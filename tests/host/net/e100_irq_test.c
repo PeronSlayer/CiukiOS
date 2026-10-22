@@ -135,6 +135,74 @@ static void test_e100_rfd_flags(void)
     }
     puts("PASS e100 RFD: physical F/EOF required, QEMU flagless allowed, partial/oversized faults, incomplete ignored");
 }
+/* f6-22: the T23 (5a10eef4) admitted its e100 with link up and never got a
+ * DHCP lease. Every physical RFD carries bit 5 for an Ethernet II frame and
+ * bit 1 for a broadcast; the former 0x0fff mask counted each as an error. */
+static unsigned ingress_frames, ingress_length;
+static uint8_t ingress_last[NET_FRAME_MAX];
+static void e100_ingress(struct netif *d, const uint8_t *frame, unsigned bytes, void *cookie)
+{
+    (void)d; (void)cookie; CHECK(bytes <= sizeof(ingress_last));
+    ingress_frames++; ingress_length = bytes; memcpy(ingress_last, frame, bytes);
+}
+/* A router's DHCPOFFER as many servers send it: Ethernet and IPv4 broadcast,
+ * UDP 67 -> 68, BOOTREPLY with the client's chaddr (RFC 2131 section 4.1). */
+static unsigned e100_dhcp_offer(uint8_t frame[342], const uint8_t client[6])
+{
+    static const uint8_t router[6] = {0x00,0x0d,0x88,0x01,0x02,0x03};
+    memset(frame, 0, 342); memset(frame, 0xff, 6); memcpy(frame + 6, router, 6);
+    frame[12] = 0x08; frame[13] = 0x00;
+    uint8_t *ip = frame + 14;
+    ip[0] = 0x45; ip[2] = 328 >> 8; ip[3] = 328 & 255; ip[8] = 64; ip[9] = 17;
+    ip[12] = 192; ip[13] = 168; ip[14] = 1; ip[15] = 1; memset(ip + 16, 0xff, 4);
+    uint8_t *udp = ip + 20; udp[1] = 67; udp[3] = 68; udp[4] = 308 >> 8; udp[5] = 308 & 255;
+    uint8_t *b = udp + 8; b[0] = 2; b[1] = 1; b[2] = 6;
+    b[16] = 192; b[17] = 168; b[18] = 1; b[19] = 20; memcpy(b + 28, client, 6);
+    b[236] = 0x63; b[237] = 0x82; b[238] = 0x53; b[239] = 0x63;
+    b[240] = 53; b[241] = 1; b[242] = 2; b[243] = 255;
+    return 342;
+}
+static void e100_deliver(struct model *h, struct netif *d, const uint8_t *frame, unsigned len, unsigned status, bool accepted)
+{
+    unsigned frames = ingress_frames; uint64_t errors = d->stats.rx_errors;
+    model_receive(h, frame, len, false);
+    CHECK(e100_rfd(d, d->rx_head)->status == status);
+    net_worker_step();
+    CHECK(!d->quarantined && d->running);
+    if (accepted) CHECK(ingress_frames == frames + 1 && ingress_length == len && !memcmp(ingress_last, frame, len) && d->stats.rx_errors == errors);
+    else CHECK(ingress_frames == frames && d->stats.rx_errors == errors + 1);
+}
+static void test_e100_rfd_status(void)
+{
+    static const unsigned errors[] = {0x800,0x400,0x200,0x100,0x80,0x10};
+    for (unsigned qemu = 0; qemu < 2; qemu++) {
+        struct model h; struct netif *d = &devices[0]; model_setup(&h, d, M_E100);
+        if (!qemu) { e100_physical_profile(); h.rfd_count_flags = 0xc000; }
+        CHECK(!model_attach(&h, d)); device_count = 1;
+        net_worker_step(); net_set_input(e100_ingress, NULL); ingress_frames = 0;
+        uint8_t frame[NET_FRAME_MAX];
+        unsigned n = e100_dhcp_offer(frame, d->address);
+        e100_deliver(&h, d, frame, n, qemu ? 0xa002 : 0xa022, true);       /* broadcast type frame */
+        e100_arp_reply_frame(frame, d->address);
+        e100_deliver(&h, d, frame, 60, qemu ? 0xa000 : 0xa020, true);      /* unicast type frame */
+        frame[12] = 0; frame[13] = 46;
+        e100_deliver(&h, d, frame, 60, 0xa000, true);                      /* IEEE 802.3 length frame */
+        e100_arp_reply_frame(frame, d->address);
+        for (unsigned extra = 1; extra <= 4; extra *= 4) {                 /* collision/TCO, no match */
+            h.rfd_status_extra = extra;
+            e100_deliver(&h, d, frame, 60, (qemu ? 0xa000 : 0xa020) | extra, true);
+        }
+        for (unsigned i = 0; i < ARRAY_SIZE(errors); i++) {                /* every damaged-frame bit */
+            h.rfd_status_extra = errors[i];
+            e100_deliver(&h, d, frame, 60, (qemu ? 0xa000 : 0xa020) | errors[i], false);
+        }
+        h.rfd_status_extra = 0;
+        CHECK(ingress_frames == 5 && d->stats.rx_packets == 5 && d->stats.rx_errors == ARRAY_SIZE(errors));
+        net_set_input(0, 0); h.trace_scb = false;
+        CHECK(!netif_stop(d) && !page_count); device_count = 0;
+    }
+    puts("PASS e100 RFD status: DHCP OFFER broadcast, Ethernet II, 802.3, TCO/no-match reach ingress; table 49 errors counted (physical and QEMU)");
+}
 static void test_e100_tx_timing(void)
 {
     uint8_t frame[60] = {0};
@@ -189,6 +257,7 @@ static void test_e100_irq(void)
 {
     test_e100_arp_modes();
     test_e100_rfd_flags();
+    test_e100_rfd_status();
     test_e100_tx_timing();
     test_e100_scb_bytes();
 }

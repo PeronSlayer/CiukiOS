@@ -16,8 +16,15 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
+sys.path.append(str(ROOT / 'scripts'))  # loader_budget, ciuki_version
+import loader_budget
 from loader_model import BootMenu, LoaderUART
 from loader_uart_machine import LoaderUARTMachine
+from loader_parser_machine import LoaderParserMachine, SYMBOLS
+import loader_model
+import probe_tables
+from physical import cfg_selector
+from run import selector as runner_selector
 
 LOADER_BYTES = 24576
 CONSOLE_HARNESS = r'''
@@ -31,9 +38,12 @@ static unsigned host_if = 0x200;
 static uint32_t irq_save(void) { unsigned old = host_if; host_if = 0; return old; }
 static void irq_restore(uint32_t flags) { host_if = flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
+const uint8_t font_cfn_sans[95+95*32] = { 0 };       /* f0-55 tagline font */
 void serial_write(const char *s, size_t n) { CHECK(s && n); }
 void kpreempt_point(void) { }
 void task_sleep_ms(uint32_t ms) { CHECK(ms == 100); }
+/* f0-55b: the console worker's class while the splash is up. */
+void task_set_base(struct task *t, enum task_prio prio, unsigned level) { (void)t; (void)prio; (void)level; }
 static void *console_map(uint32_t phys, uint32_t size)
 {
     CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height);
@@ -149,14 +159,17 @@ class LoaderTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
     def test_loader_image_keeps_its_fixed_size_and_hint(self):
         with scratch() as folder:
-            for define in (None, "-dCIUKI_VERSION='0.9.0 pre-alpha'"):
+            for version in (None, '0.9.0 pre-alpha', loader_budget.load()['display']):
                 binary = Path(folder) / 'ciukldr.bin'
                 listing = Path(folder) / 'ciukldr.lst'
-                subprocess.run(['nasm', '-f', 'bin', *([define] if define else []),
-                                str(ROOT / 'src/boot/ciukldr.asm'), '-o', str(binary), '-l', str(listing)],
-                               cwd=ROOT, check=True)
+                loader_budget.assemble(binary, listing, version)
+                budget = loader_budget.measure(binary, listing)
+                print(f'CIUKLDR free bytes ({version or "unknown"}): {budget["free"]}', flush=True)
+                self.assertGreaterEqual(budget['free'], 512)
                 data = binary.read_bytes()
                 self.assertEqual(len(data), LOADER_BYTES)
+                self.assertEqual(data[-32:], b'CLDRPRG1' + bytes(24))
+                self.assertIn(BootMenu.SAFE_CONFIRMATION.encode() + b'\r\n\0', data)
                 self.assertIn(BootMenu.MENU_HINT.encode(), data)
                 self.assertNotIn(BootMenu.MENU_HINT.encode() + b'\0', data, 'AH=13h takes a counted string')
                 # The relocated ranking table lies after the image, inside loader_end.
@@ -210,6 +223,159 @@ class LoaderTests(unittest.TestCase):
         self.assertFalse(BootMenu(request='all:sweep run=87654321 step=9').screen_quiet)
         self.assertFalse(BootMenu(safe=True).screen_quiet)
         self.assertFalse(BootMenu(request='f1:safe run=12345678', source='fw_cfg').screen_quiet)
+
+
+@unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM tools')
+class LoaderParserTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = scratch()
+        source = Path(cls.folder.name) / 'parser.asm'
+        binary = source.with_suffix('.bin')
+        symbols = (*SYMBOLS, 'raw_map', 'ph_table', 'elf_load', 'elf_load.validate',
+                   'file_seek', 'loader_bss_end')
+        source.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                          + ','.join(symbols) + '\n')
+        subprocess.run(['nasm', '-f', 'bin', str(source), '-o', str(binary)], cwd=ROOT, check=True)
+        cls.machine = LoaderParserMachine(binary, symbols)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.folder.cleanup()
+
+    def test_assembled_selectors_match_existing_models(self):
+        requests = set()
+        for phase, names in probe_tables.menu_names().items():
+            for name in names:
+                base = f'f{phase}:{name} run=1234aBcD'
+                requests.update((base, base + 'x', base + ' ', base.replace(' run=', 'x run='),
+                                 base + ' platform=e500', base + ' safe=1',
+                                 base + ' platform=e500 safe=1'))
+        for phase in ('f0', 'f1', 'f2', 'f3', 'all'):
+            for suffix in ('', ' step=0', ' step=00', ' step=63 state=0007FFFF',
+                           ' step=64', ' step=000', ' step=1 state=00080000',
+                           ' step=1 state=0000000g', ' state=00000000'):
+                requests.add(f'{phase}:sweep run=12345678' + suffix)
+        for title in ('a', 'a'*23, 'a'*24, '', 'A', '0a', 'a-0', 'a_b'):
+            requests.add('f3:title run=12345678 title=' + title)
+        # f3-55 DOS conformance grammar: exactly three suffixes, every source.
+        for suffix in ('', ' guest=freedos', ' guest=ciukidos', ' guest=ciukidos kernel=unified',
+                       ' guest=freedos kernel=unified', ' guest=unified', ' guest=ciukido',
+                       ' guest=freedosx', ' guest=ciukidos kernel=master', ' guest=ciukidos kernel=unifie',
+                       ' guest=ciukidos kernel=unified ', ' guest=freedos guest=ciukidos',
+                       ' guest=freedos platform=e500', ' platform=e500 guest=freedos',
+                       ' guest=ciukidos safe=1', ' guest=ciukidos kernel=unified x=1'):
+            requests.add('f3:dos-conformance run=1234aBcD' + suffix)
+            requests.add('f2:dos-conformance run=1234aBcD' + suffix)
+        for phase, name in ((2, 'crash-isolation'), (0, 'boot'), (3, 'vm-boot')):
+            for suffix in (' server=desktop', ' server=standin', ' safe=1 server=desktop',
+                           ' platform=e500 server=standin', ' server=other', ' safe=1 platform=e500'):
+                requests.add(f'f{phase}:{name} run=12345678' + suffix)
+        requests.update(('', 'f7:boot run=12345678', 'f0:boot run=1234567g', 'x'*65,
+                         'f0:boot run=12345678\x00', 'f2:signals-fault'))
+        # f6-18 browser grammar: http[s]://host[:port]/path, URL <= 40 bytes,
+        # optional ' now=1', every source (selector.c browser_url).
+        browser = 'f6:browser run=1234aBcD'
+        for suffix in ('', ' url=https://fixture.test/page', ' url=http://fixture.test/upgrade',
+                       ' url=https://fixture.test/page now=1', ' url=https://h:8443/a_b-c.d/',
+                       ' url=HTTPS://h/', ' url=https://H-1.x/', ' url=http://h/', ' url=http://h:/',
+                       ' url=http://h:123456/', ' url=http://h:65535/', ' url=http://:80/',
+                       ' url=https://fixture.test', ' url=ftp://fixture.test/page', ' url=https:/h/',
+                       ' url=httpss://h/', ' url=https://fixture.test/p?q=1', ' url=https://fixture.test/a=b',
+                       ' url=https://h_1/', ' url=https://h/~', ' url=https://h/page now=0',
+                       ' url=https://h/page now=1 now=1', ' url=https://h/page platform=e500',
+                       ' url=https://h/page safe=1', '  url=https://h/page', ' url=https://h/page ',
+                       ' url=https://h/' + 'a' * 25, ' url=https://h/' + 'a' * 26,
+                       ' url=https://fixture.test/' + 'a' * 9 + ' now=1',
+                       ' url=https://fixture.test/' + 'a' * 15, ' url=https://fixture.test/' + 'a' * 16):
+            requests.add(browser + suffix)
+            requests.add('f5:browser run=1234aBcD' + suffix)
+        # Name prefixes and extensions never select a neighbouring probe.
+        for phase in ('f0', 'f1', 'f2', 'f4', 'f5', 'all', 'f/', 'g0'):
+            for name in ('boo', 'bootinfox', 'input-faul', 'crash-isolatio', 'vm-audio-jitte',
+                         'w32-', 'sweepx', 'swee', 'title'):
+                requests.add(f'{phase}:{name} run=12345678')
+        for source in (0, 1, 2):
+            for request in sorted(requests):
+                with self.subTest(source=source, request=request):
+                    try:
+                        selected = (cfg_selector(request) if source == 2 else
+                                    runner_selector(request, 'fw_cfg' if source else 'menu', bool(source)))
+                    except ValueError:
+                        self.assertFalse(self.machine.select(request, source))
+                        continue
+                    self.assertTrue(self.machine.select(request, source))
+                    self.assertEqual(self.machine.read('cx'), len(request))
+                    self.assertEqual(self.machine.read('si'), self.machine.symbols['selector_buffer'])
+                    self.assertEqual(self.machine.var('selector_force', bits=8), bool(selected.get('platform')))
+                    self.assertEqual(self.machine.var('selector_safe', bits=8), selected.get('safe', False))
+                    self.assertEqual(self.machine.var('selector_sweep', bits=8), selected['probe'] == 'sweep')
+                    self.machine.run('selector_accept')
+                    self.assertEqual(self.machine.field(0x66, 2), len(request))
+                    start = 0x20000 + self.machine.info + 0x68
+                    self.assertEqual(self.machine.mem[start:start+len(request)], request.encode())
+
+    def test_assembled_options_match_model_and_keep_exact_boundaries(self):
+        options = ('', 'safe=0', 'safe=1 safe=0', 'serial=0 serial=1', 'accel=0',
+                   ' safe=1\r\nserial=0 mode=0x3FfF accel=0 ', 'mode=0x0000',
+                   'mode=0x4000', 'mode=0x123', 'mode=0x12345', 'mode=0x000g',
+                   'accel=1', 'xaccel=0', 'accel=00', 'safe=10', 'serial=00',
+                   'safe=0\tserial=1', 'safe=1\x00', 'A'*127, ' '*127, ' '*128,
+                   'ecpoll=0', 'safe=1 ecpoll=0\r\nusbscan=0', 'ecpoll=1', 'ecpoll=00',
+                   'serial=0 ecpoll=1\r\necpoll=0', 'ecpoll=2', 'ecpoll=11')
+        for flags in (0, 1, 2, 3):
+            for text in options:
+                with self.subTest(flags=flags, text=text):
+                    try:
+                        expected = loader_model.boot_options(text, bool(flags & 1), bool(flags & 2))
+                    except ValueError:
+                        self.assertFalse(self.machine.config(text, flags))
+                        continue
+                    self.assertTrue(self.machine.config(text, flags))
+                    self.assertEqual(self.machine.field(8) & 3, expected['safe'] | (expected['serial'] << 1))
+                    self.assertEqual(self.machine.var('preferred_mode'),
+                                     0xffff if expected['mode'] is None else expected['mode'])
+        text = 'safe=1\nprobe=f1:safe run=12345678\nserial=0'
+        self.assertTrue(self.machine.config(text))
+        self.assertEqual(self.machine.field(8) & 0x43, 0x41)
+        self.assertFalse(self.machine.config(text + '\nprobe=f0:core run=12345678'))
+
+    def test_elf_fills_shared_scratch_before_first_header_validation(self):
+        m = self.machine
+        self.assertEqual(m.symbols['ph_table'], m.symbols['raw_map'])
+        self.assertEqual(m.symbols['loader_bss_end'], 0x6841)
+        for count in (1, 32):
+            m.reset()
+            header = bytearray(52)
+            header[:7] = b'\x7fELF\x01\x01\x01'
+            struct.pack_into('<HHI', header, 16, 2, 3, 1)
+            struct.pack_into('<I', header, 28, 52)
+            struct.pack_into('<HHH', header, 40, 52, 32, count)
+            payload = bytes((i*17+3) % 256 for i in range(count*32))
+            data = header + payload
+            m.var('found_size', len(data), 32)
+            m.var('file_size', len(data), 32)
+            m.hooks[m.symbols['directory_find']] = lambda: setattr(m, 'carry', False)
+            m.hooks[m.symbols['file_open']] = lambda: None
+            cursor = 0
+            def seek():
+                nonlocal cursor
+                cursor = m.read('eax')
+            def read():
+                nonlocal cursor
+                start, length = 0x20000+m.read('di'), m.read('cx')
+                m.mem[start:start+length] = data[cursor:cursor+length]
+                cursor += length
+            m.hooks[m.symbols['file_seek']] = seek
+            m.hooks[m.symbols['file_read']] = read
+            raw = 0x20000 + m.symbols['raw_map']
+            m.mem[raw:raw+3072] = b'\xa5'*3072
+            normalized = 0x20000 + m.info + 0x4f0
+            before = bytes(m.mem[normalized:normalized+128*24])
+            self.assertTrue(m.run('elf_load', stop=m.symbols['elf_load.validate']))
+            self.assertEqual(m.mem[raw:raw+len(payload)], payload)
+            self.assertEqual(m.mem[raw+len(payload):raw+3072], b'\xa5'*(3072-len(payload)))
+            self.assertEqual(m.mem[normalized:normalized+128*24], before)
 
 
 class KernelTests(unittest.TestCase):

@@ -81,6 +81,9 @@ int fbdev_present_native(uint32_t generation, unsigned x, unsigned y,
 int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
 struct ciuki_accel_request;
 int fbdev_accel_request(const struct ciuki_accel_request *);
+/* f2-92 CIUKI_ACCEL_WRITE band (see fbdev.c): 0 engine, 1 CPU, <0 error. */
+int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const struct fb_rect *limit,
+                      void *rows, uint32_t stride);
 struct ciuki_accel_info;
 int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *);
 void fbdev_cursor_hide(void);

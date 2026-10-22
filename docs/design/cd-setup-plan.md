@@ -707,7 +707,7 @@ Before the CD is called distributable, on the recorded ISO SHA-256:
   Claude agent alternative (Opus for kernel work, Sonnet for UI/glue, per
   the owner's model economy rule); the lead confirms per launch.
 
-## Lead decisions on the f9-00 open points (2026-10-22)
+## Lead decisions on the f9-00 open points (2026-10-21)
 
 - O1: variant A, the payload lives in the boot image's data clusters (ISO ≈ 546 MB); the ISO tree keeps `\LICENSES`, `\SOURCES`, `\SETUP.INF.sample`.
 - O2: the `setup=1` token is parsed by the loader with the ~24-byte addition inside f9-01, after f0-54 frees the budget (f9-01 may stage it last).

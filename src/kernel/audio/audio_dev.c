@@ -11,6 +11,8 @@
 #include <ciuki/thinkpad_ec.h>
 #include <ciuki/cpustat.h>
 #include "../../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
+#include <ciuki/task.h>
+#pragma weak sched_audio_producer_stats /* f1-101: task.c, absent in audio-only hosts */
 static struct vfs *settings_vfs;
 static struct kmutex control_lock;
 static struct kmutex service_lock; /* serialize write-side startup and worker */
@@ -116,12 +118,12 @@ int audio_master_set(struct ciuki_mixer_master *m)
     kmutex_unlock(&control_lock);
     return 0;
 }
-void audio_master_refresh(void)
+static void master_refresh(bool requested)
 {
     kmutex_lock(&control_lock);
     struct ciuki_mixer_master m = audio.master;
     bool hardware = audio.master_in_hardware;
-    int changed = thinkpad_ec_master_poll(&m);
+    int changed = requested ? thinkpad_ec_master_refresh(&m) : thinkpad_ec_master_poll(&m);
     if (changed > 0 || hardware != audio.master_in_hardware) {
         int err = audio.ready ? audio_backend_master(&m) : 0;
         if (err) audio_fail(-EIO);
@@ -137,6 +139,8 @@ void audio_master_refresh(void)
     }
     kmutex_unlock(&control_lock);
 }
+void audio_master_refresh(void) { master_refresh(false); }
+void audio_master_refresh_requested(void) { master_refresh(true); }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
 static bool first_playback;
 static bool playback_logged;
@@ -227,13 +231,26 @@ void audio_fail(int error)
     quantum_pending = false;
     if (serial_buffered) serial_buffered(false);
     audio_wake();
-    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
+    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) {
+        audio_stream_lead(audio.streams[i]); /* f1-101: no producer boost on a failed device */
+        kwait_wake_all(&audio.streams[i]->changed);
+    }
+}
+/* The service start moved later by the firmware time proven since `firmware`. */
+static uint64_t service_start(uint64_t start, uint64_t firmware)
+{
+    uint64_t now = ktime_cycles(), smm = cpu_firmware_cycles ? cpu_firmware_cycles() - firmware : 0;
+    return smm < now - start ? start + smm : now;
 }
 static void audio_service_locked(void)
 {
     if (!audio.ready) return;
     struct audio_transport b; audio_backend_snapshot(&b);
     uint64_t start = ktime_cycles();
+    /* f2-96: SMM time inside the service (a T23 SMI lasts 2.1 ms, proven
+     * by cpustat) is not refill work: the 1 ms yield, the 2 ms deadline and
+     * the service maximum measure the work alone. */
+    uint64_t firmware = cpu_firmware_cycles ? cpu_firmware_cycles() : 0;
     uint32_t service_gap = 0;
     if (audio.running && audio.last_service_cycles && g_tsc_per_ms) {
         uint64_t gap = (start - audio.last_service_cycles) * 1000 / g_tsc_per_ms;
@@ -427,7 +444,7 @@ static void audio_service_locked(void)
         }
         /* Reserve the second millisecond for one conversion/publication and
          * bookkeeping. If one quantum itself overruns, count it below. */
-        if (ktime_elapsed_us(start, AUDIO_SERVICE_US / 2)) { audio_wake(); break; }
+        if (ktime_elapsed_us(service_start(start, firmware), AUDIO_SERVICE_US / 2)) { audio_wake(); break; }
     }
     if (!err && !cursor_retry && !active && audio.running && !quantum_pending) {
         /* Client drains have already waited their fetched/tail allowance.
@@ -450,6 +467,7 @@ static void audio_service_locked(void)
     } else if (active) {
         idle_since = 0; /* a new source cancels the idle tail */
     }
+    start = service_start(start, firmware);
     if (!control && ktime_elapsed_us(start, AUDIO_SERVICE_US)) { audio.deadlines++; audio_backend_deadline(); }
     uint64_t elapsed = (g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0);
     /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */
@@ -639,6 +657,9 @@ void audio_init(struct vfs *v)
     if (!worker) {
         audio.reason = "worker_exhausted"; audio.error = -ENOMEM; audio_backend_shutdown(); return;
     }
+    /* f1-90: the DMA refill has its own bounded device budget; other device
+     * tasks' consumption never demotes it (R3). */
+    task_set_audio_class(worker);
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
@@ -647,9 +668,32 @@ void audio_init(struct vfs *v)
 }
 int audio_device_open(struct file_description *d, uint32_t flags)
 {
-    if (d->node->kind == PX_AUDIO) return audio_stream_open(&d->audio);
+    if (d->node->kind == PX_AUDIO) {
+        if ((flags&O_ACCMODE)==O_RDONLY) return -EACCES;
+        return audio_stream_open(&d->audio);
+    }
     (void)flags;
     return 0;
+}
+/* A decoder explicitly names its own thread, not every thread sharing the
+ * process fd table. One 64 KiB source-read budget expires after 20 ms and
+ * is valid only while the live writable stream has refill demand. Stream
+ * generations prevent close/reset/fd reuse from reviving a stale token. */
+bool audio_refill_reader(struct process *p,uint32_t bytes)
+{
+    struct task *t=g_current;
+    if (!t || !bytes || bytes>t->audio_refill_bytes ||
+        deadline_passed(t->audio_refill_expiry) || !audio.ready || audio.error) return false;
+    for (unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++) {
+        struct file_description *d=file_fd(p,(int32_t)fd);
+        if (!d || d->node->kind!=PX_AUDIO || (d->flags&O_ACCMODE)==O_RDONLY) continue;
+        struct audio_stream *s=d->audio;
+        if (s && s->generation==t->audio_refill_generation && s->started && !s->draining &&
+            s->queued<=AUDIO_RING*3/4) {
+            t->audio_refill_bytes-=bytes; return true;
+        }
+    }
+    return false;
 }
 void audio_device_close(struct file_description *d) { if (d->audio) { audio_stream_close(d->audio); d->audio = 0; } }
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted)
@@ -716,6 +760,8 @@ int audio_write_user(struct file_description *d, uint32_t address, uint32_t byte
     if (!bytes) return 0;
     struct audio_operation *o = operation_begin(d);
     if (!o) return -ENOMEM;
+    /* f1-101: the writing thread is this stream's producer (writer role). */
+    audio_stream_producer(s, g_current, SCHED_PRODUCER_WRITER);
     int err = ua_pin(o->process->memory, &o->pin, address, bytes, false);
     o->pinned = !err;
     unsigned done = 0; uint32_t generation = s->generation;
@@ -757,8 +803,9 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_SET_FORMAT: return sizeof(struct ciuki_audio_format);
     case AUDIO_GET_STATUS: return sizeof(struct ciuki_audio_status);
     case AUDIO_SET_GAIN: return sizeof(struct ciuki_audio_gain);
-    case AUDIO_DRAIN: case AUDIO_RESET: return sizeof(struct ciuki_audio_command);
-    case MIXER_GET_MASTER: case MIXER_SET_MASTER: return sizeof(struct ciuki_mixer_master);
+    case AUDIO_DRAIN: case AUDIO_RESET: case AUDIO_REFILL_READ: return sizeof(struct ciuki_audio_command);
+    case AUDIO_GET_PRODUCER: return sizeof(struct ciuki_audio_producer);
+    case MIXER_GET_MASTER: case MIXER_SET_MASTER: case MIXER_REFRESH_MASTER: return sizeof(struct ciuki_mixer_master);
     case MIXER_GET_DIAGNOSTICS: return sizeof(struct ciuki_audio_diagnostics);
     default: return 0;
     }
@@ -777,14 +824,28 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     int err = copy_from_user(record, address, size);
     if (!err && record[0] != 1) err = -EOPNOTSUPP;
     if (!err && record[1] != size) err = -EINVAL;
-    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER ? 1 : op == AUDIO_GET_STATUS ? 0 : 2);
+    bool observation = op == AUDIO_GET_STATUS || op == AUDIO_GET_PRODUCER; /* output-only records */
+    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER ? 1 : observation ? 0 : 2);
     for (unsigned i = reserved; !err && i < size / 4; i++) if (record[i]) err = -EINVAL;
     if (!err) { err = ua_pin(p->memory, &o->pin, address, size, true); o->pinned = !err; }
     struct audio_stream *s = d->audio;
     if (!err && interrupted()) err = -EINTR;
-    if (!err && s && op != AUDIO_GET_STATUS && (audio.error || !audio.ready)) err = -EIO;
+    if (!err && s && !observation && (audio.error || !audio.ready)) err = -EIO;
     if (!err) switch (op) {
     case AUDIO_GET_CAPS: memcpy(record, &audio.caps, size); break;
+    case AUDIO_REFILL_READ:
+        if ((d->flags&O_ACCMODE)==O_RDONLY) { err=-EACCES; break; }
+        if (!g_current) { err=-EINVAL; break; }
+        g_current->audio_refill_bytes=0;
+        /* f1-101: the declared reader is this stream's producer (reader role);
+         * the mixer's lead, never this call, decides when it is boosted. */
+        audio_stream_producer(s, g_current, SCHED_PRODUCER_READER);
+        if (s && s->started && !s->draining && s->queued<=AUDIO_RING*3/4) {
+            g_current->audio_refill_generation=s->generation;
+            g_current->audio_refill_expiry=deadline_after_ms(20);
+            g_current->audio_refill_bytes=65536;
+        }
+        break;
     case AUDIO_SET_FORMAT: err = audio_stream_format(s, (struct ciuki_audio_format *)record); break;
     case AUDIO_SET_GAIN:
         if (record[2] > 100 || record[3] > 100) err = -EINVAL;
@@ -809,12 +870,24 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         status.latency_frames = latency > UINT32_MAX ? UINT32_MAX : (uint32_t)latency;
         memcpy(record, &status, size); break;
     }
+    case AUDIO_GET_PRODUCER: {
+        struct sched_producer_stats stats = {0};
+        if (sched_audio_producer_stats) sched_audio_producer_stats(s, &stats);
+        struct ciuki_audio_producer producer = { .version=1, .size=sizeof(producer),
+            .flags=(stats.flags & SCHED_PRODUCER_BEHIND ? CIUKI_AUDIO_PRODUCER_BEHIND : 0) |
+                   (stats.flags & SCHED_PRODUCER_BOOSTED ? CIUKI_AUDIO_PRODUCER_BOOSTED : 0) |
+                   (stats.flags & SCHED_PRODUCER_OVER ? CIUKI_AUDIO_PRODUCER_OVER_BUDGET : 0),
+            .boosts=stats.boosts, .over_budget=stats.over_budget, .producers=stats.producers,
+            .boost_us=stats.cycles_per_ms ? stats.boost_cycles * 1000 / stats.cycles_per_ms : 0 };
+        memcpy(record, &producer, size); break;
+    }
     case AUDIO_RESET: audio_stream_reset(s); break;
     case AUDIO_DRAIN: {
         if (s->draining) { err = -EBUSY; break; }
         uint32_t generation = s->generation;
         s->draining = true; s->drain_goal = s->accepted;
         s->drain_latched = !s->queued; s->drain_output = s->last_output;
+        audio_stream_lead(s); /* f1-101: a draining stream needs no producer */
         audio_wake();
         while (!err && (!s->drain_latched || audio.played_output < s->drain_output)) err = stream_wait(s, generation, true);
         uint64_t limit = deadline_after_ms(audio.caps.drain_ms);
@@ -823,10 +896,20 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
             else if (audio.error) err = -EIO;
             else task_sleep_ms(1);
         }
-        if (s->generation == generation) { s->draining = false; if (!err && !s->queued) s->started = false; }
+        if (s->generation == generation) {
+            s->draining = false; if (!err && !s->queued) s->started = false;
+            audio_stream_lead(s);
+        }
         break;
     }
     case MIXER_GET_MASTER: memcpy(record, &audio.master, size); break;
+    case MIXER_REFRESH_MASTER:
+        /* f1-100: an explicit user action (volume popup) asks the EC worker
+         * for one hardware read; no periodic EC traffic. The reply is the
+         * current master; the refreshed one follows in later reads. */
+        if (!d->mixer_control) { err = -EACCES; break; }
+        thinkpad_ec_refresh_request();
+        memcpy(record, &audio.master, size); break;
     case MIXER_GET_DIAGNOSTICS: audio_diagnostics((struct ciuki_audio_diagnostics *)record); break;
     case MIXER_SET_MASTER:
         err = !d->mixer_control ? -EACCES : audio_master_set((struct ciuki_mixer_master *)record); break;

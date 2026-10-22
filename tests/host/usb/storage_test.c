@@ -24,7 +24,8 @@ static void (*sleep_hook)(void);
 static void (*port_read_hook)(void);
 static void (*hid_poll_hook)(struct usb_device *,struct usb_hid *);
 static bool (*private_transaction_hook)(uint32_t,uint32_t,volatile uint32_t *);
-static void (*qh_advance_hook)(void *,uint32_t,volatile uint32_t *,uint32_t);
+static void (*command_hook)(void); /* f1-96: after a CBW is decoded */
+static bool (*qh_advance_hook)(void *,uint32_t,volatile uint32_t *,uint32_t);
 void klog_diag(const char *fmt,...)
 {
     if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
@@ -82,10 +83,23 @@ static struct model {
     bool uhci, data_babble, data_crc, clear_fail, reset_fail, late_ack, latched, mode_stall;
     unsigned inquiry_bytes, capacity_bytes, inquiry_delay, inquiry_delays, inquiries, modes, naks, reset_order, frame_offset, late_acks;
     unsigned mode_csw_stalls;
+    /* f1-96: a device transfer limit in sectors and its reaction to a longer
+     * READ(10)/WRITE(10): 1 data STALL + failed CSW (ILLEGAL REQUEST), 2 data
+     * STALL + phase error, 3 short IN data + passed CSW with residue, 4 CBW
+     * STALL. read_bad_residue corrupts that many READ(10) CSW residues. */
+    unsigned transfer_limit, limit_reaction, read_bad_residue, max_read_sectors, max_write_sectors;
+    bool limit_writes_only, limit_phase;
     uint64_t command_at;
     uint32_t injected_status;
     uint32_t latched_qh, latched_td, hc_status;
     unsigned interrupt_mask, native_gate;
+    /* f1-96b: an HC that stops executing bulk TDs (untouched, no NAK) until
+     * the driver unlinks the bulk QH; a device that NAKs the class reset's
+     * status stage for reset_nak_ms; a READ(10) data stage NAKed at byte
+     * data_nak_offset until data_nak_ms after its CBW. */
+    bool wedged, data_nak;
+    unsigned reset_nak_ms, data_nak_offset, data_nak_ms;
+    uint64_t setup_at;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
 static struct usb_device *device(void);
@@ -104,6 +118,7 @@ static bool uhci_transaction(void *c,uint32_t address,uint32_t qh,volatile uint3
         assert(private_transaction_hook);return private_transaction_hook(address,qh,td);
     }
     assert(qh==m.h.dma_phys+(((td[2]>>15)&15) ? USB_UHCI_BULK_QH:USB_UHCI_CONTROL_QH));
+    if(m.wedged && address!=m.h.dma_phys+USB_TD) return false; /* never executed */
     unsigned other=((td[2]>>15)&15) ? USB_UHCI_CONTROL_QH:USB_UHCI_BULK_QH;
     assert(uhci_dma(NULL,m.h.dma_phys+other,8)[1]&1); /* shared TD has one owner */
     assert(address==m.h.dma_phys+USB_TD ? td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER :
@@ -167,6 +182,11 @@ static void failed(unsigned key,unsigned asc)
     memset(m.sense,0,sizeof(m.sense)); m.sense[0]=0x70; m.sense[2]=(uint8_t)key;
     m.sense[7]=10; m.sense[12]=(uint8_t)asc; m.status=1;
 }
+static bool over_limit(const uint8_t *cdb,unsigned bytes)
+{
+    return m.transfer_limit && (cdb[0]==0x2a || (cdb[0]==0x28 && !m.limit_writes_only)) &&
+           bytes/512>m.transfer_limit;
+}
 static void start_command(void)
 {
     assert(fs_rd32(m.cbw)==0x43425355 && m.cbw[13]==0 && m.cbw[14]>=6 && m.cbw[14]<=10);
@@ -191,11 +211,12 @@ static void start_command(void)
     case 0x1a: assert(m.total==4);m.modes++;m.response[0]=3;m.response[2]=m.wp ? 0x80:0;break;
     case 0x28: case 0x2a:
         assert(m.total==((unsigned)c[7]*256+c[8])*512);
-        if(c[0]==0x2a) m.writes++;
-        else m.read_commands++;
+        if(c[0]==0x2a) {m.writes++;if(m.total/512>m.max_write_sectors)m.max_write_sectors=m.total/512;}
+        else {m.read_commands++;if(m.total/512>m.max_read_sectors)m.max_read_sectors=m.total/512;}
         break;
     default: assert(!"unexpected SCSI command");
     }
+    if(command_hook) command_hook();
 }
 static void medium_bytes(void *buffer,unsigned n,bool write)
 {
@@ -221,10 +242,11 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
     (void)d; assert(!periodic && n<=64); m.packets++;
     uint8_t *b=buffer;
     if(!ep) {
-        if(pid==USB_PID_SETUP) {assert(n==8);memcpy(m.setup,b,8);return 8;}
+        if(pid==USB_PID_SETUP) {assert(n==8);memcpy(m.setup,b,8);m.setup_at=m.now;return 8;}
         unsigned req=m.setup[1];
         if(req==0xfe && pid==USB_PID_IN && n) {if(m.max_lun_stall)return -USB_EPIPE;b[0]=0;return 1;}
         if(!n) {
+            if(req==0xff && m.now-m.setup_at<m.reset_nak_ms) return -USB_EAGAIN;
             if(req==0xff) {m.resets++;if(m.reset_fail)return -USB_EPIPE;m.stage=0;m.cbw_at=0;m.reset_order=1;}
             if(req==1) {
                 if(m.clear_fail) {m.clear_fail=false;return -USB_EPIPE;}
@@ -243,6 +265,7 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
     if(m.stage==0) {
         assert(pid==USB_PID_OUT);
         if(m.cbw_stall) {m.cbw_stall=false;return -USB_EPIPE;}
+        if(m.limit_reaction==4 && n==31 && !m.cbw_at && over_limit(b+15,fs_rd32(b+8))) return -USB_EPIPE;
         assert(n<=31-m.cbw_at);memcpy(m.cbw+m.cbw_at,b,n);m.cbw_at+=n;
         if(m.cbw_at==31){m.cbw_at=0;start_command();}
     } else if(m.stage==1) {
@@ -250,6 +273,8 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
            m.read_fault_kind==1 && m.at==512) return -USB_EAGAIN;
         if(m.cbw[15]==0x28 && m.read_commands==1 &&
            m.now-m.command_at<m.first_read_delay) return -USB_EAGAIN;
+        if(m.data_nak && m.cbw[15]==0x28 && m.at==m.data_nak_offset &&
+           m.now-m.command_at<m.data_nak_ms) return -USB_EAGAIN;
         if(m.forever_data || (m.nak_capacity && m.cbw[15]==0x25) ||
            (m.nak_mount && m.cbw[15]==0x28) ||
            (m.nak_prepare && m.cbw[15]==0x28 && m.read_commands>=3) ||
@@ -261,17 +286,22 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         if(m.data_crc) {m.injected_status=(1u<<22)|(1u<<18);m.data_crc=false;return -USB_EIO;}
         if(m.remove_data) {m.remove_data=false;m.connected=false;return -USB_EIO;}
         if(m.data_stall) {m.data_stall=false;failed(3,0x11);m.stage=2;return -USB_EPIPE;}
+        if(!m.at && over_limit(m.cbw+15,m.total) && (m.limit_reaction==1 || m.limit_reaction==2)) {
+            failed(5,0x24);m.stage=2;m.limit_phase=m.limit_reaction==2;return -USB_EPIPE;
+        }
         if(m.cbw[15]==0x1a && m.mode_stall) {failed(5,0x20);m.stage=2;return -USB_EPIPE;}
         unsigned requested=n;
         assert(n<=m.remaining && (pid==USB_PID_IN)==!!(m.cbw[12]&0x80));
         if(m.cbw[15]==0x28 && m.read_limit && n>m.read_limit-m.at) n=m.read_limit-m.at;
+        unsigned limit_bytes=m.limit_reaction==3 && pid==USB_PID_IN && over_limit(m.cbw+15,m.total) ? m.transfer_limit*512 : 0;
+        if(limit_bytes && n>limit_bytes-m.at) n=limit_bytes-m.at;
         if(m.cbw[15]==0x12 && n>m.inquiry_bytes-m.at) n=m.inquiry_bytes-m.at;
         if(m.cbw[15]==0x25 && n>m.capacity_bytes-m.at) n=m.capacity_bytes-m.at;
         if(m.cbw[15]==0x28 || m.cbw[15]==0x2a) medium_bytes(b,n,pid==USB_PID_OUT);
         else {assert(pid==USB_PID_IN && m.at+n<=sizeof(m.response));memcpy(b,m.response+m.at,n);}
         m.at+=n;m.remaining-=n;if(!m.remaining || (m.cbw[15]==0x12 && m.at==m.inquiry_bytes) ||
             (m.cbw[15]==0x25 && m.at==m.capacity_bytes) ||
-            (m.cbw[15]==0x28 && m.read_limit && n<requested)){m.stage=2;m.at=0;}
+            (m.cbw[15]==0x28 && (m.read_limit || limit_bytes) && n<requested)){m.stage=2;m.at=0;}
     } else {
         assert(pid==USB_PID_IN);
         if(m.cbw[15]==0x35 && m.now-m.command_at<m.flush_delay) return -USB_EAGAIN;
@@ -282,8 +312,10 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         if(m.cbw[15]==0x1a && m.mode_csw_stalls){m.mode_csw_stalls--;return -USB_EPIPE;}
         bool bad=m.bad_signature || (m.cbw[15]==0x28 && m.read_commands<=m.read_fault_commands && m.read_fault_kind==3);
         uint8_t csw[13]={0};fs_wr32(csw,bad ? 0 : 0x53425355);
-        fs_wr32(csw+4,fs_rd32(m.cbw+4)+(m.bad_tag?1:0));fs_wr32(csw+8,m.bad_residue ? m.total+1 : m.remaining);
-        csw[12]=m.phase_error ? 2 : (uint8_t)m.status;
+        bool bad_residue=m.bad_residue || (m.cbw[15]==0x28 && m.read_bad_residue && !m.at);
+        if(m.cbw[15]==0x28 && m.read_bad_residue && !m.at)m.read_bad_residue--;
+        fs_wr32(csw+4,fs_rd32(m.cbw+4)+(m.bad_tag?1:0));fs_wr32(csw+8,bad_residue ? m.total+1 : m.remaining);
+        csw[12]=m.phase_error || m.limit_phase ? 2 : (uint8_t)m.status;m.limit_phase=false;
         unsigned take=n;if(m.short_csw && take)take--;
         assert(m.at+take<=13);memcpy(b,csw+m.at,take);m.at+=take;
         if(m.at==13 || m.short_csw){m.stage=0;m.at=0;}
@@ -691,8 +723,9 @@ static void fat32_budget(const char *path)
     uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==512);
     for(unsigned i=0;i<512;i++)assert(data[i]==0x5a);
     assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
-    printf("PASS F1-74 %u GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: read-only with scan deferred\n",
-           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->bind_poll_frames,s->bind_retire_frames);
+    assert(s->max_sectors==USB_STORAGE_MAX_SECTORS && strstr(records," read_max=1 max_sectors=128\n"));
+    printf("PASS F1-74 %u GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u read_max=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: read-only with scan deferred\n",
+           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->max_sectors,s->bind_poll_frames,s->bind_retire_frames);
     m.bytes=mapped;cleanup();
     }
     setup(path,true);use_uhci();budget_log_delay=true;log_hook=delay_after_publication;

@@ -1,0 +1,280 @@
+{
+  "schema": 1,
+  "artifacts": {
+    "NSIS-COPYING.TXT": "48fd9944176369233fa9bf923519829e20934a36df742bac4dedf49cf11226a3",
+    "chain.inf": "86746d500d35944c7c6f30b31ed250fafdf242dbc5aa210358a0a0b4a7a21678",
+    "child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+    "ciuki-installer-fixture.exe": "5358d481e2d8ab04a171c4ee676875746509eb54f69edd826277f3b2d759fb47",
+    "fixture.cab": "93056c05ec70de99566ccf6fbc48da393055dc93506a5734f9eba5bcdd413679",
+    "infchain.exe": "d352fbbbcb1a33dbd7959a55d43c6e7327009f922c36460f9d9b8b47ab85f8d9",
+    "selfextract.exe": "026f531b0bf4fbb55183d5d5341353195300af63920ec891a8fcdeb8605dab05"
+  },
+  "payload_sha256": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+  "install": {
+    "files": [
+      "payload.txt",
+      "child.exe",
+      "uninstall.exe"
+    ],
+    "uninstall_key": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture",
+    "registry": {
+      "DisplayName": "Ciuki Installer Fixture",
+      "DisplayVersion": "1.0",
+      "Publisher": "CiukiOS",
+      "InstallLocation": "C:\\Program Files\\Ciuki Installer Fixture",
+      "UninstallString": "\"C:\\Program Files\\Ciuki Installer Fixture\\uninstall.exe\""
+    },
+    "links": {
+      "C:\\WINDOWS\\Desktop\\Ciuki Installer Fixture.lnk": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt",
+      "C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Installer Fixture\\Readme.lnk": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt"
+    }
+  },
+  "cancel": {
+    "exit": 1,
+    "files": [],
+    "registry_values": [],
+    "links": []
+  },
+  "restart": {
+    "RunOnce": "\"C:\\Program Files\\Ciuki Installer Fixture\\child.exe\" /restart-child",
+    "delete": "C:\\WINDOWS\\TEMP\\CiukiInstallerFixture.remove",
+    "journal": "C:\\WINDOWS\\CIUKIRST.LOG",
+    "completion": "C:\\WINDOWS\\TEMP\\CiukiInstallerFixture.restarted"
+  },
+  "uninstall": {
+    "files": [],
+    "links": [],
+    "registry_values": [],
+    "temporary_copy": "C:\\WINDOWS\\TEMP\\CiukiInstallerFixture-uninstall.exe",
+    "self_delete": "WININIT.INI NUL=temporary_copy -> WININIT.BAK; journal observed before completion"
+  },
+  "inf": {
+    "payload_sha256": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+    "Installed": {
+      "type": "REG_DWORD",
+      "data": 1
+    },
+    "Obsolete": null,
+    "ini": {
+      "file": "C:\\WINDOWS\\fixture.ini",
+      "section": "Fixture",
+      "key": "Installed",
+      "value": "1"
+    }
+  },
+  "identities": {
+    "child.exe": {
+      "fnv1a32": 3063629135,
+      "sha256": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+      "size": 2560
+    },
+    "uninstall.exe": {
+      "fnv1a32": 1708464209,
+      "sha256": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+      "size": 37879
+    }
+  },
+  "states": {
+    "1": {
+      "files": {},
+      "registry": {}
+    },
+    "2": {
+      "files": {
+        "C/Program Files/Ciuki Installer Fixture": "directory",
+        "C/Program Files/Ciuki Installer Fixture/payload.txt": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+        "C/Program Files/Ciuki Installer Fixture/child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+        "C/Program Files/Ciuki Installer Fixture/uninstall.exe": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture": "directory",
+        "C/WINDOWS/Desktop/Ciuki Installer Fixture.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture/Readme.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080"
+      },
+      "registry": {
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture": "key",
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayName": [
+          1,
+          "4300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayVersion": [
+          1,
+          "31002e0030000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@Publisher": [
+          1,
+          "4300690075006b0069004f0053000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@InstallLocation": [
+          1,
+          "43003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@UninstallString": [
+          1,
+          "220043003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065005c0075006e0069006e007300740061006c006c002e0065007800650022000000"
+        ]
+      }
+    },
+    "3": {
+      "files": {
+        "C/Program Files/Ciuki Installer Fixture": "directory",
+        "C/Program Files/Ciuki Installer Fixture/payload.txt": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+        "C/Program Files/Ciuki Installer Fixture/child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+        "C/Program Files/Ciuki Installer Fixture/uninstall.exe": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture": "directory",
+        "C/WINDOWS/Desktop/Ciuki Installer Fixture.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture/Readme.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/TEMP/CiukiInstallerFixture.remove": "c90e5c173a9ecc4cacf3e71c0542f7e598eb7c7a7f2d97877e8ad5e9140098b9",
+        "C/WINDOWS/WININIT.INI": "5bab7d334aeb8bb0a458c5eda793c9364ea2bd20134e04cb2419e3d92d7b9b93"
+      },
+      "registry": {
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture": "key",
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayName": [
+          1,
+          "4300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayVersion": [
+          1,
+          "31002e0030000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@Publisher": [
+          1,
+          "4300690075006b0069004f0053000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@InstallLocation": [
+          1,
+          "43003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@UninstallString": [
+          1,
+          "220043003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065005c0075006e0069006e007300740061006c006c002e0065007800650022000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce@CiukiInstallerFixture": [
+          1,
+          "220043003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065005c006300680069006c0064002e00650078006500220020002f0072006500730074006100720074002d006300680069006c0064000000"
+        ]
+      }
+    },
+    "4": {
+      "files": {
+        "C/Program Files/Ciuki Installer Fixture": "directory",
+        "C/Program Files/Ciuki Installer Fixture/payload.txt": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+        "C/Program Files/Ciuki Installer Fixture/child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+        "C/Program Files/Ciuki Installer Fixture/uninstall.exe": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture": "directory",
+        "C/WINDOWS/Desktop/Ciuki Installer Fixture.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture/Readme.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/TEMP/CiukiInstallerFixture.remove": "c90e5c173a9ecc4cacf3e71c0542f7e598eb7c7a7f2d97877e8ad5e9140098b9",
+        "C/WINDOWS/WININIT.INI": "5bab7d334aeb8bb0a458c5eda793c9364ea2bd20134e04cb2419e3d92d7b9b93",
+        "C/WINDOWS/CIUKIRST.LOG": "d0f1b767dbead8be6dcdde92914c061e23044717344b057dfafb663fed366015"
+      },
+      "registry": {
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture": "key",
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayName": [
+          1,
+          "4300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayVersion": [
+          1,
+          "31002e0030000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@Publisher": [
+          1,
+          "4300690075006b0069004f0053000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@InstallLocation": [
+          1,
+          "43003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@UninstallString": [
+          1,
+          "220043003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065005c0075006e0069006e007300740061006c006c002e0065007800650022000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce@CiukiInstallerFixture": [
+          1,
+          "220043003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065005c006300680069006c0064002e00650078006500220020002f0072006500730074006100720074002d006300680069006c0064000000"
+        ]
+      }
+    },
+    "5": {
+      "files": {
+        "C/Program Files/Ciuki Installer Fixture": "directory",
+        "C/Program Files/Ciuki Installer Fixture/payload.txt": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+        "C/Program Files/Ciuki Installer Fixture/child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+        "C/Program Files/Ciuki Installer Fixture/uninstall.exe": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture": "directory",
+        "C/WINDOWS/Desktop/Ciuki Installer Fixture.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/Start Menu/Programs/Ciuki Installer Fixture/Readme.lnk": "e766a290f779c32eaebb62b721a38bcdb488e4d4140d39d4ad0d7429b5380080",
+        "C/WINDOWS/TEMP/CiukiInstallerFixture.restarted": "321a589676f7ab6c1f45bd3c2b3741e9f63183500cb9925762551503fe6ee9a4",
+        "C/WINDOWS/WININIT.BAK": "5bab7d334aeb8bb0a458c5eda793c9364ea2bd20134e04cb2419e3d92d7b9b93"
+      },
+      "registry": {
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture": "key",
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayName": [
+          1,
+          "4300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@DisplayVersion": [
+          1,
+          "31002e0030000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@Publisher": [
+          1,
+          "4300690075006b0069004f0053000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@InstallLocation": [
+          1,
+          "43003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065000000"
+        ],
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture@UninstallString": [
+          1,
+          "220043003a005c00500072006f006700720061006d002000460069006c00650073005c004300690075006b006900200049006e007300740061006c006c0065007200200046006900780074007500720065005c0075006e0069006e007300740061006c006c002e0065007800650022000000"
+        ]
+      }
+    },
+    "6": {
+      "files": {
+        "C/WINDOWS/TEMP/CiukiInstallerFixture.restarted": "321a589676f7ab6c1f45bd3c2b3741e9f63183500cb9925762551503fe6ee9a4",
+        "C/WINDOWS/TEMP/CiukiInstallerFixture-uninstall.exe": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+        "C/WINDOWS/WININIT.INI": "5acaadfdade992c9a8208f79c36599f96f53830cd54fa7db14c795ca046347c2",
+        "C/WINDOWS/WININIT.BAK": "5bab7d334aeb8bb0a458c5eda793c9364ea2bd20134e04cb2419e3d92d7b9b93"
+      },
+      "registry": {}
+    },
+    "7": {
+      "files": {
+        "C/WINDOWS/TEMP/CiukiInstallerFixture.restarted": "321a589676f7ab6c1f45bd3c2b3741e9f63183500cb9925762551503fe6ee9a4",
+        "C/WINDOWS/TEMP/CiukiInstallerFixture-uninstall.exe": "77d13cf176db9e4639998df48119c1e2488f5e980e42c24a058fd0512bf00287",
+        "C/WINDOWS/CIUKIRST.LOG": "d0f1b767dbead8be6dcdde92914c061e23044717344b057dfafb663fed366015",
+        "C/WINDOWS/WININIT.INI": "5acaadfdade992c9a8208f79c36599f96f53830cd54fa7db14c795ca046347c2",
+        "C/WINDOWS/WININIT.BAK": "5bab7d334aeb8bb0a458c5eda793c9364ea2bd20134e04cb2419e3d92d7b9b93"
+      },
+      "registry": {}
+    },
+    "8": {
+      "files": {
+        "C/WINDOWS/TEMP/CiukiInstallerFixture.restarted": "321a589676f7ab6c1f45bd3c2b3741e9f63183500cb9925762551503fe6ee9a4",
+        "C/WINDOWS/WININIT.BAK": "5acaadfdade992c9a8208f79c36599f96f53830cd54fa7db14c795ca046347c2"
+      },
+      "registry": {}
+    },
+    "selfextract.exe": {
+      "files": {},
+      "registry": {}
+    },
+    "infchain.exe": {
+      "files": {
+        "C/Program Files/Ciuki INF Fixture": "directory",
+        "C/Program Files/Ciuki INF Fixture/child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+        "C/Program Files/Ciuki INF Fixture/child.done": "321a589676f7ab6c1f45bd3c2b3741e9f63183500cb9925762551503fe6ee9a4",
+        "C/Program Files/Ciuki INF Fixture/payload.txt": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+        "C/WINDOWS/fixture.ini": "bc8600ac08c7a0c742362df32dca24acdd7d328d1d67d69cb0a57c6b4bd70b55"
+      },
+      "registry": {
+        "HKLM\\Software\\CiukiOS\\InstallerFixture": "key",
+        "HKLM\\Software\\CiukiOS\\InstallerFixture@Installed": [
+          4,
+          "01000000"
+        ]
+      }
+    }
+  }
+}

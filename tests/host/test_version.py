@@ -54,6 +54,21 @@ class VersionTests(unittest.TestCase):
         self.assertIn(current["display"], headings[0])
         self.assertIn(current["display"], (ROOT / "README.md").read_text())
 
+    def test_documentation_carries_the_current_version_and_identity(self):
+        """f2-97: the docs that describe the image and the About credits agree with config/version.json."""
+        current = version.load()
+        notes = (ROOT / "docs/release-notes-1.0-alpha.md").read_text()
+        self.assertIn(f"{current['number'].rsplit('.', 1)[0]} {current['stage'].title()}", notes)   # "1.0 Alpha"
+        for name in ("README.md", "docs/build-and-run.md"):
+            self.assertIn(current["display"], (ROOT / name).read_text(), name)
+        # No stale pre-alpha version in the sections that describe the build.
+        self.assertNotIn("0.9.2 pre-alpha)", (ROOT / "docs/build-and-run.md").read_text())
+        credits = (ROOT / "docs/credits.md").read_text()
+        self.assertIn("Classic computing, one woof at a time.", credits)
+        # About shows the kernel's uname version, which is this file's display string (build_kernel passes it).
+        shell = (ROOT / "apps/desktop/shell.c").read_text()
+        self.assertIn('"Dedicated to Ciuki.  Version %s", d->version', shell)
+
     def test_kernel_and_image_builders_read_the_same_source(self):
         self.assertEqual(kernel_build.read_version(), version.load())
         self.assertEqual(image.read_version(), version.load())

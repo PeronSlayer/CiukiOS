@@ -2126,6 +2126,709 @@
           }
         ]
       }
+    },
+    {
+      "id": "https-trusted",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=https://fixture.test/page",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 200
+              },
+              "tls": "ok",
+              "bytes": {
+                "ge": 100
+              },
+              "url": "https://fixture.test/page"
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "f6-17 'Trusted HTTPS': the Ciuki page over TLS 1.2 with the fixture CA of the test profile"
+    },
+    {
+      "id": "https-untrusted",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=https://untrusted.test/page",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "tls": "cert",
+              "bytes": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "f6-17 'Certificate refusal': the fixture answers the untrusted.test SNI with a self-signed certificate; no response reaches the browser"
+    },
+    {
+      "id": "http-redirect-https",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=http://fixture.test/upgrade",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 200
+              },
+              "tls": "ok",
+              "bytes": {
+                "ge": 1
+              },
+              "url": "https://fixture.test/cookie-end"
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "f6-17 'HTTP to HTTPS redirect': /upgrade (plain HTTP) redirects to https://fixture.test/cookie, which sets the Secure cookie and lands on /cookie-end over TLS"
+    },
+    {
+      "id": "https-cookies",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=https://fixture.test/cookie",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 200
+              },
+              "tls": "ok",
+              "bytes": {
+                "ge": 1
+              },
+              "url": "https://fixture.test/cookie-end"
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "f6-17 'Cookie over TLS': /cookie-end answers 200 only when the Secure; HttpOnly cookie set by /cookie comes back over TLS (403 otherwise)"
+    },
+    {
+      "id": "https-gzip-64k",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=https://fixture.test/gzip64",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 200
+              },
+              "tls": "ok",
+              "bytes": {
+                "eq": 65536
+              },
+              "url": "https://fixture.test/gzip64"
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "f6-17 '64 KiB gzip over TLS': exactly 65,536 decoded bytes delivered to the core"
+    },
+    {
+      "id": "https-not-ready",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=https://fixture.test/page now=1",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 1
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 0
+              },
+              "tls": "not_ready",
+              "bytes": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "f6-17 'Not ready': now=1 starts the browser before the entropy pool is seeded; the readiness page replaces the fetch (no connection). The tls verdict name arrives with f6-17's CIUKI_TLS_NOT_READY mapping (sdk/netsurf/port/testmode.inc)"
     }
   ]
 }

@@ -17,7 +17,7 @@ class InstallerShellTests(unittest.TestCase):
         cls.program = cls.out/'shell-test'
         cls.sanitized = cls.out/'shell-test-asan'
         sources = [ROOT/'sdk/win32/shell'/n for n in
-            ('folders.c','link.c','execute.c','fileop.c','strings.c')]
+            ('folders.c','pidl.c','link.c','execute.c','fileop.c','strings.c')]
         sources += [ROOT/'sdk/win32/services/bytes.c',
             ROOT/'sdk/win32/kernel32/text.c',ROOT/'apps/desktop/protocol.c']
         sources += [ROOT/'sdk/win32/version'/n for n in ('version.c','install.c')]
@@ -94,7 +94,11 @@ class InstallerShellTests(unittest.TestCase):
             ('accepted','Microsoft Corporation','Microsoft DirectX','DXSETUP.EXE',1),
             ('wrong-company','CiukiOS','Microsoft DirectX','DXSETUP.EXE',0),
             ('wrong-product','Microsoft Corporation','Other Setup','DXSETUP.EXE',0),
-            ('wrong-original','Microsoft Corporation','Microsoft DirectX','OTHER.EXE',0)):
+            ('wrong-original','Microsoft Corporation','Microsoft DirectX','OTHER.EXE',0),
+            # f5-15B: the DirectX 3 launcher's ProductName (registered signs
+            # and a double space); lowercase OriginalFilename as shipped.
+            ('directx3-form','Microsoft Corporation','Microsoft(R) DirectX for Windows(R)  95','dxsetup.exe',1),
+            ('no-directx-word','Microsoft Corporation','Microsoft Office','DXSETUP.EXE',0)):
             folder=self.out/ident
             folder.mkdir(exist_ok=True)
             rc=folder/'identity.rc'
@@ -107,6 +111,23 @@ class InstallerShellTests(unittest.TestCase):
             image=folder/'DXSETUP.EXE'
             subprocess.run(['lld-link','/machine:x86','/nodefaultlib','/safeseh:no','/entry:entry@0',
                 '/subsystem:windows,4.0','/osversion:4.0','/timestamp:0','/out:'+str(image),obj,res],check=True)
+            p=subprocess.run([model,image,str(expected)],capture_output=True,text=True,timeout=20)
+            self.assertEqual(p.returncode,0,ident+': '+p.stdout+p.stderr)
+        # f5-15B: no version resource at all (the DirectX 3 DXSETUP.EXE of
+        # 1996): the import of DSETUP.DLL!DirectXSetupA identifies the
+        # launcher; an unrelated import does not.
+        for ident,dll,symbol,expected in (('versionless-dsetup','dsetup.dll','DirectXSetupA',1),
+                                          ('versionless-other','other.dll','OtherSetupA',0)):
+            folder=self.out/ident
+            folder.mkdir(exist_ok=True)
+            (folder/'import.def').write_text(f'LIBRARY {dll}\nEXPORTS\n {symbol}@12\n')
+            subprocess.run(['llvm-dlltool','-m','i386','-k','-d',str(folder/'import.def'),'-l',str(folder/'import.lib')],check=True)
+            (folder/'caller.c').write_text('__declspec(dllimport) int __attribute__((stdcall)) '+symbol+'(void *,const char *,unsigned);\n'
+                'int __attribute__((stdcall)) entry(void){return '+symbol+'(0,0,0);}\n')
+            subprocess.run(['clang','--target=i686-pc-windows-msvc','-ffreestanding','-c',str(folder/'caller.c'),'-o',str(folder/'caller.obj')],check=True)
+            image=folder/'DXSETUP.EXE'
+            subprocess.run(['lld-link','/machine:x86','/nodefaultlib','/safeseh:no','/entry:entry@0',
+                '/subsystem:windows,4.0','/osversion:4.0','/timestamp:0','/out:'+str(image),str(folder/'caller.obj'),str(folder/'import.lib')],check=True)
             p=subprocess.run([model,image,str(expected)],capture_output=True,text=True,timeout=20)
             self.assertEqual(p.returncode,0,p.stdout+p.stderr)
             renamed=folder/'OTHER.EXE'

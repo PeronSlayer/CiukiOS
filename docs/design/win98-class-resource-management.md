@@ -329,6 +329,11 @@ Cap a fast-disk command at 64 KiB initially, with smaller adaptive limits
 when measured command time would consume the reader's service budget.
 Keep current firmware-selected DMA/PIO fallback and stop-proof rules.
 Do not assume a slow 64 KiB USB command can meet a 20 ms same-device bound.
+f1-96 (2026-10-22): a controller whose commands cannot meet the budget pins
+its admission size with `blk_queue_set_limits` (max and adaptive floor);
+the usb-storage queue pins its negotiated READ(10)/WRITE(10) length (64 KiB
+on UHCI) instead of ratcheting to the one-page floor, see
+[usb-contract.md](usb-contract.md#f1-96-negotiated-64-kib-transfers-uhci-td-ring-pinned-queue-limit-2026-10-22).
 
 Merge only adjacent requests with compatible device generation, priority,
 dependency frontier and pin ownership. FIFO/age break ties and prevent
@@ -582,7 +587,9 @@ records page-in/out, working sets, I/O waits and audio/input deadlines at
 ### R1: bounded kernel work and interrupts (R01/R02/M06)
 
 Target ≤1 ms between safe points, with no software execution span >2 ms
-while preemption is disabled outside IRQ-off paths. Audit all lifecycle and
+while preemption is disabled outside IRQ-off paths. Amendment f1-90 (lead,
+2026-10-21): the AC'97 interrupt wakes the audio refill worker directly, in
+O(1), rather than through `device-work`; other waits keep the deferred path. Audit all lifecycle and
 error paths as well as success: VM creation/teardown, page-table/heap/reclaim
 walks, FAT chain walks, dirty scans, VGA harvest/exchange, user copies and
 display/firmware handoffs. A fixed iteration count requires a conservative
@@ -605,6 +612,23 @@ heuristic does not relax the software budget, erase raw latency, or justify
 changing BIOS/SMM policy. Host replay must show ≤100 µs modeled work; physical
 qualification needs both that software bound and acceptable end-to-end
 service despite measured firmware gaps. Unexpected raw overruns remain open.
+
+Amendment f1-94 (lead, 2026-10-22): after the operating system has taken a
+device over from the firmware through its documented handoff, clearing the
+chipset SMI enable that belongs to that handoff is part of the handoff, not
+a change of BIOS/SMM policy. Today this is exactly one bit: `LEGACY_USB_EN`
+(ICH3-M 290716-001 9.8.3.14), cleared once after all three UHCI functions
+are owned and their USB_LEGKEY trap/SMI enables are clear (11.1.16). Every
+other SMI enable (GBL_SMI_EN, BIOS_EN, SLP_SMI_EN, APMC_EN, SWSMI_TMR_EN,
+MCSMI_EN, TCO_EN, PERIODIC_EN) stays with the firmware; a firmware re-arm is
+recorded and never fought. The SMI attribution records (`[kernel] smi`,
+`smi_coincide`, `smi_regs`, [f1-94](../validation/f1-94-irqoff-blackout.md))
+are evidence only: they never subtract firmware time from a software budget.
+Reducing our own device traffic that the firmware turns into SMIs (the
+ThinkPad EC poll, 1 Hz by default, `ecpoll=0` to stop it) is ordinary driver
+policy and needs no further amendment. Since f1-100 the EC poll is off by
+default (`ecpoll=1` for diagnosis) and every remaining EC transaction is
+counted and bounded ([f1-100](../validation/f1-100-ec-traffic.md)).
 
 Extend `test_kernel_latency.py`/production scheduler and VM lifecycle replays
 with long cleanup, fragmented cached chains, all-dirty cache and maximum
@@ -645,6 +669,21 @@ and a proposed aggregate budget of at most 4 ms per 10 ms under the admitted
 reference load. Budget exhaustion requeues ordinary work; an actual urgent
 audio deadline is reported/served, and an unschedulable aggregate workload
 fails admission/qualification rather than silently starving audio.
+Amendment f1-90 (lead, 2026-10-21): the 4 ms per 10 ms budget is shared by
+the device tasks with per-task accounting; only tasks above their max-min
+fair share are demoted when it runs out. The audio refill worker is exempt
+from the shared budget and has its own 2 ms per 10 ms budget, so device-class
+CPU may reach 6 ms per 10 ms; refill overruns are recorded separately
+(`audio_refill_overrun`). `device_attribution` keeps the previous all-tasks
+demotion as the replay's negative control only.
+Amendment f2-96 (2026-10-22): firmware (SMM) time proven by cpustat is left
+out of every scheduler budget (device, audio refill, desktop share) and of
+the audio service deadline; CPU statistics stay raw. Proofs: a gap of 1 ms or
+more between two marks of straight-line IF-clear phases (the f1-94 rule), and
+a PIT interrupt more than one period late with IF set, credited from the
+missed edge (by the PIT phase) to the entry. Record `[sched] firmware_credit
+count= us= max_us=` per window with credit
+([f2-96](../validation/f2-96-cursor-ec-volume.md)).
 Focused DOS preference must fit into the CPU time left after device service;
 it may use at most 80% of that remainder, preserving desktop/background
 progress. This is a proposed reconciliation of the existing 8/10 policy,
@@ -662,6 +701,23 @@ admitted load, input-to-UI-ready dispatch ≤10 ms, normal ready wait ≤100 ms,
 and all device deadlines/R1 bounds hold together. Report dispatch/wakeup
 counts and CPU overhead, not just average frame rate. Physical acceptance
 uses the combined C3 workload with continued input and game cadence.
+
+Amendment f1-98 (lead, 2026-10-22): a task holding a drive reservation or
+guard, a writer turn or a filesystem lock runs at least at the priority of
+its highest waiter (transitive, cycle-refusing, released with the hold;
+`[sched] inherit` record), as Windows 9x boosts the owner of a critical
+section. The desktop process and the Win32 window server keep a 25 % share
+of every millisecond (2.5 ms banked) ahead of the focused VM's preference,
+behind device service and the starvation boost; a holder that a desktop
+thread waits for borrows that share (`[sched] desktop_share` record). The
+80 % cap stays.
+
+Amendment f1-101 (lead, 2026-10-22): the threads that write to an open
+audio stream or read its refill (`AUDIO_REFILL_READ`) run at level 16, the
+device band's lower edge, while the mixer measures the stream more than one
+period behind its target lead; all such producers share 20 ms of boosted CPU
+per sliding 100 ms, not charged to the device or refill budgets
+(`[sched] audio_producer` record; `AUDIO_GET_PRODUCER` reads the state).
 
 ### R3: timer and audio deadlines (R03/R06)
 

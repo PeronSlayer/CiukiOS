@@ -5,7 +5,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 enum ciuki_tls_error { CIUKI_TLS_OK,CIUKI_TLS_MEMORY,CIUKI_TLS_CLOCK,CIUKI_TLS_ENTROPY,
-    CIUKI_TLS_HOST,CIUKI_TLS_CERT,CIUKI_TLS_DATE,CIUKI_TLS_PROTOCOL,CIUKI_TLS_IO,CIUKI_TLS_EOF };
+    CIUKI_TLS_HOST,CIUKI_TLS_CERT,CIUKI_TLS_DATE,CIUKI_TLS_PROTOCOL,CIUKI_TLS_IO,CIUKI_TLS_EOF,
+    CIUKI_TLS_NOT_READY };
 struct ciuki_tls_cert { size_t offset,bytes; };
 struct ciuki_tls;
 bool ciuki_tls_clock(uint32_t *,uint32_t *);
@@ -16,6 +17,7 @@ void ciuki_tls_free(struct ciuki_tls *);
  * reject post-handshake input while this request's flag is still false. */
 enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *,int,size_t *,bool *);
 unsigned ciuki_tls_state(struct ciuki_tls *);
+int ciuki_tls_engine_error(struct ciuki_tls *);
 /* Includes partial ciphertext headers/bodies, even with no readable plaintext. */
 bool ciuki_tls_pending_input(struct ciuki_tls *);
 const unsigned char *ciuki_tls_read(struct ciuki_tls *,size_t *);
@@ -25,4 +27,6 @@ void ciuki_tls_write_ack(struct ciuki_tls *,size_t);
 void ciuki_tls_flush(struct ciuki_tls *);
 unsigned ciuki_tls_certificates(struct ciuki_tls *,const unsigned char **,const struct ciuki_tls_cert **);
 const char *ciuki_tls_message(enum ciuki_tls_error);
+/* Caller-owned storage keeps concurrent readiness pages independent. */
+const char *ciuki_tls_describe(enum ciuki_tls_error,char *,size_t);
 #endif

@@ -33,6 +33,13 @@ int main(void)
     click(x,y);assert(d.sh.media_open && (d.sh.want_reload&32));
     desk_shell_topbar(&d,(struct desk_box){0,0,640,DESK_BAR});
     desk_shell_overlay(&d,(struct desk_box){0,0,640,480});assert(rows==2 && icon_calls);
+    /* f2-89 regression: the popup interior (between and beside the rows) is
+     * opaque, not left as the untouched zeroed surface. */
+    {
+        int px=mi.x+mi.w-248, py=DESK_BAR+SH_TRAY_GAP, ph=28+2*22;
+        for (int dy=2;dy<ph-2;dy+=5) for (int dx=2;dx<248-2;dx+=7)
+            assert(d.pixels[(size_t)(py+dy)*d.width+(size_t)(px+dx)]!=0);
+    }
     /* The first action is below the top-anchored popup header. */
     click(mi.x+mi.w-248+10,DESK_BAR+SH_TRAY_GAP+28+8);assert(!d.sh.media_open && d.sh.want_remove==4 && d.sh.remove_generation==100);
     click(x,y);assert(d.sh.media_open);assert(desk_shell_key(&d,DU_KEY_ESC,1)&&!d.sh.media_open);

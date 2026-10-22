@@ -12,7 +12,7 @@ out = root / 'build/host/entropy'
 out.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser()
 parser.add_argument('--kernel', action='store_true')
-parser.add_argument('--case', choices=('model', 'kernel', 'jent', 'lwip-seed', 'qualification'))
+parser.add_argument('--case', choices=('model', 'kernel', 'jent', 't23', 'lwip-seed', 'qualification'))
 args = parser.parse_args()
 includes = ['-I', str(root / 'src/kernel/include')]
 recipe = runpy.run_path(str(root / 'src/kernel/lib/jitterentropy/build.py'))
@@ -37,12 +37,12 @@ else:
     flags = ['-D_POSIX_C_SOURCE=200809L', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
              '-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     common = [str(root / f'src/kernel/lib/{n}.c') for n in ('entropy_pool', 'sha256')]
-    for name in ((args.case,) if args.case else ('model', 'jent', 'kernel', 'lwip-seed')):
+    for name in ((args.case,) if args.case else ('model', 'jent', 't23', 'kernel', 'lwip-seed')):
         binary = out / (name + '-test')
         extra, sources = [], common
         if name == 'kernel':
             sources = [*common, str(root / 'src/kernel/lib/fmt.c')]
-        if name in ('jent', 'qualification'):
+        if name in ('jent', 't23', 'qualification'):
             objects = []
             for c in recipe['sources'](src):
                 obj = out / ('host-jent-' + c.stem + '.o')

@@ -577,7 +577,7 @@ static void test_client_boundary(void)
     CHECK(dosvm_create(&reserved_config,&reserved_vm)==-ENOENT && !reserved_vm && !game_creating[2]);
     program_result=0;
     game_creating[2]++;CHECK(dosvm_game_remove_reserve(2)==-EBUSY);game_creating[2]--;
-    for(unsigned kernel=0;kernel<2;kernel++){
+    for(unsigned kernel=0;kernel<3;kernel++){
         slots[0].info.key=(struct dosvm_key){1,1};slots[0].info.state=DOSVM_BOOTING;
         slots[0].game=2;slots[0].kernel=kernel;
         CHECK(dosvm_game_remove_reserve(2)==-EBUSY);
@@ -597,7 +597,7 @@ static void test_client_boundary(void)
     c.version = CIUKI_DOSVM_VERSION; c.size = 100; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
     c.size = sizeof(c); user_fault = true; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EFAULT); user_fault = false;
     c.state = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.state = 0;
-    c.launch.kernel=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.kernel=3; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.kernel=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); /* shell */
     c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
@@ -742,8 +742,55 @@ static void test_client_boundary(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD && v->info.data_loss &&
           v->info.reason == DOSVM_TERMINATE && fake_surface[0].references == 1);
     empty();
+    /* f3-61: a shell idle at its prompt (DOS ready, no DPMI client, no V86
+     * EXEC frame outstanding, just back from its idle wait) closes as an
+     * ordinary EXIT, as Windows 9x closes an idle MS-DOS Prompt; a program
+     * still above the shell keeps the forced, possible-loss termination. */
+    for (unsigned running = 0; running < 2; running++) {
+        CHECK(!create_window(0, running ? "Running" : "Idle", &w));
+        v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+        CHECK(!dosvm_disk_write(v, 9, sector));
+        v->info.dos_ready = true; v->idle.seen = true; v->idle.last_tick = g_ticks;
+        v->exec_pending = (uint8_t)running;
+        CHECK(dosvm_shell_idle(v) == !running);
+        c = command_for(w.id, w.generation);
+        CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD &&
+              v->info.data_loss == (running != 0) && v->info.reason == (running ? DOSVM_TERMINATE : DOSVM_EXIT));
+        empty();
+    }
+    /* f3-61b: a run carries one probe name (scripts/test/evidence.py). The
+     * selected controller owns the window path's records from admission on:
+     * f3:vm-game as f3:vm-fullscreen; any other run keeps vm-window. The
+     * QEMU run cade4804 failed on a probe=vm-window admission record. */
+    {
+        uint32_t old_flags = g_boot.flags, old_length = g_boot.test_request_len;
+        char old_request[sizeof(g_boot.test_request)];
+        memcpy(old_request, g_boot.test_request, sizeof(old_request));
+        static const struct { const char *request, *probe; } owners[] = {
+            {"f3:vm-game run=12345678", "vm-game"},
+            {"f3:vm-game run=12345678 kernel=freedos-1.3", "vm-game"},
+            {"f3:vm-fullscreen run=12345678", "vm-fullscreen"},
+            {"f3:vm-window run=12345678", "vm-window"},
+            {"f3:vm-gamex run=12345678", "vm-window"}};
+        for (unsigned i = 0; i < ARRAY_SIZE(owners); i++) {
+            g_boot.flags |= CBI_F_TEST_REQUEST;
+            g_boot.test_request_len = (uint32_t)strlen(owners[i].request);
+            memcpy(g_boot.test_request, owners[i].request, g_boot.test_request_len);
+            CHECK(!create_window(0, "Owner", &w));
+            v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+            char tag[48]; snprintf(tag, sizeof(tag), "probe=%s ", owners[i].probe);
+            CHECK(!strcmp(v->probe, owners[i].probe) && strstr(last_record, tag) && strstr(last_record, "group=admission"));
+            c = command_for(w.id, w.generation);
+            CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD);
+            CHECK(strstr(last_record, tag));          /* teardown records keep the owner */
+            empty();
+        }
+        g_boot.flags = old_flags; g_boot.test_request_len = old_length;
+        memcpy(g_boot.test_request, old_request, sizeof(old_request));
+    }
     fake_current = 0;
-    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death and failures PASS\n");
+    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death, idle-shell close, "
+           "controller record ownership and failures PASS\n");
 }
 
 /* f3-02 QEMU finding (vm-window, 2026-10-11): the shell waits for a line in

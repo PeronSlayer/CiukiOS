@@ -54,7 +54,7 @@ import re, sys
 root, out = map(Path, sys.argv[1:])
 s = (root / "src/kernel/usb/usb_core.c").read_text()
 body = ""
-for name in ("native_now", "service", "input_service", "start_services"):
+for name in ("periodic_scan", "native_now", "service", "input_service", "start_services"):
     m = re.search(r"^static [^\n]+\b" + name + r"\([^\n]*\)\s*\{", s, re.M)
     assert m, name
     depth, end = 1, m.end()

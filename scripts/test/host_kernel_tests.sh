@@ -14,6 +14,7 @@ python3 "$root/tests/host/entropy/run.py" --kernel
 python3 "$root/tests/host/record_scope_test.py"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
+python3 -B -m unittest discover -s "$root/tests/host" -p test_splash_progress.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
 python3 -B "$root/tests/host/test_presenter_display.py"
@@ -264,6 +265,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
     -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/mtrr_test.c" -o "$out/mtrr_test"
 "$out/mtrr_test"
+# f6-21b: kernel PDEs identical in every directory across runtime allocations.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/kernel_pde_test.c" -o "$out/kernel_pde_test"
+"$out/kernel_pde_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
 "$out/fbdev_test"
@@ -587,3 +593,9 @@ python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loade
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel32.py
 # f3-50: bound personality, native FAT/VFS and production V86/DPMI CPU model.
 bash "$root/tests/host/dos/run_hook_cpu.sh"
+
+# f3-56: unified CiukiDOS DFV2 binding (fork build, native matrix, CPU boots).
+bash "$root/tests/host/dos/run_unified_binding.sh"
+# f3-57: unified CiukiDOS local IFS (live VFS backend, critical errors,
+# activation barrier, kernel=unified installation record).
+bash "$root/tests/host/dos/run_unified_file.sh"

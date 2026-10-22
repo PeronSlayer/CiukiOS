@@ -102,6 +102,61 @@ retries after 250 ms, and counts once toward eight consecutive failures.
 Success resets that count. At eight failures log `disabled` once and retry
 at 10 s intervals; successful re-probe logs `resumed`. Timeout records include
 the stalled stage and elapsed milliseconds and are limited to one per second.
+
+Amendment f1-94 (2026-10-22): the poll and its failure retry run at 1 Hz
+(1000 ms) instead of 250 ms, and the exact `BOOT.CFG` token `ecpoll=0`
+disables the poll (`[ec] thinkpad poll_ms=0 source=ecpoll=0`). Reason: the
+T23's 2.1 ms interrupt-off blackouts arrive at about the old 4 Hz rate and
+the legacy-mode EC GPE can become an SMI; see
+[f1-94](../validation/f1-94-irqoff-blackout.md).
+
+Amendment f1-100 (2026-10-22): no periodic EC traffic by default. The T23
+trial of 5a10eef4 showed exactly two 2.1 ms SMIs per EC read transaction:
+the EC's event line (GPI[12], GPE 1Ch) is routed to SMI# while SCI_EN is
+clear, so the 1 Hz poll alone cost about 4 ms of interrupt-off time per
+second ([f1-100](../validation/f1-100-ec-traffic.md)). Now the poll is off
+unless the exact `BOOT.CFG` token `ecpoll=1` is present (diagnosis;
+`ecpoll=0` wins over it). The boot probe is one RD_EC when the register
+already holds the saved mute preference (a stable second read is required
+only before a first write); a mute change from the desktop keeps its read,
+write and proving read; a level-only change makes no EC access. Every
+operation is bounded to four transactions and counted in the `[ec] thinkpad
+io=... transactions=...` window record. **Limitation:** the desktop mirror
+of the hardware volume keys (tray and Control Panel percentage and mute) is
+updated only by an explicit user action: opening the tray volume popup sends
+`MIXER_REFRESH_MASTER`, which makes the EC worker read register 30h once
+(at most once per second); the H page key window asks once per second. The
+EC still drives its amplifier from the keys at all times, so the sound
+follows the keys; only the displayed and saved preference can lag until the
+popup is opened. A level change from the desktop never rewrites the EC level
+and does not undo a hardware mute that has not been observed yet; a mute
+change from the desktop reads the register first and writes the requested
+state. Between two observations, several key presses can change the EC
+level by more than one step; the mirror then keeps its percentage and
+follows the mute bit, as the 1 Hz poll already did for presses inside one
+second. Without a poll, a user change or refresh is also the retry after an
+EC failure, at the existing cadence (1 s, 10 s after eight failures).
+
+Amendment f2-96 (2026-10-22, supersedes the f1-100 default): the T23 trial
+of a4d9454e showed that with no poll the system volume no longer followed
+the volume keys (the tray, Control Panel, saved preference and mute gate
+change only when the EC register is read). The default is again a poll, of
+one RD_EC every 2 s: one transaction and two 2.1 ms SMIs, about 4 ms of SMI
+time per 2 s (half the 1 Hz cost measured on 5a10eef4). `BOOT.CFG`
+`ecpoll=0` turns the poll off (the f1-100 behaviour: popup refresh only),
+`ecpoll=1` selects 1 Hz for diagnosis; `ecpoll=0` wins. A key press reaches
+the mirror within 2 s; the popup's `MIXER_REFRESH_MASTER` stays. Records:
+`[ec] thinkpad poll_ms=2000 source=default` and one `[ec] thinkpad io=9
+transactions=1 … poll_ms=2000` per 2 s window. The codec stays at unity while
+the EC owns the master: the [Linux ThinkPad ACPI
+documentation](https://raw.githubusercontent.com/torvalds/linux/v6.12/Documentation/admin-guide/laptops/thinkpad-acpi.rst)
+places the IBM console amplifier after the AC'97 mixer "under exclusive
+control of the firmware", which handles the volume keys without the OS, so
+applying the mirrored level to the codec as well would attenuate twice.
+The SMI time of the poll no longer reaches the audio refill's budget:
+cpustat leaves proven firmware time out of the scheduler budgets and the
+service deadline (see the f2-96 validation record).
+
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already
 qualified at boot, without bypassing quarantined resources.

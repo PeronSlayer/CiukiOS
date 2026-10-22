@@ -85,7 +85,7 @@ struct desk_shell {
     int tooltip_painted;
     struct sh_notification notification;
     int switcher, switch_pick, switch_count, switch_list[16];
-    int about_tab, shutdown_choice, message_kind;
+    int about_tab, about_scroll, shutdown_choice, message_kind;
     char run_text[160]; unsigned run_length;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
@@ -98,6 +98,7 @@ struct desk_shell {
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
     uint32_t *background; int background_valid, background_selected, background_outline;
     uint64_t background_rebuilds;
+    uint32_t background_serial; /* f2-92: changes with every write to background */
     struct desk_image image;        /* decoded file, owned by desktop.c */
     int image_failed;
     int wallpaper_pending;        /* owned frame is prepared by the wallpaper worker */
@@ -116,6 +117,7 @@ int desk_shell_button(struct desktop *, int button, int down);
 void desk_shell_motion(struct desktop *);
 unsigned desk_shell_cursor(const struct desktop *);
 int desk_shell_key(struct desktop *, int code, int value);
+int desk_shell_wheel(struct desktop *, int detents);   /* wheel over the focused built-in window; 1 when consumed */
 int desk_internal_click(struct desktop *, int index, int32_t x, int32_t y);
 void desk_shell_scale_motion(struct desktop *, int32_t *dx, int32_t *dy);
 void desk_shell_tick(struct desktop *);

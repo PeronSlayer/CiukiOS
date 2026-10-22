@@ -11,6 +11,21 @@ static int spawn_error;
 static unsigned service_exited,list_bad,waits;
 static int wait_error;
 static unsigned restart_mode,restart_live,restart_calls,restart_reaps,queries;
+static unsigned installer_begins,installer_ticks,installer_active;
+static int installer_error;
+int desk_installer_fixture_active(void){return (int)installer_active;}
+int desk_installer_fixture_begin(struct desktop *d)
+{(void)d;installer_begins++;installer_active=!installer_error;return installer_error;}
+void desk_installer_fixture_tick(struct desktop *d){(void)d;installer_ticks++;}
+/* f5-15C installers tier driver: routing only (installer_title.c has its own tests). */
+static unsigned title_begins,title_ticks,title_active,title_notices;
+static int title_error;
+static char title_argument[16];
+int desk_title_begin(struct desktop *d,const char *argument)
+{(void)d;title_begins++;snprintf(title_argument,sizeof(title_argument),"%s",argument);title_active=!title_error;return title_error;}
+void desk_title_tick(struct desktop *d){(void)d;title_ticks++;}
+int desk_title_active(void){return (int)title_active;}
+void desk_title_notice(unsigned kind,uint32_t pid,uint32_t flags){(void)kind;(void)pid;(void)flags;title_notices++;}
 static struct ciuki_proc_record listed[4];
 static unsigned listed_count;
 static char record[128],spawn_path[128];
@@ -65,6 +80,7 @@ static void reset(void)
     service_exited=list_bad=waits=0;wait_error=0;listed_count=4;
     memset(&restart_fixture,0,sizeof(restart_fixture));
     restart_mode=restart_live=restart_calls=restart_reaps=queries=0;
+    installer_begins=installer_ticks=installer_active=0;installer_error=0;
     listed[0]=(struct ciuki_proc_record){.pid=72,.ppid=71}; /* crash child */
     listed[1]=(struct ciuki_proc_record){.pid=74,.ppid=70,.state=CIUKI_PROC_LIVE,.name="w32srv"};
     listed[2]=(struct ciuki_proc_record){.pid=71,.ppid=70,.state=CIUKI_PROC_ZOMBIE,.name="registry-exercise.exe"};
@@ -156,5 +172,27 @@ int main(void)
     reset();restart_mode=service_ready=1;d.now_ns=0;
     assert(!desk_w32_fixture_begin(&d,"restart-exercise"));
     d.now_ns=360000000000ull;desk_w32_fixture_tick(&d);assert(!spawns && strstr(record,"failed=1"));
-    puts("PASS shared gate: ten core names plus restart and GL, OPEN+CLOSE, timeout, spawn failure, distinct result pages, child-bound dialogs, service-only reaping, phased restart and registry consumption");return 0;
+    reset();d.now_ns=0;installer_error=-ENOMEM;
+    assert(desk_w32_fixture_begin(&d,INSTALLER_FIXTURE_NAME)==-ENOMEM && !desk_w32_fixture_active());
+    installer_error=0;assert(!desk_w32_fixture_begin(&d,INSTALLER_FIXTURE_NAME));
+    assert(installer_begins==2 && desk_w32_fixture_active());
+    assert(fixture.id==W32_FIXTURE_INSTALLER && !fixture.pending);
+    assert(W32_FIXTURE_INSTALLER!=W32_FIXTURE_RESTART && W32_FIXTURE_INSTALLER!=W32_FIXTURE_GL);
+    assert(desk_w32_fixture_begin(&d,"kernel32-exercise")==-EBUSY);
+    desk_w32_fixture_tick(&d);assert(installer_ticks==1 && !spawns);
+    installer_active=0;desk_w32_fixture_tick(&d);assert(!desk_w32_fixture_active());
+    assert(INSTALLER_RESULT_VA==0x100f0000u && INSTALLER_RESULT_VA!=W32_RESTART_RESULT_VA);
+    assert(INSTALLER_RESULT_VA!=W32_GL_RESULT_VA);
+    for(unsigned i=0;i<W32_FIXTURE_COUNT;i++)assert(INSTALLER_RESULT_VA!=w32_fixtures[i].address);
+    reset();d.now_ns=0;title_error=-EINVAL;
+    assert(desk_w32_fixture_begin(&d,TITLE_FIXTURE_PREFIX "zz")==-EINVAL && !desk_w32_fixture_active());
+    title_error=0;assert(!desk_w32_fixture_begin(&d,TITLE_FIXTURE_PREFIX "de"));
+    assert(title_begins==2 && !strcmp(title_argument,"de") && fixture.id==W32_FIXTURE_TITLE && !fixture.pending && desk_w32_fixture_active());
+    assert(W32_FIXTURE_TITLE!=W32_FIXTURE_INSTALLER && desk_w32_fixture_begin(&d,"kernel32-exercise")==-EBUSY);
+    desk_w32_fixture_tick(&d);assert(title_ticks==1 && !spawns && !installer_ticks);
+    title_notices=0;desk_restart_fixture_notice(3,71,2);assert(title_notices==1);
+    title_active=0;desk_w32_fixture_tick(&d);assert(!desk_w32_fixture_active());
+    assert(TITLE_RESULT_VA==0x10100000u && TITLE_RESULT_VA!=INSTALLER_RESULT_VA && TITLE_RESULT_VA!=W32_GL_RESULT_VA);
+    for(unsigned i=0;i<W32_FIXTURE_COUNT;i++)assert(TITLE_RESULT_VA!=w32_fixtures[i].address);
+    puts("PASS shared gate: ten core names plus restart, GL, installer and installers tier, OPEN+CLOSE, timeout, spawn failure, distinct result pages, child-bound dialogs, service-only reaping, phased restart and registry consumption");return 0;
 }

@@ -33,6 +33,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:libc_smoke", "applications-system"},     /* C library self-test */
     {"program:desktop", "user-desktop"},
     {"program:setup", "system-installer"},
+    {"program:netsurf", "internet-web-browser"},       /* NetSurf, the browser application (apps/desktop/catalog.h) */
     /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
     {"program:cdplayer", "media-optical"},
     {"program:calc", "accessories-calculator"},

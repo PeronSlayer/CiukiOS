@@ -6,14 +6,14 @@ import re
 from conformance import records, tags, digest
 
 HASH = re.compile(r"[0-9a-f]{64}")
-SELECTOR = re.compile(r"f3:dos-conformance run=([0-9a-fA-F]{8}) guest=(freedos|ciukidos)")
+SELECTOR = re.compile(r"f3:dos-conformance run=([0-9a-fA-F]{8}) guest=(freedos|ciukidos)( kernel=unified)?")
 
 
 def selector(value):
     match = SELECTOR.fullmatch(value)
-    if not match:
-        raise ValueError("expected f3:dos-conformance run=<8 hex> guest=freedos|ciukidos")
-    return match.groups()
+    if not match or (match[3] and match[2] != "ciukidos"):
+        raise ValueError("expected f3:dos-conformance run=<8 hex> guest=freedos|ciukidos [kernel=unified for ciukidos]")
+    return match[1], match[2]
 
 
 def probe_manifest(manifest, read_binary=None):

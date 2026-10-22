@@ -160,6 +160,16 @@ static int section_flush(struct section_data *s, bool locked)
     d->object.release(&d->object);
     return err;
 }
+bool w32_file_needs_sync(struct px_node *node)
+{
+    for (struct w32_object *o=w32_objects;o;o=o->next) {
+        if (o->type!=W32_OBJ_SECTION || !o->u.section) continue;
+        struct section_data *s=o->u.section;
+        if (s->file && !s->syncing && s->file->u.file.description->node==node &&
+            (s->protect&(W32_PAGE_READWRITE|W32_PAGE_EXECUTE_READWRITE))) return true;
+    }
+    return false;
+}
 int w32_file_sync(struct px_node *node)
 {
     struct w32_object *o = w32_objects;

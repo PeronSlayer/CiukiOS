@@ -32,6 +32,8 @@ import dos_fixtures
 import dos_titles
 import win32_fixtures
 import win32_runner
+import win32_inventory
+import https_fixture
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -278,10 +280,18 @@ def selector(request, source='menu', validated_fw_cfg=False):
     if source == 'cfg' or isinstance(request, str) and ':sweep' in request:
         from physical import cfg_selector
         return cfg_selector(request, source)
-    # f5-17B Win32 title tiers: f5:win32-<workload> run=<id>, fw_cfg only
-    # (win32_session.selector); the kernel does not register these probes yet.
+    # f5-17B/f5-15C Win32 title tiers: f5:win32-<workload> run=<id>. The runner
+    # selects them through validated fw_cfg only (win32_session.selector); from
+    # the menu or cfg the loader accepts the grammar like any registered probe
+    # and the kernel refuses the C: write gate, so the loader model applies.
     if isinstance(request, str) and request.startswith('f5:win32-'):
-        return win32_runner.selector(request, source, validated_fw_cfg)
+        selected = base_selector(request, source, validated_fw_cfg)
+        if source == 'fw_cfg' and validated_fw_cfg:
+            try:
+                return {**selected, **win32_runner.selector(request, source, validated_fw_cfg)}
+            except ValueError:
+                pass  # runner-only strictness (lowercase run id, no suffix): the loader still accepts it
+        return selected
     server = re.search(r' server=(desktop-v3|desktop|standin)$',request) if isinstance(request,str) else None
     if not server:return base_selector(request,source,validated_fw_cfg)
     if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
@@ -539,7 +549,7 @@ def dos_image_identity(image):
         return None
 
 
-def prepare_fixtures(host,case,directory,image=None):
+def prepare_fixtures(host,case,directory,image=None,image_sha256=None):
     manifests=[]
     disks=dict(fixture_disks(case))
     # f3-06: an absent owner-local game directory is not_run before QEMU starts
@@ -577,7 +587,12 @@ def prepare_fixtures(host,case,directory,image=None):
         elif fixture.get('generator')==win32_fixtures.GENERATOR:
             # f5-17B: the lead's local extraction of a verified title download,
             # on this run's own FAT disk or CD image only (win32_fixtures.py).
-            try:item.update(win32_fixtures.generate(fixture,directory,index,ROOT))
+            # f5-15C: the installers tier's CD and run parameter disk carry the
+            # run's identity (image hash, payload of the CD, scene, tier, probe).
+            context={'image_sha256':image_sha256,'probe':case.get('probe'),'scene':case.get('win32',{}).get('scene'),
+                     'tier':win32_runner.KINDS.get(case.get('kind')),'calibrate':case.get('_win32_calibrate'),
+                     'payload_sha256':next((m.get('payload_sha256') for m in manifests if m.get('generator')==win32_fixtures.GENERATOR),None)}
+            try:item.update(win32_fixtures.generate(fixture,directory,index,ROOT,context))
             except EvidenceNotRun:raise
             except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('Win32 workload fixture generation failed: '+str(e)) from e
             item['ide_index']=disks[index] if win32_fixtures.is_disk(fixture) else 3
@@ -711,6 +726,13 @@ class Actions:
         for action in declared:
             if action.get('after',{}).get('event') not in ('READY','ARM'):
                 raise res.Refusal('actions require READY/ARM synchronization')
+            # f3-61c: an action whose ARM the probe declares will not come.
+            # Only an explicit guest DATA record releases it; a missing ARM
+            # without that record still leaves the stimuli incomplete.
+            unless=action.get('unless')
+            if unless is not None and (not isinstance(unless,dict) or unless.get('event')!='DATA' or len(unless)<2 or
+                                       not all(isinstance(v,(str,int)) for v in unless.values())):
+                raise res.Refusal('action unless requires a guest DATA record match')
             if action.get('type') not in ('input','cut','media'):raise res.Refusal('unknown runner action')
             if action['type']=='input':
                 if not 1<=action.get('repeat',1)<=1000 or not action.get('batches'):
@@ -804,8 +826,19 @@ class Actions:
         matched=any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records)
         return {'index':self.index,'action':action,'synchronization_observed':matched,
                 'batch':self.batch,'repeat':self.repeat}
+    def skip_declined(self,parser):
+        """Release actions whose `unless` record arrived instead of their ARM."""
+        while not self.complete and not self.batch and not self.repeat:
+            action=self.declared[self.index]
+            if 'unless' not in action:return
+            if any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records):return
+            declined=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['unless'].items())]
+            if not declined:return
+            self.observed.append({'type':'skipped','index':self.index,'unless_seq':declined[0]['seq']})
+            self.index+=1
     def step(self,parser,qmp,now):
         if not self.wait_consumption(parser,now):return None
+        self.skip_declined(parser)
         if self.complete or not qmp or now<self.due:return None
         action=self.declared[self.index]
         matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['after'].items())]
@@ -985,6 +1018,59 @@ def observe_fullscreen_demo(before, after):
     return {'changed': True, 'width': width, 'height': height,
             'before_sha256': hashlib.sha256(pixels).hexdigest(),
             'after_sha256': hashlib.sha256(pixels2).hexdigest()}
+
+
+def observe_window_demo(before, after, seconds, attempt):
+    """f3-61d: the DOS window of a game whose full screen was refused. The
+    two desktop screendumps (>= 5 s apart) must differ, and every changed
+    pixel must fit one 640x480 DOS window client (the desktop clock is fixed
+    under --test=vm-fullscreen; nothing else animates)."""
+    width, height, pixels = read_ppm(before)
+    width2, height2, pixels2 = read_ppm(after)
+    if (width, height) != (width2, height2):raise EvidenceError('windowed DOS game screen geometry changed')
+    changed = [i // 3 for i in range(0, len(pixels), 3) if pixels[i:i+3] != pixels2[i:i+3]]
+    box = None
+    if changed:
+        xs = [i % width for i in changed]; ys = [i // width for i in changed]
+        box = [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1]
+    inside = bool(box) and box[2] <= 640 and box[3] <= 480
+    return {'changed': inside, 'changed_pixels': len(changed), 'box': box, 'seconds': round(seconds, 3),
+            'attempt': attempt, 'width': width, 'height': height,
+            'before_sha256': hashlib.sha256(pixels).hexdigest(), 'after_sha256': hashlib.sha256(pixels2).hexdigest()}
+
+
+class WindowDemo:
+    """f3-61d: `case=fullscreen continuation=windowed` (full screen refused,
+    the game stays in its window). The full-screen demo pair is reported
+    skipped; from the demo start ARM until the probe's verdict the runner
+    compares a first desktop screendump with one taken every 5 s after it
+    and stops at the first change inside a DOS window client."""
+    INTERVAL = 5.0
+
+    def __init__(self, directory):
+        self.directory = directory; self.arm_at = None; self.base = None; self.base_at = None
+        self.attempts = 0; self.result = None
+
+    @staticmethod
+    def windowed(parser):
+        return any(r.get('event') == 'DATA' and r.get('case') == 'fullscreen' and r.get('continuation') == 'windowed'
+                   for r in parser.records)
+
+    def step(self, parser, qmp, now):
+        if self.result and self.result['changed']:return
+        if any(r.get('event') == 'DATA' and r.get('case') == 'verdict' for r in parser.records):return
+        if not any(r.get('event') == 'ARM' and r.get('action') == 'fullscreen_demo_start' for r in parser.records):return
+        if self.arm_at is None:self.arm_at = now
+        if self.base is None:
+            if now - self.arm_at < 1.0:return
+            self.base = self.directory / 'window-demo-0.ppm'
+            qmp.command('screendump', {'filename': str(self.base)}); self.base_at = now
+            return
+        if now - self.base_at < self.INTERVAL * (self.attempts + 1):return
+        self.attempts += 1
+        shot = self.directory / f'window-demo-{self.attempts}.ppm'
+        qmp.command('screendump', {'filename': str(shot)})
+        self.result = observe_window_demo(self.base, shot, now - self.base_at, self.attempts)
 
 
 def observe_window_screen(path, spec, arm):
@@ -1643,6 +1729,11 @@ def require_input_counter_source(inputs,profile,case,requested):
                           'requires f2:crash-isolation server=desktop, graphics and safe mode off')
 
 
+def browser_case(case):
+    """f6-18: a probe case selecting f6:browser (host HTTPS fixture, guestfwd)."""
+    return case.get('probe')=='browser' and str(case.get('selector','')).startswith('f6:browser ')
+
+
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     inputs=input_devices(profile,case)
@@ -1661,13 +1752,19 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         requested=selector(request,source,True)
         if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
         request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
+        # f3-61d: the vm-game DOS kernel precedes the ordinary suffixes (the
+        # kernel selector, loader menu and model grammar); rebuilding the
+        # request without it launched kernel=unified for the freedos case.
+        if requested['probe']=='vm-game' and requested.get('kernel'):request+=' kernel='+requested['kernel']
         platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
         if requested.get('title'):
             if platform:raise res.Refusal('DOS title selector does not accept a platform suffix')
             request+=' title='+requested['title']
+        if requested.get('url') and platform:raise res.Refusal('browser selector does not accept a platform suffix (qemu-t23 profile only)')
         if platform:request+=' platform='+platform
         if requested['safe']:request+=' safe=1'
         if requested.get('server'):request+=' server='+('desktop-v3' if requested.get('desktop_v3') else requested['server'])
+        if requested.get('url'):request+=' url='+requested['url']+(' now=1' if requested.get('now') else '')
     require_input_counter_source(inputs,profile,case,requested)
     machine=profile['machine']
     if not inputs['i8042']:
@@ -1694,8 +1791,17 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     nic = devices.get('network')
     if nic not in (None, 'rtl8139', 'ne2k_pci', 'i82559er', 'e1000', 'pcnet', 'tulip'):
         raise res.Refusal('unknown network device exception')
-    if nic and (normal or requested['phase'] != 6 or requested['probe'] != 'net-arp'):
-        raise res.Refusal('user network backend requires f6:net-arp')
+    browser=browser_case(case)
+    if nic and (normal or requested['phase'] != 6 or requested['probe'] not in ('net-arp','browser')):
+        raise res.Refusal('user network backend requires f6:net-arp or f6:browser')
+    if browser and not nic:raise res.Refusal('browser case requires a user network device exception')
+    guestfwd=[]
+    if browser:
+        # f6-18: the host fixture of this run, reached as 10.0.2.100:80/443 through
+        # libslirp's exec forwarding (one relay process per guest connection).
+        ports=case.get('_browser_ports')
+        if not ports:raise res.Refusal('browser case has no fixture ports: _run_boot starts the fixture first')
+        guestfwd=https_fixture.guestfwd_options(*ports)
     args=[executable,'-machine',machine,'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
@@ -1708,7 +1814,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
             args+=['-device',f'usb-{device},bus=usb{index}.0']
     if source not in ('cfg','none'):args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
     if nic:
-        args += ['-netdev', 'user,id=ciuknet0,restrict=on',
+        args += ['-netdev', ','.join(['user,id=ciuknet0,restrict=on',*guestfwd]),
                  '-device', nic+',netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=']
     if source == 'cfg' and case.get('sweep'): args.remove('-no-shutdown')
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
@@ -1826,7 +1932,17 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     if case.get('sweep'): directory /= 'boot-' + str(case.get('_sweep_boot', 1))
     overlay=shared_overlay or directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
     unit='ciuki-test-'+run_id+('-boot-'+str(case.get('_sweep_boot',1)) if case.get('sweep') else '')+'.scope';identity=git_identity(root)
-    args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
+    fixture_server=None
+    if browser_case(case):
+        # The fixture lives for this boot only; its ports enter the QEMU
+        # arguments, its request log the result (browser_fixture).
+        fixture_server=https_fixture.FixtureServer(ROOT/'tests/suites/fixtures/f6-browser').start()
+        case={**case,'_browser_ports':(fixture_server.http_port,fixture_server.https_port)}
+    try:
+        args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
+    except BaseException:
+        if fixture_server:fixture_server.stop()
+        raise
     scoped=['systemd-run','--user','--scope','--unit='+unit,'-p','MemoryMax=1500M','-p','MemorySwapMax=0','--',
             sys.executable,str(ROOT/'scripts/test/scope_exec.py'),str(gate),*args]
     result={'schema_version':1,'run_id':run_id,'suite':suite,'probe':case['probe'],'case':case.get('id',case['probe']),'attempt':case.get('attempt',1),'boot_kind':case.get('boot_kind','cold'),
@@ -1873,6 +1989,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     window_shot = directory/'window.ppm';window_armed_at = None
     fullscreen_shots = [directory/'fullscreen-before.ppm', directory/'fullscreen-after.ppm']
     fullscreen_demo_shots = [directory/'fullscreen-demo-start.ppm', directory/'fullscreen-demo-end.ppm']
+    window_demo = WindowDemo(directory)
     fullscreen_arms = {}
     normal_shot = directory/'screen.ppm';desktop_at = failure_at = None
     restart_performed=False;expected_resets=0
@@ -1897,7 +2014,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
-        result['fixtures']=prepare_fixtures(host,case,directory,image)
+        result['fixtures']=prepare_fixtures(host,case,directory,image,result['image']['sha256'])
         if win32:
             # The session binds the parser to the image hash, the fixture's
             # payload identity and the scene; pins pending, a probe name the
@@ -2062,10 +2179,21 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     qmp.command('screendump',{'filename':str(window_shot)})
                     try:result['window_screen']=observe_window_screen(window_shot,spec,arms[0])
                     finally:window_shot.unlink(missing_ok=True)
-            if case.get('fullscreen_screen') and qmp:
-                for group, actions2, shots, observe in (
+            # f3-61: fullscreen_demo_screen takes only the changing-frames pair
+            # (f3:vm-game) and keeps both screendumps as run evidence.
+            # f3-61d: the guest decides the demo check. With a refused full
+            # screen (continuation=windowed) the pair is skipped, not failed,
+            # and the DOS window region is compared instead (WindowDemo).
+            windowed_demo = case.get('fullscreen_demo_screen') and WindowDemo.windowed(parser)
+            if windowed_demo and qmp:
+                result['fullscreen_demo'] = {'skipped': True, 'reason': 'refused'}
+                window_demo.step(parser, qmp, now)
+                if window_demo.result:result['window_demo'] = window_demo.result
+            if (case.get('fullscreen_screen') or case.get('fullscreen_demo_screen')) and qmp and not windowed_demo:
+                demo_group = ('fullscreen_demo', ('fullscreen_demo_start', 'fullscreen_demo_end'), fullscreen_demo_shots, observe_fullscreen_demo)
+                for group, actions2, shots, observe in ((
                     ('fullscreen_screen', ('fullscreen_before', 'fullscreen_after'), fullscreen_shots, observe_fullscreen_screen),
-                    ('fullscreen_demo', ('fullscreen_demo_start', 'fullscreen_demo_end'), fullscreen_demo_shots, observe_fullscreen_demo)):
+                    demo_group) if case.get('fullscreen_screen') else (demo_group,)):
                     for index, action in enumerate(actions2):
                         arms = [r for r in parser.records if r.get('event') == 'ARM' and r.get('action') == action]
                         if len(arms) > 1:raise EvidenceError('duplicate full-screen observation ARM')
@@ -2075,7 +2203,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                             qmp.command('screendump', {'filename': str(shots[index])})
                             if index:
                                 result[group] = observe(*shots)
-                                for shot in shots:shot.unlink()
+                                if not case.get('fullscreen_demo_screen'):
+                                    for shot in shots:shot.unlink()
             # A trace is serialized before the subsequent request can reach
             # blkdebug. Drain the FIFO before resuming that suspended request;
             # never select a prefix from a partially collected serial batch.
@@ -2097,6 +2226,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if parser.terminal:
                 if parser.terminal['event']=='NOT_RUN' or session and parser.outcome=='not_run':
                     result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal.get('after',parser.terminal.get('reason','unknown'));break
+                actions.skip_declined(parser)
                 if not actions.complete or session and not session.player.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
@@ -2106,6 +2236,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     raise EvidenceError('DOS window lacks live screendump')
                 if case.get('fullscreen_screen') and ('fullscreen_screen' not in result or 'fullscreen_demo' not in result):
                     raise EvidenceError('DOS full-screen lacks changing demo/equal return live screendumps')
+                if case.get('fullscreen_demo_screen') and 'fullscreen_demo' not in result:
+                    raise EvidenceError('DOS full-screen game lacks changing live screendumps')
+                if case.get('fullscreen_demo_screen') and result['fullscreen_demo'].get('skipped') and \
+                        not result.get('window_demo', {}).get('changed'):
+                    raise EvidenceError('windowed DOS game: no changed DOS window between screendumps 5 s apart')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']
@@ -2173,6 +2308,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         elif isinstance(e,win32_runner.Blocked):
             result['reason']=e.kind;result['win32']['blockers']=e.blockers
     finally:
+        if fixture_server:
+            fixture_server.stop()
+            result['browser_fixture']=fixture_server.snapshot()
+            try:(directory/'fixture.log').write_text(json.dumps(result['browser_fixture'],indent=1)+'\n')
+            except OSError:pass
         # Capture before sending quit or terminating anything. A QMP reset/EOF
         # can precede reaping the wrapper by a few scheduler ticks. Never use
         # the status of our later SIGTERM/SIGKILL as the original failure.
@@ -2321,10 +2461,38 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if result['audio']['failures']: raise EvidenceError('audio waveform: '+', '.join(result['audio']['failures']))
             except (OSError, ValueError, RuntimeError, EOFError, wave.Error) as e:
                 result['outcome']='fail'; result['reason']=str(e)
+        if session is not None and session.tier=='installers' and session.parser.started:
+            # f5-15C: the independent C: delta of this run (canonical image
+            # versus the overlay), after verified teardown only.
+            try:
+                if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before the overlay inventory')
+                session.host_inventory=win32_inventory.overlay_delta(host,image,overlay,directory)
+            except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
+                session.host_inventory={'error':str(e)}
         if session is not None:
             try:session.finish(result)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']='win32 evidence summary failed: '+str(e)
+        if session is not None and case.get('_win32_calibrate'):
+            # f5-15C: a completed calibration run (guest END PASS, host delta
+            # present) writes installed_files status=calibrated into the
+            # workload manifest; the lead reviews the diff and accepts it.
+            calibration={'mode':case['_win32_calibrate'],'applied':False}
+            try:
+                if session.parser.outcome!='pass':raise EvidenceError('guest did not complete the installer flow')
+                manifest=win32_runner.calibration(case,session.row,run_id,result['image']['sha256'],session.parser.payload_sha256,
+                                                  session.host_inventory,result['win32'].get('installed_inventory',[]),
+                                                  session.parser.records,session.frames,case['_win32_calibrate'])
+                atomic_write(directory/'calibration.json',json.dumps(manifest,indent=2)+'\n')
+                calibration.update(path=str(directory/'calibration.json'),
+                                   workloads=str(win32_runner.write_calibration(session.row['id'],manifest,ROOT)),applied=True)
+                if result['outcome'] in ('pass','not_run'):
+                    # A calibration records evidence; it never passes a gate.
+                    result['outcome']='not_run'
+                    result['reason']='win32 installers calibration (%s) recorded installed_files status=calibrated: review the frames and the workloads.json diff, then accept'%case['_win32_calibrate']
+            except (OSError,ValueError,RuntimeError) as e:
+                calibration['error']=str(e)
+            result['win32']['calibration']=calibration
         result['image']['sha256_after']=sha(image)
         if result['image']['sha256_after']!=result['image']['sha256']:
             result['outcome']='fail';result['reason']='canonical image changed during run'
@@ -2340,6 +2508,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # all passing runs always retain exactly these contract artifacts
         # (a normal boot also keeps its evaluated screendump).
         passing=['serial.log','screen.ppm'] if normal else ['serial.log']
+        if case.get('_win32_calibrate'):
+            # f5-15C calibration keeps its screenshots and the manifest proposal.
+            passing+=[p.name for p in directory.iterdir() if p.name.startswith(('ui-','screen-')) or p.name=='calibration.json']
         if any(f.get('generator')=='dos-title' and f.get('calibrate') for f in case.get('fixtures',[])):
             passing.append('title-captures')
         if result['outcome']=='pass':
@@ -2616,12 +2787,19 @@ def main(argv=None):
     ap.add_argument('--image-sha256',help='verified historical image hash (physical import only)')
     ap.add_argument('suite');ap.add_argument('--image',type=Path);ap.add_argument('--profile');ap.add_argument('--keep',action='store_true')
     ap.add_argument('--case', action='append', default=[], help='run only these exact case IDs (repeatable)')
+    ap.add_argument('--win32-calibrate', choices=win32_runner.CALIBRATION_MODES,
+                    help='f5-15C installers tier: record the manifest instead of asserting it (install, then full)')
     options=ap.parse_args(argv)
     try:
         if options.image_sha256 and (not options.physical_capture or not re.fullmatch('[0-9a-f]{64}',options.image_sha256)):
             raise res.Refusal('--image-sha256 requires physical capture and 64 lowercase hex digits')
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
         suite=select_cases(load_suite(options.suite), options.case)
+        if options.win32_calibrate:
+            if not options.case or any(c.get('kind')!='win32-installer' for c in suite['cases'] if not c.get('_smoke')):
+                raise res.Refusal('--win32-calibrate needs explicit win32-installer --case selections')
+            for c in suite['cases']:
+                if not c.get('_smoke'):c['_win32_calibrate']=options.win32_calibrate
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
         with res.SlotLock(res.common_lock(ROOT)):
             Host().preflight(ROOT/'build/test-runs')

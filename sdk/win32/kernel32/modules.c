@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
 HANDLE W32API k32_load_w(const WCHAR *name, HANDLE file, DWORD flags) {
-  if (!name || file || flags & ~3u) {
+  if (!name || file || flags & ~0xbu) {
     SetLastError(87);
     return 0;
   }

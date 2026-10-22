@@ -17,6 +17,8 @@ clang -DFS_HOST -DCIUKI_DOSVM_FILE_CPU -D_POSIX_C_SOURCE=200809L \
     src/kernel/vm/vga_x86.c src/kernel/vm/vga_presenter.c \
     src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/path.c \
     src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
-    src/kernel/vm/dos_file.c src/kernel/vm/dos_file_volume.c \
+    src/kernel/fs/partition.c src/kernel/drivers/blkpart.c \
+    src/kernel/vm/dos_file.c src/kernel/vm/dos_file_volume.c src/kernel/vm/dos_unified.c \
+    src/kernel/vm/dos_unified_ifs.c \
     -lx86emu -o build/host/dos/dosvm_hook_cpu
 ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 python3 -B tests/host/dos/hook_cpu.py

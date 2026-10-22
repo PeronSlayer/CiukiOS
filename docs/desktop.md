@@ -202,7 +202,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   approved portrait inside a circular accent orb, pressed in while
   the menu is open; the menu drops below the bar, submenus open to the
   right): Programs (CiukNote,
-  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
+  Files, NetSurf, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
   Accessories and Games submenus, then a Developer submenu with Hello,
   libc_smoke and any unknown `/Programs` program),
   Documents (recent files, My Documents, Clear Recent Documents), Settings
@@ -227,6 +227,10 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
   the public read-only state, without `/dev/mixer` "No audio device".
+  Opening the popup also sends `MIXER_REFRESH_MASTER` on the delegated
+  handle (f1-100): on a ThinkPad the kernel reads the EC once, so the popup
+  shows the hardware volume keys at once; the kernel also reads the EC every
+  2 s (f2-96, `BOOT.CFG` `ecpoll=0` turns that poll off).
 - **Desktop icons** (desktop as a folder since f2-42,
   [design](design/desktop-folder.md)): the fixed icons Computer (Files at
   Computer; the icon carries the Ciuki portrait), Documents (Files at
@@ -237,8 +241,8 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   entries; the background menu has Arrange icons, Line up, Refresh, New
   (Folder, Text file), Paste and Properties.
 - **Built-in windows** (internal clients, framed by the compositor): About
-  CiukiOS (tabs General, System from call 70's system record and `uname`,
-  Credits), Run (a `/Programs` program and up to six arguments, double quotes
+  CiukiOS (540 x 420; tabs General, System from call 70's system record and `uname`,
+  Credits, see [About credits](#about-ciukios-credits-f2-97)), Run (a `/Programs` program and up to six arguments, double quotes
   group), Shut Down CiukiOS (Restart, Shut Down, Cancel) and message boxes.
 - **Shortcuts:** Win (tap) or Ctrl+Esc opens the Start menu; Alt+Tab and
   Shift+Alt+Tab switch windows with an overlay; Alt+F4 sends the v2
@@ -557,6 +561,61 @@ from its 32 px artwork; the Vista desktop list view draws its labels as
 "shadow text on transparent backgrounds"
 ([`LVS_EX_TRANSPARENTSHADOWTEXT`](https://learn.microsoft.com/en-us/windows/win32/controls/extended-list-view-styles)),
 the model of the halo above.
+
+## About CiukiOS credits (f2-97)
+
+The Credits tab of the About window (`apps/desktop/shell.c`, `credits_page`) is a
+scrollable page, replacing the former nine-line text:
+
+- **Header (fixed).** The approved Ciuki portrait, unchanged, area-sampled to 56 px in a
+  sunken frame; `CiukiOS` in the large face; the tagline `Classic computing, one woof at a
+  time.`; `Dedicated to Ciuki.  Version <uname version>` (the version string of
+  `config/version.json`, which the kernel reports through `uname`).
+- **List (scrolling).** One line per component with three columns: name, version or pin,
+  licence. Seven groups in this order: System, DOS, Windows compatibility, Network and
+  browser, Media, Tools, Icons; group names are bold in the theme's selection colour. The
+  rows come from `apps/desktop/credits.inc`, which mirrors [`docs/credits.md`](credits.md);
+  `tests/host/test_credits.py` fails when the two differ or when a version, licence or
+  notice path drifts from the pins in `config/`, `third_party/*/UPSTREAM.json` and the notice
+  files.
+- **Scrolling.** Up, Down, Page Up, Page Down, Home and End; the mouse wheel (three rows
+  per notch, as the toolkit's list views); a click in the thin scroll bar jumps to that
+  position. Leaving the tab resets the scroll. Left, Right and Tab still change tab, Esc and
+  Enter close the window.
+- **Licences.** The `Licences` button (or the L key) asks the desktop to start Files on
+  `/system/licenses`, the folder of the notices installed in the image.
+- **Tests.** `tests/host/desktop/test_about.py` renders the page with the production
+  compositor (modes `about-credits`, `-end`, `-pgdn`, `-wheel` of `compositor_capture.c`,
+  driven through `desk_input` key and wheel events) and pins the four frames by SHA-256; it
+  also checks that the identity header does not move while the list scrolls. The portrait and
+  the Tango icons are not touched.
+
+The wheel reaches the window through `desk_shell_wheel` (`input.c`, `CIUKI_INPUT_WHEEL`):
+only a focused About window on its Credits tab consumes it, every other window still gets
+the event.
+
+## Compositor, 2D engine and open defects (status of 2026-10-22)
+
+- **2D engine (f2-92, f1-97).** On the S3 Savage the desktop copies, fills and writes through
+  the 2D engine (`CIUKI_ACCEL_WRITE`, `CIUKI_ACCEL_OFFSCREEN`, self-test at the first use,
+  off-screen cache of unchanged surfaces). The indicator reads `2D engine: OK (drawing:
+  software)` until the engine has drawn, then `2D acceleration: YES`; `accel=0` in `BOOT.CFG`
+  disables it. The record is `[desktop] accel fills= copies= writes= fallback= frames=
+  lfb_bytes=`.
+- **What the T23 measured (image `a4d9454e`, dev diary 2026-10-22-07).** The engine is used
+  (`copies=88` in 2 s) but the compositor still composes about 40 full frames per second with
+  only the music player open (two desktop threads take 40-50 % of the CPU; idle 8-20 %), and
+  `[desktop] stall stage=idle ... no_frame_ms=524-676 input_pending=1` shows the desktop
+  sleeping with input queued. The hardware cursor is loaded while the software cursor is
+  still drawn (two cursors), and the ThinkPad volume keys no longer reach the mixer because
+  the EC poll is off (f1-100).
+- **Decision (owner, 2026-10-22, dev diary 2026-10-22-08).** The compositor is rebuilt on the
+  Windows 98/X11 model: clipped, region-driven updates and never a full-frame composition,
+  reusing the X11 region algorithms (xorg `miregion.c` / pixman `pixman-region32.c`) and
+  pixman's compositing under the MIT licence (directive f2-95, amendment 1). Frame rate
+  capped at 30 fps for continuous small damage, wake on input, budget under 10 % CPU at rest
+  on the T23 model. f2-96 removes the duplicate cursor and polls the EC every 2 s; f1-101
+  raises the priority of audio producers. These are open until the next image passes on the T23.
 
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
@@ -963,19 +1022,49 @@ scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
 it; `--regenerate` leaves `f2-desktop.json` unchanged; the scratch `zz-ui.json`
 copy of those cases is no longer tracked).
 
-## NetSurf browser (F6 M1)
+## NetSurf browser (F6)
 
-The M1 browser payload is installed as `/Programs/netsurf`. Its desktop window
+The browser payload is installed as `/Programs/netsurf`. It is listed as
+**NetSurf** ("Web browser") in the Programs menu, with the Tango
+`internet-web-browser` icon in the menu, on its window and task button, and in
+Files and Task Manager. Its program record (`apps/desktop/catalog.h`
+`desk_applications`) grants the desktop window channel, so every launch route
+(Programs menu, desktop shortcut, Run, Terminal, ShellExecute and the
+GATE_BROWSER test route) starts `netsurf --channel-fd=3`; a launch without
+that argument still uses the channel the desktop maps at fd 3. Its desktop window
 provides a URL bar, navigation controls, status line and framebuffer content
-area. M1 renders
+area. It renders
 local `file:` pages and `data:` URLs, including the supported HTML/CSS, GIF and
 BMP content. Bookmarks and history live in the user's NetSurf profile under
 `C:\Documents\NetSurf`; local directory browsing uses the Files picker.
-The M1 payload does not yet have a Programs menu launcher and does not fetch
-HTTP or HTTPS pages. Network adapters,
-DHCP, DNS and native sockets are available separately through the kernel's
-network service; the later browser fetcher connects those facilities to web
-URLs.
+HTTP and HTTPS use the native network service, with redirects, cookies and
+gzip responses. HTTPS requires a valid RTC-set system clock dated 2026 or
+later and ready kernel entropy. A recent build date does not qualify as an
+RTC clock. TLS 1.2 and the pinned CA store are used; certificate exceptions
+and revocation checking are unsupported.
+
+"Secure connections are not ready yet" means the kernel returned EAGAIN.
+The page estimates the remaining part of the first boot minute, without
+promising readiness; after that minute it says the estimate has elapsed.
+Reload retries entropy acquisition automatically: on any browser error
+page the Reload button fetches the site address shown in the URL bar again,
+without a new history entry and never replaying a form submission. The
+browser stays responsive while waiting and never substitutes a weak seed.
+An unavailable-entropy page indicates another entropy error. The clock page
+asks you to set the RTC; certificate pages identify an untrusted or
+malformed certificate, a hostname mismatch, or expired/not-yet-valid dates.
+Protocol errors can mean the server does not support TLS 1.2. DNS, offline,
+refused/timed-out connection and truncated-response pages describe separate
+network failures. These pages and the "not ready" page end with the network
+state (f6-22): no adapter, adapter stopped, no link (check the cable), no
+address yet (waiting for a DHCP server), or the address with the outcome of
+the browser's last name lookup (DNS ok, DNS lookups failing, DNS not tried
+yet). Each browser exit appends one line, with a UTC time, to
+`C:\SYSTEM\LOGS\NETSURF.LOG`: the exit reason, layout timings and the
+network state (`network=no-address`, `dns-ok`, ...); the file starts over
+after 64 KiB. The kernel's `[net] dhcp`, `[net] resolver` and `[net] stack`
+lines in `BOOT.LOG` show the lease, the first DNS answer and the adapter's
+frame counters.
 
 ## f2-30 decisions (2026-10-11)
 

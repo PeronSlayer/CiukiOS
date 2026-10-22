@@ -95,3 +95,14 @@ both count formats, early/late/lost/shared interrupts, CU completion timing,
 busy SCB commands, and real DMA/register faults. Host results and the exact
 reproduction values are recorded in `build/codex/f6-09-report.md`; integrated
 `i82559er-qemu-t23` and `f4-audio` evidence remains with the lead.
+
+## F6-22: e100 RFD status information bits
+
+Research 2026-10-22 (record: `2026-10-22-f6-22-network-state.md`). The
+manual's table 49 sets status bit 5 for every Ethernet II (type) frame and
+bit 1 for every frame not addressed to the individual address; Linux e100
+tests only C and OK; QEMU's `nic_receive` sets bit 1 for broadcast and
+multicast. The receive check above rejected any of bits 12:0, so physical
+controllers counted every frame as an error and QEMU dropped broadcasts.
+Decision: only bits 11, 10, 9, 8, 7 and 4 (mask `0x0f90`) mark a damaged
+frame; the host model now writes the device-specific status bits.

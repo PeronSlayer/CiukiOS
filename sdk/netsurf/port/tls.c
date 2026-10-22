@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -57,6 +58,8 @@ static unsigned chain_end(const br_x509_class **v)
 static const br_x509_pkey *chain_key(const br_x509_class *const *v,unsigned *uses)
 { struct ciuki_tls *t=((const struct cert_proxy *)v)->owner;return t->x509.vtable->get_pkey((const br_x509_class *const *)&t->x509.vtable,uses); }
 static const br_x509_class proxy_class={sizeof(struct cert_proxy),chain_start,cert_start,cert_append,cert_end,chain_end,chain_key};
+static void erase(void *buffer,size_t bytes)
+{ volatile unsigned char *p=buffer;while(bytes--)*p++=0; }
 static enum ciuki_tls_error tls_error(int e)
 {
     if(e==BR_ERR_X509_BAD_SERVER_NAME)return CIUKI_TLS_HOST;
@@ -84,8 +87,14 @@ struct ciuki_tls *ciuki_tls_create(const char *host,const br_x509_trust_anchor *
     *error=CIUKI_TLS_CLOCK;
     if(!ciuki_tls_clock(&days,&seconds))return NULL;
     *error=CIUKI_TLS_HOST;if(inet_pton(AF_INET,host,&numeric)==1)return NULL;
-    unsigned char seed[32];*error=CIUKI_TLS_ENTROPY;
-    if(getentropy(seed,sizeof(seed)))return NULL;
+    /* A fresh kernel seed is mandatory for each connection, before reset can
+     * generate ClientHello. Never wait on the browser thread or let BearSSL's
+     * optional OS seeder bypass a failed syscall. Erase even partial output. */
+    unsigned char seed[32]={0};*error=CIUKI_TLS_ENTROPY;
+    if(getentropy(seed,sizeof(seed))){
+        if(errno==EAGAIN)*error=CIUKI_TLS_NOT_READY;
+        erase(seed,sizeof(seed));return NULL;
+    }
     struct ciuki_tls *t=calloc(1,sizeof(*t));
     if(t){
         static const uint16_t suites[]={BR_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
@@ -103,12 +112,13 @@ struct ciuki_tls *ciuki_tls_create(const char *host,const br_x509_trust_anchor *
         if(!br_ssl_client_reset(&t->client,host,0)){free(t);t=NULL;}
         else *error=CIUKI_TLS_OK;
     } else *error=CIUKI_TLS_MEMORY;
-    volatile unsigned char *wipe=seed;for(size_t i=0;i<sizeof(seed);i++)wipe[i]=0;
+    erase(seed,sizeof(seed));
     return t;
 }
 void ciuki_tls_free(struct ciuki_tls *t)
 { if(t){volatile unsigned char *p=(void *)t;for(size_t i=0;i<sizeof(*t);i++)p[i]=0;free(t);} }
 unsigned ciuki_tls_state(struct ciuki_tls *t) { return br_ssl_engine_current_state(&t->client.eng); }
+int ciuki_tls_engine_error(struct ciuki_tls *t) { return br_ssl_engine_last_error(&t->client.eng); }
 /* Track only TLS record boundaries (RFC 5246 section 6.2.3). BearSSL owns
  * validation/decryption; recvrec may consume a partial header or ciphertext
  * without exposing RECVAPP. Do this before ack can overwrite the input. */
@@ -159,7 +169,7 @@ enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *t,int fd,size_t *budget,bo
                 if(transmitted && !*transmitted && t->handshake_done)unexpected=true;
                 record_input(t,buffer,(size_t)r);br_ssl_engine_recvrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;
             }
-            if(!r)return CIUKI_TLS_IO;
+            if(!r){errno=ECONNRESET;return CIUKI_TLS_IO;}
         } else return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
         if(r<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
         return CIUKI_TLS_IO;
@@ -181,6 +191,19 @@ const char *ciuki_tls_message(enum ciuki_tls_error e)
         "TLS certificate hostname verification failed (numeric HTTPS hosts are unsupported).",
         "TLS certificate validation failed: untrusted, malformed, or unsupported certificate.",
         "TLS certificate has expired or is not yet valid.",
-        "TLS protocol failed. This browser requires TLS 1.2.","TLS connection closed or was truncated."};
+        "TLS protocol failed. This browser requires TLS 1.2.","TLS connection closed or was truncated.",
+        "TLS connection closed or was truncated.","Secure connections are not ready yet."};
     return text[e];
+}
+const char *ciuki_tls_describe(enum ciuki_tls_error e,char *buffer,size_t bytes)
+{
+    if(e!=CIUKI_TLS_NOT_READY)return ciuki_tls_message(e);
+    struct timespec now;
+    const char *message=ciuki_tls_message(e);
+    if(clock_gettime(CLOCK_MONOTONIC,&now) || now.tv_sec<0)
+        snprintf(buffer,bytes,"%s Estimated wait unavailable. Reload to retry.",message);
+    else if(now.tv_sec<60)
+        snprintf(buffer,bytes,"%s Estimated initial wait remaining: up to %u seconds. Reload to retry.",message,60-(unsigned)now.tv_sec);
+    else snprintf(buffer,bytes,"%s The initial one-minute estimate has elapsed; readiness is not guaranteed. Reload to retry.",message);
+    return buffer;
 }

@@ -28,7 +28,7 @@ static jmp_buf cancelled;
 
 static void priority_reset(void)
 {
-    reset(); waiters=0; held=0; owned_queues=0; propagating=false; cycle_records=0;
+    reset(); waiters=0; held=0; owned_queues=0; propagating=false; cycle_records=0; dependents=0;
     normal.state=hog.state=ui.state=T_BLOCKED;
     middle=(struct task){.id=5,.generation=1,.prio=P_NORMAL,.state=T_BLOCKED};
     strcpy(middle.name,"middle");ui.all_next=&middle;
@@ -68,6 +68,21 @@ static void input_and_io(void)
     priority_reset();task_input_delivered(&ui);
     CHECK(ui.focused && ui.input_priority==11); /* shell/internal window */
     puts("f0-45 input: focus base 9, +2 refresh/20ms expiry/focus loss; I/O +1/10 running ticks/no polling PASS");
+}
+static void input_forwarding(void)
+{
+    priority_reset(); task_focus(&ui);
+    task_input_forward(&middle,&normal); CHECK(!normal.input_priority);
+    task_input_forward(&ui,&normal);
+    CHECK(normal.base_priority==7 && normal.input_priority==9 && normal.input_expiry==20);
+    for (unsigned i=0;i<19;i++) run_tick(0);
+    CHECK(normal.input_forwarded); run_tick(0);
+    CHECK(!normal.input_priority && !normal.input_forwarded && !input_proxy);
+    task_input_forward(&ui,&normal); task_focus(&middle);
+    CHECK(!normal.input_priority && !normal.input_expiry && !input_proxy);
+    task_input_forward(&middle,&normal); task_input_withdraw(&normal);
+    CHECK(normal.base_priority==7 && !normal.input_priority && !input_proxy);
+    puts("F1-87 D forwarded input: focused source only, base7 unchanged, 20ms expiry and native/DOS focus withdrawal PASS");
 }
 static struct kwait completion;
 static bool completed;
@@ -287,6 +302,92 @@ static void saturation_test(void)
     puts("f0-45 overload: aggregate exhaustion requeues ordinary work, urgent audio dispatch served/reported (outside admission) PASS");
     puts("f0-45 short device turns: 8 x 500us without a PIT tick charge 4ms and throttle at handoff PASS");
 }
+/* f1-98 (R2): reservation dependencies of polling waiters (ksync_depend):
+ * the holder of a drive reservation or the cache lock runs at least at the
+ * highest waiter's priority, transitively, recorded, withdrawn at release,
+ * at the waiter's withdrawal and at either task's exit. */
+static char drive_c, cache_object, other_object;
+static void reservation_inheritance_test(void)
+{
+    priority_reset(); task_start(&normal); task_start(&middle);
+    running(&ui); CHECK(ui.effective_priority==9 && normal.effective_priority==7);
+    ksync_depend(&normal,&drive_c,KSYNC_DEPEND_DRIVE);
+    CHECK(ui.depends_on==&normal && normal.inherited_priority==9 && normal.effective_priority==9);
+    CHECK(inherit_used==1 && inherit_events[0].from_id==ui.id && inherit_events[0].to_id==normal.id);
+    CHECK(inherit_events[0].level==9 && inherit_events[0].reason==KSYNC_DEPEND_DRIVE && inherit_events[0].count==1);
+    ksync_depend(&normal,&drive_c,KSYNC_DEPEND_DRIVE); /* the next poll changes nothing */
+    CHECK(inherit_events[0].count==1 && dependents==&ui && !ui.depend_next);
+    ui.state=T_BLOCKED; /* asleep in its request pause: still lending */
+    running(&normal); ksync_depend_release(&other_object); CHECK(normal.effective_priority==9);
+    ksync_depend_release(&drive_c);
+    CHECK(normal.effective_priority==7 && !normal.inherited_priority && !ui.depends_on && !dependents);
+    cycles+=1000; record_bytes=0; records[0]=0; g_boot.flags=CBI_F_VERBOSE; cpu_emit(); g_boot.flags=0;
+    CHECK(strstr(records,"[sched] inherit from=desktop#4 to=worker#2 level=9 reason=drive count=1\n"));
+
+    /* Transitive: desktop(9) -> middle (drive) -> worker (cache); the
+     * waiter's input boost propagates and expires along the chain. */
+    priority_reset(); task_start(&normal);
+    running(&middle); ksync_depend(&normal,&cache_object,KSYNC_DEPEND_CACHE);
+    CHECK(middle.depends_on==&normal && normal.effective_priority==7 && !inherit_used); /* no raise, no record */
+    middle.state=T_BLOCKED;
+    running(&ui); ksync_depend(&middle,&drive_c,KSYNC_DEPEND_DRIVE); ui.state=T_BLOCKED;
+    CHECK(middle.effective_priority==9 && normal.effective_priority==9 && inherit_used==2);
+    CHECK(inherit_events[1].from_id==middle.id && inherit_events[1].to_id==normal.id &&
+          inherit_events[1].reason==KSYNC_DEPEND_CACHE && inherit_events[1].level==9);
+    task_input_delivered(&ui);
+    CHECK(ui.effective_priority==11 && middle.effective_priority==11 && normal.effective_priority==11);
+    for (unsigned i=0;i<20;i++) run_tick(0);
+    CHECK(ui.effective_priority==9 && middle.effective_priority==9 && normal.effective_priority==9);
+    /* A dependency closing a cycle lends nothing. */
+    running(&normal); ksync_depend(&ui,&other_object,KSYNC_DEPEND_DRIVE);
+    CHECK(!normal.depends_on && normal.effective_priority==9 && ui.effective_priority==9);
+    /* The waiter's withdrawal (admitted, cancelled, timed out). */
+    running(&ui); ksync_depend(0,0,0);
+    CHECK(!ui.depends_on && middle.effective_priority==7 && normal.effective_priority==7);
+    /* Exits: a dying holder drops its waiters' edges, a dying waiter its own. */
+    ksync_depend(&middle,&drive_c,KSYNC_DEPEND_DRIVE); CHECK(normal.effective_priority==9);
+    ksync_task_exit(&normal); CHECK(!middle.depends_on && middle.effective_priority==9);
+    ksync_task_exit(&ui); CHECK(!dependents && middle.effective_priority==7 && !middle.inherited_priority);
+
+    /* Share lending: a desktop member waiting for a non-member holder lends
+     * it the group's share, only for the dependency. */
+    priority_reset(); task_start(&normal); task_set_share_group(&ui,true);
+    running(&ui); ksync_depend(&normal,&drive_c,KSYNC_DEPEND_DRIVE);
+    CHECK(normal.share_lent && share_ready==1);
+    ui.state=T_BLOCKED; running(&normal); ksync_depend_release(&drive_c);
+    CHECK(!normal.share_lent && !share_ready);
+    task_set_share_group(&ui,false);
+
+    /* kmutex lock-order panics keep the kwait-only graph. */
+    CHECK(!lock_cycle(&ui,&normal));
+    puts("F1-98 reservation inheritance: holder raised to the waiter (9), transitive, input boost +2 and expiry propagate, cycle refused, release/withdrawal/exit restore 7, [sched] inherit record, share lent only while waited for PASS");
+}
+/* A priority-9 waiter for drive C beside a busy focused VM at 9: the 7
+ * holder that still has 5 ms of work inside its hold. */
+static unsigned holder_dispatch(bool edge)
+{
+    priority_reset();
+    task_set_base(&middle,P_NORMAL,9); audio_focus=&middle; task_start(&middle);
+    running(&ui); if (edge) ksync_depend(&normal,&drive_c,KSYNC_DEPEND_DRIVE);
+    ui.state=T_BLOCKED; task_start(&normal); schedule();
+    unsigned work=5; uint64_t start=g_ticks;
+    while (work && g_ticks-start<2000) {
+        if (g_current==&normal) work--;
+        run_tick(0); kpreempt_point();
+    }
+    CHECK(!work);
+    unsigned elapsed=(unsigned)(g_ticks-start);
+    struct task *was=g_current; running(&normal); ksync_depend_release(&drive_c);
+    CHECK(normal.effective_priority==7 && !dependents);
+    (void)was; audio_focus=0;
+    return elapsed;
+}
+static void holder_dispatch_test(void)
+{
+    unsigned without=holder_dispatch(false), with=holder_dispatch(true);
+    printf("F1-98 drive hold beside a busy focused VM=9, waiter at 9: holder's 5 ms finish in %u ms without inheritance (starvation boosts), %u ms with PASS\n",without,with);
+    CHECK(without>=300 && with<=40);
+}
 #include "../../src/kernel/proc/priority.c"
 static void mappings(void)
 {
@@ -322,6 +423,7 @@ int main(int argc,char **argv)
     if(argc==2 && !strcmp(argv[1],"--benchmark"))return benchmark();
     mappings();
     input_and_io();completion_test();inversion_test();withdrawal_tests();cycle_test();fifo_test();fifo_cancellation();combined_load();saturation_test();
-    dosvm_wait_dependency_test();dosvm_wait_combined_load();
+    input_forwarding();dosvm_wait_dependency_test();dosvm_wait_combined_load();
+    reservation_inheritance_test();holder_dispatch_test();
     return 0;
 }

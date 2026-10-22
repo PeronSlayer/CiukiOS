@@ -172,7 +172,8 @@ static int locate(struct w32_loader *l, const char *name, char *path, struct w32
         if (l->services->open(l->services->opaque, path, file))
             return 1;
     } else {
-        const char *dirs[] = {l->exe_directory, l->current_directory, l->system_directory,
+        const char *dirs[] = {l->altered_directory ? l->altered_directory : l->exe_directory,
+                              l->current_directory, l->system_directory,
                               l->windows_directory};
         for (ULONG i = 0; i < 4; i++)
             if (open_join(l, dirs[i], base, path, file))
@@ -332,43 +333,27 @@ static void *resolve(struct w32_loader *l, struct w32_module *m, const char *nam
     }
     return w32_pe_span(p, rva, 1);
 }
-static int bind_imports(struct w32_loader *l, struct w32_module *m, ULONG depth) {
-    struct w32_pe *p = &m->pe;
-    struct w32_directory d = p->dirs[1];
-    for (ULONG off = 0; off < d.size; off += 20) {
-        uint8_t *t = w32_pe_span(p, d.rva + off, 20);
-        if (!t)
-            return 0;
-        ULONG any = 0;
-        for (ULONG i = 0; i < 20; i++)
-            any |= t[i];
-        if (!any)
-            break;
-        ULONG ilt = w32_u32(t), iat = w32_u32(t + 16);
-        if (ilt && !w32_u32(p->image + ilt))
-            ilt = 0;
-        if (!ilt && w32_u32(t + 4) && w32_u32(p->image + iat) >= p->size)
-            return error(l, 193, "bound-iat-without-names", m->name, 0);
-        const char *dll = w32_pe_string(p, w32_u32(t + 12));
-        if (!dll)
-            return 0;
-        struct w32_module *dep = load_one(l, dll, 0, depth + 1);
-        if (!dep || !dependency(l, m, dep))
-            return 0;
-        for (ULONG i = 0; i < 65536; i++) {
-            ULONG v = w32_u32(p->image + (ilt ? ilt : iat) + i * 4);
-            if (!v)
-                break;
-            const char *name = v & 0x80000000 ? 0 : w32_pe_string(p, v + 2);
-            ULONG hint = name ? w32_u16(p->image + v) : 0xffffffffu;
-            void *address = resolve(l, dep, name, v & 65535, hint, 0);
-            if (!address)
-                return 0;
-            if(!w32_pe_write(p,iat+i*4,4))return 0;
-            w32_put32(p->image + iat + i * 4, (ULONG)(uintptr_t)address);
-        }
-    }
+struct import_binding {
+    struct w32_loader *loader;
+    struct w32_module *module, *dependency;
+    ULONG depth;
+};
+static int bind_descriptor(void *opaque,const struct pe_import *i) {
+    struct import_binding *b=opaque;
+    b->dependency=load_one(b->loader,i->module,0,b->depth+1);
+    return b->dependency && dependency(b->loader,b->module,b->dependency);
+}
+static int bind_symbol(void *opaque,const struct pe_import *i) {
+    struct import_binding *b=opaque;
+    void *address=resolve(b->loader,b->dependency,i->name,i->ordinal,
+                         i->name?i->hint:0xffffffffu,0);
+    if(!address || !w32_pe_write(&b->module->pe,i->iat,4)) return 0;
+    w32_put32(b->module->pe.image+i->iat,(ULONG)(uintptr_t)address);
     return 1;
+}
+static int bind_imports(struct w32_loader *l,struct w32_module *m,ULONG depth) {
+    struct import_binding b={l,m,0,depth};
+    return pe_walk_imports(&m->pe,&b,bind_descriptor,bind_symbol);
 }
 static int prepare_tls(struct w32_loader *l, struct w32_module *m) {
     m->tls_index = 0xffffffffu;
@@ -506,6 +491,13 @@ static struct w32_module *load_one(struct w32_loader *l, const char *name, ULONG
     w32_copy_string(m->path, sizeof(m->path), path);
     dllname(m->name, name);
     int ok = w32_pe_parse(&m->pe, f.bytes, f.size, &l->error);
+    /* Contract "Accepted images": MajorSubsystemVersion above 5 is accepted
+     * with a log record, here naming the image. Builtin store images are
+     * pinned by the store manifest instead (the reused Wine providers are
+     * linked 6.0): their record carried no information and its unattributed
+     * form ("image") was read as the application's (f5-15C). */
+    if (ok && !builtin && m->pe.subsystem_major > 5)
+        w32_diag("load", m->name, "newer-subsystem-version");
     if (ok && (flags & W32_LOAD_EXECUTABLE) && (m->pe.flags & 0x2000))
         ok = error(l, 193, "expected-executable", name, 0);
     if (ok && builtin &&
@@ -647,7 +639,7 @@ static void collect(struct w32_loader *l, int shutdown) {
 int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32_module **out) {
     if (out)
         *out = 0;
-    if (!name || !out || flags & ~(W32_LOAD_DATAFILE | W32_LOAD_EXECUTABLE))
+    if (!name || !out || flags & ~(W32_LOAD_DATAFILE | W32_LOAD_EXECUTABLE | W32_LOAD_ALTERED_SEARCH))
         return error(l, 87, "load-flags", name, 0);
     if (RtlEnterCriticalSection(&l->lock))
         return 0;
@@ -655,6 +647,20 @@ int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32
     if (!w32_builtin_validate(l->builtins, l->builtin_count, &l->error)) {
         RtlLeaveCriticalSection(&l->lock);
         return 0;
+    }
+    char *altered=0;
+    ULONG directory_bytes=(ULONG)(basename(name)-name);
+    if((flags&W32_LOAD_ALTERED_SEARCH) && directory_bytes){
+        if(directory_bytes>=W32_PATH_MAX){
+            error(l,193,"module-name-limit",name,0);
+            RtlLeaveCriticalSection(&l->lock);return 0;
+        }
+        altered=l->services->alloc(l->services->opaque,directory_bytes+1);
+        if(!altered){
+            error(l,8,"loader-memory",name,0);
+            RtlLeaveCriticalSection(&l->lock);return 0;
+        }
+        w32_copy(altered,name,directory_bytes);altered[directory_bytes]=0;
     }
     /* Snapshot dependency lists too: GetProcAddress forwarders can add edges
      * to an existing module during a recursive initialization transaction. */
@@ -668,7 +674,15 @@ int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32
         old[count++].deps = m->dependency_count;
     }
     l->transaction_depth++;
-    struct w32_module *m = load_one(l, name, flags, 0);
+    /* Win9x alternate order substitutes the top DLL's folder for the EXE
+     * folder while resolving imports. Loaded modules and protected builtins
+     * keep their precedence. A basename (used by Wine COM) has no folder to
+     * substitute; retain ordinary search for that unspecified path case. */
+    const char *saved_directory=l->altered_directory;
+    l->altered_directory=altered;
+    struct w32_module *m = load_one(l, name, flags & ~W32_LOAD_ALTERED_SEARCH, 0);
+    l->altered_directory=saved_directory;
+    if(altered)l->services->free(l->services->opaque,altered,directory_bytes+1);
     /* The main module is visible to GetModuleHandle(NULL) inside TLS and
      * DllMain callbacks, before its initialization transaction commits. */
     if(m && (flags&W32_LOAD_EXECUTABLE)){

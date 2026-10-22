@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 static void power_target(struct desktop *, uint32_t, const char *, int);
 static void v3_configure(struct desktop *, int);
 int desk_ignore_sigpipe(void)
@@ -56,8 +57,11 @@ void desk_drop_client(struct desktop *d, int i)
     if (d->drag == i) { d->drag = -1; d->resize_edges=0; d->keyboard_geometry=0; }
     if (c->window) desk_sound(d,SOUND_WINDOW_CLOSE);
     if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+    /* f2-95: a closing program (an installer) may have added shortcuts. */
+    if (c->window && !c->internal) d->v3_links_force|=DESK_LINKS_SCAN;
     if (c->pixels && !c->internal) d->ops.unmap((void *)c->pixels, c->info.allocation_bytes);
     if (c->surface >= 0) d->ops.close(c->surface);
+    free(c->v3_over);
     if (c->channel >= 0 && !c->v3_peer) d->ops.close(c->channel);
     if (d->about == i) d->about = -1;
     if (c->internal) desk_internal_closed(d, i);
@@ -72,6 +76,72 @@ void desk_drop_client(struct desktop *d, int i)
     }
     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
     desk_cursor_update(d);
+}
+/* f2-91: v3 pointer motion is merged exactly like older protocols when the client is behind (last
+ * position wins, only inside a trailing motion run of the same window), keys/buttons/everything else
+ * keep their order. A full ring never drops the window: the message waits in an ordered overflow,
+ * the windows are marked busy ("not responding" path) and delivery resumes when the client drains.
+ * Only a client that read nothing for DESK_V3_SILENT_NS with ring and overflow both full is dropped. */
+static int v3_is_motion(const struct ciuki_message *m)
+{
+    return m->data[0]==DESK_V3_VERSION && m->data[1]==DESK_MOTION && m->length==56 &&
+        desk_get32(m->data+28)==CIUKI_INPUT_MOTION;
+}
+static struct ciuki_message *v3_trailing(struct desk_client *p)
+{
+    if (p->v3_over_count) return &p->v3_over[(p->v3_over_head+p->v3_over_count-1)%DESK_V3_OVER_MAX];
+    if (p->tx_count) return &p->tx[(p->tx_head+p->tx_count-1)%DESK_TX_MAX];
+    return NULL;
+}
+static void v3_set_busy(struct desktop *d, int pi, int busy)
+{
+    struct desk_client *p=&d->clients[pi];
+    if (p->v3_busy==busy) return;
+    p->v3_busy=busy;
+    for (int j=0;j<DESK_CLIENTS;j++) {
+        struct desk_client *w=&d->clients[j];
+        if (w->channel<0 || w->v3_peer!=(unsigned)pi+1 || !w->window) continue;
+        if (busy && !w->unresponsive) { w->unresponsive=1; w->v3_busy_mark=1; }
+        else if (!busy && w->v3_busy_mark) { w->unresponsive=0; w->v3_busy_mark=0; }
+        else continue;
+        desk_damage_add(&d->damage,desk_outer(w),d->width,d->height);
+    }
+}
+static void v3_check_silent(struct desktop *d, int pi)
+{
+    struct desk_client *p=&d->clients[pi];
+    if (p->v3_failed || p->tx_count<DESK_TX_MAX || p->v3_over_count<DESK_V3_OVER_MAX) return;
+    uint64_t silent=d->now_ns>p->v3_progress_ns ? d->now_ns-p->v3_progress_ns : 0;
+    if (silent<DESK_V3_SILENT_NS) return;
+    p->v3_failed=1;
+    fprintf(stderr,"[desktop] client_drop window=%u pending=%u silent_ms=%llu\n",
+        p->window_id,p->tx_count+p->v3_over_count,(unsigned long long)(silent/1000000ull));
+}
+static void v3_hold(struct desktop *d, int pi, const struct ciuki_message *wire)
+{
+    struct desk_client *p=&d->clients[pi];
+    v3_set_busy(d,pi,1);
+    if (v3_is_motion(wire)) {
+        struct ciuki_message *q=v3_trailing(p);
+        if (q && v3_is_motion(q) && desk_get32(q->data+8)==desk_get32(wire->data+8) &&
+            desk_get32(q->data+12)==desk_get32(wire->data+12)) { *q=*wire; return; }
+    }
+    if (!p->v3_over) p->v3_over=malloc(sizeof(*p->v3_over)*DESK_V3_OVER_MAX);
+    if (!p->v3_over || p->v3_over_count==DESK_V3_OVER_MAX) {
+        p->v3_over_lost++; /* bounded: only reachable inside the silence deadline, newest message discarded */
+        v3_check_silent(d,pi); return;
+    }
+    p->v3_over[(p->v3_over_head+p->v3_over_count++)%DESK_V3_OVER_MAX]=*wire;
+    v3_check_silent(d,pi);
+}
+static void v3_refill(struct desktop *d, int pi)
+{
+    struct desk_client *p=&d->clients[pi];
+    while (p->v3_over_count && p->tx_count<DESK_TX_MAX) {
+        p->tx[(p->tx_head+p->tx_count++)%DESK_TX_MAX]=p->v3_over[p->v3_over_head];
+        p->v3_over_head=(p->v3_over_head+1)%DESK_V3_OVER_MAX; p->v3_over_count--;
+    }
+    if (!p->v3_over_count && p->v3_busy) v3_set_busy(d,pi,0);
 }
 void desk_queue(struct desktop *d, int i, const struct ciuki_message *m)
 {
@@ -88,7 +158,9 @@ void desk_queue(struct desktop *d, int i, const struct ciuki_message *m)
             if (op==DESK_V3_ACTIVATE) desk_put32(wire.data+20,desk_get32(m->data+4));
         }
         struct desk_client *peer=c->v3_peer ? &d->clients[c->v3_peer-1] : c;
-        if (peer->tx_count==DESK_TX_MAX) { peer->v3_failed=1; return; }
+        int pi=(int)(peer-d->clients);
+        if (peer->tx_count==DESK_TX_MAX || peer->v3_over_count) { v3_hold(d,pi,&wire); return; }
+        if (!peer->tx_count) peer->v3_progress_ns=d->now_ns;
         peer->tx[(peer->tx_head+peer->tx_count++)%DESK_TX_MAX]=wire;
         return;
     }
@@ -157,6 +229,7 @@ void desk_flush(struct desktop *d, int i)
     if (c->v3_peer) return;
     if (c->v3_failed) { desk_drop_client(d,i); return; }
     unsigned budget = DESK_TX_MAX;
+    if (c->version==DESK_V3_VERSION) v3_refill(d,i);
     while (c->channel >= 0 && c->tx_count && budget--) {
         struct ciuki_message *message = &c->tx[c->tx_head];
         unsigned flags = DONTWAIT;
@@ -184,6 +257,8 @@ void desk_flush(struct desktop *d, int i)
         }
         d->replied++;
         c->tx_head = (c->tx_head + 1) % DESK_TX_MAX; c->tx_count--;
+        c->v3_progress_ns = d->now_ns;
+        if (c->version==DESK_V3_VERSION) v3_refill(d,i);
     }
     if (c->channel>=0 && c->gfx_reply_pending && c->tx_count<DESK_TX_MAX)
         desk_gfx_complete(d,i,c->gfx_result,c->gfx_completed_ns,c->gfx_next_ns);
@@ -769,7 +844,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
-        if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;}
+        if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;d->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
             if (d->display_reply_mode) result=-EBUSY;
             else result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
@@ -850,13 +925,22 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
     }
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_client *c = &d->clients[i];
+        if (c->channel >= 0 && c->version==DESK_V3_VERSION && !c->v3_peer) v3_check_silent(d,i);
+    }
+    for (int i = 0; i < DESK_CLIENTS; i++) {
+        struct desk_client *c = &d->clients[i];
         if (c->channel < 0 || !c->hello || (c->version==DESK_V3_VERSION && !c->window)) continue;
         if (!c->ping_pending && now >= c->next_ping_ns && c->tx_count < DESK_TX_MAX) {
             struct ciuki_message m;
             desk_message(&m, DESK_PING, 8); desk_put32(m.data + 4, ++c->serial);
             desk_queue(d, i, &m); c->ping_pending = 1; c->ping_sent_ns = now;
         }
-        if (c->ping_pending && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive) {
+        /* One rule for every application: a PING unanswered for 5 s marks the window, but only when the desktop
+         * itself drained the channels after that deadline. A desktop-owned wait (a synchronous VFS lookup in a
+         * launch, a present, a worker mailbox) leaves the PONG unread in the channel and must not be charged
+         * to the application (f2-88). */
+        if (c->ping_pending && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive &&
+            (!d->drain_ns || d->drain_ns >= c->ping_sent_ns + 5000000000ull)) {
             c->unresponsive = 1;
             if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         }

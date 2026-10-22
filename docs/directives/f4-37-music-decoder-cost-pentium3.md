@@ -1,0 +1,27 @@
+# f4-37 — Music decoder costs 41 % of the T23's CPU: measure per stage and bring it under 5 %
+
+- **Phase/model:** F4, Claude agent (Opus). **Worktree:** `wt/f4-37` from `main`.
+- **Evidence:** f1-101 report (`build/codex/f1-101-report.md`): the trial's decoder uses about 8.55 µs of CPU per output frame, 41 % of the 1.1 GHz Pentium III, about 400 times the host benchmark; with that cost even the f1-101 boost leaves 140 starvations in the replay. T23 BOOT.LOG of image a4d9454e (`build/lead-scratch/t23-a4d9454e-BOOT.LOG`): `[user 45] [music] level … reader_fps=… decode_us_frame=24–53 … ui_mps=1998 repaint_mps=1599–5396`, `close starvations=119`. The decoder is minimp3 with `MINIMP3_NO_SIMD` (x87 float path) built for `-march=pentiumpro` (`apps/music/decoder.c:12`, `config/toolchain.json`). Leading hypothesis to test, not to assume: x87 denormal assists on the P6 core during quiet passages and synthesis-filter tails (Intel's optimization manual documents microcode assists of hundreds of cycles per denormal operand); also check the 44.1→48 kHz resampler, the PCM conversion and the player's own UI cost (`repaint_mps`).
+
+## Required
+
+1. **Measure where the time goes** on the T23: TSC counters per stage in the player (bitstream/Huffman, requantisation, IMDCT, polyphase synthesis, resampling, PCM conversion, UI repaint and meter) emitted every 5 s as one protected record `[music] cost decode_us=… synth_us=… imdct_us=… resample_us=… ui_us=… repaints=… frames=… tiny_values=…` (`tiny_values` = count of results below FLT_MIN in the synthesis state, cheap sampling), so one trial gives the split.
+2. **Fix the cause the host can show**: build a host harness that runs the exact decoder build (i686, x87, same flags) over a fade-out/quiet test file and counts denormal results; if denormals are present, apply the standard remedy (flush tiny values in the synthesis/overlap state, or the anti-denormal offset technique, cited) without audible change (bit-exactness against the reference decoder within ±1 LSB on the test vectors); on CPUs with SSE (CPUID), optionally use minimp3's SSE path with FTZ/DAZ set for the decoder thread only, keeping the x87 path for the i686 baseline without SSE (hardware-baseline.md).
+3. **Player UI bound**: the meter and position repaint at most 15 fps and only the changed region (coordinate with f2-95, which owns `apps/desktop/compositor.c`; do not touch it).
+4. **Target and model**: decoder plus player ≤ 5 % of a 1.1 GHz Pentium III for 128–320 kb/s stereo at 44.1/48 kHz, estimated with a cycle model from the host measurements (state the method and its uncertainty); if the float decoder cannot reach it, evaluate a fixed-point decoder (libmad, GPL-2.0-or-later, compatible with CiukiOS) with numbers, and recommend — do not switch without the lead.
+5. Host tests: the denormal regression, bit-exactness on the test vectors, the cost record format, the UI rate bound; the Music tests and `test_kernel_latency`.
+
+Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f4-37-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 20:19, decisions on the delivery)
+
+Accepted. The decoder models at about 3 % of a 1.1 GHz Pentium III before
+the changes and 1.3–1.7 % after (FLDCW-free PCM conversion, exact
+multiply-and-shift resampling, no input-buffer copy, mono scratch row
+cleared); the stereo denormal hypothesis is refuted, so the trial's 41 % is
+an environment cost read from the new `[music] cost … mhz= loop= mem=
+best_kc=` record on the next trial. Decisions: keep minimp3 (libmad models
+only ~10 % fewer cycles); no SSE for native programs in this release (the
+Pentium III has no SSE2 for minimp3's SIMD path, and enabling SSE state is a
+kernel/SDK decision for later); the libdeskui compare-region opt-in stays
+opt-in.

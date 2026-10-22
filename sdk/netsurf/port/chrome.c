@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  * Single UI owner: deskui chrome/dialogs; fbtk owns the content viewport. */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 #include <libnsfb.h>
 #include <libnsfb_event.h>
 #include "utils/errors.h"
@@ -29,18 +32,32 @@
 #include "surface.h"
 #include "profile.h"
 #include "chrome.h"
+#include "budget.h"
+#include "logline.h"
+#include "pointer.h"
 
-enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,OPEN=20,FILE_PICKER,NOTICE };
+enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,OPEN=20,FILE_PICKER,NOTICE };
+static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK};
 static struct du_ui ui;
 static struct ciuki_browser_surface *surface;
 static bool active, loading, hotlist_ready, profile_ready, toolbar_keys;
 static bool status_dirty;
 static bool profile_requested;
+static unsigned input_records;
 static unsigned bookmarks;
+static unsigned content_cursor=DESK_CURSOR_ARROW;
 static struct form_control *file_gadget;
 static struct gui_window *file_window;
 const char *ciuki_resource_path="/system/netsurf";
 const char *ciuki_capture_path;
+/* f6-22: C:\SYSTEM\LOGS\NETSURF.LOG keeps one line per browser exit. Host
+ * runs write it only when --ciuki-log= names a file. */
+#ifdef CIUKI_HOST
+const char *ciuki_netsurf_log_path;
+#else
+const char *ciuki_netsurf_log_path="/system/logs/NETSURF.LOG";
+#endif
+#define CIUKI_NETSURF_LOG_MAX (64u*1024u)
 static const char *profile_path="/Documents/NetSurf";
 const char *ciuki_chrome_choices(void)
 {
@@ -75,8 +92,9 @@ static void action(int id)
     switch(id) {
     case BACK: if(browser_window_back_available(bw))browser_window_history_back(bw,false);break;
     case FORWARD:if(browser_window_forward_available(bw))browser_window_history_forward(bw,false);break;
-    case RELOAD:browser_window_reload(bw,true);break;
+    case RELOAD:ciuki_chrome_reload();break;
     case STOP:browser_window_stop(bw);ciuki_chrome_loading(false);break;
+    case HOME:navigate(nsoption_charp(homepage_url)?nsoption_charp(homepage_url):"about:welcome");break;
     case BOOKMARK:
         if(!hotlist_ready || bookmarks>=500) { ciuki_chrome_status("Bookmark limit reached or profile unavailable.");break; }
         if(!hotlist_has_url(browser_window_access_url(bw))) {
@@ -92,7 +110,7 @@ static void event(struct du_ui *u,const struct du_event *e,void *unused)
 {
     (void)unused;
     if(e->type==DU_EV_ACTIVATE || e->type==DU_EV_COMMIT) {
-        if(e->id==URL) { navigate(du_get(u,URL)->text);u->focus=-1;toolbar_keys=false; }
+        if(e->id==URL) { u->focus=-1;toolbar_keys=false;navigate(du_get(u,URL)->text); }
         else action(e->id);
     } else if(e->type==DU_EV_DIALOG && (e->id==OPEN || e->id==FILE_PICKER)) {
         if(e->index==0 && u->dialog.text[0]) {
@@ -109,18 +127,20 @@ static void event(struct du_ui *u,const struct du_event *e,void *unused)
 static void layout(void)
 {
     int w=surface->current.info.width,h=surface->current.info.height;
-    for(unsigned i=0;i<5;i++)du_get(&ui,BACK+i)->box=(struct du_rect){4+(int)i*30,4,28,28};
-    du_get(&ui,URL)->box=(struct du_rect){158,6,w-164,24};
+    for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++)du_get(&ui,buttons[i])->box=(struct du_rect){4+(int)i*30,4,28,28};
+    du_get(&ui,URL)->box=(struct du_rect){188,6,w-194,24};
     du_get(&ui,STATUS)->box=(struct du_rect){0,h-CIUKI_BROWSER_STATUS,w,CIUKI_BROWSER_STATUS};
 }
 void ciuki_chrome_init(struct ciuki_browser_surface *s)
 {
-    surface=s;active=status_dirty=true;du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
+    content_cursor=DESK_CURSOR_ARROW;
+    surface=s;active=status_dirty=true;toolbar_keys=false;input_records=0;
+    du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
     ui.event=event;
-    const char *labels[]={"Back","Forward","Reload","Stop","Bookmark"};
-    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/bookmark-new"};
-    for(unsigned i=0;i<5;i++) {
-        struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,BACK+i,(struct du_rect){0},labels[i]);
+    const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark"};
+    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new"};
+    for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++) {
+        struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,buttons[i],(struct du_rect){0},labels[i]);
         widget->icon=du_icon_argb(icons[i],22);widget->icon_size=22;
     }
     du_add(&ui,DU_EDIT,URL,(struct du_rect){0},"");
@@ -133,8 +153,20 @@ void ciuki_chrome_resize(void)
     du_resize(&ui,surface->current.back,surface->current.info.width,surface->current.info.height);layout();
     status_dirty=true;
 }
+static void chrome_cursor(void)
+{
+    if(!active)return;
+    int chrome=ui.dialog.kind || ui.capture>=0 || ui.mouse_y<CIUKI_BROWSER_TOP ||
+        ui.mouse_y>=(int)surface->current.info.height-CIUKI_BROWSER_STATUS;
+    unsigned shape=chrome ? du_cursor_at(&ui) : content_cursor;
+    if(!chrome && loading && shape==DESK_CURSOR_ARROW)shape=DESK_CURSOR_ARROW_BUSY;
+    (void)ciuki_browser_cursor(surface,shape);
+}
+void ciuki_chrome_pointer(unsigned shape)
+{ content_cursor=ciuki_pointer_shape(shape);chrome_cursor(); }
 void ciuki_chrome_render(void)
 {
+    chrome_cursor(); /* also retry a refused cursor send on an otherwise idle UI turn */
     if(!active || (!ui.dirty && !status_dirty))return;
     struct browser_window *bw=browser();
     du_get(&ui,BACK)->disabled=!bw || !browser_window_back_available(bw);
@@ -155,9 +187,32 @@ void ciuki_chrome_render(void)
 }
 void ciuki_chrome_status(const char *text)
 { if(active) { du_set_text(du_get(&ui,STATUS),text?text:"");status_dirty=true; } }
+/* The URL the core last displayed: for its internal query pages this is the
+ * site being loaded (the core's loading parameters), not the about: page. */
+static nsurl *shown_url;
 void ciuki_chrome_url(nsurl *url)
 {
-    if(active && url) { du_set_text(du_get(&ui,URL),nsurl_access(url));ui.dirty=1; }
+    if(url) { if(shown_url)nsurl_unref(shown_url);shown_url=nsurl_ref(url); }
+    /* A late loading notification must not overwrite an address being edited. */
+    if(active && url && !(toolbar_keys && du_focused(&ui)==URL)) {
+        du_set_text(du_get(&ui,URL),nsurl_access(url));ui.dirty=1;
+    }
+}
+/* browser_window_reload re-fetches the content URL. On the core's internal
+ * error pages (about:query/...) that navigation needs the page's form data
+ * and browser_window_navigate refuses it (NSERROR_NEED_DATA), so a reload
+ * would never retry the site. Navigate to the displayed site URL instead,
+ * without a history entry or POST replay: a reload after "not ready" then
+ * retries HTTPS with a fresh entropy request. */
+void ciuki_chrome_reload(void)
+{
+    struct browser_window *bw=browser();if(!bw)return;
+    nsurl *current=browser_window_access_url(bw);
+    if(current && shown_url && !strncmp(nsurl_access(current),"about:query/",12) && strncmp(nsurl_access(shown_url),"about:query/",12)) {
+        if(browser_window_navigate(bw,shown_url,NULL,BW_NAVIGATE_NONE,NULL,NULL,NULL)!=NSERROR_OK)ciuki_chrome_status("Unable to reload this address.");
+        return;
+    }
+    browser_window_reload(bw,true);
 }
 void ciuki_chrome_complete(struct gui_window *window)
 {
@@ -169,7 +224,14 @@ void ciuki_chrome_complete(struct gui_window *window)
     if(url && ciuki_profile_visit(nsurl_access(url)))
         ciuki_chrome_status("Unable to record this page in history.");
 }
-void ciuki_chrome_loading(bool value) { loading=value;if(active)ui.dirty=1; }
+/* f6-18 test profile: gate, fixture anchors and the one-shot page report. */
+#include "testmode.inc"
+void ciuki_chrome_loading(bool value)
+{
+    loading=value;if(active)ui.dirty=1;
+    chrome_cursor();
+    if(!value)ciuki_test_page_done();
+}
 bool ciuki_chrome_busy(void) { return loading; }
 void ciuki_chrome_title(struct gui_window *window,const char *title)
 {
@@ -191,6 +253,12 @@ static void open_profile_page(const char *name)
     }
     if(path && netsurf_path_to_nsurl(path,&url)==NSERROR_OK) { navigate(nsurl_access(url));nsurl_unref(url); }
 }
+static void focus_address(void)
+{
+    du_focus(&ui,URL);toolbar_keys=true;
+    struct du_widget *edit=du_get(&ui,URL);
+    edit->anchor=0;edit->cursor=strlen(edit->text);edit->selection.ns=0;ui.dirty=1;
+}
 bool ciuki_chrome_input(const struct ciuki_input_event *input)
 {
     if(!active)return false;
@@ -203,7 +271,7 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         }
         bool ctrl=ui.modifiers&DU_CTRL,alt=ui.modifiers&DU_ALT;
         if(e.value && !ui.dialog.kind) {
-            if(ctrl && e.code==0x26) { du_focus(&ui,URL);du_get(&ui,URL)->anchor=0;du_get(&ui,URL)->cursor=strlen(du_get(&ui,URL)->text);toolbar_keys=true;return true; }
+            if(ctrl && e.code==0x26) { focus_address();return true; }
             if(ctrl && e.code==0x13) { action(RELOAD);return true; }
             if(e.code==DU_KEY_ESC) { action(STOP);return true; }
             if(alt && e.code==DU_KEY_LEFT) { action(BACK);return true; }
@@ -216,11 +284,11 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
     }
     if(e.type==CIUKI_INPUT_MOTION) {
         bool chrome=e.value2<CIUKI_BROWSER_TOP || e.value2>=(int)surface->current.info.height-CIUKI_BROWSER_STATUS;
-        if(!chrome && !ui.dialog.kind && ui.capture<0) { ui.mouse_x=e.value;ui.mouse_y=e.value2;return false; }
+        if(!chrome && !ui.dialog.kind && ui.capture<0) { ui.mouse_x=e.value;ui.mouse_y=e.value2;chrome_cursor();return false; }
     }
     if(e.type==CIUKI_INPUT_BUTTON && !ui.dialog.kind && ui.capture<0 &&
        ui.mouse_y>=CIUKI_BROWSER_TOP && ui.mouse_y<(int)surface->current.info.height-CIUKI_BROWSER_STATUS) {
-        if(e.value) { toolbar_keys=false;ui.focus=-1; }return false;
+        if(e.value) { if(toolbar_keys || ui.focus>=0)ui.dirty=1;toolbar_keys=false;ui.focus=-1; }return false;
     }
     if(e.type==CIUKI_INPUT_TEXT && !toolbar_keys && !ui.dialog.kind)return false;
     struct du_widget *edit=NULL;
@@ -241,9 +309,58 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
     if(e.type==CIUKI_INPUT_WHEEL && !ui.dialog.kind && ui.capture<0 &&
        ui.mouse_y>=CIUKI_BROWSER_TOP && ui.mouse_y<(int)surface->current.info.height-CIUKI_BROWSER_STATUS)return false;
     if(e.type==CIUKI_INPUT_KEY && e.value && e.code==DU_KEY_TAB && du_focused(&ui)==URL && !(ui.modifiers&DU_SHIFT)) {
-        toolbar_keys=false;ui.focus=-1;return false;
+        toolbar_keys=false;ui.focus=-1;ui.dirty=1;return false;
     }
-    du_input(&ui,&e);return true;
+    bool entering_address=e.type==CIUKI_INPUT_BUTTON && e.code==1 && e.value && !ui.dialog.kind &&
+        (!toolbar_keys || du_focused(&ui)!=URL) && du_contains(du_get(&ui,URL)->box,ui.mouse_x,ui.mouse_y);
+    if(e.type==CIUKI_INPUT_BUTTON && e.code==1 && e.value && !ui.dialog.kind) {
+        int hit=du_hit(&ui,ui.mouse_x,ui.mouse_y);
+        /* deskui toolbuttons deliberately do not take keyboard focus. Blur
+         * the edit before their navigation can report the new page's URL. */
+        if(hit>=0 && ui.widgets[hit].kind==DU_TOOLBUTTON) {
+            toolbar_keys=false;ui.focus=-1;ui.dirty=1;
+        }
+    }
+    du_input(&ui,&e);
+    if(e.type==CIUKI_INPUT_BUTTON && e.value && !ui.dialog.kind)toolbar_keys=du_focused(&ui)!=0;
+    if(entering_address)focus_address();
+    chrome_cursor();
+    return true;
+}
+/* Both owners need the latest client position, even when one consumes motion.
+ * Only the page translator subtracts CIUKI_BROWSER_TOP. A held page button
+ * keeps its release/drag; deskui's own capture keeps chrome selections. */
+void ciuki_chrome_dispatch(struct ciuki_browser_surface *s,const struct ciuki_input_event *e)
+{
+    if(e->type==CIUKI_INPUT_MOTION) {
+        s->mouse_x=ui.mouse_x=e->value;s->mouse_y=ui.mouse_y=e->value2;
+    }
+    bool page_drag=s->buttons && (e->type==CIUKI_INPUT_MOTION || e->type==CIUKI_INPUT_BUTTON);
+    int id=0;
+    if(active) {
+        int hit=e->type==CIUKI_INPUT_BUTTON?du_hit(&ui,ui.mouse_x,ui.mouse_y):ui.focus;
+        if(hit>=0 && (unsigned)hit<ui.count)id=ui.widgets[hit].id;
+        if(ui.capture>=0 && e->type==CIUKI_INPUT_BUTTON)id=ui.widgets[ui.capture].id;
+    }
+    bool chrome=!page_drag && ciuki_chrome_input(e);
+    if(!chrome)ciuki_browser_input(s,e);
+    /* First 512 edges per window, then silence; no motion or typed text data. */
+    if(e->type==CIUKI_INPUT_BUTTON || e->type==CIUKI_INPUT_KEY || e->type==CIUKI_INPUT_TEXT) {
+        if(input_records<512) {
+            const char *widget="toolbar";
+            if(!chrome)widget="content";
+            else if(ui.dialog.kind)widget="dialog";
+            else if(id==URL || (!id && du_focused(&ui)==URL))widget="address";
+            else if(id==BACK)widget="back";else if(id==FORWARD)widget="forward";
+            else if(id==RELOAD)widget="reload";else if(id==STOP)widget="stop";
+            else if(id==HOME)widget="home";else if(id==BOOKMARK)widget="bookmark";
+            else if(id==STATUS)widget="status";
+            ciuki_log_line("[netsurf] input target=%s widget=%s type=%u code=%d value=%d last=%u",
+                chrome?"chrome":"page",widget,(unsigned)e->type,
+                e->type==CIUKI_INPUT_TEXT?0:e->code,e->value,input_records==511);
+            input_records++;
+        }
+    }
 }
 void ciuki_chrome_file(struct gui_window *window,struct hlcache_handle *content,struct form_control *gadget)
 {
@@ -272,21 +389,40 @@ void ciuki_chrome_defaults(void)
     nsoption_set_int(max_fetchers,8);nsoption_set_int(max_fetchers_per_host,2);
     nsoption_set_charp(fb_toolbar_layout,strdup("q"));
 }
+static const char *exit_reason;
+static int exit_detail;
+static bool exit_reported;
+static void exit_fallback(void);
 int ciuki_chrome_arguments(int *argc,char **argv)
 {
+    /* f6-22: every complete stderr line, NetSurf's own log included, leaves
+     * as one write (see logline.h); C allows a line-buffered stderr. */
+    static char stderr_buffer[1024];
+    setvbuf(stderr,stderr_buffer,_IOLBF,sizeof(stderr_buffer));
+    atexit(exit_fallback);
     for(int i=1;i<*argc;) {
         const char *a=argv[i];bool consumed=false;
         if(!strncmp(a,"--channel-fd=",13)) {
-            char *end;long n=strtol(a+13,&end,10);if(*end || n<3 || n>63)return -1;
+            char *end;long n=strtol(a+13,&end,10);if(*end || n<3 || n>63) { exit_reason="bad-arguments";return -1; }
             ciuki_browser_channel=n;consumed=true;
         }
+        else if(!strcmp(a,"--test=browser")) { test_requested=true;consumed=true; }
 #ifdef CIUKI_HOST
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-capture=",16)) { ciuki_capture_path=a+16;consumed=true; }
+        else if(!strncmp(a,"--ciuki-log=",12)) { ciuki_netsurf_log_path=a+12;consumed=true; }
+        else if(!strncmp(a,"--ciuki-clock-scale=",20)) {
+            /* f6-20 T23 model: charge host layouts as a slower CPU. */
+            char *end;unsigned long n=strtoul(a+20,&end,10);if(*end || !n || n>1000000) { exit_reason="bad-arguments";return -1; }
+            ciuki_layout_clock_scale=(uint32_t)n;consumed=true;
+        }
 #endif
         if(consumed) { memmove(argv+i,argv+i+1,(size_t)(*argc-i)*sizeof(*argv));(*argc)--; } else i++;
     }
+    /* Before netsurf_init registers the fetchers, which create the network
+     * with the trust anchors the profile selects. */
+    ciuki_test_arm();
     return 0;
 }
 int ciuki_chrome_start(void)
@@ -309,15 +445,69 @@ void ciuki_chrome_finish(void)
             fprintf(stderr,"NetSurf: unable to save profile; previous files retained.\n");
     }
     if(hotlist_ready)hotlist_fini();
+    if(shown_url) { nsurl_unref(shown_url);shown_url=NULL; }
     ciuki_profile_fini();active=profile_ready=hotlist_ready=false;
+}
+void ciuki_chrome_exit_reason(const char *reason)
+{
+    if(exit_reason)return;
+    if(reason) { exit_reason=reason;return; }
+    struct ciuki_browser_surface *s=ciuki_browser_active;
+    exit_reason=s && s->close_reason?s->close_reason:"quit-event";
+    exit_detail=s && s->close_reason?s->close_detail:0;
+}
+/* Builds without the native fetcher (unit harnesses) report "unknown". */
+__attribute__((weak)) const char *ciuki_net_state_word(void);
+__attribute__((format(printf,3,4)))
+static int format_line(char *line,size_t size,const char *format,...)
+{ va_list ap;va_start(ap,format);int n=ciuki_line_vformat(line,size,format,ap);va_end(ap);return n; }
+static int exit_line(char *line,size_t size,bool surface)
+{
+    struct ciuki_browser_surface *s=surface?ciuki_browser_active:NULL;
+    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u network=%s",
+            exit_reason?exit_reason:"unknown",exit_detail,ciuki_layout_rejections,
+            (unsigned long long)(ciuki_layout_max_ns/1000u),(unsigned long long)(ciuki_layout_local_max_ns/1000u),
+            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,
+            ciuki_net_state_word?ciuki_net_state_word():"unknown");
+}
+/* Appends "<UTC time> <line>"; past 64 KiB the file starts over. */
+static void netsurf_log(const char *line)
+{
+    if(!ciuki_netsurf_log_path)return;
+    struct stat st;int flags=O_WRONLY|O_CREAT|O_APPEND;
+    if(!stat(ciuki_netsurf_log_path,&st) && st.st_size>=(off_t)CIUKI_NETSURF_LOG_MAX)flags=O_WRONLY|O_CREAT|O_TRUNC;
+    int fd=open(ciuki_netsurf_log_path,flags,0666);if(fd<0)return;
+    char stamp[32]="unknown-time ";struct timespec now;struct tm utc;
+    if(!clock_gettime(CLOCK_REALTIME,&now) && gmtime_r(&now.tv_sec,&utc))
+        snprintf(stamp,sizeof(stamp),"%04d-%02d-%02dT%02d:%02d:%02dZ ",utc.tm_year+1900,utc.tm_mon+1,utc.tm_mday,utc.tm_hour,utc.tm_min,utc.tm_sec);
+    ciuki_write_all(fd,stamp,strlen(stamp));ciuki_write_all(fd,line,strlen(line));close(fd);
+}
+void ciuki_chrome_exit_report(void)
+{
+    char line[CIUKI_LOG_LINE_MAX];
+    if(exit_reported || exit_line(line,sizeof(line),true)<=0)return;
+    exit_reported=true;
+    fflush(stderr);ciuki_write_all(2,line,strlen(line));
+    netsurf_log(line);
+}
+/* die() and early returns: stderr already has their message; the log file
+ * still gets an exit line. The surface may be gone, so it is not read. */
+static void exit_fallback(void)
+{
+    char line[CIUKI_LOG_LINE_MAX];
+    if(exit_reported)return;
+    exit_reported=true;
+    if(!exit_reason)exit_reason="fatal";
+    if(exit_line(line,sizeof(line),false)>0)netsurf_log(line);
 }
 void ciuki_chrome_capture(void *context)
 {
 #ifdef CIUKI_HOST
     if(!ciuki_capture_path)return;
-    extern uint64_t ciuki_layout_max_ns;
     extern unsigned ciuki_file_slices;
-    fprintf(stderr,"NetSurf local capture: layout_max_ns=%llu file_slices=%u\n",(unsigned long long)ciuki_layout_max_ns,ciuki_file_slices);
+    fprintf(stderr,"NetSurf local capture: layout_max_ns=%llu local_max_ns=%llu remote_max_ns=%llu clock_scale=%u file_slices=%u\n",
+            (unsigned long long)ciuki_layout_max_ns,(unsigned long long)ciuki_layout_local_max_ns,
+            (unsigned long long)ciuki_layout_remote_max_ns,(unsigned)ciuki_layout_clock_scale,ciuki_file_slices);
     if(browser())fprintf(stderr,"NetSurf local title: %s\n",browser_window_get_title(browser()));
     nsfb_t *fb=context;uint8_t *pixels;int stride;
     nsfb_get_buffer(fb,&pixels,&stride);

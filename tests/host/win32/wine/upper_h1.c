@@ -3,7 +3,8 @@
  * Linux adapter, its whole import closure bound to the CiukiOS core PEs, and
  * every DllMain executed (attach, then detach on free). The PE ntdll is the
  * adapter build (fail-closed CIUKI_SYS_W32 transport): this is not the
- * CiukiOS kernel, so kernel and w32srv requests fail with ENOSYS.
+ * CiukiOS kernel. The default mode refuses unimplemented kernel/w32srv
+ * requests; the opt-in H1_INSTALLERS mode uses the fixture services below.
  *
  * Safety: PE code never reaches a Linux system call. A seccomp filter allows
  * system calls only from the adapter ELF's own text; any int 0x80 from PE
@@ -11,7 +12,7 @@
  * (0x7ffe0100, used by USER/ADVAPI32) is a host stub counting calls and
  * returning -ENOSYS.
  *
- * Adapter answers (h1_transport.c in the PE ntdll): the kernel's W32_IDENTITY
+ * Default adapter answers (h1_transport.c in the PE ntdll): the kernel's W32_IDENTITY
  * record as src/kernel/proc/win32/records.c answers it (Windows 98, 4.10.2222
  * " A "), and the w32srv atom directory (ATOM_ADD/FIND/DELETE/NAME, the
  * apps/w32srv/directory.c rules: integer atoms #1..#0xbfff, string atoms from
@@ -24,6 +25,11 @@
 #include <w32/server.h>
 #include "upper_h1_store.h"
 #include <stdarg.h>
+#ifdef H1_INSTALLERS
+#include "h1_services.h"
+static int installer_exec;
+static int installer_fixture;
+#endif
 /* f5-20D: the guest fixture's logic (src/probes/win32_upper/exercise.c, the
  * same source that is linked as upper-exercise.exe) on the adapter. The test
  * writes upper_fixture_src.h (an include of that source) and upper_table.h
@@ -102,6 +108,10 @@ static int sandbox(void) {
 }
 
 static ULONG kernel_records, kernel_enosys, server_requests, server_unsupported, console_writes;
+#ifdef H1_INSTALLERS
+static struct {ULONG op,action,size;} recent_kernel[32];
+static struct {ULONG op,key,status;} recent_server[16];
+#endif
 /* Exec mode (Wine conformance programs): the process's standard handles are
  * a console the adapter answers itself (write to stdout, empty input). */
 #define H1_STDIN 0x40000010u
@@ -136,6 +146,13 @@ static int32_t h1_console(struct ciuki_w32_file_args *a) {
 
 static int32_t h1_kernel(void *record, uint32_t size) {
     struct ciuki_w32_header *h = record;
+#ifdef H1_INSTALLERS
+    recent_kernel[kernel_records%32].op=h->operation;
+    recent_kernel[kernel_records%32].size=size;
+    recent_kernel[kernel_records%32].action=
+        (h->operation==W32_FILE || h->operation==W32_OBJECT || h->operation==W32_VIEW) && size>=20?
+        ((const ULONG *)record)[4]:0;
+#endif
     kernel_records++;
     if (h->operation == W32_IDENTITY && size >= sizeof(struct ciuki_w32_identity)) {
         struct ciuki_w32_identity *a = record;
@@ -151,8 +168,28 @@ static int32_t h1_kernel(void *record, uint32_t size) {
     }
     if (h->operation == W32_FILE && size >= sizeof(struct ciuki_w32_file_args) && h1_console(record))
         return 0;
+#ifdef H1_INSTALLERS
+    int32_t status;
+    if ((installer_exec || installer_fixture) && h1_installer_kernel(record, size, &status)){
+        host_print("KERNEL op=");print_hex(h->operation);
+        host_print(" action=");host_number(recent_kernel[(kernel_records-1)%32].action);
+        host_print(" status=");print_hex((ULONG)status);
+        if(size>=sizeof(struct ciuki_w32_vm) &&
+           (h->operation==W32_VM_ALLOC || h->operation==W32_VM_FREE || h->operation==W32_VM_PROTECT)){
+            const struct ciuki_w32_vm *a=record;host_print(" address=");print_hex(a->address);
+            host_print(" bytes=");host_number(a->bytes);host_print(" flags=");print_hex(a->flags);
+        }
+        host_print("\n");
+        return status;
+    }
+#endif
     kernel_enosys++;
     count_enosys(h->operation);
+    host_print("KERNEL ENOSYS op=");
+    print_hex(h->operation);
+    host_print(" size=");
+    host_number(size);
+    host_print("\n");
     return -38;
 }
 
@@ -233,6 +270,19 @@ static ULONG atom_call(const struct w32r_request *r, const char *name, struct w3
 }
 
 static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, uint32_t *used) {
+#ifdef H1_INSTALLERS
+    if (installer_exec || installer_fixture){
+        unsigned slot=server_requests++%16;
+        const struct w32r_request *request=in;
+        recent_server[slot].op=n>=sizeof(*request)?request->op:0;
+        recent_server[slot].key=n>=sizeof(*request)?request->key:0;
+        uint32_t status=h1_installer_server(in,n,out,cap,used);
+        recent_server[slot].status=status;
+        if(!status && *used>=sizeof(struct w32r_reply))
+            recent_server[slot].status=((const struct w32r_reply *)out)->error;
+        return status;
+    }
+#endif
     const struct w32r_request *r = in;
     struct w32r_reply *reply = out;
     server_requests++;
@@ -256,15 +306,41 @@ static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, u
     return 0;
 }
 
+#ifdef H1_INSTALLERS
+/* f5-15B: the USER gate stays a refusing stub (-ENOSYS), but the installer
+ * runs record which gate numbers (CIUKI_SYS_*) the PE attempted, so the
+ * acceptance table names the first unavailable adapter service exactly.
+ * Called from the gate page with the number in eax; no system call here. */
+static ULONG gate_ops[16][2];
+static ULONG __attribute__((cdecl, used)) h1_gate_log(ULONG number) {
+    gate_calls++;
+    for (unsigned i = 0; i < 16; i++)
+        if (!gate_ops[i][1] || gate_ops[i][0] == number) {
+            gate_ops[i][0] = number;
+            gate_ops[i][1]++;
+            break;
+        }
+    return (ULONG)-38;
+}
+#endif
+
 static int gate_page(void) {
     LONG page = host_syscall(192, 0x7ffe0000u, 4096, 3, 0x32, -1, 0);
     if (page != (LONG)0x7ffe0000u)
         return 0;
     uint8_t *gate = (uint8_t *)(uintptr_t)0x7ffe0100u;
+#ifdef H1_INSTALLERS
+    /* push eax; push ecx; push edx; push eax; call h1_gate_log; add esp,4;
+     * pop edx; pop ecx; add esp,4 (saved eax); ret -> eax = -38 */
+    ULONG rel = (ULONG)(uintptr_t)h1_gate_log - (0x7ffe0100u + 9);
+    const uint8_t code[] = {0x50, 0x51, 0x52, 0x50, 0xe8, rel, rel >> 8, rel >> 16, rel >> 24,
+                            0x83, 0xc4, 0x04, 0x5a, 0x59, 0x83, 0xc4, 0x04, 0xc3};
+#else
     ULONG counter = (ULONG)(uintptr_t)&gate_calls;
     /* incl counter; movl $-38,%eax; ret */
     const uint8_t code[] = {0xff, 0x05, counter, counter >> 8, counter >> 16, counter >> 24,
                             0xb8, 0xda, 0xff, 0xff, 0xff, 0xc3};
+#endif
     for (unsigned i = 0; i < sizeof(code); i++)
         gate[i] = code[i];
     void **hooks = (void **)(uintptr_t)0x7ffe0200u;
@@ -292,12 +368,65 @@ static void print_stats(void) {
         host_print("=");
         host_number(enosys_ops[i][1]);
     }
+#ifdef H1_INSTALLERS
+    for (unsigned i = 0; i < 16 && gate_ops[i][1]; i++) {
+        host_print(" gate:");
+        host_number(gate_ops[i][0]);
+        host_print("=");
+        host_number(gate_ops[i][1]);
+    }
+#endif
     host_print("\n");
 }
+
+#ifdef H1_INSTALLERS
+/* Keep the original fault context: the terse diagnostic alone loses both
+ * the failing instruction and its callers. Read only the owned PE stack. */
+static void installer_report(void *opaque, uint32_t action, uint32_t reason,
+                             struct w32_context *c, const char *name, uint32_t code) {
+    (void)opaque;(void)name;(void)code;
+    host_print("REPORT action=");host_number(action);
+    host_print(" reason=");print_hex(reason);
+    if(c){
+        host_print(" eip=");print_hex(c->Eip);
+        host_print(" esp=");print_hex(c->Esp);
+        host_print(" ebp=");print_hex(c->Ebp);
+        host_print(" eax=");print_hex(c->Eax);
+        host_print(" ecx=");print_hex(c->Ecx);
+        host_print(" edx=");print_hex(c->Edx);
+        host_print("\nSTACK");
+        uintptr_t at=c->Esp,low=(uintptr_t)host.teb.Tib.StackLimit,high=(uintptr_t)host.teb.Tib.StackBase;
+        for(unsigned i=0;i<32 && at>=low && at<=high && high-at>=4;i++,at+=4){
+            host_print(" ");print_hex(*(const uint32_t *)at);
+        }
+    }
+    host_print("\n");
+    for(ULONG i=kernel_records>32?kernel_records-32:0;i<kernel_records;i++){
+        unsigned slot=i%32;host_print("KERNEL recent=");host_number(i+1);
+        host_print(" op=");print_hex(recent_kernel[slot].op);
+        host_print(" action=");host_number(recent_kernel[slot].action);
+        host_print(" size=");host_number(recent_kernel[slot].size);host_print("\n");
+    }
+    for(ULONG i=server_requests>16?server_requests-16:0;i<server_requests;i++){
+        unsigned slot=i%16;host_print("SERVER recent=");host_number(i+1);
+        host_print(" op=");host_number(recent_server[slot].op);
+        host_print(" key=");print_hex(recent_server[slot].key);
+        host_print(" status=");host_number(recent_server[slot].status);host_print("\n");
+    }
+}
+#endif
 
 static void (*base_terminate)(void *, uint32_t);
 static void stats_terminate(void *opaque, uint32_t code) {
     print_stats();
+#ifdef H1_INSTALLERS
+    if (installer_exec) {
+        host_print("TERMINATE ");
+        host_number(code);
+        host_print("\n");
+        host_exit(code);
+    }
+#endif
     base_terminate(opaque, code);
 }
 
@@ -324,6 +453,10 @@ static int run_exe(const char *exe, const char *test) {
         command_line[n++] = (uint8_t)*s;
     command_line[n] = 0;
     RtlInitUnicodeString(&host.parameters.CommandLine, command_line);
+#ifdef H1_INSTALLERS
+    if (installer_exec)
+        h1_installer_parameters(test);
+#endif
     host.parameters.StandardInput = (void *)(uintptr_t)H1_STDIN;
     host.parameters.StandardOutput = (void *)(uintptr_t)H1_STDOUT;
     host.parameters.StandardError = (void *)(uintptr_t)H1_STDERR;
@@ -332,6 +465,15 @@ static int run_exe(const char *exe, const char *test) {
     base_unmap = host.services.unmap;
     host.services.unmap = exit_unmap;
     struct w32_module *m;
+#ifdef H1_INSTALLERS
+    /* f5-15B: the same DirectSetup admission as sdk/win32/services/start.c,
+     * before import binding or any callback of the redistributable. */
+    if (installer_exec && w32_installer_intercept(&loader, exe)) {
+        host_print("RESULT intercepted dxsetup\n");
+        host_print("TERMINATE 0\n");
+        return 0;
+    }
+#endif
     NTSTATUS start = w32_ldr_start_process(&loader, exe, &m);
     if (start) {
         host_print("REFUSE ");
@@ -493,13 +635,23 @@ static int run_fixture(void) {
     host_print(" mappings=");
     host_number(host.mappings);
     host_print("\n");
+    print_stats();
     return r->errors ? 1 : 0;
 }
 
 int host_main(int argc, char **argv) {
     int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
+#ifdef H1_INSTALLERS
+    installer_exec = argc == 5 && !w32_strcmp(argv[1], "installer-exec");
+    installer_fixture = argc == 3 && !w32_strcmp(argv[1], "installer-fixture");
+    exec = exec || installer_exec;
+#endif
     int preflight = argc == 2 && !w32_strcmp(argv[1], "sandbox-check");
-    if (argc != 2 && !exec)
+    if (argc != 2 && !exec
+#ifdef H1_INSTALLERS
+        && !installer_fixture
+#endif
+        )
         return 2;
     /* No PE is mapped in this mode. An outer filter may kill the i386
      * prctl rather than returning an error; the host test can distinguish
@@ -514,6 +666,13 @@ int host_main(int argc, char **argv) {
         host_print("H1-SANDBOX ready\n");
         return 0;
     }
+#ifdef H1_INSTALLERS
+    h1_installer_providers(h1_store,sizeof(h1_store)/sizeof(h1_store[0]));
+    if ((installer_exec && !h1_installer_init(argv[4])) ||
+        (installer_fixture && !h1_installer_init(argv[2])))
+        return 9;
+    host.services.report = installer_report;
+#endif
     if (!gate_page())
         return 3;
     base_invoke = host.services.invoke;
@@ -541,7 +700,11 @@ int host_main(int argc, char **argv) {
         return run_exe(argv[2], argv[3]);
     if (!w32_strcmp(argv[1], "debugbreak"))
         return run_debugbreak();
-    if (!w32_strcmp(argv[1], "fixture"))
+    if (!w32_strcmp(argv[1], "fixture")
+#ifdef H1_INSTALLERS
+        || installer_fixture
+#endif
+        )
         return run_fixture();
     /* The process heap, as w32_ldr_start_process creates it: by the adapter's
      * own ntdll code (the PE ntdll is unmapped at loader shutdown). */

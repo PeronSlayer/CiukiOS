@@ -249,6 +249,15 @@ allowance, while retaining public priority encodings and R3 audio policy.
   Valid device completion wakes add one (cap 15) for ten running PIT ticks;
   polling, false completion predicates and already-ready tasks earn nothing.
   Class/foreground changes recompute active boosts from the new base.
+- A DOS window keeps the VM's configured ordinary base (normally 7), even
+  when its native client is focused at 9. WAIT_PRESENT retains dependency
+  donation. Actual input accepted by the bound VM forwards a focused
+  client's +2/20 ms grant to that VM explicitly; focus messages alone do
+  not grant it. The grant expires and is withdrawn on DOS/native focus
+  loss, teardown and fullscreen transitions. Repeated forwarded input shares
+  the existing bounded DOS preference, preserving desktop progress after
+  that preference is exhausted. Fullscreen transitions restore the binding's
+  base before releasing the held VM, including hotkey and watchdog paths.
 - Ring-3 timer preemption also honours a newly ready higher-priority task.
   Measurement counters preserve timer-caused transitions between measured
   users when an intervening device dispatch services the wake; intermediate
@@ -1368,11 +1377,25 @@ reserved zeros. No hardware address or user DMA mapping is returned.
 | AUDIO_SET_GAIN | 0x4104 | ciuki_audio_gain / 24 |
 | AUDIO_DRAIN | 0x4105 | ciuki_audio_command / 16 |
 | AUDIO_RESET | 0x4106 | ciuki_audio_command / 16 |
+| AUDIO_REFILL_READ | 0x4107 | ciuki_audio_command / 16 |
+| AUDIO_GET_PRODUCER | 0x4108 | ciuki_audio_producer / 32 (f1-101) |
 | MIXER_GET_MASTER | 0x4201 | ciuki_mixer_master / 32 |
 | MIXER_SET_MASTER | 0x4202 | ciuki_mixer_master / 32 |
+| MIXER_REFRESH_MASTER | 0x4204 | ciuki_mixer_master / 32 (f1-100) |
 
 The exact fields below are consecutive u32 unless marked u64/i32. All records
 start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
+
+`AUDIO_REFILL_READ` declares source-read demand for the calling thread, using
+a writable output descriptor. A started, non-draining stream with at most
+1536 queued frames permits up to 64 KiB of source reads for 20 ms. Each read
+consumes that allowance; close, reset and expiry invalidate it. A replenished
+stream is ineligible while above the threshold. Other threads sharing the descriptor receive no allowance.
+Music's decoder declares demand before each decode batch; the decoded
+reservoir (filled to the ring when the CPU allows; playback starts after one
+second since f1-101) covers slow I/O. VFS admission still closes to
+new urgent reads when a queued volume ticket reaches 100 ms (C3). These
+limits bound urgency and do not promise a hardware completion time.
 
 | Record | Remaining fields, in byte order |
 | --- | --- |
@@ -1381,6 +1404,21 @@ start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
 | gain | left, right, reserved[2] |
 | command | reserved[2] |
 | status | queued_frames, state (0=idle,1=started,2=failed), output_rate, generation, u64 accepted_frames, consumed_frames, output_frames, fetched_frames, source_starvation, fifo_errors, dma_halts, deadline_misses; i32 last_error; stream_generation, max_service_us, max_irq_us, transport_frames, latency_frames |
+| producer (f1-101) | flags (1 behind, 2 boosted, 4 withheld by the budget), boosts, over_budget, producers, u64 boost_us; output only, like status |
+
+F1-101 amendment (2026-10-22): the kernel raises the producers of a native
+stream that is behind its target lead. The mixer measures the lead (frames
+still queued in the stream, converted to output frames); the stream is
+behind below `ring_frames - 2 * period_frames` (1536) and refilled again at
+`ring_frames - period_frames` (1792). Its producers are the thread that last
+wrote it and the thread that last issued `AUDIO_REFILL_READ` on it; while
+the stream is behind they run at scheduler level 16, the lower edge of the
+device band, inside one budget of 20 ms of CPU per 100 ms shared by every
+producer, and a lock holder they wait for inherits at most level 15. No
+operation sets the state: `AUDIO_GET_PRODUCER` only reports it, with the
+stream's boost episodes, budget withholdings and boosted CPU since the
+stream was opened or reset. Validation:
+`docs/validation/f1-101-audio-producer-priority.md`.
 
 | master | left, right, mute (0/1), save_state (0=defaults,1=saved,2=applied_unsaved), i32 save_error, reserved |
 
@@ -1445,6 +1483,20 @@ observations, not physical addresses or an assertion of audible sound.
 Fetch and owned-IRQ counters are monotonic over transport stops. Getters
 accept a returned record again with its reserved word zero. No existing
 record size or operation number changes.
+
+### F1-100 amendment: requested hardware master read (2026-10-22)
+
+`MIXER_REFRESH_MASTER` (4204h) uses the `ciuki_mixer_master` record and the
+copied version/size/reserved rules of `MIXER_GET_MASTER`. It needs the
+delegated control handle (EACCES on a public open). It asks the kernel to
+read the hardware master once (the ThinkPad EC volume register; nothing on
+other machines), asynchronously in the EC worker and at most once per
+second, and returns the current master like `MIXER_GET_MASTER`; a changed
+hardware state appears in later reads. The desktop issues it when the user
+opens the tray volume popup. Reason: with no periodic EC traffic (f1-100,
+`docs/validation/f1-100-ec-traffic.md`) the mirror of the hardware volume
+keys is updated only by an explicit user action. No existing number or
+record changes.
 
 ## F2-33 amendment: process enumeration and termination requests (2026-10-11)
 
@@ -2493,3 +2545,33 @@ The forced redraw still uses the existing row yields and reports exact bands.
 
 Research, policy comparison and qualification limits:
 [window wait validation](../validation/f3-52-window-wait.md).
+
+### f5-15C installers-tier probe tokens (2026-10-21, pending lead review)
+
+The QEMU `installers` tier selects one probe per acceptance title with the
+existing F5 selector grammar, `f5:<alias> run=<8 hex>`, where `<alias>` is the
+title's `probe` field of `tests/win32/workloads.json` (at most 23 bytes,
+`struct probe_selection.probe[24]`): `win32-diablo-shareware`, `win32-sc`,
+`win32-aoe-trial`, `win32-half-life-uplink`, `win32-ut-demo-348`, `win32-wa`,
+`win32-heroes3-demo`, `win32-rct-demo`, `win32-jazz2-shareware`,
+`win32-ta-demo`. No suffix and no new grammar: the same tokens serve the
+f5-17B `titles` tier, and the probe tells the tiers apart by the `tier=` line
+of the run's parameter disk (`CIUKI-ID.TXT`); a `titles` request ends
+`END status=NOT_RUN reason=title_driver_pending` until its guest driver
+exists. The tokens are in `src/kernel/probes/selector.c` (`f5_names`) and
+`scripts/test/loader_model.py` (`F5_PROBES`); the loader table line
+(`src/boot/ciukldr/menu.inc` `f5_probe_names`, 168 bytes) is applied with the
+f0-54 byte budget (`build/codex/f5-15c-menu-inc.patch`).
+
+Each probe opens the C: write gate (`storage_enable_write(storage_get(),2)`)
+before it starts the desktop, maps the private checkpoint range
+`0x10100000`–`0x10103fff` (four pages, `TITLE_RESULT_VA`,
+`src/probes/win32_installers/title_controller.h`) into the desktop before
+the shared gate command `GATE_W32_FIXTURE "title-installer:<run><cd>"` (the
+parameter-disk and CD drive letters), and publishes records only in its own
+scope (`probe=<alias>`, the f5-17A/B serial schema of
+`scripts/test/win32_evidence.py` with the f5-15C DATA cases `ui`,
+`inventory`, `residue`, `ledger_summary`, `snapshot` and the `title`/`class`
+name fields). The desktop reports `case=w32-title phase=<n> serial=<n>`
+through the existing probe-report hook; the kernel reads the checkpoint page
+in that call. No system call, record buffer or boot-info field changes.

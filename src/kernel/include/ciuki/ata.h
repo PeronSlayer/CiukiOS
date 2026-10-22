@@ -64,6 +64,10 @@ struct ata_device {
     uint8_t udma_mode;
     int8_t firmware_udma;            /* measured before the discovery SRST */
     uint64_t dma_requests, dma_bytes, dma_bounces, dma_errors;
+    /* f1-92: interrupt edges that were not this command's completion, issued
+     * commands completed after their request was interrupted, and failed DMA
+     * requests repeated once through PIO. Records are bounded per unit. */
+    uint32_t early_irqs, interrupted_inflight, dma_retries;
     uint8_t packet_bytes, packet_type, sense_key, asc, ascq;
     const char *ready_stage;
     int ready_error;
@@ -102,6 +106,8 @@ struct ata_channel {
     int claims[3];
     gen_t generations[3];
     uint8_t control_shadow;
+    uint8_t expiry;                 /* f1-92: why the last expired()/wait ended */
+    const char *fault_cause;        /* f1-92: cause carried from DMA to channel fault */
     bool native, stopped, discovered, quiescing;
 };
 

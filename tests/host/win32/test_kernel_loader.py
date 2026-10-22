@@ -178,6 +178,7 @@ class KernelLoaderTests(unittest.TestCase):
         from scripts.win32 import stubs
         for source in ('docs/design/research/win32-layer-2026-10-14.md','docs/design/win32-census/fixtures.txt'):
             expected.update(stubs.imports((ROOT/source).read_text()).get('kernel32.dll',set()))
+        expected.update(stubs.acceptance_imports('kernel32.dll'))  # f5-15B acceptance installers
         self.assertEqual({e['name'] for e in coverage['exports']},expected)
         self.assertTrue(expected<=exports)
         self.assertEqual(coverage['deferred_vfs'],[])

@@ -1,7 +1,9 @@
 """F4-07 production decoder/worker/UI tests; one native harness at a time."""
 # SPDX-License-Identifier: MIT
+import array
 import hashlib
 import importlib.util
+import json
 import os
 import shutil
 from pathlib import Path
@@ -17,6 +19,51 @@ ROOT = Path(__file__).resolve().parents[3]
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
+
+# f4-37: the SDK's code generation flags (build/tools/ciuki-sdk/manifest.json)
+# that decide the decoder's float code on the i686 baseline: x87, no SSE/MMX.
+X87_CODEGEN = ['-march=pentiumpro', '-mno-sse', '-mno-sse2', '-mno-mmx', '-mno-red-zone', '-O2', '-fno-builtin',
+               '-fno-omit-frame-pointer', '-fno-strict-aliasing', '-std=c17']
+MP3_KBPS = {3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+            2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]}
+MP3_HZ = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+
+def mp3_gain(data, gain, scalefac_scale=None):
+    """Rewrite layer III side info: global_gain of every granule and channel
+    (and optionally scalefac_scale). Bit lengths do not change, so the stream
+    stays valid and decodes the same spectra at a lower level (mp3gain's
+    method); gain 0 with scalefac_scale 1 is the quietest representable."""
+    out = bytearray(data); i = 0
+    if data[:3] == b'ID3':
+        i = 10 + sum(data[6+k] << (21-7*k) for k in range(4))
+    frames = []
+    while i + 4 <= len(out):
+        h = out[i:i+4]
+        if h[0] != 0xff or (h[1] & 0xe0) != 0xe0 or ((h[1] >> 1) & 3) != 1 or not (h[2] >> 4) or (h[2] >> 4) == 15:
+            i += 1; continue
+        ver = (h[1] >> 3) & 3
+        size = (144 if ver == 3 else 72)*MP3_KBPS[3 if ver == 3 else 2][h[2] >> 4]*1000//MP3_HZ[ver][(h[2] >> 2) & 3] + ((h[2] >> 1) & 1)
+        frames.append((i, ver)); i += size
+    def field(bit, width, value=None):
+        old = 0
+        for j in range(width):
+            byte, mask = (bit+j)//8, 0x80 >> ((bit+j) % 8)
+            old = old << 1 | (1 if out[byte] & mask else 0)
+            if value is not None:
+                out[byte] = out[byte] | mask if (value >> (width-1-j)) & 1 else out[byte] & ~mask
+        return old
+    for k, (pos, ver) in enumerate(frames):
+        mono = out[pos+3] >> 6 == 3; nch = 1 if mono else 2
+        bit = (pos + 4 + (0 if out[pos+1] & 1 else 2))*8
+        bit += 9 + (5 if mono else 3) + 4*nch if ver == 3 else 8 + (1 if mono else 2)
+        for _ in range((2 if ver == 3 else 1)*nch):
+            b = bit + 21
+            field(b, 8, gain(k, len(frames), field(b, 8))); b += 8 + (4 if ver == 3 else 9)
+            b += 1 + 22 + (1 if ver == 3 else 0)  # window switching: 22 bits either way; MPEG-1 preflag
+            if scalefac_scale is not None:
+                field(b, 1, scalefac_scale)
+            bit = b + 2
+    return bytes(out), len(frames)
 
 class MusicTests(unittest.TestCase):
     def test_slow_removable_volume(self):
@@ -92,17 +139,121 @@ class MusicTests(unittest.TestCase):
             self.assertGreaterEqual(len(levels), 4)
             for record in levels:
                 self.assertRegex(record, r'ms=\d+ reservoir=\d+/\d+/\d+ reader_fps=\d+ decode_us_frame=\d+\.\d{3} '
-                                 r'writes_ps=\d+ bytes=\d+ queued=\d+/\d+ starvations=\d+ ui_mps=\d+ repaint_mps=\d+$')
+                                 r'writes_ps=\d+ bytes=\d+ queued=\d+/\d+ starvations=\d+ ui_mps=\d+ repaint_mps=\d+ '
+                                 r'boost=\d+ boosts=\d+ boost_ms=\d+ over=\d+$')
             print('Real-codec telemetry:', levels[0])
+            # f4-37: a cost record follows every level record; the real
+            # codecs decode on the reader, so the stage split is populated.
+            costs = [line for line in result.stderr.splitlines() if line.startswith('[music] cost ')]
+            self.assertEqual(len(costs), len(levels))
+            pattern = (r'\[music\] cost decode_us=(\d+) synth_us=(\d+) imdct_us=(\d+) resample_us=(\d+) ui_us=(\d+) '
+                       r'repaints=(\d+) frames=(\d+) tiny_values=(\d+) pcm_us=(\d+) io_us=(\d+) pump_us=(\d+) out=(\d+) '
+                       r'mhz=(\d+) de=(\d+) ue=(\d+) best_kc=(\d+) loop=(\d+) mem=(\d+)$')
+            import re
+            fields = [tuple(map(int, re.fullmatch(pattern, line).groups())) for line in costs]
+            self.assertTrue(any(f[6] > 0 and f[11] > 0 and f[12] > 0 and f[0]+f[1]+f[2] > 0 for f in fields))
+            self.assertTrue(all(f[7] == 0 and f[13] == 0 and f[14] == 0 for f in fields))  # tiny, de, ue
+            print('Real-codec cost:', costs[0])
             self.assertIn('[music] close starvations=1', result.stderr)
             self.assertTrue(all(len(line) <= 240 for line in result.stderr.splitlines()))
+
+    def test_x87_decoder(self):
+        """f4-37: the production decoder built like the i686 target (x87) and
+        as a host reference: denormal flags and state, the denormal remedy,
+        exactness of the rate conversion and PCM conversion, and the PCM within
+        1 LSB of upstream minimp3's own int16 output."""
+        parent = ROOT/'build/host'; parent.mkdir(parents=True, exist_ok=True)
+        toolchain = json.loads((ROOT/'config/toolchain.json').read_text())
+        self.assertIn(f"-march={toolchain['march']}", X87_CODEGEN)
+        manifest = ROOT/'build/tools/ciuki-sdk/manifest.json'
+        if manifest.exists():
+            sdk = json.loads(manifest.read_text())['flags']
+            for flag in X87_CODEGEN:
+                self.assertIn(flag, sdk)
+        with tempfile.TemporaryDirectory(prefix='music-x87-', dir=parent) as temp:
+            folder = Path(temp)
+            probe = folder/'probe.c'; probe.write_text('int main(void){return 0;}\n')
+            if subprocess.run(['clang', '-m32', str(probe), '-o', str(folder/'probe')], capture_output=True).returncode:
+                self.skipTest('no 32-bit host C library for the i686 decoder build')
+            sources = [str(ROOT/'tests/host/desktop/music_x87_test.c'), str(ROOT/'tests/host/desktop/music_x87_ref.c'),
+                       str(ROOT/'apps/music/vorbis.c')]
+            common = ['-Wall', '-Wextra', '-Werror', '-D_POSIX_C_SOURCE=200809L', '-g']
+            builds = {'i686-x87': folder/'x87', 'reference': folder/'reference'}
+            subprocess.run(['clang', '-m32', *X87_CODEGEN, '-fno-pic', '-no-pie', *common, *sources, '-lm',
+                            '-o', str(builds['i686-x87'])], check=True)
+            subprocess.run(['clang', '-O2', '-std=c17', *common, *sources, '-lm', '-o', str(builds['reference'])], check=True)
+            for arch, binary in builds.items():
+                out = subprocess.run([str(binary), 'lerp'], text=True, capture_output=True, check=True).stdout
+                self.assertRegex(out, rf'lerp arch={arch} checks=\d+ exact')
+                self.assertRegex(out, rf'pcm arch={arch} checks=\d+ exact')
+                print(out.strip())
+            vectors = []
+            for name in ('tone.mp3', 'tone-mono.mp3'):
+                data = (ROOT/'tests/fixtures/music'/name).read_bytes()
+                vectors.append(folder/name); vectors[-1].write_bytes(data)
+            if shutil.which('ffmpeg'):
+                # Real encoder output: tone plus noise with an exponential
+                # fade to digital silence; mono, MPEG-2 and a -90 dBFS pass.
+                fade = '[0:a][1:a]amix=inputs=2,afade=t=out:st=1:d=4:curve=exp,apad=pad_dur=1,aformat=channel_layouts=stereo[a]'
+                for hz, kbps in ((44100, '128k'), (48000, '320k')):
+                    name = folder/f'fade-{hz}-{kbps}.mp3'
+                    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'sine=f=440:d=6:r={hz}', '-f', 'lavfi', '-i',
+                                    f'anoisesrc=d=6:r={hz}:a=0.3:seed=7', '-filter_complex', fade, '-map', '[a]',
+                                    '-c:a', 'libmp3lame', '-b:a', kbps, str(name)], check=True)
+                    vectors.append(name)
+                for name, rate, channels, kbps in (('mono-44100-96k.mp3', 44100, 1, '96k'), ('lsf-22050-64k.mp3', 22050, 2, '64k')):
+                    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'sine=f=440:d=5:r={rate}', '-filter_complex',
+                                    'afade=t=out:st=1:d=3:curve=exp,apad=pad_dur=1[a]', '-map', '[a]', '-ac', str(channels),
+                                    '-c:a', 'libmp3lame', '-b:a', kbps, str(folder/name)], check=True)
+                    vectors.append(folder/name)
+                subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anoisesrc=d=4:r=44100:a=0.00003:seed=9', '-ac', '2',
+                                '-c:a', 'libmp3lame', '-b:a', '128k', str(folder/'quiet-44100-128k.mp3')], check=True)
+                vectors.append(folder/'quiet-44100-128k.mp3')
+            for source in list(vectors):
+                data = source.read_bytes()
+                faded, count = mp3_gain(data, lambda k, n, g: g*(n-1-k)//max(n-1, 1)); self.assertGreater(count, 0)
+                floor, _ = mp3_gain(data, lambda k, n, g: 0, 1)
+                for prefix, content in (('gainfade-', faded), ('floor-', floor)):
+                    vectors.append(folder/(prefix+source.name)); vectors[-1].write_bytes(content)
+            records = {}
+            for arch, binary in builds.items():
+                result = subprocess.run([str(binary), 'decode', str(folder), *map(str, vectors)], text=True,
+                                        capture_output=True, timeout=600)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                for line in result.stdout.splitlines():
+                    fields = dict(item.split('=', 1) for item in line.split())
+                    records[fields['vector'], fields['arch']] = fields
+            for vector in vectors:
+                for arch in builds:
+                    r = records[vector.name, arch]
+                    for key in ('prod_de', 'prod_ue', 'tiny_full', 'tiny_sampled', 'adapter_mismatch'):
+                        self.assertEqual(r[key], '0', f'{vector.name} {arch} {key}')
+                    self.assertEqual(r['garbage_independent'], '1', vector.name)
+                    self.assertGreaterEqual(int(r['control_de']), 1, vector.name)  # the detector sees a denormal
+                    self.assertEqual(r['prod_frames'], r['up_frames'])
+                x87 = records[vector.name, 'i686-x87']
+                if x87['channels'] == '1':
+                    # Negative control: upstream's mono path loads the unwritten
+                    # synthesis lanes; the production driver clears them.
+                    self.assertEqual(x87['up_de'], x87['up_frames'], vector.name)
+                prod = array.array('h', (folder/f'{vector.name}.i686-x87.prod.pcm').read_bytes())
+                summary = []
+                for label, path in (('i686 upstream int16', 'i686-x87.ref'), ('reference', 'reference.ref')):
+                    want = array.array('h', (folder/f'{vector.name}.{path}.pcm').read_bytes())
+                    self.assertEqual(len(prod), len(want), vector.name)
+                    worst = max((abs(a-b) for a, b in zip(prod, want)), default=0)
+                    self.assertLessEqual(worst, 1, f'{vector.name} against {label}')
+                    summary.append(f'{label}: {sum(1 for a, b in zip(prod, want) if a != b)} of {len(prod)} samples differ by 1')
+                print(f"x87 {vector.name}: frames={x87['prod_frames']} ch={x87['channels']} rate={x87['rate']} "
+                      f"upstream_de={x87['up_de']} production de=0 ue=0 tiny=0; " + '; '.join(summary))
 
     def harness(self, name, sources, *args):
         parent = ROOT/'build/host'; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='music-', dir=parent) as temp:
             binary = Path(temp)/name
             include = Path(temp)/'include/ciuki'; include.mkdir(parents=True)
-            (include/'audio.h').write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki/audio.h').read_bytes())
+            for header in ('audio.h', 'channel.h', 'surface.h'):
+                (include/header).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/header).read_bytes())
             flags = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-D_POSIX_C_SOURCE=200809L',
                      '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined', '-fno-omit-frame-pointer',
                      '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-pthread',
@@ -122,7 +273,7 @@ class MusicTests(unittest.TestCase):
         acc = load('music_policy_acc', ROOT/'tests/host/desktop/test_accessories.py')
         self.harness('policy', ['apps/music/decoder.c', 'apps/music/vorbis.c', 'apps/music/playlist.c',
                                'apps/music/player.c', 'apps/music/view.c', 'apps/accessories/acc.c',
-                               *acc.TOOLKIT, 'tests/host/desktop/music_policy_test.c'])
+                               *acc.TOOLKIT, 'tests/host/desktop/music_client.c', 'tests/host/desktop/music_policy_test.c'])
 
     def test_contention_model(self):
         model = load('music_contention', ROOT/'tests/host/desktop/music_contention_model.py')

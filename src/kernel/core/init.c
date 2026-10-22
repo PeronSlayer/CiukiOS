@@ -17,7 +17,10 @@
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
 #include <ciuki/entropy.h>
+#include <ciuki/splash.h>
+#include <ciuki/smi.h>
 #pragma weak entropy_start
+#pragma weak console_splash_phase
 #pragma weak usb_init
 #pragma weak audio_init
 #pragma weak net_init
@@ -26,6 +29,9 @@
 static struct drivers_state state;
 static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
 static unsigned activation_count;
+
+/* f0-55: the boot splash bar follows these records (ciuki/splash.h). */
+static void splash_report(enum splash_phase phase) { if (console_splash_phase) console_splash_phase(phase); }
 
 void drivers_snapshot(struct drivers_state *out) { if (out) *out = state; }
 bool drivers_input_firmware(void)
@@ -67,6 +73,8 @@ static void activation_add(struct activation_entry entry)
         klog("[storage] kind=%u disk=%u part=%u mode=%s error=%d writes=%llu qualified=%u reason=%s activation_seq=%u",
              entry.kind, entry.disk, entry.partition, entry.readonly ? "ro" : "rw", entry.error,
              entry.writes, entry.qualified, entry.reason, entry.seq);
+    int phase = splash_storage_phase(entry.kind);
+    if (phase >= 0) splash_report((enum splash_phase)phase);
 }
 
 void drivers_storage_add(struct activation_entry entry)
@@ -96,6 +104,7 @@ void drivers_init(void)
     state.flag_sequence = 1;
     klog("[init] flag safe_mode=%u boot_flags=%08x activation_seq=%u",
          state.safe, state.boot_flags, state.flag_sequence);
+    splash_report(SPLASH_PHASE_DRIVERS);
     if (g_boot.input_policy == CBI_INPUT_FIRMWARE && !state.firmware)
         klog("[init] input_policy=firmware source=unknown action=native");
 
@@ -111,6 +120,7 @@ void drivers_init(void)
         .result = !state.fb_called ? "disabled" : state.fb_error ? "failed" : "ready",
         .reason = !state.fb_called ? "safe_text_console" : "boot_console", .error = state.fb_error,
         .tick = tick, .safe_flag_before = safe_flag_before, .required = state.safe });
+    splash_report(SPLASH_PHASE_FRAMEBUFFER);
 
     state.input_sequence = 3;
     tick = g_ticks;
@@ -134,6 +144,7 @@ void drivers_init(void)
         .result = state.input_error ? "failed" : "ready",
         .reason = state.input_fallback ? "firmware_failed_native_fallback" : state.firmware ? "firmware" : "native",
         .error = state.input_error, .tick = tick, .safe_flag_before = safe_flag_before, .required = true });
+    splash_report(SPLASH_PHASE_INPUT);
 
     state.ata_sequence = 4;
     tick = g_ticks;
@@ -159,15 +170,22 @@ void drivers_init(void)
         .result = !state.ata_called ? "disabled" : (state.ata_error || quarantine) ? "failed" : storage ? "ready" : "absent",
         .reason = state.safe ? "safe_mode" : "native_discovery", .error = state.ata_error,
         .tick = tick, .safe_flag_before = safe_flag_before, .present = storage, .quarantined = quarantine });
+    splash_report(SPLASH_PHASE_ATA);
     storage_init();
     file_clock_start(CIUKI_BUILD_EPOCH, true);
     klog("[init] storage done; files bootstrap");
+    splash_report(SPLASH_PHASE_STORAGE);
     int native_files = files_bootstrap(&storage_get()->vfs);
     klog("[init] files result=%d; audio init", native_files);
+    splash_report(SPLASH_PHASE_FILES);
     if (audio_init) audio_init(&storage_get()->vfs);
     klog("[init] audio init done");
+    splash_report(SPLASH_PHASE_AUDIO);
     if (net_init) net_init();
     if (usb_init) usb_init();
+    /* f1-94: after every UHCI handoff; SMI sampling and LEGACY_USB_EN. */
+    if (smi_attribution_init) smi_attribution_init();
+    splash_report(SPLASH_PHASE_DEVICES);
     if (native_files) klog("[files] initialization failed: %d", native_files);
     if (fbdev_accel_schedule && !(g_boot.flags & CBI_F_HW_CHECK))
         fbdev_accel_schedule(&storage_get()->vfs);

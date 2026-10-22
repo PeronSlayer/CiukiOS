@@ -10,6 +10,7 @@ struct music_runtime {
     struct music_command commands[MUSIC_COMMANDS]; unsigned head, count;
     atomic_int closing; int done;
     uint64_t last_publish;
+    unsigned ui_cycles; /* f4-37: below 1024, carried to the next report (UI thread) */
     struct music_snapshot snapshot;
     struct music_player player;
 };
@@ -52,8 +53,10 @@ static void *worker(void *ctx)
         pthread_mutex_unlock(&r->lock);
         if (closing) break;
         if (have) (void)music_player_command(&r->player,&c);
+        uint64_t begin=music_cycles();
         (void)music_player_pump(&r->player);
         publish(r,&r->player.view);
+        r->player.pump_cycles+=music_cycles()-begin;
         pthread_mutex_lock(&r->lock);
         if (!r->closing && !r->count) {
             int playing=r->player.view.state==MUSIC_PLAYING || r->player.view.state==MUSIC_LOADING;
@@ -95,6 +98,11 @@ void music_runtime_snapshot(struct music_runtime *r, struct music_snapshot *s)
 { pthread_mutex_lock(&r->lock); *s=r->snapshot; pthread_mutex_unlock(&r->lock); }
 void music_runtime_repaint(struct music_runtime *r)
 { atomic_fetch_add(&r->player.ui_repaints,1); }
+void music_runtime_ui_cycles(struct music_runtime *r, uint64_t cycles)
+{
+    cycles+=r->ui_cycles; r->ui_cycles=(unsigned)(cycles&1023u);
+    atomic_fetch_add(&r->player.ui_kcycles,(unsigned)(cycles>>10));
+}
 void music_runtime_close(struct music_runtime *r)
 { pthread_mutex_lock(&r->lock); r->closing=1; r->count=0; pthread_cond_signal(&r->changed); pthread_mutex_unlock(&r->lock); }
 int music_runtime_done(struct music_runtime *r)

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sdk/netsurf/port/surface.h"
+#include "sdk/netsurf/port/pointer.h"
 static struct { struct ciuki_surface_info info;void *map;int live; } fds[64];
 static int nextfd=4, fail_create, fail_send, closed, unmapped;
 static struct ciuki_message sent[256], incoming;
@@ -57,6 +58,23 @@ int main(void)
     struct ciuki_browser_surface *s=calloc(1,sizeof(*s));assert(s);
     assert(!ciuki_browser_open(s,&ops,3,640,480));assert(sends==2 && sent[0].data[0]==3 && sent[1].fd_count==1);
     struct desk_packet p=result(DESK_CREATE_WINDOW,s->create_request,0);assert(!ciuki_browser_packet(s,&p) && s->ready);
+    /* f2-99: semantic browser pointers use the existing system cursor API,
+     * with no imported bitmap, duplicate sends or lost backpressure retry. */
+    const unsigned shapes[]={GUI_POINTER_DEFAULT,GUI_POINTER_POINT,GUI_POINTER_CARET,GUI_POINTER_MENU,
+        GUI_POINTER_UP,GUI_POINTER_DOWN,GUI_POINTER_LEFT,GUI_POINTER_RIGHT,GUI_POINTER_RU,GUI_POINTER_LD,
+        GUI_POINTER_LU,GUI_POINTER_RD,GUI_POINTER_CROSS,GUI_POINTER_MOVE,GUI_POINTER_WAIT,GUI_POINTER_HELP,
+        GUI_POINTER_NO_DROP,GUI_POINTER_NOT_ALLOWED,GUI_POINTER_PROGRESS};
+    const unsigned cursors[]={0,10,3,0,6,6,5,5,8,8,7,7,11,9,1,21,4,4,2};
+    for(unsigned n=0;n<sizeof(shapes)/sizeof(*shapes);n++)assert(ciuki_pointer_shape(shapes[n])==cursors[n]);
+    assert(ciuki_pointer_shape(999)==DESK_CURSOR_ARROW);
+    unsigned cursor_sends=sends;
+    assert(!ciuki_browser_cursor(s,ciuki_pointer_shape(GUI_POINTER_POINT)) && sends==cursor_sends+1);
+    struct desk_packet cp;assert(desk_parse(&sent[sends-1],1,NULL,&cp));
+    assert(cp.opcode==DESK_SET_CURSOR && cp.flags==DESK_CURSOR_HAND && cp.index==0 && cp.result==0);
+    assert(!ciuki_browser_cursor(s,DESK_CURSOR_HAND) && sends==cursor_sends+1);
+    fail_send=1;assert(ciuki_browser_cursor(s,DESK_CURSOR_TEXT)==-1 && s->cursor_shape==DESK_CURSOR_HAND);
+    fail_send=0;assert(!ciuki_browser_cursor(s,DESK_CURSOR_TEXT) && sends==cursor_sends+2);
+    assert(ciuki_browser_cursor(s,DESK_CURSOR_COUNT)==-1 && errno==EINVAL);
     s->dirty=false;
     for(unsigned i=0;i<640*480;i++)s->current.back[i]=0x123456;
     s->current.back[2*640+1]=0x00ff0000;s->current.back[2*640+2]=0x000000ff;
@@ -107,13 +125,39 @@ int main(void)
     ciuki_browser_release(s);unsigned releases=0;while(ciuki_browser_event(s,&out)) { assert(out.type==NSFB_EVENT_KEY_UP || (out.type==NSFB_EVENT_CONTROL && out.value.controlcode==NSFB_CONTROL_CANCEL));releases++; }assert(releases==3);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=10,.value2=10};ciuki_browser_input(s,&e);assert(!ciuki_browser_event(s,&out));
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};ciuki_browser_input(s,&e);assert(!ciuki_browser_event(s,&out));
+    /* f6-20: a full input queue (UI thread behind a long layout) drops the
+     * queued input and resynchronises like a focus loss; it never closes. */
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=50,.value2=100};ciuki_browser_input(s,&e);
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=0x2a,.value=1};ciuki_browser_input(s,&e);
+    /* Pointer motion coalesces into one trailing event; text does not. */
+    for(unsigned i=0;i<10;i++) { e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=60+(int)i,.value2=110};ciuki_browser_input(s,&e); }
+    assert(s->count==3 && s->events[(s->head+2)%CIUKI_BROWSER_EVENTS].value.vector.x==69);
+    while(s->count<CIUKI_BROWSER_EVENTS) { e=(struct ciuki_input_event){.type=CIUKI_INPUT_TEXT,.code='x'};ciuki_browser_input(s,&e); }
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_TEXT,.code='y'};ciuki_browser_input(s,&e);
+    assert(!s->closed && !s->close_reason && s->overflows==1 && s->count==2 && !s->keys[0x2a] && !s->buttons);
+    assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_KEY_UP && out.value.keycode==NSFB_KEY_LSHIFT);
+    assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_CONTROL && out.value.controlcode==NSFB_CONTROL_CANCEL);
+    assert(!ciuki_browser_event(s,&out));
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=50,.value2=100};ciuki_browser_input(s,&e);
+    assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_MOVE_ABSOLUTE && !s->closed);
     p=packet(DESK_PING,0,4);p.serial=123;ciuki_browser_packet(s,&p);assert(s->ping==123);
     assert(!du3_ui_progress(&s->connection,1,1,s->ping));assert(sent[sends-1].data[1]==DESK_PONG);
+    /* f6-20: the desktop's close request is the recorded reason; a later
+     * CLOSED or local close does not replace it. */
+    p=packet(DESK_CLOSE_REQUEST,0,0);ciuki_browser_packet(s,&p);
+    assert(s->closed && !strcmp(s->close_reason,"desktop-close-request"));
+    p=packet(DESK_CLOSED,0,0);ciuki_browser_packet(s,&p);assert(!strcmp(s->close_reason,"desktop-close-request"));
     ciuki_browser_close(s);assert(s->current.fd==-1 && s->pending.fd==-1 && s->connection.channel==-1);
-    assert(unmapped==3 && closed==4);
+    assert(unmapped==3 && closed==4 && !strcmp(s->close_reason,"desktop-close-request"));
+    /* A refused CREATE_WINDOW names the desktop's result. */
+    assert(!ciuki_browser_open(s,&ops,3,640,480) && !s->closed && !s->close_reason);
+    p=result(DESK_CREATE_WINDOW,s->create_request,-ENOSPC);assert(ciuki_browser_packet(s,&p)==-1);
+    assert(s->closed && !strcmp(s->close_reason,"window-refused") && s->close_detail==-ENOSPC);
+    ciuki_browser_close(s);
     /* The v3 protocol requires packed rows and rejects padded strides. */
     padding=64;
-    assert(ciuki_browser_open(s,&ops,3,640,480)==-1 && s->closed);
+    assert(ciuki_browser_open(s,&ops,3,640,480)==-1 && s->closed && !strcmp(s->close_reason,"surface-open-failed"));
     free(s);puts("NetSurf v3 surface: damage, colour, ownership, resize, stale/OOM, input and cleanup passed");fflush(stdout);
-    return 0;
+    puts("PASS f2-99 browser cursor: all upstream semantic shapes, system bitmap index zero, unchanged suppression and backpressure retry");
+    fflush(stdout);return 0;
 }

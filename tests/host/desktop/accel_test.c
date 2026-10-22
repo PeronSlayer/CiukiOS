@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #include "fake.h"
 #include "../../../apps/libdeskui/deskui.h"
-#include "../../../assets/cursors/cursors.h"
+#include "../../../assets/cursors/paint.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -27,6 +27,11 @@ static int display_info(int display,struct ciuki_framebuffer_info *out)
     return 0;
 }
 static int fail_copy, fail_cursor, fail_cursor_set, fail_fill, shown, cursor_x, cursor_y;
+/* f2-92: engine-only rows below the scanout ([vram_first, vram_end), the
+ * scanout buffer extends over them) and host-to-screen writes. */
+static uint32_t vram_first, vram_end;
+static unsigned writes, cache_copies, fail_write;
+static uint64_t written_pixels, engine_copied_pixels;
 static struct ciuki_accel_request cursor;
 static int upload(int display,int surface,const struct ciuki_rect *r)
 {
@@ -51,10 +56,28 @@ static int service(int display,const struct ciuki_accel_request *q)
 {
     assert(display==7 && q->size==sizeof(*q) && q->generation==expected_generation);
     if (q->operation==CIUKI_ACCEL_QUERY) return caps;
+    if (q->operation==CIUKI_ACCEL_OFFSCREEN) return (caps&1u) && vram_end ? (int)(vram_end<<16|vram_first) : 0;
+    if (q->operation==CIUKI_ACCEL_WRITE) {
+        /* Uploads target engine-only rows only, never the visible frame. */
+        assert(caps&1u && vram_end && q->rect.dst_y>=(int32_t)vram_first &&
+               q->rect.dst_y+(int64_t)q->rect.height<=(int64_t)vram_end && q->rect.dst_x>=0 &&
+               q->rect.dst_x+(int64_t)q->rect.width<=(int64_t)d.width && !q->write.clip_width);
+        if (fail_write) { fail_write=0; caps=0; shown=0; return -EIO; }
+        const uint32_t *src=(const uint32_t *)(uintptr_t)((uint64_t)q->write.pixels_hi<<32|q->write.pixels_lo);
+        assert(q->rect.src_y>=0 && q->rect.src_y+(int64_t)q->rect.height<=(int64_t)q->write.source_height &&
+               q->rect.width<=q->write.source_width && q->write.stride>=q->write.source_width*4);
+        for (uint32_t y=0;y<q->rect.height;y++)
+            memcpy(scanout+((uint32_t)q->rect.dst_y+y)*d.width+(uint32_t)q->rect.dst_x,
+                   (const uint8_t *)src+((uint32_t)q->rect.src_y+y)*(size_t)q->write.stride+(uint32_t)q->rect.src_x*4,q->rect.width*4);
+        writes++; written_pixels+=(uint64_t)q->rect.width*q->rect.height;
+        return 0;
+    }
     if (q->operation==CIUKI_ACCEL_COPY || q->operation==CIUKI_ACCEL_FILL) completed_ram_frame();
     if (q->operation==CIUKI_ACCEL_COPY) {
         copies++;
-        if (q->rect.height>1) window_copies++;
+        engine_copied_pixels+=(uint64_t)q->rect.width*q->rect.height;
+        if (q->rect.src_y>=(int32_t)d.height) cache_copies++;
+        else if (q->rect.height>1) window_copies++;
         for (uint32_t n=0;n<q->rect.height;n++) {
             uint32_t y=q->rect.dst_y>q->rect.src_y ? q->rect.height-1-n : n;
             memmove(scanout+((uint32_t)q->rect.dst_y+y)*d.width+(uint32_t)q->rect.dst_x,
@@ -81,8 +104,18 @@ static void identical_frame(void)
     uint32_t *expected=calloc((size_t)d.width*d.height,4), *visible=malloc((size_t)d.width*d.height*4);
     assert(expected && visible);
     struct desktop *oracle=malloc(sizeof(d)); assert(oracle); *oracle=d;
-    oracle->pixels=expected; oracle->hw_cursor=0;
+    oracle->pixels=expected; oracle->hw_cursor=shown;
     desk_composite(oracle,(struct desk_box){0,0,(int32_t)d.width,(int32_t)d.height});
+    /* Hardware uses the same silhouette/hotspot without a soft shadow. */
+    if (shown) {
+        struct desk_tool_cursor art=desk_tool_cursor(d.cursor_shape);
+        for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
+            int px=d.mouse_x-art.hot_x+x, py=d.mouse_y-art.hot_y+y;
+            uint32_t bit=0x80000000u>>x;
+            if (px>=0 && py>=0 && (unsigned)px<d.width && (unsigned)py<d.height && (art.mask[y]&bit))
+                expected[(unsigned)py*d.width+(unsigned)px]=art.image[y]&bit ? 0xffffffu : 0;
+        }
+    }
     memcpy(visible,scanout,(size_t)d.width*d.height*4);
     if (shown) for (unsigned y=0;y<32;y++) for (unsigned x=0;x<32;x++) {
         int px=cursor_x+(int)x,py=cursor_y+(int)y;
@@ -270,8 +303,135 @@ static void scenario(unsigned available)
     for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
     desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
 }
+/* f2-92: the offscreen caches (wallpaper/icon background and window
+ * content) behind moves, raises, menus and closes: every completed frame
+ * identical to the software oracle, rows really served from the caches. */
+static void cache_steps(uint64_t *now)
+{
+    for (unsigned k=0;k<200;k++) { *now+=100000000ull; desk_accel_cache_step(&d,*now); }
+}
+static void cache_scenario(void)
+{
+    fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;
+    desk_init(&d,&ops,640,480);d.display=7;
+    vram_first=480; vram_end=1300;
+    d.pixels=calloc((size_t)d.width*d.height,4);scanout=calloc((size_t)d.width*vram_end,4);assert(d.pixels && scanout);
+    caps=3;copies=window_copies=fills=uploads=cursor_moves=writes=cache_copies=0;uploaded_pixels=written_pixels=0;
+    shown=fail_copy=fail_cursor=fail_fill=fail_write=0;
+    d.accel=service;desk_accel_reset(&d,55);
+    assert(d.vram_first==480 && d.vram_end==1300);
+    desk_shell_enable(&d);
+    snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"builtin:%s",desk_builtin_wallpapers[0].id);
+    desk_shell_apply(&d); assert(!desk_shell_wallpaper_update(&d));
+    int a=window_new(10,20,200,150,40,60), b=window_new(11,21,180,120,300,200);
+    redraw();
+    uint64_t now=1000000000ull; cache_steps(&now);
+    assert(writes>0 && d.vram[0].valid && d.vram[0].kind==DESK_VRAM_BACKGROUND);
+    unsigned windows_cached=0;
+    for (int k=1;k<DESK_VRAM_ENTRIES;k++) if (d.vram[k].valid && d.vram[k].kind==DESK_VRAM_WINDOW) windows_cached++;
+    assert(windows_cached==2);
+    unsigned before=cache_copies;
+    /* Moves expose wallpaper and the other window; raises expose content. */
+    for (int k=0;k<6;k++) { desk_move(&d,a,40+k*23,60+k*11); redraw(); }
+    desk_focus(&d,b); redraw(); desk_focus(&d,a); redraw();
+    desk_move(&d,b,250,150); redraw();
+    desk_menu_open(&d,SH_MENU_START,DESK_START_X,DESK_BAR); redraw();
+    desk_menu_close(&d); redraw();
+    unsigned during=cache_copies;
+    assert(during>before && d.stats.cache_rows>0);
+    /* Client content changes: only the exact comparison decides; the
+     * changed window is re-uploaded after it is stable again. */
+    uint32_t *pixels=(uint32_t *)d.clients[a].pixels;
+    for (unsigned p=0;p<200*150;p++) pixels[p]=(p*2654435761u)&0xffffff;
+    dirty_client(a); redraw();
+    desk_move(&d,b,60,80); redraw(); desk_move(&d,b,300,220); redraw();
+    unsigned written=writes; cache_steps(&now); assert(writes>written);
+    desk_focus(&d,b); redraw(); desk_focus(&d,a); redraw();
+    /* An icon selection changes the background; its cache restarts. */
+    uint32_t serial=d.sh.background_serial;
+    d.sh.icon_selected=0; desk_damage_add(&d.damage,(struct desk_box){0,0,640,480},640,480); redraw();
+    /* A stale serial is never used (identical frame above); the next steps
+     * restart the upload from the new background. */
+    unsigned restarted=writes;
+    cache_steps(&now); assert(d.sh.background_serial==serial || (writes>restarted && d.vram[0].serial==d.sh.background_serial));
+    desk_move(&d,a,120,90); redraw();
+    /* Closing a window exposes everything underneath. */
+    desk_drop_client(&d,b); redraw();
+    unsigned after=cache_copies;
+    /* An upload failure: quarantined engine, software frames, no cache. */
+    pixels[0]^=0x10101; dirty_client(a); redraw();
+    now+=600000000ull; desk_accel_cache_step(&d,now); now+=600000000ull;
+    fail_write=1; for (unsigned k=0;k<4 && fail_write;k++) { now+=600000000ull; desk_accel_cache_step(&d,now); }
+    desk_move(&d,a,200,200); redraw(); redraw();
+    assert(!d.accel_caps && !d.vram_end && d.accel_lost);
+    printf("f2-92 desktop caches: frames identical, uploads=%u written_pixels=%llu cache_copies=%u->%u->%u cache_rows=%llu window_copies=%u fills=%u cpu_pixels=%llu\n",
+        writes,(unsigned long long)written_pixels,before,during,after,(unsigned long long)d.stats.cache_rows,
+        window_copies,fills,(unsigned long long)uploaded_pixels);
+    for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
+    desk_render_release(&d);free(d.pixels);free(scanout);vram_first=vram_end=0;assert(!fake_live());
+}
+/* f2-92 item 4: one 640x480 window dragged 40 steps of (8,6) over the
+ * wallpaper at 1024x768x32, software presenter versus the engine model
+ * (screen copies, offscreen caches). CPU bytes are the LFB uploads; the
+ * time model uses the historical T23 upload rate of 134 MB/s
+ * (docs/validation/f4-20-gfxdemo-frame-budget.md). */
+static void move_measurement(unsigned available)
+{
+    fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;
+    desk_init(&d,&ops,1024,768);d.display=7;
+    vram_first=available ? 768 : 0; vram_end=available ? 2048 : 0;
+    d.pixels=calloc((size_t)d.width*d.height,4);scanout=calloc((size_t)d.width*(available ? vram_end : 768),4);assert(d.pixels && scanout);
+    caps=available;copies=window_copies=fills=uploads=cursor_moves=writes=cache_copies=0;
+    uploaded_pixels=written_pixels=engine_copied_pixels=0;shown=fail_copy=fail_cursor=fail_fill=fail_write=0;
+    if (available) { d.accel=service;desk_accel_reset(&d,55); }
+    desk_shell_enable(&d);
+    snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"builtin:%s",desk_builtin_wallpapers[0].id);
+    desk_shell_apply(&d); assert(!desk_shell_wallpaper_update(&d));
+    int i=window_new(10,20,640,480,100,120);
+    d.mouse_x=1000; d.mouse_y=700; redraw();
+    uint64_t now=1000000000ull;
+    if (available) cache_steps(&now);
+    uint64_t setup_written=written_pixels;
+    uint64_t base_pixels=uploaded_pixels; unsigned base_copies=copies, base_fills=fills;
+    for (int k=1;k<=40;k++) { desk_move(&d,i,100+k*8,120+k*6); redraw(); }
+    uint64_t cpu=(uploaded_pixels-base_pixels)*4;
+    printf("f2-92 window move 1024x768x32 %s: 40 steps cpu_bytes=%llu (%.1f MB) model_upload_ms=%.1f per_step_ms=%.2f engine_copies=%u (window=%u cache=%u) engine_fills=%u engine_pixels=%llu setup_writes=%llu px\n",
+        available ? "engine" : "software",(unsigned long long)cpu,cpu/1e6,cpu/134e6*1e3,cpu/134e6*1e3/40,
+        copies-base_copies,window_copies,cache_copies,fills-base_fills,(unsigned long long)engine_copied_pixels,(unsigned long long)setup_written);
+    static uint64_t software_bytes;
+    if (!available) software_bytes=cpu;
+    else assert(software_bytes && cpu*4<software_bytes && window_copies>=30 && cache_copies>0);
+    for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
+    desk_render_release(&d);free(d.pixels);free(scanout);vram_first=vram_end=0;assert(!fake_live());
+}
+/* f2-92: on the T23 the engine became ready after the desktop's first
+ * frame with an unchanged mode generation; the hardware cursor, offscreen
+ * rows and therefore window-move copies must follow (5a10eef4 had none). */
+static void late_cursor_ready(void)
+{
+    fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;
+    desk_init(&d,&ops,640,480);d.display=7;
+    vram_first=480; vram_end=900;
+    d.pixels=calloc((size_t)d.width*d.height,4);scanout=calloc((size_t)d.width*vram_end,4);assert(d.pixels && scanout);
+    caps=0;copies=window_copies=fills=uploads=cursor_moves=writes=cache_copies=0;uploaded_pixels=0;
+    shown=fail_copy=fail_cursor=fail_fill=fail_write=0;
+    d.accel=service;desk_accel_reset(&d,55);
+    int i=window_new(10,20,120,80,50,80);redraw();
+    assert(!d.hw_cursor && !d.accel_caps && !d.vram_end);
+    caps=3; dirty_client(i); redraw();
+    assert(d.hw_cursor && d.accel_caps==3 && d.vram_first==480 && d.vram_end==900 && d.scanout_valid);
+    unsigned before=window_copies;
+    desk_move(&d,i,80,95);redraw();desk_move(&d,i,90,100);redraw();
+    assert(window_copies>=before+1);
+    puts("PASS f2-92 late activation: same-generation caps 0->3 loads the hardware cursor and offscreen rows, window moves use engine copies");
+    for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
+    desk_render_release(&d);free(d.pixels);free(scanout);vram_first=vram_end=0;assert(!fake_live());
+}
 int main(void)
 {
+    late_cursor_ready();
+    cache_scenario();
+    move_measurement(0); move_measurement(3);
     scenario(0);scenario(1);scenario(3);
     /* Actual mode reactivation is deferred. A completed CPU-presented frame
      * permits later screen blits when rectangle capability becomes ready. */

@@ -1109,9 +1109,27 @@ F4-01: fixed copied device-control extension.
 #define AUDIO_SET_GAIN 0x4104u
 #define AUDIO_DRAIN 0x4105u
 #define AUDIO_RESET 0x4106u
+#define AUDIO_REFILL_READ 0x4107u
+```
+
+command: this thread's next bounded source reads
+
+```c
+#define AUDIO_GET_PRODUCER 0x4108u
+```
+
+f1-101: the kernel's producer boost state of this stream
+
+```c
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
+#define MIXER_REFRESH_MASTER 0x4204u
+```
+
+f1-100: control handle; master record, one requested hardware read
+
+```c
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u
@@ -1186,6 +1204,63 @@ struct ciuki_audio_command {
     uint32_t version;
     uint32_t size;
     uint32_t reserved[2];
+};
+```
+
+f1-101: the mixer reports a native stream behind its target lead (more
+than one 256-frame period below ring_frames - period_frames, in output
+frames) and the scheduler raises the stream's writer and its refill-read
+thread above every ordinary level until the lead is refilled, within one
+CPU budget shared by all producers (20 % over any 100 ms). The record is a
+read-only observation; no flag of it can be set by the application.
+
+```c
+#define CIUKI_AUDIO_PRODUCER_BEHIND 1u
+```
+
+lead below the producer mark now
+
+```c
+#define CIUKI_AUDIO_PRODUCER_BOOSTED 2u
+```
+
+behind, producers boosted now
+
+```c
+#define CIUKI_AUDIO_PRODUCER_OVER_BUDGET 4u
+```
+
+behind, boost withheld by the budget
+
+```c
+struct ciuki_audio_producer {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    uint32_t boosts;
+```
+
+boost episodes since open/reset
+
+```c
+uint32_t over_budget;
+```
+
+episodes withheld by the budget
+
+```c
+uint32_t producers;
+```
+
+registered producer threads, 0..2
+
+```c
+uint64_t boost_us;
+```
+
+producer CPU used at the boost level
+
+```c
 };
 struct ciuki_audio_status {
     uint32_t version;
@@ -2146,7 +2221,90 @@ Generation prevents stale operations across a firmware mode change.
 ```c
 enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
        CIUKI_ACCEL_PATTERN, CIUKI_ACCEL_CURSOR_SET, CIUKI_ACCEL_CURSOR_MOVE,
-       CIUKI_ACCEL_CURSOR_SHOW };
+       CIUKI_ACCEL_CURSOR_SHOW,
+```
+
+f2-92: host-to-screen image write through the 2D engine. rect
+selects source (src_x, src_y) pixels of `write` and the destination
+(dst_x, dst_y), width x height; `write.clip` bounds the written
+destination pixels (zero width or height: no extra clip). Returns
+0 when the engine wrote every band, 1 when the CPU wrote visible
+rows instead; engine-only rows (below) fail when the engine cannot
+write them.
+
+```c
+CIUKI_ACCEL_WRITE,
+```
+
+f2-92: engine-only video memory below the visible screen. Returns
+(end << 16) | first: rows [first, end) at the screen's width are
+valid COPY sources/destinations and WRITE destinations; 0 when
+there are none (no engine, no lease, quarantined).
+
+```c
+CIUKI_ACCEL_OFFSCREEN };
+```
+
+f2-92 WRITE source: 32-bit 0xXXRRGGBB rows in the caller's memory. The
+address is split so the request keeps 4-byte alignment on 64-bit hosts.
+
+```c
+struct ciuki_accel_write {
+    uint32_t pixels_lo;
+```
+
+0: user address of pixel (0,0)
+
+```c
+uint32_t pixels_hi;
+```
+
+4: zero on i386
+
+```c
+uint32_t stride;
+```
+
+8: bytes per source row, multiple of 4
+
+```c
+uint32_t source_width;
+```
+
+12
+
+```c
+uint32_t source_height;
+```
+
+16
+
+```c
+int32_t clip_x;
+```
+
+20: destination clip rectangle
+
+```c
+int32_t clip_y;
+```
+
+24
+
+```c
+uint32_t clip_width;
+```
+
+28
+
+```c
+uint32_t clip_height;
+```
+
+32
+
+```c
+};
 struct ciuki_accel_request {
     uint32_t size;
     uint32_t operation;
@@ -2155,13 +2313,23 @@ struct ciuki_accel_request {
     uint32_t background;
     struct ciuki_rect rect;
     uint8_t pattern[8];
-    uint32_t cursor_mask[32];
+    union {
+        struct {
+            uint32_t cursor_mask[32];
 ```
 
 MSB first
 
 ```c
 uint32_t cursor_image[32];
+        };
+        struct ciuki_accel_write write;
+```
+
+CIUKI_ACCEL_WRITE only
+
+```c
+};
 };
 ```
 
@@ -2413,11 +2581,17 @@ delegated program-management authority; no VM handle
 ```
 
 CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
-a FreeDOS override is permitted only for an explicit game, never the shell.
+a reference/unified override is permitted only for an explicit game, never the shell.
 
 ```c
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
+#define CIUKI_DOSVM_UNIFIED 2u
+```
+
+opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57)
+
+```c
 #define CIUKI_DOSVM_GAME_COUNT 3u
 ```
 
@@ -4556,6 +4730,12 @@ struct du_ui {
 dirty=3: union of clipped client invalidations
 
 ```c
+struct du_rect rendered;
+```
+
+the region the last du_render drew
+
+```c
 unsigned cursor;
 ```
 
@@ -4701,8 +4881,12 @@ int manual_damage;
 
 application combines ordinary damage with its frame request
 
+f4-37 opt-in for clients that draw only inside du_render: present
+compares and copies only the region it drew, not the whole surface.
+
 ```c
-uint32_t server_pid, ping_serial;
+int present_rendered;
+    uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
 ```

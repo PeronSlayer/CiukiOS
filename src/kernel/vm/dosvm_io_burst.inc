@@ -31,7 +31,8 @@ static bool burst_blocked(const struct dosvm *v, const struct v86_frame *f)
 }
 static bool io_hot_port(uint16_t port)
 {
-    return (port >= 0x40 && port <= 0x43) || port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1;
+    return (port >= 0x40 && port <= 0x43) || port == 0x388 || port == 0x389 ||
+        port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1;
 }
 /* Common byte cycles and VGA word OUTs need no generic decoder. Other
  * prefixes, dword and string operations retain the scalar checks. */
@@ -63,7 +64,8 @@ bool dosvm_io_fast(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *
     bool vga = port == 0x3C4 || port == 0x3C5 || port == 0x3CE || port == 0x3CF;
     if (!((width == 1 && io_hot_port(port)) || (write && vga && width <= 2))) return false;
     uint32_t value = f->tf.eax;
-    *error = v86_io(&v->monitor, port, width, write, &value);
+    if (!dosvm_io_hot(v,port,width,write,&value,error))
+        *error = v86_io(&v->monitor, port, width, write, &value);
     if (*error) {
         if (!v->frame_pm) *error = v86_abort(&v->monitor, f, *error);
         return true;

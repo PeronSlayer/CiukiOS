@@ -1,0 +1,955 @@
+--- a/kernel/entry.asm
++++ b/kernel/entry.asm
+@@ -564,6 +564,16 @@
+                 mov     bp,sp
+                 push    si
+                 push    di
++%if XCPU >= 386
++%ifdef WATCOM
++                ; CiukiDOS fork: keep the C caller's FS/GS. Watcom's 386
++                ; code holds far pointers in GS (int2F_12_handler writes
++                ; the 2F/1206h result through GS:SI), and Restore386Registers
++                ; below loads the user's FS/GS for the INT 24h handler.
++                push    fs
++                push    gs
++%endif
++%endif
+                 ;
+                 ; Get parameters
+                 ;
+@@ -624,6 +634,12 @@
+                 mov     es,[_cu_psp]
+                 pop     word [es:PSP_USERSP]
+                 pop     word [es:PSP_USERSS]
++%if XCPU >= 386
++%ifdef WATCOM
++                pop     gs                      ; CiukiDOS fork: caller's FS/GS
++                pop     fs
++%endif
++%endif
+                 mov     bp, sp
+                 mov     ah, byte [bp+4+4]       ; restore old AH from nFlags
+                 sti                             ; Enable interrupts
+--- a/kernel/fcbfns.c
++++ b/kernel/fcbfns.c
+@@ -28,6 +28,7 @@
+ 
+ #include "portab.h"
+ #include "globals.h"
++#include "ciuki.h"
+ 
+ #ifdef VERSION_STRINGS
+ static BYTE *RcsId =
+@@ -39,6 +40,52 @@
+ #define FCB_ERR_SEGMENT_WRAP 2
+ #define FCB_ERR_EOF     3
+ #define FCB_ERROR       0xff
++
++/* CiukiDOS fork (GPL-2.0-or-later addition): the f3-50 checked FCB rules,
++   applied to the upstream engine. Reserved FCB bytes keep naming the SFT
++   index (fcb_sftno), but grant nothing beyond an open FCB entry of the
++   same file. RBIL 2121/2127: a random record is 32 bits when the record
++   size is below 64 bytes, otherwise only its low 24 bits are used. */
++#define FCB_DE_DISKFULL 39      /* position beyond 4 GiB, as f3-50 */
++#define FCB_DE_EOF      38      /* handle end of file (59h after AL=1/3) */
++
++STATIC ULONG FcbRandomGet(fcb FAR * lpFcb, unsigned recsiz)
++{
++  return recsiz < 64 ? lpFcb->fcb_rndm : lpFcb->fcb_rndm & 0xffffffUL;
++}
++
++STATIC VOID FcbRandomSet(fcb FAR * lpFcb, unsigned recsiz, ULONG n)
++{
++  if (recsiz < 64)
++    lpFcb->fcb_rndm = n;
++  else
++    lpFcb->fcb_rndm = (lpFcb->fcb_rndm & 0xff000000UL) | (n & 0xffffffUL);
++}
++
++/* The FCB's SFT entry: open, FCB-opened and still the same file name. */
++STATIC sft FAR *FcbSft(fcb FAR * lpFcb)
++{
++  sft FAR *s = idx_to_sft(lpFcb->fcb_sftno);
++  int i, n;
++
++  if (s == (sft FAR *) - 1 || !(s->sft_mode & O_FCB))
++    return (sft FAR *) - 1;
++  n = (s->sft_flags & SFT_FDEVICE) ? FNAME_SIZE : FNAME_SIZE + FEXT_SIZE;
++  for (i = 0; i < n; i++)
++    if (DosUpFChar(lpFcb->fcb_fname[i]) != (UBYTE)s->sft_name[i])
++      return (sft FAR *) - 1;
++  return s;
++}
++
++/* f3-50: a drive byte must name a valid drive (59h = 15, not a path error). */
++STATIC BOOL FcbDriveValid(fcb FAR * lpFcb)
++{
++  if (lpFcb->fcb_drive == 0 ||
++      get_cds(lpFcb->fcb_drive - 1) != NULL)
++    return TRUE;
++  CritErrCode = -DE_INVLDDRV;
++  return FALSE;
++}
+ 
+ STATIC fcb FAR *ExtFcbToFcb(xfcb FAR * lpExtFcb);
+ STATIC fcb FAR *CommonFcbInit(xfcb FAR * lpExtFcb, BYTE * pszBuffer,
+@@ -49,6 +96,7 @@
+ 
+ #define TestCmnSeps(lpFileName) (*lpFileName && strchr(":;,=+ \t", *lpFileName) != NULL)
+ #define TestFieldSeps(lpFileName) ((unsigned char)*lpFileName <= ' ' || strchr("/\\\"[]<>|.:;,=+\t", *lpFileName) != NULL)
++#define TestFieldSepsEnd(lpFileName) (*lpFileName == '\0' || TestFieldSeps(lpFileName))
+ 
+ static dmatch Dmatch;
+ 
+@@ -153,9 +201,12 @@
+   }
+ 
+   /* Now to format the file name into the string                  */
+-  lpFileName =
+-      GetNameField(lpFileName, (BYTE FAR *) lpFcb->fcb_fname, FNAME_SIZE,
+-                   (BOOL *) & wRetCodeName);
++  /* CiukiDOS fork: RBIL 2129 bit 2 keeps the name if none is given
++     (upstream GetNameField blanked it anyway) */
++  if (!(*wTestMode & PARSE_BLNK_FNAME) || !TestFieldSepsEnd(lpFileName))
++    lpFileName =
++        GetNameField(lpFileName, (BYTE FAR *) lpFcb->fcb_fname, FNAME_SIZE,
++                     (BOOL *) & wRetCodeName);
+ 
+   /* Do we have an extension? If do, format it else return        */
+   if (*lpFileName == '.')
+@@ -220,19 +271,35 @@
+   return ((ULONG) lpFcb->fcb_cublock * 128) + lpFcb->fcb_curec;
+ }
+ 
+-UBYTE FcbReadWrite(xfcb FAR * lpXfcb, UCOUNT recno, int mode)
+-{
+-  ULONG lPosit;
++/* One transfer of recno records. *done receives the number of records
++   counted by the caller's AL/CX rules (partial last record included for
++   reads). All arithmetic uses the record size captured on entry: the DTA
++   may overlap the FCB (fcbfns.c:268 upstream re-read it after the read). */
++STATIC UBYTE FcbTransfer(xfcb FAR * lpXfcb, UCOUNT recno, int mode, UWORD * done)
++{
++  ULONG record, lPosit;
+   long nTransfer;
+   fcb FAR *lpFcb;
+-  unsigned size;
+-  unsigned long bigsize;
++  unsigned size, rest;
++  unsigned long bigsize, records;
+   unsigned recsiz;
+-
++  BOOL reading = (mode & XFR_READ) != 0;
++
++  *done = 0;
+   /* Convert to fcb if necessary                                  */
+   lpFcb = ExtFcbToFcb(lpXfcb);
+ 
+   recsiz = lpFcb->fcb_recsiz;
++  if (recsiz == 0 || lpFcb->fcb_curec >= 128)
++  {
++    CritErrCode = -DE_INVLDPARM;
++    return FCB_ERR_NODATA;
++  }
++  if (FcbSft(lpFcb) == (sft FAR *) - 1)
++  {
++    CritErrCode = -DE_INVLDHNDL;
++    return FCB_ERROR;
++  }
+   bigsize = (ULONG)recsiz * recno;
+   if (bigsize > 0xffff)
+     return FCB_ERR_SEGMENT_WRAP;
+@@ -242,37 +309,59 @@
+     return FCB_ERR_SEGMENT_WRAP;
+ 
+   /* Now update the fcb and compute where we need to position     */
+-  /* to.                                                          */
+-  lPosit = FcbRec(lpFcb) * recsiz;
++  /* to; the position and the end of the transfer fit in 32 bits. */
++  record = FcbRec(lpFcb);
++  if (record > 0xffffffffUL / recsiz ||
++      record * recsiz > 0xffffffffUL - bigsize)
++  {
++    CritErrCode = FCB_DE_DISKFULL;
++    return FCB_ERR_NODATA;
++  }
++  lPosit = record * recsiz;
+   if ((CritErrCode = -SftSeek(lpFcb->fcb_sftno, lPosit, 0)) != SUCCESS)
+     return FCB_ERR_NODATA;
+ 
+   /* Do the read                                                  */
+   nTransfer = DosRWSft(lpFcb->fcb_sftno, size, dta, mode & ~XFR_FCB_RANDOM);
+   if (nTransfer < 0)
++  {
++    /* no record arithmetic on an error (upstream fell through) */
+     CritErrCode = -(int)nTransfer;
++    return FCB_ERR_NODATA;
++  }
+ 
+   /* Now find out how we will return and do it.                   */
+   if (mode & XFR_WRITE)
+     lpFcb->fcb_fsize = SftGetFsize(lpFcb->fcb_sftno);
+ 
+-  /* if end-of-file, then partial read should count last record */
+-  if (mode & XFR_FCB_RANDOM && recsiz > 0)
+-    lpFcb->fcb_rndm += ((unsigned)nTransfer + recsiz - 1) / recsiz;
+-  size -= (unsigned)nTransfer;
+-  if (size == 0)
++  /* a partial last record counts for a read, not for a write */
++  records = reading ? ((ULONG)nTransfer + recsiz - 1) / recsiz
++                    : (ULONG)nTransfer / recsiz;
++  *done = (UWORD)records;
++  if (mode & XFR_FCB_RANDOM)
++    FcbRandomSet(lpFcb, recsiz, FcbRandomGet(lpFcb, recsiz) + records);
++  rest = size - (unsigned)nTransfer;
++  if (rest == 0)
+   {
+     FcbNextRecord(lpFcb);
+     return FCB_SUCCESS;
+   }
+-  size %= lpFcb->fcb_recsiz;
+-  if (mode & XFR_READ && size > 0)
+-  {
+-    fmemset((char FAR *)dta + (unsigned)nTransfer, 0, size);
++  rest %= recsiz;
++  if (reading && rest > 0)
++  {
++    fmemset((char FAR *)dta + (unsigned)nTransfer, 0, rest);
+     FcbNextRecord(lpFcb);
++    CritErrCode = FCB_DE_EOF;
+     return FCB_ERR_EOF;
+   }
++  CritErrCode = reading ? FCB_DE_EOF : FCB_DE_DISKFULL;
+   return FCB_ERR_NODATA;
++}
++
++UBYTE FcbReadWrite(xfcb FAR * lpXfcb, UCOUNT recno, int mode)
++{
++  UWORD done;
++  return FcbTransfer(lpXfcb, recno, mode, &done);
+ }
+ 
+ UBYTE FcbGetFileSize(xfcb FAR * lpXfcb)
+@@ -284,9 +373,14 @@
+   fcb FAR *lpFcb = CommonFcbInit(lpXfcb, SecPathName, &FcbDrive);
+   recsiz = lpFcb->fcb_recsiz;
+ 
++  if (!FcbDriveValid(lpFcb))
++    return FCB_ERROR;
+   /* check for a device                                           */
+-  if (!lpFcb || IsDevice(SecPathName) || (recsiz == 0))
+-    return FCB_ERROR;
++  if (IsDevice(SecPathName) || (recsiz == 0))
++  {
++    CritErrCode = recsiz == 0 ? -DE_INVLDPARM : -DE_FILENOTFND;
++    return FCB_ERROR;
++  }
+ 
+   sft_idx = (short)DosOpenSft(SecPathName, O_LEGACY | O_RDONLY | O_OPEN, 0);
+   if (sft_idx >= 0)
+@@ -296,8 +390,8 @@
+     /* Get the size                                         */
+     fsize = SftGetFsize(sft_idx);
+ 
+-    /* compute the size and update the fcb                  */
+-    lpFcb->fcb_rndm = (fsize + (recsiz - 1)) / recsiz;
++    /* compute the size without 32-bit overflow and update the fcb */
++    FcbRandomSet(lpFcb, recsiz, fsize / recsiz + (fsize % recsiz != 0));
+ 
+     /* close the file and leave                             */
+     if ((CritErrCode = -DosCloseSft(sft_idx, FALSE)) == SUCCESS)
+@@ -315,7 +409,7 @@
+ 
+   /* Now update the fcb and compute where we need to position     */
+   /* to. */
+-  lpFcb->fcb_rndm = FcbRec(lpFcb);
++  FcbRandomSet(lpFcb, lpFcb->fcb_recsiz, FcbRec(lpFcb));
+ }
+ 
+ void FcbCalcRec(xfcb FAR * lpXfcb)
+@@ -323,27 +417,23 @@
+ 
+   /* Convert to fcb if necessary                                  */
+   fcb FAR *lpFcb = ExtFcbToFcb(lpXfcb);
++  ULONG record = FcbRandomGet(lpFcb, lpFcb->fcb_recsiz);
+ 
+   /* Now update the fcb and compute where we need to position     */
+   /* to.                                                          */
+-  lpFcb->fcb_cublock = (UWORD)(lpFcb->fcb_rndm / 128);
+-  lpFcb->fcb_curec = (UBYTE)lpFcb->fcb_rndm & 127;
++  lpFcb->fcb_cublock = (UWORD)(record / 128);
++  lpFcb->fcb_curec = (UBYTE)record & 127;
+ }
+ 
+ UBYTE FcbRandomBlockIO(xfcb FAR * lpXfcb, UWORD *nRecords, int mode)
+ {
+   UBYTE nErrorCode;
+-  fcb FAR *lpFcb;
+-  unsigned long old;
+ 
+   FcbCalcRec(lpXfcb);
+ 
+-  /* Convert to fcb if necessary                                  */
+-  lpFcb = ExtFcbToFcb(lpXfcb);
+-
+-  old = lpFcb->fcb_rndm;
+-  nErrorCode = FcbReadWrite(lpXfcb, *nRecords, mode);
+-  *nRecords = (UWORD)(lpFcb->fcb_rndm - old);
++  /* CiukiDOS fork: count the records transferred directly; a 24-bit
++     random record cannot be differenced across its preserved high byte */
++  nErrorCode = FcbTransfer(lpXfcb, *nRecords, mode, nRecords);
+ 
+   /* Now update the fcb                                           */
+   FcbCalcRec(lpXfcb);
+@@ -395,6 +485,8 @@
+ 
+   /* Build a traditional DOS file name                            */
+   fcb FAR *lpFcb = CommonFcbInit(lpXfcb, SecPathName, &FcbDrive);
++  if (!FcbDriveValid(lpFcb))
++    return FCB_ERROR;
+   if ((flags & O_CREAT) && lpXfcb->xfcb_flag == 0xff)
+     /* pass attribute without constraints (dangerous for directories) */
+     attr = lpXfcb->xfcb_attrib;
+@@ -475,7 +567,8 @@
+   void FAR *lpOldDta = dta;
+ 
+   /* Build a traditional DOS file name                            */
+-  CommonFcbInit(lpXfcb, SecPathName, &FcbDrive);
++  if (!FcbDriveValid(CommonFcbInit(lpXfcb, SecPathName, &FcbDrive)))
++    return FCB_ERROR;
+   /* check for a device                                           */
+   if (IsDevice(SecPathName))
+   {
+@@ -517,6 +610,8 @@
+ 
+   /* Build a traditional DOS file name                            */
+   lpRenameFcb = (rfcb FAR *) CommonFcbInit(lpXfcb, SecPathName, &FcbDrive);
++  if (!FcbDriveValid((fcb FAR *) lpRenameFcb))
++    return FCB_ERROR;
+ 
+   /* check for a device                                           */
+   if (IsDevice(SecPathName))
+@@ -601,14 +696,23 @@
+   if (lpFcb->fcb_sftno == (BYTE) 0xff)
+     return FCB_SUCCESS;
+ 
+-  /* Get the SFT block that contains the SFT      */
+-  if ((s = idx_to_sft(lpFcb->fcb_sftno)) == (sft FAR *) - 1)
+-    return FCB_ERROR;
++  /* Get the SFT block that contains the SFT (an FCB-opened entry of the
++     same file: CiukiDOS fork, f3-50 authority rule) */
++  if ((s = FcbSft(lpFcb)) == (sft FAR *) - 1)
++  {
++    CritErrCode = -DE_INVLDHNDL;
++    return FCB_ERROR;
++  }
+ 
+   /* change time and set file size                */
+-  s->sft_size = lpFcb->fcb_fsize;
+   if (!(s->sft_flags & SFT_FSHARED))
++  {
++    /* local FAT: upstream semantics, the FCB size becomes the entry size */
++    s->sft_size = lpFcb->fcb_fsize;
+     dos_merge_file_changes(lpFcb->fcb_sftno);
++  }
++  else if (ciuki_fcb_close_size(lpFcb->fcb_sftno, lpFcb->fcb_fsize) != SUCCESS)
++    return FCB_ERROR;       /* refused publication: the FCB stays open */
+   DosSetFtimeSft(lpFcb->fcb_sftno, lpFcb->fcb_date, lpFcb->fcb_time);
+   if ((CritErrCode = -DosCloseSft(lpFcb->fcb_sftno, FALSE)) == SUCCESS)
+   {
+@@ -639,10 +743,22 @@
+   /* First, move the dta to a local and change it around to match */
+   /* our functions.                                               */
+   lpDir = dta;
++  /* CiukiDOS fork: the drive byte, 32-byte entry and an extended
++     prefix must fit before the end of the DTA segment */
++  if (FP_OFF(lpDir) > 0xffffu - (1 + 32 + 7))
++  {
++    CritErrCode = -DE_INVLDPARM;
++    return FCB_ERROR;
++  }
+   dta = &Dmatch;
+ 
+   /* Next initialze local variables by moving them from the fcb   */
+   lpFcb = CommonFcbInit(lpXfcb, SecPathName, &FcbDrive);
++  if (!FcbDriveValid(lpFcb))
++  {
++    dta = orig_dta;
++    return FCB_ERROR;
++  }
+   /* Reconstrct the dirmatch structure from the fcb - doesn't hurt for first */
+   Dmatch.dm_drive = lpFcb->fcb_sftno;
+ 
+--- a/kernel/int2f.asm
++++ b/kernel/int2f.asm
+@@ -344,6 +344,24 @@
+ ; sumtimes return data *ptr is the push stack word
+ ;
+ 
++; CiukiDOS fork (GPL-2.0-or-later addition): the seven redirector callouts
++; below reach a bound fork-local IFS backend with the unchanged 11xxh
++; registers and an INT-style FLAGS/CS/IP frame (pushf; call far). The
++; backend returns with RETF 2 or chains to the current INT 2Fh vector with
++; that frame intact. Public 1100h is never answered here. SS = DGROUP at
++; every site (upstream relies on it: "push ss; pop ds" below).
++                extern  _CiukiHooks
++%macro REDIRECTOR_INT2F 0
++                pushf
++                cmp     word [ss:_CiukiHooks+10], byte 0
++                je      %%upstream
++                call    far [ss:_CiukiHooks+8]
++                jmp     short %%done
++%%upstream:     popf
++                int     2fh
++%%done:
++%endmacro
++
+ remote_lseek:   ; arg is a pointer to the long seek value
+                 mov     bx, cx
+                 mov     dx, [bx]
+@@ -352,7 +370,7 @@
+ 
+ remote_getfattr:        
+                 clc                    ; set to succeed
+-                int     2fh
++                REDIRECTOR_INT2F
+                 jc      ret_neg_ax
+                 jmp     short ret_int2f
+ 
+@@ -361,7 +379,7 @@
+ 		mov	bx, cx
+ 		mov	bl, [bx + 8]	; unlock or not
+ 		mov	cx, 1
+-		int	0x2f
++		REDIRECTOR_INT2F
+ 		jnc	ret_set_ax_to_carry
+ 		mov	ah, 0
+                 jmp     short ret_neg_ax
+@@ -404,7 +422,7 @@
+ 
+ int2f_call:
+                 xor     cx, cx         ; set to succeed; clear carry and CX
+-                int     2fh
++                REDIRECTOR_INT2F
+                 pop     bx
+                 jnc     ret_set_ax_to_cx
+ ret_neg_ax:
+@@ -429,7 +447,7 @@
+                 lds     di,[di+0xa]
+ 
+                 clc                     ; set to succeed
+-                int     2fh
++                REDIRECTOR_INT2F
+                 pop     bx              ; restore stack and ds=ss
+                 push    ss
+                 pop     ds
+@@ -440,7 +458,7 @@
+ 
+ remote_getfree:
+                 clc                     ; set to succeed
+-                int     2fh
++                REDIRECTOR_INT2F
+                 pop     di              ; retrieve pushed pointer arg
+                 jc      ret_set_ax_to_carry
+                 mov     [di],ax
+@@ -451,7 +469,7 @@
+ 
+ remote_rw:
+                 clc                    ; set to succeed
+-                int     2fh
++                REDIRECTOR_INT2F
+                 jc      ret_min_dx_ax
+                 xor     dx, dx         ; dx:ax := dx:cx = bytes read
+                 jmp     short ret_set_ax_to_cx
+@@ -468,7 +486,7 @@
+                 mov     ds, [_cu_psp]
+ int2f_restore_ds:
+                 clc
+-                int     2fh
++                REDIRECTOR_INT2F
+                 push    ss
+                 pop     ds
+                 jmp     short ret_set_ax_to_carry
+--- a/kernel/inthndlr.c
++++ b/kernel/inthndlr.c
+@@ -30,6 +30,7 @@
+ 
+ #include "portab.h"
+ #include "globals.h"
++#include "ciuki.h"
+ #include "nls.h"
+ 
+ #ifdef VERSION_STRINGS
+@@ -184,6 +185,9 @@
+ 
+       /* Set PSP                                                      */
+     case 0x50:
++      /* CiukiDOS fork: selection only; native ancestry is unchanged.
++         DOS reports no error for AH=50h, so a refusal is not visible. */
++      ciuki_event(CIUKI_EV_PSP_SELECT, irp->BX, 0, 0);
+       cu_psp = irp->BX;
+       break;
+ 
+@@ -422,6 +426,11 @@
+   lr.DS = r->DS;
+   lr.ES = r->ES;
+ 
++  /* CiukiDOS fork: a function claimed by the bound VMM is served once,
++     before dispatch; the driver applied the complete result to *r. */
++  if (ciuki_direct(r))
++    goto real_exit;
++
+ dispatch:
+ 
+ #ifdef DEBUG
+@@ -704,6 +713,8 @@
+       /* Dos Create New Psp                                           */
+     case 0x26:
+       new_psp(lr.DX, r->CS);
++      /* CiukiDOS fork: bookkeeping only; new_psp() clones no handle. */
++      ciuki_event(CIUKI_EV_PSP_CREATE, lr.DX, cu_psp, 0x26);
+       break;
+ 
+       /* Read random record(s) using FCB */
+@@ -1170,6 +1181,15 @@
+       child_psp(lr.DX, cu_psp, lr.SI);
+       /* copy command line from the parent (required for some device loaders) */
+       fmemcpy(MK_FP(lr.DX, 0x80), MK_FP(cu_psp, 0x80), 128);
++      /* CiukiDOS fork: publish before selection; a refusal releases the
++         cloned references once and leaves the caller selected. */
++      rc = ciuki_event(CIUKI_EV_PSP_CREATE, lr.DX, cu_psp, 0x55);
++      if (rc != SUCCESS)
++      {
++        ciuki_release_jft(lr.DX);
++        lr.AX = rc;
++        goto error_carry;
++      }
+       cu_psp = lr.DX;
+       break;
+ 
+@@ -1429,6 +1449,13 @@
+ 
+       /* Extended country info                                        */
+     case 0x65:
++      /* CiukiDOS fork: a buffer or string may not wrap its segment */
++      if (((lr.AL == 0x21 || lr.AL == 0xA1) && (ULONG)lr.DX + lr.CX > 0x10000UL) ||
++          ((lr.AL == 0x22 || lr.AL == 0xA2) && !ciuki_asciz_fits(FP_DS_DX)))
++      {
++        rc = DE_INVLDPARM;
++        goto error_exit;
++      }
+       switch (lr.AL)
+       {
+         case 0x20:             /* upcase single character */
+@@ -1454,7 +1481,7 @@
+           break;
+         default:
+ #ifdef NLS_DEBUG
+-          if ((rc = DosGetData(lr.AL, lr.BX, lr.DX, lr.CX, FP_ES_DI)) < 0)
++          if ((rc = DosGetData(lr.AL, lr.BX, lr.DX, lr.CX, FP_ES_DI, &lr.CX)) < 0)
+           {
+             printf("DosGetData() := %d\n", rc);
+             goto error_exit;
+@@ -1462,7 +1489,13 @@
+           printf("DosGetData() returned successfully\n");
+           break;
+ #else
+-          rc = DosGetData(lr.AL, lr.BX, lr.DX, lr.CX, FP_ES_DI);
++          {
++            /* CiukiDOS fork: CX returns the length copied (f3-50) */
++            UWORD count;
++            rc = DosGetData(lr.AL, lr.BX, lr.DX, lr.CX, FP_ES_DI, &count);
++            if (rc >= SUCCESS)
++              lr.CX = count;
++          }
+           goto short_check;
+ #endif
+       }
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -57,6 +57,7 @@
+ STATIC VOID InitSerialPorts(VOID);
+ STATIC void CheckContinueBootFromHarddisk(void);
+ STATIC void setup_int_vectors(void);
++VOID CiukiLateBind(VOID);   /* CiukiDOS fork: ciukinit.c */
+ 
+ #ifdef _MSC_VER
+ BYTE _acrtused = 0;
+@@ -119,6 +120,10 @@
+ 
+   /* initialize all internal variables, process CONFIG.SYS, load drivers, etc */
+   init_kernel();
++
++  /* CiukiDOS fork: final DFV2 binding after the kernel layout is final
++     (SFT chain, CDS, FsConfig, DOS=LOW) and before INSTALL= or the shell. */
++  CiukiLateBind();
+ 
+ #ifdef DEBUG
+   /* Non-portable message kludge alert!   */
+--- a/kernel/makefile
++++ b/kernel/makefile
+@@ -19,10 +19,10 @@
+ error.obj
+ OBJS4=break.obj dosfns.obj fatdir.obj fatfs.obj fattab.obj fcbfns.obj \
+ inthndlr.obj
+-OBJS5=ioctl.obj memmgr.obj task.obj newstuff.obj nls.obj network.obj
++OBJS5=ioctl.obj memmgr.obj task.obj newstuff.obj nls.obj network.obj ciuki.obj
+ OBJS6=prf.obj misc.obj strings.obj syspack.obj lfnapi.obj iasmsupt.obj memdisk.obj
+ OBJS7=main.obj config.obj initoem.obj inithma.obj dyninit.obj iprf.obj
+-OBJS8=initdisk.obj initclk.obj cpu.obj
++OBJS8=initdisk.obj initclk.obj ciukinit.obj cpu.obj
+ OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(OBJS4) $(OBJS5) $(OBJS6) $(OBJS7) $(OBJS8)
+ 
+ #               *Explicit Rules*
+@@ -121,6 +121,7 @@
+ syspack.obj: syspack.c  $(HEADERS) $(TARGET).lnk
+ systime.obj: systime.c  $(HEADERS) $(TARGET).lnk
+ task.obj: task.c        $(HEADERS) $(TARGET).lnk
++ciuki.obj: ciuki.c      $(HEADERS) $(HDR)ciuki.h $(TARGET).lnk
+ 
+ # now the funny stuff :-)
+ # Files in the INIT segment
+@@ -156,6 +157,11 @@
+ 	$(CC) $(INITCFLAGS) $*.c
+ 	$(INITPATCH) $*.obj
+ 
++# CiukiDOS fork addition: late DFV2 binding (INIT segment)
++ciukinit.obj: ciukinit.c  $(INITHEADERS) $(HDR)ciuki.h $(TARGET).lnk
++	$(CC) $(INITCFLAGS) $*.c
++	$(INITPATCH) $*.obj
++
+ #the string functions for INIT_TEXT
+ iasmsupt.obj: asmsupt.asm $(TARGET).lnk
+ 	$(NASM) -D$(COMPILER) -D_INIT -f obj $(NASMFLAGS) -o $@ asmsupt.asm
+--- a/kernel/nls.c
++++ b/kernel/nls.c
+@@ -299,10 +299,38 @@
+ 	the direct-access interface.
+ 	subfct == NLS_DOS_38 is a value > 0xff in order to not clash
+ 	with subfunctions valid to be passed as DOS-65-XX. */
++/* CiukiDOS fork (GPL-2.0-or-later addition), f3-50 65h semantics on the
++   one country-1/CP437 package: 65h/01 returns the bounded prefix of the
++   41-byte record (at least 5 bytes), pointer subfunctions return 5 bytes,
++   CX reports the length, and no destination may wrap its segment. */
++extern UBYTE ASM nlsLowcaseHardcoded[];
++
++STATIC int ciukiCopy(UBYTE FAR * buf, unsigned bufsize, VOID FAR * src,
++                     unsigned len, unsigned *count)
++{
++  if (len > bufsize)
++    len = bufsize;
++  if (bufsize < 5 || (ULONG)FP_OFF(buf) + len > 0x10000UL)
++    return DE_INVLDPARM;
++  fmemcpy(buf, src, len);
++  *count = len;
++  return SUCCESS;
++}
++
+ STATIC int nlsGetData(struct nlsPackage FAR * nls, int subfct,
+-                      UBYTE FAR * buf, unsigned bufsize)
++                      UBYTE FAR * buf, unsigned bufsize, unsigned *count)
+ {
+   VOID FAR *poi;
++  static struct nlsPointer lowcase;
++
++  *count = 0;
++  /* 65h/03: the lowercase table, derived from table 2 (nls_hc.asm) */
++  if (subfct == 3 && nls == &nlsPackageHardcoded)
++  {
++    lowcase.subfct = 3;
++    lowcase.pointer = nlsLowcaseHardcoded;
++    return ciukiCopy(buf, bufsize, &lowcase, sizeof(struct nlsPointer), count);
++  }
+ 
+   log(("NLS: nlsGetData(): subfct=%x, bufsize=%u, cp=%u, cntry=%u\n",
+        subfct, bufsize, nls->cp, nls->cntry));
+@@ -321,8 +349,8 @@
+     switch (subfct)
+     {
+       case 1:                  /* Extended Country Information */
+-        return cpyBuf(buf, bufsize, poi,
+-                      ((struct nlsExtCntryInfo FAR *)poi)->size + 3);
++        return ciukiCopy(buf, bufsize, poi,
++                         ((struct nlsExtCntryInfo FAR *)poi)->size + 3, count);
+       case NLS_DOS_38:         /* Normal Country Information */
+         return cpyBuf(buf, bufsize, &(((struct nlsExtCntryInfo FAR *)poi)->dateFmt), 24);       /* standard cinfo has no more 34 _used_ bytes */
+         /* don't copy 34, copy only 0x18 instead, 
+@@ -330,7 +358,9 @@
+       default:
+         /* All other subfunctions just return the found nlsPoinerInf
+            structure */
+-        return cpyBuf(buf, bufsize, poi, sizeof(struct nlsPointer));
++        if (bufsize < sizeof(struct nlsPointer))
++          return DE_INVLDPARM;
++        return ciukiCopy(buf, bufsize, poi, sizeof(struct nlsPointer), count);
+     }
+   }
+ 
+@@ -563,15 +593,20 @@
+  *	function is invoked.
+  */
+ COUNT DosGetData(int subfct, UWORD cp, UWORD cntry, UWORD bufsize,
+-                 VOID FAR * buf)
++                 VOID FAR * buf, UWORD * count)
+ {
+   struct nlsPackage FAR *nls;   /* NLS package to use to return the info from */
++  unsigned n = 0;
++  COUNT rc;
+ 
+   log(("NLS: GetData(): subfct=%x, cp=%u, cntry=%u, bufsize=%u\n",
+        subfct, cp, cntry, bufsize));
+ 
++  *count = 0;
+   if (!buf || !bufsize)
+     return DE_INVLDDATA;
++  if (subfct != NLS_DOS_38 && bufsize < 5)
++    return DE_INVLDPARM;      /* CiukiDOS fork: f3-50 minimum */
+   if (subfct == 0)              /* Currently not supported */
+     return DE_INVLDFUNC;
+ 
+@@ -580,8 +615,12 @@
+   {
+     /* matching NLS package found */
+     if (nls->flags & NLS_FLAG_DIRECT_GETDATA)
++    {
+       /* Direct access to the data */
+-      return nlsGetData(nls, subfct, buf, bufsize);
++      rc = nlsGetData(nls, subfct, buf, bufsize, &n);
++      *count = n;
++      return rc;
++    }
+     cp = nls->cp;
+     cntry = nls->cntry;
+   }
+@@ -611,7 +650,8 @@
+ #ifndef DosGetCountryInformation
+ COUNT DosGetCountryInformation(UWORD cntry, VOID FAR * buf)
+ {
+-  return DosGetData(NLS_DOS_38, NLS_DEFAULT, cntry, 0x18, buf);
++  UWORD count;
++  return DosGetData(NLS_DOS_38, NLS_DEFAULT, cntry, 0x18, buf, &count);
+ }
+ #endif
+ 
+@@ -642,6 +682,10 @@
+  */
+ COUNT DosSetCodepage(UWORD actCP, UWORD sysCP)
+ {
++  /* CiukiDOS fork: selecting the active code page is not a switch */
++  if (actCP == nlsInfo.actPkg->cp &&
++      (sysCP == NLS_DEFAULT || sysCP == nlsInfo.sysCodePage))
++    return SUCCESS;
+   if (sysCP == NLS_DEFAULT || sysCP == nlsInfo.sysCodePage)
+     return DosSetPackage(actCP, NLS_DEFAULT);
+   return DE_INVLDDATA;
+@@ -670,6 +714,7 @@
+ UWORD ASMCFUNC syscall_MUX14(iregs FAR *pr)
+ {
+   struct nlsPackage FAR *nls;   /* addressed NLS package */
++  unsigned count;
+ 
+   log(("NLS: MUX14(): subfct=%x, cp=%u, cntry=%u\n", pr->AL, pr->BX, pr->DX));
+ 
+@@ -684,12 +729,12 @@
+       pr->BX = NLS_FREEDOS_NLSFUNC_ID;
+       return SUCCESS;           /* kernel just simulates default functions */
+     case NLSFUNC_DOS38:
+-      return nlsGetData(nls, NLS_DOS_38, MK_FP(pr->ES, pr->DI), 34);
++      return nlsGetData(nls, NLS_DOS_38, MK_FP(pr->ES, pr->DI), 34, &count);
+     case NLSFUNC_GETDATA:
+-      return nlsGetData(nls, pr->BP, MK_FP(pr->ES, pr->DI), pr->CX);
++      return nlsGetData(nls, pr->BP, MK_FP(pr->ES, pr->DI), pr->CX, &count);
+     case NLSFUNC_DRDOS_GETDATA:
+       /* Does not pass buffer length */
+-      return nlsGetData(nls, pr->CL, MK_FP(pr->ES, pr->DI), 512);
++      return nlsGetData(nls, pr->CL, MK_FP(pr->ES, pr->DI), 512, &count);
+     case NLSFUNC_LOAD_PKG:
+       return nlsLoadPackage(nls);
+     case NLSFUNC_LOAD_PKG2:
+--- a/kernel/nls_hc.asm
++++ b/kernel/nls_hc.asm
+@@ -29,12 +29,15 @@
+ 	GLOBAL _nlsCntryInfoHardcoded
+ _nlsCntryInfoHardcoded:
+ ?table1:
+-	DB  01ch, 000h, 001h, 000h, 0b5h, 001h, 000h, 000h
++	; CiukiDOS fork: DOS 4+ size 26h (38 bytes), the 34-byte country
++	; information ends with 10 reserved bytes (RBIL 2138, 2165/01).
++	DB  026h, 000h, 001h, 000h, 0b5h, 001h, 000h, 000h
+ 	DB  024h, 000h, 000h, 000h, 000h, 02ch, 000h, 02eh
+ 	DB  000h, 02dh, 000h, 03ah, 000h, 000h, 002h, 000h
+ extern _CharMapSrvc
+         DW  _CharMapSrvc, DGROUP
+         DB  02ch, 000h
++	DB  000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h
+ 	GLOBAL _hcTablesStart
+ _hcTablesStart:
+ 	GLOBAL _nlsUpcaseHardcoded
+@@ -124,5 +127,43 @@
+ ?table7:
+ 	DB  000h, 000h, 000h, 000h, 000h, 000h, 000h, 000h
+ 	DB  000h, 000h
++; CiukiDOS fork (GPL-2.0-or-later addition): 65h/03 lowercase table,
++; derived from table 2 alone (A-Z, and every 80h-FFh byte whose
++; uppercase is another byte >= 80h maps back to its first preimage).
++	GLOBAL _nlsLowcaseHardcoded
++_nlsLowcaseHardcoded:
++	DB  000h, 001h, 000h, 001h, 002h, 003h, 004h, 005h
++	DB  006h, 007h, 008h, 009h, 00ah, 00bh, 00ch, 00dh
++	DB  00eh, 00fh, 010h, 011h, 012h, 013h, 014h, 015h
++	DB  016h, 017h, 018h, 019h, 01ah, 01bh, 01ch, 01dh
++	DB  01eh, 01fh, 020h, 021h, 022h, 023h, 024h, 025h
++	DB  026h, 027h, 028h, 029h, 02ah, 02bh, 02ch, 02dh
++	DB  02eh, 02fh, 030h, 031h, 032h, 033h, 034h, 035h
++	DB  036h, 037h, 038h, 039h, 03ah, 03bh, 03ch, 03dh
++	DB  03eh, 03fh, 040h, 061h, 062h, 063h, 064h, 065h
++	DB  066h, 067h, 068h, 069h, 06ah, 06bh, 06ch, 06dh
++	DB  06eh, 06fh, 070h, 071h, 072h, 073h, 074h, 075h
++	DB  076h, 077h, 078h, 079h, 07ah, 05bh, 05ch, 05dh
++	DB  05eh, 05fh, 060h, 061h, 062h, 063h, 064h, 065h
++	DB  066h, 067h, 068h, 069h, 06ah, 06bh, 06ch, 06dh
++	DB  06eh, 06fh, 070h, 071h, 072h, 073h, 074h, 075h
++	DB  076h, 077h, 078h, 079h, 07ah, 07bh, 07ch, 07dh
++	DB  07eh, 07fh, 087h, 081h, 082h, 083h, 084h, 085h
++	DB  086h, 087h, 088h, 089h, 08ah, 08bh, 08ch, 08dh
++	DB  084h, 086h, 090h, 091h, 091h, 093h, 094h, 095h
++	DB  096h, 097h, 098h, 094h, 081h, 09bh, 09ch, 09dh
++	DB  09eh, 09fh, 0a0h, 0a1h, 0a2h, 0a3h, 0a4h, 0a4h
++	DB  0a6h, 0a7h, 0a8h, 0a9h, 0aah, 0abh, 0ach, 0adh
++	DB  0aeh, 0afh, 0b0h, 0b1h, 0b2h, 0b3h, 0b4h, 0b5h
++	DB  0b6h, 0b7h, 0b8h, 0b9h, 0bah, 0bbh, 0bch, 0bdh
++	DB  0beh, 0bfh, 0c0h, 0c1h, 0c2h, 0c3h, 0c4h, 0c5h
++	DB  0c6h, 0c7h, 0c8h, 0c9h, 0cah, 0cbh, 0cch, 0cdh
++	DB  0ceh, 0cfh, 0d0h, 0d1h, 0d2h, 0d3h, 0d4h, 0d5h
++	DB  0d6h, 0d7h, 0d8h, 0d9h, 0dah, 0dbh, 0dch, 0ddh
++	DB  0deh, 0dfh, 0e0h, 0e1h, 0e2h, 0e3h, 0e4h, 0e5h
++	DB  0e6h, 0e7h, 0e8h, 0e9h, 0eah, 0ebh, 0ech, 0edh
++	DB  0eeh, 0efh, 0f0h, 0f1h, 0f2h, 0f3h, 0f4h, 0f5h
++	DB  0f6h, 0f7h, 0f8h, 0f9h, 0fah, 0fbh, 0fch, 0fdh
++	DB  0feh, 0ffh
+ 	GLOBAL _hcTablesEnd
+ _hcTablesEnd:
+--- a/kernel/proto.h
++++ b/kernel/proto.h
+@@ -267,7 +267,7 @@
+ unsigned char DosUpFChar(unsigned char ch);
+ VOID DosUpFString(char FAR * str);
+ COUNT DosGetData(int subfct, UWORD cp, UWORD cntry, UWORD bufsize,
+-                 VOID FAR * buf);
++                 VOID FAR * buf, UWORD * count);
+ #ifndef DosGetCountryInformation
+ COUNT DosGetCountryInformation(UWORD cntry, VOID FAR * buf);
+ #endif
+--- a/kernel/task.c
++++ b/kernel/task.c
+@@ -28,6 +28,7 @@
+ 
+ #include "portab.h"
+ #include "globals.h"
++#include "ciuki.h"
+ 
+ #ifdef VERSION_STRINGS
+ static BYTE *RcsId =
+@@ -340,7 +341,17 @@
+ {
+   psp FAR *p = MK_FP(ds, 0);
+   psp FAR *q = MK_FP(cu_psp, 0);
+-  
++  COUNT rc;
++
++  /* CiukiDOS fork: the inherited JFT and the parent are final here. A
++     refusal unwinds the child once; the caller remains current. */
++  rc = ciuki_event(CIUKI_EV_EXEC_COMMIT, ds, cu_psp, 0);
++  if (rc != SUCCESS)
++  {
++    ciuki_exec_unwind(ds, cu_psp);
++    return -rc;
++  }
++
+   /* Transfer control to the executable                   */
+   p->ps_parent = cu_psp;
+   p->ps_prevpsp = q;
+@@ -527,6 +538,17 @@
+     UWORD fcbcode;
+     psp FAR *p;
+ 
++    /* CiukiDOS fork: native preparation precedes handle inheritance. */
++    {
++      COUNT rc = ciuki_event(CIUKI_EV_EXEC_BEGIN, mem, cu_psp, 0);
++      if (rc != SUCCESS)
++      {
++        DosMemFree(mem - 1);
++        DosMemFree(env);
++        return -rc;
++      }
++    }
++
+     /* point to the PSP so we can build it                  */
+     setvec(0x22, (intvec)MK_FP(user_r->CS, user_r->IP));
+     child_psp(mem, cu_psp, mem + asize);
+@@ -536,7 +558,12 @@
+     if (asize > 0x1000)
+       asize = 0x1000;
+     if (asize < 0x11)
++    {
++      /* CiukiDOS fork: upstream returned here with the cloned handles
++         and the child's blocks still allocated. */
++      ciuki_exec_unwind(mem, cu_psp);
+       return DE_NOMEM;
++    }
+     asize -= 0x11;
+     /* CP/M compatibility--size of first segment for .COM files
+        while preserving the far call to 0:00c0 +
+@@ -548,9 +575,8 @@
+     exp->exec.stack = MK_FP(mem, asize);
+     exp->exec.start_addr = MK_FP(mem, 0x100);
+     *((UWORD FAR *) MK_FP(mem, asize)) = (UWORD) 0;
+-    load_transfer(mem, exp, fcbcode, mode);
+-  }
+-  return SUCCESS;
++    return load_transfer(mem, exp, fcbcode, mode);
++  }
+ }
+ 
+ VOID return_user(void)
+@@ -583,6 +609,11 @@
+     FcbCloseAll();
+     FreeProcessMem(cu_psp);
+   }
++
++  /* CiukiDOS fork: the process has released its handles; termination
++     itself cannot be refused. */
++  ciuki_event(tsr ? CIUKI_EV_TSR : CIUKI_EV_PROCESS_EXIT, cu_psp,
++              p->ps_parent, 0);
+ 
+   cu_psp = p->ps_parent;
+   q = MK_FP(cu_psp, 0);
+@@ -789,6 +820,16 @@
+ 
+   {
+     UWORD fcbcode;
++    COUNT rc;
++
++    /* CiukiDOS fork: native preparation precedes handle inheritance. */
++    rc = ciuki_event(CIUKI_EV_EXEC_BEGIN, mem, cu_psp, 0);
++    if (rc != SUCCESS)
++    {
++      DosMemFree(--mem);
++      DosMemFree(env);
++      return -rc;
++    }
+ 
+     /* point to the PSP so we can build it                  */
+     setvec(0x22, (intvec)MK_FP(user_r->CS, user_r->IP));
+@@ -801,9 +842,8 @@
+       MK_FP(ExeHeader.exInitCS + start_seg, ExeHeader.exInitIP);
+ 
+     /* Transfer control to the executable                   */
+-    load_transfer(mem, exp, fcbcode, mode);
+-  }
+-  return SUCCESS;
++    return load_transfer(mem, exp, fcbcode, mode);
++  }
+ }
+ 
+ /* mode = LOAD or EXECUTE

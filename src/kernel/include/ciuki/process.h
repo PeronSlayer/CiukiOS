@@ -58,6 +58,9 @@ struct process {
      * Setup in Setup mode (f9-01); zero in every other process (kzalloc),
      * never inherited by children or descriptors, gone with the process. */
     bool setup_capability;
+    /* f1-98: the desktop and its Win32 window server keep a minimum CPU
+     * share (task.c share_group); every thread inherits it at creation. */
+    bool share_group;
     /* f2-33 enumeration: image basename (printable, NUL-terminated) and the
      * g_ticks value at publication. */
     char name[CIUKI_PROC_NAME_MAX];
@@ -122,6 +125,9 @@ int proc_thread_prepare(struct process *p, uint32_t entry, uint32_t argument,
                         uint32_t trampoline, uint32_t stack_bytes, uint32_t flags,
                         uint64_t mask, bool main, struct proc_thread **out);
 void proc_thread_discard(struct proc_thread *thread);
+/* f1-98: mark p and its existing threads as members of the desktop's
+ * minimum-share group; later threads inherit it in task_create_native. */
+void proc_share_group(struct process *p);
 void proc_thread_collect(struct proc_thread *thread);
 void proc_thread_cleanup(struct proc_thread *thread);
 int proc_thread_create(uint32_t args);

@@ -9,6 +9,7 @@
 #include <ciuki/cpu.h>
 #include <time.h>
 #include <ciuki/work.h>
+#include "../../assets/cursors/cursors.h"
 static unsigned binding_claims, binding_pci_count;
 static struct pci_func binding_gpu;
 static bool binding_allowed;
@@ -230,9 +231,28 @@ struct model {
      * descriptor readbacks deliberately remain correct in this scenario. */
     bool depth_preamble_model, depth_preamble_seen;
     unsigned depth_preamble_bpp;
+    /* f1-95, measured on the T23 and modelled as such, not a documented
+     * erratum: the first colour RECT after a CR66 engine reset repeats the
+     * colour's low byte over the pixel (a395ffa8 H sweep: only the first
+     * candidate failed; five production boots: the only fill failed).
+     * Later RECTs use the descriptor depth. colour_8bpp keeps every fill
+     * at 8 bpp (the prime does not help); ignore_copy drops BitBLTs. */
+    bool first_rect_8bpp, first_rect_pending, colour_8bpp, ignore_copy;
+    uint32_t draw_log[8][8];
+    unsigned draw_logged;
+    /* f2-92: host colour images (CLIP_LR | SRC_COLOR), the on-chip queue's
+     * occupancy as MM48C60 bits 20:0 (drained per status read; an entry
+     * beyond 32 is an overflow), and engine-only rows below the screen. */
+    bool fifo_model, image_corrupt, drop_offscreen;
+    unsigned fifo_used, fifo_drain, fifo_peak, fifo_overflow;
+    unsigned vram_rows, images, image_words;
+    bool image_active;
+    uint32_t image_left, image_right, image_x, image_y, image_w, image_h, image_row, image_word, image_row_words;
 };
 static struct model m;
 static struct savage2d test_engine;
+/* f1-95 self-test: prime 8x2 fill, marker 4x2 fill, 4x2 BitBLT. */
+#define PROBE_DRAWS 3u
 uint64_t ktime_cycles(void) { return m.us * 1000; }
 static void marker_delay(void) { CHECK(!locks && !initializing); m.us+=marker_cost_us; }
 static void marker_before_register(void)
@@ -275,7 +295,12 @@ static void execute_packet(struct model *p)
         if (p->t23_bit3_conflict && (gbd&0x10000008u)==0x10000008u) engine_bpp=8;
     }
     bool copying=(cmd&0x1e0u)==0x20u, pattern=(cmd&3u)==3u;
+    bool stale_first=p->first_rect_pending;
+    p->first_rect_pending=false;
+    if (!copying && (stale_first || p->colour_8bpp)) engine_bpp=8;
+    if (copying && p->ignore_copy) return;
     unsigned index=copying ? 2 : pattern ? 3 : 2;
+    unsigned rows=p->vram_rows ? p->vram_rows : device.height;
     uint32_t origin=p->packet[index], dimensions=p->packet[index+1];
     unsigned w=dimensions&4095,h=dimensions>>16;
     unsigned bytes=device.bpp/8;
@@ -287,13 +312,13 @@ static void execute_packet(struct model *p)
     for (unsigned y=0; y<h; y++) for (unsigned x=0; x<w; x++) {
         int32_t px=dx+((p->packet[0]&XP) ? (int32_t)x : -(int32_t)x);
         int32_t py=dy+((p->packet[0]&YP) ? (int32_t)y : -(int32_t)y);
-        CHECK(px>=0 && py>=0 && (unsigned)px<device.width && (unsigned)py<device.height);
+        CHECK(px>=0 && py>=0 && (unsigned)px<device.width && (unsigned)py<rows);
         uint8_t *dst=device.mapped+(unsigned)py*device.pitch+(unsigned)px*bytes;
         uint32_t colour=p->packet[1];
         if (copying) {
             int32_t ax=sx+((p->packet[0]&XP) ? (int32_t)x : -(int32_t)x);
             int32_t ay=sy+((p->packet[0]&YP) ? (int32_t)y : -(int32_t)y);
-            CHECK(ax>=0 && ay>=0 && (unsigned)ax<device.width && (unsigned)ay<device.height);
+            CHECK(ax>=0 && ay>=0 && (unsigned)ax<device.width && (unsigned)ay<rows);
             memcpy(dst,device.mapped+(unsigned)ay*device.pitch+(unsigned)ax*bytes,bytes);
         } else {
             if (pattern) {
@@ -311,6 +336,25 @@ static void execute_packet(struct model *p)
     }
 }
 static void model_write(void *,uint32_t,uint32_t);
+/* f2-92: one host data dword of a SRC_COLOR image: little-endian pixels of
+ * the current row, the row padded to a dword; CLIP_LR discards columns. */
+static void image_word(struct model *p, uint32_t value)
+{
+    unsigned bytes=device.bpp/8, rows=p->vram_rows ? p->vram_rows : device.height;
+    for (unsigned b=0;b<4;b+=bytes) {
+        uint32_t column=(p->image_word*4u+b)/bytes;
+        if (column>=p->image_w) break;
+        uint32_t x=p->image_x+column, y=p->image_y+p->image_row;
+        if (x<p->image_left || x>p->image_right) continue;
+        CHECK(x<device.width && y<rows);
+        if (p->drop_offscreen && y>=device.height) continue;
+        uint8_t *dst=device.mapped+y*device.pitch+x*bytes;
+        for (unsigned k=0;k<bytes;k++) dst[k]=(uint8_t)(value>>((p->image_corrupt ? b : b+k)*8));
+    }
+    p->image_words++;
+    if (++p->image_word==p->image_row_words) { p->image_word=0; p->image_row++; }
+    if (p->image_row==p->image_h) { p->image_active=false; p->packets++; p->busy=3; p->images++; }
+}
 static void model_progress(struct model *p)
 {
     /* Inject a delayed parser independently of the register being polled.
@@ -340,6 +384,7 @@ static uint32_t model_read(void *ctx,uint32_t offset)
         if (p->last_status_busy) CHECK(p->us-p->last_status_us>=POLL_US);
         p->last_status_us=p->us; p->status_reads++;
         if (p->status_reads==1) p->first_status_us=p->us;
+        if (p->fifo_model) p->fifo_used=p->fifo_used>p->fifo_drain ? p->fifo_used-p->fifo_drain : 0;
         if (p->dead) value=UINT32_MAX;
         else if (p->wrong_offset || p->stuck) value=0;
         else if (p->idle_after_us && p->us-p->first_status_us<p->idle_after_us)
@@ -347,6 +392,7 @@ static uint32_t model_read(void *ctx,uint32_t offset)
         else if (p->busy) { p->busy--; value=(p->status_value ? p->status_value : 0x00e00000u)|1u; }
         else if (p->contradictory && p->status_reads>1) value=0x004e0000;
         else value=p->status_value ? p->status_value : 0x00e00000u;
+        if (p->fifo_model && value!=UINT32_MAX) value|=p->fifo_used;
         p->last_status_busy = p->busy || (value & 0x1ffffu);
     } else {
         CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
@@ -379,8 +425,13 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
     marker_before_register();
     if (!p->replaying) p->engine_writes++;
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
-    if (offset>=SAVAGE_BCI && offset<SAVAGE_BCI+64) {
+    if (offset>=SAVAGE_BCI && offset<SAVAGE_BCI+4*BCI_FIFO_WORDS) {
         CHECK((p->reg[BCI_CONTROL/4]&15u)==8u);
+        if (p->fifo_model && !p->replaying) {
+            if (++p->fifo_used>BCI_FIFO_WORDS) p->fifo_overflow++;
+            if (p->fifo_used>p->fifo_peak) p->fifo_peak=p->fifo_used;
+        }
+        if (p->image_active) { CHECK(drains>0); image_word(p,value); return; }
         if (p->async_parser && !p->replaying) {
             CHECK(p->deferred_count<ARRAY_SIZE(p->deferred));
             if (!p->deferred_count) p->parser_due_us=p->us+10;
@@ -407,6 +458,10 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
                 CHECK((value&0xffff0000u)==0x96010000u);
                 CHECK((value&0xffffu)==0xe0 || (value&0xffffu)==0xe1);
                 p->expected=2;
+            } else if ((value&0x1e0u)==0x40u) {
+                /* RECT|XP|YP, ROP CC, CLIP_LR, SRC_COLOR, DEST_GBD only. */
+                CHECK(value==0x4bcc4040u);
+                p->expected=4;
             } else {
                 CHECK((value&0xfc00u)==(value&0x8000u));
                 p->expected=(value&3u)==3u ? 7 : 4;
@@ -426,7 +481,19 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
                 p->register_packets++;
                 p->busy=p->gbd_busy ? 3 : 0;
                 if (p->fail_after_gbd && p->register_packets>=p->fail_after_gbd) p->stuck=true;
+            } else if ((p->packet[0]&0x1e0u)==0x40u) {
+                if (p->draw_logged<ARRAY_SIZE(p->draw_log))
+                    memcpy(p->draw_log[p->draw_logged++],p->packet,sizeof(p->draw_log[0]));
+                p->image_left=p->packet[1]&4095u; p->image_right=(p->packet[1]>>16)&4095u;
+                p->image_x=p->packet[2]&4095u; p->image_y=(p->packet[2]>>16)&4095u;
+                p->image_w=p->packet[3]&4095u; p->image_h=(p->packet[3]>>16)&4095u;
+                CHECK(p->image_w && p->image_h && p->image_left<=p->image_right);
+                p->image_row=p->image_word=0;
+                p->image_row_words=(p->image_w*(device.bpp/8)+3u)/4u;
+                p->image_active=true;
             } else {
+                if (p->draw_logged<ARRAY_SIZE(p->draw_log))
+                    memcpy(p->draw_log[p->draw_logged++],p->packet,sizeof(p->draw_log[0]));
                 if (!p->ignore_fill) execute_packet(p);
                 p->packets++; p->busy=3;
                 if (p->fail_after_submit) p->stuck=true;
@@ -507,6 +574,7 @@ static void chip_cr_write(struct model *p,uint8_t index,uint8_t value)
         if (value&2u) {
             p->postreset_enable=false;
             p->depth_preamble_seen=false;
+            p->first_rect_pending=p->first_rect_8bpp;
             p->reset_set_us=0; p->reset_clear_us=0; p->status_reads=0;
             p->reset_engine_writes=p->engine_writes;
         }
@@ -603,6 +671,7 @@ static struct savage_io model_io(void)
 const struct accel_ops *boot_init(const struct fb_device *d, struct vfs *vfs)
 { CHECK(marker_thread_running); boot_calls++; struct savage_io io=model_io(); return init_with_io(d,vfs,&io); }
 static uint8_t *storage;
+static unsigned log_matches(const char *part);
 static void prepare(unsigned bpp)
 {
     memset(&m,0,sizeof(m)); memset(&test_engine,0,sizeof(test_engine));
@@ -677,11 +746,29 @@ static void commands(unsigned bpp, bool async_parser)
     unsigned packets=m.packets;
     q.generation--; CHECK(fbdev_accel_request(&q)==-EAGAIN); CHECK(m.packets==packets);
     q.generation=42; q.rect.src_x=INT32_MAX; CHECK(fbdev_accel_request(&q)==-EINVAL); CHECK(m.packets==packets);
-    q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xffffff; q.background=0x101010;
+    q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xffffff; q.background=0;
     q.cursor_mask[0]=0xc0000000; q.cursor_image[0]=0x40000000;
+    q.cursor_mask[1]=0x81814242; q.cursor_image[1]=0x01804002;
+    q.cursor_mask[31]=0x00018001; q.cursor_image[31]=0x00010001;
+    q.cursor_image[2]=0xffffffff; /* source outside the opaque mask is ignored */
+    /* Independent golden bytes from X.Org savage_cursor.c:115-119:
+     * left-to-right MSB-first AND bytes, then masked XOR bytes, per 16 px.
+     * Cover both byte/word boundaries, last input row and unused 64x64 area.
+     * The old little-endian stores fail the first four-byte golden. */
+    static const uint8_t golden[3][16]={
+        {0x3f,0xff,0x40,0x00, 0xff,0xff,0,0, 0xff,0xff,0,0, 0xff,0xff,0,0},
+        {0x7e,0x7e,0x01,0x80, 0xbd,0xbd,0x40,0x02, 0xff,0xff,0,0, 0xff,0xff,0,0},
+        {0xff,0xfe,0x00,0x01, 0x7f,0xfe,0x00,0x01, 0xff,0xff,0,0, 0xff,0xff,0,0}
+    };
+    memset(m.cursor_page,0xa5,sizeof(m.cursor_page));
     CHECK(!fbdev_accel_request(&q));
-    CHECK(m.cursor_page[0]==0xff && m.cursor_page[1]==0x3f && m.cursor_page[2]==0 && m.cursor_page[3]==0x40);
-    CHECK(m.cursor_page[4]==0xff && m.cursor_page[5]==0xff && !m.cursor_page[6] && !m.cursor_page[7]);
+    for (unsigned y=0;y<64;y++) for (unsigned x=0;x<16;x++) {
+        uint8_t expected=y==0 ? golden[0][x] : y==1 ? golden[1][x] :
+                         y==31 ? golden[2][x] : x%4<2 ? 0xff : 0;
+        CHECK(m.cursor_page[y*16+x]==expected);
+    }
+    for (unsigned i=1024;i<sizeof(m.cursor_page);i++) CHECK(m.cursor_page[i]==0xa5);
+    for (unsigned i=0;i<3;i++) CHECK(m.colour[0][i]==0xff && m.colour[1][i]==0);
     CHECK(m.cr[0x4c]==4 && m.cr[0x4d]==0 && !(m.cr[0x55]&16u));
     q=request(CIUKI_ACCEL_CURSOR_MOVE); q.rect.dst_x=-5; q.rect.dst_y=511;
     unsigned at=m.cr_writes;
@@ -690,6 +777,28 @@ static void commands(unsigned bpp, bool async_parser)
     CHECK(m.cr_sequence[at+5]==0x48);
     q=request(CIUKI_ACCEL_CURSOR_SHOW); q.colour=1;
     CHECK(!fbdev_accel_request(&q) && (m.cr[0x45]&1));
+    const struct desk_cursor_raster *sets[]={desk_cursors,desk_extra_cursors};
+    const unsigned counts[]={13,3};
+    for (unsigned set=0;set<2;set++) for (unsigned n=0;n<counts[set];n++) {
+        const struct desk_cursor_raster *art=&sets[set][n];
+        q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xffffff;
+        memcpy(q.cursor_mask,art->mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,art->image,sizeof(q.cursor_image));
+        CHECK(!fbdev_accel_request(&q));
+        /* Decode individual screen-order bits independently of the driver.
+         * All 4096 pixels, including transparent padding, must match. */
+        for (unsigned y=0;y<64;y++) for (unsigned x=0;x<64;x++) {
+            unsigned at=y*16+(x/16)*4+(x%16)/8, shift=7-x%8;
+            unsigned opaque=x<32 && y<32 && !!(art->mask[y]&(0x80000000u>>x));
+            unsigned light=x<32 && y<32 && !!(art->image[y]&(0x80000000u>>x));
+            CHECK(((m.cursor_page[at]>>shift)&1u)==!opaque);
+            CHECK(((m.cursor_page[at+2]>>shift)&1u)==(opaque && light));
+        }
+    }
+    /* Distinct stack bytes: native RGB565 must be expanded, RGB888 retained. */
+    q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xff0000; q.background=0x00ff00;
+    CHECK(!fbdev_accel_request(&q));
+    CHECK(m.colour[0][0]==0 && m.colour[0][1]==0 && m.colour[0][2]==255);
+    CHECK(m.colour[1][0]==0 && m.colour[1][1]==255 && m.colour[1][2]==0);
     CHECK(!test_engine.ops.stop(&test_engine) && !test_engine.active && !(m.cr[0x45]&1));
     CHECK(m.cr[0x50]==(bpp==16 ? 0x30u : 0x10u)); /* firmware value restored */
     CHECK(m.alias_reads==1 && m.alias_writes==1 && test_engine.operations>10);
@@ -746,6 +855,15 @@ static void failures_and_fallback(void)
     binding_gpu.bar[0]=0xe1000000;binding_gpu.bar[1]=0xe2000000;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
     binding_gpu.bar[1]=device.phys;binding_pci_count=2;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
     binding_pci_count=0;finish();
+    /* f1-97: safe mode never reaches the activation code; the record is
+     * emitted once, and a repeated decision of the same state adds nothing. */
+    memset(&summary_state,0,sizeof(summary_state)); accel_count=0;
+    CHECK(!savage2d_summary(NULL,NULL,NULL));
+    savage2d_summary_safe_mode(); savage2d_summary_safe_mode();
+    CHECK(log_matches("[accel] summary accelerated=0 driver=savage reason=safe_mode")==1 && log_matches("[accel] summary ")==1);
+    summary(true,0);                              /* a flip is a new fact: one more record */
+    CHECK(log_matches("[accel] summary accelerated=1 driver=savage reason=none")==1 && log_matches("[accel] summary ")==2);
+    memset(&summary_state,0,sizeof(summary_state));
 }
 static unsigned log_matches(const char *part)
 {
@@ -784,6 +902,7 @@ static void boot_fixture_mode(bool retain_marker, unsigned bpp)
     prepare(bpp); acceleration=NULL;
     memset(&m,0,sizeof(m)); m.cr[0x66]=1;
     engine=(struct savage2d){0}; attempt_blocked=false; reg_claim=cursor_claim=port_claim=-1;
+    memset(&summary_state,0,sizeof(summary_state));
     registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false;
     binding_allowed=true; binding_claims=0; binding_pci_count=1;
     binding_port_conflict=false; memset(binding_resources,0,sizeof(binding_resources));
@@ -855,8 +974,16 @@ static void deferred_boots(void)
         bool guarded=variant==9; /* queued setup lost its completion proof */
         bool annotated=!ready && engine.status_logged;
         CHECK(acceleration==((ready || guarded) ? &engine.ops : NULL) && marker_commits==((ready || annotated) ? 2u : 1u));
-        CHECK(disk_size==(ready ? 0u : annotated ? 30u : 14u) && m.status_reads<=INITIAL_POLLS+1);
+        /* Each self-test command after the first adds at most four busy reads. */
+        CHECK(disk_size==(ready ? 0u : annotated ? 30u : 14u) &&
+              m.status_reads<=INITIAL_POLLS+1+4*(PROBE_DRAWS-1));
         CHECK(log_matches(ready ? "[accel] savage ready" : "[accel] savage quarantined reason=")==1);
+        /* f1-97: exactly one summary record answers the question in one line. */
+        CHECK(log_matches("[accel] summary ")==1);
+        if (ready) CHECK(log_matches("[accel] summary accelerated=1 driver=savage reason=none")==1);
+        else CHECK(log_matches("[accel] summary accelerated=0 driver=savage reason=")==1 &&
+                   log_matches("[accel] summary accelerated=0 driver=savage reason=none")==0);
+        { bool ok=ready; const char *why=0; CHECK(savage2d_summary(&ok,NULL,&why) && ok==ready && why && (ready ? !strcmp(why,"none") : *why!=0)); }
         if (variant==1 || variant==3 || variant==6 || variant==12) CHECK(!m.status_reads);
         else CHECK(log_matches("savage status reg=48c60 raw=")==1);
         if (variant==1) CHECK(log_matches("engine_probe reg=48c18 raw=ffffffff")==1);
@@ -1100,14 +1227,14 @@ static void failed_access_handoff(void)
     attempt_in_progress=true; /* BEGIN has not yet committed/closed the marker. */
     struct savage_io io=model_io();
     CHECK(!init_with_io(&device,0,&io) && !binding_claims && !m.port_reads && !m.port_writes && !m.packets);
-    CHECK(log_matches("attempt_not_persisted")==1);
+    CHECK(log_matches("quarantined reason=attempt_not_persisted")==1);
     finish();
     const int unqualified[]={0,3,24}; /* measured failure, block writes, tiling */
     for (unsigned i=0;i<ARRAY_SIZE(unqualified);i++) {
         boot_fixture_accel(false);registry_setting_present=true;registry_setting=unqualified[i];
         fbdev_accel_schedule(&settings_vfs);run_accel_init();
         CHECK(!acceleration && !binding_claims && !marker_commits && !m.port_reads && !m.port_writes && !m.packets);
-        CHECK(log_matches("config_unqualified")==1);
+        CHECK(log_matches("quarantined reason=config_unqualified")==1);
         finish();
     }
     registry_setting_present=false;
@@ -1132,7 +1259,9 @@ static void decorated_readbacks(void)
         if (variant==1 || variant==2) CHECK(log_matches("init reg=00038") == 1);
         else CHECK(m.cr[0x38]==0x48 && m.cr[0x39]==0xa0);
         if (!variant || variant==3) {
-            CHECK(m.status_reads==6 && m.delays==5); /* reset plus BCI completion */
+            /* Reset, initial idle, GBD packet, then four reads and three
+             * paced delays per self-test command (model busy=3). */
+            CHECK(m.status_reads==2+4*PROBE_DRAWS && m.delays==2+3*PROBE_DRAWS);
             CHECK(log_matches(variant==3 ? "vga_alias reg=083d5 port=68 alias=48 match=0" : "vga_alias reg=083d5 port=68 alias=68 match=1")==1);
             CHECK(disk_size==0 && engine.active && !engine.quarantined);
         } else {
@@ -1191,7 +1320,8 @@ static void activation_timing(void)
         uint64_t us=terminal ? log_number(terminal," us=") : 0;
         CHECK(terminal && log_number(terminal," trace_us=")==simulated_trace_us);
         if (!variant) CHECK(!m.status_reads && !m.delays && us>=8000+simulated_trace_us);
-        if (variant==2) CHECK(m.delays==5 && engine.reset_us>=20000 && engine.poll_us==15 && simulated_trace_us>0);
+        if (variant==2) CHECK(m.delays==2+3*PROBE_DRAWS && engine.reset_us>=20000 &&
+                              engine.poll_us==15*PROBE_DRAWS && simulated_trace_us>0);
         /* Clock conversion and tick fallback both execute production code. */
         CHECK(hw_now(NULL)==m.us);
         g_cpu_tsc=false; g_ticks=7; CHECK(hw_now(NULL)==7000);
@@ -1244,8 +1374,8 @@ static void initial_idle_diagnostics(void)
             CHECK(engine.idle_value==(variant==3 ? 0x004e0000u : 0x00e00000u));
             /* Status transport records are outside every polling deadline.
              * Only the initial wait and marker command's busy reads count. */
-            CHECK(engine.poll_us==(variant==2 ? 18015u : 15u));
-            CHECK(m.status_reads==(variant==2 ? 24u : 6u));
+            CHECK(engine.poll_us==(variant==2 ? 18000u : 0u)+15*PROBE_DRAWS);
+            CHECK(m.status_reads==(variant==2 ? 20u : 2u)+4*PROBE_DRAWS);
             unsigned initial_samples=log_matches("savage status sample=");
             software_desktop();
             CHECK(engine.operations>0 && log_matches("savage status sample=")==initial_samples);
@@ -1299,6 +1429,19 @@ static unsigned setup_at(uint32_t reg, uint32_t value, unsigned begin)
         if (m.setup[i].reg==reg && m.setup[i].value==value) return i;
     CHECK(false);
     return ARRAY_SIZE(m.setup);
+}
+/* The f1-95 self-test commands as the model executed them, from index
+ * first: prime fill, marker fill, then a forward (XP|YP) GBD BitBLT. */
+static void expect_probe_commands(unsigned first, uint32_t marker, unsigned draws)
+{
+    uint32_t x0=device.width-2*PROBE_W, y0=device.height-PROBE_H;
+    CHECK(m.draw_logged>=first+draws);
+    const uint32_t *p=m.draw_log[first];
+    if (draws>0) CHECK(p[0]==0x4bcc8000u && p[1]==PROBE_PRIME && p[2]==xy(x0,y0) && p[3]==xy(2*PROBE_W,PROBE_H));
+    p=m.draw_log[first+1];
+    if (draws>1) CHECK(p[0]==0x4bcc8000u && p[1]==marker && p[2]==xy(x0+PROBE_W,y0) && p[3]==xy(PROBE_W,PROBE_H));
+    p=m.draw_log[first+2];
+    if (draws>2) CHECK(p[0]==0x4bcc0020u && p[1]==xy(x0+PROBE_W,y0) && p[2]==xy(x0,y0) && p[3]==xy(PROBE_W,PROBE_H));
 }
 static void supersavage_window_and_records(void)
 {
@@ -1365,8 +1508,8 @@ static void supersavage_window_and_records(void)
         }
         CHECK(m.setup_count<ARRAY_SIZE(m.setup));
         if (!variant) {
-            CHECK(acceleration && engine.active && !engine.quarantined && engine.operations==1);
-            CHECK(m.packets==1 && !m.dead_window_writes && m.postreset_enable);
+            CHECK(acceleration && engine.active && !engine.quarantined && engine.operations==PROBE_DRAWS);
+            CHECK(m.packets==PROBE_DRAWS && !m.dead_window_writes && m.postreset_enable);
             CHECK((m.reg[0x816c/4]&GBD_READ_MASK)==(engine.descriptor));
             CHECK(log_matches("bci_test result=ok error=0")==1 && log_matches("read_valid=1 restored=1")==1);
             char raw[32]; snprintf(raw,sizeof(raw),"read=%08x",(engine.descriptor)|~GBD_READ_MASK);
@@ -1419,7 +1562,7 @@ static void halfword_glue_and_16bit_marker(void)
     uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*2;
     uint8_t before[2]; memcpy(before,last,sizeof(before));
     CHECK(!bci_test(&test_engine,&device) && !memcmp(before,last,sizeof(before)));
-    CHECK(m.packets==1 && test_engine.operations==1 && test_engine.cpu_safe);
+    CHECK(m.packets==PROBE_DRAWS && test_engine.operations==PROBE_DRAWS && test_engine.cpu_safe);
     CHECK(!test_engine.ops.stop(&test_engine)); finish();
 
     /* Actual production UC halfword accessors, backed by a byte window. */
@@ -1445,7 +1588,8 @@ static void engine_depth_and_trace_thread(void)
         accel_count=0;
         CHECK(bci_test(&test_engine,&device)==-EIO);
         CHECK(log_matches("wrote=004a8166 read=66666666 read_valid=1 restored=1")==1);
-        CHECK(test_engine.quarantined && test_engine.cpu_safe && m.packets==1);
+        CHECK(log_matches("mismatch phase=fill x=92 y=62 read=66666666")==1);
+        CHECK(test_engine.quarantined && test_engine.cpu_safe && m.packets==2); /* prime, fill */
         CHECK(!memcmp(last,&before,4));
         finish();
     }
@@ -1476,7 +1620,7 @@ static void engine_depth_and_trace_thread(void)
         CHECK(!device_work_requests && simulated_trace_us>0);
         unsigned records=step_count+log_matches("savage init reg="), yields=normal_yields;
         struct fb_rect r={0,0,1,1};
-        CHECK(!fbdev_fill(&r,0x4a8166) && engine.operations==2);
+        CHECK(!fbdev_fill(&r,0x4a8166) && engine.operations==PROBE_DRAWS+1);
         CHECK(step_count+log_matches("savage init reg=")==records && normal_yields==yields);
         /* Exercise the actual reset pacing glue as well as the model delay:
          * 10 ms becomes twenty <=500-us slices on this same normal task. */
@@ -1508,7 +1652,11 @@ static void engine_depth_and_trace_thread(void)
         CHECK(accel_marker_request==ACCEL_MARKER_STATUS && !acceleration);
         CHECK(!blocked ? (!binding_claims && !m.port_reads) : (binding_claims==2 && m.port_reads>0 && !m.packets));
         if (!blocked) changing=false;
-        else { CHECK(log_matches("quarantined reason=bci_test_busy")==1); fbdev_console_end(); }
+        else {
+            CHECK(log_matches("quarantined reason=bci_test_busy")==1 && !log_matches("bci_test mismatch"));
+            CHECK(log_matches("phase=none pixels=16")==1);
+            fbdev_console_end();
+        }
         marker_thread_step();
         CHECK(!accel_queued && disk_size==(!blocked ? 14u : 30u) && marker_commits==(!blocked ? 1u : 2u) && !device_work_requests);
         software_desktop(); finish();
@@ -1563,14 +1711,16 @@ static void gbd_idle_and_async_regressions(void)
         fbdev_accel_schedule(&settings_vfs); run_accel_init();
         init_interleave=NULL;
         CHECK(setup_frames>=20 && setup_consoles==setup_frames && first_setup_frame_us<1000000);
-        CHECK(m.packets==1 && m.packet[0]==0x4bcc8000 && m.packet[1]==0x004a8166);
-        CHECK(m.packet[2]==((device.height-1)<<16 | (device.width-1)) && m.packet[3]==0x00010001);
+        /* A dropped or corrupted prime stops before the marker command. */
+        CHECK(m.packets==(failure ? 1u : PROBE_DRAWS));
+        expect_probe_commands(0,0x004a8166,failure ? 1u : PROBE_DRAWS);
         CHECK(!memcmp(last,&before,4));
         if (failure) {
             CHECK(!acceleration && engine.quarantined && engine.cpu_safe && engine.final_idle_checked);
             CHECK(disk_size==30 && binding_resources[1].state==RS_RELEASED && (engine.submitted && !engine.cpu_safe ? binding_resources[2].state==RS_QUARANTINED && !binding_successor[2] : binding_available(2)));
             CHECK(log_matches("bci_test_readback_failed")>=1 && log_matches("savage init reg=")<=40);
-            if (failure==2) CHECK(log_matches("read=664a8166 read_valid=1 restored=1")==1);
+            if (failure==2) CHECK(log_matches("read=66000000 read_valid=1 restored=1")==1 &&
+                                  log_matches("phase=prime pixels=16")==1);
         } else {
             CHECK(acceleration && !engine.quarantined && log_matches("savage init reg=")==init_count && simulated_trace_us>0);
             CHECK(log_matches("wrote=004a8166 read=004a8166")==1);
@@ -1673,8 +1823,9 @@ static void queued_gbd_depth(void)
         }
         CHECK(!memcmp(frame,device.mapped,device.size));
         free(frame);
-        CHECK(engine.submitted && m.packets==(variant>=3 ? 0u : 1u));
-        CHECK(engine.operations==(variant>=3 ? 0u : 1u));
+        unsigned draws=variant>=3 ? 0u : variant==2 ? 2u : PROBE_DRAWS; /* stale depth stops at the marker */
+        CHECK(engine.submitted && m.packets==draws);
+        CHECK(engine.operations==draws);
         bool ready=variant<2;
         CHECK(engine.quarantined==!ready && engine.active==ready);
         CHECK(!!engine.ops.capabilities(&engine)==ready);
@@ -1738,7 +1889,8 @@ static void shared_enable_and_failure_readbacks(void)
             fbdev_accel_schedule(&settings_vfs); run_accel_init();
             uint32_t gbd=bpp==16 ? 0x10100401u : 0x10200401u;
             uint8_t cr50=bpp==16 ? 0xd1 : 0xf1;
-            CHECK(engine.descriptor==gbd && m.register_packets==4 && m.packets==1);
+            CHECK(engine.descriptor==gbd && m.register_packets==4 &&
+                  m.packets==(!variant ? PROBE_DRAWS : variant==4 ? 1u : 2u));
             CHECK(log_matches("savage init reg=")==init_count && init_count<INIT_RECORDS);
             CHECK(log_matches("savage probe pci=")==1 && log_matches("savage mapped mmio=")==1);
             CHECK(log_matches(variant ? "caps=0 init_result=-5" : "caps=1 init_result=0")==1);
@@ -1856,10 +2008,11 @@ static void supersavage_completion_fence(void)
         CHECK(disk_size==(ready ? 0u : 30u));
         CHECK(m.cr[0x66]==1 && m.reg[BCI_CONTROL/4]==8 && !m.reg[0x48c0c/4]);
         if (ready || variant==7) {
-            CHECK(m.events==2 && m.waits==2 && m.register_packets==4 && m.packets==1);
-            CHECK(!engine.event_pending && engine.cpu_safe && engine.event_tag==2);
+            unsigned draws=ready ? PROBE_DRAWS : 1u; /* dropped prime stops the test */
+            CHECK(m.events==1+draws && m.waits==1+draws && m.register_packets==4 && m.packets==draws);
+            CHECK(!engine.event_pending && engine.cpu_safe && engine.event_tag==1+draws);
             CHECK(log_matches("savage completion reg=48c64")==1);
-            CHECK(log_matches("reg=48c64 wrote=")==(ready ? 2u : 3u)); /* plus fault snapshot */
+            CHECK(log_matches("reg=48c64 wrote=")==(ready ? 1+draws : 3u)); /* plus fault snapshot */
             CHECK(log_matches(ready ? "bci_test result=ok" : "bci_test_readback_failed")>=1);
             if (variant==6) CHECK(log_matches("reg=48c64 wrote=00000001 read=00000001 bank=event")==1);
         } else {
@@ -1966,7 +2119,7 @@ static void supersavage_depth_preamble(void)
         CHECK(engine.ops.capabilities(&engine) && acceleration==&engine.ops && !disk_size);
         CHECK(engine.saved50==saved50 && !memcmp(last,&before,bpp/8));
         CHECK(log_matches(bpp==32 ? "wrote=00cd00e8 read=00cd00e8" : "wrote=000000e8 read=000000e8")==1);
-        CHECK(log_matches("order=cr50_before_gbd")==1 && m.register_packets==4 && m.packets==1);
+        CHECK(log_matches("order=cr50_before_gbd")==1 && m.register_packets==4 && m.packets==PROBE_DRAWS);
         unsigned at=setup_at(0x100050,bpp==32 ? 0xf1 : 0xd1,0);
         setup_at(0x816c,0x10000001,at+1);
         printf("f1-88 Amendment 1 corrected depth=%u firmware_cr50=%02x preamble_bpp=%u marker=exact caps=%u PASS\n",
@@ -1995,7 +2148,7 @@ static void hardware_sweep_default(void)
         if (!pass) {
             CHECK(!engine.touched && !engine.active && !engine.submitted && !acceleration);
             CHECK(!disk_size && !marker_commits && !binding_claims && !m.port_reads && !m.port_writes);
-            CHECK(log_matches("config_unqualified")==1);
+            CHECK(log_matches("quarantined reason=config_unqualified")==1);
             CHECK(!memcmp(last,&before,4));
             finish(); continue;
         }
@@ -2024,6 +2177,398 @@ static void hardware_sweep_default(void)
     registry_setting_present=false;
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
+/* f1-95: X.Org's SuperSavage global descriptor, independently derived from
+ * xf86-video-savage: savage_driver.h HIGH {Stride; Bpp; ResBWTile} and
+ * SavageSetGBD_PM (savage_accel.c): ResBWTile = TILE_FORMAT_LINEAR | 0x10,
+ * S3_GLB_BD_HIGH = HiPart | BCI_ENABLE_TWISTER | S3_LITTLE_ENDIAN | S3_BD64,
+ * with savage_bci.h BCI_ENABLE_TWISTER=0, S3_LITTLE_ENDIAN=0, S3_BD64=1. */
+static uint32_t xorg_pm_gbd_high(unsigned stride_pixels, unsigned bpp)
+{
+    uint32_t res_bw_tile=0u /* TILE_FORMAT_LINEAR */ | 0x10u /* block write disable */;
+    uint32_t hi=(res_bw_tile<<24) | ((bpp&0xffu)<<16) | (stride_pixels&0xffffu);
+    return hi | 0u /* BCI_ENABLE_TWISTER */ | 0u /* S3_LITTLE_ENDIAN */ | 1u /* S3_BD64 */;
+}
+static void t23_fixture(unsigned bpp, uint32_t before)
+{
+    boot_fixture_mode(false,bpp);
+    free(storage);
+    device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
+    device.size=device.height*device.pitch; device.mode_id=bpp==32 ? 0x118 : 0x117;
+    storage=malloc(device.size+32); CHECK(storage!=NULL);
+    memset(storage,0xa5,device.size+32); device.mapped=storage+16;
+    /* Firmware state recorded on the T23 (b453bc92 serial): CR50=30,
+     * CR66 engine enabled, MM48C18=8, status 07e00000, event tag 0. */
+    m.cr[0x66]=0x89; m.cr[0x50]=0x30; m.misc=0xef; m.vga_enable=1;
+    m.reg[BCI_CONTROL/4]=8; m.status_value=0x07e00000;
+    m.exact_clock=m.strict_window=m.first_rect_8bpp=true;
+    memcpy(device.mapped+device.size-bpp/8,&before,bpp/8);
+}
+static void save_probe_block(uint32_t *out)
+{ for (unsigned i=0;i<PROBE_PIXELS;i++) out[i]=probe_read(&device,i); }
+static bool probe_block_equals(const uint32_t *saved)
+{
+    for (unsigned i=0;i<PROBE_PIXELS;i++) if (probe_read(&device,i)!=saved[i]) return false;
+    return true;
+}
+static void f1_95_first_fill_after_reset(void)
+{
+    /* 1. The production descriptor is X.Org's PM encoding bit for bit. */
+    for (unsigned bpp=16;bpp<=32;bpp+=16) {
+        struct fb_device d={.width=1024,.height=768,.pitch=1024*(bpp/8),.size=768*1024*(bpp/8),
+            .bpp=bpp,.present=true,.mode_id=bpp==32 ? 0x118 : 0x117};
+        struct savage_config cfg;
+        CHECK(savage2d_config(1,&d,&cfg));
+        CHECK(cfg.descriptor==xorg_pm_gbd_high(d.pitch/(bpp/8),bpp));
+        CHECK(cfg.descriptor==(bpp==32 ? 0x10200401u : 0x10100401u));
+        CHECK(cfg.depth==(bpp==32 ? 3u : 1u)); /* RE046-B CR50_5-4: 11=4 bytes, 01=2 */
+        /* RE046-B MM816C fields: BDS=1, BE (Savage4 BCI enable)=0, stride
+         * bits 12-4 in units of 16 pixels, colour depth, linear, BW off. */
+        CHECK((cfg.descriptor&1u) && !(cfg.descriptor&8u) && ((cfg.descriptor>>4)&0x1ffu)==1024u/16u);
+        CHECK(((cfg.descriptor>>16)&0xffu)==bpp && !((cfg.descriptor>>24)&3u) && (cfg.descriptor&0x10000000u));
+        /* PM preamble: bci_enable | S3_BD64 | 0x10000000 (savage_accel.c). */
+        CHECK((0x10000000u|(cfg.descriptor&9u))==(0u|1u|0x10000000u));
+    }
+
+    /* 2. Old sequence: engine start, then one fill as the first RECT. The
+     * T23 values reproduce exactly: completed, idle, tag 2, read 4a4a4a4a.
+     * The very same command with the same descriptor is exact afterwards. */
+    t23_fixture(32,0x00181c10);
+    struct savage_io io=model_io(); struct savage2d old={0};
+    init_count=0;
+    CHECK(!savage2d_start(&old,&io,&device,true,NULL,0));
+    CHECK(old.descriptor==0x10200401 && (m.reg[0x816c/4]&GBD_READ_MASK)==0x10200401 && m.bci_gbd[1]==0x10200401);
+    uint8_t *last=device.mapped+device.size-4;
+    struct fb_rect pixel={1023,767,1,1};
+    uint32_t read=0, marker=probe_marker(0x00181c10,4);
+    CHECK(marker==0x0042b94a);
+    CHECK(!fill_rect(&old,&pixel,marker));
+    memcpy(&read,last,4);
+    CHECK(read==0x4a4a4a4a && old.event_tag==2 && old.event_status==2 && old.status==0x07e00000);
+    CHECK(!fill_rect(&old,&pixel,marker));
+    memcpy(&read,last,4); CHECK(read==0x0042b94a);
+    printf("f1-95 T23 old single-fill self-test: GBD=%08x wrote=%08x first_read=4a4a4a4a second_read=%08x status=%08x tag=%04x\n",
+        old.descriptor,marker,read,old.status,old.event_tag);
+    CHECK(!old.ops.stop(&old));
+    finish();
+
+    /* 3. New production activation on the same model and T23 state. */
+    static const struct { const char *bank; uint32_t reg; unsigned width; uint32_t wrote; } t23[]={
+        /* build/codex/t23-b453bc92-serial.txt lines 232-262 (bank/reg/width/wrote) */
+        {"port",0x3c3,8,0x01},{"port",0x3c2,8,0xef},{"cr",0x38,8,0x48},{"cr",0x39,8,0xa0},
+        {"cr",0x40,8,0x01},{"sr",0x08,8,0x06},{"sr",0x26,8,0x40},{"port",0x3c2,8,0xef},
+        {"cr",0x66,8,0x8b},{"cr",0x66,8,0x89},{"cr",0x40,8,0x01},{"cr",0x31,8,0x0c},
+        {"mmio",0x48c18,32,0},{"mmio",0x8128,32,0xffffffff},{"mmio",0x812c,32,0xffffffff},
+        {"mmio",0x8134,16,0x27},{"mmio",0x8136,16,0x07},{"mmio",0x48c10,32,0x00700040},
+        {"mmio",0x48c0c,32,0},{"mmio",0x48c18,32,8},{"cr",0x50,8,0xf1},
+        {"mmio",0x816c,32,0x10000001},{"mmio",0x8168,32,0},{"mmio",0x816c,32,0x10200401},
+        {"event",0x48c64,32,1},{"bci",0xe0,32,0},{"bci",0xe1,32,0x10200401},
+    };
+    for (unsigned bpp=16;bpp<=32;bpp+=16) {
+        uint32_t before=bpp==32 ? 0x00181c10 : 0x1c10;
+        t23_fixture(bpp,before);
+        uint32_t saved[PROBE_PIXELS]; save_probe_block(saved);
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        uint32_t want=probe_marker(before,bpp/8);
+        CHECK(want==(bpp==32 ? 0x0042b94au : 0xb94au));
+        CHECK(acceleration==&engine.ops && engine.active && !engine.quarantined && !disk_size);
+        CHECK(engine.ops.capabilities(&engine) && engine.cpu_safe && probe_block_equals(saved));
+        CHECK(m.packets==PROBE_DRAWS && engine.operations==PROBE_DRAWS && m.register_packets==4);
+        expect_probe_commands(0,want,PROBE_DRAWS);
+        CHECK(init_count==ARRAY_SIZE(t23)+PROBE_DRAWS);
+        for (unsigned i=0;i<ARRAY_SIZE(t23);i++) {
+            uint32_t wrote=t23[i].wrote;
+            if (bpp==16 && t23[i].reg==0x50) wrote=0xd1;
+            if (bpp==16 && (t23[i].reg==0x816c || t23[i].reg==0xe1) && wrote==0x10200401) wrote=0x10100401;
+            CHECK(!strcmp(init_records[i].bank,t23[i].bank) && init_records[i].reg==t23[i].reg &&
+                  init_records[i].width==t23[i].width && init_records[i].wrote==wrote);
+        }
+        for (unsigned i=0;i<PROBE_DRAWS;i++) {
+            const unsigned at=ARRAY_SIZE(t23)+i;
+            CHECK(!strcmp(init_records[at].bank,"event") && init_records[at].wrote==2+i && init_records[at].read==2+i);
+        }
+        char line[200];
+        CHECK(log_matches("bci_test phase=prime x=1016 y=766 w=8 h=2 wrote=00000000 cmd=4bcc8000")==1);
+        snprintf(line,sizeof(line),"bci_test phase=fill x=1023 y=767 wrote=%08x before=%08x cmd=4bcc8000 block=1020,766+4x2",want,before);
+        CHECK(log_matches(line)==1);
+        CHECK(log_matches("bci_test phase=copy src=1020,766 dst=1016,766 w=4 h=2 cmd=4bcc0020")==1);
+        snprintf(line,sizeof(line),"bci_test result=ok error=0 wrote=%08x read=%08x read_valid=1 restored=1 status=07e00000 status_valid=1 phase=done pixels=16",want,want);
+        CHECK(log_matches(line)==1 && !log_matches("bci_test mismatch"));
+        snprintf(line,sizeof(line),"mode=%u bpp=%u pitch=%u caps=1 init_result=0",bpp==32 ? 280u : 279u,bpp,device.pitch);
+        CHECK(log_matches(line)==1 && log_matches("savage ready us=")==1);
+        snprintf(line,sizeof(line),"completion reg=48c64 before=00000003 requested=0004 observed=00000004 pending=0 status=07e00000 idle_bits=7 fifo_used=0");
+        CHECK(log_matches(line)==1);
+        /* Desktop operations after activation are exact. */
+        struct fb_rect r={100,100,20,10};
+        CHECK(!fbdev_fill(&r,0x00123456));
+        uint8_t expected[4]; reference_pixel(&device,expected,0x00123456);
+        CHECK(!memcmp(device.mapped+105*device.pitch+110*(bpp/8),expected,bpp/8));
+        CHECK(!fbdev_copy_to(&device,&r,300,200));
+        CHECK(!memcmp(device.mapped+205*device.pitch+310*(bpp/8),expected,bpp/8));
+        printf("f1-95 T23 depth=%u trace=%u/%u records match self-test=prime,fill,copy wrote=%08x caps=%u restored=16 PASS\n",
+            bpp,(unsigned)ARRAY_SIZE(t23),init_count,want,engine.ops.capabilities(&engine));
+        CHECK(!engine.ops.stop(&engine) && m.cr[0x50]==0x30);
+        finish();
+    }
+
+    /* 4. Safety net: an engine that stays 8 bpp, drops the copy or writes
+     * part of a rectangle still quarantines, with the block restored. */
+    for (unsigned variant=0;variant<3;variant++) {
+        t23_fixture(32,0x00181c10);
+        m.colour_8bpp=variant==0; m.ignore_copy=variant==1; m.partial=variant==2;
+        uint32_t saved[PROBE_PIXELS]; save_probe_block(saved);
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        CHECK(!acceleration && engine.quarantined && !engine.active && engine.cpu_safe);
+        CHECK(!engine.ops.capabilities(&engine) && disk_size==30 && probe_block_equals(saved));
+        CHECK(log_matches("bci_test result=failed error=-5")==1 && log_matches("read_valid=1 restored=1")==1);
+        CHECK(log_matches("quarantined reason=bci_test_readback_failed")==1);
+        static const char *mismatch[]={"mismatch phase=fill x=1020 y=766 read=4a4a4a4a",
+            "mismatch phase=copy x=1016 y=766 read=00000000","mismatch phase=prime x=1021 y=766 read=a5a5a5a5"};
+        CHECK(log_matches(mismatch[variant])==1);
+        CHECK(m.packets==(variant==0 ? 2u : variant==1 ? 3u : 1u));
+        printf("f1-95 safety variant=%u %s quarantined=1 restored=16\n",variant,mismatch[variant]);
+        software_desktop(); finish();
+    }
+
+    /* 5. A marker invariant under low-byte repetition is never used. */
+    for (uint32_t before=0;before<0x10000;before+=0x101) {
+        uint32_t c32=probe_marker(before|0x005a0000u,4), c16=probe_marker(before,2);
+        CHECK(c32 && ((c32&0xffu)*0x01010101u)!=c32 && !(c32>>24));
+        CHECK(c16 && ((c16&0xffu)*0x0101u)!=c16 && !(c16>>16));
+    }
+    CHECK(probe_marker(0x005aa55a,4)==0x00a55a3c && probe_marker(0xd22d,2)==0x2d4b);
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+    puts("f1-95 Savage BCI: X.Org PM descriptor, T23 trace, old first fill 4a4a4a4a, primed fill+copy exact PASS");
+}
+/* f2-92: the display service. The production fbdev.c pause releases the
+ * presenter lock between 1 ms slices; this preemption point checks that no
+ * lock is held, the request keeps its drawing claim and mode changes wait. */
+static unsigned preempt_calls, preempt_change_refusals;
+void grants_display_yield(void)
+{
+    preempt_calls++;
+    CHECK(!locks && drawing==PRESENT_BUSY && accel_inflight);
+    if (fbdev_change_begin()==-EBUSY) preempt_change_refusals++;
+}
+static uint8_t *service_storage;
+static void service_prepare(unsigned bpp, unsigned vram_rows, unsigned first)
+{
+    prepare(bpp); free(storage);
+    service_storage=malloc((size_t)device.pitch*vram_rows+32); CHECK(service_storage!=NULL);
+    memset(service_storage,0xa5,(size_t)device.pitch*vram_rows+32);
+    storage=service_storage; device.mapped=storage+16;
+    test_engine.rows=vram_rows; test_engine.offscreen_first=first; m.vram_rows=vram_rows;
+    preempt_calls=preempt_change_refusals=0; accel_count=0;
+}
+static void service_finish(unsigned vram_rows)
+{
+    for (unsigned i=0;i<16;i++) CHECK(storage[i]==0xa5 && storage[16+(size_t)device.pitch*vram_rows+i]==0xa5);
+    free(storage); storage=NULL; acceleration=NULL;
+}
+static uint32_t *xrgb_rows(unsigned w, unsigned h, uint32_t seed)
+{
+    uint32_t *rows=malloc((size_t)w*h*4); CHECK(rows!=NULL);
+    for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) rows[y*w+x]=0xff000000u|((seed+x*2654435761u+y*40503u)&0xffffffu);
+    return rows;
+}
+static bool pixel_is(unsigned x, unsigned y, uint32_t rgb)
+{
+    uint8_t want[4]; reference_pixel(&device,want,rgb);
+    return !memcmp(device.mapped+y*device.pitch+x*(device.bpp/8),want,device.bpp/8);
+}
+static void f2_92_service(unsigned bpp)
+{
+    const unsigned vram_rows=160, first=72;
+    service_prepare(bpp,vram_rows,first);
+    unsigned bytes=bpp/8;
+    /* OFFSCREEN: (end << 16) | first while the engine is ready. */
+    uint8_t *untouched=malloc(device.size); CHECK(untouched!=NULL); memcpy(untouched,device.mapped,device.size);
+    struct ciuki_accel_request q=request(CIUKI_ACCEL_OFFSCREEN);
+    CHECK(fbdev_accel_request(&q)==(int)((vram_rows<<16)|first));
+    /* The first use proved the write and the offscreen copy on the saved
+     * self-test block, restored afterwards. */
+    CHECK(test_engine.write_state==1 && test_engine.offscreen_ok && test_engine.writes==2 && test_engine.operations>=3);
+    CHECK(!memcmp(untouched,device.mapped,device.size)); free(untouched);
+    CHECK(log_matches("[accel] savage write_test result=ok phase=done write=1 offscreen=1")==1);
+    /* Visible clipped write: 40x9 source at (3,5), clip (10,7)+21x4. */
+    uint32_t *rows=xrgb_rows(40,9,0x135);
+    uint32_t *keep=malloc(40*9*4); CHECK(keep!=NULL); memcpy(keep,rows,40*9*4);
+    uint8_t *before=malloc(device.size); CHECK(before!=NULL); memcpy(before,device.mapped,device.size);
+    struct fb_rect dst={3,5,40,9}, clip={10,7,21,4};
+    unsigned images=m.images, words=m.image_words;
+    CHECK(fbdev_accel_write(42,&dst,&clip,rows,40*4)==0 && m.images==images+1 && !locks && !drawing);
+    CHECK(m.draw_log[m.draw_logged-1][0]==0x4bcc4040u);
+    CHECK(m.draw_log[m.draw_logged-1][1]==((30u<<16)|10u));       /* CLIP_LR(10, 30) */
+    CHECK(m.draw_log[m.draw_logged-1][2]==((7u<<16)|10u) && m.draw_log[m.draw_logged-1][3]==((4u<<16)|21u));
+    CHECK(m.image_words-words==4u*((21u*bytes+3u)/4u));           /* only clipped pixels sent */
+    for (unsigned y=0;y<device.height;y++) for (unsigned x=0;x<device.width;x++) {
+        bool inside=x>=10 && x<31 && y>=7 && y<11;
+        if (inside) CHECK(pixel_is(x,y,keep[(y-5)*40+(x-3)]&0xffffffu));
+        else CHECK(!memcmp(device.mapped+y*device.pitch+x*bytes,before+y*device.pitch+x*bytes,bytes));
+    }
+    CHECK(test_engine.writes==3 && !test_engine.quarantined && test_engine.ops.capabilities(&test_engine)&1u);
+    /* Queue throttling: a 96x12 band never holds more than 32 entries. */
+    free(rows); rows=xrgb_rows(96,12,0x777); memcpy(keep,rows,40*9*4);
+    m.fifo_model=true; m.fifo_drain=5; m.fifo_peak=m.fifo_overflow=0;
+    unsigned waits=(unsigned)test_engine.fifo_waits;
+    struct fb_rect band={0,40,96,12};
+    CHECK(fbdev_accel_write(42,&band,&band,rows,96*4)==0);
+    /* Filled to capacity, never beyond: each status read bounds the burst. */
+    CHECK(!m.fifo_overflow && m.fifo_peak==BCI_FIFO_WORDS);
+    printf("f2-92 bpp=%u queue: overflow=%u peak=%u waits=%llu\n",bpp,m.fifo_overflow,m.fifo_peak,(unsigned long long)(test_engine.fifo_waits-waits));
+    for (unsigned y=40;y<52;y++) for (unsigned x=0;x<96;x+=7) CHECK(pixel_is(x,y,0x777+x*2654435761u+(y-40)*40503u));
+    m.fifo_model=false;
+    /* Offscreen write, then an offscreen-to-visible copy. */
+    free(rows); rows=xrgb_rows(32,6,0x2468);
+    uint32_t *reference=malloc(32*6*4); CHECK(reference!=NULL); memcpy(reference,rows,32*6*4);
+    struct fb_rect off={0,first+10,32,6};
+    CHECK(fbdev_accel_write(42,&off,&off,rows,32*4)==0);
+    q=request(CIUKI_ACCEL_COPY); q.rect=(struct ciuki_rect){0,(int32_t)first+10,50,2,32,6};
+    CHECK(fbdev_accel_request(&q)==0);
+    for (unsigned y=0;y<6;y++) for (unsigned x=0;x<32;x++) CHECK(pixel_is(50+x,2+y,reference[y*32+x]&0xffffffu));
+    /* Visible to offscreen and back, both ends validated. */
+    q.rect=(struct ciuki_rect){50,2,0,(int32_t)first+40,32,6}; CHECK(fbdev_accel_request(&q)==0);
+    q.rect=(struct ciuki_rect){0,(int32_t)first+40,10,20,32,6}; CHECK(fbdev_accel_request(&q)==0);
+    for (unsigned y=0;y<6;y++) for (unsigned x=0;x<32;x+=5) CHECK(pixel_is(10+x,20+y,reference[y*32+x]&0xffffffu));
+    unsigned packets=m.packets;
+    q.rect=(struct ciuki_rect){0,(int32_t)device.height,0,0,8,2};   /* the gap below the screen */
+    CHECK(fbdev_accel_request(&q)==-EINVAL);
+    q.rect=(struct ciuki_rect){0,(int32_t)vram_rows-1,0,0,8,2};     /* past the lease */
+    CHECK(fbdev_accel_request(&q)==-EINVAL);
+    q.rect=(struct ciuki_rect){0,(int32_t)first,0,(int32_t)device.height-1,8,2}; /* straddles */
+    CHECK(fbdev_accel_request(&q)==-EINVAL && m.packets==packets);
+    free(rows); rows=xrgb_rows(8,2,1);
+    struct fb_rect gap={0,(int32_t)device.height+1,8,2};
+    CHECK(fbdev_accel_write(42,&gap,&gap,rows,8*4)==-EINVAL && m.packets==packets);
+    /* Bounded 1 ms slices: an engine busy for 5 ms of model time. */
+    free(rows); rows=xrgb_rows(16,4,0x99);
+    m.exact_clock=true; m.idle_after_us=5000; m.status_reads=0; m.first_status_us=0;
+    q=request(CIUKI_ACCEL_FILL); q.rect=(struct ciuki_rect){0,0,4,4,30,20}; q.colour=0x445566;
+    unsigned pauses=(unsigned)test_engine.pauses, preempts=preempt_calls, refusals=preempt_change_refusals;
+    CHECK(fbdev_accel_request(&q)==0 && !test_engine.quarantined);
+    CHECK(test_engine.pauses>pauses && preempt_calls-preempts==test_engine.pauses-pauses &&
+          preempt_change_refusals-refusals==preempt_calls-preempts);
+    CHECK(pixel_is(4,4,0x445566) && pixel_is(33,23,0x445566) && !locks && !drawing && !accel_inflight);
+    printf("f2-92 bpp=%u slices: busy 5 ms engine, pauses=%llu lock released each time, mode change refused while in flight\n",
+        bpp,(unsigned long long)(test_engine.pauses-pauses));
+    m.idle_after_us=0;
+    /* A slow engine (30 ms): the 20 ms wait times out and quarantines; the
+     * final bounded idle proof then lets the CPU finish the request. */
+    m.idle_after_us=30000; m.status_reads=0; m.first_status_us=0; pauses=(unsigned)test_engine.pauses;
+    uint64_t begin=m.us;
+    q.rect=(struct ciuki_rect){0,0,40,30,10,10}; q.colour=0x112233;
+    CHECK(fbdev_accel_request(&q)==0 && test_engine.quarantined && test_engine.cpu_safe);
+    CHECK(pixel_is(40,30,0x112233) && pixel_is(49,39,0x112233));
+    CHECK(test_engine.pauses-pauses<=2u*(WAIT_US/SLICE_US)+2u && m.us-begin<=2u*WAIT_US+2u*SLICE_US);
+    printf("f2-92 bpp=%u slow engine: quarantined after %llu model us, %llu slices, CPU fill after the idle proof\n",
+        bpp,(unsigned long long)(m.us-begin),(unsigned long long)(test_engine.pauses-pauses));
+    m.idle_after_us=0;
+    /* Software fallback: visible writes by the CPU, no offscreen rows. */
+    struct fb_rect visible={60,50,16,4};
+    CHECK(fbdev_accel_write(42,&visible,&visible,rows,16*4)==1);
+    CHECK(pixel_is(60,50,0x99u+0u*2654435761u) && pixel_is(75,53,(0x99u+15u*2654435761u+3u*40503u)&0xffffffu));
+    q=request(CIUKI_ACCEL_OFFSCREEN); CHECK(fbdev_accel_request(&q)==0);
+    free(rows); rows=xrgb_rows(8,2,1);
+    CHECK(fbdev_accel_write(42,&off,&off,rows,8*4)==-EINVAL);
+    /* A stuck engine: bounded, quarantined, the CPU guard stays closed. */
+    m.exact_clock=false; free(rows); free(keep); free(before); free(reference);
+    service_finish(vram_rows);
+    service_prepare(bpp,vram_rows,first); m.exact_clock=true; m.stuck=true;
+    pauses=(unsigned)test_engine.pauses; begin=m.us;
+    q=request(CIUKI_ACCEL_FILL); q.rect=(struct ciuki_rect){0,0,40,30,10,10}; q.colour=0x112233;
+    int result=fbdev_accel_request(&q);
+    CHECK(result==-EIO && test_engine.quarantined && !test_engine.cpu_safe && !fbdev_console_begin());
+    CHECK(test_engine.pauses-pauses<=2u*(WAIT_US/SLICE_US)+2u && m.us-begin<=2u*WAIT_US+2u*SLICE_US);
+    printf("f2-92 bpp=%u stuck engine: result=%d slices=%llu model_us=%llu quarantined=1 cpu_guard=closed\n",
+        bpp,result,(unsigned long long)(test_engine.pauses-pauses),(unsigned long long)(m.us-begin));
+    /* A queue that never drains during a write: the same bound. */
+    service_finish(vram_rows);
+    service_prepare(bpp,vram_rows,first); m.exact_clock=true;
+    q=request(CIUKI_ACCEL_OFFSCREEN); CHECK(fbdev_accel_request(&q)==(int)((vram_rows<<16)|first));
+    m.fifo_model=true; m.fifo_drain=0;
+    rows=xrgb_rows(64,4,3); begin=m.us;
+    struct fb_rect jam={0,0,64,4};
+    CHECK(fbdev_accel_write(42,&jam,&jam,rows,64*4)<0 && test_engine.quarantined && !m.fifo_overflow);
+    CHECK(m.us-begin<=2u*WAIT_US+2u*SLICE_US && !strcmp(test_engine.reason,"fifo_timeout"));
+    printf("f2-92 bpp=%u full queue: reason=%s model_us=%llu overflow=0\n",bpp,test_engine.reason,(unsigned long long)(m.us-begin));
+    free(rows); m.fifo_model=false; m.stuck=false;
+    /* A wrong image (lanes) disables writes and offscreen rows only; a
+     * dropped offscreen write disables only the offscreen rows. */
+    for (unsigned variant=0;variant<2;variant++) {
+        service_finish(vram_rows);
+        service_prepare(bpp,vram_rows,first);
+        if (variant==0) m.image_corrupt=true; else m.drop_offscreen=true;
+        q=request(CIUKI_ACCEL_OFFSCREEN); CHECK(fbdev_accel_request(&q)==0);
+        CHECK(test_engine.write_state==(variant==0 ? -1 : 1) && !test_engine.offscreen_ok && !test_engine.quarantined);
+        CHECK(log_matches(variant==0 ? "write_test result=failed phase=write write=0 offscreen=0" :
+                                       "write_test result=ok phase=offscreen write=1 offscreen=0")==1);
+        rows=xrgb_rows(16,4,0x55);
+        struct fb_rect visible={8,8,16,4};
+        CHECK(fbdev_accel_write(42,&visible,&visible,rows,16*4)==(variant==0 ? 1 : 0));
+        CHECK(pixel_is(8,8,0x55u) && pixel_is(23,11,(0x55u+15u*2654435761u+3u*40503u)&0xffffffu));
+        q=request(CIUKI_ACCEL_FILL); q.rect=(struct ciuki_rect){0,0,30,30,8,8}; q.colour=0x0a0b0c;
+        unsigned packets=m.packets;
+        CHECK(!fbdev_accel_request(&q) && m.packets==packets+1 && pixel_is(30,30,0x0a0b0c));
+        free(rows); m.image_corrupt=m.drop_offscreen=false;
+        printf("f2-92 bpp=%u write self-test variant=%s: write=%d offscreen=%u, fills unaffected\n",
+            bpp,variant==0 ? "corrupt_image" : "dropped_offscreen",test_engine.write_state,test_engine.offscreen_ok);
+    }
+    m.exact_clock=false;
+    service_finish(vram_rows);
+    printf("f2-92 bpp=%u display service: clipped write, queue <=32, offscreen write/copy, bounds, slices, bounded stuck wait, software fallback PASS\n",bpp);
+}
+/* The production instance: used=1 after the first engine-drawn request,
+ * never from the self-test, and a drawing failure flips the indicator. */
+static char splash_text[96];
+static unsigned splash_calls;
+void console_splash_accel(bool accelerated, bool used, const char *reason)
+{
+    splash_calls++;
+    snprintf(splash_text,sizeof(splash_text),"%s%s%s%s",
+        accelerated && used ? "2D acceleration: YES" : "2D engine: ",
+        !accelerated ? "NO (" : used ? "" : "OK (drawing: software)",
+        accelerated || !reason ? "" : reason, accelerated ? "" : ")");
+}
+static void f2_92_offscreen_span(void)
+{
+    /* T23 (5a10eef4 serial): mode 280, 1024x768x32, pitch 4096, VBE VRAM
+     * 15532032, cursor page at (vram - 4096) & ~4095 = 15527936. */
+    struct fb_device t23={.width=1024,.height=768,.pitch=4096,.size=4096u*768u,.phys=0xe8000000,.bpp=32,.present=true};
+    uint32_t first=0, end=0;
+    CHECK(savage2d_offscreen_span(&t23,15532032u,15527936u,&first,&end) && first==768 && end==2048);
+    CHECK(savage2d_offscreen_span(&t23,15532032u,0,&first,&end) && first==768 && end==2048);
+    struct fb_device rgb565=t23; rgb565.pitch=2048; rgb565.size=2048u*768u; rgb565.bpp=16;
+    CHECK(savage2d_offscreen_span(&rgb565,15532032u,15527936u,&first,&end) && first==768 && end==2048);
+    struct fb_device odd=t23; odd.size=4096u*768u+100u;       /* a partial row stays with the scanout */
+    CHECK(savage2d_offscreen_span(&odd,15532032u,0,&first,&end) && first==769);
+    CHECK(savage2d_offscreen_span(&t23,4u*1024u*1024u,0,&first,&end) && first==768 && end==1024);
+    CHECK(!savage2d_offscreen_span(&t23,4096u*768u,0,&first,&end));       /* nothing below the screen */
+    CHECK(!savage2d_offscreen_span(&t23,15532032u,4096u*700u,&first,&end)); /* cursor inside the scanout */
+    CHECK(!savage2d_offscreen_span(&t23,0,0,&first,&end));
+    struct fb_device high=t23; high.phys=0xffc00000u;          /* would wrap the 32-bit space */
+    CHECK(!savage2d_offscreen_span(&high,15532032u,0,&first,&end));
+    puts("f2-92 offscreen span: T23 rows 768-2047 (5 MiB below the scanout, cursor and 2048-line limits), 16 bpp, partial row, small VRAM, wrap PASS");
+}
+static void f2_92_used_and_flip(void)
+{
+    boot_fixture_accel(false); m.busy=12; splash_calls=0;
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
+    CHECK(acceleration==&engine.ops && splash_calls==1 && log_matches("[accel] summary accelerated=1 driver=savage reason=none used=0")==1);
+    CHECK(!strcmp(splash_text,"2D engine: OK (drawing: software)"));
+    bool ok=false, used=true; const char *why=0;
+    CHECK(savage2d_summary(&ok,&used,&why) && ok && !used);
+    struct ciuki_accel_request q=request(CIUKI_ACCEL_FILL); q.rect=(struct ciuki_rect){0,0,2,2,8,8}; q.colour=0x204060;
+    CHECK(!fbdev_accel_request(&q) && !fbdev_accel_request(&q));
+    CHECK(log_matches("[accel] summary accelerated=1 driver=savage reason=none used=1")==1);
+    CHECK(savage2d_summary(&ok,&used,&why) && ok && used && !strcmp(splash_text,"2D acceleration: YES"));
+    m.stuck=true;
+    CHECK(fbdev_accel_request(&q)==-EIO && engine.quarantined);
+    CHECK(log_matches("[accel] savage quarantined reason=")==1 && log_matches("phase=draw")==1);
+    CHECK(log_matches("[accel] summary accelerated=0 driver=savage reason=")==1 && log_matches("used=1")==2);
+    CHECK(savage2d_summary(&ok,&used,&why) && !ok && used && strstr(splash_text,"2D engine: NO ("));
+    CHECK(log_matches("[accel] summary ")==3);
+    m.stuck=false; m.busy=0; finish();
+    puts("f2-92 indicator: OK (drawing: software) until the first engine draw, used=1 record once, draw failure quarantines and flips to NO PASS");
+}
 int main(void)
 {
     sweep_persistence();
@@ -2045,6 +2590,9 @@ int main(void)
     supersavage_completion_fence();
     supersavage_depth_preamble();
     hardware_sweep_default();
+    f1_95_first_fill_after_reset();
+    f2_92_service(32); f2_92_service(16);
+    f2_92_offscreen_span(); f2_92_used_and_flip();
     boot_fixture_accel(false);
     for (int32_t id=-1;id<=96;id++) {
         registry_setting_present=true; registry_setting=id; load_config(&settings_vfs);

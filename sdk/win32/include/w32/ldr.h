@@ -11,26 +11,12 @@
 int w32_utf16_path(const WCHAR *, ULONG, char *, ULONG);
 int w32_utf8_path(const char *, WCHAR *, ULONG);
 WCHAR w32_acp_character(uint8_t);
-struct w32_error {
-    ULONG code;
-    const char *reason;
-    char module[W32_PATH_MAX], symbol[256];
-};
-struct w32_section {
-    ULONG rva, span, raw, offset, flags;
-};
-struct w32_directory {
-    ULONG rva, size;
-};
-struct w32_pe {
-    const uint8_t *file;
-    ULONG file_size, preferred, base, size, headers, entry, section_alignment;
-    uint16_t flags, subsystem, section_count;
-    struct w32_section sections[W32_MAX_SECTIONS];
-    struct w32_directory dirs[16];
-    uint8_t *image;
-    struct w32_error *error;
-};
+/* Compatibility names preserve the F5 API; layout lives in the mechanism. */
+#include "../../../pe/pe.h"
+#define w32_error pe_error
+#define w32_section pe_section
+#define w32_directory pe_directory
+#define w32_pe pe_image
 int w32_pe_parse(struct w32_pe *, const void *, ULONG, struct w32_error *);
 int w32_pe_copy_image(struct w32_pe *, void *);
 int w32_pe_validate(struct w32_pe *);
@@ -48,7 +34,7 @@ int w32_pe_resource(struct w32_pe *, struct w32_resource_key, struct w32_resourc
 int w32_pe_resource_lookup(struct w32_pe *, const struct w32_resource_key *, ULONG, void **);
 struct w32_loader;
 int w32_installer_intercept(struct w32_loader *,const char *);
-enum { W32_LOAD_DATAFILE = 2, W32_LOAD_EXECUTABLE = 0x10000 };
+enum { W32_LOAD_DATAFILE = 2, W32_LOAD_ALTERED_SEARCH = 8, W32_LOAD_EXECUTABLE = 0x10000 };
 struct w32_builtin {
     const char *name, *path, *sha256;
     ULONG base, size;
@@ -101,6 +87,7 @@ struct w32_loader {
     char exe_directory[W32_PATH_MAX], current_directory[W32_PATH_MAX];
     char system_directory[W32_PATH_MAX], windows_directory[W32_PATH_MAX];
     const char *path;
+    const char *altered_directory; /* only while binding this load's imports */
     struct w32_error error;
     uint8_t tls_used[W32_MAX_TLS];
     ULONG transaction_depth, collecting;

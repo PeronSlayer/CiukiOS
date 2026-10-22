@@ -170,8 +170,12 @@ static int clear_halt(struct usb_device *d, bool in)
 }
 static int reset_recovery(struct usb_device *d)
 {
-    /* Class reset preserves toggles; only successful halt clear sets DATA0. */
+    /* Class reset preserves toggles; only successful halt clear sets DATA0.
+     * f1-96b: a device aborting a data phase may NAK the reset's status
+     * stage; Linux usb_stor_reset_common allows 5 s before giving up. */
+    d->control_timeout_ms=USB_STORAGE_RESET_MS;
     int e=usb_control(d,0x21,0xff,0,d->storage.interface,0,0);
+    d->control_timeout_ms=0;
     if (!e) e=clear_halt(d,true);
     if (!e) e=clear_halt(d,false);
     klog("[usb-storage] reset addr=%u result=%d",d->address,e);
@@ -199,18 +203,24 @@ static int fault(struct usb_device *d, const char *reason, bool reset)
     }
     return -FS_EIO;
 }
-enum bot_policy { BOT_STRICT, BOT_FIRST_INQUIRY, BOT_OPTIONAL_MODE, BOT_READ_RETRY };
-enum { BOT_RETRY_INQUIRY=2, BOT_MODE_UNAVAILABLE=3, BOT_RETRY_READ=4 };
+/* f1-96: BOT_READ_BATCH is a multi-sector READ(10). f1-96b: after any
+ * recoverable transport fault (NAK timeout once the UHCI engine retried the
+ * same chain, STALL, CSW error) and a successful Reset Recovery, where a
+ * single-sector read would be retried once, a batch reports BOT_FALLBACK and
+ * the caller re-issues the range with the next ladder size (128, 8, 1). */
+enum bot_policy { BOT_STRICT, BOT_FIRST_INQUIRY, BOT_OPTIONAL_MODE, BOT_READ_RETRY, BOT_READ_BATCH };
+enum { BOT_RETRY_INQUIRY=2, BOT_MODE_UNAVAILABLE=3, BOT_RETRY_READ=4, BOT_FALLBACK=5 };
 static int transport_fault(struct usb_device *d, const char *reason, enum bot_policy policy)
 {
     struct usb_storage *s=&d->storage;
     struct usb_storage_trace *t=&s->trace;
+    t->fault_reason=reason;
     /* The sole read-only attach retry cannot revive a published medium or
      * hardware/DMA failure. A malformed received CSW has result=0, not STALL. */
     bool retry=policy==BOT_FIRST_INQUIRY &&
         (t->result==-USB_ETIMEDOUT || t->result==-USB_EPIPE);
     bool skip=policy==BOT_OPTIONAL_MODE && t->result==-USB_EPIPE;
-    bool read_retry=policy==BOT_READ_RETRY &&
+    bool read_retry=(policy==BOT_READ_RETRY || policy==BOT_READ_BATCH) &&
         (t->result==0 || t->result==-USB_ETIMEDOUT || t->result==-USB_EPIPE);
     if (read_retry && !s->block.quarantined && !t->packet.retired && live(d) &&
         (!s->binding || !usb_expired(d->host,s->bind_deadline-USB_BIND_FINISH_MS))) {
@@ -250,7 +260,8 @@ static int bot(struct usb_device *d, const uint8_t *cdb, unsigned clen, bool in,
             e=clear_halt(d,in);
             if (e) {
                 s->trace.result=e;
-                return policy==BOT_READ_RETRY ? transport_fault(d,"data_clear_halt",policy) :
+                return policy==BOT_READ_RETRY || policy==BOT_READ_BATCH ?
+                    transport_fault(d,"data_clear_halt",policy) :
                     fault(d,"data_clear_halt",true);
             }
         } else if (e) return transport_fault(d,"data_transfer",policy);
@@ -282,6 +293,11 @@ static int command_policy(struct usb_device *d, const uint8_t *cdb, unsigned len
 {
     int e=bot(d,cdb,len,in,data,bytes,transferred,policy);
     if (e==BOT_RETRY_READ) {
+        /* f1-96b: reset recovery restored framing. A batch steps down the
+         * ladder instead of a same-size retry: a NAK timeout reaches here
+         * only after the HC engine retried the same TD chain once. A single
+         * sector keeps the f1-74 reset-qualified retry. */
+        if (policy==BOT_READ_BATCH) return BOT_FALLBACK;
         klog("[usb-storage] retry addr=%u cmd=%02x attempt=2",d->address,cdb[0]);
         e=bot(d,cdb,len,in,data,bytes,transferred,BOT_STRICT);
     }
@@ -305,6 +321,13 @@ static int command_policy(struct usb_device *d, const uint8_t *cdb, unsigned len
         if (!reset_recovery(d) && live(d)) return BOT_RETRY_INQUIRY;
         return fault(d,"reset_recovery",false);
     }
+    /* f1-96: a batch whose data stage was STALLed, or which the device
+     * rejected as ILLEGAL REQUEST (an invalid CDB field such as the length),
+     * steps down the transfer ladder. The pipe was cleared before CSW. */
+    if (policy==BOT_READ_BATCH && (s->trace.data_stalled || s->sense_key==5) && live(d)) {
+        s->trace.fault_reason=s->trace.data_stalled ? "data_stall" : "illegal_request";
+        return BOT_FALLBACK;
+    }
     return -FS_EIO;
 }
 static int command_result(struct usb_device *d, const uint8_t *cdb, unsigned len,
@@ -318,6 +341,22 @@ static int ready(struct usb_device *d)
 { uint8_t cdb[6]={0}; return command(d,cdb,6,false,0,0); }
 static int flush_locked(struct usb_device *d)
 { uint8_t cdb[10]={0x35}; return command(d,cdb,10,false,0,0); }
+/* f1-96b: one ladder step down from the failed command length: more than
+ * USB_STORAGE_FALLBACK_SECTORS sectors drop to that size, a shorter command
+ * to one sector. The device keeps the lowered length (as for f1-96's STALL
+ * fallback); a re-plug starts a new device record at the negotiated size. */
+static void transfer_fallback(struct usb_device *d, uint8_t cmd, uint32_t lba, uint32_t sectors,
+                              const char *reason, bool resend)
+{
+    struct usb_storage *s=&d->storage;
+    uint32_t from=s->max_sectors ? s->max_sectors : 1;
+    uint32_t to=sectors>USB_STORAGE_FALLBACK_SECTORS ? USB_STORAGE_FALLBACK_SECTORS : 1;
+    if (to>from) to=from;
+    klog("[usb-storage] max_sectors addr=%u cmd=%02x lba=%u sectors=%u from=%u to=%u reason=%s resend=%u fallbacks=%u",
+         d->address,cmd,lba,sectors,from,to,reason ? reason : "unknown",resend,++s->transfer_fallbacks);
+    s->max_sectors=to;
+    if (s->read_qualified>to) s->read_qualified=to;
+}
 static bool block_take(struct usb_device *d)
 {
     uint32_t left=blk_request_remaining_ms ? blk_request_remaining_ms() : UINT32_MAX;
@@ -364,17 +403,50 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
         e=ready(d); /* observe unit attention before issuing READ/WRITE */
         if (e && s->published && !b->quarantined) e=fault(d,"readiness_failed",false);
     }
+    bool lowered=false;
     if (!e) {
         if (!write && s->binding) {
             s->bind_read_requests++; s->bind_read_sectors+=count;
             if (count>s->bind_read_max) s->bind_read_max=count;
         }
-        uint8_t cdb[10]={0}; cdb[0]=write ? 0x2a : 0x28;
-        put32(cdb+2,(uint32_t)lba); cdb[7]=(uint8_t)(count>>8); cdb[8]=(uint8_t)count;
-        e=command(d,cdb,10,!write,buf,count*512u);
+        /* f1-96: one READ(10)/WRITE(10) per negotiated transfer. A WRITE(10)
+         * never exceeds a length this medium already completed as READ(10). */
+        uint8_t cmd=write ? 0x2a : 0x28;
+        uint32_t done=0, n=0;
+        while (!e && done<count) {
+            uint32_t limit=s->max_sectors ? s->max_sectors : 1;
+            if (write && limit>s->read_qualified) limit=s->read_qualified ? s->read_qualified : 1;
+            n=count-done; if (n>limit) n=limit;
+            uint8_t cdb[10]={cmd};
+            put32(cdb+2,(uint32_t)(lba+done)); cdb[7]=(uint8_t)(n>>8); cdb[8]=(uint8_t)n;
+            e=command_policy(d,cdb,10,!write,(uint8_t *)buf+done*512u,n*512u,0,
+                write ? BOT_STRICT : n>1 ? BOT_READ_BATCH : BOT_READ_RETRY);
+            if (e==BOT_FALLBACK) {
+                transfer_fallback(d,cmd,(uint32_t)(lba+done),n,s->trace.fault_reason,true);
+                lowered=true; e=0; continue;
+            }
+            if (!e) {
+                if (!write && n>s->read_qualified) s->read_qualified=n;
+                done+=n;
+            }
+        }
+        /* An issued write is never resent; a multi-sector failure still
+         * records the next ladder size for this device's diagnostics. */
+        if (e && write && n>1 && s->max_sectors>1) {
+            transfer_fallback(d,cmd,(uint32_t)(lba+done),n,s->trace.data_stalled ? "data_stall" :
+                s->trace.fault_reason ? s->trace.fault_reason : s->trace.csw_status ? "csw_status" : "write_failed",false);
+            lowered=true;
+        }
         if (e && !b->quarantined) e=fault(d,write ? "write_failed" : "read_failed",false);
     }
-    usb_host_drop(d->host); return e;
+    usb_host_drop(d->host);
+    /* Outside the host reservation: the queue then issues commands of the
+     * lowered ladder size (8 sectors, then one). */
+    if (lowered) {
+        uint32_t bytes=(s->max_sectors ? s->max_sectors : 1)*512u;
+        blk_queue_set_limits(&s->requests,bytes,bytes);
+    }
+    return e;
 }
 static int block_read(struct blkdev *b,uint64_t lba,uint32_t n,void *buf)
 { return block_io(b,lba,n,buf,false); }
@@ -428,6 +500,16 @@ static int probe_storage(struct usb_device *d)
     struct usb_storage *s=&d->storage;
     if (!s->bound || !s->in || !s->out || d->low_speed) return -FS_EINVAL;
     blk_queue_init(&s->requests,"usb-storage",128u*512u);
+    /* f1-96: transfer length is host policy; Windows uses 128 sectors and
+     * Linux 240 for USB mass storage, and no VPD page is requested (Linux
+     * skips them for usb-storage). One full-speed 64 KiB command (~65 ms)
+     * cannot meet the C3 reader budget, so the queue limit is pinned. A
+     * host without a chained bulk engine (OHCI: one packet per pass, about
+     * 1 s per 64 KiB) keeps the one-page command of the former floor. */
+    unsigned host_max=d->host->ops->bulk ? BLKDEV_READ_SECTORS : BLKREQ_MIN_COMMAND_BYTES/512u;
+    s->max_sectors=USB_STORAGE_MAX_SECTORS<host_max ? USB_STORAGE_MAX_SECTORS : host_max;
+    s->read_qualified=1; s->transfer_fallbacks=0;
+    blk_queue_set_limits(&s->requests,s->max_sectors*512u,s->max_sectors*512u);
     s->block=(struct blkdev){.read=queued_block_read,.write=queued_block_write,
         .request_read=block_read,.request_write=block_write,.queue=&s->requests,.media_check=block_media,
         .sector_size=512,.ctx=d,.media_generation=gen_alloc()};
@@ -593,9 +675,9 @@ void usb_storage_service(struct usb_host *h)
             /* Retain the attempt, including refusal; no recovery loop. */
             klog("[usb-storage] mount addr=%u result=%d",d->address,e);
             uint64_t elapsed=h->io.now(h->io.cookie)-s->bind_started_ms;
-            klog("[usb-storage] bind addr=%u elapsed_ms=%llu result=%d published=%u overrun=%u reads=%u sectors=%u max_sectors=%u",
+            klog("[usb-storage] bind addr=%u elapsed_ms=%llu result=%d published=%u overrun=%u reads=%u sectors=%u read_max=%u max_sectors=%u",
                  d->address,elapsed,e,s->published,elapsed>USB_BIND_TIMEOUT_MS,
-                 s->bind_read_requests,s->bind_read_sectors,s->bind_read_max);
+                 s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->max_sectors);
             klog("[usb-storage] cadence addr=%u packets=%u poll_frames=%u retire_frames=%u batch=%u",
                  d->address,s->bind_packets,s->bind_poll_frames,s->bind_retire_frames,h->ops->bulk ? USB_BULK_BATCH : 1);
         }

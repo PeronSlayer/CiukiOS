@@ -16,6 +16,7 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+void dosvm_client_priority(struct dosvm *);
 /* A base image may stop before the geometry's end (owner decision
  * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
  * are cut by scripts/build_games_disk.py and read back as zeros. It must
@@ -38,6 +39,14 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_IDLE_POLLS 8u
 #define DOSVM_IDLE_WINDOW 10u
 enum dosvm_idle_reason { DOSVM_IDLE_2F, DOSVM_IDLE_28, DOSVM_IDLE_16, DOSVM_IDLE_HLT, DOSVM_IDLE_REASONS };
+/* f3-61: the end of a full-screen session. A hotkey (Alt+Enter/Alt+Tab) and a
+ * guest mode change are ordinary; the others leave the VM running in its
+ * window with a message, except STOPPING, where the VM itself stopped. */
+enum dosvm_fullscreen_cause {
+    DOSVM_FS_NONE, DOSVM_FS_HOTKEY, DOSVM_FS_BACKGROUND, DOSVM_FS_MODE_CHANGE, DOSVM_FS_PRESENT_ERROR,
+    DOSVM_FS_STOPPING, DOSVM_FS_FIRST_FRAME_TIMEOUT, DOSVM_FS_PROGRESS_TIMEOUT, DOSVM_FS_OWNER_LOST,
+    DOSVM_FS_REQUEST, DOSVM_FS_CAUSES
+};
 #include "dosvm_memory.h"
 #include "dpmi_internal.h"
 #include "dos_conformance_fixture.h"
@@ -136,6 +145,7 @@ struct dos_file;
 struct dos_file_ops;
 struct vm_cache_block;
 struct dos_file_volume;
+struct dos_unified;
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -147,6 +157,10 @@ struct dosvm {
     struct dos_file_volume *file_volume;
     struct v86_frame file_saved;
     uint32_t file_phys,file_bytes;
+    struct dos_unified *unified; /* f3-56 DFV2 state: unified profile only */
+    struct v86_frame unified_saved;
+    uint32_t unified_phys,unified_bytes;
+    bool unified_vif,unified_logged;
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
     bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */
@@ -163,6 +177,17 @@ struct dosvm {
     uint32_t fullscreen_ip, fullscreen_cs;
     uint64_t fullscreen_progress;
     int fullscreen_error;
+    /* f3-61: why the last full-screen session ended (enum dosvm_fullscreen_cause),
+     * kept until the next entry for STATUS/probe evidence. */
+    uint8_t fullscreen_cause;
+    /* f3-61: per-second frame evidence of the current session: seconds
+     * sampled and seconds in which the guest stored to the scanout (aperture
+     * PTE dirty bits, or a VBE frame flush). Reset at each entry. */
+    uint32_t fullscreen_seconds, fullscreen_frame_seconds;
+    /* f3-61c: full-screen entries refused with the windowed continuation and
+     * the last reason (negative errno), e.g. the QEMU std-VGA readback (f3-29). */
+    uint32_t fullscreen_refusals;
+    int fullscreen_refusal;
     uint32_t continuation;
     struct kwait wake;
     struct kwait present_wait; /* request dependency on the VM worker */
@@ -275,6 +300,7 @@ struct dosvm {
         unsigned cause;
         uint64_t trap_cycles, cost_cycles[DOSVM_COST_COUNT], last_cost_cycles[DOSVM_COST_COUNT];
         bool io_valid, reporting;
+        uint32_t io_dispatches, io_fast_cycles;
         uint16_t io_port;
         struct dosvm_perf_interval interval[2]; /* preallocated producer/reporter banks */
         unsigned active_interval;
@@ -314,6 +340,13 @@ struct dosvm {
     bool launch_armed, launch_enter_consumed, launch_exec, launch_ready, launch_failed;
     uint16_t launch_cs, launch_ss, launch_sp;
     uint32_t launch_ip, launch_error;
+    /* f3-61: the armed program returned to its shell (completed IRET of the
+     * EXEC frame without CF), and V86 INT 21h/4B00h frames still running
+     * (LIFO; an overflow is never treated as an idle shell). */
+    bool launch_returned, exec_overflow;
+    uint64_t launch_returned_tick;
+    uint8_t exec_pending;
+    struct { uint16_t cs, ss, sp; uint32_t ip; } exec_frame[4];
     uint16_t boot_log_count;
     char boot_log[2048], console_line[81];
     unsigned console_length;
@@ -376,6 +409,13 @@ int dosvm_file_destroy(struct dosvm *) __attribute__((weak));
 void dosvm_file_dump(struct dosvm *) __attribute__((weak));
 void dosvm_file_deadline(struct dosvm *) __attribute__((weak));
 int dosvm_file_disk(struct dosvm *,uint32_t,void *,bool) __attribute__((weak));
+/* f3-61: kernel=unified binding evidence (vm-game probe); false without one. */
+struct dosvm_unified_info {
+    bool active; uint32_t owned, requests, opens, closes, reads, failed, critical, expired, refusals, held, start;
+    uint64_t read_bytes;
+    struct { uint16_t fn, error; char name[13]; } failure[8];   /* f3-61c: first min(failed, 8) */
+};
+bool dosvm_file_unified_info(const struct dosvm *,struct dosvm_unified_info *) __attribute__((weak));
 void dosvm_disk_provider_init(struct dosvm *,struct blkdev *);
 void dosvm_file_rom_init(struct dosvm *) __attribute__((weak));
 void dosvm_file_ops_init(struct dosvm *,struct dos_file_ops *);
@@ -419,6 +459,7 @@ int dosvm_vbe_flush(struct dosvm *, bool force);
 int dosvm_vbe_present(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t, struct ciuki_rect *);
 void dosvm_fullscreen_mode_changed(struct dosvm *);
+bool dosvm_shell_idle(const struct dosvm *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
 void dosvm_vga_burst(struct dosvm *, struct v86_frame *);
 /* f3-06: a ring-3 DPMI client's access to the supervisor-only window. */
@@ -446,6 +487,7 @@ int dosvm_disk_open(struct dosvm *, const char *base);
 int dosvm_disk_close(struct dosvm *, bool forced);
 int dosvm_bios_init(struct dosvm *);
 int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);
+bool dosvm_io_hot(struct dosvm *,uint16_t,unsigned,bool,uint32_t *,int *);
 void dosvm_putchar(struct dosvm *, uint8_t, uint8_t);
 int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);

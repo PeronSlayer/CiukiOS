@@ -8,12 +8,15 @@
 #include <ciuki/timing.h>
 #include <ciuki/task.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/smi.h>
 
 uint64_t g_tsc_per_ms;               /* 0 until calibrated */
 static uint64_t crit_start, crit_firmware_start, firmware_cycles;
 static uint64_t crit_work_max, firmware_max, firmware_window;
 static uint64_t raw_max_work, raw_max_firmware;
 static uint32_t firmware_gaps, unclassified_irqoff;
+static char unclassified_task[16];
+static uint32_t unclassified_task_id, unclassified_worker_site;
 static char interrupt_owner[16], maximum_owner[16];
 static char work_owner[16];
 static uint32_t work_site;
@@ -97,8 +100,15 @@ void crit_end(void)
     if (firmware > firmware_max) firmware_max = firmware;
     if (firmware > firmware_window) firmware_window = firmware;
     if (firmware) firmware_gaps++;
-    if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US && !firmware)
+    if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US && !firmware) {
         unclassified_irqoff++;
+        /* Ending context, including preemption inside a worker callback.
+         * Copy bounded values now; no task pointer survives a task exit. */
+        memset(unclassified_task,0,sizeof(unclassified_task));
+        if (g_current) memcpy(unclassified_task,g_current->name,sizeof(unclassified_task)-1);
+        unclassified_task_id=g_current ? g_current->id : 0;
+        unclassified_worker_site=g_current ? g_current->device_worker_site : 0;
+    }
     crit_start = 0;
     if (d > crit_max_cycles) {
         crit_max_cycles = d;
@@ -136,7 +146,10 @@ void timing_stall_observe(uint64_t start, uint64_t end, const char *section)
 {
     /* Attribution is independent of whether diagnostic tracing is active.
      * Only adjacent serialized no-work probes supply this heuristic tag. */
-    if (section && !strncmp(section, "smi_attributed", sizeof("smi_attributed"))) firmware_cycles += end - start;
+    if (section && !strncmp(section, "smi_attributed", sizeof("smi_attributed"))) {
+        firmware_cycles += end - start;
+        if (smi_adjacent_gap) smi_adjacent_gap(start, end); /* f1-94 TSC evidence */
+    }
     /* IRQ budget probes call with IF clear; no allocation, I/O or logging. */
     if (!stall_active || start < stall_begin || !stall_per_ms || end - start <= stall_per_ms) return;
     /* The enclosing crit_end must not count this same stall a second time. */
@@ -194,6 +207,8 @@ void timing_timer_irq(void)
     if (!g_cpu_tsc)
         return;
     uint64_t now = rdtsc();
+    /* f1-94: SMI_STS sample (ICH3-M only) and blackout/activity relation. */
+    if (smi_tick) smi_tick(now, last_timer_tsc);
     if (last_timer_tsc && g_tsc_per_ms) {
         uint64_t gap = now - last_timer_tsc;
         if (gap > 2 * g_tsc_per_ms) {
@@ -230,6 +245,8 @@ void timing_reset(void)
     crit_max_cycles = crit_work_max = firmware_max = firmware_window = 0;
     raw_max_work = raw_max_firmware = 0;
     firmware_gaps = unclassified_irqoff = 0;
+    memset(unclassified_task,0,sizeof(unclassified_task));
+    unclassified_task_id=unclassified_worker_site=0;
     maximum_owner[0] = 0;
     work_owner[0] = 0; work_site = 0; work_section = "none";
     crit_max_site = 0; crit_max_section = "none";
@@ -245,6 +262,9 @@ static void snapshot_locked(struct timing_stats *s, struct timing_raw *raw)
 {
     *raw=(struct timing_raw){g_tsc_per_ms,crit_max_cycles,pic_mask_out_max,crit_work_max,firmware_max,raw_max_work,raw_max_firmware};
     s->firmware_gaps = firmware_gaps; s->unclassified_irqoff = unclassified_irqoff;
+    memcpy(s->unclassified_task,unclassified_task,sizeof(unclassified_task));
+    s->unclassified_task_id=unclassified_task_id;
+    s->unclassified_worker_site=unclassified_worker_site;
     memcpy(s->interrupt_owner, maximum_owner, sizeof(maximum_owner));
     s->work_site = work_site; s->work_section = work_section;
     memcpy(s->work_owner, work_owner, sizeof(work_owner));

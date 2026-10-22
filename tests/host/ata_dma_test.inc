@@ -32,7 +32,6 @@ static void dma_bus_start(struct fake *f)
     CHECK(f->dma_command && m->armed && f->bm_table == m->prd_phys);
     CHECK(!!(f->bm_command & 8) == !f->writing);
     uint32_t bytes = 0, phys = m->bounced ? m->bounce_phys : f->direct_phys;
-    uint8_t *data = m->bounced ? m->bounce : scatter_mapping ? scatter_data : f->direct_buffer;
     for (unsigned i = 0; i < ATA_DMA_PRDS; i++) {
         struct ata_prd *prd = &m->prd[i];
         uint32_t count = prd->count ? prd->count : 65536;
@@ -45,6 +44,25 @@ static void dma_bus_start(struct fake *f)
     }
     CHECK(bytes == f->blocks * 512 && bytes == m->bytes && bytes <= ATA_DMA_BYTES);
     f->bm_status |= 1;
+    if (f->dma_deferred) {
+        /* f1-92: the transfer stays live (DMARQ, DRQ) across scheduler steps. */
+        f->dma_in_flight = true;
+        f->status = f->live_status ? f->live_status : 0x58;
+        if (f->stray_after_start) {
+            f->stray_after_start = false; f->pending = true;
+            if (f->stray_bm_irq) f->bm_status |= ATA_BM_IRQ;
+        }
+        return;
+    }
+    dma_bus_finish(f);
+}
+static void dma_bus_finish(struct fake *f)
+{
+    struct ata_dma *m = &f->channel.dma;
+    f->dma_in_flight = false;
+    CHECK(m->armed && (f->bm_command & 1)); /* never finished after an abort */
+    uint32_t bytes = m->bytes;
+    uint8_t *data = m->bounced ? m->bounce : scatter_mapping ? scatter_data : f->direct_buffer;
     if (f->media_bytes) {
         CHECK(f->lba + f->blocks <= f->media_sectors);
         if (f->writing) memcpy(f->media_bytes + f->lba * 512, data, bytes);
@@ -214,16 +232,19 @@ static void test_dma(void)
         captured_logs[0]=0;
         CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && !captured_logs[0] && ata_stamp_reads==2);
         f.fault=DMA_ERROR;
-        CHECK(b->read(b,0,1,data)==-FS_EIO && b->stats.dma==2 && b->stats.pio==initial_pio);
-        CHECK(strstr(captured_logs,"[ata0] dma quarantine unit=0"));
+        /* f1-92: the quarantined DMA request is repeated once through PIO. */
+        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && b->stats.pio==initial_pio+1);
+        CHECK(strstr(captured_logs,"[ata0] dma quarantine unit=0") && strstr(captured_logs,"cause=bm_error\n"));
         CHECK(strstr(captured_logs,"[ata0] dma fallback unit=0") && strstr(captured_logs,"mode=pio\n"));
+        CHECK(strstr(captured_logs,"[ata0] dma retry unit=0 generation=") &&
+              strstr(captured_logs," command=20 mode=pio result=0 count=1\n"));
         captured_logs[0]=0; f.fault=GOOD;
-        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && b->stats.pio==initial_pio+1 && !captured_logs[0] && ata_stamp_reads==2);
+        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && b->stats.pio==initial_pio+2 && !captured_logs[0] && ata_stamp_reads==2);
         capture_logs=false;
         g_tsc_per_ms=0;
         b=dma_qualify(&f,false); f.fault=DMA_ACTIVE;
         capture_logs=true; captured_logs[0]=0;
-        CHECK(b->read(b,0,1,data)==-FS_EIO && !b->stats.dma);
+        CHECK(!b->read(b,0,1,data) && !b->stats.dma && b->stats.pio==1);
         CHECK(!strstr(captured_logs,"first-completion")); capture_logs=false;
         puts("PASS f1-86 ATA: first validated DMA completion once/channel, exact TSC elapsed, no timestamp reads for calibrated PIO or later DMA, failed DMA excluded, quarantine/fallback and later PIO");
     }
@@ -269,12 +290,23 @@ static void test_dma(void)
         struct fake f; struct blkdev *b = dma_qualify(&f, false);
         f.noncontiguous = true; f.fault = faults[i]; unsigned before = f.commands;
         if (write) fill(buf, 0, 1); else memset(buf, 0x5a, 512);
-        CHECK((write ? b->write(b, 0, 1, buf) : b->read(b, 0, 1, buf)) == -FS_EIO);
+        /* f1-92 fallback policy: an idle DMA failure (drive DRDY without
+         * BSY/DRQ/DF, master stopped) repeats the request once through PIO.
+         * Only the bus-master-only faults recover there; ERR and NO_IRQ
+         * fail again on PIO and then quarantine the channel. Busy/DRQ/DF
+         * or a stuck master never reach PIO. */
+        bool unsafe = faults[i] == BUSY || faults[i] == DF || faults[i] == EXTRA_DRQ || faults[i] == DMA_STUCK_MASTER;
+        bool retried = !unsafe;
+        bool recovered = retried && faults[i] != ERR && faults[i] != NO_IRQ;
+        int result = write ? b->write(b, 0, 1, buf) : b->read(b, 0, 1, buf);
+        CHECK(result == (recovered ? 0 : -FS_EIO));
         struct ata_device *d = &f.channel.devices[0];
         CHECK(d->dma_quarantined && !d->dma_enabled && d->dma_errors == 1 && !d->dma_requests);
-        CHECK(f.commands == before + 1 && !f.channel.dma.armed && !(f.bm_command & 1));
-        if (!write) CHECK(buf[0] == 0x5a && buf[511] == 0x5a); /* failed bounce never published */
-        bool unsafe = faults[i] == BUSY || faults[i] == DF || faults[i] == EXTRA_DRQ || faults[i] == DMA_STUCK_MASTER;
+        CHECK(d->dma_retries == (retried ? 1u : 0u));
+        CHECK(f.commands == before + (retried ? 2u : 1u) && !f.channel.dma.armed && !(f.bm_command & 1));
+        if (!write && !recovered) CHECK(buf[0] == 0x5a && buf[511] == 0x5a); /* failed bounce never published */
+        if (!write && recovered) for (unsigned w = 0; w < 256; w++) CHECK(fs_rd16(buf + w * 2) == sector_word(0, w));
+        unsafe = !recovered;
         CHECK(f.channel.stopped == unsafe && b->quarantined == unsafe);
         before = f.commands;
         f.fault = GOOD;
@@ -285,17 +317,25 @@ static void test_dma(void)
         }
     }
     struct fake f; struct blkdev *b = dma_qualify(&f, false);
+    /* An immediate abort (ERR) before Start is a real DMA failure: the
+     * master is never started, DMA is quarantined and PIO repeats it. */
     f.early_dma_irq = f.immediate = true;
-    CHECK(b->read(b, 0, 1, buf) == -FS_EIO && !f.dma_starts && f.channel.devices[0].dma_quarantined);
+    CHECK(!b->read(b, 0, 1, buf) && !f.dma_starts && f.channel.devices[0].dma_quarantined);
+    CHECK(f.channel.devices[0].dma_retries == 1 && !f.channel.stopped && f.command == 0x20);
     b = dma_qualify(&f, false);
+    /* f1-92: a ready-looking edge before Start (drive DRDY, BM Interrupt)
+     * proves nothing about the unstarted transfer. It is consumed, the
+     * master is started and the same command completes normally. */
     f.early_dma_irq = f.early_dma_ready = f.immediate = f.noncontiguous = true;
     memset(buf, 0x5a, 512);
-    CHECK(b->read(b, 0, 1, buf) == -FS_EIO && !f.dma_starts && !f.channel.devices[0].dma_requests);
-    CHECK(buf[0] == 0x5a && buf[511] == 0x5a); /* stale ready IRQ cannot publish an unstarted buffer */
-    CHECK(f.channel.stopped && b->quarantined); /* the drive command's completion is uncertain */
+    CHECK(!b->read(b, 0, 1, buf) && f.dma_starts == 1 && f.channel.devices[0].dma_requests == 1);
+    for (unsigned w = 0; w < 256; w++) CHECK(fs_rd16(buf + w * 2) == sector_word(0, w));
+    CHECK(!f.channel.stopped && !b->quarantined && f.channel.devices[0].dma_enabled);
+    CHECK(f.channel.devices[0].early_irqs == 1 && !f.channel.devices[0].dma_errors);
     dma_qualify(&f, false); f.noncontiguous = true; on_schedule = stale_schedule;
-    CHECK(f.channel.devices[0].block.read(&f.channel.devices[0].block, 0, 1, buf) == -FS_EIO);
+    CHECK(!f.channel.devices[0].block.read(&f.channel.devices[0].block, 0, 1, buf));
     CHECK(f.channel.devices[0].dma_quarantined && !f.channel.stopped); /* unmatched generation times out */
+    CHECK(f.channel.devices[0].dma_retries == 1 && f.command == 0x20); /* then PIO repeats the request */
     dma_qualify(&f, false); on_schedule = quiesce_schedule;
     CHECK(f.channel.devices[0].block.read(&f.channel.devices[0].block, 0, 1, buf) == -FS_EIO);
     CHECK(f.channel.stopped && f.channel.quiescing && !(f.bm_command & 1));
@@ -328,11 +368,18 @@ static void test_dma(void)
     memcpy(f.identify[1], f.identify[0], sizeof(f.identify[0]));
     f.identify[1][88] = 0x080f; /* peer firmware selected UDMA3 */
     CHECK(ata_channel_discover(&f.channel) == 2 && f.channel.devices[1].udma_mode == 3);
-    f.fault = ERR;
-    CHECK(f.channel.devices[0].block.read(&f.channel.devices[0].block, 0, 1, buf) == -FS_EIO && !f.channel.stopped);
+    f.fault = DMA_ERROR;
+    CHECK(!f.channel.devices[0].block.read(&f.channel.devices[0].block, 0, 1, buf) && !f.channel.stopped);
+    CHECK(f.channel.devices[0].dma_quarantined && f.channel.devices[0].dma_retries == 1);
     CHECK(f.channel.devices[1].dma_enabled && !f.channel.devices[1].block.quarantined);
     f.fault = GOOD;
     CHECK(!f.channel.devices[1].block.read(&f.channel.devices[1].block, 0, 1, buf) && f.selected == 1 && f.command == 0xc8);
+    /* A drive error on DMA that fails again on the PIO repeat: only now the
+     * whole channel (and so the volume) is quarantined. */
+    f.fault = ERR;
+    CHECK(f.channel.devices[1].block.read(&f.channel.devices[1].block, 0, 1, buf) == -FS_EIO);
+    CHECK(f.channel.devices[1].dma_retries == 1 && f.channel.stopped && f.channel.devices[0].block.quarantined);
+    f.fault = GOOD;
     dma_qualify(&f, false); unsigned before = f.writes;
     CHECK(f.channel.devices[0].block.read(&f.channel.devices[0].block, 0, 0, buf) == -FS_EINVAL && f.writes == before);
     CHECK(ata_channel_idle(&f.channel) && !(f.bm_command & 1));
@@ -340,18 +387,19 @@ static void test_dma(void)
     dma_qualify(&f, false);
     CHECK(read_fault(&f.channel.devices[0], buf) && f.command == 0x20 && f.channel.devices[0].dma_enabled);
     CHECK(!f.dma_starts); /* the existing fault probe selects/restores only its PIO section */
-    /* The existing writer must retain EIO even though an idle DMA fault
-     * leaves the block device available for future independent PIO I/O. */
+    /* f1-92: an idle DMA fault during write-back is repeated through PIO,
+     * so the writer sees success and no volume error is recorded. */
     b = dma_qualify(&f, false);
     struct block_cache cache; CHECK(!cache_init(&cache, 8192));
     fill(buf, 0, 1); CHECK(!cache_write(&cache, b, 0, buf));
     f.fault = DMA_ERROR;
-    CHECK(cache_barrier(&cache, b) == -FS_EIO && !b->quarantined && f.channel.devices[0].dma_quarantined);
+    CHECK(!cache_barrier(&cache, b) && !b->quarantined && f.channel.devices[0].dma_quarantined);
+    CHECK(f.channel.devices[0].dma_retries == 1 && f.command == 0xe7 && !cache_error(&cache, b));
     before = f.commands; f.fault = GOOD;
-    CHECK(cache_barrier(&cache, b) == -FS_EIO && f.commands == before && cache_error(&cache, b) == -FS_EIO);
+    CHECK(!cache_barrier(&cache, b) && f.commands >= before && !cache_error(&cache, b) && !f.channel.stopped);
     cache_destroy(&cache);
     free(buf);
-    puts("ata DMA: LBA28/48 read/write/chunks/direct/bounce/one IRQ, faults/timeouts/quiescence/quarantine/no retry/PIO fallback/ATAPI PIO: PASS");
+    puts("ata DMA: LBA28/48 read/write/chunks/direct/bounce/one IRQ, faults/timeouts/quiescence/quarantine/PIO fallback/ATAPI PIO, f1-92 PIO repeat of idle DMA failures: PASS");
 }
 
 /* The existing FAT/cache throughput suite can use this boundary instead of

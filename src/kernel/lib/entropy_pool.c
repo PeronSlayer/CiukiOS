@@ -81,15 +81,33 @@ bool entropy_pool_wants_credit(const struct entropy_pool *p)
 {
     return p->source_ready && !p->failed && p->estimate_bits < ENTROPY_SEED_BITS;
 }
+static unsigned add_credit(struct entropy_pool *p, unsigned bits, uint64_t now)
+{
+    unsigned room = ENTROPY_SEED_BITS - p->estimate_bits, credited = bits < room ? bits : room;
+    p->estimate_bits += credited;
+    if (p->estimate_bits == ENTROPY_SEED_BITS && due(p, now)) reseed(p, now);
+    return credited;
+}
 void entropy_pool_credit(struct entropy_pool *p, const void *bytes, size_t count, uint64_t now)
 {
     if (!entropy_pool_wants_credit(p)) return;
     entropy_pool_mix(p, bytes, count, ENTROPY_SOURCE_JITTER);
     /* Amendment 2: at most ONE bit per delivered library output byte.
-     * No startup, failed read, IRQ or saturated-pool credit. */
-    unsigned room = ENTROPY_SEED_BITS - p->estimate_bits;
-    p->estimate_bits += count < room ? (unsigned)count : room;
-    if (p->estimate_bits == ENTROPY_SEED_BITS && due(p, now)) reseed(p, now);
+     * No startup, failed read or saturated-pool credit. */
+    (void)add_credit(p, count < ENTROPY_SEED_BITS ? (unsigned)count : ENTROPY_SEED_BITS, now);
+}
+void entropy_pool_credit_irq(struct entropy_pool *p, const void *data, size_t bytes, unsigned events, uint64_t now)
+{
+    if (p->failed || !events) return;
+    entropy_pool_mix(p, data, bytes, ENTROPY_SOURCE_IRQ);
+    /* Amendment 4 (f6-19): Linux random.c credits count/64 bits per fast-pool
+     * mix. Count at most what the fast buffer retains; no credit while the
+     * fresh credit is full (mixing continues) or before a validated TSC. */
+    if (!entropy_pool_wants_credit(p)) { p->irq_events = 0; return; }
+    p->irq_events += events < ENTROPY_IRQ_EVENTS_PER_DRAIN ? events : ENTROPY_IRQ_EVENTS_PER_DRAIN;
+    unsigned bits = p->irq_events / ENTROPY_IRQ_EVENTS_PER_BIT;
+    p->irq_events %= ENTROPY_IRQ_EVENTS_PER_BIT;
+    if (bits) p->irq_bits += add_credit(p, bits, now);
 }
 int entropy_pool_read(struct entropy_pool *p, void *buffer, size_t bytes, uint64_t now)
 {

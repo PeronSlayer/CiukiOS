@@ -1,0 +1,25 @@
+CiukiOS f6-23: bounded font work inside HTML layout spans.
+Research: docs/validation/f6-23-netsurf-chrome.md.
+
+--- a/netsurf/content/handlers/html/layout.c
++++ b/netsurf/content/handlers/html/layout.c
+@@ -5509,15 +5509,19 @@
+ 	return ret;
+ }
+ 
++#include "framebuffer/ciuki/font_work.h"
++
+ /* Always stop the clock, including structural, allocation and timeout exits.
+  * f6-20: the time limit applies to remote documents only; local ones keep
+  * the structural admission above. */
+ bool layout_document(html_content *content, int width, int height)
+ {
+     nsurl *url=content_get_url(&content->base);
++    struct ciuki_font_work work=ciuki_font_work_read();
+     struct ciuki_layout_span span=ciuki_layout_begin(!ciuki_layout_local_url(url?nsurl_access(url):NULL));
+     bool accepted=ciuki_layout_document(content,width,height);
+     bool result=ciuki_layout_end(span,accepted);
++    ciuki_font_work_report(work,ciuki_layout_last_ns(),!span.timed);
+     content->ciuki_layout_timeout=!result && ciuki_layout_last_cause()==CIUKI_LAYOUT_TIME;
+     return result;
+ }
