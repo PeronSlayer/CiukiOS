@@ -31,7 +31,7 @@
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Host tests one at a time with `nice -n 19`. Write `build/codex/f2-101-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 23:28): scope after the Codex plan review
+## Amendment 1 (lead, 2026-10-22 23:26): scope after the Codex plan review
 
 The contract's Amendment 1 is binding and **narrows part A**.
 

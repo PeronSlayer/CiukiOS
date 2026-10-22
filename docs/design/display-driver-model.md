@@ -196,7 +196,7 @@ Host evidence:
 Runtime evidence, run by the lead: QEMU standard VGA binds no driver and uses
 the software engine, and on the T23 the Savage binds through the registry.
 
-## Amendment 1 (lead, 2026-10-22 23:28, Codex plan review)
+## Amendment 1 (lead, 2026-10-22 23:26, Codex plan review)
 
 A Codex `gpt-6.1-sol` plan review returned 19 findings with code
 evidence; the lead accepts all of them. The binding changes:
