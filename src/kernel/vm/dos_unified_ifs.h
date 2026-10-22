@@ -30,6 +30,11 @@ struct dfv2_ifs_stats {
     uint32_t opens,closes,reads,writes,finds,activations,refusals;
     uint64_t read_bytes,written_bytes;
 };
+/* f3-61c: the first owned requests that ended in a DOS error, for evidence
+ * records: redirector function (11xxh), DOS error and the 8.3 leaf name
+ * (path calls: FN1; handle calls: the SFT name; none for find-next). */
+#define DFV2_IFS_FAILURES 8u
+struct dfv2_ifs_failure { uint16_t fn,error; char name[13]; };
 struct dfv2_ifs;
 /* Host side of the activation barrier (production: dos_file_vm.c mounts the
  * VM's logical FAT16 view through f3-47; tests: an in-memory provider).
@@ -54,6 +59,7 @@ struct dfv2_ifs {
     struct { bool armed; struct dfv2_call call; uint64_t deadline; } retry;
     uint64_t started;
     struct dfv2_ifs_stats stats;
+    struct dfv2_ifs_failure failure[DFV2_IFS_FAILURES];   /* first stats.failed entries */
     const char *why;
     uint8_t io[4096];
 };

@@ -1,0 +1,203 @@
+CiukiOS f6-20: the layout time limit applies to remote content only; a
+rejection never ends the browser. layout_document/textplain_reformat classify
+the content URL (about:, resource: and file: are local: structural admission
+only; every other scheme also gets the 75 ms limit, nested spans inherit an
+outer deadline). Rejections log class, cause and elapsed time and show the
+error page; after an error on the current content (rejection after READY) the
+page's parameters return to loading_parameters so the error page's Try Again
+re-fetches it. The frontend records why its main loop ended and prints one
+"[netsurf] exit reason=..." line before netsurf_exit's lwc leak report.
+Evidence: docs/validation/2026-10-22-f6-20-netsurf-budget-exit.md (host
+tests/host/netsurf); the port files add the channel drain and keepalive.
+
+--- a/netsurf/content/handlers/html/layout.c
++++ b/netsurf/content/handlers/html/layout.c
+@@ -5509,10 +5509,15 @@
+ 	return ret;
+ }
+ 
+-/* Always stop the clock, including structural, allocation and timeout exits. */
++/* Always stop the clock, including structural, allocation and timeout exits.
++ * f6-20: the time limit applies to remote documents only; local ones keep
++ * the structural admission above. */
+ bool layout_document(html_content *content, int width, int height)
+ {
+-    uint64_t start=ciuki_layout_begin();
++    nsurl *url=content_get_url(&content->base);
++    struct ciuki_layout_span span=ciuki_layout_begin(!ciuki_layout_local_url(url?nsurl_access(url):NULL));
+     bool accepted=ciuki_layout_document(content,width,height);
+-    return ciuki_layout_end(start,accepted);
++    bool result=ciuki_layout_end(span,accepted);
++    content->ciuki_layout_timeout=!result && ciuki_layout_last_cause()==CIUKI_LAYOUT_TIME;
++    return result;
+ }
+--- a/netsurf/content/handlers/html/private.h
++++ b/netsurf/content/handlers/html/private.h
+@@ -121,6 +121,7 @@
+ 	/** Whether a layout (reflow) is in progress */
+ 	bool reflowing;
+     bool ciuki_layout_failed;
++    bool ciuki_layout_timeout; /* f6-20: rejected by the remote time limit */
+ 
+ 	/** Whether an initial layout has been done */
+ 	bool had_initial_layout;
+--- a/netsurf/content/handlers/html/html.c
++++ b/netsurf/content/handlers/html/html.c
+@@ -71,6 +71,7 @@
+ #include "html/imagemap.h"
+ #include "html/layout.h"
+ #include "html/textselection.h"
++#include "framebuffer/ciuki/budget.h"
+ 
+ #define CHUNK 4096
+ 
+@@ -1050,12 +1051,18 @@
+  * Reformat a CONTENT_HTML to a new width.
+  */
+ 
++static const char *ciuki_layout_message(html_content *htmlc)
++{
++    return htmlc->ciuki_layout_timeout ? "This page needs more layout time than the browser allows for web content."
++                                       : "This page exceeds the browser's layout size limits.";
++}
+ static void ciuki_layout_error(void *context)
+ {
+     struct content *c=context;
+-    fprintf(stderr,"NetSurf layout rejected: local page exceeds admission/time limit.\n");
+     content_set_error(c);
+-    content_broadcast_error(c,NSERROR_STOPPED,"Local page exceeds the layout admission/time limit.");
++    /* Only the error page replaces this content: the browser and its
++     * window stay, and Try Again re-fetches the page (f6-20). */
++    content_broadcast_error(c,NSERROR_STOPPED,ciuki_layout_message((html_content *)c));
+     /* The callback can release c; never use it after broadcasting. */
+ }
+ 
+@@ -1081,7 +1088,11 @@
+ 	if (!layout_document(htmlc, width, height)) {
+         htmlc->reflowing=false;htmlc->ciuki_layout_failed=true;c->ciuki_layout_rejected=true;
+         c->width=1;c->height=1;
+-        content_set_status(c,"Local page exceeds the layout admission/time limit.");
++        nsurl *ciuki_url=content_get_url(c);
++        fprintf(stderr,"NetSurf layout rejected: %s page, %s limit, elapsed_us=%llu.\n",
++                ciuki_layout_local_url(ciuki_url?nsurl_access(ciuki_url):NULL)?"local":"remote",
++                htmlc->ciuki_layout_timeout?"time":"admission",(unsigned long long)(ciuki_layout_last_ns()/1000u));
++        content_set_status(c,ciuki_layout_message(htmlc));
+         /* READY/reformat callers still own their stack references. Report
+          * failure only after that call unwinds, and cancel on destruction. */
+         guit->misc->schedule(0,ciuki_layout_error,c);
+--- a/netsurf/content/handlers/text/textplain.c
++++ b/netsurf/content/handlers/text/textplain.c
+@@ -68,6 +68,7 @@
+ 	unsigned long physical_line_count;
+ 	struct textplain_line *physical_line;
+ 	bool ciuki_layout_failed;
++	bool ciuki_layout_timeout;
+ 	int formatted_width;
+ 	struct browser_window *bw;
+ 
+@@ -406,7 +407,9 @@
+ {
+     struct content *c=context;
+     content_set_error(c);
+-    content_broadcast_error(c,NSERROR_STOPPED,"Local text exceeds layout admission/time limit.");
++    content_broadcast_error(c,NSERROR_STOPPED,((textplain_content *)c)->ciuki_layout_timeout
++        ? "This text needs more layout time than the browser allows for web content."
++        : "This text exceeds the browser's layout size limits.");
+ }
+ static bool ciuki_text_reformat(struct content *c, int width, int height)
+ {
+@@ -537,12 +540,17 @@
+ {
+     textplain_content *text=(textplain_content *)c;
+     if (text->ciuki_layout_failed) return;
+-    uint64_t start=ciuki_layout_begin();
++    /* f6-20: the time limit applies to remote text only. */
++    nsurl *url=content_get_url(c);
++    bool local=ciuki_layout_local_url(url?nsurl_access(url):NULL);
++    struct ciuki_layout_span span=ciuki_layout_begin(!local);
+     bool accepted=ciuki_text_reformat(c,width,height);
+-    if (!ciuki_layout_end(start,accepted)) {
++    if (!ciuki_layout_end(span,accepted)) {
+         text->ciuki_layout_failed=true;c->ciuki_layout_rejected=true;text->physical_line_count=0;
++        text->ciuki_layout_timeout=ciuki_layout_last_cause()==CIUKI_LAYOUT_TIME;
+         c->width=1;c->height=1;
+-        fprintf(stderr,"NetSurf layout rejected: plain text admission/time limit.\n");
++        fprintf(stderr,"NetSurf layout rejected: plain text, %s, %s limit, elapsed_us=%llu.\n",local?"local":"remote",
++                text->ciuki_layout_timeout?"time":"admission",(unsigned long long)(ciuki_layout_last_ns()/1000u));
+         guit->misc->schedule(0,ciuki_text_error,c);
+     }
+ }
+--- a/netsurf/desktop/browser_window.c
++++ b/netsurf/desktop/browser_window.c
+@@ -1398,6 +1398,15 @@
+ 	} else if (c == bw->current_content) {
+ 		bw->current_content = NULL;
+ 		browser_window_remove_caret(bw, false);
++		/* Ciuki f6-20: an error after READY (a layout rejection) finds the
++		 * page's parameters already moved to current_parameters. The error
++		 * page's Try Again retries loading_parameters: give them back. */
++		if (bw->loading_parameters.url == NULL &&
++		    bw->current_parameters.url != NULL) {
++			bw->loading_parameters = bw->current_parameters;
++			memset(&bw->current_parameters, 0,
++			       sizeof(bw->current_parameters));
++		}
+ 	}
+ 
+ 	hlcache_handle_release(c);
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -118,6 +118,7 @@
+ static void die(const char *error)
+ {
+ 	fprintf(stderr, "%s\n", error);
++	fprintf(stderr, "[netsurf] exit reason=fatal\n");
+ 	exit(1);
+ }
+ 
+@@ -646,15 +647,19 @@
+ 
+ 		if (fbtk_event(fbtk, &event, timeout)) {
+ 			if ((event.type == NSFB_EVENT_CONTROL) &&
+-			    (event.value.controlcode ==  NSFB_CONTROL_QUIT))
++			    (event.value.controlcode ==  NSFB_CONTROL_QUIT)) {
++				/* f6-20: the surface states why (desktop close
++				 * request, channel loss); nothing else quits. */
++				ciuki_chrome_exit_reason(NULL);
+ 				fb_complete = true;
++			}
+ 		}
+ 
+ 		if (!ciuki_chrome_modal()) fbtk_redraw(fbtk);
+         ciuki_chrome_render();
+         if (ciuki_capture_path && window_list && !ciuki_chrome_busy()) {
+             /* Let deferred core callbacks unwind before taking host evidence. */
+-            if (++ciuki_capture_turns>=3) { ciuki_chrome_capture(fbtk_get_nsfb(fbtk)); fb_complete=true; }
++            if (++ciuki_capture_turns>=3) { ciuki_chrome_capture(fbtk_get_nsfb(fbtk)); ciuki_chrome_exit_reason("capture"); fb_complete=true; }
+         }
+ 	}
+ }
+@@ -1158,6 +1163,7 @@
+ 	if (cbi->event->type != NSFB_EVENT_KEY_UP)
+ 		return 0;
+ 
++	ciuki_chrome_exit_reason("close-button");
+ 	fb_complete = true;
+ 
+ 	return 0;
+@@ -2300,12 +2306,15 @@
+ 	}
+ 	if (ret != NSERROR_OK) {
+ 		fb_warn_user("Errorcode:", messages_get_errorcode(ret));
++		ciuki_chrome_exit_reason("window-create-failed");
+ 	} else {
+ 		framebuffer_run();
+ 
+ 		browser_window_destroy(bw);
+ 	}
+ 
++	/* f6-20: one line on stderr, before the core's lwc leak report. */
++	ciuki_chrome_exit_report();
+ 	netsurf_exit();
+     free(fbtk);fbtk=NULL;
+     filepath_free_strvec(respaths);respaths=NULL;

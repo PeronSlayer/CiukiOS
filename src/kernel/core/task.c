@@ -805,6 +805,7 @@ void schedule(void)
             if (!was_demoted && t->device_demoted) device_overrun_record(t);
         }
     }
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_QUEUE);
     struct task *prev = g_current;
     priority_init(prev);
     bool preempted = prev->state == T_RUNNING && g_need_resched;
@@ -902,6 +903,7 @@ void schedule(void)
     tss_set_kernel_stack(dosvm_task_esp0 ? dosvm_task_esp0(next, esp0) : esp0);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_LDT_DEBUG);
     if (dosvm_task_switch) dosvm_task_switch(next);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_PROC);
     proc_task_switch(next);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_FPU);
     fpu_task_switch(next);
@@ -909,6 +911,8 @@ void schedule(void)
     crit_end();                 /* a switch suspends the caller's critical section */
     switch_context(&prev->saved_esp, next->saved_esp);
     crit_begin();               /* time only the remainder after resuming */
+    /* f1-94: the resumed caller's own IF-off code until its next mark. */
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_RESUME);
     if (own_irqoff) crit_end();
     irq_restore(f);
 }
@@ -936,7 +940,9 @@ void sched_tick(void)
     }
     file_clock_tick();
     if (dosvm_tick) kwork_queue(sched_vm_tick_work, 0);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_TIMERS);
     ktimer_tick(g_ticks);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_SCHED);
     /* Running-time decay concerns only the current task; deadline events
      * and ready-age promotion are dispatched by the ordered timer queue. */
     struct task *t = g_current;

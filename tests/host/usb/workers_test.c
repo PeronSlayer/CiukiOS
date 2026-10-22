@@ -10,6 +10,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 #include <ciuki/task.h>
+#include <ciuki/smi.h> /* f1-94: the worker loops mark usb-hid turns (weak hook) */
 volatile uint64_t g_ticks;
 struct ciuki_boot_info g_boot;
 struct task *g_current;

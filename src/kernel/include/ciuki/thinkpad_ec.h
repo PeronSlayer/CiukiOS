@@ -17,7 +17,15 @@ struct thinkpad_ec {
     bool active, available, pending_read, timeout_logged;
     uint8_t status, failures;
     uint64_t next_poll, next_timeout_log;
+    /* f1-94: volume poll interval (ms); 0 means no periodic EC traffic. */
+    uint32_t poll_ms;
 };
+/* f1-94 amendment 1: 1 Hz by default (was 4 Hz); BOOT.CFG ecpoll=0 turns
+ * the poll off. Exact token over the bounded boot options. */
+#define THINKPAD_EC_POLL_DEFAULT_MS 1000u
+uint32_t thinkpad_ec_poll_option(const char *options, size_t size);
+/* Native poll state for records: interval in ms, 0 when off, -1 without EC. */
+int thinkpad_ec_poll_state(void);
 /* Firmware strings are copied/sanitized for records; eligibility is decided
  * against the complete original strings, before truncation. */
 struct thinkpad_ec_smbios {

@@ -126,13 +126,113 @@ Box's own `--dos-kernel=` and autorun), waits for the prompt, records the VM
 text screen (hex rows) at the prompt, before the game's mode set and after it
 ends, the unified binding state, three windowed frame digests, then arms
 `fullscreen_enter` for the runner's Alt+Enter and samples one record per
-second for 45 s (`frame_seconds` from the aperture dirty bits, PM timer IRQs,
+second for 45 s (`frames` from the aperture dirty bits, PM timer IRQs,
 OPL/SB progress, IFS reads/failures, `cause`). `case=verdict outcome=`
 `running` (frames in every observed second but two), `frozen`, `watchdog`,
 `exited`, `stopped`, `not-entered`, `no-video` or `launch-failed`.
 `fullscreen_demo_screen` keeps the two live QMP screendumps. Cases
 `vm-game-doom-unified-qemu-t23` and `vm-game-doom-freedos-qemu-t23` in
 `tests/suites/f3-vm.json`.
+
+f3-61b (2026-10-22 10:45, after QEMU run cade4804 on image 6b586080 failed
+with "version, run or probe mismatch"): a run carries exactly one probe name
+(`scripts/test/evidence.py` refuses any other), and there is no secondary-probe
+declaration in the runner. As for `vm-fullscreen`, the selected controller
+owns the window path's records from the VM admission on: `window_probe()` in
+`dosvm_client.c` names `vm-game` for an `f3:vm-game ` request (admission,
+`vm_stop`, `vm_cleanup`, guest and perf records); other runs keep
+`vm-window`. Every vm-game record also fits the 240-byte CIUKI_TEST line
+for all values (an overlong line becomes `event=ERROR reason=record_overflow`
+in `output.c`): text rows are emitted as two halves (`row= col=0|40 hex=`),
+the per-second record is `case=sample t= fs= state= mode= frames=n/m dpmi=
+returned= cause= error=` plus `case=progress t= irq_pm= opl= sb= ifs_reads=
+ifs_failed= ifs_critical=`, the binding state is `case=unified when= kernel=
+bound= active= owned= start= critical= refusals= held=` plus `case=unified_io
+when= requests= opens= closes= reads= read_kib= failed= expired=`, frames are
+`case=frame index= error= mode= w= h= digest=` and the end state
+`case=after state= reason= vector= mode= dpmi= returned= exec= idle= cause=`.
+Host evidence: `tests/host/test_vm_game_records.py` (widest-value rendering
+of every format, the runner Parser and both suite cases over a full run, the
+cade4804 prefix refused) and the window-ownership check in
+`tests/host/dosvm_video_test.inc`.
+
+f3-61c (2026-10-22 11:08, after QEMU run 12142460 of
+`vm-game-doom-unified-qemu-t23` ended "terminal evidence before declared
+stimuli completed"): the unified binding and DOOM ran (`DFV2 IFS active
+drives=c`, `case=unified when=prompt bound=1 active=1 owned=c start=63`,
+1216 IFS reads, 2658 KiB), but the runner's Alt+Enter entry was refused by
+the f3-26 readback under QEMU's standard VGA (`fullscreen_transport_fault
+registers=1` = MISC output/enable, `fullscreen_refused error=-5
+continuation=windowed`, the open f3-29 deviation), so `ARM fullscreen_leave`
+never came. Decisions:
+
+- The kernel counts refusals with the windowed continuation
+  (`fullscreen_refusals`, `fullscreen_refusal`). The probe waits for entry or
+  a refusal and records `case=fullscreen entered= refused= reason=
+  continuation=windowed|none policy=qemu|hardware`. Under QEMU
+  (`CBI_F_SMBIOS_QEMU`, as f3-29 proposes for this deviation) a refusal is
+  data: the probe verifies the windowed game for 25 s (at least 20 sampled
+  seconds with a page flip or a changed presenter frame, same `case=sample`
+  and `case=progress` records with `fs=0`) and the verdict carries
+  `display=window|fullscreen`. On hardware (`policy=hardware`, the T23
+  expectation, also when the same case is imported from a physical boot) a
+  refusal stays `outcome=refused`, a failure. A profile whose full screen
+  works can require it with the predicate field `display: fullscreen`.
+- Runner: an action may declare `unless`, a guest DATA record that releases
+  it when its ARM never comes (`scripts/test/run.py` `Actions.skip_declined`,
+  recorded as `type=skipped`). The vm-game leave action is released by
+  `case=fullscreen entered=0`; a missing ARM without that record still fails
+  the stimuli.
+- Clean end: after the verdict the probe leaves DOOM through its own menu
+  (Esc, Up, Enter, y), waits up to 120 s for `dosvm_shell_idle`, then closes
+  the window: an ordinary EXIT, `vm_cleanup data_loss=0`. It records
+  `case=close method=idle-prompt|forced why=none|vm-stopped|fullscreen|
+  game-running|dpmi-client|shell-busy`, then `case=after` and the text
+  screen (ENDOOM and the prompt).
+- The IFS keeps the first 8 failed requests (function, DOS error, 8.3 name:
+  FN1 for path calls, the SFT name for handle calls) and the probe records
+  `case=unified_failed when= n= of= fn=11xx dos= error= name=`. In the
+  production VM on the host, DOOM's 4 failures are expected misses:
+  `1116 error=2 DOOM.ETX` (open), `110f error=2 DOOM2F.WAD`, `DOOM2.WAD`,
+  `DOOM.WAD` (get attributes, DOOM's IdentifyVersion).
+
+f3-61d (2026-10-22 11:35, QEMU runs ebffb1db (unified) and 761df914
+(freedos case)):
+
+- The freedos case had launched `kernel=unified`: `scripts/test/run.py`
+  rebuilds the fw_cfg request from the parsed selector and dropped the
+  vm-game `kernel=` suffix. It is now kept before the platform suffix; a host
+  test sends both suite cases through `qemu_args` and the kernel selector
+  (`PROBE_DOS_FREEDOS` for the freedos case). The probe's `case=vm
+  kernel= expected=` predicates already refuse a mismatch.
+- The runner failed the windowed run on its own demo pair: the probe's
+  per-second presenter hash (a 640x480 render plus SHA-256 under TCG, about
+  0.3–0.6 s each) made later samples late, and the two demo ARMs were then
+  emitted in the same instant, so the two screendumps were identical. The
+  probe now samples cheaply (page flips, scanout seconds) and paces the ARMs
+  5 s apart on the clock. With `continuation=windowed` the runner reports
+  `fullscreen_demo={skipped, reason: refused}` and compares a desktop
+  screendump with later ones every 5 s, from the demo ARM until the verdict,
+  for a change that fits one 640x480 DOS window client (`window_demo`).
+- Window frame rate under QEMU: not the presenter (the counted flips are CRTC
+  start-address writes in the VM, before any WAIT_PRESENT/PRESENT) and not
+  the IFS (the freedos-run had the same `frames=1/10`). It is the QEMU return
+  tracker (f3-35: TF stepping under `CBI_F_SMBIOS_QEMU` because TCG's debug
+  breakpoints are unusable): in the production VM on the host, 60 s of DOOM
+  with DMX sound take 5.66 M monitor traps with the TF tracker (4.48 M
+  `pm_return` single steps, about 405 per protected-mode IRQ, 11054 IRQs)
+  against 1.65 M with the hardware breakpoint tracker (443 k checkpoints,
+  397 k `pm_if`), same 138 page flips in that instruction-timed run. The QEMU
+  run shows about 5000 VM exits per second (25 k per 5 s perf window), so the
+  IRQ handlers' single steps saturate the VM and DOOM's main loop flips only
+  every few seconds (3 changes in 19 s). On the T23 (breakpoint tracker, a
+  few µs per exit) the same IRQ load costs about 5 % of the CPU; DOOM runs at
+  its 35 Hz tic rate, full screen expected near 35 frames per second.
+- Profile-aware verdict: full screen, and a window on hardware, need frames
+  in all observed seconds but two (`threshold=frames`); a window under QEMU
+  needs at least 20 sampled seconds, PM IRQs in all but two of them and at
+  least two page flips (`threshold=qemu-tcg`). `case=progress` carries
+  `flips=`.
 
 ## Open (lead)
 

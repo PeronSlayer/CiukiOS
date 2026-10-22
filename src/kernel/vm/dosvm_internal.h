@@ -184,6 +184,10 @@ struct dosvm {
      * sampled and seconds in which the guest stored to the scanout (aperture
      * PTE dirty bits, or a VBE frame flush). Reset at each entry. */
     uint32_t fullscreen_seconds, fullscreen_frame_seconds;
+    /* f3-61c: full-screen entries refused with the windowed continuation and
+     * the last reason (negative errno), e.g. the QEMU std-VGA readback (f3-29). */
+    uint32_t fullscreen_refusals;
+    int fullscreen_refusal;
     uint32_t continuation;
     struct kwait wake;
     struct kwait present_wait; /* request dependency on the VM worker */
@@ -409,6 +413,7 @@ int dosvm_file_disk(struct dosvm *,uint32_t,void *,bool) __attribute__((weak));
 struct dosvm_unified_info {
     bool active; uint32_t owned, requests, opens, closes, reads, failed, critical, expired, refusals, held, start;
     uint64_t read_bytes;
+    struct { uint16_t fn, error; char name[13]; } failure[8];   /* f3-61c: first min(failed, 8) */
 };
 bool dosvm_file_unified_info(const struct dosvm *,struct dosvm_unified_info *) __attribute__((weak));
 void dosvm_disk_provider_init(struct dosvm *,struct blkdev *);

@@ -21,6 +21,7 @@ int grants_display_suspend(bool suspended)
     return 0;
 }
 extern void display_frame_complete(uint32_t generation, bool full_frame) __attribute__((weak));
+extern void entropy_desktop_presented(void) __attribute__((weak));
 bool grants_display_owner(const struct process *p)
 {
     if (!p || p->pid != grant_owner) return false;
@@ -231,6 +232,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         activity.presents++;
         if (display_frame_complete) display_frame_complete(generation, full_frame);
         if (full_frame && pager_bootstrap_complete) pager_bootstrap_complete();
+        if (full_frame && entropy_desktop_presented) entropy_desktop_presented(); /* f6-21 */
     }
     return err;
 }

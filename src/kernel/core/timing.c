@@ -8,6 +8,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/task.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/smi.h>
 
 uint64_t g_tsc_per_ms;               /* 0 until calibrated */
 static uint64_t crit_start, crit_firmware_start, firmware_cycles;
@@ -145,7 +146,10 @@ void timing_stall_observe(uint64_t start, uint64_t end, const char *section)
 {
     /* Attribution is independent of whether diagnostic tracing is active.
      * Only adjacent serialized no-work probes supply this heuristic tag. */
-    if (section && !strncmp(section, "smi_attributed", sizeof("smi_attributed"))) firmware_cycles += end - start;
+    if (section && !strncmp(section, "smi_attributed", sizeof("smi_attributed"))) {
+        firmware_cycles += end - start;
+        if (smi_adjacent_gap) smi_adjacent_gap(start, end); /* f1-94 TSC evidence */
+    }
     /* IRQ budget probes call with IF clear; no allocation, I/O or logging. */
     if (!stall_active || start < stall_begin || !stall_per_ms || end - start <= stall_per_ms) return;
     /* The enclosing crit_end must not count this same stall a second time. */
@@ -203,6 +207,8 @@ void timing_timer_irq(void)
     if (!g_cpu_tsc)
         return;
     uint64_t now = rdtsc();
+    /* f1-94: SMI_STS sample (ICH3-M only) and blackout/activity relation. */
+    if (smi_tick) smi_tick(now, last_timer_tsc);
     if (last_timer_tsc && g_tsc_per_ms) {
         uint64_t gap = now - last_timer_tsc;
         if (gap > 2 * g_tsc_per_ms) {

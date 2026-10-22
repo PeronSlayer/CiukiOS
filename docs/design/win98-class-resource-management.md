@@ -329,6 +329,11 @@ Cap a fast-disk command at 64 KiB initially, with smaller adaptive limits
 when measured command time would consume the reader's service budget.
 Keep current firmware-selected DMA/PIO fallback and stop-proof rules.
 Do not assume a slow 64 KiB USB command can meet a 20 ms same-device bound.
+f1-96 (2026-10-22): a controller whose commands cannot meet the budget pins
+its admission size with `blk_queue_set_limits` (max and adaptive floor);
+the usb-storage queue pins its negotiated READ(10)/WRITE(10) length (64 KiB
+on UHCI) instead of ratcheting to the one-page floor, see
+[usb-contract.md](usb-contract.md#f1-96-negotiated-64-kib-transfers-uhci-td-ring-pinned-queue-limit-2026-10-22).
 
 Merge only adjacent requests with compatible device generation, priority,
 dependency frontier and pin ownership. FIFO/age break ties and prevent
@@ -607,6 +612,21 @@ heuristic does not relax the software budget, erase raw latency, or justify
 changing BIOS/SMM policy. Host replay must show ≤100 µs modeled work; physical
 qualification needs both that software bound and acceptable end-to-end
 service despite measured firmware gaps. Unexpected raw overruns remain open.
+
+Amendment f1-94 (lead, 2026-10-22): after the operating system has taken a
+device over from the firmware through its documented handoff, clearing the
+chipset SMI enable that belongs to that handoff is part of the handoff, not
+a change of BIOS/SMM policy. Today this is exactly one bit: `LEGACY_USB_EN`
+(ICH3-M 290716-001 9.8.3.14), cleared once after all three UHCI functions
+are owned and their USB_LEGKEY trap/SMI enables are clear (11.1.16). Every
+other SMI enable (GBL_SMI_EN, BIOS_EN, SLP_SMI_EN, APMC_EN, SWSMI_TMR_EN,
+MCSMI_EN, TCO_EN, PERIODIC_EN) stays with the firmware; a firmware re-arm is
+recorded and never fought. The SMI attribution records (`[kernel] smi`,
+`smi_coincide`, `smi_regs`, [f1-94](../validation/f1-94-irqoff-blackout.md))
+are evidence only: they never subtract firmware time from a software budget.
+Reducing our own device traffic that the firmware turns into SMIs (the
+ThinkPad EC poll, 1 Hz by default, `ecpoll=0` to stop it) is ordinary driver
+policy and needs no further amendment.
 
 Extend `test_kernel_latency.py`/production scheduler and VM lifecycle replays
 with long cleanup, fragmented cached chains, all-dirty cache and maximum

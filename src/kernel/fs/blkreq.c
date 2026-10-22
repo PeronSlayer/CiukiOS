@@ -132,6 +132,17 @@ void blk_queue_init(struct blk_queue *q,const char *name,uint32_t max_bytes) {
     q->name=name; q->max_bytes=max_bytes && max_bytes<BLKREQ_COMMAND_BYTES ? max_bytes : BLKREQ_COMMAND_BYTES;
     q->limit_bytes=q->max_bytes; q->last_record=fs_now_ms();
 }
+void blk_queue_set_limits(struct blk_queue *q,uint32_t max_bytes,uint32_t floor_bytes) {
+    max_bytes-=max_bytes%BLKDEV_SECTOR_SIZE; floor_bytes-=floor_bytes%BLKDEV_SECTOR_SIZE;
+    if (max_bytes<BLKDEV_SECTOR_SIZE) max_bytes=BLKDEV_SECTOR_SIZE;
+    if (max_bytes>BLKREQ_COMMAND_BYTES) max_bytes=BLKREQ_COMMAND_BYTES;
+    if (floor_bytes>max_bytes) floor_bytes=max_bytes;
+    fs_lock_take(&q->lock);
+    q->max_bytes=max_bytes; q->floor_bytes=floor_bytes;
+    if (q->limit_bytes>max_bytes) q->limit_bytes=max_bytes;
+    if (q->limit_bytes<floor_bytes) q->limit_bytes=floor_bytes;
+    q->record_dirty=true; fs_lock_drop(&q->lock);
+}
 int blk_queue_start(struct blk_queue *q) {
     initialize(); if (!pool) return -FS_ENOMEM;
 #ifndef FS_HOST
@@ -382,6 +393,9 @@ bool blk_queue_run_one(struct blk_queue *q) {
      * (Files, DOS game loading). Real IDE command overhead dominates small
      * transfers; QEMU hides it. */
     uint32_t floor=BLKREQ_MIN_COMMAND_BYTES<r->device->sector_size ? r->device->sector_size : BLKREQ_MIN_COMMAND_BYTES;
+    /* f1-96: a pinned controller floor (USB full speed) is not shrunk by
+     * the reader budget; C3 reports such slow source commands instead. */
+    if (q->floor_bytes>floor) floor=q->floor_bytes;
     if (floor>q->max_bytes) floor=q->max_bytes;
     if (elapsed>BLKREQ_READER_MS/2 && bytes>floor) {
         uint32_t limit=(uint32_t)((uint64_t)bytes*(BLKREQ_READER_MS/2)/elapsed);

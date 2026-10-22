@@ -726,6 +726,13 @@ class Actions:
         for action in declared:
             if action.get('after',{}).get('event') not in ('READY','ARM'):
                 raise res.Refusal('actions require READY/ARM synchronization')
+            # f3-61c: an action whose ARM the probe declares will not come.
+            # Only an explicit guest DATA record releases it; a missing ARM
+            # without that record still leaves the stimuli incomplete.
+            unless=action.get('unless')
+            if unless is not None and (not isinstance(unless,dict) or unless.get('event')!='DATA' or len(unless)<2 or
+                                       not all(isinstance(v,(str,int)) for v in unless.values())):
+                raise res.Refusal('action unless requires a guest DATA record match')
             if action.get('type') not in ('input','cut','media'):raise res.Refusal('unknown runner action')
             if action['type']=='input':
                 if not 1<=action.get('repeat',1)<=1000 or not action.get('batches'):
@@ -819,8 +826,19 @@ class Actions:
         matched=any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records)
         return {'index':self.index,'action':action,'synchronization_observed':matched,
                 'batch':self.batch,'repeat':self.repeat}
+    def skip_declined(self,parser):
+        """Release actions whose `unless` record arrived instead of their ARM."""
+        while not self.complete and not self.batch and not self.repeat:
+            action=self.declared[self.index]
+            if 'unless' not in action:return
+            if any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records):return
+            declined=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['unless'].items())]
+            if not declined:return
+            self.observed.append({'type':'skipped','index':self.index,'unless_seq':declined[0]['seq']})
+            self.index+=1
     def step(self,parser,qmp,now):
         if not self.wait_consumption(parser,now):return None
+        self.skip_declined(parser)
         if self.complete or not qmp or now<self.due:return None
         action=self.declared[self.index]
         matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['after'].items())]
@@ -1000,6 +1018,59 @@ def observe_fullscreen_demo(before, after):
     return {'changed': True, 'width': width, 'height': height,
             'before_sha256': hashlib.sha256(pixels).hexdigest(),
             'after_sha256': hashlib.sha256(pixels2).hexdigest()}
+
+
+def observe_window_demo(before, after, seconds, attempt):
+    """f3-61d: the DOS window of a game whose full screen was refused. The
+    two desktop screendumps (>= 5 s apart) must differ, and every changed
+    pixel must fit one 640x480 DOS window client (the desktop clock is fixed
+    under --test=vm-fullscreen; nothing else animates)."""
+    width, height, pixels = read_ppm(before)
+    width2, height2, pixels2 = read_ppm(after)
+    if (width, height) != (width2, height2):raise EvidenceError('windowed DOS game screen geometry changed')
+    changed = [i // 3 for i in range(0, len(pixels), 3) if pixels[i:i+3] != pixels2[i:i+3]]
+    box = None
+    if changed:
+        xs = [i % width for i in changed]; ys = [i // width for i in changed]
+        box = [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1]
+    inside = bool(box) and box[2] <= 640 and box[3] <= 480
+    return {'changed': inside, 'changed_pixels': len(changed), 'box': box, 'seconds': round(seconds, 3),
+            'attempt': attempt, 'width': width, 'height': height,
+            'before_sha256': hashlib.sha256(pixels).hexdigest(), 'after_sha256': hashlib.sha256(pixels2).hexdigest()}
+
+
+class WindowDemo:
+    """f3-61d: `case=fullscreen continuation=windowed` (full screen refused,
+    the game stays in its window). The full-screen demo pair is reported
+    skipped; from the demo start ARM until the probe's verdict the runner
+    compares a first desktop screendump with one taken every 5 s after it
+    and stops at the first change inside a DOS window client."""
+    INTERVAL = 5.0
+
+    def __init__(self, directory):
+        self.directory = directory; self.arm_at = None; self.base = None; self.base_at = None
+        self.attempts = 0; self.result = None
+
+    @staticmethod
+    def windowed(parser):
+        return any(r.get('event') == 'DATA' and r.get('case') == 'fullscreen' and r.get('continuation') == 'windowed'
+                   for r in parser.records)
+
+    def step(self, parser, qmp, now):
+        if self.result and self.result['changed']:return
+        if any(r.get('event') == 'DATA' and r.get('case') == 'verdict' for r in parser.records):return
+        if not any(r.get('event') == 'ARM' and r.get('action') == 'fullscreen_demo_start' for r in parser.records):return
+        if self.arm_at is None:self.arm_at = now
+        if self.base is None:
+            if now - self.arm_at < 1.0:return
+            self.base = self.directory / 'window-demo-0.ppm'
+            qmp.command('screendump', {'filename': str(self.base)}); self.base_at = now
+            return
+        if now - self.base_at < self.INTERVAL * (self.attempts + 1):return
+        self.attempts += 1
+        shot = self.directory / f'window-demo-{self.attempts}.ppm'
+        qmp.command('screendump', {'filename': str(shot)})
+        self.result = observe_window_demo(self.base, shot, now - self.base_at, self.attempts)
 
 
 def observe_window_screen(path, spec, arm):
@@ -1681,6 +1752,10 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         requested=selector(request,source,True)
         if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
         request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
+        # f3-61d: the vm-game DOS kernel precedes the ordinary suffixes (the
+        # kernel selector, loader menu and model grammar); rebuilding the
+        # request without it launched kernel=unified for the freedos case.
+        if requested['probe']=='vm-game' and requested.get('kernel'):request+=' kernel='+requested['kernel']
         platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
         if requested.get('title'):
             if platform:raise res.Refusal('DOS title selector does not accept a platform suffix')
@@ -1914,6 +1989,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     window_shot = directory/'window.ppm';window_armed_at = None
     fullscreen_shots = [directory/'fullscreen-before.ppm', directory/'fullscreen-after.ppm']
     fullscreen_demo_shots = [directory/'fullscreen-demo-start.ppm', directory/'fullscreen-demo-end.ppm']
+    window_demo = WindowDemo(directory)
     fullscreen_arms = {}
     normal_shot = directory/'screen.ppm';desktop_at = failure_at = None
     restart_performed=False;expected_resets=0
@@ -2105,7 +2181,15 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     finally:window_shot.unlink(missing_ok=True)
             # f3-61: fullscreen_demo_screen takes only the changing-frames pair
             # (f3:vm-game) and keeps both screendumps as run evidence.
-            if (case.get('fullscreen_screen') or case.get('fullscreen_demo_screen')) and qmp:
+            # f3-61d: the guest decides the demo check. With a refused full
+            # screen (continuation=windowed) the pair is skipped, not failed,
+            # and the DOS window region is compared instead (WindowDemo).
+            windowed_demo = case.get('fullscreen_demo_screen') and WindowDemo.windowed(parser)
+            if windowed_demo and qmp:
+                result['fullscreen_demo'] = {'skipped': True, 'reason': 'refused'}
+                window_demo.step(parser, qmp, now)
+                if window_demo.result:result['window_demo'] = window_demo.result
+            if (case.get('fullscreen_screen') or case.get('fullscreen_demo_screen')) and qmp and not windowed_demo:
                 demo_group = ('fullscreen_demo', ('fullscreen_demo_start', 'fullscreen_demo_end'), fullscreen_demo_shots, observe_fullscreen_demo)
                 for group, actions2, shots, observe in ((
                     ('fullscreen_screen', ('fullscreen_before', 'fullscreen_after'), fullscreen_shots, observe_fullscreen_screen),
@@ -2142,6 +2226,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if parser.terminal:
                 if parser.terminal['event']=='NOT_RUN' or session and parser.outcome=='not_run':
                     result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal.get('after',parser.terminal.get('reason','unknown'));break
+                actions.skip_declined(parser)
                 if not actions.complete or session and not session.player.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
@@ -2153,6 +2238,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     raise EvidenceError('DOS full-screen lacks changing demo/equal return live screendumps')
                 if case.get('fullscreen_demo_screen') and 'fullscreen_demo' not in result:
                     raise EvidenceError('DOS full-screen game lacks changing live screendumps')
+                if case.get('fullscreen_demo_screen') and result['fullscreen_demo'].get('skipped') and \
+                        not result.get('window_demo', {}).get('changed'):
+                    raise EvidenceError('windowed DOS game: no changed DOS window between screendumps 5 s apart')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']

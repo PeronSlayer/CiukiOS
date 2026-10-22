@@ -414,6 +414,11 @@ bool dosvm_file_unified_info(const struct dosvm *v,struct dosvm_unified_info *ou
     *out=(struct dosvm_unified_info){.active=r->ifs.active,.owned=r->ifs.owned,.requests=t->requests,.opens=t->opens,
         .closes=t->closes,.reads=t->reads,.failed=t->failed,.critical=t->critical,.expired=t->expired,
         .refusals=t->refusals,.held=dfv2_ifs_held(&r->ifs),.start=r->start,.read_bytes=t->read_bytes};
+    _Static_assert(DFV2_IFS_FAILURES==8,"failure list size");
+    for (unsigned i=0;i<DFV2_IFS_FAILURES && i<t->failed;i++) {
+        out->failure[i].fn=r->ifs.failure[i].fn; out->failure[i].error=r->ifs.failure[i].error;
+        memcpy(out->failure[i].name,r->ifs.failure[i].name,sizeof(out->failure[i].name));
+    }
     return true;
 }
 int dosvm_file_disk(struct dosvm *v,uint32_t lba,void *sector,bool write) {

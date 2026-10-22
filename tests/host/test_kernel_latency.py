@@ -268,7 +268,7 @@ static void test_irq_restore(uint32_t f) {
         with tempfile.TemporaryDirectory(prefix='accel-notice-', dir=out) as directory:
             temp = Path(directory)
             source = (ROOT / 'apps/desktop/desktop.c').read_text()
-            begin = source.index('static void accel_notice_text(')
+            begin = source.index('void accel_notice_text(')
             end = source.index('static void storage_poll(', begin)
             (temp / 'latency_accel_notice.inc').write_text(source[begin:end])
             binary = temp / 'notice'
@@ -323,8 +323,13 @@ static void test_irq_restore(uint32_t f) {
             pit = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
             (temp / 'pit_timer.inc').write_text(pit[pit.index('static void shared_tick_work('):pit.index('void pit_init(')])
             write_model(temp / 'vm_creation_model.inc')
+            # f6-21: the jitter collector's turn policy, verbatim from entropy.c.
+            entropy = (ROOT / 'src/kernel/core/entropy.c').read_text()
+            (temp / 'entropy_turns.inc').write_text(
+                entropy[entropy.index('/* f6-21 turns: begin'):entropy.index('static struct entropy_turns turns;')])
             for unit, extra in (
                 ('kernel_latency_test.c', []),
+                ('jitter_collector_latency_test.c', []),
                 ('scheduler_irqoff_test.c', []),
                 ('scheduler_priorities_test.c', []),
                 ('timer_audio_load_test.c', []),

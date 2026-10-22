@@ -13,3 +13,19 @@
 5. Host tests: SMI classification from recorded samples, the SMI_EN mask computation per chipset id, the records. Validation document `docs/validation/f1-94-irqoff-blackout.md` with the expected T23 lines.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-94-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 10:34, decisions on the delivery)
+
+1. R1 is amended: after the operating system has taken a device over from
+   the firmware (UHCI legacy handoff), clearing the SMI enable that belongs
+   to that handoff (`LEGACY_USB_EN`) is part of the handoff, not a change of
+   BIOS/SMM policy; every other SMI enable stays. Record the amendment in
+   `docs/design/win98-class-resource-management.md` R1.
+2. The leading hypothesis (the kernel's 4 Hz ThinkPad EC poll trapped by
+   the BIOS into an SMI, matching the ≈4 blackouts per second) gets a direct
+   experiment in the same delivery: the EC poll interval becomes a boot-time
+   setting with a default of 1 Hz, and a BOOT.CFG option `ecpoll=0` disables
+   the poll (loader: 807 bytes free; the option is preserved for the kernel
+   like `accel=0`); the `smi_coincide` record must count EC accesses so the
+   T23 serial answers the question in one trial.
+3. The QEMU phase attribution of the 2,079 µs section is re-run by the lead.

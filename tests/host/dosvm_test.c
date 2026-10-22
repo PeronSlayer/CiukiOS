@@ -512,7 +512,8 @@ void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[240]; va_list ap; va_start(ap,fmt); int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
-    CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window") || !strcmp(probe,"vm-fullscreen")));
+    CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window") || !strcmp(probe,"vm-fullscreen") ||
+          !strcmp(probe,"vm-game")));   /* f3-61b: the window path's owners */
     n=snprintf(last_record,sizeof(last_record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s %s",++records,probe,event,extra);
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     memcpy(recent_records[(records - 1) % 8], last_record, sizeof(last_record));
