@@ -55,6 +55,15 @@ static void report_error(struct music_player *p, int error, const char *path)
     snprintf(p->view.error_path,sizeof(p->view.error_path),"%s",path ? path : "");
     diagnostic("[music] error stage=%s errno=%d",p->stage ? p->stage : "playback",-error);
 }
+/* f4-37: the reader adds the decoder's stage cycles to the open window. */
+static void cost_add(struct music_cost *to, const struct music_cost *c)
+{
+    to->decode+=c->decode; to->imdct+=c->imdct; to->synth+=c->synth; to->pcm+=c->pcm;
+    to->adapter+=c->adapter; to->io+=c->io;
+    if (c->best && (!to->best || c->best<to->best)) to->best=c->best;
+    to->frames+=c->frames; to->out+=c->out; to->tiny+=c->tiny; to->scans+=c->scans;
+    to->de+=c->de; to->ue+=c->ue;
+}
 static int reader_cancel(void *ctx)
 {
     struct music_player *p=ctx;
@@ -81,8 +90,10 @@ static void *reader(void *ctx)
         int got=music_decoder_read(p->decoder,p->ring+2*end,n);
         uint64_t elapsed=p->output->now(p->output->ctx)-begin;
         uint64_t length=music_decoder_length(p->decoder);
+        struct music_cost cost; music_decoder_cost(p->decoder,&cost);
         pthread_mutex_lock(&p->reservoir_lock);
         if (atomic_load(&p->reader_stop)) break;
+        cost_add(&p->level.cost,&cost);
         p->reader_length=length;
         if (got<0) { p->reader_error=got; break; }
         if (!got) { p->eof=1; break; }
@@ -186,7 +197,7 @@ static int load(struct music_player *p)
 void music_player_init(struct music_player *p, const struct music_output *output, music_cancel cancel, void *ctx)
 {
     memset(p,0,sizeof(*p)); atomic_init(&p->reader_stop,0);
-    atomic_init(&p->ui_publishes,0); atomic_init(&p->ui_repaints,0);
+    atomic_init(&p->ui_publishes,0); atomic_init(&p->ui_repaints,0); atomic_init(&p->ui_kcycles,0);
     p->output=output; p->cancel=cancel; p->ctx=ctx;
     p->sync_error=pthread_mutex_init(&p->reservoir_lock,NULL);
     if (!p->sync_error) {
@@ -277,6 +288,34 @@ int music_player_command(struct music_player *p, const struct music_command *c)
     }
     return -EINVAL;
 }
+/* f4-37: two fixed workloads per cost record, the best of three runs in TSC
+ * cycles. loop: 1024 iterations of a dependent add and a counted branch;
+ * on P6 the TSC counts every core clock (Intel SDM Vol. 3B, "Time-Stamp
+ * Counter") and keeps counting while throttling stops the clock, so a slowed
+ * or throttled core shows here. mem: a second pass over 4 KiB of the
+ * player's own memory, about one load per clock when it is cacheable. */
+static uint32_t calibration_buffer[1024];
+static void calibrate(unsigned *loop, unsigned *mem)
+{
+    uint64_t best_loop=UINT64_MAX, best_mem=UINT64_MAX;
+    for (unsigned run=0;run<3;run++) {
+        uint64_t begin=music_cycles();
+#if defined(__i386__) || defined(__x86_64__)
+        unsigned x=0, n=1024;
+        __asm__ volatile("1:\n\taddl $1, %0\n\tdecl %1\n\tjnz 1b" : "+r"(x), "+r"(n));
+#endif
+        uint64_t middle=music_cycles();
+        volatile uint32_t *b=calibration_buffer; uint32_t sum=0;
+        for (unsigned i=0;i<1024;i++) sum+=b[i];
+        uint64_t warm=music_cycles();
+        for (unsigned i=0;i<1024;i++) sum+=b[i];
+        uint64_t end=music_cycles(); b[0]=sum&1u;
+        if (middle-begin<best_loop) best_loop=middle-begin;
+        if (end-warm<best_mem) best_mem=end-warm;
+    }
+    *loop=(unsigned)(best_loop<UINT32_MAX ? best_loop : UINT32_MAX);
+    *mem=(unsigned)(best_mem<UINT32_MAX ? best_mem : UINT32_MAX);
+}
 /* Called with reservoir_lock held. Diagnostics use the protected raw debug
  * sink on CiukiOS, independently of stdio and decoder/VFS locks. */
 static void level(struct music_player *p, uint64_t now, unsigned queued)
@@ -287,6 +326,7 @@ static void level(struct music_player *p, uint64_t now, unsigned queued)
         p->level.queued_low=p->level.queued_high=queued;
         p->level.publishes=atomic_load(&p->ui_publishes);
         p->level.repaints=atomic_load(&p->ui_repaints);
+        p->level.tsc=music_cycles(); p->level.ui_kcycles=atomic_load(&p->ui_kcycles);
     }
     if (p->count<p->level.low) p->level.low=p->count;
     if (p->count>p->level.high) p->level.high=p->count;
@@ -317,10 +357,26 @@ static void level(struct music_player *p, uint64_t now, unsigned queued)
         boost.flags,boost.boosts-p->producer_base.boosts,
         (unsigned)((boost.boost_us-p->producer_base.boost_us)/1000),boost.over_budget-p->producer_base.over_budget);
     p->producer_base=boost;
+    /* f4-37: where the time went in this window, one record (240 bytes). The
+     * stages are TSC cycles (decoder.h) converted with the window's own
+     * TSC rate; mhz is that rate, so a clock below the CPU's rating shows. */
+    uint64_t tsc=music_cycles(), mhz=(tsc-p->level.tsc)*1000/elapsed;
+    unsigned ui=atomic_load(&p->ui_kcycles), ui_k=ui-p->level.ui_kcycles;
+    const struct music_cost *c=&p->level.cost;
+#define MUSIC_US(cycles) (unsigned)(mhz ? (cycles)/mhz : 0)
+    unsigned loop, mem; calibrate(&loop,&mem);
+    diagnostic("[music] cost decode_us=%u synth_us=%u imdct_us=%u resample_us=%u ui_us=%u repaints=%u frames=%u tiny_values=%u "
+               "pcm_us=%u io_us=%u pump_us=%u out=%u mhz=%u de=%u ue=%u best_kc=%u loop=%u mem=%u",
+        MUSIC_US(c->decode),MUSIC_US(c->synth),MUSIC_US(c->imdct),MUSIC_US(c->adapter),MUSIC_US((uint64_t)ui_k*1024u),
+        repaints-p->level.repaints,c->frames,c->tiny,MUSIC_US(c->pcm),MUSIC_US(c->io),MUSIC_US(p->pump_cycles),
+        c->out,(unsigned)mhz,c->de,c->ue,(unsigned)(c->best/1000),loop,mem);
+#undef MUSIC_US
+    p->pump_cycles=0;
     memset(&p->level,0,sizeof(p->level));
     p->level.start=now+1; p->level.low=MUSIC_RING;
     p->level.queued_low=MUSIC_DEVICE_FRAMES;
     p->level.publishes=publishes; p->level.repaints=repaints;
+    p->level.tsc=tsc; p->level.ui_kcycles=ui;
 }
 int music_player_pump(struct music_player *p)
 {

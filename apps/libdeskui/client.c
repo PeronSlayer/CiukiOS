@@ -143,10 +143,15 @@ void du_window_present(struct du_window *w)
     if (w->closed || w->swap_sent || w->present_pending) return;
     int width = (int)w->info.width, height = (int)w->info.height;
     int x0 = width, x1 = -1, y0 = height, y1 = -1;
-    for (int y = 0; y < height; y++) {
+    int left = 0, right = width, top = 0, bottom = height;
+    if (w->present_rendered && !w->replacement) {
+        struct du_rect r = du_intersection(w->ui->rendered, (struct du_rect){0, 0, width, height});
+        left = r.x; right = r.x + r.w; top = r.y; bottom = r.y + r.h;
+    }
+    for (int y = top; y < bottom && left < right; y++) {
         uint32_t *src = w->back + (size_t)y * (size_t)width, *dst = w->pixels + (size_t)y * (size_t)width;
-        if (!memcmp(src, dst, (size_t)width * 4)) continue;
-        int a = 0, b = width - 1;
+        if (!memcmp(src + left, dst + left, (size_t)(right - left) * 4)) continue;
+        int a = left, b = right - 1;
         while (src[a] == dst[a]) a++;
         while (src[b] == dst[b]) b--;
         memcpy(dst + a, src + a, (size_t)(b - a + 1) * 4);

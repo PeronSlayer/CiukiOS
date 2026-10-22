@@ -12,3 +12,16 @@
 5. Host tests: the denormal regression, bit-exactness on the test vectors, the cost record format, the UI rate bound; the Music tests and `test_kernel_latency`.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f4-37-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 20:19, decisions on the delivery)
+
+Accepted. The decoder models at about 3 % of a 1.1 GHz Pentium III before
+the changes and 1.3–1.7 % after (FLDCW-free PCM conversion, exact
+multiply-and-shift resampling, no input-buffer copy, mono scratch row
+cleared); the stereo denormal hypothesis is refuted, so the trial's 41 % is
+an environment cost read from the new `[music] cost … mhz= loop= mem=
+best_kc=` record on the next trial. Decisions: keep minimp3 (libmad models
+only ~10 % fewer cycles); no SSE for native programs in this release (the
+Pentium III has no SSE2 for minimp3's SIMD path, and enabling SSE state is a
+kernel/SDK decision for later); the libdeskui compare-region opt-in stays
+opt-in.
