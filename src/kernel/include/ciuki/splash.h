@@ -52,9 +52,10 @@ static inline int splash_storage_phase(unsigned kind)
  * the splash is on screen; a no-op on verbose boots and after the handover. */
 void console_splash_phase(enum splash_phase phase);
 
-/* f1-97: the 2D accelerator decision, drawn under the bar by the console
- * worker as `2D acceleration: YES` or `2D acceleration: NO (<reason>)`.
- * Thread context; a no-op when the splash is not on screen. */
-void console_splash_accel(bool accelerated, const char *reason);
+/* f1-97/f2-92: the 2D accelerator state, drawn under the bar by the console
+ * worker: `2D engine: NO (<reason>)`, `2D engine: OK (drawing: software)`
+ * until the engine has drawn a presenter's request, then
+ * `2D acceleration: YES`. Thread context; a no-op off screen. */
+void console_splash_accel(bool accelerated, bool used, const char *reason);
 
 #endif

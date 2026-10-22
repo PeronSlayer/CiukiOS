@@ -98,6 +98,7 @@ struct desk_shell {
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
     uint32_t *background; int background_valid, background_selected, background_outline;
     uint64_t background_rebuilds;
+    uint32_t background_serial; /* f2-92: changes with every write to background */
     struct desk_image image;        /* decoded file, owned by desktop.c */
     int image_failed;
     int wallpaper_pending;        /* owned frame is prepared by the wallpaper worker */

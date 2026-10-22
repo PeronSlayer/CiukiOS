@@ -179,6 +179,15 @@ void smi_attribution_init(void)
     klog("[kernel] smi_config chip=%s pmbase=%04x en=%08x sts=%08x pm1_cnt=%04x pm1_en=%04x gen_pmcon1=%04x gpe0_en=%04x gpe1_en=%04x gpi_rout=%08x devtrap=%04x mon_smi=%04x legkey=%04x/%04x/%04x",
          c->name, p.base, p.smi_en, p.smi_sts, p.pm1_cnt, p.pm1_en, p.gen_pmcon1, p.gpe0_en,
          gpe1_en, gpi_rout, devtrap, mon, p.usb_legkey[0], p.usb_legkey[1], p.usb_legkey[2]);
+    /* f1-100, read-only: the I/O monitors 4-7 (290716-001 9.8.1.6-9.8.1.8,
+     * D31:F0 C0h-CDh; MON_SMI 9.8.3.16 holds their status/enable), GPE1_STS
+     * (9.8.3.12) and the last I/O cycle latched at SMI# (BUS_ADDR_TRACK,
+     * BUS_CYC_TRACK, 9.8.3.19/20). Names what monitor 4 watched. */
+    uint32_t fwd = cfg_read(31, 0, 0xc0), rng45 = cfg_read(31, 0, 0xc4);
+    uint32_t rng67 = cfg_read(31, 0, 0xc8), msk = cfg_read(31, 0, 0xcc);
+    klog("[kernel] smi_monitors trp_fwd=%02x mon_rng=%04x/%04x/%04x/%04x mon_msk=%04x gpe1_sts=%04x last_io=%04x/%02x",
+         fwd & 0xff, rng45 & 0xffff, rng45 >> 16, rng67 & 0xffff, rng67 >> 16, msk & 0xffff,
+         cpu_inw(p.base + 0x2c), cpu_inw(p.base + 0x4c), inb(p.base + 0x4e));
     uint32_t f = irq_save();
     chip = c; base = p.base; en_cache = p.smi_en; causal_cache = smi_causal_status(c, p.smi_en);
     tick_valid = false;
@@ -249,9 +258,13 @@ void smi_window_emit(uint64_t window_cycles, bool verbose)
         char ec_poll[12];
         if (poll > 0) ksnprintf(ec_poll, sizeof(ec_poll), "%u", (unsigned)poll);
         else ksnprintf(ec_poll, sizeof(ec_poll), "%s", poll ? "none" : "off");
-        klog_periodic("[kernel] smi_coincide gaps=%u hid_near=%u scan_near=%u ec_near=%u hid_turns=%u scans=%u ec_io=%u ec_poll=%s leads=%u hid_lead_us=%u/%u scan_lead_us=%u/%u ec_lead_us=%u/%u",
+        /* f1-100: last I/O cycle latched when SMI# last went active
+         * (BUS_ADDR_TRACK/BUS_CYC_TRACK, read-only; 0 without the sampler). */
+        uint16_t last_io = base ? cpu_inw(base + 0x4c) : 0;
+        uint8_t last_cyc = base ? inb(base + 0x4e) : 0;
+        klog_periodic("[kernel] smi_coincide gaps=%u hid_near=%u scan_near=%u ec_near=%u hid_turns=%u scans=%u ec_io=%u ec_poll=%s leads=%u hid_lead_us=%u/%u scan_lead_us=%u/%u ec_lead_us=%u/%u last_io=%04x/%02x",
             w.gaps, w.near[0], w.near[1], w.near[2], counts[0], counts[1], counts[2], ec_poll, w.leads,
-            lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
+            lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], last_io, last_cyc);
     }
     if (!base) return;
     regs.rise |= w.rise;

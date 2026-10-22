@@ -116,12 +116,12 @@ int audio_master_set(struct ciuki_mixer_master *m)
     kmutex_unlock(&control_lock);
     return 0;
 }
-void audio_master_refresh(void)
+static void master_refresh(bool requested)
 {
     kmutex_lock(&control_lock);
     struct ciuki_mixer_master m = audio.master;
     bool hardware = audio.master_in_hardware;
-    int changed = thinkpad_ec_master_poll(&m);
+    int changed = requested ? thinkpad_ec_master_refresh(&m) : thinkpad_ec_master_poll(&m);
     if (changed > 0 || hardware != audio.master_in_hardware) {
         int err = audio.ready ? audio_backend_master(&m) : 0;
         if (err) audio_fail(-EIO);
@@ -137,6 +137,8 @@ void audio_master_refresh(void)
     }
     kmutex_unlock(&control_lock);
 }
+void audio_master_refresh(void) { master_refresh(false); }
+void audio_master_refresh_requested(void) { master_refresh(true); }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
 static bool first_playback;
 static bool playback_logged;
@@ -784,7 +786,7 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_GET_STATUS: return sizeof(struct ciuki_audio_status);
     case AUDIO_SET_GAIN: return sizeof(struct ciuki_audio_gain);
     case AUDIO_DRAIN: case AUDIO_RESET: case AUDIO_REFILL_READ: return sizeof(struct ciuki_audio_command);
-    case MIXER_GET_MASTER: case MIXER_SET_MASTER: return sizeof(struct ciuki_mixer_master);
+    case MIXER_GET_MASTER: case MIXER_SET_MASTER: case MIXER_REFRESH_MASTER: return sizeof(struct ciuki_mixer_master);
     case MIXER_GET_DIAGNOSTICS: return sizeof(struct ciuki_audio_diagnostics);
     default: return 0;
     }
@@ -863,6 +865,13 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         break;
     }
     case MIXER_GET_MASTER: memcpy(record, &audio.master, size); break;
+    case MIXER_REFRESH_MASTER:
+        /* f1-100: an explicit user action (volume popup) asks the EC worker
+         * for one hardware read; no periodic EC traffic. The reply is the
+         * current master; the refreshed one follows in later reads. */
+        if (!d->mixer_control) { err = -EACCES; break; }
+        thinkpad_ec_refresh_request();
+        memcpy(record, &audio.master, size); break;
     case MIXER_GET_DIAGNOSTICS: audio_diagnostics((struct ciuki_audio_diagnostics *)record); break;
     case MIXER_SET_MASTER:
         err = !d->mixer_control ? -EACCES : audio_master_set((struct ciuki_mixer_master *)record); break;

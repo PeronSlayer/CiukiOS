@@ -227,6 +227,9 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
   the public read-only state, without `/dev/mixer` "No audio device".
+  Opening the popup also sends `MIXER_REFRESH_MASTER` on the delegated
+  handle (f1-100): on a ThinkPad the kernel reads the EC once, so the popup
+  then follows the hardware volume keys; there is no periodic EC polling.
 - **Desktop icons** (desktop as a folder since f2-42,
   [design](design/desktop-folder.md)): the fixed icons Computer (Files at
   Computer; the icon carries the Ciuki portrait), Documents (Files at

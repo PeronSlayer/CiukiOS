@@ -28,9 +28,12 @@ GOLDEN = {
     'splash-0': '1aeb6dab4c295bbdac6c8bc989abb37c847094157be1ab9008c33e9f44b6ead4',
     'splash-40': 'a9e626cb83fe505f9359771ece392fbf2307402c8772d8f737a3526e8fc4b801',
     'splash-100': '743614799351196b2e0c11ac48a629c9cf8f4784b2d885d9d7584f27edbf8396',
-    # f1-97: the handover frame with the accelerator line.
+    # f1-97: the handover frame with the accelerator line; f2-92: "2D engine:
+    # OK (drawing: software)" until the engine has drawn, then "2D
+    # acceleration: YES" (frame unchanged), and "2D engine: NO (<reason>)".
+    'splash-accel-ok': '3dd2728624df35d85bbf25276b5d5f3a2ad38feac930db75d047fcbe885dfbf0',
     'splash-accel-yes': 'a30b62c9d9e280b5df187d6cb8cd250b707e7ccbc3e0110b5f358233f5aec613',
-    'splash-accel-no': 'ad8f00b2c812adebcbef4b0e5fdd2d5161876bf71f6f703bd21ad0fa019f6fdc',
+    'splash-accel-no': 'b39c94f9eaab5cfeecfbaa07dd6948cd8da0f8db7dcf3893ca0bba6dd4be9dbe',
 }
 
 
@@ -158,13 +161,13 @@ class SplashProgressTests(unittest.TestCase):
         # f1-97: one protected record, the splash line drawn by the console
         # worker (never by the decision's caller), the desktop notice.
         savage = (ROOT / 'src/kernel/drivers/savage2d.c').read_text()
-        self.assertEqual(savage.count('klog("[accel] summary accelerated=%u driver=savage reason=%s"'), 1)
+        self.assertEqual(savage.count('klog("[accel] summary accelerated=%u driver=savage reason=%s used=%u"'), 1)
         decline = savage.split('static const struct accel_ops *decline(const char *reason)\n{', 1)[1]
         self.assertTrue(decline.lstrip().startswith('summary(false, reason);'))
         ready = savage.split('klog("[accel] savage ready', 1)[1].split('return &engine.ops;', 1)[0]
         self.assertIn('summary(true, 0);', ready)
         console = (ROOT / 'src/kernel/core/console.c').read_text()
-        accel = console.split('void console_splash_accel(bool accelerated, const char *reason)', 1)[1].split('\n}\n', 1)[0]
+        accel = console.split('void console_splash_accel(bool accelerated, bool used, const char *reason)', 1)[1].split('\n}\n', 1)[0]
         self.assertNotIn('splash_accel_update', accel)
         self.assertNotIn('fbdev_console_begin', accel)
         service = console.split('static uint32_t splash_service(void)', 1)[1].split('\n}\n', 1)[0]
@@ -172,8 +175,16 @@ class SplashProgressTests(unittest.TestCase):
         fbdev = (ROOT / 'src/kernel/drivers/fbdev.c').read_text()
         self.assertIn('savage2d_summary_safe_mode();', fbdev)
         desktop = (ROOT / 'apps/desktop/desktop.c').read_text()
-        self.assertIn('accel_noticed=accel_notice(d);', desktop)
+        self.assertIn('(accel_noticed=accel_notice(d))', desktop)
         self.assertIn('d->sh.notification.expires=d->now_ns+10000000000ull;', desktop)
+        # f2-92: the engine-use record of the 2 s performance window.
+        self.assertIn('"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu', desktop)
+        sample = desktop.split('static void performance_sample(struct desktop *d, uint64_t now)\n{', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('accel_record(d,now);', sample)
+        self.assertLess(sample.index('desk_stats_sample(d);'), sample.index('accel_record(d,now);'))
+        self.assertLess(sample.index('accel_record(d,now);'), sample.index('if (verbose_boot)'))
+        self.assertIn('klog("[accel] savage write_test result=%s phase=%s', savage)
+        self.assertIn('klog("[accel] savage quarantined reason=%s phase=draw', savage)
 
 
 if __name__ == '__main__':

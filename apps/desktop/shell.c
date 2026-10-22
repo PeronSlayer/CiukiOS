@@ -1590,7 +1590,7 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
             if (!s->background_valid) {
                 memcpy(s->background,s->wall,(size_t)d->width*d->height*4);
                 draw_icons(d,(struct desk_box){0,DESK_BAR,(int)d->width,(int)d->height-2*DESK_BAR});
-                s->background_rebuilds++; s->background_valid=1;
+                s->background_rebuilds++; s->background_valid=1; s->background_serial++;
             } else if (s->background_selected!=s->icon_selected || s->background_outline!=outline) {
                 int changed[2]={s->background_selected,s->icon_selected};
                 for (int k=0;k<2;k++) if (changed[k]>=0 && changed[k]<s->icon_count) {
@@ -1599,7 +1599,7 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
                             (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) continue;
                     for (int y=b.y;y<b.y+b.h;y++) memcpy(s->background+(size_t)y*d->width+b.x,
                         s->wall+(size_t)y*d->width+b.x,(size_t)b.w*4);
-                    draw_icons(d,b);
+                    draw_icons(d,b); s->background_serial++;
                 }
             }
             d->pixels=out; s->background_selected=s->icon_selected; s->background_outline=outline;
@@ -2351,7 +2351,9 @@ int desk_shell_button(struct desktop *d, int button, int down)
             return 1;
         }
         if (desk_contains(volume_icon_box(d), x, y) && button == CIUKI_BUTTON_LEFT) {
-            d->sh.volume_open = 1; d->sh.want_reload |= 4;
+            /* f1-100: opening the popup is the explicit action that asks
+             * the kernel to re-read the hardware volume keys' state (8). */
+            d->sh.volume_open = 1; d->sh.want_reload |= 4|8;
             damage(d, outer(volume_popup(d)));
             return 1;
         }

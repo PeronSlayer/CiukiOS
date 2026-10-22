@@ -35,11 +35,32 @@
 #define BCI_WAIT_2D 0xc0020000u
 #define BCI_EVENT 0x98000000u
 #define BCI_FIFO_WORDS 32u
+/* f2-92 host-to-screen image write (X.Org savage_bci.h): BCI_CMD_CLIP_LR
+ * selects the left/right clip word, BCI_CMD_SRC_COLOR host colour data. */
+#define CLIP_LR 0x00004000u
+#define SRC_COLOR 0x00000040u
+/* Display-service waits: 1 ms polling slices, the lock released between
+ * them; the same 20 ms deadline, the iteration bound scaled to it. */
+#define SLICE_US 1000u
+#define SLICED_POLLS (WAIT_US / POLL_US + 1u)
+/* X.Org WaitQueue4 (savage_driver.c:501-516) and savagefb
+ * savage4_waitfifo (savagefb_driver.c:266-270): MM48C60 bits 20:0 count
+ * used BCI entries. */
+#define FIFO_USED_MASK 0x001fffffu
+#define FIFO_CHUNK BCI_FIFO_WORDS
+/* X.Org caps the addressable video memory at 2048 lines
+ * (savage_accel.c:271-272, cyMemory) and the scissor at 2047
+ * (savage_xaa.c:319-320); offscreen rows stay below that. */
+#define OFFSCREEN_ROWS_MAX 2048u
 static unsigned selected_config;
 static bool initializing, probing;
+static struct savage2d engine; /* the production instance (defined below) */
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
 static void init_failure_readback(struct savage2d *);
 static void relinquish_access(void);
+static void runtime_fault(struct savage2d *);
+static void note_used(void);
+static int verify_write(void *);
 static uint8_t port_cr_read(struct savage2d *s, uint8_t index)
 {
     s->io.write_port(s->io.ctx, 0x3d4, index);
@@ -126,19 +147,28 @@ static int wait_idle(struct savage2d *s)
     struct { uint64_t us; uint32_t value; } samples[STATUS_SAMPLES];
     unsigned count = 0;
     uint32_t old_mask = s->idle_mask;
-    unsigned polls = first ? INITIAL_POLLS : WAIT_POLLS;
+    /* f2-92: a display-service wait polls in 1 ms slices and releases the
+     * presenter lock between them (never during setup or the self-test). */
+    bool sliced = s->pause && !initializing && !probing;
+    unsigned polls = first ? INITIAL_POLLS : sliced ? SLICED_POLLS : WAIT_POLLS;
     uint32_t interval = first ? INITIAL_POLL_US : POLL_US;
     /* Buffer status diagnostics until after the polling budget. At 38400
      * baud a single log can exceed the entire wait. */
-    uint64_t start = s->io.now_us(s->io.ctx);
+    uint64_t start = s->io.now_us(s->io.ctx), slice = start;
     int result = -EIO;
     bool last_idle = false;
     for (unsigned i = 0; i < polls; i++) {
         /* No pacing before the first read of a new idle check. Reset has
          * already settled; only consecutive busy reads need the interval. */
         if (i) {
-            uint64_t elapsed = s->io.now_us(s->io.ctx) - start;
+            uint64_t now = s->io.now_us(s->io.ctx), elapsed = now - start;
             if (elapsed >= WAIT_US) break;
+            if (sliced && now - slice >= SLICE_US) {
+                /* The engine runs on; the next read follows the usual pacing. */
+                s->pauses++;
+                (void)s->pause(s->pause_arg);
+                slice = s->io.now_us(s->io.ctx);
+            }
             uint32_t delay = interval;
             if (delay > WAIT_US - elapsed) delay = (uint32_t)(WAIT_US - elapsed);
             if (s->io.delay_us(s->io.ctx, delay)) { s->reason = "delay_failed"; break; }
@@ -198,6 +228,9 @@ static int fault(struct savage2d *s)
         }
         restore_mmio(s);
         if (s->io.fault) s->io.fault(s->io.ctx);
+        /* f2-92: a drawing request's failure flips the indicator; the
+         * records are emitted after the presenter lock is released. */
+        if (!initializing && !probing) runtime_fault(s);
     }
     s->fallbacks++;
     return -EIO;
@@ -292,12 +325,159 @@ static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
     int err = send_bci(s, words, n);
     if (err) return err;
     s->operations++;
+    if (s == &engine && !initializing && !probing) note_used();
     return 0;
 }
+/* Visible rows, or entirely within the engine-only offscreen lease. */
 static bool valid_rect(struct savage2d *s, const struct fb_rect *r)
 {
-    return fbdev_rect_valid(r) && r->x >= 0 && r->y >= 0 && r->width > 0 && r->height > 0 &&
-        (uint32_t)(r->x + r->width) <= s->width && (uint32_t)(r->y + r->height) <= s->height;
+    if (!fbdev_rect_valid(r) || r->x < 0 || r->y < 0 || r->width <= 0 || r->height <= 0 ||
+        (uint32_t)(r->x + r->width) > s->width) return false;
+    uint32_t top = (uint32_t)r->y, bottom = top + (uint32_t)r->height;
+    return bottom <= s->height ||
+        (s->rows > s->height && top >= s->offscreen_first && bottom <= s->rows);
+}
+/* f2-92: wait until `need` more entries fit the 32-entry on-chip queue
+ * (no command overflow buffer: X.Org sets bciThresholdHi = 32 then,
+ * savage_driver.c:1941). X.Org's WaitQueue4 polls the same used count
+ * (savage_driver.c:501-516); savagefb's savage4_waitfifo too. Same
+ * deadline, pacing and slices as the completion wait. */
+static bool fifo_busy; /* the last queue read showed used entries */
+static unsigned fifo_free; /* entries known free since that read */
+static int fifo_space(struct savage2d *s, unsigned need)
+{
+    if (fifo_free >= need) return 0;
+    uint64_t start = s->io.now_us(s->io.ctx), slice = start;
+    bool sliced = s->pause && !initializing && !probing;
+    for (unsigned i = 0; i < SLICED_POLLS; i++) {
+        if (i) {
+            uint64_t now = s->io.now_us(s->io.ctx);
+            if (now - start >= WAIT_US) break;
+            if (sliced && now - slice >= SLICE_US) {
+                s->pauses++;
+                (void)s->pause(s->pause_arg);
+                slice = s->io.now_us(s->io.ctx);
+            }
+        }
+        /* Busy reads keep the completion wait's pacing. */
+        if ((i || fifo_busy) && s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; return -EIO; }
+        uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
+        if (status == UINT32_MAX) { s->reason = "dead_mmio"; return -EIO; }
+        uint32_t used = status & FIFO_USED_MASK;
+        fifo_busy = used != 0;
+        fifo_free = used < BCI_FIFO_WORDS ? BCI_FIFO_WORDS - used : 0;
+        if (fifo_free >= need) return 0;
+        s->fifo_waits++;
+    }
+    s->reason = "fifo_timeout";
+    return -EIO;
+}
+/* Chunked BCI writes, each chunk from the window start like every packet
+ * here (X.Org rewinds with BCI_RESET, savage_bci.h:48; the queue does not
+ * decode the offset). */
+static int fifo_send(struct savage2d *s, const uint32_t *words, unsigned n)
+{
+    while (n) {
+        /* As many entries as the last read proved free, at least one. */
+        if (fifo_space(s, 1)) return -EIO;
+        unsigned chunk = n < fifo_free ? n : fifo_free;
+        if (chunk > FIFO_CHUNK) chunk = FIFO_CHUNK;
+        for (unsigned i = 0; i < chunk; i++) s->io.write32(s->io.ctx, SAVAGE_BCI + i * 4, words[i]);
+        fifo_free -= chunk; words += chunk; n -= chunk;
+    }
+    return 0;
+}
+/* f2-92 host-to-screen image write: X.Org EXA SavageUploadToScreen
+ * (savage_exa.c:433-561): RECT | XP | YP | CLIP_LR | SRC_COLOR, ROP CC,
+ * CLIP_LR(x, x+w-1), XY, WH, then each row's bytes padded to a dword; the
+ * destination is the global descriptor as in savagefb_imageblit
+ * (savagefb_accel.c:115-134, DEST_GBD, no inline descriptor words) and as
+ * this driver's fill and copy. Only the clipped pixels are sent: rows
+ * outside the clip are skipped, its columns become CLIP_LR. */
+static int write_rect(void *ctx, const struct fb_rect *dst, const struct fb_rect *clip,
+                      const void *rows, uint32_t stride)
+{
+    struct savage2d *s = ctx;
+    if (!s->active || s->quarantined || s->write_state < 0 || (!s->write_state && !probing)) {
+        s->fallbacks++; return -ENODEV;
+    }
+    if (!dst || !clip || !rows || !fbdev_rect_valid(dst) || !fbdev_rect_valid(clip)) return -EINVAL;
+    int32_t x0 = dst->x > clip->x ? dst->x : clip->x, y0 = dst->y > clip->y ? dst->y : clip->y;
+    int64_t x1 = (int64_t)dst->x + dst->width, y1 = (int64_t)dst->y + dst->height;
+    if ((int64_t)clip->x + clip->width < x1) x1 = (int64_t)clip->x + clip->width;
+    if ((int64_t)clip->y + clip->height < y1) y1 = (int64_t)clip->y + clip->height;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    struct fb_rect c = {x0, y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+    if (!valid_rect(s, &c)) return -EINVAL;
+    unsigned bytes = ((s->descriptor >> 16) & 255u) / 8u;
+    if (bytes != 2 && bytes != 4) return -EINVAL;
+    uint32_t row_bytes = (uint32_t)c.width * bytes, row_words = (row_bytes + 3u) / 4u;
+    if (stride < (uint32_t)dst->width * bytes) return -EINVAL;
+    const uint8_t *first = (const uint8_t *)rows + (uint32_t)(c.y - dst->y) * stride +
+        (uint32_t)(c.x - dst->x) * bytes;
+    if (sync_engine(s)) return -EIO;
+    if (s->supersavage) {
+        s->event_before = s->io.read32(s->io.ctx, SAVAGE_EVENT_STATUS);
+        if (s->event_before == UINT32_MAX) return fail(s, "dead_event_mmio");
+        s->event_tag = (uint16_t)(s->event_before + 1u);
+        if (!s->event_tag) s->event_tag = 1;
+        s->event_pending = true;
+    }
+    s->io.drain(s->io.ctx);
+    s->cpu_safe = false;
+    s->submitted = true;
+    fifo_busy = false; fifo_free = 0;
+    uint32_t header[] = {RECT | XP | YP | CLIP_LR | DEST_GBD | SRC_COLOR | (0xccu << 16),
+        ((uint32_t)(c.x + c.width - 1) << 16) | (uint32_t)c.x,
+        xy((uint32_t)c.x, (uint32_t)c.y), xy((uint32_t)c.width, (uint32_t)c.height)};
+    if (fifo_send(s, header, ARRAY_SIZE(header))) return fault(s);
+    uint32_t chunk[FIFO_CHUNK];
+    for (int32_t y = 0; y < c.height; y++) {
+        const uint8_t *row = first + (uint32_t)y * stride;
+        for (uint32_t w = 0; w < row_words; w += FIFO_CHUNK) {
+            unsigned n = row_words - w > FIFO_CHUNK ? FIFO_CHUNK : row_words - w;
+            uint32_t at = w * 4u, have = row_bytes - at < n * 4u ? row_bytes - at : n * 4u;
+            chunk[n - 1] = 0; /* dword padding of the row's last word */
+            memcpy(chunk, row + at, have);
+            if (fifo_send(s, chunk, n)) return fault(s);
+        }
+    }
+    if (s->supersavage) {
+        uint32_t fence[] = {BCI_WAIT_2D, BCI_EVENT | s->event_tag};
+        if (fifo_send(s, fence, ARRAY_SIZE(fence))) return fault(s);
+    }
+    if (fifo_busy && s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; return fault(s); }
+    fifo_busy = false; fifo_free = 0;
+    if (wait_idle(s)) return fault(s);
+    s->operations++; s->writes++; s->write_words += (uint64_t)row_words * (uint32_t)c.height;
+    if (s == &engine && !initializing && !probing) note_used();
+    return 0;
+}
+/* f2-92: offscreen rows after the scanout lease (`size` bytes) and below
+ * the cursor page (or the end of VRAM) and X.Org's 2048-line limit. */
+bool savage2d_offscreen_span(const struct fb_device *d, uint32_t vram, uint32_t cursor_offset,
+                             uint32_t *first, uint32_t *end)
+{
+    if (!d || !d->pitch || !vram || !first || !end) return false;
+    uint32_t start = (uint32_t)(((uint64_t)d->size + d->pitch - 1) / d->pitch);
+    uint32_t limit = (cursor_offset ? cursor_offset : vram) / d->pitch;
+    if (limit > OFFSCREEN_ROWS_MAX) limit = OFFSCREEN_ROWS_MAX;
+    if (start < d->height || limit <= start ||
+        (uint64_t)d->phys + (uint64_t)limit * d->pitch > UINT32_MAX) return false;
+    *first = start; *end = limit;
+    return true;
+}
+static uint32_t offscreen_rows(void *ctx, uint32_t *first)
+{
+    struct savage2d *s = ctx;
+    if (!s->active || s->quarantined || s->rows <= s->height || s->write_state <= 0 || !s->offscreen_ok) return 0;
+    if (first) *first = s->offscreen_first;
+    return s->rows;
+}
+static void set_pause(void *ctx, int (*pause)(void *), void *arg)
+{
+    struct savage2d *s = ctx;
+    s->pause = pause; s->pause_arg = arg;
 }
 static int copy_rect(void *ctx, const struct fb_rect *r, int32_t dx, int32_t dy)
 {
@@ -453,7 +633,10 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     if (!savage2d_config(config, d, &cfg)) return -EINVAL;
     s->descriptor = cfg.descriptor;
     s->ops = (struct accel_ops){s, sync_engine, copy_rect, fill_rect, pattern_rect,
-        cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
+        cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready,
+        write_rect, offscreen_rows, set_pause, verify_write};
+    s->rows = d->height; s->offscreen_first = d->height; s->pause = 0; s->pause_arg = 0;
+    s->fb = d; s->write_state = 0; s->offscreen_ok = false;
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
     s->status_ready = false; s->submitted = false; s->final_idle_checked = false;
     s->event_before = s->event_status = s->event_tag = 0; s->event_pending = false;
@@ -566,10 +749,14 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset)
 { return start_config(s, io, d, supersavage, cursor, cursor_offset, supersavage ? 1 : 0); }
 
-static struct savage2d engine;
 static volatile uint8_t *registers;
 static int reg_claim = -1, cursor_claim = -1, port_claim = -1;
 static gen_t reg_generation, cursor_generation, port_generation;
+/* f2-92: engine-only rows below the scanout, an exclusive lease that is
+ * never CPU-mapped (only BCI writes/copies reach it). */
+static int offscreen_claim = -1;
+static gen_t offscreen_generation;
+static uint32_t offscreen_first_row, offscreen_end_row;
 static uint32_t cursor_phys;
 static uint8_t *cursor_mapping;
 static void *register_window, *cursor_window;
@@ -870,8 +1057,6 @@ static int bci_test(struct savage2d *s, const struct fb_device *d)
         p.phase ? p.phase : "none", PROBE_PIXELS);
     return err;
 }
-void savage2d_record(void)
-{ if (!initializing && reg_claim >= 0 && g_ticks - last_log >= 1000) record(); }
 /* Caller holds the fbdev presenter mutex; this never reads hardware. */
 void savage2d_snapshot(struct ciuki_accel_info *out)
 {
@@ -916,6 +1101,11 @@ static bool register_idle(int handle, gen_t generation)
     registers=0;
     return true;
 }
+static bool offscreen_idle(int handle, gen_t generation)
+{
+    (void)handle; (void)generation;
+    return !(engine.submitted && !engine.cpu_safe);
+}
 static bool port_idle(int handle, gen_t generation)
 {
     (void)handle; (void)generation;
@@ -943,6 +1133,8 @@ static void release_access(int *handle, gen_t generation, registry_idle_proof_fn
 static void relinquish_access(void)
 {
     release_access(&port_claim, port_generation, port_idle);
+    release_access(&offscreen_claim, offscreen_generation, offscreen_idle);
+    engine.rows = engine.height;
     release_access(&cursor_claim, cursor_generation, cursor_idle);
     release_access(&reg_claim, reg_generation, register_idle);
 }
@@ -950,6 +1142,12 @@ static int runtime_stop(void *ctx)
 {
     int err = stop_engine(ctx);
     if (err || engine.quarantined) { hw_fault(0); return err; }
+    if (offscreen_claim >= 0) {
+        err = registry_quiesce(offscreen_claim, offscreen_generation, offscreen_idle);
+        if (!err) err = registry_release(offscreen_claim, offscreen_generation);
+        if (err) { hw_fault(0); engine.quarantined = true; return -EIO; }
+        offscreen_claim = -1; engine.rows = engine.height;
+    }
     if (cursor_claim >= 0 && cursor_mapping) {
         err = registry_quiesce(cursor_claim, cursor_generation, cursor_idle);
         if (!err) err = registry_release(cursor_claim, cursor_generation);
@@ -1025,8 +1223,16 @@ int savage2d_check_begin(struct vfs *vfs, bool *retained)
 /* f1-97: the one-line answer to "does 2D acceleration work?". Emitted when
  * the first decision exists and again only if it flips (a later quarantine
  * of an accelerated engine); the splash line and the device record follow it. */
-extern void console_splash_accel(bool, const char *) __attribute__((weak));
-static struct { bool decided, accelerated; char reason[40]; } summary_state;
+extern void console_splash_accel(bool, bool, const char *) __attribute__((weak));
+/* f2-92: `used` turns true at the first drawing request the engine executes
+ * for a presenter (self-test, setup and cursor excluded); until then the
+ * engine is "OK (drawing: software)", never "acceleration: YES". */
+static struct { bool decided, accelerated, used, used_pending, fault_pending; char reason[40]; } summary_state;
+static void summary_record(void)
+{
+    klog("[accel] summary accelerated=%u driver=savage reason=%s used=%u",
+        summary_state.accelerated ? 1u : 0u, summary_state.reason, summary_state.used ? 1u : 0u);
+}
 static void summary(bool accelerated, const char *reason)
 {
     if (summary_state.decided && summary_state.accelerated == accelerated) return;
@@ -1035,16 +1241,131 @@ static void summary(bool accelerated, const char *reason)
     for (; token[n] && n + 1 < sizeof(summary_state.reason); n++) summary_state.reason[n] = token[n];
     summary_state.reason[n] = 0;
     summary_state.decided = true; summary_state.accelerated = accelerated;
-    klog("[accel] summary accelerated=%u driver=savage reason=%s", accelerated ? 1u : 0u, summary_state.reason);
-    if (console_splash_accel) console_splash_accel(accelerated, accelerated ? 0 : summary_state.reason);
+    summary_record();
+    if (console_splash_accel)
+        console_splash_accel(accelerated, summary_state.used, accelerated ? 0 : summary_state.reason);
+}
+/* Under the presenter lock: no serial output (38400 baud), only state and
+ * the splash text copy; savage2d_record emits after the lock is released. */
+static void note_used(void)
+{
+    if (summary_state.used || !summary_state.decided || !summary_state.accelerated) return;
+    summary_state.used = summary_state.used_pending = true;
+    if (console_splash_accel) console_splash_accel(true, true, 0);
+}
+static void runtime_fault(struct savage2d *s)
+{
+    (void)s;
+    summary_state.fault_pending = true;
 }
 /* Desktop and device list: false until a decision exists. */
-bool savage2d_summary(bool *accelerated, const char **reason)
+bool savage2d_summary(bool *accelerated, bool *used, const char **reason)
 {
     if (!summary_state.decided) return false;
     if (accelerated) *accelerated = summary_state.accelerated;
+    if (used) *used = summary_state.used;
     if (reason) *reason = summary_state.reason;
     return true;
+}
+/* f2-92: the first host-to-screen write or offscreen use is proven on the
+ * hardware with the self-test block (bottom-right 8x2, presenter lock and
+ * full-screen drawing claim held by the caller): a 4x2 image write into
+ * its right half, then, with offscreen rows, the same image written to the
+ * first offscreen row and copied into the left half; each read back exactly
+ * through the LFB, the 16 pixels restored after proven idle. A mismatch
+ * disables only writes (and offscreen rows), or only offscreen rows; an
+ * engine fault quarantines like any drawing request. */
+struct write_record { bool pending, write_ok, offscreen_ok; const char *phase; uint32_t wrote, read, first, rows; int error; };
+static struct write_record write_test;
+static int verify_write(void *ctx)
+{
+    struct savage2d *s = ctx;
+    if (s->write_state) return s->write_state > 0 ? 0 : -ENODEV;
+    const struct fb_device *d = s->fb;
+    if (!s->active || s->quarantined || !d || !d->mapped || d->width < 2u * PROBE_W || d->height < PROBE_H)
+        return -ENODEV;
+    if (sync_engine(s)) return -EIO;
+    unsigned bytes = d->bpp / 8u;
+    uint32_t saved[PROBE_PIXELS], image[PROBE_W * PROBE_H], mask = bytes == 2 ? 0xffffu : 0xffffffu;
+    uint8_t rows[PROBE_W * PROBE_H * 4];
+    s->io.drain(s->io.ctx);
+    for (unsigned i = 0; i < PROBE_PIXELS; i++) saved[i] = probe_read(d, i);
+    for (unsigned i = 0; i < PROBE_W * PROBE_H; i++) {
+        /* Distinct pixels whose low byte repeated cannot equal them. */
+        image[i] = probe_marker(saved[PROBE_PIXELS - 1] ^ (i * 0x00102030u), bytes) & mask;
+        for (unsigned b = 0; b < bytes; b++) rows[i * bytes + b] = (uint8_t)(image[i] >> (8 * b));
+    }
+    int32_t x0 = (int32_t)(d->width - 2u * PROBE_W), y0 = (int32_t)(d->height - PROBE_H);
+    struct fb_rect left = {x0, y0, (int32_t)PROBE_W, (int32_t)PROBE_H};
+    struct fb_rect right = {x0 + (int32_t)PROBE_W, y0, (int32_t)PROBE_W, (int32_t)PROBE_H};
+    write_test = (struct write_record){.pending = true, .phase = "write", .wrote = image[0]};
+    bool was = probing, offscreen = s->rows > s->height;
+    probing = true;
+    int err = write_rect(s, &right, &right, rows, PROBE_W * bytes);
+    bool ok = !err;
+    for (unsigned i = 0; ok && i < PROBE_PIXELS; i++) {
+        if (i % (2u * PROBE_W) < PROBE_W) continue;
+        uint32_t want = image[(i / (2u * PROBE_W)) * PROBE_W + i % (2u * PROBE_W) - PROBE_W];
+        uint32_t got = probe_read(d, i) & mask;
+        if (got != want) { ok = false; write_test.wrote = want; write_test.read = got; }
+    }
+    bool offscreen_ok = false;
+    if (ok && offscreen) {
+        write_test.phase = "offscreen";
+        struct fb_rect below = {0, (int32_t)s->offscreen_first, (int32_t)PROBE_W, (int32_t)PROBE_H};
+        err = write_rect(s, &below, &below, rows, PROBE_W * bytes);
+        if (!err) err = copy_rect(s, &below, left.x, left.y);
+        offscreen_ok = !err;
+        for (unsigned i = 0; offscreen_ok && i < PROBE_PIXELS; i++) {
+            if (i % (2u * PROBE_W) >= PROBE_W) continue;
+            uint32_t want = image[(i / (2u * PROBE_W)) * PROBE_W + i % (2u * PROBE_W)];
+            uint32_t got = probe_read(d, i) & mask;
+            if (got != want) { offscreen_ok = false; write_test.wrote = want; write_test.read = got; }
+        }
+    }
+    probing = was;
+    if (s->cpu_safe) {
+        for (unsigned i = 0; i < PROBE_PIXELS; i++) {
+            volatile uint8_t *pixel = probe_pixel(d, i);
+            for (unsigned b = 0; b < bytes; b++) pixel[b] = (uint8_t)(saved[i] >> (8 * b));
+        }
+        s->io.drain(s->io.ctx);
+    }
+    write_test.error = err;
+    if (err) {
+        if (s->quarantined) runtime_fault(s);
+        s->write_state = -1;
+        return -EIO;
+    }
+    if (ok && (offscreen_ok || !offscreen)) write_test.phase = "done";
+    s->write_state = ok ? 1 : -1; s->offscreen_ok = offscreen_ok;
+    write_test.write_ok = ok; write_test.offscreen_ok = offscreen_ok;
+    write_test.first = s->offscreen_first; write_test.rows = s->rows;
+    return ok ? 0 : -ENODEV;
+}
+void savage2d_record(void)
+{
+    /* f2-92 protected records, outside the presenter lock: the first
+     * engine-drawn request and a drawing request's quarantine. */
+    if (summary_state.used_pending) {
+        summary_state.used_pending = false;
+        if (summary_state.accelerated) summary_record();
+    }
+    if (write_test.pending) {
+        write_test.pending = false;
+        klog("[accel] savage write_test result=%s phase=%s write=%u offscreen=%u wrote=%08x read=%08x error=%d rows=%u-%u",
+            write_test.write_ok && !write_test.error ? "ok" : "failed", write_test.phase, write_test.write_ok,
+            write_test.offscreen_ok, write_test.wrote, write_test.read, write_test.error,
+            write_test.first, write_test.rows);
+    }
+    if (summary_state.fault_pending) {
+        summary_state.fault_pending = false;
+        const char *reason = engine.reason ? engine.reason : "engine_fault";
+        klog("[accel] savage quarantined reason=%s phase=draw ops=%llu writes=%llu status=%08x status_valid=%u",
+            reason, engine.operations, engine.writes, engine.status, engine.status_logged);
+        summary(false, reason);
+    }
+    if (!initializing && reg_claim >= 0 && g_ticks - last_log >= 1000) record();
 }
 /* Safe mode never reaches the activation code. */
 void savage2d_summary_safe_mode(void) { summary(false, "safe_mode"); }
@@ -1187,12 +1508,30 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
     }
     uint8_t *cursor = cursor_mapping && cursor_phys >= d->phys + d->size ? cursor_mapping : 0;
     klog("[accel] savage mapped mmio=%p cursor=%p", (void *)registers, (void *)cursor);
+    /* f2-92: rows after the scanout lease, below the cursor page and
+     * X.Org's 2048-line limit, for the display service's offscreen copies. */
+    offscreen_first_row = offscreen_end_row = 0;
+    uint32_t first_row, end_row;
+    if (offscreen_claim < 0 && savage2d_offscreen_span(d, vram, cursor ? off : 0, &first_row, &end_row)) {
+        uint32_t base = d->phys + first_row * d->pitch, end = d->phys + end_row * d->pitch;
+        if (safe_extent(base, end - base)) {
+            offscreen_claim = registry_claim(RES_MMIO, base, end, "savage-offscreen", false);
+            if (offscreen_claim >= 0) {
+                offscreen_generation = registry_get(offscreen_claim)->generation;
+                if (registry_activate(offscreen_claim, offscreen_generation)) {
+                    registry_quarantine(offscreen_claim, offscreen_generation); offscreen_claim = -1;
+                } else { offscreen_first_row = first_row; offscreen_end_row = end_row; }
+            }
+        }
+    }
     initializing = true;
     int err = start_config(&engine, io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys, selected_config);
     if (!err) err = bci_test(&engine, d);
     else klog("[accel] savage bci_test result=skipped reason=%s", engine.reason ? engine.reason : "init_failed");
     initializing = false;
     engine.ops.stop = runtime_stop;
+    if (!err && offscreen_claim >= 0) { engine.offscreen_first = offscreen_first_row; engine.rows = offscreen_end_row; }
+    klog("[accel] savage offscreen first=%u end=%u claim=%d", offscreen_first_row, offscreen_end_row, offscreen_claim >= 0);
     klog("[accel] savage pci=%04x:%04x mmio=%08x lfb=%08x mode=%u bpp=%u pitch=%u caps=%u init_result=%d",
         gpu->vendor,gpu->device,gpu->bar[0]&~15u,d->phys,d->mode_id,d->bpp,d->pitch,capabilities(&engine),err);
     record();

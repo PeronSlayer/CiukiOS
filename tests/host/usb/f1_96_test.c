@@ -2,7 +2,7 @@
  * VFS/FAT/cache/queue/BOT/UHCI path over the 1 ms frame model (at most 16
  * bulk transactions per frame, uhci_model.h). Negotiated 128-sector
  * READ(10)/WRITE(10) CBWs, the TD ring across frames, CSW residue, the
- * one-sector fallback after a STALL/CSW error, the pinned usb-storage queue
+ * fallback after a STALL/CSW error (f1-96b: 128 -> 8 -> 1), the pinned usb-storage queue
  * limit and a 5 MB copy. SPDX-License-Identifier: GPL-2.0-only */
 #define main storage_fixture_main
 #include "storage_test.c"
@@ -128,19 +128,20 @@ static void residue(const char *path)
         uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
         unsigned reads=m.read_commands;
         assert(!block()->read(block(),64,128,buf) && !memcmp(buf,m.image+64*512,BLKDEV_READ_BYTES));
-        assert(!block()->quarantined && s->max_sectors==1 && s->transfer_fallbacks==1 && queue_limit()==512);
-        assert(m.read_commands==reads+129 && m.resets==1 && m.clear_in==1 && m.clear_out==1);
+        /* f1-96b: the ladder's next size, 8 sectors, is within every limit. */
+        assert(!block()->quarantined && s->max_sectors==8 && s->transfer_fallbacks==1 && queue_limit()==4096);
+        assert(m.read_commands==reads+1+16 && m.resets==1 && m.clear_in==1 && m.clear_out==1);
         if(kind!=1) {
             assert(strstr(records,"reason=short_command tag=") &&
                    strstr(records,kind==0 ? "csw=1 status=0 residue=61440" : "csw=1 status=0 residue=14336"));
-            assert(strstr(records,"max_sectors addr=1 cmd=28 lba=64 sectors=128 from=128 to=1 reason=short_command resend=1 fallbacks=1"));
+            assert(strstr(records,"max_sectors addr=1 cmd=28 lba=64 sectors=128 from=128 to=8 reason=short_command resend=1 fallbacks=1"));
         } else {
             assert(strstr(records,"csw_tag=") && strstr(records,"residue=65537"));
-            assert(strstr(records,"max_sectors addr=1 cmd=28 lba=64 sectors=128 from=128 to=1 reason=invalid_csw resend=1 fallbacks=1"));
+            assert(strstr(records,"max_sectors addr=1 cmd=28 lba=64 sectors=128 from=128 to=8 reason=invalid_csw resend=1 fallbacks=1"));
         }
         free(buf);end();
     }
-    puts("PASS F1-96 CSW residue: short 64 KiB READ(10) (in the first window and after the ring wrapped) with consistent residue, and a residue beyond dCBWDataTransferLength, reset, fall back and re-read every sector");
+    puts("PASS F1-96 CSW residue: short 64 KiB READ(10) (in the first window and after the ring wrapped) with consistent residue, and a residue beyond dCBWDataTransferLength, reset, fall back to 8 sectors (f1-96b ladder) and re-read the range");
 }
 
 static void stall_fallback(const char *path)
@@ -154,19 +155,20 @@ static void stall_fallback(const char *path)
         uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
         unsigned reads=m.read_commands;
         assert(!block()->read(block(),200,128,buf) && !memcmp(buf,m.image+200*512,BLKDEV_READ_BYTES));
-        assert(!block()->quarantined && !device()->quarantined && s->max_sectors==1 && queue_limit()==512);
+        assert(!block()->quarantined && !device()->quarantined && s->max_sectors==8 && queue_limit()==4096);
         char needle[160];
-        snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=28 lba=200 sectors=128 from=128 to=1 reason=%s resend=1 fallbacks=1",reasons[reaction]);
+        snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=28 lba=200 sectors=128 from=128 to=8 reason=%s resend=1 fallbacks=1",reasons[reaction]);
         assert(strstr(records,needle));
-        assert(m.read_commands==reads+(reaction==4 ? 128u : 129u)); /* a STALLed CBW starts no READ(10) */
-        assert(m.resets==(reaction==1 ? 0u : 1u) && m.max_read_sectors==(reaction==4 ? 1u : 128u));
+        assert(m.read_commands==reads+(reaction==4 ? 16u : 17u)); /* a STALLed CBW starts no READ(10) */
+        assert(m.resets==(reaction==1 ? 0u : 1u) && m.max_read_sectors==(reaction==4 ? 8u : 128u));
         if(reaction==1) assert(m.clear_in==1 && strstr(records,"scsi addr=1 cmd=28 sense=05/24/00"));
-        /* The queue now admits one sector per command; no second fallback. */
+        /* The queue now admits 8 sectors per command; no second fallback.
+         * Completed 8-sector READ(10)s qualify 8-sector WRITE(10)s. */
         reads=m.read_commands;
         assert(!block()->read(block(),400,128,buf) && !memcmp(buf,m.image+400*512,BLKDEV_READ_BYTES));
-        assert(m.read_commands==reads+128 && s->transfer_fallbacks==1);
+        assert(m.read_commands==reads+16 && s->transfer_fallbacks==1);
         unsigned writes=m.writes;fill(buf,4096,3);
-        assert(!block()->write(block(),(uint32_t)block()->capacity-16,8,buf) && m.writes==writes+8);
+        assert(!block()->write(block(),(uint32_t)block()->capacity-16,8,buf) && m.writes==writes+1 && m.max_write_sectors==8);
         assert(!memcmp(m.image+((size_t)block()->capacity-16)*512,buf,4096));
         free(buf);end();
     }
@@ -180,12 +182,12 @@ static void stall_fallback(const char *path)
     uint32_t lba=(uint32_t)block()->capacity-128;
     assert(block()->write(block(),lba,64,buf)<0 && block()->quarantined && m.writes==writes+1);
     char needle[160];
-    snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=2a lba=%u sectors=64 from=128 to=1 reason=data_stall resend=0 fallbacks=1",lba);
+    snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=2a lba=%u sectors=64 from=128 to=8 reason=data_stall resend=0 fallbacks=1",lba);
     assert(strstr(records,needle) && strstr(records,"quarantine addr=1 reason=write_failed"));
     unsigned commands=m.commands;
     assert(block()->write(block(),lba,1,buf)<0 && m.commands==commands && m.writes==writes+1);
     free(buf);end();
-    puts("PASS F1-96 STALL/CSW fallback: data STALL + ILLEGAL REQUEST, phase error and CBW STALL drop to one sector with a record and re-read the range; queue limit 512; a failed multi-sector write is recorded and never resent");
+    puts("PASS F1-96 STALL/CSW fallback: data STALL + ILLEGAL REQUEST, phase error and CBW STALL step to 8 sectors (f1-96b ladder) with a record and re-read the range; queue limit 4096; a failed multi-sector write is recorded and never resent");
 }
 
 /* 5 MB copy to and from the stick in Files' 64 KiB chunks. The read side

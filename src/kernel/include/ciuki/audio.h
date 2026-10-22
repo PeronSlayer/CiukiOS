@@ -94,6 +94,7 @@ int audio_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, ui
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted);
 int audio_master_set(struct ciuki_mixer_master *);
 void audio_master_refresh(void); /* EC worker: apply without storage I/O */
+void audio_master_refresh_requested(void); /* f1-100: EC worker, user-requested read */
 void audio_settings_load(struct vfs *);
 bool audio_registry_load(struct vfs *, struct ciuki_mixer_master *);
 void audio_diagnostics(struct ciuki_audio_diagnostics *);

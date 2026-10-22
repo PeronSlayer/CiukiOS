@@ -1253,7 +1253,14 @@ static void test_persistence(void)
     audio.init_error=0;audio.ready=true;
     struct ciuki_mixer_master m={1,32,60,40,1,0,0,0};
     CHECK(ctl(mixer,MIXER_SET_MASTER,&m,32)==-EACCES);
+    /* f1-100: a requested hardware read needs the control handle too. */
+    CHECK(ctl(mixer,MIXER_REFRESH_MASTER,&m,32)==-EACCES);
     file_fd(client,mixer)->mixer_control=true; /* bootstrap authority is tested separately below */
+    struct ciuki_mixer_master refreshed={1,32,0,0,0,0,0,0};
+    CHECK(!ctl(mixer,MIXER_REFRESH_MASTER,&refreshed,32) && refreshed.left==audio.master.left &&
+          refreshed.right==audio.master.right && refreshed.mute==audio.master.mute);
+    refreshed.reserved=1;CHECK(ctl(mixer,MIXER_REFRESH_MASTER,&refreshed,32)==-EINVAL);
+    refreshed.reserved=0;CHECK(ctl(mixer,MIXER_REFRESH_MASTER,&refreshed,28)==-EINVAL);
     hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;
     CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,32)&&m.save_state==1);
     CHECK(hw.codec[2/2]==0x8305 && hw.codec[0x18/2]==0x8808);

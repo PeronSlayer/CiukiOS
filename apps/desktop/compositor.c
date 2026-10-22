@@ -791,6 +791,8 @@ void desk_render_release(struct desktop *d)
     free(d->rows); d->rows=NULL; d->row_height=0;
     free(d->sh.background); d->sh.background=NULL; d->sh.background_valid=0;
     d->cursor_valid=0; d->cursor_dirty=1; d->present_damage.count=0;
+    for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) { free(d->vram[i].shadow); memset(&d->vram[i],0,sizeof(d->vram[i])); }
+    d->vram_first=d->vram_end=0;
 }
 int desk_frame_due(const struct desktop *d, uint64_t now)
 { return now>=d->next_frame_ns && (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty); }
@@ -800,6 +802,31 @@ static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
     q->size=sizeof(*q); q->generation=d->accel_generation;
     return d->accel ? d->accel(d->display,q) : -ENOSYS;
 }
+/* f2-92: offscreen caches. Video memory below the scanout holds unchanged
+ * surfaces; uploads go through the engine's host-to-screen write and each
+ * use is an engine copy, after an exact comparison with the RAM frame. */
+#define DESK_VRAM_MIN_W 64
+#define DESK_VRAM_STEP_ROWS 16u /* about 64 KiB per idle turn at 1024 pixels */
+#define DESK_VRAM_CHECK_NS 500000000ull
+static void vram_free(struct desk_vram_entry *e)
+{
+    free(e->shadow);
+    memset(e,0,sizeof(*e));
+}
+static void vram_query(struct desktop *d)
+{
+    d->vram_queries++;
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_OFFSCREEN};
+    int rows=accel_call(d,&q);
+    uint32_t first=rows>0 ? (uint32_t)rows&0xffffu : 0, end=rows>0 ? (uint32_t)rows>>16 : 0;
+    if (end>first && first>=d->height) { d->vram_first=first; d->vram_end=end; }
+}
+static void vram_reset(struct desktop *d)
+{
+    for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) vram_free(&d->vram[i]);
+    d->vram_first=d->vram_end=0; d->vram_check_ns=d->vram_query_ns=0; d->vram_queries=d->vram_failures=0;
+    if (d->accel && (d->accel_caps&1u)) vram_query(d);
+}
 void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
     d->scanout_valid=0; d->move_damage.count=0;
@@ -808,6 +835,7 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+    vram_reset(d);
     d->cursor_loaded=DESK_CURSOR_COUNT;
     if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) {
         q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
@@ -833,6 +861,7 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
 {
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_COPY,.rect=*r};
     if (accel_call(d,&q)) {
+        d->frame_stats.accel_fallback++;
         d->scanout_valid=0;
         q.operation=CIUKI_ACCEL_QUERY;
         int caps=accel_call(d,&q);
@@ -841,8 +870,157 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         return -1;
     }
-    d->presents++; d->frame_stats.presents++;
+    d->presents++; d->frame_stats.presents++; d->frame_stats.accel_copies++;
     return 0;
+}
+/* The shell background is the cached image itself; a window has its own
+ * shadow (the masked client pixels that were uploaded). */
+static const uint32_t *vram_source(struct desktop *d, const struct desk_vram_entry *e, uint32_t *stride)
+{
+    if (e->kind==DESK_VRAM_BACKGROUND) {
+        if (!d->shell || !d->sh.background || !d->sh.background_valid || e->serial!=d->sh.background_serial ||
+            e->width!=d->width || e->height!=d->height) return NULL;
+        *stride=d->width; return d->sh.background;
+    }
+    *stride=e->width; return e->shadow;
+}
+/* A cached window: an ordinary, unscaled application surface whose composed
+ * content is exactly its pixels without the X byte (client_rows). */
+static int vram_window_ok(const struct desktop *d, const struct desk_client *c)
+{
+    struct desk_box b=desk_content(c);
+    return c->window && !c->minimized && !c->collapsed && !c->internal && c->pixels &&
+        (c->v3_style&3)!=DESK_V3_POPUP && !c->gfx_width && !c->gfx_height &&
+        b.w==(int)c->info.width && b.h==(int)c->info.height && b.w>=DESK_VRAM_MIN_W && b.h>0 &&
+        (uint32_t)b.w<=d->width;
+}
+/* Row y of box b served by one cache: entry index, source x and row. */
+static int vram_lookup(struct desktop *d, struct desk_box b, int y, int32_t *sx, int32_t *sy)
+{
+    if (!d->vram_end || b.w<DESK_VRAM_MIN_W) return -1;
+    const uint32_t *row=d->pixels+(size_t)y*d->width+b.x;
+    for (int i=0;i<DESK_VRAM_ENTRIES;i++) {
+        struct desk_vram_entry *e=&d->vram[i];
+        uint32_t stride; const uint32_t *src;
+        if (!e->valid || !(src=vram_source(d,e,&stride))) continue;
+        int32_t ox=0, oy=0;
+        if (e->kind==DESK_VRAM_WINDOW) {
+            const struct desk_client *c=&d->clients[e->client];
+            if (!vram_window_ok(d,c) || c->info.width!=e->width || c->info.height!=e->height) continue;
+            struct desk_box cb=desk_content(c);
+            ox=cb.x; oy=cb.y;
+        }
+        if (y<oy || y>=oy+(int)e->height || b.x<ox || b.x+b.w>ox+(int)e->width) continue;
+        if (memcmp(row,src+(size_t)(y-oy)*stride+(b.x-ox),(size_t)b.w*4)) continue;
+        *sx=b.x-ox; *sy=(int32_t)e->row+(y-oy);
+        return i;
+    }
+    return -1;
+}
+static int vram_write(struct desktop *d, const uint32_t *src, uint32_t stride, uint32_t width, uint32_t height,
+                      uint32_t first, uint32_t rows, uint32_t dst_row)
+{
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_WRITE,
+        .rect={0,(int32_t)first,0,(int32_t)dst_row,width,rows}};
+    uintptr_t at=(uintptr_t)src;
+    q.write.pixels_lo=(uint32_t)at; q.write.pixels_hi=(uint32_t)((uint64_t)at>>32);
+    q.write.stride=stride*4u; q.write.source_width=width; q.write.source_height=height;
+    int e=accel_call(d,&q);
+    if (e) {
+        /* Three failed uploads in a row end the caches until the next
+         * accelerator reset; a quarantine also clears the capability. */
+        d->stats.accel_fallback++;
+        if (++d->vram_failures>=3) {
+            for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) vram_free(&d->vram[i]);
+            d->vram_first=d->vram_end=0;
+        }
+        return -1;
+    }
+    d->vram_failures=0; d->stats.accel_writes++;
+    return 0;
+}
+/* Upload the next rows of an entry; a changed source restarts it. */
+static int vram_upload(struct desktop *d, struct desk_vram_entry *e)
+{
+    uint32_t stride; const uint32_t *src=vram_source(d,e,&stride);
+    if (!src) { e->valid=0; e->uploaded=0; return 0; }
+    uint32_t rows=e->height-e->uploaded;
+    if (rows>DESK_VRAM_STEP_ROWS) rows=DESK_VRAM_STEP_ROWS;
+    if (vram_write(d,src+(size_t)e->uploaded*stride,stride,e->width,rows,0,rows,e->row+e->uploaded)) {
+        if (e->kind) { e->valid=0; e->uploaded=0; }
+        return 0;
+    }
+    e->uploaded+=rows;
+    e->valid=e->uploaded==e->height;
+    return !e->valid;
+}
+static void vram_check(struct desktop *, uint64_t, uint32_t);
+int desk_accel_cache_step(struct desktop *d, uint64_t now)
+{
+    /* A busy first answer (the kernel's write self-test needs the display)
+     * is asked again twice, 2 s apart; none at all is final. */
+    if (d->accel && (d->accel_caps&1u) && !d->vram_end && d->vram_queries && d->vram_queries<3 &&
+        now>=d->vram_query_ns) { d->vram_query_ns=now+2000000000ull; vram_query(d); }
+    if (!d->accel || !(d->accel_caps&1u) || d->vram_end<=d->vram_first || !d->pixels) return 0;
+    uint32_t next=d->vram_first;
+    /* The background needs one full screen of rows; stale serials restart. */
+    struct desk_vram_entry *bg=&d->vram[0];
+    if (d->shell && d->sh.background && d->sh.background_valid && d->vram_end-next>=d->height) {
+        if (bg->kind!=DESK_VRAM_BACKGROUND || bg->serial!=d->sh.background_serial) {
+            vram_free(bg);
+            *bg=(struct desk_vram_entry){.kind=DESK_VRAM_BACKGROUND,.row=next,.width=d->width,
+                .height=d->height,.serial=d->sh.background_serial};
+        }
+        next+=d->height;
+        if (!bg->valid) return vram_upload(d,bg);
+    } else if (bg->kind) vram_free(bg);
+    /* Windows, front-most first, while they fit; checked at most twice a
+     * second (a full RAM comparison), uploaded once unchanged for a check. */
+    if (now>=d->vram_check_ns) vram_check(d,now,next);
+    for (int i=1;i<DESK_VRAM_ENTRIES;i++)
+        if (d->vram[i].kind && !d->vram[i].valid && d->vram[i].dirty_ns+DESK_VRAM_CHECK_NS<=now)
+            return vram_upload(d,&d->vram[i]);
+    return 0;
+}
+static void vram_check(struct desktop *d, uint64_t now, uint32_t next)
+{
+    d->vram_check_ns=now+DESK_VRAM_CHECK_NS;
+    int order[DESK_VRAM_ENTRIES-1], count=0; uint64_t last=UINT64_MAX;
+    while (count<DESK_VRAM_ENTRIES-1) {
+        int best=-1;
+        for (int i=0;i<DESK_CLIENTS;i++) if (vram_window_ok(d,&d->clients[i]) && d->clients[i].order<last &&
+            (best<0 || d->clients[i].order>d->clients[best].order)) best=i;
+        if (best<0) break;
+        last=d->clients[best].order; order[count++]=best;
+    }
+    for (int k=1;k<DESK_VRAM_ENTRIES;k++) {
+        struct desk_vram_entry *e=&d->vram[k];
+        int want=k-1<count ? order[k-1] : -1;
+        const struct desk_client *c=want>=0 ? &d->clients[want] : NULL;
+        if (!c || next+c->info.height>d->vram_end) { if (e->kind) vram_free(e); continue; }
+        uint32_t w=c->info.width, h=c->info.height;
+        if (e->kind!=DESK_VRAM_WINDOW || e->client!=want || e->width!=w || e->height!=h || e->row!=next) {
+            vram_free(e);
+            uint32_t *shadow=malloc((size_t)w*h*4);
+            if (!shadow) { next+=h; continue; }
+            *e=(struct desk_vram_entry){.kind=DESK_VRAM_WINDOW,.client=want,.row=next,.width=w,.height=h,
+                .shadow=shadow,.dirty_ns=now,.order=c->order};
+            for (uint32_t y=0;y<h;y++) xrgb_row(shadow+(size_t)y*w,c->pixels+(size_t)y*w,(int)w);
+        } else {
+            /* Exact comparison; a change replaces the shadow and waits. */
+            uint32_t *row=malloc((size_t)w*4); int changed=0;
+            if (!row) { next+=h; continue; }
+            for (uint32_t y=0;y<h;y++) {
+                xrgb_row(row,c->pixels+(size_t)y*w,(int)w);
+                if (memcmp(row,e->shadow+(size_t)y*w,(size_t)w*4)) {
+                    memcpy(e->shadow+(size_t)y*w,row,(size_t)w*4); changed=1;
+                }
+            }
+            free(row);
+            if (changed) { e->valid=0; e->uploaded=0; e->dirty_ns=now; }
+        }
+        next+=h;
+    }
 }
 /* A scroll is accelerated only after comparing every translated client pixel
  * with the last completed RAM frame. Samples merely reject candidates early. */
@@ -885,28 +1063,64 @@ static int scroll_plan(struct desktop *d, struct ciuki_rect *out)
 /* Present the composite surface directly. There is no second frame to copy
  * or compare. COPY's exact destination is excluded from upload rows by the
  * caller; FILL is used only after checking every pixel in its span. */
+static int engine_failed(struct desktop *d)
+{
+    /* A failed engine may have changed part of scanout. Retain a full
+     * software recovery frame rather than trusting it. */
+    d->frame_stats.accel_fallback++;
+    d->scanout_valid=0;
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+    return -1;
+}
 static int present_box_raw(struct desktop *d, struct desk_box b)
 {
-    if (!(d->accel_caps&1u) || !d->accel || !d->scanout_valid) {
+    int engine=(d->accel_caps&1u) && d->accel;
+    /* f2-92: offscreen-cache copies need no previous scanout; fills and
+     * duplicate-row copies keep requiring a completed engine-era frame. */
+    int scan=engine && d->scanout_valid, cached=engine && d->vram_end && b.w>=DESK_VRAM_MIN_W;
+    if (!scan && !cached) {
         struct ciuki_rect r={b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
         if (d->ops.present(d->display,d->output,&r)) return -1;
         d->frame_stats.lfb_bytes+=(uint64_t)b.w*b.h*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
         d->presents++; d->frame_stats.presents++; return 0;
     }
+    int32_t hit_x=0, hit_y=0;
+    int hit=cached ? vram_lookup(d,b,b.y,&hit_x,&hit_y) : -1;
     for (int y=b.y;y<b.y+b.h;) {
         const uint32_t *row=d->pixels+(size_t)y*d->width+b.x;
-        int solid=b.w>=64;
+        int solid=scan && b.w>=64;
         for (int x=1;solid && x<b.w;x++) if (row[x]!=row[0]) solid=0;
+        if (!solid && hit>=0) {
+            /* Consecutive rows served by the same cache: one engine copy. */
+            int bottom=y+1; int32_t nx=0, ny=0;
+            int next=-1;
+            while (bottom<b.y+b.h && (next=vram_lookup(d,b,bottom,&nx,&ny))==hit &&
+                   nx==hit_x && ny==hit_y+(bottom-y)) { bottom++; next=-1; }
+            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_COPY,
+                .rect={hit_x,hit_y,b.x,y,(uint32_t)b.w,(uint32_t)(bottom-y)}};
+            if (accel_call(d,&q)) return engine_failed(d);
+            d->presents++; d->frame_stats.presents++; d->frame_stats.accel_copies++;
+            d->frame_stats.cache_rows+=(uint64_t)(bottom-y);
+            y=bottom;
+            if (y<b.y+b.h) {
+                if (next>=0 || (next=vram_lookup(d,b,y,&nx,&ny))>=0) { hit=next; hit_x=nx; hit_y=ny; }
+                else hit=-1;
+            }
+            continue;
+        }
         /* Composition is complete, and the preceding span was presented in
          * this call. Equal non-solid rows can copy that scanout span without
          * retaining another RAM frame. A failure uses the normal full retry. */
-        if (!solid && b.w>=64 && y>b.y &&
+        if (!solid && scan && b.w>=64 && y>b.y &&
             !memcmp(row,row-d->width,(size_t)b.w*4)) {
             struct ciuki_rect r={b.x,y-1,b.x,y,(uint32_t)b.w,1};
             if (screen_copy(d,&r)) return -1;
-            y++; continue;
+            y++;
+            if (cached && y<b.y+b.h) hit=vram_lookup(d,b,y,&hit_x,&hit_y);
+            continue;
         }
         int bottom=y+1;
+        hit=-1;
         if (solid) {
             for (;bottom<b.y+b.h;bottom++) {
                 const uint32_t *next=d->pixels+(size_t)bottom*d->width+b.x;
@@ -916,24 +1130,21 @@ static int present_box_raw(struct desktop *d, struct desk_box b)
             }
         } else {
             /* Upload distinct rows together, stopping before a duplicate so
-             * its now-presented predecessor can supply a screen copy. */
+             * its now-presented predecessor can supply a screen copy, and
+             * before a row an offscreen cache can supply. */
             for (;bottom<b.y+b.h;bottom++) {
                 const uint32_t *next=d->pixels+(size_t)bottom*d->width+b.x;
-                if (b.w>=64 && !memcmp(next,next-d->width,(size_t)b.w*4)) break;
+                if (scan && b.w>=64 && !memcmp(next,next-d->width,(size_t)b.w*4)) break;
+                if (cached && (hit=vram_lookup(d,b,bottom,&hit_x,&hit_y))>=0) break;
             }
         }
+        if (bottom<b.y+b.h && hit<0 && cached && solid) hit=vram_lookup(d,b,bottom,&hit_x,&hit_y);
         struct ciuki_rect r={b.x,y,b.x,y,(uint32_t)b.w,(uint32_t)(bottom-y)};
         int filled=0;
         if (solid) {
             struct ciuki_accel_request q={.operation=CIUKI_ACCEL_FILL,.colour=row[0],.rect=r};
-            if (!accel_call(d,&q)) filled=1;
-            else {
-                /* A failed engine may have changed part of scanout. Retain
-                 * a full software recovery frame rather than trusting it. */
-                d->scanout_valid=0;
-                desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
-                return -1;
-            }
+            if (accel_call(d,&q)) return engine_failed(d);
+            filled=1; d->frame_stats.accel_fills++;
         }
         if (!filled) {
             if (d->ops.present(d->display,d->output,&r)) return -1;
@@ -1102,8 +1313,21 @@ int desk_redraw(struct desktop *d)
     uint64_t begin=time_now(d);
     if (d->accel) {
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
+        uint32_t had=d->accel_caps;
         int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-        if (d->hw_cursor && !(d->accel_caps&2u)) {
+        if ((had&1u) && !(d->accel_caps&1u)) {
+            /* f2-92: the engine went away while in use (quarantine). */
+            d->accel_lost=1;
+            for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) d->vram[i].valid=0;
+            d->vram_first=d->vram_end=0;
+        }
+        if (d->accel_caps&~had&3u) {
+            /* f2-92: activation finished after the desktop started, with an
+             * unchanged mode generation. Load the hardware cursor and learn
+             * the offscreen rows exactly as for a new generation (one full
+             * software frame), otherwise window moves never use the engine. */
+            desk_accel_reset(d,d->accel_generation);
+        } else if (d->hw_cursor && !(d->accel_caps&2u)) {
             d->hw_cursor=0; d->cursor_dirty=1; d->scanout_valid=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
         }
@@ -1219,6 +1443,9 @@ int desk_redraw(struct desktop *d)
     d->pending_input_ns=d->pending_input_lag_ns=0;
     d->stats.frames++; d->stats.damage_px+=s->damage_px; d->stats.scene_px+=s->scene_px;
     d->stats.presents+=s->presents; d->stats.lfb_bytes+=s->lfb_bytes;
+    d->stats.accel_fills+=s->accel_fills; d->stats.accel_copies+=s->accel_copies;
+    d->stats.accel_writes+=s->accel_writes; d->stats.accel_fallback+=s->accel_fallback;
+    d->stats.cache_rows+=s->cache_rows;
     d->stats.composite_ns+=s->composite_ns; d->stats.present_ns+=s->present_ns;
     uint64_t slot=frame_begin;
     if (d->next_frame_ns && d->next_frame_ns<=frame_begin)

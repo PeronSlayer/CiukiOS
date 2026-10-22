@@ -50,6 +50,23 @@ struct desk_frame_stats {
     uint64_t frames, damage_px, scene_px, presents, lfb_bytes;
     uint64_t composite_ns, present_ns, input_ns, input_lag_ns;
     uint64_t completed, frame_ns, frame_p95_ns, frame_max_ns, overruns, dropped;
+    /* f2-92: 2D engine requests that succeeded (fills, copies including
+     * offscreen-cache copies, writes = cache uploads), engine requests that
+     * fell back to software, and rows served from the offscreen caches. */
+    uint64_t accel_fills, accel_copies, accel_writes, accel_fallback, cache_rows;
+};
+/* f2-92: an unchanged surface kept in engine-only video memory below the
+ * scanout (CIUKI_ACCEL_OFFSCREEN rows): the wallpaper/icon background, or a
+ * window's content. Video memory equals `shadow` (or the shell background
+ * at `serial`) once every row is uploaded; a scanout row is copied from it
+ * only after an exact comparison with the composed RAM frame. */
+enum { DESK_VRAM_NONE, DESK_VRAM_BACKGROUND, DESK_VRAM_WINDOW };
+#define DESK_VRAM_ENTRIES 3
+struct desk_vram_entry {
+    int kind, client, valid;
+    uint32_t row, width, height, uploaded, serial;
+    uint32_t *shadow;
+    uint64_t dirty_ns, order;
 };
 #define DESK_LATENCY_BUCKETS 256
 struct desk_dirty_row { int32_t left, right; };
@@ -287,6 +304,12 @@ struct desktop {
     /* A move can copy only a clean, unobscured window. Other exposure is damage. */
     int copy_pending, copy_client;
     struct ciuki_rect copy_rect;
+    /* f2-92: offscreen rows [vram_first, vram_end), their surface caches,
+     * the next window stability check and an engine lost while in use. */
+    uint32_t vram_first, vram_end, vram_queries, vram_failures;
+    struct desk_vram_entry vram[DESK_VRAM_ENTRIES];
+    uint64_t vram_check_ns, vram_query_ns;
+    int accel_lost;
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -386,6 +409,9 @@ void desk_input(struct desktop *, const struct ciuki_input_event *);
 int desk_drain_input(struct desktop *, int (*read_events)(int, struct ciuki_input_event *, uint32_t));
 void desk_composite(struct desktop *, struct desk_box);
 void desk_accel_reset(struct desktop *, uint32_t generation);
+/* f2-92: one bounded offscreen-cache maintenance step (upload or check);
+ * 1 when work remains. Call between frames. */
+int desk_accel_cache_step(struct desktop *, uint64_t now);
 void desk_cursor_motion(struct desktop *);
 void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
