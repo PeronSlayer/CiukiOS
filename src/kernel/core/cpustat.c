@@ -11,6 +11,7 @@
 #include <ciuki/ledger.h>
 #include <ciuki/reclaim.h>
 #include <ciuki/pager.h>
+#include <ciuki/smi.h>
 
 static struct task *stat_task;
 static uint64_t window_start, irq_cycles, exited_cycles, classes[P_COUNT];
@@ -28,7 +29,9 @@ static struct {
     uint64_t start;
     uint32_t site;
     unsigned count;
-    struct { uint64_t stamp; enum cpu_irqoff_phase phase; } marks[8];
+    /* f1-94: the IRQ path, the PIT top half and schedule() in one section
+     * place up to 17 marks; the tail beyond capacity stays unclassified. */
+    struct { uint64_t stamp; enum cpu_irqoff_phase phase; } marks[20];
     const struct task *from, *to;
 } irqoff;
 static struct irqoff_long {
@@ -77,13 +80,13 @@ void cpu_irqoff_end(uint64_t end)
 {
     if (!irqoff.start) return;
     uint64_t d=end-irqoff.start;
-    if (g_tsc_per_ms && end>=irqoff.start && d>=g_tsc_per_ms && d>irqoff_window.cycles) {
-        uint64_t measured=0,largest=0;
+    if (g_tsc_per_ms && end>=irqoff.start && d>=g_tsc_per_ms) {
+        uint64_t measured=0,largest=0,largest_start=0;
         enum cpu_irqoff_phase phase=CPU_IRQOFF_NONE;
         unsigned count=irqoff.count;
         if (count>ARRAY_SIZE(irqoff.marks)) count=ARRAY_SIZE(irqoff.marks);
         /* Raw capture above has no phase subtraction, accumulation/ranking.
-         * Only a qualifying section evaluates the bounded marks here. */
+         * Only a section of 1 ms or more evaluates the bounded marks here. */
         for (unsigned i=0;i<count;i++) {
             if (irqoff.marks[i].phase==CPU_IRQOFF_NONE) continue;
             uint64_t a=irqoff.marks[i].stamp;
@@ -91,17 +94,26 @@ void cpu_irqoff_end(uint64_t end)
             uint64_t b=i+1<count ? irqoff.marks[i+1].stamp : end;
             if (a<irqoff.start || b<a || b>end) continue;
             uint64_t elapsed=b-a; measured+=elapsed;
-            if (elapsed>largest) { largest=elapsed; phase=irqoff.marks[i].phase; }
+            if (elapsed>largest) { largest=elapsed; largest_start=a; phase=irqoff.marks[i].phase; }
         }
         if (measured>d) measured=d;
-        irqoff_window.cycles=d; irqoff_window.site=irqoff.site;
-        irqoff_window.gap=measured<d/2+d%2;
-        irqoff_window.phase=phase;
-        irqoff_window.phase_cycles=irqoff_window.gap ? d-measured : largest;
-        const struct task *from=irqoff.from ? irqoff.from : g_current;
-        const struct task *to=irqoff.from ? irqoff.to : g_current;
-        name_copy(irqoff_window.from,from ? from->name : "none");
-        name_copy(irqoff_window.to,to ? to->name : "none");
+        /* f1-94: every long section is offered to the SMI attribution, not
+         * only the window maximum; it samples SMI_STS once, after `end`. */
+        if (smi_section_end) {
+            struct smi_section x={irqoff.start,end,largest,largest_start,
+                largest && cpu_irqoff_bounded(phase)};
+            smi_section_end(&x);
+        }
+        if (d>irqoff_window.cycles) {
+            irqoff_window.cycles=d; irqoff_window.site=irqoff.site;
+            irqoff_window.gap=measured<d/2+d%2;
+            irqoff_window.phase=phase;
+            irqoff_window.phase_cycles=irqoff_window.gap ? d-measured : largest;
+            const struct task *from=irqoff.from ? irqoff.from : g_current;
+            const struct task *to=irqoff.from ? irqoff.to : g_current;
+            name_copy(irqoff_window.from,from ? from->name : "none");
+            name_copy(irqoff_window.to,to ? to->name : "none");
+        }
     }
     irqoff.start=0;
 }
@@ -361,12 +373,15 @@ static void cpu_emit(void)
         }
     }
     if (long_section.cycles && g_tsc_per_ms) {
-        static const char *const phases[]={"other","pick","fpu","address_space","ldt/debug","vm-enter","other"};
+        static const char *const phases[CPU_IRQOFF_PHASES]={"other","pick","fpu","address_space",
+            "ldt/debug","vm-enter","other","queue","proc","resume","irq-entry","irq-handler",
+            "irq-eoi","irq-exit","tick-timing","tick-sched","tick-timers","tick-serial"};
         klog_periodic("[kernel] irqoff_long site=%08x us=%llu phase=%s phase_us=%llu from=%s to=%s",
             long_section.site,long_section.cycles*1000/g_tsc_per_ms,
             long_section.gap ? "gap" : phases[long_section.phase],
             long_section.phase_cycles*1000/g_tsc_per_ms,long_section.from,long_section.to);
     }
+    if (smi_window_emit) smi_window_emit(total, emit);
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);

@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
 #include <ciuki/task.h>
+#include <ciuki/smi.h>
 
 #define EC_DATA 0x62
 #define EC_SC 0x66
@@ -288,8 +289,11 @@ int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 #ifndef THINKPAD_EC_HOST
 static struct thinkpad_ec native_ec;
 static struct kmutex ec_lock;
-static uint8_t native_read(void *ctx, uint16_t port) { (void)ctx; return inb(port); }
-static void native_write(void *ctx, uint16_t port, uint8_t v) { (void)ctx; outb(port, v); }
+/* f1-94: every EC port access is a candidate SMI trigger in legacy mode. */
+static uint8_t native_read(void *ctx, uint16_t port)
+{ (void)ctx; if (smi_mark) smi_mark(SMI_EC_IO); return inb(port); }
+static void native_write(void *ctx, uint16_t port, uint8_t v)
+{ (void)ctx; if (smi_mark) smi_mark(SMI_EC_IO); outb(port, v); }
 static uint64_t native_now(void *ctx) { (void)ctx; return g_ticks; }
 static void native_pause(void *ctx) { (void)ctx; task_sleep_ms(1); }
 static bool native_table_reserved(uint32_t address, uint16_t length)
