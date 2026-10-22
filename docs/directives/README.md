@@ -462,3 +462,9 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-118-s3-trio64-virge](f2-118-s3-trio64-virge.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: S3 Trio64/ViRGE) |
 | [f9-04b-setup-native-integration](f9-04b-setup-native-integration.md) | F9 | gpt-6.1-sol / xhigh | written 2026-10-23 01:05 (Setup native integration: VFS query, destination-aware writers, manifest, Setup-mode authority, interface amendment, real libsetup in the wizard) |
 | [f1-113b-joystick-persistence](f1-113b-joystick-persistence.md) | F1 | gpt-6.1-sol / high | written 2026-10-23 01:11 (joystick selection and calibration persisted by controller identity) |
+| [f2-105-nvidia-fx-gf6](f2-105-nvidia-fx-gf6.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: NVIDIA FX/GeForce 6 on nv2d) |
+| [f2-113-trident-blade](f2-113-trident-blade.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: Trident Blade/CyberBlade) |
+| [f2-119-intel-i810-i740](f2-119-intel-i810-i740.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: Intel i810/i815 and i740) |
+| [f2-120-riva128](f2-120-riva128.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: NVIDIA Riva 128) |
+| [f2-121-neomagic](f2-121-neomagic.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: NeoMagic) |
+| [f2-122-chips-hiqv](f2-122-chips-hiqv.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: Chips & Technologies HiQV) |
