@@ -9,7 +9,7 @@
 #define USB_PORT_MAX 8u
 #define USB_HID_MAX 4u
 #define USB_CONFIG_MAX 512u
-#define USB_DMA_BYTES 12288u
+#define USB_DMA_BYTES 20480u /* f1-96: 128-TD bulk ring and its 8 KiB of packet buffers */
 #define USB_PACKET_MAX 64u
 #define USB_TIMEOUT_MS 500u
 #define USB_PERIODIC_WATCHDOG_MS 20u
@@ -37,9 +37,18 @@
 #define USB_HID_STRIDE 48u
 #define USB_OHCI_DONE_HEADS (USB_DEVICE_MAX * USB_HID_MAX + 1u)
 #define USB_HID_LATENCY_LIMIT 20u
+/* f1-96: UHCI bulk data stages stream through a ring of USB_BULK_BATCH TDs
+ * (about seven full-speed frames of 64-byte packets); completed slots are
+ * re-armed while the controller executes the rest. One 64-byte buffer per
+ * slot. A phase of at most USB_BULK_BATCH packets is a single chain. */
 #define USB_BULK_TD 7680u
-#define USB_BULK_BUFFER 8192u
-#define USB_BULK_BATCH 32u
+#define USB_BULK_BUFFER 12288u
+#define USB_BULK_BATCH 128u
+/* f1-96: BOT READ(10)/WRITE(10) transfer limit. Windows limits USB mass
+ * storage to 128 sectors and Linux to 240 by default; our block requests
+ * are at most BLKDEV_READ_SECTORS. A STALL/CSW failure of a multi-sector
+ * command drops the device to one sector per command. */
+#define USB_STORAGE_MAX_SECTORS 128u
 #define USB_HID_DESCRIPTOR_MAX 512u
 #define USB_MOUSE_REPORTS 8u
 struct usb_mouse_field { uint16_t bit; uint8_t size; };
@@ -106,6 +115,7 @@ struct usb_storage_trace {
     uint64_t bulk_started_ms, bulk_deadline, bulk_elapsed_ms, bind_remaining_ms;
     const char *bulk_stop;
     const char *stage;
+    const char *fault_reason; /* f1-96: last transport/CSW fault of this command */
     uint32_t tag, port_status;
     unsigned expected, actual, data_expected, data_actual;
     int result;
@@ -131,6 +141,10 @@ struct usb_storage {
     bool binding, bind_reserved, bind_stage_active;
     uint32_t bind_read_requests, bind_read_sectors, bind_read_max;
     uint32_t bind_packets, bind_poll_frames, bind_retire_frames;
+    /* f1-96: negotiated sectors per READ(10)/WRITE(10); the largest READ(10)
+     * that completed with a passed CSW on this medium (writes never use a
+     * longer transfer); fallbacks to one sector, recorded. */
+    uint32_t max_sectors, read_qualified, transfer_fallbacks;
 };
 /* Coalesce suppressed events; root and external-hub ports use the same budget. */
 struct usb_port_log {
