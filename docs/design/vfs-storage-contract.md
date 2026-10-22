@@ -574,15 +574,29 @@ wakes the existing generation-bound wait queue; it copies no data. Success
 requires that Start was issued, the matching IRQ, BM interrupt without BM error, and drive ready
 without BSY/DRQ/ERR/DF. Read bounce data is copied only after success.
 
-Any DMA error or 30-second timeout stops the master, records a sticky
-per-device DMA quarantine, and returns EIO without replaying the failed
-read/write. Later independent requests use PIO only when the bus master
-and drive are idle. If stop cannot establish idle (or quiescence intervenes),
-retain the existing whole-channel quarantine. Late IRQs cannot start DMA
-or resurrect a generation. Quiescence stops DMA before proving idle and
-retains all claims on uncertainty.
-An IRQ before Start without an ATA abort error cannot prove completion of
-the issued drive command; it returns EIO and quarantines the channel.
+f1-92 (`docs/validation/f1-92-ata-early-interrupt.md`) refines the edge
+rules. After Start, an edge whose bus-master status has neither Interrupt
+nor Error, or has Interrupt with Active while the drive still shows BSY or
+DRQ, is not a completion: the handler leaves the master running and the
+waiter keeps the command's deadline (a drive that ends without a latched
+Interrupt gets a bounded 10 ms grace, then fails as `bm_no_interrupt`). An
+edge between the DMA command and Start without ERR/DF from a present drive,
+with the master neither Active nor in Error, cannot be this command's end
+(ATA-6 9.7): it is counted (`early_irq`), consumed, and the master is started.
+An issued command is never ended by its caller's cancellation or request
+budget; interruption is honoured only before a command is issued.
+
+Any DMA error or 30-second timeout stops the master and records a sticky
+per-device DMA quarantine. When the bus master and drive are proven idle,
+the same request is repeated once through PIO (same buffer and LBAs) before
+any error reaches the caller; later requests use PIO. Only a failed PIO
+repeat returns EIO with the whole-channel quarantine. If stop cannot
+establish idle (or quiescence intervenes), retain the existing whole-channel
+quarantine without a repeat. Late IRQs cannot resurrect a generation.
+Quiescence stops DMA before proving idle and retains all claims on
+uncertainty. An edge before Start with ERR is the drive's abort (DMA
+quarantine and PIO repeat); with DF, a missing drive or an active/error
+master it still quarantines the channel.
 If Stop fails on native hardware, revoke PCI bus mastering for the whole
 function before returning a direct buffer. Failure to verify that revocation
 halts the kernel rather than allowing further DMA into reclaimed memory.
