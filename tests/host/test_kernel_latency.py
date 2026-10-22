@@ -262,6 +262,22 @@ static void test_irq_restore(uint32_t f) {
                             str(ROOT / 'tests/host/desktop/storage_notice_test.c'), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
+    def test_desktop_accel_notice(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='accel-notice-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'apps/desktop/desktop.c').read_text()
+            begin = source.index('void accel_notice_text(')
+            end = source.index('static void storage_poll(', begin)
+            (temp / 'latency_accel_notice.inc').write_text(source[begin:end])
+            binary = temp / 'notice'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-I', str(temp),
+                            '-I', str(ROOT / 'src/kernel/include'),
+                            str(ROOT / 'tests/host/desktop/accel_notice_test.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_diagnostics_require_explicit_boot_selection(self):
         menu = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
         platform = (ROOT / 'src/boot/ciukldr/platform.inc').read_text()
@@ -307,12 +323,24 @@ static void test_irq_restore(uint32_t f) {
             pit = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
             (temp / 'pit_timer.inc').write_text(pit[pit.index('static void shared_tick_work('):pit.index('void pit_init(')])
             write_model(temp / 'vm_creation_model.inc')
+            # f6-21: the jitter collector's turn policy, verbatim from entropy.c.
+            entropy = (ROOT / 'src/kernel/core/entropy.c').read_text()
+            (temp / 'entropy_turns.inc').write_text(
+                entropy[entropy.index('/* f6-21 turns: begin'):entropy.index('static struct entropy_turns turns;')])
             for unit, extra in (
                 ('kernel_latency_test.c', []),
+                ('jitter_collector_latency_test.c', []),
                 ('scheduler_irqoff_test.c', []),
                 ('scheduler_priorities_test.c', []),
                 ('timer_audio_load_test.c', []),
                 ('fs/wait_latency_test.c', []),
+                # f1-98: desktop minimum share and reservation-holder boost
+                # on the T23 b453bc92 replay model (negative controls inside).
+                ('t23_desktop_share_test.c', []),
+                # f1-101: audio producer boost on the T23 a4d9454e replay
+                # (trial windows, 50 % interactive load, budget bound, unit
+                # checks; zero refill overruns in every scenario).
+                ('t23_audio_producer_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
                 binary = temp / Path(unit).stem
@@ -323,6 +351,45 @@ static void test_irq_restore(uint32_t f) {
                                 *(str(ROOT / path) for path in extra),
                                 str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
+            binary = temp / 't23_audio_replay_test'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
+                            '-pthread', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(ROOT / 'tests/host/t23_audio_replay_test.c'),
+                            str(ROOT / 'src/kernel/fs/fs_port.c'), str(ROOT / 'src/kernel/fs/blkreq.c'),
+                            *(str(ROOT / 'src/kernel/fs' / unit) for unit in
+                              ('vfs.c', 'fat.c', 'cache.c', 'path.c', 'fs_ro.c')),
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            for policy in ('--vfs', '--old-vfs'):
+                subprocess.run([str(binary), policy], check=True,
+                               env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            # F1-87 amendment 4 / f1-90: the trial's measured device work.
+            # The trial image's aggregate device budget must reproduce the
+            # overruns with either VFS policy (negative controls); the f1-90
+            # attributed budget must give zero audio-refill device overruns
+            # with either. C is fatal with CIUKI_F187_REQUIRE_C=1.
+            strict = ['--require-c'] if os.environ.get('CIUKI_F187_REQUIRE_C') == '1' else []
+            for policy in (['--old-vfs', '--old-device-budget'], ['--vfs', '--old-device-budget'],
+                           ['--old-vfs'], ['--vfs', *strict]):
+                subprocess.run([str(binary), *policy, '--trial-device-work'], check=True,
+                               env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            # f2-96: 2.1 ms SMI blackouts (the T23 EC transaction's SMIs) at
+            # 1 Hz, in the refill's own service (worst case) and anywhere; the
+            # default 2 s EC poll's pair anywhere and in the device worker;
+            # ecpoll=1's pair in the device worker. No transport gap, no
+            # refill own-budget overrun, no service deadline miss. The pair
+            # inside the refill is a reported stress case; without the
+            # firmware proof the pre-f2-96 charge reproduces the T23 5a10eef4
+            # audio_refill_overrun records (negative control).
+            for smi in ('1000:1:refill', '1000:1:any', '2000:2:any', '2000:2:device', '1000:2:device',
+                        '2000:2:refill', '1000:1:refill:unproven'):
+                result = subprocess.run([str(binary), '--smi=' + smi], text=True, capture_output=True,
+                                        env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+                print(''.join(line + '\n' for line in result.stdout.splitlines() if 'F2-96' in line), end='')
+                self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
 
             if os.environ.get('CIUKI_SCHED_BENCH') == '1':
                 binary = temp / 'scheduler_benchmark'

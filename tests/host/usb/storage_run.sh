@@ -25,6 +25,9 @@ build_test f1_74_test
 "$out/f1_74_test" "$root/build/host/fs/fat16.img"
 build_test f1_81_test
 "$out/f1_81_test" "$root/build/host/fs/fat16.img"
+# f1-96: negotiated 64 KiB READ(10)/WRITE(10), TD ring, fallback, 5 MB copy.
+build_test f1_96_test
+"$out/f1_96_test" "$root/build/host/fs/fat16.img"
 
 # Replay the real run queue policy while the USB bind worker sleeps.
 python3 - "$root" "$out" <<'PYTHON'
@@ -44,3 +47,6 @@ for name in ("rq_remove", "priority_base", "priority_init", "rq_link", "rq_push"
 PYTHON
 build_test bind_freeze_test
 "$out/bind_freeze_test" "$root/build/host/fs/fat12.img" "$root/build/host/fs/fat16.img" "$root/build/host/fs/fat32.img"
+# f1-96b: drained TD ring, early-Intel element erratum, same-chain retry, 128/8/1 ladder.
+build_test f1_96b_test
+"$out/f1_96b_test" "$root/build/host/fs/fat16.img"

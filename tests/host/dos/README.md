@@ -259,3 +259,100 @@ start, menu, demo, play, save, load, config-write, config-reopen and exit ranges
 each containing actual reconciled calls. Missing fragments, unreturned calls,
 cancelled accepted stages, unknown selectors, unsupported DOS functions and
 unapproved errors fail. No complete title trace has been collected by Codex.
+
+## Unified CiukiDOS binding (f3-56)
+
+The DFV2 binding between the CiukiDOS fork of FreeDOS 2043, its control
+driver `CIUKIDF.SYS` and the VMM has its own host qualification:
+
+```sh
+nice -n 19 bash tests/host/dos/run_unified_binding.sh
+```
+
+It builds the hash-pinned fork (patch 0001 + patch 0002 + the files in
+`third_party/freedos/unified/ciuki/fork/`, see `fork.json`) twice and the
+pristine patch-0001 kernel with the pinned Open Watcom 1.9 and NASM tools,
+then runs `unified_binding_test.c` (the native adapter against synthetic,
+guarded guest memory: negotiation, layout, frame/spoof and lifecycle
+matrices with failure injection) and `unified_cpu_test.c`, which boots
+small FAT16 disks through the pinned MBR/VBR on libx86emu with a ROM BIOS
+and the production `dos_unified.c` at the INT FE gates. The guest programs
+are in `h56/`: `h56.asm` (layout, handles, EXEC/TSR, PSP, internals, direct,
+PENDING, spoof and failure-injection tests), `child.asm`, `h56fcb.asm` and
+`h56nls.asm` (print-only FCB/NLS probes compared with the pristine kernel)
+and `runall.asm` (runs the unchanged basic-fixture f3-48 probes, whose
+results must be identical on the pristine kernel and the bound fork).
+ASan/UBSan stay on with leak detection at its default. The script needs
+libx86emu headers and the ignored FreeDOS 1.3 packages in
+`third_party/freedos/1.3` (or in the primary checkout of a worktree), and
+is part of `scripts/test/host_kernel_tests.sh`. `test_unified_fork.py`
+checks the fork pins and shared constants without building.
+
+Evidence limits: the native backend is a fixture; every file operation is
+FreeDOS's local FAT (the fixture boots load `CIUKIDF.SYS /LOCAL`, the
+explicit isolated-fixture policy). f3-57 supplies the live VFS backend
+(next section). Editing the fork:
+`python3 -B scripts/unified_fork.py --checkout build/<dir>`, edit, then
+`--refresh build/<dir>` regenerates patch 0002 and `fork.json`. Wire layout
+and decisions: `docs/validation/f3-56-unified-binding.md`.
+
+## Unified CiukiDOS local IFS (f3-57)
+
+```sh
+nice -n 19 bash tests/host/dos/run_unified_file.sh
+```
+
+`unified_file.py` builds the fork twice (determinism) and the pristine
+patch-0001 kernel, compiles `unified_cpu_test.c` with `-DH57_IFS` (the
+production `dos_unified.c` + `dos_unified_ifs.c` over the production
+VFS/FAT and `dos_file_volume.c`, mounting the boot disk's partition as C:
+and a small FAT16 volume as read-only D: at the final bind), and boots:
+`h57/h57.asm` (`H57.COM F`: drive classification 4409h/4408h/32h/1100h,
+create/read/seek/zero-length truncate, dup/forced dup, copied-DTA search,
+attributes, rename/delete, directories and current-directory refusal,
+36h, locks, 6C00h actions, file times, checked FCB-close size metadata,
+read-only D:, and INT 24h Retry/Fail/Abort and O_NOCRIT through provider
+read faults armed on port EBh); the f3-56 suite `H56.COM N` over the live
+backend; the activation barrier (refused mount: contained stop before the
+shell; `/LOCAL`: local FAT; a view beyond LASTDRIVE: refused after the
+mount and unwound); and the unchanged f3-48 basic battery on the pristine
+kernel and on the fork with the live IFS, whose results must be identical.
+Guest INT 13h after activation must be zero. On success it writes
+`build/unified-dos/fork-qualified.json`; only then does the canonical image
+builder install the fork kernel, `CIUKIDF.SYS` and the `DEVICE=` line for
+`kernel=unified` (`scripts/unified_dos.py` `fork_guest_files`), which the
+script also reads back. Part of `scripts/test/host_kernel_tests.sh`.
+Decisions: `docs/validation/f3-57-unified-file-channel.md`.
+
+## Unified CiukiDOS in the production VM path (f3-61)
+
+`run_unified_file.sh` ends with the H61 production-VM boots (`production_vm`
+in `unified_file.py`): the H50 hook-CPU build of `tests/host/dosvm_guest.c`
+(production dosvm/BIOS/DPMI/`dos_file_vm.c`, real VFS, libx86emu) boots a
+`kernel=unified` base made by the canonical `build_reference` (MBR, FAT16 at
+LBA 63, `.SHA` sidecar) with `GUEST_KERNEL=unified`, i.e. `config.kernel=2`
+and the v1 bridge disabled exactly as `/Programs/dosbox` creates it. It
+requires the DFV2 binding and the C: IFS (no `CIUKIDF: no DFV2 host`), a
+replay of the pre-f3-61 state (`GUEST_UNIFIED_UNBOUND=1`: the fork unbound)
+and an unbound `freedos-1.3` base.
+
+The same build replays a game from the canonical image's DOS bases (read
+only; the harness writes its scratch overlay under `build/host/`):
+
+```sh
+# after tests/host/dos/hook_cpu.py --prepare and the run_hook_cpu.sh compile
+# (add -O2 and drop the sanitizers for long replays)
+GUEST_KERNEL=unified GUEST_INT21_TRACE=1 GUEST_PLAY_MS=40000 \
+  build/host/dos/dosvm_hook_cpu build/f0/dos/UNIFIED.IMG \
+  'shell:CD \DOOM' - 'play:DOOM.EXE -config CIUKI.CFG' DOOM
+```
+
+`GUEST_KERNEL=freedos-1.3|unified` selects the base and sidecar,
+`GUEST_INT21_TRACE=1` prints every INT 21h the guest kernel serves as one
+`I21` entry/return line (V86 INT 21h matched to the kernel's IRET; DOS/4GW's
+0302h calls into the INT 21h vector and reflected PM INT 21h at the host's
+real-mode return stub), `play:` runs `GUEST_PLAY_MS` simulated milliseconds
+with one `H61 PLAY` progress line per second, and `GUEST_PLAY_QUIT=1` leaves
+DOOM through its menu (Esc, Up, Enter, y) and requires the shell prompt with
+no EXEC frame outstanding. Not QEMU or hardware evidence. Decisions:
+`docs/validation/f3-61-unified-dos-game-watchdog.md`.

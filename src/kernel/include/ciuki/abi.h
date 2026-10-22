@@ -913,9 +913,12 @@ _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position 
 #define AUDIO_SET_GAIN 0x4104u
 #define AUDIO_DRAIN 0x4105u
 #define AUDIO_RESET 0x4106u
+#define AUDIO_REFILL_READ 0x4107u /* command: this thread's next bounded source reads */
+#define AUDIO_GET_PRODUCER 0x4108u /* f1-101: the kernel's producer boost state of this stream */
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
+#define MIXER_REFRESH_MASTER 0x4204u /* f1-100: control handle; master record, one requested hardware read */
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u
@@ -985,6 +988,24 @@ struct ciuki_audio_command {
     uint32_t size;
     uint32_t reserved[2];
 };
+/* f1-101: the mixer reports a native stream behind its target lead (more
+ * than one 256-frame period below ring_frames - period_frames, in output
+ * frames) and the scheduler raises the stream's writer and its refill-read
+ * thread above every ordinary level until the lead is refilled, within one
+ * CPU budget shared by all producers (20 % over any 100 ms). The record is a
+ * read-only observation; no flag of it can be set by the application. */
+#define CIUKI_AUDIO_PRODUCER_BEHIND 1u      /* lead below the producer mark now */
+#define CIUKI_AUDIO_PRODUCER_BOOSTED 2u     /* behind, producers boosted now */
+#define CIUKI_AUDIO_PRODUCER_OVER_BUDGET 4u /* behind, boost withheld by the budget */
+struct ciuki_audio_producer {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    uint32_t boosts;      /* boost episodes since open/reset */
+    uint32_t over_budget; /* episodes withheld by the budget */
+    uint32_t producers;   /* registered producer threads, 0..2 */
+    uint64_t boost_us;    /* producer CPU used at the boost level */
+};
 struct ciuki_audio_status {
     uint32_t version;
     uint32_t size;
@@ -1020,6 +1041,7 @@ struct ciuki_mixer_master {
 _Static_assert(sizeof(struct ciuki_audio_caps) == 80, "audio caps");
 _Static_assert(sizeof(struct ciuki_audio_format) == 32, "audio format");
 _Static_assert(sizeof(struct ciuki_audio_status) == 112, "audio status");
+_Static_assert(sizeof(struct ciuki_audio_producer) == 32, "audio producer");
 _Static_assert(__builtin_offsetof(struct ciuki_audio_status, accepted_frames) == 24, "audio counters");
 _Static_assert(sizeof(struct ciuki_audio_gain) == 24, "audio gain");
 _Static_assert(sizeof(struct ciuki_audio_command) == 16, "audio command");
@@ -1299,7 +1321,33 @@ struct ciuki_rect {
  * Generation prevents stale operations across a firmware mode change. */
 enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
        CIUKI_ACCEL_PATTERN, CIUKI_ACCEL_CURSOR_SET, CIUKI_ACCEL_CURSOR_MOVE,
-       CIUKI_ACCEL_CURSOR_SHOW };
+       CIUKI_ACCEL_CURSOR_SHOW,
+       /* f2-92: host-to-screen image write through the 2D engine. rect
+        * selects source (src_x, src_y) pixels of `write` and the destination
+        * (dst_x, dst_y), width x height; `write.clip` bounds the written
+        * destination pixels (zero width or height: no extra clip). Returns
+        * 0 when the engine wrote every band, 1 when the CPU wrote visible
+        * rows instead; engine-only rows (below) fail when the engine cannot
+        * write them. */
+       CIUKI_ACCEL_WRITE,
+       /* f2-92: engine-only video memory below the visible screen. Returns
+        * (end << 16) | first: rows [first, end) at the screen's width are
+        * valid COPY sources/destinations and WRITE destinations; 0 when
+        * there are none (no engine, no lease, quarantined). */
+       CIUKI_ACCEL_OFFSCREEN };
+/* f2-92 WRITE source: 32-bit 0xXXRRGGBB rows in the caller's memory. The
+ * address is split so the request keeps 4-byte alignment on 64-bit hosts. */
+struct ciuki_accel_write {
+    uint32_t pixels_lo; /* 0: user address of pixel (0,0) */
+    uint32_t pixels_hi; /* 4: zero on i386 */
+    uint32_t stride; /* 8: bytes per source row, multiple of 4 */
+    uint32_t source_width; /* 12 */
+    uint32_t source_height; /* 16 */
+    int32_t clip_x; /* 20: destination clip rectangle */
+    int32_t clip_y; /* 24 */
+    uint32_t clip_width; /* 28 */
+    uint32_t clip_height; /* 32 */
+};
 struct ciuki_accel_request {
     uint32_t size;
     uint32_t operation;
@@ -1308,14 +1356,21 @@ struct ciuki_accel_request {
     uint32_t background;
     struct ciuki_rect rect;
     uint8_t pattern[8];
-    uint32_t cursor_mask[32]; /* MSB first */
-    uint32_t cursor_image[32];
+    union {
+        struct {
+            uint32_t cursor_mask[32]; /* MSB first */
+            uint32_t cursor_image[32];
+        };
+        struct ciuki_accel_write write; /* CIUKI_ACCEL_WRITE only */
+    };
 };
 _Static_assert(sizeof(struct ciuki_accel_request) == 308, "ciuki_accel_request size");
 _Static_assert(_Alignof(struct ciuki_accel_request) == 4, "ciuki_accel_request alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_accel_request, rect) == 20, "ciuki_accel_request rect");
 _Static_assert(__builtin_offsetof(struct ciuki_accel_request, cursor_mask) == 52, "ciuki_accel_request cursor mask");
 _Static_assert(__builtin_offsetof(struct ciuki_accel_request, cursor_image) == 180, "ciuki_accel_request cursor image");
+_Static_assert(__builtin_offsetof(struct ciuki_accel_request, write) == 52, "ciuki_accel_request write");
+_Static_assert(sizeof(struct ciuki_accel_write) == 36, "ciuki_accel_write size");
 
 /* DISPLAY_ACCEL/QUERY optionally writes this snapshot to EDX (zero keeps
  * the original capability-only query). No register reads or activation. */
@@ -1406,7 +1461,7 @@ struct ciuki_pthread_condattr {
  * a reference/unified override is permitted only for an explicit game, never the shell. */
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
-#define CIUKI_DOSVM_UNIFIED 2u /* opt-in unmodified source-built K2043, bridge off */
+#define CIUKI_DOSVM_UNIFIED 2u /* opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57) */
 #define CIUKI_DOSVM_GAME_COUNT 3u
 /* f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
  * per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS

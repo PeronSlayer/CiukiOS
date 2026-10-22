@@ -10,7 +10,25 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/win32'))
+sys.path.insert(0, str(ROOT))
 import workloads
+
+
+# f5-15C lead decision: the SHA-256 of each approved download, from the f5-15B
+# import receipts (build/downloads/win32/<id>/<file>.receipt.json, size and
+# SHA-1 verified against the contract's archive metadata at import).
+PINS = {
+    'diablo-shareware': 'ac3bc8196f84c8cf59af502a5318717075adab20f2dc0af42c42d6b643c6a33e',
+    'starcraft-shareware': 'a10834d3000462dc333371fd0323206f0c8825c799f757ccbd30a5539b478f93',
+    'aoe-trial': '60e01bd94cc88af64fd2ca40a75f3df783b8ea7725971ddd02c60f4d11e96973',
+    'half-life-uplink': '9f236e9785980c127d46870a828ba4dac756308767ebd498b85bd7edff3305a8',
+    'ut-demo-348': '59e65276c67af7859935d79001b93934928b3e1c3a8cc300807cdfa95208f708',
+    'worms-armageddon-demo': '1f7e79cb999314ed402a5b40e381b0cf91242d122fed0e8d769aef0b339ce604',
+    'heroes3-demo': '83cbb6319386d6deba65273f53a60395fda8cce74cc24177b2ac3560ded9c315',
+    'rct-demo': '057066729e835c1840a051daf12295f25e05ed8a5bdd64cf79e46373ce42357a',
+    'jazz2-shareware': 'ce1bfbc7727a6ff03ba461ad5fdc7c292d3b90924baaf6111d7bbfecf7a55231',
+    'ta-demo': '5e41cf05226c274b4ac9e4398f74f6b321506bd7a4317ee1744ff7aceba34c49',
+}
 
 
 class WorkloadTests(unittest.TestCase):
@@ -21,12 +39,33 @@ class WorkloadTests(unittest.TestCase):
         rows = self.manifest['workloads']
         self.assertEqual(len(rows), 14)
         self.assertEqual({r['id'] for r in rows if r['gate'] == 'F5'}, workloads.APPROVED)
-        self.assertTrue(all(r['source']['sha256'] is None for r in rows))
+        self.assertEqual(set(PINS), workloads.APPROVED)
+        for row in rows:
+            with self.subTest(workload=row['id']):
+                self.assertEqual(row['source']['sha256'], PINS.get(row['id']))
+                self.assertEqual('source.sha256' in row['unknowns'], row['id'] not in PINS)
         self.assertTrue(all(not r['licence']['distribution_verified'] for r in rows))
         self.assertEqual(sum(r['scene']['focus_round_trips'] == 10 for r in rows), 3)
         self.assertEqual({r['id'] for r in rows if r['gate'] == 'F7'}, {'quake3-demo','tomb-raider4-demo'})
         self.assertEqual(rows[0]['source']['size'], 137576448)
         self.assertEqual(rows[1]['source']['sha1'], 'a29ccfb4b34d55034bbae6bde23199fc4766f288')
+
+    def test_pins_agree_with_local_import_receipts(self):
+        """The lead's receipts, when this checkout has them, are the pins' source."""
+        found = 0
+        for row in self.manifest['workloads']:
+            if row['id'] not in PINS:
+                continue
+            receipt = ROOT/workloads.DOWNLOAD_DIRECTORY/row['id']/(row['source']['file']+'.receipt.json')
+            if not receipt.is_file():
+                continue
+            found += 1
+            data = json.loads(receipt.read_text())
+            with self.subTest(workload=row['id']):
+                self.assertEqual((data['size'], data['sha1'], data['sha256']),
+                                 (row['source']['size'], row['source']['sha1'], PINS[row['id']]))
+        if not found:
+            self.skipTest('no import receipt in build/downloads/win32 (payloads are local to the lead)')
 
     def test_schema_rejects_dangerous_or_unsubstantiated_mutations(self):
         mutations = [
@@ -45,7 +84,8 @@ class WorkloadTests(unittest.TestCase):
             lambda m: m['workloads'][0]['installer'].update(arguments=['/S']),
             lambda m: m['workloads'][0]['scene'].update(play_seconds=179),
             lambda m: m['workloads'][0]['scene'].update(case_timeout_seconds=601),
-            lambda m: m['workloads'][0]['unknowns'].remove('source.sha256'),
+            lambda m: m['workloads'][10]['unknowns'].remove('source.sha256'),
+            lambda m: m['workloads'][0]['source'].update(sha256=None),
             lambda m: m['workloads'][12]['source'].update(url='https://example.org/game'),
             lambda m: m['workloads'][12]['source'].update(path_pattern='legacy/local/win32/../../game'),
         ]
@@ -77,6 +117,13 @@ class WorkloadTests(unittest.TestCase):
             self.assertEqual(by_segment['start']['deadline_seconds'], 120)
             self.assertEqual(by_segment['exit']['ledger_deadline_seconds'], 2)
             self.assertEqual('focus' in by_segment, row['scene']['focus_round_trips'] == 10)
+            # f5-15C: the guest-executable program of the installers tier
+            # (the F5 gate titles; reserves have none yet).
+            from scripts.win32 import operator_program
+            self.assertEqual('guest' in operator, row['id'] in workloads.APPROVED)
+            if 'guest' in operator:
+                program = operator_program.compile_program(row['id'], operator_program.validate(operator['guest']))
+                self.assertTrue(program.startswith('CIUKIOP 1\n') and program.endswith('end\n'))
 
     def fixture_row(self):
         payload = b'Ciuki self-authored download test; no original game bytes.\n'

@@ -198,19 +198,56 @@ int main(void) {
   memset(decoded, 9, 4);
   CHECK(!GetPrivateProfileStructA("s", "binary", decoded, 4, "test.ini") &&
         decoded[0] == 9 && GetLastError() == 13);
+  /* f5-ini: WritePrivateProfileString edge cases (MS Learn contract). */
+#define DISK_IS(text)                                                          \
+  (disk_size == strlen(text) && !memcmp(disk, text, disk_size))
+  seed("; top\r\n[S]\r\n; c1\r\nA=1\r\n\r\nB=2\r\nA=dup\r\n; tail\r\n\r\n[T]\r\nA=t\r\n");
+  CHECK(WritePrivateProfileStringA("s", "a", "9", "test.ini"));
+  CHECK(DISK_IS("; top\r\n[S]\r\n; c1\r\nA=9\r\n\r\nB=2\r\n; tail\r\n\r\n[T]\r\nA=t\r\n"));
+  CHECK(WritePrivateProfileStringA("S", "A", "10", "test.ini"));
+  CHECK(WritePrivateProfileStringA("S", "A", "11", "test.ini"));
+  CHECK(DISK_IS("; top\r\n[S]\r\n; c1\r\nA=11\r\n\r\nB=2\r\n; tail\r\n\r\n[T]\r\nA=t\r\n"));
+  CHECK(GetPrivateProfileStringA("S", "a", "", out, sizeof(out), "test.ini") == 2 &&
+        !strcmp(out, "11"));
+  /* New key goes after the last entry of its section, before comments. */
+  CHECK(WritePrivateProfileStringA("s", "C", "3", "test.ini"));
+  CHECK(DISK_IS("; top\r\n[S]\r\n; c1\r\nA=11\r\n\r\nB=2\r\nC=3\r\n; tail\r\n\r\n[T]\r\nA=t\r\n"));
+  CHECK(WritePrivateProfileStringA("t", "Z", "z", "test.ini"));
+  CHECK(DISK_IS("; top\r\n[S]\r\n; c1\r\nA=11\r\n\r\nB=2\r\nC=3\r\n; tail\r\n\r\n[T]\r\nA=t\r\nZ=z\r\n"));
+  /* NULL value deletes only that key. */
+  CHECK(WritePrivateProfileStringA("S", "b", 0, "test.ini"));
+  CHECK(DISK_IS("; top\r\n[S]\r\n; c1\r\nA=11\r\n\r\nC=3\r\n; tail\r\n\r\n[T]\r\nA=t\r\nZ=z\r\n"));
+  CHECK(WritePrivateProfileStringA("S", "nothere", 0, "test.ini"));
+  CHECK(DISK_IS("; top\r\n[S]\r\n; c1\r\nA=11\r\n\r\nC=3\r\n; tail\r\n\r\n[T]\r\nA=t\r\nZ=z\r\n"));
+  /* NULL key deletes the whole section, other sections stay. */
+  CHECK(WritePrivateProfileStringA("s", 0, 0, "test.ini"));
+  CHECK(DISK_IS("; top\r\n[T]\r\nA=t\r\nZ=z\r\n"));
+  CHECK(GetPrivateProfileStringA("S", "A", "gone", out, sizeof(out), "test.ini") == 4);
+  CHECK(GetPrivateProfileStringA("T", "z", "", out, sizeof(out), "test.ini") == 1 &&
+        !strcmp(out, "z"));
+  /* New section appended with the file's terminator; LF-only file stays LF. */
+  seed("[a]\nx=1\n");
+  CHECK(WritePrivateProfileStringA("b", "y", "2", "test.ini"));
+  CHECK(DISK_IS("[a]\nx=1\n[b]\ny=2\n"));
+  CHECK(WritePrivateProfileStringA("a", "w", "0", "test.ini"));
+  CHECK(DISK_IS("[a]\nx=1\nw=0\n[b]\ny=2\n"));
+  seed("[a]\r\nx=1");
+  CHECK(WritePrivateProfileStringA("a", "x", "2", "test.ini"));
+  CHECK(DISK_IS("[a]\r\nx=2"));
+  CHECK(WritePrivateProfileStringA("a", "y", "3", "test.ini"));
+  CHECK(DISK_IS("[a]\r\nx=2\r\ny=3\r\n"));
+  seed("");
+  CHECK(WritePrivateProfileStringA("n", "k", "v", "test.ini"));
+  CHECK(DISK_IS("[n]\r\nk=v\r\n"));
+  CHECK(!allocations);
   expected_path="C:\\WINDOWS\\WININIT.INI";
   extern BOOL k32_delay_move(const char *,const char *,DWORD);
   seed("[other]\r\nx=kept\r\n[rename]\r\nNUL=C:\\old.exe\r\n[last]\r\ny=kept\r\n");
-  CHECK(k32_delay_move("C:\\Program Files\\Fixture\\uninstall.exe",0,4));
-  CHECK(k32_delay_move("C:\\WINDOWS\\TEMP\\copy.exe",0,4));
+  CHECK(!k32_delay_move("C:\\Program Files\\Fixture\\uninstall.exe",0,4) && GetLastError()==120);
+  CHECK(!k32_delay_move("C:\\WINDOWS\\TEMP\\copy.exe",0,4) && GetLastError()==120);
   disk[disk_size]=0;
-  CHECK(strstr((char *)disk,"NUL=C:\\old.exe\r\nNUL=C:\\Program Files\\Fixture\\uninstall.exe\r\nNUL=C:\\WINDOWS\\TEMP\\copy.exe\r\n[last]"));
-  CHECK(strstr((char *)disk,"[other]\r\nx=kept\r\n"));
-  CHECK(!k32_delay_move("C:\\bad\r\nfile.exe",0,4) && GetLastError()==123);
-  seed("[other]\r\nx=kept\r\n");
-  CHECK(k32_delay_move("C:\\source.tmp","C:\\target.dll",5));
-  disk[disk_size]=0;
-  CHECK(strstr((char *)disk,"[rename]\r\nC:\\target.dll=C:\\source.tmp\r\n"));
+  CHECK(!strcmp(disk,"[other]\r\nx=kept\r\n[rename]\r\nNUL=C:\\old.exe\r\n[last]\r\ny=kept\r\n"));
+  CHECK(!k32_delay_move("C:\\source.tmp","C:\\target.dll",5) && GetLastError()==120);
   CHECK(!allocations);
   puts("PASS profile first-match quotes comments CR LF defaults enumeration "
        "deletion growth bounds");

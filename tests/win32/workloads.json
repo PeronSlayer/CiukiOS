@@ -23,9 +23,9 @@
         "file": "DIABLOSW.iso",
         "size": 137576448,
         "sha1": "bf1a62b24ce01ce39993955bff4b3c4d4ab9d647",
-        "sha256": null,
+        "sha256": "ac3bc8196f84c8cf59af502a5318717075adab20f2dc0af42c42d6b643c6a33e",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "shareware",
@@ -80,7 +80,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -107,9 +106,9 @@
         "file": "StarCraft Shareware (USA).zip",
         "size": 248478379,
         "sha1": "a29ccfb4b34d55034bbae6bde23199fc4766f288",
-        "sha256": null,
+        "sha256": "a10834d3000462dc333371fd0323206f0c8825c799f757ccbd30a5539b478f93",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "shareware",
@@ -164,7 +163,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -191,9 +189,9 @@
         "file": "MSAoE.exe",
         "size": 24786864,
         "sha1": "ccd19bd57e7070ffe7c0b20ed9265d680fbe36c7",
-        "sha256": null,
+        "sha256": "60e01bd94cc88af64fd2ca40a75f3df783b8ea7725971ddd02c60f4d11e96973",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -248,7 +246,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -275,9 +272,9 @@
         "file": "hluplink.exe",
         "size": 50872079,
         "sha1": "605e110670ca3d55b2093b7750d1d0138cbf1f4c",
-        "sha256": null,
+        "sha256": "9f236e9785980c127d46870a828ba4dac756308767ebd498b85bd7edff3305a8",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -332,7 +329,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -359,9 +355,9 @@
         "file": "UTDEMO348.EXE",
         "size": 55647232,
         "sha1": "faf2c18852a1a53c59db490e044e0d3e100e8fed",
-        "sha256": null,
+        "sha256": "59e65276c67af7859935d79001b93934928b3e1c3a8cc300807cdfa95208f708",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -416,7 +412,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -443,9 +438,9 @@
         "file": "WormsArmageddonDemo.zip",
         "size": 13903680,
         "sha1": "5a53c889037b91566c211b16d527c69afd037be8",
-        "sha256": null,
+        "sha256": "1f7e79cb999314ed402a5b40e381b0cf91242d122fed0e8d769aef0b339ce604",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -500,7 +495,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -528,9 +522,9 @@
         "file": "h3demo.exe",
         "size": 98265058,
         "sha1": "8d44f794a3fe80bea524f90b38fed3325ca3d1cb",
-        "sha256": null,
+        "sha256": "83cbb6319386d6deba65273f53a60395fda8cce74cc24177b2ac3560ded9c315",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -585,7 +579,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -612,9 +605,9 @@
         "file": "RCTYCOON.EXE",
         "size": 19596288,
         "sha1": "f985bb782e974572805ee2990cfa2d1fd4e93eee",
-        "sha256": null,
+        "sha256": "057066729e835c1840a051daf12295f25e05ed8a5bdd64cf79e46373ce42357a",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -669,7 +662,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -696,9 +688,9 @@
         "file": "jazz2swf.exe",
         "size": 11019236,
         "sha1": "d2ab0a3107360563c5c3bb897a4adfb9d319c04f",
-        "sha256": null,
+        "sha256": "ce1bfbc7727a6ff03ba461ad5fdc7c292d3b90924baaf6111d7bbfecf7a55231",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "shareware",
@@ -753,7 +745,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",
@@ -780,9 +771,9 @@
         "file": "Total Annihilation.exe",
         "size": 21540864,
         "sha1": "ce8a2c21488fbe807cd855b8effcc127053c3e85",
-        "sha256": null,
+        "sha256": "5e41cf05226c274b4ac9e4398f74f6b321506bd7a4317ee1744ff7aceba34c49",
         "path_pattern": null,
-        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A. SHA-256 promoted by the lead from the f5-15B import receipt (2026-10-21; size and SHA-1 verified at import)."
       },
       "licence": {
         "class": "free-demo",
@@ -837,7 +828,6 @@
         "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
       },
       "unknowns": [
-        "source.sha256",
         "licence.text_path",
         "licence.text_sha256",
         "installer.arguments",

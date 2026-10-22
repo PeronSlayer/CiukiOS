@@ -39,12 +39,28 @@ struct savage2d {
     const char *reason;
     uint64_t operations, idle_waits, fallbacks, timeouts;
     uint64_t reset_us, poll_us;
+    /* f2-92: engine-only rows [offscreen_first, rows) beyond the visible
+     * height (rows == height without an offscreen lease), service counters
+     * and the display service's slice hook. */
+    uint32_t rows, offscreen_first;
+    uint64_t writes, write_words, pauses, fifo_waits;
+    int (*pause)(void *);
+    void *pause_arg;
+    /* Write self-test: 0 untested, 1 passed, -1 failed (writes and offscreen
+     * rows unavailable; fills and copies unaffected). */
+    const struct fb_device *fb;
+    int write_state;
+    bool offscreen_ok;
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
     /* submitted includes BCI register setup, before drawing is enabled. */
     bool mmio_saved, status_ready, submitted, final_idle_checked;
     bool event_pending;
 };
 bool savage2d_supported(const struct pci_func *);
+/* f2-92: engine-only rows [first, end) for a mode, VRAM size and cursor
+ * page offset (0: none); false when nothing fits. */
+bool savage2d_offscreen_span(const struct fb_device *, uint32_t vram, uint32_t cursor_offset,
+                             uint32_t *first, uint32_t *end);
 /* No register/file access: decide before scheduling marker persistence. */
 bool savage2d_eligible(const struct fb_device *);
 /* Attempt marker file I/O for kernel callers, outside presenter locks. */
@@ -54,6 +70,11 @@ int savage2d_attempt_end(struct vfs *);
 int savage2d_attempt_failed(struct vfs *);
 int savage2d_check_begin(struct vfs *, bool *retained_marker);
 void savage2d_quarantine(const char *reason);
+/* f1-97: the activation decision (false before it exists); the reason is the
+ * quarantine token, "none" when accelerated. f2-92: used is true once the
+ * engine has executed a drawing request of a presenter (not the self-test). */
+bool savage2d_summary(bool *accelerated, bool *used, const char **reason);
+void savage2d_summary_safe_mode(void);
 /* Final idle proof once; return a rejecting guard only for an unsafe writer. */
 const struct accel_ops *savage2d_fallback_ops(void);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,

@@ -1,0 +1,12 @@
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -1960,6 +1960,9 @@
+ static void
+ gui_window_set_pointer(struct gui_window *g, gui_pointer_shape shape)
+ {
++	/* CiukiOS owns the pointer; send its semantic shape through v3. */
++	ciuki_chrome_pointer(shape);
++	return;
+ 	switch (shape) {
+ 	case GUI_POINTER_POINT:
+ 		framebuffer_set_cursor(&hand_image);

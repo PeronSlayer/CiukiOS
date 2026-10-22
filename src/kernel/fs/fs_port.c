@@ -181,5 +181,13 @@ void fs_service(void)
 void fs_calendar_init(void) { }
 void fs_worker_enter(void) { }
 void fs_worker_leave(void) { }
-void fs_service(void) { }
+/* f1-98: host models observe the reservation dependencies the kernel would
+ * turn into priority inheritance (sync.c ksync_depend). */
+void fs_depend(uintptr_t holder,const void *object,unsigned reason) {
+    if (fs_host_depend) fs_host_depend(holder,object,reason);
+}
+void fs_depend_release(const void *object) { if (fs_host_depend_release) fs_host_depend_release(object); }
+/* f1-93b: host models observe the kernel's preemption points (a starved
+ * holder loses the CPU at each one, T23 b453bc92). */
+void fs_service(void) { if (fs_host_service) fs_host_service(); }
 #endif

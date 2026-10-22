@@ -1,5 +1,8 @@
 import copy
 import json
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 import sys
 import unittest
@@ -7,9 +10,65 @@ import unittest
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/test'))
 import loader_model as model
+from loader_parser_machine import LoaderParserMachine, SYMBOLS
 
 
 class LoaderModelTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
+    def test_usbscan_option_assembled_allowlist(self):
+        # f0-54 parser: usbscan=0 is one exact entry of the BOOT.CFG option list
+        # without a loader action; the kernel reads it from the copied options.
+        menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
+        options=menu.split('option_tokens db',1)[1].split('\n',1)[0]
+        self.assertIn("'usbscan=0',0",options)
+        out=ROOT/'build/host';out.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='usbscan-loader-',dir=out) as folder:
+            asm=Path(folder)/'loader.asm';binary=Path(folder)/'loader.bin'
+            asm.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                           +','.join(SYMBOLS)+'\n')
+            subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],cwd=ROOT,check=True)
+            machine=LoaderParserMachine(binary)
+            for token in ('usbscan=0','usbscan=1','usbscan=00','xusbscan=0','USBscan=0','usbscan=0\r\n'):
+                with self.subTest(token=token):
+                    self.assertEqual(machine.config(token),token.strip()=='usbscan=0')
+                    if token.strip()=='usbscan=0':self.assertEqual(machine.field(8)&3,2)
+            self.assertTrue(machine.config('serial=0 usbscan=0\r\nsafe=1 mode=0x0118'))
+            self.assertEqual((machine.field(8)&3,machine.var('preferred_mode')),(1,0x118))
+        self.assertEqual(model.boot_options('serial=0 usbscan=0\r\nsafe=1 mode=0x0118'),
+                         {'safe':True,'serial':False,'mode':0x118})
+        for token in ('usbscan=1','usbscan=00','xusbscan=0','USBscan=0'):
+            with self.assertRaises(ValueError):model.boot_options(token)
+
+    @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
+    def test_ecpoll_option_assembled_allowlist(self):
+        # f1-100: ecpoll=0 and ecpoll=1 are exact BOOT.CFG options without a
+        # loader action; the kernel keeps the ThinkPad EC volume poll off unless
+        # ecpoll=1 (and ecpoll=0 wins). Both fit the loader's byte budget.
+        menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
+        options=menu.split('option_tokens db',1)[1].split('\n',1)[0]
+        self.assertIn("'ecpoll=0',0",options)
+        self.assertIn("'ecpoll=1',0",options)
+        out=ROOT/'build/host';out.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='ecpoll-loader-',dir=out) as folder:
+            asm=Path(folder)/'loader.asm';binary=Path(folder)/'loader.bin'
+            asm.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                           +','.join(SYMBOLS)+'\n')
+            subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],cwd=ROOT,check=True)
+            machine=LoaderParserMachine(binary)
+            for token in ('ecpoll=0','ecpoll=1','ecpoll=00','ecpoll=11','ecpoll=2','xecpoll=0','ECpoll=1',
+                          'ecpoll=','ecpoll=0\r\n','ecpoll=1\r\n'):
+                with self.subTest(token=token):
+                    valid=token.strip() in ('ecpoll=0','ecpoll=1')
+                    self.assertEqual(machine.config(token),valid)
+                    if valid:self.assertEqual(machine.field(8)&3,2)
+            self.assertTrue(machine.config('serial=0 ecpoll=1 usbscan=0\r\nsafe=1 mode=0x0118 ecpoll=0'))
+            self.assertEqual((machine.field(8)&3,machine.var('preferred_mode')),(1,0x118))
+        self.assertEqual(model.boot_options('serial=0 ecpoll=1 usbscan=0\r\nsafe=1 mode=0x0118 ecpoll=0'),
+                         {'safe':True,'serial':False,'mode':0x118})
+        self.assertEqual(model.boot_options('ecpoll=1'),{'safe':False,'serial':True,'mode':None})
+        for token in ('ecpoll=00','ecpoll=11','ecpoll=2','xecpoll=0','ECpoll=1','ecpoll='):
+            with self.assertRaises(ValueError):model.boot_options(token)
+
     def test_uart_outcomes_and_disable(self):
         for options, state in (({}, 1), ({'bda': 0}, 2), ({'bda': 0x2f8}, 2),
                                ({'scratch': False}, 3), ({'lsr': 0xff}, 4),

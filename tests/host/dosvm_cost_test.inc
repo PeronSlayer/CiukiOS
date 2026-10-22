@@ -66,8 +66,34 @@ static unsigned cost_startup(bool pm, bool batch, uint8_t palette[256][3])
     empty();
     return exits;
 }
+static int hot_override(struct dosvm *v,uint16_t p,unsigned w,bool wr,uint32_t *value,void *arg)
+{ (void)v;(void)p;(void)w;(void)wr;(void)arg; *value=0x87; return 0; }
+static void test_hot_io(void)
+{
+    struct dosvm *v=create(); CHECK(!dosvm_boot(v)); v->info.dos_ready=true;
+    const uint8_t code[]={0xe6,0x43,0xe4,0x40,0xe4,0x40,0xe4,0x43,0xee,0xee};
+    CHECK(!dosvm_write(v,0x30000,code,sizeof(code)));
+    port_out(v,0x388,1,0x20); /* populate the authoritative audio hint */
+    unsigned dispatch=v->perf.io_dispatches,fast=v->perf.io_fast_cycles;
+    for (unsigned i=0;i<1000;i++) {
+        struct v86_frame f=vf(0,0,0,0); f.tf.cs=0x3000; int e;
+        for (unsigned cycle=0;cycle<4;cycle++) CHECK(dosvm_io_fast(v,&f,0,&e) && !e);
+        CHECK((uint8_t)f.tf.eax==0xff); /* 43h is write-only */
+        f.tf.edx=0x388; f.tf.eax=0x20; CHECK(dosvm_io_fast(v,&f,0,&e) && !e);
+        f.tf.edx=0x389; f.tf.eax=i; CHECK(dosvm_io_fast(v,&f,0,&e) && !e);
+    }
+    CHECK(v->perf.io_dispatches==dispatch && v->perf.io_fast_cycles==fast+6000);
+    CHECK(!dosvm_port_unregister(v->info.key,0x40));
+    CHECK(!dosvm_port_register(v->info.key,0x40,0x43,hot_override,0));
+    struct v86_frame f=vf(0,0,0,0); f.tf.cs=0x3000; f.tf.eip=2; int e;
+    CHECK(dosvm_io_fast(v,&f,0,&e) && !e && (uint8_t)f.tf.eax==0x87);
+    CHECK(v->perf.io_dispatches==dispatch+1);
+    destroy(v,true); empty();
+    puts("F1-87 PIT latch/read + OPL writes: 6000 fast cycles, zero dispatcher entries; custom registration uses dispatcher PASS");
+}
 static void test_cost_bursts(void)
 {
+    test_hot_io();
     uint8_t scalar[256][3], batched[256][3];
     for (unsigned pm = 0; pm < 2; pm++) {
         CHECK(cost_startup(pm, false, scalar) == 774);

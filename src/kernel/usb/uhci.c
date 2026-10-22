@@ -266,18 +266,103 @@ static int bulk_status(uint32_t v, unsigned expected)
     unsigned n=((v & 0x7ff)+1)&0x7ff;
     return n>expected ? -USB_EIO : (int)n;
 }
-/* Depth-first batches permit several ACKs per frame. SPD leaves a short IN
+/* Depth-first chains permit several ACKs per frame. SPD leaves a short IN
  * at the QH element so no following TD can consume the BOT status wrapper.
- * The reservation owns this window; HID uses independent DMA throughout. */
+ * The reservation owns this window; HID uses independent DMA throughout.
+ *
+ * f1-96: a data stage longer than the window streams through it as a ring
+ * (UHCI 1.1 §3.4.1.3, depth-first queue advance). Slot k%USB_BULK_BATCH
+ * holds packet k; every TD links depth-first to the next slot except the
+ * final packet, which terminates the chain and requests IOC. The HC stops
+ * at a slot whose TD is not yet re-armed (inactive: the queue does not
+ * advance, as with the Linux uhci-q.c dummy TD) and resumes in a later
+ * frame once the driver re-arms it. Completed slots are harvested in order
+ * and re-armed only after the following packet completed, so the HC has
+ * finished that TD's QH writeback before its link can change. */
+static void bulk_arm(struct usb_device *d, bool in, unsigned ep, unsigned toggle,
+                     const uint8_t *data, unsigned k, unsigned n, bool last)
+{
+    struct usb_host *h=d->host;
+    unsigned slot=k%USB_BULK_BATCH;
+    volatile uint32_t *td=words(h,USB_BULK_TD+slot*16);
+    td[0]=last ? 1 : (h->dma_phys+USB_BULK_TD+((slot+1)%USB_BULK_BATCH)*16)|4;
+    td[2]=(in ? USB_PID_IN : USB_PID_OUT)|(unsigned)d->address<<8|ep<<15|toggle<<19|(n-1)<<21;
+    td[3]=h->dma_phys+USB_BULK_BUFFER+slot*64;
+    if (!in) memcpy(h->dma+USB_BULK_BUFFER+slot*64,data,n);
+    /* Active last: the HC sees either an inactive slot or the whole TD. */
+    usb_barrier();
+    td[1]=(1u<<23)|(h->irq_attached && last ? 1u<<24 : 0)|(3u<<27)|(in ? 1u<<29 : 0)|0x7ff;
+}
+/* Record and consume packet k: 1 full ACK, 0 short (transfer ends),
+ * negative error. The TD is inactive or already unlinked and retired. */
+static int bulk_take(struct usb_device *d, bool in, void *data, unsigned *actual, unsigned k,
+                     unsigned hc, unsigned frames, unsigned poll_frames, uint64_t begin, int failure)
+{
+    struct usb_host *h=d->host; struct usb_storage *s=&d->storage;
+    unsigned slot=k%USB_BULK_BATCH, ep=in ? s->in : s->out;
+    uint8_t *toggle=in ? &s->in_toggle : &s->out_toggle;
+    volatile uint32_t *td=words(h,USB_BULK_TD+slot*16);
+    usb_barrier(); unsigned v=td[1], n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
+    int result=bulk_status(v,n);
+    d->packet_trace=(struct usb_packet_trace){.status=v,.token=td[2],.hc_status=hc,
+        .expected=n,.actual=result>=0 ? result : -1,.result=result,.valid=true,
+        .endpoint=ep,.pid=in ? USB_PID_IN : USB_PID_OUT,.toggle=*toggle,
+        .frames=frames,.poll_frames=poll_frames,.elapsed_ms=h->io.now(h->io.cookie)-begin};
+    struct usb_storage_trace *t=&s->trace;
+    t->packet_index=t->packet_count; t->packet_offset=*actual;
+    if (t->packet_count<USB_BULK_TRACE_LIMIT) t->packets[t->packet_count]=d->packet_trace;
+    t->packet_count++; if (s->binding) s->bind_packets++;
+    if (!(v&(1u<<23)) && (((v&0x7ff)+1)&0x7ff)>n) {
+        usb_host_quarantine(h,"uhci_dma_length"); return -USB_EIO;
+    }
+    if (result<0) return failure ? failure : result;
+    if (!in && result!=(int)n) return -USB_EPROTO;
+    if (in && result) memcpy((uint8_t *)data+*actual,h->dma+USB_BULK_BUFFER+slot*64,(unsigned)result);
+    *actual+=(unsigned)result; *toggle^=1;
+    if ((unsigned)result<n) return failure ? failure : 0;
+    return 1;
+}
+static uint32_t bulk_td_address(struct usb_host *h, unsigned k)
+{ return h->dma_phys+USB_BULK_TD+(k%USB_BULK_BATCH)*16; }
+static bool bulk_full(struct usb_host *h, unsigned k)
+{
+    volatile uint32_t *td=words(h,USB_BULK_TD+(k%USB_BULK_BATCH)*16);
+    unsigned expected=(((td[2]>>21)&0x7ff)+1)&0x7ff;
+    return bulk_status(td[1],expected)==(int)expected;
+}
+/* f1-96b: early Intel erratum (Linux b761d9d867bc "UHCI: Work around old
+ * Intel bug", uhci_advance_check): the QH element sometimes stays on a TD
+ * that completed successfully and the queue never moves again. Packet k is
+ * the newest full ACK; its slot is not re-armed before packet k+1 completes,
+ * so its link is exactly what the HC should have written. The HC writes the
+ * element only after executing an active element TD (UHCI 1.1 section
+ * 3.4.1.3 steps 2/9, ICH3-M 5.16.2.2 steps 2/11), and this element is
+ * inactive, so the write cannot race a writeback. */
+static bool bulk_advance(struct usb_device *d, unsigned ep, unsigned k, unsigned frames)
+{
+    struct usb_host *h=d->host; struct usb_storage *s=&d->storage;
+    volatile uint32_t *qh=words(h,USB_UHCI_BULK_QH);
+    volatile uint32_t *td=words(h,USB_BULK_TD+(k%USB_BULK_BATCH)*16);
+    usb_barrier();
+    uint32_t element=qh[1];
+    if ((element&3) || (element&~15u)!=bulk_td_address(h,k) || (td[1]&(1u<<23))) return false;
+    uint32_t link=td[0];
+    qh[1]=link; usb_barrier();
+    s->advance_fixes++;
+    if (s->advance_fixes<=4 || !(s->advance_fixes&63))
+        klog("[usb] uhci_advance controller=%s addr=%u ep=%u tag=%u packet=%u element=%08x link=%08x frames=%u fixes=%u",
+             h->owner,d->address,ep,s->trace.tag,k,element,link,frames,s->advance_fixes);
+    return true;
+}
 static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual)
 {
     struct usb_host *h=d->host; struct usb_storage *s=&d->storage;
     unsigned mps=in ? s->in_packet : s->out_packet, ep=in ? s->in : s->out;
     uint8_t *toggle=in ? &s->in_toggle : &s->out_toggle;
     volatile uint32_t *qh=words(h,USB_UHCI_BULK_QH);
+    bool relinked=false; /* f1-96b: one same-chain retry per data stage */
     while (*actual<bytes) {
-        unsigned count=(bytes-*actual+mps-1)/mps;
-        if (count>USB_BULK_BATCH) count=USB_BULK_BATCH;
+        unsigned base=*actual, total=(bytes-base+mps-1)/mps;
         uint64_t begin=h->io.now(h->io.cookie);
         unsigned budget=usb_packet_budget(d,ep,false,begin);
         unsigned port=h->ops->port_status(h,d->root_port);
@@ -295,46 +380,62 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
             t->packet_count++;
             return result;
         }
-        unsigned offset=*actual;
-        for (unsigned i=0;i<count;i++) {
-            unsigned n=bytes-offset; if (n>mps) n=mps;
-            volatile uint32_t *td=words(h,USB_BULK_TD+i*16);
-            td[0]=i+1<count ? (h->dma_phys+USB_BULK_TD+(i+1)*16)|4 : 1;
-            td[1]=(1u<<23)|(h->irq_attached && i+1==count ? 1u<<24 : 0)|(3u<<27)|(in ? 1u<<29 : 0)|0x7ff;
-            td[2]=(in ? USB_PID_IN : USB_PID_OUT)|(unsigned)d->address<<8|ep<<15|
-                  (*toggle^(i&1))<<19|(n-1)<<21;
-            td[3]=h->dma_phys+USB_BULK_BUFFER+i*64;
-            if (!in) memcpy(h->dma+USB_BULK_BUFFER+i*64,(uint8_t *)data+offset,n);
-            offset+=n;
+        unsigned first=*toggle, armed=0, done=0;
+        for (;armed<total && armed<USB_BULK_BATCH;armed++) {
+            unsigned at=base+armed*mps, n=bytes-at<mps ? bytes-at : mps;
+            bulk_arm(d,in,ep,first^(armed&1),(const uint8_t *)data+at,armed,n,armed+1==total);
         }
         usb_barrier(); qh[1]=h->dma_phys+USB_BULK_TD; usb_barrier();
-        unsigned frame=usb_read(h,6,2)&0x7ff, frames=0, progress=0, hc=0;
-        int failure=0;
-        bool completed_batch=false;
+        unsigned frame=usb_read(h,6,2)&0x7ff, frames=0, progress=0, hc=0, moved_frames=0;
+        uint64_t moved_at=begin;
+        int failure=0, refill=1;
+        bool completed_batch=false, tail_advanced=false;
         /* ACK progress can renew the binding wait, but never the aggregate
-         * deadline. The finite poll count also bounds a frozen clock. */
-        for (unsigned polls=0;polls<=USB_BULK_TIMEOUT_MS;polls++) {
+         * deadline. The finite poll count also bounds a frozen clock; each
+         * completed packet earns one more poll. */
+        for (unsigned polls=0;polls<=USB_BULK_TIMEOUT_MS+progress;polls++) {
             if (!h->ready) return -USB_EIO; /* quarantined DMA remains pinned */
             hc=usb_read(h,2,2);
             if (hc&0x38) { usb_host_quarantine(h,"uhci_host_error"); return -USB_EIO; }
             unsigned next=usb_read(h,6,2)&0x7ff;
             frames+=(next-frame)&0x7ff; frame=next;
             usb_barrier();
+            /* f1-96b: `stopped` is the status of the TD that ended the walk.
+             * A walk that reached `armed` (the HC drained every armed TD and
+             * waits at a slot not yet re-armed) leaves it active: the refill
+             * below arms more TDs, and the stale status of the last full ACK
+             * must not end the stage (T23 5a10eef4: td=388007ff never
+             * executed, stop=packet after 44 ms, result=-110). */
             unsigned completed=progress, stopped=1u<<23;
-            while (completed<count) {
-                volatile uint32_t *td=words(h,USB_BULK_TD+completed*16);
-                unsigned expected=(((td[2]>>21)&0x7ff)+1)&0x7ff;
-                stopped=td[1];
-                if (bulk_status(stopped,expected)!=(int)expected) break;
+            while (completed<armed) {
+                volatile uint32_t *td=words(h,USB_BULK_TD+(completed%USB_BULK_BATCH)*16);
+                unsigned expected=(((td[2]>>21)&0x7ff)+1)&0x7ff, v=td[1];
+                if (bulk_status(v,expected)!=(int)expected) { stopped=v; break; }
                 completed++;
             }
-            if (completed>progress && s->binding) {
-                uint64_t end=h->io.now(h->io.cookie)+USB_BIND_BULK_MS;
-                if ((int64_t)(end-(s->bind_deadline-USB_BIND_FINISH_MS))>0)
-                    end=s->bind_deadline-USB_BIND_FINISH_MS;
-                s->bulk_deadline=end; s->trace.bulk_deadline=end;
+            uint64_t now=h->io.now(h->io.cookie);
+            if (completed>progress) {
+                moved_at=now; moved_frames=frames;
+                if (s->binding) {
+                    uint64_t end=now+USB_BIND_BULK_MS;
+                    if ((int64_t)(end-(s->bind_deadline-USB_BIND_FINISH_MS))>0)
+                        end=s->bind_deadline-USB_BIND_FINISH_MS;
+                    s->bulk_deadline=end; s->trace.bulk_deadline=end;
+                }
             }
             progress=completed;
+            /* Refill the ring behind the HC. Data leaves a slot before its
+             * reuse; the newest completed slot stays until its successor
+             * completes (its QH writeback may still be in flight). */
+            if (armed<total && done<progress) {
+                for (;done<progress && refill>0;done++)
+                    refill=bulk_take(d,in,data,actual,done,hc,frames,frames,begin,0);
+                if (refill<=0) break; /* a proven full ACK cannot end here */
+                for (;armed<total && armed+1<progress+USB_BULK_BATCH;armed++) {
+                    unsigned at=base+armed*mps, n=bytes-at<mps ? bytes-at : mps;
+                    bulk_arm(d,in,ep,first^(armed&1),(const uint8_t *)data+at,armed,n,armed+1==total);
+                }
+            }
             unsigned port=h->ops->port_status(h,d->root_port);
             if (!d->present || d->quarantined ||
                 (port&(USB_PORT_CONNECTED|USB_PORT_ENABLED|USB_PORT_CHANGED|USB_PORT_OVERCURRENT))!=
@@ -343,10 +444,50 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
              * prefix walk and this decision. Re-reading Active here could
              * mistake a full ACK for a short/error and unlink the unfinished
              * suffix. Decide using the exact snapshot that stopped the walk. */
-            if (progress==count) {
+            if (progress==total) {
                 usb_barrier();
-                if (qh[1]&1) { completed_batch=true; break; }
-            } else if (!(stopped&(1u<<23))) break;
+                /* A terminating element written by hand is no HC proof:
+                 * the post-loop unlink still retires the queue. */
+                if (qh[1]&1) { completed_batch=!tail_advanced; break; }
+            } else if (progress<armed && !(stopped&(1u<<23))) break;
+            if (progress && frames-moved_frames>=USB_UHCI_ADVANCE_FRAMES &&
+                bulk_advance(d,ep,progress-1,frames)) {
+                tail_advanced=progress==total;
+                moved_at=now; moved_frames=frames;
+            } else if (!relinked && progress<armed && now-moved_at>=USB_BULK_STALL_MS) {
+                /* f1-96b: the same chain is retried once. A next TD that
+                 * the HC never executed (no NAK, error or length written)
+                 * or an element off this chain means the HC is not running
+                 * the queue; a NAKing device keeps its bounded wait. The QH
+                 * is unlinked and retired first, so the relink cannot race
+                 * a writeback: same TDs, toggles and buffers, never a CBW. */
+                volatile uint32_t *td=words(h,USB_BULK_TD+(progress%USB_BULK_BATCH)*16);
+                usb_barrier();
+                uint32_t element=qh[1], v=td[1];
+                bool off=(element&3) || (element&~15u)!=bulk_td_address(h,progress);
+                if (off || (v&0x18ff07ffu)==((3u<<27)|(1u<<23)|0x7ffu)) {
+                    relinked=true; s->relinks++;
+                    qh[1]=1; usb_barrier();
+                    int retired=usb_retire_frames(h,6,2,0x7ff);
+                    next=usb_read(h,6,2)&0x7ff; frames+=(next-frame)&0x7ff; frame=next;
+                    if (retired) return -USB_EIO;
+                    usb_barrier();
+                    const char *result="relinked";
+                    unsigned c=progress;
+                    if (!(qh[1]&1)) result="advancing"; /* an ACK raced the unlink */
+                    else {
+                        while (c<armed && bulk_full(h,c)) c++;
+                        if (c==total) result="complete";
+                        else if (c<armed && !(words(h,USB_BULK_TD+(c%USB_BULK_BATCH)*16)[1]&(1u<<23)))
+                            result="stopped"; /* short or error: the walk ends the stage */
+                        else { qh[1]=bulk_td_address(h,c); usb_barrier(); }
+                    }
+                    klog("[usb-storage] data_retry addr=%u tag=%u packet=%u offset=%u element=%08x td=%08x stalled_ms=%llu frames=%u relink=%08x result=%s",
+                         d->address,s->trace.tag,base/mps+progress,base+progress*mps,element,v,
+                         (unsigned long long)(now-moved_at),frames,bulk_td_address(h,c),result);
+                    moved_at=h->io.now(h->io.cookie); moved_frames=frames;
+                }
+            }
             if (usb_expired(h,s->bulk_deadline)) break;
             usb_poll_pause(h,1);
         }
@@ -355,26 +496,10 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
         unsigned all_frames=frames+((usb_read(h,6,2)-frame)&0x7ff);
         if (s->binding) { s->bind_poll_frames+=frames; s->bind_retire_frames+=all_frames-frames; }
         if (retired) return -USB_EIO;
-        for (unsigned i=0;i<count;i++) {
-            volatile uint32_t *td=words(h,USB_BULK_TD+i*16);
-            usb_barrier(); unsigned v=td[1], n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
-            int result=bulk_status(v,n);
-            d->packet_trace=(struct usb_packet_trace){.status=v,.token=td[2],.hc_status=hc,
-                .expected=n,.actual=result>=0 ? result : -1,.result=result,.valid=true,
-                .endpoint=ep,.pid=in ? USB_PID_IN : USB_PID_OUT,.toggle=*toggle,
-                .frames=all_frames,.poll_frames=frames,.elapsed_ms=h->io.now(h->io.cookie)-begin};
-            struct usb_storage_trace *t=&s->trace;
-            t->packet_index=t->packet_count; t->packet_offset=*actual;
-            if (t->packet_count<USB_BULK_TRACE_LIMIT) t->packets[t->packet_count]=d->packet_trace;
-            t->packet_count++; if (s->binding) s->bind_packets++;
-            if (!(v&(1u<<23)) && (((v&0x7ff)+1)&0x7ff)>n) {
-                usb_host_quarantine(h,"uhci_dma_length"); return -USB_EIO;
-            }
-            if (result<0) return failure ? failure : result;
-            if (!in && result!=(int)n) return -USB_EPROTO;
-            if (in && result) memcpy((uint8_t *)data+*actual,h->dma+USB_BULK_BUFFER+i*64,(unsigned)result);
-            *actual+=(unsigned)result; *toggle^=1;
-            if ((unsigned)result<n) return failure ? failure : 0;
+        if (refill<=0) return refill ? refill : -USB_EPROTO;
+        for (;done<armed;done++) {
+            int e=bulk_take(d,in,data,actual,done,hc,all_frames,frames,begin,failure);
+            if (e<=0) return e;
         }
         if (failure) return failure;
     }

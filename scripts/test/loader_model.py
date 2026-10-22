@@ -9,15 +9,24 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
-             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen', 'dos-conformance')
+             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen', 'dos-conformance',
+             'vm-game')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio', 'media-remove', 'vm-audio-jitter')  # F4 probes run by selector only; not in the sweep yet
-F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-gl')
-F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
+F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-installer-nsis', 'w32-gl',
+             # f5-15C installers tier: title aliases (tests/win32/workloads.json)
+             'win32-diablo-shareware', 'win32-sc', 'win32-aoe-trial', 'win32-half-life-uplink', 'win32-ut-demo-348', 'win32-wa', 'win32-heroes3-demo', 'win32-rct-demo', 'win32-jazz2-shareware', 'win32-ta-demo')
+F6_PROBES = ('net-arp', 'browser')  # explicit selectors; no F6 hardware sweep yet
 F3_SELECTOR_PROBES = ('title',)  # fixture and explicit title ID required
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
 SELECTOR_RE = r'f([0123456]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 DOS_SELECTOR_RE = (r'f3:dos-conformance run=([0-9a-fA-F]{8}) '
                    r'guest=(freedos|ciukidos)( kernel=unified)?')
+# f6-18: f6:browser run=<id> url=<url> [now=1]; the URL (8..40 bytes, no query,
+# record-grammar charset) is the only address the case opens; now=1 launches the
+# browser before the entropy pool is ready. No platform or safe suffix.
+BROWSER_URL_MAX = 40
+BROWSER_SELECTOR_RE = (r'f6:browser run=([0-9a-fA-F]{8}) '
+                       r'url=(https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/[A-Za-z0-9_./-]*)( now=1)?')
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a BIOS E820 memory map (L:E820)'
@@ -99,6 +108,16 @@ def selector(request, source='menu', validated_fw_cfg=False):
         return {'phase': 3, 'probe': 'dos-conformance', 'run': dos[1],
                 'platform': None, 'safe': False, 'guest': dos[2],
                 'kernel': 'unified' if dos[3] else dos[2]}
+    if request.startswith('f6:browser '):
+        browser = re.fullmatch(BROWSER_SELECTOR_RE, request)
+        if not browser or len(browser[2]) > BROWSER_URL_MAX:
+            raise ValueError('invalid browser selector: f6:browser run=<8hex> url=<http(s)://host[:port]/path> [now=1]')
+        return {'phase': 6, 'probe': 'browser', 'run': browser[1], 'url': browser[2], 'now': bool(browser[3]),
+                'platform': None, 'safe': False}
+    # f3-61: f3:vm-game takes an optional DOS kernel before the ordinary suffixes.
+    game = re.fullmatch(r'(f3:vm-game run=[0-9a-fA-F]{8}) kernel=(unified|freedos-1\.3)(.*)', request)
+    if game:
+        return dict(selector(game[1] + game[3], source, validated_fw_cfg), kernel=game[2])
     title = re.fullmatch(r'f3:title run=([0-9a-fA-F]{8}) title=([a-z][a-z0-9-]{0,22})', request)
     if title:
         return {'phase': 3, 'probe': 'title', 'run': title[1], 'title': title[2], 'platform': None, 'safe': False}
@@ -243,6 +262,8 @@ def boot_options(options, safe=False, serial=True):
             safe=safe or token=='safe=1'
         elif token in ('serial=0','serial=1'):
             serial=serial and token=='serial=1'
+        elif token in ('usbscan=0','ecpoll=0','ecpoll=1'):
+            pass  # Kernel diagnostic policy; raw BOOT.CFG options are retained.
         elif token in ('accel=0','setup=1'):
             pass  # Preserved boot-info options; consumed by the kernel.
         elif re.fullmatch(r'mode=0x[0-9a-fA-F]{4}',token) and int(token[7:],16)<=0x3fff:

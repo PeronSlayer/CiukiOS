@@ -9,6 +9,9 @@ void entropy_free(void *);
 void entropy_boot(void);
 void entropy_irq(unsigned irq);
 void entropy_start(void);
+/* f6-21: the desktop presented its first full frame, or no desktop frame
+ * will come. Gates the jitter collector's runtime retries. Any context. */
+void entropy_desktop_presented(void) __attribute__((weak));
 int entropy_get(void *, size_t);
 int32_t entropy_syscall(struct trap_frame *);
 #endif

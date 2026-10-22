@@ -12,6 +12,7 @@
 #include "content/fetchers.h"
 #include "content/urldb.h"
 #include "framebuffer/ciuki/net.h"
+#include "framebuffer/ciuki/testmode.h"
 struct ciuki_fetch {
     struct ciuki_fetch *next;
     struct fetch *parent;
@@ -20,7 +21,18 @@ struct ciuki_fetch {
     bool active,aborted,only_2xx;
     const char *error;
     fetch_msg_type terminal;
+    size_t delivered; /* decoded body bytes handed to the core (f6-18 observer) */
 };
+/* Host harnesses link the fetcher without chrome.c: silent defaults. */
+__attribute__((weak)) void ciuki_test_fetch_observe(unsigned status,size_t bytes,int tls_error,const char *error)
+{ (void)status;(void)bytes;(void)tls_error;(void)error; }
+__attribute__((weak)) const br_x509_trust_anchor *ciuki_test_anchors(size_t *count) { *count=0;return NULL; }
+static void observe(struct ciuki_fetch *f)
+{
+    unsigned status=f->job && f->job->http ? f->job->http->status : 0;
+    int tls=f->job && f->job->secure ? (int)f->job->tls_error : -1;
+    ciuki_test_fetch_observe(status,f->delivered,tls,f->error?f->error:f->job?f->job->error:NULL);
+}
 static struct ciuki_net *network;
 static struct ciuki_fetch *jobs;
 static unsigned references;
@@ -81,31 +93,36 @@ static bool http_event(void *context,enum ciuki_http_event e,const void *bytes,s
                 enum nsurl_scheme_type scheme=nsurl_get_scheme_type(to);
                 if(scheme!=NSURL_SCHEME_HTTP && scheme!=NSURL_SCHEME_HTTPS)f->error="Unsupported HTTP redirect scheme.";
                 else if(f->job->secure && scheme!=NSURL_SCHEME_HTTPS)f->error="HTTPS redirect to an insecure connection was refused.";
-                else f->terminal=FETCH_REDIRECT;
+                else {f->terminal=FETCH_REDIRECT;ciuki_net_record(f->job,CIUKI_FETCH_REDIRECT);}
                 nsurl_unref(to);
             }
+            if(f->error){ciuki_net_failure(f->job,f->error);f->error=f->job->error;}
             return false;
         }
-        if(p->status==401 || p->status==407){f->error="HTTP authentication and proxies are unsupported.";return false;}
-        if(f->only_2xx && (p->status<200 || p->status>299)){f->error="The server returned an unsuccessful HTTP status.";return false;}
+        if(p->status==401 || p->status==407){ciuki_net_failure(f->job,"HTTP authentication and proxies are unsupported.");f->error=f->job->error;return false;}
+        if(f->only_2xx && (p->status<200 || p->status>299)){ciuki_net_failure(f->job,"The server returned an unsuccessful HTTP status.");f->error=f->job->error;return false;}
         return true;
     }
     if(e==CIUKI_HTTP_HEADER && count>11 && !strncasecmp(bytes,"Set-Cookie:",11)){
         /* NetSurf owns domain/path/Secure/HttpOnly/PSL/context policy. */
         const char *s=bytes;size_t n=count-13;char *cookie=malloc(n+1);
-        if(!cookie){f->error="Unable to allocate HTTP cookie.";return false;}
+        if(!cookie){ciuki_net_failure(f->job,"Unable to allocate HTTP cookie.");f->error=f->job->error;return false;}
         memcpy(cookie,s+11,n);cookie[n]=0;fetch_set_cookie(f->parent,cookie);free(cookie);
-        if(!trim_cookies()){f->error="Stored cookie exceeds the browser limit.";return false;}
+        if(!trim_cookies()){ciuki_net_failure(f->job,"Stored cookie exceeds the browser limit.");f->error=f->job->error;return false;}
         if(f->aborted)return false;
     }
     fetch_msg msg={.type=e==CIUKI_HTTP_DATA?FETCH_DATA:FETCH_HEADER};
     msg.data.header_or_data.buf=bytes;msg.data.header_or_data.len=count;
+    if(e==CIUKI_HTTP_DATA)f->delivered+=count;
     return notify(f,&msg);
 }
 static bool initialise(lwc_string *scheme)
 {
     (void)scheme;
-    if(!references){network=ciuki_net_create(NULL,0);if(!network)return false;}
+    if(!references){
+        size_t count=0;const br_x509_trust_anchor *anchors=ciuki_test_anchors(&count);
+        network=ciuki_net_create(anchors,count);if(!network)return false;
+    }
     references++;return true;
 }
 static bool acceptable(const nsurl *url)
@@ -132,10 +149,12 @@ static void *setup(struct fetch *parent,nsurl *url,bool only_2xx,bool downgrade,
     else if(nsurl_has_component(url,NSURL_CREDENTIALS))f->error="HTTP URL credentials are unsupported.";
     else if(strlen(nsurl_access(url))>CIUKI_HTTP_URL)f->error="HTTP URL exceeds 4 KiB.";
     else if(nsurl_get(url,NSURL_PATH|NSURL_QUERY,&target,&length)!=NSERROR_OK)f->error="Unable to allocate HTTP request URL.";
-    if(!f->error){
-        cookie=urldb_get_cookie(url,true);r.cookie=cookie;r.target=target;
+    {
+        if(!f->error)cookie=urldb_get_cookie(url,true);
+        r.cookie=cookie;r.target=target?target:"/";
         f->job=ciuki_net_job(&r,http_event,f);
         if(!f->job){free(target);free(cookie);if(host)lwc_string_unref(host);if(port)lwc_string_unref(port);nsurl_unref(f->url);free(f);return NULL;}
+        if(f->error){f->job->error=f->error;f->error=NULL;}
     }
     free(target);free(cookie);if(host)lwc_string_unref(host);if(port)lwc_string_unref(port);
     f->next=jobs;jobs=f;return f;
@@ -176,7 +195,7 @@ static void poll_fetch(lwc_string *scheme)
             msg.type=FETCH_ERROR;msg.data.error=f->error?f->error:f->job->error;
         } else if(msg.type==FETCH_REDIRECT)msg.data.redirect=f->job->http->location;
         fetch_remove_from_queues(f->parent);
-        if(!f->aborted)notify(f,&msg);
+        if(!f->aborted){observe(f);notify(f,&msg);}
         fetch_free(f->parent);
     }
     in_poll=false;

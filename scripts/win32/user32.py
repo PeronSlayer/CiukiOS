@@ -124,6 +124,7 @@ def build(out, base, flags):
     wide=wide_gate(objects,exports,objdir,'user32.dll',MINUS_ONE_FAILURES,flags)
     names=stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text()).get('user32.dll',set())
     names |= stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('user32.dll',set())
+    names |= stubs.acceptance_imports('user32.dll')  # f5-15B
     specs=inventory()
     unicode={n for n in specs if n.endswith('W') and n[:-1]+'A' in exports and n not in exports}
     missing=sorted((names|unicode)-exports.keys())

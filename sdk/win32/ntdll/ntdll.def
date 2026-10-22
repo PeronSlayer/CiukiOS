@@ -38,6 +38,9 @@ EXPORTS
     RaiseException
     RtlRaiseStatus
     RtlUnwind
+    RtlFillMemory
+    RtlMoveMemory
+    RtlZeroMemory
     KiUserExceptionDispatcher
     LdrLoadDll
     LdrUnloadDll
@@ -108,6 +111,9 @@ EXPORTS
     RtlUnicodeToMultiByteN
     RtlUnicodeToMultiByteSize
     _alldiv
+    ; f5-15C: CRT formatters the reused shlwapi.dll resolves from NTDLL
+    _vsnprintf
+    _vsnwprintf
     _allrem
     _aulldiv
     _chkstk

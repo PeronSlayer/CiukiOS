@@ -8,7 +8,10 @@
 #include <ciuki/pager.h>
 #include <ciuki/setup_mode.h>
 #include <ciuki/storage.h>
+#include <ciuki/splash.h>
+#pragma weak console_splash_phase
 extern void dosvm_client_poll(void) __attribute__((weak));
+extern void entropy_desktop_presented(void) __attribute__((weak)); /* f6-21 */
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
 
@@ -95,9 +98,14 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     struct proc_thread *thread = 0;
     uint32_t esp = 0;
     if (!err) err = proc_prepare(proc_supervisor(), &p);
+    /* f1-98: the desktop's threads keep a minimum CPU share beside a game. */
+    if (!err && desktop) proc_share_group(p);
     if (!err) proc_set_name(p, path);
     if (!err) err = elf_validate(&file, &image);
     if (!err) err = elf_load(&file, &image, p->memory);
+    /* f0-55: the desktop image is in memory; the grant below completes the
+     * boot splash bar (console_display_owned). */
+    if (!err && desktop && console_splash_phase) console_splash_phase(SPLASH_PHASE_DESKTOP);
     if (!err) err = proc_thread_prepare(p, image.entry, 0, 0, CIUKI_THREAD_STACK_DEFAULT, 0, 0, true, &thread);
     if (!err) {
         err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
@@ -219,13 +227,16 @@ void supervisor_bootstrap(void)
     const char *argv[] = { "desktop", 0 };
     struct process *p = 0;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");
+    if (console_splash_phase) console_splash_phase(SPLASH_PHASE_SUPERVISOR);
     int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
     if (result == -ENOENT) {
         result = supervisor_spawn_standin(proc_supervisor(), &p);
         if (result >= 0 && pager_bootstrap_complete) pager_bootstrap_complete();
+        if (result >= 0 && entropy_desktop_presented) entropy_desktop_presented();
     }
     if (result < 0) {
         if (pager_bootstrap_complete) pager_bootstrap_complete();
+        if (entropy_desktop_presented) entropy_desktop_presented(); /* f6-21: no desktop frame */
         console_wake();   /* a quiet boot shows its log instead of the desktop */
         klog("[supervisor] desktop unavailable: %d; console ready", result);
         return;
@@ -243,6 +254,7 @@ void supervisor_poll(void)
             uint32_t pid=desktop_pid;
             desktop_pid = 0;
             if (pager_bootstrap_complete) pager_bootstrap_complete();
+            if (entropy_desktop_presented) entropy_desktop_presented();
             desktop_deaths++;
             console_wake();
             klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, p ? p->status : -1, desktop_deaths);

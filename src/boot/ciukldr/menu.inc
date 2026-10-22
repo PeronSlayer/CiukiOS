@@ -69,6 +69,10 @@ selector_validate:
     jc .bad
     cmp bx, dos_conformance_name
     je .dos_suffix
+    cmp bx, f6_browser_name
+    je .browser_suffix
+    cmp bx, f3_game_name
+    je .game_suffix
     cmp si, [selector_end]
     jne .suffix
     cmp bx, f3_title_name
@@ -179,6 +183,89 @@ selector_validate:
     call token_match
     jc .bad
     jmp .exact_end
+.game_suffix:
+    ; f3-61 grammar, as selector.c and the model: an optional
+    ; ' kernel=freedos-1.3' or ' kernel=unified', then the F3 suffixes.
+    cmp si, [selector_end]
+    je .good
+    mov di, game_freedos_suffix
+    call token_match
+    jnc .game_kernel
+    mov di, dos_kernel_suffix
+    call token_match
+    jc .suffix
+.game_kernel:
+    mov si, ax
+    cmp si, [selector_end]
+    je .good
+    jmp .suffix
+.browser_suffix:
+    ; f6-18 grammar for every source, as selector.c browser_url and the
+    ; model: ' url=' http[s]://host[:port]/path, host [A-Za-z0-9.-]+, port
+    ; 1..5 digits, path [A-Za-z0-9_./-]*, then nothing or exactly ' now=1'.
+    ; The 64-byte cap leaves at most 36 URL bytes after the 28-byte
+    ; 'f6:browser run=<8hex> url=', so PROBE_URL_MAX (40) always holds.
+    mov di, url_suffix
+    call token_match
+    jc .bad
+    mov si, ax
+    mov di, https_prefix
+    call token_match
+    jnc .scheme
+    mov di, http_prefix
+    call token_match
+    jc .bad
+.scheme:
+    mov si, ax
+    mov cx, si ; host start
+.host:
+    cmp si, [selector_end]
+    jae .bad ; the path is mandatory
+    lodsb
+    call url_host_char
+    jnc .host
+    dec si ; SI=first byte after the host
+    cmp si, cx
+    je .bad
+    cmp al, ':'
+    jne .slash
+    inc si
+    mov cx, si ; port digits start
+.port:
+    cmp si, [selector_end]
+    jae .bad
+    lodsb
+    sub al, '0'
+    cmp al, 9
+    jbe .port
+    dec si
+    mov ax, si
+    sub ax, cx
+    dec ax
+    cmp ax, 4 ; 1..5 digits
+    ja .bad
+    mov al, [si]
+.slash:
+    cmp al, '/'
+    jne .bad
+.path:
+    inc si
+    cmp si, [selector_end]
+    jae .url_end
+    mov al, [si]
+    cmp al, '_'
+    je .path
+    cmp al, '/'
+    je .path
+    call url_host_char
+    jnc .path
+.url_end:
+    cmp si, [selector_end]
+    je .good
+    mov di, now_suffix
+    call token_match
+    jc .bad
+    jmp .exact_end
 .title_suffix:
     mov di, title_suffix
     call token_match
@@ -262,6 +349,28 @@ token_hex:
 .bad:
     stc
     ret
+; CF clear for a URL host byte [A-Za-z0-9.-] (selector.c url_host_char).
+; Only bytes above '9' are case-folded in AL, so ':' and '/' stay intact.
+url_host_char:
+    cmp al, '-'
+    je .done ; equal leaves CF clear
+    cmp al, '.'
+    je .done
+    cmp al, '0'
+    jb .done
+    cmp al, '9'+1
+    jb .digit
+    or al, 0x20 ; only 'A'-'Z' and 'a'-'z' reach 'a'..'z' here
+    cmp al, 'a'
+    jb .done
+    cmp al, 'z'
+    jbe .digit
+    stc
+.done:
+    ret
+.digit:
+    clc
+    ret
 selector_accept:
     mov [B(test_request_len)], cx
     mov di, B(test_request)
@@ -296,6 +405,7 @@ f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
     db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
               db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+f3_game_name db 'vm-game',0
 dos_conformance_name db 'dos-conformance',0
 f3_title_name db 'title',0,0
 ; NUL-terminated suffix tokens for token_match/token_hex.
@@ -305,6 +415,11 @@ state_suffix db ' state=',0
 dos_freedos_suffix db ' guest=freedos',0
 dos_ciukidos_suffix db ' guest=ciukidos',0
 dos_kernel_suffix db ' kernel=unified',0
+game_freedos_suffix db ' kernel=freedos-1.3',0
+url_suffix db ' url=',0
+https_prefix db 'https://',0
+http_prefix db 'http://',0
+now_suffix db ' now=1',0
 title_suffix db ' title=',0
 platform_suffix db ' platform=e500',0
 safe_suffix db ' safe=1',0
@@ -423,9 +538,12 @@ config_read:
     mov [preferred_mode], dx
     jmp .next
 .apply:
-    ; safe=0, serial=1 and accel=0 change nothing here: a normal option never
-    ; clears a positive safe-mode source; B(options) keeps accel=0 for the
-    ; kernel, which declines acceleration before marker I/O.
+    ; safe=0, serial=1, accel=0, usbscan=0 and ecpoll=0/1 change nothing
+    ; here: a normal option never clears a positive safe-mode source;
+    ; B(options) keeps accel=0 (the kernel declines acceleration before
+    ; marker I/O), usbscan=0 and ecpoll=0/1 (f2-96: the ThinkPad EC volume
+    ; poll runs every 2 s by default, ecpoll=0 turns it off, ecpoll=1 selects
+    ; 1 Hz), policies the kernel reads from the copied options.
     cmp bx, safe_option
     jne .serial
     or dword [B(flags)], CBI_F_SAFE_MODE
@@ -460,7 +578,7 @@ config_read:
 .done:
     ret
 ; Exact BOOT.CFG options; an empty name ends the list.
-option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'setup=1',0
+option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0,'ecpoll=0',0,'ecpoll=1',0,'setup=1',0
 safe_option db 'safe=1',0
 serial_option db 'serial=0',0,0
 mode_prefix db 'mode=0x',0
@@ -715,5 +833,6 @@ menu_tick dd 0
 menu_polls dd 0
 
 f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,'vm-audio-jitter',0,0
-f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-gl',0,0
-f6_probe_names db 'net-arp',0,0
+f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-installer-nsis',0,'w32-gl',0,'win32-diablo-shareware',0,'win32-sc',0,'win32-aoe-trial',0,'win32-half-life-uplink',0,'win32-ut-demo-348',0,'win32-wa',0,'win32-heroes3-demo',0,'win32-rct-demo',0,'win32-jazz2-shareware',0,'win32-ta-demo',0,0
+f6_probe_names db 'net-arp',0
+f6_browser_name db 'browser',0,0

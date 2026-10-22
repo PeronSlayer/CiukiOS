@@ -632,6 +632,25 @@ static void test_audio_clock_lifetime(void)
 
 static void test_audio(void)
 {
+    /* A window presenter makes no calls during 300 ms of desktop work.
+     * Keep the independent device clock and the modeled guest ISR running. */
+    struct dosvm *busy=audio_vm_create(); uint32_t token;
+    CHECK(!dosvm_audio_attach(busy->info.key,&token)); dsp_reset(busy);
+    struct a_guest guest={busy,0x30000,0,64,0,0,1000000,false,true};
+    a_fill(&guest,0,guest.seq++); a_fill(&guest,1,guest.seq++);
+    dma8(busy,1,guest.buffer,127,true);
+    dsp(busy,0x41); dsp(busy,0x56); dsp(busy,0x22);
+    dsp(busy,0x48); dsp(busy,63); dsp(busy,0); dsp(busy,0x1c);
+    for (unsigned i=0;i<300;i++) {
+        ms(1);
+        if (busy->audio.sb.irq_entry_pending) dosvm_audio_irq_enter(busy,7);
+        a_service(&guest); nsegs=0; drain(busy,token,512);
+    }
+    CHECK(guest.serviced>=100 && busy->audio.sb.cadence.irq_entries>=100 &&
+        busy->audio.sb.cadence.irq_latency_max_us<=33000 && !busy->audio.sb.cadence.parked);
+    printf("F1-87 window presenter absent=300ms SB16 blocks=%u IRQ_latency_max_us=%u parked=0 PASS\n",
+        guest.serviced,busy->audio.sb.cadence.irq_latency_max_us);
+    destroy(busy,true); empty();
     test_vm_late();
     test_audio_tiny_auto_init();
     test_audio_clock_lifetime();

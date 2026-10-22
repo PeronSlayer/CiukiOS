@@ -35,12 +35,31 @@ struct cp_font_entry {
 enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE_NOTE,
        CP_REFRESH, CP_SUMMARY, CP_CONFIRM, CP_MODE_TIMER };
 enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT, CP_MODE_SAVE };
+/* f2-88b: one preview job. image is moved to the worker (NULL: decode path first). */
+struct cp_preview_req {
+    char path[128]; int mode; uint32_t colour, bar; int font; uint32_t label; int aa;
+    const uint32_t *portrait; struct desk_image image;
+};
+struct cp_preview_done {
+    struct cp_preview_req req;      /* the snapshot the preview was rendered from */
+    struct desk_image image;        /* the image returned to the UI (pixels NULL: decode failed) */
+    int rendered;                   /* preview[] holds the rendering of req */
+    unsigned decode_ms, render_ms;
+    uint32_t *preview;              /* caller-supplied 192*144 buffer, filled when rendered */
+};
 struct cp_host {
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
     int save_async; /* save queued; main calls cp_settings_saved after durable completion */
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
     int (*decode)(void *, const char *path, struct desk_image *out);
+    /* f2-88/f2-88b: the UI thread never reads, decodes or resamples a wallpaper. decode_begin starts a worker
+     * job (0, or -errno) and decode_poll returns 0 while it runs and 1 when it finished. Both return at once
+     * and never wait on the worker. The request moves the UI's decoded image (if any) to the worker, which
+     * returns it in done->image; the worker also renders the 192x144 preview from a snapshot of the request. */
+    int (*decode_begin)(void *, const struct cp_preview_req *);
+    int (*decode_poll)(void *, struct cp_preview_done *);
+    void (*log)(void *, const char *line);                            /* serial record, optional */
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
@@ -109,6 +128,10 @@ struct cp_app {
     int preview_valid;
     struct desk_image image;
     int preview_pending;            /* an image wallpaper decode is scheduled after the first paint */
+    int decode_wait;                /* an asynchronous decode is running for decode_path */
+    unsigned decode_ms, render_ms, decode_done;
+    struct cp_preview_req wait_req; /* snapshot of the running job (image field unused) */
+    char decode_path[128], decode_failed[128];
     char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
     struct ciuki_devices_info devices;

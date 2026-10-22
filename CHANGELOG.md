@@ -1,5 +1,91 @@
 # Changelog
 
+## 1.0.0 alpha (unreleased, `main`; hardware image `3423912f8463…` of 2026-10-22, T23 trial pending)
+
+Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.
+
+### Kernel and resource management
+
+- Trial of image `a4d9454e…` (dev diary 2026-10-22-07) and the sixth image (2026-10-22-09): desktop CPU cut on the T23 model from 40.6 % to 2.1 % (shortcut and sound workers, pixman region code for damage) (f2-95), audio producer priority (f1-101), single pointer and EC volume poll every 2 s with proven SMI time excluded from budgets (f2-96), music decoder cost and per-stage record (f4-37), credits and About (f2-97).
+- Trial of image `5a10eef4…` (dev diary 2026-10-22-05) and the fifth image (2026-10-22-06): f1-100 (no periodic EC I/O — the EC event line is routed to SMI#, two 2.1 ms SMIs per read), f1-96b (UHCI ring walk stale status; fallback ladder before quarantine; re-plug), f2-92 (the desktop draws with the Savage engine: late readiness, bounded waits, write/offscreen operations, honest indicator), f6-22 (e100 receive mask: DHCP works; network state records; NetSurf lines complete).
+- Trial of image `b453bc92…` rejected (dev diary 2026-10-22-03); thirteen corrective merges on 2026-10-22 (dev diary 2026-10-22-04): Savage first-fill priming (f1-95), boot-log classes (f0-56), 2D acceleration YES/NO indicator (f1-97), unified DOS kernel actually bound (f3-61), holds without preemption points (f1-93b), priority inheritance and desktop share (f1-98), Display properties worker (f2-88b), NetSurf budget and exit (f6-20), desktop pointer merging (f2-91), USB 64 KiB transfers (f1-96), SMI attribution and EC poll (f1-94), entropy worker in an idle task and kernel PDEs with Accessed preset (f6-21/b).
+- Trial of image `8f59e221…` on the T23 (2026-10-21, dev diary 2026-10-21-10) rejected: seven corrective merges on 2026-10-22 — f1-92 (`125fefa2`: an issued ATA command ends only on its device deadline; since f3-49b a cancelled request was treated as a device fault, quarantining the drive and turning C: read-only), f1-93 (`c394506a`: native volume holds never span cold device reads), f6-19 (`d64787e0`: NetSurf gets its window channel from every launch route, Programs entry with icon, entropy initialises on the Pentium III), f2-88 (`8a181714`: Display properties decodes its preview off the UI thread), f2-89 (`bb8d652f`: removable media popup painted), f2-90/f2-90b (`5d28b71d`, `ce19c3bb`: wallpaper in the first desktop frame), f0-55 (`6f121d69`: boot splash progress bar).
+- f1-87 (`c19230eb`): T23 trial fixes — tagged volume holds with a missing-tag control, audio refill priority, the windowed DOS VM decoupled from the presenter, `usbscan=0` loader token, `device_overrun` attribution record.
+- f1-90 (`3c50bb79`): device CPU budget accounted per task with a max-min fair share; the audio refill worker has its own 2 ms per 10 ms budget and a direct interrupt wake; `device_top` and `audio_refill_overrun` records; contract R1/R2 amended.
+- f1-89 (`551bd15a`): reserved cache publication and FAT transactions — bounded logical holds, writer turn with a wait metric, in-flight readers block publication, single-page transactions, no barrier per 8 KiB overflow chunk, guarded lookups never read the disk under the guard (strict FS gate exit 0, 10 MiB copy replay 1,278 commands, 4,678 crash cuts clean).
+- Fixed (`dbb0d714`, `cc81cbb6`): Addressed peer thread metadata pin contention where concurrent walks of a process memory map yielded `EBUSY`, allowing task walks to wait out metadata pins and avoiding duplicate pins on pre-pinned caller copies (`test_peer_walk_copy`).
+- f0-49b (`a7f933be`): Pagefile mapper cluster cursor is now validated by the chain stamp and reset on error, ensuring trailing trims followed by regrowth cannot map reused clusters belonging to other files (`trim_regrow_reuse`).
+- f0-49c (`66d0ae55`): Pagefile extents in `C:\SYSTEM\PAGEFILE.SWP` are preserved across boots and extent growth is restricted to metadata allocation without synchronous 16 MiB zeroing, decoupling desktop startup from the pager manager and resolving boot stalls under `icount`.
+- f1-86 (`5ce6ce41`): Kernel contention instrumentation added to monitor volume reservation hold durations and waiters (`vfs_hold`/`vfs_wait`), per-command ATA DMA/PIO service timings, serial DOS VM exit profiling, and unmasked IRQ-off sections (`firmware_max_us`).
+- f6-16 (`3d001784`): Kernel entropy subsystem integrated with pinned `jitterentropy-library 3.7.0` and a ChaCha20 DRBG, providing syscall 91 (`getentropy`), SDK `getentropy`/`arc4random` interfaces with finite deadlines, and `entropyraw=1` capture mode.
+
+### Storage
+
+- Fixed (`7c5b9878`): Prevented ATA command queue throttling from getting locked at 512 bytes on slow commands by introducing a 4,096-byte (or sector size) minimum floor and restoring maximum queue depth after fast transfers (`test_blkreq`).
+- f3-51c (`abd1c7c1`): Per-open-file FAT cluster cursor validated by chain stamps reduced sequential reads of a 27 MB image from 2,801,342 to 13,295 FAT lookups, combined with an LRU cache of 16 base digests indexed by volume version.
+- f1-88 (`985aeb9e`): S3 SuperSavage BCI self-test sequence updated with CR50 depth selection preceding descriptor writes, incoming CR50 buffering, completion fence, and an `accel=0` boot configuration token for safe hardware fallback.
+
+### DOS and unified DOS
+
+- Owner decision 2026-10-21 (dev diary 2026-10-21-09): the unified kernel is the default for every DOS game without a saved choice; `DOS kernel=ciukidos` selects the classic kernel; the DOS Box shell stays classic until f3-58.
+- f3-56, f3-57 (`d0e05169`): unified DOS — native DFV2 binding adapter, `CIUKIDF.SYS`, FreeDOS 2043 fork patch 0002 (lifecycle hooks, redirector sites, FCB/NLS, critical-error GS fix), live VFS backend for C:/D:/E: at the seven redirector sites, INT 24h critical errors with the real frame, a refused activation stops the VM with a record, the fork kernel installed in the image under `kernel=unified` once `fork-qualified.json` exists.
+- f3-46 (`ed2f028a`): Converted the DOS VM 24 MiB memory pool into a pageable object (Contract D1) backed by demand paging and pagefile swap, reducing creation latency from 134.3 ms to 23.6 ms with protected I/O fault handling.
+- Fixed (`85b9024a`, `b2bc10a7`): Optimized DOS game launch base hashing from sector-by-sector seeks into a single sequential pass with 64 KiB reads, reducing host hashing elapsed time from 29.2 s to 0.25 s (`test_game_window_base_hash`).
+- f3-52 (`84f01cd2`): Replaced 2 ms DOS window rendering polling with event-driven blocking frame waits (`WAIT_PRESENT`), donating priority to the VM thread while waiting and throttling loading panel repaints to <=4 Hz.
+- f3-54 (`6ddc7035`): Unified DOS contract established, merging the FreeDOS 1.3 kernel base with the CiukiDOS identity, banner, and prompt, using the VMM redirector interface (INT 2Fh AH=11h) for native VFS routing.
+- f3-55 (`2b857092`): Pinned FreeDOS 2043 kernel fork built natively and reproducibly with Open Watcom 1.9 (patch 0001, SHA `d24464ec…`), selectable at boot via `kernel=unified` alongside the classic CiukiDOS kernel.
+- f6-11 (`690fe9df`): Virtual NE2000 network adapter (DP8390 model) and Ethernet II IPX bridge implemented for DOS VMs over the native netif and packet pool, providing VMM IPX API emulation with DPMI routing, ESR delivery, and `NETID.BIN`.
+- f3-53 (`251ab754`): DOS title battery test harness and manifest schema established covering tracked titles across bundled, test-media, and owner-copy classes with calibrate, accept, and verify modes.
+- Fixed (`19346ce6`): DOS Box settings panel updated to configure the unified kernel on key 7 and network modes on keys 5 and 6.
+
+### Win32 and installers
+
+- f5-15a2 (`a72352fd`): NSIS, CAB and self-extracting installers — advpack/setupapi/cabinet qualification, zero-length `ReadFile`, case-insensitive paths, `w32-installer-nsis` probe.
+- f5-15b (`01fa33ec`): original installer acceptance — ten installers load, workloads imported with SHA-1 receipts, installer title tests and census.
+- f5-15c (`90c9e903`): QEMU installers tier — ten `f5:win32-<alias>` probes in the kernel, loader table and runner model, guest UI driver, manifests and calibration commands, installer CD images in the runner, `_vsnprintf`/`_vsnwprintf`, named newer-subsystem records (per-title QEMU calibration still to run).
+- kernel32 profile (`a17e29f8`): `WritePrivateProfileStringA` rewrites keep one entry in place, duplicates dropped, NULL value/key deletion, line endings preserved.
+- f5-10c (`d772a901`, `74718423`): Win32 dialog manager, standard controls, menus, accelerators, `MessageBox`, and TrueType font selection implemented.
+- f5-10c2 (`e246bda5`): TrueType font bridge routing glyph rasterization through `w32srv` via FreeType, baseline alignment corrections across golden frames, and `dialogs-exercise.exe` guest probe fixture.
+- f5-10c3 (`588609e7`): Dialogs fixture results page relocated to `0x10000000` to avoid conflicts with loader metadata structures.
+- f5-10c4 (`97310308`): `LdrAccessResource` enhanced to support size-only, address-only, and no-output queries, resolving a regression where `SizeofResource` returned 0 and broke dialog creation.
+- f5-20a, f5-20b, f5-20c (`593c5ce2`, `29f80401`, `39a67111`): Implemented 347 core exports across `kernel32`, `ntdll`, `advapi32`, `user32`, and `gdi32` to satisfy dependencies for 16 reused Wine DLLs, enabling all 16 DLLs to initialize successfully (`DllMain` returning TRUE).
+- f5-20d (`5db64490`): Cached build step for reused Wine DLLs integrated into `make build-full`, staging 16 verified DLLs and adding the `w32-upper-dlls` probe.
+- f5-15a (`19a105b5`): Installer shell integration providing `shell32` and `shlwapi` APIs, standard shell folders, `.lnk` shortcut creation, file operations (`SHFileOperation`, `ShellExecuteEx`), temporary directory staging, and delayed rename support via `WININIT.INI [rename]`.
+- f5-07b (`396c248d`, `e020e2a1`): PROGMAN DDE service, session termination messages (`WM_QUERYENDSESSION`/`WM_ENDSESSION`), and virtual restart handling via `WININIT.INI` and `RunOnce`/`RunServicesOnce` keys with `runonce.exe`.
+- f5-07c (`32d438af`): Reduced Win32 service idle traffic by caching client connections in `ntdll`, avoiding allocations during active sessions, and moving desktop status polls to an asynchronous worker thread.
+- f5-07d (`e020e2a1`): Restart validation fixture and `f5:w32-restart` guest observer registered on the shared desktop fixture gate.
+- f5-19p (`8d833fbd`): Win16 contract P0 dispositions established, routing Win16 file I/O through the VMM INT 21h backend and scheduling 32-bit segment support for post-1.0 Beta.
+
+### Network and browser
+
+- f6-18 (`311d33bc`): runner HTTPS cases for NetSurf — `f6:browser run= url= [now=1]` selector with the full URL grammar in the loader, kernel browser probe with a resolver override, test profile with fixture CA anchors, `https_fixture.py`, six `f6-net` cases (QEMU runs pending).
+- f6-10 (`ece0ae07`): lwIP 2.2.1 TCP/IP stack imported with native `sys_arch` integration, supporting native socket system calls 78–89, DHCP client, DNS resolver, and C SDK socket headers.
+- f6-13 (`24267b26`): NetSurf 3.11 browser port plan established, defining native socket fetching, BearSSL TLS, and framebuffer rendering (`libnsfb`) on the desktop v3 windowing protocol.
+- f6-14 (`84f01cd2`): NetSurf Milestone 1 (M1) frontend delivered, enabling native window rendering and offline HTML/data navigation.
+- f6-15 (`96ec06e1`): NetSurf Milestone 2 (M2) HTTP/1.1 fetcher delivered, featuring an asynchronous DNS worker thread, BearSSL TLS 1.2 support with converted CA bundle, cookie management, and offline error classification.
+- f6-17 (`aac5cb00`): BearSSL entropy seeded per connection via `getentropy`, integrated with an internal browser readiness page, chrome reload handling on error pages, and host HTTPS acceptance tests.
+
+### Desktop and media
+
+- f2-86 (`ffdb437a`): Toolkit timer events in `libdeskui` decoupled from whole-window invalidation, idle polling stopped in Files, and desktop main idle loop throttled to >=10 ms sleep, eliminating heavy background CPU consumption.
+- f2-87 (`aed8765d`): Add/Remove Programs control panel applet delivered, managing uninstallation across Win32, DOS, native, and bundled game packages via `GAME_QUERY`/`GAME_REMOVE` interfaces.
+- f7-07 (`33fded92`): Hardware-independent 3D rendering delivered via `opengl32.dll` and WGL bindings implemented atop the `sdk/libgl` software rasterizer.
+- f5-12b, f5-12b2 (`e2ac5a1e`, `7f6b61a3`, `ef66ce72`): Media Control Interface (MCI) subsystem delivered, supporting `waveaudio` (PCM/ADPCM), `sequencer` (MIDI streams via TinySoundFont), `avivideo` (`mciavi32.dll` with DrawDib), VfW codecs, and digital CD audio reading (READ CD) with analog fallback.
+- f5-22 (`32d438af`): Audio CD playback integrated into `C:\WINDOWS\CDPLAYER.EXE` featuring the Tango `media-optical` icon and Start Menu accessories placement.
+
+### Loader
+
+- f0-55b (`a056ae8c`): splash bar visible from the first frame (centred sweep segment at tick 0, phases reported before the paint applied), console worker on its own 40 ms timer above init's level while the splash is up, one serial record per phase.
+- f0-54 (`f162192b`): Loader memory budget overhauled by replacing repetitive option parsing with a shared bounded table matcher, streaming ELF program headers through the E820 scratch buffer, and reclaiming 1,303 bytes within the fixed 64 KiB loader extent with zero differential divergence across 60,102 tested selectors.
+- f3-55 / fix-dosbox (`2b857092`, `19346ce6`): Added loader command-line and interactive menu parsers for `kernel=unified` alongside existing DOS conformance selectors.
+
+### Tooling and tests
+
+- f5-21, f5-21b (`c2ff1c90`, `4745eff8`): Automated probe registry infrastructure, write gates (`GATE_W32_FIXTURE`), and ten guest observers covering `kernel32`, fullscreen display, registry, audio, GDI, crash reporting, USER, DirectDraw, DirectInput, and codecs.
+- f5-17b (`96e0dcb1`): Win32 acceptance runner harness tiers, automated fixture disk generation, recorded input event replay, and cross-selector table verification.
+- Toolchain update (`5fd91e4c`): Requalified host toolchain pins for Clang, LLD, and LLVM from 23.1.1 to 23.1.3 across SDK, applications, upper DLLs, and kernel tests.
+- f0-50, f0-51, f0-53 (`a57de459`, `27db294d`, `79b9536a`): Host regression repairs, including scheduler name unification (`CIUKI_SCHED_NORMAL`), firmware record headers, bounds assertions, gate test links, build image license inventories, and directive index hygiene.
+
 ## 0.9.2 pre-alpha (unreleased, `main`, from 2026-10-20)
 
 Version identity moved from 0.9.0 to 0.9.2 on 2026-10-20 (owner decision,

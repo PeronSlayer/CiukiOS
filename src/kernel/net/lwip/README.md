@@ -52,6 +52,14 @@ fixed. User waits and cleanup retain request storage through late completion.
 Link callbacks use preallocated core messages. The existing driver ARP probes
 remain available as driver evidence; normal ingress belongs solely to lwIP.
 
+f6-22 records (`docs/validation/2026-10-22-f6-22-network-state.md`): DHCP
+start and every DHCP state change (`[net] dhcp state=… ip=… gw=… dns=…`,
+token-limited against lwIP's immediate re-DISCOVER after a NAK), a timeout
+record with driver and stack frame counters after 30 s without a lease, the
+resolver's first answer and first failure per DNS-server generation, and the
+periodic `[net] stack` line. The NIC worker posts one preallocated watch
+message (`net_stack_watch`); no lwIP timeout is allocated for them.
+
 Focused checks (run serially with `nice -n 19`):
 
 ```sh

@@ -110,6 +110,7 @@ struct blk_queue {
     uint64_t sequence;
     unsigned requests; /* prepared through waiter release; queue lifetime pin */
     uint32_t last_record, max_bytes, limit_bytes;
+    uint32_t floor_bytes; /* f1-96: adaptive split never goes below this */
     bool busy, stopped, record_dirty;
     struct task *worker;
     struct ktimer report_timer;
@@ -117,6 +118,11 @@ struct blk_queue {
     const char *name;
 };
 void blk_queue_init(struct blk_queue *, const char *name, uint32_t max_bytes);
+/* f1-96: a controller whose single command cannot meet the reader budget
+ * (a full-speed USB 64 KiB command takes about 65 ms) pins its admitted
+ * command size: max is the hard split size, floor the adaptive minimum.
+ * Both are clamped to [sector, BLKREQ_COMMAND_BYTES]; task context only. */
+void blk_queue_set_limits(struct blk_queue *, uint32_t max_bytes, uint32_t floor_bytes);
 int blk_queue_start(struct blk_queue *); /* resident controller queues only */
 int blk_queue_destroy(struct blk_queue *); /* only after all completions */
 struct blk_request *blk_request_prepare(struct blkdev *, enum blk_operation,

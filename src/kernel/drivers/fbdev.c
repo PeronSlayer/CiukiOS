@@ -16,8 +16,12 @@ extern int savage2d_attempt_failed(struct vfs *) __attribute__((weak));
 extern void savage2d_quarantine(const char *) __attribute__((weak));
 extern void savage2d_record(void) __attribute__((weak));
 extern void savage2d_snapshot(struct ciuki_accel_info *) __attribute__((weak));
+extern void savage2d_summary_safe_mode(void) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
+/* f2-92: the display grant's preemption point (grants.c), absent in
+ * fixtures that run without the scheduler. */
+extern void grants_display_yield(void) __attribute__((weak));
 
 #include <ciuki/mtrr.h>
 #include <ciuki/timing.h>
@@ -37,6 +41,10 @@ static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
 static unsigned drawing;
+/* f2-92: a display-service engine request is between its submission and
+ * its proven completion; it may have released the presenter lock between
+ * 1 ms wait slices while keeping its `drawing` claim. Mode changes wait. */
+static bool accel_inflight;
 static uint64_t full_count, full_bytes, full_total_us, full_last_us, full_max_us, full_log_tick;
 enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
 
@@ -282,7 +290,10 @@ static void accel_marker_main(void *arg)
 
 void fbdev_accel_schedule(struct vfs *vfs)
 {
-    if (g_boot.flags & CBI_F_SAFE_MODE) return;
+    if (g_boot.flags & CBI_F_SAFE_MODE) {
+        if (savage2d_summary_safe_mode) savage2d_summary_safe_mode();
+        return;
+    }
     if (accel_queued) return; /* keep the pending attempt's volume stable */
     accel_vfs = vfs;
     if (!initialized || !device.present || !savage2d_init || acceleration) return;
@@ -621,9 +632,59 @@ int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *out)
     return err;
 }
 
+/* f2-92: the display service's engine requests wait for completion in
+ * 1 ms slices. Between slices the presenter lock is released and the task
+ * may be preempted; the request keeps its `drawing` claim (no CPU writer,
+ * no console pixels) and accel_inflight (no mode change), so no other
+ * writer can reach the LFB or the BCI meanwhile. */
+static int accel_pause(void *arg)
+{
+    (void)arg;
+    kmutex_unlock(&presenter);
+    if (grants_display_yield) grants_display_yield();
+    kmutex_lock(&presenter);
+    return 0;
+}
+static void service_begin(void)
+{
+    accel_inflight = true;
+    if (acceleration && acceleration->set_pause) acceleration->set_pause(acceleration->ctx, accel_pause, 0);
+}
+static void service_end(void)
+{
+    if (acceleration && acceleration->set_pause) acceleration->set_pause(acceleration->ctx, 0, 0);
+    accel_inflight = false;
+}
+/* The first write or offscreen use proves both on the hardware (savage2d
+ * verify_write); caller holds the presenter lock and a drawing claim. */
+static void verify_writes(void)
+{
+    if (!acceleration || !acceleration->verify_write || !(acceleration->capabilities(acceleration->ctx) & 1u)) return;
+    service_begin();
+    (void)acceleration->verify_write(acceleration->ctx);
+    service_end();
+}
+/* Engine-only rows: [*first, end), 0 without an active offscreen lease. */
+static uint32_t offscreen_end(uint32_t *first)
+{
+    if (!acceleration || !acceleration->offscreen || !(acceleration->capabilities(acceleration->ctx) & 1u))
+        return 0;
+    return acceleration->offscreen(acceleration->ctx, first);
+}
+/* Visible rows, or a rectangle wholly inside the offscreen rows. */
+static int row_band(int32_t y, uint32_t height, uint32_t first, uint32_t end)
+{
+    if (y < 0 || !height || height > INT32_MAX) return -1;
+    uint64_t bottom = (uint64_t)(uint32_t)y + height;
+    if (bottom <= device.height) return 0;
+    if (end && (uint32_t)y >= first && bottom <= end) return 1;
+    return -1;
+}
+
 int fbdev_accel_request(const struct ciuki_accel_request *q)
 {
-    if (!q || q->size != sizeof(*q) || q->operation > CIUKI_ACCEL_CURSOR_SHOW) return -EINVAL;
+    if (!q || q->size != sizeof(*q) || q->operation > CIUKI_ACCEL_OFFSCREEN ||
+        q->operation == CIUKI_ACCEL_WRITE) return -EINVAL;
     if (changing) return -EBUSY;
     kmutex_lock(&presenter);
     int err = -ENODEV;
@@ -632,27 +693,61 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
     if (q->operation == CIUKI_ACCEL_QUERY) {
         err = acceleration ? (int)acceleration->capabilities(acceleration->ctx) : 0; goto done;
     }
+    if (q->operation == CIUKI_ACCEL_OFFSCREEN) {
+        struct fb_rect busy = {0,0,(int32_t)device.width,(int32_t)device.height};
+        if (!present_begin(&device,&busy)) { err = -EBUSY; goto done; }
+        verify_writes();
+        (void)present_end(&device,&busy,false);
+        uint32_t first = 0, end = offscreen_end(&first);
+        err = end > first && end < 65536u ? (int)((end << 16) | first) : 0; goto done;
+    }
     if (q->operation == CIUKI_ACCEL_COPY) {
-        struct ciuki_surface_info s = {.width=device.width,.height=device.height};
-        struct ciuki_rect c;
-        /* Avoid a dependency on process code: strict bounded screen rectangles. */
-        c = q->rect;
-        if (c.width > INT32_MAX || c.height > INT32_MAX || c.src_x < 0 || c.src_y < 0 ||
-            c.dst_x < 0 || c.dst_y < 0 || (uint64_t)(uint32_t)c.src_x+c.width > s.width ||
-            (uint64_t)(uint32_t)c.src_y+c.height > s.height || (uint64_t)(uint32_t)c.dst_x+c.width > s.width ||
-            (uint64_t)(uint32_t)c.dst_y+c.height > s.height) { err=-EINVAL; goto done; }
+        struct ciuki_rect c = q->rect;
+        if (!c.width || !c.height) {
+            /* Empty copies keep the original strict screen validation. */
+            if (c.width > INT32_MAX || c.height > INT32_MAX || c.src_x < 0 || c.src_y < 0 ||
+                c.dst_x < 0 || c.dst_y < 0 || (uint64_t)(uint32_t)c.src_x+c.width > device.width ||
+                (uint64_t)(uint32_t)c.src_y+c.height > device.height || (uint64_t)(uint32_t)c.dst_x+c.width > device.width ||
+                (uint64_t)(uint32_t)c.dst_y+c.height > device.height) { err=-EINVAL; goto done; }
+            struct fb_rect r = {c.src_x,c.src_y,(int32_t)c.width,(int32_t)c.height};
+            err = fbdev_copy_to(&device,&r,c.dst_x,c.dst_y); goto done;
+        }
+        uint32_t first = 0, end = offscreen_end(&first);
+        /* Avoid a dependency on process code: strict bounded rectangles. */
+        int sb = c.width > INT32_MAX || c.src_x < 0 || (uint64_t)(uint32_t)c.src_x + c.width > device.width ?
+            -1 : row_band(c.src_y, c.height, first, end);
+        int db = c.width > INT32_MAX || c.dst_x < 0 || (uint64_t)(uint32_t)c.dst_x + c.width > device.width ?
+            -1 : row_band(c.dst_y, c.height, first, end);
+        if (sb < 0 || db < 0) { err = -EINVAL; goto done; }
         struct fb_rect r = {c.src_x,c.src_y,(int32_t)c.width,(int32_t)c.height};
-        err = fbdev_copy_to(&device,&r,c.dst_x,c.dst_y); goto done;
+        service_begin();
+        if (!sb && !db) err = fbdev_copy_to(&device,&r,c.dst_x,c.dst_y);
+        else {
+            /* An engine-only endpoint has no CPU path: the caller
+             * reconstructs from its RAM frame after -EAGAIN. */
+            struct fb_rect busy = {0,0,(int32_t)device.width,(int32_t)device.height};
+            if (!present_begin(&device,&busy)) err = -EBUSY;
+            else {
+                err = acceleration->copy_rect(acceleration->ctx,&r,c.dst_x,c.dst_y) ? -EAGAIN : 0;
+                (void)present_end(&device,&busy,false);
+            }
+        }
+        service_end();
+        goto done;
     }
     if (q->operation == CIUKI_ACCEL_FILL || q->operation == CIUKI_ACCEL_PATTERN) {
         if (q->rect.width > INT32_MAX || q->rect.height > INT32_MAX) { err=-EINVAL; goto done; }
         struct fb_rect r = {q->rect.dst_x,q->rect.dst_y,(int32_t)q->rect.width,(int32_t)q->rect.height};
-        if (q->operation == CIUKI_ACCEL_FILL) { err=fbdev_fill_to(&device,&r,q->colour); goto done; }
+        if (q->operation == CIUKI_ACCEL_FILL) {
+            service_begin(); err=fbdev_fill_to(&device,&r,q->colour); service_end(); goto done;
+        }
         struct fb_rect c;
         if (!fbdev_rect_valid(&r)) { err=-EINVAL; goto done; }
         if (!clip(&device,&r,&c)) { err=0; goto done; }
         if (!present_begin(&device,&c)) { err=-EBUSY; goto done; }
+        service_begin();
         err=acceleration ? acceleration->pattern_rect(acceleration->ctx,&c,q->pattern,pack(&device,q->colour),pack(&device,q->background)) : -ENODEV;
+        service_end();
         if (err && (!acceleration || !acceleration->sync(acceleration->ctx))) {
             unsigned bytes=device.bpp/8;
             uint32_t fg=pack(&device,q->colour), bg=pack(&device,q->background);
@@ -678,6 +773,77 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
         err=acceleration->cursor_move(acceleration->ctx,q->rect.dst_x,q->rect.dst_y);
     else err=acceleration->cursor_show(acceleration->ctx,q->colour!=0);
     (void)present_end(&device,&busy,false);
+done:
+    kmutex_unlock(&presenter);
+    if (savage2d_record) savage2d_record();
+    return err;
+}
+
+/* f2-92 CIUKI_ACCEL_WRITE, one band: `rows` holds dst->height rows of
+ * dst->width 0xXXRRGGBB pixels, `stride` bytes apart, in kernel memory the
+ * caller filled outside every lock; it is converted in place to the native
+ * format. Only pixels inside `limit` (already clipped by the caller) are
+ * written. Returns 0 when the engine wrote the band, 1 when the CPU did
+ * (visible rows, engine absent or failed after a proven idle), -EAGAIN for
+ * offscreen rows the engine could not write. */
+int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const struct fb_rect *limit,
+                      void *rows, uint32_t stride)
+{
+    if (!dst || !limit || !rows || !fbdev_rect_valid(dst) || !fbdev_rect_valid(limit) ||
+        dst->x < 0 || dst->y < 0 || dst->width <= 0 || dst->height <= 0 ||
+        (uint64_t)(uint32_t)dst->width * 4u > stride || (stride & 3u)) return -EINVAL;
+    if (changing) return -EBUSY;
+    kmutex_lock(&presenter);
+    int err = -ENODEV;
+    if (!live()) goto done;
+    if (generation != device.generation) { err = -EAGAIN; goto done; }
+    struct fb_rect busy = {0,0,(int32_t)device.width,(int32_t)device.height};
+    if (!present_begin(&device,&busy)) { err = -EBUSY; goto done; }
+    verify_writes();
+    uint32_t first = 0, end = offscreen_end(&first);
+    int band = (uint64_t)(uint32_t)dst->x + (uint32_t)dst->width > device.width ? -1 :
+        row_band(dst->y, (uint32_t)dst->height, first, end);
+    if (band < 0) { err = -EINVAL; (void)present_end(&device,&busy,false); goto done; }
+    struct fb_rect c = *dst;
+    {
+        int64_t x1 = (int64_t)c.x + c.width, y1 = (int64_t)c.y + c.height;
+        if (limit->x > c.x) c.x = limit->x;
+        if (limit->y > c.y) c.y = limit->y;
+        if ((int64_t)limit->x + limit->width < x1) x1 = (int64_t)limit->x + limit->width;
+        if ((int64_t)limit->y + limit->height < y1) y1 = (int64_t)limit->y + limit->height;
+        if (x1 <= c.x || y1 <= c.y) { err = 0; (void)present_end(&device,&busy,false); goto done; }
+        c.width = (int32_t)(x1 - c.x); c.height = (int32_t)(y1 - c.y);
+    }
+    /* In place, left to right: a native pixel never outgrows its source. */
+    const struct pixel_layout l = pixel_layout(&device);
+    for (int32_t y = 0; y < dst->height; y++) {
+        uint8_t *row = (uint8_t *)rows + (uint32_t)y * stride;
+        for (int32_t x = 0; x < dst->width; x++) {
+            uint32_t v = pack_layout(&l, ((const fb_word *)row)[x]);
+            if (l.bytes == 4) ((fb_word *)row)[x] = v;
+            else pixel(row + (uint32_t)x * l.bytes, l.bytes, v);
+        }
+    }
+    if (acceleration && acceleration->write_rect && (acceleration->capabilities(acceleration->ctx) & 1u) &&
+        (!acceleration->verify_write || !acceleration->verify_write(acceleration->ctx))) {
+        service_begin();
+        err = acceleration->write_rect(acceleration->ctx, dst, &c, rows, stride);
+        service_end();
+        if (!err) { (void)present_end(&device,&busy,false); goto done; }
+    }
+    if (band) { err = -EAGAIN; (void)present_end(&device,&busy,false); goto done; }
+    if (acceleration && acceleration->sync(acceleration->ctx)) {
+        err = -EIO; (void)present_end(&device,&busy,false); goto done;
+    }
+    for (int32_t y = c.y; y < c.y + c.height; y++) {
+        const uint8_t *src = (const uint8_t *)rows + (uint32_t)(y - dst->y) * stride + (uint32_t)(c.x - dst->x) * l.bytes;
+        uint8_t *dp = device.mapped + (uint32_t)y * device.pitch + (uint32_t)c.x * l.bytes;
+        if (l.bytes == 4 && !(((uintptr_t)dp | (uintptr_t)src) & 3u)) row_copy(dp, src, (size_t)c.width);
+        else for (uint32_t i = 0; i < (uint32_t)c.width * l.bytes; i++) dp[i] = src[i];
+        row_written();
+    }
+    (void)present_end(&device,&busy,false);
+    err = 1;
 done:
     kmutex_unlock(&presenter);
     if (savage2d_record) savage2d_record();
@@ -732,11 +898,11 @@ static bool change_idle(int handle, gen_t generation)
 
 int fbdev_change_begin(void)
 {
-    if (!initialized || changing || accel_initializing || !live()) return -EBUSY;
+    if (!initialized || changing || accel_initializing || accel_inflight || !live()) return -EBUSY;
     if (!console_framebuffer_revoke || !console_framebuffer_changed) return -ENODEV;
     changing = true; /* stop submissions before waiting for the last presenter */
     kmutex_lock(&presenter);
-    if (accel_initializing) {
+    if (accel_initializing || accel_inflight) {
         changing = false; kmutex_unlock(&presenter); return -EBUSY;
     }
     if (acceleration && acceleration->stop(acceleration->ctx)) {

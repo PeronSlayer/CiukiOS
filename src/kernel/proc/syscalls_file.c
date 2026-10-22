@@ -11,6 +11,7 @@
 #include <ciuki/version.h>
 #pragma weak audio_write_user
 #pragma weak audio_devctl
+#pragma weak audio_refill_reader
 #pragma weak net_devctl
 bool net_socket_object(struct proc_object *) __attribute__((weak));
 int32_t net_socket_rw(struct process *, int, uint32_t, uint32_t, bool) __attribute__((weak));
@@ -41,10 +42,14 @@ struct file_operation {
     void *buffer;
     size_t buffer_bytes; /* nonzero for a page-backed contiguous I/O buffer */
     bool pinned, reading;
+    struct vfs_request request;
+    struct fs_request_scope scope;
+    bool scoped;
 };
 static void operation_free(void *arg)
 {
     struct file_operation *op = arg;
+    if (op->scoped) fs_request_leave(&op->scope);
     if (op->pinned) ua_unpin(op->process->memory, &op->pin);
     if (op->description) op->description->object.release(&op->description->object);
     px_release(op->cwd);
@@ -88,6 +93,28 @@ static bool caught(void)
     struct proc_thread *t = proc_thread_for(g_current);
     return t && (t->process->state == PROC_STOPPING || proc_signal_caught(t));
 }
+static uint64_t file_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000u; }
+static bool file_cancelled(void *arg) { (void)arg; return caught(); }
+static void file_pause(void *arg) { (void)arg; task_sleep_ms(1); }
+static const char *file_tag(uint32_t nr) {
+    switch (nr) {
+    case CIUKI_SYS_READ: case CIUKI_SYS_PREAD: return "read";
+    case CIUKI_SYS_WRITE: case CIUKI_SYS_PWRITE: return "write";
+    case CIUKI_SYS_GETDENTS: return "readdir";
+    case CIUKI_SYS_FSYNC: return "commit";
+    case CIUKI_SYS_FTRUNCATE: return "truncate";
+    case CIUKI_SYS_FSTAT: case CIUKI_SYS_STAT: return "stat";
+    case CIUKI_SYS_MKDIR: return "mkdir";
+    case CIUKI_SYS_RMDIR: return "rmdir";
+    case CIUKI_SYS_UNLINK: return "unlink";
+    case CIUKI_SYS_RENAME: return "rename";
+    case CIUKI_SYS_CHDIR: return "chdir";
+    case CIUKI_SYS_GETCWD: return "getcwd";
+    case CIUKI_SYS_LSEEK64: return "seek";
+    case CIUKI_SYS_OPEN: return "open";
+    default: return "metadata";
+    }
+}
 static int64_t scalar64(uint32_t lo, uint32_t hi)
 {
     uint64_t bits = lo | (uint64_t)hi << 32;
@@ -99,8 +126,13 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     bool write = tf->eax == CIUKI_SYS_WRITE || tf->eax == CIUKI_SYS_PWRITE;
     bool positioned = tf->eax == CIUKI_SYS_PREAD || tf->eax == CIUKI_SYS_PWRITE;
     struct file_description *d = op->description;
-    vfs_lock(d->node->space->vfs,(d->node->volume || d->node->ro) ? vfs_drive_mask(d->node->drive) : 0);
-    int media_error=px_ro_check_locked(d->node);
+    vfs_lock(d->node->space->vfs,d->node->ro ? vfs_drive_mask(d->node->drive) : 0);
+    vfs_tag_locked(d->node->space->vfs,write ? "write" : "read");
+    vfs_site_locked(d->node->space->vfs,"native");
+    int media_error=d->node->volume && !write ?
+        (d->node->drive<26 && d->node->volume->mounted && !d->node->volume->dev->quarantined &&
+         d->node->space->vfs->volumes[d->node->drive]==d->node->volume &&
+         d->node->space->vfs->generation[d->node->drive]==d->node->generation ? 0 : -EIO) : px_ro_check_locked(d->node);
     if (!media_error && write && d->node->ro) media_error=-EROFS;
     vfs_unlock(d->node->space->vfs);
     if (media_error) return media_error;
@@ -131,7 +163,8 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     if (!op->buffer) return -ENOMEM;
     if (write && (err = copy_from_user(op->buffer, tf->ecx, bytes))) return err;
     struct vfs *v = d->node->space->vfs;
-    vfs_lock(v,(d->node->volume || d->node->ro) ? vfs_drive_mask(d->node->drive) : 0);
+    vfs_lock(v,(write || d->node->ro) && (d->node->volume || d->node->ro) ? vfs_drive_mask(d->node->drive) : 0);
+    vfs_tag_locked(v,write ? "write" : "read"); vfs_site_locked(v,"native");
     if (caught()) err = -EINTR;
     uint64_t position = positioned ? (uint64_t)offset : write && (d->flags & O_APPEND) ? d->node->entry.size : d->position;
     /* Check the ENTIRE request before a permitted short transfer. */
@@ -141,12 +174,14 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     uint64_t saved_position = d->position;
     op->reading = !write;
     if (!err) err = file_io_locked(d, op->buffer, bytes, write, positioned, (uint64_t)offset, &done);
+    if (!write && d->node->kind==PX_FILE && !d->node->ro)
+        saved_position=positioned ? d->position : d->position-done;
     op->reading = false;
     if (!write && caught()) {
         /* F1 reads are synchronous. Keep pins until completion; no byte has
          * reached the caller yet, so discard a successfully drained result. */
         d->position = saved_position;
-        err = err && err != -EINTR ? -EIO : -EINTR;
+        err = err && err != -EINTR && err != -VFS_ECANCELLED ? -EIO : -EINTR;
         done = 0;
     }
     if (!write && done) {
@@ -181,6 +216,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     if (!err) switch (tf->eax) {
     case CIUKI_SYS_LSEEK64: {
         int64_t position;
+        vfs_tag_locked(d->node->space->vfs,"seek"); vfs_site_locked(d->node->space->vfs,"native"); /* f1-93b */
         err = file_seek_locked(d, scalar64(tf->ecx, tf->edx), tf->esi, &position);
         if (!err) err = copy_to_user(tf->edi, &position, sizeof(position));
         break;
@@ -316,6 +352,11 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     if (!op) return -ENOMEM;
     op->process = p; op->cwd = p->cwd; px_retain(op->cwd);
     op->description = d; if (d) d->object.retain(&d->object);
+    op->request=(struct vfs_request){.deadline=UINT64_MAX,.now=file_now,
+        .cancelled=(nr==CIUKI_SYS_READ || nr==CIUKI_SYS_PREAD) ? file_cancelled : 0,
+        .pause=file_pause,.operation=file_tag(nr),.site="native",
+        .urgent_reader=(nr==CIUKI_SYS_READ || nr==CIUKI_SYS_PREAD) && audio_refill_reader && audio_refill_reader(p,tf->edx)};
+    fs_request_enter(&op->scope,&op->request); op->scoped=true;
     struct proc_thread *thread = proc_thread_for(g_current);
     if (thread) { thread->cleanup = operation_free; thread->operation = op; }
     int err;

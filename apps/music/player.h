@@ -8,6 +8,22 @@
 #define MUSIC_BATCH 4096
 #define MUSIC_DEVICE_FRAMES 2048
 #define MUSIC_COMMANDS 8
+/* f1-101: playback starts after 1 s of decoded PCM (was 2 s), and the
+ * player defends a 500 ms reservoir. The reader still fills the ring when
+ * the CPU allows (f4-34: 1.5 s storage stalls stay covered). Below the
+ * target the pump keeps the device stream one period under the kernel's
+ * producer mark (ring - 2 periods, abi.h AUDIO_GET_PRODUCER), so the mixer
+ * reports the stream behind and the kernel raises the decoder and the pump
+ * within its producer budget; at or above the target it fills the stream. */
+#define MUSIC_PREFILL_MS 1000u
+#define MUSIC_TARGET_MS 500u
+#define MUSIC_DEVICE_BEHIND (MUSIC_DEVICE_FRAMES-3u*256u)
+static inline unsigned music_frames_ms(unsigned rate, unsigned ms)
+{ return (unsigned)((uint64_t)rate*ms/1000u); }
+static inline unsigned music_device_fill(unsigned reservoir, unsigned target, int eof)
+{ return eof || reservoir>=target ? MUSIC_DEVICE_FRAMES : MUSIC_DEVICE_BEHIND; }
+/* f1-101: the kernel's producer boost state of the stream (AUDIO_GET_PRODUCER). */
+struct music_producer { unsigned flags, boosts, over_budget; uint64_t boost_us; };
 /* A backend owns one nonblocking native stream; counters reset at open. */
 struct music_output {
     int (*open)(void *, unsigned *rate);
@@ -16,6 +32,8 @@ struct music_output {
     void (*close)(void *);
     uint64_t (*now)(void *); /* Monotonic; called by reader and pump concurrently. */
     void *ctx;
+    void (*refill)(void *); /* reader-thread demand, optional for host sinks */
+    int (*producer)(void *, struct music_producer *); /* f1-101, optional */
 };
 enum music_state { MUSIC_STOPPED, MUSIC_LOADING, MUSIC_PLAYING, MUSIC_PAUSED, MUSIC_ERROR, MUSIC_CLOSING };
 enum music_action { MUSIC_OPEN, MUSIC_ADD, MUSIC_SAVE, MUSIC_PLAY, MUSIC_PAUSE, MUSIC_STOP, MUSIC_PREV, MUSIC_NEXT, MUSIC_SEEK, MUSIC_SELECT, MUSIC_CLEAR };
@@ -43,8 +61,14 @@ struct music_player {
         uint64_t start, sum, samples, frames, decode_ns, writes, bytes;
         unsigned low, high, queued_low, queued_high, starvations;
         unsigned publishes, repaints;
+        /* f4-37: the decoder's stage cycles (reader), the window's TSC start
+         * and the UI kilocycles at its start (docs/design/music-player.md). */
+        struct music_cost cost; uint64_t tsc; unsigned ui_kcycles;
     } level;
     atomic_uint ui_publishes, ui_repaints;
+    atomic_uint ui_kcycles; /* f4-37: UI thread time, cycles/1024, wrapping */
+    uint64_t pump_cycles;   /* f4-37: worker thread time in pump and publish */
+    struct music_producer producer_base; /* f1-101: counters at the last level record */
     uint64_t load_started; int first_pcm;
     const char *stage;
     void (*changed)(void *, const struct music_snapshot *);
@@ -60,6 +84,8 @@ struct music_runtime *music_runtime_start(const struct music_output *);
 int music_runtime_send(struct music_runtime *, const struct music_command *);
 void music_runtime_snapshot(struct music_runtime *, struct music_snapshot *);
 void music_runtime_repaint(struct music_runtime *);
+/* f4-37: UI thread cycles (turns, rendering, presenting) for the cost record. */
+void music_runtime_ui_cycles(struct music_runtime *, uint64_t cycles);
 void music_runtime_close(struct music_runtime *);
 int music_runtime_done(struct music_runtime *);
 void music_runtime_destroy(struct music_runtime *);

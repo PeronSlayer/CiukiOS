@@ -89,7 +89,7 @@ class Kernel32Files(unittest.TestCase):
             'src/kernel/fs/fs_ro.c','src/kernel/fs/iso9660.c','tests/host/fs/fake.c','src/kernel/probes/f2_probes_files.c']
         program=out/'files'
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread',
+            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Wl,--wrap=cache_reserve','-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread',
             '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'src/kernel/fs'),*[str(ROOT/s) for s in sources],'-o',str(program)],check=True,env=env)
         result=subprocess.run([program,ROOT/'build/host/fs/fat32.img',ROOT/'build/host/fs/fat16.img'],env=env,capture_output=True,text=True,timeout=60)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
@@ -137,6 +137,14 @@ class Kernel32Files(unittest.TestCase):
         out=self._host('ntdll-upper',['tests/host/win32/ntdll_upper_test.c',
             *[nt+n+'.c' for n in ('native','registry','strings','path','divide')]],'PASS ntdll upper checks=',extra=('-pthread',))
         self.assertIn('PASS ntdll upper NT registry paths access rights dispositions close routing',out)
+
+    def test_f5_15c_ntdll_vsnprintf_wine_semantics(self):
+        """f5-15C lead decision: ntdll!_vsnprintf/_vsnwprintf implemented with
+        Wine 10.0 dlls/ntdll/printf.h semantics instead of a W21 stub."""
+        nt='sdk/win32/ntdll/'
+        out=self._host('ntdll-printf',['tests/host/win32/ntdll_printf_test.c',nt+'printf.c',nt+'strings.c'],
+                       'PASS ntdll printf checks=')
+        self.assertIn('PASS ntdll printf Wine overflow exact-fit counting flags sizes strings pointers',out)
 
     def test_f5_20a_ntdll_compiler_helpers_i386(self):
         """_alldiv/_allrem/_aulldiv/_chkstk exactly as exported, in a static

@@ -207,7 +207,14 @@ static void *worker(void *arg)
         if (!sound_active(&w->player) && w->fd >= 0) {
             struct ciuki_audio_status s = {.version=1,.size=sizeof(s)};
             if (ciuki_devctl(w->fd,AUDIO_GET_STATUS,&s,sizeof(s)) || s.last_error) stop(w);
-            else if (s.consumed_frames >= s.accepted_frames) {
+            /* f2-95: without AUDIO_DRAIN the kernel mixer keeps a resampled
+             * stream's last frame queued (it waits for an interpolation
+             * partner, src/kernel/audio/mixer.c), so consumed stays at
+             * accepted-1 for 22050 Hz clips: on the T23 (a4d9454e) the
+             * worker then polled every 2 ms for ever (desktop#31, ~7 % of the
+             * CPU) and kept the audio transport running. One frame left is
+             * the end of the clip; the drain allowance still follows. */
+            else if (s.consumed_frames >= s.accepted_frames || s.queued_frames <= 1) {
                 if (!w->drain_until) w->drain_until = now_ns() + (uint64_t)w->drain_ms*1000000ull +
                     (uint64_t)s.transport_frames*1000000000ull/s.output_rate;
                 if (now_ns() >= w->drain_until) stop(w);

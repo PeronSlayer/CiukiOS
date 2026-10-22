@@ -7,6 +7,10 @@
 #include <ciuki/signal.h>
 #include <ciuki/audio.h>
 #pragma weak audio_device_close
+#pragma weak px_fat_transaction_locked
+#pragma weak vfs_file_wait_locked
+#pragma weak vfs_turn_take_locked
+#pragma weak vfs_turn_drop_locked
 uint32_t net_socket_count(void) __attribute__((weak));
 uint32_t *net_socket_flags(struct proc_object *) __attribute__((weak));
 void net_fd_changed(struct process *, unsigned) __attribute__((weak));
@@ -101,7 +105,10 @@ int file_description_close(struct file_description *d)
     if (d->node) {
         struct px_namespace *s = d->node->space;
         vfs_lock(s->vfs,0);
-        if (d->node->volume || d->node->ro) vfs_reserve_locked(s->vfs,vfs_drive_mask(d->node->drive));
+        /* f1-93b: the final close's hold was untagged (op=metadata site=vfs,
+         * desktop#29 1214 ms on the T23 b453bc92 trial). */
+        vfs_tag_locked(s->vfs,"close"); vfs_site_locked(s->vfs,"native");
+        if (d->node->volume || d->node->ro) vfs_reserve_file_locked(s->vfs,vfs_drive_mask(d->node->drive),d->identity);
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;
         if (*at) *at = d->next;
@@ -223,14 +230,76 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
     return 0;
 }
 extern int w32_file_sync(struct px_node *) __attribute__((weak));
+extern bool w32_file_needs_sync(struct px_node *) __attribute__((weak));
 extern void w32_file_changed(struct px_node *,uint64_t,const void *,uint32_t) __attribute__((weak));
+struct read_range_check { struct file_description *description; int error; };
+static int native_write_turn(struct file_description *,uint64_t *,bool,const void *,size_t,size_t *,bool);
+static int native_write_transaction(struct file_description *d,uint64_t *position,bool positioned,
+                                     const void *data,size_t bytes,size_t *done,bool section) {
+    struct px_node *n=d->node; struct vfs *v=n->space->vfs;
+    if (!px_fat_transaction_locked || !vfs_file_wait_locked || !vfs_turn_take_locked)
+        return VFS_IO(v,fat_write_cursor(n->volume,&n->entry,&d->fat_cursor,*position,data,bytes,done));
+    /* f1-89: the writer turn spans every chunk of this write. Busy flags
+     * are waited for WITHOUT the turn (their owner may be a data
+     * transaction that suspended its turn around device I/O). */
+    for (;;) {
+        int e=vfs_file_wait_locked(v,&n->writing);
+        if (!e) e=vfs_file_wait_locked(v,&d->lock_description.io_active);
+        if (!e && d->identity) e=vfs_file_wait_locked(v,&d->identity->writer);
+        if (e) return e;
+        uint32_t turn; e=vfs_turn_take_locked(v,vfs_drive_mask(n->drive),&turn);
+        if (e) return e;
+        if (n->writing || d->lock_description.io_active || (d->identity && d->identity->writer)) {
+            vfs_turn_drop_locked(v,turn); continue;
+        }
+        e=native_write_turn(d,position,positioned,data,bytes,done,section);
+        vfs_turn_drop_locked(v,turn);
+        return e;
+    }
+}
+static int native_write_turn(struct file_description *d,uint64_t *position,bool positioned,
+                             const void *data,size_t bytes,size_t *done,bool section) {
+    struct px_node *n=d->node; struct vfs *v=n->space->vfs; int e=0;
+    if (!vfs_identity_live(v,d->identity) || n->generation!=v->generation[n->drive]) return -FS_EIO;
+    if (!positioned) *position=(d->flags&O_APPEND) ? n->entry.size : d->position;
+    if (*position>UINT32_MAX || bytes>UINT32_MAX-*position) return -FS_EFBIG;
+    if (!section && (e=px_description_range_locked(d,*position,bytes,true))) return e;
+    n->writing=true; d->lock_description.io_active=true;
+    /* A write slice is one in-flight claim set (256 clusters); a gap
+     * before the position is extended in 128 KiB steps first. */
+    size_t limit=(size_t)n->volume->spc*512*FAT_TRANSACTION_CLUSTERS, extend=limit<131072 ? limit : 131072;
+    while (*position>=(uint64_t)n->entry.size+limit && !e) {
+        uint64_t end=(uint64_t)n->entry.size+extend; if (end>*position) end=*position;
+        e=px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_EXTEND,.entry=&n->entry,.capacity=(uint32_t)end});
+    }
+    while (*done<bytes && !e) {
+        size_t step=limit, written=0;
+        if (*position+*done>n->entry.size) step-=*position+*done-n->entry.size;
+        if (step>bytes-*done) step=bytes-*done;
+        e=px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_WRITE,
+            .entry=&n->entry,.cursor=&d->fat_cursor,.position=*position+*done,.data=(const uint8_t *)data+*done,.size=step,.done=&written});
+        *done+=written;
+    }
+    d->lock_description.io_active=false; n->writing=false; fs_event_wake(&v->volume_changed);
+    return e;
+}
+static int read_range(void *arg,uint64_t position,size_t bytes)
+{
+    struct read_range_check *check=arg;
+    return check->error=px_description_range_locked(check->description,position,bytes,false);
+}
 static int description_io_locked(struct file_description *d, void *buffer, size_t bytes, bool write,
                     bool positioned, uint64_t offset, size_t *done, bool section)
 {
-    vfs_tag_locked(d->node->space->vfs,write ? "write" : "other");
+    vfs_tag_locked(d->node->space->vfs,write ? "write" : "read");
+    vfs_site_locked(d->node->space->vfs,"native");
     *done = 0;
     if (bytes > CIUKI_IO_MAX) return -EINVAL;
-    int live=px_ro_check_locked(d->node); if (live) return live;
+    int live=!write && d->node->volume ?
+        (d->node->drive<26 && d->node->volume->mounted && !d->node->volume->dev->quarantined &&
+         d->node->space->vfs->volumes[d->node->drive]==d->node->volume &&
+         d->node->space->vfs->generation[d->node->drive]==d->node->generation ? 0 : -EIO) : px_ro_check_locked(d->node);
+    if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (write && win32_protected_file(d)) return -EACCES;
     if (write && d->node->ro) return -EROFS;
@@ -251,12 +320,26 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
     /* DOS record locks are mandatory for native clients as well. Namespace
      * and this volume's reservation already protect the common node list. */
-    int locked=section ? 0 : px_description_range_locked(d,position,bytes,write); if (locked) return locked;
-    if(w32_file_sync){int sync=w32_file_sync(n);if(sync)return sync;}
+    bool private_read=!write && !n->ro && !n->space->vfs->active;
+    int locked=section || private_read ? 0 : px_description_range_locked(d,position,bytes,write); if (locked) return locked;
+    if (w32_file_sync) {
+        struct vfs *v=n->space->vfs;
+        bool reserve=!v->active && w32_file_needs_sync && w32_file_needs_sync(n);
+        if (reserve) vfs_reserve_file_locked(v,vfs_drive_mask(n->drive),d->identity);
+        int sync=w32_file_sync(n);
+        if (reserve) { vfs_unlock(v); vfs_lock(v,0); }
+        if (sync) return sync;
+    }
     struct fat_entry before = n->entry;
+    struct read_range_check read_check={d,0};
     int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) :
-        write ? VFS_IO(d->node->space->vfs,fat_write_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done)) :
-                VFS_IO(d->node->space->vfs,fat_read_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done));
+        write ? native_write_transaction(d,&position,positioned,buffer,bytes,done,section) :
+                vfs_read_identity_locked(n->space->vfs,d->identity,n->volume,&n->entry,
+                    &d->fat_cursor,&d->lock_description.io_active,&position,&d->position,positioned,
+                    section ? 0 : read_range,&read_check,buffer,bytes,done);
+    /* A mandatory-lock denial is already in the caller's ABI. Preserve it
+     * just as the reserved precheck does, before FAT's attribute mapping. */
+    if (read_check.error) return read_check.error;
     if(write && *done && w32_file_changed)w32_file_changed(n,position,buffer,(uint32_t)*done);
     if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
     /* fat_write reports the committed count even if the later FSInfo hint
@@ -285,6 +368,7 @@ int file_section_io_locked(struct file_description *d,void *buffer,size_t bytes,
 int file_truncate_locked(struct file_description *d, uint64_t length)
 {
     vfs_tag_locked(d->node->space->vfs,"truncate");
+    vfs_site_locked(d->node->space->vfs,"native");
     if (win32_protected_file(d)) return -EACCES;
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
@@ -297,18 +381,22 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     uint64_t start=length<before.size ? length : before.size;
     int locked=px_description_range_locked(d,start,length<before.size ? before.size-length : length-before.size,true);
     if (locked) return locked;
-    int err = VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
+    int err = px_fat_transaction_locked ? px_fat_transaction_locked(d->node,d->node->parent,0,
+        (struct fat_transaction_args){.op=FAT_TX_TRUNCATE,.entry=&d->node->entry,.position=length}) :
+        VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
     if (memcmp(&before, &d->node->entry, sizeof(before))) px_changed_locked(d->node);
     return err == -FS_EACCES ? -EROFS : px_error(err);
 }
 int file_sync_locked(struct file_description *d)
 {
     vfs_tag_locked(d->node->space->vfs,"commit");
+    vfs_site_locked(d->node->space->vfs,"native");
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return px_ro_check_locked(d->node);
     if (!d->node->volume) return -EINVAL;
-    return px_error(VFS_IO(d->node->space->vfs,fat_commit(d->node->volume)));
+    return px_error(px_fat_transaction_locked ? px_fat_transaction_locked(d->node,d->node->parent,0,
+        (struct fat_transaction_args){.op=FAT_TX_COMMIT,.entry=&d->node->entry}) : VFS_IO(d->node->space->vfs,fat_commit(d->node->volume)));
 }
 int files_stdio(struct process *p)
 {
@@ -370,6 +458,85 @@ static int image_read(void *cookie, uint32_t offset, void *buffer, uint32_t byte
     }
     return 0;
 }
+/* Append one read run to the image pages. */
+static int image_append(struct file_image *image, const uint8_t *buffer, uint32_t bytes)
+{
+    for (uint32_t off=0; off<bytes; off+=PAGE_SIZE) {
+        unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
+        if (!image->lists[list_index]) {
+            image->lists[list_index] = pmm_alloc();
+            if (!image->lists[list_index]) return -ENOMEM;
+            memset(P2V(image->lists[list_index]), 0, PAGE_SIZE);
+        }
+        uint32_t page = pmm_alloc();
+        if (!page) return -ENOMEM;
+        ((uint32_t *)P2V(image->lists[list_index]))[image->pages % (PAGE_SIZE / sizeof(uint32_t))] = page;
+        image->pages++;
+        uint32_t take=bytes-off;
+        if (take>PAGE_SIZE) take=PAGE_SIZE;
+        memcpy(P2V(page),buffer+off,take);
+    }
+    return 0;
+}
+static void image_reset(struct file_image *image)
+{
+    for (unsigned i = 0; i < image->pages; i++) pmm_free(V2P(image_page(image, i)));
+    image->pages = 0;
+}
+struct image_range { struct px_node *node; };
+static int image_range_check(void *arg, uint64_t position, size_t bytes)
+{
+    struct image_range *r = arg;
+    return px_range_locked(r->node, position, bytes) ? -EACCES : 0;
+}
+/* f1-93: FAT executable bytes come through the open-file reader path, one
+ * 64 KiB run per admission, with no volume reservation across a device read
+ * (the T23 1.0.0 alpha launch held drive C for 2294 ms reading a binary
+ * under the reservation, tagged op=lookup). The snapshot stays consistent:
+ * the entry and the f3-51c write generation are compared after the last
+ * run, and the whole image is read again (at most twice) if the file
+ * changed meanwhile. Mandatory record locks are checked for every run.
+ * Namespace and the drive's reservation held on entry and return. */
+static int image_fat(struct px_namespace *s, struct px_node *n, struct file_image *image, void *buffer)
+{
+    struct vfs *v = s->vfs;
+    struct vfs_file_identity *id = 0;
+    int err = px_error(vfs_identity_get(v, n->volume, &n->entry, &id));
+    if (err) return err;
+    px_retain(n);
+    uint32_t mask = v->active;
+    vfs_unlock(v); vfs_lock(v, 0);
+    vfs_tag_locked(v, "read"); vfs_site_locked(v, "native");
+    struct image_range range = { n };
+    for (unsigned attempt = 0;; attempt++) {
+        if (!n->linked) { err = -ENOENT; break; }
+        struct fat_entry entry = n->entry;
+        if (entry.size > CIUKI_ELF_BYTES_MAX) { err = -ENOEXEC; break; }
+        image_reset(image); image->bytes = entry.size;
+        uint64_t generation = vfs_change_generation(v, n->volume, entry.parent, entry.index);
+        struct fat_cursor cursor = {0}; bool busy = false;
+        for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
+            uint32_t bytes = image->bytes - offset;
+            if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
+            uint64_t position = offset; size_t done = 0;
+            err = px_error(vfs_read_identity_locked(v, id, n->volume, &n->entry, &cursor, &busy, &position, &position,
+                true, image_range_check, &range, buffer, bytes, &done));
+            proc_launch_volume_read(bytes, done);
+            if (!err && done != bytes) err = -EIO;
+            if (!err) err = image_append(image, buffer, bytes);
+        }
+        if (err) break;
+        /* Changed while it was read: read it again from the new entry. */
+        if (n->linked && n->entry.first == entry.first && n->entry.size == entry.size &&
+            n->entry.chain_generation == entry.chain_generation && vfs_identity_live(v, id) &&
+            vfs_change_generation(v, n->volume, entry.parent, entry.index) == generation) break;
+        if (attempt == 2) { err = -EAGAIN; break; }
+    }
+    vfs_identity_put(v, id);
+    vfs_reserve_locked(v, mask);
+    int drop = px_drop_locked(n);
+    return err ? err : drop;
+}
 static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
 {
     struct px_node *cwd = cwd_arg;
@@ -380,37 +547,27 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     vfs_lock(s->vfs,0);
     struct px_path r;
     int err = px_resolve_locked(s, cwd, path, false, &r);
+    vfs_tag_locked(s->vfs,"open"); vfs_site_locked(s->vfs,"native");
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
     if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
     if (!err) err = px_range_locked(r.node,0,r.node->ro ? r.node->ro_size : r.node->entry.size);
     if (!err) image->bytes = (uint32_t)(r.node->ro ? r.node->ro_size : r.node->entry.size);
-    uint32_t buffer_bytes=image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
+    /* A FAT image can be read again with a different size: one full run. */
+    uint32_t buffer_bytes=err ? 0 : !r.node->ro ? BLKDEV_READ_BYTES :
+        image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
     void *buffer=!err && buffer_bytes ? fs_contig_alloc(buffer_bytes) : 0;
     if (!err && buffer_bytes && !buffer) err=-ENOMEM;
-    struct fat_cursor cursor = {0}; /* f3-51c: sequential image read, linear in the chain */
-    for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
-        uint32_t bytes = image->bytes - offset;
-        if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
-        size_t done = 0;
-        err = px_error(r.node->ro ? VFS_IO(s->vfs,fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done)) :
-                       VFS_IO(s->vfs,fat_read_cursor(r.node->volume, &r.node->entry, &cursor, offset, buffer, bytes, &done)));
-        proc_launch_volume_read(bytes, done);
-        if (!err && done != bytes) err = -EIO;
-        for (uint32_t off=0; !err && off<bytes; off+=PAGE_SIZE) {
-            unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
-            if (!image->lists[list_index]) {
-                image->lists[list_index] = pmm_alloc();
-                if (!image->lists[list_index]) { err = -ENOMEM; break; }
-                memset(P2V(image->lists[list_index]), 0, PAGE_SIZE);
-            }
-            uint32_t page = pmm_alloc();
-            if (!page) { err = -ENOMEM; break; }
-            ((uint32_t *)P2V(image->lists[list_index]))[image->pages % (PAGE_SIZE / sizeof(uint32_t))] = page;
-            image->pages++;
-            uint32_t take=bytes-off;
-            if (take>PAGE_SIZE) take=PAGE_SIZE;
-            memcpy(P2V(page),(uint8_t *)buffer+off,take);
+    if (!err && !r.node->ro && r.node->volume) err = image_fat(s, r.node, image, buffer);
+    else if (!err) {
+        for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
+            uint32_t bytes = image->bytes - offset;
+            if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
+            size_t done = 0;
+            err = px_error(VFS_IO(s->vfs,fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done)));
+            proc_launch_volume_read(bytes, done);
+            if (!err && done != bytes) err = -EIO;
+            if (!err) err = image_append(image, buffer, bytes);
         }
     }
     fs_contig_free(buffer,buffer_bytes);

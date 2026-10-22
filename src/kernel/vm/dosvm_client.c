@@ -21,19 +21,39 @@ struct binding {
     struct surface *surface;
     bool busy, focused;
     bool observed, video_pending;
+    unsigned vm_base, window_base;
     uint32_t changes, display, starts, vbe_changes, console, state, flags, reason, phase;
     uint16_t mode;
 };
 static struct binding bindings[DOSVM_LIMIT];
+static void binding_priority(const struct binding *b,struct dosvm *v) {
+    if (!b->window_base || !v->task) return;
+    unsigned base=v->fullscreen ? b->vm_base : b->window_base;
+    if (v->task->base_priority!=base) task_set_base(v->task,P_NORMAL,base);
+}
+/* Called at the actual display transition, including hotkey/watchdog paths,
+ * before the parked worker is released. */
+void dosvm_client_priority(struct dosvm *v) {
+    struct dosvm_key key=dosvm_key(v);
+    if (!key.id || key.id>DOSVM_LIMIT) return;
+    const struct binding *b=&bindings[key.id-1];
+    if (b->pid && b->key.generation==key.generation) binding_priority(b,v);
+}
 static uint32_t creating[DOSVM_LIMIT]; /* owners inside a sleeping create */
 static const char *window_probe(void)
 {
     /* The selected controller owns admission records too, before it can
-     * discover the newly created window VM. No native input chooses this. */
-    static const char prefix[]="f3:vm-fullscreen ";
-    return rec_active() && (g_boot.flags&CBI_F_TEST_REQUEST) &&
-        g_boot.test_request_len>=sizeof(prefix)-1 &&
-        !memcmp(g_boot.test_request,prefix,sizeof(prefix)-1) ? "vm-fullscreen" : "vm-window";
+     * discover the newly created window VM. No native input chooses this.
+     * A run carries one probe name only (scripts/test/evidence.py): f3-61's
+     * vm-game drives the same window path as vm-fullscreen. */
+    static const struct { char prefix[24]; const char *probe; } owners[]={
+        {"f3:vm-fullscreen ","vm-fullscreen"},{"f3:vm-game ","vm-game"}};
+    if (rec_active() && (g_boot.flags&CBI_F_TEST_REQUEST))
+        for (unsigned i=0;i<ARRAY_SIZE(owners);i++) {
+            size_t n=strlen(owners[i].prefix);
+            if (g_boot.test_request_len>=n && !memcmp(g_boot.test_request,owners[i].prefix,n)) return owners[i].probe;
+        }
+    return "vm-window";
 }
 static bool owns_vm(uint32_t pid)
 {
@@ -52,22 +72,30 @@ static void window_focus(struct binding *b, bool focused)
 {
     b->focused = focused;
     dosvm_input_focus(b->key, focused);
+    struct dosvm *v=dosvm_lookup(b->key);
+    if (v && v->task && !focused) task_input_withdraw(v->task);
 }
 static int window_input(struct binding *b, const struct ciuki_input_event *e)
 {
     /* The record was validated; a refusal is a full guest queue (or a VM that
      * lost the single input focus to another window: the desktop's focus
      * message to this window follows). */
-    return dosvm_input_event(b->key, e) ? 0 : -EAGAIN;
+    if (!dosvm_input_event(b->key,e)) return -EAGAIN;
+    struct dosvm *v=dosvm_lookup(b->key);
+    if (v && v->task && !v->fullscreen) task_input_forward(g_current,v->task);
+    return 0;
 }
 
 /* ---- Owner lifecycle ---- */
 static int release_binding(struct binding *b)
 {
     struct dosvm *v = dosvm_lookup(b->key);
+    if (v && v->task) task_input_withdraw(v->task);
     /* A VM that already stopped (EXIT, fault) is not forced: forced
-     * termination is what reports possible private-data loss. */
-    bool forced = v && v->info.state < DOSVM_STOPPING;
+     * termination is what reports possible private-data loss. f3-61: nor is
+     * a VM whose shell is idle at its prompt (dosvm_shell_idle), e.g. after
+     * a game returned to DOS; it ends as an ordinary EXIT. */
+    bool forced = v && v->info.state < DOSVM_STOPPING && !dosvm_shell_idle(v);
     int e = dosvm_destroy(b->key, forced);
     v = dosvm_lookup(b->key);
     if (!v || v->info.state == DOSVM_DEAD) {
@@ -170,7 +198,8 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
     /* This is a producer dependency, not a physical device wait. Existing
      * sync machinery propagates boosts and withdraws them on every wake. */
     kwait_set_owner(&v->present_wait, v->task);
-    kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(c->wait.timeout_ms));
+    unsigned timeout=c->wait.timeout_ms>33 ? 33 : c->wait.timeout_ms;
+    kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(timeout));
     kwait_set_owner(&v->present_wait, 0);
     if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
@@ -336,6 +365,13 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         memcpy(v->name, c.name, sizeof(v->name));
         if (p->state != PROC_LIVE) e = -EINTR;
         else if (!(e = dosvm_network_launch(v,dosvm_launch_network(&c)))) e = dosvm_boot(v);
+        /* Focus belongs to the native endpoint. Its +2 promotion is never
+         * copied into the VM's permanent base; WAIT carries transient boosts. */
+        if (!e && v->task && g_current) {
+            b->vm_base=v->task->base_priority;
+            b->window_base=b->vm_base;
+            binding_priority(b,v);
+        }
         if (e) {
             release_binding(b);
             if (!b->pid) b = 0; /* released; otherwise collected below/later */
@@ -352,6 +388,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         b->busy = true;
         v = dosvm_lookup(key);
         if (!v) { e = -ESRCH; goto out; }
+        binding_priority(b,v);
         if (op == CIUKI_DOSVM_CLOSE) {
             e = closed_error(release_binding(b));
             if (!b->pid) b = 0; /* binding released */

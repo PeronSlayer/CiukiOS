@@ -205,7 +205,17 @@ void W32API RtlRaiseException(struct w32_exception *);
 void W32API RaiseException(ULONG, ULONG, ULONG, const ULONG *);
 W32_NORETURN void W32API RtlRaiseStatus(NTSTATUS);
 void W32API RtlUnwind(void *, void *, struct w32_exception *, void *);
+void W32API RtlFillMemory(void *, uint32_t, uint8_t);
+void W32API RtlMoveMemory(void *, const void *, uint32_t);
+void W32API RtlZeroMemory(void *, uint32_t);
 struct w32_teb *W32API w32_current_teb(void);
 void W32API KiUserExceptionDispatcher(struct w32_exception *, struct w32_context *);
 void w32_stub_hit(volatile ULONG *, const char *, const char *);
+/* f5-15C: CRT formatters NT NTDLL exports (cdecl; printf.c), and the ANSI
+ * code page conversion of one unit they share with strings.c. */
+#include <stdarg.h>
+int _vsnprintf(char *, ULONG, const char *, va_list);
+int _vsnwprintf(WCHAR *, ULONG, const WCHAR *, va_list);
+WCHAR w32_ansi_decode(uint8_t);
+uint8_t w32_ansi_encode(WCHAR);
 #endif

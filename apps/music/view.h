@@ -21,6 +21,13 @@ struct music_app {
 enum { M_OPEN=1, M_ADD, M_FOLDER, M_SAVE, M_CLEAR, M_EXIT, M_PLAY, M_PAUSE, M_STOP, M_PREV, M_NEXT, M_ABOUT,
        M_TITLE=100, M_TIME, M_SEEK, M_VOLUME, M_LEVEL, M_LIST, M_STATUS,
        M_D_OPEN=200, M_D_ADD, M_D_FOLDER, M_D_SAVE, M_POLL, M_APPLY, M_SEEK_APPLY };
+/* f4-37: the window presents at most MUSIC_UI_FPS frames per second; the
+ * toolkit keeps accumulating the invalid region in between. Returns the time
+ * left before the next frame may be presented (0: now). */
+#define MUSIC_UI_FPS 15u
+#define MUSIC_UI_FRAME_NS (1000000000ull/MUSIC_UI_FPS)
+static inline uint64_t music_ui_hold(int presented, uint64_t last, uint64_t now)
+{ return presented && now-last<MUSIC_UI_FRAME_NS ? MUSIC_UI_FRAME_NS-(now-last) : 0; }
 void music_attach(struct music_app *, struct du_ui *, const struct music_ui_backend *);
 void music_update(struct music_app *, const struct music_snapshot *);
 void music_event(struct du_ui *, const struct du_event *, void *);

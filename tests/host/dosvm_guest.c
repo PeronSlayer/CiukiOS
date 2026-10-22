@@ -205,6 +205,9 @@ bool task_alive(const struct task *t) { return t->state < T_ZOMBIE; }
 void task_kill(struct task *t, int reason) { t->state = T_ZOMBIE; t->exit_code = reason; }
 void task_reap(struct task *t) { g_task_count--; free(t->kstack); free(t->fpu_alloc); free(t); }
 void task_exit(int reason) { (void)reason; abort(); }
+/* dosvm.c revokes a forwarded input boost at DOS focus transfer; no
+ * native input forwarding exists in this runner. */
+void task_input_withdraw(struct task *t) { (void)t; }
 void schedule(void) { g_need_resched = false; }
 void kpreempt_point(void) { if ((cpu_flags & V86_IF) && g_need_resched) schedule(); }
 void crit_begin(void) { }
@@ -235,9 +238,10 @@ void v86_enter(const struct v86_frame *initial, uint32_t *continuation) { (void)
 
 /* VFS transport: the real image read-only, a per-run scratch overlay file. */
 static struct storage store = {.ready = true};
-static FILE *disk_image, *cow;
+static FILE *disk_image, *cow, *sidecar;
 static char cow_path[96];
-static uint64_t pos[2];
+static const char *disk_path;
+static uint64_t pos[3];
 struct storage *storage_get(void) { return &store; }
 #ifdef CIUKI_DOSVM_FILE_CPU
 #define vfs_table_init transport_vfs_table_init
@@ -262,12 +266,23 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     (void)table; (void)access; (void)share; (void)attr;
-    if (strstr(path, "DOSBOOT.IMG")) return 0;
+    if (strstr(path, "DOSBOOT.IMG") || strstr(path, "FREEDOS.IMG") || strstr(path, "UNIFIED.IMG")) return 0;
+    size_t length = strlen(path);
+    if (length > 4 && !strcmp(path + length - 4, ".SHA")) {
+        /* f3-61: kernel=freedos-1.3/unified sidecar, next to the host image. */
+        char host[512]; size_t n = strlen(disk_path);
+        CHECK(n > 4 && n < sizeof(host) && !strcmp(disk_path + n - 4, ".IMG"));
+        memcpy(host, disk_path, n - 4); memcpy(host + n - 4, ".SHA", 5);
+        CHECK(!sidecar); sidecar = fopen(host, "rb"); CHECK(sidecar);
+        pos[2] = 0;
+        return 2;
+    }
     snprintf(cow_path, sizeof(cow_path), "build/host/dosvm-guest-XXXXXX");
     int fd = mkstemp(cow_path); CHECK(fd >= 0); cow = fdopen(fd, "w+b"); CHECK(cow);
     return 1;
 }
-int vfs_close(struct vfs_table *table, int handle) { (void)table; (void)handle; return 0; }
+int vfs_close(struct vfs_table *table, int handle)
+{ (void)table; if (handle == 2 && sidecar) { fclose(sidecar); sidecar = 0; } return 0; }
 int vfs_delete(struct vfs_table *table, const char *path)
 { (void)table; (void)path; if (cow) { fclose(cow); unlink(cow_path); cow = 0; } return 0; }
 int vfs_seek(struct vfs_table *table, int handle, int64_t offset, enum vfs_whence whence, uint64_t *position)
@@ -275,16 +290,18 @@ int vfs_seek(struct vfs_table *table, int handle, int64_t offset, enum vfs_whenc
 int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size_t *done)
 {
     (void)table;
+    if (handle == 2) { *done = fread(data, 1, bytes, sidecar); pos[2] += *done; return 0; }
     FILE *f = handle ? cow : disk_image;
     CHECK(handle || pos[0] + bytes <= disk_bytes);
     CHECK(fseek(f, (long)pos[handle], SEEK_SET) == 0);
     size_t n = fread(data, 1, bytes, f);
     if (n < bytes) memset((uint8_t *)data + n, 0, bytes - n);
     *done = bytes;
+    pos[handle] += bytes;   /* sequential readers (base hash) seek once */
     return 0;
 }
 int vfs_write(struct vfs_table *table, int handle, const void *data, size_t bytes, size_t *done)
-{ (void)table; CHECK(handle == 1 && fseek(cow, (long)pos[1], SEEK_SET) == 0); *done = fwrite(data, 1, bytes, cow); return 0; }
+{ (void)table; CHECK(handle == 1 && fseek(cow, (long)pos[1], SEEK_SET) == 0); *done = fwrite(data, 1, bytes, cow); pos[1] += *done; return 0; }
 int vfs_commit(struct vfs_table *table, int handle) { (void)table; (void)handle; return 0; }
 /* f3-51c: no content version; a game/kernel base would be hashed each launch. */
 int vfs_handle_version(struct vfs_table *table, int handle, struct vfs_file_version *out)
@@ -396,6 +413,27 @@ void dosvm_network_process_exit(struct dosvm *v, uint16_t psp) { (void)v; (void)
 #ifdef CIUKI_DOSVM_FILE_CPU
 #include "../../src/kernel/vm/dos_file_vm.c"
 #endif
+static unsigned guest_kernel;   /* f3-61: 0 CiukiDOS, 1 freedos-1.3, 2 unified */
+#ifdef CIUKI_DOSVM_FILE_CPU
+static void unified_report(const char *when)
+{
+    const struct unified_runtime *u=(const struct unified_runtime *)gv->unified;
+    if (!u) { printf("H61 IFS %s kernel=%u bound=0 active=0\n",when,guest_kernel); return; }
+    const struct dfv2_ifs_stats *t=&u->ifs.stats;
+    printf("H61 IFS %s kernel=%u bound=1 active=%u owned=%x requests=%u owned_requests=%u chained=%u failed=%u critical=%u "
+           "retries=%u expired=%u forged=%u opens=%u closes=%u reads=%u writes=%u finds=%u read_bytes=%llu written_bytes=%llu "
+           "held=%u refusals=%u why=%s\n",when,guest_kernel,u->ifs.active,u->ifs.owned,t->requests,t->owned,t->chained,t->failed,
+           t->critical,t->retries,t->expired,t->forged,t->opens,t->closes,t->reads,t->writes,t->finds,
+           (unsigned long long)t->read_bytes,(unsigned long long)t->written_bytes,dfv2_ifs_held(&u->ifs),t->refusals,
+           u->ifs.why ? u->ifs.why : "-");
+    /* f3-61c: the first failed requests, as the vm-game probe records them. */
+    for (unsigned i=0;i<t->failed && i<DFV2_IFS_FAILURES;i++)
+        printf("H61 IFS %s failed n=%u fn=%04x error=%u name=%s\n",when,i+1,u->ifs.failure[i].fn,u->ifs.failure[i].error,
+               u->ifs.failure[i].name[0] ? u->ifs.failure[i].name : "-");
+}
+#else
+static void unified_report(const char *when) { (void)when; }
+#endif
 
 /* ---- guest CPU glue ---- */
 static struct dosvm *gv;
@@ -471,6 +509,16 @@ static unsigned replay_cause(const struct v86_frame *f)
     return pm ? (op == 0xFA || op == 0xFB ? 4 : 13) : 2;
 }
 static uint64_t db_rm, db_flags, db_return, db_other;
+/* f3-61d: #DB exits by monitor owner (dosvm_step_owner), for the TCG cost
+ * analysis of a windowed game (one #DB exit is a full monitor round trip). */
+static struct { const char *owner; uint64_t count; } db_owners[16];
+static void db_owner_count(const char *owner)
+{
+    for (unsigned i = 0; i < 16; i++) {
+        if (!db_owners[i].owner) db_owners[i].owner = owner;
+        if (!strcmp(db_owners[i].owner, owner)) { db_owners[i].count++; return; }
+    }
+}
 static uint64_t db_return_tf, db_return_breakpoint;
 static uint32_t rstack_low = 0xFFFF;   /* lowest SP seen on the DPMI host real-mode stack */
 static int trace = -1, ring_on = -1;
@@ -508,6 +556,95 @@ static void trace_trap(const struct gcpu_event *ev)
                pm ? "PM " : "V86", cpu.tf.cs & 0xFFFF, cpu.tf.eip & 0xFFFF, op[1], cpu.tf.eax & 0xFFFF, cpu.tf.ebx & 0xFFFF,
                cpu.tf.ecx & 0xFFFF, cpu.tf.edx & 0xFFFF, cpu.tf.user_ss & 0xFFFF, cpu.tf.user_esp & 0xFFFF,
                (pm ? cpu.tf.ds : cpu.ds) & 0xFFFF, (pm ? cpu.tf.es : cpu.es) & 0xFFFF, gv->dpmi.depth, gv->dpmi.clients);
+}
+/* f3-61 GUEST_INT21_TRACE=1: every INT 21h the guest's DOS kernel serves,
+ * as one entry/return line. V86 INT 21h is matched to the kernel's IRET
+ * (trapped, IOPL-sensitive) by return address and stack; DPMI 0300h and
+ * reflected PM INT 21h are matched at the host's real-mode return stub,
+ * whose top record still holds the caller's input registers. Observation
+ * only: the guest and the production monitor see the same traps. */
+static int i21_on = -1;
+static unsigned long i21_count;
+struct i21_entry { uint16_t cs, ip, ss, sp, ax, bx, cx, dx, si, ds; char path[48]; };
+static struct i21_entry i21_stack[48];
+static unsigned i21_depth;
+static void i21_string(uint32_t linear, char *out, size_t n)
+{
+    size_t k = 0;
+    for (; k + 1 < n; k++) {
+        uint8_t c = 0;
+        if (dosvm_read(gv, linear + (uint32_t)k, &c, 1) || !c) break;
+        out[k] = c >= 32 && c < 127 && c != '"' ? (char)c : '?';
+    }
+    out[k] = 0;
+}
+static void i21_path(struct i21_entry *e)
+{
+    unsigned ah = e->ax >> 8, al = e->ax & 255;
+    e->path[0] = 0;
+    bool dx = ah == 0x39 || ah == 0x3A || ah == 0x3B || ah == 0x3C || ah == 0x3D || ah == 0x41 || ah == 0x43 ||
+              ah == 0x4B || ah == 0x4E || ah == 0x56 || ah == 0x5A || ah == 0x5B || (ah == 0x71 && al != 0xA1);
+    if (dx) i21_string(((uint32_t)e->ds << 4) + e->dx, e->path, sizeof(e->path));
+    else if (ah == 0x6C) i21_string(((uint32_t)e->ds << 4) + e->si, e->path, sizeof(e->path));
+}
+static void i21_line(const char *src, const struct i21_entry *e, uint32_t ax, uint32_t bx, uint32_t cx, uint32_t dx, uint32_t flags)
+{
+    printf("I21 n=%lu src=%s ax=%04x bx=%04x cx=%04x dx=%04x%s%s%s -> ax=%04x bx=%04x cx=%04x dx=%04x cf=%u ms=%llu\n",
+           ++i21_count, src, e->ax, e->bx, e->cx, e->dx, e->path[0] ? " path=\"" : "", e->path, e->path[0] ? "\"" : "",
+           ax & 0xFFFF, bx & 0xFFFF, cx & 0xFFFF, dx & 0xFFFF, flags & 1, (unsigned long long)g_ticks);
+}
+static void i21_observe(const struct gcpu_event *ev)
+{
+    if (i21_on < 0) i21_on = getenv("GUEST_INT21_TRACE") != 0;
+    if (!i21_on || ev->vector != 13 || frame_pm()) return;
+    uint16_t cs = (uint16_t)cpu.tf.cs, ip = (uint16_t)cpu.tf.eip, ss = (uint16_t)cpu.tf.user_ss, sp = (uint16_t)cpu.tf.user_esp;
+    uint8_t op[2] = {0};
+    if (dosvm_read(gv, ((uint32_t)cs << 4) + ip, op, 2)) return;
+    if (op[0] == 0xCD && op[1] == 0x21) {
+        if (i21_depth == sizeof(i21_stack) / sizeof(i21_stack[0])) {
+            memmove(i21_stack, i21_stack + 1, sizeof(i21_stack) - sizeof(i21_stack[0])); i21_depth--;
+        }
+        struct i21_entry *e = &i21_stack[i21_depth++];
+        *e = (struct i21_entry){cs, (uint16_t)(ip + 2), ss, sp, (uint16_t)cpu.tf.eax, (uint16_t)cpu.tf.ebx,
+                                (uint16_t)cpu.tf.ecx, (uint16_t)cpu.tf.edx, (uint16_t)cpu.tf.esi, (uint16_t)cpu.ds, ""};
+        i21_path(e);
+        return;
+    }
+    if (op[0] == 0xCF) {
+        uint16_t frame[3];
+        if (dosvm_read(gv, ((uint32_t)ss << 4) + sp, frame, sizeof(frame))) return;
+        for (unsigned k = i21_depth; k-- > 0;) {
+            const struct i21_entry *e = &i21_stack[k];
+            if (e->cs == frame[1] && e->ip == frame[0] && e->ss == ss && e->sp == (uint16_t)(sp + 6)) {
+                i21_line("v86", e, cpu.tf.eax, cpu.tf.ebx, cpu.tf.ecx, cpu.tf.edx, frame[2]);
+                i21_depth = k;
+                return;
+            }
+        }
+        return;
+    }
+    if (op[0] == 0xCD && op[1] == 0xFE && cs == 0xF000 && ip == DPMI_RM_RETURN && gv->dpmi.depth) {
+        const struct dpmi_record *r = &gv->dpmi.rec[gv->dpmi.depth - 1];
+        if (r->kind != DPMI_REC_REALCALL && (r->kind != DPMI_REC_REFLECT || r->vector != 0x21)) return;
+        struct i21_entry e = {0};
+        if (r->kind == DPMI_REC_REALCALL) {
+            uint32_t lin; uint8_t b[0x32]; uint16_t ivt[2];
+            if (!dpmi_ptr(gv, r->sel, r->off, sizeof(b), false, &lin) || dosvm_read(gv, lin, b, sizeof(b)) ||
+                dosvm_read(gv, 0x21 * 4, ivt, sizeof(ivt))) return;
+            /* 0300h BL=21h, or 0301h/0302h straight into the INT 21h vector
+             * (DOS/4GW calls the kernel's handler with 0302h). */
+            bool vector = r->arg[0] == 0x0300 ? r->vector == 0x21 : vm_u16(b + 0x2C) == ivt[1] && vm_u16(b + 0x2A) == ivt[0];
+            if (!vector) return;
+            e.ax = vm_u16(b + 0x1C); e.bx = vm_u16(b + 0x10); e.cx = vm_u16(b + 0x18); e.dx = vm_u16(b + 0x14);
+            e.si = vm_u16(b + 0x04); e.ds = vm_u16(b + 0x24);
+            i21_path(&e);
+        } else {
+            e.ax = (uint16_t)r->saved.tf.eax; e.bx = (uint16_t)r->saved.tf.ebx;
+            e.cx = (uint16_t)r->saved.tf.ecx; e.dx = (uint16_t)r->saved.tf.edx;
+        }
+        i21_line(r->kind != DPMI_REC_REALCALL ? "reflect" : r->arg[0] == 0x0300 ? "dpmi0300" : r->arg[0] == 0x0301 ? "dpmi0301" : "dpmi0302", &e, cpu.tf.eax, cpu.tf.ebx, cpu.tf.ecx, cpu.tf.edx,
+                 cpu.tf.eflags);
+    }
 }
 static unsigned slice_left = SLICE;
 static bool g_read(uint32_t lin, void *b, unsigned n) { return !dosvm_read(gv, lin, b, n); }
@@ -576,6 +713,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     traps++;
     if (vector == 1) {
         const char *owner = dosvm_step_owner(gv, &cpu, dpmi_debug_status(gv, debug_dr6));
+        db_owner_count(owner);
         if (!strcmp(owner, "rm_ss") || !strcmp(owner, "rm_irq")) db_rm++;
         else if (!strcmp(owner, "pm_flags")) db_flags++;
         else if (!strcmp(owner, "pm_return") || !strcmp(owner, "pm_checkpoint")) {
@@ -672,6 +810,7 @@ static int run(uint64_t budget, bool (*done)(void))
                     if (debug_dr7 & (1u << (2 * j))) bits &= ~(1u << j);
                 debug_dr6 |= bits;
             }
+            i21_observe(&ev);
             deliver(ev.vector, ev.err, ev.cr2);
             if (quake_exec_mode && quake_alias_calls && !quake_alias_returned &&
                 frame_pm() && cpu.tf.cs == quake_alias_cs && cpu.tf.eip == quake_alias_ip &&
@@ -848,6 +987,44 @@ static int window_vmvideo(const char *command)
 }
 static uint64_t menu_until;
 static bool menu_elapsed(void) { return g_ticks >= menu_until; }
+/* f3-61 play:COMMAND NAME: a game started the way the DOS Box types it,
+ * run for GUEST_PLAY_MS simulated milliseconds (default 30000) or until
+ * the shell prompt returns or the VM stops. One progress line per second
+ * (video mode, page flips, PM timer IRQs, DPMI, IFS counters), then the
+ * text screen: the game's exit or error message, if any. */
+static void play_progress(uint64_t begin)
+{
+    struct dosvm_video_info video = {0};
+    dosvm_video_info(dosvm_key(gv), &video);
+    unsigned reads = 0, failed = 0, critical = 0;
+#ifdef CIUKI_DOSVM_FILE_CPU
+    const struct unified_runtime *u = (const struct unified_runtime *)gv->unified;
+    if (u) { reads = u->ifs.stats.reads; failed = u->ifs.stats.failed; critical = u->ifs.stats.critical; }
+#endif
+    printf("H61 PLAY t=%llu mode=%02x vbe=%x unchained=%u flips=%u irq_pm=%u dpmi=%u clients=%u terminations=%u faults=%u "
+           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu\n",
+           (unsigned long long)(g_ticks - begin), video.mode, gv->vbe_mode, video.unchained, video.starts,
+           gv->dpmi.stats.irqs_pm, gv->dpmi.active, gv->dpmi.clients, gv->dpmi.stats.terminations, gv->dpmi.stats.faults,
+           gv->audio.sb.units, reads, failed, critical,
+           (unsigned long long)instructions);
+}
+static int play_run(void)
+{
+    const char *limit = getenv("GUEST_PLAY_MS");
+    uint64_t total = limit ? strtoull(limit, 0, 10) : 30000, begin = g_ticks;
+    int r = 0;
+    while (g_ticks - begin < total) {
+        menu_until = g_ticks + 1000;
+        if (menu_until > begin + total) menu_until = begin + total;
+        r = run(4000000000ull, menu_elapsed);
+        play_progress(begin);
+        if (r == 2 && prompt()) break;      /* the game returned to the shell */
+        if (r == -1 || stopped()) break;
+        if (r == 0) { printf("H61 PLAY instruction budget exhausted\n"); break; }
+        if (r == 2) waiting_input = false; /* a game waiting for a key: keep time running */
+    }
+    return r;
+}
 static bool menu_wait(uint32_t ms)
 {
     menu_until = g_ticks + ms;
@@ -978,6 +1155,7 @@ int main(int argc, char **argv)
         slice_left = guest_slice = (unsigned)value;
     }
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
+    disk_path = argv[1];
     disk_image = fopen(argv[1], "rb"); CHECK(disk_image);
     if (getenv("GUEST_VERBOSE")) g_boot.flags |= CBI_F_VERBOSE;
     const char *tracker = getenv("GUEST_TRACKER");
@@ -995,6 +1173,17 @@ int main(int argc, char **argv)
 #ifdef CIUKI_DOSVM_FILE_CPU
     const char *bridge_policy=getenv("GUEST_NO_FILE_HOOK");
     config.disable_file_bridge=bridge_policy && !strcmp(bridge_policy,"disabled");
+    /* f3-61: the per-game DOS kernel exactly as /Programs/dosbox creates it
+     * (dosvm_client.c): the pinned base, its SHA sidecar and the v1 bridge
+     * disabled for every kernel other than CiukiDOS. */
+    const char *kernel_choice=getenv("GUEST_KERNEL");
+    if (kernel_choice) {
+        CHECK(!strcmp(kernel_choice,"freedos-1.3") || !strcmp(kernel_choice,"unified"));
+        guest_kernel=!strcmp(kernel_choice,"unified") ? 2 : 1;
+        config.kernel=(uint8_t)guest_kernel; config.disable_file_bridge=true;
+        config.base=guest_kernel==2 ? "C:\\SYSTEM\\DOS\\UNIFIED.IMG" : "C:\\SYSTEM\\DOS\\FREEDOS.IMG";
+        config.probe="vm-window";
+    }
 #endif
     CHECK(dosvm_create(&config, &gv) == 0);
     printf("return tracker: %s (production VM creation)\n", gv->return_tracker_tf ? "tf" : "breakpoint");
@@ -1013,6 +1202,12 @@ int main(int argc, char **argv)
         else descriptor[0]='?';
     }
 #endif
+#ifdef CIUKI_DOSVM_FILE_CPU
+    /* f3-61 replay of images before the fix: the DFV2 gates go unserved, so
+     * CIUKIDF.SYS finds no host and the fork runs unbound on its local FAT
+     * (the b453bc92 T23 state). The ROM and base stay those of kernel=unified. */
+    if (guest_kernel==2 && getenv("GUEST_UNIFIED_UNBOUND")) gv->kernel=0;
+#endif
     CHECK(dosvm_boot(gv) == 0);
     cpu = gv->frame;
     int failures = 0;
@@ -1021,6 +1216,12 @@ int main(int argc, char **argv)
     printf("boot: %s after %llu instructions, %llu traps, %llu ms\n", r > 0 ? "prompt" : "FAILED",
            (unsigned long long)instructions, (unsigned long long)traps, (unsigned long long)g_ticks);
     if (r <= 0) { screen(); return 1; }
+    if (guest_kernel) {
+        unified_report("boot"); screen();
+        printf("H61 SHELL exec_pending=%u overflow=%u shell_idle=%u\n",gv->exec_pending,gv->exec_overflow,dosvm_shell_idle(gv));
+        for (unsigned k=0;k<gv->exec_pending;k++)
+            printf("H61 SHELL frame=%u %04x:%04x ss:sp=%04x:%04x\n",k,gv->exec_frame[k].cs,gv->exec_frame[k].ip,gv->exec_frame[k].ss,gv->exec_frame[k].sp);
+    }
 #ifdef CIUKI_DOSVM_FILE_CPU
     if (getenv("GUEST_FILE_TRACE") && gv->files) gv->files->trace_enabled=true;
 #endif
@@ -1047,6 +1248,7 @@ int main(int argc, char **argv)
         bool video = !strncmp(argv[i], "video:", 6);
         bool menu = !strncmp(argv[i], "menu:", 5);
         bool isr = !strncmp(argv[i], "isr:", 4);
+        bool play = !strncmp(argv[i], "play:", 5);
         quake_exec_mode = !strncmp(argv[i], "quake:", 6);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
@@ -1054,7 +1256,7 @@ int main(int argc, char **argv)
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : isr ? argv[i] + 4 : menu ? argv[i] + 5 : video || quake_exec_mode ? argv[i] + 6 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : isr ? argv[i] + 4 : menu || play ? argv[i] + 5 : video || quake_exec_mode ? argv[i] + 6 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
 #ifdef CIUKI_DOSVM_FILE_CPU
@@ -1070,6 +1272,36 @@ int main(int argc, char **argv)
         }
 #endif
         type(command);
+        if (play) {
+            int pr = play_run();
+            bool returned = pr == 2 && prompt();
+            /* f3-61 GUEST_PLAY_QUIT=1: leave DOOM through its own menu (Esc,
+             * Up to Quit Game, Enter, y) as a player does, then require the
+             * shell prompt: the EXEC frame completes and the shell is idle. */
+            if (!returned && !stopped() && getenv("GUEST_PLAY_QUIT")) {
+                CHECK(gv->exec_pending && !dosvm_shell_idle(gv));
+                CHECK(dosvm_input_focus(dosvm_key(gv), true));
+                static const unsigned quit_keys[] = {0x01, 0x148, 0x1C, 0x15};
+                for (unsigned k = 0; k < sizeof(quit_keys) / sizeof(quit_keys[0]); k++) {
+                    window_key(quit_keys[k], 1); menu_wait(80); window_key(quit_keys[k], 0); menu_wait(700);
+                }
+                menu_until = g_ticks + 60000;
+                pr = run(4000000000ull, menu_elapsed);
+                returned = pr == 2 && prompt();
+                if (pr == 2) { waiting_input = false; run(20000000ull, 0); }
+                printf("H61 QUIT returned=%u exec_pending=%u overflow=%u shell_idle=%u dpmi=%u clients=%u\n", returned,
+                       gv->exec_pending, gv->exec_overflow, dosvm_shell_idle(gv), gv->dpmi.active, gv->dpmi.clients);
+                if (!returned || gv->exec_pending || !dosvm_shell_idle(gv)) failures++;
+            }
+            printf("H61 PLAY END %s returned=%u stopped=%u reason=%u vector=%u eip=%08x console=\"%s\"\n", argv[i + 1],
+                   returned, stopped(), gv->info.reason, gv->info.fault_vector, gv->info.fault_eip, gv->console_line);
+            unified_report("play");
+            stats("play");
+            fault_dump();
+            screen();
+            if (stopped()) failures++;
+            break;
+        }
         /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
         const char *budget = getenv("GUEST_BUDGET");
         r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull,
@@ -1164,6 +1396,10 @@ int main(int argc, char **argv)
     printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
            (unsigned long long)db_rm, (unsigned long long)db_flags,
            (unsigned long long)db_return, (unsigned long long)db_other);
+    printf("debug trap owners:");
+    for (unsigned i = 0; i < 16 && db_owners[i].owner; i++)
+        printf(" %s=%llu", db_owners[i].owner, (unsigned long long)db_owners[i].count);
+    printf("\n");
     printf("return causes: tf=%llu breakpoint=%llu armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u\n",
            (unsigned long long)db_return_tf, (unsigned long long)db_return_breakpoint,
            gv->perf.return_armed, gv->perf.return_hits, gv->perf.return_expired,
@@ -1174,11 +1410,22 @@ int main(int argc, char **argv)
 #ifdef CIUKI_DOSVM_FILE_CPU
     printf("H50 CPU binding=%u dispatches=%llu resident=%u\n",gv->files && gv->files->personality.live,
            (unsigned long long)(gv->files ? gv->files->sequence : 0),gv->info.resident);
-    if (!getenv("GUEST_NO_FILE_HOOK")) CHECK(gv->files && gv->files->personality.live);
+    if (guest_kernel) {
+        /* f3-61: the v1 bridge never binds a FreeDOS kernel; the unified
+         * fork binds DFV2 and activates its IFS (C: owned). */
+        unified_report("end");
+        CHECK(!gv->files);
+        if (guest_kernel==1 || getenv("GUEST_UNIFIED_UNBOUND")) CHECK(!gv->unified);
+        else {
+            const struct unified_runtime *u=(const struct unified_runtime *)gv->unified;
+            CHECK(u && u->ifs.active && (u->ifs.owned&4) && !u->ifs.stats.forged && gv->file_volume==&((struct unified_runtime *)gv->unified)->volume);
+        }
+    }
+    else if (!getenv("GUEST_NO_FILE_HOOK")) CHECK(gv->files && gv->files->personality.live);
     else CHECK(!gv->files);
-    unsigned file_pages=gv->file_bytes/PAGE_SIZE, before_pages=used_pages;
+    unsigned file_pages=(gv->file_bytes+gv->unified_bytes)/PAGE_SIZE, before_pages=used_pages;
     CHECK(!dosvm_file_destroy(gv));
-    CHECK(!gv->files && !gv->file_volume && used_pages+file_pages==before_pages);
+    CHECK(!gv->files && !gv->file_volume && !gv->unified && used_pages+file_pages==before_pages);
     vfs_destroy(&store.vfs); cache_destroy(&store.cache);
 #endif
     if (cow) { fclose(cow); unlink(cow_path); }

@@ -141,19 +141,31 @@ static struct ciuki_input_event input_fifo[GATE_INPUT_FIFO];
 static unsigned fifo_head, fifo_count;
 /* No timed input/channel wait in the native ABI. Empty service polls share
  * this 10 ms idle cadence; actual deadlines and active input may shorten it. */
-static void loop_deadline(uint64_t now,uint64_t deadline,uint64_t *wait)
+/* f2-95: which deadline shortened the wait (the [desktop] loop record). */
+enum { PAUSE_IDLE, PAUSE_INPUT, PAUSE_FRAME, PAUSE_ANIMATION, PAUSE_TIMER, PAUSE_PING, PAUSE_CLOSE,
+       PAUSE_NOTIFY, PAUSE_HOVER, PAUSE_POWER, PAUSE_CACHE, PAUSE_REASONS };
+static const char *const pause_names[PAUSE_REASONS]={"idle","input","frame","animation","timer","ping",
+    "close","notify","hover","power","cache"};
+static unsigned pause_reason;
+static void loop_deadline_for(uint64_t now,uint64_t deadline,uint64_t *wait,unsigned reason)
 {
     uint64_t left=deadline>now ? deadline-now : 1000000ull;
-    if (left<*wait) *wait=left;
+    if (left<*wait) { *wait=left; pause_reason=reason; }
 }
+#define loop_deadline(now,deadline,wait) loop_deadline_for(now,deadline,wait,reason)
 static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_pending,uint64_t timer)
 {
     uint64_t wait=input_pending ? 1000000ull : 10000000ull;
+    unsigned reason=PAUSE_FRAME;
+    pause_reason=input_pending ? PAUSE_INPUT : PAUSE_IDLE;
     if (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty)
-        loop_deadline(now,d->next_frame_ns,&wait);
+        loop_deadline(now,desk_frame_time(d,now),&wait);
+    reason=PAUSE_ANIMATION;
     if (d->animation.active)
         loop_deadline(now,d->animation.started+(d->animation.step+1)*25000000ull,&wait);
+    reason=PAUSE_TIMER;
     loop_deadline(now,timer,&wait);
+    reason=PAUSE_PING;
     for (int i=0;i<DESK_CLIENTS;i++) {
         const struct desk_client *c=&d->clients[i];
         if (c->channel<0 || !c->hello || (c->version==DESK_V3_VERSION && !c->window)) continue;
@@ -161,14 +173,17 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         else if (c->ping_pending && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
     }
     if (d->shell && !d->power.state) {
+        reason=PAUSE_CLOSE;
         for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid && d->children[i].close_ns && !d->children[i].term_sent)
             loop_deadline(now,d->children[i].close_ns,&wait);
+        reason=PAUSE_NOTIFY;
         const struct sh_notification *n=&d->sh.notification;
         if (n->active) {
             loop_deadline(now,n->expires,&wait);
             if (now>=n->started && now-n->started<160000000ull)
                 loop_deadline(now,n->started+((now-n->started)/8000000ull+1)*8000000ull,&wait);
         }
+        reason=PAUSE_HOVER;
         if (!d->sh.tooltip && d->sh.hover_since && d->sh.hover_target && !n->active &&
             !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open)
             loop_deadline(now,d->sh.hover_since+600000000ull,&wait);
@@ -176,12 +191,37 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         /* Shutdown suspends ordinary shell ticks and child close timeouts.
          * Stale shell deadlines must not turn its static Busy panel into a
          * 1 ms poll; only the active shutdown phase supplies a deadline. */
+        reason=PAUSE_POWER;
         if (d->power.state==DESK_POWER_CLOSING)
             loop_deadline(now,d->power.close_deadline,&wait);
         else if (d->power.state==DESK_POWER_RETRY || d->power.state==DESK_POWER_FORCE)
             loop_deadline(now,d->power.next_try,&wait);
     }
     return wait;
+}
+#undef loop_deadline
+/* f2-95: service turns per 2 s and what shortened them. An idle desktop
+ * turns 100 times a second; a deadline left in the past turns it every
+ * 1 ms. Reported when above 150 turns/s, otherwise once a minute. */
+static struct { unsigned turns, short_turns, reasons[PAUSE_REASONS]; uint64_t quiet_ns; } loop_turns;
+static void loop_turn(uint64_t wait)
+{
+    loop_turns.turns++;
+    if (wait<10000000ull) { loop_turns.short_turns++; loop_turns.reasons[pause_reason<PAUSE_REASONS ? pause_reason : 0]++; }
+}
+static int loop_record_line(char *line,size_t size,uint64_t now,uint64_t window_ns)
+{
+    unsigned top=0;
+    for (unsigned i=1;i<PAUSE_REASONS;i++) if (loop_turns.reasons[i]>loop_turns.reasons[top]) top=i;
+    uint64_t per_second=window_ns ? (uint64_t)loop_turns.turns*1000000000ull/window_ns : 0;
+    int n=0;
+    if (per_second>150 || now-loop_turns.quiet_ns>=60000000000ull) {
+        if (per_second<=150) loop_turns.quiet_ns=now;
+        n=snprintf(line,size,"[desktop] loop turns=%u short=%u top=%s:%u window_ms=%llu\n",loop_turns.turns,
+                   loop_turns.short_turns,pause_names[top],loop_turns.reasons[top],(unsigned long long)(window_ns/1000000ull));
+    }
+    uint64_t quiet=loop_turns.quiet_ns; memset(&loop_turns,0,sizeof(loop_turns)); loop_turns.quiet_ns=quiet;
+    return n>0 && (size_t)n<size ? n : 0;
 }
 static int scenario_hold(const struct desktop *d, uint64_t now)
 {
@@ -312,6 +352,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return launch_failed(program,errno,"channel-pair");
     int index=-1;
     ciuki_pid_t pid=-1;
+    /* The program record grants the window channel (catalog.h; f6-19: also NetSurf). */
     int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
     /* f2-33: only the Task Manager receives the delegated termination
      * authority, explicitly mapped to fd 4; it also may send task requests. */
@@ -373,6 +414,30 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].launch_input_ns=click_ns;
     d->children[child].pid=(uint32_t)pid;
     return pid;
+}
+void desk_v3_fixture_report(const char *line);
+/* f6-18 GATE_BROWSER: start /Programs/netsurf --channel-fd=3 --test=browser <url>
+ * through the ordinary launch path (same environment, channel and client slot
+ * as a menu launch) and name the child to the controller; the kernel validates
+ * the PID and reads the browser's page outcome from it. One shot per gate command.
+ * f6-19: the window channel comes from NetSurf's program record, not from the gate. */
+static int desk_browser_fixture_begin(struct desktop *d,const char *url)
+{
+    static char gate_browser_url[48];
+    struct desk_program program;
+    memset(&program,0,sizeof(program));
+    snprintf(program.name,sizeof(program.name),"netsurf");
+    snprintf(program.path,sizeof(program.path),"/Programs/netsurf");
+    snprintf(gate_browser_url,sizeof(gate_browser_url),"%s",url);
+    d->launch_arg=NULL;
+    memset(d->launch_argv,0,sizeof(d->launch_argv));
+    d->launch_argv[0]="--test=browser"; d->launch_argv[1]=gate_browser_url;
+    int pid=launch_program(d,&program), error=errno;
+    memset(d->launch_argv,0,sizeof(d->launch_argv));
+    char line[80];
+    snprintf(line,sizeof(line),"case=browser child=%d",pid<0 ? 0 : pid);
+    desk_v3_fixture_report(line);
+    return pid<0 ? -error : pid;
 }
 /* f2-33 scenario: the ended PID has no kernel record any more (reaped, not
  * just exited), while the Task Manager and this desktop are still live. */
@@ -501,20 +566,27 @@ static void desktop_watchdog_start(struct desktop *d)
     if (error) { desk_shell_notify_error(d,"Desktop watchdog unavailable",error); return; }
     desktop_watchdog.live=1; d->input_pending=desktop_input_pending;
 }
+/* result: desk_redraw's value, or -1 with errno 0 when no frame was due.
+ * f2-95: a frame is the desktop catching up with its input, whether it
+ * wrote scanout rows, only moved the hardware cursor or found nothing left
+ * to draw (an EBUSY display belongs to its owner). The T23 trial a4d9454e
+ * logged `stall stage=idle ... input_pending=1 wait=idle` 19 times while the
+ * pointer moved only the hardware cursor: those frames write no row, so the
+ * stamp kept the last row write and the observer reported a stall that was
+ * none. An up-to-date desktop also renews the stamp, so a later blocked
+ * loop reports the time since it was last current. */
 static void desktop_watchdog_frame(struct desktop *d,uint64_t before,int result)
 {
+    (void)before;
     unsigned waiting=d->sh.wallpaper_pending || settings_reload_pending;
     __atomic_store_n(&desktop_watchdog.work,waiting,__ATOMIC_RELEASE);
-    if (result && errno==EBUSY) {
-        __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
+    int outstanding=d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty;
+    if (!result || errno==EBUSY || (!outstanding && !settings_reload_pending)) {
+        /* The turn's input clock (no extra kernel entry on an idle turn). */
+        uint64_t now=d->now_ns ? d->now_ns : monotonic();
+        __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(now/1000000ull),__ATOMIC_RELEASE);
         __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
-        return;
     }
-    if (!result && d->presents!=before) {
-        __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
-        __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
-    } else if (!d->damage.count && !d->cursor_dirty && !settings_reload_pending)
-        __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
 }
 static void startup_flush(void)
 {
@@ -685,12 +757,42 @@ static int gfx_benchmark(struct desktop *d, unsigned index, uint64_t values[3])
     if (!e) { values[0]=result.bytes; values[1]=result.ns; values[2]=result.operations; }
     return e;
 }
+/* f2-92: what the 2D engine did in the last 2 s window, on every boot:
+ * engine fills, copies (screen and offscreen-cache), writes (cache uploads),
+ * requests that fell back to software, rows served from the caches, frames
+ * and CPU-uploaded bytes. Every window with engine activity; otherwise at
+ * most once a minute while frames are drawn (a seconds clock alone would
+ * add a record every 2 s), silent when idle. */
+static int accel_record_line(const struct desktop *d, char *line, size_t size, uint64_t now, uint64_t *quiet_ns)
+{
+    const struct desk_frame_stats *s=&d->sample;
+    int engine=s->accel_fills || s->accel_copies || s->accel_writes || s->accel_fallback;
+    if (!engine && (!s->frames || now-*quiet_ns<60000000000ull)) return 0;
+    if (!engine) *quiet_ns=now;
+    /* f2-96: who draws the pointer (hw, sw, or hiding: a hardware cursor
+     * still to be hidden), busy retries and software fallbacks since boot. */
+    const char *pointer=d->hw_cursor ? "hw" : d->hw_cursor_shown ? "hiding" : "sw";
+    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u\n",
+        (unsigned long long)s->accel_fills,(unsigned long long)s->accel_copies,(unsigned long long)s->accel_writes,
+        (unsigned long long)s->accel_fallback,(unsigned long long)s->cache_rows,(unsigned long long)s->frames,
+        (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u,
+        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks);
+    return n>0 && (size_t)n<size ? n : 0;
+}
+static void accel_record(struct desktop *d, uint64_t now)
+{
+    static uint64_t quiet_ns;
+    char line[320]; int n=accel_record_line(d,line,sizeof(line),now,&quiet_ns);
+    if (n) (void)write(STDERR_FILENO,line,(size_t)n);
+}
 static void performance_sample(struct desktop *d, uint64_t now)
 {
     if (!d->sample_begin_ns) { d->sample_begin_ns=now; return; }
     if (now-d->sample_begin_ns<2000000000ull) return;
     desk_stats_sample(d); d->sample_ns=now-d->sample_begin_ns;
     d->sample_begin_ns=now;
+    accel_record(d,now);
+    { char line[160]; int n=loop_record_line(line,sizeof(line),now,d->sample_ns); if (n) (void)write(STDERR_FILENO,line,(size_t)n); }
     if (verbose_boot) {
         const struct desk_frame_stats *s=&d->sample;
         char line[CFG_LOG_MAX];
@@ -825,6 +927,22 @@ static void wallpaper_update(struct desktop *d)
         d->sh.wall_valid=1; d->sh.background_valid=0;
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     } else if (!d->sh.wall_valid) desk_shell_wallpaper_update(d);
+}
+/* f2-90: the wallpaper is in memory before the first frame. The build-seeded
+ * native frame is read synchronously here; on any miss the solid colour stays
+ * (desk_shell_wallpaper_update ran in wallpaper_load) and the worker decodes
+ * after the first frame as before. */
+static void wallpaper_preload(struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || !d->sh.wallpaper_pending || wallpaper_worker_failed) return;
+    uint32_t *pixels=NULL;
+    if (desk_wall_preload(&wallpaper_request,DESK_WALL_CACHE,&pixels,startup_stage) || !pixels) return;
+    if (d->scanout_valid) { free(pixels); return; }
+    free(d->sh.wall); free(d->sh.background); d->sh.background=NULL;
+    d->sh.wall=pixels; d->sh.wall_w=d->width; d->sh.wall_h=d->height;
+    d->sh.wall_valid=1; d->sh.background_valid=0; d->sh.image_failed=0; d->sh.wallpaper_pending=0;
+    startup_stage("wallpaper_applied");
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
 }
 /* Create the idle wallpaper thread during initialisation: the kernel's crash-isolation
  * probe compares the desktop's thread count across its cycles, and a thread born after the
@@ -1077,7 +1195,12 @@ static void mixer_read(struct desktop *d)
     int fd=d->mixer_fd;
     if (fd<0) fd=observer_open(&d->mixer_observer_fd,"/dev/mixer"); /* public, read-only */
     struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m)};
-    if (fd<0 || ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0) {
+    /* f1-100: no periodic hardware (EC) reads; the popup's open (want_reload
+     * bit 8) asks the kernel for one on the control handle, the plain read
+     * follows otherwise. */
+    int refreshed=(d->sh.want_reload&8) && d->mixer_fd>=0 && fd==d->mixer_fd &&
+        !ciuki_devctl(fd,MIXER_REFRESH_MASTER,&m,sizeof(m));
+    if (fd<0 || (!refreshed && ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0)) {
         d->sh.mixer_state=-1;
         observer_close(&d->mixer_observer_fd);
     }
@@ -1135,6 +1258,51 @@ static void system_read(struct desktop *d)
     }
     struct utsname u;
     if (!uname(&u)) snprintf(d->sh.cpu_name,sizeof(d->sh.cpu_name),"%.40s",u.machine);
+}
+/* f1-97: one-line 2D acceleration answer at the first desktop frame, from the
+ * kernel's `2D accelerator` device record (driver "savage2d"; reason = the
+ * quarantine token). A shell notice card, never a dialog: it expires after
+ * 10 s and any click dismisses it. f2-92: "YES" only once the engine has
+ * drawn for a presenter (record reason "accelerated"); before that the
+ * engine is "OK (drawing: software)". */
+static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, int used, const char *reason)
+{
+    if (accelerated && used) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 Savage");
+    else if (accelerated) snprintf(out,size,"2D engine: OK (drawing: software)");
+    else snprintf(out,size,"2D engine: NO (%s)",reason && *reason ? reason : "unknown");
+}
+/* The activation is asynchronous and usually decides after the first frame:
+ * poll the inventory twice a second for up to 60 s; an engine that is ready
+ * gets 3 s to draw before it is reported as unused. */
+static struct { unsigned failures; uint64_t first_ns, next_ns, ready_ns; } accel_notice_state;
+/* Returns 1 when finished (shown, nothing recorded, or given up), 0 to retry. */
+static int accel_notice(struct desktop *d)
+{
+#ifdef __i386__
+    static struct ciuki_devices_info info;
+    if (!accel_notice_state.first_ns) accel_notice_state.first_ns=d->now_ns ? d->now_ns : 1;
+    if (d->now_ns<accel_notice_state.next_ns) return 0;
+    accel_notice_state.next_ns=d->now_ns+500000000ull;
+    info.version=CIUKI_DEVICES_VERSION; info.size=sizeof(info);
+    if (ciuki_devices(&info)) return ++accel_notice_state.failures>=3;
+    for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
+        const struct ciuki_device_record *v=&info.devices[i];
+        if (strcmp(v->driver,"savage2d")) continue;
+        int ready=v->state==CIUKI_DEVICE_READY, used=ready && !strcmp(v->reason,"accelerated");
+        if (ready && !used) {
+            if (!accel_notice_state.ready_ns) accel_notice_state.ready_ns=d->now_ns ? d->now_ns : 1;
+            if (d->now_ns-accel_notice_state.ready_ns<3000000000ull) return 0;
+        }
+        char text[160];
+        accel_notice_text(text,sizeof(text),ready,used,v->reason);
+        desk_shell_notify(d,"Graphics",text,DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
+        d->sh.notification.expires=d->now_ns+10000000000ull;
+        return 1;
+    }
+    return d->now_ns-accel_notice_state.first_ns>=60000000000ull;
+#else
+    (void)d; return 1;
+#endif
 }
 static void storage_poll(struct desktop *d, uint64_t now)
 {
@@ -1204,8 +1372,16 @@ static void startup_launch(struct desktop *d,const char *name)
     for (unsigned i=0;i<d->program_count;i++) if (!strcmp(d->programs[i].name,name)) d->action=(int)i;
     if (d->action<0) snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",name);
 }
+/* f3-61 f3:vm-game: one Programs > Games entry launched at startup through
+ * the menu's own path, optionally with the DOS Box's --dos-kernel= choice. */
+static int startup_game_index=-1;
+static const char *startup_game_kernel;
 static int launch_pending(struct desktop *d)
 {
+    if (d->action<0 && startup_game_index>=0) {
+        int index=startup_game_index; startup_game_index=-1;
+        return desk_launch_game(d,index,startup_game_kernel);
+    }
     if (d->action<0) return desk_autoplay_launch(d);
     unsigned selected=(unsigned)d->action; d->action=-1;
     int pid=selected<d->program_count ? desk_task_launch(d,d->programs[selected].name,NULL) : -ENOENT;
@@ -1476,40 +1652,91 @@ static int link_read(struct desktop *d, const char *path, struct desk_launch_rec
     int result=bad || n>DESK_LINK_BYTES || !desk_link_decode(bytes,(unsigned)n,record) ? -EINVAL : 0;
     free(bytes); return result;
 }
-static void links_directory(struct desktop *d, const char *path, unsigned desktop,
-                            struct desk_link_entry *out, unsigned cap, unsigned *count,
-                            unsigned depth, unsigned *budget)
+/* f2-95: the shortcut scan walks the Start Menu, the Windows desktop, /Games
+ * and /Programs. On the T23 trial of image a4d9454e the worker (desktop#30)
+ * repeated that walk every 2 s with a stat() per entry, re-read every
+ * shortcut and asked CIUKI_DOSVM_GAME_QUERY for each bundled game (each query
+ * mounts the games image and walks a program tree in the kernel): 12-50 % of
+ * the CPU in kernel mode, holding the block cache that netsurf and the
+ * compositor then waited for ([sched] inherit ... to=desktop#30
+ * reason=cache count=424). Now the entry type, size and time come from the
+ * directory enumeration itself (CIUKI_DIRENT_METADATA, no allocation-chain
+ * walk); an unchanged shortcut (same path, size and time) keeps its decoded
+ * record; a scan runs on request (start, Programs menu, program change,
+ * window close, Windows restart) or after DESK_LINKS_RESCAN_NS; the bundled
+ * games are queried only at start and after a program change. */
+#define DESK_LINKS_RESCAN_NS 10000000000ull
+struct link_stamp { uint64_t size; int64_t mtime; };
+static const char *links_roots[]={"/Windows/Start Menu/Programs","/Windows/Desktop","/Games","/Programs"};
+static const unsigned links_depth[]={3,1,3,3}, links_budget[]={128,128,256,256}, links_on_desktop[]={0,1,0,0};
+struct links_scan {
+    struct desk_link_entry *out; struct link_stamp *stamps; unsigned cap, count, budget;
+    const struct desk_link_entry *previous; const struct link_stamp *previous_stamps; unsigned previous_count;
+    unsigned stats, reads;
+};
+/* 1 directory, 0 regular file, -1 anything else or gone. */
+static int link_entry_kind(const char *file, const struct dirent *entry, struct link_stamp *stamp, struct links_scan *s)
 {
-    if (!depth || !*budget || *count>=cap) return;
+    *stamp=(struct link_stamp){0,0};
+#if defined(CIUKI_DIRENT_METADATA)
+    if (entry->d_type==DT_DIR) return 1;
+    if (entry->d_type==DT_REG) { stamp->size=entry->d_size; stamp->mtime=entry->d_mtime; return 0; }
+    if (entry->d_type!=DT_UNKNOWN) return -1;
+#else
+    (void)entry; /* host builds: no enumeration metadata, stat as before */
+#endif
+    struct stat st; s->stats++;
+    if (stat(file,&st)) return -1;
+    if (S_ISDIR(st.st_mode)) return 1;
+    if (!S_ISREG(st.st_mode)) return -1;
+    stamp->size=(uint64_t)st.st_size; stamp->mtime=(int64_t)st.st_mtime;
+    return 0;
+}
+static int link_reuse(const struct links_scan *s, const char *file, const struct link_stamp *stamp,
+                      struct desk_launch_record *out)
+{
+    if (!stamp->mtime) return 0; /* no time: always read again */
+    for (unsigned k=0;k<s->previous_count;k++)
+        if (s->previous_stamps[k].size==stamp->size && s->previous_stamps[k].mtime==stamp->mtime &&
+            !strcmp(s->previous[k].source,file)) { *out=s->previous[k].launch; return 1; }
+    return 0;
+}
+static void links_directory(struct links_scan *s, const char *path, unsigned desktop, unsigned cap, unsigned depth)
+{
+    if (!depth || !s->budget || s->count>=cap) return;
     DIR *dir=opendir(path); if (!dir) return;
     struct dirent *entry;
-    while (*budget && *count<cap && (entry=readdir(dir))) {
-        (*budget)--;
+    while (s->budget && s->count<cap && (entry=readdir(dir))) {
+        s->budget--;
         if ((entry->d_name[0]=='.' && strcmp(entry->d_name,".ciuki")) || strchr(entry->d_name,'/') || strchr(entry->d_name,'\\')) continue;
         char file[260]; int n=snprintf(file,sizeof(file),"%s/%s",path,entry->d_name);
         if (n<0 || n>=(int)sizeof(file)) continue;
-        struct stat st; if (stat(file,&st)) continue;
-        if (S_ISDIR(st.st_mode)) links_directory(d,file,desktop,out,cap,count,depth-1,budget);
-        else if (S_ISREG(st.st_mode) && n>=4 && (!strcasecmp(file+n-4,".lnk") || (n>=6 && !strcasecmp(file+n-6,".ciuki"))) && !link_read(d,file,&out[*count].launch)) {
-            snprintf(out[*count].source,sizeof(out[*count].source),"%s",file); out[*count].desktop=desktop; (*count)++;
-        }
+        struct link_stamp stamp; int kind=link_entry_kind(file,entry,&stamp,s);
+        if (kind==1) { links_directory(s,file,desktop,cap,depth-1); continue; }
+        if (kind || n<4 || (strcasecmp(file+n-4,".lnk") && (n<6 || strcasecmp(file+n-6,".ciuki")))) continue;
+        /* Whole entries are cleared: snapshots compare by bytes. */
+        struct desk_link_entry *e=&s->out[s->count]; memset(e,0,sizeof(*e));
+        if (!link_reuse(s,file,&stamp,&e->launch)) { s->reads++; if (link_read(NULL,file,&e->launch)) continue; }
+        snprintf(e->source,sizeof(e->source),"%s",file); e->desktop=desktop; s->stamps[s->count++]=stamp;
     }
     closedir(dir);
 }
-static int links_list(struct desktop *d, struct desk_link_entry *out, unsigned cap)
+static int links_list(struct links_scan *s)
 {
-    unsigned count=0, budget=128;
-    links_directory(d,"/Windows/Start Menu/Programs",0,out,cap/2,&count,3,&budget);
-    budget=128;
-    links_directory(d,"/Windows/Desktop",1,out,cap,&count,1,&budget);
-    budget=256;links_directory(d,"/Games",0,out,cap,&count,3,&budget);
-    budget=256;links_directory(d,"/Programs",0,out,cap,&count,3,&budget);
-    /* Stable labels independent of FAT enumeration order. */
-    for (unsigned i=1;i<count;i++) for (unsigned j=i;j && strcmp(out[j-1].launch.label,out[j].launch.label)>0;j--) {
-        struct desk_link_entry *temp=malloc(sizeof(*temp)); if (!temp) return (int)count;
-        *temp=out[j-1]; out[j-1]=out[j]; out[j]=*temp; free(temp);
+    s->count=0;
+    for (unsigned r=0;r<sizeof(links_roots)/sizeof(*links_roots);r++) {
+        s->budget=links_budget[r];
+        links_directory(s,links_roots[r],links_on_desktop[r],r ? s->cap : s->cap/2,links_depth[r]);
     }
-    return (int)count;
+    /* Stable labels independent of FAT enumeration order. */
+    struct desk_link_entry *temp=s->count>1 ? malloc(sizeof(*temp)) : NULL;
+    if (s->count>1 && !temp) return (int)s->count;
+    for (unsigned i=1;i<s->count;i++) for (unsigned j=i;j && strcmp(s->out[j-1].launch.label,s->out[j].launch.label)>0;j--) {
+        *temp=s->out[j-1]; s->out[j-1]=s->out[j]; s->out[j]=*temp;
+        struct link_stamp t=s->stamps[j-1]; s->stamps[j-1]=s->stamps[j]; s->stamps[j]=t;
+    }
+    free(temp);
+    return (int)s->count;
 }
 /* Discovery and stale-link reads share one sleeping worker. The shell never
  * waits for directory/disk/RPC I/O; it consumes only complete snapshots. */
@@ -1517,22 +1744,46 @@ struct links_worker {
     pthread_t thread;
     pthread_mutex_t mutex;
     pthread_cond_t changed;
-    int scan_requested, launch_requested, launch_busy, completed, result;
+    int scan_requested, games_requested, scanning, launch_requested, launch_busy, completed, result;
     unsigned games_removed;
     unsigned count;
+    uint64_t scanned_ns;                       /* f2-95: last completed scan, 0 = none yet */
+    unsigned scans, game_scans, stats, reads;  /* f2-95: totals for tests and diagnostics */
     char source[260];
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
+    struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
 static struct links_worker *links_worker;
+static void links_scan_once(struct links_worker *w, int games)
+{
+    struct links_scan s={.out=w->scratch,.stamps=w->scratch_stamps,.cap=DESK_LINKS,
+        .previous=w->published,.previous_stamps=w->published_stamps,.previous_count=w->count};
+    int count=links_list(&s);
+    unsigned removed=w->games_removed;
+    for(unsigned g=1;games && g<=CIUKI_DOSVM_GAME_COUNT;g++){
+        struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
+        if(!ciuki_dosvm(CIUKI_DOSVM_GAME_QUERY,&c)){
+            if(c.state==1)removed&=~(1u<<(g-1));else removed|=1u<<(g-1);
+        }
+    }
+    pthread_mutex_lock(&w->mutex);
+    w->games_removed=removed;
+    w->count=count>0 && count<=(int)DESK_LINKS ? (unsigned)count : 0;
+    memcpy(w->published,w->scratch,w->count*sizeof(*w->published));
+    memcpy(w->published_stamps,w->scratch_stamps,w->count*sizeof(*w->published_stamps));
+    w->scanned_ns=monotonic(); w->scanning=0;
+    w->scans++; w->game_scans+=!!games; w->stats+=s.stats; w->reads+=s.reads;
+    pthread_mutex_unlock(&w->mutex);
+}
 static void *links_thread(void *arg)
 {
     struct links_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->mutex);
         while (!w->scan_requested && !w->launch_requested) pthread_cond_wait(&w->changed,&w->mutex);
-        int launch=w->launch_requested; char path[260];
+        int launch=w->launch_requested, games=0; char path[260];
         if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
-        else w->scan_requested=0;
+        else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
         if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
@@ -1547,23 +1798,22 @@ static void *links_thread(void *arg)
             if (!result) result=ciuki_win32_shell_launch(r);
             free(r);
             pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; pthread_mutex_unlock(&w->mutex);
-        } else {
-            int count=links_list(NULL,w->scratch,DESK_LINKS);
-            unsigned removed=w->games_removed;
-            for(unsigned g=1;g<=CIUKI_DOSVM_GAME_COUNT;g++){
-                struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
-                if(!ciuki_dosvm(CIUKI_DOSVM_GAME_QUERY,&c)){
-                    if(c.state==1)removed&=~(1u<<(g-1));else removed|=1u<<(g-1);
-                }
-            }
-            pthread_mutex_lock(&w->mutex);
-            w->games_removed=removed;
-            w->count=count>0 && count<=(int)DESK_LINKS ? (unsigned)count : 0;
-            memcpy(w->published,w->scratch,w->count*sizeof(*w->published));
-            pthread_mutex_unlock(&w->mutex);
-        }
+        } else links_scan_once(w,games);
     }
     return NULL;
+}
+/* f2-95: request policy, called with the worker's mutex held. A forced
+ * request waits for a scan in progress (it may predate the change). */
+static void links_request(struct links_worker *w, struct desktop *d, uint64_t now)
+{
+    unsigned force=d->v3_links_force;
+    if (force && !w->scanning) {
+        w->scan_requested=1; if (force&DESK_LINKS_GAMES) w->games_requested=1;
+        d->v3_links_force=0; pthread_cond_signal(&w->changed);
+    } else if (!force && !w->scan_requested && !w->scanning && w->scanned_ns &&
+               now-w->scanned_ns>=DESK_LINKS_RESCAN_NS) {
+        w->scan_requested=1; pthread_cond_signal(&w->changed);
+    }
 }
 static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsigned cap)
 {
@@ -1571,8 +1821,9 @@ static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsign
     if (!w || pthread_mutex_trylock(&w->mutex)) return -EAGAIN;
     unsigned n=w->count<cap ? w->count : cap;
     int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
-    memcpy(out,w->published,n*sizeof(*out)); w->scan_requested=1;
-    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
+    if (!same) memcpy(out,w->published,n*sizeof(*out));
+    links_request(w,d,monotonic());
+    pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
 }
 static int link_cached(struct desktop *d,const char *source,struct desk_launch_record *out)
 {
@@ -1614,7 +1865,7 @@ static void links_start(struct desktop *d)
     struct links_worker *w=calloc(1,sizeof(*w)); if (!w) return;
     if (pthread_mutex_init(&w->mutex,NULL)) { free(w); return; }
     if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
-    w->scan_requested=1;
+    w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
     links_worker=w;
     d->install_program=install_program;
@@ -1674,7 +1925,7 @@ static void shell_setup(struct desktop *d, int gate)
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
-    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_worker_prepare(d); }
+    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
     if (!gate) desktop_watchdog_start(d);
 }
@@ -1690,6 +1941,7 @@ int main(int argc, char **argv)
     int channels[DESK_CLIENTS], channel_count = 0;
     const char *demos[DESK_CLIENTS], *victim = NULL, *launch = NULL;
     for (int a = 1; a < argc; a++) if (!strcmp(argv[a],"--test=crash-isolation")) test = 1;
+    for (int a = 1; a < argc; a++) if (!strcmp(argv[a],"--test=vm-fullscreen")) fullscreen_test = 1;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a],"--test=crash-isolation")) continue;
         if (!strcmp(argv[a],"--test=vm-fullscreen")) { fullscreen_test=1; continue; }
@@ -1707,6 +1959,11 @@ int main(int argc, char **argv)
             victim = argv[a]+9;
         else if (test && !strncmp(argv[a],"--cycles=",9)) cycles = number(argv[a]+9,100);
         else if (!strncmp(argv[a],"--launch=",9) && argv[a][9] && !launch) launch = argv[a]+9;
+        else if (fullscreen_test && !strncmp(argv[a],"--launch-game=",14) && startup_game_index<0) {
+            for (unsigned g=0;g<DESK_GAME_COUNT;g++) if (!strcmp(argv[a]+14,desk_games[g].title)) startup_game_index=(int)g;
+            if (startup_game_index<0) return 2;
+        } else if (fullscreen_test && !strncmp(argv[a],"--game-kernel=",14) && !startup_game_kernel &&
+                   (!strcmp(argv[a]+14,"unified") || !strcmp(argv[a]+14,"freedos-1.3"))) startup_game_kernel=argv[a]+14;
         else return 2;
     }
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
@@ -1765,7 +2022,7 @@ int main(int argc, char **argv)
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
     unsigned reported_progress=0;
-    int holding=0, shifted=0, startup_sound=0;
+    int holding=0, shifted=0, startup_sound=0, accel_noticed=0;
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
@@ -1836,11 +2093,19 @@ int main(int argc, char **argv)
                 desk_w32_start(d);
                 report=1;break;
             }
+            case GATE_BROWSER: {
+                char url[sizeof(control->fixture)];
+                memcpy(url,control->fixture,sizeof(url));
+                if (!memchr(url,0,sizeof(url)) || !url[0]) return gate_error("browser_url",EINVAL,generation);
+                int pid=desk_browser_fixture_begin(d,url);
+                if (pid<0) return gate_error("browser_launch",-pid,generation);
+                report=1;break;
+            }
             case GATE_INTERACT: interaction=1; report=1; break;
             default: return gate_error("command",EINVAL,generation);
             }
         }
-        uint64_t input_begin=monotonic();
+        uint64_t input_begin=gate ? monotonic() : 0; /* f2-95: gate statistics only */
         desktop_stage(STALL_INPUT);
         if (!gate) {
             int n=desk_drain_input(d,ciuki_input_read);
@@ -1902,8 +2167,7 @@ int main(int argc, char **argv)
                 input_dirty=1;
             } else desk_input(d,&ev);
         }
-        uint64_t input_time=monotonic()-input_begin;
-        if (gate) { d->stats.input_ns+=input_time; d->pending_input_ns+=input_time; }
+        if (gate) { uint64_t input_time=monotonic()-input_begin; d->stats.input_ns+=input_time; d->pending_input_ns+=input_time; }
         /* Input has priority over IPC, theme/file reads and rendering. The
          * gate's FIFO may deliberately retain paced events; ordinary input
          * drains again before rendering if a full FIFO left anything queued. */
@@ -1918,6 +2182,7 @@ int main(int argc, char **argv)
             }
             desk_flush(d,i);
         }
+        d->drain_ns=monotonic();
         if (!gate && fifo_count==0) {
             (void)desk_drain_input(d,ciuki_input_read);
         }
@@ -1958,6 +2223,7 @@ int main(int argc, char **argv)
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         int render_ready=gate || desk_frame_due(d,monotonic());
         uint64_t presents_before=d->presents; desktop_stage(STALL_RENDER);
+        if (!render_ready) errno=0; /* the watchdog reads errno only from a frame */
         int redraw = render_ready ? desk_redraw(d) : -1;
         if (!gate) desktop_watchdog_frame(d,presents_before,redraw);
         if (render_ready && redraw && errno!=EINTR && errno!=EBUSY && !display_reported) {
@@ -1966,6 +2232,12 @@ int main(int argc, char **argv)
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
+        if (!gate && d->shell && d->presents && !accel_noticed && (accel_noticed=accel_notice(d))) d->accel_lost=0;
+        if (d->accel_lost && accel_noticed) {
+            /* f2-92: the engine was quarantined after the notice: say so. */
+            d->accel_lost=0; accel_noticed=0;
+            memset(&accel_notice_state,0,sizeof(accel_notice_state));
+        }
         desk_v3_fixture_tick(d);
         desk_dialogs_fixture_tick(d);
         desk_upper_fixture_tick(d);
@@ -1976,7 +2248,7 @@ int main(int argc, char **argv)
             if (mode_frame==DESK_DISPLAY_PERSIST_FRAME && d->shell && !d->sh.gate && settings_save(d))
                 snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
         }
-        if (!gate) performance_sample(d,monotonic());
+        if (!gate) performance_sample(d,d->now_ns); /* f2-95: the turn's clock, 2 s cadence */
         /* The controller hashes the framebuffer during this report: send it
          * only after the checkpoint frame has been presented completely. */
         if (gate && d->app_test && d->app_checkpoint>d->app_reported && !d->damage.count) {
@@ -2043,10 +2315,31 @@ int main(int argc, char **argv)
         /* Input drains and all service polls run together. An unchanged
          * desktop sleeps 10 ms; real work retains its earlier deadline. */
         desktop_stage(STALL_IDLE);
+        /* f2-92: offscreen-cache uploads and checks between frames, one
+         * bounded engine request per turn while nothing is due. */
+        int cache_more=!gate && !d->damage.count && !d->move_damage.count && !d->present_damage.count &&
+            desk_accel_cache_step(d,d->now_ns);
+        /* f2-95: input that arrived during this turn's services and frame is
+         * read before sleeping (and its client messages leave now), so the
+         * sleep ends at its frame instead of after a further idle wait. */
+        int late_input=0;
+        if (!gate && fifo_count==0) {
+            /* One kernel entry when nothing arrived (the common idle turn). */
+            struct ciuki_input_event late[CIUKI_INPUT_READ_MAX];
+            int n=ciuki_input_read(d->input,late,CIUKI_INPUT_READ_MAX);
+            if (n>0) {
+                d->now_ns=monotonic(); late_input=1;
+                for (int i=0;i<n;i++) desk_input(d,&late[i]);
+                (void)desk_drain_input(d,ciuki_input_read);
+                for (int i=0;i<DESK_CLIENTS;i++) desk_flush(d,i);
+            }
+        }
         uint64_t sleep_now=monotonic();
         __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(sleep_now/1000000ull),__ATOMIC_RELEASE);
         uint64_t timer=d->shell && !gate && !d->power.state ? mixer_poll_next : UINT64_MAX;
-        uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count!=0,timer);
+        uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count!=0 || late_input,timer);
+        if (cache_more && wait>1000000ull) { wait=1000000ull; pause_reason=PAUSE_CACHE; }
+        loop_turn(wait);
         struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait}; nanosleep(&pause,NULL);
     }
 }

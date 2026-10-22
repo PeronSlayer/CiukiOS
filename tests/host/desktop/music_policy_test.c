@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <string.h>
+#include <unistd.h>
 #include "../../../apps/music/view.h"
 static uint64_t test_now;
 static int model_clock(clockid_t id, struct timespec *t)
@@ -130,9 +132,137 @@ static void publication(struct music_runtime *r)
     assert(r->snapshot.publication<=before+4);
     puts("PASS unchanged fields suppressed and state/buffering publications capped at 10Hz");
 }
+static void t23_holds(void)
+{
+    /* Trial histogram (no invented timestamps): isolate each refill delay,
+     * restoring decoded PCM between holds. Device CPU overruns are covered
+     * by the real FS mutex replay and scheduler tests, not this DAC model. */
+    const struct { unsigned count,ms; } holds[]={{406,125},{91,350},{10,750},{5,1250},{1,1502},{34,1633},{1,1837},{1,602},{1,441}};
+    unsigned cases=0;
+    for (unsigned kind=0;kind<sizeof(holds)/sizeof(*holds);kind++)
+        for (unsigned h=0;h<holds[kind].count;h++) {
+            struct device d={0};
+            struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL,NULL};
+            struct music_player *p=calloc(1,sizeof(*p)); assert(p);
+            test_now=0; music_player_init(p,&out,NULL,NULL); prepare(p);
+            /* f1-87 C: the decoded reservoir the reader keeps once it has
+             * filled the ring (>= 2 s). f1-101 starts playback after
+             * MUSIC_PREFILL_MS (1 s); this case is the steady state. */
+            p->count=p->view.rate*2u;
+            assert(!music_player_pump(p));
+            for (unsigned t=2;t<=holds[kind].ms;t+=2) {
+                test_now=(uint64_t)t*1000000; assert(!music_player_pump(p));
+            }
+            assert(!d.gaps && !p->view.starvations && p->count);
+            music_player_destroy(p); free(p); cases++;
+        }
+    printf("PASS F1-87 T23 hold histogram cases=%u max=1837ms decoded_start=2s DAC_gaps=0 starvations=0\n",cases);
+}
+/* f1-101: the kernel's producer state in the level record, and the device
+ * lead that mirrors a reservoir under its 500 ms target. */
+static struct music_producer kernel_producer;
+static unsigned producer_calls;
+static int producer_state(void *ctx,struct music_producer *out)
+{ (void)ctx; producer_calls++; *out=kernel_producer; return 0; }
+static void producer_level(void)
+{
+    struct device d={0};
+    struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL,producer_state};
+    struct music_player *p=calloc(1,sizeof(*p)); assert(p);
+    test_now=0; music_player_init(p,&out,NULL,NULL); prepare(p);
+    for (unsigned i=0;i<20;i++) {
+        p->count=music_frames_ms(48000,MUSIC_TARGET_MS); test_now+=2000000; assert(!music_player_pump(p));
+    }
+    assert(d.queued>MUSIC_DEVICE_BEHIND); /* at the target: the device stream is filled */
+    p->count=music_frames_ms(48000,MUSIC_TARGET_MS)-1;
+    unsigned high=0;
+    for (unsigned i=0;i<100;i++) {
+        test_now+=2000000; assert(!music_player_pump(p));
+        if (i>=40 && d.queued>high) high=d.queued; /* after the device drained to the mark */
+        p->count=music_frames_ms(48000,MUSIC_TARGET_MS)-1;
+    }
+    assert(high<=MUSIC_DEVICE_BEHIND && high+256>MUSIC_DEVICE_BEHIND && !d.gaps);
+    /* EOF: the tail is not a deficit, the stream fills */
+    p->eof=1; test_now+=2000000; assert(!music_player_pump(p)); assert(d.queued>MUSIC_DEVICE_BEHIND);
+    p->eof=0;
+    /* the level record carries the kernel's boost state as window deltas */
+    FILE *capture=tmpfile(); assert(capture);
+    fflush(stderr); int saved=dup(2); assert(saved>=0 && dup2(fileno(capture),2)==2);
+    kernel_producer=(struct music_producer){.flags=3,.boosts=4,.over_budget=1,.boost_us=12500};
+    memset(&p->level,0,sizeof(p->level)); p->producer_base=(struct music_producer){0};
+    for (unsigned i=0;i<2600;i++) { test_now+=2000000; p->count=MUSIC_RING/2; assert(!music_player_pump(p)); }
+    kernel_producer=(struct music_producer){.flags=0,.boosts=6,.over_budget=1,.boost_us=20500};
+    for (unsigned i=0;i<2600;i++) { test_now+=2000000; p->count=MUSIC_RING/2; assert(!music_player_pump(p)); }
+    fflush(stderr); assert(dup2(saved,2)==2); close(saved);
+    char text[4096]={0}; rewind(capture); size_t n=fread(text,1,sizeof(text)-1,capture); fclose(capture); text[n]=0;
+    assert(strstr(text," boost=3 boosts=4 boost_ms=12 over=1\n"));
+    assert(strstr(text," boost=0 boosts=2 boost_ms=8 over=0\n"));
+    /* f4-37: one cost record per level record, every field in order. */
+    unsigned records=0;
+    for (const char *line=strstr(text,"[music] cost ");line;line=strstr(line+1,"[music] cost ")) {
+        unsigned v[18]; int end=0;
+        assert(sscanf(line,"[music] cost decode_us=%u synth_us=%u imdct_us=%u resample_us=%u ui_us=%u repaints=%u "
+                      "frames=%u tiny_values=%u pcm_us=%u io_us=%u pump_us=%u out=%u mhz=%u de=%u ue=%u best_kc=%u loop=%u mem=%u%n",
+                      v,v+1,v+2,v+3,v+4,v+5,v+6,v+7,v+8,v+9,v+10,v+11,v+12,v+13,v+14,v+15,v+16,v+17,&end)==18);
+        assert(v[16]>0 && v[17]>0); /* calibration workloads ran (TSC cycles) */
+        assert(line[end]=='\n' && end<=240); records++;
+    }
+    assert(records==2);
+    assert(producer_calls>=2);
+    music_player_destroy(p); free(p);
+    puts("PASS F1-101 device lead mirrors a reservoir under 500 ms (<=1280 frames), fills at the target and at EOF; level record boost=flags boosts/boost_ms/over deltas");
+}
+/* f4-37: the player window presents at most 15 frames/s however often the
+ * toolkit is invalidated, and position updates render and present only the
+ * widgets that changed. The loop follows run() in apps/music/main.c. */
+static void ui_rate(void)
+{
+    struct music_app *app=calloc(1,sizeof(*app)); struct du_ui *ui=calloc(1,sizeof(*ui));
+    uint32_t *back=calloc(560*420,4), *shown=calloc(560*420,4); assert(app && ui && back && shown);
+    struct music_ui_backend backend={send_command,volume_get,NULL,NULL,NULL};
+    du_init(ui,back,560,420); music_attach(app,ui,&backend); du_render(ui);
+    struct du_window w={0}; w.ui=ui; w.back=back; w.pixels=shown; w.info.width=560; w.info.height=420;
+    w.present_rendered=1; du_window_present(&w); w.damaged=0;
+    struct music_snapshot *s=calloc(1,sizeof(*s)); assert(s);
+    s->state=MUSIC_PLAYING; s->rate=48000; s->duration=48000ull*180; s->playlist.count=1;
+    strcpy(s->playlist.path[0],"/Documents/Music/Evening.mp3");
+    struct du_rect time=du_get(ui,M_TIME)->box, seek=du_get(ui,M_SEEK)->box;
+    music_update(app,s); du_render(ui); du_window_present(&w); w.damaged=0; /* title, list, status */
+    for (unsigned pointer=0;pointer<2;pointer++) {
+        uint64_t last=0; int presented=0; unsigned frames=0, window_frames=0, worst=0; uint64_t compared=0;
+        for (uint64_t now=1000000;now<=10000000000ull;now+=1000000) {
+            s->position=now*48/1000000;
+            if (!(now%100000000)) music_update(app,s);   /* idle() polls at 10 Hz */
+            if (pointer && !(now%3000000)) ui->dirty=1;  /* motion events: full repaints */
+            if (!music_ui_hold(presented,last,now) && ui->dirty) {
+                int bounded=ui->dirty==3; du_render(ui); du_window_present(&w);
+                if (bounded) {
+                    struct du_rect r=ui->rendered;
+                    assert(r.y>=time.y && r.y+r.h<=seek.y+seek.h && r.x>=time.x && r.x+r.w<=time.x+time.w);
+                    if (w.damaged) assert(w.damage.y>=r.y && w.damage.y+w.damage.h<=r.y+r.h);
+                    compared+=(uint64_t)r.w*(uint64_t)r.h;
+                }
+                w.damaged=0; frames++;
+                if (presented && now-last<MUSIC_UI_FRAME_NS) abort();
+                last=now; presented=1;
+            }
+            if (!(now%1000000000ull)) { if (window_frames>worst) worst=window_frames; window_frames=0; }
+            else if (last==now) window_frames++;
+        }
+        assert(worst<=MUSIC_UI_FPS && frames<=10*MUSIC_UI_FPS);
+        if (!pointer) assert(frames>=10 && compared/frames<=(uint64_t)(seek.y+seek.h-time.y)*(uint64_t)time.w);
+        printf("PASS F4-37 UI %s: frames=%u in 10s, max %u per second (bound %u), pixels compared per bounded frame %llu of %u\n",
+               pointer ? "under pointer motion" : "position only",frames,worst,MUSIC_UI_FPS,
+               (unsigned long long)(compared/frames),560u*420u);
+    }
+    du_release(ui); free(back); free(shown); free(ui); free(app); free(s);
+}
 int main(void)
 {
-    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d};
+    ui_rate();
+    t23_holds();
+    producer_level();
+    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL,NULL};
     struct music_runtime *r=calloc(1,sizeof(*r)); assert(r);
     assert(!pthread_mutex_init(&r->lock,NULL)); music_player_init(&r->player,&out,NULL,NULL);
     contention(r,&d); backpressure(r,&d); debounce(r,&d); publication(r);

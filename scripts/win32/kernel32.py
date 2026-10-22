@@ -16,6 +16,9 @@ FORWARDS={name:'ntdll.'+target for name,target in {
     'RaiseException':'RaiseException', 'RtlUnwind':'RtlUnwind',
     'SetUnhandledExceptionFilter':'SetUnhandledExceptionFilter',
     'UnhandledExceptionFilter':'UnhandledExceptionFilter',
+    # f5-15B: Windows 95/98 KERNEL32 forwards these to NTDLL; DirectX 3
+    # DXSETUP.EXE (Diablo shareware CD) imports KERNEL32!RtlZeroMemory.
+    'RtlFillMemory':'RtlFillMemory','RtlMoveMemory':'RtlMoveMemory','RtlZeroMemory':'RtlZeroMemory',
 }.items()}
 # f5-20A: the LZ expansion API is implemented once, by the CiukiOS LZ32
 # facade; KERNEL32 forwards the names the reused Wine DLLs bind there.
@@ -61,6 +64,7 @@ def build(out,base,flags):
     subprocess.run(['clang',*flags,'-c',str(source),'-o',str(obj)],check=True);objects.append(str(obj))
     imported=stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text())['kernel32.dll']
     imported|=stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('kernel32.dll',set())
+    imported|=stubs.acceptance_imports('kernel32.dll')  # f5-15B
     missing=sorted((imported|REQUIRED_VFS)-exports.keys()-FORWARDS.keys())
     stub=['/* SPDX-License-Identifier: LGPL-2.1-or-later */',stub_signatures.DECLARATIONS]
     definitions=['; SPDX-License-Identifier: LGPL-2.1-or-later','LIBRARY kernel32.dll','EXPORTS']

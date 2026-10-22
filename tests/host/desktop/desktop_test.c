@@ -245,8 +245,12 @@ static void test_damage(void)
     }
     assert(a.count<=DESK_DAMAGE_MAX);
     memset(&a,0,sizeof(a));
+    /* f2-95: a 33rd separate rectangle joins the closest pair (least added
+     * area), not the whole list into one 97-pixel bounding box. */
     for (int n=0; n<33; n++) desk_damage_add(&a,(struct desk_box){n*3,0,1,1},128,128);
-    assert(a.count==1 && a.boxes[0].w==97);
+    unsigned area=0; for (unsigned i=0;i<a.count;i++) area+=(unsigned)(a.boxes[i].w*a.boxes[i].h);
+    assert(a.count==DESK_DAMAGE_MAX && area==35);
+    for (int n=0; n<33; n++) { int covered=0; for (unsigned i=0;i<a.count;i++) covered|=covers(a.boxes[i],n*3,0); assert(covered); }
     struct desk_box f=desk_frame(2048,2048,0,32);
     assert(f.w==2054 && f.h==2075);
     puts("PASS damage/frame: clipping, signed extremes, transitive merge, saturation, coverage");
@@ -448,6 +452,19 @@ static void test_lifecycle(void)
     desk_heartbeat(&d,6000000000ull); assert(d.clients[survivor].unresponsive && d.clients[survivor].window);
     request(&m,DESK_PONG,8); desk_put32(m.data+4,d.clients[survivor].serial); desk_receive(&d,survivor,&m);
     assert(!d.clients[survivor].unresponsive);
+    /* f2-88: one rule for every application. A first frame (or any reply) 2 s late is not "not responding". */
+    d.clients[survivor].ping_pending=0; d.clients[survivor].next_ping_ns=0;
+    desk_heartbeat(&d,10000000000ull); assert(d.clients[survivor].ping_pending);
+    desk_heartbeat(&d,12100000000ull); assert(!d.clients[survivor].unresponsive);
+    /* A desktop-owned wait (launch VFS lookup, present) past the 5 s deadline: the loop has not drained the
+     * channels since, so the unread PONG is not charged to the application... */
+    d.drain_ns=10500000000ull;
+    desk_heartbeat(&d,16000000000ull); assert(!d.clients[survivor].unresponsive);
+    /* ...and once the desktop drained the channels after the deadline with no PONG, the window is marked. */
+    d.drain_ns=16100000000ull;
+    desk_heartbeat(&d,16200000000ull); assert(d.clients[survivor].unresponsive);
+    request(&m,DESK_PONG,8); desk_put32(m.data+4,d.clients[survivor].serial); desk_receive(&d,survivor,&m);
+    assert(!d.clients[survivor].unresponsive); d.drain_ns=0;
     unsigned baseline=fake_live();
     for (int n=0; n<100; n++) {
         fake_sent=0;

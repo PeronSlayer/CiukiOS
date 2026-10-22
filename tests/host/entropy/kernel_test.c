@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#include <stdarg.h>
 #define CHECK(x) do { if(!(x)) { fprintf(stderr,"FAIL entropy kernel %u: %s\n",__LINE__,#x); abort(); } } while(0)
 #define CIUKI_CPU_H
 static uint8_t physical[1024*1024];
@@ -34,8 +35,12 @@ static unsigned pit_reads;
 static uint8_t speaker=2;
 static uint32_t irq_save(void) { uint32_t f=fake_flags;fake_flags=0;return f; }
 static void irq_restore(uint32_t f) { fake_flags=f; }
-static uint64_t read_tsc_serialized(void) { if(!stalled)fake_clock+=10000;return fake_clock; }
-static uint64_t read_tsc_unserialized(void) { return ++fake_clock; }
+/* Boot: 10 ms per read (boot_per_ms=1000 cycles). Runtime: one read per
+ * round boundary; runtime_step cycles per round (100 = 0.1 ms by default). */
+static uint64_t runtime_step=100;
+static uint64_t read_tsc_serialized(void) { if(!stalled)fake_clock+=g_current ? runtime_step : 10000;return fake_clock; }
+static bool irq_counter_stopped;
+static uint64_t read_tsc_unserialized(void) { return irq_counter_stopped ? fake_clock : ++fake_clock; }
 static uint8_t inb(uint16_t port) { CHECK(port==0x61);return pit_stalled || pit_reads++<2 ? speaker&~0x20u : speaker|0x20u; }
 static void outb(uint16_t port,uint8_t value) { if(port==0x61)speaker=value;else CHECK(port==0x42 || port==0x43); }
 uint64_t ktime_cycles(void) { return read_tsc_serialized(); }
@@ -45,19 +50,24 @@ volatile uint64_t g_ticks;
 bool g_cpu_tsc=true;
 struct task *g_current;
 static struct process process;
-static struct task worker;
-static bool refuse_worker, readonly, write_failure;
-static unsigned started, locked, logs, safe_points, boot_logs, raw_logs;
+static struct task worker, collector;
+static bool refuse_worker, refuse_collector, readonly, write_failure;
+static unsigned started, locked, logs, safe_points, pauses, boot_logs, raw_logs;
 static unsigned stream_samples, stream_complete, serial_waits;
 static uint64_t serial_ticket;
 static bool serial_refuse, serial_lost, serial_pending, in_jent_read, read_failure;
-static void (*worker_entry)(void *);
+static void (*worker_entry)(void *), (*collector_entry)(void *);
 static jmp_buf worker_return;
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { (void)m;CHECK(!locked++); }
 void kmutex_unlock(struct kmutex *m) { (void)m;CHECK(locked--==1); }
+static char last_record[512], last_jitter[512];
+static unsigned jitter_logs;
 void klog(const char *fmt,...) { CHECK(strncmp(fmt,"[entropy]",9)==0);logs++;
     if(strstr(fmt,"boot rounds="))boot_logs++;
+    char line[512];va_list ap;va_start(ap,fmt);vsnprintf(line,sizeof(line),fmt,ap);va_end(ap);
+    if(!strncmp(line,"[entropy] sources=",18))strcpy(last_record,line);
+    if(!strncmp(line,"[entropy] jitter ",17)){strcpy(last_jitter,line);jitter_logs++;}
 }
 uint32_t serial_evidence_begin(size_t bytes)
 {
@@ -91,11 +101,19 @@ void serial_snapshot(struct serial_stats *s)
     *s=(struct serial_stats){.present=!serial_lost,.sent=serial_pending?serial_ticket-1:serial_ticket};
 }
 void panic(const char *fmt,...) { (void)fmt;abort(); }
+/* f6-21: interrupt timing in a P_NORMAL worker, jitter in an idle-class collector. */
+static bool collecting; /* tentative: defined by entropy.c below */
 struct task *task_create_kernel(const char *n,void (*fn)(void *),void *arg,enum task_prio prio)
-{ CHECK(!strcmp(n,"entropy") && !arg && prio==P_NORMAL);worker_entry=fn;return refuse_worker?NULL:&worker; }
-void task_start(struct task *t) { CHECK(t==&worker);started++; }
+{
+    CHECK(!arg);
+    if(!strcmp(n,"entropy")){CHECK(prio==P_NORMAL);worker_entry=fn;return refuse_worker?NULL:&worker;}
+    CHECK(!strcmp(n,"jitter") && prio==P_IDLE);if(refuse_collector)return NULL;collector_entry=fn;return &collector;
+}
+void task_start(struct task *t) { CHECK(t==&worker || t==&collector);started++; }
 void task_sleep_ms(uint32_t n) {
-    CHECK(n==10 && !locked && fake_flags==0x200);
+    CHECK((n==10 || n==1) && !locked && fake_flags==0x200);
+    /* A pause: only the collector, only inside a session; it returns from a new dispatch. */
+    if(n==1){CHECK(g_current==&collector && collecting);pauses++;collector.dispatches++;return;}
     if(serial_pending){serial_pending=false;serial_waits++;return;}
     longjmp(worker_return,1);
 }
@@ -107,10 +125,24 @@ bool ua_range(const struct uaddr *u,uint32_t address,uint32_t n,uint32_t prot)
 int ua_user_write(const struct uaddr *u,uint32_t address,const void *data,uint32_t n)
 { if(write_failure)return -ENOMEM;if(!ua_range(u,address,n,PROT_WRITE))return -EFAULT;memcpy(user_buffer+(address-4096),data,n);return 0; }
 static const struct entropy_jent_ops *jent_ops;
-static bool init_failure;
-static unsigned reads, closes;
+static bool init_failure, read_permanent;
+static unsigned reads, closes, inits, init_first, init_last, report_osr;
 void entropy_jent_begin(const struct entropy_jent_ops *o) { jent_ops=o; }
-int entropy_jent_init(void) { return init_failure ? -1 : 0; }
+int entropy_jent_init(unsigned first,unsigned last)
+{
+    CHECK(!locked && first>=ENTROPY_JENT_MIN_OSR && first<=last && last<=ENTROPY_JENT_MAX_OSR);inits++;init_first=first;init_last=last;
+    /* A failed escalation stops where its 5 s budget ran out (here four OSRs on). */
+    report_osr=!init_failure || first==last ? first : first+4<last ? first+4 : last;
+    return init_failure ? -1 : 0;
+}
+unsigned entropy_jent_stage(void) { return ENTROPY_JENT_OUTPUT; }
+void entropy_jent_report(struct entropy_jent_report *r)
+{
+    memset(r,0,sizeof(*r));r->osr=report_osr;r->result=init_failure || read_failure ? -1 : 0;
+    r->permanent=read_failure && read_permanent;
+    if(init_failure){r->alarm=1;r->alarm_stage=ENTROPY_JENT_SHA3;r->alarm_osr=init_first;r->alarm_round=2644;
+        r->rounds[0]=1125;r->rounds[1]=1428;r->rounds[2]=91;r->refused=524288;}
+}
 int entropy_jent_read(uint8_t bytes[32])
 {
     CHECK(!locked);reads++;jent_ops->yield();
@@ -128,8 +160,47 @@ struct ciuki_boot_info g_boot;
 #include "../../../src/kernel/core/entropy.c"
 #include "../../../src/kernel/lib/stackprot.c"
 #include "../../../src/kernel/proc/syscalls_entropy.c"
+/* One 10 ms iteration of each task: the drain worker, then the collector. */
+static void step(void)
+{
+    g_current=&worker;if(!setjmp(worker_return))worker_entry(NULL);
+    if(collector_entry){g_current=&collector;if(!setjmp(worker_return))collector_entry(NULL);}
+    g_current=&worker;
+}
+/* f6-21 turn policy: 1 ms turns, a pause when the next round could cross. */
+static unsigned turn_rounds(struct entropy_turns *t, uint64_t *now, uint64_t cost, uint32_t dispatches)
+{
+    unsigned k=1;
+    while(turns_round(t,*now+=cost,dispatches)==TURN_CONTINUE)k++;
+    return k;
+}
+static void turns_policy(void)
+{
+    struct entropy_turns t={.bound=1000};uint64_t now=0;
+    turns_open(&t,0,5);
+    CHECK(turn_rounds(&t,&now,127,5)==7 && t.turn_max==889 && t.pauses==1 && t.turns==1 && t.active==889);   /* T23: 127 us rounds */
+    now+=1000;turns_resume(&t,now,6);                       /* slept one tick, dispatched again */
+    CHECK(turn_rounds(&t,&now,127,6)==7 && t.turns==2 && t.turn_max==889 && t.pauses==2 && t.active==2*889);
+    /* A dispatch the collector did not see (a blocking wait) also starts a
+     * new turn; the unknown interval counts as the predicted round. */
+    now+=1000;turns_resume(&t,now,7);now+=300;
+    now+=50000;CHECK(turns_round(&t,now,9)==TURN_CONTINUE && t.turns==4 && now-t.start==127 && t.active==2*889+127);
+    /* QEMU TCG-like: a round alone exceeds the bound; one round per turn. */
+    uint64_t budget=t.active;turns_open(&t,0,1);now=0;CHECK(t.active==budget); /* the budget clock is never reset */
+    for(unsigned i=0;i<5;i++){now+=1500;CHECK(turns_round(&t,now,1+i)==TURN_PAUSE);now+=1000;turns_resume(&t,now,2+i);}
+    CHECK(t.pauses==5 && t.turns==6 && t.turn_max==1500 && t.round_max==1500 && t.active-budget==5*1500);
+    /* A 600 us chunk (e.g. the pool's search) ends its turn; the prediction
+     * then decays: 6 rounds in the next turn, 7 again after it. */
+    turns_open(&t,0,1);now=0;
+    CHECK(turns_round(&t,now+=600,1)==TURN_PAUSE);
+    now+=1000;turns_resume(&t,now,2);CHECK(turn_rounds(&t,&now,127,2)==6);
+    now+=1000;turns_resume(&t,now,3);CHECK(turn_rounds(&t,&now,127,3)==7);
+    CHECK(t.turn_max==889 && t.round_max==600 && t.pauses==3);
+    puts("PASS f6-21 turn policy: T23 127 us rounds -> 7 per 1 ms turn, new turn after a pause, preemption or blocking wait, TCG rounds over 1 ms -> one per turn, a long chunk shortens the next turn only");
+}
 int main(void)
 {
+    turns_policy();
     setvbuf(stdout,NULL,_IOLBF,0);
     void *allocation=entropy_alloc(262144);CHECK(allocation && owned_pages==65);entropy_free(allocation);CHECK(!owned_pages);
     allocation=entropy_alloc(500);CHECK(allocation && !owned_pages);entropy_free(allocation);
@@ -154,22 +225,68 @@ int main(void)
     for(unsigned i=0;i<16;i++)entropy_irq(i);entropy_irq(16);
     CHECK(fast.count==16 && fast.sources==65535 && !memcmp(&pool,&before,sizeof(pool)));
     refuse_worker=true;entropy_start();CHECK(!worker_started && !started);
-    refuse_worker=false;entropy_start();entropy_start();CHECK(worker_started && started==1);
-    g_current=&worker;
+    refuse_worker=false;entropy_start();entropy_start();CHECK(worker_started && started==2 && !desktop_ready && turns.bound==1000);
+    g_current=&worker;unsigned boot_collected=reads;
     if(!setjmp(worker_return))worker_entry(NULL);
-    CHECK(!fast.count && (pool.sources&ENTROPY_SOURCE_IRQ) && __stack_chk_guard==guard && safe_points==8);
+    CHECK(!fast.count && (pool.sources&ENTROPY_SOURCE_IRQ) && reads==boot_collected && !safe_points); /* the worker never samples jitter */
+    g_current=&collector;
+    if(!setjmp(worker_return))collector_entry(NULL);
+    CHECK(__stack_chk_guard==guard && safe_points==8 && !pauses && !collecting);
+    CHECK(turns.turns==1 && turns.turn_max==900 && turns.round_max==100 && turns.active==900); /* 8 rounds + the tail */
     CHECK(pool.estimate_bits==256);unsigned collected=reads;
-    if(!setjmp(worker_return))worker_entry(NULL);
+    step();
     CHECK(reads==collected); /* saturation does not sample jitter */
     g_ticks=ENTROPY_RESEED_MS;
     CHECK(!entropy_syscall(&tf) && pool.reseeds==2 && !pool.estimate_bits);
-    if(!setjmp(worker_return))worker_entry(NULL);
-    CHECK(reads==collected+8 && pool.estimate_bits==256);
+    /* 1.5 ms per round (QEMU TCG-like): every round ends its turn with a pause,
+     * and the budget clock counts collection only (8 x 1.5 ms = 12 ms). */
+    uint64_t active=turns.active;runtime_step=1500;unsigned points=safe_points;
+    step();runtime_step=100;
+    CHECK(reads==collected+8 && pool.estimate_bits==256 && pauses==8 && safe_points==points);
+    CHECK(turns.turns==9 && turns.turn_max==1500 && turns.round_max==1500 && turns.active-active==8*1500+1500);
+    CHECK(collection_ms()==turns.active/1000);
+    /* Desktop gate: retries wait for the first frame on a normal boot. */
+    entropy_desktop_presented();CHECK(desktop_ready);
     g_ticks+=ENTROPY_RESEED_MS;CHECK(!entropy_syscall(&tf));
     g_ticks+=ENTROPY_RESEED_MS;
     memset(user_buffer,0xa5,sizeof(user_buffer));CHECK(entropy_syscall(&tf)==-EAGAIN && user_buffer[0]==0xa5);
-    read_failure=true;unsigned freed=closes;worker_entry(NULL);
-    CHECK(pool.failed && closes==freed+1 && entropy_syscall(&tf)==-EAGAIN);
+    /* f6-19: a jitter read failure retires the collector, never the pool. */
+    read_failure=true;unsigned freed=closes,seen=jitter_logs;
+    step();
+    CHECK(!pool.failed && closes==freed+1 && jitter==JITTER_RETRY && jitter_attempts==1 && jitter_logs==seen+1);
+    CHECK(strstr(last_jitter,"attempt=read result=-1 osr=3 ") && strstr(last_jitter," state=retry"));
+    CHECK(strstr(last_record," health=ok ") && strstr(last_record," jitter=retry "));
+    CHECK(entropy_syscall(&tf)==-EAGAIN && jitter_retry_ms==g_ticks+1000 && jitter_next_osr==4);
+    /* Interrupt timing alone supplies the fresh 256 bits: 128 edges per
+     * 10 ms drain on a moving counter, 2 bits each (Linux: count/64). The
+     * runtime retry at +1 s resumes at OSR 4 and fails here (init refused). */
+    read_failure=false;init_failure=true;
+    unsigned jitter_reads=reads,jitter_inits=inits,reseeded=pool.reseeds,drains=0,irq_bits=pool.irq_bits;
+    while(pool.reseeds==reseeded){
+        for(unsigned i=0;i<128;i++)entropy_irq(i%3==0 ? 0 : i%3==1 ? 14 : 11);
+        g_ticks+=10;drains++;
+        step();
+        CHECK(drains<=128 && !pool.failed);
+    }
+    CHECK(pool.irq_bits-irq_bits>=248 && reads==jitter_reads && inits==jitter_inits+1 && init_first==4 && init_last==ENTROPY_JENT_MAX_OSR);
+    CHECK(jitter==JITTER_RETRY && jitter_attempts==2 && jitter_retry_ms>=g_ticks+29000 && strstr(last_jitter,"attempt=runtime "));
+    CHECK(!entropy_syscall(&tf) && strstr(last_record," health=ok reseeds=4 jitter=retry "));
+    /* A stopped counter: the edges are mixed, never credited. */
+    unsigned credited=pool.irq_bits,estimate=pool.estimate_bits;
+    irq_counter_stopped=true;
+    for(unsigned k=0;k<4;k++){
+        for(unsigned i=0;i<128;i++)entropy_irq(0);
+        g_ticks+=10;step();
+    }
+    CHECK(pool.irq_bits==credited && pool.estimate_bits==estimate && !fast.count);irq_counter_stopped=false;
+    /* Backoff 30 s, then 120 s; the fourth failed attempt retires jitter for this boot. */
+    g_ticks=jitter_retry_ms;step();
+    CHECK(jitter==JITTER_RETRY && jitter_attempts==3 && jitter_retry_ms==g_ticks+120000);
+    g_ticks=jitter_retry_ms;step();
+    CHECK(jitter==JITTER_FAILED && jitter_attempts==4 && strstr(last_record," health=ok ") && strstr(last_record," jitter=failed "));
+    g_ticks+=600000;unsigned failed_inits=inits;step();
+    CHECK(inits==failed_inits && !pool.failed);
+    init_failure=false;
     CHECK(speaker==2 && boot_logs==1 && !raw_logs);
     /* Exact token; boot produces no raw allocation/output. */
     g_current=NULL;booted=seeded=false;read_failure=false;g_ticks=0;pit_reads=0;
@@ -178,18 +295,18 @@ int main(void)
     CHECK(raw_enabled());stackprot_init();
     CHECK(pool.ready && !raw_logs && !raw && !owned_pages);
     g_current=&worker;serial_pending=true;
-    if(!setjmp(worker_return))worker_entry(NULL);
+    step();
     CHECK(raw && raw_sent==8800 && !raw_count && serial_waits==1 && owned_pages==33);
     /* Continue past full credit, preserve order/zero/rejected low bytes,
      * service reseed demand during capture, and stop at exactly 2^20. */
     for(unsigned batch=1;raw;batch++){
         if(batch==32){g_ticks=ENTROPY_RESEED_MS;uint8_t byte;CHECK(!entropy_get(&byte,1));}
-        if(!setjmp(worker_return))worker_entry(NULL);
+        step();
     }
     CHECK(raw_sent==RAW_LIMIT && stream_samples==RAW_LIMIT && stream_complete==1 && !owned_pages);
     CHECK(pool.ready && !pool.failed && pool.reseeds==2 && pool.estimate_bits==256);
     collected=reads;
-    if(!setjmp(worker_return))worker_entry(NULL);
+    step();
     CHECK(reads==collected); /* capture stops and saturated collection pauses */
     /* The observation hook never overruns an attempt buffer, even if an
      * invalid caller supplies excess callbacks. No serial I/O in the hook. */
@@ -199,16 +316,19 @@ int main(void)
     raw_release();CHECK(!owned_pages);
     /* Refused serial publication stops only capture, without failing DRBG. */
     raw_sent=0;stream_samples=stream_complete=0;raw_requested=true;serial_refuse=true;
-    if(!setjmp(worker_return))worker_entry(NULL);
+    step();
     CHECK(!raw && !raw_requested && !owned_pages && !pool.failed && !raw_sent);
     serial_refuse=false;serial_lost=true;raw_requested=true;
-    if(!setjmp(worker_return))worker_entry(NULL);
+    step();
     CHECK(!raw && !raw_requested && !owned_pages && !pool.failed && raw_sent==1100);
     serial_lost=false;raw_sent=0;stream_samples=0;raw_requested=true;refuse_pages=true;
-    if(!setjmp(worker_return))worker_entry(NULL);
+    step();
     CHECK(!raw && !raw_requested && !owned_pages && !pool.failed);refuse_pages=false;
-    raw_requested=true;read_failure=true;freed=closes;worker_entry(NULL);
-    CHECK(pool.failed && !raw && !owned_pages && closes==freed+1);read_failure=false;
+    /* A permanent library health failure retires jitter (and the capture) for this boot. */
+    raw_requested=true;read_failure=true;read_permanent=true;freed=closes;
+    step();
+    CHECK(!pool.failed && jitter==JITTER_FAILED && jitter_attempts==1 && !raw && !owned_pages && closes==freed+1);
+    read_failure=read_permanent=false;
     g_current=NULL;
     memset(g_boot.options,0,sizeof(g_boot.options));
     booted=seeded=false;g_cpu_tsc=false;boot_per_ms=0;stackprot_init();
@@ -217,9 +337,53 @@ int main(void)
     CHECK(pool.failed && !pool.ready);stalled=false;
     booted=seeded=false;pit_stalled=true;pit_reads=0;stackprot_init();
     CHECK(pool.failed && !pool.ready && speaker==2);pit_stalled=false;
-    booted=seeded=false;init_failure=true;pit_reads=0;stackprot_init();
-    CHECK(pool.failed && !pool.ready && !pool.estimate_bits);
-    puts("PASS production boot/guard, absent/stalled TSC/PIT, library-init refusal, IRQ-only mix, worker saturation/resume/retirement and syscall 91 surface");
+    /* f6-19, T23 1.0.0 alpha profile: the boot attempt fails (the stub reports
+     * the reproduction of t23_test.c); health stays ok and interrupt edges
+     * alone initialise the pool; the runtime retry then adds jitter. */
+    booted=seeded=false;init_failure=true;pit_reads=0;g_ticks=0;memset(&fast,0,sizeof(fast));drained_last=0;
+    stackprot_init();
+    CHECK(!pool.failed && !pool.ready && !pool.estimate_bits && pool.source_ready && jitter==JITTER_RETRY && init_first==3 && init_last==3);
+    CHECK(strstr(last_jitter,"[entropy] jitter attempt=boot result=-1 osr=3 alarm=0001 stage=sha3 alarm_osr=3 round=2644 rounds=1125/1428/91/0 refused=524288 expired=0 state=retry"));
+    CHECK(!strcmp(last_record,"[entropy] sources=0 irq_mask=0000 estimate_bits=0 initialised_ms=0 health=ok reseeds=0 jitter=retry irq_bits=0"));
+    worker_started=false;started=0;desktop_ready=false;entropy_start();
+    CHECK(worker_started && started==2 && jitter_retry_ms==1000 && !desktop_ready);
+    g_current=&worker;unsigned boot_reads=reads,boot_inits=inits;drains=0;
+    while(!pool.ready){
+        for(unsigned i=0;i<128;i++)entropy_irq(i%3==0 ? 0 : i%3==1 ? 14 : 11);
+        g_ticks+=10;drains++;
+        step();
+        CHECK(drains<=128 && !pool.failed);
+    }
+    /* f6-21: past the 1 s mark the first runtime retry still waits for the
+     * desktop's first frame; interrupt timing alone initialises the pool. */
+    CHECK(g_ticks>1000 && inits==boot_inits);
+    CHECK(reads==boot_reads && pool.sources==ENTROPY_SOURCE_IRQ && pool.irq_bits==256 && pool.initialised_ms==g_ticks && jitter_attempts==1);
+    char expected[200];
+    snprintf(expected,sizeof(expected),"[entropy] sources=2 irq_mask=4801 estimate_bits=256 initialised_ms=%llu health=ok reseeds=1 jitter=retry irq_bits=256",
+             (unsigned long long)g_ticks);
+    CHECK(!strcmp(last_record,expected));
+    uint8_t secret[32];CHECK(!entropy_get(secret,sizeof(secret)));
+    printf("T23 IRQ-only initialisation after %u drains of 128 edges: %s\n",drains,expected);
+    step();CHECK(inits==boot_inits && jitter_attempts==1);
+    entropy_desktop_presented();step();
+    CHECK(inits==boot_inits+1 && init_first==4 && jitter==JITTER_RETRY && jitter_attempts==2 && jitter_retry_ms==g_ticks+30000);
+    CHECK(strstr(last_jitter,"attempt=runtime result=-1 osr=8 ") && strstr(last_jitter," state=retry turns=1 pauses=0 turn_max_us=0 round_max_us=0"));
+    init_failure=false;g_ticks=jitter_retry_ms;
+    step();
+    CHECK(jitter==JITTER_READY && reads==boot_reads+8 && pool.sources==(ENTROPY_SOURCE_IRQ|ENTROPY_SOURCE_JITTER) && pool.estimate_bits==256);
+    CHECK(strstr(last_jitter,"attempt=runtime result=0 osr=9 ") && strstr(last_record,"[entropy] sources=3 irq_mask=4801 ") && strstr(last_record," jitter=ready "));
+    /* No collector task: jitter is retired at start, interrupt timing stays. */
+    g_current=NULL;booted=seeded=false;pit_reads=0;g_ticks=0;stackprot_init();CHECK(jitter==JITTER_READY);
+    worker_started=false;started=0;refuse_collector=true;collector_entry=NULL;freed=closes;desktop_ready=false;
+    g_boot.flags=CBI_F_TEST_REQUEST;entropy_start();
+    CHECK(worker_started && started==1 && jitter==JITTER_FAILED && closes==freed+1 && desktop_ready); /* test boots: no desktop */
+    unsigned retired_reads=reads;for(unsigned i=0;i<64;i++)entropy_irq(0);g_ticks+=10;step();
+    CHECK(reads==retired_reads && strstr(last_record," health=ok ") && strstr(last_record," jitter=failed "));
+    g_boot.flags=0;refuse_collector=false;
+    g_current=NULL;
+    puts("PASS f6-21 split: interrupt timing in the P_NORMAL worker, jitter in an idle-class collector (turns, pauses, collection-time budget), first runtime retry after the desktop's first frame (or at once on test boots), no collector -> jitter retired");
+    puts("PASS f6-19 two credited sources: boot jitter failure keeps health=ok, IRQ-only initialisation (sources=2, irq_mask=4801), runtime retry resumes above the failed OSRs and adds jitter (sources=3), backoff and retirement, stopped counter uncredited");
+    puts("PASS production boot/guard, absent/stalled TSC/PIT, library-init refusal, IRQ mix, worker saturation/resume/retirement and syscall 91 surface");
     puts("PASS post-boot opt-in raw stream: exactly 1048576 ordered low bytes, bounded hex frames, serial backpressure/drain, concurrent DRBG/reseed, cap/pause, allocation/serial/collector failure cleanup");
     return 0;
 }

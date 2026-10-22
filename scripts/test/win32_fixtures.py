@@ -47,7 +47,16 @@ GENERATOR = 'win32-workload'
 DISK_MEDIA = ('fat16', 'fat32')
 OPTICAL_MEDIA = ('iso', 'mixed')
 MEDIA = DISK_MEDIA + OPTICAL_MEDIA
-SOURCES = ('extracted', 'installed')
+SOURCES = ('extracted', 'installed', 'download', 'disc', 'run')
+# f5-15C installers tier: `download` masters the verified installer file
+# itself onto the medium, `disc` attaches the title's original CD image (the
+# verified ISO, or the ISO data track derived from a verified BIN/CUE archive),
+# `run` is the run's parameter disk: CIUKI-ID.TXT (image, payload, scene, tier,
+# probe) and CIUKI-OP.TXT (the compiled operator program). None of them is
+# ever written to the canonical image.
+ARCHIVE_SOURCES = ('download', 'disc')
+PROGRAM_FILE = 'CIUKI-OP.TXT'
+RUN_DISK_MEDIA = 'fat16'
 DOWNLOADS = 'build/downloads/win32'
 REDISTRIBUTION = 'local-only'
 IDENTITY_FILE = 'CIUKI-ID.TXT'
@@ -105,7 +114,11 @@ def validate(fixture, root=ROOT):
     if fixture.get('media') not in MEDIA:
         raise ValueError('Win32 workload media must be one of ' + ', '.join(MEDIA))
     if fixture.get('source', 'extracted') not in SOURCES:
-        raise ValueError('Win32 workload source must be extracted or installed')
+        raise ValueError('Win32 workload source must be one of ' + ', '.join(SOURCES))
+    if fixture.get('source') == 'run' and fixture['media'] != RUN_DISK_MEDIA:
+        raise ValueError('the run parameter disk is a FAT16 disk')
+    if fixture.get('source') == 'disc' and fixture['media'] != 'iso':
+        raise ValueError('an original disc is attached as an ISO image')
     if fixture.get('redistribution') != REDISTRIBUTION:
         raise ValueError('Win32 workload fixtures are local-only; declare redistribution')
     extra = set(fixture) - {'generator', 'workload', 'media', 'source', 'redistribution', 'audio_seconds'}
@@ -329,8 +342,115 @@ def iso_image(scanned, source, directory, index, media, identity, audio_seconds)
             shutil.rmtree(staging)
 
 
-def generate(fixture, directory, index=0, root=ROOT):
+def verified_archive(row, root=ROOT):
+    """The lead's pinned download (f5-15C promoted the SHA-256 pins)."""
+    from scripts.win32 import workloads
+    if row['licence']['class'] == 'owner-local':
+        raise ValueError('owner-local rows have no downloaded archive')
+    if row['source']['sha256'] is None:
+        raise WorkloadUnqualified('workload SHA-256 pin pending lead review: ' + row['id'])
+    archive = Path(root) / DOWNLOADS / row['id'] / row['source']['file']
+    if not archive.is_file():
+        raise WorkloadAbsent('fixtures_absent: verified workload archive absent: ' + str(archive.relative_to(root)))
+    return archive, {'status': 'pinned', **workloads.verify(archive, row['source'])}
+
+
+def link_or_copy(source, target):
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copyfile(source, target)
+
+
+CD_SYNC = b'\x00' + b'\xff' * 10 + b'\x00'
+
+
+def bin_to_iso(stream, size, output, mode):
+    """2352-byte raw data sectors to 2048-byte user data (ECMA-130: Mode 1
+    data at offset 16; CD-ROM XA Mode 2 Form 1 at offset 24, after the
+    subheader). Every sector's sync pattern and mode byte are checked."""
+    if mode not in ('MODE1/2352', 'MODE2/2352') or size % 2352:
+        raise ValueError('unsupported raw CD track: %s, %d bytes' % (mode, size))
+    offset, expected = (16, 1) if mode == 'MODE1/2352' else (24, 2)
+    with Path(output).open('xb') as out:
+        for _ in range(size // 2352):
+            sector = stream.read(2352)
+            if len(sector) != 2352 or sector[:12] != CD_SYNC or sector[15] != expected:
+                raise ValueError('raw CD sector does not match its cue mode')
+            if expected == 2 and sector[18] & 0x20:
+                raise ValueError('Mode 2 Form 2 sector in a data track')
+            out.write(sector[offset:offset + 2048])
+
+
+def disc_image(archive, directory, index):
+    """The original disc as an ISO in this run's directory (a hard link of a
+    verified .iso; the data track of a verified BIN/CUE .zip, derived here)."""
+    target = Path(directory) / ('fixture-%d.iso' % index)
+    if target.exists():
+        raise ValueError('Win32 fixture already exists: ' + target.name)
+    if archive.suffix.lower() == '.iso':
+        link_or_copy(archive, target)
+        return target, {'derived': None}
+    if archive.suffix.lower() != '.zip':
+        raise ValueError('a disc archive is an .iso or a BIN/CUE .zip')
+    import zipfile
+    with zipfile.ZipFile(archive) as z:
+        cues = [i for i in z.infolist() if i.filename.lower().endswith('.cue')]
+        if len(cues) != 1:
+            raise ValueError('a disc archive holds exactly one .cue')
+        cue = z.read(cues[0]).decode('latin-1')
+        files = re.findall(r'FILE\s+"([^"]+)"\s+BINARY', cue)
+        modes = re.findall(r'TRACK\s+01\s+(\S+)', cue)
+        if len(files) != 1 or len(modes) != 1 or len(re.findall(r'TRACK\s+\d+', cue)) != 1:
+            raise ValueError('only a single-track data disc is supported')
+        member = next((i for i in z.infolist() if i.filename.rsplit('/', 1)[-1] == files[0]), None)
+        if member is None:
+            raise ValueError('cue names an absent BIN member')
+        with z.open(member) as stream:
+            bin_to_iso(stream, member.file_size, target, modes[0])
+    return target, {'derived': {'from': archive.name, 'cue': cues[0].filename, 'mode': modes[0]}}
+
+
+def run_identity_text(row, context):
+    lines = ['CiukiOS f5-15C run parameters', 'workload=' + row['id'], 'probe=' + context['probe'],
+             'tier=' + context['tier'], 'scene=' + context['scene'], 'payload_sha256=' + context['payload_sha256'],
+             'image_sha256=' + context['image_sha256'], 'calibrate=' + (context.get('calibrate') or 'none')]
+    return ('\r\n'.join(lines) + '\r\n').encode('ascii')
+
+
+def run_disk(row, fixture, directory, index, root, context):
+    """The parameter disk: identity and compiled operator program, FAT16."""
+    from scripts.win32 import operator_program
+    for key in ('probe', 'tier', 'scene', 'payload_sha256', 'image_sha256'):
+        if not isinstance(context.get(key), str) or not context[key]:
+            raise ValueError('run parameter disk needs ' + key)
+    for key in ('payload_sha256', 'image_sha256'):
+        if not re.fullmatch('[0-9a-f]{64}', context[key]):
+            raise ValueError('run parameter disk needs a SHA-256 ' + key)
+    _, guest = operator_program.load(row['id'], root)
+    program = operator_program.compile_program(row['id'], guest, 'install' if context.get('calibrate') == 'install' else 'full')
+    staging = Path(directory) / ('win32-run-%d' % index)
+    staging.mkdir()
+    try:
+        (staging / PROGRAM_FILE).write_bytes(program.encode('ascii'))
+        scanned = {'files': [{'path': PROGRAM_FILE, 'size': len(program), 'sha256': hashlib.sha256(program.encode()).hexdigest()}],
+                   'directories': [], 'total_bytes': len(program)}
+        image = Path(directory) / ('fixture-%d.img' % index)
+        if image.exists():
+            raise ValueError('Win32 fixture already exists: ' + image.name)
+        identity = run_identity_text(row, context)
+        manifest = fat_image(scanned, staging, image, RUN_DISK_MEDIA, identity)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    manifest.update(path=str(image), program_sha256=hashlib.sha256(program.encode()).hexdigest(),
+                    program=program, operator_status=guest['status'], identity_text=identity.decode('ascii'))
+    return manifest
+
+
+def generate(fixture, directory, index=0, root=ROOT, context=None):
     row = validate(fixture, root)
+    if fixture.get('source') in ARCHIVE_SOURCES + ('run',):
+        return generate_installer_medium(row, fixture, directory, index, root, context or {})
     media = fixture['media']
     source_kind = fixture.get('source', 'extracted')
     source = source_directory(row, fixture, root)
@@ -367,6 +487,43 @@ def generate(fixture, directory, index=0, root=ROOT):
         if (directory / f'fixture-{index}.iso').exists():
             raise ValueError('Win32 fixture already exists: fixture-%d.iso' % index)
         manifest.update(iso_image(scanned, source, directory, index, media, text, fixture.get('audio_seconds', 4)))
+    manifest['size'] = Path(manifest['path']).stat().st_size
+    manifest['sha256'] = sha(manifest['path'])
+    return manifest
+
+
+def generate_installer_medium(row, fixture, directory, index, root, context):
+    """f5-15C media: the installer or original disc, or the parameter disk."""
+    media, source_kind = fixture['media'], fixture['source']
+    directory = dos_fixtures.check_output(directory, root)
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = {'generator': GENERATOR, 'workload': row['id'], 'title': row['title'], 'media': media,
+                'source': source_kind, 'redistribution': REDISTRIBUTION, 'licence_class': row['licence']['class'],
+                'disc_requirement': row['disc']['requirement'], 'identity_file': IDENTITY_FILE}
+    if source_kind == 'run':
+        manifest.update(run_disk(row, fixture, directory, index, root, context))
+        manifest['payload_sha256'] = context['payload_sha256']
+    else:
+        archive, provenance = verified_archive(row, root)
+        manifest['archive_verification'] = provenance
+        if source_kind == 'disc':
+            path, derived = disc_image(archive, directory, index)
+            files = [{'path': path.name if derived['derived'] else archive.name, 'size': path.stat().st_size, 'sha256': sha(path)}]
+            manifest.update(path=str(path), **derived)
+        else:
+            files = [{'path': archive.name, 'size': provenance['size'], 'sha256': provenance['sha256']}]
+            scanned = {'files': files, 'directories': [], 'total_bytes': provenance['size']}
+            identity = identity_text(row['id'], media, payload_identity(files))
+            if media in DISK_MEDIA:
+                image = directory / f'fixture-{index}.img'
+                if image.exists():
+                    raise ValueError('Win32 fixture already exists: ' + image.name)
+                manifest.update(fat_image(scanned, archive.parent, image, media, identity))
+                manifest['path'] = str(image)
+            else:
+                manifest.update(iso_image(scanned, archive.parent, directory, index, media, identity, 4))
+        manifest['payload_sha256'] = payload_identity(files)
+        manifest.update(files=files, file_count=len(files), total_bytes=sum(f['size'] for f in files))
     manifest['size'] = Path(manifest['path']).stat().st_size
     manifest['sha256'] = sha(manifest['path'])
     return manifest

@@ -14,6 +14,7 @@
 /* f1-39 reads regular files in 64 KiB transfers. Writes can still return
  * a page at a time; both loops advance by the actual count and retry EINTR. */
 #define WALL_IO_CHUNK (64u * 1024u)
+#define WALL_PRELOAD_CHUNK (1024u * 1024u)
 /* Bound optional reuse independently of display geometry and source limits.
  * Larger requests still render, but are not retained in these caches. */
 #define WALL_FRAME_BYTES (9u * 1024u * 1024u)
@@ -112,6 +113,10 @@ static uint32_t sha8(const char *text)
 void desk_wall_cache_name(char out[DESK_WALL_NAME_MAX], const struct desk_wall_request *r, uint64_t size, int64_t mtime)
 {
     char identity[320];
+    /* f2-90b: read-only system sources are identified by path and size only. Their
+     * FAT mtime depends on the build host's checkout time and the kernel's
+     * timezone handling, so it must not change the seeded frame's name. */
+    if (!strncmp(r->path,"/system/",8)) mtime=0;
     snprintf(identity,sizeof(identity),"wallpaper-v1\n%s\n%llu\n%lld\n%ux%u\n%d\n%06x\n%u,%u\n",
              r->path,(unsigned long long)size,(long long)mtime,r->width,r->height,r->mode,r->colour&0xffffffu,r->top,r->bottom);
     if (r->path[0]!='/') snprintf(identity,sizeof(identity),"wallpaper-builtin-v1\n%s\n%ux%u\n%d\n%06x\n%u,%u\n%d,%06x,%d\n",
@@ -279,6 +284,42 @@ static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint
      * shell behind the volume lock. Keep seed generation on the explicit
      * synchronous API; runtime reuse is bounded worker-owned memory. */
     if (!w && dir && !make_directory(dir) && !join_path(path,sizeof(path),dir,name) && !write_atomic(path,pixels,bytes)) cache_promote(dir,name);
+    return 0;
+}
+/* f2-90: synchronous start-up read of the build-seeded native-format frame
+ * (XRGB8888, exactly width*height*4 bytes, named by desk_wall_cache_name).
+ * One sequential pass of large reads into the frame, no decode, no scaling,
+ * no writes, no journal. Any miss (absent, wrong size, short or failed read)
+ * returns non-zero with *out NULL: the caller paints the solid colour and
+ * leaves the decode to the worker. A frame is never returned half filled. */
+int desk_wall_preload(const struct desk_wall_request *r, const char *dir, uint32_t **out, void (*stage)(const char *))
+{
+    *out=NULL;
+    if (!dir || !r->width || !r->height || r->width>2048 || r->height>2048 || r->mode<0 || r->mode>=CFG_WALL_MODES) return EINVAL;
+    int file=r->path[0]=='/';
+    if (!file && strcmp(r->path,"none") && strcmp(r->path,"ciuki") && strncmp(r->path,"builtin:",8)) return EINVAL;
+    struct stat s={0};
+    if (file && (stat(r->path,&s) || !S_ISREG(s.st_mode) || s.st_size<=0 || s.st_size>DESK_IMAGE_FILE_MAX)) return ENOENT;
+    char name[DESK_WALL_NAME_MAX], path[512];
+    desk_wall_cache_name(name,r,(uint64_t)s.st_size,(int64_t)s.st_mtime);
+    if (join_path(path,sizeof(path),dir,name)) return ENAMETOOLONG;
+    size_t bytes=(size_t)r->width*r->height*4;
+    int fd=open(path,O_RDONLY|O_CLOEXEC); if (fd<0) return errno;
+    struct stat f;
+    if (fstat(fd,&f) || !S_ISREG(f.st_mode) || f.st_size!=(int64_t)bytes) { close(fd); return EINVAL; }
+    uint32_t *pixels=malloc(bytes); if (!pixels) { close(fd); return ENOMEM; }
+    size_t done=0; int error=0;
+    while (done<bytes) {
+        size_t request=bytes-done<WALL_PRELOAD_CHUNK ? bytes-done : WALL_PRELOAD_CHUNK;
+        ssize_t n=read(fd,(char *)pixels+done,request);
+        if (n<0 && errno==EINTR) continue;
+        if (n<=0) { error=n<0 ? errno : EIO; break; }
+        done+=(size_t)n;
+    }
+    close(fd);
+    if (error) { free(pixels); return error; }
+    *out=pixels;
+    if (stage) stage("wallpaper_cache_read");
     return 0;
 }
 int desk_wall_prepare(const struct desk_wall_request *r, const char *dir, uint32_t **out, int *hit, void (*stage)(const char *))

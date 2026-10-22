@@ -2,8 +2,6 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
 #define INI_MAX 65535u
-/* f5-15A's installer amendment: queue delayed operations in the 9x file,
- * rather than the NT Session Manager key. Processing belongs to f5-07B. */
 struct span {
   DWORD at, n;
 };
@@ -281,6 +279,48 @@ static int append(char *out, DWORD *n, const char *s, DWORD bytes) {
   *n += bytes;
   return 1;
 }
+/* Insert bytes at an offset of the output buffer (tail is shifted). */
+static int put_at(char *out, DWORD *n, DWORD at, const char *s, DWORD bytes) {
+  if (bytes > INI_MAX - *n)
+    return 0;
+  w32_copy(out + at + bytes, out + at, *n - at);
+  w32_copy(out + at, s, bytes);
+  *n += bytes;
+  return 1;
+}
+/* Copy the line terminator (at most CRLF) of a parsed line into e. */
+static DWORD eol_of(const char *s, struct line l, char *e) {
+  DWORD b = l.end;
+  while (b > l.start && (s[b - 1] == '\r' || s[b - 1] == '\n') && l.end - b < 2)
+    b--;
+  for (DWORD i = b; i < l.end; i++)
+    e[i - b] = s[i];
+  return l.end - b;
+}
+/* Insert "key=value<eol>" at an offset; an unterminated last line gets one. */
+static int insert_entry(char *out, DWORD *n, DWORD at, const char *key,
+                        const char *value, const char *eol, DWORD eoln,
+                        const char *fe, DWORD fen) {
+  if (!eoln) {
+    if (!put_at(out, n, at, fe, fen))
+      return 0;
+    at += fen;
+    eol = fe;
+    eoln = fen;
+  }
+  DWORD k = w32_strlen(key);
+  if (!put_at(out, n, at, key, k))
+    return 0;
+  at += k;
+  if (!put_at(out, n, at, "=", 1))
+    return 0;
+  at++;
+  DWORD v = w32_strlen(value);
+  if (!put_at(out, n, at, value, v))
+    return 0;
+  at += v;
+  return put_at(out, n, at, eol, eoln);
+}
 BOOL W32API WritePrivateProfileStringA(const char *section, const char *key,
                                        const char *value, const char *file) {
   if (!section && !key && !value)
@@ -296,8 +336,19 @@ BOOL W32API WritePrivateProfileStringA(const char *section, const char *key,
   DWORD size;
   char *s = read_ini(file, &size), *out = k32_alloc(INI_MAX + 1);
   BOOL ok = s && out;
-  DWORD n = 0, at = 0;
+  DWORD n = 0, at = 0, ins = 0, ien = 0, fen = 2;
+  char fe[2] = {'\r', '\n'}, ie[2] = {0, 0}, le[2];
   int active = 0, matched = 0, replaced = 0, ended = 0;
+  /* New lines follow the file's own first terminator (default CRLF). */
+  for (DWORD i = 0; ok && i < size; i++)
+    if (s[i] == '\r' || s[i] == '\n') {
+      if (s[i] == '\r' && i + 1 < size && s[i + 1] == '\n') {
+        fe[0] = '\r', fe[1] = '\n', fen = 2;
+      } else {
+        fe[0] = s[i], fen = 1;
+      }
+      break;
+    }
   while (ok && at < size) {
     struct line l = next(s, size, at);
     at = l.end;
@@ -306,10 +357,7 @@ BOOL W32API WritePrivateProfileStringA(const char *section, const char *key,
         active = 0;
         ended = 1;
         if (key && value && !replaced) {
-          ok = append(out, &n, key, w32_strlen(key)) &&
-               append(out, &n, "=", 1) &&
-               append(out, &n, value, w32_strlen(value)) &&
-               append(out, &n, "\r\n", 2);
+          ok = ok && insert_entry(out, &n, ins, key, value, ie, ien, fe, fen);
           replaced = 1;
         }
       }
@@ -322,25 +370,35 @@ BOOL W32API WritePrivateProfileStringA(const char *section, const char *key,
       continue;
     if (active && l.kind == 2 && equal(s, l.key, key)) {
       if (value && !replaced) {
-        ok = append(out, &n, key, w32_strlen(key)) && append(out, &n, "=", 1) &&
+        DWORD e = eol_of(s, l, le);
+        ok = ok && append(out, &n, s + l.key.at, l.key.n) &&
+             append(out, &n, "=", 1) &&
              append(out, &n, value, w32_strlen(value)) &&
-             append(out, &n, "\r\n", 2);
+             append(out, &n, le, e);
         replaced = 1;
+        ins = n;
+        ien = e;
+        w32_copy(ie, le, e);
       }
       continue;
     }
     ok = ok && append(out, &n, s + l.start, l.end - l.start);
+    if (ok && active && (l.kind == 1 || l.kind == 2)) {
+      ins = n;
+      ien = eol_of(s, l, ie);
+    }
   }
   if (ok && key && value && !replaced) {
-    if (n && out[n - 1] != '\n')
-      ok = append(out, &n, "\r\n", 2);
-    if (!matched)
+    if (matched)
+      ok = insert_entry(out, &n, ins, key, value, ie, ien, fe, fen);
+    else {
+      if (n && out[n - 1] != '\n' && out[n - 1] != '\r')
+        ok = append(out, &n, fe, fen);
       ok = ok && append(out, &n, "[", 1) &&
            append(out, &n, section, w32_strlen(section)) &&
-           append(out, &n, "]\r\n", 3);
-    ok = ok && append(out, &n, key, w32_strlen(key)) &&
-         append(out, &n, "=", 1) && append(out, &n, value, w32_strlen(value)) &&
-         append(out, &n, "\r\n", 2);
+           append(out, &n, "]", 1) && append(out, &n, fe, fen) &&
+           insert_entry(out, &n, n, key, value, fe, fen, fe, fen);
+    }
   }
   if (ok) {
     char path[260];
@@ -548,37 +606,11 @@ BOOL W32API WritePrivateProfileSectionA(const char *section, const char *values,
   return ok;
 }
 BOOL k32_delay_move(const char *from,const char *to,DWORD flags) {
-  if(!from || flags&~5u){SetLastError(87);return 0;}
-  char source[260],destination[260];
-  DWORD n=GetFullPathNameA(from,sizeof(source),source,0);
-  if(!n || n>=sizeof(source)){SetLastError(206);return 0;}
-  if(to){n=GetFullPathNameA(to,sizeof(destination),destination,0);if(!n || n>=sizeof(destination)){SetLastError(206);return 0;}}
-  else w32_copy(destination,"NUL",4);
-  for(unsigned i=0;source[i];i++)if(source[i]=='\r' || source[i]=='\n'){SetLastError(123);return 0;}
-  for(unsigned i=0;destination[i];i++)if(destination[i]=='\r' || destination[i]=='\n' || destination[i]=='='){SetLastError(123);return 0;}
-  if(GetFileAttributesA(source)==~0u)return 0;
-  RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
-  RtlEnterCriticalSection(lock);
-  if(!k32_profile_begin()){RtlLeaveCriticalSection(lock);return 0;}
-  DWORD size=0,at=0,insert=0;int found=0;
-  char *text=read_ini("C:\\WINDOWS\\WININIT.INI",&size),*out=k32_alloc(INI_MAX+1);
-  BOOL ok=text && out;
-  if(ok) {
-    insert=size;
-    for(DWORD offset=0;offset<size;) {
-      struct line l=next(text,size,offset);offset=l.end;
-      if(l.kind==1){if(found){insert=l.start;break;}if(equal(text,l.section,"rename"))found=1;}
-    }
-    ok=append(out,&at,text,insert);
-    if(ok && at && out[at-1]!='\n')ok=append(out,&at,"\r\n",2);
-    if(ok && !found)ok=append(out,&at,"[rename]\r\n",10);
-    ok=ok && append(out,&at,destination,w32_strlen(destination)) && append(out,&at,"=",1) &&
-      append(out,&at,source,w32_strlen(source)) && append(out,&at,"\r\n",2) && append(out,&at,text+insert,size-insert);
-    if(ok)ok=save_ini("C:\\WINDOWS\\WININIT.INI",out,at);else SetLastError(112);
-  }else SetLastError(8);
-  k32_free(text,INI_MAX+1);k32_free(out,INI_MAX+1);k32_profile_end();RtlLeaveCriticalSection(lock);
-  if(ok)w32_diag("installer","wininit-queued",to?"rename":"delete");
-  return ok;
+  /* Windows 98 does not implement MOVEFILE_DELAY_UNTIL_REBOOT. Installers
+   * write WININIT.INI themselves; w32srv's f5-07B restart owns replay. */
+  (void)from;(void)to;(void)flags;
+  SetLastError(120);
+  return 0;
 }
 BOOL W32API WriteProfileSectionA(const char *section, const char *values) {
   return WritePrivateProfileSectionA(section, values, 0);

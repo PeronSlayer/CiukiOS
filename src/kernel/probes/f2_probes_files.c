@@ -55,7 +55,13 @@ static int fault_write(struct blkdev *dev, uint64_t lba, uint32_t count, const v
     if (err) return err;
     /* In-place append publishes size after the data/chain/directory barriers.
      * The next issued write updates the advisory FSInfo hint. */
-    if (fault_disk.armed && fault_node.entry.size != fault_disk.size_before) {
+    /* The live node is now published before its device wait. Inspect the
+     * owning entry on this write-through test medium, so this remains a
+     * post-durability fault rather than failing the DIRECTORY write itself. */
+    uint64_t owner_lba=fault_volume.data_sector+
+        (uint64_t)(fault_node.entry.parent-2)*fault_volume.spc+fault_node.entry.index/16;
+    const uint8_t *owner=fault_sector(owner_lba,false);
+    if (fault_disk.armed && owner && fs_rd32(owner+(fault_node.entry.index%16)*32+28)!=fault_disk.size_before) {
         fault_disk.armed = false; fault_disk.failures++;
         dev->quarantined = true;
         return -FS_EIO;

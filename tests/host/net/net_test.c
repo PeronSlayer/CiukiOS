@@ -186,6 +186,7 @@ struct model {
     uint16_t ee_words[256], mii_status;
     unsigned mii_reads;
     unsigned rfd_count_flags, scb_write_count, command_busy_reads;
+    unsigned rfd_status_extra; /* f6-22: error/information bits a test adds */
     bool trace_scb;
     struct model_scb_write scb_writes[32];
     bool reset_stuck, dma_stuck, command_stuck, mdi_stuck, tx_auto, config_reject, latch_low, ee_absent;
@@ -392,6 +393,28 @@ static void model_ring_write(struct model *h, unsigned pos, const void *data, un
     const uint8_t *p = data;
     for (unsigned i = 0; i < len; i++) h->device->dma[(pos + i) % RTL_RING] = p[i];
 }
+/* f6-22: RFD status as each device writes it. Physical 8255x (Intel
+ * developer manual, table 49): C|OK, bit 5 for a type frame (type/length
+ * field 0 or > 1500: Ethernet II, so IPv4 and ARP), bit 1 when the
+ * destination is not the individual address (broadcast, multicast), bit 2
+ * when no filter matched (promiscuous). QEMU eepro100.c nic_receive: 0xa000,
+ * |0x0002 for broadcast/multicast, |0x0004 promiscuous unicast; no TL bit.
+ * The former model wrote 0xa000 for every frame, which hid the f6-22 bug. */
+static unsigned model_e100_rfd_status(const struct model *h, const uint8_t *data, unsigned len)
+{
+    unsigned status = 0xa000;
+    bool group = data[0] & 1, individual = !memcmp(data, h->device->address, 6);
+    if (g_boot.flags & CBI_F_SMBIOS_QEMU) {
+        if (group) status |= 2;
+        else if (!individual) status |= 4;
+    } else {
+        unsigned type = len >= 14 ? (unsigned)data[12] << 8 | data[13] : 0;
+        if (!type || type > 1500) status |= 0x20;
+        if (!individual) status |= 2;
+        if (!group && !individual) status |= 4;
+    }
+    return status | h->rfd_status_extra;
+}
 static void model_receive(struct model *h, const uint8_t *data, unsigned len, bool error)
 {
     struct netif *d = h->device;
@@ -403,7 +426,7 @@ static void model_receive(struct model *h, const uint8_t *data, unsigned len, bo
     } else if (h->kind == M_E100) {
         CHECK(h->rfd_pointer); struct e100_block *rfd = model_dma(h->rfd_pointer, sizeof(*rfd));
         CHECK(!rfd->status); memcpy(rfd->data, data, len); rfd->count = h->rfd_count_flags | len;
-        rfd->status = error ? 0x8800 : 0xa000; h->reg[1] |= 0x40;
+        rfd->status = error ? 0x8800 : model_e100_rfd_status(h, data, len); h->reg[1] |= 0x40;
         if (rfd->command & 0x8000) { h->reg[0] = (h->reg[0] & 0xc0) | 8; h->rfd_pointer = 0; }
         else h->rfd_pointer = rfd->link;
     } else {

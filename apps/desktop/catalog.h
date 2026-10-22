@@ -22,6 +22,18 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"paint", "CiukPaint", "applications-graphics", 1, "bmp|png"},
 };
 #define DESK_CATALOG_COUNT (sizeof(desk_catalog) / sizeof(desk_catalog[0]))
+/* Native applications with their own desktop window (f6-19). The program
+ * record, not a test gate, grants the desktop window channel: every launch
+ * route (Programs menu, desktop icon, Run, Terminal, ShellExecute) starts
+ * the program with --channel-fd=3. Each record carries the launcher label,
+ * the Tango 0.8.90 icon name (16/22/32 px in the store, 48 px derived) and
+ * the description. NetSurf is the browser application (owner 2026-10-21):
+ * Programs root, never the Developer folder. */
+struct desk_application_entry { const char *name, *label, *tango, *description; };
+static const struct desk_application_entry desk_applications[] = {
+    {"netsurf", "NetSurf", "internet-web-browser", "Web browser"},
+};
+#define DESK_APPLICATION_COUNT (sizeof(desk_applications) / sizeof(desk_applications[0]))
 /* Pre-installed DOS games (owner decision 2026-10-12): the shareware
  * releases on the bundled games disk (C:\GAMES\CIUKIGAM.IMG, built by
  * scripts/build_games_disk.py), which every /Programs/dosbox window boots.
@@ -40,6 +52,11 @@ static const struct desk_game_entry desk_games[] = {
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)
 {
     for (unsigned i = 0; i < DESK_CATALOG_COUNT; i++) if (!strcmp(desk_catalog[i].name, name)) return &desk_catalog[i];
+    return 0;
+}
+static inline const struct desk_application_entry *desk_application_find(const char *name)
+{
+    for (unsigned i = 0; i < DESK_APPLICATION_COUNT; i++) if (!strcmp(desk_applications[i].name, name)) return &desk_applications[i];
     return 0;
 }
 /* Default file association, shared by Files and the shell. Case-insensitive

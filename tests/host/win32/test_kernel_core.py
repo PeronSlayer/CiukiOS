@@ -106,7 +106,8 @@ class KernelCoreTests(unittest.TestCase):
                               (ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text())
                 continue
             if case['probe']=='w32-installer-nsis':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertNotIn('integration_pending',case)
+                self.assertEqual(selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)['probe'],case['probe'])
                 self.assertEqual(case['selector'],'f5:w32-installer-nsis run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['installer_install','installer_cancel','installer_restart_request','installer_uninstall'])

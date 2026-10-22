@@ -10,6 +10,7 @@
 #define P2V(p) model_page(p)
 
 static struct task worker, input_worker;
+struct task *g_current=&worker;
 static void (*worker_fn)(void *);
 static void *worker_arg;
 static void (*input_fn)(void *);

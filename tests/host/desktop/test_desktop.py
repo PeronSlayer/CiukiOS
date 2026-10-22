@@ -185,7 +185,8 @@ class DesktopTests(unittest.TestCase):
                 if mode == "plain":
                     # F2-62: the missing-settings desktop now uses Ciuki Blue.
                     # F2-63: re-recorded for the pinned FreeType UI atlases.
-                    pinned = "ab5eef0dfb084cd58fd8a272f1bffe5cff4ad296fc6a2679715c7b9d137e5a0e"
+                    # F2-99: original cursor silhouette and software shadow.
+                    pinned = "dbb84ed9259ddbb1153904eea8862d40e59e664e84692a397d6cfa6b5852a5d9"
                     actual = hashlib.sha256(pixels).hexdigest()
                     self.assertEqual(actual, pinned)
                 else:
@@ -460,6 +461,47 @@ class DesktopTests(unittest.TestCase):
                 for raw in renders.glob("*.xrgb"):
                     width, height = map(int, raw.with_suffix(".size").read_text().split())
                     write_png(Path(frames) / f"{raw.stem}.png", width, height, xrgb_to_rgb(raw.read_bytes()))
+        print(result.stdout.strip())
+
+    def test_control_display_async(self):
+        """f2-88: Display Properties never decodes or blocks on the UI thread."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="control-async-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "control-async-test"
+            icons = load("control_async_icons", ROOT / "tests/host/desktop/icon_assets.py")
+            sources = ["tests/host/desktop/control_async_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
+                       *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+            ft = load("control_async_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
+                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
+                            "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
+                            "-I", str(ROOT / "tests/host/desktop"), "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
+                            *ft.includes(), *(str(ROOT / s) for s in sources), str(library), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
+            result = subprocess.run([str(binary)], check=False, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS control async display", result.stdout)
+        print(result.stdout.strip())
+
+    def test_control_decoder_worker(self):
+        """f2-88b: the preview worker never makes the UI thread wait."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="control-decoder-", dir=parent) as temp:
+            binary = Path(temp) / "control-decoder-test"
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            sources = ["tests/host/desktop/control_decoder_test.c", "apps/control/decoder.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c",
+                       "apps/desktop/settings.c", "apps/desktop/theme.c", "apps/desktop/protocol.c", "apps/desktop/compositor.c", "apps/desktop/sounds.c"]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L", "-fsanitize=address,undefined",
+                            "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
+                            "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
+                            *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
+            result = subprocess.run([str(binary)], check=False, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS control decoder", result.stdout)
         print(result.stdout.strip())
 
     def test_shell_launcher(self):

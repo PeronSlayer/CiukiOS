@@ -94,6 +94,7 @@ class FixtureTests(unittest.TestCase):
     def test_generation_checks_archive_pin_and_keeps_payload_out_of_image(self):
         fixture = {'generator': wf.GENERATOR, 'workload': 'diablo-shareware', 'media': 'iso', 'redistribution': 'local-only'}
         row = copy.deepcopy(wf.workload_row('diablo-shareware'))
+        row['source']['sha256'] = None  # the unreviewed-candidate state (f5-15C promoted the real pin)
         output = self.base / 'build/host/media'
         with patch.object(wf, 'workload_row', return_value=row), patch.object(wf, 'source_directory', return_value=self.source):
             with self.assertRaises(wf.WorkloadUnqualified): wf.generate(fixture, output, root=self.base)

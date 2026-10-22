@@ -21,6 +21,7 @@ int grants_display_suspend(bool suspended)
     return 0;
 }
 extern void display_frame_complete(uint32_t generation, bool full_frame) __attribute__((weak));
+extern void entropy_desktop_presented(void) __attribute__((weak));
 bool grants_display_owner(const struct process *p)
 {
     if (!p || p->pid != grant_owner) return false;
@@ -82,7 +83,7 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
     return d->owner == p->pid && grant_owner == p->pid && (d->maximum & right) ? 0 : -EACCES;
 }
 
-struct accel_operation { struct desktop_description *grant; bool presenting; };
+struct accel_operation { struct desktop_description *grant; bool presenting; uint32_t page; };
 int grant_accel_info(struct process *p, int32_t fd, const struct ciuki_accel_request *q,
                      struct ciuki_accel_info *out)
 {
@@ -91,11 +92,71 @@ int grant_accel_info(struct process *p, int32_t fd, const struct ciuki_accel_req
     if (q->size != sizeof(*q) || q->operation != CIUKI_ACCEL_QUERY) return -EINVAL;
     return fbdev_accel_info(q->generation,out);
 }
+/* f2-92: fbdev releases the presenter lock between 1 ms engine-wait slices
+ * of a display request; the requesting thread may be preempted there. */
+void grants_display_yield(void) { kpreempt_point(); }
 static void accel_cleanup(void *arg)
 {
     struct accel_operation *op=arg;
     if (op->presenting) presenting--;
+    if (op->page) { pmm_free(op->page); op->page=0; }
     op->grant->object.release(&op->grant->object);
+}
+/* f2-92 CIUKI_ACCEL_WRITE: clip the request against its source and the
+ * optional destination clip, copy each band of user rows into one staging
+ * page outside every display lock (user memory may fault), then hand the
+ * band to the presenter (engine, else CPU for visible rows). 0: every band
+ * went through the engine; 1: at least one band was written by the CPU. */
+static int accel_write(struct process *p, const struct ciuki_accel_request *q, struct accel_operation *op)
+{
+    const struct ciuki_accel_write *w = &q->write;
+    if (w->pixels_hi || (w->stride & 3u) || !w->source_width || !w->source_height ||
+        w->source_width > INT32_MAX || w->source_height > INT32_MAX ||
+        (uint64_t)w->source_width * 4u > w->stride || q->rect.width > INT32_MAX || q->rect.height > INT32_MAX ||
+        w->clip_width > INT32_MAX || w->clip_height > INT32_MAX) return -EINVAL;
+    int64_t sx = q->rect.src_x, sy = q->rect.src_y, dx = q->rect.dst_x, dy = q->rect.dst_y;
+    int64_t width = q->rect.width, height = q->rect.height;
+    /* Source bounds, then the destination clip and origin, moving both ends. */
+    if (sx < 0) { dx -= sx; width += sx; sx = 0; }
+    if (sy < 0) { dy -= sy; height += sy; sy = 0; }
+    if (sx + width > w->source_width) width = (int64_t)w->source_width - sx;
+    if (sy + height > w->source_height) height = (int64_t)w->source_height - sy;
+    int64_t cx = 0, cy = 0, cr = INT32_MAX, cb = INT32_MAX;
+    if (w->clip_width && w->clip_height) {
+        cx = w->clip_x > 0 ? w->clip_x : 0; cy = w->clip_y > 0 ? w->clip_y : 0;
+        cr = (int64_t)w->clip_x + w->clip_width; cb = (int64_t)w->clip_y + w->clip_height;
+    }
+    if (dx < cx) { sx += cx - dx; width -= cx - dx; dx = cx; }
+    if (dy < cy) { sy += cy - dy; height -= cy - dy; dy = cy; }
+    if (dx + width > cr) width = cr - dx;
+    if (dy + height > cb) height = cb - dy;
+    if (width <= 0 || height <= 0) return 0;
+    uint64_t base = (uint64_t)w->pixels_lo + (uint64_t)sy * w->stride + (uint64_t)sx * 4u;
+    if (base + (uint64_t)(height - 1) * w->stride + (uint64_t)width * 4u > UINT32_MAX) return -EFAULT;
+    if (!(op->page = pmm_alloc())) return -EIO;
+    uint8_t *buffer = P2V(op->page);
+    struct proc_thread *t = proc_thread_for(g_current);
+    uint32_t tile = width > PAGE_SIZE / 4 ? PAGE_SIZE / 4 : (uint32_t)width;
+    int err = 0, cpu = 0;
+    for (uint32_t x = 0; x < (uint32_t)width && !err; x += tile) {
+        uint32_t tw = (uint32_t)width - x < tile ? (uint32_t)width - x : tile;
+        uint32_t band = (PAGE_SIZE / 4) / tw;
+        for (uint32_t y = 0; y < (uint32_t)height && !err; y += band) {
+            uint32_t bh = (uint32_t)height - y < band ? (uint32_t)height - y : band;
+            for (uint32_t r = 0; r < bh && !err; r++)
+                if (copy_from_user(buffer + r * tw * 4u, (uint32_t)(base + (uint64_t)(y + r) * w->stride + x * 4u), tw * 4u))
+                    err = -EFAULT;
+            if (err) break;
+            struct fb_rect rect = {(int32_t)(dx + x), (int32_t)(dy + y), (int32_t)tw, (int32_t)bh};
+            int e = fbdev_accel_write(q->generation, &rect, &rect, buffer, tw * 4u);
+            if (e < 0) err = e;
+            else if (e) cpu = 1;
+            kpreempt_point();
+            if (!err && (p->state != PROC_LIVE || (t && proc_signal_caught(t)))) err = -EINTR;
+        }
+    }
+    pmm_free(op->page); op->page = 0;
+    return err ? err : cpu;
 }
 int grant_accel(struct process *p, int32_t fd, const struct ciuki_accel_request *q)
 {
@@ -107,7 +168,7 @@ int grant_accel(struct process *p, int32_t fd, const struct ciuki_accel_request 
     op.grant->object.retain(&op.grant->object);
     if (t) { t->cleanup=accel_cleanup; t->operation=&op; }
     presenting++;
-    err = fbdev_accel_request(q);
+    err = q->size == sizeof(*q) && q->operation == CIUKI_ACCEL_WRITE ? accel_write(p,q,&op) : fbdev_accel_request(q);
     if (t) { t->cleanup=0; t->operation=0; }
     accel_cleanup(&op);
     return err;
@@ -231,6 +292,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         activity.presents++;
         if (display_frame_complete) display_frame_complete(generation, full_frame);
         if (full_frame && pager_bootstrap_complete) pager_bootstrap_complete();
+        if (full_frame && entropy_desktop_presented) entropy_desktop_presented(); /* f6-21 */
     }
     return err;
 }

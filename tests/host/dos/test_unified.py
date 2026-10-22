@@ -468,7 +468,12 @@ class DistributionTests(unittest.TestCase):
                              "ciukios/src/boot/full_boot.asm", "ciukios/src/boot/full_stage1_loader.asm",
                              "ciukios/third_party/freedos/1.3/boot16.bin", "build-inputs/config.mak",
                              "ciukios/third_party/freedos/unified/ciuki/build.json",
-                             "ciukios/third_party/freedos/unified/ciuki/patches/0001-reproducible-date.patch"):
+                             "ciukios/third_party/freedos/unified/ciuki/patches/0001-reproducible-date.patch",
+                             "ciukios/third_party/freedos/unified/ciuki/fork.json",
+                             "ciukios/third_party/freedos/unified/ciuki/patches/0002-ciukidos-dfv2-binding.patch",
+                             "ciukios/third_party/freedos/unified/ciuki/fork/drivers/ciukidf.asm",
+                             "ciukios/scripts/unified_fork.py",
+                             "ciukios/docs/licenses/CiukiDOS-unified-kernel-GRANT.md"):
                     self.assertIn(path, archive.namelist())
                 manifest, raw, date_patch = unified.reproducible_inputs()
                 prefix = "ciukios/third_party/freedos/unified/"
