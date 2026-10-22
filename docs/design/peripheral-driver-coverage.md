@@ -569,4 +569,4 @@ The lead reviewed this contract and the source audit; both are accepted as bindi
 The owner removed licence-compatibility gating: "integra tutte le licenze GPL varie versioni, MIT ecc non mi interessa che siano diverse tu metti tutto e basta".
 - **Yamaha DS-XG (f1-119)** is no longer deferred. Its microcode is included from the best available source, with its notice.
 - **Notices.** Every imported file keeps its notice and origin line in the credits.
-- **Release check.** Before a public release, the lead lists GPL-3.0-only kernel code and firmware with restrictive terms so the owner can resolve them.
+- **Redistribution.** The owner redistributes regardless (2026-10-22 23:55); no release-time licence list is kept.
