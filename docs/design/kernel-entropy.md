@@ -270,3 +270,88 @@ errors latch failure" (Amendment 2); every other rule above stands.
   1 jitter, 2 interrupts.
 * The raw capture (`entropyraw=1`) waits through retries and stops with
   `reason=collector` only when jitter is retired.
+
+## Amendment 5 (f6-21, 2026-10-22): jitter collection never starves anyone
+
+QEMU (qemu-t23 profile, image 6b586080) failed f0-core `preempt` with
+`max_wait_a=59 max_wait_b=59` ticks while `[cpu] top` showed
+`entropy#10:375k375s57`: the f6-19 runtime retry ran inside the P_NORMAL
+worker, beside the probe's two P_NORMAL spinners, and one of its kernel
+stretches lasted 57 ms without a preemption point (the `s` field is the
+longest stretch in ms). The worker yields only at round boundaries; the
+kernel is not preemptible, so a long stretch of adapter work (buffer
+zeroing/erasure, allocation) blocks every task of its level and below. This
+amendment supersedes Amendment 4's "the worker retries 1 s after it starts"
+and "Runtime attempts run in the worker"; every other rule stands.
+
+Sources:
+
+* Windows: priority 0 is reserved for "the zero-page thread ... responsible
+  for zeroing any free pages when there are no other threads that need to
+  run"; idle-class threads exist so they do not interfere with higher
+  priority threads
+  ([Scheduling Priorities](https://learn.microsoft.com/en-us/windows/win32/procthread/scheduling-priorities)).
+  Dynamic boosts favour responsiveness
+  ([Priority Boosts](https://learn.microsoft.com/en-us/windows/win32/procthread/priority-boosts)).
+* Linux: `SCHED_IDLE` is "intended for running jobs at extremely low
+  priority (lower even than a +19 nice value)"
+  ([sched(7)](https://man7.org/linux/man-pages/man7/sched.7.html)); the
+  kernel's own jitter collector `try_to_generate_entropy()` calls
+  `schedule()` after every sample
+  ([random.c v6.12](https://github.com/torvalds/linux/blob/v6.12/drivers/char/random.c), line 1350).
+
+Decisions:
+
+* Two tasks. `entropy` (P_NORMAL) only drains interrupt timing every 10 ms
+  and records state changes; it never waits for jitter, so interrupt credit
+  keeps its cadence however long a jitter attempt takes. `jitter` is the
+  collector: P_IDLE class with no configured level, i.e. scheduler level 0,
+  the Windows zero-page-thread position. It is dispatched only when no other
+  task is runnable; the scheduler arms the starvation timer only for P_NORMAL
+  and grants no input/I/O boost to P_IDLE, so it is never boosted. A ready
+  task above it (the audio refill, the desktop, any foreground task) sets the
+  reschedule flag and is dispatched at the collector's next boundary.
+  Priority inheritance through the pool mutex still applies (the mutex is held
+  only to credit 32 bytes).
+* Turns. At runtime every measurement round, and every 16 KiB chunk of the
+  adapter's own zeroing and erasure of the 256 KiB buffer (plus one boundary
+  before the pool allocation), is a boundary. The collector measures its turn
+  in TSC cycles and sleeps one tick when the next round, predicted as the
+  longest recent round plus an eighth, would take the turn past 1 ms
+  (`ENTROPY_TURN_US`); otherwise it offers a preemption point. The prediction
+  rises at once to a longer round and decays by a quarter of the gap per
+  shorter round. A turn restarts after every pause or preemption. With the
+  T23's 127 us rounds a turn holds 7 rounds (889 us); a round alone longer
+  than 1 ms (QEMU TCG) makes one round per turn, the bound being then the
+  round itself. The adapter's `point` callback is new and optional; the
+  library, its patches and the health parameters are unchanged.
+* Budget. The attempt's 5 s/131,072-round bound now counts the collector's
+  own collection time at runtime (TSC cycles accumulated at boundaries,
+  divided by the boot PIT calibration), not wall time: pauses and other
+  tasks' work cannot expire an attempt, and the total wall time grows with
+  the load. Boot collection (no scheduler) is unchanged: TSC since
+  `entropy_boot`, no turns.
+* First retry. A runtime retry also waits for the desktop: the first full
+  frame the display owner presents (`grant_present`, the event that already
+  completes the pager's bootstrap) calls `entropy_desktop_presented()`; so do
+  the supervisor's stand-in, desktop-unavailable and desktop-stopped paths.
+  Test and hardware-check boots launch no desktop and are ready at once. The
+  1 s minimum after the worker starts remains.
+* Evidence. The jitter attempt record gains four trailing fields for the
+  collection session: `... state=<s> turns=N pauses=N turn_max_us=N
+  round_max_us=N` (zeros at boot). The collector's CPU is idle-class time:
+  it counts in `[cpu] idle_pm` and is not listed in `[cpu] top`, like any
+  P_IDLE task; `turn_max_us` is its stretch evidence.
+* Without the collector task (allocation failure) jitter is retired at
+  start (`[entropy] collector=unavailable`), interrupt timing stays credited.
+
+Host evidence: `tests/host/entropy/kernel_test.c` (turn policy, pauses,
+budget clock, desktop gate, collector refusal), `jent_test.c` (adapter
+boundaries), and `tests/host/jitter_collector_latency_test.c` in
+`test_kernel_latency.py`, which runs the extracted turn policy on the
+production scheduler and CPU sampler: the f6-19 shape (P_NORMAL, one point
+per round, one 57 ms stretch) reproduces spinner `max_wait=58` ticks; the
+collector keeps both spinners at `max_wait<=2` and runs no round beside
+them; on a T23-like desktop (AC'97 refill IRQ every 10 ms, 2 ms desktop
+frames every 16 ms) there are no audio-refill overruns and no boosts, the
+refill waits at most one round (91 us measured) and turns stay under 1 ms.

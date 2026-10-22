@@ -18,8 +18,12 @@ struct entropy_jent_ops {
     uint64_t (*ms)(void);
     void *(*alloc)(size_t);
     void (*free)(void *);
-    void (*yield)(void);
+    void (*yield)(void);         /* before every measurement round */
     void (*raw)(uint64_t delta, uint64_t gcd, unsigned osr);
+    /* f6-21, optional: a boundary inside the adapter's own long work (the
+     * pool allocation, then zeroing and erasing the 256 KiB buffer in 16 KiB
+     * chunks). It is not a measurement round and never counts as one. */
+    void (*point)(void);
 };
 /* First health alarm the library reported (jent_set_fips_failure_callback)
  * during the current attempt; budget expiry is not a health alarm. */
