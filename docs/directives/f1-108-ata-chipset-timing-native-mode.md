@@ -14,3 +14,10 @@
 4. Host tests use per-chipset register models, IDENTIFY fixtures, cable and mode matrices, and errata paths.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (datasheets, the donor driver files with path and tag). Host tests one at a time with `nice -n 19`. Write `build/codex/f1-108-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 00:45): AddressSanitizer finding
+
+The lead's leak-enabled run of `scripts/test/host_kernel_tests.sh` on the merged branch reported `stack-use-after-scope` in `kmutex_lock_until` (`src/kernel/core/sync.c:582`), called from `ata_channel_discover` (`src/kernel/drivers/ata.c:1068`), from `test_chip_transactions` (`tests/host/ata_chipset_test.inc:307`). The address lies inside the fixture `f` declared at line 283 of the previous test case. The full trace is in `build/lead-scratch/asan-ata-chipset.txt` of this worktree.
+1. Find whether production code keeps a pointer to a channel, device or mutex beyond the object's lifetime, or whether the test fixture leaks state between cases.
+2. Fix the cause: in production code if there is a real retained pointer, otherwise in the fixture.
+3. Rerun `scripts/test/host_kernel_tests.sh` and `scripts/test/host_fs_tests.sh` with AddressSanitizer enabled. The sandbox LeakSanitizer exit after the last assertion is not a failure, but any ASan or UBSan report is.
