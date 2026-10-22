@@ -42,6 +42,8 @@ const uint8_t font_cfn_sans[95+95*32] = { 0 };       /* f0-55 tagline font */
 void serial_write(const char *s, size_t n) { CHECK(s && n); }
 void kpreempt_point(void) { }
 void task_sleep_ms(uint32_t ms) { CHECK(ms == 100); }
+/* f0-55b: the console worker's class while the splash is up. */
+void task_set_base(struct task *t, enum task_prio prio, unsigned level) { (void)t; (void)prio; (void)level; }
 static void *console_map(uint32_t phys, uint32_t size)
 {
     CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height);

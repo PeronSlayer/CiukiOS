@@ -17,8 +17,10 @@ pressed in the menu window.
 3. The loader sets the VBE mode (black screen) and loads `VMM.ELF`.
 4. The kernel draws the boot splash, the original Ciuki photograph
    (`misc/CiukiOS_SplashScreen.png`) with the tagline and a progress bar
-   under its wordmark, as soon as it maps the framebuffer, and then draws no
-   log line. The bar follows the kernel's init phases. The splash stays
+   under its wordmark, as soon as it maps the framebuffer (in `kmain`,
+   before the stack-guard entropy collection, the scheduler and the
+   drivers; the display accelerator probe is scheduled only at the end of
+   driver activation), and then draws no log line. The bar follows the kernel's init phases. The splash stays
    until `/Programs/desktop` takes the display (its display grant) and its
    first frame paints over it.
 5. The desktop.
@@ -46,7 +48,24 @@ the photograph only.
 The bar is indeterminate (a quarter-length segment sweeping the track,
 animated by the console worker every 40 ms) until the kernel reports its
 first phase. From then on it is determinate and moves only when a phase is
-reported, never on a timer. The phases (`src/kernel/include/ciuki/splash.h`)
+reported, never on a timer.
+
+The first frame already shows state (f0-55b). `kmain` paints it before the
+PIT runs, at tick 0, with the segment centred on the track; every later
+sweep position keeps at least one step (1/40 of the sweep, 12 columns at
+1024x768) inside the track, so no frame shows an empty track. A phase that a
+quiet boot reports before the paint is kept, and the first frame shows its
+level. Until the scheduler starts (stack-guard entropy collection, 335 ms on
+the T23 with the 1.0.0 alpha; PIT calibration, 100 ms) no task exists and
+that first frame stays as painted. The sweep is then animated by the console
+worker (kernel task `console`, created in `sched_init`): `task_sleep_ms`
+wakes it every 40 ms from its own kernel timer (PIT IRQ 0), never from log
+traffic, and while the splash is on screen its base level is
+`SCHED_FOREGROUND + 2`, above the boot task that runs driver activation and
+the desktop spawn (`probes`, `P_INTERACTIVE`, including its I/O completion
+boost), so the wake preempts init at init's next blocking wait or
+`kpreempt_point` (the kernel does not preempt kernel code). At the handover
+or any other end of the bar the worker returns to `P_NORMAL`. The phases (`src/kernel/include/ciuki/splash.h`)
 follow the existing records, with shares weighted by the 1.0.0 alpha T23
 serial timeline (storage and audio dominate):
 
@@ -74,21 +93,31 @@ logs `[console] splash handover progress=1000 complete=1 phases= updates=
 claims= deferred= max_claim_pixels= max_claim_us=`; from then on the
 console draws nothing, the splash is never cleared, and the desktop's first
 frame replaces it. A wake (panic, desktop failure, watchdog) or a mode
-change also ends the bar.
+change also ends the bar; phases reported after the end are ignored.
+
+When the serial log is on (`serial=1`, the default `BOOT.CFG`; boot flag
+bit 1) each drawn phase level is also recorded once, as
+`[console] splash phase=<n> permille=<p>` with `<n>` the phase number of
+the table above (0 drivers to 13 handover): at most 14 lines per boot, in
+order, the 100 % line just before the handover line. A level drawn for
+several phases at once (reported before the first paint, or drawn by the
+worker after a refused claim) is recorded once, under the last of them.
 
 Each update redraws only the columns that changed, from the embedded
 photograph (no framebuffer reads, no allocation, no disk read), in console
 claims of at most 1024 pixels with the claim released before any yield. A
 claim refused by a busy presenter is retried by the console worker. The
 host test `tests/host/test_splash_progress.py` pins the 1024x768 frames at
-0 %, 40 %, 100 % and indeterminate and checks the phase mapping, the claim
-budget and the handover.
+0 %, 40 %, 100 % and indeterminate (the tick-0 first frame) and checks the
+phase mapping, the claim budget, the handover, a first frame painted after
+three phases, the sweep driven by worker turns alone, the worker's class
+and the phase records.
 
 Every kernel log line still goes to COM1 and to the disk log
 (`C:\SYSTEM\LOGS`, once storage is qualified) and is kept in the console
-history. The serial capture is unchanged except for two lines,
-`[console] quiet boot: log on serial and disk until the desktop starts`
-and the splash handover line above;
+history. The serial capture is unchanged except for
+`[console] quiet boot: log on serial and disk until the desktop starts`,
+the splash handover line above and the splash phase records;
 `L:CPU signature=`, `SELECT_READY`, the menu text, `L:SELECT_SOURCE=menu`,
 the `Ciuki VMM F0 build` banner and the supervisor lines are still there.
 
