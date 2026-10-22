@@ -21,3 +21,14 @@
 4. **Records.** Device Manager shows the driver's display name, and the Control Panel shows it as the 2D driver. Add a row to the contract's family table with the result.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (datasheets, register references, donor files with path and tag). Host tests one at a time with `nice -n 19`. Write `build/codex/f2-104-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 01:19): transport approved
+
+The lead reviewed the f2-104 transport subsection in `video-driver-families.md` and approves it as written.
+- **Transport:** channel 0 PIO, no bus mastering, host DMA, GART or command-fetch DMA object.
+- **Credits:** method groups reserve FIFO credits.
+- **Completion:** an empty FIFO plus PGRAPH idle with posted-read ordering.
+- **Scope:** NV4–NV2x only, with the stated refusals.
+
+1. **Enable activation.** Set `transport_reviewed` from this approval, with a comment citing this amendment. The DM9 hardware check at activation is the runtime guard: a mismatch against the software engine quarantines the driver and keeps software rendering after the idle proof.
+2. **Tests.** Update `nv2d_adapter_test.c` so the approved path is tested: activation, the DM9 pass and a DM9 mismatch leading to quarantine. Keep the refusal paths (UMA, layouts, heads, scanout start) tested through their own predicates rather than through the review constant.
