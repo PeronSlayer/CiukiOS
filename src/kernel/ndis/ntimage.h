@@ -39,7 +39,8 @@ uint32_t ndis_mm_get_system_routine_address(const uint16_t *, uint16_t);
 uint32_t ndis_get_routine_address(const uint16_t *, uint16_t);
 struct ntimage_platform {
     struct pe_ops memory;
-    /* Must prove every page is private, supervisor and pinned, at actual VA.
+    /* Prove private pinned pages at the actual execution VA: supervisor for
+     * the old policy, owned user mappings for user_host. Staging may differ.
      * This is not a statement that the driver has DMA-safe access to it. */
     int (*resident)(void *, void *, uint32_t, uint32_t);
     void (*record)(void *, const char *file, const char *module, const char *symbol,
@@ -48,6 +49,10 @@ struct ntimage_platform {
     size_t export_count;
     uint32_t image_budget; /* already reserved from the common 4 MiB F6 budget */
     void (*scan_record)(void *, const char *file, uint32_t rva, const char *reason);
+    /* ND14: the returned pointer is a supervisor staging view; base is the
+     * distinct process execution VA. resident proves owned user mappings. */
+    bool user_host;
+    int (*user_import)(void *, const struct ndis_export *, uint32_t *address);
 };
 struct ntimage {
     struct pe_image pe;

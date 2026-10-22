@@ -114,6 +114,7 @@ struct task {
     struct task *all_next;
     uint8_t pager_order;            /* f0-49 held lock-order levels (bitmask) */
     struct ndis_execution *ndis_execution; /* pinned foreign callback, task-local */
+    struct ndis_user_host *ndis_user_host; /* kernel-owned, never inherited */
 };
 
 extern struct task *g_current;

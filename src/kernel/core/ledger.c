@@ -379,6 +379,13 @@ static struct pin_slot *find_pin(const struct mm_pin *pin, uint32_t generation)
     }
     return 0;
 }
+bool mm_pin_valid(const struct mm_pin *pin, uint32_t generation)
+{
+    uint32_t f=irq_save();
+    struct pin_slot *s=find_pin(pin,generation);
+    bool valid=s && !s->retired;
+    irq_restore(f); return valid;
+}
 int mm_pin_retire(struct mm_pin *pin, uint32_t generation, enum mm_owner owner)
 {
     uint32_t f = irq_save(); struct pin_slot *s = find_pin(pin, generation);

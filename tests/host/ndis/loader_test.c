@@ -80,7 +80,11 @@ static void policies(void) {
     assert(!strcmp(d.error.reason,"network-image-budget"));
 }
 static void hostile(void) {
-    fixture();raw[515]=0xfa;reject("instruction-cli");
+    fixture();raw[515]=0xfa;
+    struct ntimage diagnostic={0};struct ntimage_platform pp=platform();
+    assert(ntimage_load(&diagnostic,raw,sizeof(raw),"diagnostic.sys",&pp));
+    assert(!diagnostic.scanned && diagnostic.scan_rva==0x1003);
+    assert(ntimage_unload(&diagnostic));
     fixture();put(T+52,0x1000);reject("section-virtual-overlap");
     fixture();put(T+60,512);reject("driver-raw-overlap");
     fixture();put(T+20,0);reject("driver-raw-header-overlap");
@@ -164,6 +168,32 @@ static void relocations(void) {
     fixture();dir(5,0x2700,12);put(at(0x2700),0x2000);put(at(0x2704),12);pe_put16(raw+at(0x2708),0x5600);
     reject("relocation-type");
 }
+static bool bad_user_import;
+static int user_import(void *ctx,const struct ndis_export *e,uint32_t *address)
+{
+    (void)ctx;
+    *address=bad_user_import?e->address:0x500000+(e->address-0xc2000000);
+    return 1;
+}
+static void user_policy(void)
+{
+    struct ntimage d={0};struct ntimage_platform p=platform();
+    p.user_host=true;p.user_import=user_import;mapped_base=0x100000;
+    fixture();import("NTOSKRNL.EXE","KeTickCount",0,false,false);
+    dir(5,0x2700,12);put(at(0x2700),0x2000);put(at(0x2704),12);
+    pe_put16(raw+at(0x2708),0x3600);put(at(0x2600),BASE+0x1234);
+    raw[512]=0xfa; /* admitted diagnostically, never executed by this model */
+    assert(ntimage_load(&d,raw,sizeof(raw),"user.sys",&p));
+    assert(d.pe.base==0x100000 && pe_u32(d.pe.image+0x2600)==0x101234);
+    assert(pe_u32(d.pe.image+0x2120)==0x502000 && !d.scanned);
+    assert(ntimage_unload(&d));
+    bad_user_import=true;d=(struct ntimage){0};
+    assert(!ntimage_load(&d,raw,sizeof(raw),"kernel-import.sys",&p));
+    assert(!strcmp(d.error.reason,"user-import-unavailable") && !live);
+    bad_user_import=false;mapped_base=BASE;d=(struct ntimage){0};
+    assert(!ntimage_load(&d,raw,sizeof(raw),"kernel-va.sys",&p));
+    assert(!strcmp(d.error.reason,"image-not-user-pinned") && !live);
+}
 bool registry_valid(int handle,gen_t generation) { return claims_ok && handle==7 && generation==11; }
 int registry_quarantine(int handle,gen_t generation) { assert(handle==7 && generation==11);quarantines++;return 0; }
 static bool fence(void *ctx,const char *why) { (void)ctx;assert(why);fences++;return fence_ok; }
@@ -206,7 +236,7 @@ static void callbacks(void) {
     }
 }
 int main(void) {
-    policies();hostile();imports();modified_imports();relocations();callbacks();
+    policies();hostile();imports();modified_imports();relocations();user_policy();callbacks();
     assert(!live && allocations==frees && records && quarantines==6);
     puts("PASS shared PE/kernel policy imports ordinals data rollback fault nonreturn IRQL model");fflush(stdout);return 0;
 }

@@ -77,6 +77,22 @@ uint32_t vmm_kernel_pte(uint32_t va)
     return p ? *p : 0;
 }
 
+bool vmm_cache_alias_ok(uint32_t physical,uint32_t bytes,uint32_t flags)
+{
+    if (!bytes || (physical&4095) || (bytes&4095) || bytes-1>UINT32_MAX-physical) return false;
+    uint64_t end=(uint64_t)physical+bytes;
+    for (unsigned i=768;i<1024;i++) if (kpd[i]&PTE_P) {
+        uint32_t *pt=table_va(kpd[i]&~4095u);
+        for (unsigned j=0;j<1024;j++) {
+            uint32_t p=pt[j], frame=p&~4095u;
+            if ((p&PTE_P) && frame>=physical && frame<end &&
+                (p&(PTE_PCD|PTE_PWT))!=(flags&(PTE_PCD|PTE_PWT))) return false;
+            if (!((j+1)&15)) kpreempt_point();
+        }
+    }
+    return true;
+}
+
 void vmm_init(void)
 {
     /* Tables must be reachable through the boot map (0-16 MiB). */
@@ -375,9 +391,11 @@ int as_create(struct aspace *as)
     return 0;
 }
 
-int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
+static int as_map_internal(struct aspace *as, uint32_t va, uint32_t phys,
+                           uint32_t flags, bool borrowed)
 {
-    if (va >= KERNEL_VBASE)
+    if (!as->pd_phys || va >= KERNEL_VBASE || (borrowed &&
+        (as->memory || (va & 4095) || (phys & 4095))))
         return -EINVAL;
     uint32_t *pd = table_va(as->pd_phys);
     uint32_t *pde = &pd[va >> 22];
@@ -391,14 +409,36 @@ int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
         as->tables++;
     }
     uint32_t *pte = &table_va(*pde & ~0xFFFu)[(va >> 12) & 1023];
+    if ((*pte & PTE_BORROWED) && !as->memory) return -EINVAL;
+    if (borrowed && *pte) return -EINVAL;
     if (!(*pte & PTE_P)) {
         as->pages++;
         g_user_mappings++;
         if (ledger_mapping) ledger_mapping(1, 0);
     }
-    *pte = (phys & ~0xFFFu) | (flags & (PTE_W | PTE_U)) | PTE_P;
+    *pte = (phys & ~0xFFFu) | (flags & (PTE_W | PTE_U)) | PTE_P |
+        (borrowed ? PTE_BORROWED | (flags & (PTE_PCD | PTE_PWT)) : 0);
     if (read_cr3() == as->pd_phys)
         invlpg(va);
+    return 0;
+}
+
+int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
+{ return as_map_internal(as, va, phys, flags, false); }
+
+int as_map_borrowed(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
+{ return as_map_internal(as, va, phys, flags, true); }
+
+int as_revoke_borrowed(struct aspace *as, uint32_t va, uint32_t phys)
+{
+    if (!as->pd_phys || as->memory || va>=KERNEL_VBASE || (va&4095) || (phys&4095)) return -EINVAL;
+    uint32_t de=table_va(as->pd_phys)[va>>22];
+    if (!(de&PTE_P)) return -EFAULT;
+    uint32_t *p=&table_va(de&~4095u)[(va>>12)&1023];
+    if ((*p & (PTE_P|PTE_BORROWED))!=(PTE_P|PTE_BORROWED) || (*p&~4095u)!=phys) return -EFAULT;
+    *p=0; as->pages--; g_user_mappings--;
+    if (ledger_mapping) ledger_mapping(-1,0);
+    if (read_cr3()==as->pd_phys) invlpg(va);
     return 0;
 }
 
@@ -412,7 +452,8 @@ int as_replace_pages(struct aspace *as, uint32_t va, const uint32_t *frames,
     volatile uint32_t *pt = &table_va(pde & ~0xFFFu)[(va >> 12) & 1023];
     /* Validate the whole span before changing any entry. */
     for (unsigned i = 0; i < count; i++)
-        if (!(pt[i] & PTE_P) || (frames && (frames[i] & (PAGE_SIZE - 1)))) return -EFAULT;
+        if (!(pt[i] & PTE_P) || (!as->memory && (pt[i]&PTE_BORROWED)) ||
+            (frames && (frames[i] & (PAGE_SIZE - 1)))) return -EFAULT;
     uint32_t d = 0, a = 0;
     bool changed = false;
     for (unsigned i = 0; i < count; i++) {
@@ -464,8 +505,9 @@ void as_destroy(struct aspace *as)
                 uint32_t old = pt[j];
                 if (old & PTE_P) {
                     pt[j] = 0;
-                    mm_free(old & ~0xFFFu, as->pool_base && (i * 1024u + j) * PAGE_SIZE >= as->pool_base ? MM_VM_POOL : as->owner);
-                    if (as->owner==MM_USER_PRIVATE && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
+                    bool borrowed=!as->memory && (old&PTE_BORROWED);
+                    if (!borrowed) mm_free(old & ~0xFFFu, as->pool_base && (i * 1024u + j) * PAGE_SIZE >= as->pool_base ? MM_VM_POOL : as->owner);
+                    if (!borrowed && as->owner==MM_USER_PRIVATE && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
                     as->pages--; g_user_mappings--;
                     if (ledger_mapping) ledger_mapping(-1, 0);
                 }

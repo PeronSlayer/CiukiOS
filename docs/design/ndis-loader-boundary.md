@@ -105,6 +105,10 @@ Before opening the gate the lead must cross-review and demonstrate:
 
 No owner-pack payload or external implementation code is used by this step.
 
+Amendment 1 replaces ring-0 execution with the dedicated ring-3 boundary in
+[ndis-user-host.md](ndis-user-host.md). The scanner is now diagnostic only;
+neither loader policy enables foreign execution.
+
 The staged, incomplete f6-05 recovery mechanisms and their host-test limits
 are documented in [ndis-containment.md](ndis-containment.md). They do not open
 the production gate described here or qualify the three pinned profiles.

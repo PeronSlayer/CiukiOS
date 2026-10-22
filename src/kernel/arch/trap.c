@@ -19,6 +19,8 @@ extern bool ndis_execution_exception(struct trap_frame *) __attribute__((weak));
 extern void ndis_execution_timer(struct trap_frame *) __attribute__((weak));
 extern void ndis_execution_irq_enter(void) __attribute__((weak));
 extern void ndis_execution_irq_leave(void) __attribute__((weak));
+extern bool ndis_user_trap(struct trap_frame *) __attribute__((weak));
+extern void ndis_user_timer(void) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -84,6 +86,7 @@ static void handle_irq(struct trap_frame *tf)
     biosvm_account_irq(irq, true, irq_handlers[irq] != 0);
     if (ledger_irq_context) ledger_irq_context(false);
     if (ndis_execution_irq_leave) ndis_execution_irq_leave();
+    if (irq==0 && ndis_user_timer) ndis_user_timer(); /* all hosts, after EOI */
 }
 
 static bool try_expected(struct trap_frame *tf)
@@ -136,6 +139,10 @@ void trap_dispatch(struct trap_frame *tf)
         return;
     }
     bool from_user = (tf->cs & 3) == 3;
+    if (from_user && ndis_user_trap && ndis_user_trap(tf)) {
+        cpu_user_return();
+        return;
+    }
     /* f3-04: a DOS VM worker running a DPMI client at ring 3 (no VM flag).
      * Physical IRQs keep their single dispatch/EOI here; every other vector,
      * INT 80h included, belongs to the VM monitor and never reaches the

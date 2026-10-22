@@ -81,6 +81,8 @@ void ledger_irq_context(bool enter) __attribute__((weak));
  * registry; snapshots never chase client storage. */
 int mm_pin(struct mm_pin *) __attribute__((weak));
 int mm_unpin(struct mm_pin *, uint32_t generation) __attribute__((weak));
+/* Exact live token identity, excluding retired backing; no PFN-only alias test. */
+bool mm_pin_valid(const struct mm_pin *, uint32_t generation) __attribute__((weak));
 int mm_pin_retire(struct mm_pin *, uint32_t generation, enum mm_owner) __attribute__((weak));
 bool ledger_page_pinned(uint32_t pfn);
 

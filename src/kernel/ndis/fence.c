@@ -8,7 +8,7 @@ static bool owner_matches(const char *a,const char *b) {
 int ndis_fence_prepare(struct ndis_pci_fence *f,struct ndis_callback *c,unsigned index) {
     const struct pci_func *p=pci_get(index);
     if(!f || f->prepared || !c || c->depth || c->state==NDIS_CALLBACK_QUARANTINED ||
-       !c->image || !c->image->loaded || !c->image->scanned || c->image->quarantined || !c->owner ||
+       !c->image || !c->image->loaded || c->image->quarantined || !c->owner ||
        !p || (p->header_type&0x7f) || p->class_code!=2 || p->subclass!=0 || !c->claim_count ||
        c->claim_count>NDIS_CALLBACK_CLAIMS) return 0;
     bool bar=false;

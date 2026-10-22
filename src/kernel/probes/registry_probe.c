@@ -111,6 +111,8 @@ static void fixture_seed(void) { }
 #define pci_get fixture_pci_get
 #define irq_chain_add fixture_irq_chain_add
 #define irq_chain_remove fixture_irq_chain_remove
+#define irq_chain_pending fixture_irq_chain_pending
+#define irq_chain_resolve_pending fixture_irq_chain_resolve_pending
 #define irq_chain_snapshot fixture_irq_chain_snapshot
 #define irq_chain_spurious fixture_irq_chain_spurious
 #define outb fixture_outb
@@ -178,6 +180,8 @@ static void fixture_seed(void) { }
 #undef pci_get
 #undef irq_chain_add
 #undef irq_chain_remove
+#undef irq_chain_pending
+#undef irq_chain_resolve_pending
 #undef irq_chain_snapshot
 #undef irq_chain_spurious
 #undef outb

@@ -3,6 +3,11 @@
 This is a partial implementation, not approval to execute an owner-pack driver.
 The production entry gate remains closed while the prerequisites below are open.
 
+ND14/ND14.1 supersede ring-0 execution with the ring-3 boundary documented in
+[ndis-user-host.md](ndis-user-host.md). The scanner now records diagnostics
+without refusing a load. The ring-0 model and its fixtures remain for reference;
+their former prerequisites do not authorize ring-0 admission.
+
 ## Research and implementation decisions
 
 Intel's [SDM landing page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)

@@ -39,3 +39,20 @@ Implement with real semantics the NT/HAL exports of the three pinned profiles: I
 To get the exact import lists, run `scripts/pe_import_census.py` read-only on the owner's pack under `third_party/` (git-ignored). The pack never becomes a test input: tests use synthetic fixtures. Exports outside those three sets stay unimplemented and refuse the load.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (Microsoft DDK pages, Intel SDM for the instruction scan). Host tests one at a time with `nice -n 19`. Write `build/codex/f6-05-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 00:13): user-mode driver host replaces ring-0 containment
+
+The first run showed that ring-0 containment cannot be completed on i686. The contract now has **ND14 and ND14.1**: each miniport runs in a ring-3 driver-host process. This directive changes accordingly, and the first run's work (execution context, PCI fence, recovery code, fixtures) is kept where it still applies.
+- **Part 1, new.** Build the ND14/ND14.1 host infrastructure:
+  - per-task I/O permission bitmaps installed on every switch;
+  - typed, revocable uncached user mappings of owned BARs and ledger DMA memory;
+  - CLI/STI/HLT trap emulation and the reviewed flag-save mechanism;
+  - the teardown order of fence first, then kill;
+  - interrupt delivery with exclusive or per-function-masked lines and generation-tagged pending delivery;
+  - kernel-owned deadlines;
+  - the loader's user-host policy;
+  - the validated shared packet ring.
+
+  Each piece gets host tests, plus an executable i386 fixture host process wherever the sandbox allows.
+- **Part 2.** The NT/HAL shim for the three pinned profiles now runs inside the host process.
+- **Unchanged.** The admission scan of the first run is no longer required: keep it as a diagnostic only.

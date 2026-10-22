@@ -7,7 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 
 class LoaderTests(unittest.TestCase):
-    def test_synthetic_loader_under_address_undefined_and_leak_sanitizers(self):
+    def synthetic_loader(self, sanitizer):
         out = ROOT/'build/host/ndis'; out.mkdir(parents=True, exist_ok=True)
         sources = ['sdk/pe/pe.c', 'sdk/win32/ldr/pe.c', 'tests/host/ndis/user_policy.c',
                    'src/kernel/ndis/ntimage.c', 'src/kernel/ndis/exports.c',
@@ -15,7 +15,7 @@ class LoaderTests(unittest.TestCase):
                    'tests/host/ndis/loader_test.c']
         command = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                    '-DW32_HOST_MODEL', '-DCIUKI_NDIS_HOST_MODEL', '-ffunction-sections',
-                   '-fdata-sections', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                   '-fdata-sections', '-fsanitize='+sanitizer, '-fno-sanitize-recover=all',
                    '-I.', '-Isrc/kernel/include', '-Isdk/win32/include',
                    *sources, '-Wl,--gc-sections', '-o', str(out/'loader')]
         subprocess.run(command, cwd=ROOT, check=True)
@@ -25,6 +25,12 @@ class LoaderTests(unittest.TestCase):
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertIn('PASS shared PE/kernel policy', result.stdout)
+
+    def test_synthetic_loader_under_address_undefined_and_leak_sanitizers(self):
+        self.synthetic_loader('address,undefined')
+
+    def test_synthetic_loader_undefined(self):
+        self.synthetic_loader('undefined')
 
     def test_resident_allocator_under_address_undefined_and_leak_sanitizers(self):
         out = ROOT/'build/host/ndis'; out.mkdir(parents=True, exist_ok=True)
@@ -40,7 +46,10 @@ class LoaderTests(unittest.TestCase):
 
     def test_production_i686_objects_compile_without_model_execution_hook(self):
         out = ROOT/'build/host/ndis/kernel'; out.mkdir(parents=True, exist_ok=True)
-        sources = [*sorted((ROOT/'src/kernel/ndis').glob('*.c')), ROOT/'src/kernel/arch/trap.c']
+        sources = [*sorted((ROOT/'src/kernel/ndis').glob('*.c')),
+                   *(ROOT/'src/kernel'/s for s in ('arch/trap.c', 'arch/desc.c',
+                     'core/task.c', 'core/vmm.c', 'core/registry.c', 'core/ledger.c',
+                     'proc/signal.c', 'probes/registry_probe.c'))]
         for source in sources:
             subprocess.run(['clang', '--target=i686-unknown-elf', '-march=pentiumpro',
                             '-ffreestanding', '-fno-builtin', '-fno-pic', '-fno-pie',
@@ -57,6 +66,10 @@ class LoaderTests(unittest.TestCase):
         gate = asm.split('<ndis_execute2>:', 1)[1].split('<ndis_shim_enter>:', 1)[0]
         self.assertNotIn('ndis_context_save', gate)
         self.assertNotRegex(gate, r'call[l]?\s+\*')
+        host = subprocess.check_output(['llvm-objdump', '-dr', str(out/'userhost.o')], text=True)
+        init = host.split('<ndis_host_init>:', 1)[1].split('<ndis_host_stop>:', 1)[0]
+        self.assertNotIn('NDIS_HOST_LIVE', init)
+        self.assertNotRegex(init, r'call[l]?\s+\*')
 
     def build_abi(self):
         out = ROOT/'build/host/ndis/abi'; out.mkdir(parents=True, exist_ok=True)

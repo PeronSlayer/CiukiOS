@@ -38,8 +38,12 @@ static int policy(void *ctx,struct pe_image *p) {
 static void *allocate(void *ctx,uint32_t preferred,uint32_t size,uint32_t *base) {
     struct ntimage *d=ctx; const struct pe_ops *m=&d->platform.memory;
     void *v=m->allocate(m->context,preferred,size,base);
-    if(v && (!d->platform.resident(m->context,v,size,*base) || *base<0xc0000000u || (*base&4095))) {
-        m->release(m->context,v,size); refuse(d,"image-not-supervisor-pinned"); return 0;
+    if(!v) return 0;
+    bool range=d->platform.user_host ? (*base>=0x10000u && *base<0xc0000000u &&
+        size<=0xc0000000u-*base) : *base>=0xc0000000u;
+    if(v && (!d->platform.resident(m->context,v,size,*base) || !range || (*base&4095))) {
+        m->release(m->context,v,size);
+        refuse(d,d->platform.user_host?"image-not-user-pinned":"image-not-supervisor-pinned"); return 0;
     }
     return v;
 }
@@ -61,7 +65,15 @@ static int symbol(void *ctx,const struct pe_import *i) {
     struct ntimage *d=ctx; const char *why;
     const struct ndis_export *e=ndis_export_find(d->platform.exports,d->platform.export_count,
                                                i->module,i->name,i->ordinal);
-    uint32_t address=ndis_export_address(e,&why);
+    uint32_t address;
+    if(d->platform.user_host) {
+        address=0; why="user-import-unavailable";
+        /* Metadata is shared; no kernel export address crosses into the IAT.
+         * The allocator policy proves the process-local function/data view. */
+        if(!e || !e->implemented || !d->platform.user_import ||
+           !d->platform.user_import(d->platform.memory.context,e,&address) ||
+           address<0x10000u || address>=0xc0000000u) address=0;
+    } else address=ndis_export_address(e,&why);
     if(!address) {
         if(d->platform.record) d->platform.record(d->platform.memory.context,d->file,i->module,
                                                  i->name,i->ordinal,why);
@@ -94,9 +106,11 @@ int ntimage_load(struct ntimage *d,const void *file,uint32_t n,const char *name,
         d->scan_rva=scan.rva;
         if(d->platform.scan_record) d->platform.scan_record(d->platform.memory.context,d->file,
                                                            scan.rva,scan.reason);
-        refuse(d,scan.reason); goto failed;
+        /* ND14: diagnostic only. Ring 3, not a linear scan, enforces CPL and
+         * port/memory permissions. Never use this result as admission proof. */
+    } else {
+        d->scanned=true;
     }
-    d->scanned=true;
     d->loaded=true;
     /* Borrowed file bytes are no longer needed; no dangling input pointer. */
     d->pe.file=0; d->pe.file_size=0;

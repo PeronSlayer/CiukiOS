@@ -289,10 +289,12 @@ void proc_signal_fault(struct trap_frame *tf, uint32_t cr2)
 }
 
 extern void w32_user_return(struct proc_thread *,struct trap_frame *) __attribute__((weak));
+extern void ndis_user_return(struct trap_frame *) __attribute__((weak));
 void proc_signal_return_to_user(struct trap_frame *tf)
 {
     if ((tf->cs & 3) != 3)
         return;
+    if (ndis_user_return) ndis_user_return(tf);
     struct proc_thread *t = proc_thread_for(g_current);
     if (!t)
         return;                        /* F0 */

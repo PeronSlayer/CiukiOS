@@ -66,6 +66,9 @@ unsigned pmm_reservations(const struct pmm_reservation **out);
 #define PTE_A    0x020u
 #define PTE_D    0x040u
 #define PTE_G    0x100u
+/* Only for raw device address spaces (as.memory == NULL). Not a UA shared
+ * page: this alias never owns, releases, copies or changes the backing. */
+#define PTE_BORROWED 0x800u
 
 /* kernel virtual memory */
 void vmm_init(void);
@@ -86,6 +89,9 @@ void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes);
 /* All console/presenter aliases must be revoked before runtime replacement. */
 void *vmm_replace_framebuffer(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes);
 uint32_t vmm_kernel_pte(uint32_t va);      /* raw PTE or 0 */
+/* Thread context, before publishing a device view. Refuse mixed PCD/PWT
+ * aliases, including the permanent direct map. No mapping is changed. */
+bool vmm_cache_alias_ok(uint32_t physical,uint32_t bytes,uint32_t flags);
 
 /* kernel stacks: 16 KiB with an unmapped guard page below (f2-20) */
 #define KSTACK_SIZE 32768u /* 32 KiB: the optical probe path double-faulted at 16 KiB on QEMU (2026-10-11) */
@@ -109,6 +115,8 @@ bool vmm_sample_step(uint32_t epoch) __attribute__((weak));
 uint32_t as_sample_page(struct aspace *, uint32_t va);
 int as_create(struct aspace *as);
 int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags);
+int as_map_borrowed(struct aspace *, uint32_t va, uint32_t phys, uint32_t flags);
+int as_revoke_borrowed(struct aspace *, uint32_t va, uint32_t phys);
 /* Replace 1..32 already-present pages within one table; no allocation or
  * ownership change. Caller excludes guest execution/interrupts. Return old
  * D/A bits as page masks, clear D, and flush the active AS once if changed.

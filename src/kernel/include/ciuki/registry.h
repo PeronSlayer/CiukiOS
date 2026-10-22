@@ -98,6 +98,7 @@ struct irq_chain_stats {
     uint64_t max_service_us, smi_attributed;
     unsigned participants, consecutive_unclaimed, quarantines;
     bool quarantined, deferred;
+    uint64_t pending_passes, async_handled, async_unclaimed;
 };
 /* Qualified PCI level routing only: caller validates chipset/ELCR and owns
  * an ACTIVE shareable registry IRQ claim. Fixed edge/cascade lines reject.
@@ -118,6 +119,11 @@ struct irq_chain_stats {
  * survive, including a queued rearm. Per-member overruns use irq_budget.h. */
 int irq_chain_add(unsigned irq, irq_chain_handler_t handler, const char *owner);
 int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owner);
+/* ND14 asynchronous delivery. Only the currently executing member can publish
+ * pending, after masking its qualified source. It is neither handled nor
+ * not-mine. Completion must match the exact claim generation and token. */
+bool irq_chain_pending(unsigned irq,int handle,gen_t,uint32_t delivery_token);
+bool irq_chain_resolve_pending(unsigned irq,int handle,gen_t,uint32_t delivery_token,bool recognized);
 bool irq_chain_snapshot(unsigned irq, struct irq_chain_stats *out);
 void irq_chain_spurious(unsigned irq);
 
