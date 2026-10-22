@@ -56,3 +56,15 @@ The first run showed that ring-0 containment cannot be completed on i686. The co
   Each piece gets host tests, plus an executable i386 fixture host process wherever the sandbox allows.
 - **Part 2.** The NT/HAL shim for the three pinned profiles now runs inside the host process.
 - **Unchanged.** The admission scan of the first run is no longer required: keep it as a diagnostic only.
+
+## Amendment 2 (lead, 2026-10-23 00:38): flag mechanism and remaining part 1
+
+1. **Flag mechanism (ND14.1 item 1).** PUSHF/POPF/IRET do not trap at CPL3, so the loader patches them.
+   - **Find:** after relocation and before entry, the f6-05 decoder walks every executable section (linear sweep, with the relocation table marking non-code operands). Each PUSHF(D) `9C`, POPF(D) `9D` and IRET(D) `CF` instruction found becomes `INT3` (`CC`), which is the same length.
+   - **Record:** the patch is recorded in a per-image site table (offset, original opcode, image hash).
+   - **Trap:** the #BP handler for a host process emulates the original instruction against the virtual IF only at a recorded site. Any other INT3, or a site whose bytes changed, quarantines the driver.
+   - **Code integrity:** code pages are mapped read-only after patching, so self-modifying code faults.
+   - **Tests:** pushf/cli/popf nesting, pushf in a callee, iret frames, data bytes equal to `9C`/`9D` outside decoded instructions, and tamper detection.
+2. **Device bindings.** Qualification of the three pinned profiles is the lead's runtime work in QEMU, which the owner allows for F6 network, and on the T23. Build the dispatcher and doorbells and the native integration so that the lead can run them. Keep execution closed by default, opened only by an explicit per-profile qualification record.
+3. **Downloads.** The worktree now links the main checkout's pinned `build/downloads`, so the jitterentropy archive and the full kernel suite are available.
+4. **Then part 2.** After part 1 is complete with tests, implement the NT/HAL shim for the three profiles as the directive requires.
