@@ -29,34 +29,61 @@ static struct kmutex *held;
 static struct kwait *owned_queues;
 static gen_t last_gen;
 static bool propagating;
+/* f1-98: tasks with a reservation dependency (task.depends_on), unordered. */
+static struct task *dependents;
 
-/* Every live outgoing dependency is a wait on an owned lock/request queue.
- * Device waits have owner==NULL. Suppress the edge that would close a cycle. */
+/* Every live outgoing dependency is a wait on an owned lock/request queue,
+ * or (f1-98) a polling waiter's reservation dependency. Device waits have
+ * owner==NULL. Suppress the edge that would close a cycle. */
 static struct task *wait_owner(struct task *t)
+{ return !t ? 0 : t->waiting_on ? t->waiting_on->owner : t->depends_on; }
+/* The kmutex lock-order checks keep the pre-f1-98 graph of kwait edges only:
+ * a reservation dependency never turns a mutex wait into a panic path. */
+static struct task *lock_owner(struct task *t)
 { return t && t->waiting_on ? t->waiting_on->owner : 0; }
-static bool donation_cycle(struct task *waiter, struct task *owner)
+static bool owner_cycle(struct task *waiter, struct task *owner, struct task *(*next)(struct task *))
 {
     struct task *slow = owner, *fast = owner;
     while (slow) {
         if (slow == waiter) return true;
-        slow = wait_owner(slow);
-        fast = wait_owner(wait_owner(fast));
+        slow = next(slow);
+        fast = next(next(fast));
         if (slow && slow == fast) return true;
     }
     return false;
 }
+static bool donation_cycle(struct task *waiter, struct task *owner)
+{ return owner_cycle(waiter, owner, wait_owner); }
+static bool lock_cycle(struct task *waiter, struct task *owner)
+{ return owner_cycle(waiter, owner, lock_owner); }
 static void donation_update(struct task *t)
 {
     if (propagating) return;
     propagating = true;
     while (t) {
-        unsigned highest = 0;
+        unsigned highest = 0, dependency = 0;
+        bool lend = false; /* f1-98: a desktop-share member waits for t */
+        struct task *source = 0; /* f1-98: the reservation waiter that sets it */
         for (struct kwaiter *w = waiters; w; w = w->all_next)
-            if (w->donating && w->queue->owner == t &&
-                w->task->effective_priority > highest) highest = w->task->effective_priority;
+            if (w->donating && w->queue->owner == t) {
+                if (w->task->effective_priority > highest) highest = w->task->effective_priority;
+                lend |= w->task->share_group || w->task->share_lent;
+            }
+        for (struct task *d = dependents; d; d = d->depend_next)
+            if (d->depends_on == t) {
+                if (d->effective_priority > dependency) { dependency = d->effective_priority; source = d; }
+                lend |= d->share_group || d->share_lent;
+            }
+        if (dependency > highest) highest = dependency;
+        else source = 0; /* a kwaiter sets it, or ties with it */
         unsigned old = t->effective_priority;
+        bool was_lent = t->share_lent;
         task_set_inherited(t, highest);
-        if (old == t->effective_priority) break;
+        if (was_lent != lend) task_set_share_lent(t, lend);
+        /* f1-98: record a reservation dependency that raised the holder. */
+        if (source && t->effective_priority > old && t->effective_priority == highest && cpu_inherit)
+            cpu_inherit(source, t, highest, source->depend_reason);
+        if (old == t->effective_priority && was_lent == t->share_lent) break;
         t = wait_owner(t);
     }
     propagating = false;
@@ -68,6 +95,57 @@ void ksync_task_ready(struct task *t)
     if (t->sync_waiter) t->sync_waiter->donating = false;
     t->waiting_on = 0;
     donation_update(owner);
+}
+/* f1-98 (R2, Windows VMM Begin_Critical_Section boost; Win95 SDK priority
+ * inversion): a request that polls for a drive reservation, a writer turn
+ * or a filesystem lock (fs_port.h fs_depend) sleeps in its own pause, not on
+ * a kwait, so it names the holder here. The edge stays across the waiter's
+ * pause wakeups; it ends when the waiter withdraws (admitted, cancelled,
+ * timed out), when the holder releases that object, or at either task's
+ * exit, so the inheritance never outlives the hold. */
+static void depend_unlink(struct task *t)
+{
+    struct task **p = &dependents;
+    while (*p && *p != t) p = &(*p)->depend_next;
+    if (*p) *p = t->depend_next;
+    t->depend_next = 0; t->depends_on = 0; t->depend_object = 0; t->depend_reason = 0;
+}
+void ksync_depend(struct task *owner, const void *object, unsigned reason)
+{
+    struct task *t = g_current;
+    if (!t) return;
+    uint32_t f = irq_save();
+    if (owner == t || (owner && (owner->state == T_ZOMBIE || owner->state == T_DEAD))) owner = 0;
+    if (t->depends_on == owner && (!owner || t->depend_object == object)) { irq_restore(f); return; }
+    struct task *old = t->depends_on;
+    if (old) depend_unlink(t);
+    /* A dependency that would close a cycle donates nothing; the waiter's own
+     * request deadline bounds it, as for a cyclic kwait. */
+    if (owner && donation_cycle(t, owner)) owner = 0;
+    if (owner) {
+        t->depends_on = owner; t->depend_object = object; t->depend_reason = (uint8_t)reason;
+        t->depend_next = dependents; dependents = t;
+    }
+    donation_update(old);
+    donation_update(owner); /* records the raise ([sched] inherit) */
+    irq_restore(f);
+}
+void ksync_depend_release(const void *object)
+{
+    struct task *owner = g_current;
+    if (!owner || !dependents) return;
+    uint32_t f = irq_save();
+    bool released = false;
+    for (struct task **p = &dependents; *p;) {
+        struct task *d = *p;
+        if (d->depends_on == owner && d->depend_object == object) {
+            *p = d->depend_next;
+            d->depend_next = 0; d->depends_on = 0; d->depend_object = 0; d->depend_reason = 0;
+            released = true;
+        } else p = &d->depend_next;
+    }
+    if (released) donation_update(owner);
+    irq_restore(f);
 }
 void kwait_set_owner(struct kwait *q, struct task *owner)
 {
@@ -504,7 +582,7 @@ bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
             if (p == m) panic("mutex: recursive acquisition");
             /* Cyclic waits remain bounded by the caller's timeout. Never
              * recurse around the donation graph, or change lock ordering. */
-            if (!donation_cycle(g_current, m->owner)) panic("mutex: lock order");
+            if (!lock_cycle(g_current, m->owner)) panic("mutex: lock order");
         }
     if (m->owner && !kwait_wait_until(&m->wait, mutex_free, m, deadline)) return false;
     uint32_t f = irq_save();
@@ -522,7 +600,7 @@ void kmutex_lock(struct kmutex *m)
         /* The void API cannot return an acquisition failure. After the
          * protected cycle record and one real bounded wait, fail closed
          * rather than retrying an impossible cyclic dependency forever. */
-        if (donation_cycle(g_current, m->owner)) panic("mutex: cyclic wait timeout");
+        if (lock_cycle(g_current, m->owner)) panic("mutex: cyclic wait timeout");
     }
 }
 
@@ -591,6 +669,16 @@ void ksync_task_exit(struct task *t)
             if (queue->ticket_cancelled) kwait_wake_all(queue);
         }
         w = next;
+    }
+    /* f1-98: the dying task's own reservation dependency, and every edge that
+     * names it as holder (its waiters poll again and find the next holder). */
+    if (t->depends_on) { struct task *was = t->depends_on; depend_unlink(t); donation_update(was); }
+    for (struct task **p = &dependents; *p;) {
+        struct task *d = *p;
+        if (d->depends_on == t) {
+            *p = d->depend_next;
+            d->depend_next = 0; d->depends_on = 0; d->depend_object = 0; d->depend_reason = 0;
+        } else p = &d->depend_next;
     }
     ksync_task_ready(t);
     t->wake_tick = 0;

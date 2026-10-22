@@ -334,6 +334,9 @@ static void test_irq_restore(uint32_t f) {
                 ('scheduler_priorities_test.c', []),
                 ('timer_audio_load_test.c', []),
                 ('fs/wait_latency_test.c', []),
+                # f1-98: desktop minimum share and reservation-holder boost
+                # on the T23 b453bc92 replay model (negative controls inside).
+                ('t23_desktop_share_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
                 binary = temp / Path(unit).stem

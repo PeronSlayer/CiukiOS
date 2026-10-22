@@ -87,6 +87,16 @@ void kwait_wake_irq(struct kwait *q, bool io);
 void kwait_set_owner(struct kwait *q, struct task *owner);
 void ksync_task_ready(struct task *t) __attribute__((weak));
 void ksync_priority_changed(struct task *t) __attribute__((weak));
+/* f1-98 (R2): reservation dependencies of polling waiters. The calling task
+ * waits for `owner`, the holder of `object` (a drive reservation or writer
+ * turn, or a filesystem lock taken by a request); a NULL owner withdraws the
+ * caller's edge. The owner inherits the waiter's effective priority through
+ * the same donation walk as a kwait owner, transitively, until the waiter
+ * withdraws, the owner calls ksync_depend_release(object) for that object,
+ * or either task exits. Weak: harnesses without sync.c skip both calls. */
+enum { KSYNC_DEPEND_DRIVE = 1, KSYNC_DEPEND_CACHE = 2 };
+void ksync_depend(struct task *owner, const void *object, unsigned reason) __attribute__((weak));
+void ksync_depend_release(const void *object) __attribute__((weak));
 void kmutex_init(struct kmutex *m);
 void kmutex_lock(struct kmutex *m);
 bool kmutex_lock_until(struct kmutex *m, uint64_t deadline_ticks);
