@@ -190,8 +190,14 @@ static void usb_binding(struct ciuki_device_record *d, const struct pci_func *p)
             h->pci.vendor != p->vendor || h->pci.device != p->device) continue;
         string(d->driver, sizeof(d->driver), "usb-host");
         d->state = h->quarantined ? CIUKI_DEVICE_QUARANTINED :
-            h->ready || (h->touched && p->prog_if == 0x20) ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT;
+            h->ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT;
         string(d->reason, sizeof(d->reason), h->reason);
+        if (h->inventory.parent_locator) {
+            uint32_t parent = h->inventory.parent_locator;
+            ksnprintf(d->reason, sizeof(d->reason), "%s; companion of %02x:%02x.%u",
+                      h->reason ? h->reason : "discovered", (parent >> 16) & 255,
+                      (parent >> 8) & 255, parent & 255);
+        }
         if (h->owner[0]) owner_resources(d, h->owner);
         d->generation = h->generation;
     }
@@ -214,6 +220,7 @@ static void usb_devices(struct ciuki_devices_info *out)
                 u->quarantined || h->quarantined ? CIUKI_DEVICE_QUARANTINED :
                 u->present && u->configured && !u->storage.ejected ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, u->reason);
             if (!d) continue;
+            if (u->high_speed) ksnprintf(d->reason, sizeof(d->reason), "%s; high speed", u->reason ? u->reason : "discovered");
             d->bus = i; d->slot = u->address; d->function = u->port;
             d->subclass = u->parent; d->prog_if = u->low_speed;
             d->vendor = u->vendor; d->device = u->product; d->generation = u->generation;
@@ -235,7 +242,7 @@ static void drivers(struct ciuki_devices_info *out)
         {"e100", "Retained PCI binding; safe mode disables NIC activation"},
         {"rtl8139", "Retained PCI binding; safe mode disables NIC activation"},
         {"ne2000", "Retained PCI binding; safe mode disables NIC activation"},
-        {"usb-host", "UHCI/OHCI polling HID; firmware-first disables takeover"},
+        {"usb-host", "UHCI/OHCI/EHCI; HS hubs: TT unsupported; firmware-first"},
         {"e1000", "Retained PCI binding; safe mode disables NIC activation"},
         {"pcnet", "Retained PCI binding; safe mode disables NIC activation"},
         {"tulip", "Retained PCI binding; safe mode disables NIC activation"},

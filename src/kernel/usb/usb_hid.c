@@ -406,11 +406,13 @@ void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
             poll_record(d,h,n);
             if (n!=-USB_EAGAIN) {
                 bool babble=n==-USB_EIO && h->trace.valid &&
-                    (host->pci.prog_if==0 ? (h->trace.status & 0x00360000u)==(1u<<20) :
+                    (host->pci.prog_if==0x20 ? (h->trace.status & 0x38)==0x10 :
+                     host->pci.prog_if==0 ? (h->trace.status & 0x00360000u)==(1u<<20) :
                                            (h->trace.status>>28)==8);
                 bool port_retry=false;
                 if (n==-USB_EIO && h->trace.valid && host->ready && host->ops->port_status &&
-                    (host->pci.prog_if==0 ? (h->trace.status & 0x00360000u)==(1u<<18) :
+                    (host->pci.prog_if==0x20 ? (h->trace.status & 0x38)==8 :
+                     host->pci.prog_if==0 ? (h->trace.status & 0x00360000u)==(1u<<18) :
                                            (h->trace.status>>28)==5)) {
                     unsigned s=host->ops->port_status(host,d->root_port);
                     port_retry=(s & (USB_PORT_CONNECTED|USB_PORT_ENABLED|USB_PORT_OVERCURRENT))==USB_PORT_CONNECTED;

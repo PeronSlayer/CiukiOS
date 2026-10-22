@@ -1,5 +1,55 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-105/F1-106: controller inventory and EHCI high-speed service (2026-10-23)
+
+This extension supersedes the route-only EHCI scope below when activation
+qualifies. The interface, routing guard, primary-source research and DMA map
+are recorded in [peripheral-driver-coverage.md](peripheral-driver-coverage.md#f1-105f1-106-implementation-interface-2026-10-22).
+`ehci_route` remains the sole BIOS semaphore owner. It stops the controller,
+checks bus mastering is off and leaves CF=0 before any companion can enumerate.
+After companions start, activation admits an unambiguous same-slot group only
+when every declared companion is ready, owned and has no live device records.
+The HCSPARAMS/PORTROUTE map supplies per-port companions. Missing, ambiguous,
+active or unqualified groups remain route-only, visible as unavailable native
+high-speed service in Device Manager. No new syscall or Device Manager v1
+layout/state number is introduced.
+
+EHCI uses high-speed QH/qTD control and bulk and a periodic power-of-two
+interrupt schedule. The general slot is serialized by the existing reservation;
+interrupt QHs have independent, resident slots. Bulk MPS is 512 bytes;
+BOT currently uses the common per-packet path and its existing eight-sector
+command bound rather than UHCI's 128-TD batching. Boot HID endpoints remain
+bounded to 64 bytes with one transaction per microframe and bInterval 1–14.
+Larger/high-bandwidth endpoints and longer periods are refused; periodic
+admission uses a conservative 80 us per microframe budget. A high-speed hub's
+high-speed child uses EHCI; full/low-speed children retain explicit
+`unsupported_transaction_translator` records and are disabled, without split
+transactions or falsely configured devices. Root full/low-speed ports are
+handed to their qualified companions. Disconnect returns ownership in hardware.
+
+Each general unlink removes its QH, clears stale IAA and completes two
+doorbell cycles. IAA is polled by that owner, independent of IRQ delivery.
+If IAA is missing, ASS=0 after disabling ASE is the alternative stop proof.
+Failure quarantines the host with its arena and leases retained. A late ACK
+is decoded after retirement. Periodic completion unlinks the QH and requires
+16 further microframes before reuse; cancellation retains its monotonic slot.
+An uncertain frame clock or corrupted schedule link/residual fails closed.
+Interrupt handlers only acknowledge their own completion/error/port causes;
+they preserve HSE for the worker and leave IAA to the unlink owner. IRQ lease
+loss masks local sources and retains polling service, schedule and routing.
+
+Controller quarantine stops local interrupts and both schedules, observes
+HCHalted/ASS/PSS, checks PCI BME clear and acknowledges pending causes.
+Only a successful stop readback permits CF=0; an uncertain stop retains port
+routing as well as memory/claims. Neither success nor timeout releases the
+arena. No controller reset occurs after children have been admitted.
+
+The existing 20 KiB arena/controller and all controller/device/port limits
+are unchanged. EHCI now consumes that arena when a high-speed engine is
+requested; firmware-first/safe input still returns before allocation or writes.
+See [host validation](../validation/f1-106-ehci.md) for measured layouts,
+model coverage and the sandbox's LeakSanitizer limitation.
+
 ## F1-96b: drained TD ring, QH element erratum, recovery ladder, re-plug (2026-10-22)
 
 Evidence (T23, image 5a10eef4, serial `t23-5a10eef4-serial.txt` lines

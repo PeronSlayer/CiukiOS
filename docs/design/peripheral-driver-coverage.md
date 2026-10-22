@@ -763,3 +763,57 @@ The owner removed licence-compatibility gating: "integra tutte le licenze GPL va
 - **Yamaha DS-XG (f1-119)** is no longer deferred. Its microcode is included from the best available source, with its notice.
 - **Notices.** Every imported file keeps its notice and origin line in the credits.
 - **Redistribution.** The owner redistributes regardless (2026-10-22 23:55); no release-time licence list is kept.
+
+## f1-105/f1-106 implementation interface (2026-10-22)
+
+The existing Device Manager v1 layout and state numbers remain unchanged.
+An EHCI controller with only companion routing is ABSENT (native high-speed
+service unavailable), with a `route_only_*` reason, never READY. Companion
+relationships are PCI bus/device/function locators, not USB VID/PID aliases.
+The kernel-only `usb_controller_inventory` v1 snapshot is 72 bytes: eighteen
+32-bit words (`version`, `size`, `pci_locator`, `parent_locator`, `flags`,
+`quirks`, `ports`, `companions`, `companion_functions`, `ready_functions`,
+then eight `port_companion` locators). Locator bit 31 means valid, bits
+23:16/15:8/7:0 contain PCI bus/device/function. Zero means unknown. Flags
+are OWNED=1, ROUTE_ONLY=2, HIGH_SPEED=4, TT_UNSUPPORTED=8, QUARANTINED=16.
+Quirks are NVIDIA_31BIT=1, AMD8111_REFUSED=2, VIA_SLEEP=4. The snapshot is
+an internal, size/version checked interface; it creates no new syscall.
+The Device Manager v1 reason includes the companion parent locator when known.
+Ready-function snapshots recheck the pinned companion records and register/DMA
+leases; a failed companion cannot receive another port hand-back.
+
+Research and resulting implementation decision: Intel EHCI 1.0
+[specification](https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/ehci-specification-for-usb.pdf),
+sections 2.2–2.3, 3.5–3.6, 4.2, 4.8.2, 4.10 and 5.1 define routing,
+ownership, QH/qTD and stop/unlink. Keep `usb_core.c:ehci_route` the sole
+firmware handoff owner; initialize companions before switching CF to one.
+Same-slot companion groups with one EHCI and a complete HCS routing map
+are admitted; ambiguous or missing groups stay route-only. A low/full-speed
+root port goes to its companion; a low/full-speed child of a high-speed hub
+gets an explicit unsupported record, without issuing unsupported split DMA.
+High-speed bulk MPS is 512; control MPS is 64. Boot HID remains bounded to
+64-byte endpoints with one transaction per microframe (larger/high-bandwidth
+endpoints refused). Supported interrupt intervals are scheduled in hardware;
+intervals above the 1024-frame list period are explicitly refused.
+
+The existing 20,480-byte arena is sufficient (including zeroed 64-bit buffer extensions): frame list 0–4095, async head
+4096–4191, general QH 4192–4287, qTD 4288–4351, control buffer 4352–4415,
+64 periodic slots of 224 bytes at 4608–18943, and 1024 bytes of bulk bounce
+data at 19456–20479. No capacity or memory limit grows. General transfers
+use asynchronous advance and schedule-stop fallback; periodic reuse requires
+unlink plus two complete frames, and uncertainty retains DMA and leases.
+
+Linux v6.12 [ehci-pci.c](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/ehci-pci.c)
+and [pci-quirks.c](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/pci-quirks.c)
+are behavioral references: honor NVIDIA's 31-bit QH limit (already satisfied
+by the existing 768 MiB DMA bound), refuse AMD8111 high-speed activation,
+and apply the VT6212 sleep-time bit with a byte config access. No forced BIOS
+semaphore clear is permitted. Linux's
+[queue](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/ehci-q.c),
+[periodic](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/ehci-sched.c),
+and [timer](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/ehci-timer.c)
+implementations corroborate cached-QH retirement and polling after lost IRQs.
+The implementation is written against the EHCI specification, without
+transplanting Linux code. The Windows 98 Resource Kit, chapter 30, “Using
+USB”/“USB Topology” (`wrkc30_2.htm`, local research media), supplies the
+host/hub/device enumeration model, not USB 2.0 register semantics.

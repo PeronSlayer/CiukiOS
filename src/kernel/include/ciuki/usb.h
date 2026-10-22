@@ -1,4 +1,4 @@
-/* Bounded USB 1.x host/HID model. See docs/design/usb-contract.md.
+/* Bounded USB host/HID model. See docs/design/usb-contract.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_USB_H
 #define CIUKI_USB_H
@@ -86,10 +86,35 @@ struct usb_mouse_input {
 #define USB_PORT_LOW 4u
 #define USB_PORT_OVERCURRENT 8u
 #define USB_PORT_CHANGED 16u
+#define USB_PORT_HIGH 32u
+#define USB_PORT_COMPANION 64u
+#define USB_EHCI_HEAD 4096u
+#define USB_EHCI_QH 4192u
+#define USB_EHCI_TD 4288u
+#define USB_EHCI_HID_BASE 4608u
+#define USB_EHCI_HID_STRIDE 224u
+#define USB_EHCI_BULK_BUFFER 19456u
+#define USB_CONTROLLER_INVENTORY_VERSION 1u
+#define USB_CONTROLLER_OWNED 1u
+#define USB_CONTROLLER_ROUTE_ONLY 2u
+#define USB_CONTROLLER_HIGH_SPEED 4u
+#define USB_CONTROLLER_TT_UNSUPPORTED 8u
+#define USB_CONTROLLER_QUARANTINED 16u
+#define USB_QUIRK_NVIDIA_31BIT 1u
+#define USB_QUIRK_AMD8111 2u
+#define USB_QUIRK_VIA_SLEEP 4u
+struct usb_controller_inventory {
+    uint32_t version, size, pci_locator, parent_locator, flags, quirks;
+    uint32_t ports, companions, companion_functions, ready_functions;
+    uint32_t port_companion[USB_PORT_MAX];
+};
+_Static_assert(sizeof(struct usb_controller_inventory) == 72, "USB inventory v1");
+static inline uint32_t usb_pci_locator(const struct pci_func *p)
+{ return 0x80000000u | (uint32_t)p->bus << 16 | (uint32_t)p->dev << 8 | p->fn; }
 struct usb_host;
 struct usb_device;
 /* All callbacks are pinned. sleep must yield with IF=1, even in a fixture.
- * Config width is 2 or 4; register width is 1, 2 or 4. */
+ * Config and register widths are 1, 2 or 4. */
 struct usb_io {
     void *cookie;
     uint32_t (*read)(void *, unsigned offset, unsigned width);
@@ -152,7 +177,8 @@ struct usb_storage {
     uint64_t bind_started_ms, bind_stage_started_ms;
     const char *bind_stage;
     struct usb_storage_trace trace;
-    uint8_t interface, in, out, in_packet, out_packet, in_toggle, out_toggle;
+    uint8_t interface, in, out, in_toggle, out_toggle;
+    uint16_t in_packet, out_packet;
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
     bool binding, bind_reserved, bind_stage_active;
@@ -182,7 +208,7 @@ struct usb_device {
     const char *hid_fault; /* general owner performs hub control/quarantine */
     uint16_t vendor, product;
     uint8_t address, ep0, class_code, root_port, parent, port, hub_ports, config;
-    bool present, configured, quarantined, low_speed;
+    bool present, configured, quarantined, low_speed, high_speed;
     uint16_t control_timeout_ms; /* f1-96b: nonzero only around a BOT class reset */
     struct usb_hid hid[USB_HID_MAX];
     struct usb_storage storage;
@@ -221,6 +247,12 @@ struct usb_host {
     gen_t claim_gen[3];
     char owner[24];
     const char *reason;
+    struct usb_controller_inventory inventory;
+    const struct usb_host *ehci_group; /* pinned controller records, never stack storage */
+    unsigned ehci_group_count;
+    uint32_t ehci_params;
+    uint8_t ehci_caplen;
+    bool ehci_started;
     unsigned ports, device_count, next_address;
     bool root_blocked[USB_PORT_MAX];
     uint8_t root_child[USB_PORT_MAX];
@@ -242,7 +274,11 @@ struct usb_host {
     fs_lock transfer_lock; /* short DMA/state mutex; always free across sleeps */
     struct usb_device devices[USB_DEVICE_MAX];
 };
-extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops;
+extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops, usb_ehci_ops;
+int usb_ehci_activate(struct usb_host *, struct usb_host *, unsigned);
+bool usb_ehci_stop(struct usb_host *); /* pinned claims/arena are never released */
+int usb_controller_snapshot(const struct usb_host *, struct usb_controller_inventory *);
+bool usb_ehci_companion_ready(const struct usb_host *, unsigned port);
 static inline void usb_barrier(void) { __asm__ volatile("" ::: "memory"); }
 /* Bulk NAK never renews a deadline. Binding ACK progress may renew the bulk
  * wait, always capped by the aggregate bind limit. Published I/O retains its
