@@ -9,6 +9,7 @@
 #pragma weak audio_device_open
 #pragma weak vfs_fat_transaction_locked /* older standalone personality models */
 #pragma weak vfs_dir_step_locked
+#pragma weak vfs_dir_walk_locked
 #pragma weak vfs_chain_clusters_locked
 
 static struct px_namespace *spaces;
@@ -955,8 +956,11 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     } else {
         struct fat_entry entry; int err;
         for (;;) {
-            /* f1-93: never a cold directory sector under the reservation. */
-            err = vfs_dir_step_locked ? vfs_dir_step_locked(dir->space->vfs, dir->volume, dir->entry.first, 0, &cursor, &entry, false) :
+            /* f1-93: never a cold directory sector under the reservation.
+             * f1-93b: nor a preemption point; the description keeps the
+             * walk position so a step does not walk the chain from its start. */
+            err = vfs_dir_walk_locked ? vfs_dir_walk_locked(dir->space->vfs, dir->volume, dir->entry.first, 0, &cursor, &entry, false, &d->dir_hint) :
+                vfs_dir_step_locked ? vfs_dir_step_locked(dir->space->vfs, dir->volume, dir->entry.first, 0, &cursor, &entry, false) :
                 VFS_IO(dir->space->vfs,fat_next(dir->volume, dir->entry.first, &cursor, &entry));
             if (err) return err == -FS_ENOENT ? 0 : px_error(err);
             if (path_equal(entry.name, ".") || path_equal(entry.name, "..")) continue;

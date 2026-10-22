@@ -1192,6 +1192,14 @@ int vfs_file_wait_locked(struct vfs *v,const bool *busy) {
     v->default_drive=default_drive; vfs_tag_locked(v,owner.op); vfs_site_locked(v,owner.site);
     return e;
 }
+#define VFS_STEP_ATTEMPTS 64u
+/* f1-93b: a guarded lookup that resumes in place returns EAGAIN to its walk
+ * after this many warms of the same sector at the same position (evicted
+ * again before it could be used). Every resumed walk is also bounded in
+ * sections: a FAT directory has at most 65536 slots, and each section
+ * settles at least one of them or warms a missing sector. */
+#define VFS_STEP_ATTEMPTS_GUARDED 8u
+#define VFS_STEP_SECTIONS 131072u
 /* Pins protect the source volume, matching descriptions and their node for
  * the entire unlocked operation. The mutation sequence validates cold
  * planning against every other FAT publisher, including legacy callers. */
@@ -1204,8 +1212,13 @@ static __attribute__((noinline)) int warm_sector(struct vfs *v,struct fat_volume
     v->transaction_users[drive]++; /* no detach while the read runs */
     vfs_unlock(v);
     /* f1-93: the whole read-ahead run of the sector (FAT copy, cluster or
-     * root directory), so one warm serves the rest of the walk. */
-    int e=sector==UINT64_MAX ? 0 : fat_warm(vol,sector);
+     * root directory), so one warm serves the rest of the walk.
+     * f1-93b: a section that ended at its work bound offers its preemption
+     * point here, with nothing held (the T23 b453bc92 holds were the guard
+     * kept by a starved holder preempted inside its section). */
+    int e=0;
+    if (sector==UINT64_MAX) fs_service();
+    else e=fat_warm(vol,sector);
     /* Readmitted with its own tag (a read-only step is admitted beside
      * open-file readers, f1-93). */
     vfs_lock(v,0); vfs_tag_locked(v,owner.op); vfs_site_locked(v,owner.site);
@@ -1227,14 +1240,29 @@ __attribute__((noinline)) int vfs_fat_transaction_locked(struct vfs *v, struct f
     if (a.guarded && !vol->dev->logical && (a.op==FAT_TX_LOOKUP || a.op==FAT_TX_NEXT)) {
         /* Reader restart fallback (f1-89 Amendment 1 item 5): the short
          * guard excludes every publication step, and the lookup reads only
-         * resident sectors. A miss ends the attempt: the sector is read with
-         * no reservation held and the caller restarts its walk. */
-        uint64_t miss;
-        int e=VFS_IO(v,fat_lookup_cached(vol,a.directory,a.op==FAT_TX_LOOKUP ? a.name : 0,
-                                         a.directory_cursor,a.entry,&miss));
-        if (e!=-FS_EAGAIN || miss==UINT64_MAX) return e;
-        e=warm_sector(v,vol,drive,miss);
-        return e ? e : -FS_EAGAIN;
+         * resident sectors. A miss is read with no reservation held.
+         * f1-93b: so is a section's work bound, and the lookup resumes in
+         * place when nothing was published meanwhile (no earlier component
+         * can be stale); a publication still restarts the caller's walk. */
+        uint64_t sequence=vol->mutation_sequence, last=UINT64_MAX;
+        struct fat_dir_hint hint={0};
+        uint32_t at=a.op==FAT_TX_NEXT ? *a.directory_cursor : 0, last_at=UINT32_MAX;
+        for (unsigned stalls=0,sections=0;;) {
+            if (++sections>VFS_STEP_SECTIONS) return -FS_EAGAIN;
+            uint64_t miss; uint32_t pos=at;
+            int e=VFS_IO(v,fat_dir_cached(vol,a.directory,a.op==FAT_TX_LOOKUP ? a.name : 0,&pos,a.entry,false,&hint,&miss));
+            if (e!=-FS_EAGAIN || miss==UINT64_MAX) {
+                if (a.op==FAT_TX_NEXT) *a.directory_cursor=pos;
+                return e;
+            }
+            at=pos;
+            if (miss==FAT_CACHE_YIELD) v->step_yields++;
+            else if (miss==last && at==last_at) { if (++stalls==VFS_STEP_ATTEMPTS_GUARDED) return -FS_EAGAIN; }
+            else v->warm_restarts++;
+            last=miss; last_at=at;
+            if ((e=warm_sector(v,vol,drive,miss==FAT_CACHE_YIELD ? UINT64_MAX : miss))) return e;
+            if (vol->mutation_sequence!=sequence) return -FS_EAGAIN;
+        }
     }
     /* LOG_WRITE publishes only DATA into owned reserved clusters: it never
      * stales another transaction, so the storage writer takes no turn.
@@ -1371,7 +1399,6 @@ retry:
  * consistent state. A logical step uses device windows. Bounded: every
  * restart warms a whole read-ahead run, and an exhausted bound falls back
  * to the guarded cold read (counted; zero in every host gate). */
-#define VFS_STEP_ATTEMPTS 64u
 static unsigned volume_drive(struct vfs *v,struct fat_volume *vol) {
     for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) return d;
     return 26;
@@ -1382,31 +1409,56 @@ static enum vfs_window reader_window(struct vfs *v,unsigned drive) {
 static int dir_step_cold(struct fat_volume *vol,uint32_t dir,const char *name,uint32_t *cursor,struct fat_entry *e,bool labels) {
     return name ? fat_lookup(vol,dir,name,e) : labels ? fat_next_dos(vol,dir,cursor,e) : fat_next(vol,dir,cursor,e);
 }
-__attribute__((noinline)) int vfs_dir_step_locked(struct vfs *v,struct fat_volume *vol,uint32_t dir,const char *name,
-                                                  uint32_t *cursor,struct fat_entry *e,bool labels) {
+__attribute__((noinline)) int vfs_dir_walk_locked(struct vfs *v,struct fat_volume *vol,uint32_t dir,const char *name,
+                                                  uint32_t *cursor,struct fat_entry *e,bool labels,struct fat_dir_hint *hint) {
     unsigned drive=volume_drive(v,vol);
     if (drive==26 || !(v->active&(1u<<drive))) return -FS_EIO;
     uint32_t scratch=0; if (!cursor) cursor=&scratch;
+    struct fat_dir_hint local={0}; if (!hint) hint=&local;
+    /* start: the step's first slot (a lookup's is 0); at: where the next
+     * section resumes (the first entry not yet settled). */
+    uint32_t start=name ? 0 : *cursor, at=start, last_at=UINT32_MAX;
+    uint64_t sequence=vol->mutation_sequence, last=UINT64_MAX;
+    unsigned sections=0;
     for (unsigned attempt=0;;attempt++) {
-        uint32_t start=*cursor; int r;
+        int r;
+        if (++sections>VFS_STEP_SECTIONS) attempt=VFS_STEP_ATTEMPTS;
         if (vol->dev->logical) {
             enum vfs_window m=attempt<VFS_STEP_ATTEMPTS ? reader_window(v,drive) : VFS_WINDOW_NONE;
             if (m==VFS_WINDOW_NONE) v->cold_fallbacks++;
-            r=VFS_IO_MODE(v,m,dir_step_cold(vol,dir,name,cursor,e,labels));
-            if (r!=-FS_EAGAIN || m!=VFS_WINDOW_VALIDATE) return r;
-            *cursor=start;
+            uint32_t pos=start;
+            r=VFS_IO_MODE(v,m,dir_step_cold(vol,dir,name,&pos,e,labels));
+            if (r!=-FS_EAGAIN || m!=VFS_WINDOW_VALIDATE) { if (!name) *cursor=pos; return r; }
             continue;
         }
         if (attempt>=VFS_STEP_ATTEMPTS) {
+            /* Bounded: only restarts after a publication and warms that made
+             * no progress count; then the old guarded cold step (counted). */
             v->cold_fallbacks++;
-            return VFS_IO(v,dir_step_cold(vol,dir,name,cursor,e,labels));
+            uint32_t pos=start;
+            r=VFS_IO(v,dir_step_cold(vol,dir,name,&pos,e,labels));
+            if (!name) *cursor=pos;
+            return r;
         }
-        uint64_t miss;
-        r=VFS_IO(v,name ? fat_lookup_cached(vol,dir,name,0,e,&miss) : fat_next_cached(vol,dir,cursor,e,labels,&miss));
-        if (r!=-FS_EAGAIN || miss==UINT64_MAX) return r;
-        v->warm_restarts++;
-        if ((r=warm_sector(v,vol,drive,miss))) return r;
+        uint64_t miss; uint32_t pos=at;
+        r=VFS_IO(v,fat_dir_cached(vol,dir,name,&pos,e,labels,hint,&miss));
+        if (r!=-FS_EAGAIN || miss==UINT64_MAX) { if (!name) *cursor=pos; return r; }
+        at=pos;
+        if (miss==FAT_CACHE_YIELD) { v->step_yields++; attempt--; }
+        else if (miss!=last || at!=last_at) { v->warm_restarts++; attempt--; } /* progress */
+        last=miss; last_at=at;
+        if ((r=warm_sector(v,vol,drive,miss==FAT_CACHE_YIELD ? UINT64_MAX : miss))) return r;
+        if (vol->mutation_sequence!=sequence) {
+            /* A publication while the guard was given up: the settled
+             * entries may have changed, restart the step (counted). */
+            sequence=vol->mutation_sequence; at=start; hint->valid=false; last=UINT64_MAX;
+            v->step_restarts++; attempt++;
+        }
     }
+}
+__attribute__((noinline)) int vfs_dir_step_locked(struct vfs *v,struct fat_volume *vol,uint32_t dir,const char *name,
+                                                  uint32_t *cursor,struct fat_entry *e,bool labels) {
+    return vfs_dir_walk_locked(v,vol,dir,name,cursor,e,labels,0);
 }
 __attribute__((noinline)) int vfs_chain_clusters_locked(struct vfs *v,struct fat_volume *vol,uint32_t first,uint32_t *clusters) {
     unsigned drive=volume_drive(v,vol);
@@ -1422,6 +1474,7 @@ __attribute__((noinline)) int vfs_chain_clusters_locked(struct vfs *v,struct fat
         if (r!=-FS_EAGAIN) { if (!r) *clusters=w.count; return r; }
         /* A miss is warmed, a full section yields; either releases the
          * guard. A walk that saw a publication restarts from first. */
+        if (miss==FAT_CACHE_YIELD) miss=UINT64_MAX; /* never from a chain walk; a yield if it were */
         if (!logical && miss!=UINT64_MAX) v->warm_restarts++;
         if ((r=warm_sector(v,vol,drive,logical ? UINT64_MAX : miss))) return r;
         if (vol->mutation_sequence!=sequence) { w=(struct fat_chain_walk){first,first,0}; sequence=vol->mutation_sequence; }

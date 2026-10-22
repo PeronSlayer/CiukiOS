@@ -153,6 +153,10 @@ struct vfs {
     uint8_t io_mode[26];
     uint64_t io_sequence[26];
     uint32_t window_pauses, window_restarts, warm_restarts, cold_fallbacks;
+    /* f1-93b: cache-only sections ended by their work bound (the guard is
+     * given up before the preemption point), and resumed walks restarted
+     * from the start because something was published meanwhile. */
+    uint32_t step_yields, step_restarts;
     struct vfs_reader *reader_owners; /* stack records, namespace protected */
     uint32_t urgent_gate_start[26];
     bool urgent_gate_valid[26];
@@ -258,12 +262,24 @@ int vfs_io_window_call(struct vfs *, struct fat_volume *, bool write, int (*call
  * device read. Namespace and the volume's reservation held on entry and
  * return (the reservation may be released and readmitted in between).
  * Physical: resident sectors only under the guard; a miss is read with
- * nothing held and the step restarts. Logical: device windows, restarted
- * after a concurrent change. name 0: next entry from *cursor (labels:
- * fat_next_dos); otherwise lookup of name in dir (cursor unused). */
+ * nothing held and the step resumes (f1-93b: see vfs_dir_walk_locked).
+ * Logical: device windows, restarted after a concurrent change. name 0:
+ * next entry from *cursor (labels: fat_next_dos); otherwise lookup of name
+ * in dir (cursor unused). */
 int vfs_dir_step_locked(struct vfs *, struct fat_volume *, uint32_t dir, const char *name,
                         uint32_t *cursor, struct fat_entry *, bool labels);
-/* Clusters in the chain starting at first (st_blocks), the same way. */
+/* f1-93b: the same step, resumable. A physical step runs in cache-only
+ * sections bounded by FAT_CACHED_BUDGET; between sections (a miss to warm,
+ * or the bound) the guard is given up, a preemption point is offered with
+ * nothing held, and the step resumes at its first unsettled entry while the
+ * volume's mutation_sequence is unchanged (else from its start). The holder
+ * is never preempted while it holds the volume. hint (optional) keeps the
+ * walk position across steps (a native readdir description). */
+int vfs_dir_walk_locked(struct vfs *, struct fat_volume *, uint32_t dir, const char *name,
+                        uint32_t *cursor, struct fat_entry *, bool labels, struct fat_dir_hint *hint);
+/* Clusters in the chain starting at first (st_blocks), the same way; a
+ * cached section visits at most FAT_CHAIN_CACHED_SECTORS FAT sectors and
+ * gives the guard up before its preemption point (f1-93b). */
 int vfs_chain_clusters_locked(struct vfs *, struct fat_volume *, uint32_t first, uint32_t *clusters);
 /* f3-51c write generation of a file location (identity lock taken). */
 uint64_t vfs_change_generation(struct vfs *, struct fat_volume *, uint32_t parent, uint32_t index);

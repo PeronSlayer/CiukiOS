@@ -261,6 +261,11 @@ void fs_calendar_init(void);
 void fs_worker_enter(void);
 void fs_worker_leave(void);
 void fs_service(void);
+#ifdef FS_HOST
+/* f1-93b: optional host observer of every fs_service point (the kernel's
+ * only preemption point inside filesystem work). */
+void fs_host_service(void) __attribute__((weak));
+#endif
 /* No dependency on the host's errno ABI. All public failures are NEGATIVE. */
 enum fs_error {
     FS_EAGAIN=11, FS_EIO=5, FS_ENOENT=2, FS_EBADF=9, FS_ENOMEM=12, FS_EACCES=13,
