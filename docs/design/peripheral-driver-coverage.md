@@ -498,6 +498,82 @@ documents the offsets and IRQ pin. No QEMU run is evidence for this change.
 
 ## Device model, claims and guest boundaries
 
+### f1-109 inventory ABI and read-only interpreter boundary
+
+Call 76 retains its v1 layout and numbers. A distinct version 2 request,
+`ciuki_firmware_page` in `ciuki/firmware_abi.h`, uses the same call with its
+exact smaller byte extent. All records use pack(4), fixed-width integers,
+terminated strings and no pointers. Input is version=2, size=sizeof(page),
+cursor (zero for the first page), generation (zero only on the first page),
+and reserved=0. Output has at most four records, total, next cursor (zero at
+end), immutable boot generation, flags and ACPICA status. Invalid headers or
+cursors return EINVAL, stale generation EAGAIN, inaccessible memory EFAULT.
+Queries only copy cached facts; they never evaluate AML or access hardware.
+
+Records retain a boot-local ID, nearest device parent ID, absolute namespace
+path, HID, up to four CIDs, eight half-open 64-bit resource extents, capability
+bits, origin (ACPI or PnP BIOS), and explicit discovered/unsupported/routing
+unqualified states. IDs are stable within the returned generation. Overflow
+of records, paths, IDs, resources or unsupported resource descriptors is
+explicit. Capabilities describe object presence, never current battery,
+thermal, power or routing readiness. Logical owner and VM lease are zero:
+firmware discovery grants neither. Device Manager consumes pages and displays
+firmware identity, hierarchy, resources and capabilities separately from v1.
+
+The retained inventory is bounded by the existing 64-device ceiling; no
+registry, v1, heap or physical-memory limit grows. ACPICA has a separate
+one-MiB allocation admission budget (including allocator rounding), with
+high-water accounting. Table length retains power.c's 256-KiB ceiling and
+the validated table set is bounded at 64 entries. Memory exhaustion is a
+reported incomplete inventory. NVS remains excluded by PMM's existing
+non-type-1 E820 policy; the OSL never frees/reclaims firmware memory.
+
+Research decisions: [ACPI software model §5](https://uefi.org/htmlspecs/ACPI_Spec_6_4_html/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html)
+permits control methods to access hardware, including during table load.
+[ACPICA AcpiLoadTables](https://github.com/open-acpica/acpica/blob/20260930/source/components/tables/tbxfload.c)
+installs default region handlers and executes module-level AML. Therefore
+every OSL region read needs a live generation-qualified `acpi-inventory`
+registry lease; there is no implicit access to an existing driver's region.
+Writes, SCI installation, global-lock firmware writes, EC transport, sleep
+entry and event work are refused. No ACPI_ENABLE, AcpiEnableSubsystem,
+AcpiInitializeObjects or _INI/_REG activation is performed. SCI_EN remains
+unknown without a qualified read lease. EC-dependent methods report denied
+access; f1-110 supplies the EC/event owner and broker.
+
+The exact audited vendor files remain unchanged. The build produces Ciuki
+platform headers and derived psloop.c, psargs.c and nsaccess.c. The loop
+checks an opcode/time/cancellation budget and preserves parser errors. The
+package decoder's truncated-length clamps and invalid package extents become
+sticky errors. The predefined-name load uses a byte-safe copy. Direct pointer
+casts and offsetof use defined integer/builtin operations; ACPICA's portable
+unaligned moves are selected on both host and i686. Expiry uses ACPICA's
+existing CompleteOp/error unwind, with sticky transaction and whole-run errors
+because upstream AcpiLoadTables and optional lookups can mask failures. A thread
+checkpoint yields every 64 parser steps; waits and stalls are bounded by the
+same transaction deadline. This seam applies to nested calls and module AML.
+The default transaction is 100,000 steps/250 ms; neither limit is reset by
+nested methods. Inventory initialization runs once on its own device thread,
+outside shared IRQ/EC/GPE work. The OSL callback queue excludes event types
+in this phase. PnP BIOS installation-structure discovery is read-only;
+real-mode PnP node calls and ISA isolation/configuration are unsupported here.
+ACPI HID/CID PnP IDs are enumerated through the interpreter.
+
+[ACPI device objects](https://uefi.org/specs/ACPI/6.5/09_ACPI_Defined_Devices_and_Device_Specific_Objects.html)
+and [power-source objects](https://uefi.org/specs/ACPI/6.5/10_Power_Source_and_Power_Meter_Devices.html)
+define the advertised capabilities. The read-only Resource Kit references
+wrkc30_4.htm:54–129 and wrkc05_3.htm:42 corroborate discovery before power
+policy and firmware hardware-profile origin; no Microsoft text/code is copied.
+
+Build selection retains all 207 audited files but excludes debugger-only
+rsdump.c and rsdumpinfo.c from compilation; the unguarded dump implementation
+otherwise references disabled debug tables. No debugger, disassembler,
+application mode or foreign OSL is enabled. The optional upstream C library
+is symbol-prefixed to avoid replacing Ciuki/libc routines. The interpreter
+is terminated after the one-shot copy; page queries read the retained cache.
+The inventory root also records FADT fixed-button description and _S5 object
+presence without evaluating sleep methods. These bits never mean power-off
+or event readiness. Native/VM owner and SCI state stay unknown/unassigned.
+
 The existing [ownership](device-firmware-ownership.md),
 [Device Manager](device-manager.md) and unified DOS contracts remain in
 force. The following extensions need a written directive before code:

@@ -15,6 +15,8 @@
 #include <ciuki/uaddr.h>
 #include <ciuki/com.h>
 #pragma weak com_snapshot
+#include <ciuki/firmware.h>
+#pragma weak firmware_inventory_page
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
 #endif
@@ -23,6 +25,7 @@
  * Keeping these out of the 16 KiB task stack also avoids heap size limits. */
 static struct registry_inventory_copy inventory;
 static struct ciuki_devices_info query_buffer;
+static struct ciuki_firmware_page firmware_buffer;
 extern bool storage_readonly_info(unsigned, char *, unsigned) __attribute__((weak));
 extern bool savage2d_summary(bool *, bool *, const char **) __attribute__((weak));
 
@@ -413,6 +416,14 @@ void devices_snapshot(struct ciuki_devices_info *out)
 }
 int devices_query(uint32_t address, uint32_t bytes)
 {
+    if (bytes == sizeof(firmware_buffer)) {
+        struct process *p = proc_current();
+        if (!p || address > UINT32_MAX - bytes || !ua_range(p->memory, address, bytes, PROT_READ | PROT_WRITE)) return -EFAULT;
+        if (!firmware_inventory_page) return -ENOSYS;
+        int error = copy_from_user(&firmware_buffer, address, 5 * sizeof(uint32_t));
+        if (!error) error = firmware_inventory_page(&firmware_buffer);
+        return error ? error : copy_to_user(address, &firmware_buffer, sizeof(firmware_buffer));
+    }
     if (bytes != sizeof(query_buffer)) return -EINVAL;
     struct process *p = proc_current();
     if (!p || address > UINT32_MAX - bytes || !ua_range(p->memory, address, bytes, PROT_READ | PROT_WRITE)) return -EFAULT;

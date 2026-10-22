@@ -1,0 +1,17 @@
+ACPICA 20260930 — ACPI Component Architecture
+Copyright (c) 1999 - 2026, Intel Corp. and the contributors named in each file.
+https://github.com/open-acpica/acpica/releases/tag/20260930
+
+CiukiOS elects GPL version 2 for every admitted file. The 195 newer files
+offer BSD-3-Clause OR GPL-2.0-only. The twelve legacy headers offer multiple
+alternatives including GPL version 2; that explicit alternative is elected.
+The original file notices remain intact. No legacy custom permissive notice
+is relabelled as BSD-3-Clause. The GPL version 2 text is in the repository
+LICENSE and is installed with the system's licence notices.
+
+Exactly 164 C files and 43 headers are kept under third_party/acpica/.
+Source tree: e85aa3bebaae81ed1e6d163511ac7e1eafe732cf.
+The per-file manifest, blob hashes and legacy exceptions are recorded in
+src/kernel/acpi/manifest.json and docs/design/peripheral-driver-source-audit.md.
+Ciuki's separate OSL and build-generated platform/parser adapters are documented
+in docs/design/peripheral-driver-coverage.md and src/kernel/acpi/build.py.

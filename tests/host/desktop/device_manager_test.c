@@ -39,6 +39,24 @@ static int settings_load(void *c, char *s, size_t cap, size_t *n)
 { (void)c; const char text[] = "version=1\nwallpaper=none\n"; assert(cap >= sizeof(text)); memcpy(s, text, sizeof(text)); *n = sizeof(text) - 1; return 0; }
 static int devices(void *ctx, struct ciuki_devices_info *out)
 { (void)ctx; queries++; assert(out->version == 1 && out->size == sizeof(*out)); *out = sample; return fail_query; }
+static int firmware_error, firmware_queries;
+static int firmware(void *ctx, struct ciuki_firmware_page *p)
+{
+    (void)ctx; firmware_queries++;
+    assert(p->version == 2 && p->size == sizeof(*p) && !p->reserved && p->cursor <= 4);
+    if (firmware_error) return -EAGAIN;
+    uint32_t cursor = p->cursor;
+    memset(p, 0, sizeof(*p)); p->version = 2; p->size = sizeof(*p); p->cursor = cursor;
+    p->generation = 7; p->total = 5; p->count = cursor ? 1 : 4; p->next = cursor ? 0 : 4;
+    for (unsigned i = 0; i < p->count; i++) {
+        struct ciuki_firmware_record *r = &p->records[i];
+        r->id = cursor + i + 1; r->parent = 1; r->origin = CIUKI_FIRMWARE_ACPI;
+        r->state = CIUKI_FIRMWARE_DISCOVERED; r->capabilities = CIUKI_FW_CAP_BATTERY;
+        snprintf(r->path, sizeof(r->path), "\\_SB_.BAT%u", cursor + i);
+        strcpy(r->hid, "PNP0C0A"); strcpy(r->reason, "Firmware description only.");
+    }
+    return 0;
+}
 static int boot_load(void *ctx, char *out, size_t cap, size_t *n)
 { (void)ctx; loads++; *n = strlen(boot); if (*n >= cap) return -1; memcpy(out, boot, *n + 1); return 0; }
 static int boot_save(void *ctx, const char *in, size_t n)
@@ -86,7 +104,7 @@ int main(int argc, char **argv)
     char hwid[65];
     assert(!cp_hwid_lookup_json("{\"8086:2485\": \"INF Audio Name\"}", 0x8086, 0x2485, hwid, sizeof(hwid)) && !strcmp(hwid, "INF Audio Name"));
     assert(cp_hwid_lookup_json("{}", 0x8086, 0x2485, hwid, sizeof(hwid)));
-    app.host = (struct cp_host){.load = settings_load, .devices = devices, .display=display, .engine=engine, .network=network, .mixer=mixer, .power=action, .log_read=log_read, .autoplay_list=autoplay, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
+    app.host = (struct cp_host){.load = settings_load, .devices = devices, .firmware = firmware, .display=display, .engine=engine, .network=network, .mixer=mixer, .power=action, .log_read=log_read, .autoplay_list=autoplay, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
         .portrait = portrait, .screen_w = 1024, .screen_h = 768, .mem_total_k = 512 * 1024, .mem_free_k = 480 * 1024,
         .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6, .fonts_path = argv[3]};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
@@ -120,6 +138,16 @@ int main(int argc, char **argv)
     }
     cp_open(&app, CP_DEVICES);
     assert(app.tree_count == 19 && !strcmp(app.tree_items[0].text[0], "Computer"));
+    click("Firmware..."); assert(strstr(ui.dialog.text, "PNP0C0A") && strstr(ui.dialog.text, "battery") && strstr(ui.dialog.text, "unknown"));
+    render(renders, "firmware-devices");
+    for (unsigned i = 0; i < 4; i++) {
+        struct du_rect next = du_dialog_button(&ui, 1); at_click(&ui, next.x + next.w / 2, next.y + next.h / 2);
+    }
+    assert(app.firmware_index == 4 && strstr(ui.dialog.text, "5 of 5") && strstr(ui.dialog.text, "Parent 1"));
+    struct du_rect previous = du_dialog_button(&ui, 0); at_click(&ui, previous.x + previous.w / 2, previous.y + previous.h / 2);
+    assert(app.firmware_index == 3 && firmware_queries == 6); at_tap(&ui, DU_KEY_ESC);
+    firmware_error = 1; click("Firmware..."); assert(strstr(ui.dialog.text, "invalid") || strstr(ui.dialog.text, "No firmware"));
+    at_tap(&ui, DU_KEY_ESC); firmware_error = 0;
     for (unsigned k = 0; k < sample.count; k++) assert(app.tree_items[tree_row(k)].depth == 2 && app.tree_items[tree_row(k)].icon16);
     struct ciuki_device_record usb_sample = sample.devices[0];
     usb_sample.bus_type = CIUKI_BUS_USB; usb_sample.vendor = 0x1234; usb_sample.device = 1;

@@ -6,6 +6,10 @@ out="$root/build/host"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
+# f1-109: real ACPICA runtime and OSL, synthetic DSDT/SSDT, no guest/image.
+python3 -B "$root/tests/host/acpi/run.py"
+python3 -B "$root/tests/host/acpi/compile_target.py"
+
 # f3-49: standalone production DOS bridge/FAT/VFS harness, no guest image.
 bash "$root/tests/host/dos/run_file_api.sh"
 python3 "$root/tests/host/entropy/run.py"

@@ -205,6 +205,14 @@ def main() -> int:
     lwip_source = lwip_recipe["source"]()
     lwip_includes = lwip_recipe["includes"](lwip_source)
     objs = []
+    acpi_recipe = runpy.run_path(str(SRC / "acpi/build.py"))
+    acpi_out = OBJ / "acpica"
+    acpi_sources = acpi_recipe["prepare"](acpi_out)
+    for c in [*acpi_sources, *sorted((SRC / "acpi").glob("*.c"))]:
+        o = acpi_out / (c.stem + ".o")
+        run(["clang", *CFLAGS, *acpi_recipe["flags"](acpi_out),
+             "-c", str(c), "-o", str(o)])
+        objs.append(o)
     jent_recipe = runpy.run_path(str(SRC / "lib/jitterentropy/build.py"))
     jent_source = jent_recipe["source"]()
     for c in jent_recipe["sources"](jent_source):
