@@ -287,6 +287,18 @@ static int base_identity(struct dosvm *v, uint32_t size)
         digest_store(v, &version, v->base_sha256);
     return 0;
 }
+static void *save_index_alloc(void *arg)
+{
+    struct dosvm *v=arg;
+    if (v->info.resident>v->info.commitment || v->info.commitment-v->info.resident<PAGE_SIZE) return 0;
+    uint32_t phys=pmm_alloc_contig(1); if (!phys) return 0;
+    mm_claim(phys,1,MM_VM_PRIVATE); v->info.resident+=PAGE_SIZE;
+    return P2V(phys);
+}
+static void save_index_release(void *arg,void *page)
+{
+    struct dosvm *v=arg; mm_free(V2P(page),MM_VM_PRIVATE); v->info.resident-=PAGE_SIZE;
+}
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
@@ -327,6 +339,27 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
             int closed=vfs_close(&v->disk_table,identity);
             if (read_error || got!=65 || expected[64]!='\n' || memcmp(expected,v->base_sha256,64) || closed) return -FS_EIO;
         }
+    }
+    if (v->game && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
+        v->persistent=true;
+        v->save.alloc=save_index_alloc; v->save.release=save_index_release; v->save.memory=v;
+        v->save_file.table=&v->disk_table;
+        struct dos_save_identity identity={.game=v->game,.kernel=v->kernel};
+        memcpy(identity.base,v->base_sha256,sizeof(identity.base));
+        unsigned archived=0;
+        disk_gate_take(v);
+        e=dos_save_store_open(&v->save_file,&v->save,&identity,v->overlay_path,&archived);
+        disk_gate_drop(v);
+        if (archived) klog("[dosvm] game-data game=%u action=archive reason=identity-mismatch count=%u base=%s error=%d",
+                          v->game,archived,v->base_sha256,e);
+        if (e==-FS_EROFS && v->save_file.fd<0 && v->save_file.absent) return 0;
+        if (e) return e;
+        v->overlay=v->save_file.fd; v->overlay_open=true;
+        v->sector_count=v->save.rows;
+        if (v->save.recovered_bytes || !v->save.sealed)
+            klog("[dosvm] game-data game=%u reason=forced-session-end lost_bytes=%u committed_bytes=%u volatile_loss=unknown",
+                 v->game,v->save.recovered_bytes,v->save.committed);
+        return 0;
     }
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
@@ -460,7 +493,11 @@ static unsigned read_find(struct dosvm *v, uint32_t lba)
 }
 static int read_sector_uncached(struct dosvm *v, uint32_t lba, void *sector)
 {
-    for (unsigned i = 0; i < v->sector_count; i++)
+    if (v->persistent && v->overlay_open) {
+        int e=dos_save_read(&v->save,lba,sector);
+        if (e!=-FS_ENOENT) return e;
+    }
+    for (unsigned i = 0; !v->persistent && i < v->sector_count; i++)
         if (v->sectors[i].lba == lba)
             return backing_io(v, v->overlay, v->sectors[i].offset, sector, 512, false);
     /* Past the end of a cut base image: the free FAT16 area, all zeros. */
@@ -489,7 +526,11 @@ static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
     uint8_t *bytes = P2V(v->read_cache[slot].phys);
     int e = count ? backing_io(v, v->base, start * 512u, bytes, count * 512u, false) : 0;
     if (count < DOSVM_READ_SECTORS) memset(bytes + count * 512u, 0, (DOSVM_READ_SECTORS - count) * 512u);
-    for (unsigned i = 0; !e && i < v->sector_count; i++) {
+    if (v->persistent && v->overlay_open) for (unsigned i=0;!e && i<DOSVM_READ_SECTORS;i++) {
+        int found=dos_save_read(&v->save,start+i,bytes+i*512u);
+        if (found!=-FS_ENOENT) e=found;
+    }
+    for (unsigned i = 0; !v->persistent && !e && i < v->sector_count; i++) {
         uint32_t offset = v->sectors[i].lba - start;
         if (offset < DOSVM_READ_SECTORS)
             e = backing_io(v, v->overlay, v->sectors[i].offset, bytes + offset * 512u, 512, false);
@@ -507,6 +548,16 @@ static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
 {
     if (!v->base_open || lba >= DOSVM_SECTORS) return -EINVAL;
     if (!v->overlay_open) return -FS_EROFS;
+    if (v->persistent) {
+        disk_access(v,lba);
+        int e=dos_save_write(&v->save,lba,sector);
+        if (e==-FS_ENOSPC) klog("[dosvm] game-data game=%u reason=game-data-full quota=%u bytes=%u action=read-only",
+                              v->game,v->save.quota,v->save.end);
+        if (!e) { v->info.dirty=true; v->sector_count=v->save.rows; }
+        unsigned slot=read_find(v,lba);
+        if (slot<v->read_capacity) v->read_cache[slot].count=0;
+        return e;
+    }
     unsigned i;
     for (i = 0; i < v->sector_count; i++) if (v->sectors[i].lba == lba) break;
     if (i == DOSVM_OVERLAY_SECTORS) return -ENOSPC;
@@ -583,7 +634,7 @@ static int provider_write(struct blkdev *dev,uint64_t lba,uint32_t count,const v
 static int provider_flush(struct blkdev *dev)
 {
     struct dosvm *v=dev->ctx; int admission=disk_gate_request(v); if (admission) return admission;
-    int e=v->overlay_open ? vfs_commit(&v->disk_table,v->overlay) : 0;
+    int e=v->overlay_open ? (v->persistent ? (v->save_discarding ? 0 : dos_save_commit(&v->save,false)) : vfs_commit(&v->disk_table,v->overlay)) : 0;
     disk_gate_drop(v); return e;
 }
 void dosvm_disk_provider_init(struct dosvm *v,struct blkdev *provider)
@@ -598,11 +649,19 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
     disk_gate_take(v);
     int error = 0, e;
     if (v->overlay_open) {
-        if (!forced && v->info.dirty) error = vfs_commit(&v->disk_table, v->overlay);
+        if (v->persistent) {
+            if (!forced && v->save_file.writable) error=dos_save_commit(&v->save,true);
+            if (forced || error) {
+                v->info.data_loss=v->save.pending!=0 || v->save.failed;
+                klog("[dosvm] game-data game=%u reason=forced-session-end lost_records=%u committed_bytes=%u error=%d volatile_loss=unknown",
+                     v->game,v->save.pending,v->save.committed,error);
+            }
+        } else if (!forced && v->info.dirty) error = vfs_commit(&v->disk_table, v->overlay);
         e = vfs_close(&v->disk_table, v->overlay);
         if (!error) error = e;
         v->overlay_open = false;
     }
+    dos_save_release(&v->save);
     if (v->base_open) {
         e = vfs_close(&v->disk_table, v->base);
         if (!error) error = e;

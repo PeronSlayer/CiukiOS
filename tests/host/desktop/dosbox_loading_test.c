@@ -42,6 +42,7 @@ static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
 static unsigned settings_phase, close_declined, f12_forwarded;
+static unsigned save_full_notice;
 static unsigned bar_damage[256], bar_updates, full_damage, settings_damage, notice_seen, loading_seen, back_seen;
 static uint64_t last_bar_at;
 static char console[256]; static unsigned console_at;
@@ -128,6 +129,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     case CIUKI_DOSVM_FOCUS:
         return 0;
     case CIUKI_DOSVM_FULLSCREEN:
+        if (scenario==19) { assert(!c->focused); fs_command=1; return 0; }
         assert(scenario==8 && c->focused); fs_active=1; fs_until=clock_ms+100; return 0;
     case CIUKI_DOSVM_STATUS:
         c->state = clock_ms < 300 ? CIUKI_DOSVM_BOOTING : CIUKI_DOSVM_RUNNING;
@@ -142,6 +144,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if (fs_active) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
         else if (scenario==8 && fs_command) { c->changed|=CIUKI_DOSVM_FULLSCREEN_REFUSED; c->reason=EIO; }
         if (clock_ms>=(scenario==17 ? 700u : 300u) && !entered) c->changed|=CIUKI_DOSVM_SHELL_READY;
+        if (scenario>=18 && presents) c->changed|=CIUKI_DOSVM_SAVE_FULL;
+        if (scenario==19 && presents && !fs_command) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
         return 0;
     case CIUKI_DOSVM_LAUNCH: assert(!armed); armed = 1; return 0;
     case CIUKI_DOSVM_INPUT:
@@ -183,6 +187,7 @@ void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32
     assert(!strstr(s,"DOS kernel, memory and network"));
     if (!strcmp(s,"Full screen unavailable")) notice_seen++;
     if (!strcmp(s,"Back in the window")) back_seen++;   /* f3-61: the kernel ended full screen itself */
+    if (!strcmp(s,"Game data is full")) save_full_notice++;
     if (!strncmp(s,"Loading ",8)) loading_seen++;
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
@@ -208,7 +213,7 @@ int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=17);
+    assert(scenario>=0 && scenario<=19);
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -229,6 +234,8 @@ int main(int argc, char **argv)
     if (scenario == 6) assert(!armed && !entered);
     if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active && back_seen==1 && !notice_seen);
     else assert(!back_seen);
+    if (scenario>=18) assert(save_full_notice==1 && presents && !error_seen);
+    if (scenario==19) assert(fs_command);
     if (error_seen) assert(error_seen==1);
     if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : 1u)); /* fullscreen's static page shares the title */
     assert(damage_count);

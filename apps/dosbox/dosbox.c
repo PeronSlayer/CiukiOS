@@ -142,7 +142,7 @@ int main(int argc, char **argv)
     uint64_t started = now_ms(), panel_at = 0, launch_at = 0;
     int loading = !!typed_length, shown = !loading;
     int failure_painted = 0;
-    int panel_sent = 0, panel_redraw = 0, notice_painted = 0, redraw = 1;
+    int panel_sent = 0, panel_redraw = 0, notice_painted = 0, redraw = 1, save_full_seen=0;
     unsigned precise_rows = 1;
     const char *failure = NULL;
     char detail[80] = "Preparing...";
@@ -246,6 +246,16 @@ int main(int argc, char **argv)
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
         fullscreen=!!(c.changed&CIUKI_DOSVM_FULL_SCREEN);
+        if ((c.changed&CIUKI_DOSVM_SAVE_FULL) && !save_full_seen) {
+            save_full_seen=1; fullscreen_title="Game data is full";
+            snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Game data is full (64 MiB limit or disk space). Further writes are disabled. Export or reset data in Properties.");
+            fullscreen_notice_until=now_ms()+8000; notice_painted=0;
+            if (fullscreen) {
+                struct ciuki_dosvm_command leave;
+                command(&leave,id,generation);
+                if (!ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&leave)) fullscreen=0;
+            }
+        }
         if (!(c.changed&CIUKI_DOSVM_FULLSCREEN_REFUSED)) fullscreen_error_seen=0;
         else if (c.reason!=fullscreen_error_seen) {
             fullscreen_error_seen=c.reason;

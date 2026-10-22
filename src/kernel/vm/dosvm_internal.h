@@ -3,16 +3,19 @@
 #ifndef CIUKI_DOSVM_INTERNAL_H
 #define CIUKI_DOSVM_INTERNAL_H
 #include <ciuki/dosvm.h>
+#include <ciuki/abi.h>
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
 #include "dosvm_devices.h"
 #include "virtual_vga_bios.h"
 #include "dosvm_audio_state.h"
+#include "dos_save_store.h"
 #include <ciuki/dos_video_modes.h>
 int dosvm_game_remove_reserve(unsigned game);
 void dosvm_game_remove_release(unsigned game);
 int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
+int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -237,6 +240,9 @@ struct dosvm {
     uint32_t read_reclaimed, read_regrown;
     unsigned read_recent, read_oldest, read_capacity, read_pages;
     char overlay_path[128];
+    bool persistent, save_discarding;
+    struct dos_save save;
+    struct dos_save_file save_file;
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;
     uint8_t sector[512];

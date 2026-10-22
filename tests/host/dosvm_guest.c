@@ -380,7 +380,17 @@ int dosvm_network_detach(struct dosvm *v) { (void)v; return 0; }
 void dosvm_network_process_exit(struct dosvm *v, uint16_t psp) { (void)v; (void)psp; }
 #ifndef CIUKI_DOSVM_FILE_CPU
 #include "dosvm_request_context.inc"
+void fs_service(void) { }
 #endif
+/* Explicit guest fixtures have no native persistent title store. */
+int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
+                        char path[128],unsigned *archived)
+{
+    (void)s; *archived=0; f->fd=-1; f->absent=true;
+    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    return -FS_EROFS;
+}
+#include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #ifdef CIUKI_DOSVM_FILE_CPU
 #undef vfs_table_init

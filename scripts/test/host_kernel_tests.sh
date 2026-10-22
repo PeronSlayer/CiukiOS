@@ -12,6 +12,7 @@ python3 -B "$root/tests/host/acpi/compile_target.py"
 
 # f3-49: standalone production DOS bridge/FAT/VFS harness, no guest image.
 bash "$root/tests/host/dos/run_file_api.sh"
+bash "$root/tests/host/dos/run_persistent_saves.sh"
 python3 "$root/tests/host/entropy/run.py"
 python3 "$root/tests/host/entropy/run.py" --kernel
 

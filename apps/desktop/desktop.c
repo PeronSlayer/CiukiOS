@@ -1737,6 +1737,9 @@ struct links_worker {
     pthread_mutex_t mutex;
     pthread_cond_t changed;
     int scan_requested, games_requested, scanning, launch_requested, launch_busy, completed, result;
+    unsigned save_requested, save_game, save_busy, save_done, save_operation;
+    int save_result;
+    struct ciuki_dosvm_command save_command;
     unsigned games_removed;
     unsigned count;
     uint64_t scanned_ns;                       /* f2-95: last completed scan, 0 = none yet */
@@ -1772,12 +1775,21 @@ static void *links_thread(void *arg)
     struct links_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->mutex);
-        while (!w->scan_requested && !w->launch_requested) pthread_cond_wait(&w->changed,&w->mutex);
+        while (!w->scan_requested && !w->launch_requested && !w->save_requested) pthread_cond_wait(&w->changed,&w->mutex);
         int launch=w->launch_requested, games=0; char path[260];
-        if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
+        unsigned save=w->save_requested,game=w->save_game;
+        if (save) { w->save_requested=0; w->save_busy=1; }
+        else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
         else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
-        if (launch) {
+        if (save) {
+            struct ciuki_dosvm_command command={.version=CIUKI_DOSVM_VERSION,.size=sizeof(command)};
+            command.launch.game=game;
+            int result=ciuki_dosvm(save,&command) ? -errno : 0;
+            pthread_mutex_lock(&w->mutex);
+            w->save_result=result; w->save_command=command; w->save_operation=save;
+            w->save_done=1; w->save_busy=0; pthread_mutex_unlock(&w->mutex);
+        } else if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
             int result=-ENOMEM;
             if(r && launch==2){
@@ -1865,9 +1877,26 @@ static void links_start(struct desktop *d)
 }
 static void links_service(struct desktop *d)
 {
-    struct links_worker *w=links_worker; if (!w || pthread_mutex_trylock(&w->mutex)) return;
+    struct links_worker *w=links_worker;
+    if (!w) {
+        if (d->sh.save_op) {
+            unsigned op=d->sh.save_op; d->sh.save_op=0;
+            struct ciuki_dosvm_command command={0};
+            desk_game_data_result(d,d->sh.save_game,op,-ENOMEM,&command);
+        }
+        return;
+    }
+    if (pthread_mutex_trylock(&w->mutex)) return;
     d->games_removed=w->games_removed;
+    unsigned save_done=w->save_done,save_game=w->save_game,save_op=w->save_operation;
+    int save_result=w->save_result; struct ciuki_dosvm_command save_command=w->save_command;
+    w->save_done=0;
+    if (d->sh.save_op && !w->save_requested && !w->save_busy && !save_done) {
+        w->save_game=d->sh.save_game; w->save_requested=d->sh.save_op; d->sh.save_op=0;
+        pthread_cond_signal(&w->changed);
+    }
     int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
+    if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
 }
 static void shell_setup(struct desktop *d, int gate)

@@ -609,6 +609,52 @@ int desk_launch_game(struct desktop *d, int index, const char *kernel)
     return r;
 }
 static void launch_game(struct desktop *d, int index) { (void)desk_launch_game(d, index, NULL); }
+void desk_game_properties(struct desktop *d,unsigned game)
+{
+    if (!game || game>DESK_GAME_COUNT || d->sh.save_busy) return;
+    desk_menu_close(d);
+    d->sh.save_game=game; d->sh.save_confirm=0; d->sh.save_focus=2;
+    d->sh.save_bytes=0; d->sh.save_quota=64u*1024u*1024u;
+    d->sh.save_op=CIUKI_DOSVM_SAVE_QUERY; d->sh.save_busy=1;
+    snprintf(d->sh.save_status,sizeof(d->sh.save_status),"Loading game data...");
+    int i=desk_internal_open(d,DESK_INTERNAL_GAME_DATA);
+    if (i>=0) {
+        snprintf(d->clients[i].title,sizeof(d->clients[i].title),"%.32s Properties",desk_games[game-1].title);
+        damage_all(d);
+    }
+}
+void desk_game_data_result(struct desktop *d,unsigned game,unsigned op,int error,const struct ciuki_dosvm_command *c)
+{
+    if (game!=d->sh.save_game) return;
+    d->sh.save_busy=0;
+    if (error) snprintf(d->sh.save_status,sizeof(d->sh.save_status),"%s",
+        error==-EBUSY ? "Close the game before changing or exporting its data." :
+        error==-ENOENT ? "No current game data is available to export." : "Game data could not be accessed. Please try again.");
+    else if (op==CIUKI_DOSVM_SAVE_QUERY) {
+        d->sh.save_bytes=c->changed; d->sh.save_quota=c->reason;
+        snprintf(d->sh.save_status,sizeof(d->sh.save_status),"Saved games, high scores and setup choices are kept between sessions.");
+    } else if (op==CIUKI_DOSVM_SAVE_RESET) {
+        d->sh.save_bytes=0;
+        snprintf(d->sh.save_status,sizeof(d->sh.save_status),"Game data has been reset.");
+    } else snprintf(d->sh.save_status,sizeof(d->sh.save_status),"Exported %u changed file(s) to %s",c->changed,c->name);
+    damage_all(d);
+}
+static void game_data_action(struct desktop *d,int index,unsigned button)
+{
+    if (d->sh.save_busy) { if (button==2) desk_request_close(d,index); return; }
+    if (d->sh.save_confirm) {
+        d->sh.save_confirm=0;
+        if (button==0) d->sh.save_op=CIUKI_DOSVM_SAVE_RESET;
+        d->sh.save_focus=2;
+    } else if (button==0) { d->sh.save_confirm=1; d->sh.save_focus=1; }
+    else if (button==1) d->sh.save_op=CIUKI_DOSVM_SAVE_EXPORT;
+    else desk_request_close(d,index);
+    if (d->sh.save_op) {
+        d->sh.save_busy=1;
+        snprintf(d->sh.save_status,sizeof(d->sh.save_status),"Working...");
+    }
+    damage_all(d);
+}
 static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
@@ -1789,6 +1835,7 @@ static const char *const about_tabs[] = {"General", "System", "Credits"};
 static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32_t *h)
 {
     switch (kind) {
+    case DESK_INTERNAL_GAME_DATA: *w=480; *h=230; break;
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
     case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
     case DESK_INTERNAL_ABOUT: *w = 540; *h = 420; break;
@@ -2139,6 +2186,22 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     struct du_canvas c = canvas(d, b);
     du_fill(&c, R(content), SH_FACE);
     switch (cl->internal) {
+    case DESK_INTERNAL_GAME_DATA: {
+        char size[96];
+        du_icon_blit(&c,content.x+14,content.y+16,desk_shell_icon("input-gaming",32),32,DU_ICON_NORMAL);
+        bold(&c,content.x+60,content.y+16,desk_games[d->sh.save_game-1].title,SH_INK);
+        snprintf(size,sizeof(size),"Game data: %u bytes of %u MiB",d->sh.save_bytes,d->sh.save_quota/(1024u*1024u));
+        du_text(&c,content.x+14,content.y+62,size,SH_INK);
+        du_text_wrap(&c,(struct du_rect){content.x+14,content.y+90,content.w-28,85},
+            d->sh.save_confirm ? "Reset this game's saved games, high scores and setup choices? This cannot be undone." : d->sh.save_status,SH_INK);
+        for (unsigned b=0;b<3;b++) {
+            if (d->sh.save_confirm && b==2) continue;
+            struct desk_box box={content.x+12+(int)b*154,content.y+content.h-36,146,26};
+            push_button(&c,box,d->sh.save_confirm ? (b==0 ? "Reset game data" : "Cancel") :
+                b==0 ? "Reset game data" : b==1 ? "Export saves" : "Close",d->sh.save_focus==b);
+        }
+        break;
+    }
     case DESK_INTERNAL_TRANSFER:
         desk_folder_dialog_paint(d,content,clip); return;
     case DESK_INTERNAL_AUTOPLAY: {
@@ -2253,6 +2316,11 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
     struct desk_client *cl = &d->clients[index];
     struct desk_box content = desk_content(cl);
     switch (cl->internal) {
+    case DESK_INTERNAL_GAME_DATA:
+        for (unsigned b=0;b<(d->sh.save_confirm ? 2u : 3u);b++)
+            if (desk_contains((struct desk_box){content.x+12+(int)b*154,content.y+content.h-36,146,26},x,y))
+                game_data_action(d,index,b);
+        return 1;
     case DESK_INTERNAL_PROGRAMS: {
         int row=(y-content.y-40)/22+d->sh.programs_scroll;
         if (y<content.y+40 || programs_entry(d,row)<0) return 1;
@@ -2385,7 +2453,9 @@ int desk_shell_button(struct desktop *d, int button, int down)
         for (int l = d->sh.levels - 1; l >= 0; l--) {
             int k = menu_hit(&d->sh.menus[l], x, y);
             if (k == -1) continue;
-            if (k >= 0 && button != CIUKI_BUTTON_MIDDLE) activate(d, l, k);
+            if (k>=0 && button==CIUKI_BUTTON_RIGHT && d->sh.menus[l].items[k].action==SH_ACT_GAME)
+                desk_game_properties(d,(unsigned)d->sh.menus[l].items[k].arg+1);
+            else if (k >= 0 && button != CIUKI_BUTTON_MIDDLE) activate(d, l, k);
             return 1;
         }
         desk_menu_close(d);
@@ -2652,6 +2722,9 @@ static int menu_key(struct desktop *d, int code)
 {
     int l = d->sh.levels - 1;
     struct sh_menu *m = &d->sh.menus[l];
+    if (code==DU_KEY_F10 && (d->sh.modifiers&DU_SHIFT) && m->hot>=0 && m->items[m->hot].action==SH_ACT_GAME) {
+        desk_game_properties(d,(unsigned)m->items[m->hot].arg+1); return 1;
+    }
     switch (code) {
     case DU_KEY_UP: case DU_KEY_DOWN:
         menu_highlight(d,m,menu_step(m, m->hot < 0 ? (code == DU_KEY_UP ? 0 : m->count - 1) : m->hot, code == DU_KEY_UP ? -1 : 1));
@@ -2694,6 +2767,14 @@ static int internal_key(struct desktop *d, int index, int code, int value)
     if (c->internal==DESK_INTERNAL_TRANSFER) { desk_folder_dialog_key(d,code,value); return 1; }
     if (value == 0) return 1;
     switch (c->internal) {
+    case DESK_INTERNAL_GAME_DATA:
+        if (code==DU_KEY_ESC) {
+            if (d->sh.save_confirm) { d->sh.save_confirm=0; d->sh.save_focus=2; damage_all(d); }
+            else desk_request_close(d,index);
+        } else if (code==DU_KEY_TAB) {
+            d->sh.save_focus=(d->sh.save_focus+1)%(d->sh.save_confirm ? 2u : 3u); damage_all(d);
+        } else if (code==DU_KEY_ENTER || code==DU_KEY_SPACE) game_data_action(d,index,d->sh.save_focus);
+        return 1;
     case DESK_INTERNAL_PROGRAMS:
         if (code==DU_KEY_ESC) desk_request_close(d,index);
         else if (code==DU_KEY_ENTER) programs_open_selected(d);

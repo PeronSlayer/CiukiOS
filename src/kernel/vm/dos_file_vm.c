@@ -80,6 +80,9 @@ static int removable_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *d
         e=d48_sector(dev->ctx,D48_E_START+(uint32_t)lba+i,(uint8_t *)data+i*512,false);
     return e;
 }
+static bool file_disk_writable(const struct dosvm *v) {
+    return v->overlay_open && (!v->persistent || (v->save_file.writable && !v->save.readonly));
+}
 static int file_bind(struct dosvm *v,struct dos_file_frame *f,uint16_t caller_cs) {
     if (v->disable_file_bridge) return -FS_EACCES;
     if (v->files) return -FS_EINVAL;
@@ -95,8 +98,8 @@ static int file_bind(struct dosvm *v,struct dos_file_frame *f,uint16_t caller_cs
     dosvm_disk_provider_init(v,&runtime->provider);
     struct storage *storage=storage_get();
     int e=!storage || !storage->ready ? -FS_EIO :
-        dos_file_volume_open(&runtime->volume,&storage->cache,&runtime->provider,v->overlay_open);
-    if (!e) e=dos_file_map(&runtime->files,2,&runtime->volume.table,2,!v->overlay_open);
+        dos_file_volume_open(&runtime->volume,&storage->cache,&runtime->provider,file_disk_writable(v));
+    if (!e) e=dos_file_map(&runtime->files,2,&runtime->volume.table,2,!file_disk_writable(v));
     if (!e && vfs_drive_present(&storage->vfs,2)) {
         e=vfs_table_init(&storage->vfs,&runtime->native,2);
         if (!e) { runtime->native_ready=true; e=dos_file_native_views(&runtime->files,&runtime->native,false); }
@@ -193,8 +196,8 @@ static int unified_mount(void *arg,struct dfv2_ifs *s) {
     struct storage *storage=storage_get();
     if (!storage || !storage->ready || v->file_volume) return -FS_EIO;
     dosvm_disk_provider_init(v,&r->provider);
-    int e=dos_file_volume_open(&r->volume,&storage->cache,unified_source(r),v->overlay_open);
-    if (!e) { r->volume_open=true; e=dfv2_ifs_map(s,2,&r->volume.table,2,!v->overlay_open); }
+    int e=dos_file_volume_open(&r->volume,&storage->cache,unified_source(r),file_disk_writable(v));
+    if (!e) { r->volume_open=true; e=dfv2_ifs_map(s,2,&r->volume.table,2,!file_disk_writable(v)); }
     if (!e && vfs_drive_present(&storage->vfs,2)) {
         e=vfs_table_init(&storage->vfs,&r->native,2);
         if (!e) { r->native_ready=true; e=dfv2_ifs_map(s,3,&r->native,2,true); }
