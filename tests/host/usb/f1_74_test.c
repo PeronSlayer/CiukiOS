@@ -23,30 +23,24 @@ static void irq_loss_reads(const char *path)
 }
 static void read_recovery(const char *path)
 {
-    /* NAK timeouts (partial data, missing CSW) keep the same-size retry. */
-    for(unsigned kind=1;kind<=2;kind++) for(unsigned failures=1;failures<=2;failures++) {
+    /* f1-96b: NAK timeouts (partial data, missing CSW) and an invalid CSW
+     * of a 128-sector READ(10) step down the ladder after reset recovery:
+     * 128 -> 8 sectors, and 8 -> 1 when the 8-sector command fails too. */
+    for(unsigned kind=1;kind<=3;kind++) for(unsigned failures=1;failures<=2;failures++) {
         setup(path,false);use_uhci();m.h.irq_attached=true;attach();
-        m.read_fault_kind=kind;m.read_fault_commands=failures;
-        uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
-        int e=block()->read(block(),0,128,buf);
-        assert(m.read_commands==2 && m.resets>=1 && m.clear_in==m.resets && m.clear_out==m.resets);
-        assert(strstr(records,"retry addr=1 cmd=28 attempt=2") && !strstr(records,"max_sectors addr="));
-        if(failures==1) assert(!e && !block()->quarantined && !memcmp(buf,m.image,BLKDEV_READ_BYTES));
-        else assert(e==-FS_EIO && block()->quarantined);
-        free(buf);cleanup();
-    }
-    /* f1-96: an invalid CSW of a 128-sector READ(10) is a CSW error: after
-     * reset recovery the range is re-read one sector per command; a single
-     * sector keeps its own reset-qualified retry. */
-    for(unsigned failures=1;failures<=2;failures++) {
-        setup(path,false);use_uhci();m.h.irq_attached=true;attach();
-        m.read_fault_kind=3;m.read_fault_commands=failures;
+        m.read_fault_kind=kind;m.read_fault_commands=failures;m.read_commands=0;
         uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
         assert(!block()->read(block(),0,128,buf) && !block()->quarantined && !memcmp(buf,m.image,BLKDEV_READ_BYTES));
-        assert(m.read_commands==128+failures && m.resets==failures && m.clear_in==m.resets && m.clear_out==m.resets);
-        assert(strstr(records,"max_sectors addr=1 cmd=28 lba=0 sectors=128 from=128 to=1 reason=invalid_csw resend=1"));
-        assert(!strstr(records,"retry addr=1 cmd=28 attempt=2")==(failures==1));
-        assert(device()->storage.max_sectors==1);
+        assert(m.resets==failures && m.clear_in==m.resets && m.clear_out==m.resets);
+        const char *reason=kind==1 ? "data_transfer" : "invalid_csw";
+        char needle[160];
+        snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=28 lba=0 sectors=128 from=128 to=8 reason=%s resend=1 fallbacks=1",reason);
+        assert(strstr(records,needle) && !strstr(records,"retry addr=1 cmd=28 attempt=2"));
+        if(failures==1) assert(m.read_commands==1+16 && device()->storage.max_sectors==8);
+        else {
+            snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=28 lba=0 sectors=8 from=8 to=1 reason=%s resend=1 fallbacks=2",reason);
+            assert(strstr(records,needle) && m.read_commands==1+1+128 && device()->storage.max_sectors==1);
+        }
         free(buf);cleanup();
     }
     setup(path,false);use_uhci();m.h.irq_attached=true;attach();
@@ -56,7 +50,7 @@ static void read_recovery(const char *path)
     assert(m.read_commands==1 && m.resets==1 && !m.clear_in && !m.clear_out);
     free(buf);cleanup();
     /* Single-sector READ(10): the f1-74 reset-qualified retry. Multi-sector
-     * STALL/CSW faults take the f1-96 one-sector fallback (f1_96_test.c). */
+     * STALL/CSW faults take the f1-96b ladder (f1_96_test.c, f1_96b_test.c). */
     setup(path,false);use_uhci();m.h.irq_attached=true;attach();m.read_csw_stalls=2;
     uint8_t stalled_buf[512];
     assert(!block()->read(block(),0,1,stalled_buf) && m.read_commands==2 && m.resets==1);
@@ -77,7 +71,7 @@ static void read_recovery(const char *path)
     setup(path,false);use_uhci();m.h.irq_attached=true;attach();m.data_crc=true;
     uint8_t crc_buf[1024];assert(block()->read(block(),0,2,crc_buf)==-FS_EIO && block()->quarantined);
     assert(m.read_commands==1 && !strstr(records,"retry addr=1 cmd=28"));cleanup();
-    puts("PASS F1-74 IRQ recovery: partial-data/missing-CSW/invalid-CSW/persistent-CSW-STALL retry once after reset/clear-IN/clear-OUT; repeat/reset failure quarantines; short/ZLP preserve CSW/toggles; CRC never replayed");
+    puts("PASS F1-74 IRQ recovery: partial-data/missing-CSW/invalid-CSW step 128 -> 8 -> 1 after reset/clear-IN/clear-OUT (f1-96b); single-sector CSW STALL retries once; reset failure quarantines; short/ZLP preserve CSW/toggles; CRC never replayed");
 }
 static void complete_between_observations(void)
 {

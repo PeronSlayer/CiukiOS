@@ -11,3 +11,13 @@
 3. Host tests on the UHCI model: a controller that stops advancing at packet n completes with the workaround; the fallback ladder; the quarantine only at the end; re-plug after quarantine.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-96b-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 14:35, decision on the delivery)
+
+Accepted. The cause was our f1-96 ring walk keeping a stale TD status after
+the controller had drained the ring between two driver wake-ups (reproduced
+on the host at a 9-frame wake), not the Intel erratum; the erratum
+workaround stays as a defensive measure. Follow-ups: USB port reset before
+quarantine when the BOT reset fails, re-qualification up to 128 sectors
+after successes, cancelled mid-transfer requests, drive-letter reuse on
+re-plug.

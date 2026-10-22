@@ -41,16 +41,16 @@ static void transport_latency(const char *path, unsigned mode, bool baseline)
 
 static unsigned deferred, writeback_waits;
 static volatile uint32_t *pending_qh;
-static void delay_writeback(void *cookie,uint32_t address,volatile uint32_t *qh,uint32_t next)
+static bool delay_writeback(void *cookie,uint32_t address,volatile uint32_t *qh,uint32_t next)
 {
     (void)cookie;
     if (!deferred && (next&1) && m.cbw[15]==0x28 && m.stage==2) {
         assert(address>=m.h.dma_phys+USB_BULK_TD);
         volatile uint32_t *td=uhci_dma(NULL,address,16);
         assert(!(td[1]&(1u<<23)) && (td[1]&(1u<<24)));
-        pending_qh=qh;deferred++;return;
+        pending_qh=qh;deferred++;return false;
     }
-    qh[1]=next;
+    qh[1]=next;return true;
 }
 static void finish_writeback(void)
 {
