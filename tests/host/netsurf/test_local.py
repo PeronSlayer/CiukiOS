@@ -11,6 +11,14 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).resolve().parent
+# f6-20 T23 model for the port's layout budget clock: host layout time is
+# charged 32x, a conservative model of a 1.1 GHz Pentium III-M (i686 code,
+# 512 KiB L2, PC133 SDRAM) against this host class (Ryzen 7 7800X3D):
+# published single-thread integer ratios are about 13-25x; the factor rounds
+# the upper end up for the T23's memory hierarchy. Rationale and measured
+# margins: build/codex/f6-20-report.md.
+T23_CLOCK_SCALE=32
+LAYOUT_LIMIT_NS=75_000_000
 
 def recipe():
     spec=importlib.util.spec_from_file_location("netsurf_recipe",ROOT / "sdk/netsurf/build.py")
@@ -92,6 +100,57 @@ class LocalTests(unittest.TestCase):
                 self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
                 self.assertEqual(out.stat().st_size,640*480*4)
 
+    def run_page(self,url,*extra,width=640,height=480,timeout=30):
+        with tempfile.TemporaryDirectory(dir=self.out) as directory:
+            out=Path(directory) / "page.xrgb"
+            completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w",str(width),"-h",str(height),
+                "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-capture="+str(out),*extra,url],
+                capture_output=True,text=True,timeout=timeout)
+            self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+            self.assertEqual(out.stat().st_size,width*height*4)
+        return completed
+
+    def assert_exit_reason(self,completed,reason):
+        """One exit-reason line, before netsurf_exit's lwc leak report."""
+        lines=completed.stderr.splitlines()
+        reasons=[i for i,line in enumerate(lines) if line.startswith("[netsurf] exit reason=")]
+        self.assertEqual(len(reasons),1,completed.stderr)
+        self.assertTrue(lines[reasons[0]].startswith(f"[netsurf] exit reason={reason} "),lines[reasons[0]])
+        leaks=[i for i,line in enumerate(lines) if "netsurf_lwc_iterator" in line]
+        self.assertTrue(all(i>reasons[0] for i in leaks),completed.stderr)
+        return lines[reasons[0]]
+
+    def test_welcome_t23_clock(self):
+        """f6-20: about:welcome lays out under the T23 budget clock; local
+        content is never rejected by the time limit, however slow."""
+        samples=[]
+        for _ in range(3):
+            # The T23 window's content area: 800x542 surface minus chrome.
+            completed=self.run_page("about:welcome","--ciuki-clock-scale="+str(T23_CLOCK_SCALE),width=800,height=484)
+            self.assertNotIn("rejected",completed.stderr)
+            self.assertIn("NetSurf local title: Welcome to NetSurf",completed.stderr)
+            metrics=re.search(r"local_max_ns=(\d+) remote_max_ns=(\d+) clock_scale=(\d+)",completed.stderr)
+            self.assertIsNotNone(metrics,completed.stderr)
+            self.assertEqual((int(metrics[2]),int(metrics[3])),(0,T23_CLOCK_SCALE))
+            self.assertGreater(int(metrics[1]),0)
+            line=self.assert_exit_reason(completed,"capture")
+            self.assertIn("layout_rejections=0",line)
+            samples.append(int(metrics[1]))
+        best=min(samples)
+        print(f"welcome layout at T23 scale {T23_CLOCK_SCALE}: {sorted(samples)} ns; best {best/1e6:.1f} ms = "
+              f"{LAYOUT_LIMIT_NS/best:.1f}x under the {LAYOUT_LIMIT_NS//1_000_000} ms remote budget; "
+              f"break-even scale {LAYOUT_LIMIT_NS*T23_CLOCK_SCALE//best}",flush=True)
+        # Margin even against the remote budget (min of three: robust to host load).
+        self.assertLess(best,LAYOUT_LIMIT_NS)
+        # Deterministic exemption: charged far beyond the remote budget, the
+        # welcome page and a local file still lay out and the browser exits normally.
+        for url in ("about:welcome",(HERE / "fixtures/layout.html").as_uri()):
+            with self.subTest(url=url):
+                completed=self.run_page(url,"--ciuki-clock-scale=1000000")
+                self.assertNotIn("rejected",completed.stderr)
+                self.assertGreater(int(re.search(r"local_max_ns=(\d+)",completed.stderr)[1]),LAYOUT_LIMIT_NS)
+                self.assertIn("layout_rejections=0",self.assert_exit_reason(completed,"capture"))
+
     def test_layout_rejection(self):
         with tempfile.TemporaryDirectory(dir=self.out) as directory:
             page=Path(directory) / "oversized.html"
@@ -103,6 +162,7 @@ class LocalTests(unittest.TestCase):
             self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
             self.assertEqual(out.stat().st_size,640*480*4)
             self.assertIn("NetSurf structure rejected:",completed.stderr)
+            self.assert_exit_reason(completed,"capture")
 
     def test_structural_and_plain_text_rejections(self):
         cases={"deep.html":"<div>"*20000+"x"+"</div>"*20000,
@@ -120,8 +180,11 @@ class LocalTests(unittest.TestCase):
                 self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
                 self.assertEqual(out.stat().st_size,640*480*4)
                 self.assertNotIn(page.as_uri(),(Path(directory) / "profile/History.html").read_text())
+                # f6-20: a rejected page leaves the browser on its error page;
+                # only the capture ends these runs.
+                self.assert_exit_reason(completed,"capture")
                 if name=="large.txt":
-                    self.assertIn("NetSurf layout rejected: plain text",completed.stderr)
+                    self.assertIn("NetSurf layout rejected: plain text, local, admission limit",completed.stderr)
                     self.assertGreater(int(re.search(r"layout_max_ns=(\d+)",completed.stderr)[1]),0)
                 elif name=="columns.html":
                     self.assertIn("Error occurred fetching page",completed.stderr)

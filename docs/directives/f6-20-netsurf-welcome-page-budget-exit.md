@@ -10,3 +10,13 @@
 3. Host tests: the welcome page lays out under the budget with the T23 clock scale; a rejected remote page leaves the browser running; the exit-reason line.
 
 Rules: no QEMU (the lead reruns `build/lead-scratch/menu-probe.py`), no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English. Report `build/codex/f6-20-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 10:30, decision on the delivery)
+
+Accepted. The T23 exit is most likely the desktop dropping the window after
+128 pending unmerged pointer messages during a slow first paint
+(`apps/desktop/client.c:91,158`), seen by NetSurf as a channel close; the
+welcome page itself laid out on the T23. The desktop side (merge pointer
+motion for v3 windows in `desk_queue`, as for older windows) is directive
+f2-91. The 75 ms remote limit stays until the T23 `layout slow` lines give
+a measurement.
