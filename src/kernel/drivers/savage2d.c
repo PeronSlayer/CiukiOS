@@ -531,7 +531,8 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     if ((init_cr_write(s, 0x50, cr50) & 0xf1u) != (cr50 & 0xf1u))
         return fail(s, "depth_readback_failed");
     /* X.Org's PM preamble, with the selected controls in both transports.
-     * T23 sweep: bit 3 + BW_DISABLE replicates the low colour byte. */
+     * The a395ffa8 sweep's configuration-0 failure was its first fill after
+     * the reset, not its bit 3 (configuration 8 passed): see bci_test. */
     if (supersavage) init_write(s, 0x816c, 0x10000000u | (cfg.descriptor & 9u), true);
     init_write(s, 0x8168, 0, true);
     uint32_t gbd = cfg.descriptor;
@@ -745,47 +746,128 @@ const struct accel_ops *savage2d_fallback_ops(void)
     relinquish_access();
     return engine.cpu_safe ? 0 : &engine.ops;
 }
+/* f1-95 self-test: an 8x2 block in the bottom-right corner. The right
+ * 4x2 half receives the marker fill (it contains the historical probe
+ * pixel), the left half receives a screen-to-screen copy of it. Every
+ * pixel is saved first and restored after proven idle. */
+#define PROBE_W 4u
+#define PROBE_H 2u
+#define PROBE_PIXELS (2u * PROBE_W * PROBE_H)
+#define PROBE_PRIME 0u
 struct bci_probe {
     struct savage2d *s;
     const struct fb_device *d;
-    uint32_t before, marker, read;
-    bool valid;
+    uint32_t before, marker, read, saved[PROBE_PIXELS];
+    unsigned mismatch;  /* first failing block index, PROBE_PIXELS if none */
+    const char *phase;  /* last phase attempted: prime, fill, copy, done */
+    bool valid, restored;
 };
+static volatile uint8_t *probe_pixel(const struct fb_device *d, unsigned i)
+{
+    unsigned x = d->width - 2u * PROBE_W + i % (2u * PROBE_W);
+    unsigned y = d->height - PROBE_H + i / (2u * PROBE_W);
+    return d->mapped + y * d->pitch + x * (d->bpp / 8u);
+}
+static uint32_t probe_read(const struct fb_device *d, unsigned i)
+{
+    volatile uint8_t *pixel = probe_pixel(d, i);
+    uint32_t value = 0;
+    for (unsigned b = 0; b < d->bpp / 8u; b++) value |= (uint32_t)pixel[b] << (8 * b);
+    return value;
+}
+/* Compare every block pixel; the half written last is checked first so
+ * the reported value is the one the failing command produced. */
+static bool probe_check(struct bci_probe *p, uint32_t left, uint32_t right, bool right_first)
+{
+    for (unsigned pass = 0; pass < 2; pass++) {
+        bool right_half = right_first ? !pass : pass;
+        for (unsigned i = 0; i < PROBE_PIXELS; i++) {
+            if ((i % (2u * PROBE_W) >= PROBE_W) != right_half) continue;
+            uint32_t value = probe_read(p->d, i);
+            if (value != (right_half ? right : left)) { p->read = value; p->mismatch = i; return false; }
+        }
+    }
+    return true;
+}
+/* A colour whose low byte repeated over the pixel equals itself cannot
+ * detect the T23 failure (b6b6b6b6, 66666666, e8e8e8e8, 4a4a4a4a). */
+static uint32_t probe_marker(uint32_t before, unsigned bytes)
+{
+    uint32_t mask = bytes == 2 ? 0xffffu : 0xffffffu;
+    uint32_t marker = (before ^ 0x005aa55au) & mask;
+    uint32_t repeated = (marker & 0xffu) * (bytes == 2 ? 0x0101u : 0x01010101u);
+    if (repeated == marker) marker ^= 0x00a55a3cu & mask;
+    return marker;
+}
 static int bci_probe_pixel(void *ctx)
 {
     struct bci_probe *p = ctx;
     struct savage2d *s = p->s;
     const struct fb_device *d = p->d;
+    p->mismatch = PROBE_PIXELS; p->phase = "prime";
     if (!d->mapped) return fail(s, "bci_test_unmapped");
-    /* Only this saved-pixel transaction needs presenter/console exclusion.
+    if (d->width < 2u * PROBE_W || d->height < PROBE_H) return fail(s, "bci_test_geometry");
+    /* Only this saved-block transaction needs presenter/console exclusion.
      * No serial output or voluntary yield may extend that interval. */
-    unsigned bytes = d->bpp / 8;
-    volatile uint8_t *pixel = d->mapped + (d->height - 1) * d->pitch + (d->width - 1) * bytes;
     s->io.drain(s->io.ctx);
-    for (unsigned i = 0; i < bytes; i++) p->before |= (uint32_t)pixel[i] << (8 * i);
-    p->marker = (p->before ^ 0x005aa55au) & (bytes == 2 ? 0xffffu : 0xffffffu);
-    struct fb_rect r = {(int32_t)d->width - 1, (int32_t)d->height - 1, 1, 1};
-    int err = fill_rect(s, &r, p->marker);
-    p->valid = !err && s->cpu_safe;
-    if (p->valid) {
-        for (unsigned i = 0; i < bytes; i++) p->read |= (uint32_t)pixel[i] << (8 * i);
-        for (unsigned i = 0; i < bytes; i++) pixel[i] = (uint8_t)(p->before >> (8 * i));
-        s->io.drain(s->io.ctx);
-        if (p->read != p->marker) err = fail(s, "bci_test_readback_failed");
+    for (unsigned i = 0; i < PROBE_PIXELS; i++) p->saved[i] = probe_read(d, i);
+    p->before = p->saved[PROBE_PIXELS - 1];
+    p->marker = probe_marker(p->before, d->bpp / 8u);
+    int32_t x0 = (int32_t)(d->width - 2u * PROBE_W), y0 = (int32_t)(d->height - PROBE_H);
+    struct fb_rect block = {x0, y0, (int32_t)(2u * PROBE_W), (int32_t)PROBE_H};
+    struct fb_rect right = {x0 + (int32_t)PROBE_W, y0, (int32_t)PROBE_W, (int32_t)PROBE_H};
+    /* Measured on the T23 (a395ffa8 sweep, f1-95 validation): the first
+     * fill after the CR66 engine reset repeats the colour's low byte, every
+     * later fill with the same descriptor is exact. A first fill with a
+     * byte-uniform colour has the same result either way; it is checked,
+     * never trusted as the acceptance. */
+    int err = fill_rect(s, &block, PROBE_PRIME);
+    bool ok = !err && s->cpu_safe && probe_check(p, PROBE_PRIME, PROBE_PRIME, true);
+    if (ok) {
+        p->phase = "fill";
+        err = fill_rect(s, &right, p->marker);
+        ok = !err && s->cpu_safe && probe_check(p, PROBE_PRIME, p->marker, true);
     }
+    if (ok) {
+        /* Linux savagefb_copyarea: RECT | DEST_GBD | SRC_GBD, ROP CC. */
+        p->phase = "copy";
+        err = copy_rect(s, &right, x0, y0);
+        ok = !err && s->cpu_safe && probe_check(p, p->marker, p->marker, false);
+    }
+    p->valid = !err && s->cpu_safe;
+    if (ok) { p->phase = "done"; p->read = probe_read(d, PROBE_PIXELS - 1); }
+    /* CPU writes only with no engine writer outstanding. */
+    if (s->cpu_safe) {
+        for (unsigned i = 0; i < PROBE_PIXELS; i++) {
+            volatile uint8_t *pixel = probe_pixel(d, i);
+            for (unsigned b = 0; b < d->bpp / 8u; b++) pixel[b] = (uint8_t)(p->saved[i] >> (8 * b));
+        }
+        s->io.drain(s->io.ctx);
+        p->restored = true;
+    }
+    if (!err && !ok) err = fail(s, "bci_test_readback_failed");
     return err;
 }
 static int bci_test(struct savage2d *s, const struct fb_device *d)
 {
-    struct bci_probe p = {.s = s, .d = d};
+    struct bci_probe p = {.s = s, .d = d, .mismatch = PROBE_PIXELS};
     probing = true;
     int err = initializing ? fbdev_accel_probe(d, bci_probe_pixel, &p) : bci_probe_pixel(&p);
     probing = false;
     if (err == -EBUSY) err = fail(s, "bci_test_busy");
-    klog("[accel] savage bci_test phase=fill x=%u y=%u wrote=%08x before=%08x cmd=4bcc8000",
-        d->width - 1, d->height - 1, p.marker, p.before);
-    klog("[accel] savage bci_test result=%s error=%d wrote=%08x read=%08x read_valid=%u restored=%u status=%08x status_valid=%u",
-        err ? "failed" : "ok", err, p.marker, p.read, p.valid, p.valid, s->status, s->status_logged);
+    unsigned x0 = d->width - 2u * PROBE_W, y0 = d->height - PROBE_H;
+    klog("[accel] savage bci_test phase=prime x=%u y=%u w=%u h=%u wrote=%08x cmd=4bcc8000",
+        x0, y0, 2u * PROBE_W, PROBE_H, PROBE_PRIME);
+    klog("[accel] savage bci_test phase=fill x=%u y=%u wrote=%08x before=%08x cmd=4bcc8000 block=%u,%u+%ux%u",
+        d->width - 1, d->height - 1, p.marker, p.before, x0 + PROBE_W, y0, PROBE_W, PROBE_H);
+    klog("[accel] savage bci_test phase=copy src=%u,%u dst=%u,%u w=%u h=%u cmd=4bcc0020",
+        x0 + PROBE_W, y0, x0, y0, PROBE_W, PROBE_H);
+    if (p.mismatch < PROBE_PIXELS)
+        klog("[accel] savage bci_test mismatch phase=%s x=%u y=%u read=%08x",
+            p.phase, x0 + p.mismatch % (2u * PROBE_W), y0 + p.mismatch / (2u * PROBE_W), p.read);
+    klog("[accel] savage bci_test result=%s error=%d wrote=%08x read=%08x read_valid=%u restored=%u status=%08x status_valid=%u phase=%s pixels=%u",
+        err ? "failed" : "ok", err, p.marker, p.read, p.valid, p.restored, s->status, s->status_logged,
+        p.phase ? p.phase : "none", PROBE_PIXELS);
     return err;
 }
 void savage2d_record(void)
