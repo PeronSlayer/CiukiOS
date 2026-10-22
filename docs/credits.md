@@ -91,5 +91,6 @@ Status: **image** is installed in the image, **build only** is used to build or 
 - The Wine DLLs are LGPL-2.1-or-later; corresponding source and the written offer are `third_party/wine/SOURCE-OFFER.txt`. A release must carry them before publication resumes.
 - Game data are not part of the engines' licences: only public shareware packages are pre-installed, with their own terms (`third_party/games/*/UPSTREAM.json`).
 - The Microsoft and vendor driver collections under `third_party/drivers` are research references, are not installed and are not redistributed.
+- ACPICA sources are retained in `third_party/acpica`; its existing System row, elected GPL-2.0 notice and About entry cover that directory.
 - Reference material that is not shipped: the FreeDOS 1.3 packages of the conformance battery (`third_party/freedos/1.3`).
 - pixman and the X11 region algorithms (xorg `miregion.c`, pixman `pixman-region32.c`) are MIT; they enter with the compositor rebuild of directive f2-95 (dev diary 2026-10-22-08), which adds `third_party/pixman` and its notice.

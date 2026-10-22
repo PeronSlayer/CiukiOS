@@ -11,6 +11,7 @@ static struct storage storage;
 static struct fake disk;
 static unsigned reservations,invalidations;
 static int reserve_error;
+void kpreempt_point(void) {}
 struct storage *storage_get(void){return &storage;}
 int dosvm_game_remove_reserve(unsigned game){assert(game==2);if(reserve_error)return reserve_error;reservations++;return 0;}
 void dosvm_game_remove_release(unsigned game){assert(game==2 && reservations);reservations--;}

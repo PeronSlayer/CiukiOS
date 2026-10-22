@@ -44,8 +44,13 @@ static void device_close(void *ctx) { (void)ctx; }
 static uint64_t device_now(void *ctx) { (void)ctx; return test_now; }
 static int send_command(void *ctx,const struct music_command *c) { (void)ctx; (void)c; return 0; }
 static int volume_get(void *ctx,unsigned *v) { (void)ctx; *v=65; return 0; }
-static void repaint(struct du_ui *u,void *ctx)
-{ (void)u; struct music_app *a=ctx; music_runtime_repaint(a->backend->ctx); }
+static void render(struct du_ui *u)
+{
+    du_render(u);
+    /* Match the native loop's once-per-frame accounting, independently of
+     * how many disjoint update regions du_render visits. */
+    struct music_app *a=u->user; music_runtime_repaint(a->backend->ctx);
+}
 static void prepare(struct music_player *p)
 {
     p->device=p->started=p->first_pcm=1; p->view.rate=48000; p->view.state=MUSIC_PLAYING;
@@ -57,7 +62,7 @@ static void contention(struct music_runtime *r,struct device *d)
     struct music_app *app=calloc(1,sizeof(*app)); struct du_ui *ui=calloc(1,sizeof(*ui));
     uint32_t *pixels=calloc(560*420,4); assert(app && ui && pixels);
     struct music_ui_backend backend={send_command,volume_get,NULL,NULL,r};
-    du_init(ui,pixels,560,420); music_attach(app,ui,&backend); ui->paint=repaint; du_render(ui);
+    du_init(ui,pixels,560,420); music_attach(app,ui,&backend); render(ui);
     uint64_t pump_cpu=0; unsigned turns=0, full_repaints=0;
     for (test_now=0;test_now<60000000000ull;test_now+=2000000) {
         if (test_now%20000000<10000000) continue;
@@ -69,7 +74,7 @@ static void contention(struct music_runtime *r,struct device *d)
         if (r->snapshot.publication!=app->snapshot.publication) {
             music_update(app,&r->snapshot);
             if (ui->dirty==1) full_repaints++;
-            if (ui->dirty) du_render(ui);
+            if (ui->dirty) render(ui);
         }
     }
     assert(!d->gaps && !p->view.starvations && d->max_request>256);

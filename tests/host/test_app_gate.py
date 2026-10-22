@@ -220,6 +220,7 @@ class AppGateTests(unittest.TestCase):
                         "-DFS_HOST", "-D_POSIX_C_SOURCE=200809L", "-DAPP_GATE_NAMESPACE_TEARDOWN_TEST", "-pthread",
                         "-I", str(ROOT / "src/kernel/include"),
                         str(ROOT / "tests/host/proc/app_gate_test.c"),
+                        str(ROOT / "src/kernel/lib/fmt.c"),
                         str(ROOT / "src/kernel/fs/vfs.c"), str(ROOT / "src/kernel/fs/fs_ro.c"), str(ROOT / "src/kernel/fs/iso9660.c"), str(ROOT / "src/kernel/fs/blkreq.c"), str(ROOT / "src/kernel/fs/cache.c"),
                         str(ROOT / "src/kernel/fs/path.c"), str(ROOT / "src/kernel/fs/fs_port.c"), "-o", str(binary)],
                         capture_output=True, text=True, env=self.env)

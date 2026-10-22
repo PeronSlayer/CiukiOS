@@ -120,11 +120,12 @@ class DeviceTests(unittest.TestCase):
             actual={p.stem:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(frames.glob('*.xrgb'))}
             self.assertEqual(len(actual),8)
             pins=ROOT / 'tests/host/desktop/network-settings-goldens.json'
-            self.assertEqual(actual,json.loads(pins.read_text()))
             capture=load('network_settings_png',ROOT / 'tests/host/desktop/test_desktop.py')
             review=ROOT / 'build/host/f2-100';review.mkdir(exist_ok=True,parents=True)
             for p in frames.glob('*.xrgb'):
                 capture.write_png(review/(p.stem+'.png'),560,420,capture.xrgb_to_rgb(p.read_bytes()))
+            print('NETWORK_SETTINGS_GOLDENS',actual)
+            self.assertEqual(actual,json.loads(pins.read_text()))
 
 if __name__ == '__main__':
     unittest.main()

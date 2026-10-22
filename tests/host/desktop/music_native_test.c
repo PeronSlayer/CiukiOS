@@ -23,6 +23,9 @@ static int fake_close(int);
 #undef write
 #undef open
 static unsigned view_updates, refill_requests;
+static unsigned painted_frames;
+uint64_t du_now(void) { return 123456789; }
+void music_runtime_repaint(struct music_runtime *r) { (void)r; painted_frames++; }
 void music_update(struct music_app *a, const struct music_snapshot *s)
 { assert(a && s==&a->snapshot); view_updates++; }
 static int audio_closed, mixer_closed, blocked, malformed, fail_control, queue_failed;
@@ -66,6 +69,11 @@ int du_window_queue(struct du_window *w, struct ciuki_message *msg)
 int main(void)
 {
     struct music_main *m=calloc(1,sizeof(*m)); assert(m); m->audio=m->mixer=-1;
+    m->backend.ctx=m; m->app.backend=&m->backend;
+    painted(&m->ui,&m->app); painted(&m->ui,&m->app);
+    assert(painted_frames==1 && m->painted && m->last_paint==du_now());
+    m->painted_this_turn=0; painted(&m->ui,&m->app);
+    assert(painted_frames==2);
     unsigned rate; assert(!audio_open(m,&rate) && rate==48000);
     audio_refill(m); assert(refill_requests==1);
     struct music_producer producer={0};

@@ -10,20 +10,26 @@ static struct desktop d;
 static uint32_t portrait[256*256];
 static uint32_t window_pixel;
 static size_t bytes;
-static void full(void) { desk_composite(&d,(struct desk_box){0,0,d.width,d.height}); }
+static void full(void)
+{
+    /* Scene-only oracle; input is free to update cursor ownership. */
+    d.v3_cursor_hidden=1;
+    desk_composite(&d,(struct desk_box){0,0,d.width,d.height}); d.frame_valid=1;
+}
 static void parity(void)
 {
     static unsigned step;
     step++;
-    assert(d.damage.count);
-    for (unsigned i=0; i<d.damage.count; i++) desk_composite(&d,d.damage.boxes[i]);
+    assert(d.damage.count || d.move_damage.count || d.cursor_dirty);
+    /* Exercise the production retained copy and exposed-region path too. */
+    d.v3_cursor_hidden=1; fake_presents=0; assert(!desk_redraw(&d));
     uint32_t *copy=malloc(bytes); assert(copy); memcpy(copy,d.pixels,bytes);
     full();
     if (memcmp(copy,d.pixels,bytes)) for (size_t k=0; k<bytes/4; k++) if (copy[k]!=d.pixels[k]) {
         fprintf(stderr,"orb parity step=%u %s %ux%u at %zu,%zu incremental=%06x full=%06x\n",
             step,desk_theme->name,d.width,d.height,k%d.width,k/d.width,copy[k],d.pixels[k]); break;
     }
-    assert(!memcmp(copy,d.pixels,bytes)); free(copy); d.damage.count=0;
+    assert(!memcmp(copy,d.pixels,bytes)); free(copy); d.damage.count=0; d.cursor_dirty=0;
 }
 static void frame(const char *directory, const char *state)
 {
@@ -89,12 +95,13 @@ static void exercise(const char *directory)
     uint32_t orb=d.pixels[py*d.width+cx];
     desk_composite(&d,(struct desk_box){20,DESK_BAR,16,13});
     assert(d.pixels[py*d.width+cx]==orb);
-    /* The copy source or destination would contain orb/shadow pixels. */
+    /* F2-98b clips retained copies around orb/shadow pixels. Verify the
+     * actual frame, including copy/exposure, rather than refusing the plan. */
     d.frame_valid=1; d.damage.count=0;
     desk_zoom(&d,0); parity();
     desk_move(&d,0,0,DESK_BAR); parity();
-    d.damage.count=0; desk_move(&d,0,100,100); assert(!d.copy_pending); parity();
-    d.damage.count=0; desk_move(&d,0,0,DESK_BAR); assert(!d.copy_pending); parity();
+    d.damage.count=0; desk_move(&d,0,100,100); parity(); assert(d.pixels[py*d.width+cx]==orb);
+    d.damage.count=0; desk_move(&d,0,0,DESK_BAR); parity(); assert(d.pixels[py*d.width+cx]==orb);
     desk_zoom(&d,0); parity();
     desk_shell_notify(&d,"Notification","Shell chrome over the maximized window",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
     parity(); frame(directory,"notification");
@@ -122,7 +129,7 @@ int main(int argc, char **argv)
     const unsigned widths[]={1024,800}, heights[]={768,600};
     for (int theme=0; theme<desk_theme_count(); theme++) for (int size=0; size<2; size++) {
         fake_reset(); desk_init(&d,&fake_ops,widths[size],heights[size]);
-        d.portrait=portrait; d.hw_cursor=1; desk_shell_enable(&d);
+        d.portrait=portrait; d.v3_cursor_hidden=1; desk_shell_enable(&d);
         strcpy(d.sh.cfg.theme,desk_theme_at(theme)->name); desk_shell_apply(&d);
         f=fopen(argv[3],"rb"); assert(f && !fseek(f,0,SEEK_END));
         long length=ftell(f); assert(length>0 && !fseek(f,0,SEEK_SET));

@@ -12,15 +12,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
+# F2-99 cursor; F1-109 ACPICA and F2-123 hardware-ID credits rows, reviewed in integ-fix1.
 GOLDENS = {
-    "about-credits":
-        "18da39e3b0d37185f496e748c74ea73479b826f684704963527ddb35f8876895",
-    "about-credits-end":
-        "8b97b494eb520716bb1adb6edb4fe093e2d6c999dd8ccacf1e6ebf42ce4ac268",
-    "about-credits-pgdn":
-        "f4bb9f4d4e6027509b63d48020a5bfaf5bf1443c2676ff90b16fa84f242dc92f",
-    "about-credits-wheel":
-        "a9e0529737a7d45249fd041ef4f2c74f173804a5677a1dfb53e6833c672786ea",
+    "about-credits": "d26937e8434da92823cd0af9cd3fc3ee9d3c41c6722d79c39a364d5e74157eca",
+    "about-credits-end": "c1df8fce6885f62e57597c530673e1967f31b17c7863193e9280e3ecb05e68b4",
+    "about-credits-pgdn": "580065ed64fe195aa78df8e83f4a94a3cbd00688f91387fff5eb7a392f0533ad",
+    "about-credits-wheel": "cffd86d7a8f0f910296ba578432bac3417532bee427fb0fa9aa9291845e68416"
 }
 
 
@@ -65,6 +62,7 @@ class AboutCreditsTests(unittest.TestCase):
         digests = {mode: hashlib.sha256(data).hexdigest() for mode, data in self.frames.items()}
         for mode, data in self.frames.items():
             self.assertEqual(len(data), W * H * 4)
+            load("about_review", ROOT / "tests/host/desktop/frame_review.py").capture(mode, data, W, H)
         self.assertEqual(digests, GOLDENS)
 
     def test_scrolling_changes_only_the_list(self):

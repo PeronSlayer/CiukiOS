@@ -314,14 +314,17 @@ class SyntheticFixture(unittest.TestCase):
     def setUpClass(cls):
         cls.root = ROOT / 'build/host' / f'f306-{secrets.token_hex(4)}'
         cls.root.mkdir(parents=True)
+        cls.addClassCleanup(shutil.rmtree, cls.root, ignore_errors=True)
         dos = builder()
         work = cls.root / 'work'
         work.mkdir()
         boot = dos.assemble('src/boot/full_boot.asm', work / 'boot.bin', {'FAT_TOTAL_SECTORS': dos.SECTORS})
         loader = dos.assemble('src/boot/full_stage1_loader.asm', work / 'loader.bin', dos.GEOMETRY)
-        cls.system = {'/SYSTEM/CIUKIDOS.SYS': b'CIUKIDOS' * 300, '/SYSTEM/SHELL.COM': b'\xc3' * 40,
+        # Nonbootable parser data, never a retired classic kernel or a
+        # substitute for the qualified unified payload used by image tests.
+        cls.system = {'/SYSTEM/FIXTURE.SYS': b'fixture' * 300, '/SYSTEM/SHELL.COM': b'\xc3' * 40,
                       '/COMMAND.COM': b'\x90' * 5000, '/AUTOEXEC.BAT': b'\\DOSREADY.COM\r\n', '/RUNREC.COM': b'\xcd\x20' * 600}
-        image = cls.root / 'build/f0/dos/DOSBOOT.IMG'
+        image = cls.root / 'build/f0/dos/UNIFIED.IMG'
         image.parent.mkdir(parents=True)
         dos.write_fat16(image, boot, loader, cls.system)
         manifest = {'image_sha256': fx.sha(image), 'payloads': [
@@ -340,10 +343,6 @@ class SyntheticFixture(unittest.TestCase):
         cls.fixture = {'generator': 'dos-local', 'workload': 'doom', 'source': 'third_party/Doom', 'target': '/DOOM',
                        'redistribution': 'local-only'}
         cls.manifest = fx.generate(cls.fixture, cls.out, 0, root=cls.root)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.root, ignore_errors=True)
 
     def test_manifest_and_independent_readback(self):
         m = self.manifest
@@ -403,9 +402,11 @@ class SyntheticFixture(unittest.TestCase):
                 fx.generate(self.fixture, self.out, 2, root=self.root)
         finally:
             wad.with_suffix('.BAK').rename(wad)
-        image = self.root / 'build/f0/dos/DOSBOOT.IMG'
-        with self.assertRaises(ValueError):
+        image = self.root / 'build/f0/dos/UNIFIED.IMG'
+        with self.assertRaisesRegex(ValueError, 'differs from its manifest'):
             fx.dos_system(image, expected_sha256='0' * 64)
+        with self.assertRaisesRegex(ValueError, 'classic CiukiDOS is retired'):
+            fx.write_guest(self.root / 'work/retired.img', b'', b'', {'/SYSTEM/CIUKIDOS.SYS': b'classic'}, [])
         dos = builder()
         with self.assertRaises(SystemExit):
             dos.refuse_local_payloads({'/GAMES/DOOM.EXE': '1' * 64}, self.root)
@@ -417,13 +418,17 @@ class SyntheticFixture(unittest.TestCase):
         dos = builder()
         with self.assertRaises(ValueError):
             dos.write_fat16(self.root / 'work/bad.img', b'\0' * 510 + b'\x55\xaa', b'', {'/A/B/C.TXT': b'x'}, directories=['/A'])
-        # The canonical payload keeps SYSTEM first and explicitly supplies all
-        # conformance directories, including one child per manifest case.
-        source = (ROOT / 'scripts/build_dos_image.py').read_text()
-        self.assertIn('write_fat16(candidate, boot, loader, files, directories=probe_directories)', source)
-        self.assertIn('probe_directories=("D48","D48TEST",*("D48TEST/"+r["tag"] for r in probe_manifest["cases"]))', source)
-        self.assertIn('"/RUNREC.COM"', source)
-        self.assertIn('"/CLILOOP.COM"', source)
+        # The host parser writer retains nested conformance directories.
+        # The canonical guest now uses unified.install, not this writer.
+        image = self.root / 'work/directories.img'
+        files = {'/D48/RUNREC.COM': b'fixture recorder', '/D48TEST/CASE/RESULT.TXT': b'fixture result'}
+        dos.write_fat16(image, (self.root / 'work/boot.bin').read_bytes(),
+                        (self.root / 'work/loader.bin').read_bytes(), files,
+                        directories=['D48', 'D48TEST', 'D48TEST/CASE'])
+        for path, data in files.items():
+            got = subprocess.run(['mcopy', '-i', str(image), '::' + path, '-'],
+                                 capture_output=True, check=True).stdout
+            self.assertEqual(got, data, path)
 
 
 if __name__ == '__main__':

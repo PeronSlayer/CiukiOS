@@ -39,15 +39,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # 2026-10-18 (main after f4-30 + f2-81): the dialogs frames re-recorded on the combined tree (Places pane in the two-bar shell), reviewed by the lead.
 # F2-82: intentional orb geometry, well and sphere changes in shell frames.
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
+# F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "7be82fba7a1fbc2c76749e2d5b82e2c0f0446f66804d39f55f9a74f5ed15f236",
-    "ciuki-blue-dialogs.ppm": "06611ac97f8a704e637f76f18b35fd2602ef84c3030e6bf85861e070e5c10f4a",
-    "ciuki-blue-tray-disabled.ppm": "ff074a348a95ca8ba515e85f6d83440cea13e5a7d70f15235f127a43884b2e09",
-    "ciuki-blue-tray-media.ppm": "9f80d80f02a8d3e0b966957100a6c857056fd2db75508e884d8a5ef5d4dcf00e",
-    "platinum-desktop.ppm": "a6618af64babd303c822f2c249a2fff00e0a80b4d674383a543d576a4842884b",
-    "platinum-dialogs.ppm": "92da071be98f2a25bdc3c8a6f38d41acd9c53d3db283b6a1ed0ecda3d3629f35",
-    "platinum-tray-disabled.ppm": "0de6d2ccfbbbbb9f707f070ff4f975809ac6116e52db8be2bfd67bea59415618",
-    "platinum-tray-media.ppm": "3382fcae2977be32494b2f8330d54178cb2b82b73e8356f24f57fb3b92be42f6"
+    "ciuki-blue-desktop.ppm": "3dccb1ea75847efa4b4a66bb8aa30d06b6effb090a8ca7b0f2e0f97a2b345ed0",
+    "ciuki-blue-dialogs.ppm": "237073cf27cabaa634b3f71c4dce66ad33b4391f97a7b89909fbcc6fa4c91b3f",
+    "ciuki-blue-tray-disabled.ppm": "bf6abefa91ed40f5e49817c1c14010151869fc3e06f2bdd26af512dff38f2e99",
+    "ciuki-blue-tray-media.ppm": "17846f4ddd2fba69cd26475e699e25a62c7e7a7ca254f8b78c93fc18721c7f4a",
+    "platinum-desktop.ppm": "2f72f27c37a3638bb699b86ed3ba5d909317c03fc35c17f24f906b025c259b6e",
+    "platinum-dialogs.ppm": "c4aa0d8373771d7306914fa23e64ffd471fb42ea378dfe106cc0197312ded52a",
+    "platinum-tray-disabled.ppm": "f610a538bb99571b4ecf557ddf9557cc40e47fb52d1a67b89663c99610e754a1",
+    "platinum-tray-media.ppm": "c40e0355f9bfce0110a03b71859af14fb9f21fde86b67cc079bd12b03ef1d998"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
