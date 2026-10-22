@@ -521,3 +521,36 @@ thresholds. These are export-count workload estimates, not executable shim
 bytes, source LOC estimates, runtime coverage or a guarantee that 95% of this
 pack is in scope. Runtime memory and execution containment remain qualification
 gates; neither can be inferred from static imports.
+
+## Amendment ND14 (lead, 2026-10-23 00:10): user-mode driver host
+
+f6-05 part 1 showed that ring-0 containment of foreign code cannot be complete on i686 without hardware isolation:
+- a CLI-free spin inside an interrupt handler that runs with IF clear cannot be preempted;
+- a 1 kHz PIT cannot enforce a 50 µs ISR budget;
+- a linear instruction scan can be defeated by jumps into immediates or by self-modification;
+- the PCI fence does not prove that DMA has stopped.
+
+**[ND14]** Each miniport therefore runs in a dedicated **user-mode driver-host process** at ring 3, one per adapter. The f6-04 loader and the shim run inside it.
+1. **Port I/O.** The process gets its BAR port ranges in the TSS I/O permission bitmap with IOPL 0.
+   - `in`/`out` to its own ports run natively; any other port faults.
+   - `cli`, `sti`, `pushf`/`popf` with IF and `hlt` raise #GP and are emulated: a virtual interrupt flag per host, the way the Windows 9x VMM virtualises IF for V86 machines, and `hlt` as a yield.
+   - No instruction scan is required.
+2. **Memory.** MMIO BARs are mapped uncached into the process. DMA memory comes from the kernel physical allocator and the F6 DMA ledger, pinned and mapped into the process with its physical addresses reported through the shim. The process cannot map anything else.
+3. **Interrupts.**
+   - **Top half:** the kernel acknowledges the interrupt controller and masks the source, using the PCI 2.3 Interrupt Disable bit when the device supports it, otherwise the line.
+   - **Delivery:** the kernel wakes the host thread. The host runs `MiniportISR`/`MiniportHandleInterrupt`, then unmasks through a syscall.
+   - **Shared lines:** a not-mine result unmasks at once; masking on a shared line is bounded by the watchdog.
+   - **IRQL:** a state of the host's shim, enforced in software as before.
+4. **Budgets, enforced by a kernel watchdog on the host process.**
+
+   | Callback | Budget |
+   | --- | --- |
+   | Initialize, reset, halt | 10 s |
+   | Other passive-level callbacks | 500 ms |
+   | DPC-class work, handle-interrupt | 50 ms |
+   | ISR | 5 ms |
+
+   An overrun, a fault or an exit kills the host process. The kernel then applies the fence: Bus Master Enable off, the I/O and memory decode off, Interrupt Disable on, a D3hot→D0 reset where the PM capability allows it. It quarantines the adapter for the boot and keeps the DMA pages pinned until reboot when idle cannot be proved.
+5. **Network path.** The `netif_driver` adapter of ND9 talks to the host process over a shared ring of packet descriptors in the pinned memory, with a doorbell syscall in each direction. A crash or quarantine takes the interface down with a record; lwIP and other adapters continue.
+
+ND5–ND8 keep their semantics inside the host process. ND12's scan becomes unnecessary and is dropped. f6-04's in-kernel resident loader is reused with a user-process allocator policy.
