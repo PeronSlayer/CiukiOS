@@ -377,6 +377,25 @@ static void flush_all(struct dfv2_ifs *s) {
 }
 
 /* ---- errors and the critical result ---------------------------------- */
+/* f3-61c: name of a failed request for its evidence record (8.3 leaf, no
+ * drive or directory; at most 12 characters). */
+static void failure_name(struct dfv2_ifs *s,const struct dfv2_call *k,unsigned sub,char out[13]) {
+    out[0]=0;
+    if (sub==0x06 || sub==0x07 || sub==0x08 || sub==0x09 || sub==0x0a || sub==0x21) {
+        int i=slot(s,k->es,k->di); struct sft f;
+        if (i<0 || !sft_read(s,(unsigned)i,&f)) return;
+        unsigned n=0;
+        for (unsigned c=0;c<8 && f.b[0x20+c]!=' ';c++) out[n++]=(char)f.b[0x20+c];
+        if (f.b[0x28]!=' ') { out[n++]='.'; for (unsigned c=8;c<11 && f.b[0x20+c]!=' ';c++) out[n++]=(char)f.b[0x20+c]; }
+        out[n]=0; return;
+    }
+    if (sub==0x1c || sub==0x0c) return;   /* find-next, free space: no name */
+    uint8_t b[128]; if (!grd(s,sda(s,DFV2_SDA_FN1),b,sizeof(b))) return;
+    size_t len=0,start=0; while (len<sizeof(b) && b[len]) { if (b[len]=='\\' || b[len]==':') start=len+1; len++; }
+    if (len==sizeof(b)) return;
+    unsigned n=0; for (size_t c=start;c<len && n<12;c++) out[n++]=(char)b[c];
+    out[n]=0;
+}
 /* *cause: the extended error (59h class of the failure) for the INT 24h DI. */
 static void dos_error(struct dfv2_call *k,int e,bool writing,unsigned *cause) {
     unsigned c;
@@ -435,7 +454,12 @@ static enum dos_file_result request(void *arg,unsigned role,struct dfv2_call *k,
     s->stats.owned++;
     if (!e) { k->flags&=~1u; return DOS_FILE_DONE; }
     bool writing=sub==0x09 || sub==0x0e || sub==0x13 || sub==0x11 || sub==0x03 || sub==0x01 || sub==0x17;
-    unsigned code; *k=original; dos_error(k,e,writing,&code); s->stats.failed++;
+    unsigned code; *k=original; dos_error(k,e,writing,&code);
+    if (s->stats.failed<DFV2_IFS_FAILURES) {
+        struct dfv2_ifs_failure *x=&s->failure[s->stats.failed];
+        x->fn=(uint16_t)original.ax; x->error=k->ax; failure_name(s,&original,sub,x->name);
+    }
+    s->stats.failed++;
     /* DOS critical-error producers (f3-49 DF5 set): genuine INT 24h through
      * the kernel unless the open mode asked for none (O_NOCRIT, 6Ch bit 13). */
     bool nocrit=false;

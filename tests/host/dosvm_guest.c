@@ -426,6 +426,10 @@ static void unified_report(const char *when)
            t->critical,t->retries,t->expired,t->forged,t->opens,t->closes,t->reads,t->writes,t->finds,
            (unsigned long long)t->read_bytes,(unsigned long long)t->written_bytes,dfv2_ifs_held(&u->ifs),t->refusals,
            u->ifs.why ? u->ifs.why : "-");
+    /* f3-61c: the first failed requests, as the vm-game probe records them. */
+    for (unsigned i=0;i<t->failed && i<DFV2_IFS_FAILURES;i++)
+        printf("H61 IFS %s failed n=%u fn=%04x error=%u name=%s\n",when,i+1,u->ifs.failure[i].fn,u->ifs.failure[i].error,
+               u->ifs.failure[i].name[0] ? u->ifs.failure[i].name : "-");
 }
 #else
 static void unified_report(const char *when) { (void)when; }

@@ -156,6 +156,46 @@ of every format, the runner Parser and both suite cases over a full run, the
 cade4804 prefix refused) and the window-ownership check in
 `tests/host/dosvm_video_test.inc`.
 
+f3-61c (2026-10-22 11:08, after QEMU run 12142460 of
+`vm-game-doom-unified-qemu-t23` ended "terminal evidence before declared
+stimuli completed"): the unified binding and DOOM ran (`DFV2 IFS active
+drives=c`, `case=unified when=prompt bound=1 active=1 owned=c start=63`,
+1216 IFS reads, 2658 KiB), but the runner's Alt+Enter entry was refused by
+the f3-26 readback under QEMU's standard VGA (`fullscreen_transport_fault
+registers=1` = MISC output/enable, `fullscreen_refused error=-5
+continuation=windowed`, the open f3-29 deviation), so `ARM fullscreen_leave`
+never came. Decisions:
+
+- The kernel counts refusals with the windowed continuation
+  (`fullscreen_refusals`, `fullscreen_refusal`). The probe waits for entry or
+  a refusal and records `case=fullscreen entered= refused= reason=
+  continuation=windowed|none policy=qemu|hardware`. Under QEMU
+  (`CBI_F_SMBIOS_QEMU`, as f3-29 proposes for this deviation) a refusal is
+  data: the probe verifies the windowed game for 25 s (at least 20 sampled
+  seconds with a page flip or a changed presenter frame, same `case=sample`
+  and `case=progress` records with `fs=0`) and the verdict carries
+  `display=window|fullscreen`. On hardware (`policy=hardware`, the T23
+  expectation, also when the same case is imported from a physical boot) a
+  refusal stays `outcome=refused`, a failure. A profile whose full screen
+  works can require it with the predicate field `display: fullscreen`.
+- Runner: an action may declare `unless`, a guest DATA record that releases
+  it when its ARM never comes (`scripts/test/run.py` `Actions.skip_declined`,
+  recorded as `type=skipped`). The vm-game leave action is released by
+  `case=fullscreen entered=0`; a missing ARM without that record still fails
+  the stimuli.
+- Clean end: after the verdict the probe leaves DOOM through its own menu
+  (Esc, Up, Enter, y), waits up to 120 s for `dosvm_shell_idle`, then closes
+  the window: an ordinary EXIT, `vm_cleanup data_loss=0`. It records
+  `case=close method=idle-prompt|forced why=none|vm-stopped|fullscreen|
+  game-running|dpmi-client|shell-busy`, then `case=after` and the text
+  screen (ENDOOM and the prompt).
+- The IFS keeps the first 8 failed requests (function, DOS error, 8.3 name:
+  FN1 for path calls, the SFT name for handle calls) and the probe records
+  `case=unified_failed when= n= of= fn=11xx dos= error= name=`. In the
+  production VM on the host, DOOM's 4 failures are expected misses:
+  `1116 error=2 DOOM.ETX` (open), `110f error=2 DOOM2F.WAD`, `DOOM2.WAD`,
+  `DOOM.WAD` (get attributes, DOOM's IdentifyVersion).
+
 ## Open (lead)
 
 - QEMU `vm-game` on both kernels, then the T23 with serial capture: the
