@@ -12,3 +12,17 @@
 4. Host tests: damage-region compositing golden frames unchanged, the frame-rate cap, the input wake, the CPU model.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f2-95-report.md`.
+
+## Amendment 2 (lead, 2026-10-22 19:46, decision on the delivery)
+
+Accepted. The CPU was not taken by the compositor but by the shortcut worker
+(`desktop#30`: a full `stat()` rescan of four trees and three game-image
+queries every 2 s, holding the block cache) and the sound worker
+(`desktop#31`: polling every 2 ms for a last frame the mixer never consumed);
+the ~40 frames per second were cursor moves. Damage tracking now uses
+pixman 0.46.4's region code (vendored unmodified, MIT); pixman's MMX drawing
+is not ported (composing is 0.12–1.4 % of the CPU on the model). Accepted
+behaviour changes: external shortcuts may appear after up to 10 s; small
+continuous updates without input capped at 30 fps. The 9–18 % of
+`desktop#28` the model does not explain is read from the new
+`[desktop] loop` record on the next trial.

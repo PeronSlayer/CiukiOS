@@ -245,8 +245,12 @@ static void test_damage(void)
     }
     assert(a.count<=DESK_DAMAGE_MAX);
     memset(&a,0,sizeof(a));
+    /* f2-95: a 33rd separate rectangle joins the closest pair (least added
+     * area), not the whole list into one 97-pixel bounding box. */
     for (int n=0; n<33; n++) desk_damage_add(&a,(struct desk_box){n*3,0,1,1},128,128);
-    assert(a.count==1 && a.boxes[0].w==97);
+    unsigned area=0; for (unsigned i=0;i<a.count;i++) area+=(unsigned)(a.boxes[i].w*a.boxes[i].h);
+    assert(a.count==DESK_DAMAGE_MAX && area==35);
+    for (int n=0; n<33; n++) { int covered=0; for (unsigned i=0;i<a.count;i++) covered|=covers(a.boxes[i],n*3,0); assert(covered); }
     struct desk_box f=desk_frame(2048,2048,0,32);
     assert(f.w==2054 && f.h==2075);
     puts("PASS damage/frame: clipping, signed extremes, transitive merge, saturation, coverage");
