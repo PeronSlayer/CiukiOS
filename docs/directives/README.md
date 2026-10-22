@@ -444,3 +444,10 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-98c-event-driven-native-apps](f2-98c-event-driven-native-apps.md) | F2 | gpt-6.1-sol / high | written 2026-10-23 00:09 (du_run and every native app blocking on events; after f2-88c) |
 | [f3-64-persistent-dos-saves](f3-64-persistent-dos-saves.md) | F3 | gpt-6.1-sol / xhigh | written 2026-10-23 00:17 (per-title persistent overlays: saves kept across sessions, crash-consistent, reset/export, quota; after f3-63) |
 | [f1-106b-ehci-tt-and-interrupt-hid](f1-106b-ehci-tt-and-interrupt-hid.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-23 00:20 (EHCI split transactions behind USB 2.0 hubs; interrupt-driven idle HID, no 1 kHz poll) |
+| [f1-110-acpi-events-power](f1-110-acpi-events-power.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (ACPI SCI/GPE, generic EC, power button, lid, AC, battery, thermal, soft-off, tray and Power page) |
+| [f1-112-serial-mice-pnp-dos-uart](f1-112-serial-mice-pnp-dos-uart.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (serial PnP and mice, virtual UART/INT 14h leases) |
+| [f1-113-game-port-joysticks](f1-113-game-port-joysticks.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (analog game port, DOS 201h/INT 15h AH=84h, one joystick API) |
+| [f1-114-parallel-port-lpt](f1-114-parallel-port-lpt.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (LPT SPP/PS2/EPP/ECP, /dev/lpt, INT 17h and raw leases) |
+| [f1-115-floppy-controller](f1-115-floppy-controller.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (82077AA FDC, A:/B: through FAT12, INT 13h and virtual FDC) |
+| [f1-121-apm-12](f1-121-apm-12.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:31 (APM 1.2 for pre-ACPI machines) |
+| [f1-104b-hid-64-byte-reports](f1-104b-hid-64-byte-reports.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:31 (HID reports up to 64 bytes) |
