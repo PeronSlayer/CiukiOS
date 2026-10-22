@@ -41,11 +41,13 @@ class LoaderModelTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
     def test_ecpoll_option_assembled_allowlist(self):
-        # f1-94 amendment 1: ecpoll=0 is one exact BOOT.CFG option without a
-        # loader action; the kernel disables the ThinkPad EC volume poll.
+        # f1-100: ecpoll=0 and ecpoll=1 are exact BOOT.CFG options without a
+        # loader action; the kernel keeps the ThinkPad EC volume poll off unless
+        # ecpoll=1 (and ecpoll=0 wins). Both fit the loader's byte budget.
         menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
         options=menu.split('option_tokens db',1)[1].split('\n',1)[0]
         self.assertIn("'ecpoll=0',0",options)
+        self.assertIn("'ecpoll=1',0",options)
         out=ROOT/'build/host';out.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='ecpoll-loader-',dir=out) as folder:
             asm=Path(folder)/'loader.asm';binary=Path(folder)/'loader.bin'
@@ -53,15 +55,18 @@ class LoaderModelTests(unittest.TestCase):
                            +','.join(SYMBOLS)+'\n')
             subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],cwd=ROOT,check=True)
             machine=LoaderParserMachine(binary)
-            for token in ('ecpoll=0','ecpoll=1','ecpoll=00','xecpoll=0','ECpoll=0','ecpoll=','ecpoll=0\r\n'):
+            for token in ('ecpoll=0','ecpoll=1','ecpoll=00','ecpoll=11','ecpoll=2','xecpoll=0','ECpoll=1',
+                          'ecpoll=','ecpoll=0\r\n','ecpoll=1\r\n'):
                 with self.subTest(token=token):
-                    self.assertEqual(machine.config(token),token.strip()=='ecpoll=0')
-                    if token.strip()=='ecpoll=0':self.assertEqual(machine.field(8)&3,2)
-            self.assertTrue(machine.config('serial=0 ecpoll=0 usbscan=0\r\nsafe=1 mode=0x0118'))
+                    valid=token.strip() in ('ecpoll=0','ecpoll=1')
+                    self.assertEqual(machine.config(token),valid)
+                    if valid:self.assertEqual(machine.field(8)&3,2)
+            self.assertTrue(machine.config('serial=0 ecpoll=1 usbscan=0\r\nsafe=1 mode=0x0118 ecpoll=0'))
             self.assertEqual((machine.field(8)&3,machine.var('preferred_mode')),(1,0x118))
-        self.assertEqual(model.boot_options('serial=0 ecpoll=0 usbscan=0\r\nsafe=1 mode=0x0118'),
+        self.assertEqual(model.boot_options('serial=0 ecpoll=1 usbscan=0\r\nsafe=1 mode=0x0118 ecpoll=0'),
                          {'safe':True,'serial':False,'mode':0x118})
-        for token in ('ecpoll=1','ecpoll=00','xecpoll=0','ECpoll=0','ecpoll='):
+        self.assertEqual(model.boot_options('ecpoll=1'),{'safe':False,'serial':True,'mode':None})
+        for token in ('ecpoll=00','ecpoll=11','ecpoll=2','xecpoll=0','ECpoll=1','ecpoll='):
             with self.assertRaises(ValueError):model.boot_options(token)
 
     def test_uart_outcomes_and_disable(self):

@@ -626,7 +626,9 @@ recorded and never fought. The SMI attribution records (`[kernel] smi`,
 are evidence only: they never subtract firmware time from a software budget.
 Reducing our own device traffic that the firmware turns into SMIs (the
 ThinkPad EC poll, 1 Hz by default, `ecpoll=0` to stop it) is ordinary driver
-policy and needs no further amendment.
+policy and needs no further amendment. Since f1-100 the EC poll is off by
+default (`ecpoll=1` for diagnosis) and every remaining EC transaction is
+counted and bounded ([f1-100](../validation/f1-100-ec-traffic.md)).
 
 Extend `test_kernel_latency.py`/production scheduler and VM lifecycle replays
 with long cleanup, fragmented cached chains, all-dirty cache and maximum

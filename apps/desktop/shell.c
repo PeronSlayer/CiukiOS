@@ -2351,7 +2351,9 @@ int desk_shell_button(struct desktop *d, int button, int down)
             return 1;
         }
         if (desk_contains(volume_icon_box(d), x, y) && button == CIUKI_BUTTON_LEFT) {
-            d->sh.volume_open = 1; d->sh.want_reload |= 4;
+            /* f1-100: opening the popup is the explicit action that asks
+             * the kernel to re-read the hardware volume keys' state (8). */
+            d->sh.volume_open = 1; d->sh.want_reload |= 4|8;
             damage(d, outer(volume_popup(d)));
             return 1;
         }

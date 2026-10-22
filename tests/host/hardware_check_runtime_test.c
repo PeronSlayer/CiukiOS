@@ -98,6 +98,8 @@ bool input_read(struct input_event *out)
     return true;
 }
 int audio_master_set(struct ciuki_mixer_master *m) { audio.master=*m; return 0; }
+static unsigned ec_refresh_requests;
+void thinkpad_ec_refresh_request(void) { ec_refresh_requests++; }
 struct storage *storage_get(void) { return &disk; }
 const struct fb_device *fbdev_get(void) { return &fb; }
 unsigned pci_count(void) { return 1; }
@@ -179,6 +181,14 @@ int main(void)
     assert(out.status==HW_FAIL && g_ticks==100 && !live_prompt && strstr(out.detail,"reason=scan_pending"));
     puts("PASS f1-69 USB mouse: delayed attach then full 5 s events, absent waits 8 s, no host skips, inactive fails, short budget bounded");
     puts("PASS merged USB mouse: shared first-scan wait, pending/conflicted hosts fail, late first scan preserves live window, expired reserve issues no sleep");
+    /* f1-100: the EC poll is off by default; the keyboard/EC key window asks
+     * the EC worker for one rate-bounded read per second, none without EC. */
+    fixture(); audio.master_in_hardware=true; ec_refresh_requests=0;
+    input_window(false,15000,&out);
+    assert(out.status==HW_PASS && g_ticks==5000 && ec_refresh_requests==5);
+    fixture(); ec_refresh_requests=0; input_window(false,15000,&out);
+    assert(out.status==HW_PASS && g_ticks==5000 && !ec_refresh_requests);
+    puts("PASS f1-100 H keyboard/EC keys: one EC refresh request per second during the 5 s window, none without the EC");
     for (int s=0;s<=6;s++) {
         fixture(); scenario=s; retained=s==1;
         savage_check(15000,&out);

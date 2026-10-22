@@ -136,6 +136,12 @@ static void test_memory_footprint(const char *directory)
         mixer_poll(&d,now+249999999ull,&poll_next); assert(!(d.sh.want_reload&4));
     }
     assert(mixer_queries==before_queries+20 && !footprint_master_saves);
+    /* f1-100: the 250 ms observation never asks for a hardware (EC) read;
+     * opening the volume popup asks once, on the control handle only. */
+    assert(!mixer_refreshes);
+    d.sh.want_reload|=4|8; shell_service(&d);
+    assert(mixer_refreshes==1 && mixer_queries==before_queries+21 && !d.sh.want_reload);
+    mixer_read(&d); assert(mixer_refreshes==1);
     assert(network_queries && d.sh.network.present && d.sh.network.link==CIUKI_NET_LINK_UP);
     d.sh.volume_open=1; mixer_fixture.left=60; mixer_fixture.right=80; mixer_fixture.mute=1;
     mixer_fixture.save_state=CIUKI_MIXER_UNSAVED;

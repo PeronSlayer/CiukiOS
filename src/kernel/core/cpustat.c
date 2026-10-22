@@ -13,6 +13,9 @@
 #include <ciuki/pager.h>
 #include <ciuki/smi.h>
 
+/* f1-100: the ThinkPad EC traffic record of the window (drivers/thinkpad_ec.c). */
+extern void thinkpad_ec_window_emit(void) __attribute__((weak));
+
 static struct task *stat_task;
 static uint64_t window_start, irq_cycles, exited_cycles, classes[P_COUNT];
 static uint64_t stretch_max, resched_start, resched_max, paths[CPU_PATHS];
@@ -415,6 +418,7 @@ static void cpu_emit(void)
             long_section.phase_cycles*1000/g_tsc_per_ms,long_section.from,long_section.to);
     }
     if (smi_window_emit) smi_window_emit(total, emit);
+    if (thinkpad_ec_window_emit) thinkpad_ec_window_emit();
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);
