@@ -1338,6 +1338,12 @@ int cache_error(struct block_cache *c, struct blkdev *d) {
     (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); struct cache_device *s=device(c,d);
     int e=s ? s->error : -FS_ENOSPC; fs_lock_drop(&c->lock); return e;
 }
+uint32_t cache_dirty_bytes(struct block_cache *c, struct blkdev *d) {
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
+    uint32_t bytes=0;
+    for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) bytes=c->devices[i].dirty_bytes;
+    fs_lock_drop(&c->lock); return bytes;
+}
 void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
     (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     unsigned work=0;

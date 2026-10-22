@@ -58,6 +58,9 @@ int storage_pagefile_bind(struct storage *s, unsigned d, const char *path)
     return e;
 }
 
+bool storage_volume_pagefile(const struct storage *s, const struct fat_volume *fat)
+{ return pagefile_on(s,fat); }
+
 uint64_t storage_sweep_writes(const struct storage_volume *v)
 {
     return v == &system_storage.volumes[2] ? system_sweep_writes : 0;
@@ -234,6 +237,7 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
 {
     if (!s || !s->ready || s->stopped || disk >= STORAGE_DISKS || !dev || s->disks[disk]) return -FS_EINVAL;
     s->disks[disk] = true;
+    s->raw[disk].dev = dev; /* f9-02: the raw node of this slot */
     struct partition_table table;
     int e = partition_scan(dev, &table);
     if (e && (!disk || e != -FS_EINVAL)) return s->disk_errors[disk] = e;
@@ -282,6 +286,45 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         v->error = e;
     }
     return 0;
+}
+/* f9-02 DISK_PUBLISH: mount primary partition 1 of a leased disk at the
+ * reserved free letter d with the same read gate as storage_add_disk, then
+ * open its write session (a dirty or lost-cluster volume is repaired by
+ * fat_enable_write as at boot). Nothing is published on failure. Only the
+ * lease path calls this; namespace lock held and d reserved by the caller. */
+int storage_publish_locked(struct storage *s, unsigned disk, unsigned d,
+                           const struct partition *part, uint32_t *reasons)
+{
+    if (!s || disk >= STORAGE_DISKS || !s->raw[disk].dev || d < 3 || d >= 26 || !part) return -FS_EINVAL;
+    struct storage_volume *v = &s->volumes[d];
+    if (s->stopped || v->present || vfs_drive_present(&s->vfs, d)) return -FS_EBUSY;
+    memset(v, 0, sizeof(*v));
+    v->drive = d; v->disk = disk; v->partition = 1;
+    int e = blkpart_init(&v->part, s->raw[disk].dev, part);
+    if (e) { memset(v, 0, sizeof(*v)); return e; }
+    v->io = (struct blkdev){ .read = volume_read, .write = volume_write,
+        .capacity = part->count, .sector_size = 512, .ctx = v };
+    refresh_volume(v);
+    cache_invalidate(&s->cache, &v->io, true);
+    e = VFS_IO(&s->vfs, fat_mount(&v->fat, &s->cache, &v->io, 0, part->count, false));
+    if (!e) {
+        if (reasons) *reasons = v->fat.ro_reasons;
+        v->writes_before_gate = v->writes;
+        v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));
+        if (!v->read_gate || v->writes_before_gate) e = -FS_EROFS;
+    }
+    if (!e) {
+        v->read_sequence = ++s->sequence; v->present = true;
+        refresh_volume(v);
+        e = VFS_IO(&s->vfs, fat_enable_write(&v->fat));
+    }
+    if (!e) { v->write_sequence = ++s->sequence; e = vfs_attach_locked(&s->vfs, d, &v->fat); }
+    if (e) {
+        v->fat.mounted = false;
+        cache_invalidate(&s->cache, &v->io, true);
+        memset(v, 0, sizeof(*v));
+    }
+    return e;
 }
 /* Preparation does not expose a FAT volume or hold shared storage locks
  * across device I/O. Only reservation/publication take the namespace lock. */
@@ -803,6 +846,25 @@ static void storage_timer(void *arg)
     }
     task_exit(0);
 }
+/* f9-02: a published destination needs the writer even when the boot
+ * started storage read-only (Setup mode). Idempotent; never in ordinary
+ * boots, whose writer is created by storage_init. */
+int storage_writer_start(struct storage *s)
+{
+    if (!s || s != &system_storage) return 0;
+    vfs_lock(&s->vfs,0);
+    bool start = s->ready && !s->stopped && !s->cache.writer_online;
+    if (start) s->cache.writer_online = true;
+    vfs_unlock(&s->vfs);
+    if (!start) return 0;
+    struct task *timer = task_create_kernel("storage-writer", storage_timer, s, P_DEVICE);
+    if (!timer) {
+        vfs_lock(&s->vfs,0); s->cache.writer_online = false; vfs_unlock(&s->vfs);
+        return -FS_ENOMEM;
+    }
+    task_start(timer);
+    return 0;
+}
 void storage_init(void)
 {
     if (initialized) return;
@@ -828,6 +890,11 @@ void storage_init(void)
         devices[slot]=dev;
         if (!dev || dev->atapi) continue;
         e = storage_add_disk(s, slot, &dev->block);
+        /* f9-02 DISK_GET_INFO identity, copied once (data only). */
+        memcpy(s->raw[slot].model, dev->model, sizeof(s->raw[slot].model));
+        memcpy(s->raw[slot].serial, dev->serial, sizeof(s->raw[slot].serial));
+        memcpy(s->raw[slot].firmware, dev->firmware, sizeof(s->raw[slot].firmware));
+        s->raw[slot].lba48 = dev->lba48;
         drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE,
             .disk = slot, .error = e, .readonly = true, .reason = "disk_scan" });
     }
@@ -877,4 +944,5 @@ void storage_init(void)
 }
 #else
 void storage_init(void) { }
+int storage_writer_start(struct storage *s) { (void)s; return 0; }
 #endif

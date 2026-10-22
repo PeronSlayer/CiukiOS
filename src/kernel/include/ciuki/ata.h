@@ -54,6 +54,7 @@ struct ata_device {
     unsigned unit;
     bool present, atapi, identified, lba48, flush_ext;
     char model[41];                 /* printable, whitespace replaced by '_' */
+    char serial[21], firmware[9];   /* f9-02: IDENTIFY words 10-19 and 23-26, trimmed */
     gen_t generation;              /* last issued command, retained for evidence */
     uint64_t commands, elapsed_ms;
     uint8_t status, error, command;

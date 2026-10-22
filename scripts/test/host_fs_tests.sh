@@ -13,7 +13,7 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
 # are mandatory; leak detection is explicitly not claimed by this runner.
 printf '%s\n' 'SANITIZERS ASan=on UBSan=on LSan=off (sandbox ptrace restriction)'
 missing=0
-for tool in clang python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm; do
+for tool in clang python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -62,6 +62,24 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
+# f9-02: sdk/libdisk over the production lease code (disklease.c, mount.c,
+# fat.c, cache.c) on file-backed disks. Oracles: build_image.py + mkfs.fat
+# (libdisk_oracle.py), fsck.fat -n, mtools, the f1-22 corruption fixtures.
+rm -rf build/host/fs/libdisk
+python3 tests/host/libdisk_oracle.py --out build/host/fs/libdisk
+python3 sdk/libdisk/gen_boot.py --out build/host/fs/libdisk/libdisk_boot.c
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs -Isdk/libdisk/include -Isdk/libdisk -Itests/host \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    src/kernel/fs/ntfs_fs.c src/kernel/fs/ntfs_ro.c src/kernel/fs/mount.c src/kernel/fs/pagefile.c src/kernel/fs/disklease.c \
+    src/kernel/core/bootlog.c src/kernel/drivers/blkpart.c src/kernel/lib/sha256.c src/kernel/lib/fmt.c \
+    sdk/libdisk/disk.c sdk/libdisk/format.c sdk/libdisk/sha256.c build/host/fs/libdisk/libdisk_boot.c \
+    tests/host/fs/fake.c tests/host/libdisk_files.c tests/host/libdisk_test.c \
+    -o build/host/fs/libdisk_test
+build/host/fs/libdisk_test build/host/fs/libdisk
+rm -rf build/host/fs/libdisk build/host/fs/libdisk_test
 # f0-49: production pagefile adapter: slot map oracle, in-place growth and
 # shrink, exclusivity, reserved records, I/O failures and power cuts.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \

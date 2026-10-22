@@ -322,6 +322,7 @@ ScanDisk with a surface scan on the next boot).
 | --- | --- | --- |
 | Partition start | first partition at head 1 (LBA 63, CHS-aligned) | LBA 2048 (1 MiB) so the loader gap 1–2047 holds `ciukldr`; the only start the loader accepts |
 | Cluster size | table 10.2: 4 KiB up to 8 GB, 8 KiB to 16 GB, 16 KiB to 32 GB, 32 KiB above | fixed 4 KiB (8 sectors) at every size: the loader pins it and the fs suite's fsck/mtools oracles assume it |
+| FAT size | not described in chapter 10 (Format picks the cluster size of table 10.2, `wrkc10_6.htm`); the FAT specification's formula `ceil((DskSize − ResvdSecCnt) / ((256 × SecPerClus + NumFATs) / 2))` may over-allocate | mkfs.fat 4.2's exact need, `ceil((clusters + 2) × 4 / 512)`, so the volume is byte-identical to `build_image.py`'s; the specification value is computed and recorded (never smaller); one extra sector only where mkfs.fat's rounding would leave the last cluster without an entry (f9-02) |
 | Reserved sectors | 32 typical (FAT spec) | 160, blackbox descriptor and ring inside them (`build_image.py`; `boot-memory.md` corrected by this rework) |
 | Partition types | primary, extended, logical; active flag chosen by the user | one primary, active; no extended/logical; foreign entries are erased by whole-disk |
 | Table refresh | reboot after repartitioning | the kernel invalidates the disk's cache and rescans the table under the lease before publishing the new volume, no reboot |
@@ -329,6 +330,7 @@ ScanDisk with a surface scan on the next boot).
 | Resizing | not offered | not offered; occupied filesystems are never resized |
 | Disk overlays, compression (DriveSpace) | supported by Windows 98 | unsupported; a disk with an overlay or a non-MBR scheme (GPT `0xEE`) is refused |
 | LBA limit | INT 13h extensions | 28-bit LBA per `partition.c`; the partition is capped, the rest stays unallocated |
+| Write confirmation | not described in chapter 10 (VCACHE caches reads and writes, `wrkc10_6.htm`) | a disk whose write cache is on (or unknown) without a qualified FLUSH CACHE path is refused ("the disk cannot confirm writes"), the same durability rule as every writable FAT mount (f9-02) |
 | Destructive confirmation | Fdisk/Format warnings | the final transaction summary (section 4) with the disk identity and the erased partitions; unattended needs `EraseDisk=yes` |
 
 ### 5.3 Raw-disk ownership: the destination lease (D5; F6)

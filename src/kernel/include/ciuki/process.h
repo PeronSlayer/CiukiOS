@@ -53,6 +53,11 @@ struct process {
     struct kwait changed;
     uint32_t threads, live_threads;
     bool published, dosvm_capability, programs_capability;
+    /* f9-02: destination-disk authority for /dev/ata0..3 (mutating requests
+     * and the lease). Set only by the supervisor on the process it spawns as
+     * Setup in Setup mode (f9-01); zero in every other process (kzalloc),
+     * never inherited by children or descriptors, gone with the process. */
+    bool setup_capability;
     /* f2-33 enumeration: image basename (printable, NUL-terminated) and the
      * g_ticks value at publication. */
     char name[CIUKI_PROC_NAME_MAX];

@@ -169,6 +169,8 @@ bool cache_writeback_due(const struct block_cache *, uint32_t now_ms);
 void cache_writer_wait(struct block_cache *, uint32_t max_ms);
 bool cache_writeback_report(struct block_cache *, uint32_t now_ms, struct cache_stats *);
 int cache_error(struct block_cache *, struct blkdev *);
+/* f9-02 lease preflight: dirty bytes currently held for one device view. */
+uint32_t cache_dirty_bytes(struct block_cache *, struct blkdev *);
 /* Invalidate only after durable unmount or externally established media loss.
  * forget_error is for a new media generation, never automatic error recovery. */
 void cache_invalidate(struct block_cache *, struct blkdev *, bool forget_error);

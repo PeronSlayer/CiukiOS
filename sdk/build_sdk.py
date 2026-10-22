@@ -129,7 +129,17 @@ def main():
     # engine as well. libfreetype.a is available for future validated GDI users.
     objects['libfont'].extend(work/'freetype'/(Path(name).stem+'.o') for name in ft.SOURCES)
     obj=work/'syscalls.o'; compile(work/'syscalls.S',obj); objects['libciuki'].append(obj)
-    for name,objs in [('libciuki',objects['crt']+objects['libciuki']),('libpthread',objects['libpthread']),('libfont',objects['libfont']),('libreg',objects['libreg'])]:
+    # f9-02 libdisk: the stub and canonical MBR code are assembled from
+    # src/boot by the pinned nasm into a generated source; digests go to
+    # the manifest. Header installed as <libdisk.h>.
+    disk_include=('-I',ROOT/'sdk/libdisk/include','-I',ROOT/'sdk/libdisk')
+    run(['python3',ROOT/'sdk/libdisk/gen_boot.py','--out',work/'libdisk_boot.c','--nasm',tool_info['nasm']['path'],
+         '--manifest',work/'libdisk_boot.json'],env=env)
+    objects['libdisk']=[]
+    for path in sorted((ROOT/'sdk/libdisk').glob('*.c'))+[work/'libdisk_boot.c']:
+        obj=work/('libdisk_'+path.stem+'.o'); compile(path,obj,disk_include); objects['libdisk'].append(obj)
+    shutil.copy2(ROOT/'sdk/libdisk/include/libdisk.h',inc/'libdisk.h')
+    for name,objs in [('libciuki',objects['crt']+objects['libciuki']),('libpthread',objects['libpthread']),('libfont',objects['libfont']),('libreg',objects['libreg']),('libdisk',objects['libdisk'])]:
         run([tool_info['llvm-ar']['path'],'rcsD',lib/(name+'.a'),*objs])
     helpers=work/'helpers.o'; compile(ROOT/'sdk/newlib/helpers.c',helpers)
     run([tool_info['llvm-ar']['path'],'rcsD',lib/'libcompiler.a',helpers])
@@ -162,6 +172,11 @@ def main():
     manifest['compiled_file_licenses']=inventory
     manifest['sdk_compiled_file_licenses']=[{'source':str(p.relative_to(ROOT)),'sha256':digest(p),'notice':'sdk/libgl/LICENSE-TinyGL.txt' if 'libgl/vendor' in str(p) else 'licenses/SDK-MIT.txt'} for p in sorted((ROOT/'sdk').rglob('*')) if p.suffix in ('.c','.S') and 'tests' not in p.parts]
     manifest['generated_stub_license']={'source':'work/syscalls.S','abi_sha256':digest(ABI),'notice':'licenses/SDK-MIT.txt'}
+    # f9-02: libdisk embeds boot-code bytes assembled from GPL-2.0-only
+    # sources and mkfs.fat 4.2's FAT32 boot program (format.c); the lead
+    # decides the licence boundary (build/codex/f9-02-report.md).
+    manifest['libdisk_boot']={'generated':'work/libdisk_boot.c','code':json.loads((work/'libdisk_boot.json').read_text()),
+         'format_boot_program':'mkfs.fat 4.2 FAT32 boot program bytes in sdk/libdisk/format.c (dosfstools)'}
     manifest['license_scope']={'runtime':'newlib per-file notices; SDK MIT; FreeType FTL; TinyGL acknowledgment licence; exact ABI header GPL-2.0-only (contract issue documented)',
          'tools_build_only':'LLVM Apache-2.0 WITH LLVM-exception; NASM BSD; upstream configure/build licenses retained in source',
          'excluded':'libgloss, libnosys, libc/sys board ports, POSIX/unix/signal sample wrappers'}
@@ -175,7 +190,7 @@ def main():
     linked={}
     for mapfile in (OUT/'tests').glob('*.elf.map'):
         members=sorted(set(re.findall(r'([^\s/]+\.a)\(([^)]+)\)',mapfile.read_text())))
-        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','sdk/libgl/LICENSE-TinyGL.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
+        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','sdk/libgl/LICENSE-TinyGL.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a','libdisk.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
     manifest['linked_file_licenses']=linked
     manifest['test_evidence']=json.loads((OUT/'tests/host-checks.json').read_text())
     manifest['installed_bytes']=sum(p.stat().st_size for p in (OUT/'sysroot').rglob('*') if p.is_file())

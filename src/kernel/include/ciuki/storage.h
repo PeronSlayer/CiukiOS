@@ -40,6 +40,24 @@ struct storage_ntfs {
     bool present;
     uint64_t reads, writes, flushes;
 };
+/* f9-02: raw whole-disk access and the destination lease (disklease.c,
+ * cd-setup-plan.md 5.3). Protected by the VFS namespace lock. */
+#define STORAGE_LEASE_PHASE 32u
+#define STORAGE_LEASE_REASON 24u
+struct storage_lease {
+    uint32_t holder, state, generation; /* state: CIUKI_DISK_LEASE_* */
+    uint32_t drive, reasons;            /* published letter index and its mount reasons */
+    uint64_t reads, writes, flushes;    /* raw node sectors and flushes */
+    uint32_t io_active;                 /* raw requests in flight (holder threads) */
+    char phase[STORAGE_LEASE_PHASE], reason[STORAGE_LEASE_REASON];
+};
+struct storage_disk {
+    struct blkdev *dev;                 /* the slot's ATA device, set by storage_add_disk */
+    char model[41], serial[21], firmware[9];
+    bool lba48;
+    struct storage_lease lease;
+};
+struct storage_caller { uint32_t pid; bool setup_capability; };
 struct storage {
     struct block_cache cache;
     struct vfs vfs;
@@ -53,6 +71,7 @@ struct storage {
     unsigned next_drive;
     uint32_t sequence, writer_ticks;
     int writer_error;
+    struct storage_disk raw[STORAGE_DISKS];
 };
 int storage_setup(struct storage *, size_t cache_bytes);
 /* disk is the IDE slot, independent of discovery order. Only MBR primary
@@ -91,6 +110,26 @@ int storage_sync(void);
 struct pagefile;
 int storage_pagefile_bind(struct storage *, unsigned drive, const char *path);
 struct pagefile *storage_pagefile(void);
+
+/* f9-02 raw nodes /dev/ata0..3 (disklease.c). Results are 0, a byte count
+ * or a negative ABI errno. Authority is checked on every mutating call:
+ * the caller's Setup capability (EPERM) and the lease it holds (EACCES).
+ * No call takes a path in ordinary boots: they serve the device nodes only. */
+int storage_disk_open(struct storage *, unsigned disk);
+int storage_disk_io(struct storage *, unsigned disk, const struct storage_caller *, bool write,
+                    uint64_t offset, void *buffer, uint32_t bytes);
+int storage_disk_flush(struct storage *, unsigned disk, const struct storage_caller *);
+/* DISK_* requests on a record already copied into kernel memory. */
+int storage_disk_control(struct storage *, unsigned disk, const struct storage_caller *,
+                         uint32_t op, void *record, uint32_t size);
+void storage_disk_exit(struct storage *, uint32_t pid);      /* process death: revoke */
+bool storage_disk_write_denied(struct storage *, unsigned drive, uint32_t pid); /* namespace lock held */
+uint64_t storage_disk_writes(struct storage *, unsigned disk); /* raw + volume sectors written */
+/* mount.c helpers for disklease.c; namespace lock held, drive reserved. */
+bool storage_volume_pagefile(const struct storage *, const struct fat_volume *);
+int storage_publish_locked(struct storage *, unsigned disk, unsigned drive,
+                           const struct partition *, uint32_t *reasons);
+int storage_writer_start(struct storage *);
 
 /* Production probe helpers: no hardware or records in these decisions. */
 bool storage_probe_readonly(const char *selector, unsigned length);
