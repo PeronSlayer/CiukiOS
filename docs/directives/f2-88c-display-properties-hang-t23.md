@@ -12,3 +12,17 @@
 5. Host tests: the no-polling test, thumbnails in the image, input latency on the model, golden frames.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Write `build/codex/<id>-report.md`.
+
+## Lead note (2026-10-22 23:01): QEMU evidence
+
+`build/lead-scratch/qemu-control-probe-serial.txt` (current image, QEMU
+qemu-t23 profile, `scripts/test/control_display_probe.py`): `[control]
+display open ms=0 decode=pending`, then `[cpu] top=control#34:462k460s3,
+control#32:152k124s3` and `[control] display open ms=3300 decode=3220
+render=16 … ping_answered=23`. The decode worker spends almost all of its
+3.2 s **in the kernel** (460 of 462 ms per 2 s window are system time), not
+in the PNG decoder, and the UI thread too (124 of 152 ms). Find which kernel
+paths those are (the chunked file read with 1 ms sleeps, demand-zero faults
+of the multi-MB decode buffers, the trylock/futex path of libpthread, the
+SDK's malloc growing the heap page by page) with the host kernel models and
+remove them; on the T23 the same work never finishes.
