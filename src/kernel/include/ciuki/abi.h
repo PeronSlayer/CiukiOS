@@ -15,6 +15,7 @@
 #define CIUKI_ABI_H
 
 #include <stdint.h>
+#include <ciuki/input_abi.h>
 
 #define CIUKI_ABI_VERSION 1
 #define __CIUKI_ABI_VERSION__ CIUKI_ABI_VERSION

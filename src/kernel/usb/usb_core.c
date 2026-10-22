@@ -608,10 +608,10 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
                 if (d->low_speed || d->storage.bound || p[4] != 2) return -USB_EPROTO;
                 storage = &d->storage; storage->bound = true; storage->interface = p[2];
             }
-            if (!p[3] && p[5] == 3 && p[6] == 1 && (p[7] == 1 || p[7] == 2)) {
+            if (!p[3] && p[5] == 3 && (p[6] == 0 || (p[6] == 1 && (p[7] == 1 || p[7] == 2)))) {
                 if (count == USB_HID_MAX) return -ENOSPC;
                 hid = &d->hid[count++];
-                *hid = (struct usb_hid){.interface=p[2], .protocol=p[7]};
+                *hid = (struct usb_hid){.interface=p[2], .protocol=p[6]==1 ? p[7] : 0, .boot_capable=p[6]==1};
             }
         } else if (p[1] == 0x21 && hid) {
             if (size < 9 || p[5] < 1 || size < 6u + p[5] * 3u) return -USB_EPROTO;
@@ -635,7 +635,7 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
             }
             if (hid && (p[2] & 0x80) && (p[3] & 3) == 3) {
                 unsigned mps = le16(p + 4);
-                if (!(p[2] & 15) || (p[2] & 0x70) || !p[6] || mps > (d->low_speed ? 8u : 64u) || mps < (hid->protocol == 1 ? 8u : 3u) || hid->endpoint) return -USB_EPROTO;
+                if (!(p[2] & 15) || (p[2] & 0x70) || !p[6] || mps > (d->low_speed ? 8u : 64u) || mps < (hid->protocol == 1 ? 8u : hid->protocol == 2 ? 3u : 1u) || hid->endpoint) return -USB_EPROTO;
                 unsigned bit = 1u << (p[2] & 15);
                 if ((endpoints & bit) || (storage_endpoints & (bit<<16))) return -USB_EPROTO;
                 endpoints |= bit;
@@ -710,7 +710,13 @@ descriptor_ready:
     }
     for (unsigned i = 0; i < USB_HID_MAX; i++) if (d->hid[i].endpoint) {
         unsigned report_len = d->hid[i].report_length;
-        err = usb_hid_attach(d, &d->hid[i], report_len); if (err) goto failed;
+        err = usb_hid_attach(d, &d->hid[i], report_len);
+        if (err==-USB_ENOTSUP) {
+            klog("[usb] hid unsupported addr=%u interface=%u reason=report_layout",d->address,d->hid[i].interface);
+            if (!strncmp(d->reason,"unsupported_class",sizeof("unsupported_class"))) d->reason="hid_unsupported";
+            continue; /* An unhandled vendor interface must not detach its peers. */
+        }
+        if (err) goto failed;
         d->reason = "hid_ready";
     }
     if (d->storage.bound) {

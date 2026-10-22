@@ -29,6 +29,7 @@ def flags():
 
 def generate(inc,lib,work):
     abi=ABI.read_text(); shutil.copy2(ABI,inc/'ciuki/abi.h')
+    shutil.copy2(ABI.with_name('input_abi.h'),inc/'ciuki/input_abi.h')
     shutil.copy2(ROOT/'apps/desktop/protocol.h',inc/'ciuki/desktop.h')
     calls=re.findall(r'CIUKI_SYS_(\w+)\s*=\s*(\d+)',abi)
     defs=['/* Generated from ciuki/abi.h. */']
@@ -96,6 +97,7 @@ def main():
     for patch in patch_paths: run(['patch','--batch','--fuzz=0','-p1','-i',patch],cwd=src,stdout=subprocess.DEVNULL)
     shutil.copytree(ROOT/'sdk/sysroot-overlay/include',src/'newlib/libc/include',dirs_exist_ok=True)
     shutil.copy2(ABI,src/'newlib/libc/include/ciuki/abi.h')
+    shutil.copy2(ABI.with_name('input_abi.h'),src/'newlib/libc/include/ciuki/input_abi.h')
     cflags=flags()
     cc=work/'target-cc'; cc.write_text('#!/bin/sh\nexec '+shlex.join([tool_info['clang']['path'],*cflags,'-fuse-ld=lld','-nostdinc','-isystem',str(Path(run([tool_info['clang']['path'],'-print-resource-dir'],capture_output=True,text=True).stdout.strip())/'include'),'-isystem',str(src/'newlib/libc/include'),'-Wno-error','-Wno-deprecated-non-prototype','-Dasm=__asm__'])+' "$@"\n'); cc.chmod(0o755)
     env.update(CC=str(cc),CC_FOR_TARGET=str(cc),AR=tool_info['llvm-ar']['path'],AR_FOR_TARGET=tool_info['llvm-ar']['path'],RANLIB=tool_info['llvm-ranlib']['path'],RANLIB_FOR_TARGET=tool_info['llvm-ranlib']['path'],AS=str(cc),AS_FOR_TARGET=str(cc),LD=tool_info['ld.lld']['path'],LD_FOR_TARGET=tool_info['ld.lld']['path'],CFLAGS='-O2 -g')
@@ -136,7 +138,7 @@ def main():
     binpath=OUT/'bin'; binpath.mkdir(); shutil.copy2(ROOT/'sdk/bin/ciuki-cc',binpath/'ciuki-cc'); (binpath/'ciuki-cc').chmod(0o755)
     # Persist the actual recipe before wrapper inspection.
     manifest={'tools':tool_info,'newlib':source,'configure':configure,'flags':cflags,'newlib_compile_extra_flags':['-Wno-error','-Wno-deprecated-non-prototype','-Dasm=__asm__'],'port':'CiukiOS equivalent configure.host + libciuki hooks',
-              'sdk_repository':str(ROOT),'abi_sha256':digest(ABI),'patches':hashes,'build_seconds':None,'runtime_qualification':'not_run'}
+              'sdk_repository':str(ROOT),'input_abi_sha256':digest(ABI.with_name('input_abi.h')),'abi_sha256':digest(ABI),'patches':hashes,'build_seconds':None,'runtime_qualification':'not_run'}
     notice_dir=OUT/'licenses'; notice_dir.mkdir()
     shutil.copy2(src/'COPYING.NEWLIB',notice_dir/'COPYING.NEWLIB')
     shutil.copy2(ROOT/'sdk/LICENSE',notice_dir/'SDK-MIT.txt')

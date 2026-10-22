@@ -103,6 +103,90 @@ changing existing ownership or memory policy.
 
 ### Input
 
+#### f1-104 input extension, version 1
+
+The existing 40-byte `ciuki_input_event`, its types 1–6, input grant,
+single-consumer queue and physical resource claims stay byte compatible.
+`ciuki/input_abi.h` defines an independently versioned extension. New event
+types 7–12 are keyboard HID usage, consumer action, joystick axis, hat,
+button and device lifecycle. Their `value2` is a stable logical interface
+locator (1–256), `generation` is the USB device generation, and `lost_count`
+is the extension version (1). Keyboard usages are page 07h (0–255), with
+0/1 transitions; existing translated key/text events remain available.
+Consumer actions are volume up/down, mute, play/pause, next and previous
+(1–6), with 0/1 transitions and one action on each press. They never become
+scan codes. The desktop uses its existing mixer worker for volume and sends
+explicit transport actions to the running native Music Player.
+
+Axes X/Y/Z/Rx/Ry/Rz/slider/dial/wheel (0–8) are normalized to -32767..32767
+using per-interface minimum/centre/maximum calibration, initially derived
+from descriptor logical limits. Hats (0–3) are -1 neutral or 0–7 clockwise
+from north; four-way hats occupy even directions. Buttons (1–32) are 0/1.
+No joystick data is projected onto mouse events or physical guest I/O.
+
+`INPUT_HID_GET_CAPS` (4901h), `INPUT_HID_GET_STATE` (4902h) and
+`INPUT_HID_CALIBRATE` (4903h) use `ciuki_devctl` on the existing input grant.
+All structures start with uint32 version, size, device and generation;
+exact size/version and reserved zeros are checked before writing. GET_CAPS
+accepts generation zero for discovery; state/calibration require an exact
+generation. Locators encode host/device/interface record slots, not VID/PID,
+and are never reassigned before reboot. Capabilities retain keyboard usages,
+the six consumer actions, axes, hats, buttons, logical/physical limits and
+units. State queries recover held state after queue RESYNC. Detach publishes
+releases, neutral axes/hats, then lifecycle value 0; capabilities remain
+queryable with attached=0. Calibration requires the input grant's existing
+exclusive authority and minimum < centre < maximum within logical limits.
+Queries and publication use the existing UP synchronization boundary.
+Publication runs under the existing host transfer mutex/preemption hold;
+queries copy stable records inside the short UP IRQ exclusion. These ioctls
+do not grant an application, DOS VM or interface its own physical HC lease.
+Boot fallback preserves its legacy event stream and allocation footprint;
+the versioned keyboard state query still exposes its held HID usages.
+
+| Version-1 record | Bytes | Selected fixed offsets |
+| --- | ---: | --- |
+| `ciuki_hid_caps` | 340 | keyboard bitmap 56; axis metadata 88 |
+| `ciuki_hid_state` | 116 | keyboard bitmap 32; normalized axes 64; hats 100 |
+| `ciuki_hid_calibration` | 32 | axis 16; minimum/centre/maximum 20/24/28 |
+
+Wire alignment is four bytes on host and i686. Invalid size/version/reserved
+fields return EINVAL; missing devices and stale generations return ENODEV;
+invalid user ranges return EFAULT. Discovery metadata retains descriptor
+limits; calibration changes normalized state, not those discovery facts.
+
+Parser limits are explicit: 512 descriptor bytes, eight report IDs, 32 data
+main items, 64 usage spans, four global pushes, eight nested collections,
+and 16-byte input/output/feature reports (including the ID). Oversize or
+unsupported layouts fail transactionally without modifying the destination.
+Long items and alternative usage delimiters are refused. Input, Output and
+Feature offsets are independent. Unknown application/vendor collections are
+ignored while their offsets and global state are retained. Only one joystick
+application per interface is supported. Boot-capable keyboards/mice retain
+their proven boot fallback. Report-only devices receive no SET_PROTOCOL.
+LED reports use their descriptor's Output offsets and ID through SET_REPORT.
+Output reports with unrelated writable fields are skipped instead of zeroing
+vendor state. Unsupported report-only interfaces retain an explicit
+unsupported flag and diagnostic; compatible peer interfaces remain active.
+Descriptor allocations are split into a 1,868-byte layout and a 900-byte
+i686 state object (2,048/1,024-byte heap classes), respecting the existing
+2,040-byte heap payload maximum. Allocation failure keeps a boot keyboard's
+fallback. Successful layouts remain with monotonic device records after
+detach; failed attachment frees both allocations.
+
+Research decision: [HID 1.11](https://www.usb.org/sites/default/files/documents/hid1_11.pdf)
+§§6.2.2, 7.2, 8 and Appendix B govern parsing, arrays, LEDs and fallback;
+[HUT 1.12](https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf)
+§§4, 10, 11, 12 and 15 govern usages, hats and explicit consumer actions.
+Linux v6.12 [hid-core.c](https://github.com/torvalds/linux/blob/v6.12/drivers/hid/hid-core.c)
+and [hid-input.c](https://github.com/torvalds/linux/blob/v6.12/drivers/hid/hid-input.c)
+were consulted for range validation and usage/hat mapping, not copied.
+The old mouse parser's signed relative fields and first-three-button
+projection remain the compatibility policy. The existing 48-byte DMA slot
+already has 16 payload bytes at offset 32; using those bytes changes no DMA,
+queue, host/device or physical resource limit. Implementation measurements
+and host evidence are recorded in `build/codex/f1-104-report.md`; the lead
+reviews this ABI at integration. Hardware qualification remains separate.
+
 [Microsoft's PS/2 wheel and five-button specification](https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/keyboard-and-mouse-hid-client-drivers#activating-buttons-4-5-and-wheel-on-ps2-mice)
 and Linux `psmouse-base.c:intellimouse_detect/im_explorer_detect` agree:
 send sample rates 200,100,80 and read ID 3; then 200,200,80 and read ID 4.

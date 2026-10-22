@@ -303,6 +303,10 @@ void desktop_input_event(const struct input_event *in, uint32_t lost, uint32_t b
     *out = (struct ciuki_input_event){ .sequence = (uint32_t)in->sequence, .source = in->source,
         .generation = in->generation, .monotonic_ns = in->tick * UINT64_C(1000000) };
     switch (in->type) {
+    case INPUT_USAGE: case INPUT_CONSUMER: case INPUT_JOY_AXIS:
+    case INPUT_JOY_HAT: case INPUT_JOY_BUTTON: case INPUT_DEVICE:
+        out->type=in->type; out->code=in->code; out->value=in->value;
+        out->value2=(int32_t)in->device; out->lost_count=CIUKI_HID_VERSION; break;
     case INPUT_KEY: out->type = CIUKI_INPUT_KEY; out->code = in->code; out->value = in->value; break;
     case INPUT_TEXT: out->type = CIUKI_INPUT_TEXT; out->code = in->code; break;
     case INPUT_REL:
@@ -322,6 +326,34 @@ struct input_operation {
     struct desktop_description *grant;
     struct ua_pin *pin;
 };
+extern int usb_hid_query(uint32_t, void *) __attribute__((weak));
+int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t address, uint32_t bytes)
+{
+    int err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
+    if (err) return err;
+    unsigned expected=command==INPUT_HID_GET_CAPS ? sizeof(struct ciuki_hid_caps) :
+        command==INPUT_HID_GET_STATE ? sizeof(struct ciuki_hid_state) :
+        command==INPUT_HID_CALIBRATE ? sizeof(struct ciuki_hid_calibration) : 0;
+    if (!expected) return -ENOTTY;
+    if (bytes!=expected) return -EINVAL;
+    union { struct ciuki_hid_caps caps; struct ciuki_hid_state state;
+        struct ciuki_hid_calibration calibration; uint32_t header[4]; } record;
+    struct ua_pin pin;
+    err=ua_pin(p->memory,&pin,address,bytes,true);
+    if (err) return err;
+    err=copy_from_user(&record,address,bytes);
+    if (!err && (record.header[0]!=CIUKI_HID_VERSION || record.header[1]!=bytes ||
+        (command==INPUT_HID_GET_CAPS && record.caps.reserved) ||
+        (command==INPUT_HID_GET_STATE && record.state.reserved))) err=-EINVAL;
+    if (!err) {
+        uint32_t flags=irq_save();
+        err=usb_hid_query ? usb_hid_query(command,&record) : -ENODEV;
+        irq_restore(flags);
+    }
+    if (!err) err=copy_to_user(address,&record,bytes);
+    ua_unpin(p->memory,&pin);
+    return err;
+}
 static void input_cleanup(void *arg)
 {
     struct input_operation *op = arg;

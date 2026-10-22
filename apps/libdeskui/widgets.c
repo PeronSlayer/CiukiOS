@@ -1109,6 +1109,12 @@ static void key_down(struct du_ui *u, unsigned code)
 void du_input(struct du_ui *u, const struct ciuki_input_event *e)
 {
     if (e->monotonic_ns > u->now) u->now = e->monotonic_ns;
+    if (e->type==CIUKI_INPUT_CONSUMER) {
+        if (e->lost_count==CIUKI_HID_VERSION && e->value==1 &&
+            (unsigned)e->code>=CIUKI_CONSUMER_PLAY_PAUSE && (unsigned)e->code<=CIUKI_CONSUMER_PREVIOUS)
+            du_emit(u,(struct du_event){.type=DU_EV_CONSUMER,.key=(unsigned)e->code});
+        return;
+    }
     if (e->type == CIUKI_INPUT_RESYNC) { du_release(u); return; }
     if (e->type == CIUKI_INPUT_KEY) {
         if (e->code < 0 || e->code > 0x200) return;

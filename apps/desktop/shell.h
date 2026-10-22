@@ -117,6 +117,7 @@ int desk_shell_button(struct desktop *, int button, int down);
 void desk_shell_motion(struct desktop *);
 unsigned desk_shell_cursor(const struct desktop *);
 int desk_shell_key(struct desktop *, int code, int value);
+int desk_shell_consumer(struct desktop *, unsigned action, int value);
 int desk_shell_wheel(struct desktop *, int detents);   /* wheel over the focused built-in window; 1 when consumed */
 int desk_internal_click(struct desktop *, int index, int32_t x, int32_t y);
 void desk_shell_scale_motion(struct desktop *, int32_t *dx, int32_t *dy);

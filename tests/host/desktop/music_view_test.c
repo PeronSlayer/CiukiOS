@@ -52,5 +52,14 @@ int main(int argc, char **argv)
     memset(s.error_path,'a',sizeof(s.error_path)-1); s.error_path[sizeof(s.error_path)-1]=0;
     music_update(&app,&s);
     assert(strstr(du_get(&ui,M_STATUS)->text,"...:") && du_text_width(du_get(&ui,M_STATUS)->text)<420);
+    struct ciuki_input_event consumer={.type=CIUKI_INPUT_CONSUMER,.value=1,.value2=1,.lost_count=1};
+    s.state=MUSIC_PLAYING; music_update(&app,&s);
+    consumer.code=CIUKI_CONSUMER_PLAY_PAUSE; du_input(&ui,&consumer); assert(last.action==MUSIC_PAUSE);
+    s.state=MUSIC_PAUSED; music_update(&app,&s); du_input(&ui,&consumer); assert(last.action==MUSIC_PLAY);
+    consumer.code=CIUKI_CONSUMER_NEXT; du_input(&ui,&consumer); assert(last.action==MUSIC_NEXT);
+    consumer.code=CIUKI_CONSUMER_PREVIOUS; du_input(&ui,&consumer); assert(last.action==MUSIC_PREV);
+    unsigned prior=sends; consumer.value=0; du_input(&ui,&consumer); assert(sends==prior);
+    consumer.value=1; consumer.lost_count=99; du_input(&ui,&consumer); assert(sends==prior);
+    puts("PASS F1-104 consumer controls -> toolkit explicit event -> production Music Player commands");
     assert(sends>=7); du_release(&ui); puts("PASS music UI: controls, shortcuts, master volume, resize and renders"); return 0;
 }

@@ -6,9 +6,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "sync.h"
+#include <ciuki/input_abi.h>
 
 #define INPUT_CAPACITY 256u
 enum input_type { INPUT_KEY = 1, INPUT_REL, INPUT_BTN, INPUT_TEXT, INPUT_RESYNC };
+enum input_hid_type { INPUT_USAGE = 7, INPUT_CONSUMER, INPUT_JOY_AXIS,
+    INPUT_JOY_HAT, INPUT_JOY_BUTTON, INPUT_DEVICE };
 enum input_axis { INPUT_X, INPUT_Y, INPUT_WHEEL };
 enum input_button { INPUT_LEFT, INPUT_RIGHT, INPUT_MIDDLE };
 enum input_source { INPUT_NATIVE = 1, INPUT_FIRMWARE, INPUT_USB };
@@ -27,6 +30,8 @@ void input_devices_changed(enum input_source source, bool attached);
 /* USB producer: balanced transitions per HID interface, thread context.
  * Merges with native PS/2 held state, even when i8042 activation failed. */
 void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick);
+void input_hid_event(uint16_t type, uint16_t code, int32_t value, uint32_t device,
+                     gen_t generation, uint64_t tick);
 
 #define INPUT_KEY_A 0x1Eu
 #define INPUT_KEY_PAUSE 0x200u
@@ -38,6 +43,7 @@ struct input_event {
     gen_t generation;
     uint16_t source, flags;
     uint64_t lost_count; /* RESYNC only; cumulative discarded events */
+    uint32_t device; /* HID extension only; stable logical interface locator */
 };
 struct input_stats {
     uint64_t overflow, resync, duplicates, repeats, bytes, errors;

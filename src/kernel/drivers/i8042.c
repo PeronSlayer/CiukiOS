@@ -250,6 +250,21 @@ static void usb_event_drop(const char *reason, uint16_t type, uint16_t code,
              reason, type, code, value, generation);
 }
 
+void input_hid_event(uint16_t type, uint16_t code, int32_t value, uint32_t device,
+                     gen_t generation, uint64_t tick)
+{
+    if (!generation || !device || device>CIUKI_HID_DEVICES ||
+        type<INPUT_USAGE || type>INPUT_DEVICE || drivers_input_firmware()) return;
+    uint32_t f=irq_save();
+    native.event_source=INPUT_USB; native.event_generation=generation;
+    /* HID extension has its own logical identity; DOS projection is separate. */
+    if (native.queue.stats.pending==INPUT_CAPACITY) queue_resync(&native,tick);
+    queue_event(&native,type,code,value,tick,0);
+    struct input_event *e=&native.queue.ring[(native.queue.tail+INPUT_CAPACITY-1)%INPUT_CAPACITY];
+    e->device=device;
+    native.event_source=0; native.event_generation=0;
+    irq_restore(f);
+}
 void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
 {
     const char *drop = !generation ? "generation" :

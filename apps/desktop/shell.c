@@ -2741,6 +2741,35 @@ static void icon_select(struct desktop *d, int icon)
     d->sh.icon_selected = icon;
     if (icon >= 0) damage(d, d->sh.icons[icon].box);
 }
+static int volume_action(struct desktop *d, unsigned action, int value, int notify)
+{
+    if (action<CIUKI_CONSUMER_VOLUME_UP || action>CIUKI_CONSUMER_MUTE) return 0;
+    if (d->sh.mixer_state!=2) return 0;
+    if (value) {
+        if (action==CIUKI_CONSUMER_MUTE) {
+            if (value!=1) return 1;
+            d->sh.muted=!d->sh.muted;
+        } else {
+            int v=d->sh.volume+(action==CIUKI_CONSUMER_VOLUME_UP ? 1 : -1);
+            if (v<0) v=0;
+            if (v>100) v=100;
+            if (v==d->sh.volume) return 1;
+            d->sh.volume=v;
+        }
+        d->sh.want_mixer=1;
+        if (notify) {
+            char text[64]; snprintf(text,sizeof(text),"Volume: %d%%%s",d->sh.volume,d->sh.muted ? " (muted)" : "");
+            desk_shell_notify(d,"Volume",text,DU_DLG_ICON_INFO,SH_NOTIFY_VOLUME);
+        }
+        desk_shell_volume_damage(d);
+    }
+    return 1;
+}
+int desk_shell_consumer(struct desktop *d, unsigned action, int value)
+{
+    if (action<CIUKI_CONSUMER_VOLUME_UP || action>CIUKI_CONSUMER_MUTE) return 0;
+    (void)volume_action(d,action,value,1); return 1;
+}
 int desk_shell_key(struct desktop *d, int code, int value)
 {
     if (!d->shell) return 0;
@@ -2880,28 +2909,11 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (value && code==DU_KEY_UP && d->sh.media_scroll) { d->sh.media_scroll--; damage(d,outer(media_popup(d))); return 1; }
     }
     if (d->sh.network_open && code == DU_KEY_ESC) { if (value) { d->sh.network_open = 0; damage(d, outer(network_popup(d))); } return 1; }
-    if (d->sh.mixer_state == 2 && (code == 0x130 || code == 0x12e || code == 0x120 ||
-        (d->sh.volume_open && (code == DU_KEY_UP || code == DU_KEY_DOWN)))) {
-        if (value) {
-            if (code == 0x120) {
-                if (value != 1) return 1; /* mute is a toggle, not a repeating step */
-                d->sh.muted = !d->sh.muted;
-            }
-            else {
-                int v = d->sh.volume + ((code == 0x130 || code == DU_KEY_UP) ? 1 : -1);
-                if (v < 0) v = 0;
-                if (v > 100) v = 100;
-                if (v == d->sh.volume) return 1;
-                d->sh.volume = v;
-            }
-            d->sh.want_mixer = 1;
-            if (code==0x130 || code==0x12e || code==0x120) {
-                char text[64]; snprintf(text,sizeof(text),"Volume: %d%%%s",d->sh.volume,d->sh.muted ? " (muted)" : "");
-                desk_shell_notify(d,"Volume",text,DU_DLG_ICON_INFO,SH_NOTIFY_VOLUME);
-            }
-            damage(d,outer(volume_popup(d))); damage(d,tray_box(d));
-        }
-        return 1;
+    if (code==0x130 || code==0x12e || code==0x120 ||
+        (d->sh.volume_open && (code==DU_KEY_UP || code==DU_KEY_DOWN))) {
+        unsigned action=code==0x120 ? CIUKI_CONSUMER_MUTE :
+            code==0x130 || code==DU_KEY_UP ? CIUKI_CONSUMER_VOLUME_UP : CIUKI_CONSUMER_VOLUME_DOWN;
+        if (volume_action(d,action,value,code!=DU_KEY_UP && code!=DU_KEY_DOWN)) return 1;
     }
     if (d->sh.volume_open && code == DU_KEY_ESC) { if (value) { d->sh.volume_open = 0; damage(d, outer(volume_popup(d))); } return 1; }
     if (d->sh.notification.active && code==DU_KEY_ESC) {
