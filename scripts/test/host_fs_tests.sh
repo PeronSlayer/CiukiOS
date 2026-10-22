@@ -16,6 +16,12 @@ missing=0
 for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
+# Focused entry keeps the filesystem runner lock and sanitizer policy.
+if [[ ${1:-} == --libsetup ]]; then
+    ((missing == 0)) || exit 1
+    bash scripts/test/host_libsetup_tests.sh
+    exit 0
+fi
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
@@ -187,6 +193,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -o build/host/fs/libdisk/link_test
 build/host/fs/libdisk/link_test
 rm -rf build/host/fs/libdisk build/host/fs/libdisk_test
+# f9-04: installation transaction over the same production FAT/VFS/lease.
+bash scripts/test/host_libsetup_tests.sh
 # f0-49: production pagefile adapter: slot map oracle, in-place growth and
 # shrink, exclusivity, reserved records, I/O failures and power cuts.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
