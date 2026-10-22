@@ -444,3 +444,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-98c-event-driven-native-apps](f2-98c-event-driven-native-apps.md) | F2 | gpt-6.1-sol / high | written 2026-10-23 00:09 (du_run and every native app blocking on events; after f2-88c) |
 | [f3-64-persistent-dos-saves](f3-64-persistent-dos-saves.md) | F3 | gpt-6.1-sol / xhigh | written 2026-10-23 00:17 (per-title persistent overlays: saves kept across sessions, crash-consistent, reset/export, quota; after f3-63) |
 | [f1-106b-ehci-tt-and-interrupt-hid](f1-106b-ehci-tt-and-interrupt-hid.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-23 00:20 (EHCI split transactions behind USB 2.0 hubs; interrupt-driven idle HID, no 1 kHz poll) |
+| [f2-101b-savage-driver-relocation-keyed-markers](f2-101b-savage-driver-relocation-keyed-markers.md) | F2 | gpt-6.1-sol / high | written 2026-10-23 00:39 (part B: Savage files into video/s3savage, keyed attempt markers with legacy migration) |
+| [f2-101d-display-commands-part-c](f2-101d-display-commands-part-c.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:39 (part C: MONO/INVERT/KEYED/SCALED/LINE, clip lists, v1 batches and fences, colour cursor, clients) |
+| [f2-103-radeon-r100](f2-103-radeon-r100.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:39 (first family port: Radeon R100/RV100 MMIO 2D) |
+| [f2-114-mach64-rage-mobility](f2-114-mach64-rage-mobility.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:39 (second family port: Mach64/Rage Mobility (E500)) |
