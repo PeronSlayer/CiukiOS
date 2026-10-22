@@ -707,6 +707,13 @@ static int flip_during_row(void *arg, unsigned y, const void *pixels, unsigned b
     if (y == 100) port_out(changing_video, 0x3D4, 2, 0x010D);
     return e;
 }
+static void seed_chain4_flips(struct dosvm *v)
+{
+    /* Distinguish both low- and high-byte start-address changes. Blank
+     * pages correctly produce no damage under the exact comparison. */
+    for (unsigned at = 0; at < 65536; at++)
+        linear_store(v, at, (uint8_t)(at / 4 + at / 1024));
+}
 static void test_bounded_present(void)
 {
     unsigned before = preempt_points;
@@ -727,9 +734,11 @@ static void test_bounded_present(void)
     /* 60 Hz timing gives a 30 Hz ceiling. Changes survive deferral. */
     v->vga.crtc[6] = 0x0B; v->vga.crtc[7] = (v->vga.crtc[7] & ~0x21u) | 0x20u;
     v->vga.display_changes++; v->vga.changes++;
+    linear_store(v, 100, 201); /* Timing alone changes no displayed pixels. */
     CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 60, &d));
     CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 63, &d) == 1 && v->video_present_rate == 30);
     int10(v, 0x13, 0, 0, 0);
+    seed_chain4_flips(v);
     g_ticks = 100;
     port_out(v, 0x3D4, 2, 0x010C);
     g_ticks = 114; port_out(v, 0x3D4, 2, 0x020C);
@@ -752,7 +761,9 @@ static void test_bounded_present(void)
     (void)dosvm_vga_present(v, capture_row, frame_buffer, 340, &d);
     CHECK(v->video_presented && v->video_display != v->vga.display_changes);
     CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 341, &d));
-    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 380, &d) == 1);
+    uint32_t samples = v->present_samples;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 380, &d) == 1 &&
+          v->present_samples == samples + 1 && v->video_display == v->vga.display_changes);
     speed_compare_scanout(v);
     int10(v, 0x13, 0, 0, 0); linear_store(v, 100, 200);
     CHECK(dosvm_vga_present(v, flip_during_row, frame_buffer, 420, &d) == 1 && d.height == 480);
@@ -792,6 +803,75 @@ static void test_live_scanout(void)
     destroy(v, true); empty();
     puts("f3-41 live scanout: stores between row groups appear this/next sample, deferred dirt and exact comparison recover both rows PASS");
 }
+static void test_chain4_changed_rows(void)
+{
+    static uint8_t previous[DOSVM_VIDEO_HEIGHT][DOSVM_VIDEO_WIDTH];
+    static const unsigned columns[] = {0, 1, 2, 3, 100, 101, 102, 103, 316, 317, 318, 319};
+    for (unsigned pan = 0; pan < 8; pan++) for (unsigned split = 0; split < 2; split++) {
+        struct dosvm *v = create(); int10(v, 0x13, 0, 0, 0);
+        v->vga.attr[19] = pan; v->vga.attr[16] |= 0x20;
+        v->vga.crtc[12] = 0xff; v->vga.crtc[13] = 0xe0;
+        v->vga.crtc[24] = split ? 79 : 255;
+        if (split) { v->vga.crtc[7] &= ~0x10u; v->vga.crtc[9] &= ~0x40u; }
+        v->vga.display_changes++; v->vga.changes++;
+        cvga_geometry g; CHECK(cvga_get_geometry(&v->vga, &g) && g.width == 320 && g.height == 200);
+        struct ciuki_rect damage;
+        uint64_t tick = 0;
+        CHECK(dosvm_vga_present(v, capture_row, frame_buffer, tick, &damage) == 1);
+        for (unsigned y = 0; y < g.height; y++)
+            CHECK(cvga_render_row8(&v->vga, y, previous[y], sizeof(previous[y]), 0) == g.width);
+        for (unsigned bottom = 0; bottom < 2; bottom++) for (unsigned c = 0; c < ARRAY_SIZE(columns); c++) {
+            unsigned base, shift, x = columns[c];
+            CHECK(cvga_chain4_row(&v->vga, bottom ? 199 : 0, &base, &shift));
+            unsigned plane = (x + shift) & 3, at = (base + ((x + shift) / 4) * 4) & 0xffffu;
+            uint8_t pixel = v->vga.plane[plane][at] ? 0 : 15;
+            cvga_store_plane(&v->vga, plane, at, pixel);
+            uint32_t expected[15] = {0};
+            unsigned rows = 0, first = DOSVM_VIDEO_HEIGHT, last = 0;
+            for (unsigned y = 0; y < g.height; y++) {
+                uint8_t indexes[DOSVM_VIDEO_WIDTH];
+                CHECK(cvga_render_row8(&v->vga, y, indexes, sizeof(indexes), 0) == g.width);
+                if (memcmp(previous[y], indexes, g.width)) {
+                    unsigned dest = 40 + y * 2;
+                    expected[dest / 32] |= 1u << (dest % 32);
+                    expected[(dest + 1) / 32] |= 1u << ((dest + 1) % 32);
+                    rows += 2; if (dest < first) first = dest; last = dest + 2;
+                }
+                memcpy(previous[y], indexes, g.width);
+            }
+            unsigned before = v->perf.rows;
+            tick += 40;
+            CHECK(rows && dosvm_vga_present(v, capture_row, frame_buffer, tick, &damage) == 1);
+            CHECK(v->perf.rows == before + rows && damage.dst_y == (int32_t)first && damage.height == last - first);
+            CHECK(!memcmp(v->video_rows, expected, sizeof(expected)));
+            speed_compare_scanout(v);
+            /* Rewriting the same bytes must not invent a presented frame. */
+            cvga_store_plane(&v->vga, plane, at, pixel); tick += 40;
+            CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, tick, &damage) && v->perf.rows == before + rows);
+        }
+        /* A changed byte in a chain-4 plane's unused gaps is not damage. */
+        unsigned before = v->perf.rows;
+        cvga_store_plane(&v->vga, 0, 1, 15); tick += 40;
+        CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, tick, &damage) && v->perf.rows == before);
+        destroy(v, true); empty();
+    }
+    /* Start-address changes between identical black pages keep the fast
+     * sampling policy, but must not manufacture damage or surface writes. */
+    struct dosvm *v = create(); int10(v, 0x13, 0, 0, 0);
+    struct ciuki_rect damage;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 0, &damage) == 1);
+    unsigned before = v->perf.rows;
+    for (unsigned n = 1; n <= 73; n++) {
+        uint64_t tick = n * vga_frame_us(&v->vga) / 1000;
+        g_ticks = tick; port_out(v, 0x3D4, 2, (n << 8) | 0x0D);
+        g_ticks++; port_out(v, 0x3D4, 2, (((n % 3) + 1) << 8) | 0x0C);
+        CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, tick + 1, &damage) && !damage.height);
+        for (unsigned i = 0; i < ARRAY_SIZE(v->video_rows); i++) CHECK(!v->video_rows[i]);
+    }
+    CHECK(v->perf.rows == before && v->video_present_rate == 70);
+    destroy(v, true); empty();
+    puts("F2-98b-fix1 chain-4: 384 incremental updates, four planes, all pans, split/wrap, exact rows and scalar golden, unchanged/gap stores PASS");
+}
 static void test_present_rates(void)
 {
     struct dosvm *v = create(); struct ciuki_rect d;
@@ -807,9 +887,13 @@ static void test_present_rates(void)
             linear_store(v, 100, (uint8_t)tick);
             frames += dosvm_vga_present(v, capture_row, frame_buffer, tick, &d) == 1;
         }
+        printf("mode 13h cadence: refresh=%u frames=%u expected=%u\n",
+               hz ? 60u : 70u, frames, hz ? 30u : 35u);
+        fflush(stdout);
         CHECK(frames == (hz ? 30u : 35u));
     }
     int10(v, 0x13, 0, 0, 0);
+    seed_chain4_flips(v);
     CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 0, &d) == 1);
     unsigned frames = 0;
     for (unsigned n = 1; n <= 73; n++) {
@@ -819,6 +903,8 @@ static void test_present_rates(void)
         int e = dosvm_vga_present(v, capture_row, frame_buffer, tick + 1, &d);
         if (n > 3) frames += e == 1;
     }
+    printf("mode 13h flips: frames=%u expected=70 present_rate=%u\n", frames, v->video_present_rate);
+    fflush(stdout);
     CHECK(frames == 70 && v->video_present_rate == 70);
     destroy(v, true); empty();
     puts("f3-41 cadence: 1 kHz polling gives 35/30 updates per second; 70 refresh-spaced flips after warm-up, split low/high writes PASS");
@@ -844,5 +930,5 @@ static void test_bounded_vbe(void)
     puts("f3-41 VBE: four-row batches, mode/extent revalidation after yield, VGA retry PASS");
 }
 static void test_speed(void)
-{ test_present_rates(); test_bounded_present(); test_live_scanout(); test_bounded_vbe(); test_speed_window(); test_speed_accounting(); test_perf_ranking(); test_chain4_conversion(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
+{ test_chain4_changed_rows(); test_present_rates(); test_bounded_present(); test_live_scanout(); test_bounded_vbe(); test_speed_window(); test_speed_accounting(); test_perf_ranking(); test_chain4_conversion(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
   test_doom_column_replay(); test_modex_conversion(); test_planar_changed_rows(); test_planar_dirty_bitmap(); test_planar_rep_and_pm_burst(); test_planar_strings_differential(); }

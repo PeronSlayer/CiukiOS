@@ -813,10 +813,11 @@ static uint32_t rgb(const cvga_state *g, uint8_t index)
     uint32_t r = (p[0] << 2) | (p[0] >> 4), gr = (p[1] << 2) | (p[1] >> 4), b = (p[2] << 2) | (p[2] >> 4);
     return (r << 16) | (gr << 8) | b;
 }
-/* Retain the actual displayed Mode X/Y bytes, grouped by plane for exact
- * contiguous comparisons. The total of the four spans is exactly width,
- * including partial dots from pan. Do not confuse a dirty PTE with changed
- * pixels, or a CRTC flip with changed palette/geometry. */
+/* Retain the actual displayed indexed bytes, grouped by plane. Mode X/Y
+ * spans are contiguous; chain-4 uses every fourth byte in each plane.
+ * The total of the four spans is exactly width, including partial dots
+ * from pan. Do not confuse a dirty PTE with changed pixels, or a CRTC flip
+ * with changed palette/geometry. */
 static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsigned y, unsigned width, bool force)
 {
     unsigned base = v->video_row_base[y], pan = v->video_row_pan[y];
@@ -827,6 +828,16 @@ static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsign
         unsigned first = (p + 4 - (pan & 3)) & 3;
         if (first >= width) continue;
         unsigned count = (width - first + 3) / 4;
+        if (v->video_chain4) {
+            unsigned at = (base + ((pan + first) / 4) * 4) & 0xffffu;
+            for (unsigned x = 0; x < count; x++, at = (at + 4) & 0xffffu) {
+                uint8_t index = scan->plane[p][at];
+                changed |= previous[x] != index;
+                previous[x] = index;
+            }
+            previous += count;
+            continue;
+        }
         unsigned at = (base + (pan + first) / 4) & 0xffffu;
         unsigned n = CVGA_PLANE_SIZE - at;
         if (n > count) n = count;
@@ -914,6 +925,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     memcpy(v->video_taken, v->vga.dirty, sizeof(v->video_taken));
     memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
     uint32_t display = v->vga.display_changes, changes = v->vga.changes;
+    uint8_t dac_mask = v->vga.dac_mask;
     uint32_t starts = v->video_starts;
     unsigned phase = ((tick / DOSVM_BLINK_TICKS) & 1 ? 0 : CVGA_BLINK_VISIBLE) |
                      ((tick / DOSVM_CURSOR_TICKS) & 1 ? 0 : CVGA_CURSOR_VISIBLE);
@@ -1041,7 +1053,9 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     v->video_changes = changes;
     v->video_seen_start = starts;
     v->video_geometry = g;
-    v->video_dac_mask = scan->dac_mask;
+    /* A mask change across a yield must stay pending with its display
+     * generation, even if some live rows already used the new mask. */
+    v->video_dac_mask = dac_mask;
     v->video_presented = !restart;
     v->perf.present_cycles += dosvm_perf_task_clock() - begin;
     if (!last) return 0;
