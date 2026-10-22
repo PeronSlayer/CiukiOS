@@ -4730,6 +4730,12 @@ struct du_ui {
 dirty=3: union of clipped client invalidations
 
 ```c
+struct du_rect rendered;
+```
+
+the region the last du_render drew
+
+```c
 unsigned cursor;
 ```
 
@@ -4875,8 +4881,12 @@ int manual_damage;
 
 application combines ordinary damage with its frame request
 
+f4-37 opt-in for clients that draw only inside du_render: present
+compares and copies only the region it drew, not the whole surface.
+
 ```c
-uint32_t server_pid, ping_serial;
+int present_rendered;
+    uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
 ```
