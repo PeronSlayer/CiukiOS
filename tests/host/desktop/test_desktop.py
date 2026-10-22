@@ -471,34 +471,49 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-async-test"
             icons = load("control_async_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/control_async_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
+            sources = ["tests/host/desktop/control_async_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             ft = load("control_async_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
-                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
+                            '-DCP_THUMB_DIR="thumbnails"', "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-I", str(ROOT / "tests/host/desktop"), "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
                             *ft.includes(), *(str(ROOT / s) for s in sources), str(library), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
-            result = subprocess.run([str(binary)], check=False, env=env, capture_output=True, text=True)
+            image = load("control_async_image", ROOT / "scripts/build_image.py")
+            image.wallpaper_thumbnail_payloads(folder / "thumbnails")
+            portrait = load("control_async_portrait", ROOT / "apps/desktop/convert_portrait.py")
+            (folder / "portrait.xrgb").write_bytes(portrait.convert(ROOT / "assets/brand/ciuki-logo.png"))
+            result = subprocess.run([str(binary), str(folder), str(folder / "portrait.xrgb")], check=False, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS control async display", result.stdout)
+            frames = {p.stem: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob("control-thumbnail-*.xrgb")}
+            self.assertEqual(frames, json.loads((ROOT / "tests/host/desktop/control-thumbnail-goldens.json").read_text()))
         print(result.stdout.strip())
 
     def test_control_decoder_worker(self):
-        """f2-88b: the preview worker never makes the UI thread wait."""
+        """f2-88c: real completion wait, single CPU and built-in thumbnail path."""
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="control-decoder-", dir=parent) as temp:
             binary = Path(temp) / "control-decoder-test"
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
-            sources = ["tests/host/desktop/control_decoder_test.c", "apps/control/decoder.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c",
+            sources = ["tests/host/desktop/control_decoder_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/display.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c",
                        "apps/desktop/settings.c", "apps/desktop/theme.c", "apps/desktop/protocol.c", "apps/desktop/compositor.c", "apps/desktop/sounds.c"]
-            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L", "-fsanitize=address,undefined",
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L", "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                            '-DCP_THUMB_DIR="thumbnails"',
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
                             *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
-            result = subprocess.run([str(binary)], check=False, env=env, capture_output=True, text=True)
+            thumbs = Path(temp) / "thumbnails"
+            thumbs.mkdir()
+            for i in range(1, 4):
+                (thumbs / f"Ciuk{i}-192x144.raw").write_bytes(bytes((0x33, 0x22, 0x11, 0)) * (192 * 144))
+            # 2x2 24-bit BMP, two padded scanlines.
+            import struct
+            bmp = struct.pack("<2sIHHI", b"BM", 70, 0, 0, 54) + struct.pack("<IiiHHIIiiII", 40, 2, 2, 1, 24, 0, 16, 0, 0, 0, 0)
+            (Path(temp) / "user.bmp").write_bytes(bmp + bytes((0x33, 0x22, 0x11, 0x66, 0x55, 0x44, 0, 0)) * 2)
+            result = subprocess.run([str(binary), temp, str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png")], check=False, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS control decoder", result.stdout)
         print(result.stdout.strip())
@@ -656,6 +671,7 @@ class DesktopTests(unittest.TestCase):
                                         "/System/hwids/pci-ids.json", "/System/hwids/usb-ids.json",
                                         "/system/sounds/scheme.cfg",
                                         *(f"/System/cache/wallpaper/{n}" for n in metadata["wallpaper_cache"]["files"]),
+                                        *(f"/System/cache/wallpaper/thumbnails/{n}" for n in metadata["wallpaper_thumbnails"]["files"]),
                                         *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "scheme.cfg")}
         self.assertEqual(set(sources), expected_paths)
         self.assertTrue({"/Programs", "/System", "/System/Win32", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
@@ -680,6 +696,8 @@ class DesktopTests(unittest.TestCase):
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())
+            elif r["path"].startswith("/System/cache/wallpaper/thumbnails/"):
+                self.assertEqual(r["sha256"], metadata["wallpaper_thumbnails"]["files"][Path(r["path"]).name]["sha256"])
             elif r["path"].startswith("/System/cache/wallpaper/"):
                 self.assertEqual(r["sha256"], metadata["wallpaper_cache"]["files"][Path(r["path"]).name]["sha256"])
             else:

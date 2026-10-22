@@ -26,6 +26,7 @@ unsigned cu_mbox_bytes(void);
 unsigned cu_mbox_count(sys_mbox_t);
 unsigned cu_change_snapshot(void);
 void cu_changed(void);
+void cu_changed_irq(void);
 void cu_wait_change(unsigned, uint64_t);
 #ifdef LWIP_HOST
 void cu_host_join(sys_thread_t);

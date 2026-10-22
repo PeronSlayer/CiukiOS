@@ -157,22 +157,6 @@ static uint32_t desktop_colour(const struct cp_app *a, const struct desk_theme *
 }
 static const struct desk_theme *chosen(const struct cp_app *a)
 { const struct desk_theme *t = desk_theme_named(a->cfg.theme); return t ? t : desk_theme; }
-static void preview_request(struct cp_app *a, struct cp_preview_req *r, int have_image)
-{
-    uint32_t sh = a->host.screen_h ? a->host.screen_h : 768, bar = sh ? (32u * 144u) / sh : 6;
-    const struct desk_theme *t = chosen(a);
-    memset(r, 0, sizeof(*r));
-    snprintf(r->path, sizeof(r->path), "%s", a->cfg.wallpaper);
-    r->mode = a->cfg.wallpaper_mode; r->colour = desktop_colour(a, t); r->bar = bar;
-    r->font = t->font_large; r->label = t->desktop_label; r->aa = t->text_aa; r->portrait = a->host.portrait;
-    if (have_image) r->image = a->image;
-}
-static int preview_request_same(const struct cp_app *a, const struct cp_preview_req *r)
-{
-    struct cp_preview_req now; preview_request((struct cp_app *)a, &now, 0);
-    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.colour == r->colour &&
-           now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa;
-}
 static void preview_build(struct cp_app *a)
 {
     uint32_t sw = a->host.screen_w ? a->host.screen_w : 1024, sh = a->host.screen_h ? a->host.screen_h : 768;
@@ -184,16 +168,15 @@ static void preview_build(struct cp_app *a)
          * (lead fix, 2026-10-12). */
         if (a->host.decode_begin) {
             /* Worker job: decode (when needed) and resample off the UI thread. Show the desktop colour now,
-             * poll on a short timer, never block, never decode or resample here (f2-88b). */
+             * wait for a completion descriptor, never decode or resample here. */
             int have = a->image.pixels && !strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path));
             int failed = !have && !strncmp(a->decode_failed, a->cfg.wallpaper, sizeof(a->decode_failed));
             if (!failed && !a->decode_wait) {
-                struct cp_preview_req req; preview_request(a, &req, have);
+                struct cp_preview_req req; cp_preview_request(a, &req, have);
                 if (!a->host.decode_begin(a->host.ctx, &req)) {
                     if (have) memset(&a->image, 0, sizeof(a->image));   /* moved to the worker */
                     a->wait_req = req; a->wait_req.image = (struct desk_image){0};
                     a->decode_wait = 1; snprintf(a->decode_path, sizeof(a->decode_path), "%s", a->cfg.wallpaper);
-                    du_timer_start(a->ui, CP_T_PREVIEW, 50000000ull, 1);
                 } else if (!have) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", a->cfg.wallpaper);
             }
             /* The previous preview stays while a render-only job runs; otherwise the desktop colour. */
@@ -453,27 +436,6 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (a->display_write && e->type != DU_EV_TICK) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
-    if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW && a->decode_wait) {   /* worker job: poll */
-        struct cp_preview_done done; memset(&done, 0, sizeof(done)); done.preview = a->preview;
-        if (!a->host.decode_poll) { a->decode_wait = 0; return; }
-        if (a->host.decode_poll(a->host.ctx, &done) <= 0) return;
-        du_timer_stop(u, CP_T_PREVIEW); a->decode_wait = 0;
-        a->decode_ms = done.decode_ms; a->render_ms = done.render_ms; a->decode_done++;
-        int current = !strncmp(done.req.path, a->cfg.wallpaper, sizeof(done.req.path));
-        if (done.image.pixels && current) {
-            desk_image_free(&a->image); a->image = done.image;
-            snprintf(a->image_path, sizeof(a->image_path), "%s", done.req.path);
-        } else {
-            if (!done.image.pixels) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", done.req.path);
-            desk_image_free(&done.image);
-        }
-        a->preview_pending = 2; u->dirty = 1;
-        /* A rendering of the current settings is used as it is; anything else repaints and starts a new job. */
-        a->preview_valid = done.rendered && current && done.image.pixels && preview_request_same(a, &done.req);
-        if (!a->preview_valid && !done.image.pixels)   /* failed: the desktop colour stays, no retry */
-            { for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a)); a->preview_valid = 1; }
-        return;
-    }
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
         a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;
         return;
@@ -543,6 +505,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case CP_DISPLAY_TABS_ID:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_DISPLAY_TABS && !a->mode_state) {
+            if (a->display_tab != e->index) cp_preview_cancel(a);
             a->display_tab=e->index; build(a); du_focus(u,CP_DISPLAY_TABS_ID);
         }
         break;
@@ -1266,7 +1229,7 @@ void cp_open(struct cp_app *a, int page)
     }
     if (page == CP_ADAPTER) { page=CP_DISPLAY; a->display_tab=CP_SCREEN_SETTINGS; }
     if (page == CP_FONTS) { page=CP_DISPLAY; a->display_tab=CP_APPEARANCE; }
-    if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_fonts_close(a);
+    if (a->page == CP_DISPLAY && page != CP_DISPLAY) { cp_preview_cancel(a); cp_fonts_close(a); }
     if (page==CP_DEVICES) a->system_tab=1;
     if (page==CP_DRIVERS) a->system_tab=3;
     if (page==CP_SYSTEM && a->system_tab!=2) a->system_tab=0;
@@ -1298,4 +1261,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { cp_preview_cancel(a); du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

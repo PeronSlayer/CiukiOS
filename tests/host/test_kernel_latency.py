@@ -3,6 +3,7 @@ import os
 import json
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -323,6 +324,30 @@ static void test_irq_restore(uint32_t f) {
             pit = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
             (temp / 'pit_timer.inc').write_text(pit[pit.index('static void shared_tick_work('):pit.index('void pit_init(')])
             write_model(temp / 'vm_creation_model.inc')
+            # Execute the native event/kwait path, not LWIP_HOST's pthread
+            # condition variables. Only the privileged EFLAGS read is faked.
+            port = (ROOT / 'src/kernel/net/lwip/sys_arch.c').read_text()
+            instruction = '__asm__ volatile("pushfl; popl %0" : "=r"(flags));'
+            self.assertEqual(port.count(instruction), 1)
+            (temp / 'native_poll_port.inc').write_text(port.replace(instruction, 'flags = read_eflags();'))
+            def functions(path, names):
+                text = (ROOT / path).read_text()
+                result = ''
+                for name in names:
+                    match = re.search(r'^[^\n]+\b' + name + r'\([^\n]*\)\s*\{', text, re.M)
+                    self.assertIsNotNone(match, name)
+                    depth, end = 1, match.end()
+                    while depth:
+                        depth += (text[end] == '{') - (text[end] == '}')
+                        end += 1
+                    result += text[match.start():end] + '\n'
+                return result
+            (temp / 'native_poll_process.inc').write_text(functions(
+                'src/kernel/proc/process.c', ('proc_interrupt', 'proc_stop')))
+            (temp / 'native_poll_fd.inc').write_text(functions(
+                'src/kernel/proc/fdtable.c', ('file_fd_slot', 'file_fd_object', 'file_close')))
+            lwip = runpy.run_path(str(ROOT / 'src/kernel/net/lwip/build.py'))
+            poll_includes = lwip['includes'](lwip['source']())
             # f6-21: the jitter collector's turn policy, verbatim from entropy.c.
             entropy = (ROOT / 'src/kernel/core/entropy.c').read_text()
             (temp / 'entropy_turns.inc').write_text(
@@ -332,6 +357,7 @@ static void test_irq_restore(uint32_t f) {
                 ('jitter_collector_latency_test.c', []),
                 ('scheduler_irqoff_test.c', []),
                 ('scheduler_priorities_test.c', []),
+                ('control_display_wait_test.c', ['apps/control/display.c']),
                 ('timer_audio_load_test.c', []),
                 ('fs/wait_latency_test.c', []),
                 # f1-98: desktop minimum share and reservation-holder boost
@@ -347,7 +373,10 @@ static void test_irq_restore(uint32_t f) {
                 subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                                 '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                                 '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
-                                '-I', str(temp), str(ROOT / 'tests/host' / unit),
+                                '-I', str(temp),
+                                *(poll_includes if unit == 'control_display_wait_test.c' else []),
+                                *(['-idirafter', str(ROOT / 'sdk/sysroot-overlay/include')] if unit == 'control_display_wait_test.c' else []),
+                                str(ROOT / 'tests/host' / unit),
                                 *(str(ROOT / path) for path in extra),
                                 str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})

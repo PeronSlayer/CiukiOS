@@ -78,6 +78,44 @@ def wallpaper_cache_payloads(out=None):
     return {f"/System/cache/wallpaper/{name}": out / name for name in record["files"]}, record
 
 
+def wallpaper_thumbnail_payloads(out=None):
+    """Only asset staging: three small raw previews, never a disk-image build."""
+    out = Path(out) if out is not None else DESKTOP / "wallpaper-cache/thumbnails"
+    units = ("render_wallpaper.c", "wallpaper_io.c", "wallpaper.c", "image.c", "settings.c", "theme.c")
+    inputs = {"sources": {name: sha256(ROOT / "apps/desktop" / name) for name in
+                         (*units, "wallpaper_io.h", "wallpaper.h", "settings.h", "theme.h", "ui_fonts.h", "desktop.h", "shell.h", "protocol.h")},
+              "stb_sha256": sha256(ROOT / "third_party/stb/stb_image.h"),
+              "wallpapers": {name: sha256(ROOT / "assets/wallpapers/ciuki" / name) for name in WALLPAPERS},
+              "format": "XRGB8888 little-endian B,G,R,0", "width": 192, "height": 144}
+    names = {Path(name).stem + "-192x144.raw" for name in WALLPAPERS}
+    manifest = out / "manifest.json"
+    try:
+        record = json.loads(manifest.read_text())
+        valid = record["inputs"] == inputs and set(record["files"]) == names and all(
+            frame["size"] == 192 * 144 * 4 and (out / name).stat().st_size == frame["size"] and
+            sha256(out / name) == frame["sha256"] for name, frame in record["files"].items())
+    except (OSError, ValueError, KeyError):
+        valid = False
+    if not valid:
+        out.mkdir(parents=True, exist_ok=True)
+        record = {"inputs": inputs, "files": {}}
+        with tempfile.TemporaryDirectory(prefix="render-", dir=out) as temporary:
+            tool = Path(temporary) / "render-wallpaper"
+            subprocess.run(["nice", "-n", "19", "clang", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *(str(ROOT / "apps/desktop" / name) for name in units), "-o", str(tool)], check=True)
+            for source in WALLPAPERS:
+                name = Path(source).stem + "-192x144.raw"
+                path = out / name
+                subprocess.run(["nice", "-n", "19", str(tool), str(ROOT / "assets/wallpapers/ciuki" / source),
+                                str(path), "thumbnail"], check=True)
+                require(path.stat().st_size == 192 * 144 * 4, "system wallpaper thumbnail size")
+                record["files"][name] = {"sha256": sha256(path), "size": path.stat().st_size,
+                                         "width": 192, "height": 144, "source_path": "/system/wallpapers/" + source}
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return {f"/System/cache/wallpaper/thumbnails/{name}": out / name for name in record["files"]}, record
+
+
 def run(*args):
     subprocess.run([str(a) for a in args], cwd=ROOT, check=True)
 
@@ -160,10 +198,13 @@ def desktop_payloads():
     cache_sources, cache = wallpaper_cache_payloads()
     sources.update(cache_sources)
     metadata["wallpaper_cache"] = cache
+    thumbs, thumbnail_record = wallpaper_thumbnail_payloads()
+    sources.update(thumbs)
+    metadata["wallpaper_thumbnails"] = thumbnail_record
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def font_payloads():

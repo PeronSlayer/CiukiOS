@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -30,8 +31,9 @@ struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; st
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h;
-    /* f2-88b: Display page timing: open, first frame, worker job, worst gap between UI turns (= ping latency). */
-    uint64_t disp_open, disp_first, disp_last_idle, disp_gap_max, disp_gap_logged; unsigned disp_decode_seen; int disp_open_logged; };
+    const char *disp_state, *disp_decode, *disp_wait;
+    unsigned disp_done;
+};
 
 /* Panel geometry is independent of desktop preferences and display rollback. */
 static void panel_size(int *width, int *height)
@@ -196,6 +198,7 @@ static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
 }
 static int decode_begin(void *ctx, const struct cp_preview_req *req) { (void)ctx; return cp_decoder_begin(req); }
 static int decode_poll(void *ctx, struct cp_preview_done *out) { (void)ctx; return cp_decoder_poll(out); }
+static void decode_cancel(void *ctx) { (void)ctx; cp_decoder_cancel(); }
 static int mixer(void *ctx, int *volume, int *muted)
 {
     (void)ctx;
@@ -324,38 +327,27 @@ static void raw_log(const char *line)
     fputs(line,stderr);
 #endif
 }
-static unsigned ms_since(uint64_t from, uint64_t to) { return to > from ? (unsigned)((to - from) / 1000000ull) : 0; }
-static void display_log(struct cp_main *m, uint64_t mono)
+static void display_log(struct cp_main *m, const char *wait)
 {
-    char line[160]; struct cp_app *a=&m->app;
-    if (a->page != CP_DISPLAY) { m->disp_open = 0; return; }
-    if (!m->disp_open) { m->disp_open = m->disp_last_idle = mono; m->disp_first = 0; m->disp_gap_max = 0; m->disp_open_logged = 0; m->disp_decode_seen = a->decode_done; }
-    uint64_t gap = m->disp_last_idle && mono > m->disp_last_idle ? mono - m->disp_last_idle : 0;
-    m->disp_last_idle = mono;
-    if (gap > m->disp_gap_max) m->disp_gap_max = gap;
-    if (!m->disp_first && m->window.configured && !m->ui.dirty && !m->window.swap_sent) m->disp_first = mono;
-    if (gap >= 100000000ull && mono - m->disp_gap_logged >= 1000000000ull) {   /* a turn the ping had to wait for */
-        m->disp_gap_logged = mono;
-        snprintf(line, sizeof(line), "[control] display turn_gap_ms=%u at_ms=%u decode_wait=%d\n", ms_since(0, gap), ms_since(m->disp_open, mono), a->decode_wait);
-        raw_log(line);
-    }
-    if (m->disp_first && !m->disp_open_logged) {
-        m->disp_open_logged = 1;
-        snprintf(line, sizeof(line), "[control] display open ms=%u decode=pending first_frame=%u ping_answered=%u\n",
-                 ms_since(m->disp_open, mono), ms_since(m->disp_open, m->disp_first), ms_since(0, m->disp_gap_max));
-        raw_log(line);
-    }
-    if (a->decode_done != m->disp_decode_seen) {
-        m->disp_decode_seen = a->decode_done;
-        snprintf(line, sizeof(line), "[control] display open ms=%u decode=%u render=%u first_frame=%u ping_answered=%u\n",
-                 ms_since(m->disp_open, mono), a->decode_ms, a->render_ms, ms_since(m->disp_open, m->disp_first ? m->disp_first : mono), ms_since(0, m->disp_gap_max));
-        raw_log(line);
-    }
+    struct cp_app *a = &m->app;
+    const char *state = a->page != CP_DISPLAY ? "closed" : a->display_tab == CP_BACKGROUND ? "background" :
+                        a->display_tab == CP_APPEARANCE ? "appearance" : "settings";
+    char thumb[64];
+    const char *decode = a->decode_cancelled ? "cancelling" : a->decode_wait ?
+        (cp_system_thumbnail(a->decode_path, thumb, sizeof(thumb)) ? "thumbnail" : "user") :
+        a->preview_pending == 1 ? "deferred" : a->decode_failed[0] && !strcmp(a->decode_failed, a->cfg.wallpaper) ? "failed" :
+        a->image.pixels ? "ready" : "idle";
+    if (a->page != CP_DISPLAY && !m->disp_state) return;
+    if (m->disp_state == state && m->disp_decode == decode && m->disp_wait == wait && m->disp_done == a->decode_done) return;
+    char line[192];
+    snprintf(line, sizeof(line), "[control] display state=%s decode=%s ui_wait=%s jobs=%u decode_ms=%u render_ms=%u\n",
+             state, decode, wait, a->decode_done, a->decode_ms, a->render_ms);
+    raw_log(line);
+    m->disp_state = state; m->disp_decode = decode; m->disp_wait = wait; m->disp_done = a->decode_done;
 }
 static void idle(void *arg)
 {
     struct cp_main *m = arg;
-    display_log(m, du_now());
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
@@ -447,6 +439,35 @@ static int program_install(void *ctx,const char *path)
     memcpy(request.data+16+t,path,n);
     int result=du_window_queue(&m->window,&request);if(!result)m->install_serial=m->serial;return result;
 }
+/* Display opts into the native wait set. Other applets retain du_run's
+ * scheduling interval (f2-98a owns their idle policy). */
+static int control_run(struct cp_main *m)
+{
+    for (;;) {
+        idle(m);
+        int r = du_window_turn(&m->window, du_now());
+        if (r <= 0) return r;
+        uint64_t mono = du_now(), next = du_next_deadline(&m->ui);
+        int timeout = cp_display_wait_ms(mono, next);
+        if (m->app.page != CP_DISPLAY && timeout > 10) timeout = 10;
+        /* Durable settings results currently have no descriptor. Only a
+         * pending settings write needs this bounded completion check. */
+        int saving = m->writer_started && cfg_writer_busy(&m->writer);
+        if (saving && timeout > 50) timeout = 50;
+        if (m->ui.dirty && m->window.configured && !m->window.swap_sent && !m->window.present_pending && m->window.count < 16) continue;
+        struct pollfd fds[2] = {
+            {.fd = m->window.channel, .events = POLLIN | (m->window.count ? POLLOUT : 0)},
+            {.fd = cp_decoder_fd(), .events = POLLIN}
+        };
+        display_log(m, saving ? "settings" : next != UINT64_MAX ? "timer" : "event");
+        r = poll(fds, 2, timeout);
+        if (r < 0) { if (errno == EINTR) continue; return -1; }
+        if ((fds[0].revents | fds[1].revents) & POLLNVAL) { errno = EBADF; return -1; }
+        if (fds[1].revents & POLLIN) cp_preview_ready(&m->app);
+        if (fds[1].revents & (POLLERR | POLLHUP)) { errno = EIO; return -1; }
+    }
+}
+
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
@@ -464,7 +485,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
-    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
@@ -496,7 +517,8 @@ int main(int argc, char **argv)
     if (cp_attach(&m->app, &m->ui, page)) {
         du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
-    int r = du_run(&m->window, idle, m);
+    int r = control_run(m);
+    cp_decoder_stop();
     if (m->writer_started) cfg_writer_stop(&m->writer);
     cp_detach(&m->app); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
     return r < 0 ? 1 : 0;

@@ -13,16 +13,11 @@
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Write `build/codex/<id>-report.md`.
 
-## Lead note (2026-10-22 23:01): QEMU evidence
+## Amendment 1 (lead, 2026-10-22 23:41): decisions from the first report
 
-`build/lead-scratch/qemu-control-probe-serial.txt` (current image, QEMU
-qemu-t23 profile, `scripts/test/control_display_probe.py`): `[control]
-display open ms=0 decode=pending`, then `[cpu] top=control#34:462k460s3,
-control#32:152k124s3` and `[control] display open ms=3300 decode=3220
-render=16 … ping_answered=23`. The decode worker spends almost all of its
-3.2 s **in the kernel** (460 of 462 ms per 2 s window are system time), not
-in the PNG decoder, and the UI thread too (124 of 152 ms). Find which kernel
-paths those are (the chunked file read with 1 ms sleeps, demand-zero faults
-of the multi-MB decode buffers, the trylock/futex path of libpthread, the
-SDK's malloc growing the heap page by page) with the host kernel models and
-remove them; on the T23 the same work never finishes.
+1. **Native wait: authorized.** Fix the native `net_poll()` wait, and any signal or wakeup integration it needs, outside the applet files.
+   - Wait to the real deadline or event, keep the registration/recheck race protection, and wake promptly for input, channel completion, fd close and caught signals.
+   - Host tests prove each wakeup source and that an idle UI and worker consume no periodic kernel time; extend the model to execute the native wait.
+   - This is the Windows 9x model: a blocked thread is not scheduled until its event fires.
+2. **Worker priority: the existing policy is accepted.** The background worker stays at base 7 against base 9 for the focused UI (input boost 11), with no new priority API in this directive.
+3. **Decoder cancellation** stays cooperative at decode boundaries; the UI state cancels immediately.

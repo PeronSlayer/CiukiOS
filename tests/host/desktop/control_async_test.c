@@ -3,7 +3,7 @@
  * Fixture: T23-like (1024x768, slow or absent accel info, default image wallpaper whose decode
  * takes "seconds"): the first frame comes before the decode, every UI-thread host call is
  * counted, and the image arrives through the worker poll only. */
-#include "control.h"
+#include "decoder.h"
 #include "display_fixture.h"
 #include <assert.h>
 #include <errno.h>
@@ -11,9 +11,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef __linux__
+#undef _SC_ARG_MAX
+#undef _SC_OPEN_MAX
+#undef _SC_PAGESIZE
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#endif
+#include <unistd.h>
+#include <poll.h>
+void cp_channel_host_cleanup(void);
+static int real_begin(void *c, const struct cp_preview_req *r) { (void)c; return cp_decoder_begin(r); }
+static int real_take(void *c, struct cp_preview_done *r) { (void)c; return cp_decoder_poll(r); }
+static void real_cancel(void *c) { (void)c; cp_decoder_cancel(); }
 static uint32_t pixels[CP_WIDTH * CP_HEIGHT], portrait[256 * 256];
 static struct cp_app a; static struct du_ui u;
-static unsigned sync_decodes, begins, polls, engine_calls, pending_polls;
+static unsigned sync_decodes, begins, polls, engine_calls, pending_polls, cancels;
 static int decode_fails;
 static char begun_path[128];
 static struct desk_image held;
@@ -38,6 +51,7 @@ static int poll_done(void *c, struct cp_preview_done *o)
     o->rendered = 1; for (unsigned i = 0; i < 192 * 144; i++) o->preview[i] = 0xff445566u;
     return 1;
 }
+static void cancel(void *c) { (void)c; cancels++; }
 static int display(void *c, struct ciuki_display_info *d) { (void)c; display_fixture(d); return 0; }
 static int engine_slow(void *c, struct ciuki_accel_info *i) { (void)c; (void)i; engine_calls++; return -EAGAIN; }
 static int load(void *c, char *t, size_t s, size_t *n) { (void)c; (void)t; (void)s; (void)n; return -1; }
@@ -46,7 +60,7 @@ static void attach(int page, int engine, int async)
     memset(&a, 0, sizeof(a)); sync_decodes = begins = polls = engine_calls = 0;
     a.host = (struct cp_host){.load = load, .display = display, .portrait = portrait, .screen_w = 1024, .screen_h = 768, .decode = sync_decode,
                               .engine = engine ? engine_slow : NULL};
-    if (async) { a.host.decode_begin = begin; a.host.decode_poll = poll_done; }
+    if (async) { a.host.decode_begin = begin; a.host.decode_poll = poll_done; a.host.decode_cancel = cancel; }
     du_init(&u, pixels, CP_WIDTH, CP_HEIGHT); u.focused_window = 1;
     assert(!cp_attach(&a, &u, page));
     snprintf(a.cfg.wallpaper, sizeof(a.cfg.wallpaper), "/system/wallpapers/default.png");
@@ -55,10 +69,11 @@ static void attach(int page, int engine, int async)
 static void settle(unsigned ticks)
 {
     uint64_t t = u.now;
-    for (unsigned i = 0; i < ticks; i++) { t += 60000000ull; du_tick(&u, t); du_render(&u); }
+    for (unsigned i = 0; i < ticks; i++) { t += 60000000ull; du_tick(&u, t); if (a.decode_wait) cp_preview_ready(&a); du_render(&u); }
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    assert(argc == 3);
     static const struct { int engine, async, fails; unsigned slow; } cases[] = {
         {0, 1, 0, 0}, {1, 1, 0, 5}, {1, 1, 0, 40}, {0, 1, 1, 3}};
     for (unsigned k = 0; k < sizeof(cases) / sizeof(*cases); k++) {
@@ -79,6 +94,22 @@ int main(void)
         assert(begins == 1);                 /* no retry loop after a finished or failed decode */
         cp_detach(&a); desk_image_free(&a.image);
     }
+    /* Pending work has no timer: ticks cannot query the worker. Every tab
+     * cancels once and accepts input immediately, even if work never returns. */
+    pending_polls = 1u << 30; attach(CP_DISPLAY, 0, 1); du_render(&u); settle(1);
+    unsigned before = polls; cancels = 0;
+    for (unsigned i = 0; i < 500; i++) du_tick(&u, u.now + 1000000ull);
+    assert(polls == before && du_next_deadline(&u) == UINT64_MAX);
+    for (int tab = 1; tab < CP_DISPLAY_TABS; tab++) {
+        struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
+        u.event(&u, &(struct du_event){.type=DU_EV_SELECT,.id=CP_DISPLAY_TABS_ID,.index=tab}, u.user);
+        du_render(&u); clock_gettime(CLOCK_MONOTONIC, &t1);
+        assert(a.display_tab == tab && cancels == 1);
+        assert((t1.tv_sec-t0.tv_sec)*1000000000ll+t1.tv_nsec-t0.tv_nsec < 100000000ll);
+    }
+    pending_polls = 0; cp_preview_ready(&a);
+    assert(!a.decode_wait && !a.image.pixels); /* cancelled result cannot reappear on another tab */
+    cp_detach(&a);
     /* f2-88b: image already decoded; a mode change is a render-only job (image moved to the worker),
      * the old preview stays until it is done, and the UI thread never resamples. */
     pending_polls = 0; decode_fails = 0; render_jobs = image_jobs = 0;
@@ -120,6 +151,23 @@ int main(void)
     attach(CP_DISPLAY, 1, 1); du_render(&u);
     assert(strstr(a.engine_line, "status unavailable"));
     cp_detach(&a); desk_image_free(&a.image);
+    /* Golden frames through the actual application/worker/thumbnail path. */
+    assert(!chdir(argv[1]));
+    FILE *f = fopen(argv[2], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
+    for (unsigned i = 1; i <= 3; i++) {
+        attach(CP_DISPLAY, 0, 0);
+        a.host.decode_begin = real_begin; a.host.decode_poll = real_take; a.host.decode_cancel = real_cancel;
+        snprintf(a.cfg.wallpaper, sizeof(a.cfg.wallpaper), "/system/wallpapers/Ciuk%u.png", i);
+        du_render(&u); du_tick(&u, u.now + 20000000ull); du_render(&u);
+        assert(a.decode_wait);
+        struct pollfd p = {.fd = cp_decoder_fd(), .events = POLLIN};
+        assert(poll(&p, 1, 3000) == 1 && p.revents == POLLIN);
+        cp_preview_ready(&a); du_render(&u);
+        assert(!a.decode_wait && a.preview_valid && a.image.width == 192 && a.image.height == 144);
+        char name[64]; snprintf(name, sizeof(name), "control-thumbnail-%u.xrgb", i);
+        f = fopen(name, "wb"); assert(f && fwrite(pixels, 4, CP_WIDTH * CP_HEIGHT, f) == CP_WIDTH * CP_HEIGHT); fclose(f);
+        cp_decoder_stop(); cp_channel_host_cleanup(); cp_detach(&a);
+    }
     puts("PASS control async display: first frame before decode, bounded host calls, failed decode does not loop");
     return 0;
 }

@@ -13,7 +13,7 @@ static void socket_release(struct proc_object *o) { CHECK(o==&socket_fixture.obj
 uint32_t net_socket_count(void) { return !!socket_fixture.references; }
 bool net_socket_object(struct proc_object *o) { return o==&socket_fixture.object; }
 uint32_t *net_socket_flags(struct proc_object *o) { return net_socket_object(o) ? &socket_fixture.flags : NULL; }
-void net_fd_changed(struct process *p,unsigned fd) { CHECK(fd<CIUKI_OPEN_MAX);p->fd_generation[fd]++; }
+void net_fd_changed(struct process *p,unsigned fd) { CHECK(fd<CIUKI_OPEN_MAX);if(p)p->fd_generation[fd]++; }
 int32_t net_socket_rw(struct process *p,int fd,uint32_t b,uint32_t n,bool write)
 {
     (void)b;CHECK(p==client && net_socket_object(file_fd_object(p,fd)));

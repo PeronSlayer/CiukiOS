@@ -66,6 +66,8 @@
 #include <ciuki/timing.h>
 #include <ciuki/work.h>
 
+extern void net_input_changed(void) __attribute__((weak));
+
 #define DATA_PORT 0x60u
 #define STATUS_PORT 0x64u
 #define OBF 0x01u
@@ -195,6 +197,7 @@ static void queue_event(struct controller *c, uint16_t type, uint16_t code, int3
         .flags = type == INPUT_RESYNC ? INPUT_F_RESYNC : 0, .lost_count = lost };
     q->tail = (q->tail + 1) % INPUT_CAPACITY;
     q->stats.pending++;
+    if (c == &native && net_input_changed) net_input_changed();
 }
 static void queue_resync(struct controller *c, uint64_t tick)
 {

@@ -317,3 +317,87 @@ int cp_display_event(struct cp_app *a, const struct du_event *e)
     }
     return 0;
 }
+
+/* Display preview ownership and readiness, f2-88c. The app.c paint/event glue
+ * calls these functions; no other applet's scheduling policy changes. */
+static const struct desk_theme *chosen(const struct cp_app *a)
+{ const struct desk_theme *t = desk_theme_named(a->cfg.theme); return t ? t : desk_theme; }
+static uint32_t desktop_colour(const struct cp_app *a, const struct desk_theme *t)
+{ return a->cfg.desktop_color == CFG_DESKTOP_COLOR ? t->desktop : a->cfg.desktop_color; }
+void cp_preview_request(struct cp_app *a, struct cp_preview_req *r, int have_image)
+{
+    uint32_t sh = a->host.screen_h ? a->host.screen_h : 768, bar = sh ? (32u * 144u) / sh : 6;
+    const struct desk_theme *t = chosen(a);
+    memset(r, 0, sizeof(*r));
+    snprintf(r->path, sizeof(r->path), "%s", a->cfg.wallpaper);
+    r->mode = a->cfg.wallpaper_mode; r->colour = desktop_colour(a, t); r->bar = bar;
+    r->font = t->font_large; r->label = t->desktop_label; r->aa = t->text_aa; r->portrait = a->host.portrait;
+    if (have_image) r->image = a->image;
+}
+static int preview_request_same(const struct cp_app *a, const struct cp_preview_req *r)
+{
+    struct cp_preview_req now; cp_preview_request((struct cp_app *)a, &now, 0);
+    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.colour == r->colour &&
+           now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa;
+}
+
+int cp_system_thumbnail(const char *path, char *name, size_t size)
+{
+    static const char *const names[] = {"Ciuk1", "Ciuk2", "Ciuk3"};
+    /* FAT paths are case insensitive; accept their normal case variants, but
+     * not another user file with the same basename or an arbitrary prefix. */
+    for (unsigned i = 0; i < 3; i++) {
+        char full[64]; snprintf(full, sizeof(full), "/system/wallpapers/%s.png", names[i]);
+        unsigned k = 0;
+        while (full[k] && path[k]) {
+            unsigned a = (unsigned char)full[k], b = (unsigned char)path[k];
+            if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+            if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+            if (a != b) break;
+            k++;
+        }
+        if (!full[k] && !path[k]) { snprintf(name, size, "%s-192x144.raw", names[i]); return 1; }
+    }
+    return 0;
+}
+void cp_preview_cancel(struct cp_app *a)
+{
+    du_timer_stop(a->ui, 700); /* deferred first paint, never a completion timer */
+    a->preview_pending = 0; a->preview_valid = 0;
+    if (a->decode_wait && !a->decode_cancelled) {
+        a->decode_cancelled = 1;
+        if (a->host.decode_cancel) a->host.decode_cancel(a->host.ctx);
+    }
+}
+void cp_preview_ready(struct cp_app *a)
+{
+    struct cp_preview_done done = {.preview = a->preview};
+    if (!a->decode_wait || !a->host.decode_poll || a->host.decode_poll(a->host.ctx, &done) <= 0) return;
+    int cancelled = a->decode_cancelled || done.error == -ECANCELED;
+    a->decode_wait = a->decode_cancelled = 0;
+    a->decode_ms = done.decode_ms; a->render_ms = done.render_ms; a->decode_done++;
+    int current = !cancelled && a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND &&
+                  !strncmp(done.req.path, a->cfg.wallpaper, sizeof(done.req.path));
+    if (done.image.pixels && current) {
+        desk_image_free(&a->image); a->image = done.image;
+        snprintf(a->image_path, sizeof(a->image_path), "%s", done.req.path);
+    } else {
+        if (!cancelled && !done.image.pixels) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", done.req.path);
+        desk_image_free(&done.image);
+    }
+    a->preview_pending = 2;
+    a->preview_valid = done.rendered && current && a->image.pixels && preview_request_same(a, &done.req);
+    if (!cancelled && current && !done.image.pixels) {
+        for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
+        a->preview_valid = 1;
+    }
+    if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) a->ui->dirty = 1;
+}
+int cp_display_wait_ms(uint64_t now, uint64_t deadline)
+{
+    /* Round up: sub-ms or overdue timers must not turn poll into a busy loop.
+     * The caller has already dispatched due timers in du_window_turn(). */
+    if (deadline <= now) return 1;
+    uint64_t left = deadline - now;
+    return left >= 1000000000ull ? 1000 : (int)((left + 999999ull) / 1000000ull);
+}

@@ -11,6 +11,7 @@ extern void w32_process_cleanup(struct process *) __attribute__((weak));
 extern void w32_process_died(struct process *) __attribute__((weak));
 extern void w32_thread_died(struct proc_thread *) __attribute__((weak));
 extern void w32_process_stopping(struct process *, uint32_t) __attribute__((weak));
+extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
 
 static struct process *processes[CIUKI_PROCESS_MAX];
 static struct process supervisor;
@@ -239,6 +240,9 @@ void proc_interrupt(struct proc_thread *t)
     uint32_t flags = irq_save();
     t->interrupted = true;
     ww_interrupt(&t->word_wait, -EINTR);
+    /* A native poll waiter tests the shared sequence inside kwait. Merely
+     * making it runnable would leave that predicate false on resumption. */
+    if (net_fd_changed) net_fd_changed(0, 0);
     if (t->task && t->task->state == T_BLOCKED) {
         t->task->wake_tick = 0;
         task_start(t->task);
@@ -252,6 +256,7 @@ void proc_stop(struct process *p, int raw_code, uint32_t signal)
         return;
     if(w32_process_stopping)w32_process_stopping(p,signal);
     p->state = PROC_STOPPING;            /* no new syscall/creation can publish */
+    if (net_fd_changed) net_fd_changed(0, 0);
     p->raw_exit = raw_code;
     p->status = signal ? (int32_t)(signal & 0x7f) : (raw_code & 0xff) << 8;
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {

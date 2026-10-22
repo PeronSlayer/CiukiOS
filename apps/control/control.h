@@ -44,6 +44,7 @@ struct cp_preview_done {
     struct cp_preview_req req;      /* the snapshot the preview was rendered from */
     struct desk_image image;        /* the image returned to the UI (pixels NULL: decode failed) */
     int rendered;                   /* preview[] holds the rendering of req */
+    int error;                      /* negative errno; ECANCELED results are discarded */
     unsigned decode_ms, render_ms;
     uint32_t *preview;              /* caller-supplied 192*144 buffer, filled when rendered */
 };
@@ -54,11 +55,12 @@ struct cp_host {
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
     int (*decode)(void *, const char *path, struct desk_image *out);
     /* f2-88/f2-88b: the UI thread never reads, decodes or resamples a wallpaper. decode_begin starts a worker
-     * job (0, or -errno) and decode_poll returns 0 while it runs and 1 when it finished. Both return at once
+     * job (0, or -errno). decode_poll takes a result once, after endpoint readiness. Both return at once
      * and never wait on the worker. The request moves the UI's decoded image (if any) to the worker, which
      * returns it in done->image; the worker also renders the 192x144 preview from a snapshot of the request. */
     int (*decode_begin)(void *, const struct cp_preview_req *);
     int (*decode_poll)(void *, struct cp_preview_done *);
+    void (*decode_cancel)(void *);
     void (*log)(void *, const char *line);                            /* serial record, optional */
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
@@ -129,6 +131,7 @@ struct cp_app {
     struct desk_image image;
     int preview_pending;            /* an image wallpaper decode is scheduled after the first paint */
     int decode_wait;                /* an asynchronous decode is running for decode_path */
+    int decode_cancelled;
     unsigned decode_ms, render_ms, decode_done;
     struct cp_preview_req wait_req; /* snapshot of the running job (image field unused) */
     char decode_path[128], decode_failed[128];
@@ -179,6 +182,11 @@ const char *cp_device_state(unsigned);
 int cp_boot_serial(const char *text, size_t length, int serial, char *out, size_t capacity);
 void cp_audio_result(struct cp_app *, int result);
 void cp_engine_refresh(struct cp_app *);
+void cp_preview_request(struct cp_app *, struct cp_preview_req *, int);
+int cp_system_thumbnail(const char *, char *, size_t);
+void cp_preview_ready(struct cp_app *);
+void cp_preview_cancel(struct cp_app *);
+int cp_display_wait_ms(uint64_t now, uint64_t deadline);
 int cp_display_refresh(struct cp_app *);
 void cp_display_sync(struct cp_app *);
 int cp_display_event(struct cp_app *, const struct du_event *);

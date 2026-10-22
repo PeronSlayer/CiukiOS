@@ -27,6 +27,8 @@ void net_stack_watch(void);
 int net_stack_transmit(unsigned, const void *, unsigned);
 void net_stack_entropy(uint64_t);
 void net_fd_changed(struct process *, unsigned);
+/* Input publication, including IRQ producers: defer the poll waiter walk. */
+void net_input_changed(void);
 uint32_t net_socket_count(void);
 uint32_t *net_socket_flags(struct proc_object *);
 bool net_socket_object(struct proc_object *);
