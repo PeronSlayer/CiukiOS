@@ -8,6 +8,9 @@
 #define CIUKI_BROWSER_TOP 36
 #define CIUKI_BROWSER_STATUS 22
 #define CIUKI_BROWSER_EVENTS 544
+/* Every desktop launch maps the window channel at fd 3 (apps/desktop launch_program,
+ * the SDK convention of sdk/samples/HelloWindow); --channel-fd=N overrides it. */
+#define CIUKI_BROWSER_CHANNEL_FD 3
 struct ciuki_browser_storage {
     int fd;
     struct ciuki_surface_info info;
@@ -43,7 +46,7 @@ void ciuki_browser_input(struct ciuki_browser_surface *,const struct ciuki_input
 void ciuki_browser_release(struct ciuki_browser_surface *);
 /* Bound to the framebuffer frontend's sole UI thread. */
 extern struct ciuki_browser_surface *ciuki_browser_active;
-extern int ciuki_browser_channel;
+extern int ciuki_browser_channel;   /* --channel-fd=N, or -1: use CIUKI_BROWSER_CHANNEL_FD */
 void ciuki_chrome_init(struct ciuki_browser_surface *);
 void ciuki_chrome_resize(void);
 void ciuki_chrome_render(void);
