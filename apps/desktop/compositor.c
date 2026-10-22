@@ -594,13 +594,19 @@ static void window(struct desktop *d, int i, struct desk_box clip)
 /* Programs that open a desktop window receive their channel at fd 3. */
 int desk_program_graphical(const char *name)
 { return !strcmp(name,"demo") || !strcmp(name,"dosbox") || !strcmp(name,"files") || !strcmp(name,"tasks") || !strcmp(name,"ciuknote") ||
-         !strcmp(name,"control") || !strcmp(name,"ciukide") || !strcmp(name,"ciukide-app") || !strcmp(name,"terminal") || desk_catalog_find(name); }
+         !strcmp(name,"control") || !strcmp(name,"ciukide") || !strcmp(name,"ciukide-app") || !strcmp(name,"terminal") || desk_catalog_find(name) ||
+         desk_application_find(name); }
 const char *desk_program_label(const char *name)
 {
     const struct desk_catalog_entry *e=desk_catalog_find(name);
+    const struct desk_application_entry *a=desk_application_find(name);
     return !strcmp(name,"demo") ? "Ciuki Demo" : !strcmp(name,"files") ? "Files" : !strcmp(name,"tasks") ? "Task Manager" :
-           !strcmp(name,"terminal") ? "Terminal" : !strcmp(name,"ciuknote") ? "CiukNote" : !strcmp(name,"ciukide") ? "CiukIDE" : !strcmp(name,"control") ? "Control Panel" : e ? e->label : name;
+           !strcmp(name,"terminal") ? "Terminal" : !strcmp(name,"ciuknote") ? "CiukNote" : !strcmp(name,"ciukide") ? "CiukIDE" : !strcmp(name,"control") ? "Control Panel" :
+           e ? e->label : a ? a->label : name;
 }
+/* The application record's description ("Web browser"), or NULL. */
+const char *desk_program_description(const char *name)
+{ const struct desk_application_entry *a=desk_application_find(name); return a ? a->description : NULL; }
 int desk_catalog_takes_file(const char *name)
 { const struct desk_catalog_entry *e=desk_catalog_find(name); return e && e->takes_file; }
 const char *desk_app_program(int kind) { return kind==DESK_APP_NOTE ? "ciuknote" : "files"; }

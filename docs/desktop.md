@@ -202,7 +202,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   approved portrait inside a circular accent orb, pressed in while
   the menu is open; the menu drops below the bar, submenus open to the
   right): Programs (CiukNote,
-  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
+  Files, NetSurf, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
   Accessories and Games submenus, then a Developer submenu with Hello,
   libc_smoke and any unknown `/Programs` program),
   Documents (recent files, My Documents, Clear Recent Documents), Settings
@@ -965,7 +965,14 @@ copy of those cases is no longer tracked).
 
 ## NetSurf browser (F6)
 
-The browser payload is installed as `/Programs/netsurf`. Its desktop window
+The browser payload is installed as `/Programs/netsurf`. It is listed as
+**NetSurf** ("Web browser") in the Programs menu, with the Tango
+`internet-web-browser` icon in the menu, on its window and task button, and in
+Files and Task Manager. Its program record (`apps/desktop/catalog.h`
+`desk_applications`) grants the desktop window channel, so every launch route
+(Programs menu, desktop shortcut, Run, Terminal, ShellExecute and the
+GATE_BROWSER test route) starts `netsurf --channel-fd=3`; a launch without
+that argument still uses the channel the desktop maps at fd 3. Its desktop window
 provides a URL bar, navigation controls, status line and framebuffer content
 area. It renders
 local `file:` pages and `data:` URLs, including the supported HTML/CSS, GIF and

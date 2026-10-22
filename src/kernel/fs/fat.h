@@ -82,6 +82,14 @@ struct fat_volume {
     bool cache_only;
     uint64_t cache_miss;
     struct fat_transaction *transaction, *transactions;
+    /* f1-93: logical providers only (no block cache). Set by the VFS that
+     * attached this source volume: every device call of the volume goes
+     * through io_window, which may give the caller's volume guard up around
+     * the call and readmit it afterwards. write: the call changes on-disk
+     * bytes (announced to readers before the guard is given up). Views and
+     * unattached volumes leave it null and call the device directly. */
+    int (*io_window)(void *ctx, struct fat_volume *, bool write, int (*call)(void *), void *arg);
+    void *io_window_ctx;
 };
 /* The caller pins borrowed identities before releasing its namespace turn.
  * enter takes a fresh short turn; leave releases it. All cold planning,
@@ -151,6 +159,24 @@ int fat_transaction_run(struct fat_volume *, const struct fat_transaction_args *
  * only. -FS_EAGAIN with *miss set: warm that volume sector and restart. */
 int fat_lookup_cached(struct fat_volume *, uint32_t dir, const char *name, uint32_t *cursor,
                       struct fat_entry *, uint64_t *miss);
+/* f1-93: next entry (labels: fat_next_dos) from resident cache slots only;
+ * -FS_EAGAIN with *miss set restores *cursor. Caller holds the guard. */
+int fat_next_cached(struct fat_volume *, uint32_t dir, uint32_t *cursor, struct fat_entry *,
+                    bool labels, uint64_t *miss);
+/* f1-93: read sector s (with readsec's FAT/cluster read-ahead extent) into
+ * the block cache. Geometry only: callable with no guard held. A logical
+ * provider has no block cache: nothing is read. */
+int fat_warm(const struct fat_volume *, uint64_t s);
+/* f1-93: cluster count of a chain (st_blocks), one FAT sector read per
+ * sector visited instead of one guarded call per cluster. Resumable:
+ * cluster is the next cluster to visit (start: cluster=first, count=0).
+ * cached: resident sectors only, the first missing one is reported in *miss
+ * with -FS_EAGAIN. At most FAT_CHAIN_SECTORS sectors are visited per call:
+ * a yield returns -FS_EAGAIN with *miss=UINT64_MAX and the walk resumes.
+ * An invalid link or a cycle is -FS_EIO (no write revocation). */
+#define FAT_CHAIN_SECTORS 128u
+struct fat_chain_walk { uint32_t first, cluster, count; };
+int fat_chain_clusters(struct fat_volume *, struct fat_chain_walk *, bool cached, uint64_t *miss);
 /* Mount does not write unless requested AND validation and durability pass.
  * requested RO always issues zero writes/flushes. why is retained in volume. */
 int fat_mount(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors, bool writable);

@@ -25,7 +25,7 @@ int dos_file_volume_discard(struct dos_file_volume *v) {
     struct vfs *space=&v->space; vfs_lock(space,0);
     int e=0;
     if (px_volume_busy && px_volume_busy(space,&v->fat)) e=-FS_EBUSY;
-    if (space->reserved || space->mutating || space->waiters) e=-FS_EBUSY;
+    if (space->reserved || space->mutating || space->waiters || space->transaction_users[2]) e=-FS_EBUSY;
     for (unsigned i=0;i<26;i++)
         if (space->readers[i] || (i!=2 && (space->volumes[i] || space->ro_volumes[i]))) e=-FS_EBUSY;
     for (unsigned i=0;i<VFS_TABLES;i++) if (space->tables[i]) e=-FS_EBUSY;
@@ -39,6 +39,7 @@ int dos_file_volume_discard(struct dos_file_volume *v) {
         cache_invalidate(v->fat.cache,v->provider,true);
         vfs_identity_expire(space,&v->fat);
         v->fat.identity_changed=0; v->fat.identity_ctx=0;
+        v->fat.io_window=0; v->fat.io_window_ctx=0;
         space->volumes[2]=0; space->generation[2]++;
         v->fat.mounted=false;
     }
@@ -46,12 +47,26 @@ int dos_file_volume_discard(struct dos_file_volume *v) {
     if (!e) { vfs_destroy(space); v->mounted=false; }
     return e;
 }
+struct raw_sector { struct blkdev *provider; uint32_t lba; void *sector; bool write; };
+static int raw_sector(void *arg) {
+    struct raw_sector *r=arg;
+    return r->write ? blkdev_write(r->provider,r->lba,1,r->sector) : blkdev_read(r->provider,r->lba,1,r->sector);
+}
+/* f1-93: the provider call is a device window of the logical volume: the
+ * VM's volume guard is not held across the outer image I/O. A raw write
+ * changes FAT state underneath the parser, so it takes the writer turn
+ * like a FAT mutation and is announced to concurrent readers. */
 static int volume_raw(struct dos_file_volume *v,uint32_t lba,void *sector,bool write,const struct vfs_request *request) {
     if (!v->mounted || blkdev_range(v->provider,lba,1)) return -FS_EINVAL;
     int e=vfs_admit(&v->space,1u<<2,request); if (e) return e;
+    uint32_t turn=0;
     if (write && v->fat.readonly) e=-FS_EROFS;
-    else e=write ? VFS_IO(&v->space,blkdev_write(v->provider,lba,1,sector)) :
-                   VFS_IO(&v->space,blkdev_read(v->provider,lba,1,sector));
+    else if (write && (e=vfs_turn_take_locked(&v->space,1u<<2,&turn))) { }
+    else if (!(v->space.active&(1u<<2)) || v->space.volumes[2]!=&v->fat) e=-FS_EIO;
+    else {
+        struct raw_sector call={v->provider,lba,sector,write};
+        e=VFS_IO_MODE(&v->space,VFS_WINDOW_FREE,vfs_io_window_call(&v->space,&v->fat,write,raw_sector,&call));
+    }
     if (!e && write) {
         /* FAT has no private chain cache. Refresh live metadata with its own
          * parser after raw writes; no stale first-cluster/size/write cursor.
@@ -60,11 +75,12 @@ static int volume_raw(struct dos_file_volume *v,uint32_t lba,void *sector,bool w
             struct vfs_node *n=&v->space.nodes[i];
             if (!n->refs || n->volume!=&v->fat) continue;
             struct fat_entry fresh;
-            int found=VFS_IO(&v->space,fat_lookup(&v->fat,n->entry.parent,n->entry.alias[0] ? n->entry.alias : n->entry.name,&fresh));
+            int found=vfs_dir_step_locked(&v->space,&v->fat,n->entry.parent,n->entry.alias[0] ? n->entry.alias : n->entry.name,0,&fresh,false);
             if (found || fresh.index!=n->entry.index) { v->space.generation[2]++; break; }
             n->entry=fresh;
         }
     }
+    vfs_turn_drop_locked(&v->space,turn);
     vfs_unlock(&v->space); return e;
 }
 

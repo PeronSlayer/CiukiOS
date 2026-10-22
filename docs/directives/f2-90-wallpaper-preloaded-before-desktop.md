@@ -11,3 +11,13 @@
 4. Host tests: first frame contains the wallpaper (golden), the fallback, the raw file's determinism in the build (`tests/host` image checks).
 
 Rules as f2-89. Report `build/codex/f2-90-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 00:11, decision on the delivery)
+
+The synchronous preload before the first paint is accepted. The 1,123 ms
+figure was computed at the 2.8 MB/s of the failed trial, which ran on the PIO
+fallback of the ATA quarantine (f1-92); at the UDMA2 rate the read is about
+190 ms, within what the owner asked ("already loaded"). A bounded wait with a
+solid first frame and a swap is a follow-up only if the T23 measurement after
+f1-92 exceeds 300 ms. Corrupt-file detection: follow-up (size and a header
+magic in the raw frame).

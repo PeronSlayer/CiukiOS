@@ -11,12 +11,25 @@
 
 static struct entropy_pool pool;
 static struct kmutex lock;
-/* One CPU on the current kernel. SMP must allocate a buffer per CPU. */
-static struct { uint32_t words[4], count, sources; } fast;
+/* One CPU on the current kernel. SMP must allocate a buffer per CPU.
+ * last: low TSC word of the newest edge; a drain with an unchanged value
+ * (stopped counter) is mixed but never credited. */
+static struct { uint32_t words[4], count, sources, last; } fast;
+static uint32_t drained_last;
 static bool booted, worker_started;
 static unsigned reported_reseeds;
 static bool reported_failure;
 static uint64_t boot_start, boot_per_ms;
+/* f6-19: the jitter source is one of two credited sources. Boot tries the
+ * default OSR once (no boot delay beyond one attempt); the worker retries
+ * with interrupts live, raising the OSR, then retires it for this boot. */
+enum { JITTER_OFF, JITTER_READY, JITTER_RETRY, JITTER_FAILED };
+static const char *const jitter_names[] = {"off", "ready", "retry", "failed"};
+static unsigned jitter, reported_jitter, jitter_attempts, jitter_next_osr = ENTROPY_JENT_MIN_OSR;
+static uint64_t jitter_retry_ms;
+#define JITTER_ATTEMPTS 4u          /* boot + three runtime attempts */
+#define JITTER_FIRST_RETRY_MS 1000u
+static const uint32_t jitter_backoff_ms[] = {30000u, 120000u};
 #define RAW_LIMIT 1048576u
 #define RAW_FRAME 64u
 /* One bounded attempt cannot produce more samples than measurement rounds.
@@ -132,17 +145,46 @@ static uint64_t boot_clock_rate(void)
 }
 static void record(void)
 {
-    klog("[entropy] sources=%u irq_mask=%04x estimate_bits=%u initialised_ms=%llu health=%s reseeds=%u",
+    klog("[entropy] sources=%u irq_mask=%04x estimate_bits=%u initialised_ms=%llu health=%s reseeds=%u jitter=%s irq_bits=%u",
          pool.sources, fast.sources, pool.ready ? ENTROPY_SEED_BITS : pool.estimate_bits,
-         pool.initialised_ms, pool.failed ? "fail" : "ok", pool.reseeds);
-    reported_reseeds = pool.reseeds; reported_failure = pool.failed;
+         pool.initialised_ms, pool.failed ? "fail" : "ok", pool.reseeds, jitter_names[jitter], pool.irq_bits);
+    reported_reseeds = pool.reseeds; reported_failure = pool.failed; reported_jitter = jitter;
+}
+/* One record per attempt: the library result, the OSR reached, the first
+ * health alarm (bits, stage, OSR, round) and the rounds per stage. */
+static void jitter_report(const char *attempt)
+{
+    static const char *const stages[] = {"powerup", "memory", "sha3", "output"};
+    struct entropy_jent_report r;
+    entropy_jent_report(&r);
+    klog("[entropy] jitter attempt=%s result=%d osr=%u alarm=%04x stage=%s alarm_osr=%u round=%u rounds=%u/%u/%u/%u refused=%u expired=%u state=%s",
+         attempt, r.result, r.osr, r.alarm, stages[r.alarm_stage < 4 ? r.alarm_stage : 0], r.alarm_osr, r.alarm_round,
+         r.rounds[0], r.rounds[1], r.rounds[2], r.rounds[3], (unsigned)r.refused, entropy_jent_expired(), jitter_names[jitter]);
+}
+/* A failed attempt retires the collector, never the pool: interrupt timing
+ * remains a credited source. A permanent library health failure (not this
+ * adapter's budget) or the last attempt ends jitter collection for this boot. */
+static void jitter_retire(const char *attempt)
+{
+    struct entropy_jent_report r;
+    entropy_jent_report(&r);
+    entropy_jent_close();
+    jitter_attempts++;
+    if (r.osr >= jitter_next_osr) jitter_next_osr = r.osr < ENTROPY_JENT_MAX_OSR ? r.osr + 1 : ENTROPY_JENT_MAX_OSR;
+    jitter = r.permanent || jitter_attempts >= JITTER_ATTEMPTS ? JITTER_FAILED : JITTER_RETRY;
+    if (jitter == JITTER_RETRY) {
+        unsigned backoff = jitter_attempts - 1;
+        jitter_retry_ms = (g_current ? now_ms() : 0) +
+            (backoff == 0 ? JITTER_FIRST_RETRY_MS : jitter_backoff_ms[backoff - 1 < 2 ? backoff - 1 : 1]);
+    }
+    jitter_report(attempt);
 }
 static bool collect(void)
 {
     uint8_t bytes[32];
     if (entropy_jent_read(bytes)) {
-        kmutex_lock(&lock); entropy_pool_fail(&pool); kmutex_unlock(&lock);
         entropy_erase(bytes, sizeof(bytes));
+        jitter_retire("read");
         return false;
     }
     kmutex_lock(&lock);
@@ -151,26 +193,40 @@ static bool collect(void)
     entropy_erase(bytes, sizeof(bytes));
     return true;
 }
+/* Runtime attempt: interrupts and scheduling now perturb the measured
+ * intervals. No pool mutex is held; each round offers a preemption point. */
+static void jitter_restart(void)
+{
+    entropy_jent_begin(&ops);
+    if (entropy_jent_init(jitter_next_osr, ENTROPY_JENT_MAX_OSR)) { jitter_retire("runtime"); return; }
+    struct entropy_jent_report r;
+    entropy_jent_report(&r);
+    jitter = JITTER_READY; jitter_next_osr = r.osr;
+    jitter_report("runtime");
+}
 void entropy_boot(void)
 {
     if (booted) return;
     booted = true; entropy_pool_init(&pool); kmutex_init(&lock);
+    jitter = JITTER_OFF; jitter_attempts = 0; jitter_next_osr = ENTROPY_JENT_MIN_OSR;
     raw_requested = raw_enabled();
     if (g_cpu_tsc) boot_per_ms = boot_clock_rate();
     boot_start = g_cpu_tsc ? jitter_clock() : 0;
+    /* A TSC validated against the PIT backs both credited sources. */
+    pool.source_ready = boot_per_ms != 0;
     if (boot_per_ms) {
         entropy_jent_begin(&ops);
-        pool.source_ready = entropy_jent_init() == 0;
-        while (pool.source_ready && !pool.ready && !pool.failed) {
+        if (entropy_jent_init(ENTROPY_JENT_MIN_OSR, ENTROPY_JENT_MIN_OSR)) jitter_retire("boot");
+        else jitter = JITTER_READY;
+        while (jitter == JITTER_READY && !pool.ready) {
             /* No scheduler/mutex owner exists before stack-guard seeding. */
             uint8_t bytes[32];
-            int e = entropy_jent_read(bytes);
-            if (e) entropy_pool_fail(&pool);
+            if (entropy_jent_read(bytes)) jitter_retire("boot-read");
             else entropy_pool_credit(&pool, bytes, sizeof(bytes), 0);
             entropy_erase(bytes, sizeof(bytes));
         }
     }
-    if (!pool.ready) { entropy_pool_fail(&pool); entropy_jent_close(); }
+    if (!pool.source_ready) entropy_pool_fail(&pool);
     uint64_t cycles = g_cpu_tsc ? jitter_clock() - boot_start : 0;
     klog("[entropy] boot rounds=%u cycles=%llu ms=%llu", entropy_jent_rounds(), cycles,
          boot_per_ms ? cycles / boot_per_ms : 0);
@@ -185,6 +241,7 @@ void entropy_irq(unsigned irq)
     fast.words[at] = ((word << 7) | (word >> 25)) ^ (uint32_t)cycles ^
                      (uint32_t)(cycles >> 32) ^ (irq << 24);
     fast.sources |= 1u << irq;
+    fast.last = (uint32_t)cycles;
 }
 int entropy_get(void *out, size_t bytes)
 {
@@ -201,27 +258,35 @@ static void entropy_worker(void *unused)
         if (!raw) { raw_requested = false; klog("[entropy] raw unavailable=allocation"); }
     }
     for (;;) {
-        uint32_t words[6];
+        uint32_t words[7];
         uint32_t flags = irq_save();
         memcpy(words, fast.words, sizeof(fast.words));
-        words[4] = fast.count; words[5] = fast.sources;
+        words[4] = fast.count; words[5] = fast.sources; words[6] = fast.last;
         fast.count = 0;
         irq_restore(flags);
+        /* Credit only edges stamped by a counter that moved since the last drain. */
+        unsigned events = words[4] && words[6] != drained_last ? words[4] : 0;
+        drained_last = words[6];
         kmutex_lock(&lock);
-        if (words[4]) entropy_pool_mix(&pool, words, sizeof(words), ENTROPY_SOURCE_IRQ);
+        if (events) entropy_pool_credit_irq(&pool, words, sizeof(words), events, now_ms());
+        else if (words[4]) entropy_pool_mix(&pool, words, sizeof(words), ENTROPY_SOURCE_IRQ);
         bool need = entropy_pool_wants_credit(&pool);
         kmutex_unlock(&lock);
-        if (need || raw) {
+        if (jitter == JITTER_RETRY && (need || raw) && now_ms() >= jitter_retry_ms) jitter_restart();
+        if (jitter == JITTER_READY && (need || raw)) {
             entropy_jent_begin(&ops);
             do {
                 if (!collect()) break;
             } while (entropy_pool_wants_credit(&pool));
             /* Fill normal fresh credit before serial waits. The next batch
              * gets a new budget, excluding this attempt's later drain. */
-            if (raw) raw_flush();
+            if (raw && jitter == JITTER_READY) raw_flush();
+        }
+        if (raw && jitter == JITTER_FAILED) {
+            raw_release(); klog("[entropy] raw stopped samples=%u reason=collector", raw_sent);
         }
         kmutex_lock(&lock);
-        if (pool.reseeds != reported_reseeds || pool.failed != reported_failure) record();
+        if (pool.reseeds != reported_reseeds || pool.failed != reported_failure || jitter != reported_jitter) record();
         bool failed = pool.failed;
         kmutex_unlock(&lock);
         entropy_erase(words, sizeof(words));
@@ -237,5 +302,7 @@ void entropy_start(void)
     if (!booted || worker_started || pool.failed) return;
     struct task *t = task_create_kernel("entropy", entropy_worker, NULL, P_NORMAL);
     if (!t) { klog("[entropy] worker=unavailable error=%d", -ENOMEM); return; }
+    /* A boot failure retries once the PIT and device interrupts run. */
+    if (jitter == JITTER_RETRY) jitter_retry_ms = now_ms() + JITTER_FIRST_RETRY_MS;
     worker_started = true; task_start(t);
 }

@@ -141,6 +141,18 @@ struct vfs {
      * stream cannot starve a short publication step. */
     uint32_t publish_waiting[26];
     uint32_t lookup_restarts, lookup_guarded; /* diagnostics: reader restarts */
+    /* f1-93 device windows (logical providers). io_owner/io_mode name the
+     * task whose VFS_IO_MODE holds the drive's guard and how it may give
+     * it up around a device call; io_sequence is a VALIDATE reader's
+     * mutation_sequence snapshot. Namespace protected; the owner reads its
+     * own entries without it. Counters are diagnostics: windows opened,
+     * reader restarts after a concurrent change, guarded/cached steps that
+     * had to warm a sector, and the bounded fallbacks that still read cold
+     * under the guard (zero in every host gate). */
+    uintptr_t io_owner[26];
+    uint8_t io_mode[26];
+    uint64_t io_sequence[26];
+    uint32_t window_pauses, window_restarts, warm_restarts, cold_fallbacks;
     struct vfs_reader *reader_owners; /* stack records, namespace protected */
     uint32_t urgent_gate_start[26];
     bool urgent_gate_valid[26];
@@ -227,13 +239,44 @@ void vfs_turn_resume_locked(struct vfs *,unsigned drive,uint32_t depth);
 bool vfs_turn_try_resume_locked(struct vfs *,unsigned drive,uint32_t depth);
 struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical;
     struct vfs_pending_waits diagnostics; };
+/* f1-93 device windows: how a VFS_IO owner treats a logical provider's
+ * device call. NONE keeps the guard across it (legacy, teardown). FREE
+ * gives the guard up around the call and readmits it (FIFO): the owner
+ * holds the drive's writer turn, so no other mutator can intervene, or it
+ * is a barrier whose result does not depend on the volume state. VALIDATE
+ * (readers without the turn) also gives it up, and the call returns
+ * -FS_EAGAIN when any write was published or announced since the VFS_IO
+ * began: the caller restarts from a consistent point. */
+enum vfs_window { VFS_WINDOW_NONE, VFS_WINDOW_VALIDATE, VFS_WINDOW_FREE };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);
+struct vfs_io_state vfs_io_begin_mode_locked(struct vfs *, enum vfs_window);
 void vfs_io_end_locked(struct vfs *, struct vfs_io_state);
+/* Run call under the caller's VFS_IO_MODE window for vol (dos_file_volume
+ * raw sectors); outside one, or for an unattached volume, call directly. */
+int vfs_io_window_call(struct vfs *, struct fat_volume *, bool write, int (*call)(void *), void *arg);
+/* f1-93: directory and chain steps that never hold a volume across a cold
+ * device read. Namespace and the volume's reservation held on entry and
+ * return (the reservation may be released and readmitted in between).
+ * Physical: resident sectors only under the guard; a miss is read with
+ * nothing held and the step restarts. Logical: device windows, restarted
+ * after a concurrent change. name 0: next entry from *cursor (labels:
+ * fat_next_dos); otherwise lookup of name in dir (cursor unused). */
+int vfs_dir_step_locked(struct vfs *, struct fat_volume *, uint32_t dir, const char *name,
+                        uint32_t *cursor, struct fat_entry *, bool labels);
+/* Clusters in the chain starting at first (st_blocks), the same way. */
+int vfs_chain_clusters_locked(struct vfs *, struct fat_volume *, uint32_t first, uint32_t *clusters);
+/* f3-51c write generation of a file location (identity lock taken). */
+uint64_t vfs_change_generation(struct vfs *, struct fat_volume *, uint32_t parent, uint32_t index);
 /* Filesystem expressions must not call namespace/observer helpers. */
 #define VFS_IO(v, expression) __extension__ ({ \
     struct vfs *io_v_ = (v); \
     if (!io_v_->active) fs_panic("filesystem without volume reservation"); \
     struct vfs_io_state io_mask_ = vfs_io_begin_locked(io_v_); \
+    int io_result_ = (expression); vfs_io_end_locked(io_v_, io_mask_); io_result_; })
+#define VFS_IO_MODE(v, mode, expression) __extension__ ({ \
+    struct vfs *io_v_ = (v); \
+    if (!io_v_->active) fs_panic("filesystem without volume reservation"); \
+    struct vfs_io_state io_mask_ = vfs_io_begin_mode_locked(io_v_, (mode)); \
     int io_result_ = (expression); vfs_io_end_locked(io_v_, io_mask_); io_result_; })
 #define VFS_IO_VOID(v, expression) do { \
     struct vfs *io_v_ = (v); \

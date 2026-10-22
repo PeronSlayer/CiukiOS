@@ -163,6 +163,13 @@ static int read_transport(struct block_cache *c, struct blkdev *d, uint64_t lba,
     while (*at!=&fill) { scan_service(&work); at=&(*at)->next; }
     *at=fill.next; return e;
 }
+/* f1-93: a dirty block under write-back holds valid bytes that nobody may
+ * change until the write completes (cache_write waits, publication returns
+ * EAGAIN): a reader copies them instead of waiting for the device command,
+ * as cache_peek already does. A fill (never dirty) is still waited for. */
+static bool readable_busy(const struct cache_block *b) {
+    return b->busy && b->dirty && !b->invalid && b->dev && b->generation==b->dev->media_generation;
+}
 static int wait_block(struct block_cache *c, struct cache_block *b) {
     if (b->waiters==255) fs_panic("cache waiters");
     b->waiters++;
@@ -353,7 +360,7 @@ retry:
     if ((e=layout_for(c,d))) return e;
     struct cache_block *b=find(c,d,lba);
     if (b) {
-        if (b->busy) { if (issued && read) *issued=true; e=wait_block(c,b); if (e) return e; goto retry; }
+        if (b->busy && !(read && readable_busy(b))) { if (issued && read) *issued=true; e=wait_block(c,b); if (e) return e; goto retry; }
         c->hits++; if (read) c->demand_hits++;
         prefetch_finish(c,b,read); touch(c,b); *out=b; return 0;
     }
@@ -941,7 +948,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
     for (unsigned i=0; !e && i<count; i++) {
         if (!(i & 15u)) fs_service(); /* 16 short hash walks plus <=8 KiB copy */
         struct cache_block *b=find(c,d,lba+i);
-        if (b && b->busy) { e=wait_block(c,b); if (e) break; b=find(c,d,lba+i); }
+        if (b && b->busy && !readable_busy(b)) { e=wait_block(c,b); if (e) break; b=find(c,d,lba+i); }
         if (b) {
             prefetch_finish(c,b,true); c->demand_hits++;
             memcpy((uint8_t *)buf+i*512,b->data,512);
@@ -960,7 +967,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         /* Recheck after any preceding unlocked transport. */
         struct cache_block *existing=find(c,d,lba+i);
         if (existing) {
-            if (existing->busy) { e=wait_block(c,existing); continue; }
+            if (existing->busy && !readable_busy(existing)) { e=wait_block(c,existing); continue; }
             prefetch_finish(c,existing,true); c->demand_hits++;
             memcpy((uint8_t *)buf+i*512,existing->data,512); i++; continue;
         }

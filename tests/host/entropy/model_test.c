@@ -67,7 +67,36 @@ static void schedule(void)
     for (unsigned i=0;i<32;i++) CHECK(!p.key[i]);
     puts("PASS no uncredited/startup output, key erasure, time/byte reseed thresholds, fresh reseed and failure erasure");
 }
-int main(void) { setvbuf(stdout,NULL,_IOLBF,0); vectors(); schedule();
+/* f6-19 Amendment 4: interrupt timing as a credited source (Linux random.c:
+ * count/64 bits per fast-pool mix), bounded by the fast buffer's 128 events. */
+static void irq_credit(void)
+{
+    struct entropy_pool p; entropy_pool_init(&p);
+    uint32_t words[7] = {1, 2, 3, 4, 128, 0x4801, 99};
+    entropy_pool_credit_irq(&p, words, sizeof(words), 128, 0);   /* no validated TSC yet */
+    CHECK(p.sources == ENTROPY_SOURCE_IRQ && !p.estimate_bits && !p.irq_events && !p.irq_bits);
+    p.source_ready = true;
+    entropy_pool_credit_irq(&p, words, sizeof(words), 63, 0); CHECK(!p.estimate_bits && p.irq_events == 63);
+    entropy_pool_credit_irq(&p, words, sizeof(words), 1, 0); CHECK(p.estimate_bits == 1 && !p.irq_events && p.irq_bits == 1);
+    entropy_pool_credit_irq(&p, words, sizeof(words), 100000, 0); CHECK(p.estimate_bits == 3 && p.irq_bits == 3);
+    entropy_pool_credit_irq(&p, words, sizeof(words), 0, 0); CHECK(p.estimate_bits == 3);
+    unsigned drains = 0;
+    while (!p.ready) { entropy_pool_credit_irq(&p, words, sizeof(words), 128, 9); CHECK(++drains <= 128); }
+    CHECK(drains == 127 && p.reseeds == 1 && p.initialised_ms == 9 && p.irq_bits == 256 && !p.estimate_bits);
+    CHECK(p.sources == ENTROPY_SOURCE_IRQ);   /* IRQ-only initialisation */
+    uint8_t out[32]; CHECK(!entropy_pool_read(&p, out, sizeof(out), 9));
+    while (entropy_pool_wants_credit(&p)) entropy_pool_credit_irq(&p, words, sizeof(words), 128, 10);
+    struct entropy_pool saved = p;
+    entropy_pool_credit_irq(&p, words, sizeof(words), 128, 10);   /* saturated: mixed only */
+    CHECK(p.estimate_bits == 256 && p.irq_bits == saved.irq_bits && !p.irq_events && memcmp(&p.conditioner, &saved.conditioner, sizeof(p.conditioner)));
+    /* Both sources: jitter bytes and IRQ edges share one conditioner and one estimate. */
+    CHECK(!entropy_pool_read(&p, out, 1, ENTROPY_RESEED_MS + 10) && p.reseeds == 2 && !p.estimate_bits);
+    feed(&p, ENTROPY_RESEED_MS + 10); CHECK(p.estimate_bits == 256 && p.sources == (ENTROPY_SOURCE_IRQ | ENTROPY_SOURCE_JITTER));
+    entropy_pool_fail(&p); unsigned bits = p.irq_bits;
+    entropy_pool_credit_irq(&p, words, sizeof(words), 128, 11); CHECK(p.failed && p.irq_bits == bits && !p.ready);
+    puts("PASS f6-19 IRQ credit: none before a validated TSC, 1 bit per 64 edges, 128-edge drain cap, IRQ-only seed after 127 drains, saturation mixes only, shared estimate with jitter, none after failure");
+}
+int main(void) { setvbuf(stdout,NULL,_IOLBF,0); vectors(); schedule(); irq_credit();
     struct entropy_pool p; entropy_pool_init(&p); p.source_ready = true; feed(&p, 0);
     CHECK(p.ready && entropy_pool_wants_credit(&p)); feed(&p, 0);
     CHECK(p.estimate_bits == 256 && !entropy_pool_wants_credit(&p));
