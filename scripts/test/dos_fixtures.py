@@ -8,7 +8,7 @@ builds, inside the run directory only:
 
 1. a private DOS VM base image with the exact DOSBOOT.IMG geometry
    (scripts/build_dos_image.write_fat16): the DOS system payloads read back
-   from build/f0/dos/DOSBOOT.IMG (hashes checked against its manifest) plus
+   from build/f0/dos/UNIFIED.IMG (hashes checked against its manifest) plus
    the game directory as /<TARGET> and generated test files;
 2. a FAT16 superfloppy (mkfs.fat) holding that image as \\CIUKIGAM.IMG in one
    contiguous, sparse chain; the kernel mounts it as a further drive and the
@@ -26,6 +26,7 @@ import importlib.util
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -164,21 +165,50 @@ def dos_system(dos_image, expected_sha256=None):
     dos_image = Path(dos_image)
     manifest_path = dos_image.with_suffix('.json')
     if not dos_image.is_file() or not manifest_path.is_file():
-        raise ValueError('DOS VM payload missing: build/f0/dos/DOSBOOT.IMG (make build-full)')
+        raise ValueError('DOS VM payload missing: build/f0/dos/UNIFIED.IMG (make build-full)')
     manifest = json.loads(manifest_path.read_text())
     actual = sha(dos_image)
     if actual != manifest.get('image_sha256') or (expected_sha256 and actual != expected_sha256):
-        raise ValueError('DOSBOOT.IMG differs from its manifest or the canonical image')
+        raise ValueError('UNIFIED.IMG differs from its manifest or the canonical image')
     with dos_image.open('rb') as stream:
         boot = stream.read(512)
         loader = stream.read(4096)
     files = {}
     for payload in manifest['payloads']:
-        data = run(['mcopy', '-n', '-i', dos_image, '::' + payload['path'], '-']).stdout
+        data = run(['mcopy', '-n', '-i', mtools_image(dos_image), '::' + payload['path'], '-']).stdout
         if len(data) != payload['size'] or hashlib.sha256(data).hexdigest() != payload['sha256']:
             raise ValueError('DOS payload read-back mismatch: ' + payload['path'])
         files[payload['path']] = data
     return boot, loader, files, actual
+
+
+def mtools_image(path):
+    """Address the FAT partition of a unified guest, or a synthetic host FAT."""
+    with Path(path).open('rb') as stream:
+        header=stream.read(512)
+    if len(header)==512 and header[450]==0x06:
+        return str(path)+'@@'+str(struct.unpack_from('<I',header,454)[0]*512)
+    return str(path)
+
+
+def write_guest(path, boot, loader, files, directories):
+    """Production fixtures retain the unified fork; legacy kernels fail closed.
+    A superfloppy branch exists only for synthetic host parser fixtures."""
+    if '/SYSTEM/CIUKIDOS.SYS' in files:
+        raise ValueError('classic CiukiDOS is retired; rebuild the unified DOS payload')
+    dos=_build_dos()
+    if '/CIUKIDF.SYS' not in files:
+        dos.write_fat16(path,boot,loader,files,directories=directories)
+        return run(['fsck.fat','-n',path]).stdout.decode(errors='replace')
+    identity=json.loads(files['/D48/UNI.JSN'])
+    if identity.get('profile',{}).get('kernel')!='unified':
+        raise ValueError('fixture requires the unified fork')
+    spec=importlib.util.spec_from_file_location('fixture_unified',ROOT/'scripts/dos_conformance.py')
+    conformance=importlib.util.module_from_spec(spec); spec.loader.exec_module(conformance)
+    conformance.build_reference(path,files,directories,guest=(files,identity))
+    # The outer fixture exposes the fixed VMM geometry; the unused tail is zero.
+    with Path(path).open('r+b') as stream: stream.truncate(dos.SECTORS*512)
+    return 'unified partition: fsck and payload read-back passed by build_reference'
 
 
 def embed(outer, inner):
@@ -241,7 +271,7 @@ def generate(fixture, directory, index=0, root=ROOT, expected_dos_sha256=None, d
     directory = check_output(directory, root)
     directory.mkdir(parents=True, exist_ok=True)
     dos = _build_dos()
-    boot, loader, files, dos_sha = dos_system(dos_image or Path(root) / 'build/f0/dos/DOSBOOT.IMG', expected_dos_sha256)
+    boot, loader, files, dos_sha = dos_system(dos_image or Path(root) / 'build/f0/dos/UNIFIED.IMG', expected_dos_sha256)
     target = spec['target']
     workload_files = []
     for name, path in chosen.items():
@@ -263,10 +293,10 @@ def generate(fixture, directory, index=0, root=ROOT, expected_dos_sha256=None, d
             raise ValueError('DOS fixture already exists: ' + path.name)
     try:
         # The boot sector's BPB names CIUKIOSFULL: keep the root label equal (fsck.fat compares them).
-        dos.write_fat16(inner, boot, loader, files, directories=[target])
-        inner_check = run(['fsck.fat', '-n', inner]).stdout.decode(errors='replace')
+        directories=sorted({p.rsplit('/',1)[0] for p in files if p.count('/')>1}|{target})
+        inner_check = write_guest(inner,boot,loader,files,directories)
         for item in workload_files:
-            data = run(['mcopy', '-n', '-i', inner, '::' + item['path'], '-']).stdout
+            data = run(['mcopy', '-n', '-i', mtools_image(inner), '::' + item['path'], '-']).stdout
             if hashlib.sha256(data).hexdigest() != item['sha256']:
                 raise ValueError('base image read-back mismatch: ' + item['path'])
         base_sha = sha(inner)

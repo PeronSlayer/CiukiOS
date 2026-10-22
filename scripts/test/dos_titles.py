@@ -347,7 +347,7 @@ def generate(fixture, directory, index=0, root=ROOT, expected_dos_sha256=None, d
     payload = files(t, pins, root)
     directory = dos_fixtures.check_output(directory, root)
     directory.mkdir(parents=True, exist_ok=True)
-    boot, loader, system, dos_sha = dos_fixtures.dos_system(dos_image or Path(root) / 'build/f0/dos/DOSBOOT.IMG', expected_dos_sha256)
+    boot, loader, system, dos_sha = dos_fixtures.dos_system(dos_image or Path(root) / 'build/f0/dos/UNIFIED.IMG', expected_dos_sha256)
     if '/RUNREC.COM' not in system: raise ValueError('canonical DOS system lacks RUNREC.COM')
     if set(system) & set(payload): raise ValueError('title collides with DOS system')
     combined = dict(system, **payload)
@@ -356,10 +356,9 @@ def generate(fixture, directory, index=0, root=ROOT, expected_dos_sha256=None, d
     planfile = directory / 'DTITLE.PLN'
     if any(p.exists() for p in (inner, outer, planfile)): raise ValueError('title fixture already exists')
     try:
-        dos_fixtures._build_dos().write_fat16(inner, boot, loader, combined, directories=dirs)
-        dos_fixtures.run(['fsck.fat', '-n', inner])
+        dos_fixtures.write_guest(inner,boot,loader,combined,dirs)
         for path, data in combined.items():
-            if dos_fixtures.run(['mcopy', '-n', '-i', inner, '::' + path, '-']).stdout != data:
+            if dos_fixtures.run(['mcopy', '-n', '-i', dos_fixtures.mtools_image(inner), '::' + path, '-']).stdout != data:
                 raise ValueError('private disk read-back mismatch')
         base_sha = dos_fixtures.sha(inner)
         with outer.open('xb') as stream: stream.truncate(dos_fixtures.OUTER_BYTES)

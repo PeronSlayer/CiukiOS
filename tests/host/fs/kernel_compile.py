@@ -45,6 +45,12 @@ sources += [root/'src/kernel/drivers/i8042.c']
 # f3-49b: compile the production DOS adapter/teardown with the target ABI.
 sources += [root/'src/kernel/vm'/name for name in
             ('dos_file.c', 'dos_file_volume.c', 'dos_file_vm.c', 'dosvm_disk.c', 'dosvm.c')]
+# f3-63: unified-only launch/close, authorized base mutation, shell readiness
+# and affected runtime probes must also compile with the freestanding ABI.
+sources += [root/'src/kernel/vm'/name for name in ('dosvm_client.c', 'dosvm_programs.c')]
+sources += [root/'src/kernel/lib/sha256.c']
+sources += [root/'src/kernel/probes'/name for name in
+            ('f3_probes_dos_conformance.c', 'f3_probes_video.c', 'f3_probes_workloads.c', 'f3_probes_titles.c')]
 for source in sources:
     subprocess.run(['clang',*flags,'-I'+str(root/'src/kernel/include'),'-fstack-usage','-c',str(source),
                     '-o',str(out/(source.stem+'.o'))],check=True)

@@ -578,13 +578,14 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
 }
 /* Programs > Games: a DOS Box window titled after the game, typing its command.
  * f3-61: kernel, when given (the vm-game probe only), is the DOS Box's own
- * --dos-kernel= choice, saved as the game's setting exactly as F12 does. */
+ * unified-only runtime assertion; no configuration is written. */
 int desk_launch_game(struct desktop *d, int index, const char *kernel)
 {
     if (index < 0 || (unsigned)index >= DESK_GAME_COUNT) return -EINVAL;
     if(d->games_removed&(1u<<index)){
         desk_shell_message(d,"Games","This bundled game has been removed. Reinstall CiukiOS to restore it.",1);return -ENOENT;
     }
+    if (kernel && strcmp(kernel,"unified")) return -EINVAL;
     char name[48], choice[32];
     snprintf(name, sizeof(name), "--name=%s", desk_games[index].title);
     snprintf(choice, sizeof(choice), "--dos-kernel=%s", kernel ? kernel : "");

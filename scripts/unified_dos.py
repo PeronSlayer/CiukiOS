@@ -741,7 +741,8 @@ def corresponding_source(output):
     for name, data in fork_source_files().items():
         files["ciukios/third_party/freedos/unified/" + name] = data
     paths = ["scripts/unified_dos.py", "scripts/unified_fork.py", "docs/licenses/CiukiDOS-unified-kernel-GRANT.md",
-             "scripts/dos_conformance.py", "scripts/build_dos_image.py",
+             "scripts/dos_conformance.py", "scripts/build_dos_image.py", "scripts/build_games_disk.py",
+             "scripts/test/dos_fixtures.py", "scripts/test/fat_fixtures.py", "scripts/test/evidence.py",
              "scripts/ciukidos_image.py", "src/boot/full_boot.asm", "src/boot/full_stage1_loader.asm",
              "config/openwatcom.json", "docs/design/unified-dos-licenses.tsv",
              "third_party/freedos/1.3/UPSTREAM.json", "third_party/freedos/1.3/boot16.bin",
@@ -866,7 +867,7 @@ def readback(read, identity, license_files):
 def install(out, system_files, directories, games_files, *, source_output):
     """Called only by the canonical image builder when qualification exists."""
     ref = reference_module()
-    files, identity = guest_files()
+    files, identity = fork_guest_files()
     identity = ref.build_reference(out, system_files, directories, games_files, guest=(files, identity))
     source = corresponding_source(source_output)
     license_files, metadata = notices(identity, source)

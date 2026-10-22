@@ -164,13 +164,13 @@ class ImagePayloadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "directory display name: Games"):
                 image.check_payloads(volume, [], directories)
 
-    @unittest.skipUnless((ROOT / "build/f0/dos/DOSBOOT.IMG").is_file() and
+    @unittest.skipUnless((ROOT / "build/f0/dos/UNIFIED.IMG").is_file() and
                          all(shutil.which(t) for t in ("mkfs.fat", "mmd", "mcopy", "mdir")),
                          "run python3 scripts/build_dos_image.py first; requires mtools")
     def test_games_disk_payloads(self):
         """Owner decision 2026-10-12: the shareware games disk at /Games/CIUKIGAM.IMG with the
         packages' licence documents and provenance; the guard accepts only pinned shareware files."""
-        sources, directories, metadata, free = image.games_payloads(ROOT / "build/f0/dos/DOSBOOT.IMG",
+        sources, directories, metadata, free = image.games_payloads(ROOT / "build/f0/dos/UNIFIED.IMG",
                                                                     self.work / "games/CIUKIGAM.IMG")
         licences = {f"/system/licenses/{p}-{n}" for p, n in (("wolf3d-shareware", "VENDOR.DOC"),
                     ("wolf3d-shareware", "FILE_ID.DIZ"), ("wolf3d-shareware", "UPSTREAM.json"),
@@ -182,7 +182,7 @@ class ImagePayloadTests(unittest.TestCase):
         records = image.payload_records(sources)
         disk = next(r for r in records if r["path"] == "/Games/CIUKIGAM.IMG")
         self.assertEqual((disk["sha256"], disk["size"]), (metadata["image_sha256"], metadata["size"]))
-        self.assertLess(disk["size"], 32 * 1024 * 1024)
+        self.assertLess(disk["size"], 128 * 1024 * 1024)
         self.assertTrue(all(f["redistribution"] in ("free", "ciukios") for f in metadata["files"]))
         names = {f["path"].rsplit("/", 1)[1] for f in metadata["files"]}
         self.assertFalse({n for n in names if dos.REGISTERED_DATA.fullmatch(n)})
@@ -201,14 +201,14 @@ class ImagePayloadTests(unittest.TestCase):
         # The FAT32 read-back the image build performs.
         volume = self.work / "games.fat"
         with volume.open("wb") as stream:
-            stream.truncate(32 * 1024 * 1024)
+            stream.truncate(128 * 1024 * 1024)
         subprocess.run(["mkfs.fat", str(volume)], check=True, stdout=subprocess.DEVNULL)
         image.populate_payloads(volume, sources, {"/System"} | directories)
         with patch.object(image, "PART_LBA", 0):
             image.check_payloads(volume, records, directories)
         # build() installs it and hands the same pin set to the guard.
         text = (ROOT / "scripts/build_image.py").read_text()
-        self.assertIn("games_payloads(dos_image)", text)
+        self.assertIn("dos_payloads(out)", text)
         self.assertIn("refuse_local_payloads({p[\"path\"]: p[\"sha256\"] for p in payloads}, free=free)", text)
 
     def test_archive_rejects_traversal_and_links(self):

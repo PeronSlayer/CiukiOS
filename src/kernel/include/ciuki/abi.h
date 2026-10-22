@@ -1457,11 +1457,12 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_EVENT_STATE 2u
 #define CIUKI_DOSVM_EVENT_CONSOLE 4u
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
-/* CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
- * a reference/unified override is permitted only for an explicit game, never the shell. */
+/* CREATE launch.kernel: all three historical values map to unified (2).
+ * Values 0/1 are retired compatibility inputs, never another kernel.
+ * game is the catalog index+1, or zero for the interactive shell. */
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
-#define CIUKI_DOSVM_UNIFIED 2u /* opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57) */
+#define CIUKI_DOSVM_UNIFIED 2u /* sole CiukiDOS K2043 fork, DFV2 binding and native IFS */
 #define CIUKI_DOSVM_GAME_COUNT 3u
 /* f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
  * per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS
@@ -1472,6 +1473,7 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_LAUNCH_FAILED 2u
 #define CIUKI_DOSVM_FULL_SCREEN 4u /* STATUS.changed */
 #define CIUKI_DOSVM_SUSPENDED 8u
+#define CIUKI_DOSVM_SHELL_READY 32u /* STATUS: shell blocked for input, guest key queues empty */
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u

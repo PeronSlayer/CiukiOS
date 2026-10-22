@@ -356,3 +356,20 @@ with one `H61 PLAY` progress line per second, and `GUEST_PLAY_QUIT=1` leaves
 DOOM through its menu (Esc, Up, Enter, y) and requires the shell prompt with
 no EXEC frame outstanding. Not QEMU or hardware evidence. Decisions:
 `docs/validation/f3-61-unified-dos-game-watchdog.md`.
+
+## f3-63 retirement
+
+The canonical image and every desktop DOS launch use the qualified unified
+fork. ABI kernel values 0/1 map to 2 at the window boundary. The pristine
+FreeDOS comparison guest remains inside the host harness; it uses the explicit
+host transport rather than a production kernel selector. The old two-kernel
+`qemu_reference.py` entry point refuses execution. The classic H50 CPU boot and
+its emitted-layout/idle tests are retired from the host gate; H49 file API tests
+and H56/H57 unified binding/file tests remain. `hook_cpu.py --prepare` supplies
+shared host preparation only and does not assemble the classic kernel.
+
+`test_unified_only.py` tests the production payload plan with synthetic builder
+outputs, without constructing an OS image. The DOS Box loading replay includes
+kernel/settings CLI refusal, F12 forwarding, busy-close retention and the actual
+shell-readiness handshake. Its 2505 ms first-frame model excludes CREATE and
+cannot close the T23 cold-verification or post-frame CPU targets.

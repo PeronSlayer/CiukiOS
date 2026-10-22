@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 
 
-@unittest.skipUnless(shutil.which("nasm"), "requires NASM")
+@unittest.skip("f3-63: classic kernel build retired; unified binding/layout is tested by H56/H57")
 class HookLayoutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -87,7 +87,7 @@ static void test_speed_window(void)
     c = command_for(w.id, w.generation); c.presentation.bands[0] = 1;
     CHECK(dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) == -EINVAL);
     c = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)));
+    CHECK(!finish_test_vm( &c, sizeof(c)));
     fake_current = 0; empty();
     puts("f3-13 launch and speed: shell hidden until EXEC/video, persistent writable chain-4, sparse band transport, completion cadence and focused share PASS");
 }

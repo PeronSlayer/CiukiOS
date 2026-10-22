@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/storage.h>
 #include <ciuki/task.h>
+#include <ciuki/sha256.h>
 #include "../fs/program_tree.h"
 int dosvm_game_remove_reserve(unsigned);
 void dosvm_game_remove_release(unsigned);
@@ -17,6 +18,7 @@ static struct {
     struct blkdev device;
     int fd;
     uint32_t sectors;
+    uint8_t hash_buffer[4096];
     bool busy;
 } owner;
 static int image_read(struct blkdev *d,uint64_t lba,uint32_t count,void *out)
@@ -56,6 +58,29 @@ static int remove_overlays(unsigned game)
     }
     return -FS_ELOOP;
 }
+/* Authorized base mutation publishes a fresh full-file digest before another
+ * launch. A failed update leaves the old sidecar, so launch fails closed. */
+static int update_identity(void)
+{
+    struct sha256_ctx ctx; uint8_t raw[32]; char text[65];
+    uint64_t pos=0; int e=vfs_seek(&owner.table,owner.fd,0,VFS_SEEK_SET,&pos);
+    sha256_init(&ctx);
+    for (uint32_t at=0;!e && at<owner.sectors*512u;) {
+        size_t n=owner.sectors*512u-at, got=0;
+        if (n>sizeof(owner.hash_buffer)) n=sizeof(owner.hash_buffer);
+        e=vfs_read(&owner.table,owner.fd,owner.hash_buffer,n,&got);
+        if (!e && got!=n) e=-FS_EIO;
+        if (!e) { sha256_update(&ctx,owner.hash_buffer,n); at+=(uint32_t)n; kpreempt_point(); }
+    }
+    if (e) return e;
+    sha256_final(&ctx,raw); sha256_hex(raw,text); text[64]='\n';
+    int h=vfs_open(&owner.table,"C:\\SYSTEM\\DOS\\UNIFIED.SHA",VFS_WRITE|VFS_TRUNCATE,VFS_DENY_ALL,0);
+    if (h<0) return h;
+    size_t done=0; e=vfs_write(&owner.table,h,text,sizeof(text),&done);
+    if (!e && done!=sizeof(text)) e=-FS_EIO;
+    if (!e) e=vfs_commit(&owner.table,h);
+    int closed=vfs_close(&owner.table,h); return e ? e : closed;
+}
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 {
     if(!size || !game || game>3)return -FS_EINVAL;
@@ -78,11 +103,11 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
         int pe=vfs_stat(&owner.table,pending_path,&entry);
         if(!pe)pending=true;else if(pe!=-FS_ENOENT)e=pe;
     }
-    if(!e)e=vfs_stat(&owner.table,"C:\\GAMES\\CIUKIGAM.IMG",&entry);
+    if(!e)e=vfs_stat(&owner.table,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",&entry);
     if(!e && ((entry.attr&FAT_ATTR_DIR) || entry.size%512u || entry.size/512u>GAME_SECTORS))e=-FS_EINVAL;
     if(!e) {
         owner.sectors=entry.size/512u;
-        owner.fd=vfs_open(&owner.table,"C:\\GAMES\\CIUKIGAM.IMG",
+        owner.fd=vfs_open(&owner.table,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",
             remove ? VFS_READ|VFS_WRITE : VFS_READ,remove ? VFS_DENY_ALL : VFS_DENY_WRITE,0);
         if(owner.fd<0)e=owner.fd;
     }
@@ -90,7 +115,11 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
         .capacity=GAME_SECTORS,.sector_size=512,.logical=true,.write_cache_state=BLKDEV_CACHE_ENABLED};
     bool mounted=false;
     if(!e) {
-        e=fat_prepare_removable(&owner.fat,&s->cache,&owner.device,0,GAME_SECTORS);
+        uint8_t mbr[512];
+        e=image_read(&owner.device,0,1,mbr);
+        uint32_t start=!e && mbr[450]==0x06 ? fs_rd32(mbr+454) : 0;
+        if (!e) e=start>=GAME_SECTORS ? -FS_EIO :
+            fat_prepare_removable(&owner.fat,&s->cache,&owner.device,start,GAME_SECTORS-start);
         mounted=!e;
     }
     /* Prove traversal bounds and ownership before deleting any entry. */
@@ -111,6 +140,7 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
         dosvm_game_digest_invalidate(); /* also after a partially issued write */
     }
     if(mounted){int close_error=fat_unmount(&owner.fat);if(!e)e=close_error;}
+    if(!e && remove)e=update_identity();
     if(!e && remove)e=remove_overlays(game);
     if(owner.fd>=0){int close_error=vfs_close(&owner.table,owner.fd);if(!e)e=close_error;}
     if(table)vfs_table_destroy(&owner.table);

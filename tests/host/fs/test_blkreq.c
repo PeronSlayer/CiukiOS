@@ -154,21 +154,29 @@ static void faults(void) {
     m.cancel_issued=false; m.delay_ms=25;
     assert(!blkdev_read(&m.dev,0,128,b));
     struct blk_queue_stats stats; blk_queue_snapshot(&m.queue,&stats);
-    assert(stats.limit_bytes<65536 && stats.limit_bytes>=4096 && stats.limit_bytes%512==0);
-    /* T23 regression (image 3d18f2db): a slow phase must not leave single-
-     * sector commands for the rest of the session. Very slow commands keep
-     * the floor at one page; fast commands grow the limit back to 64 KiB. */
-    m.delay_ms=200; assert(!blkdev_read(&m.dev,0,128,b));
-    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==4096);
-    m.delay_ms=0;
-    for (unsigned i=0;i<8 && stats.limit_bytes<65536;i++) { m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); blk_queue_snapshot(&m.queue,&stats); }
-    assert(stats.limit_bytes==65536);
+    assert(stats.limit_bytes==65536); /* no other reader: fixed latency is not bandwidth */
+    fake_clock=true; clock_ms=1000; m.delay_ms=106;
+    m.queue.limit_bytes=4608; m.calls=0;
+    assert(!blkdev_read(&m.dev,0,128,b));
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==65536 && m.calls==2);
+    /* A queued demand still invokes the fairness split. Once it has drained,
+     * the following uncontended stream recovers in one completion. */
+    uint8_t small[512];
+    struct blk_request *a=prepare(&m,BLK_READ,0,65536,b,BLK_DEMAND,0);
+    struct blk_request *other=prepare(&m,BLK_READ,128,512,small,BLK_DEMAND,0);
+    assert(!blk_request_submit(a) && !blk_request_submit(other));
+    assert(blk_queue_run_one(&m.queue));
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes>=4096 && stats.limit_bytes<65536);
+    drop(a,0); drop(other,0);
+    m.calls=0; assert(!blkdev_read(&m.dev,0,128,b));
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==65536 && m.calls==1);
+    fake_clock=false;
     printf("[storage] queue name=host depth=%u/%u/%u age_ms=%u issued=%llu merged=%llu split=%llu cancelled=%llu timeout=%llu backpressure=%llu limit=%u\n",
         stats.depth[0],stats.depth[1],stats.depth[2],stats.oldest_ms,
         (unsigned long long)stats.issued,(unsigned long long)stats.merged,(unsigned long long)stats.split,
         (unsigned long long)stats.cancelled,(unsigned long long)stats.timeouts,(unsigned long long)stats.backpressure,stats.limit_bytes);
     assert(!blk_queue_destroy(&m.queue));
-    puts("PASS command cap=64KiB adaptive<=10ms, timeout, generation, queued/issued cancel and uncertain write");
+    puts("PASS command cap=64KiB contended adaptation and uncontended 106ms/4608-byte recovery, timeout, generation, queued/issued cancel and uncertain write");
 }
 /* f1-96: a controller that cannot finish one command inside the reader
  * budget (full-speed USB: a 64 KiB READ(10) takes about 65 ms) pins its
@@ -183,8 +191,8 @@ static void pinned_limits(void) {
     blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==65536 && !stats.split);
     blk_queue_set_limits(&m.queue,65536,0);
     m.calls=0; assert(!blkdev_read(&m.dev,0,128,b));
-    m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); assert(m.calls>=8);
-    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes<=8192 && stats.limit_bytes>=4096);
+    assert(m.calls==1); /* no demand competitor, even on a slow controller */
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==65536);
     /* One-sector fallback: every request is split into 512-byte commands. */
     blk_queue_set_limits(&m.queue,512,512); m.delay_ms=0;
     m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); assert(m.calls==128 && m.sizes[0]==1 && m.sizes[127]==1);

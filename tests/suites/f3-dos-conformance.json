@@ -3,20 +3,19 @@
   "image": "full",
   "host_tests": true,
   "cases": [],
-  "status": "host-implementation-delivered-runtime-unqualified",
-  "runner": "tests/host/dos/qemu_reference.py",
+  "status": "unified-runtime-only-reference-in-host-harness",
+  "runner": "tests/host/dos/run_unified_file.sh",
   "differential": {
     "profile": "qemu-t23",
     "guests": [
-      "freedos",
       "ciukidos"
     ],
     "reference_release": "FreeDOS 1.3 with SHARE loaded; ANSI and redirector absent",
-    "selector": "f3:dos-conformance run={run_id} guest={guest}",
+    "selector": "f3:dos-conformance run={run_id} guest=ciukidos kernel=unified",
     "timeout_seconds": 900,
     "probe_manifest": "build/f0/dos/conformance/manifest.json",
     "result_format": "D48NNN PASS 0000 or D48NNN FAIL HHHH",
-    "comparison": "all cases present once; both PASS 0000; identical failures fail",
+    "comparison": "FreeDOS reference comparison belongs to the host harness; runtime executes unified only",
     "fixtures": [
       "basic",
       "share",
@@ -26,9 +25,9 @@
     ],
     "terminal": "D48 END run={run_id} guest={guest} count={case_count}",
     "integration_required": [
-      "official FreeDOS 1.3 package/member/license pins and reference boot qualification",
+      "qualified unified fork, shell/SHARE/probe identities and boot qualification",
       "disposable removable E: virtual-block/native-provider fault fixture, post-open arm and reset",
-      "lead same-image reference/candidate transcripts, teardown and image read-back manifest"
+      "lead unified transcript, teardown and canonical image read-back manifest"
     ],
     "integration_manifest": "build/f0/dos-conformance.json",
     "independent_runs": 2

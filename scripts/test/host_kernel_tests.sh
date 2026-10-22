@@ -371,12 +371,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_presenter.c" -o "$out/test_virtual_vga"
 "$out/test_virtual_vga"
-# f3-04 guest runner: the real DOSBOOT.IMG on the production DOS VM and DPMI
-# host code with libx86emu as the CPU (pre-QEMU check, not QEMU evidence).
-# f3-02: keys: types \VMVIDEO.COM the way a desktop window does (8042, IRQ1,
-# guest INT 9) into the shell blocked in INT 16h AH=00h.
-# Optional: needs libx86emu and an already built build/f0/dos/DOSBOOT.IMG.
-dos_image="$root/build/f0/dos/DOSBOOT.IMG"
+# Host CPU instruction stepping and synthetic EXEC models. The canonical
+# unified guest's production boot/IFS tests are H56/H57 below.
 if [[ -f /usr/include/x86emu.h ]]; then
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         "$root/tests/host/dosvm_guest_step_test.c" "$root/tests/host/dosvm_guest_cpu.c" -lx86emu -o "$out/dosvm_guest_step_test"
@@ -391,28 +387,12 @@ if [[ -f /usr/include/x86emu.h ]]; then
         "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
         "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" -lx86emu -o "$out/dosvm_guest"
     # F3-28: always replay EXEC of the hash-pinned Quake executable in a
-    # temporary sparse FAT fixture, even without a canonical DOSBOOT image.
+    # temporary sparse FAT fixture, without building a DOS kernel.
     python3 -B "$root/tests/host/dosvm_exec_test.py" "$out/dosvm_guest"
 fi
-if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"' "${dos_image%.IMG}.json"; then
-    if ! (cd "$root" && timeout 600 "$out/dosvm_guest" "$dos_image" 'keys:\VMVIDEO.COM' VMVIDEO 'gate:\DPMI16.COM' DPMI16 '\DPMI16.COM' DPMI16 '\DPMI32.COM' DPMI32 \
-            '\DPMI4GW.EXE' DPMI4GW 'fault:\DPMIFLT.COM' DPMIFLT > "$out/dosvm_guest.log" 2>&1); then
-        tail -n 40 "$out/dosvm_guest.log"
-        exit 1
-    fi
-    tail -n 1 "$out/dosvm_guest.log"
-    # QEMU TCG model (no data-segment limit checks, TCG CPUID signature): the
-    # clients must take their recorded TCG fallback and still pass.
-    if ! (cd "$root" && GUEST_TCG=1 timeout 600 "$out/dosvm_guest" "$dos_image" '\DPMI16.COM' DPMI16 \
-            '\DPMI32.COM' DPMI32 > "$out/dosvm_guest_tcg.log" 2>&1) ||
-       [[ $(grep -c 'NOTE tcg_no_data_limit_check' "$out/dosvm_guest_tcg.log") != 2 ]]; then
-        tail -n 40 "$out/dosvm_guest_tcg.log"
-        exit 1
-    fi
-    echo "TCG model: $(tail -n 1 "$out/dosvm_guest_tcg.log")"
-else
-    echo "dosvm guest runner: SKIP (no libx86emu headers, or no DOSBOOT.IMG with the f3-04 payloads)"
-fi
+# Canonical unified boot/IFS evidence is run by H57 below. The retired
+# DOSBOOT image and its classic-kernel optional boot cases are no longer built.
+
 
 # F1 firmware queue: fake-time scheduler and the existing production VM fakes.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -591,8 +571,8 @@ python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loade
 
 # f5-06 kernel32 production VFS endpoints and direct-file INI parity.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel32.py
-# f3-50: bound personality, native FAT/VFS and production V86/DPMI CPU model.
-bash "$root/tests/host/dos/run_hook_cpu.sh"
+# f3-63: the classic-kernel H50 CPU boot is retired. Native DOS file API
+# tests above and unified H56/H57 below retain the supported coverage.
 
 # f3-56: unified CiukiDOS DFV2 binding (fork build, native matrix, CPU boots).
 bash "$root/tests/host/dos/run_unified_binding.sh"

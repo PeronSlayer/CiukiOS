@@ -268,7 +268,7 @@ static int title_run(void)
     struct dosvm_ledger before,after;
     dosvm_snapshot(&before);
     struct dosvm *v=0;
-    struct dosvm_config cfg={.probe="title",.base=base,.dpmi=true};
+    struct dosvm_config cfg={.probe="title",.base=base,.dpmi=true,.kernel=2,.disable_file_bridge=true};
     uint64_t started=g_ticks, launched=0, playing=0;
     error=dosvm_create(&cfg,&v);
     if (!error) {

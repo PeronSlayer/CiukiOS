@@ -17,21 +17,12 @@ static void test_kernel_choice(void)
     CHECK(strcmp(hash,v->base_sha256) && strcmp(first,v->overlay_path));
     strcpy(hash,v->base_sha256); destroy(v,false); empty();
     config.kernel=1;config.base="C:\\SYSTEM\\DOS\\FREEDOS.IMG";
-    CHECK(dosvm_create(&config,&v)==-ENOENT && !v); empty();
-    reference_present=true;reference_checksum_missing=true;
-    CHECK(dosvm_create(&config,&v)==-ENOENT && !v); empty();
-    reference_checksum_missing=false;memset(reference_identity,'0',64);reference_identity[64]='\n';
-    CHECK(dosvm_create(&config,&v)==-FS_EIO && !v); empty();
-    memcpy(reference_identity,hash,64);
-    CHECK(!dosvm_create(&config,&v));
-    CHECK(v->disable_file_bridge && strstr(v->overlay_path,"G1K1") && strstr(v->overlay_path,hash));
-    struct dosvm_key previous=dosvm_key(v);destroy(v,false);empty();
-    CHECK(!dosvm_valid(previous));
-    CHECK(!dosvm_create(&config,&v) && v->info.key.generation!=previous.generation);
-    destroy(v,false);empty();
+    CHECK(dosvm_create(&config,&v)==-EINVAL && !v); empty();
+    config.base="C:\\SYSTEM\\DOS\\DOSBOOT.IMG";
+    CHECK(dosvm_create(&config,&v)==-EINVAL && !v); empty();
     /* New personality must not reuse reference sidecar or old COW identity,
      * even when their synthetic base contents happen to be equal. */
-    config.kernel=2;config.base="C:\\SYSTEM\\DOS\\UNIFIED.IMG";
+    config.kernel=2;config.base="C:\\SYSTEM\\DOS\\UNIFIED.IMG";unified_present=false;
     CHECK(dosvm_create(&config,&v)==-ENOENT && !v);empty();
     unified_present=true;unified_checksum_missing=true;
     CHECK(dosvm_create(&config,&v)==-ENOENT && !v);empty();
@@ -41,7 +32,7 @@ static void test_kernel_choice(void)
     CHECK(!dosvm_create(&config,&v));
     CHECK(v->disable_file_bridge && strstr(v->overlay_path,"G1K2") && strstr(v->overlay_path,hash));
     CHECK(!strcmp(last_base,"C:\\SYSTEM\\DOS\\UNIFIED.IMG"));
-    destroy(v,false);empty();unified_present=false;
+    destroy(v,false);empty();unified_identity[0]=0;unified_present=true;
     reference_present=false;bundled_bytes=saved_bytes;
     puts("H51-06 kernel choice: PASS game/kernel/base-specific COW, missing/corrupt reference, close/relaunch ledgers");
 }
@@ -73,17 +64,17 @@ static void test_game_window_base_hash(void)
     /* Hash: one seek and ceil(size/64 KiB) reads; boot sector: one more each. */
     CHECK(base_seeks-seeks==2 && disk_reads-reads==(bundled_bytes+block-1)/block+1);
     struct dosvm *v=dosvm_lookup((struct dosvm_key){w.id,w.generation});
-    CHECK(v && v->game==2 && !v->kernel && !v->disable_file_bridge && !strcmp(last_base,DOSVM_BUNDLED_BASE));
-    CHECK(!strcmp(v->base_sha256,expected) && strstr(v->overlay_path,"G2K0") && strstr(v->overlay_path,expected));
-    CHECK(strstr(game_launch_record,"probe=vm-window event=DATA group=game_launch game=2 kernel=ciukidos base_sha256=") &&
-          strstr(game_launch_record,expected) && strstr(game_launch_record,"bridge=1"));
+    CHECK(v && v->game==2 && v->kernel==2 && v->disable_file_bridge && !strcmp(last_base,DOSVM_DEFAULT_BASE));
+    CHECK(!strcmp(v->base_sha256,expected) && strstr(v->overlay_path,"G2K2") && strstr(v->overlay_path,expected));
+    CHECK(strstr(game_launch_record,"probe=vm-window event=DATA group=game_launch game=2 kernel=unified base_sha256=") &&
+          strstr(game_launch_record,expected) && strstr(game_launch_record,"bridge=0"));
     const uint32_t probes[]={1,127,128,sectors-17,sectors-1};
     for (unsigned i=0;i<sizeof(probes)/sizeof(probes[0]);i++) {
         uint8_t want[512]; memset(want,probes[i]%251,512);
         CHECK(!dosvm_disk_read(v,probes[i],sector) && !memcmp(sector,want,512));
     }
     struct ciuki_dosvm_command shut=command_for(w.id,w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&shut,sizeof(shut))); empty();
+    CHECK(!finish_test_vm(&shut,sizeof(shut))); empty();
     fake_current=saved; bundled_bytes=saved_bytes; disk_base_sector=saved_sector;
     puts("f3-51 game window base hash: PASS 27 MB games disk read once in 64 KiB blocks, digest, COW name, cache");
 }
@@ -111,7 +102,7 @@ static void test_game_digest_cache(void)
     empty();
     uint32_t saved_bytes=bundled_bytes; void (*saved_sector)(uint32_t,void *)=disk_base_sector;
     bundled_bytes=(DOSVM_BASE_MIN_SECTORS+24u)*512u; disk_base_sector=0;
-    const char *base=DOSVM_BUNDLED_BASE;
+    const char *base="C:\\GAMES\\CIUKIGAM.IMG";
     const unsigned blocks=(bundled_bytes+DOSVM_READ_SECTORS*512u-1)/(DOSVM_READ_SECTORS*512u);
     char digest[65];
     /* First launch after boot hashes once; the relaunch reuses the digest. */
@@ -154,13 +145,12 @@ static void test_game_digest_cache(void)
     base_writes=first+1; v=digest_launch(2,0,base,0,1); destroy(v,false); empty();
     base_writes=first; v=digest_launch(2,0,base,0,0); destroy(v,false); empty(); /* evicted */
     base_writes=first+DOSVM_DIGESTS; v=digest_launch(2,0,base,0,1); destroy(v,false); empty();
-    /* FreeDOS: a cached digest still meets the FREEDOS.SHA reference check. */
-    reference_present=true; memcpy(reference_identity,digest,64); reference_identity[64]='\n';
-    const char *freedos="C:\\SYSTEM\\DOS\\FREEDOS.IMG";
-    v=digest_launch(1,1,freedos,0,0); CHECK(v->disable_file_bridge && strstr(v->overlay_path,"G1K1")); destroy(v,false); empty();
-    v=digest_launch(1,1,freedos,0,1); CHECK(!strcmp(v->base_sha256,digest)); destroy(v,false); empty();
-    reference_identity[0]^=1; digest_launch(1,1,freedos,-FS_EIO,1); reference_identity[0]^=1;
-    reference_present=false;
+    /* Unified sidecar is checked even when a digest is cached. */
+    memcpy(unified_identity,digest,64); unified_identity[64]='\n';
+    const char *unified="C:\\SYSTEM\\DOS\\UNIFIED.IMG";
+    v=digest_launch(1,2,unified,0,0); CHECK(v->disable_file_bridge && strstr(v->overlay_path,"G1K2")); destroy(v,false); empty();
+    v=digest_launch(1,2,unified,0,1); CHECK(!strcmp(v->base_sha256,digest)); destroy(v,false); empty();
+    unified_identity[0]^=1; digest_launch(1,2,unified,-FS_EIO,1); unified_identity[0]=0;
     bundled_bytes=saved_bytes; disk_base_sector=saved_sector;
     puts("f3-51c game digest cache: PASS first launch hashes, relaunch reads no base block, write/mtime/location/mount/size invalidate, no version or unstable version never cached, LRU 16, FREEDOS.SHA still checked");
 }

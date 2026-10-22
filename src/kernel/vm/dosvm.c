@@ -1370,8 +1370,9 @@ void dosvm_game_remove_release(unsigned game)
 static int game_create(const struct dosvm_config *,struct dosvm **);
 int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
 {
-    unsigned game=config ? config->game : 0;
     if(out)*out=0;
+    if (config && config->kernel && config->kernel!=CIUKI_DOSVM_UNIFIED) return -EINVAL;
+    unsigned game=config ? config->game : 0;
     if(game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
     uint32_t flags=irq_save();
     if(game && game_removing[game]){irq_restore(flags);return -EBUSY;}
@@ -1423,6 +1424,9 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
         v->game=config->game; v->kernel=config->kernel;
         v->record_observer=config->record_observer; v->record_arg=config->record_arg;
     }
+    /* Internal probes without a fixture use the same sole image as windows.
+     * Explicit fixture bases retain the host bridge testing seam. */
+    if (!config || !config->base || !strncmp(config->base,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",sizeof("C:\\SYSTEM\\DOS\\UNIFIED.IMG"))) { v->kernel=CIUKI_DOSVM_UNIFIED; v->disable_file_bridge=true; }
     v->info.commitment = commitment;
     v->info.resident = sizeof(*v);
     initializing[slot] = 0;
@@ -1484,7 +1488,7 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     if (e) goto fail;
     if (v->game || v->kernel)
         rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u",
-                      v->game,v->kernel==2 ? "unified" : v->kernel ? "freedos-1.3" : "ciukidos",v->base_sha256,
+                      v->game,v->kernel==2 ? "unified" : "fixture",v->base_sha256,
                       v->info.key.generation,!v->disable_file_bridge,v->base_cached);
     kpreempt_point();
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);

@@ -795,6 +795,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_EVENT_TIMEOUT", CIUKI_DOSVM_EVENT_TIMEOUT, 8u},
     {"constant.CIUKI_DOSVM_FULL_SCREEN", (uint32_t)(CIUKI_DOSVM_FULL_SCREEN), 4u},
     {"constant.CIUKI_DOSVM_SUSPENDED", (uint32_t)(CIUKI_DOSVM_SUSPENDED), 8u},
+    {"constant.CIUKI_DOSVM_SHELL_READY", CIUKI_DOSVM_SHELL_READY, 32u},
     {"constant.CIUKI_DOSVM_FULLSCREEN_REFUSED", (uint32_t)(CIUKI_DOSVM_FULLSCREEN_REFUSED), 16u},
     {"constant.CIUKI_DOSVM_VIDEO_READY", (uint32_t)(CIUKI_DOSVM_VIDEO_READY), 1u},
     {"constant.CIUKI_DOSVM_LAUNCH_FAILED", (uint32_t)(CIUKI_DOSVM_LAUNCH_FAILED), 2u},

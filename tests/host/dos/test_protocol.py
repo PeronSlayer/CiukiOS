@@ -140,47 +140,14 @@ class ProductionParserTests(unittest.TestCase):
                                    env=parser_env)
 
 class RunnerOwnershipTests(unittest.TestCase):
-    def test_two_independent_pairs_and_overlay_cleanup(self):
-        import contextlib
+    def test_retired_two_kernel_runner_never_launches_or_opens_an_image(self):
         import qemu_reference as runner
-        from unittest.mock import patch, Mock
-        import subprocess
-        import sys
-        root=conformance.ROOT
-        profile=(root/"tests/profiles/qemu-t23.json").read_text()
-        for failure in (None,"capture","create"):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
-                folder=Path(d); image=folder/"base"; image.write_bytes(b"not an image; mocked read-back only")
-                probes=folder/"probes";probes.write_text("{}")
-                identity=folder/"identity";identity.write_text("{}")
-                (folder/"tests/profiles").mkdir(parents=True)
-                (folder/"tests/profiles/qemu-t23.json").write_text(profile)
-                rows=conformance.records("\n".join(t+" PASS 0000" for t in conformance.tags()))
-                created=[]
-                def create(argv,**kw):
-                    path=Path(argv[-1]);path.write_bytes(b"mock COW");created.append(path)
-                    if failure=="create": raise subprocess.CalledProcessError(1,argv)
-                    return subprocess.CompletedProcess(argv,0)
-                capture=Mock(return_value=rows)
-                if failure=="capture":capture.side_effect=ValueError("mock partial log")
-                args=["runner","--image",str(image),"--integration-manifest",str(identity),"--probes-manifest",str(probes)]
-                with patch.object(runner,"ROOT",folder),patch.object(sys,"argv",args), \
-                     patch.object(runner,"qualified",return_value={"image_sha256":conformance.digest(image)}), \
-                     patch.object(runner,"capped"),patch.object(runner.subprocess,"run",side_effect=create), \
-                     patch.object(runner,"capture",capture), \
-                     patch.object(runner,"reconcile_overlay",return_value={"records":1}), \
-                     patch.object(runner.res,"ExclusiveLock",side_effect=lambda _:contextlib.nullcontext()), \
-                     patch.object(runner.res,"slot_paths",return_value=[]), \
-                     patch.object(runner.res,"common_lock",return_value=folder/"mock-lock"):
-                    if failure:
-                        with self.assertRaises((ValueError,subprocess.CalledProcessError)): runner.main()
-                    else:
-                        self.assertEqual(runner.main(),0)
-                        self.assertEqual(len(created),4)
-                        calls=capture.call_args_list
-                        self.assertNotEqual(calls[0].args[2],calls[2].args[2])
-                        self.assertEqual([c.args[3] for c in calls],["freedos","ciukidos"]*2)
-                self.assertFalse(any(p.exists() for p in created))
+        from unittest.mock import patch
+        with patch.object(runner,"qualified") as qualified, patch.object(runner,"capped") as capped, \
+             patch.object(runner.subprocess,"Popen") as process, patch.object(runner.subprocess,"run") as command:
+            self.assertEqual(runner.main(),2)
+        qualified.assert_not_called(); capped.assert_not_called()
+        process.assert_not_called(); command.assert_not_called()
 
     def test_setup_failure_and_forced_kill_reap(self):
         import qemu_reference as runner

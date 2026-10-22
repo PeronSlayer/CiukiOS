@@ -26,11 +26,11 @@ struct dosvm_config {
     bool dpmi;         /* f3-04 staged testing: answer INT 2Fh/1687h before DOSVM_DPMI_PUBLIC */
     /* f3-06: read-only base image (VFS path, the private FAT16 geometry:
      * DOSVM_SECTORS sectors, or fewer when its trailing zero sectors were
-     * cut, which then read as zeros); NULL selects C:\SYSTEM\DOS\DOSBOOT.IMG.
+     * cut, which then read as zeros); NULL selects C:\SYSTEM\DOS\UNIFIED.IMG.
      * The writable overlay always stays in C:\SYSTEM\DOS (any base volume). */
     const char *base;
-    bool disable_file_bridge; /* FreeDOS reference/fallback must never bind */
-    uint8_t game, kernel; /* game 1..3; kernel 0=CiukiDOS, 1=FreeDOS 1.3 */
+    bool disable_file_bridge; /* unified disables the retired v1 bridge */
+    uint8_t game, kernel; /* game 1..3; kernel 2=unified; 0 only for explicit host-fixture seams */
     /* f3-46 per-game compatibility (Windows 98 PIF "XMS/EMS memory locked",
      * Resource Kit table 25.2 xml/eml): the pool is backed eagerly at
      * creation and stays resident. Default: demand-zero, pageable pool. */
@@ -112,11 +112,9 @@ int dosvm_create(const struct dosvm_config *, struct dosvm **out);
  * C: that has it. 0 with path filled, -ENOENT without one, else the error.
  * The workload probes use only this disk (their pins are the owner's data). */
 int dosvm_workload_base(char path[24]);
-/* Window VMs (/Programs/dosbox): that local disk when attached, else the bundled
- * shareware games disk C:\GAMES\CIUKIGAM.IMG (owner decision 2026-10-12;
- * scripts/build_games_disk.py). Without a fixture, bundled lookup errors
- * (including ENOENT) are returned; an invalid bundled entry is EINVAL. */
-int dosvm_window_base(char path[24]);
+/* Window VMs always use C:\SYSTEM\DOS\UNIFIED.IMG. No local fixture or
+ * retired kernel is substituted by this lookup. */
+int dosvm_window_base(char path[32]);
 int dosvm_boot(struct dosvm *);
 struct dosvm_key dosvm_key(const struct dosvm *);
 bool dosvm_valid(struct dosvm_key);

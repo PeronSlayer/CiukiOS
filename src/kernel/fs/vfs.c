@@ -540,9 +540,18 @@ static void change_record(struct vfs *v, struct fat_volume *vol, uint32_t parent
         *slot=(struct vfs_change){.volume=vol,.mount=mount,.parent=parent,.index=index};
     }
     slot->sequence=++v->change_sequence;
+    for (unsigned i=0;i<VFS_VERSION_PINS;i++) {
+        struct vfs_version_watch *w=&v->version_watches[i];
+        if (w->refs && w->volume==vol && w->mount==mount && w->parent==parent && w->index==index)
+            w->sequence=slot->sequence;
+    }
 }
 static uint64_t change_generation(struct vfs *v, struct fat_volume *vol, uint32_t parent, uint32_t index) {
     uint64_t mount=identity_generation(v,vol);
+    for (unsigned i=0;i<VFS_VERSION_PINS;i++) {
+        struct vfs_version_watch *w=&v->version_watches[i];
+        if (w->refs && w->volume==vol && w->mount==mount && w->parent==parent && w->index==index) return w->sequence;
+    }
     for (unsigned i=0;i<VFS_CHANGES;i++) {
         struct vfs_change *c=&v->changes[i];
         if (c->sequence && c->volume==vol && c->mount==mount && c->parent==parent && c->index==index) return c->sequence;
@@ -657,6 +666,8 @@ void vfs_identity_expire(struct vfs *v, struct fat_volume *vol) {
     /* f3-51c: any file of this volume may have changed (raw write, removal). */
     for (unsigned i=0;i<VFS_CHANGES;i++) if (v->changes[i].volume==vol) memset(&v->changes[i],0,sizeof(v->changes[i]));
     v->change_floor=++v->change_sequence;
+    for (unsigned i=0;i<VFS_VERSION_PINS;i++) if (v->version_watches[i].volume==vol && v->version_watches[i].refs)
+        v->version_watches[i].sequence=v->change_floor;
     fs_lock_drop(&v->identity_lock);
 }
 void vfs_raw_changed(struct vfs *v, struct fat_volume *vol) { vfs_identity_expire(v,vol); }
@@ -912,7 +923,13 @@ static int release_description(struct vfs *v,struct vfs_description *d) {
             bool announce=(v->active&vfs_drive_mask(drive)) && !previous;
             if (announce) v->io_file[drive]=d->node;
             struct vfs_io_state io=vfs_io_begin_locked(v);
+            /* This phase only retires the description's speculative reads.
+             * Its live slot and io_file pin the file; no FAT workspace or
+             * metadata guard is needed during the wait/cache scan. */
+            struct vfs_hold_info saved;
+            if (announce) window_pause(v,drive,&saved);
             cache_stream_close(&d->stream);
+            if (announce) window_resume(v,drive,&saved,VFS_WINDOW_NONE);
             vfs_io_end_locked(v,io);
             if (announce) v->io_file[drive]=previous;
         }
@@ -937,6 +954,7 @@ static int close_handle(struct vfs_table *t, unsigned h) {
 }
 void vfs_table_destroy(struct vfs_table *t) {
     struct vfs *v=t->vfs; vfs_lock(v,0);
+    operation_tag(v,"close"); vfs_site_locked(v,"teardown");
     uint32_t mask=0;
     for (unsigned i=0;i<VFS_HANDLES;i++) if (t->handles[i]) mask|=vfs_drive_mask(t->handles[i]->node->drive);
     /* A suspended mutation still borrows this table/description until its
@@ -1911,6 +1929,52 @@ int vfs_handle_version(struct vfs_table *t,int h,struct vfs_file_version *out) {
     }
     vfs_unlock(v); return e;
 }
+int vfs_version_pin(struct vfs_table *t,int h,const struct vfs_file_version *version,struct vfs_version_pin *pin) {
+    if (!version || !pin) return -FS_EINVAL;
+    *pin=(struct vfs_version_pin){0};
+    struct vfs_file_version current;
+    int e=vfs_handle_version(t,h,&current); if (e) return e;
+    if (!vfs_file_version_equal(version,&current)) return -FS_EAGAIN;
+    e=handle_lock(t,h); if (e) return e; operation_tag(t->vfs,"stat");
+    struct vfs *v=t->vfs; struct vfs_description *d=get(t,h);
+    if (!d || !d->node->volume) e=-FS_EBADF;
+    else {
+        fs_lock_take(&v->identity_lock);
+        struct fat_volume *vol=d->node->volume;
+        uint64_t mount=identity_generation(v,vol);
+        if (mount!=version->mount || d->node->drive!=version->drive || v->generation[d->node->drive]!=version->drive_generation ||
+            d->node->entry.parent!=version->parent || d->node->entry.index!=version->index ||
+            d->node->entry.first!=version->first || d->node->entry.size!=version->size ||
+            d->node->entry.times.write_date!=version->write_date || d->node->entry.times.write_time!=version->write_time ||
+            change_generation(v,vol,version->parent,version->index)!=version->write_generation)
+            e=-FS_EAGAIN;
+        struct vfs_version_watch *slot=0,*free=0;
+        for (unsigned i=0;i<VFS_VERSION_PINS;i++) {
+            struct vfs_version_watch *w=&v->version_watches[i];
+            if (!w->refs) free=w;
+            else if (w->volume==vol && w->mount==mount && w->parent==version->parent && w->index==version->index) slot=w;
+        }
+        if (!e && !slot) {
+            slot=free;
+            if (!slot || v->next_version_watch==UINT64_MAX) e=-FS_ENOSPC;
+            else *slot=(struct vfs_version_watch){.volume=vol,.mount=mount,.parent=version->parent,.index=version->index,
+                .sequence=version->write_generation,.serial=++v->next_version_watch};
+        }
+        if (!e && slot->refs==UINT32_MAX) e=-FS_ENOSPC;
+        if (!e) { slot->refs++; *pin=(struct vfs_version_pin){v,slot->serial}; }
+        fs_lock_drop(&v->identity_lock);
+    }
+    vfs_unlock(v); return e;
+}
+void vfs_version_unpin(struct vfs_version_pin *pin) {
+    if (!pin || !pin->vfs || !pin->serial) return;
+    struct vfs *v=pin->vfs; fs_lock_take(&v->identity_lock);
+    for (unsigned i=0;i<VFS_VERSION_PINS;i++) {
+        struct vfs_version_watch *w=&v->version_watches[i];
+        if (w->serial==pin->serial && w->refs) { if (!--w->refs) memset(w,0,sizeof(*w)); break; }
+    }
+    fs_lock_drop(&v->identity_lock); *pin=(struct vfs_version_pin){0};
+}
 int vfs_handle_times(struct vfs_table *t,int h,uint16_t date,uint16_t time) {
     uint32_t turn;
     int e=handle_lock_writer(t,h,&turn); if (e) return e;
@@ -2028,7 +2092,7 @@ void vfs_release_owner(struct vfs *v,uint64_t owner) {
     vfs_release_lock_owner(v,(struct vfs_lock_owner){VFS_OWNER_NATIVE,owner});
 }
 int vfs_close(struct vfs_table *t, int h) {
-    int admission=handle_lock(t,h); if (admission) return admission; int e=get(t,h) ? 0 : -FS_EBADF; if (!e) e=close_handle(t,(unsigned)h); vfs_unlock(t->vfs); return e;
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"close"); int e=get(t,h) ? 0 : -FS_EBADF; if (!e) e=close_handle(t,(unsigned)h); vfs_unlock(t->vfs); return e;
 }
 int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
     if (src->vfs!=dst->vfs || target< -1 || target>=(int)VFS_HANDLES) return -FS_EINVAL;

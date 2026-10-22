@@ -598,13 +598,27 @@ static void test_client_boundary(void)
     c.size = sizeof(c); user_fault = true; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EFAULT); user_fault = false;
     c.state = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.state = 0;
     c.launch.kernel=3; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
-    c.launch.kernel=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); /* shell */
+    for (unsigned kernel=0;kernel<=2;kernel++) for(unsigned game=0;game<=1;game++) {
+        struct ciuki_dosvm_command alias=command_for(0,0);
+        alias.surface_fd=0; alias.name[0]='X'; alias.launch.kernel=kernel; alias.launch.game=game;
+        CHECK(!dosvm_call(CIUKI_DOSVM_CREATE,&alias,sizeof(alias)));
+        struct dosvm *mapped=dosvm_lookup((struct dosvm_key){alias.id,alias.generation});
+        CHECK(mapped && mapped->kernel==2 && mapped->disable_file_bridge &&
+              !strcmp(last_base,"C:\\SYSTEM\\DOS\\UNIFIED.IMG"));
+        struct ciuki_dosvm_command close=command_for(alias.id,alias.generation);
+        CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
+    }
+    c.launch.kernel=1;
     c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.reserved[0]=0; c.launch.reserved[1]=1;
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); c.launch.reserved[1]=0;
     c.launch.reserved[0]=0; workload_disk=true;
-    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EIO && fake_surface[0].references==1);
+    struct ciuki_dosvm_command local=c;
+    CHECK(!dosvm_call(CIUKI_DOSVM_CREATE,&local,sizeof(local)));
+    CHECK(!strcmp(last_base,"C:\\SYSTEM\\DOS\\UNIFIED.IMG"));
+    struct ciuki_dosvm_command local_close=command_for(local.id,local.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&local_close,sizeof(local_close))); empty();
     workload_disk=false; c.launch.kernel=c.launch.game=0;
     c.id = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.id = 0;
     c.name[0] = 0; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
@@ -753,9 +767,25 @@ static void test_client_boundary(void)
         v->info.dos_ready = true; v->idle.seen = true; v->idle.last_tick = g_ticks;
         v->exec_pending = (uint8_t)running;
         CHECK(dosvm_shell_idle(v) == !running);
+        v->idle.sleeping=true;
+        c=command_for(w.id,w.generation);
+        CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&c,sizeof(c)) &&
+              !!(c.changed&CIUKI_DOSVM_SHELL_READY)==!running);
+        if (!running) {
+            v->kbd.count=1; c=command_for(w.id,w.generation);
+            CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&c,sizeof(c)) && !(c.changed&CIUKI_DOSVM_SHELL_READY));
+            v->kbd.count=0;
+        }
         c = command_for(w.id, w.generation);
+        if (running) {
+            unsigned deletes_before=deletes; unsigned writes_before=disk_writes;
+            CHECK(dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c))==-EBUSY);
+            CHECK(v->info.state<DOSVM_STOPPING && !v->info.data_loss && v->overlay_open &&
+                  deletes==deletes_before && disk_writes==writes_before && v->kbd.count==4);
+            v->exec_pending=0; v->kbd.count=0; v->idle.seen=true; v->idle.last_tick=g_ticks;
+        }
         CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD &&
-              v->info.data_loss == (running != 0) && v->info.reason == (running ? DOSVM_TERMINATE : DOSVM_EXIT));
+              !v->info.data_loss && v->info.reason==DOSVM_EXIT);
         empty();
     }
     /* f3-61b: a run carries one probe name (scripts/test/evidence.py). The

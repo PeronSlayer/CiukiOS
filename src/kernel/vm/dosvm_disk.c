@@ -10,12 +10,10 @@
  * local workload disk built by scripts/test/dos_fixtures.py, or the bundled
  * shareware games disk); the canonical C: payload otherwise. Only the
  * overlay below is ever opened writable. */
-#define DOSVM_DEFAULT_BASE "C:\\SYSTEM\\DOS\\DOSBOOT.IMG"
-/* Owner decision 2026-10-12: Wolfenstein 3-D and DOOM shareware are
- * pre-installed. scripts/build_games_disk.py builds this image (the DOS
- * system plus \WOLF3D and \DOOM, trailing zero sectors cut) and
- * scripts/build_image.py installs it on the boot volume. */
-#define DOSVM_BUNDLED_BASE "C:\\GAMES\\CIUKIGAM.IMG"
+#define DOSVM_DEFAULT_BASE "C:\\SYSTEM\\DOS\\UNIFIED.IMG"
+/* The unified image includes the pinned shareware games and interactive
+ * shell. Every desktop window uses it; external test bases are probe-only. */
+#define DOSVM_BUNDLED_BASE DOSVM_DEFAULT_BASE
 /* A full image, or one cut after its last used sector (zeros follow). */
 static bool base_size_valid(uint32_t size)
 {
@@ -34,7 +32,7 @@ static int base_error(const char *path, int error, const char *reason)
     klog("[dosvm] disk base=%s error=%d reason=%s", path, error, reason);
     return error;
 }
-static int base_lookup(char path[24], bool bundled)
+static int base_lookup(char *path, unsigned capacity, bool bundled)
 {
     path[0] = 0;
     const char *fallback = bundled ? DOSVM_BUNDLED_BASE : "D:\\CIUKIGAM.IMG";
@@ -55,27 +53,27 @@ static int base_lookup(char path[24], bool bundled)
         /* Optional fixtures: every failed stat, including EIO/EBUSY from a
          * foreign or quarantined volume, is absent. Never carry its error
          * into the next letter or the required bundled base. */
-        for (unsigned d = 3; d < 26 && e == -ENOENT; d++) {
-            ksnprintf(path, 24, "%c:\\CIUKIGAM.IMG", 'A' + d);
+        for (unsigned d = 3; !bundled && d < 26 && e == -ENOENT; d++) {
+            ksnprintf(path, capacity, "%c:\\CIUKIGAM.IMG", 'A' + d);
             if (!vfs_stat(t, path, &entry) && entry.size == DOSVM_SECTORS * 512u && !(entry.attr & 0x10)) e = 0;
         }
         /* The bundled base is required for windows without a fixture. Keep
          * its real error, so a damaged boot volume cannot look like absence. */
         if (e == -ENOENT && bundled) {
             reason = "bundled";
-            ksnprintf(path, 24, "%s", DOSVM_BUNDLED_BASE);
+            ksnprintf(path, capacity, "%s", DOSVM_BUNDLED_BASE);
             e = vfs_stat(t, path, &entry);
             if (!e && (!base_size_valid(entry.size) || (entry.attr & 0x10))) e = -EINVAL;
         }
         vfs_table_destroy(t);
-    } else ksnprintf(path, 24, "%s", fallback);
+    } else ksnprintf(path, capacity, "%s", fallback);
     workload_busy = false;
     if (e && (bundled || e != -ENOENT)) base_error(path, e, reason);
     if (e) path[0] = 0;
     return e;
 }
-int dosvm_workload_base(char path[24]) { return base_lookup(path, false); }
-int dosvm_window_base(char path[24]) { return base_lookup(path, true); }
+int dosvm_workload_base(char path[24]) { return base_lookup(path, 24, false); }
+int dosvm_window_base(char path[32]) { return base_lookup(path, 32, true); }
 /* f3-46 (contract D1): a cache block is clean (the overlay is written
  * synchronously before the cache is updated), so the global replacement
  * discards it without I/O. One tracker per 64 KiB run; it can outlive the
@@ -219,10 +217,13 @@ static int base_hash(struct dosvm *v, uint32_t size)
  * writes, removal); a remount is a new attachment. A digest is stored only
  * when the version is unchanged across the whole hash (the base is open
  * deny-write throughout), so item 8's identity guarantee is unchanged: the
- * digest still names exactly the bytes the VM boots. */
+ * digest still names exactly the bytes the VM boots. A bounded version
+ * watch prevents unrelated 64-slot change-ledger eviction from invalidating
+ * a cached digest; it pins no handle, page, volume or write-deny claim. */
 #define DOSVM_DIGESTS 16u
 static struct {
     struct vfs_file_version version;
+    struct vfs_version_pin pin;
     char sha256[65];
     bool valid;
     uint32_t used;
@@ -230,9 +231,12 @@ static struct {
 static uint32_t digest_clock;
 void dosvm_game_digest_invalidate(void)
 {
+    struct vfs_version_pin pins[DOSVM_DIGESTS];
     uint32_t flags=irq_save();
+    for (unsigned i=0;i<DOSVM_DIGESTS;i++) pins[i]=digests[i].pin;
     memset(digests,0,sizeof(digests));
     irq_restore(flags);
+    for (unsigned i=0;i<DOSVM_DIGESTS;i++) vfs_version_unpin(&pins[i]);
 }
 static bool digest_lookup(const struct vfs_file_version *version, char out[65])
 {
@@ -246,8 +250,10 @@ static bool digest_lookup(const struct vfs_file_version *version, char out[65])
     irq_restore(flags);
     return hit;
 }
-static void digest_store(const struct vfs_file_version *version, const char sha256[65])
+static void digest_store(struct dosvm *v,const struct vfs_file_version *version, const char sha256[65])
 {
+    struct vfs_version_pin pin={0};
+    (void)vfs_version_pin(&v->disk_table,v->base,version,&pin);
     uint32_t flags = irq_save();
     unsigned slot = DOSVM_DIGESTS;
     for (unsigned i = 0; i < DOSVM_DIGESTS && slot == DOSVM_DIGESTS; i++)
@@ -258,11 +264,14 @@ static void digest_store(const struct vfs_file_version *version, const char sha2
         slot = 0; /* least recently used */
         for (unsigned i = 1; i < DOSVM_DIGESTS; i++) if (digests[i].used < digests[slot].used) slot = i;
     }
+    struct vfs_version_pin old=digests[slot].pin;
+    digests[slot].pin=pin;
     digests[slot].version = *version;
     memcpy(digests[slot].sha256, sha256, sizeof(digests[slot].sha256));
     digests[slot].sha256[64] = 0;
     digests[slot].valid = true; digests[slot].used = ++digest_clock;
     irq_restore(flags);
+    vfs_version_unpin(&old);
 }
 /* Hash once per base content version; the first launch after boot hashes. */
 static int base_identity(struct dosvm *v, uint32_t size)
@@ -275,13 +284,15 @@ static int base_identity(struct dosvm *v, uint32_t size)
     if (e) return e;
     if (versioned && !vfs_handle_version(&v->disk_table, v->base, &after) &&
         vfs_file_version_equal(&version, &after))
-        digest_store(&version, v->base_sha256);
+        digest_store(v, &version, v->base_sha256);
     return 0;
 }
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
     if (!base) base = DOSVM_DEFAULT_BASE;
+    if (!strncmp(base,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG",sizeof("C:\\SYSTEM\\DOS\\DOSBOOT.IMG")) ||
+        !strncmp(base,"C:\\SYSTEM\\DOS\\FREEDOS.IMG",sizeof("C:\\SYSTEM\\DOS\\FREEDOS.IMG"))) return -EINVAL;
     unsigned length = 0;
     while (length < 64 && base[length]) length++;
     if (!length || length == 64) return -EINVAL;
@@ -304,9 +315,9 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     if (v->game || v->kernel) {
         e = base_identity(v, entry.size);
         if (e) return e;
-        if (v->kernel==1 || v->kernel==2) {
+        if (v->kernel==2 && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
             char expected[66];
-            const char *sidecar=v->kernel==2 ? "C:\\SYSTEM\\DOS\\UNIFIED.SHA" : "C:\\SYSTEM\\DOS\\FREEDOS.SHA";
+            const char *sidecar="C:\\SYSTEM\\DOS\\UNIFIED.SHA";
             int identity=vfs_open(&v->disk_table,sidecar,VFS_READ,VFS_DENY_WRITE,0);
             if (identity<0) return identity;
             size_t got=0;
@@ -598,6 +609,8 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
         v->base_open = false;
     }
     if (v->overlay_created) {
+        if (v->info.dirty) klog("[dosvm] private-data vm=%u generation=%u action=discard reason=%s dirty=1 cleanup_error=%d",
+            v->info.key.id,v->info.key.generation,forced ? "forced-session-end" : "transient-session-end",error);
         e = vfs_delete(&v->disk_table, v->overlay_path);
         if (e == -FS_ENOENT) e = 0;
         if (!error) error = e;

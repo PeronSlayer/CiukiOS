@@ -766,7 +766,7 @@ void cache_stream_close(struct cache_stream *s) {
     fs_lock_take(&c->lock); stream_decay(s);
     while (s->outstanding) fs_event_wait(&c->changed,&c->lock);
     unsigned work=0;
-    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) {
+    for (struct cache_block *b=first_block(c);b && s->resident;b=next_block(c,b)) {
         scan_service(&work);
         if (b->speculative && b->prefetch_owner==s) unhash(c,b);
     }

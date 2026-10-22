@@ -1,10 +1,8 @@
-/* Compile the new panel and launch-word helpers with the production SDK.
- * SPDX-License-Identifier: MIT */
-#include "../../../apps/dosbox/network_panel.h"
+/* Compile expert-file launch helpers with the production SDK. SPDX-License-Identifier: MIT */
 #include "../../../apps/dosbox/network_settings.h"
-void dosbox_network_panel_compile(struct du_canvas *canvas,struct ciuki_dosvm_command *command,unsigned game)
+void dosbox_configuration_compile(struct ciuki_dosvm_command *command,unsigned game)
 {
-    unsigned mode=dosbox_network_load(game);
-    dosvm_launch_network_set(command,mode);
-    dosbox_network_panel(canvas,dosbox_network_label(mode),"Changes apply on relaunch.");
+    command->launch.kernel=dosbox_setting_load(game);
+    command->launch.memory=dosbox_memory_load(game);
+    dosvm_launch_network_set(command,dosbox_network_load(game));
 }

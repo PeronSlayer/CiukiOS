@@ -154,8 +154,8 @@ not yet run in the guest).
   Blaster 16/OPL3 emulation; Alt+Enter switches to full screen on the real
   VGA hardware, as Windows 98 did. Since the owner decision of 21 October
   the **unified DOS kernel** (the CiukiDOS fork of FreeDOS kernel 2043 with
-  the native file-system binding) is the default for games; the game's DOS setting
-  `kernel=ciukidos` selects the classic kernel (the DOS Box shell still uses it). The
+  the native file-system binding) is the sole DOS kernel for games and the
+  interactive shell. The DOS Box has no configuration panel. The
   shareware licence texts are in `third_party/games`; Wolfenstein 3D stays
   pre-installed (owner decision 2026-10-21). *QEMU: DOS VM, DPMI and DOS/4GW cases. T23: the
   three games run in a window and full screen, with defects still open.*

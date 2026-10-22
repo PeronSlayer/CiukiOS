@@ -397,7 +397,15 @@ bool blk_queue_run_one(struct blk_queue *q) {
      * the reader budget; C3 reports such slow source commands instead. */
     if (q->floor_bytes>floor) floor=q->floor_bytes;
     if (floor>q->max_bytes) floor=q->max_bytes;
-    if (elapsed>BLKREQ_READER_MS/2 && bytes>floor) {
+    /* A lone sequential reader has nobody to yield the device to. Service
+     * time includes seek/IRQ scheduling and bounce overhead, not just bytes.
+     * Do not extrapolate that fixed cost into a permanent 4 KiB limit.
+     * Restore throughput after the contending reader has drained. */
+    bool competing=false;
+    for (struct blk_request *p=q->head;p;p=p->next)
+        if (p->priority==BLK_DEMAND && eligible(q,p)) { competing=true; break; }
+    if (!e && r->operation!=BLK_FLUSH && !competing) q->limit_bytes=q->max_bytes;
+    else if (!e && elapsed>BLKREQ_READER_MS/2 && bytes>floor) {
         uint32_t limit=(uint32_t)((uint64_t)bytes*(BLKREQ_READER_MS/2)/elapsed);
         limit-=limit%r->device->sector_size;
         if (limit<floor) limit=floor;

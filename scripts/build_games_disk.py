@@ -580,7 +580,7 @@ def last_used_sector(path):
 def build(out=None, dos_image=None, root=ROOT):
     root = Path(root)
     out = Path(out or root / "build/f0/games" / NAME)
-    dos_image = Path(dos_image or root / "build/f0/dos/DOSBOOT.IMG")
+    dos_image = Path(dos_image or root / "build/f0/dos/UNIFIED.IMG")
     for forbidden in ("third_party",):
         if out.resolve().is_relative_to((root / forbidden).resolve()):
             raise ValueError("the games disk is a build output, never under " + forbidden)
@@ -612,12 +612,11 @@ def build(out=None, dos_image=None, root=ROOT):
     with tempfile.TemporaryDirectory(prefix=".games-", dir=out.parent) as temporary:
         full = Path(temporary) / "full.img"
         # The boot sector's BPB names CIUKIOSFULL: keep the root label equal (fsck.fat compares them).
-        dos.write_fat16(full, boot, loader, {path: data for path, data, _ in files}, directories=directories)
-        checked = fixtures.run(["fsck.fat", "-n", full]).stdout.decode(errors="replace")
+        checked = fixtures.write_guest(full,boot,loader,{path: data for path, data, _ in files},directories)
         for path, data, _ in files:
-            if fixtures.run(["mcopy", "-n", "-i", full, "::" + path, "-"]).stdout != data:
+            if fixtures.run(["mcopy", "-n", "-i", fixtures.mtools_image(full), "::" + path, "-"]).stdout != data:
                 raise ValueError("games disk read-back mismatch: " + path)
-        listing = fixtures.run(["mdir", "-/", "-a", "-i", full, "::/"]).stdout.decode(errors="replace")
+        listing = fixtures.run(["mdir", "-/", "-a", "-i", fixtures.mtools_image(full), "::/"]).stdout.decode(errors="replace")
         logical_sha = fixtures.sha(full)
         used = last_used_sector(full) + 1
         size = max(used, dos.DATA_LBA + dos.SPC) * SECTOR
@@ -663,7 +662,7 @@ def validate(out, root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", type=Path, default=ROOT / "build/f0/games" / NAME)
-    parser.add_argument("--dos-image", type=Path, default=ROOT / "build/f0/dos/DOSBOOT.IMG")
+    parser.add_argument("--dos-image", type=Path, default=ROOT / "build/f0/dos/UNIFIED.IMG")
     args = parser.parse_args()
     build(args.out, args.dos_image)
     return 0

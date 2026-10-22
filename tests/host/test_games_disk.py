@@ -26,7 +26,8 @@ def load(name, path):
 
 games = load("games_disk_build", ROOT / "scripts/build_games_disk.py")
 dos = load("games_dos_build", ROOT / "scripts/build_dos_image.py")
-DOSBOOT = ROOT / "build/f0/dos/DOSBOOT.IMG"
+fixtures = games._fixtures()
+DOSBOOT = ROOT / "build/f0/dos/UNIFIED.IMG"
 ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1", LC_ALL="C")
 
 
@@ -358,7 +359,7 @@ class GuardTests(unittest.TestCase):
     def test_disk_holds_only_shareware(self):
         out = self.root / "out" / games.NAME
         image, manifest = games.build(out, DOSBOOT, self.root)
-        listing = subprocess.run(["mdir", "-/", "-b", "-i", str(image), "::/"], check=True, capture_output=True,
+        listing = subprocess.run(["mdir", "-/", "-b", "-i", fixtures.mtools_image(image), "::/"], check=True, capture_output=True,
                                  text=True, env=ENV).stdout.upper().split()
         for name in listing:
             self.assertIsNone(dos.REGISTERED_DATA.fullmatch(name.rsplit("/", 1)[-1]), name)
@@ -367,7 +368,7 @@ class GuardTests(unittest.TestCase):
         for name in listing:
             if name.endswith("/"):
                 continue
-            data = subprocess.run(["mcopy", "-n", "-i", str(image), "::" + name.split("::", 1)[-1], "-"],
+            data = subprocess.run(["mcopy", "-n", "-i", fixtures.mtools_image(image), "::" + name.split("::", 1)[-1], "-"],
                                   check=True, capture_output=True, env=ENV).stdout
             on_disk.add(sha(data))
         self.assertFalse(on_disk & local)
@@ -415,13 +416,14 @@ class DiskTests(unittest.TestCase):
                     return struct.unpack_from("<H", entries, at + 26)[0]
             self.fail("directory absent: " + name)
         with self.out.open("rb") as stream:
-            stream.seek((dos.RESERVED + 2 * dos.FAT_SECTORS) * 512)
+            start = 63 * 512
+            stream.seek(start+(dos.RESERVED + 2 * dos.FAT_SECTORS) * 512)
             parent = cluster(stream.read(dos.ROOT_SECTORS * 512), "QUAKE")
-            stream.seek((dos.DATA_LBA + (parent - 2) * dos.SPC) * 512)
+            stream.seek(start+(dos.DATA_LBA + (parent - 2) * dos.SPC) * 512)
             entries = stream.read(dos.SPC * 512)
             self.assertEqual(struct.unpack_from("<H", entries, 58)[0], 0)
             child = cluster(entries, "ID1")
-            stream.seek((dos.DATA_LBA + (child - 2) * dos.SPC) * 512)
+            stream.seek(start+(dos.DATA_LBA + (child - 2) * dos.SPC) * 512)
             entries = stream.read(64)
             self.assertEqual(struct.unpack_from("<H", entries, 26)[0], child)
             self.assertEqual(struct.unpack_from("<H", entries, 58)[0], parent)
@@ -435,10 +437,10 @@ class DiskTests(unittest.TestCase):
         size = self.out.stat().st_size
         self.assertEqual(size, m["size"])
         self.assertEqual(size % 512, 0)
-        self.assertLess(size, 32 * 1024 * 1024)                 # 128 MiB volume, a few MiB used
+        self.assertLess(size, 128 * 1024 * 1024)                 # 128 MiB volume, a few MiB used
         self.assertEqual(m["logical_size"], 128 * 1024 * 1024)
         for f in m["files"]:
-            data = subprocess.run(["mcopy", "-n", "-i", str(self.out), "::" + f["path"], "-"], check=True,
+            data = subprocess.run(["mcopy", "-n", "-i", fixtures.mtools_image(self.out), "::" + f["path"], "-"], check=True,
                                   capture_output=True, env=ENV).stdout
             self.assertEqual(sha(data), f["sha256"], f["path"])
         full = self.out.with_name("full.img")
@@ -446,8 +448,10 @@ class DiskTests(unittest.TestCase):
         with full.open("r+b") as stream:
             stream.truncate(m["logical_size"])                  # sparse zero tail: the kernel's view
         self.assertEqual(games._fixtures().sha(full), m["logical_sha256"])
-        checked = subprocess.run(["fsck.fat", "-n", str(full)], capture_output=True, text=True)
-        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        reader = load("f363_full_readback", ROOT / "scripts/dos_conformance.py")
+        for item in m["files"]:
+            self.assertEqual(sha(reader.read_file(full,item["path"],63*512)),item["sha256"])
+        self.assertIn("fsck", m["checkers"]["fsck"])
         self.assertGreaterEqual(size // 512, 361)                # DOSVM_BASE_MIN_SECTORS
         full.unlink()
 

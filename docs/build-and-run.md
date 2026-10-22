@@ -301,7 +301,7 @@ runner's ordinary cleanup rules. A missing packet device records
 The F3 workload suite (`tests/suites/f3-workloads.json`) runs the owner's own
 copies of DOS DOOM and Wolfenstein 3-D. They are commercial files and stay
 local: the directories `third_party/Doom/` and `third_party/WOLF3D/` are
-ignored by git and never enter `build/f0/ciukios.img`, `DOSBOOT.IMG` or a
+ignored by git and never enter `build/f0/ciukios.img`, `UNIFIED.IMG` or a
 release (`scripts/build_dos_image.py` and `scripts/build_image.py` refuse a
 payload whose name or SHA-256 matches a file there). To declare them, copy
 the game files into these directories:
@@ -313,8 +313,8 @@ the game files into these directories:
 
 For a case that declares one, the runner calls `scripts/test/dos_fixtures.py`
 inside that run's directory under `build/test-runs/`: it builds a private
-DOS VM image with the `DOSBOOT.IMG` geometry (the DOS system read back from
-`build/f0/dos/DOSBOOT.IMG` and checked against its manifest, plus the game
+DOS VM image with the `UNIFIED.IMG` geometry (the DOS system read back from
+`build/f0/dos/UNIFIED.IMG` and checked against its manifest, plus the game
 directory as `\DOOM` or `\WOLF3D` and a generated `\DOOM\CIUKI.CFG`), puts it
 as `\CIUKIGAM.IMG` on a sparse 160 MiB FAT16 superfloppy and attaches that disk
 as the next IDE index. Only top-level regular files with plain 8.3 names
@@ -363,13 +363,11 @@ members, decoded by a port of zlib's `blast.c`; Quake's LHA self-extractor
 with the pure-Python `-lh5-` decoder and CRC-16 verification), checks every member,
 refuses registered data names (`DOOM.WAD`, `*.WL6`, …) and any other
 match with the owner's local files that is not a pinned shareware file, and
-writes `build/f0/games/CIUKIGAM.IMG` and its manifest `CIUKIGAM.json`. The
-disk has the `DOSBOOT.IMG` geometry (the DOS system read back from
-`DOSBOOT.IMG` and checked against its manifest) with `\WOLF3D`, `\DOOM` and `\QUAKE\ID1`;
-its trailing zero sectors are cut (about 26.96 MB of the 128 MiB volume;
-the kernel reads sectors past the end as zeros). The image holds it at
-`/Games/CIUKIGAM.IMG` (display folder `Games`; the kernel retains the
-case-insensitive `C:\GAMES\CIUKIGAM.IMG` path), and the licence documents and `UPSTREAM.json` files
+installs the games inside `build/f0/dos/UNIFIED.IMG`. This is the sole DOS
+base in the canonical image, at `/system/dos/UNIFIED.IMG`, with a partitioned
+FAT16 guest and the qualified fork/CIUKIDF.SYS. Trailing unused zero sectors
+are cut; the VMM exposes the existing 128 MiB geometry with zeros beyond the
+stored prefix. Licence documents and `UPSTREAM.json` files remain
 at `/system/licenses/<package>-<file>`. To build or inspect it alone:
 
 ```bash
