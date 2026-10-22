@@ -119,7 +119,9 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     switch (op) {
     case CIUKI_DOSVM_WAIT_PRESENT:
         assert(c->wait.timeout_ms==CIUKI_DOSVM_WAIT_MAX_MS);
-        clock_ms+=c->wait.timeout_ms; c->wait.frame_ms=15;
+        /* timeout_ms is a maximum, not the producer period. VIDEO/STATE
+         * wake early; only an actual TIMEOUT consumes the full deadline. */
+        clock_ms+=nonvideo==1 ? c->wait.timeout_ms : 15; c->wait.frame_ms=15;
         c->wait.events=nonvideo==1 ? CIUKI_DOSVM_EVENT_TIMEOUT : nonvideo==2 ? CIUKI_DOSVM_EVENT_STATE : CIUKI_DOSVM_EVENT_VIDEO;
         last_events=c->wait.events;
         timeout_waits+=last_events==CIUKI_DOSVM_EVENT_TIMEOUT;

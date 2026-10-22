@@ -17,14 +17,15 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-74: balloon/notification include the explicit close affordance; media replay is pinned separately.
 # F2-82: orb changes in frames containing desktop chrome; dialogs stay pinned.
 # F2-83: shaded bars and notification surfaces; dialog-only hashes stay pinned.
+# F2-99: balloon, notification and tooltip contain the new arrow/shadow; other pins unchanged.
 GOLDENS = {
-    "balloon": "1a4a287b2b05e6cda6e27ed3cdc2f4d092342b792394a7e5104301b7944338e8",
+    "balloon": "908136ec7b45610918fe082dd807552f29032b7a92ea9f80175e83145e85edcf",
     "error": "310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a",
     "info": "50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53",
     "loading": "c675bfec0dd20df260c2137464b819e2faaa8624138f6d4ca823bad8eb937af1",
-    "notification": "54981284086da5ab4d108dabdeaa2f58cb8e2ee41927fedfc49cdf2f2b3bb0a5",
+    "notification": "45dad9289e17ef9aa84aa05fc671c6c1cf3740da76cb253cb8c7571b5e3f61af",
     "question": "a1ed1a8b878ff15b9f6a251573a41d6f268d33e137d42ceeaea7e4df665c3c06",
-    "tooltip": "def4017559abd2e10099397d6b46c8afb830508864cc93fd3aea2d096d3dfe66",
+    "tooltip": "138ea973f5a273457dd088f5bd4f546301db138d1b71ad5d00df6a8100c841dd",
     "tooltip-media": "30f60a4a05266e870b4c44e4bb51fb4cf9e17b37ad76f8128bb23933a4599141",
     "tooltip-network": "a2978376035d6af7ea973748346082db8017a5050d8843370a38247244d3c406",
     "tooltip-task": "204f7fd3bc9c2a266fdbd422ae8bd43420f2c3cd3433ccf01231ba674365f788",

@@ -4,7 +4,6 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "../../src/kernel/lib/fmt.c"
 #define CIUKI_CPU_H
 #include <stdint.h>
 static uint32_t irq_save(void);

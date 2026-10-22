@@ -1,5 +1,6 @@
 """f2-87 fixture inventory and production FAT removal; no canonical image."""
 from pathlib import Path
+import hashlib
 import os
 import shutil
 import subprocess
@@ -159,7 +160,10 @@ int main(void){
                 subprocess.run(['mcopy','-i',image,payload,'::/'+name],check=True,env=env)
             for name in ('Games','System','System/DOS'):
                 subprocess.run(['mmd','-i',outer,'::/'+name],check=True,env=env)
-            subprocess.run(['mcopy','-i',outer,image,'::/Games/CIUKIGAM.IMG'],check=True,env=env)
+            subprocess.run(['mcopy','-i',outer,image,'::/System/DOS/UNIFIED.IMG'],check=True,env=env)
+            sidecar=folder/'UNIFIED.SHA'
+            sidecar.write_text(hashlib.sha256(image.read_bytes()).hexdigest()+'\n')
+            subprocess.run(['mcopy','-i',outer,sidecar,'::/System/DOS/UNIFIED.SHA'],check=True,env=env)
             for name in ('G2K0.COW','G2K1.COW','G1K0.COW'):
                 subprocess.run(['mcopy','-i',outer,payload,'::/System/DOS/'+name],check=True,env=env)
             sources=['src/kernel/fs/'+name+'.c' for name in ('fs_port','blkreq','cache','path','fat','vfs','fs_ro','program_tree')]
@@ -172,7 +176,9 @@ int main(void){
                             *(str(ROOT/s) for s in sources),'-pthread','-o',binary],check=True,env=env)
             ran=subprocess.run([binary,outer],env=env)
             subprocess.run(['fsck.fat','-n',outer],check=True,env=env)
-            subprocess.run(['mcopy','-o','-i',outer,'::/Games/CIUKIGAM.IMG',image],check=True,env=env)
+            subprocess.run(['mcopy','-o','-i',outer,'::/System/DOS/UNIFIED.IMG',image],check=True,env=env)
+            subprocess.run(['mcopy','-o','-i',outer,'::/System/DOS/UNIFIED.SHA',sidecar],check=True,env=env)
+            self.assertEqual(sidecar.read_text(),hashlib.sha256(image.read_bytes()).hexdigest()+'\n')
             subprocess.run(['fsck.fat','-n',image],check=True,env=env)
             self.assertEqual(ran.returncode,0)
 if __name__=='__main__':unittest.main()

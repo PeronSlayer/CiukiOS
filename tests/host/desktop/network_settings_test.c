@@ -29,9 +29,17 @@ static void click(int id)
 }
 static void tab(unsigned index)
 { struct du_widget *w=du_get(&ui,1401);assert(w);w->active=index;du_post(&ui,DU_EV_SELECT,1401,(int)index); }
+static void edit(int id,const char *text)
+{
+    struct du_widget *w=du_get(&ui,id);assert(w);
+    du_set_text(w,text);du_invalidate(&ui,w->box);
+}
 static void frame(const char *dir,const char *name)
 {
-    du_render(&ui);char path[512];snprintf(path,sizeof(path),"%s/%s.xrgb",dir,name);
+    du_render(&ui);
+    uint32_t *partial=malloc(sizeof(pixels));assert(partial);memcpy(partial,pixels,sizeof(pixels));
+    ui.dirty=1;du_render(&ui);assert(!memcmp(partial,pixels,sizeof(pixels)));free(partial);
+    char path[512];snprintf(path,sizeof(path),"%s/%s.xrgb",dir,name);
     FILE *f=fopen(path,"wb");assert(f);assert(fwrite(pixels,4,CP_WIDTH*CP_HEIGHT,f)==CP_WIDTH*CP_HEIGHT);assert(!fclose(f));
     for(unsigned i=0;i<ui.count;i++)for(unsigned j=i+1;j<ui.count;j++)assert(ui.widgets[i].id!=ui.widgets[j].id);
 }
@@ -56,12 +64,12 @@ int main(int argc,char **argv)
     click(1414);assert(operation==CIUKI_NETCTL_SET && submitted.config.speed==10);cp_tick(&app);
     tab(1);frame(argv[1],"network-dhcp");
     click(1403);assert(!app.network_edit.dhcp && !du_get(&ui,1404)->disabled);
-    du_set_text(du_get(&ui,1404),"192.0.2.110");du_set_text(du_get(&ui,1405),"255.255.255.0");
-    du_set_text(du_get(&ui,1406),"192.0.2.1");du_set_text(du_get(&ui,1407),"192.0.2.1");
-    du_set_text(du_get(&ui,1408),"192.0.2.2");du_set_text(du_get(&ui,1409),"192.0.2.3");
+    edit(1404,"192.0.2.110");edit(1405,"255.255.255.0");
+    edit(1406,"192.0.2.1");edit(1407,"192.0.2.1");
+    edit(1408,"192.0.2.2");edit(1409,"192.0.2.3");
     frame(argv[1],"network-static");int before=calls;
-    du_set_text(du_get(&ui,1404),"999.1.2.3");click(1414);assert(calls==before && strstr(app.network_message,"IPv4"));frame(argv[1],"network-invalid");
-    du_set_text(du_get(&ui,1404),"192.0.2.110");click(1414);assert(operation==1 && !submitted.config.dhcp && submitted.config.dns[2]);cp_tick(&app);
+    edit(1404,"999.1.2.3");click(1414);assert(calls==before && strstr(app.network_message,"IPv4"));frame(argv[1],"network-invalid");
+    edit(1404,"192.0.2.110");click(1414);assert(operation==1 && !submitted.config.dhcp && submitted.config.dns[2]);cp_tick(&app);
     tab(2);frame(argv[1],"network-status");click(1419);assert(operation==CP_NET_TEST && app.network_busy);
     strcpy(fixture.message,"DNS 192.0.2.8; gateway TCP/80 refused.");cp_tick(&app);assert(strstr(app.network_message,"refused"));frame(argv[1],"network-test");
     tab(1);click(1402);click(1414);assert(submitted.config.dhcp && !submitted.config.address && !submitted.config.gateway);cp_tick(&app);

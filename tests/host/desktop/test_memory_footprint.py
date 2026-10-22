@@ -14,16 +14,17 @@ import hashlib
 
 # F2-82: boot shell frames include the larger orb and clipped recess.
 # F2-83: deliberately re-recorded for the new bar gradients and coverage rims.
+# F2-99: new software arrow/shadow; old raster reproduces all former pins (integ-fix1).
 BOOT_GOLDENS = {
-    "absent-ro": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
-    "absent-rw": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
-    "identical-unpresented": "587622d3f8baed652eb99637898d2d3d67682355ea6e3471fe9802ac98e2c02c",
-    "present-ro": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
-    "present-ro-seeded": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
-    "present-rw": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
-    "present-rw-seeded": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
-    "theme": "bd4cffcf7cf5c595db3b70ccc0fe81a0c9af159bce5eafa3e253ea8327ff2d1e",
-    "wallpaper-change": "587622d3f8baed652eb99637898d2d3d67682355ea6e3471fe9802ac98e2c02c"
+    "absent-ro": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
+    "absent-rw": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
+    "identical-unpresented": "51602a69716bab6c7eff08236b1b03f2337569e0476f65e64c63246d4c167387",
+    "present-ro": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
+    "present-ro-seeded": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
+    "present-rw": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
+    "present-rw-seeded": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
+    "theme": "fe9e7ecf2f2c87e9f4cbb9ed1bad5eb989abaf94dad7dfaae7f301413e3b6a34",
+    "wallpaper-change": "51602a69716bab6c7eff08236b1b03f2337569e0476f65e64c63246d4c167387"
 }
 
 class MemoryFootprintTests(unittest.TestCase):
@@ -108,12 +109,15 @@ class MemoryFootprintTests(unittest.TestCase):
             print(boot.stdout, end="", flush=True)
             self.assertEqual(boot.returncode, 0, boot.stdout + boot.stderr)
             from .test_desktop import capture
+            digests = {}
             with patch.dict(os.environ, CIUKI_FONT_REVIEW=str(boot_review)):
                 self.assertEqual({f.stem for f in boot_review.glob("*.xrgb")}, set(BOOT_GOLDENS))
                 for frame in boot_review.glob("*.xrgb"):
-                    self.assertEqual(hashlib.sha256(frame.read_bytes()).hexdigest(), BOOT_GOLDENS[frame.stem], frame.stem)
+                    digests[frame.stem] = hashlib.sha256(frame.read_bytes()).hexdigest()
                     capture(frame.stem, frame.read_bytes(), 1024, 768)
                     frame.unlink()
+            print("BOOT_GOLDENS", digests)
+            self.assertEqual(digests, BOOT_GOLDENS)
             review = ROOT / "build/host/f2-70"
             review.mkdir(parents=True, exist_ok=True)
             performance = subprocess.run([str(binary), "--theme-wallpaper-performance", str(folder)],

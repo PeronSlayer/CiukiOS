@@ -14,7 +14,7 @@ struct music_main {
     struct music_runtime *runtime; struct music_output output; struct music_ui_backend backend;
     struct music_snapshot snapshot; int audio, mixer, closing; unsigned balance_left, balance_right, mute;
     uint32_t serial, sent; uint32_t drain_ms; uint64_t last_poll;
-    uint64_t last_paint; int painted; /* f4-37: frame pacing */
+    uint64_t last_paint; int painted, painted_this_turn; /* f4-37: frame pacing */
 };
 static int audio_open(void *ctx, unsigned *rate)
 {
@@ -99,6 +99,9 @@ static void message(struct du_window *w, const struct desk_packet *p, void *ctx)
 static void painted(struct du_ui *u, void *ctx)
 {
     (void)u; struct music_app *a=ctx; struct music_main *m=a->backend->ctx;
+    /* du_render calls this hook for every clipped region of one frame. */
+    if (m->painted_this_turn) return;
+    m->painted_this_turn=1;
     m->last_paint=du_now(); m->painted=1;
     music_runtime_repaint(m->runtime);
 }
@@ -121,6 +124,7 @@ static int run(struct music_main *m)
     for (;;) {
         uint64_t now=du_now(), begin=music_cycles();
         w->present_pending=music_ui_hold(m->painted,m->last_paint,now)!=0;
+        m->painted_this_turn=0;
         r=du_window_turn(w,now);
         w->present_pending=0;
         if (r<=0) break;

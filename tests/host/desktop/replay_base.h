@@ -31,6 +31,9 @@
 #undef MSG_PEEK
 #undef MSG_DONTWAIT
 #undef MSG_NOSIGNAL
+#undef IPPROTO_IP
+#undef IPPROTO_TCP
+#undef IPPROTO_UDP
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
