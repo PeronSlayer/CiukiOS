@@ -21,3 +21,10 @@
 4. **Records.** Device Manager shows the driver's display name, and the Control Panel shows it as the 2D driver. Add a row to the contract's family table with the result.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (datasheets, register references, donor files with path and tag). Host tests one at a time with `nice -n 19`. Write `build/codex/f2-105-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 01:38): transport approved
+
+The lead reviewed the NV3x/NV4x transport in the f2-105 report and the family contract and approves it as written.
+- **Transport:** VRAM pushbuffer with PFIFO fetch setup, wrap and jump, and completion via `NVDmaWait`/`NVSync` semantics, pinned to xf86-video-nv `0b6619fe`.
+- **Enable activation** behind the DM9 hardware check, as f2-104 amendment 1 did: a mismatch quarantines the driver and keeps software rendering after the idle proof.
+- **Tests:** activation, DM9 pass and mismatch quarantine; the refusal predicates stay tested independently.
