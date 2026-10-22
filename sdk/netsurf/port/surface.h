@@ -70,5 +70,7 @@ void ciuki_chrome_init(struct ciuki_browser_surface *);
 void ciuki_chrome_resize(void);
 void ciuki_chrome_render(void);
 bool ciuki_chrome_input(const struct ciuki_input_event *);
+/* Route client coordinates before converting page Y to viewport coordinates. */
+void ciuki_chrome_dispatch(struct ciuki_browser_surface *,const struct ciuki_input_event *);
 void ciuki_chrome_release(void);
 #endif
