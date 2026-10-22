@@ -248,7 +248,7 @@ struct du_menu { const char *label; struct du_menu_item *items; unsigned count; 
 enum du_event_type {
     DU_EV_ACTIVATE = 1, DU_EV_SELECT, DU_EV_OPEN, DU_EV_SORT, DU_EV_CONTEXT, DU_EV_CHANGE,
     DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS,
-    DU_EV_POINTER, DU_EV_DRAG
+    DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER
 };
 /* DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
  * zero on hover), x/y are client coordinates. CANCEL follows focus loss,

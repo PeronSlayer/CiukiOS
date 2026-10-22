@@ -4,6 +4,7 @@
 #include <ciuki/usb.h>
 _Static_assert(USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE <= USB_DMA_BYTES,
                "interrupt slots exceed pinned DMA");
+_Static_assert(32 + HID_PACKET_MAX <= USB_HID_STRIDE, "HID payload exceeds slot");
 static unsigned slot(struct usb_device *d, struct usb_hid *p)
 {
     return USB_HID_BASE + ((unsigned)(d - d->host->devices) * USB_HID_MAX +
@@ -22,6 +23,7 @@ void usb_interrupt_stop(struct usb_device *d, struct usb_hid *p)
 }
 int usb_interrupt(struct usb_device *d, struct usb_hid *p, void *data, unsigned length)
 {
+    if (!data || !length || length>HID_PACKET_MAX || length>p->packet) return -USB_EPROTO;
     struct usb_host *h = d->host;
     bool uhci = h->pci.prog_if == 0;
     if (!uhci) {
@@ -43,7 +45,6 @@ int usb_interrupt(struct usb_device *d, struct usb_hid *p, void *data, unsigned 
     }
     if (!p->pipe_state) {
         if (!usb_expired(h, p->next_poll)) return -USB_EAGAIN;
-        if (!length || length > 8 || length > p->packet) return -USB_EPROTO;
         *t = (struct usb_packet_trace){.expected=length,.actual=-1,
             .endpoint=p->endpoint,.pid=USB_PID_IN,.toggle=p->toggle,
             .result=-USB_ETIMEDOUT};

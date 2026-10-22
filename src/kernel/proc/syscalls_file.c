@@ -20,6 +20,7 @@ bool net_socket_object(struct proc_object *) __attribute__((weak));
 int32_t net_socket_rw(struct process *, int, uint32_t, uint32_t, bool) __attribute__((weak));
 int media_devctl(struct process *, int32_t, uint32_t, uint32_t, uint32_t);
 #pragma weak media_devctl
+int grant_input_devctl(struct process *, int32_t, uint32_t, uint32_t, uint32_t) __attribute__((weak));
 
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
@@ -308,6 +309,8 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
 {
     uint32_t nr = tf->eax;
     if (nr == CIUKI_SYS_DEVCTL) {
+        if (tf->ecx==INPUT_HID_GET_CAPS || tf->ecx==INPUT_HID_GET_STATE || tf->ecx==INPUT_HID_CALIBRATE)
+            return grant_input_devctl ? grant_input_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);
         if (d && d->node->kind==PX_COM)
             return com_devctl ? com_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;

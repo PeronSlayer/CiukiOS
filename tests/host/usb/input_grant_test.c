@@ -7,9 +7,18 @@
 #undef main
 #include <ciuki/usb.h>
 #include "mouse_descriptor.h"
+#include "hid_corpus.h"
 #include <time.h>
 
 static uint64_t input_tick = 100;
+static const uint8_t *hid_fixture;
+static unsigned hid_fixture_length, protocol_writes, output_writes;
+static bool protocol_stall;
+static uint8_t output_bytes[16]; static unsigned output_length, output_id;
+static struct usb_host *query_host;
+unsigned usb_count(void) { return query_host ? 1 : 0; }
+const struct usb_host *usb_get(unsigned i) { return !i ? query_host : NULL; }
+
 bool drivers_input_firmware(void)
 {
     return g_boot.input_policy == CBI_INPUT_FIRMWARE ||
@@ -34,6 +43,18 @@ int usb_control(struct usb_device *d, uint8_t type, uint8_t request, uint16_t va
                 uint16_t index, void *data, unsigned length)
 {
     (void)d; (void)data;
+    if (hid_fixture) {
+        CHECK(!index);
+        if (type==0x81 && request==6 && value==0x2200) {
+            CHECK(length==hid_fixture_length); memcpy(data,hid_fixture,length); return (int)length;
+        }
+        CHECK(type==0x21);
+        if (request==11) { protocol_writes++; return value && protocol_stall ? -USB_EPIPE : 0; }
+        if (request==10) return 0;
+        CHECK(request==9 && (value>>8)==2 && length<=16);
+        output_writes++; output_id=value&255; output_length=length; memcpy(output_bytes,data,length);
+        return (int)length;
+    }
     CHECK(type == 0x21 && !index);
     CHECK((request == 11 && !value && !length) ||
           (request == 10 && !value && !length) ||
@@ -177,6 +198,7 @@ static void mouse_regression(struct process *p, int fd, struct usb_device *mouse
     puts("PASS F1-68 exact 52-byte QEMU descriptor: left/right/middle, signed motion and wheel through production grant");
     g_boot.flags=CBI_F_VERBOSE;
 }
+#include "hid_integration.h"
 int main(int argc, char **argv)
 {
     bool exact_only = argc == 2 && !strcmp(argv[1], "--exact");
@@ -304,6 +326,7 @@ int main(int argc, char **argv)
     usb_hid_release(&keyboard, &keyboard.hid[0]);
     input_devices_snapshot(&devices); CHECK(!devices.usb);
     CHECK(grant_input_read(p, grants[1], BUFFER, 8) == -EAGAIN);
+    hid_extension_test(p,grants[1]);
     desktop_clean(p); free(ram);
     return 0;
 }

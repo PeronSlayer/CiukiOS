@@ -879,6 +879,29 @@ static void test_volume_steps(void)
     desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);assert(!d.sh.volume_drag && !d.sh.want_mixer);
     cleanup();puts("PASS UI volume: tray steps during drag, unchanged/release silence, popup/extended keyboard, repeat and bounds");
 }
+static void test_hid_consumer(void)
+{
+    setup(640,480); desk_shell_enable(&d); d.sh.mixer_state=2; d.sh.volume=50;
+    struct ciuki_input_event e={.type=CIUKI_INPUT_CONSUMER,.source=3,.generation=77,
+        .code=CIUKI_CONSUMER_VOLUME_UP,.value=1,.value2=1,.lost_count=CIUKI_HID_VERSION};
+    desk_input(&d,&e); assert(d.sh.volume==51 && d.sh.want_mixer);
+    e.value=0; d.sh.want_mixer=0; desk_input(&d,&e); assert(d.sh.volume==51 && !d.sh.want_mixer);
+    e.code=CIUKI_CONSUMER_VOLUME_DOWN; e.value=1; desk_input(&d,&e); assert(d.sh.volume==50);
+    e.code=CIUKI_CONSUMER_MUTE; desk_input(&d,&e); assert(d.sh.muted);
+    int a=client(11,101,240,160,0), b=client(12,102,240,160,0); flush_all();
+    strcpy(d.clients[a].application,"/Programs/music");
+    for (unsigned action=CIUKI_CONSUMER_PLAY_PAUSE;action<=CIUKI_CONSUMER_PREVIOUS;action++) {
+        fake_sent=0; e.code=(int)action; desk_input(&d,&e); flush_all();
+        assert(fake_sent==1 && fake_destinations[0]==11);
+        struct desk_packet packet; assert(desk_parse(&fake_messages[0],0,NULL,&packet));
+        assert(packet.opcode==DESK_KEY && packet.event.type==CIUKI_INPUT_CONSUMER && packet.event.code==(int)action);
+        /* A client cannot forge desktop-to-player input. */
+        assert(!desk_parse(&fake_messages[0],1,NULL,&packet));
+    }
+    e.lost_count=99; fake_sent=0; desk_input(&d,&e); flush_all(); assert(!fake_sent);
+    assert(d.focus==b); cleanup();
+    puts("PASS F1-104 explicit consumer actions through desktop mixer worker and launch-bound Music Player route");
+}
 static void test_dos_fullscreen_menu(void)
 {
     setup(1024,768); desk_shell_enable(&d);
@@ -951,6 +974,6 @@ int main(void)
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
-    test_volume_steps(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
+    test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

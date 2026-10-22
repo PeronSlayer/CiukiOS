@@ -420,3 +420,18 @@ QEMU v9.2.0 files linked in the coverage contract were inspected for model names
 and emulator limitations only. No QEMU file, header, license or source build is
 added to the Ciuki runtime. No `-device help` command or VM was executed. These
 references must not be presented as driver port sources or runtime evidence.
+
+## f1-104 implementation boundary
+
+`src/kernel/usb/hid_report.c`, `hid_input.c` and
+`src/kernel/include/ciuki/hid.h` are original GPL-2.0-only implementations
+of the USB-IF HID 1.11 and HUT 1.12 protocol facts cited in the coverage
+contract. The existing project-owned `usb_hid.c` mouse projection now uses
+that common parser. Linux v6.12 `hid-core.c` and `hid-input.c` listed above
+were consulted for behavioral comparison; no Linux implementation, header,
+dependency or notice-bearing fragment is transplanted. The new public
+`ciuki/input_abi.h` is MIT, matching the existing public ABI's license.
+Synthetic descriptor fixtures are project-owned GPL-2.0-only test data.
+No Resource Kit text, media, vendor firmware or foreign driver binary is
+included. Unsupported descriptor constructs are bounded failures, not a
+claim of complete HID, XInput, vendor protocol or force-feedback support.

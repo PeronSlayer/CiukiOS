@@ -295,6 +295,21 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         return;
     }
     switch (e.type) {
+    case CIUKI_INPUT_CONSUMER: {
+        if (e.lost_count!=CIUKI_HID_VERSION || e.code<1 || e.code>6 || e.value<0 || e.value>1) break;
+        if (d->shell && desk_shell_consumer(d,(unsigned)e.code,e.value)) break;
+        /* The native Music Player already owns media commands/playlist state.
+         * Prefer its focused window, otherwise its most recent live window. */
+        int target=-1;
+        for (unsigned i=0;i<DESK_CLIENTS;i++) {
+            const struct desk_client *c=&d->clients[i];
+            if (!c->window || c->closing || strcmp(c->application,"/Programs/music")) continue;
+            if (target<0 || c->order>d->clients[target].order) target=(int)i;
+            if ((int)i==d->focus) { target=(int)i; break; }
+        }
+        if (target>=0) route(d,target,DESK_KEY,&e);
+        break;
+    }
     case CIUKI_INPUT_RESYNC:
         desk_v3_pointer_release(d);
         /* The input stream was cut: keys are released below, and the screen may

@@ -48,6 +48,11 @@ int desk_surface_valid(const struct ciuki_surface_info *s)
 static int valid_event(unsigned op, const struct ciuki_input_event *e)
 {
     if (op == DESK_KEY) {
+        if (e->type==CIUKI_INPUT_CONSUMER)
+            return (unsigned)e->code>=CIUKI_CONSUMER_PLAY_PAUSE && (unsigned)e->code<=CIUKI_CONSUMER_PREVIOUS &&
+                e->value>=0 && e->value<=1 && e->value2>=1 && (unsigned)e->value2<=CIUKI_HID_DEVICES &&
+                e->lost_count==CIUKI_HID_VERSION;
+
         if (e->type == CIUKI_INPUT_KEY)
             return e->code >= 0 && e->code <= 0x200 &&
                    e->value >= 0 && e->value <= 2 && !e->value2 && !e->lost_count;

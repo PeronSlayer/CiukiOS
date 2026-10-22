@@ -127,7 +127,12 @@ void music_attach(struct music_app *a, struct du_ui *u, const struct music_ui_ba
 void music_event(struct du_ui *u, const struct du_event *e, void *ctx)
 {
     struct music_app *a=ctx;
-    if (e->type==DU_EV_TICK) {
+    if (e->type==DU_EV_CONSUMER) {
+        if (e->key==CIUKI_CONSUMER_PLAY_PAUSE) send(a,a->snapshot.state==MUSIC_PLAYING ? MUSIC_PAUSE : MUSIC_PLAY,NULL,0);
+        else if (e->key==CIUKI_CONSUMER_NEXT) send(a,MUSIC_NEXT,NULL,0);
+        else if (e->key==CIUKI_CONSUMER_PREVIOUS) send(a,MUSIC_PREV,NULL,0);
+        else return;
+    } else if (e->type==DU_EV_TICK) {
         if (e->id==M_POLL) volume(a);
         if (e->id==M_SEEK_APPLY && a->seek_waiting) { a->seek_waiting=0; send(a,MUSIC_SEEK,NULL,a->seek_target); }
         if (e->id==M_APPLY) {

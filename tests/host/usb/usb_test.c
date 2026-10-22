@@ -204,7 +204,7 @@ void input_usb_event(uint16_t type,uint16_t code,int32_t value,gen_t gen,uint64_
 #define wheel_desc qemu_mouse_descriptor
 enum kind {KBD=1,MOUSE,HUB,RECEIVER};
 struct peripheral {
-    enum kind kind;unsigned addr;uint8_t report[8];
+    enum kind kind;unsigned addr;uint8_t report[HID_PACKET_MAX];
     unsigned report_len,leds,protocol,in_toggle,idle_requests,boot_requests;
     unsigned descriptor_failures,descriptor_attempts,reset_series,hid_errors,clear_halts;
     uint8_t mouse_report[8];unsigned mouse_length,mouse_toggle,error_endpoint,last_clear;
@@ -229,7 +229,7 @@ struct model {
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool fatal_reassert, gate_stuck, source_stuck, run_stuck, halt_stuck, bme_stuck;
     bool rhsc_level, root_change_stuck;
-    bool bulk_test, receiver_reports, report_stall;
+    bool bulk_test, receiver_reports, report_stall, receiver_vendor;
     bool late_hid;
     unsigned latched_td,latched_ed,late_hid_acks;
     bool bulk_short;
@@ -285,6 +285,10 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
             cfg[2]=59;cfg[4]=2;cfg[33]=8;memcpy(b,cfg,34);
             memcpy(b+34,cfg+9,25);b[36]=1;b[41]=2;b[54]=0x82;b[56]=8;b[58]=2;
             if(m->receiver_reports)b[50]=sizeof(receiver_mouse_descriptor);
+            if(m->receiver_vendor) {
+                b[2]=84;b[4]=3;memcpy(b+59,cfg+9,25);b[61]=2;b[65]=b[66]=0;
+                b[75]=21;b[79]=0x83;return 84;
+            }
             return 59;
         }
         if(d->kind==HUB) {cfg[14]=9;cfg[15]=0;cfg[16]=0;cfg[2]=25;memcpy(b,cfg,18);memcpy(b+18,cfg+27,7);return 25;}
@@ -296,6 +300,10 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
     }
     if(type==0x29) {uint8_t hub[]={10,0x29,8,0x0a,0,1,0,0,0,0xff};memcpy(b,hub,sizeof(hub));return sizeof(hub);}
     if(type==0x22) {
+        if(m->receiver_vendor && m->setup[4]==2) {
+            uint8_t vendor[]={6,0,0xff,9,1,0xa1,1,0x15,0,0x26,255,0,0x75,8,0x95,1,9,2,0x81,2,0xc0};
+            memcpy(b,vendor,sizeof(vendor));return sizeof(vendor);
+        }
         if(m->receiver_reports) {memcpy(b,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor));return sizeof(receiver_mouse_descriptor);}
         memcpy(b,wheel_desc,sizeof(wheel_desc));return sizeof(wheel_desc);
     }
@@ -368,7 +376,7 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
             if(index==0x82)d->mouse_toggle=0;else d->in_toggle=0;
         }
         if(req==11 && type==0x21){if(value && m->report_stall)return -USB_EPIPE;d->protocol=value;m->protocol_requests++;if(!value)d->boot_requests++;}
-        if(req==10 && type==0x21){assert(!value && (!index || (index==1 && d->kind==RECEIVER)));d->idle_requests++;}
+        if(req==10 && type==0x21){assert(!value && (!index || (index==1 && d->kind==RECEIVER) || (index==2 && m->receiver_vendor)));d->idle_requests++;}
         if(req==9 && !type)d->in_toggle=d->mouse_toggle=0; /* SET_CONFIGURATION */
         if(type==0x23) {
             assert(d->kind==HUB && index>=1 && index<=USB_PORT_MAX);
@@ -1754,9 +1762,43 @@ static void scan_option(void)
     }
     puts("F1-87 usbscan=0: initial enumeration retained, periodic scans stopped, exact tokens and CRLF PASS");
 }
+static void unsupported_hid_peer(bool ohci)
+{
+    setup(ohci,false); m.dev[0].kind=RECEIVER; m.dev[1].present=false; m.receiver_vendor=true;
+    assert(!attach()); model_step();
+    struct usb_device *d=&m.host.devices[0];
+    assert(d->configured && !d->quarantined && d->hid[0].active && d->hid[1].active);
+    assert(d->hid[2].unsupported && !d->hid[2].active && !d->hid[2].reports);
+    assert(!strcmp(d->reason,"hid_ready"));
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;
+    m.dev[0].mouse_report[1]=4;m.dev[0].mouse_length=3;model_step();
+    assert(held[INPUT_KEY_A]==1 && last_x==4 && !d->quarantined);
+    printf("PASS F1-104 %s composite: unsupported vendor HID interface isolated; boot keyboard/mouse remain live\n",ohci ? "OHCI" : "UHCI");
+}
+static void hid_packet_capacity(bool ohci)
+{
+    setup(ohci,false); assert(!attach()); model_step();
+    struct usb_device *d=&m.host.devices[0]; struct usb_hid *p=&d->hid[0];
+    usb_interrupt_stop(d,p); sleep_ms(&m,3);
+    p->active=false; p->packet=HID_PACKET_MAX;
+    unsigned at=USB_HID_BASE+32;
+    memset(m.dma+at,0xa5,HID_PACKET_MAX);
+    uint8_t guard[16]; memcpy(guard,m.dma+USB_HID_BASE+USB_HID_STRIDE,sizeof(guard));
+    uint8_t wanted[HID_PACKET_MAX], got[HID_PACKET_MAX];
+    for (unsigned i=0;i<HID_PACKET_MAX;i++) wanted[i]=(uint8_t)(i+0x40);
+    memcpy(m.dev[0].report,wanted,sizeof(wanted)); m.dev[0].report_len=sizeof(wanted);
+    int n=-USB_EAGAIN;
+    for (unsigned turns=0;turns<20 && n==-USB_EAGAIN;turns++) {
+        n=usb_interrupt(d,p,got,sizeof(got)); sleep_ms(&m,1);
+    }
+    assert(n==(int)sizeof(got) && !memcmp(got,wanted,sizeof(got)) && !d->quarantined);
+    assert(!memcmp(guard,m.dma+USB_HID_BASE+USB_HID_STRIDE,sizeof(guard)));
+    assert(usb_interrupt(d,p,got,HID_PACKET_MAX+1)==-USB_EPROTO);
+    printf("PASS F1-104 %s interrupt: full 16-byte payload, retired completion, adjacent DMA slot unchanged, oversize refused\n",ohci ? "OHCI" : "UHCI");
+}
 int main(void)
 {
-    scan_option();
+    scan_option(); unsupported_hid_peer(false); unsupported_hid_peer(true); hid_packet_capacity(false); hid_packet_capacity(true);
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
     receiver_wheel();chained_bulk();binding_eighth_packet();
     enumeration_retries(false);enumeration_retries(true);

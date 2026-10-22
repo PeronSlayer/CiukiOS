@@ -3,6 +3,7 @@
 #ifndef CIUKI_USB_H
 #define CIUKI_USB_H
 #include <ciuki/registry.h>
+#include <ciuki/hid.h>
 #include "../../fs/blkdev.h"
 #define USB_HOST_MAX 4u
 #define USB_DEVICE_MAX 16u
@@ -24,6 +25,7 @@
 #define USB_EAGAIN 11
 #define USB_EPIPE 32
 #define USB_EPROTO 71
+#define USB_ENOTSUP 95
 #define USB_ETIMEDOUT 110
 #define USB_ED 4096u
 #define USB_UHCI_CONTROL_QH USB_ED
@@ -145,10 +147,12 @@ struct usb_hid {
     unsigned latency_reports;
     struct usb_packet_trace trace; /* separate from the general/BOT slot */
     bool active, wheel, recovery_pending, recovery_tried, port_retry;
+    bool boot_capable, input_registered, unsupported;
     int recovery_result;
     struct usb_mouse_report mouse[USB_MOUSE_REPORTS];
     uint8_t mouse_reports;
     bool report_protocol, report_ids;
+    struct usb_hid_reports *reports; /* bounded, retained with monotonic device record */
 };
 struct usb_storage_trace {
     struct usb_packet_trace packet;
@@ -336,6 +340,10 @@ void usb_uhci_dump_schedule(struct usb_host *); /* once, after enumeration; mute
 int usb_hub_attach(struct usb_device *);
 void usb_hub_scan(struct usb_device *);
 int usb_hid_attach(struct usb_device *, struct usb_hid *, unsigned report_length);
+int usb_hid_query(uint32_t command, void *record);
+int usb_hid_describe(struct usb_device *, struct usb_hid *);
+void usb_hid_publish(struct usb_device *, struct usb_hid *, const struct hid_values *, unsigned report);
+void usb_hid_lifecycle(struct usb_device *, struct usb_hid *, bool attached);
 int usb_hid_report(struct usb_device *, struct usb_hid *, const uint8_t *, unsigned);
 void usb_hid_poll(struct usb_device *, struct usb_hid *);
 void usb_hid_release(struct usb_device *, struct usb_hid *);

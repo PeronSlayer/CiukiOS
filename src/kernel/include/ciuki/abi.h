@@ -15,6 +15,7 @@
 #define CIUKI_ABI_H
 
 #include <stdint.h>
+#include <ciuki/input_abi.h>
 
 /* f1-111: independent COM v1 records, all fields fixed-width. */
 #define CIUKI_COM_VERSION 1u
