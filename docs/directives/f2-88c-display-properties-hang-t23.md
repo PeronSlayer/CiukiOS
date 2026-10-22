@@ -12,3 +12,12 @@
 5. Host tests: the no-polling test, thumbnails in the image, input latency on the model, golden frames.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Write `build/codex/<id>-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 23:41): decisions from the first report
+
+1. **Native wait: authorized.** Fix the native `net_poll()` wait, and any signal or wakeup integration it needs, outside the applet files.
+   - Wait to the real deadline or event, keep the registration/recheck race protection, and wake promptly for input, channel completion, fd close and caught signals.
+   - Host tests prove each wakeup source and that an idle UI and worker consume no periodic kernel time; extend the model to execute the native wait.
+   - This is the Windows 9x model: a blocked thread is not scheduled until its event fires.
+2. **Worker priority: the existing policy is accepted.** The background worker stays at base 7 against base 9 for the focused UI (input boost 11), with no new priority API in this directive.
+3. **Decoder cancellation** stays cooperative at decode boundaries; the UI state cancels immediately.
