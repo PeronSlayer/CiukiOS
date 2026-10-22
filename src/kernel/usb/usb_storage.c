@@ -21,7 +21,8 @@ static unsigned raw_port(struct usb_device *d)
 {
     struct usb_host *h=d->host;
     bool uhci=h->pci.prog_if==0;
-    return usb_read(h,uhci ? 0x10+2*d->root_port : 0x54+4*d->root_port,uhci ? 2 : 4);
+    return usb_read(h,uhci ? 0x10+2*d->root_port : h->pci.prog_if==0x20 ?
+                    h->ehci_caplen+0x44+4*d->root_port : 0x54+4*d->root_port,uhci ? 2 : 4);
 }
 static uint64_t bulk_end(struct usb_device *d)
 {
@@ -66,7 +67,7 @@ int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned
     d->packet_trace=(struct usb_packet_trace){.actual=-1};
     struct usb_storage *s=&d->storage;
     unsigned packet=in ? s->in_packet : s->out_packet, ep=in ? s->in : s->out;
-    if (!s->bound || (packet!=8 && packet!=16 && packet!=32 && packet!=64) ||
+    if (!s->bound || (d->high_speed ? packet!=512 : packet!=8 && packet!=16 && packet!=32 && packet!=64) ||
         !ep || ep>15 || d->low_speed) return -USB_EPROTO;
     uint8_t *toggle=in ? &s->in_toggle : &s->out_toggle;
     struct usb_storage_trace *t=&s->trace;

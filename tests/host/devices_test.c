@@ -236,6 +236,18 @@ int main(void)
     assert(device(0x60000)->class_id==CIUKI_DEVICE_DISK && device(0x60000)->state==CIUKI_DEVICE_ABSENT);
     assert(!strcmp(device(0x60000)->driver,"usb-storage") && !strcmp(device(0x60000)->reason,"safely_removed"));
     assert(usb_context.devices[0].present && usb_context.devices[0].configured);
+    pci[0].prog_if=usb_context.pci.prog_if=0x20;
+    usb_context.ready=false; usb_context.touched=usb_context.owned=true;
+    usb_context.reason="route_only_companions_unqualified";
+    devices_snapshot(&snapshot);
+    assert(device(0x10018)->state==CIUKI_DEVICE_ABSENT);
+    assert(!strcmp(device(0x10018)->reason,"route_only_companions_unqualified"));
+    pci[0].prog_if=usb_context.pci.prog_if=0;
+    usb_context.ready=true; usb_context.reason="ready_polling";
+    usb_context.inventory.parent_locator=0x80001d07;
+    devices_snapshot(&snapshot);
+    assert(strstr(device(0x10018)->reason,"companion of 00:1d.7"));
+    usb_context.inventory.parent_locator=0;
     usb_hosts = 0; pci[0].class_code = 2; pci[0].subclass = 0; /* pci[0] is the NIC again for the later catalogue checks */
     pci[2]=(struct pci_func){.vendor=0x1274,.device=0x5000,.class_code=4,.subclass=1,.dev=5,.irq_line=11,.irq_pin=1,.bar={0xd001}};
     npci=3; audio.backend_pci=pci[2]; audio.backend_name="es137x"; audio.backend_touched=true; audio.ready=true;

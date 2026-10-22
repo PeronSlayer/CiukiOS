@@ -37,7 +37,7 @@ const struct usb_host *usb_get(unsigned i) { return i < host_count ? &hosts[i] :
 uint32_t usb_read(struct usb_host *h, unsigned at, unsigned width)
 {
     uint32_t v = h->io.read(h->io.cookie, at, width);
-    if (at == (h->pci.prog_if ? 0x0cu : 2u)) v |= h->irq_status;
+    if (at == (h->pci.prog_if == 0x20 ? h->ehci_caplen + 4u : h->pci.prog_if ? 0x0cu : 2u)) v |= h->irq_status;
     return v;
 }
 void usb_write(struct usb_host *h, unsigned at, uint32_t v, unsigned width)
@@ -148,6 +148,21 @@ bool usb_host_irq(struct usb_host *h)
      * stopped asserting. Even quarantined hosts keep servicing their source
      * until isolation permits callback removal. */
     if (!h || !h->irq_attached) return false;
+    if (h->pci.prog_if == 0x20) {
+        unsigned off = h->ehci_caplen, status = h->io.read(h->io.cookie, off + 4, 4);
+        unsigned causes = status & h->io.read(h->io.cookie, off + 8, 4) & 0x17;
+        if (!causes) return false;
+        if (status == UINT32_MAX || (causes & 0x10)) {
+            h->irq_status |= 0x10;
+            usb_write(h, off + 8, 0, 4);
+            if (h->io.read(h->io.cookie, off + 8, 4) & 0x3f) quarantine_irq(h);
+        }
+        if (status != UINT32_MAX) usb_write(h, off + 4, causes, 4);
+        h->interrupts++; h->irq_pending = input_pending = true;
+        kwait_wake_irq(&h->changed, !(causes & 0x10));
+        kwait_wake_irq(&input_changed, false);
+        return true; /* IAA remains polled by the sole unlink owner */
+    }
     bool uhci = h->pci.prog_if == 0;
     unsigned off = uhci ? 2 : 0x0c, width = uhci ? 2 : 4;
     unsigned status = h->io.read(h->io.cookie, off, width);
@@ -203,7 +218,7 @@ void usb_port_action(struct usb_host *h, unsigned port, const char *event,
     unsigned count = ++log->operations;
     if (count > USB_PORT_ACTION_TRACE_LIMIT && !usb_expired(h, log->next_operation)) return;
     bool uhci = h->pci.prog_if == 0;
-    unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : 0x54 + 4 * port, uhci ? 2 : 4);
+    unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : h->pci.prog_if == 0x20 ? h->ehci_caplen + 0x44 + 4 * port : 0x54 + 4 * port, uhci ? 2 : 4);
     klog("[usb] port_action port=%u event=%s before=%08x write=%08x status=%08x count=%u controller=%s tick=%llu result=%d",
          port + 1, event, before, written, raw, count, h->owner, h->io.now(h->io.cookie), result);
     log->next_operation = h->io.now(h->io.cookie) + 1000;
@@ -216,7 +231,7 @@ bool usb_port_record(struct usb_host *h, unsigned port, const char *event, int r
     log->pending = event; log->result = result;
     if (!usb_expired(h, log->next_record)) return false;
     bool uhci = h->pci.prog_if == 0;
-    unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : 0x54 + 4 * port, uhci ? 2 : 4);
+    unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : h->pci.prog_if == 0x20 ? h->ehci_caplen + 0x44 + 4 * port : 0x54 + 4 * port, uhci ? 2 : 4);
     bool quarantined = h->root_blocked[port] && !strncmp(event, "connect", 8);
     klog("[usb] port=%u status=%08x event=%s reason=%s controller=%s tick=%llu result=%d",
          port + 1, raw, event, quarantined ? "quarantined" : "state",
@@ -243,6 +258,11 @@ static bool usb_leases_valid(struct usb_host *h)
         h->io.config_write(h->io.cookie, 0xc0, 0x8f00, 2);
         if ((h->io.read(h->io.cookie, 4, 2) & 15) ||
             (h->io.config_read(h->io.cookie, 0xc0, 2) & 0x20bf)) {
+            usb_host_quarantine(h, "irq_mask_failed"); return false;
+        }
+    } else if (h->pci.prog_if == 0x20) {
+        usb_write(h, h->ehci_caplen + 8, 0, 4);
+        if (h->io.read(h->io.cookie, h->ehci_caplen + 8, 4) & 0x3f) {
             usb_host_quarantine(h, "irq_mask_failed"); return false;
         }
     } else {
@@ -381,6 +401,8 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
     if (h->owned) {
         if (h->pci.prog_if == 0) {
             isolated = uhci_isolate(h);
+        } else if (h->pci.prog_if == 0x20) {
+            isolated = usb_ehci_stop(h);
         } else if (h->pci.prog_if == 0x10) {
             usb_write(h, 0x14, UINT32_MAX, 4); usb_write(h, 4, 0, 4);
             ohci_capture_done(h);
@@ -441,7 +463,15 @@ static bool blocked(void)
 static int ehci_route(struct usb_host *h)
 {
     unsigned caplen = usb_read(h, 0, 1), params = usb_read(h, 4, 4);
-    if (caplen < 0x10 || caplen > 0x80 || !(params & 15) || (params & 15) > USB_PORT_MAX || !(params & 0xf000)) return -USB_EPROTO;
+    if (caplen < 0x10 || caplen > 0x80 || (caplen & 3) || !(params & 15) || (params & 15) > USB_PORT_MAX) return -USB_EPROTO;
+    h->ehci_caplen = (uint8_t)caplen; h->ehci_params = params;
+    h->inventory.ports = h->ports = params & 15;
+    h->inventory.companions = (params >> 12) & 15;
+    if (h->pci.vendor == 0x1022 && h->pci.device == 0x7463) h->inventory.quirks |= USB_QUIRK_AMD8111;
+    if (h->pci.vendor == 0x10de && (h->pci.device == 0x003c || h->pci.device == 0x005b ||
+        h->pci.device == 0x00d8 || h->pci.device == 0x00e8)) h->inventory.quirks |= USB_QUIRK_NVIDIA_31BIT;
+    if (h->pci.vendor == 0x1106 && h->pci.device == 0x3104 && (h->pci.revision & 0xf0) == 0x60)
+        h->inventory.quirks |= USB_QUIRK_VIA_SLEEP;
     unsigned eecp = (usb_read(h, 8, 4) >> 8) & 255;
     bool seen[64] = {0};
     for (unsigned n = 0; eecp && n < 48; n++) {
@@ -456,8 +486,10 @@ static int ehci_route(struct usb_host *h)
                 h->io.sleep(h->io.cookie, 1);
             }
             if (cap & (1u << 16)) return -USB_ETIMEDOUT;
+            if (!(cap & (1u << 24))) return -USB_EIO;
             /* Disable legacy SMI enables, clear defined W1C statuses. */
             h->io.config_write(h->io.cookie, eecp + 4, 0xe0000000u, 4);
+            if (h->io.config_read(h->io.cookie, eecp + 4, 4) & 0xe03f) return -USB_EIO;
             break;
         }
         eecp = (cap >> 8) & 255;
@@ -468,9 +500,10 @@ static int ehci_route(struct usb_host *h)
     int err = usb_wait_register(h, caplen + 4, 4, 1u << 12, 1u << 12, 100);
     if (err) return err;
     h->io.config_write(h->io.cookie, 4, (h->pci.command | 2u) & ~4u, 2);
+    if (h->io.config_read(h->io.cookie, 4, 2) & 4) return -USB_EIO;
     usb_write(h, caplen + 0x40, 0, 4);
     if (usb_read(h, caplen + 0x40, 4) & 1) return -USB_EIO;
-    h->ports = params & 15; h->reason = "companion_routing"; return 0;
+    h->reason = "route_only_companions"; return 0;
 }
 static bool power_d0(struct usb_host *h)
 {
@@ -487,6 +520,34 @@ static bool power_d0(struct usb_host *h)
     }
     return !at;
 }
+static int enable_irq(struct usb_host *h)
+{
+    for (unsigned i = 0; i < USB_HOST_MAX; i++) if (!irq_hosts[i]) {
+        irq_hosts[i] = h;
+        int err = irq_chain_add(h->pci.irq_line, usb_irq, h->owner);
+        if (!err) {
+            h->irq_attached = true;
+            if (h->pci.prog_if == 0) {
+                /* ICH USB_LEGKEY bit 13 gates native PCI interrupts too.
+                 * Keep every SMI/trap enable clear (ICH3 §11.1.16). */
+                h->io.config_write(h->io.cookie, 0xc0, 0x2000, 2);
+                if ((h->io.config_read(h->io.cookie, 0xc0, 2) & 0x20bf) != 0x2000) {
+                    usb_host_quarantine(h, "irq_gate_failed"); return -USB_EIO;
+                }
+            }
+            /* Completion/error/root changes only; no per-frame heartbeat. */
+            if (h->pci.prog_if == 0x20) {
+                usb_write(h, h->ehci_caplen + 8, 0x17, 4);
+                if ((h->io.read(h->io.cookie, h->ehci_caplen + 8, 4) & 0x3f) != 0x17) {
+                    usb_host_quarantine(h, "ehci_irq_mask_failed"); return -USB_EIO;
+                }
+            }
+            else usb_write(h, h->pci.prog_if ? 0x10 : 4, h->pci.prog_if ? 0x80000052u : 0x0d, h->pci.prog_if ? 4 : 2);
+        } else irq_hosts[i] = 0;
+        break;
+    }
+    return 0;
+}
 int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io *io, uint8_t *dma, uint32_t phys)
 {
     if (!h || !p || !io || !io->read || !io->write || !io->config_read || !io->config_write || !io->now || !io->sleep) return -EINVAL;
@@ -496,6 +557,9 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     fs_lock_init(&h->transfer_lock);
     for (unsigned i = 0; i < 3; i++) h->claims[i] = -1;
     h->reason = "unsupported_controller";
+    h->inventory.version = USB_CONTROLLER_INVENTORY_VERSION;
+    h->inventory.size = sizeof(h->inventory);
+    h->inventory.pci_locator = usb_pci_locator(p);
     if (p->class_code != 0x0c || p->subclass != 3 || (p->prog_if != 0 && p->prog_if != 0x10 && p->prog_if != 0x20)) return -ENOSYS;
     if (blocked()) { h->reason = "firmware_first_or_safe_mode"; return -ENOSYS; }
     if (p->header_type & 0x7f) return -EINVAL;
@@ -507,7 +571,7 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     }
     if (!uhci && p->prog_if != 0x20) h->ops = &usb_ohci_ops;
     if (uhci) h->ops = &usb_uhci_ops;
-    if (h->ops && (!dma || !phys || (phys & 4095) || ((uintptr_t)dma & 4095) || phys > 768u * 1024 * 1024 - USB_DMA_BYTES)) {
+    if ((h->ops || dma || phys) && (!dma || !phys || (phys & 4095) || ((uintptr_t)dma & 4095) || phys > 768u * 1024 * 1024 - USB_DMA_BYTES)) {
         h->reason = "dma_bounds"; return -EINVAL;
     }
     if ((io->config_read(io->cookie, 4, 2) & 0xffff) != p->command || !power_d0(h)) {
@@ -520,7 +584,7 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     int err = claim(h, 0, uhci ? RES_PORT : RES_MMIO, h->base, h->base + bytes, false);
     bool intx = h->ops && pci_irq_routed(p);
     if (!err && intx && claim(h, 1, RES_IRQ, p->irq_line, p->irq_line + 1u, true)) intx = false;
-    if (!err && h->ops) err = claim(h, 2, RES_MMIO, phys, phys + USB_DMA_BYTES, false);
+    if (!err && dma) err = claim(h, 2, RES_MMIO, phys, phys + USB_DMA_BYTES, false);
     if (err) {
         /* No controller write occurred. Retain partial leases in quarantine;
          * no idle proof or runtime recovery is published by this driver. */
@@ -536,28 +600,101 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     if (!err) err = h->ops ? h->ops->start(h) : ehci_route(h);
     if (err) { usb_host_quarantine(h, "activation_or_handoff"); return err; }
     h->ready = h->ops != 0;
-    if (intx) for (unsigned i = 0; i < USB_HOST_MAX; i++) if (!irq_hosts[i]) {
-        irq_hosts[i] = h;
-        err = irq_chain_add(p->irq_line, usb_irq, h->owner);
-        if (!err) {
-            h->irq_attached = true;
-            if (uhci) {
-                /* ICH USB_LEGKEY bit 13 gates native PCI interrupts too.
-                 * Keep every SMI/trap enable clear (ICH3 §11.1.16). */
-                h->io.config_write(h->io.cookie, 0xc0, 0x2000, 2);
-                if ((h->io.config_read(h->io.cookie, 0xc0, 2) & 0x20bf) != 0x2000) {
-                    usb_host_quarantine(h, "irq_gate_failed"); return -USB_EIO;
-                }
-            }
-            /* Completion/error/root changes only; no per-frame heartbeat. */
-            usb_write(h, uhci ? 4 : 0x10, uhci ? 0x0d : 0x80000052u, uhci ? 2 : 4);
-        } else irq_hosts[i] = 0;
-        break;
-    }
+    if (intx && enable_irq(h)) return -USB_EIO;
     if (h->ready) h->reason = h->irq_attached ? "ready_irq" : "ready_polling";
     klog("[usb] controller=%s ports=%u pci=%02x:%02x.%u mode=%s reason=%s",
-         uhci ? "uhci" : p->prog_if == 0x10 ? "ohci" : "ehci-companion", h->ports, p->bus, p->dev, p->fn,
+         uhci ? "uhci" : p->prog_if == 0x10 ? "ohci" : "ehci", h->ports, p->bus, p->dev, p->fn,
          h->irq_attached ? "irq" : "poll", h->reason);
+    return 0;
+}
+static bool companion_ready(const struct usb_host *peer)
+{
+    if (!peer->ready || !peer->owned || peer->quarantined) return false;
+    for (unsigned slot = 0; slot < 3; slot += 2)
+        if (peer->claims[slot] >= 0 && !registry_valid(peer->claims[slot], peer->claim_gen[slot])) return false;
+    return true;
+}
+bool usb_ehci_companion_ready(const struct usb_host *h, unsigned port)
+{
+    if (port >= h->ports || !h->inventory.port_companion[port]) return false;
+    for (unsigned i = 0; i < h->ehci_group_count; i++) {
+        const struct usb_host *peer = &h->ehci_group[i];
+        if (usb_pci_locator(&peer->pci) == h->inventory.port_companion[port]) return companion_ready(peer);
+    }
+    return false;
+}
+int usb_controller_snapshot(const struct usb_host *h, struct usb_controller_inventory *out)
+{
+    if (!h || !out || out->version != USB_CONTROLLER_INVENTORY_VERSION || out->size != sizeof(*out)) return -EINVAL;
+    *out = h->inventory;
+    out->version = USB_CONTROLLER_INVENTORY_VERSION; out->size = sizeof(*out);
+    out->pci_locator = usb_pci_locator(&h->pci); out->ports = h->ports;
+    if (h->ehci_group) {
+        out->ready_functions = 0;
+        for (unsigned i = 0; i < h->ehci_group_count; i++) {
+            const struct usb_host *peer = &h->ehci_group[i];
+            if (peer->pci.fn < 8 && peer->pci.bus == h->pci.bus && peer->pci.dev == h->pci.dev &&
+                (out->companion_functions & (1u << peer->pci.fn)) && companion_ready(peer))
+                out->ready_functions |= 1u << peer->pci.fn;
+        }
+    }
+    out->flags = (h->owned ? USB_CONTROLLER_OWNED : 0) |
+        (h->pci.prog_if == 0x20 ? USB_CONTROLLER_TT_UNSUPPORTED |
+         (h->ready ? USB_CONTROLLER_HIGH_SPEED : h->owned ? USB_CONTROLLER_ROUTE_ONLY : 0) : 0) |
+        (h->quarantined ? USB_CONTROLLER_QUARANTINED : 0);
+    return 0;
+}
+int usb_ehci_activate(struct usb_host *h, struct usb_host *group, unsigned count)
+{
+    if (!h || !group || count > USB_HOST_MAX || blocked() || h->pci.prog_if != 0x20 ||
+        !h->owned || h->quarantined || h->ready || h->ehci_started) return -USB_EIO;
+    h->ehci_group = group; h->ehci_group_count = count;
+    unsigned ehcis = 0, companions = 0;
+    struct usb_host *by_fn[8] = {0};
+    h->inventory.companion_functions = h->inventory.ready_functions = 0;
+    memset(h->inventory.port_companion, 0, sizeof(h->inventory.port_companion));
+    for (unsigned i = 0; i < count; i++) {
+        struct usb_host *peer = &group[i];
+        if (peer->pci.bus != h->pci.bus || peer->pci.dev != h->pci.dev || peer->pci.vendor != h->pci.vendor ||
+            peer->pci.class_code != 0x0c || peer->pci.subclass != 3) continue;
+        if (peer->pci.prog_if == 0x20) { ehcis++; continue; }
+        if (peer->pci.fn > 7 || (peer->pci.prog_if != 0 && peer->pci.prog_if != 0x10)) continue;
+        if (by_fn[peer->pci.fn]) { h->reason = "route_only_ambiguous_companions"; return -ENOSYS; }
+        by_fn[peer->pci.fn] = peer; companions++;
+        h->inventory.companion_functions |= 1u << peer->pci.fn;
+        if (peer->ready && !peer->quarantined && peer->owned && !peer->device_count && usb_leases_valid(peer))
+            h->inventory.ready_functions |= 1u << peer->pci.fn;
+    }
+    h->reason = "route_only_companions_unqualified";
+    if (ehcis != 1 || companions != h->inventory.companions) return -ENOSYS;
+    struct usb_host *ordered[8]; unsigned n = 0;
+    for (unsigned fn = 0; fn < 8; fn++) if (by_fn[fn]) ordered[n++] = by_fn[fn];
+    unsigned routes = usb_read(h, 0x0c, 4), per = (h->ehci_params >> 8) & 15;
+    for (unsigned p = 0; p < h->ports && companions; p++) {
+        unsigned index = h->ehci_params & 0x80 ? (routes >> (p * 4)) & 15 : per ? p / per : 15;
+        if (index >= companions) { h->reason = "route_only_invalid_port_map"; return -ENOSYS; }
+        h->inventory.port_companion[p] = usb_pci_locator(&ordered[index]->pci);
+    }
+    for (unsigned i = 0; i < companions; i++) ordered[i]->inventory.parent_locator = usb_pci_locator(&h->pci);
+    if (h->inventory.companion_functions != h->inventory.ready_functions) return -ENOSYS;
+    h->reason = "route_only_no_dma";
+    if (!h->dma || h->claims[2] < 0) return -ENOSYS;
+    h->reason = "route_only_ehci_revision";
+    if (usb_read(h, 2, 2) != 0x100) return -ENOSYS;
+    h->reason = "route_only_chipset_errata";
+    if (h->inventory.quirks & USB_QUIRK_AMD8111) return -ENOSYS;
+    if (!usb_leases_valid(h)) return -USB_EIO;
+    h->ops = &usb_ehci_ops;
+    bool intx = pci_irq_routed(&h->pci);
+    if (intx && claim(h, 1, RES_IRQ, h->pci.irq_line, h->pci.irq_line + 1u, true)) intx = false;
+    int err = h->ops->start(h);
+    if (err) { usb_host_quarantine(h, "ehci_activation"); return err; }
+    h->ready = true;
+    if (intx && enable_irq(h)) return -USB_EIO;
+    h->reason = h->irq_attached ? "ready_irq_hs_tt_unsupported" : "ready_polling_hs_tt_unsupported";
+    klog("[usb] controller=ehci ports=%u pci=%02x:%02x.%u reason=%s companions=%02x ready=%02x",
+         h->ports, h->pci.bus, h->pci.dev, h->pci.fn, h->reason,
+         h->inventory.companion_functions, h->inventory.ready_functions);
     return 0;
 }
 static int packet(struct usb_device *d, unsigned pid, unsigned toggle, void *data, unsigned len)
@@ -623,19 +760,19 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
                 unsigned mps = le16(p + 4), ep = p[2] & 15;
                 unsigned bit = 1u << (ep + (p[2] & 0x80 ? 16 : 0));
                 if (!ep || (p[2] & 0x70) || p[3] != 2 ||
-                    (mps != 8 && mps != 16 && mps != 32 && mps != 64) || (storage_endpoints & bit) || ((p[2] & 0x80) && (endpoints & (1u<<ep)))) return -USB_EPROTO;
+                    (d->high_speed ? mps != 512 : mps != 8 && mps != 16 && mps != 32 && mps != 64) || (storage_endpoints & bit) || ((p[2] & 0x80) && (endpoints & (1u<<ep)))) return -USB_EPROTO;
                 storage_endpoints |= bit;
                 if (p[2] & 0x80) {
                     if (storage->in) return -USB_EPROTO;
-                    storage->in = (uint8_t)ep; storage->in_packet = (uint8_t)mps;
+                    storage->in = (uint8_t)ep; storage->in_packet = (uint16_t)mps;
                 } else {
                     if (storage->out) return -USB_EPROTO;
-                    storage->out = (uint8_t)ep; storage->out_packet = (uint8_t)mps;
+                    storage->out = (uint8_t)ep; storage->out_packet = (uint16_t)mps;
                 }
             }
             if (hid && (p[2] & 0x80) && (p[3] & 3) == 3) {
                 unsigned mps = le16(p + 4);
-                if (!(p[2] & 15) || (p[2] & 0x70) || !p[6] || mps > (d->low_speed ? 8u : 64u) || mps < (hid->protocol == 1 ? 8u : 3u) || hid->endpoint) return -USB_EPROTO;
+                if (!(p[2] & 15) || (p[2] & 0x70) || !p[6] || (d->high_speed && p[6] > 14) || mps > (d->low_speed ? 8u : 64u) || mps < (hid->protocol == 1 ? 8u : 3u) || hid->endpoint) return -USB_EPROTO;
                 unsigned bit = 1u << (p[2] & 15);
                 if ((endpoints & bit) || (storage_endpoints & (bit<<16))) return -USB_EPROTO;
                 endpoints |= bit;
@@ -660,6 +797,8 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
     struct usb_device *d = &h->devices[slot]; memset(d, 0, sizeof(*d));
     d->host = h; d->ep0 = 8; d->low_speed = low; d->root_port = (uint8_t)root;
     d->parent = (uint8_t)parent; d->port = (uint8_t)port; d->present = true;
+    d->high_speed = h->pci.prog_if == 0x20 && !low;
+    if (d->high_speed) d->ep0 = 64;
     d->generation = gen_alloc(); d->reason = "enumerating";
     uint8_t b[USB_CONFIG_MAX];
     int err = -USB_EIO;
@@ -683,7 +822,7 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
                  h->owner, port + 1, parent, attempt, h->io.now(h->io.cookie), err,
                  h->io.now(h->io.cookie) - descriptor_tick);
             if (err == 8 && b[0] == 18 && b[1] == 1 &&
-                (b[7] == 8 || b[7] == 16 || b[7] == 32 || b[7] == 64) && (!low || b[7] == 8)) goto descriptor_ready;
+                (b[7] == 8 || b[7] == 16 || b[7] == 32 || b[7] == 64) && (!low || b[7] == 8) && (!d->high_speed || b[7] == 64)) goto descriptor_ready;
         }
     }
     goto failed;
@@ -695,7 +834,7 @@ descriptor_ready:
     err = usb_control(d, 0x80, 6, 0x100, 0, b, 18);
     if (err != 18 || b[0] != 18 || b[1] != 1 || b[7] != d->ep0 || !b[17]) goto failed;
     d->class_code = b[4]; d->vendor = (uint16_t)le16(b + 8); d->product = (uint16_t)le16(b + 10);
-    klog("[usb] device addr=%u vid:pid=%04x:%04x class=%02x speed=%s", d->address, d->vendor, d->product, d->class_code, low ? "low" : "full");
+    klog("[usb] device addr=%u vid:pid=%04x:%04x class=%02x speed=%s", d->address, d->vendor, d->product, d->class_code, low ? "low" : d->high_speed ? "high" : "full");
     err = usb_control(d, 0x80, 6, 0x200, 0, b, 9);
     if (err != 9 || b[0] != 9 || b[1] != 2) goto failed;
     unsigned len = le16(b + 2); if (len < 9 || len > sizeof(b)) goto failed;
@@ -822,6 +961,9 @@ void usb_step(struct usb_host *h)
                     h->root_status[p] = s; continue;
                 }
                 int err = h->ops->port_reset(h, p);
+                if (err == -USB_EAGAIN && (h->ops->port_status(h, p) & USB_PORT_COMPANION)) {
+                    h->ops->port_ack_changes(h, p); continue;
+                }
                 if (err) {
                     if (!h->ready || h->quarantined) break;
                     h->root_blocked[p] = true;
@@ -897,13 +1039,13 @@ static uint32_t cfg_read(void *arg, unsigned at, unsigned width)
 {
     struct usb_host *h = arg; const struct pci_func *p = &h->pci;
     uint32_t f = irq_save(); outl(0xcf8, 0x80000000u | (uint32_t)p->bus << 16 | (uint32_t)p->dev << 11 | (uint32_t)p->fn << 8 | (at & ~3u));
-    uint32_t v = width == 2 ? cpu_inw(0xcfc + (at & 2)) : inl(0xcfc); irq_restore(f); return v;
+    uint32_t v = width == 1 ? inb(0xcfc + (at & 3)) : width == 2 ? cpu_inw(0xcfc + (at & 2)) : inl(0xcfc); irq_restore(f); return v;
 }
 static void cfg_write(void *arg, unsigned at, uint32_t v, unsigned width)
 {
     struct usb_host *h = arg; const struct pci_func *p = &h->pci;
     uint32_t f = irq_save(); outl(0xcf8, 0x80000000u | (uint32_t)p->bus << 16 | (uint32_t)p->dev << 11 | (uint32_t)p->fn << 8 | (at & ~3u));
-    if (width == 2) cpu_outw(0xcfc + (at & 2), (uint16_t)v); else outl(0xcfc, v); irq_restore(f);
+    if (width == 1) outb(0xcfc + (at & 3), (uint8_t)v); else if (width == 2) cpu_outw(0xcfc + (at & 2), (uint16_t)v); else outl(0xcfc, v); irq_restore(f);
 }
 static uint64_t native_now(void *arg) { (void)arg; uint32_t f = irq_save(); uint64_t v = g_ticks; irq_restore(f); return v; }
 static bool host_pending(void *arg) { return ((struct usb_host *)arg)->irq_pending; }
@@ -992,10 +1134,10 @@ void usb_init(void)
             (p->prog_if ? (bar & 7) || base > UINT32_MAX - bytes : !(bar & 1) || base > 65536 - bytes)) {
             h->pci = *p; h->reason = "invalid_bar"; continue;
         }
-        uint32_t phys = p->prog_if == 0x20 ? 0 : pmm_alloc_contig(USB_DMA_BYTES / PAGE_SIZE);
+        uint32_t phys = pmm_alloc_contig(USB_DMA_BYTES / PAGE_SIZE);
         /* The window remains pinned with the controller, including failure. */
         void *mapping = p->prog_if ? vmm_map_mmio(p->bar[0] & ~15u, 4096, true) : 0;
-        if ((p->prog_if && !mapping) || (p->prog_if != 0x20 && !phys)) {
+        if ((p->prog_if && !mapping) || (!phys && p->prog_if != 0x20)) {
             if (phys) for (unsigned at=0;at<USB_DMA_BYTES;at+=PAGE_SIZE) pmm_free(phys+at);
             h->pci = *p; h->reason = "allocation_failed"; continue;
         }
@@ -1007,6 +1149,9 @@ void usb_init(void)
             h->dma = 0;
         }
     }
+    /* No companion has enumerated yet: changing CF cannot steal a live child. */
+    for (unsigned i = 0; i < host_count; i++) if (hosts[i].pci.prog_if == 0x20)
+        (void)usb_ehci_activate(&hosts[i], hosts, host_count);
     start_services();
 }
 #endif

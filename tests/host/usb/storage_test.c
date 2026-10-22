@@ -237,9 +237,12 @@ static void medium_bytes(void *buffer,unsigned n,bool write)
         n-=take;b+=take;pos+=take;
     }
 }
+#ifndef USB_STORAGE_MODEL_PACKET_MAX
+#define USB_STORAGE_MODEL_PACKET_MAX 64u
+#endif
 static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,void *buffer,unsigned n,bool periodic)
 {
-    (void)d; assert(!periodic && n<=64); m.packets++;
+    (void)d; assert(!periodic && n<=USB_STORAGE_MODEL_PACKET_MAX); m.packets++;
     uint8_t *b=buffer;
     if(!ep) {
         if(pid==USB_PID_SETUP) {assert(n==8);memcpy(m.setup,b,8);m.setup_at=m.now;return 8;}

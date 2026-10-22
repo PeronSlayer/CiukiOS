@@ -115,6 +115,8 @@ void usb_hub_scan(struct usb_device *d)
             continue;
         }
         if (d->hub_child[p]) {
+            if (child && child->reason && !strncmp(child->reason, "unsupported_transaction_translator",
+                                                  sizeof("unsupported_transaction_translator"))) continue;
             if (!(s & 2)) { err = feature(d, p, 1, true); if (err) goto failed; }
             if (c & 2) { err = feature(d, p, 17, false); if (err) goto failed; }
             continue;
@@ -123,6 +125,21 @@ void usb_hub_scan(struct usb_device *d)
         err = status(d, p, &s, &c); if (err) goto failed;
         if (!(s & 1)) { record(d, p, s, c, "disconnect", 0); d->hub_status[p] = (uint16_t)s; continue; }
         err = usb_hub_reset(d, p); if (err) goto failed;
+        /* Speed is meaningful after reset. Unsupported splits never enter DMA. */
+        err = status(d, p, &s, &c); if (err) goto failed;
+        if (d->high_speed && !(s & 0x400)) {
+            if (h->device_count == USB_DEVICE_MAX) { err = -ENOSPC; goto failed; }
+            unsigned slot = h->device_count++;
+            struct usb_device *unsupported = &h->devices[slot];
+            *unsupported = (struct usb_device){.host=h,.generation=gen_alloc(),.present=true,
+                .parent=(uint8_t)(d-h->devices+1),.root_port=d->root_port,.port=(uint8_t)p,
+                .low_speed=!!(s & 0x200),.reason="unsupported_transaction_translator"};
+            d->hub_child[p] = (uint8_t)(slot + 1);
+            err = feature(d, p, 1, false); if (err) goto failed;
+            klog("[usb] unsupported_tt hub=%u port=%u status=%04x change=%04x event=unsupported reason=unsupported_transaction_translator speed=%s tick=%llu result=%d",
+                 d->address, p+1, s, c, unsupported->low_speed ? "low" : "full", h->io.now(h->io.cookie), -ENOSYS);
+            continue;
+        }
         err = usb_enumerate(h, d->root_port, (unsigned)(d - h->devices) + 1, p, !!(s & 0x200));
         if (err < 0) goto failed;
         d->hub_child[p] = (uint8_t)err;

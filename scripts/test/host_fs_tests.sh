@@ -239,7 +239,7 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
     -DCIUKI_USB_HOST -ffunction-sections -fdata-sections -Wl,--gc-sections \
     tests/host/fs/test_fairness.c tests/host/usb/f1_83_source.c \
-    src/kernel/usb/usb_core.c src/kernel/usb/usb_storage.c src/kernel/usb/uhci.c src/kernel/usb/usb_interrupt.c \
+    src/kernel/usb/usb_core.c src/kernel/usb/ehci.c src/kernel/usb/usb_storage.c src/kernel/usb/uhci.c src/kernel/usb/usb_interrupt.c \
     src/kernel/lib/fmt.c src/kernel/core/bootlog.c src/kernel/drivers/blkpart.c src/kernel/fs/mount.c \
     -Wl,--wrap=cache_read_ahead,--wrap=cache_write -o build/host/fs/test_fairness
 build/host/fs/test_fairness
