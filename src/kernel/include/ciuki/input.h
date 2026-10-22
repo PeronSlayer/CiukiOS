@@ -10,7 +10,7 @@
 #define INPUT_CAPACITY 256u
 enum input_type { INPUT_KEY = 1, INPUT_REL, INPUT_BTN, INPUT_TEXT, INPUT_RESYNC };
 enum input_axis { INPUT_X, INPUT_Y, INPUT_WHEEL };
-enum input_button { INPUT_LEFT, INPUT_RIGHT, INPUT_MIDDLE };
+enum input_button { INPUT_LEFT, INPUT_RIGHT, INPUT_MIDDLE, INPUT_SIDE, INPUT_EXTRA };
 enum input_source { INPUT_NATIVE = 1, INPUT_FIRMWARE, INPUT_USB };
 /* Live producers, independent of the boot-time i8042 activation result.
  * PS/2 and firmware activate a keyboard/mouse pair; USB counts HID interfaces.
@@ -54,7 +54,7 @@ struct input_digest {
  * 0=up, 1=down, 2=repeat. Overflow discards stale queued events, counts them,
  * and queues one RESYNC before the triggering event and fresh transitions.
  * RESYNC carries lost_count and the current button bitmap in value (bits
- * 0-2); consumers release remembered keys. state_lost is latched telemetry,
+ * 0-4); consumers release remembered keys. state_lost is latched telemetry,
  * not a flag on subsequent events. */
 bool input_read(struct input_event *out);
 void input_snapshot(struct input_stats *out);

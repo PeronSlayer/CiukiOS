@@ -1,4 +1,4 @@
-/* Native i8042, raw set-2 keyboard and standard three-byte PS/2 mouse.
+/* Native i8042, raw set-2 keyboard and PS/2 ID 0/3/4 mice.
  * Research/decision for f1-04 (2026-10-10), compared with registry.c,
  * sync.c and the F1 contracts before implementation:
  * IBM PS/2 Hardware Interface Technical Reference, controller pp. 4-12:
@@ -52,6 +52,12 @@
  * A no-reply controller write gets a bounded 1 ms quiet interval after IBF
  * clears, within the existing deadlines. Drain one EC FA there, record it,
  * and complete that controller phase before arming a device ACK receiver.
+ * f1-103 protocol research and recovery decisions:
+ * docs/design/peripheral-driver-coverage.md, Input implementation contract.
+ * Microsoft PS/2 tables specify signed byte/nibble wheel and Explorer buttons:
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/keyboard-and-mouse-hid-client-drivers#activating-buttons-4-5-and-wheel-on-ps2-mice
+ * Linux v6.12 psmouse-base.c confirms the rate sequences and wheel sign.
+ * No upstream code copied; keep command deadlines and retained quarantine.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -76,6 +82,7 @@
 #define IRQ_BITS 0x03u
 #define TRANSLATE 0x40u
 #define POLL_LIMIT 65536u             /* stalled PIT escape, never a time estimate */
+#define MOUSE_PACKET_GAP_MS 500u      /* incomplete packet only, not device timeout */
 
 struct input_queue {
     struct input_event ring[INPUT_CAPACITY];
@@ -84,7 +91,8 @@ struct input_queue {
     unsigned head, tail;
     bool down[513], native_down[513], extended, breaking;
     uint8_t usb_keys[513], usb_buttons[3], native_buttons;
-    uint8_t pause_pos, mouse_pos, packet[3];
+    uint8_t pause_pos, mouse_pos, packet[4];
+    uint64_t mouse_tick;
 };
 struct controller {
     struct input_queue queue;
@@ -183,7 +191,7 @@ char input_unshifted(uint16_t code) { return code < sizeof(us) ? us[code] : 0; }
 
 /* Decoder producers never yield. Native IRQs only append raw bytes, so the
  * thread consumer may decode with IF enabled; USB/firmware producers retain
- * their short queue exclusion. One byte produces at most five events plus
+ * their short queue exclusion. One byte produces at most eight events plus
  * RESYNC, without allocation, logging, polling or sleeping. */
 static void queue_event(struct controller *c, uint16_t type, uint16_t code, int32_t value,
                         uint64_t tick, uint64_t lost)
@@ -323,13 +331,28 @@ static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)
 static void mouse_byte(struct controller *c, uint8_t b, uint64_t tick)
 {
     struct input_queue *q = &c->queue;
+    if (q->mouse_pos && tick - q->mouse_tick > MOUSE_PACKET_GAP_MS) {
+        q->mouse_pos = 0;
+        q->stats.resync++;
+    }
+    q->mouse_tick = tick;
     if (!q->mouse_pos && (!(b & 8) || (b & 0xC0))) {
         q->stats.resync++;              /* count every rejected candidate header */
         return;
     }
     q->packet[q->mouse_pos++] = b;
-    if (q->mouse_pos != 3)
+    if (q->mouse_pos != (c->stats.aux_id ? 4 : 3))
         return;
+    if (c->stats.aux_id == 4 && (q->packet[3] & 0xC0)) {
+        /* Unsupported extensions/corruption: retain a possible suffix header.
+         * No packet has been published, including its buttons or motion. */
+        q->stats.resync++;
+        unsigned skip = 1;
+        while (skip < 4 && (!(q->packet[skip] & 8) || (q->packet[skip] & 0xC0))) skip++;
+        q->mouse_pos = (uint8_t)(4 - skip);
+        memmove(q->packet, q->packet + skip, q->mouse_pos);
+        return;
+    }
     q->mouse_pos = 0;
     uint8_t h = q->packet[0];
     /* PS/2 axes are signed NINE-bit values, not int8_t. Screen y grows
@@ -338,13 +361,21 @@ static void mouse_byte(struct controller *c, uint8_t b, uint64_t tick)
     int x = q->packet[1] ? (int)q->packet[1] - ((h & 0x10) ? 256 : 0) : 0;
     int y = q->packet[2] ? (int)q->packet[2] - ((h & 0x20) ? 256 : 0) : 0;
     q->native_buttons = h & 7;
+    int wheel = 0;
+    if (c->stats.aux_id == 3)
+        wheel = q->packet[3] - ((q->packet[3] & 0x80) ? 256 : 0);
+    else if (c->stats.aux_id == 4) {
+        wheel = (q->packet[3] & 15) - ((q->packet[3] & 8) ? 16 : 0);
+        q->native_buttons |= (q->packet[3] & 0x30) >> 1;
+    }
     unsigned buttons = q->native_buttons;
     for (unsigned i = 0; i < 3; i++) if (q->usb_buttons[i]) buttons |= 1u << i;
     unsigned changed = buttons ^ q->stats.buttons;
     q->stats.buttons = buttons;        /* RESYNC snapshots this complete packet */
     if (x) enqueue(c, INPUT_REL, INPUT_X, x, tick);
     if (y) enqueue(c, INPUT_REL, INPUT_Y, -y, tick);
-    for (unsigned i = 0; i < 3; i++)
+    if (wheel) enqueue(c, INPUT_REL, INPUT_WHEEL, -wheel, tick);
+    for (unsigned i = 0; i < 5; i++)
         if (changed & (1u << i))
             enqueue(c, INPUT_BTN, (uint16_t)i, !!(buttons & (1u << i)), tick);
 }
@@ -492,7 +523,7 @@ static void poll_pause(struct controller *c, struct poll_deadline *d)
 static void capture_at(struct controller *c, uint8_t status, uint8_t b, uint64_t tick)
 {
     bool aux = (status & AUX) != 0;
-    /* Boot traffic predates the configured raw set-2/three-byte protocol.
+    /* Boot traffic predates the configured raw set-2/negotiated mouse protocol.
      * It must not poison decoder state while draining for initialization. */
     if (c->init_recording && (!c->stats.pending_command || aux != c->reply_aux)) {
         c->stats.drained++;
@@ -789,6 +820,36 @@ static int init_device(struct controller *c, bool aux, uint8_t command,
 {
     init_command(c, command);
     return device_exchange(c, aux, command, end, reply);
+}
+
+static bool mouse_id_supported(uint8_t id)
+{
+    return id == 0 || id == 3 || id == 4;
+}
+
+/* Reporting is disabled by F5. Only a fresh ID proves the stream format;
+ * a failed transaction cannot prove any fallback and follows quarantine. */
+static int init_mouse_protocol(struct controller *c, uint64_t end)
+{
+    uint8_t id = 0;
+    int err = init_device(c, true, 0xF2, end, &id);
+    if (!err && !mouse_id_supported(id)) err = -I8042_EPROTO;
+    if (err) return err;
+    c->stats.aux_id = id;
+    static const uint8_t rates[2][3] = { { 200, 100, 80 }, { 200, 200, 80 } };
+    for (unsigned stage = 0; stage < ARRAY_SIZE(rates) && id != 4; stage++) {
+        for (unsigned i = 0; !err && i < ARRAY_SIZE(rates[stage]); i++) {
+            err = init_device(c, true, 0xF3, end, 0);
+            if (!err) err = init_device(c, true, rates[stage][i], end, 0);
+        }
+        if (!err) err = init_device(c, true, 0xF2, end, &id);
+        if (!err && !mouse_id_supported(id)) err = -I8042_EPROTO;
+        if (err) return err;
+        c->stats.aux_id = id;
+        if (!id) break;                /* proven standard three-byte fallback */
+    }
+    c->queue.mouse_pos = 0;
+    return 0;
 }
 
 /* A write is not complete while IBF remains asserted. OBF alone is input to
@@ -1129,13 +1190,11 @@ int i8042_init(void)
     }
     if (!err) {
         init_begin(&native, I8042_INIT_RESET_AUX, 0xF5);
-        /* F6 defaults do not undo a negotiated wheel ID (QEMU v9.2.0,
-         * https://github.com/qemu/qemu/blob/v9.2.0/hw/input/ps2.c).
-         * Require ID 0; no FF/BAT or wheel sample-rate negotiation. */
+        /* F6 defaults do not prove ID 0. Negotiate with reporting disabled;
+         * no FF/BAT reset or unproven three-byte fallback. */
         err = init_device(&native, true, 0xF5, end, 0);
         if (!err) err = init_device(&native, true, 0xF6, end, 0);
-        if (!err) err = init_device(&native, true, 0xF2, end, &reply);
-        if (!err && reply) err = -I8042_EPROTO;
+        if (!err) err = init_mouse_protocol(&native, end);
         if (!err) err = init_device(&native, true, 0xEA, end, 0); /* stream */
         if (!err) err = init_device(&native, true, 0xE6, end, 0); /* 1:1 */
         init_finish(&native, err);
@@ -1200,6 +1259,9 @@ int i8042_init(void)
         i8042_init_format(line, i, &native.init_records[i]);
         klog("[i8042] %s", line);
     }
+    if (!err) klog("[i8042] aux id=%u protocol=%s", native.stats.aux_id,
+                   native.stats.aux_id == 4 ? "explorer" :
+                   native.stats.aux_id == 3 ? "intellimouse" : "ps2");
     kmutex_unlock(&native.mutex);
     return err;
 }

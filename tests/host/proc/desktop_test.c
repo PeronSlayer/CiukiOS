@@ -619,6 +619,16 @@ static void test_desktop_grants(void)
     struct ciuki_input_event wheel_user;
     desktop_input_event(&wheel, 0, 0, &wheel_user);
     CHECK(wheel_user.type == CIUKI_INPUT_WHEEL && wheel_user.value == -1 && !wheel_user.value2 && wheel_user.source == INPUT_USB && wheel_user.generation == 17);
+    for (unsigned button = INPUT_SIDE; button <= INPUT_EXTRA; button++) {
+        struct input_event extra = { .type = INPUT_BTN, .code = button, .value = 1,
+            .source = INPUT_NATIVE, .generation = 23, .tick = 123 };
+        desktop_input_event(&extra, 0, 0, &wheel_user);
+        CHECK(wheel_user.type == CIUKI_INPUT_BUTTON && wheel_user.code == (int32_t)button + 1 &&
+              wheel_user.value == 1 && wheel_user.source == INPUT_NATIVE && wheel_user.generation == 23);
+    }
+    struct input_event extra_resync = { .type = INPUT_RESYNC };
+    desktop_input_event(&extra_resync, 256, 0xFF, &wheel_user);
+    CHECK(wheel_user.type == CIUKI_INPUT_RESYNC && wheel_user.value == 31 && wheel_user.lost_count == 256);
     input_count = 6; input_at = 0;
     input_events[0] = (struct input_event){ .type = INPUT_KEY, .code = INPUT_KEY_A, .value = 2, .source = INPUT_NATIVE, .generation = 1, .tick = 123, .sequence = 12 };
     input_events[1] = (struct input_event){ .type = INPUT_TEXT, .code = 'a' };
