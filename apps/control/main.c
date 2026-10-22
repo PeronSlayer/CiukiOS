@@ -113,6 +113,7 @@ static int boot_save(void *ctx, const char *text, size_t length)
     return r;
 }
 static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; return ciuki_devices(out); }
+static int firmware(void *ctx, struct ciuki_firmware_page *out) { (void)ctx; return ciuki_firmware_inventory(out); }
 /* The id database is intentionally opened on first Device Manager lookup.
  * Its generator emits a flat, deterministic JSON object with no escaped
  * strings, so lookup needs only bounded string scanning. */
@@ -470,7 +471,7 @@ int main(int argc, char **argv)
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1;
     h->audio_diagnostics = audio_query;
-    h->devices = devices; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
+    h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
     if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
     const char *display = getenv("CIUKI_DISPLAY");

@@ -19,7 +19,7 @@ enum {
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
-    C_DETAILS = 130, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
+    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs"};
@@ -27,6 +27,7 @@ static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
 static void details(struct cp_app *a);
+static void firmware_show(struct cp_app *a, uint32_t index);
 static const uint32_t swatches[6] = {0x375564u, 0x2f6f6bu, 0x3a3f6bu, 0x6b4f3au, 0x808080u, 0x101820u};
 /* The Position buttons, in two rows of three: Center Tile Stretch / Fit Fill. */
 #define CP_POSITIONS 5
@@ -601,6 +602,14 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case D_PROPERTIES: if (e->type == DU_EV_DIALOG && e->index < 2) properties(a, e->index == 1); break;
+    case C_FIRMWARE:
+        if (e->type == DU_EV_ACTIVATE) { memset(&a->firmware, 0, sizeof(a->firmware)); firmware_show(a, 0); }
+        break;
+    case D_FIRMWARE:
+        if (e->type == DU_EV_DIALOG && e->index < 2)
+            firmware_show(a, e->index == 0 ? (a->firmware_index ? a->firmware_index - 1 : 0) :
+                          a->firmware_index + 1 < a->firmware.total ? a->firmware_index + 1 : a->firmware_index);
+        break;
     case C_SERIAL: if (e->type == DU_EV_CHANGE) a->serial_next = du_get(u, C_SERIAL)->value != 0; break;
     case C_BOOT_APPLY:
         if (e->type == DU_EV_ACTIVATE) {
@@ -884,6 +893,50 @@ static const char *resource_name(unsigned type)
     static const char *const names[] = {"I/O", "IRQ", "DMA", "Memory"};
     return type < 4 ? names[type] : "Unknown";
 }
+static void firmware_show(struct cp_app *a, uint32_t index)
+{
+    struct ciuki_firmware_page *p = &a->firmware;
+    uint32_t gen = p->generation;
+    memset(p, 0, sizeof(*p)); p->version = CIUKI_FIRMWARE_VERSION; p->size = sizeof(*p);
+    p->cursor = index / CIUKI_FIRMWARE_PAGE_RECORDS * CIUKI_FIRMWARE_PAGE_RECORDS; p->generation = gen;
+    char body[DU_DIALOG_TEXT];
+    int valid = a->host.firmware && !a->host.firmware(a->host.ctx, p) &&
+                p->version == CIUKI_FIRMWARE_VERSION && p->size == sizeof(*p) && p->count <= 4 &&
+                p->total <= CIUKI_DEVICES_MAX && p->cursor <= index && index - p->cursor < p->count;
+    const struct ciuki_firmware_record *r = valid ? &p->records[index - p->cursor] : NULL;
+    if (r && (r->cid_count > 4 || r->resource_count > 8 || !memchr(r->path, 0, sizeof(r->path)) ||
+              !memchr(r->hid, 0, sizeof(r->hid)) || !memchr(r->reason, 0, sizeof(r->reason)))) valid = 0;
+    if (r) for (unsigned i = 0; valid && i < r->cid_count; i++)
+        if (!memchr(r->cid[i], 0, sizeof(r->cid[i]))) valid = 0;
+    if (!valid) {
+        snprintf(body, sizeof(body), "%s", !a->host.firmware ? "Firmware inventory is unavailable." :
+                 p->flags & CIUKI_FIRMWARE_PENDING ? "Firmware inventory is still being collected. Reopen to refresh." :
+                 !p->total ? "No firmware devices recorded. Firmware data may be absent or invalid." :
+                 "Firmware inventory changed or is invalid. Close and reopen to refresh.");
+    } else {
+        a->firmware_index = index;
+        size_t at = (size_t)snprintf(body, sizeof(body), "%u of %u  %s\n%s\nID %u  Parent %u  HID %s\n%s\n%s\n",
+            index + 1, p->total, r->origin == CIUKI_FIRMWARE_ACPI ? "ACPI" : "PnP BIOS", r->path, r->id, r->parent,
+            r->hid[0] ? r->hid : "unknown", r->state == CIUKI_FIRMWARE_ROUTING_UNQUALIFIED ? "Interrupt routing unqualified" :
+            r->state == CIUKI_FIRMWARE_UNSUPPORTED ? "Unsupported or incomplete" : "Discovered", r->reason);
+        for (unsigned i = 0; i < r->cid_count && at + 64 < sizeof(body); i++)
+            at += (size_t)snprintf(body + at, sizeof(body) - at, "CID %s\n", r->cid[i]);
+        static const char *const caps[] = {"button", "lid", "AC", "battery", "thermal", "power", "wake", "EC"};
+        at += (size_t)snprintf(body + at, sizeof(body) - at, "Described capabilities:");
+        for (unsigned i = 0; i < 8 && at + 16 < sizeof(body); i++) if (r->capabilities & (1u << i))
+            at += (size_t)snprintf(body + at, sizeof(body) - at, " %s", caps[i]);
+        if (at + 96 < sizeof(body)) at += (size_t)snprintf(body + at, sizeof(body) - at, "\nCurrent power values unknown; no takeover.\n");
+        for (unsigned i = 0; i < r->resource_count && at + 80 < sizeof(body); i++) {
+            const struct ciuki_firmware_resource *res = &r->resources[i];
+            at += (size_t)snprintf(body + at, sizeof(body) - at, "%s %llX..%llX (end exclusive)\n", resource_name(res->type),
+                (unsigned long long)res->start, (unsigned long long)res->end);
+        }
+        if (at + 64 < sizeof(body) && (p->flags || r->flags))
+            snprintf(body + at, sizeof(body) - at, "Inventory incomplete or truncated; unlisted facts are unknown.");
+    }
+    static const char *const buttons[] = {"Previous", "Next", "Close"};
+    du_message(a->ui, D_FIRMWARE, "Firmware devices", body, DU_DLG_ICON_INFO, buttons, 3, 2, 2);
+}
 static const char *lease_state(unsigned state)
 {
     static const char *const names[] = {"Firmware", "Claimed", "Active", "Quiescing", "Released", "Quarantined", "Discovered"};
@@ -967,6 +1020,7 @@ static void system_pages(struct cp_app *a)
         w = add(a, DU_TREE, C_TREE, 24, 40, 452, 270, ""); w->inactive_selection = 1;
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
         add(a, DU_BUTTON, C_PROPERTIES, 24, 320, 110, 24, "Properties...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, C_FIRMWARE, 146, 320, 110, 24, "Firmware...")->anchors = DU_ANCHOR_BOTTOM;
         cp_tree_build(a);
         add(a, DU_BUTTON, C_REFRESH, 366, 320, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
     } else if (a->page == CP_DRIVERS) {

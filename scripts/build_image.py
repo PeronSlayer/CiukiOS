@@ -119,6 +119,8 @@ def desktop_license_payloads():
                  "jitterentropy-3.7.0-NOTICES.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
     sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
+    sources["/system/licenses/acpica-20260930-NOTICE.txt"] = ROOT / "docs/licenses/acpica-20260930-NOTICE.txt"
+    sources["/system/licenses/acpica-GPL-2.0.txt"] = ROOT / "LICENSE"
     return sources
 
 

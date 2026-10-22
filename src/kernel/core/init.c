@@ -19,6 +19,8 @@
 #include <ciuki/entropy.h>
 #include <ciuki/splash.h>
 #include <ciuki/smi.h>
+#include <ciuki/firmware.h>
+#pragma weak firmware_inventory_start
 #pragma weak entropy_start
 #pragma weak console_splash_phase
 #pragma weak usb_init
@@ -183,6 +185,7 @@ void drivers_init(void)
     splash_report(SPLASH_PHASE_AUDIO);
     if (net_init) net_init();
     if (usb_init) usb_init();
+    if (firmware_inventory_start) firmware_inventory_start();
     /* f1-94: after every UHCI handoff; SMI sampling and LEGACY_USB_EN. */
     if (smi_attribution_init) smi_attribution_init();
     splash_report(SPLASH_PHASE_DEVICES);

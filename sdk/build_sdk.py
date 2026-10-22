@@ -29,6 +29,7 @@ def flags():
 
 def generate(inc,lib,work):
     abi=ABI.read_text(); shutil.copy2(ABI,inc/'ciuki/abi.h')
+    shutil.copy2(ABI.parent/'firmware_abi.h',inc/'ciuki/firmware_abi.h')
     shutil.copy2(ROOT/'apps/desktop/protocol.h',inc/'ciuki/desktop.h')
     calls=re.findall(r'CIUKI_SYS_(\w+)\s*=\s*(\d+)',abi)
     defs=['/* Generated from ciuki/abi.h. */']
@@ -96,6 +97,7 @@ def main():
     for patch in patch_paths: run(['patch','--batch','--fuzz=0','-p1','-i',patch],cwd=src,stdout=subprocess.DEVNULL)
     shutil.copytree(ROOT/'sdk/sysroot-overlay/include',src/'newlib/libc/include',dirs_exist_ok=True)
     shutil.copy2(ABI,src/'newlib/libc/include/ciuki/abi.h')
+    shutil.copy2(ABI.parent/'firmware_abi.h',src/'newlib/libc/include/ciuki/firmware_abi.h')
     cflags=flags()
     cc=work/'target-cc'; cc.write_text('#!/bin/sh\nexec '+shlex.join([tool_info['clang']['path'],*cflags,'-fuse-ld=lld','-nostdinc','-isystem',str(Path(run([tool_info['clang']['path'],'-print-resource-dir'],capture_output=True,text=True).stdout.strip())/'include'),'-isystem',str(src/'newlib/libc/include'),'-Wno-error','-Wno-deprecated-non-prototype','-Dasm=__asm__'])+' "$@"\n'); cc.chmod(0o755)
     env.update(CC=str(cc),CC_FOR_TARGET=str(cc),AR=tool_info['llvm-ar']['path'],AR_FOR_TARGET=tool_info['llvm-ar']['path'],RANLIB=tool_info['llvm-ranlib']['path'],RANLIB_FOR_TARGET=tool_info['llvm-ranlib']['path'],AS=str(cc),AS_FOR_TARGET=str(cc),LD=tool_info['ld.lld']['path'],LD_FOR_TARGET=tool_info['ld.lld']['path'],CFLAGS='-O2 -g')
@@ -168,6 +170,7 @@ def main():
     manifest['files']={str(p.relative_to(OUT)):digest(p) for p in sorted((OUT/'sysroot').rglob('*')) if p.is_file()}
     manifest['sdk_sources']={str(p.relative_to(ROOT)):digest(p) for p in sorted((ROOT/'sdk').rglob('*')) if p.is_file() and '__pycache__' not in str(p)}
     manifest['sdk_sources']['config/sdk-pins.json']=digest(ROOT/'config/sdk-pins.json')
+    manifest['sdk_sources']['src/kernel/include/ciuki/firmware_abi.h']=digest(ABI.parent/'firmware_abi.h')
     (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
     run([binpath/'ciuki-cc','--self-test'],env=env)
     run(['python3',ROOT/'sdk/tests/check_sdk.py'],env=env)

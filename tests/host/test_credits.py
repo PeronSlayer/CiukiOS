@@ -71,7 +71,7 @@ class CreditsTests(unittest.TestCase):
         for needle in ("third_party/freedos", "third_party/jemm", "third_party/ctmouse", "third_party/DOSNavigator",
                        "third_party/vsbhda", "third_party/wine", "third_party/nsis", "third_party/bearssl",
                        "third_party/cacert", "third_party/jsvendor", "third_party/stb", "third_party/audio",
-                       "third_party/minimp3", "third_party/tjpgd", "third_party/doomgeneric", "third_party/wolf4sdl",
+                       "third_party/minimp3", "third_party/tjpgd", "third_party/doomgeneric", "third_party/wolf4sdl", "ACPICA",
                        "third_party/games", "third_party/tcc", "third_party/drivers", "third_party/pixman",
                        "assets/icons", "assets/fonts", "config/openwatcom.json", "config/netsurf.json",
                        "config/sdk-pins.json", "docs/licenses/jitterentropy", "docs/licenses/lwip",
@@ -90,6 +90,7 @@ class CreditsTests(unittest.TestCase):
     def test_versions_follow_the_pins(self):
         v = lambda name: self.by_name[name][2]
         expected = {
+            "ACPICA": pin("src/kernel/acpi/manifest.json", "version"),
             "FreeType": pin("config/sdk-pins.json", "freetype", "version"),
             "newlib C library": re.search(r"newlib-([0-9.]+?)\.tar", pin("config/sdk-pins.json", "newlib", "archive")).group(1),
             "Lua": re.search(r"lua-([0-9.]+?)\.tar", pin("config/sdk-pins.json", "lua", "source", "archive")).group(1),
@@ -125,6 +126,7 @@ class CreditsTests(unittest.TestCase):
         lic = lambda name: self.by_name[name][3]
         self.assertEqual(lic("Open Watcom C/C++"), pin("config/openwatcom.json", "license"))
         self.assertEqual(lic("FreeType").split()[0], pin("config/sdk-pins.json", "freetype", "license_choice"))
+        self.assertIn(pin("src/kernel/acpi/manifest.json", "license"), lic("ACPICA"))
         self.assertIn("BSD-3", lic("jitterentropy-library"))
         self.assertIn("GPL-2.0", lic("jitterentropy-library"))
         self.assertIn("BSD-3-Clause", pin("src/kernel/net/lwip/import.json", "license"))

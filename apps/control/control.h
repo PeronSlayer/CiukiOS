@@ -15,6 +15,7 @@
 #include "../desktop/settings_catalog.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
+#include <ciuki/firmware_abi.h>
 #include <ciuki/font.h>
 #include <stdint.h>
 #define CP_PROGRAM_MAX 96u
@@ -65,6 +66,7 @@ struct cp_host {
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
     int (*devices)(void *, struct ciuki_devices_info *);
+    int (*firmware)(void *, struct ciuki_firmware_page *);
     int (*hwid_name)(void *, unsigned vendor, unsigned device, char *out, size_t size);
     int (*usb_hwid_name)(void *, unsigned vendor, unsigned device, char *out, size_t size);
     int (*boot_load)(void *, char *, size_t, size_t *);
@@ -135,6 +137,8 @@ struct cp_app {
     char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
     struct ciuki_devices_info devices;
+    struct ciuki_firmware_page firmware;
+    uint32_t firmware_index;
     int devices_ok, system_tab, properties_device, detail_list;
     unsigned detail_index;
     uint64_t snapshot_time;

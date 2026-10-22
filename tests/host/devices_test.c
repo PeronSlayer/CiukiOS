@@ -14,6 +14,7 @@ static void irq_restore(uint32_t);
 #include <ciuki/task.h>
 #include <ciuki/process.h>
 #include <ciuki/uaddr.h>
+#include <ciuki/firmware.h>
 #include <ciuki/ata.h>
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
@@ -85,13 +86,25 @@ const struct ata_device *ata_inventory_get(unsigned c, unsigned u) { return c ==
 static struct process process;
 struct process *proc_current(void) { return &process; }
 static struct ciuki_devices_info user;
+static struct ciuki_firmware_page user_firmware;
+static unsigned firmware_queries;
+int firmware_inventory_page(struct ciuki_firmware_page *p)
+{
+    firmware_queries++;
+    if (p->version != 2 || p->size != sizeof(*p) || p->reserved) return -EINVAL;
+    if (p->generation == 99) return -EAGAIN;
+    uint32_t cursor = p->cursor;
+    memset(p, 0, sizeof(*p)); p->version = 2; p->size = sizeof(*p);
+    p->count = 1; p->cursor = cursor; p->generation = 7;
+    strcpy(p->records[0].hid, "PNP0303"); return 0;
+}
 static int accessible = 1, copy_error;
 bool ua_range(const struct uaddr *u, uint32_t a, uint32_t n, uint32_t prot)
-{ (void)u; ranges++; assert(n == sizeof(user) && prot == (PROT_READ | PROT_WRITE)); return accessible && a == 0x1000; }
+{ (void)u; ranges++; assert((n == sizeof(user) || n == sizeof(user_firmware)) && prot == (PROT_READ | PROT_WRITE)); return accessible && a == 0x1000; }
 int copy_from_user(void *out, uint32_t a, uint32_t n)
-{ assert(a == 0x1000 && n == 8); memcpy(out, &user, n); return 0; }
+{ assert(a == 0x1000 && (n == 8 || n == 20)); if (copy_error) return copy_error; memcpy(out, n == 8 ? (void *)&user : (void *)&user_firmware, n); return 0; }
 int copy_to_user(uint32_t a, const void *in, uint32_t n)
-{ assert(a == 0x1000 && n == sizeof(user)); copies++; if (copy_error) return copy_error; memcpy(&user, in, n); return 0; }
+{ assert(a == 0x1000 && (n == sizeof(user) || n == sizeof(user_firmware))); copies++; if (copy_error) return copy_error; memcpy(n == sizeof(user) ? (void *)&user : (void *)&user_firmware, in, n); return 0; }
 extern bool storage_readonly_info(unsigned,char *,unsigned) __attribute__((weak));
 static bool volume_locked;
 bool storage_readonly_info(unsigned drive,char *text,unsigned bytes)
@@ -278,6 +291,18 @@ int main(void)
     assert(!devices_query(0x1000, sizeof(user)) && !changes && user.generation == registry_generation());
     changes = 100; c0 = copies;
     assert(devices_query(0x1000, sizeof(user)) == -EAGAIN && copies == c0);
+    user_firmware = (struct ciuki_firmware_page){.version = 2, .size = sizeof(user_firmware)};
+    accessible = 0; assert(devices_query(0x1000, sizeof(user_firmware)) == -EFAULT && !firmware_queries); accessible = 1;
+    assert(devices_query(UINT32_MAX - 8, sizeof(user_firmware)) == -EFAULT && !firmware_queries);
+    user_firmware.version = 1; assert(devices_query(0x1000, sizeof(user_firmware)) == -EINVAL && copies == c0);
+    user_firmware.version = 2; user_firmware.reserved = 1;
+    assert(devices_query(0x1000, sizeof(user_firmware)) == -EINVAL && copies == c0);
+    user_firmware.reserved = 0; user_firmware.generation = 99;
+    assert(devices_query(0x1000, sizeof(user_firmware)) == -EAGAIN && copies == c0);
+    user_firmware.generation = 0; assert(!devices_query(0x1000, sizeof(user_firmware)) && copies == c0 + 1);
+    assert(!strcmp(user_firmware.records[0].hid, "PNP0303") && user_firmware.generation == 7 && !user_firmware.records[3].hid[0]);
+    copy_error = -EFAULT; assert(devices_query(0x1000, sizeof(user_firmware)) == -EFAULT);
+    copy_error = 0;
     assert(!writes);
     puts("PASS devices: retained registry, PCI/64-bit BARs, NIC binding/readiness/quarantine/failure, quarantine, firmware leases, CPUID, zeroed marshalling and bounds");
     return 0;

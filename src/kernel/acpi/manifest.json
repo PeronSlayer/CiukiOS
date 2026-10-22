@@ -1,0 +1,1042 @@
+{
+  "version": "20260930",
+  "tree": "e85aa3bebaae81ed1e6d163511ac7e1eafe732cf",
+  "license": "GPL-2.0-only",
+  "files": [
+    {
+      "path": "source/components/dispatcher/dsargs.c",
+      "blob": "c50e089a788b724d84b961f717fc7409b43ff493",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dscontrol.c",
+      "blob": "76757801e6dd2f74e444b476d3032be0cee8a8b5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsdebug.c",
+      "blob": "2932e6e226579da131c0a1c8ea14473bdf5ef999",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsfield.c",
+      "blob": "dae5977cf3281fc1e7c9441195d8106156156d88",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsinit.c",
+      "blob": "707d1f5cd8f2c0571100f0522ab15d070fec170d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsmethod.c",
+      "blob": "caad1154375f8fb7f31fc61854b09e7dbba42ef6",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsmthdat.c",
+      "blob": "26afeab9c6ce9dcf4dc6d1ae54f3131acee35811",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsobject.c",
+      "blob": "a4a2bfefbcb9b0ddac62802305850f7f818cb27c",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsopcode.c",
+      "blob": "e5cf93853962816a98827b9711799b921c67deaf",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dspkginit.c",
+      "blob": "a5052f1189539731694de207b399c138b42187ea",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dsutils.c",
+      "blob": "93b84d54faf4377090c9960703510ea68fb62aab",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dswexec.c",
+      "blob": "8098d35a3e753401847f71be66bcc43ee99ba161",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dswload.c",
+      "blob": "6b88587d0e63d377a160cbc0c2470cb7e37ace8a",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dswload2.c",
+      "blob": "e1738c7b593418b8c77ceda7a435e7db370a6218",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dswscope.c",
+      "blob": "9dd6d7b70f2ed2e4926562f884da5597f7514a1a",
+      "legacy": false
+    },
+    {
+      "path": "source/components/dispatcher/dswstate.c",
+      "blob": "9cfa43455acd6faef02e01d0fbee4aa21e27c7c3",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evevent.c",
+      "blob": "b42bc78bcf51562f692c91e43d07d955c84314f6",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evglock.c",
+      "blob": "8db3d3bdba8cbbdfdb0bc7131b85775b49eb6819",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evgpe.c",
+      "blob": "f64bc021c9b7ce92547f498c02df25873adb8765",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evgpeblk.c",
+      "blob": "f78ffc8ad6cc503166186c84c67b8f18081d3c8e",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evgpeinit.c",
+      "blob": "e722501f34b8b4ed6901fe1ab19ed2e0c5cd4515",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evgpeutil.c",
+      "blob": "fc28a911af2ac0cb1f0e7bcf92a2635d91d7e3fc",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evhandler.c",
+      "blob": "37629f17dbe1c0e10034f9a6feac6c9df1ac4431",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evmisc.c",
+      "blob": "d96558a43c1e21bb6244c6d0f6aa1a6b2797e011",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evregion.c",
+      "blob": "a08ff6d624e26d8c50b0395b11d9ebf27db8311d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evrgnini.c",
+      "blob": "9ebdad10558dfb433646ca34b02b68ea03314d9d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evsci.c",
+      "blob": "709c81776062a3cc9f2339f1cea8cbdf3b27403d",
+      "legacy": true
+    },
+    {
+      "path": "source/components/events/evxface.c",
+      "blob": "b8e7fcc84036400f973e198a0bce9937dad78cab",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evxfevnt.c",
+      "blob": "f0ecc5e7e699c7bec761d7f223b7c1d47d7d4100",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evxfgpe.c",
+      "blob": "0c7e1814e09c1a238595a9d64a11ff7b458ec114",
+      "legacy": false
+    },
+    {
+      "path": "source/components/events/evxfregn.c",
+      "blob": "f064c2f7bebbdc622ed77af5c86e10882f26e74e",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exconcat.c",
+      "blob": "93f114b8cd03aedcb8d4675bf4f3362bd475069a",
+      "legacy": true
+    },
+    {
+      "path": "source/components/executer/exconfig.c",
+      "blob": "278b5622e6aa137bca48c2ee7230c3750cad7e2b",
+      "legacy": true
+    },
+    {
+      "path": "source/components/executer/exconvrt.c",
+      "blob": "76eccce2eb6339763eb5b043b6f5fa5c904a7259",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/excreate.c",
+      "blob": "f78c7e53f69b0ee101423562190afa05b4497e5d",
+      "legacy": true
+    },
+    {
+      "path": "source/components/executer/exdebug.c",
+      "blob": "80350f1843b06035f19a2d68e0550b9040aced37",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exdump.c",
+      "blob": "bfc5069501110aaea2e45f3c6381175d97dff990",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exfield.c",
+      "blob": "25a5904c38fedeb473c3d910beebfe999073ea31",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exfldio.c",
+      "blob": "091e1be4e3ab92ba464629817dbc67c1520ee1de",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exmisc.c",
+      "blob": "befd8a998e802004e05757fa32c7ae4ccd530c2d",
+      "legacy": true
+    },
+    {
+      "path": "source/components/executer/exmutex.c",
+      "blob": "4c06df6fdad55a9ce25d7c2008fed899d56f935c",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exnames.c",
+      "blob": "8ce650eddb214f2532efa19ae1d3e7e20896d452",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exoparg1.c",
+      "blob": "0de6b496e8a32566e6ad01a1655b1cb0ff58440e",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exoparg2.c",
+      "blob": "9f36ed0ab579f82c38860517e152219a02352fff",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exoparg3.c",
+      "blob": "e42317ab303922ff1c994e4f1fa1dbd3aaa77ef0",
+      "legacy": true
+    },
+    {
+      "path": "source/components/executer/exoparg6.c",
+      "blob": "85c1e2db839ef6f2843c608b4e5f60ddde60eda0",
+      "legacy": true
+    },
+    {
+      "path": "source/components/executer/exprep.c",
+      "blob": "e3d77140a0d5cf47c1f21ebc8aa6f25c1503d534",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exregion.c",
+      "blob": "8a22f8ebf3a1d9c4f4f70ce5969bd2a32ab32d89",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exresnte.c",
+      "blob": "0bb8b92870fcec61f38e34d79aa8f229c39a1c7d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exresolv.c",
+      "blob": "d16cc61f814592e7a13570137547662130ffea1c",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exresop.c",
+      "blob": "5780bb4a93061372a09f6aaaf55b5305bdecbfa9",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exserial.c",
+      "blob": "1b12b3bdef926e412d8e2ffbe3b70f5f2e0235a8",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exstore.c",
+      "blob": "a00516329d06bbf46c5f6b01b402f166f5d0a6e5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exstoren.c",
+      "blob": "89dc04fc5fbe8f279c85c2f39ada864c806f7693",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exstorob.c",
+      "blob": "746302f29f21dedbe7667003841a27d2d7cc188f",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exsystem.c",
+      "blob": "2369b1be7672055cba40c323d6c6048aa939436c",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/extrace.c",
+      "blob": "7952ed8d066470bef718d21b0e6e16b7b05eb907",
+      "legacy": false
+    },
+    {
+      "path": "source/components/executer/exutils.c",
+      "blob": "bdb1a1a493a3cfd930451712294e76e9e1a07a7d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwacpi.c",
+      "blob": "1b599e82e2278b1faa151409c2b680e3ed0d6514",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwesleep.c",
+      "blob": "4d3df12b31e01b9b746e631e401bb7dd018d008b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwgpe.c",
+      "blob": "b02139f1998c14a64e65aae71ee5cf4e005fcfcd",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwpci.c",
+      "blob": "00c3c809a2ee11da97e135696564912e7369e6da",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwregs.c",
+      "blob": "8e6fa866c225edeeaf47f619a47ea77129bcce54",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwsleep.c",
+      "blob": "4dd6697cba159386911b6d01ae1bb3c3fc0d5f5f",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwtimer.c",
+      "blob": "29bec9e221c774be4122479e0c955fad1fa1c86d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwvalid.c",
+      "blob": "70b800ab6e9b0a527dc73f06da7fd2c6d22c6680",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwxface.c",
+      "blob": "4797d6214a68d06ef123cf1e5a4de2523d0f0f16",
+      "legacy": false
+    },
+    {
+      "path": "source/components/hardware/hwxfsleep.c",
+      "blob": "16202d6e686e4a422f3067fa29027039a1a9a930",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsaccess.c",
+      "blob": "f0f881f6cf4e0065f8b99847cd097f8ad95fa126",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsalloc.c",
+      "blob": "61a6c14773514830bc04126e4332f1bc63effb16",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsarguments.c",
+      "blob": "6db9aa2b6cf1b561f28b9e89f368580119747215",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsconvert.c",
+      "blob": "ce8a6a91b3a8c3ea69790eb8db980ca63b5d2243",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsdump.c",
+      "blob": "c44c9ccfde7dd96952c27f6215ef45598b478d8f",
+      "legacy": true
+    },
+    {
+      "path": "source/components/namespace/nsdumpdv.c",
+      "blob": "a3d75f44a3eebdd33127931b4b1714ad319c5aab",
+      "legacy": true
+    },
+    {
+      "path": "source/components/namespace/nseval.c",
+      "blob": "a46c6b92f556309acdab9605fa9e6b5691241d38",
+      "legacy": true
+    },
+    {
+      "path": "source/components/namespace/nsinit.c",
+      "blob": "345a60245fac014afc191a0dc062ccb551176e35",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsload.c",
+      "blob": "3db532c8596081f7fb70af4e75b49b7aca0e2b66",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsnames.c",
+      "blob": "0f4915154e1694b5acbbd23df68e2b9b0b5b85f2",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsobject.c",
+      "blob": "b4dec85aacce8e8c84de5d593fbe1c5cdcd0996d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsparse.c",
+      "blob": "ac6853050892b38311fdf24f88d7d146cc382ced",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nspredef.c",
+      "blob": "644d5d91461aef1425dc73959949deed5c0b6137",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsprepkg.c",
+      "blob": "15b7a961e9208d1c55cddaf5ad80a07034b319d5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsrepair.c",
+      "blob": "6c22f3851c863a60ad4e08e0a0939ba6eb057b95",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsrepair2.c",
+      "blob": "526b8d175fbed7b30d4e1802df305552bd49eb20",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nssearch.c",
+      "blob": "c2395860d2c01b26f342e954e2a7491ea1cee9ed",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsutils.c",
+      "blob": "045b4ad67fb8aaae22b7d6150b8ae7c441684283",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nswalk.c",
+      "blob": "ddd0d15112fdef89272205d4c4ec4055a4889d1b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsxfeval.c",
+      "blob": "e39b360bd126520023485190eaa39c973670f9af",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsxfname.c",
+      "blob": "4c7c1a4612600063fff1ccb7c5c96c5cee435be3",
+      "legacy": false
+    },
+    {
+      "path": "source/components/namespace/nsxfobj.c",
+      "blob": "4b0f5441b2dbd4586d24eab3048cf093da3c5120",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psargs.c",
+      "blob": "8ef957d88f0a5f60cb24bef512d42230b6e10999",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psloop.c",
+      "blob": "e27beb6dd1ed9127cfe538301ad0ba2e4b5914d2",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psobject.c",
+      "blob": "d1c7e4a161edfffb2c560f2cbc20e9c9822813b4",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psopcode.c",
+      "blob": "997f85741a865b00743eff82ecf1df0a67805144",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psopinfo.c",
+      "blob": "511d7d467b3623ddc11ec1d0badde1a2c45c01b2",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psparse.c",
+      "blob": "1aacc0c0ae9f516d6ff388e86fca5f3ea18e4ebb",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psscope.c",
+      "blob": "bcab07f77148de139199ef5cc2e3253584ef7c9b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/pstree.c",
+      "blob": "ca4a2e68eea5f6978d324d2865bef7e6249f6ceb",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psutils.c",
+      "blob": "0ec46c442389bb8a7d46a725d3c9b85053af6279",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/pswalk.c",
+      "blob": "2ebcefa918c0b86d22f7d5a1e60f1718c6261518",
+      "legacy": false
+    },
+    {
+      "path": "source/components/parser/psxface.c",
+      "blob": "0fe6ddd5a7ea18e5d4c04d701665fcbcc4a26dbc",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsaddr.c",
+      "blob": "06f8d2060353aff25e4462f656f8503706df1881",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rscalc.c",
+      "blob": "caf43d4281cda06d49e518763c527206d1b8cb05",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rscreate.c",
+      "blob": "2b59402012c7e5f94da89f06c547ef93768876af",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsdump.c",
+      "blob": "bcf1a6bc9892ef0a9933757e8a78d3a1e5701ce4",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsdumpinfo.c",
+      "blob": "4184c7ccfc962237670114a5c15df95733652c95",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsinfo.c",
+      "blob": "592f126ccff2d78b331ccddef72da961528fe74d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsio.c",
+      "blob": "1a20ce0e66223b8a0e7adc310b5756df7a6d736e",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsirq.c",
+      "blob": "3508c7c5ba3798157b5ee464c7f62908db7d0cfd",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rslist.c",
+      "blob": "9f2456ca99646170f53c0b188c6e39b7cdd12722",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsmemory.c",
+      "blob": "d81e3ebaac46dc45b3acd370a99b02fa33ee9529",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsmisc.c",
+      "blob": "6776f55a4754371797dc92464f03981cbbfd23a6",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsserial.c",
+      "blob": "ea68372b13b2b5114f19aa4781b96ee2278068cb",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsutils.c",
+      "blob": "591e88622e4b4f302dadac7c56833e626fe2458c",
+      "legacy": false
+    },
+    {
+      "path": "source/components/resources/rsxface.c",
+      "blob": "9ede619494bd9b1b48f6f43d1f41dc9e50faed1d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbdata.c",
+      "blob": "0d57f132cca252d9fa143d4af406818aeb4734bd",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbfadt.c",
+      "blob": "9f83077a5b2b16556f027c65d9f5898d14ed51b0",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbfind.c",
+      "blob": "a8d644c38deafccaefd881e2b2a7923b68eb6db5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbinstal.c",
+      "blob": "90c28fcba7fc1867faa0a3131348de153da0ab69",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbprint.c",
+      "blob": "1ad28045b9ad57ba7174cc9edf26c2064cd749ab",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbutils.c",
+      "blob": "f4a81f962c871d10c9618c42b293c932e099c8d6",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbxface.c",
+      "blob": "e407d700eedca6ff033ac7c5f526fdab460a89c4",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbxfload.c",
+      "blob": "b88643cb6c84c2a15a7a18f39ebb54b6172c07d5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/tables/tbxfroot.c",
+      "blob": "89f9b7750ec02752e0aaec8a07da4075374fca4c",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utaddress.c",
+      "blob": "5f8cd2fd5aede46393e8c0f1d3b55cccfe31729f",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utalloc.c",
+      "blob": "5ab3c3e161d25bc55c8a5751213044cfda957697",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utascii.c",
+      "blob": "8e60ba0034e461a79db5c38fef1b90082e3f78ca",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utbuffer.c",
+      "blob": "03bb31d86bc5dadcd11e31258bdfd0f39f35453b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utcache.c",
+      "blob": "a10f705bf1406afab818ecea550d65222735993a",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utcksum.c",
+      "blob": "ef8893f52ca74f49604c66840702b76335a23a15",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utclib.c",
+      "blob": "3566a72fcefdcc55c36c3896614580df0873a7a1",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utcopy.c",
+      "blob": "49ca1267b3f5f6400e25c7755ec5ec8713f43f4d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utdebug.c",
+      "blob": "fc3279242fbc38f9c7a44a1c6f81d4fe6b9fe71d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utdecode.c",
+      "blob": "4767c24fa4df839ef7eb4cb5b9a04280779d7040",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utdelete.c",
+      "blob": "243ee65dfda197539fb5a388cb4bb033e9ee6569",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/uterror.c",
+      "blob": "bd12ef740920994a11d644ce6876c38d95ac9427",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/uteval.c",
+      "blob": "8f5ad824215cd66e99bf576706f8141e88cb32be",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utexcep.c",
+      "blob": "092b76d1df19c4cde42e04e2df78710f0c8eb464",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utglobal.c",
+      "blob": "bab3bff4b681bea272c987ca0f36a2c5edee2361",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/uthex.c",
+      "blob": "d969043e49475c01244df611f487875d8629ccb4",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utids.c",
+      "blob": "3ad3624e565949e227088de5599445f8ea9b3dc1",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utinit.c",
+      "blob": "2ce64c0cbd4d99ba99d6305a597dd7a7cb6fdb5b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utlock.c",
+      "blob": "a43876914a8653798186e82f6614d35c402912a5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utmath.c",
+      "blob": "ecd46df3f07ba409595259be3722d82076219678",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utmisc.c",
+      "blob": "927b802f14b6474f9be24176a26925a8073085a2",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utmutex.c",
+      "blob": "b12a702b41fcb6ba9072a0e603f18225de548f2b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utnonansi.c",
+      "blob": "3fc6b5bbf2f94a9d0ed2fb0efe1e8c35c948e1c5",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utobject.c",
+      "blob": "d851a4d415a3839726395702d9d003dc541013e7",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utosi.c",
+      "blob": "e0975869899d3ce12962f4ca23a5e435f73bb67b",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utownerid.c",
+      "blob": "4d896684f62a2085a94270cdd607d067718de923",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utpredef.c",
+      "blob": "c820305e87039d80eace72489c2ea0945c428a94",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utprint.c",
+      "blob": "3d26ab54a1411d24e0dfcfc87669755373a17bf3",
+      "legacy": true
+    },
+    {
+      "path": "source/components/utilities/utresdecode.c",
+      "blob": "d4f9130480621c0d6a833dfe15e7ccb2b7e3c097",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utresrc.c",
+      "blob": "46341cef63877e580c7504bda0ff431307d3564d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utstate.c",
+      "blob": "ebc05a43e5faa4b4487036a51970398e06ca2f47",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utstring.c",
+      "blob": "9831b3ec26de617b09aeeee29ceb91f838683cb9",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utstrsuppt.c",
+      "blob": "79ce2757711f24c3bebf605b40d4d0e4e654187d",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utstrtoul64.c",
+      "blob": "c9fb250647d17f87bad3d113d7e941ea1a1bb555",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/uttrack.c",
+      "blob": "d5de82770650c3261eb866a1b244d42010844665",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utuuid.c",
+      "blob": "44d9e02c8aedb3fee1f08cce10b5b5158da80ca9",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utxface.c",
+      "blob": "144c02bb13dbb716de98253d4543546f78c3a593",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utxferror.c",
+      "blob": "40336dbc20f4fa5f9adc5d5510083fe58be27318",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utxfinit.c",
+      "blob": "20ee3d95560408d5c8cc9721506a74f83621ea20",
+      "legacy": false
+    },
+    {
+      "path": "source/components/utilities/utxfmutex.c",
+      "blob": "170a10e502236bdb3051d675ebc99ee8443e444b",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acapps.h",
+      "blob": "394aa3f61bc928d93dcbfa66fb72a1a3372555e3",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acbuffer.h",
+      "blob": "a4df25462c9ee2bceced119462eba34506dc0398",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acclib.h",
+      "blob": "e14d746383d6aed9a2049c066b62960eb26b2dd3",
+      "legacy": false
+    },
+    {
+      "path": "source/include/accommon.h",
+      "blob": "295ad8422c5f22123064a12792e71b53d3192a75",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acconfig.h",
+      "blob": "6d94a2646ffffb19172ac7f512f14d01d708a6c2",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acconvert.h",
+      "blob": "4e5bc3214df508920d637a9d6b55615aa4848175",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acdebug.h",
+      "blob": "eda60b600f534cf7536d0b671ee47afcdac0d3d2",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acdisasm.h",
+      "blob": "333d48c3480f50514d1b959856d6ebce4fc76f75",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acdispat.h",
+      "blob": "c50874b35675b40b4f11078ca21bf7e744ce10fb",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acevents.h",
+      "blob": "ace3ca92bef81210125e7cd6e3390640f5b325dd",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acexcep.h",
+      "blob": "2d20618b8748bc40a7c21c782e5968de96e197fd",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acglobal.h",
+      "blob": "333a33893e1d471854a31af760d574ce465b5408",
+      "legacy": false
+    },
+    {
+      "path": "source/include/achware.h",
+      "blob": "561466dffb70aa9cc7c6d5d7dddcd713daf2a13b",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acinterp.h",
+      "blob": "bd80c471a0fdba7d6d98c07616518d710fa95933",
+      "legacy": false
+    },
+    {
+      "path": "source/include/aclocal.h",
+      "blob": "d0e4b067c0539cf34a5c1d2a176a0a0570255089",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acmacros.h",
+      "blob": "6b98bafc79b2e2800d4f0c9133c8d3b547ffc1fa",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acnames.h",
+      "blob": "51f486242e96bd8ae536f48f84987ddc1e1fe860",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acnamesp.h",
+      "blob": "97c57ea851e11ecf58a4c0503ab1269a416aa204",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acobject.h",
+      "blob": "7cba4041516e8c394f5a5b5992c3ad17e10f2daa",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acopcode.h",
+      "blob": "6633c9ada09202a091f0e98abf514ba9f021759f",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acoutput.h",
+      "blob": "ae58fd5bc0a4fbf6d36f836a944e172722cdc3ec",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acparser.h",
+      "blob": "2d85b6f0ebe2a851ebb4be15143ce7661a2d2bc0",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acpi.h",
+      "blob": "3e72807054de9bddf76c57feee60082ed6a56c04",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acpiosxf.h",
+      "blob": "8bb63438f329c8a08434b456bbd6d05a45a318b8",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acpixf.h",
+      "blob": "028f94ad39f1421dae11c380daee15d4e297be7c",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acpredef.h",
+      "blob": "26266e302847e769b7be8cbc9bb0e7e464af6270",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acresrc.h",
+      "blob": "d648194883daed75d1c50dc3bd64be38455a87b9",
+      "legacy": true
+    },
+    {
+      "path": "source/include/acrestyp.h",
+      "blob": "a6caba710f9fc605ae5103f96b6f6a6bbfc967f3",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acstruct.h",
+      "blob": "3dc3f505e0060177e4a51ef07e0b826cad139c3c",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actables.h",
+      "blob": "98c8468422dba4a6962ff59f42e1fae7a5a1b516",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actbinfo.h",
+      "blob": "6e2db405cf594e3d75dc57895a2a5bfed405dbde",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actbl.h",
+      "blob": "8eee17869d10b6a4f258941a7a2443e201ebd902",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actbl1.h",
+      "blob": "c49bbcc7c3eedb3fef30c904fde67beb398c3a50",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actbl2.h",
+      "blob": "c58548983459eb472bc2b936d63e4b319b5e8387",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actbl3.h",
+      "blob": "18209c15abc38c5f1c59163bdb98d46368be4532",
+      "legacy": false
+    },
+    {
+      "path": "source/include/actypes.h",
+      "blob": "67c97b00734fccbe01279384186497ba519c38de",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acutils.h",
+      "blob": "74ca5223b79fbce2baf9157829e4e9fa8e8ae250",
+      "legacy": false
+    },
+    {
+      "path": "source/include/acuuid.h",
+      "blob": "0906254bc08a08a291a66315fea6b197a57fe708",
+      "legacy": false
+    },
+    {
+      "path": "source/include/amlcode.h",
+      "blob": "c1fde40df7e10a6decf2decc82d5fbbbc181a90f",
+      "legacy": false
+    },
+    {
+      "path": "source/include/amlresrc.h",
+      "blob": "4cbb50d328f430592115aef515dd674ef463f920",
+      "legacy": false
+    },
+    {
+      "path": "source/include/platform/acenv.h",
+      "blob": "dfd30ef451a473edf4e366fb82b221bcb9dcf10b",
+      "legacy": false
+    },
+    {
+      "path": "source/include/platform/acenvex.h",
+      "blob": "bf22950bfdb0541acd14a2a09f262db74f4324e3",
+      "legacy": false
+    },
+    {
+      "path": "source/include/platform/acgcc.h",
+      "blob": "bd107606a722c4626b10a900909912bb8152d211",
+      "legacy": false
+    }
+  ]
+}

@@ -79,7 +79,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/host/f2-75'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 29)  # f2-87 Add/Remove Programs page
+            self.assertEqual(len(captures), 30)  # f1-109 firmware inventory dialog
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.control_frame(self,path.stem,path.read_bytes(),width,height)
