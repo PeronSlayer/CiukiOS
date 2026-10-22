@@ -12,7 +12,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f6-22-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 15:20, decision on the delivery)
+## Amendment 1 (lead, 2026-10-22 15:17, decision on the delivery)
 
 Accepted. Cause: the e100 driver rejected every received frame with status
 bits 12:0 set, and the 8255x sets bit 5 on IPv4/ARP and bit 1 on broadcast
