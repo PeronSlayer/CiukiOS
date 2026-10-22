@@ -152,7 +152,7 @@ class RunnerTests(unittest.TestCase):
         self.case['timeout']=2
         self.assertFalse(self.case.get('fixtures'))
         before={'event':'DATA','group':'bootlog','case':'before','prequalification_writes':'0',
-                'storage_calls':'0','queued':'106','limit':'1048576'}
+                'storage_calls':'0','queued':'106','limit':'9437184'}
         readonly={'event':'DATA','group':'bootlog','case':'readonly','disk_log':'unavailable',
                   'result':'-30','write_count':'0','storage_calls':'0'}
         metadata={'event':'DATA','group':'metadata','subcase':'complete','owner':'vfs',
@@ -1453,7 +1453,7 @@ class F1RecordTests(unittest.TestCase):
         result['mount-crash-cut']=['event=ARM action=crash_cut marker=F109CUT.ARM workload=replace_rename bytes=8192',
                                  'case=cut index=1 barrier=0 action=write lba=2050 result=0 durable=1',
                                  'case=cut index=2 barrier=0 action=write lba=2050 result=0 durable=1']
-        before='group=bootlog case=before prequalification_writes=0 storage_calls=0 queued=106 limit=1048576'
+        before='group=bootlog case=before prequalification_writes=0 storage_calls=0 queued=106 limit=9437184'
         log='case=file id=0 name_hex=2f53595354454d2f4c4f47532f424f4f542e4c4f47 size=106 sha256='+'d'*64
         result['bootlog']=[before,'case=capture source=klog connected=1 captured=200',log,
                            'case=qualification qualified_seq=2 first_log_write_seq=3 size=106 writes=1 flush_result=0',

@@ -78,7 +78,12 @@ class CreditsTests(unittest.TestCase):
                        "Tango Icon Theme", "Ciuki portrait"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
-        listed = {p.name for p in (ROOT / "third_party").iterdir() if p.is_dir()}
+        # Only tracked directories: ignored local material (for example the owner's
+        # private Resource Kit media under third_party/mswin98rskt) is never shipped.
+        import subprocess
+        tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "third_party"], capture_output=True,
+                                 text=True, check=True).stdout.splitlines()
+        listed = {line.split("/")[1] for line in tracked if line.count("/") >= 2}
         for name in listed:
             self.assertIn("third_party/" + name, text, name)
 
