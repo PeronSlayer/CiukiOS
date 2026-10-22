@@ -484,3 +484,172 @@ cleanup_fs:
     return !!error;
 }
 CIUKI_F3_PROBE(FS_PROBE,probe_f3_vm_fullscreen);
+
+/* f3-61 f3:vm-game run=<id> [kernel=freedos-1.3]: DOOM shareware launched
+ * exactly as Programs > Games does it: the desktop starts /Programs/dosbox
+ * with the catalog command and the DOS Box's own --dos-kernel= choice
+ * (default unified; saved as the game's setting like F12), the DOS Box types
+ * CLS, CD \DOOM and DOOM.EXE -config CIUKI.CFG (default sound), the runner
+ * presses Alt+Enter. Evidence, not a game patch: the VM text screen at the
+ * prompt, before the game's mode set and after it ends (hex rows), the first
+ * windowed mode-13h frame digests, the unified binding state, one full-screen
+ * sample per second (scanout writes, PM timer IRQs, OPL/SB progress, IFS
+ * reads) and the outcome: running (frames in every observed second),
+ * watchdog (the kernel ended full screen: its cause), exited (the game
+ * returned to the shell) or stopped (VM stop reason/vector). */
+#include "selector.h"
+#define GAME_PROBE "vm-game"
+#define GAME_FULL_MS 45000u
+static void game_text(struct dosvm *v,const char *phase,const uint16_t *text)
+{
+    static const char hex[]="0123456789abcdef";
+    for (unsigned row=0;row<25;row++) {
+        unsigned n=80;
+        while (n && ((uint8_t)text[row*80+n-1]==' ' || !(uint8_t)text[row*80+n-1])) n--;
+        if (!n) continue;
+        char line[161];
+        for (unsigned c=0;c<n;c++) {
+            uint8_t ch=(uint8_t)text[row*80+c];
+            line[2*c]=hex[ch>>4]; line[2*c+1]=hex[ch&15];
+        }
+        line[2*n]=0;
+        rec_emit(GAME_PROBE,"DATA","case=console phase=%s row=%u hex=%s",phase,row,line);
+        task_sleep_ms(5);
+    }
+    (void)v;
+}
+static void game_unified(struct dosvm *v,const char *when)
+{
+    struct dosvm_unified_info u;
+    bool bound=dosvm_file_unified_info && dosvm_file_unified_info(v,&u);
+    if (!bound) u=(struct dosvm_unified_info){0};
+    rec_emit(GAME_PROBE,"DATA","case=unified when=%s kernel=%u bound=%u active=%u owned=%x start=%u requests=%u "
+             "opens=%u closes=%u reads=%u read_kib=%u failed=%u critical=%u expired=%u refusals=%u held=%u",
+             when,v->kernel,bound,u.active,u.owned,u.start,u.requests,u.opens,u.closes,u.reads,
+             (uint32_t)(u.read_bytes>>10),u.failed,u.critical,u.expired,u.refusals,u.held);
+}
+static int probe_f3_vm_game(void)
+{
+    struct probe_selection selected;
+    if (!probes_parse_selector(g_boot.test_request,g_boot.test_request_len,g_boot.flags,&selected)) return 1;
+    bool freedos=(selected.flags&PROBE_DOS_FREEDOS)!=0;
+    const char *kernel=freedos ? "freedos-1.3" : "unified";
+    unsigned expected=freedos ? CIUKI_DOSVM_FREEDOS13 : CIUKI_DOSVM_UNIFIED;
+    rec_emit(GAME_PROBE,"BEGIN","version=1 game=doom kernel=%s",kernel);
+    int error=0; struct process *desktop=0;
+    struct dosvm *v=0; uint32_t client=0,desktop_pid=0;
+    static const char running[]="running";
+    const char *outcome="none";
+    struct dosvm_ledger before,after; dosvm_snapshot(&before);
+    static uint16_t last_text[80*25];
+    if ((error=storage_enable_write(storage_get(),2))) goto cleanup;
+    char game_kernel[32]; ksnprintf(game_kernel,sizeof(game_kernel),"--game-kernel=%s",kernel);
+    const char *argv[]={"desktop","--test=vm-fullscreen","--launch-game=DOOM",game_kernel,0};
+    int made=supervisor_spawn("/Programs/desktop",argv,0,true,&desktop);
+    if (made<0) { error=made; goto cleanup; }
+    desktop_pid=desktop->pid;
+    uint64_t until=deadline_after_ms(60000);
+    while (!(v=dosvm_client_first(&client))) {
+        if (!process_live(desktop_pid) || deadline_passed(until)) { error=-V86_ETIMEDOUT; goto cleanup; }
+        task_sleep_ms(10);
+    }
+    v->probe=GAME_PROBE;
+    rec_emit(GAME_PROBE,"DATA","case=vm kernel=%u expected=%u bridge=%u",v->kernel,expected,!v->disable_file_bridge);
+    if (v->kernel!=expected) { error=-EINVAL; goto cleanup; }
+    if ((error=video_wait(v,120000,ready_prompt,0))) goto cleanup;
+    game_text(v,"prompt",dosvm_text(v,0));
+    game_unified(v,"prompt");
+    /* The DOS Box types the command itself. Keep the last text screen seen
+     * before the game's mode set: its startup messages. */
+    uint64_t typed=g_ticks; until=deadline_after_ms(300000);
+    struct dosvm_video_info video;
+    bool text_seen=false;
+    for (;;) {
+        struct dosvm_info info; dosvm_info(v,&info);
+        if (info.state>=DOSVM_STOPPING) { error=-V86_EIO; outcome="stopped"; goto observed; }
+        dosvm_video_info(dosvm_key(v),&video);
+        if (video.mode==0x13 && video.unchained) break;
+        if (video.mode<=3) { memcpy(last_text,dosvm_text(v,0),sizeof(last_text)); text_seen=true; }
+        if (v->launch_failed) { error=-ENOEXEC; outcome="launch-failed"; goto observed; }
+        if (deadline_passed(until)) { error=-V86_ETIMEDOUT; outcome="no-video"; goto observed; }
+        task_sleep_ms(20);
+    }
+    rec_emit(GAME_PROBE,"DATA","case=launch ms=%llu mode=%u unchained=%u",g_ticks-typed,video.mode,video.unchained);
+    if (text_seen) game_text(v,"startup",last_text);
+    for (unsigned i=0;i<3;i++) {
+        struct dosvm_frame frame; char hex[65]="none";
+        task_sleep_ms(1000);
+        int e=dosvm_frame_digest(v,g_ticks,&frame);
+        if (!e) sha256_hex(frame.digest,hex);
+        rec_emit(GAME_PROBE,"DATA","case=frame index=%u error=%d mode=%u width=%u height=%u text=%u digest=%s",
+                 i,e,e ? 0 : frame.mode,e ? 0 : frame.width,e ? 0 : frame.height,e ? 0 : frame.text,hex);
+    }
+    rec_emit(GAME_PROBE,"ARM","action=fullscreen_enter");
+    until=deadline_after_ms(30000);
+    while (!dosvm_fullscreen_active(dosvm_key(v))) {
+        if (!dosvm_valid(dosvm_key(v)) || deadline_passed(until)) break;
+        task_sleep_ms(10);
+    }
+    bool entered=dosvm_fullscreen_active(dosvm_key(v));
+    rec_emit(GAME_PROBE,"DATA","case=fullscreen entered=%u error=%d",entered,v->fullscreen_error);
+    if (!entered) { error=-EIO; outcome="not-entered"; goto observed; }
+    uint64_t started=g_ticks;
+    uint32_t irq0=v->dpmi.stats.irqs_pm; uint64_t opl0=v->audio.opl_writes; uint32_t sb0=v->audio.sb.units;
+    bool demo_start=false,demo_end=false;
+    outcome=running;
+    for (unsigned second=1;g_ticks-started<GAME_FULL_MS;second++) {
+        uint64_t next=started+second*1000ull;
+        while (g_ticks<next) {
+            if (!dosvm_valid(dosvm_key(v)) || v->info.state>=DOSVM_STOPPING || !dosvm_fullscreen_active(dosvm_key(v))) break;
+            if (!demo_start && g_ticks-started>=1000) { rec_emit(GAME_PROBE,"ARM","action=fullscreen_demo_start"); demo_start=true; }
+            if (!demo_end && g_ticks-started>=5000) { rec_emit(GAME_PROBE,"ARM","action=fullscreen_demo_end"); demo_end=true; }
+            task_sleep_ms(10);
+        }
+        struct dosvm_unified_info u={0};
+        if (dosvm_file_unified_info) dosvm_file_unified_info(v,&u);
+        uint8_t mode=0; dosvm_read(v,0x449,&mode,1);
+        bool active=dosvm_fullscreen_active(dosvm_key(v));
+        rec_emit(GAME_PROBE,"DATA","case=sample t=%llu fullscreen=%u state=%u mode=%u frame_seconds=%u/%u irq_pm=%u opl=%u sb=%u "
+                 "dpmi=%u returned=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u cause=%u error=%d",
+                 g_ticks-started,active,v->info.state,mode,v->fullscreen_frame_seconds,v->fullscreen_seconds,
+                 v->dpmi.stats.irqs_pm-irq0,(uint32_t)(v->audio.opl_writes-opl0),v->audio.sb.units-sb0,v->dpmi.active,
+                 v->launch_returned,u.reads,u.failed,u.critical,v->fullscreen_cause,v->fullscreen_error);
+        if (v->info.state>=DOSVM_STOPPING || !dosvm_valid(dosvm_key(v))) { outcome="stopped"; break; }
+        if (!active) { outcome=v->launch_returned ? "exited" : "watchdog"; break; }
+    }
+    if (outcome==running && v->fullscreen_frame_seconds+2<v->fullscreen_seconds) outcome="frozen";
+    if (dosvm_fullscreen_active(dosvm_key(v))) {
+        rec_emit(GAME_PROBE,"ARM","action=fullscreen_leave");
+        until=deadline_after_ms(30000);
+        while (dosvm_fullscreen_active(dosvm_key(v)) && !deadline_passed(until)) task_sleep_ms(10);
+    }
+observed:
+    task_sleep_ms(2000);
+    if (v && dosvm_valid(dosvm_key(v))) {
+        uint8_t mode=0; dosvm_read(v,0x449,&mode,1);
+        rec_emit(GAME_PROBE,"DATA","case=after state=%u reason=%u vector=%u mode=%u dpmi=%u returned=%u exec_pending=%u "
+                 "shell_idle=%u cause=%u",v->info.state,v->info.reason,v->info.fault_vector,mode,v->dpmi.active,
+                 v->launch_returned,v->exec_pending,dosvm_shell_idle(v),v->fullscreen_cause);
+        if (mode<=3) game_text(v,"after",dosvm_text(v,0));
+        game_unified(v,"after");
+    }
+    rec_emit(GAME_PROBE,"DATA","case=verdict outcome=%s",outcome);
+    if (!error && outcome!=running) error=-EIO;
+cleanup:
+    if (v && dosvm_fullscreen_active(dosvm_key(v))) dosvm_fullscreen_leave(dosvm_key(v),false);
+    if (client) process_remove(0,client);
+    if (desktop_pid) process_remove(proc_supervisor(),desktop_pid);
+    until=deadline_after_ms(10000);
+    do {
+        dosvm_client_poll(); dosvm_snapshot(&after);
+        if (ledger_same(&before,&after)) break;
+        task_sleep_ms(10);
+    } while (!deadline_passed(until));
+    bool restored=ledger_same(&before,&after);
+    if (!restored && !error) error=-ENOMEM;
+    rec_emit(GAME_PROBE,"DATA","case=cleanup restored=%u vms=%u tasks=%u pages=%u handles=%u",
+        restored,after.vms,after.tasks,after.pages,after.handles);
+    rec_emit(GAME_PROBE,"END","status=%s error=%d",error ? "FAIL" : "PASS",error);
+    return !!error;
+}
+CIUKI_F3_PROBE(GAME_PROBE,probe_f3_vm_game);

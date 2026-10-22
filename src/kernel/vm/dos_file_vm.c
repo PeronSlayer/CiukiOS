@@ -7,6 +7,7 @@
 #include "dos_unified_ifs.h"
 #include "dos_file_volume.h"
 #include "dosvm_network.h"
+#include <ciuki/blkpart.h>
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
 static bool file_check(void *arg,uint32_t linear,size_t bytes,bool write) {
@@ -144,7 +145,35 @@ struct unified_runtime {
     struct blkdev provider,removable_provider;
     struct vfs_table native;
     bool volume_open,removable_open,native_ready,active_logged;
+    /* f3-61: C: is a partition of the VM disk (kernel=unified base: MBR,
+     * FAT16 at LBA 63); start/sectors map guest INT 13h onto the view. */
+    struct partition_table table;
+    struct blkpart partition;
+    uint32_t start,sectors;
 };
+static bool fat_partition(uint8_t type) {
+    return type==0x01 || type==0x04 || type==0x06 || type==0x0e || type==0x0b || type==0x0c;
+}
+/* The partition FreeDOS itself assigns to C: (K2043 initdisk.c
+ * ScanForPrimaryPartitions: SCAN_PRIMARYBOOT, then SCAN_PRIMARY): the
+ * first active primary FAT partition, else the first primary FAT one.
+ * A disk without a valid partition table (a superfloppy image whose LBA 0
+ * is the FAT boot sector) keeps the whole-disk view. */
+static struct blkdev *unified_source(struct unified_runtime *r) {
+    r->start=0; r->sectors=(uint32_t)r->provider.capacity;
+    if (partition_scan(&r->provider,&r->table)) return &r->provider;
+    const struct partition *pick=0;
+    for (unsigned pass=0;pass<2 && !pick;pass++)
+        for (unsigned i=0;i<r->table.count && !pick;i++) {
+            const struct partition *p=&r->table.entries[i];
+            if (!p->logical && fat_partition(p->type) && (pass || p->bootable)) pick=p;
+        }
+    if (!pick || blkpart_init(&r->partition,&r->provider,pick)) return &r->provider;
+    struct blkdev *view=blkpart_device(&r->partition);
+    view->logical=true;                  /* the VM provider owns caching/coherence */
+    r->start=(uint32_t)pick->start; r->sectors=(uint32_t)pick->count;
+    return view;
+}
 static void unified_unmount(void *arg,struct dfv2_ifs *s) {
     struct dosvm *v=arg; struct unified_runtime *r=(struct unified_runtime *)v->unified; (void)s;
     if (v->file_volume==&r->volume) v->file_volume=0;
@@ -164,7 +193,7 @@ static int unified_mount(void *arg,struct dfv2_ifs *s) {
     struct storage *storage=storage_get();
     if (!storage || !storage->ready || v->file_volume) return -FS_EIO;
     dosvm_disk_provider_init(v,&r->provider);
-    int e=dos_file_volume_open(&r->volume,&storage->cache,&r->provider,v->overlay_open);
+    int e=dos_file_volume_open(&r->volume,&storage->cache,unified_source(r),v->overlay_open);
     if (!e) { r->volume_open=true; e=dfv2_ifs_map(s,2,&r->volume.table,2,!v->overlay_open); }
     if (!e && vfs_drive_present(&storage->vfs,2)) {
         e=vfs_table_init(&storage->vfs,&r->native,2);
@@ -273,11 +302,15 @@ int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsi
             !dosvm_read(v,vm_ptr(f->ds,(uint16_t)f->tf.edx),input,sizeof(input)) && !memcmp(input,path,sizeof(path));
         d48_open_enter(&v->conformance_media,&r,matched);
     }
-    if (v->disable_file_bridge) return -ENOSYS;
+    /* f3-61: kernel=unified always runs with the v1 bridge disabled
+     * (dosvm_client.c, dosvm.c: no FreeDOS kernel may bind v1). Its DFV2
+     * gates must be served before that refusal; checked after it, CIUKIDF.SYS
+     * never found a host and the fork ran unbound on its local FAT. */
     if (v->kernel==2) {
         int unified=unified_interrupt(v,f,vector);
         if (unified!=-ENOSYS) return unified;
     }
+    if (v->disable_file_bridge) return -ENOSYS;
     if (vector==0x2f) {
         struct dos_file_frame r=unpack(f);
         uint8_t magic[8];
@@ -373,8 +406,27 @@ void dosvm_file_reflected_return(struct dosvm *v,const struct v86_frame *f,bool 
     dos_file_observe_return(v->files,&r);
     dosvm_file_dump(v);
 }
+bool dosvm_file_unified_info(const struct dosvm *v,struct dosvm_unified_info *out) {
+    const struct unified_runtime *r=(const struct unified_runtime *)v->unified;
+    *out=(struct dosvm_unified_info){0};
+    if (!r) return false;
+    const struct dfv2_ifs_stats *t=&r->ifs.stats;
+    *out=(struct dosvm_unified_info){.active=r->ifs.active,.owned=r->ifs.owned,.requests=t->requests,.opens=t->opens,
+        .closes=t->closes,.reads=t->reads,.failed=t->failed,.critical=t->critical,.expired=t->expired,
+        .refusals=t->refusals,.held=dfv2_ifs_held(&r->ifs),.start=r->start,.read_bytes=t->read_bytes};
+    return true;
+}
 int dosvm_file_disk(struct dosvm *v,uint32_t lba,void *sector,bool write) {
-    return v->file_volume ? dos_file_volume_raw(v->file_volume,lba,sector,write,0) : -ENOSYS;
+    if (!v->file_volume) return -ENOSYS;
+    const struct unified_runtime *r=(const struct unified_runtime *)v->unified;
+    if (r && v->file_volume==&r->volume) {
+        /* f3-61: guest INT 13h inside the owned partition serializes through
+         * the logical view (same provider/generation, raw-write invalidation);
+         * the MBR and the gap before it are not part of any FAT view. */
+        if (lba<r->start || lba-r->start>=r->sectors) return -ENOSYS;
+        lba-=r->start;
+    }
+    return dos_file_volume_raw(v->file_volume,lba,sector,write,0);
 }
 int dosvm_file_destroy(struct dosvm *v) {
     unified_release(v);
