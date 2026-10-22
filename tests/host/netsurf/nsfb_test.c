@@ -65,5 +65,15 @@ int main(void)
     assert(live==1 && resize_calls==1);
     uint8_t *pixels;int stride;nsfb_get_buffer(fb,&pixels,&stride);assert(pixels==(uint8_t *)s->current.back+36*stride && stride==3200);
     nsfb_free(fb);assert(!ciuki_browser_active && !live && unmaps==2);
-    puts("NetSurf registered Ciuki surface: constructor, viewport, content drag, resize and cleanup passed");fflush(stdout);return 0;
+    /* f6-19: a Programs-menu launch has no --channel-fd; the registered surface
+     * opens the desktop channel the launcher mapped at fd 3 (the 1.0.0 alpha
+     * T23 trial died with "Unable to initialise framebuffer" here). */
+    ciuki_browser_channel=-1;sends=0;
+    fb=nsfb_new(NSFB_SURFACE_CIUKI);assert(fb);
+    assert(!nsfb_set_geometry(fb,640,422,NSFB_FMT_XRGB8888));assert(!nsfb_init(fb));
+    s=ciuki_browser_active;assert(s && s->connection.channel==CIUKI_BROWSER_CHANNEL_FD && sends==2 && live==1);
+    result(DESK_CREATE_WINDOW,s->create_request);assert(!nsfb_event(fb,&e,0) && s->ready);
+    nsfb_free(fb);assert(!ciuki_browser_active && !live && ciuki_browser_channel==-1);
+    puts("NetSurf registered Ciuki surface: constructor, viewport, content drag, resize and cleanup passed");
+    puts("PASS f6-19 launch without --channel-fd: the surface opens the inherited desktop channel at fd 3");fflush(stdout);return 0;
 }

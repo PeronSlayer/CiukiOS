@@ -448,6 +448,19 @@ static void test_lifecycle(void)
     desk_heartbeat(&d,6000000000ull); assert(d.clients[survivor].unresponsive && d.clients[survivor].window);
     request(&m,DESK_PONG,8); desk_put32(m.data+4,d.clients[survivor].serial); desk_receive(&d,survivor,&m);
     assert(!d.clients[survivor].unresponsive);
+    /* f2-88: one rule for every application. A first frame (or any reply) 2 s late is not "not responding". */
+    d.clients[survivor].ping_pending=0; d.clients[survivor].next_ping_ns=0;
+    desk_heartbeat(&d,10000000000ull); assert(d.clients[survivor].ping_pending);
+    desk_heartbeat(&d,12100000000ull); assert(!d.clients[survivor].unresponsive);
+    /* A desktop-owned wait (launch VFS lookup, present) past the 5 s deadline: the loop has not drained the
+     * channels since, so the unread PONG is not charged to the application... */
+    d.drain_ns=10500000000ull;
+    desk_heartbeat(&d,16000000000ull); assert(!d.clients[survivor].unresponsive);
+    /* ...and once the desktop drained the channels after the deadline with no PONG, the window is marked. */
+    d.drain_ns=16100000000ull;
+    desk_heartbeat(&d,16200000000ull); assert(d.clients[survivor].unresponsive);
+    request(&m,DESK_PONG,8); desk_put32(m.data+4,d.clients[survivor].serial); desk_receive(&d,survivor,&m);
+    assert(!d.clients[survivor].unresponsive); d.drain_ns=0;
     unsigned baseline=fake_live();
     for (int n=0; n<100; n++) {
         fake_sent=0;

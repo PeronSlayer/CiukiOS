@@ -36,7 +36,7 @@ int main(void)
     struct entropy_jent_ops ops={cycles,ms,malloc,free,NULL,capture};
     uint64_t start=ms();struct entropy_pool pool;entropy_pool_init(&pool);
     entropy_jent_begin(&ops);
-    int error=entropy_jent_init();pool.source_ready=!error;
+    int error=entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR);pool.source_ready=!error;
     for(unsigned i=0;i<8 && !error;i++){
         uint8_t bytes[32];error=entropy_jent_read(bytes);
         if(!error)entropy_pool_credit(&pool,bytes,sizeof(bytes),0);

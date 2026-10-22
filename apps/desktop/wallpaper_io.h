@@ -34,6 +34,10 @@ void desk_wall_cache_name(char out[DESK_WALL_NAME_MAX], const struct desk_wall_r
                           uint64_t size, int64_t mtime);
 int desk_wall_prepare(const struct desk_wall_request *, const char *cache_dir,
                       uint32_t **pixels, int *hit, void (*stage)(const char *));
+/* Synchronous start-up read of the seeded frame; 0 with *pixels owned by the
+ * caller, else non-zero and *pixels NULL (solid-colour fallback). */
+int desk_wall_preload(const struct desk_wall_request *, const char *cache_dir,
+                      uint32_t **pixels, void (*stage)(const char *));
 /* Runtime reads disk seeds but never persists frames/journals: native FAT
  * full-file COW on short writes can hold the shared filesystem for seconds. */
 int desk_wall_worker_start(struct desk_wall_worker *, const char *, void (*stage)(const char *));

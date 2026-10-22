@@ -6,6 +6,8 @@
 #include <ciuki/audio.h>
 #include <ciuki/desktop.h>
 #include <ciuki/pager.h>
+#include <ciuki/splash.h>
+#pragma weak console_splash_phase
 extern void dosvm_client_poll(void) __attribute__((weak));
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
@@ -89,6 +91,9 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     if (!err) proc_set_name(p, path);
     if (!err) err = elf_validate(&file, &image);
     if (!err) err = elf_load(&file, &image, p->memory);
+    /* f0-55: the desktop image is in memory; the grant below completes the
+     * boot splash bar (console_display_owned). */
+    if (!err && desktop && console_splash_phase) console_splash_phase(SPLASH_PHASE_DESKTOP);
     if (!err) err = proc_thread_prepare(p, image.entry, 0, 0, CIUKI_THREAD_STACK_DEFAULT, 0, 0, true, &thread);
     if (!err) {
         err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
@@ -180,6 +185,7 @@ void supervisor_bootstrap(void)
     const char *argv[] = { "desktop", 0 };
     struct process *p = 0;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");
+    if (console_splash_phase) console_splash_phase(SPLASH_PHASE_SUPERVISOR);
     int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
     if (result == -ENOENT) {
         result = supervisor_spawn_standin(proc_supervisor(), &p);

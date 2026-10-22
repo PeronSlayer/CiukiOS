@@ -41,6 +41,11 @@ struct cp_host {
     int save_async; /* save queued; main calls cp_settings_saved after durable completion */
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
     int (*decode)(void *, const char *path, struct desk_image *out);
+    /* f2-88: the UI thread never reads or decodes a wallpaper. decode_begin starts a worker (0, or -errno);
+     * decode_poll returns 0 while it runs and 1 when it finished, copying the path of the finished job and
+     * moving its image (pixels NULL when decoding failed) into out. Both return at once. */
+    int (*decode_begin)(void *, const char *path);
+    int (*decode_poll)(void *, char *path, size_t size, struct desk_image *out);
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
@@ -109,6 +114,8 @@ struct cp_app {
     int preview_valid;
     struct desk_image image;
     int preview_pending;            /* an image wallpaper decode is scheduled after the first paint */
+    int decode_wait;                /* an asynchronous decode is running for decode_path */
+    char decode_path[128], decode_failed[128];
     char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
     struct ciuki_devices_info devices;

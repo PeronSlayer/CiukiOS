@@ -70,6 +70,41 @@ class WallpaperStartupTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256((folder / f"{mode}.raw").read_bytes()).hexdigest(), digest)
             print(result.stdout.strip())
 
+    def test_preload_hit_fallback_and_model(self):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="wp-pre-", dir=parent) as folder:
+            folder = Path(folder)
+            source = folder / "Ciuk2.png"
+            shutil.copy2(ROOT / "assets/wallpapers/ciuki/Ciuk2.png", source)
+            (folder / "cache").mkdir()
+            binary = folder / "test"
+            subprocess.run(["clang", "-std=c17", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
+                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-Wl,--wrap=read",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            str(ROOT / "tests/host/desktop/wallpaper_preload_test.c"),
+                            *(str(ROOT / f"apps/desktop/{n}.c") for n in ("wallpaper_io", "wallpaper", "image", "settings", "theme")),
+                            "-o", str(binary)], check=True)
+            env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
+            result = subprocess.run([str(binary), str(source), str(folder / "cache")], capture_output=True, text=True, env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS wallpaper preload", result.stdout)
+            print(result.stdout.strip())
+
+    def test_seed_build_is_deterministic(self):
+        """f2-90: two independent renders into fresh directories give byte-identical native frames."""
+        image = image_module()
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="wp-det-", dir=parent) as folder:
+            first, one = image.wallpaper_cache_payloads(Path(folder) / "a")
+            second, two = image.wallpaper_cache_payloads(Path(folder) / "b")
+            self.assertEqual(one["files"], two["files"])
+            self.assertEqual(sorted(p.name for p in first.values()), sorted(p.name for p in second.values()))
+            for key, path in first.items():
+                self.assertEqual(path.read_bytes(), second[key].read_bytes())
+                self.assertEqual(len(path.read_bytes()) % 4, 0)
+
     def test_build_cache_inventory_and_fat(self):
         image = image_module()
         sources, record = image.wallpaper_cache_payloads()

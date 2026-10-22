@@ -54,6 +54,12 @@ static int launch(struct files_app *a,const char *path,char *const argv[])
 { (void)a;assert(!strcmp(path,"/mnt/e/program000") && argv[0] && !argv[1]);launches++;return 42; }
 static const struct fm_vfs fs={.list=list,.stat_path=stat_path,.open=open_file,.read=read_file,.close=close_file};
 static uint64_t ping_max,turn_max;
+/* f2-89: every pixel of the shared surface is painted, never left transparent. */
+static void assert_opaque(void)
+{
+    size_t n=(size_t)window.info.width*window.info.height;
+    for (size_t i=0;i<n;i++) assert(window.pixels[i]!=0);
+}
 static unsigned serial;
 static void turn(void)
 {
@@ -83,6 +89,7 @@ int main(void)
     assert(!files_setup(&app,&ui,&fs,"/mnt/e"));
     assert(app.loading && !strcmp(du_get(&ui,100)->text,"E:\\"));
     window.configured=1;turn();uint64_t first_paint=now()-begin;assert(first_paint<300000000ull);
+    assert_opaque(); /* first frame of a slow-directory window */
     assert(!strcmp(du_get(&ui,107)->text,"Loading..."));
     struct du_event address={.type=DU_EV_KEY,.key=DU_KEY_F4};files_event(&ui,&address,&app);
     assert(du_focused(&ui)==100 && app.loading);
@@ -95,6 +102,7 @@ int main(void)
     unsigned before=__atomic_load_n(&entries,__ATOMIC_RELAXED);
     begin=now();assert(!files_navigate(&app,"/fast"));wait_done(3);
     assert(!strcmp(app.model.path,"/fast") && !app.model.count);
+    turn();assert_opaque(); /* empty directory */
     assert(__atomic_load_n(&entries,__ATOMIC_RELAXED)<before+3);
     assert(now()-begin<1000000000ull);
     assert(!files_navigate(&app,"/mnt/e"));wait_done(12);

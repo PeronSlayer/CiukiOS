@@ -298,9 +298,6 @@ static int launch_failed(const struct desk_program *program, int error, const ch
     }
     errno=error; return -1;
 }
-/* f6-18 GATE_BROWSER: the browser needs its window channel, but /Programs/netsurf
- * has no catalogue entry before M4; the gate launch alone treats it as graphical. */
-static int gate_browser_launch;
 static int launch_program(struct desktop *d, const struct desk_program *program)
 {
     if (d->power.state) return launch_failed(program,EBUSY,"power");
@@ -315,7 +312,8 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return launch_failed(program,errno,"channel-pair");
     int index=-1;
     ciuki_pid_t pid=-1;
-    int graphical=desk_program_graphical(program->name) || gate_browser_launch, kind=desk_program_kind(program->name);
+    /* The program record grants the window channel (catalog.h; f6-19: also NetSurf). */
+    int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
     /* f2-33: only the Task Manager receives the delegated termination
      * authority, explicitly mapped to fd 4; it also may send task requests. */
     int tasks=!strcmp(program->name,"tasks");
@@ -381,7 +379,8 @@ void desk_v3_fixture_report(const char *line);
 /* f6-18 GATE_BROWSER: start /Programs/netsurf --channel-fd=3 --test=browser <url>
  * through the ordinary launch path (same environment, channel and client slot
  * as a menu launch) and name the child to the controller; the kernel validates
- * the PID and reads the browser's page outcome from it. One shot per gate command. */
+ * the PID and reads the browser's page outcome from it. One shot per gate command.
+ * f6-19: the window channel comes from NetSurf's program record, not from the gate. */
 static int desk_browser_fixture_begin(struct desktop *d,const char *url)
 {
     static char gate_browser_url[48];
@@ -393,9 +392,7 @@ static int desk_browser_fixture_begin(struct desktop *d,const char *url)
     d->launch_arg=NULL;
     memset(d->launch_argv,0,sizeof(d->launch_argv));
     d->launch_argv[0]="--test=browser"; d->launch_argv[1]=gate_browser_url;
-    gate_browser_launch=1;
     int pid=launch_program(d,&program), error=errno;
-    gate_browser_launch=0;
     memset(d->launch_argv,0,sizeof(d->launch_argv));
     char line[80];
     snprintf(line,sizeof(line),"case=browser child=%d",pid<0 ? 0 : pid);
@@ -853,6 +850,22 @@ static void wallpaper_update(struct desktop *d)
         d->sh.wall_valid=1; d->sh.background_valid=0;
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     } else if (!d->sh.wall_valid) desk_shell_wallpaper_update(d);
+}
+/* f2-90: the wallpaper is in memory before the first frame. The build-seeded
+ * native frame is read synchronously here; on any miss the solid colour stays
+ * (desk_shell_wallpaper_update ran in wallpaper_load) and the worker decodes
+ * after the first frame as before. */
+static void wallpaper_preload(struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || !d->sh.wallpaper_pending || wallpaper_worker_failed) return;
+    uint32_t *pixels=NULL;
+    if (desk_wall_preload(&wallpaper_request,DESK_WALL_CACHE,&pixels,startup_stage) || !pixels) return;
+    if (d->scanout_valid) { free(pixels); return; }
+    free(d->sh.wall); free(d->sh.background); d->sh.background=NULL;
+    d->sh.wall=pixels; d->sh.wall_w=d->width; d->sh.wall_h=d->height;
+    d->sh.wall_valid=1; d->sh.background_valid=0; d->sh.image_failed=0; d->sh.wallpaper_pending=0;
+    startup_stage("wallpaper_applied");
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
 }
 /* Create the idle wallpaper thread during initialisation: the kernel's crash-isolation
  * probe compares the desktop's thread count across its cycles, and a thread born after the
@@ -1702,7 +1715,7 @@ static void shell_setup(struct desktop *d, int gate)
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
-    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_worker_prepare(d); }
+    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
     if (!gate) desktop_watchdog_start(d);
 }
@@ -1954,6 +1967,7 @@ int main(int argc, char **argv)
             }
             desk_flush(d,i);
         }
+        d->drain_ns=monotonic();
         if (!gate && fifo_count==0) {
             (void)desk_drain_input(d,ciuki_input_read);
         }

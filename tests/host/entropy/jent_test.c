@@ -48,21 +48,27 @@ int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);health();
     uint8_t bytes[32];
-    entropy_jent_begin(&ops);CHECK(!entropy_jent_init());
+    entropy_jent_begin(&ops);CHECK(!entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MIN_OSR));
     CHECK(!entropy_jent_read(bytes) && captured>1024 && yields>captured);
     entropy_jent_begin(&ops);ticks+=ENTROPY_COLLECT_MS;memset(bytes,0xa5,sizeof(bytes));
     CHECK(entropy_jent_read(bytes) && entropy_jent_expired());
+    struct entropy_jent_report report;entropy_jent_report(&report);
+    CHECK(!report.permanent && report.result<0 && !report.alarm);   /* the budget is not a health failure */
     for(unsigned i=0;i<sizeof(bytes);i++)CHECK(bytes[i]==0xa5);
     entropy_jent_close();CHECK(!allocated);
-    timed=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init());
+    timed=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR));
     CHECK(entropy_jent_expired() && entropy_jent_rounds()<=5);
     entropy_jent_close();CHECK(!allocated);timed=false;
     entropy_jent_begin(&ops);
     struct rand_data ec={0};
     for(unsigned i=0;i<ENTROPY_COLLECT_ROUNDS;i++)CHECK(!ciuki_jent_round(&ec));
     CHECK(ciuki_jent_round(&ec) && entropy_jent_expired() && (ec.health_failure & JENT_RCT_FAILURE_PERMANENT));
-    stall=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init());entropy_jent_close();CHECK(!allocated);stall=false;
-    no_memory=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init());entropy_jent_close();CHECK(!allocated);
+    stall=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR));
+    entropy_jent_report(&report);CHECK(report.result==ECOARSETIME && report.osr==ENTROPY_JENT_MIN_OSR);   /* no OSR retry for a stopped clock */
+    entropy_jent_close();CHECK(!allocated);stall=false;
+    no_memory=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR));
+    entropy_jent_report(&report);CHECK(report.result==EMEM && report.osr==ENTROPY_JENT_MIN_OSR);
+    entropy_jent_close();CHECK(!allocated);
     puts("PASS actual library synthetic-clock init/read, bounded time/rounds, stalled clock and allocation refusal; all allocations freed");
     return 0;
 }

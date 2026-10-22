@@ -185,3 +185,88 @@ clock/collector, pool lifecycle, deadline and syscall fixtures. Measured host
 jitter and output histograms run separately with
 `tests/host/entropy/run_qualification.sh`; source availability is reported,
 never a prerequisite for the deterministic host gate.
+
+## Amendment 4 (f6-19, 2026-10-22): two credited sources on the T23
+
+The 1.0.0 alpha T23 boot logged `[entropy] boot rounds=2644 cycles=335678959
+ms=335` and `health=fail`: the jitter source failed and, being the only
+credited source, latched the pool failed, so `getentropy` never succeeded.
+The diagnosis and the expected T23 records are in
+[f6-19 validation](../validation/f6-19-entropy-t23.md). This amendment
+supersedes the f6-16 rules "IRQ input receives zero credit" and "collection
+errors latch failure" (Amendment 2); every other rule above stands.
+
+### Adapter: the library's documented use
+
+* [jitterentropy(3), v3.7.0](https://github.com/smuellerDD/jitterentropy-library/blob/v3.7.0/doc/jitterentropy.3):
+  `jent_entropy_init_ex(osr, flags)` takes "the osr and flags parameters which
+  should be identical to the subsequent invocation of
+  `jent_entropy_collector_alloc()`"; after a health failure "the entropy
+  collector instance MUST be deallocated and a fresh instance must be
+  allocated", increasing the OSR "at least by one"; under FIPS 140-3
+  considerations "it is recommended that the function
+  `jent_read_entropy_safe()` API call is used". The adapter now calls
+  `jent_entropy_init_ex(osr, JENT_FORCE_FIPS | JENT_DISABLE_INTERNAL_TIMER |
+  JENT_MAX_MEMSIZE_256kB)`, allocates with the identical arguments, retries a
+  failed startup with a fresh instance at OSR+1 (up to the caller's bound,
+  never above upstream `JENT_MAX_OSR` 20), stops at once for results an OSR
+  cannot change (`ENOTIME`, `ECOARSETIME`, `ENOMONOTONIC`, `ESTUCK`, `EHASH`,
+  `EMEM`, `EGCD`), and reads with `jent_read_entropy_safe`.
+* Why the port's own recovery: with `JENT_FORCE_FIPS` the collector runs the
+  NTG.1-style startup (memory-access stage, then SHA-3 hash-loop stage, each
+  sampled alone, `jitterentropy-noise.c` `jent_random_data`). A startup alarm
+  calls `jent_health_failure_reset`, which, because `max_mem_set` is only
+  recorded after `_jent_entropy_collector_alloc` returns, asks for the next
+  memory step (512 KiB). The 256 KiB adapter bound (unchanged; no memory-limit
+  change) refuses it, so the library's reset fails without running a round and
+  the allocation returns NULL. The adapter's OSR+1 loop keeps the pinned
+  buffer size.
+* The health parameters, cutoffs, safety factor, memory workload and the
+  pinned source are unchanged; no source patch is added. The adapter registers
+  `jent_set_fips_failure_callback` (before the first `jent_entropy_init*`, as
+  the man page requires) only to record the first alarm of an attempt, and
+  counts rounds per stage (power-up test, memory, SHA-3, output; the stage is
+  read from `rct_mem_nosr` and `startup_state`).
+
+### Kernel: jitter is optional, interrupt timing is credited
+
+* Boot runs one attempt at the default OSR 3 (no boot delay beyond today's
+  attempt). A failure retires the collector, not the pool: `health=ok`, and
+  `[entropy] jitter attempt=... result=... osr=... alarm=... stage=...
+  alarm_osr=... round=... rounds=P/M/S/O refused=... expired=... state=...`
+  records the attempt.
+* The worker retries 1 s after it starts (the PIT and device interrupts then
+  perturb the measured intervals), resuming above the last OSR tried, then
+  after 30 s and 120 s; four failed attempts, or a permanent health failure
+  reported by the library (not this adapter's 5 s/131,072-round budget),
+  retire jitter for the boot. Each attempt keeps the existing bounds. Runtime
+  attempts run in the worker without the pool mutex and offer a preemption
+  point every round.
+* Interrupt timing credit follows
+  [Linux random.c v6.12](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/char/random.c)
+  (`add_interrupt_randomness`, `mix_interrupt_randomness`: the fast pool
+  "feeds the input pool roughly once a second or after 64 interrupts" and
+  credits `(count & U16_MAX) / 64` bits, clamped to the pool size): one bit per
+  64 interrupt edges, without Linux's one-bit minimum per mix. The worker drains
+  the CPU-local buffer every 10 ms and counts at most 128 edges per drain (four
+  32-bit words, 32 rotation positions each), carrying the remainder below 64.
+  The drained words are conditioned through the existing SHA-256 pool before
+  any credit. No credit is granted before a TSC validated against the PIT at
+  boot, while the fresh credit is full (edges are still mixed), after a pool
+  failure, or for a drain whose newest edge carries the same TSC low word as
+  the previous drain (a stopped counter). The IRQ path gains one store
+  (`fast.last`); it still performs no hashing, allocation, logging or health
+  test. Every PIC line contributes, PIT included, as in Linux.
+* With the PIT alone (1 kHz) the 256-bit seed needs 16,384 edges, about 16 s;
+  device interrupts (ATA, USB, AC'97, PS/2, NIC, UART) shorten it. The pool is
+  `failed` only without a validated TSC (no credited source), as before.
+* `source_ready` now means "a credited source is available" (validated TSC).
+  Jitter credit stays one bit per delivered output byte; both sources share the
+  conditioner, the 256-bit estimate and the reseed rules.
+* The status record gains two trailing fields:
+  `... health=ok reseeds=N jitter=off|ready|retry|failed irq_bits=N`
+  (`irq_bits`: total credited interrupt bits). It is printed at boot, on each
+  reseed, on a health change and on a jitter state change. Source flags remain
+  1 jitter, 2 interrupts.
+* The raw capture (`entropyraw=1`) waits through retries and stops with
+  `reason=collector` only when jitter is retired.

@@ -87,6 +87,9 @@ static int boot_wall_worker_start(struct desk_wall_worker *w,const char *dir,voi
                                boot_cache_directory ? boot_wall_stage : stage); }
 static void boot_sound_init(struct desktop *d)
 { if (!boot_cache_directory) desk_sound_init(d); }
+static int boot_wall_preload(const struct desk_wall_request *r,const char *dir,uint32_t **out,void (*stage)(const char *))
+{ return desk_wall_preload(r,boot_cache_directory ? boot_cache_directory : dir,out,boot_cache_directory ? boot_wall_stage : stage); }
+#define desk_wall_preload boot_wall_preload
 #define cfg_writer_start boot_cfg_writer_start
 #define desk_wall_worker_start boot_wall_worker_start
 #define fm_native_vfs boot_native_vfs
@@ -251,8 +254,8 @@ int shell_fstat(int fd, struct stat *st)
     errno=EBADF; return -1;
 }
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
-static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg;
-static unsigned dosbox_spawns;
+static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg, *expect_netsurf[2];
+static unsigned dosbox_spawns, netsurf_spawns;
 #ifndef DESK_FOOTPRINT_TEST
 static unsigned control_spawns;
 #endif
@@ -279,6 +282,14 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         for (unsigned i=0;i<2 && expect_dosbox[i];i++) assert(argv[at] && !strcmp(argv[at++],expect_dosbox[i]));
         assert(!argv[at]);
         dosbox_spawns++;
+    } else if (!strcmp(path,"/Programs/netsurf")) {
+        /* f6-19: NetSurf's program record grants the window channel on every
+         * route; the GATE_BROWSER route only appends --test=browser <url>. */
+        assert(!strcmp(argv[0],"netsurf") && !strcmp(argv[1],"--channel-fd=3") && count==1);
+        unsigned at=2;
+        for (unsigned i=0;i<2 && expect_netsurf[i];i++) assert(argv[at] && !strcmp(argv[at++],expect_netsurf[i]));
+        assert(!argv[at]);
+        netsurf_spawns++;
     } else if (!strcmp(path,"/Programs/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
     else if (!strcmp(path,"/Programs/music")) assert(!strcmp(argv[0],"music") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     else if (!strcmp(path,"/Programs/tasks")) {
@@ -861,7 +872,7 @@ static void test_menu_icons(void)
     struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     static const char *const bin[]={"calc","charmap","ciukide","ciuknote","clock","control","demo","dosbox","files","hello","help",
-                                    "libc_smoke","lua","mixer","tasks","tcc","viewer","newtool"};
+                                    "libc_smoke","lua","mixer","netsurf","tasks","tcc","viewer","newtool"};
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) desk_program_add(&d,bin[i],elf,sizeof(elf));
     d.sh.cfg.recent_count=1; snprintf(d.sh.cfg.recent[0],sizeof(d.sh.cfg.recent[0]),"/notes.txt");
@@ -922,6 +933,69 @@ static void test_menu_icons(void)
     assert(strcmp(desk_program_icon_name("demo"),"applications-games") && strcmp(desk_program_icon_name("demo"),desk_games[0].tango));
     drop_all(&d); fake_reset();
     puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
+}
+/* f6-19 (T23 1.0.0 alpha: "[console] Unable to initialise framebuffer" after
+ * a Programs-menu launch): NetSurf is the browser application. Its catalog.h
+ * record carries the name, the description, the Tango icon and the desktop
+ * window grant; the Programs root lists it (never Developer) and every launch
+ * route passes --channel-fd=3, the same argv as the GATE_BROWSER route. */
+static const char *netsurf_icon_request;
+static uint32_t netsurf_icon_pixels[48*48];
+static const uint32_t *netsurf_store(const char *name,unsigned size)
+{ (void)size; netsurf_icon_request=name; return netsurf_icon_pixels; }
+static void test_netsurf_record(void)
+{
+    const struct desk_application_entry *app=desk_application_find("netsurf");
+    assert(app && DESK_APPLICATION_COUNT==1 && !strcmp(app->label,"NetSurf") && !strcmp(app->description,"Web browser"));
+    assert(!strcmp(app->tango,"internet-web-browser") && !desk_catalog_find("netsurf"));
+    assert(desk_program_graphical("netsurf") && !desk_program_kind("netsurf") && !desk_catalog_takes_file("netsurf"));
+    assert(!strcmp(desk_program_label("netsurf"),"NetSurf") && !strcmp(desk_program_description("netsurf"),"Web browser"));
+    assert(!desk_program_description("files") && !desk_program_description("hello"));
+    assert(!strcmp(desk_program_icon_name("netsurf"),app->tango) && !strcmp(desk_program_category("netsurf"),"programs"));
+    struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
+    desk_program_add(&d,"hello",elf,sizeof(elf)); desk_program_add(&d,"netsurf",elf,sizeof(elf));
+    desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
+    int row=item_at(&d.sh.menus[0],"NetSurf");
+    assert(row>=0 && !strcmp(d.sh.menus[0].items[row].icon,"internet-web-browser"));
+    assert(d.sh.menus[0].items[row].action==SH_ACT_LAUNCH && !strcmp(d.programs[d.sh.menus[0].items[row].arg].name,"netsurf"));
+    assert(item_at(&d.sh.menus[0],"Developer")>=0);   /* hello still has its folder */
+    desk_menu_close(&d);
+    desk_menu_open(&d,SH_MENU_DEVELOPER,0,0);
+    assert(item_at(&d.sh.menus[0],"NetSurf")<0 && item_at(&d.sh.menus[0],"netsurf")<0 && item_at(&d.sh.menus[0],"Hello")>=0);
+    desk_menu_close(&d);
+    /* Start > Programs > NetSurf with the keyboard, then the pending launch. */
+    desk_menu_open(&d,SH_MENU_START,0,0);
+    key(&d,DU_KEY_DOWN); key(&d,DU_KEY_RIGHT); assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_PROGRAMS);
+    while (d.sh.menus[1].hot!=row) key(&d,DU_KEY_DOWN);
+    key(&d,DU_KEY_ENTER); assert(!d.sh.levels && d.action>=0 && !strcmp(d.programs[d.action].name,"netsurf"));
+    int pid=launch_pending(&d);
+    assert(pid>0 && netsurf_spawns==1 && d.action<0);
+    int slot=-1;
+    for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].channel>=0 && d.clients[i].pid==(uint32_t)pid) slot=i;
+    assert(slot>=0 && !strcmp(d.clients[slot].application,"netsurf") && d.clients[slot].awaiting_frame && !d.clients[slot].program);
+    /* The window keeps the browser icon when the page title replaces "NetSurf - CiukiOS". */
+    snprintf(d.clients[slot].title,sizeof(d.clients[slot].title),"Example Domain");
+    d.icon=netsurf_store; netsurf_icon_request=NULL;
+    assert(desk_shell_window_icon(&d,slot,16)==netsurf_icon_pixels && !strcmp(netsurf_icon_request,"internet-web-browser"));
+    d.icon=NULL;
+    drop_all(&d); memset(d.children,0,sizeof(d.children)); fake_reset();
+    /* Run dialog (and the Terminal's DESK_LAUNCH): the same record. */
+    char command[]="netsurf";
+    assert(run_command(&d,command)>0 && netsurf_spawns==2);
+    drop_all(&d); memset(d.children,0,sizeof(d.children)); fake_reset();
+    /* GATE_BROWSER: no gate-only grant any more; the record supplies the channel. */
+    expect_netsurf[0]="--test=browser"; expect_netsurf[1]="https://ciuki.test/";
+    captured_report[0]=0;
+    pid=desk_browser_fixture_begin(&d,"https://ciuki.test/");
+    char line[48]; snprintf(line,sizeof(line),"case=browser child=%d",pid);
+    assert(pid>0 && netsurf_spawns==3 && !strcmp(captured_report,line) && !d.launch_argv[0]);
+    expect_netsurf[0]=expect_netsurf[1]=NULL;
+    drop_all(&d); fake_reset();
+    puts("PASS f6-19 NetSurf record: Programs root (not Developer), internet-web-browser icon, \"Web browser\", "
+         "--channel-fd=3 from the menu, Run and GATE_BROWSER routes, window icon by launch identity");
 }
 static unsigned music_mixer_calls;
 static int music_mixer_set(struct desktop *d,uint32_t l,uint32_t r,uint32_t mute)
@@ -1263,6 +1337,7 @@ int main(int argc,char **argv)
     test_cd_player_menu();
     test_games_menu();
     test_menu_icons();
+    test_netsurf_record();
     test_launch_timing();
     test_wallpaper_startup();
     test_shutdown_sequence();

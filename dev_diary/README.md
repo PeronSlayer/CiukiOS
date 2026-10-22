@@ -168,3 +168,4 @@ Documenti di design, validazione, fonti esterne.
 | [Setup da CD rinviato a una release successiva; la 1.0 Alpha resta immagine disco per il T23](2026-10-21-07-setup-cd-rinviato.md) | 21 ottobre 2026 | decisione (programma) |
 | [Integrazione della 1.0.0 alpha: nove fusioni, versione, catena finale, rinvii](2026-10-21-08-integrazione-1-0-0-alpha.md) | 21 ottobre 2026 | integrazione, release |
 | [Kernel DOS unificato predefinito per i giochi nella 1.0.0 alpha (shell classica fino a f3-58)](2026-10-21-09-kernel-unificato-default.md) | 21 ottobre 2026 | decisione (DOS) |
+| [Prova T23 della 1.0.0 alpha fallita: cause dalla seriale (ATA, prenotazioni, NetSurf, entropia) e sette direttive correttive](2026-10-21-10-prova-t23-1-0-0-alpha-fallita.md) | 21 ottobre 2026 | prova hardware, analisi |

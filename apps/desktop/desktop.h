@@ -140,6 +140,7 @@ struct desk_power_sequence {
 };
 struct desk_render_cache;
 struct desktop {
+    uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
     unsigned games_removed;
     int (*install_program)(struct desktop *,const char *);
     struct desk_ops ops;
@@ -311,6 +312,7 @@ int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, siz
 int desk_program_graphical(const char *name);
 int desk_ide_launch(struct desktop *, const char *path);
 const char *desk_program_label(const char *name);
+const char *desk_program_description(const char *name);   /* catalog.h application record, or NULL */
 const char *desk_app_program(int kind);          /* "files" / "ciuknote" */
 int desk_program_kind(const char *name);
 int desk_catalog_takes_file(const char *name);   /* catalog.h accessories that open a file argument */         /* 1 Files, 2 CiukNote, else 0 */

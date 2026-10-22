@@ -714,8 +714,10 @@ class Session:
                 if fd is None: os.chmod(p, mode)
                 else: os.fchmod(fd, mode)
             else:
-                if not offset or count != 832 or offset > len(raw) or count > len(raw) - offset:
+                if not offset or count not in (832, 844) or offset > len(raw) or count > len(raw) - offset:
                     raise OSError(errno.EINVAL, 'timestamp input')
+                # 844 = sizeof(struct ciuki_w32_file_info) since f5-12B amendment 4
+                # (file_id and volume_serial appended); 832 is the pre-identity layout.
                 current = list(struct.unpack_from('<5H', self.info(st, '', metadata), 12))
                 incoming = struct.unpack_from('<5H', raw, offset + 12)
                 for mask, indices in ((1, (0, 1)), (2, (2,)), (4, (3, 4))):
