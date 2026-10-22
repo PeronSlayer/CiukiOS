@@ -704,6 +704,13 @@ behind device service and the starvation boost; a holder that a desktop
 thread waits for borrows that share (`[sched] desktop_share` record). The
 80 % cap stays.
 
+Amendment f1-101 (lead, 2026-10-22): the threads that write to an open
+audio stream or read its refill (`AUDIO_REFILL_READ`) run at level 16, the
+device band's lower edge, while the mixer measures the stream more than one
+period behind its target lead; all such producers share 20 ms of boosted CPU
+per sliding 100 ms, not charged to the device or refill budgets
+(`[sched] audio_producer` record; `AUDIO_GET_PRODUCER` reads the state).
+
 ### R3: timer and audio deadlines (R03/R06)
 
 Keep PIT divisor 1193, nominal 1 kHz, and calibrated monotonic timestamps.

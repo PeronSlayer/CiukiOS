@@ -66,12 +66,13 @@ static void donation_update(struct task *t)
         struct task *source = 0; /* f1-98: the reservation waiter that sets it */
         for (struct kwaiter *w = waiters; w; w = w->all_next)
             if (w->donating && w->queue->owner == t) {
-                if (w->task->effective_priority > highest) highest = w->task->effective_priority;
+                /* f1-101: a boosted audio producer lends at most SCHED_BOOST_CAP. */
+                if (task_donor_priority(w->task) > highest) highest = task_donor_priority(w->task);
                 lend |= w->task->share_group || w->task->share_lent;
             }
         for (struct task *d = dependents; d; d = d->depend_next)
             if (d->depends_on == t) {
-                if (d->effective_priority > dependency) { dependency = d->effective_priority; source = d; }
+                if (task_donor_priority(d) > dependency) { dependency = task_donor_priority(d); source = d; }
                 lend |= d->share_group || d->share_lent;
             }
         if (dependency > highest) highest = dependency;

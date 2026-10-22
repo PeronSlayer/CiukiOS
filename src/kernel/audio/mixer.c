@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/audio.h>
+#include <ciuki/task.h>
+/* f1-101: the scheduler side lives in task.c; host audio harnesses that do
+ * not link the scheduler see null hooks. */
+#pragma weak sched_audio_producer
+#pragma weak sched_audio_lead
 struct audio_state audio;
 /* f4-05 DOS VM sources (audio/vm_source.c); weak so host harnesses that link
  * only the native mixer keep working. */
@@ -89,6 +94,7 @@ void audio_mix(struct audio_frame *out, unsigned frames)
             while (s->phase >= output_rate && s->queued) mixer_retire(s,output_rate);
         }
         if (starved) s->starvation++;
+        audio_stream_lead(s); /* f1-101: the mixer reports the lead it really has */
         kwait_wake_io(&s->changed);
     }
     if (audio_vm_mix) audio_vm_mix(sums, frames); /* every admitted VM, focused or not */
@@ -101,4 +107,23 @@ void audio_mix(struct audio_frame *out, unsigned frames)
     }
     if (audio_vm_tap) audio_vm_tap(out, frames);
     audio.output += frames;
+}
+/* f1-101: lead in output frames, from the mixer's own queue. A draining,
+ * stopped or failed stream has no producer to hurry. */
+void audio_stream_lead(struct audio_stream *s)
+{
+    uint32_t rate = s->rate ? s->rate : AUDIO_RATE;
+    uint32_t lead = s->queued * audio_output_rate() / rate; /* <= 2048 * 48000 */
+    bool live = s->started && !s->draining && audio.ready && !audio.error;
+    bool behind = live && audio_producer_behind(s->producer_behind, lead, AUDIO_PRODUCER_BEHIND);
+    if (behind == s->producer_behind) return;
+    s->producer_behind = behind;
+    if (sched_audio_lead) sched_audio_lead(s, behind);
+}
+void audio_stream_producer(struct audio_stream *s, struct task *t, unsigned role)
+{
+    if (!s || !t || !sched_audio_producer) return;
+    sched_audio_producer(s, t, role);
+    /* A source that was already behind before this producer registered. */
+    if (s->producer_behind && sched_audio_lead) sched_audio_lead(s, true);
 }

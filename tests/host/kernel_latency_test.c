@@ -112,6 +112,10 @@ static void reset(void)
     share_ready=0;share_credit=0;share_tick=0;share_scale=1;share_turn=share_picked=false;desktop_share=true;
     memset(&share_stats,0,sizeof(share_stats));memset(&share_base,0,sizeof(share_base));
     inherit_used=inherit_lost=0;
+    /* f1-101 audio producer boost and records */
+    memset(producer_sources,0,sizeof(producer_sources));memset(producer_cpu,0,sizeof(producer_cpu));
+    producer_cpu_total=producer_tick=0;producer_scale=1;producer_slot=0;producer_over=false;audio_producer=true;
+    producer_used=producer_lost=0;
     last_measured=0;last_preempted=false;
     g_task_switches=g_task_switches_other=g_switch_target=0;g_measure_stop=false;
     memset(classes,0,sizeof(classes));memset(paths,0,sizeof(paths));

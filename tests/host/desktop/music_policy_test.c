@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <string.h>
+#include <unistd.h>
 #include "../../../apps/music/view.h"
 static uint64_t test_now;
 static int model_clock(clockid_t id, struct timespec *t)
@@ -140,10 +142,13 @@ static void t23_holds(void)
     for (unsigned kind=0;kind<sizeof(holds)/sizeof(*holds);kind++)
         for (unsigned h=0;h<holds[kind].count;h++) {
             struct device d={0};
-            struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL};
+            struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL,NULL};
             struct music_player *p=calloc(1,sizeof(*p)); assert(p);
             test_now=0; music_player_init(p,&out,NULL,NULL); prepare(p);
-            p->count=p->view.rate*MUSIC_START_SECONDS;
+            /* f1-87 C: the decoded reservoir the reader keeps once it has
+             * filled the ring (>= 2 s). f1-101 starts playback after
+             * MUSIC_PREFILL_MS (1 s); this case is the steady state. */
+            p->count=p->view.rate*2u;
             assert(!music_player_pump(p));
             for (unsigned t=2;t<=holds[kind].ms;t+=2) {
                 test_now=(uint64_t)t*1000000; assert(!music_player_pump(p));
@@ -153,10 +158,54 @@ static void t23_holds(void)
         }
     printf("PASS F1-87 T23 hold histogram cases=%u max=1837ms decoded_start=2s DAC_gaps=0 starvations=0\n",cases);
 }
+/* f1-101: the kernel's producer state in the level record, and the device
+ * lead that mirrors a reservoir under its 500 ms target. */
+static struct music_producer kernel_producer;
+static unsigned producer_calls;
+static int producer_state(void *ctx,struct music_producer *out)
+{ (void)ctx; producer_calls++; *out=kernel_producer; return 0; }
+static void producer_level(void)
+{
+    struct device d={0};
+    struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL,producer_state};
+    struct music_player *p=calloc(1,sizeof(*p)); assert(p);
+    test_now=0; music_player_init(p,&out,NULL,NULL); prepare(p);
+    for (unsigned i=0;i<20;i++) {
+        p->count=music_frames_ms(48000,MUSIC_TARGET_MS); test_now+=2000000; assert(!music_player_pump(p));
+    }
+    assert(d.queued>MUSIC_DEVICE_BEHIND); /* at the target: the device stream is filled */
+    p->count=music_frames_ms(48000,MUSIC_TARGET_MS)-1;
+    unsigned high=0;
+    for (unsigned i=0;i<100;i++) {
+        test_now+=2000000; assert(!music_player_pump(p));
+        if (i>=40 && d.queued>high) high=d.queued; /* after the device drained to the mark */
+        p->count=music_frames_ms(48000,MUSIC_TARGET_MS)-1;
+    }
+    assert(high<=MUSIC_DEVICE_BEHIND && high+256>MUSIC_DEVICE_BEHIND && !d.gaps);
+    /* EOF: the tail is not a deficit, the stream fills */
+    p->eof=1; test_now+=2000000; assert(!music_player_pump(p)); assert(d.queued>MUSIC_DEVICE_BEHIND);
+    p->eof=0;
+    /* the level record carries the kernel's boost state as window deltas */
+    FILE *capture=tmpfile(); assert(capture);
+    fflush(stderr); int saved=dup(2); assert(saved>=0 && dup2(fileno(capture),2)==2);
+    kernel_producer=(struct music_producer){.flags=3,.boosts=4,.over_budget=1,.boost_us=12500};
+    memset(&p->level,0,sizeof(p->level)); p->producer_base=(struct music_producer){0};
+    for (unsigned i=0;i<2600;i++) { test_now+=2000000; p->count=MUSIC_RING/2; assert(!music_player_pump(p)); }
+    kernel_producer=(struct music_producer){.flags=0,.boosts=6,.over_budget=1,.boost_us=20500};
+    for (unsigned i=0;i<2600;i++) { test_now+=2000000; p->count=MUSIC_RING/2; assert(!music_player_pump(p)); }
+    fflush(stderr); assert(dup2(saved,2)==2); close(saved);
+    char text[4096]={0}; rewind(capture); size_t n=fread(text,1,sizeof(text)-1,capture); fclose(capture); text[n]=0;
+    assert(strstr(text," boost=3 boosts=4 boost_ms=12 over=1\n"));
+    assert(strstr(text," boost=0 boosts=2 boost_ms=8 over=0\n"));
+    assert(producer_calls>=2);
+    music_player_destroy(p); free(p);
+    puts("PASS F1-101 device lead mirrors a reservoir under 500 ms (<=1280 frames), fills at the target and at EOF; level record boost=flags boosts/boost_ms/over deltas");
+}
 int main(void)
 {
     t23_holds();
-    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL};
+    producer_level();
+    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL,NULL};
     struct music_runtime *r=calloc(1,sizeof(*r)); assert(r);
     assert(!pthread_mutex_init(&r->lock,NULL)); music_player_init(&r->player,&out,NULL,NULL);
     contention(r,&d); backpressure(r,&d); debounce(r,&d); publication(r);

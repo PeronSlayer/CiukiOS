@@ -50,6 +50,15 @@ static void audio_refill(void *ctx)
     struct ciuki_audio_command c={.version=1,.size=sizeof(c)};
     (void)ciuki_devctl(m->audio,AUDIO_REFILL_READ,&c,sizeof(c));
 }
+/* f1-101: the kernel's producer boost state of this stream, for the level record. */
+static int audio_producer(void *ctx, struct music_producer *out)
+{
+    struct music_main *m=ctx; struct ciuki_audio_producer r={.version=1,.size=sizeof(r)};
+    if (m->audio<0) return -EBADF;
+    if (ciuki_devctl(m->audio,AUDIO_GET_PRODUCER,&r,sizeof(r))) return -errno;
+    out->flags=r.flags; out->boosts=r.boosts; out->over_budget=r.over_budget; out->boost_us=r.boost_us;
+    return 0;
+}
 static uint64_t now(void *ctx) { (void)ctx; return du_now(); }
 static int send(void *ctx, const struct music_command *c) { return music_runtime_send(((struct music_main *)ctx)->runtime,c); }
 static int master_get(void *ctx, unsigned *volume)
@@ -104,7 +113,7 @@ int main(int argc, char **argv)
     if (acc_args(argc,argv,"music",&channel,&test,&path)) return 2;
     struct music_main *m=calloc(1,sizeof(*m)); if (!m) return 1;
     m->audio=m->mixer=-1;
-    m->output=(struct music_output){audio_open,audio_write,audio_status,audio_close,now,m,audio_refill};
+    m->output=(struct music_output){audio_open,audio_write,audio_status,audio_close,now,m,audio_refill,audio_producer};
     m->backend=(struct music_ui_backend){send,master_get,master_set,quit,m};
     m->runtime=music_runtime_start(&m->output);
     if (!m->runtime) { free(m); return 1; }

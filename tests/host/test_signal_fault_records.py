@@ -84,6 +84,11 @@ static void device_tick_sample(struct task *t) { (void)t; }
 static bool device_demote(const struct task *t) { return device_throttled() && !device_urgent(t); }
 static void device_overrun_record(struct task *t) { (void)t; scheduler_stats.budget_exhausted++; }
 static void device_audio_poll(void) { }
+/* f1-101 helpers of the extracted sched_tick; the producer boost is covered
+ * by t23_audio_producer_test.c. */
+static bool producer_over;
+static bool producer_turn(const struct task *t) { (void)t; return false; }
+static void producer_advance(void) { }
 
 void task_start(struct task *t) { t->state=T_READY;rq_push(t); }
 #include <ciuki/work.h>
