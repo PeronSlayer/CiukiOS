@@ -8,6 +8,8 @@
 #include <ciuki/audio.h>
 #pragma weak audio_device_open
 #pragma weak vfs_fat_transaction_locked /* older standalone personality models */
+#pragma weak vfs_dir_step_locked
+#pragma weak vfs_chain_clusters_locked
 
 static struct px_namespace *spaces;
 
@@ -556,9 +558,51 @@ int px_range_locked(struct px_node *n,uint64_t start,uint64_t length)
     return vfs_description_io_locked(n->space->vfs,&key,0,(struct vfs_lock_owner){0},start,length,true) ? -EACCES : 0;
 }
 
+/* Clusters of a FAT chain for st_blocks. f1-93: one FAT sector per sector
+ * visited and never a cold device read under the volume reservation (the
+ * walk can release and readmit it); before, one guarded VFS_IO per cluster
+ * held the drive for a 128 MiB image's whole 32768-cluster walk. */
+static int px_stat_fill(struct px_node *, struct ciuki_stat *, uint32_t chain);
+static int chain_clusters(struct px_node *n, uint32_t first, uint32_t *count)
+{
+    if (vfs_chain_clusters_locked) return px_error(vfs_chain_clusters_locked(n->space->vfs,n->volume,first,count));
+    uint32_t c = first; *count = 0; /* standalone personality models */
+    while (c) {
+        if (c < 2 || c >= n->volume->clusters + 2 || ++*count > n->volume->clusters) return -EIO;
+        uint32_t next; int err = VFS_IO(n->space->vfs,fat_get_cluster(n->volume, c, &next));
+        if (err) return px_error(err);
+        uint32_t end = n->volume->type == 12 ? 0xff8 : n->volume->type == 16 ? 0xfff8 : 0x0ffffff8;
+        if (next >= end) break;
+        c = next;
+        if (!c) return -EIO;
+    }
+    return 0;
+}
 int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
 {
     vfs_tag_locked(n->space->vfs,"stat"); vfs_site_locked(n->space->vfs,"native");
+    int live=px_ro_check_locked(n); if (live) return live;
+    uint32_t chain = 0;
+    if (n->volume && n->entry.first) {
+        /* The walk may release the reservation: keep the node (and an
+         * unlinked file's chain) alive; a chain replaced meanwhile is
+         * walked again so st_blocks matches the entry reported. */
+        px_retain(n);
+        int err = 0;
+        for (unsigned tries = 0;; tries++) {
+            uint32_t first = n->entry.first;
+            err = first ? chain_clusters(n, first, &chain) : 0;
+            if (!first) chain = 0;
+            if (err || n->entry.first == first || tries == 2) break;
+        }
+        if (!err) err = px_stat_fill(n, out, chain);
+        int drop = px_drop_locked(n);
+        return err ? err : drop;
+    }
+    return px_stat_fill(n, out, 0);
+}
+static int px_stat_fill(struct px_node *n, struct ciuki_stat *out, uint32_t chain)
+{
     int live=px_ro_check_locked(n); if (live) return live;
     memset(out, 0, sizeof(*out));
     out->st_ino = n->ino; out->st_nlink = n->linked ? 1 : 0;
@@ -574,19 +618,9 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
     out->st_dev = n->drive + 1;
     out->st_size = n->kind == PX_FILE ? n->entry.size : 0;
     out->st_blksize = n->volume->spc * 512;
-    uint32_t c = n->entry.first, count = 0;
-    if (!c && n->mountpoint && n->volume->type != 32)
+    if (!n->entry.first && n->mountpoint && n->volume->type != 32)
         out->st_blocks = ((uint32_t)n->volume->root_entries * 32 + 511) / 512;
-    else while (c) {
-        if (c < 2 || c >= n->volume->clusters + 2 || ++count > n->volume->clusters) return -EIO;
-        uint32_t next; int err = VFS_IO(n->space->vfs,fat_get_cluster(n->volume, c, &next));
-        if (err) return px_error(err);
-        uint32_t end = n->volume->type == 12 ? 0xff8 : n->volume->type == 16 ? 0xfff8 : 0x0ffffff8;
-        out->st_blocks += n->volume->spc;
-        if (next >= end) break;
-        c = next;
-        if (!c) return -EIO;
-    }
+    else out->st_blocks = (int64_t)chain * n->volume->spc;
     clock_fat_utc(n->entry.times.access_date, 0, &out->st_atim.tv_sec);
     clock_fat_utc(n->entry.times.write_date, n->entry.times.write_time, &out->st_mtim.tv_sec);
     out->st_ctim = n->ctime;
@@ -921,7 +955,9 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     } else {
         struct fat_entry entry; int err;
         for (;;) {
-            err = VFS_IO(dir->space->vfs,fat_next(dir->volume, dir->entry.first, &cursor, &entry));
+            /* f1-93: never a cold directory sector under the reservation. */
+            err = vfs_dir_step_locked ? vfs_dir_step_locked(dir->space->vfs, dir->volume, dir->entry.first, 0, &cursor, &entry, false) :
+                VFS_IO(dir->space->vfs,fat_next(dir->volume, dir->entry.first, &cursor, &entry));
             if (err) return err == -FS_ENOENT ? 0 : px_error(err);
             if (path_equal(entry.name, ".") || path_equal(entry.name, "..")) continue;
             if (dir == dir->space->root && (path_equal(entry.name, "mnt") || path_equal(entry.name, "dev"))) continue;

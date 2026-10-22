@@ -11,3 +11,12 @@
 4. Host tests that fail on `main` for each of the three operations, then the strict FS gate, `test_kernel_latency`, `test_t23_holds` with the new cold-read actor.
 
 Rules as f1-92. Report `build/codex/f1-93-report.md`, validation `docs/validation/f1-93-holds-cold-reads.md`.
+
+## Amendment 1 (lead, 2026-10-22 02:35, decisions on the delivery)
+
+Accepted: the two extra admission changes (stat-like operations admitted
+beside a 64 KiB file read; readers copy a directory sector under
+write-back), the `test_vfs_contention` adjustment, and the readers of the
+VM's C: seeing the intermediate state of a DOS mutation for the 1.0.0 alpha
+(a publication path for logical volumes is a follow-up directive, with the
+lookup-versus-publication fairness). The replay mix explanation is recorded.

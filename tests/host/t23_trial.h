@@ -30,6 +30,21 @@ static inline unsigned t23_arrival_ms(unsigned sequence)
  * upper-bound assumption, and the phase relative to the holds is arbitrary. */
 #define T23_DEVICE_WORK_US 2110u
 #define T23_DEVICE_WORK_PERIOD_MS 251u
+/* f1-93: T23 trial of the 1.0.0 alpha image 8f59e221 (2026-10-21): the
+ * ATA queue reported svc=3947/1129/79/24 (<2, 2-7, 8-31, >=32 ms) and
+ * svc_max_ms=106. The cold replay charges every device command the
+ * measured maximum, so a hold that spans one command fails the 20 ms gate. */
+#define T23A_SERVICE_MS 106u
+#define T23A_HOLD_GATE_MS 20u
+#define T23A_STAT_GATE_MS 30u
+/* The trial's vfs_hold records on drive C (each >= 50 ms; the diagnostic
+ * budget suppressed the rest): op=stat 240 (desktop 237, netsurf, dosbox,
+ * control), op=readdir 36, op=lookup 10 (desktop launches), op=mkdir 1
+ * (dosvm#53, site=dos, 1910 ms), op=mount 1 (boot). */
+#define T23A_STAT_RECORDS 240u
+#define T23A_READDIR_RECORDS 36u
+#define T23A_LOOKUP_RECORDS 10u
+#define T23A_DOS_MKDIR_RECORDS 1u
 /* Directive fact 2: device_overrun task=audio-refill in 192 of 201 windows. */
 #define T23_OVERRUN_WINDOWS 192u
 #define T23_REPORT_WINDOWS 201u

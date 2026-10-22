@@ -111,6 +111,11 @@ static void *write_thread(void *arg) {
 static void *wait_thread(void *arg) {
     (void)arg; struct fat_entry e; assert(!vfs_stat(&waiter,"C:/TEST.BIN",&e) && e.size==512); return 0;
 }
+/* A metadata mutation (the attribute byte): unlike a stat (f1-93), its
+ * ticket still waits for in-flight open-file readers. */
+static void *attrib_thread(void *arg) {
+    (void)arg; assert(!vfs_attrib(&waiter,"C:/TEST.BIN",FAT_ATTR_ARCHIVE)); return 0;
+}
 static void timeout_pause(void *arg) { (void)arg; clock_ms+=125; }
 static void *timeout_thread(void *arg) {
     (void)arg; struct vfs_request r=waiter_request;
@@ -153,10 +158,14 @@ int main(void) {
     pause_ms(150); atomic_store(&release_device,true);
     assert(!pthread_join(a,0) && !pthread_join(b,0));
     assert(hold_records==1 && wait_records==1 && held_ms>=waited_ms);
+    /* f1-93: a stat changes no chain, so it is admitted beside an
+     * outstanding desktop reader instead of waiting for its device read. */
+    vfs_lock(&v,0); v.readers[2]++; vfs_unlock(&v);
+    assert(!pthread_create(&b,0,wait_thread,0) && !pthread_join(b,0));
+    vfs_lock(&v,0); assert(v.readers[2]==1 && !v.diagnostic_waiters[2]); vfs_unlock(&v);
     /* A normal metadata ticket is queued behind an outstanding desktop
      * reader. The deadline reader passes that ticket before it is released. */
-    vfs_lock(&v,0); v.readers[2]++; vfs_unlock(&v);
-    assert(!pthread_create(&b,0,wait_thread,0));
+    assert(!pthread_create(&b,0,attrib_thread,0));
     for (;;) {
         vfs_lock(&v,0); bool queued=v.diagnostic_waiters[2]==1; vfs_unlock(&v);
         if (queued) break; pause_ms(1);
@@ -165,7 +174,7 @@ int main(void) {
     vfs_lock(&v,0); assert(v.readers[2]==1); v.readers[2]--;
     fs_event_wake(&v.volume_changed); vfs_unlock(&v);
     assert(!pthread_join(b,0));
-    puts("PASS f1-87 native identity reader completes during unrelated write; deadline reader passes queued normal metadata behind desktop reader");
+    puts("PASS f1-87 native identity reader completes during unrelated write; deadline reader passes queued normal metadata behind desktop reader; f1-93 stat beside the reader");
     /* Exact release threshold and bounded name copy, including a context
      * temporarily suppressed for uncancellable legacy reservation cleanup. */
     struct vfs_request diagnostic=writer_request;
