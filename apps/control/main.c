@@ -8,6 +8,7 @@
 #include "control.h"
 #include "programs.h"
 #include "decoder.h"
+#include "../libdeskui/job.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #ifdef __i386__
 #include <ciuki/raw.h>
@@ -36,9 +37,15 @@ struct cp_main { struct cp_network_worker network_worker; struct cp_app app; str
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h;
+    struct du_job assets; int assets_requested, assets_ready;
+    char wall_cache[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
+    char *pci_cache,*usb_cache; int portrait_ready;
+    struct du_job program_scan; int programs_requested,programs_ready,program_count,next_program_count;
+    struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
     /* f2-88b: Display page timing: open, first frame, worker job, worst gap between UI turns (= ping latency). */
     uint64_t disp_open, disp_first, disp_last_idle, disp_gap_max, disp_gap_logged; unsigned disp_decode_seen; int disp_open_logged; };
 
+static void programs_poll(struct cp_main *);
 /* Panel geometry is independent of desktop preferences and display rollback. */
 static void panel_size(int *width, int *height)
 {
@@ -124,41 +131,13 @@ static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; retur
  * strings, so lookup needs only bounded string scanning. */
 static int hwid_name(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 {
-    struct cp_main *m = ctx;
-    if (!m->hwid_loaded) {
-        m->hwid_loaded = 1;
-        FILE *f = fopen("/System/hwids/pci-ids.json", "rb");
-        if (f && !fseek(f, 0, SEEK_END)) {
-            long length = ftell(f);
-            if (length > 0 && length <= 400 * 1024 && !fseek(f, 0, SEEK_SET)) {
-                m->hwid_pci = malloc((size_t)length + 1);
-                if (m->hwid_pci && fread(m->hwid_pci, 1, (size_t)length, f) == (size_t)length)
-                    m->hwid_pci[length] = 0;
-                else { free(m->hwid_pci); m->hwid_pci = NULL; }
-            }
-            fclose(f);
-        } else if (f) fclose(f);
-    }
-    return cp_hwid_lookup_json(m->hwid_pci, vendor, device, out, size);
+    struct cp_main *m=ctx; m->assets_requested=1;
+    return cp_hwid_lookup_json(m->hwid_pci,vendor,device,out,size);
 }
 static int usb_hwid_name(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 {
-    struct cp_main *m = ctx;
-    if (!m->usb_hwid_loaded) {
-        m->usb_hwid_loaded = 1;
-        FILE *f = fopen("/System/hwids/usb-ids.json", "rb");
-        if (f && !fseek(f, 0, SEEK_END)) {
-            long length = ftell(f);
-            if (length > 0 && length <= 400 * 1024 && !fseek(f, 0, SEEK_SET)) {
-                m->hwid_usb = malloc((size_t)length + 1);
-                if (m->hwid_usb && fread(m->hwid_usb, 1, (size_t)length, f) == (size_t)length)
-                    m->hwid_usb[length] = 0;
-                else { free(m->hwid_usb); m->hwid_usb = NULL; }
-            }
-            fclose(f);
-        } else if (f) fclose(f);
-    }
-    return cp_hwid_lookup_json(m->hwid_usb, vendor, device, out, size);
+    struct cp_main *m=ctx; m->assets_requested=1;
+    return cp_hwid_lookup_json(m->hwid_usb,vendor,device,out,size);
 }
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -181,7 +160,7 @@ static int image_name(const char *name)
     ext[n] = 0;
     return !strcmp(ext, "bmp") || !strcmp(ext, "png") || !strcmp(ext, "jpg") || !strcmp(ext, "jpeg");
 }
-static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
+static int scan_wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
 {
     (void)ctx;
     DIR *dir = opendir(CFG_WALLPAPER_DIR);
@@ -199,6 +178,36 @@ static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
     }
     closedir(dir);
     return (int)n;
+}
+static char *read_ids(const char *path)
+{
+    FILE *f=fopen(path,"rb"); if (!f) return NULL;
+    char *text=NULL;
+    if (!fseek(f,0,SEEK_END)) {
+        long n=ftell(f);
+        if (n>0 && n<=400*1024 && !fseek(f,0,SEEK_SET)) {
+            text=malloc((size_t)n+1);
+            if (text && fread(text,1,(size_t)n,f)==(size_t)n) text[n]=0;
+            else { free(text); text=NULL; }
+        }
+    }
+    fclose(f); return text;
+}
+static void read_assets(void *ctx)
+{
+    struct cp_main *m=ctx;
+    m->wall_count=(unsigned)scan_wallpapers(NULL,m->wall_cache,CP_WALLPAPERS);
+    m->pci_cache=read_ids("/System/hwids/pci-ids.json");
+    m->usb_cache=read_ids("/System/hwids/usb-ids.json");
+    FILE *f=fopen("/system/assets/ciuki-portrait.xrgb","rb");
+    if (f) { m->portrait_ready=fread(m->portrait,4,256*256,f)==256*256; fclose(f); }
+}
+static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
+{
+    struct cp_main *m=ctx;
+    if (!m->assets_ready) return 0;
+    unsigned count=m->wall_count<capacity ? m->wall_count : capacity;
+    memcpy(names,m->wall_cache,count*CFG_PATH_MAX); return (int)count;
 }
 static int decode_begin(void *ctx, const struct cp_preview_req *req) { (void)ctx; return cp_decoder_begin(req); }
 static int decode_poll(void *ctx, struct cp_preview_done *out) { (void)ctx; return cp_decoder_poll(out); }
@@ -306,12 +315,12 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
     }
     if(p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && p->serial==m->install_serial){
         m->install_serial=0;struct du_widget *s=du_get(&m->ui,3);
-        if(s){du_set_text(s,p->result<0 ? "The installer could not be started. Check the selected media and try again." : "Installer started.");m->ui.dirty=1;}
+        if(s){du_set_text(s,p->result<0 ? "The installer could not be started. Check the selected media and try again." : "Installer started.");du_invalidate(&m->ui,s->box);}
         return;
     }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->result < 0) {
         struct du_widget *s = du_get(&m->ui, 3);   /* the status line */
-        if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); m->ui.dirty = 1; }
+        if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); du_invalidate(&m->ui,s->box); }
     }
 }
 static uint64_t monotonic(void *ctx) { (void)ctx; return du_now(); }
@@ -320,7 +329,7 @@ static int close_request(struct du_window *w, void *user)
 { (void)w; struct cp_main *m = user;
   if (m->writer_started && cfg_writer_busy(&m->writer)) {
       m->app.close_pending=1; m->app.display_accept=0;
-      du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); m->ui.dirty=1; return 0;
+      du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); du_invalidate_widget(&m->ui,3); return 0;
   }
   remember_size(m); return cp_close(&m->app); }
 /* The kernel's debug_write path is a plain klog line ("[user N] ...": serial, console and the protected boot
@@ -364,7 +373,18 @@ static void display_log(struct cp_main *m, uint64_t mono)
 }
 static void idle(void *arg)
 {
-    struct cp_main *m = arg;
+    struct cp_main *m=arg;
+    if (m->app.page==CP_DISPLAY || m->app.page==CP_SYSTEM || m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS) m->assets_requested=1;
+    if (m->window.configured && m->ui.frame_count) programs_poll(m);
+    if (m->assets.started && du_job_ready(&m->assets) && m->ui.capture<0 && !m->ui.dialog.kind) {
+        du_job_finish(&m->assets); m->assets_ready=1;
+        m->hwid_pci=m->pci_cache; m->hwid_usb=m->usb_cache;
+        if (m->portrait_ready) m->app.host.portrait=m->portrait;
+        cp_assets_ready(&m->app);
+    } else if (m->assets_requested && !m->assets_ready && !m->assets.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
+        if (du_job_start(&m->assets,read_assets,m)) m->assets_ready=1;
+    }
+    if (m->window.configured && m->ui.frame_count) cp_fonts_poll(&m->app);
     display_log(m, du_now());
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
@@ -389,7 +409,7 @@ static void idle(void *arg)
     if (m->writer_started && cfg_writer_busy(&m->writer) && m->app.quit) return;
     if (m->app.quit) { remember_size(m); du_window_close(&m->window); m->app.quit = 0; }
     uint64_t t = now(m);
-    if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); if (m->app.page == CP_DATETIME) m->ui.dirty = 1; }
+    if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); }
 }
 __attribute__((weak)) int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 { (void)out; (void)cap; return -ENOSYS; }
@@ -434,17 +454,44 @@ static int program_save(void *ctx)
     return error ? -error : 0;
 }
 static struct cp_program_store programs={.root="",.registry_list=registry_list,.registry_run=registry_run,.registry_check=registry_check,.game=game_program,.forget_icon=forget_icon,.persist=program_save};
+static void scan_programs(void *ctx)
+{
+    struct cp_main *m=ctx; struct cp_program_store store=programs;
+    m->next_program_count=cp_program_list(&store,m->program_next,CP_PROGRAM_MAX);
+}
+static void programs_poll(struct cp_main *m)
+{
+    if (du_job_ready(&m->program_scan) && m->ui.capture<0 && !m->ui.dialog.kind) {
+        du_job_finish(&m->program_scan);
+        m->program_count=m->next_program_count; m->programs_ready=1;
+        if (m->program_count>0) memcpy(m->program_cache,m->program_next,(unsigned)m->program_count*sizeof(*m->program_next));
+        free(m->program_next); m->program_next=NULL;
+        if (m->app.page==CP_UNINSTALL) cp_open(&m->app,CP_UNINSTALL);
+        m->programs_requested=0;
+    } else if (m->programs_requested && !m->program_scan.started && !m->ui.dirty) {
+        m->program_next=calloc(CP_PROGRAM_MAX,sizeof(*m->program_next));
+        int error=m->program_next ? du_job_start(&m->program_scan,scan_programs,m) : -ENOMEM;
+        if (error) { free(m->program_next); m->program_next=NULL; m->programs_ready=1; m->program_count=error; m->programs_requested=0; }
+    }
+}
 static int win32_uninstall_list(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
-{(void)ctx;return cp_program_list(&programs,out,cap);}
+{
+    struct cp_main *m=ctx; m->programs_requested=1;
+    if (!m->programs_ready) return 0;
+    if (m->program_count<0) return m->program_count;
+    unsigned n=(unsigned)m->program_count<cap ? (unsigned)m->program_count : cap;
+    memcpy(out,m->program_cache,n*sizeof(*out)); return (int)n;
+}
 static int program_remove(void *ctx,const struct desk_uninstall_entry *r)
 {
+    struct cp_main *m=ctx; if (m->program_scan.started) return -EBUSY;
     programs.ctx=ctx;
     int result=cp_program_remove(&programs,r);
     struct cp_program_store recorder=programs;recorder.log=program_log;
     cp_program_record(&recorder,r,result);return result;
 }
 static void programs_changed(void *ctx)
-{(void)apply(ctx,DESK_SETTINGS_PROGRAMS,0,0);}
+{ struct cp_main *m=ctx; m->programs_ready=0; m->programs_requested=1; (void)apply(ctx,DESK_SETTINGS_PROGRAMS,0,0); }
 static int program_install(void *ctx,const char *path)
 {
     struct cp_main *m=ctx;
@@ -479,11 +526,10 @@ int main(int argc, char **argv)
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
-    h->save_async=1;
+    h->save_async=1; h->fonts_async=1;
     h->audio_diagnostics = audio_query;
     h->devices = devices; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
-    FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
-    if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
+
     const char *display = getenv("CIUKI_DISPLAY");
     h->screen_w = 1024; h->screen_h = 768;
     if (display) { char *end; long w = strtol(display, &end, 10); if (*end == 'x' && w >= 320 && w <= 2048) { h->screen_w = (uint32_t)w; h->screen_h = (uint32_t)strtol(end + 1, NULL, 10); } }
@@ -508,6 +554,9 @@ int main(int argc, char **argv)
         du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     int r = du_run(&m->window, idle, m);
+    du_job_finish(&m->program_scan); free(m->program_next);
+    du_job_finish(&m->assets);
+    if (!m->assets_ready) { free(m->pci_cache); free(m->usb_cache); }
     if (m->writer_started) cfg_writer_stop(&m->writer);
     network_worker_stop(&m->network_worker);
     cp_detach(&m->app); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);

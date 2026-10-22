@@ -6,6 +6,7 @@
 #include "paint.h"
 #include "../libdeskui/textarea.h"
 #include "default_font.h"
+#include "../libdeskui/job.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -30,6 +31,7 @@ static void *callback_host;
 static void fmt_u32(char *out, u32 n) { sprintf(out, "%u", (unsigned)n); }
 static void no_memory(void);
 static void layout(void);
+static void open_finish(void);
 static void clamp_scroll(void);
 static void finish_pending(void);
 static void drop_selection(void);
@@ -185,10 +187,12 @@ static int alloc_retry(struct paint_image *m, int w, int h)
     return img_alloc(m, w, h);
 }
 
+static uint64_t image_revision;
 static int dx0, dy0, dx1, dy1 = -1;          /* image area to show again */
 static int bx0, by0, bx1, by1 = -1;          /* what the preview drew */
 static void dmg_add(int x0, int y0, int x1, int y1)
 {
+    image_revision++;
     if (dy1 < dy0 || dx1 < dx0) { dx0 = x0; dy0 = y0; dx1 = x1; dy1 = y1; return; }
     if (x0 < dx0) dx0 = x0;
     if (y0 < dy0) dy0 = y0;
@@ -1175,6 +1179,7 @@ static const int zooms[5] = { 1, 2, 4, 6, 8 };
 #define OPT_H 80
 static int show_tools = 1, show_colors = 1, show_status = 1, show_grid;
 static int W, H, tby, optx, opty, cby, sby, vx, vy, vw, vh;
+static int partial_layout;
 static int ptr_x = -1, ptr_y;
 static int page_w(void) { return imax(1, (vw - 8) / zoom); }
 static int page_h(void) { return imax(1, (vh - 8) / zoom); }
@@ -1187,7 +1192,30 @@ static int i2sx(int ix) { return vx + 4 + (ix - scx) * zoom; }
 static int i2sy(int iy) { return vy + 4 + (iy - scy) * zoom; }
 static int s2i(int d, int sc) { return sc + (d >= 0 ? d / zoom : -((zoom - 1 - d) / zoom)); }
 static void to_img(int sx, int sy, int *x, int *y) { *x = s2i(sx - vx - 4, scx); *y = s2i(sy - vy - 4, scy); }
-static void flush(void) { ui->dirty = 1; dx0 = dy0 = 0; dx1 = dy1 = -1; }
+static void flush(void)
+{
+    if (dx1>=dx0 && dy1>=dy0) {
+        struct du_rect r={vx+4+(dx0-scx)*zoom,vy+4+(dy0-scy)*zoom,
+                          (dx1-dx0+1)*zoom,(dy1-dy0+1)*zoom};
+        du_invalidate(ui,du_intersection(r,(struct du_rect){vx,vy,vw,vh}));
+    }
+    dx0=dy0=0; dx1=dy1=-1;
+}
+static void scroll_canvas(int old_x, int old_y)
+{
+    clamp_scroll(); int dx=(old_x-scx)*zoom,dy=(old_y-scy)*zoom;
+    if (!dx && !dy) return;
+    struct du_rect viewport={vx+4,vy+4,vw-4,vh-4};
+    du_scroll(ui,viewport,dx,dy);
+    /* The brush preview stays at the pointer while the image moves. */
+    if (tool==T_BRUSH || tool==T_ERASER || tool==T_AIR) {
+        int radius=20*zoom;
+        struct du_rect r={ui->mouse_x-radius,ui->mouse_y-radius,2*radius+1,2*radius+1};
+        du_invalidate(ui,du_intersection(viewport,r)); r.x+=dx;r.y+=dy;
+        du_invalidate(ui,du_intersection(viewport,r));
+    }
+}
+
 static char path[DU_TEXT_MAX], status_title[DESK_TITLE_MAX + 1];
 static void update_title(void)
 {
@@ -1208,7 +1236,7 @@ static int new_image(int w, int h)
     if (!img_alloc(&next, w, h)) { no_memory(); return 0; }
     finish_pending(); drop_selection(); drop_undo(); pool_free(); img_free(&cv);
     cv = next; img_fill(&cv, WHITE);
-    path[0] = 0; dirty = 0; scx = scy = 0; update_title(); return 1;
+    image_revision++; path[0] = 0; dirty = 0; scx = scy = 0; update_title(); return 1;
 }
 static void set_zoom(int z, int cx, int cy)
 {
@@ -1615,7 +1643,9 @@ static void layout(void)
              "Drag to select a free-form area; drag inside it to move (Ctrl: copy)." : tool_hints[tool]);
     if (ptr_x >= 0) snprintf(position, sizeof(position), "%d, %d", ptr_x, ptr_y);
     snprintf(size, sizeof(size), "%d x %d", sel_on ? selw : cv.w, sel_on ? selh : cv.h);
-    snprintf(st->text, sizeof(st->text), "%s\t%s\t%s", hint, position, size);
+    char status_text[sizeof(st->text)];
+    snprintf(status_text,sizeof(status_text),"%s\t%s\t%s",hint,position,size);
+    if (strcmp(st->text,status_text)) { du_set_text(st,status_text); if (!st->hidden) du_invalidate(ui,st->box); }
     for (int i = 0; i < NTOOLS; i++) {
         struct du_widget *w = du_get(ui, P_TOOL + i);
         w->hidden = !show_tools; w->box = (struct du_rect){4 + (i & 1) * 26, top + 4 + (i >> 1) * 26, 25, 25};
@@ -1626,7 +1656,9 @@ static void layout(void)
         struct du_widget *w = du_get(ui, P_SWATCH + i);
         w->hidden = !show_colors; w->box = (struct du_rect){50 + (i % 14) * 17, cby + 6 + (i / 14) * 18, 16, 16};
     }
-    update_menus(); ui->dirty = 1;
+    update_menus();
+    if (!partial_layout) ui->dirty=1;
+    flush();
 }
 static void relayout(struct du_ui *u, void *arg) { (void)u; (void)arg; layout(); }
 
@@ -1842,14 +1874,18 @@ static void footprint(void)
 }
 static void render(struct du_ui *u, void *arg)
 {
-    (void)arg; layout(); struct du_canvas *c = &u->canvas; struct du_rect saved = c->clip;
+    (void)arg; struct du_canvas *c = &u->canvas; struct du_rect saved = c->clip;
     c->clip = du_intersection(saved, (struct du_rect){vx,vy,vw,vh});
     du_fill(c, c->clip, DU_SHADOW);
     int cols = imax(0, imin(cv.w - scx, (vw - 4) / zoom));
     int rows = imax(0, imin(cv.h - scy, (vh - 4) / zoom));
-    for (int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) {
-        uint32_t color = rgb(pixel(x + scx, y + scy));
-        ui_rect(vx + 4 + x * zoom, vy + 4 + y * zoom, zoom, zoom, color);
+    /* DIB-style clipped row writes. No per-pixel toolkit calls and no
+     * palette conversion outside the update region. */
+    struct du_rect image=du_intersection(c->clip,(struct du_rect){vx+4,vy+4,cols*zoom,rows*zoom});
+    for (int y=image.y;y<image.y+image.h;y++) {
+        uint32_t *dst=c->pixels+(size_t)y*c->width;
+        int sy=scy+(y-vy-4)/zoom;
+        for (int x=image.x;x<image.x+image.w;x++) dst[x]=rgb(pixel(scx+(x-vx-4)/zoom,sy));
     }
     if (show_grid && zoom >= 4) {
         for (int x = 1; x < cols; x++) ui_rect(vx + 4 + x * zoom, vy + 4, 1, rows * zoom, DU_SHADOW);
@@ -1886,7 +1922,7 @@ static void render(struct du_ui *u, void *arg)
     footprint();
     c->clip = saved;
     du_outline(c, (struct du_rect){vx - 1,vy - 1,vw + 17,vh + 17}, DU_SHADOW);
-    if (show_tools) {
+    if (show_tools && saved.x<TB_W && saved.x+saved.w>0 && saved.y<imax(vy+vh+17,opty+OPT_H) && saved.y+saved.h>tby) {
         du_fill(c, (struct du_rect){0, tby, TB_W, vh + 17}, DU_FACE);
         for (int i = 0; i < NTOOLS; i++) {
             struct du_widget *w = du_get(u,P_TOOL+i); int x=w->box.x,y=w->box.y;
@@ -1897,7 +1933,7 @@ static void render(struct du_ui *u, void *arg)
         }
         paint_options();
     }
-    if (show_colors) {
+    if (show_colors && saved.y<cby+CB_H && saved.y+saved.h>cby) {
         ui_rect(0,cby,W,CB_H,DU_FACE); ui_rect(0,cby,W,1,DU_HILITE);
         sunken(6,cby+5,36,35,DU_FACE);
         ui_rect(19,cby+17,18,18,DU_INK); ui_rect(20,cby+18,16,16,rgb(bg));
@@ -2204,14 +2240,15 @@ static void editor_key(const struct du_event *e)
     }
     if (key==DU_KEY_MENU || (key==DU_KEY_F10 && e->modifiers==DU_SHIFT)) { context_menu(vx+40,vy+40); return; }
     if (drag) return;
+    int old_x=scx,old_y=scy;
     int dx=0,dy=0,step=imax(1,32/zoom);
     if (key==DU_KEY_LEFT) dx=-1; else if (key==DU_KEY_RIGHT) dx=1;
     else if (key==DU_KEY_UP) dy=-1; else if (key==DU_KEY_DOWN) dy=1;
     else if (key==DU_KEY_PGUP) scy-=page_h(); else if (key==DU_KEY_PGDN) scy+=page_h();
     else if (key==DU_KEY_HOME) scx=scy=0;
     else if (key==DU_KEY_END) { scx=cv.w; scy=cv.h; }
-    if (sel_on && (dx || dy)) nudge(dx,dy); else { scx+=dx*step; scy+=dy*step; }
-    layout();
+    if (sel_on && (dx || dy)) nudge(dx,dy); else { scx+=dx*step; scy+=dy*step; scroll_canvas(old_x,old_y); }
+    partial_layout=1; layout(); partial_layout=0;
 }
 static void event(struct du_ui *u, const struct du_event *e, void *arg)
 {
@@ -2219,7 +2256,10 @@ static void event(struct du_ui *u, const struct du_event *e, void *arg)
     if (e->type==DU_EV_DIALOG) { dialog_result(e); return; }
     if (e->type==DU_EV_ACTIVATE) { paint_command(e->id); return; }
     if (e->type==DU_EV_CHANGE && (e->id==P_HSCROLL || e->id==P_VSCROLL)) {
-        if (e->id==P_HSCROLL) scx=e->index; else scy=e->index; layout(); return;
+        int ox=scx,oy=scy;
+        if (e->id==P_HSCROLL) scx=e->index; else scy=e->index;
+        scroll_canvas(ox,oy);
+        partial_layout=1; layout(); partial_layout=0; return;
     }
     if (e->type==DU_EV_KEY) { editor_key(e); return; }
     if (e->type==DU_EV_TICK && e->id==T_AIR && drag && tool==T_AIR && drag_mode==DM_FREE) { spray(lx,ly,c1); flush(); return; }
@@ -2227,17 +2267,32 @@ static void event(struct du_ui *u, const struct du_event *e, void *arg)
     if (e->index==DU_POINTER_CANCEL) { cancel_pointer(); return; }
     int btn=(int)e->key;
     if (e->id>=P_TOOL && e->id<P_TOOL+NTOOLS) {
-        tool_hot=e->id-P_TOOL;
+        int next=du_contains(du_get(u,e->id)->box,e->x,e->y) ? e->id-P_TOOL : -1;
+        if (next!=tool_hot) {
+            if (tool_hot>=0) du_invalidate_widget(u,P_TOOL+tool_hot);
+            tool_hot=next; if (next>=0) du_invalidate_widget(u,P_TOOL+next);
+        }
         if (e->index==DU_POINTER_DOWN) { select_tool(e->id-P_TOOL); layout(); }
         return;
     }
-    tool_hot=-1;
+    if (tool_hot>=0) { du_invalidate_widget(u,P_TOOL+tool_hot); tool_hot=-1; }
     if (e->index==DU_POINTER_DOWN && e->id>=P_SWATCH && e->id<P_SWATCH+NSWATCH) {
         if (btn==1) fg=swatch[e->id-P_SWATCH]; else if (btn==2) bg=swatch[e->id-P_SWATCH];
         if (floating && !opaque) float_render(); if (text_on) text_render(); layout(); return;
     }
     if (e->id==P_OPTIONS) { if (e->index==DU_POINTER_DOWN) { option_click(e->x,e->y); layout(); } return; }
     if (e->id!=P_CANVAS) return;
+    int old_x=ptr_x,old_y=ptr_y;
+    if (e->index==DU_POINTER_MOVE && u->capture<0 && !du_contains(du_get(u,P_CANVAS)->box,e->x,e->y)) {
+        /* Erase the departing preview while retaining the last image
+         * coordinates in the status panel, as before update regions. */
+        if (ptr_x>=0 && (tool==T_BRUSH || tool==T_ERASER || tool==T_AIR)) {
+            int radius=(tool==T_AIR ? 6+air_size*4 : 12)*zoom;
+            du_invalidate(u,du_intersection((struct du_rect){vx,vy,vw,vh},(struct du_rect){
+                vx+4+(ptr_x-scx)*zoom-radius,vy+4+(ptr_y-scy)*zoom-radius,2*radius+zoom,2*radius+zoom}));
+        }
+        return;
+    }
     int x,y; to_img(e->x,e->y,&x,&y);
     /* Capture can extend beyond the client; bounded coordinates keep all
      * drawing arithmetic inside the supported image domain. */
@@ -2260,12 +2315,21 @@ static void event(struct du_ui *u, const struct du_event *e, void *arg)
         if (e->index==DU_POINTER_UP) text_drag=0;
     } else if (e->index==DU_POINTER_MOVE) { if (drag) tool_move(x,y); }
     else if (e->index==DU_POINTER_UP && drag==btn) { tool_up(x,y); du_timer_stop(u,T_AIR); }
-    layout();
+    /* Freehand strokes already carry exact image damage. Selection/text
+     * overlays have their own retained preview bounds. */
+    if (tool==T_SELECT || text_drag || text_on) du_invalidate(u,(struct du_rect){vx,vy,vw,vh});
+    if (tool==T_BRUSH || tool==T_ERASER || tool==T_AIR) {
+        int radius=(tool==T_AIR ? 6+air_size*4 : 12)*zoom;
+        if (old_x>=0) du_invalidate(u,(struct du_rect){vx+4+(old_x-scx)*zoom-radius,vy+4+(old_y-scy)*zoom-radius,2*radius+zoom,2*radius+zoom});
+        if (ptr_x>=0) du_invalidate(u,(struct du_rect){vx+4+(ptr_x-scx)*zoom-radius,vy+4+(ptr_y-scy)*zoom-radius,2*radius+zoom,2*radius+zoom});
+    }
+    partial_layout=1; layout(); partial_layout=0;
 }
 int paint_attach(struct du_ui *u)
 {
     if (ui) return -EBUSY;
     if (!u || u->count) return -EINVAL;
+    partial_layout=0; dx0=dy0=0; dx1=dy1=-1;
     ui=u; quit_cb=NULL; title_cb=NULL; callback_host=NULL;
     fg=BLACK; bg=WHITE; tool=prev_tool=T_PENCIL; tool_hot=-1; zoom=1;
     line_w=pen_size=1; fill_style=0; brush_kind=PEN_ROUND; brush_size=eraser_size=air_size=1;
@@ -2297,21 +2361,47 @@ void paint_callbacks(void (*quit)(void *), void (*title)(void *, const char *), 
 void paint_detach(void)
 {
     if (!ui) return;
+    open_finish();
     cancel_pointer(); du_dialog_close(ui); du_menu_close(ui);
     img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); img_free(&selection_mask); du_ta_free(&text_edit);
     ui->event=NULL; ui->paint=NULL; ui->layout=NULL; ui->menus=NULL; ui->menu_count=ui->count=0;
     ui=NULL; quit_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
 }
+static int install_image(const char *p, struct paint_image next)
+{
+    finish_pending(); drop_selection(); drop_undo(); pool_free(); img_free(&cv);
+    image_revision++; cv=next; snprintf(path,sizeof(path),"%s",p); dirty=0; scx=scy=0;
+    const char *ext=strrchr(p,'.'); save_format=ext && (!strcmp(ext,".png") || !strcmp(ext,".PNG"))?PAINT_PNG:PAINT_BMP8;
+    update_title(); layout(); return 0;
+}
+static struct { struct du_job job; struct paint_image image; char path[PAINT_PATH_MAX]; uint8_t palette[PAINT_COLORS*3]; int error; uint64_t revision; } opening;
+static void read_image(void *unused)
+{ (void)unused; opening.error=paint_read_image(opening.path,opening.palette,&opening.image); }
+int paint_open_begin(const char *p)
+{
+    if (opening.job.started) return -EBUSY;
+    if (strlen(p)>=sizeof(opening.path)) return -ENAMETOOLONG;
+    opening.revision=image_revision;
+    strcpy(opening.path,p); memcpy(opening.palette,pal,sizeof(opening.palette)); opening.image=(struct paint_image){0};
+    return du_job_start(&opening.job,read_image,NULL);
+}
+int paint_open_poll(void)
+{
+    if (!du_job_ready(&opening.job)) return 0;
+    du_job_finish(&opening.job);
+    if (opening.error) return opening.error;
+    if (opening.revision!=image_revision) { img_free(&opening.image); return -EBUSY; }
+    struct paint_image image=opening.image; opening.image=(struct paint_image){0};
+    install_image(opening.path,image); return 1;
+}
 int paint_open(const char *p)
 {
     if (strlen(p)>=sizeof(path)) return -ENAMETOOLONG;
     struct paint_image next={0}; int r=paint_read_image(p,pal,&next);
-    if (r) return r;
-    finish_pending(); drop_selection(); drop_undo(); pool_free(); img_free(&cv);
-    cv=next; snprintf(path,sizeof(path),"%s",p); dirty=0; scx=scy=0;
-    const char *ext=strrchr(p,'.'); save_format=ext && (!strcmp(ext,".png") || !strcmp(ext,".PNG"))?PAINT_PNG:PAINT_BMP8;
-    update_title(); layout(); return 0;
+    return r ? r : install_image(p,next);
 }
+static void open_finish(void)
+{ du_job_finish(&opening.job); img_free(&opening.image); }
 int paint_save(const char *p, enum paint_format format)
 {
     if (strlen(p)>=sizeof(path)) return -ENAMETOOLONG;

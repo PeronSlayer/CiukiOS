@@ -65,7 +65,7 @@ static void failure(struct cn_app *a, const char *what, const char *name, int er
 static const char *document_name(const struct cn_app *a) { return a->named ? cn_basename(a->path) : "Untitled"; }
 static const char *text_of(struct cn_app *a, int id) { return W(a, id)->text; }
 static void select_all_text(struct cn_app *a, int id)
-{ struct du_widget *w = W(a, id); w->anchor = 0; w->cursor = strlen(w->text); w->offset = 0; a->ui->dirty = 1; }
+{ struct du_widget *w = W(a, id); w->anchor = 0; w->cursor = strlen(w->text); w->offset=0; du_invalidate(a->ui,w->box); }
 
 uint32_t cn_digest(const struct du_ui *ui)
 {
@@ -107,11 +107,24 @@ static void set_flag(struct du_menu_item *item, unsigned flag, int on) { if (on)
 
 void cn_refresh(struct cn_app *a)
 {
+    if (a->ui_revision!=a->ta.revision) du_invalidate_widget(a->ui,W_TEXT);
+    else if ((a->ui_cursor!=a->ui_anchor || a->ta.cursor!=a->ta.anchor) && (a->ui_cursor!=a->ta.cursor || a->ui_anchor!=a->ta.anchor)) {
+        unsigned first=du_ta_visual_line_of(&a->ta,a->ui_cursor,NULL),last=first;
+        size_t ends[]={a->ui_anchor,a->ta.cursor,a->ta.anchor};
+        for (unsigned i=0;i<3;i++) { unsigned line=du_ta_visual_line_of(&a->ta,ends[i],NULL);if(line<first)first=line;if(line>last)last=line; }
+        struct du_rect box=W(a,W_TEXT)->box;
+        du_invalidate(a->ui,du_intersection(box,(struct du_rect){box.x,box.y+4+((int)first-(int)a->ta.top-1)*DU_TA_CELL_H,box.w,((int)last-(int)first+3)*DU_TA_CELL_H}));
+    }
+    else if (a->ui_cursor!=a->ta.cursor) {
+        du_invalidate(a->ui,a->ui_caret); du_invalidate(a->ui,du_ta_caret(&a->ta,W(a,W_TEXT)->box));
+    }
+    a->ui_revision=a->ta.revision; a->ui_cursor=a->ta.cursor; a->ui_anchor=a->ta.anchor;
+    a->ui_caret=du_ta_caret(&a->ta,W(a,W_TEXT)->box);
     unsigned line, col; char text[160];
     du_ta_line_col(&a->ta, a->ta.cursor, &line, &col);
     snprintf(text, sizeof(text), "%s%s%s%s\tLn %u, Col %u", document_name(a), a->ta.modified ? " *" : "",
              a->note[0] ? "   " : "", a->note, line, col);
-    du_set_text(W(a, W_STATUS), text);
+    if (strcmp(W(a,W_STATUS)->text,text)) { du_set_text(W(a,W_STATUS),text); du_invalidate_widget(a->ui,W_STATUS); }
     int selection = du_ta_has_selection(&a->ta);
     set_flag(&a->edit_items[E_UNDO], DU_ITEM_DISABLED, !du_ta_can_undo(&a->ta));
     set_flag(&a->edit_items[E_CUT], DU_ITEM_DISABLED, !selection);
@@ -126,7 +139,7 @@ void cn_refresh(struct cn_app *a)
     set_flag(&a->popup[2], DU_ITEM_DISABLED, !selection);
     set_flag(&a->popup[3], DU_ITEM_DISABLED, !paste_available(a));
     set_flag(&a->popup[4], DU_ITEM_DISABLED, !selection);
-    a->ui->dirty = 1;
+
 }
 
 void cn_layout(struct cn_app *a)
@@ -166,16 +179,14 @@ static void new_document(struct cn_app *a)
 {
     du_ta_set_text(&a->ta, "", 0);
     a->path[0] = 0; a->named = 0; a->crlf = 1; a->note[0] = 0;
-    du_ta_reveal(&a->ta); cn_refresh(a);
+    du_ta_reveal(&a->ta); du_invalidate_widget(a->ui,W_TEXT); cn_refresh(a);
 }
 /* Reads and decodes a file into the editor. No UI on failure. */
-static int load_file(struct cn_app *a, const char *path)
+int cn_open_bytes(struct cn_app *a, const char *path, const char *raw, size_t n)
 {
-    size_t raw_cap = 2 * (size_t)CN_LIMIT + 1, n = 0, len = 0; int crlf = 1;
-    char *raw = malloc(raw_cap), *text = malloc((size_t)CN_LIMIT + 1);
-    int r = raw && text ? 0 : -ENOMEM;
-    if (!r) r = a->fs->load(a->fs->ctx, path, raw, raw_cap, &n);
-    if (!r) r = cn_decode(raw, n, text, CN_LIMIT, &len, &crlf);
+    size_t len=0; int crlf=1;
+    char *text=malloc((size_t)CN_LIMIT+1);
+    int r=text ? cn_decode(raw,n,text,CN_LIMIT,&len,&crlf) : -ENOMEM;
     if (!r) {
         du_ta_set_text(&a->ta, text, len);
         snprintf(a->path, sizeof(a->path), "%s", path); a->named = 1; a->crlf = crlf; a->note[0] = 0;
@@ -193,8 +204,16 @@ static int load_file(struct cn_app *a, const char *path)
         }
         du_ta_reveal(&a->ta);
     }
-    free(raw); free(text);
+    free(text);
+    if (!r) { du_invalidate_widget(a->ui,W_TEXT); cn_refresh(a); }
     return r;
+}
+static int load_file(struct cn_app *a, const char *path)
+{
+    size_t cap=2*(size_t)CN_LIMIT+1,n=0; char *raw=malloc(cap);
+    int r=raw ? a->fs->load(a->fs->ctx,path,raw,cap,&n) : -ENOMEM;
+    if (!r) r=cn_open_bytes(a,path,raw,n);
+    free(raw); return r;
 }
 static int save_file(struct cn_app *a, const char *path)
 {
@@ -545,7 +564,7 @@ void cn_event(struct du_ui *u, const struct du_event *e, void *ctx)
         break;
     default: return;
     }
-    cn_refresh(a);
+    du_invalidate_widget(u,W_TEXT); cn_refresh(a);
 }
 
 /* ---- lifecycle ---------------------------------------------------------- */

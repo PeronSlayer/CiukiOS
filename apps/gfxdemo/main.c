@@ -149,7 +149,7 @@ static void idle(void *ctx)
             if (a->page || r->scene_active || r->window.damaged) {
                 /* Explicit changed source bounds; no whole-window diff on animation. */
                 /* A toolkit repaint already published its source rows. */
-                if (a->page && !r->window.damaged) gfx_submit_scene(a,r->window.pixels,r->window.info.width);
+                if (a->page && dirty.w>0 && dirty.h>0) gfx_submit_scene(a,r->window.pixels,r->window.info.width);
                 struct ciuki_message m; desk_message(&m,DESK_GFX_FRAME,84);
                 uint32_t serial=r->serial+1; if (!serial) serial++;
                 desk_put32(m.data+4,serial);

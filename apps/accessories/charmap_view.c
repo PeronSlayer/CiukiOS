@@ -12,11 +12,12 @@ void charmap_select(struct charmap_app *a, int i)
 {
     if (i < 0) i = 0;
     if (i >= CHARMAP_COUNT) i = CHARMAP_COUNT - 1;
-    a->selected = i;
+    int old=a->selected; a->selected = i;
     char text[64]; int ch = CHARMAP_FIRST + i;
     snprintf(text, sizeof(text), "U+%04X   %s%c%s   decimal %d", ch, ch == ' ' ? "(space" : "'", ch == ' ' ? ')' : ch, ch == ' ' ? "" : "'", ch);
     du_set_text(du_get(a->ui, CM_STATUS), text);
-    a->ui->dirty = 1;
+    du_invalidate(a->ui,charmap_cell(old)); du_invalidate(a->ui,charmap_cell(i));
+    du_invalidate(a->ui,(struct du_rect){GRID_X+CHARMAP_COLS*CELL-64,GRID_Y+rows()*CELL+8,64,64}); du_invalidate_widget(a->ui,CM_STATUS);
 }
 void charmap_paint(struct du_ui *u, void *user)
 {
@@ -93,5 +94,5 @@ void charmap_event(struct du_ui *u, const struct du_event *e, void *user)
     }
     default: return;
     }
-    u->dirty = 1;
+    du_invalidate_widget(u,CM_FIELD);
 }

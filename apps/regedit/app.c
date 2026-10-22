@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "regedit.h"
+#include "../libdeskui/job.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +57,7 @@ static void menu_state(struct re_app *a)
     a->edit_menu[5].flags |= a->value_count ? 0 : DU_ITEM_DISABLED;
     if (a->selected < a->count && !a->nodes[a->selected].depth && du_focused(a->ui) != RE_VALUES)
         a->edit_menu[6].flags |= DU_ITEM_DISABLED;
-    a->ui->dirty = 1;
+    du_invalidate(a->ui,(struct du_rect){0,0,a->ui->canvas.width,20});
 }
 static int show_values(struct re_app *a)
 {
@@ -98,10 +99,10 @@ static int show_tree(struct re_app *a)
         const char *name = strrchr(a->nodes[i].path, '\\'); name = name ? name + 1 : a->nodes[i].path;
         a->tree_rows[j] = (struct du_item){.text = {name}, .depth = (uint8_t)a->nodes[i].depth,
             .expanded = (uint8_t)a->nodes[i].expanded, .children = (uint8_t)a->nodes[i].children, .selected = (uint8_t)(i == a->selected)};
-        a->tree_rows[j].icon16 = du_icon_argb(a->nodes[i].depth ? "folder" : "applications-system", 16);
+        if (!a->defer_icons) a->tree_rows[j].icon16 = du_icon_argb(a->nodes[i].depth ? "folder" : "applications-system", 16);
         if (i == a->selected) w->active = j;
     }
-    w->items = a->tree_rows; w->count = a->visible_count; du_list_ensure(w, w->active); a->ui->dirty = 1; return 0;
+    w->items = a->tree_rows; w->count = a->visible_count; du_list_ensure(w, w->active); du_invalidate_widget(a->ui,RE_TREE); return 0;
 }
 int re_select(struct re_app *a, const char *path)
 {
@@ -282,11 +283,11 @@ void re_event(struct du_ui *u, const struct du_event *e, void *user)
         if (du_dialog_id(u)) return;
         for (unsigned i = 0; i < 5; i++) if (a->roots[i]) {
             uint64_t g = reg_generation(a->roots[i]);
-            if (g != a->generations[i]) { if (re_refresh(a)) error(a, "Registry changed", errno); u->dirty=1; break; }
+            if (g != a->generations[i]) { if (re_refresh(a)) error(a, "Registry changed", errno); du_invalidate_widget(u,RE_TREE); du_invalidate_widget(u,RE_VALUES); break; }
         }
         return;
     }
-    u->dirty = 1;
+    du_invalidate_widget(u,RE_STATUS);
 }
 static void layout(struct du_ui *u, void *user)
 {
@@ -297,7 +298,7 @@ static void layout(struct du_ui *u, void *user)
     du_get(u, RE_STATUS)->box = (struct du_rect){0, h - 22, w, 22};
     du_get(u, RE_VALUES)->columns[2].width = w - left - 208;
 }
-int re_attach(struct re_app *a, struct du_ui *u, const char *directory)
+static int attach(struct re_app *a, struct du_ui *u, const char *directory, int scan)
 {
     a->ui = u; a->directory = directory; u->event = re_event; u->user = a; u->layout = layout;
     struct du_menu_item files[] = {{"&Import...", RE_IMPORT, 0, 0, 0}, {"&Export branch...", RE_EXPORT, 0, 0, 0}, {"&Refresh", RE_REFRESH, DU_KEY_F5, 0, 0}};
@@ -313,10 +314,57 @@ int re_attach(struct re_app *a, struct du_ui *u, const char *directory)
     struct du_widget *v = du_add(u, DU_LISTVIEW, RE_VALUES, (struct du_rect){0}, ""); v->view = DU_DETAILS; v->column_count = 3;
     v->columns[0] = (struct du_column){"Name", 120, 0}; v->columns[1] = (struct du_column){"Type", 80, 0}; v->columns[2].title = "Data";
     du_add(u, DU_STATUS, RE_STATUS, (struct du_rect){0}, ""); layout(u, a);
+    if (!scan) { du_set_text(du_get(u,RE_STATUS),"Loading registry..."); return 0; }
     int result = re_refresh(a); du_timer_start(u, RE_POLL, 2000000000ull, 1); return result;
+}
+struct re_startup { struct du_job job; struct re_app app; struct du_ui ui; int result; };
+int re_attach(struct re_app *a, struct du_ui *u, const char *directory)
+{ return attach(a,u,directory,1); }
+int re_attach_lazy(struct re_app *a, struct du_ui *u, const char *directory)
+{
+    int r=attach(a,u,directory,0); if (r) return r;
+    a->startup=calloc(1,sizeof(*a->startup));
+    if (!a->startup) return -ENOMEM;
+    a->startup->app.directory=directory;
+    a->startup->app.defer_icons=1; /* The process icon cache belongs to the UI thread. */
+    du_init(&a->startup->ui,NULL,u->canvas.width,u->canvas.height);
+    u->event=NULL; return 0;
+}
+static void startup_read(void *arg)
+{
+    struct re_startup *s=arg;
+    s->result=re_attach(&s->app,&s->ui,s->app.directory);
+}
+void re_startup_poll(struct re_app *a)
+{
+    struct re_startup *s=a->startup; if (!s) return;
+    struct du_ui *u=a->ui;
+    if (!s->job.started) {
+        if (u->dirty || !u->frame_count) return;
+        int r=du_job_start(&s->job,startup_read,s);
+        if (r) { free(s); a->startup=NULL; du_message(u,RE_ERROR,"Registry Editor","The registry worker could not start.",DU_DLG_ICON_ERROR,NULL,0,0,0); }
+        return;
+    }
+    if (!du_job_ready(&s->job)) return;
+    du_job_finish(&s->job);
+    *a=s->app; a->ui=u; a->startup=NULL; a->defer_icons=0;
+    for (unsigned j=0;j<a->visible_count;j++)
+        a->tree_rows[j].icon16=du_icon_argb(a->nodes[a->visible[j]].depth ? "folder" : "applications-system",16);
+    memcpy(u->widgets,s->ui.widgets,sizeof(u->widgets)); u->count=s->ui.count;
+    a->menus[0].items=a->file_menu; a->menus[1].items=a->edit_menu; a->menus[2].items=a->help_menu;
+    u->menus=a->menus; u->event=re_event; u->user=a; u->layout=layout;
+    layout(u,a); u->dirty=1;
+    du_timer_start(u,RE_POLL,2000000000ull,1);
+    if (s->result) error(a,"Read registry",EIO);
+    free(s);
 }
 void re_destroy(struct re_app *a)
 {
+    if (a->startup) {
+        struct re_startup *s=a->startup; du_job_finish(&s->job);
+        if (s->app.ui) re_destroy(&s->app);
+        free(s); a->startup=NULL;
+    }
     clear_pending(a); free_values(a); free_nodes(a);
     for (unsigned i = 0; i < 5; i++) { reg_close_root(a->roots[i]); a->roots[i] = NULL; }
     du_get(a->ui, RE_TREE)->items = NULL; du_get(a->ui, RE_VALUES)->items = NULL;

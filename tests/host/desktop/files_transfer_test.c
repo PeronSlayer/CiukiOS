@@ -210,7 +210,7 @@ static void capture_frames(const char *folder)
 {
     assert(!app.job_active);
     for(unsigned theme=0;theme<2;theme++) {
-        assert(!desk_theme_use(desk_theme_at(theme)->name));
+        assert(!du_theme_use(&ui,desk_theme_at(theme)->name));
         for(unsigned kind=FM_COPY;kind<=FM_PROPERTIES;kind++) {
             app.job.kind=(enum fm_job_kind)kind;
             pthread_mutex_lock(&app.transfer->lock);

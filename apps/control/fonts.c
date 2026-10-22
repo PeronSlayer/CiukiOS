@@ -1,15 +1,22 @@
 /* SPDX-License-Identifier: MIT
  * Read-only enumeration and preview of the installed trusted font store. */
 #include "control.h"
+#include "../libdeskui/job.h"
+#include <stdlib.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
+struct cp_font_job { struct du_job job; struct cp_app *result; };
 static const char *directory(struct cp_app *a) { return a->host.fonts_path ? a->host.fonts_path : "/System/fonts"; }
 void cp_fonts_close(struct cp_app *a)
 {
+    if (a->font_job) {
+        du_job_finish(&a->font_job->job);
+        ciuki_font_close(a->font_job->result->font_face); free(a->font_job->result); free(a->font_job); a->font_job=NULL;
+    }
     ciuki_font_close(a->font_face); a->font_face = NULL;
     a->font_count = 0; a->fonts_loaded = 0;
 }
@@ -66,23 +73,52 @@ static void enumerate(struct cp_app *a)
 }
 void cp_fonts_build(struct cp_app *a)
 {
-    if (!a->fonts_loaded) enumerate(a);
+    if (!a->fonts_loaded) {
+        if (a->host.fonts_async) { a->fonts_loaded=-1; strcpy(a->font_status,"Loading installed fonts..."); }
+        else enumerate(a);
+    }
     struct du_widget *w = du_add(a->ui, DU_LISTVIEW, CP_FONT_LIST, (struct du_rect){24, 164, CP_WIDTH - 48, 66}, "");
     w->items = a->font_items; w->count = a->font_count; w->view = DU_DETAILS; w->active = (int)a->font_selected;
     w->inactive_selection = 1; w->column_count = 3; w->anchors = DU_ANCHOR_GROW_X;
     w->columns[0] = (struct du_column){"Family", 132, 0}; w->columns[1] = (struct du_column){"Style", 90, 0};
     w->columns[2] = (struct du_column){"File", 268, 0};
 }
+static void read_fonts(void *arg) { enumerate(((struct cp_font_job *)arg)->result); }
+void cp_fonts_poll(struct cp_app *a)
+{
+    if (a->fonts_loaded!=-1) return;
+    if (!a->font_job) {
+        struct cp_font_job *j=calloc(1,sizeof(*j));
+        if (j) j->result=calloc(1,sizeof(*j->result));
+        if (!j || !j->result) { free(j); a->fonts_loaded=1; strcpy(a->font_status,"Font list unavailable: not enough memory."); return; }
+        j->result->host.fonts_path=a->host.fonts_path;
+        if (du_job_start(&j->job,read_fonts,j)) { free(j->result); free(j); a->fonts_loaded=1; strcpy(a->font_status,"Font worker unavailable."); return; }
+        a->font_job=j; return;
+    }
+    struct cp_font_job *j=a->font_job;
+    if (!du_job_ready(&j->job)) return;
+    du_job_finish(&j->job);
+    memcpy(a->fonts,j->result->fonts,sizeof(a->fonts)); a->font_count=j->result->font_count;
+    a->font_face=j->result->font_face; a->font_selected=0; a->fonts_loaded=1;
+    strcpy(a->font_status,j->result->font_status);
+    for (unsigned i=0;i<a->font_count;i++) a->font_items[i]=(struct du_item){.text={a->fonts[i].family,a->fonts[i].style,a->fonts[i].file}};
+    struct du_widget *w=du_get(a->ui,CP_FONT_LIST);
+    if (w) { w->items=a->font_items; w->count=a->font_count; du_invalidate(a->ui,w->box); }
+    if (a->page==CP_DISPLAY && a->display_tab==CP_APPEARANCE) du_invalidate(a->ui,(struct du_rect){24,236,a->ui->canvas.width-48,114});
+    free(j->result); free(j); a->font_job=NULL;
+}
 int cp_fonts_event(struct cp_app *a, const struct du_event *e)
 {
     if ((a->page != CP_DISPLAY || a->display_tab != CP_APPEARANCE) || e->id != CP_FONT_LIST) return 0;
     if ((e->type == DU_EV_SELECT || e->type == DU_EV_OPEN) && e->index >= 0 && (unsigned)e->index < a->font_count) {
-        select_face(a, (unsigned)e->index); a->ui->dirty = 1;
+        select_face(a,(unsigned)e->index); du_invalidate_widget(a->ui,CP_FONT_LIST); du_invalidate(a->ui,(struct du_rect){24,236,a->ui->canvas.width-48,114});
     }
     return 1;
 }
 void cp_fonts_paint(struct cp_app *a, struct du_canvas *c)
 {
+    struct du_rect visible=du_intersection(c->clip,(struct du_rect){24,236,c->width-48,114});
+    if (visible.w<=0 || visible.h<=0) return;
     static const char sample[] = "Classic computing, one woof at a time.";
     du_text_fit(c, 24, 236, c->width - 48, a->font_status, DU_INK);
     struct du_rect box = {24, 258, c->width - 48, 92};

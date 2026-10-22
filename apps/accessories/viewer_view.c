@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Image Viewer window on libdeskui: toolbar, painted image area, status bar. */
 #include "viewer.h"
+#include "../libdeskui/job.h"
 #include "../libdeskui/recent.h"
 #include <errno.h>
 #include <stdio.h>
@@ -66,11 +67,15 @@ static void status(struct viewer_app *a)
         snprintf(text, sizeof(text), "%.80s   %d x %d %s   %d%%%s   %d of %u", acc_basename(a->path), a->image.width, a->image.height,
                  a->image.format, effective_zoom(a), a->zoom ? "" : " (fit)", a->index + 1, a->count);
     else snprintf(text, sizeof(text), "%s", a->error[0] ? a->error : "Open an image with File > Open, or from Files.");
-    du_set_text(du_get(a->ui, V_STATUS), text);
+    struct du_widget *status_widget=du_get(a->ui,V_STATUS);
+    if (strcmp(status_widget->text,text)) { du_set_text(status_widget,text); du_invalidate(a->ui,status_widget->box); }
     int many = a->count > 1;
-    du_get(a->ui, V_PREV)->disabled = du_get(a->ui, V_NEXT)->disabled = (uint8_t)!many;
+    int ids[]={V_PREV,V_NEXT};
+    for (unsigned i=0;i<2;i++) {
+        struct du_widget *w=du_get(a->ui,ids[i]);
+        if (w->disabled!=!many) { w->disabled=(uint8_t)!many;du_invalidate(a->ui,w->box); }
+    }
     a->file_items[1].flags = a->file_items[2].flags = many ? 0 : DU_ITEM_DISABLED;
-    a->ui->dirty = 1;
 }
 void viewer_layout(struct viewer_app *a)
 {
@@ -105,9 +110,36 @@ static void scan_folder(struct viewer_app *a)
     for (unsigned i = 0; i < a->count; i++) if (!strcmp(a->names[i], base)) a->index = (int)i;
 }
 
+struct viewer_load { struct du_job job; struct viewer_app result; char path[VIEWER_PATH]; int error; };
+static void load_image(void *arg)
+{
+    struct viewer_load *l=arg;
+    l->error=viewer_open(&l->result,l->path);
+}
+void viewer_poll(struct viewer_app *a)
+{
+    struct viewer_load *l=a->loading;
+    if (!l || !du_job_ready(&l->job)) return;
+    du_job_finish(&l->job);
+    viewer_free(&a->image); a->image=l->result.image;
+    a->loaded=l->result.loaded; a->zoom=0; a->scroll_x=a->scroll_y=0;
+    strcpy(a->path,l->result.path); strcpy(a->folder,l->result.folder); strcpy(a->error,l->result.error);
+    memcpy(a->names,l->result.names,sizeof(a->names)); a->count=l->result.count; a->index=l->result.index;
+    free(l->result.entries); free(l); a->loading=NULL;
+    du_invalidate(a->ui,viewer_area(a)); status(a);
+}
+
 int viewer_open(struct viewer_app *a, const char *path)
 {
     if (!path || strlen(path) >= sizeof(a->path)) return -ENAMETOOLONG;
+    if (a->asynchronous) {
+        if (a->loading) return -EBUSY;
+        struct viewer_load *l=calloc(1,sizeof(*l)); if (!l) return -ENOMEM;
+        l->result.fs=a->fs; strcpy(l->path,path);
+        int error=du_job_start(&l->job,load_image,l);
+        if (error) { free(l); return error; }
+        a->loading=l; return 0;
+    }
     uint8_t *data = NULL; size_t size = 0;
     int err = a->fs->read(a->fs->ctx, path, &data, &size, VIEWER_MAX_FILE);
     struct viewer_image image;
@@ -128,7 +160,7 @@ int viewer_open(struct viewer_app *a, const char *path)
                  err == -EINVAL ? "not a supported image (PNG, JPEG, BMP, GIF)" : err == -EFBIG ? "the image is too large" :
                  err == -ENOMEM ? "not enough memory" : err == -ENOENT ? "the file was not found" : "the file could not be read");
     } else { a->image = image; a->loaded = 1; a->error[0] = 0; du_recent_add(path); }
-    status(a);
+    if (a->ui) { du_invalidate(a->ui,viewer_area(a)); status(a); }
     return err;
 }
 
@@ -150,7 +182,7 @@ static void zoom(struct viewer_app *a, int z)
     a->zoom = z;
     int nz = effective_zoom(a);
     a->scroll_x = cx - (int)((int64_t)r.w * 50 / nz); a->scroll_y = cy - (int)((int64_t)r.h * 50 / nz);
-    clamp_scroll(a); status(a);
+    clamp_scroll(a); du_invalidate(a->ui,viewer_area(a)); status(a);
 }
 
 void viewer_paint(struct du_ui *u, void *user)
@@ -159,7 +191,8 @@ void viewer_paint(struct du_ui *u, void *user)
     struct du_rect area = viewer_area(a), frame = {area.x - 2, area.y - 2, area.w + 4, area.h + 4};
     du_edge(c, frame, DU_SUNKEN);
     du_fill(c, area, AREA_BG);
-    c->clip = area;
+    struct du_rect saved=c->clip;
+    c->clip = du_intersection(saved,area);
     if (a->loaded) viewer_blit(c, area, &a->image, effective_zoom(a), a->scroll_x, a->scroll_y);
     else {
         const char *line1 = a->error[0] ? "The image cannot be shown." : "CiukiOS Image Viewer";
@@ -167,7 +200,7 @@ void viewer_paint(struct du_ui *u, void *user)
         du_text(c, area.x + (area.w - du_text_width(line1)) / 2, area.y + area.h / 2 - 12, line1, 0xffffffu);
         du_text(c, area.x + (area.w - du_text_width(line2)) / 2, area.y + area.h / 2 + 4, line2, 0xdbe5e7u);
     }
-    c->clip = (struct du_rect){0, 0, c->width, c->height};
+    c->clip = saved;
 }
 
 static const struct du_menu_item file_template[] = {
@@ -197,12 +230,19 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     u->focus = -1;
     return 0;
 }
-void viewer_detach(struct viewer_app *a) { viewer_free(&a->image); free(a->entries); a->entries = NULL; }
+void viewer_detach(struct viewer_app *a) {
+    if (a->loading) {
+        du_job_finish(&a->loading->job); viewer_free(&a->loading->result.image);
+        free(a->loading->result.entries); free(a->loading); a->loading=NULL;
+    }
+    viewer_free(&a->image); free(a->entries); a->entries = NULL;
+}
 
 void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct viewer_app *a = user;
     int id = e->id;
+    int old_x=a->scroll_x,old_y=a->scroll_y;
     switch (e->type) {
     case DU_EV_DIALOG:
         if (id == V_D_OPEN && !e->index && e->text && e->text[0]) viewer_open(a, e->text);
@@ -245,5 +285,11 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
     }
     default: return;
     }
-    u->dirty = 1;
+    if (old_x!=a->scroll_x || old_y!=a->scroll_y) {
+        int z=effective_zoom(a);
+        int dx=(int)((int64_t)old_x*z/100)-(int)((int64_t)a->scroll_x*z/100);
+        int dy=(int)((int64_t)old_y*z/100)-(int)((int64_t)a->scroll_y*z/100);
+        du_scroll(u,viewer_area(a),dx,dy);
+    }
+    status(a);
 }

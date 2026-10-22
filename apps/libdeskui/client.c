@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Desktop protocol v2.1 client glue: handshake, surface, back buffer,
  * coalesced damage, close requests, focus releases and the event loop. */
-#include "deskui.h"
+#include "internal.h"
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
 #include <sys/mman.h>
@@ -118,6 +118,7 @@ static int replacement(struct du_window *w)
     if (!back) { errno = ENOMEM; goto fail; }
     w->old_surface = w->surface; w->old_info = w->info; w->old_pixels = w->pixels; w->old_back = w->back;
     w->surface = fd; w->info = info; w->pixels = pixels; w->back = back;
+    w->damage_count=0;
     w->replacement = 1; w->configure_serial = w->request_serial; w->request_serial = 0; w->damaged = 0;
     du_resize(w->ui,back,(int)info.width,(int)info.height);
     return 0;
@@ -129,6 +130,8 @@ fail: {
 
 static void add_damage(struct du_window *w, struct du_rect r)
 {
+    if (!w->damaged) w->damage_count=0;
+    du_region_add(w->damages,&w->damage_count,r);
     if (!w->damaged) { w->damage = r; w->damaged = 1; return; }
     int x = w->damage.x < r.x ? w->damage.x : r.x, y = w->damage.y < r.y ? w->damage.y : r.y;
     int right = w->damage.x + w->damage.w > r.x + r.w ? w->damage.x + w->damage.w : r.x + r.w;
@@ -142,26 +145,29 @@ void du_window_present(struct du_window *w)
 {
     if (w->closed || w->swap_sent || w->present_pending) return;
     int width = (int)w->info.width, height = (int)w->info.height;
-    int x0 = width, x1 = -1, y0 = height, y1 = -1;
-    int left = 0, right = width, top = 0, bottom = height;
-    if (w->present_rendered && !w->replacement) {
-        struct du_rect r = du_intersection(w->ui->rendered, (struct du_rect){0, 0, width, height});
-        left = r.x; right = r.x + r.w; top = r.y; bottom = r.y + r.h;
+    unsigned regions=w->present_rendered && !w->replacement ? w->ui->frame_count : 1;
+    for (unsigned n=0;n<regions;n++) {
+        struct du_rect r=w->present_rendered && !w->replacement ? w->ui->frames[n] : (struct du_rect){0,0,width,height};
+        r=du_intersection(r,(struct du_rect){0,0,width,height});
+        int left=r.x, right=r.x+r.w, top=r.y, bottom=r.y+r.h;
+        int x0=width, x1=-1, y0=height, y1=-1;
+        for (int y=top;y<bottom && left<right;y++) {
+            uint32_t *src=w->back+(size_t)y*width, *dst=w->pixels+(size_t)y*width;
+            if (!memcmp(src+left,dst+left,(size_t)(right-left)*4)) continue;
+            int a=left,b=right-1;
+            while (src[a]==dst[a]) a++;
+            while (src[b]==dst[b]) b--;
+            memcpy(dst+a,src+a,(size_t)(b-a+1)*4);
+            if (a<x0) x0=a;
+            if (b>x1) x1=b;
+            if (y<y0) y0=y;
+            y1=y;
+        }
+        if (x1>=0) add_damage(w,(struct du_rect){x0,y0,x1-x0+1,y1-y0+1});
     }
-    for (int y = top; y < bottom && left < right; y++) {
-        uint32_t *src = w->back + (size_t)y * (size_t)width, *dst = w->pixels + (size_t)y * (size_t)width;
-        if (!memcmp(src + left, dst + left, (size_t)(right - left) * 4)) continue;
-        int a = left, b = right - 1;
-        while (src[a] == dst[a]) a++;
-        while (src[b] == dst[b]) b--;
-        memcpy(dst + a, src + a, (size_t)(b - a + 1) * 4);
-        if (a < x0) x0 = a;
-        if (b > x1) x1 = b;
-        if (y < y0) y0 = y;
-        y1 = y;
+    if (w->replacement) {
+        w->damage_count=0; w->damaged=0; add_damage(w,(struct du_rect){0,0,width,height});
     }
-    if (x1 >= 0) add_damage(w, (struct du_rect){x0, y0, x1 - x0 + 1, y1 - y0 + 1});
-    if (w->replacement) { w->damage = (struct du_rect){0,0,width,height}; w->damaged = 1; }
 }
 
 int du_window_queue(struct du_window *w, struct ciuki_message *m) { return queue(w, m); }
@@ -264,11 +270,14 @@ int du_window_turn(struct du_window *w, uint64_t now)
     }
     /* ui-look: follow the shell's theme setting (read at once, then a stat every 2 s). */
     if (desk_theme_poll(DESK_SETTINGS_PATH, now)) w->ui->dirty = 1;
-    if (w->configured && !w->swap_sent && !w->present_pending && w->ui->dirty) { du_render(w->ui); du_window_present(w); }
-    if (w->configured && w->damaged && w->count < 16 && !w->manual_damage) {
+    if (w->configured && !w->swap_sent && !w->present_pending && w->ui->dirty) { du_render(w->ui);
+        int mode=w->present_rendered; w->present_rendered=1;
+        du_window_present(w); w->present_rendered=mode; }
+    while (w->configured && w->damaged && w->count < 16 && !w->manual_damage) {
         struct ciuki_message m; desk_message(&m, DESK_DAMAGE, 24);
-        desk_put32(m.data + 4, (uint32_t)w->damage.x); desk_put32(m.data + 8, (uint32_t)w->damage.y);
-        desk_put32(m.data + 12, (uint32_t)w->damage.w); desk_put32(m.data + 16, (uint32_t)w->damage.h);
+        struct du_rect damage=w->replacement || !w->damage_count ? w->damage : w->damages[0];
+        desk_put32(m.data + 4, (uint32_t)damage.x); desk_put32(m.data + 8, (uint32_t)damage.y);
+        desk_put32(m.data + 12, (uint32_t)damage.w); desk_put32(m.data + 16, (uint32_t)damage.h);
         if (w->replacement) {
             desk_put32(m.data + 20,w->configure_serial); m.fd_count = 1; m.fds[0] = w->surface;
             /* Send swaps directly after the FIFO drains: an EAGAIN surface
@@ -276,10 +285,17 @@ int du_window_turn(struct du_window *w, uint64_t now)
             if (flush(w)) return -1;
             if (!w->count) {
                 m.data[0] = DESK_SHELL_VERSION; m.data[2] = DESK_RESIZE_MINOR;
-                if (!ciuki_channel_send(w->channel,&m,DONTWAIT)) { w->swap_sent = 1; w->damaged = 0; }
+                if (!ciuki_channel_send(w->channel,&m,DONTWAIT)) { w->swap_sent = 1; w->damaged = 0; w->damage_count=0; }
                 else if (errno != EAGAIN && errno != EINTR) { w->error = errno; w->closed = 1; return -1; }
             }
-        } else if (!queue(w, &m)) w->damaged = 0;
+            break; /* The pending swap (including EAGAIN) is retried next turn. */
+        } else if (!queue(w, &m)) {
+            if (w->damage_count) {
+                w->damage_count--;
+                memmove(w->damages,w->damages+1,w->damage_count*sizeof(*w->damages));
+            }
+            w->damaged=w->damage_count!=0;
+        } else break;
     }
     return flush(w) ? -1 : 1;
 protocol_error:
@@ -292,7 +308,8 @@ int du_run(struct du_window *w, void (*idle)(void *), void *arg)
     uint64_t started = du_now();
     while ((r = du_window_turn(w, du_now())) > 0) {
         if (idle) idle(arg);
-        /* No poll/select in the F2 ABI: nonblocking turns plus a short sleep. */
+        /* Keep asynchronous completion callbacks responsive. A blocking
+         * channel/deadline wait needs a matching callback wake contract. */
         uint64_t now = du_now(), next = du_next_deadline(w->ui), wait = 10000000u;
         if (!w->configured && now >= started && now - started < 5000000000ull) wait = 1000000u;
         if (next > now && next - now < wait) wait = next - now;

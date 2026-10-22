@@ -71,6 +71,17 @@ static struct layout compute(const struct du_widget *w)
 
 struct du_rect du_list_body(const struct du_widget *w) { return compute(w).area; }
 
+void du_list_scrolled(struct du_ui *u, struct du_widget *w, int old_v, int old_h)
+{
+    struct layout l=compute(w);
+    int dy=(old_v-w->scroll)*(w->view==DU_ICONS && w->kind!=DU_TREE ? CELL_H : DU_ROW);
+    int dx=(old_h-w->hscroll)*l.colw;
+    if (!dx && !dy) return;
+    du_scroll(u,l.area,dx,dy);
+    if (l.has_v) du_invalidate(u,l.v.box);
+    if (l.has_h) du_invalidate(u,l.h.box);
+}
+
 int du_list_wheel(struct du_widget *w, int detents)
 {
     struct layout l=compute(w);
@@ -445,17 +456,18 @@ int du_list_key(struct du_ui *u, struct du_widget *w, unsigned code)
 int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y)
 {
     struct layout l = compute(w);
+    int old_v=w->scroll,old_h=w->hscroll;
     if (button == 1 && l.has_v && du_contains(l.v.box, x, y)) {
         l.v.value = w->scroll; int part = du_sb_part(&l.v, x, y);
         w->drag = 10 + part;
         if (part == 3) w->drag_offset = du_sb_grab(&l.v, x, y); else w->scroll = du_sb_apply(&l.v, part);
-        u->dirty = 1; return 1;
+        du_list_scrolled(u,w,old_v,old_h); du_invalidate(u,l.has_v && w->drag<20 ? l.v.box : l.h.box); return 1;
     }
     if (button == 1 && l.has_h && du_contains(l.h.box, x, y)) {
         l.h.value = w->hscroll; int part = du_sb_part(&l.h, x, y);
         w->drag = 20 + part;
         if (part == 3) w->drag_offset = du_sb_grab(&l.h, x, y); else w->hscroll = du_sb_apply(&l.h, part);
-        u->dirty = 1; return 1;
+        du_list_scrolled(u,w,old_v,old_h); du_invalidate(u,l.has_v && w->drag<20 ? l.v.box : l.h.box); return 1;
     }
     if (w->kind == DU_LISTVIEW && w->view == DU_DETAILS && du_contains(l.header, x, y)) {
         int at = l.header.x;
@@ -495,18 +507,22 @@ int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y
 void du_list_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 {
     struct layout l = compute(w);
+    int old_v=w->scroll,old_h=w->hscroll;
     if (w->drag==50 && (abs(x-w->file_drag_x)>4 || abs(y-w->file_drag_y)>4)) { w->drag=51; u->last_click_widget=-1; }
-    if (w->drag == 13 && l.has_v) { l.v.value = w->scroll; w->scroll = du_sb_drag(&l.v, x, y, w->drag_offset); u->dirty = 1; }
-    else if (w->drag == 23 && l.has_h) { l.h.value = w->hscroll; w->hscroll = du_sb_drag(&l.h, x, y, w->drag_offset); u->dirty = 1; }
+    if (w->drag == 13 && l.has_v) { l.v.value = w->scroll; w->scroll = du_sb_drag(&l.v, x, y, w->drag_offset); du_list_scrolled(u,w,old_v,old_h); }
+    else if (w->drag == 23 && l.has_h) { l.h.value = w->hscroll; w->hscroll = du_sb_drag(&l.h, x, y, w->drag_offset); du_list_scrolled(u,w,old_v,old_h); }
     else if (w->drag >= 30 && w->drag < 30 + DU_COLUMNS) {
         int width = x - w->drag_offset;
         w->columns[w->drag - 30].width = width < 24 ? 24 : width > 600 ? 600 : width;
-        u->dirty = 1;
+        du_invalidate(u,w->box);
     }
 }
 
 void du_list_release(struct du_ui *u, struct du_widget *w)
 {
-    int drag=w->drag; w->drag=0; u->dirty=1;
+    int drag=w->drag; w->drag=0;
+    struct layout l=compute(w);
+    if (drag>=10 && drag<=13) du_invalidate(u,l.v.box);
+    else if (drag>=20 && drag<=23) du_invalidate(u,l.h.box);
     if (drag==51 && w->file_drag) du_emit(u,(struct du_event){.type=DU_EV_DRAG,.id=w->id,.index=(int)w->active,.x=u->mouse_x,.y=u->mouse_y});
 }

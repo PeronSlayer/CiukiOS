@@ -32,21 +32,38 @@ static void status(struct clock_app *a)
 static void show_month_of(struct clock_app *a, struct clock_date t)
 {
     a->selected = t; a->shown_year = t.year; a->shown_month = t.month;
-    status(a); a->ui->dirty = 1;
+    status(a); du_invalidate_widget(a->ui,CLOCK_STATUS);
+    du_invalidate(a->ui,(struct du_rect){GRID_X-2,30,7*CELL_W+4,6*CELL_H+GRID_Y-28});
 }
 
+static void hand_damage(struct du_ui *u, int position, int length, int width)
+{
+    int i=position/12,f=position%12;
+    int sx=(acc_sin60(i)*(12-f)+acc_sin60(i+1)*f)/12;
+    int cy=(acc_cos60(i)*(12-f)+acc_cos60(i+1)*f)/12;
+    int x=FACE_X+sx*length/1024,y=FACE_Y-cy*length/1024,pad=width+2;
+    int left=x<FACE_X ? x : FACE_X,top=y<FACE_Y ? y : FACE_Y;
+    du_invalidate(u,(struct du_rect){left-pad,top-pad,(x>FACE_X ? x-FACE_X : FACE_X-x)+2*pad+1,(y>FACE_Y ? y-FACE_Y : FACE_Y-y)+2*pad+1});
+}
+static void moving_hand(struct du_ui *u,int before,int after,int length,int width)
+{ if (before!=after) { hand_damage(u,before,length,width); hand_damage(u,after,length,width); } }
 void clock_update(struct clock_app *a)
 {
     int64_t now = a->clock ? a->clock(a->host) : 0;
     if (now == a->now && a->today.year) return;
     struct clock_date before = a->today; int h, m, s;
+    int old_h,old_m,old_s;struct clock_date old_date;
+    clock_from_epoch(a->now,&old_date,&old_h,&old_m,&old_s);
     a->now = now;
     clock_from_epoch(now, &a->today, &h, &m, &s);
     /* Follow midnight when the calendar showed the old today. */
     if (!before.year || (a->selected.year == before.year && a->selected.month == before.month && a->selected.day == before.day &&
         (before.day != a->today.day || before.month != a->today.month)))
         show_month_of(a, a->today);
-    a->ui->dirty = 1;
+    moving_hand(a->ui,(old_h%12)*60+old_m,(h%12)*60+m,FACE_R*52/100,4);
+    moving_hand(a->ui,old_m*12+old_s/5,m*12+s/5,FACE_R*78/100,3);
+    if (a->seconds_hand) moving_hand(a->ui,old_s*12,s*12,FACE_R*86/100,1);
+    du_invalidate(a->ui,(struct du_rect){FACE_X-86,222,172,24});
 }
 
 static void hand(struct du_canvas *c, int position60x12, int length, int width, uint32_t color)
@@ -166,5 +183,6 @@ void clock_event(struct du_ui *u, const struct du_event *e, void *user)
     }
     default: return;
     }
-    u->dirty = 1;
+    if (e->id==CLOCK_M_SECONDS) du_invalidate(u,(struct du_rect){FACE_X-FACE_R-3,FACE_Y-FACE_R-3,2*FACE_R+6,2*FACE_R+6});
+    if (e->id==CLOCK_M_24H) du_invalidate(u,(struct du_rect){FACE_X-86,222,172,24});
 }

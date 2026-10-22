@@ -29,7 +29,9 @@ struct viewer_fs {
 };
 #define VIEWER_W 560
 #define VIEWER_H 420
+struct viewer_load;
 struct viewer_app {
+    struct viewer_load *loading; int asynchronous;
     struct du_ui *ui; const struct viewer_fs *fs;
     void (*quit)(void *host); void *host;
     struct viewer_image image; int loaded; char error[160];
@@ -44,6 +46,7 @@ enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, 
        V_STATUS = 100, V_PREV, V_NEXT, V_IN, V_OUT, V_FIT, V_ACTUAL, V_D_OPEN = 200, V_D_INFO };
 int viewer_attach(struct viewer_app *, struct du_ui *, const struct viewer_fs *);
 void viewer_detach(struct viewer_app *);
+void viewer_poll(struct viewer_app *);
 int viewer_open(struct viewer_app *, const char *path);
 void viewer_event(struct du_ui *, const struct du_event *, void *);
 void viewer_paint(struct du_ui *, void *);
