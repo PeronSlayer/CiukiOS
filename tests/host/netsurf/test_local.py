@@ -133,6 +133,13 @@ class LocalTests(unittest.TestCase):
             self.assertIsNotNone(metrics,completed.stderr)
             self.assertEqual((int(metrics[2]),int(metrics[3])),(0,T23_CLOCK_SCALE))
             self.assertGreater(int(metrics[1]),0)
+            work=re.search(r"layout work elapsed_us=(\d+) class=local pass=1 font_opens=(\d+) font_open_us=(\d+) font_measures=(\d+) font_measure_us=(\d+) width_hits=(\d+) measured_bytes=(\d+)",completed.stderr)
+            self.assertIsNotNone(work,completed.stderr)
+            self.assertGreater(int(work[2]),0)
+            self.assertGreater(int(work[4]),0)
+            self.assertGreater(int(work[6]),0)
+            self.assertGreater(int(work[7]),0)
+            print(work[0],flush=True)
             line=self.assert_exit_reason(completed,"capture")
             self.assertIn("layout_rejections=0",line)
             samples.append(int(metrics[1]))
@@ -142,6 +149,10 @@ class LocalTests(unittest.TestCase):
               f"break-even scale {LAYOUT_LIMIT_NS*T23_CLOCK_SCALE//best}",flush=True)
         # Margin even against the remote budget (min of three: robust to host load).
         self.assertLess(best,LAYOUT_LIMIT_NS)
+        # f6-23 requirement: the inherited host CPU model must also remain
+        # below 300 ms. This excludes native font I/O/mutex latency; the port's
+        # layout-work record is required before making a physical T23 claim.
+        self.assertLess(max(samples),300_000_000)
         # Deterministic exemption: charged far beyond the remote budget, the
         # welcome page and a local file still lay out and the browser exits normally.
         for url in ("about:welcome",(HERE / "fixtures/layout.html").as_uri()):
