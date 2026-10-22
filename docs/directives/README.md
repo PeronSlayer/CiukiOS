@@ -472,3 +472,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-125-game-properties-ports-joystick](f2-125-game-properties-ports-joystick.md) | F2/F3 | gpt-6.1-sol / xhigh | written 2026-10-23 01:36 (per-game joystick, COM and LPT panel; resolves the f1-112/f1-113/f1-114 merge) |
 | [f6-06-ndis-host-netif](f6-06-ndis-host-netif.md) | F6 | gpt-6.1-sol / xhigh | written 2026-10-23 01:47 (ndis.sys host in the ring-3 host, netif adapter, wait bridge, STI shadow) |
 | [f6-07-device-manager-driver-install](f6-07-device-manager-driver-install.md) | F6 | gpt-6.1-sol / high | written 2026-10-23 01:47 (Install driver from pack: INF selection, transactional install, rollback, binding) |
+| [integ-video-family-integration](integ-video-family-integration.md) | integration | gpt-6.1-sol / xhigh | written 2026-10-23 01:51 (one tree for display parts A/B and 19 family drivers; unified registry, build lists, DM9 path, credits) |
