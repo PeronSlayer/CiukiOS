@@ -732,6 +732,32 @@ struct ciuki_devices_info {
     struct ciuki_device_lease leases[64];
 };
 
+/* f9-07: retained hardware identity, additive call 76 version 3. */
+#define CIUKI_HARDWARE_VERSION 3u
+struct ciuki_hardware_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t memmap_source;
+    uint32_t memmap_count;
+    uint32_t cpuid_ecx;
+    uint32_t cpuid_edx;
+    uint32_t smbios_valid;
+    uint64_t memory_bytes[6]; /* index 0 unknown, 1 usable, 2 reserved, 3 reclaim, 4 NVS, 5 bad */
+    char vendor[48];
+    char product[48];
+    char bios_vendor[48];
+    char bios_version[48];
+    char bios_date[48];
+    char build_id[64];
+    uint32_t log_active;
+    uint32_t log_position;
+    uint32_t log_pending_bytes;
+    uint32_t log_dropped;
+    uint32_t log_ring_start;
+    uint32_t log_limit;
+    char log_pending[4096];
+};
+
 /* Read-only /dev/net carrier snapshot. IP configuration is reserved for lwIP.
  * Initialize version/size and zero reserved fields before NET_GET_STATE. */
 #define CIUKI_NET_VERSION 1u

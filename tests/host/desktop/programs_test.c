@@ -59,13 +59,14 @@ int main(int argc,char **argv)
     link_file("/Windows/Desktop/Quake.lnk","Quake shortcut","/Programs/dosbox","--name=Quake \\QUAKE\\QUAKE.EXE");
     link_file("/Windows/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     link_file("/Documents/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
-    file("/Programs/UserNative","\177ELF",4);file("/Programs/control","\177ELF",4);
+    file("/Programs/UserNative","\177ELF",4);file("/Programs/control","\177ELF",4);file("/Programs/hwreport","\177ELF",4);
     struct desk_uninstall_entry limited[4];
     assert(cp_program_list(&store,limited,4)==4 && limited[0].inventory_more);
     for(unsigned j=0;j<4;j++)assert(limited[j].system_component);
     unsigned i=find("External DOS launch");assert(entries[i].kind==DESK_PROGRAM_DOS && entries[i].disk_bytes);
     int n=cp_program_list(&store,entries,96);assert(n>=10);
     for(int j=1;j<n;j++)assert(strcasecmp(entries[j-1].name,entries[j].name)<=0);
+    i=find("hwreport");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/hwreport"));
     i=find("control");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/control"));
     i=find("DOOM (shareware)");assert(!strcmp(entries[i].version,"1.9") && !strcmp(entries[i].publisher,"id Software") && strstr(entries[i].licence,"/system/licenses/"));
     i=find("Zulu Win32");assert(!strcmp(entries[i].location,"/Programs/Win"));keep_key=1;assert(cp_program_remove(&store,&entries[i])==-EAGAIN && exists("/Windows/Start Menu/Programs/Win.lnk"));
@@ -89,7 +90,7 @@ int main(int argc,char **argv)
     save_failure=0;i=find("Quake (shareware)");
     assert(!cp_program_remove(&store,&entries[i]) && !(games&4));
     assert(!exists("/System/REMOVE3.PND") && !exists("/system/settings/dos-game-3.cfg") && !exists("/Windows/Desktop/Quake.lnk") && icons>=7);
-    assert(strstr(logged,"[control] remove name=Quake (shareware) kind=bundled-dos result=0") && logs==11);
+    assert(strstr(logged,"[control] remove name=Quake (shareware) kind=bundled-dos result=0") && logs==12);
     assert(exists("/system/licenses/quake-shareware-UPSTREAM.json"));
     struct desk_uninstall_entry bad={.name="bad",.kind=DESK_PROGRAM_NATIVE,.location="/Programs/../System"};
     assert(cp_program_remove(&store,&bad)==-EPERM);

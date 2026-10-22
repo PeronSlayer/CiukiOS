@@ -107,6 +107,7 @@ bool thinkpad_ec_smbios_decode(const uint8_t *table, size_t n, struct thinkpad_e
             s->has_bios = true;
             ec_string_copy(s->bios_vendor, ec_string(p, p[1], end + 1, p[4]));
             ec_string_copy(s->bios_version, ec_string(p, p[1], end + 1, p[5]));
+            if (p[1] > 8) ec_string_copy(s->bios_date, ec_string(p, p[1], end + 1, p[8]));
         }
         if (p[0] == 1) {
             if (p[1] < 7 || s->has_system) return false;
@@ -470,10 +471,14 @@ static void native_identity(struct thinkpad_ec_smbios *s)
         if (s->valid) return;
     }
 }
+static struct thinkpad_ec_smbios retained_identity;
+void thinkpad_ec_smbios_snapshot(struct thinkpad_ec_smbios *out)
+{ *out = retained_identity; }
 void thinkpad_ec_init(void)
 {
     struct thinkpad_ec_smbios s;
     native_identity(&s);
+    retained_identity = s;
     thinkpad_ec_smbios_log(&s);
     if (!thinkpad_ec_gate(&s, g_boot.flags)) return;
     kmutex_init(&ec_lock);

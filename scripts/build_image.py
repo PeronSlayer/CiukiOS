@@ -175,6 +175,7 @@ def desktop_payloads():
                "/Programs/gfxdemo": DESKTOP / "gfxdemo",
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
                "/Programs/regedit": DESKTOP / "regedit",
+               "/Programs/hwreport": DESKTOP / "hwreport",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",

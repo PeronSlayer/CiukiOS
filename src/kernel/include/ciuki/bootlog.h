@@ -79,5 +79,10 @@ int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *);
 int bootlog_try_sync(void);
 int bootlog_shutdown(void);
 void bootlog_snapshot(struct bootlog_stats *);
+/* Read-only report snapshot. At most 4096 pending bytes, oldest first; no
+ * allocation, VFS or producer changes. Position is the current disk write
+ * point (ring-aware), not the preallocated file's physical end. */
+bool bootlog_report_snapshot(uint32_t *position, uint32_t *dropped,
+                             char *pending, size_t capacity, size_t *length);
 void bootlog_reset(void); /* quiescent, detached only; host reboot fixture */
 #endif

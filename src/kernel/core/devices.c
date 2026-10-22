@@ -16,6 +16,10 @@
 #include <ciuki/com.h>
 #pragma weak com_snapshot
 #include <ciuki/firmware.h>
+#include <ciuki/thinkpad_ec.h>
+#pragma weak thinkpad_ec_smbios_snapshot
+#include <ciuki/bootlog.h>
+#pragma weak bootlog_report_snapshot
 #pragma weak firmware_inventory_page
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
@@ -26,6 +30,7 @@
 static struct registry_inventory_copy inventory;
 static struct ciuki_devices_info query_buffer;
 static struct ciuki_firmware_page firmware_buffer;
+static struct ciuki_hardware_info hardware_buffer;
 extern bool storage_readonly_info(unsigned, char *, unsigned) __attribute__((weak));
 extern bool savage2d_summary(bool *, bool *, const char **) __attribute__((weak));
 
@@ -421,8 +426,52 @@ void devices_snapshot(struct ciuki_devices_info *out)
     usb_devices(out);
     drivers(out);
 }
+static void hardware_snapshot(struct ciuki_hardware_info *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->version = CIUKI_HARDWARE_VERSION; out->size = sizeof(*out);
+    out->memmap_source = g_boot.memmap_source; out->memmap_count = g_boot.e820_count;
+    uint32_t a, b, c, d;
+    cpuid(0, &a, &b, &c, &d);
+    if (a >= 1) { cpuid(1, &a, &b, &c, &d); out->cpuid_ecx = c; out->cpuid_edx = d; }
+    for (unsigned i = 0; i < g_boot.e820_count && i < ARRAY_SIZE(g_boot.e820); i++) {
+        unsigned type = g_boot.e820[i].type;
+        if (type > 5) type = 0;
+        out->memory_bytes[type] += g_boot.e820[i].length;
+    }
+    struct thinkpad_ec_smbios identity;
+    memset(&identity, 0, sizeof(identity));
+    if (thinkpad_ec_smbios_snapshot) thinkpad_ec_smbios_snapshot(&identity);
+    if (identity.valid) {
+        out->smbios_valid = 1;
+        string(out->vendor, sizeof(out->vendor), identity.vendor);
+        string(out->product, sizeof(out->product), identity.product);
+        string(out->bios_vendor, sizeof(out->bios_vendor), identity.bios_vendor);
+        string(out->bios_version, sizeof(out->bios_version), identity.bios_version);
+        string(out->bios_date, sizeof(out->bios_date), identity.bios_date);
+    }
+    string(out->build_id, sizeof(out->build_id), CIUKI_BUILD_ID);
+    if (bootlog_report_snapshot) {
+        size_t n=0;
+        out->log_active=bootlog_report_snapshot(&out->log_position,&out->log_dropped,
+            out->log_pending,sizeof(out->log_pending),&n);
+        out->log_pending_bytes=(uint32_t)n;
+        out->log_ring_start=BOOTLOG_PROTECTED;
+        out->log_limit=BOOTLOG_LIMIT;
+    }
+}
 int devices_query(uint32_t address, uint32_t bytes)
 {
+    if (bytes == sizeof(hardware_buffer)) {
+        struct process *p = proc_current();
+        if (!p || address > UINT32_MAX - bytes || !ua_range(p->memory, address, bytes, PROT_READ | PROT_WRITE)) return -EFAULT;
+        uint32_t header[2];
+        int error = copy_from_user(header, address, sizeof(header));
+        if (error) return error;
+        if (header[0] != CIUKI_HARDWARE_VERSION || header[1] != bytes) return -EINVAL;
+        hardware_snapshot(&hardware_buffer);
+        return copy_to_user(address, &hardware_buffer, sizeof(hardware_buffer));
+    }
     if (bytes == sizeof(firmware_buffer)) {
         struct process *p = proc_current();
         if (!p || address > UINT32_MAX - bytes || !ua_range(p->memory, address, bytes, PROT_READ | PROT_WRITE)) return -EFAULT;

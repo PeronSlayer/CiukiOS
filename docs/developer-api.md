@@ -24,6 +24,79 @@ include it and link the SDK runtime; the kernel itself stays GPL-2.0-only.
 #define CIUKI_ABI_H
 
 #include <stdint.h>
+#include <ciuki/input_abi.h>
+```
+
+f1-111: independent COM v1 records, all fields fixed-width.
+
+```c
+#define CIUKI_COM_VERSION 1u
+#define CIUKI_COM_MAX 8u
+#define CIUKI_COM_QUEUE 1024u
+#define COM_GET_LINE   0x434f0101u
+#define COM_SET_LINE   0x434f0102u
+#define COM_GET_STATUS 0x434f0103u
+#define COM_SET_MODEM  0x434f0104u
+enum ciuki_com_chip { CIUKI_COM_UNKNOWN, CIUKI_COM_8250, CIUKI_COM_16450,
+    CIUKI_COM_16550, CIUKI_COM_16550A, CIUKI_COM_16650, CIUKI_COM_16750 };
+enum ciuki_com_origin { CIUKI_COM_BDA = 1, CIUKI_COM_PNP, CIUKI_COM_PCI };
+enum ciuki_com_parity { CIUKI_COM_PARITY_NONE, CIUKI_COM_PARITY_ODD,
+    CIUKI_COM_PARITY_EVEN, CIUKI_COM_PARITY_MARK, CIUKI_COM_PARITY_SPACE };
+#define CIUKI_COM_DTR 1u
+#define CIUKI_COM_RTS 2u
+#define CIUKI_COM_BREAK 4u
+#define CIUKI_COM_LOGGER 1u
+#define CIUKI_COM_OPEN 2u
+#define CIUKI_COM_READY 4u
+#define CIUKI_COM_QUARANTINED 8u
+```
+
+errors use LSR bits 1..4, modem uses MSR bits 0..7
+
+```c
+struct ciuki_com_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t baud;
+    uint32_t data_bits;
+    uint32_t stop_bits;
+    uint32_t parity;
+    uint32_t rx_trigger;
+    uint32_t read_timeout_ms;
+    uint32_t write_timeout_ms;
+    uint32_t reserved;
+};
+struct ciuki_com_modem {
+    uint32_t version;
+    uint32_t size;
+    uint32_t outputs;
+    uint32_t reserved;
+};
+struct ciuki_com_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t generation;
+    uint32_t number;
+    uint32_t base;
+    uint32_t irq;
+    uint32_t origin;
+    uint32_t chip;
+    uint32_t fifo_depth;
+    uint32_t flags;
+    uint32_t modem;
+    uint32_t errors;
+    uint32_t rx_queued;
+    uint32_t tx_queued;
+    uint32_t rx_capacity;
+    uint32_t tx_capacity;
+    uint32_t received;
+    uint32_t transmitted;
+    uint32_t dropped;
+    uint32_t reserved;
+};
+
+
+
 
 #define CIUKI_ABI_VERSION 1
 #define __CIUKI_ABI_VERSION__ CIUKI_ABI_VERSION
@@ -696,6 +769,40 @@ struct ciuki_devices_info {
     struct ciuki_device_record devices[64];
     struct ciuki_driver_record drivers[16];
     struct ciuki_device_lease leases[64];
+};
+```
+
+f9-07: retained hardware identity, additive call 76 version 3.
+
+```c
+#define CIUKI_HARDWARE_VERSION 3u
+struct ciuki_hardware_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t memmap_source;
+    uint32_t memmap_count;
+    uint32_t cpuid_ecx;
+    uint32_t cpuid_edx;
+    uint32_t smbios_valid;
+    uint64_t memory_bytes[6];
+```
+
+index 0 unknown, 1 usable, 2 reserved, 3 reclaim, 4 NVS, 5 bad
+
+```c
+char vendor[48];
+    char product[48];
+    char bios_vendor[48];
+    char bios_version[48];
+    char bios_date[48];
+    char build_id[64];
+    uint32_t log_active;
+    uint32_t log_position;
+    uint32_t log_pending_bytes;
+    uint32_t log_dropped;
+    uint32_t log_ring_start;
+    uint32_t log_limit;
+    char log_pending[4096];
 };
 ```
 
@@ -2650,8 +2757,9 @@ delegated program-management authority; no VM handle
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
 ```
 
-CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
-a reference/unified override is permitted only for an explicit game, never the shell.
+CREATE launch.kernel: all three historical values map to unified (2).
+Values 0/1 are retired compatibility inputs, never another kernel.
+game is the catalog index+1, or zero for the interactive shell.
 
 ```c
 #define CIUKI_DOSVM_CIUKIDOS 0u
@@ -2659,7 +2767,7 @@ a reference/unified override is permitted only for an explicit game, never the s
 #define CIUKI_DOSVM_UNIFIED 2u
 ```
 
-opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57)
+sole CiukiDOS K2043 fork, DFV2 binding and native IFS
 
 ```c
 #define CIUKI_DOSVM_GAME_COUNT 3u
@@ -2686,6 +2794,12 @@ STATUS.changed
 
 ```c
 #define CIUKI_DOSVM_SUSPENDED 8u
+#define CIUKI_DOSVM_SHELL_READY 32u
+```
+
+STATUS: shell blocked for input, guest key queues empty
+
+```c
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u
 ```
 
@@ -3299,6 +3413,20 @@ int ciuki_wake_word(uint32_t *,uint32_t);
 #endif
 ```
 
+## `ciuki/com.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/com.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_COM_H
+#define CIUKI_SDK_COM_H
+#include <ciuki/abi.h>
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
+#endif
+```
+
 ## `ciuki/desktop.h`
 
 Source: `apps/desktop/protocol.h`.
@@ -3646,6 +3774,7 @@ SPDX-License-Identifier: MIT
 #ifndef CIUKI_SDK_DEVICES_H
 #define CIUKI_SDK_DEVICES_H
 #include <ciuki/abi.h>
+#include <ciuki/firmware_abi.h>
 ```
 
 Initialize version=CIUKI_DEVICES_VERSION and size=sizeof(*info).
@@ -3655,6 +3784,20 @@ See docs/design/device-manager.md.
 
 ```c
 int ciuki_devices(struct ciuki_devices_info *info);
+```
+
+Version 2, exact sizeof(*page), cursor/generation paging; same call 76.
+No firmware calls occur during this query.
+
+```c
+int ciuki_firmware_inventory(struct ciuki_firmware_page *page);
+```
+
+Version 3, exact sizeof(*info); read-only SMBIOS/map/CPUID identity and
+a bounded boot-log snapshot. No firmware evaluation or device activation.
+
+```c
+int ciuki_hardware_inventory(struct ciuki_hardware_info *info);
 #endif
 ```
 
@@ -4739,7 +4882,7 @@ struct du_menu { const char *label; struct du_menu_item *items; unsigned count; 
 enum du_event_type {
     DU_EV_ACTIVATE = 1, DU_EV_SELECT, DU_EV_OPEN, DU_EV_SORT, DU_EV_CONTEXT, DU_EV_CHANGE,
     DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS,
-    DU_EV_POINTER, DU_EV_DRAG
+    DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER
 };
 ```
 

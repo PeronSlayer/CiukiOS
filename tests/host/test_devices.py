@@ -30,7 +30,7 @@ class DeviceTests(unittest.TestCase):
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-ffunction-sections', '-fdata-sections', '-fsanitize=address,undefined',
                             '-fno-sanitize-recover=undefined', '-I', str(ROOT / 'src/kernel/include'),
-                            str(ROOT / 'tests/host/devices_test.c'), str(ROOT / 'src/kernel/lib/fmt.c'),
+                            str(ROOT / 'tests/host/devices_test.c'),
                             '-Wl,--gc-sections', '-o', str(binary)], check=True, env=env)
             r = subprocess.run([binary], check=True, env=env, capture_output=True, text=True)
             self.assertIn('PASS devices:', r.stdout)

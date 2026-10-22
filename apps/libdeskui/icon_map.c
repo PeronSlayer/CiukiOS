@@ -16,6 +16,7 @@
 
 const struct du_icon_map du_icon_map[] = {
     /* /Programs programs (the desktop menu lists /Programs) */
+    {"program:hwreport", "preferences-system"},
     {"program:regedit", "preferences-system"},
     {"program:*", "application-x-executable"},
     {"program:files", "system-file-manager"},

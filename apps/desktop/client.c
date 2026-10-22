@@ -620,7 +620,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_GFX_QUERY: case DESK_GFX_BENCH: {
-        if ((!c->gfxdemo && !(c->program==DESK_APP_CONTROL && p.opcode==DESK_GFX_QUERY)) || !c->window || c->closing) {
+        if ((!c->gfxdemo && !((c->program==DESK_APP_CONTROL || !strcmp(c->application,"hwreport")) && p.opcode==DESK_GFX_QUERY)) || !c->window || c->closing) {
             desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
             desk_put32(reply.data+8,p.opcode); desk_put32(reply.data+12,(uint32_t)-EPERM);
         } else if (p.opcode==DESK_GFX_QUERY) {

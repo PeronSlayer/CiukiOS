@@ -23,6 +23,7 @@ static void irq_restore(uint32_t);
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
 #include <ciuki/com.h>
+#include <ciuki/thinkpad_ec.h>
 static struct ciuki_com_status com_records[CIUKI_COM_MAX];
 static bool com_visible;
 bool com_snapshot(unsigned i, struct ciuki_com_status *out, const char **reason)
@@ -51,7 +52,7 @@ static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t
     if (cpu_hook) cpu_hook();
     cpu_calls++; *a = *b = *c = *d = 0;
     if (leaf == 0) { *a = 1; memcpy(b, "Genu", 4); memcpy(d, "ineI", 4); memcpy(c, "ntel", 4); }
-    else if (leaf == 1) *a = 0x6b1;
+    else if (leaf == 1) { *a = 0x6b1; *c = 0x200; *d = 0x8001; }
     else if (leaf == 0x80000000u) *a = extended ? 0x80000004u : 0x80000000u;
     else {
         assert(extended && leaf >= 0x80000002u && leaf <= 0x80000004u);
@@ -96,6 +97,12 @@ static struct process process;
 struct process *proc_current(void) { return &process; }
 static struct ciuki_devices_info user;
 static struct ciuki_firmware_page user_firmware;
+static struct ciuki_hardware_info user_hardware;
+static bool hardware_active;
+void thinkpad_ec_smbios_snapshot(struct thinkpad_ec_smbios *s)
+{ memset(s,0,sizeof(*s)); s->valid=true; strcpy(s->vendor,"Fixture vendor"); strcpy(s->bios_date,"10/22/1999"); }
+bool bootlog_report_snapshot(uint32_t *position,uint32_t *dropped,char *pending,size_t cap,size_t *n)
+{ assert(cap==4096); *position=133000; *dropped=2; strcpy(pending,"[ata] count=3\n"); *n=strlen(pending); return true; }
 static unsigned firmware_queries;
 int firmware_inventory_page(struct ciuki_firmware_page *p)
 {
@@ -109,11 +116,11 @@ int firmware_inventory_page(struct ciuki_firmware_page *p)
 }
 static int accessible = 1, copy_error;
 bool ua_range(const struct uaddr *u, uint32_t a, uint32_t n, uint32_t prot)
-{ (void)u; ranges++; assert((n == sizeof(user) || n == sizeof(user_firmware)) && prot == (PROT_READ | PROT_WRITE)); return accessible && a == 0x1000; }
+{ (void)u; ranges++; assert((n == sizeof(user) || n == sizeof(user_firmware) || n == sizeof(user_hardware)) && prot == (PROT_READ | PROT_WRITE)); return accessible && a == 0x1000; }
 int copy_from_user(void *out, uint32_t a, uint32_t n)
-{ assert(a == 0x1000 && (n == 8 || n == 20)); if (copy_error) return copy_error; memcpy(out, n == 8 ? (void *)&user : (void *)&user_firmware, n); return 0; }
+{ assert(a == 0x1000 && (n == 8 || n == 20)); if (copy_error) return copy_error; memcpy(out, hardware_active ? (void *)&user_hardware : n == 8 ? (void *)&user : (void *)&user_firmware, n); return 0; }
 int copy_to_user(uint32_t a, const void *in, uint32_t n)
-{ assert(a == 0x1000 && (n == sizeof(user) || n == sizeof(user_firmware))); copies++; if (copy_error) return copy_error; memcpy(n == sizeof(user) ? (void *)&user : (void *)&user_firmware, in, n); return 0; }
+{ assert(a == 0x1000 && (n == sizeof(user) || n == sizeof(user_firmware) || n == sizeof(user_hardware))); copies++; if (copy_error) return copy_error; memcpy(n == sizeof(user_hardware) ? (void *)&user_hardware : n == sizeof(user) ? (void *)&user : (void *)&user_firmware, in, n); return 0; }
 extern bool storage_readonly_info(unsigned,char *,unsigned) __attribute__((weak));
 static bool volume_locked;
 bool storage_readonly_info(unsigned drive,char *text,unsigned bytes)
@@ -211,6 +218,26 @@ static void com_inventory(void)
 }
 int main(void)
 {
+    hardware_active=true;
+    user_hardware=(struct ciuki_hardware_info){.version=3,.size=sizeof(user_hardware)};
+    g_boot.memmap_source=1; g_boot.e820_count=3;
+    g_boot.e820[0]=(struct ciuki_e820){.length=1024,.type=1};
+    g_boot.e820[1]=(struct ciuki_e820){.length=2048,.type=4};
+    g_boot.e820[2]=(struct ciuki_e820){.length=4096,.type=99};
+    assert(!devices_query(0x1000,sizeof(user_hardware)));
+    assert(user_hardware.cpuid_ecx==0x200 && user_hardware.cpuid_edx==0x8001);
+    assert(user_hardware.memory_bytes[1]==1024 && user_hardware.memory_bytes[4]==2048 && user_hardware.memory_bytes[0]==4096);
+    assert(user_hardware.memmap_count==3 && user_hardware.memmap_source==1 && user_hardware.smbios_valid);
+    assert(!strcmp(user_hardware.vendor,"Fixture vendor") && !strcmp(user_hardware.bios_date,"10/22/1999"));
+    user_hardware.version=2; assert(devices_query(0x1000,sizeof(user_hardware))==-EINVAL);
+    user_hardware.version=3; user_hardware.size=8; assert(devices_query(0x1000,sizeof(user_hardware))==-EINVAL);
+    user_hardware.size=sizeof(user_hardware); accessible=0; assert(devices_query(0x1000,sizeof(user_hardware))==-EFAULT); accessible=1;
+    assert(devices_query(UINT32_MAX-8,sizeof(user_hardware))==-EFAULT);
+    copy_error=-EFAULT; assert(devices_query(0x1000,sizeof(user_hardware))==-EFAULT); copy_error=0;
+    assert(user_hardware.log_active && user_hardware.log_position==133000 && user_hardware.log_dropped==2 && user_hardware.log_pending_bytes==14);
+    assert(user_hardware.log_ring_start==BOOTLOG_PROTECTED && user_hardware.log_limit==BOOTLOG_LIMIT);
+    assert(!writes); hardware_active=false; copies=ranges=cpu_calls=0;
+    puts("PASS hardware identity: version/extent/copy checks, CPUID/map/SMBIOS, no port writes");
     g_ticks = 123456; g_boot.flags = CBI_F_SERIAL_LOG; g_boot.input_policy = CBI_INPUT_FIRMWARE;
     strcpy(g_boot.options, "safe=0 serial=1 input=firmware");
     driver_state.initialized = true; driver_state.firmware = true; framebuffer.present = true;

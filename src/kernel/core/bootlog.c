@@ -641,6 +641,34 @@ void bootlog_snapshot(struct bootlog_stats *out)
     if (stats.active && !out->queued && sync_target>sync_done) out->queued=1;
     unlock_ram(f);
 }
+bool bootlog_report_snapshot(uint32_t *position, uint32_t *dropped,
+                             char *pending, size_t capacity, size_t *length)
+{
+    if (!position || !dropped || !pending || !length) return false;
+    if (capacity>4096) capacity=4096;
+    uint32_t f=lock_ram();
+    *position=boot_sent<boot_used || history_sent<history_size ? history_sent+boot_sent : ring_position;
+    *dropped=stats.records_dropped_protected+stats.records_dropped_verbose+stats.records_dropped_statistic;
+    *length=0;
+    /* Select the newest whole retained slices, then copy in publication
+     * order. Do not consume slots, change watermarks or touch disk state. */
+    unsigned first=NONE;
+    size_t bytes=0;
+    for (unsigned i=tail, visited=0;i!=NONE && visited<BOOTLOG_RECORDS;visited++) {
+        if (records[i].length>capacity-bytes) break;
+        bytes+=records[i].length; first=i; i=records[i].prev;
+    }
+    for (unsigned i=first, visited=0;i!=NONE && visited<BOOTLOG_RECORDS;visited++) {
+        memcpy(pending+*length,ram[i],records[i].length);
+        *length+=records[i].length; i=records[i].next;
+    }
+    if (!*length && boot_used>boot_sent) {
+        size_t n=boot_used-boot_sent; if (n>capacity) n=capacity;
+        memcpy(pending,boot+boot_used-n,n); *length=n;
+    }
+    bool active=stats.active;
+    unlock_ram(f); return active;
+}
 void bootlog_reset(void)
 {
     if (attached || draining) return;
