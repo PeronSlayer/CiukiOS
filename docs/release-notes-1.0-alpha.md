@@ -1,12 +1,12 @@
 # CiukiOS 1.0 Alpha Release Notes
 
 - **Release:** 1.0 Alpha (unreleased, `main`, image pending)
-- **Date:** 2026-10-21
+- **Date:** 2026-10-22 (first written 2026-10-21; updated with the trials and fixes of 2026-10-21/22)
 - **Target Architecture:** i686 PC (Pentium III baseline, AC'97 audio, IDE/ATA, VESA VBE 2.0+, PS/2 / USB HID)
 - **Primary Hardware Twin:** IBM ThinkPad T23 (1.13 GHz Pentium III-M, 512 MiB RAM, S3 SuperSavage IX/C, Intel 82801CA ICH3 AC'97)
 - **Canonical Image:** 512 MiB FAT32 disk image (`build/f0/ciukios.img`, or `build/hw/ciukios-hw.img`)
 - **Setup Media Note:** Setup CD (f9) is deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha ships as a direct disk image written to the target disk.
-- **Qualification Status:** Hardware qualification on the ThinkPad T23 is pending for this image (`TODO(lead)`).
+- **Qualification Status:** Five alpha images (`8f59e221`, `28805270`, `b453bc92`, `5a10eef4`, `a4d9454e`) were tried on the ThinkPad T23 on 2026-10-21/22 and none has passed; see section 2.2. Hardware qualification is open (`TODO(lead)`).
 
 ---
 
@@ -27,12 +27,13 @@ CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bring
 ### 1.2 Storage Subsystem
 - **Adaptive ATA Queue Management:** Adaptive command-depth logic (`blkreq.c`, `7c5b9878`) bounded by a 4,096-byte (or device sector size) minimum floor, recovering back to the 64 KiB maximum queue depth upon rapid completions to prevent command starvation on slow disks.
 - **Fast FAT Chain Lookups:** Per-open-file FAT cluster cursor with chain-stamp validation (f3-51c), reducing sequential 27 MB image reads from 2,801,342 to 13,295 FAT lookups, combined with an LRU cache of 16 base digests indexed by volume version.
+- **2D acceleration indicator (f1-97, f2-92):** the splash, the tray notice and the log state `2D acceleration: YES` or `2D engine: NO (<reason>)`; `2D engine: OK (drawing: software)` until the engine has drawn; `accel=0` disables it.
 - **S3 SuperSavage BCI Acceleration Diagnostics:** S3 SuperSavage BCI self-test sequence updated with CR50 depth selection preceding descriptor writes, incoming CR50 buffering, completion fence, and an `accel=0` boot configuration token for safe hardware fallback (f1-88).
 
 ### 1.3 Unified DOS Subsystem
 - **Unified Kernel Architecture:** Adoption of the unified DOS contract (f3-54) combining the FreeDOS 1.3 kernel base with the CiukiDOS identity, banner, and prompt:
-  - Pinned FreeDOS 2043 kernel fork built natively and reproducibly with Open Watcom 1.9 (patch 0001, SHA `d24464ec…`), selectable at boot via `kernel=unified` (f3-55).
-  - Classic CiukiDOS kernel remains selectable (`kernel=ciukidos`) during conformance qualification.
+  - Pinned FreeDOS 2043 kernel fork built natively and reproducibly with Open Watcom 1.9 (patch 0001, SHA `d24464ec…`; f3-55), with the native DFV2 binding and `CIUKIDF.SYS` (f3-56, f3-57).
+  - **Default since 2026-10-21 23:20** (owner decision, dev diary 2026-10-21-09): a game without a saved DOS setting starts on the unified kernel; the game's DOS setting `kernel=ciukidos` selects the classic CiukiDOS kernel, which the DOS Box shell still uses. The image installs the fork only when its qualification record exists. On 2026-10-22 the IFS was found not to be connected (request order, mount on sector 0); it now reports `DFV2 IFS active` (f3-61). On QEMU DOOM starts and reads its WAD through it; the windowed run stays frozen under TCG single-step tracing and is left to the T23.
   - VMM integration via the network redirector interface (INT 2Fh AH=11h), serving DOS INT 21h file calls from the native VFS as in the Windows 9x IFS Manager.
 - **Pageable DOS Memory Pool:** 24 MiB VM memory pool converted to a pageable object (Contract D1, f3-46), reducing VM creation latency from 134.3 ms to 23.6 ms with protected I/O fault handling.
 - **Event-Driven Frame Synchronization:** DOS window rendering converted from 2 ms polling to blocking event-driven frame waits (`WAIT_PRESENT`, f3-52), donating priority to the VM thread while waiting and capping loading panel repaints to <=4 Hz to prevent VM thread starvation.
@@ -85,6 +86,17 @@ During the hardware trial of image `b51f034f04aee486…` on the IBM ThinkPad T23
 | **High PIT & OPL VM Exits** | CPU overhead of ~5% attributed entirely to I/O port trap dispatch during DOS VM execution. | 593,816 exits on port 0040 (10.4 s), 296,908 on port 0043 (7.4 s), and 230,000 on OPL ports 0388/0389 (3.7 s). | **Addressed by authored work** (directive `f1-87`: fast-path dispatch for ports 0040, 0043, 0388, and 0389). Verification on hardware pending (`TODO(lead)`). |
 | **Unattributed 2.1 ms Interrupt-Off Pauses** | Periodic system stalls of ~2.1 ms occurring ~3.9 times per second. | 1,554 sections with interrupts disabled (`firmware_max_us=2117`), matching the UHCI USB host controller scan rate (~3.98 scans/sec). | **Open investigation** (directive `f1-87`: test option `usbscan=0` provided for T23 trial to isolate hardware SMI vs. USB host controller interaction). |
 | **S3 SuperSavage BCI Self-Test Failure** | 2D acceleration driver placed in quarantine (`init_result=-5`); desktop falls back to software composition. | SuperSavage BCI self-test readback fails on real hardware due to CR50 register depth setup ordering. | **Addressed by merged work** (directive `f1-88`: CR50 depth selection ordering before descriptor write, incoming CR50 buffering, completion fence, and `accel=0` safe mode fallback token). Hardware verification pending (`TODO(lead)`). |
+
+### 2.2 Trials of 2026-10-21/22 (images `8f59e221` to `a4d9454e`)
+
+| Image | Result (owner) | Resolution |
+| --- | --- | --- |
+| `8f59e221` (first alpha) | NetSurf does not open; windows stutter; any DOS application or game puts the system in protection with an I/O error; USB copy very slow; Display Properties "not responding" (dev diary 2026-10-21-10) | Second image `28805270` (2026-10-22-01): wallpaper read in one pass, popup faces, DOS and I/O fixes |
+| `28805270` / `b453bc92` (third: splash bar fixed, f0-55b) | Rejected: slow window opening (no 2D acceleration visible), unified DOS does not work, NetSurf exits, Display Properties not responding, music worse (2026-10-22-03) | Fourth image `5a10eef4`: Savage fill repair (f1-95), IFS connected (f3-61), priority inheritance and 25 % desktop share during a game (f1-98), USB 64 KiB transfers (f1-96), NetSurf local pages exempt from the layout budget (f6-20), 2D indicator (f1-97) |
+| `5a10eef4` | Residual instability, stutter, NetSurf without internet, "I/O error and protection", USB stick removed by the system (2026-10-22-05) | Fifth image `a4d9454e`: SMI blackouts traced to the EC event line routed on SMI# and the poll turned off (f1-100), USB stale TD state (f1-96b), the desktop draws with the 2D engine (f2-92), e100 receive filter fixed so DHCP works (f6-22) |
+| `a4d9454e` | Stutter of windows and music unchanged, browser cannot be interacted with, two cursors, hardware volume keys have no effect, USB copy 149 KB/s (2026-10-22-07) | Open: the T23 log shows the SMI blackouts gone (`irqoff_long` 2 per boot, `ec_poll=off`), DHCP up, and the CPU saturated by the desktop (about 40 composed frames per second with one player open). Directives f2-95 (compositor rebuilt on the Windows 98/X11 region model with X11 regions and pixman, MIT), f1-101 (audio producer priority) and f2-96 (one cursor, EC poll every 2 s) |
+
+The next image is built only with the desktop CPU budget demonstrated on the model and those three points green.
 
 ---
 
@@ -144,8 +156,11 @@ CiukiOS 1.0 Alpha adheres to strict licensing boundaries, source code publicatio
 - **Ciuki Portrait:** The OS mascot portrait of Ciuki is a proprietary project asset and is not part of Tango's Public Domain release. It must not be replaced, redrawn, or substituted.
 
 ### 4.3 Third-Party Stack Components
+The full list (version, licence, notice path and status of every component shipped or used to build the image) is [docs/credits.md](credits.md); the same entries are shown in About CiukiOS > Credits, and `tests/host/test_credits.py` checks them against the pins. The CiukiOS code itself is GPL-2.0 (`LICENSE`), the SDK MIT (`sdk/LICENSE`). Highlights:
 - **lwIP 2.2.1 TCP/IP Stack:** Licensed under the **BSD-3-Clause** license (`docs/licenses/lwip-2.2.1-BSD-3-Clause.txt`).
 - **Jitterentropy Library 3.7.0:** Dual-licensed under **BSD-3-Clause** and **GPL-2.0** (`docs/licenses/jitterentropy-3.7.0-LICENSE.bsd`, `docs/licenses/jitterentropy-3.7.0-LICENSE.gplv2`).
+- **pixman and the X11 region code (being integrated by f2-95):** MIT; the notice is added with `third_party/pixman`.
+- **NetSurf 3.11:** GPL-2.0 with MIT libraries, zlib 1.3.1, libpng 1.6.59 (`config/netsurf.json`); BearSSL 0.6 (MIT).
 - **Wine Upper DLLs:** Reused Wine 10.0 PE binaries are built from source and distributed under the **GNU Lesser General Public License, version 2.1 or later (LGPL-2.1-or-later)**, with corresponding source code offers staged in `third_party/wine/`.
 
 ### 4.4 Commercial Payload Policy
