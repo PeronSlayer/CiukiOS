@@ -1,11 +1,12 @@
 # Changelog
 
-## 1.0.0 alpha (unreleased, `main`; hardware image `b453bc921d49…` of 2026-10-22, T23 trial pending)
+## 1.0.0 alpha (unreleased, `main`; hardware image `5a10eef4a821…` of 2026-10-22, T23 trial pending)
 
 Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.
 
 ### Kernel and resource management
 
+- Trial of image `b453bc92…` rejected (dev diary 2026-10-22-03); thirteen corrective merges on 2026-10-22 (dev diary 2026-10-22-04): Savage first-fill priming (f1-95), boot-log classes (f0-56), 2D acceleration YES/NO indicator (f1-97), unified DOS kernel actually bound (f3-61), holds without preemption points (f1-93b), priority inheritance and desktop share (f1-98), Display properties worker (f2-88b), NetSurf budget and exit (f6-20), desktop pointer merging (f2-91), USB 64 KiB transfers (f1-96), SMI attribution and EC poll (f1-94), entropy worker in an idle task and kernel PDEs with Accessed preset (f6-21/b).
 - Trial of image `8f59e221…` on the T23 (2026-10-21, dev diary 2026-10-21-10) rejected: seven corrective merges on 2026-10-22 — f1-92 (`125fefa2`: an issued ATA command ends only on its device deadline; since f3-49b a cancelled request was treated as a device fault, quarantining the drive and turning C: read-only), f1-93 (`c394506a`: native volume holds never span cold device reads), f6-19 (`d64787e0`: NetSurf gets its window channel from every launch route, Programs entry with icon, entropy initialises on the Pentium III), f2-88 (`8a181714`: Display properties decodes its preview off the UI thread), f2-89 (`bb8d652f`: removable media popup painted), f2-90/f2-90b (`5d28b71d`, `ce19c3bb`: wallpaper in the first desktop frame), f0-55 (`6f121d69`: boot splash progress bar).
 - f1-87 (`c19230eb`): T23 trial fixes — tagged volume holds with a missing-tag control, audio refill priority, the windowed DOS VM decoupled from the presenter, `usbscan=0` loader token, `device_overrun` attribution record.
 - f1-90 (`3c50bb79`): device CPU budget accounted per task with a max-min fair share; the audio refill worker has its own 2 ms per 10 ms budget and a direct interrupt wake; `device_top` and `audio_refill_overrun` records; contract R1/R2 amended.

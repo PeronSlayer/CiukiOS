@@ -172,3 +172,4 @@ Documenti di design, validazione, fonti esterne.
 | [Seconda immagine 1.0.0 alpha 288052706a…: sette fusioni correttive, cause reali, evidenza host e QEMU](2026-10-22-01-immagine-1-0-0-alpha-seconda.md) | 22 ottobre 2026 | integrazione, release |
 | [Terza immagine 1.0.0 alpha b453bc92…: barra dello splash visibile dal primo frame (f0-55b)](2026-10-22-02-immagine-1-0-0-alpha-terza-barra-splash.md) | 22 ottobre 2026 | release, correzione |
 | [Prova T23 b453bc92… fallita: blackout SMI da 2,1 ms, Savage 32 bpp, prenotazioni readdir, USB a 85 KB/s, DOS unificato, NetSurf, Proprietà schermo, log persi; sette direttive](2026-10-22-03-prova-t23-b453bc92-fallita.md) | 22 ottobre 2026 | prova hardware, analisi |
+| [Quarta immagine 1.0.0 alpha 5a10eef4…: tredici fusioni correttive, gate f0-core verde su QEMU (parziale), prova T23 con esperimento ecpoll](2026-10-22-04-immagine-1-0-0-alpha-quarta.md) | 22 ottobre 2026 | release, integrazione |
