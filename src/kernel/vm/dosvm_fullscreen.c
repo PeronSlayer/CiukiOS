@@ -17,8 +17,17 @@ static void *fullscreen_mapping;
 static uint64_t fullscreen_frame_deadline;
 static bool fullscreen_frame_seen;
 static bool fullscreen_linear,fullscreen_model_changed;
+static uint64_t fullscreen_sample_tick;
+static bool fullscreen_sample_frame;
 static uint32_t fullscreen_palette;
 static const struct task *fullscreen_service_task;
+/* f3-61: what requested the pending return (enum dosvm_fullscreen_cause).
+ * The record keeps reason=return-or-fault and names the cause. */
+static uint8_t fullscreen_cause_next;
+static const char *const fullscreen_causes[DOSVM_FS_CAUSES]={
+    "none","hotkey","background","mode-change","present-error","stopping",
+    "first-frame-timeout","guest-progress-timeout","owner-lost","request"};
+static void return_cause(uint8_t cause) { if (!fullscreen_cause_next) fullscreen_cause_next=cause; }
 /* A VM may yield halfway through a synthetic VGA BIOS transfer. After a
  * forced return its C continuation may finish, but must never touch the
  * restored adapter. The display worker retains its independent access. */
@@ -134,7 +143,7 @@ void dosvm_fullscreen_mode_changed(struct dosvm *v)
     /* A guest worker cannot synchronously park itself. Finish the synthetic
      * operation, then park at its normal checkpoint for the display worker. */
     arch_vga_io(false); map_aperture(v,false);
-    fullscreen_model_changed=true; fullscreen_return=true;
+    fullscreen_model_changed=true; fullscreen_return=true; return_cause(DOSVM_FS_MODE_CHANGE);
     v->fullscreen_hold=true;
     display_fullscreen_return_request();
 }
@@ -164,7 +173,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     fullscreen_busy=true;
     fullscreen_service_task=g_current;
     fullscreen_linear=v->vbe_mode!=0; fullscreen_model_changed=false;
-    v->fullscreen_error=0;
+    v->fullscreen_error=0; v->fullscreen_cause=DOSVM_FS_NONE; fullscreen_cause_next=0;
     /* Persistence sleeps: pin the VM before the first record can yield. */
     v->fullscreen_hold=true;
     klog("[dosvm] fullscreen_request vm=%u generation=%u mode=%u",key.id,key.generation,mode);
@@ -207,6 +216,8 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     fullscreen_owner=v; v->fullscreen=true;
     fullscreen_background=false;
     v->fullscreen_progress=g_ticks; v->fullscreen_ip=UINT32_MAX;
+    v->fullscreen_seconds=v->fullscreen_frame_seconds=0;
+    fullscreen_sample_tick=g_ticks; fullscreen_sample_frame=false;
     fullscreen_frame_seen=mode<=3; /* a static text prompt need not store again */
     /* Arm before resuming: the native worker observes hardware PTE D bits,
      * independent of guest instruction progress and idle hints. */
@@ -238,6 +249,8 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     fullscreen_busy=true;
     fullscreen_service_task=g_current;
     struct dosvm *v=fullscreen_owner;
+    v->fullscreen_cause=fullscreen_cause_next ? fullscreen_cause_next : DOSVM_FS_REQUEST;
+    fullscreen_cause_next=0;
     display_fullscreen_return_request();
     display_fullscreen_checkpoint("guest-revoke",0);
     /* Leave at least 1750 ms of the 2 s return budget for capture/native
@@ -262,8 +275,9 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     desktop_next=0; desktop_pending=background && fullscreen_background ? 5 : 1;
     v->fullscreen_suspended=(parked || (background && v->fullscreen_pause)) && dosvm_valid(key);
     unhold(v);
-    klog("[dosvm] fullscreen=0 vm=%u generation=%u result=%d suspended=%u revoke_result=%d restore_result=%d",
-        key.id,key.generation,e,v->fullscreen_suspended,revoked,restored);
+    klog("[dosvm] fullscreen=0 vm=%u generation=%u result=%d suspended=%u revoke_result=%d restore_result=%d cause=%s",
+        key.id,key.generation,e,v->fullscreen_suspended,revoked,restored,
+        fullscreen_causes[v->fullscreen_cause<DOSVM_FS_CAUSES ? v->fullscreen_cause : 0]);
     fullscreen_busy=false;
     return e;
 }
@@ -273,7 +287,7 @@ void dosvm_fullscreen_stopping(struct dosvm *v)
         display_fullscreen_return_request();
         uint32_t flags=irq_save();
         arch_vga_io(false); map_aperture(v,false);
-        fullscreen_return=true;
+        fullscreen_return=true; return_cause(DOSVM_FS_STOPPING);
         irq_restore(flags);
     }
     v->fullscreen_suspended=false;
@@ -296,8 +310,9 @@ void dosvm_fullscreen_poll(void)
         if (fullscreen_linear && !fullscreen_return) {
             linear_palette(v);
             int frame=dosvm_vbe_flush(v,false);
-            if (frame<0) { v->fullscreen_error=frame; fullscreen_return=true; }
-            else if (frame && !fullscreen_frame_seen) {
+            if (frame<0) { v->fullscreen_error=frame; fullscreen_return=true; return_cause(DOSVM_FS_PRESENT_ERROR); }
+            if (frame>0) fullscreen_sample_frame=true;
+            if (frame>0 && !fullscreen_frame_seen) {
                 fullscreen_frame_seen=true;
                 klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=linear-write",
                     v->info.key.id,v->info.key.generation,g_ticks);
@@ -317,6 +332,27 @@ void dosvm_fullscreen_poll(void)
                 display_fullscreen_checkpoint("first-guest-frame",0);
             }
         }
+        /* f3-61: once a first frame was seen, one sample per second of the
+         * aperture dirty bits (cleared here; the VM's CR3 reload flushes its
+         * TLB). Frame evidence for probes, never a watchdog input. */
+        if (fullscreen_frame_seen && !fullscreen_return && g_ticks-fullscreen_sample_tick>=1000) {
+            fullscreen_sample_tick=g_ticks;
+            if (!fullscreen_linear && v->as.pd_phys) {
+                uint32_t flags=irq_save();
+                uint32_t *pd=P2V(v->as.pd_phys);
+                if (fullscreen_owner==v && v->fullscreen && (pd[0]&PTE_P)) {
+                    volatile uint32_t *pt=P2V(pd[0]&~0xFFFu);
+                    for (unsigned i=0xA0;i<0xC0;i++) if (pt[i]&0x40u) {
+                        fullscreen_sample_frame=true; pt[i]&=~0x40u;
+                        if (read_cr3()==v->as.pd_phys) invlpg(i<<12);
+                    }
+                }
+                irq_restore(flags);
+            }
+            v->fullscreen_seconds++;
+            if (fullscreen_sample_frame) v->fullscreen_frame_seconds++;
+            fullscreen_sample_frame=false;
+        }
         bool idle=v->fullscreen_suspended || v->idle.sleeping ||
             (v->idle.seen && g_ticks-v->idle.last_tick<1000) ||
             (v->monitor.state==V86_HALTED && v->monitor.vif);
@@ -329,8 +365,15 @@ void dosvm_fullscreen_poll(void)
             !v->task || !task_alive(v->task) || frame_timeout || progress_timeout) {
             const char *reason=fullscreen_return ? "return-or-fault" : frame_timeout ? "first-frame-timeout" :
                 progress_timeout ? "guest-progress-timeout" : "owner-lost";
+            if (!fullscreen_return)
+                return_cause(frame_timeout ? DOSVM_FS_FIRST_FRAME_TIMEOUT : progress_timeout ? DOSVM_FS_PROGRESS_TIMEOUT : DOSVM_FS_OWNER_LOST);
+            uint8_t cause=fullscreen_cause_next<DOSVM_FS_CAUSES ? fullscreen_cause_next : DOSVM_FS_NONE;
             display_fullscreen_return_request();
-            klog("[dosvm] fullscreen_watchdog vm=%u generation=%u reason=%s",v->info.key.id,v->info.key.generation,reason);
+            /* f3-61: the VM keeps running in its window; only cause=stopping
+             * is a VM that stopped by itself (vector!=0: a guest fault). */
+            klog("[dosvm] fullscreen_watchdog vm=%u generation=%u reason=%s cause=%s stop_reason=%u vector=%u",
+                 v->info.key.id,v->info.key.generation,reason,fullscreen_causes[cause],
+                 cause==DOSVM_FS_STOPPING ? v->info.reason : 0,cause==DOSVM_FS_STOPPING ? v->info.fault_vector : 0);
             display_fullscreen_checkpoint("watchdog-return",0);
             if (frame_timeout || progress_timeout) v->fullscreen_error=-ETIMEDOUT;
             struct dosvm_key key=v->info.key;
@@ -375,6 +418,7 @@ bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value)
             if (fullscreen_owner) {
                 display_fullscreen_return_request();
                 fullscreen_return=true; fullscreen_background=code==0x0F;
+                return_cause(code==0x0F ? DOSVM_FS_BACKGROUND : DOSVM_FS_HOTKEY);
             }
             else {
                 struct dosvm *v=dosvm_lookup(key);

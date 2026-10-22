@@ -216,6 +216,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     if (!err) switch (tf->eax) {
     case CIUKI_SYS_LSEEK64: {
         int64_t position;
+        vfs_tag_locked(d->node->space->vfs,"seek"); vfs_site_locked(d->node->space->vfs,"native"); /* f1-93b */
         err = file_seek_locked(d, scalar64(tf->ecx, tf->edx), tf->esi, &position);
         if (!err) err = copy_to_user(tf->edi, &position, sizeof(position));
         break;

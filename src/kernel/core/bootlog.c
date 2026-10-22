@@ -18,6 +18,8 @@ struct log_record {
     unsigned next, prev, diag_next, diag_prev;
     unsigned length, offset;
     bool verbose;
+    bool droppable; /* verbose or budgeted statistic: evictable by any other class */
+    bool statistic; /* budgeted periodic statistic (counted apart from verbose) */
 };
 static struct log_record records[BOOTLOG_RECORDS];
 static unsigned boot_used, boot_sent, used, record_count, free_count;
@@ -73,7 +75,7 @@ static void init_slots(void)
 static void unlink_diag(unsigned slot)
 {
     struct log_record *r=&records[slot];
-    if (!r->verbose || r->offset) return;
+    if (!r->droppable || r->offset) return;
     if (r->diag_prev!=NONE) records[r->diag_prev].diag_next=r->diag_next;
     else diag_head=r->diag_next;
     if (r->diag_next!=NONE) records[r->diag_next].diag_prev=r->diag_prev;
@@ -90,11 +92,133 @@ static void remove_record(unsigned slot)
     used-=r->length-r->offset;record_count--;
     free_slots[free_count++]=slot;
 }
-static void record_loss(unsigned bytes, bool verbose)
+static void record_loss(unsigned bytes, bool verbose, bool statistic)
 {
     stats.dropped+=bytes;
     if (verbose) { stats.dropped_verbose+=bytes;stats.records_dropped_verbose++; }
+    else if (statistic) { stats.dropped_statistic+=bytes;stats.records_dropped_statistic++; }
     else { stats.dropped_protected+=bytes;stats.records_dropped_protected++; }
+}
+/* f0-56 record classes. Protected: every klog/record line and every periodic
+ * line named below (application and [user N] output, DOS VM lifecycle,
+ * accelerator, ATA, storage read-only/failure, entropy, interrupt-off
+ * blackouts, the log's own counters); they are only lost when the RAM queue
+ * is full of other protected lines. Statistic: any other klog_periodic line;
+ * it gets a per-window line budget, is refused when the queue is nearly full
+ * and is the first thing evicted. Suppression is reported by one summary. */
+static const char *const protected_periodic[]={
+    "[kernel] irqoff","[kernel] bootlog","[dosvm] lifecycle","[accel]","[ata]",
+    "[storage] readonly","[storage] failure","[entropy]","[user ","[bootlog]",0};
+/* Only recognised statistics are budgeted (the dosvm perf and audio transport
+ * rows stay protected: low volume, rate-limited by their emitters); any other
+ * periodic line stays protected, so an unknown emitter can never be suppressed by mistake. */
+static const char *const statistic_periodic[]={
+    "[cpu] ","[sched] ","[kernel] ","[mem] ","[storage] queue","[pager] stats",0};
+static bool starts_with(const char *s, unsigned n, const char *p)
+{
+    unsigned i=0;
+    for (;p[i];i++) if (i>=n || s[i]!=p[i]) return false;
+    return true;
+}
+static bool protected_line(const char *s, unsigned n)
+{
+    for (unsigned i=0;protected_periodic[i];i++)
+        if (starts_with(s,n,protected_periodic[i])) return true;
+    for (unsigned i=0;statistic_periodic[i];i++)
+        if (starts_with(s,n,statistic_periodic[i])) return false;
+    return true;
+}
+#define BUDGET_KINDS 16u
+#define BUDGET_NAME 24u
+static struct {
+    bool open;
+    uint32_t start;
+    unsigned lines, dropped_lines, dropped_bytes, kinds;
+    struct { char name[BUDGET_NAME]; unsigned seen, dropped; } kind[BUDGET_KINDS];
+} budget;
+/* "[cpu] task=x" -> "cpu/task"; unknown shapes share the last slot. */
+static void kind_name(const char *s, unsigned n, char *out)
+{
+    unsigned o=0,i=0;
+    if (n && s[0]=='[') {
+        for (i=1;i<n && s[i]!=']' && o<12;i++) out[o++]=s[i];
+        while (i<n && s[i]!=']') i++;
+        if (i<n) i++;
+        while (i<n && s[i]==' ') i++;
+        out[o++]='/';
+        for (;i<n && s[i]!=' ' && s[i]!='=' && s[i]!='\n' && o<BUDGET_NAME-1;i++) out[o++]=s[i];
+    } else out[o++]='?';
+    out[o]=0;
+}
+static unsigned kind_find(const char *name)
+{
+    for (unsigned k=0;k<budget.kinds;k++) {
+        unsigned i=0;
+        while (name[i] && name[i]==budget.kind[k].name[i]) i++;
+        if (name[i]==budget.kind[k].name[i]) return k;
+    }
+    if (budget.kinds<BUDGET_KINDS-1) {
+        unsigned k=budget.kinds++,i=0;
+        for (;name[i];i++) budget.kind[k].name[i]=name[i];
+        budget.kind[k].name[i]=0;
+        return k;
+    }
+    if (budget.kinds==BUDGET_KINDS-1) {
+        const char *other="other";
+        budget.kinds=BUDGET_KINDS;
+        for (unsigned i=0;i<6;i++) budget.kind[BUDGET_KINDS-1].name[i]=other[i];
+    }
+    return BUDGET_KINDS-1;
+}
+static void put_str(char *b, unsigned *o, const char *t)
+{ while (*t && *o<BOOTLOG_RECORD_BYTES-2) b[(*o)++]=*t++; }
+static void put_num(char *b, unsigned *o, unsigned v)
+{
+    char t[10];unsigned n=0;
+    do { t[n++]=(char)('0'+v%10);v/=10; } while (v);
+    while (n && *o<BOOTLOG_RECORD_BYTES-2) b[(*o)++]=t[--n];
+}
+static void admit_locked(const char *s, unsigned take, bool periodic, bool verbose, bool statistic);
+/* RAM lock held. Emits the summary of a closed window, then resets it. */
+static void budget_close_locked(uint32_t now)
+{
+    if (budget.dropped_lines) {
+        char b[BOOTLOG_RECORD_BYTES];unsigned o=0;
+        put_str(b,&o,"[bootlog] budget_dropped window_ms=");put_num(b,&o,now-budget.start);
+        put_str(b,&o," limit=");put_num(b,&o,BOOTLOG_BUDGET_LINES);
+        put_str(b,&o,"/");put_num(b,&o,BOOTLOG_BUDGET_KIND_LINES);
+        put_str(b,&o," kept=");put_num(b,&o,budget.lines);
+        put_str(b,&o," dropped=");put_num(b,&o,budget.dropped_lines);
+        put_str(b,&o," bytes=");put_num(b,&o,budget.dropped_bytes);
+        put_str(b,&o," kinds=");
+        bool first=true;
+        for (unsigned k=0;k<budget.kinds;k++) if (budget.kind[k].dropped) {
+            if (!first) put_str(b,&o,",");
+            first=false;put_str(b,&o,budget.kind[k].name);put_str(b,&o,":");put_num(b,&o,budget.kind[k].dropped);
+        }
+        b[o++]='\n';
+        stats.budget_windows++;
+        admit_locked(b,o,true,false,false);
+        stats.captured+=o;
+    }
+    budget.open=false;budget.lines=budget.dropped_lines=budget.dropped_bytes=budget.kinds=0;
+    for (unsigned k=0;k<BUDGET_KINDS;k++) budget.kind[k].name[0]=0,budget.kind[k].seen=budget.kind[k].dropped=0;
+}
+/* RAM lock held. True when this statistic line is within its window budget. */
+static bool budget_admit(const char *s, unsigned take)
+{
+    uint32_t now=fs_now_ms();
+    if (budget.open && (uint32_t)(now-budget.start)>=BOOTLOG_BUDGET_WINDOW_MS) budget_close_locked(now);
+    if (!budget.open) { budget.open=true;budget.start=now; }
+    char name[BUDGET_NAME];kind_name(s,take,name);
+    unsigned k=kind_find(name);
+    if (budget.lines>=BOOTLOG_BUDGET_LINES || budget.kind[k].seen>=BOOTLOG_BUDGET_KIND_LINES) {
+        budget.kind[k].dropped++;budget.dropped_lines++;budget.dropped_bytes+=take;
+        stats.budget_dropped_lines++;
+        return false;
+    }
+    budget.lines++;budget.kind[k].seen++;
+    return true;
 }
 static bool high_water(void)
 {
@@ -110,42 +234,57 @@ static bool sync_ready(void)
     return sync_commit_target && history_sent==history_size &&
            boot_sent>=sync_commit_boot && ring_done()>=sync_commit_ring;
 }
+/* RAM lock held. One record slice (<=256 bytes), admitted or lost as a whole. */
+static void admit_locked(const char *s, unsigned take, bool periodic, bool verbose, bool statistic)
+{
+    bool droppable=verbose || statistic;
+    unsigned prefix=!periodic && boot_used<boot_capacity ? boot_capacity-boot_used : 0;
+    if (prefix>=take) prefix=take;else prefix=0;
+    if (prefix) { memcpy(boot+boot_used,s,prefix);boot_used+=prefix; }
+    unsigned bytes=take-prefix;
+    if (bytes) {
+        uint64_t begin=ring_captured;ring_captured+=bytes;
+        /* A statistic never takes the last slots: they stay for evidence. */
+        if (statistic && free_count<=BOOTLOG_STATISTIC_RESERVE) {
+            record_loss(bytes,false,true);
+            return;
+        }
+        if (!free_count && diag_head!=NONE) {
+            unsigned slot=diag_head;
+            record_loss(records[slot].length,records[slot].verbose,records[slot].statistic);
+            remove_record(slot);
+        }
+        if (!free_count) record_loss(bytes,verbose,statistic);
+        else {
+            unsigned slot=free_slots[--free_count];
+            struct log_record *r=&records[slot];
+            *r=(struct log_record){.begin=begin,.length=bytes,.next=NONE,.prev=tail,
+                .diag_next=NONE,.diag_prev=NONE,.verbose=verbose,.droppable=droppable,.statistic=statistic};
+            memcpy(ram[slot],s+prefix,bytes);
+            if (tail!=NONE) records[tail].next=slot;else head=slot;
+            tail=slot;record_count++;used+=bytes;
+            if (droppable) {
+                r->diag_prev=diag_tail;
+                if (diag_tail!=NONE) records[diag_tail].diag_next=slot;else diag_head=slot;
+                diag_tail=slot;
+            }
+        }
+    }
+}
 static void capture(const char *s, size_t n, bool periodic, bool verbose)
 {
     if (!s) return;
     /* Formatted output is <=255 bytes and is admitted/evicted as a whole.
-     * Bulk callers use bounded slices; producers never perform disk I/O. */
+     * Bulk callers use bounded slices; producers never perform disk I/O.
+     * Each slice holds the RAM lock for one memcpy of <=256 bytes. */
+    bool statistic=periodic && !verbose && n<=BOOTLOG_RECORD_BYTES && !protected_line(s,(unsigned)n);
     while (n) {
         unsigned take=n>BOOTLOG_RECORD_BYTES ? BOOTLOG_RECORD_BYTES : (unsigned)n;
         uint32_t flags=lock_ram();
         if (disabled) { unlock_ram(flags);return; }
         init_slots();
-        unsigned prefix=!periodic && boot_used<boot_capacity ? boot_capacity-boot_used : 0;
-        if (prefix>=take) prefix=take;else prefix=0;
-        if (prefix) { memcpy(boot+boot_used,s,prefix);boot_used+=prefix; }
-        unsigned bytes=take-prefix;
-        if (bytes) {
-            uint64_t begin=ring_captured;ring_captured+=bytes;
-            if (!free_count && diag_head!=NONE) {
-                unsigned slot=diag_head;
-                record_loss(records[slot].length,true);remove_record(slot);
-            }
-            if (!free_count) record_loss(bytes,verbose);
-            else {
-                unsigned slot=free_slots[--free_count];
-                struct log_record *r=&records[slot];
-                *r=(struct log_record){.begin=begin,.length=bytes,.next=NONE,.prev=tail,
-                    .diag_next=NONE,.diag_prev=NONE,.verbose=verbose};
-                memcpy(ram[slot],s+prefix,bytes);
-                if (tail!=NONE) records[tail].next=slot;else head=slot;
-                tail=slot;record_count++;used+=bytes;
-                if (verbose) {
-                    r->diag_prev=diag_tail;
-                    if (diag_tail!=NONE) records[diag_tail].diag_next=slot;else diag_head=slot;
-                    diag_tail=slot;
-                }
-            }
-        }
+        if (statistic && !budget_admit(s,take)) { unlock_ram(flags);return; }
+        admit_locked(s,take,periodic,verbose,statistic);
         stats.captured+=take;
         if (high_water()) pressure=true;
         unlock_ram(flags);s+=take;n-=take;
@@ -361,6 +500,8 @@ int bootlog_drain(void)
     uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
 #endif
     uint32_t f=lock_ram();
+    if (budget.open && (uint32_t)(fs_now_ms()-budget.start)>=BOOTLOG_BUDGET_WINDOW_MS)
+        budget_close_locked(fs_now_ms());
     if (high_water()) pressure=true;
     unlock_ram(f);
     uint32_t turn_start=fs_now_ms();
@@ -460,6 +601,7 @@ int bootlog_shutdown(void)
 #endif
     if (!take_drain()) return -FS_EBUSY;
     stopping = true;
+    { uint32_t f=lock_ram();budget_close_locked(fs_now_ms());unlock_ram(f); }
     int result = stats.error;
     for (;;) {
         uint32_t f = lock_ram();
@@ -504,6 +646,7 @@ void bootlog_reset(void)
     if (attached || draining) return;
     memset(&stats, 0, sizeof(stats)); used=boot_used=boot_sent=record_count=free_count=0;
     head=tail=diag_head=diag_tail=NONE;slots_ready=pressure=false;ring_captured=0;
+    memset(&budget,0,sizeof(budget));
     history=0;history_size=history_sent=0;boot_capacity=BOOTLOG_PROTECTED;
     ring_position = BOOTLOG_PROTECTED; handle = -1; disabled = false;
     stopping=metadata_dirty=drain_started=false; last_drain=last_metadata=0;

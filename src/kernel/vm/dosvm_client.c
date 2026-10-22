@@ -86,8 +86,10 @@ static int release_binding(struct binding *b)
     struct dosvm *v = dosvm_lookup(b->key);
     if (v && v->task) task_input_withdraw(v->task);
     /* A VM that already stopped (EXIT, fault) is not forced: forced
-     * termination is what reports possible private-data loss. */
-    bool forced = v && v->info.state < DOSVM_STOPPING;
+     * termination is what reports possible private-data loss. f3-61: nor is
+     * a VM whose shell is idle at its prompt (dosvm_shell_idle), e.g. after
+     * a game returned to DOS; it ends as an ordinary EXIT. */
+    bool forced = v && v->info.state < DOSVM_STOPPING && !dosvm_shell_idle(v);
     int e = dosvm_destroy(b->key, forced);
     v = dosvm_lookup(b->key);
     if (!v || v->info.state == DOSVM_DEAD) {

@@ -45,6 +45,19 @@ static inline unsigned t23_arrival_ms(unsigned sequence)
 #define T23A_READDIR_RECORDS 36u
 #define T23A_LOOKUP_RECORDS 10u
 #define T23A_DOS_MKDIR_RECORDS 1u
+/* f1-93b: T23 trial of image b453bc92 (2026-10-22). After f1-93 the drive C
+ * records were still op=readdir 1904/1549/1502/1395 ms, op=stat 1386/967 ms
+ * and op=lookup 392/216/200 ms, all task=desktop#31 (the desktop's folder
+ * worker, "directory-compare"), quantized at 100 ms (100 x7, 200 x2, 300 x2)
+ * while the foreground DOS VM (dosvm#54, effective priority 9, 62-74 % of
+ * the CPU, idle 0) starved the desktop workers (base 7, under 3 % each) and
+ * the ATA queue issued 13-41 commands per 4 s. A starved normal task runs
+ * again only at its starvation boost, 100 ms after it became ready
+ * (task.c task_ready_timer), so every preemption point the holder reached
+ * inside its section kept drive C for 100 ms more. The replay charges that
+ * 100 ms at every fs_service point and checks the 20 ms gate. */
+#define T23B_PREEMPT_MS 100u
+#define T23B_FOLDER_ENTRIES 2000u
 /* Directive fact 2: device_overrun task=audio-refill in 192 of 201 windows. */
 #define T23_OVERRUN_WINDOWS 192u
 #define T23_REPORT_WINDOWS 201u

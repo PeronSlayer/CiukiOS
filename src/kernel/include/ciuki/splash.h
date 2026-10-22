@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_SPLASH_H
 #define CIUKI_SPLASH_H
+#include <stdbool.h>
 #include <stdint.h>
 
 enum splash_phase {
@@ -50,5 +51,10 @@ static inline int splash_storage_phase(unsigned kind)
 /* Thread context with IF=1. Stores the phase and draws the bar at once when
  * the splash is on screen; a no-op on verbose boots and after the handover. */
 void console_splash_phase(enum splash_phase phase);
+
+/* f1-97: the 2D accelerator decision, drawn under the bar by the console
+ * worker as `2D acceleration: YES` or `2D acceleration: NO (<reason>)`.
+ * Thread context; a no-op when the splash is not on screen. */
+void console_splash_accel(bool accelerated, const char *reason);
 
 #endif
