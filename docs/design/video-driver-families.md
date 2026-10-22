@@ -1111,7 +1111,7 @@ The lead reviewed this contract; it is binding with these decisions:
 4. **Names.** The hardware-name extractor fix is issued as f2-123, so that every display adapter has a name in Device Manager and Control Panel.
 5. **3D.** The Mesa/OpenGL update of F7 is deferred: the owner agreed that hardware 3D comes after the 2D families. This contract's section 7 is kept as research input.
 
-### Owner decision on GPL-3.0 (2026-10-22 23:55)
+### Owner decision on GPL-3.0 (2026-10-22 23:54)
 
 The owner allows GPL-3.0 sources ("includi anche GPL-3"). Item 3 above changes accordingly:
 - **VirtualBox `DevVGA-SVGA.cpp`** may be read and cited as the behavioural reference for the VMSVGA backend of f2-111. It is VirtualBox's emulator, the host side of the virtual adapter, so it supplies no driver code; the guest protocol comes from the MIT `svga_reg.h`.
