@@ -94,3 +94,62 @@ Budgets are workload-specific host models, not physical-machine evidence.
 The report states their rates, included costs and exclusions. Arbitrary full
 frames cannot satisfy a budget below the measured LFB transfer lower bound;
 the lead must qualify actual applications on the canonical image.
+
+## F2-98b-fix1: chain-4 comparison and present cadence
+
+Research checked 2026-10-23 before the correction. The
+[QEMU 10.1 VGA memory paths](https://raw.githubusercontent.com/qemu/qemu/v10.1.0/hw/display/vga.c)
+select the chain-4 plane from the low two address bits and distinguish
+doubleword display addressing from host memory access. Its backing layout
+differs from Ciuki's separate plane arrays. In this repository,
+`cvga_store_chain4_span`, `cvga_chain4_dirty` and `cvp_chain4_row32` agree:
+successive displayed bytes within one chain-4 plane are four array positions
+apart, with 16-bit wrap. Mode X/Y uses consecutive array positions. The new
+shared `video_planar_changed` comparison incorrectly used the Mode X/Y
+address calculation for both. A store at mode 13h offset 100 changes plane 0
+at 100, outside the comparison's incorrect first-row span 0..79.
+
+Keep the existing
+[F3-41 cadence contract](../directives/f3-41-bounded-kernel-stretches-presenter-compositor-present-cadence.md)
+(required item 2 and review amendment item 3): sample changing mode 13h at
+half the programmed refresh, with the existing fast-flip exception. F3-45
+preserved that test; [F3-52](f3-52-window-wait.md) preserved its fractional
+deadlines through WAIT/PRESENT. The
+[DOOM source](https://raw.githubusercontent.com/id-Software/DOOM/master/linuxdoom-1.10/doomdef.h)
+defines 35 game tics per second; the half-refresh cap is Ciuki's explicit
+policy, not a general VGA or Windows requirement. Microsoft's
+[update-region contract](https://learn.microsoft.com/en-us/windows/win32/gdi/the-update-region)
+supports retaining precise damage rather than manufacturing unchanged
+updates. The owner's read-only Resource Kit `wrkc28_8.htm`, Graphics Device
+Interface / Graphics Subsystem, was also checked; it describes the DIB engine
+and display minidrivers, not a DOS presentation-frequency mandate.
+
+Correct the cache's chain-4 stride and wrap while retaining the contiguous
+Mode X/Y comparison. Keep the 35/30 assertions, row callback convention and
+`video_rows` bookkeeping. Add incremental scanout coverage against the scalar
+renderer, including all four planes, panning, split screens, address wrap,
+and unchanged stores. Host commands, results and qualification limits are
+recorded in `build/codex/f2-98b-fix1-report.md`.
+
+The cadence fixtures keep their original 35/30 and 70 expected counts.
+They now give flipped pages distinct pixels, and the 60 Hz deferral fixture
+makes a visible store alongside its timing change. Blank-page flips and
+timing-only changes cannot require a surface update under F2-98b's unchanged
+frame rule. This changes the test inputs, not the cadence policy or counts.
+
+The pending-DAC-observation assertion in `test_bounded_present` retains its
+one-present expectation and checks the completed sample count, acknowledged
+display counter and retained-renderer golden. The cache must retain the
+DAC mask from the sample's captured display generation, not the live mask
+at the end: a change across a yield can occur after row admission, leaving
+rows unconverted. Retaining the initial mask ensures that the pending
+display change forces those rows through conversion at the next due sample.
+Separate black-page flips now explicitly check zero surface rows and zero
+scanline damage while retaining the 70 Hz fast-flip sampling policy.
+
+The complete ASan/UBSan DOS VM host executable passed 65,186,617 checks:
+35/30 presents for the 1,000-tick changing-pixel cases, 70 changing-page
+flips after warm-up, 384 incremental chain-4 goldens, and all existing
+video/wait tests. LeakSanitizer then exited because ptrace is restricted in
+the sandbox; assertions passed, but leak checking requires the lead's
+unrestricted run. No QEMU or image build was performed.
