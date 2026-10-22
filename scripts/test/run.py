@@ -726,6 +726,13 @@ class Actions:
         for action in declared:
             if action.get('after',{}).get('event') not in ('READY','ARM'):
                 raise res.Refusal('actions require READY/ARM synchronization')
+            # f3-61c: an action whose ARM the probe declares will not come.
+            # Only an explicit guest DATA record releases it; a missing ARM
+            # without that record still leaves the stimuli incomplete.
+            unless=action.get('unless')
+            if unless is not None and (not isinstance(unless,dict) or unless.get('event')!='DATA' or len(unless)<2 or
+                                       not all(isinstance(v,(str,int)) for v in unless.values())):
+                raise res.Refusal('action unless requires a guest DATA record match')
             if action.get('type') not in ('input','cut','media'):raise res.Refusal('unknown runner action')
             if action['type']=='input':
                 if not 1<=action.get('repeat',1)<=1000 or not action.get('batches'):
@@ -819,8 +826,19 @@ class Actions:
         matched=any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records)
         return {'index':self.index,'action':action,'synchronization_observed':matched,
                 'batch':self.batch,'repeat':self.repeat}
+    def skip_declined(self,parser):
+        """Release actions whose `unless` record arrived instead of their ARM."""
+        while not self.complete and not self.batch and not self.repeat:
+            action=self.declared[self.index]
+            if 'unless' not in action:return
+            if any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records):return
+            declined=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['unless'].items())]
+            if not declined:return
+            self.observed.append({'type':'skipped','index':self.index,'unless_seq':declined[0]['seq']})
+            self.index+=1
     def step(self,parser,qmp,now):
         if not self.wait_consumption(parser,now):return None
+        self.skip_declined(parser)
         if self.complete or not qmp or now<self.due:return None
         action=self.declared[self.index]
         matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['after'].items())]
@@ -2142,6 +2160,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if parser.terminal:
                 if parser.terminal['event']=='NOT_RUN' or session and parser.outcome=='not_run':
                     result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal.get('after',parser.terminal.get('reason','unknown'));break
+                actions.skip_declined(parser)
                 if not actions.complete or session and not session.player.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')

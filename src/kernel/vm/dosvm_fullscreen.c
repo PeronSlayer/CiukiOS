@@ -80,6 +80,10 @@ static int entry_windowed(struct dosvm_key key,int reason)
 {
     klog("[dosvm] fullscreen_refused vm=%u generation=%u error=%d continuation=windowed",
         key.id,key.generation,reason);
+    uint32_t flags=irq_save();
+    struct dosvm *v=dosvm_lookup(key);
+    if (v) { v->fullscreen_refusals++; v->fullscreen_refusal=reason; }
+    irq_restore(flags);
     entry_error(key,0);
     return DISPLAY_FULLSCREEN_WINDOWED;
 }
