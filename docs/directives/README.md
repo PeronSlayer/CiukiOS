@@ -431,3 +431,11 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-111-uart-generations-native-com-abi](f1-111-uart-generations-native-com-abi.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-22 23:47 (UART generations, COM resources, native COM ABI, logger arbitration) |
 | [f2-123-hardware-names-complete](f2-123-hardware-names-complete.md) | F2 | gpt-6.1-sol / medium (--search) | written 2026-10-22 23:58 (INF literal descriptions, pci.ids/usb.ids as second source, size measured) |
 | [f2-101c-display-command-semantics](f2-101c-display-command-semantics.md) | F2 | gpt-6.1-sol / high (--search, no code) | written 2026-10-22 23:58 (pixel, aliasing, clip, line, batch and fence semantics with golden vectors before part C code) |
+| [f1-107-ac97-chipset-codec-qualification](f1-107-ac97-chipset-codec-qualification.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:08 (wave 2: AC97 routing/codec qualification across ICH/VIA/SiS/nForce/ALi, codec table) |
+| [f1-108-ata-chipset-timing-native-mode](f1-108-ata-chipset-timing-native-mode.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:08 (wave 2: ATA timing/cable/native-mode per chipset, PIIX/ICH first) |
+| [f1-116-ess-maestro-audio](f1-116-ess-maestro-audio.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:08 (wave 2: ESS Maestro 1/2/2E engine, E500 routing) |
+| [f1-117-emu10k1-sb-live-audigy](f1-117-emu10k1-sb-live-audigy.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:08 (wave 2: EMU10K1/10K2 PCM and mixer) |
+| [f1-118-cmi8338-8738](f1-118-cmi8338-8738.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:08 (wave 2: CMI8338/8738 PCM and mixer) |
+| [f1-119-yamaha-ds-xg](f1-119-yamaha-ds-xg.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:08 (wave 2: Yamaha DS-XG with microcode (owner licence decision)) |
+| [f1-120-trident-4dwave-ali-m5451](f1-120-trident-4dwave-ali-m5451.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:08 (wave 2: Trident 4DWave and ALi M5451 engines) |
+| [f1-122-synaptics-alps-touchpads](f1-122-synaptics-alps-touchpads.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:08 (wave 2: Synaptics/ALPS absolute touchpads) |
