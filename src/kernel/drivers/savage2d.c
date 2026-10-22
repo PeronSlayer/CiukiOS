@@ -1022,8 +1022,35 @@ int savage2d_check_begin(struct vfs *vfs, bool *retained)
      * it intact. Never lift an in-session quarantine or clear this marker. */
     return attempt_marker(vfs,false,retained);
 }
+/* f1-97: the one-line answer to "does 2D acceleration work?". Emitted when
+ * the first decision exists and again only if it flips (a later quarantine
+ * of an accelerated engine); the splash line and the device record follow it. */
+extern void console_splash_accel(bool, const char *) __attribute__((weak));
+static struct { bool decided, accelerated; char reason[40]; } summary_state;
+static void summary(bool accelerated, const char *reason)
+{
+    if (summary_state.decided && summary_state.accelerated == accelerated) return;
+    const char *token = accelerated ? "none" : reason && *reason ? reason : "unknown";
+    unsigned n = 0;
+    for (; token[n] && n + 1 < sizeof(summary_state.reason); n++) summary_state.reason[n] = token[n];
+    summary_state.reason[n] = 0;
+    summary_state.decided = true; summary_state.accelerated = accelerated;
+    klog("[accel] summary accelerated=%u driver=savage reason=%s", accelerated ? 1u : 0u, summary_state.reason);
+    if (console_splash_accel) console_splash_accel(accelerated, accelerated ? 0 : summary_state.reason);
+}
+/* Desktop and device list: false until a decision exists. */
+bool savage2d_summary(bool *accelerated, const char **reason)
+{
+    if (!summary_state.decided) return false;
+    if (accelerated) *accelerated = summary_state.accelerated;
+    if (reason) *reason = summary_state.reason;
+    return true;
+}
+/* Safe mode never reaches the activation code. */
+void savage2d_summary_safe_mode(void) { summary(false, "safe_mode"); }
 static const struct accel_ops *decline(const char *reason)
 {
+    summary(false, reason);
     klog("[accel] savage quarantined reason=%s us=%llu reset_us=%llu poll_us=%llu trace_us=%llu status=%08x status_valid=%u",
         reason, activation_elapsed(), engine.reset_us, engine.poll_us, trace_us, engine.status, engine.status_logged);
     attempt_in_progress = false;
@@ -1190,6 +1217,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
     klog("[accel] savage ready us=%llu reset_us=%llu poll_us=%llu trace_us=%llu status=%08x status_valid=%u",
         activation_elapsed(), engine.reset_us, engine.poll_us, trace_us, engine.status, engine.status_logged);
     attempt_in_progress = false;
+    summary(true, 0);
     return &engine.ops;
 }
 

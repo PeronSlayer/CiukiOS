@@ -1,4 +1,4 @@
-# f1-97 — Plain "2D acceleration: YES/NO" indicator at start-up (owner, 2026-10-22 09:40)
+# f1-97 — Plain "2D acceleration: YES/NO" indicator at start-up (owner, 2026-10-22 09:33)
 
 - **Phase/model:** F1/F2, Claude agent (Sonnet). **Worktree:** `wt/f1-97` from `main`.
 - **Owner request:** at system start, for debugging, something that says plainly whether the acceleration works: "YES, it works" or "NO, it does not", without frills and without wasting time.
