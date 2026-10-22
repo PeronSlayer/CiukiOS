@@ -42,6 +42,7 @@ F0 and F1 design records:
 - [USB host, HID and mass storage](design/usb-contract.md)
 - [Optical drive binding](design/optical-drive-binding.md)
 - [Framebuffer write combining](design/framebuffer-write-combining.md)
+- [Universal display driver model](design/display-driver-model.md)
 - [Savage 2D presentation](design/savage-2d.md)
 - [Hardware ID database coverage](design/hardware-id-coverage.md)
 - [Kernel latency research](design/research/kernel-latency-2026-10-14.md)
