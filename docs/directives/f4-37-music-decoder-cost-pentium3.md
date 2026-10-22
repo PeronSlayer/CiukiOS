@@ -13,7 +13,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f4-37-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 20:28, decisions on the delivery)
+## Amendment 1 (lead, 2026-10-22 20:19, decisions on the delivery)
 
 Accepted. The decoder models at about 3 % of a 1.1 GHz Pentium III before
 the changes and 1.3–1.7 % after (FLDCW-free PCM conversion, exact
