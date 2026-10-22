@@ -41,6 +41,11 @@ Files:
   compiled: the floating-point entry points and the bitmap converter are
   never emitted and the integer-only compositor audit of
   `apps/desktop/build_desktop.py` still applies.
+  Upstream defines `pixman_region32_print` without `PIXMAN_EXPORT`; a prior
+  `static` declaration in this header gives it internal linkage as well
+  (C11 6.2.2p4). Without it, NetSurf (which links libdeskui with the
+  compositor's copy and its own surface copy) failed with a duplicate symbol
+  (lead fix 2026-10-23 after the f2-98a/f2-98b merges).
 
 Not taken this round: pixman's image, compositing and fast-path code
 (`pixman-fast-path.c`, `pixman-mmx.c`, `pixman-sse2.c` and the

@@ -61,6 +61,11 @@ struct pixman_region32
     pixman_box32_t          extents;
     pixman_region32_data_t  *data;
 };
+/* Upstream defines _print without PIXMAN_EXPORT (external linkage). This
+ * prior static declaration gives that definition internal linkage too
+ * (C11 6.2.2p4), so the compositor (libdeskui) and NetSurf's surface
+ * transport can both include the region code in one program. */
+static __attribute__((unused)) int pixman_region32_print(pixman_region32_t *region);
 
 /* Only for the never-emitted _init_from_image: an a1 image has no source in
  * CiukiOS, every accessor reports an empty image. */
