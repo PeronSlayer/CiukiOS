@@ -169,3 +169,4 @@ Documenti di design, validazione, fonti esterne.
 | [Integrazione della 1.0.0 alpha: nove fusioni, versione, catena finale, rinvii](2026-10-21-08-integrazione-1-0-0-alpha.md) | 21 ottobre 2026 | integrazione, release |
 | [Kernel DOS unificato predefinito per i giochi nella 1.0.0 alpha (shell classica fino a f3-58)](2026-10-21-09-kernel-unificato-default.md) | 21 ottobre 2026 | decisione (DOS) |
 | [Prova T23 della 1.0.0 alpha fallita: cause dalla seriale (ATA, prenotazioni, NetSurf, entropia) e sette direttive correttive](2026-10-21-10-prova-t23-1-0-0-alpha-fallita.md) | 21 ottobre 2026 | prova hardware, analisi |
+| [Seconda immagine 1.0.0 alpha 288052706a…: sette fusioni correttive, cause reali, evidenza host e QEMU](2026-10-22-01-immagine-1-0-0-alpha-seconda.md) | 22 ottobre 2026 | integrazione, release |

@@ -1,11 +1,12 @@
 # Changelog
 
-## 1.0.0 alpha (unreleased, `main`; hardware image `8f59e2217bca…` of 2026-10-21, T23 trial pending)
+## 1.0.0 alpha (unreleased, `main`; hardware image `288052706a83…` of 2026-10-22, T23 trial pending)
 
 Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.
 
 ### Kernel and resource management
 
+- Trial of image `8f59e221…` on the T23 (2026-10-21, dev diary 2026-10-21-10) rejected: seven corrective merges on 2026-10-22 — f1-92 (`125fefa2`: an issued ATA command ends only on its device deadline; since f3-49b a cancelled request was treated as a device fault, quarantining the drive and turning C: read-only), f1-93 (`c394506a`: native volume holds never span cold device reads), f6-19 (`d64787e0`: NetSurf gets its window channel from every launch route, Programs entry with icon, entropy initialises on the Pentium III), f2-88 (`8a181714`: Display properties decodes its preview off the UI thread), f2-89 (`bb8d652f`: removable media popup painted), f2-90/f2-90b (`5d28b71d`, `ce19c3bb`: wallpaper in the first desktop frame), f0-55 (`6f121d69`: boot splash progress bar).
 - f1-87 (`c19230eb`): T23 trial fixes — tagged volume holds with a missing-tag control, audio refill priority, the windowed DOS VM decoupled from the presenter, `usbscan=0` loader token, `device_overrun` attribution record.
 - f1-90 (`3c50bb79`): device CPU budget accounted per task with a max-min fair share; the audio refill worker has its own 2 ms per 10 ms budget and a direct interrupt wake; `device_top` and `audio_refill_overrun` records; contract R1/R2 amended.
 - f1-89 (`551bd15a`): reserved cache publication and FAT transactions — bounded logical holds, writer turn with a wait metric, in-flight readers block publication, single-page transactions, no barrier per 8 KiB overflow chunk, guarded lookups never read the disk under the guard (strict FS gate exit 0, 10 MiB copy replay 1,278 commands, 4,678 crash cuts clean).
