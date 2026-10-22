@@ -11,6 +11,8 @@
 #include <ciuki/thinkpad_ec.h>
 #include <ciuki/cpustat.h>
 #include "../../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
+#include <ciuki/task.h>
+#pragma weak sched_audio_producer_stats /* f1-101: task.c, absent in audio-only hosts */
 static struct vfs *settings_vfs;
 static struct kmutex control_lock;
 static struct kmutex service_lock; /* serialize write-side startup and worker */
@@ -229,7 +231,10 @@ void audio_fail(int error)
     quantum_pending = false;
     if (serial_buffered) serial_buffered(false);
     audio_wake();
-    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
+    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) {
+        audio_stream_lead(audio.streams[i]); /* f1-101: no producer boost on a failed device */
+        kwait_wake_all(&audio.streams[i]->changed);
+    }
 }
 static void audio_service_locked(void)
 {
@@ -744,6 +749,8 @@ int audio_write_user(struct file_description *d, uint32_t address, uint32_t byte
     if (!bytes) return 0;
     struct audio_operation *o = operation_begin(d);
     if (!o) return -ENOMEM;
+    /* f1-101: the writing thread is this stream's producer (writer role). */
+    audio_stream_producer(s, g_current, SCHED_PRODUCER_WRITER);
     int err = ua_pin(o->process->memory, &o->pin, address, bytes, false);
     o->pinned = !err;
     unsigned done = 0; uint32_t generation = s->generation;
@@ -786,6 +793,7 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_GET_STATUS: return sizeof(struct ciuki_audio_status);
     case AUDIO_SET_GAIN: return sizeof(struct ciuki_audio_gain);
     case AUDIO_DRAIN: case AUDIO_RESET: case AUDIO_REFILL_READ: return sizeof(struct ciuki_audio_command);
+    case AUDIO_GET_PRODUCER: return sizeof(struct ciuki_audio_producer);
     case MIXER_GET_MASTER: case MIXER_SET_MASTER: case MIXER_REFRESH_MASTER: return sizeof(struct ciuki_mixer_master);
     case MIXER_GET_DIAGNOSTICS: return sizeof(struct ciuki_audio_diagnostics);
     default: return 0;
@@ -805,18 +813,22 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     int err = copy_from_user(record, address, size);
     if (!err && record[0] != 1) err = -EOPNOTSUPP;
     if (!err && record[1] != size) err = -EINVAL;
-    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER ? 1 : op == AUDIO_GET_STATUS ? 0 : 2);
+    bool observation = op == AUDIO_GET_STATUS || op == AUDIO_GET_PRODUCER; /* output-only records */
+    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER ? 1 : observation ? 0 : 2);
     for (unsigned i = reserved; !err && i < size / 4; i++) if (record[i]) err = -EINVAL;
     if (!err) { err = ua_pin(p->memory, &o->pin, address, size, true); o->pinned = !err; }
     struct audio_stream *s = d->audio;
     if (!err && interrupted()) err = -EINTR;
-    if (!err && s && op != AUDIO_GET_STATUS && (audio.error || !audio.ready)) err = -EIO;
+    if (!err && s && !observation && (audio.error || !audio.ready)) err = -EIO;
     if (!err) switch (op) {
     case AUDIO_GET_CAPS: memcpy(record, &audio.caps, size); break;
     case AUDIO_REFILL_READ:
         if ((d->flags&O_ACCMODE)==O_RDONLY) { err=-EACCES; break; }
         if (!g_current) { err=-EINVAL; break; }
         g_current->audio_refill_bytes=0;
+        /* f1-101: the declared reader is this stream's producer (reader role);
+         * the mixer's lead, never this call, decides when it is boosted. */
+        audio_stream_producer(s, g_current, SCHED_PRODUCER_READER);
         if (s && s->started && !s->draining && s->queued<=AUDIO_RING*3/4) {
             g_current->audio_refill_generation=s->generation;
             g_current->audio_refill_expiry=deadline_after_ms(20);
@@ -847,12 +859,24 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         status.latency_frames = latency > UINT32_MAX ? UINT32_MAX : (uint32_t)latency;
         memcpy(record, &status, size); break;
     }
+    case AUDIO_GET_PRODUCER: {
+        struct sched_producer_stats stats = {0};
+        if (sched_audio_producer_stats) sched_audio_producer_stats(s, &stats);
+        struct ciuki_audio_producer producer = { .version=1, .size=sizeof(producer),
+            .flags=(stats.flags & SCHED_PRODUCER_BEHIND ? CIUKI_AUDIO_PRODUCER_BEHIND : 0) |
+                   (stats.flags & SCHED_PRODUCER_BOOSTED ? CIUKI_AUDIO_PRODUCER_BOOSTED : 0) |
+                   (stats.flags & SCHED_PRODUCER_OVER ? CIUKI_AUDIO_PRODUCER_OVER_BUDGET : 0),
+            .boosts=stats.boosts, .over_budget=stats.over_budget, .producers=stats.producers,
+            .boost_us=stats.cycles_per_ms ? stats.boost_cycles * 1000 / stats.cycles_per_ms : 0 };
+        memcpy(record, &producer, size); break;
+    }
     case AUDIO_RESET: audio_stream_reset(s); break;
     case AUDIO_DRAIN: {
         if (s->draining) { err = -EBUSY; break; }
         uint32_t generation = s->generation;
         s->draining = true; s->drain_goal = s->accepted;
         s->drain_latched = !s->queued; s->drain_output = s->last_output;
+        audio_stream_lead(s); /* f1-101: a draining stream needs no producer */
         audio_wake();
         while (!err && (!s->drain_latched || audio.played_output < s->drain_output)) err = stream_wait(s, generation, true);
         uint64_t limit = deadline_after_ms(audio.caps.drain_ms);
@@ -861,7 +885,10 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
             else if (audio.error) err = -EIO;
             else task_sleep_ms(1);
         }
-        if (s->generation == generation) { s->draining = false; if (!err && !s->queued) s->started = false; }
+        if (s->generation == generation) {
+            s->draining = false; if (!err && !s->queued) s->started = false;
+            audio_stream_lead(s);
+        }
         break;
     }
     case MIXER_GET_MASTER: memcpy(record, &audio.master, size); break;

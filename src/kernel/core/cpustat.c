@@ -30,6 +30,10 @@ static unsigned overrun_used, overrun_lost, audio_used, audio_lost;
 struct inherit_event { char from[16], to[16]; uint32_t from_id, to_id, count; uint8_t level, reason; };
 static struct inherit_event inherit_events[8];
 static unsigned inherit_used, inherit_lost;
+/* f1-101: audio producer boosts per task and window. */
+struct producer_event { char name[16]; uint32_t id, boosts, over_budget; uint64_t cycles; };
+static struct producer_event producer_events[8];
+static unsigned producer_used, producer_lost;
 static struct sched_share_stats share_base;
 static bool forced, threshold, resched_pending;
 static struct sched_stats sched_base;
@@ -238,6 +242,21 @@ void cpu_inherit(const struct task *from, const struct task *to, unsigned level,
     if (level > e->level) e->level = (uint8_t)level;
     irq_restore(f);
 }
+void cpu_audio_producer(const struct task *t, unsigned boosts, unsigned over_budget, uint64_t cycles)
+{
+    uint32_t f = irq_save();
+    unsigned i = 0;
+    while (i < producer_used && producer_events[i].id != t->id) i++;
+    if (i == ARRAY_SIZE(producer_events)) { producer_lost++; irq_restore(f); return; }
+    struct producer_event *e = &producer_events[i];
+    if (i == producer_used) {
+        producer_used++;
+        name_copy(e->name, t->name); e->id = t->id;
+        e->boosts = e->over_budget = 0; e->cycles = 0;
+    }
+    e->boosts += boosts; e->over_budget += over_budget; e->cycles += cycles;
+    irq_restore(f);
+}
 void cpu_trap_enter(const struct trap_frame *tf)
 {
     if (g_current && ((tf->cs & 3) == 3 || (tf->eflags & (1u << 17)))) {
@@ -310,6 +329,7 @@ static void cpu_emit(void)
     struct top top[5] = {0};
     struct overrun_event events[16], audio_overruns[4];
     struct inherit_event inherits[8];
+    struct producer_event producers[8];
     struct sched_share_stats share_now, share_delta;
     struct { char name[16]; uint32_t id; uint64_t cycles; } device_top = { "none", 0, 0 };
     uint64_t counts[P_COUNT], path[CPU_PATHS];
@@ -354,6 +374,9 @@ static void cpu_emit(void)
     unsigned inherit_count = inherit_used, inherit_dropped = inherit_lost;
     memcpy(inherits, inherit_events, inherit_count * sizeof(*inherits));
     inherit_used = inherit_lost = 0;
+    unsigned producer_count = producer_used, producer_dropped = producer_lost;
+    memcpy(producers, producer_events, producer_count * sizeof(*producers));
+    producer_used = producer_lost = 0;
     sched_share_snapshot(&share_now);
     share_delta = (struct sched_share_stats){ share_now.turns - share_base.turns,
         share_now.lent_turns - share_base.lent_turns, share_now.turn_cycles - share_base.turn_cycles,
@@ -490,6 +513,13 @@ static void cpu_emit(void)
             inherits[i].from, inherits[i].from_id, inherits[i].to, inherits[i].to_id, inherits[i].level,
             inherits[i].reason == KSYNC_DEPEND_CACHE ? "cache" : "drive", inherits[i].count);
     if (inherit_dropped) klog_periodic("[sched] inherit lost=%u", inherit_dropped);
+    /* f1-101: producers raised for a stream behind its lead, and withheld
+     * boosts once the shared 20 %/100 ms producer budget was spent. */
+    for (unsigned i = 0; i < producer_count; i++)
+        klog_periodic("[sched] audio_producer task=%s#%u boosts=%u over_budget=%u boost_us=%llu",
+            producers[i].name, producers[i].id, producers[i].boosts, producers[i].over_budget,
+            (unsigned long long)(producers[i].cycles * 1000 / per_ms()));
+    if (producer_dropped) klog_periodic("[sched] audio_producer lost=%u", producer_dropped);
     /* f1-98: the desktop group's CPU and the turns its minimum share gave it. */
     if (share_delta.group_cycles || share_delta.turns)
         klog_periodic("[sched] desktop_share group_pm=%u turns=%u lent_turns=%u turn_ms=%u",

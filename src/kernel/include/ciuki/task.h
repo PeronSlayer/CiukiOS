@@ -20,6 +20,9 @@ enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_HIGH, P_COUNT };
 #define SCHED_DEVICE 24u
 #define SCHED_SERVICE_MIN 16u
 #define SCHED_BOOST_CAP 15u
+/* f1-101: an audio producer behind its stream's target lead runs at the
+ * device band's lower edge, above every ordinary level (task.c). */
+#define SCHED_AUDIO_PRODUCER SCHED_SERVICE_MIN
 
 #define EXIT_FAULT_BASE 0x100      /* exit code = 0x100 + vector for faults */
 #define KSTACK_CANARY   0xC1A0CA7Au /* lowest word of every kernel stack */
@@ -86,6 +89,11 @@ struct task {
     uint8_t depend_reason;
     struct task *depends_on, *depend_next;
     const void *depend_object;
+    /* f1-101: a registered producer of an audio stream that the mixer finds
+     * behind its target lead (task.c producer table), and the boost level it
+     * holds while the producer CPU budget allows (0 otherwise). */
+    bool producer_behind;
+    uint8_t producer_priority;
     uint64_t device_ticks;
     uint64_t device_cycles, device_base; /* shared-budget CPU, report windows */
     uint64_t run_cycles, window_base, kernel_ticks, user_ticks;
@@ -145,6 +153,31 @@ struct sched_share_stats {
     uint64_t group_cycles;   /* CPU debited to the share (members, lent holders) */
 };
 void sched_share_snapshot(struct sched_share_stats *out);
+/* f1-101 (R2/R3): audio producer boost. The mixer, never the application,
+ * reports whether a native stream is behind its target lead; the stream's
+ * writer and its declared refill reader (roles below) then run at
+ * SCHED_AUDIO_PRODUCER until the lead is refilled, within one CPU budget for
+ * all producers (20 % over any 100 ms). Sources are keyed by the stream. */
+enum { SCHED_PRODUCER_WRITER, SCHED_PRODUCER_READER, SCHED_PRODUCER_ROLES };
+void sched_audio_producer(const void *source, struct task *t, unsigned role);
+void sched_audio_lead(const void *source, bool behind);
+void sched_audio_source_end(const void *source);
+#define SCHED_PRODUCER_BEHIND 1u    /* the mixer reports the lead behind */
+#define SCHED_PRODUCER_BOOSTED 2u   /* behind, and the budget allows the boost */
+#define SCHED_PRODUCER_OVER 4u      /* behind, boost withheld by the budget */
+struct sched_producer_stats {
+    uint32_t flags, boosts, over_budget, producers;
+    uint64_t boost_cycles, cycles_per_ms; /* producer CPU at the boost level */
+};
+void sched_audio_producer_stats(const void *source, struct sched_producer_stats *out);
+/* The level a waiter lends the owner it waits for (sync.c donation): the
+ * producer boost is the waiter's own deadline service and lends at most the
+ * top of the ordinary band, never device-band service to a lock holder. */
+static inline unsigned task_donor_priority(const struct task *t)
+{
+    return t->producer_priority && t->effective_priority == t->producer_priority ?
+        SCHED_BOOST_CAP : t->effective_priority;
+}
 void sched_snapshot(struct sched_stats *out);
 /* cpustat charges actual execution at IRQ/switch boundaries. Tick accounting
  * remains a conservative fallback before a calibrated clock is available. */
@@ -169,6 +202,9 @@ void cpu_audio_overrun(struct task *t, uint64_t consumed) __attribute__((weak));
  * KSYNC_DEPEND_*); called with interrupts disabled, aggregated per window. */
 void cpu_inherit(const struct task *from, const struct task *to, unsigned level,
                  unsigned reason) __attribute__((weak));
+/* f1-101: producer boost events (aggregated per task per window). */
+void cpu_audio_producer(const struct task *t, unsigned boosts, unsigned over_budget,
+                        uint64_t cycles) __attribute__((weak));
 void task_sleep_ms(uint32_t ms);
 __attribute__((noreturn)) void task_exit(int code);
 void task_kill(struct task *t, int code);

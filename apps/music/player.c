@@ -71,7 +71,7 @@ static void *reader(void *ctx)
         if (n>free_frames) n=free_frames;
         if (n>MUSIC_BATCH) n=MUSIC_BATCH;
         /* Publish the startup threshold exactly, independently of batch size. */
-        unsigned threshold=p->reader_rate*MUSIC_START_SECONDS;
+        unsigned threshold=music_frames_ms(p->reader_rate,MUSIC_PREFILL_MS);
         if (p->count<threshold && n>threshold-p->count) n=threshold-p->count;
         /* Serialize the short demand command with pause/close and reopen;
          * decoding itself still runs without the reservoir lock. */
@@ -161,7 +161,9 @@ static int open_device(struct music_player *p)
     pthread_mutex_unlock(&p->reservoir_lock);
     if (r) return r;
     if (!rate || rate>MUSIC_RING/2 || (p->view.rate && p->view.rate!=rate)) { close_device(p); return -EIO; }
-    p->view.rate=rate; p->base=p->view.position; p->written=p->audible=0; return 0;
+    p->view.rate=rate; p->base=p->view.position; p->written=p->audible=0;
+    memset(&p->producer_base,0,sizeof(p->producer_base)); /* a new stream counts from zero */
+    return 0;
 }
 static int load(struct music_player *p)
 {
@@ -296,13 +298,25 @@ static void level(struct music_player *p, uint64_t now, unsigned queued)
     uint64_t ms=elapsed/1000000;
     uint64_t decode=p->level.frames ? p->level.decode_ns/p->level.frames : 0;
     unsigned publishes=atomic_load(&p->ui_publishes), repaints=atomic_load(&p->ui_repaints);
-    diagnostic("[music] level ms=%llu reservoir=%u/%u/%u reader_fps=%u decode_us_frame=%u.%03u writes_ps=%u bytes=%llu queued=%u/%u starvations=%u ui_mps=%u repaint_mps=%u",
+    /* f1-101: the kernel's producer boost of this stream over the window:
+     * current flags (1 behind, 2 boosted, 4 withheld by the budget), boost
+     * episodes, CPU at the boost level and budget withholdings. */
+    struct music_producer boost=p->producer_base;
+    if (!p->device || !p->output->producer || p->output->producer(p->output->ctx,&boost)) {
+        boost=p->producer_base; boost.flags=0;
+    }
+    if (boost.boosts<p->producer_base.boosts || boost.over_budget<p->producer_base.over_budget ||
+        boost.boost_us<p->producer_base.boost_us) memset(&p->producer_base,0,sizeof(p->producer_base));
+    diagnostic("[music] level ms=%llu reservoir=%u/%u/%u reader_fps=%u decode_us_frame=%u.%03u writes_ps=%u bytes=%llu queued=%u/%u starvations=%u ui_mps=%u repaint_mps=%u boost=%u boosts=%u boost_ms=%u over=%u",
         (unsigned long long)ms,p->level.low,(unsigned)(p->level.sum/p->level.samples),p->level.high,
         (unsigned)(p->level.frames*1000/ms),(unsigned)(decode/1000),(unsigned)(decode%1000),
         (unsigned)(p->level.writes*1000/ms),(unsigned long long)p->level.bytes,
         p->level.queued_low,p->level.queued_high,p->level.starvations,
         (unsigned)((uint64_t)(publishes-p->level.publishes)*1000000/ms),
-        (unsigned)((uint64_t)(repaints-p->level.repaints)*1000000/ms));
+        (unsigned)((uint64_t)(repaints-p->level.repaints)*1000000/ms),
+        boost.flags,boost.boosts-p->producer_base.boosts,
+        (unsigned)((boost.boost_us-p->producer_base.boost_us)/1000),boost.over_budget-p->producer_base.over_budget);
+    p->producer_base=boost;
     memset(&p->level,0,sizeof(p->level));
     p->level.start=now+1; p->level.low=MUSIC_RING;
     p->level.queued_low=MUSIC_DEVICE_FRAMES;
@@ -319,7 +333,7 @@ int music_player_pump(struct music_player *p)
     p->view.duration=p->reader_length; p->view.reservoir_frames=p->count;
     if (error) { pthread_mutex_unlock(&p->reservoir_lock); p->stage="decode"; return fail(p,error); }
     if (!p->started) {
-        if (p->count<p->view.rate*MUSIC_START_SECONDS && !p->eof) { pthread_mutex_unlock(&p->reservoir_lock); return 0; }
+        if (p->count<music_frames_ms(p->view.rate,MUSIC_PREFILL_MS) && !p->eof) { pthread_mutex_unlock(&p->reservoir_lock); return 0; }
         p->started=1; p->view.state=MUSIC_PLAYING;
         memset(&p->level,0,sizeof(p->level));
     }
@@ -351,8 +365,12 @@ int music_player_pump(struct music_player *p)
         }
     }
     level(p,now,(unsigned)queued);
-    unsigned limit=p->submitted ? MUSIC_DEVICE_FRAMES : 256;
-    if (p->count && (unsigned)queued<(p->submitted ? MUSIC_DEVICE_FRAMES-256 : 256)) {
+    /* f1-101: under its 500 ms target the reservoir shows the kernel a
+     * stream behind its lead (music_device_fill); the mixer's real lead,
+     * not a flag, then raises the decoder and this pump. */
+    unsigned fill=music_device_fill(p->count,music_frames_ms(p->view.rate,MUSIC_TARGET_MS),p->eof);
+    unsigned limit=p->submitted ? fill : 256;
+    if (p->count && (unsigned)queued<(p->submitted ? fill-256 : 256)) {
         unsigned n=MUSIC_RING-p->head; if (n>p->count) n=p->count;
         if (n>limit-(unsigned)queued) n=limit-(unsigned)queued;
         p->stage="audio-write";

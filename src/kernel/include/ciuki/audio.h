@@ -43,12 +43,28 @@ static inline unsigned audio_refill_lead(bool active, bool tail_start, bool vm_a
     *limit = active || tail_start ? lead : 1u;
     return lead;
 }
+/* f1-101 (R3): the producer lead. The mixer, not the application, decides
+ * when a native stream's producers need CPU: its lead (source frames still
+ * queued in the mixer, in output frames) is behind once it falls more than
+ * one period below the target lead (AUDIO_PRODUCER_TARGET, the f4-36 refill
+ * mark one period under the ring, so AUDIO_PRODUCER_BEHIND equals the 3/4
+ * ring mark of AUDIO_REFILL_READ demand at 48 kHz), and refilled once it is
+ * back at the target. Rates are at most AUDIO_RATE, so every stream's ring
+ * holds at least 2048 output frames and can reach the target. The lead stays
+ * below 2^32 in 32-bit arithmetic: 2048 * 48000. */
+#define AUDIO_PRODUCER_TARGET (AUDIO_RING - AUDIO_QUANTUM)
+#define AUDIO_PRODUCER_BEHIND (AUDIO_PRODUCER_TARGET - AUDIO_QUANTUM)
+static inline bool audio_producer_behind(bool behind, unsigned lead, unsigned mark)
+{
+    return behind ? lead < AUDIO_PRODUCER_TARGET : lead < mark;
+}
 struct audio_stream {
     struct audio_frame *ring[2];
     uint32_t pages[2], head, queued, phase, rate, format, channels;
     uint32_t gain[2], generation;
     uint64_t accepted, consumed, discarded, starvation, last_output, drain_goal, drain_output;
     bool started, configured, draining, drain_latched;
+    bool producer_behind; /* f1-101: last lead state reported to the scheduler */
     struct audio_frame previous;
     bool have_previous;
     struct kwait changed;
@@ -81,6 +97,11 @@ void audio_stream_close(struct audio_stream *s);
 int audio_stream_format(struct audio_stream *, struct ciuki_audio_format *);
 int audio_stream_enqueue(struct audio_stream *, const void *, uint32_t bytes);
 void audio_stream_reset(struct audio_stream *);
+/* f1-101: report the stream's lead to the scheduler (on a state change) and
+ * register the calling thread as one of its producers (task.h roles). */
+void audio_stream_lead(struct audio_stream *);
+struct task;
+void audio_stream_producer(struct audio_stream *, struct task *, unsigned role);
 /* One quantum, no blocking/allocation/codec/file I/O. */
 void audio_mix(struct audio_frame *out, unsigned frames);
 void audio_service(void);

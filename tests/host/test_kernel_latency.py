@@ -337,6 +337,10 @@ static void test_irq_restore(uint32_t f) {
                 # f1-98: desktop minimum share and reservation-holder boost
                 # on the T23 b453bc92 replay model (negative controls inside).
                 ('t23_desktop_share_test.c', []),
+                # f1-101: audio producer boost on the T23 a4d9454e replay
+                # (trial windows, 50 % interactive load, budget bound, unit
+                # checks; zero refill overruns in every scenario).
+                ('t23_audio_producer_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
                 binary = temp / Path(unit).stem

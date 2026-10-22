@@ -1378,6 +1378,7 @@ reserved zeros. No hardware address or user DMA mapping is returned.
 | AUDIO_DRAIN | 0x4105 | ciuki_audio_command / 16 |
 | AUDIO_RESET | 0x4106 | ciuki_audio_command / 16 |
 | AUDIO_REFILL_READ | 0x4107 | ciuki_audio_command / 16 |
+| AUDIO_GET_PRODUCER | 0x4108 | ciuki_audio_producer / 32 (f1-101) |
 | MIXER_GET_MASTER | 0x4201 | ciuki_mixer_master / 32 |
 | MIXER_SET_MASTER | 0x4202 | ciuki_mixer_master / 32 |
 | MIXER_REFRESH_MASTER | 0x4204 | ciuki_mixer_master / 32 (f1-100) |
@@ -1390,8 +1391,9 @@ a writable output descriptor. A started, non-draining stream with at most
 1536 queued frames permits up to 64 KiB of source reads for 20 ms. Each read
 consumes that allowance; close, reset and expiry invalidate it. A replenished
 stream is ineligible while above the threshold. Other threads sharing the descriptor receive no allowance.
-Music's decoder declares demand before each decode batch; the unchanged
-two-second decoded reservoir covers slow I/O. VFS admission still closes to
+Music's decoder declares demand before each decode batch; the decoded
+reservoir (filled to the ring when the CPU allows; playback starts after one
+second since f1-101) covers slow I/O. VFS admission still closes to
 new urgent reads when a queued volume ticket reaches 100 ms (C3). These
 limits bound urgency and do not promise a hardware completion time.
 
@@ -1402,6 +1404,21 @@ limits bound urgency and do not promise a hardware completion time.
 | gain | left, right, reserved[2] |
 | command | reserved[2] |
 | status | queued_frames, state (0=idle,1=started,2=failed), output_rate, generation, u64 accepted_frames, consumed_frames, output_frames, fetched_frames, source_starvation, fifo_errors, dma_halts, deadline_misses; i32 last_error; stream_generation, max_service_us, max_irq_us, transport_frames, latency_frames |
+| producer (f1-101) | flags (1 behind, 2 boosted, 4 withheld by the budget), boosts, over_budget, producers, u64 boost_us; output only, like status |
+
+F1-101 amendment (2026-10-22): the kernel raises the producers of a native
+stream that is behind its target lead. The mixer measures the lead (frames
+still queued in the stream, converted to output frames); the stream is
+behind below `ring_frames - 2 * period_frames` (1536) and refilled again at
+`ring_frames - period_frames` (1792). Its producers are the thread that last
+wrote it and the thread that last issued `AUDIO_REFILL_READ` on it; while
+the stream is behind they run at scheduler level 16, the lower edge of the
+device band, inside one budget of 20 ms of CPU per 100 ms shared by every
+producer, and a lock holder they wait for inherits at most level 15. No
+operation sets the state: `AUDIO_GET_PRODUCER` only reports it, with the
+stream's boost episodes, budget withholdings and boosted CPU since the
+stream was opened or reset. Validation:
+`docs/validation/f1-101-audio-producer-priority.md`.
 
 | master | left, right, mute (0/1), save_state (0=defaults,1=saved,2=applied_unsaved), i32 save_error, reserved |
 
