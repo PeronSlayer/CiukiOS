@@ -729,6 +729,41 @@ struct ciuki_net_state {
 };
 ```
 
+Syscall 90: ebx=operation, ecx=pointer, edx=sizeof(record), others zero.
+All operations require the supervisor-delegated network capability. IPv4
+words are in network byte order. Speed 0 / duplex 0 select auto negotiation;
+forced modes require speed 10 or 100 and duplex 1 (half) or 2 (full).
+GET enumerates index [0,count); mutations require the returned generation.
+SET persists the complete validated config.
+DHCP renew/release are transient. No user pointers occur in these records.
+
+```c
+#define CIUKI_NETCTL_VERSION 1u
+#define CIUKI_NETCTL_GET 0u
+#define CIUKI_NETCTL_SET 1u
+#define CIUKI_NETCTL_RENEW 2u
+#define CIUKI_NETCTL_RELEASE 3u
+#define CIUKI_NET_MEDIA_AUTO 1u
+#define CIUKI_NET_MEDIA_10 2u
+#define CIUKI_NET_MEDIA_100 4u
+struct ciuki_net_config {
+    uint32_t enabled, dhcp, speed, duplex;
+    uint32_t address, mask, gateway, dns[3];
+    char hostname[64], domain[128];
+};
+struct ciuki_net_control {
+    uint32_t version, size, index, count;
+    struct ciuki_net_config config;
+    char name[8], driver[16];
+    uint8_t mac[6], reserved0[2];
+    uint32_t pci_vendor, pci_device, irq, io_base, mmio_base;
+    uint32_t link, state, media_caps, speed, duplex;
+    uint32_t address, mask, gateway, dns[3], lease_seconds, lease_remaining;
+    uint64_t rx_packets, tx_packets, rx_errors, tx_errors;
+    uint32_t generation, reserved[3];
+};
+```
+
 /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
 removable_mask includes ejectable USB and optical media; type[] distinguishes them.
 A removal names a generation and ejects the physical USB device or CD.
@@ -2543,6 +2578,12 @@ arm command visibility before its final Enter
 PRESENT plus destination 8-line damage
 
 ```c
+#define CIUKI_DOSVM_PRESENT_SCANLINES 1u
+```
+
+opt-in PRESENT_BANDS flags
+
+```c
 #define CIUKI_DOSVM_FULLSCREEN 9u
 ```
 
@@ -2693,6 +2734,8 @@ char name[32];
 
 ```c
 union {
+      struct {
+       union {
         struct ciuki_input_event event;
 ```
 
@@ -2705,7 +2748,7 @@ struct { uint32_t kernel, game, memory, reserved[7]; } launch;
 CREATE input
 
 ```c
-struct { uint32_t bands[2], redraw, reserved[7]; } presentation;
+struct { uint32_t bands[2], redraw, flags, reserved[6]; } presentation;
 ```
 
 bands output; redraw input 0/1
@@ -2718,12 +2761,23 @@ WAIT_PRESENT
 
 ```c
 };
-    struct ciuki_rect damage;
+       struct ciuki_rect damage;
 ```
 
 112
 
 ```c
+};
+```
+
+PRESENT_BANDS with flags=SCANLINES returns 480 exact row bits.
+The bitmap overlays the entire event/presentation/damage tail.
+Legacy callers (flags=0) retain the original damage rectangle.
+An older kernel rejects flags with EINVAL; retry with flags=0.
+
+```c
+struct { uint32_t bits[15], reserved; } scanlines;
+    };
 };
 
 #pragma pack(pop)
@@ -3298,7 +3352,7 @@ enum desk_v3_opcode {
     DESK_V3_PRESENT
 ```
 
-16-byte damage; RESULT deferred until completed frame
+16-byte damage; RESULT after frame, immediate if covered/identical
 
 ```c
 };
@@ -3312,7 +3366,14 @@ enum desk_cursor_shape {
     DESK_CURSOR_MOVE, DESK_CURSOR_HAND, DESK_CURSOR_CROSSHAIR,
     DESK_CURSOR_PRECISION,
     DESK_CURSOR_PENCIL, DESK_CURSOR_BRUSH, DESK_CURSOR_FILL, DESK_CURSOR_PICK,
-    DESK_CURSOR_ZOOM, DESK_CURSOR_ERASER, DESK_CURSOR_COUNT
+    DESK_CURSOR_ZOOM, DESK_CURSOR_ERASER,
+```
+
+f2-99: append only; the existing native/v3 cursor IDs stay stable.
+
+```c
+DESK_CURSOR_OPEN_HAND, DESK_CURSOR_CLOSED_HAND, DESK_CURSOR_HELP,
+    DESK_CURSOR_COUNT
 };
 #define DESK_TITLE_MAX 63u
 #define DESK_ARG_MAX 160u
@@ -3322,7 +3383,14 @@ LAUNCH argument: 12 + name + 4 + argument always fits one message
 
 ```c
 enum desk_opcode {
-    DESK_HELLO = 1, DESK_CREATE_WINDOW, DESK_DAMAGE, DESK_MOVE, DESK_CLOSE,
+```
+
+DAMAGE remains a rectangle in every version. A legacy producer with
+no finer damage sends its full backing bounds; no new negotiation is
+required for precise Win32, DOS-window or NetSurf updates.
+
+```c
+DESK_HELLO = 1, DESK_CREATE_WINDOW, DESK_DAMAGE, DESK_MOVE, DESK_CLOSE,
     DESK_PING, DESK_CONFIGURE, DESK_KEY, DESK_MOTION, DESK_BUTTON,
     DESK_FOCUS, DESK_PONG, DESK_CLOSED, DESK_CLOSE_REQUEST,
 ```
@@ -3777,10 +3845,16 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
 
 Existing /dev/net NET_GET_STATE helper: opens read-only, initializes the
 version/size, queries and closes. present/link/state/address_configured
-describe local availability; syscall 90 remains reserved ENOSYS.
+describe local availability.
 
 ```c
 int ciuki_net_status(struct ciuki_net_state *);
+```
+
+Privileged configuration; returns 0 or -1 with errno.
+
+```c
+int ciuki_net_control(unsigned operation, struct ciuki_net_control *);
 #endif
 ```
 
@@ -4238,6 +4312,7 @@ Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs).
 #define DU_WIDGETS       64
 #define DU_DIALOG_ITEMS  10
 #define DU_TIMERS        8
+#define DU_REGIONS       32
 #define DU_TEXT_MAX      1040
 #define DU_COLUMNS       8
 ```
@@ -4733,10 +4808,12 @@ dirty=3: union of clipped client invalidations
 struct du_rect rendered;
 ```
 
-the region the last du_render drew
+covering bounds, retained for existing clients
 
 ```c
-unsigned cursor;
+struct du_rect updates[DU_REGIONS], frames[DU_REGIONS], copied[DU_REGIONS];
+    unsigned update_count, frame_count, copied_count;
+    unsigned cursor;
 ```
 
 application default, used outside text/splitter controls
@@ -4780,6 +4857,14 @@ Union clipped repaint regions; a full dirty=1 invalidation takes precedence.
 
 ```c
 void du_invalidate(struct du_ui *, struct du_rect);
+void du_invalidate_widget(struct du_ui *, int id);
+```
+
+Retain unchanged pixels; repaint only exposed strips. Pending paint or
+overlays cause a bounded repaint instead of copying stale pixels.
+
+```c
+void du_scroll(struct du_ui *, struct du_rect, int dx, int dy);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
 void du_release(struct du_ui *);
@@ -4881,8 +4966,8 @@ int manual_damage;
 
 application combines ordinary damage with its frame request
 
-f4-37 opt-in for clients that draw only inside du_render: present
-compares and copies only the region it drew, not the whole surface.
+Explicit presenters opt in to the last render regions. The normal
+du_window_turn path always presents those regions.
 
 ```c
 int present_rendered;
@@ -4902,6 +4987,7 @@ int old_surface, replacement, swap_sent, resizable;
     uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
     struct ciuki_message tx[16]; unsigned head, count;
     struct du_rect damage; int damaged;
+    struct du_rect damages[DU_REGIONS]; unsigned damage_count;
     struct du_ui *ui;
     int (*close_request)(struct du_window *, void *);
     void *user;
@@ -5009,6 +5095,7 @@ cap+1 bytes, always NUL terminated
 
 ```c
 size_t len, cap;
+    uint64_t revision;
     size_t cursor, anchor;
 ```
 
@@ -5076,6 +5163,7 @@ load: clears undo and modified
 ```c
 void du_ta_set_wrap(struct du_textarea *, int);
 void du_ta_set_view(struct du_textarea *, unsigned cols, unsigned rows);
+struct du_rect du_ta_caret(struct du_textarea *, struct du_rect);
 void du_ta_fit(struct du_textarea *, struct du_rect box);
 ```
 
