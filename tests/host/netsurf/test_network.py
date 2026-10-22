@@ -260,6 +260,21 @@ class NetworkTests(unittest.TestCase):
         parser=Text();parser.feed(page)
         self.assertIn(message," ".join(parser.parts))
 
+    def test_remote_layout_rejection_keeps_browser(self):
+        """f6-20: a remote page rejected by the layout time limit leaves the
+        browser running on the error page; its Try Again button re-fetches."""
+        result=self.browser("/page",mode="browser-budget",expected="fixture_budget_retry=1")
+        self.assertIn("fixture_budget_rejected requests=",result.stdout)
+        self.assertIn("NetSurf layout rejected: remote page, time limit",result.stderr)
+        self.assertIn("<h1>Ciuki</h1>",result.stdout)
+        lines=result.stderr.splitlines()
+        reasons=[line for line in lines if line.startswith("[netsurf] exit reason=")]
+        self.assertEqual(len(reasons),1,result.stderr)
+        self.assertTrue(reasons[0].startswith("[netsurf] exit reason=capture ") and "layout_rejections=1" in reasons[0],reasons[0])
+        page_requests=[int(n) for n in __import__("re").findall(r"fixture_budget_(?:rejected|retry=1) requests=(\d+)",result.stdout)]
+        self.assertEqual(len(page_requests),2)
+        self.assertGreater(page_requests[1],page_requests[0])
+
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")
 
