@@ -138,30 +138,47 @@ static void visibility(void)
 }
 
 static int uploads, fail_present;
+/* f2-95: the frame region (pixman region union of the damage list) minus a
+ * copied destination covers exactly the damaged pixels, each once. */
 static void dirty_rows(void)
 {
     struct desktop d={.width=RW,.height=RH};
-    d.rows=calloc(RH,sizeof(*d.rows)); assert(d.rows);
-    struct desk_box dirty[DESK_DAMAGE_MAX];
+    struct desk_box dirty[DESK_DAMAGE_MAX]; struct desk_damage list={0};
     for (unsigned i=0;i<DESK_DAMAGE_MAX;i++) {
         dirty[i]=(struct desk_box){(int)i*6,5+(int)i%3,3,20};
-        rows_add(&d,dirty[i]);
+        desk_damage_add(&list,dirty[i],RW,RH);
     }
+    pixman_region32_t region; region_load(&d,&region,&list); assert(pixman_region32_n_rects(&region)>1);
     for (int clipped=0;clipped<2;clipped++) {
         struct desk_box cut=clipped ? (struct desk_box){7,5,1,20} : (struct desk_box){0};
-        memset(coverage,0,sizeof(coverage)); uint32_t y=0;
-        while (y<RH) {
-            struct desk_box boxes[DESK_DAMAGE_MAX+1]; unsigned n=row_boxes(&d,&y,cut,boxes);
-            for (unsigned i=0;i<n;i++) cover(&d,0,boxes[i]);
-        }
+        pixman_region32_t use, c; pixman_region32_init(&use);
+        pixman_region32_init_rect(&c,cut.x,cut.y,(unsigned)cut.w,(unsigned)cut.h);
+        assert(pixman_region32_subtract(&use,&region,&c)); pixman_region32_fini(&c);
+        memset(coverage,0,sizeof(coverage));
+        int n; const pixman_box32_t *r=pixman_region32_rectangles(&use,&n);
+        for (int k=0;k<n;k++) cover(&d,0,box_region(r[k]));
         for (int y=0;y<RH;y++) for (int x=0;x<RW;x++) {
             int wanted=0;
             for (unsigned i=0;i<DESK_DAMAGE_MAX;i++) wanted|=desk_contains(dirty[i],x,y);
             wanted&=!desk_contains(cut,x,y);
             assert(coverage[y*RW+x]==(unsigned)wanted);
         }
+        pixman_region32_fini(&use);
     }
-    free(d.rows);
+    /* More separate rectangles than a list holds: joined pairwise by least
+     * added area, never into one screen-wide box; every pixel stays covered. */
+    struct desk_damage many={0};
+    for (int i=0;i<48;i++) desk_damage_add(&many,(struct desk_box){(i%8)*8,(i/8)*8,2,2},RW,RH);
+    assert(many.count<=DESK_DAMAGE_MAX);
+    uint64_t area=0; for (unsigned i=0;i<many.count;i++) area+=(uint64_t)many.boxes[i].w*many.boxes[i].h;
+    for (int i=0;i<48;i++) {
+        int covered=0; for (unsigned k=0;k<many.count;k++) covered|=desk_contains(many.boxes[k],(i%8)*8,(i/8)*8);
+        assert(covered);
+    }
+    assert(area<(uint64_t)RW*RH/4);
+    pixman_region32_fini(&region);
+    /* Region storage is the fixed pool: nothing is left in use. */
+    assert(!region_small_used && !region_large_used);
 }
 static int upload(int display, int output, const struct ciuki_rect *r)
 { (void)display; (void)output; (void)r; uploads++; return fail_present ? -1 : 0; }

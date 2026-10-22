@@ -59,6 +59,89 @@ static uint64_t per_ms(void) { return g_tsc_per_ms ? g_tsc_per_ms : 1; }
 static uint32_t ms(uint64_t cycles) { return (uint32_t)(cycles / per_ms()); }
 static unsigned pm(uint64_t cycles, uint64_t total)
 { return total ? (unsigned)(cycles * 1000 / total) : 0; }
+
+/* f2-96: firmware (SMM) time is not task work. On the T23 every EC
+ * transaction raises two 2.1 ms SMIs (f1-100); trial 5a10eef4 logged 14
+ * audio_refill_overrun records with consumed_us=2182-2227, one SMI each
+ * charged to the refill's 2 ms own budget. Two conservative proofs, and only
+ * the scheduler budgets (device, audio refill, desktop share) leave the time
+ * out; run_cycles and the class totals stay raw:
+ *  - IF clear: a gap of 1 ms or more between two marks of straight-line
+ *    phases (the f1-94 TSC rule, cpu_irqoff_bounded);
+ *  - IF set: a PIT interrupt more than one period late (tick gap above 2 ms,
+ *    the f1-94 blackout rule). The missed edge fell inside SMM, or the CPU
+ *    would have taken it, so the time from the edge to the IRQ entry, after
+ *    the last IF-clear section and the task's last accounting point, was
+ *    spent outside the OS. V86 frames are excluded: a guest with IOPL 3 can
+ *    clear IF itself. */
+static uint64_t irqoff_credited, irqoff_last_end, pit_last, pit_phase;
+static uint64_t firmware_window, firmware_max, firmware_total;
+static uint32_t firmware_count;
+static uint64_t irqoff_firmware(uint64_t from, uint64_t now)
+{
+    if (!g_tsc_per_ms || !irqoff.start || now < irqoff.start || now - irqoff.start < g_tsc_per_ms) return 0;
+    unsigned count = irqoff.count;
+    bool tail = count <= ARRAY_SIZE(irqoff.marks); /* beyond capacity: unmeasured */
+    if (!tail) count = ARRAY_SIZE(irqoff.marks);
+    uint64_t total = 0;
+    for (unsigned i = 0; i < count; i++) {
+        uint64_t a = irqoff.marks[i].stamp;
+        uint64_t b = i + 1 < count ? irqoff.marks[i + 1].stamp : tail ? now : a;
+        if (a < from) a = from;
+        if (b > now) b = now;
+        if (b > a && b - a >= g_tsc_per_ms && cpu_irqoff_bounded(irqoff.marks[i].phase)) total += b - a;
+    }
+    return total;
+}
+static void firmware_note(uint64_t cycles)
+{
+    if (!cycles) return;
+    firmware_window += cycles; firmware_total += cycles; firmware_count++;
+    if (cycles > firmware_max) firmware_max = cycles;
+}
+/* The firmware time inside [from, now], the interval being charged. */
+static uint64_t firmware_take(struct task *t, uint64_t from, uint64_t now)
+{
+    uint64_t credit = t->firmware_credit;
+    t->firmware_credit = 0;
+    if (irqoff.start) {
+        uint64_t gap = irqoff_firmware(irqoff_credited > from ? irqoff_credited : from, now);
+        irqoff_credited = now;
+        firmware_note(gap); credit += gap;
+    }
+    return credit < now - from ? credit : now - from;
+}
+uint64_t cpu_firmware_cycles(void)
+{
+    uint32_t f = irq_save(); /* written by the PIT IRQ; no torn 64-bit read */
+    uint64_t total = firmware_total;
+    irq_restore(f);
+    return total;
+}
+static void pit_late(const struct trap_frame *tf, uint64_t now)
+{
+    uint64_t last = pit_last;
+    pit_last = now;
+    if (!g_tsc_per_ms || !last || now <= last) return;
+    /* An entry at most 1.5 periods after the previous one is on time: the
+     * PIT (mode 2) keeps its phase, so later edges follow from this stamp. */
+    if ((now - last) * 2 <= 3 * g_tsc_per_ms) { pit_phase = now; return; }
+    if (!g_current || now - last <= 2 * g_tsc_per_ms || (tf->eflags & (1u << 17))) return;
+    /* The missed edge: the first one after the previous entry (which may
+     * itself have been late, as for the second SMI of an EC transaction). */
+    uint64_t from = last + g_tsc_per_ms;
+    if (pit_phase && pit_phase <= last) {
+        uint64_t edge = pit_phase + g_tsc_per_ms;
+        for (unsigned n = 0; edge <= last && n < 64; n++) edge += g_tsc_per_ms;
+        if (edge > last && edge < from) from = edge;
+    }
+    if (irqoff_last_end > from) from = irqoff_last_end;
+    if (g_current->account_start > from) from = g_current->account_start;
+    /* This IRQ's own IF-clear section began at its entry, after the edge;
+     * a gap inside the entry path is the bounded-phase proof's. */
+    uint64_t to = irqoff.start && irqoff.start > from && irqoff.start < now ? irqoff.start : now;
+    if (to > from) { g_current->firmware_credit += to - from; firmware_note(to - from); }
+}
 static void name_copy(char *dst, const char *src)
 {
     unsigned i = 0;
@@ -74,6 +157,7 @@ void cpu_irqoff_begin(uint64_t start,uint32_t site)
     /* Most sections never schedule: do not clear the phase array or copy
      * task identities on their entry/exit. count bounds all stale slots. */
     irqoff.start=start; irqoff.site=site; irqoff.count=0; irqoff.from=0;
+    irqoff_credited=start;
 }
 void cpu_irqoff_mark(enum cpu_irqoff_phase phase)
 {
@@ -91,6 +175,14 @@ void cpu_irqoff_tasks(const struct task *from,const struct task *to)
 void cpu_irqoff_end(uint64_t end)
 {
     if (!irqoff.start) return;
+    /* f2-96: bounded gaps after the section's last charge lie in the open
+     * interval of the task now running (after a switch: the next task). */
+    if (g_current) {
+        uint64_t from=irqoff_credited>g_current->account_start ? irqoff_credited : g_current->account_start;
+        uint64_t gap=irqoff_firmware(from,end);
+        if (gap) { g_current->firmware_credit+=gap; firmware_note(gap); }
+    }
+    irqoff_last_end=end;
     uint64_t d=end-irqoff.start;
     if (g_tsc_per_ms && end>=irqoff.start && d>=g_tsc_per_ms) {
         uint64_t measured=0,largest=0,largest_start=0;
@@ -158,10 +250,11 @@ void cpu_stretch_snapshot(char name[16], uint32_t *duration_ms)
 static void charge(struct task *t, uint64_t now)
 {
     uint64_t d = now - t->account_start;
+    uint64_t firmware = firmware_take(t, t->account_start, now);
     t->run_cycles += d;
     classes[t->account_prio] += d;
     t->account_start = now;
-    sched_charge_runtime(t, d, per_ms());
+    sched_charge_runtime(t, d - firmware, per_ms()); /* f2-96: budgets exclude SMM */
 }
 void cpu_account(void) { if (g_current) charge(g_current, stamp()); }
 void cpu_switch(struct task *prev, struct task *next)
@@ -273,6 +366,7 @@ void cpu_user_return(void)
 uint64_t cpu_irq_enter(const struct trap_frame *tf)
 {
     uint64_t now = stamp();
+    if (tf->vector == 0x20) pit_late(tf, now);
     if (g_current) charge(g_current, now);
     if (g_current && tf->vector == 0x20) {
         if ((tf->cs & 3) == 3 || (tf->eflags & (1u << 17))) g_current->user_ticks++;
@@ -374,6 +468,9 @@ static void cpu_emit(void)
     unsigned inherit_count = inherit_used, inherit_dropped = inherit_lost;
     memcpy(inherits, inherit_events, inherit_count * sizeof(*inherits));
     inherit_used = inherit_lost = 0;
+    uint64_t firmware_us = firmware_window * 1000 / per_ms(), firmware_max_us = firmware_max * 1000 / per_ms();
+    uint32_t firmware_n = firmware_count;
+    firmware_window = firmware_max = 0; firmware_count = 0;
     unsigned producer_count = producer_used, producer_dropped = producer_lost;
     memcpy(producers, producer_events, producer_count * sizeof(*producers));
     producer_used = producer_lost = 0;
@@ -442,6 +539,11 @@ static void cpu_emit(void)
     }
     if (smi_window_emit) smi_window_emit(total, emit);
     if (thinkpad_ec_window_emit) thinkpad_ec_window_emit();
+    /* f2-96: firmware time left out of the scheduler budgets this window
+     * (every window that had some, like the EC traffic record). */
+    if (firmware_n)
+        klog_periodic("[sched] firmware_credit count=%u us=%llu max_us=%llu", firmware_n,
+            (unsigned long long)firmware_us, (unsigned long long)firmware_max_us);
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);

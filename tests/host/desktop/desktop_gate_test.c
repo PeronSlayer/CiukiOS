@@ -46,8 +46,9 @@ static void *gate_mmap(void *,size_t,int,int,int,off_t);
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
 /* The deterministic gate has no bundled-volume backend. */
+static unsigned game_queries;
 int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
-{if(op==CIUKI_DOSVM_GAME_QUERY){c->state=1;return 0;}errno=ENOSYS;return -1;}
+{if(op==CIUKI_DOSVM_GAME_QUERY){game_queries++;c->state=1;return 0;}errno=ENOSYS;return -1;}
 /* f4-18: desktop.c saves the master volume preference through libreg (sound_storage.c);
  * the gate exercises the display contract, so the harness supplies the persistence hook. */
 int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute)
@@ -481,11 +482,146 @@ static void idle_policy_test(void)
     free(d);
     puts("PASS F2-86 idle policy: 100 turns/s, input lag <=10 ms, frame budget <50 ms, timer/frame/animation/heartbeat/shell deadlines");
 }
+/* f2-95: input arriving at any moment of the idle wait is read when the wait
+ * ends (<=10 ms) and is shown by the next frame slot: the small-damage cap
+ * never applies to a desktop with recent input. The stall observer counts a
+ * hardware-cursor-only frame (no row written) as a frame. */
+static void idle_wake_test(void)
+{
+    struct desktop *d=calloc(1,sizeof(*d)); assert(d);
+    struct desk_ops ops={0}; desk_init(d,&ops,1024,768);
+    memset(&d->damage,0,sizeof(d->damage)); d->cursor_dirty=0;
+    struct desk_client *c=&d->clients[0]; c->channel=3; c->hello=1; c->window=1;
+    uint64_t now=5000000000ull, worst_wait=0, worst_show=0;
+    /* States: idle, an application's small continuous damage (30 fps), a
+     * hover deadline, an animation and a pending heartbeat. */
+    for (unsigned state=0;state<5;state++) for (uint64_t offset=0;offset<=10000000ull;offset+=250000ull) {
+        memset(&d->damage,0,sizeof(d->damage)); d->animation.active=0; d->cursor_dirty=0; d->frame_input_ns=0;
+        d->last_input_ns=now-1000000000ull; d->last_frame_ns=now-1000000ull; d->next_frame_ns=now+15666667ull;
+        c->next_ping_ns=now+60000000000ull;
+        if (state==1) desk_damage_add(&d->damage,(struct desk_box){100,100,20,20},d->width,d->height);
+        if (state==2) { d->shell=1; d->sh.hover_target=1; d->sh.hover_since=now-100000000ull; }
+        if (state==3) { d->animation.active=1; d->animation.started=now; d->animation.step=0; }
+        if (state==4) c->next_ping_ns=now+3000000ull;
+        uint64_t wait=desktop_pause_ns(d,now,0,UINT64_MAX);
+        d->shell=0; d->sh.hover_target=0; d->sh.hover_since=0;
+        assert(wait<=10000000ull);
+        if (offset>wait) continue;
+        /* The loop drains at now+wait; input that arrived at now+offset waits wait-offset. */
+        if (wait-offset>worst_wait) worst_wait=wait-offset;
+        uint64_t drained=now+wait;
+        struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.monotonic_ns=now+offset,.value=1,.value2=0};
+        d->now_ns=drained; desk_input(d,&e);
+        assert(!desk_small_damage(d,drained));
+        uint64_t due=desk_frame_time(d,drained);
+        uint64_t show=(due>drained ? due-drained : 0)+(wait-offset);
+        if (show>worst_show) worst_show=show;
+        assert(wait-offset<=10000000ull && show<=10000000ull+DESK_FRAME_NS);
+    }
+    /* Without input the same small damage is spaced at 30 fps, never more. */
+    memset(&d->damage,0,sizeof(d->damage)); d->cursor_dirty=0; d->frame_input_ns=0; c->next_ping_ns=now+60000000000ull;
+    d->last_input_ns=now-1000000000ull; d->last_frame_ns=now; d->next_frame_ns=now+DESK_FRAME_NS;
+    desk_damage_add(&d->damage,(struct desk_box){100,100,20,20},d->width,d->height);
+    assert(desk_small_damage(d,now) && desk_frame_time(d,now)==now+DESK_SMALL_FRAME_NS);
+    assert(!desk_frame_due(d,now+DESK_FRAME_NS) && desk_frame_due(d,now+DESK_SMALL_FRAME_NS));
+    assert(desktop_pause_ns(d,now+DESK_FRAME_NS,0,UINT64_MAX)==10000000ull);
+    assert(desktop_pause_ns(d,now+DESK_FRAME_NS+10000000ull,0,UINT64_MAX)==DESK_SMALL_FRAME_NS-DESK_FRAME_NS-10000000ull);
+    /* An isolated update is not delayed: the previous frame is long past. */
+    d->last_frame_ns=now-1000000000ull; assert(desk_frame_time(d,now)==d->next_frame_ns);
+    /* Stall observer: a cursor-only frame (presents unchanged) clears the
+     * pending input and renews the frame stamp; no record follows. */
+    memset(&desktop_watchdog,0,sizeof(desktop_watchdog));
+    memset(&d->damage,0,sizeof(d->damage)); d->cursor_dirty=0;
+    uint32_t base=(uint32_t)(monotonic()/1000000ull);
+    __atomic_store_n(&desktop_watchdog.frame_ms,base-600,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.loop_ms,base,__ATOMIC_RELEASE);
+    desktop_input_pending(); desktop_stage(STALL_IDLE);
+    char line[512];
+    assert(desktop_stall_record(base,line,sizeof(line))>0 && strstr(line,"stage=idle")); /* a stale stamp reports */
+    d->now_ns=(uint64_t)base*1000000ull; errno=0; desktop_watchdog_frame(d,d->presents,0);
+    assert(!__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE));
+    assert(!desktop_stall_record(base+400,line,sizeof(line)));
+    /* A frame not yet due keeps pending input; a stale errno is not a frame. */
+    desktop_input_pending(); d->cursor_dirty=1; errno=0; desktop_watchdog_frame(d,d->presents,-1);
+    assert(__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE));
+    memset(&desktop_watchdog,0,sizeof(desktop_watchdog));
+    free(d);
+    printf("PASS F2-95 idle wake: input during the idle wait read within %llu us (<=10 ms), shown within %llu us; "
+           "small damage 30 fps without input; cursor-only frame clears the stall observer\n",
+           (unsigned long long)(worst_wait/1000),(unsigned long long)(worst_show/1000));
+}
+/* f2-95: shortcut scans. Temporary roots replace the four production trees. */
+static void link_write(const char *path,const char *label,const char *target,time_t mtime)
+{
+    struct desk_launch_record r={0}; snprintf(r.label,sizeof(r.label),"%s",label);
+    snprintf(r.target,sizeof(r.target),"%s",target); r.show=1;
+    uint8_t bytes[DESK_LINK_BYTES]; unsigned n=desk_link_encode(&r,bytes,sizeof(bytes)); assert(n);
+    FILE *f=fopen(path,"wb"); assert(f && fwrite(bytes,1,n,f)==n && !fclose(f));
+    struct timespec times[2]={{mtime,0},{mtime,0}}; assert(!utimensat(AT_FDCWD,path,times,0));
+}
+static void links_policy_test(void)
+{
+    const char *tmp=getenv("TMPDIR"); char base[200];
+    snprintf(base,sizeof(base),"%s/links-XXXXXX",tmp && *tmp ? tmp : "/tmp"); assert(mkdtemp(base));
+    char roots[4][260], path[300];
+    for (unsigned r=0;r<4;r++) { snprintf(roots[r],sizeof(roots[r]),"%s/r%u",base,r); assert(!mkdir(roots[r],0700)); }
+    snprintf(path,sizeof(path),"%s/Tools",roots[0]); assert(!mkdir(path,0700));
+    snprintf(path,sizeof(path),"%s/Tools/Beta.lnk",roots[0]); link_write(path,"Beta","C:\\BETA.EXE",1700000000);
+    snprintf(path,sizeof(path),"%s/Alpha.lnk",roots[1]); link_write(path,"Alpha","C:\\ALPHA.EXE",1700000000);
+    snprintf(path,sizeof(path),"%s/readme.txt",roots[2]); FILE *f=fopen(path,"w"); assert(f && fputs("x",f)>=0 && !fclose(f));
+    snprintf(path,sizeof(path),"%s/Gamma.ciuki",roots[3]); link_write(path,"Gamma","/Programs/gamma",1700000000);
+    const char *saved[4]; memcpy(saved,links_roots,sizeof(saved));
+    for (unsigned r=0;r<4;r++) links_roots[r]=roots[r];
+    struct links_worker *w=calloc(1,sizeof(*w)); assert(w);
+    assert(!pthread_mutex_init(&w->mutex,NULL) && !pthread_cond_init(&w->changed,NULL));
+    unsigned queries=game_queries;
+    links_scan_once(w,1);
+    assert(w->count==3 && !strcmp(w->published[0].launch.label,"Alpha") && w->published[0].desktop==1);
+    assert(!strcmp(w->published[1].launch.label,"Beta") && !strcmp(w->published[2].launch.label,"Gamma"));
+    assert(game_queries==queries+CIUKI_DOSVM_GAME_COUNT && w->reads==3 && w->scans==1 && w->game_scans==1);
+    struct desk_link_entry first[3]; memcpy(first,w->published,sizeof(first));
+    /* Unchanged shortcuts keep their records: no read, no game query, same bytes. */
+    links_scan_once(w,0);
+    assert(w->count==3 && w->reads==3 && game_queries==queries+CIUKI_DOSVM_GAME_COUNT && !memcmp(first,w->published,sizeof(first)));
+    /* A rewritten shortcut (new time) is read again. */
+    snprintf(path,sizeof(path),"%s/Alpha.lnk",roots[1]); link_write(path,"Alpha 2","C:\\ALPHA.EXE",1700000100);
+    links_scan_once(w,0); assert(w->reads==4 && !strcmp(w->published[0].launch.label,"Alpha 2"));
+    /* Request policy: 2 s snapshots never rescan by themselves before 10 s. */
+    struct desktop *d=calloc(1,sizeof(*d)); assert(d);
+    w->scanned_ns=1000000000ull;
+    links_request(w,d,w->scanned_ns+DESK_LINKS_RESCAN_NS-1); assert(!w->scan_requested);
+    links_request(w,d,w->scanned_ns+DESK_LINKS_RESCAN_NS); assert(w->scan_requested && !w->games_requested);
+    w->scan_requested=0; w->scanning=1; d->v3_links_force=DESK_LINKS_SCAN|DESK_LINKS_GAMES;
+    links_request(w,d,w->scanned_ns); assert(!w->scan_requested && d->v3_links_force); /* a scan in progress may predate it */
+    w->scanning=0; links_request(w,d,w->scanned_ns);
+    assert(w->scan_requested && w->games_requested && !d->v3_links_force);
+    /* One minute of 2 s snapshots without events: 6 scans and no game query
+     * (the a4d9454e policy: 30 scans, 90 queries and a stat per entry). */
+    w->scan_requested=w->games_requested=0; unsigned scans=0, games=0; uint64_t t=w->scanned_ns;
+    for (uint64_t now=t+2000000000ull;now<=t+60000000000ull;now+=2000000000ull) { /* 30 snapshots */
+        links_request(w,d,now);
+        if (w->scan_requested) { scans++; games+=w->games_requested; w->scan_requested=w->games_requested=0; w->scanned_ns=now; }
+    }
+    assert(scans==6 && !games);
+    for (unsigned r=0;r<4;r++) links_roots[r]=saved[r];
+    pthread_mutex_destroy(&w->mutex); pthread_cond_destroy(&w->changed); free(w); free(d);
+    snprintf(path,sizeof(path),"%s/Tools/Beta.lnk",roots[0]); assert(!unlink(path));
+    snprintf(path,sizeof(path),"%s/Tools",roots[0]); assert(!rmdir(path));
+    snprintf(path,sizeof(path),"%s/Alpha.lnk",roots[1]); assert(!unlink(path));
+    snprintf(path,sizeof(path),"%s/readme.txt",roots[2]); assert(!unlink(path));
+    snprintf(path,sizeof(path),"%s/Gamma.ciuki",roots[3]); assert(!unlink(path));
+    for (unsigned r=0;r<4;r++) assert(!rmdir(roots[r]));
+    assert(!rmdir(base));
+    printf("PASS F2-95 shortcut scan: records reused when unchanged (reads=4 over 3 scans), games queried only on request, "
+           "60 s idle: scans=%u (was 30) game_queries=%u (was 90)\n",scans,games);
+}
 
 int main(int argc,char **argv)
 {
     gate_main_thread=pthread_self();
     idle_policy_test();
+    idle_wake_test();
+    if (argc==2 && !strcmp(argv[1],"--links")) { links_policy_test(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--folder-poll")) { gate_folder_poll(); return 0; }
     if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
         first_frame_portrait=argv[2]; first_frame_output=argv[3];

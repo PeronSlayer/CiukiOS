@@ -10,6 +10,15 @@
  * in that model instead of reporting it. --old-device-budget selects the
  * pre-f1-90 aggregate device budget (every non-urgent device task demoted,
  * the refill charged to the shared budget), the trial image's policy.
+ * f2-96: --smi=<period_ms>:<count>:<any|device|refill>[:unproven] injects
+ * SMI blackouts of 2.1 ms (count 2: the pair of one T23 EC transaction,
+ * 50 us apart) every period. The CPU stops, the AC'97 DMA keeps fetching,
+ * the PIT edges inside are latched once by the PIC and delivered at RSM,
+ * the others are lost. `any` starts a blackout in whatever runs, `device`
+ * in the device worker (the EC worker's own port access raises the T23 SMI
+ * 13-15 us later), `refill` inside the refill's service (worst case);
+ * `unproven` delivers the late tick from a V86 frame, where cpustat cannot
+ * prove firmware time: the pre-f2-96 charge (negative control).
  * SPDX-License-Identifier: GPL-2.0-only */
 #define main latency_fixture_main
 #include "kernel_latency_test.c"
@@ -24,6 +33,7 @@
 #undef proc_task_switch
 static void advance(unsigned us);
 #include <ciuki/audio_backend.h>
+#include <ciuki/v86.h>
 #include "../../src/kernel/audio/mixer.c"
 #include "../../src/kernel/audio/audio_dev.c"
 
@@ -104,11 +114,58 @@ struct operation {
 static struct operation operations[OPERATIONS];
 static unsigned operation_count, finished[4];
 
+/* f2-96 SMI blackout model. */
+#define SMI_US 2100u
+#define SMI_PAIR_SPACING_US 50u
+static unsigned smi_period_ms, smi_count, smi_in_burst;
+static bool smi_unproven, smi_stress;
+static struct task *smi_task; /* placement: blackouts start only in this task */
+static uint64_t smi_next, smi_burst_start, lost_ticks;
+static unsigned smi_injected, smi_in_hog, smi_lost_ticks;
+static uint64_t lead_min_frames=UINT64_MAX;
+static unsigned firmware_records;
+/* run_tick for the PIT IRQ delivered at RSM; a V86 frame carries no proof. */
+static void late_tick(void)
+{
+    g_ticks++;
+    struct trap_frame tf={.vector=0x20,.cs=smi_unproven ? 0 : (g_current->user ? 0x1b : 8),.eip=0x87,
+        .eflags=smi_unproven ? V86_VM : 0};
+    uint64_t start=cpu_irq_enter(&tf); sched_tick(); cpu_irq_leave(start);
+    uint32_t saved_flags=flags; flags=0x200;
+    for (unsigned n=0;deferred_fn && n<1024;n++) { kwork_fn fn=deferred_fn; deferred_fn=0; fn(deferred_arg); }
+    flags=saved_flags;
+}
+static void blackout(void)
+{
+    uint64_t resume=cycles+SMI_US, edge=(g_ticks+lost_ticks+1)*1000u;
+    unsigned edges=0;
+    while (edge+edges*1000u<=resume) edges++;
+    CHECK(edges>=2 && edges<=3);
+    lost_ticks+=edges-1; smi_lost_ticks+=edges-1;
+    smi_injected++; if (g_current==&hog) smi_in_hog++;
+    cycles=resume; late_tick();
+    if (++smi_in_burst<smi_count) smi_next=cycles+SMI_PAIR_SPACING_US;
+    else { smi_in_burst=0; smi_burst_start+=smi_period_ms*1000u; smi_next=smi_burst_start; }
+}
+/* Start of the next blackout inside [cycles, end), or UINT64_MAX. */
+static uint64_t smi_due(uint64_t end)
+{
+    if (!smi_period_ms || smi_next>=end) return UINT64_MAX;
+    if (smi_task && g_current!=smi_task) return UINT64_MAX; /* waits for that task's work */
+    return smi_next>cycles ? smi_next : cycles;
+}
 static void advance(unsigned us)
 {
     uint64_t end=cycles+us;
-    while ((g_ticks+1)*1000u<=end) {
-        cycles=g_ticks*1000u;
+    for (;;) {
+        uint64_t edge=(g_ticks+lost_ticks+1)*1000u, smi=smi_due(end);
+        if (smi<edge && smi<end) {
+            /* The work done so far stands; the rest resumes after RSM. */
+            uint64_t remaining=end-smi; cycles=smi; blackout(); end=cycles+remaining;
+            continue;
+        }
+        if (edge>end) break;
+        cycles=edge-1000u;
         run_tick(0x87);
     }
     cycles=end;
@@ -247,9 +304,12 @@ static void step(void)
 {
     arrivals();
     if (g_current==&hog) {
+        /* f2-96: the DMA lead left when the refill runs (no gap: > 0). */
+        uint64_t fetched=cycles*AUDIO_RATE/1000000u, queued=transport.published*AUDIO_QUANTUM;
+        if (queued>=fetched && queued-fetched<lead_min_frames) lead_min_frames=queued-fetched;
         CHECK(!audio_backend_progress());
         audio_service(); refills++;
-        CHECK(!audio.error && !audio.deadlines && !audio.underruns);
+        CHECK(!audio.error && !audio.underruns && (smi_unproven || smi_stress || !audio.deadlines));
         next_refill=g_ticks+4;
         task_device_deadline(&hog,next_refill); block_until(&hog,next_refill);
     } else if (g_current==&normal) {
@@ -326,6 +386,10 @@ static void collect_overruns(void)
     /* Use the real reporting path and start another 2 s window. */
     record_bytes=0; records[0]=0; cpu_emit();
     CHECK(!overrun_used && !audio_used);
+    for (const char *at=strstr(records,"[sched] firmware_credit count="); at; at=strstr(at+1,"[sched] firmware_credit count=")) {
+        unsigned n=0, us=0; CHECK(sscanf(at,"[sched] firmware_credit count=%u us=%u",&n,&us)==2 && n && us);
+        firmware_records++;
+    }
     const char *top=strstr(records,"[cpu] device_top task=");
     if (top) { top_windows++; if (!strncmp(top+22,"device-work#7 ",14)) top_work_windows++; }
 }
@@ -337,9 +401,21 @@ int main(int argc,char **argv)
         } else if (!strcmp(argv[i],"--trial-device-work")) trial_device_work=true;
         else if (!strcmp(argv[i],"--old-device-budget")) old_device_budget=true;
         else if (!strcmp(argv[i],"--require-c")) require_c=true;
+        else if (!strncmp(argv[i],"--smi=",6)) {
+            char placement[16]={0}, proof[16]={0};
+            int n=sscanf(argv[i]+6,"%u:%u:%15[a-z]:%15[a-z]",&smi_period_ms,&smi_count,placement,proof);
+            CHECK(n>=3 && smi_period_ms>=500 && (smi_count==1 || smi_count==2));
+            CHECK(!strcmp(placement,"any") || !strcmp(placement,"device") || !strcmp(placement,"refill"));
+            CHECK(n==3 || !strcmp(proof,"unproven"));
+            smi_task=!strcmp(placement,"refill") ? &hog : !strcmp(placement,"device") ? &device_peer : NULL;
+            smi_unproven=n==4; smi_stress=smi_task==&hog && smi_count==2;
+            /* Mid-period phase: each blackout spans two or three PIT edges. */
+            smi_burst_start=smi_next=1000437u;
+        }
         else CHECK(!"unknown option");
     }
     CHECK(!require_c || (vfs_replay && trial_device_work && !old_device_budget));
+    CHECK(!smi_period_ms || (!vfs_replay && !trial_device_work && !old_device_budget));
     reset();
     device_attribution=!old_device_budget;
     hog.audio_class=true; /* as audio_init marks the refill worker */
@@ -390,6 +466,46 @@ int main(int argc,char **argv)
     }
     collect_overruns();
     CHECK(finished[0]==513 && finished[1]==35 && finished[2]==6 && finished[3]==1);
+    if (smi_period_ms) {
+        /* f2-96 acceptance: the refill and the mixer do not notice the
+         * blackouts. No transport gap (the DMA never passes the published
+         * frames, no underrun, no PCM starvation), no refill own-budget
+         * overrun and no service deadline miss while cpustat proves the
+         * firmware time; without the proof (V86 frame) the pre-f2-96 charge
+         * reproduces the T23 5a10eef4 audio_refill_overrun records. */
+        unsigned bursts=(unsigned)(cycles/1000u/smi_period_ms);
+        uint64_t credited_us=cpu_firmware_cycles()*1000u/g_tsc_per_ms;
+        const char *placement=smi_task==&hog ? "refill" : smi_task ? "device" : "any";
+        /* Both SMIs of one EC transaction inside the refill's own work is a
+         * stress case: the tick-lateness proof cannot see the SMM time
+         * before each missed PIT edge (up to one period per SMI). */
+        bool stress=smi_task==&hog && smi_count==2;
+        printf("F2-96 SMI blackouts: period_ms=%u per_burst=%u placement=%s proof=%s injected=%u in_refill=%u lost_ticks=%u "
+               "wall_ms=%llu lead_min_frames=%llu (%llu us, lead %u periods) refill_gap_max_us=%u refill_service_max_us=%u "
+               "deadlines=%llu underruns=%llu starvations=%llu audio_refill_own_overruns=%u other_device_overruns=%u "
+               "firmware_credit_us=%llu firmware_credit_records=%u\n",
+            smi_period_ms,smi_count,placement,smi_unproven ? "none" : "cpustat",smi_injected,smi_in_hog,
+            smi_lost_ticks,(unsigned long long)(cycles/1000u),(unsigned long long)lead_min_frames,
+            (unsigned long long)(lead_min_frames*1000000u/AUDIO_RATE),AUDIO_LEAD,audio.max_service_gap_us,audio.max_service_us,
+            (unsigned long long)audio.deadlines,(unsigned long long)audio.underruns,(unsigned long long)pcm.starvation,
+            audio_own_overruns,other_overruns,(unsigned long long)credited_us,firmware_records);
+        CHECK(smi_injected+smi_count>=bursts*smi_count && smi_injected<=(bursts+1)*smi_count);
+        CHECK(smi_task!=&hog || smi_in_hog==smi_injected);
+        CHECK(!audio.error && !audio.underruns && !pcm.starvation && lead_min_frames!=UINT64_MAX && lead_min_frames>0);
+        if (smi_unproven) {
+            CHECK(!credited_us && (audio_own_overruns>0 || smi_task!=&hog));
+            printf("F2-96 SMI negative control (no firmware proof): audio_refill_own_overruns=%u deadlines=%llu as on T23 5a10eef4 PASS\n",
+                audio_own_overruns,(unsigned long long)audio.deadlines);
+        } else if (stress) {
+            CHECK(credited_us*2>=(uint64_t)smi_injected*SMI_US/2); /* at least half of the SMM time proven */
+            printf("F2-96 SMI stress (EC pair inside the refill): no transport gap; residual audio_refill_own_overruns=%u deadlines=%llu REPORTED\n",
+                audio_own_overruns,(unsigned long long)audio.deadlines);
+        } else {
+            CHECK(!audio_own_overruns && !audio.deadlines && credited_us>0);
+            CHECK(audio.max_service_us<AUDIO_SERVICE_US);
+            printf("F2-96 SMI blackouts: no transport gap, no refill overrun above its 2 ms budget, no service deadline miss PASS\n");
+        }
+    }
     printf("F1-87 C continuous replay: wall_ms=%llu desktop=%u log=%u commit=%u mkdir=%u commands=%u priority_checks=%u decode_reads=%u decoder_latency_max_ms=%llu decoded_min_frames=%u refills=%u refill_gap_max_us=%u refill_service_max_us=%u audio_overruns=%u other_overruns=%u starvations=%llu idle_pm=%llu device_pm=%llu normal_pm=%llu\n",
         (unsigned long long)g_ticks,finished[0],finished[1],finished[2],finished[3],commands,priority_checks,decode_reads,
         (unsigned long long)read_latency_max,decoded_min,refills,audio.max_service_gap_us,
@@ -397,7 +513,7 @@ int main(int argc,char **argv)
         (unsigned long long)(class_total[P_IDLE]*1000/cycles),
         (unsigned long long)(class_total[P_DEVICE]*1000/cycles),
         (unsigned long long)(class_total[P_NORMAL]*1000/cycles));
-    CHECK(!audio.error && !audio.deadlines && !audio.underruns && (old_admission || !pcm.starvation));
+    CHECK(!audio.error && (smi_unproven || smi_stress || !audio.deadlines) && !audio.underruns && (old_admission || !pcm.starvation));
     if (!vfs_replay) CHECK(decoded_min && decode_reads>1500 && refills>50000 && commands>2000 && priority_checks);
     else {
         printf("F1-87 C VFS continuous old_policy=%u holds=555 complete_intervals=125..1837ms admission_deadline_overruns=%u decoder_latency_max_ms=%llu sampler_audio_overruns=%u PCM_starvations=%llu\n",
@@ -422,7 +538,7 @@ int main(int argc,char **argv)
         /* f1-90: the refill has its own budget, so another task's device
          * work can never demote it; a demotion names only the consumer
          * (device-work here), and the refill stays inside its own budget. */
-        CHECK(!audio_overruns && !innocent_overruns && !audio_own_overruns);
+        CHECK(!audio_overruns && !innocent_overruns && (smi_unproven || smi_stress || !audio_own_overruns));
         CHECK(top_work_windows==top_windows);
     }
     if (!trial_device_work) {

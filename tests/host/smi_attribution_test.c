@@ -332,16 +332,20 @@ static void refusal_tests(void)
     cycles += 3000000; smi_tick(cycles, cycles - 3000000);
     smi_window_emit(2000ull * 1000000, true);
     assert(strstr(logbuf, "[kernel] smi count=0 sources=00000000") && !strstr(logbuf, "smi_regs") && !pm_reads);
-    /* ecpoll=0 and a machine without the EC are named in the record. */
-    for (unsigned i = 0; i < 2; i++) {
-        ec_poll_state = i ? -1 : 0; logat = 0;
+    /* The f2-96 default (2 s), ecpoll=0 and a machine without the EC are
+     * named in the record. */
+    for (unsigned i = 0; i < 3; i++) {
+        static const int states[] = { 2000, 0, -1 };
+        static const char *const want[] = { " ec_io=0 ec_poll=2000 leads=0", " ec_io=0 ec_poll=off leads=0",
+                                            " ec_io=0 ec_poll=none leads=0" };
+        ec_poll_state = states[i]; logat = 0;
         cycles += 3000000; smi_tick(cycles, cycles - 3000000);
         smi_window_emit(2000ull * 1000000, true);
-        assert(strstr(logbuf, i ? " ec_io=0 ec_poll=none leads=0" : " ec_io=0 ec_poll=off leads=0"));
+        assert(strstr(logbuf, want[i]));
         assert(strstr(logbuf, " last_io=0000/00\n") && !pm_reads); /* no sampler: no PM read */
     }
     ec_poll_state = 1000;
-    puts("PASS f1-94 refusals: H page/safe mode, armed LEGKEY, unowned/quarantined UHCI, failed readback, unsupported bridge without port I/O; ec_poll=1000/off/none in smi_coincide");
+    puts("PASS f1-94 refusals: H page/safe mode, armed LEGKEY, unowned/quarantined UHCI, failed readback, unsupported bridge without port I/O; ec_poll=1000/2000/off/none in smi_coincide");
     puts("PASS f1-100 records: read-only smi_monitors (TRP_FWD_EN, MON4-7 ranges, mask, GPE1_STS, last I/O at SMI#) and last_io in smi_coincide, none without the sampler");
 }
 

@@ -334,7 +334,7 @@ static void restart_notice(void *ctx,unsigned kind,uint32_t pid,uint32_t flags)
         restart_closing_pending=0;
         if(desk_request_close)for(unsigned i=0;i<DESK_CLIENTS;i++)if(restart_progress_window && owner->clients[i].window_id==restart_progress_window && owner->clients[i].internal==DESK_INTERNAL_MESSAGE)desk_request_close(owner,(int)i);
         restart_progress_window=0;
-        owner->v3_links_next=0;if(desk_links_refresh)desk_links_refresh(owner);
+        owner->v3_links_next=0;owner->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;if(desk_links_refresh)desk_links_refresh(owner);
         fprintf(stderr,"[win32] restart desktop-input-restored\n");
     }else fprintf(stderr,"[win32] end-session desktop-power-decision flags=%u\n",flags);
 }

@@ -8,6 +8,7 @@
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
+struct desk_dirty_row { int32_t left, right; };   /* visible-span painter (compositor.c) */
 #define DESK_TX_MAX 64
 #define DESK_V3_OVER_MAX 64              /* f2-91: v3 transport overflow behind a full tx ring (lazily allocated) */
 #define DESK_V3_SILENT_NS 5000000000ull  /* f2-91: a v3 client silent this long with 128 pending is dropped */
@@ -69,9 +70,12 @@ struct desk_vram_entry {
     uint64_t dirty_ns, order;
 };
 #define DESK_LATENCY_BUCKETS 256
-struct desk_dirty_row { int32_t left, right; };
-struct desk_dirty_runs { unsigned count; struct desk_dirty_row spans[DESK_DAMAGE_MAX]; };
+#define DESK_LINKS_SCAN 1u
+#define DESK_LINKS_GAMES 2u
 #define DESK_FRAME_NS 16666667ull /* VBE does not expose measured refresh; conservative 60 Hz */
+#define DESK_SMALL_FRAME_NS 33333333ull  /* f2-95: 30 fps for continuous small damage */
+#define DESK_INPUT_ACTIVE_NS 250000000ull /* f2-95: input this recent keeps the display rate */
+#define DESK_POINTER_RETRY_NS 1000000000ull /* f2-96: software pointer offered back to the engine */
 struct desk_gfx_stats {
     uint32_t serial,app_serial,render_us,submit_us,wait_us;
     uint32_t width,height,source_w,source_h,view_w,view_h;
@@ -214,7 +218,6 @@ struct desktop {
     void (*input_pending)(void); /* independent desktop stall observer */
     struct desk_damage damage;
     struct desk_damage present_damage;
-    struct desk_dirty_runs *rows; uint32_t row_height;
     struct desk_render_cache *render_cache;
     int render_cache_prepared;
     uint64_t chrome_rebuilds;
@@ -225,6 +228,7 @@ struct desktop {
     unsigned cursor_shape, cursor_loaded;
     unsigned lfb_bytes_per_pixel;
     uint64_t next_frame_ns;
+    uint64_t last_frame_ns, last_input_ns; /* f2-95: last completed frame's start, last input */
     struct desk_gfx_stats gfx_sample; /* most recently completed demo frame */
     uint64_t pending_input_ns, pending_input_lag_ns, frame_input_ns;
     uint64_t latency_buckets[DESK_LATENCY_BUCKETS];
@@ -249,6 +253,10 @@ struct desktop {
     struct desk_link_entry *v3_links;
     unsigned v3_link_count;
     uint64_t v3_links_next;
+    /* f2-95: DESK_LINKS_SCAN asks the shortcut worker for a scan at the next
+     * snapshot, DESK_LINKS_GAMES also for the bundled-games query. Without a
+     * request the worker rescans every 10 s, never on every 2 s snapshot. */
+    unsigned v3_links_force;
     /* Enumerate a fresh bounded snapshot; read source again before launch. */
     int (*v3_links_list)(struct desktop *, struct desk_link_entry *, unsigned);
     int (*v3_link_read)(struct desktop *, const char *, struct desk_launch_record *);
@@ -299,7 +307,17 @@ struct desktop {
     int (*gfx_benchmark)(struct desktop *, unsigned, uint64_t result[3]);
     uint64_t gfx_next_bench_ns;
     uint32_t accel_generation, accel_caps;
-    int hw_cursor;
+    /* hw_cursor: the hardware cursor is loaded and owns the pointer.
+     * f2-96: hw_cursor_shown: the hardware cursor may be visible (SHOW 1
+     * succeeded and no CURSOR_SET, SHOW 0, engine loss or new generation
+     * hid it since). The software pointer is drawn only when both are 0,
+     * so the two are never on screen together. Busy/stale answers keep the
+     * owner and retry next frame; other errors hide the hardware cursor and
+     * fall back to software; a software pointer is offered back to the
+     * engine at most once per DESK_POINTER_RETRY_NS. */
+    int hw_cursor, hw_cursor_shown;
+    uint64_t hw_cursor_retry_ns;
+    unsigned hw_cursor_retries, hw_cursor_fallbacks;
     int32_t cursor_x, cursor_y;
     /* A move can copy only a clean, unobscured window. Other exposure is damage. */
     int copy_pending, copy_client;
@@ -418,6 +436,8 @@ void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
 int desk_redraw(struct desktop *);
 void desk_render_release(struct desktop *);
 int desk_frame_due(const struct desktop *, uint64_t now);
+int desk_small_damage(const struct desktop *, uint64_t now);
+uint64_t desk_frame_time(const struct desktop *, uint64_t now);
 void desk_gfx_complete(struct desktop *, int index, int result, uint64_t completed, uint64_t next);
 void desk_stats_sample(struct desktop *);
 void desk_display_reply(struct desktop *, int result);

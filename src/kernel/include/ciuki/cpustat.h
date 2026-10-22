@@ -24,6 +24,9 @@ void cpu_irqoff_end(uint64_t end) __attribute__((weak));
 void cpu_irqoff_mark(enum cpu_irqoff_phase) __attribute__((weak));
 void cpu_irqoff_tasks(const struct task *,const struct task *) __attribute__((weak));
 uint64_t cpu_path_clock(void) __attribute__((weak));
+/* f2-96: cumulative firmware (SMM) time proven so far, in TSC cycles; the
+ * scheduler budgets and the audio service deadline leave it out. */
+uint64_t cpu_firmware_cycles(void) __attribute__((weak));
 void cpu_trap_enter(const struct trap_frame *tf);
 void cpu_user_return(void);
 uint64_t cpu_irq_enter(const struct trap_frame *tf);

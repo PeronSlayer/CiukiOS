@@ -3,6 +3,8 @@
  * f1-100: every EC transaction raises the T23 EC event line (GPI12, routed
  * to SMI# in legacy mode) and costs about two 2.1 ms SMIs; EC traffic is
  * therefore explicit, counted and bounded (docs/validation/f1-100-ec-traffic.md).
+ * f2-96: the default poll is one RD_EC every 2 s, so the mixer follows the
+ * volume keys again (docs/validation/f2-96-cursor-ec-volume.md).
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/audio.h>
@@ -20,6 +22,7 @@
 #define EC_MASK 0x4f
 #define EC_TIMEOUT_MS 500u
 #define EC_POLL_MS THINKPAD_EC_POLL_MS
+#define EC_DEFAULT_POLL_MS THINKPAD_EC_DEFAULT_POLL_MS
 #define EC_REFRESH_MS THINKPAD_EC_REFRESH_MS
 #define EC_REPROBE_MS 10000u
 #define EC_FAILURE_LIMIT 8u
@@ -32,8 +35,9 @@
 uint32_t thinkpad_ec_poll_option(const char *s, size_t size, const char **source)
 {
     /* Same token rules as the loader: separators are space, CR and LF (any
-     * control byte here), the match is exact. f1-100: off unless ecpoll=1;
-     * ecpoll=0 wins, like a positive safe-mode source. */
+     * control byte here), the match is exact. f2-96: 2 s by default, 1 Hz
+     * with ecpoll=1, off with ecpoll=0, which wins like a positive
+     * safe-mode source. */
     bool off = false, on = false;
     size_t i = 0;
     while (i < size && s[i]) {
@@ -45,7 +49,7 @@ uint32_t thinkpad_ec_poll_option(const char *s, size_t size, const char **source
         }
     }
     if (source) *source = off ? "ecpoll=0" : on ? "ecpoll=1" : "default";
-    return !off && on ? EC_POLL_MS : 0;
+    return off ? 0 : on ? EC_POLL_MS : EC_DEFAULT_POLL_MS;
 }
 static bool ec_sum(const uint8_t *p, size_t n)
 { uint8_t sum = 0; for (size_t i = 0; i < n; i++) sum += p[i]; return sum == 0; }
@@ -300,7 +304,8 @@ static int ec_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m, struct ec
 static void ec_result(struct thinkpad_ec *e, int err)
 {
     uint64_t now = e->io.now(e->io.ctx);
-    /* Retries follow the poll cadence; a disabled poll keeps the default. */
+    /* Retries follow the poll cadence (2 s by default, 1 s with ecpoll=1);
+     * with the poll off an explicit action retries after 1 s. */
     uint64_t poll = e->poll_ms ? e->poll_ms : EC_POLL_MS;
     if (!err) { e->active = e->available = true; e->failures = 0; e->next_poll = now + poll; return; }
     e->available = false;
@@ -349,7 +354,7 @@ int thinkpad_ec_probe(struct thinkpad_ec *e, const struct thinkpad_ec_io *io, bo
     memset(e, 0, sizeof(*e));
     if (!identified || !io || !io->read || !io->write || !io->now || !io->pause) return -ENODEV;
     e->io = *io;
-    e->poll_ms = 0;      /* f1-100: thinkpad_ec_start applies ecpoll=1 */
+    e->poll_ms = 0;      /* thinkpad_ec_start applies the default or ecpoll= */
     e->status = 0xff;    /* no valid register value: the first read is logged once */
     struct ec_budget b = ec_budget_begin(e);
     int err = ec_discover(e, m, &b);
@@ -382,7 +387,7 @@ static int ec_mirror(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
     if (!e->io.now) return -ENODEV;
-    if (!e->poll_ms) return e->available ? 0 : -ENODEV; /* default: no periodic EC traffic */
+    if (!e->poll_ms) return e->available ? 0 : -ENODEV; /* ecpoll=0: no periodic EC traffic */
     uint64_t now = e->io.now(e->io.ctx);
     if ((int64_t)(now - e->next_poll) < 0) return e->available ? 0 : -ENODEV;
     return ec_mirror(e, m);
@@ -402,7 +407,8 @@ int thinkpad_ec_volume_refresh(struct thinkpad_ec *e, struct ciuki_mixer_master 
 #ifndef THINKPAD_EC_HOST
 static struct thinkpad_ec native_ec;
 static struct kmutex ec_lock;
-/* f1-100: the worker serves user-requested refreshes (and the ecpoll=1 poll). */
+/* The worker serves the poll (f2-96: every 2 s by default, 1 Hz with
+ * ecpoll=1) and user-requested refreshes (f1-100). */
 static struct kwait ec_wake;
 static bool ec_refresh_wanted, ec_worker_running;
 /* f1-94: every EC port access is a candidate SMI trigger in legacy mode. */
@@ -525,8 +531,8 @@ static void ec_worker(void *arg)
 {
     (void)arg;
     while (native_ec.io.now) {
-        /* No EC traffic while idle: with the poll off (default) only a
-         * request ends the wait; the 60 s timeout just re-checks it. */
+        /* With the poll off (ecpoll=0) there is no EC traffic while idle:
+         * only a request ends the wait; the 60 s timeout just re-checks it. */
         kwait_wait_until(&ec_wake, ec_wanted, 0, deadline_after_ms(native_ec.poll_ms ? native_ec.poll_ms : 60000u));
         if (__atomic_exchange_n(&ec_refresh_wanted, false, __ATOMIC_RELAXED)) audio_master_refresh_requested();
         else if (native_ec.poll_ms) audio_master_refresh();
@@ -549,9 +555,11 @@ int thinkpad_ec_poll_state(void)
 void thinkpad_ec_start(void)
 {
     if (!native_ec.active) return;
-    /* f1-100: no periodic EC traffic unless BOOT.CFG says ecpoll=1. The EC
-     * keeps driving the amplifier from the keys; the mixer mirror follows
-     * them on an explicit refresh (volume popup) only. */
+    /* f2-96: one RD_EC every 2 s by default (ecpoll=1: 1 Hz, ecpoll=0:
+     * none). The EC drives the amplifier from the keys; this poll mirrors
+     * the key presses into the shared master (tray, Control Panel, saved
+     * preference, mute gate) within 2 s. With ecpoll=0 only an explicit
+     * refresh (volume popup) reads the EC (f1-100). */
     const char *source = "default";
     native_ec.poll_ms = thinkpad_ec_poll_option(g_boot.options, sizeof(g_boot.options), &source);
     klog("[ec] thinkpad poll_ms=%u source=%s", native_ec.poll_ms, source);

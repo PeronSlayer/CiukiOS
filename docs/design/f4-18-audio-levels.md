@@ -137,6 +137,26 @@ follows the mute bit, as the 1 Hz poll already did for presses inside one
 second. Without a poll, a user change or refresh is also the retry after an
 EC failure, at the existing cadence (1 s, 10 s after eight failures).
 
+Amendment f2-96 (2026-10-22, supersedes the f1-100 default): the T23 trial
+of a4d9454e showed that with no poll the system volume no longer followed
+the volume keys (the tray, Control Panel, saved preference and mute gate
+change only when the EC register is read). The default is again a poll, of
+one RD_EC every 2 s: one transaction and two 2.1 ms SMIs, about 4 ms of SMI
+time per 2 s (half the 1 Hz cost measured on 5a10eef4). `BOOT.CFG`
+`ecpoll=0` turns the poll off (the f1-100 behaviour: popup refresh only),
+`ecpoll=1` selects 1 Hz for diagnosis; `ecpoll=0` wins. A key press reaches
+the mirror within 2 s; the popup's `MIXER_REFRESH_MASTER` stays. Records:
+`[ec] thinkpad poll_ms=2000 source=default` and one `[ec] thinkpad io=9
+transactions=1 … poll_ms=2000` per 2 s window. The codec stays at unity while
+the EC owns the master: the [Linux ThinkPad ACPI
+documentation](https://raw.githubusercontent.com/torvalds/linux/v6.12/Documentation/admin-guide/laptops/thinkpad-acpi.rst)
+places the IBM console amplifier after the AC'97 mixer "under exclusive
+control of the firmware", which handles the volume keys without the OS, so
+applying the mirrored level to the codec as well would attenuate twice.
+The SMI time of the poll no longer reaches the audio refill's budget:
+cpustat leaves proven firmware time out of the scheduler budgets and the
+service deadline (see the f2-96 validation record).
+
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already
 qualified at boot, without bypassing quarantined resources.

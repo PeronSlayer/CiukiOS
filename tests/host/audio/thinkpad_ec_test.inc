@@ -334,7 +334,7 @@ static void test_thinkpad_ec_reserved_table(void)
             ec_expect_record(2,"[smbios] bios vendor=\"IBM\" version=\"1AET64WW (1.20 )\" type0=1");
             CHECK(audio.master.left==20 && ehw.volume_writes==0 && second_claim_next==2);
             ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=7 mute=0");
-            CHECK(!hec.poll_ms && hec.total_transactions==1); /* f1-100: off until ecpoll=1 */
+            CHECK(!hec.poll_ms && hec.total_transactions==1); /* no poll before thinkpad_ec_start */
             hec.poll_ms=EC_POLL_MS;ehw.reg=0xe8;ehw.tick=hec.next_poll;g_ticks=ehw.tick;
             CHECK(thinkpad_ec_master_poll(&audio.master)==1 && audio.master.left==25 && audio.master.mute);
         } else {
@@ -474,8 +474,10 @@ static void test_thinkpad_ec_tolerance(void)
     audio.ready=audio.master_in_codec=audio.master_in_hardware=false;
     puts("ThinkPad EC tolerance: 100 ms busy windows, shared 500 ms budget, sleeping polls, offline codec/software master persistence, eight failures, 10 s reprobe, late reply, resync and rate-limited records PASS");
 }
-/* f1-100: no periodic EC traffic by default (each T23 EC transaction costs
- * about two 2.1 ms SMIs); every remaining transaction is counted and bounded. */
+/* f1-100: each T23 EC transaction costs about two 2.1 ms SMIs; every
+ * transaction is counted and bounded. f2-96: one RD_EC every 2 s by default
+ * (the volume keys reach the mixer again), 1 Hz with ecpoll=1, none with
+ * ecpoll=0. */
 static unsigned ec_window_field(const char *line, const char *name)
 {
     const char *at=strstr(line,name);unsigned value=UINT32_MAX;
@@ -484,17 +486,18 @@ static unsigned ec_window_field(const char *line, const char *name)
 static void test_thinkpad_ec_traffic(void)
 {
     const char *src=NULL;
-    CHECK(EC_POLL_MS==1000u && EC_REFRESH_MS==1000u && EC_OP_TRANSACTIONS==4u);
-    CHECK(thinkpad_ec_poll_option("",128,&src)==0 && !strcmp(src,"default"));
+    CHECK(EC_POLL_MS==1000u && EC_DEFAULT_POLL_MS==2000u && EC_REFRESH_MS==1000u && EC_OP_TRANSACTIONS==4u);
+    CHECK(thinkpad_ec_poll_option("",128,&src)==EC_DEFAULT_POLL_MS && !strcmp(src,"default"));
     static const char *const off[]={"ecpoll=0","safe=1 ecpoll=0","serial=0\r\necpoll=0\r\n"," ecpoll=0 usbscan=0",
                                     "ecpoll=1 ecpoll=0","ecpoll=0\necpoll=1"};
     for(unsigned i=0;i<6;i++) CHECK(thinkpad_ec_poll_option(off[i],strlen(off[i])+1,&src)==0 && !strcmp(src,"ecpoll=0"));
     static const char *const on[]={"ecpoll=1","safe=1 ecpoll=1","serial=0\r\necpoll=1\r\n"," usbscan=0 ecpoll=1 "};
     for(unsigned i=0;i<4;i++) CHECK(thinkpad_ec_poll_option(on[i],strlen(on[i])+1,&src)==EC_POLL_MS && !strcmp(src,"ecpoll=1"));
     static const char *const other[]={"ecpoll=00","ecpoll=11","xecpoll=1","ECPOLL=1","ecpoll=","ecpoll=2","usbscan=0 accel=0"};
-    for(unsigned i=0;i<7;i++) CHECK(thinkpad_ec_poll_option(other[i],strlen(other[i])+1,&src)==0 && !strcmp(src,"default"));
+    for(unsigned i=0;i<7;i++) CHECK(thinkpad_ec_poll_option(other[i],strlen(other[i])+1,&src)==EC_DEFAULT_POLL_MS && !strcmp(src,"default"));
     CHECK(thinkpad_ec_poll_option("ecpoll=10",8,&src)==EC_POLL_MS); /* bounded: the 9th byte is outside */
-    CHECK(thinkpad_ec_poll_option("ecpoll=1",7,NULL)==0);           /* a truncated token is no token */
+    CHECK(thinkpad_ec_poll_option("ecpoll=1",7,NULL)==EC_DEFAULT_POLL_MS); /* a truncated token is no token */
+    CHECK(thinkpad_ec_poll_option("ecpoll=0",7,&src)==EC_DEFAULT_POLL_MS && !strcmp(src,"default"));
 
     /* Probe: one RD_EC. On a ready EC that is 9 port accesses, the T23's
      * ec_io=18 per 2 s window of the 1 Hz poll. */
@@ -506,17 +509,53 @@ static void test_thinkpad_ec_traffic(void)
     CHECK(!strcmp(line,"[ec] thinkpad io=9 transactions=1 max_io=9 refused=0 requests=0 poll_ms=0 total_io=9 total_transactions=1"));
     CHECK(!thinkpad_ec_window(&hec,line,sizeof(line))); /* reset: a quiet window prints nothing */
 
-    /* Default: no periodic traffic, however long the system runs. */
+    /* ecpoll=0 (and a probed EC before thinkpad_ec_start): no periodic
+     * traffic, however long the system runs. */
     unsigned reads=ehw.reads,writes=ehw.writes;
     for(unsigned i=0;i<100;i++) { ehw.tick+=1000;CHECK(!thinkpad_ec_volume_poll(&hec,&m)); }
     CHECK(ehw.reads==reads && ehw.writes==writes && !thinkpad_ec_window(&hec,line,sizeof(line)));
 
+    /* f2-96 default cadence: one RD_EC (9 port accesses, one transaction)
+     * per 2 s window, a key press mirrored within one period; ecpoll=1: two
+     * per window. The worker's wake follows next_poll as in production. */
+    uint8_t saved_reg=ehw.reg;unsigned saved_volume_writes=ehw.volume_writes;
+    for(unsigned rate=0;rate<2;rate++) {
+        hec.poll_ms=rate ? EC_POLL_MS : EC_DEFAULT_POLL_MS;
+        hec.next_poll=ehw.tick;(void)thinkpad_ec_window(&hec,line,sizeof(line));
+        unsigned polls=0,windows=0,mirrored=0;uint64_t start=ehw.tick,window=ehw.tick+2000;
+        uint8_t level=ehw.reg&15u;
+        while(ehw.tick-start<60000) {
+            if(ehw.tick>=hec.next_poll) {
+                unsigned before=hec.total_transactions;
+                if(polls==7) { level=(uint8_t)((level+1)%15);ehw.reg=(uint8_t)((ehw.reg&~15u)|level); } /* one key press */
+                int changed=thinkpad_ec_volume_poll(&hec,&m);
+                CHECK(changed>=0 && hec.total_transactions==before+1);polls++;
+                if(changed==1) { mirrored++;CHECK(polls==8); }
+            }
+            ehw.tick++;
+            if(ehw.tick>=window) {
+                window+=2000;windows++;
+                CHECK(thinkpad_ec_window(&hec,line,sizeof(line)));
+                unsigned want=rate ? 2u : 1u;
+                CHECK(ec_window_field(line,"transactions=")>=want-1 && ec_window_field(line,"transactions=")<=want+1);
+                CHECK(ec_window_field(line,"max_io=")==9 && ec_window_field(line,"refused=")==0);
+                CHECK(ec_window_field(line,"poll_ms=")==hec.poll_ms);
+            }
+        }
+        /* 60 s: 30 transactions at 2 s (60 at 1 Hz), never more. */
+        CHECK(windows==30 && polls>=(rate ? 59u : 29u) && polls<=(rate ? 61u : 31u) && mirrored==1);
+    }
+    CHECK(ehw.volume_writes==saved_volume_writes); /* the poll only reads */
+    /* Back to the probed register and the poll off for the f1-100 cases. */
+    hec.poll_ms=0;ehw.reg=saved_reg;hec.status=saved_reg;m.left=m.right=20;
+    (void)thinkpad_ec_window(&hec,line,sizeof(line));unsigned total_before=hec.total_transactions;
+    reads=ehw.reads;writes=ehw.writes;
     /* A level-only change has nothing for the EC (register 30h holds no
      * master level we write); a mute change keeps its write: read, write, proof. */
     m.left=m.right=60;CHECK(!thinkpad_ec_volume_set(&hec,&m) && ehw.reads==reads && ehw.writes==writes);
     m.mute=1;CHECK(!thinkpad_ec_volume_set(&hec,&m) && (ehw.reg&EC_MASK)==0x47 && ehw.volume_writes==1 && m.mute);
     CHECK(thinkpad_ec_window(&hec,line,sizeof(line)) && ec_window_field(line,"transactions=")==3 &&
-          ec_window_field(line,"total_transactions=")==4);
+          ec_window_field(line,"total_transactions=")==total_before+3);
     reads=ehw.reads;CHECK(!thinkpad_ec_volume_set(&hec,&m) && ehw.reads==reads); /* already muted */
 
     /* Requested refresh: one RD_EC, independent of the poll, at most once a second. */
@@ -552,24 +591,25 @@ static void test_thinkpad_ec_traffic(void)
     CHECK(!thinkpad_ec_volume_set(&hec,&m) && hec.available && !hec.failures && !(ehw.reg&0x40) && ehw.reads>reads);
     CHECK(thinkpad_ec_window(&hec,line,sizeof(line)) && ec_window_field(line,"transactions=")==1);
 
-    /* Native start: off by default (one record), ecpoll=1 restores 1 Hz; a
-     * request reaches only a running worker and is counted. */
+    /* Native start: 2 s by default (one record), ecpoll=1 1 Hz, ecpoll=0
+     * off; a request reaches only a running worker and is counted. */
     struct audio_state saved_audio=audio;char saved_options[sizeof(g_boot.options)];
     memcpy(saved_options,g_boot.options,sizeof(saved_options));
     static const char *const options[]={"","ecpoll=1","ecpoll=1 ecpoll=0"};
-    static const char *const records[]={"[ec] thinkpad poll_ms=0 source=default","[ec] thinkpad poll_ms=1000 source=ecpoll=1",
+    static const char *const records[]={"[ec] thinkpad poll_ms=2000 source=default","[ec] thinkpad poll_ms=1000 source=ecpoll=1",
                                         "[ec] thinkpad poll_ms=0 source=ecpoll=0"};
     for(unsigned i=0;i<3;i++) {
         memset(g_boot.options,0,sizeof(g_boot.options));strcpy(g_boot.options,options[i]);
         ec_worker_running=false;ec_capture_begin();alloc_fail=0; /* no worker task in the host replay */
         thinkpad_ec_start();alloc_fail=-1;
         ec_expect_record(0,records[i]);ec_expect_record(1,"[ec] thinkpad worker unavailable error=-12");
-        CHECK(hec.poll_ms==(i==1?EC_POLL_MS:0) && thinkpad_ec_poll_state()==(int)hec.poll_ms);
+        CHECK(hec.poll_ms==(i==0?EC_DEFAULT_POLL_MS:i==1?EC_POLL_MS:0) && thinkpad_ec_poll_state()==(int)hec.poll_ms);
     }
     hec.window_requests=0;thinkpad_ec_refresh_request();CHECK(!hec.window_requests && !ec_refresh_wanted);
     ec_worker_running=true;thinkpad_ec_refresh_request();CHECK(hec.window_requests==1 && ec_refresh_wanted);
     ec_capture_begin();thinkpad_ec_window_emit();
     CHECK(ec_records_containing("[ec] thinkpad io=0 transactions=0 max_io=0 refused=0 requests=1 poll_ms=0")==1);
+    hec.poll_ms=0; /* the requested refresh below runs with the poll off (ecpoll=0) */
     ec_worker_running=ec_refresh_wanted=false;
     /* The worker's requested refresh reads even with the poll off. */
     hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;audio.master_in_hardware=true;
@@ -579,7 +619,7 @@ static void test_thinkpad_ec_traffic(void)
     audio_master_refresh_requested();CHECK(ehw.reads>reads && audio.master.mute && audio.master_in_hardware);
     capture_ec_records=false;memcpy(g_boot.options,saved_options,sizeof(saved_options));audio=saved_audio;
     memset(&hec,0,sizeof(hec));
-    puts("ThinkPad EC f1-100: poll off by default (ecpoll=1 1 Hz, ecpoll=0 wins), one-transaction probe, no level-only traffic, mute write kept, 1 s requested refresh, counted window record, 4-transaction and port-access bounds, retry by explicit action PASS");
+    puts("ThinkPad EC f1-100/f2-96: 2 s default poll of one transaction per window and a key press mirrored within one period (ecpoll=1 1 Hz, ecpoll=0 off and wins), one-transaction probe, no level-only traffic, mute write kept, 1 s requested refresh, counted window record, 4-transaction and port-access bounds, retry by explicit action PASS");
 }
 static void test_thinkpad_ec(void)
 {

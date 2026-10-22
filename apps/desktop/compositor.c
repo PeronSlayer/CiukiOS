@@ -6,6 +6,81 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rows.h"
+/* f2-95 (lead amendment): damage and clip regions are the X11 sample
+ * server's region algorithms as maintained in pixman 0.46.4 (MIT,
+ * third_party/pixman, pinned in its README.md), compiled into this unit
+ * with internal linkage; nothing floating point is emitted. */
+static void *region_malloc(size_t);
+static void *region_realloc(void *, size_t);
+static void region_free(void *);
+#define CIUKI_PIXMAN_ALLOC region_malloc
+#define CIUKI_PIXMAN_REALLOC region_realloc
+#define CIUKI_PIXMAN_FREE region_free
+/* Any allocator macros of the includer (host footprint harness) return
+ * afterwards; only the region code sees the pool. */
+#pragma push_macro("malloc")
+#pragma push_macro("realloc")
+#pragma push_macro("free")
+#undef malloc
+#undef realloc
+#undef free
+#include "../../third_party/pixman/pixman-region32.c"
+#undef malloc
+#undef realloc
+#undef free
+#pragma pop_macro("free")
+#pragma pop_macro("realloc")
+#pragma pop_macro("malloc")
+/* Region data comes from a fixed pool: the desktop allocates nothing after
+ * its first frame (f2-55/f2-60, tests/host/desktop/test_memory_footprint.py).
+ * The compositor runs on the desktop's main thread only. A request beyond
+ * the pool fails like an exhausted heap: pixman marks the region broken
+ * and the callers below fall back to a covering box. */
+#define REGION_SMALL_RECTS 32
+#define REGION_LARGE_RECTS 512
+#define REGION_SMALL_BLOCKS 64
+#define REGION_LARGE_BLOCKS 4
+#define REGION_BYTES(n) (sizeof(pixman_region32_data_t)+(size_t)(n)*sizeof(pixman_box32_t))
+static long region_small[REGION_SMALL_BLOCKS][REGION_BYTES(REGION_SMALL_RECTS)/sizeof(long)+1];
+static long region_large[REGION_LARGE_BLOCKS][REGION_BYTES(REGION_LARGE_RECTS)/sizeof(long)+1];
+static uint64_t region_small_used; static unsigned region_large_used;
+static void *region_malloc(size_t n)
+{
+    if (n<=sizeof(region_small[0])) for (unsigned i=0;i<REGION_SMALL_BLOCKS;i++)
+        if (!(region_small_used&(1ull<<i))) { region_small_used|=1ull<<i; return region_small[i]; }
+    if (n<=sizeof(region_large[0])) for (unsigned i=0;i<REGION_LARGE_BLOCKS;i++)
+        if (!(region_large_used&(1u<<i))) { region_large_used|=1u<<i; return region_large[i]; }
+    return NULL;
+}
+/* Pool index of p, or -1: small blocks 0..63, large blocks 64.. */
+static int region_block(const void *p)
+{
+    uintptr_t a=(uintptr_t)p, small=(uintptr_t)region_small, large=(uintptr_t)region_large;
+    if (a>=small && a<small+sizeof(region_small)) return (int)((a-small)/sizeof(region_small[0]));
+    if (a>=large && a<large+sizeof(region_large)) return REGION_SMALL_BLOCKS+(int)((a-large)/sizeof(region_large[0]));
+    return -1;
+}
+static size_t region_capacity(const void *p)
+{
+    int i=region_block(p);
+    return i<0 ? 0 : i<REGION_SMALL_BLOCKS ? sizeof(region_small[0]) : sizeof(region_large[0]);
+}
+static void region_free(void *p)
+{
+    int i=region_block(p);
+    if (i>=REGION_SMALL_BLOCKS) region_large_used&=~(1u<<(i-REGION_SMALL_BLOCKS));
+    else if (i>=0) region_small_used&=~(1ull<<i);
+}
+static void *region_realloc(void *p, size_t n)
+{
+    if (!p) return region_malloc(n);
+    size_t have=region_capacity(p);
+    if (n<=have) return p;
+    void *q=region_malloc(n);
+    if (!q) return NULL; /* p stays valid, as with realloc */
+    memcpy(q,p,have); region_free(p);
+    return q;
+}
 #include "../../assets/cursors/cursors.h"
 #include "../../assets/cursors/paint.h"
 /* libdeskui also links this unit for glyphs/frames without the desktop server. */
@@ -201,53 +276,62 @@ struct desk_box desk_menu_box(const struct desktop *d)
     if (y + h > limit) y = limit - h;
     return (struct desk_box){DESK_START_X, y < 0 ? 0 : y, 184, h};
 }
-static struct desk_box unite(struct desk_box a, struct desk_box b)
+static pixman_box32_t region_box(struct desk_box b)
+{ return (pixman_box32_t){b.x,b.y,b.x+b.w,b.y+b.h}; }
+static struct desk_box box_region(pixman_box32_t r)
+{ return (struct desk_box){r.x1,r.y1,r.x2-r.x1,r.y2-r.y1}; }
+/* f2-95: a damage list holds at most DESK_DAMAGE_MAX rectangles. Beyond
+ * that, the two rectangles whose bounding box adds the least area are
+ * joined (the joined box may overlap others: the frame's region union
+ * removes overlaps), so scattered small damage never grows into the whole
+ * screen the way a single bounding box did. */
+static void damage_reduce(struct desk_damage *d, pixman_box32_t *r, unsigned n)
 {
-    int32_t x = a.x < b.x ? a.x : b.x, y = a.y < b.y ? a.y : b.y;
-    int32_t r = a.x+a.w > b.x+b.w ? a.x+a.w : b.x+b.w;
-    int32_t t = a.y+a.h > b.y+b.h ? a.y+a.h : b.y+b.h;
-    return (struct desk_box){x,y,r-x,t-y};
+    while (n>DESK_DAMAGE_MAX) {
+        unsigned bi=0, bj=1; uint64_t best=UINT64_MAX;
+        for (unsigned i=0;i<n;i++) for (unsigned j=i+1;j<n;j++) {
+            int32_t x1=r[i].x1<r[j].x1 ? r[i].x1 : r[j].x1, y1=r[i].y1<r[j].y1 ? r[i].y1 : r[j].y1;
+            int32_t x2=r[i].x2>r[j].x2 ? r[i].x2 : r[j].x2, y2=r[i].y2>r[j].y2 ? r[i].y2 : r[j].y2;
+            uint64_t grow=(uint64_t)(x2-x1)*(uint64_t)(y2-y1);
+            uint64_t own=(uint64_t)(r[i].x2-r[i].x1)*(uint64_t)(r[i].y2-r[i].y1)+(uint64_t)(r[j].x2-r[j].x1)*(uint64_t)(r[j].y2-r[j].y1);
+            grow=grow>own ? grow-own : 0;
+            if (grow<best) { best=grow; bi=i; bj=j; }
+        }
+        pixman_box32_t a=r[bi], b=r[bj];
+        r[bi]=(pixman_box32_t){a.x1<b.x1 ? a.x1 : b.x1,a.y1<b.y1 ? a.y1 : b.y1,a.x2>b.x2 ? a.x2 : b.x2,a.y2>b.y2 ? a.y2 : b.y2};
+        r[bj]=r[--n];
+    }
+    for (unsigned i=0;i<n;i++) d->boxes[i]=box_region(r[i]);
+    d->count=n;
 }
 void desk_damage_add(struct desk_damage *d, struct desk_box b, uint32_t w, uint32_t h)
 {
     if (!desk_intersect(b, (struct desk_box){0,0,(int32_t)w,(int32_t)h}, &b)) return;
-    for (unsigned i = 0; i < d->count;) {
-        struct desk_box a = d->boxes[i], overlap, bound=unite(a,b);
-        uint64_t area=(uint64_t)a.w*a.h+(uint64_t)b.w*b.h;
-        if (desk_intersect(a,b,&overlap)) area-=(uint64_t)overlap.w*overlap.h;
-        /* Merge only rectangular unions. A diagonal drag or a narrow menu
-         * touching a wide bar must not fill the clean corners of its bounds. */
-        if ((uint64_t)bound.w*bound.h==area) {
-            b = bound; d->boxes[i] = d->boxes[--d->count]; i = 0;
-        } else i++;
-    }
-    struct desk_box pending[DESK_DAMAGE_MAX], next[DESK_DAMAGE_MAX];
-    unsigned count=1; pending[0]=b;
-    for (unsigned i=0;i<d->count && count;i++) {
-        unsigned used=0;
-        for (unsigned k=0;k<count;k++) {
-            struct desk_box a=pending[k], cut;
-            if (!desk_intersect(a,d->boxes[i],&cut)) {
-                if (used==DESK_DAMAGE_MAX) goto saturated;
-                next[used++]=a; continue;
-            }
-            struct desk_box parts[4]={{a.x,a.y,a.w,cut.y-a.y},
-                {a.x,cut.y+cut.h,a.w,a.y+a.h-cut.y-cut.h},
-                {a.x,cut.y,cut.x-a.x,cut.h},
-                {cut.x+cut.w,cut.y,a.x+a.w-cut.x-cut.w,cut.h}};
-            for (unsigned j=0;j<4;j++) if (parts[j].w>0 && parts[j].h>0) {
-                if (used==DESK_DAMAGE_MAX) goto saturated;
-                next[used++]=parts[j];
-            }
+    pixman_box32_t boxes[DESK_DAMAGE_MAX+1];
+    unsigned count=d->count<=DESK_DAMAGE_MAX ? d->count : DESK_DAMAGE_MAX;
+    for (unsigned i=0;i<count;i++) boxes[i]=region_box(d->boxes[i]);
+    boxes[count]=region_box(b);
+    /* Region union (pixman_region32_init_rects validates the list into
+     * disjoint y-x bands and coalesces equal bands). */
+    pixman_region32_t region;
+    if (!pixman_region32_init_rects(&region,boxes,(int)count+1)) {
+        /* No memory for the region: one bounding box still covers it all. */
+        pixman_box32_t all=boxes[0];
+        for (unsigned i=1;i<=count;i++) {
+            if (boxes[i].x1<all.x1) all.x1=boxes[i].x1;
+            if (boxes[i].y1<all.y1) all.y1=boxes[i].y1;
+            if (boxes[i].x2>all.x2) all.x2=boxes[i].x2;
+            if (boxes[i].y2>all.y2) all.y2=boxes[i].y2;
         }
-        count=used; memcpy(pending,next,count*sizeof(*pending));
+        d->count=1; d->boxes[0]=box_region(all);
+        return;
     }
-    if (d->count+count>DESK_DAMAGE_MAX) goto saturated;
-    memcpy(d->boxes+d->count,pending,count*sizeof(*pending)); d->count+=count;
-    return;
-saturated:
-    for (unsigned i=0;i<d->count;i++) b=unite(b,d->boxes[i]);
-    d->count=1; d->boxes[0]=b;
+    int n; pixman_box32_t *rects=pixman_region32_rectangles(&region,&n);
+    if (n<=(int)DESK_DAMAGE_MAX) {
+        for (int i=0;i<n;i++) d->boxes[i]=box_region(rects[i]);
+        d->count=(unsigned)n;
+    } else damage_reduce(d,rects,(unsigned)n); /* rects belong to the region */
+    pixman_region32_fini(&region);
 }
 static void fill(struct desktop *d, struct desk_box b, struct desk_box clip, uint32_t colour)
 {
@@ -788,19 +872,94 @@ void desk_render_release(struct desktop *d)
     free(d->render_cache); d->render_cache=NULL; d->render_cache_prepared=0;
     d->scanout_valid=d->frame_valid=0;
     d->copy_pending=0; d->move_damage.count=0;
-    free(d->rows); d->rows=NULL; d->row_height=0;
     free(d->sh.background); d->sh.background=NULL; d->sh.background_valid=0;
     d->cursor_valid=0; d->cursor_dirty=1; d->present_damage.count=0;
     for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) { free(d->vram[i].shadow); memset(&d->vram[i],0,sizeof(d->vram[i])); }
     d->vram_first=d->vram_end=0;
 }
+/* f2-95: continuous small damage without user input (an application's
+ * clock, position label, meter, progress bar or throbber) is composed at
+ * most every DESK_SMALL_FRAME_NS. Input within DESK_INPUT_ACTIVE_NS, the
+ * pointer, window moves, launches, frame-paced presenters (gfx demo, DOS
+ * windows through DESK_GFX_FRAME) and damage over a sixteenth of the screen
+ * keep the display rate; an isolated update is never delayed (the cap only
+ * spaces a frame from the previous completed one). */
+int desk_small_damage(const struct desktop *d, uint64_t now)
+{
+    if (d->cursor_dirty || d->move_damage.count || d->present_damage.count || d->copy_pending ||
+        d->frame_input_ns || (d->last_input_ns && now-d->last_input_ns<DESK_INPUT_ACTIVE_NS) || !d->damage.count)
+        return 0;
+    uint64_t area=0;
+    for (unsigned i=0;i<d->damage.count;i++) area+=(uint64_t)d->damage.boxes[i].w*(uint64_t)d->damage.boxes[i].h;
+    if (area*16>(uint64_t)d->width*d->height) return 0;
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (c->gfx_pending || c->awaiting_frame || c->launch_frame_pending) return 0;
+    }
+    return 1;
+}
+uint64_t desk_frame_time(const struct desktop *d, uint64_t now)
+{
+    uint64_t due=d->next_frame_ns;
+    if (d->last_frame_ns && desk_small_damage(d,now) && d->last_frame_ns+DESK_SMALL_FRAME_NS>due)
+        due=d->last_frame_ns+DESK_SMALL_FRAME_NS;
+    return due;
+}
 int desk_frame_due(const struct desktop *d, uint64_t now)
-{ return now>=d->next_frame_ns && (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty); }
+{
+    return (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty) &&
+        now>=desk_frame_time(d,now);
+}
 static uint64_t time_now(struct desktop *d) { return d->time_ns ? d->time_ns() : 0; }
 static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
 {
     q->size=sizeof(*q); q->generation=d->accel_generation;
     return d->accel ? d->accel(d->display,q) : -ENOSYS;
+}
+/* f2-96: answers that leave the engine and its cursor exactly as they were
+ * (fbdev: a mode change or another presenter owns the display, a stale
+ * generation, a caught signal). The request is repeated, never treated as
+ * an engine loss. */
+static int accel_retry(int error) { return error==-EBUSY || error==-EAGAIN || error==-EINTR; }
+/* QUERY; a busy or stale answer keeps the capabilities already known. */
+static uint32_t accel_query(struct desktop *d)
+{
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
+    int caps=accel_call(d,&q);
+    if (accel_retry(caps)) return d->accel_caps;
+    return caps>0 ? (uint32_t)caps : 0;
+}
+/* f2-96: one pointer on screen. CURSOR_SET hides the hardware cursor before
+ * loading the shape (savage2d cursor_set), so a loaded cursor is hidden
+ * until the frame's MOVE and SHOW. */
+static int pointer_load(struct desktop *d)
+{
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
+    struct desk_cursor_raster r=cursor_raster(d);
+    memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
+    int error=accel_call(d,&q);
+    if (!error) { d->hw_cursor=1; d->hw_cursor_shown=0; d->cursor_loaded=d->cursor_shape; d->cursor_dirty=1; }
+    return error;
+}
+/* Hide a hardware cursor that no longer owns the pointer. A refusal other
+ * than busy/stale means the engine is gone, and the kernel hides the cursor
+ * whenever it stops or quarantines the engine (savage2d stop_engine/fault). */
+static void pointer_hide(struct desktop *d)
+{
+    if (d->hw_cursor || !d->hw_cursor_shown) return;
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SHOW,.colour=0};
+    int error=accel_call(d,&q);
+    if (!error || !accel_retry(error)) d->hw_cursor_shown=0;
+    else d->hw_cursor_retries++;
+    d->cursor_dirty=1; /* draw the software pointer, or ask again next frame */
+}
+/* A cursor request failed for good: the software pointer takes over after
+ * the hardware cursor is hidden; the engine is offered it again later. */
+static void pointer_software(struct desktop *d, uint64_t now)
+{
+    d->hw_cursor=0; d->cursor_dirty=1; d->cursor_loaded=DESK_CURSOR_COUNT;
+    d->hw_cursor_fallbacks++; d->hw_cursor_retry_ns=now+DESK_POINTER_RETRY_NS;
+    pointer_hide(d);
 }
 /* f2-92: offscreen caches. Video memory below the scanout holds unchanged
  * surfaces; uploads go through the engine's host-to-screen write and each
@@ -831,18 +990,17 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
     d->scanout_valid=0; d->move_damage.count=0;
     d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
+    /* f2-96: a new generation follows a stopped engine (fbdev_change_begin)
+     * or a display lease (display_present), both of which hide the cursor. */
+    if (generation!=d->accel_generation) d->hw_cursor_shown=0;
     d->accel_generation=generation;
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+    if (!(d->accel_caps&2u) && !accel_retry(caps)) d->hw_cursor_shown=0;
     vram_reset(d);
     d->cursor_loaded=DESK_CURSOR_COUNT;
-    if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) {
-        q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-        struct desk_cursor_raster r=cursor_raster(d);
-        memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
-        if (!accel_call(d,&q)) { d->hw_cursor=1; d->cursor_loaded=d->cursor_shape; }
-    }
+    if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) (void)pointer_load(d);
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
 }
 void desk_cursor_motion(struct desktop *d)
@@ -863,10 +1021,8 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
     if (accel_call(d,&q)) {
         d->frame_stats.accel_fallback++;
         d->scanout_valid=0;
-        q.operation=CIUKI_ACCEL_QUERY;
-        int caps=accel_call(d,&q);
-        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-        if (!(d->accel_caps&2u)) d->hw_cursor=0;
+        d->accel_caps=accel_query(d);
+        if (!(d->accel_caps&2u)) d->hw_cursor=d->hw_cursor_shown=0; /* engine loss hid it */
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         return -1;
     }
@@ -1173,88 +1329,54 @@ static int present_box(struct desktop *d, struct desk_box b)
     }
     return result;
 }
-static void rows_clear(struct desktop *d)
+/* f2-95: a frame's damage as an X11 region: the list's union clipped to
+ * the screen. Should the pool be exhausted, the list's covering box is used
+ * (it needs no storage): a frame is never refused for region memory. */
+static void region_load(struct desktop *d, pixman_region32_t *region, const struct desk_damage *list)
 {
-    for (uint32_t y=0;y<d->height;y++) d->rows[y].count=0;
-}
-static void rows_add(struct desktop *d, struct desk_box box)
-{
-    if (!desk_intersect(box,(struct desk_box){0,0,(int)d->width,(int)d->height},&box)) return;
-    for (int y=box.y;y<box.y+box.h;y++) {
-        struct desk_dirty_runs *r=&d->rows[y];
-        int left=box.x, right=box.x+box.w;
-        unsigned i=0;
-        while (i<r->count && r->spans[i].right<left) i++;
-        unsigned first=i;
-        while (i<r->count && r->spans[i].left<=right) {
-            if (r->spans[i].left<left) left=r->spans[i].left;
-            if (r->spans[i].right>right) right=r->spans[i].right;
-            i++;
-        }
-        /* There are at most DESK_DAMAGE_MAX source boxes in this pass. */
-        memmove(r->spans+first+1,r->spans+i,(r->count-i)*sizeof(*r->spans));
-        r->count=r->count-(i-first)+1;
-        r->spans[first]=(struct desk_dirty_row){left,right};
-    }
-}
-/* Equal adjacent span lists form a band. A copied destination splits its
- * spans without filling the clean gaps between separate text updates. */
-static unsigned row_boxes(struct desktop *d, uint32_t *y, struct desk_box cut,
-                          struct desk_box out[DESK_DAMAGE_MAX+1])
-{
-    while (*y<d->height && !d->rows[*y].count) ++*y;
-    if (*y==d->height) return 0;
-    int top=(int)*y, bottom=top+1;
-    struct desk_dirty_runs *r=&d->rows[top];
-    int in_cut=cut.w>0 && top>=cut.y && top<cut.y+cut.h;
-    while (bottom<(int)d->height && d->rows[bottom].count==r->count &&
-           !memcmp(d->rows[bottom].spans,r->spans,r->count*sizeof(*r->spans)) &&
-           in_cut==(cut.w>0 && bottom>=cut.y && bottom<cut.y+cut.h)) bottom++;
-    *y=(uint32_t)bottom;
-    unsigned n=0;
-    for (unsigned k=0;k<r->count;k++) {
-        struct desk_dirty_row row=r->spans[k];
-        if (!in_cut || cut.x>=row.right || cut.x+cut.w<=row.left)
-            out[n++]=(struct desk_box){row.left,top,row.right-row.left,bottom-top};
+    pixman_box32_t boxes[DESK_DAMAGE_MAX], all={0,0,0,0}; unsigned n=0;
+    for (unsigned i=0;i<list->count && i<DESK_DAMAGE_MAX;i++) {
+        struct desk_box b;
+        if (!desk_intersect(list->boxes[i],(struct desk_box){0,0,(int)d->width,(int)d->height},&b)) continue;
+        boxes[n]=region_box(b);
+        if (!n) all=boxes[0];
         else {
-            if (cut.x>row.left) out[n++]=(struct desk_box){row.left,top,cut.x-row.left,bottom-top};
-            if (cut.x+cut.w<row.right) out[n++]=(struct desk_box){cut.x+cut.w,top,row.right-cut.x-cut.w,bottom-top};
+            if (boxes[n].x1<all.x1) all.x1=boxes[n].x1;
+            if (boxes[n].y1<all.y1) all.y1=boxes[n].y1;
+            if (boxes[n].x2>all.x2) all.x2=boxes[n].x2;
+            if (boxes[n].y2>all.y2) all.y2=boxes[n].y2;
         }
+        n++;
     }
-    return n;
+    if (!pixman_region32_init_rects(region,boxes,(int)n))
+        pixman_region32_init_rect(region,all.x1,all.y1,(unsigned)(all.x2-all.x1),(unsigned)(all.y2-all.y1));
 }
-static void render_rows(struct desktop *d, struct desk_box cut)
+/* Compose (present=0) or present (present=1) every rectangle of a region
+ * except the cut, a destination the engine or the RAM copy already holds.
+ * Without memory for the subtraction the whole region is used: the cut
+ * holds the same composed pixels, so the superset is only redundant. */
+static int region_each(struct desktop *d, const pixman_region32_t *region, struct desk_box cut, int present)
 {
-    uint32_t y=0;
-    while (y<d->height) {
-        struct desk_box boxes[DESK_DAMAGE_MAX+1]; unsigned n=row_boxes(d,&y,cut,boxes);
-        for (unsigned k=0;k<n;k++) {
-            scene(d,boxes[k]); d->frame_stats.scene_px+=(uint64_t)boxes[k].w*boxes[k].h;
-        }
+    pixman_region32_t clipped; const pixman_region32_t *use=region;
+    pixman_region32_init(&clipped);
+    if (cut.w>0 && cut.h>0) {
+        pixman_region32_t c; pixman_region32_init_rect(&c,cut.x,cut.y,(unsigned)cut.w,(unsigned)cut.h);
+        if (pixman_region32_subtract(&clipped,region,&c)) use=&clipped;
+        pixman_region32_fini(&c);
     }
+    int n, result=0; const pixman_box32_t *r=pixman_region32_rectangles(use,&n);
+    for (int k=0;k<n && !result;k++) {
+        struct desk_box b=box_region(r[k]);
+        if (present) { d->frame_stats.damage_px+=(uint64_t)b.w*b.h; result=present_box(d,b); }
+        else { scene(d,b); d->frame_stats.scene_px+=(uint64_t)b.w*b.h; }
+    }
+    pixman_region32_fini(&clipped);
+    return result;
 }
-static int present_rows(struct desktop *d, struct desk_box cut)
+static int region_covers(const pixman_region32_t *region, struct desk_box box)
 {
-    uint32_t y=0;
-    while (y<d->height) {
-        struct desk_box boxes[DESK_DAMAGE_MAX+1]; unsigned n=row_boxes(d,&y,cut,boxes);
-        for (unsigned k=0;k<n;k++) {
-            d->frame_stats.damage_px+=(uint64_t)boxes[k].w*boxes[k].h;
-            if (present_box(d,boxes[k])) return -1;
-        }
-    }
-    return 0;
-}
-static int rows_cover(struct desktop *d, struct desk_box box)
-{
-    for (int y=box.y;y<box.y+box.h;y++) {
-        const struct desk_dirty_runs *r=&d->rows[y];
-        int covered=0;
-        for (unsigned k=0;k<r->count;k++)
-            if (r->spans[k].left<=box.x && r->spans[k].right>=box.x+box.w) { covered=1; break; }
-        if (!covered) return 0;
-    }
-    return 1;
+    pixman_box32_t b=region_box(box);
+    return pixman_region32_contains_rectangle(region,&b)==PIXMAN_REGION_IN;
 }
 static void latency_record(struct desktop *d, uint64_t latency)
 {
@@ -1281,19 +1403,23 @@ void desk_stats_sample(struct desktop *d)
 extern void desk_v3_present_complete(struct desktop *) __attribute__((weak));
 int desk_redraw(struct desktop *d)
 {
-    if (d->v3_lease_state) return 0;
-    if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) {
-        struct ciuki_accel_request hide={.operation=CIUKI_ACCEL_CURSOR_SHOW,.colour=0};
-        (void)accel_call(d,&hide); d->hw_cursor=0;
-    }
+    /* f2-95: while a leased program owns the display, retained damage waits
+     * at the frame cadence (it is drawn when the lease ends). */
+    if (d->v3_lease_state) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
+    /* A client bitmap or a hidden pointer needs the software path; it draws
+     * only once the hardware cursor is known hidden (f2-96). */
+    if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) { d->hw_cursor=0; d->cursor_dirty=1; }
+    if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
     /* A RESYNC/damage can precede the mode-counter service turn. Refresh
      * the existing grant query before any generation-tagged engine request;
      * an unchanged layout can still have a new framebuffer lease. */
     if (d->display_info) {
+        /* f2-95: a refused query (display owned elsewhere, mode change) is
+         * retried at the frame cadence, never on every 1 ms service turn. */
         struct ciuki_framebuffer_info fb;
-        if (d->display_info(d->display,&fb)) return -1;
-        if (fb.width!=d->width || fb.height!=d->height) { errno=EAGAIN; return -1; }
+        if (d->display_info(d->display,&fb)) { int e=errno; d->next_frame_ns=time_now(d)+DESK_FRAME_NS; errno=e; return -1; }
+        if (fb.width!=d->width || fb.height!=d->height) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; errno=EAGAIN; return -1; }
         if (fb.generation!=d->accel_generation) {
             d->lfb_bytes_per_pixel=(fb.bpp+7)/8;
             desk_accel_reset(d,fb.generation);
@@ -1301,20 +1427,18 @@ int desk_redraw(struct desktop *d)
     }
     uint64_t frame_begin=time_now(d);
     render_cache_prepare(d);
-    if (!d->rows || d->row_height!=d->height) {
-        struct desk_dirty_runs *next=malloc((size_t)d->height*sizeof(*next));
-        if (!next) { d->next_frame_ns=frame_begin+DESK_FRAME_NS; errno=ENOMEM; return -1; }
-        free(d->rows); d->rows=next; d->row_height=d->height;
-        d->frame_valid=d->scanout_valid=0; d->cursor_valid=0;
+    if (!d->frame_valid) {
+        /* First frame, or after a render release (mode change, lease end):
+         * nothing in RAM or scanout can be trusted. */
+        d->scanout_valid=0; d->cursor_valid=0;
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     }
     struct desk_frame_stats *s=&d->frame_stats;
     memset(s,0,sizeof(*s)); s->frames=1;
     uint64_t begin=time_now(d);
     if (d->accel) {
-        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
         uint32_t had=d->accel_caps;
-        int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        d->accel_caps=accel_query(d);
         if ((had&1u) && !(d->accel_caps&1u)) {
             /* f2-92: the engine went away while in use (quarantine). */
             d->accel_lost=1;
@@ -1327,12 +1451,27 @@ int desk_redraw(struct desktop *d)
              * the offscreen rows exactly as for a new generation (one full
              * software frame), otherwise window moves never use the engine. */
             desk_accel_reset(d,d->accel_generation);
-        } else if (d->hw_cursor && !(d->accel_caps&2u)) {
-            d->hw_cursor=0; d->cursor_dirty=1; d->scanout_valid=0;
+        } else if ((d->hw_cursor || d->hw_cursor_shown) && !(d->accel_caps&2u)) {
+            /* Engine loss: the kernel hid the cursor; software returns. */
+            d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; d->scanout_valid=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        } else if (!d->hw_cursor && (d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden &&
+                   frame_begin>=d->hw_cursor_retry_ns) {
+            /* f2-96: the engine takes the pointer back (after a client
+             * pointer or a failed request). The scanout still holds the
+             * software pointer: no screen copy this frame; its footprint
+             * is restored from RAM below (cursor_dirty). */
+            int error=pointer_load(d);
+            if (!error) d->scanout_valid=0;
+            else if (!accel_retry(error)) d->hw_cursor_retry_ns=frame_begin+DESK_POINTER_RETRY_NS;
         }
+        if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
     }
     s->present_ns+=time_now(d)-begin;
+    /* f2-95: the frame is the region of its damage; nothing outside it is
+     * composed or presented. */
+    pixman_region32_t move_region, damage_region;
+    region_load(d,&move_region,&d->move_damage); region_load(d,&damage_region,&d->damage);
     begin=time_now(d);
     if (d->cursor_valid) {
         struct desk_box b=d->cursor_box;
@@ -1348,69 +1487,56 @@ int desk_redraw(struct desktop *d)
     struct desk_box copied={copy.dst_x,copy.dst_y,(int)copy.width,(int)copy.height};
     if (moving) {
         DESK_PROFILE("windows", ram_copy(d,&copy));
-        rows_clear(d);
-        for (unsigned i=0;i<d->move_damage.count;i++) rows_add(d,d->move_damage.boxes[i]);
-        render_rows(d,copied);
+        region_each(d,&move_region,copied,0);
     }
-    rows_clear(d);
-    for (unsigned i=0;i<d->damage.count;i++) rows_add(d,d->damage.boxes[i]);
-    render_rows(d,(struct desk_box){0});
+    region_each(d,&damage_region,(struct desk_box){0},0);
     d->frame_valid=1;
     struct desk_box b;
-    if (!d->hw_cursor && desk_intersect(pointer_box(d),
+    /* Never a software pointer while the hardware cursor may be visible. */
+    int soft=!d->hw_cursor && !d->hw_cursor_shown;
+    if (soft && desk_intersect(pointer_box(d),
                        (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) {
         for (int y=0;y<b.h;y++)
             memcpy(d->cursor_under+y*32,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
         d->cursor_box=b; d->cursor_valid=1; DESK_PROFILE("cursor", cursor(d,b));
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     } else d->cursor_valid=0;
-    if (!d->hw_cursor) d->cursor_dirty=0;
+    if (soft) d->cursor_dirty=0;
     s->composite_ns=time_now(d)-begin;
     begin=time_now(d);
     int complete=1;
     if (engine_copy && screen_copy(d,&copy)) complete=0;
     /* Move exposure excludes the exact scanout copy. General damage (new
      * client pixels, changed captions) must still overwrite that destination. */
-    if (complete && moving) {
-        rows_clear(d);
-        for (unsigned i=0;i<d->move_damage.count;i++) rows_add(d,d->move_damage.boxes[i]);
-        if (present_rows(d,engine_copy ? copied : (struct desk_box){0})) complete=0;
-    }
-    if (complete) {
-        rows_clear(d);
-        for (unsigned i=0;i<d->damage.count;i++) rows_add(d,d->damage.boxes[i]);
-        if (present_rows(d,scrolling ? copied : (struct desk_box){0})) complete=0;
-    }
+    if (complete && moving && region_each(d,&move_region,engine_copy ? copied : (struct desk_box){0},1)) complete=0;
+    if (complete && region_each(d,&damage_region,scrolling ? copied : (struct desk_box){0},1)) complete=0;
     if (complete) for (unsigned i=0;i<d->present_damage.count;i++) {
         struct desk_box dirty=d->present_damage.boxes[i];
-        if (rows_cover(d,dirty) && !scrolling) continue;
+        if (region_covers(&damage_region,dirty) && !scrolling) continue;
         s->damage_px+=(uint64_t)dirty.w*dirty.h;
         if (present_box(d,dirty)) { complete=0; break; }
     }
-    /* Faults may hide the hardware pointer. Reconstruct with a software
-     * cursor before acknowledging either launch or a display-mode change. */
+    pixman_region32_fini(&move_region); pixman_region32_fini(&damage_region);
+    /* Faults hide the hardware pointer (the kernel clears it when it stops
+     * or quarantines the engine). Reconstruct with a software cursor before
+     * acknowledging either launch or a display-mode change. */
     if (d->hw_cursor) {
-        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
-        int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-        if (!(d->accel_caps&2u)) { d->hw_cursor=0; d->cursor_dirty=1; complete=0; }
+        d->accel_caps=accel_query(d);
+        if (!(d->accel_caps&2u)) { d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; complete=0; }
     }
     if (d->hw_cursor && d->cursor_dirty && complete) {
-        if (d->cursor_loaded!=d->cursor_shape) {
-            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-            struct desk_cursor_raster r=cursor_raster(d);
-            memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
-            if (accel_call(d,&q)) { d->hw_cursor=0; complete=0; }
-            else d->cursor_loaded=d->cursor_shape;
-        }
-    }
-    if (d->hw_cursor && d->cursor_dirty && complete) {
+        /* f2-96: busy/stale answers keep the hardware owner and retry on the
+         * next frame (cursor_dirty stays set; the scanout is complete). Any
+         * other refusal hides the hardware cursor before software draws. */
+        int error=d->cursor_loaded!=d->cursor_shape ? pointer_load(d) : 0;
         struct desk_box box=pointer_box(d);
-        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,
-            .rect={0,0,box.x,box.y,0,0}};
-        int error=accel_call(d,&q); q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,.rect={0,0,box.x,box.y,0,0}};
         if (!error) error=accel_call(d,&q);
-        if (error) { d->hw_cursor=0; complete=0; }
-        else { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
+        q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+        if (!error && !(error=accel_call(d,&q))) d->hw_cursor_shown=1;
+        if (!error) { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
+        else if (accel_retry(error)) d->hw_cursor_retries++;
+        else { pointer_software(d,time_now(d)); complete=0; }
     }
     uint64_t end=time_now(d);
     s->present_ns+=end-begin;
@@ -1429,14 +1555,18 @@ int desk_redraw(struct desktop *d)
         s->frame_ns=end>=start ? end-start : 0; s->completed=1;
         latency_record(d,s->frame_ns); d->frame_input_ns=0;
         d->damage.count=d->present_damage.count=0; d->scanout_valid=1;
+        d->last_frame_ns=frame_begin;
     } else {
         d->scanout_valid=0;
         if (d->accel) d->cursor_dirty=1;
         /* The copied source no longer exists in RAM; retries reconstruct. */
         for (unsigned i=0;i<d->move_damage.count;i++)
             desk_damage_add(&d->damage,d->move_damage.boxes[i],d->width,d->height);
-        if (engine_copy || d->accel)
-            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        /* f2-95: only an engine failure leaves scanout unknown, and those
+         * paths (engine_failed, screen_copy) already damage the whole frame.
+         * A refused CPU present or a lost hardware cursor keeps its damage:
+         * the rows written before it are the composed pixels, so the retry
+         * composes and presents the same region, not a full frame. */
     }
     d->copy_pending=0; d->move_damage.count=0;
     s->input_ns=d->pending_input_ns; s->input_lag_ns=d->pending_input_lag_ns;

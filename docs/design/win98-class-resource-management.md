@@ -676,6 +676,14 @@ from the shared budget and has its own 2 ms per 10 ms budget, so device-class
 CPU may reach 6 ms per 10 ms; refill overruns are recorded separately
 (`audio_refill_overrun`). `device_attribution` keeps the previous all-tasks
 demotion as the replay's negative control only.
+Amendment f2-96 (2026-10-22): firmware (SMM) time proven by cpustat is left
+out of every scheduler budget (device, audio refill, desktop share) and of
+the audio service deadline; CPU statistics stay raw. Proofs: a gap of 1 ms or
+more between two marks of straight-line IF-clear phases (the f1-94 rule), and
+a PIT interrupt more than one period late with IF set, credited from the
+missed edge (by the PIT phase) to the entry. Record `[sched] firmware_credit
+count= us= max_us=` per window with credit
+([f2-96](../validation/f2-96-cursor-ec-volume.md)).
 Focused DOS preference must fit into the CPU time left after device service;
 it may use at most 80% of that remainder, preserving desktop/background
 progress. This is a proposed reconciliation of the existing 8/10 policy,

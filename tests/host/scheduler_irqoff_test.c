@@ -20,6 +20,70 @@ static uint64_t tick_now, tick_previous, adjacent[2];
 void smi_tick(uint64_t now, uint64_t previous) { tick_now=now; tick_previous=previous; }
 void smi_adjacent_gap(uint64_t a, uint64_t b) { adjacent[0]=a; adjacent[1]=b; }
 
+/* f2-96: the audio refill's own-budget charge without and with SMM time. */
+static uint64_t refill_charged(void)
+{
+    struct device_consumer *e=device_consumer_find(&hog);
+    return e ? e->cpu_total : 0;
+}
+static void refill_ready(void)
+{
+    reset(); timing_begin_hook=timing_crit_begin; timing_end_hook=timing_crit_end;
+    hog.audio_class=true; priority_update(&hog); CHECK(hog.effective_priority>=SCHED_SERVICE_MIN);
+    g_current=&hog; hog.state=T_RUNNING; cpu_switch(&idle,&hog);
+}
+static void firmware_credit_tests(void)
+{
+    /* IF clear, bounded phase after the switch: a 2.11 ms FPU-phase gap lies
+     * in the refill's open interval and stays out of its own budget. */
+    reset(); timing_begin_hook=timing_crit_begin; timing_end_hook=timing_crit_end;
+    hog.audio_class=true; priority_update(&hog); hog.state=T_READY; rq_push(&hog);
+    fpu_cost=2110; uint32_t f=irq_save(); schedule(); irq_restore(f);
+    CHECK(g_current==&hog && hog.firmware_credit==2110);
+    uint64_t run=hog.run_cycles; cycles+=150; cpu_account();
+    CHECK(hog.run_cycles-run>=2260 && refill_charged()<=200 && !hog.firmware_credit);
+    /* IF clear before the charge: PICK mark, 2.1 ms, then cpu_account (the
+     * gap ends at the charge itself). */
+    refill_ready(); f=irq_save(); cpu_irqoff_mark(CPU_IRQOFF_PICK); cycles+=2100; cpu_account();
+    CHECK(refill_charged()<=10); irq_restore(f);
+    /* The resumed caller is not bounded straight-line code: no credit. */
+    refill_ready(); f=irq_save(); cpu_irqoff_mark(CPU_IRQOFF_RESUME); cycles+=2100; cpu_account();
+    CHECK(refill_charged()>=2100); irq_restore(f);
+    /* IF set: the PIT edge at +1 ms fell inside SMM, the IRQ came 2.1 ms
+     * later than due; the time from the missed edge is not refill work. */
+    refill_ready();
+    struct trap_frame tf={.vector=0x20,.cs=8};
+    cycles+=1000; uint64_t start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    uint64_t before=refill_charged(); cycles+=3100; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    CHECK(refill_charged()-before==1000);  /* 3.1 ms charged before f2-96 */
+    /* On time: everything is work. V86 frames carry no proof (IOPL 3). */
+    before=refill_charged(); cycles+=1000; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    CHECK(refill_charged()-before==1000);
+    struct trap_frame vm={.vector=0x20,.cs=0,.eflags=1u<<17};
+    before=refill_charged(); cycles+=3100; start=cpu_irq_enter(&vm); cpu_irq_leave(start);
+    CHECK(refill_charged()-before==3100);
+    /* An IF-clear section that ended after the missed edge delayed the IRQ
+     * itself: only the time after its end can be firmware. */
+    cycles+=1000; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    before=refill_charged(); cycles+=1500; f=irq_save(); cycles+=1200; irq_restore(f);
+    cycles+=400; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    CHECK(refill_charged()-before==2700);
+    /* Class totals stay raw; the window record names the credited time. */
+    record_bytes=0; records[0]=0; cpu_emit();
+    CHECK(strstr(records,"[sched] firmware_credit count=2 us=2500 max_us=2100\n"));
+    /* The pair of one EC transaction: the second SMI starts 50 us after the
+     * first RSM. Its missed edge follows the PIT phase (on-time entry T),
+     * not the late entry: T+4000, not T+4100. */
+    refill_ready();
+    cycles+=1000; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    cycles+=1000; start=cpu_irq_enter(&tf); cpu_irq_leave(start); /* on time: phase anchor T */
+    before=refill_charged(); cycles+=3100; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    CHECK(refill_charged()-before==1000);
+    before=refill_charged(); cycles+=2150; start=cpu_irq_enter(&tf); cpu_irq_leave(start);
+    CHECK(refill_charged()-before==900); /* SMM [T+3150,T+5250]: 1250 proven, 850 unprovable */
+    timing_begin_hook=timing_end_hook=0;
+    puts("PASS f2-96 firmware credit: bounded IF-clear gaps (after and before the switch charge) and late PIT edges with IF set leave the refill budget; resumed-caller gaps, V86 frames and IF-clear delays are still charged; firmware_credit record");
+}
 int main(void) {
     reset(); timing_begin_hook=timing_crit_begin; timing_end_hook=timing_crit_end;
     flags=0; rq_push(&normal); fpu_cost=1600;
@@ -93,6 +157,7 @@ int main(void) {
     reset(); offers=0; f=irq_save(); cycles+=999; irq_restore(f); CHECK(!offers);
     f=irq_save(); cycles+=1500; irq_restore(f); CHECK(offers==1);
     f=irq_save(); cycles+=1200; irq_restore(f); CHECK(offers==2 && irqoff_window.cycles==1500);
+    firmware_credit_tests();
     puts("PASS f1-86 real scheduler/timing/cpustat hooks: IF-clear inactive entry, existing outer owner/site retained, switch and same-task cleanup, IF preserved");
     puts("PASS f1-86 deferred phases: raw timestamps only, no clearing unused slots, 999/1000us threshold, bounded overflow tail");
     puts("PASS f1-94 phases: queue/proc/resume/irq-entry/irq-handler/irq-eoi/irq-exit/tick-serial/timing/sched/timers named, bounded set offered to the SMI attribution for every section >= 1 ms");

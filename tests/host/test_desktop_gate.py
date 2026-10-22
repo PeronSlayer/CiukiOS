@@ -241,6 +241,12 @@ void klog(const char *f,...) {(void)f;}
         result=subprocess.run([str(binary),'--folder-poll'],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS F2-79 desktop gate',result.stdout)
+        # f2-95: idle wake/stall observer (every run) and the shortcut scan policy.
+        self.assertIn('PASS F2-95 idle wake: ',result.stdout)
+        result=subprocess.run([str(binary),'--links'],capture_output=True,text=True,env=env,timeout=10)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS F2-95 shortcut scan: ',result.stdout)
+        print('\n'.join(line for line in result.stdout.splitlines() if line.startswith('PASS F2-95 ')))
         portrait=converter.convert(ROOT/'assets/brand/ciuki-logo.png')
         source=self.folder/'portrait.xrgb';source.write_bytes(portrait)
         for shifted in (False,True):
