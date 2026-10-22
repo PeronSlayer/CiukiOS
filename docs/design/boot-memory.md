@@ -702,6 +702,21 @@ No boot-info ABI bits or fields are added.
   be copied after boot. Entry 1023 is per address space: it points to that
   address space's own directory (recursive window), is supervisor-only, and
   is excluded from mapping-equality checks.
+- Kernel PDEs 768–1022 are created with the accessed flag already set
+  (f6-21b, 2026-10-22). The processor sets the accessed flag of every
+  paging-structure entry it uses in the directory that CR3 names, and the
+  dirty flag only in the leaf entry
+  ([Intel SDM Vol. 3A 4.8, as quoted on LKML](https://lkml.iu.edu/hypermail/linux/kernel/2103.1/08629.html)).
+  A directory copied before a kernel task first touched a 4 MiB region would
+  otherwise differ from the kernel directory in that bit only. On QEMU
+  (image 8af310c2) the isolation probe's second process zeroed its data page
+  at 28 MiB, the first page of PDE 775, after both clones, and reported
+  `shared_kernel_errors=1`. Linux presets the same flag in kernel table
+  entries (`_KERNPG_TABLE`,
+  [pgtable_types.h v6.12](https://github.com/torvalds/linux/blob/v6.12/arch/x86/include/asm/pgtable_types.h)).
+  Kernel PDEs are therefore bit-identical in every directory for the whole
+  boot; the working-set sampler clears accessed bits only in user PTEs.
+  Host regression: `tests/host/kernel_pde_test.c`.
 - 4 MiB PSE pages MAY be used, when CPUID reports PSE, only for direct-map
   ranges whose pages all share the same permissions and cache attributes.
   The kernel image (read-only text and data), guard pages and MMIO always
