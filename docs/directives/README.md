@@ -448,3 +448,9 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-101d-display-commands-part-c](f2-101d-display-commands-part-c.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:39 (part C: MONO/INVERT/KEYED/SCALED/LINE, clip lists, v1 batches and fences, colour cursor, clients) |
 | [f2-103-radeon-r100](f2-103-radeon-r100.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:39 (first family port: Radeon R100/RV100 MMIO 2D) |
 | [f2-114-mach64-rage-mobility](f2-114-mach64-rage-mobility.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:39 (second family port: Mach64/Rage Mobility (E500)) |
+| [f2-116-cirrus-gd54xx](f2-116-cirrus-gd54xx.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: Cirrus GD5446/GD54xx) |
+| [f2-111-vmware-svga](f2-111-vmware-svga.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: VMware SVGA II FIFO) |
+| [f2-115-rage128](f2-115-rage128.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: ATI Rage 128) |
+| [f2-104-nvidia-tnt-gf4](f2-104-nvidia-tnt-gf4.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: NVIDIA TNT–GeForce4 with transport contract first) |
+| [f2-110-matrox-g200-g550](f2-110-matrox-g200-g550.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: Matrox G200–G550) |
+| [f2-107-intel-i830-i915](f2-107-intel-i830-i915.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: Intel i830–i915G with ring/GTT contract first) |
