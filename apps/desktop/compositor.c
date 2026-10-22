@@ -710,7 +710,8 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
     if (desk_shell_overlay) desk_shell_overlay(d,clip);
 }
 _Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_PRECISION+1,"generic cursor inventory");
-_Static_assert(DESK_CURSOR_ERASER+1==DESK_CURSOR_COUNT,"paint cursor inventory");
+_Static_assert(DESK_CURSOR_ERASER+1==DESK_CURSOR_OPEN_HAND,"paint cursor inventory");
+_Static_assert(sizeof(desk_extra_cursors)/sizeof(desk_extra_cursors[0])==DESK_CURSOR_COUNT-DESK_CURSOR_OPEN_HAND,"extra cursor inventory");
 static struct desk_cursor_raster cursor_raster(const struct desktop *d)
 {
     if (d->v3_cursor_id) {
@@ -718,10 +719,11 @@ static struct desk_cursor_raster cursor_raster(const struct desktop *d)
         return (struct desk_cursor_raster){.hot_x=c->v3_hot_x[id],.hot_y=c->v3_hot_y[id],.width=32,.height=32};
     }
     unsigned shape=d->cursor_shape;
-    if (shape<=DESK_CURSOR_PRECISION) return desk_cursors[shape];
+    const struct desk_cursor_raster *generic=desk_generic_cursor(shape);
+    if (generic) return *generic;
     if (shape>=DESK_CURSOR_COUNT) return desk_cursors[DESK_CURSOR_ARROW];
     struct desk_tool_cursor tool=desk_tool_cursor(shape);
-    struct desk_cursor_raster raster={(unsigned)tool.hot_x,(unsigned)tool.hot_y,32,32,{0},{0}};
+    struct desk_cursor_raster raster={.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
     memcpy(raster.mask,tool.mask,sizeof(raster.mask));
     memcpy(raster.image,tool.image,sizeof(raster.image));
     return raster;
@@ -954,7 +956,56 @@ static void cursor(struct desktop *d, struct desk_box clip)
             }
             uint32_t bit=0x80000000u>>(b.x+x-box.x);
             unsigned row=(unsigned)(b.y+y-box.y);
-            if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : 0x101010u;
+            if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : 0;
+            else if (r.shadow) {
+                unsigned alpha=r.shadow[row*32+(unsigned)(b.x+x-box.x)], inv=255-alpha;
+                unsigned red=(((dst[x]>>16)&255)*inv+127)/255;
+                unsigned green=(((dst[x]>>8)&255)*inv+127)/255;
+                unsigned blue=((dst[x]&255)*inv+127)/255;
+                dst[x]=(red<<16)|(green<<8)|blue;
+            }
+        }
+    }
+}
+/* f2-99: a stationary software pointer only touches scene damage. Row bits
+ * union overlapping rectangles before alpha blending, so a shadow is never
+ * blended twice. A moved/changed pointer or a RAM copy restores the entire
+ * old footprint before the copy and draws the entire new one afterwards. */
+static void pointer_rows(struct desk_box box, int full, const pixman_region32_t *damage,
+                         const pixman_region32_t *move, uint32_t rows[32])
+{
+    memset(rows,0,32*sizeof(*rows));
+    if (full) {
+        uint32_t bits=UINT32_MAX>>(32-box.w);
+        for (int y=0;y<box.h;y++) rows[y]=bits;
+        return;
+    }
+    const pixman_region32_t *regions[]={damage,move};
+    for (unsigned k=0;k<2;k++) {
+        int count; const pixman_box32_t *rects=pixman_region32_rectangles(regions[k],&count);
+        for (int i=0;i<count;i++) {
+            struct desk_box b;
+            if (!desk_intersect(box,box_region(rects[i]),&b)) continue;
+            uint32_t bits=(UINT32_MAX>>(32-b.w))<<(b.x-box.x);
+            for (int y=b.y-box.y;y<b.y-box.y+b.h;y++) rows[y]|=bits;
+        }
+    }
+}
+static void pointer_under(struct desktop *d, struct desk_box box, const uint32_t rows[32], int save)
+{
+    for (int y=0;y<box.h;y++) {
+        uint32_t bits=rows[y];
+        for (int x=0;x<box.w;) {
+            if (!(bits&(1u<<x))) { x++; continue; }
+            int left=x;
+            do { x++; } while (x<box.w && (bits&(1u<<x)));
+            uint32_t *dst=d->pixels+(size_t)(box.y+y)*d->width+box.x+left;
+            uint32_t *under=d->cursor_under+y*32+left;
+            size_t bytes=(size_t)(x-left)*4;
+            if (save) {
+                memcpy(under,dst,bytes);
+                DESK_PROFILE("cursor",cursor(d,((struct desk_box){box.x+left,box.y+y,x-left,1})));
+            } else memcpy(dst,under,bytes);
         }
     }
 }
@@ -1033,7 +1084,7 @@ static uint32_t accel_query(struct desktop *d)
  * until the frame's MOVE and SHOW. */
 static int pointer_load(struct desktop *d)
 {
-    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0};
     struct desk_cursor_raster r=cursor_raster(d);
     memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
     int error=accel_call(d,&q);
@@ -1607,6 +1658,14 @@ int desk_redraw(struct desktop *d)
     /* f2-95: while a leased program owns the display, retained damage waits
      * at the frame cadence (it is drawn when the lease ends). */
     if (d->v3_lease_state) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
+    /* A shell caller can move the pointer while damaging the scene rather
+     * than sending a motion event. Its old save-under still needs restoring
+     * and both footprints need presentation, including the shadow. */
+    if (d->cursor_valid && !d->cursor_dirty) {
+        struct desk_box next, old=d->cursor_box;
+        if (!desk_intersect(pointer_box(d),(struct desk_box){0,0,(int)d->width,(int)d->height},&next) ||
+            next.x!=old.x || next.y!=old.y || next.w!=old.w || next.h!=old.h) d->cursor_dirty=1;
+    }
     /* A client bitmap or a hidden pointer needs the software path; it draws
      * only once the hardware cursor is known hidden (f2-96). */
     if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) { d->hw_cursor=0; d->cursor_dirty=1; }
@@ -1674,10 +1733,13 @@ int desk_redraw(struct desktop *d)
     pixman_region32_t move_region, damage_region;
     region_load(d,&move_region,&d->move_damage); region_load(d,&damage_region,&d->damage);
     begin=time_now(d);
+    uint32_t pointer_damage[32];
+    int pointer_full=d->cursor_dirty || d->copy_pending || !d->frame_valid || !d->cursor_valid ||
+                     d->hw_cursor || d->hw_cursor_shown;
     if (d->cursor_valid) {
         struct desk_box b=d->cursor_box;
-        for (int y=0;y<b.h;y++)
-            memcpy(d->pixels+(size_t)(b.y+y)*d->width+b.x,d->cursor_under+y*32,(size_t)b.w*4);
+        pointer_rows(b,pointer_full,&damage_region,&move_region,pointer_damage);
+        pointer_under(d,b,pointer_damage,0);
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     }
     struct ciuki_rect copy=d->copy_rect;
@@ -1712,9 +1774,9 @@ int desk_redraw(struct desktop *d)
     int soft=!d->hw_cursor && !d->hw_cursor_shown;
     if (soft && desk_intersect(pointer_box(d),
                        (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) {
-        for (int y=0;y<b.h;y++)
-            memcpy(d->cursor_under+y*32,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
-        d->cursor_box=b; d->cursor_valid=1; DESK_PROFILE("cursor", cursor(d,b));
+        pointer_rows(b,pointer_full,&damage_region,&move_region,pointer_damage);
+        pointer_under(d,b,pointer_damage,1);
+        d->cursor_box=b; d->cursor_valid=1;
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     } else d->cursor_valid=0;
     if (soft) d->cursor_dirty=0;

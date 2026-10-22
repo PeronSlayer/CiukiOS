@@ -103,8 +103,7 @@ static bool input(nsfb_t *fb,nsfb_event_t *event,int timeout)
         if(!ciuki_browser_unhold(s,&p) && !receive(s,&p))break;
         ciuki_browser_packet(s,&p);
         if(p.opcode==DESK_KEY || p.opcode==DESK_MOTION || p.opcode==DESK_BUTTON) {
-            bool content_drag=s->buttons && (p.event.type==CIUKI_INPUT_MOTION || p.event.type==CIUKI_INPUT_BUTTON);
-            if(content_drag || !ciuki_chrome_input(&p.event))ciuki_browser_input(s,&p.event);
+            ciuki_chrome_dispatch(s,&p.event);
         } else if((p.opcode==DESK_V3_ACTIVATE && !p.focused) || p.opcode==DESK_V3_POINTER_STATE)ciuki_chrome_release();
     }
     s->in_input=false;

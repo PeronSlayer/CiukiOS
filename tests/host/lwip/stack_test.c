@@ -140,18 +140,21 @@ static unsigned dhcp_type(const unsigned char *b,unsigned bytes)
     return 0;
 }
 static uint32_t get32(const unsigned char *p) { return (uint32_t)get16(p)<<16|get16(p+2); }
+static bool wire_options;
 static void tcp_reply(const unsigned char *request,uint32_t sequence,uint32_t ack,unsigned flags,const char *data,unsigned bytes)
 {
     unsigned char f[1514]={0};memcpy(f,request+6,6);memcpy(f+6,server_mac,6);put16(f+12,0x800);
-    unsigned char *ip=f+14;ip[0]=0x45;put16(ip+2,40+bytes);ip[8]=64;ip[9]=6;
+    unsigned h=(wire_options && (flags&2))?32:20;
+    unsigned char *ip=f+14;ip[0]=0x45;put16(ip+2,20+h+bytes);ip[8]=64;ip[9]=6;
     memcpy(ip+12,request+30,4);memcpy(ip+16,request+26,4);uint16_t check=inet_chksum(ip,20);memcpy(ip+10,&check,2);
     unsigned char *tcp=ip+20;memcpy(tcp,request+36,2);memcpy(tcp+2,request+34,2);
-    put32(tcp+4,sequence);put32(tcp+8,ack);tcp[12]=0x50;tcp[13]=(unsigned char)flags;put16(tcp+14,16384);
-    if(bytes)memcpy(tcp+20,data,bytes);
-    struct pbuf *p=pbuf_alloc(PBUF_RAW,(u16_t)(20+bytes),PBUF_RAM);CHECK(p && pbuf_take(p,tcp,(u16_t)(20+bytes))==ERR_OK);
+    put32(tcp+4,sequence);put32(tcp+8,ack);tcp[12]=(unsigned char)(h<<2);tcp[13]=(unsigned char)flags;put16(tcp+14,wire_options?64240:16384);
+    if(h==32){const unsigned char options[]={2,4,5,180,1,3,3,7,1,1,4,2};memcpy(tcp+20,options,sizeof(options));}
+    if(bytes)memcpy(tcp+h,data,bytes);
+    struct pbuf *p=pbuf_alloc(PBUF_RAW,(u16_t)(h+bytes),PBUF_RAM);CHECK(p && pbuf_take(p,tcp,(u16_t)(h+bytes))==ERR_OK);
     ip4_addr_t src,dst;memcpy(&src.addr,ip+12,4);memcpy(&dst.addr,ip+16,4);
-    check=inet_chksum_pseudo(p,6,(u16_t)(20+bytes),&src,&dst);memcpy(tcp+16,&check,2);pbuf_free(p);
-    net_stack_input(0,f,54+bytes);
+    check=inet_chksum_pseudo(p,6,(u16_t)(h+bytes),&src,&dst);memcpy(tcp+16,&check,2);pbuf_free(p);
+    net_stack_input(0,f,34+h+bytes);
 }
 int net_stack_transmit(unsigned index,const void *data,unsigned bytes)
 {
@@ -611,15 +614,20 @@ static void cycles(void)
 }
 #include "amendment.inc"
 #include "dos_bridge.inc"
-int main(void)
+#include "f624.inc"
+int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
     client=(struct process){.pid=1,.state=PROC_LIVE,.fds=fds};arch_tests();
     ciuki_lwip_seed(0x12345678);CHECK(!net_stack_init());
     CHECK(entropy_before_transport);
+    if(argc==2 && !strcmp(argv[1],"--f6-24")){
+        CHECK(!net_stack_attach(0,client_mac,true));check_address(PP_HTONL(0xc0000264));
+        f624_tcp_tests();CHECK(!live_pins);cu_host_shutdown();return 0;
+    }
     refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
     preparation_races();queue_races();connect_error_race();shutdown_close_tests();
-    cycles();dns_dhcp_tests();dos_bridge_pool_test();CHECK(!live_pins);
+    cycles();dns_dhcp_tests();f624_tcp_tests();dos_bridge_pool_test();CHECK(!live_pins);
     extern unsigned cu_arch_bytes(void),cu_socket_bytes(void),cu_socket_object_bytes(void),cu_request_bytes(void);
     printf("MEASURE host pbuf=%zu tcp_pcb=%zu udp_pcb=%zu netconn=%zu socket=%u mbox=%u arch=%u socket_metadata=%u request=%u\n",
         sizeof(struct pbuf),sizeof(struct tcp_pcb),sizeof(struct udp_pcb),sizeof(struct netconn),cu_socket_object_bytes(),cu_mbox_bytes(),cu_arch_bytes(),cu_socket_bytes(),cu_request_bytes());

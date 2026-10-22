@@ -70,6 +70,7 @@ static bool crypto_seeded;
 int cu_sockets_init(void);
 void ciuki_resolver_counts(unsigned *, unsigned *);
 void ciuki_sockets_address_lost(uint32_t);
+void ciuki_tcp_records(void);
 static void link_dispatch(void *);
 
 /* Network byte order to dotted decimal, without libc formatting. */
@@ -207,6 +208,7 @@ static void watch(void *unused)
     (void)unused; uint64_t now = cu_now();
     for (unsigned i = 0; i < 2; i++) if (ports[i].attached) { dhcp_observe(&ports[i]); dhcp_timeout_check(&ports[i], now); }
     stack_line(now);
+    ciuki_tcp_records();
     sys_prot_t f = sys_arch_protect(); watch_pending = false; sys_arch_unprotect(f);
 }
 void net_stack_watch(void)

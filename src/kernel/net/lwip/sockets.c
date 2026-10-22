@@ -32,6 +32,40 @@ static struct socket_object sockets[CIUKI_SOCKET_MAX];
 static unsigned object_generation, tcp_count, udp_count, listeners;
 static sys_mbox_t commands;
 static bool workers_ready;
+/* Protected counters, drained by the already allocated network watch message.
+ * At most one summary per category per ten-second window, no new timers. */
+struct tcp_record {
+    unsigned count,attempts,established,failed,pid;
+    uint32_t address; unsigned port; int error;
+    uint64_t due;
+};
+static struct tcp_record tcp_records[3];
+static void tcp_record(struct socket_object *s,unsigned kind,int error,unsigned state)
+{
+    if(s->type!=SOCK_STREAM)return;
+    sys_prot_t f=sys_arch_protect();struct tcp_record *r=&tcp_records[kind];
+    if(r->count!=UINT32_MAX)r->count++;
+    if(!state && r->attempts!=UINT32_MAX)r->attempts++;
+    if(state==1 && r->established!=UINT32_MAX)r->established++;
+    if(state==2 && r->failed!=UINT32_MAX)r->failed++;
+    r->pid=s->origin_pid;r->address=s->peer.address;r->port=lwip_ntohs(s->peer.port);r->error=error;
+    sys_arch_unprotect(f);
+}
+void ciuki_tcp_records(void)
+{
+    static const char *const names[]={"connect","reset","timeout"};
+    uint64_t now=cu_now();
+    for(unsigned i=0;i<3;i++){
+        sys_prot_t f=sys_arch_protect();struct tcp_record r=tcp_records[i];
+        bool emit=r.count && now>=r.due;
+        if(emit){tcp_records[i]=(struct tcp_record){.due=now+10000};}
+        sys_arch_unprotect(f);
+        if(!emit)continue;
+        const uint8_t *ip=(const uint8_t *)&r.address;
+        klog("[net] tcp %s count=%u attempts=%u established=%u failed=%u last_ip=%u.%u.%u.%u port=%u errno=%d pid=%u window_ms=10000",
+             names[i],r.count,r.attempts,r.established,r.failed,ip[0],ip[1],ip[2],ip[3],r.port,r.error,r.pid);
+    }
+}
 enum operation { OP_NEW, OP_BIND, OP_CONNECT, OP_LISTEN, OP_ACCEPT, OP_SEND, OP_RECV, OP_NAME, OP_OPTION };
 struct request {
     enum operation operation;
@@ -118,13 +152,19 @@ static void notify(struct netconn *conn, enum netconn_evt evt, u16_t length)
         struct socket_object *s = &sockets[i]; if (!s->used || s->conn != conn) continue;
         if (evt == NETCONN_EVT_RCVPLUS) s->receive_events++;
         if (evt == NETCONN_EVT_RCVMINUS) s->receive_events--;
-        if (evt == NETCONN_EVT_SENDPLUS) { s->send_events = 1; if (s->connecting) { s->connecting = false; s->connected = true; s->connect_result = 0; } }
+        if (evt == NETCONN_EVT_SENDPLUS) { s->send_events = 1; if (s->connecting) { s->connecting = false; s->connected = true; s->connect_result = 0; tcp_record(s,0,0,1); } }
         if (evt == NETCONN_EVT_SENDMINUS) s->send_events = 0;
         if (evt == NETCONN_EVT_ERROR) {
             int e = error_number(conn->pending_err);
             /* SYN refused is RST before a connection has been established. */
             if (s->connecting && e == -ECONNRESET) e = -ECONNREFUSED;
+            /* tcp_slowtmr reports exhausted SYN retries as ERR_ABRT. Our
+             * adapter's local teardown is marked control/closing/down. */
+            if(s->connecting && e==-ECONNABORTED && !s->control && !s->closing && !s->network_down)e=-ETIMEDOUT;
             if (e) {
+                if(s->connecting)tcp_record(s,0,-e,2);
+                if(conn->pending_err==ERR_RST)tcp_record(s,1,-e,2);
+                if(e==-ETIMEDOUT)tcp_record(s,2,-e,2);
                 s->error = -e; s->failed = true;
                 if (s->connecting) s->connect_result = e;
             } else {
@@ -364,10 +404,11 @@ static int attempt(struct request *r)
         e = tcpip_callback_wait(route_address_core, r); if (e) return error_number(e);
         if ((cancelled = commit(r))) return cancelled;
         s->peer = r->address;
+        tcp_record(s,0,0,0);
         s->connecting = s->type == SOCK_STREAM; s->failed = false; s->connect_result = -EINPROGRESS;
         e = netconn_connect(c, &ip, port);
-        if (e == ERR_OK) { s->connected = true; s->connecting = false; s->connect_result = 0; }
-        else if (e != ERR_INPROGRESS) { s->connecting = false; s->connect_result = error_number(e); }
+        if (e == ERR_OK) { s->connected = true; s->connecting = false; s->connect_result = 0; tcp_record(s,0,0,1); }
+        else if (e != ERR_INPROGRESS) { s->connecting = false; s->connect_result = error_number(e); tcp_record(s,0,-s->connect_result,2); }
         return error_number(e);
     case OP_LISTEN:
         if (s->type != SOCK_STREAM) return -EOPNOTSUPP;

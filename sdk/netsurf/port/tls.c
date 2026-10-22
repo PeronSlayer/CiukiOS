@@ -118,6 +118,7 @@ struct ciuki_tls *ciuki_tls_create(const char *host,const br_x509_trust_anchor *
 void ciuki_tls_free(struct ciuki_tls *t)
 { if(t){volatile unsigned char *p=(void *)t;for(size_t i=0;i<sizeof(*t);i++)p[i]=0;free(t);} }
 unsigned ciuki_tls_state(struct ciuki_tls *t) { return br_ssl_engine_current_state(&t->client.eng); }
+int ciuki_tls_engine_error(struct ciuki_tls *t) { return br_ssl_engine_last_error(&t->client.eng); }
 /* Track only TLS record boundaries (RFC 5246 section 6.2.3). BearSSL owns
  * validation/decryption; recvrec may consume a partial header or ciphertext
  * without exposing RECVAPP. Do this before ack can overwrite the input. */
@@ -168,7 +169,7 @@ enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *t,int fd,size_t *budget,bo
                 if(transmitted && !*transmitted && t->handshake_done)unexpected=true;
                 record_input(t,buffer,(size_t)r);br_ssl_engine_recvrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;
             }
-            if(!r)return CIUKI_TLS_IO;
+            if(!r){errno=ECONNRESET;return CIUKI_TLS_IO;}
         } else return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
         if(r<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
         return CIUKI_TLS_IO;

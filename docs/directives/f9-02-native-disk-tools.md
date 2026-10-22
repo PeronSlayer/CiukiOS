@@ -35,3 +35,16 @@ Host tests (`tests/host/libdisk_test.c` in the fs host suite, plus the kernel ho
 Acceptance: items 1–5 with green host tests and the fs suite unchanged in its existing results; the kernel diff adds no path taken by normal boots except the node registration and the capability checks; `[disk] lease` records as specified; the ioctl numbers listed for the lead; no `panic()`.
 
 Report `build/codex/f9-02-report.md` with citations, the proposed ioctl numbers, the exact commands and results, and any deviation from plan §5.2. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment R (lead, 2026-10-22 23:55): resumed for the public distribution
+
+The owner wants CiukiOS distributed for people's retro PCs, and the next image includes every requested integration. This directive resumes from its worktree's earlier work, which main has been merged into:
+- **f9-01:** the CD media, Setup-mode kernel and the `setup=1` loader token, now in the option table after `usbscan`/`ecpoll`.
+- **f9-02:** the uncommitted 2026-10-21 work, now committed: libdisk, disk lease, stub MBR, disk device.
+
+Complete the directive as written, keep earlier work that still meets it, and adapt it to the current main.
+
+Lead notes from the merge:
+- **Shared field.** Both f9-01 and f9-02 add `setup_capability` to `struct process`. Keep one field with one comment, so the two branches merge cleanly.
+- **f9-02 only.** In `syscalls_file.c`, main's volume-read media check was kept with the `PX_DISK` early return. The earlier f9-02 drive-mask change for volume nodes was dropped. Prove with host tests that raw-disk and volume I/O still meet the lease and hold rules.
+- **Universal hardware.** Setup must work on any baseline PC, not only the T23. Disk and controller detection uses the generic paths, and the display uses the registry and software engine of `display-driver-model.md` when no native driver binds.

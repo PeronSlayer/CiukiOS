@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sdk/netsurf/port/surface.h"
+#include "sdk/netsurf/port/pointer.h"
 static struct { struct ciuki_surface_info info;void *map;int live; } fds[64];
 static int nextfd=4, fail_create, fail_send, closed, unmapped;
 static struct ciuki_message sent[256], incoming;
@@ -57,6 +58,23 @@ int main(void)
     struct ciuki_browser_surface *s=calloc(1,sizeof(*s));assert(s);
     assert(!ciuki_browser_open(s,&ops,3,640,480));assert(sends==2 && sent[0].data[0]==3 && sent[1].fd_count==1);
     struct desk_packet p=result(DESK_CREATE_WINDOW,s->create_request,0);assert(!ciuki_browser_packet(s,&p) && s->ready);
+    /* f2-99: semantic browser pointers use the existing system cursor API,
+     * with no imported bitmap, duplicate sends or lost backpressure retry. */
+    const unsigned shapes[]={GUI_POINTER_DEFAULT,GUI_POINTER_POINT,GUI_POINTER_CARET,GUI_POINTER_MENU,
+        GUI_POINTER_UP,GUI_POINTER_DOWN,GUI_POINTER_LEFT,GUI_POINTER_RIGHT,GUI_POINTER_RU,GUI_POINTER_LD,
+        GUI_POINTER_LU,GUI_POINTER_RD,GUI_POINTER_CROSS,GUI_POINTER_MOVE,GUI_POINTER_WAIT,GUI_POINTER_HELP,
+        GUI_POINTER_NO_DROP,GUI_POINTER_NOT_ALLOWED,GUI_POINTER_PROGRESS};
+    const unsigned cursors[]={0,10,3,0,6,6,5,5,8,8,7,7,11,9,1,21,4,4,2};
+    for(unsigned n=0;n<sizeof(shapes)/sizeof(*shapes);n++)assert(ciuki_pointer_shape(shapes[n])==cursors[n]);
+    assert(ciuki_pointer_shape(999)==DESK_CURSOR_ARROW);
+    unsigned cursor_sends=sends;
+    assert(!ciuki_browser_cursor(s,ciuki_pointer_shape(GUI_POINTER_POINT)) && sends==cursor_sends+1);
+    struct desk_packet cp;assert(desk_parse(&sent[sends-1],1,NULL,&cp));
+    assert(cp.opcode==DESK_SET_CURSOR && cp.flags==DESK_CURSOR_HAND && cp.index==0 && cp.result==0);
+    assert(!ciuki_browser_cursor(s,DESK_CURSOR_HAND) && sends==cursor_sends+1);
+    fail_send=1;assert(ciuki_browser_cursor(s,DESK_CURSOR_TEXT)==-1 && s->cursor_shape==DESK_CURSOR_HAND);
+    fail_send=0;assert(!ciuki_browser_cursor(s,DESK_CURSOR_TEXT) && sends==cursor_sends+2);
+    assert(ciuki_browser_cursor(s,DESK_CURSOR_COUNT)==-1 && errno==EINVAL);
     s->dirty=false;
     for(unsigned i=0;i<640*480;i++)s->current.back[i]=0x123456;
     s->current.back[2*640+1]=0x00ff0000;s->current.back[2*640+2]=0x000000ff;
@@ -157,5 +175,6 @@ int main(void)
     padding=64;
     assert(ciuki_browser_open(s,&ops,3,640,480)==-1 && s->closed && !strcmp(s->close_reason,"surface-open-failed"));
     free(s);puts("NetSurf v3 surface: damage, colour, ownership, resize, stale/OOM, input and cleanup passed");fflush(stdout);
-    return 0;
+    puts("PASS f2-99 browser cursor: all upstream semantic shapes, system bitmap index zero, unchanged suppression and backpressure retry");
+    fflush(stdout);return 0;
 }

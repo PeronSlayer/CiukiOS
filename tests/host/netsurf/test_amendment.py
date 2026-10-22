@@ -82,6 +82,7 @@ class SanitizerTests(unittest.TestCase):
         libraries=["-Wl,--start-group",*[str(p) for p in sorted((self.base / "prefix/lib").glob("*.a")) if p.name!="libnsfb.a"],"-Wl,--end-group",
                    "-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-lm","-lpthread",
                    "-Wl,--wrap=nsfb_event,--wrap=browser_window_mouse_click,--wrap=browser_window_access_url,--wrap=clock_gettime,--wrap=malloc,--wrap=calloc,--wrap=realloc",
+                   "-Wl,--wrap=browser_window_navigate,--wrap=browser_window_back_available,--wrap=browser_window_forward_available,--wrap=browser_window_history_back,--wrap=browser_window_history_forward,--wrap=browser_window_reload,--wrap=browser_window_stop",
                    "-include",str(ROOT / "tests/host/desktop/replay_base.h"),"-Dnsframebuffer","-DCIUKI_HOST","-DCIUKI_NETSURF","-DWITH_NSLOG"]
         with tempfile.TemporaryDirectory(dir=self.out) as directory:
             page=Path(directory) / "interaction.html"

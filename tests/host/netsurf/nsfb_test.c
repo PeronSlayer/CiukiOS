@@ -44,6 +44,13 @@ void ciuki_chrome_render(void) {}
 void ciuki_chrome_release(void) {}
 bool ciuki_chrome_input(const struct ciuki_input_event *e)
 { return e->type==CIUKI_INPUT_MOTION && e->value2<CIUKI_BROWSER_TOP; }
+/* The real dispatcher and deskui are exercised by frontend_test.c. */
+void ciuki_chrome_dispatch(struct ciuki_browser_surface *s,const struct ciuki_input_event *e)
+{
+    if(e->type==CIUKI_INPUT_MOTION) { s->mouse_x=e->value;s->mouse_y=e->value2; }
+    bool drag=s->buttons && (e->type==CIUKI_INPUT_MOTION || e->type==CIUKI_INPUT_BUTTON);
+    if(drag || !ciuki_chrome_input(e))ciuki_browser_input(s,e);
+}
 static void result(unsigned op,uint32_t request)
 {
     desk_v3_message(&incoming,DESK_V3_RESULT,8,request,1,1);
