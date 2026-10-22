@@ -9,6 +9,13 @@
 #include "../../apps/desktop/protocol.h"
 #include "cursors.h"
 struct desk_tool_cursor { uint32_t mask[32], image[32]; int hot_x, hot_y; };
+static inline const struct desk_cursor_raster *desk_generic_cursor(unsigned shape)
+{
+    if (shape<=DESK_CURSOR_PRECISION) return &desk_cursors[shape];
+    if (shape>=DESK_CURSOR_OPEN_HAND && shape<=DESK_CURSOR_HELP)
+        return &desk_extra_cursors[shape-DESK_CURSOR_OPEN_HAND];
+    return NULL;
+}
 static inline struct desk_tool_cursor desk_tool_cursor(unsigned shape)
 {
     static const char *const pencil[] = {
@@ -47,7 +54,8 @@ static inline struct desk_tool_cursor desk_tool_cursor(unsigned shape)
     case DESK_CURSOR_ZOOM: TOOL_ROWS(magnify,7,5); break;
     case DESK_CURSOR_ERASER: TOOL_ROWS(eraser,4,4); break;
     default: {
-        const struct desk_cursor_raster *generic=&desk_cursors[shape<=DESK_CURSOR_PRECISION ? shape : DESK_CURSOR_ARROW];
+        const struct desk_cursor_raster *generic=desk_generic_cursor(shape);
+        if (!generic) generic=&desk_cursors[DESK_CURSOR_ARROW];
         memcpy(r.mask,generic->mask,sizeof(r.mask)); memcpy(r.image,generic->image,sizeof(r.image));
         r.hot_x=(int)generic->hot_x; r.hot_y=(int)generic->hot_y;
         return r;

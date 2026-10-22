@@ -185,7 +185,8 @@ class DesktopTests(unittest.TestCase):
                 if mode == "plain":
                     # F2-62: the missing-settings desktop now uses Ciuki Blue.
                     # F2-63: re-recorded for the pinned FreeType UI atlases.
-                    pinned = "ab5eef0dfb084cd58fd8a272f1bffe5cff4ad296fc6a2679715c7b9d137e5a0e"
+                    # F2-99: original cursor silhouette and software shadow.
+                    pinned = "dbb84ed9259ddbb1153904eea8862d40e59e664e84692a397d6cfa6b5852a5d9"
                     actual = hashlib.sha256(pixels).hexdigest()
                     self.assertEqual(actual, pinned)
                 else:

@@ -34,6 +34,7 @@
 #include "chrome.h"
 #include "budget.h"
 #include "logline.h"
+#include "pointer.h"
 
 enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,OPEN=20,FILE_PICKER,NOTICE };
 static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK};
@@ -44,6 +45,7 @@ static bool status_dirty;
 static bool profile_requested;
 static unsigned input_records;
 static unsigned bookmarks;
+static unsigned content_cursor=DESK_CURSOR_ARROW;
 static struct form_control *file_gadget;
 static struct gui_window *file_window;
 const char *ciuki_resource_path="/system/netsurf";
@@ -131,6 +133,7 @@ static void layout(void)
 }
 void ciuki_chrome_init(struct ciuki_browser_surface *s)
 {
+    content_cursor=DESK_CURSOR_ARROW;
     surface=s;active=status_dirty=true;toolbar_keys=false;input_records=0;
     du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
     ui.event=event;
@@ -150,8 +153,20 @@ void ciuki_chrome_resize(void)
     du_resize(&ui,surface->current.back,surface->current.info.width,surface->current.info.height);layout();
     status_dirty=true;
 }
+static void chrome_cursor(void)
+{
+    if(!active)return;
+    int chrome=ui.dialog.kind || ui.capture>=0 || ui.mouse_y<CIUKI_BROWSER_TOP ||
+        ui.mouse_y>=(int)surface->current.info.height-CIUKI_BROWSER_STATUS;
+    unsigned shape=chrome ? du_cursor_at(&ui) : content_cursor;
+    if(!chrome && loading && shape==DESK_CURSOR_ARROW)shape=DESK_CURSOR_ARROW_BUSY;
+    (void)ciuki_browser_cursor(surface,shape);
+}
+void ciuki_chrome_pointer(unsigned shape)
+{ content_cursor=ciuki_pointer_shape(shape);chrome_cursor(); }
 void ciuki_chrome_render(void)
 {
+    chrome_cursor(); /* also retry a refused cursor send on an otherwise idle UI turn */
     if(!active || (!ui.dirty && !status_dirty))return;
     struct browser_window *bw=browser();
     du_get(&ui,BACK)->disabled=!bw || !browser_window_back_available(bw);
@@ -214,6 +229,7 @@ void ciuki_chrome_complete(struct gui_window *window)
 void ciuki_chrome_loading(bool value)
 {
     loading=value;if(active)ui.dirty=1;
+    chrome_cursor();
     if(!value)ciuki_test_page_done();
 }
 bool ciuki_chrome_busy(void) { return loading; }
@@ -268,7 +284,7 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
     }
     if(e.type==CIUKI_INPUT_MOTION) {
         bool chrome=e.value2<CIUKI_BROWSER_TOP || e.value2>=(int)surface->current.info.height-CIUKI_BROWSER_STATUS;
-        if(!chrome && !ui.dialog.kind && ui.capture<0) { ui.mouse_x=e.value;ui.mouse_y=e.value2;return false; }
+        if(!chrome && !ui.dialog.kind && ui.capture<0) { ui.mouse_x=e.value;ui.mouse_y=e.value2;chrome_cursor();return false; }
     }
     if(e.type==CIUKI_INPUT_BUTTON && !ui.dialog.kind && ui.capture<0 &&
        ui.mouse_y>=CIUKI_BROWSER_TOP && ui.mouse_y<(int)surface->current.info.height-CIUKI_BROWSER_STATUS) {
@@ -308,6 +324,7 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
     du_input(&ui,&e);
     if(e.type==CIUKI_INPUT_BUTTON && e.value && !ui.dialog.kind)toolbar_keys=du_focused(&ui)!=0;
     if(entering_address)focus_address();
+    chrome_cursor();
     return true;
 }
 /* Both owners need the latest client position, even when one consumes motion.

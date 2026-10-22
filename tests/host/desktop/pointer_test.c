@@ -13,7 +13,7 @@
  * the hardware cursor, which then stayed frozen beside the software one.
  * SPDX-License-Identifier: MIT */
 #include "fake.h"
-#include "../../../assets/cursors/cursors.h"
+#include "../../../assets/cursors/paint.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -113,6 +113,18 @@ static void visible(uint32_t *out)
         out[py*W+px]=(hw.image[y]&(0x80000000u>>x)) ? hw.fg : hw.bg;
     }
 }
+/* Independent expected hardware overlay: artwork and hotspot, no software
+ * shadow. Do not use the engine's uploaded bitmap/origin as the oracle. */
+static void expected_hardware(uint32_t *out)
+{
+    struct desk_tool_cursor r=desk_tool_cursor(d.cursor_shape);
+    for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
+        int px=d.mouse_x-r.hot_x+x, py=d.mouse_y-r.hot_y+y;
+        uint32_t bit=0x80000000u>>x;
+        if (px>=0 && py>=0 && px<W && py<H && (r.mask[y]&bit))
+            out[py*W+px]=(r.image[y]&bit) ? 0xffffffu : 0;
+    }
+}
 static void save(const char *name,const uint32_t *pixels)
 {
     if (!frames || !name) return;
@@ -147,7 +159,8 @@ static void check(const char *name,int steady)
         assert(!d.cursor_dirty);
         if (pointer) {
             assert(hw.shown+soft_visible==1);
-            if (hw.shown && memcmp(seen,soft,(size_t)W*H*4)) {
+            if (hw.shown) expected_hardware(bare);
+            if (hw.shown && memcmp(seen,bare,(size_t)W*H*4)) {
                 fprintf(stderr,"%s: hardware cursor shape/position differs from the software pointer\n",name); abort();
             }
         } else assert(!hw.shown);

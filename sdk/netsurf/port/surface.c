@@ -76,6 +76,17 @@ void ciuki_browser_damage(struct ciuki_browser_surface *s,nsfb_bbox_t b)
     }
     s->dirty=true;
 }
+int ciuki_browser_cursor(struct ciuki_browser_surface *s,unsigned shape)
+{
+    if(!s || !s->ready || s->closed) { errno=EAGAIN;return -1; }
+    if(shape>=DESK_CURSOR_COUNT) { errno=EINVAL;return -1; }
+    if(s->cursor_valid && s->cursor_shape==shape)return 0;
+    /* Bitmap index and visibility remain zero: the system cursor is visible.
+     * Remember only accepted sends, so EAGAIN retries on the next UI turn. */
+    uint8_t b[12]={0};desk_put32(b,shape);
+    if(!du3_request(&s->connection,DESK_SET_CURSOR,s->window,s->generation,b,sizeof(b),-1))return -1;
+    s->cursor_shape=shape;s->cursor_valid=true;return 0;
+}
 int ciuki_browser_present(struct ciuki_browser_surface *s)
 {
     if(!s->ready || !s->dirty || s->swap_request)return 0;

@@ -1,0 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only; original CiukiOS project artwork. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" data-hot-x="15" data-hot-y="15">
+  <path d="M9 17 L7 10 Q6 7 8 7 Q10 6 11 10 L12 14 L11 6 Q11 3 13 4 Q15 4 15 7 V13 L16 5 Q16 3 18 4 Q20 4 19 8 L19 14 L21 8 Q22 6 24 7 Q25 8 24 11 L23 19 Q23 23 20 26 H11 L4 19 Q2 16 4 15 Q6 14 9 17 Z" fill="white" stroke="black" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M12 17 L13 21 M16 16 V21 M20 17 L19 21" fill="none" stroke="black"/>
+</svg>
