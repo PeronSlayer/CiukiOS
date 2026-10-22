@@ -853,7 +853,9 @@ static void test_launch_throughput(void)
 static struct storage media_observation;
 static unsigned media_removals;
 static int media_result;
+#ifndef NATIVE_DISK_TEST
 struct storage *storage_get(void) { return &media_observation; }
+#endif
 int usb_storage_eject(struct storage *s,unsigned drive,uint32_t gen)
 { CHECK(s==&media_observation && drive==4 && gen==123); media_removals++; return media_result; }
 /* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */
@@ -959,6 +961,29 @@ static void test_media_node(void)
 }
 static void test_com_nodes(void)
 {
+    /* Check all eight possible ports, including absent ones, against all
+     * ATA slots and the fixed devices using the production stat path. */
+    uint32_t numbers[6+4+CIUKI_COM_MAX]; unsigned count=0;
+    struct px_node *fixed[]={space->null,space->console,space->audio,space->mixer,space->net,space->media};
+    struct ciuki_stat device_stat;
+    for (unsigned i=0;i<6;i++) {
+        CHECK(!locked_stat(fixed[i],&device_stat) && device_stat.st_rdev==i+1);
+        numbers[count++]=device_stat.st_rdev;
+    }
+    for (unsigned i=0;i<4;i++) {
+        char name[]="/dev/ata0"; name[8]+=(char)i;
+        struct px_path disk_path;
+        CHECK(!resolve_path(name,&disk_path) && disk_path.node==space->disks[i]);
+        CHECK(!locked_stat(disk_path.node,&device_stat) && device_stat.st_rdev==32+i);
+        CHECK(device_stat.st_mode==(S_IFCHR|0644));
+        numbers[count++]=device_stat.st_rdev;
+    }
+    for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
+        struct px_node port={.space=space,.kind=PX_COM,.drive=i,.linked=true};
+        CHECK(!locked_stat(&port,&device_stat) && device_stat.st_rdev==16+i);
+        numbers[count++]=device_stat.st_rdev;
+    }
+    for (unsigned i=0;i<count;i++) for (unsigned j=0;j<i;j++) CHECK(numbers[i]!=numbers[j]);
     struct px_path path; CHECK(!resolve_path("/dev/com2",&path) && path.node->kind==PX_COM);
     struct ciuki_stat st; CHECK(!locked_stat(path.node,&st) && st.st_mode==(S_IFCHR|0666) && st.st_rdev==17);
     CHECK(file_open(client,"/dev/com1",O_RDONLY,0)==-EBUSY);
@@ -966,6 +991,8 @@ static void test_com_nodes(void)
     int fd=file_open(client,"/dev/com2",O_RDWR,0); CHECK(fd>=0);
     CHECK(file_open(client,"/dev/com2",O_RDONLY,0)==-EBUSY);
     CHECK(file_fcntl(client,fd,F_SETFL,O_APPEND)==-EINVAL);
+    CHECK(!file_fcntl(client,fd,F_SETFL,O_NONBLOCK));
+    CHECK(file_fcntl(client,fd,F_GETFL,0)==(O_RDWR|O_NONBLOCK));
     CHECK(call(CIUKI_SYS_READ,fd,0x1234,17,0,0)==7 && mock_com_reads==1);
     CHECK(call(CIUKI_SYS_WRITE,fd,0x1234,17,0,0)==7 && mock_com_writes==1);
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,COM_GET_STATUS,0x1234,80,0) && mock_com_controls==1);
@@ -973,14 +1000,40 @@ static void test_com_nodes(void)
     CHECK(call(CIUKI_SYS_PREAD,fd,USER,1,0,0)==-ESPIPE);
     CHECK(call(CIUKI_SYS_PWRITE,fd,USER,1,0,0)==-ESPIPE);
     CHECK(call(CIUKI_SYS_FSYNC,fd,0,0,0,0)==-EINVAL);
+    CHECK(call(CIUKI_SYS_FTRUNCATE,fd,0,0,0,0)==-EINVAL);
     int dup=file_dup(client,fd,0,false,0); CHECK(dup>=0);
     CHECK(!file_close(client,fd) && !mock_com_closes && mock_com_generation==77);
     CHECK(!file_close(client,dup) && mock_com_closes==1 && !mock_com_generation);
     int dir=file_open(client,"/dev",O_RDONLY|O_DIRECTORY,0); CHECK(dir>=0);
-    struct ciuki_dirent entry; unsigned seen=0;
-    while (locked_dents(file_fd(client,dir),&entry)>0)
-        if (!strcmp(entry.d_name,"com1") || !strcmp(entry.d_name,"com2")) { CHECK(entry.d_type==DT_CHR); seen++; }
-    CHECK(seen==2 && !file_close(client,dir));
+    struct ciuki_dirent entry;
+    const char *names[]={".","..","null","console","audio","mixer","net","media",
+                         "ata0","ata1","ata2","ata3","com1","com2"};
+    for (unsigned pass=0;pass<2;pass++) {
+        for (unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++) {
+            CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+            CHECK(!strcmp(entry.d_name,names[i]) && entry.d_off==(int64_t)i+1);
+            CHECK(entry.d_type==(i<2 ? DT_DIR : DT_CHR));
+        }
+        uint64_t end=file_fd(client,dir)->position;
+        CHECK(!locked_dents(file_fd(client,dir),&entry) && file_fd(client,dir)->position==end);
+        CHECK(!locked_dents(file_fd(client,dir),&entry) && file_fd(client,dir)->position==end);
+        int64_t pos; CHECK(!locked_seek(file_fd(client,dir),0,SEEK_SET,&pos) && !pos);
+    }
+    /* Sparse/unlinked ports must be skipped without dereferencing NULL or
+     * disturbing the fixed-device and ATA prefix. Restore the fixture. */
+    space->com[0]->linked=false;
+    file_fd(client,dir)->position=12;
+    CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+    CHECK(!strcmp(entry.d_name,"com2") && entry.d_off==13);
+    CHECK(!locked_dents(file_fd(client,dir),&entry));
+    space->com[0]->linked=true;
+    struct px_node *first=space->com[0]; space->com[0]=0;
+    file_fd(client,dir)->position=12;
+    CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+    CHECK(!strcmp(entry.d_name,"com2") && entry.d_off==13);
+    CHECK(!locked_dents(file_fd(client,dir),&entry));
+    space->com[0]=first;
+    CHECK(!file_close(client,dir));
     puts("PASS COM namespace/fd/syscall: lookup/stat/readdir, logger refusal, exclusive/dup/final-close and stream dispatch");
 }
 static void test_net_node(void)

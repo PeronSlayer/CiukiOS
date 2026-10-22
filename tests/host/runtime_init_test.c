@@ -196,6 +196,9 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include <ciuki/work.h>
 static struct storage system_storage;
 static bool initialized;
+static bool setup_requested;
+static unsigned writer_creates, writer_starts, write_enables, log_starts, pagefile_binds, optical_starts;
+static unsigned setup_media_calls, setup_record_calls;
 static void storage_timer(void *arg) { (void)arg; CHECK(false); }
 void fs_calendar_init(void) { called('S'); }
 void ledger_snapshot(struct mm_ledger *out) {
@@ -212,23 +215,24 @@ int storage_setup(struct storage *s, size_t bytes) { CHECK(bytes==CACHE_DEFAULT_
 bool storage_probe_readonly(const char *selector, unsigned length) { return selector && length; }
 int kwork_init(void) { return 0; }
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
-{ (void)name; (void)fn; (void)arg; (void)prio; static struct task task; return &task; }
-void task_start(struct task *task) { CHECK(task != 0); }
+{ (void)name; (void)fn; (void)arg; (void)prio; writer_creates++; static struct task task; return &task; }
+void task_start(struct task *task) { CHECK(task != 0); writer_starts++; }
 int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t seq)
-{ (void)vfs; (void)qualified; (void)seq; return 0; }
+{ (void)vfs; (void)qualified; (void)seq; log_starts++; return 0; }
 int storage_pagefile_bind(struct storage *s, unsigned drive, const char *path)
-{ CHECK(s && drive == 2 && path); return 0; }
+{ CHECK(s && drive == 2 && path); pagefile_binds++; return 0; }
 int atapi_ready(struct ata_device *d) { (void)d; return -FS_EIO; }
 int optical_bind(struct storage *s,unsigned slot,struct ata_device *d)
 { (void)s; (void)slot; (void)d; CHECK(false); return -FS_EIO; }
 void optical_service(struct storage *s,uint64_t now) { (void)s; (void)now; }
-void optical_start_service(struct storage *s) { (void)s; }
+void optical_start_service(struct storage *s) { (void)s; optical_starts++; }
 int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *b, uint64_t session)
 { (void)s; (void)slot; (void)b; (void)session; return -FS_EIO; }
 int storage_add_disk(struct storage *s, unsigned slot, struct blkdev *dev)
 {
     (void)dev; CHECK(!slot);
-    s->volumes[2] = (struct storage_volume){ .present = true, .drive = 2,
+    unsigned drive = setup_requested ? 4 : 2;
+    s->volumes[drive] = (struct storage_volume){ .present = true, .drive = drive,
         .partition = 1, .read_gate = true, .read_sequence = 1,
         .fat = { .readonly = true, .type = 32 } };
     return 0;
@@ -236,8 +240,13 @@ int storage_add_disk(struct storage *s, unsigned slot, struct blkdev *dev)
 struct storage_volume *storage_volume(struct storage *s, unsigned drive)
 { return s->volumes[drive].present ? &s->volumes[drive] : 0; }
 int storage_enable_write(struct storage *s, unsigned drive)
-{ s->volumes[drive].fat.readonly = false; return 0; }
+{ write_enables++; s->volumes[drive].fat.readonly = false; return 0; }
 uint32_t rec_premature_records(void) { return 0; }
+bool storage_setup_requested(void) { return setup_requested; }
+void storage_setup_media(struct storage *s, struct ata_device *d[STORAGE_DISKS])
+{ CHECK(setup_requested && s->setup_mode && d[0] && !s->volumes[4].present); setup_media_calls++; }
+void storage_setup_records(struct ata_device *d[STORAGE_DISKS])
+{ CHECK(setup_requested && d[0] && !d[0]->write_commands && system_storage.volumes[4].present); setup_record_calls++; }
 #include "../../src/kernel/core/init.c"
 #include "../../build/host/runtime_storage_init.inc"
 static struct storage host_storage;
@@ -464,6 +473,15 @@ static void safe_sweep_tests(void)
 int main(void)
 {
     CHECK(CIUKI_BUILD_EPOCH == 0); /* the host build uses the header fallback */
+    reset(0, false, true); disk = setup_requested = true;
+    storage_init();
+    CHECK(system_storage.setup_mode && system_storage.volumes[4].fat.readonly);
+    CHECK(!writer_creates && !writer_starts && !write_enables && !log_starts && !pagefile_binds);
+    CHECK(setup_media_calls == 1 && setup_record_calls == 1 && optical_starts == 1);
+    storage_init();
+    CHECK(setup_media_calls == 1 && setup_record_calls == 1 && optical_starts == 1);
+    setup_requested = false;
+    puts("Setup storage_init: no writer/write enable/disk log/pagefile, optical poller retained, discovery before zero-write records, idempotent PASS");
     input_decision_table();
     safe_sweep_tests();
     reset(0, false, true); disk = true; verify("FNA", 2, "ready", "ready", "ready", 0);

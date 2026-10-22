@@ -52,7 +52,16 @@ struct process {
     uint64_t pending, cpu_ticks;
     struct kwait changed;
     uint32_t threads, live_threads;
-    bool published, dosvm_capability, programs_capability, network_capability;
+    bool published, dosvm_capability, programs_capability;
+    /* f2-100: supervisor/desktop-authorized desktop and Control Panel only;
+     * network configuration authority is delegated explicitly at spawn. */
+    bool network_capability;
+    /* f9-01 D5 / f9-02: destination-disk authority for /dev/ata0..3
+     * (mutating requests and the lease). Set only by the supervisor's
+     * Setup-mode spawn of /Programs/setup, before publication; zero in every
+     * other process (kzalloc), never inherited by children or descriptors,
+     * gone with the process. */
+    bool setup_capability;
     /* f1-98: the desktop and its Win32 window server keep a minimum CPU
      * share (task.c share_group); every thread inherits it at creation. */
     bool share_group;
