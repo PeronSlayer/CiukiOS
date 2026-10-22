@@ -3,6 +3,12 @@
 #ifndef CIUKI_SAVAGE2D_H
 #define CIUKI_SAVAGE2D_H
 #include <ciuki/accel.h>
+/* Private source compatibility for the frozen legacy snapshot. */
+#define CIUKI_ACCEL_DRIVER_SAVAGE CIUKI_ACCEL_DRIVER_LEGACY_NATIVE
+const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *);
+void savage2d_record(void);
+struct ciuki_accel_info;
+void savage2d_snapshot(struct ciuki_accel_info *);
 struct pci_func;
 #define SAVAGE_MMIO_BYTES 0x80000u
 #define SAVAGE_BCI 0x10000u

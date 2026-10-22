@@ -35,5 +35,6 @@ struct accel_ops {
     int (*verify_write)(void *);
 };
 struct vfs;
-const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *);
+/* -EOPNOTSUPP guarantees no submission and no modified pixels. Success
+ * proves completion. Any other error may have partially executed. */
 #endif

@@ -1260,14 +1260,14 @@ static void system_read(struct desktop *d)
     if (!uname(&u)) snprintf(d->sh.cpu_name,sizeof(d->sh.cpu_name),"%.40s",u.machine);
 }
 /* f1-97: one-line 2D acceleration answer at the first desktop frame, from the
- * kernel's `2D accelerator` device record (driver "savage2d"; reason = the
+ * kernel's `2D accelerator` device record (stable accelerator id; reason = the
  * quarantine token). A shell notice card, never a dialog: it expires after
  * 10 s and any click dismisses it. f2-92: "YES" only once the engine has
  * drawn for a presenter (record reason "accelerated"); before that the
  * engine is "OK (drawing: software)". */
-static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, int used, const char *reason)
+static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, int used, const char *reason, const char *name)
 {
-    if (accelerated && used) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 Savage");
+    if (accelerated && used) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 %s",name && *name ? name : "Native driver");
     else if (accelerated) snprintf(out,size,"2D engine: OK (drawing: software)");
     else snprintf(out,size,"2D engine: NO (%s)",reason && *reason ? reason : "unknown");
 }
@@ -1287,14 +1287,15 @@ static int accel_notice(struct desktop *d)
     if (ciuki_devices(&info)) return ++accel_notice_state.failures>=3;
     for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
         const struct ciuki_device_record *v=&info.devices[i];
-        if (strcmp(v->driver,"savage2d")) continue;
-        int ready=v->state==CIUKI_DEVICE_READY, used=ready && !strcmp(v->reason,"accelerated");
+        if (v->id!=CIUKI_DEVICE_ACCELERATOR_ID) continue;
+        if (!strcmp(v->reason,"pending")) return d->now_ns-accel_notice_state.first_ns>=60000000000ull;
+        int ready=v->accel_ready, used=ready && v->native_used;
         if (ready && !used) {
             if (!accel_notice_state.ready_ns) accel_notice_state.ready_ns=d->now_ns ? d->now_ns : 1;
             if (d->now_ns-accel_notice_state.ready_ns<3000000000ull) return 0;
         }
         char text[160];
-        accel_notice_text(text,sizeof(text),ready,used,v->reason);
+        accel_notice_text(text,sizeof(text),ready,used,v->reason,v->driver_display_name);
         desk_shell_notify(d,"Graphics",text,DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
         d->sh.notification.expires=d->now_ns+10000000000ull;
         return 1;
@@ -1986,6 +1987,7 @@ int main(int argc, char **argv)
     d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
     d->accel_info=ciuki_display_accel_info;
+    d->engine_info=ciuki_display_engine_info;
     d->display_info=ciuki_display_info;
     d->gfx_benchmark=gfx_benchmark;
     if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }

@@ -722,7 +722,9 @@ int cp_snapshot_valid(const struct ciuki_devices_info *s)
         const struct ciuki_device_record *d = &s->devices[i];
         if (d->class_id >= CIUKI_DEVICE_CLASSES || d->state > CIUKI_DEVICE_FIRMWARE_FIRST || d->bus_type > CIUKI_BUS_USB ||
             d->resource_count > CIUKI_DEVICE_RESOURCES || !memchr(d->name, 0, sizeof(d->name)) ||
-            !memchr(d->driver, 0, sizeof(d->driver)) || !memchr(d->reason, 0, sizeof(d->reason))) return 0;
+            !memchr(d->driver, 0, sizeof(d->driver)) || !memchr(d->reason, 0, sizeof(d->reason)) ||
+            !memchr(d->driver_display_name,0,sizeof(d->driver_display_name)) ||
+            d->accel_ready>1 || d->native_used>1 || d->cpu_ready>1) return 0;
         for (unsigned j = 0; j < d->resource_count; j++) {
             const struct ciuki_device_resource *r = &d->resources[j];
             if (r->type > CIUKI_RESOURCE_MEMORY || r->end < r->start ||
@@ -773,24 +775,9 @@ int cp_hwid_lookup_json(const char *json, unsigned vendor, unsigned device, char
 }
 static const char *product(struct cp_app *a, const struct ciuki_device_record *d, char *resolved, size_t size)
 {
-    /* Display names only; never used to select a driver. PCI IDs checked
-     * against Linux pci_ids.h and pciutils pci.ids (device-manager.md). */
-    static const struct { unsigned vendor, device; const char *name; } table[] = {
-        {0x8086, 0x1237, "Intel 440FX host bridge"}, {0x8086, 0x7190, "Intel 440BX host bridge"},
-        {0x8086, 0x3575, "Intel 830MP host bridge"}, {0x8086, 0x7000, "Intel PIIX ISA bridge"},
-        {0x8086, 0x7010, "Intel PIIX IDE controller"}, {0x8086, 0x7110, "Intel PIIX4 ISA bridge"},
-        {0x8086, 0x7111, "Intel PIIX4 IDE controller"}, {0x8086, 0x2415, "Intel ICH AC97 audio"},
-        {0x8086, 0x2485, "Intel ICH3 AC97 audio"}, {0x8086, 0x1229, "Intel PRO/100 Ethernet"},
-        {0x5333, 0x8c2e, "S3 SuperSavage/IXC"}, {0x1002, 0x4c4d, "ATI Rage Mobility"},
-        {0x1013, 0x00b8, "Cirrus Logic GD5446"}, {0x1234, 0x1111, "Bochs VBE display"},
-        {0x10ec, 0x8139, "Realtek RTL8139 Ethernet"}, {0x10b7, 0x9055, "3Com 3C905B Ethernet"},
-        {0x1106, 0x3099, "VIA VT8366 host bridge"}, {0x1106, 0x3074, "VIA VT8233 ISA bridge"},
-    };
     if (d->bus_type == CIUKI_BUS_PCI) {
         if (a->host.hwid_name && !a->host.hwid_name(a->host.ctx, d->vendor, d->device, resolved, size) && resolved[0])
             return resolved;
-        for (unsigned i = 0; i < sizeof(table) / sizeof(table[0]); i++)
-            if (table[i].vendor == d->vendor && table[i].device == d->device) return table[i].name;
         if (d->pci_class == 1 && d->subclass == 1) return "PCI IDE controller";
         if (d->pci_class == 6) return "PCI bridge";
         if (d->pci_class == 0x0c && d->subclass == 3) return "USB controller";

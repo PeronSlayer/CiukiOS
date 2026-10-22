@@ -6,17 +6,9 @@
 #include <ciuki/registry.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/accel.h>
+#include <ciuki/display_driver.h>
+#include <ciuki/swdib.h>
 #include <ciuki/task.h>
-extern const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *) __attribute__((weak));
-extern const struct accel_ops *savage2d_fallback_ops(void) __attribute__((weak));
-extern bool savage2d_eligible(const struct fb_device *) __attribute__((weak));
-extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
-extern int savage2d_attempt_end(struct vfs *) __attribute__((weak));
-extern int savage2d_attempt_failed(struct vfs *) __attribute__((weak));
-extern void savage2d_quarantine(const char *) __attribute__((weak));
-extern void savage2d_record(void) __attribute__((weak));
-extern void savage2d_snapshot(struct ciuki_accel_info *) __attribute__((weak));
-extern void savage2d_summary_safe_mode(void) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
 /* f2-92: the display grant's preemption point (grants.c), absent in
@@ -29,9 +21,11 @@ extern void grants_display_yield(void) __attribute__((weak));
 static struct fb_device device;
 static struct kmutex presenter;
 static const struct accel_ops *acceleration;
+static const struct display_driver *adapter;
 static bool initialized, changing;
 static struct vfs *accel_vfs;
 static bool accel_queued, accel_initializing;
+static bool accel_blocked;
 /* One reusable normal-priority thread owns marker I/O and initialization.
  * Synchronous serial trace must stay outside the 1-ms device-work budget. */
 static struct task *accel_marker_task;
@@ -48,14 +42,26 @@ static bool accel_inflight;
 static uint64_t full_count, full_bytes, full_total_us, full_last_us, full_max_us, full_log_tick;
 enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
 
+static void presenter_unlock(void)
+{
+    if (!accel_initializing && display_driver_refresh()) accel_blocked=true;
+    kmutex_unlock(&presenter);
+}
+
 void fbdev_console_region(unsigned rows)
 {
     __atomic_store_n(&console_rows, rows, __ATOMIC_RELEASE);
 }
 
+unsigned fbdev_native_capabilities(void)
+{ return acceleration && !accel_initializing ? acceleration->capabilities(acceleration->ctx) : 0; }
+
+bool fbdev_cpu_ready(void)
+{ return !acceleration || acceleration->cpu_ready(acceleration->ctx); }
+
 bool fbdev_console_begin(void)
 {
-    if (acceleration && !acceleration->cpu_ready(acceleration->ctx)) return false;
+    if (!fbdev_cpu_ready()) return false;
     unsigned idle = 0;
     return __atomic_compare_exchange_n(&drawing, &idle, CONSOLE_BUSY, false,
                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
@@ -206,17 +212,17 @@ static void accel_initialize(void)
     kmutex_lock(&presenter);
     bool run = !changing && device.present && !acceleration;
     if (run) accel_initializing = true;
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     if (run) {
         /* No engine command is submitted during setup. CPU rendering and
          * console output remain available across reset, polls and logging. */
-        const struct accel_ops *ops = savage2d_init(&device, 0);
+        const struct accel_ops *ops = adapter->start(&device, 0);
         ready = ops != 0;
-        if (!ready && savage2d_fallback_ops) ops = savage2d_fallback_ops();
+        if (!ready && adapter && adapter->fallback) ops = adapter->fallback();
         kmutex_lock(&presenter);
         acceleration = ops;
-        accel_initializing = false;
-        kmutex_unlock(&presenter);
+        accel_initializing = ready;
+        presenter_unlock();
     }
     accel_marker_request = ready ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS;
     kwait_wake_all(&accel_marker_wait);
@@ -233,11 +239,12 @@ int fbdev_accel_probe(const struct fb_device *d, int (*probe)(void *), void *ctx
             err = probe(ctx);
             /* Before releasing the console, publish a rejecting guard if
              * the probe left a writer whose completion cannot be proved. */
-            if (err && savage2d_fallback_ops) acceleration = savage2d_fallback_ops();
+            if (err && adapter && adapter->fallback) acceleration = adapter->fallback();
+            framebuffer_write_drain();
             __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
         }
     }
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     return err;
 }
 
@@ -251,7 +258,9 @@ static void accel_marker_run(void)
     }
     if (accel_marker_request == ACCEL_MARKER_STATUS) {
         accel_marker_request = ACCEL_MARKER_IDLE;
-        if (savage2d_attempt_failed) savage2d_attempt_failed(accel_vfs);
+        if (adapter->attempt_failed) adapter->attempt_failed(accel_vfs);
+        accel_blocked = true;
+        display_driver_software("start_failed");
         accel_queued = false;
         return;
     }
@@ -259,21 +268,32 @@ static void accel_marker_run(void)
     accel_marker_request = ACCEL_MARKER_IDLE;
     if (!clear) {
         /* VFS/ATA locks must never nest under the presenter mutex. */
-        if (!savage2d_attempt_begin || savage2d_attempt_begin(accel_vfs)) {
+        if (!adapter->attempt_begin || adapter->attempt_begin(accel_vfs)) {
             accel_queued = false;
+            accel_blocked = true;
+            display_driver_software("marker_unavailable");
             return;
         }
         accel_marker_request = ACCEL_MARKER_INIT;
         return;
     }
-    if (!savage2d_attempt_end || savage2d_attempt_end(accel_vfs)) {
+    if (!adapter->attempt_end || adapter->attempt_end(accel_vfs)) {
         /* The clear did not reach the disk: the next boot would skip the
          * accelerator anyway; keep the software presenter now as well. */
+        accel_blocked = true;
         kmutex_lock(&presenter);
-        if (acceleration) { acceleration->stop(acceleration->ctx); acceleration = 0; }
-        kmutex_unlock(&presenter);
-        if (savage2d_quarantine) savage2d_quarantine("marker_clear_failed");
+        if (acceleration) {
+            /* Failed stop retains the rejecting guard and console exclusion. */
+            int e = acceleration->stop(acceleration->ctx);
+            if (!e) acceleration = 0;
+        }
+        if (adapter->quarantine) adapter->quarantine("marker_clear_failed");
+        if (!acceleration && adapter->fallback) acceleration = adapter->fallback();
+        presenter_unlock();
     }
+    kmutex_lock(&presenter);
+    accel_initializing = false;
+    presenter_unlock();
     accel_queued = false;
 }
 
@@ -290,19 +310,22 @@ static void accel_marker_main(void *arg)
 
 void fbdev_accel_schedule(struct vfs *vfs)
 {
-    if (g_boot.flags & CBI_F_SAFE_MODE) {
-        if (savage2d_summary_safe_mode) savage2d_summary_safe_mode();
-        return;
-    }
-    if (accel_queued) return; /* keep the pending attempt's volume stable */
+    if (accel_queued) return; /* keep the pending volume and binding stable */
     accel_vfs = vfs;
-    if (!initialized || !device.present || !savage2d_init || acceleration) return;
-    if (!savage2d_eligible || !savage2d_eligible(&device)) return;
+    if (!initialized || !device.present || acceleration || accel_blocked) return;
+    adapter = display_driver_bind(&device);
+    const char *reason = 0;
+    if (display_accel_disabled(&reason)) { display_driver_software(reason); return; }
+    if (!adapter) { display_driver_software("no_driver"); return; }
+    display_driver_software(0);
+    if (!adapter->eligible || !adapter->eligible(&device)) return;
     if (!accel_marker_task) {
         kwait_init(&accel_marker_wait);
-        accel_marker_task = task_create_kernel("savage-marker", accel_marker_main, 0, P_NORMAL);
+        accel_marker_task = task_create_kernel("display-marker", accel_marker_main, 0, P_NORMAL);
         if (!accel_marker_task) {
-            klog("[accel] savage quarantined reason=marker_worker_unavailable");
+            accel_blocked=true;
+            display_driver_software("marker_worker_unavailable");
+            klog("[accel] driver quarantined reason=marker_worker_unavailable");
             return;
         }
         task_start(accel_marker_task);
@@ -336,105 +359,6 @@ static bool clip(const struct fb_device *d, const struct fb_rect *r, struct fb_r
     return true;
 }
 
-struct pixel_layout {
-    unsigned bytes, red_shift, red_pos, green_shift, green_pos, blue_shift, blue_pos;
-};
-
-static struct pixel_layout pixel_layout(const struct fb_device *d)
-{
-    return (struct pixel_layout){ d->bpp / 8, 8 - d->red_size, d->red_pos,
-                                 8 - d->green_size, d->green_pos, 8 - d->blue_size, d->blue_pos };
-}
-
-static uint32_t pack_layout(const struct pixel_layout *l, uint32_t rgb)
-{
-    return ((((rgb >> 16) & 255u) >> l->red_shift) << l->red_pos) |
-           ((((rgb >> 8) & 255u) >> l->green_shift) << l->green_pos) |
-           (((rgb & 255u) >> l->blue_shift) << l->blue_pos);
-}
-
-static uint32_t pack(const struct fb_device *d, uint32_t rgb)
-{
-    const struct pixel_layout l = pixel_layout(d);
-    return pack_layout(&l, rgb);
-}
-
-/* Unaligned RAM loads and generic integer stores are valid on i686. The
- * lowered C alignment and alias permission also cover arbitrary row pitch. */
-typedef uint32_t fb_word __attribute__((aligned(1), may_alias));
-typedef uint16_t fb_half __attribute__((aligned(1), may_alias));
-
-static void pixel(uint8_t *p, unsigned bytes, uint32_t colour)
-{
-    if (bytes == 2)
-        *(fb_half *)p = (uint16_t)colour;
-    else if (bytes == 4)
-        *(fb_word *)p = colour;
-    else {
-        p[0] = (uint8_t)colour;
-        p[1] = (uint8_t)(colour >> 8);
-        p[2] = (uint8_t)(colour >> 16);
-    }
-}
-
-/* Intel SDM Vol. 3A, 253668-084US, sections 12.3/12.3.1 and 9.2.5:
- * https://cdrdv2-public.intel.com/825758/253668-sdm-vol-3a.pdf
- * Consecutive WC writes combine; partially filled buffers drain at the next
- * serializing event. A compiler barrier per row preserves generated stores,
- * without volatile per pixel or a hardware fence per row. Keep the existing
- * framebuffer_write_drain() before ownership release and the end timestamp. */
-static void row_written(void) { __asm__ volatile("" ::: "memory"); }
-
-/* Both pointers must be dword aligned; count is in dwords, not bytes. */
-static void row_copy(uint8_t *dst, const void *src, size_t count)
-{
-    __asm__ volatile("cld\n\trep movsl" : "+D"(dst), "+S"(src), "+c"(count) : : "memory", "cc");
-}
-
-static void row_fill(uint8_t *dst, uint32_t colour, size_t count)
-{
-    __asm__ volatile("cld\n\trep stosl" : "+D"(dst), "+c"(count) : "a"(colour) : "memory", "cc");
-}
-
-static void present_xrgb_row(uint8_t *dst, const uint8_t *src, unsigned width)
-{
-    uint32_t used = 0;
-    for (unsigned x = 0; x < width; x++) used |= ((const fb_word *)src)[x];
-    if (!(used & 0xff000000u)) {
-        row_copy(dst, src, width);
-        return;
-    }
-    /* X is ignored by the public surface contract. Normalize in RAM, never
-     * by reading or masking a destination word in the WC framebuffer. */
-    uint32_t pixels[64];
-    while (width) {
-        unsigned n = width > ARRAY_SIZE(pixels) ? ARRAY_SIZE(pixels) : width;
-        for (unsigned x = 0; x < n; x++) pixels[x] = ((const fb_word *)src)[x] & 0xffffffu;
-        row_copy(dst, pixels, n);
-        src += n * 4; dst += n * 4; width -= n;
-    }
-}
-
-static uint16_t pack_565(uint32_t rgb)
-{
-    return (uint16_t)(((rgb >> 8) & 0xf800u) | ((rgb >> 5) & 0x07e0u) | ((rgb >> 3) & 0x001fu));
-}
-
-static void present_565_row(uint8_t *dst, const uint8_t *src, unsigned width)
-{
-    if ((uintptr_t)dst & 2u) {
-        pixel(dst, 2, pack_565(*(const fb_word *)src));
-        dst += 2; src += 4; width--;
-    }
-    uint16_t pixels[64] __attribute__((aligned(4)));
-    while (width >= 2) {
-        unsigned n = width > ARRAY_SIZE(pixels) ? ARRAY_SIZE(pixels) : width & ~1u;
-        for (unsigned x = 0; x < n; x++) pixels[x] = pack_565(((const fb_word *)src)[x]);
-        row_copy(dst, pixels, n / 2);
-        src += n * 4; dst += n * 2; width -= n;
-    }
-    if (width) pixel(dst, 2, pack_565(*(const fb_word *)src));
-}
 
 int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, const struct fb_rect *r)
 {
@@ -450,29 +374,13 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
         return 0;
     if (!present_begin(d, &c))
         return -EBUSY;
-    if (d == &device && acceleration && acceleration->sync(acceleration->ctx)) {
+    if (d == &device && acceleration && (acceleration->sync(acceleration->ctx) || !acceleration->cpu_ready(acceleration->ctx))) {
         (void)present_end(d, &c, false); return -EIO;
     }
     bool timed = d == &device && g_cpu_tsc && g_tsc_per_ms &&
                  !c.x && !c.y && c.width == (int32_t)d->width && c.height == (int32_t)d->height;
     uint64_t start = timed ? framebuffer_cycles() : 0;
-    uint32_t sx = (uint32_t)((int64_t)c.x - r->x), sy = (uint32_t)((int64_t)c.y - r->y);
-    const struct pixel_layout l = pixel_layout(d);
-    bool xrgb = l.bytes == 4 && !l.red_shift && l.red_pos == 16 &&
-                !l.green_shift && l.green_pos == 8 && !l.blue_shift && !l.blue_pos;
-    bool rgb565 = l.bytes == 2 && l.red_shift == 3 && l.red_pos == 11 &&
-                  l.green_shift == 2 && l.green_pos == 5 && l.blue_shift == 3 && !l.blue_pos;
-    for (int32_t y = 0; y < c.height; y++) {
-        const uint8_t *sp = (const uint8_t *)s->pixels + (sy + (uint32_t)y) * s->pitch + sx * 4;
-        uint8_t *dp = d->mapped + (c.y + (uint32_t)y) * d->pitch + (uint32_t)c.x * l.bytes;
-        if (xrgb && !(((uintptr_t)sp | (uintptr_t)dp) & 3u))
-            present_xrgb_row(dp, sp, (unsigned)c.width);
-        else if (rgb565 && !((uintptr_t)dp & 1u))
-            present_565_row(dp, sp, (unsigned)c.width);
-        else for (int32_t x = 0; x < c.width; x++)
-            pixel(dp + (uint32_t)x * l.bytes, l.bytes, pack_layout(&l, ((const fb_word *)sp)[x]));
-        row_written();
-    }
+    swdib_present(d, s, r, &c);
     uint64_t end = present_end(d, &c, timed);
     if (timed) {
         uint64_t cycles = end - start;
@@ -480,7 +388,7 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
         full_last_us = (cycles / g_tsc_per_ms) * 1000 +
                        (cycles % g_tsc_per_ms) * 1000 / g_tsc_per_ms;
         full_count++;
-        full_bytes += (uint64_t)(uint32_t)c.width * (uint32_t)c.height * l.bytes;
+        full_bytes += (uint64_t)(uint32_t)c.width * (uint32_t)c.height * (d->bpp / 8);
         full_total_us += full_last_us;
         if (full_last_us > full_max_us) full_max_us = full_last_us;
         uint64_t now = g_ticks;
@@ -507,26 +415,17 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
         return 0;
     if (!present_begin(d, &c))
         return -EBUSY;
-    unsigned bytes = d->bpp / 8;
-    colour = pack(d, colour);
-    if (d == &device && acceleration) {
+    colour = swdib_pack(d, colour);
+    if (d == &device) framebuffer_write_drain();
+    if (d == &device && acceleration && !accel_initializing && (acceleration->capabilities(acceleration->ctx)&1u)) {
         int err = acceleration->fill_rect(acceleration->ctx, &c, colour);
-        if (!err) { (void)present_end(d, &c, false); return 0; }
-        if (acceleration->sync(acceleration->ctx)) { (void)present_end(d, &c, false); return -EIO; }
+        if (!err) { display_driver_count(CIUKI_ENGINE_FILL, true); (void)present_end(d, &c, false); return 0; }
     }
-    for (int32_t y = 0; y < c.height; y++) {
-        uint8_t *dp = d->mapped + (c.y + (uint32_t)y) * d->pitch + (uint32_t)c.x * bytes;
-        unsigned width = (unsigned)c.width;
-        if (bytes == 4 && !((uintptr_t)dp & 3u))
-            row_fill(dp, colour, width);
-        else if (bytes == 2 && !((uintptr_t)dp & 1u)) {
-            if ((uintptr_t)dp & 2u) { pixel(dp, 2, colour); dp += 2; width--; }
-            row_fill(dp, colour | (colour << 16), width / 2);
-            if (width & 1u) pixel(dp + (width & ~1u) * 2, 2, colour);
-        } else for (int32_t x = 0; x < c.width; x++)
-            pixel(dp + (uint32_t)x * bytes, bytes, colour);
-        row_written();
+    if (d == &device && acceleration && (acceleration->sync(acceleration->ctx) || !acceleration->cpu_ready(acceleration->ctx))) {
+        (void)present_end(d,&c,false); return -EIO;
     }
+    swdib_fill(d, &c, colour);
+    if (d == &device) display_driver_count(CIUKI_ENGINE_FILL, false);
     (void)present_end(d, &c, false);
     return 0;
 }
@@ -546,8 +445,8 @@ int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst)
     if (changing) return -EBUSY;
     kmutex_lock(&presenter);
     int rc = live() ? fbdev_present_to(&device, src, dst) : -ENODEV;
-    kmutex_unlock(&presenter);
-    if (savage2d_record) savage2d_record();
+    presenter_unlock();
+    display_driver_record();
     return rc;
 }
 
@@ -558,7 +457,8 @@ int fbdev_fill(const struct fb_rect *rect, uint32_t colour)
     if (changing) return -EBUSY;
     kmutex_lock(&presenter);
     int rc = live() ? fbdev_fill_to(&device, rect, colour) : -ENODEV;
-    kmutex_unlock(&presenter);
+    presenter_unlock();
+    display_driver_record();
     return rc;
 }
 
@@ -573,7 +473,7 @@ int fbdev_present_native(uint32_t generation, unsigned x, unsigned y,
     else if (x >= device.width || count > device.width-x || y >= device.height) e = -EINVAL;
     else if (!present_begin(&device,&r)) e = -EBUSY;
     else {
-        if (acceleration && acceleration->sync(acceleration->ctx)) e = -EIO;
+        if (acceleration && (acceleration->sync(acceleration->ctx) || !acceleration->cpu_ready(acceleration->ctx))) e = -EIO;
         if (!e) {
             unsigned bytes = device.bpp/8;
             uint8_t *dst = device.mapped+y*device.pitch+x*bytes;
@@ -582,7 +482,7 @@ int fbdev_present_native(uint32_t generation, unsigned x, unsigned y,
         }
         (void)present_end(&device,&r,false);
     }
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     return e;
 }
 
@@ -600,20 +500,26 @@ int fbdev_copy_to(const struct fb_device *d, const struct fb_rect *r, int32_t x,
     if (r->y < busy.y) busy.y = r->y;
     if (!present_begin(d, &busy)) return -EBUSY;
     if (d == &device && acceleration && (acceleration->capabilities(acceleration->ctx) & 1u)) {
+        framebuffer_write_drain();
         int e = acceleration->copy_rect(acceleration->ctx,r,x,y);
+        if (!e) display_driver_count(CIUKI_ENGINE_COPY, true);
+        if (e != -EOPNOTSUPP) {
         (void)present_end(d,&busy,false);
         /* A partially executed overlapping blit has lost its original source.
          * Caller must rebuild destination from its authoritative RAM surface. */
         return e ? -EAGAIN : 0;
+        }
     }
-    if (d == &device && acceleration && acceleration->sync(acceleration->ctx)) {
+    if (d == &device && acceleration && (acceleration->sync(acceleration->ctx) || !acceleration->cpu_ready(acceleration->ctx))) {
         (void)present_end(d,&busy,false); return -EIO;
     }
-    /* LFB reads are uncached, even when WC accelerates its stores. The
-     * desktop's screen_copy/scroll_copy recovery rebuilds scene damage from
-     * the authoritative RAM surface and re-presents it after -EAGAIN. */
+    if (d == &device && acceleration && !acceleration->cpu_ready(acceleration->ctx)) {
+        (void)present_end(d,&busy,false); return -EIO;
+    }
+    swdib_copy(d, r, x, y);
+    if (d == &device) display_driver_count(CIUKI_ENGINE_COPY, false);
     (void)present_end(d,&busy,false);
-    return -EAGAIN;
+    return 0;
 }
 
 int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *out)
@@ -625,11 +531,28 @@ int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *out)
     if (!err) {
         memset(out, 0, sizeof(*out));
         out->generation = device.generation;
-        out->capabilities = acceleration ? acceleration->capabilities(acceleration->ctx) : 0;
-        if (!accel_initializing && savage2d_snapshot) savage2d_snapshot(out);
+        out->capabilities = fbdev_native_capabilities();
+        if (!accel_initializing && adapter && adapter->snapshot) adapter->snapshot(out);
     }
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     return err;
+}
+
+int fbdev_engine_info(uint32_t generation, struct ciuki_display_engine_info *out)
+{
+    if (!out) return -EINVAL;
+    if (changing) return -EBUSY;
+    kmutex_lock(&presenter);
+    int e = !live() ? -ENODEV : generation != device.generation ? -EAGAIN : 0;
+    if (!e) {
+        display_driver_info(out);
+        out->generation = device.generation;
+        out->capabilities = fbdev_native_capabilities();
+        out->cpu_ready = !acceleration || acceleration->cpu_ready(acceleration->ctx);
+        if (accel_initializing) out->ready = out->native_used = out->capabilities = 0;
+    }
+    presenter_unlock();
+    return e;
 }
 
 /* f2-92: the display service's engine requests wait for completion in
@@ -637,16 +560,22 @@ int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *out)
  * may be preempted; the request keeps its `drawing` claim (no CPU writer,
  * no console pixels) and accel_inflight (no mode change), so no other
  * writer can reach the LFB or the BCI meanwhile. */
+static uint64_t validate_deadline;
+static bool (*validate_cancel)(void *);
+static void *validate_context;
 static int accel_pause(void *arg)
 {
     (void)arg;
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     if (grants_display_yield) grants_display_yield();
     kmutex_lock(&presenter);
+    if (validate_deadline && g_ticks >= validate_deadline) return -ETIMEDOUT;
+    if (validate_cancel && validate_cancel(validate_context)) return -EINTR;
     return 0;
 }
 static void service_begin(void)
 {
+    framebuffer_write_drain();
     accel_inflight = true;
     if (acceleration && acceleration->set_pause) acceleration->set_pause(acceleration->ctx, accel_pause, 0);
 }
@@ -655,8 +584,7 @@ static void service_end(void)
     if (acceleration && acceleration->set_pause) acceleration->set_pause(acceleration->ctx, 0, 0);
     accel_inflight = false;
 }
-/* The first write or offscreen use proves both on the hardware (savage2d
- * verify_write); caller holds the presenter lock and a drawing claim. */
+/* The first write or offscreen use proves both through verify_write; caller holds the presenter lock and a drawing claim. */
 static void verify_writes(void)
 {
     if (!acceleration || !acceleration->verify_write || !(acceleration->capabilities(acceleration->ctx) & 1u)) return;
@@ -689,9 +617,10 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
     kmutex_lock(&presenter);
     int err = -ENODEV;
     if (!live()) goto done;
+    if ((accel_inflight || accel_initializing) && q->operation != CIUKI_ACCEL_QUERY) { err = -EBUSY; goto done; }
     if (q->generation != device.generation) { err = -EAGAIN; goto done; }
     if (q->operation == CIUKI_ACCEL_QUERY) {
-        err = acceleration ? (int)acceleration->capabilities(acceleration->ctx) : 0; goto done;
+        err = (int)fbdev_native_capabilities(); goto done;
     }
     if (q->operation == CIUKI_ACCEL_OFFSCREEN) {
         struct fb_rect busy = {0,0,(int32_t)device.width,(int32_t)device.height};
@@ -729,6 +658,7 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
             if (!present_begin(&device,&busy)) err = -EBUSY;
             else {
                 err = acceleration->copy_rect(acceleration->ctx,&r,c.dst_x,c.dst_y) ? -EAGAIN : 0;
+                if (!err) display_driver_count(CIUKI_ENGINE_COPY,true);
                 (void)present_end(&device,&busy,false);
             }
         }
@@ -746,17 +676,12 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
         if (!clip(&device,&r,&c)) { err=0; goto done; }
         if (!present_begin(&device,&c)) { err=-EBUSY; goto done; }
         service_begin();
-        err=acceleration ? acceleration->pattern_rect(acceleration->ctx,&c,q->pattern,pack(&device,q->colour),pack(&device,q->background)) : -ENODEV;
+        err=acceleration && (acceleration->capabilities(acceleration->ctx)&1u) && acceleration->pattern_rect ? acceleration->pattern_rect(acceleration->ctx,&c,q->pattern,swdib_pack(&device,q->colour),swdib_pack(&device,q->background)) : -EOPNOTSUPP;
+        if (!err) display_driver_count(CIUKI_ENGINE_PATTERN, true);
         service_end();
-        if (err && (!acceleration || !acceleration->sync(acceleration->ctx))) {
-            unsigned bytes=device.bpp/8;
-            uint32_t fg=pack(&device,q->colour), bg=pack(&device,q->background);
-            for (int32_t y=c.y; y<c.y+c.height; y++) {
-                for (int32_t x=c.x; x<c.x+c.width; x++)
-                    pixel(device.mapped+(uint32_t)y*device.pitch+(uint32_t)x*bytes,bytes,
-                          q->pattern[y&7] & (0x80u >> (x&7)) ? fg : bg);
-                row_written();
-            }
+        if (err && (!acceleration || (!acceleration->sync(acceleration->ctx) && acceleration->cpu_ready(acceleration->ctx)))) {
+            swdib_pattern(&device,&c,q->pattern,swdib_pack(&device,q->colour),swdib_pack(&device,q->background));
+            display_driver_count(CIUKI_ENGINE_PATTERN, false);
             err=0;
         }
         (void)present_end(&device,&c,false); goto done;
@@ -767,15 +692,16 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
     if (q->operation == CIUKI_ACCEL_CURSOR_SET) {
         struct accel_cursor cursor;
         memcpy(cursor.mask,q->cursor_mask,sizeof(cursor.mask)); memcpy(cursor.image,q->cursor_image,sizeof(cursor.image));
-        cursor.foreground=pack(&device,q->colour); cursor.background=pack(&device,q->background);
-        err=acceleration->cursor_set(acceleration->ctx,&cursor);
+        cursor.foreground=swdib_pack(&device,q->colour); cursor.background=swdib_pack(&device,q->background);
+        err=acceleration->cursor_show(acceleration->ctx,false);
+        if (!err) err=acceleration->cursor_set(acceleration->ctx,&cursor);
     } else if (q->operation == CIUKI_ACCEL_CURSOR_MOVE)
         err=acceleration->cursor_move(acceleration->ctx,q->rect.dst_x,q->rect.dst_y);
     else err=acceleration->cursor_show(acceleration->ctx,q->colour!=0);
     (void)present_end(&device,&busy,false);
 done:
-    kmutex_unlock(&presenter);
-    if (savage2d_record) savage2d_record();
+    presenter_unlock();
+    display_driver_record();
     return err;
 }
 
@@ -796,6 +722,7 @@ int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const stru
     kmutex_lock(&presenter);
     int err = -ENODEV;
     if (!live()) goto done;
+    if (accel_inflight || accel_initializing) { err = -EBUSY; goto done; }
     if (generation != device.generation) { err = -EAGAIN; goto done; }
     struct fb_rect busy = {0,0,(int32_t)device.width,(int32_t)device.height};
     if (!present_begin(&device,&busy)) { err = -EBUSY; goto done; }
@@ -814,48 +741,167 @@ int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const stru
         if (x1 <= c.x || y1 <= c.y) { err = 0; (void)present_end(&device,&busy,false); goto done; }
         c.width = (int32_t)(x1 - c.x); c.height = (int32_t)(y1 - c.y);
     }
-    /* In place, left to right: a native pixel never outgrows its source. */
-    const struct pixel_layout l = pixel_layout(&device);
-    for (int32_t y = 0; y < dst->height; y++) {
-        uint8_t *row = (uint8_t *)rows + (uint32_t)y * stride;
-        for (int32_t x = 0; x < dst->width; x++) {
-            uint32_t v = pack_layout(&l, ((const fb_word *)row)[x]);
-            if (l.bytes == 4) ((fb_word *)row)[x] = v;
-            else pixel(row + (uint32_t)x * l.bytes, l.bytes, v);
-        }
-    }
+    swdib_convert(&device, dst, rows, stride);
     if (acceleration && acceleration->write_rect && (acceleration->capabilities(acceleration->ctx) & 1u) &&
         (!acceleration->verify_write || !acceleration->verify_write(acceleration->ctx))) {
         service_begin();
         err = acceleration->write_rect(acceleration->ctx, dst, &c, rows, stride);
         service_end();
-        if (!err) { (void)present_end(&device,&busy,false); goto done; }
+        if (!err) { display_driver_count(CIUKI_ENGINE_WRITE, true); (void)present_end(&device,&busy,false); goto done; }
     }
     if (band) { err = -EAGAIN; (void)present_end(&device,&busy,false); goto done; }
-    if (acceleration && acceleration->sync(acceleration->ctx)) {
+    if (acceleration && (acceleration->sync(acceleration->ctx) || !acceleration->cpu_ready(acceleration->ctx))) {
         err = -EIO; (void)present_end(&device,&busy,false); goto done;
     }
-    for (int32_t y = c.y; y < c.y + c.height; y++) {
-        const uint8_t *src = (const uint8_t *)rows + (uint32_t)(y - dst->y) * stride + (uint32_t)(c.x - dst->x) * l.bytes;
-        uint8_t *dp = device.mapped + (uint32_t)y * device.pitch + (uint32_t)c.x * l.bytes;
-        if (l.bytes == 4 && !(((uintptr_t)dp | (uintptr_t)src) & 3u)) row_copy(dp, src, (size_t)c.width);
-        else for (uint32_t i = 0; i < (uint32_t)c.width * l.bytes; i++) dp[i] = src[i];
-        row_written();
-    }
+    swdib_write(&device, dst, &c, rows, stride);
+    display_driver_count(CIUKI_ENGINE_WRITE, false);
     (void)present_end(&device,&busy,false);
     err = 1;
 done:
-    kmutex_unlock(&presenter);
-    if (savage2d_record) savage2d_record();
+    presenter_unlock();
+    display_driver_record();
     return err;
+}
+
+/* No calls to the software-dispatch wrappers below: a pass proves native
+ * execution. Only a small saved visible block is read, under exclusive
+ * drawing ownership and after idle. Cursor evidence belongs to selftest. */
+int fbdev_accel_validate(uint64_t deadline, bool (*cancel)(void *), void *ctx, uint32_t *tested)
+{
+    if (!tested) return -EINVAL;
+    *tested=0;
+    if (g_ticks>=deadline) return -ETIMEDOUT;
+    if (cancel && cancel(ctx)) return -EINTR;
+    const char *why;
+    if (display_accel_disabled(&why)) return -EOPNOTSUPP;
+    kmutex_lock(&presenter);
+    int e=-EOPNOTSUPP;
+    if (!live() || accel_initializing || accel_inflight || !acceleration ||
+        !(acceleration->capabilities(acceleration->ctx)&1u) || device.width<16 || device.height<16) goto unlock;
+    struct fb_rect block={0,0,16,16};
+    if (!present_begin(&device,&block)) { e=-EBUSY; goto unlock; }
+    validate_deadline=deadline; validate_cancel=cancel; validate_context=ctx;
+    service_begin();
+    uint8_t saved[16*16*4], reference[16*16*4];
+    uint32_t upload[16*16];
+    unsigned bytes=device.bpp/8;
+    struct fb_device ref=device; ref.width=ref.height=16; ref.pitch=16*bytes;
+    ref.size=16*ref.pitch; ref.mapped=reference;
+    bool saved_ok=false;
+    e=acceleration->sync(acceleration->ctx);
+    if (e || !fbdev_cpu_ready()) { e=-EIO; goto finish; }
+    for (unsigned y=0;y<16;y++) memcpy(saved+y*ref.pitch,device.mapped+y*device.pitch,ref.pitch);
+    memcpy(reference,saved,ref.size); saved_ok=true;
+    for (unsigned op=0;op<5;op++) {
+        if (g_ticks>=deadline || (cancel && cancel(ctx))) { e=g_ticks>=deadline ? -ETIMEDOUT : -EINTR; break; }
+        framebuffer_write_drain();
+        unsigned kind;
+        struct fb_rect source={0,0,12,12};
+        if (!op) {
+            uint32_t colour=swdib_pack(&device,0x36a5e7);
+            swdib_fill(&ref,&block,colour); kind=CIUKI_ENGINE_FILL;
+            e=acceleration->fill_rect(acceleration->ctx,&block,colour);
+            if (!e) {
+                struct fb_rect seed={0,0,4,4};
+                uint32_t contrasting=swdib_pack(&device,0xcb7123);
+                swdib_fill(&ref,&seed,contrasting);
+                e=acceleration->fill_rect(acceleration->ctx,&seed,contrasting);
+            }
+        } else if (op==1 || op==2) {
+            if (op==2) source.x=source.y=4;
+            int dst=op==1 ? 4 : 0;
+            swdib_copy(&ref,&source,dst,dst); kind=CIUKI_ENGINE_COPY;
+            e=acceleration->copy_rect(acceleration->ctx,&source,dst,dst);
+        } else if (op==3) {
+            if (!acceleration->pattern_rect) continue;
+            const uint8_t pattern[8]={0x81,0x42,0x24,0x18,0x18,0x24,0x42,0x81};
+            uint32_t fg=swdib_pack(&device,0x12c456), bg=swdib_pack(&device,0xd73491);
+            swdib_pattern(&ref,&block,pattern,fg,bg); kind=CIUKI_ENGINE_PATTERN;
+            e=acceleration->pattern_rect(acceleration->ctx,&block,pattern,fg,bg);
+        } else {
+            if (!acceleration->write_rect) continue;
+            if (acceleration->verify_write && acceleration->verify_write(acceleration->ctx)) { e=-EIO; break; }
+            for (unsigned i=0;i<ARRAY_SIZE(upload);i++) upload[i]=i*34571u;
+            swdib_convert(&ref,&block,upload,16*4);
+            swdib_write(&ref,&block,&block,upload,16*4); kind=CIUKI_ENGINE_WRITE;
+            e=acceleration->write_rect(acceleration->ctx,&block,&block,upload,16*4);
+        }
+        if (e) break; /* refusal is recorded as unsupported, never replayed */
+        e=acceleration->sync(acceleration->ctx);
+        if (e || !fbdev_cpu_ready()) { e=-EIO; break; }
+        for (unsigned y=0;y<16;y++) if (memcmp(reference+y*ref.pitch,device.mapped+y*device.pitch,ref.pitch)) { e=-EIO; break; }
+        if (e) break;
+        *tested|=1u<<kind;
+    }
+    if (saved_ok && !acceleration->sync(acceleration->ctx) && fbdev_cpu_ready()) {
+        for (unsigned y=0;y<16;y++) memcpy(device.mapped+y*device.pitch,saved+y*ref.pitch,ref.pitch);
+        framebuffer_write_drain();
+    } else e=-EIO;
+finish:
+    service_end(); validate_deadline=0; validate_cancel=0; validate_context=0;
+    if (e && e!=-EOPNOTSUPP && adapter && adapter->quarantine) {
+        accel_blocked=true;
+        adapter->quarantine("native_comparison_failed");
+        const struct accel_ops *guard=adapter->fallback ? adapter->fallback() : acceleration;
+        if (guard) acceleration=guard;
+    }
+    (void)present_end(&device,&block,false);
+unlock:
+    presenter_unlock();
+    display_driver_record();
+    return e;
+}
+int fbdev_accel_diagnostic(struct vfs *vfs, uint64_t deadline, bool (*cancel)(void *), void *ctx, uint32_t *tested)
+{
+    if (!(g_boot.flags & CBI_F_HW_CHECK)) return -EPERM;
+    const char *why;
+    if (display_accel_disabled(&why)) return -EOPNOTSUPP;
+    if (!tested) return -EINVAL;
+    *tested=0;
+    if (g_ticks>=deadline) return -ETIMEDOUT;
+    if (cancel && cancel(ctx)) return -EINTR;
+    /* No cursor-state export exists for restoring an arbitrary live owner's
+     * shape/position. Diagnostics use only their own fresh activation. */
+    if (acceleration) return -EBUSY;
+    if (!acceleration) {
+        if (accel_marker_task || accel_queued || accel_initializing || accel_blocked) return -EBUSY;
+        adapter=display_driver_bind(&device);
+        if (!adapter || !adapter->eligible || !adapter->eligible(&device)) return -EOPNOTSUPP;
+        accel_vfs=vfs;
+        if (!adapter->attempt_begin || adapter->attempt_begin(vfs)) return -EIO;
+        kwait_init(&accel_marker_wait);
+        accel_queued=true;
+        accel_initialize();
+        accel_marker_run(); /* clear/status I/O, outside presenter */
+    }
+    int e=fbdev_accel_validate(deadline,cancel,ctx,tested);
+    kmutex_lock(&presenter);
+    if (!e && acceleration && (acceleration->capabilities(acceleration->ctx)&2u)) {
+        struct fb_rect busy={0,0,(int32_t)device.width,(int32_t)device.height};
+        if (!present_begin(&device,&busy)) e=-EBUSY;
+        else {
+            service_begin();
+            e=adapter->cursor_test ? adapter->cursor_test(acceleration,deadline,cancel,ctx) : -EOPNOTSUPP;
+            service_end();
+            if (!e) *tested|=DISPLAY_CHECK_CURSOR;
+            (void)present_end(&device,&busy,false);
+        }
+    }
+    if (acceleration) {
+        int stop=acceleration->stop(acceleration->ctx);
+        if (!stop) acceleration=0;
+        else { accel_blocked=true; e=-EIO; }
+    }
+    presenter_unlock();
+    return e;
 }
 
 void fbdev_cursor_hide(void)
 {
     kmutex_lock(&presenter);
-    if (acceleration && !changing && (acceleration->capabilities(acceleration->ctx)&2u))
+    if (acceleration && !changing && !accel_inflight && (acceleration->capabilities(acceleration->ctx)&2u))
         (void)acceleration->cursor_show(acceleration->ctx,false);
-    kmutex_unlock(&presenter);
+    presenter_unlock();
 }
 
 /* VBE 3.0 functions 01h/02h: a mode can change its LFB address. Reject RAM
@@ -903,10 +949,10 @@ int fbdev_change_begin(void)
     changing = true; /* stop submissions before waiting for the last presenter */
     kmutex_lock(&presenter);
     if (accel_initializing || accel_inflight) {
-        changing = false; kmutex_unlock(&presenter); return -EBUSY;
+        changing = false; presenter_unlock(); return -EBUSY;
     }
     if (acceleration && acceleration->stop(acceleration->ctx)) {
-        changing = false; kmutex_unlock(&presenter); return -EIO;
+        changing = false; presenter_unlock(); return -EIO;
     }
     acceleration=0; /* successful stop may have revoked register mappings */
     if (!change_window) {
@@ -917,10 +963,10 @@ int fbdev_change_begin(void)
         }
         change_capacity = PAGE_ALIGN_UP(capacity + PAGE_SIZE); /* nonaligned physical base */
         change_window = vmm_reserve_mmio(change_capacity);
-        if (!change_window) { changing = false; kmutex_unlock(&presenter); return -ENOMEM; }
+        if (!change_window) { changing = false; presenter_unlock(); return -ENOMEM; }
     }
     int e = registry_quiesce(device.handle, device.generation, change_idle);
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     if (e) { changing = false; device.present = false; }
     return e;
 }
@@ -952,6 +998,6 @@ void fbdev_change_end(void)
 {
     kmutex_lock(&presenter);
     changing = false;
-    kmutex_unlock(&presenter);
+    presenter_unlock();
     if (accel_vfs) fbdev_accel_schedule(accel_vfs);
 }

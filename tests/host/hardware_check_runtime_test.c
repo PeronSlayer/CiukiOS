@@ -107,12 +107,12 @@ const struct pci_func *pci_get(unsigned i) { return i ? 0 : &gpu; }
 bool savage2d_supported(const struct pci_func *p) { return p==&gpu; }
 int savage2d_check_begin(struct vfs *v,bool *prior) { assert(v==&disk.vfs); *prior=retained; return 0; }
 int savage2d_attempt_end(struct vfs *v) { assert(v==&disk.vfs); clears++; return 0; }
-int savage2d_hardware_sweep(uint64_t end,savage_sweep_line line,void *ctx,struct savage_sweep_result *out)
+int savage2d_hardware_sweep(uint64_t end,void (*line)(void *,const char *),void *ctx,struct display_selftest_result *out)
 {
     assert(end==g_ticks+5000);
     sweep_calls++;
     assert(sweep_calls<3 && (sweep_calls==1 || winner && swept && fb.bpp==16));
-    *out=(struct savage_sweep_result){.tried=12,.passed=2,.skipped=84,.completed=96,.first=1,.restored=true};
+    *out=(struct display_selftest_result){.tried=12,.passed=2,.skipped=84,.completed=96,.first=1,.restored=true};
     if (scenario==2 && sweep_calls==1) out->passed=0,out->first=-1;
     if (scenario==3 && sweep_calls==1) out->error=-ETIMEDOUT;
     if (scenario==4 && sweep_calls==2) out->restored=false,out->error=-EIO;
@@ -120,6 +120,12 @@ int savage2d_hardware_sweep(uint64_t end,savage_sweep_line line,void *ctx,struct
     winner=out->first>=0;
     return out->error;
 }
+static const struct display_driver diagnostic_driver={.name="Recording adapter",.check_begin=savage2d_check_begin,
+    .attempt_end=savage2d_attempt_end,.selftest=savage2d_hardware_sweep};
+bool display_accel_disabled(const char **reason) { (void)reason; return false; }
+const struct display_driver *display_driver_bind(const struct fb_device *fb) { (void)fb; return &diagnostic_driver; }
+int fbdev_accel_diagnostic(struct vfs *v,uint64_t until,bool (*cancel)(void *),void *ctx,uint32_t *tested)
+{ (void)v;(void)until;(void)cancel;(void)ctx;*tested=15;return 0; }
 int display_check_begin(uint16_t id)
 {
     assert(id==0x117 && winner && sweep_calls==1 && !swept);
@@ -191,8 +197,8 @@ int main(void)
     puts("PASS f1-100 H keyboard/EC keys: one EC refresh request per second during the 5 s window, none without the EC");
     for (int s=0;s<=6;s++) {
         fixture(); scenario=s; retained=s==1;
-        savage_check(15000,&out);
-        if (s<=1) assert(out.status==HW_PASS && sweep_calls==2 && restores==1 && fb.bpp==32 && clears==!retained);
+        accelerator_check(15000,&out);
+        if (s<=1) assert(out.status==(retained ? HW_SKIP : HW_PASS) && sweep_calls==2 && restores==1 && fb.bpp==32 && clears==!retained);
         else if (s<=3) assert(out.status==HW_FAIL && sweep_calls==1 && !mode_calls);
         else if (s==4) assert(out.status==HW_FAIL && sweep_calls==2 && !restores && !clears);
         else if (s==5) assert(out.status==HW_FAIL && sweep_calls==1 && mode_calls==1 && !restores);

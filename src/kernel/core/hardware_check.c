@@ -10,7 +10,7 @@
 #include <ciuki/i8042.h>
 #include <ciuki/timing.h>
 #include <ciuki/display.h>
-#include <ciuki/savage2d.h>
+#include <ciuki/display_driver.h>
 #include <ciuki/audio.h>
 #include <ciuki/thinkpad_ec.h>
 #include <ciuki/bootlog.h>
@@ -195,22 +195,23 @@ static void serial_check(uint64_t until,struct hw_check_result *out)
         accepted,sent,b.resent-a.resent,b.dropped-a.dropped,
         b.periodic_dropped-a.periodic_dropped,b.evidence_dropped-a.evidence_dropped,b.queued);
 }
-static void savage_check(uint64_t until,struct hw_check_result *out)
+static void accelerator_check(uint64_t until,struct hw_check_result *out)
 {
     const struct fb_device original=*fbdev_get();
-    bool present=false;
-    for (unsigned i=0;i<pci_count();i++) if (savage2d_supported(pci_get(i))) present=true;
-    if (!present) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"Savage absent"); return; }
+    const char *reason;
+    if (display_accel_disabled(&reason)) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"2D disabled: %s",reason); return; }
+    const struct display_driver *driver=display_driver_bind(&original);
+    if (!driver || !driver->selftest || !driver->check_begin) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"No native display self-test"); return; }
+    page_line(0,driver->name);
     struct storage *storage=storage_get();
     bool retained_marker=false;
-    if (savage2d_check_begin(&storage->vfs,&retained_marker)) {
+    if (driver->check_begin(&storage->vfs,&retained_marker)) {
         out->status=HW_FAIL; ksnprintf(out->detail,sizeof(out->detail),"durable attempt unavailable/session quarantined"); return;
     }
-    page_line(0,"CR45 c0: reserved bits; cursor enable is bit 0. MM8136 07->00: unresolved; test pixels.");
-    struct savage_sweep_result a,b={.first=-1};
-    int e=savage2d_hardware_sweep(deadline_after_ms(5000),page_line,0,&a);
+    struct display_selftest_result a,b={.first=-1};
+    int e=driver->selftest(deadline_after_ms(5000),page_line,0,&a);
     char stage[176];
-    ksnprintf(stage,sizeof(stage),"Savage original-depth result: bpp=%u first=%d passed=%u/%u done=%u skip=%u timeout=%u restored=%u error=%d",
+    ksnprintf(stage,sizeof(stage),"Native 2D original-depth result: bpp=%u first=%d passed=%u/%u done=%u skip=%u timeout=%u restored=%u error=%d",
         original.bpp,a.first,a.passed,a.tried,a.completed,a.skipped,a.timeouts,a.restored,e);
     page_line(0,stage); /* publish before making any firmware request */
     bool restored=a.restored, changed=false, sweep_started=false; int mode_error=0;
@@ -221,19 +222,19 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
             if (m->width==1024 && m->height==768 && m->bpp==16 && m->linear) { mode=m->id; break; }
         }
         if (mode && mode!=original.mode_id) {
-            page_line(0,"Savage stage=16bpp-mode-set (display watchdog armed)");
+            page_line(0,"Native 2D stage=16bpp-mode-set (display watchdog armed)");
             mode_error=display_check_begin(mode); changed=!mode_error;
             if (changed) {
                 e=display_check_sweep_begin();
                 if (!e) {
                     sweep_started=true;
-                    page_line(0,"Savage stage=16bpp-sweep");
-                    e=savage2d_hardware_sweep(deadline_after_ms(5000),page_line,0,&b);
+                    page_line(0,"Native 2D stage=16bpp-sweep");
+                    e=driver->selftest(deadline_after_ms(5000),page_line,0,&b);
                     display_check_sweep_end(b.restored);
                 }
             }
             int restore=0;
-            page_line(0,"Savage stage=desktop-restore");
+            page_line(0,"Native 2D stage=desktop-restore");
             if (changed) restore=(!sweep_started || b.restored) ? display_check_end() : -EIO;
             else {
                 /* begin already attempted rollback on a failed mode set.
@@ -247,8 +248,8 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
         } else if (original.bpp==16) b=a;
         else mode_error=-EOPNOTSUPP;
     } else mode_error=e ? e : a.first<0 ? -EIO : -ETIMEDOUT;
-    page_line(0,restored ? "Savage stage=desktop-restored" : "Savage stage=desktop-restore-failed");
-    if (restored && !retained_marker) { int clear=savage2d_attempt_end(&storage->vfs); if (clear && !e) e=clear; }
+    page_line(0,restored ? "Native 2D stage=desktop-restored" : "Native 2D stage=desktop-restore-failed");
+    if (restored && !retained_marker) { int clear=driver->attempt_end(&storage->vfs); if (clear && !e) e=clear; }
     out->status=!e && !mode_error && a.passed && b.passed && restored ? HW_PASS : HW_FAIL;
     char first_a[12],first_b[12];
     if (a.first<0) ksnprintf(first_a,sizeof(first_a),"none");
@@ -258,8 +259,19 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
     ksnprintf(out->detail,sizeof(out->detail),"%ubpp first=%s %u/%u done=%u; 16bpp first=%s %u/%u done=%u skip=%u timeout=%u restore=%u e=%d mode=%d",
         original.bpp,first_a,a.passed,a.tried,a.completed,first_b,b.passed,b.tried,b.completed,
         a.skipped+(changed ? b.skipped : 0),a.timeouts+(changed ? b.timeouts : 0),restored,e,mode_error);
-    if (a.first<0) page_line(0,"Savage first exact configuration: none (original depth)");
-    if (b.first<0) page_line(0,"Savage first exact configuration: none (16 bpp)");
+    if (a.first<0) page_line(0,"Native 2D first exact configuration: none (original depth)");
+    if (b.first<0) page_line(0,"Native 2D first exact configuration: none (16 bpp)");
+    if (out->status==HW_PASS && !retained_marker) {
+        uint32_t tested=0;
+        int comparison=fbdev_accel_diagnostic(&storage->vfs,until,0,0,&tested);
+        ksnprintf(stage,sizeof(stage),"Native-only software-reference comparison: draw_mask=%x cursor_evidence=%u error=%d",tested&15u,!!(tested&DISPLAY_CHECK_CURSOR),comparison);
+        page_line(0,stage);
+        if (comparison || (tested&3u)!=3u) out->status=HW_FAIL;
+    } else if (retained_marker) {
+        page_line(0,"Native comparison skipped: retained diagnostic marker preserved");
+        if (out->status==HW_PASS) out->status=HW_SKIP;
+    }
+
 }
 static void audio_check(struct hw_check_result *out)
 {
@@ -286,7 +298,7 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     case 5: hardware_check_timer(until,false,out,&ops); break;
     case 6: hardware_check_timer(until,true,out,&ops); break;
     case 7: serial_check(until,out); break;
-    case 8: savage_check(until,out); break;
+    case 8: accelerator_check(until,out); break;
     case 9: audio_check(out); break;
     case 11: hardware_check_cache(storage_get(),out); break;
     case 10: {

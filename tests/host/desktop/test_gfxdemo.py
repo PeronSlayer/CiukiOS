@@ -17,11 +17,11 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-63: re-recorded for the pinned FreeType UI atlases.
 # F7-01: TinyGL scenes at native viewport size; GL tabs and product acknowledgment.
 GOLDENS = {
-    'benchmark': 'e75a6247ee04331eca5f7a4493484b3257f86033192852af226a4847286a51cd',
-    'cube-flat': '7437fff6f62953feccc31270f932f28e95200308c002ebe964cb942d0cf0adf8',
-    'cube-gouraud': '89f284494dd8f8325ea77f210e40a18ba4cc283209d86e5192b0422a3a91c3ed',
-    'sprites': '4d6413c6c2b6d4411dbc7aa30b6decc0633cd04967ff27edee466ae851f52944',
-    'software-only': '9ffdd290e6d29e1f3b7fbc610409f55e84d2db88f7c190e1687a7345cc9e593b',
+    'benchmark': '17b617f0e3b209f9ee7d0168a38c346e83a131bf7f0114ad26db42b380211e6f',
+    'cube-flat': '39b432352407495b416d45b9923a1523b49c144504d3bef27121e64ffe63f8e5',
+    'cube-gouraud': 'bf2f59d9d9bc0550221d64fdc60b87f5f82b145a2f4068e7ec4115a172d43de9',
+    'sprites': '634c85fca6ea267679bf34fb74e80bcfe4b316dd7661bd3d101d0eb16dc6ea4e',
+    'software-only': '34337f9c73e297f3fa29e0ee1f6412c72998800a7236e329b2a01a13a37a95d2',
 }
 
 def load(name, path):

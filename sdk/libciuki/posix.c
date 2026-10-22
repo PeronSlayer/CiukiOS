@@ -111,6 +111,13 @@ int ciuki_display_accel_info(int d,uint32_t generation,struct ciuki_accel_info *
     struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_QUERY,.generation=generation};
     return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(&q),CU_PTR(out),0,0,0);
 }
+int ciuki_display_engine_info(int d,uint32_t generation,struct ciuki_display_engine_info *out)
+{
+    if (!out) return -EINVAL;
+    struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_QUERY_ENGINE,
+        .generation=generation,.colour=out->version,.background=out->size};
+    return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(&q),CU_PTR(out),0,0,0);
+}
 int ciuki_display_info(int d,struct ciuki_framebuffer_info *i) { return RET(CU_CALL(DISPLAY_INFO,d,CU_PTR(i),0,0,0,0)); }
 int ciuki_input_read(int d,struct ciuki_input_event *e,uint32_t n) { return RET(CU_CALL(INPUT_READ,d,CU_PTR(e),n,0,0,0)); }
 int ciuki_channel_pair(int fds[2]) { return RET(CU_CALL(CHANNEL_PAIR,CU_PTR(fds),0,0,0,0,0)); }

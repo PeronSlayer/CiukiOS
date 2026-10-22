@@ -157,7 +157,9 @@ bool input_read(struct input_event *out)
 #endif
 int supervisor_spawn_standin(struct process *parent, struct process **out) { (void)parent; (void)out; return -ENOENT; }
 
+#include "../../../src/kernel/drivers/video/swdib.c"
 #include "../../../src/kernel/drivers/fbdev.c"
+#include "../display_driver_software_fixture.h"
 #include "../../../src/kernel/proc/surface.c"
 #include "../../../src/kernel/proc/channel.c"
 #include "../../../src/kernel/proc/grants.c"
@@ -722,6 +724,31 @@ static void test_desktop_present(void)
     struct ciuki_accel_info ai;
     CHECK(!ua_read(p->memory,&ai,BUFFER+512,sizeof(ai)) && ai.generation==1 &&
         ai.driver==CIUKI_ACCEL_DRIVER_NONE && !ai.operations && !ai.capabilities && !ai.quarantined);
+    /* f2-101: distinct version/size negotiation, real user pin/copy and
+     * grant authorization; neither an old nor an oversized buffer is overrun. */
+    struct ciuki_accel_request generic=q;
+    generic.operation=CIUKI_ACCEL_QUERY_ENGINE; generic.colour=1;
+    generic.background=sizeof(struct ciuki_display_engine_info)+16;
+    CHECK(!ua_write(p->memory,BUFFER,&generic,sizeof(generic)));
+    uint32_t canary=0x5a1234a5, observed=0;
+    CHECK(!ua_write(p->memory,BUFFER+512+sizeof(struct ciuki_display_engine_info),&canary,sizeof(canary)));
+    CHECK(!desktop_syscall(&accel_call));
+    struct ciuki_display_engine_info engine;
+    CHECK(!ua_read(p->memory,&engine,BUFFER+512,sizeof(engine)) && engine.version==1 &&
+        engine.size==sizeof(engine) && engine.generation==1 && engine.kind==CIUKI_ENGINE_SOFTWARE &&
+        engine.capabilities==0 && engine.cpu_ready && engine.software_operations==15);
+    CHECK(!ua_read(p->memory,&observed,BUFFER+512+sizeof(engine),sizeof(observed)) && observed==canary);
+    generic.background=sizeof(engine)-1; CHECK(!ua_write(p->memory,BUFFER,&generic,sizeof(generic)));
+    CHECK(desktop_syscall(&accel_call)==-EINVAL);
+    generic.background=sizeof(engine); generic.colour=2; CHECK(!ua_write(p->memory,BUFFER,&generic,sizeof(generic)));
+    CHECK(desktop_syscall(&accel_call)==-EINVAL);
+    generic.colour=1; generic.generation=2; CHECK(!ua_write(p->memory,BUFFER,&generic,sizeof(generic)));
+    CHECK(desktop_syscall(&accel_call)==-EAGAIN);
+    generic.generation=1; CHECK(!ua_write(p->memory,BUFFER,&generic,sizeof(generic)));
+    accel_call.edx=1; CHECK(desktop_syscall(&accel_call)==-EFAULT);
+    accel_call.edx=0; CHECK(desktop_syscall(&accel_call)==-EINVAL);
+    CHECK(!ua_write(p->memory,BUFFER,&q,sizeof(q)));
+    accel_call.edx=BUFFER+512;
     accel_call.edx=1; CHECK(desktop_syscall(&accel_call)==-EFAULT);
     accel_call.edx=BUFFER+512; q.generation=2; CHECK(!ua_write(p->memory,BUFFER,&q,sizeof(q)));
     CHECK(desktop_syscall(&accel_call)==-EAGAIN);
@@ -746,9 +773,11 @@ static void test_desktop_present(void)
     }
     memcpy(expected,target,sizeof(target));
     q.operation=CIUKI_ACCEL_COPY;q.rect=(struct ciuki_rect){1,2,2,3,4,3};
-    CHECK(grant_accel(p,grants[0],&q)==-EAGAIN);
+    CHECK(!grant_accel(p,grants[0],&q));
+    uint8_t copy_source[sizeof(expected)]; memcpy(copy_source,expected,sizeof(expected));
+    for (unsigned y=0;y<3;y++) memcpy(expected+(3+y)*device.pitch+2*4,copy_source+(2+y)*device.pitch+1*4,4*4);
     CHECK(!memcmp(target,expected,sizeof(target)));
-    /* Recover through the normal RAM-surface upload, without an LFB read. */
+    /* The normal RAM-surface upload remains valid after a software copy. */
     struct ciuki_rect recovery={0,0,2,3,4,3};
     CHECK(!grant_present(p,grants[0],fd,&recovery));
     for (unsigned y=0;y<3;y++) for (unsigned x=0;x<4;x++) {

@@ -227,7 +227,9 @@ def main() -> int:
         objs.append(o)
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
-                    list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
+                    list((SRC / "drivers").glob("*.c")) +
+                    [SRC / "drivers/video" / name for name in ("registry.c", "s3savage_register.c", "swdib.c")] +
+                    list((SRC / "fs").glob("*.c")) +
                     list((SRC / "usb").glob("*.c")) + list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "proc/win32").glob("*.c")) + list((SRC / "net").glob("*.c")) + list((SRC / "net/lwip").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, *lwip_includes, "-I", str(SRC / "net/lwip/libc"), *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',

@@ -71,6 +71,8 @@ bool fbdev_rect_valid(const struct fb_rect *rect);
  * allocation or waiting is introduced; a preempted present may suppress pixels. */
 void fbdev_console_region(unsigned rows);
 bool fbdev_console_begin(void);
+bool fbdev_cpu_ready(void);
+unsigned fbdev_native_capabilities(void);
 void fbdev_console_end(void);
 /* Live damage operations: */
 int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst);
@@ -86,8 +88,14 @@ int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const stru
                       void *rows, uint32_t stride);
 struct ciuki_accel_info;
 int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *);
+struct ciuki_display_engine_info;
+int fbdev_engine_info(uint32_t generation, struct ciuki_display_engine_info *);
+/* H-page native-only comparison; no software replay, bounded/cancellable.
+ * Driver-specific sweeps run separately. Retained markers forbid activation. */
+int fbdev_accel_validate(uint64_t deadline, bool (*cancel)(void *), void *, uint32_t *tested);
+int fbdev_accel_diagnostic(struct vfs *, uint64_t, bool (*)(void *), void *, uint32_t *);
 void fbdev_cursor_hide(void);
-/* Strictly bounded screen copy, hardware only. No software LFB reads.
+/* Strictly bounded screen copy, native or synchronized software.
  * -EAGAIN requires reconstruction/presentation from the caller's RAM frame;
  * failed overlapping hardware copies may already have modified scanout. */
 int fbdev_copy_to(const struct fb_device *, const struct fb_rect *, int32_t, int32_t);

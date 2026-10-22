@@ -28,6 +28,7 @@ struct gfx_app {
     uint64_t (*time_ns)(void); /* runtime clock; deterministic previews need none */
     int have_timing;
     struct ciuki_accel_info accelerator;
+    struct ciuki_display_engine_info engine;
     uint32_t display_w,display_h,bpp;
     int info_error,have_info,have_desktop,bench_running;
     unsigned bench_index;

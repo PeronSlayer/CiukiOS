@@ -601,7 +601,8 @@ pack(4) is scoped and restores the includer's previous setting.
 F2-41: read-only, fixed copied device inventory (device-manager.md).
 
 ```c
-#define CIUKI_DEVICES_VERSION 1u
+#define CIUKI_DEVICES_VERSION 2u
+#define CIUKI_DEVICE_ACCELERATOR_ID 0x30010u
 #define CIUKI_DEVICES_MAX 64u
 #define CIUKI_DEVICE_RESOURCES 8u
 #define CIUKI_DRIVERS_MAX 16u
@@ -660,6 +661,10 @@ struct ciuki_device_record {
     char driver[32];
     char reason[80];
     struct ciuki_device_resource resources[8];
+    char driver_display_name[48];
+    uint32_t accel_ready;
+    uint32_t native_used;
+    uint32_t cpu_ready;
 };
 struct ciuki_driver_record {
     char name[32];
@@ -2242,7 +2247,16 @@ valid COPY sources/destinations and WRITE destinations; 0 when
 there are none (no engine, no lease, quarantined).
 
 ```c
-CIUKI_ACCEL_OFFSCREEN };
+CIUKI_ACCEL_OFFSCREEN,
+```
+
+EDX is the output buffer; background is its byte capacity,
+and colour selects the requested version.
+Version 1 requires at least sizeof(ciuki_display_engine_info).
+Copies exactly that size, even when the caller offers more.
+
+```c
+CIUKI_ACCEL_QUERY_ENGINE };
 ```
 
 f2-92 WRITE source: 32-bit 0xXXRRGGBB rows in the caller's memory. The
@@ -2337,7 +2351,13 @@ DISPLAY_ACCEL/QUERY optionally writes this snapshot to EDX (zero keeps
 the original capability-only query). No register reads or activation.
 
 ```c
-enum { CIUKI_ACCEL_DRIVER_NONE, CIUKI_ACCEL_DRIVER_SAVAGE };
+enum { CIUKI_ACCEL_DRIVER_NONE, CIUKI_ACCEL_DRIVER_LEGACY_NATIVE };
+```
+
+Legacy value 1 retains its binary meaning; source compatibility for the
+frozen driver lives in its private header.
+
+```c
 struct ciuki_accel_info {
     uint32_t driver;
     uint32_t capabilities;
@@ -2346,6 +2366,33 @@ struct ciuki_accel_info {
     uint64_t operations;
     uint64_t idle_waits;
     uint64_t fallbacks;
+};
+
+
+
+
+#define CIUKI_DISPLAY_ENGINE_VERSION 1u
+enum { CIUKI_ENGINE_NONE, CIUKI_ENGINE_SOFTWARE, CIUKI_ENGINE_NATIVE };
+enum { CIUKI_ENGINE_FILL, CIUKI_ENGINE_COPY, CIUKI_ENGINE_PATTERN, CIUKI_ENGINE_WRITE, CIUKI_ENGINE_OPERATIONS };
+#define CIUKI_ENGINE_SOFTWARE_OPERATIONS 15u
+struct ciuki_display_engine_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t kind;
+    uint32_t capabilities;
+    uint32_t software_operations;
+    uint32_t quarantined;
+    uint32_t generation;
+    uint32_t ready;
+    uint32_t native_used;
+    uint32_t cpu_ready;
+    uint16_t pci_vendor;
+    uint16_t pci_device;
+    char driver_id[16];
+    char display_name[48];
+    char reason[60];
+    uint64_t native[CIUKI_ENGINE_OPERATIONS];
+    uint64_t software[CIUKI_ENGINE_OPERATIONS];
 };
 
 
@@ -3411,7 +3458,13 @@ v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
 1 closing later). One later reply within 2 s grants 30 s total.
 
 ```c
-DESK_CLOSE_ACK
+DESK_CLOSE_ACK,
+    DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE
+```
+
+v1 generic engine payload, 256 bytes
+
+```c
 };
 #define DESK_SETTINGS_RELOAD 1u
 ```
@@ -3491,6 +3544,7 @@ present, input, max input lag (all ns), interval ns
 
 ```c
 struct ciuki_accel_info accelerator;
+    struct ciuki_display_engine_info engine;
     uint32_t bpp;
     uint64_t benchmark[3];
 ```
@@ -4110,6 +4164,7 @@ Read-only snapshot; returns zero or a negative errno.
 
 ```c
 int ciuki_display_accel_info(int,uint32_t,struct ciuki_accel_info *);
+int ciuki_display_engine_info(int,uint32_t,struct ciuki_display_engine_info *);
 int ciuki_display_info(int,struct ciuki_framebuffer_info *);
 int ciuki_input_read(int,struct ciuki_input_event *,uint32_t);
 #endif

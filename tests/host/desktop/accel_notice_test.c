@@ -31,7 +31,10 @@ static void record(unsigned state,const char *reason)
     memset(&inventory,0,sizeof(inventory));
     struct ciuki_device_record *v=&inventory.devices[0];
     snprintf(v->driver,sizeof(v->driver),"fat"); snprintf(v->reason,sizeof(v->reason),"%s","unrelated");
-    v=&inventory.devices[1]; v->state=state;
+    v=&inventory.devices[1]; v->state=state; v->id=CIUKI_DEVICE_ACCELERATOR_ID;
+    v->accel_ready=state==CIUKI_DEVICE_READY;
+    v->native_used=!strcmp(reason,"accelerated");
+    strcpy(v->driver_display_name,"Recording adapter");
     snprintf(v->driver,sizeof(v->driver),"savage2d"); snprintf(v->reason,sizeof(v->reason),"%s",reason);
     inventory.count=2;
 }
@@ -41,17 +44,20 @@ int main(void)
     struct desktop d={.now_ns=5000000000ull};
     char text[160];
     /* f2-92: YES only once the engine has drawn; OK (drawing: software) before. */
-    accel_notice_text(text,sizeof(text),1,1,"accelerated");
-    CHECK(!strcmp(text,"2D acceleration: YES \xE2\x80\x94 Savage"));
-    accel_notice_text(text,sizeof(text),1,0,"engine_ok_drawing_software");
+    accel_notice_text(text,sizeof(text),1,1,"accelerated","Recording adapter");
+    CHECK(!strcmp(text,"2D acceleration: YES \xE2\x80\x94 Recording adapter"));
+    accel_notice_text(text,sizeof(text),1,0,"engine_ok_drawing_software","Recording adapter");
     CHECK(!strcmp(text,"2D engine: OK (drawing: software)"));
-    accel_notice_text(text,sizeof(text),0,0,"bci_test_readback_failed");
+    accel_notice_text(text,sizeof(text),0,0,"bci_test_readback_failed","Recording adapter");
     CHECK(!strcmp(text,"2D engine: NO (bci_test_readback_failed)"));
-    accel_notice_text(text,sizeof(text),0,0,"");
+    accel_notice_text(text,sizeof(text),0,0,"","Recording adapter");
     CHECK(strstr(text,"(unknown)"));
+    record(CIUKI_DEVICE_READY,"pending");
+    CHECK(!notice_at(&d,1000000000ull) && !notices);
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
     record(CIUKI_DEVICE_READY,"accelerated");
     CHECK(notice_at(&d,5000000000ull)==1 && notices==1);
-    CHECK(!strcmp(last_text,"2D acceleration: YES \xE2\x80\x94 Savage") && d.sh.notification.expires==15000000000ull);
+    CHECK(!strcmp(last_text,"2D acceleration: YES \xE2\x80\x94 Recording adapter") && d.sh.notification.expires==15000000000ull);
     /* Ready but unused: 3 s for the first engine draw, polled twice a second. */
     memset(&accel_notice_state,0,sizeof(accel_notice_state));
     record(CIUKI_DEVICE_READY,"engine_ok_drawing_software");

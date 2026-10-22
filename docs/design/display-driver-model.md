@@ -270,3 +270,78 @@ evidence; the lead accepts all of them. The binding changes:
     declarative registration, private compatibility headers and vendored
     sources, not unrestricted substring matching. Control Panel reuses its
     existing `hwid_name` lookup.
+
+## Part A implementation interfaces
+
+Primary-source comparison for this implementation:
+
+- The owner's Windows 98 Resource Kit, chapter 24, `wrkc24_3.htm`, “Display
+  Driver Overview” (read from the lead's read-only `build/rskt`), describes
+  DIB-engine drawing for operations a minidriver does not accelerate. This is
+  the Windows 98 reference; the NT DDI is supporting evidence for the dispatch
+  pattern, not a claim that the two driver architectures are interchangeable.
+- [Microsoft EngCopyBits](https://learn.microsoft.com/windows/win32/api/winddi/nf-winddi-engcopybits)
+  specifies bounded, lower/right-exclusive destination rectangles and packed
+  standard formats. The named “Copying bitmaps” page could not be retrieved;
+  this official DDI page was checked instead.
+- [Haiku Accelerant.h](https://raw.githubusercontent.com/haiku/haiku/master/headers/os/add-ons/graphics/Accelerant.h)
+  separates mode, engine, synchronization and optional drawing hooks. Part A
+  keeps the immutable mode provider independent of 2D policy and pins its
+  pointer through begin, write, end, mediated recovery and complete.
+- [X.org EXA](https://raw.githubusercontent.com/XQuartz/xorg-server/master/exa/exa.h)
+  permits refusal before drawing, orders overlapping copies by direction, and
+  coordinates CPU access to sources and destinations. Part A synchronizes the
+  complete synchronous engine before CPU access. `-EOPNOTSUPP` is a clean
+  refusal; failed submitted COPY retains caller reconstruction with `-EAGAIN`.
+  Existing idempotent FILL/PATTERN/WRITE recovery still requires proven idle.
+- [Linux fb.h](https://raw.githubusercontent.com/torvalds/linux/master/include/linux/fb.h)
+  separates fill/copy/image/cursor and idle hooks. The existing integer CPU
+  renderers move to `swdib.c`; no upstream rendering code is copied.
+
+The new `CIUKI_ACCEL_QUERY_ENGINE` uses the unchanged 308-byte request:
+`colour` selects version 1, `background` offers output bytes, and EDX points
+to the output. Version 1 requires at least 232 bytes and copies exactly 232;
+unsupported versions and short buffers fail before output. Legacy QUERY,
+40-byte snapshots, operation numbers 0–8, capability bits and WRITE returns
+are unchanged. The legacy native enum has a generic public name; the frozen
+driver's old spelling is private source compatibility.
+
+`DESK_GFX_QUERY_ENGINE`/`DESK_GFX_INFO_ENGINE` opt in to the generic version-1
+payload; the latter is a 24-byte header plus the exact 232-byte record. Legacy
+64-byte `DESK_GFX_INFO` remains accepted. Device inventory is version 2 with
+504-byte records (new display name/readiness/usage/CPU-safety fields); its
+existing size/version gate rejects old inventory buffers before copying.
+The stable accelerator record id is `CIUKI_DEVICE_ACCELERATOR_ID`. Software
+and native per-operation counts are separate; only completed presenter draws
+establish `native_used`. Cursor/setup/diagnostic commands do not establish it.
+
+The read-only ownership gate requires exactly one display PCI function,
+32-bit enabled memory decode, a matching driver-declared framebuffer BAR,
+the full validated VBE extent within firmware VRAM, and no RAM/kernel alias or
+32-bit wrap. The exact active `fbdev` MMIO lease, bounds and generation must
+also agree with that PCI BAR. A mismatched or ambiguous function is never activated. Driver
+eligibility remains an additional gate. BAR sizing is not performed through
+configuration writes. Provider selection does not call eligibility, marker or
+activation hooks, so `accel=0` does not change full-screen recovery.
+
+The host suite is `nice -n 19 python3 -B tests/host/test_display_driver_model.py`
+(UBSan); `CIUKI_DISPLAY_ASAN=1` additionally enables ASan with default leak
+checking. `tests/host/test_display_driver_names.py` enforces DM12 using C token
+boundaries and explicit declarative/private/vendored/audio exceptions. Neither
+suite builds an image or executes a guest. Part B retains keyed markers and
+file moves; part C retains all newly proposed command/batch semantics.
+
+Presenter unlock refreshes the driver's cached legacy snapshot while the lock
+is held (never during deferred initialization), then releases the lock.
+Inventory reads use that cache. Observed quarantine latches the generic
+same-boot activation block and revokes usable off-screen spans through native
+capabilities. Native submission stays excluded until marker clear finishes.
+The notice waits for a pending decision and still requires a completed native
+presenter draw before reporting YES.
+
+The H-page cursor check uses a fresh diagnostic activation (no prior desktop
+cursor owner). The adapter loads a transparent shape, moves it, enables it and
+hides it again, under exclusive drawing ownership and deadline/cancellation
+checks. Existing driver callbacks verify the cursor base and enable register;
+MOVE supplies submission evidence, not coordinate-register readback. The
+cursor-evidence bit is separate from the four framebuffer command bits.

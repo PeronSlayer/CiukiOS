@@ -331,6 +331,32 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->serial=desk_get32(m->data+4); n=m->length;
         if (p->opcode==DESK_GFX_BENCH) { p->index=desk_get32(m->data+8); if (p->index>=6) return 0; }
         break;
+    case DESK_GFX_QUERY_ENGINE:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=12 ||
+            desk_get32(m->data+8)!=CIUKI_DISPLAY_ENGINE_VERSION) return 0;
+        p->serial=desk_get32(m->data+4); n=12; break;
+    case DESK_GFX_INFO_ENGINE:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=256) return 0;
+        p->serial=desk_get32(m->data+4); p->result=(int32_t)desk_get32(m->data+8);
+        p->width=desk_get32(m->data+12); p->height=desk_get32(m->data+16); p->bpp=desk_get32(m->data+20);
+        /* Ciuki wire records use pack(4), little-endian scalars, no pointers.
+         * Copy into aligned storage before inspecting the negotiated payload. */
+        memcpy(&p->engine,m->data+24,sizeof(p->engine));
+        if (p->result>0 || p->result < -4095 || p->engine.version!=CIUKI_DISPLAY_ENGINE_VERSION ||
+            p->engine.size!=sizeof(p->engine) || p->engine.kind>CIUKI_ENGINE_NATIVE ||
+            p->engine.capabilities>3 || p->engine.quarantined>1 || p->engine.ready>1 ||
+            p->engine.native_used>1 || p->engine.cpu_ready>1 ||
+            p->engine.software_operations!=CIUKI_ENGINE_SOFTWARE_OPERATIONS ||
+            !memchr(p->engine.driver_id,0,sizeof(p->engine.driver_id)) ||
+            !memchr(p->engine.display_name,0,sizeof(p->engine.display_name)) ||
+            !memchr(p->engine.reason,0,sizeof(p->engine.reason))) return 0;
+        p->accelerator.driver=p->engine.kind==CIUKI_ENGINE_NATIVE ? CIUKI_ACCEL_DRIVER_LEGACY_NATIVE : CIUKI_ACCEL_DRIVER_NONE;
+        p->accelerator.capabilities=p->engine.capabilities; p->accelerator.generation=p->engine.generation;
+        p->accelerator.quarantined=p->engine.quarantined;
+        for (unsigned k=0;k<CIUKI_ENGINE_OPERATIONS;k++) {
+            p->accelerator.operations+=p->engine.native[k]; p->accelerator.fallbacks+=p->engine.software[k];
+        }
+        n=256; break;
     case DESK_GFX_INFO:
         if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=64) return 0;
         p->serial=desk_get32(m->data+4); p->result=(int32_t)desk_get32(m->data+8);
@@ -340,7 +366,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->accelerator.operations=(uint64_t)desk_get32(m->data+40)|(uint64_t)desk_get32(m->data+44)<<32;
         p->accelerator.idle_waits=(uint64_t)desk_get32(m->data+48)|(uint64_t)desk_get32(m->data+52)<<32;
         p->accelerator.fallbacks=(uint64_t)desk_get32(m->data+56)|(uint64_t)desk_get32(m->data+60)<<32;
-        if (p->result>0 || p->result < -4095 || p->accelerator.driver>CIUKI_ACCEL_DRIVER_SAVAGE ||
+        if (p->result>0 || p->result < -4095 || p->accelerator.driver>CIUKI_ACCEL_DRIVER_LEGACY_NATIVE ||
             p->accelerator.capabilities>3 || p->accelerator.quarantined>1) return 0;
         n=64; break;
     case DESK_GFX_RESULT:

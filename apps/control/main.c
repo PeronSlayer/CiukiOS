@@ -28,6 +28,7 @@
 
 struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
+    struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h;
     /* f2-88b: Display page timing: open, first frame, worker job, worst gap between UI turns (= ping latency). */
@@ -228,6 +229,12 @@ static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; return ap_preference_forget(NULL,id); }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
+static int generic_engine_query(void *ctx,struct ciuki_display_engine_info *info)
+{
+    struct cp_main *m=ctx;
+    if (!m->engine_ok || m->generic_engine.version!=CIUKI_DISPLAY_ENGINE_VERSION) return -EAGAIN;
+    *info=m->generic_engine; return 0;
+}
 static int engine_query(void *ctx, struct ciuki_accel_info *info)
 {
     struct cp_main *m=ctx;
@@ -277,14 +284,14 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 {
     (void)w;
     struct cp_main *m = user;
-    if (p->opcode==DESK_GFX_INFO && p->serial==m->engine_serial) {
-        m->engine_serial=0; m->engine_ok=!p->result; m->engine=p->accelerator;
+    if ((p->opcode==DESK_GFX_INFO || p->opcode==DESK_GFX_INFO_ENGINE) && p->serial==m->engine_serial) {
+        m->engine_serial=0; m->engine_ok=!p->result; m->engine=p->accelerator; m->generic_engine=p->engine;
         cp_engine_refresh(&m->app);
         struct du_widget *line=du_get(&m->ui,974);
         if (line) du_set_text(line,m->app.engine_line);
         return;
     }
-    if (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_QUERY && p->serial==m->engine_serial) {
+    if (p->opcode==DESK_TASK_RESULT && (p->request==DESK_GFX_QUERY || p->request==DESK_GFX_QUERY_ENGINE) && p->serial==m->engine_serial) {
         m->engine_serial=0; m->engine_ok=0; m->engine_next=du_now()+2000000000ull;
         cp_engine_refresh(&m->app); return;
     }
@@ -365,7 +372,7 @@ static void idle(void *arg)
     }
     uint64_t mono=du_now();
     if (m->window.configured && m->app.page==CP_DISPLAY && mono>=m->engine_next && !m->engine_serial && !m->app.mode_state) {
-        struct ciuki_message query; desk_message(&query,DESK_GFX_QUERY,8);
+        struct ciuki_message query; desk_message(&query,DESK_GFX_QUERY_ENGINE,12); desk_put32(query.data+8,CIUKI_DISPLAY_ENGINE_VERSION);
         if (!++m->serial) ++m->serial;
         desk_put32(query.data+4,m->serial);
         if (!du_window_queue(&m->window,&query)) m->engine_serial=m->serial;
@@ -466,7 +473,7 @@ int main(int argc, char **argv)
     h->program_install=program_install;h->programs_changed=programs_changed;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
-    h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
+    h->engine=engine_query; h->engine_info=generic_engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1;
     h->audio_diagnostics = audio_query;

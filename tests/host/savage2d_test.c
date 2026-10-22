@@ -1,5 +1,6 @@
 /* Production register driver + production framebuffer renderer, ASan/UBSan.
  * SPDX-License-Identifier: GPL-2.0-only */
+#define DISPLAY_DRIVER_FIXTURE_PCI
 #define main framebuffer_regression_main
 #define savage2d_init boot_init
 #include "fbdev_test.c"
@@ -678,14 +679,15 @@ static void prepare(unsigned bpp)
     m.cr[0x66]=1;
     m.cr[0x50]=0; /* firmware VGA depth, independent of the active VBE mode */
     initialized=true; changing=false; accel_initializing=false; drawing=0; console_rows=8;
-    g_boot.flags=0; memset(g_boot.options,0,sizeof(g_boot.options)); acceleration=NULL;
+    g_boot.flags=0; g_boot.display.vram_bytes=8u*1024*1024; memset(g_boot.options,0,sizeof(g_boot.options)); acceleration=NULL;
     device=(struct fb_device){.width=96,.height=64,.pitch=128*(bpp/8),.size=64*128*(bpp/8),
         .phys=0xe0000000,.bpp=bpp,.red_size=bpp==16 ? 5 : 8,.red_pos=bpp==16 ? 11 : 16,
         .green_size=bpp==16 ? 6 : 8,.green_pos=bpp==16 ? 5 : 8,.blue_size=bpp==16 ? 5 : 8,
         .present=true,.handle=0,.generation=42};
     storage=malloc(device.size+32); CHECK(storage!=NULL);
     memset(storage,0xa5,device.size+32); device.mapped=storage+16;
-    reservation=(struct resource){.state=RS_ACTIVE,.generation=42};
+    reservation=(struct resource){.type=RES_MMIO,.start=device.phys,.end=device.phys+device.size,
+        .owner="fbdev",.state=RS_ACTIVE,.generation=42};
     struct savage_io io=model_io();
     CHECK(!savage2d_start(&test_engine,&io,&device,true,m.cursor_page,0x100000));
     acceleration=&test_engine.ops;
@@ -862,7 +864,8 @@ static void boot_fixture_mode(bool retain_marker, unsigned bpp)
     memset(&m,0,sizeof(m)); m.cr[0x66]=1;
     engine=(struct savage2d){0}; attempt_blocked=false; reg_claim=cursor_claim=port_claim=-1;
     memset(&summary_state,0,sizeof(summary_state));
-    registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false;
+    registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false; accel_blocked=false;
+    memset(native_count,0,sizeof(native_count)); memset(software_count,0,sizeof(software_count));
     binding_allowed=true; binding_claims=0; binding_pci_count=1;
     binding_port_conflict=false; memset(binding_resources,0,sizeof(binding_resources));
     binding_fail_activate=binding_fail_claim=binding_fail_release=0;
@@ -1829,7 +1832,7 @@ static void shared_enable_and_failure_readbacks(void)
             boot_fixture_mode(false,bpp);
             free(storage);
             device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
-            device.size=device.height*device.pitch;
+            device.size=device.height*device.pitch; reservation.end=device.phys+device.size;
             device.mode_id=bpp==16 ? 0x117 : 0x118;
             storage=malloc(device.size+32); CHECK(storage!=NULL);
             memset(storage,0xa5,device.size+32); device.mapped=storage+16;
@@ -1942,7 +1945,7 @@ static void supersavage_completion_fence(void)
         boot_fixture_mode(false,bpp);
         free(storage);
         device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
-        device.size=device.pitch*device.height;
+        device.size=device.pitch*device.height; reservation.end=device.phys+device.size;
         storage=malloc(device.size+32); CHECK(storage!=NULL);
         memset(storage,0xa5,device.size+32); device.mapped=storage+16;
         m.exact_clock=true; m.status_value=0x07e00000;
@@ -2027,7 +2030,7 @@ static void supersavage_depth_preamble(void)
     prepare(32);
     free(storage);
     device.width=1024; device.height=768; device.pitch=4096;
-    device.size=device.height*device.pitch;
+    device.size=device.height*device.pitch; reservation.end=device.phys+device.size;
     storage=malloc(device.size+32); CHECK(storage!=NULL);
     memset(storage,0xa5,device.size+32); device.mapped=storage+16;
     test_engine.width=device.width; test_engine.height=device.height;
@@ -2062,7 +2065,7 @@ static void supersavage_depth_preamble(void)
         boot_fixture_mode(false,bpp);
         free(storage);
         device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
-        device.size=device.height*device.pitch;
+        device.size=device.height*device.pitch; reservation.end=device.phys+device.size;
         storage=malloc(device.size+32); CHECK(storage!=NULL);
         memset(storage,0xa5,device.size+32); device.mapped=storage+16;
         uint8_t saved50=firmware==0 ? 0xc1 : firmware==1 ? 0xd1 : 0xf1;
@@ -2094,7 +2097,7 @@ static void hardware_sweep_default(void)
         boot_fixture_mode(false,32);
         free(storage);
         device.width=1024; device.height=768; device.pitch=4096;
-        device.size=device.height*device.pitch;
+        device.size=device.height*device.pitch; reservation.end=device.phys+device.size;
         storage=malloc(device.size+32); CHECK(storage!=NULL);
         memset(storage,0xa5,device.size+32); device.mapped=storage+16;
         registry_setting_present=config>=0; registry_setting=config;
@@ -2152,7 +2155,7 @@ static void t23_fixture(unsigned bpp, uint32_t before)
     boot_fixture_mode(false,bpp);
     free(storage);
     device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
-    device.size=device.height*device.pitch; device.mode_id=bpp==32 ? 0x118 : 0x117;
+    device.size=device.height*device.pitch; reservation.end=device.phys+device.size; device.mode_id=bpp==32 ? 0x118 : 0x117;
     storage=malloc(device.size+32); CHECK(storage!=NULL);
     memset(storage,0xa5,device.size+32); device.mapped=storage+16;
     /* Firmware state recorded on the T23 (b453bc92 serial): CR50=30,

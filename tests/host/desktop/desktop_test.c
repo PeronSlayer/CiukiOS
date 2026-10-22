@@ -680,7 +680,7 @@ static unsigned graphics_samples;
 static int graphics_snapshot(int display,uint32_t generation,struct ciuki_accel_info *out)
 {
     (void)display;assert(generation==77);
-    *out=(struct ciuki_accel_info){.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=1,.generation=77,
+    *out=(struct ciuki_accel_info){.driver=CIUKI_ACCEL_DRIVER_LEGACY_NATIVE,.capabilities=1,.generation=77,
         .quarantined=1,.operations=0x123456789ull,.idle_waits=0xabcdef123ull,.fallbacks=5};return 0;
 }
 static int graphics_sample(struct desktop *desktop,unsigned index,uint64_t values[3])

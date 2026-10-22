@@ -629,10 +629,19 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         if (!d->damage.count) desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS);
         break;
     }
-    case DESK_GFX_QUERY: case DESK_GFX_BENCH: {
-        if ((!c->gfxdemo && !(c->program==DESK_APP_CONTROL && p.opcode==DESK_GFX_QUERY)) || !c->window || c->closing) {
+    case DESK_GFX_QUERY: case DESK_GFX_QUERY_ENGINE: case DESK_GFX_BENCH: {
+        if ((!c->gfxdemo && !(c->program==DESK_APP_CONTROL && (p.opcode==DESK_GFX_QUERY || p.opcode==DESK_GFX_QUERY_ENGINE))) || !c->window || c->closing) {
             desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
             desk_put32(reply.data+8,p.opcode); desk_put32(reply.data+12,(uint32_t)-EPERM);
+        } else if (p.opcode==DESK_GFX_QUERY_ENGINE) {
+            struct ciuki_display_engine_info a={.version=CIUKI_DISPLAY_ENGINE_VERSION,.size=sizeof(a),
+                .software_operations=CIUKI_ENGINE_SOFTWARE_OPERATIONS};
+            int e=d->engine_info ? d->engine_info(d->display,d->accel_generation,&a) : -ENOSYS;
+            desk_message(&reply,DESK_GFX_INFO_ENGINE,256);
+            desk_put32(reply.data+4,p.serial); desk_put32(reply.data+8,(uint32_t)e);
+            desk_put32(reply.data+12,d->width); desk_put32(reply.data+16,d->height);
+            desk_put32(reply.data+20,d->lfb_bytes_per_pixel*8);
+            memcpy(reply.data+24,&a,sizeof(a));
         } else if (p.opcode==DESK_GFX_QUERY) {
             struct ciuki_accel_info a={0};
             int e=d->accel_info ? d->accel_info(d->display,d->accel_generation,&a) : -ENOSYS;

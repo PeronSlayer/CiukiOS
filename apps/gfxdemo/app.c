@@ -87,13 +87,13 @@ void gfx_presented(struct gfx_app *a,uint64_t now)
 }
 void gfx_receive(struct gfx_app *a,const struct desk_packet *p)
 {
-    if (p->opcode==DESK_GFX_INFO) {
+    if ((p->opcode==DESK_GFX_INFO || p->opcode==DESK_GFX_INFO_ENGINE)) {
         if (a->have_info && !a->info_error && !p->result &&
             (a->accelerator.generation!=p->accelerator.generation || a->display_w!=p->width ||
              a->display_h!=p->height || a->bpp!=p->bpp)) {
             memset(a->results,0,sizeof(a->results)); a->bench_running=0;
         }
-        a->have_info=1; a->info_error=p->result; a->accelerator=p->accelerator;
+        a->have_info=1; a->info_error=p->result; a->accelerator=p->accelerator; a->engine=p->engine;
         a->display_w=p->width; a->display_h=p->height; a->bpp=p->bpp;
     } else if (p->opcode==DESK_SYSTEM_INFO) {
         a->have_desktop=p->performance[0]!=0;
@@ -106,7 +106,7 @@ void gfx_receive(struct gfx_app *a,const struct desk_packet *p)
         if (p->result || r->samples==4) a->bench_index++;
         if (a->bench_index>=6) a->bench_running=0;
         /* Runtime schedules the next request, rather than bursting here. */
-    } else if (p->opcode==DESK_TASK_RESULT && (p->request==DESK_GFX_QUERY || p->request==DESK_SYSTEM_QUERY)) {
+    } else if (p->opcode==DESK_TASK_RESULT && (p->request==DESK_GFX_QUERY || p->request==DESK_GFX_QUERY_ENGINE || p->request==DESK_SYSTEM_QUERY)) {
         a->info_error=p->result;
     } else if (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_BENCH) {
         a->bench_running=0; a->results[a->bench_index].error=p->result;
@@ -254,7 +254,7 @@ void gfx_paint(struct du_ui *u,void *ctx)
     else if (a->info_error) snprintf(text,sizeof(text),"System info: %u x %u, %u bpp; accelerator query unavailable (%d)",
         a->display_w,a->display_h,a->bpp,-a->info_error);
     else snprintf(text,sizeof(text),"System info: %u x %u, %u bpp; driver=%s ops=%llu quarantined=%u",
-        a->display_w,a->display_h,a->bpp,a->accelerator.driver==CIUKI_ACCEL_DRIVER_SAVAGE ? "savage" : "none",
+        a->display_w,a->display_h,a->bpp,a->engine.driver_id[0] ? a->engine.driver_id : "unavailable",
         (unsigned long long)a->accelerator.operations,a->accelerator.quarantined);
     label(c,12,c->height-(compact ? 35 : 64),text,DU_INK);
     if (a->have_desktop) snprintf(text,sizeof(text),"Desktop average: present %llu.%03llu ms  composite %llu.%03llu ms",

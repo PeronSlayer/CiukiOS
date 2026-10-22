@@ -107,7 +107,8 @@ enum desk_opcode {
     DESK_SET_CURSOR, /* v2 client to desktop: uint32 shape, own client area only */
     /* v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
      * 1 closing later). One later reply within 2 s grants 30 s total. */
-    DESK_CLOSE_ACK
+    DESK_CLOSE_ACK,
+    DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE /* v1 generic engine payload, 256 bytes */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
@@ -142,6 +143,7 @@ struct desk_packet {
     uint64_t performance[9]; /* frames, damage px, presents, LFB bytes, composite,
                              * present, input, max input lag (all ns), interval ns */
     struct ciuki_accel_info accelerator;
+    struct ciuki_display_engine_info engine;
     uint32_t bpp;
     uint64_t benchmark[3]; /* destination bytes, elapsed ns, completed kernel ops */
     uint32_t source_w, source_h, damage_x, damage_y, damage_w, damage_h;

@@ -45,7 +45,7 @@ class HardwareCheckTests(unittest.TestCase):
             temp = Path(directory)
             source = (ROOT / 'src/kernel/core/hardware_check.c').read_text()
             begin = source.index('static void serial_check(')
-            end = source.index('\nstatic void savage_check(', begin)
+            end = source.index('\nstatic void accelerator_check(', begin)
             (temp / 'serial_page.inc').write_text(source[begin:end])
             binary = temp / 'serial-page'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
