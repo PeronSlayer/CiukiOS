@@ -49,11 +49,11 @@
 /* ---- copy ---- */
 static const char *const steps[8] = {"Welcome", "Licence", "Hardware check", "Destination disk", "Components",
                                      "User and computer", "Network", "Copy files"};          /* mockup */
-static const char F_KEYS[] = "F1 Help " MID " F3 Exit Setup " MID " F10 Rescue console";       /* mockup */
-static const char F_LOG[] = "Setup log: C:\\System\\Logs\\SETUP.LOG";                        /* mockup */
+static const char F_KEYS[] = "F1 Help " MID " F3 Exit Setup " MID " F10 Continue";       /* mockup */
+static const char F_LOG[] = "Setup log kept in memory until installation";                        /* mockup */
 static const char F_COPY[] = "Cancelling now leaves the disk unbootable; Setup can be restarted from the CD."; /* mockup */
 static const char F_DONE[] = "Thank you for trying CiukiOS.";                                /* mockup */
-static const char F_STOP[] = "F10 Rescue console (read-only tools still work on this machine)"; /* mockup */
+static const char F_STOP[] = "F1 Help · F10 Restart"; /* mockup */
 static const char F_MEMORY[] = "Setup log kept in memory only";                              /* mockup */
 static const char F_RESCUE[] = "F1 Help " MID " Esc Close";
 static const char TAGLINE[] = "Classic computing, one woof at a time.";
@@ -64,7 +64,7 @@ static const char W_P2[] = "The whole installation takes about 15 minutes on a 1
 static const char W_BOX[] = ST_B "Before you begin" ST_B "\n" MID " Back up any data on the destination disk.\n" MID
                             " Connect the network cable if you want LAN play and Internet.\n" MID " Keep the CD in the drive until Setup asks to remove it.";
 static const char L_H[] = "Licence agreements";
-static const char L_P[] = "CiukiOS is free software. Read the licences of the system and of the bundled components; Setup installs the full texts in C:\\System\\Licenses.";
+static const char L_P[] = "CiukiOS is free software. Read the licences of the system and of the bundled components; Setup installs the full texts in \\System\\Licenses.";
 static const char *const L_LINES[] = {
     ST_B "CiukiOS kernel, desktop and tools " EM " GNU GPL v2.0 only" ST_B,
     "Unified DOS kernel (FreeDOS 1.3 fork) " EM " GNU GPL v2.0 or later; source archive on the CD in \\SOURCES.",
@@ -81,7 +81,7 @@ static const char H_H[] = "Hardware check";
 static const char H_P[] = "Setup detected this hardware. Items marked with a warning still work with a fallback; a stop sign would prevent installation.";
 static const char H_LINK[] = "Save hardware report to USB\xe2\x80\xa6";
 static const char D_H[] = "Where do you want to install CiukiOS?";
-static const char D_WHOLE[] = ST_B "Use the entire disk" ST_B " (recommended): MBR, one FAT32 system volume C:";
+static const char D_WHOLE[] = ST_B "Use the entire disk" ST_B " (recommended): MBR, one FAT32 system volume";
 static const char D_FREE[] = ST_B "Use the free space" ST_B " after the existing partitions (needs 2 GB free) " EM " Not available in this Beta";
 static const char D_ADV[] = ST_B "Advanced" ST_B ": choose or create a partition, keep NTFS read-only volumes " EM " Not available in this Beta";
 static const char D_INCOMPLETE[] = "A previous installation did not complete.";
@@ -107,7 +107,6 @@ static const char R_STEPS[3][200] = {
     "Press " ST_B "Restart" ST_B ". The computer starts from the hard disk; the first boot takes about a minute while the hardware is checked.",
     "If the screen stays black after the restart, press " ST_B "S" ST_B " at the boot menu for safe video.",
 };
-static const char R_LOGS[] = "Setup log saved to C:\\System\\Logs\\SETUP.LOG. A copy of the hardware report is in C:\\System\\Logs\\HARDWARE.TXT.";
 static const char E_H[] = "This computer does not meet the minimum requirements";
 static const char E_P[] = "Setup checked the hardware and found a problem that no fallback can solve. Nothing has been written to the disk.";
 static const char X_H[] = "Setup did not complete";
@@ -167,7 +166,7 @@ static void comma(char *out, size_t cap, uint64_t v)
 int st_page_primary(enum st_page p)
 {
     switch (p) {
-    case ST_PAGE_COPY: return 0;
+    case ST_PAGE_COPY: return ST_ID_CANCEL;
     case ST_PAGE_RESTART: case ST_PAGE_STOP: case ST_PAGE_FAILED: case ST_PAGE_STATUS: return ST_ID_RESTART;
     case ST_PAGE_RESCUE: case ST_PAGE_TEXT: return ST_ID_CLOSE;
     default: return ST_ID_NEXT;
@@ -177,7 +176,7 @@ int st_page_primary(enum st_page p)
 const char *st_help(enum st_page p)
 {
     switch (p) {
-    case ST_PAGE_WELCOME: return "Setup installs CiukiOS on ATA disk 0 (the primary master hard disk). Use Tab and Shift+Tab to move, Enter for the highlighted button, Esc to go back, F3 to exit and F10 for the read-only rescue console.";
+    case ST_PAGE_WELCOME: return "Setup installs CiukiOS on ATA disk 0 (the primary master hard disk). Use Tab and Shift+Tab to move, Enter for the highlighted button, Esc to go back, F3 to exit and F10 for the primary action.";
     case ST_PAGE_LICENCE: return "Use the arrow keys to scroll the licences and Enter to read a full text. Select the check box with Space to accept the licences; Setup continues only after you accept them.";
     case ST_PAGE_HARDWARE: return "A warning means the device works with a fallback. Setup stops only when the display, ATA disk 0, the CD drive or the disk itself cannot be used. The report can be saved to a USB drive.";
     case ST_PAGE_DISK: return "This Beta installs only on the whole of ATA disk 0: every partition on it is erased. Nothing is written until you choose Install on the summary page.";
@@ -188,7 +187,10 @@ const char *st_help(enum st_page p)
     case ST_PAGE_COPY: return "Setup is copying the files. Cancel stops at the next safe point and leaves the disk unbootable; restart Setup from the CD to install again.";
     case ST_PAGE_RESTART: return "Remove the CD and restart. The first boot finishes the hardware setup.";
     case ST_PAGE_RESCUE: return "The rescue console reads the disks without writing to them. Copy logs to USB saves SETUP.LOG, SETUP.STATE, HARDWARE.TXT and the boot log of an installed system to the first USB drive.";
-    default: return "Choose Restart to start the computer again, or press F10 for the read-only rescue console.";
+    case ST_PAGE_TEXT: return "Use the arrow keys, Page Up and Page Down to read the document. Esc closes it and returns to the previous page.";
+    case ST_PAGE_STATUS: return "Setup stopped on an answer-file status. Check the status and key, correct SETUP.INF and restart Setup. Rescue can save the diagnostics to USB.";
+    case ST_PAGE_FAILED: return "The page states whether the disk was changed. When installation did not complete, restart Setup from the CD to install again. Rescue can save the logs to USB.";
+    default: return "The hardware report explains why Setup cannot continue. Read the report or choose Restart to start the computer again.";
     }
 }
 
@@ -201,7 +203,10 @@ static void build_welcome(struct st_app *a)
     h = para(F_UI, CW, LP, W_P2); a->r[2] = (struct du_rect){CX, y, CW, h}; y += h + 12;
     h = para(F_UI, CW - 20, LP, W_BOX); a->r[3] = (struct du_rect){CX, y, CW, h + 16};
     a->r[4] = (struct du_rect){CX, a->r[3].y + a->r[3].h, 0, 0};
+    add(a, DU_BUTTON, ST_ID_REPORT, (struct du_rect){CX, BTN_Y - 28, 125, BTN_H}, "Hardware report");
     wizard_buttons(a, "Next >", 1, 0);
+    struct du_widget *back = du_get(a->ui, ST_ID_BACK);
+    if (back) { back->id = ST_ID_RESCUE; back->disabled = 0; du_set_text(back, "Rescue"); }
     du_focus(a->ui, ST_ID_NEXT);
 }
 
@@ -227,7 +232,6 @@ static void build_licence(struct st_app *a)
     du_focus(a->ui, ST_ID_VIEW);
 }
 
-static int hw_text_width(void) { return CW - 4 - 8 - 18 - 6 - 92 - 6 - 8; }
 static int hw_row_height(const struct st_hw_row *r, int width)
 {
     int h = para(F_UI, width, LS, r->text);
@@ -239,72 +243,63 @@ static void build_hardware(struct st_app *a)
     int y = CY;
     a->r[0] = (struct du_rect){CX, y, CW, H1}; y += H1 + 10;
     int h = para(F_UI, CW, LP, H_P); a->r[1] = (struct du_rect){CX, y, CW, h}; y += h + 10;
-    int rows = 8;
-    for (unsigned i = 0; i < a->row_count; i++) rows += hw_row_height(&a->rows[i], hw_text_width());
-    int room = BTN_Y - 10 - y;
-    a->r[2] = (struct du_rect){CX, y, CW, rows < room ? rows : room};
-    a->r[3] = (struct du_rect){CX, y + rows, 0, 0};       /* unclipped bottom, for the layout test */
+    a->r[2] = (struct du_rect){CX, y, CW, BTN_Y - 38 - y};
+    a->r[3] = (struct du_rect){CX, BTN_Y - 10, 0, 0};
+    st_view_reset(&a->view, ST_ID_VIEW, a->r[2]);
+    for (unsigned i = 0; i < a->row_count; i++)
+        st_view_add(&a->view, st_pool(a, ST_B "%s:" ST_B " %s", a->rows[i].name, a->rows[i].text),
+                    0, F_UI, DU_INK, a->rows[i].mark + 1);
+    st_view_layout(&a->view);
+    add(a, DU_CANVAS, ST_ID_VIEW, a->r[2], NULL);
     int lw = st_text_width(F_UI, H_LINK) + 4;
-    add(a, DU_CANVAS, ST_ID_LINK_SAVE, (struct du_rect){CX, BTN_Y + 3, lw, 17}, NULL);
+    add(a, DU_CANVAS, ST_ID_LINK_SAVE, (struct du_rect){CX, BTN_Y - 30, lw, 17}, NULL);
     wizard_buttons(a, "Next >", 0, a->stop != ST_STOP_NONE);
-    du_focus(a->ui, ST_ID_NEXT);
-}
-
-static int disk_rows(const struct st_app *a)
-{
-    int n = 1;
-    for (int i = 0; i < a->disk_count; i++) n += a->disks[i].present != 0;
-    for (int i = 0; i < a->volume_count; i++) n += a->volumes[i].usb != 0;
-    return n;
-}
-
-static const char *erase_warning(struct st_app *a, const struct st_disk *d)
-{
-    if (!d || !d->part_count) return st_pool(a, "Everything on this disk will be erased.");
-    char list[600]; size_t k = 0; list[0] = 0;
-    for (unsigned i = 0; i < d->part_count && i < ST_PARTS; i++) {
-        const struct st_part *p = &d->parts[i];
-        char size[24], type[16], item[120];
-        st_disk_size(size, sizeof(size), p->count * 512);
-        const char *fs = p->fs[0] ? p->fs : st_part_name(p->type);
-        if (!fs) { snprintf(type, sizeof(type), "type %02Xh", p->type); fs = type; }
-        if (p->letter) snprintf(item, sizeof(item), "%c: %s%s(%s, %s)", p->letter, p->label, p->label[0] ? " " : "", fs, size);
-        else snprintf(item, sizeof(item), "partition %u (%s, %s)", i + 1, fs, size);
-        const char *sep = !i ? "" : i + 1 == d->part_count ? " and " : ", ";
-        int n = snprintf(list + k, sizeof(list) - k, "%s%s", sep, item);
-        if (n < 0 || (size_t)n >= sizeof(list) - k) break;
-        k += (size_t)n;
-    }
-    return st_pool(a, "Everything on this disk will be erased, including %s.", list);
+    du_focus(a->ui, ST_ID_VIEW);
 }
 
 static void build_disk(struct st_app *a)
 {
-    const struct st_disk *d = disk0(a);
-    int y = CY;
-    a->r[0] = (struct du_rect){CX, y, CW, H1}; y += H1 + 10;
-    a->r[1] = (struct du_rect){CX, y, CW, 8 + 18 * disk_rows(a)}; y += a->r[1].h + 10;
-    int lw = CW - 22 - 18, fy = y + 16;
-    const char *labels[3] = {D_WHOLE, D_FREE, D_ADV};
-    for (int i = 0; i < 3; i++) {
-        int h = para(F_UI, lw, LS, labels[i]);
-        a->r[5 + i] = (struct du_rect){CX + 10 + 18, fy, lw, h};
-        struct du_widget *w = add(a, DU_RADIO, ST_ID_WHOLE + i, (struct du_rect){CX + 10, fy, 16, LS}, NULL);
-        if (w) { w->total = 1; w->value = i == 0; w->disabled = i != 0; }
-        fy += h + 4;
+    const struct st_disk *d=disk0(a);
+    int y=CY;
+    a->r[0]=(struct du_rect){CX,y,CW,H1};y+=H1+10;
+    const char *labels[3]={D_WHOLE,D_FREE,D_ADV};
+    int heights[3],group=20;
+    for(int i=0;i<3;i++){heights[i]=para(F_UI,CW-40,LS,labels[i]);group+=heights[i]+4;}
+    int group_y=BTN_Y-10-group;
+    a->r[2]=(struct du_rect){CX,group_y,CW,group};
+    a->r[3]=(struct du_rect){CX,group_y-48,CW,40};
+    a->r[1]=(struct du_rect){CX,y,CW,a->r[3].y-8-y};
+    st_view_reset(&a->view,ST_ID_VIEW,a->r[1]);
+    if(d){
+        char size[24];st_disk_size(size,sizeof(size),d->sectors*512);
+        st_view_add(&a->view,st_pool(a,ST_B "ATA 0:0 %s" ST_B ", serial %s, %s",d->model,d->serial,size),0,F_UI,DU_INK,0);
+        if(d->install==ST_INSTALL_INCOMPLETE)st_view_add(&a->view,D_INCOMPLETE,0,F_BOLD,WARN_RED,0);
+        st_view_add(&a->view,"Everything on this disk will be erased, including every partition and volume listed below.",0,F_BOLD,WARN_RED,0);
+        if(!d->part_count)st_view_add(&a->view,"The disk holds no partitions.",0,F_UI,DU_INK,0);
+        for(unsigned i=0;i<d->part_count&&i<ST_PARTS;i++){
+            const struct st_part *p=&d->parts[i];st_disk_size(size,sizeof(size),p->count*512);
+            const char *fs=p->fs[0]?p->fs:st_part_name(p->type);
+            st_view_add(&a->view,st_pool(a,"Partition %u: %c%s %s, %s (type %02Xh), %s, LBA %" PRIu64 ", %" PRIu64 " sectors",
+                i+1,p->letter?p->letter:'-',p->letter?":":"",p->label,fs?fs:"unknown filesystem",p->type,size,p->start,p->count),0,F_UI,WARN_RED,0);
+        }
+        if(d->part_count>ST_PARTS)st_view_add(&a->view,"The partition inventory exceeds the frozen transaction preview. Setup will stop before installation.",0,F_UI,WARN_RED,0);
+        if(d->sectors>((uint64_t)1<<28))st_view_add(&a->view,"The disk is larger than 128 GB: CiukiOS uses the first 128 GB and the rest stays unallocated.",0,F_UI,DU_INK,0);
     }
-    a->r[2] = (struct du_rect){CX, y, CW, fy - y + 4}; y += a->r[2].h + 10;
-    const char *warning = erase_warning(a, d);
-    a->warning = warning;
-    int inner = CW - 16, h = LS + 4 + 14 + 6;
-    uint64_t sectors = d ? d->sectors : 0;
-    if (sectors > ((uint64_t)1 << 28)) h += para(F_UI, inner, LS, "The disk is larger than 128 GB: CiukiOS uses the first 128 GB and the rest stays unallocated.") + 2;
-    if (d && d->install == ST_INSTALL_INCOMPLETE) h += para(F_BOLD, inner, LS, D_INCOMPLETE) + 2;
-    h += para(F_UI, inner, LS, warning);
-    a->r[3] = (struct du_rect){CX, y, CW, h + 12};
-    a->r[4] = (struct du_rect){CX, y + h + 12, 0, 0};
-    wizard_buttons(a, "Next >", 0, !d || !d->installable);
-    du_focus(a->ui, ST_ID_WHOLE);
+    for(int i=0;i<a->disk_count;i++)if(&a->disks[i]!=d){
+        char size[24];st_disk_size(size,sizeof(size),a->disks[i].sectors*512);
+        st_view_add(&a->view,st_pool(a,"ATA %u:%u %s, %s (not selected)",a->disks[i].slot,a->disks[i].unit,a->disks[i].model,size),0,F_UI,GREY,0);
+    }
+    for(int i=0;i<a->volume_count;i++)if(a->volumes[i].usb)
+        st_view_add(&a->view,st_pool(a,"USB %c: %s, %s (not selected)",a->volumes[i].letter,a->volumes[i].label,a->volumes[i].fs),0,F_UI,GREY,0);
+    st_view_layout(&a->view);add(a,DU_CANVAS,ST_ID_VIEW,a->r[1],NULL);
+    int fy=group_y+16;
+    for(int i=0;i<3;i++){
+        a->r[5+i]=(struct du_rect){CX+28,fy,CW-40,heights[i]};
+        struct du_widget *w=add(a,DU_RADIO,ST_ID_WHOLE+i,(struct du_rect){CX+10,fy,16,LS},NULL);
+        if(w){w->total=1;w->value=i==0;w->disabled=i!=0;}fy+=heights[i]+4;
+    }
+    a->r[4]=(struct du_rect){CX,group_y+group,0,0};
+    wizard_buttons(a,"Next >",0,a->stop!=ST_STOP_NONE);du_focus(a->ui,ST_ID_VIEW);
 }
 
 static int comp_label_width(void) { return CW - 4 - 8 - 16 - 8 - 8 - 56 - 8; }
@@ -323,7 +318,7 @@ static void build_components(struct st_app *a)
             w->disabled = i == 0 || ((st_components[i].requires & ~a->answers.components) != 0);
         }
         a->r[8 + i] = (struct du_rect){CX + 8 + 16 + 8, ry, comp_label_width(), rh};
-        ry += rh + 2;
+        ry += rh;
     }
     a->r[2] = (struct du_rect){CX, y, CW, ry - y + 4};
     a->r[3] = (struct du_rect){CX, line, CW, LS};
@@ -361,6 +356,7 @@ static void build_user(struct st_app *a)
     add(a, DU_CANVAS, ST_ID_KBD, (struct du_rect){fx, y, fw, 21}, NULL); y += 27;
     a->r[5] = (struct du_rect){CX, y, 120, 21};
     add(a, DU_EDIT, ST_ID_CLOCK, (struct du_rect){fx, y, 130, 21}, a->clock_text); y += 27;
+    a->r[8] = (struct du_rect){CX, y, 120, 21};
     add(a, DU_CANVAS, ST_ID_TZ, (struct du_rect){fx, y, fw, 21}, NULL); y += 27;
     struct du_widget *w = add(a, DU_CHECKBOX, ST_ID_UTC, (struct du_rect){fx, y, du_label_width(U_UTC) + 30, 17}, U_UTC);
     if (w) w->value = a->clock_utc;
@@ -402,7 +398,6 @@ static void build_network(struct st_app *a)
         if (w) { w->total = 2; w->value = i == a->net_manual; w->disabled = (uint8_t)none; }
         fy += lh + 6;
     }
-    static const char *const names[4] = {"IP address", "Subnet mask", "Gateway", "DNS server"};
     char text[4][20] = {"", "", "", ""};
     if (a->answers.network == SETUP_NET_STATIC) {
         uint32_t mask = a->answers.prefix ? 0xffffffffu << (32 - a->answers.prefix) : 0;
@@ -433,11 +428,11 @@ static void build_network(struct st_app *a)
     }
     a->r[3] = (struct du_rect){CX, y, CW, fy - y + 4};
     a->r[4] = (struct du_rect){CX, y + a->r[3].h, 0, 0};
-    wizard_buttons(a, "Install", 0, 0);
+    wizard_buttons(a, "Next >", 0, 0);
     du_focus(a->ui, none ? ST_ID_IPX : ST_ID_DHCP + a->net_manual);
 }
 
-static void hex16(char *out, const uint8_t *b) { for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", b[i]); }
+static void hex16(char *out, const uint8_t *b) { for (int i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", b[i]); }
 
 static void build_summary(struct st_app *a)
 {
@@ -447,14 +442,14 @@ static void build_summary(struct st_app *a)
     a->r[2] = (struct du_rect){CX, y, CW, BTN_Y - 10 - y};
     st_view_reset(&a->view, ST_ID_VIEW, a->r[2]);
     const struct setup_plan *p = &a->plan;
-    char size[24], size2[24], size3[24], size4[24], size5[24], fp[24], model[48];
+    char size[24], size2[24], size3[24], size4[24], size5[24], fp[65], model[48];
     snprintf(model, sizeof(model), "%s", p->disk.model);
     for (size_t n = strlen(model); n && model[n - 1] == ' '; n--) model[n - 1] = 0;
     st_disk_size(size, sizeof(size), p->disk.sectors * 512);
     st_view_add(&a->view, st_pool(a, ST_B "Disk:" ST_B " ATA 0:0 %s, serial %.20s, %s (%" PRIu64 " sectors)", model,
                 p->disk.serial[0] ? p->disk.serial : "none", size, p->disk.sectors), 0, F_UI, DU_INK, 0);
     hex16(fp, p->disk.table_fingerprint);
-    st_view_add(&a->view, st_pool(a, ST_B "Partition table fingerprint:" ST_B " %s\xe2\x80\xa6 (SHA-256)", fp), 0, F_UI, DU_INK, 0);
+    st_view_add(&a->view, st_pool(a, ST_B "Partition table fingerprint:" ST_B " %s (SHA-256)", fp), 0, F_UI, DU_INK, 0);
     if (!p->erased_partitions) st_view_add(&a->view, st_pool(a, ST_B "Erased:" ST_B " nothing; the disk holds no partition"), 0, F_UI, DU_INK, 0);
     for (unsigned i = 0; i < p->erased_partitions && i < 16; i++) {
         const char *fs = st_part_name(p->erased[i].type);
@@ -477,15 +472,16 @@ static void build_summary(struct st_app *a)
         if (n > 0 && (size_t)n < sizeof(list) - k) k += (size_t)n;
     }
     st_view_add(&a->view, st_pool(a, ST_B "Components:" ST_B " %s", list), 0, F_UI, DU_INK, 0);
-    st_view_add(&a->view, st_pool(a, ST_B "Sources:" ST_B " C: boot image %.16s\xe2\x80\xa6, D: CD manifest %.16s\xe2\x80\xa6",
+    st_view_add(&a->view, st_pool(a, ST_B "Sources:" ST_B " C: boot image %s, D: CD manifest %s",
                 p->source_image_sha[0] ? p->source_image_sha : "unknown", p->source_iso_sha[0] ? p->source_iso_sha : "unknown"), 0, F_UI, DU_INK, 0);
     const struct setup_answers *s = &p->answers;
     const char *kbd = s->keyboard;
     for (unsigned i = 0; i < st_keyboard_count; i++) if (!strcmp(st_keyboards[i].id, s->keyboard)) kbd = st_keyboards[i].label;
     st_view_add(&a->view, st_pool(a, ST_B "User:" ST_B " %s " MID " computer %s " MID " keyboard %s", s->user_name, s->computer_name, kbd), 0, F_UI, DU_INK, 0);
     int zone = st_zone_index(s->tz_minutes);
-    st_view_add(&a->view, st_pool(a, ST_B "Clock:" ST_B " %s, the RTC keeps %s%s", zone >= 0 ? st_zones[zone].label : "UTC offset",
-                s->clock == SETUP_CLOCK_UTC ? "UTC" : "local time", s->clock_adjust_s ? st_pool(a, ", set to %s when the files are copied", a->clock_text) : ""),
+    st_view_add(&a->view, st_pool(a, ST_B "Clock:" ST_B " UTC%c%02d:%02d (%s), the RTC keeps %s%s", s->tz_minutes < 0 ? '-' : '+',
+                (s->tz_minutes < 0 ? -s->tz_minutes : s->tz_minutes) / 60, (s->tz_minutes < 0 ? -s->tz_minutes : s->tz_minutes) % 60,
+                zone >= 0 ? st_zones[zone].label : "custom offset", s->clock == SETUP_CLOCK_UTC ? "UTC" : "local time", s->clock_adjust_s ? st_pool(a, ", set to %s when the files are copied", a->clock_text) : ""),
                 0, F_UI, DU_INK, 0);
     if (s->network == SETUP_NET_STATIC)
         st_view_add(&a->view, st_pool(a, ST_B "Network:" ST_B " manual %u.%u.%u.%u/%u, gateway %u.%u.%u.%u, DNS %u.%u.%u.%u " MID " IPX %s " MID " game lobby %s",
@@ -510,8 +506,8 @@ static void build_restart(struct st_app *a)
 
 static void build_stop(struct st_app *a)
 {
-    if (a->page == ST_PAGE_STOP) button(a, ST_ID_SAVE_REPORT, CX + CW - BTN_W - 6 - 130, 130, "Save report to USB", 0, 0);
-    if (a->page == ST_PAGE_FAILED) button(a, ST_ID_RESCUE, CX + CW - 2 * BTN_W - 6, BTN_W, "Rescue", 0, 0);
+    if (a->page == ST_PAGE_STOP) button(a, ST_ID_REPORT, CX + CW - BTN_W - 6 - 130, 130, "Hardware report", 0, 0);
+    if (a->page == ST_PAGE_FAILED || a->page == ST_PAGE_STATUS) button(a, ST_ID_RESCUE, CX + CW - 2 * BTN_W - 6, BTN_W, "Rescue", 0, 0);
     button(a, ST_ID_RESTART, CX + CW - BTN_W, BTN_W, "Restart", 1, 0);
     du_focus(a->ui, ST_ID_RESTART);
 }
@@ -734,7 +730,7 @@ static void frame(struct st_app *a, struct du_canvas *c)
     else if (a->page == ST_PAGE_STOP || a->page == ST_PAGE_FAILED || a->page == ST_PAGE_STATUS) { left = F_STOP; log = F_MEMORY; }
     else if (a->page == ST_PAGE_RESCUE || (a->page == ST_PAGE_TEXT && s < 0)) { left = F_RESCUE; log = F_MEMORY; }
     text_at(c, F_UI, FX, FOOT_Y, LS, left, SILVER);
-    right_text(c, F_UI, FX + FW, FOOT_Y, LS, log, SILVER);
+    right_text(c, F_UI, FX + FW, FOOT_Y + LS, LS, log, SILVER);
 }
 
 static void heading(struct du_canvas *c, struct du_rect r, const char *s) { text_at(c, F_H1, r.x, r.y, r.h, s, DU_INK); }
@@ -804,84 +800,29 @@ static void paint_hardware(struct st_app *a, struct du_canvas *c)
 {
     heading(c, a->r[0], H_H);
     wrap(c, F_UI, a->r[1], LP, H_P, DU_INK);
-    well(c, a->r[2]);
-    paint_hardware_rows(a, c, a->r[2], 92);
+
 }
 
 static void paint_disk(struct st_app *a, struct du_canvas *c)
 {
-    const struct st_disk *d = disk0(a);
-    heading(c, a->r[0], D_H);
-    struct du_rect t = a->r[1];
-    well(c, t);
-    int cols[4] = {t.x + 10, t.x + 10 + 70, t.x + t.w - 10 - 140, t.x + t.w - 10 - 70};
-    static const char *const head[4] = {"Disk", "Model", "Size", "Contents"};
-    for (int i = 0; i < 4; i++) text_at(c, F_UI, cols[i], t.y + 4, 18, head[i], GREY);
-    int y = t.y + 4 + 18;
-    struct du_rect old = c->clip;
-    for (int i = 0; i < a->disk_count; i++) {
-        const struct st_disk *k = &a->disks[i];
-        if (!k->present) continue;
-        int selected = k == d;
-        uint32_t ink = selected ? DU_SELECT_INK : k->installable || selected ? DU_INK : GREY;
-        if (selected) du_fill(c, (struct du_rect){t.x + 2, y, t.w - 4, 18}, DU_SELECT);
-        char cell[64], model[48];
-        snprintf(cell, sizeof(cell), "ATA %u:%u", k->slot, k->unit);
-        text_at(c, F_UI, cols[0], y, 18, cell, ink);
-        snprintf(model, sizeof(model), "%s", k->model);
-        for (size_t n = strlen(model); n && model[n - 1] == ' '; n--) model[n - 1] = 0;
-        c->clip = du_intersection(old, (struct du_rect){cols[1], y, cols[2] - cols[1] - 6, 18});
-        text_at(c, F_UI, cols[1], y, 18, model, ink);
-        c->clip = old;
-        st_disk_size(cell, sizeof(cell), k->sectors * (k->sector_size ? k->sector_size : 512));
-        text_at(c, F_UI, cols[2], y, 18, cell, ink);
-        st_disk_contents(k, cell, sizeof(cell));
-        c->clip = du_intersection(old, (struct du_rect){cols[3], y, t.x + t.w - 4 - cols[3], 18});
-        text_at(c, F_UI, cols[3], y, 18, cell, ink);
-        c->clip = old;
-        y += 18;
-    }
-    for (int i = 0; i < a->volume_count; i++) {
-        const struct st_volume *v = &a->volumes[i];
-        if (!v->usb) continue;
-        char cell[48];
-        snprintf(cell, sizeof(cell), "USB %c:", v->letter);
-        text_at(c, F_UI, cols[0], y, 18, cell, GREY);
-        c->clip = du_intersection(old, (struct du_rect){cols[1], y, cols[2] - cols[1] - 6, 18});
-        text_at(c, F_UI, cols[1], y, 18, v->label[0] ? v->label : "USB drive", GREY);
-        c->clip = old;
-        snprintf(cell, sizeof(cell), "%s data", v->fs[0] ? v->fs : "FAT");
-        text_at(c, F_UI, cols[3], y, 18, cell, GREY);
-        y += 18;
-    }
-    legend(c, a->r[2], "Installation type");
-    const char *labels[3] = {D_WHOLE, D_FREE, D_ADV};
-    for (int i = 0; i < 3; i++) wrap(c, F_UI, a->r[5 + i], LS, labels[i], i ? GREY : DU_INK);
-    struct du_rect l = a->r[3];
-    well(c, l);
-    char title[64];
-    snprintf(title, sizeof(title), "Resulting layout on ATA %u:%u", d ? d->slot : 0, d ? d->unit : 0);
-    int x = l.x + 8, w = l.w - 16;
-    y = l.y + 6;
-    text_at(c, F_BOLD, x, y, LS, title, DU_INK); y += LS + 4;
-    uint64_t sectors = d ? d->sectors : 0, part = st_partition_sectors(sectors);
-    int used = sectors > part + 2048 && sectors ? (int)((uint64_t)(w - 4) * (part + 2048) / sectors) : w - 4;
-    if (used < 40) used = 40;
-    du_outline(c, (struct du_rect){x, y, w, 14}, 0x000000u);
-    du_fill(c, (struct du_rect){x + 1, y + 1, 2, 12}, 0x000000u);
-    du_fill(c, (struct du_rect){x + 3, y + 1, used - 2, 12}, 0x000080u);
-    if (used < w - 4) du_fill(c, (struct du_rect){x + 1 + used, y + 1, w - 2 - used, 12}, SILVER);
-    char bar[160], size[24];
-    st_disk_size(size, sizeof(size), part * 512);
-    snprintf(bar, sizeof(bar), "C: CIUKIOS  FAT32  %s  (system, programs, games, pagefile 16 MB)", size);
-    c->clip = du_intersection(old, (struct du_rect){x + 3, y + 1, used - 4, 12});
-    text_at(c, F_UI, x + 7, y, 14, bar, WHITE);
-    c->clip = old;
-    y += 14 + 6;
-    if (sectors > ((uint64_t)1 << 28))
-        y += wrap(c, F_UI, (struct du_rect){x, y, w, 0x7fff}, LS, "The disk is larger than 128 GB: CiukiOS uses the first 128 GB and the rest stays unallocated.", DU_INK) + 2;
-    if (d && d->install == ST_INSTALL_INCOMPLETE) y += wrap(c, F_BOLD, (struct du_rect){x, y, w, 0x7fff}, LS, D_INCOMPLETE, WARN_RED) + 2;
-    wrap(c, F_UI, (struct du_rect){x, y, w, 0x7fff}, LS, a->warning ? a->warning : "", WARN_RED);
+    heading(c,a->r[0],D_H);
+    const struct st_disk *d=disk0(a);struct du_rect l=a->r[3];well(c,l);
+    int x=l.x+8,y=l.y+3,w=l.w-16;
+    text_at(c,F_BOLD,x,y,LS,"Resulting layout on ATA 0:0",DU_INK);y+=LS+2;
+    uint64_t sectors=d?d->sectors:0,part=st_partition_sectors(sectors);
+    int used=sectors>part+2048?(int)((uint64_t)(w-4)*(part+2048)/sectors):w-4;
+    if(used<40)used=40;
+    du_outline(c,(struct du_rect){x,y,w,14},0);
+    du_fill(c,(struct du_rect){x+1,y+1,2,12},0);
+    du_fill(c,(struct du_rect){x+3,y+1,used-2,12},0x000080u);
+    if(used<w-4)du_fill(c,(struct du_rect){x+used+1,y+1,w-used-2,12},SILVER);
+    char size[24],bar[120];st_disk_size(size,sizeof(size),part*512);
+    snprintf(bar,sizeof(bar),"CIUKIOS  FAT32  %s",size);
+    struct du_rect old=c->clip;c->clip=du_intersection(old,(struct du_rect){x+5,y+1,used-8,12});
+    text_at(c,F_UI,x+7,y,14,bar,WHITE);c->clip=old;
+    legend(c,a->r[2],"Installation type");
+    const char *labels[3]={D_WHOLE,D_FREE,D_ADV};
+    for(int i=0;i<3;i++)wrap(c,F_UI,a->r[5+i],LS,labels[i],i?GREY:DU_INK);
 }
 
 static void paint_components(struct st_app *a, struct du_canvas *c)
@@ -906,8 +847,8 @@ static void paint_components(struct st_app *a, struct du_canvas *c)
     st_disk_size(avail, sizeof(avail), available_bytes(a));
     if (a->sizes_ok) {
         st_disk_size(need, sizeof(need), st_required_estimate(a, chosen | SETUP_COMP_SYSTEM));
-        snprintf(line, sizeof(line), "Space required: " ST_B "%s" ST_B " " MID " available on C: %s", need, avail);
-    } else snprintf(line, sizeof(line), "Space required: " ST_B EM ST_B " " MID " available on C: %s", avail);
+        snprintf(line, sizeof(line), "Space required: " ST_B "%s" ST_B " " MID " available on disk 0: %s", need, avail);
+    } else snprintf(line, sizeof(line), "Space required: " ST_B EM ST_B " " MID " available on disk 0: %s", avail);
     text_at(c, F_UI, a->r[3].x, a->r[3].y, LS, line, DU_INK);
 }
 
@@ -917,19 +858,20 @@ static void paint_user(struct st_app *a, struct du_canvas *c)
     wrap(c, F_UI, a->r[1], LP, U_P, DU_INK);
     static const char *const labels[4] = {"Your name", "Computer name", "Keyboard layout", "Clock"};
     for (int i = 0; i < 4; i++) text_at(c, F_UI, a->r[2 + i].x, a->r[2 + i].y, 21, labels[i], DU_INK);
+    text_at(c, F_UI, a->r[8].x, a->r[8].y, 21, "Time zone", DU_INK);
     well(c, a->r[6]);
     wrap(c, F_UI, (struct du_rect){a->r[6].x + 8, a->r[6].y + 6, CW - 16, a->r[6].h - 12}, LS, U_BOX, DU_INK);
 }
 
 static void paint_network(struct st_app *a, struct du_canvas *c)
 {
+    static const char *const names[4] = {"IP address", "Subnet mask", "Gateway", "DNS server"};
     heading(c, a->r[0], N_H);
     wrap(c, F_UI, a->r[1], LP, a->adapter ? a->adapter : "", DU_INK);
     int none = a->adapter_none;
     legend(c, a->r[2], "Address");
     wrap(c, F_UI, a->r[5], LS, N_DHCP, none ? GREY : DU_INK);
     wrap(c, F_UI, a->r[6], LS, N_MANUAL, none ? GREY : DU_INK);
-    static const char *const names[4] = {"IP address", "Subnet mask", "Gateway", "DNS server"};
     for (int i = 0; i < 4; i++) text_at(c, F_UI, a->r[10 + i].x, a->r[10 + i].y, 19, names[i], a->net_manual && !none ? DU_INK : GREY);
     legend(c, a->r[3], "Games on the LAN");
     struct du_widget *lobby = du_get(a->ui, ST_ID_LOBBY);
@@ -944,12 +886,12 @@ static void paint_summary(struct st_app *a, struct du_canvas *c)
 }
 
 static const char *const copy_rows[6] = {
-    "Partition table written, volume C: formatted FAT32 (8 sectors per cluster)",
+    "Partition table written, system volume formatted FAT32 (8 sectors per cluster)",
     "Copying system files",
     "Copying programs and games",
     "Writing registry, user and network settings",
     "Creating the pagefile and verifying the installation",
-    "Boot sector and Ciuki loader installed (LBA 1" EN "62), verified by read-back",
+    "Boot sector and Ciuki loader installed (LBA 1" EN "1023), verified by read-back",
 };
 
 static enum st_mark copy_mark(const struct st_app *a, int row)
@@ -979,7 +921,7 @@ static void paint_copy(struct st_app *a, struct du_canvas *c)
             text = line;
         } else if (m == ST_MARK_ACTIVE) { snprintf(line, sizeof(line), ST_B "%s" ST_B, copy_rows[i]); text = line; }
         st_mark_paint(c, CX + 2, y + 2, 12, m);
-        y += wrap(c, F_UI, (struct du_rect){CX + 24, y, tw, 0x7fff}, LS, text, m == ST_MARK_PENDING ? SECONDARY : DU_INK) + 2;
+        y += wrap(c, F_UI, (struct du_rect){CX + 24, y, tw, 0x7fff}, 13, text, m == ST_MARK_PENDING ? SECONDARY : DU_INK) + 1;
     }
     y += 6;
     const struct setup_progress *p = &a->progress;
@@ -1023,7 +965,7 @@ static void paint_restart(struct st_app *a, struct du_canvas *c)
     heading(c, (struct du_rect){CX, y, CW, H1}, R_H); y += H1 + 12;
     char files[24], p[300];
     comma(files, sizeof(files), a->progress.files_total);
-    snprintf(p, sizeof(p), "CiukiOS 1.0 Beta has been installed on " ST_B "C:" ST_B " and the disk is bootable. The installation was verified: %s files read back with matching sizes and checksums.", files);
+    snprintf(p, sizeof(p), "CiukiOS 1.0 Beta has been installed on " ST_B "%c:" ST_B " and the disk is bootable. The installation was verified: %s files read back with matching sizes and checksums.", a->dest_letter ? a->dest_letter : '?', files);
     y += wrap(c, F_UI, (struct du_rect){CX, y, CW, 0x7fff}, LP, p, DU_INK) + 12;
     int h = 10;
     for (int i = 0; i < 3; i++) h += para(F_UI, CW - 24 - 28, 18, R_STEPS[i]) + 6;
@@ -1036,7 +978,9 @@ static void paint_restart(struct st_app *a, struct du_canvas *c)
         sy += wrap(c, F_UI, (struct du_rect){CX + 12 + 28, sy, CW - 24 - 28, 0x7fff}, 18, R_STEPS[i], DU_INK) + 6;
     }
     y += box.h + 12;
-    wrap(c, F_UI, (struct du_rect){CX, y, CW, 0x7fff}, LS, R_LOGS, SECONDARY);
+    char logs[240];
+    snprintf(logs, sizeof(logs), "Setup log saved to %c:\\SYSTEM\\SETUP.LOG. A copy of the hardware report is in %c:\\SYSTEM\\HARDWARE.TXT.", a->dest_letter ? a->dest_letter : '?', a->dest_letter ? a->dest_letter : '?');
+    wrap(c, F_UI, (struct du_rect){CX, y, CW, 0x7fff}, LS, logs, SECONDARY);
     char left[96];
     uint64_t now = a->now, left_s = a->countdown_deadline > now ? (a->countdown_deadline - now + 999999999ull) / 1000000000ull : 0;
     if (a->restart_state == 0) snprintf(left, sizeof(left), "Restarting automatically in " ST_B "%" PRIu64 ST_B " seconds", left_s);
@@ -1370,13 +1314,14 @@ int st_page_event(struct st_app *a, const struct du_event *e)
     switch (e->type) {
     case DU_EV_KEY: return canvas_key(a, e->id, e->key);
     case DU_EV_POINTER:
-        if (e->index != DU_POINTER_UP) return 1;
         if (e->id == ST_ID_VIEW) {
-            int was = a->view.selected, hit = st_view_click(&a->view, e->x, e->y);
+            int was = a->view.selected, hit = st_view_pointer(&a->view, e);
             if (hit >= 0 && hit == was && a->page == ST_PAGE_LICENCE) canvas_key(a, ST_ID_VIEW, DU_KEY_ENTER);
             a->ui->dirty = 1;
-        } else if (e->id == ST_ID_LINK_SAVE || e->id == ST_ID_DEFAULTS) st_action(a, e->id);
-        else if (e->id == ST_ID_KBD || e->id == ST_ID_TZ) popup_open(a, e->id);
+        } else if (e->index == DU_POINTER_UP) {
+            if (e->id == ST_ID_LINK_SAVE || e->id == ST_ID_DEFAULTS) st_action(a, e->id);
+            else if (e->id == ST_ID_KBD || e->id == ST_ID_TZ) popup_open(a, e->id);
+        }
         return 1;
     case DU_EV_CHANGE:
         if (e->id == ST_ID_ACCEPT) {

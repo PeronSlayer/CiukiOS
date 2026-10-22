@@ -86,6 +86,21 @@ int st_text_wrap(struct du_canvas *c, int font, struct du_rect box, int line_h, 
             int sw = end ? run(NULL, font, &t, 0, 0, spaces, (size_t)(q - spaces), 0) : 0;
             int ww = run(NULL, font, &t, 0, 0, q, (size_t)(we - q), 0);
             if (end && w + sw + ww > box.w) break;
+            if (!end && ww > box.w) {
+                /* A fingerprint or source hash must remain fully readable:
+                 * wrap long words at UTF-8 boundaries, never ellipsize. */
+                const char *cut = q;
+                int cw = 0, state = probe;
+                while (cut < we) {
+                    size_t n = (size_t)seq_length((unsigned char)*cut);
+                    if (n > (size_t)(we - cut)) n = (size_t)(we - cut);
+                    int next = state;
+                    int adv = run(NULL, font, &next, 0, 0, cut, n, 0);
+                    if (cut > q && cw + adv > box.w) break;
+                    cw += adv; state = next; cut += n;
+                }
+                end = cut; break;
+            }
             w += sw + ww; probe = t; end = we; q = we;
         }
         if (end) run(c, font, &bold, box.x, baseline_of(font, box.y + lines * line_h, line_h), p, (size_t)(end - p), ink);
