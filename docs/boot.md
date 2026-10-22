@@ -151,6 +151,12 @@ The exact `BOOT.CFG` token `usbscan=0` (f1-87 diagnostic) keeps the initial
 USB enumeration and stops the periodic USB rescans; the loader only accepts
 the token and leaves it in the copied boot options for the kernel.
 
+The exact `BOOT.CFG` token `ecpoll=0` (f1-94 diagnostic) stops the ThinkPad
+EC volume poll, which otherwise runs at 1 Hz: no periodic 62h/66h traffic,
+the EC keeps driving its amplifier from the volume keys, and the desktop
+mixer no longer follows those keys until the next boot without the token.
+The loader only accepts the token and leaves it in the copied boot options.
+
 ## Shutting down
 
 The desktop calls `ciuki_power()` (system call 73): reboot, power off

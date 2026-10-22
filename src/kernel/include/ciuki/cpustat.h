@@ -5,7 +5,18 @@
 #include <ciuki/task.h>
 void cpu_init(void);
 enum cpu_irqoff_phase { CPU_IRQOFF_NONE, CPU_IRQOFF_PICK, CPU_IRQOFF_FPU,
-    CPU_IRQOFF_ADDRESS, CPU_IRQOFF_LDT_DEBUG, CPU_IRQOFF_VM_ENTER, CPU_IRQOFF_OTHER };
+    CPU_IRQOFF_ADDRESS, CPU_IRQOFF_LDT_DEBUG, CPU_IRQOFF_VM_ENTER, CPU_IRQOFF_OTHER,
+    /* f1-94: finer scheduler phases, the resumed caller, the IRQ path and
+     * the PIT top half. Appended: the values above keep their record names. */
+    CPU_IRQOFF_QUEUE, CPU_IRQOFF_PROC, CPU_IRQOFF_RESUME,
+    CPU_IRQOFF_IRQ_ENTRY, CPU_IRQOFF_IRQ_HANDLER, CPU_IRQOFF_IRQ_EOI, CPU_IRQOFF_IRQ_EXIT,
+    CPU_IRQOFF_TICK_TIMING, CPU_IRQOFF_TICK_SCHED, CPU_IRQOFF_TICK_TIMERS,
+    CPU_IRQOFF_TICK_SERIAL, CPU_IRQOFF_PHASES };
+/* Phases that mark straight-line code with a fixed small bound: a gap of a
+ * millisecond between two such marks is not our work (f1-94 TSC rule). The
+ * resumed caller and a generic device handler are not bounded here. */
+static inline bool cpu_irqoff_bounded(enum cpu_irqoff_phase p)
+{ return p != CPU_IRQOFF_NONE && p != CPU_IRQOFF_RESUME && p != CPU_IRQOFF_IRQ_HANDLER && p < CPU_IRQOFF_PHASES; }
 /* IF-clear scalar accounting only; the cpustat task publishes the maximum
  * once per window. timing.c supplies its existing section boundary stamps. */
 void cpu_irqoff_begin(uint64_t start,uint32_t site) __attribute__((weak));

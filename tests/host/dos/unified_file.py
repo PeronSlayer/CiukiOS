@@ -145,7 +145,8 @@ def production_vm(installed, identity):
         for suffix, extra in variants:
             env = dict(os.environ, GUEST_KERNEL="unified" if name == "UNIFIED" else "freedos-1.3",
                        ASAN_OPTIONS="detect_leaks=0:halt_on_error=1", UBSAN_OPTIONS="halt_on_error=1", **extra)
-            run = subprocess.run([str(cpu), str(image), "shell:TYPE C:\\FDAUTO.BAT", "-"], cwd=ROOT, env=env,
+            run = subprocess.run([str(cpu), str(image), "shell:TYPE C:\\FDAUTO.BAT", "-",
+                                  "shell:TYPE C:\\NOFILE.TXT", "-"], cwd=ROOT, env=env,
                                  capture_output=True, text=True, timeout=600)
             log = run.stdout + run.stderr
             (OUT / f"h61-{name.lower()}{suffix}.log").write_text(log)
@@ -163,10 +164,18 @@ def production_vm(installed, identity):
                       fields.get("forged") == "0" and fields.get("critical") == "0" and fields.get("held") == "0" and
                       int(fields.get("reads", "0")) > 0 and fields.get("opens") == fields.get("closes"),
                       f"h61 UNIFIED: DFV2 bound and C: IFS active on the partitioned base {fields}")
+                # f3-61c: the failed-request list names what the guest asked for.
+                failed = re.findall(r"^H61 IFS end failed n=(\d+) fn=(11[0-9a-f]{2}) error=(\d+) name=(\S+)$", log, re.M)
+                check(int(fields.get("failed", "0")) >= 1 and
+                      len(failed) == min(int(fields.get("failed", "0")), 8) and
+                      any(name == "NOFILE.TXT" and error in ("2", "18") for _, _, error, name in failed),
+                      f"h61 UNIFIED: failed requests listed by function and name {failed}")
+                results["UNIFIED-failed"] = failed
     print(f"H61 production VM: unified base IFS active={results.get('UNIFIED', {}).get('active')} "
           f"owned={results.get('UNIFIED', {}).get('owned')} reads={results.get('UNIFIED', {}).get('reads')}; "
           f"unbound replay bound={results.get('UNIFIED-unbound', {}).get('bound')}; "
-          f"freedos-1.3 bound={results.get('FREEDOS', {}).get('bound')}", flush=True)
+          f"freedos-1.3 bound={results.get('FREEDOS', {}).get('bound')}; failed requests "
+          f"{['%s:%s:%s' % (fn, error, name) for _, fn, error, name in results.get('UNIFIED-failed', [])]}", flush=True)
 
 
 def released(run, name):

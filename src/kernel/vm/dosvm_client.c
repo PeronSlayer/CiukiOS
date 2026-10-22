@@ -43,11 +43,17 @@ static uint32_t creating[DOSVM_LIMIT]; /* owners inside a sleeping create */
 static const char *window_probe(void)
 {
     /* The selected controller owns admission records too, before it can
-     * discover the newly created window VM. No native input chooses this. */
-    static const char prefix[]="f3:vm-fullscreen ";
-    return rec_active() && (g_boot.flags&CBI_F_TEST_REQUEST) &&
-        g_boot.test_request_len>=sizeof(prefix)-1 &&
-        !memcmp(g_boot.test_request,prefix,sizeof(prefix)-1) ? "vm-fullscreen" : "vm-window";
+     * discover the newly created window VM. No native input chooses this.
+     * A run carries one probe name only (scripts/test/evidence.py): f3-61's
+     * vm-game drives the same window path as vm-fullscreen. */
+    static const struct { char prefix[24]; const char *probe; } owners[]={
+        {"f3:vm-fullscreen ","vm-fullscreen"},{"f3:vm-game ","vm-game"}};
+    if (rec_active() && (g_boot.flags&CBI_F_TEST_REQUEST))
+        for (unsigned i=0;i<ARRAY_SIZE(owners);i++) {
+            size_t n=strlen(owners[i].prefix);
+            if (g_boot.test_request_len>=n && !memcmp(g_boot.test_request,owners[i].prefix,n)) return owners[i].probe;
+        }
+    return "vm-window";
 }
 static bool owns_vm(uint32_t pid)
 {

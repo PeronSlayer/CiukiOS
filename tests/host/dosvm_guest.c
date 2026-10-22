@@ -426,6 +426,10 @@ static void unified_report(const char *when)
            t->critical,t->retries,t->expired,t->forged,t->opens,t->closes,t->reads,t->writes,t->finds,
            (unsigned long long)t->read_bytes,(unsigned long long)t->written_bytes,dfv2_ifs_held(&u->ifs),t->refusals,
            u->ifs.why ? u->ifs.why : "-");
+    /* f3-61c: the first failed requests, as the vm-game probe records them. */
+    for (unsigned i=0;i<t->failed && i<DFV2_IFS_FAILURES;i++)
+        printf("H61 IFS %s failed n=%u fn=%04x error=%u name=%s\n",when,i+1,u->ifs.failure[i].fn,u->ifs.failure[i].error,
+               u->ifs.failure[i].name[0] ? u->ifs.failure[i].name : "-");
 }
 #else
 static void unified_report(const char *when) { (void)when; }
@@ -505,6 +509,16 @@ static unsigned replay_cause(const struct v86_frame *f)
     return pm ? (op == 0xFA || op == 0xFB ? 4 : 13) : 2;
 }
 static uint64_t db_rm, db_flags, db_return, db_other;
+/* f3-61d: #DB exits by monitor owner (dosvm_step_owner), for the TCG cost
+ * analysis of a windowed game (one #DB exit is a full monitor round trip). */
+static struct { const char *owner; uint64_t count; } db_owners[16];
+static void db_owner_count(const char *owner)
+{
+    for (unsigned i = 0; i < 16; i++) {
+        if (!db_owners[i].owner) db_owners[i].owner = owner;
+        if (!strcmp(db_owners[i].owner, owner)) { db_owners[i].count++; return; }
+    }
+}
 static uint64_t db_return_tf, db_return_breakpoint;
 static uint32_t rstack_low = 0xFFFF;   /* lowest SP seen on the DPMI host real-mode stack */
 static int trace = -1, ring_on = -1;
@@ -699,6 +713,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     traps++;
     if (vector == 1) {
         const char *owner = dosvm_step_owner(gv, &cpu, dpmi_debug_status(gv, debug_dr6));
+        db_owner_count(owner);
         if (!strcmp(owner, "rm_ss") || !strcmp(owner, "rm_irq")) db_rm++;
         else if (!strcmp(owner, "pm_flags")) db_flags++;
         else if (!strcmp(owner, "pm_return") || !strcmp(owner, "pm_checkpoint")) {
@@ -1381,6 +1396,10 @@ int main(int argc, char **argv)
     printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
            (unsigned long long)db_rm, (unsigned long long)db_flags,
            (unsigned long long)db_return, (unsigned long long)db_other);
+    printf("debug trap owners:");
+    for (unsigned i = 0; i < 16 && db_owners[i].owner; i++)
+        printf(" %s=%llu", db_owners[i].owner, (unsigned long long)db_owners[i].count);
+    printf("\n");
     printf("return causes: tf=%llu breakpoint=%llu armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u\n",
            (unsigned long long)db_return_tf, (unsigned long long)db_return_breakpoint,
            gv->perf.return_armed, gv->perf.return_hits, gv->perf.return_expired,

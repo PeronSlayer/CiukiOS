@@ -67,8 +67,12 @@ static void handle_irq(struct trap_frame *tf)
     }
     if (entropy_irq) entropy_irq(irq);
     biosvm_account_irq(irq, false, irq_handlers[irq] != 0);
+    /* f1-94: the section label/owner name the vector and handler; these
+     * marks split handler time from dispatch, EOI and accounting. */
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_HANDLER);
     if (irq_handlers[irq])
         irq_handlers[irq](tf);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_EOI);
     pic_eoi(irq);
     biosvm_account_irq(irq, true, irq_handlers[irq] != 0);
     if (ledger_irq_context) ledger_irq_context(false);
@@ -109,9 +113,11 @@ void trap_dispatch(struct trap_frame *tf)
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
             if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
+            if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_ENTRY);
             uint64_t irq_start = cpu_irq_enter(tf);
             handle_irq(tf);
             cpu_irq_leave(irq_start);
+            if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_EXIT);
             crit_end();
         }
         if (!dosvm_trap || !dosvm_trap(tf)) biosvm_trap(tf);
@@ -128,9 +134,11 @@ void trap_dispatch(struct trap_frame *tf)
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
             if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
+            if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_ENTRY);
             uint64_t irq_start = cpu_irq_enter(tf);
             handle_irq(tf);
             cpu_irq_leave(irq_start);
+            if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_EXIT);
             crit_end();
         }
         dosvm_trap(tf);
@@ -141,9 +149,11 @@ void trap_dispatch(struct trap_frame *tf)
     if (tf->vector >= 0x20 && tf->vector < 0x30) {
         crit_begin();
         if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
+        if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_ENTRY);
         uint64_t irq_start = cpu_irq_enter(tf);
         handle_irq(tf);
         cpu_irq_leave(irq_start);
+        if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_IRQ_EXIT);
         if (from_user && g_need_resched)
             schedule();               /* still inside the IF-disabled interval */
         crit_end();

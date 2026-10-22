@@ -500,20 +500,25 @@ CIUKI_F3_PROBE(FS_PROBE,probe_f3_vm_fullscreen);
 #include "selector.h"
 #define GAME_PROBE "vm-game"
 #define GAME_FULL_MS 45000u
+#define GAME_WINDOW_MS 25000u   /* f3-61c: windowed continuation, observed 25 s */
+#define GAME_WINDOW_MIN_S 20u    /* of which at least 20 sampled seconds */
+/* Every vm-game record stays within the 240-byte CIUKI_TEST line for all
+ * values (tests/host/test_vm_game_records.py): a text row is two halves of
+ * 40 cells, blank halves are not emitted, counters are 32-bit. */
 static void game_text(struct dosvm *v,const char *phase,const uint16_t *text)
 {
     static const char hex[]="0123456789abcdef";
-    for (unsigned row=0;row<25;row++) {
-        unsigned n=80;
-        while (n && ((uint8_t)text[row*80+n-1]==' ' || !(uint8_t)text[row*80+n-1])) n--;
+    for (unsigned row=0;row<25;row++) for (unsigned col=0;col<80;col+=40) {
+        unsigned n=40;
+        while (n && ((uint8_t)text[row*80+col+n-1]==' ' || !(uint8_t)text[row*80+col+n-1])) n--;
         if (!n) continue;
-        char line[161];
+        char line[81];
         for (unsigned c=0;c<n;c++) {
-            uint8_t ch=(uint8_t)text[row*80+c];
+            uint8_t ch=(uint8_t)text[row*80+col+c];
             line[2*c]=hex[ch>>4]; line[2*c+1]=hex[ch&15];
         }
         line[2*n]=0;
-        rec_emit(GAME_PROBE,"DATA","case=console phase=%s row=%u hex=%s",phase,row,line);
+        rec_emit(GAME_PROBE,"DATA","case=console phase=%s row=%u col=%u hex=%s",phase,row,col,line);
         task_sleep_ms(5);
     }
     (void)v;
@@ -523,10 +528,45 @@ static void game_unified(struct dosvm *v,const char *when)
     struct dosvm_unified_info u;
     bool bound=dosvm_file_unified_info && dosvm_file_unified_info(v,&u);
     if (!bound) u=(struct dosvm_unified_info){0};
-    rec_emit(GAME_PROBE,"DATA","case=unified when=%s kernel=%u bound=%u active=%u owned=%x start=%u requests=%u "
-             "opens=%u closes=%u reads=%u read_kib=%u failed=%u critical=%u expired=%u refusals=%u held=%u",
-             when,v->kernel,bound,u.active,u.owned,u.start,u.requests,u.opens,u.closes,u.reads,
-             (uint32_t)(u.read_bytes>>10),u.failed,u.critical,u.expired,u.refusals,u.held);
+    rec_emit(GAME_PROBE,"DATA","case=unified when=%s kernel=%u bound=%u active=%u owned=%x start=%u critical=%u "
+             "refusals=%u held=%u",when,v->kernel,bound,u.active,u.owned,u.start,u.critical,u.refusals,u.held);
+    rec_emit(GAME_PROBE,"DATA","case=unified_io when=%s requests=%u opens=%u closes=%u reads=%u read_kib=%u "
+             "failed=%u expired=%u",when,u.requests,u.opens,u.closes,u.reads,(uint32_t)(u.read_bytes>>10),
+             u.failed,u.expired);
+    /* f3-61c: the first failed requests (at most 8): redirector function,
+     * the INT 21h function it serves, DOS error and 8.3 name. A character
+     * outside the record grammar is written as '_'; no name is '-'. */
+    static const struct { uint8_t fn,dos; } map[]={
+        {0x01,0x3a},{0x03,0x39},{0x05,0x3b},{0x06,0x3e},{0x07,0x68},{0x08,0x3f},{0x09,0x40},{0x0a,0x5c},
+        {0x0c,0x36},{0x0e,0x43},{0x0f,0x43},{0x11,0x56},{0x13,0x41},{0x16,0x3d},{0x17,0x3c},{0x1b,0x4e},
+        {0x1c,0x4f},{0x21,0x42},{0x2e,0x6c}};
+    for (unsigned i=0;bound && i<u.failed && i<ARRAY_SIZE(u.failure);i++) {
+        char name[13]; unsigned n=0;
+        for (;n<12 && u.failure[i].name[n];n++) {
+            char c=u.failure[i].name[n];
+            bool ok=(c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='_' || c==':' ||
+                    c=='.' || c==',' || c=='/' || c=='+' || c=='-';
+            name[n]=ok ? c : '_';
+        }
+        if (!n) name[n++]='-';
+        name[n]=0;
+        unsigned dos=0;
+        for (unsigned k=0;k<ARRAY_SIZE(map);k++) if (map[k].fn==(u.failure[i].fn&0xff)) dos=map[k].dos;
+        rec_emit(GAME_PROBE,"DATA","case=unified_failed when=%s n=%u of=%u fn=%04x dos=%02x error=%u name=%s",
+                 when,i+1,u.failed,u.failure[i].fn,dos,u.failure[i].error,name);
+    }
+}
+/* DOOM's own exit, as a player leaves it: Esc (menu), Up (Quit Game, the
+ * last item), Enter, y. Set-1 codes through the window's input path. */
+static void game_quit(struct dosvm *v)
+{
+    static const uint16_t keys[]={0x01,0x148,0x1C,0x15};
+    if (!dosvm_input_focus(dosvm_key(v),true)) return;
+    for (unsigned i=0;i<ARRAY_SIZE(keys);i++) {
+        struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=keys[i],.value=1};
+        dosvm_input_event(dosvm_key(v),&e); task_sleep_ms(300);
+        e.value=0; dosvm_input_event(dosvm_key(v),&e); task_sleep_ms(1500);
+    }
 }
 static int probe_f3_vm_game(void)
 {
@@ -539,7 +579,7 @@ static int probe_f3_vm_game(void)
     int error=0; struct process *desktop=0;
     struct dosvm *v=0; uint32_t client=0,desktop_pid=0;
     static const char running[]="running";
-    const char *outcome="none";
+    const char *outcome="none", *display="none", *threshold="none";
     struct dosvm_ledger before,after; dosvm_snapshot(&before);
     static uint16_t last_text[80*25];
     if ((error=storage_enable_write(storage_get(),2))) goto cleanup;
@@ -574,67 +614,125 @@ static int probe_f3_vm_game(void)
         if (deadline_passed(until)) { error=-V86_ETIMEDOUT; outcome="no-video"; goto observed; }
         task_sleep_ms(20);
     }
-    rec_emit(GAME_PROBE,"DATA","case=launch ms=%llu mode=%u unchained=%u",g_ticks-typed,video.mode,video.unchained);
+    rec_emit(GAME_PROBE,"DATA","case=launch ms=%u mode=%u unchained=%u",(uint32_t)(g_ticks-typed),video.mode,video.unchained);
     if (text_seen) game_text(v,"startup",last_text);
     for (unsigned i=0;i<3;i++) {
         struct dosvm_frame frame; char hex[65]="none";
         task_sleep_ms(1000);
         int e=dosvm_frame_digest(v,g_ticks,&frame);
         if (!e) sha256_hex(frame.digest,hex);
-        rec_emit(GAME_PROBE,"DATA","case=frame index=%u error=%d mode=%u width=%u height=%u text=%u digest=%s",
-                 i,e,e ? 0 : frame.mode,e ? 0 : frame.width,e ? 0 : frame.height,e ? 0 : frame.text,hex);
+        rec_emit(GAME_PROBE,"DATA","case=frame index=%u error=%d mode=%u w=%u h=%u digest=%s",
+                 i,e,e ? 0 : frame.mode,e ? 0 : frame.width,e ? 0 : frame.height,hex);
     }
+    /* f3-61c: QEMU's standard VGA does not read back every loaded register
+     * (f3-29): the entry is refused with the windowed continuation. Under QEMU
+     * the case then verifies the windowed game and reports the refusal as
+     * data; on hardware (the T23 expectation) full screen stays required. */
+    uint32_t refusals=v->fullscreen_refusals;
     rec_emit(GAME_PROBE,"ARM","action=fullscreen_enter");
     until=deadline_after_ms(30000);
-    while (!dosvm_fullscreen_active(dosvm_key(v))) {
+    while (!dosvm_fullscreen_active(dosvm_key(v)) && v->fullscreen_refusals==refusals) {
         if (!dosvm_valid(dosvm_key(v)) || deadline_passed(until)) break;
         task_sleep_ms(10);
     }
-    bool entered=dosvm_fullscreen_active(dosvm_key(v));
-    rec_emit(GAME_PROBE,"DATA","case=fullscreen entered=%u error=%d",entered,v->fullscreen_error);
-    if (!entered) { error=-EIO; outcome="not-entered"; goto observed; }
-    uint64_t started=g_ticks;
+    bool entered=dosvm_fullscreen_active(dosvm_key(v)), refused=v->fullscreen_refusals!=refusals;
+    bool qemu=(g_boot.flags&CBI_F_SMBIOS_QEMU)!=0;
+    rec_emit(GAME_PROBE,"DATA","case=fullscreen entered=%u refused=%u reason=%d continuation=%s policy=%s error=%d",
+             entered,refused,refused ? v->fullscreen_refusal : 0,refused ? "windowed" : "none",qemu ? "qemu" : "hardware",
+             v->fullscreen_error);
+    if (!entered && !(refused && qemu)) { error=-EIO; outcome=refused ? "refused" : "not-entered"; goto observed; }
+    display=entered ? "fullscreen" : "window";
+    /* f3-61d: one sample per second without the probe's own frame hashing
+     * (a 640x480 render + SHA-256 per second took 0.3-0.6 s of the TCG
+     * guest's CPU and bunched the samples): full screen counts seconds with
+     * scanout writes, the window counts seconds with a CRTC page flip (DOOM
+     * flips once per displayed frame). The screendump ARMs are paced on the
+     * clock, 5 s apart, never inside a late sample. */
+    uint64_t started=g_ticks,sample=g_ticks,demo_at=0;
     uint32_t irq0=v->dpmi.stats.irqs_pm; uint64_t opl0=v->audio.opl_writes; uint32_t sb0=v->audio.sb.units;
+    uint32_t seconds=0,frames=0,irq_seconds=0,flips=0,irq_last=irq0;
     bool demo_start=false,demo_end=false;
+    struct dosvm_video_info wv; dosvm_video_info(dosvm_key(v),&wv);
+    uint32_t starts0=wv.starts,starts=wv.starts;
     outcome=running;
-    for (unsigned second=1;g_ticks-started<GAME_FULL_MS;second++) {
-        uint64_t next=started+second*1000ull;
-        while (g_ticks<next) {
-            if (!dosvm_valid(dosvm_key(v)) || v->info.state>=DOSVM_STOPPING || !dosvm_fullscreen_active(dosvm_key(v))) break;
-            if (!demo_start && g_ticks-started>=1000) { rec_emit(GAME_PROBE,"ARM","action=fullscreen_demo_start"); demo_start=true; }
-            if (!demo_end && g_ticks-started>=5000) { rec_emit(GAME_PROBE,"ARM","action=fullscreen_demo_end"); demo_end=true; }
+    while (g_ticks-started<(entered ? GAME_FULL_MS : GAME_WINDOW_MS)) {
+        while (g_ticks-sample<1000) {
+            if (!dosvm_valid(dosvm_key(v)) || v->info.state>=DOSVM_STOPPING ||
+                (entered && !dosvm_fullscreen_active(dosvm_key(v))) || (!entered && v->launch_returned)) break;
+            if (!demo_start && g_ticks-started>=1000) {
+                rec_emit(GAME_PROBE,"ARM","action=fullscreen_demo_start"); demo_start=true; demo_at=g_ticks;
+            }
+            if (demo_start && !demo_end && g_ticks-demo_at>=5000) {
+                rec_emit(GAME_PROBE,"ARM","action=fullscreen_demo_end"); demo_end=true;
+            }
             task_sleep_ms(10);
         }
+        sample=g_ticks;
         struct dosvm_unified_info u={0};
         if (dosvm_file_unified_info) dosvm_file_unified_info(v,&u);
         uint8_t mode=0; dosvm_read(v,0x449,&mode,1);
         bool active=dosvm_fullscreen_active(dosvm_key(v));
-        rec_emit(GAME_PROBE,"DATA","case=sample t=%llu fullscreen=%u state=%u mode=%u frame_seconds=%u/%u irq_pm=%u opl=%u sb=%u "
-                 "dpmi=%u returned=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u cause=%u error=%d",
-                 g_ticks-started,active,v->info.state,mode,v->fullscreen_frame_seconds,v->fullscreen_seconds,
-                 v->dpmi.stats.irqs_pm-irq0,(uint32_t)(v->audio.opl_writes-opl0),v->audio.sb.units-sb0,v->dpmi.active,
-                 v->launch_returned,u.reads,u.failed,u.critical,v->fullscreen_cause,v->fullscreen_error);
+        dosvm_video_info(dosvm_key(v),&wv);
+        uint32_t irq=v->dpmi.stats.irqs_pm;
+        if (entered) { seconds=v->fullscreen_seconds; frames=v->fullscreen_frame_seconds; }
+        else { seconds++; frames+=wv.starts!=starts; }
+        irq_seconds+=irq!=irq_last; irq_last=irq;
+        starts=wv.starts; flips=wv.starts-starts0;
+        uint32_t t=(uint32_t)(g_ticks-started);
+        rec_emit(GAME_PROBE,"DATA","case=sample t=%u fs=%u state=%u mode=%u frames=%u/%u dpmi=%u returned=%u cause=%u error=%d",
+                 t,active,v->info.state,mode,frames,seconds,v->dpmi.active,
+                 v->launch_returned,v->fullscreen_cause,v->fullscreen_error);
+        rec_emit(GAME_PROBE,"DATA","case=progress t=%u irq_pm=%u opl=%u sb=%u flips=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u",
+                 t,irq-irq0,(uint32_t)(v->audio.opl_writes-opl0),v->audio.sb.units-sb0,flips,
+                 u.reads,u.failed,u.critical);
         if (v->info.state>=DOSVM_STOPPING || !dosvm_valid(dosvm_key(v))) { outcome="stopped"; break; }
-        if (!active) { outcome=v->launch_returned ? "exited" : "watchdog"; break; }
+        if (entered && !active) { outcome=v->launch_returned ? "exited" : "watchdog"; break; }
+        if (!entered && v->launch_returned) { outcome="exited"; break; }
     }
-    if (outcome==running && v->fullscreen_frame_seconds+2<v->fullscreen_seconds) outcome="frozen";
+    /* Profile-aware progress (f3-61d). Full screen, and a window on hardware:
+     * frames in all observed seconds but two. A window under QEMU TCG: the
+     * f3-35 TF return tracker single-steps every protected-mode IRQ handler
+     * (DOOM with DMX sound: about 400 #DB exits per IRQ), so the game draws
+     * only every few seconds there; require a live guest (PM IRQs in all
+     * seconds but two) and at least two page flips over at least 20 s. */
+    threshold=entered || !qemu ? "frames" : "qemu-tcg";
+    if (outcome==running) {
+        bool progress=entered || !qemu ? frames+2>=seconds && seconds>=(entered ? 1u : GAME_WINDOW_MIN_S) :
+                      seconds>=GAME_WINDOW_MIN_S && irq_seconds+2>=seconds && flips>=2;
+        if (!progress) outcome="frozen";
+    }
     if (dosvm_fullscreen_active(dosvm_key(v))) {
         rec_emit(GAME_PROBE,"ARM","action=fullscreen_leave");
         until=deadline_after_ms(30000);
         while (dosvm_fullscreen_active(dosvm_key(v)) && !deadline_passed(until)) task_sleep_ms(10);
     }
 observed:
+    rec_emit(GAME_PROBE,"DATA","case=verdict outcome=%s display=%s threshold=%s",outcome,display,threshold);
+    if (!error && outcome!=running) error=-EIO;
+    /* f3-61c: end the session through its own idle prompt (DOOM's menu:
+     * Esc, Up to Quit Game, Enter, y), so the window closes as an ordinary
+     * EXIT (dosvm_shell_idle, no data loss); otherwise record why not. */
+    const char *close="forced", *why="no-vm";
     task_sleep_ms(2000);
     if (v && dosvm_valid(dosvm_key(v))) {
+        if (v->info.state>=DOSVM_STOPPING) why="vm-stopped";
+        else if (dosvm_fullscreen_active(dosvm_key(v))) why="fullscreen";
+        else {
+            if (v->exec_pending && !v->launch_returned) game_quit(v);
+            until=deadline_after_ms(120000);
+            while (!dosvm_shell_idle(v) && v->info.state<DOSVM_STOPPING && !deadline_passed(until)) task_sleep_ms(20);
+            if (dosvm_shell_idle(v)) { close="idle-prompt"; why="none"; }
+            else why=v->info.state>=DOSVM_STOPPING ? "vm-stopped" : v->exec_pending ? "game-running" :
+                      v->dpmi.clients ? "dpmi-client" : "shell-busy";
+        }
         uint8_t mode=0; dosvm_read(v,0x449,&mode,1);
-        rec_emit(GAME_PROBE,"DATA","case=after state=%u reason=%u vector=%u mode=%u dpmi=%u returned=%u exec_pending=%u "
-                 "shell_idle=%u cause=%u",v->info.state,v->info.reason,v->info.fault_vector,mode,v->dpmi.active,
+        rec_emit(GAME_PROBE,"DATA","case=after state=%u reason=%u vector=%u mode=%u dpmi=%u returned=%u exec=%u "
+                 "idle=%u cause=%u",v->info.state,v->info.reason,v->info.fault_vector,mode,v->dpmi.active,
                  v->launch_returned,v->exec_pending,dosvm_shell_idle(v),v->fullscreen_cause);
         if (mode<=3) game_text(v,"after",dosvm_text(v,0));
         game_unified(v,"after");
     }
-    rec_emit(GAME_PROBE,"DATA","case=verdict outcome=%s",outcome);
-    if (!error && outcome!=running) error=-EIO;
+    rec_emit(GAME_PROBE,"DATA","case=close method=%s why=%s",close,why);
 cleanup:
     if (v && dosvm_fullscreen_active(dosvm_key(v))) dosvm_fullscreen_leave(dosvm_key(v),false);
     if (client) process_remove(0,client);

@@ -39,6 +39,31 @@ class LoaderModelTests(unittest.TestCase):
         for token in ('usbscan=1','usbscan=00','xusbscan=0','USBscan=0'):
             with self.assertRaises(ValueError):model.boot_options(token)
 
+    @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
+    def test_ecpoll_option_assembled_allowlist(self):
+        # f1-94 amendment 1: ecpoll=0 is one exact BOOT.CFG option without a
+        # loader action; the kernel disables the ThinkPad EC volume poll.
+        menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
+        options=menu.split('option_tokens db',1)[1].split('\n',1)[0]
+        self.assertIn("'ecpoll=0',0",options)
+        out=ROOT/'build/host';out.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='ecpoll-loader-',dir=out) as folder:
+            asm=Path(folder)/'loader.asm';binary=Path(folder)/'loader.bin'
+            asm.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                           +','.join(SYMBOLS)+'\n')
+            subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],cwd=ROOT,check=True)
+            machine=LoaderParserMachine(binary)
+            for token in ('ecpoll=0','ecpoll=1','ecpoll=00','xecpoll=0','ECpoll=0','ecpoll=','ecpoll=0\r\n'):
+                with self.subTest(token=token):
+                    self.assertEqual(machine.config(token),token.strip()=='ecpoll=0')
+                    if token.strip()=='ecpoll=0':self.assertEqual(machine.field(8)&3,2)
+            self.assertTrue(machine.config('serial=0 ecpoll=0 usbscan=0\r\nsafe=1 mode=0x0118'))
+            self.assertEqual((machine.field(8)&3,machine.var('preferred_mode')),(1,0x118))
+        self.assertEqual(model.boot_options('serial=0 ecpoll=0 usbscan=0\r\nsafe=1 mode=0x0118'),
+                         {'safe':True,'serial':False,'mode':0x118})
+        for token in ('ecpoll=1','ecpoll=00','xecpoll=0','ECpoll=0','ecpoll='):
+            with self.assertRaises(ValueError):model.boot_options(token)
+
     def test_uart_outcomes_and_disable(self):
         for options, state in (({}, 1), ({'bda': 0}, 2), ({'bda': 0x2f8}, 2),
                                ({'scratch': False}, 3), ({'lsr': 0xff}, 4),

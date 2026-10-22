@@ -7286,7 +7286,12 @@
                 }
               ]
             }
-          ]
+          ],
+          "unless": {
+            "event": "DATA",
+            "case": "fullscreen",
+            "entered": "0"
+          }
         }
       ],
       "expected": {
@@ -7353,12 +7358,14 @@
               "event": "DATA",
               "case": "fullscreen"
             },
-            "fields": {
-              "entered": {
-                "eq": 1
-              }
-            },
-            "exact_count": 1
+            "exact_count": 1,
+            "required_fields": [
+              "entered",
+              "refused",
+              "reason",
+              "continuation",
+              "policy"
+            ]
           },
           {
             "where": {
@@ -7368,6 +7375,17 @@
             "fields": {
               "outcome": "running"
             },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "close"
+            },
+            "required_fields": [
+              "method",
+              "why"
+            ],
             "exact_count": 1
           },
           {
@@ -7541,7 +7559,12 @@
                 }
               ]
             }
-          ]
+          ],
+          "unless": {
+            "event": "DATA",
+            "case": "fullscreen",
+            "entered": "0"
+          }
         }
       ],
       "expected": {
@@ -7608,12 +7631,14 @@
               "event": "DATA",
               "case": "fullscreen"
             },
-            "fields": {
-              "entered": {
-                "eq": 1
-              }
-            },
-            "exact_count": 1
+            "exact_count": 1,
+            "required_fields": [
+              "entered",
+              "refused",
+              "reason",
+              "continuation",
+              "policy"
+            ]
           },
           {
             "where": {
@@ -7623,6 +7648,17 @@
             "fields": {
               "outcome": "running"
             },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "close"
+            },
+            "required_fields": [
+              "method",
+              "why"
+            ],
             "exact_count": 1
           },
           {

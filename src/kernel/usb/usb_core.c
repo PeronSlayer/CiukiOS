@@ -3,6 +3,7 @@
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
 #include <ciuki/init.h>
+#include <ciuki/smi.h>
 #ifndef CIUKI_USB_HOST
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
@@ -760,6 +761,7 @@ void usb_step(struct usb_host *h)
             h->scan_window = tick; h->scan_count = 0;
         }
         h->scan_count++;
+        if (smi_mark) smi_mark(SMI_USB_SCAN); /* f1-94 blackout coincidence */
         for (unsigned p = 0; p < h->ports && h->ready; p++) {
             unsigned s = h->ops->port_status(h, p);
             unsigned previous = h->root_status[p];
@@ -932,6 +934,7 @@ static void input_service(void *arg)
     (void)arg;
     for (;;) {
         uint32_t f = irq_save(); input_pending = false; irq_restore(f);
+        if (smi_mark) smi_mark(SMI_HID_BEGIN); /* f1-94: one usb-hid turn */
         for (unsigned i = 0; i < host_count; i++) {
             fs_lock_take(&hosts[i].transfer_lock);
             if (g_current) g_current->device_worker_site=(uint32_t)(uintptr_t)usb_hid_service;
@@ -939,6 +942,7 @@ static void input_service(void *arg)
             if (g_current) g_current->device_worker_site=0;
             fs_lock_drop(&hosts[i].transfer_lock);
         }
+        if (smi_mark) smi_mark(SMI_HID_END);
         kwait_wait_until(&input_changed, hid_pending, 0, deadline_after_ms(1));
     }
 }
