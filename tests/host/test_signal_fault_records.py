@@ -33,6 +33,7 @@ HARNESS = r'''
 #include <ciuki/kernel.h>
 #include <ciuki/signal.h>
 #include <ciuki/probe.h>
+#include <ciuki/cpustat.h>
 #define SIGNAL_RESULT (CIUKI_IMAGE_BASE + 4 * CIUKI_PAGE_SIZE)
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "line %d: %s\n", __LINE__, #c); exit(1); } } while (0)
 RESULT_LAYOUT
