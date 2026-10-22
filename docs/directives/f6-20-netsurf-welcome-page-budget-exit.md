@@ -11,7 +11,7 @@
 
 Rules: no QEMU (the lead reruns `build/lead-scratch/menu-probe.py`), no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English. Report `build/codex/f6-20-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 10:30, decision on the delivery)
+## Amendment 1 (lead, 2026-10-22 10:06, decision on the delivery)
 
 Accepted. The T23 exit is most likely the desktop dropping the window after
 128 pending unmerged pointer messages during a slow first paint
