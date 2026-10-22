@@ -31,3 +31,9 @@ class SerialTests(unittest.TestCase):
 
     def test_records(self):
         self.run_fixture('serial_record_test')
+
+    def test_native_com(self):
+        self.run_fixture('com_test')
+
+    def test_com_logger(self):
+        self.run_fixture('com_logger_test')

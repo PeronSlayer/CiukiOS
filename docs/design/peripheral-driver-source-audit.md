@@ -383,6 +383,25 @@ reason. Firmware bytes downloaded here are research-only, never image payloads.
 
 ## Behavioral and test references, not port sources
 
+### f1-111 implementation use
+
+`drivers/com.c` is Ciuki code informed by the audited Linux v6.12 8250
+detection and PCI layout algorithms above, with the retained serial.c authors
+and Russell King attribution in its header. No upstream source/header is
+compiled wholesale, and no foreign UART/TTY framework is imported. UART
+register facts also use TI's [TL16C550D](https://www.ti.com/lit/ds/symlink/tl16c550d.pdf),
+[TL16C750 revision C](https://www.ti.com/lit/ds/symlink/tl16c750.pdf), and
+Exar's [ST16C650A revision 5.0.3](https://www.maxlinear.com/ds/st16c650a_503_061610.pdf).
+Those manuals are research references, not redistributed runtime assets.
+The additional QEMU [PCI serial specification](https://www.qemu.org/docs/master/specs/pci-serial.html)
+is used for its documented I/O layout only; no QEMU source is imported or run.
+Public COM records and the SDK include are original MIT ABI definitions;
+the implementation remains GPL-2.0-only. Local Resource Kit chapter 24's
+communications-resource/VCOMM discussion is behavioral research only; no
+Microsoft code or media is copied to tracked files.
+
+### Existing census references
+
 Microsoft's
 [serial enumerator](https://github.com/microsoft/Windows-driver-samples/blob/main/serial/serenum/enum.c)
 was read for the COM PnP sequence. The branch link is not an immutable pin;

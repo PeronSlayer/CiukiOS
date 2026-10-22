@@ -415,6 +415,87 @@ with existing Ciuki drivers and broader matching tables, rather than carry
 multiple foreign driver frameworks. Their permissive licenses permit
 selective future reuse with notices; they do not make porting free of work.
 
+## Native COM ABI v1 (f1-111)
+
+The implementation interface is `ciuki/com.h` in the SDK and `ciuki/com.h`
+in the kernel. Native names are `/dev/com1` through `/dev/com8`; BDA slots
+retain their numbers and additional assigned PnP/qualified PCI ports take
+unused slots. Zero/FFFF, wrapping and overlapping resources are rejected.
+Enumeration never probes the live logger. Its existing `uart` claim and
+IRQ callback remain pinned; the native aggregate dispatcher invokes that
+callback once on its line. The boot record identifies the reserved base.
+An application opening that port gets `EBUSY`, including read-only opens.
+
+`open`/`close`/`read`/`write` and existing `devctl(fd, op, buffer, size)` are
+used, without new syscall numbers. Opens are exclusive per file description;
+dup/fork share it, final close stops local interrupts, invalidates the open
+generation and discards queued bytes. Close flushes the hardware holding
+FIFO, then gives the shift register at most 20 one-millisecond pauses with
+interrupts enabled. Idle failure retains the port in quarantine; another
+open cannot enter during that stop. Process exit follows the same close.
+No raw I/O privilege or guest lease is granted. Native/VM/mouse handoff is
+reserved for f1-112. `O_APPEND`, create/truncate/directory flags are rejected.
+Access mode controls read/write rights; configuration needs write access.
+
+All v1 records contain only 32-bit fields, with leading `version=1` and
+`size=sizeof(record)`. Unknown versions, sizes, enum values, flags and
+reserved fields return `EINVAL`; unrelated controls return `ENOTTY`.
+`COM_GET_LINE`/`COM_SET_LINE` use baud, data bits (5..8), stop bits (1/2;
+5-bit/two-stop means the hardware's 1.5), parity (none/odd/even/mark/space),
+RX trigger selector (0..3) and read/write timeout milliseconds (0..60000).
+The default is 38400 8N1, trigger 0, immediate I/O. Trigger selectors 0..3
+map to 1/4/8/14 bytes on a 16550A, 8/16/24/28 on the 32-byte 16650, and
+1/16/32/56 in 16750 64-byte mode; single-byte operation ignores the selector.
+Only exactly representable divisors of the proven clock are accepted. A line
+change requires empty software/hardware RX and TX; otherwise `EBUSY`.
+`COM_SET_MODEM` sets DTR/RTS and transmit break, without exposing LOOP/OUT2.
+`COM_GET_STATUS` returns generation, port/base/IRQ/origin, detected generation,
+verified FIFO depth, modem inputs/deltas, sticky line errors, queue occupancy
+and capacities, and receive/drop counters. Status reads do not clear errors.
+
+Each open allocates 1024 RX and 1024 TX bytes; at most eight metadata slots
+exist, with no registry/inventory limit increases. Reads/writes return a
+bounded short transfer as soon as progress occurs. Zero timeouts and
+`O_NONBLOCK` return `EAGAIN` when empty/full; finite waits return `ETIMEDOUT`,
+signals/termination return `EINTR`, stale generations return `ENODEV`.
+IRQ work is bounded per port/pass and uses the wait queue's deferred wake.
+RX overflow drops new bytes and increments a counter; LSR overrun, parity,
+framing and break are sticky status bits. Caller buffers are checked/pinned
+before consuming or publishing bytes. Seek/positioned I/O returns `ESPIPE`.
+
+Research and implementation decisions: [TI TL16C550D, register descriptions
+and interrupt priorities](https://www.ti.com/lit/ds/symlink/tl16c550d.pdf),
+[TI TL16C750, FCR5/DLAB and trigger table](https://www.ti.com/lit/ds/symlink/tl16c750.pdf),
+[Exar ST16C650A rev 5.0.3, EFR and FIFO](https://www.maxlinear.com/ds/st16c650a_503_061610.pdf),
+and Linux v6.12 [8250 detection](https://github.com/torvalds/linux/blob/v6.12/drivers/tty/serial/8250/8250_port.c),
+[PCI layouts](https://github.com/torvalds/linux/blob/v6.12/drivers/tty/serial/8250/8250_pci.c)
+and [assigned PnP resources](https://github.com/torvalds/linux/blob/v6.12/drivers/tty/serial/8250/8250_pnp.c).
+Detection restores LCR/IER/MCR/SCR/divisors/EFR; because FCR is write-only,
+an inherited enabled FIFO is refused rather than claiming to restore an
+unknown trigger. Inactive FIFO-off ports have a known restore baseline.
+EFR alone is insufficient to claim 32 bytes: loopback measures depth, with
+unknown clones falling back to the verified lower capability.
+The four BDA words are confirmed by [SeaBIOS rel-1.16.3
+`bda.h`](https://github.com/coreboot/seabios/blob/rel-1.16.3/src/std/bda.h).
+The local Windows 98 Resource Kit, chapter 24 (`wrkc24_1.htm`, ISA devices
+and ESCD), confirms separating assigned resources from device names. The
+read-only f1-109 inventory provider must supply assigned PnP resources;
+f1-111 does not perform ISA isolation/configuration writes. Unsupported PCI
+IDs/MMIO layouts and unqualified routes stay visible and cannot be opened.
+Assigned PnP submission runs after `com_init()` and before the initial native
+namespace is attached. `com_pnp_assigned()` preserves an existing BDA logical
+number and can qualify its previously unknown IRQ without probing a live port.
+Before an open, assigned routing supersedes the BDA IRQ convention; the logger
+keeps its original reservation. Registry invalidation prevents further native
+access and is reflected in the read-only COM inventory.
+The f1-109 provider is not present in the f1-111 base: connecting its assigned
+inventory remains an explicit integration dependency, not an implemented ISA
+isolation scan. PCI activation currently admits Oxford 1415:9501 (four packed
+ports at 1.8432 MHz; SIIG subsystem excluded) and QEMU 1b36:0002/0003/0004
+(one/two/four packed ports, same clock), from exact layouts. QEMU's
+[PCI serial device specification](https://www.qemu.org/docs/master/specs/pci-serial.html)
+documents the offsets and IRQ pin. No QEMU run is evidence for this change.
+
 ## Device model, claims and guest boundaries
 
 The existing [ownership](device-firmware-ownership.md),

@@ -8,6 +8,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
 #include <ciuki/work.h>
+extern bool com_legacy_attach(unsigned, irq_handler_t) __attribute__((weak));
 
 #define UART_POLL_LIMIT 20000u   /* panic only */
 #define UART_INIT_POLL_LIMIT 4096u
@@ -103,6 +104,7 @@ void serial_init(uint16_t base, uint16_t divisor)
 }
 
 bool serial_present(void) { return uart_ok; }
+unsigned serial_fifo_size(void) { return uart_fifo_bytes; }
 
 void serial_boot_init(void)
 {
@@ -172,7 +174,8 @@ void serial_writer_init(void)
      * the first STI. No writer task, allocation or synchronous drain. */
     if (!uart_ok || uart_irq_started || uart_panic_mode) return;
     uint32_t f = irq_save();
-    irq_set_handler(uart_irq, serial_irq);
+    if (!com_legacy_attach || !com_legacy_attach(uart_irq, serial_irq))
+        irq_set_handler(uart_irq, serial_irq);
     uart_irq_started = true;
     pic_unmask(uart_irq);
     serial_irq(NULL);

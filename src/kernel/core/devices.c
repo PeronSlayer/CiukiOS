@@ -13,6 +13,8 @@
 #include <ciuki/usb.h>
 #include <ciuki/process.h>
 #include <ciuki/uaddr.h>
+#include <ciuki/com.h>
+#pragma weak com_snapshot
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
 #endif
@@ -69,6 +71,32 @@ static void owner_resources(struct ciuki_device_record *d, const char *owner)
             string(d->reason, sizeof(d->reason), "Resource lease quarantined; retained until reboot.");
         }
     }
+}
+static bool com_devices(struct ciuki_devices_info *out)
+{
+    if (!com_snapshot) return false;
+    bool logger=false;
+    static const char *const chips[]={"unprobed", "8250", "16450", "16550", "16550A", "16650", "16750"};
+    for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
+        struct ciuki_com_status s; const char *reason;
+        if (!com_snapshot(i,&s,&reason)) continue;
+        logger|=!!(s.flags&CIUKI_COM_LOGGER);
+        char name[64];
+        ksnprintf(name,sizeof(name),"COM%u %s (%u-byte capacity)%s",s.number,
+            s.chip<ARRAY_SIZE(chips) ? chips[s.chip] : "unknown",s.fifo_depth,
+            s.flags&CIUKI_COM_LOGGER ? " kernel log" : "");
+        struct ciuki_device_record *d=append(out,0x70000+i,CIUKI_DEVICE_PORT,
+            s.origin==CIUKI_COM_PCI ? CIUKI_BUS_PCI : CIUKI_BUS_LEGACY,name,"uart",
+            s.flags&CIUKI_COM_QUARANTINED ? CIUKI_DEVICE_QUARANTINED :
+            s.flags&(CIUKI_COM_READY|CIUKI_COM_LOGGER) ? CIUKI_DEVICE_READY : CIUKI_DEVICE_FIRMWARE_FIRST,reason);
+        resource(d,RES_PORT,s.base,s.base+8,0);
+        if (s.irq && s.irq<16) resource(d,RES_IRQ,s.irq,s.irq+1,0);
+        if (d) {
+            d->generation=s.generation;
+            if (s.flags&CIUKI_COM_OPEN) string(d->reason,sizeof(d->reason),"Exclusive native COM file description owns this port.");
+        }
+    }
+    return logger;
 }
 static void activation(struct ciuki_device_record *d, const char *name)
 {
@@ -303,11 +331,13 @@ void devices_snapshot(struct ciuki_devices_info *out)
         if (p->class_code == 0x0c && p->subclass == 3) usb_binding(d, p);
         if (bound) { owner_resources(d, sound_driver); d->generation = audio.caps.generation ? audio.caps.generation : ac97.generation; }
     }
+    bool com_logger=com_devices(out);
     /* Registry owners become legacy logical devices. Special owners below
      * are represented once by their actual backend rather than inferred PCI bindings. */
     for (unsigned k = 0; k < inventory.resource_count; k++) {
         const struct resource *r = &inventory.resources[k];
-        if (r->state == RS_RELEASED || equal(r->owner, "input") || equal(r->owner, "i8042") ||
+        if (r->state == RS_RELEASED || (com_logger && equal(r->owner,"uart")) ||
+            (com_snapshot && !strncmp(r->owner,"com",3)) || equal(r->owner, "input") || equal(r->owner, "i8042") ||
             equal(r->owner, "firmware-input") || equal(r->owner, "boot-framebuffer") || equal(r->owner, "fbdev") ||
             !strncmp(r->owner, "usb-", 4) || !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma") || equal(r->owner, "es137x") || equal(r->owner, "via82xx") || equal(r->owner, "sb16")) continue;
         bool seen = false;
