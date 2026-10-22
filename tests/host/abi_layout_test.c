@@ -6,6 +6,11 @@
 #include <ciuki/abi.h>
 
 struct expectation { const char *key; uint32_t native, expected; };
+_Static_assert(CIUKI_COM_UNKNOWN==0 && CIUKI_COM_8250==1 && CIUKI_COM_16450==2 &&
+    CIUKI_COM_16550==3 && CIUKI_COM_16550A==4 && CIUKI_COM_16650==5 && CIUKI_COM_16750==6,"COM chip codes");
+_Static_assert(CIUKI_COM_BDA==1 && CIUKI_COM_PNP==2 && CIUKI_COM_PCI==3,"COM origins");
+_Static_assert(CIUKI_COM_PARITY_NONE==0 && CIUKI_COM_PARITY_ODD==1 && CIUKI_COM_PARITY_EVEN==2 &&
+    CIUKI_COM_PARITY_MARK==3 && CIUKI_COM_PARITY_SPACE==4,"COM parity codes");
 /* The operation-specific union is not enumerated recursively by the JSON
  * extractor; check these literal offsets in both the -m32 compile and host. */
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.timeout_ms)==72,"DOSVM timeout ABI");
@@ -14,6 +19,60 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.events)==80,"D
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.reserved)==84,"DOSVM wait reserved ABI");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.redraw)==80,"DOSVM redraw ABI");
 static const struct expectation expectations[] = {
+    {"constant.CIUKI_COM_VERSION", CIUKI_COM_VERSION, 1u},
+    {"constant.CIUKI_COM_MAX", CIUKI_COM_MAX, 8u},
+    {"constant.CIUKI_COM_QUEUE", CIUKI_COM_QUEUE, 1024u},
+    {"constant.COM_GET_LINE", COM_GET_LINE, 0x434f0101u},
+    {"constant.COM_SET_LINE", COM_SET_LINE, 0x434f0102u},
+    {"constant.COM_GET_STATUS", COM_GET_STATUS, 0x434f0103u},
+    {"constant.COM_SET_MODEM", COM_SET_MODEM, 0x434f0104u},
+    {"constant.CIUKI_COM_DTR", CIUKI_COM_DTR, 1u},
+    {"constant.CIUKI_COM_RTS", CIUKI_COM_RTS, 2u},
+    {"constant.CIUKI_COM_BREAK", CIUKI_COM_BREAK, 4u},
+    {"constant.CIUKI_COM_LOGGER", CIUKI_COM_LOGGER, 1u},
+    {"constant.CIUKI_COM_OPEN", CIUKI_COM_OPEN, 2u},
+    {"constant.CIUKI_COM_READY", CIUKI_COM_READY, 4u},
+    {"constant.CIUKI_COM_QUARANTINED", CIUKI_COM_QUARANTINED, 8u},
+    {"sizeof.ciuki_com_line", sizeof(struct ciuki_com_line), 40u},
+    {"alignof.ciuki_com_line", _Alignof(struct ciuki_com_line), 4u},
+    {"offsetof.ciuki_com_line.version", __builtin_offsetof(struct ciuki_com_line, version), 0u},
+    {"offsetof.ciuki_com_line.size", __builtin_offsetof(struct ciuki_com_line, size), 4u},
+    {"offsetof.ciuki_com_line.baud", __builtin_offsetof(struct ciuki_com_line, baud), 8u},
+    {"offsetof.ciuki_com_line.data_bits", __builtin_offsetof(struct ciuki_com_line, data_bits), 12u},
+    {"offsetof.ciuki_com_line.stop_bits", __builtin_offsetof(struct ciuki_com_line, stop_bits), 16u},
+    {"offsetof.ciuki_com_line.parity", __builtin_offsetof(struct ciuki_com_line, parity), 20u},
+    {"offsetof.ciuki_com_line.rx_trigger", __builtin_offsetof(struct ciuki_com_line, rx_trigger), 24u},
+    {"offsetof.ciuki_com_line.read_timeout_ms", __builtin_offsetof(struct ciuki_com_line, read_timeout_ms), 28u},
+    {"offsetof.ciuki_com_line.write_timeout_ms", __builtin_offsetof(struct ciuki_com_line, write_timeout_ms), 32u},
+    {"offsetof.ciuki_com_line.reserved", __builtin_offsetof(struct ciuki_com_line, reserved), 36u},
+    {"sizeof.ciuki_com_modem", sizeof(struct ciuki_com_modem), 16u},
+    {"alignof.ciuki_com_modem", _Alignof(struct ciuki_com_modem), 4u},
+    {"offsetof.ciuki_com_modem.version", __builtin_offsetof(struct ciuki_com_modem, version), 0u},
+    {"offsetof.ciuki_com_modem.size", __builtin_offsetof(struct ciuki_com_modem, size), 4u},
+    {"offsetof.ciuki_com_modem.outputs", __builtin_offsetof(struct ciuki_com_modem, outputs), 8u},
+    {"offsetof.ciuki_com_modem.reserved", __builtin_offsetof(struct ciuki_com_modem, reserved), 12u},
+    {"sizeof.ciuki_com_status", sizeof(struct ciuki_com_status), 80u},
+    {"alignof.ciuki_com_status", _Alignof(struct ciuki_com_status), 4u},
+    {"offsetof.ciuki_com_status.version", __builtin_offsetof(struct ciuki_com_status, version), 0u},
+    {"offsetof.ciuki_com_status.size", __builtin_offsetof(struct ciuki_com_status, size), 4u},
+    {"offsetof.ciuki_com_status.generation", __builtin_offsetof(struct ciuki_com_status, generation), 8u},
+    {"offsetof.ciuki_com_status.number", __builtin_offsetof(struct ciuki_com_status, number), 12u},
+    {"offsetof.ciuki_com_status.base", __builtin_offsetof(struct ciuki_com_status, base), 16u},
+    {"offsetof.ciuki_com_status.irq", __builtin_offsetof(struct ciuki_com_status, irq), 20u},
+    {"offsetof.ciuki_com_status.origin", __builtin_offsetof(struct ciuki_com_status, origin), 24u},
+    {"offsetof.ciuki_com_status.chip", __builtin_offsetof(struct ciuki_com_status, chip), 28u},
+    {"offsetof.ciuki_com_status.fifo_depth", __builtin_offsetof(struct ciuki_com_status, fifo_depth), 32u},
+    {"offsetof.ciuki_com_status.flags", __builtin_offsetof(struct ciuki_com_status, flags), 36u},
+    {"offsetof.ciuki_com_status.modem", __builtin_offsetof(struct ciuki_com_status, modem), 40u},
+    {"offsetof.ciuki_com_status.errors", __builtin_offsetof(struct ciuki_com_status, errors), 44u},
+    {"offsetof.ciuki_com_status.rx_queued", __builtin_offsetof(struct ciuki_com_status, rx_queued), 48u},
+    {"offsetof.ciuki_com_status.tx_queued", __builtin_offsetof(struct ciuki_com_status, tx_queued), 52u},
+    {"offsetof.ciuki_com_status.rx_capacity", __builtin_offsetof(struct ciuki_com_status, rx_capacity), 56u},
+    {"offsetof.ciuki_com_status.tx_capacity", __builtin_offsetof(struct ciuki_com_status, tx_capacity), 60u},
+    {"offsetof.ciuki_com_status.received", __builtin_offsetof(struct ciuki_com_status, received), 64u},
+    {"offsetof.ciuki_com_status.transmitted", __builtin_offsetof(struct ciuki_com_status, transmitted), 68u},
+    {"offsetof.ciuki_com_status.dropped", __builtin_offsetof(struct ciuki_com_status, dropped), 72u},
+    {"offsetof.ciuki_com_status.reserved", __builtin_offsetof(struct ciuki_com_status, reserved), 76u},
     {"constant.ENOTSOCK", ENOTSOCK, 88u},
     {"constant.EDESTADDRREQ", EDESTADDRREQ, 89u},
     {"constant.EPROTOTYPE", EPROTOTYPE, 91u},

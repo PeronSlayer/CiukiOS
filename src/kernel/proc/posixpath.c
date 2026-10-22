@@ -6,6 +6,9 @@
 #include <ciuki/clock.h>
 #include <ciuki/fat_native.h>
 #include <ciuki/audio.h>
+#include <ciuki/com.h>
+#pragma weak com_device_open
+#pragma weak com_snapshot
 #pragma weak audio_device_open
 #pragma weak vfs_fat_transaction_locked /* older standalone personality models */
 #pragma weak vfs_dir_step_locked
@@ -224,6 +227,15 @@ int files_attach(struct vfs *v, struct px_namespace **out)
             memcpy(s->audio->entry.name, "audio", 6); memcpy(s->mixer->entry.name, "mixer", 6);
             memcpy(s->net->entry.name, "net", 4);
             memcpy(s->media->entry.name, "media", 6);
+            if (com_snapshot) for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
+                struct ciuki_com_status info;
+                if (!com_snapshot(i,&info,0)) continue;
+                struct px_node *com=node_new(s,s->dev,PX_COM);
+                if (!com) { err=-ENOMEM; break; }
+                s->com[i]=com;
+                com->drive=i;
+                ksnprintf(com->entry.name,sizeof(com->entry.name),"com%u",i+1);
+            }
         }
         if (err) files_detach(v);
     }
@@ -366,7 +378,13 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
         else if (path_equal(name, "mixer")) *out = s->mixer;
         else if (path_equal(name, "net")) *out = s->net;
         else if (path_equal(name, "media")) *out = s->media;
-        else return -ENOENT;
+        else {
+            for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
+                struct px_node *n=s->com[i];
+                if (n && n->linked && path_equal(name,n->entry.name)) { *out=n; return 0; }
+            }
+            return -ENOENT;
+        }
         return 0;
     }
     if (p == s->mnt) {
@@ -615,7 +633,7 @@ static int px_stat_fill(struct px_node *n, struct ciuki_stat *out, uint32_t chai
         out->st_blksize=n->ro->dev->sector_size; out->st_blocks=(n->ro_size+511)/512;
         out->st_mode=directory(n) ? S_IFDIR|0555 : S_IFREG|0444; return 0;
     }
-    if (!n->volume) { out->st_rdev = n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 : n->kind == PX_NET ? 5 : n->kind == PX_MEDIA ? 6 : 0; return 0; }
+    if (!n->volume) { out->st_rdev = n->kind == PX_COM ? 16+n->drive : n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 : n->kind == PX_NET ? 5 : n->kind == PX_MEDIA ? 6 : 0; return 0; }
     out->st_dev = n->drive + 1;
     out->st_size = n->kind == PX_FILE ? n->entry.size : 0;
     out->st_blksize = n->volume->spc * 512;
@@ -659,7 +677,7 @@ static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *p
         ((flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_TRUNC)))) return -EROFS;
     if (r.node && r.node->delete_pending) return -EACCES;
     if (r.node && r.node->ro && (err=px_share_locked(r.node,d->win32 ? d->share_access : VFS_READ,d->deny))) return err;
-    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER || r.node->kind == PX_NET || r.node->kind == PX_MEDIA)) {
+    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER || r.node->kind == PX_NET || r.node->kind == PX_MEDIA || r.node->kind==PX_COM)) {
         if ((err = device_open(r.node->kind, flags))) return err;
     } else if (r.node && directory(r.node)) {
         if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return -EISDIR;
@@ -698,6 +716,10 @@ static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *p
         if (err) return px_error(err);
     }
     d->node = r.node;
+    if (r.node->kind==PX_COM) {
+        err=com_device_open ? com_device_open(d,flags) : -ENODEV;
+        if (err) { d->node=0; return err; }
+    }
     if (r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER) {
         err = audio_device_open ? audio_device_open(d, flags) : r.node->kind == PX_AUDIO ? -ENODEV : 0;
         if (err) { d->node = 0; return err; }
@@ -938,9 +960,17 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     uint32_t cursor = d->cursor;
     if (d->position < 2) { name = d->position ? ".." : "."; n = d->position ? dir->parent : dir; }
     else if (dir == dir->space->dev) {
-        if (d->position > 7) return 0;
         struct px_node *devices[] = { dir->space->null, dir->space->console, dir->space->audio, dir->space->mixer, dir->space->net, dir->space->media };
-        n = devices[d->position - 2]; name = n->entry.name;
+        if (d->position<8) n=devices[d->position-2];
+        else {
+            unsigned index=0;
+            for (unsigned port=0;port<CIUKI_COM_MAX;port++) {
+                struct px_node *com=dir->space->com[port];
+                if (com && com->linked && index++==d->position-8) n=com;
+            }
+            if (!n) return 0;
+        }
+        name=n->entry.name;
     } else if (dir == dir->space->mnt) {
         if (!cursor) cursor = 3;
         while (cursor < 26 && !vfs_drive_present(dir->space->vfs,cursor)) cursor++;

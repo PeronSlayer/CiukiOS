@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include "../../src/kernel/lib/fmt.c"
 #define CIUKI_CPU_H
 #include <stdint.h>
 static uint32_t irq_save(void);
@@ -20,6 +21,14 @@ static void irq_restore(uint32_t);
 #include <ciuki/ac97.h>
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
+#include <ciuki/com.h>
+static struct ciuki_com_status com_records[CIUKI_COM_MAX];
+static bool com_visible;
+bool com_snapshot(unsigned i, struct ciuki_com_status *out, const char **reason)
+{
+    if (!com_visible || i>2) return false;
+    *out=com_records[i]; if (reason) *reason="Retained COM resource state."; return true;
+}
 static struct usb_host usb_context;
 static unsigned usb_hosts;
 unsigned usb_count(void) { return usb_hosts; }
@@ -167,6 +176,26 @@ static void second_nic_catalogue(void)
     assert(!net_get(0));
     puts("PASS devices: two-netif bounds, four discovered NICs and bounded catalogue bindings");
 }
+static void com_inventory(void)
+{
+    unsigned before=writes;
+    com_visible=true;
+    for (unsigned i=0;i<3;i++) com_records[i]=(struct ciuki_com_status){
+        .number=i+1,.base=0x3f8-i*0x100,.irq=4,.origin=CIUKI_COM_BDA};
+    com_records[0].flags=CIUKI_COM_LOGGER; com_records[0].fifo_depth=16;
+    com_records[1].flags=CIUKI_COM_READY|CIUKI_COM_OPEN; com_records[1].chip=CIUKI_COM_16650;
+    com_records[1].fifo_depth=32; com_records[1].generation=77;
+    com_records[2].flags=CIUKI_COM_QUARANTINED;
+    devices_snapshot(&snapshot);
+    const struct ciuki_device_record *d=device(0x70000);
+    assert(d->state==CIUKI_DEVICE_READY && strstr(d->name,"kernel log") && strstr(d->name,"unprobed"));
+    d=device(0x70001);
+    assert(d->state==CIUKI_DEVICE_READY && d->generation==77 && strstr(d->name,"16650") && strstr(d->reason,"Exclusive native"));
+    assert(d->resource_count==2 && d->resources[0].start==0x2f8 && d->resources[0].end==0x300);
+    assert(device(0x70002)->state==CIUKI_DEVICE_QUARANTINED && writes==before);
+    com_visible=false;
+    puts("PASS devices: COM generation/resources/owner/logger/quarantine, no probe on refresh");
+}
 int main(void)
 {
     g_ticks = 123456; g_boot.flags = CBI_F_SERIAL_LOG; g_boot.input_policy = CBI_INPUT_FIRMWARE;
@@ -252,6 +281,7 @@ int main(void)
     devices_snapshot(&snapshot); assert(device(0x50001)->bus_type==CIUKI_BUS_LEGACY && !strcmp(device(0x50001)->name,"Creative Sound Blaster 16"));
     assert(!strcmp(snapshot.drivers[11].name,"sb16") && snapshot.drivers[11].bound_devices==1);
     memset(&audio,0,sizeof(audio)); npci=2; nres--;
+    com_inventory();
     second_nic_catalogue();
     extended = 1; devices_snapshot(&snapshot); assert(!strcmp(snapshot.cpu_brand, "Synthetic Pentium III CPU"));
     volume_locked=true;devices_snapshot(&snapshot);

@@ -42,6 +42,7 @@ void serial_init(uint16_t base, uint16_t divisor);
  * both outcomes, and publish the effective resource fields in g_boot. */
 void serial_boot_init(void);
 bool serial_present(void);
+unsigned serial_fifo_size(void); /* verified boot TX capability; no probe */
 enum serial_probe_result {
     SERIAL_PROBE_UNKNOWN, SERIAL_PROBE_OK, SERIAL_PROBE_MAPPING,
     SERIAL_PROBE_SCRATCH, SERIAL_PROBE_LSR, SERIAL_PROBE_DIVISOR,

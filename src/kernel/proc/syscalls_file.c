@@ -9,6 +9,9 @@
 #include <ciuki/audio.h>
 #include <ciuki/net.h>
 #include <ciuki/version.h>
+#include <ciuki/com.h>
+#pragma weak com_devctl
+#pragma weak com_rw_user
 #pragma weak audio_write_user
 #pragma weak audio_devctl
 #pragma weak audio_refill_reader
@@ -306,6 +309,8 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     uint32_t nr = tf->eax;
     if (nr == CIUKI_SYS_DEVCTL) {
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);
+        if (d && d->node->kind==PX_COM)
+            return com_devctl ? com_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
         if (d && d->node->kind == PX_MEDIA)
             return media_devctl ? media_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
         if (d && d->node->kind == PX_NET)
@@ -348,6 +353,12 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     }
     if (d && d->node->kind == PX_AUDIO && nr == CIUKI_SYS_WRITE)
         return audio_write_user ? audio_write_user(d, tf->ecx, tf->edx) : -ENODEV;
+    if (d && d->node->kind==PX_COM) {
+        if (nr==CIUKI_SYS_READ || nr==CIUKI_SYS_WRITE)
+            return com_rw_user ? com_rw_user(d,tf->ecx,tf->edx,nr==CIUKI_SYS_WRITE) : -ENODEV;
+        if (nr==CIUKI_SYS_PREAD || nr==CIUKI_SYS_PWRITE || nr==CIUKI_SYS_LSEEK64) return -ESPIPE;
+        if (nr==CIUKI_SYS_FSYNC || nr==CIUKI_SYS_FTRUNCATE) return -EINVAL;
+    }
     struct file_operation *op = kzalloc(sizeof(*op));
     if (!op) return -ENOMEM;
     op->process = p; op->cwd = p->cwd; px_retain(op->cwd);

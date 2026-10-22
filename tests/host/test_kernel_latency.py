@@ -97,6 +97,7 @@ class KernelLatencyTests(unittest.TestCase):
             ('core/registry.c', 'chain_resume'): ['pic_unmask(irq)'],
             ('core/registry.c', 'irq_chain_add'): ['pic_unmask(irq)'],
             ('core/serial.c', 'serial_writer_init'): ['pic_unmask(uart_irq)'],
+            ('drivers/com.c', 'attach_route'): ['pic_unmask(irq)'],
             ('drivers/ata.c', 'failure'): ['pic_mask(c->irq)'],
             ('drivers/ata.c', 'ata_channel_idle'): ['pic_mask(c->irq)'],
             ('drivers/ata.c', 'ata_init'): ['pic_unmask(c->irq)'],

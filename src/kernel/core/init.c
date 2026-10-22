@@ -19,6 +19,8 @@
 #include <ciuki/entropy.h>
 #include <ciuki/splash.h>
 #include <ciuki/smi.h>
+#include <ciuki/com.h>
+#pragma weak com_init
 #pragma weak entropy_start
 #pragma weak console_splash_phase
 #pragma weak usb_init
@@ -175,6 +177,7 @@ void drivers_init(void)
     file_clock_start(CIUKI_BUILD_EPOCH, true);
     klog("[init] storage done; files bootstrap");
     splash_report(SPLASH_PHASE_STORAGE);
+    if (com_init && !state.safe) com_init();
     int native_files = files_bootstrap(&storage_get()->vfs);
     klog("[init] files result=%d; audio init", native_files);
     splash_report(SPLASH_PHASE_FILES);

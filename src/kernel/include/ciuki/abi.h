@@ -16,6 +16,71 @@
 
 #include <stdint.h>
 
+/* f1-111: independent COM v1 records, all fields fixed-width. */
+#define CIUKI_COM_VERSION 1u
+#define CIUKI_COM_MAX 8u
+#define CIUKI_COM_QUEUE 1024u
+#define COM_GET_LINE   0x434f0101u
+#define COM_SET_LINE   0x434f0102u
+#define COM_GET_STATUS 0x434f0103u
+#define COM_SET_MODEM  0x434f0104u
+enum ciuki_com_chip { CIUKI_COM_UNKNOWN, CIUKI_COM_8250, CIUKI_COM_16450,
+    CIUKI_COM_16550, CIUKI_COM_16550A, CIUKI_COM_16650, CIUKI_COM_16750 };
+enum ciuki_com_origin { CIUKI_COM_BDA = 1, CIUKI_COM_PNP, CIUKI_COM_PCI };
+enum ciuki_com_parity { CIUKI_COM_PARITY_NONE, CIUKI_COM_PARITY_ODD,
+    CIUKI_COM_PARITY_EVEN, CIUKI_COM_PARITY_MARK, CIUKI_COM_PARITY_SPACE };
+#define CIUKI_COM_DTR 1u
+#define CIUKI_COM_RTS 2u
+#define CIUKI_COM_BREAK 4u
+#define CIUKI_COM_LOGGER 1u
+#define CIUKI_COM_OPEN 2u
+#define CIUKI_COM_READY 4u
+#define CIUKI_COM_QUARANTINED 8u
+/* errors use LSR bits 1..4, modem uses MSR bits 0..7 */
+struct ciuki_com_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t baud;
+    uint32_t data_bits;
+    uint32_t stop_bits;
+    uint32_t parity;
+    uint32_t rx_trigger;
+    uint32_t read_timeout_ms;
+    uint32_t write_timeout_ms;
+    uint32_t reserved;
+};
+struct ciuki_com_modem {
+    uint32_t version;
+    uint32_t size;
+    uint32_t outputs;
+    uint32_t reserved;
+};
+struct ciuki_com_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t generation;
+    uint32_t number;
+    uint32_t base;
+    uint32_t irq;
+    uint32_t origin;
+    uint32_t chip;
+    uint32_t fifo_depth;
+    uint32_t flags;
+    uint32_t modem;
+    uint32_t errors;
+    uint32_t rx_queued;
+    uint32_t tx_queued;
+    uint32_t rx_capacity;
+    uint32_t tx_capacity;
+    uint32_t received;
+    uint32_t transmitted;
+    uint32_t dropped;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_com_line) == 40, "COM line v1");
+_Static_assert(sizeof(struct ciuki_com_modem) == 16, "COM modem v1");
+_Static_assert(sizeof(struct ciuki_com_status) == 80, "COM status v1");
+
 #define CIUKI_ABI_VERSION 1
 #define __CIUKI_ABI_VERSION__ CIUKI_ABI_VERSION
 #define __CIUKIOS__ 1
