@@ -13,7 +13,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-100-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 14:30, decisions on the delivery)
+## Amendment 1 (lead, 2026-10-22 14:27, decisions on the delivery)
 
 Accepted. The delivery corrects the directive's reading: no I/O trap is
 armed; the EC's event line GPI[12] is routed to SMI# (`gpe1_en=1000`,
