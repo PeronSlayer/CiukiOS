@@ -11,7 +11,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-unused-function \
     "$root/src/kernel/usb/usb_core.c" "$root/src/kernel/usb/ehci.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/ohci.c" \
     "$root/src/kernel/usb/usb_interrupt.c" "$root/src/kernel/usb/usb_hub.c" \
-    "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/usb_storage.c" \
+    "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/hid_report.c" \
+    "$root/src/kernel/usb/hid_input.c" "$root/tests/host/usb/hid_support.c" \
+    "$root/src/kernel/usb/usb_storage.c" \
     "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/lib/fmt.c" -o "$out/ehci_test"
 status=0
 "$out/ehci_test" || status=$?
