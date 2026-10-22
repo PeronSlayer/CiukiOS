@@ -11,6 +11,7 @@ VENDOR = ROOT / 'third_party/acpica'
 
 def prepare(out):
     out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)  # lead fix 2026-10-23: canonical build starts from an empty obj dir
     manifest = json.loads((HERE / 'manifest.json').read_text())
     actual = {str(p.relative_to(VENDOR)) for p in VENDOR.rglob('*') if p.is_file()}
     expected = {row['path'] for row in manifest['files']}
