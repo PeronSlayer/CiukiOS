@@ -15,18 +15,20 @@ int main(void)
 {
     char path[144]; CHECK(!dosbox_network_path(1,path,sizeof(path))); (void)unlink(path);
     CHECK(dosbox_network_load(1)==0 && !strcmp(dosbox_network_label(1),"IPX (LAN)"));
-    CHECK(!dosbox_network_save(1,1) && dosbox_network_load(1)==1);
-    CHECK(!dosbox_setting_save(1,1) && dosbox_network_load(1)==1);
-    CHECK(!dosbox_memory_save(1,1) && dosbox_network_load(1)==1);
-    CHECK(!dosbox_network_save(1,0) && dosbox_network_load(1)==0);
-    CHECK(dosbox_setting_load(1)==1 && dosbox_memory_load(1)==1);
-    FILE *f=fopen(path,"wb"); CHECK(f); CHECK(fwrite("network=ipx\nextra",1,17,f)==17); CHECK(!fclose(f));
+    CHECK(!mkdir(DOSBOX_SETTINGS_DIR,0755) || errno==EEXIST);
+    FILE *f=fopen(path,"wb"); CHECK(f); CHECK(fputs("network=ipx\n",f)>=0); CHECK(!fclose(f));
+    CHECK(dosbox_network_load(1)==1);
+    char config[144]; CHECK(!dosbox_setting_path(1,config,sizeof(config)));
+    f=fopen(config,"wb"); CHECK(f); CHECK(fputs("DOS kernel=unified\nDOS memory=locked\n",f)>=0); CHECK(!fclose(f));
+    CHECK(dosbox_network_load(1)==1 && dosbox_setting_load(1)==CIUKI_DOSVM_UNIFIED && dosbox_memory_load(1)==1);
+    f=fopen(path,"wb"); CHECK(f); CHECK(fputs("network=ipx\nextra",f)>=0); CHECK(!fclose(f));
     CHECK(dosbox_network_load(1)==0);
-    CHECK(dosbox_network_save(1,2)<0 && dosbox_network_save(0,1)<0);
+    CHECK(dosbox_network_path(0,path,sizeof(path))<0);
+    CHECK(!dosbox_network_path(1,path,sizeof(path)));
     struct ciuki_dosvm_command c={0}; CHECK(dosvm_launch_network(&c)==0);
     dosvm_launch_network_set(&c,1); CHECK(dosvm_launch_network(&c)==1);
     CHECK(!c.launch.kernel && !c.launch.memory && !c.launch.reserved[1]);
     CHECK(!unlink(path)); CHECK(!dosbox_setting_path(1,path,sizeof(path))); CHECK(!unlink(path));
     CHECK(!rmdir(DOSBOX_SETTINGS_DIR));
-    printf("settings: %u checks passed\n",checks); return 0;
+    printf("settings: %u checks passed\n",checks); fflush(stdout); return 0;
 }

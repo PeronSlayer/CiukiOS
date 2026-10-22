@@ -37,5 +37,6 @@ int main(void)
     sha256_final(&c, digest);
     check(digest, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
     printf("sha256 vectors (empty, abc, million-a, padding/streaming): %s\n", failures ? "FAIL" : "PASS");
+    fflush(stdout);
     return failures ? 1 : 0;
 }

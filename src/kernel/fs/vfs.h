@@ -50,6 +50,21 @@ struct vfs_file_version {
     uint32_t drive, drive_generation, parent, index, first, size;
     uint16_t write_date, write_time;
 };
+/* Bounded content-version watches used by the launch digest LRU. They pin
+ * only a change counter, never an open file, volume reservation or cache page. */
+struct vfs;
+struct vfs_table;
+#define VFS_VERSION_PINS 16u
+/* Counter watches retain no file/volume handle. The VFS must outlive every
+ * token; unpin before destroying a nonresident VFS. */
+struct vfs_version_pin { struct vfs *vfs; uint64_t serial; };
+struct vfs_version_watch {
+    struct fat_volume *volume;
+    uint64_t mount, sequence, serial;
+    uint32_t parent, index, refs;
+};
+int vfs_version_pin(struct vfs_table *,int,const struct vfs_file_version *,struct vfs_version_pin *);
+void vfs_version_unpin(struct vfs_version_pin *);
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 /* Internal DOS bridge errors; never user syscall errno values. */
 #define VFS_ESHARE 201
@@ -186,6 +201,8 @@ struct vfs {
     struct vfs_file_identity identities[VFS_IDENTITIES];
     struct vfs_page_identity page_identities[VFS_PAGE_IDENTITIES];
     uint64_t change_sequence, change_floor; /* identity_lock */
+    struct vfs_version_watch version_watches[VFS_VERSION_PINS];
+    uint64_t next_version_watch;
     struct vfs_change changes[VFS_CHANGES];
 };
 struct vfs_table {

@@ -150,8 +150,8 @@ class VmGameRecords(unittest.TestCase):
     def case(self, name):
         return next(c for c in json.loads(SUITE.read_text())['cases'] if c['id'] == name)
 
-    def test_parser_accepts_both_suite_cases(self):
-        for name, kernel in (('vm-game-doom-unified-qemu-t23', 2), ('vm-game-doom-freedos-qemu-t23', 1)):
+    def test_parser_accepts_unified_suite_case(self):
+        for name, kernel in (('vm-game-doom-unified-qemu-t23', 2),):
             for windowed in (False, True):
                 case = self.case(name)
                 self.assertEqual(case['probe'], 'vm-game')
@@ -210,7 +210,7 @@ class VmGameRecords(unittest.TestCase):
             parser.feed(line(seq, event, extra).encode() + b'\n')
         return parser.records
 
-    def test_freedos_case_request_reaches_the_kernel(self):
+    def test_unified_case_request_reaches_the_kernel(self):
         """f3-61d: the runner rebuilt the fw_cfg request without the vm-game
         kernel suffix, so the freedos case launched kernel=unified."""
         import ctypes, subprocess, tempfile
@@ -236,9 +236,8 @@ int kernel_of(const char *s, unsigned n, unsigned flags) {
             native = ctypes.CDLL(str(lib))
             native.kernel_of.argtypes = [ctypes.c_char_p, ctypes.c_uint, ctypes.c_uint]
             qemu_flag = 1 << 3  # CBI_F_SMBIOS_QEMU, only needed by a platform suffix
-            for name, kernel, profile in (('vm-game-doom-freedos-qemu-t23', 1, 'qemu-t23'),
-                                          ('vm-game-doom-unified-qemu-t23', 0, 'qemu-t23'),
-                                          ('vm-game-doom-freedos-qemu-t23', 1, 'qemu-e500')):
+            for name, kernel, profile in (('vm-game-doom-unified-qemu-t23', 0, 'qemu-t23'),
+                                          ('vm-game-doom-unified-qemu-t23', 0, 'qemu-e500')):
                 case = self.case(name)
                 _, request = runner.qemu_args('fake', runner.load(ROOT / f'tests/profiles/{profile}.json'), case,
                                               '12345678', Path(folder) / 'overlay', Path(folder) / 'bios')

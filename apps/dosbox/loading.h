@@ -63,26 +63,4 @@ static inline void dosbox_panel(struct du_canvas *canvas, const char *name,
 {
     dosbox_panel_framed(canvas,error ? "Program did not start" : "Starting program",name,icon,error,detail,elapsed);
 }
-/* Save only the dialog rectangle and its border, allocated while it is open. */
-#define DOSBOX_SETTINGS_X 80u
-#define DOSBOX_SETTINGS_Y 120u
-#define DOSBOX_SETTINGS_W 480u
-#define DOSBOX_SETTINGS_H 280u
-static inline int dosbox_settings_capture(struct du_canvas *canvas,uint32_t **saved)
-{
-    *saved=malloc(DOSBOX_SETTINGS_W*DOSBOX_SETTINGS_H*sizeof(uint32_t));
-    if (!*saved) return -1;
-    for (unsigned y=0;y<DOSBOX_SETTINGS_H;y++)
-        memcpy(*saved+y*DOSBOX_SETTINGS_W,canvas->pixels+(y+DOSBOX_SETTINGS_Y)*canvas->width+DOSBOX_SETTINGS_X,
-               DOSBOX_SETTINGS_W*sizeof(uint32_t));
-    return 0;
-}
-static inline void dosbox_settings_restore(struct du_canvas *canvas,uint32_t **saved)
-{
-    if (!*saved) return;
-    for (unsigned y=0;y<DOSBOX_SETTINGS_H;y++)
-        memcpy(canvas->pixels+(y+DOSBOX_SETTINGS_Y)*canvas->width+DOSBOX_SETTINGS_X,*saved+y*DOSBOX_SETTINGS_W,
-               DOSBOX_SETTINGS_W*sizeof(uint32_t));
-    free(*saved); *saved=NULL;
-}
 #endif

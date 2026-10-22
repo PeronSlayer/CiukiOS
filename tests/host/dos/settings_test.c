@@ -10,52 +10,31 @@
 #include "../../../apps/dosbox/settings.h"
 #include <assert.h>
 #include <stdlib.h>
+static void write_config(const void *text, size_t n) {
+    char path[128]; assert(!dosbox_setting_path(2,path,sizeof(path)));
+    FILE *f=fopen(path,"wb"); assert(f); assert(fwrite(text,1,n,f)==n); assert(!fclose(f));
+}
 int main(void) {
     assert(dosbox_game("\\DOOM\\DOOM.EXE -config CIUKI.CFG")==2);
-    assert(!dosbox_game("\\DOOM\\DOOM.EXE -nosound"));
     assert(!dosbox_game("DIR"));
-    for(unsigned game=1;game<=3;game++) assert(dosbox_setting_load(game)==CIUKI_DOSVM_UNIFIED); /* default: unified */
-    assert(dosbox_kernel_value(NULL)==CIUKI_DOSVM_UNIFIED && dosbox_kernel_value("bad")==CIUKI_DOSVM_UNIFIED && !dosbox_kernel_value("ciukidos"));
-    assert(dosbox_kernel_value("freedos-1.3")==1);
-    assert(dosbox_kernel_value("unified")==CIUKI_DOSVM_UNIFIED);
-    assert(!dosbox_setting_save(1,CIUKI_DOSVM_UNIFIED));
-    assert(dosbox_setting_load(1)==CIUKI_DOSVM_UNIFIED);
-    assert(!dosbox_setting_save(1,0));
-    assert(!dosbox_setting_save(2,1));
-    assert(dosbox_setting_load(2)==1 && !dosbox_setting_load(1) && dosbox_setting_load(3)==CIUKI_DOSVM_UNIFIED);
-    char path[128]; assert(!dosbox_setting_path(1,path,sizeof(path)));
-    FILE *file=fopen(path,"wb"); assert(file);
-    fputs("DOS kernel=freedos-1.3\nextra=1\n",file); fclose(file);
-    assert(dosbox_setting_load(1)==CIUKI_DOSVM_UNIFIED && dosbox_setting_load(2)==1); /* trailing line: default */
-    file=fopen(path,"wb"); assert(file); fputs("DOS kernel=master\n",file); fclose(file);
-    assert(dosbox_setting_load(1)==CIUKI_DOSVM_UNIFIED); /* unknown kernel: default */
-    assert(dosbox_setting_save(0,1)==-1 && dosbox_setting_save(4,1)==-1 && dosbox_setting_save(1,3)==-1);
-    assert(dosbox_setting_load(2)==1);
-    assert(!dosbox_setting_save(2,0) && !dosbox_setting_load(2));
-    /* Failed replacement preserves existing selection, reports failure and
-     * removes only this writer's temporary file. */
-    assert(!dosbox_setting_save(3,1));
-    assert(!dosbox_setting_path(3,path,sizeof(path))); assert(!unlink(path));
-    assert(!mkdir(path,0755));
-    assert(dosbox_setting_save(3,0)==-1);
-    assert(!rmdir(path));
-    /* f3-46: the memory mode is a second, optional line; a kernel change
-     * keeps it and a memory change keeps the kernel. */
-    for(unsigned game=1;game<=3;game++) assert(dosbox_memory_load(game)==CIUKI_DOSVM_MEMORY_PAGED);
-    assert(!dosbox_memory_save(2,CIUKI_DOSVM_MEMORY_LOCKED));
-    assert(dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_LOCKED && !dosbox_setting_load(2)); /* explicit classic kept */
-    assert(!dosbox_setting_save(2,1) && dosbox_setting_load(2)==1 && dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_LOCKED);
-    assert(!dosbox_setting_path(2,path,sizeof(path)));
-    file=fopen(path,"rb"); assert(file); char text[96]={0}; assert(fread(text,1,sizeof(text)-1,file)>0); fclose(file);
-    assert(!strcmp(text,"DOS kernel=freedos-1.3\nDOS memory=locked\n"));
-    assert(!dosbox_memory_save(2,CIUKI_DOSVM_MEMORY_PAGED) && dosbox_setting_load(2)==1 && !dosbox_memory_load(2));
-    file=fopen(path,"wb"); assert(file); fputs("DOS kernel=ciukidos\nDOS memory=locked\nextra\n",file); fclose(file);
-    assert(dosbox_setting_load(2)==CIUKI_DOSVM_UNIFIED && !dosbox_memory_load(2)); /* invalid: default */
-    file=fopen(path,"wb"); assert(file); fputs("DOS kernel=ciukidos\nDOS memory=fixed\n",file); fclose(file);
-    assert(dosbox_setting_load(2)==CIUKI_DOSVM_UNIFIED && !dosbox_memory_load(2)); /* invalid: default */
-    assert(dosbox_settings_save(2,0,2)==-1 && dosbox_memory_save(0,1)==-1 && dosbox_memory_save(4,1)==-1);
-    assert(dosbox_memory_value("locked")==CIUKI_DOSVM_MEMORY_LOCKED && !dosbox_memory_value("paged") && !dosbox_memory_value(NULL));
-    assert(!dosbox_setting_path(1,path,sizeof(path))); assert(!unlink(path));
-    assert(!dosbox_setting_path(2,path,sizeof(path))); assert(!unlink(path));
-    puts("H51-06 preferences PASS missing/invalid/independent/override/failed-save; f3-46 memory mode");
+    assert(!mkdir(DOSBOX_SETTINGS_DIR,0755) || errno==EEXIST);
+    for (unsigned i=0;i<4;i++) assert(dosbox_setting_load(i)==CIUKI_DOSVM_UNIFIED);
+    const char *invalid[]={"DOS kernel=ciukidos\nDOS memory=locked\n", "DOS kernel=freedos-1.3\nDOS memory=locked\n",
+        "DOS kernel=master\n", "DOS kernel=unified\nDOS memory=locked\nextra\n", "DOS kernel=unified", ""};
+    for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);i++) {
+        write_config(invalid[i],strlen(invalid[i]));
+        assert(dosbox_setting_load(2)==CIUKI_DOSVM_UNIFIED && dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_PAGED);
+        assert(dosbox_kernel_value(invalid[i])==CIUKI_DOSVM_UNIFIED);
+    }
+    const char locked[]="DOS kernel=unified\nDOS memory=locked\n";
+    write_config(locked,sizeof(locked)-1);
+    assert(dosbox_setting_load(2)==CIUKI_DOSVM_UNIFIED && dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_LOCKED);
+    write_config(locked,sizeof(locked)); /* embedded NUL is not EOF */
+    assert(dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_PAGED);
+    char huge[128]; memset(huge,'x',sizeof(huge)); memcpy(huge,locked,sizeof(locked)-1);
+    write_config(huge,sizeof(huge)); assert(dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_PAGED);
+    char path[128]; assert(!dosbox_setting_path(2,path,sizeof(path))); assert(!unlink(path));
+    assert(dosbox_setting_path(0,path,sizeof(path))<0 && dosbox_setting_path(4,path,sizeof(path))<0);
+    puts("PASS unified-only read-only configuration parser: retired/malformed/oversized/NUL files default, locked accepted");
+    return 0;
 }

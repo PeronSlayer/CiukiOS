@@ -34,36 +34,16 @@ static int replay_sleep(const struct timespec *, struct timespec *);
 #undef nanosleep
 
 static uint32_t screen[640 * 480];
-static uint64_t clock_ms, enter_ms;
+static uint64_t clock_ms, enter_ms, first_frame_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
 static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
 static int input_refused;
 static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
-static unsigned settings_phase,settings_seen,settings_blur,settings_restore;
-static unsigned network_rows,network_selections;
-static uint64_t settings_hold_until, last_bar_at;
+static unsigned settings_phase, close_declined, f12_forwarded;
 static unsigned bar_damage[256], bar_updates, full_damage, settings_damage, notice_seen, loading_seen, back_seen;
-static uint32_t settings_original[640 * 480];
-static const struct {
-    unsigned kernel, memory, key, saved_kernel, saved_memory;
-    const char *memory_arg;
-} settings_cases[] = {
-    /* Initial preferences, panel key, expected preferences after closing. */
-    {0, 0, CIUKI_KEY_2, 1, 0, NULL}, /* 11: legacy kernel-only setting */
-    {0, 0, 0,           0, 0, NULL}, /* 12: close with panel open */
-    {0, 1, CIUKI_KEY_2, 1, 1, NULL}, /* 13: kernel choice keeps locked memory */
-    {1, 1, CIUKI_KEY_1, 0, 1, NULL}, /* 14: return to CiukiDOS, keep locked */
-    {1, 1, CIUKI_KEY_3, 1, 0, NULL}, /* 15: paged memory keeps FreeDOS */
-    {1, 0, CIUKI_KEY_4, 1, 1, NULL}, /* 16: locked memory keeps FreeDOS */
-    {0, 0, CIUKI_KEY_2, 1, 1, "--dos-memory=locked"}, /* 17: CLI lock */
-    {0, 1, CIUKI_KEY_2, 1, 0, "--dos-memory=paged"},  /* 18: CLI unlock */
-    {0, 0, CIUKI_KEY_1, 0, 0, "--dos-memory=paged"},  /* 19: duplicate selection changes no pixels */
-    {0, 0, CIUKI_KEY_6, 0, 0, NULL}, /* 20: enable IPX without changing kernel/memory */
-    {1, 1, CIUKI_KEY_5, 1, 1, NULL}, /* 21: disable IPX, longest kernel/memory labels */
-    {0, 0, CIUKI_KEY_7, 2, 0, NULL}, /* 22: unified kernel on row 7, network untouched */
-};
+static uint64_t last_bar_at;
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
 const struct desk_theme *desk_theme = &replay_theme;
@@ -97,6 +77,7 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
             else assert(h==1 && (y==1 || y==17 || y==265));
         } else { assert(screen[0] == replay_theme.face); full_damage++; }
     }
+    if (p.opcode==DESK_CLOSE_ACK) { assert(scenario==12 && !p.flags); close_declined++; }
     return 0;
 }
 int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
@@ -114,18 +95,9 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
         desk_message(m, DESK_FOCUS, 8); desk_put32(m->data + 4, 1); focus_loss++;
     } else if (scenario==8 && presents && !fs_command) {
         fs_command=1; desk_message(m,DESK_DOS_FULLSCREEN,4);
-    } else if (scenario>=11 && presents && settings_phase<(scenario==12 ? 2u : scenario==19 ? 8u : 6u)) {
-        if (clock_ms<settings_hold_until) { errno=EAGAIN; return -1; }
-        unsigned step=settings_phase++;
-        if (step&1) { settings_hold_until=clock_ms+1100; errno=EAGAIN; return -1; }
-        if (!step) memcpy(settings_original,screen,sizeof(screen));
-        desk_message(m,DESK_KEY,44);
-        desk_put32(m->data+16,CIUKI_INPUT_KEY);
-        desk_put32(m->data+28,step==0 ? CIUKI_KEY_F12 : step==2 || (scenario==19 && step==4) ? settings_cases[scenario-11].key :
-                   scenario==16 ? CIUKI_KEY_F12 : CIUKI_KEY_ESCAPE);
-        desk_put32(m->data+32,1);
-    } else if (scenario==12 && settings_phase==2) {
-        desk_message(m,DESK_CLOSE_REQUEST,4);
+    } else if (scenario==11 && presents && !settings_phase++) {
+        desk_message(m,DESK_KEY,44); desk_put32(m->data+16,CIUKI_INPUT_KEY);
+        desk_put32(m->data+28,CIUKI_KEY_F12); desk_put32(m->data+32,1);
     } else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : enter_ms+650)) || (error_seen && clock_ms > 5000)) {
         desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
     } else { errno = EAGAIN; return -1; }
@@ -138,10 +110,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     if (op == CIUKI_DOSVM_CREATE) {
         assert(c->surface_fd == 7);
         assert(c->launch.game==(scenario==6 ? 0u : 2u));
-        assert(c->launch.kernel==(scenario>=11 ? settings_cases[scenario-11].kernel :
-                                 (scenario==9 || scenario==10) ? 1u : 0u));
-        assert(c->launch.memory==(scenario==17 ? 1u : scenario==18 ? 0u :
-                                 scenario>=11 ? settings_cases[scenario-11].memory : 0u));
+        assert(c->launch.kernel==CIUKI_DOSVM_UNIFIED);
+        assert(c->launch.memory==CIUKI_DOSVM_MEMORY_PAGED);
         if (scenario == 2 || scenario==9) { errno = scenario==9 ? EIO : ENOMEM; return -1; }
         c->id = 1; c->generation = 9; return 0;
     }
@@ -156,7 +126,6 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         state_waits+=last_events==CIUKI_DOSVM_EVENT_STATE;
         return 0;
     case CIUKI_DOSVM_FOCUS:
-        if (scenario>=11 && settings_phase) { if (c->focused) settings_restore++; else settings_blur++; }
         return 0;
     case CIUKI_DOSVM_FULLSCREEN:
         assert(scenario==8 && c->focused); fs_active=1; fs_until=clock_ms+100; return 0;
@@ -172,9 +141,12 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if (fs_active && clock_ms>=fs_until) fs_active=0;
         if (fs_active) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
         else if (scenario==8 && fs_command) { c->changed|=CIUKI_DOSVM_FULLSCREEN_REFUSED; c->reason=EIO; }
+        if (clock_ms>=(scenario==17 ? 700u : 300u) && !entered) c->changed|=CIUKI_DOSVM_SHELL_READY;
         return 0;
     case CIUKI_DOSVM_LAUNCH: assert(!armed); armed = 1; return 0;
     case CIUKI_DOSVM_INPUT:
+        if (scenario==17) assert(clock_ms>=700);
+        if (c->event.code==CIUKI_KEY_F12) { f12_forwarded++; return 0; }
         if (!input_refused++) { errno = EAGAIN; return -1; }
         if (c->event.code == CIUKI_KEY_ENTER && c->event.value == 1) {
             if (armed && scenario == 7 && !focus_loss) { focus_loss = 1; errno = EACCES; return -1; }
@@ -186,6 +158,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if (scenario==0 && c->presentation.flags) { errno=EINVAL;return -1; } /* legacy kernel */
         if (!(last_events&CIUKI_DOSVM_EVENT_VIDEO)) { assert(c->presentation.redraw); nonvideo_presents++; }
         if (scenario != 6) assert(entered && clock_ms > enter_ms + 500 && !error_seen);
+        if (!presents) first_frame_ms=clock_ms;
         presents++;
         c->changed = 1;
         if(c->presentation.flags==CIUKI_DOSVM_PRESENT_SCANLINES) {
@@ -193,7 +166,9 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
             c->scanlines.bits[0]=(1u<<1)|(1u<<17);c->scanlines.bits[265/32]=1u<<(265%32);
         } else { c->presentation.bands[0] = 5; c->presentation.bands[1] = 2; }
         return 0;
-    case CIUKI_DOSVM_CLOSE: closed++; return 0;
+    case CIUKI_DOSVM_CLOSE:
+        if (scenario==12 && !close_declined) { errno=EBUSY; return -1; }
+        closed++; return 0;
     default: assert(0); return -1;
     }
 }
@@ -205,7 +180,7 @@ void du_edge(struct du_canvas *c, struct du_rect r, enum du_edge e) { (void)c; (
 void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32_t colour)
 {
     (void)c; (void)x; (void)y; (void)w; (void)colour;
-    if (!strcmp(s,"DOS kernel, memory and network")) settings_seen++;
+    assert(!strstr(s,"DOS kernel, memory and network"));
     if (!strcmp(s,"Full screen unavailable")) notice_seen++;
     if (!strcmp(s,"Back in the window")) back_seen++;   /* f3-61: the kernel ended full screen itself */
     if (!strncmp(s,"Loading ",8)) loading_seen++;
@@ -224,14 +199,6 @@ void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_
 { (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel, memory and network")) c->pixels[y*640+x]=0x123456; }
 int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink)
 {
-    if (strstr(s,"5  Network: off (default)\n6  Network: IPX (LAN)\n7  CiukiDOS unified (preview)\n")) network_rows++;
-    if (!strncmp(s,"Kernel: ",8)) {
-        const char *network=strstr(s,". Network: ");
-        unsigned ipx=scenario==21;
-        if (settings_phase>=3 && (scenario==20 || scenario==21)) ipx=scenario==20;
-        assert(network && !strcmp(network,ipx ? ". Network: IPX (LAN)." : ". Network: off (default)."));
-        network_selections++;
-    }
     du_text_fit(c,b.x,b.y,b.w,s,ink); return 1;
 }
 void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,uint64_t phase)
@@ -241,45 +208,41 @@ int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<11+(int)(sizeof(settings_cases)/sizeof(settings_cases[0])));
-    char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG",
-                      scenario>=17 ? (char *)settings_cases[scenario-11].memory_arg : NULL};
-    char *reference[]={"dosbox","--name=DOOM","--dos-kernel=freedos-1.3","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
-    if (scenario>=11) {
-        assert(!dosbox_settings_save(2,settings_cases[scenario-11].kernel,settings_cases[scenario-11].memory));
-        assert(dosbox_setting_load(2)==settings_cases[scenario-11].kernel);
-        assert(dosbox_memory_load(2)==settings_cases[scenario-11].memory);
-    } else assert(!dosbox_settings_save(2,0,0));
-    int selected=scenario==9 || scenario==10;
-    assert(!dosbox_network_save(2,scenario==21 ? CIUKI_DOSVM_NETWORK_IPX : CIUKI_DOSVM_NETWORK_OFF));
-    int result = dosbox_main(selected || launch[5] ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
-    if (selected) assert(dosbox_setting_load(2)==1);
-    if (scenario>=11) {
-        assert(dosbox_setting_load(2)==settings_cases[scenario-11].saved_kernel);
-        assert(dosbox_memory_load(2)==settings_cases[scenario-11].saved_memory);
-        assert(dosbox_network_load(2)==(scenario==20 ? CIUKI_DOSVM_NETWORK_IPX : CIUKI_DOSVM_NETWORK_OFF));
-        assert(settings_seen && settings_blur && (scenario==12 || settings_restore));
-        if (scenario!=12) assert(!memcmp(screen,settings_original,sizeof(screen)));
-        assert(settings_seen==(scenario==12 ? 1u : 2u));
-        assert(network_rows==settings_seen && network_selections==settings_seen);
-        assert(settings_damage==settings_seen+(scenario!=12)); /* Restore only the saved rectangle. */
+    assert(scenario>=0 && scenario<=17);
+    if (scenario>=13 && scenario<=16) {
+        const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
+        char *refused[]={"dosbox",(char *)options[scenario-13]};
+        assert(dosbox_main(2,refused)==2 && !phase && !closed && !presents);
+        puts("PASS dosbox loading replay: retired kernel/settings CLI refused before VM/window creation");
+        return 0;
     }
+    char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
+    char *reference[]={"dosbox","--name=DOOM","--dos-kernel=unified","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    int selected=scenario==9 || scenario==10;
+    int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    if (scenario==11) assert(f12_forwarded==1 && !settings_damage);
+    if (scenario==12) assert(close_declined==1);
     if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5 || scenario==9)
         assert(result == 1 && error_seen && !presents && closed == (scenario != 2 && scenario!=9));
     else assert(!result && presents && !error_seen && closed == 1);
-    if (scenario == 0 || scenario == 4 || scenario == 7) assert(armed && entered && console_at == 2);
+    if (scenario == 0 || scenario == 4 || scenario == 7) assert(armed && entered && console_at == 1);
     if (scenario == 6) assert(!armed && !entered);
     if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active && back_seen==1 && !notice_seen);
     else assert(!back_seen);
     if (error_seen) assert(error_seen==1);
     if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : 1u)); /* fullscreen's static page shares the title */
     assert(damage_count);
+    if (scenario==0 && !nonvideo) {
+        assert(first_frame_ms<=3000);
+        printf("f3-63 client startup model: first_frame_ms=%llu (ready=300ms, guest first-frame work=500ms, CREATE excluded)\n",
+               (unsigned long long)first_frame_ms);
+    }
     if (nonvideo) {
         assert((nonvideo==1 ? timeout_waits : state_waits)>=4);
         assert(nonvideo_presents==(scenario==0 ? 1u : scenario==8 ? 2u : 0u));
         printf("PASS no-VIDEO events: TIMEOUT=%u STATE=%u redraw_presents=%u scenario=%d\n",timeout_waits,state_waits,nonvideo_presents,scenario);
     }
-    printf("PASS dosbox loading replay scenario=%d full_damage=%u bar_updates=%u max_bar_per_second<=4 settings_paints=%u settings_damage=%u error_paints=%d notice_paints=%u loading_static=%u\n",
-           scenario,full_damage,bar_updates,settings_seen,settings_damage,error_seen,notice_seen,loading_seen);
+    printf("PASS dosbox loading replay scenario=%d full_damage=%u bar_updates=%u max_bar_per_second<=4 settings_damage=%u error_paints=%d notice_paints=%u loading_static=%u\n",
+           scenario,full_damage,bar_updates,settings_damage,error_seen,notice_seen,loading_seen);
     return 0;
 }

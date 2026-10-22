@@ -87,7 +87,7 @@ static int window_input(struct binding *b, const struct ciuki_input_event *e)
 }
 
 /* ---- Owner lifecycle ---- */
-static int release_binding(struct binding *b)
+static int release_binding(struct binding *b, bool owner_gone)
 {
     struct dosvm *v = dosvm_lookup(b->key);
     if (v && v->task) task_input_withdraw(v->task);
@@ -96,6 +96,18 @@ static int release_binding(struct binding *b)
      * a VM whose shell is idle at its prompt (dosvm_shell_idle), e.g. after
      * a game returned to DOS; it ends as an ordinary EXIT. */
     bool forced = v && v->info.state < DOSVM_STOPPING && !dosvm_shell_idle(v);
+    if (forced && !owner_gone && v->info.dos_ready) {
+        /* Ask through ordinary guest keyboard input. DOS applications may
+         * decline Ctrl+C; retain the VM and its private disk in that case. */
+        bool requested=dosvm_kbd_event(v,0x1d,1) && dosvm_kbd_event(v,0x2e,1);
+        (void)dosvm_kbd_event(v,0x2e,0); (void)dosvm_kbd_event(v,0x1d,0);
+        dosvm_idle_wake(v);
+        klog("[dosvm] close vm=%u generation=%u action=request-quit method=ctrl-c queued=%u outcome=retained",
+             b->key.id,b->key.generation,requested);
+        return -EBUSY;
+    }
+    if (forced) klog("[dosvm] close vm=%u generation=%u action=terminate reason=%s dirty=%u",
+                    b->key.id,b->key.generation,owner_gone ? "owner-gone" : "startup-cancel",v->info.dirty);
     int e = dosvm_destroy(b->key, forced);
     v = dosvm_lookup(b->key);
     if (!v || v->info.state == DOSVM_DEAD) {
@@ -116,7 +128,7 @@ void dosvm_client_poll(void)
         struct process *p = proc_find(b->pid);
         if (!p || p->state >= PROC_STOPPING) {
             b->busy = true;
-            release_binding(b);
+            release_binding(b, true);
             b->busy = false;
         }
     }
@@ -174,7 +186,8 @@ static uint32_t status_flags(const struct dosvm *v)
            (v->launch_failed ? CIUKI_DOSVM_LAUNCH_FAILED : 0) |
            (v->fullscreen ? CIUKI_DOSVM_FULL_SCREEN : 0) |
            (v->fullscreen_suspended ? CIUKI_DOSVM_SUSPENDED : 0) |
-           (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0);
+           (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0) |
+           (dosvm_shell_idle(v) && v->idle.sleeping && !v->key_count && !v->kbd.count ? CIUKI_DOSVM_SHELL_READY : 0);
 }
 static uint32_t wait_phase(void)
 { return (uint32_t)((g_ticks / DOSVM_BLINK_TICKS) & 1) | (uint32_t)((g_ticks / DOSVM_CURSOR_TICKS) & 1) << 1; }
@@ -288,7 +301,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (op == CIUKI_DOSVM_CREATE) {
         allowed.surface_fd = c.surface_fd;
         if (c.launch.kernel>CIUKI_DOSVM_UNIFIED || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
-            (c.launch.kernel && !c.launch.game) || c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED ||
+            c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED ||
             dosvm_launch_network(&c)>CIUKI_DOSVM_NETWORK_IPX) return -EINVAL;
         allowed.launch.kernel=c.launch.kernel; allowed.launch.game=c.launch.game;
         allowed.launch.memory=c.launch.memory;
@@ -343,29 +356,10 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         while (reservation < DOSVM_LIMIT && creating[reservation]) reservation++;
         if (reservation == DOSVM_LIMIT) { e = -ENOSPC; goto out; }
         creating[reservation] = p->pid;
-        /* f3-06: an owner-attached local workload disk (\CIUKIGAM.IMG, the
-         * DOS system plus \DOOM or \WOLF3D) becomes the window VM's base,
-         * with the staged DPMI host (DOSVM_DPMI_PUBLIC is still 0): the
-         * owner-visible DOOM window. Without it, the bundled shareware games
-         * disk (C:\GAMES\CIUKIGAM.IMG, owner decision 2026-10-12) does.
-         * Errors of that required bundled base fail this window launch. */
-        char workload[32];
-        int found = 0;
-        if (c.launch.kernel==CIUKI_DOSVM_FREEDOS13 || c.launch.kernel==CIUKI_DOSVM_UNIFIED) {
-            /* This reference contains the pinned shareware corpus. An attached
-             * local workload is a different base: never silently substitute
-             * its executable/data with another edition under the override. */
-            char local[24];
-            found=dosvm_workload_base(local);
-            if (!found) found=-EINVAL;
-            else if (found==-ENOENT) {
-                found=0;
-                const char *base=c.launch.kernel==CIUKI_DOSVM_UNIFIED ?
-                    "C:\\SYSTEM\\DOS\\UNIFIED.IMG" : "C:\\SYSTEM\\DOS\\FREEDOS.IMG";
-                memcpy(workload,base,strlen(base)+1);
-            }
-        } else found=dosvm_window_base(workload);
-        if (found) { creating[reservation] = 0; e = closed_error(found); goto out; }
+        /* ABI 0/1 are compatibility aliases. Every desktop window, including
+         * the interactive shell, uses the qualified unified base. */
+        const char *workload="C:\\SYSTEM\\DOS\\UNIFIED.IMG";
+        c.launch.kernel=CIUKI_DOSVM_UNIFIED;
         /* Creation may sleep opening storage; another thread may close the
          * descriptor meanwhile, so the VM holds its own surface reference. */
         struct surface *surface = d->u.surface;
@@ -373,7 +367,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
             .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
             .memory_locked=c.launch.memory==CIUKI_DOSVM_MEMORY_LOCKED,
-            .disable_file_bridge=c.launch.kernel!=CIUKI_DOSVM_CIUKIDOS};
+            .disable_file_bridge=true};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }
@@ -392,7 +386,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             binding_priority(b,v);
         }
         if (e) {
-            release_binding(b);
+            release_binding(b, true);
             if (!b->pid) b = 0; /* released; otherwise collected below/later */
             e = closed_error(e); goto out;
         }
@@ -409,7 +403,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (!v) { e = -ESRCH; goto out; }
         binding_priority(b,v);
         if (op == CIUKI_DOSVM_CLOSE) {
-            e = closed_error(release_binding(b));
+            e = closed_error(release_binding(b, false));
             if (!b->pid) b = 0; /* binding released */
         } else if (op == CIUKI_DOSVM_STATUS) {
             c.state = public_state(v);
@@ -491,7 +485,7 @@ out:
         b->busy = false;
         /* The owner began stopping during this call: collect now, since the
          * supervisor pass skipped the busy binding. */
-        if (p->state != PROC_LIVE && b->pid) release_binding(b);
+        if (p->state != PROC_LIVE && b->pid) release_binding(b, true);
     }
     if (!direct) ua_unpin(p->memory, &pin);
     return e;

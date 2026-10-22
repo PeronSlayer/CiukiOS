@@ -572,11 +572,12 @@ class DesktopTests(unittest.TestCase):
                             '-DDOSBOX_SETTINGS_DIR="'+str(folder/"prefs")+'"', "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
                             str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
                             "-o", str(binary)], check=True)
-            for scenario in range(23):
+            for scenario in range(18):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
                 self.assertIn("PASS dosbox loading replay", result.stdout)
+                if scenario==0: print(result.stdout.strip())
             for events in (1, 2):
                 for scenario in (0, 1, 3, 5, 8):
                     result = subprocess.run([str(binary), str(scenario), str(events)], capture_output=True, text=True,

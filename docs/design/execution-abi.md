@@ -2283,27 +2283,34 @@ The FILE OPEN record uses private flag bit `0x10000` for handle inheritance,
 leaving the FAT read-only attribute bit independent. Other FILE actions assign
 flags by action (for example positioned I/O and short/long path lookup).
 
-### F3-51 CREATE game kernel selection (2026-10-19, pending lead review)
+### F3-63 CREATE: unified-only DOS
 
-The existing 136-byte version-1 record retains its layout. On CREATE only,
-`launch.kernel` at offset 72 and `launch.game` at offset 76 occupy the union
-used by INPUT/PRESENT operations. Kernel 0 is CiukiDOS; 1 is the pinned FreeDOS
-1.3 reference. Game 0 is the ordinary shell, and 1–3 identify the existing
-Wolf3D/DOOM/Quake catalog entries. Every other union byte remains zero.
-An unknown kernel/game or a FreeDOS request with game 0 returns EINVAL.
-Existing zero-initialized clients retain their default behavior.
+The existing 136-byte version-1 record retains its layout. On CREATE,
+`launch.kernel` at offset 72 accepts historical values 0, 1 and 2; all map to
+`CIUKI_DOSVM_UNIFIED` (2). Values 0/1 no longer select the classic/reference
+kernel. Game 0 opens the unified interactive shell; 1–3 identify the catalog
+entries. Unknown kernel/game values return EINVAL. The image contains only the
+qualified unified fork, FreeCOM, SHARE, CIUKIDF.SYS and the existing tools/games.
+The pristine FreeDOS conformance reference remains inside the host harness.
 
-The desktop launcher derives the game id from the exact unchanged catalog
-command. It persists each game's `DOS kernel` setting separately under
-`/system/settings/`, defaults absent/invalid values to CiukiDOS, and exposes
-the choices through F12. Changes apply on the next launch. A failed FreeDOS
-launch retains its preference and reports that the pinned reference must be
-installed or repaired. Its CREATE uses the separate reference base with the
-candidate file bridge disabled; it never rewrites the ordinary DOS base.
-Private COW names contain the game, kernel, complete base SHA-256 and fresh VM
-generation. CLOSE/owner death use the existing stop/destroy ownership path.
-The ordinary closed syscall error set is retained; reference storage or hash
-failures return EIO. Runtime dual-kernel game qualification remains open.
+The native DOS Box reads expert configuration files and never writes them.
+There is no DOS settings UI or intercepted settings key. Explicit legacy kernel
+tokens are invalid configuration and use the unified pageable default. A
+`--dos-kernel=unified` runtime assertion remains for the probe; other values are
+refused. It does not persist anything. Private COW names retain game, kernel,
+full base SHA-256 and fresh generation. Full-file verification is still required
+on the first open of a content version; cached versions retain the sidecar check.
+A bounded VFS counter watch prevents unrelated change-ledger eviction from
+forcing another hash. STATUS adds `CIUKI_DOSVM_SHELL_READY` (32), an output flag
+for the blocked shell with empty key queues; the native typist uses it before
+each command line.
+
+CLOSE requests ordinary guest keyboard quit input while a program is running
+and returns EBUSY, retaining the VM. The client declines the desktop close
+request and continues forwarding input. Idle shell and stopped VM close use the
+existing destroy path. Owner loss permits forced cleanup and records its reason;
+private scratch deletion records the dirty state and cause. This does not add
+cross-session save-file persistence to the existing private COW contract.
 
 ### F3-46 CREATE memory mode (2026-10-20, pending lead review)
 
@@ -2317,9 +2324,9 @@ behaviour, for games that need it (the role of the Windows 98 PIF "XMS/EMS
 memory locked" flags). Any other value returns EINVAL. The remaining seven
 reserved words stay zero. The launcher stores the choice per game as an
 optional second line `DOS memory=locked` of `/system/settings/dos-game-N.cfg`
-(absent or invalid: paged), offers it through F12 (keys 3/4) and accepts
-`--dos-memory=paged|locked`; a kernel choice keeps the memory choice and vice
-versa. Changes apply on the next launch. Admission is unchanged.
+(absent or invalid: paged). The f3-63 launcher reads it only when the kernel
+line is exactly unified. There is no settings UI or command-line settings
+writer. Changes apply on the next launch. Admission is unchanged.
 ## f5-16 — compatibility and diagnostics (2026-10-19)
 
 The additive wire layouts are in `ciuki/w32_diagnostics.h` (kernel and SDK

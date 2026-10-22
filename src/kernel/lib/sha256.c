@@ -17,11 +17,11 @@ static const uint32_t constants[64] = {
 
 static uint32_t ror(uint32_t x, unsigned n) { return (x >> n) | (x << (32 - n)); }
 
-static void compress(struct sha256_ctx *c)
+static void compress(struct sha256_ctx *c, const uint8_t block[64])
 {
     uint32_t w[64];
     for (unsigned i = 0; i < 16; i++) {
-        const uint8_t *p = c->block + i * 4;
+        const uint8_t *p = block + i * 4;
         w[i] = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
     }
     for (unsigned i = 16; i < 64; i++) {
@@ -57,13 +57,14 @@ void sha256_update(struct sha256_ctx *c, const void *data, size_t n)
 {
     const uint8_t *p = data;
     c->bytes += n;
-    while (n--) {
-        c->block[c->used++] = *p++;
-        if (c->used == 64) {
-            compress(c);
-            c->used = 0;
-        }
+    /* FIPS 180-4 6.2: compress complete input blocks directly. The old
+     * per-byte staging loop copied every game-base byte before hashing it. */
+    if (c->used) {
+        while (n && c->used < 64) { c->block[c->used++] = *p++; n--; }
+        if (c->used == 64) { compress(c, c->block); c->used = 0; }
     }
+    while (n >= 64) { compress(c, p); p += 64; n -= 64; }
+    while (n--) c->block[c->used++] = *p++;
 }
 
 void sha256_final(struct sha256_ctx *c, uint8_t digest[32])
@@ -73,14 +74,14 @@ void sha256_final(struct sha256_ctx *c, uint8_t digest[32])
     if (c->used > 56) {
         while (c->used < 64)
             c->block[c->used++] = 0;
-        compress(c);
+        compress(c, c->block);
         c->used = 0;
     }
     while (c->used < 56)
         c->block[c->used++] = 0;
     for (unsigned i = 0; i < 8; i++)
         c->block[63 - i] = (uint8_t)(bits >> (8 * i));
-    compress(c);
+    compress(c, c->block);
     for (unsigned i = 0; i < 32; i++)
         digest[i] = (uint8_t)(c->state[i / 4] >> (24 - (i % 4) * 8));
 }

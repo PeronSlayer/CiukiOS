@@ -137,63 +137,9 @@ def reconcile_overlay(overlay, image, serial, disk, run_id, guest):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--image", type=Path, required=True)
-    p.add_argument("--integration-manifest", type=Path, required=True)
-    p.add_argument("--probes-manifest", type=Path, required=True)
-    p.add_argument("--qemu", default="qemu-system-i386")
-    p.add_argument("--qemu-img", default="qemu-img")
-    args = p.parse_args()
-    suite = json.loads(SUITE.read_text())
-    identity=qualified(args.image, json.loads(args.integration_manifest.read_text()), args.probes_manifest)
-    capped()
-    profile = json.loads((ROOT / "tests/profiles/qemu-t23.json").read_text())
-    run_id = secrets.token_hex(4)
-    out = ROOT / "build/test-runs/f3-dos-conformance" / run_id
-    out.mkdir(parents=True)
-    sha = identity["image_sha256"]
-    results = {}
-    all_ok = True
-    # Exclude the common launcher and every current runner slot, sequentially.
-    with ExitStack() as locks:
-        common = res.common_lock(ROOT)
-        for path in [common, *res.slot_paths(common)]:
-            locks.enter_context(res.ExclusiveLock(path))
-        if digest(args.image)!=sha:
-            raise ValueError("canonical image changed before suite lock")
-        for repeat in range(2):
-            results = {};ledgers={}
-            current = out / str(repeat + 1)
-            current.mkdir()
-            for guest in suite["differential"]["guests"]:
-                overlay = current / (guest + ".qcow2")
-                try:
-                    subprocess.run([args.qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b",
-                                    str(args.image.resolve()), str(overlay)], check=True, capture_output=True)
-                    selector = suite["differential"]["selector"].format(run_id=run_id, guest=guest)
-                    results[guest] = capture(command(args.qemu, overlay, selector, profile),
-                                             current / (guest + ".serial.log"), run_id, guest,
-                                             suite["differential"]["timeout_seconds"])
-                    ledgers[guest]=reconcile_overlay(overlay,args.image,current/(guest+".serial.log"),
-                        current/(guest+".disk.log"),run_id,guest)
-                finally:
-                    # Serial evidence survives; no owned overlay remains on
-                    # timeout, failed create, parser error or normal completion.
-                    overlay.unlink(missing_ok=True)
-            if digest(args.image) != sha:
-                raise ValueError("canonical image changed during suite")
-            table, ok = compare(results["freedos"], results["ciukidos"])
-            all_ok &= ok
-            (current / "comparison.md").write_text(table)
-            (current / "evidence.json").write_text(json.dumps(dict(image_sha256=sha, run_id=run_id,
-                repeat=repeat+1, profile=profile, probes_sha256=digest(args.probes_manifest),
-                integration=json.loads(args.integration_manifest.read_text()),
-                trace_ledgers=ledgers,
-                verdict="PASS" if ok else "FAIL"), indent=2) + "\n")
-            # An independent second pair has a fresh nonce, same immutable base.
-            run_id = secrets.token_hex(4)
-    print(out)
-    return 0 if all_ok else 1
+    print("dos-conformance: the two-kernel image runner is retired; use the unified DOS host harness. "
+          "The pristine FreeDOS reference is host-only.", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

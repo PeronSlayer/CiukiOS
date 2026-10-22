@@ -261,7 +261,7 @@ static void test_fullscreen_service(void)
     CHECK(!dosvm_stop(key,DOSVM_FAULT) && !fs_ports);
     dosvm_fullscreen_poll(); CHECK(!v->fullscreen && !fs_display);
     struct ciuki_dosvm_command close=command_for(key.id,key.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
+    CHECK(!finish_test_vm(&close,sizeof(close))); empty();
     fs_test_checkpoint_pin=false;
     g_boot.flags=old_flags; g_boot.test_request_len=old_length; memcpy(g_boot.test_request,old_request,sizeof(old_request));
     puts("PASS full-screen service: refusal/rollback, UC aperture grant/revoke, task-local ports, Alt+Enter/Tab consumed, PS/2/USB mouse path, pause/resume, watchdog and fault cleanup");
@@ -305,7 +305,7 @@ static void test_fullscreen_more_modes(void)
         dosvm_fullscreen_poll();CHECK(fullscreen_frame_seen);CHECK(!dosvm_fullscreen_leave(key,false));
     }
     struct ciuki_dosvm_command close=command_for(key.id,key.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close)));empty();
+    CHECK(!finish_test_vm(&close,sizeof(close)));empty();
     puts("PASS f3-37 VGA: 16 chain-4/unchained 320/360 x200/240/400/480 variants and planar 0d/0e/10/11/12 plus 640x400, enter/nonblack frame/dirty-store proof/capture/return");
 }
 static int vbe_changing_row(void *arg,unsigned y,const void *pixels,unsigned bytes)
@@ -489,7 +489,7 @@ static void test_fullscreen_vbe(void)
     fs_linear_error=-EIO;CHECK(dosvm_fullscreen_enter(key)==DISPLAY_FULLSCREEN_WINDOWED && !fs_display && !v->fullscreen_hold);
     fs_linear_error=0;
     struct ciuki_dosvm_command close=command_for(key.id,key.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close)));empty();
+    CHECK(!finish_test_vm(&close,sizeof(close)));empty();
     v=create();f=vf(0x4F02,0x4101,0,0);
     CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && !v->vbe_buffer.used && !v->vbe_mode);
     destroy(v,true);empty();fs_vbe_available=false;

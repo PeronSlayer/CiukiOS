@@ -225,72 +225,74 @@ def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=(), s
         stream.write(root)
 
 
+def script_module(name):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, ROOT / ("scripts/" + name + ".py"))
+    result = importlib.util.module_from_spec(spec); spec.loader.exec_module(result)
+    return result
+
+
+def system_payloads(work, out):
+    """Shared probes/tools only. The classic DOS kernel is retired from builds."""
+    files = {}
+    for source, name in (("dosready", "DOSREADY.COM"), ("memory", "MEMORY.COM"),
+                         ("command_status", "CMDSTAT.COM"), ("exit37", "EXIT37.COM"),
+                         ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM"),
+                         ("vmdevices", "VMDEV.COM")):
+        files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
+    files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
+    files["/VMVIDEO.COM"] = assemble("src/probes/dos/vm_video.asm", work / "VMVIDEO.COM")  # f3-02 virtual VGA pattern payload
+    files["/VMAUDIO.COM"] = assemble("src/probes/dos/vm_audio.asm", work / "VMAUDIO.COM")  # f3-05 SB16/OPL3/8237 state payload
+    files["/VMPLAY.COM"] = assemble("src/probes/dos/vm_play.asm", work / "VMPLAY.COM")  # f4-05 SB16/OPL3 output pattern payload
+    # f3-04 DPMI clients: 16/32-bit conformance, nested children, fault, DOS/4GW.
+    for width in (16, 32):
+        files[f"/DPMI{width}.COM"] = assemble("src/probes/dos/dpmi_client.asm", work / f"DPMI{width}.COM",
+                                              {"BITS32": int(width == 32)})
+        files[f"/DPMICH{width}.COM"] = assemble("src/probes/dos/dpmi_child.asm", work / f"DPMICH{width}.COM",
+                                                {"BITS32": int(width == 32)})
+    files["/DPMIFLT.COM"] = assemble("src/probes/dos/dpmi_fault.asm", work / "DPMIFLT.COM")
+    # f3-06 workloads: EXEC-and-report launcher and the starvation-gate CLI loop.
+    files["/RUNREC.COM"] = assemble("src/probes/dos/run_record.asm", work / "RUNREC.COM")
+    files["/CLILOOP.COM"] = assemble("src/probes/dos/cli_loop.asm", work / "CLILOOP.COM")
+    files["/DPMI4GW.EXE"], files["/SYSTEM/DOS4GW.EXE"] = watcom_build("src/probes/vm/dpmi_dos4gw.c", "DPMI4GW.EXE", work)
+    integration=script_module("dos_conformance")
+    probe_files,probe_manifest=integration.probes(out.parent/"conformance")
+    files.update(probe_files)
+    probe_directories=("D48","D48TEST",*("D48TEST/"+r["tag"] for r in probe_manifest["cases"]))
+    return files, probe_directories
+
+
 def build(out=None):
-    out = Path(out or ROOT / "build/f0/dos/DOSBOOT.IMG")
+    """Build the sole unified guest. Pristine FreeDOS is host-harness only."""
+    out = Path(out or ROOT / "build/f0/dos/UNIFIED.IMG")
     out.parent.mkdir(parents=True, exist_ok=True)
+    unified, games = script_module("unified_dos"), script_module("build_games_disk")
     with tempfile.TemporaryDirectory(prefix=".dos-", dir=out.parent) as temporary:
-        work = Path(temporary)
-        boot = assemble("src/boot/full_boot.asm", work / "boot.bin", {"FAT_TOTAL_SECTORS": SECTORS})
-        loader = assemble("src/boot/full_stage1_loader.asm", work / "loader.bin", GEOMETRY)
-        kernel = assemble("src/runtime/ciukidos.asm", work / "CIUKIDOS.SYS", {**GEOMETRY, **PERSONALITY})
-        subprocess.run(["python3", "scripts/ciukidos_image.py", "--kernel", str(work / "CIUKIDOS.SYS"), "--json"],
-                       cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
-        command = assemble("src/com/shell.asm", work / "COMMAND.COM", {"COMMAND_COMPAT": 1})
-        shell = assemble("src/com/dosvm_shell.asm", work / "SHELL.COM")
-        if len(command) > 0xFF00 or len(shell) > 0xFF00:
-            raise ValueError("DOS shell exceeds COM extent")
-        files = {"/SYSTEM/CIUKIDOS.SYS": kernel, "/SYSTEM/SHELL.COM": shell,
-                 "/COMMAND.COM": command, "/AUTOEXEC.BAT": b"\\DOSREADY.COM\r\n"}
-        for source, name in (("dosready", "DOSREADY.COM"), ("memory", "MEMORY.COM"),
-                             ("command_status", "CMDSTAT.COM"), ("exit37", "EXIT37.COM"),
-                             ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM"),
-                             ("vmdevices", "VMDEV.COM")):
-            files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
-        files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
-        files["/VMVIDEO.COM"] = assemble("src/probes/dos/vm_video.asm", work / "VMVIDEO.COM")  # f3-02 virtual VGA pattern payload
-        files["/VMAUDIO.COM"] = assemble("src/probes/dos/vm_audio.asm", work / "VMAUDIO.COM")  # f3-05 SB16/OPL3/8237 state payload
-        files["/VMPLAY.COM"] = assemble("src/probes/dos/vm_play.asm", work / "VMPLAY.COM")  # f4-05 SB16/OPL3 output pattern payload
-        # f3-04 DPMI clients: 16/32-bit conformance, nested children, fault, DOS/4GW.
-        for width in (16, 32):
-            files[f"/DPMI{width}.COM"] = assemble("src/probes/dos/dpmi_client.asm", work / f"DPMI{width}.COM",
-                                                  {"BITS32": int(width == 32)})
-            files[f"/DPMICH{width}.COM"] = assemble("src/probes/dos/dpmi_child.asm", work / f"DPMICH{width}.COM",
-                                                    {"BITS32": int(width == 32)})
-        files["/DPMIFLT.COM"] = assemble("src/probes/dos/dpmi_fault.asm", work / "DPMIFLT.COM")
-        # f3-06 workloads: EXEC-and-report launcher and the starvation-gate CLI loop.
-        files["/RUNREC.COM"] = assemble("src/probes/dos/run_record.asm", work / "RUNREC.COM")
-        files["/CLILOOP.COM"] = assemble("src/probes/dos/cli_loop.asm", work / "CLILOOP.COM")
-        files["/DPMI4GW.EXE"], files["/SYSTEM/DOS4GW.EXE"] = watcom_build("src/probes/vm/dpmi_dos4gw.c", "DPMI4GW.EXE", work)
-        import importlib.util
-        spec=importlib.util.spec_from_file_location("dos_conformance",ROOT/"scripts/dos_conformance.py")
-        integration=importlib.util.module_from_spec(spec); spec.loader.exec_module(integration)
-        probe_files,probe_manifest=integration.probes(out.parent/"conformance")
-        files.update(probe_files)
-        probe_directories=("D48","D48TEST",*("D48TEST/"+r["tag"] for r in probe_manifest["cases"]))
+        files, directories = system_payloads(Path(temporary), out)
+        game_files = {}
+        for package in games.PACKAGES:
+            _, members, _ = games.package_files(package)
+            for path, data, _ in members:
+                game_files[path] = data
+        game_files["/DOOM/CIUKI.CFG"] = games._fixtures().DOOM_CONFIG
         refuse_local_payloads({name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
-        candidate = work / "DOSBOOT.IMG"
-        write_fat16(candidate, boot, loader, files, directories=probe_directories)
-        subprocess.run(["fsck.fat", "-n", str(candidate)], check=True)
-        for name, data in files.items():
-            actual = subprocess.run(["mcopy", "-i", str(candidate), "::" + name, "-"],
-                                    check=True, capture_output=True).stdout
-            if actual != data:
-                raise ValueError(f"DOS payload read-back mismatch: {name}")
-        candidate.replace(out)
-    manifest = {"schema_version": 1, "image_sha256": digest(out), "size": SECTORS * 512,
-                "geometry": GEOMETRY, "personality": PERSONALITY,
-                "shell": "src/com/shell.asm COMMAND_COMPAT=1; dosvm_shell.asm AUTOEXEC/exit wrapper",
+        directories = (*directories, "WOLF3D", "DOOM", "QUAKE", "QUAKE/ID1")
+        identity, licenses, metadata = unified.install(out, files, directories, game_files,
+            source_output=out.parent.parent / "ciukidos-unified-source.zip")
+    guest_files, _ = unified.fork_guest_files()
+    files.update(guest_files)
+    files["/FDAUTO.BAT"] = unified.reference_module().AUTO
+    files["/D48/UNI.JSN"] = (json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
+    manifest = {"schema_version": 1, "image_sha256": digest(out), "size": out.stat().st_size,
+                "kernel": "unified", "identity": identity, "licenses": str(licenses),
+                "unified_dos": metadata,
                 "payloads": [{"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-                             for name, data in sorted(files.items())],
-                "dos4gw": {"client": "/DPMI4GW.EXE", "extender": "/SYSTEM/DOS4GW.EXE",
-                           "extender_sha256": DOS4GW_SHA256, "redistribution": DOS4GW_STATUS,
-                           "recipe": "wcl386 -zq -bt=dos -l=dos4g (Open Watcom 2.0)"}}
+                             for name, data in sorted(files.items())]}
     out.with_suffix(".json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    print(f"T1 DOS PASS: FAT16, CIUKIDOS header, {len(files)} payloads read back; SHA256 {manifest['image_sha256']}")
     return out, manifest
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=ROOT / "build/f0/dos/DOSBOOT.IMG")
+    parser.add_argument("--out", type=Path)
     build(parser.parse_args().out)

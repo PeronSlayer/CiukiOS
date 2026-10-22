@@ -359,7 +359,7 @@ static void test_workload_linear_replay(bool pm, bool window)
 static void test_workload_base_image(void)
 {
     struct dosvm *v = 0;
-    char path[24] = "x";
+    char path[32] = "x";
     workload_disk = false;
     CHECK(dosvm_workload_base(path) == -ENOENT && !path[0] && !heap_blocks && !tables);
     workload_disk = true;
@@ -388,24 +388,24 @@ static void test_workload_base_image(void)
     unsigned scans = workload_scans;
     vq_begin();
     /* Two D: stats: the lookup, then the base image open of the new VM. */
-    CHECK(!create_window(0, "Games", &w) && workload_scans == scans + 2 && !workload_busy);
+    CHECK(!create_window(0, "Games", &w) && workload_scans == scans && !workload_busy);
     v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
-    CHECK(v && v->dpmi_enabled && !strcmp(last_base, "D:\\CIUKIGAM.IMG"));
+    CHECK(v && v->dpmi_enabled && !strcmp(last_base, DOSVM_BUNDLED_BASE));
     struct audio_vm_stats st;
     struct dosvm_key wkey = {w.id, w.generation};
     CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_PENDING && ainfo(v).consumer);
     struct ciuki_dosvm_command shut = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut)));
+    CHECK(!finish_test_vm( &shut, sizeof(shut)));
     CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_FREE);
     empty();
     workload_disk = false;
     CHECK(!create_window(0, "Plain", &w) && !workload_busy);
     v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
-    CHECK(v && v->dpmi_enabled && !strcmp(last_base, "C:\\GAMES\\CIUKIGAM.IMG"));
+    CHECK(v && v->dpmi_enabled && !strcmp(last_base, DOSVM_BUNDLED_BASE));
     wkey = (struct dosvm_key){w.id, w.generation};
     CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_PENDING && ainfo(v).consumer);
     shut = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut)));
+    CHECK(!finish_test_vm( &shut, sizeof(shut)));
     vq_end();
     empty();
     fake_current = saved_current;
@@ -419,18 +419,18 @@ static void test_workload_base_image(void)
  * used sector reads as zeros past its end. */
 static void test_bundled_games_base(void)
 {
-    char path[24] = "x";
+    char path[32] = "x";
     struct dosvm *v = 0;
     workload_disk = false; bundled_disk = true; bundled_bytes = 4096u * 512u;
     unsigned scans = bundled_scans;
     CHECK(dosvm_workload_base(path) == -ENOENT && !path[0] && bundled_scans == scans && !tables);
-    CHECK(!dosvm_window_base(path) && !strcmp(path, "C:\\GAMES\\CIUKIGAM.IMG") && bundled_scans == scans + 1);
+    CHECK(!dosvm_window_base(path) && !strcmp(path, "C:\\SYSTEM\\DOS\\UNIFIED.IMG") && bundled_scans == scans + 1);
     CHECK(!tables && !workload_busy && !heap_blocks);
     workload_disk = true;                                   /* the owner's local disk takes precedence */
-    CHECK(!dosvm_window_base(path) && !strcmp(path, "D:\\CIUKIGAM.IMG") && bundled_scans == scans + 1);
+    CHECK(!dosvm_window_base(path) && !strcmp(path, DOSVM_BUNDLED_BASE) && bundled_scans == scans + 2);
     workload_disk = false;
     /* A cut base: no VFS read past its end, zeros instead; writes there go to the overlay. */
-    struct dosvm_config c = {.commitment = DOSVM_LOW_CAP, .base = "C:\\GAMES\\CIUKIGAM.IMG"};
+    struct dosvm_config c = {.commitment = DOSVM_LOW_CAP, .base = "C:\\SYSTEM\\DOS\\UNIFIED.IMG"};
     CHECK(!dosvm_create(&c, &v) && v && v->base_sectors == 4096u);
     uint8_t got[512], bytes[512];
     unsigned reads = disk_reads;
@@ -467,19 +467,19 @@ static void test_bundled_games_base(void)
     vq_begin();
     CHECK(!create_window(0, "Games", &w) && !workload_busy);
     v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
-    CHECK(v && v->dpmi_enabled && v->base_sectors == 4096u && !strcmp(last_base, "C:\\GAMES\\CIUKIGAM.IMG"));
+    CHECK(v && v->dpmi_enabled && v->base_sectors == 4096u && !strcmp(last_base, "C:\\SYSTEM\\DOS\\UNIFIED.IMG"));
     struct ciuki_dosvm_command shut = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut)));
+    CHECK(!finish_test_vm( &shut, sizeof(shut)));
     vq_end();
     empty();
     fake_current = saved_current;
     bundled_disk = true; bundled_bytes = DOSVM_SECTORS * 512u;
-    printf("bundled games disk: window VMs use C:\\GAMES\\CIUKIGAM.IMG after the local fixture disk (probes: fixture only), a cut base reads zeros past its end, invalid sizes refused\n");
+    printf("bundled games disk: window VMs use C:\\SYSTEM\\DOS\\UNIFIED.IMG after the local fixture disk (probes: fixture only), a cut base reads zeros past its end, invalid sizes refused\n");
 }
 
 static void test_foreign_drive_errors(void)
 {
-    char path[24];
+    char path[32];
     workload_disk = false;
     bundled_disk = true;
     fixture_errors[3] = -EIO;       /* foreign D: fails before bundled C: */
@@ -490,7 +490,7 @@ static void test_foreign_drive_errors(void)
     CHECK(dosvm_workload_base(path) == -ENOENT && !path[0]);
     CHECK(!tables && !handles && !workload_busy);
     workload_disk = true; workload_drive = 'G';
-    CHECK(!dosvm_window_base(path) && !strcmp(path, "G:\\CIUKIGAM.IMG"));
+    CHECK(!dosvm_window_base(path) && !strcmp(path, DOSVM_BUNDLED_BASE));
     workload_disk = false; workload_drive = 'D';
 
     struct process *saved = fake_current;
@@ -503,12 +503,12 @@ static void test_foreign_drive_errors(void)
     struct dosvm *v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
     CHECK(v && v->dpmi_enabled && !strcmp(last_base, DOSVM_BUNDLED_BASE));
     shut = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut))); empty();
+    CHECK(!finish_test_vm( &shut, sizeof(shut))); empty();
 
     /* Only the required base fails the launch; optional errors stay absent. */
     bundled_disk = false;
     CHECK(dosvm_window_base(path) == -ENOENT && !path[0]);
-    CHECK(strstr(last_disk_log, "disk base=C:\\GAMES\\CIUKIGAM.IMG error=-2 reason=bundled"));
+    CHECK(strstr(last_disk_log, "disk base=C:\\SYSTEM\\DOS\\UNIFIED.IMG error=-2 reason=bundled"));
     CHECK(create_window(0, "Quake", 0) == -EIO);
     CHECK(launch_errors == errors + 1 && launch_stage_sequence < launch_error_sequence);
     CHECK(strstr(last_launch_log, "[launch] name=dosbox pid=10 error=-5 stage=vm-create window=Quake"));
@@ -520,7 +520,7 @@ static void test_foreign_drive_errors(void)
         bundled_error = failures[i];
         CHECK(dosvm_window_base(path) == failures[i] && !path[0]);
         CHECK(create_window(0, "DOOM", 0) == failures[i]);
-        CHECK(strstr(last_disk_log, "base=C:\\GAMES\\CIUKIGAM.IMG") && strstr(last_disk_log, "reason=bundled"));
+        CHECK(strstr(last_disk_log, "base=C:\\SYSTEM\\DOS\\UNIFIED.IMG") && strstr(last_disk_log, "reason=bundled"));
         CHECK(launch_stage_sequence < launch_error_sequence && fake_surface[0].references == 1 && !creating[0]); empty();
     }
     bundled_error = 0; bundled_open_error = -EIO;
@@ -530,16 +530,16 @@ static void test_foreign_drive_errors(void)
     bundled_open_error = 0;
     io_fail_at = io_calls + 1;
     CHECK(create_window(0, "DOOM", 0) == -EIO);
-    CHECK(strstr(last_disk_log, "error=-5 reason=probe"));
+    CHECK(strstr(last_disk_log, "error=-5 reason=bundled"));
     io_fail_at = 0; empty();
     store.stopped = true;
     strcpy(path, "stale");
     CHECK(dosvm_window_base(path) == -EIO && !path[0]);
-    CHECK(strstr(last_disk_log, "base=C:\\GAMES\\CIUKIGAM.IMG error=-5 reason=probe"));
+    CHECK(strstr(last_disk_log, "base=C:\\SYSTEM\\DOS\\UNIFIED.IMG error=-5 reason=probe"));
     store.stopped = false;
     CHECK(!create_window(0, "Quake", &w)); /* failed reservations do not poison retry */
     shut = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut))); empty();
+    CHECK(!finish_test_vm( &shut, sizeof(shut))); empty();
     memset(fixture_errors, 0, sizeof(fixture_errors));
     fake_current = saved;
     puts("f1-61 disk/launch: foreign EIO/EBUSY/quarantine absent, later fixture and bundled fallback, required missing/error/open failures logged, stage before allocation, cleanup/retry PASS");

@@ -160,8 +160,8 @@ class EvidenceTests(unittest.TestCase):
     def test_dedicated_suite_cannot_pass_as_empty_generic_suite(self):
         suite = json.loads(reference.SUITE.read_text())
         self.assertNotEqual(suite["schema_version"], 1)
-        self.assertEqual(suite["runner"], "tests/host/dos/qemu_reference.py")
-        self.assertEqual(suite["differential"]["guests"], ["freedos", "ciukidos"])
+        self.assertEqual(suite["runner"], "tests/host/dos/run_unified_file.sh")
+        self.assertEqual(suite["differential"]["guests"], ["ciukidos"])
 
     def test_pinned_audit_contains_no_false_runtime_claim(self):
         audit = json.loads((battery.ROOT / "docs/validation/f3-48-static-candidates.json").read_text())

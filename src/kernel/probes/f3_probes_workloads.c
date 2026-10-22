@@ -520,7 +520,7 @@ static int doom_probe(const char *name, bool sound)
     base_record(name, base);
     struct dosvm_ledger before;
     dosvm_snapshot(&before);
-    const struct dosvm_config config = {.commitment = 0, .probe = name, .dpmi = true, .base = base};
+    const struct dosvm_config config = {.commitment = 0, .probe = name, .dpmi = true, .base = base, .kernel=2, .disable_file_bridge=true};
     const char *command = sound ? "\\RUNREC.COM \\DOOM DOOM.EXE -config CIUKI.CFG -timedemo demo1"
                                 : "\\RUNREC.COM \\DOOM DOOM.EXE -config CIUKI.CFG -nosound -timedemo demo1";
     struct dosvm *v = 0;
@@ -660,7 +660,7 @@ static int probe_f3_wolf3d(void)
     struct dosvm_ledger before;
     dosvm_snapshot(&before);
     /* Real-mode workload: no DPMI flag; XMS, EMS and UMBs of f3-03 offered. */
-    const struct dosvm_config config = {.commitment = 0, .probe = name, .base = base};
+    const struct dosvm_config config = {.commitment = 0, .probe = name, .base = base, .kernel=2, .disable_file_bridge=true};
     struct dosvm *v = 0;
     unsigned passed = 0, files = 0;
     int error = storage_enable_write(storage_get(), 2);
@@ -919,7 +919,7 @@ static int probe_f3_quake(void)
     rec_emit(name, "DATA", "case=identity build=%s loops=1 source=bundled", CIUKI_BUILD_HEX8);
     struct dosvm_ledger before;
     dosvm_snapshot(&before);
-    const struct dosvm_config config = {.probe = name, .dpmi = true, .base = "C:\\GAMES\\CIUKIGAM.IMG"};
+    const struct dosvm_config config = {.probe = name, .dpmi = true, .base = "C:\\SYSTEM\\DOS\\UNIFIED.IMG", .kernel=2, .disable_file_bridge=true};
     struct dosvm *v = 0;
     int error = storage_enable_write(storage_get(), 2);
     if (!error) error = wl_boot(&config, &v);

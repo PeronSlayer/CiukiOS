@@ -1372,7 +1372,7 @@ static void startup_launch(struct desktop *d,const char *name)
     if (d->action<0) snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",name);
 }
 /* f3-61 f3:vm-game: one Programs > Games entry launched at startup through
- * the menu's own path, optionally with the DOS Box's --dos-kernel= choice. */
+ * the menu's own path, optionally asserting --dos-kernel=unified. */
 static int startup_game_index=-1;
 static const char *startup_game_kernel;
 static int launch_pending(struct desktop *d)
@@ -1955,7 +1955,7 @@ int main(int argc, char **argv)
             for (unsigned g=0;g<DESK_GAME_COUNT;g++) if (!strcmp(argv[a]+14,desk_games[g].title)) startup_game_index=(int)g;
             if (startup_game_index<0) return 2;
         } else if (fullscreen_test && !strncmp(argv[a],"--game-kernel=",14) && !startup_game_kernel &&
-                   (!strcmp(argv[a]+14,"unified") || !strcmp(argv[a]+14,"freedos-1.3"))) startup_game_kernel=argv[a]+14;
+                   !strcmp(argv[a]+14,"unified")) startup_game_kernel=argv[a]+14;
         else return 2;
     }
     if (display < 3 || input < 3 || display == input || cycles < 1 ||

@@ -146,9 +146,8 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         *selection=parsed;
         return true;
     }
-    /* f3-61: f3:vm-game run=<id> [kernel=unified|kernel=freedos-1.3], then
-     * the ordinary optional suffixes; default the unified kernel, the DOS
-     * Box's own default for a game without a saved choice. */
+    /* Historical kernel suffixes remain parseable for old request files.
+     * f3-63: vm-game always launches unified, regardless of this old flag. */
     if (parsed.phase == 3 && !strncmp(parsed.probe,"vm-game",sizeof(parsed.probe))) {
         if (len-i >= 19 && !memcmp(s+i," kernel=freedos-1.3",19)) { parsed.flags |= PROBE_DOS_FREEDOS; i += 19; }
         else if (len-i >= 15 && !memcmp(s+i," kernel=unified",15)) { parsed.flags |= PROBE_DOS_UNIFIED; i += 15; }

@@ -259,6 +259,45 @@ static void write_generations(void) {
     CHECK(vfs_handle_version(&t,77,&v)==-FS_EBADF);
     puts("PASS f3-51c write generations: same-bytes rewrite, delete+recreate in the same slot/cluster/time, time, truncate, rename over, raw change and remount change the version; unrelated writes do not; ledger eviction is conservative");
 }
+/* A digest cache pins only a counter, so unrelated ledger eviction must not
+ * trigger another complete image hash or deny a later legitimate writer. */
+static void digest_version_watches(void) {
+    const char *base="C:/GAMES/SMALL.IMG";
+    struct vfs_file_version before=version_of(base), after;
+    struct vfs_version_pin pin={0}, second={0};
+    int h=vfs_open(&t,base,VFS_READ,VFS_DENY_WRITE,0); CHECK(h>=0);
+    CHECK(!vfs_version_pin(&t,h,&before,&pin) && pin.serial);
+    CHECK(!vfs_version_pin(&t,h,&before,&second) && second.serial==pin.serial);
+    CHECK(!vfs_close(&t,h));
+    char path[32];
+    for (unsigned i=0;i<2*VFS_CHANGES;i++) {
+        snprintf(path,sizeof(path),"C:/W%03u.BIN",i); write_file(path,512,(uint8_t)i,false,0);
+        after=version_of(base); CHECK(vfs_file_version_equal(&before,&after));
+    }
+    write_file(base,512,9,true,&before); after=version_of(base);
+    CHECK(!vfs_file_version_equal(&before,&after) && after.write_generation>before.write_generation);
+    h=vfs_open(&t,base,VFS_READ,VFS_DENY_WRITE,0); CHECK(h>=0);
+    struct vfs_version_pin stale={0}; CHECK(vfs_version_pin(&t,h,&before,&stale)==-FS_EAGAIN && !stale.serial);
+    CHECK(!vfs_close(&t,h));
+    vfs_version_unpin(&pin); CHECK(!pin.vfs && !pin.serial);
+    vfs_version_unpin(&pin); /* idempotent */
+    before=version_of(base);
+    vfs_raw_changed(&space,&vol); after=version_of(base);
+    CHECK(!vfs_file_version_equal(&before,&after));
+    vfs_version_unpin(&second);
+    struct vfs_version_pin full[VFS_VERSION_PINS]={0};
+    for (unsigned i=0;i<=VFS_VERSION_PINS;i++) {
+        snprintf(path,sizeof(path),"C:/W%03u.BIN",i);
+        h=vfs_open(&t,path,VFS_READ,VFS_DENY_WRITE,0); CHECK(h>=0);
+        before=version_of(path);
+        struct vfs_version_pin extra={0};
+        int e=vfs_version_pin(&t,h,&before,i<VFS_VERSION_PINS ? &full[i] : &extra);
+        CHECK(e==(i<VFS_VERSION_PINS ? 0 : -FS_ENOSPC)); CHECK(!vfs_close(&t,h));
+    }
+    for (unsigned i=0;i<VFS_VERSION_PINS;i++) vfs_version_unpin(&full[i]);
+    for (unsigned i=0;i<VFS_VERSION_PINS;i++) CHECK(!space.version_watches[i].refs);
+    puts("PASS f3-63 digest watches: 128 unrelated writes keep the version, same-bytes write and raw change invalidate, bounded 16/refcounts/stale pin/release without open handles");
+}
 /* Last: a device error empties the open file's cursor (no later writes). */
 static void error_path(void) {
     int r=vfs_open(&t,"C:/FRAG.BIN",VFS_READ,VFS_DENY_NONE,0); CHECK(r>=0);
@@ -281,6 +320,7 @@ int main(int argc, char **argv) {
     sequential_reads(argv[2]);
     cursor_rules();
     write_generations();
+    digest_version_watches();
     error_path();
     vfs_table_destroy(&t); vfs_table_destroy(&w);
     CHECK(!vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache); fake_close(&f);

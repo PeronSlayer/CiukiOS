@@ -80,14 +80,13 @@ static int d51_run(void)
 {
     struct probe_selection selected;
     if (!probes_parse_selector(g_boot.test_request,g_boot.test_request_len,g_boot.flags,&selected)) return 1;
-    bool freedos=(selected.flags&PROBE_DOS_FREEDOS)!=0;
-    bool unified=(selected.flags&PROBE_DOS_UNIFIED)!=0;
-    const char *base=unified ? "C:\\SYSTEM\\DOS\\UNIFIED.IMG" : "C:\\SYSTEM\\DOS\\FREEDOS.IMG";
-    const char *sidecar=unified ? "C:\\SYSTEM\\DOS\\UNIFIED.SHA" : "C:\\SYSTEM\\DOS\\FREEDOS.SHA";
-    const char *guest=freedos ? "freedos" : "ciukidos";
+    /* All historical runtime selectors map to unified. The pristine
+     * reference is confined to the host conformance harness. */
+    const char *base="C:\\SYSTEM\\DOS\\UNIFIED.IMG";
+    const char *sidecar="C:\\SYSTEM\\DOS\\UNIFIED.SHA";
+    const char *guest="ciukidos";
     const char *name="dos-conformance";
-    if (unified) rec_emit(name,"BEGIN","guest=%s adapter=1 kernel=unified",guest);
-    else rec_emit(name,"BEGIN","guest=%s adapter=1",guest);
+    rec_emit(name,"BEGIN","guest=%s adapter=1 kernel=unified",guest);
     char message[160];
     ksnprintf(message,sizeof(message),"D48 BEGIN run=%s guest=%s\n",selected.run,guest); d51_line(message);
     struct storage *storage=storage_get();
@@ -98,14 +97,14 @@ static int d51_run(void)
     if (!error) error=vfs_table_init(&storage->vfs,&plan_table,2);
     int amount=0;
     if (!error) {
-        if (freedos || unified) {
+        {
             struct fat_entry entry;
             error=vfs_stat(&plan_table,base,&entry);
             if (!error && (entry.attr&0x10)) error=-EINVAL;
             if (!error) error=vfs_stat(&plan_table,sidecar,&entry);
             if (error) {
                 vfs_table_destroy(&plan_table);
-                rec_emit(name,"END","status=FAIL reason=reference_absent_or_corrupt error=%d",error);
+                rec_emit(name,"END","status=FAIL reason=unified_absent_or_corrupt error=%d",error);
                 return 1;
             }
         }
@@ -144,14 +143,14 @@ static int d51_run(void)
         unsigned fault=!strncmp(fixture,"fault-once",11) ? 1 : !strncmp(fixture,"fault-always",13) ? 2 : 0;
         if (strncmp(fixture,"basic",6) && strncmp(fixture,"share",6) && !keys && !fault) { error=-EINVAL;break; }
         struct dosvm *v=0;
-        const struct dosvm_config config={.probe=name,.dpmi=true,.kernel=unified ? 2 : freedos,
-            .disable_file_bridge=freedos || unified,.base=(freedos || unified) ? base : 0,
+        const struct dosvm_config config={.probe=name,.dpmi=true,.kernel=2,
+            .disable_file_bridge=true,.base=base,
             .record_observer=d51_observe,.record_arg=&state};
         error=dosvm_create(&config,&v);
         if (!error) d48_reset(&v->conformance_media,fault,dosvm_key(v).generation);
         if (!error) error=dosvm_boot(v);
         if (!error) error=d51_wait(v,&state,0,false);
-        if (!error && ((freedos || unified) ? v->files!=0 : v->files==0)) error=-V86_EIO;
+        if (!error && v->files) error=-V86_EIO;
         if (!error) {
             char command[64];
             ksnprintf(command,sizeof(command),"CD \\D48TEST\\%s",state.tag);
@@ -164,7 +163,7 @@ static int d51_run(void)
         if (!error && (!state.pass || state.results!=1)) error=-V86_EIO;
         if (v) {
             if (fault && (v->conformance_media.bad || v->conformance_media.opens!=1 ||
-                v->conformance_media.failures!=((freedos || unified) ? D48_BIOS_RETRIES : 1))) error=-V86_EIO;
+                v->conformance_media.failures!=D48_BIOS_RETRIES)) error=-V86_EIO;
             if (fault) rec_emit(name,"DATA","group=d48_fault case=%s opens=%u failures=%u generation=%u",
                 state.tag,v->conformance_media.opens,v->conformance_media.failures,v->conformance_media.generation);
             if (v->files && (v->files->dropped || v->files->cleanup_status)) error=-V86_EIO;

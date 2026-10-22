@@ -20,6 +20,7 @@
 #undef WIFSIGNALED
 #undef WTERMSIG
 #include <ciuki/abi.h>
+#include <ciuki/sha256.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
@@ -378,7 +379,7 @@ void vfs_table_destroy(struct vfs_table *table)
  * bundled games disk (owner decision 2026-10-12) is C:\\GAMES\\CIUKIGAM.IMG,
  * present while bundled_disk is set, bundled_bytes long (cut images). */
 static char last_base[32];
-static bool reference_present,reference_checksum_missing,unified_present,unified_checksum_missing;
+static bool reference_present,reference_checksum_missing,unified_present=true,unified_checksum_missing;
 static char reference_identity[66];
 static char unified_identity[66];
 static bool workload_disk, bundled_disk = true, bundled_directory;
@@ -393,7 +394,7 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 {
     (void)file_slot(table);
     if (!strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.IMG") && !reference_present) return -ENOENT;
-    if (!strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG") && !unified_present) return -ENOENT;
+    if (!strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG")) { bundled_scans++; if (!unified_present || !bundled_disk) return -ENOENT; if (bundled_error) return bundled_error; }
     if (fixture_path(path)) {
         CHECK(path[0] >= 'D' && path[0] <= 'Z');
         if (path[0] == 'D') workload_scans++;
@@ -403,7 +404,7 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
     if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) { bundled_scans++; if (bundled_error) return bundled_error; if (!bundled_disk) return -ENOENT; }
     CHECK(base_path(path)); snprintf(last_base,sizeof(last_base),"%s",path); if (io_fails()) return -V86_EIO;
     memset(entry,0,sizeof(*entry)); entry->size=(uint32_t)base_bytes(path);
-    if (bundled_directory && !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) entry->attr=0x10;
+    if (bundled_directory && (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG"))) entry->attr=0x10;
     return 0;
 }
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
@@ -415,7 +416,7 @@ int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vf
         CHECK(!files[i].identity_open && access==VFS_READ && share==VFS_DENY_WRITE);
         files[i].identity_open=true; handles++; return 2;
     }
-    if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") && bundled_open_error) return bundled_open_error;
+    if ((!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG")) && bundled_open_error) return bundled_open_error;
     if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; files[i].base_bytes=base_bytes(path); files[i].base_sector=disk_base_sector; handles++; return 0; }
     CHECK(access==(VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE) && share==VFS_DENY_ALL && strstr(path,".COW"));
     snprintf(files[i].path,sizeof(files[i].path),"build/host/dosvm-cow-XXXXXX");
@@ -431,6 +432,9 @@ static uint32_t base_location, base_mtime;
 static int version_error;
 static unsigned version_calls;
 static void (*version_hook)(void);
+int vfs_version_pin(struct vfs_table *t,int h,const struct vfs_file_version *v,struct vfs_version_pin *pin)
+{ (void)t; (void)h; (void)v; *pin=(struct vfs_version_pin){0}; return 0; }
+void vfs_version_unpin(struct vfs_version_pin *pin) { *pin=(struct vfs_version_pin){0}; }
 int vfs_handle_version(struct vfs_table *table, int handle, struct vfs_file_version *out)
 {
     unsigned i=file_slot(table); CHECK(handle==0 && files[i].base_open && out);
@@ -457,7 +461,30 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
 {
     unsigned i=file_slot(table); disk_owned(table);
     if (handle==2) {
-        CHECK(files[i].identity_open && bytes==66); *done=65; memcpy(data,files[i].unified_identity ? unified_identity : reference_identity,65); return 0;
+        CHECK(files[i].identity_open && bytes==66); *done=65;
+        if (files[i].unified_identity && !unified_identity[0]) {
+            /* Independent synthetic identity for ordinary window fixtures;
+             * explicit identity tests provide their own sidecar bytes. */
+            static uint64_t cached_size, cached_writes=UINT64_MAX;
+            static void (*cached_sector)(uint32_t,void *);
+            static bool cached_bad;
+            static char hex[65];
+            if (cached_size!=files[i].base_bytes || cached_sector!=files[i].base_sector ||
+                cached_bad!=bad_signature || cached_writes!=base_writes) {
+            struct sha256_ctx ctx; uint8_t sector[512], binary[32];
+            sha256_init(&ctx);
+            for (uint32_t lba=0;lba<files[i].base_bytes/512;lba++) {
+                if (files[i].base_sector) files[i].base_sector(lba,sector);
+                else { memset(sector,lba%251,512); if (!lba) { sector[0]=0xEE; sector[510]=bad_signature ? 0 : 0x55; sector[511]=0xAA; } }
+                sha256_update(&ctx,sector,sizeof(sector));
+            }
+            sha256_final(&ctx,binary); sha256_hex(binary,hex);
+            cached_size=files[i].base_bytes; cached_sector=files[i].base_sector;
+            cached_bad=bad_signature; cached_writes=base_writes;
+            }
+            memcpy(data,hex,64); ((char *)data)[64]='\n';
+        } else memcpy(data,files[i].unified_identity ? unified_identity : reference_identity,65);
+        return 0;
     }
     CHECK(bytes && !(bytes % 512) && bytes <= DOSVM_READ_SECTORS * 512u && (!handle || bytes == 512));
     disk_reads++;
@@ -595,6 +622,14 @@ static unsigned vm_owned_pages(const struct dosvm *v)
 }
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
+/* Teardown of synthetic workloads explicitly completes them before closing;
+ * active-window CLOSE refusal is tested separately in dosvm_video_test.inc. */
+static int dosvm_call(unsigned,struct ciuki_dosvm_command *,uint32_t);
+static int finish_test_vm(struct ciuki_dosvm_command *c,unsigned bytes)
+{
+    CHECK(!dosvm_stop((struct dosvm_key){c->id,c->generation},DOSVM_EXIT));
+    return dosvm_call(CIUKI_DOSVM_CLOSE,c,bytes);
+}
 static void empty(void)
 { struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms && !l.pages && !l.tasks && !l.handles && !l.devices && !l.resident && !l.reserved); CHECK(!used_pages && !heap_blocks && !handles && !tables && !scratch && !g_task_count && !g_user_mappings); for (unsigned i=0;i<DOSVM_LIMIT;i++) CHECK(!slots[i].disk_busy); }
 static void destroy(struct dosvm *v, bool forced)
@@ -964,5 +999,6 @@ int main(void)
     test_startup_boot();
     test_pool_paging(); /* f3-46: last, it attaches the production pager */
     free(ram);
-    printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
+    printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record);
+    fflush(stdout); return 0;
 }

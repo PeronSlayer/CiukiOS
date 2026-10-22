@@ -485,11 +485,10 @@ cleanup_fs:
 }
 CIUKI_F3_PROBE(FS_PROBE,probe_f3_vm_fullscreen);
 
-/* f3-61 f3:vm-game run=<id> [kernel=freedos-1.3]: DOOM shareware launched
+/* f3-61 f3:vm-game run=<id> [kernel=unified]: DOOM shareware launched
  * exactly as Programs > Games does it: the desktop starts /Programs/dosbox
- * with the catalog command and the DOS Box's own --dos-kernel= choice
- * (default unified; saved as the game's setting like F12), the DOS Box types
- * CLS, CD \DOOM and DOOM.EXE -config CIUKI.CFG (default sound), the runner
+ * with the catalog command and an optional --dos-kernel=unified assertion.
+ * DOS Box types CD \DOOM and DOOM.EXE -config CIUKI.CFG (default sound); the runner
  * presses Alt+Enter. Evidence, not a game patch: the VM text screen at the
  * prompt, before the game's mode set and after it ends (hex rows), the first
  * windowed mode-13h frame digests, the unified binding state, one full-screen
@@ -572,9 +571,8 @@ static int probe_f3_vm_game(void)
 {
     struct probe_selection selected;
     if (!probes_parse_selector(g_boot.test_request,g_boot.test_request_len,g_boot.flags,&selected)) return 1;
-    bool freedos=(selected.flags&PROBE_DOS_FREEDOS)!=0;
-    const char *kernel=freedos ? "freedos-1.3" : "unified";
-    unsigned expected=freedos ? CIUKI_DOSVM_FREEDOS13 : CIUKI_DOSVM_UNIFIED;
+    const char *kernel="unified";
+    unsigned expected=CIUKI_DOSVM_UNIFIED;
     rec_emit(GAME_PROBE,"BEGIN","version=1 game=doom kernel=%s",kernel);
     int error=0; struct process *desktop=0;
     struct dosvm *v=0; uint32_t client=0,desktop_pid=0;

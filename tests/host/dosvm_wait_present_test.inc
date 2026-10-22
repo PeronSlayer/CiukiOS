@@ -53,7 +53,7 @@ static void test_wait_record_protection(void)
     }
     fake_current->memory=0; ua_destroy(&u);
     struct ciuki_dosvm_command c=command_for(present_window.id,present_window.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c))); empty();
+    CHECK(!finish_test_vm(&c,sizeof(c))); empty();
     puts("F3-52 real uaddr: WAIT/PRESENT/BANDS read-only and PROT_NONE records, cross-page all-or-error copy, protection changed during sleep, zero retained reservations PASS");
 }
 
@@ -101,7 +101,7 @@ static void test_wait_cadence(void)
         printf("F3-52 WAIT->PRESENT cadence direct=%u period_us=%llu frames=%u short=%u long=%u deferred=%u delayed_samples=0..3ms PASS\n",
                direct,(unsigned long long)period,frames,short_intervals,long_intervals,deferred);
         struct ciuki_dosvm_command c=command_for(present_window.id,present_window.generation);
-        CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c))); empty();
+        CHECK(!finish_test_vm(&c,sizeof(c))); empty();
     }
 }
 static void present_action_hook(void)
@@ -239,7 +239,7 @@ static void test_wait_present(void)
     CHECK(other->task->input_priority==9); /* delayed old loss cannot revoke the new grant */
     fake_current=&fake_proc[1];
     second=command_for(second.id,second.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&second,sizeof(second)));
+    CHECK(!finish_test_vm(&second,sizeof(second)));
     fake_current=&fake_proc[0];
     close.event.type=INPUT_KEY; close.event.code=0x1e; close.event.value=1;
     CHECK(dosvm_call(CIUKI_DOSVM_INPUT,&close,sizeof(close))==-EACCES);
@@ -261,7 +261,7 @@ static void test_wait_present(void)
     CHECK(!producer->fullscreen && producer->task->base_priority==7 && producer->fullscreen_error==-ETIMEDOUT);
     priority_transition_task=0; priority_transition_hold=0;
     close=command_for(present_window.id,present_window.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
+    CHECK(!finish_test_vm(&close,sizeof(close))); empty();
     puts("F1-87 D binding: focused client base9 leaves VM base7, input forwarding/withdrawal, syscall/hotkey/worker fullscreen bases PASS");
     g_current->base_priority=saved_base;
     for (present_action=0;present_action<21;present_action++) {
@@ -321,7 +321,7 @@ static void test_wait_present(void)
         if (fake_current->state==PROC_LIVE) {
             CHECK(!dosvm_fullscreen_leave(v->info.key,false));
             c=command_for(present_window.id,present_window.generation);
-            CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c)));
+            CHECK(!finish_test_vm(&c,sizeof(c)));
         }
         empty(); CHECK(fake_surface[0].references==1);
     }
@@ -372,7 +372,7 @@ static void test_wait_present(void)
     user_fault=true; c=command_for(present_window.id,present_window.generation); c.wait.timeout_ms=1;
     CHECK(dosvm_call(CIUKI_DOSVM_WAIT_PRESENT,&c,sizeof(c))==-EFAULT); user_fault=false;
     c=command_for(present_window.id,present_window.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c))); empty(); fake_current=0;
+    CHECK(!finish_test_vm(&c,sizeof(c))); empty(); fake_current=0;
     window_fixtures(); CHECK(!create_window(0,"Deferred frame",&present_window));
     v=dosvm_lookup((struct dosvm_key){present_window.id,present_window.generation}); int10(v,0x13,0,0,0);
     c=command_for(present_window.id,present_window.generation); c.wait.timeout_ms=50;
@@ -396,7 +396,7 @@ static void test_wait_present(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && c.changed && v->present_samples!=samples);
     CHECK(!bindings[present_window.id-1].video_pending);
     c=command_for(present_window.id,present_window.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c))); empty(); fake_current=0;
+    CHECK(!finish_test_vm(&c,sizeof(c))); empty(); fake_current=0;
     printf("F3-52 wait: dirty/trapped/direct/VBE, geometry/mode, console, ready/launch/failure/fullscreen/suspend/refusal/stop/fault, timeout, signal/exit, copyout fault, enqueue race, single waiter, deferred final frame and overlay pacing PASS\n");
     printf("F3-52 pins: 100 requests former_record_walks=%u unchanged_present_walks=0 unchanged_wait_walks=0 surface_pin_walks=0 unchanged_rows=0 sparse_rows=%u sparse_walks=0; forced frame writes only rows, no pin walk PASS\n",old_walks,sparse_rows);
     test_wait_record_protection();

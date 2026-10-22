@@ -255,6 +255,8 @@ struct storage *storage_get(void) { return &store; }
 #define vfs_write transport_vfs_write
 #define vfs_commit transport_vfs_commit
 #define vfs_handle_version transport_vfs_handle_version
+#define vfs_version_pin(...) transport_vfs_version_pin(__VA_ARGS__)
+#define vfs_version_unpin transport_vfs_version_unpin
 #endif
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
@@ -266,7 +268,7 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     (void)table; (void)access; (void)share; (void)attr;
-    if (strstr(path, "DOSBOOT.IMG") || strstr(path, "FREEDOS.IMG") || strstr(path, "UNIFIED.IMG")) return 0;
+    if (strstr(path, ".IMG")) return 0; /* the explicit host fixture, never a runtime selector */
     size_t length = strlen(path);
     if (length > 4 && !strcmp(path + length - 4, ".SHA")) {
         /* f3-61: kernel=freedos-1.3/unified sidecar, next to the host image. */
@@ -306,6 +308,10 @@ int vfs_commit(struct vfs_table *table, int handle) { (void)table; (void)handle;
 /* f3-51c: no content version; a game/kernel base would be hashed each launch. */
 int vfs_handle_version(struct vfs_table *table, int handle, struct vfs_file_version *out)
 { (void)table; (void)handle; (void)out; return -FS_EOPNOTSUPP; }
+
+int vfs_version_pin(struct vfs_table *t,int h,const struct vfs_file_version *v,struct vfs_version_pin *pin)
+{ (void)t; (void)h; (void)v; *pin=(struct vfs_version_pin){0}; return -FS_EOPNOTSUPP; }
+void vfs_version_unpin(struct vfs_version_pin *pin) { *pin=(struct vfs_version_pin){0}; }
 
 static struct dosvm *gv;
 static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
@@ -387,6 +393,9 @@ void dosvm_network_process_exit(struct dosvm *v, uint16_t psp) { (void)v; (void)
 #undef vfs_read
 #undef vfs_write
 #undef vfs_commit
+#undef vfs_handle_version
+#undef vfs_version_pin
+#undef vfs_version_unpin
 #endif
 
 #include "../../src/kernel/vm/dosvm_bios.c"
@@ -1169,7 +1178,7 @@ int main(int argc, char **argv)
     CHECK(!cache_init(&store.cache,65536)); vfs_init(&store.vfs);
 #endif
     gcpu_init(&guest_ops);
-    struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
+    struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true, .base="HOST-FIXTURE.IMG"};
 #ifdef CIUKI_DOSVM_FILE_CPU
     const char *bridge_policy=getenv("GUEST_NO_FILE_HOOK");
     config.disable_file_bridge=bridge_policy && !strcmp(bridge_policy,"disabled");
@@ -1180,8 +1189,9 @@ int main(int argc, char **argv)
     if (kernel_choice) {
         CHECK(!strcmp(kernel_choice,"freedos-1.3") || !strcmp(kernel_choice,"unified"));
         guest_kernel=!strcmp(kernel_choice,"unified") ? 2 : 1;
-        config.kernel=(uint8_t)guest_kernel; config.disable_file_bridge=true;
-        config.base=guest_kernel==2 ? "C:\\SYSTEM\\DOS\\UNIFIED.IMG" : "C:\\SYSTEM\\DOS\\FREEDOS.IMG";
+        /* The pristine reference exists only inside this host transport. */
+        config.kernel=guest_kernel==2 ? 2 : 0; config.disable_file_bridge=true;
+        config.base=guest_kernel==2 ? "C:\\SYSTEM\\DOS\\UNIFIED.IMG" : "HOST-REFERENCE.IMG";
         config.probe="vm-window";
     }
 #endif

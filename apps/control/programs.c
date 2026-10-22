@@ -287,7 +287,7 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
         if(closedir(d) && !e)e=-errno;if(e)return e;
     }
     static const struct {const char *name,*location;} protected[]={
-        {"CiukiDOS kernel","/System/DOS/DOSBOOT.IMG"},{"FreeDOS kernel","/System/DOS/FREEDOS.IMG"},{"Windows service","/System/Win32/w32srv"},{"System fonts","/System/fonts"}};
+        {"CiukiDOS kernel","/System/DOS/UNIFIED.IMG"},{"Windows service","/System/Win32/w32srv"},{"System fonts","/System/fonts"}};
     for(unsigned i=0;i<sizeof(protected)/sizeof(*protected);i++){
         struct desk_uninstall_entry candidate;
         struct desk_uninstall_entry *r=&candidate;

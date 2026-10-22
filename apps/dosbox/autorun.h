@@ -105,20 +105,10 @@ static inline int dosbox_command_keys(const char *command, struct dosbox_key *ke
     return (int)at;
 }
 
-/* Command launches clear boot text using the DOS shell's own CLS command;
- * no guest RAM or register is rewritten by the desktop client. */
+/* The native loading panel hides boot text until the program's first frame.
+ * A separate CLS round trip only adds key events and a line-settle delay. */
 static inline int dosbox_launch_keys(const char *command, struct dosbox_key *keys, unsigned max)
-{
-    int prefix = dosbox_command_keys("CLS", keys, max);
-    if (prefix < 0) return -1;
-    int count = dosbox_command_keys(command, keys + prefix, max - (unsigned)prefix);
-    if (count < 0) return -1;
-    for (int i = 0; i < count; i++) {
-        keys[prefix + i].group += (uint16_t)prefix;
-        keys[prefix + i].main += (uint16_t)prefix;
-    }
-    return prefix + count;
-}
+{ return dosbox_command_keys(command, keys, max); }
 
 /* Where to resume after the window lost the focus at event `failed`: the
  * kernel then released every held key. Not yet typed: the character again

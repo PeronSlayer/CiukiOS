@@ -87,7 +87,7 @@ int main(void)
     char launched[2 * DOSBOX_COMMAND_MAX];
     n = dosbox_launch_keys("\\DOOM\\DOOM.EXE -config CIUKI.CFG", keys, DOSBOX_KEYS_MAX);
     assert(n > 0); replay(keys, n, launched, sizeof(launched));
-    assert(!strcmp(launched, "CLS\nCD \\DOOM\nDOOM.EXE -config CIUKI.CFG\n"));
+    assert(!strcmp(launched, "CD \\DOOM\nDOOM.EXE -config CIUKI.CFG\n"));
     longest[DOSBOX_COMMAND_MAX] = 0;
     assert(dosbox_launch_keys(longest, keys, DOSBOX_KEYS_MAX) > 0);
     assert(dosbox_launch_keys("DOOM", keys, 8) == -1);

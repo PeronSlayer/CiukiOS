@@ -305,6 +305,59 @@ def application_provenance(sources, manifest, sdk):
     return "".join(lines)
 
 
+def dos_payloads(out):
+    """One required unified base, its probes and licenses; no fallback image."""
+    sources, directories, metadata = {}, set(), {}
+    dos_spec = importlib.util.spec_from_file_location("build_dos_image", ROOT / "scripts/build_dos_image.py")
+    dos_build = importlib.util.module_from_spec(dos_spec)
+    dos_spec.loader.exec_module(dos_build)
+    dos_image, dos_manifest = dos_build.build()
+    identity=dos_manifest.get("identity",{})
+    require(dos_manifest.get("kernel")=="unified" and identity.get("profile",{}).get("ifs") is True and
+            identity.get("kernel",{}).get("personality")=="ciukidos-fork", "canonical DOS requires the qualified unified IFS fork")
+    sources["/system/dos/UNIFIED.IMG"] = dos_image
+    sources["/system/dos/UNIFIED.SHA"] = dos_image.with_suffix(".SHA")
+    sources["/system/dos/D48PLAN.TXT"] = dos_image.parent/"conformance/PLAN.TXT"
+    directories.update(("/system/dos", "/system/licenses", "/Games"))
+    metadata["dos"] = dos_manifest
+    metadata["unified_dos"] = dos_manifest["unified_dos"]
+    metadata["dos_conformance"] = {"reference": "host-harness-only", "kernel": "unified"}
+    conformance_spec=importlib.util.spec_from_file_location("dos_conformance",ROOT/"scripts/dos_conformance.py")
+    conformance=importlib.util.module_from_spec(conformance_spec); conformance_spec.loader.exec_module(conformance)
+    identity=dos_manifest["identity"]
+    license_dir=Path(dos_manifest["licenses"])
+    for name in ("CIUKIDOS.TXT","FDK-GPL2.TXT","FREECOM.TXT","SUPPL.TXT","SHARE.TXT","CIUKIDOS.JSN"):
+        sources["/system/licenses/"+name]=license_dir/name
+    games=conformance.module("build_games_disk",ROOT/"scripts/build_games_disk.py")
+    packages=[]
+    for package in games.PACKAGES:
+        record, _, documents=games.package_files(package)
+        packages.append(dict(record, name=package))
+        for name, _ in documents:
+            sources[f"/system/licenses/{package}-{name}"]=ROOT/games.GAMES/package/name
+        sources[f"/system/licenses/{package}-UPSTREAM.json"]=ROOT/games.GAMES/package/"UPSTREAM.json"
+    metadata["games"]={"kernel":"unified", "base":"/system/dos/UNIFIED.IMG", "packages":packages}
+    free=games.free_hashes()
+    return sources, directories, metadata, free
+
+
+def verify_unified_payloads(candidate, manifest):
+    """Read the installed fork, sidecar and notices from the actual FAT32 image."""
+    import io
+    spec=importlib.util.spec_from_file_location("dos_conformance",ROOT/"scripts/dos_conformance.py")
+    conformance=importlib.util.module_from_spec(spec); spec.loader.exec_module(conformance)
+    unified=conformance.module("unified_dos",ROOT/"scripts/unified_dos.py")
+    nested=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.IMG",PART_LBA*SECTOR)
+    sidecar=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.SHA",PART_LBA*SECTOR)
+    require(sidecar==(unified.sha(nested)+"\n").encode(),"unified sidecar read-back")
+    def read_unified(path):
+        if path.startswith("/system/licenses/"):
+            return conformance.read_file(candidate,path,PART_LBA*SECTOR)
+        return conformance.read_file(io.BytesIO(nested),path,conformance.reference_offset(nested))
+    notices={p.name:p.read_bytes() for p in Path(manifest["licenses"]).iterdir()}
+    unified.readback(read_unified,manifest["identity"],notices)
+
+
 def games_payloads(dos_image, out=None):
     """Owner decisions 2026-10-12/14: Wolfenstein 3-D, DOOM and Quake shareware are
     pre-installed. The games disk (the DOS system plus \\WOLF3D, \\DOOM and \\QUAKE,
@@ -579,57 +632,8 @@ def build(kernel, out, boot_cfg):
     registry_sources, registry_directories = registry_payloads(out.parent / "registry")
     sources.update(registry_sources)
     directories.update(registry_directories)
-    dos_spec = importlib.util.spec_from_file_location("build_dos_image", ROOT / "scripts/build_dos_image.py")
-    dos_build = importlib.util.module_from_spec(dos_spec)
-    dos_spec.loader.exec_module(dos_build)
-    dos_image, dos_manifest = dos_build.build()
-    sources["/system/dos/DOSBOOT.IMG"] = dos_image
-    sources["/system/dos/D48PLAN.TXT"] = dos_image.parent/"conformance/PLAN.TXT"
-    directories.add("/system/dos")
-    metadata["dos"] = dos_manifest
-    games_sources, games_directories, metadata["games"], free = games_payloads(dos_image)
-    sources.update(games_sources)
-    directories.update(games_directories)
-    # Optional until the official reference has been provisioned. Never label
-    # an absent reference qualified, nor replace the default CiukiDOS base.
-    conformance_spec=importlib.util.spec_from_file_location("dos_conformance",ROOT/"scripts/dos_conformance.py")
-    conformance=importlib.util.module_from_spec(conformance_spec); conformance_spec.loader.exec_module(conformance)
-    if (conformance.RELEASE/"UPSTREAM.json").is_file():
-        import io
-        system_files={p["path"]:conformance.read_file(dos_image,p["path"]) for p in dos_manifest["payloads"]}
-        game_module=conformance.module("d51_games",ROOT/"scripts/build_games_disk.py")
-        game_files={}
-        for package in game_module.PACKAGES:
-            _,members,_=game_module.package_files(package)
-            for path,data,_ in members: game_files[path]=data
-        game_files["/DOOM/CIUKI.CFG"]=game_module._fixtures().DOOM_CONFIG
-        reference=dos_image.parent/"FREEDOS.IMG"
-        import sys
-        sys.path.insert(0,str(ROOT/"tests/host/dos"))
-        from cases import CASES
-        reference_dirs=("D48","D48TEST",*("D48TEST/D48%03d"%i for i in range(1,len(CASES)+1)),
-                        "WOLF3D","DOOM","QUAKE","QUAKE/ID1")
-        conformance.build_reference(reference,system_files,reference_dirs,game_files)
-        sources["/system/dos/FREEDOS.IMG"]=reference
-        sources["/system/dos/FREEDOS.SHA"]=reference.with_suffix(".SHA")
-        metadata["dos_conformance"]={"reference":"installed-unqualified"}
-        unified=conformance.module("unified_dos",ROOT/"scripts/unified_dos.py")
-        qualification=ROOT/"build/unified-dos/qualified.json"
-        # f3-57: a fork qualification (two identical fork builds + live IFS CPU
-        # boots) selects the CiukiDOS fork + CIUKIDF.SYS for kernel=unified.
-        if qualification.is_file() or unified.FORK_QUALIFIED.is_file():
-            rebuilt=dos_image.parent/"UNIFIED.IMG"
-            identity,license_dir,metadata["unified_dos"]=unified.install(
-                rebuilt,system_files,reference_dirs,game_files,
-                source_output=out.parent/"ciukidos-unified-source.zip")
-            sources["/system/dos/UNIFIED.IMG"]=rebuilt
-            sources["/system/dos/UNIFIED.SHA"]=rebuilt.with_suffix(".SHA")
-            for name in ("CIUKIDOS.TXT","FDK-GPL2.TXT","FREECOM.TXT","SUPPL.TXT","SHARE.TXT","CIUKIDOS.JSN"):
-                sources["/system/licenses/"+name]=license_dir/name
-        else:
-            metadata["unified_dos"]={"status":"absent", "reason":"two-build/CPU qualification not provisioned"}
-    else:
-        metadata["dos_conformance"]={"reference":"absent", "reason":"official FreeDOS 1.3 pins/packages not provisioned"}
+    dos_sources, dos_directories, dos_metadata, free = dos_payloads(out)
+    sources.update(dos_sources); directories.update(dos_directories); metadata.update(dos_metadata)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
@@ -698,27 +702,11 @@ def build(kernel, out, boot_cfg):
                 cursor = hole
         check_image(candidate, volume)
         check_payloads(candidate, payloads, directories)
-        if "/system/dos/UNIFIED.IMG" in sources:
-            import io
-            nested=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.IMG",PART_LBA*SECTOR)
-            sidecar=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.SHA",PART_LBA*SECTOR)
-            require(sidecar==(unified.sha(nested)+"\n").encode(),"unified sidecar read-back")
-            def read_unified(path):
-                if path.startswith("/system/licenses/"):
-                    return conformance.read_file(candidate,path,PART_LBA*SECTOR)
-                return conformance.read_file(io.BytesIO(nested),path,conformance.reference_offset(nested))
-            notices={p.name:p.read_bytes() for p in license_dir.iterdir()}
-            unified.readback(read_unified,identity,notices)
+        verify_unified_payloads(candidate, metadata["dos"])
         os.replace(candidate, out)
     image_sha = sha256(out)
     write_manifest(out, kernel, image_sha, payloads, metadata)
-    if "/system/dos/FREEDOS.IMG" in sources:
-        import sys
-        sys.path.insert(0,str(ROOT/"tests/host/dos"))
-        evidence=conformance.readback(out,dos_image.parent/"conformance/manifest.json")
-        (out.parent/"dos-conformance.json").write_text(json.dumps(evidence,indent=2)+"\n")
-    else:
-        (out.parent/"dos-conformance.json").unlink(missing_ok=True)
+    (out.parent/"dos-conformance.json").unlink(missing_ok=True)
     print(f"SHA256 {image_sha}  {out}")
 
 

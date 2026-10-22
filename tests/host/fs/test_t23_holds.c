@@ -22,12 +22,18 @@ static uint32_t clock_ms,max_mutex,max_guard,service_ms=T23_SERVICE_MS;
 static struct dos_file_volume unified;
 static struct vfs_table vmio;
 static int image_handle=-1;
-static bool cold93;
+static bool cold93, close_replay;
+static unsigned close_services, close_tags;
+void fs_host_service(void) {
+    if (!close_replay) return;
+    assert(!((space.reserved|space.mutating)&vfs_drive_mask(2)));
+    if (!close_services++) clock_ms+=691; /* the supplied DOS Box close hold */
+}
 static uint32_t inner_since,inner_max,inner_acquired[2],cold_records,cold_record_max;
 static bool inner_held;
 static char inner_op[12];
 static struct { const char *op; uint32_t inner,outer; } ops93[]={{.op="mkdir"},{.op="stat"},{.op="find"},
-    {.op="open"},{.op="read"},{.op="lookup"},{.op="chdir"},{.op="commit"},{.op="write"},{.op="metadata"}};
+    {.op="open"},{.op="read"},{.op="lookup"},{.op="chdir"},{.op="commit"},{.op="write"},{.op="metadata"},{.op="close"}};
 static int op93(const char *op) {
     for (unsigned i=0;i<sizeof(ops93)/sizeof(*ops93);i++) if (!strcmp(op,ops93[i].op)) return (int)i;
     return -1;
@@ -137,6 +143,10 @@ void __wrap_fs_lock_released(fs_lock *l) {
     for (unsigned d=0;d<26;d++) if (l==&space.volume_lock[d]) {
         volume_depth--; uint32_t ms=clock_ms-acquired[d]; if (ms>max_mutex) max_mutex=ms;
         if (d==2 && space.holds[d].op[0]) memcpy(logical_op,space.holds[d].op,sizeof(logical_op));
+    }
+    if (close_replay && l==&space.volume_lock[2] && space.holds[2].op[0]) {
+        assert(!strcmp(space.holds[2].op,"close") && space.holds[2].attribution);
+        close_tags++;
     }
     __real_fs_lock_released(l);
 }
@@ -287,6 +297,20 @@ static void f193_cold_replay(void) {
     cold_end("find");
     cold_begin(); assert(!vfs_stat(&desktop,"C:/MANY/Entry 050.txt",&ent)); cold_end("stat");
     cold_begin(); assert(!vfs_chdir(&dos,"C:/MANY") && !vfs_chdir(&dos,"C:/")); cold_end("chdir");
+    cold_begin(); {
+        int h=vfs_open(&desktop,"C:/UNIFIED.IMG",VFS_READ,VFS_DENY_NONE,0); assert(h>=0);
+        uint8_t sector[512];
+        for(unsigned i=0;i<48;i++) assert(!cache_read(&cache,dev_c,2000+i,sector));
+        struct cache_stream *stream=&desktop.handles[h]->stream;
+        cache_stream_begin(&cache,stream,dev_c,0);
+        (void)cache_stream_end(stream,0,65536,true); stream->window_bytes=65536;
+        cache_stream_queue(stream,2500,16); assert(cache_prefetch_tick(&cache) && stream->resident);
+        close_services=close_tags=0; close_replay=true;
+        assert(!vfs_close(&desktop,h)); close_replay=false;
+        assert(close_services && close_tags && !cache.speculative_bytes);
+        printf("F3-63 DOS Box close: injected_pause_ms=691 service_points=%u attributed_segments=%u guard_held_during_retirement=0\n",close_services,close_tags);
+    }
+    cold_end("dosbox-close");
     cold93=false; replay=false;
     for (unsigned i=0;i<sizeof(ops93)/sizeof(*ops93);i++)
         printf("F1-93 cold op=%s dos_vm_hold_max_ms=%u physical_c_hold_max_ms=%u\n",ops93[i].op,ops93[i].inner,ops93[i].outer);
