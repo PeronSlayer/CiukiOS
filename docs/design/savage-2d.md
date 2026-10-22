@@ -4,6 +4,21 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f1-95: the first fill after the engine reset
+
+Supersedes the f1-69 interpretation and the f1-88 preamble-depth hypothesis;
+evidence, sources and the expected T23 records are in
+[the f1-95 validation](../validation/f1-95-savage-bci-32bpp.md). The
+production descriptor `10200401` is X.Org's `SavageSetGBD_PM` encoding bit
+for bit, and the T23 firmware already had CR50 depth `11`. Every T23
+production failure was the single self-test fill, the first colour RECT after
+the CR66 reset; in the a395ffa8 sweep only the first fill failed and
+configuration 8 (same descriptor as 0) passed. Decision: the self-test first
+fills an 8x2 block with the byte-uniform colour 0, then checks a 4x2 marker
+fill and a 4x2 GBD BitBLT pixel by pixel, restoring the block after proven
+idle. No register programming changes; the quarantine stays the safety net.
+The first-fill state is a measured inference, not a documented erratum.
+
 ## f3-43: failed acceleration relinquishes scanout access
 
 Research rechecked online on 2026-10-18 against X.Org's
