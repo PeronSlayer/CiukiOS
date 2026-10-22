@@ -30,6 +30,19 @@ int disk_node_sync(struct process *p, unsigned slot)
     struct storage_caller c = caller(p);
     return storage_disk_flush(storage_get(), slot, &c);
 }
+struct disk_control_operation {
+    struct process *process;
+    struct file_description *description;
+    struct ua_pin pin;
+    bool pinned;
+};
+static void disk_control_free(void *arg)
+{
+    struct disk_control_operation *o = arg;
+    if (o->pinned) ua_unpin(o->process->memory, &o->pin);
+    o->description->object.release(&o->description->object);
+    kfree(o);
+}
 int disk_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes)
 {
     if (!file_fd_object(p, fd)) return -EBADF;
@@ -43,13 +56,24 @@ int disk_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, ui
         struct ciuki_disk_recheck recheck;
     } record;
     if (bytes < sizeof(record.request) || bytes > sizeof(record)) return -EINVAL;
-    int err = copy_from_user(&record, address, bytes);
-    if (err) return err;
     unsigned slot = d->node->drive;
     if (!disk_node_present(slot)) return -ENXIO;
+    struct disk_control_operation *o = kzalloc(sizeof(*o));
+    if (!o) return -ENOMEM;
+    o->process = p; o->description = d;
+    d->object.retain(&d->object);
+    struct proc_thread *thread = proc_thread_for(g_current);
+    if (thread) { thread->cleanup = disk_control_free; thread->operation = o; }
+    int err = copy_from_user(&record, address, bytes);
+    /* All requests return a record. Reject an unwritable output before any
+     * lease/table state changes and retain its backing across blocking I/O. */
+    if (!err) { err = ua_pin(p->memory, &o->pin, address, bytes, true); o->pinned = !err; }
     struct storage_caller c = caller(p);
-    err = storage_disk_control(storage_get(), slot, &c, op, &record, bytes);
-    return err ? err : copy_to_user(address, &record, bytes);
+    if (!err) err = storage_disk_control(storage_get(), slot, &c, op, &record, bytes);
+    if (!err) err = copy_to_user(address, &record, bytes);
+    if (thread) { thread->cleanup = 0; thread->operation = 0; }
+    disk_control_free(o);
+    return err;
 }
 /* Only a process with the capability can have acquired a lease, so other
  * exits (every exit of an ordinary boot) do no work here. */
@@ -61,5 +85,5 @@ void disk_process_exit(struct process *p)
 bool disk_write_denied(unsigned drive)
 {
     struct process *p = proc_current();
-    return storage_disk_write_denied(storage_get(), drive, p ? p->pid : 0);
+    return storage_disk_write_denied(storage_get(), drive, p && p->setup_capability ? p->pid : 0);
 }

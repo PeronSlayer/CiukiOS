@@ -60,4 +60,8 @@ is the `setup_error_class` of `setup_txn.h`. The stub and canonical MBR code are
 assembled from `src/boot/setup_stub_mbr.asm` and `src/boot/mbr.asm` by
 `sdk/libdisk/gen_boot.py` during the SDK build; their digests are in the SDK
 manifest (`libdisk_boot`). Host qualification: `tests/host/libdisk_test.c` in
-`scripts/test/host_fs_tests.sh`.
+`scripts/test/host_fs_tests.sh`, including native syscall/lease tests and an
+archive-extraction regression test. The default native backend is included
+automatically by `-ldisk`. Embedded boot-code origins and notices are in
+`sdk/libdisk/NOTICE`, installed as `licenses/libdisk.txt` and named by the
+SDK manifest alongside the MIT notice.

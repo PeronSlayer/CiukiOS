@@ -150,6 +150,7 @@ def main():
     notice_dir=OUT/'licenses'; notice_dir.mkdir()
     shutil.copy2(src/'COPYING.NEWLIB',notice_dir/'COPYING.NEWLIB')
     shutil.copy2(ROOT/'sdk/LICENSE',notice_dir/'SDK-MIT.txt')
+    shutil.copy2(ROOT/'sdk/libdisk/NOTICE',notice_dir/'libdisk.txt')
     ft.notices(notice_dir)
     gl.notices(notice_dir)
     manifest['opengl_backend']={'name':'TinyGL',**gl_recipe,'notice':'sdk/libgl/LICENSE-TinyGL.txt'}
@@ -170,12 +171,13 @@ def main():
         dst.write_text(notice or 'No inline notice; consult COPYING.NEWLIB and retained upstream source.\n')
         inventory.append({'source':rel,'sha256':digest(path),'notice':str(dst.relative_to(OUT)),'notice_sha256':digest(dst)})
     manifest['compiled_file_licenses']=inventory
-    manifest['sdk_compiled_file_licenses']=[{'source':str(p.relative_to(ROOT)),'sha256':digest(p),'notice':'sdk/libgl/LICENSE-TinyGL.txt' if 'libgl/vendor' in str(p) else 'licenses/SDK-MIT.txt'} for p in sorted((ROOT/'sdk').rglob('*')) if p.suffix in ('.c','.S') and 'tests' not in p.parts]
+    manifest['sdk_compiled_file_licenses']=[{'source':str(p.relative_to(ROOT)),'sha256':digest(p),'notice':'sdk/libgl/LICENSE-TinyGL.txt' if 'libgl/vendor' in str(p) else 'licenses/libdisk.txt' if 'libdisk' in p.parts else 'licenses/SDK-MIT.txt'} for p in sorted((ROOT/'sdk').rglob('*')) if p.suffix in ('.c','.S') and 'tests' not in p.parts]
     manifest['generated_stub_license']={'source':'work/syscalls.S','abi_sha256':digest(ABI),'notice':'licenses/SDK-MIT.txt'}
     # f9-02: libdisk embeds boot-code bytes assembled from GPL-2.0-only
-    # sources and mkfs.fat 4.2's FAT32 boot program (format.c); the lead
-    # decides the licence boundary (build/codex/f9-02-report.md).
+    # sources and mkfs.fat 4.2's FAT32 boot program (format.c). Preserve the
+    # origins/notices under the owner's accepted mixed-licence policy.
     manifest['libdisk_boot']={'generated':'work/libdisk_boot.c','code':json.loads((work/'libdisk_boot.json').read_text()),
+         'notice':'licenses/libdisk.txt','format_boot_program_license':'GPL-3.0-or-later',
          'format_boot_program':'mkfs.fat 4.2 FAT32 boot program bytes in sdk/libdisk/format.c (dosfstools)'}
     manifest['license_scope']={'runtime':'newlib per-file notices; SDK MIT; FreeType FTL; TinyGL acknowledgment licence; exact ABI header GPL-2.0-only (contract issue documented)',
          'tools_build_only':'LLVM Apache-2.0 WITH LLVM-exception; NASM BSD; upstream configure/build licenses retained in source',
@@ -190,7 +192,7 @@ def main():
     linked={}
     for mapfile in (OUT/'tests').glob('*.elf.map'):
         members=sorted(set(re.findall(r'([^\s/]+\.a)\(([^)]+)\)',mapfile.read_text())))
-        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','sdk/libgl/LICENSE-TinyGL.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a','libdisk.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
+        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','sdk/libgl/LICENSE-TinyGL.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/libdisk.txt'] if a=='libdisk.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
     manifest['linked_file_licenses']=linked
     manifest['test_evidence']=json.loads((OUT/'tests/host-checks.json').read_text())
     manifest['installed_bytes']=sum(p.stat().st_size for p in (OUT/'sysroot').rglob('*') if p.is_file())

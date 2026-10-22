@@ -302,17 +302,21 @@ static int publish(struct storage *s, unsigned disk, const struct storage_caller
     vfs_unlock(&s->vfs);
     if (e) { fs_free(table); return e; }
     int scanned = partition_scan(r->dev, table);
+    /* Setup mode has no writer until publication (f9-01). Reserve/start it
+     * before exposing a writable volume: failure must publish nothing. */
+    int writer = scanned ? 0 : storage_writer_start(s);
     vfs_lock(&s->vfs, 0);
     r->lease.io_active--;
-    e = publish_locked(s, disk, c, table, scanned, out);
+    if (writer) {
+        e = authorize(s, disk, c);
+        if (!e) {
+            text(r->lease.reason, sizeof(r->lease.reason), "writer");
+            e = abi_error(writer);
+            klog("[disk] publish disk=%u pid=%u result=%d reason=writer", disk, c->pid, e);
+        }
+    } else e = publish_locked(s, disk, c, table, scanned, out);
     vfs_unlock(&s->vfs);
     fs_free(table);
-    /* Setup mode starts storage without the writer task (f9-01, D2); the
-     * published volume needs it. A failure leaves writes to fsync barriers. */
-    if (!e) {
-        int w = storage_writer_start(s);
-        if (w) klog("[disk] publish disk=%u writer=unavailable error=%d", disk, w);
-    }
     return e;
 }
 /* The kernel's own consistency check (plan 6.3): commit, clean unmount
@@ -454,12 +458,14 @@ int storage_disk_flush(struct storage *s, unsigned disk, const struct storage_ca
     struct storage_disk *r = &s->raw[disk];
     struct blkdev *dev = r->dev;
     int e = dev ? authorize(s, disk, c) : -ENXIO;
-    if (!e && !dev->flush) e = -EOPNOTSUPP;
+    if (!e && !dev->flush && dev->write_cache_state != BLKDEV_CACHE_DISABLED) e = -EOPNOTSUPP;
     if (!e) e = abi_error(commit_published(s, disk));
     if (!e) r->lease.io_active++;
     vfs_unlock(&s->vfs);
     if (e) return e;
-    e = dev->flush(dev);
+    /* Match cache.c: confirmed cache-disabled synchronous writes already
+     * reached the medium. Never infer this from an unknown cache state. */
+    e = dev->flush ? dev->flush(dev) : 0;
     vfs_lock(&s->vfs, 0);
     r->lease.io_active--;
     if (!e) r->lease.flushes++;

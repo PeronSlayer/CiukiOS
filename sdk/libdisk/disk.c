@@ -7,7 +7,9 @@
 #include "internal.h"
 #include <string.h>
 
-const struct disk_backend *disk_native_backend(void) __attribute__((weak));
+/* A strong reference extracts native.o when applications link -ldisk.
+ * Tests replace this backend at the same link boundary. */
+const struct disk_backend *disk_native_backend(void);
 
 #define CD_SIGNATURE 0x4B554943u /* reserved for the Setup CD image (lead decision O4) */
 #define MIB (1024ull * 1024ull)
@@ -30,7 +32,7 @@ static struct disk_plan p5_plan;
 static const struct disk_backend *backend(void)
 {
     if (installed) return installed;
-    return disk_native_backend ? disk_native_backend() : 0;
+    return disk_native_backend();
 }
 void disk_set_backend(const struct disk_backend *b) { installed = b; }
 const struct disk_error_info *disk_last_error(void) { return &last; }

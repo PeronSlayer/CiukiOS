@@ -27,6 +27,8 @@ int hf_run(const char *, char *, size_t);
 int hf_remove(const char *);
 
 static unsigned checks;
+/* The native archive dependency is strong; the host uses its file backend. */
+const struct disk_backend *disk_native_backend(void) { return 0; }
 static const char *work;
 static void dump(void)
 {
@@ -144,7 +146,11 @@ static struct harness {
     uint8_t *log_data; size_t log_bytes, log_cap;
     uint32_t fail_op; int fail_result; unsigned fail_after, op_calls;
     void (*before_publish)(void);
+    int writer_error;
 } H;
+int __real_storage_writer_start(struct storage *);
+int __wrap_storage_writer_start(struct storage *s)
+{ return H.writer_error ? H.writer_error : __real_storage_writer_start(s); }
 static void path_of(char *out, size_t cap, char letter, const char *rel)
 {
     snprintf(out, cap, "%c:/%s", letter, rel);
@@ -253,6 +259,7 @@ static struct storage *start(struct model *m, unsigned slot)
     H.s = s; H.caller = (struct storage_caller){ 42, true };
     H.logging = false; H.logs = 0; H.log_bytes = 0;
     H.fail_op = 0; H.fail_after = 0; H.op_calls = 0; H.before_publish = 0;
+    H.writer_error = 0;
     forget_records();
     return s;
 }
@@ -880,6 +887,19 @@ static void test_failures(void)
     stub_present(&m, &plan);
     CHECK(lease_state(0).state == CIUKI_DISK_LEASE_HELD && saw("[disk] write disk=0"));
     stop(); model_close(&m);
+    /* Writer allocation is part of publication, before any writable mount. */
+    model_open(&m, "fail-writer", 2097152, 0);
+    start(&m, 0); set_entropy(0xc1a0f902u, INVARIANT_ID);
+    OK(disk_plan_whole(0, 0, &plan)); OK(disk_execute_p1(&plan, 0));
+    H.writer_error = -FS_ENOMEM;
+    CHECK(disk_execute_p2(&plan, 0, 0) == DISK_ENOMEM);
+    CHECK(lease_state(0).state == CIUKI_DISK_LEASE_HELD && !strcmp(lease_state(0).reason, "writer"));
+    CHECK(!vfs_drive_present(&H.s->vfs, 3) && !H.s->volumes[3].present);
+    stub_present(&m, &plan);
+    H.writer_error = 0;
+    char letter;
+    OK(disk_execute_p2(&plan, 0, &letter)); CHECK(letter == 'D');
+    stop(); model_close(&m);
     /* Flush error at the end of P2 (the third device flush of the volume). */
     model_open(&m, "fail", 2097152, 0);
     start(&m, 0); set_entropy(0xc1a0f902u, INVARIANT_ID);
@@ -916,8 +936,26 @@ static void test_failures(void)
     m.vol.fail_flush = true;
     CHECK(storage_disk_flush(H.s, 0, &H.caller) == -EIO && saw("[disk] flush disk=0 result="));
     stop(); model_close(&m);
-    printf("PASS libdisk failure injection: P2 write error (LBA range reported), P2 flush error, unconfirmed final MBR, "
+    printf("PASS libdisk failure injection: P2 write error (LBA range reported), writer failure publishes nothing (retry succeeds), P2 flush error, unconfirmed final MBR, "
            "cancel: stub MBR and lease kept in every case\n");
+}
+
+static void test_cache_disabled(void)
+{
+    struct model m;
+    static struct disk_plan plan;
+    model_open(&m, "no-cache", 2097152, 0);
+    m.dev.write_cache_state = BLKDEV_CACHE_DISABLED; m.dev.flush = 0;
+    start(&m, 0); set_entropy(0xc1a0f902u, INVARIANT_ID);
+    OK(disk_plan_whole(0, 0, &plan)); OK(disk_execute_p1(&plan, 0));
+    char letter;
+    OK(disk_execute_p2(&plan, 0, &letter)); CHECK(letter == 'D');
+    struct disk_publish pub = { loader, loader_bytes, boot_cfg, installed_state };
+    OK(disk_execute_p5(&plan, &pub, 0));
+    fsck_expect(m.vol_path, 0, 0);
+    CHECK(!m.head.flush_calls && !m.vol.flush_calls);
+    stop(); model_close(&m);
+    puts("PASS libdisk cache-disabled device without FLUSH: P1/P2/P5, fsck clean, no unqualified flush command");
 }
 
 /* 10. The kernel consistency check on the f1-22 corruption fixtures. */
@@ -998,6 +1036,7 @@ int main(int argc, char **argv)
     test_busy();
     test_revalidation();
     test_failures();
+    test_cache_disabled();
     test_consistency();
     free(H.log_data);
     printf("PASS libdisk host suite: %u checks\n", checks);

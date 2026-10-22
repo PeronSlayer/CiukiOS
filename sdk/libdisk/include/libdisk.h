@@ -60,7 +60,7 @@ enum disk_refusal {
     DISK_REFUSE_GPT,          /* protective 0xEE entry (non-MBR scheme) */
     DISK_REFUSE_OVERLAY,      /* disk overlay (Ontrack 54h, EZ-Drive 55h) */
     DISK_REFUSE_UNREADABLE,   /* LBA 0 could not be read */
-    DISK_REFUSE_DURABILITY    /* write cache on and no FLUSH CACHE: writes cannot be confirmed */
+    DISK_REFUSE_DURABILITY    /* unknown cache state, or enabled cache without FLUSH CACHE */
 };
 const char *disk_refusal_text(enum disk_refusal);
 

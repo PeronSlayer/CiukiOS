@@ -95,7 +95,9 @@ void disk_fmt_mbr(uint8_t out[512], const uint8_t code[440], uint32_t signature,
 /* mkfs.fat 4.2's FAT32 boot program (jump EB 58 90 targets offset 0x5A): it
  * prints the message with INT 10h and reboots through INT 19h. Reproduced
  * byte for byte so that the formatted volume equals the build_image.py
- * oracle; CiukiOS never executes it (the MBR chains to ciukldr). */
+ * oracle; CiukiOS never executes it (the MBR chains to ciukldr).
+ * This embedded program: GPL-3.0-or-later, dosfstools 4.2 src/mkfs.fat.c;
+ * upstream copyright holders and origin are retained in sdk/libdisk/NOTICE. */
 static const uint8_t mkfs_boot_program[129] = {
     0x0e, 0x1f, 0xbe, 0x77, 0x7c, 0xac, 0x22, 0xc0, 0x74, 0x0b, 0x56, 0xb4, 0x0e, 0xbb, 0x07, 0x00,
     0xcd, 0x10, 0x5e, 0xeb, 0xf0, 0x32, 0xe4, 0xcd, 0x16, 0xcd, 0x19, 0xeb, 0xfe,

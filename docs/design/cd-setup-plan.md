@@ -330,7 +330,7 @@ ScanDisk with a surface scan on the next boot).
 | Resizing | not offered | not offered; occupied filesystems are never resized |
 | Disk overlays, compression (DriveSpace) | supported by Windows 98 | unsupported; a disk with an overlay or a non-MBR scheme (GPT `0xEE`) is refused |
 | LBA limit | INT 13h extensions | 28-bit LBA per `partition.c`; the partition is capped, the rest stays unallocated |
-| Write confirmation | not described in chapter 10 (VCACHE caches reads and writes, `wrkc10_6.htm`) | a disk whose write cache is on (or unknown) without a qualified FLUSH CACHE path is refused ("the disk cannot confirm writes"), the same durability rule as every writable FAT mount (f9-02) |
+| Write confirmation | not described in chapter 10 (VCACHE caches reads and writes, `wrkc10_6.htm`) | an unknown write-cache state, or an enabled cache without a qualified FLUSH CACHE path, is refused ("the disk cannot confirm writes"), the same durability rule as every writable FAT mount; a confirmed disabled cache needs no device FLUSH command (f9-02) |
 | Destructive confirmation | Fdisk/Format warnings | the final transaction summary (section 4) with the disk identity and the erased partitions; unattended needs `EraseDisk=yes` |
 
 ### 5.3 Raw-disk ownership: the destination lease (D5; F6)
@@ -377,6 +377,27 @@ ScanDisk with a surface scan on the next boot).
   page; **execution revalidates identity, capacity and fingerprint
   immediately after acquiring the lease** and refuses with "the disk has
   changed since the preview" when they differ.
+
+The native boundary checks the caller's current capability on raw operations
+and on writes to the published volume, including an already-open description.
+Ioctl output records are pinned writable before a lease or publication can
+change state. Volume reads retain the normal generation/media check and the
+reservation-free cold-read path; a raw request does not enter volume admission.
+These are also host-test obligations after integrating f9-01 (f9-02 Amendment R).
+Publication starts the storage writer before exposing the volume; failure
+retains the lease without publishing. Raw flush follows the existing FAT/cache
+durability rule: with a positively identified disabled device write cache,
+completed synchronous writes need no device FLUSH command; an enabled cache
+requires a qualified path, and unknown cache state is refused (section 5.2).
+
+`libdisk.a` must pull in its native backend through an ordinary undefined
+reference; applications need only `-ldisk`, without naming a backend symbol.
+This follows the [ELF symbol binding rules](https://gabi.xinuos.com/elf/05-symtab.html#symbol-binding)
+and [LLD's archive extraction rules](https://lld.llvm.org/ELF/warn_backrefs.html).
+The formatter continues to follow the [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+(FAT[1], FSInfo and backup BPB), checked against [dosfstools 4.2](https://github.com/dosfstools/dosfstools/blob/v4.2/src/mkfs.fat.c).
+MBR offsets follow [UEFI 2.10 §5.2.1](https://uefi.org/specs/UEFI/2.10/05_GUID_Partition_Table_Format.html#legacy-master-boot-record-mbr).
+The final MBR still follows the durability barrier of [T13 ATA/ATAPI-6 revision 3a §§8.12–8.13](https://flint.cs.yale.edu/cs422/readings/hardware/ATA-d1410r3a.pdf).
 
 ## 6. Installation transaction (D6; F7) and the shared interface (D14)
 
