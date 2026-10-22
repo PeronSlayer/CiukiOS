@@ -195,3 +195,78 @@ Host evidence:
 
 Runtime evidence, run by the lead: QEMU standard VGA binds no driver and uses
 the software engine, and on the T23 the Savage binds through the registry.
+
+## Amendment 1 (lead, 2026-10-22 23:28, Codex plan review)
+
+A Codex `gpt-6.1-sol` plan review returned 19 findings with code
+evidence; the lead accepts all of them. The binding changes:
+
+1. **Quarantine and CPU safety (review 1).** Quarantine disables submissions;
+   it does not prove that the CPU may touch video memory. The rejecting guard
+   stays until idle or stop is proved. A failed proof forbids CPU drawing and
+   console/panic frame buffer access (serial diagnostics remain). `cpu_ready`
+   is mandatory, cached and nonwaiting. The software engine draws only after
+   that proof.
+2. **Lifecycle and locks (review 2, 13, 15).** The registry header specifies
+   the signature and lock context of every hook: eligibility, activation,
+   fallback guard, marker begin/end/failure, quarantine, record, summary,
+   snapshot and one authoritative stop.
+   - Deferred initialization stays outside the presenter lock, and activation pixel probes are serialized through fbdev.
+   - VFS/ATA I/O and deferred records happen outside the presenter lock.
+   - Generic policy checks safe mode and the exact `accel=0` option before any activation, marker change, resource claim or self-test, and records a software/disabled summary.
+   - Match tables only nominate candidates. Ownership of the frame buffer is proved from validated PCI resources and the frame buffer extent, and ambiguity selects software. Existing eligibility gates are preserved.
+   - Clean probe refusal, safe start failure and unsafe start failure are distinct. No other driver is tried after unproved hardware activity.
+3. **Part A preserves the driver (review 3, 4).** The adapter forwards the ops
+   table the driver returns and references no static driver function.
+   - Existing `accel_ops` field order and signatures stay; new optional hooks are only appended, and clipping is layered above the legacy hooks.
+   - Marker orchestration is abstracted without changing its storage or authorization.
+   - Keyed storage (DM8) and legacy-marker migration move to part B with a reviewed export change. An interrupted legacy attempt is never cleared because it lacks a key.
+4. **ABI compatibility (review 5, 6, 19).**
+   - The legacy request, operation numbers, capability bits (bit 0 hardware rectangles, bit 1 hardware cursor), WRITE return values (0 engine, 1 CPU) and the 40-byte `ciuki_accel_info` stay as they are.
+   - DM7 becomes a new size- and version-negotiated generic query; the adapter translates the legacy snapshot.
+   - The device record gains bounded fields for driver display name, reason, readiness and native-used, including software-only boots. "YES" still requires an actual native draw.
+   - Software-supported operations are reported separately from native capabilities.
+   - Extended desktop messages (`DESK_GFX_INFO`) are versioned, with encoder, decoder, Control Panel, gfxdemo, SDK headers and libciuki wrappers updated together.
+5. **Cursor (review 7).** The desktop keeps owning the software cursor. Without
+   a native cursor, cursor requests return `-EOPNOTSUPP` and the hardware
+   cursor bit is never advertised. SET hides before replacing; stop and
+   quarantine hide or disable the native cursor before the software takes over.
+6. **Punting (review 8).** `-EOPNOTSUPP` means no submission and no pixel
+   change; only that permits automatic replay in software. A fault after
+   submission needs completion proof and operation-specific recovery.
+   Overlapping COPY and other non-idempotent operations are never replayed
+   blindly (today's `-EAGAIN` and caller reconstruction stay).
+7. **Synchronous part A (review 9, 10, 11, 16).** Part A stays synchronous:
+   success proves completion.
+   - Before CPU access, conflicting engine work on every source and destination is synchronized, and CPU frame buffer writes drain before engine access and before ownership is released.
+   - Batches, fences, clip lists, MONO/INVERT/KEYED/SCALED/LINE, colour cursors and system-memory targets move to **part C**. Part C needs a written semantic specification first: pixels, aliasing, clip union, formats, line endpoints, filtering, alpha, pattern origin and errors. It also defines the batch layout, limits, grant checks, staging outside display locks, prefix completion and lock lifetime, so that drawing claims and in-flight state hold across every presenter release.
+8. **Off-screen memory (review 12).** Software touches only validated
+   CPU-mapped targets. A missing or revoked engine-only target fails, and the
+   caller reconstructs it. Part A keeps today's verified off-screen spans and
+   driver-owned claims, revoked on quarantine as well as on a mode change.
+9. **Mode providers (review 14).** Adapter and provider binding are
+   independent of active 2D ops. The provider is pinned for the whole
+   full-screen transaction with its supported, prepare, begin, write, end and
+   complete hooks. A preflight failure on a natively managed adapter stays
+   fail-closed; firmware fallback happens only through the existing mediated
+   recovery. `accel=0` does not change full-screen recovery.
+10. **Hardware check (review 17).** The comparison proves native execution,
+    with fallback disabled or recorded separately. It holds exclusive drawing
+    ownership, saves and restores only after proven idle, and is bounded by
+    deadlines and cancellation. It preserves retained diagnostic markers and
+    same-boot quarantine. Cursor state is checked through driver evidence,
+    separately from frame buffer read-back.
+11. **Build and tests (review 18).** Video sources are listed explicitly in
+    `scripts/build_kernel.py` with collision-free object names. Mechanical
+    fixture and linkage changes are allowed if behavioural assertions stay.
+    Integrated fake-driver tests cover:
+    - marker failures and unsafe quarantine;
+    - presenter re-entry and console exclusion;
+    - sliced waits and mode races;
+    - revoked off-screen rows;
+    - legacy binary layouts and SDK/protocol round trips.
+12. **Name enforcement (review 19).** The DM12 test checks that generic code
+    has no driver-specific policy or calls. It uses explicit exceptions for
+    declarative registration, private compatibility headers and vendored
+    sources, not unrestricted substring matching. Control Panel reuses its
+    existing `hwid_name` lookup.

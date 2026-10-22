@@ -30,3 +30,23 @@
    - New tests cover the registry, the software engine, punting, batches, the ABI and names.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Host tests one at a time with `nice -n 19`. Write `build/codex/f2-101-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 23:28): scope after the Codex plan review
+
+The contract's Amendment 1 is binding and **narrows part A**.
+
+**Part A, this run:**
+- the registry with full lifecycle and lock rules;
+- the generic safe-mode and `accel=0` policy;
+- PCI ownership proof;
+- adapter forwarding of the Savage ops table, with no static driver function referenced and the three Savage files untouched;
+- the software reference engine for the **existing** commands only (FILL, COPY, PATTERN, WRITE; CPU paths moved out of fbdev with golden tests);
+- the legacy ABI preserved plus a new negotiated generic query;
+- device-record metadata and generic UI text;
+- independent mode-provider binding;
+- the generic hardware check proving native execution;
+- explicit build listing;
+- the name-enforcement test with explicit exceptions;
+- the fake-driver integration tests of contract item 11.
+
+Items 2 and 3 of "Required" shrink accordingly. **Not in part A:** new commands, clip lists, batches, fences, colour cursor, system-memory targets (part C, a separate directive after a semantic specification), keyed markers and the file move (part B, after f2-99 merges).
