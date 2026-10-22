@@ -17,6 +17,8 @@ Status: **image** is installed in the image, **build only** is used to build or 
 | Liberation, Noto, Inter fonts | see fonts | SIL OFL 1.1 | `assets/fonts/LICENSES.TXT` | image |
 | jitterentropy-library | 3.7.0 | BSD-3 or GPL-2.0 | `docs/licenses/jitterentropy-3.7.0-NOTICES.txt` | image |
 | pixman, X11 regions (integrating) | f2-95 | MIT | `third_party/pixman` | integrating |
+| PCI ID Repository | 2026.10.01 | GPL-2.0-or-later | `docs/licenses/hwids-NOTICES.txt` | image |
+| USB ID Repository (hwdata) | 2026.06.26 | GPL-2.0-or-later | `docs/licenses/hwids-NOTICES.txt` | image |
 
 ## DOS
 

@@ -109,6 +109,8 @@ def desktop_license_payloads():
     sources = {f"/system/licenses/{name}": ROOT / "third_party/stb/LICENSE"
                for name in ("stb_image.txt", "stb_image_write.txt", "stb_vorbis.txt")}
     sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
+    for name in ("hwids-NOTICES.txt", "hwids-GPL-2.0.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
     for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt",
                  "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
         sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
