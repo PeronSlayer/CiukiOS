@@ -18,6 +18,8 @@
 #undef main
 #undef net_stack_transmit
 static const char *fixture_mode;
+static bool wan;
+static unsigned wan_syns,wan_frames,wan_full_frames;
 static br_x509_certificate server_certificates[12];
 static unsigned server_depth=1;
 static unsigned char *intermediate_data;
@@ -26,6 +28,8 @@ static _Thread_local bool blocked_lookup_returned;
 static br_skey_decoder_context server_key;
 static unsigned char *certificate_data,*key_data;
 static _Atomic unsigned http_requests,connections_seen,loop_requests;
+static _Atomic bool slow_started;
+bool fixture_slow_started(void) { return slow_started; }
 static bool fixture_offline;
 static bool send_blocked;
 static unsigned blocked_sends;
@@ -66,17 +70,23 @@ static void response(struct peer *p)
     }
     if(!strcmp(path,"/loop"))loop_requests++;
     const char *wire="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nCiuki";
+    if(!strcmp(path,"/wan")){
+        size_t header=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Length: 32768\r\n\r\n");
+        memset(p->response+header,'C',32768);p->response_bytes=header+32768;p->response_sent=0;p->request_bytes=0;return;
+    }
     if(!strcmp(path,"/stale"))p->close_after=true;
     if(!strcmp(path,"/unsolicited"))p->unsolicited=true;
     if(!strcmp(path,"/chunked"))wire="HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;x=y\r\nCi\r\n3\r\nuki\r\n0\r\nX-Test: end\r\n\r\n";
     else if(!strcmp(path,"/tls-truncated")){wire="HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nCiuki";p->close_after=true;}
     else if(!strcmp(path,"/truncated")){wire="HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nCiuki";p->close_after=true;}
-    else if(!strcmp(path,"/slow"))wire="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n";
+    else if(!strcmp(path,"/slow")){wire="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n";slow_started=true;}
     else if(!strcmp(path,"/loop"))wire="HTTP/1.1 302 Loop\r\nLocation: /loop\r\nContent-Length: 0\r\n\r\n";
     else if(!strncmp(path,"/redirect",9))wire="HTTP/1.1 302 Redirect\r\nLocation: /cookie\r\nSet-Cookie: hop=one; Path=/; HttpOnly\r\nSet-Cookie: secure=hidden; Path=/; Secure\r\nSet-Cookie: path=hidden; Path=/other\r\nSet-Cookie: domain=hidden; Domain=other.example; Path=/\r\nSet-Cookie: expired=hidden; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/\r\nContent-Length: 0\r\n\r\n";
-    else if(!strcmp(path,"/upgrade")){
+    else if(!strcmp(path,"/upgrade")||!strcmp(path,"/upgrade301")){
         CHECK(!p->tls);
-        wire="HTTP/1.1 302 Redirect\r\nLocation: https://fixture.example:8443/tls-cookie-start\r\nContent-Length: 0\r\n\r\n";
+        wire=!strcmp(path,"/upgrade301")?
+            "HTTP/1.1 301 Moved Permanently\r\nLocation: https://fixture.example:8443/tls-cookie-start\r\nContent-Length: 0\r\n\r\n":
+            "HTTP/1.1 302 Redirect\r\nLocation: https://fixture.example:8443/tls-cookie-start\r\nContent-Length: 0\r\n\r\n";
     } else if(!strcmp(path,"/tls-cookie-start")){
         CHECK(p->tls);
         wire="HTTP/1.1 302 Redirect\r\nLocation: /tls-cookie-end\r\nSet-Cookie: tls_session=Ciuki; Path=/; Secure; HttpOnly\r\nContent-Length: 0\r\n\r\n";
@@ -137,6 +147,7 @@ static void request_data(struct peer *p,const unsigned char *data,size_t n)
 }
 static void packet(struct peer *p,const void *data,unsigned n,bool fin)
 {
+    if(wan && n==1460)wan_full_frames++;
     tcp_reply(p->frame,p->next,p->ack,fin?0x19:n?0x18:0x10,data,n);
     p->next+=n+(fin?1:0);if(n||fin)p->waiting=true;
 }
@@ -149,7 +160,7 @@ static void peer_output(struct peer *p)
     }
     if(!p->tls){
         if(p->reset_after){p->reset_after=false;p->response_sent=p->response_bytes;tcp_reply(p->frame,p->next,p->ack,0x14,NULL,0);return;}
-        size_t n=p->response_bytes-p->response_sent;if(n>1024)n=1024;
+        size_t n=p->response_bytes-p->response_sent;if(n>(wan?1460u:1024u))n=wan?1460:1024;
         if(n){packet(p,p->response+p->response_sent,(unsigned)n,false);p->response_sent+=n;}
         else if(p->close_after){packet(p,NULL,0,true);p->close_after=false;}
         return;
@@ -158,7 +169,7 @@ static void peer_output(struct peer *p)
         if(p->reset_after){p->reset_after=false;p->response_sent=p->response_bytes;tcp_reply(p->frame,p->next,p->ack,0x14,NULL,0);return;}
         unsigned state=br_ssl_engine_current_state(&p->server->eng);size_t n;
         if(state&BR_SSL_SENDREC){
-            unsigned char *record=br_ssl_engine_sendrec_buf(&p->server->eng,&n);if(n>1024)n=1024;
+            unsigned char *record=br_ssl_engine_sendrec_buf(&p->server->eng,&n);if(n>(wan?1460u:1024u))n=wan?1460:1024;
             if(p->record_prefix){CHECK(n>p->record_prefix);n=p->record_prefix;p->record_prefix=0;p->hold_record=true;}
             packet(p,record,(unsigned)n,false);br_ssl_engine_sendrec_ack(&p->server->eng,n);return;
         }
@@ -180,15 +191,23 @@ int net_stack_transmit(unsigned index,const void *data,unsigned bytes)
         unsigned n=get16(f+38)-8;unsigned char answer[512];CHECK(n<sizeof(answer));memcpy(answer,f+42,n);
         answer[2]=0x81;answer[3]=0x83;put16(answer+6,0);udp_reply(f,53,get16(f+34),answer,n,false);return 0;
     }
-    if(bytes<54 || get16(f+12)!=0x800 || f[23]!=6 || (get16(f+36)!=8080 && get16(f+36)!=8443 && get16(f+36)!=9))return f6_10_transmit(index,data,bytes);
+    if(bytes<54 || get16(f+12)!=0x800 || f[23]!=6 || (get16(f+36)!=8080 && get16(f+36)!=8443 && get16(f+36)!=9 && !(wan && (get16(f+36)==80 || get16(f+36)==443))))return f6_10_transmit(index,data,bytes);
     unsigned port=get16(f+34),flags=f[47],header=(f[46]>>4)*4,length=get16(f+16)-20-header;
+    if(wan){
+        CHECK(get32(f+30)==0xc6336409 && !memcmp(f,server_mac,6) && bytes<=1514);wan_frames++;
+        if(!(flags&2))CHECK(get16(f+48)<=TCP_WND);
+        if(flags&2){
+            CHECK(header==24 && f[54]==2 && f[55]==4 && get16(f+56)==1460);
+            if(++wan_syns==1)return 0; /* Lose initial SYN, exercise actual timer. */
+        }
+    }
     if(get16(f+36)==9){tcp_reply(f,0,get32(f+38)+1,0x14,NULL,0);return 0;}
     struct peer *p=NULL;
     for(unsigned i=0;i<16;i++)if(peers[i].port==port){p=&peers[i];break;}
     if(flags&2){
         if(!p)for(unsigned i=0;i<16;i++)if(!peers[i].port){p=&peers[i];break;}
         CHECK(p);memset(p,0,sizeof(*p));p->port=port;p->ack=get32(f+38)+1;p->next=100001;memcpy(p->frame,f,54);
-        connections_seen++;p->tls=get16(f+36)==8443;
+        connections_seen++;p->tls=get16(f+36)==8443 || get16(f+36)==443;
         if(p->tls){
             p->server=calloc(1,sizeof(*p->server));p->io=malloc(BR_SSL_BUFSIZE_BIDI);CHECK(p->server && p->io);
             br_ssl_server_init_full_ec(p->server,server_certificates,server_depth,BR_KEYTYPE_EC,br_skey_decoder_get_ec(&server_key));
@@ -288,6 +307,7 @@ int __wrap_getaddrinfo(const char *name,const char *service,const struct addrinf
     }
     int e=0;if(!strcmp(name,"localhost")){address=PP_HTONL(0x7f000001);status=0;}else e=net_resolve(&client,name,&address,&status);
     if(e){errno=-e;return EAI_SYSTEM;}if(status)return status==2?EAI_AGAIN:EAI_NONAME;
+    if(wan)address=PP_HTONL(0xc6336409);
     struct addrinfo *a=calloc(1,sizeof(*a));struct sockaddr_in *s=calloc(1,sizeof(*s));CHECK(a && s);
     s->sin_family=AF_INET;s->sin_addr.s_addr=address;a->ai_family=AF_INET;a->ai_socktype=SOCK_STREAM;a->ai_addr=(void *)s;a->ai_addrlen=16;*out=a;
     if(!strcmp(name,"blocked.example"))blocked_lookup_returned=true;
@@ -301,7 +321,7 @@ static unsigned char *load(const char *name,size_t *bytes)
 }
 void fixture_begin(const char *mode,const char *cert,const char *key)
 {
-    fixture_mode=mode;client=(struct process){.pid=1,.state=PROC_LIVE,.fds=fds};
+    fixture_mode=mode;wan=wire_options=!strcmp(mode,"web-http")||!strcmp(mode,"tls-web");client=(struct process){.pid=1,.state=PROC_LIVE,.fds=fds};
     for(unsigned i=0;i<32;i++)fds[i].object=&reserved;
     ciuki_lwip_seed(0x12345678);CHECK(!net_stack_init());
     CHECK(!net_stack_attach(0,client_mac,true));check_address(PP_HTONL(0xc0000264));
@@ -326,6 +346,7 @@ void fixture_end(void)
     cu_sleep(30);cu_host_shutdown();
     for(unsigned i=0;i<16;i++){free(peers[i].server);free(peers[i].io);}
     free(certificate_data);free(key_data);free(intermediate_data);
+    if(wan){CHECK(wan_syns>=2 && wan_frames>10 && wan_full_frames);printf("PASS gateway ports 80/443 MSS=1460 MTU=1500 peer-WS=7 SYN retransmit=%u frames=%u full=%u\n",wan_syns,wan_frames,wan_full_frames);}
 }
 
 /* Native read-only status boundary: production net.c opens /dev/net and

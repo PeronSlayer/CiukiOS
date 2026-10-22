@@ -93,21 +93,22 @@ static bool http_event(void *context,enum ciuki_http_event e,const void *bytes,s
                 enum nsurl_scheme_type scheme=nsurl_get_scheme_type(to);
                 if(scheme!=NSURL_SCHEME_HTTP && scheme!=NSURL_SCHEME_HTTPS)f->error="Unsupported HTTP redirect scheme.";
                 else if(f->job->secure && scheme!=NSURL_SCHEME_HTTPS)f->error="HTTPS redirect to an insecure connection was refused.";
-                else f->terminal=FETCH_REDIRECT;
+                else {f->terminal=FETCH_REDIRECT;ciuki_net_record(f->job,CIUKI_FETCH_REDIRECT);}
                 nsurl_unref(to);
             }
+            if(f->error){ciuki_net_failure(f->job,f->error);f->error=f->job->error;}
             return false;
         }
-        if(p->status==401 || p->status==407){f->error="HTTP authentication and proxies are unsupported.";return false;}
-        if(f->only_2xx && (p->status<200 || p->status>299)){f->error="The server returned an unsuccessful HTTP status.";return false;}
+        if(p->status==401 || p->status==407){ciuki_net_failure(f->job,"HTTP authentication and proxies are unsupported.");f->error=f->job->error;return false;}
+        if(f->only_2xx && (p->status<200 || p->status>299)){ciuki_net_failure(f->job,"The server returned an unsuccessful HTTP status.");f->error=f->job->error;return false;}
         return true;
     }
     if(e==CIUKI_HTTP_HEADER && count>11 && !strncasecmp(bytes,"Set-Cookie:",11)){
         /* NetSurf owns domain/path/Secure/HttpOnly/PSL/context policy. */
         const char *s=bytes;size_t n=count-13;char *cookie=malloc(n+1);
-        if(!cookie){f->error="Unable to allocate HTTP cookie.";return false;}
+        if(!cookie){ciuki_net_failure(f->job,"Unable to allocate HTTP cookie.");f->error=f->job->error;return false;}
         memcpy(cookie,s+11,n);cookie[n]=0;fetch_set_cookie(f->parent,cookie);free(cookie);
-        if(!trim_cookies()){f->error="Stored cookie exceeds the browser limit.";return false;}
+        if(!trim_cookies()){ciuki_net_failure(f->job,"Stored cookie exceeds the browser limit.");f->error=f->job->error;return false;}
         if(f->aborted)return false;
     }
     fetch_msg msg={.type=e==CIUKI_HTTP_DATA?FETCH_DATA:FETCH_HEADER};
@@ -148,10 +149,12 @@ static void *setup(struct fetch *parent,nsurl *url,bool only_2xx,bool downgrade,
     else if(nsurl_has_component(url,NSURL_CREDENTIALS))f->error="HTTP URL credentials are unsupported.";
     else if(strlen(nsurl_access(url))>CIUKI_HTTP_URL)f->error="HTTP URL exceeds 4 KiB.";
     else if(nsurl_get(url,NSURL_PATH|NSURL_QUERY,&target,&length)!=NSERROR_OK)f->error="Unable to allocate HTTP request URL.";
-    if(!f->error){
-        cookie=urldb_get_cookie(url,true);r.cookie=cookie;r.target=target;
+    {
+        if(!f->error)cookie=urldb_get_cookie(url,true);
+        r.cookie=cookie;r.target=target?target:"/";
         f->job=ciuki_net_job(&r,http_event,f);
         if(!f->job){free(target);free(cookie);if(host)lwc_string_unref(host);if(port)lwc_string_unref(port);nsurl_unref(f->url);free(f);return NULL;}
+        if(f->error){f->job->error=f->error;f->error=NULL;}
     }
     free(target);free(cookie);if(host)lwc_string_unref(host);if(port)lwc_string_unref(port);
     f->next=jobs;jobs=f;return f;

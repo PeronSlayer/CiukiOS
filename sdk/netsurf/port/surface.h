@@ -44,6 +44,8 @@ struct ciuki_browser_surface {
     nsfb_bbox_t damage;
     int mouse_x, mouse_y;
     unsigned buttons;
+    unsigned cursor_shape;
+    bool cursor_valid;
     unsigned keys[0x201];
     nsfb_event_t events[CIUKI_BROWSER_EVENTS];
     unsigned head, count;
@@ -55,6 +57,7 @@ int ciuki_browser_open(struct ciuki_browser_surface *,const struct ciuki_browser
 void ciuki_browser_close(struct ciuki_browser_surface *);
 void ciuki_browser_damage(struct ciuki_browser_surface *,nsfb_bbox_t);
 int ciuki_browser_present(struct ciuki_browser_surface *);
+int ciuki_browser_cursor(struct ciuki_browser_surface *,unsigned shape);
 int ciuki_browser_packet(struct ciuki_browser_surface *,const struct desk_packet *);
 bool ciuki_browser_event(struct ciuki_browser_surface *,nsfb_event_t *);
 void ciuki_browser_input(struct ciuki_browser_surface *,const struct ciuki_input_event *);
@@ -70,5 +73,7 @@ void ciuki_chrome_init(struct ciuki_browser_surface *);
 void ciuki_chrome_resize(void);
 void ciuki_chrome_render(void);
 bool ciuki_chrome_input(const struct ciuki_input_event *);
+/* Route client coordinates before converting page Y to viewport coordinates. */
+void ciuki_chrome_dispatch(struct ciuki_browser_surface *,const struct ciuki_input_event *);
 void ciuki_chrome_release(void);
 #endif

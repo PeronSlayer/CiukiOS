@@ -34,14 +34,18 @@
 #include "chrome.h"
 #include "budget.h"
 #include "logline.h"
+#include "pointer.h"
 
-enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,OPEN=20,FILE_PICKER,NOTICE };
+enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,OPEN=20,FILE_PICKER,NOTICE };
+static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK};
 static struct du_ui ui;
 static struct ciuki_browser_surface *surface;
 static bool active, loading, hotlist_ready, profile_ready, toolbar_keys;
 static bool status_dirty;
 static bool profile_requested;
+static unsigned input_records;
 static unsigned bookmarks;
+static unsigned content_cursor=DESK_CURSOR_ARROW;
 static struct form_control *file_gadget;
 static struct gui_window *file_window;
 const char *ciuki_resource_path="/system/netsurf";
@@ -90,6 +94,7 @@ static void action(int id)
     case FORWARD:if(browser_window_forward_available(bw))browser_window_history_forward(bw,false);break;
     case RELOAD:ciuki_chrome_reload();break;
     case STOP:browser_window_stop(bw);ciuki_chrome_loading(false);break;
+    case HOME:navigate(nsoption_charp(homepage_url)?nsoption_charp(homepage_url):"about:welcome");break;
     case BOOKMARK:
         if(!hotlist_ready || bookmarks>=500) { ciuki_chrome_status("Bookmark limit reached or profile unavailable.");break; }
         if(!hotlist_has_url(browser_window_access_url(bw))) {
@@ -105,7 +110,7 @@ static void event(struct du_ui *u,const struct du_event *e,void *unused)
 {
     (void)unused;
     if(e->type==DU_EV_ACTIVATE || e->type==DU_EV_COMMIT) {
-        if(e->id==URL) { navigate(du_get(u,URL)->text);u->focus=-1;toolbar_keys=false; }
+        if(e->id==URL) { u->focus=-1;toolbar_keys=false;navigate(du_get(u,URL)->text); }
         else action(e->id);
     } else if(e->type==DU_EV_DIALOG && (e->id==OPEN || e->id==FILE_PICKER)) {
         if(e->index==0 && u->dialog.text[0]) {
@@ -122,18 +127,20 @@ static void event(struct du_ui *u,const struct du_event *e,void *unused)
 static void layout(void)
 {
     int w=surface->current.info.width,h=surface->current.info.height;
-    for(unsigned i=0;i<5;i++)du_get(&ui,BACK+i)->box=(struct du_rect){4+(int)i*30,4,28,28};
-    du_get(&ui,URL)->box=(struct du_rect){158,6,w-164,24};
+    for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++)du_get(&ui,buttons[i])->box=(struct du_rect){4+(int)i*30,4,28,28};
+    du_get(&ui,URL)->box=(struct du_rect){188,6,w-194,24};
     du_get(&ui,STATUS)->box=(struct du_rect){0,h-CIUKI_BROWSER_STATUS,w,CIUKI_BROWSER_STATUS};
 }
 void ciuki_chrome_init(struct ciuki_browser_surface *s)
 {
-    surface=s;active=status_dirty=true;du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
+    content_cursor=DESK_CURSOR_ARROW;
+    surface=s;active=status_dirty=true;toolbar_keys=false;input_records=0;
+    du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
     ui.event=event;
-    const char *labels[]={"Back","Forward","Reload","Stop","Bookmark"};
-    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/bookmark-new"};
-    for(unsigned i=0;i<5;i++) {
-        struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,BACK+i,(struct du_rect){0},labels[i]);
+    const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark"};
+    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new"};
+    for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++) {
+        struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,buttons[i],(struct du_rect){0},labels[i]);
         widget->icon=du_icon_argb(icons[i],22);widget->icon_size=22;
     }
     du_add(&ui,DU_EDIT,URL,(struct du_rect){0},"");
@@ -146,8 +153,20 @@ void ciuki_chrome_resize(void)
     du_resize(&ui,surface->current.back,surface->current.info.width,surface->current.info.height);layout();
     status_dirty=true;
 }
+static void chrome_cursor(void)
+{
+    if(!active)return;
+    int chrome=ui.dialog.kind || ui.capture>=0 || ui.mouse_y<CIUKI_BROWSER_TOP ||
+        ui.mouse_y>=(int)surface->current.info.height-CIUKI_BROWSER_STATUS;
+    unsigned shape=chrome ? du_cursor_at(&ui) : content_cursor;
+    if(!chrome && loading && shape==DESK_CURSOR_ARROW)shape=DESK_CURSOR_ARROW_BUSY;
+    (void)ciuki_browser_cursor(surface,shape);
+}
+void ciuki_chrome_pointer(unsigned shape)
+{ content_cursor=ciuki_pointer_shape(shape);chrome_cursor(); }
 void ciuki_chrome_render(void)
 {
+    chrome_cursor(); /* also retry a refused cursor send on an otherwise idle UI turn */
     if(!active || (!ui.dirty && !status_dirty))return;
     struct browser_window *bw=browser();
     du_get(&ui,BACK)->disabled=!bw || !browser_window_back_available(bw);
@@ -174,7 +193,10 @@ static nsurl *shown_url;
 void ciuki_chrome_url(nsurl *url)
 {
     if(url) { if(shown_url)nsurl_unref(shown_url);shown_url=nsurl_ref(url); }
-    if(active && url) { du_set_text(du_get(&ui,URL),nsurl_access(url));ui.dirty=1; }
+    /* A late loading notification must not overwrite an address being edited. */
+    if(active && url && !(toolbar_keys && du_focused(&ui)==URL)) {
+        du_set_text(du_get(&ui,URL),nsurl_access(url));ui.dirty=1;
+    }
 }
 /* browser_window_reload re-fetches the content URL. On the core's internal
  * error pages (about:query/...) that navigation needs the page's form data
@@ -207,6 +229,7 @@ void ciuki_chrome_complete(struct gui_window *window)
 void ciuki_chrome_loading(bool value)
 {
     loading=value;if(active)ui.dirty=1;
+    chrome_cursor();
     if(!value)ciuki_test_page_done();
 }
 bool ciuki_chrome_busy(void) { return loading; }
@@ -230,6 +253,12 @@ static void open_profile_page(const char *name)
     }
     if(path && netsurf_path_to_nsurl(path,&url)==NSERROR_OK) { navigate(nsurl_access(url));nsurl_unref(url); }
 }
+static void focus_address(void)
+{
+    du_focus(&ui,URL);toolbar_keys=true;
+    struct du_widget *edit=du_get(&ui,URL);
+    edit->anchor=0;edit->cursor=strlen(edit->text);edit->selection.ns=0;ui.dirty=1;
+}
 bool ciuki_chrome_input(const struct ciuki_input_event *input)
 {
     if(!active)return false;
@@ -242,7 +271,7 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         }
         bool ctrl=ui.modifiers&DU_CTRL,alt=ui.modifiers&DU_ALT;
         if(e.value && !ui.dialog.kind) {
-            if(ctrl && e.code==0x26) { du_focus(&ui,URL);du_get(&ui,URL)->anchor=0;du_get(&ui,URL)->cursor=strlen(du_get(&ui,URL)->text);toolbar_keys=true;return true; }
+            if(ctrl && e.code==0x26) { focus_address();return true; }
             if(ctrl && e.code==0x13) { action(RELOAD);return true; }
             if(e.code==DU_KEY_ESC) { action(STOP);return true; }
             if(alt && e.code==DU_KEY_LEFT) { action(BACK);return true; }
@@ -255,11 +284,11 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
     }
     if(e.type==CIUKI_INPUT_MOTION) {
         bool chrome=e.value2<CIUKI_BROWSER_TOP || e.value2>=(int)surface->current.info.height-CIUKI_BROWSER_STATUS;
-        if(!chrome && !ui.dialog.kind && ui.capture<0) { ui.mouse_x=e.value;ui.mouse_y=e.value2;return false; }
+        if(!chrome && !ui.dialog.kind && ui.capture<0) { ui.mouse_x=e.value;ui.mouse_y=e.value2;chrome_cursor();return false; }
     }
     if(e.type==CIUKI_INPUT_BUTTON && !ui.dialog.kind && ui.capture<0 &&
        ui.mouse_y>=CIUKI_BROWSER_TOP && ui.mouse_y<(int)surface->current.info.height-CIUKI_BROWSER_STATUS) {
-        if(e.value) { toolbar_keys=false;ui.focus=-1; }return false;
+        if(e.value) { if(toolbar_keys || ui.focus>=0)ui.dirty=1;toolbar_keys=false;ui.focus=-1; }return false;
     }
     if(e.type==CIUKI_INPUT_TEXT && !toolbar_keys && !ui.dialog.kind)return false;
     struct du_widget *edit=NULL;
@@ -280,9 +309,58 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
     if(e.type==CIUKI_INPUT_WHEEL && !ui.dialog.kind && ui.capture<0 &&
        ui.mouse_y>=CIUKI_BROWSER_TOP && ui.mouse_y<(int)surface->current.info.height-CIUKI_BROWSER_STATUS)return false;
     if(e.type==CIUKI_INPUT_KEY && e.value && e.code==DU_KEY_TAB && du_focused(&ui)==URL && !(ui.modifiers&DU_SHIFT)) {
-        toolbar_keys=false;ui.focus=-1;return false;
+        toolbar_keys=false;ui.focus=-1;ui.dirty=1;return false;
     }
-    du_input(&ui,&e);return true;
+    bool entering_address=e.type==CIUKI_INPUT_BUTTON && e.code==1 && e.value && !ui.dialog.kind &&
+        (!toolbar_keys || du_focused(&ui)!=URL) && du_contains(du_get(&ui,URL)->box,ui.mouse_x,ui.mouse_y);
+    if(e.type==CIUKI_INPUT_BUTTON && e.code==1 && e.value && !ui.dialog.kind) {
+        int hit=du_hit(&ui,ui.mouse_x,ui.mouse_y);
+        /* deskui toolbuttons deliberately do not take keyboard focus. Blur
+         * the edit before their navigation can report the new page's URL. */
+        if(hit>=0 && ui.widgets[hit].kind==DU_TOOLBUTTON) {
+            toolbar_keys=false;ui.focus=-1;ui.dirty=1;
+        }
+    }
+    du_input(&ui,&e);
+    if(e.type==CIUKI_INPUT_BUTTON && e.value && !ui.dialog.kind)toolbar_keys=du_focused(&ui)!=0;
+    if(entering_address)focus_address();
+    chrome_cursor();
+    return true;
+}
+/* Both owners need the latest client position, even when one consumes motion.
+ * Only the page translator subtracts CIUKI_BROWSER_TOP. A held page button
+ * keeps its release/drag; deskui's own capture keeps chrome selections. */
+void ciuki_chrome_dispatch(struct ciuki_browser_surface *s,const struct ciuki_input_event *e)
+{
+    if(e->type==CIUKI_INPUT_MOTION) {
+        s->mouse_x=ui.mouse_x=e->value;s->mouse_y=ui.mouse_y=e->value2;
+    }
+    bool page_drag=s->buttons && (e->type==CIUKI_INPUT_MOTION || e->type==CIUKI_INPUT_BUTTON);
+    int id=0;
+    if(active) {
+        int hit=e->type==CIUKI_INPUT_BUTTON?du_hit(&ui,ui.mouse_x,ui.mouse_y):ui.focus;
+        if(hit>=0 && (unsigned)hit<ui.count)id=ui.widgets[hit].id;
+        if(ui.capture>=0 && e->type==CIUKI_INPUT_BUTTON)id=ui.widgets[ui.capture].id;
+    }
+    bool chrome=!page_drag && ciuki_chrome_input(e);
+    if(!chrome)ciuki_browser_input(s,e);
+    /* First 512 edges per window, then silence; no motion or typed text data. */
+    if(e->type==CIUKI_INPUT_BUTTON || e->type==CIUKI_INPUT_KEY || e->type==CIUKI_INPUT_TEXT) {
+        if(input_records<512) {
+            const char *widget="toolbar";
+            if(!chrome)widget="content";
+            else if(ui.dialog.kind)widget="dialog";
+            else if(id==URL || (!id && du_focused(&ui)==URL))widget="address";
+            else if(id==BACK)widget="back";else if(id==FORWARD)widget="forward";
+            else if(id==RELOAD)widget="reload";else if(id==STOP)widget="stop";
+            else if(id==HOME)widget="home";else if(id==BOOKMARK)widget="bookmark";
+            else if(id==STATUS)widget="status";
+            ciuki_log_line("[netsurf] input target=%s widget=%s type=%u code=%d value=%d last=%u",
+                chrome?"chrome":"page",widget,(unsigned)e->type,
+                e->type==CIUKI_INPUT_TEXT?0:e->code,e->value,input_records==511);
+            input_records++;
+        }
+    }
 }
 void ciuki_chrome_file(struct gui_window *window,struct hlcache_handle *content,struct form_control *gadget)
 {

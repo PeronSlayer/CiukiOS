@@ -521,6 +521,20 @@ static int cursor_show(void *ctx, bool show)
     s->operations++;
     return 0;
 }
+static uint32_t cursor_rgb(const struct fb_device *d, uint32_t pixel)
+{
+    /* accel_ops receives native framebuffer pixels. The streams cursor
+     * colour stack takes RGB888, independently of the scanout packing. */
+    const unsigned sizes[]={d->blue_size,d->green_size,d->red_size};
+    const unsigned positions[]={d->blue_pos,d->green_pos,d->red_pos};
+    uint32_t rgb=0;
+    for (unsigned i=0;i<3;i++) {
+        if (!sizes[i] || sizes[i]>8 || positions[i]>24) return 0;
+        uint32_t mask=(1u<<sizes[i])-1;
+        rgb|=((((pixel>>positions[i])&mask)*255u+mask/2u)/mask)<<(i*8);
+    }
+    return rgb;
+}
 static int cursor_set(void *ctx, const struct accel_cursor *c)
 {
     struct savage2d *s = ctx;
@@ -535,16 +549,22 @@ static int cursor_set(void *ctx, const struct accel_cursor *c)
         }
         uint8_t *p = s->cursor + y * 16 + group * 4;
         uint16_t and_bits = ~mask;
-        p[0] = (uint8_t)and_bits; p[1] = (uint8_t)(and_bits >> 8);
-        p[2] = (uint8_t)image; p[3] = (uint8_t)(image >> 8);
+        /* X.Org savage_cursor.c:115-119: MSB-first bytes, AND/XOR
+         * interleaved every 16 pixels. A little-endian uint16_t store
+         * exchanges the two eight-pixel halves of every group (f2-99). */
+        p[0] = (uint8_t)(and_bits >> 8); p[1] = (uint8_t)and_bits;
+        p[2] = (uint8_t)(image >> 8); p[3] = (uint8_t)image;
     }
     s->io.drain(s->io.ctx);
     port_cr_write(s, 0x55, s->saved55 & ~0x10u);
-    unsigned bytes = ((s->descriptor >> 16) & 255u) == 16 ? 2 : 3;
+    /* With the streams engine X.Org uses full RGB even at 16-bpp
+     * scanout (savage_cursor.c:314-355); reset each colour stack. */
+    unsigned bytes = 3;
+    uint32_t foreground=cursor_rgb(s->fb,c->foreground), background=cursor_rgb(s->fb,c->background);
     (void)port_cr_read(s, 0x45);
-    for (unsigned i = 0; i < bytes; i++) port_cr_write(s, 0x4a, c->foreground >> (i * 8));
+    for (unsigned i = 0; i < bytes; i++) port_cr_write(s, 0x4a, foreground >> (i * 8));
     (void)port_cr_read(s, 0x45);
-    for (unsigned i = 0; i < bytes; i++) port_cr_write(s, 0x4b, c->background >> (i * 8));
+    for (unsigned i = 0; i < bytes; i++) port_cr_write(s, 0x4b, background >> (i * 8));
     port_cr_write(s, 0x4c, (s->cursor_offset >> 18) & 0x7f);
     port_cr_write(s, 0x4d, (s->cursor_offset >> 10) & 0xfc);
     if (port_cr_read(s,0x4c) != ((s->cursor_offset >> 18)&0x7f) ||

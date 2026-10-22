@@ -333,43 +333,27 @@ static void *resolve(struct w32_loader *l, struct w32_module *m, const char *nam
     }
     return w32_pe_span(p, rva, 1);
 }
-static int bind_imports(struct w32_loader *l, struct w32_module *m, ULONG depth) {
-    struct w32_pe *p = &m->pe;
-    struct w32_directory d = p->dirs[1];
-    for (ULONG off = 0; off < d.size; off += 20) {
-        uint8_t *t = w32_pe_span(p, d.rva + off, 20);
-        if (!t)
-            return 0;
-        ULONG any = 0;
-        for (ULONG i = 0; i < 20; i++)
-            any |= t[i];
-        if (!any)
-            break;
-        ULONG ilt = w32_u32(t), iat = w32_u32(t + 16);
-        if (ilt && !w32_u32(p->image + ilt))
-            ilt = 0;
-        if (!ilt && w32_u32(t + 4) && w32_u32(p->image + iat) >= p->size)
-            return error(l, 193, "bound-iat-without-names", m->name, 0);
-        const char *dll = w32_pe_string(p, w32_u32(t + 12));
-        if (!dll)
-            return 0;
-        struct w32_module *dep = load_one(l, dll, 0, depth + 1);
-        if (!dep || !dependency(l, m, dep))
-            return 0;
-        for (ULONG i = 0; i < 65536; i++) {
-            ULONG v = w32_u32(p->image + (ilt ? ilt : iat) + i * 4);
-            if (!v)
-                break;
-            const char *name = v & 0x80000000 ? 0 : w32_pe_string(p, v + 2);
-            ULONG hint = name ? w32_u16(p->image + v) : 0xffffffffu;
-            void *address = resolve(l, dep, name, v & 65535, hint, 0);
-            if (!address)
-                return 0;
-            if(!w32_pe_write(p,iat+i*4,4))return 0;
-            w32_put32(p->image + iat + i * 4, (ULONG)(uintptr_t)address);
-        }
-    }
+struct import_binding {
+    struct w32_loader *loader;
+    struct w32_module *module, *dependency;
+    ULONG depth;
+};
+static int bind_descriptor(void *opaque,const struct pe_import *i) {
+    struct import_binding *b=opaque;
+    b->dependency=load_one(b->loader,i->module,0,b->depth+1);
+    return b->dependency && dependency(b->loader,b->module,b->dependency);
+}
+static int bind_symbol(void *opaque,const struct pe_import *i) {
+    struct import_binding *b=opaque;
+    void *address=resolve(b->loader,b->dependency,i->name,i->ordinal,
+                         i->name?i->hint:0xffffffffu,0);
+    if(!address || !w32_pe_write(&b->module->pe,i->iat,4)) return 0;
+    w32_put32(b->module->pe.image+i->iat,(ULONG)(uintptr_t)address);
     return 1;
+}
+static int bind_imports(struct w32_loader *l,struct w32_module *m,ULONG depth) {
+    struct import_binding b={l,m,0,depth};
+    return pe_walk_imports(&m->pe,&b,bind_descriptor,bind_symbol);
 }
 static int prepare_tls(struct w32_loader *l, struct w32_module *m) {
     m->tls_index = 0xffffffffu;

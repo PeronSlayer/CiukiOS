@@ -9,6 +9,7 @@
 #include <ciuki/cpu.h>
 #include <time.h>
 #include <ciuki/work.h>
+#include "../../assets/cursors/cursors.h"
 static unsigned binding_claims, binding_pci_count;
 static struct pci_func binding_gpu;
 static bool binding_allowed;
@@ -745,11 +746,29 @@ static void commands(unsigned bpp, bool async_parser)
     unsigned packets=m.packets;
     q.generation--; CHECK(fbdev_accel_request(&q)==-EAGAIN); CHECK(m.packets==packets);
     q.generation=42; q.rect.src_x=INT32_MAX; CHECK(fbdev_accel_request(&q)==-EINVAL); CHECK(m.packets==packets);
-    q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xffffff; q.background=0x101010;
+    q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xffffff; q.background=0;
     q.cursor_mask[0]=0xc0000000; q.cursor_image[0]=0x40000000;
+    q.cursor_mask[1]=0x81814242; q.cursor_image[1]=0x01804002;
+    q.cursor_mask[31]=0x00018001; q.cursor_image[31]=0x00010001;
+    q.cursor_image[2]=0xffffffff; /* source outside the opaque mask is ignored */
+    /* Independent golden bytes from X.Org savage_cursor.c:115-119:
+     * left-to-right MSB-first AND bytes, then masked XOR bytes, per 16 px.
+     * Cover both byte/word boundaries, last input row and unused 64x64 area.
+     * The old little-endian stores fail the first four-byte golden. */
+    static const uint8_t golden[3][16]={
+        {0x3f,0xff,0x40,0x00, 0xff,0xff,0,0, 0xff,0xff,0,0, 0xff,0xff,0,0},
+        {0x7e,0x7e,0x01,0x80, 0xbd,0xbd,0x40,0x02, 0xff,0xff,0,0, 0xff,0xff,0,0},
+        {0xff,0xfe,0x00,0x01, 0x7f,0xfe,0x00,0x01, 0xff,0xff,0,0, 0xff,0xff,0,0}
+    };
+    memset(m.cursor_page,0xa5,sizeof(m.cursor_page));
     CHECK(!fbdev_accel_request(&q));
-    CHECK(m.cursor_page[0]==0xff && m.cursor_page[1]==0x3f && m.cursor_page[2]==0 && m.cursor_page[3]==0x40);
-    CHECK(m.cursor_page[4]==0xff && m.cursor_page[5]==0xff && !m.cursor_page[6] && !m.cursor_page[7]);
+    for (unsigned y=0;y<64;y++) for (unsigned x=0;x<16;x++) {
+        uint8_t expected=y==0 ? golden[0][x] : y==1 ? golden[1][x] :
+                         y==31 ? golden[2][x] : x%4<2 ? 0xff : 0;
+        CHECK(m.cursor_page[y*16+x]==expected);
+    }
+    for (unsigned i=1024;i<sizeof(m.cursor_page);i++) CHECK(m.cursor_page[i]==0xa5);
+    for (unsigned i=0;i<3;i++) CHECK(m.colour[0][i]==0xff && m.colour[1][i]==0);
     CHECK(m.cr[0x4c]==4 && m.cr[0x4d]==0 && !(m.cr[0x55]&16u));
     q=request(CIUKI_ACCEL_CURSOR_MOVE); q.rect.dst_x=-5; q.rect.dst_y=511;
     unsigned at=m.cr_writes;
@@ -758,6 +777,28 @@ static void commands(unsigned bpp, bool async_parser)
     CHECK(m.cr_sequence[at+5]==0x48);
     q=request(CIUKI_ACCEL_CURSOR_SHOW); q.colour=1;
     CHECK(!fbdev_accel_request(&q) && (m.cr[0x45]&1));
+    const struct desk_cursor_raster *sets[]={desk_cursors,desk_extra_cursors};
+    const unsigned counts[]={13,3};
+    for (unsigned set=0;set<2;set++) for (unsigned n=0;n<counts[set];n++) {
+        const struct desk_cursor_raster *art=&sets[set][n];
+        q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xffffff;
+        memcpy(q.cursor_mask,art->mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,art->image,sizeof(q.cursor_image));
+        CHECK(!fbdev_accel_request(&q));
+        /* Decode individual screen-order bits independently of the driver.
+         * All 4096 pixels, including transparent padding, must match. */
+        for (unsigned y=0;y<64;y++) for (unsigned x=0;x<64;x++) {
+            unsigned at=y*16+(x/16)*4+(x%16)/8, shift=7-x%8;
+            unsigned opaque=x<32 && y<32 && !!(art->mask[y]&(0x80000000u>>x));
+            unsigned light=x<32 && y<32 && !!(art->image[y]&(0x80000000u>>x));
+            CHECK(((m.cursor_page[at]>>shift)&1u)==!opaque);
+            CHECK(((m.cursor_page[at+2]>>shift)&1u)==(opaque && light));
+        }
+    }
+    /* Distinct stack bytes: native RGB565 must be expanded, RGB888 retained. */
+    q=request(CIUKI_ACCEL_CURSOR_SET); q.colour=0xff0000; q.background=0x00ff00;
+    CHECK(!fbdev_accel_request(&q));
+    CHECK(m.colour[0][0]==0 && m.colour[0][1]==0 && m.colour[0][2]==255);
+    CHECK(m.colour[1][0]==0 && m.colour[1][1]==255 && m.colour[1][2]==0);
     CHECK(!test_engine.ops.stop(&test_engine) && !test_engine.active && !(m.cr[0x45]&1));
     CHECK(m.cr[0x50]==(bpp==16 ? 0x30u : 0x10u)); /* firmware value restored */
     CHECK(m.alias_reads==1 && m.alias_writes==1 && test_engine.operations>10);

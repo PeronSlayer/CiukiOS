@@ -184,7 +184,9 @@ bool ciuki_http_drain(struct ciuki_http *p)
             count--;if(++p->crlf==2)p->state=CHUNK_SIZE;
         } else {
             unsigned c=*s++;count--;
-            if(++p->header_bytes>CIUKI_HTTP_HEADERS)return fail(p,"HTTP headers exceed 32 KiB.");
+            /* RFC 9112 section 7.1: chunk-size lines frame the body. Bound
+             * each line, but do not spend the response-header allowance. */
+            if(p->state!=CHUNK_SIZE && ++p->header_bytes>CIUKI_HTTP_HEADERS)return fail(p,"HTTP headers exceed 32 KiB.");
             if(p->line_bytes>=CIUKI_HTTP_LINE+2 || !c || c==127 || (c<32 && c!='\t' && c!='\r' && c!='\n'))return fail(p,"Invalid or oversized HTTP line.");
             if(c=='\n' && (!p->line_bytes || p->line[p->line_bytes-1]!='\r'))return fail(p,"HTTP requires CRLF lines.");
             if(p->line_bytes && p->line[p->line_bytes-1]=='\r' && c!='\n')return fail(p,"Invalid HTTP CRLF.");
