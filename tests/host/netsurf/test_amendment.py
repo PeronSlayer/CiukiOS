@@ -70,6 +70,11 @@ class SanitizerTests(unittest.TestCase):
         self.compile_run("budget",[HERE / "budget_test.c",ROOT / "sdk/netsurf/port/budget.c"],
                          ["-Wl,--wrap=clock_gettime"])
 
+    def test_stderr_record_lines(self):
+        """f6-22: the layout slow and exit reason lines are single writes."""
+        self.compile_run("logline",[HERE / "logline_test.c",ROOT / "sdk/netsurf/port/budget.c"],
+                         ["-Wl,--wrap=clock_gettime,--wrap=write"])
+
     def test_real_frontend_input(self):
         objects=self.source / "build/Linux-framebuffer"
         excluded={"frontends_framebuffer_gui.o","frontends_framebuffer_ciuki_chrome.o","frontends_framebuffer_fbtk_event.o","content_handlers_html_layout.o","content_handlers_text_textplain.o","frontends_framebuffer_bitmap.o"}
@@ -77,6 +82,7 @@ class SanitizerTests(unittest.TestCase):
         libraries=["-Wl,--start-group",*[str(p) for p in sorted((self.base / "prefix/lib").glob("*.a")) if p.name!="libnsfb.a"],"-Wl,--end-group",
                    "-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-lm","-lpthread",
                    "-Wl,--wrap=nsfb_event,--wrap=browser_window_mouse_click,--wrap=browser_window_access_url,--wrap=clock_gettime,--wrap=malloc,--wrap=calloc,--wrap=realloc",
+                   "-Wl,--wrap=browser_window_navigate,--wrap=browser_window_back_available,--wrap=browser_window_forward_available,--wrap=browser_window_history_back,--wrap=browser_window_history_forward,--wrap=browser_window_reload,--wrap=browser_window_stop",
                    "-include",str(ROOT / "tests/host/desktop/replay_base.h"),"-Dnsframebuffer","-DCIUKI_HOST","-DCIUKI_NETSURF","-DWITH_NSLOG"]
         with tempfile.TemporaryDirectory(dir=self.out) as directory:
             page=Path(directory) / "interaction.html"

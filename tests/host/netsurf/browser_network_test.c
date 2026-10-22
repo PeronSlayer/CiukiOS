@@ -16,12 +16,17 @@
 #include "content/content.h"
 #include "framebuffer/gui.h"
 #include "framebuffer/ciuki/chrome.h"
+#include "content/hlcache.h"
+#include "content/handlers/html/private.h"
+#include "content/handlers/html/form_internal.h"
+#include "sdk/netsurf/port/budget.h"
 #include "sdk/netsurf/port/tls.h"
 #include "fixture-anchors.h"
 #include <errno.h>
 extern void fixture_begin(const char *,const char *,const char *),fixture_end(void);
 extern unsigned fixture_requests(void),fixture_loops(void),fixture_connections(void);
 extern bool fixture_lookup_blocked(void);
+extern bool fixture_slow_started(void);
 extern bool fixture_lookup_returned_in_thread(void);
 extern void fixture_lookup_release(void);
 static bool blocked,navigated,completed,printed;
@@ -33,6 +38,22 @@ static struct hlcache_handle *completed_page;
 static struct timespec lookup_started;
 static const char *fixture_mode;
 static bool reload_entropy,reloaded;
+/* f6-20 browser-budget: a remote page rejected by the layout time limit
+ * leaves the browser running on its error page; Try Again re-fetches it. */
+static bool budget,retried,retry_done;
+static struct hlcache_handle *error_page;
+static void try_again(struct hlcache_handle *page)
+{
+    /* The error page's own "Try Again" submit button, through form_submit
+     * as a click on it submits it (no chrome shortcut). */
+    html_content *html=(html_content *)hlcache_handle_get_content(page);
+    assert(content_get_type(page)==CONTENT_HTML && html->forms);
+    struct form_control *retry=NULL;
+    for(struct form_control *control=html->forms->controls;control;control=control->next)
+        if(control->name && !strcmp(control->name,"retry"))retry=control;
+    assert(retry && retry->type==GADGET_SUBMIT);
+    assert(form_submit(hlcache_handle_get_url(page),window_list->bw,html->forms,retry)==NSERROR_OK);
+}
 static _Atomic bool entropy_ready;
 static time_t monotonic_shift,eagain_uptime=-1;
 static bool monotonic_shifted;
@@ -81,6 +102,7 @@ int __real_clock_gettime(clockid_t,struct timespec *);
 int __wrap_clock_gettime(clockid_t clock,struct timespec *out)
 {
     int r=__real_clock_gettime(clock,out);if(!r && clock==CLOCK_REALTIME)out->tv_sec=1790000000;
+    if(!r && clock==CLOCK_MONOTONIC && fixture_mode && !strcmp(fixture_mode,"browser-timeout") && fixture_slow_started())out->tv_sec+=31;
     /* Simulated boot uptime: shift the real clock instead of freezing it,
      * so NetSurf's scheduler and the fetch timeouts keep advancing. */
     if(!r && clock==CLOCK_MONOTONIC && fixture_mode && !strncmp(fixture_mode,"browser-entropy",15)){
@@ -92,7 +114,7 @@ int __wrap_clock_gettime(clockid_t clock,struct timespec *out)
 bool __real_nsfb_event(nsfb_t *,nsfb_event_t *,int);
 bool __wrap_nsfb_event(nsfb_t *fb,nsfb_event_t *event,int timeout)
 {
-    if((blocked || reload_entropy) && !capture_held){
+    if((blocked || reload_entropy || budget) && !capture_held){
         assert(ciuki_capture_path);capture_path=ciuki_capture_path;ciuki_capture_path=NULL;capture_held=true;
         __real_clock_gettime(CLOCK_MONOTONIC,&lookup_started);
     }
@@ -118,6 +140,19 @@ bool __wrap_nsfb_event(nsfb_t *fb,nsfb_event_t *event,int timeout)
         ciuki_chrome_reload();page=NULL;
     }
     if(reload_entropy && reloaded && page==completed_page)page=NULL;
+    /* The rejected page can reach DONE before its deferred error replaces it. */
+    if(budget && page && content_is_layout_rejected(page)){assert(!retried);page=NULL;}
+    if(budget && page && content_get_status(page)==CONTENT_STATUS_DONE && !retried){
+        /* The rejected page is gone; the browser shows the core's error page. */
+        assert(window_list && !strncmp(nsurl_access(hlcache_handle_get_url(page)),"about:query/fetcherror",22));
+        size_t bytes;const uint8_t *source=content_get_source_data(page,&bytes);assert(source);
+        assert(memmem(source,bytes,"needs more layout time than the browser allows for web content",62));
+        assert(fixture_requests()>=1 && ciuki_layout_rejections==1);
+        printf("fixture_budget_rejected requests=%u\n",fixture_requests());
+        ciuki_layout_clock_scale=1;retried=true;error_page=page;
+        try_again(page);page=NULL;
+    }
+    if(budget && retried && page==error_page)page=NULL;
     if(page && content_get_status(page)==CONTENT_STATUS_DONE && !printed){
         size_t bytes;const uint8_t *source=content_get_source_data(page,&bytes);assert(source);
         if(!strncmp(fixture_mode,"browser-entropy",15) && !reload_entropy){
@@ -128,6 +163,11 @@ bool __wrap_nsfb_event(nsfb_t *fb,nsfb_event_t *event,int timeout)
         if(reload_entropy){
             assert(reloaded && memmem(source,bytes,"<h1>Ciuki</h1>",14));
             ciuki_capture_path=capture_path;puts("fixture_entropy_reload=1");
+        }
+        if(budget){
+            assert(retried && memmem(source,bytes,"<h1>Ciuki</h1>",14) && ciuki_layout_rejections==1);
+            assert(!strcmp(nsurl_access(browser_window_access_url(window_list->bw)),"http://fixture.example:8080/page"));
+            retry_done=true;ciuki_capture_path=capture_path;printf("fixture_budget_retry=1 requests=%u\n",fixture_requests());
         }
         if(strstr(nsurl_access(browser_window_access_url(window_list->bw)),"/gzip64")){
             assert(bytes==65536 && memmem(source,bytes,"<h1>Ciuki</h1>",14));
@@ -162,11 +202,16 @@ int __wrap_main(int argc,char **argv)
     setvbuf(stdout,NULL,_IOLBF,0);
     const char *mode=getenv("CIUKI_FIXTURE_MODE");if(!mode)mode="browser";
     fixture_mode=mode;reload_entropy=!strcmp(mode,"browser-entropy-reload");
+    budget=!strcmp(mode,"browser-budget");
+    /* Every remote layout exceeds 75 ms of budget time; local pages, such as
+     * the error page, are never time-limited. */
+    if(budget)ciuki_layout_clock_scale=1000000;
     const char *cert=getenv("CIUKI_FIXTURE_CERT"),*key=getenv("CIUKI_FIXTURE_KEY");
     blocked=!strcmp(mode,"browser-blocked");fixture_begin(mode,cert?cert:"-",key?key:"-");
     int result=__real_main(argc,argv);
     assert(printed);
     if(blocked){assert(navigated && completed && lookup_released && lookup_idle && late_checked);puts("fixture_navigation_blocked=1 completed=1 late_ignored=1");}
+    if(budget)assert(retried && retry_done);
     printf("fixture_requests=%u fixture_loop_requests=%u\n",fixture_requests(),fixture_loops());
     fixture_end();return result;
 }

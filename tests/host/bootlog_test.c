@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <ciuki/bootlog.h>
 #include "../../src/kernel/fs/vfs.h"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL bootlog %d: %s\n", __LINE__, #c); exit(1); } } while (0)
@@ -556,4 +557,94 @@ static void bounded_pause(void)
     puts("PASS bootlog pause: zero I/O with protected records/sync pending, in-flight exclusion, non-nesting, explicit resume, deadline/clock wrap, shutdown and reset");
 }
 
-int main(void) { stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+/* f0-56: record classes, statistic budget, summary, capacity, producer bound. */
+static unsigned disk_count(const char *needle)
+{
+    size_t l=strlen(needle);unsigned c=0;
+    for (size_t i=0;i+l<=sizeof(disk);i++) if (disk[i]==(unsigned char)needle[0] && !memcmp(disk+i,needle,l)) c++;
+    return c;
+}
+static void statistic_budget(void)
+{
+    char line[256];
+    /* Capacity: three logs keep at least 8 MiB, batch-aligned, within budget. */
+    CHECK((uint64_t)BOOTLOG_LIMIT*3>=8u*1024u*1024u && BOOTLOG_LIMIT%BOOTLOG_BATCH==0);
+    CHECK((uint64_t)BOOTLOG_LIMIT*3+3*65536u<=BOOTLOG_BUDGET && BOOTLOG_RING>BOOTLOG_RAM);
+    /* Summary format and the overall/per-kind limits. */
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    for (unsigned k=0;k<10;k++) for (unsigned i=0;i<8+(k==9?2:0);i++) {
+        int n=snprintf(line,sizeof(line),"[cpu] k%u=%u\n",k,i);bootlog_capture_ring(line,(size_t)n);
+    }
+    struct bootlog_stats st=snapshot();
+    CHECK(st.budget_dropped_lines==42 && !st.dropped && !st.budget_windows);
+    model_now=2000;
+    bootlog_capture_ring("[cpu] task=next\n",16);   /* closes the window, opens the next */
+    st=snapshot();CHECK(st.budget_windows==1 && st.budget_dropped_lines==42);
+    CHECK(!bootlog_shutdown());
+    unsigned bytes=0;
+    for (unsigned k=5;k<10;k++) bytes+=(unsigned)snprintf(line,sizeof(line),"[cpu] k%u=0\n",k)*8+(k==9?2*(unsigned)strlen("[cpu] k9=0\n"):0);
+    char expect[256];
+    snprintf(expect,sizeof(expect),"[bootlog] budget_dropped window_ms=2000 limit=40/8 kept=40 dropped=42 bytes=%u "
+        "kinds=cpu/k5:8,cpu/k6:8,cpu/k7:8,cpu/k8:8,cpu/k9:10\n",bytes);
+    CHECK(disk_count(expect)==1);
+    CHECK(disk_count("[cpu] k0=7\n")==1 && disk_count("[cpu] k4=7\n")==1 && !disk_count("[cpu] k5=0\n"));
+    CHECK(disk_count("[cpu] task=next\n")==1);
+    /* A flood of statistics across many windows never drops protected lines. */
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    for (unsigned w=0;w<300;w++) {
+        for (unsigned i=0;i<100;i++) {
+            int n=snprintf(line,sizeof(line),"[cpu] task=t%u#%u class=1 flood=%u\n",i,w,i);bootlog_capture_ring(line,(size_t)n);
+            n=snprintf(line,sizeof(line),"[mem] activity w=%u i=%u\n",w,i);bootlog_capture_ring(line,(size_t)n);
+        }
+        int n=snprintf(line,sizeof(line),"[user 46] stderr w=%04u\n",w);bootlog_capture_ring(line,(size_t)n);
+        n=snprintf(line,sizeof(line),"[dosvm] lifecycle vm=1 w=%04u\n",w);bootlog_capture_ring(line,(size_t)n);
+        n=snprintf(line,sizeof(line),"[accel] savage w=%04u\n",w);bootlog_capture_ring(line,(size_t)n);
+        n=snprintf(line,sizeof(line),"[kernel] irqoff_long w=%04u\n",w);bootlog_capture_ring(line,(size_t)n);
+        n=snprintf(line,sizeof(line),"[ata] w=%04u\n",w);bootlog_capture(line,(size_t)n);
+        model_now+=500;
+        if (w%4==3) CHECK(!bootlog_drain());
+    }
+    drain();CHECK(!bootlog_shutdown());
+    st=snapshot();
+    CHECK(!st.dropped_protected && !st.records_dropped_protected && st.budget_windows==75 && st.budget_dropped_lines>50000);
+    /* The ring wrapped (2.75 MiB log): the last protected lines are present. */
+    for (unsigned w=299;w>=290;w--) {
+        snprintf(line,sizeof(line),"[user 46] stderr w=%04u\n",w);CHECK(disk_count(line)==1);
+        snprintf(line,sizeof(line),"[dosvm] lifecycle vm=1 w=%04u\n",w);CHECK(disk_count(line)==1);
+        snprintf(line,sizeof(line),"[kernel] irqoff_long w=%04u\n",w);CHECK(disk_count(line)==1);
+    }
+    CHECK(disk_count("[bootlog] budget_dropped window_ms=")>=20);
+    /* Queue saturated by statistics (no drain): protected lines evict them. */
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    CHECK(!bootlog_pause_drain(BOOTLOG_PAUSE_MAX_MS));
+    for (unsigned w=0;w<40;w++) {
+        for (unsigned i=0;i<BOOTLOG_BUDGET_KIND_LINES;i++) {
+            int n=snprintf(line,sizeof(line),"[cpu] task=%u#%u\n",w,i);bootlog_capture_ring(line,(size_t)n);
+        }
+        model_now+=BOOTLOG_BUDGET_WINDOW_MS;
+    }
+    st=snapshot();CHECK(st.ring_queued>0 && st.dropped_statistic>0 && !st.dropped_protected);
+    for (unsigned i=0;i<150;i++) {
+        int n=snprintf(line,sizeof(line),"[user 7] app line %04u\n",i);bootlog_capture_ring(line,(size_t)n);
+    }
+    st=snapshot();CHECK(!st.dropped_protected && st.dropped_statistic>0 && st.records_dropped_statistic>0);
+    bootlog_resume_drain();CHECK(!bootlog_shutdown());
+    for (unsigned i=0;i<150;i++) {
+        snprintf(line,sizeof(line),"[user 7] app line %04u\n",i);CHECK(disk_count(line)==1);
+    }
+    /* Producers never wait on the disk: saturated queue, no drain, bounded time. */
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    CHECK(!bootlog_pause_drain(BOOTLOG_PAUSE_MAX_MS));
+    struct timespec a,b;unsigned io_before=calls;clock_gettime(CLOCK_MONOTONIC,&a);
+    for (unsigned i=0;i<200000;i++) {
+        int n=snprintf(line,sizeof(line),"[user 1] flood %u\n",i);bootlog_capture_ring(line,(size_t)n);
+        n=snprintf(line,sizeof(line),"[cpu] task=x#%u\n",i);bootlog_capture_ring(line,(size_t)n);
+    }
+    clock_gettime(CLOCK_MONOTONIC,&b);
+    long us=(b.tv_sec-a.tv_sec)*1000000L+(b.tv_nsec-a.tv_nsec)/1000;
+    CHECK(us/400000<50 && calls==io_before); /* mean < 50 us per call (sanitizers), zero storage I/O */
+    bootlog_resume_drain();CHECK(!bootlog_shutdown());
+    puts("PASS bootlog f0-56: statistic budget 40 lines/2 s (8 per kind) with one summary line, protected classes survive a flood and a saturated queue, 3 x 2.75 MiB retention, producers never block on disk");
+}
+
+int main(void) { statistic_budget(); stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

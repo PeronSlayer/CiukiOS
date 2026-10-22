@@ -41,7 +41,7 @@ static unsigned hub_connects,hub_disconnects,hub_resets,hub_enumerations,hub_fai
 static unsigned usb_devices,usb_attaches,usb_detaches;
 static uint64_t root_record_at[USB_PORT_MAX],hub_record_at[128][USB_PORT_MAX];
 static unsigned root_records[USB_PORT_MAX],hub_records[128][USB_PORT_MAX];
-static unsigned root_quarantine_records,hub_quarantine_records;
+static unsigned root_quarantine_records,hub_quarantine_records,release_records;
 static unsigned hid_reports[128],hid_polls[128],hid_pipes[128],usb_key_records,f12_down_records,f12_up_records;
 static int hid_poll_result;
 static unsigned schedule_entries,schedule_qhs,schedule_tds,schedule_invalid;
@@ -139,6 +139,7 @@ void klog(const char *s,...)
             if(strstr(record,"result=-")) descriptor_failures++;
         }
     }
+    if(strstr(record,"[usb] release ")) {assert(strstr(record," port=") && strstr(record,"reason=disconnect"));release_records++;}
     if(strstr(record,"first_scan_tick=")) first_scans++;
     if(strstr(record,"scans_per_second=")) {cadence_records++;assert(strstr(record,"elapsed_ms="));}
     if(strstr(record,"addr0 uhci_packet")) {
@@ -736,7 +737,7 @@ static void setup(bool ohci,bool hub)
     usb_devices=usb_attaches=usb_detaches=0;
     memset(root_record_at,0,sizeof(root_record_at));memset(hub_record_at,0,sizeof(hub_record_at));
     memset(root_records,0,sizeof(root_records));memset(hub_records,0,sizeof(hub_records));
-    root_quarantine_records=hub_quarantine_records=0;
+    root_quarantine_records=hub_quarantine_records=release_records=0;
     memset(hid_reports,0,sizeof(hid_reports));memset(hid_polls,0,sizeof(hid_polls));memset(hid_pipes,0,sizeof(hid_pipes));
     usb_key_records=f12_down_records=f12_up_records=0;
     schedule_entries=schedule_qhs=schedule_tds=schedule_invalid=0;
@@ -1222,10 +1223,20 @@ static void port_flood(bool ohci)
         if(ohci)m.regs[0x54/4]=0x10000;
         else m.regs[0x10/4]=(m.regs[0x10/4]&0xffff0000)|0x82;
         m.now+=250;usb_step(&m.host);
-        assert(!m.host.root_child[0] && m.host.root_blocked[0] && root_records[0]==logged+1);
-        assert(disconnect_records==1 && m.root_acks[0]==acks+2);
+        /* f1-96b: the observed disconnect releases the quarantined port. */
+        assert(!m.host.root_child[0] && !m.host.root_blocked[0] && root_records[0]==logged+1);
+        assert(disconnect_records==1 && m.root_acks[0]==acks+2 && release_records==1);
         for(unsigned scan=0;scan<8;scan++) {m.now+=250;usb_step(&m.host);}
         assert(root_records[0]==logged+1 && m.host.device_count==count && m.root_resets[0]==resets);
+        /* Re-plug: a new device generation is debounced, reset and enumerated. */
+        unsigned old_addr=d->address;gen_t old_gen=d->generation;
+        if(ohci)m.regs[0x54/4]=0x10001;else m.regs[0x10/4]|=3;
+        m.now+=300;model_step();
+        struct usb_device *fresh=&m.host.devices[count];
+        assert(m.host.device_count==count+1 && m.host.root_child[0]==count+1 && !m.host.root_blocked[0]);
+        assert(m.root_resets[0]>resets && fresh->configured && fresh->present && !fresh->quarantined);
+        assert(fresh->hid[0].active && fresh->address>old_addr && fresh->generation!=old_gen);
+        assert((storage_fault || d->quarantined) && !d->present && release_records==1 && connect_records>=2);
     }
     setup(ohci,true);assert(!attach());usb_step(&m.host);
     struct usb_device *hub=&m.host.devices[0],*child=&m.host.devices[1];
@@ -1239,9 +1250,15 @@ static void port_flood(bool ohci)
     assert(hub_records[hub->address][0]==logged && m.hub_acks[0]==acks+5);
     m.dev[2].present=false;m.hub_status[0]=0x100;m.hub_change[0]=3;
     for(unsigned scan=0;scan<6;scan++) {m.now+=250;usb_step(&m.host);}
-    assert(!hub->hub_child[0] && hub->hub_blocked[0] && hub_records[hub->address][0]==logged+1);
-    assert(m.hub_acks[0]==acks+7 && !m.hub_change[0] && m.hub_reset_requests==resets);
-    printf("PASS USB %s F1-53 port flood: one quarantined connect, W1C once, silence until disconnect, retained block, no enumeration/reset; every root/hub record >=1 s apart\n",ohci?"OHCI":"UHCI");
+    assert(!hub->hub_child[0] && !hub->hub_blocked[0] && hub_records[hub->address][0]==logged+1);
+    assert(m.hub_acks[0]==acks+7 && !m.hub_change[0] && m.hub_reset_requests==resets && release_records==1);
+    /* f1-96b: re-plug behind the hub enumerates a new device. */
+    m.dev[2].present=true;m.hub_status[0]=0x101;m.hub_change[0]=1;
+    for(unsigned scan=0;scan<6;scan++) {m.now+=250;model_step();}
+    assert(m.host.device_count==count+1 && hub->hub_child[0]==count+1 && !hub->hub_blocked[0]);
+    assert(m.host.devices[count].configured && !m.host.devices[count].quarantined && child->quarantined);
+    assert(m.hub_reset_requests==resets+1 && release_records==1);
+    printf("PASS USB %s F1-53 port flood: one quarantined connect, W1C once, silence until disconnect, no enumeration/reset while connected; f1-96b disconnect releases the port and a re-plug enumerates a new device (root and hub); every root/hub record >=1 s apart\n",ohci?"OHCI":"UHCI");
 }
 static void enumeration_retries(bool ohci)
 {
@@ -1724,8 +1741,22 @@ static void root_port_isolation(bool ohci)
     record_hook=NULL;
     printf("PASS f0-40 USB %s failed hub child-disable: hub root port isolated; independent root mouse survives\n",ohci?"OHCI":"UHCI");
 }
+static void scan_option(void)
+{
+    const char *options[]={"", "usbscan=00", "xusbscan=0", "usbscan=1", "usbscan=0\r\n"};
+    for (unsigned opt=0;opt<5;opt++) {
+        setup(false,false); memcpy(g_boot.options,options[opt],strlen(options[opt])+1);
+        assert(!attach()); model_step(); unsigned scans=m.host.scan_count;
+        unsigned devices=m.host.device_count; assert(devices && m.host.scanned);
+        for (unsigned i=0;i<4;i++) { m.now+=250; model_step(); }
+        assert(m.host.device_count==devices);
+        assert(opt==4 ? m.host.scan_count==scans : m.host.scan_count!=scans);
+    }
+    puts("F1-87 usbscan=0: initial enumeration retained, periodic scans stopped, exact tokens and CRLF PASS");
+}
 int main(void)
 {
+    scan_option();
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
     receiver_wheel();chained_bulk();binding_eighth_packet();
     enumeration_retries(false);enumeration_retries(true);

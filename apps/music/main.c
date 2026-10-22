@@ -7,12 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 struct music_main {
     struct du_window window; struct du_ui ui; struct music_app app;
     struct music_runtime *runtime; struct music_output output; struct music_ui_backend backend;
     struct music_snapshot snapshot; int audio, mixer, closing; unsigned balance_left, balance_right, mute;
     uint32_t serial, sent; uint32_t drain_ms; uint64_t last_poll;
+    uint64_t last_paint; int painted; /* f4-37: frame pacing */
 };
 static int audio_open(void *ctx, unsigned *rate)
 {
@@ -44,6 +46,21 @@ static int audio_status(void *ctx, uint64_t *consumed, unsigned *queued, uint64_
     *tail=(uint64_t)pending*1000000000/s.output_rate; return 0;
 }
 static void audio_close(void *ctx) { struct music_main *m=ctx; if (m->audio>=0) close(m->audio); m->audio=-1; }
+static void audio_refill(void *ctx)
+{
+    struct music_main *m=ctx;
+    struct ciuki_audio_command c={.version=1,.size=sizeof(c)};
+    (void)ciuki_devctl(m->audio,AUDIO_REFILL_READ,&c,sizeof(c));
+}
+/* f1-101: the kernel's producer boost state of this stream, for the level record. */
+static int audio_producer(void *ctx, struct music_producer *out)
+{
+    struct music_main *m=ctx; struct ciuki_audio_producer r={.version=1,.size=sizeof(r)};
+    if (m->audio<0) return -EBADF;
+    if (ciuki_devctl(m->audio,AUDIO_GET_PRODUCER,&r,sizeof(r))) return -errno;
+    out->flags=r.flags; out->boosts=r.boosts; out->over_budget=r.over_budget; out->boost_us=r.boost_us;
+    return 0;
+}
 static uint64_t now(void *ctx) { (void)ctx; return du_now(); }
 static int send(void *ctx, const struct music_command *c) { return music_runtime_send(((struct music_main *)ctx)->runtime,c); }
 static int master_get(void *ctx, unsigned *volume)
@@ -82,6 +99,7 @@ static void message(struct du_window *w, const struct desk_packet *p, void *ctx)
 static void painted(struct du_ui *u, void *ctx)
 {
     (void)u; struct music_app *a=ctx; struct music_main *m=a->backend->ctx;
+    m->last_paint=du_now(); m->painted=1;
     music_runtime_repaint(m->runtime);
 }
 static void idle(void *ctx)
@@ -92,13 +110,42 @@ static void idle(void *ctx)
     music_runtime_snapshot(m->runtime,&m->snapshot);
     if (m->snapshot.publication!=m->app.snapshot.publication) music_update(&m->app,&m->snapshot);
 }
+/* du_run (libdeskui/client.c) with two f4-37 additions: frames are paced to
+ * MUSIC_UI_FPS through present_pending, the toolkit's client-owned pacing
+ * flag (apps/gfxdemo/main.c): while it is set a turn still handles messages,
+ * input and timers but neither renders nor presents, and the invalid region
+ * keeps growing; and each turn's cycles go to the cost record. */
+static int run(struct music_main *m)
+{
+    struct du_window *w=&m->window; int r; uint64_t started=du_now();
+    for (;;) {
+        uint64_t now=du_now(), begin=music_cycles();
+        w->present_pending=music_ui_hold(m->painted,m->last_paint,now)!=0;
+        r=du_window_turn(w,now);
+        w->present_pending=0;
+        if (r<=0) break;
+        idle(m);
+        music_runtime_ui_cycles(m->runtime,music_cycles()-begin);
+        now=du_now(); uint64_t next=du_next_deadline(w->ui), wait=10000000u;
+        if (!w->configured && now>=started && now-started<5000000000ull) wait=1000000u;
+        if (next>now && next-now<wait) wait=next-now;
+        if (next<=now) wait=1000000u;
+        else if (w->ui->dirty) {
+            uint64_t hold=music_ui_hold(m->painted,m->last_paint,now);
+            if (!hold) wait=1000000u; else if (hold<wait) wait=hold;
+        }
+        struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait};
+        nanosleep(&pause,NULL);
+    }
+    return r;
+}
 int main(int argc, char **argv)
 {
     int channel,test; const char *path;
     if (acc_args(argc,argv,"music",&channel,&test,&path)) return 2;
     struct music_main *m=calloc(1,sizeof(*m)); if (!m) return 1;
     m->audio=m->mixer=-1;
-    m->output=(struct music_output){audio_open,audio_write,audio_status,audio_close,now,m};
+    m->output=(struct music_output){audio_open,audio_write,audio_status,audio_close,now,m,audio_refill,audio_producer};
     m->backend=(struct music_ui_backend){send,master_get,master_set,quit,m};
     m->runtime=music_runtime_start(&m->output);
     if (!m->runtime) { free(m); return 1; }
@@ -107,6 +154,7 @@ int main(int argc, char **argv)
         fprintf(stderr,"music: desktop connection failed: %s\n",strerror(errno)); music_runtime_destroy(m->runtime); free(m); return 1;
     }
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
+    m->window.present_rendered=1; /* f4-37: everything is drawn in du_render */
     music_attach(&m->app,&m->ui,&m->backend);
     m->ui.paint=painted;
     if (path) {
@@ -116,7 +164,7 @@ int main(int argc, char **argv)
         music_update(&m->app,&m->snapshot);
     }
     if (test) du_window_move(&m->window,24,48);
-    int r=du_run(&m->window,idle,m);
+    int r=run(m);
     music_runtime_destroy(m->runtime); if (m->mixer>=0) close(m->mixer);
     du_window_destroy(&m->window); free(m); return r<0 ? 1 : 0;
 }

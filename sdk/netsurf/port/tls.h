@@ -17,6 +17,7 @@ void ciuki_tls_free(struct ciuki_tls *);
  * reject post-handshake input while this request's flag is still false. */
 enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *,int,size_t *,bool *);
 unsigned ciuki_tls_state(struct ciuki_tls *);
+int ciuki_tls_engine_error(struct ciuki_tls *);
 /* Includes partial ciphertext headers/bodies, even with no readable plaintext. */
 bool ciuki_tls_pending_input(struct ciuki_tls *);
 const unsigned char *ciuki_tls_read(struct ciuki_tls *,size_t *);

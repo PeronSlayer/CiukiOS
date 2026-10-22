@@ -180,7 +180,7 @@ class NetworkTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):cls.fixture.cleanup()
 
-    def engine(self,mode,path="/"):
+    def engine(self,mode,path="/",inspect=None):
         secure=mode.startswith("tls-") or mode in ("valid","expired","future","wrong","self","tls10","intermediate","missing-intermediate","malformed-chain","cert-depth","cert-buffer")
         cert="intermediate" if mode in ("intermediate","missing-intermediate","malformed-chain") else mode if mode in ("valid","expired","future","wrong","self") else "valid"
         if mode=="malformed-chain":
@@ -189,12 +189,52 @@ class NetworkTests(unittest.TestCase):
             openssl("x509","-in",self.folder / "intermediate-ca.pem","-outform","DER","-out",self.folder / "intermediate-chain.der")
         args=[str(self.folder / (cert+".der")),str(self.folder / (cert+"-key.der"))] if secure else ["-","-"]
         try:
-            result=subprocess.run([str(OUT / "network"),mode,"8443" if secure else "9" if mode=="refused" else "8080",path,*args],text=True,capture_output=True,env=SAN,timeout=25)
+            port="443" if mode=="tls-web" else "80" if mode=="web-http" else "8443" if secure else "9" if mode=="refused" else "8080"
+            result=subprocess.run([str(OUT / "network"),mode,port,path,*args],text=True,capture_output=True,env=SAN,timeout=25)
         except subprocess.TimeoutExpired as error:
             print(error.stdout,error.stderr,flush=True)
             raise
         print(result.stdout.strip(),flush=True)
+        if inspect:inspect(result)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        return result
+
+    def test_gateway_mtu_and_syn_retry(self):
+        for mode in ("web-http","tls-web"):
+            with self.subTest(mode=mode):self.engine(mode,"/wan")
+
+    def test_idle_clock_step(self):
+        for mode in ("idle-expiry","idle-reuse-expiry"):
+            with self.subTest(mode=mode):self.engine(mode)
+
+    def fetch_records(self,result):
+        import re
+        lines=[line for line in result.stderr.splitlines() if line.startswith("[netsurf] fetch ")]
+        self.assertTrue(lines,result.stderr)
+        seen=set()
+        for line in lines:
+            self.assertLessEqual(len(line)+1,512,line)
+            match=re.fullmatch(r"\[netsurf\] fetch url=(https?://[^ ?#]+) stage=(dns|connect|tls|request|response|redirect|done|error) code=(\d+) errno=(\d+) tls_err=(\d+) bytes=(\d+) ms=(\d+) id=(\d+) at=\w+ tls_code=\d+ rtc=[01] utc=-?\d+",line)
+            self.assertIsNotNone(match,line)
+            key=(match[8],match[2]);self.assertNotIn(key,seen,line);seen.add(key)
+        return lines
+
+    def test_fetch_stage_records_and_privacy(self):
+        def success(result):
+            lines=self.fetch_records(result)
+            self.assertFalse(any("TOPSECRET" in line for line in lines))
+            self.assertEqual([line.split(" stage=")[1].split()[0] for line in lines],
+                             ["dns","connect","request","response","done"])
+            self.assertIn("code=200",lines[-1]);self.assertIn("bytes=5",lines[-1])
+        with self.subTest(mode="ok"):self.engine("ok","/?TOPSECRET=value",inspect=success)
+        for mode,stage in (("dns","dns"),("refused","connect"),("timeout","response"),("wrong","tls"),("fallback-clock","tls"),("entropy","tls")):
+            with self.subTest(mode=mode):
+                def failure(result):
+                    lines=self.fetch_records(result)
+                    self.assertEqual(sum(" stage=error " in line for line in lines),1)
+                    self.assertTrue(any(" stage=error " in line and " at="+stage+" " in line for line in lines))
+                    self.assertIn("Fetch failed during "+stage+":",result.stdout)
+                self.engine(mode,"/slow" if mode=="timeout" else "/",inspect=failure)
 
     def test_parser(self):subprocess.run([str(OUT / "http")],check=True,env=SAN,timeout=20)
     def test_certificate_capture_limits(self):subprocess.run([str(OUT / "tls-limits")],check=True,env=SAN,timeout=10)
@@ -225,20 +265,37 @@ class NetworkTests(unittest.TestCase):
         for mode in ("stale-retry","post-no-replay","tls-stale-retry","tls-post-no-replay"):
             with self.subTest(mode=mode):self.engine(mode)
 
-    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None):
+    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None,port=None,inspect=None):
         with tempfile.TemporaryDirectory(dir=OUT) as folder:
             capture=Path(folder) / "page.xrgb"
             result=subprocess.run([str(OUT / "browser"),"-w","640","-h","480",
                 "--ciuki-resources="+str(BASE / "stage/system/netsurf"),"--ciuki-profile="+folder,
-                "--ciuki-capture="+str(capture),f"{scheme}://{host}:{8443 if scheme=='https' else 8080}{path}"],capture_output=True,text=True,timeout=25,
+                "--ciuki-capture="+str(capture),f"{scheme}://{host}:{port or (8443 if scheme=='https' else 8080)}{path}"],capture_output=True,text=True,timeout=25,
                 env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der")))
             self.assertTrue(capture.exists(),result.stdout+result.stderr)
             self.assertEqual(capture.stat().st_size,640*480*4)
             if error:self.assert_page_error(result,error)
             if expected:self.assertIn(expected,result.stdout,result.stdout+result.stderr)
+            if inspect:inspect(result)
             print(f"PASS rendered fixture {mode} {path}",flush=True)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             return result
+
+    def test_fetch_failure_pages_name_the_stage(self):
+        for options in (
+            {"mode":"dns","error":"Fetch failed during dns: DNS lookup failed"},
+            {"port":9,"error":"Fetch failed during connect: The server refused the connection."},
+            {"scheme":"https","mode":"browser-untrusted","error":"Fetch failed during tls: TLS certificate validation failed"},
+            {"scheme":"https","mode":"fallback-clock","error":"Fetch failed during tls: HTTPS requires a qualified RTC clock"},
+            {"scheme":"https","mode":"browser-entropy","error":"Fetch failed during tls: Secure connections are not ready yet."}):
+            with self.subTest(options=options):self.browser("/page",inspect=self.fetch_records,**options)
+        self.browser("/slow",mode="browser-timeout",error="Fetch failed during response: The network request timed out",inspect=self.fetch_records)
+
+    def test_redirect_fetch_records(self):
+        for path,code in (("/redirect",302),("/upgrade",302),("/upgrade301",301)):
+            def inspect(result):
+                self.assertTrue(any(f" stage=redirect code={code} " in line for line in self.fetch_records(result)))
+            with self.subTest(path=path):self.browser(path,inspect=inspect)
 
     def test_browser_redirect_cookies_and_errors(self):
         cases=[("/redirect",{}),
@@ -260,6 +317,21 @@ class NetworkTests(unittest.TestCase):
         parser=Text();parser.feed(page)
         self.assertIn(message," ".join(parser.parts))
 
+    def test_remote_layout_rejection_keeps_browser(self):
+        """f6-20: a remote page rejected by the layout time limit leaves the
+        browser running on the error page; its Try Again button re-fetches."""
+        result=self.browser("/page",mode="browser-budget",expected="fixture_budget_retry=1")
+        self.assertIn("fixture_budget_rejected requests=",result.stdout)
+        self.assertIn("NetSurf layout rejected: remote page, time limit",result.stderr)
+        self.assertIn("<h1>Ciuki</h1>",result.stdout)
+        lines=result.stderr.splitlines()
+        reasons=[line for line in lines if line.startswith("[netsurf] exit reason=")]
+        self.assertEqual(len(reasons),1,result.stderr)
+        self.assertTrue(reasons[0].startswith("[netsurf] exit reason=capture ") and "layout_rejections=1" in reasons[0],reasons[0])
+        page_requests=[int(n) for n in __import__("re").findall(r"fixture_budget_(?:rejected|retry=1) requests=(\d+)",result.stdout)]
+        self.assertEqual(len(page_requests),2)
+        self.assertGreater(page_requests[1],page_requests[0])
+
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")
 
@@ -272,6 +344,15 @@ class NetworkTests(unittest.TestCase):
             ("/page",{"scheme":"https","mode":"browser-entropy","error":"Secure connections are not ready yet. Estimated initial wait remaining: up to ","expected":"fixture_entropy_estimate_ok=1"}),
             ("/page",{"scheme":"https","mode":"browser-entropy-late","error":"The initial one-minute estimate has elapsed; readiness is not guaranteed.","expected":"fixture_entropy_estimate_ok=1"}),
             ("/page",{"scheme":"https","mode":"browser-entropy-reload","expected":"fixture_entropy_reload=1"})]
+        for path,options in cases:
+            with self.subTest(path=path,options=options):self.browser(path,**options)
+
+    def test_failure_and_readiness_pages_state_the_network(self):
+        """f6-22: the T23 had a running e100 with link and no DHCP lease; the
+        pages a user sees then say so (no address / address with DNS state)."""
+        cases=[("/page",{"mode":"hostname-offline","error":"Offline: no usable network address or route. Network: no address yet (e100, link up); waiting for a DHCP server."}),
+            ("/page",{"mode":"dns","error":"DNS lookup failed: the server name could not be resolved. Network: address 192.0.2.100 (e100); DNS lookups failing."}),
+            ("/page",{"scheme":"https","mode":"browser-entropy","error":"Reload to retry. Network: address 192.0.2.100 (e100); DNS not tried yet."})]
         for path,options in cases:
             with self.subTest(path=path,options=options):self.browser(path,**options)
 

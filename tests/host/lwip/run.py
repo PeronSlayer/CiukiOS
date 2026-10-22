@@ -17,7 +17,9 @@ OUT = ROOT / 'build/host/lwip'
 OUT.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser()
 parser.add_argument('--kernel', action='store_true')
+parser.add_argument('--case', choices=('f6-24',), help='run only the focused TCP record/timeout regression')
 args = parser.parse_args()
+if args.kernel and args.case: parser.error('--case is a host runtime selection')
 flags = runpy.run_path(str(ROOT / 'scripts/build_kernel.py'))['CFLAGS'] if args.kernel else [
     '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
     '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-DLWIP_HOST', '-pthread',
@@ -108,4 +110,4 @@ else:
     subprocess.run(['clang', *flags, *includes, str(ROOT / 'tests/host/lwip/stack_test.c'),
         str(ROOT / 'tests/host/lwip/channel_fixture.c'),
         *map(str, objects), '-Wl,--gc-sections', '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True, timeout=90)
+    subprocess.run([str(binary), *(['--f6-24'] if args.case else [])], check=True, timeout=90)

@@ -58,6 +58,17 @@ static void compressed(unsigned coding,bool chunked)
         if(!bad)wire[head+n-1]^=1;
     }
 }
+static void many_chunks(void)
+{
+    struct ciuki_http p;struct received r={0};ciuki_http_init(&p,false,callback,&r);
+    const char *header="HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+    assert(ciuki_http_feed(&p,header,strlen(header)));
+    for(unsigned i=0;i<12000;i++)assert(ciuki_http_feed(&p,"1\r\nC\r\n",6));
+    const char *tail="0\r\nX-Trailer: end\r\n\r\n";
+    assert(ciuki_http_feed(&p,tail,strlen(tail)));
+    assert(p.done && !p.error && r.bytes==12000 && ciuki_http_reusable(&p));
+    ciuki_http_destroy(&p);puts("PASS 12000 chunks: chunk framing does not spend header budget");
+}
 static void expansion(bool excessive)
 {
     unsigned char encoded[12000],block[1024];memset(block,'x',sizeof(block));
@@ -120,7 +131,7 @@ int main(void)
         "HTTP/1.1 101 Switching Protocols\r\n\r\n",
         "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nxx"};
     for(size_t i=0;i<sizeof(bad)/sizeof(*bad);i++)invalid(bad[i]);
-    compressed(1,false);compressed(2,false);compressed(1,true);
+    compressed(1,false);compressed(2,false);compressed(1,true);many_chunks();
     expansion(false);expansion(true);
     struct ciuki_http p;struct received r={.cancel=true};ciuki_http_init(&p,false,callback,&r);
     assert(!ciuki_http_feed(&p,"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nCiuki",43));

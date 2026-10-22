@@ -26,6 +26,7 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 make build-full        # kernel (build/f0/VMM.ELF), apps, the cached upper Wine DLLs, then the image, with T1 checks and build-manifest.json
 make upper             # only the reused Wine DLLs (cached; needs make apps first)
 make test-host         # T0: kernel library, loader statics, runner, fixtures, loader model
+python3 scripts/loader_budget.py   # loader bytes per section and free bytes in its fixed 48-sector extent
 make qemu-test-full    # T2: f0-smoke through scripts/test/run.py
 python3 scripts/test/run.py f0-core    # T3: ten-boot matrix and the nine non-fatal probes
 python3 scripts/test/run.py f0-panic   # T3: destructive panic cases
@@ -143,24 +144,61 @@ boot stops the campaign there. The case kind and its rules are in
 ## Version
 
 `config/version.json` is the single source of the CiukiOS version
-(`0.9.2`, stage `pre-alpha`). `scripts/ciuki_version.py` validates it and:
+(`1.0.0`, stage `alpha`). `scripts/ciuki_version.py` validates it and:
 
-- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="0.9.2 pre-alpha"` to every
+- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="1.0.0 alpha"` to every
   kernel object and records `version` in `build/f0/build-clock.json`. The kernel
   logs `CiukiOS <version>` on the line after the `Ciuki VMM F0 build <id> - CiukiOS`
   banner (that banner is parsed by `scripts/test/physical.py` and is unchanged)
   and `uname` returns it in `version` (`release` stays the build ID); the desktop
-  About window shows it as `Version <version>`.
+  About window shows it as `Version <version>` (header of the Credits tab and
+  the General tab).
 - `scripts/build_image.py` refuses a kernel built with another version, passes
   `-dCIUKI_VERSION='...'` to the loader (menu title `CiukiOS <version>: N Normal /
   ...`) and writes `version` in `build/f0/build-manifest.json` (schema_version
   stays 1).
 - `VERSION`, `CHANGELOG.md` and `README.md` are written by hand;
-  `tests/host/test_version.py` checks that they agree with the file.
+  `tests/host/test_version.py` checks that they agree with the file, and that
+  `docs/release-notes-1.0-alpha.md` and `docs/credits.md` carry the current
+  version and identity.
 
 Bump the version by editing `config/version.json` and those three files, then
 `make build-full`. Publication of `main` prereleases stays governed by
 `config/release-policy.json`.
+
+## Boot tokens, the splash bar and the 2D indicator
+
+The image's `BOOT.CFG` is a line of exact tokens that the loader copies for the
+kernel (default `safe=0 serial=1`). The ones a hardware trial uses
+(details in [boot modes](boot.md)):
+
+| Token | Effect |
+| --- | --- |
+| `serial=1` | kernel log on COM1 as well as on the disk (`C:\SYSTEM\LOGS`) |
+| `safe=1` | safe mode (no optional drivers) |
+| `usbscan=0` | keeps the first USB enumeration, stops the periodic rescans (f1-87 diagnostic) |
+| `ecpoll=1` / `ecpoll=0` | ThinkPad EC volume poll: off by default since f1-100 (each EC transaction costs the T23 two 2.1 ms SMIs); `ecpoll=1` restores the 1 Hz poll for diagnosis, `ecpoll=0` keeps it off and wins. The disk log counts the transactions (`[ec] thinkpad io= transactions=`) and `[kernel] smi` shows the blackouts. A planned change (f2-96) polls the EC every 2 s so the hardware volume keys reach the mixer |
+| `accel=0` | disables the Savage 2D engine (`reason=boot_disabled`) |
+
+The splash screen shows the original Ciuki photograph with a progress bar
+under it. Since f0-55b the bar starts with the sweeping segment centred on the
+first frame, the phases reported before the first paint are applied, and the
+console worker is woken by its own 40 ms timer (priority `SCHED_FOREGROUND + 2`
+while the splash is up); it appears as at most 14 serial records
+`[console] splash phase=<n> permille=<p>`. Under QEMU TCG the phase reports
+still arrive in a burst, so judge the bar on the T23 or by the record count
+(`handover updates=15 claims=17` on the third image).
+
+Under the bar the splash prints the 2D engine state (f1-97, f2-92):
+`2D engine: NO (<reason>)` when the accelerator was refused, `2D engine: OK
+(drawing: software)` while the engine is ready but has not drawn yet and
+`2D acceleration: YES` after it has drawn a presenter request. The tray
+notice and the log say the same: `[accel] summary accelerated=<0|1> driver=
+reason= used=<0|1>` and `[desktop] accel fills= copies= writes= fallback=
+frames= lfb_bytes=`. What to read after a T23 trial (dev diary 2026-10-22-06):
+`[accel] summary ... used=1` with `[desktop] accel copies>0`, `[net] dhcp
+state=bound ip=...`, `[usb-storage] bind ... max_sectors=128`, `DFV2 IFS
+active` with a DOS game and `[sched] desktop_share` during the game.
 
 ## NTFS host fixtures (f4-03)
 

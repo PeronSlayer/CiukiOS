@@ -13,7 +13,7 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
 # are mandatory; leak detection is explicitly not claimed by this runner.
 printf '%s\n' 'SANITIZERS ASan=on UBSan=on LSan=off (sandbox ptrace restriction)'
 missing=0
-for tool in clang python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm; do
+for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -38,6 +38,50 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
 build/host/fs/test_vfs_contention
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_vfs_urgent_admission.c -o build/host/fs/test_vfs_urgent_admission
+build/host/fs/test_vfs_urgent_admission
+rm build/host/fs/test_vfs_urgent_admission
+# f1-87: T23 request mix and 111 ms device commands. The strict amendment-1
+# gate also requires bounded logical holds; diagnostics alone cannot pass B.
+# f1-93 (unconditional): the 1.0.0 alpha cold paths at 106 ms per command,
+# including the DOS VM's logical C: through the production dos_file_volume.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/vm/dos_file_volume.c \
+    tests/host/fs/test_t23_holds.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_t23_holds
+tag_status=0
+build/host/fs/test_t23_holds --missing-tag || tag_status=$?
+if [[ $tag_status != 1 ]]; then
+    echo 'FAIL: untagged volume hold was accepted' >&2; exit 1
+fi
+if [[ ${CIUKI_F187_REQUIRE_BOUNDED:-0} == 1 ]]; then
+    build/host/fs/test_t23_holds --require-bounded
+else
+    build/host/fs/test_t23_holds
+fi
+rm build/host/fs/test_t23_holds
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_fat_transactions.c -o build/host/fs/test_fat_transactions
+build/host/fs/test_fat_transactions
+rm build/host/fs/test_fat_transactions
+# f1-89: concurrent writers/namespace mutators/readers through the public
+# VFS; no internal EAGAIN may surface; remount and fsck must be clean.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_fat_concurrency.c -o build/host/fs/test_fat_concurrency
+build/host/fs/test_fat_concurrency build/host/fs/concurrency.img
+fsck.fat -n build/host/fs/concurrency.img
+rm build/host/fs/concurrency.img build/host/fs/test_fat_concurrency
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs tests/host/fs/test_blkreq_timer.c \
     -o build/host/fs/test_blkreq_timer
 build/host/fs/test_blkreq_timer
@@ -47,6 +91,12 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    tests/host/fs/test_cache_reservation.c -o build/host/fs/test_cache_reservation
+build/host/fs/test_cache_reservation
+rm build/host/fs/test_cache_reservation
 # F1-82: deterministic dirty-budget/reservation/error cases, then the timed
 # 10 MiB production FAT/VFS copy versus a 16 KiB / 20 ms reader.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -62,6 +112,81 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
+# Native desktop path/fd adapters must meet the same cold-device hold bound;
+# f1-93 adds stat, executable image read, readdir and open at 106 ms.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+    tests/host/proc/files_holds_test.c tests/host/proc/signal_legacy.c tests/host/proc/desktop_legacy.c \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/path.c \
+    src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c tests/host/fs/fake.c \
+    src/kernel/probes/f2_probes_files.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released \
+    -o build/host/fs/files_holds_test
+build/host/fs/files_holds_test build/host/fs/fat32.img build/host/fs/fat16.img
+# f1-93b: the T23 b453bc92 desktop#31 directory compare (2,000 entries, cold
+# cache, 106 ms per command, a starved holder that loses 100 ms at every
+# preemption point), on the T23 C: geometry (FAT32, 4 KiB clusters, as
+# scripts/build_image.py) and on 512-byte clusters. Sorted copy: the
+# directory order does not depend on the host file system.
+rm -rf build/host/fs/folder-src build/host/fs/folder32.img build/host/fs/folder32s1.img
+python3 -c 'import os,sys; r=os.path.join(sys.argv[1],"Desktop"); os.makedirs(r,exist_ok=True); [open(os.path.join(r,"i%04d Desktop item.txt"%i),"wb").close() for i in range(2000)]' build/host/fs/folder-src
+truncate -s 288M build/host/fs/folder32.img
+mkfs.fat --invariant -F 32 -S 512 -s 8 -f 2 -i 00C1A93B build/host/fs/folder32.img > /dev/null
+cp --sparse=always build/host/fs/fat32.img build/host/fs/folder32s1.img
+for folder in folder32 folder32s1; do
+    MTOOLSRC=build/host/fs/mtoolsrc mmd -i "build/host/fs/$folder.img" ::/Documents ::/Documents/Desktop
+    ( export LC_ALL=C; MTOOLSRC=build/host/fs/mtoolsrc mcopy -i "build/host/fs/$folder.img" build/host/fs/folder-src/Desktop/* ::/Documents/Desktop/ )
+    MTOOLSRC=build/host/fs/mtoolsrc mmd -i "build/host/fs/$folder.img" "::/Documents/Desktop/Zz Sub"
+    build/host/fs/files_holds_test --desktop31 "build/host/fs/$folder.img" build/host/fs/fat16.img
+    fsck.fat -n "build/host/fs/$folder.img" > /dev/null
+done
+rm -rf build/host/fs/folder-src build/host/fs/folder32.img build/host/fs/folder32s1.img
+rm build/host/fs/files_holds_test
+# f9-02: sdk/libdisk over the production lease code (disklease.c, mount.c,
+# fat.c, cache.c) on file-backed disks. Oracles: build_image.py + mkfs.fat
+# (libdisk_oracle.py), fsck.fat -n, mtools, the f1-22 corruption fixtures.
+rm -rf build/host/fs/libdisk
+python3 tests/host/libdisk_oracle.py --out build/host/fs/libdisk
+python3 sdk/libdisk/gen_boot.py --out build/host/fs/libdisk/libdisk_boot.c
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs -Isdk/libdisk/include -Isdk/libdisk -Itests/host \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    src/kernel/fs/ntfs_fs.c src/kernel/fs/ntfs_ro.c src/kernel/fs/mount.c src/kernel/fs/pagefile.c src/kernel/fs/disklease.c \
+    src/kernel/core/bootlog.c src/kernel/drivers/blkpart.c src/kernel/lib/sha256.c src/kernel/lib/fmt.c \
+    sdk/libdisk/disk.c sdk/libdisk/format.c sdk/libdisk/sha256.c build/host/fs/libdisk/libdisk_boot.c \
+    tests/host/fs/fake.c tests/host/libdisk_files.c tests/host/libdisk_test.c \
+    -Wl,--wrap=storage_writer_start -o build/host/fs/libdisk_test
+build/host/fs/libdisk_test build/host/fs/libdisk
+# The real native boundary: user copies/pins, process inheritance/death,
+# raw dispatch and published-volume cold-read reservations after f9-01.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+    tests/host/proc/disk_test.c tests/host/proc/signal_legacy.c tests/host/proc/desktop_legacy.c \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/path.c \
+    src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    src/kernel/fs/partition.c src/kernel/fs/mount.c src/kernel/fs/disklease.c \
+    src/kernel/drivers/blkpart.c src/kernel/drivers/disk_dev.c tests/host/fs/fake.c \
+    -o build/host/fs/native_disk_test
+build/host/fs/native_disk_test build/host/fs/fat32.img build/host/fs/libdisk/volume-1g.img
+rm build/host/fs/native_disk_test
+# Archive extraction is not exercised by directly linking the test objects.
+for source in sdk/libdisk/disk.c sdk/libdisk/format.c sdk/libdisk/sha256.c build/host/fs/libdisk/libdisk_boot.c; do
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Isrc/kernel/include -Isdk/libdisk/include -Isdk/libdisk -c "$source" \
+        -o "build/host/fs/libdisk/$(basename "$source" .c).o"
+done
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -Isdk/libdisk/include -DLIBDISK_LINK_BACKEND -c tests/host/libdisk_link_test.c \
+    -o build/host/fs/libdisk/native.o
+ar rcs build/host/fs/libdisk/libdisk.a build/host/fs/libdisk/*.o
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -Isdk/libdisk/include tests/host/libdisk_link_test.c -Lbuild/host/fs/libdisk -ldisk \
+    -o build/host/fs/libdisk/link_test
+build/host/fs/libdisk/link_test
+rm -rf build/host/fs/libdisk build/host/fs/libdisk_test
 # f0-49: production pagefile adapter: slot map oracle, in-place growth and
 # shrink, exclusivity, reserved records, I/O failures and power cuts.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -219,6 +344,7 @@ for bits in 12 16 32; do
     build/host/fs/test_fs read "$image"
     build/host/fs/test_fs fault "$image"
     build/host/fs/test_fs crash "$image"
+    build/host/fs/test_fs txcrash "$image"
     cp --sparse=always "$image" build/host/fs/work.img
     build/host/fs/test_fs write build/host/fs/work.img
     fsck.fat -n build/host/fs/work.img

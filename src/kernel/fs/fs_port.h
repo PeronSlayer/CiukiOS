@@ -19,14 +19,27 @@ struct vfs_request {
     uint64_t owner; struct vfs_wait_info *wait;
     int *cleanup_status; /* first failed mutation cleanup, not ordinary DOS errors */
     struct fs_task_identity task; /* diagnostic caller across worker calldowns */
-    const char *operation; /* optional short diagnostic tag, copied on admission */
+    const char *operation; /* short diagnostic tag, copied on admission */
+    const char *site; /* static family: native, dos, writer, mount, vfs */
+    bool urgent_reader; /* deadline-sensitive audio; never inferred from a filename */
 };
 struct fs_request_scope { struct fs_request_scope *next; uintptr_t task; const struct vfs_request *request; };
 void fs_request_enter(struct fs_request_scope *,const struct vfs_request *);
 void fs_request_leave(struct fs_request_scope *);
 const struct vfs_request *fs_request_current(void);
+/* Opaque identity of the calling task (pthread on the host). Used only to
+ * recognise the owner of an f1-89 writer turn; never dereferenced. */
+uintptr_t fs_task_token(void);
 int fs_request_check(void);
 void fs_request_wait(enum vfs_wait_reason,uint64_t begin,int outcome);
+/* f1-98 (R2): a waiter that polls (request pause, event wait) for a drive's
+ * reservation, guard or writer turn, or for a lock, names the holder (an
+ * fs_task_token, 0 = none/withdraw) and the held object; the kernel lends the
+ * holder the waiter's priority (sync.h ksync_depend). The holder calls
+ * fs_depend_release(object) when it gives that object up, so the inherited
+ * priority never outlives the hold. */
+#define FS_DEPEND_DRIVE 1u
+#define FS_DEPEND_CACHE 2u
 #ifdef FS_HOST
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +71,13 @@ static inline void fs_lock_drop(fs_lock *l) {
     if (fs_lock_released) fs_lock_released(l);
     if (pthread_mutex_unlock(l)) abort();
 }
+/* Host: observers only (fs_port.c); a pthread mutex names no owner. */
+void fs_depend(uintptr_t holder,const void *object,unsigned reason);
+void fs_depend_release(const void *object);
+void fs_host_depend(uintptr_t holder,const void *object,unsigned reason) __attribute__((weak));
+void fs_host_depend_release(const void *object) __attribute__((weak));
+static inline uintptr_t fs_lock_holder(fs_lock *l) { (void)l; return 0; }
+static inline unsigned fs_lock_reason(fs_lock *l) { (void)l; return FS_DEPEND_DRIVE; }
 struct fs_event { pthread_mutex_t mutex; pthread_cond_t changed; uint32_t sequence; };
 static inline void fs_event_init(struct fs_event *q) {
     memset(q,0,sizeof(*q)); if (pthread_mutex_init(&q->mutex,0) || pthread_cond_init(&q->changed,0)) abort();
@@ -142,8 +162,20 @@ static inline void fs_lock_take(fs_lock *l) {
         kwait_wait_ticket_until(&l->wait,fs_ticket_ready,&t,deadline_after_ms(1000),&t.ticket);
     }
 }
+static inline void fs_depend(uintptr_t holder,const void *object,unsigned reason) {
+    if (ksync_depend) ksync_depend((struct task *)holder,object,reason);
+}
+static inline void fs_depend_release(const void *object) {
+    if (ksync_depend_release) ksync_depend_release(object);
+}
+static inline uintptr_t fs_lock_holder(fs_lock *l) { return (uintptr_t)l->wait.owner; }
+/* Rank 3 is the block cache (cache.c); namespace and volume locks guard a
+ * drive's reservations. */
+static inline unsigned fs_lock_reason(fs_lock *l) { return l->rank==3 ? FS_DEPEND_CACHE : FS_DEPEND_DRIVE; }
 static inline void fs_lock_drop(fs_lock *l) {
-    uint32_t f=irq_save(); l->held=false; l->serving++; kwait_set_owner(&l->wait,0); kpreempt_release(); irq_restore(f); kwait_wake_all(&l->wait);
+    uint32_t f=irq_save(); l->held=false; l->serving++; kwait_set_owner(&l->wait,0); kpreempt_release(); irq_restore(f);
+    fs_depend_release(l); /* f1-98: polling requests stop lending their priority */
+    kwait_wake_all(&l->wait);
 }
 struct fs_event { struct kwait wait; uint32_t sequence; };
 struct fs_event_ticket { struct fs_event *event; uint32_t sequence; };
@@ -208,9 +240,11 @@ static inline int fs_lock_take_request(fs_lock *lock,enum vfs_wait_reason reason
     if (!r) { fs_lock_take(lock); return 0; }
     uint64_t begin=r->now(r->arg); int error=fs_request_check(); bool blocked=false;
     while (!error && !fs_lock_try_take(lock)) {
-        blocked=true; r->pause(r->arg); error=fs_request_check();
+        blocked=true; fs_depend(fs_lock_holder(lock),lock,fs_lock_reason(lock));
+        r->pause(r->arg); error=fs_request_check();
     }
-    if (blocked) fs_request_wait(reason,begin,error); return error;
+    if (blocked) { fs_depend(0,0,0); fs_request_wait(reason,begin,error); }
+    return error;
 }
 /* A published reservation/reference must retire under its bookkeeping lock.
  * Cancellation is observed during reacquisition; no further storage is issued.
@@ -219,7 +253,11 @@ static inline int fs_lock_retake(fs_lock *lock,enum vfs_wait_reason reason) {
     int error=fs_lock_take_request(lock,reason);
     if (error) {
         const struct vfs_request *r=fs_request_current();
-        while (!fs_lock_try_take(lock)) r->pause(r->arg);
+        bool blocked=false;
+        while (!fs_lock_try_take(lock)) {
+            blocked=true; fs_depend(fs_lock_holder(lock),lock,fs_lock_reason(lock)); r->pause(r->arg);
+        }
+        if (blocked) fs_depend(0,0,0);
     }
     return error;
 }
@@ -256,6 +294,11 @@ void fs_calendar_init(void);
 void fs_worker_enter(void);
 void fs_worker_leave(void);
 void fs_service(void);
+#ifdef FS_HOST
+/* f1-93b: optional host observer of every fs_service point (the kernel's
+ * only preemption point inside filesystem work). */
+void fs_host_service(void) __attribute__((weak));
+#endif
 /* No dependency on the host's errno ABI. All public failures are NEGATIVE. */
 enum fs_error {
     FS_EAGAIN=11, FS_EIO=5, FS_ENOENT=2, FS_EBADF=9, FS_ENOMEM=12, FS_EACCES=13,

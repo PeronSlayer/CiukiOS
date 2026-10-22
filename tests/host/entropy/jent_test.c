@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL jent %u: %s\n",__LINE__,#x); abort(); } } while(0)
-static unsigned fixture=0x12345678, yields, captured, allocated;
+static unsigned fixture=0x12345678, yields, captured, allocated, points;
 static uint64_t ticks, cycles;
 static bool stall, timed, no_memory;
 static uint64_t clock_tick(void)
@@ -23,7 +23,8 @@ static void yield(void) { yields++; if(timed) ticks += 1000; }
 static void *allocate(size_t size) { if(no_memory)return NULL;allocated++;return malloc(size); }
 static void release(void *p) { CHECK(allocated);allocated--;free(p); }
 static void raw(uint64_t delta,uint64_t gcd,unsigned osr) { (void)delta;CHECK(gcd && osr>=3);captured++; }
-static const struct entropy_jent_ops ops={clock_tick,ms,allocate,release,yield,raw};
+static void point(void) { points++; }
+static const struct entropy_jent_ops ops={clock_tick,ms,allocate,release,yield,raw,point};
 static void health(void)
 {
     struct rand_data ec={.osr=3,.fips_enabled=1};
@@ -48,21 +49,38 @@ int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);health();
     uint8_t bytes[32];
-    entropy_jent_begin(&ops);CHECK(!entropy_jent_init());
+    entropy_jent_begin(&ops);CHECK(!entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MIN_OSR));
     CHECK(!entropy_jent_read(bytes) && captured>1024 && yields>captured);
     entropy_jent_begin(&ops);ticks+=ENTROPY_COLLECT_MS;memset(bytes,0xa5,sizeof(bytes));
     CHECK(entropy_jent_read(bytes) && entropy_jent_expired());
+    struct entropy_jent_report report;entropy_jent_report(&report);
+    CHECK(!report.permanent && report.result<0 && !report.alarm);   /* the budget is not a health failure */
     for(unsigned i=0;i<sizeof(bytes);i++)CHECK(bytes[i]==0xa5);
     entropy_jent_close();CHECK(!allocated);
-    timed=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init());
+    timed=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR));
     CHECK(entropy_jent_expired() && entropy_jent_rounds()<=5);
     entropy_jent_close();CHECK(!allocated);timed=false;
     entropy_jent_begin(&ops);
     struct rand_data ec={0};
     for(unsigned i=0;i<ENTROPY_COLLECT_ROUNDS;i++)CHECK(!ciuki_jent_round(&ec));
     CHECK(ciuki_jent_round(&ec) && entropy_jent_expired() && (ec.health_failure & JENT_RCT_FAILURE_PERMANENT));
-    stall=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init());entropy_jent_close();CHECK(!allocated);stall=false;
-    no_memory=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init());entropy_jent_close();CHECK(!allocated);
+    stall=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR));
+    entropy_jent_report(&report);CHECK(report.result==ECOARSETIME && report.osr==ENTROPY_JENT_MIN_OSR);   /* no OSR retry for a stopped clock */
+    entropy_jent_close();CHECK(!allocated);stall=false;
+    no_memory=true;entropy_jent_begin(&ops);CHECK(entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR));
+    entropy_jent_report(&report);CHECK(report.result==EMEM && report.osr==ENTROPY_JENT_MIN_OSR);
+    entropy_jent_close();CHECK(!allocated);
+    /* f6-21: the pinned buffer is zeroed and erased in 16 KiB chunks with a
+     * boundary before the allocation and between chunks, never as rounds. */
+    no_memory=false;entropy_jent_begin(&ops);
+    unsigned before_points=points,before_yields=yields,before_rounds=entropy_jent_rounds();
+    uint8_t *buffer=ciuki_jent_alloc(262144);CHECK(buffer && points==before_points+16);
+    for(unsigned i=0;i<262144;i++)CHECK(!buffer[i]);
+    memset(buffer,0x5a,262144);ciuki_jent_free(buffer,262144);
+    CHECK(points==before_points+31 && yields==before_yields && entropy_jent_rounds()==before_rounds && !allocated);
+    buffer=ciuki_jent_alloc(8192);CHECK(buffer && points==before_points+32);ciuki_jent_free(buffer,8192);
+    CHECK(points==before_points+32 && !allocated);
     puts("PASS actual library synthetic-clock init/read, bounded time/rounds, stalled clock and allocation refusal; all allocations freed");
+    puts("PASS f6-21 adapter boundaries: 256 KiB zeroing/erasure in sixteen 16 KiB chunks, one boundary before the allocation, none counted as a round");
     return 0;
 }

@@ -32,6 +32,40 @@ static struct socket_object sockets[CIUKI_SOCKET_MAX];
 static unsigned object_generation, tcp_count, udp_count, listeners;
 static sys_mbox_t commands;
 static bool workers_ready;
+/* Protected counters, drained by the already allocated network watch message.
+ * At most one summary per category per ten-second window, no new timers. */
+struct tcp_record {
+    unsigned count,attempts,established,failed,pid;
+    uint32_t address; unsigned port; int error;
+    uint64_t due;
+};
+static struct tcp_record tcp_records[3];
+static void tcp_record(struct socket_object *s,unsigned kind,int error,unsigned state)
+{
+    if(s->type!=SOCK_STREAM)return;
+    sys_prot_t f=sys_arch_protect();struct tcp_record *r=&tcp_records[kind];
+    if(r->count!=UINT32_MAX)r->count++;
+    if(!state && r->attempts!=UINT32_MAX)r->attempts++;
+    if(state==1 && r->established!=UINT32_MAX)r->established++;
+    if(state==2 && r->failed!=UINT32_MAX)r->failed++;
+    r->pid=s->origin_pid;r->address=s->peer.address;r->port=lwip_ntohs(s->peer.port);r->error=error;
+    sys_arch_unprotect(f);
+}
+void ciuki_tcp_records(void)
+{
+    static const char *const names[]={"connect","reset","timeout"};
+    uint64_t now=cu_now();
+    for(unsigned i=0;i<3;i++){
+        sys_prot_t f=sys_arch_protect();struct tcp_record r=tcp_records[i];
+        bool emit=r.count && now>=r.due;
+        if(emit){tcp_records[i]=(struct tcp_record){.due=now+10000};}
+        sys_arch_unprotect(f);
+        if(!emit)continue;
+        const uint8_t *ip=(const uint8_t *)&r.address;
+        klog("[net] tcp %s count=%u attempts=%u established=%u failed=%u last_ip=%u.%u.%u.%u port=%u errno=%d pid=%u window_ms=10000",
+             names[i],r.count,r.attempts,r.established,r.failed,ip[0],ip[1],ip[2],ip[3],r.port,r.error,r.pid);
+    }
+}
 enum operation { OP_NEW, OP_BIND, OP_CONNECT, OP_LISTEN, OP_ACCEPT, OP_SEND, OP_RECV, OP_NAME, OP_OPTION };
 struct request {
     enum operation operation;
@@ -118,13 +152,19 @@ static void notify(struct netconn *conn, enum netconn_evt evt, u16_t length)
         struct socket_object *s = &sockets[i]; if (!s->used || s->conn != conn) continue;
         if (evt == NETCONN_EVT_RCVPLUS) s->receive_events++;
         if (evt == NETCONN_EVT_RCVMINUS) s->receive_events--;
-        if (evt == NETCONN_EVT_SENDPLUS) { s->send_events = 1; if (s->connecting) { s->connecting = false; s->connected = true; s->connect_result = 0; } }
+        if (evt == NETCONN_EVT_SENDPLUS) { s->send_events = 1; if (s->connecting) { s->connecting = false; s->connected = true; s->connect_result = 0; tcp_record(s,0,0,1); } }
         if (evt == NETCONN_EVT_SENDMINUS) s->send_events = 0;
         if (evt == NETCONN_EVT_ERROR) {
             int e = error_number(conn->pending_err);
             /* SYN refused is RST before a connection has been established. */
             if (s->connecting && e == -ECONNRESET) e = -ECONNREFUSED;
+            /* tcp_slowtmr reports exhausted SYN retries as ERR_ABRT. Our
+             * adapter's local teardown is marked control/closing/down. */
+            if(s->connecting && e==-ECONNABORTED && !s->control && !s->closing && !s->network_down)e=-ETIMEDOUT;
             if (e) {
+                if(s->connecting)tcp_record(s,0,-e,2);
+                if(conn->pending_err==ERR_RST)tcp_record(s,1,-e,2);
+                if(e==-ETIMEDOUT)tcp_record(s,2,-e,2);
                 s->error = -e; s->failed = true;
                 if (s->connecting) s->connect_result = e;
             } else {
@@ -364,10 +404,11 @@ static int attempt(struct request *r)
         e = tcpip_callback_wait(route_address_core, r); if (e) return error_number(e);
         if ((cancelled = commit(r))) return cancelled;
         s->peer = r->address;
+        tcp_record(s,0,0,0);
         s->connecting = s->type == SOCK_STREAM; s->failed = false; s->connect_result = -EINPROGRESS;
         e = netconn_connect(c, &ip, port);
-        if (e == ERR_OK) { s->connected = true; s->connecting = false; s->connect_result = 0; }
-        else if (e != ERR_INPROGRESS) { s->connecting = false; s->connect_result = error_number(e); }
+        if (e == ERR_OK) { s->connected = true; s->connecting = false; s->connect_result = 0; tcp_record(s,0,0,1); }
+        else if (e != ERR_INPROGRESS) { s->connecting = false; s->connect_result = error_number(e); tcp_record(s,0,-s->connect_result,2); }
         return error_number(e);
     case OP_LISTEN:
         if (s->type != SOCK_STREAM) return -EOPNOTSUPP;
@@ -895,9 +936,47 @@ struct dns_request {
     int status;
     unsigned generation;
     bool used, done, abandoned;
+    uint64_t started;
 };
 static struct dns_request lookups[CIUKI_DNS_MAX];
 static unsigned resolver_generation = 1;
+/* f6-22: the first answer and the first failure after each DNS server change
+ * are protected records; the totals go into the `[net] stack` line. The
+ * looked-up name is not recorded. Core thread only. */
+static unsigned resolver_recorded_generation, resolver_answers, resolver_failures;
+static bool resolver_answer_recorded, resolver_failure_recorded;
+void ciuki_resolver_counts(unsigned *answers, unsigned *failures)
+{ *answers = resolver_answers; *failures = resolver_failures; }
+static void dotted_text(uint32_t address, char out[16])
+{
+    const uint8_t *b = (const uint8_t *)&address; char *p = out;
+    for (unsigned i = 0; i < 4; i++) {
+        unsigned v = b[i];
+        if (v >= 100) *p++ = (char)('0' + v / 100);
+        if (v >= 10) *p++ = (char)('0' + v / 10 % 10);
+        *p++ = (char)('0' + v % 10);
+        *p++ = i < 3 ? '.' : 0;
+    }
+}
+static void resolver_record(const struct dns_request *r, bool answered, uint32_t address)
+{
+    ciuki_lwip_assert_core();
+    if (resolver_recorded_generation != r->generation) {
+        resolver_recorded_generation = r->generation;
+        resolver_answer_recorded = resolver_failure_recorded = false;
+    }
+    if (answered) resolver_answers++; else resolver_failures++;
+    if (answered ? resolver_answer_recorded : resolver_failure_recorded) return;
+    if (answered) resolver_answer_recorded = true; else resolver_failure_recorded = true;
+    char ip[16], first[16], second[16];
+    dotted_text(address, ip);
+    const ip_addr_t *a = dns_getserver(0), *b = dns_getserver(1);
+    dotted_text(a ? ip4_addr_get_u32(ip_2_ip4(a)) : 0, first);
+    dotted_text(b ? ip4_addr_get_u32(ip_2_ip4(b)) : 0, second);
+    klog("[net] resolver %s ip=%s servers=%s,%s elapsed_ms=%llu generation=%u",
+         answered ? "first_answer" : "first_failure", ip, first, second,
+         (unsigned long long)(cu_now() - r->started), r->generation);
+}
 /* The netif status callback runs AFTER upstream may abort/free TCP PCBs.
  * Retained endpoint/route state also identifies those sockets and listeners. */
 void ciuki_sockets_address_lost(uint32_t address)
@@ -929,8 +1008,11 @@ static void dns_done(const char *name, const ip_addr_t *address, void *arg)
     /* Upstream's callback cannot distinguish NXDOMAIN from retry exhaustion. */
     r->status = address && r->generation == resolver_generation ? 0 : 3;
     r->address = address ? ip4_addr_get_u32(ip_2_ip4(address)) : 0;
+    struct dns_request copy = *r;
     r->done = true; if (r->abandoned) r->used = false;
-    sys_arch_unprotect(f); cu_changed();
+    sys_arch_unprotect(f);
+    resolver_record(&copy, !copy.status, copy.address);
+    cu_changed();
 }
 static void dns_start(void *arg)
 {
@@ -957,14 +1039,38 @@ static void dns_abandon(void *arg)
     w->request->abandoned = true; if (w->request->done) w->request->used = false;
     sys_arch_unprotect(f); if (w->outer) w->outer(w->value);
 }
+static struct { char name[64]; uint32_t address; } resolve_overrides[NET_RESOLVE_OVERRIDES];
+int net_resolve_override(const char *name, uint32_t address)
+{
+    if (!name || strlen(name) >= sizeof(resolve_overrides[0].name) || !dns_name(name)) return -EINVAL;
+    sys_prot_t f = sys_arch_protect(); int slot = -1;
+    for (unsigned i = 0; i < NET_RESOLVE_OVERRIDES; i++) {
+        if (!strncmp(resolve_overrides[i].name, name, sizeof(resolve_overrides[i].name))) { slot = (int)i; break; }
+        if (slot < 0 && !resolve_overrides[i].address) slot = (int)i;
+    }
+    if (slot < 0) { sys_arch_unprotect(f); return -ENOSPC; }
+    if (address) { memcpy(resolve_overrides[slot].name, name, strlen(name) + 1); resolve_overrides[slot].address = address; }
+    else memset(&resolve_overrides[slot], 0, sizeof(resolve_overrides[slot]));
+    sys_arch_unprotect(f);
+    return 0;
+}
+static bool resolve_overridden(const char *name, uint32_t *address)
+{
+    bool found = false; sys_prot_t f = sys_arch_protect();
+    for (unsigned i = 0; i < NET_RESOLVE_OVERRIDES && !found; i++)
+        if (resolve_overrides[i].address && !strncmp(resolve_overrides[i].name, name, sizeof(resolve_overrides[i].name))) { *address = resolve_overrides[i].address; found = true; }
+    sys_arch_unprotect(f);
+    return found;
+}
 int net_resolve(struct process *p, const char *name, uint32_t *address, int *status)
 {
     if (!dns_name(name)) return -EINVAL;
+    if (resolve_overridden(name, address)) { *status = 0; return 0; }
     struct dns_request *r = NULL; sys_prot_t f = sys_arch_protect();
     for (unsigned i = 0; i < CIUKI_DNS_MAX; i++) if (!lookups[i].used) { r = &lookups[i]; memset(r, 0, sizeof(*r)); r->used = true; break; }
     sys_arch_unprotect(f);
     if (!r) { *status = 2; *address = 0; return 0; }
-    memcpy(r->name, name, strlen(name) + 1); r->generation = resolver_generation;
+    memcpy(r->name, name, strlen(name) + 1); r->generation = resolver_generation; r->started = cu_now();
     struct proc_thread *t = proc_thread_for(g_current);
     struct dns_waiter w = { r, t ? t->cleanup : NULL, t ? t->operation : NULL };
     if (t) { t->cleanup = dns_abandon; t->operation = &w; }

@@ -55,6 +55,10 @@ void w32_service_delegate(struct process *parent, struct process *child, const c
         role = NATIVE_CONTROL_REGISTRY;
     if (role && !w32_process_init(child))
         child->w32->service = role;
+    /* f1-98: the Win32 window server serves the desktop's windows; it keeps
+     * the desktop's minimum CPU share beside a game. */
+    if (role == W32_SERVICE_W32SRV && child->w32 && child->w32->service == role)
+        proc_share_group(child);
 }
 static struct process *server_for(uint32_t service)
 {

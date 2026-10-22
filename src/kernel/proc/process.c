@@ -310,9 +310,12 @@ bool proc_task_exiting(struct task *task, int code)
     return true;                        /* FPU release belongs to deferred teardown */
 }
 
+void disk_process_exit(struct process *) __attribute__((weak));
 static void close_resources(struct process *p)
 {
     if(w32_process_cleanup)w32_process_cleanup(p);
+    /* f9-02: death revokes a destination-disk lease (no disk I/O). */
+    if (disk_process_exit) disk_process_exit(p);
     if (p->fds) {
         for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
             struct proc_object *o = p->fds[i].object;

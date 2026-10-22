@@ -6,6 +6,16 @@
 #define E100_RX 8u
 #define E100_SETUP 16384u
 #define E100_TX 20480u
+/* RFD status bits 12:0 (Intel 8255x manual, table 49). Only bits 11 (CRC),
+ * 10 (alignment), 9 (no resources), 8 (DMA overrun), 7 (too short) and
+ * 4 (RX_ER) report a damaged frame. Bit 5 (type frame: every Ethernet II
+ * frame, IPv4 and ARP included), bit 2 (no address match), bit 1 (not the
+ * individual address: every broadcast and multicast frame) and bit 0
+ * (82557/8 receive collision, 82559 TCO indication) describe a good frame;
+ * Linux e100 accepts on C and OK alone. f6-22: the former mask 0x0fff
+ * rejected every frame on physical controllers and every broadcast frame
+ * on QEMU's eepro100 (DHCP OFFER/ACK included). */
+#define E100_RFD_ERRORS 0x0f90u
 struct e100_block {
     volatile uint16_t status, command;
     uint32_t link, buffer;
@@ -220,7 +230,7 @@ static int e100_poll(struct netif *d, uint8_t *out)
          * See docs/validation/f6-01-nic-drivers.md (F6-09). */
         bool complete_count = flags == 0xc000 || (!flags && (g_boot.flags & CBI_F_SMBIOS_QEMU));
         if (count > NET_FRAME_MAX || !complete_count) { d->stats.rx_errors++; return -5; }
-        if ((rfd->status & 0x2000) && !(rfd->status & 0x0fff) && count >= 60) {
+        if ((rfd->status & 0x2000) && !(rfd->status & E100_RFD_ERRORS) && count >= 60) {
             memcpy(out, rfd->data, count); length = count;
         } else d->stats.rx_errors++;
         /* Publish a new end marker before clearing the old one. Completed

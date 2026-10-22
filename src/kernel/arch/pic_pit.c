@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/cpustat.h>
 #include <ciuki/win32.h>
 #include <ciuki/work.h>
 extern void w32_shared_tick(void) __attribute__((weak));
@@ -78,9 +79,14 @@ static void timer_irq(struct trap_frame *tf)
 {
     (void)tf;
     g_ticks++;
+    /* f1-94: the PIT top half in marked phases (UART rearm and shared-tick
+     * queueing, timing/SMI sample, scheduler accounting, timer transfer). */
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_SERIAL);
     if (serial_tick) serial_tick();  /* idle TX rearm only; no polling or FIFO writes */
     if (w32_shared_tick) kwork_queue(shared_tick_work, 0);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_TIMING);
     timing_timer_irq();
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_SCHED);
     sched_tick();
 }
 

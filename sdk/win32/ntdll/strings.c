@@ -39,6 +39,8 @@ static uint8_t encode(WCHAR c) {
             return i + 0x80;
     return c <= 255 ? (uint8_t)c : '?';
 }
+WCHAR w32_ansi_decode(uint8_t c) { return decode(c); }
+uint8_t w32_ansi_encode(WCHAR c) { return encode(c); }
 /* Rtl string buffers come from the process heap, as on Windows, so that
  * RtlFreeHeap(GetProcessHeap()) and RtlFree*String are interchangeable.
  * Before the process heap exists (early loader use) core metadata is used. */

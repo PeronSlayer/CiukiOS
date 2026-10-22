@@ -10,6 +10,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <sched.h>
 struct event { pthread_cond_t condition; unsigned sequence; };
 static pthread_mutex_t gate = PTHREAD_MUTEX_INITIALIZER;
@@ -305,6 +306,18 @@ void cu_host_join(sys_thread_t id)
     struct thread_start *t = (void *)id; pthread_join(t->thread, NULL); t->used = false;
 }
 void cu_host_clock_offset(uint64_t value) { clock_offset = value; }
+/* f6-22: harnesses observe the kernel's `[net]` records (klog/klog_periodic
+ * in the kernel) through this hook, one complete line without a newline;
+ * with no hook installed the records are discarded. Weak: harnesses that
+ * link this file beside their own klog (dosvm_test) keep theirs. */
+void (*cu_host_record)(const char *line);
+static void host_record(const char *fmt, va_list ap)
+{
+    char line[256]; vsnprintf(line, sizeof(line), fmt, ap);
+    if (cu_host_record) cu_host_record(line);
+}
+__attribute__((weak)) void klog(const char *fmt, ...) { va_list ap; va_start(ap, fmt); host_record(fmt, ap); va_end(ap); }
+__attribute__((weak)) void klog_periodic(const char *fmt, ...) { va_list ap; va_start(ap, fmt); host_record(fmt, ap); va_end(ap); }
 void cu_host_shutdown(void)
 {
     for (unsigned i = 0; i < 7; i++) if (threads[i].used) pthread_cancel(threads[i].thread);

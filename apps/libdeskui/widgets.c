@@ -861,7 +861,7 @@ void du_render(struct du_ui *u)
     struct du_rect repaint=u->dirty==3 ? u->invalid :
         u->dirty==2 && u->dialog.kind==DU_DLG_PROGRESS ? u->dialog.box :
         (struct du_rect){0,0,c->width,c->height};
-    c->clip = repaint;
+    c->clip = repaint; u->rendered = repaint;
     du_fill(c, c->clip, DU_FACE);
     for (unsigned i = 0; i < u->count; i++) {
         struct du_widget *w = &u->widgets[i];

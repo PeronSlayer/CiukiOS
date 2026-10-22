@@ -6,6 +6,9 @@
 #include "../proc/files_test.c"
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 void w32_refusal_queue(struct process *p,uint32_t why,const char *name,uint32_t error){(void)p;(void)name;CHECK(why==W32_REFUSE_DRIVER&&error==5);}
 static struct w32_object *handles[64];
 static unsigned core_allocations;
@@ -76,6 +79,54 @@ static uint32_t path_request(const char *path, unsigned action) {
   struct ciuki_w32_file_args a = {.action = action, .path = USER};
   CHECK(!w32_file_call(client_thread, &a));
   return a.error;
+}
+/* f1-89 Amendment 1 item 2: a DOS delete parked after taking the writer
+ * turn but before publishing its tombstone, against Win32 SetFileAttributes
+ * of the same path. The attribute call must find the file gone and must
+ * never rewrite (resurrect) the deleted slot. */
+int __real_cache_reserve(struct block_cache *, struct blkdev *, const struct cache_reserve_sector *,
+                         unsigned, struct cache_reservation *);
+static atomic_bool race_armed, race_parked, race_release;
+static _Thread_local bool race_actor;
+int __wrap_cache_reserve(struct block_cache *c, struct blkdev *d, const struct cache_reserve_sector *set,
+                         unsigned n, struct cache_reservation *r) {
+  if (race_actor && atomic_exchange(&race_armed, false)) {
+    atomic_store(&race_parked, true);
+    while (!atomic_load(&race_release)) sched_yield();
+  }
+  return __real_cache_reserve(c, d, set, n, r);
+}
+static int race_delete_error;
+static void *race_delete(void *arg) {
+  (void)arg; race_actor = true;
+  struct vfs_table t; CHECK(!vfs_table_init(&vfs, &t, 2));
+  race_delete_error = vfs_delete(&t, "C:/WINDOWS/RACE.TXT");
+  vfs_table_destroy(&t); return 0;
+}
+static void *race_release_when_queued(void *arg) {
+  (void)arg;
+  for (bool queued = false; !queued; sched_yield()) {
+    vfs_lock(&vfs, 0); queued = vfs.turn_waiters[2] != 0; vfs_unlock(&vfs);
+  }
+  atomic_store(&race_release, true); return 0;
+}
+static uint32_t path_request(const char *path, unsigned action);
+static void delete_attr_race(void) {
+  int fd = file_open(client, "/WINDOWS/RACE.TXT", O_CREAT | O_RDWR, 0666);
+  CHECK(fd >= 0 && io(fd, "race", 4, true, false, 0) == 4 && !file_close(client, fd));
+  atomic_store(&race_parked, false); atomic_store(&race_release, false); atomic_store(&race_armed, true);
+  pthread_t deleter, releaser;
+  CHECK(!pthread_create(&deleter, 0, race_delete, 0));
+  while (!atomic_load(&race_parked)) sched_yield();
+  CHECK(!pthread_create(&releaser, 0, race_release_when_queued, 0));
+  uint32_t error = path_request("C:\\WINDOWS\\RACE.TXT", W32_F_ATTR);
+  CHECK(!pthread_join(releaser, 0) && !pthread_join(deleter, 0));
+  CHECK(!race_delete_error && error == 2);
+  struct vfs_table t; struct fat_entry e; CHECK(!vfs_table_init(&vfs, &t, 2));
+  CHECK(vfs_stat(&t, "C:/WINDOWS/RACE.TXT", &e) == -FS_ENOENT);
+  vfs_table_destroy(&t);
+  puts("PASS f1-89 delete versus SetFileAttributes: attribute call queued for the writer turn, "
+       "ERROR_FILE_NOT_FOUND, deleted slot not resurrected");
 }
 static struct ciuki_w32_file_args open_request(const char *path,
                                                unsigned access, unsigned share,
@@ -300,6 +351,7 @@ int main(int argc, char **argv) {
   CHECK(path_request("C:\\System", W32_F_MKDIR) == 5);
   amendment_file_identity();
   amendment_files();
+  delete_attr_race();
   struct ciuki_w32_file_args a =
       open_request("C:\\WINDOWS\\Long File.txt", 0xc0000000u, 1, 1);
   CHECK(!a.error && a.result);

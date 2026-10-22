@@ -229,8 +229,62 @@ static void ownership(void)
     setup(); root=peer(10,42); a=create(root,20,1,1,0,0); flush();
     fake_block=1;
     for (unsigned k=0;k<DESK_TX_MAX+1;k++) { msg(&m,DESK_PING,4,1,1); desk_put32(m.data+16,k); (void)desk_v3_receive(&d,root,&m); }
-    assert(d.clients[root].v3_failed); desk_flush(&d,root); fake_block=0; assert(!d.clients[a].window); cleanup();
+    /* f2-91: a full ring no longer fails the channel inside the silence deadline. */
+    assert(!d.clients[root].v3_failed && d.clients[root].v3_over_count>=1); fake_block=0; flush(); assert(d.clients[a].window); cleanup();
     puts("PASS v3 multiwindow: ownership, generations, topmost, modal owner death, transport loss and backpressure");
+}
+static void slow_client_storm(void)
+{
+    struct ciuki_message m; unsigned keys=0, buttons=0, last_motion=0, motions=0, sent0;
+    setup(); int root=peer(10,42); int a=create(root,20,1,1,0,0); flush(); d.focus=a;
+    d.now_ns=1000000000ull; sent0=fake_sent; fake_block=1;
+    for (unsigned k=1;k<=2000;k++) {
+        struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=(int)k,.value2=(int)k};
+        desk_event_message(&m,DESK_MOTION,&e); desk_queue(&d,a,&m);
+        if (k%500==0) { struct ciuki_input_event b={.type=CIUKI_INPUT_BUTTON,.code=1,.value=(int)(k/500&1)}; desk_event_message(&m,DESK_BUTTON,&b); desk_queue(&d,a,&m); }
+        if (k%700==0) { struct ciuki_input_event kk={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=(int)(k/700&1)}; desk_event_message(&m,DESK_KEY,&kk); desk_queue(&d,a,&m); }
+        d.now_ns+=1000000ull;
+    }
+    struct desk_client *r=&d.clients[root];
+    assert(!r->v3_failed && d.clients[a].window && d.clients[a].channel>=0);   /* 2 s < deadline */
+    assert(r->v3_busy && d.clients[a].unresponsive);                          /* busy path */
+    assert(r->v3_over_count>0 && r->v3_over_count<DESK_V3_OVER_MAX && !r->v3_over_lost);
+    fake_block=0; for (int n=0;n<8;n++) flush();
+    assert(!r->tx_count && !r->v3_over_count && !r->v3_busy && !d.clients[a].unresponsive);
+    for (unsigned k=sent0;k<fake_sent;k++) {
+        const struct ciuki_message *q=&fake_messages[k]; if (q->data[0]!=DESK_V3_VERSION) continue;
+        unsigned type=desk_get32(q->data+28);
+        if (q->data[1]==DESK_MOTION && type==CIUKI_INPUT_MOTION) { unsigned v=desk_get32(q->data+44); assert(v>last_motion); last_motion=v; motions++; }
+        if (q->data[1]==DESK_BUTTON) buttons++;
+        if (q->data[1]==DESK_KEY) keys++;
+    }
+    assert(last_motion==2000 && motions<2000 && motions>=DESK_TX_MAX && buttons==4 && keys==2);
+    cleanup();
+    /* ordering of keys/buttons relative to motion is preserved: K B K B pattern with merges between. */
+    setup(); root=peer(10,42); a=create(root,20,1,1,0,0); flush(); d.focus=a; d.now_ns=1000000000ull; sent0=fake_sent; fake_block=1;
+    for (unsigned k=0;k<DESK_TX_MAX;k++) { struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=1}; desk_event_message(&m,DESK_MOTION,&e); desk_queue(&d,a,&m); }
+    unsigned seq[]={DESK_MOTION,DESK_KEY,DESK_MOTION,DESK_MOTION,DESK_BUTTON,DESK_MOTION,DESK_KEY};
+    for (unsigned k=0;k<sizeof(seq)/sizeof(*seq);k++) {
+        struct ciuki_input_event e={.type=seq[k]==DESK_MOTION?CIUKI_INPUT_MOTION:seq[k]==DESK_KEY?CIUKI_INPUT_KEY:CIUKI_INPUT_BUTTON,.code=seq[k]==DESK_MOTION?0:1,.value=seq[k]==DESK_MOTION?(int)(100+k):1};
+        desk_event_message(&m,seq[k],&e); desk_queue(&d,a,&m);
+    }
+    r=&d.clients[root]; assert(r->v3_over_count==5);   /* K M B M K after the first M merged into the ring tail */
+    fake_block=0; for (int n=0;n<4;n++) flush();
+    unsigned got[8], ng=0, vals[8];
+    for (unsigned k=sent0+DESK_TX_MAX;k<fake_sent;k++) { got[ng]=fake_messages[k].data[1]; vals[ng++]=desk_get32(fake_messages[k].data+44); }
+    assert(ng==5 && got[0]==DESK_KEY && got[1]==DESK_MOTION && got[2]==DESK_BUTTON && got[3]==DESK_MOTION && got[4]==DESK_KEY);
+    assert(vals[1]==103);   /* last of the two merged motions wins */
+    cleanup();
+    /* the drop only after the deadline, with the record. */
+    setup(); root=peer(10,42); a=create(root,20,1,1,0,0); flush(); d.focus=a; d.now_ns=1000000000ull; fake_block=1;
+    for (unsigned k=0;k<DESK_TX_MAX+DESK_V3_OVER_MAX;k++) { struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=(int)(k&1)}; desk_event_message(&m,DESK_KEY,&e); desk_queue(&d,a,&m); }
+    r=&d.clients[root]; assert(!r->v3_failed && r->tx_count==DESK_TX_MAX && r->v3_over_count==DESK_V3_OVER_MAX);
+    d.now_ns+=4900000000ull; { struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=1}; desk_event_message(&m,DESK_KEY,&e); desk_queue(&d,a,&m); }
+    assert(!r->v3_failed);
+    d.now_ns+=200000000ull; desk_heartbeat(&d,d.now_ns);
+    assert(r->v3_failed); desk_flush(&d,root); fake_block=0; assert(!d.clients[a].window);
+    cleanup();
+    puts("PASS v3 slow client: merged motion, ordered keys/buttons, busy mark, drop only after the deadline");
 }
 static void order_msg(struct ciuki_message *m, unsigned id, unsigned flags, unsigned after,
                       unsigned after_gen, unsigned owner, unsigned owner_gen)
@@ -522,6 +576,6 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); window_order(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); frames(argv[2]);
+    protocol(); ownership(); window_order(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
     puts("PASS desktop v3 integration (host only)"); return 0;
 }

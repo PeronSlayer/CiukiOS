@@ -11,6 +11,10 @@
 #include <ciuki/ledger.h>
 #include <ciuki/reclaim.h>
 #include <ciuki/pager.h>
+#include <ciuki/smi.h>
+
+/* f1-100: the ThinkPad EC traffic record of the window (drivers/thinkpad_ec.c). */
+extern void thinkpad_ec_window_emit(void) __attribute__((weak));
 
 static struct task *stat_task;
 static uint64_t window_start, irq_cycles, exited_cycles, classes[P_COUNT];
@@ -18,16 +22,28 @@ static uint64_t stretch_max, resched_start, resched_max, paths[CPU_PATHS];
 static uint32_t stretch_eip, switches, overruns, boost_base;
 static char stretch_name[16] = "none", resched_name[16] = "none";
 static uint32_t stretch_id;
-struct overrun_event { char name[16]; uint32_t id, count; };
-static struct overrun_event overrun_events[16];
-static unsigned overrun_used, overrun_lost;
+/* consumed_us: the largest own device-window consumption at a demotion. */
+struct overrun_event { char name[16]; uint32_t id, count, consumed_us; };
+static struct overrun_event overrun_events[16], audio_events[4];
+static unsigned overrun_used, overrun_lost, audio_used, audio_lost;
+/* f1-98: reservation inheritances per window (from waiter to holder). */
+struct inherit_event { char from[16], to[16]; uint32_t from_id, to_id, count; uint8_t level, reason; };
+static struct inherit_event inherit_events[8];
+static unsigned inherit_used, inherit_lost;
+/* f1-101: audio producer boosts per task and window. */
+struct producer_event { char name[16]; uint32_t id, boosts, over_budget; uint64_t cycles; };
+static struct producer_event producer_events[8];
+static unsigned producer_used, producer_lost;
+static struct sched_share_stats share_base;
 static bool forced, threshold, resched_pending;
 static struct sched_stats sched_base;
 static struct {
     uint64_t start;
     uint32_t site;
     unsigned count;
-    struct { uint64_t stamp; enum cpu_irqoff_phase phase; } marks[8];
+    /* f1-94: the IRQ path, the PIT top half and schedule() in one section
+     * place up to 17 marks; the tail beyond capacity stays unclassified. */
+    struct { uint64_t stamp; enum cpu_irqoff_phase phase; } marks[20];
     const struct task *from, *to;
 } irqoff;
 static struct irqoff_long {
@@ -43,6 +59,89 @@ static uint64_t per_ms(void) { return g_tsc_per_ms ? g_tsc_per_ms : 1; }
 static uint32_t ms(uint64_t cycles) { return (uint32_t)(cycles / per_ms()); }
 static unsigned pm(uint64_t cycles, uint64_t total)
 { return total ? (unsigned)(cycles * 1000 / total) : 0; }
+
+/* f2-96: firmware (SMM) time is not task work. On the T23 every EC
+ * transaction raises two 2.1 ms SMIs (f1-100); trial 5a10eef4 logged 14
+ * audio_refill_overrun records with consumed_us=2182-2227, one SMI each
+ * charged to the refill's 2 ms own budget. Two conservative proofs, and only
+ * the scheduler budgets (device, audio refill, desktop share) leave the time
+ * out; run_cycles and the class totals stay raw:
+ *  - IF clear: a gap of 1 ms or more between two marks of straight-line
+ *    phases (the f1-94 TSC rule, cpu_irqoff_bounded);
+ *  - IF set: a PIT interrupt more than one period late (tick gap above 2 ms,
+ *    the f1-94 blackout rule). The missed edge fell inside SMM, or the CPU
+ *    would have taken it, so the time from the edge to the IRQ entry, after
+ *    the last IF-clear section and the task's last accounting point, was
+ *    spent outside the OS. V86 frames are excluded: a guest with IOPL 3 can
+ *    clear IF itself. */
+static uint64_t irqoff_credited, irqoff_last_end, pit_last, pit_phase;
+static uint64_t firmware_window, firmware_max, firmware_total;
+static uint32_t firmware_count;
+static uint64_t irqoff_firmware(uint64_t from, uint64_t now)
+{
+    if (!g_tsc_per_ms || !irqoff.start || now < irqoff.start || now - irqoff.start < g_tsc_per_ms) return 0;
+    unsigned count = irqoff.count;
+    bool tail = count <= ARRAY_SIZE(irqoff.marks); /* beyond capacity: unmeasured */
+    if (!tail) count = ARRAY_SIZE(irqoff.marks);
+    uint64_t total = 0;
+    for (unsigned i = 0; i < count; i++) {
+        uint64_t a = irqoff.marks[i].stamp;
+        uint64_t b = i + 1 < count ? irqoff.marks[i + 1].stamp : tail ? now : a;
+        if (a < from) a = from;
+        if (b > now) b = now;
+        if (b > a && b - a >= g_tsc_per_ms && cpu_irqoff_bounded(irqoff.marks[i].phase)) total += b - a;
+    }
+    return total;
+}
+static void firmware_note(uint64_t cycles)
+{
+    if (!cycles) return;
+    firmware_window += cycles; firmware_total += cycles; firmware_count++;
+    if (cycles > firmware_max) firmware_max = cycles;
+}
+/* The firmware time inside [from, now], the interval being charged. */
+static uint64_t firmware_take(struct task *t, uint64_t from, uint64_t now)
+{
+    uint64_t credit = t->firmware_credit;
+    t->firmware_credit = 0;
+    if (irqoff.start) {
+        uint64_t gap = irqoff_firmware(irqoff_credited > from ? irqoff_credited : from, now);
+        irqoff_credited = now;
+        firmware_note(gap); credit += gap;
+    }
+    return credit < now - from ? credit : now - from;
+}
+uint64_t cpu_firmware_cycles(void)
+{
+    uint32_t f = irq_save(); /* written by the PIT IRQ; no torn 64-bit read */
+    uint64_t total = firmware_total;
+    irq_restore(f);
+    return total;
+}
+static void pit_late(const struct trap_frame *tf, uint64_t now)
+{
+    uint64_t last = pit_last;
+    pit_last = now;
+    if (!g_tsc_per_ms || !last || now <= last) return;
+    /* An entry at most 1.5 periods after the previous one is on time: the
+     * PIT (mode 2) keeps its phase, so later edges follow from this stamp. */
+    if ((now - last) * 2 <= 3 * g_tsc_per_ms) { pit_phase = now; return; }
+    if (!g_current || now - last <= 2 * g_tsc_per_ms || (tf->eflags & (1u << 17))) return;
+    /* The missed edge: the first one after the previous entry (which may
+     * itself have been late, as for the second SMI of an EC transaction). */
+    uint64_t from = last + g_tsc_per_ms;
+    if (pit_phase && pit_phase <= last) {
+        uint64_t edge = pit_phase + g_tsc_per_ms;
+        for (unsigned n = 0; edge <= last && n < 64; n++) edge += g_tsc_per_ms;
+        if (edge > last && edge < from) from = edge;
+    }
+    if (irqoff_last_end > from) from = irqoff_last_end;
+    if (g_current->account_start > from) from = g_current->account_start;
+    /* This IRQ's own IF-clear section began at its entry, after the edge;
+     * a gap inside the entry path is the bounded-phase proof's. */
+    uint64_t to = irqoff.start && irqoff.start > from && irqoff.start < now ? irqoff.start : now;
+    if (to > from) { g_current->firmware_credit += to - from; firmware_note(to - from); }
+}
 static void name_copy(char *dst, const char *src)
 {
     unsigned i = 0;
@@ -58,6 +157,7 @@ void cpu_irqoff_begin(uint64_t start,uint32_t site)
     /* Most sections never schedule: do not clear the phase array or copy
      * task identities on their entry/exit. count bounds all stale slots. */
     irqoff.start=start; irqoff.site=site; irqoff.count=0; irqoff.from=0;
+    irqoff_credited=start;
 }
 void cpu_irqoff_mark(enum cpu_irqoff_phase phase)
 {
@@ -75,14 +175,22 @@ void cpu_irqoff_tasks(const struct task *from,const struct task *to)
 void cpu_irqoff_end(uint64_t end)
 {
     if (!irqoff.start) return;
+    /* f2-96: bounded gaps after the section's last charge lie in the open
+     * interval of the task now running (after a switch: the next task). */
+    if (g_current) {
+        uint64_t from=irqoff_credited>g_current->account_start ? irqoff_credited : g_current->account_start;
+        uint64_t gap=irqoff_firmware(from,end);
+        if (gap) { g_current->firmware_credit+=gap; firmware_note(gap); }
+    }
+    irqoff_last_end=end;
     uint64_t d=end-irqoff.start;
-    if (g_tsc_per_ms && end>=irqoff.start && d>=g_tsc_per_ms && d>irqoff_window.cycles) {
-        uint64_t measured=0,largest=0;
+    if (g_tsc_per_ms && end>=irqoff.start && d>=g_tsc_per_ms) {
+        uint64_t measured=0,largest=0,largest_start=0;
         enum cpu_irqoff_phase phase=CPU_IRQOFF_NONE;
         unsigned count=irqoff.count;
         if (count>ARRAY_SIZE(irqoff.marks)) count=ARRAY_SIZE(irqoff.marks);
         /* Raw capture above has no phase subtraction, accumulation/ranking.
-         * Only a qualifying section evaluates the bounded marks here. */
+         * Only a section of 1 ms or more evaluates the bounded marks here. */
         for (unsigned i=0;i<count;i++) {
             if (irqoff.marks[i].phase==CPU_IRQOFF_NONE) continue;
             uint64_t a=irqoff.marks[i].stamp;
@@ -90,17 +198,26 @@ void cpu_irqoff_end(uint64_t end)
             uint64_t b=i+1<count ? irqoff.marks[i+1].stamp : end;
             if (a<irqoff.start || b<a || b>end) continue;
             uint64_t elapsed=b-a; measured+=elapsed;
-            if (elapsed>largest) { largest=elapsed; phase=irqoff.marks[i].phase; }
+            if (elapsed>largest) { largest=elapsed; largest_start=a; phase=irqoff.marks[i].phase; }
         }
         if (measured>d) measured=d;
-        irqoff_window.cycles=d; irqoff_window.site=irqoff.site;
-        irqoff_window.gap=measured<d/2+d%2;
-        irqoff_window.phase=phase;
-        irqoff_window.phase_cycles=irqoff_window.gap ? d-measured : largest;
-        const struct task *from=irqoff.from ? irqoff.from : g_current;
-        const struct task *to=irqoff.from ? irqoff.to : g_current;
-        name_copy(irqoff_window.from,from ? from->name : "none");
-        name_copy(irqoff_window.to,to ? to->name : "none");
+        /* f1-94: every long section is offered to the SMI attribution, not
+         * only the window maximum; it samples SMI_STS once, after `end`. */
+        if (smi_section_end) {
+            struct smi_section x={irqoff.start,end,largest,largest_start,
+                largest && cpu_irqoff_bounded(phase)};
+            smi_section_end(&x);
+        }
+        if (d>irqoff_window.cycles) {
+            irqoff_window.cycles=d; irqoff_window.site=irqoff.site;
+            irqoff_window.gap=measured<d/2+d%2;
+            irqoff_window.phase=phase;
+            irqoff_window.phase_cycles=irqoff_window.gap ? d-measured : largest;
+            const struct task *from=irqoff.from ? irqoff.from : g_current;
+            const struct task *to=irqoff.from ? irqoff.to : g_current;
+            name_copy(irqoff_window.from,from ? from->name : "none");
+            name_copy(irqoff_window.to,to ? to->name : "none");
+        }
     }
     irqoff.start=0;
 }
@@ -133,10 +250,11 @@ void cpu_stretch_snapshot(char name[16], uint32_t *duration_ms)
 static void charge(struct task *t, uint64_t now)
 {
     uint64_t d = now - t->account_start;
+    uint64_t firmware = firmware_take(t, t->account_start, now);
     t->run_cycles += d;
     classes[t->account_prio] += d;
     t->account_start = now;
-    sched_charge_runtime(t, d, per_ms());
+    sched_charge_runtime(t, d - firmware, per_ms()); /* f2-96: budgets exclude SMM */
 }
 void cpu_account(void) { if (g_current) charge(g_current, stamp()); }
 void cpu_switch(struct task *prev, struct task *next)
@@ -173,20 +291,64 @@ void cpu_point(void)
     g_current->stretch_start = now; g_current->stretch_sampled = false; g_current->active_stretch_eip = 0;
     irq_restore(f);
 }
-void cpu_overrun(struct task *t)
+static void overrun_note(struct overrun_event *events, unsigned capacity, unsigned *used,
+                         unsigned *lost, struct task *t, uint64_t consumed)
 {
     t->account_prio = P_NORMAL; /* the IRQ entry already charged the device interval */
     overruns++; threshold = true;
     unsigned i = 0;
-    while (i < overrun_used && overrun_events[i].id != t->id) i++;
-    if (i == ARRAY_SIZE(overrun_events)) { overrun_lost++; return; }
-    if (i == overrun_used) {
-        overrun_used++;
-        name_copy(overrun_events[i].name, t->name);
-        overrun_events[i].id = t->id;
-        overrun_events[i].count = 0;
+    while (i < *used && events[i].id != t->id) i++;
+    if (i == capacity) { (*lost)++; return; }
+    if (i == *used) {
+        (*used)++;
+        name_copy(events[i].name, t->name);
+        events[i].id = t->id;
+        events[i].count = events[i].consumed_us = 0;
     }
-    overrun_events[i].count++;
+    events[i].count++;
+    uint64_t us = consumed * 1000 / per_ms();
+    if (us > events[i].consumed_us) events[i].consumed_us = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+}
+void cpu_overrun(struct task *t, uint64_t consumed)
+{
+    overrun_note(overrun_events, ARRAY_SIZE(overrun_events), &overrun_used, &overrun_lost, t, consumed);
+}
+void cpu_audio_overrun(struct task *t, uint64_t consumed)
+{
+    overrun_note(audio_events, ARRAY_SIZE(audio_events), &audio_used, &audio_lost, t, consumed);
+}
+void cpu_inherit(const struct task *from, const struct task *to, unsigned level, unsigned reason)
+{
+    uint32_t f = irq_save();
+    unsigned i = 0;
+    while (i < inherit_used && (inherit_events[i].from_id != from->id ||
+           inherit_events[i].to_id != to->id || inherit_events[i].reason != reason)) i++;
+    if (i == ARRAY_SIZE(inherit_events)) { inherit_lost++; irq_restore(f); return; }
+    struct inherit_event *e = &inherit_events[i];
+    if (i == inherit_used) {
+        inherit_used++;
+        name_copy(e->from, from->name); name_copy(e->to, to->name);
+        e->from_id = from->id; e->to_id = to->id; e->reason = (uint8_t)reason;
+        e->count = 0; e->level = 0;
+    }
+    e->count++;
+    if (level > e->level) e->level = (uint8_t)level;
+    irq_restore(f);
+}
+void cpu_audio_producer(const struct task *t, unsigned boosts, unsigned over_budget, uint64_t cycles)
+{
+    uint32_t f = irq_save();
+    unsigned i = 0;
+    while (i < producer_used && producer_events[i].id != t->id) i++;
+    if (i == ARRAY_SIZE(producer_events)) { producer_lost++; irq_restore(f); return; }
+    struct producer_event *e = &producer_events[i];
+    if (i == producer_used) {
+        producer_used++;
+        name_copy(e->name, t->name); e->id = t->id;
+        e->boosts = e->over_budget = 0; e->cycles = 0;
+    }
+    e->boosts += boosts; e->over_budget += over_budget; e->cycles += cycles;
+    irq_restore(f);
 }
 void cpu_trap_enter(const struct trap_frame *tf)
 {
@@ -204,6 +366,7 @@ void cpu_user_return(void)
 uint64_t cpu_irq_enter(const struct trap_frame *tf)
 {
     uint64_t now = stamp();
+    if (tf->vector == 0x20) pit_late(tf, now);
     if (g_current) charge(g_current, now);
     if (g_current && tf->vector == 0x20) {
         if ((tf->cs & 3) == 3 || (tf->eflags & (1u << 17))) g_current->user_ticks++;
@@ -258,7 +421,11 @@ struct top { char name[16]; uint32_t id; uint64_t cycles, kernel_ticks, user_tic
 static void cpu_emit(void)
 {
     struct top top[5] = {0};
-    struct overrun_event events[16];
+    struct overrun_event events[16], audio_overruns[4];
+    struct inherit_event inherits[8];
+    struct producer_event producers[8];
+    struct sched_share_stats share_now, share_delta;
+    struct { char name[16]; uint32_t id; uint64_t cycles; } device_top = { "none", 0, 0 };
     uint64_t counts[P_COUNT], path[CPU_PATHS];
     uint32_t f = irq_save();
     uint64_t now = stamp(), total = now - window_start;
@@ -295,6 +462,23 @@ static void cpu_emit(void)
     unsigned event_count = overrun_used, lost = overrun_lost;
     memcpy(events, overrun_events, event_count * sizeof(*events));
     overrun_used = overrun_lost = 0;
+    unsigned audio_count = audio_used, audio_dropped = audio_lost;
+    memcpy(audio_overruns, audio_events, audio_count * sizeof(*audio_overruns));
+    audio_used = audio_lost = 0;
+    unsigned inherit_count = inherit_used, inherit_dropped = inherit_lost;
+    memcpy(inherits, inherit_events, inherit_count * sizeof(*inherits));
+    inherit_used = inherit_lost = 0;
+    uint64_t firmware_us = firmware_window * 1000 / per_ms(), firmware_max_us = firmware_max * 1000 / per_ms();
+    uint32_t firmware_n = firmware_count;
+    firmware_window = firmware_max = 0; firmware_count = 0;
+    unsigned producer_count = producer_used, producer_dropped = producer_lost;
+    memcpy(producers, producer_events, producer_count * sizeof(*producers));
+    producer_used = producer_lost = 0;
+    sched_share_snapshot(&share_now);
+    share_delta = (struct sched_share_stats){ share_now.turns - share_base.turns,
+        share_now.lent_turns - share_base.lent_turns, share_now.turn_cycles - share_base.turn_cycles,
+        share_now.group_cycles - share_base.group_cycles };
+    share_base = share_now;
     memcpy(path, paths, sizeof(path));
     window_start = now; irq_cycles = exited_cycles = 0;
     memset(classes, 0, sizeof(classes)); memset(paths, 0, sizeof(paths));
@@ -322,10 +506,16 @@ static void cpu_emit(void)
             t->io_priority, t->inherited_priority, t->boosted, t->io_ticks, t->input_expiry
         };
         t->window_base = t->run_cycles; t->kernel_base = t->kernel_ticks; t->user_base = t->user_ticks;
+        uint64_t device = t->device_cycles - t->device_base;
+        t->device_base = t->device_cycles;
         t->max_stretch = 0; t->stretch_eip = 0;
         if (t->stretch_start) t->stretch_start = now;
         t->stretch_sampled = false; t->active_stretch_eip = 0;
         irq_restore(f);
+        if (device > device_top.cycles) {
+            device_top.cycles = device; device_top.id = sample.id;
+            name_copy(device_top.name, t->name);
+        }
         if (emit && !is_idle)
             klog_periodic("[cpu] task=%s#%u class=%u base=%u effective=%u input=%u io=%u inherited=%u starvation=%u input_until=%llu io_ticks=%u",
                 sample.name, sample.id, priority.class, priority.base, priority.effective,
@@ -339,12 +529,21 @@ static void cpu_emit(void)
         }
     }
     if (long_section.cycles && g_tsc_per_ms) {
-        static const char *const phases[]={"other","pick","fpu","address_space","ldt/debug","vm-enter","other"};
+        static const char *const phases[CPU_IRQOFF_PHASES]={"other","pick","fpu","address_space",
+            "ldt/debug","vm-enter","other","queue","proc","resume","irq-entry","irq-handler",
+            "irq-eoi","irq-exit","tick-timing","tick-sched","tick-timers","tick-serial"};
         klog_periodic("[kernel] irqoff_long site=%08x us=%llu phase=%s phase_us=%llu from=%s to=%s",
             long_section.site,long_section.cycles*1000/g_tsc_per_ms,
             long_section.gap ? "gap" : phases[long_section.phase],
             long_section.phase_cycles*1000/g_tsc_per_ms,long_section.from,long_section.to);
     }
+    if (smi_window_emit) smi_window_emit(total, emit);
+    if (thinkpad_ec_window_emit) thinkpad_ec_window_emit();
+    /* f2-96: firmware time left out of the scheduler budgets this window
+     * (every window that had some, like the EC traffic record). */
+    if (firmware_n)
+        klog_periodic("[sched] firmware_credit count=%u us=%llu max_us=%llu", firmware_n,
+            (unsigned long long)firmware_us, (unsigned long long)firmware_max_us);
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);
@@ -374,15 +573,20 @@ static void cpu_emit(void)
     }
     if (!at) line[0] = 0;
     klog_periodic("[cpu] top=%s", line);
+    /* f1-90: the largest consumer of the shared device budget this window. */
+    klog_periodic("[cpu] device_top task=%s#%u us=%llu", device_top.name, device_top.id,
+        (unsigned long long)(device_top.cycles * 1000 / per_ms()));
     klog_periodic("[kernel] stretch_max_ms=%u task=%s#%u eip=%08x resched_lat_max_ms=%u resched_task=%s irqoff_max_us=%u timer_gaps=%u/%u work_us=%u",
         stretch, name, sid, site, latency, late, timing.critical_us, timing.gaps_software, timing.gaps_unclassified, timing.critical_work_us);
     klog_periodic("[kernel] irqoff_section=%s site=%08x irqoff_max_us=%u violations=%u work_us=%u firmware_us=%u unclassified=%u owner=%s",
         timing.critical_section ? timing.critical_section : "none", timing.critical_site,
         timing.critical_us, timing.budget_violations, timing.raw_work_us,
         timing.raw_firmware_us, timing.unclassified_irqoff, timing.interrupt_owner[0] ? timing.interrupt_owner : "none");
-    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u",
+    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u task=%s#%u worker_site=%08x",
         timing.critical_us, timing.critical_work_us, timing.firmware_us,
-        timing.firmware_gaps, timing.unclassified_irqoff);
+        timing.firmware_gaps, timing.unclassified_irqoff,
+        timing.unclassified_task[0] ? timing.unclassified_task : "none",
+        timing.unclassified_task_id,timing.unclassified_worker_site);
     klog_periodic("[cpu] irqwork max_us=%u owner=%s site=%08x section=%s",
         timing.critical_work_us, timing.work_owner[0] ? timing.work_owner : "none", timing.work_site,
         timing.work_section ? timing.work_section : "none");
@@ -396,9 +600,33 @@ static void cpu_emit(void)
         log.writes, log.bytes_written, log.metadata_writes, log.rotations, log.dropped);
     klog_periodic("[kernel] bootlog dropped_protected=%u dropped_verbose=%u records_protected=%u records_verbose=%u",
         log.dropped_protected, log.dropped_verbose, log.records_dropped_protected, log.records_dropped_verbose);
+    klog_periodic("[kernel] bootlog dropped_statistic=%u records_statistic=%u budget_dropped_lines=%u budget_windows=%u",
+        log.dropped_statistic, log.records_dropped_statistic, log.budget_dropped_lines, log.budget_windows);
     for (unsigned i = 0; i < event_count; i++)
-        klog_periodic("[sched] device_overrun task=%s#%u count=%u", events[i].name, events[i].id, events[i].count);
+        klog_periodic("[sched] device_overrun task=%s#%u count=%u consumed_us=%u",
+            events[i].name, events[i].id, events[i].count, events[i].consumed_us);
     if (lost) klog_periodic("[sched] device_overrun lost=%u", lost);
+    for (unsigned i = 0; i < audio_count; i++)
+        klog_periodic("[sched] audio_refill_overrun task=%s#%u count=%u consumed_us=%u",
+            audio_overruns[i].name, audio_overruns[i].id, audio_overruns[i].count, audio_overruns[i].consumed_us);
+    if (audio_dropped) klog_periodic("[sched] audio_refill_overrun lost=%u", audio_dropped);
+    for (unsigned i = 0; i < inherit_count; i++)
+        klog_periodic("[sched] inherit from=%s#%u to=%s#%u level=%u reason=%s count=%u",
+            inherits[i].from, inherits[i].from_id, inherits[i].to, inherits[i].to_id, inherits[i].level,
+            inherits[i].reason == KSYNC_DEPEND_CACHE ? "cache" : "drive", inherits[i].count);
+    if (inherit_dropped) klog_periodic("[sched] inherit lost=%u", inherit_dropped);
+    /* f1-101: producers raised for a stream behind its lead, and withheld
+     * boosts once the shared 20 %/100 ms producer budget was spent. */
+    for (unsigned i = 0; i < producer_count; i++)
+        klog_periodic("[sched] audio_producer task=%s#%u boosts=%u over_budget=%u boost_us=%llu",
+            producers[i].name, producers[i].id, producers[i].boosts, producers[i].over_budget,
+            (unsigned long long)(producers[i].cycles * 1000 / per_ms()));
+    if (producer_dropped) klog_periodic("[sched] audio_producer lost=%u", producer_dropped);
+    /* f1-98: the desktop group's CPU and the turns its minimum share gave it. */
+    if (share_delta.group_cycles || share_delta.turns)
+        klog_periodic("[sched] desktop_share group_pm=%u turns=%u lent_turns=%u turn_ms=%u",
+            pm(share_delta.group_cycles, total), share_delta.turns, share_delta.lent_turns,
+            ms(share_delta.turn_cycles));
 }
 static void cpu_worker(void *arg)
 {

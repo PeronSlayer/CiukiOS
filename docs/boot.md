@@ -16,9 +16,13 @@ pressed in the menu window.
    `S for safe mode, L for log, H for Hardware check`, for about 3 s.
 3. The loader sets the VBE mode (black screen) and loads `VMM.ELF`.
 4. The kernel draws the boot splash, the original Ciuki photograph
-   (`misc/CiukiOS_SplashScreen.png`), as soon as it maps the framebuffer,
-   and then draws no log line. The splash stays until `/Programs/desktop` takes
-   the display (its display grant) and paints over it.
+   (`misc/CiukiOS_SplashScreen.png`) with the tagline and a progress bar
+   under its wordmark, as soon as it maps the framebuffer (in `kmain`,
+   before the stack-guard entropy collection, the scheduler and the
+   drivers; the display accelerator probe is scheduled only at the end of
+   driver activation), and then draws no log line. The bar follows the kernel's init phases. The splash stays
+   until `/Programs/desktop` takes the display (its display grant) and its
+   first frame paints over it.
 5. The desktop.
 
 The splash is a deterministic format conversion done at kernel build time by
@@ -28,10 +32,92 @@ the kernel (384 KiB of read-only data). The console scales it with nearest
 neighbour to the largest 4:3 area of the screen (1024x768: 2x; 800x600 and
 640x480 fill the screen) on black.
 
+### Boot splash progress (f0-55)
+
+Under the photograph's `CiukiOS` wordmark the console draws the tagline
+`Classic computing, one woof at a time.` in CiukiOS Sans
+(`assets/fonts/native/CIUKIOS.CFN`, regular, embedded in the kernel by
+`src/kernel/arch/font.asm`) and a thin rounded progress bar: 3/8 of the
+photograph's width, 6 rows at 1024x768 (4 to 9 rows at other sizes),
+centred on row 728 of 768, with anti-aliased ends. Its colours come from
+the photograph: a cream track (`#FFF4E4`, the wordmark's white, at 25 %
+over the photo) and a fill that runs from Ciuki's fur tan `#D99A41` to
+`#F7D099`. No other text is drawn. Splash areas smaller than 320x240 show
+the photograph only.
+
+The bar is indeterminate (a quarter-length segment sweeping the track,
+animated by the console worker every 40 ms) until the kernel reports its
+first phase. From then on it is determinate and moves only when a phase is
+reported, never on a timer.
+
+The first frame already shows state (f0-55b). `kmain` paints it before the
+PIT runs, at tick 0, with the segment centred on the track; every later
+sweep position keeps at least one step (1/40 of the sweep, 12 columns at
+1024x768) inside the track, so no frame shows an empty track. A phase that a
+quiet boot reports before the paint is kept, and the first frame shows its
+level. Until the scheduler starts (stack-guard entropy collection, 335 ms on
+the T23 with the 1.0.0 alpha; PIT calibration, 100 ms) no task exists and
+that first frame stays as painted. The sweep is then animated by the console
+worker (kernel task `console`, created in `sched_init`): `task_sleep_ms`
+wakes it every 40 ms from its own kernel timer (PIT IRQ 0), never from log
+traffic, and while the splash is on screen its base level is
+`SCHED_FOREGROUND + 2`, above the boot task that runs driver activation and
+the desktop spawn (`probes`, `P_INTERACTIVE`, including its I/O completion
+boost), so the wake preempts init at init's next blocking wait or
+`kpreempt_point` (the kernel does not preempt kernel code). At the handover
+or any other end of the bar the worker returns to `P_NORMAL`. The phases (`src/kernel/include/ciuki/splash.h`)
+follow the existing records, with shares weighted by the 1.0.0 alpha T23
+serial timeline (storage and audio dominate):
+
+| Record | Phase | Bar |
+| --- | --- | --- |
+| `[init] flag ...` | drivers | 4 % |
+| `[init] framebuffer ...` | framebuffer | 6 % |
+| `[init] input ...` | input | 8 % |
+| `[init] ata ...` | ATA | 12 % |
+| `[storage] kind=1` | disk scanned | 25 % |
+| `[storage] kind=2` | volume mounted | 40 % |
+| `[storage] kind=3` | boot identity | 52 % |
+| `[init] storage done` | storage | 60 % |
+| `[init] files result=` | files | 66 % |
+| `[init] audio init done` | audio | 86 % |
+| network and USB started | devices | 90 % |
+| `[supervisor] bootstrap: spawning` | supervisor | 92 % |
+| desktop image loaded | desktop | 97 % |
+| display grant | handover | 100 % |
+
+Progress never goes back; a skipped phase (safe mode has no ATA or volume
+records) only makes the next step larger. The display grant, installed by
+the supervisor before the desktop runs, completes the bar to 100 % and
+logs `[console] splash handover progress=1000 complete=1 phases= updates=
+claims= deferred= max_claim_pixels= max_claim_us=`; from then on the
+console draws nothing, the splash is never cleared, and the desktop's first
+frame replaces it. A wake (panic, desktop failure, watchdog) or a mode
+change also ends the bar; phases reported after the end are ignored.
+
+When the serial log is on (`serial=1`, the default `BOOT.CFG`; boot flag
+bit 1) each drawn phase level is also recorded once, as
+`[console] splash phase=<n> permille=<p>` with `<n>` the phase number of
+the table above (0 drivers to 13 handover): at most 14 lines per boot, in
+order, the 100 % line just before the handover line. A level drawn for
+several phases at once (reported before the first paint, or drawn by the
+worker after a refused claim) is recorded once, under the last of them.
+
+Each update redraws only the columns that changed, from the embedded
+photograph (no framebuffer reads, no allocation, no disk read), in console
+claims of at most 1024 pixels with the claim released before any yield. A
+claim refused by a busy presenter is retried by the console worker. The
+host test `tests/host/test_splash_progress.py` pins the 1024x768 frames at
+0 %, 40 %, 100 % and indeterminate (the tick-0 first frame) and checks the
+phase mapping, the claim budget, the handover, a first frame painted after
+three phases, the sweep driven by worker turns alone, the worker's class
+and the phase records.
+
 Every kernel log line still goes to COM1 and to the disk log
 (`C:\SYSTEM\LOGS`, once storage is qualified) and is kept in the console
-history. The serial capture is unchanged except for one line,
-`[console] quiet boot: log on serial and disk until the desktop starts`;
+history. The serial capture is unchanged except for
+`[console] quiet boot: log on serial and disk until the desktop starts`,
+the splash handover line above and the splash phase records;
 `L:CPU signature=`, `SELECT_READY`, the menu text, `L:SELECT_SOURCE=menu`,
 the `Ciuki VMM F0 build` banner and the supervisor lines are still there.
 
@@ -60,6 +146,18 @@ With a `BOOT.CFG` test request or safe flag the loader also prints its menu
 on screen as before. After `S`, `L` or `P` in a normal boot the loader prints
 its remaining lines on screen; the menu text itself stays serial-only there.
 A loader error is always printed on screen.
+
+The exact `BOOT.CFG` token `usbscan=0` (f1-87 diagnostic) keeps the initial
+USB enumeration and stops the periodic USB rescans; the loader only accepts
+the token and leaves it in the copied boot options for the kernel.
+
+The ThinkPad EC volume poll reads EC register 30h once every 2 s by default
+(f2-96): each EC transaction costs the T23 two 2.1 ms SMIs, so the poll is
+one transaction per 2 s, and the desktop mixer follows the volume keys within
+2 s. The exact `BOOT.CFG` token `ecpoll=0` turns the poll off (the mixer then
+follows the keys only when the tray volume popup opens) and wins over
+`ecpoll=1`, which selects the 1 Hz diagnosis rate. The loader only accepts
+the two tokens and leaves them in the copied boot options.
 
 ## Shutting down
 

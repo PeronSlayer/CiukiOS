@@ -7,7 +7,7 @@ python3 "$root/tests/host/vm_creation_model.py" "$out/vm_creation_model.inc"
 build_test() {
  local binary="$1"; shift
  clang -std=c17 -g -Wall -Wextra -Werror "$@" \
- -ffunction-sections -fdata-sections -Wl,--gc-sections \
+ -ffunction-sections -fdata-sections -Wl,--gc-sections,--wrap=fs_lock_acquired \
  -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$out" -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
  "$root/tests/host/audio/audio_test.c" "$root/tests/host/proc/signal_legacy.c" \
  "$root/src/kernel/audio/registry_master.c" \

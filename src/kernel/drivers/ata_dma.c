@@ -254,9 +254,28 @@ void ata_dma_start(struct ata_channel *c)
 void ata_dma_irq(struct ata_channel *c)
 {
     struct ata_dma *m = &c->dma;
+    /* f1-92: the first completion captured after Start is final; a later
+     * edge before disarm must not replace it with a stray snapshot. */
+    if (m->started && (m->irq_status & (ATA_BM_IRQ | ATA_BM_ERROR))) return;
     /* Read BEFORE clearing Start: exact-size PRDs must already be retired.
      * Read again after Stop to flush posted writes/prove inactivity. */
     uint8_t s = m->ops->in8(m->ctx, m->base + 2);
+    if (m->started && !(s & ATA_BM_ERROR)) {
+        /* f1-92. Intel "Programming Interface for Bus Master IDE Controller"
+         * 1.0, 3.1 Data Synchronization: Interrupt clear means the device did
+         * not generate this edge (libata ata_bmdma_port_intr: "not our irq").
+         * Interrupt with Active set while the drive still shows BSY or DRQ is
+         * not a completion either: ATA-6 9.7 sets interrupt pending only
+         * after the data or on an abort (BSY=0, DRQ=0). Stopping the master
+         * here would abort a live transfer, so leave it running and let the
+         * waiter classify the edge; the real completion edge follows. */
+        bool stray = !(s & ATA_BM_IRQ);
+        if (!stray && (s & ATA_BM_ACTIVE)) {
+            uint8_t drive = c->ops->in8(c->port_ctx, c->control); /* Alternate Status: no acknowledge */
+            stray = drive != 0xff && (drive & (0x80 | 0x08));   /* BSY or DRQ */
+        }
+        if (stray) { m->irq_status = (uint8_t)(s & ~ATA_BM_IRQ); return; }
+    }
     m->ops->out8(m->ctx, m->base, m->direction);
     uint8_t stopped = m->ops->in8(m->ctx, m->base + 2);
     m->irq_status = s | (stopped & (ATA_BM_ACTIVE | ATA_BM_ERROR));

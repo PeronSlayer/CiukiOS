@@ -316,6 +316,39 @@ DPMI real stubs 1040–11FF, protected stubs 1200–13FF, and DFVM v1 1800–1B5
 f3-56 specifies exact gate bytes, descriptor offsets and reservation tests.
 No new ROM page or conventional-memory reservation is needed.
 
+**DFV2 reservations (f3-56 Amendment 1, lead, 2026-10-21).** These replace the
+proposal order above; wire layout and diagrams are in
+[f3-56-unified-binding.md](../validation/f3-56-unified-binding.md).
+
+| Reserved item | Value | Reference |
+| --- | --- | --- |
+| Discovery | AX=C148h BX=4644h **CX=2** DX=564Dh → AX=0 CX=2 ES:DI=F000:1C10; v1 keeps CX=1 | `src/kernel/vm/dos_unified.c` `dos_unified_discover` |
+| Descriptor / bind record identities, version | `DFV2` / `DFB2`, version 2, descriptor 48 bytes, call record 48 bytes, bind record D0h bytes | `src/kernel/vm/dos_unified.h` |
+| Feature bits | 3Fh: direct, local 11xxh, lifecycle, critical continuation, two-phase late bind, single country-1/CP437 set | `dos_unified.h` `DFV2_FEATURES` |
+| ROM window | F000:1C00–1C3F: 1C00 direct `CD FE CB D2`, 1C04 local 11xxh `CD FE CB A2`, 1C08 lifecycle/bind `CD FE CB E2`, 1C0C critical continuation `CD FE F4 C2`, 1C10 descriptor; 1C40–1FFF stays free | `dos_unified.c` `dos_unified_rom`, asserts in `dos_file_vm.c` |
+| Role bytes | D2 / A2 / E2 / C2 | as above |
+| Driver identity | device `CIUKIDF$`, control block `CIUKIDFC` v2 at header+12h, identity `CIUKIDF2 F3-56 1` | `third_party/freedos/unified/ciuki/fork/drivers/ciukidf.asm` |
+| Kernel identity | `CIUKIDOS K2043 2` | `third_party/freedos/unified/ciuki/fork/kernel/ciukinit.c` |
+| Events | 0 = BIND in both phases, distinguished by the bind record's phase field (phase 0: driver registration at INIT, no kernel pointer; phase 1: the final layout after `init_kernel()`); 1–7 as above; 8 issued only by the monitor | `dos_unified.c`, `ciukidf.asm` |
+| Profile | `kernel=unified` (value 2) only, DOS=LOW required: the final bind refuses a kernel text or data range outside conventional memory | `dos_file_vm.c`, `dos_unified.c` |
+
+No other number is reserved by f3-56.
+
+f3-57 additions, reserved by the lead in f3-57 Amendment 1 (2026-10-21 21:52;
+private wire only, no lifecycle selector, no public ABI; rationale in
+`docs/validation/f3-57-unified-file-channel.md`). The f3-56 monitor-only
+PENDING continuation (1C0C) stays for requests that have no INT 24h frame:
+
+| Item | Value | Source |
+| --- | --- | --- |
+| Call status | 2 = CRITICAL (local role only): AX = INT 24h AH/AL, DI = cause, BP:SI = device; the driver raises it with INT 2Fh/1206h | `dos_unified.h` `DFV2_STATUS_CRITICAL`, `ciukidf.asm` |
+| Retry word | call record +2Ah: 0, or 1 = Retry of the previous CRITICAL request (+2Ch–2Fh stay zero) | `dos_unified.c` `parse_call` |
+| Fail result | 53h | `DFV2_FAIL_ON_INT24` |
+| Control block | `CIUKIDFC` v3, 24 bytes; +16h = offset of the policy byte (1 = `/LOCAL`) | `ciukidf.asm`, `hdr/ciuki.h` |
+| Identities | driver `CIUKIDF2 F3-57 1`, kernel `CIUKIDOS K2043 3` (supersede the f3-56 rows above) | `ciukidf.asm`, `ciukinit.c`, `dos_unified.c` |
+| CDS publication | owned drives `C000h` (IFS) at event 0 phase 1 commit | `dos_unified_ifs.c` |
+| Refused activation | the monitor stops the VM at the event 0 phase 1 gate call (`DOSVM_FAULT`) with one record `[dosvm] unified_activation_refused reason=<token>` ([a-z0-9_]), unless CIUKIDF.SYS has the `/LOCAL` policy; no event number added | `dos_unified.c` `dos_unified_activation_stop`, `dos_file_vm.c` |
+
 Reuse event selector **0** for the late BIND and **1–8** for existing meanings:
 1 PSP_CREATE, 2 PSP_SELECT, 3 EXEC_BEGIN, 4 EXEC_COMMIT, 5 EXEC_ROLLBACK,
 6 PROCESS_EXIT, 7 TSR, 8 VM_DESTROY. INIT discovery/driver registration does

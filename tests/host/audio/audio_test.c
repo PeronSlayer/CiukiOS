@@ -1129,6 +1129,137 @@ static int ctl(int fd,unsigned op,void *record,unsigned bytes)
     int r=call(CIUKI_SYS_DEVCTL,fd,op,USER2,bytes,0);
     CHECK(!ua_read(client->memory,record,USER2,bytes));return r;
 }
+static bool watch_source_read, source_urgent;
+void __real_fs_lock_acquired(fs_lock *lock);
+void __wrap_fs_lock_acquired(fs_lock *lock)
+{
+    __real_fs_lock_acquired(lock);
+    const struct vfs_request *r=fs_request_current();
+    if (watch_source_read && r && r->operation && !strcmp(r->operation,"read")) source_urgent=r->urgent_reader;
+}
+static void test_refill_demand(void)
+{
+    audio.ready=true; audio.error=0;
+    int fd=file_open(client,"/dev/audio",O_WRONLY|O_NONBLOCK,0); CHECK(fd>=0);
+    struct file_description *d=file_fd(client,fd); struct audio_stream *s=d->audio;
+    struct ciuki_audio_command c={.version=1,.size=sizeof(c)};
+    CHECK(!audio_refill_reader(client,4096)); /* open but unused */
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)) && !audio_refill_reader(client,4096));
+    s->started=true; s->queued=AUDIO_RING;
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)) && !audio_refill_reader(client,4096));
+    s->queued=AUDIO_RING*3/4;
+    d->flags=O_RDONLY;
+    CHECK(ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))==-EACCES && !audio_refill_reader(client,4096));
+    struct file_description probe={.node=d->node};
+    CHECK(audio_device_open(&probe,O_RDONLY)==-EACCES && !probe.audio);
+    d->flags=O_WRONLY|O_NONBLOCK;
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)));
+    struct task *saved=g_current, other={.generation=1,.prio=P_NORMAL,.state=T_RUNNING};
+    g_current=&other; CHECK(!audio_refill_reader(client,4096)); g_current=saved;
+    CHECK(audio_refill_reader(client,65536) && !audio_refill_reader(client,1));
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))); g_ticks+=20;
+    CHECK(!audio_refill_reader(client,1));
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))); audio_stream_reset(s);
+    s->started=true; CHECK(!audio_refill_reader(client,1)); /* generation withdrawn */
+    int source=file_open(client,"/refill-demand.bin",O_CREAT|O_RDWR,0666); CHECK(source>=0);
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)));
+    watch_source_read=true; source_urgent=false;
+    CHECK(call(CIUKI_SYS_READ,source,USER,4096,0,0)==0 && source_urgent);
+    g_ticks+=20; source_urgent=true;
+    CHECK(call(CIUKI_SYS_READ,source,USER,4096,0,0)==0 && !source_urgent);
+    watch_source_read=false;
+    CHECK(!file_close(client,source) && !file_close(client,fd));
+    puts("F1-87 C refill: writable started low-water stream, explicit reading thread, 64KiB/20ms bound, reset generation; native read urgency PASS");
+}
+/* f1-101: the scheduler side is task.c (t23_audio_producer_test.c); here a
+ * recording fake checks what the production device path and mixer report:
+ * who the producers are and the lead the mixer really has. */
+static struct { const void *source; struct task *task[SCHED_PRODUCER_ROLES]; bool behind; unsigned reports, ends; } producer_fake[AUDIO_STREAMS];
+static unsigned producer_fake_slot(const void *source)
+{
+    unsigned i=0;
+    while (i<AUDIO_STREAMS && producer_fake[i].source!=source) i++;
+    if (i==AUDIO_STREAMS) for (i=0;i<AUDIO_STREAMS && producer_fake[i].source;i++);
+    CHECK(i<AUDIO_STREAMS); producer_fake[i].source=source; return i;
+}
+void sched_audio_producer(const void *source,struct task *t,unsigned role)
+{ CHECK(role<SCHED_PRODUCER_ROLES); producer_fake[producer_fake_slot(source)].task[role]=t; }
+void sched_audio_lead(const void *source,bool behind)
+{
+    unsigned i=0; while (i<AUDIO_STREAMS && producer_fake[i].source!=source) i++;
+    if (i<AUDIO_STREAMS) { producer_fake[i].behind=behind; producer_fake[i].reports++; }
+}
+void sched_audio_source_end(const void *source)
+{
+    for (unsigned i=0;i<AUDIO_STREAMS;i++) if (producer_fake[i].source==source) {
+        unsigned ends=producer_fake[i].ends+1;
+        memset(&producer_fake[i],0,sizeof(producer_fake[i])); producer_fake[i].ends=ends;
+    }
+}
+void sched_audio_producer_stats(const void *source,struct sched_producer_stats *out)
+{
+    memset(out,0,sizeof(*out));
+    for (unsigned i=0;i<AUDIO_STREAMS;i++) if (producer_fake[i].source==source) {
+        out->flags=producer_fake[i].behind ? SCHED_PRODUCER_BEHIND|SCHED_PRODUCER_BOOSTED : 0;
+        out->boosts=7; out->over_budget=2; out->boost_cycles=3500; out->cycles_per_ms=1000;
+        for (unsigned r=0;r<SCHED_PRODUCER_ROLES;r++) if (producer_fake[i].task[r]) out->producers++;
+    }
+}
+static void test_producer_lead(void)
+{
+    audio.ready=true;audio.error=0;audio.running=true;idle_since=0;
+    memset(producer_fake,0,sizeof(producer_fake));
+    int fd=file_open(client,"/dev/audio",O_WRONLY|O_NONBLOCK,0); CHECK(fd>=0);
+    struct audio_stream *s=file_fd(client,fd)->audio;
+    struct ciuki_audio_producer r={.version=1,.size=sizeof(r)};
+    CHECK(!ctl(fd,AUDIO_GET_PRODUCER,&r,sizeof(r)) && !r.flags && !r.producers && !r.boosts);
+    /* the writing thread registers as the writer; one queued frame is behind */
+    uint8_t bytes[4*AUDIO_RING]; memset(bytes,0,sizeof(bytes));
+    CHECK(!ua_write(client->memory,USER,bytes,1024));
+    CHECK(call(CIUKI_SYS_WRITE,fd,USER,4,0,0)==4);
+    unsigned slot=producer_fake_slot(s);
+    CHECK(producer_fake[slot].task[SCHED_PRODUCER_WRITER]==g_current && producer_fake[slot].behind);
+    /* the declared reader registers too; the call itself never sets the state */
+    struct ciuki_audio_command c={.version=1,.size=sizeof(c)};
+    unsigned reports=producer_fake[slot].reports;
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)));
+    CHECK(producer_fake[slot].task[SCHED_PRODUCER_READER]==g_current);
+    CHECK(producer_fake[slot].reports==reports+1 && producer_fake[slot].behind); /* re-pushed state */
+    /* refilled only at the target lead (output frames, 48 kHz) */
+    unsigned fill=AUDIO_PRODUCER_TARGET-1-s->queued;
+    CHECK(audio_stream_enqueue(s,bytes,fill*4)==(int)fill*4);
+    CHECK(producer_fake[slot].behind && s->queued==AUDIO_PRODUCER_TARGET-1);
+    CHECK(audio_stream_enqueue(s,bytes,4)==4 && !producer_fake[slot].behind && s->queued==AUDIO_PRODUCER_TARGET);
+    /* the mixer's consumption, not the application, reports it behind again */
+    struct audio_frame out[AUDIO_QUANTUM];
+    audio_mix(out,AUDIO_QUANTUM); CHECK(!producer_fake[slot].behind && s->queued==AUDIO_PRODUCER_BEHIND);
+    audio_mix(out,1); CHECK(producer_fake[slot].behind);
+    /* the observation record translates the scheduler's state */
+    CHECK(!ctl(fd,AUDIO_GET_PRODUCER,&r,sizeof(r)));
+    CHECK(r.flags==(CIUKI_AUDIO_PRODUCER_BEHIND|CIUKI_AUDIO_PRODUCER_BOOSTED) && r.boosts==7 &&
+          r.over_budget==2 && r.producers==2 && r.boost_us==3500);
+    struct ciuki_audio_producer bad={.version=1,.size=sizeof(bad)-4};
+    CHECK(ctl(fd,AUDIO_GET_PRODUCER,&bad,sizeof(bad))==-EINVAL);
+    /* reset ends the source; the next write registers again */
+    struct ciuki_audio_command cmd={1,16,{0}};
+    unsigned ends=producer_fake[slot].ends;
+    CHECK(!ctl(fd,AUDIO_RESET,&cmd,sizeof(cmd)));
+    CHECK(producer_fake[slot].ends==ends+1 && !producer_fake[slot].task[0] && !s->producer_behind);
+    /* a 22.05 kHz stream: the lead is converted to output frames */
+    struct ciuki_audio_format f={1,32,22050,CIUKI_AUDIO_S16LE,2,0,{0}}; CHECK(!ctl(fd,AUDIO_SET_FORMAT,&f,sizeof(f)));
+    CHECK(audio_stream_enqueue(s,bytes,706*4)==706*4 && !s->producer_behind); /* 1536 output frames */
+    s->queued--; audio_stream_lead(s); CHECK(s->producer_behind);              /* 1534 < 1536 */
+    for (unsigned i=0;i<AUDIO_STREAMS;i++) CHECK(producer_fake[i].source!=s); /* nobody to raise yet */
+    CHECK(call(CIUKI_SYS_WRITE,fd,USER,4,0,0)==4);
+    slot=producer_fake_slot(s);
+    CHECK(producer_fake[slot].task[SCHED_PRODUCER_WRITER]==g_current && producer_fake[slot].behind); /* registered while behind */
+    /* failure and close end every boost */
+    audio_fail(-EIO); CHECK(!producer_fake[slot].behind); audio.ready=true; audio.error=0;
+    ends=producer_fake[slot].ends;
+    CHECK(!file_close(client,fd)); CHECK(producer_fake[slot].ends==ends+1 && !producer_fake[slot].source);
+    audio.running=false;
+    puts("F1-101 producer lead: writer and refill-reader registration, mixer-reported lead 1536/1792 with rate conversion, AUDIO_GET_PRODUCER, reset/failure/close end the source PASS");
+}
 static void test_stream_syscalls(void)
 {
     audio.ready=false;CHECK(file_open(client,"/dev/audio",O_WRONLY,0)==-ENODEV);
@@ -1211,7 +1342,14 @@ static void test_persistence(void)
     audio.init_error=0;audio.ready=true;
     struct ciuki_mixer_master m={1,32,60,40,1,0,0,0};
     CHECK(ctl(mixer,MIXER_SET_MASTER,&m,32)==-EACCES);
+    /* f1-100: a requested hardware read needs the control handle too. */
+    CHECK(ctl(mixer,MIXER_REFRESH_MASTER,&m,32)==-EACCES);
     file_fd(client,mixer)->mixer_control=true; /* bootstrap authority is tested separately below */
+    struct ciuki_mixer_master refreshed={1,32,0,0,0,0,0,0};
+    CHECK(!ctl(mixer,MIXER_REFRESH_MASTER,&refreshed,32) && refreshed.left==audio.master.left &&
+          refreshed.right==audio.master.right && refreshed.mute==audio.master.mute);
+    refreshed.reserved=1;CHECK(ctl(mixer,MIXER_REFRESH_MASTER,&refreshed,32)==-EINVAL);
+    refreshed.reserved=0;CHECK(ctl(mixer,MIXER_REFRESH_MASTER,&refreshed,28)==-EINVAL);
     hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;
     CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,32)&&m.save_state==1);
     CHECK(hw.codec[2/2]==0x8305 && hw.codec[0x18/2]==0x8808);
@@ -1289,6 +1427,8 @@ int main(int argc,char **argv)
     test_vm_creation_lead();
     test_vm_paging_replay();
     test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_pipeline();
+    test_refill_demand();
+    test_producer_lead();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

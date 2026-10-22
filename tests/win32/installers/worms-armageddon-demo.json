@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "workload": "worms-armageddon-demo",
+  "engine": "installshield",
+  "engine_detail": "InstallShield 3 package: SETUP.EXE, _SETUP.DLL and _ISDEL.EXE are NE (Win16) images; SETUP.INI AppName \"Worms Armageddon Demo\". Identified at import (the contract left it open).",
+  "entry": {
+    "kind": "download",
+    "file": "WormsArmageddonDemo.zip"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    }
+  ],
+  "deferred": {
+    "reason": "Win16 (owner decision 2026-10-20: the Win16 subsystem f5-19 moves after the 1.0 Beta; W24 16-bit setup stubs are its scope)",
+    "ne_child": "SETUP.EXE"
+  },
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-worms-armageddon-demo-qemu-t23"
+}

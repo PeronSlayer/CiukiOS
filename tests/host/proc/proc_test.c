@@ -66,6 +66,8 @@ void kwait_wake_all(struct kwait *q) { (void)q; }
 void kwait_wake_io(struct kwait *q) { (void)q; }
 void kwait_wake_irq(struct kwait *q, bool io) { if(io) kwait_wake_io(q); else kwait_wake_all(q); }
 void task_device_deadline(struct task *t,uint64_t d) { t->service_deadline=d; }
+void task_set_audio_class(struct task *t) { t->audio_class=true; }
+void task_set_share_group(struct task *t,bool member) { t->share_group=member; }
 void task_set_class(struct task *t,enum task_prio p) { t->prio=p; }
 static struct task *fixture_focus;
 unsigned fixture_inputs;

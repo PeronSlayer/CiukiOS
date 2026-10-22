@@ -27,6 +27,13 @@ void *w32_fill(void *d, uint8_t v, uint32_t n) {
         p[i] = v;
     return d;
 }
+/* f5-15B: the three RTL memory exports Windows 95/98 KERNEL32 forwards to
+ * NTDLL (RtlFillMemory, RtlMoveMemory, RtlZeroMemory; Microsoft "WinBase
+ * RtlMoveMemory": overlapping ranges are permitted). DirectX 3 DXSETUP.EXE
+ * (Diablo shareware CD, September 1996) imports KERNEL32!RtlZeroMemory. */
+void W32API RtlFillMemory(void *d, uint32_t n, uint8_t v) { w32_fill(d, v, n); }
+void W32API RtlMoveMemory(void *d, const void *s, uint32_t n) { w32_copy(d, s, n); }
+void W32API RtlZeroMemory(void *d, uint32_t n) { w32_fill(d, 0, n); }
 uint32_t w32_strlen(const char *s) {
     uint32_t n = 0;
     if (s)

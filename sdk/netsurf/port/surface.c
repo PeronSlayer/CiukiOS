@@ -46,7 +46,13 @@ int ciuki_browser_open(struct ciuki_browser_surface *s,const struct ciuki_browse
     if(!s->create_request) goto fail;
     return 0;
 fail:
+    ciuki_browser_mark_closed(s,"surface-open-failed",errno);
     ciuki_browser_close(s); return -1;
+}
+void ciuki_browser_mark_closed(struct ciuki_browser_surface *s,const char *reason,int detail)
+{
+    if(!s->closed && !s->close_reason) { s->close_reason=reason; s->close_detail=detail; }
+    s->closed=true;
 }
 void ciuki_browser_close(struct ciuki_browser_surface *s)
 {
@@ -54,7 +60,8 @@ void ciuki_browser_close(struct ciuki_browser_surface *s)
         du3_request(&s->connection,DESK_CLOSE,s->window,s->generation,NULL,0,-1);
     drop(s,&s->pending); drop(s,&s->current);
     if(s->connection.channel>=0) s->ops.transport.close(s->connection.channel);
-    s->connection.channel=-1; s->connection.disconnected=1; s->closed=true;
+    s->connection.channel=-1; s->connection.disconnected=1;
+    ciuki_browser_mark_closed(s,"surface-closed",0);
 }
 void ciuki_browser_damage(struct ciuki_browser_surface *s,nsfb_bbox_t b)
 {
@@ -68,6 +75,17 @@ void ciuki_browser_damage(struct ciuki_browser_surface *s,nsfb_bbox_t b)
         if(b.x1>s->damage.x1)s->damage.x1=b.x1; if(b.y1>s->damage.y1)s->damage.y1=b.y1;
     }
     s->dirty=true;
+}
+int ciuki_browser_cursor(struct ciuki_browser_surface *s,unsigned shape)
+{
+    if(!s || !s->ready || s->closed) { errno=EAGAIN;return -1; }
+    if(shape>=DESK_CURSOR_COUNT) { errno=EINVAL;return -1; }
+    if(s->cursor_valid && s->cursor_shape==shape)return 0;
+    /* Bitmap index and visibility remain zero: the system cursor is visible.
+     * Remember only accepted sends, so EAGAIN retries on the next UI turn. */
+    uint8_t b[12]={0};desk_put32(b,shape);
+    if(!du3_request(&s->connection,DESK_SET_CURSOR,s->window,s->generation,b,sizeof(b),-1))return -1;
+    s->cursor_shape=shape;s->cursor_valid=true;return 0;
 }
 int ciuki_browser_present(struct ciuki_browser_surface *s)
 {
@@ -94,9 +112,40 @@ static void resize_request(struct ciuki_browser_surface *s)
     if(!s->swap_request)drop(s,&s->pending);
     else s->configure=0;
 }
+static bool pointer_motion(const struct desk_packet *p)
+{ return p->opcode==DESK_MOTION && p->event.type==CIUKI_INPUT_MOTION; }
+bool ciuki_browser_hold(struct ciuki_browser_surface *s,const struct desk_packet *p)
+{
+    if(s->held_count && pointer_motion(p)) {
+        struct desk_packet *last=&s->held[(s->held_head+s->held_count-1)%CIUKI_BROWSER_HELD];
+        if(pointer_motion(last)) { *last=*p; return true; }
+    }
+    if(s->held_count==CIUKI_BROWSER_HELD)return false;
+    s->held[(s->held_head+s->held_count++)%CIUKI_BROWSER_HELD]=*p;
+    return true;
+}
+bool ciuki_browser_unhold(struct ciuki_browser_surface *s,struct desk_packet *out)
+{
+    if(!s->held_count)return false;
+    *out=s->held[s->held_head]; s->held_head=(s->held_head+1)%CIUKI_BROWSER_HELD; s->held_count--;
+    return true;
+}
 static void push(struct ciuki_browser_surface *s,nsfb_event_t e)
 {
-    if(s->count==CIUKI_BROWSER_EVENTS) { s->closed=true; return; }
+    /* f6-20: pointer motion replaces a trailing queued motion, so a UI turn
+     * that drains the whole channel never fills the queue with positions. */
+    if(e.type==NSFB_EVENT_MOVE_ABSOLUTE && s->count) {
+        nsfb_event_t *last=&s->events[(s->head+s->count-1)%CIUKI_BROWSER_EVENTS];
+        if(last->type==NSFB_EVENT_MOVE_ABSOLUTE) { *last=e; return; }
+    }
+    if(s->count==CIUKI_BROWSER_EVENTS) {
+        /* f6-20: a UI thread that fell behind (a long local layout on the
+         * T23) loses queued input, never the browser: drop the queue and
+         * resynchronise like a focus loss (key-ups, then CANCEL). The held
+         * keys plus CANCEL (at most 0x202 events) always fit again. */
+        s->overflows++; s->head=s->count=0;
+        ciuki_browser_release(s); return;
+    }
     s->events[(s->head+s->count++)%CIUKI_BROWSER_EVENTS]=e;
 }
 bool ciuki_browser_event(struct ciuki_browser_surface *s,nsfb_event_t *out)
@@ -176,7 +225,7 @@ int ciuki_browser_packet(struct ciuki_browser_surface *s,const struct desk_packe
     if(p->window_id!=s->window || p->generation!=s->generation)return 0;
     if(p->opcode==DESK_V3_RESULT) {
         if(p->request==s->create_request && p->index==DESK_CREATE_WINDOW) {
-            s->create_request=0; if(p->result) { s->closed=true; return -1; }
+            s->create_request=0; if(p->result) { ciuki_browser_mark_closed(s,"window-refused",p->result); return -1; }
             s->ready=true;
             ciuki_browser_damage(s,(nsfb_bbox_t){0,0,s->current.info.width,s->current.info.height});
         } else if(p->request==s->swap_request && p->index==DESK_V3_RESIZE) {
@@ -191,7 +240,8 @@ int ciuki_browser_packet(struct ciuki_browser_surface *s,const struct desk_packe
             s->last_configure=s->configure=p->serial; s->want_width=p->width; s->want_height=p->height;
         }
     } else if(p->opcode==DESK_PING) s->ping=p->serial;
-    else if(p->opcode==DESK_CLOSE_REQUEST || p->opcode==DESK_CLOSED)s->closed=true;
+    else if(p->opcode==DESK_CLOSE_REQUEST)ciuki_browser_mark_closed(s,"desktop-close-request",0);
+    else if(p->opcode==DESK_CLOSED)ciuki_browser_mark_closed(s,"desktop-closed",0);
     else if((p->opcode==DESK_V3_ACTIVATE && !p->focused) ||
             (p->opcode==DESK_V3_POINTER_STATE && !(p->flags&DESK_V3_CAPTURE)))ciuki_browser_release(s);
     resize_request(s);return 0;

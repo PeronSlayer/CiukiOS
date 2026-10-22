@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <ciuki/font.h>
 #include <libnsfb.h>
 #include <libnsfb_plot.h>
@@ -16,14 +17,51 @@
 #include "framebuffer/font.h"
 #include "font.h"
 #include "budget.h"
+#include "font_work.h"
+#include "logline.h"
+
+static struct ciuki_font_work work;
+static uint64_t clock_ns(void)
+{
+    struct timespec t;
+    if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;
+    return (uint64_t)t.tv_sec*1000000000u+t.tv_nsec;
+}
+struct ciuki_font_work ciuki_font_work_read(void) { return work; }
+void ciuki_font_work_report(struct ciuki_font_work before,uint64_t elapsed,bool local)
+{
+    static unsigned reports;
+    if(reports>=16)return;
+    reports++;
+    ciuki_log_line("[netsurf] layout work elapsed_us=%llu class=%s pass=%u font_opens=%u font_open_us=%llu font_measures=%u font_measure_us=%llu width_hits=%u measured_bytes=%llu",
+        (unsigned long long)(elapsed/1000),local?"local":"remote",reports,work.opens-before.opens,
+        (unsigned long long)((work.open_ns-before.open_ns)/1000),work.measures-before.measures,
+        (unsigned long long)((work.measure_ns-before.measure_ns)/1000),work.hits-before.hits,
+        (unsigned long long)(work.bytes-before.bytes));
+}
+/* Exact whole-string SDK advances; fixed storage, no new font/glyph budget.
+ * Hash collisions compare all bytes. Longer strings bypass the cache. */
+#define WIDTH_SLOTS 128
+#define WIDTH_BYTES 256
+static struct {
+    bool valid;
+    unsigned key,size;
+    size_t length;
+    int width;
+    char text[WIDTH_BYTES];
+} widths[WIDTH_SLOTS];
 
 /* Four live faces cap caches at 1 MiB. Reopen on style changes; no web fonts. */
 static struct { struct ciuki_font_face *face; unsigned key; } faces[4];
 static unsigned next_face;
-static struct ciuki_font_face *face_for(const plot_font_style_t *style)
+static unsigned face_key(const plot_font_style_t *style)
 {
     unsigned family=style->family==PLOT_FONT_FAMILY_SERIF?1:style->family==PLOT_FONT_FAMILY_MONOSPACE?2:0;
-    unsigned key=family*4+(style->weight>=600?1:0)+((style->flags&(FONTF_ITALIC|FONTF_OBLIQUE))?2:0);
+    return family*4+(style->weight>=600?1:0)+((style->flags&(FONTF_ITALIC|FONTF_OBLIQUE))?2:0);
+}
+static struct ciuki_font_face *face_for(const plot_font_style_t *style)
+{
+    unsigned key=face_key(style),family=key/4;
     static const char *family_names[]={"Sans","Serif","Mono"};
     static const char *style_names[]={"Regular","Bold","Italic","BoldItalic"};
     for (unsigned i=0;i<4;i++) if (faces[i].face && faces[i].key==key) return faces[i].face;
@@ -35,7 +73,11 @@ static struct ciuki_font_face *face_for(const plot_font_style_t *style)
 #else
     snprintf(path,sizeof(path),"/System/fonts/Liberation%s-%s.ttf",family_names[family],style_names[key%4]);
 #endif
-    if (ciuki_font_open(path,&faces[i].face)) return NULL;
+    uint64_t start=clock_ns();
+    int error=ciuki_font_open(path,&faces[i].face);
+    uint64_t end=clock_ns();
+    work.opens++;if(end>=start)work.open_ns+=end-start;
+    if(error)return NULL;
     faces[i].key=key;
     return faces[i].face;
 }
@@ -48,16 +90,34 @@ bool fb_font_init(void) { return true; }
 bool fb_font_finalise(void)
 {
     for(unsigned i=0;i<4;i++) { ciuki_font_close(faces[i].face); faces[i].face=NULL; }
+    memset(widths,0,sizeof(widths));next_face=0;
     return true;
 }
 nserror fb_font_width(const plot_font_style_t *style,const char *s,size_t n,int *width)
 {
     *width=0;
     if(n>8192 || ciuki_layout_expired())return NSERROR_BAD_SIZE;
+    unsigned key=face_key(style),size=em(style),slot=key*33u+size;
+    for(size_t i=0;i<n;i++)slot=slot*33u+(unsigned char)s[i];
+    slot%=WIDTH_SLOTS;
+    if(n<=WIDTH_BYTES && widths[slot].valid && widths[slot].key==key && widths[slot].size==size &&
+       widths[slot].length==n && !memcmp(widths[slot].text,s,n)) {
+        *width=widths[slot].width;work.hits++;return NSERROR_OK;
+    }
     struct ciuki_font_face *face=face_for(style); int32_t advance;
-    if (!face || ciuki_font_measure(face,em(style),s,n,&advance)) return NSERROR_NOMEM;
+    if(!face)return NSERROR_NOMEM;
+    uint64_t start=clock_ns();
+    int error=ciuki_font_measure(face,size,s,n,&advance);
+    uint64_t end=clock_ns();
+    work.measures++;work.bytes+=n;if(end>=start)work.measure_ns+=end-start;
+    if(error)return NSERROR_NOMEM;
     if(ciuki_layout_expired())return NSERROR_STOPPED;
-    *width=(advance+32)/64; return NSERROR_OK;
+    *width=(advance+32)/64;
+    if(n<=WIDTH_BYTES) {
+        widths[slot].valid=true;widths[slot].key=key;widths[slot].size=size;
+        widths[slot].length=n;widths[slot].width=*width;memcpy(widths[slot].text,s,n);
+    }
+    return NSERROR_OK;
 }
 /* At most ceil(log2(8193))+2 complete measurements, rather than one
  * measurement per growing prefix. Boundaries are UTF-8 byte offsets. */
@@ -118,6 +178,7 @@ static int paint(void *context,int x,int y,const struct ciuki_font_bitmap *bitma
 }
 nserror ciuki_font_plot(nsfb_t *surface,const plot_font_style_t *style,int x,int y,const char *s,size_t n)
 {
+    ciuki_ui_keepalive(); /* f6-20: a long first paint still reads the desktop channel */
     struct ciuki_font_face *face=face_for(style);
     struct paint_context p={surface,style->foreground};
     int32_t advance;

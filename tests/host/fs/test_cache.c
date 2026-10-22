@@ -63,7 +63,7 @@ static void budget(void) {
     }
     /* Default budget: 8 MiB = 2048 pages, 128 workspace, 8 writeback,
      * 1912 for data/descriptors. F1 had 13440 slots. The i686 layout packs
-     * 10 headers per descriptor page: 13904 slots. Host density is derived. */
+     * 8 headers per descriptor page with pins/order: 13592 slots. Host density is derived. */
     struct block_cache c; struct cache_stats s; CHECK(!cache_init(&c, 0)); cache_stats(&c, &s);
     CHECK(s.workspace_pages == 128 && s.writeback_pages==8 && s.pages == 2048);
     CHECK(s.slots_512 == 8*model_data(1920-8,
@@ -71,7 +71,7 @@ static void budget(void) {
     cache_destroy(&c);
     CHECK(8 * model_data(1920, 10) >= 7 * 1920);
     CHECK(8 * model_data(1920, 7) == 13440); /* original host layout baseline */
-    CHECK(8*model_data(1920-8,10)==13904 && 8*model_data(1920-8,10)>=13440);
+    CHECK(8*model_data(1920-8,8)==13592 && 8*model_data(1920-8,8)>=13440);
     printf("PASS budget: pages <= bytes/4096 including 32 KiB writeback buffer, 8 slots per data page, i686 default retains >=13440 FAT slots\n");
 }
 

@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "dosvm_internal.h"
 #include "dos_file_hook.h"
+#include "dos_unified.h"
+#include "dos_unified_ifs.h"
 #include "dos_file_volume.h"
 #include "dosvm_network.h"
+#include <ciuki/blkpart.h>
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
 static bool file_check(void *arg,uint32_t linear,size_t bytes,bool write) {
@@ -52,7 +55,16 @@ _Static_assert(DOS_HOOK_DISPATCH>=DPMI_RM_END,"DOS gates overlap DPMI real stubs
 _Static_assert(0xf0000+DOS_HOOK_DISPATCH>DPMI_PM_BASE+DPMI_PM_LIMIT,"DOS gates overlap DPMI PM stubs");
 _Static_assert(DOS_HOOK_DISPATCH>DOSVM_MOUSE_RETURN+3,"DOS gates overlap mouse callback");
 _Static_assert(DOS_HOOK_END<=0x2000,"DOS ROM exceeds protected F1 page");
-void dosvm_file_rom_init(struct dosvm *v) { dos_file_hook_rom(P2V(v->frames[0xf1])); }
+_Static_assert(DFV2_DIRECT>=DOS_HOOK_END,"DFV2 gates overlap the v1 ROM");
+_Static_assert(DFV2_END<=0x2000,"DFV2 ROM exceeds protected F1 page");
+_Static_assert(DFV2_DIRECT>DOSVM_MOUSE_RETURN+3 && DFV2_DIRECT>=DPMI_RM_END,"DFV2 gates overlap mouse/DPMI stubs");
+_Static_assert(0xf0000+DFV2_DIRECT>DPMI_PM_BASE+DPMI_PM_LIMIT,"DFV2 gates overlap DPMI PM stubs");
+/* v1 is written for every VM exactly as before; DFV2 only for the unified
+ * profile (kernel=unified, schema value 2), into the unused 1C00-1C3F. */
+void dosvm_file_rom_init(struct dosvm *v) {
+    dos_file_hook_rom(P2V(v->frames[0xf1]));
+    if (v->kernel==2) dos_unified_rom(P2V(v->frames[0xf1]),v->info.key.generation);
+}
 struct file_runtime {
     struct dos_file files;
     struct dos_file_volume volume;
@@ -118,6 +130,170 @@ static int file_finish(struct dosvm *v,struct v86_frame *f,const struct dos_file
     }
     pack(f,r); return 0;
 }
+/* f3-56/f3-57 DFV2 (private, unified profile only). The state is allocated
+ * at the first event-gate call and charged to the VM; an allocation failure
+ * is a refused gate call, which CIUKIDF.SYS reports as a contained INIT
+ * failure. The backend is the f3-57 live IFS (dos_unified_ifs.c): the final
+ * bind mounts this VM's logical C: view through f3-47 (the same provider and
+ * generation as BIOS INT 13h, which then serializes through it), maps the
+ * read-only system D: and the policy-controlled E:, and converts their CDS
+ * entries to IFS drives. */
+struct unified_runtime {
+    struct dos_unified unified;
+    struct dfv2_ifs ifs;
+    struct dos_file_volume volume,removable;
+    struct blkdev provider,removable_provider;
+    struct vfs_table native;
+    bool volume_open,removable_open,native_ready,active_logged;
+    /* f3-61: C: is a partition of the VM disk (kernel=unified base: MBR,
+     * FAT16 at LBA 63); start/sectors map guest INT 13h onto the view. */
+    struct partition_table table;
+    struct blkpart partition;
+    uint32_t start,sectors;
+};
+static bool fat_partition(uint8_t type) {
+    return type==0x01 || type==0x04 || type==0x06 || type==0x0e || type==0x0b || type==0x0c;
+}
+/* The partition FreeDOS itself assigns to C: (K2043 initdisk.c
+ * ScanForPrimaryPartitions: SCAN_PRIMARYBOOT, then SCAN_PRIMARY): the
+ * first active primary FAT partition, else the first primary FAT one.
+ * A disk without a valid partition table (a superfloppy image whose LBA 0
+ * is the FAT boot sector) keeps the whole-disk view. */
+static struct blkdev *unified_source(struct unified_runtime *r) {
+    r->start=0; r->sectors=(uint32_t)r->provider.capacity;
+    if (partition_scan(&r->provider,&r->table)) return &r->provider;
+    const struct partition *pick=0;
+    for (unsigned pass=0;pass<2 && !pick;pass++)
+        for (unsigned i=0;i<r->table.count && !pick;i++) {
+            const struct partition *p=&r->table.entries[i];
+            if (!p->logical && fat_partition(p->type) && (pass || p->bootable)) pick=p;
+        }
+    if (!pick || blkpart_init(&r->partition,&r->provider,pick)) return &r->provider;
+    struct blkdev *view=blkpart_device(&r->partition);
+    view->logical=true;                  /* the VM provider owns caching/coherence */
+    r->start=(uint32_t)pick->start; r->sectors=(uint32_t)pick->count;
+    return view;
+}
+static void unified_unmount(void *arg,struct dfv2_ifs *s) {
+    struct dosvm *v=arg; struct unified_runtime *r=(struct unified_runtime *)v->unified; (void)s;
+    if (v->file_volume==&r->volume) v->file_volume=0;
+    if (r->native_ready) { vfs_table_destroy(&r->native); r->native_ready=false; }
+    if (r->removable_open) { (void)dos_file_volume_close(&r->removable); r->removable_open=false; }
+    if (r->volume_open) {
+        int e=dos_file_volume_close(&r->volume);
+        if (e) {
+            if (!v->info.cleanup_error) v->info.cleanup_error=e;
+            (void)dos_file_volume_discard(&r->volume);
+        }
+        r->volume_open=false;
+    }
+}
+static int unified_mount(void *arg,struct dfv2_ifs *s) {
+    struct dosvm *v=arg; struct unified_runtime *r=(struct unified_runtime *)v->unified;
+    struct storage *storage=storage_get();
+    if (!storage || !storage->ready || v->file_volume) return -FS_EIO;
+    dosvm_disk_provider_init(v,&r->provider);
+    int e=dos_file_volume_open(&r->volume,&storage->cache,unified_source(r),v->overlay_open);
+    if (!e) { r->volume_open=true; e=dfv2_ifs_map(s,2,&r->volume.table,2,!v->overlay_open); }
+    if (!e && vfs_drive_present(&storage->vfs,2)) {
+        e=vfs_table_init(&storage->vfs,&r->native,2);
+        if (!e) { r->native_ready=true; e=dfv2_ifs_map(s,3,&r->native,2,true); }
+    }
+    if (!e && v->conformance_media.mode) {
+        r->removable_provider=(struct blkdev){.read=removable_read,.capacity=D48_VOLUME_SECTORS,
+            .sector_size=512,.media_generation=v->conformance_media.generation,.logical=true,.ctx=&v->conformance_media};
+        e=dos_file_volume_open(&r->removable,&storage->cache,&r->removable_provider,false);
+        if (!e) { r->removable_open=true; e=dfv2_ifs_map(s,4,&r->removable.table,2,true); }
+    } else if (!e && r->native_ready) {
+        for (unsigned i=3;i<26;i++)
+            if (vfs_drive_present(&storage->vfs,i) && (storage->vfs.drive_flags[i]&VFS_DRIVE_REMOVABLE)) {
+                e=dfv2_ifs_map(s,4,&r->native,i,true); break;   /* policy: not writable */
+            }
+    }
+    if (e) { unified_unmount(v,s); return e; }
+    v->file_volume=&r->volume;
+    return 0;
+}
+static int unified_create(struct dosvm *v) {
+    unsigned bytes=(sizeof(struct unified_runtime)+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+    if (v->info.resident+bytes>v->info.commitment) return -FS_ENOMEM;
+    uint32_t phys=pmm_alloc_contig(bytes/PAGE_SIZE); if (!phys) return -FS_ENOMEM;
+    mm_claim(phys,bytes/PAGE_SIZE,MM_VM_PRIVATE);
+    struct unified_runtime *r=P2V(phys); memset(r,0,bytes);
+    struct dos_file_ops ops; dosvm_file_ops_init(v,&ops);
+    struct dfv2_ifs_host host={unified_mount,unified_unmount,v};
+    struct dfv2_backend backend;
+    dfv2_ifs_init(&r->ifs,&r->unified,&ops,&host,v->info.key.id,v->info.key.generation);
+    dfv2_ifs_backend(&r->ifs,&backend);
+    dos_unified_init(&r->unified,v->info.key.generation,&ops,&backend);
+    v->unified=&r->unified; v->unified_phys=phys; v->unified_bytes=bytes; v->info.resident+=bytes;
+    return 0;
+}
+static void unified_release(struct dosvm *v) {
+    if (!v->unified) return;
+    dos_unified_destroy(v->unified);       /* closes descriptions, then unmounts */
+    for (unsigned i=0;i<v->unified_bytes/PAGE_SIZE;i++) mm_free(v->unified_phys+i*PAGE_SIZE,MM_VM_PRIVATE);
+    v->info.resident-=v->unified_bytes; v->unified=0; v->unified_phys=v->unified_bytes=0;
+}
+static int unified_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector) {
+    struct dos_file_frame r=unpack(f);
+    if (vector==0x2f) {
+        if (!dos_unified_discover(&r)) return -ENOSYS;
+        pack(f,&r); return 0;
+    }
+    if (vector!=0xfe || f->tf.cs!=DFV2_ROM_SEG) return -ENOSYS;
+    uint32_t ip=f->tf.eip;
+    if (ip==DFV2_CRITICAL+2) {
+        /* Monitor-only PENDING ends here exactly once; anything else stops
+         * the VM (contained, no host panic). */
+        if (!v->unified || dos_unified_critical(v->unified,&r,f->tf.eax&255)!=DFV2_RESUME) {
+            dosvm_stop(v->info.key,DOSVM_FAULT); return 0;
+        }
+        *f=v->unified_saved; v->monitor.vif=v->unified_vif; return 0;
+    }
+    if (ip!=DFV2_DIRECT+2 && ip!=DFV2_LOCAL+2 && ip!=DFV2_EVENT+2) return -ENOSYS;
+    if (!v->unified && (ip!=DFV2_EVENT+2 || unified_create(v))) return 0;
+    enum dfv2_outcome outcome=dos_unified_gate(v->unified,&r);
+    if (v->unified->bind_refusal && !v->unified_logged) {
+        /* One line per VM: the final bind is one-shot (DOS=LOW is required).
+         * f3-57 Amendment 1: a refused activation stops the VM here, at the
+         * lifecycle gate, unless CIUKIDF.SYS was loaded with /LOCAL. */
+        struct unified_runtime *r=(struct unified_runtime *)v->unified;
+        char token[64];
+        v->unified_logged=true;
+        if (dos_unified_activation_stop(v->unified,r->ifs.why,token,sizeof(token))) {
+            klog("[dosvm] unified_activation_refused reason=%s",token);
+            dosvm_stop(v->info.key,DOSVM_FAULT); return 0;
+        }
+        klog("[dosvm] DFV2 bind refused vm=%u generation=%u reason=%s ifs=%s",
+             v->info.key.id,v->info.key.generation,v->unified->bind_refusal,r->ifs.why ? r->ifs.why : "-");
+    }
+    {
+        struct unified_runtime *r=(struct unified_runtime *)v->unified;
+        if (r->ifs.active && !r->active_logged) {
+            klog("[dosvm] DFV2 IFS active vm=%u generation=%u drives=%x",
+                 v->info.key.id,v->info.key.generation,r->ifs.owned);
+            r->active_logged=true;
+        }
+    }
+    if (outcome!=DFV2_SUSPEND) return 0;
+    /* INT 24h callback on the driver stack; IRET returns to the C2 gate. */
+    uint16_t ss,sp,vector24[2];
+    if (!dos_unified_callback_stack(v->unified,&ss,&sp) || dosvm_read(v,0x24*4,vector24,4)) {
+        dosvm_stop(v->info.key,DOSVM_FAULT); return 0;
+    }
+    uint16_t frame[3]={DFV2_CRITICAL,DFV2_ROM_SEG,
+        (uint16_t)((f->tf.eflags&~V86_IF)|(v->monitor.vif ? V86_IF : 0))};
+    sp=(uint16_t)(sp-6);
+    if (dosvm_write(v,vm_ptr(ss,sp),frame,6)) { dosvm_stop(v->info.key,DOSVM_FAULT); return 0; }
+    v->unified_saved=*f; v->unified_vif=v->monitor.vif;
+    const struct dfv2_critical *c=&v->unified->critical;
+    vm_low(&f->tf.eax,c->ax); vm_low(&f->tf.edi,c->di); vm_low(&f->tf.ebp,c->bp); vm_low(&f->tf.esi,c->si);
+    vm_low(&f->tf.user_ss,ss); vm_low(&f->tf.user_esp,sp);
+    f->tf.cs=vector24[1]; f->tf.eip=vector24[0]; f->tf.eflags&=~V86_TF;
+    v->monitor.vif=false;
+    return 0;
+}
 int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsigned origin) {
     if (v->conformance_media.mode && vector==0x21 && (f->tf.eax&0xff00)==0x3d00) {
         static const char path[]="E:\\D48FAULT.DAT";
@@ -125,6 +301,14 @@ int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsi
         bool matched=(uint16_t)f->tf.edx<=65536-sizeof(path) &&
             !dosvm_read(v,vm_ptr(f->ds,(uint16_t)f->tf.edx),input,sizeof(input)) && !memcmp(input,path,sizeof(path));
         d48_open_enter(&v->conformance_media,&r,matched);
+    }
+    /* f3-61: kernel=unified always runs with the v1 bridge disabled
+     * (dosvm_client.c, dosvm.c: no FreeDOS kernel may bind v1). Its DFV2
+     * gates must be served before that refusal; checked after it, CIUKIDF.SYS
+     * never found a host and the fork ran unbound on its local FAT. */
+    if (v->kernel==2) {
+        int unified=unified_interrupt(v,f,vector);
+        if (unified!=-ENOSYS) return unified;
     }
     if (v->disable_file_bridge) return -ENOSYS;
     if (vector==0x2f) {
@@ -222,10 +406,35 @@ void dosvm_file_reflected_return(struct dosvm *v,const struct v86_frame *f,bool 
     dos_file_observe_return(v->files,&r);
     dosvm_file_dump(v);
 }
+bool dosvm_file_unified_info(const struct dosvm *v,struct dosvm_unified_info *out) {
+    const struct unified_runtime *r=(const struct unified_runtime *)v->unified;
+    *out=(struct dosvm_unified_info){0};
+    if (!r) return false;
+    const struct dfv2_ifs_stats *t=&r->ifs.stats;
+    *out=(struct dosvm_unified_info){.active=r->ifs.active,.owned=r->ifs.owned,.requests=t->requests,.opens=t->opens,
+        .closes=t->closes,.reads=t->reads,.failed=t->failed,.critical=t->critical,.expired=t->expired,
+        .refusals=t->refusals,.held=dfv2_ifs_held(&r->ifs),.start=r->start,.read_bytes=t->read_bytes};
+    _Static_assert(DFV2_IFS_FAILURES==8,"failure list size");
+    for (unsigned i=0;i<DFV2_IFS_FAILURES && i<t->failed;i++) {
+        out->failure[i].fn=r->ifs.failure[i].fn; out->failure[i].error=r->ifs.failure[i].error;
+        memcpy(out->failure[i].name,r->ifs.failure[i].name,sizeof(out->failure[i].name));
+    }
+    return true;
+}
 int dosvm_file_disk(struct dosvm *v,uint32_t lba,void *sector,bool write) {
-    return v->file_volume ? dos_file_volume_raw(v->file_volume,lba,sector,write,0) : -ENOSYS;
+    if (!v->file_volume) return -ENOSYS;
+    const struct unified_runtime *r=(const struct unified_runtime *)v->unified;
+    if (r && v->file_volume==&r->volume) {
+        /* f3-61: guest INT 13h inside the owned partition serializes through
+         * the logical view (same provider/generation, raw-write invalidation);
+         * the MBR and the gap before it are not part of any FAT view. */
+        if (lba<r->start || lba-r->start>=r->sectors) return -ENOSYS;
+        lba-=r->start;
+    }
+    return dos_file_volume_raw(v->file_volume,lba,sector,write,0);
 }
 int dosvm_file_destroy(struct dosvm *v) {
+    unified_release(v);
     if (v->files) {
         dos_file_cancel(v->files);
         dosvm_file_dump(v);

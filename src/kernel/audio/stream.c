@@ -4,6 +4,9 @@
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
 #include <ciuki/audio.h>
+#include <ciuki/task.h>
+/* f1-101: task.c; host audio harnesses without the scheduler see null hooks. */
+#pragma weak sched_audio_source_end
 
 int audio_stream_open(struct audio_stream **out)
 {
@@ -33,6 +36,7 @@ int audio_stream_open(struct audio_stream **out)
 void audio_stream_close(struct audio_stream *s)
 {
     if (!s) return;
+    if (sched_audio_source_end) sched_audio_source_end(s); /* f1-101 */
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] == s) audio.streams[i] = 0;
     audio.commitment_pages -= 2;
     pmm_free(s->pages[0]); pmm_free(s->pages[1]); kfree(s); /* published periods contain copies, never references */
@@ -53,6 +57,9 @@ void audio_stream_reset(struct audio_stream *s)
     s->head = s->queued = s->phase = 0;
     s->have_previous = false;
     s->configured = s->started = s->draining = s->drain_latched = false;
+    /* f1-101: the producers re-register on their next write or refill read. */
+    s->producer_behind = false;
+    if (sched_audio_source_end) sched_audio_source_end(s);
     s->generation = gen_alloc();
     if (!s->generation) audio_fail(-EIO);
     kwait_wake_all(&s->changed);
@@ -81,6 +88,7 @@ int audio_stream_enqueue(struct audio_stream *s, const void *buffer, uint32_t by
     }
     s->queued += count; s->accepted += count;
     s->configured = s->started = true;
+    audio_stream_lead(s);
     audio_wake();
     return (int)(count * frame);
 }

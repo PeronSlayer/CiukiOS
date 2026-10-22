@@ -41,10 +41,18 @@ int __wrap_br_ssl_client_reset(br_ssl_client_context *client,const char *host,in
     assert(!failure && injections==resets+1 && seeded==&client->eng);
     assert(client->eng.rng_init_done==2 && br_ssl_engine_get_rsavrfy(&client->eng));
     assert(br_ssl_engine_get_flags(&client->eng)&BR_OPT_NO_RENEGOTIATION);
+    static const uint16_t offered[]={BR_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+        BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,BR_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    assert(client->eng.version_min==BR_TLS12 && client->eng.version_max==BR_TLS12);
+    assert(client->eng.suites_num==4 && !memcmp(client->eng.suites_buf,offered,sizeof(offered)));
+    assert(!strcmp(host,"fixture.example"));
     assert(!resume);resets++;return __real_br_ssl_client_reset(client,host,resume);
 }
 int main(void)
 {
+    uint32_t days,seconds;assert(ciuki_tls_clock(&days,&seconds));
+    assert(days==1790000000u/86400u+719528u && seconds==1790000000u%86400u);
     enum ciuki_tls_error error;
     for(unsigned i=0;i<3;i++){
         struct ciuki_tls *tls=ciuki_tls_create("fixture.example",NULL,0,&error);

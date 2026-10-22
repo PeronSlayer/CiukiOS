@@ -82,5 +82,26 @@
         "menu_entries"
       ]
     }
-  ]
+  ],
+  "guest": {
+    "schema_version": 1,
+    "status": "proposed",
+    "note": "f5-15C guest program: interactive defaults (Finish/Install/Next/Yes/I Agree/OK) on a settled page, the default directory and components kept; explicit steps, screen pins and the directory answer are added from the calibration run. Entry: Wise installation stub.",
+    "choices": "default",
+    "entry": "hluplink.exe",
+    "arguments": "",
+    "timeout_seconds": 330,
+    "defaults": {
+      "enabled": true,
+      "idle_ms": 4000,
+      "max": 40
+    },
+    "restart": "accept",
+    "uninstall": {
+      "enabled": true,
+      "timeout_seconds": 150
+    },
+    "shot_ms": 1500,
+    "steps": []
+  }
 }

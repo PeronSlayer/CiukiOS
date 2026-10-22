@@ -21,6 +21,12 @@ import test_runner as common
 from test_win32_evidence import canned, wire, IMAGE, PAYLOAD
 
 
+# f5-15C: the independent overlay delta matching the canned guest inventory.
+HOST_DELTA = {'added': [{'path': 'GAME.EXE', 'kind': 'file', 'size': 12, 'sha256': 'c' * 64}], 'changed': [],
+              'removed': [], 'excluded': 0, 'temp': [], 'system_writes': 0, 'links': [], 'menu_links': [],
+              'registry': {'added_keys': [], 'removed_keys': [], 'changed_values': []}}
+
+
 def frame(n):
     return (320, 300, bytes([n, n, n]) * (320 * 300))
 
@@ -54,6 +60,12 @@ class TierTests(unittest.TestCase):
         p.start(); self.addCleanup(p.stop)
         p = patch.object(wr.win32_fixtures, 'workload_row', return_value=self.row)
         p.start(); self.addCleanup(p.stop)
+        # f5-15C: the installers tier validates the title's guest operator
+        # program; the canned case runs a qualified copy of the real record.
+        operator = json.loads((ROOT / 'tests/win32/operators/diablo-shareware.json').read_text())
+        operator['guest']['status'] = 'qualified'
+        (self.root / 'tests/win32/operators').mkdir(parents=True)
+        (self.root / 'tests/win32/operators/diablo-shareware.json').write_text(json.dumps(operator))
 
     def case(self, tier):
         case = copy.deepcopy(json.loads((ROOT / ('tests/suites/f5-' + tier + '.json')).read_text())['cases'][0])
@@ -144,6 +156,8 @@ class TierTests(unittest.TestCase):
             session.tick(now, qmp)
         for line in (b'[win32] start exe=fixture pid=7\n', b'[win32] exit pid=7 code=00000000\n'):
             session.observe(line, None, now)
+        if tier == 'installers':
+            session.host_inventory = HOST_DELTA
         result = {'outcome': 'pass', 'timeout': {'occurred': False}, 'audio': {'failures': []}}
         verdict = session.finish(result)
         return session, result, verdict
@@ -255,7 +269,11 @@ class RunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'not_run', result['reason'])
         self.assertFalse((directory / 'run.qcow2').exists())
         self.assertFalse((directory / 'fake-arguments.json').exists())
-        self.assertIn('probe_not_registered', [b['kind'] for b in result['win32']['blockers']])
+        kinds = [b['kind'] for b in result['win32']['blockers']]
+        # f5-15C registered the probe; the operator program and the manifest are pending calibration.
+        self.assertNotIn('probe_not_registered', kinds)
+        self.assertIn('operator_program_pending', kinds)
+        self.assertIn('manifest_pending', kinds)
 
     def test_fixture_connector_arguments(self):
         case = json.loads((ROOT / 'tests/suites/f5-titles.json').read_text())['cases'][0]
@@ -310,7 +328,8 @@ class RunnerIntegrationTests(unittest.TestCase):
             path.write_bytes(b'authored fixture')
             return {'manifest': [{'generator': 'win32-workload', 'payload_sha256': PAYLOAD,
                                  'media': 'iso', 'path': str(path), 'sha256': runner.sha(path)}]}
-        with patch.object(runner, 'ROOT', fixture.root), patch.object(runner, 'prepare_fixtures', side_effect=prepare):
+        with patch.object(runner, 'ROOT', fixture.root), patch.object(runner, 'prepare_fixtures', side_effect=prepare), \
+                patch.object(runner.win32_inventory, 'overlay_delta', return_value=HOST_DELTA):
             result, directory = self.run_fake(records=records[:4], screens=screens, after_inputs={
                 '1': [*records[4:], '[win32] start exe=fixture pid=7', '[win32] exit pid=7 code=00000000']})
         self.assertEqual(result['outcome'], 'pass', result['reason'])

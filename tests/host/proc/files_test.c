@@ -823,7 +823,9 @@ static void test_launch_throughput(void)
 static struct storage media_observation;
 static unsigned media_removals;
 static int media_result;
+#ifndef NATIVE_DISK_TEST
 struct storage *storage_get(void) { return &media_observation; }
+#endif
 int usb_storage_eject(struct storage *s,unsigned drive,uint32_t gen)
 { CHECK(s==&media_observation && drive==4 && gen==123); media_removals++; return media_result; }
 /* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */

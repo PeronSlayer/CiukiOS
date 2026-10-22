@@ -68,3 +68,18 @@ ultimate target's classification. W21 entries remain stubs and do not prove
 successful runtime handling. The tool never generates new stubs or runs inputs.
 Opaque children and dynamic imports still need original install/play traces.
 See [the runner design](../f5-17b-acceptance-runner.md) for the complete handoff.
+
+## F5-15B acceptance-installer census — 2026-10-21
+
+`acceptance-installers.txt` is the `census.py` text of the ten original
+acceptance installers (entry executables imported by
+`scripts/win32/workloads.py --import-unpinned` under
+`build/downloads/win32/<id>/`, plus the setup children extracted on the host
+with 7-Zip into `<id>/extracted/`; the exact per-title commands are in the
+file). It records metadata only. `scripts/win32/stubs.py`
+(`acceptance_imports`, `acceptance_extra`) feeds those imports to the builtin
+builders as extra W21 names for DLLs the research census already lists;
+title-private DLLs (for example the Unreal setup's `Core.dll`/`Window.dll`)
+never become builtins. The three NE inputs of the Worms Armageddon demo are
+explicit refusals (Win16, deferred). Host extraction assists discovery and
+proves nothing about completion on CiukiOS.

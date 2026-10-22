@@ -1,0 +1,41 @@
+{
+  "added": {
+    "ciuki/ciukidf.asm": {
+      "sha256": "499c8bec5e9bd01f92ffdc23097afa76e4eea87cc8d9f28ded744735e9480bc2",
+      "source": "ciuki/fork/drivers/ciukidf.asm"
+    },
+    "hdr/ciuki.h": {
+      "sha256": "40aea577f91322e8edfd2b3ecb8990470dcbb4c212df905a42f0cafac0e1d118",
+      "source": "ciuki/fork/hdr/ciuki.h"
+    },
+    "kernel/ciuki.c": {
+      "sha256": "734269191e764978c8ea8502ad61d8a19f9de4268edb43f92f41fd019c4c3163",
+      "source": "ciuki/fork/kernel/ciuki.c"
+    },
+    "kernel/ciukinit.c": {
+      "sha256": "2df831579dcd23b862c20294d04fbbf6aede48f77b95739698a13aff8b048234",
+      "source": "ciuki/fork/kernel/ciukinit.c"
+    }
+  },
+  "base": "unmodified except patch 0001 (reproducible date)",
+  "changed": {
+    "kernel/entry.asm": "1341ab747a790e05960acd8ad34c4b4ef26efbe70fa813c51f57e1baa8f7c92b",
+    "kernel/fcbfns.c": "65b8769c5293c12749c84d3bd0d798de0a11bbf48227f67df17883fc4997cc7a",
+    "kernel/int2f.asm": "ddbc1d55bb3395303f1993afec4ba453bc9891e3c47d357ca645381f56bd97f6",
+    "kernel/inthndlr.c": "f134e7aa76cc9dd71f739b68942e1dbae43a62495567b086b40f55f41495341e",
+    "kernel/main.c": "eca11700903f6223dacc0b41770ddc34b1129b106464b68eb164f619e3cb6e75",
+    "kernel/makefile": "fe365882e8092df9c6d23a50fdb0aa25af0cea2fc9d6bf52a37c1813ea37a2d1",
+    "kernel/nls.c": "f4db271c771b091c725601604f842c3f54bf12539a2b169bc44f4b3968c598b9",
+    "kernel/nls_hc.asm": "e9a4d236a5eae16006587a690cf4fe16c1a6f47dc38716bb2dc689ef13b04df8",
+    "kernel/proto.h": "0f833d9ec5db5ee5b70ddd801c3efb4feb1ae9fc7df99421ec84caa98f06aa7a",
+    "kernel/task.c": "0398ccfa44dcec9c4334beb413aef00f5e47adb9e29e7a6687ee1ef5a731d464"
+  },
+  "identity": "CIUKIDOS K2043 3",
+  "license": "GPL-2.0-or-later",
+  "modification": "CiukiDOS fork: patch 0001 (reproducible date), patch 0002 (DFV2 binding, lifecycle, FCB and NLS) and added fork files",
+  "patch": {
+    "path": "ciuki/patches/0002-ciukidos-dfv2-binding.patch",
+    "sha256": "1d4e8ee57bdc74d35b74fbe279721fcfeb38e065ffd2aad4c85753b37dd78dc8"
+  },
+  "schema": 1
+}

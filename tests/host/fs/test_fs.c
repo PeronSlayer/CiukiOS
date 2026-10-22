@@ -50,24 +50,35 @@ static void read_tests(struct fake *f) {
     printf("PASS FAT%u read/names/aliases/UTF-8/cwd/masks zero_writes\n",vol.type);
 }
 static int create(const char *name) { int h=vfs_open(&table,name,VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0); CHECK(h>=0); return h; }
+/* C2 order data -> FAT (detached chain, link) -> directory -> FSInfo, each
+ * transition fenced. f1-89: a long write is several transactions of one
+ * budget slice (lead design, f1-87 Amendment 1). Every slice is checked
+ * with the same rules and must be complete (directory/FSInfo published,
+ * both FAT copies written) and fenced before the next slice's data. */
 static void ordering(struct fake *f, unsigned begin) {
-    unsigned phase=0,copies=0; bool fence=true;
+    unsigned phase=0,copies=0,slices=1,last=vol.type==32 ? 4u : 3u; bool fence=true;
     uint32_t rootsec=vol.type==32 ? vol.data_sector+(vol.root-2)*vol.spc : vol.root_sector;
     unsigned rootsectors=vol.type==32 ? vol.spc : vol.root_entries/16;
     for (unsigned i=begin;i<f->events;i++) {
         struct fake_event *event=&f->trace[i];
         if (event->kind=='B') { fence=true; continue; }
-        uint64_t lba=event->lba; unsigned nextphase;
+        uint64_t lba=event->lba; unsigned nextphase, copy=0;
         if (lba>=vol.reserved && lba<vol.reserved+vol.fats*vol.fat_sectors) {
-            nextphase=2; copies|=1u<<((lba-vol.reserved)/vol.fat_sectors);
+            nextphase=2; copy=1u<<((lba-vol.reserved)/vol.fat_sectors);
         } else if (lba>=rootsec && lba<rootsec+rootsectors) nextphase=3;
         else if (vol.type==32 && lba==vol.fsinfo) nextphase=4;
         else nextphase=1;
+        if (nextphase<phase) {
+            CHECK(phase==last && copies==3 && fence && nextphase==1);
+            phase=0; copies=0; slices++;
+        }
+        copies|=copy;
         CHECK(nextphase>=phase);
         if (nextphase!=phase) CHECK(fence);
         phase=nextphase; fence=false;
     }
-    CHECK(phase==(vol.type==32 ? 4u : 3u) && copies==3);
+    CHECK(phase==last && copies==3);
+    if (slices>1) printf("ORDER FAT%u write slices=%u each data->FAT->directory%s fenced\n",vol.type,slices,vol.type==32 ? "->FSInfo" : "");
 }
 static void write_file(struct fake *f, const char *name, unsigned bytes) {
     int h=create(name); size_t n; unsigned begin=f->events; OK(vfs_write(&table,h,big,bytes,&n)); CHECK(n==bytes); if (bytes) ordering(f,begin); OK(vfs_commit(&table,h));
@@ -136,6 +147,14 @@ static void write_tests(struct fake *f) {
 }
 static void publication_observe(void *,uint64_t,enum fat_publication_stage,char,int);
 static uint64_t publication_last;
+static bool transaction_crashes;
+static int transaction_guard_enter(void *ctx) { (void)ctx; return 0; }
+static void transaction_guard_leave(void *ctx) { (void)ctx; }
+static int transaction_call(struct fat_transaction_args a) {
+    const struct fat_transaction_guard guard={.enter=transaction_guard_enter,.leave=transaction_guard_leave,.retire=transaction_guard_leave};
+    a.sequence=vol.mutation_sequence;
+    return fat_transaction_run(&vol,&a,&guard);
+}
 /* Small, mixed workload replayed with a new cache and VFS at EVERY cut. */
 static int crash_workload(struct fake *f) {
     int e=cache_init(&cache,2*1024*1024); if (e) return e;
@@ -144,6 +163,22 @@ static int crash_workload(struct fake *f) {
     publication_last=0; vol.publication_observer=publication_observe;
     struct fat_entry a,b,file; size_t n;
     if (vol.type==12) vol.next_free=680;
+    if (transaction_crashes) {
+        e=transaction_call((struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=vol.root,.name="Crash A",.attr=FAT_ATTR_DIR,.entry=&a});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=vol.root,.name="Crash B",.attr=FAT_ATTR_DIR,.entry=&b});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=a.first,.name="Crash file long.bin",.entry=&file});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_WRITE,.entry=&file,.data=big,.size=vol.spc*1536+300,.done=&n});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_WRITE,.entry=&file,.position=19,.data=big+19,.size=30,.done=&n});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_WRITE,.entry=&file,.position=file.size,.data=big,.size=vol.spc*512,.done=&n});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=&file,.directory=b.first,.name="Renamed file.bin"});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=&file,.directory=b.first,.name="R.bin"});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=&a,.directory=b.first,.name="Moved directory"});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_TRUNCATE,.entry=&file,.position=17});
+        if (!e) e=transaction_call((struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=&file});
+        if (!e) e=fat_unmount(&vol);
+        CHECK(!vol.transactions && !cache.reserved_bytes);
+        cache_destroy(&cache); return e;
+    }
     e=fat_create(&vol,vol.root,"Crash A",FAT_ATTR_DIR,&a);
     if (!e) e=fat_create(&vol,vol.root,"Crash B",FAT_ATTR_DIR,&b);
     if (!e) e=fat_create(&vol,a.first,"Crash file long.bin",0,&file);
@@ -372,6 +407,7 @@ int main(int argc,char **argv) {
     else if (!strcmp(argv[1],"write")) write_tests(&f);
     else if (!strcmp(argv[1],"fault")) fault_tests(&f);
     else if (!strcmp(argv[1],"crash")) crash_tests(&f);
+    else if (!strcmp(argv[1],"txcrash")) { transaction_crashes=true; crash_tests(&f); }
     else if (!strcmp(argv[1],"cache")) cache_tests(&f);
     else if (!strcmp(argv[1],"partition")) partition_tests(&f);
     else if (!strcmp(argv[1],"manifest")) { mounted(&f,false); manifest_dir(vol.root,"",0); unmounted(); fake_close(&f); return 0; }

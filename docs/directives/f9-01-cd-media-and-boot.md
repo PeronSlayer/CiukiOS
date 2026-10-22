@@ -32,3 +32,16 @@ QEMU (the lead runs it; define the case): `tests/suites/f9-cd-smoke.json`: profi
 Acceptance: items 1–9 delivered with green host tests; the canonical build (`make build-full`, run by the lead) produces the ISO within the limit with the manifest; the smoke suite passes on the three profiles; no ATA write in any Setup-mode boot; the kernel changes touch no path taken by normal boots other than the option parse and the flag checks (diff review).
 
 Report `build/codex/f9-01-report.md` with citations, the exact catalogue bytes, the size figures, exact commands and results. `rg`/`sed` only; no QEMU, no `systemd-run`, no `make build-full` (building the ISO with your script on the existing `build/f0` payloads is allowed when they exist in the worktree, otherwise test with synthetic payloads), no commits, no diary edits; English.
+
+## Amendment R (lead, 2026-10-22 23:55): resumed for the public distribution
+
+The owner wants CiukiOS distributed for people's retro PCs, and the next image includes every requested integration. This directive resumes from its worktree's earlier work, which main has been merged into:
+- **f9-01:** the CD media, Setup-mode kernel and the `setup=1` loader token, now in the option table after `usbscan`/`ecpoll`.
+- **f9-02:** the uncommitted 2026-10-21 work, now committed: libdisk, disk lease, stub MBR, disk device.
+
+Complete the directive as written, keep earlier work that still meets it, and adapt it to the current main.
+
+Lead notes from the merge:
+- **Shared field.** Both f9-01 and f9-02 add `setup_capability` to `struct process`. Keep one field with one comment, so the two branches merge cleanly.
+- **f9-02 only.** In `syscalls_file.c`, main's volume-read media check was kept with the `PX_DISK` early return. The earlier f9-02 drive-mask change for volume nodes was dropped. Prove with host tests that raw-disk and volume I/O still meet the lease and hold rules.
+- **Universal hardware.** Setup must work on any baseline PC, not only the T23. Disk and controller detection uses the generic paths, and the display uses the registry and software engine of `display-driver-model.md` when no native driver binds.

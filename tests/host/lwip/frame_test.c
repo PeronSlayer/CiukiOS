@@ -30,6 +30,9 @@ int netif_transmit(struct netif *d,gen_t generation,const void *data,unsigned by
     if(busy)return -16;
     CHECK(bytes==60);memcpy(received,data,bytes);transmits++;if(advance_tick)g_ticks++;return 0;
 }
+static unsigned watches;
+void net_stack_watch(void){watches++;}
+void netif_snapshot(struct netif *d,struct net_stats *out){*out=d->stats;}
 #include "../../../src/kernel/net/lwip_handoff.c"
 int main(void)
 {
@@ -54,6 +57,14 @@ int main(void)
     for(unsigned i=0;i<2;i++)CHECK(!net_stack_transmit(i,frame,60));
     before=transmits;advance_tick=true;net_stack_driver_service();CHECK(transmits==before+1 && outgoing[1].count==1);
     advance_tick=false;net_stack_driver_service();CHECK(!outgoing[1].count);
+    /* f6-22: every service pass offers the stack a watch pass; the counters
+     * the `[net]` records print are the driver's own. */
+    CHECK(watches>=8);
+    devices[1].stats=(struct net_stats){.rx_packets=5,.rx_errors=7,.rx_dropped=2,.tx_completed=9,.tx_errors=1};
+    struct net_stack_counters c={0};net_stack_driver_counters(1,&c);
+    CHECK(c.rx==5 && c.rx_errors==7 && c.dropped==2 && c.tx==9 && c.tx_errors==1 && !c.frames_in && !c.frames_out);
+    c=(struct net_stack_counters){0};net_stack_driver_counters(2,&c);CHECK(!c.rx && !c.tx);
+    puts("PASS f6-22 watch offered per service pass; driver counters for the [net] records");
     puts("PASS Amendment 1.9/10/11 two-NIC sixteen-frame/time budget, renamed lwIP ingress and primary MAC entropy");
     puts("PASS production copied bridge FIFO/full/backpressure/batch/stale generation/quarantine/ingress/bounds");return 0;
 }

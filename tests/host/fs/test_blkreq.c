@@ -76,6 +76,21 @@ static void pool_bounds(void) {
     assert(!m.calls && !blk_queue_destroy(&m.queue));
     puts("PASS requests bounded=32 prepared cancellation, backpressure, no early/double release");
 }
+static uint64_t urgent_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000; }
+static void urgent_pause(void *arg) { (void)arg; }
+static void urgent_readers(void) {
+    struct disk m; init(&m); uint8_t b[2][512];
+    struct blk_request *normal=prepare(&m,BLK_READ,20,512,b[0],BLK_DEMAND,0);
+    struct vfs_request audio={.urgent_reader=true,.deadline=UINT64_MAX,.now=urgent_now,.pause=urgent_pause};
+    struct fs_request_scope scope;
+    fs_request_enter(&scope,&audio);
+    struct blk_request *urgent=prepare(&m,BLK_READ,30,512,b[1],BLK_DEMAND,0);
+    fs_request_leave(&scope);
+    assert(!blk_request_submit(normal) && !blk_request_submit(urgent));
+    drop(normal,0); drop(urgent,0);
+    assert(m.order[0]==30 && m.order[1]==20 && !blk_queue_destroy(&m.queue));
+    puts("PASS F1-87 audio demand read precedes older normal desktop read; age promotion preserved");
+}
 static void priorities(void) {
     struct disk m; init(&m); uint8_t b[4][512];
     struct blk_request *w=prepare(&m,BLK_WRITE,100,512,b[0],BLK_BACKGROUND,4);
@@ -154,6 +169,31 @@ static void faults(void) {
         (unsigned long long)stats.cancelled,(unsigned long long)stats.timeouts,(unsigned long long)stats.backpressure,stats.limit_bytes);
     assert(!blk_queue_destroy(&m.queue));
     puts("PASS command cap=64KiB adaptive<=10ms, timeout, generation, queued/issued cancel and uncertain write");
+}
+/* f1-96: a controller that cannot finish one command inside the reader
+ * budget (full-speed USB: a 64 KiB READ(10) takes about 65 ms) pins its
+ * command size. The f1-83 adaptive split with its one-page floor is the
+ * T23 b453bc92 negative control (usb-storage limit=4096). */
+static void pinned_limits(void) {
+    struct disk m; init(&m); static uint8_t b[65536]; memset(b,0x5a,sizeof(b));
+    fake_clock=true; clock_ms=1000; m.delay_ms=70;
+    blk_queue_set_limits(&m.queue,65536,65536);
+    struct blk_queue_stats stats;
+    for (unsigned i=0;i<4;i++) { m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); assert(m.calls==1 && m.sizes[0]==128); }
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==65536 && !stats.split);
+    blk_queue_set_limits(&m.queue,65536,0);
+    m.calls=0; assert(!blkdev_read(&m.dev,0,128,b));
+    m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); assert(m.calls>=8);
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes<=8192 && stats.limit_bytes>=4096);
+    /* One-sector fallback: every request is split into 512-byte commands. */
+    blk_queue_set_limits(&m.queue,512,512); m.delay_ms=0;
+    m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); assert(m.calls==128 && m.sizes[0]==1 && m.sizes[127]==1);
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==512);
+    blk_queue_set_limits(&m.queue,0,0); blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==512);
+    blk_queue_set_limits(&m.queue,1u<<20,1u<<20); blk_queue_snapshot(&m.queue,&stats);
+    assert(stats.limit_bytes==65536 && m.queue.max_bytes==65536 && m.queue.floor_bytes==65536);
+    fake_clock=false; assert(!blk_queue_destroy(&m.queue));
+    puts("PASS f1-96 pinned queue limits: slow 64 KiB commands keep 64 KiB, adaptive one-page floor control, 512-byte fallback, clamps");
 }
 static void telemetry(void) {
     struct disk m; init(&m); uint8_t b[512];
@@ -253,4 +293,5 @@ static void idle_telemetry(void) {
     assert(!blk_queue_destroy(&m.queue)); fake_clock=idle_report=false;
     puts("PASS f1-86 idle queue telemetry: completed DMA burst published at next 5s boundary, no empty duplicates, later PIO completion retained");
 }
-int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }
+int main(void) {
+    urgent_readers(); pool_bounds(); priorities(); merging(); faults(); pinned_limits(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }

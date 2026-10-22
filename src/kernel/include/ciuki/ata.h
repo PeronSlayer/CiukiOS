@@ -54,6 +54,7 @@ struct ata_device {
     unsigned unit;
     bool present, atapi, identified, lba48, flush_ext;
     char model[41];                 /* printable, whitespace replaced by '_' */
+    char serial[21], firmware[9];   /* f9-02: IDENTIFY words 10-19 and 23-26, trimmed */
     gen_t generation;              /* last issued command, retained for evidence */
     uint64_t commands, elapsed_ms;
     uint8_t status, error, command;
@@ -63,6 +64,10 @@ struct ata_device {
     uint8_t udma_mode;
     int8_t firmware_udma;            /* measured before the discovery SRST */
     uint64_t dma_requests, dma_bytes, dma_bounces, dma_errors;
+    /* f1-92: interrupt edges that were not this command's completion, issued
+     * commands completed after their request was interrupted, and failed DMA
+     * requests repeated once through PIO. Records are bounded per unit. */
+    uint32_t early_irqs, interrupted_inflight, dma_retries;
     uint8_t packet_bytes, packet_type, sense_key, asc, ascq;
     const char *ready_stage;
     int ready_error;
@@ -70,6 +75,9 @@ struct ata_device {
     uint32_t session_lba;
     uint32_t spinup_generation;
     uint64_t packet_commands, read_blocks, media_writes, max_packet_ms;
+    /* f9-01: write-class commands issued to a fixed disk (WRITE, WRITE DMA,
+     * emergency write, FLUSH CACHE); Setup mode asserts it stays zero. */
+    uint64_t write_commands;
     /* f5-12B2 CD audio: TOC cache, page 2Ah capability bits (fetched once
      * per drive, cd_caps_valid) and the audio-disc readiness flag. */
     struct atapi_toc toc;
@@ -101,6 +109,8 @@ struct ata_channel {
     int claims[3];
     gen_t generations[3];
     uint8_t control_shadow;
+    uint8_t expiry;                 /* f1-92: why the last expired()/wait ended */
+    const char *fault_cause;        /* f1-92: cause carried from DMA to channel fault */
     bool native, stopped, discovered, quiescing;
 };
 

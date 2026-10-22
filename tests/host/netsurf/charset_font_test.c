@@ -16,6 +16,7 @@
 #include "framebuffer/font.h"
 #include "sdk/netsurf/port/charset.h"
 #include "sdk/netsurf/port/font.h"
+#include "sdk/netsurf/port/font_work.h"
 static size_t measure_calls,processed_bytes;
 int __real_ciuki_font_measure(struct ciuki_font_face *,unsigned,const char *,size_t,int32_t *);
 int __wrap_ciuki_font_measure(struct ciuki_font_face *f,unsigned size,const char *s,size_t n,int32_t *out)
@@ -54,6 +55,20 @@ int main(void)
     plot_font_style_t style={.family=PLOT_FONT_FAMILY_SANS_SERIF,.size=12*PLOT_STYLE_SCALE,.weight=400,.foreground=0xff};
     const char *text="Ciuki caf\xc3\xa9 \xe2\x82\xac";size_t length=strlen(text);int width;
     assert(fb_font_width(&style,text,length,&width)==NSERROR_OK && width>60);
+    /* f6-23: exact byte/size/style keys, not pointer identity or an approximate
+     * per-character sum. A cache hit avoids SDK locking and measurement. */
+    size_t before=measure_calls;
+    char copy[80];strcpy(copy,text);int cached_width;
+    assert(fb_font_width(&style,copy,length,&cached_width)==NSERROR_OK && cached_width==width);
+    assert(measure_calls==before && ciuki_font_work_read().hits);
+    plot_font_style_t other=style;other.flags=FONTF_ITALIC;other.weight=700;
+    assert(fb_font_width(&other,copy,length,&cached_width)==NSERROR_OK);
+    assert(measure_calls==before+1);
+    other=style;other.size+=PLOT_STYLE_SCALE;
+    assert(fb_font_width(&other,copy,length,&cached_width)==NSERROR_OK);
+    assert(measure_calls==before+2);
+    copy[0]='X';assert(fb_font_width(&style,copy,length,&cached_width)==NSERROR_OK);
+    assert(measure_calls==before+3);
     size_t offset;int actual;
     assert(fb_font_position(&style,text,length,9999,&offset,&actual)==NSERROR_OK && offset==length && actual==width);
     assert(fb_font_position(&style,text,length,-1,&offset,&actual)==NSERROR_OK && !offset && !actual);

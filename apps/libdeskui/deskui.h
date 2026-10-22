@@ -311,6 +311,7 @@ struct du_ui {
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
     struct du_rect invalid; /* dirty=3: union of clipped client invalidations */
+    struct du_rect rendered; /* the region the last du_render drew */
     unsigned cursor;                       /* application default, used outside text/splitter controls */
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
@@ -393,6 +394,9 @@ struct du_window {
     int close_reply_pending; /* disposition+1, retried if the client queue is full */
     int present_pending; /* optional completion-paced client freezes surface writes */
     int manual_damage; /* application combines ordinary damage with its frame request */
+    /* f4-37 opt-in for clients that draw only inside du_render: present
+     * compares and copies only the region it drew, not the whole surface. */
+    int present_rendered;
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;

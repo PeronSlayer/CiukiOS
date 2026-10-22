@@ -666,6 +666,26 @@ This extra state is necessary for truthful totals after reset/panic, which
 cannot be recovered from an in-memory accumulator or a step number alone.
 No boot-info ABI bits or fields are added.
 
+### BOOT.CFG `setup=1` (f9-01, Setup CD)
+
+`setup=1` is a lead-reserved token for the Setup CD's boot image only
+(`docs/design/cd-setup-plan.md` sections 3.2 and 8):
+
+- Loader: accepted as an ordinary 7-byte token and passed through unchanged
+  in `options` (no flag, no other behaviour). Following lead decision O2,
+  the token is in f0-54's exact option table after `usbscan=0` and
+  `ecpoll=0|1`. It fits the existing 48-sector extent; malformed variants
+  are rejected with `selection_error`.
+- Kernel: `setup=1` in `options` selects Setup mode unless the boot carries
+  `CBI_F_TEST_REQUEST` (`src/kernel/include/ciuki/setup_mode.h`): the
+  storage layer starts read-only (no writer task, write enable, disk log,
+  pagefile or black box; ATA volumes from `E:`), `C:` is the boot CD's
+  El Torito image through `cdview`, `D:` its ISO 9660 tree, and the
+  supervisor spawns `/Programs/setup` instead of the desktop.
+- Never written to an installed disk: the installed `BOOT.CFG` never
+  contains `setup=1`, and the disk image's `BOOT.CFG` must not carry it
+  (`scripts/build_cd.py` refuses one that does).
+
 ## Physical memory ownership
 
 - Usable pages: type 1 entries of the normalized map in `ciuki_boot_info`
@@ -702,6 +722,21 @@ No boot-info ABI bits or fields are added.
   be copied after boot. Entry 1023 is per address space: it points to that
   address space's own directory (recursive window), is supervisor-only, and
   is excluded from mapping-equality checks.
+- Kernel PDEs 768–1022 are created with the accessed flag already set
+  (f6-21b, 2026-10-22). The processor sets the accessed flag of every
+  paging-structure entry it uses in the directory that CR3 names, and the
+  dirty flag only in the leaf entry
+  ([Intel SDM Vol. 3A 4.8, as quoted on LKML](https://lkml.iu.edu/hypermail/linux/kernel/2103.1/08629.html)).
+  A directory copied before a kernel task first touched a 4 MiB region would
+  otherwise differ from the kernel directory in that bit only. On QEMU
+  (image 8af310c2) the isolation probe's second process zeroed its data page
+  at 28 MiB, the first page of PDE 775, after both clones, and reported
+  `shared_kernel_errors=1`. Linux presets the same flag in kernel table
+  entries (`_KERNPG_TABLE`,
+  [pgtable_types.h v6.12](https://github.com/torvalds/linux/blob/v6.12/arch/x86/include/asm/pgtable_types.h)).
+  Kernel PDEs are therefore bit-identical in every directory for the whole
+  boot; the working-set sampler clears accessed bits only in user PTEs.
+  Host regression: `tests/host/kernel_pde_test.c`.
 - 4 MiB PSE pages MAY be used, when CPUID reports PSE, only for direct-map
   ranges whose pages all share the same permissions and cache attributes.
   The kernel image (read-only text and data), guard pages and MMIO always
@@ -872,3 +907,20 @@ file size and the page-rounded reservation are preserved. The format,
 deadlines, assembled tests and limits (including nonreturning BIOS calls
 and pre-kernel disk persistence) are in the
 [F0-40 audit](../validation/f0-40-reliability-audit.md#loader-trail-and-limits).
+
+## f0-54: loader byte budget
+
+The ELF program-header scratch (`ph_table`, at most 32 × 32 bytes) shares
+the raw E820 buffer (`raw_map`, 128 × 24 bytes), which only `memory_collect`
+uses before A20, the FAT mount and the menu; later RAM checks read the
+normalized `boot_info.e820` array. `elf_load` fills every program-header
+byte it reads. Ordering invariant (accepted by the lead, 2026-10-21):
+`raw_map` is dead once `memory_collect` returns, and `elf_load` stays after
+it; code that reads or writes `raw_map` after `memory_collect`, or a
+program-header read before it, must first give `ph_table` its own buffer
+again. An assembly-time check keeps `MAX_PH * 32` within `raw_map`.
+The file stays 48 sectors; `loader_end` (`0x26841`) and the
+page-rounded reservation are unchanged. `scripts/loader_budget.py` reports
+the bytes per section and the free tail, and the size test requires at
+least 512 free bytes. See the
+[f0-54 record](../validation/f0-54-loader-budget.md).

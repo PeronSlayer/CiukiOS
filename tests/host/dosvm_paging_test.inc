@@ -463,8 +463,30 @@ static void test_pool_flat_stack_isr(void)
            v->memory.pool.stats.page_ins);
     destroy(v, true); vmp_detach(); empty();
 }
+static void test_pool_resolution_slices(void)
+{
+    struct dosvm *v;
+    struct dosvm_config cfg={.commitment=DOSVM_LOW_CAP+1024*1024};
+    CHECK(!dosvm_create(&cfg,&v));
+    uint32_t phys;
+    /* A resident working set removes storage from this CPU-stretch test. */
+    for (unsigned i=0;i<256;i++) CHECK(!dosvm_pool_frame(v,VM_POOL_BASE+i*PAGE_SIZE,true,true,&phys));
+    creation_cost_ns=creation_cost_span=creation_cost_max=0;
+    creation_cost_enabled=creation_cost_points=true;
+    unsigned before=preempt_points;
+    for (unsigned i=0;i<256;i++) {
+        creation_cost_charge(500000); /* T23-like model: 0.5 ms/page */
+        CHECK(!dosvm_pool_frame(v,VM_POOL_BASE+i*PAGE_SIZE,false,true,&phys));
+    }
+    creation_cost_boundary(); creation_cost_enabled=false;
+    CHECK(preempt_points==before+256 && creation_cost_max<=5000000);
+    printf("F1-87 resident pool: 256 resolutions, old model stretch=128ms, new max_slice_ns=%llu (<=5ms) PASS\n",
+        (unsigned long long)creation_cost_max);
+    destroy(v,true); empty();
+}
 static void test_pool_paging(void)
 {
+    test_pool_resolution_slices();
     test_pool_flat_stack_isr();
     test_pool_irq_split();
     test_pool_stack_prefault();

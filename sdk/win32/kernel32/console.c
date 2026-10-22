@@ -112,6 +112,33 @@ static int console(HANDLE h) {
   SetLastError(6);
   return 0;
 }
+/* f5-15B: Microsoft "SetConsoleCtrlHandler": add or remove a handler, or
+ * with a NULL routine set/clear the ignore-Ctrl+C state. The personality
+ * delivers no console control events, so the registration is only
+ * bounded bookkeeping; 64 handlers, like the documented per-process set. */
+static void *ctrl_handlers[64];
+static DWORD ctrl_count;
+BOOL W32API SetConsoleCtrlHandler(void *routine, BOOL add) {
+  if (!routine) {
+    (void)add; /* the ignore-Ctrl+C state has no event source to act on */
+    return 1;
+  }
+  if (add) {
+    if (ctrl_count == 64) {
+      SetLastError(8);
+      return 0;
+    }
+    ctrl_handlers[ctrl_count++] = routine;
+    return 1;
+  }
+  for (DWORD i = 0; i < ctrl_count; i++)
+    if (ctrl_handlers[i] == routine) {
+      ctrl_handlers[i] = ctrl_handlers[--ctrl_count];
+      return 1;
+    }
+  SetLastError(87);
+  return 0;
+}
 BOOL W32API GetConsoleMode(HANDLE h, DWORD *mode) {
   if (!mode) {
     SetLastError(87);

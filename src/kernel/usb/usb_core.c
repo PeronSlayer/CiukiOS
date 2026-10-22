@@ -3,6 +3,7 @@
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
 #include <ciuki/init.h>
+#include <ciuki/smi.h>
 #ifndef CIUKI_USB_HOST
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
@@ -13,6 +14,18 @@ static unsigned host_count;
 static struct usb_host *irq_hosts[USB_HOST_MAX];
 static struct kwait input_changed;
 static bool input_pending;
+/* BOOT.CFG options are already bounded by the loader. Exact token matching:
+ * an unknown/partial value keeps the normal 250 ms scan policy. */
+static bool periodic_scan(void) {
+    const char *s=g_boot.options; unsigned i=0;
+    while (i<sizeof(g_boot.options) && s[i]) {
+        while (i<sizeof(g_boot.options) && ((unsigned char)s[i]<=32 && s[i])) i++;
+        unsigned start=i;
+        while (i<sizeof(g_boot.options) && s[i] && (unsigned char)s[i]>32) i++;
+        if (i-start==9 && !memcmp(s+start,"usbscan=0",9)) return false;
+    }
+    return true;
+}
 bool usb_input_ready(void)
 {
     struct input_devices devices;
@@ -354,7 +367,9 @@ void usb_device_quarantine(struct usb_device *d, const char *reason)
              * port, retaining devices attached to other root ports. */
             usb_device_quarantine(hub, "hub_disable_failed");
     }
-    /* A device fault cannot authorize re-enumerating that port until reboot. */
+    /* A device fault cannot authorize re-enumerating that port while the
+     * device stays connected. f1-96b: an observed disconnect (CCS=0)
+     * releases the port; the next connection is a new device generation. */
     klog("[usb] quarantine device addr=%u reason=%s stage=%s", d->address, reason,
          d->storage.trace.stage ? d->storage.trace.stage : "enumeration");
 }
@@ -733,7 +748,7 @@ void usb_step(struct usb_host *h)
     if (!h->ready || h->quarantined) { fs_lock_drop(&h->transfer_lock); usb_storage_service(h); return; }
     h->busy = true;
     if (!usb_leases_valid(h)) { usb_host_drop(h); return; }
-    if (usb_expired(h, h->next_scan)) {
+    if ((!h->scanned || periodic_scan()) && usb_expired(h, h->next_scan)) {
         uint64_t tick = h->io.now(h->io.cookie);
         bool first_scan = !h->scanned;
         h->next_scan = tick + 250;
@@ -748,6 +763,7 @@ void usb_step(struct usb_host *h)
             h->scan_window = tick; h->scan_count = 0;
         }
         h->scan_count++;
+        if (smi_mark) smi_mark(SMI_USB_SCAN); /* f1-94 blackout coincidence */
         for (unsigned p = 0; p < h->ports && h->ready; p++) {
             unsigned s = h->ops->port_status(h, p);
             unsigned previous = h->root_status[p];
@@ -768,6 +784,12 @@ void usb_step(struct usb_host *h)
                     if (previous & USB_PORT_CONNECTED) usb_port_record(h, p, "disconnect", 0);
                     log->quarantine_reported = false;
                     if (child) { usb_detach(child, "disconnected"); h->root_child[p] = 0; }
+                    /* f1-96b: the quarantined device is physically gone. A
+                     * re-plug is debounced, reset and enumerated as a new
+                     * device; a persisting overcurrent blocks it again. */
+                    h->root_blocked[p] = false;
+                    klog("[usb] release port=%u controller=%s reason=disconnect tick=%llu",
+                         p + 1, h->owner, h->io.now(h->io.cookie));
                 }
                 if (log->pending) usb_port_record(h, p, log->pending, log->result);
                 h->root_status[p] = s;
@@ -903,9 +925,11 @@ static void service(void *arg)
     for (;;) {
         if (!h->ready || h->quarantined) { task_sleep_ms(1000); continue; }
         uint32_t f = irq_save(); h->irq_pending = false; irq_restore(f);
+        if (g_current) g_current->device_worker_site=(uint32_t)(uintptr_t)usb_step;
         usb_step(h);
+        if (g_current) g_current->device_worker_site=0;
         uint64_t now = native_now(0);
-        uint64_t due = h->next_scan;
+        uint64_t due = periodic_scan() ? h->next_scan : now+250;
         /* Control/BOT sleeps retain their per-host reservation. The separate
          * HID task services completed reports at 1 ms, independently. */
         unsigned ms = due > now && due - now <= 250 ? (uint32_t)(due - now) : 1;
@@ -918,11 +942,15 @@ static void input_service(void *arg)
     (void)arg;
     for (;;) {
         uint32_t f = irq_save(); input_pending = false; irq_restore(f);
+        if (smi_mark) smi_mark(SMI_HID_BEGIN); /* f1-94: one usb-hid turn */
         for (unsigned i = 0; i < host_count; i++) {
             fs_lock_take(&hosts[i].transfer_lock);
+            if (g_current) g_current->device_worker_site=(uint32_t)(uintptr_t)usb_hid_service;
             usb_hid_service(&hosts[i]);
+            if (g_current) g_current->device_worker_site=0;
             fs_lock_drop(&hosts[i].transfer_lock);
         }
+        if (smi_mark) smi_mark(SMI_HID_END);
         kwait_wait_until(&input_changed, hid_pending, 0, deadline_after_ms(1));
     }
 }

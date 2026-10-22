@@ -304,9 +304,23 @@ struct fake {
     bool defer_abort, bad_abort_signature;
     unsigned abort_status_reads;
     uint8_t abort_status;
+    /* f1-92 interrupt-edge models. late_edge: an edge latched before the
+     * master was prepared (no BM Interrupt) delivered right after a DMA
+     * command; dma_deferred: Start leaves the transfer live (BSY/DRQ, Active)
+     * until the next scheduler step; stray_after_start: one edge without BM
+     * Interrupt while that transfer is live; pio_early_edge: an edge while a
+     * PIO data-in command is still BSY, DRQ after busy_reads status reads. */
+    bool late_edge, dma_deferred, dma_in_flight, stray_after_start, pio_early_edge;
+    bool late_edge_bm, stray_bm_irq;   /* the edge is the drive's INTRQ: BM Interrupt latched */
+    uint8_t late_edge_status, live_status;
+    unsigned busy_reads, dma_aborts;
 };
 static struct fake *running;
 static void dma_bus_start(struct fake *f);
+static void dma_bus_finish(struct fake *f);
+/* f1-92: called at every Command register write (request-cancellation and
+ * competing-reader models of the T23 trial). */
+static void (*command_hook)(struct fake *f, uint8_t command);
 
 static void fake_native_irq(struct trap_frame *tf)
 {
@@ -386,6 +400,11 @@ static uint8_t fake_in8(void *ctx, uint16_t port)
     }
     if (port == f->channel.control || r == 7) {
         if (r == 7 && f->pending) { f->pending = false; f->irq_acks++; }
+        if (f->busy_reads) {
+            /* The early edge's PIO command becomes ready after N reads. */
+            if (!--f->busy_reads) { f->status = 0x48; interrupt(f); }
+            return ATA_BSY;
+        }
         if (f->kind[f->selected] == ABSENT)
             return f->absent_ff ? 0xff : 0;
         if (port == f->channel.control && f->abort_status_reads) {
@@ -420,7 +439,11 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
         CHECK(!((value ^ f->bm_command) & 8) || !(f->bm_command & 1));
         f->bm_command = value;
         if (value & 1) { f->dma_starts++; dma_bus_start(f); }
-        else { f->dma_stops++; if (f->fault != DMA_STUCK_MASTER) f->bm_status &= ~1u; }
+        else {
+            f->dma_stops++;
+            if (f->dma_in_flight) { f->dma_in_flight = false; f->dma_aborts++; } /* data discarded */
+            if (f->fault != DMA_STUCK_MASTER) f->bm_status &= ~1u;
+        }
         return;
     }
     if (f->channel.dma.ops && port == f->channel.dma.base + 2) {
@@ -476,6 +499,7 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     CHECK(r == 7);
     f->command = value;
     f->commands++;
+    if (command_hook) command_hook(f, value);
     if (f->discovery_model) {
         if (f->reset_started && (!f->signature_seen[0] || !f->signature_seen[1]))
             f->premature_commands++;
@@ -540,6 +564,21 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
             if (f->early_dma_ready) f->bm_status |= ATA_BM_IRQ;
             interrupt(f);
         }
+        if (f->late_edge) {
+            /* The PIC delivers an edge latched before ata_dma_prepare cleared
+             * the master: the drive shows a stale DRDY, the BM shows nothing. */
+            f->late_edge = false;
+            if (f->late_edge_status) f->status = f->late_edge_status;
+            if (f->late_edge_bm) f->bm_status |= ATA_BM_IRQ;
+            f->pending = true; deliver(f);
+        }
+        return;
+    }
+    if (f->pio_early_edge && !f->writing) {
+        /* ATA-6 9.5 DPIOI0: BSY while preparing. An edge arrives anyway. */
+        f->pio_early_edge = false;
+        f->status = ATA_BSY; f->busy_reads = 4;
+        f->pending = true; deliver(f);
         return;
     }
     if (f->fault != NO_IRQ && (!f->writing || f->fault == ERR || f->fault == DF))
@@ -569,7 +608,8 @@ static uint16_t fake_in16(void *ctx, uint16_t port)
     if (native_dma_ports && port == 0xcfc) return native_dma_pci_command;
     struct fake *f = ctx;
     CHECK(port == f->channel.base && f->status == 0x48 && !f->writing);
-    uint16_t v = (f->command == 0xec || f->command == 0xa1) ? f->identify[f->selected][f->words] : sector_word(f->lba, f->words);
+    uint16_t v = (f->command == 0xec || f->command == 0xa1) ? f->identify[f->selected][f->words] :
+        f->media_bytes ? fs_rd16(f->media_bytes + f->lba * 512 + f->words * 2) : sector_word(f->lba, f->words);
     f->data_reads++;
     if (++f->words == 256)
         block_end(f);
@@ -584,7 +624,8 @@ static void fake_out16(void *ctx, uint16_t port, uint16_t value)
     }
     struct fake *f = ctx;
     CHECK(port == f->channel.base && f->status == 0x48 && f->writing);
-    CHECK(value == sector_word(f->lba, f->words));
+    if (f->media_bytes) fs_wr16(f->media_bytes + f->lba * 512 + f->words * 2, value);
+    else CHECK(value == sector_word(f->lba, f->words));
     f->data_writes++;
     if (++f->words == 256)
         block_end(f);
@@ -617,6 +658,9 @@ static const struct ata_port_ops fake_ops = {
 static void irq_schedule(void)
 {
     struct fake *f = running;
+    /* A deferred DMA transfer ends one scheduler step after any edge that
+     * is already pending (the stray edge is delivered first). */
+    if (f->dma_in_flight && !f->pending) dma_bus_finish(f);
     if (f->delayed_irq) {
         g_ticks = f->delayed_irq;
         f->delayed_irq = 0;
@@ -630,13 +674,14 @@ static void quiesce_schedule(void)
     CHECK(!ata_channel_idle(&running->channel));
     CHECK(running->channel.quiescing && (running->control & 2));
 }
+static void stale_expire(void) { on_schedule = irq_schedule; } /* this step expires the wait */
 static void stale_schedule(void)
 {
     struct ata_channel *c = &running->channel;
     c->irq_generation = c->request_generation - 1;
     c->irq_sequence++;
     kwait_wake_all(&c->wait);
-    on_schedule = 0;                /* next scheduler step expires the unmatched wait */
+    on_schedule = stale_expire;     /* next scheduler step expires the unmatched wait */
 }
 static void fresh(struct fake *f, bool ext)
 {
@@ -1033,6 +1078,7 @@ static void test_storage_cache_faults(void)
 }
 #include "atapi_test.inc"
 #include "ata_dma_test.inc"
+#include "ata_f192_test.inc"
 
 static void discovery_fresh(struct fake *f, unsigned topology, bool dma)
 {
@@ -1316,8 +1362,10 @@ static void test_emergency_recorder(void)
         struct fake f;struct blkdev *d=qualify(&f,!!ext);
         uint64_t lba=ext ? 0x123456789ull : 8192;uint8_t data[512];fill(data,lba,1);
         unsigned commands=f.commands,before_yields=yields,before_waits=schedules;
+        uint64_t issued=f.channel.devices[0].write_commands;
         flags=0;CHECK(d->emergency_write && !d->emergency_write(d,lba,data));
         CHECK(f.commands==commands+2 && f.data_writes==256 && !flags);
+        CHECK(f.channel.devices[0].write_commands==issued+2);
         CHECK(yields==before_yields && schedules==before_waits && !f.channel.active && !f.channel.mutex.owner);
         unsigned writes=f.writes;
         f.channel.active=&f.channel.devices[0];CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
@@ -1325,8 +1373,10 @@ static void test_emergency_recorder(void)
         f.channel.mutex.owner=0;f.channel.stopped=true;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
         f.channel.stopped=false;f.status=0x80;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
         CHECK(f.writes==writes);
+        CHECK(f.channel.devices[0].write_commands==issued+2);
         f.status=0x40;f.fault=BUSY;commands=f.commands;
         CHECK(d->emergency_write(d,lba,data)==-FS_EIO && f.commands==commands+1);
+        CHECK(f.channel.devices[0].write_commands==issued+3);
         CHECK(yields==before_yields && schedules==before_waits);
         flags=0x200;
     }
@@ -1336,7 +1386,7 @@ int main(void)
 {
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
-    test_dma(); test_constant_pic_masks(); test_emergency_recorder();
+    test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

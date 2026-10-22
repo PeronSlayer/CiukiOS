@@ -38,13 +38,13 @@ def wallpaper_cache_payloads(out=None):
     """Pre-render the default with the production C renderer, never a PIL substitute."""
     out = Path(out) if out is not None else DESKTOP / "wallpaper-cache"
     source = ROOT / "assets/wallpapers/ciuki/Ciuk2.png"
-    # Ciuki interprets FAT timestamps as UTC; mcopy -m with TZ=UTC below
-    # preserves this exact source timestamp, truncated to two seconds.
-    mtime = int(source.stat().st_mtime) & ~1
+    # The cache identity of /system/ sources ignores the FAT mtime (f2-90b), so
+    # the checkout time of the asset no longer affects the seeded file names.
+    mtime = 0
     units = ("render_wallpaper.c", "wallpaper_io.c", "wallpaper.c", "image.c", "settings.c", "theme.c")
-    inputs = {"sources": {name: sha256(ROOT / "apps/desktop" / name) for name in (*units, "wallpaper_io.h", "wallpaper.h", "settings.h", "theme.h", "ui_fonts.h", "desktop.h", "shell.h", "protocol.h")},
+    inputs = {"sources": {name: sha256(ROOT / "apps/desktop" / name) for name in (*units, "wallpaper_io.h", "wallpaper.h", "settings.h", "theme.h", "ui_fonts.h", "desktop.h", "shell.h", "credits.inc", "protocol.h")},
               "stb_sha256": sha256(ROOT / "third_party/stb/stb_image.h"),
-              "source_sha256": sha256(source), "source_size": source.stat().st_size, "source_mtime": mtime}
+              "source_sha256": sha256(source), "source_size": source.stat().st_size}
     manifest = out / "manifest.json"
     try:
         record = json.loads(manifest.read_text())
@@ -67,7 +67,7 @@ def wallpaper_cache_payloads(out=None):
                                     capture_output=True, text=True)
         names = result.stdout.splitlines()
         require(len(names) == len(WALLPAPER_SIZES), "default wallpaper cache resolutions")
-        record = {"inputs": inputs, "format": "XRGB8888 little-endian B,G,R,0", "mode": "fill", "colour": "375564",
+        record = {"inputs": inputs, "format": "XRGB8888 little-endian B,G,R,0", "mode": "fill", "colour": "2b4a63",
                   "source_path": "/system/wallpapers/Ciuk2.png", "files": {}}
         for name, (width, height) in zip(names, WALLPAPER_SIZES):
             require(Path(name).name == name and name.endswith(f"-{width}x{height}-fill.raw"), "wallpaper cache key")
@@ -615,7 +615,9 @@ def build(kernel, out, boot_cfg):
         metadata["dos_conformance"]={"reference":"installed-unqualified"}
         unified=conformance.module("unified_dos",ROOT/"scripts/unified_dos.py")
         qualification=ROOT/"build/unified-dos/qualified.json"
-        if qualification.is_file():
+        # f3-57: a fork qualification (two identical fork builds + live IFS CPU
+        # boots) selects the CiukiDOS fork + CIUKIDF.SYS for kernel=unified.
+        if qualification.is_file() or unified.FORK_QUALIFIED.is_file():
             rebuilt=dos_image.parent/"UNIFIED.IMG"
             identity,license_dir,metadata["unified_dos"]=unified.install(
                 rebuilt,system_files,reference_dirs,game_files,
@@ -708,6 +710,9 @@ def build(kernel, out, boot_cfg):
             notices={p.name:p.read_bytes() for p in license_dir.iterdir()}
             unified.readback(read_unified,identity,notices)
         os.replace(candidate, out)
+    # f9-01: the loader of this build beside the image; the Setup CD boot
+    # image carries the same bytes (scripts/build_cd.py checks all three).
+    (out.parent / "ciukldr.bin").write_bytes(loader)
     image_sha = sha256(out)
     write_manifest(out, kernel, image_sha, payloads, metadata)
     if "/system/dos/FREEDOS.IMG" in sources:

@@ -86,13 +86,19 @@ void vmm_init(void)
     mm_claim(kpd_phys, 1, MM_TABLE);
     kpd = table_va(kpd_phys);
     memset(kpd, 0, PAGE_SIZE);
+    /* Every address space copies PDEs 768-1022 at creation (as_create), and
+     * they never change afterwards. The CPU sets the accessed flag of a PDE
+     * in the directory it walks (Intel SDM Vol. 3A 4.8; the dirty flag only
+     * in leaf entries), so a first kernel touch of a 4 MiB region would set
+     * it in one copy only. Preset it, as Linux's _KERNPG_TABLE does: kernel
+     * PDEs then stay identical in every directory (f6-21b). */
     for (unsigned i = 768; i < 1023; i++) {
         uint32_t pt = pmm_alloc_zone(ZONE_DMA);
         if (!pt)
             panic("vmm: no page for kernel table %u", i);
         mm_claim(pt, 1, MM_TABLE);
         memset(table_va(pt), 0, PAGE_SIZE);
-        kpd[i] = pt | PTE_P | PTE_W;
+        kpd[i] = pt | PTE_P | PTE_W | PTE_A;
     }
     kpd[1023] = kpd_phys | PTE_P | PTE_W;   /* recursive window */
 

@@ -138,3 +138,74 @@ Decode up to 4096 frames per batch, yield only above half-full, and wake the
 reader when audible retirement frees a complete batch. Publishing PCM does
 not block or rendezvous with the pump. Existing timed pumping needs no new
 kernel readiness feature.
+
+## F1-101 prefill, reservoir target and the kernel producer boost (2026-10-22)
+
+Playback starts after `MUSIC_PREFILL_MS` (1 s) of decoded PCM instead of two
+seconds. The player defends a `MUSIC_TARGET_MS` (500 ms) reservoir: below it
+the pump keeps the device stream at `MUSIC_DEVICE_BEHIND` (1280 frames), one
+period under the kernel's producer mark, so the mixer reports the stream
+behind its target lead and the kernel raises the decoder (the thread that
+issues `AUDIO_REFILL_READ`) and the pump (the writer) to the device band's
+lower edge within the shared 20 %/100 ms producer budget; at the target, or
+at the end of the file, the pump fills the 2048-frame stream as before. The
+reader still fills the ring when the CPU allows, so the f4-34 storage-stall
+tolerance stays. The level record ends with
+`boost=<flags> boosts=<n> boost_ms=<n> over=<n>` from `AUDIO_GET_PRODUCER`
+(flags 1 behind, 2 boosted, 4 withheld; window deltas). Research, decisions
+and replay results: `docs/validation/f1-101-audio-producer-priority.md`.
+
+## F4-37 decoder cost record, x87 path and UI frame bound (2026-10-22)
+
+The reader accumulates per-stage time-stamp-counter cycles (`struct
+music_cost`, `apps/music/decoder.h`) and the pump emits, after every
+`[music] level` record, one protected record for the same 5 s window:
+
+```
+[music] cost decode_us=<n> synth_us=<n> imdct_us=<n> resample_us=<n> ui_us=<n>
+  repaints=<n> frames=<n> tiny_values=<n> pcm_us=<n> io_us=<n> pump_us=<n>
+  out=<n> mhz=<n> de=<n> ue=<n> best_kc=<n> loop=<n> mem=<n>
+```
+
+(one line, at most 240 bytes; the fields the directive names come first).
+For MP3, `decode` is side information, bit reservoir, scalefactors, Huffman
+decoding with requantisation and stereo processing; `imdct` reordering, alias
+reduction, IMDCT and overlap; `synth` the DCT-II and polyphase window;
+`pcm` the float to int16 conversion; `resample` the adapter (rate
+conversion, stereo extraction, input buffering); `io` the stdio reads,
+including any wait for storage; `ui` the UI thread's turns (events,
+rendering, presenting, the snapshot poll); `pump` the worker's pump and
+publication. WAV and Ogg blocks count as `decode`. `frames` counts MPEG
+frames (blocks), `out` output frames, `best_kc` the fewest kilocycles one
+complete MPEG frame took (no preemption inside), `tiny_values` values below
+FLT_MIN found by scanning the synthesis and overlap state every eighth
+frame, `de`/`ue` frames whose float unit raised the denormal-operand or
+underflow flag (x87 status word, read and cleared per frame). Cycles become
+microseconds with `mhz`, the window's own TSC rate against the kernel clock;
+on the P6 the TSC counts core clocks and changes with SpeedStep. `loop` and
+`mem` are two fixed workloads timed once per record (1024 dependent adds;
+a second pass over 4 KiB of the player's memory), so a throttled core or
+uncached memory shows as a multiple of their usual values.
+
+The decoder keeps minimp3 `ea99364` unmodified. `mp3_frame` repeats
+`mp3dec_decode_frame`'s layer III path with stage timers and two changes,
+both checked on the i686 x87 build by `tests/host/desktop/music_x87_test.c`:
+minimp3 produces float output (`MINIMP3_FLOAT_OUTPUT`) that `pcm_s16`
+converts in integer arithmetic with minimp3's own rounding (the C
+conversion on x87 costs two FLDCW per sample), and the last synthesis row
+is cleared before each granule (its unwritten lanes otherwise carried stack
+garbage into `qmf_state`, and the mono copy loaded denormal patterns through
+the x87). The rate conversion keeps its exact integer interpolation without
+64-bit divisions. The PCM is within 1 LSB of upstream's own int16 output on
+every test vector. Not taken: minimp3's SIMD path needs SSE2 (CPUID bit 26,
+absent on the Pentium III) and the native process ABI enables no SSE.
+
+The window presents at most 15 frames per second (`MUSIC_UI_FPS`): the
+Music main loop holds the toolkit's client-owned `present_pending` flag
+between frames while messages and input are still handled, and the window
+opts into `present_rendered` (libdeskui), so a present compares and copies
+only the region `du_render` drew. A position update repaints and compares
+the time label and the seek bar, not the 560x420 surface.
+
+Research, measurements, the cycle model and the libmad evaluation:
+`docs/validation/f4-37-music-decoder-cost.md`.

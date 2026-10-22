@@ -97,7 +97,10 @@ static int (*fast_flush)(struct blkdev *);
 static uint64_t slow_ns;
 static void slow_transfer(uint64_t ns)
 {
-    CHECK(space.mutating & (1u << 2)); /* volume reservation covers metadata only */
+    /* f1-89: the exclusive pagefile description and transaction pin survive
+     * metadata I/O, while the volume publication guard has been released. */
+    CHECK(!((space.mutating|space.reserved)&(1u<<2)));
+    CHECK(space.transaction_users[2] && vol.transactions && pf.table.handles[pf.handle]->node->pins);
     slow_ns += ns;
     struct timespec pause = { .tv_sec = (time_t)(ns / 1000000000), .tv_nsec = (long)(ns % 1000000000) };
     CHECK(!nanosleep(&pause, 0));

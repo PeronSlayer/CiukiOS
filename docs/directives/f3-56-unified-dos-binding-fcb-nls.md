@@ -168,3 +168,37 @@ live VFS tests. Lead owns cross-review, canonical image and allowed runtime
 evidence. Codex runs no QEMU/systemd-run/image build, no git mutations or diary
 edits; no new panic, unmeasured memory increase, game/old-guest behavior change,
 duplicated filesystem owner or private corpus reference. English throughout.
+
+## Amendment 1 (lead, 2026-10-21 20:40, after the delivery review)
+
+Decisions on the six points of `build/codex/f3-56-report.md`:
+
+1. **Reserved** (lead): discovery CX=2; version strings `DFV2`/`DFB2`; feature
+   bits 3Fh; ROM window F000:1C00–1C3F with role bytes D2/A2/E2/C2; the
+   driver and kernel identity strings as implemented. Record them in the ABI
+   table of `docs/design/unified-dos-contract.md` (one row each, with the
+   f3-56 source file as reference). No other number is reserved by f3-56.
+2. **Confirmed**: AL=FFh for FCB authority failures with the FCB-name check
+   against the SFT; 59h codes 38/39 after FCB end-of-file and short writes;
+   the derived 65h/03 lowercase table; FreeDOS case tables as the single
+   definition (the 80h–FFh uppercasing change relative to v1 is accepted and
+   must be stated in the validation document); 2F/1226h as in K2043. Write
+   each as a decision line in `docs/validation/f3-56-unified-binding.md`.
+3. The stray `third_party/freedos/freedos` symlink was removed by the lead.
+4. The ABI layout test already carries `CIUKI_DOSVM_UNIFIED` on `main`
+   (merged into this worktree at `4ffa413a`); rerun `host_kernel_tests.sh`
+   unmodified and report the real result.
+5. **Required**: add patch 0002 and every `fork/` file to
+   `docs/design/unified-dos-licenses.tsv` and to the source-bundle manifest
+   used by the release archive (GPL-2.0-or-later, grant
+   `docs/licenses/CiukiDOS-unified-kernel-GRANT.md`); the bundle test must
+   fail when a fork file is missing from the manifest.
+6. **DOS=LOW** is the required profile for `kernel=unified`; the refusal of
+   DOS=HIGH stays and is logged once with the reason.
+
+Then continue, in the same worktree, with directive f3-57
+(`f3-57-unified-dos-vmm-file-channel.md`): the live VFS backend at the seven
+sites, PENDING producers with the full INT 24h frame and Abort, and the image
+installation of the fork kernel and CIUKIDF.SYS under `kernel=unified`. Report
+f3-57 in `build/codex/f3-57-report.md`. Same rules: no QEMU, no image build,
+no git mutations, no diary edits, nothing deleted outside the worktree.

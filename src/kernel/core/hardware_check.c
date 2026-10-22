@@ -12,6 +12,7 @@
 #include <ciuki/display.h>
 #include <ciuki/savage2d.h>
 #include <ciuki/audio.h>
+#include <ciuki/thinkpad_ec.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
 #include <ciuki/abi.h>
@@ -123,7 +124,13 @@ static void input_window(bool mouse,uint64_t until,struct hw_check_result *out)
     uint64_t end=check_now(0)+5000;
     if (end>until-500) end=until-500;
     unsigned events=0, volume=0, displayed=0;
+    uint64_t ec_next=0;
     while (check_now(0)<end) {
+        /* f1-100: no periodic EC traffic; this user-run key window asks
+         * for one rate-bounded EC read per second instead. */
+        if (!mouse && audio.master_in_hardware && check_now(0)>=ec_next) {
+            thinkpad_ec_refresh_request(); ec_next=check_now(0)+1000;
+        }
         struct input_event e;
         for (unsigned count=0;count<INPUT_CAPACITY && input_read(&e);count++) {
             bool relevant=mouse ? e.source==INPUT_USB && (e.type==INPUT_REL || e.type==INPUT_BTN) :

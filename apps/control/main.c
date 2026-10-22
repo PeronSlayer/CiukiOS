@@ -3,6 +3,7 @@
  * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
 #include "control.h"
 #include "programs.h"
+#include "decoder.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #ifdef __i386__
 #include <ciuki/raw.h>
@@ -17,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -27,7 +29,9 @@
 struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
-    int saved_w, saved_h; };
+    int saved_w, saved_h;
+    /* f2-88b: Display page timing: open, first frame, worker job, worst gap between UI turns (= ping latency). */
+    uint64_t disp_open, disp_first, disp_last_idle, disp_gap_max, disp_gap_logged; unsigned disp_decode_seen; int disp_open_logged; };
 
 /* Panel geometry is independent of desktop preferences and display rollback. */
 static void panel_size(int *width, int *height)
@@ -190,23 +194,8 @@ static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
     closedir(dir);
     return (int)n;
 }
-static int decode(void *ctx, const char *path, struct desk_image *out)
-{
-    (void)ctx;
-    FILE *f = fopen(path, "rb");
-    if (!f) return -1;
-    size_t cap = 1 << 16, n = 0; uint8_t *data = malloc(cap);
-    while (data) {
-        if (n == cap) { if (cap >= DESK_IMAGE_FILE_MAX) { free(data); data = NULL; break; } uint8_t *g = realloc(data, cap * 2); if (!g) { free(data); data = NULL; break; } data = g; cap *= 2; }
-        size_t got = fread(data + n, 1, cap - n, f);
-        if (!got) break;
-        n += got;
-    }
-    fclose(f);
-    int r = data ? desk_image_decode(data, n, out) : -1;
-    free(data);
-    return r;
-}
+static int decode_begin(void *ctx, const struct cp_preview_req *req) { (void)ctx; return cp_decoder_begin(req); }
+static int decode_poll(void *ctx, struct cp_preview_done *out) { (void)ctx; return cp_decoder_poll(out); }
 static int mixer(void *ctx, int *volume, int *muted)
 {
     (void)ctx;
@@ -324,9 +313,49 @@ static int close_request(struct du_window *w, void *user)
       du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); m->ui.dirty=1; return 0;
   }
   remember_size(m); return cp_close(&m->app); }
+/* The kernel's debug_write path is a plain klog line ("[user N] ...": serial, console and the protected boot
+ * log), not a debug-only sink. The trailing newline is dropped: debug_write maps control bytes to '.'. */
+static void raw_log(const char *line)
+{
+#ifdef __i386__
+    size_t n=strlen(line); if (n && line[n-1]=='\n') n--;
+    (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line,(uint32_t)n,0,0,0,0);
+#else
+    fputs(line,stderr);
+#endif
+}
+static unsigned ms_since(uint64_t from, uint64_t to) { return to > from ? (unsigned)((to - from) / 1000000ull) : 0; }
+static void display_log(struct cp_main *m, uint64_t mono)
+{
+    char line[160]; struct cp_app *a=&m->app;
+    if (a->page != CP_DISPLAY) { m->disp_open = 0; return; }
+    if (!m->disp_open) { m->disp_open = m->disp_last_idle = mono; m->disp_first = 0; m->disp_gap_max = 0; m->disp_open_logged = 0; m->disp_decode_seen = a->decode_done; }
+    uint64_t gap = m->disp_last_idle && mono > m->disp_last_idle ? mono - m->disp_last_idle : 0;
+    m->disp_last_idle = mono;
+    if (gap > m->disp_gap_max) m->disp_gap_max = gap;
+    if (!m->disp_first && m->window.configured && !m->ui.dirty && !m->window.swap_sent) m->disp_first = mono;
+    if (gap >= 100000000ull && mono - m->disp_gap_logged >= 1000000000ull) {   /* a turn the ping had to wait for */
+        m->disp_gap_logged = mono;
+        snprintf(line, sizeof(line), "[control] display turn_gap_ms=%u at_ms=%u decode_wait=%d\n", ms_since(0, gap), ms_since(m->disp_open, mono), a->decode_wait);
+        raw_log(line);
+    }
+    if (m->disp_first && !m->disp_open_logged) {
+        m->disp_open_logged = 1;
+        snprintf(line, sizeof(line), "[control] display open ms=%u decode=pending first_frame=%u ping_answered=%u\n",
+                 ms_since(m->disp_open, mono), ms_since(m->disp_open, m->disp_first), ms_since(0, m->disp_gap_max));
+        raw_log(line);
+    }
+    if (a->decode_done != m->disp_decode_seen) {
+        m->disp_decode_seen = a->decode_done;
+        snprintf(line, sizeof(line), "[control] display open ms=%u decode=%u render=%u first_frame=%u ping_answered=%u\n",
+                 ms_since(m->disp_open, mono), a->decode_ms, a->render_ms, ms_since(m->disp_open, m->disp_first ? m->disp_first : mono), ms_since(0, m->disp_gap_max));
+        raw_log(line);
+    }
+}
 static void idle(void *arg)
 {
     struct cp_main *m = arg;
+    display_log(m, du_now());
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
@@ -435,7 +464,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
-    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;

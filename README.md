@@ -6,12 +6,18 @@
 of the 1990s on the computers of the 1990s. Dedicated to **Ciuki**, the dog
 in the boot splash. Code under [GNU GPLv2](LICENSE).
 
-**Version: 0.9.2 pre-alpha** on `main` (the Ciuki VMM line, built on a new
-32-bit kernel), next to the frozen **0.8** line on branch `legacy-0.8`. 0.9.2
+**Version: 1.0.0 alpha** on `main` (the Ciuki VMM line, built on a new
+32-bit kernel), next to the frozen **0.8** line on branch `legacy-0.8`. 1.0.0 alpha
 is not released: its evidence is host tests, QEMU campaigns up to
-2026-10-19 and owner trials of earlier images on a ThinkPad T23. No image of
-the current `main` has run on hardware yet, hardware qualification is open
-and publication is suspended ([Changelog](CHANGELOG.md)).
+2026-10-19 (and the f0-core gate on 2026-10-22) and owner trials on a
+ThinkPad T23. Five 1.0.0 alpha images have been written to the T23 between 21
+and 22 October (the last one `a4d9454e`); none has passed yet: window and
+music stutter, an unusable browser and a doubled cursor remain open, and the
+compositor is being rebuilt on the Windows 98/X11 region model to fix the CPU
+saturation the last trial measured (dev diary 2026-10-22-07 and -08). Hardware
+qualification is open and publication is suspended ([Changelog](CHANGELOG.md)).
+Third-party components and their licences: [Credits](docs/credits.md), also
+shown in Ciuki > About CiukiOS > Credits.
 
 ## What CiukiOS wants to be
 
@@ -44,14 +50,14 @@ The project is small and is meant to stay active for years. Each step of
 the plan adds capabilities that can be tested and shown, so there is
 always something concrete to bring to a retro computing fair.
 
-## Where the project is (20 October 2026)
+## Where the project is (22 October 2026)
 
 There are two lines of code:
 
 | Line | Branch | What it is | State |
 | --- | --- | --- | --- |
 | **0.8** | [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8) | The DOS-based system in the screenshots below: CiukiDOS kernel, graphical desktop, DOS games in windows, CiukWeb browser. | Frozen. Last release: prerelease **0.8.3 build 849** with a [Windows portable bundle](docs/windows-portable-release.md). |
-| **Ciuki VMM** | `main` | **0.9.2 pre-alpha.** A 32-bit protected-mode kernel with paging, priority scheduling and fault containment, whose disk, memory, cache and real-time management follow the Windows 98/ME model (dynamic block cache, asynchronous I/O queues, memory objects, page replacement and a swap file); drivers for ATA with UDMA, FAT32, PS/2 and USB input, USB sticks, ATAPI CD-ROM, NTFS read-only, the framebuffer with S3 Savage support, AC'97 and other audio chips and several network cards; native processes with a POSIX-subset libc, Lua and an on-board C compiler; a ring-3 desktop (top bar with the Ciuki orb, window bar, Files, CiukNote, Music, Terminal, Registry Editor, Control Panel, accessories); DOS virtual machines (V86, XMS/EMS/UMB, a kernel DPMI host, Sound Blaster 16 and OPL3, in a window or full screen) whose DOS file calls are handed to the kernel's file system (merged, host-tested); the first libraries of a Win32 personality. DOOM, Wolfenstein 3D and Quake shareware are pre-installed. | Unreleased. QEMU: the last campaign (image `f56fcbf5…`, 2026-10-19) passed the F0–F4 gate cases and the F5 kernel-core cases, except four known red cases; the owner then suspended the QEMU gates for the hardware trial cycle, so what was merged after it (resource management, DOS file API, Win32 libraries) has host-test evidence only. Hardware: only the ThinkPad T23 has run this line, in owner trials of more than twenty images between 13 and 19 October (the last one `4bcd1d43…`); no image of the current `main` has run on hardware; the E500 and generic PCs have not run it. Main prereleases are suspended. |
+| **Ciuki VMM** | `main` | **1.0.0 alpha.** A 32-bit protected-mode kernel with paging, priority scheduling and fault containment, whose disk, memory, cache and real-time management follow the Windows 98/ME model (dynamic block cache, asynchronous I/O queues, memory objects, page replacement and a swap file); drivers for ATA with UDMA, FAT32, PS/2 and USB input, USB sticks, ATAPI CD-ROM, NTFS read-only, the framebuffer with S3 Savage support, AC'97 and other audio chips and several network cards; native processes with a POSIX-subset libc, Lua and an on-board C compiler; a ring-3 desktop (top bar with the Ciuki orb, window bar, Files, CiukNote, Music, Terminal, Registry Editor, Control Panel, accessories); DOS virtual machines (V86, XMS/EMS/UMB, a kernel DPMI host, Sound Blaster 16 and OPL3, in a window or full screen) whose DOS file calls are handed to the kernel's file system (merged, host-tested); the first libraries of a Win32 personality. DOOM, Wolfenstein 3D and Quake shareware are pre-installed. | Unreleased. DOS games start on the unified DOS kernel by default since 21 October (see DOS games below). QEMU: the last campaign (image `f56fcbf5…`, 2026-10-19) passed the F0–F4 gate cases and the F5 kernel-core cases, except four known red cases; the owner then suspended the QEMU gates for the hardware trial cycle, so what was merged after it (resource management, DOS file API, Win32 libraries) has host-test evidence only. Hardware: only the ThinkPad T23 has run this line, in owner trials of more than twenty images between 13 and 19 October and of the five 1.0.0 alpha images between 21 and 22 October (the last one `a4d9454e…`, trial of 22 October: stutter, browser and cursor defects open); the E500 and generic PCs have not run it. Main prereleases are suspended. |
 
 **Regressions of 20 October 2026, fixed.** The first QEMU boot of the
 integrated image found three regressions (application windows, wallpaper, DOS
@@ -75,7 +81,7 @@ current hardware trial cycle the owner has suspended the QEMU gates
 (19 October): changes are merged with green host suites and a canonical
 build, and the hardware qualifies the final image of the programme.
 
-| Step | What you get | Status (20 October 2026) |
+| Step | What you get | Status (22 October 2026) |
 | --- | --- | --- |
 | F0 Foundations | Kernel boots, isolates processes, survives faults, reports its own tests; memory and real-time management on the Windows 98/ME model | QEMU: `f0-core` 92/92 on five profiles; `f0-smoke` 4/4 on the delivered images up to the last campaign (2026-10-19). Real time (R1–R3) and memory management with a swap file (M1–M4) merged 19–20 October with host tests only. T23: the nine non-fatal probes pass in the sweeps; the hardware-check page runs and its power-cut repair check passes. E500 and generic PCs: open |
 | F1 Drivers and disk | Keyboard, mouse, display, hard disk, FAT32, safe mode; USB input and sticks, CD-ROM; a disk cache and I/O on the Windows 98/ME model | QEMU: storage, FAT32, input, USB and optical cases pass on the last campaign. T23 trials: UDMA disk, PS/2 and USB keyboard and mouse, USB stick, data CD. The background cache writeback was on the last T23 image; asynchronous I/O, staged FAT updates and the adaptive cache have host tests only. Not done until hardware passes |
@@ -89,7 +95,7 @@ build, and the hardware qualifies the final image of the programme.
 
 Details and gates: [Roadmap](Roadmap.md).
 
-## What the 0.9.2 pre-alpha does today
+## What the 1.0.0 alpha does today
 
 Only what is merged on `main`. Each item says how far its evidence goes:
 **T23** (seen in an owner trial on the ThinkPad T23, always on an earlier
@@ -128,7 +134,7 @@ not yet run in the guest).
   Sound Blaster 16, VIA, SiS and nForce audio families, S3 Savage/SuperSavage
   (2D engine and a native full-screen mode for DOS games), ThinkPad volume
   keys, shared PCI interrupts, and drivers for eight network card families
-  (no TCP/IP yet). *T23: UDMA disk, USB input and stick, AC'97 audio,
+  (TCP/IP, DHCP and DNS come from lwIP). *T23: UDMA disk, USB input and stick, AC'97 audio,
   SuperSavage full screen, volume keys. QEMU: USB input, ES1370, Sound
   Blaster 16, e100. The other drivers: host.*
 - **Disk, memory and real-time management on the Windows 98/ME model**
@@ -146,15 +152,29 @@ not yet run in the guest).
   releases, are pre-installed on `C:\GAMES\CIUKIGAM.IMG` and start from
   Programs > Games in a DOS window with the kernel DPMI host and Sound
   Blaster 16/OPL3 emulation; Alt+Enter switches to full screen on the real
-  VGA hardware, as Windows 98 did. The shareware licence texts are in
-  `third_party/games`; whether Wolfenstein 3D may stay in a published image
-  is an open owner decision. *QEMU: DOS VM, DPMI and DOS/4GW cases. T23: the
+  VGA hardware, as Windows 98 did. Since the owner decision of 21 October
+  the **unified DOS kernel** (the CiukiDOS fork of FreeDOS kernel 2043 with
+  the native file-system binding) is the default for games; the game's DOS setting
+  `kernel=ciukidos` selects the classic kernel (the DOS Box shell still uses it). The
+  shareware licence texts are in `third_party/games`; Wolfenstein 3D stays
+  pre-installed (owner decision 2026-10-21). *QEMU: DOS VM, DPMI and DOS/4GW cases. T23: the
   three games run in a window and full screen, with defects still open.*
-- **DOS file calls in the kernel** (owner decision 2026-10-19): CiukiDOS
-  stays the DOS of CiukiOS, and its INT 21h file and directory calls are
-  handed to the kernel's file system, as Windows 9x did with its IFS
-  manager; a conformance battery compares the results with FreeDOS. *Host;
-  the battery has not run yet.*
+- **DOS file calls in the kernel**: INT 21h file and directory calls are
+  handed to the kernel's file system through the native IFS binding, as
+  Windows 9x did with its IFS manager (the unified kernel reports `DFV2 IFS
+  active`); a conformance battery compares the results with FreeDOS. *Host;
+  on QEMU the unified kernel starts DOOM and reads its WAD through the IFS,
+  but the windowed run stays frozen under TCG single-step tracing; the
+  verdict is left to the T23.*
+- **Network and browser.** lwIP 2.2.1 with DHCP and DNS, eight network card
+  families (the e100 receive filter was fixed on 22 October and DHCP now
+  gets a lease on the T23), BearSSL for HTTPS and the NetSurf 3.11 browser
+  port. *T23: DHCP works; the browser opens but cannot be used properly yet.*
+- **2D acceleration.** The desktop draws with the Savage 2D engine; the
+  splash, the tray and the log show `2D acceleration: YES` or `NO (reason)`
+  (`2D engine: OK (drawing: software)` until the engine has been used).
+  `accel=0` in `BOOT.CFG` disables it. *T23: engine used, no gain in
+  compositor work yet (f2-95 rebuilds the compositor).*
 - **Win32 personality (F5, in progress).** The kernel side of a Windows
   process (memory, exceptions, objects, sections), a PE loader with ntdll,
   kernel32, a registry service, user32, gdi32, DirectDraw, DirectSound,
@@ -166,7 +186,7 @@ not yet run in the guest).
   `/Programs`, `/Documents`, `/system`, `/tmp`, synthetic `/dev` and `/mnt`);
   users see `C:\Programs`, `C:\Documents`, `C:\System` and `C:\Games`.
 
-## 0.9.2 pre-alpha in pictures
+## 1.0.0 alpha in pictures (screenshots taken on the 0.9.2 pre-alpha desktop)
 
 QEMU captures (Pentium III profile, TCG) of the canonical image `116ced5d…`
 built from `main` at `cc81cbb6` on 2026-10-20; the DOOM frame comes from the
@@ -239,7 +259,7 @@ Actual Linux QEMU captures of 0.8.3 ([capture details](docs/screenshots/0.8.3/RE
 ## Build and test the new kernel (Linux)
 
 ```bash
-make build-full        # kernel build/f0/VMM.ELF + 512 MiB FAT32 image build/f0/ciukios.img (config/version.json: 0.9.2 pre-alpha)
+make build-full        # kernel build/f0/VMM.ELF + 512 MiB FAT32 image build/f0/ciukios.img (config/version.json: 1.0.0 alpha)
 make test-host         # host unit tests (kernel library, loader statics, runner, fixtures)
 make qemu-test-full    # boot smoke through the test runner (QEMU TCG, pentium3)
 make qemu-run-full     # boot interactively; scripts/run_f0.sh "f0:all run=00000001" runs every probe
@@ -264,6 +284,7 @@ and QEMU is used only for the DOS conformance battery.
   merged change and its state.
 - [Validation records](docs/validation/2026-10-09-f0/README.md) — what was
   measured, on which image, with which limits.
+- [Credits and third-party notices](docs/credits.md) — every component, version, licence and notice path (checked by a host test).
 - [Changelog](CHANGELOG.md) · [Roadmap](Roadmap.md) · [Support the project](DONATIONS.md)
 
 ## How it is made
