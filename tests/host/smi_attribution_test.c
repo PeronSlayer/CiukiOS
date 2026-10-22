@@ -52,6 +52,11 @@ static uint32_t inl(uint16_t port)
         unsigned dev = pci_address >> 11 & 31, fn = pci_address >> 8 & 7, off = pci_address & 0xfc;
         assert((pci_address & 0xffff0000u) == 0x80000000u);
         if (dev == 31 && !fn && off == 0xb8) return gpi_rout;
+        /* f1-100: TRP_FWD_EN, MON4-7_TRP_RNG, MON_TRP_MSK (read-only). */
+        if (dev == 31 && !fn && off == 0xc0) return 0x00000010;
+        if (dev == 31 && !fn && off == 0xc4) return 0x00000062;
+        if (dev == 31 && !fn && off == 0xc8) return 0x00000000;
+        if (dev == 31 && !fn && off == 0xcc) return 0x00000004;
         if (dev == 29 && fn < 3 && off == 0xc0) return 0xffff0000u | legkey[fn];
         assert(0);
     }
@@ -67,8 +72,16 @@ static uint16_t cpu_inw(uint16_t port)
     case 0x102e: return 0x0080;
     case 0x1040: return 0x0000;
     case 0x1048: return 0x0000;
+    case 0x102c: return 0x0000;      /* f1-100: GPE1_STS */
+    case 0x104c: return 0x0066;      /* f1-100: BUS_ADDR_TRACK */
     default: assert(0); return 0;
     }
+}
+static uint8_t inb(uint16_t port)
+{
+    pm_reads++;
+    assert(port == 0x104e);          /* f1-100: BUS_CYC_TRACK */
+    return 0xf2;
 }
 bool registry_smi_snapshot(struct registry_smi *out) { *out = snap; return snap_ok; }
 static int ec_poll_state = 1000;
@@ -227,6 +240,7 @@ static void init_and_records(void)
     assert(pm_writes == 1 && written == 0x4023 && enable == 0x4023 && mitigated == SMI_EN_LEGACY_USB);
     assert(strstr(logbuf, "[kernel] smi_config chip=ICH3-M pmbase=1000 en=0000402b sts=00000900 pm1_cnt=0000 pm1_en=0100 gen_pmcon1=0000 gpe0_en=0000 gpe1_en=0080 gpi_rout=00020000 devtrap=0000 mon_smi=0000 legkey=2000/2000/2000\n"));
     assert(strstr(logbuf, "[kernel] smi_mitigate result=cleared clear=00000008 en_before=0000402b en_after=00004023 kept=GBL_SMI_EN,APMC_EN,PERIODIC_EN\n"));
+    assert(strstr(logbuf, "[kernel] smi_monitors trp_fwd=10 mon_rng=0062/0000/0000/0000 mon_msk=0004 gpe1_sts=0000 last_io=0066/f2\n"));
     assert(base == 0x1000 && en_cache == 0x4023 && causal_cache == 0x1f720);
 
     /* Ticks: one SMI_STS read each; a 3.1 ms tick gap is a blackout. */
@@ -274,6 +288,7 @@ static void init_and_records(void)
     smi_window_emit(2000ull * 1000000, false);
     assert(strstr(logbuf, "[kernel] smi count=3 sources=00008020 max_us=2120 min_us=2100 sts=1 tsc=2 unproven=1 gaps=2 rate=1.00/s period_ms=251/251\n"));
     assert(strstr(logbuf, "[kernel] smi_coincide gaps=2 hid_near=1 scan_near=0 ec_near=1 hid_turns=3 scans=1 ec_io=2 ec_poll=1000 leads=2 hid_lead_us="));
+    assert(strstr(logbuf, " ec_lead_us=") && strstr(logbuf, " last_io=0066/f2\n"));
     assert(strstr(logbuf, "[kernel] smi_regs en=00004023 sts=00000900 rise=00008000 mitigated=00000008 rearm=0 legkey=2000/2000/2000\n"));
     assert(!win.gaps && !win.tsc && win.min == UINT64_MAX && !mark_count[0]);
 
@@ -323,9 +338,11 @@ static void refusal_tests(void)
         cycles += 3000000; smi_tick(cycles, cycles - 3000000);
         smi_window_emit(2000ull * 1000000, true);
         assert(strstr(logbuf, i ? " ec_io=0 ec_poll=none leads=0" : " ec_io=0 ec_poll=off leads=0"));
+        assert(strstr(logbuf, " last_io=0000/00\n") && !pm_reads); /* no sampler: no PM read */
     }
     ec_poll_state = 1000;
     puts("PASS f1-94 refusals: H page/safe mode, armed LEGKEY, unowned/quarantined UHCI, failed readback, unsupported bridge without port I/O; ec_poll=1000/off/none in smi_coincide");
+    puts("PASS f1-100 records: read-only smi_monitors (TRP_FWD_EN, MON4-7 ranges, mask, GPE1_STS, last I/O at SMI#) and last_io in smi_coincide, none without the sampler");
 }
 
 int main(void)

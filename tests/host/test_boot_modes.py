@@ -321,7 +321,8 @@ class LoaderParserTests(unittest.TestCase):
                    'mode=0x4000', 'mode=0x123', 'mode=0x12345', 'mode=0x000g',
                    'accel=1', 'xaccel=0', 'accel=00', 'safe=10', 'serial=00',
                    'safe=0\tserial=1', 'safe=1\x00', 'A'*127, ' '*127, ' '*128,
-                   'ecpoll=0', 'safe=1 ecpoll=0\r\nusbscan=0', 'ecpoll=1', 'ecpoll=00')
+                   'ecpoll=0', 'safe=1 ecpoll=0\r\nusbscan=0', 'ecpoll=1', 'ecpoll=00',
+                   'serial=0 ecpoll=1\r\necpoll=0', 'ecpoll=2', 'ecpoll=11')
         for flags in (0, 1, 2, 3):
             for text in options:
                 with self.subTest(flags=flags, text=text):

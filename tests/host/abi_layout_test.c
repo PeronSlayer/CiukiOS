@@ -902,6 +902,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_audio_diagnostics.rate", __builtin_offsetof(struct ciuki_audio_diagnostics, rate), 58u},
     {"offsetof.ciuki_audio_diagnostics.reserved", __builtin_offsetof(struct ciuki_audio_diagnostics, reserved), 60u},
     {"constant.MIXER_GET_DIAGNOSTICS", MIXER_GET_DIAGNOSTICS, 0x4203u},
+    {"constant.MIXER_REFRESH_MASTER", MIXER_REFRESH_MASTER, 0x4204u},
     {"constant.CIUKI_AUDIO_DIAG_READY", CIUKI_AUDIO_DIAG_READY, 1u},
     {"constant.CIUKI_AUDIO_DIAG_RUNNING", CIUKI_AUDIO_DIAG_RUNNING, 2u},
     {"constant.CIUKI_AUDIO_DIAG_QUARANTINE", CIUKI_AUDIO_DIAG_QUARANTINE, 4u},
