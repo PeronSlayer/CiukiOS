@@ -265,6 +265,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
     -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/mtrr_test.c" -o "$out/mtrr_test"
 "$out/mtrr_test"
+# f6-21b: kernel PDEs identical in every directory across runtime allocations.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/kernel_pde_test.c" -o "$out/kernel_pde_test"
+"$out/kernel_pde_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
 "$out/fbdev_test"
