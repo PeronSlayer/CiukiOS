@@ -13,7 +13,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-95-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 09:35, decision on the delivery)
+## Amendment 1 (lead, 2026-10-22 09:31, decision on the delivery)
 
 The delivery refutes the directive's premise: the descriptor `10200401` and
 the fill command match X.org and savagefb; the measured behaviour is that the
