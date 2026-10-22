@@ -12,7 +12,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. (the lead runs the QEMU case and sends you its serial and console capture). Report `build/codex/f3-61-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 10:00, decision on the delivery)
+## Amendment 1 (lead, 2026-10-22 09:59, decision on the delivery)
 
 Accepted. The delivery shows that on every image so far the unified kernel
 ran unbound (the VM refused the DFV2 requests before checking
