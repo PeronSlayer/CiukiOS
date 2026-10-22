@@ -107,13 +107,38 @@ int main(void)
     ciuki_browser_release(s);unsigned releases=0;while(ciuki_browser_event(s,&out)) { assert(out.type==NSFB_EVENT_KEY_UP || (out.type==NSFB_EVENT_CONTROL && out.value.controlcode==NSFB_CONTROL_CANCEL));releases++; }assert(releases==3);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=10,.value2=10};ciuki_browser_input(s,&e);assert(!ciuki_browser_event(s,&out));
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};ciuki_browser_input(s,&e);assert(!ciuki_browser_event(s,&out));
+    /* f6-20: a full input queue (UI thread behind a long layout) drops the
+     * queued input and resynchronises like a focus loss; it never closes. */
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=50,.value2=100};ciuki_browser_input(s,&e);
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=0x2a,.value=1};ciuki_browser_input(s,&e);
+    /* Pointer motion coalesces into one trailing event; text does not. */
+    for(unsigned i=0;i<10;i++) { e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=60+(int)i,.value2=110};ciuki_browser_input(s,&e); }
+    assert(s->count==3 && s->events[(s->head+2)%CIUKI_BROWSER_EVENTS].value.vector.x==69);
+    while(s->count<CIUKI_BROWSER_EVENTS) { e=(struct ciuki_input_event){.type=CIUKI_INPUT_TEXT,.code='x'};ciuki_browser_input(s,&e); }
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_TEXT,.code='y'};ciuki_browser_input(s,&e);
+    assert(!s->closed && !s->close_reason && s->overflows==1 && s->count==2 && !s->keys[0x2a] && !s->buttons);
+    assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_KEY_UP && out.value.keycode==NSFB_KEY_LSHIFT);
+    assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_CONTROL && out.value.controlcode==NSFB_CONTROL_CANCEL);
+    assert(!ciuki_browser_event(s,&out));
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=50,.value2=100};ciuki_browser_input(s,&e);
+    assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_MOVE_ABSOLUTE && !s->closed);
     p=packet(DESK_PING,0,4);p.serial=123;ciuki_browser_packet(s,&p);assert(s->ping==123);
     assert(!du3_ui_progress(&s->connection,1,1,s->ping));assert(sent[sends-1].data[1]==DESK_PONG);
+    /* f6-20: the desktop's close request is the recorded reason; a later
+     * CLOSED or local close does not replace it. */
+    p=packet(DESK_CLOSE_REQUEST,0,0);ciuki_browser_packet(s,&p);
+    assert(s->closed && !strcmp(s->close_reason,"desktop-close-request"));
+    p=packet(DESK_CLOSED,0,0);ciuki_browser_packet(s,&p);assert(!strcmp(s->close_reason,"desktop-close-request"));
     ciuki_browser_close(s);assert(s->current.fd==-1 && s->pending.fd==-1 && s->connection.channel==-1);
-    assert(unmapped==3 && closed==4);
+    assert(unmapped==3 && closed==4 && !strcmp(s->close_reason,"desktop-close-request"));
+    /* A refused CREATE_WINDOW names the desktop's result. */
+    assert(!ciuki_browser_open(s,&ops,3,640,480) && !s->closed && !s->close_reason);
+    p=result(DESK_CREATE_WINDOW,s->create_request,-ENOSPC);assert(ciuki_browser_packet(s,&p)==-1);
+    assert(s->closed && !strcmp(s->close_reason,"window-refused") && s->close_detail==-ENOSPC);
+    ciuki_browser_close(s);
     /* The v3 protocol requires packed rows and rejects padded strides. */
     padding=64;
-    assert(ciuki_browser_open(s,&ops,3,640,480)==-1 && s->closed);
+    assert(ciuki_browser_open(s,&ops,3,640,480)==-1 && s->closed && !strcmp(s->close_reason,"surface-open-failed"));
     free(s);puts("NetSurf v3 surface: damage, colour, ownership, resize, stale/OOM, input and cleanup passed");fflush(stdout);
     return 0;
 }

@@ -105,6 +105,9 @@ int file_description_close(struct file_description *d)
     if (d->node) {
         struct px_namespace *s = d->node->space;
         vfs_lock(s->vfs,0);
+        /* f1-93b: the final close's hold was untagged (op=metadata site=vfs,
+         * desktop#29 1214 ms on the T23 b453bc92 trial). */
+        vfs_tag_locked(s->vfs,"close"); vfs_site_locked(s->vfs,"native");
         if (d->node->volume || d->node->ro) vfs_reserve_file_locked(s->vfs,vfs_drive_mask(d->node->drive),d->identity);
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;

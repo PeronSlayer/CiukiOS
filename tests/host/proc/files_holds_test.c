@@ -11,11 +11,29 @@
 static uint32_t model_ms, mutex_since[27], logical_since, max_mutex, max_logical, service_ms=T23_SERVICE_MS;
 static unsigned mutex_depth, commands, releases, namespace_takes, hold_records;
 static uint32_t hold_record_max, warm_base, fallback_base;
-static bool measured, logical;
+static bool measured;
 static int (*saved_read)(struct blkdev *,uint64_t,uint32_t,void *);
 static int (*saved_write)(struct blkdev *,uint64_t,uint32_t,const void *);
 static int (*saved_flush)(struct blkdev *);
 uint32_t fs_host_clock_ms(void) { return model_ms; }
+/* f1-93b: the starved holder of the T23 b453bc92 trial. fs_service is the
+ * kernel's only preemption point inside filesystem work (the kernel is not
+ * preemptible elsewhere, arch/trap.c); a desktop worker starved by the
+ * foreground DOS VM loses the CPU there and runs again only at its
+ * starvation boost, T23B_PREEMPT_MS later. Reached while drive C is held,
+ * that time is part of the hold. */
+static bool starved;
+static unsigned held_preemptions, service_points;
+static bool logical;
+/* Host CPU time of the longest drive C hold (ASAN build): the work bound of
+ * a section, not a T23 duration. */
+static uint64_t logical_since_ns, max_logical_ns;
+static uint64_t host_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec; }
+void fs_host_service(void) {
+    if (!starved || !measured) return;
+    service_points++; model_ms+=T23B_PREEMPT_MS;
+    if (logical) held_preemptions++;
+}
 void __real_fs_lock_acquired(fs_lock *);
 void __real_fs_lock_released(fs_lock *);
 void __wrap_fs_lock_acquired(fs_lock *lock) {
@@ -23,7 +41,7 @@ void __wrap_fs_lock_acquired(fs_lock *lock) {
     for (unsigned i=0;i<27;i++) if (lock==(i==26 ? &vfs.lock : &vfs.volume_lock[i])) {
         mutex_depth++; mutex_since[i]=model_ms;
         if (i==26 && measured) namespace_takes++;
-        if (i==2 && !logical) { logical=true; logical_since=model_ms; }
+        if (i==2 && !logical) { logical=true; logical_since=model_ms; if (measured) logical_since_ns=host_ns(); }
     }
 }
 void __wrap_fs_lock_released(fs_lock *lock) {
@@ -32,7 +50,10 @@ void __wrap_fs_lock_released(fs_lock *lock) {
         uint32_t held=model_ms-mutex_since[i]; if (measured && held>max_mutex) max_mutex=held;
         if (i==26 && logical && !((vfs.reserved|vfs.mutating)&(1u<<2))) {
             held=model_ms-logical_since; logical=false;
-            if (measured) { releases++; if (held>max_logical) max_logical=held; }
+            if (measured) {
+                releases++; if (held>max_logical) max_logical=held;
+                uint64_t ns=host_ns()-logical_since_ns; if (logical_since_ns && ns>max_logical_ns) max_logical_ns=ns;
+            }
         }
     }
     __real_fs_lock_released(lock);
@@ -166,7 +187,87 @@ static void alpha_mix(void) {
     CHECK(worst<=T23A_HOLD_GATE_MS && !worst_records);
     service_ms=T23_SERVICE_MS;
 }
+/* ---- f1-93b: the desktop#31 directory compare, T23 b453bc92 ---------- */
+static uint32_t row_model_start, row_yields, row_restarts;
+static bool t23b_failed;
+static void begin_t23b(bool cold) {
+    CHECK(!cache.dirty_bytes); if (cold) cache_invalidate(&cache,&disk[0].dev,false);
+    max_mutex=max_logical=commands=releases=namespace_takes=hold_records=hold_record_max=0;
+    held_preemptions=service_points=0; row_model_start=model_ms; max_logical_ns=logical_since_ns=0;
+    row_yields=vfs.step_yields; row_restarts=vfs.step_restarts;
+    warm_base=vfs.warm_restarts; fallback_base=vfs.cold_fallbacks; measured=true;
+}
+static void finish_t23b(const char *operation,const char *t23,unsigned items) {
+    measured=false;
+    printf("F1-93B T23 b453bc92 desktop#31 operation=%s t23_op=%s items=%u service_ms=%u preempt_ms=%u commands=%u releases=%u "
+        "physical_mutex_max_ms=%u logical_hold_max_ms=%u vfs_hold_records=%u vfs_hold_max_ms=%u held_preemptions=%u "
+        "service_points=%u warm_restarts=%u step_yields=%u step_restarts=%u cold_fallbacks=%u model_ms=%u "
+        "host_hold_max_us=%llu gate_ms=%u\n",
+        operation,t23,items,service_ms,T23B_PREEMPT_MS,commands,releases,max_mutex,max_logical,hold_records,hold_record_max,
+        held_preemptions,service_points,vfs.warm_restarts-warm_base,vfs.step_yields-row_yields,vfs.step_restarts-row_restarts,
+        vfs.cold_fallbacks-fallback_base,model_ms-row_model_start,(unsigned long long)(max_logical_ns/1000),T23A_HOLD_GATE_MS);
+    if (max_mutex || max_logical>T23A_HOLD_GATE_MS || hold_records || held_preemptions || vfs.cold_fallbacks!=fallback_base) {
+        printf("F1-93B NOT ACCEPTED operation=%s: drive C held %u ms (%u preemption points inside a hold, %u cold fallbacks)\n",
+            operation,max_logical,held_preemptions,vfs.cold_fallbacks-fallback_base);
+        t23b_failed=true;
+    }
+    CHECK(!volumes[0].transactions && !cache.reserved_bytes && !vfs.transaction_users[2]);
+}
+/* apps/desktop/folder.c folder_poll_worker -> apps/files/vfs.c list ->
+ * sdk/libciuki/posix.c opendir (open O_DIRECTORY, fstat) and readdir (one
+ * CIUKI_SYS_GETDENTS record per call, syscalls_file.c fd_call), closedir. */
+static unsigned folder_compare(const char *path) {
+    int fd=file_open(client,path,O_RDONLY|O_DIRECTORY,0); CHECK(fd>=0);
+    struct file_description *d=file_fd(client,fd); struct ciuki_stat st;
+    vfs_lock(&vfs,vfs_drive_mask(2)); CHECK(!px_stat_locked(d->node,&st)); vfs_unlock(&vfs);
+    CHECK((st.st_mode & S_IFMT)==S_IFDIR);
+    unsigned listed=0;
+    for (;;) {
+        struct ciuki_dirent ent;
+        vfs_lock(&vfs,vfs_drive_mask(2)); int n=px_getdents_locked(d,&ent); vfs_unlock(&vfs);
+        CHECK(n>=0); if (!n) break;
+        listed++;
+    }
+    CHECK(!file_close(client,fd));
+    return listed;
+}
+static void desktop31_replay(void) {
+    static const char folder[]="/Documents/Desktop", last[]="i1999 Desktop item.txt";
+    service_ms=T23A_SERVICE_MS; starved=true;
+    unsigned entries=T23B_FOLDER_ENTRIES+3; /* ., .. and Zz Sub */
+    begin_t23b(true); CHECK(folder_compare(folder)==entries); finish_t23b("directory-compare-cold","readdir/stat/lookup",entries);
+    begin_t23b(false); CHECK(folder_compare(folder)==entries); finish_t23b("directory-compare-warm","readdir/stat/lookup",entries);
+    /* The links worker's per-entry stat, last entry of the folder. */
+    char path[96]; snprintf(path,sizeof(path),"%s/%s",folder,last); struct ciuki_stat st;
+    begin_t23b(true); CHECK(!stat_path(path,&st) && (st.st_mode & S_IFMT)==S_IFREG); finish_t23b("stat-last-entry","lookup/stat",1);
+    /* The resolver's guarded attempts (after two unguarded ones overlapped
+     * a publication), as px_resolve_locked: retried while EAGAIN. */
+    vfs_lock(&vfs,0); struct px_path r; CHECK(!px_resolve_locked(space,client->cwd,folder,false,&r));
+    struct px_node *dir=r.node; px_retain(dir); vfs_unlock(&vfs);
+    begin_t23b(true);
+    int e=-EAGAIN;
+    for (unsigned attempt=0;e==-EAGAIN && attempt<PX_RESOLVE_GUARDED;attempt++) {
+        struct px_node *n=0; vfs_lock(&vfs,vfs_drive_mask(2)); e=child_lookup(dir,last,&n,true); vfs_unlock(&vfs);
+    }
+    if (e) { printf("F1-93B NOT ACCEPTED operation=guarded-lookup-last-entry: %d after %u attempts\n",e,PX_RESOLVE_GUARDED); t23b_failed=true; }
+    finish_t23b("guarded-lookup-last-entry","lookup",1);
+    px_release(dir);
+    /* DOS FindFirst/FindNext and chdir (canonical walk) of the same folder
+     * through the legacy table, the dos/w32 path of vfs_dir_step_locked. */
+    struct vfs_table dos; CHECK(!vfs_table_init(&vfs,&dos,2));
+    struct vfs_find f; struct fat_entry ent; unsigned found=0;
+    begin_t23b(true);
+    e=vfs_find_first(&dos,"C:/Documents/Desktop/*.*",VFS_FIND_DOS,&f,&ent);
+    while (!e) { found++; e=vfs_find_next(&dos,&f,&ent); }
+    CHECK(e==-FS_ENOENT && found==T23B_FOLDER_ENTRIES); finish_t23b("dos-find","find",found);
+    begin_t23b(true); CHECK(!vfs_chdir(&dos,"C:/Documents/Desktop/Zz Sub")); finish_t23b("dos-chdir-last-entry","chdir",1);
+    CHECK(!vfs_chdir(&dos,"C:/"));
+    vfs_table_destroy(&dos);
+    starved=false; service_ms=T23_SERVICE_MS;
+}
 int main(int argc,char **argv) {
+    bool t23b=argc==4 && !strcmp(argv[1],"--desktop31");
+    if (t23b) { argv++; argc--; }
     CHECK(argc==3); ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     controller.state=T_RUNNING; g_current=&controller; proc_init();
     CHECK(!fake_open(&disk[0],argv[1]) && !fake_open(&disk[1],argv[2]));
@@ -181,6 +282,18 @@ int main(int argc,char **argv) {
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     saved_read=disk[0].dev.read; saved_write=disk[0].dev.write; saved_flush=disk[0].dev.flush;
     disk[0].dev.read=timed_read; disk[0].dev.write=timed_write; disk[0].dev.flush=timed_flush;
+    if (t23b) {
+        desktop31_replay();
+        all_closed(); stop_collect(client);
+        struct file_ledger ledger; files_snapshot(space,&ledger); CHECK(!ledger.descriptions && !ledger.pins);
+        for (unsigned i=0;i<2;i++) CHECK(!vfs_detach(&vfs,i+2));
+        vfs_destroy(&vfs); cache_destroy(&cache);
+        for (unsigned i=0;i<2;i++) { fake_reset(&disk[i]); fake_close(&disk[i]); }
+        CHECK(!pages_used && heap_blocks==1 && !fs_host_contig_live);
+        free(ram);
+        if (t23b_failed) { puts("F1-93B NOT ACCEPTED: a drive C hold spans a preemption point or a cold device read"); return 1; }
+        puts("PASS f1-93b desktop#31 directory compare: no drive C hold above 20 ms"); return 0;
+    }
     begin(); CHECK(!make_dir("/Bounded")); finish("mkdir");
     begin(); int fd=file_open(client,"/Bounded/File",O_CREAT|O_RDWR,0666); CHECK(fd>=0); finish("create");
     uint8_t bytes[4096]; memset(bytes,0x89,sizeof(bytes));

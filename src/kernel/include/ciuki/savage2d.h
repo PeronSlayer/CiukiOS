@@ -54,6 +54,10 @@ int savage2d_attempt_end(struct vfs *);
 int savage2d_attempt_failed(struct vfs *);
 int savage2d_check_begin(struct vfs *, bool *retained_marker);
 void savage2d_quarantine(const char *reason);
+/* f1-97: the activation decision (false before it exists); the reason is the
+ * quarantine token, "none" when accelerated. */
+bool savage2d_summary(bool *accelerated, const char **reason);
+void savage2d_summary_safe_mode(void);
 /* Final idle proof once; return a rejecting guard only for an unsafe writer. */
 const struct accel_ops *savage2d_fallback_ops(void);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,

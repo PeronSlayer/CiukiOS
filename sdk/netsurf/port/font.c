@@ -118,6 +118,7 @@ static int paint(void *context,int x,int y,const struct ciuki_font_bitmap *bitma
 }
 nserror ciuki_font_plot(nsfb_t *surface,const plot_font_style_t *style,int x,int y,const char *s,size_t n)
 {
+    ciuki_ui_keepalive(); /* f6-20: a long first paint still reads the desktop channel */
     struct ciuki_font_face *face=face_for(style);
     struct paint_context p={surface,style->foreground};
     int32_t advance;

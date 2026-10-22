@@ -333,6 +333,8 @@ int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
 /* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */
 int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
+/* Programs > Games entry index; kernel NULL keeps the game's saved setting. */
+int desk_launch_game(struct desktop *, int index, const char *kernel);
 int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);

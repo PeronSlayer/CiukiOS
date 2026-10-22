@@ -181,5 +181,7 @@ void fs_service(void)
 void fs_calendar_init(void) { }
 void fs_worker_enter(void) { }
 void fs_worker_leave(void) { }
-void fs_service(void) { }
+/* f1-93b: host models observe the kernel's preemption points (a starved
+ * holder loses the CPU at each one, T23 b453bc92). */
+void fs_service(void) { if (fs_host_service) fs_host_service(); }
 #endif

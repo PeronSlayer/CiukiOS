@@ -163,7 +163,8 @@ int main(int argc, char **argv)
     unsigned frame_ms = 15;
     const char *failure = NULL;
     char detail[80] = "Preparing...";
-    char fullscreen_notice[80]="";
+    char fullscreen_notice[128]="";
+    const char *fullscreen_title="Full screen unavailable";
     uint64_t fullscreen_notice_until=0;
     uint32_t fullscreen_error_seen=0;
     if (loading) {
@@ -321,7 +322,11 @@ int main(int argc, char **argv)
         if (!(c.changed&CIUKI_DOSVM_FULLSCREEN_REFUSED)) fullscreen_error_seen=0;
         else if (c.reason!=fullscreen_error_seen) {
             fullscreen_error_seen=c.reason;
-            snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror((int)c.reason));
+            /* Still painted as full screen: the kernel ended the session
+             * itself (watchdog, display error); the game keeps running. */
+            fullscreen_title=fullscreen_painted ? "Back in the window" : "Full screen unavailable";
+            snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",
+                     fullscreen_painted ? dosbox_return_text((int)c.reason) : strerror((int)c.reason));
             fullscreen_notice_until=now_ms()+3000;
             notice_painted=0;
         }
@@ -340,15 +345,16 @@ int main(int argc, char **argv)
             if (loading) { panel_redraw=1; panel_sent=0; }
         }
         if (c.state == CIUKI_DOSVM_STOPPED) {
-            if (shown) break;
-            failure = c.reason == 4 ? "Startup timed out" : "Unable to start";
-            snprintf(detail, sizeof(detail), "%s", c.name[0] ? c.name : "Close this window and try again.");
+            if (shown && !dosbox_stop_reported(c.reason)) break;
+            failure = shown ? "The DOS session stopped" : c.reason == 4 ? "Startup timed out" : "Unable to start";
+            snprintf(detail, sizeof(detail), "%s", c.name[0] ? c.name : shown ?
+                     "The program stopped with an error. Close this window." : "Close this window and try again.");
             result = 1;
             goto panel;
         }
         if (configured && now_ms()<fullscreen_notice_until) {
             if (!notice_painted) {
-                dosbox_panel(&canvas,name,icon,"Full screen unavailable",fullscreen_notice,0);
+                dosbox_panel_framed(&canvas,name,name,icon,fullscreen_title,fullscreen_notice,0);
                 desk_message(&m,DESK_DAMAGE,20);
                 desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
                 if (send_packet(channel,&m)) goto done;
@@ -411,7 +417,8 @@ panel:
         if (configured && (failure ? !failure_painted : !panel_sent || now_ms() - panel_at >= DOSBOX_PULSE_MS)) {
             struct du_rect damage={0,0,CIUKI_DOSVM_WIDTH,CIUKI_DOSVM_HEIGHT};
             if (failure || panel_redraw) {
-                dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
+                if (failure && shown) dosbox_panel_framed(&canvas, name, name, icon, failure, detail, now_ms() - started);
+                else dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
                 if (game) du_text_wrap(&canvas,(struct du_rect){120,300,400,18},"F12: DOS kernel settings",DU_INK);
                 panel_redraw=0;
             } else if (panel_sent) damage=dosbox_panel_pulse(&canvas,now_ms()-started);

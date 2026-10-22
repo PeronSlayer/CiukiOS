@@ -38,6 +38,7 @@ struct file_description {
     uint64_t position;
     uint32_t references, flags, deny, cursor, stream;
     struct fat_cursor fat_cursor; /* f3-51c FAT cluster cursor; namespace + volume reservation */
+    struct fat_dir_hint dir_hint; /* f1-93b readdir position of cursor; namespace + volume reservation */
 };
 struct px_namespace {
     struct vfs *vfs;

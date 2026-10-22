@@ -157,6 +157,22 @@ static uint32_t desktop_colour(const struct cp_app *a, const struct desk_theme *
 }
 static const struct desk_theme *chosen(const struct cp_app *a)
 { const struct desk_theme *t = desk_theme_named(a->cfg.theme); return t ? t : desk_theme; }
+static void preview_request(struct cp_app *a, struct cp_preview_req *r, int have_image)
+{
+    uint32_t sh = a->host.screen_h ? a->host.screen_h : 768, bar = sh ? (32u * 144u) / sh : 6;
+    const struct desk_theme *t = chosen(a);
+    memset(r, 0, sizeof(*r));
+    snprintf(r->path, sizeof(r->path), "%s", a->cfg.wallpaper);
+    r->mode = a->cfg.wallpaper_mode; r->colour = desktop_colour(a, t); r->bar = bar;
+    r->font = t->font_large; r->label = t->desktop_label; r->aa = t->text_aa; r->portrait = a->host.portrait;
+    if (have_image) r->image = a->image;
+}
+static int preview_request_same(const struct cp_app *a, const struct cp_preview_req *r)
+{
+    struct cp_preview_req now; preview_request((struct cp_app *)a, &now, 0);
+    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.colour == r->colour &&
+           now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa;
+}
 static void preview_build(struct cp_app *a)
 {
     uint32_t sw = a->host.screen_w ? a->host.screen_w : 1024, sh = a->host.screen_h ? a->host.screen_h : 768;
@@ -166,18 +182,25 @@ static void preview_build(struct cp_app *a)
          * fill of the 1448x1086 default scene followed by a 1024x768 -> 192x144
          * downscale took seconds under TCG and the window opened black
          * (lead fix, 2026-10-12). */
-        if (a->host.decode_begin && (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path))) &&
-            strncmp(a->decode_failed, a->cfg.wallpaper, sizeof(a->decode_failed))) {
-            /* Worker decode: show the desktop colour now, poll on a short timer, never block the UI thread. */
-            if (!a->decode_wait && !a->host.decode_begin(a->host.ctx, a->cfg.wallpaper)) {
-                a->decode_wait = 1; snprintf(a->decode_path, sizeof(a->decode_path), "%s", a->cfg.wallpaper);
-                du_timer_start(a->ui, CP_T_PREVIEW, 50000000ull, 1);
+        if (a->host.decode_begin) {
+            /* Worker job: decode (when needed) and resample off the UI thread. Show the desktop colour now,
+             * poll on a short timer, never block, never decode or resample here (f2-88b). */
+            int have = a->image.pixels && !strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path));
+            int failed = !have && !strncmp(a->decode_failed, a->cfg.wallpaper, sizeof(a->decode_failed));
+            if (!failed && !a->decode_wait) {
+                struct cp_preview_req req; preview_request(a, &req, have);
+                if (!a->host.decode_begin(a->host.ctx, &req)) {
+                    if (have) memset(&a->image, 0, sizeof(a->image));   /* moved to the worker */
+                    a->wait_req = req; a->wait_req.image = (struct desk_image){0};
+                    a->decode_wait = 1; snprintf(a->decode_path, sizeof(a->decode_path), "%s", a->cfg.wallpaper);
+                    du_timer_start(a->ui, CP_T_PREVIEW, 50000000ull, 1);
+                } else if (!have) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", a->cfg.wallpaper);
             }
-            if (a->decode_wait) {
-                for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
-                a->preview_valid = 1;
-                return;
-            }
+            /* The previous preview stays while a render-only job runs; otherwise the desktop colour. */
+            int keep = have || (a->decode_wait && !strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path)));
+            if (!keep) for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
+            a->preview_valid = 1;
+            return;
         }
         if (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path))) {
             desk_image_free(&a->image);
@@ -201,6 +224,19 @@ static void preview_build(struct cp_app *a)
     } else for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
     a->preview_valid = 1;
 }
+/* f2-88b: the 192x144 preview as one clipped row copy per scanline (was 27,648 one-pixel fills). */
+static void preview_blit(struct du_canvas *c, int x, int y, const uint32_t *src)
+{
+    int x0 = x < c->clip.x ? c->clip.x : x, x1 = x + 192 > c->clip.x + c->clip.w ? c->clip.x + c->clip.w : x + 192;
+    int y0 = y < c->clip.y ? c->clip.y : y, y1 = y + 144 > c->clip.y + c->clip.h ? c->clip.y + c->clip.h : y + 144;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > c->width) x1 = c->width;
+    if (y1 > c->height) y1 = c->height;
+    if (x1 <= x0 || y1 <= y0) return;
+    for (int row = y0; row < y1; row++)
+        memcpy(c->pixels + (size_t)row * (size_t)c->width + (size_t)x0, src + (row - y) * 192 + (x0 - x), (size_t)(x1 - x0) * sizeof(uint32_t));
+}
 static void put(struct du_canvas *c, int x, int y, int w, int h, uint32_t colour) { du_fill(c, (struct du_rect){x, y, w, h}, colour); }
 static void paint(struct du_ui *u, void *user)
 {
@@ -211,7 +247,7 @@ static void paint(struct du_ui *u, void *user)
             /* An image wallpaper not decoded yet: paint the desktop colour now and
              * decode after this frame (timer), so the window never opens black
              * (reading and decoding the 2.5 MB default scene takes seconds under TCG). */
-            if (a->cfg.wallpaper[0] == '/' && a->preview_pending == 0 &&   /* 0 never scheduled, 1 scheduled, 2 fired */
+            if (a->cfg.wallpaper[0] == '/' && a->preview_pending == 0 && !a->decode_wait &&   /* 0 never scheduled, 1 scheduled, 2 fired */
                 (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path)))) {
                 for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
                 a->preview_pending = 1; a->preview_valid = 1;
@@ -222,7 +258,7 @@ static void paint(struct du_ui *u, void *user)
         put(c, 24, 44, 208, 160, DU_FACE);
         du_edge(c, (struct du_rect){24, 44, 208, 160}, DU_RAISED);
         du_edge(c, (struct du_rect){30, 50, 196, 148}, DU_SUNKEN);
-        for (int y = 0; y < 144; y++) for (int x = 0; x < 192; x++) put(c, 32 + x, 52 + y, 1, 1, a->preview[y * 192 + x]);
+        preview_blit(c, 32, 52, a->preview);
         put(c, 108, 204, 40, 6, DU_SHADOW); put(c, 92, 210, 72, 4, DU_FACE); du_edge(c, (struct du_rect){92, 210, 72, 5}, DU_RAISED_THIN);
         /* The chosen theme in miniature: top bar with the Ciuki button, taskbar and a window. */
         const struct desk_theme *t = chosen(a);
@@ -417,21 +453,25 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (a->display_write && e->type != DU_EV_TICK) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
-    if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW && a->decode_wait) {   /* worker decode: poll */
-        struct desk_image done = {0}; char path[128] = "";
-        if (!a->host.decode_poll || a->host.decode_poll(a->host.ctx, path, sizeof(path), &done) <= 0) {
-            if (!a->host.decode_poll) a->decode_wait = 0;
-            return;
-        }
+    if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW && a->decode_wait) {   /* worker job: poll */
+        struct cp_preview_done done; memset(&done, 0, sizeof(done)); done.preview = a->preview;
+        if (!a->host.decode_poll) { a->decode_wait = 0; return; }
+        if (a->host.decode_poll(a->host.ctx, &done) <= 0) return;
         du_timer_stop(u, CP_T_PREVIEW); a->decode_wait = 0;
-        if (done.pixels && !strncmp(path, a->cfg.wallpaper, sizeof(path))) {
-            desk_image_free(&a->image); a->image = done;
-            snprintf(a->image_path, sizeof(a->image_path), "%s", path);
+        a->decode_ms = done.decode_ms; a->render_ms = done.render_ms; a->decode_done++;
+        int current = !strncmp(done.req.path, a->cfg.wallpaper, sizeof(done.req.path));
+        if (done.image.pixels && current) {
+            desk_image_free(&a->image); a->image = done.image;
+            snprintf(a->image_path, sizeof(a->image_path), "%s", done.req.path);
         } else {
-            if (!done.pixels) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", path);
-            desk_image_free(&done);
+            if (!done.image.pixels) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", done.req.path);
+            desk_image_free(&done.image);
         }
-        a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;   /* repaint: renders, or starts the next path */
+        a->preview_pending = 2; u->dirty = 1;
+        /* A rendering of the current settings is used as it is; anything else repaints and starts a new job. */
+        a->preview_valid = done.rendered && current && done.image.pixels && preview_request_same(a, &done.req);
+        if (!a->preview_valid && !done.image.pixels)   /* failed: the desktop colour stays, no retry */
+            { for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a)); a->preview_valid = 1; }
         return;
     }
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
