@@ -149,6 +149,11 @@ class DeskuiTests(unittest.TestCase):
             self.fail(label + " frames are not pinned")
         assert_pins(self, actual, pinned, label + "_FRAMES")
 
+    def test_update_regions_and_scroll(self):
+        self.run_harness("update-regions", ["tests/host/desktop/update_regions_test.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"],
+            cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-pthread"))
+
     def test_toolkit_widgets_and_frames(self):
         _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c",

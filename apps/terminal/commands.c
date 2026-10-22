@@ -343,7 +343,7 @@ int term_execute(struct terminal *t,const char *line)
     }
     else r=system_cmd(t,n,a);
     if(r)term_printf(t,"%s: %s (error %d)\n",n>0 ? a[0] : "Syntax",strerror(-r),-r);
-    if(t->ui)t->ui->dirty=1; return r;
+    if(t->ui)du_invalidate(t->ui,(struct du_rect){4,4,t->ui->canvas.width-8,t->ui->canvas.height-8}); return r;
 }
 char *term_capture(struct terminal *t,const char *line,int *error)
 {

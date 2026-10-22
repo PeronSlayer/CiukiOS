@@ -23,6 +23,7 @@ struct ide_app {
 };
 int ide_attach(struct ide_app *, struct du_ui *);
 void ide_detach(struct ide_app *);
+void ide_adopt_project(struct ide_app *, struct ide_app *loaded);
 int ide_open_project(struct ide_app *, const char *folder);
 int ide_save(struct ide_app *);
 int ide_new_project(struct ide_app *, const char *folder, int window);

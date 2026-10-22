@@ -6,10 +6,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-struct paint_main { struct du_window window; struct du_ui ui; };
+struct paint_main { struct du_window window; struct du_ui ui; const char *path; };
 static void quit(void *arg) { du_window_close(&((struct paint_main *)arg)->window); }
 static void title(void *arg, const char *text) { du_window_set_title(&((struct paint_main *)arg)->window,text); }
 static int closing(struct du_window *w, void *arg) { (void)w; (void)arg; return paint_request_close(); }
+static void idle(void *arg)
+{
+    struct paint_main *m=arg;
+    if (!m->window.configured || m->ui.dirty || !m->ui.frame_count) return;
+    int r=paint_open_poll();
+    if (m->path) { r=paint_open_begin(m->path); m->path=NULL; }
+    if (r<0) du_message(&m->ui,999,"CiukPaint",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0);
+}
 int main(int argc, char **argv)
 {
     int channel,test; const char *path;
@@ -23,12 +31,9 @@ int main(int argc, char **argv)
     }
     if (paint_attach(&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
     paint_callbacks(quit,title,m); m->window.close_request=closing;
-    if (path) {
-        int r=paint_open(path);
-        if (r) du_message(&m->ui,999,"CiukPaint",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0);
-    }
+    m->path=path;
     if (test) du_window_move(&m->window,24,48);
     fprintf(stderr,"[PAINT] ready\n");
-    int r=du_run(&m->window,NULL,NULL);
+    int r=du_run(&m->window,idle,m);
     paint_detach(); du_window_destroy(&m->window); free(m); return r<0?1:0;
 }

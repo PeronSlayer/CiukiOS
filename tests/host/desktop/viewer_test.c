@@ -4,6 +4,7 @@
 #include "viewer.h"
 #include "../../../apps/libdeskui/recent.h"
 #include "acc_test.h"
+#include <time.h>
 #include <errno.h>
 int setenv(const char *, const char *, int);
 static const unsigned char jpeg16x8[] = {
@@ -104,6 +105,12 @@ int main(int argc, char **argv)
     du_resize(&ui, pixels, VIEWER_W, VIEWER_H); free(large);
     snprintf(path, sizeof(path), "%s/missing.png", scratch);
     assert(viewer_open(&app, path) == -ENOENT && strstr(app.error, "not found"));
+    app.asynchronous=1; snprintf(path,sizeof(path),"%s/b-photo.jpg",scratch);
+    assert(!viewer_open(&app,path)); assert(viewer_open(&app,path)==-EBUSY);
+    for(unsigned i=0;i<2000 && app.loading;i++) { viewer_poll(&app); if(app.loading) nanosleep(&(struct timespec){.tv_nsec=1000000},NULL); }
+    assert(!app.loading && app.loaded && app.index==1 && !strcmp(app.image.format,"JPEG"));
+    du_render(&ui);
+    assert(!viewer_open(&app,path)); /* close safely joins an outstanding decode */
     viewer_detach(&app);
     puts("viewer: PASS");
     return 0;

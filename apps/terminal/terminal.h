@@ -44,6 +44,7 @@ struct terminal {
     char *lines[TERM_SCROLLBACK]; unsigned first, count;
     char pending[TERM_LINE + 1]; unsigned used;
     unsigned columns, rows, top;
+    unsigned view_top, output_serial, updated_serial;
     int follow, busy, interrupted, lua_mode, quit, history_error;
     char *chunk; size_t chunk_length;
     char *capture; size_t captured; int capture_error;

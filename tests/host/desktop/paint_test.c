@@ -7,6 +7,7 @@
 #include "../../../third_party/stb/stb_image_write.h"
 #include "../../../third_party/stb/stb_image.h"
 #include <errno.h>
+#include <time.h>
 #include <sys/stat.h>
 static struct du_ui ui;
 static uint32_t pixels[PAINT_W*PAINT_H+1];
@@ -43,6 +44,19 @@ static void render_write(void *f,void *data,int n) { assert(fwrite(data,1,(size_
 static void render(const char *folder,const char *name)
 {
     du_render(&ui); assert(pixels[PAINT_W*PAINT_H]==0xdeadbeefu);
+    size_t n=(size_t)ui.canvas.width*(size_t)ui.canvas.height;
+    uint32_t *retained=malloc(n*4); assert(retained);
+    memcpy(retained,ui.canvas.pixels,n*4);
+    ui.dirty=1; du_render(&ui);
+    if (memcmp(retained,ui.canvas.pixels,n*4)) {
+        int left=ui.canvas.width,top=ui.canvas.height,right=0,bottom=0;
+        for(int y=0;y<ui.canvas.height;y++)for(int x=0;x<ui.canvas.width;x++) {
+            size_t at=(size_t)y*ui.canvas.width+x;
+            if(retained[at]==ui.canvas.pixels[at])continue;
+            if(x<left)left=x;if(x>right)right=x;if(y<top)top=y;if(y>bottom)bottom=y;
+        }
+        fprintf(stderr,"%s: partial/full mismatch at %d,%d..%d,%d\n",name,left,top,right,bottom); abort();
+    }
     if(include_cursor) {
         struct desk_tool_cursor r=desk_tool_cursor(du_cursor_at(&ui));
         for(int y=0;y<32;y++)for(int x=0;x<32;x++) {
@@ -52,12 +66,14 @@ static void render(const char *folder,const char *name)
         }
     }
     char p[1100]; snprintf(p,sizeof(p),"%s/%s.png",folder,name);
-    size_t n=(size_t)ui.canvas.width*(size_t)ui.canvas.height;
     uint8_t *data=malloc(n*3); assert(data);
     for (size_t i=0;i<n;i++) { data[i*3]=(uint8_t)(ui.canvas.pixels[i]>>16); data[i*3+1]=(uint8_t)(ui.canvas.pixels[i]>>8); data[i*3+2]=(uint8_t)ui.canvas.pixels[i]; }
     FILE *f=fopen(p,"wb"); assert(f);
     assert(stbi_write_png_to_func(render_write,f,ui.canvas.width,ui.canvas.height,3,data,ui.canvas.width*3));
     assert(!fclose(f)); free(data);
+    /* The test's cursor overlay belongs to the captured frame, never to
+     * the retained client surface which the next paint uses as backing. */
+    memcpy(ui.canvas.pixels,retained,n*4); free(retained);
 }
 static void stroke_continuity(void)
 {
@@ -353,7 +369,19 @@ static void files(const char *scratch)
         if (f<2) assert(head[0]=='B' && head[1]=='M' && head[28]==(f?24:8)); else assert(!memcmp(head,"\x89PNG\r\n\x1a\n",8));
         assert(!paint_open(path)); assert(state().width==s.width && state().height==s.height && !state().can_undo);
         for(size_t i=0;i<n;i++) assert(paint_rgb(paint_pixel((int)(i%(size_t)s.width),(int)(i/(size_t)s.width)))==reference[i]);
+        assert(!paint_open_begin(path)); assert(paint_open_begin(path)==-EBUSY);
+        int done=0;
+        for(unsigned poll=0;poll<2000 && !done;poll++) {
+            du_tick(&ui,ui.now+1000000ull); done=paint_open_poll();
+            if (!done) nanosleep(&(struct timespec){.tv_nsec=1000000},NULL);
+        }
+        assert(done==1 && state().width==s.width && state().height==s.height);
+        for(size_t i=0;i<n;i++) assert(paint_rgb(paint_pixel((int)(i%(size_t)s.width),(int)(i/(size_t)s.width)))==reference[i]);
     }
+    assert(!paint_open_begin(path)); paint_command(M_CLEARIMG);
+    int stale=0;
+    for(unsigned i=0;i<2000 && !stale;i++) { stale=paint_open_poll();if(!stale)nanosleep(&(struct timespec){.tv_nsec=1000000},NULL); }
+    assert(stale==-EBUSY && state().dirty); assert(!paint_open(path));
     assert(paint_open(bad)==-EINVAL && state().width==s.width); /* old image retained */
     snprintf(path,sizeof(path),"%s/no-directory/fail.png",scratch);
     foreground(2); stroke(T_PENCIL,1,1,4,1,1); assert(state().dirty);

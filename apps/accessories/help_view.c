@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define LIST_W 172
-static void status(struct help_app *a, const char *text) { du_set_text(du_get(a->ui, H_STATUS), text); a->ui->dirty = 1; }
+static void status(struct help_app *a, const char *text) { du_set_text(du_get(a->ui,H_STATUS),text); du_invalidate_widget(a->ui,H_STATUS); }
 
 void help_layout(struct help_app *a)
 {
@@ -38,7 +38,7 @@ int help_load_text(struct help_app *a, const char *data, size_t n, const char *t
     free(copy);
     if (err) return -EFBIG;
     if (title) status(a, title);
-    a->ui->dirty = 1;
+    du_invalidate_widget(a->ui,H_TEXT); du_invalidate_widget(a->ui,H_TOPICS);
     return 0;
 }
 void help_show_topic(struct help_app *a, int topic)
@@ -50,6 +50,14 @@ void help_show_topic(struct help_app *a, int topic)
     a->topic = topic;
     help_load_text(a, help_topics[topic].text, strlen(help_topics[topic].text), help_topics[topic].title);
 }
+int help_open_bytes(struct help_app *a, const char *path, const char *data, size_t n)
+{
+    char title[200]; snprintf(title,sizeof(title),"%.180s (read-only)",path);
+    int error=help_load_text(a,data,n,title); if (error) return error;
+    snprintf(a->path,sizeof(a->path),"%s",path);
+    for (unsigned i=0;i<help_topic_count;i++) a->items[i].selected=0;
+    a->topic=-1; du_recent_add(path); du_focus(a->ui,H_TEXT); return 0;
+}
 int help_open_file(struct help_app *a, const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -59,10 +67,7 @@ int help_open_file(struct help_app *a, const char *path)
     if (!err && !data) err = -ENOMEM;
     if (!err) { n = fread(data, 1, HELP_FILE_MAX + 1, f); if (ferror(f)) err = -EIO; }
     if (f) fclose(f);
-    if (!err) {
-        char title[200]; snprintf(title, sizeof(title), "%.180s (read-only)", path);
-        err = help_load_text(a, data, n, title);
-    }
+    if (!err) err=help_open_bytes(a,path,data,n);
     free(data);
     if (err) {
         char text[300];
@@ -72,11 +77,6 @@ int help_open_file(struct help_app *a, const char *path)
         du_message(a->ui, H_D_INFO, "CiukiOS Help", text, DU_DLG_ICON_WARNING, NULL, 0, 0, 0);
         return err;
     }
-    snprintf(a->path, sizeof(a->path), "%s", path);
-    for (unsigned i = 0; i < help_topic_count; i++) a->items[i].selected = 0;
-    a->topic = -1;
-    du_recent_add(path);
-    du_focus(a->ui, H_TEXT);
     return 0;
 }
 
@@ -142,5 +142,5 @@ void help_event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     default: return;
     }
-    u->dirty = 1;
+    du_invalidate_widget(u,H_TEXT);
 }

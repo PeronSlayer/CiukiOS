@@ -43,15 +43,16 @@ static void text(uint32_t *pixels, unsigned x, unsigned y, const char *s)
     struct desk_paint p = {pixels, WIDTH, HEIGHT, 0, 0, WIDTH, HEIGHT};
     desk_paint_text(&p, DESK_FONT_MONO, (int)x, (int)y + desk_font_cap(DESK_FONT_MONO), s, 0x213c4cu);
 }
-static void draw(uint32_t *pixels, const char *typed, unsigned motion, unsigned buttons)
+static void draw_region(uint32_t *pixels, const char *typed, unsigned motion, unsigned buttons, int y0, int y1)
 {
-    for (unsigned y=0; y<HEIGHT; y++) for (unsigned x=0; x<WIDTH; x++)
-        pixels[y*WIDTH+x] = y<58 ? 0xe8d7b9u : ((x/16+y/16)&1) ? 0x607a85u : 0x375564u;
-    text(pixels,8,8,"Type here:");
+    for (int y=y0;y<y1;y++) for (unsigned x=0;x<WIDTH;x++)
+        pixels[y*WIDTH+x]=y<58 ? 0xe8d7b9u : ((x/16+y/16)&1) ? 0x607a85u : 0x375564u;
+    if (!y0) text(pixels,8,8,"Type here:");
     text(pixels,8,22,typed);
-    char s[64]; snprintf(s,sizeof(s),"Motion %u  Buttons %u",motion,buttons);
-    text(pixels,8,40,s);
+    char s[64]; snprintf(s,sizeof(s),"Motion %u  Buttons %u",motion,buttons); text(pixels,8,40,s);
 }
+static void draw(uint32_t *pixels, const char *typed, unsigned motion, unsigned buttons)
+{ draw_region(pixels,typed,motion,buttons,0,HEIGHT); }
 static void demo_report(unsigned stage, unsigned turns, unsigned unauthorized, unsigned generation)
 {
     char line[CIUKI_PROBE_REPORT_MAX+1];
@@ -199,7 +200,11 @@ int main(int argc, char **argv)
             break;
         }
         if (!open) break;
-        if (dirty) { draw(pixels,typed,motion,buttons); damage(channel); }
+        if (dirty) {
+            draw_region(pixels,typed,motion,buttons,20,58);
+            desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+8,20); desk_put32(m.data+12,WIDTH); desk_put32(m.data+16,38);
+            if (send_wait(channel,&m)) return 1;
+        }
         if (gate && configured && !pending && !announced && turns==target) {
             demo_report(!strcmp(kind,"none") ? 2 : 1,turns,0,0); announced=1;
         }

@@ -91,6 +91,7 @@ struct cp_host {
     uint32_t screen_w, screen_h;
     char version[65], build[65], machine[65];
     uint64_t mem_total_k, mem_free_k; unsigned processes;
+    int fonts_async;
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
@@ -162,9 +163,11 @@ struct cp_app {
     struct du_item font_items[CP_FONTS_MAX];
     unsigned font_count, font_selected;
     int fonts_loaded;
+    struct cp_font_job *font_job;
     struct ciuki_font_face *font_face;
     char font_status[96];
 };
+void cp_assets_ready(struct cp_app *);
 int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
@@ -196,5 +199,6 @@ void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned reque
 void cp_fonts_build(struct cp_app *);
 void cp_fonts_paint(struct cp_app *, struct du_canvas *);
 int cp_fonts_event(struct cp_app *, const struct du_event *);
+void cp_fonts_poll(struct cp_app *);
 void cp_fonts_close(struct cp_app *);
 #endif

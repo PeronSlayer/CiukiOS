@@ -258,3 +258,54 @@ reproduce the trial's 9-18 % for desktop#28, which included pointer frames
 and user time the host cannot attribute: the new `[desktop] loop` record
 measures it on the next T23 image. Host counts are evidence for the code
 paths, not T23 timings.
+
+
+## F2-98a: native client update regions
+
+The toolkit accumulates bounded client rectangles until a render turn, clips
+all widget and application painting to those rectangles, and compares/copies
+only those rectangles into the shared surface. Separate dirty widgets retain
+separate rectangles. A bounded list merges the least costly pair when full;
+allocation failure cannot add a fatal path. Surface replacement still sends
+a complete first frame. Explicit external back-buffer presenters retain their
+full-surface compatibility path. Scroll operations move retained pixels in
+RAM and invalidate exposed strips; moved pixels also need surface publication.
+Custom painters must intersect, never widen, the supplied clip. Timer callbacks
+invalidate only changed visible state. A cold first frame precedes optional
+file reads, directory scans and image decoding; results are published on the
+UI thread, with worker-owned buffers until completion.
+
+Sources checked against the toolkit and applications for this directive:
+
+* Microsoft SDK, [Invalidating and Validating the Update Region](https://learn.microsoft.com/en-us/windows/win32/gdi/invalidating-and-validating-the-update-region):
+  accumulate invalidations while processing input, then paint the combined
+  update region, rather than painting synchronously for each event.
+* Microsoft SDK, [Redrawing in the Update Region](https://learn.microsoft.com/en-us/windows/win32/gdi/redrawing-in-the-update-region):
+  the paint DC clips to the update region; merely narrowing the final present
+  while running a full custom painter does not satisfy this model.
+* Microsoft SDK, [ScrollWindowEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-scrollwindowex):
+  retain translated pixels and invalidate the exposed area. The current SDK
+  minimum-version table is not evidence of historical availability.
+* Microsoft Windows 95 DDK, [Display Minidriver Guidelines](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S27F2.HTM)
+  (archived original Microsoft text): DIB engine drawing with optional driver
+  acceleration; this is the 9x driver family, not the NT EngBitBlt contract.
+* Microsoft KB [Q224152, Windows 95/98 Don't Use the Display Driver's FastBorder Interface](https://helparchive.huntertur.net/document/108076)
+  (archived original Microsoft text, Windows 95/98 DDK applicability): the
+  specific FastBorder example synthesizes GDI/USER functionality from more
+  fundamental DDIs and documents the Windows 9x DIBEngine DLL.
+* Windows 98 Resource Kit, main checkout read-only `build/rskt/wrkc28_8.htm`
+  (Core System Components, User and Graphics Device Interface) and
+  `wrkc24_3.htm` (Display Driver Overview): asynchronous input queues,
+  optimized 32-bit DIB operations and display minidriver fallback. These
+  chapters establish architecture, not application timing guarantees.
+
+T23 budgets are estimates from counted production operations with explicitly
+stated memory/entry rates, alongside measured host CPU time. Host milliseconds
+are not T23 measurements; disk/decode latency requires separate evidence.
+An unchanged view performs no raster or surface-compare work. The native
+service loop still polls asynchronous completions every 10 ms. Eliminating
+those wakes needs a channel/deadline wait and worker-completion wake contract;
+switching to the current kernel poll loop alone still wakes every millisecond.
+The budget charges a service-loop baseline instead of claiming literal zero
+CPU. Small Tango icon conversions retain their existing lazy process cache
+on the UI thread; startup workers never mutate that cache.

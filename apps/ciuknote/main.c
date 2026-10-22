@@ -2,6 +2,7 @@
  * /Programs/ciuknote: a Notepad-class text editor on libdeskui (f2-32).
  * Usage: ciuknote [--channel-fd=N] [--test=ciuknote] [path] */
 #include "app.h"
+#include "../libdeskui/job.h"
 #include "../libdeskui/recent.h"
 #include <errno.h>
 #include <stdio.h>
@@ -13,7 +14,7 @@
 #define TEST_TIME 1791711660   /* 2026-10-11 09:41:00 UTC: the fixed clock of --test runs */
 #define CHECKPOINT_SERIAL 0xf2320000u
 
-struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; };
+struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; struct du_job opening; const char *path; char *raw; size_t length; int open_error; char resolved[CN_PATH]; uint64_t open_revision; };
 
 static time_t host_now(void *p) { struct note_main *m = p; return m->app.test ? (time_t)TEST_TIME : time(NULL); }
 static void host_recent(const char *path) { (void)du_recent_add(path); }
@@ -25,9 +26,29 @@ static int close_request(struct du_window *w, void *p) { (void)w; return cn_clos
  * reports the checkpoint. The serial log carries the surface digest of the same frame. */
 static void on_checkpoint(struct cn_app *a, int stage) { ((struct note_main *)a->host)->checkpoint = stage; }
 
+static void load_argument(void *arg)
+{
+    struct note_main *m=arg;
+    m->open_error=cn_resolve(m->resolved,"/",m->path); if (m->open_error) return;
+    m->raw=malloc(2*(size_t)CN_LIMIT+1);
+    m->open_error=m->raw ? m->app.fs->load(m->app.fs->ctx,m->resolved,m->raw,2*(size_t)CN_LIMIT+1,&m->length) : -ENOMEM;
+}
 static void idle(void *arg)
 {
     struct note_main *m = arg;
+    if (du_job_ready(&m->opening)) {
+        du_job_finish(&m->opening);
+        int r=m->open_error;
+        if ((r==0 || r==-ENOENT) && m->open_revision!=m->app.ta.revision) r=-EBUSY;
+        if (!r) r=cn_open_bytes(&m->app,m->resolved,m->raw,m->length);
+        else if (r==-ENOENT) cn_open_argument(&m->app,m->resolved);
+        if (r && r!=-ENOENT) du_message(&m->ui,999,"CiukNote",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0);
+        free(m->raw); m->raw=NULL; m->path=NULL;
+    } else if (m->path && !m->opening.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
+        m->open_revision=m->app.ta.revision;
+        int r=du_job_start(&m->opening,load_argument,m);
+        if (r) { du_message(&m->ui,999,"CiukNote",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0); m->path=NULL; }
+    }
     if (m->checkpoint > m->sent && !m->window.damaged && !m->ui.dirty &&
         !du_window_ping(&m->window, CHECKPOINT_SERIAL + (unsigned)m->sent + 1)) {
         char line[256];
@@ -89,9 +110,10 @@ int main(int argc, char **argv)
     a->host = m; a->test = test;
     if (test) a->checkpoint = on_checkpoint;
     if (cn_attach(a, &m->ui)) { fprintf(stderr, "CiukNote: out of memory\n"); du_window_destroy(&m->window); free(m); return 1; }
-    if (path) cn_open_argument(a, path);
+    m->path=path;
     if (test) du_window_move(&m->window, 24, 48); /* fixed placement for the scripted QEMU case */
     int r = du_run(&m->window, idle, m);
+    du_job_finish(&m->opening); free(m->raw);
     cn_detach(a); du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

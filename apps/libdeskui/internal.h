@@ -7,6 +7,7 @@
 #define DU_MENUBAR 20
 #define DU_DOUBLE_CLICK_NS 500000000ull
 
+void du_region_add(struct du_rect *, unsigned *, struct du_rect);
 void du_emit(struct du_ui *, struct du_event);
 int du_focusable(const struct du_widget *);
 void du_draw_widget(struct du_ui *, struct du_widget *, int focused);
@@ -28,6 +29,7 @@ int du_list_key(struct du_ui *, struct du_widget *, unsigned code);
 int du_list_press(struct du_ui *, struct du_widget *, int button, int x, int y);
 void du_list_motion(struct du_ui *, struct du_widget *, int x, int y);
 void du_list_release(struct du_ui *, struct du_widget *);
+void du_list_scrolled(struct du_ui *, struct du_widget *, int old_v, int old_h);
 int du_list_wheel(struct du_widget *, int detents);
 
 /* Scrollbar geometry shared by standalone and embedded scrollbars. */

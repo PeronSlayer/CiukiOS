@@ -44,6 +44,7 @@
 #define DU_WIDGETS       64
 #define DU_DIALOG_ITEMS  10
 #define DU_TIMERS        8
+#define DU_REGIONS       32
 #define DU_TEXT_MAX      1040
 #define DU_COLUMNS       8   /* f2-33: Task Manager Processes uses six */
 #define DU_DIALOG_TEXT   1024
@@ -311,7 +312,9 @@ struct du_ui {
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
     struct du_rect invalid; /* dirty=3: union of clipped client invalidations */
-    struct du_rect rendered; /* the region the last du_render drew */
+    struct du_rect rendered; /* covering bounds, retained for existing clients */
+    struct du_rect updates[DU_REGIONS], frames[DU_REGIONS], copied[DU_REGIONS];
+    unsigned update_count, frame_count, copied_count;
     unsigned cursor;                       /* application default, used outside text/splitter controls */
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
@@ -336,6 +339,10 @@ void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
 /* Union clipped repaint regions; a full dirty=1 invalidation takes precedence. */
 void du_invalidate(struct du_ui *, struct du_rect);
+void du_invalidate_widget(struct du_ui *, int id);
+/* Retain unchanged pixels; repaint only exposed strips. Pending paint or
+ * overlays cause a bounded repaint instead of copying stale pixels. */
+void du_scroll(struct du_ui *, struct du_rect, int dx, int dy);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
 void du_release(struct du_ui *);
@@ -394,8 +401,8 @@ struct du_window {
     int close_reply_pending; /* disposition+1, retried if the client queue is full */
     int present_pending; /* optional completion-paced client freezes surface writes */
     int manual_damage; /* application combines ordinary damage with its frame request */
-    /* f4-37 opt-in for clients that draw only inside du_render: present
-     * compares and copies only the region it drew, not the whole surface. */
+    /* Explicit presenters opt in to the last render regions. The normal
+     * du_window_turn path always presents those regions. */
     int present_rendered;
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
@@ -409,6 +416,7 @@ struct du_window {
     uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
     struct ciuki_message tx[16]; unsigned head, count;
     struct du_rect damage; int damaged;
+    struct du_rect damages[DU_REGIONS]; unsigned damage_count;
     struct du_ui *ui;
     int (*close_request)(struct du_window *, void *);
     void *user;

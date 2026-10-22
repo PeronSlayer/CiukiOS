@@ -87,7 +87,11 @@ void du_emit(struct du_ui *u, struct du_event e)
     if (!e.modifiers) e.modifiers = u->modifiers;
     /* A timer notifies the application; only changed content needs paint.
      * Preserve any pending full, dialog-only or bounded invalidation. */
-    if (e.type != DU_EV_TICK) u->dirty = 1;
+    if (e.type != DU_EV_TICK && e.type != DU_EV_POINTER && e.type != DU_EV_KEY && e.type != DU_EV_FOCUS)
+    {
+        struct du_widget *w=du_get(u,e.id);
+        if (!(e.type==DU_EV_CHANGE && w && w->kind==DU_TEXTAREA)) du_invalidate_widget(u,e.id);
+    }
     if (u->event) u->event(u, &e, u->user);
 }
 
@@ -147,7 +151,7 @@ struct du_widget *du_add(struct du_ui *u, enum du_kind kind, int id, struct du_r
     struct du_widget *w = &u->widgets[u->count++];
     memset(w, 0, sizeof(*w));
     w->kind = kind; w->id = id; w->box = r; w->vertical = 1; w->sort = -1; w->focus_rect = 1;
-    du_set_text(w, text);
+    du_set_text(w,text); du_invalidate(u,r);
     return w;
 }
 
@@ -217,7 +221,7 @@ unsigned du_cursor_at(const struct du_ui *u)
 void du_focus(struct du_ui *u, int id)
 {
     for (unsigned i = 0; i < u->count; i++) if (u->widgets[i].id == id) {
-        if (u->focus != (int)i) { u->focus = (int)i; u->dirty = 1; }
+        if (u->focus != (int)i) { if (u->focus>=0) du_invalidate(u,u->widgets[u->focus].box); u->focus=(int)i; du_invalidate(u,u->widgets[i].box); }
         return;
     }
 }
@@ -244,7 +248,10 @@ void du_release(struct du_ui *u)
         if (w->kind == DU_TEXTAREA && w->data) du_ta_mouse_up(w->data);
     }
     u->dialog.dragging = 0;
-    u->capture = -1; u->dirty = 1;
+    if (u->capture>=0 && (unsigned)u->capture<u->count) du_invalidate(u,u->widgets[u->capture].box);
+    u->capture=-1;
+    if (u->dialog.kind) du_invalidate(u,u->dialog.box);
+    if (u->focus>=0 && (unsigned)u->focus<u->count) du_invalidate(u,u->widgets[u->focus].box);
 }
 
 void du_window_focus(struct du_ui *u, int focused)
@@ -254,7 +261,8 @@ void du_window_focus(struct du_ui *u, int focused)
         u->focused_window = focused;
         du_post(u, DU_EV_FOCUS, 0, focused);
     }
-    u->dirty = 1;
+    if (u->focus>=0 && (unsigned)u->focus<u->count) du_invalidate(u,u->widgets[u->focus].box);
+    if (u->dialog.kind) du_invalidate(u,u->dialog.box);
 }
 
 unsigned du_key_char(const struct du_ui *u, unsigned code)
@@ -374,7 +382,7 @@ int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
     else return 0;
     if (ch || code == DU_KEY_BACKSPACE || code == DU_KEY_DELETE || (ctrl && (code == 0x2d || code == 0x2f)))
         du_post(u, DU_EV_CHANGE, w->id, 0);
-    u->dirty = 1;
+    du_invalidate(u,w->box);
     return 1;
 }
 
@@ -798,7 +806,7 @@ static void draw_header_box(struct du_canvas *c, const struct du_widget *w)
 static void select_tab(struct du_ui *u, struct du_widget *w, int index)
 {
     if (index < 0 || (unsigned)index >= w->count) return;
-    w->active = (unsigned)index; u->dirty = 1;
+    w->active = (unsigned)index; du_invalidate(u,w->box);
     du_emit(u, (struct du_event){.type = DU_EV_SELECT, .id = w->id, .index = index});
 }
 
@@ -837,46 +845,107 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
     }
 }
 
+static struct du_rect covering(struct du_rect a, struct du_rect b)
+{
+    int x = a.x < b.x ? a.x : b.x, y = a.y < b.y ? a.y : b.y;
+    int r = a.x+a.w > b.x+b.w ? a.x+a.w : b.x+b.w;
+    int d = a.y+a.h > b.y+b.h ? a.y+a.h : b.y+b.h;
+    return (struct du_rect){x,y,r-x,d-y};
+}
+
+/* Fixed storage, no allocation in the paint path. Keep distant widgets
+ * separate; capacity pressure joins the pair with the least added area. */
+void du_region_add(struct du_rect *rects, unsigned *count, struct du_rect r)
+{
+    if (r.w <= 0 || r.h <= 0) return;
+    for (unsigned i=0; i<*count; i++) {
+        struct du_rect a=rects[i];
+        if (r.x>=a.x && r.y>=a.y && r.x+r.w<=a.x+a.w && r.y+r.h<=a.y+a.h) return;
+        if (a.x>=r.x && a.y>=r.y && a.x+a.w<=r.x+r.w && a.y+a.h<=r.y+r.h) {
+            rects[i]=rects[--*count]; i--; continue;
+        }
+    }
+    if (*count == DU_REGIONS) {
+        unsigned ai=0, bi=1; int64_t best=INT64_MAX;
+        for (unsigned i=0; i<*count; i++) for (unsigned j=i+1; j<*count; j++) {
+            struct du_rect box=covering(rects[i],rects[j]);
+            int64_t cost=(int64_t)box.w*box.h-(int64_t)rects[i].w*rects[i].h-(int64_t)rects[j].w*rects[j].h;
+            if (cost<best) { best=cost; ai=i; bi=j; }
+        }
+        rects[ai]=covering(rects[ai],rects[bi]); rects[bi]=rects[--*count];
+    }
+    rects[(*count)++]=r;
+}
+
 void du_invalidate(struct du_ui *u, struct du_rect r)
 {
     r=du_intersection(r,(struct du_rect){0,0,u->canvas.width,u->canvas.height});
     if (r.w<=0 || r.h<=0 || u->dirty==1) return;
-    if (u->dirty==2) { u->dirty=1; return; }
-    if (u->dirty==3) {
-        int right=u->invalid.x+u->invalid.w, bottom=u->invalid.y+u->invalid.h;
-        if (right<r.x+r.w) right=r.x+r.w;
-        if (bottom<r.y+r.h) bottom=r.y+r.h;
-        if (r.x>u->invalid.x) r.x=u->invalid.x;
-        if (r.y>u->invalid.y) r.y=u->invalid.y;
-        r.w=right-r.x; r.h=bottom-r.y;
+    if (u->dirty!=3) {
+        u->update_count=0;
+        if (u->dirty==2 && u->dialog.kind) du_region_add(u->updates,&u->update_count,u->dialog.box);
     }
-    u->invalid=r; u->dirty=3;
+    du_region_add(u->updates,&u->update_count,r);
+    u->invalid=u->update_count==1 ? r : covering(u->invalid,r); u->dirty=3;
+}
+void du_invalidate_widget(struct du_ui *u, int id)
+{
+    struct du_widget *w=du_get(u,id);
+    if (w && !w->hidden) du_invalidate(u,w->box);
+}
+
+void du_scroll(struct du_ui *u, struct du_rect r, int dx, int dy)
+{
+    r=du_intersection(r,(struct du_rect){0,0,u->canvas.width,u->canvas.height});
+    if (r.w<=0 || r.h<=0 || (!dx && !dy)) return;
+    if (u->dirty==1 || u->dirty==2 || u->dialog.kind || u->menu>=0 || u->popup ||
+        dx<=-r.w || dx>=r.w || dy<=-r.h || dy>=r.h) { du_invalidate(u,r); return; }
+    for (unsigned i=0;i<u->update_count && u->dirty==3;i++) {
+        struct du_rect q=du_intersection(r,u->updates[i]);
+        if (q.w>0 && q.h>0) { du_invalidate(u,r); return; }
+    }
+    struct du_rect dest=du_intersection(r,(struct du_rect){r.x+dx,r.y+dy,r.w,r.h});
+    for (int n=0;n<dest.h;n++) {
+        int y=dy>0 ? dest.y+dest.h-1-n : dest.y+n;
+        memmove(u->canvas.pixels+(size_t)y*u->canvas.width+dest.x,
+                u->canvas.pixels+(size_t)(y-dy)*u->canvas.width+dest.x-dx,(size_t)dest.w*4);
+    }
+    du_region_add(u->copied,&u->copied_count,dest);
+    if (dy) du_invalidate(u,(struct du_rect){r.x,dy>0?r.y:r.y+r.h+dy,r.w,dy>0?dy:-dy});
+    if (dx) du_invalidate(u,(struct du_rect){dx>0?r.x:r.x+r.w+dx,dest.y,dx>0?dx:-dx,dest.h});
 }
 
 void du_render(struct du_ui *u)
 {
-    struct du_canvas *c = &u->canvas;
-    /* Rebuild the underlay inside the dialog too: rounded frame coverage
-     * must blend against the original background, not its previous edge. */
-    struct du_rect repaint=u->dirty==3 ? u->invalid :
-        u->dirty==2 && u->dialog.kind==DU_DLG_PROGRESS ? u->dialog.box :
+    struct du_canvas *c=&u->canvas;
+    struct du_rect rects[DU_REGIONS]; unsigned count=0;
+    if (u->dirty==3) {
+        count=u->update_count; memcpy(rects,u->updates,count*sizeof(*rects));
+        /* Compatibility with clients retaining only the old bounded field. */
+        if (!count) rects[count++]=u->invalid;
+    } else rects[count++]=u->dirty==2 && u->dialog.kind==DU_DLG_PROGRESS ? u->dialog.box :
         (struct du_rect){0,0,c->width,c->height};
-    c->clip = repaint; u->rendered = repaint;
-    du_fill(c, c->clip, DU_FACE);
-    for (unsigned i = 0; i < u->count; i++) {
-        struct du_widget *w = &u->widgets[i];
-        if (w->hidden) continue;
-        c->clip = du_intersection(repaint, w->box);
-        if (c->clip.w<=0 || c->clip.h<=0) continue;
-        du_draw_widget(u, w, u->focus == (int)i && !u->dialog.kind);
+    u->dirty=0; u->update_count=0; u->frame_count=0;
+    for (unsigned i=0;i<u->copied_count;i++) du_region_add(u->frames,&u->frame_count,u->copied[i]);
+    u->copied_count=0;
+    for (unsigned n=0;n<count;n++) {
+        struct du_rect repaint=rects[n];
+        du_region_add(u->frames,&u->frame_count,repaint);
+        c->clip=repaint; du_fill(c,repaint,DU_FACE);
+        for (unsigned i=0;i<u->count;i++) {
+            struct du_widget *w=&u->widgets[i];
+            if (w->hidden) continue;
+            c->clip=du_intersection(repaint,w->box);
+            if (c->clip.w>0 && c->clip.h>0) du_draw_widget(u,w,u->focus==(int)i && !u->dialog.kind);
+        }
+        c->clip=repaint;
+        if (u->paint) u->paint(u,u->user);
+        c->clip=repaint; du_draw_menus(u);
+        c->clip=repaint; du_draw_dialog(u);
     }
-    c->clip = repaint;
-    if (u->paint) { u->paint(u, u->user); c->clip = repaint; }
-    du_draw_menus(u);
-    c->clip = repaint;
-    du_draw_dialog(u);
-    c->clip = (struct du_rect){0, 0, c->width, c->height};
-    u->dirty = 0;
+    u->rendered=(struct du_rect){0};
+    for (unsigned i=0;i<u->frame_count;i++) u->rendered=i ? covering(u->rendered,u->frames[i]) : u->frames[i];
+    c->clip=(struct du_rect){0,0,c->width,c->height};
 }
 
 /* ---- per-widget input ---- */
@@ -888,11 +957,54 @@ static void toggle(struct du_ui *u, struct du_widget *w)
             items = u->dialog.items; count = u->dialog.count; break;
         }
         for (unsigned i = 0; i < count; i++)
-            if (items[i].kind == DU_RADIO && items[i].total == w->total) items[i].value = 0;
+            if (items[i].kind == DU_RADIO && items[i].total == w->total) { if (items[i].value) du_invalidate(u,items[i].box); items[i].value=0; }
         w->value = 1;
     } else w->value = !w->value;
-    u->dirty = 1;
+    du_invalidate(u,w->box);
     du_post(u, DU_EV_CHANGE, w->id, w->value);
+}
+
+static struct du_rect ta_caret(struct du_widget *w)
+{ du_ta_fit(w->data,w->box); return du_ta_caret(w->data,w->box); }
+static void ta_changed(struct du_ui *u, struct du_widget *w, struct du_textarea before, struct du_rect caret)
+{
+    struct du_textarea *ta=w->data;
+    struct du_rect body={w->box.x+DU_TA_PAD+(ta->line_numbers ? 42 : 0),w->box.y+DU_TA_PAD,
+        w->box.w-2*DU_TA_PAD-DU_TA_BAR-(ta->line_numbers ? 42 : 0),
+        w->box.h-2*DU_TA_PAD-(ta->wrap ? 0 : DU_TA_BAR)};
+    if (ta->revision!=before.revision) { du_invalidate(u,w->box); return; }
+    int selection=ta->cursor!=ta->anchor || before.cursor!=before.anchor;
+    int moved=ta->cursor!=before.cursor || ta->anchor!=before.anchor;
+    int scrolled=ta->top!=before.top || ta->left!=before.left;
+    if (!moved && !scrolled) return;
+    if (ta->top!=before.top || ta->left!=before.left) {
+        int dx=((int)before.left-(int)ta->left)*DU_TA_CELL_W,dy=((int)before.top-(int)ta->top)*DU_TA_CELL_H;
+        /* Padding and partial cells are fixed background, not retained text.
+         * Moving them would copy glyph tails into the top/bottom margin. */
+        struct du_rect cells=du_intersection(body,(struct du_rect){body.x+DU_TA_PAD,body.y+DU_TA_PAD,
+            (int)ta->cols*DU_TA_CELL_W,(int)ta->rows*DU_TA_CELL_H});
+        du_scroll(u,cells,dx,dy);
+        du_invalidate(u,(struct du_rect){body.x,body.y,body.w,cells.y-body.y});
+        du_invalidate(u,(struct du_rect){body.x,cells.y+cells.h,body.w,body.y+body.h-cells.y-cells.h});
+        du_invalidate(u,(struct du_rect){body.x,cells.y,cells.x-body.x,cells.h});
+        du_invalidate(u,(struct du_rect){cells.x+cells.w,cells.y,body.x+body.w-cells.x-cells.w,cells.h});
+        caret.x+=dx; caret.y+=dy;
+        du_invalidate(u,(struct du_rect){w->box.x+w->box.w-DU_TA_BAR-2,w->box.y,DU_TA_BAR+2,w->box.h});
+        if (!ta->wrap) du_invalidate(u,(struct du_rect){w->box.x,w->box.y+w->box.h-DU_TA_BAR-2,w->box.w,DU_TA_BAR+2});
+        if (ta->line_numbers) du_invalidate(u,(struct du_rect){w->box.x+2,w->box.y+2,42,body.h});
+    }
+    if (selection) {
+        if (moved) {
+            unsigned first=du_ta_visual_line_of(ta,ta->cursor,NULL),last=first;
+            unsigned rows[]={du_ta_visual_line_of(ta,ta->anchor,NULL),du_ta_visual_line_of(&before,before.cursor,NULL),du_ta_visual_line_of(&before,before.anchor,NULL)};
+            for (unsigned i=0;i<3;i++) { if(rows[i]<first)first=rows[i];if(rows[i]>last)last=rows[i]; }
+            int y=w->box.y+4+((int)first-(int)ta->top-1)*DU_TA_CELL_H;
+            du_invalidate(u,du_intersection(body,(struct du_rect){body.x,y,body.w,((int)last-(int)first+3)*DU_TA_CELL_H}));
+        }
+    } else {
+        du_invalidate(u,du_intersection(caret,body));
+        du_invalidate(u,du_intersection(ta_caret(w),body));
+    }
 }
 
 int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
@@ -900,10 +1012,18 @@ int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
     if (w->disabled || w->hidden || !detents) return 0;
     int changed=0;
     switch (w->kind) {
-    case DU_LISTVIEW: case DU_TREE: changed=du_list_wheel(w,detents); break;
+    case DU_LISTVIEW: case DU_TREE: {
+        int v=w->scroll,h=w->hscroll; changed=du_list_wheel(w,detents);
+        if (changed) du_list_scrolled(u,w,v,h);
+        return changed;
+    }
     case DU_TEXTAREA:
-        if (w->data) changed=du_ta_wheel(w->data,w->box,detents);
-        break;
+        if (w->data) {
+            struct du_rect caret=ta_caret(w); struct du_textarea before=*(struct du_textarea *)w->data;
+            changed=du_ta_wheel(w->data,w->box,detents);
+            if (changed) ta_changed(u,w,before,caret);
+        }
+        return changed;
     case DU_SCROLLBAR: {
         int next=du_wheel_value(w->value,detents,w->total,w->page);
         changed=next!=w->value; w->value=next;
@@ -912,7 +1032,7 @@ int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
     }
     default: break;
     }
-    if (changed) u->dirty=1;
+    if (changed) du_invalidate(u,w->box);
     return changed;
 }
 
@@ -926,8 +1046,10 @@ int du_widget_key(struct du_ui *u, struct du_widget *w, unsigned code)
         struct du_textarea *ta = w->data;
         if (!ta) return 0;
         du_ta_fit(ta, w->box);
+        struct du_rect caret=ta_caret(w); struct du_textarea before=*ta;
         unsigned ch = du_key_char(u, code);
         if (!(ch ? du_ta_text(ta, ch) : du_ta_key(ta, code, u->modifiers))) return 0;
+        ta_changed(u,w,before,caret);
         du_post(u, DU_EV_CHANGE, w->id, 0);
         return 1;
     }
@@ -967,12 +1089,15 @@ int du_widget_press(struct du_ui *u, struct du_widget *w, int button, int x, int
             du_edit_press(w, x, 1);
             du_select_click(&w->selection, w->text, w->cursor, (u->modifiers & DU_SHIFT) != 0,
                             u->now, x, y, &anchor, &w->cursor);
-            w->anchor = anchor; w->drag = 1; u->dirty = 1;
+            w->anchor = anchor; w->drag = 1; du_invalidate(u,w->box);
         } else if (button == 2) du_emit(u, (struct du_event){.type = DU_EV_CONTEXT, .id = w->id, .index = -1, .x = x, .y = y});
         return 1;
     case DU_TEXTAREA:
         if (button == 2) du_emit(u, (struct du_event){.type = DU_EV_CONTEXT, .id = w->id, .index = -1, .x = x, .y = y});
-        else if (button == 1 && w->data && du_ta_mouse_down(w->data, w->box, x, y, u->modifiers, u->now)) du_post(u, DU_EV_CHANGE, w->id, 0);
+        else if (button==1 && w->data) {
+            struct du_rect caret=ta_caret(w); struct du_textarea before=*(struct du_textarea *)w->data;
+            if (du_ta_mouse_down(w->data,w->box,x,y,u->modifiers,u->now)) { ta_changed(u,w,before,caret); du_post(u,DU_EV_CHANGE,w->id,0); }
+        }
         return 1;
     case DU_LISTVIEW: case DU_TREE: return du_list_press(u, w, button, x, y);
     case DU_SCROLLBAR: {
@@ -1001,22 +1126,27 @@ void du_widget_motion(struct du_ui *u, struct du_widget *w, int x, int y)
         break;
     case DU_BUTTON: case DU_TOOLBUTTON: case DU_CHECKBOX: case DU_RADIO: {
         int hot = du_contains(w->box, x, y);
-        if (hot != w->hot) { w->hot = (uint8_t)hot; u->dirty = 1; }
+        if (hot != w->hot) { w->hot = (uint8_t)hot; du_invalidate(u,w->box); }
         break;
     }
     case DU_EDIT: if (w->drag) {
         du_edit_press(w, x, 1);
         du_select_drag(&w->selection, w->text, w->cursor, &w->anchor, &w->cursor);
-        u->dirty = 1;
+        du_invalidate(u,w->box);
     } break;
-    case DU_TEXTAREA: if (w->data && du_ta_mouse_move(w->data, w->box, x, y)) du_post(u, DU_EV_CHANGE, w->id, 0); break;
+    case DU_TEXTAREA: if (w->data) {
+        struct du_rect caret=ta_caret(w); struct du_textarea before=*(struct du_textarea *)w->data;
+        if (du_ta_mouse_move(w->data,w->box,x,y)) { ta_changed(u,w,before,caret); du_post(u,DU_EV_CHANGE,w->id,0); }
+    } break;
     case DU_LISTVIEW: case DU_TREE: du_list_motion(u, w, x, y); break;
     case DU_SCROLLBAR:
         if (w->drag == 3) {
             struct du_sb s = widget_sb(w); int v = du_sb_drag(&s, x, y, w->drag_offset);
             if (v != w->value) { w->value = v; du_post(u, DU_EV_CHANGE, w->id, v); }
-        } else w->hot = (uint8_t)(du_sb_part(&(struct du_sb){w->box, w->vertical, w->value, w->total, w->page}, x, y) == w->drag);
-        u->dirty = 1;
+        } else {
+            unsigned hot=du_sb_part(&(struct du_sb){w->box,w->vertical,w->value,w->total,w->page},x,y)==w->drag;
+            if (hot!=w->hot) { w->hot=(uint8_t)hot; du_invalidate(u,w->box); }
+        }
         break;
     case DU_SPLITTER:
         if (w->drag) du_post(u, DU_EV_CHANGE, w->id, w->vertical ? x - w->drag_offset : y - w->drag_offset);
@@ -1039,7 +1169,7 @@ void du_widget_release(struct du_ui *u, struct du_widget *w, int button, int x, 
     if (w->kind == DU_LISTVIEW || w->kind == DU_TREE) du_list_release(u, w);
     if (w->kind == DU_TEXTAREA && w->data) du_ta_mouse_up(w->data);
     w->pressed = 0; w->drag = 0; w->hot = (uint8_t)du_contains(w->box, x, y);
-    u->dirty = 1;
+    du_invalidate(u,w->box);
     if (fire) du_post(u, DU_EV_ACTIVATE, w->id, 0);
     if (flip) toggle(u, w);
 }
@@ -1051,7 +1181,7 @@ static void focus_next(struct du_ui *u, int back)
     int i = u->focus;
     for (unsigned n = 0; n < u->count; n++) {
         i = back ? (i <= 0 ? (int)u->count - 1 : i - 1) : (i + 1) % (int)u->count;
-        if (du_focusable(&u->widgets[i])) { u->focus = i; u->dirty = 1; return; }
+        if (du_focusable(&u->widgets[i])) { du_focus(u,u->widgets[i].id); return; }
     }
 }
 
@@ -1147,11 +1277,17 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         if (u->capture >= 0 && (unsigned)u->capture < u->count) { du_widget_motion(u, &u->widgets[u->capture], u->mouse_x, u->mouse_y); return; }
         int hit = du_hit(u, u->mouse_x, u->mouse_y);
         if (hit != u->hover) {
-            if (u->hover >= 0 && (unsigned)u->hover < u->count) { u->widgets[u->hover].hot = 0; u->dirty = 1; }
+            if (u->hover>=0 && (unsigned)u->hover<u->count) {
+                struct du_widget *old=&u->widgets[u->hover];
+                if (old->hot) { old->hot=0; du_invalidate(u,old->box); }
+                /* Give an application canvas one leave motion to erase its
+                 * own hover overlay without repainting the entire widget. */
+                if (old->kind==DU_CANVAS && !old->disabled) du_widget_motion(u,old,u->mouse_x,u->mouse_y);
+            }
             u->hover = hit;
         }
         if (hit >= 0 && (u->widgets[hit].kind == DU_TOOLBUTTON || u->widgets[hit].kind == DU_BUTTON) &&
-            !u->widgets[hit].hot && !u->widgets[hit].disabled) { u->widgets[hit].hot = 1; u->dirty = 1; }
+            !u->widgets[hit].hot && !u->widgets[hit].disabled) { u->widgets[hit].hot = 1; du_invalidate(u,u->widgets[hit].box); }
         if (hit >= 0 && u->widgets[hit].kind == DU_CANVAS && !u->widgets[hit].disabled)
             du_widget_motion(u, &u->widgets[hit], u->mouse_x, u->mouse_y);
         return;
@@ -1172,7 +1308,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
             return;
         }
         struct du_widget *w = &u->widgets[hit];
-        if (du_focusable(w)) { if (u->focus != hit) u->dirty = 1; u->focus = hit; }
+        if (du_focusable(w)) { if (u->focus != hit) { if (u->focus>=0) du_invalidate(u,u->widgets[u->focus].box); du_invalidate(u,w->box); } u->focus = hit; }
         if (button == 1 || (w->kind == DU_CANVAS && !w->drag)) u->capture = hit;
         du_widget_press(u, w, button, u->mouse_x, u->mouse_y);
     } else {
