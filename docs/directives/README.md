@@ -473,3 +473,10 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f6-06-ndis-host-netif](f6-06-ndis-host-netif.md) | F6 | gpt-6.1-sol / xhigh | written 2026-10-23 01:47 (ndis.sys host in the ring-3 host, netif adapter, wait bridge, STI shadow) |
 | [f6-07-device-manager-driver-install](f6-07-device-manager-driver-install.md) | F6 | gpt-6.1-sol / high | written 2026-10-23 01:47 (Install driver from pack: INF selection, transactional install, rollback, binding) |
 | [integ-video-family-integration](integ-video-family-integration.md) | integration | gpt-6.1-sol / xhigh | written 2026-10-23 01:51 (one tree for display parts A/B and 19 family drivers; unified registry, build lists, DM9 path, credits) |
+| [f1-110-acpi-events-power](f1-110-acpi-events-power.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (ACPI SCI/GPE, generic EC, power button, lid, AC, battery, thermal, soft-off, tray and Power page) |
+| [f1-112-serial-mice-pnp-dos-uart](f1-112-serial-mice-pnp-dos-uart.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (serial PnP and mice, virtual UART/INT 14h leases) |
+| [f1-113-game-port-joysticks](f1-113-game-port-joysticks.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (analog game port, DOS 201h/INT 15h AH=84h, one joystick API) |
+| [f1-114-parallel-port-lpt](f1-114-parallel-port-lpt.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (LPT SPP/PS2/EPP/ECP, /dev/lpt, INT 17h and raw leases) |
+| [f1-115-floppy-controller](f1-115-floppy-controller.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-23 00:31 (82077AA FDC, A:/B: through FAT12, INT 13h and virtual FDC) |
+| [f1-121-apm-12](f1-121-apm-12.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:31 (APM 1.2 for pre-ACPI machines) |
+| [f1-104b-hid-64-byte-reports](f1-104b-hid-64-byte-reports.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:31 (HID reports up to 64 bytes) |
