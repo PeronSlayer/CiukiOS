@@ -37,7 +37,7 @@ static bool callback(void *ctx,enum ciuki_http_event e,const void *data,size_t n
 {
     (void)ctx;(void)data;
     if(e==CIUKI_HTTP_HEADER){headers++;if(cancel)return false;}
-    if(e==CIUKI_HTTP_DATA){if(received+n<=sizeof(payload))memcpy(payload+received,data,n);received+=n;data_events++;}
+    if(e==CIUKI_HTTP_DATA){if(received<sizeof(payload)){size_t take=sizeof(payload)-received;if(take>n)take=n;memcpy(payload+received,data,take);}received+=n;data_events++;}
     return true;
 }
 static void drive(struct ciuki_net *net,struct ciuki_job *job)
@@ -141,7 +141,10 @@ int main(int argc,char **argv)
     if(!strcmp(mode,"post"))request.post="dog=Ciuki&step=M2";
     cancel=!strcmp(mode,"callback-cancel");
     struct ciuki_job *job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")||!strcmp(mode,"tls-submit-recheck")||!strcmp(mode,"tls-send-recheck")||!strcmp(mode,"tls-hello-request")||!strcmp(mode,"tls-before-first-send")||!strncmp(mode,"tls-partial-",12)||!strcmp(mode,"stale-retry")||!strcmp(mode,"post-no-replay")||!strcmp(mode,"tls-stale-retry")||!strcmp(mode,"tls-post-no-replay")){
+    if(!strcmp(mode,"web-http")||!strcmp(mode,"tls-web")){
+        if(job->error)fprintf(stderr,"unexpected: %s\n",job->error);
+        assert(!job->error && job->http->done && received==32768 && payload[0]=='C');
+    } else if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")||!strcmp(mode,"tls-submit-recheck")||!strcmp(mode,"tls-send-recheck")||!strcmp(mode,"tls-hello-request")||!strcmp(mode,"tls-before-first-send")||!strncmp(mode,"tls-partial-",12)||!strcmp(mode,"stale-retry")||!strcmp(mode,"post-no-replay")||!strcmp(mode,"tls-stale-retry")||!strcmp(mode,"tls-post-no-replay")){
         if(job->error)fprintf(stderr,"unexpected: %s\n",job->error);
         assert(!job->error && job->http->done && received==5 && !memcmp(payload,"Ciuki",5));
         if(!strcmp(mode,"reuse")||!strcmp(mode,"tls-reuse")){
@@ -191,7 +194,7 @@ int main(int argc,char **argv)
         if(!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strncmp(mode,"tls-partial-",12)){
             ciuki_net_job_free(job);received=0;
             struct pollfd fds[8];assert(ciuki_net_fds(net,fds)==1 && (fds[0].events&POLLIN));
-            if(strstr(mode,"expiry"))monotonic_offset=16;else usleep(500000);
+            if(!strcmp(mode,"idle-expiry"))monotonic_offset=16;else if(strcmp(mode,"idle-reuse-expiry"))usleep(500000);
             if(!strcmp(mode,"tls-buffered")){
                 assert(last_tls);size_t bytes=0;const unsigned char *app=NULL;
                 for(unsigned tries=0;tries<1000;tries++){
@@ -211,7 +214,11 @@ int main(int argc,char **argv)
                 unsigned char byte;assert(recv(fd,&byte,1,MSG_PEEK|MSG_DONTWAIT)<0 && errno==EAGAIN);
             }
             if(strcmp(mode,"idle-reuse-expiry")){ciuki_net_service_idle(net);assert(!ciuki_net_fds(net,fds));}
-            request.target="/";job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
+            request.target="/";job=ciuki_net_job(&request,callback,NULL);assert(job);
+            /* Records timestamp job creation too. Arm the admission/idle
+             * check after allocation, without stepping the kernel clocks. */
+            if(!strcmp(mode,"idle-reuse-expiry"))monotonic_offset=16;
+            drive(net,job);
             assert(!job->error && !job->pooled && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
         }
         if(!strcmp(mode,"stale")||!strcmp(mode,"post-stale")){

@@ -26,6 +26,7 @@
 extern void fixture_begin(const char *,const char *,const char *),fixture_end(void);
 extern unsigned fixture_requests(void),fixture_loops(void),fixture_connections(void);
 extern bool fixture_lookup_blocked(void);
+extern bool fixture_slow_started(void);
 extern bool fixture_lookup_returned_in_thread(void);
 extern void fixture_lookup_release(void);
 static bool blocked,navigated,completed,printed;
@@ -101,6 +102,7 @@ int __real_clock_gettime(clockid_t,struct timespec *);
 int __wrap_clock_gettime(clockid_t clock,struct timespec *out)
 {
     int r=__real_clock_gettime(clock,out);if(!r && clock==CLOCK_REALTIME)out->tv_sec=1790000000;
+    if(!r && clock==CLOCK_MONOTONIC && fixture_mode && !strcmp(fixture_mode,"browser-timeout") && fixture_slow_started())out->tv_sec+=31;
     /* Simulated boot uptime: shift the real clock instead of freezing it,
      * so NetSurf's scheduler and the fetch timeouts keep advancing. */
     if(!r && clock==CLOCK_MONOTONIC && fixture_mode && !strncmp(fixture_mode,"browser-entropy",15)){
