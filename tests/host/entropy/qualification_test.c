@@ -33,7 +33,7 @@ static void capture(uint64_t delta,uint64_t gcd,unsigned osr)
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
-    struct entropy_jent_ops ops={cycles,ms,malloc,free,NULL,capture};
+    struct entropy_jent_ops ops={cycles,ms,malloc,free,NULL,capture,NULL};
     uint64_t start=ms();struct entropy_pool pool;entropy_pool_init(&pool);
     entropy_jent_begin(&ops);
     int error=entropy_jent_init(ENTROPY_JENT_MIN_OSR,ENTROPY_JENT_MAX_OSR);pool.source_ready=!error;

@@ -18,6 +18,20 @@ void ciuki_jent_erase(void *buffer, size_t size)
     while (size--) *p++ = 0;
 }
 void ciuki_jent_clock(uint64_t *out) { *out = ops->clock(); }
+/* f6-21: the runtime collector works in turns of at most 1 ms. Zeroing or
+ * erasing the pinned 256 KiB buffer is a byte loop (about 0.5 ms on the T23,
+ * far longer under QEMU TCG), so it runs in 16 KiB chunks with a boundary
+ * between them, outside any measured interval. */
+#define CIUKI_JENT_CHUNK 16384u
+static void clear(void *buffer, size_t size)
+{
+    volatile uint8_t *p = buffer;
+    for (size_t at = 0; at < size;) {
+        size_t end = size - at > CIUKI_JENT_CHUNK ? at + CIUKI_JENT_CHUNK : size;
+        while (at < end) p[at++] = 0;
+        if (at < size && ops->point) ops->point();
+    }
+}
 void *ciuki_jent_alloc(size_t size)
 {
     /* A startup alarm makes the library's own reset ask for the next memory
@@ -25,13 +39,14 @@ void *ciuki_jent_alloc(size_t size)
      * and entropy_jent_init recovers with osr+1 at the pinned size. */
     if (expired) return NULL;
     if (size > 262144) { if (size > report.refused) report.refused = size; return NULL; }
+    if (ops->point) ops->point();      /* the pool's search is its own unit of work */
     void *p = ops->alloc(size);
-    if (p) memset(p, 0, size);
+    if (p) clear(p, size);
     return p;
 }
 void ciuki_jent_free(void *p, size_t size)
 {
-    if (p) { ciuki_jent_erase(p, size); ops->free(p); }
+    if (p) { clear(p, size); ops->free(p); }
 }
 /* No source patch: a collector whose output loop has never run (the power-up
  * test's private instance) has rct_mem_nosr == 0; otherwise startup_state

@@ -80,7 +80,7 @@ static uint64_t clock_tick(void)
 static uint64_t ms(void) { return cycles / T23_CYCLES_PER_MS; }
 static void *allocate(size_t size) { void *p = malloc(size); if (p) allocated++; return p; }
 static void release(void *p) { CHECK(allocated); allocated--; free(p); }
-static const struct entropy_jent_ops ops = {clock_tick, ms, allocate, release, yield, NULL};
+static const struct entropy_jent_ops ops = {clock_tick, ms, allocate, release, yield, NULL, NULL};
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
