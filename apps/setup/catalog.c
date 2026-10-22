@@ -14,7 +14,7 @@ const struct st_component st_components[SETUP_COMP_COUNT] = {
     {SETUP_COMP_GAMES, "games", "Shareware games: DOOM, Quake, Wolfenstein 3D", SETUP_COMP_DOS},
     {SETUP_COMP_DEVTOOLS, "devtools", "Developer tools: CiukIDE, TCC, Lua, SDK samples", 0},
     {SETUP_COMP_SOUNDFONT, "soundfont", "General MIDI soundfont for Windows game music", 0},
-    {SETUP_COMP_SOURCES, "sources", "Source code of the unified DOS kernel (GPL) and build notices", 0},
+    {SETUP_COMP_SOURCES, "sources", "Install the source archives", 0},
 };
 
 /* Mockup order; the ids are cfg_keyboard_names (apps/desktop/settings.c). */

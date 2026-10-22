@@ -21,7 +21,7 @@
 #define ST_BACKGROUND 0x0a3d62u        /* mockup wallpaper colour */
 #define ST_SIDEBAR 0x1b2a5au
 #define ST_PORTRAIT 132                /* sidebar portrait (nearest-neighbour from 256) */
-#define ST_LICENCES_MAX 96
+#define ST_LICENCES_MAX 256
 #define ST_TEXT_BYTES (256u * 1024u)   /* licence/report viewer buffer, allocated once */
 #define ST_FILE_BYTES (64u * 1024u)    /* answer file, INDEX.TXT, rescue copies */
 #define ST_REPORT_BYTES 8192u
@@ -52,6 +52,7 @@ struct st_disk {
     uint64_t sectors; unsigned sector_size;
     uint8_t fingerprint[32];
     unsigned part_count; struct st_part parts[ST_PARTS];
+    uint8_t occupied;                     /* any partition or filesystem, including an unpartitioned volume */
     uint8_t installable; char refusal[64]; /* libdisk's reason when not installable */
     uint8_t install; char release[65];    /* SETUP.STATE on its first volume */
 };
@@ -78,6 +79,7 @@ struct st_host {
     int (*release)(void *, char *out, size_t cap);
     int (*read_file)(void *, const char *path, char *buf, size_t cap, size_t *length); /* -EFBIG: too big */
     int (*write_file)(void *, const char *path, const char *buf, size_t length);      /* USB only */
+    int (*copy_file)(void *, const char *from, const char *to, char *buffer, size_t cap); /* bounded streaming, USB destination */
     int (*make_dir)(void *, const char *path);                                        /* USB only */
     int (*list_dir)(void *, const char *path, char (*names)[64], unsigned cap);
     void (*record)(void *, const char *line);                             /* kernel log, serial */
@@ -91,7 +93,7 @@ struct st_host {
 
 struct st_hw_row { uint8_t mark; char name[20]; char text[200]; };
 struct st_line { const char *text; uint8_t entry, font, mark; uint32_t ink; int y, h; };
-struct st_view { struct st_line lines[160]; unsigned count; int scroll, content, selected; struct du_rect box; int id; };
+struct st_view { struct st_line lines[384]; unsigned count; int scroll, content, selected, dragging, grab; struct du_rect box; int id; };
 
 struct st_app {
     struct du_ui *ui;
@@ -213,6 +215,8 @@ void st_view_add(struct st_view *, const char *text, int entry, int font, uint32
 void st_view_layout(struct st_view *);
 void st_view_paint(struct du_canvas *, const struct st_view *, int focused);
 int st_view_key(struct st_view *, unsigned code);   /* 1 consumed */
+int st_view_pointer(struct st_view *, const struct du_event *);
+void st_view_wheel(struct st_view *, int ticks);
 int st_view_click(struct st_view *, int x, int y);  /* entry index or -1 */
 const char *st_pool(struct st_app *, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 /* rescue.c */

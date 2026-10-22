@@ -276,6 +276,11 @@ static int next_line(const char **p, const char *end, struct line *out, unsigned
     *p = e < end ? e + 1 : end;
     size_t n = (size_t)(e - s);
     if (n && s[n - 1] == '\r') n--;
+    int quoted = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '"') quoted = !quoted;
+        else if (s[i] == ';' && !quoted) { n = i; break; }
+    }
     while (n && (*s == ' ' || *s == '\t')) { s++; n--; }
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t')) n--;
     out->s = s; out->n = n; out->number = ++*number;
@@ -412,7 +417,7 @@ int setup_status_line(char *out, size_t cap, const struct setup_inf_status *st)
  * first FAT USB volume in letter order. */
 int st_answers_load(struct st_app *a)
 {
-    char path[48] = "";
+    char path[48] = "D:\\SETUP.INF";
     size_t length = 0;
     int r = a->h.read_file(a->h.ctx, "D:\\SETUP.INF", a->file, ST_FILE_BYTES, &length);
     if (!r) snprintf(path, sizeof(path), "D:\\SETUP.INF");
@@ -447,7 +452,7 @@ int st_answers_load(struct st_app *a)
         unsigned slot = (unsigned)d->slot * 2u + d->unit;
         if (!d->present || slot > 3) continue;
         disks[slot].present = 1;
-        disks[slot].occupied = d->part_count > 0 || d->install != ST_INSTALL_NONE;
+        disks[slot].occupied = d->occupied || d->part_count > 0 || d->install != ST_INSTALL_NONE;
         disks[slot].installed = d->install == ST_INSTALL_DONE;
         snprintf(disks[slot].model, sizeof(disks[slot].model), "%s", d->model);
         snprintf(disks[slot].serial, sizeof(disks[slot].serial), "%s", d->serial);

@@ -542,6 +542,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # kernel model (cdview, boot-CD identification, Setup-mode storage start).
 python3 "$root/scripts/test/cd_media_tests.py"
 
+# f9-03: production Setup pages, keyboard flow, strict INF and fake transaction.
+python3 "$root/tests/host/setup/run.py"
+
 # F2 app controller: sanitized records/captures plus an exact 8 KiB guarded
 # stack regression, and negative controls for the stack and compiler guards.
 python3 -m unittest discover -s "$root/tests/host" -p test_app_gate.py
