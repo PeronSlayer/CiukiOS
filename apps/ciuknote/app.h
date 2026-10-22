@@ -31,6 +31,7 @@ struct cn_app {
     int test, stage;
     /* document */
     struct du_textarea ta;
+    uint64_t ui_revision; size_t ui_cursor,ui_anchor; struct du_rect ui_caret;
     char path[CN_PATH]; int named, crlf;
     /* view and command state */
     int show_status, find_mode, match_case, find_up;
@@ -49,6 +50,7 @@ int cn_attach(struct cn_app *, struct du_ui *);
 void cn_detach(struct cn_app *);
 void cn_event(struct du_ui *, const struct du_event *, void *);
 /* Command-line argument: opens the file, or offers to create it. */
+int cn_open_bytes(struct cn_app *, const char *path, const char *, size_t);
 int cn_open_argument(struct cn_app *, const char *path);
 /* A window close request: returns 1 to close now, 0 when a prompt was shown instead. */
 int cn_close_request(struct cn_app *);

@@ -32,6 +32,7 @@ enum du_ta_drag { DU_TA_DRAG_NONE, DU_TA_DRAG_SELECT, DU_TA_DRAG_VTHUMB, DU_TA_D
 struct du_textarea {
     char *text;                 /* cap+1 bytes, always NUL terminated */
     size_t len, cap;
+    uint64_t revision;
     size_t cursor, anchor;      /* selection is [min,max) */
     unsigned lf;                /* number of "\n" in text */
     int wrap, bold, readonly, modified, limit_hit;
@@ -59,6 +60,7 @@ void du_ta_free(struct du_textarea *);
 int du_ta_set_text(struct du_textarea *, const char *, size_t); /* load: clears undo and modified */
 void du_ta_set_wrap(struct du_textarea *, int);
 void du_ta_set_view(struct du_textarea *, unsigned cols, unsigned rows);
+struct du_rect du_ta_caret(struct du_textarea *, struct du_rect);
 void du_ta_fit(struct du_textarea *, struct du_rect box); /* derive the viewport from the widget box */
 
 /* Editing. Insert replaces the selection; it returns -1, changing nothing and

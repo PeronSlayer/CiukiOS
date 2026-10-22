@@ -6,8 +6,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-struct viewer_main { struct du_window window; struct du_ui ui; struct viewer_app app; };
+struct viewer_main { struct du_window window; struct du_ui ui; struct viewer_app app; const char *path; };
 static void quit(void *host) { du_window_close(&((struct viewer_main *)host)->window); }
+static void idle(void *arg)
+{
+    struct viewer_main *m=arg;
+    viewer_poll(&m->app);
+    if (m->path && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
+        viewer_open(&m->app,m->path); m->path=NULL;
+    }
+}
 int main(int argc, char **argv)
 {
     int channel, test; const char *path;
@@ -23,9 +31,9 @@ int main(int argc, char **argv)
     }
     viewer_attach(&m->app, &m->ui, viewer_native_fs());
     m->app.quit = quit; m->app.host = m;
-    if (path) viewer_open(&m->app, path);
+    m->app.asynchronous=1; m->path=path;
     if (test) du_window_move(&m->window, 24, 48);
-    int r = du_run(&m->window, NULL, NULL);
+    int r = du_run(&m->window, idle, m);
     viewer_detach(&m->app); du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

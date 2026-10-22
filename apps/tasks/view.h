@@ -24,6 +24,7 @@ struct tasks_view {
     int page;
     enum tv_speed speed;
     uint32_t selected_window, selected_pid;
+    uint64_t app_hash, proc_hash, history_hash;
     struct du_item tab_items[TV_PAGES];
     struct du_item app_items[TM_WINDOWS];
     struct du_item proc_items[TM_PROCESSES];

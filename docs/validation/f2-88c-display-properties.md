@@ -106,3 +106,54 @@ and peer close. Per-tab replays use actual input-marked channel delivery and
 the production priority boost. A 150 microsecond cost per wait entry and 1 ms
 input dispatch/draw are explicit model assumptions. The old 1 ms wait policy
 is a negative control; these costs are not hardware measurements.
+
+## Amendment 2: merged Control Panel jobs
+
+The f2-98a private asset, wallpaper-directory, program-inventory and font jobs
+must wake the same native wait loop as the decoder. Microsoft's primary
+[wait-functions reference](https://learn.microsoft.com/en-us/windows/win32/sync/wait-functions)
+describes a window thread waiting for input alongside synchronization objects
+and real deadlines. Its
+[update-region reference](https://learn.microsoft.com/en-us/windows/win32/gdi/invalidating-and-validating-the-update-region)
+describes accumulating invalidated rectangles until painting. These contracts
+support retaining f2-98a's clips while replacing its 100 Hz completion checks.
+This is an application wait/update contract; no NT-specific kernel design is
+inferred from the current SDK documentation.
+
+Repository comparison: the merged `du_job_ready()` used a mutex trylock and
+`du_run()` woke every 10 ms. Control Panel now uses a private one-shot job
+adapter with release/acquire publication and join-before-adoption ownership.
+Assets (including wallpaper enumeration), program inventory, fonts and durable
+settings writes notify a shared pollable channel. The decoder's separate
+completion endpoint remains in the same wait set. Notifications are bounded;
+a full queue is already readable and a failed publication closes its peer to
+wake HUP. A short mutex serializes shared send/close; there is no retry timer
+or trylock loop. Deferred adoption during capture/modal interaction consumes
+the notification and waits for the next interaction instead of spinning on a
+readable descriptor.
+
+The existing settings writer gains an optional notification callback after
+result publication; other callers leave it NULL. Control Panel consumes the
+writer result under its short lock because the shared desktop trylock API
+requires periodic retries. No disk I/O occurs under that lock. The explicit
+program-removal durable-save wait also waits on the channel instead of sleeping
+in 1 ms increments.
+
+An infinite application deadline now becomes `poll(..., -1)`. Clocks, uptime
+and the external mixer snapshot retain genuine one-second deadlines; graphics
+status retains its two-second query deadline when no request is outstanding;
+preview debounce and display-mode confirmation retain toolkit deadlines.
+Other idle pages wait indefinitely. These feature timers are not a background
+job service interval. Input and completion also service pending navigation and
+close without waiting for the next wall-clock second.
+
+Page changes cancel preview state immediately, with cooperative decode-boundary
+cancellation retained. Fonts remain owned across pages and are released only
+on detach. A preview snapshot includes the portrait pointer, so late asset
+publication retains the decoded image but requests a fresh preview rendering.
+Preview completion invalidates only its 208×188 rectangle. Deferred Close
+advances its window-protocol state before entering another event wait. Host
+integration executes the production Control Panel loop with a virtual desktop
+turn/clock/poll boundary, and real pthread jobs/channels/FreeType/settings-worker
+publication separately. The native scheduler/wait model remains the production
+kernel-wait proof; neither fixture establishes physical T23 timings.

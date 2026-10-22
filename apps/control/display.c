@@ -49,7 +49,7 @@ void cp_settings_message(struct ciuki_message *m, uint32_t serial, unsigned requ
 }
 
 static void label(struct cp_app *a, int id, const char *s)
-{ struct du_widget *w = du_get(a->ui, id); if (w) du_set_text(w, s); a->ui->dirty = 1; }
+{ struct du_widget *w=du_get(a->ui,id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 static int eligible(const struct ciuki_display_mode *m)
 {
     return m->id && m->linear && m->width >= 640 && m->width <= 1600 && m->height >= 480 && m->height <= 1200 &&
@@ -160,7 +160,10 @@ int cp_display_refresh(struct cp_app *a)
 }
 void cp_display_sync(struct cp_app *a)
 {
-    struct du_widget *w = du_get(a->ui, CP_AREA);
+    const int ids[]={CP_AREA,CP_DEPTH,CP_APPLY,CP_OK,CP_DISPLAY_TABS_ID,CP_REFRESH};
+    struct { unsigned active,count; int disabled; } old[6];
+    for (unsigned i=0;i<6;i++) { struct du_widget *v=du_get(a->ui,ids[i]); old[i].active=v?v->active:0; old[i].count=v?v->count:0; old[i].disabled=v?v->disabled:0; }
+    struct du_widget *w=du_get(a->ui,CP_AREA);
     if (w) { w->count = a->area_count; w->active = a->area; w->disabled = !a->area_count || a->mode_state; du_list_ensure(w, w->active); }
     w = du_get(a->ui, CP_DEPTH);
     if (w) { w->count = a->depth_count; w->active = a->depth; w->disabled = !a->depth_count || a->mode_state; du_list_ensure(w, w->active); }
@@ -172,6 +175,7 @@ void cp_display_sync(struct cp_app *a)
     w=du_get(a->ui,CP_OK); if (w) w->disabled=a->mode_state || a->display_write;
     w=du_get(a->ui,CP_DISPLAY_TABS_ID); if (w) w->disabled=a->mode_state || a->display_write;
     w = du_get(a->ui, CP_REFRESH); if (w) w->disabled = a->mode_state != CP_MODE_IDLE;
+    for (unsigned i=0;i<6;i++) { struct du_widget *v=du_get(a->ui,ids[i]); if (v && (v->active!=old[i].active || v->count!=old[i].count || v->disabled!=old[i].disabled)) du_invalidate_widget(a->ui,v->id); }
     label(a, CP_MODE_NOTE, !a->display_ok ? "Unavailable." : !active_mode(a) ? "No safe restore." : "15s to confirm.");
 }
 void cp_adapter_paint(struct cp_app *a, struct du_canvas *c)
@@ -211,7 +215,7 @@ static void countdown(struct cp_app *a)
 {
     unsigned seconds = a->ui->now >= a->mode_deadline ? 0 : (unsigned)((a->mode_deadline - a->ui->now + SECOND - 1) / SECOND);
     snprintf(a->ui->dialog.text, sizeof(a->ui->dialog.text), "Keep these settings?\nReverting in %u second%s.", seconds, seconds == 1 ? "" : "s");
-    a->ui->dirty = 1;
+    du_invalidate(a->ui,a->ui->dialog.box);
 }
 void cp_display_result(struct cp_app *a, int result)
 {
@@ -338,7 +342,8 @@ static int preview_request_same(const struct cp_app *a, const struct cp_preview_
 {
     struct cp_preview_req now; cp_preview_request((struct cp_app *)a, &now, 0);
     return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.colour == r->colour &&
-           now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa;
+           now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa &&
+           now.portrait == r->portrait;
 }
 
 int cp_system_thumbnail(const char *path, char *name, size_t size)
@@ -391,13 +396,15 @@ void cp_preview_ready(struct cp_app *a)
         for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
         a->preview_valid = 1;
     }
-    if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) a->ui->dirty = 1;
+    if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND)
+        du_invalidate(a->ui,(struct du_rect){24,44,208,188});
 }
 int cp_display_wait_ms(uint64_t now, uint64_t deadline)
 {
     /* Round up: sub-ms or overdue timers must not turn poll into a busy loop.
      * The caller has already dispatched due timers in du_window_turn(). */
+    if (deadline == UINT64_MAX) return -1;
     if (deadline <= now) return 1;
     uint64_t left = deadline - now;
-    return left >= 1000000000ull ? 1000 : (int)((left + 999999ull) / 1000000ull);
+    return left >= 2147483647ull * 1000000ull ? 2147483647 : (int)((left + 999999ull) / 1000000ull);
 }

@@ -28,6 +28,8 @@ int paint_attach(struct du_ui *);
 void paint_detach(void);
 void paint_callbacks(void (*quit)(void *), void (*title)(void *, const char *), void *host);
 void paint_command(int);
+int paint_open_begin(const char *);
+int paint_open_poll(void); /* 0 pending, 1 installed, negative error */
 int paint_open(const char *);
 int paint_save(const char *, enum paint_format);
 int paint_request_close(void); /* 1: unsaved prompt pending; 0: safe to close */

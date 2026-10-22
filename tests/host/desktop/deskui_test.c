@@ -139,7 +139,7 @@ static void timer_invalidation_test(void)
         timer_calls,idle_calls,rt_renders,rt_compared_rows); fflush(stdout);
     assert(timer_calls==50 && idle_calls==100 && !rt_renders && !rt_compared_rows);
     timer_change=1; assert(du_window_turn(&window,1020000000ull)>0);
-    assert(rt_renders==1 && rt_compared_rows==H && rt_render_dirty==3);
+    assert(rt_renders==1 && rt_compared_rows==(unsigned)widget->box.h && rt_render_dirty==3);
     assert(!memcmp(&rt_render_bounds,&widget->box,sizeof(widget->box)));
     uint32_t reference[W*H]; memcpy(reference,ui.canvas.pixels,sizeof(reference));
     ui.dirty=1; du_render(&ui); assert(!memcmp(reference,ui.canvas.pixels,sizeof(reference)));
@@ -379,7 +379,7 @@ int main(int argc, char **argv)
     assert(last()->type == DU_EV_CHANGE && last()->id == 97 && last()->index == 249 && !split->drag);
     du_focus(&u, 3); list->active = 1; rows[1].selected = 1;
     for (int view = 0; view < 3; view++) {
-        list->view = (enum du_view)view; list->scroll = list->hscroll = 0;
+        list->view = (enum du_view)view; list->scroll = list->hscroll = 0; du_invalidate(&u,list->box);
         char name[16]; snprintf(name, sizeof(name), "view%d", view); frame(name);
     }
     /* Resize preserves focus, text/selection, timers and dialogs; anchors

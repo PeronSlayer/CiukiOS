@@ -27,6 +27,10 @@ static int checkpoints[8], checkpoint_count, closed;
 static void dump(const char *name)
 {
     du_render(&ui);
+    uint32_t *partial=malloc(WIDTH*HEIGHT*4); assert(partial); memcpy(partial,pixels,WIDTH*HEIGHT*4);
+    ui.dirty=1; du_render(&ui);
+    if (memcmp(partial,pixels,WIDTH*HEIGHT*4)) { fprintf(stderr,"Partial frame differs: %s\n",name); }
+    assert(!memcmp(partial,pixels,WIDTH*HEIGHT*4)); free(partial);
     assert(pixels[WIDTH * HEIGHT] == 0xdeadbeefu);
     if (!out_dir) return;
     char path[1024]; snprintf(path, sizeof(path), "%s/files-%s.xrgb", out_dir, name);

@@ -24,6 +24,10 @@ struct cfg_writer {
     int (*run_job)(void *, size_t); /* bounded copied device setting; worker may block on its durable save */
     const char *path, *temporary;
     int (*write)(struct cfg_writer *, const char *, size_t);
+    /* Optional event publication after a result is visible under lock.
+     * Must not perform blocking I/O or access a UI; set before start(). */
+    void (*notify)(void *);
+    void *notify_ctx;
 };
 int cfg_writer_start(struct cfg_writer *, const char *path, const char *temporary);
 int cfg_writer_submit(struct cfg_writer *, const char *, size_t);

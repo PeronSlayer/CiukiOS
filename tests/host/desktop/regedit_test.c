@@ -5,11 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include "../../../apps/regedit/regedit.h"
 #include <ciuki/devices.h>
 #include "acc_test.h"
 #include "device_fixture.h"
-int ciuki_devices(struct ciuki_devices_info *s) { device_fixture(s); return 0; }
+static unsigned device_calls;
+int ciuki_devices(struct ciuki_devices_info *s) { device_calls++;device_fixture(s);return 0; }
 static void action(struct re_app *a, int id)
 {
     struct du_event e = {.type = DU_EV_ACTIVATE, .id = id}; re_event(a->ui, &e, a);
@@ -80,6 +82,13 @@ int main(int argc, char **argv)
     at_tap(u, DU_KEY_RIGHT); assert(tree->count == before);
     assert(!re_select(a, "System\\Test")); du_focus(u, RE_TREE); action(a, RE_DELETE); approve(a, 1);
     assert(re_select(a, "System\\Test") && errno == ENOENT);
-    du_render(u); re_destroy(a); du_release(u); free(file); free(pixels); free(u); free(a);
+    du_render(u); re_destroy(a); du_release(u);
+    memset(a,0,sizeof(*a));du_init(u,pixels,RE_WIDTH,RE_HEIGHT);
+    unsigned calls=device_calls;assert(!re_attach_lazy(a,u,argv[1]));re_startup_poll(a);assert(device_calls==calls && !a->roots[0]);
+    du_render(u); /* first frame before reading any registry root */
+    for(unsigned i=0;i<2000 && a->startup;i++) { re_startup_poll(a);if(a->startup)nanosleep(&(struct timespec){.tv_nsec=1000000},NULL); }
+    assert(!a->startup && a->count>=5 && a->roots[0] && device_calls>calls);du_render(u);re_destroy(a);
+    memset(a,0,sizeof(*a));du_init(u,pixels,RE_WIDTH,RE_HEIGHT);assert(!re_attach_lazy(a,u,argv[1]));du_render(u);re_startup_poll(a);re_destroy(a); /* close during load */
+    free(file); free(pixels); free(u); free(a);
     puts("PASS Registry Editor: real toolkit tree/list/input/confirmation, typed CRUD, search, import/export, generation polling, Hardware read-only"); return 0;
 }

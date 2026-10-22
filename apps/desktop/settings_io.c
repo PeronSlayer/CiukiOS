@@ -73,6 +73,7 @@ static void *worker(void *arg)
             }
         }
         else if (!logging && !staging && !w->pending) { w->error=e; w->completed=1; }
+        if (w->notify) w->notify(w->notify_ctx);
     }
     w->live=0; pthread_mutex_unlock(&w->lock); free(text); return NULL;
 }

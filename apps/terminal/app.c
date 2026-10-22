@@ -39,7 +39,14 @@ static void update(struct terminal *t)
     unsigned n=total(t), max=n>t->rows ? n-t->rows : 0;
     if(t->follow || t->top>max)t->top=max;
     struct du_widget *s=du_get(t->ui,SCROLL); s->total=(int)n; s->page=(int)t->rows; s->value=(int)t->top;
-    t->ui->dirty=1;
+    struct du_rect grid=du_get(t->ui,GRID)->box;
+    if (t->output_serial!=t->updated_serial) du_invalidate(t->ui,grid);
+    else if (t->top!=t->view_top) du_scroll(t->ui,grid,0,((int)t->view_top-(int)t->top)*TERM_CELL_H);
+    else {
+        unsigned output=term_visual_rows(t),first=output>t->top ? output-t->top : 0;
+        if (first<t->rows) du_invalidate(t->ui,(struct du_rect){grid.x,grid.y+(int)first*TERM_CELL_H,grid.w,grid.h-(int)first*TERM_CELL_H});
+    }
+    du_invalidate(t->ui,s->box); t->view_top=t->top; t->updated_serial=t->output_serial;
 }
 static int finish_line(struct terminal *t)
 {
@@ -56,6 +63,7 @@ void term_write(struct terminal *t,const char *s)
         size_t n=strlen(s); if(n>TERM_CAPTURE-t->captured) { t->capture_error=-EOVERFLOW; return; }
         memcpy(t->capture+t->captured,s,n+1); t->captured+=n; return;
     }
+    t->output_serial++;
     while(*s) {
         unsigned c=(unsigned char)*s++;
         if(c=='\n') { if(finish_line(t))break; }
@@ -209,7 +217,7 @@ static void layout(struct du_ui *u,void *ctx)
 }
 static void paint(struct du_ui *u,void *ctx)
 {
-    struct terminal *t=ctx; update(t); struct du_rect box=du_get(u,GRID)->box; struct du_canvas c=u->canvas; c.clip=box;
+    struct terminal *t=ctx; struct du_rect box=du_get(u,GRID)->box; struct du_canvas c=u->canvas; c.clip=du_intersection(c.clip,box);
     du_fill(&c,box,0x101820); char *p=t->prompt_text; prompt(t,p,sizeof(t->prompt_text)); unsigned output=term_visual_rows(t);
     size_t a=t->selection_a,b=t->selection_b; if(a>b) { size_t x=a; a=b; b=x; }
     for(unsigned y=0;y<t->rows;y++) {
@@ -285,7 +293,7 @@ void term_event(struct du_ui *u,const struct du_event *e,void *ctx)
             }
         }
         if(e->index==DU_POINTER_UP || e->index==DU_POINTER_CANCEL)t->selecting=0;
-        u->dirty=1; return;
+        du_invalidate_widget(u,GRID); return;
     }
     if(e->type!=DU_EV_KEY)return;
     t->text_selection.ns=0;
@@ -304,7 +312,7 @@ void term_event(struct du_ui *u,const struct du_event *e,void *ctx)
     }
     if(e->modifiers & DU_CTRL) {
         if(e->key==0x2e) { if(t->busy)t->interrupted=1; else copy_selection(t); }
-        else if(t->output_focus && e->key==0x1e) { t->selection_a=0; t->selection_b=(size_t)total(t)*t->columns; u->dirty=1; }
+        else if(t->output_focus && e->key==0x1e) { t->selection_a=0; t->selection_b=(size_t)total(t)*t->columns; du_invalidate_widget(u,GRID); }
         else if(t->output_focus && e->key==0x2d)copy_selection(t);
         else if(!t->busy && (e->key==0x1e || e->key==0x2d || e->key==0x2f)) {
             struct du_widget edit={.kind=DU_EDIT,.id=GRID,.cursor=t->cursor,.anchor=t->anchor};

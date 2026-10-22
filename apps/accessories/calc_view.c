@@ -107,7 +107,9 @@ void calc_attach(struct calc_app *a, struct du_ui *u)
 
 void calc_event(struct du_ui *u, const struct du_event *e, void *user)
 {
-    struct calc_app *a = user;
+    struct calc_app *a=user;
+    char display[sizeof(a->calc.display)];memcpy(display,a->calc.display,sizeof(display));
+    int memory=a->calc.has_memory,grouping=a->digit_grouping;
     switch (e->type) {
     case DU_EV_ACTIVATE:
         if (e->id >= CALC_B_FIRST && e->id < CALC_B_FIRST + (int)KEY_COUNT) { run(&a->calc, &keys[e->id - CALC_B_FIRST]); u->focus = -1; }
@@ -135,5 +137,6 @@ void calc_event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     default: return;
     }
-    u->dirty = 1;
+    if (strcmp(display,a->calc.display) || grouping!=a->digit_grouping) du_invalidate(u,display_box);
+    if (memory!=a->calc.has_memory) du_invalidate(u,memory_box);
 }

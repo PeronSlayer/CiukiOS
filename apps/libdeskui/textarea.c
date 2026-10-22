@@ -190,7 +190,7 @@ static void undo_point(struct du_textarea *ta, int kind)
 /* Any caret movement or selection change ends the current typing/delete group. */
 static void break_group(struct du_textarea *ta) { ta->undo_kind = DU_TA_EDIT_OTHER; }
 static void touched(struct du_textarea *ta)
-{ ta->edit_cursor = ta->cursor; ta->modified = 1; ta->vl_dirty = 1; ta->want_valid = 0; ta->affinity = 0; du_ta_reveal(ta); }
+{ ta->revision++; ta->edit_cursor = ta->cursor; ta->modified = 1; ta->vl_dirty = 1; ta->want_valid = 0; ta->affinity = 0; du_ta_reveal(ta); }
 
 /* `s` must not point into the buffer. */
 static int replace_range(struct du_textarea *ta, size_t a, size_t b, const char *s, size_t n, int kind)
@@ -210,6 +210,7 @@ static int replace_range(struct du_textarea *ta, size_t a, size_t b, const char 
 int du_ta_set_text(struct du_textarea *ta, const char *s, size_t n)
 {
     if (n > ta->cap) return -1;
+    ta->revision++;
     memcpy(ta->text, s, n); ta->text[n] = 0; ta->len = n; ta->lf = (unsigned)count_lf(s, n);
     ta->cursor = ta->anchor = 0; ta->top = ta->left = 0; ta->undo_valid = 0; ta->undo_kind = DU_TA_EDIT_OTHER;
     ta->modified = 0; ta->limit_hit = 0; ta->vl_dirty = 1; ta->want_valid = 0; ta->affinity = 0; ta->edit_cursor = 0;
@@ -398,6 +399,14 @@ static void geometry(const struct du_textarea *ta, struct du_rect box, struct ge
     g->vbar = (struct du_rect){g->body.x + g->body.w - DU_TA_BAR, g->body.y, DU_TA_BAR, g->body.h - hb};
     g->hbar = (struct du_rect){g->body.x, g->body.y + g->body.h - DU_TA_BAR, g->text.w, hb};
     if (ta->line_numbers) { g->text.x += 42; g->text.w -= 42; }
+}
+struct du_rect du_ta_caret(struct du_textarea *ta, struct du_rect box)
+{
+    struct geo g; geometry(ta,box,&g); unsigned line,col;
+    locate(ta,ta->cursor,ta->affinity,&line,&col);
+    if (line<ta->top || line>=ta->top+ta->rows || col<ta->left || col>ta->left+ta->cols) return (struct du_rect){0};
+    return du_intersection(g.text,(struct du_rect){g.text.x+DU_TA_PAD+((int)col-(int)ta->left)*DU_TA_CELL_W-1,
+        g.text.y+DU_TA_PAD+((int)line-(int)ta->top)*DU_TA_CELL_H+1,1,DU_TA_CELL_H-2});
 }
 void du_ta_fit(struct du_textarea *ta, struct du_rect box)
 {

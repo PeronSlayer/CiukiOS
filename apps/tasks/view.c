@@ -108,8 +108,32 @@ static void plain_k(char *out, size_t size, uint64_t kib)
     size_t n = strlen(text); if (n >= 2) text[n - 2] = 0;
     snprintf(out, size, "%s", text);
 }
+static void changed_text(struct du_ui *u, int id, const char *text)
+{
+    struct du_widget *w=du_get(u,id);
+    if (strcmp(w->text,text)) { du_set_text(w,text); du_invalidate_widget(u,id); }
+}
+static void changed_value(struct du_ui *u, int id, int value, int disabled)
+{
+    struct du_widget *w=du_get(u,id);
+    if (w->value!=value || w->disabled!=disabled) { w->value=value; w->disabled=(uint8_t)disabled; du_invalidate_widget(u,id); }
+}
+static uint64_t hash_bytes(uint64_t h, const void *data, size_t n)
+{ const unsigned char *p=data; while(n--) h=(h^*p++)*1099511628211ull; return h; }
+static uint64_t list_hash(const struct du_widget *w)
+{
+    uint64_t h=1469598103934665603ull;
+    h=hash_bytes(h,&w->count,sizeof(w->count)); h=hash_bytes(h,&w->active,sizeof(w->active));
+    h=hash_bytes(h,&w->sort,sizeof(w->sort)); h=hash_bytes(h,&w->descending,sizeof(w->descending));
+    for (unsigned i=0;i<w->count;i++) {
+        const struct du_item *it=&w->items[i];
+        h=hash_bytes(h,&it->selected,sizeof(it->selected));
+        for (unsigned c=0;c<w->column_count;c++) if (it->text[c]) h=hash_bytes(h,it->text[c],strlen(it->text[c])+1);
+    }
+    return h;
+}
 static void line(struct du_ui *u, int id, const char *label, const char *value)
-{ char text[64]; snprintf(text, sizeof(text), "%-10s%14s", label, value); du_set_text(du_get(u, id), text); }
+{ char text[64]; snprintf(text, sizeof(text), "%-10s%14s", label, value); changed_text(u,id,text); }
 static unsigned window_index(const struct tm_model *m, uint32_t id)
 { for (unsigned i = 0; i < m->window_count; i++) if (id && m->windows[i].id == id) return i; return UINT32_MAX; }
 static unsigned process_index(const struct tm_model *m, uint32_t pid)
@@ -163,13 +187,18 @@ void tv_update(struct tasks_view *v, const struct tm_model *m)
     int page = du_list_page(procs), last = (int)procs->count > page ? (int)procs->count - page : 0;
     if (procs->scroll > last) procs->scroll = last;
     if (procs->scroll < 0) procs->scroll = 0;
-    du_get(u, A_END_TASK)->disabled = du_get(u, A_SWITCH)->disabled = !v->selected_window;
-    du_get(u, A_END_PROCESS)->disabled = !v->selected_pid;
+    changed_value(u,A_END_TASK,0,!v->selected_window); changed_value(u,A_SWITCH,0,!v->selected_window);
+    changed_value(u,A_END_PROCESS,0,!v->selected_pid);
+    uint64_t ah=list_hash(apps),ph=list_hash(procs);
+    if (ah!=v->app_hash) { v->app_hash=ah; du_invalidate_widget(u,A_APPS); }
+    if (ph!=v->proc_hash) { v->proc_hash=ph; du_invalidate_widget(u,A_PROCS); }
     char a[32], b[32], c[32];
-    snprintf(a, sizeof(a), "%3u %%", m->cpu); du_set_text(du_get(u, A_CPU_TEXT), a);
-    du_get(u, A_CPU_BAR)->value = (int)m->cpu;
+    snprintf(a, sizeof(a), "%3u %%", m->cpu); changed_text(u,A_CPU_TEXT,a);
+    changed_value(u,A_CPU_BAR,(int)m->cpu,0);
     struct du_widget *history = du_get(u, A_HISTORY);
-    history->samples = m->history; history->sample_count = m->history_count;
+    history->samples=m->history; history->sample_count=m->history_count;
+    uint64_t hh=hash_bytes(1469598103934665603ull,m->history,m->history_count*sizeof(*m->history));
+    if (hh!=v->history_hash) { v->history_hash=hh; du_invalidate_widget(u,A_HISTORY); }
     const struct ciuki_proc_system *s = &m->system;
     plain_k(a, sizeof(a), (uint64_t)s->usable_pages * 4);
     plain_k(b, sizeof(b), (uint64_t)s->free_pages * 4);
@@ -180,27 +209,27 @@ void tv_update(struct tasks_view *v, const struct tm_model *m)
     plain_k(c, sizeof(c), (uint64_t)s->kheap_pages * 4);
     line(u, A_KERNEL_HEAP, "Heap", a); line(u, A_KERNEL_PEAK, "Peak", b); line(u, A_KERNEL_POOL, "Pool", c);
     char text[96];
-    snprintf(text, sizeof(text), "Processes  %u", s->processes); du_set_text(du_get(u, A_TOTAL_PROCESSES), text);
-    snprintf(text, sizeof(text), "Threads  %u", m->threads); du_set_text(du_get(u, A_TOTAL_THREADS), text);
+    snprintf(text, sizeof(text), "Processes  %u", s->processes); changed_text(u,A_TOTAL_PROCESSES,text);
+    snprintf(text, sizeof(text), "Threads  %u", m->threads); changed_text(u,A_TOTAL_THREADS,text);
     tm_format_uptime(a, sizeof(a), s->total_ticks, s->tick_hz);
-    snprintf(text, sizeof(text), "Up Time  %s", a); du_set_text(du_get(u, A_TOTAL_UPTIME), text);
+    snprintf(text, sizeof(text), "Up Time  %s", a); changed_text(u,A_TOTAL_UPTIME,text);
     const uint64_t *p=m->performance;
     if (p[8]) {
         snprintf(text,sizeof(text),"System: %llu fps  %llu px/frame  %llu presents",
                  (unsigned long long)(p[0]*1000000000ull/p[8]),
                  (unsigned long long)(p[1]/(p[0]?p[0]:1)),(unsigned long long)p[2]);
-        du_set_text(du_get(u,A_SYSTEM),text);
+        changed_text(u,A_SYSTEM,text);
         snprintf(text,sizeof(text),"Composite %llu us/frame  Present %llu us/frame",
                  (unsigned long long)(p[4]/(p[0]?p[0]:1)/1000),
                  (unsigned long long)(p[5]/(p[0]?p[0]:1)/1000));
-        du_set_text(du_get(u,A_SYSTEM_TIME),text);
+        changed_text(u,A_SYSTEM_TIME,text);
         snprintf(text,sizeof(text),"LFB %llu KiB  Input %llu us  Lag %llu us",
                  (unsigned long long)(p[3]/1024),(unsigned long long)(p[6]/1000),(unsigned long long)(p[7]/1000));
-        du_set_text(du_get(u,A_SYSTEM_IO),text);
+        changed_text(u,A_SYSTEM_IO,text);
     }
     snprintf(text, sizeof(text), v->speed == TV_PAUSED ? "Processes: %u\tCPU Usage: %u%%\tMem: %uM / %uM (paused)" :
              "Processes: %u\tCPU Usage: %u%%\tMem Usage: %uM / %uM", s->processes, m->cpu,
              (s->usable_pages - s->free_pages) / 256, s->usable_pages / 256);
-    du_set_text(du_get(u, A_STATUS), text);
-    u->dirty = 1;
+    changed_text(u,A_STATUS,text);
+
 }

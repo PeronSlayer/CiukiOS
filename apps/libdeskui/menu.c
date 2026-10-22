@@ -159,28 +159,37 @@ void du_draw_menus(struct du_ui *u)
     if (items) draw_dropdown(u, items, n, box);
 }
 
+static void menu_damage(struct du_ui *u)
+{
+    unsigned count; struct du_rect box;
+    if (open_items(u,&count,&box)) { box.x-=3; box.y-=2; box.w+=8; box.h+=8; du_invalidate(u,box); }
+    if (u->menu>=0) du_invalidate(u,du_menu_title(u,(unsigned)u->menu));
+}
+
 void du_menu_open(struct du_ui *u, int menu, int keyboard)
 {
     if (menu < 0 || (unsigned)menu >= u->menu_count) return;
     if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_OPEN);
+    menu_damage(u);
     u->popup = NULL; u->menu = menu; u->menu_keyboard = keyboard; u->menu_track = 0; u->menu_item = -1;
     if (keyboard)
         for (unsigned i = 0; i < u->menus[menu].count; i++)
             if (!(u->menus[menu].items[i].flags & DU_ITEM_SEPARATOR)) { u->menu_item = (int)i; break; }
-    u->dirty = 1;
+    menu_damage(u);
 }
 
 void du_menu_close(struct du_ui *u)
 {
-    if (u->menu >= 0 || u->popup) u->dirty = 1;
+    menu_damage(u);
     u->menu = -1; u->popup = NULL; u->popup_count = 0; u->menu_item = -1; u->menu_track = 0;
 }
 
 void du_popup(struct du_ui *u, const struct du_menu_item *items, unsigned n, int x, int y, int owner)
 {
     if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_OPEN);
+    menu_damage(u);
     u->menu = -1; u->popup = items; u->popup_count = n; u->popup_x = x; u->popup_y = y;
-    u->popup_owner = owner; u->menu_item = -1; u->menu_track = 0; u->dirty = 1;
+    u->popup_owner = owner; u->menu_item = -1; u->menu_track = 0; menu_damage(u);
 }
 
 static void activate(struct du_ui *u, const struct du_menu_item *items, int index)
@@ -241,7 +250,7 @@ void du_menu_motion(struct du_ui *u)
     if (!u->popup && title >= 0 && title != u->menu) { du_menu_open(u, title, 0); return; }
     int item = du_contains(box, u->mouse_x, u->mouse_y) ? du_menu_item_at(items, n, box, u->mouse_y) : -1;
     if (item >= 0) u->menu_track = 1;
-    if (item != u->menu_item && (item >= 0 || !u->menu_keyboard)) { u->menu_item = item; u->dirty = 1; }
+    if (item != u->menu_item && (item >= 0 || !u->menu_keyboard)) { u->menu_item = item; menu_damage(u); }
 }
 
 int du_menu_key(struct du_ui *u, unsigned code)
@@ -257,7 +266,7 @@ int du_menu_key(struct du_ui *u, unsigned code)
             i = code == DU_KEY_UP ? (i <= 0 ? (int)n - 1 : i - 1) : (i + 1) % (int)n;
             if (!(items[i].flags & DU_ITEM_SEPARATOR)) break;
         }
-        u->menu_item = i; u->dirty = 1; return 1;
+        u->menu_item = i; menu_damage(u); return 1;
     }
     if ((code == DU_KEY_LEFT || code == DU_KEY_RIGHT) && !u->popup && u->menu_count) {
         int m = (u->menu + (code == DU_KEY_LEFT ? (int)u->menu_count - 1 : 1)) % (int)u->menu_count;

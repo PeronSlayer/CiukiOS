@@ -124,6 +124,16 @@ int main(int argc, char **argv)
     settle(6);
     assert(!a.decode_wait && a.image.pixels && a.preview_valid && sync_decodes == 0);
     cp_detach(&a); desk_image_free(&a.image);
+    /* The merged asset job may publish the portrait while a preview is in
+     * flight. Keep the image, but render again with the newly owned asset. */
+    pending_polls = 0; decode_fails = 0; attach(CP_DISPLAY, 0, 1);
+    du_render(&u); du_tick(&u,u.now+20000000ull); du_render(&u);
+    assert(a.decode_wait && last_req.portrait == portrait);
+    a.host.portrait = NULL; cp_preview_ready(&a);
+    assert(a.image.pixels && !a.preview_valid);
+    du_render(&u); assert(a.decode_wait && !last_req.portrait && last_req.image.pixels);
+    cp_preview_ready(&a); du_render(&u); assert(a.preview_valid);
+    cp_detach(&a); desk_image_free(&a.image);
     /* The worker never finishes: every UI turn stays far below the 100 ms ping bound (no decode, no resample). */
     pending_polls = 1u << 30; decode_fails = 0;
     attach(CP_DISPLAY, 1, 1); du_render(&u);

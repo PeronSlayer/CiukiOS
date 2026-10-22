@@ -58,7 +58,10 @@ static int refusals(struct tasks_app *a)
            refused(a, 1, SIGKILL, EPERM) && refused(a, a->window.server_pid, SIGTERM, EPERM);
 }
 static void status_text(struct tasks_app *a, const char *text)
-{ du_set_text(du_get(&a->ui, A_STATUS), text); a->ui.dirty = 1; }
+{
+    struct du_widget *w=du_get(&a->ui,A_STATUS);
+    if (strcmp(w->text,text)) { du_set_text(w,text); du_invalidate_widget(&a->ui,A_STATUS); }
+}
 static void refresh(struct tasks_app *a)
 {
     int n = ciuki_proc_list(a->buffer, sizeof(a->buffer));

@@ -82,7 +82,7 @@ static int open_file(struct ide_app *a,const char *name)
     if (!r) r=cn_decode(raw,n,text,CN_LIMIT,&len,&crlf);
     if (!r) r=du_ta_set_text(&a->editor,text,len);
     free(raw); free(text);
-    if (!r) { snprintf(a->file,sizeof(a->file),"%s",name); a->crlf=crlf; highlight(a); du_focus(a->ui,IDE_EDITOR); }
+    if (!r) { snprintf(a->file,sizeof(a->file),"%s",name); a->crlf=crlf; highlight(a); du_focus(a->ui,IDE_EDITOR); du_invalidate_widget(a->ui,IDE_EDITOR); }
     return r;
 }
 static void file_list(struct ide_app *a)
@@ -103,6 +103,14 @@ int ide_open_project(struct ide_app *a,const char *folder)
     r=open_file(a,p.sources[0]);
     if (r) { strcpy(a->folder,previous); return r; }
     a->model.project=p; ide_changed(&a->model); file_list(a); ide_refresh(a); return 0;
+}
+void ide_adopt_project(struct ide_app *a, struct ide_app *loaded)
+{
+    du_ta_free(&a->editor); a->editor=loaded->editor; memset(&loaded->editor,0,sizeof(loaded->editor));
+    a->editor.colour_ctx=a; a->model=loaded->model;
+    memcpy(a->syntax,loaded->syntax,sizeof(a->syntax));
+    strcpy(a->folder,loaded->folder); strcpy(a->file,loaded->file); a->crlf=loaded->crlf;
+    file_list(a); du_invalidate_widget(a->ui,IDE_FILES); du_invalidate_widget(a->ui,IDE_EDITOR); ide_refresh(a);
 }
 int ide_new_project(struct ide_app *a,const char *folder,int window)
 {
@@ -150,13 +158,14 @@ void ide_refresh(struct ide_app *a)
     char status[DU_TEXT_MAX]; snprintf(status,sizeof(status),"%s | %.80s%s | Ln %u, Col %u | %u errors, %u warnings%s",
         states[m->state],a->file,a->editor.modified ? " *" : "",line,col,m->errors,m->warnings,
         m->log_truncated || m->dropped ? " (output limited)" : "");
-    du_set_text(du_get(a->ui,IDE_STATUS),status);
+    if (strcmp(du_get(a->ui,IDE_STATUS)->text,status)) { du_set_text(du_get(a->ui,IDE_STATUS),status); du_invalidate_widget(a->ui,IDE_STATUS); }
     int busy=m->state==IDE_BUILDING || m->state==IDE_LAUNCHING;
     du_get(a->ui,IDE_BUILD)->disabled=busy || !m->project.source_count;
     du_get(a->ui,IDE_RUN)->disabled=busy || !m->built;
     a->project_menu[5].flags=du_get(a->ui,IDE_BUILD)->disabled ? DU_ITEM_DISABLED : 0;
     a->project_menu[6].flags=du_get(a->ui,IDE_RUN)->disabled ? DU_ITEM_DISABLED : 0;
-    a->ui->dirty=1;
+    du_invalidate_widget(a->ui,IDE_BUILD); du_invalidate_widget(a->ui,IDE_RUN);
+    du_invalidate_widget(a->ui,IDE_ERROR_LIST);
 }
 static int build(struct ide_app *a)
 {
@@ -240,7 +249,7 @@ void ide_idle(struct ide_app *a)
     if (a->model.log_len!=before || done) {
         du_ta_set_text(&a->output,a->model.log,a->model.log_len);
         du_ta_goto_line(&a->output,du_ta_lines(&a->output));
-        ide_refresh(a);
+        du_invalidate_widget(a->ui,IDE_OUTPUT); ide_refresh(a);
     }
 }
 int ide_attach(struct ide_app *a,struct du_ui *u)

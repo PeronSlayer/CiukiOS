@@ -25,17 +25,24 @@ void mixer_join(uint32_t left, uint32_t right, int *volume, int *balance)
 
 static void show(struct mixer_app *a)
 {
-    struct du_ui *u = a->ui;
-    du_get(u, MX_VOLUME)->value = 100 - a->volume;
-    du_get(u, MX_BALANCE)->value = a->balance + 100;
-    du_set_text(du_get(u, MX_MUTE), a->mute ? "[x] &Mute" : "[ ] &Mute");
-    char text[64];
-    uint32_t l, r; mixer_split(a->volume, a->balance, &l, &r);
-    snprintf(text, sizeof(text), "%d%%  (L %u, R %u)", a->volume, (unsigned)l, (unsigned)r);
-    du_set_text(du_get(u, MX_LEVEL), text);
-    for (int id = MX_VOLUME; id <= MX_MUTE; id++) du_get(u, id)->disabled = (uint8_t)!a->available;
-    du_set_text(du_get(u, MX_STATUS), a->status);
-    u->dirty = 1;
+    struct du_ui *u=a->ui;
+    for (unsigned i=0;i<u->count;i++) {
+        struct du_widget *w=&u->widgets[i];
+        int value=w->value,disabled=w->disabled; char text[sizeof(w->text)];
+        snprintf(text,sizeof(text),"%s",w->text);
+        if (w->id==MX_VOLUME) value=100-a->volume;
+        if (w->id==MX_BALANCE) value=a->balance+100;
+        if (w->id==MX_MUTE) snprintf(text,sizeof(text),a->mute ? "[x] &Mute" : "[ ] &Mute");
+        if (w->id==MX_LEVEL) {
+            uint32_t l,r; mixer_split(a->volume,a->balance,&l,&r);
+            snprintf(text,sizeof(text),"%d%%  (L %u, R %u)",a->volume,(unsigned)l,(unsigned)r);
+        }
+        if (w->id>=MX_VOLUME && w->id<=MX_MUTE) disabled=!a->available;
+        if (w->id==MX_STATUS) snprintf(text,sizeof(text),"%s",a->status);
+        if (value!=w->value || disabled!=w->disabled || strcmp(text,w->text)) {
+            w->value=value; w->disabled=(uint8_t)disabled; du_set_text(w,text); du_invalidate(u,w->box);
+        }
+    }
 }
 static void describe(struct mixer_app *a)
 {
@@ -147,5 +154,5 @@ void mixer_event(struct du_ui *u, const struct du_event *e, void *user)
     }
     default: return;
     }
-    u->dirty = 1;
+    show(a);
 }

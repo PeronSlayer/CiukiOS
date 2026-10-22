@@ -40,7 +40,7 @@ int cp_page_index(const char *name)
 static struct du_widget *add(struct cp_app *a, enum du_kind k, int id, int x, int y, int w, int h, const char *text)
 { return du_add(a->ui, k, id, (struct du_rect){x, y, w, h}, text); }
 static void text(struct cp_app *a, int id, const char *s)
-{ struct du_widget *w = du_get(a->ui, id); if (w) { du_set_text(w, s); a->ui->dirty = 1; } }
+{ struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
 static void load(struct cp_app *a, struct ciuki_settings *out)
@@ -276,7 +276,12 @@ static void paint(struct du_ui *u, void *user)
     }
     else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
-        for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) put(c, 24 + x, 48 + y, 1, 1, a->host.portrait[(y * 256 / 96) * 256 + x * 256 / 96]);
+        struct du_rect r=du_intersection(c->clip,(struct du_rect){24,48,96,96});
+        for (int y=r.y;y<r.y+r.h;y++) {
+            const uint32_t *src=a->host.portrait+((y-48)*256/96)*256;
+            uint32_t *dst=c->pixels+(size_t)y*c->width;
+            for (int x=r.x;x<r.x+r.w;x++) dst[x]=src[(x-24)*256/96];
+        }
         du_text_font(c, desk_theme->font_large, 140, 50, "CiukiOS", DU_SELECT);
     }
 }
@@ -286,7 +291,9 @@ static void toggle_label(struct cp_app *a, int id, const char *name, int on)
 { char s[64]; snprintf(s, sizeof(s), "%s: %s", name, on ? "On" : "Off"); text(a, id, s); }
 static void sync(struct cp_app *a)
 {
-    struct du_ui *u = a->ui;
+    struct du_ui *u=a->ui;
+    struct visual_state { int value,disabled,def; unsigned active; } before[DU_WIDGETS];
+    for (unsigned i=0;i<u->count;i++) before[i]=(struct visual_state){u->widgets[i].value,u->widgets[i].disabled,u->widgets[i].def,u->widgets[i].active};
     struct du_widget *w;
     int t = cfg_theme_index(a->cfg.theme);
     for (int k = 0; k < CFG_THEMES; k++) a->theme_items[k].selected = k == t;
@@ -330,7 +337,14 @@ static void sync(struct cp_app *a)
     toggle_label(a, C_H24, "24-hour clock", a->cfg.clock_24h);
     toggle_label(a, C_SECONDS, "Show seconds", a->cfg.clock_seconds);
     cp_display_sync(a);
-    u->dirty = 1;
+    for (unsigned i=0;i<u->count;i++) {
+        struct du_widget *v=&u->widgets[i];
+        if (v->value!=before[i].value || v->disabled!=before[i].disabled || v->def!=before[i].def || v->active!=before[i].active) du_invalidate_widget(u,v->id);
+    }
+    if (a->page==CP_DISPLAY && !a->preview_valid) {
+        du_invalidate(u,(struct du_rect){24,44,208,188});
+        for (int i=0;i<6;i++) { struct du_widget *v=du_get(u,C_COL0+i); if (v && !v->hidden) du_invalidate(u,(struct du_rect){v->box.x-1,v->box.y-1,v->box.w+2,v->box.h+2}); }
+    }
 }
 void cp_audio_result(struct cp_app *a, int result)
 {
@@ -372,9 +386,11 @@ void cp_tick(struct cp_app *a)
         int volume, mute;
         if (!a->host.mixer(a->host.ctx, &volume, &mute) &&
             (a->volume != volume || a->muted != mute)) {
-            a->volume = volume; a->muted = mute; sync(a); a->ui->dirty = 1;
+            a->volume = volume; a->muted = mute; sync(a);
         }
     }
+    if (a->page!=CP_DATETIME && a->page!=CP_SYSTEM) return;
+    char previous[sizeof(a->clock_line)]; memcpy(previous,a->clock_line,sizeof(previous));
     uint64_t t = a->host.now ? a->host.now(a->host.ctx) : 0;
     static const char *const wd[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     static const char *const mo[] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
@@ -387,6 +403,7 @@ void cp_tick(struct cp_app *a)
     int day = (int)(doy - (153 * mp + 2) / 5 + 1), month = (int)(mp < 10 ? mp + 3 : mp - 9), year = (int)(yoe + era * 400 + (month <= 2));
     snprintf(a->date_line, sizeof(a->date_line), "%s, %d %s %d (UTC)", wd[(t / 86400 + 4) % 7], day, mo[month - 1], year);
     text(a, C_DATE, a->date_line);
+    if (a->page==CP_DATETIME && strcmp(previous,a->clock_line)) du_invalidate(a->ui,(struct du_rect){24,44,452,54});
     if (a->devices_ok && a->page == CP_SYSTEM) {
         uint64_t seconds = a->devices.uptime_ms / 1000;
         uint64_t current = a->host.monotonic ? a->host.monotonic(a->host.ctx) : a->ui->now;
@@ -421,7 +438,7 @@ static void log_refresh(struct cp_app *a)
     text(a,CP_LOG_STATUS,a->log_status);
     struct du_widget *w=du_get(a->ui,CP_LOG_PREV); if (w) w->disabled=!a->log_total || !a->log_offset;
     w=du_get(a->ui,CP_LOG_NEXT); if (w) w->disabled=!a->log_total || a->log_offset+a->log.len>=a->log_total;
-    a->ui->dirty=1;
+    du_invalidate_widget(a->ui,CP_LOG_VIEW); du_invalidate_widget(a->ui,CP_LOG_PREV); du_invalidate_widget(a->ui,CP_LOG_NEXT);
 }
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
@@ -437,7 +454,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
-        a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;
+        a->preview_pending=2; a->preview_valid=0; du_invalidate(u,(struct du_rect){24,44,208,188});
         return;
     }
     switch (e->id) {
@@ -1229,7 +1246,8 @@ void cp_open(struct cp_app *a, int page)
     }
     if (page == CP_ADAPTER) { page=CP_DISPLAY; a->display_tab=CP_SCREEN_SETTINGS; }
     if (page == CP_FONTS) { page=CP_DISPLAY; a->display_tab=CP_APPEARANCE; }
-    if (a->page == CP_DISPLAY && page != CP_DISPLAY) { cp_preview_cancel(a); cp_fonts_close(a); }
+    /* Preview state cancels immediately; installed fonts remain owned until detach. */
+    if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_preview_cancel(a);
     if (page==CP_DEVICES) a->system_tab=1;
     if (page==CP_DRIVERS) a->system_tab=3;
     if (page==CP_SYSTEM && a->system_tab!=2) a->system_tab=0;
@@ -1243,6 +1261,13 @@ void cp_open(struct cp_app *a, int page)
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
     build(a);
+}
+void cp_assets_ready(struct cp_app *a)
+{
+    a->preview_valid=0;
+    a->wall_count=a->host.wallpapers ? (unsigned)a->host.wallpapers(a->host.ctx,a->wall_names,CP_WALLPAPERS) : 0;
+    if (a->wall_count>CP_WALLPAPERS) a->wall_count=0;
+    if (a->page==CP_DISPLAY || a->page==CP_DEVICES || a->page==CP_DRIVERS || a->page==CP_SYSTEM) cp_open(a,a->page);
 }
 int cp_attach(struct cp_app *a, struct du_ui *u, int page)
 {

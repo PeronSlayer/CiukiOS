@@ -21,3 +21,13 @@ Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev
    - This is the Windows 9x model: a blocked thread is not scheduled until its event fires.
 2. **Worker priority: the existing policy is accepted.** The background worker stays at base 7 against base 9 for the focused UI (input boost 11), with no new priority API in this directive.
 3. **Decoder cancellation** stays cooperative at decode boundaries; the UI state cancels immediately.
+
+## Amendment 2 (lead, 2026-10-23 00:03): merge with f2-98a and event-driven Control Panel jobs
+
+The worktree has an in-progress merge of `wt/f2-98a` with conflicts in `apps/control/app.c` and `apps/control/main.c`.
+- **What collides.** f2-88c replaced the polled preview decode with a completion channel and its own event-waiting run loop. f2-98a added background jobs (assets, wallpaper cache, program scan, fonts) polled from the idle callback.
+- **Resolution.** Keep both features, with f2-88c's model as the base: every Control Panel background job signals completion through the same channel or wait set, so the UI thread blocks until input, a completion or a deadline, with no 100 Hz idle polling. That also closes f2-98a's decision 1 for the Control Panel.
+- **Constraints.** Keep f2-98a's update-region behaviour and f2-88c's cancellation on page change; fonts stay retained across pages, as f2-98a requires.
+- **Tests.** The tests of both directives pass, plus a test that an idle Control Panel on every page performs no periodic wakeups.
+
+Resolve only the conflict markers and the code the resolution needs. The lead commits the merge.

@@ -31,6 +31,15 @@ struct du_dialog_places {
     uint64_t next_poll;
     int fd;
 };
+static void dialog_damage(struct du_ui *u)
+{
+    struct du_rect box=u->dialog.box;
+    if (box.w<=0 || box.h<=0) return;
+    int s=desk_theme->shadow_size;
+    box.x+=s/3-s; box.y+=s/2-s; box.w+=2*s; box.h+=2*s;
+    du_invalidate(u,box);
+}
+
 static void places_close(struct du_dialog *d)
 {
     if (!d->places) return;
@@ -185,6 +194,7 @@ static struct du_widget *item(struct du_dialog *d, unsigned i, enum du_kind kind
 static void begin(struct du_ui *u, enum du_dialog_kind kind, int id, const char *title, const char *text)
 {
     struct du_dialog *d = &u->dialog;
+    if (d->kind) dialog_damage(u);
     places_close(d);
     free(d->entries); free(d->rows);
     memset(d, 0, sizeof(*d));
@@ -193,7 +203,7 @@ static void begin(struct du_ui *u, enum du_dialog_kind kind, int id, const char 
     snprintf(d->text, sizeof(d->text), "%s", text ? text : "");
     du_menu_close(u);
     du_release(u);
-    u->dirty = 1;
+    dialog_damage(u);
 }
 
 static void place(struct du_ui *u, int w, int h)
@@ -201,7 +211,9 @@ static void place(struct du_ui *u, int w, int h)
     struct du_dialog *d = &u->dialog;
     if (w > u->canvas.width - 8) w = u->canvas.width - 8;
     if (h > u->canvas.height - 8) h = u->canvas.height - 8;
+    dialog_damage(u);
     d->box = (struct du_rect){(u->canvas.width - w) / 2, (u->canvas.height - h) / 2, w, h};
+    dialog_damage(u);
 }
 
 static void button_row(struct du_dialog *d, unsigned count, int y)
@@ -285,7 +297,7 @@ void du_progress(struct du_ui *u, int id, const char *title, const char *text, u
         place(u, lines > 3 ? 460 : 360, height);
         d->items[1].box = (struct du_rect){d->box.x + 14, d->box.y + d->box.h - 3 - 10 - BTN_H - 14 - 16, d->box.w - 28, 16};
         d->items[0].box = (struct du_rect){d->box.x + d->box.w - 3 - 14 - BTN_W, d->box.y + d->box.h - 3 - 10 - BTN_H, BTN_W, BTN_H};
-        u->dirty = 1;
+        dialog_damage(u);
     }
     d->progress = value; d->progress_total = total;
     d->items[1].value = (int)(value > 0x7fffffffu ? 0x7fffffffu : value);
@@ -350,7 +362,7 @@ static int navigate(struct du_ui *u, const char *path)
     list->items = d->rows; list->count = count; list->active = 0; list->scroll = list->hscroll = 0;
     du_set_text(&d->items[F_FOLDER], d->folder);
     places_select(d);
-    u->dirty = 1;
+    dialog_damage(u);
     return 0;
 }
 
@@ -398,7 +410,7 @@ int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const c
 }
 
 void du_dialog_icon(struct du_ui *u, const uint32_t *argb32)
-{ if (u->dialog.kind == DU_DLG_MESSAGE && u->dialog.icon) { u->dialog.icon_pixels = argb32; u->dirty = 1; } }
+{ if (u->dialog.kind == DU_DLG_MESSAGE && u->dialog.icon) { u->dialog.icon_pixels = argb32; dialog_damage(u); } }
 
 int du_dialog_id(const struct du_ui *u) { return u->dialog.kind ? u->dialog.id : 0; }
 struct du_rect du_dialog_button(const struct du_ui *u, unsigned i)
@@ -406,17 +418,18 @@ struct du_rect du_dialog_button(const struct du_ui *u, unsigned i)
 
 void du_dialog_close(struct du_ui *u)
 {
+    if (u->dialog.kind) dialog_damage(u);
     struct du_dialog *d = &u->dialog;
     places_close(d);
     free(d->entries); free(d->rows);
-    memset(d, 0, sizeof(*d)); d->capture = -1;
-    u->dirty = 1;
+    memset(d,0,sizeof(*d)); d->capture=-1;
+    if (u->focus>=0 && (unsigned)u->focus<u->count) du_invalidate(u,u->widgets[u->focus].box);
 }
 
 static void finish(struct du_ui *u, int index)
 {
     struct du_dialog *d = &u->dialog;
-    if (d->accept && d->accept(u, index, d->accept_ctx)) { u->dirty = 1; return; }
+    if (d->accept && d->accept(u, index, d->accept_ctx)) { dialog_damage(u); return; }
     char text[DU_TEXT_MAX] = "";
     if (d->kind == DU_DLG_INPUT) snprintf(text, sizeof(text), "%s", d->items[2].text);
     if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) join(text, d->folder, d->items[F_NAME].text);
@@ -523,7 +536,7 @@ void du_dialog_key(struct du_ui *u, unsigned code)
             d->focus = u->modifiers & DU_SHIFT ? (d->focus <= 0 ? (int)d->count - 1 : d->focus - 1) : (d->focus + 1) % (int)d->count;
             if (focusable(&d->items[d->focus])) break;
         }
-        u->dirty = 1; return;
+        dialog_damage(u); return;
     }
     if (f && (f->kind == DU_EDIT || f->kind == DU_TEXTAREA || f->kind == DU_LISTVIEW || f->kind == DU_TREE)) {
         int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
@@ -539,7 +552,7 @@ void du_dialog_key(struct du_ui *u, unsigned code)
     }
     if ((code == DU_KEY_LEFT || code == DU_KEY_RIGHT || code == DU_KEY_UP || code == DU_KEY_DOWN) && f && f->kind == DU_BUTTON && (unsigned)d->focus < d->buttons) {
         int step = code == DU_KEY_LEFT || code == DU_KEY_UP ? -1 : 1;
-        d->focus = (d->focus + step + (int)d->buttons) % (int)d->buttons; u->dirty = 1; return;
+        d->focus = (d->focus + step + (int)d->buttons) % (int)d->buttons; dialog_damage(u); return;
     }
     unsigned saved = u->modifiers; u->modifiers &= ~DU_ALT;
     unsigned ch = du_key_char(u, code); u->modifiers = saved;
@@ -553,7 +566,7 @@ void du_dialog_key(struct du_ui *u, unsigned code)
             if (d->items[i].kind == DU_BUTTON && i < d->buttons) {
                 if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && i == 0) accept_file(u); else finish(u, (int)i);
             } else if (d->items[i].kind == DU_LABEL && i + 1 <= d->count) d->focus = i == F_LOOK ? F_FOLDER : F_NAME;
-            u->dirty = 1; return;
+            dialog_damage(u); return;
         }
     }
 }
@@ -579,7 +592,7 @@ void du_dialog_press(struct du_ui *u, int button)
         if (focusable(w)) d->focus = (int)i - 1;
         if (button == 1) d->capture = (int)i - 1;
         DIALOG_CALL(du_widget_press(u, w, button, x, y));
-        u->dirty = 1;
+        dialog_damage(u);
         return;
     }
 }
@@ -588,17 +601,18 @@ void du_dialog_motion(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
     int hot = !d->dragging && du_contains(close_box(d), u->mouse_x, u->mouse_y);
-    if (hot != d->close_hot) { d->close_hot = hot; u->dirty = 1; }
+    if (hot != d->close_hot) { d->close_hot = hot; dialog_damage(u); }
     if (d->dragging) {
         int nx = u->mouse_x - d->drag_x, ny = u->mouse_y - d->drag_y;
         if (nx < -d->box.w + 40) nx = -d->box.w + 40;
         if (nx > u->canvas.width - 40) nx = u->canvas.width - 40;
         if (ny < 0) ny = 0;
         if (ny > u->canvas.height - 20) ny = u->canvas.height - 20;
+        dialog_damage(u);
         int dx = nx - d->box.x, dy = ny - d->box.y;
         d->box.x += dx; d->box.y += dy;
         for (unsigned i = 0; i < d->count; i++) { d->items[i].box.x += dx; d->items[i].box.y += dy; }
-        u->dirty = 1; return;
+        dialog_damage(u); return;
     }
     if (d->capture >= 0 && (unsigned)d->capture < d->count) {
         struct du_widget *w = &d->items[d->capture];

@@ -242,7 +242,7 @@ static void dispatch_idle_worker(void)
 }
 int main(void)
 {
-    CHECK(cp_display_wait_ms(0,UINT64_MAX)==1000);
+    CHECK(cp_display_wait_ms(0,UINT64_MAX)==-1);
     CHECK(cp_display_wait_ms(1000,1000)==1);
     CHECK(cp_display_wait_ms(0,20000000)==20);
     for (unsigned kind=COMPLETION;kind<=SPURIOUS_TIMEOUT;kind++) {

@@ -4,6 +4,8 @@
 #include "control.h"
 #include "programs.h"
 #include "decoder.h"
+#include "job.h"
+#include <ciuki/channel.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #ifdef __i386__
 #include <ciuki/raw.h>
@@ -28,13 +30,73 @@
 #include <unistd.h>
 
 struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
-    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
+    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h;
     const char *disp_state, *disp_decode, *disp_wait;
     unsigned disp_done;
+    struct cp_job assets; int assets_requested, assets_ready;
+    char wall_cache[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
+    char *pci_cache,*usb_cache; int portrait_ready;
+    struct cp_job program_scan; int programs_requested,programs_ready,program_count,next_program_count;
+    struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
+    pthread_mutex_t completion_lock;
+    int completion[2];
+    uint64_t tick_next;
 };
 
+static void programs_poll(struct cp_main *);
+/* All applet jobs share one bounded notification channel. Queue saturation
+ * already means readable; other send failures close the peer and wake HUP.
+ * Serialize send/close so concurrent producers cannot use a recycled fd. */
+static void notify_completion(void *ctx)
+{
+    struct cp_main *m=ctx;
+    pthread_mutex_lock(&m->completion_lock);
+    if (m->completion[1]>=0) {
+        struct ciuki_message token={.length=4};
+        int r;
+        do r=ciuki_channel_send(m->completion[1],&token,DONTWAIT); while (r<0 && errno==EINTR);
+        if (r<0 && errno!=EAGAIN) { close(m->completion[1]); m->completion[1]=-1; }
+    }
+    pthread_mutex_unlock(&m->completion_lock);
+}
+static int completion_start(struct cp_main *m)
+{
+    m->completion[0]=m->completion[1]=-1;
+    int error=pthread_mutex_init(&m->completion_lock,NULL);
+    if (error) { errno=error; return -1; }
+    if (ciuki_channel_pair(m->completion)) { pthread_mutex_destroy(&m->completion_lock); return -1; }
+    for (unsigned i=0;i<2;i++) (void)fcntl(m->completion[i],F_SETFD,FD_CLOEXEC);
+    return 0;
+}
+/* Only after every producer is joined. */
+static void completion_stop(struct cp_main *m)
+{
+    close(m->completion[0]);
+    if (m->completion[1]>=0) close(m->completion[1]);
+    pthread_mutex_destroy(&m->completion_lock);
+}
+/* The shared writer's desktop API uses trylock. An event consumer must read
+ * its published result exactly once, without depending on a retry timer.
+ * These critical sections never contain disk I/O. */
+static int settings_busy(struct cp_main *m)
+{
+    if (!m->writer_started) return 0;
+    pthread_mutex_lock(&m->writer.lock);
+    int busy=m->writer.busy || m->writer.pending;
+    pthread_mutex_unlock(&m->writer.lock);
+    return busy;
+}
+static int settings_result(struct cp_main *m, int *error)
+{
+    if (!m->writer_started) return 0;
+    pthread_mutex_lock(&m->writer.lock);
+    int ready=m->writer.completed;
+    if (ready) { *error=m->writer.error; m->writer.completed=0; }
+    pthread_mutex_unlock(&m->writer.lock);
+    return ready;
+}
 /* Panel geometry is independent of desktop preferences and display rollback. */
 static void panel_size(int *width, int *height)
 {
@@ -120,41 +182,13 @@ static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; retur
  * strings, so lookup needs only bounded string scanning. */
 static int hwid_name(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 {
-    struct cp_main *m = ctx;
-    if (!m->hwid_loaded) {
-        m->hwid_loaded = 1;
-        FILE *f = fopen("/System/hwids/pci-ids.json", "rb");
-        if (f && !fseek(f, 0, SEEK_END)) {
-            long length = ftell(f);
-            if (length > 0 && length <= 400 * 1024 && !fseek(f, 0, SEEK_SET)) {
-                m->hwid_pci = malloc((size_t)length + 1);
-                if (m->hwid_pci && fread(m->hwid_pci, 1, (size_t)length, f) == (size_t)length)
-                    m->hwid_pci[length] = 0;
-                else { free(m->hwid_pci); m->hwid_pci = NULL; }
-            }
-            fclose(f);
-        } else if (f) fclose(f);
-    }
-    return cp_hwid_lookup_json(m->hwid_pci, vendor, device, out, size);
+    struct cp_main *m=ctx; m->assets_requested=1;
+    return cp_hwid_lookup_json(m->hwid_pci,vendor,device,out,size);
 }
 static int usb_hwid_name(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 {
-    struct cp_main *m = ctx;
-    if (!m->usb_hwid_loaded) {
-        m->usb_hwid_loaded = 1;
-        FILE *f = fopen("/System/hwids/usb-ids.json", "rb");
-        if (f && !fseek(f, 0, SEEK_END)) {
-            long length = ftell(f);
-            if (length > 0 && length <= 400 * 1024 && !fseek(f, 0, SEEK_SET)) {
-                m->hwid_usb = malloc((size_t)length + 1);
-                if (m->hwid_usb && fread(m->hwid_usb, 1, (size_t)length, f) == (size_t)length)
-                    m->hwid_usb[length] = 0;
-                else { free(m->hwid_usb); m->hwid_usb = NULL; }
-            }
-            fclose(f);
-        } else if (f) fclose(f);
-    }
-    return cp_hwid_lookup_json(m->hwid_usb, vendor, device, out, size);
+    struct cp_main *m=ctx; m->assets_requested=1;
+    return cp_hwid_lookup_json(m->hwid_usb,vendor,device,out,size);
 }
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -177,7 +211,7 @@ static int image_name(const char *name)
     ext[n] = 0;
     return !strcmp(ext, "bmp") || !strcmp(ext, "png") || !strcmp(ext, "jpg") || !strcmp(ext, "jpeg");
 }
-static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
+static int scan_wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
 {
     (void)ctx;
     DIR *dir = opendir(CFG_WALLPAPER_DIR);
@@ -195,6 +229,36 @@ static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
     }
     closedir(dir);
     return (int)n;
+}
+static char *read_ids(const char *path)
+{
+    FILE *f=fopen(path,"rb"); if (!f) return NULL;
+    char *text=NULL;
+    if (!fseek(f,0,SEEK_END)) {
+        long n=ftell(f);
+        if (n>0 && n<=400*1024 && !fseek(f,0,SEEK_SET)) {
+            text=malloc((size_t)n+1);
+            if (text && fread(text,1,(size_t)n,f)==(size_t)n) text[n]=0;
+            else { free(text); text=NULL; }
+        }
+    }
+    fclose(f); return text;
+}
+static void read_assets(void *ctx)
+{
+    struct cp_main *m=ctx;
+    m->wall_count=(unsigned)scan_wallpapers(NULL,m->wall_cache,CP_WALLPAPERS);
+    m->pci_cache=read_ids("/System/hwids/pci-ids.json");
+    m->usb_cache=read_ids("/System/hwids/usb-ids.json");
+    FILE *f=fopen("/system/assets/ciuki-portrait.xrgb","rb");
+    if (f) { m->portrait_ready=fread(m->portrait,4,256*256,f)==256*256; fclose(f); }
+}
+static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
+{
+    struct cp_main *m=ctx;
+    if (!m->assets_ready) return 0;
+    unsigned count=m->wall_count<capacity ? m->wall_count : capacity;
+    memcpy(names,m->wall_cache,count*CFG_PATH_MAX); return (int)count;
 }
 static int decode_begin(void *ctx, const struct cp_preview_req *req) { (void)ctx; return cp_decoder_begin(req); }
 static int decode_poll(void *ctx, struct cp_preview_done *out) { (void)ctx; return cp_decoder_poll(out); }
@@ -214,7 +278,7 @@ static int mixer(void *ctx, int *volume, int *muted)
 static int apply(void *ctx, unsigned request, int volume, int muted)
 {
     struct cp_main *m = ctx;
-    if ((request==DESK_SETTINGS_RELOAD || request==DESK_SETTINGS_PROGRAMS) && m->writer_started && cfg_writer_busy(&m->writer)) {
+    if ((request==DESK_SETTINGS_RELOAD || request==DESK_SETTINGS_PROGRAMS) && settings_busy(m)) {
         m->reload_pending=(int)request; return 0;
     }
     struct ciuki_message msg;
@@ -299,21 +363,21 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
     }
     if(p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && p->serial==m->install_serial){
         m->install_serial=0;struct du_widget *s=du_get(&m->ui,3);
-        if(s){du_set_text(s,p->result<0 ? "The installer could not be started. Check the selected media and try again." : "Installer started.");m->ui.dirty=1;}
+        if(s){du_set_text(s,p->result<0 ? "The installer could not be started. Check the selected media and try again." : "Installer started.");du_invalidate(&m->ui,s->box);}
         return;
     }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->result < 0) {
         struct du_widget *s = du_get(&m->ui, 3);   /* the status line */
-        if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); m->ui.dirty = 1; }
+        if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); du_invalidate(&m->ui,s->box); }
     }
 }
 static uint64_t monotonic(void *ctx) { (void)ctx; return du_now(); }
 static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gettime(CLOCK_REALTIME, &t) || t.tv_sec < 0 ? 0 : (uint64_t)t.tv_sec; }
 static int close_request(struct du_window *w, void *user)
 { (void)w; struct cp_main *m = user;
-  if (m->writer_started && cfg_writer_busy(&m->writer)) {
+  if (settings_busy(m)) {
       m->app.close_pending=1; m->app.display_accept=0;
-      du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); m->ui.dirty=1; return 0;
+      du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); du_invalidate_widget(&m->ui,3); return 0;
   }
   remember_size(m); return cp_close(&m->app); }
 /* The kernel's debug_write path is a plain klog line ("[user N] ...": serial, console and the protected boot
@@ -347,7 +411,18 @@ static void display_log(struct cp_main *m, const char *wait)
 }
 static void idle(void *arg)
 {
-    struct cp_main *m = arg;
+    struct cp_main *m=arg;
+    if (m->app.page==CP_DISPLAY || m->app.page==CP_SYSTEM || m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS) m->assets_requested=1;
+    if (m->window.configured && m->ui.frame_count) programs_poll(m);
+    if (m->assets.started && cp_job_ready(&m->assets) && m->ui.capture<0 && !m->ui.dialog.kind) {
+        cp_job_finish(&m->assets); m->assets_ready=1;
+        m->hwid_pci=m->pci_cache; m->hwid_usb=m->usb_cache;
+        if (m->portrait_ready) m->app.host.portrait=m->portrait;
+        cp_assets_ready(&m->app);
+    } else if (m->assets_requested && !m->assets_ready && !m->assets.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
+        if (cp_job_start(&m->assets,read_assets,m,notify_completion,m)) m->assets_ready=1;
+    }
+    if (m->window.configured && m->ui.frame_count) cp_fonts_poll(&m->app);
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
@@ -364,14 +439,20 @@ static void idle(void *arg)
         m->engine_next=mono+2000000000ull;
     }
     int error;
-    if (m->writer_started && cfg_writer_result(&m->writer,&error)) {
+    if (settings_result(m,&error)) {
         if (m->reload_pending) {unsigned request=(unsigned)m->reload_pending;m->reload_pending=0; if (!error) apply(m,request,0,0); }
         cp_settings_saved(&m->app,error);
     }
-    if (m->writer_started && cfg_writer_busy(&m->writer) && m->app.quit) return;
+    /* Clocks, uptime and external mixer state have genuine one-second work.
+     * Other pages have no heartbeat. Navigation/close also runs on input and
+     * completion, even when the wall clock has not changed. */
+    int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS;
+    if (ticking && (!m->tick_next || mono>=m->tick_next)) {
+        cp_tick(&m->app); m->tick_next=mono+1000000000ull;
+    } else if (!ticking) m->tick_next=0;
+    if (m->app.close_pending || m->app.navigation_pending) cp_tick(&m->app);
+    if (settings_busy(m) && m->app.quit) return;
     if (m->app.quit) { remember_size(m); du_window_close(&m->window); m->app.quit = 0; }
-    uint64_t t = now(m);
-    if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); if (m->app.page == CP_DATETIME) m->ui.dirty = 1; }
 }
 __attribute__((weak)) int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 { (void)out; (void)cap; return -ENOSYS; }
@@ -412,21 +493,55 @@ static int program_save(void *ctx)
     /* The removal identity stays durable until the settings worker commits.
      * This applet's removal already waits for disk/uninstaller completion. */
     int error=0;
-    while(!cfg_writer_result(&m->writer,&error)){struct timespec delay={.tv_sec=0,.tv_nsec=1000000};nanosleep(&delay,NULL);}
+    while (!settings_result(m,&error)) {
+        struct pollfd fd={.fd=m->completion[0],.events=POLLIN};
+        int r=poll(&fd,1,-1);
+        if (r<0 && errno==EINTR) continue;
+        if (r<0 || fd.revents&(POLLERR|POLLHUP|POLLNVAL)) return -EIO;
+        struct ciuki_message token;
+        if (ciuki_channel_recv(fd.fd,&token,DONTWAIT) && errno!=EINTR && errno!=EAGAIN) return -EIO;
+    }
     return error ? -error : 0;
 }
 static struct cp_program_store programs={.root="",.registry_list=registry_list,.registry_run=registry_run,.registry_check=registry_check,.game=game_program,.forget_icon=forget_icon,.persist=program_save};
+static void scan_programs(void *ctx)
+{
+    struct cp_main *m=ctx; struct cp_program_store store=programs;
+    m->next_program_count=cp_program_list(&store,m->program_next,CP_PROGRAM_MAX);
+}
+static void programs_poll(struct cp_main *m)
+{
+    if (cp_job_ready(&m->program_scan) && m->ui.capture<0 && !m->ui.dialog.kind) {
+        cp_job_finish(&m->program_scan);
+        m->program_count=m->next_program_count; m->programs_ready=1;
+        if (m->program_count>0) memcpy(m->program_cache,m->program_next,(unsigned)m->program_count*sizeof(*m->program_next));
+        free(m->program_next); m->program_next=NULL;
+        if (m->app.page==CP_UNINSTALL) cp_open(&m->app,CP_UNINSTALL);
+        m->programs_requested=0;
+    } else if (m->programs_requested && !m->program_scan.started && !m->ui.dirty) {
+        m->program_next=calloc(CP_PROGRAM_MAX,sizeof(*m->program_next));
+        int error=m->program_next ? cp_job_start(&m->program_scan,scan_programs,m,notify_completion,m) : -ENOMEM;
+        if (error) { free(m->program_next); m->program_next=NULL; m->programs_ready=1; m->program_count=error; m->programs_requested=0; }
+    }
+}
 static int win32_uninstall_list(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
-{(void)ctx;return cp_program_list(&programs,out,cap);}
+{
+    struct cp_main *m=ctx; m->programs_requested=1;
+    if (!m->programs_ready) return 0;
+    if (m->program_count<0) return m->program_count;
+    unsigned n=(unsigned)m->program_count<cap ? (unsigned)m->program_count : cap;
+    memcpy(out,m->program_cache,n*sizeof(*out)); return (int)n;
+}
 static int program_remove(void *ctx,const struct desk_uninstall_entry *r)
 {
+    struct cp_main *m=ctx; if (m->program_scan.started) return -EBUSY;
     programs.ctx=ctx;
     int result=cp_program_remove(&programs,r);
     struct cp_program_store recorder=programs;recorder.log=program_log;
     cp_program_record(&recorder,r,result);return result;
 }
 static void programs_changed(void *ctx)
-{(void)apply(ctx,DESK_SETTINGS_PROGRAMS,0,0);}
+{ struct cp_main *m=ctx; m->programs_ready=0; m->programs_requested=1; (void)apply(ctx,DESK_SETTINGS_PROGRAMS,0,0); }
 static int program_install(void *ctx,const char *path)
 {
     struct cp_main *m=ctx;
@@ -439,32 +554,44 @@ static int program_install(void *ctx,const char *path)
     memcpy(request.data+16+t,path,n);
     int result=du_window_queue(&m->window,&request);if(!result)m->install_serial=m->serial;return result;
 }
-/* Display opts into the native wait set. Other applets retain du_run's
- * scheduling interval (f2-98a owns their idle policy). */
+static uint64_t control_deadline(struct cp_main *m)
+{
+    uint64_t next=du_next_deadline(&m->ui);
+    if (m->tick_next && m->tick_next<next) next=m->tick_next;
+    if (m->window.configured && m->app.page==CP_DISPLAY && !m->engine_serial && !m->app.mode_state && m->engine_next<next)
+        next=m->engine_next;
+    return next;
+}
+/* Input, decoder and all other applet jobs are in the same event wait set. */
 static int control_run(struct cp_main *m)
 {
     for (;;) {
-        idle(m);
         int r = du_window_turn(&m->window, du_now());
         if (r <= 0) return r;
-        uint64_t mono = du_now(), next = du_next_deadline(&m->ui);
+        idle(m);
+        /* idle may finish a deferred Close. Queue its protocol request before
+         * sleeping; du_window_close() itself only changes closing state. */
+        if (m->window.closing==1 && m->window.count<16) continue;
+        uint64_t mono = du_now(), next = control_deadline(m);
         int timeout = cp_display_wait_ms(mono, next);
-        if (m->app.page != CP_DISPLAY && timeout > 10) timeout = 10;
-        /* Durable settings results currently have no descriptor. Only a
-         * pending settings write needs this bounded completion check. */
-        int saving = m->writer_started && cfg_writer_busy(&m->writer);
-        if (saving && timeout > 50) timeout = 50;
         if (m->ui.dirty && m->window.configured && !m->window.swap_sent && !m->window.present_pending && m->window.count < 16) continue;
-        struct pollfd fds[2] = {
+        struct pollfd fds[3] = {
             {.fd = m->window.channel, .events = POLLIN | (m->window.count ? POLLOUT : 0)},
-            {.fd = cp_decoder_fd(), .events = POLLIN}
+            {.fd = cp_decoder_fd(), .events = POLLIN},
+            {.fd = m->completion[0], .events = POLLIN}
         };
-        display_log(m, saving ? "settings" : next != UINT64_MAX ? "timer" : "event");
-        r = poll(fds, 2, timeout);
+        display_log(m, next != UINT64_MAX ? "timer" : "event");
+        r = poll(fds, 3, timeout);
         if (r < 0) { if (errno == EINTR) continue; return -1; }
-        if ((fds[0].revents | fds[1].revents) & POLLNVAL) { errno = EBADF; return -1; }
+        if ((fds[0].revents | fds[1].revents | fds[2].revents) & POLLNVAL) { errno = EBADF; return -1; }
         if (fds[1].revents & POLLIN) cp_preview_ready(&m->app);
-        if (fds[1].revents & (POLLERR | POLLHUP)) { errno = EIO; return -1; }
+        if ((fds[1].revents | fds[2].revents) & (POLLERR | POLLHUP)) { errno = EIO; return -1; }
+        if (fds[2].revents & POLLIN) {
+            struct ciuki_message token;
+            /* One token is enough; further queued publications stay readable.
+             * No producer can race a reset or lose the transition to sleep. */
+            if (ciuki_channel_recv(fds[2].fd,&token,DONTWAIT) && errno!=EAGAIN && errno!=EINTR) return -1;
+        }
     }
 }
 
@@ -481,6 +608,8 @@ int main(int argc, char **argv)
     }
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
+    if (completion_start(m)) { free(m); return 1; }
+    m->writer.notify=notify_completion; m->writer.notify_ctx=m;
     m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
@@ -489,11 +618,10 @@ int main(int argc, char **argv)
     h->display = display_query;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
-    h->save_async=1;
+    h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;
     h->devices = devices; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
-    FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
-    if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
+
     const char *display = getenv("CIUKI_DISPLAY");
     h->screen_w = 1024; h->screen_h = 768;
     if (display) { char *end; long w = strtol(display, &end, 10); if (*end == 'x' && w >= 320 && w <= 2048) { h->screen_w = (uint32_t)w; h->screen_h = (uint32_t)strtol(end + 1, NULL, 10); } }
@@ -511,15 +639,18 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
-        free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, page)) {
-        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     int r = control_run(m);
     cp_decoder_stop();
+    cp_job_finish(&m->program_scan); free(m->program_next);
+    cp_job_finish(&m->assets);
+    if (!m->assets_ready) { free(m->pci_cache); free(m->usb_cache); }
     if (m->writer_started) cfg_writer_stop(&m->writer);
-    cp_detach(&m->app); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
+    cp_detach(&m->app); completion_stop(m); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
     return r < 0 ? 1 : 0;
 }

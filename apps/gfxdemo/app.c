@@ -28,15 +28,15 @@ static void event(struct du_ui *u,const struct du_event *e,void *ctx)
         u->dirty=1;
     } else if (e->type==DU_EV_ACTIVATE && e->id==GFX_SHADE) {
         a->gouraud=!a->gouraud;
-        du_set_text(du_get(u,GFX_SHADE),a->gouraud ? "Gouraud shading" : "Flat shading"); u->dirty=1;
+        du_set_text(du_get(u,GFX_SHADE),a->gouraud ? "Gouraud shading" : "Flat shading"); du_invalidate_widget(u,GFX_SHADE); du_invalidate(u,a->viewport);
     } else if (e->type==DU_EV_ACTIVATE && e->id==GFX_PAUSE) {
-        a->paused=!a->paused; du_set_text(du_get(u,GFX_PAUSE),a->paused ? "Resume" : "Pause"); u->dirty=1;
+        a->paused=!a->paused; du_set_text(du_get(u,GFX_PAUSE),a->paused ? "Resume" : "Pause"); du_invalidate_widget(u,GFX_PAUSE);
     } else if (e->type==DU_EV_ACTIVATE && e->id==GFX_RUN && !a->bench_running) {
         memset(a->results,0,sizeof(a->results)); a->bench_index=0; a->bench_running=1;
         if (!a->request || a->request(a->request_ctx,DESK_GFX_BENCH,0)) {
             a->results[0].error=-EIO; a->bench_running=0;
         }
-        u->dirty=1;
+        du_invalidate(u,(struct du_rect){16,66,u->canvas.width-32,u->canvas.height-166});
     } else if (e->type==DU_EV_TICK) gfx_advance(a,u->now);
 }
 void gfx_attach(struct gfx_app *a,struct du_ui *u,const uint32_t *portrait)
@@ -72,12 +72,12 @@ void gfx_advance(struct gfx_app *a,uint64_t now)
             (unsigned long long)(a->fps10/10),(unsigned long long)(a->fps10%10),
             (unsigned long long)a->ms1000,a->page==1 ? "cube" : "tiles",
             (unsigned long long)a->total_frames,a->scene.width,a->scene.height);
-        fflush(stdout);a->frames=0;a->sample_begin=now;a->ui->dirty=1;
+        fflush(stdout);a->frames=0;a->sample_begin=now; du_invalidate(a->ui,(struct du_rect){240,42,a->ui->canvas.width-256,18});
     }
     if (now<a->next_ns) return;
     a->next_ns+=((now-a->next_ns)/GFX_FRAME_NS+1)*GFX_FRAME_NS;
     if (a->page && !a->paused) a->animation_due=1;
-    if (!a->deferred && a->animation_due) a->ui->dirty=1;
+    if (!a->deferred && a->animation_due) du_invalidate(a->ui,a->viewport);
 }
 void gfx_presented(struct gfx_app *a,uint64_t now)
 {
@@ -111,7 +111,10 @@ void gfx_receive(struct gfx_app *a,const struct desk_packet *p)
     } else if (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_BENCH) {
         a->bench_running=0; a->results[a->bench_index].error=p->result;
     }
-    a->ui->dirty=1;
+    struct du_canvas *c=&a->ui->canvas;
+    du_invalidate(a->ui,(struct du_rect){8,c->height-100,c->width-16,90});
+    if (p->opcode==DESK_GFX_RESULT || (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_BENCH))
+        du_invalidate(a->ui,(struct du_rect){16,66,c->width-32,c->height-166});
 }
 static void label(struct du_canvas *c,int x,int y,const char *text,uint32_t colour)
 { du_text_fit(c,x,y,c->width-x-16,text,colour); }
@@ -209,11 +212,15 @@ void gfx_store_scene(struct gfx_app *a)
     struct du_canvas *c=&a->ui->canvas;
     unsigned w=a->scene.width,h=a->scene.height;
     int left=(int)w,right=-1,top=(int)h,bottom=-1;
-    for (unsigned y=0;y<h;y++) {
+    struct du_rect clip=du_intersection(c->clip,a->viewport);
+    unsigned x0=clip.w>0 ? (unsigned)(clip.x-a->viewport.x) : 0;
+    unsigned y0=clip.h>0 ? (unsigned)(clip.y-a->viewport.y) : 0;
+    unsigned x1=x0+(clip.w>0 ? (unsigned)clip.w : 0),y1=y0+(clip.h>0 ? (unsigned)clip.h : 0);
+    for (unsigned y=y0;y<y1 && x0<x1;y++) {
         const uint32_t *src=a->scene.pixels+(size_t)y*w;
         uint32_t *dst=c->pixels+(size_t)(a->viewport.y+(int)y)*c->width+a->viewport.x;
-        if (!memcmp(src,dst,w*4)) continue;
-        unsigned first=0,last=w-1;
+        if (!memcmp(src+x0,dst+x0,(x1-x0)*4)) continue;
+        unsigned first=x0,last=x1-1;
         while (src[first]==dst[first]) first++;
         while (src[last]==dst[last]) last--;
         desk_row_copy(dst+first,src+first,last-first+1);
@@ -233,12 +240,20 @@ void gfx_paint(struct du_ui *u,void *ctx)
     du_text_fit(c,240,42,c->width-256,text,DU_INK);
     if (!a->page) { benchmark(a,c); a->viewport=(struct du_rect){0}; a->scene_ready=1; }
     else {
-        gfx_update_scene(a);
-        if (!a->deferred) desk_scale_rows(c->pixels+(size_t)a->viewport.y*c->width+a->viewport.x,(unsigned)c->width,
-            a->scene.pixels,a->scene.width,a->scene.width,a->scene.height,
-            (unsigned)a->viewport.w,(unsigned)a->viewport.h,0,0,(unsigned)a->viewport.w,(unsigned)a->viewport.h);
-        /* A full UI repaint changes the mapping/exposure even at a fixed phase. */
-        a->scene_damage=(struct du_rect){0,0,(int)a->scene.width,(int)a->scene.height};
+        scene_layout(a);
+        struct du_rect clip=du_intersection(c->clip,a->viewport);
+        if (clip.w>0 && clip.h>0) {
+            gfx_update_scene(a);
+            if (!a->deferred) desk_scale_rows(c->pixels+(size_t)clip.y*c->width+clip.x,(unsigned)c->width,
+                a->scene.pixels,a->scene.width,a->scene.width,a->scene.height,
+                (unsigned)a->viewport.w,(unsigned)a->viewport.h,(unsigned)(clip.x-a->viewport.x),(unsigned)(clip.y-a->viewport.y),(unsigned)clip.w,(unsigned)clip.h);
+            a->scene_damage=(struct du_rect){clip.x-a->viewport.x,clip.y-a->viewport.y,clip.w,clip.h};
+        } else {
+            /* UI-only updates never render the GL scene. Retain an already
+             * prepared successor; otherwise this frame has only UI damage. */
+            if (!a->scene_ready) a->scene_damage=(struct du_rect){0};
+            a->scene_ready=1;
+        }
         if (!compact_scene(c)) {
             if (a->have_timing) snprintf(text,sizeof(text),"%dx%d / %ux%u: render %llu submit %llu wait %llu us",
                 c->width,c->height,a->scene.width,a->scene.height,

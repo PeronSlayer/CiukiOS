@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "control.h"
 #include <assert.h>
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 int main(int argc, char **argv)
@@ -40,12 +41,16 @@ int main(int argc, char **argv)
     }
     assert(!du_theme_use(&ui,theme)); du_render(&ui);
     FILE *f = fopen(argv[2], "wb"); assert(f && fwrite(pixels, sizeof(*pixels), CP_WIDTH * CP_HEIGHT, f) == CP_WIDTH * CP_HEIGHT); fclose(f);
-    cp_open(&a, CP_HOME); assert(!a.font_face && !a.font_count);
+    cp_open(&a,CP_HOME); assert(a.font_face==face && a.font_count==12);
     cp_open(&a, CP_FONTS); assert(a.font_face && a.font_count == 12);
     cp_detach(&a); assert(!a.font_face);
     /* A missing store is a visible empty list, with safe page exit. */
     a.host.fonts_path = "/ciuki-missing-font-store"; cp_open(&a, CP_FONTS); du_render(&ui);
     assert(!a.font_count && !a.font_face && strstr(a.font_status, "unavailable")); cp_detach(&a);
+    a.host.fonts_path=argv[1]; a.host.fonts_async=1; cp_open(&a,CP_FONTS);
+    assert(a.fonts_loaded==-1 && !a.font_face); du_render(&ui); /* first frame precedes enumeration */
+    for(unsigned i=0;i<2000 && a.fonts_loaded!=1;i++) { cp_fonts_poll(&a); if(a.fonts_loaded!=1)nanosleep(&(struct timespec){.tv_nsec=1000000},NULL); }
+    assert(a.fonts_loaded==1 && a.font_count==12 && a.font_face); du_render(&ui); cp_detach(&a);
     puts("PASS control fonts: twelve faces, real preview, keyboard selection, cache, lifetime and missing store");
     return 0;
 }
