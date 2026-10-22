@@ -914,6 +914,7 @@ _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position 
 #define AUDIO_DRAIN 0x4105u
 #define AUDIO_RESET 0x4106u
 #define AUDIO_REFILL_READ 0x4107u /* command: this thread's next bounded source reads */
+#define AUDIO_GET_PRODUCER 0x4108u /* f1-101: the kernel's producer boost state of this stream */
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
@@ -987,6 +988,24 @@ struct ciuki_audio_command {
     uint32_t size;
     uint32_t reserved[2];
 };
+/* f1-101: the mixer reports a native stream behind its target lead (more
+ * than one 256-frame period below ring_frames - period_frames, in output
+ * frames) and the scheduler raises the stream's writer and its refill-read
+ * thread above every ordinary level until the lead is refilled, within one
+ * CPU budget shared by all producers (20 % over any 100 ms). The record is a
+ * read-only observation; no flag of it can be set by the application. */
+#define CIUKI_AUDIO_PRODUCER_BEHIND 1u      /* lead below the producer mark now */
+#define CIUKI_AUDIO_PRODUCER_BOOSTED 2u     /* behind, producers boosted now */
+#define CIUKI_AUDIO_PRODUCER_OVER_BUDGET 4u /* behind, boost withheld by the budget */
+struct ciuki_audio_producer {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    uint32_t boosts;      /* boost episodes since open/reset */
+    uint32_t over_budget; /* episodes withheld by the budget */
+    uint32_t producers;   /* registered producer threads, 0..2 */
+    uint64_t boost_us;    /* producer CPU used at the boost level */
+};
 struct ciuki_audio_status {
     uint32_t version;
     uint32_t size;
@@ -1022,6 +1041,7 @@ struct ciuki_mixer_master {
 _Static_assert(sizeof(struct ciuki_audio_caps) == 80, "audio caps");
 _Static_assert(sizeof(struct ciuki_audio_format) == 32, "audio format");
 _Static_assert(sizeof(struct ciuki_audio_status) == 112, "audio status");
+_Static_assert(sizeof(struct ciuki_audio_producer) == 32, "audio producer");
 _Static_assert(__builtin_offsetof(struct ciuki_audio_status, accepted_frames) == 24, "audio counters");
 _Static_assert(sizeof(struct ciuki_audio_gain) == 24, "audio gain");
 _Static_assert(sizeof(struct ciuki_audio_command) == 16, "audio command");

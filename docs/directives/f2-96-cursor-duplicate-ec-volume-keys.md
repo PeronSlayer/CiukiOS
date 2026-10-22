@@ -12,7 +12,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f2-96-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 19:26, decisions on the delivery)
+## Amendment 1 (lead, 2026-10-22 19:22, decisions on the delivery)
 
 Accepted. The kernel mirrors the EC level into the shared master and leaves
 the codec at unity (the ThinkPad amplifier follows the AC'97 mixer under

@@ -52,6 +52,9 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t bytes)
         s->consumed_frames=5000; s->queued_frames=fake_queued; s->output_rate=fake_rate; s->transport_frames=480+idle_transport; s->latency_frames=fake_queued+480+fake_rate/50;
     } else if (op==AUDIO_REFILL_READ) {
         assert(fd==40 && bytes==sizeof(struct ciuki_audio_command) && !header[2] && !header[3]); refill_requests++;
+    } else if (op==AUDIO_GET_PRODUCER) {
+        assert(fd==40 && bytes==sizeof(struct ciuki_audio_producer)); struct ciuki_audio_producer *r=record;
+        r->flags=CIUKI_AUDIO_PRODUCER_BEHIND|CIUKI_AUDIO_PRODUCER_BOOSTED; r->boosts=3; r->over_budget=1; r->boost_us=4200;
     } else {
         assert(fd==41 && op==MIXER_GET_MASTER); struct ciuki_mixer_master *m=record;
         m->left=40; m->right=80; m->mute=1;
@@ -65,6 +68,8 @@ int main(void)
     struct music_main *m=calloc(1,sizeof(*m)); assert(m); m->audio=m->mixer=-1;
     unsigned rate; assert(!audio_open(m,&rate) && rate==48000);
     audio_refill(m); assert(refill_requests==1);
+    struct music_producer producer={0};
+    assert(!audio_producer(m,&producer) && producer.flags==3 && producer.boosts==3 && producer.over_budget==1 && producer.boost_us==4200);
     int16_t pcm[8]={0}; assert(audio_write(m,pcm,4)==4);
     blocked=1; assert(audio_write(m,pcm,4)==-EAGAIN); blocked=0;
     malformed=1; assert(audio_write(m,pcm,4)==-EIO); malformed=0;
@@ -76,6 +81,7 @@ int main(void)
     idle_transport=6400;
     assert(!audio_status(m,&consumed,&queued,&tail) && consumed==3560 && tail==30000000);
     audio_close(m); assert(m->audio==-1 && audio_closed==1);
+    assert(audio_producer(m,&producer)==-EBADF);
     fail_control=1; assert(audio_open(m,&rate)==-ENODEV && m->audio==-1 && audio_closed==2); fail_control=0;
     assert(!master_get(m,&rate) && rate==80);
     assert(!master_set(m,50) && m->app.waiting);

@@ -340,6 +340,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         break;
     case CIUKI_INPUT_TEXT: route(d, d->focus, DESK_KEY, &e); break;
     case CIUKI_INPUT_WHEEL:
+        if (d->shell && desk_shell_wheel(d, e.value)) break;
         route(d, d->focus, DESK_MOTION, &e);
         if (e.source==3 && e.value && d->usb_wheel_records<16) {
             char record[64];

@@ -94,7 +94,7 @@ static void play(const char *path)
 {
     struct device d={0}; reference(path,&d); atomic_store(&stalls,0); atomic_store(&bulk_reads,0);
     atomic_store(&stall_enabled,1);
-    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d,output_refill};
+    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d,output_refill,NULL};
     struct music_runtime *rt=music_runtime_start(&out); assert(rt);
     struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path); assert(!music_runtime_send(rt,&c));
     struct music_snapshot *s=calloc(1,sizeof(*s)); assert(s); uint64_t previous=0, start=ns(); int playing=0;
@@ -130,7 +130,7 @@ static void starvation(const char *path)
     /* Deliberately exceed the reservoir; writer/status/UI must keep moving,
      * then resume with the exact original PCM, with no stale-slot replay. */
     struct device d={0}; reference(path,&d); atomic_store(&stall_enabled,0);
-    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d,output_refill};
+    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d,output_refill,NULL};
     struct music_runtime *rt=music_runtime_start(&out); assert(rt);
     struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path); assert(!music_runtime_send(rt,&c));
     struct music_snapshot *s=calloc(1,sizeof(*s)); assert(s); uint64_t start=ns();

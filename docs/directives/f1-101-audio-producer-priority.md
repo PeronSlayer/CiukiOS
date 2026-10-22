@@ -11,3 +11,17 @@
 3. Host tests: a decoder thread under a 50 % interactive load keeps the reservoir above one period on the T23 replay model; the budget bound; `test_kernel_latency` with zero refill overruns; the player's level record.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-101-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 19:13, decisions on the delivery)
+
+1. Threshold: "behind" means more than one period below the 1792-frame
+   target (behind below 1536, clear at 1792), as delivered.
+2. Budget stays at 20 ms per 100 ms: the gaps that remain at the trial's
+   decoder cost (140 instead of 413 starvations) are a decoder-cost problem,
+   handled by directive f4-37; the budget is re-measured after it.
+3. Prefill 1 s with a 500 ms reservoir target is accepted: the f1-87 2 s
+   requirement was set against 1.5 s volume holds that f1-93/f1-93b removed
+   (longest hold in the last trial 294 ms, replay gate 20 ms).
+4. A program that keeps a short lead on purpose can trigger the boost; the
+   shared 20 % budget bounds it. Per-stream fairness is a follow-up.
+5. R2/R3 of the resource contract are amended by the lead.

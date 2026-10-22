@@ -110,6 +110,172 @@ static struct task *last_measured;
 static bool last_preempted;
 uint64_t g_idle_ticks;
 
+/* f1-101 (R2/R3): audio producer boost. A Windows wave-out feeder may run at
+ * THREAD_PRIORITY_TIME_CRITICAL (15, any non-realtime class) and, since
+ * Vista, MMCSS raises registered audio threads while SystemResponsiveness
+ * keeps 20 % of the CPU for everything else (Microsoft Learn, "Scheduling
+ * Priorities", "Multimedia Class Scheduler Service"); both are requests made
+ * by the application. Here the mixer reports a native stream behind its
+ * target lead (audio.h AUDIO_PRODUCER_*), and the kernel raises that
+ * stream's writer and its declared refill reader to the device band's lower
+ * edge until the lead is refilled. Every producer shares one budget:
+ * PRODUCER_BUDGET_MS of boosted CPU in any PRODUCER_WINDOW ms; at the limit
+ * each boost is withheld until the window slides. Boosted CPU is neither
+ * device service nor the refill's own budget (f1-90), and a boosted waiter
+ * lends lock holders at most SCHED_BOOST_CAP (task_donor_priority).
+ * Evidence: docs/validation/f1-101-audio-producer-priority.md. */
+#define PRODUCER_SOURCES 8u          /* AUDIO_STREAMS */
+#define PRODUCER_WINDOW 100u         /* ticks (ms), one slot each */
+#define PRODUCER_BUDGET_MS 20u
+struct producer_source {
+    const void *key;                 /* the stream; identity only */
+    struct task *task[SCHED_PRODUCER_ROLES];
+    bool behind, boosted, withheld;
+    uint32_t boosts, over_budget;
+    uint64_t cycles;
+};
+static struct producer_source producer_sources[PRODUCER_SOURCES];
+static uint32_t producer_cpu[PRODUCER_WINDOW];
+static uint64_t producer_cpu_total, producer_tick, producer_scale = 1;
+static unsigned producer_slot;
+static bool producer_over;
+/* False only in the replay's negative control (the pre-f1-101 scheduler). */
+static bool audio_producer = true;
+static void priority_update(struct task *t);
+static uint64_t producer_budget(void) { return (uint64_t)PRODUCER_BUDGET_MS * producer_scale; }
+static bool producer_turn(const struct task *t)
+{ return t->producer_priority && t->effective_priority == t->producer_priority; }
+static struct producer_source *producer_find(const void *key)
+{
+    for (unsigned i = 0; i < PRODUCER_SOURCES; i++)
+        if (producer_sources[i].key == key) return &producer_sources[i];
+    return 0;
+}
+static bool producer_registered_behind(const struct task *t)
+{
+    for (unsigned i = 0; i < PRODUCER_SOURCES; i++) {
+        const struct producer_source *s = &producer_sources[i];
+        if (s->key && s->behind)
+            for (unsigned r = 0; r < SCHED_PRODUCER_ROLES; r++) if (s->task[r] == t) return true;
+    }
+    return false;
+}
+/* Recompute one producer's boost; report grants and budget withholdings. */
+static void producer_apply(struct task *t)
+{
+    bool was_behind = t->producer_behind;
+    unsigned before = t->producer_priority;
+    t->producer_behind = producer_registered_behind(t);
+    priority_update(t);
+    if (!cpu_audio_producer) return;
+    if (!before && t->producer_priority) cpu_audio_producer(t, 1, 0, 0);
+    else if (producer_over && t->producer_behind && !t->producer_priority && (before || !was_behind))
+        cpu_audio_producer(t, 0, 1, 0);
+}
+static void producer_source_update(struct producer_source *s)
+{
+    bool boosted = s->behind && audio_producer && !producer_over;
+    bool withheld = s->behind && audio_producer && producer_over;
+    if (boosted && !s->boosted) s->boosts++;
+    if (withheld && !s->withheld) s->over_budget++;
+    s->boosted = boosted; s->withheld = withheld;
+    for (unsigned r = 0; r < SCHED_PRODUCER_ROLES; r++) if (s->task[r]) producer_apply(s->task[r]);
+}
+static void producer_refresh_all(void)
+{
+    for (unsigned i = 0; i < PRODUCER_SOURCES; i++)
+        if (producer_sources[i].key) producer_source_update(&producer_sources[i]);
+    g_need_resched = true;
+}
+/* Slide the 100 ms window; the boosts return once a tick of budget is free. */
+static void producer_advance(void)
+{
+    uint64_t elapsed = g_ticks - producer_tick;
+    if (elapsed) {
+        if (elapsed >= PRODUCER_WINDOW) { /* also a clock that moved backwards */
+            memset(producer_cpu, 0, sizeof(producer_cpu));
+            producer_cpu_total = 0; producer_slot = 0;
+        } else while (elapsed--) {
+            if (++producer_slot == PRODUCER_WINDOW) producer_slot = 0;
+            producer_cpu_total -= producer_cpu[producer_slot];
+            producer_cpu[producer_slot] = 0;
+        }
+        producer_tick = g_ticks;
+    }
+    if (producer_over && producer_cpu_total + producer_scale <= producer_budget()) {
+        producer_over = false; producer_refresh_all();
+    }
+}
+static void producer_charge(struct task *t, uint64_t cycles, uint64_t scale)
+{
+    if (producer_scale != scale) {
+        memset(producer_cpu, 0, sizeof(producer_cpu));
+        producer_cpu_total = 0; producer_slot = 0; producer_tick = g_ticks; producer_scale = scale;
+    }
+    producer_advance();
+    uint32_t *slot = &producer_cpu[producer_slot];
+    uint64_t add = cycles < UINT32_MAX - *slot ? cycles : UINT32_MAX - *slot;
+    *slot += (uint32_t)add; producer_cpu_total += add;
+    for (unsigned i = 0; i < PRODUCER_SOURCES; i++) {
+        struct producer_source *s = &producer_sources[i];
+        if (s->key && s->boosted)
+            for (unsigned r = 0; r < SCHED_PRODUCER_ROLES; r++) if (s->task[r] == t) { s->cycles += cycles; break; }
+    }
+    if (cpu_audio_producer) cpu_audio_producer(t, 0, 0, cycles);
+    if (!producer_over && producer_cpu_total >= producer_budget()) {
+        producer_over = true; producer_refresh_all();
+    }
+}
+void sched_audio_producer(const void *source, struct task *t, unsigned role)
+{
+    if (!source || !t || role >= SCHED_PRODUCER_ROLES) return;
+    uint32_t f = irq_save();
+    struct producer_source *s = producer_find(source);
+    if (!s && (s = producer_find(0))) { memset(s, 0, sizeof(*s)); s->key = source; }
+    if (s && s->task[role] != t) {
+        struct task *old = s->task[role];
+        s->task[role] = t;
+        if (old) producer_apply(old);
+        producer_apply(t);
+    }
+    irq_restore(f);
+}
+void sched_audio_lead(const void *source, bool behind)
+{
+    uint32_t f = irq_save();
+    struct producer_source *s = source ? producer_find(source) : 0;
+    if (s && s->behind != behind) {
+        if (producer_over) producer_advance();
+        s->behind = behind;
+        producer_source_update(s);
+    }
+    irq_restore(f);
+}
+void sched_audio_source_end(const void *source)
+{
+    uint32_t f = irq_save();
+    struct producer_source *s = source ? producer_find(source) : 0;
+    if (s) {
+        struct producer_source old = *s;
+        memset(s, 0, sizeof(*s));
+        for (unsigned r = 0; r < SCHED_PRODUCER_ROLES; r++) if (old.task[r]) producer_apply(old.task[r]);
+    }
+    irq_restore(f);
+}
+void sched_audio_producer_stats(const void *source, struct sched_producer_stats *out)
+{
+    uint32_t f = irq_save();
+    memset(out, 0, sizeof(*out));
+    struct producer_source *s = source ? producer_find(source) : 0;
+    out->cycles_per_ms = producer_scale;
+    if (s) {
+        out->flags = (s->behind ? SCHED_PRODUCER_BEHIND : 0) | (s->boosted ? SCHED_PRODUCER_BOOSTED : 0) |
+            (s->withheld ? SCHED_PRODUCER_OVER : 0);
+        out->boosts = s->boosts; out->over_budget = s->over_budget; out->boost_cycles = s->cycles;
+        for (unsigned r = 0; r < SCHED_PRODUCER_ROLES; r++) if (s->task[r]) out->producers++;
+    }
+    irq_restore(f);
+}
 static void rq_remove(struct task *t)
 {
     unsigned p = t->effective_priority;
@@ -359,7 +525,10 @@ void sched_share_snapshot(struct sched_share_stats *out)
 void sched_charge_runtime(struct task *t, uint64_t cycles, uint64_t scale)
 {
     if (t && share_member(t) && cycles && scale) share_charge(t, cycles, scale);
-    if (!t || !cycles || !scale || t->effective_priority < SCHED_SERVICE_MIN) return;
+    if (!t || !cycles || !scale) return;
+    /* f1-101: boosted producer CPU has its own budget; it is not device service. */
+    if (producer_turn(t)) { producer_charge(t, cycles, scale); return; }
+    if (t->effective_priority < SCHED_SERVICE_MIN) return;
     if (device_cpu_scale != scale) {
         memset(device_cpu, 0, sizeof(device_cpu));
         device_cpu_total = 0; device_cpu_scale = scale;
@@ -400,15 +569,21 @@ static void priority_update(struct task *t)
         unsigned io = t->base_priority + 1;
         t->io_priority = io > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : io;
     }
+    /* f1-101: a producer behind its stream's lead, within the budget. */
+    unsigned producer = t->producer_behind && audio_producer && !producer_over &&
+        t->prio != P_DEVICE && t->prio != P_IDLE ? SCHED_AUDIO_PRODUCER : 0;
     unsigned p = t->device_demoted ? CIUKI_SCHED_NORMAL : t->base_priority;
     if (t->input_priority > p) p = t->input_priority;
     if (t->io_priority > p) p = t->io_priority;
+    if (producer > p) p = producer;
     if (t->boosted && p < SCHED_BOOST_CAP) p = SCHED_BOOST_CAP;
     if (t->inherited_priority > p) p = t->inherited_priority;
-    if (p == t->effective_priority) return;
+    if (p == t->effective_priority) { t->producer_priority = (uint8_t)producer; return; }
     /* Close the old service interval before donation/boost withdrawal;
-     * otherwise a short inherited turn could disappear at unlock. */
+     * otherwise a short inherited turn could disappear at unlock. The
+     * producer level changes after it, so the interval keeps its budget. */
     if (t == g_current && cpu_account) cpu_account();
+    t->producer_priority = (uint8_t)producer;
     if (t->state == T_READY) rq_remove(t);
     t->effective_priority = p;
     if (t->state == T_READY) rq_link(t);
@@ -927,7 +1102,8 @@ void sched_tick(void)
 {
     bool was_throttled = device_throttled();
     device_cpu_advance();
-    bool charged = g_current && g_current->effective_priority >= SCHED_SERVICE_MIN;
+    bool charged = g_current && g_current->effective_priority >= SCHED_SERVICE_MIN &&
+        !producer_turn(g_current); /* f1-101: a boosted producer is ordinary CPU */
     /* An audio-class sample belongs to its own CPU budget, not the shared one. */
     bool shared = charged && !(device_attribution && g_current->audio_class);
     if (device_history & (1u << 9)) device_used--;
@@ -965,6 +1141,7 @@ void sched_tick(void)
         device_cpu_refresh = true; g_need_resched = true;
     }
     if (audio_over) device_audio_poll(); /* own-budget recovery */
+    if (producer_over) producer_advance(); /* f1-101: producer budget recovery */
     if (g_current == idle_task) {
         g_idle_ticks++;
         if (rq_any()) g_need_resched = true;
@@ -1006,6 +1183,14 @@ void task_sleep_ms(uint32_t ms)
     schedule();
 }
 
+/* An exiting task leaves every producer table entry (no pointer survives). */
+static void producer_task_gone(struct task *t)
+{
+    for (unsigned i = 0; i < PRODUCER_SOURCES; i++)
+        for (unsigned r = 0; r < SCHED_PRODUCER_ROLES; r++)
+            if (producer_sources[i].task[r] == t) producer_sources[i].task[r] = 0;
+    t->producer_behind = false; t->producer_priority = 0;
+}
 void task_exit(int code)
 {
     cli();
@@ -1018,6 +1203,7 @@ void task_exit(int code)
     if (!native)
         fpu_task_release(t);
     t->state = T_ZOMBIE;
+    producer_task_gone(t); /* f1-101 */
     schedule();
     panic("task_exit: zombie %s was scheduled", t->name);
 }
@@ -1040,6 +1226,7 @@ void task_kill(struct task *t, int code)
         ksync_task_exit(t);
         if (t->state == T_READY) rq_remove(t);
         t->state = T_ZOMBIE;
+        producer_task_gone(t); /* f1-101 */
         if (!native)
             fpu_task_release(t);
     }
@@ -1083,6 +1270,7 @@ void task_reap(struct task *t)
     ktimer_cancel(&t->wake_timer);
     ktimer_cancel(&t->input_timer);
     ktimer_cancel(&t->ready_timer);
+    producer_task_gone(t); /* f1-101: defensive, already done at exit */
     g_task_count--;
     if (last_measured == t) last_measured = 0;
     if (cpu_reap) cpu_reap(t);

@@ -92,7 +92,8 @@ class MusicTests(unittest.TestCase):
             self.assertGreaterEqual(len(levels), 4)
             for record in levels:
                 self.assertRegex(record, r'ms=\d+ reservoir=\d+/\d+/\d+ reader_fps=\d+ decode_us_frame=\d+\.\d{3} '
-                                 r'writes_ps=\d+ bytes=\d+ queued=\d+/\d+ starvations=\d+ ui_mps=\d+ repaint_mps=\d+$')
+                                 r'writes_ps=\d+ bytes=\d+ queued=\d+/\d+ starvations=\d+ ui_mps=\d+ repaint_mps=\d+ '
+                                 r'boost=\d+ boosts=\d+ boost_ms=\d+ over=\d+$')
             print('Real-codec telemetry:', levels[0])
             self.assertIn('[music] close starvations=1', result.stderr)
             self.assertTrue(all(len(line) <= 240 for line in result.stderr.splitlines()))
