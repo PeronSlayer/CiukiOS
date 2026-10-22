@@ -454,3 +454,9 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-104-nvidia-tnt-gf4](f2-104-nvidia-tnt-gf4.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: NVIDIA TNT–GeForce4 with transport contract first) |
 | [f2-110-matrox-g200-g550](f2-110-matrox-g200-g550.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: Matrox G200–G550) |
 | [f2-107-intel-i830-i915](f2-107-intel-i830-i915.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 00:40 (family port: Intel i830–i915G with ring/GTT contract first) |
+| [f2-106-radeon-r200-r400](f2-106-radeon-r200-r400.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: Radeon R200/R300/R420 on f2-103) |
+| [f2-108-via-unichrome](f2-108-via-unichrome.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: VIA UniChrome) |
+| [f2-109-sis-300-315-330](f2-109-sis-300-315-330.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: SiS 300/315/330) |
+| [f2-112-savage-family-completion](f2-112-savage-family-completion.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: Savage family completion) |
+| [f2-117-3dfx-voodoo3-5](f2-117-3dfx-voodoo3-5.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: 3dfx Voodoo3/VSA-100) |
+| [f2-118-s3-trio64-virge](f2-118-s3-trio64-virge.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: S3 Trio64/ViRGE) |
