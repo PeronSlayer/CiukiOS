@@ -12,3 +12,15 @@
 4. Host tests: damage-region compositing golden frames unchanged, the frame-rate cap, the input wake, the CPU model.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f2-95-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 18:38, owner decision)
+
+The owner approved the lead's recommendation (2026-10-22 ~18:00): no port of
+a window system (X.Org, Wayland, DirectFB, Microwindows); the compositor is
+rebuilt on the Windows 98 / X11 model — clipped, region-driven updates and
+never a full-frame composition — reusing under MIT licence the X11 region
+algorithms (xorg `miregion.c` / pixman `pixman-region32.c`) and pixman's
+software blit/fill fast paths (MMX on the Pentium III) where they drop in,
+pinned under `third_party/` with their notices and recorded in the desktop
+design document. The budget criteria of this directive stay the gate for the
+next image.
