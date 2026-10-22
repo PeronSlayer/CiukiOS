@@ -203,17 +203,17 @@ class IconStoreTests(unittest.TestCase):
         table = {l.split()[0]: l.split()[1] for l in self.harness("map").splitlines()}
         shell = (ROOT / "apps/desktop/shell.c").read_text()
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
-        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer)", (?:NULL|"[^"]*")\}', shell)
+        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 25)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
-        self.assertEqual(len(accessories), 10)  # f2-52 Graphics Demo
+        self.assertEqual(len(programs), 26)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
+        self.assertEqual(len(accessories), 11)  # f2-52 Graphics Demo
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         # f6-19: native application records (name, label, Tango icon, description) agree
         # with the shell's menu row (Programs root) and the icon map; NetSurf is the browser.
         applications = re.findall(r'\{"(\w+)", "([^"]+)", "([a-z-]+)", "([^"]+)"\},', catalog.split("desk_applications[]", 1)[1].split("};", 1)[0])
         self.assertEqual(applications, [("netsurf", "NetSurf", "internet-web-browser", "Web browser")])
-        rows_by_name = {m[0]: m for m in re.findall(r'\{"(\w+)", "([^"]+)", "([a-z-]+)", "(programs|accessories|developer)", (?:NULL|"[^"]*")\}', shell)}
+        rows_by_name = {m[0]: m for m in re.findall(r'\{"(\w+)", "([^"]+)", "([a-z-]+)", "(programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)}
         for name, label, tango, _ in applications:
             self.assertEqual(rows_by_name[name], (name, label, tango, "programs"), name)
             self.assertEqual(table[f"program:{name}"], tango, name)
@@ -226,7 +226,7 @@ class IconStoreTests(unittest.TestCase):
         self.assertEqual(len(applets),10)  # f5-09 Add/Remove Programs
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
-                   "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
+                   "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
                    "Developer": "menu:development", "Control Panel": "menu:control-panel", "My Documents": "place:home",
                    "Add/Remove Programs": "type:executable", "Display": "settings:display", "Mouse": "settings:mouse", "Keyboard": "settings:keyboard",
                    "Sounds and Audio": "settings:sound", "Date and Time": "settings:date-time", "Task Manager": "program:tasks",

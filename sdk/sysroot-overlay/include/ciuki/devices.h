@@ -11,4 +11,7 @@ int ciuki_devices(struct ciuki_devices_info *info);
 /* Version 2, exact sizeof(*page), cursor/generation paging; same call 76.
  * No firmware calls occur during this query. */
 int ciuki_firmware_inventory(struct ciuki_firmware_page *page);
+/* Version 3, exact sizeof(*info); read-only SMBIOS/map/CPUID identity and
+ * a bounded boot-log snapshot. No firmware evaluation or device activation. */
+int ciuki_hardware_inventory(struct ciuki_hardware_info *info);
 #endif

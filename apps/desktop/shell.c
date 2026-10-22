@@ -251,6 +251,7 @@ static const struct program_info programs[] = {
     {"clock", "Clock", "appointment-new", "accessories", NULL},
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
+    {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
     {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
     {"hello", "Hello", "face-smile", "developer", NULL},
@@ -348,22 +349,31 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (unsigned k=0;k<d->v3_link_count && preview<8;k++) if (!d->v3_links[k].desktop) {
             item(m,d->v3_links[k].launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0); preview++;
         }
-        int developer = 0, accessories = 0;
+        int developer = 0, accessories = 0, system_tools = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
             if (at < 0 && !(programs[k].target && d->v3_launch)) continue;
+            if (!strcmp(programs[k].category, "system-tools")) { system_tools = 1; continue; }
             if (!strcmp(programs[k].category, "accessories")) { accessories = 1; continue; }
             if (strcmp(programs[k].category, "programs")) { developer = 1; continue; }
             item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
         for (unsigned k = 0; k < d->program_count; k++) if (!program_find(d->programs[k].name)) developer = 1;
         if (!m->count) item(m, "(No programs)", NULL, SH_ACT_NONE, 0, SH_ITEM_DISABLED);
+        if (system_tools) item(m, "System Tools", "applications-system", SH_ACT_SUBMENU, SH_MENU_SYSTEM_TOOLS, 0);
         if (accessories) item(m, "Accessories", "applications-accessories", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
         /* The bundled shareware games run in a DOS Box window (catalog.h desk_games). */
         if (program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
         if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
         break;
     }
+    case SH_MENU_SYSTEM_TOOLS:
+        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
+            int at = program_index(d, programs[k].name);
+            if (at >= 0 && !strcmp(programs[k].category, "system-tools"))
+                item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
+        }
+        break;
     case SH_MENU_ACCESSORIES:
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);

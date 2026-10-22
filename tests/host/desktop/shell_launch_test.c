@@ -945,6 +945,28 @@ static const char *netsurf_icon_request;
 static uint32_t netsurf_icon_pixels[48*48];
 static const uint32_t *netsurf_store(const char *name,unsigned size)
 { (void)size; netsurf_icon_request=name; return netsurf_icon_pixels; }
+static void test_hwreport_menu(void)
+{
+    static struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    desk_program_add(&d,"hwreport",elf,sizeof(elf));
+    assert(desk_program_graphical("hwreport") && !desk_catalog_takes_file("hwreport"));
+    assert(!strcmp(desk_program_category("hwreport"),"system-tools"));
+    assert(!strcmp(desk_program_label("hwreport"),"Hardware Report"));
+    desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
+    int row=item_at(&d.sh.menus[0],"System Tools");
+    assert(row>=0 && d.sh.menus[0].items[row].arg==SH_MENU_SYSTEM_TOOLS);
+    assert(item_at(&d.sh.menus[0],"Developer")<0);
+    desk_menu_close(&d); desk_menu_open(&d,SH_MENU_SYSTEM_TOOLS,0,0);
+    row=item_at(&d.sh.menus[0],"Hardware Report");
+    assert(row>=0 && d.sh.menus[0].items[row].action==SH_ACT_LAUNCH);
+    assert(!strcmp(d.sh.menus[0].items[row].icon,"preferences-system"));
+    desk_menu_close(&d); desk_menu_open(&d,SH_MENU_DEVELOPER,0,0);
+    assert(item_at(&d.sh.menus[0],"Hardware Report")<0);
+    desk_menu_close(&d); desk_render_release(&d); fake_reset();
+    puts("PASS Hardware Report: Programs > System Tools, graphical grant, identity icon and file exclusion");
+}
 static void test_netsurf_record(void)
 {
     const struct desk_application_entry *app=desk_application_find("netsurf");
@@ -1339,6 +1361,7 @@ int main(int argc,char **argv)
     test_cd_player_menu();
     test_games_menu();
     test_menu_icons();
+    test_hwreport_menu();
     test_netsurf_record();
     test_launch_timing();
     test_wallpaper_startup();

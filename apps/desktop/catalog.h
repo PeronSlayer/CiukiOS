@@ -10,6 +10,7 @@
 struct desk_catalog_entry { const char *name, *label, *tango; int takes_file; const char *extensions; };
 static const struct desk_catalog_entry desk_catalog[] = {
     {"gfxdemo", "Graphics Demo", "applications-graphics", 0, ""},
+    {"hwreport", "Hardware Report", "preferences-system", 0, ""},
     {"regedit", "Registry Editor", "preferences-system", 0, ""},
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},

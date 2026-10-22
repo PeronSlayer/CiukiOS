@@ -647,4 +647,27 @@ static void statistic_budget(void)
     puts("PASS bootlog f0-56: statistic budget 40 lines/2 s (8 per kind) with one summary line, protected classes survive a flood and a saturated queue, 3 x 2.75 MiB retention, producers never block on disk");
 }
 
-int main(void) { statistic_budget(); stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+static void report_snapshot(void)
+{
+    reset_model();
+    char out[4104]; memset(out,'X',sizeof(out));
+    uint32_t position,dropped; size_t length;
+    for (unsigned i=1;i<=20;i++) {
+        char line[64]; int n=snprintf(line,sizeof(line),"[ata] count=%u\n",i);
+        bootlog_capture_ring(line,(size_t)n);
+    }
+    unsigned before_calls=calls, before_head=head, before_tail=tail, before_used=used;
+    CHECK(!bootlog_report_snapshot(&position,&dropped,out,4096,&length));
+    CHECK(length && length<=4096 && !memcmp(out,"[ata] count=1\n",14));
+    out[length]=0; CHECK(strstr(out,"[ata] count=20\n"));
+    CHECK(calls==before_calls && head==before_head && tail==before_tail && used==before_used);
+    for (unsigned i=4096;i<sizeof(out);i++) CHECK(out[i]=='X');
+    CHECK(!bootlog_report_snapshot(&position,&dropped,out,16,&length) && length==15);
+    CHECK(!memcmp(out,"[ata] count=20\n",15));
+    CHECK(!bootlog_report_snapshot(&position,&dropped,out,1,&length) && !length);
+    stats.active=true; ring_position=BOOTLOG_PROTECTED+8192;
+    CHECK(bootlog_report_snapshot(&position,&dropped,out,4096,&length) && position==BOOTLOG_PROTECTED+8192);
+    stats.active=false; reset_model();
+    puts("PASS bootlog report: newest whole pending slices, publication order, fixed cap, wrap position, no consume/watermark/storage mutation");
+}
+int main(void) { report_snapshot();statistic_budget(); stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

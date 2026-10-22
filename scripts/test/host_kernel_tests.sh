@@ -100,6 +100,7 @@ clang "${abi_flags[@]}" -I "$root/src/kernel/include" \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
     -fsanitize=address,undefined -fno-sanitize-recover=undefined -I "$root/src/kernel/include" \
     "$root/tests/host/devices_test.c" -Wl,--gc-sections -o "$out/devices_test"
+python3 -B -m unittest discover -s "$root/tests/host" -p test_hwreport.py
 "$out/devices_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

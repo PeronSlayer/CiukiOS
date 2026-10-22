@@ -55,8 +55,9 @@ struct thinkpad_ec_smbios {
     uint8_t major, minor;
     bool valid, has_system, has_bios, eligible, hint, qemu;
     char vendor[48], product[48], version[48];
-    char bios_vendor[48], bios_version[48];
+    char bios_vendor[48], bios_version[48], bios_date[48];
 };
+void thinkpad_ec_smbios_snapshot(struct thinkpad_ec_smbios *);
 bool thinkpad_ec_smbios_decode(const uint8_t *table, size_t length, struct thinkpad_ec_smbios *);
 void thinkpad_ec_smbios_log(const struct thinkpad_ec_smbios *);
 bool thinkpad_ec_gate(const struct thinkpad_ec_smbios *, uint32_t boot_flags);

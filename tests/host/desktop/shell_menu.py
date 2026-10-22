@@ -27,6 +27,7 @@ import sys
 
 PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "music", "viewer", "paint", "terminal"]
 ACCESSORIES = ["calc", "gfxdemo", "charmap", "clock", "help", "mixer", "viewer", "regedit"]
+SYSTEM_TOOLS = ["hwreport"]
 SCREEN_W, SCREEN_H = 1024, 768
 ORB = json.loads((Path(__file__).resolve().parents[3] / "apps/desktop/start-orb.json").read_text())
 TOP_BAR = ORB["bar_height"]
@@ -59,8 +60,9 @@ def program_row(programs, name):
 def submenu_height(programs):
     rows = sum(p in programs for p in PROGRAM_ORDER)
     rows += any(p in programs for p in ACCESSORIES)
+    rows += any(p in programs for p in SYSTEM_TOOLS)
     rows += "dosbox" in programs                  # Games (shell.c SH_MENU_GAMES)
-    developer = any(p not in PROGRAM_ORDER and p not in ACCESSORIES for p in programs)
+    developer = any(p not in PROGRAM_ORDER and p not in ACCESSORIES and p not in SYSTEM_TOOLS for p in programs)
     return 6 + (rows + developer) * SUB_ROW + (SEPARATOR if developer else 0)
 
 
