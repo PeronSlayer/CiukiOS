@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -206,6 +207,42 @@ static int decode(void *ctx, const char *path, struct desk_image *out)
     int r = data ? desk_image_decode(data, n, out) : -1;
     free(data);
     return r;
+}
+/* f2-88: wallpaper preview decode runs on its own thread; the UI thread (which answers the desktop's
+ * heartbeat) only starts and polls it. Decoding the default scene takes seconds on the T23. */
+static struct { pthread_mutex_t lock; int state; char path[128]; struct desk_image image; } decoder = {.lock = PTHREAD_MUTEX_INITIALIZER};
+static void *decode_run(void *arg)
+{
+    (void)arg;
+    char path[128]; struct desk_image image = {0};
+    pthread_mutex_lock(&decoder.lock); snprintf(path, sizeof(path), "%s", decoder.path); pthread_mutex_unlock(&decoder.lock);
+    if (decode(NULL, path, &image)) memset(&image, 0, sizeof(image));
+    pthread_mutex_lock(&decoder.lock); decoder.image = image; decoder.state = 2; pthread_mutex_unlock(&decoder.lock);
+    return NULL;
+}
+static int decode_begin(void *ctx, const char *path)
+{
+    (void)ctx; pthread_t t; int r = 0;
+    pthread_mutex_lock(&decoder.lock);
+    if (decoder.state) r = -EBUSY;
+    else { snprintf(decoder.path, sizeof(decoder.path), "%s", path); decoder.state = 1; }
+    pthread_mutex_unlock(&decoder.lock);
+    if (r) return r;
+    r = pthread_create(&t, NULL, decode_run, NULL);
+    if (r) { pthread_mutex_lock(&decoder.lock); decoder.state = 0; pthread_mutex_unlock(&decoder.lock); return -r; }
+    pthread_detach(t);
+    return 0;
+}
+static int decode_poll(void *ctx, char *path, size_t size, struct desk_image *out)
+{
+    (void)ctx; int done = 0;
+    if (pthread_mutex_trylock(&decoder.lock)) return 0;
+    if (decoder.state == 2) {
+        snprintf(path, size, "%s", decoder.path); *out = decoder.image;
+        memset(&decoder.image, 0, sizeof(decoder.image)); decoder.state = 0; done = 1;
+    }
+    pthread_mutex_unlock(&decoder.lock);
+    return done;
 }
 static int mixer(void *ctx, int *volume, int *muted)
 {
@@ -435,7 +472,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
-    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;

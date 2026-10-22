@@ -87,6 +87,9 @@ static int boot_wall_worker_start(struct desk_wall_worker *w,const char *dir,voi
                                boot_cache_directory ? boot_wall_stage : stage); }
 static void boot_sound_init(struct desktop *d)
 { if (!boot_cache_directory) desk_sound_init(d); }
+static int boot_wall_preload(const struct desk_wall_request *r,const char *dir,uint32_t **out,void (*stage)(const char *))
+{ return desk_wall_preload(r,boot_cache_directory ? boot_cache_directory : dir,out,boot_cache_directory ? boot_wall_stage : stage); }
+#define desk_wall_preload boot_wall_preload
 #define cfg_writer_start boot_cfg_writer_start
 #define desk_wall_worker_start boot_wall_worker_start
 #define fm_native_vfs boot_native_vfs

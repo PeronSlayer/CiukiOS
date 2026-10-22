@@ -166,9 +166,23 @@ static void preview_build(struct cp_app *a)
          * fill of the 1448x1086 default scene followed by a 1024x768 -> 192x144
          * downscale took seconds under TCG and the window opened black
          * (lead fix, 2026-10-12). */
+        if (a->host.decode_begin && (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path))) &&
+            strncmp(a->decode_failed, a->cfg.wallpaper, sizeof(a->decode_failed))) {
+            /* Worker decode: show the desktop colour now, poll on a short timer, never block the UI thread. */
+            if (!a->decode_wait && !a->host.decode_begin(a->host.ctx, a->cfg.wallpaper)) {
+                a->decode_wait = 1; snprintf(a->decode_path, sizeof(a->decode_path), "%s", a->cfg.wallpaper);
+                du_timer_start(a->ui, CP_T_PREVIEW, 50000000ull, 1);
+            }
+            if (a->decode_wait) {
+                for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
+                a->preview_valid = 1;
+                return;
+            }
+        }
         if (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path))) {
             desk_image_free(&a->image);
-            if (a->host.decode) a->host.decode(a->host.ctx, a->cfg.wallpaper, &a->image);
+            if (a->host.decode && strncmp(a->decode_failed, a->cfg.wallpaper, sizeof(a->decode_failed)))
+                a->host.decode(a->host.ctx, a->cfg.wallpaper, &a->image);
             snprintf(a->image_path, sizeof(a->image_path), "%s", a->cfg.wallpaper);
         }
         uint32_t bar = sh ? (32u * 144u) / sh : 6;
@@ -403,6 +417,23 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (a->display_write && e->type != DU_EV_TICK) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
+    if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW && a->decode_wait) {   /* worker decode: poll */
+        struct desk_image done = {0}; char path[128] = "";
+        if (!a->host.decode_poll || a->host.decode_poll(a->host.ctx, path, sizeof(path), &done) <= 0) {
+            if (!a->host.decode_poll) a->decode_wait = 0;
+            return;
+        }
+        du_timer_stop(u, CP_T_PREVIEW); a->decode_wait = 0;
+        if (done.pixels && !strncmp(path, a->cfg.wallpaper, sizeof(path))) {
+            desk_image_free(&a->image); a->image = done;
+            snprintf(a->image_path, sizeof(a->image_path), "%s", path);
+        } else {
+            if (!done.pixels) snprintf(a->decode_failed, sizeof(a->decode_failed), "%s", path);
+            desk_image_free(&done);
+        }
+        a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;   /* repaint: renders, or starts the next path */
+        return;
+    }
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
         a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;
         return;
