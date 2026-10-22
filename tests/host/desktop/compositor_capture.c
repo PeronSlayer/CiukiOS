@@ -100,8 +100,17 @@ int main(int argc,char **argv)
             int row = !strcmp(mode,"start") ? 0 : !strcmp(mode,"documents") ? 1 : 2;
             hover(d,60,m.y+3+row*SH_START_ROW+14);
             if (!strcmp(mode,"start")) { hover(d,m.x+m.w+40,m.y+3+14); hover(d,m.x+m.w+40,m.y+3+14+SH_SUB_ROW); }
-        } else if (!strcmp(mode,"about-general") || !strcmp(mode,"about-system") || !strcmp(mode,"about-credits")) {
+        } else if (!strcmp(mode,"about-general") || !strcmp(mode,"about-system") || !strncmp(mode,"about-credits",13)) {
             desk_about(d); d->sh.about_tab = !strcmp(mode,"about-general") ? 0 : !strcmp(mode,"about-system") ? 1 : 2;
+            strcpy(d->version,"1.0.0 alpha");
+            if (!strcmp(mode,"about-credits-end") || !strcmp(mode,"about-credits-wheel") || !strcmp(mode,"about-credits-pgdn")) {
+                /* f2-97: the real input paths of the scrollable credits (keyboard and wheel). */
+                struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=0x14f,.value=1};
+                if (!strcmp(mode,"about-credits-pgdn")) e.code=0x151;
+                if (!strcmp(mode,"about-credits-wheel")) { e.type=CIUKI_INPUT_WHEEL; e.code=0; e.value=-2; desk_input(d,&e); e.value=-1; }
+                desk_input(d,&e);
+                if (e.type==CIUKI_INPUT_KEY) { e.value=0; desk_input(d,&e); }
+            }
         } else if (!strcmp(mode,"run")) {
             desk_internal_open(d,DESK_INTERNAL_RUN); strcpy(d->sh.run_text,"lua /system/tests/ciuki-f2.lua"); d->sh.run_length=(unsigned)strlen(d->sh.run_text);
         } else if (!strcmp(mode,"shutdown")) {
