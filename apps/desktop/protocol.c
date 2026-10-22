@@ -4,6 +4,13 @@
 #include "sounds.h"
 #include <limits.h>
 #include <string.h>
+/* Bounded NUL check; the freestanding Win32 user32 build of this file has
+ * no memchr (lead fix 2026-10-23 after the f2-101b kernel-suite run). */
+static int has_nul(const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++) if (!s[i]) return 1;
+    return 0;
+}
 uint32_t desk_get32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
@@ -347,9 +354,9 @@ int desk_parse(const struct ciuki_message *m, int client,
             p->engine.capabilities>3 || p->engine.quarantined>1 || p->engine.ready>1 ||
             p->engine.native_used>1 || p->engine.cpu_ready>1 ||
             p->engine.software_operations!=CIUKI_ENGINE_SOFTWARE_OPERATIONS ||
-            !memchr(p->engine.driver_id,0,sizeof(p->engine.driver_id)) ||
-            !memchr(p->engine.display_name,0,sizeof(p->engine.display_name)) ||
-            !memchr(p->engine.reason,0,sizeof(p->engine.reason))) return 0;
+            !has_nul(p->engine.driver_id,sizeof(p->engine.driver_id)) ||
+            !has_nul(p->engine.display_name,sizeof(p->engine.display_name)) ||
+            !has_nul(p->engine.reason,sizeof(p->engine.reason))) return 0;
         p->accelerator.driver=p->engine.kind==CIUKI_ENGINE_NATIVE ? CIUKI_ACCEL_DRIVER_LEGACY_NATIVE : CIUKI_ACCEL_DRIVER_NONE;
         p->accelerator.capabilities=p->engine.capabilities; p->accelerator.generation=p->engine.generation;
         p->accelerator.quarantined=p->engine.quarantined;
