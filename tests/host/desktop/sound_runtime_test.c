@@ -16,7 +16,7 @@
 int ciuki_devices(struct ciuki_devices_info *s) { (void)s; errno=ENODEV; return -1; }
 static pthread_mutex_t fake_lock=PTHREAD_MUTEX_INITIALIZER;
 static int muted, vm_active;
-static uint64_t accepted, total; static int unavailable, failing, stalled, delay_consumed, writes, closed;
+static uint64_t accepted, total; static int unavailable, failing, stalled, delay_consumed, tail_frame, writes, closed, status_calls;
 static int fake_sound_load_at(struct sound_scheme *s,const char *cfg,const char *legacy,const char *dir)
 {
     (void)cfg;(void)legacy;(void)dir;
@@ -53,7 +53,14 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
     else if(op==MIXER_GET_DIAGNOSTICS){assert(fd==101);((struct ciuki_audio_diagnostics *)record)->flags=vm_active ? CIUKI_AUDIO_DIAG_VM_ACTIVE : 0;}
     else if(op==AUDIO_GET_CAPS){assert(size==sizeof(struct ciuki_audio_caps));struct ciuki_audio_caps *c=record;c->output_rate=48000;c->drain_ms=20;}
     else if(op==AUDIO_SET_FORMAT){struct ciuki_audio_format *f=record;assert(f->rate==SOUND_RATE && f->channels==1 && f->format==CIUKI_AUDIO_S16LE);}
-    else if(op==AUDIO_GET_STATUS){struct ciuki_audio_status *s=record;s->accepted_frames=accepted;s->consumed_frames=delay_consumed?0:accepted;s->output_rate=48000;s->transport_frames=256;}
+    else if(op==AUDIO_GET_STATUS){
+        /* queued = accepted - consumed, as the kernel reports it. tail_frame models
+         * the mixer's resampled last frame, which waits for an interpolation
+         * partner unless the stream drains (src/kernel/audio/mixer.c). */
+        struct ciuki_audio_status *s=record;status_calls++;
+        uint64_t consumed=delay_consumed ? 0 : tail_frame && accepted ? accepted-1 : accepted;
+        s->accepted_frames=accepted;s->consumed_frames=consumed;s->queued_frames=(uint32_t)(accepted-consumed);
+        s->output_rate=48000;s->transport_frames=256;}
     else assert(0);
     pthread_mutex_unlock(&fake_lock);return 0;
 }
@@ -160,6 +167,17 @@ int main(void)
     pthread_mutex_lock(&fake_lock);delay_consumed=0;pthread_mutex_unlock(&fake_lock);
     d.now_ns=now_ns();assert(!shutdown_wait(&d));wait_idle();d.now_ns=now_ns();assert(shutdown_wait(&d));cancel(&d);wait_idle();
     pthread_mutex_lock(&fake_lock);assert(closed>=5);pthread_mutex_unlock(&fake_lock);
+    /* f2-95: a 22050 Hz clip whose last frame stays queued in the mixer still
+     * ends: the device closes within the drain allowance and the worker then
+     * sleeps on its queue instead of polling every 2 ms. */
+    pthread_mutex_lock(&fake_lock);tail_frame=1;int closed_before=closed;before=total;pthread_mutex_unlock(&fake_lock);
+    uint64_t tail_begin=now_ns();notify(&d,SOUND_ERROR);wait_idle();uint64_t tail_ms=(now_ns()-tail_begin)/1000000ull;
+    pthread_mutex_lock(&fake_lock);assert(total>before && closed==closed_before+1);int calls=status_calls;pthread_mutex_unlock(&fake_lock);
+    struct timespec quiet={0,100000000};nanosleep(&quiet,NULL);
+    pthread_mutex_lock(&fake_lock);int idle_calls=status_calls-calls;tail_frame=0;pthread_mutex_unlock(&fake_lock);
+    assert(!idle_calls);
+    printf("PASS F2-95 sound tail: last resampled frame queued, device closed after %llu ms, status polls in 100 ms idle=%d\n",
+           (unsigned long long)tail_ms,idle_calls);
 #ifdef DESK_FOOTPRINT_TEST
     unsigned allocations=footprint_end();
     if (!getenv("CIUKI_FOOTPRINT_AUDIT")) assert(!allocations);

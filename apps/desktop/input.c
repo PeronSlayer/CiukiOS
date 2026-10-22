@@ -16,6 +16,14 @@ int desk_drain_input(struct desktop *d, int (*read_events)(int, struct ciuki_inp
     struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
     do {
         n=read_events(d->input,events,CIUKI_INPUT_READ_MAX);
+        /* f2-95: an empty queue (most service turns) costs one clock read
+         * and one input read; the clock taken just before the read stands. */
+        if (n<=0 && !total) {
+            int error=errno;
+            if (d->time_ns) d->now_ns=begin;
+            errno=error;
+            return n<0 && error!=EAGAIN && error!=EINTR ? -1 : 0;
+        }
         if (d->time_ns) d->now_ns=d->time_ns();
         for (int i=0;i<n;i++) desk_input(d,&events[i]);
         if (n>0) total+=n;
@@ -266,6 +274,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
     if (stamp && stamp<=d->now_ns && (!d->frame_input_ns || stamp<d->frame_input_ns))
         d->frame_input_ns=stamp;
     d->inputs++;
+    d->last_input_ns=d->now_ns ? d->now_ns : stamp;
     if (d->input_pending) d->input_pending();
     if (in->monotonic_ns && d->now_ns>=in->monotonic_ns &&
         d->now_ns-in->monotonic_ns>d->stats.input_lag_ns)

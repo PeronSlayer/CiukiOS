@@ -211,15 +211,21 @@ static void assertions(void)
     d.now_ns=2000000; edge.monotonic_ns=1000000; edge.value=edge.value2=0;
     desk_input(&d,&edge); redraw(); assert(d.frame_stats.input_lag_ns==1000000);
 #ifdef F125_WRAP_ALLOC
-    desk_render_release(&d); expected();
+    /* After a render release the next frame is complete again. */
+    desk_render_release(&d); expected(); redraw(); assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
+    /* f2-95: a frame's damage region (two separate rectangles here) lives in
+     * the compositor's fixed region pool: with the heap failing, the frame
+     * still completes and no allocation is attempted. */
+    desk_damage_add(&d.damage,(struct desk_box){2,40,30,20},d.width,d.height);
+    desk_damage_add(&d.damage,(struct desk_box){200,300,40,10},d.width,d.height);
+    assert(d.damage.count==2);
     fail_malloc=1; fake_presents=0;
-    assert(desk_redraw(&d)==-1 && errno==ENOMEM && !fake_presents);
-    assert(!memcmp(d.pixels,reference,(size_t)d.width*d.height*4));
-    assert(!desk_frame_due(&d,d.next_frame_ns-1));
-    redraw(); assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
+    assert(!desk_redraw(&d) && fake_presents && !d.damage.count && fail_malloc==1);
+    fail_malloc=0;
+    assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
 #endif
     free(reference); free(lfb);
-    puts("PASS f1-25: cursor overlay, cache, precise clock/hover, coalescing, input drain before render, complete output before present, retry after newer input, frame deadline/allocation failure, display frame reply, telemetry wire");
+    puts("PASS f1-25: cursor overlay, cache, precise clock/hover, coalescing, input drain before render, complete output before present, retry after newer input, frame deadline/no frame allocation, display frame reply, telemetry wire");
 }
 #endif
 static uint64_t stamp(void)

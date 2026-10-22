@@ -339,6 +339,9 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
     case SH_MENU_PROGRAMS: {
+        /* f2-95: opening the menu asks for a fresh scan; the menu shows the
+         * current snapshot and the next refresh publishes any change. */
+        d->v3_links_force|=DESK_LINKS_SCAN;
         desk_links_refresh(d);
         if (d->v3_link_count) item(m,"Programs folder","folder",SH_ACT_PROGRAMS_FOLDER,0,0);
         unsigned preview=0;

@@ -171,3 +171,90 @@ syscall substitutes and scheduling do not reproduce PIII/LFB performance.
 The replay exercises drag, Start open/close and launch/first DAMAGE, publishes
 every frame's latency and f2-48 painter breakdown, and reports p50/p95/max.
 Only lead-owned T23 measurement can establish the hardware targets.
+
+### F2-95 damage regions, frame cadence and the T23 CPU budget (2026-10-22)
+
+T23 trial of image a4d9454e: the desktop took 40-50 % of the CPU with only
+the Music Player open. The `[cpu] top` records name the threads:
+`desktop#30` (12-50 %, almost all kernel time, holding the block cache that
+netsurf and the compositor then waited for) is the shortcut worker, not the
+compositor; `desktop#31` (7-10 %) is the sound worker; `desktop#28` (the
+compositor and service loop) took 9-18 %. The `[desktop] accel` records of
+the music session show 20-50 frames per second of a few KiB each, the
+hardware-cursor frames of pointer motion; the player itself repaints its
+labels 2-5 times a second (`repaint_mps` 1799-5396 per thousand seconds).
+
+Period practice, primary sources:
+
+* Windows keeps an [update region](https://learn.microsoft.com/en-us/windows/win32/gdi/the-update-region)
+  per window: only the invalid part is redrawn, and
+  [WM_PAINT](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-paint) is
+  generated only when the message queue is empty, so input always runs first
+  and repeated invalidations merge into one paint.
+* The X server represents clip and damage as regions (y-x banded rectangle
+  sets, the sample server's `miregion.c`, today `dix/region.c` and pixman's
+  [pixman-region.c](https://gitlab.freedesktop.org/pixman/pixman/-/raw/master/pixman/pixman-region.c));
+  the [DAMAGE extension](https://gitlab.freedesktop.org/xorg/proto/xorgproto/-/raw/master/damageproto.txt)
+  reports exactly those regions (raw rectangles, deltas, bounding box or
+  non-empty) to whoever repaints.
+
+Decision (lead amendment, 2026-10-22): the X11/Windows 98 model, with no
+full-frame composition. The compositor's damage lists and frame regions are
+pixman 0.46.4 regions (MIT, `third_party/pixman`, pinned there): every
+damage addition is a region union (exact, disjoint, coalesced bands); a
+frame composes and presents exactly the region's rectangles minus a copied
+destination (region subtraction), and the present-damage skip uses
+`pixman_region32_contains_rectangle`. The former per-row span lists
+(`rows_add`/`row_boxes`, 195 KiB at 1024x768) are gone. Region storage is a
+fixed pool inside the compositor (64 blocks of 32 rectangles, 4 of 512):
+the desktop still allocates nothing after its first frame, and when the pool
+cannot hold a region the frame uses the list's covering box instead of
+failing. A list holds at most 32 rectangles; beyond that the pair whose
+bounding box adds the least area is joined, never the whole list into one
+screen-sized box. An incomplete frame keeps its own damage: only an engine
+failure (scanout unknown) still damages the whole screen.
+
+Frame cadence: input and pointer frames keep the 60 Hz slot. Continuous small
+damage without input for 250 ms (under a sixteenth of the screen, no
+frame-paced presenter, no launch) is composed at most every 33.3 ms (30 fps);
+an isolated update is never delayed. A refused frame (display owned
+elsewhere, a leased program) is retried at the frame slot, never on every
+1 ms service turn.
+
+Service loop and workers: the shortcut worker takes types, sizes and times
+from the directory enumeration (no stat), reuses unchanged shortcut records
+and rescans on events or every 10 s (the bundled-games query, which mounts
+the games image in the kernel, only at start and after a program change);
+the sound worker closes its stream when one resampled frame is left (the
+mixer keeps it waiting for an interpolation partner unless drained) and then
+sleeps; an empty service turn costs 17 kernel entries instead of 24; input
+that arrived during a turn is read before its sleep; the stall observer
+counts hardware-cursor frames as frames; a `[desktop] loop turns=...`
+record reports service turns per 2 s and the deadline that shortened them.
+
+Not taken this round: pixman's image and compositing code (fast paths,
+`pixman-mmx.c`). The compositor's opaque rows already use `rep movsl`
+(fast-string moves on the P6 family) and its blends cover shadows, corners
+and glyphs only; on the T23 model below composition is 0.12 % of the
+CPU with the player open and 1.4 % while dragging, so MMX
+OVER paths could save at most a fraction of that. Using them also needs the
+compositor's integer-only build rule (`build_desktop.py` audit) changed and
+the MMX state of desktop threads qualified on the T23.
+
+T23 model (`tests/host/desktop/t23_cpu_model_test.c`, rates stated there):
+
+| Scenario | Frames/s | Composed px/frame | CPU bytes to LFB/s | Desktop CPU |
+| --- | ---: | ---: | ---: | ---: |
+| Player open, nothing moving (a4d9454e) | | | | 40.6 % (desktop#30 30 %, #31 8.5 %, #28 2.1 % modeled) |
+| Player open, nothing moving (f2-95) | 5.0 | 19,296 | 16,080 | 2.1 % (3.1 % at 10 us per kernel entry) |
+| Player window dragged at 60 fps (f2-95) | 60.3 | 19,558 | 3.6 MB | 17.4 % (19.9 %) |
+
+While dragging, the RAM copy of the moved window (60 MB/s, about 10 % at
+600 MB/s) and the exposed strips sent to the LFB (3.6 MB/s, 2.7 %) dominate;
+the engine copies the window in scanout. Budgets: under 10 % with the
+player open, under 40 % dragging. The
+a4d9454e worker shares are the trial's measurements; the model does not
+reproduce the trial's 9-18 % for desktop#28, which included pointer frames
+and user time the host cannot attribute: the new `[desktop] loop` record
+measures it on the next T23 image. Host counts are evidence for the code
+paths, not T23 timings.

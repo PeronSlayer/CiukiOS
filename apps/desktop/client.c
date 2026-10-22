@@ -57,6 +57,8 @@ void desk_drop_client(struct desktop *d, int i)
     if (d->drag == i) { d->drag = -1; d->resize_edges=0; d->keyboard_geometry=0; }
     if (c->window) desk_sound(d,SOUND_WINDOW_CLOSE);
     if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+    /* f2-95: a closing program (an installer) may have added shortcuts. */
+    if (c->window && !c->internal) d->v3_links_force|=DESK_LINKS_SCAN;
     if (c->pixels && !c->internal) d->ops.unmap((void *)c->pixels, c->info.allocation_bytes);
     if (c->surface >= 0) d->ops.close(c->surface);
     free(c->v3_over);
@@ -842,7 +844,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
-        if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;}
+        if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;d->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
             if (d->display_reply_mode) result=-EBUSY;
             else result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
