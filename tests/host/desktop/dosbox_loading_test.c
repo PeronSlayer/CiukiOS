@@ -44,7 +44,7 @@ static uint64_t fs_until;
 static unsigned settings_phase,settings_seen,settings_blur,settings_restore;
 static unsigned network_rows,network_selections;
 static uint64_t settings_hold_until, last_bar_at;
-static unsigned bar_damage[256], bar_updates, full_damage, settings_damage, notice_seen, loading_seen;
+static unsigned bar_damage[256], bar_updates, full_damage, settings_damage, notice_seen, loading_seen, back_seen;
 static uint32_t settings_original[640 * 480];
 static const struct {
     unsigned kernel, memory, key, saved_kernel, saved_memory;
@@ -201,6 +201,7 @@ void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32
     (void)c; (void)x; (void)y; (void)w; (void)colour;
     if (!strcmp(s,"DOS kernel, memory and network")) settings_seen++;
     if (!strcmp(s,"Full screen unavailable")) notice_seen++;
+    if (!strcmp(s,"Back in the window")) back_seen++;   /* f3-61: the kernel ended full screen itself */
     if (!strncmp(s,"Loading ",8)) loading_seen++;
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
@@ -262,7 +263,8 @@ int main(int argc, char **argv)
     else assert(!result && presents && !error_seen && closed == 1);
     if (scenario == 0 || scenario == 4 || scenario == 7) assert(armed && entered && console_at == 2);
     if (scenario == 6) assert(!armed && !entered);
-    if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active && notice_seen==1);
+    if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active && back_seen==1 && !notice_seen);
+    else assert(!back_seen);
     if (error_seen) assert(error_seen==1);
     if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : 1u)); /* fullscreen's static page shares the title */
     assert(damage_count);

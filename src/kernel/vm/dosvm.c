@@ -635,6 +635,17 @@ uint32_t dosvm_task_esp0(const struct task *t, uint32_t normal)
     struct dosvm *v = owner(t);
     return v && v->continuation ? v->continuation : normal;
 }
+/* f3-61: Windows 9x closes an MS-DOS Prompt whose COMMAND.COM waits at its
+ * prompt without the "still active" warning (the close-aware shell, RBIL
+ * INT 2Fh/168Fh); only a running program is terminated with possible data
+ * loss. Here: DOS ready, no DPMI client, no V86 EXEC frame outstanding and
+ * the worker blocked in (or just back from) its idle wait. */
+bool dosvm_shell_idle(const struct dosvm *v)
+{
+    return v->info.state < DOSVM_STOPPING && v->info.dos_ready && !v->dpmi.active && !v->dpmi.clients &&
+        !v->exec_pending && !v->exec_overflow &&
+        (v->idle.sleeping || (v->idle.seen && g_ticks - v->idle.last_tick < 250));
+}
 int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
 {
     struct dosvm *v = dosvm_lookup(key);
@@ -989,6 +1000,18 @@ bool dosvm_trap(struct trap_frame *tf)
         f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp && (f->tf.eflags & V86_CF)) {
         v->launch_failed = true; v->launch_error = f->tf.eax & 0xFFFF;
     }
+    if (!v->frame_pm && v->exec_pending) {
+        const uint8_t top = v->exec_pending - 1;
+        if (f->tf.cs == v->exec_frame[top].cs && f->tf.eip == v->exec_frame[top].ip &&
+            f->tf.user_ss == v->exec_frame[top].ss && (uint16_t)f->tf.user_esp == v->exec_frame[top].sp) {
+            v->exec_pending = top;
+            if (v->launch_exec && !(f->tf.eflags & V86_CF) && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
+                f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp) {
+                v->launch_returned = true; v->launch_returned_tick = g_ticks;
+                dosvm_present_notify(v);
+            }
+        }
+    }
     /* Restored IF can expose an audio edge now. Commit it before any idle
      * wait, preemption point or UART/report work. */
     if (!e && v->info.state < DOSVM_STOPPING && v->monitor.state != V86_HALTED)
@@ -1108,6 +1131,20 @@ static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
         v->launch_exec = true;
         v->launch_cs = (uint16_t)f->tf.cs; v->launch_ip = f->tf.eip;
         v->launch_ss = (uint16_t)f->tf.user_ss; v->launch_sp = (uint16_t)f->tf.user_esp;
+    }
+    if (vector == 0x21 && (f->tf.eax & 0xFFFF) == 0x4B00 && v->info.dos_ready) {
+        /* f3-61: a program now runs above its parent until the kernel's IRET
+         * completes this frame; a later EXEC means the armed program's return
+         * no longer leaves only the shell running. Boot-time EXECs (the
+         * kernel's own load of its shell, which never returns, and AUTOEXEC
+         * programs before DOS ready) are not user programs. */
+        if (v->exec_pending < ARRAY_SIZE(v->exec_frame)) {
+            v->exec_frame[v->exec_pending].cs = (uint16_t)f->tf.cs; v->exec_frame[v->exec_pending].ip = f->tf.eip;
+            v->exec_frame[v->exec_pending].ss = (uint16_t)f->tf.user_ss;
+            v->exec_frame[v->exec_pending].sp = (uint16_t)f->tf.user_esp;
+            v->exec_pending++;
+        } else v->exec_overflow = true;
+        v->launch_returned = false;
     }
     if (vector == 0xFD) return dosvm_mouse_return(v, f);
     if (vector != 0xFE) return dpmi_v86_int(v, f, vector);

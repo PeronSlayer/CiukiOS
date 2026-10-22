@@ -742,8 +742,24 @@ static void test_client_boundary(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD && v->info.data_loss &&
           v->info.reason == DOSVM_TERMINATE && fake_surface[0].references == 1);
     empty();
+    /* f3-61: a shell idle at its prompt (DOS ready, no DPMI client, no V86
+     * EXEC frame outstanding, just back from its idle wait) closes as an
+     * ordinary EXIT, as Windows 9x closes an idle MS-DOS Prompt; a program
+     * still above the shell keeps the forced, possible-loss termination. */
+    for (unsigned running = 0; running < 2; running++) {
+        CHECK(!create_window(0, running ? "Running" : "Idle", &w));
+        v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+        CHECK(!dosvm_disk_write(v, 9, sector));
+        v->info.dos_ready = true; v->idle.seen = true; v->idle.last_tick = g_ticks;
+        v->exec_pending = (uint8_t)running;
+        CHECK(dosvm_shell_idle(v) == !running);
+        c = command_for(w.id, w.generation);
+        CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD &&
+              v->info.data_loss == (running != 0) && v->info.reason == (running ? DOSVM_TERMINATE : DOSVM_EXIT));
+        empty();
+    }
     fake_current = 0;
-    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death and failures PASS\n");
+    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death, idle-shell close and failures PASS\n");
 }
 
 /* f3-02 QEMU finding (vm-window, 2026-10-11): the shell waits for a line in

@@ -573,24 +573,30 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
         desk_shell_message(d, "Programs", text, 1);
     }
 }
-/* Programs > Games: a DOS Box window titled after the game, typing its command. */
-static void launch_game(struct desktop *d, int index)
+/* Programs > Games: a DOS Box window titled after the game, typing its command.
+ * f3-61: kernel, when given (the vm-game probe only), is the DOS Box's own
+ * --dos-kernel= choice, saved as the game's setting exactly as F12 does. */
+int desk_launch_game(struct desktop *d, int index, const char *kernel)
 {
-    if (index < 0 || (unsigned)index >= DESK_GAME_COUNT) return;
+    if (index < 0 || (unsigned)index >= DESK_GAME_COUNT) return -EINVAL;
     if(d->games_removed&(1u<<index)){
-        desk_shell_message(d,"Games","This bundled game has been removed. Reinstall CiukiOS to restore it.",1);return;
+        desk_shell_message(d,"Games","This bundled game has been removed. Reinstall CiukiOS to restore it.",1);return -ENOENT;
     }
-    char name[48];
+    char name[48], choice[32];
     snprintf(name, sizeof(name), "--name=%s", desk_games[index].title);
-    const char *args[] = {name, desk_games[index].command};
-    int r = desk_task_launch_args(d, "dosbox", args, 2);
+    snprintf(choice, sizeof(choice), "--dos-kernel=%s", kernel ? kernel : "");
+    const char *args[] = {name, choice, desk_games[index].command};
+    int r = kernel ? desk_task_launch_args(d, "dosbox", args, 3) :
+                     desk_task_launch_args(d, "dosbox", (const char *const[]){name, desk_games[index].command}, 2);
     if (r < 0) {
         char text[160];
         snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find 'dosbox' in /Programs." :
                  "'%s' could not be started (error %d).", desk_games[index].title, -r);
         desk_shell_message(d, "Games", text, 1);
     }
+    return r;
 }
+static void launch_game(struct desktop *d, int index) { (void)desk_launch_game(d, index, NULL); }
 static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
