@@ -6,6 +6,11 @@ framebuffer: golden frames at 0 %, 40 %, 100 % and indeterminate, the phase
 mapping, the claim budget and the display-grant handover
 (tests/host/splash_progress_test.c). The source checks keep the phase
 reports next to the init records they follow.
+f0-55b: the harness also checks the first frame (centred sweep at tick 0,
+or the level of phases reported before the paint), the worker's 40 ms turns
+with no phase and no klog, the worker's class above init, and the serial
+phase records; the source checks pin the paint before the stack-guard
+entropy, the scheduler and the accelerator probe.
 """
 import hashlib
 import importlib.util
@@ -102,6 +107,49 @@ class SplashProgressTests(unittest.TestCase):
             self.assertIn('splash_stop();', console.split(function, 1)[1].split('\n}\n', 1)[0], function)
         font = (ROOT / 'src/kernel/arch/font.asm').read_text()
         self.assertIn('incbin "assets/fonts/native/CIUKIOS.CFN", 64, 95 + 95 * 32', font)
+
+    def test_splash_paint_precedes_init_and_the_accelerator_probe(self):
+        # f0-55b: kmain paints the splash as soon as the LFB is mapped, before
+        # the stack-guard entropy (registry_init -> stackprot_init ->
+        # entropy_boot), the scheduler (console worker) and the PIT
+        # calibration; drivers_init schedules the accelerator probe only
+        # after its last phase report, so the probe never delays the paint.
+        main = (ROOT / 'src/kernel/core/main.c').read_text()
+        body = main.split('void kmain(', 1)[1]
+        paint = body.index('if (!text && !console_init_lfb())')
+        for later in ('registry_init();', 'sched_init();', 'timing_calibrate();', 'sched_start();'):
+            self.assertLess(paint, body.index(later), later)
+        registry = (ROOT / 'src/kernel/core/registry.c').read_text()
+        self.assertIn('stackprot_init();', registry)
+        task = (ROOT / 'src/kernel/core/task.c').read_text()
+        self.assertIn('console_worker_init();', task.split('void sched_init(void)', 1)[1].split('\n}\n', 1)[0])
+        init = (ROOT / 'src/kernel/core/init.c').read_text()
+        drivers = init.split('void drivers_init(void)', 1)[1]
+        self.assertLess(drivers.index('splash_report(SPLASH_PHASE_DEVICES);'),
+                        drivers.index('fbdev_accel_schedule(&storage_get()->vfs);'))
+        probes = (ROOT / 'src/kernel/probes/probes.c').read_text()
+        self.assertIn('struct task *t = task_create_kernel("probes", probes_main, 0, P_INTERACTIVE);', main)
+        normal = probes.split('if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {', 1)[1]
+        self.assertLess(normal.index('drivers_init();'), normal.index('supervisor_bootstrap();'))
+        # The worker: raised above the boot task at creation and on each turn
+        # while the splash is up; woken by its own sleep timer, not by klog.
+        console = (ROOT / 'src/kernel/core/console.c').read_text()
+        self.assertIn('#define SPLASH_WORKER_LEVEL (SCHED_FOREGROUND + 2u)', console)
+        worker_init = console.split('void console_worker_init(void)', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(worker_init.index('splash_worker_class();'), worker_init.index('task_start(t);'))
+        service = console.split('static uint32_t splash_service(void)', 1)[1].split('\n}\n', 1)[0]
+        self.assertTrue(service.split('{', 1)[1].lstrip().startswith('splash_worker_class();'))
+        worker = console.split('static void console_worker(void *arg)', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('task_sleep_ms(paint.active ? 1 : splash_ms);', worker)
+        write = console.split('void console_write(const char *s, size_t n)', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('task_start', write)
+        self.assertNotIn('splash', write)
+        # The phase record: one format, gated by the serial-log flag.
+        record = console.split('static void splash_record(uint32_t level)\n{', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('if (!(g_boot.flags & CBI_F_SERIAL_LOG)) return;', record)
+        self.assertIn('klog("[console] splash phase=%u permille=%u", phase, level);', record)
+        self.assertIn('splash_bar.records < SPLASH_PHASES', record)
+        self.assertEqual(console.count('[console] splash phase='), 2)   # the record and its comment
 
 
 if __name__ == '__main__':

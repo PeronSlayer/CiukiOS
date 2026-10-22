@@ -55,6 +55,7 @@ static uint32_t committed, painted_lines;
 static unsigned painted_rows;
 static uint64_t next_paint;
 static const char *pinned_page;
+static struct task *console_task;          /* the console worker (sched_init) */
 /* A service turn paints at most eight cells or one copied scanline. The
  * presenter claim is always released before a scheduling point. */
 #define PAINT_CELLS 8u
@@ -144,7 +145,16 @@ static void draw_cell(unsigned col, unsigned row, char ch)
  * owns the pixels. The splash is never cleared: the desktop's first frame
  * replaces it. Each update claims the console region for at most
  * SPLASH_CLAIM_PIXELS pixels computed from the embedded photograph: no LFB
- * reads, no allocation, no disk read. */
+ * reads, no allocation, no disk read.
+ * f0-55b: the first frame already shows state. kmain paints it before the
+ * PIT runs (tick 0) with the sweep segment centred, or with the level of
+ * any phase a quiet boot reported before the paint. The console worker
+ * (task "console", sched_init) animates the sweep: task_sleep_ms wakes it
+ * every SPLASH_TICK_MS from its kernel timer (PIT IRQ 0), never from klog,
+ * and while the splash is on screen its base level is SPLASH_WORKER_LEVEL,
+ * above the boot task that runs init (probes_main, P_INTERACTIVE), so the
+ * wake preempts init at init's next blocking wait or kpreempt_point. Each
+ * drawn phase level is recorded once on the serial log. */
 #define SPLASH_W 512u
 #define SPLASH_H 384u
 __asm__(".pushsection .rodata.splash,\"a\"\n.balign 4\n"
@@ -163,6 +173,9 @@ extern uint64_t g_tsc_per_ms;
 #define SPLASH_SHADOW_ALPHA 120u
 #define SPLASH_CLAIM_PIXELS 1024u         /* per console claim: well under 1 ms */
 #define SPLASH_TICK_MS      40u           /* indeterminate animation step */
+/* Above the boot task (P_INTERACTIVE, SCHED_FOREGROUND) and its I/O
+ * completion boost (base + 1, task_io_completed). */
+#define SPLASH_WORKER_LEVEL (SCHED_FOREGROUND + 2u)
 static const char splash_tagline[] = "Classic computing, one woof at a time.";
 
 struct splash_layout {
@@ -174,11 +187,14 @@ struct splash_layout {
 static struct {
     struct splash_layout g;
     bool active, busy, determinate, shown_valid, shown_determinate;
+    bool ended;                           /* handover or stop: phases ignored */
     uint32_t level, shown_level;
     int32_t segment, shown_segment;
     uint32_t phases, updates, claims, deferred, max_claim_pixels;
+    uint32_t recorded, records;           /* serial phase records (f0-55b) */
     uint64_t max_claim_cycles;
 } splash_bar;
+static bool splash_worker_raised;
 
 static uint32_t splash_rgb565(const uint8_t *s)
 {
@@ -236,11 +252,17 @@ static uint32_t splash_fill_width(const struct splash_layout *g, uint32_t level)
     return w < g->bh ? g->bh : w;
 }
 static uint32_t splash_segment_width(const struct splash_layout *g) { return g->bw / 4; }
-/* Indeterminate: a quarter-length segment sweeps the track left to right. */
+/* Indeterminate: a quarter-length segment sweeps the track left to right,
+ * one stride per SPLASH_TICK_MS. Tick 0 (the first frame, painted before
+ * the PIT runs) shows it centred; every position keeps at least one stride
+ * inside the track, so no frame of the sweep shows an empty track. */
 static int32_t splash_segment_at(const struct splash_layout *g, uint64_t ticks)
 {
-    uint32_t period = g->bw + splash_segment_width(g), stride = period / 40 ? period / 40 : 1;
-    return (int32_t)((uint32_t)(ticks / SPLASH_TICK_MS) % 40u * stride % period) - (int32_t)splash_segment_width(g);
+    uint32_t segment = splash_segment_width(g), period = g->bw + segment;
+    uint32_t stride = period / 40 ? period / 40 : 1, steps = (period - stride) / stride;
+    uint32_t centred = ((g->bw - segment) / 2 + segment - stride) / stride;
+    uint32_t step = (uint32_t)((ticks / SPLASH_TICK_MS + centred) % steps);
+    return (int32_t)(step * stride) - (int32_t)segment + (int32_t)stride;
 }
 
 /* Capsule coverage in 4x4 samples (0..16), coordinates in 1/8 pixel. The
@@ -323,9 +345,16 @@ static void splash_draw_tagline(const struct splash_layout *g)
         }
 }
 
+static void splash_record(uint32_t level);
 static void draw_splash(void)
 {
-    memset(&splash_bar, 0, sizeof(splash_bar));
+    /* Paint state only: the progress (phases a quiet boot reported before
+     * this paint, ended, the serial records) belongs to the boot. */
+    splash_bar.active = splash_bar.busy = splash_bar.shown_valid = splash_bar.shown_determinate = false;
+    splash_bar.shown_level = 0;
+    splash_bar.segment = splash_bar.shown_segment = 0;
+    splash_bar.updates = splash_bar.claims = splash_bar.deferred = splash_bar.max_claim_pixels = 0;
+    splash_bar.max_claim_cycles = 0;
     if ((uint32_t)(console_splash_end - console_splash) != SPLASH_W * SPLASH_H * 2)
         return;
     struct splash_layout *g = &splash_bar.g;
@@ -341,9 +370,16 @@ static void draw_splash(void)
     }
     if (!g->bar) return;
     splash_draw_tagline(g);
+    if (splash_bar.ended) return;
+    /* f0-55b: the first frame shows the accumulated level, or the sweep. */
+    bool determinate = splash_bar.determinate;
+    uint32_t level = splash_bar.level;
     splash_bar.segment = splash_bar.shown_segment = splash_segment_at(g, g_ticks);
-    splash_bar_pixels(0, g->bw, false, 0, splash_bar.segment);
+    splash_bar_pixels(0, g->bw, determinate, level, splash_bar.segment);
+    splash_bar.shown_determinate = determinate;
+    splash_bar.shown_level = level;
     splash_bar.shown_valid = splash_bar.active = true;
+    if (determinate) splash_record(level);
 }
 
 static bool splash_drawable(void)
@@ -369,6 +405,24 @@ static bool splash_chunk(uint32_t c0, uint32_t c1, bool determinate, uint32_t le
     return true;
 }
 
+/* f0-55b: `[console] splash phase=<n> permille=<p>` once per drawn phase
+ * level, when the serial log is on (BOOT.CFG serial=1, CBI_F_SERIAL_LOG).
+ * Levels only rise and the phase shares are distinct, so a boot writes at
+ * most SPLASH_PHASES records; the count is also capped. A level drawn for
+ * several phases at once (before the paint, after a deferral) records the
+ * last of them. Thread context with IF=1, or kmain's first paint. */
+static void splash_record(uint32_t level)
+{
+    if (!(g_boot.flags & CBI_F_SERIAL_LOG)) return;
+    unsigned phase = 0;
+    while (phase < SPLASH_PHASES && splash_phase_permille((enum splash_phase)phase) != level) phase++;
+    uint32_t f = irq_save();
+    bool emit = phase < SPLASH_PHASES && level > splash_bar.recorded && splash_bar.records < SPLASH_PHASES;
+    if (emit) { splash_bar.recorded = level; splash_bar.records++; }
+    irq_restore(f);
+    if (emit) klog("[console] splash phase=%u permille=%u", phase, level);
+}
+
 /* Bring the screen to the current target: only the columns that differ
  * from what is shown, in claims of at most SPLASH_CLAIM_PIXELS pixels.
  * A failed claim leaves the update to the console worker. */
@@ -380,7 +434,7 @@ static void splash_update(bool yield)
     if (start) splash_bar.busy = true;
     irq_restore(f);
     if (!start) return;
-    uint32_t per = SPLASH_CLAIM_PIXELS / g->bh;
+    uint32_t per = SPLASH_CLAIM_PIXELS / g->bh, drawn = 0;
     for (unsigned pass = 0; pass < 4; pass++) {
         f = irq_save();
         bool det = splash_bar.determinate, valid = splash_bar.shown_valid && splash_bar.shown_determinate == det;
@@ -409,8 +463,10 @@ static void splash_update(bool yield)
         splash_bar.shown_valid = true; splash_bar.shown_determinate = det;
         splash_bar.shown_level = level; splash_bar.shown_segment = segment;
         splash_bar.updates++;
+        if (det) drawn = level;
     }
     splash_bar.busy = false;
+    if (drawn) splash_record(drawn);       /* outside the busy section */
 }
 
 /* The display grant: complete the bar, then never draw it again. An update
@@ -419,6 +475,7 @@ static void splash_handover(void)
 {
     uint32_t f = irq_save();
     bool draw = splash_bar.active && quiet && !display_owned;
+    splash_bar.ended = true;
     if (draw) {
         splash_bar.phases++;
         splash_bar.determinate = true;
@@ -442,8 +499,10 @@ void console_splash_phase(enum splash_phase phase)
     if (!level) return;
     if (phase == SPLASH_PHASE_HANDOVER) { splash_handover(); return; }
     uint32_t f = irq_save();
-    bool active = splash_bar.active;
-    if (active) {
+    /* f0-55b: a quiet boot keeps a phase reported before the splash is
+     * painted; the first paint draws its level. */
+    bool kept = quiet && !splash_bar.ended, active = kept && splash_bar.active;
+    if (kept) {
         splash_bar.phases++;
         splash_bar.determinate = true;
         if (level > splash_bar.level) splash_bar.level = level;
@@ -452,10 +511,24 @@ void console_splash_phase(enum splash_phase phase)
     if (active) splash_update(true);
 }
 
+/* f0-55b: while the splash is on screen the console worker runs at
+ * SPLASH_WORKER_LEVEL, above the boot task, so its timer wake sets
+ * g_need_resched against init (task_start); at the handover or any stop it
+ * is a plain P_NORMAL task again. Called at its creation and on each of
+ * its turns. */
+static void splash_worker_class(void)
+{
+    bool raise = splash_drawable();
+    if (!console_task || raise == splash_worker_raised) return;
+    splash_worker_raised = raise;
+    task_set_base(console_task, P_NORMAL, raise ? SPLASH_WORKER_LEVEL : 0);
+}
+
 /* Console worker turn: animate the indeterminate bar, retry deferred
  * updates. Returns the next sleep in milliseconds. */
 static uint32_t splash_service(void)
 {
+    splash_worker_class();
     if (!splash_drawable()) return 100;
     uint32_t f = irq_save();
     if (!splash_bar.determinate) splash_bar.segment = splash_segment_at(&splash_bar.g, g_ticks);
@@ -464,12 +537,13 @@ static uint32_t splash_service(void)
     return splash_drawable() && (!splash_bar.determinate || !splash_bar.shown_valid ||
                                  splash_bar.shown_level != splash_bar.level) ? SPLASH_TICK_MS : 100;
 }
-static void splash_stop(void) { splash_bar.active = false; }
+static void splash_stop(void) { splash_bar.active = false; splash_bar.ended = true; }
 #else
 static void draw_splash(void) {}
 static void splash_handover(void) {}
 static uint32_t splash_service(void) { return 100; }
 static void splash_stop(void) {}
+static void splash_worker_class(void) {}
 void console_splash_phase(enum splash_phase phase) { (void)phase; }
 #endif
 
@@ -528,12 +602,13 @@ bool console_init_lfb(void)
     rows = height / CELL_H;
     fbdev_console_region(rows * CELL_H);
     con_kind = CON_LFB;
-    splash_stop();
     if (quiet) {
         draw_splash();             /* nothing else is drawn until a wake */
         cur_col = cur_row = 0;
-    } else
+    } else {
+        splash_stop();
         clear_screen();
+    }
     return true;
 }
 
@@ -767,6 +842,8 @@ void console_worker_init(void)
 {
     struct task *t = task_create_kernel("console", console_worker, 0, P_NORMAL);
     if (!t) panic("console: cannot create worker");
+    console_task = t;
+    splash_worker_class();         /* f0-55b: above init while the splash is up */
     task_start(t);
 }
 
