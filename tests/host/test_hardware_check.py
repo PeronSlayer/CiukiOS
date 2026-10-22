@@ -24,6 +24,20 @@ class HardwareCheckTests(unittest.TestCase):
                             str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS':'detect_leaks=0'})
 
+    def test_smi_attribution(self):
+        # f1-94: production SMI attribution/mitigation with simulated ports.
+        folder = ROOT / 'build/host'
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='smi-attribution-', dir=folder) as directory:
+            binary = Path(directory) / 'smi-attribution'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
+                            '-I', str(ROOT / 'src/kernel/include'),
+                            str(ROOT / 'tests/host/smi_attribution_test.c'),
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS':'detect_leaks=0'})
+
     def test_serial_transmit_page(self):
         folder = ROOT / 'build/host'
         folder.mkdir(parents=True, exist_ok=True)

@@ -260,7 +260,8 @@ and requires a bounded read/write/readback handshake. The configured boot
 master is rounded to the EC's 14 steps (20% becomes 3/14, reported as 21%).
 The EC amplifier is the effective master, so codec master remains 0 dB and
 the mixer does not apply the same gain again. The existing tray/Control Panel
-show changes from 4 Hz polling. Software volume writes control this same EC.
+show changes from 4 Hz polling (1 Hz since f1-94; `ecpoll=0` turns it off).
+Software volume writes control this same EC.
 No verified T23 DSDT was obtained online; 0x62/0x66 responses, physical analog
 level, headphones/speakers and firmware/SMI interaction require the lead's
 T23 test. See [the research and settings decision](f4-18-audio-levels.md).

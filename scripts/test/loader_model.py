@@ -262,7 +262,7 @@ def boot_options(options, safe=False, serial=True):
             safe=safe or token=='safe=1'
         elif token in ('serial=0','serial=1'):
             serial=serial and token=='serial=1'
-        elif token=='usbscan=0':
+        elif token in ('usbscan=0','ecpoll=0'):
             pass  # Kernel diagnostic policy; raw BOOT.CFG options are retained.
         elif token=='accel=0':
             pass  # Preserved boot-info options; consumed by the kernel.
