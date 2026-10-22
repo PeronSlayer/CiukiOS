@@ -12,3 +12,12 @@
 4. Host tests: CBW with transfer length > 1 sector, CSW residue handling, TD chain across frames, fallback on STALL; the storage queue test for the new limit.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-96-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 10:20, decision on the delivery)
+
+Accepted. The cause was the storage queue's adaptive split (commands over
+10 ms shrink, only 5 ms ones grow), which pinned a USB 1.1 stick at one page
+per command; usb-storage now holds a 64 KiB limit with 128-sector commands
+on a 128-TD ring. The TEST UNIT READY before every transfer and the FAT write
+path cost on the copy to the stick (SYNCHRONIZE CACHE ×4 per 64 KiB) are a
+follow-up (f1-99) after the T23 confirmation.

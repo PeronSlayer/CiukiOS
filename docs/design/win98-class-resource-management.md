@@ -329,6 +329,11 @@ Cap a fast-disk command at 64 KiB initially, with smaller adaptive limits
 when measured command time would consume the reader's service budget.
 Keep current firmware-selected DMA/PIO fallback and stop-proof rules.
 Do not assume a slow 64 KiB USB command can meet a 20 ms same-device bound.
+f1-96 (2026-10-22): a controller whose commands cannot meet the budget pins
+its admission size with `blk_queue_set_limits` (max and adaptive floor);
+the usb-storage queue pins its negotiated READ(10)/WRITE(10) length (64 KiB
+on UHCI) instead of ratcheting to the one-page floor, see
+[usb-contract.md](usb-contract.md#f1-96-negotiated-64-kib-transfers-uhci-td-ring-pinned-queue-limit-2026-10-22).
 
 Merge only adjacent requests with compatible device generation, priority,
 dependency frontier and pin ownership. FIFO/age break ties and prevent

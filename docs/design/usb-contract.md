@@ -1,5 +1,92 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-96: negotiated 64 KiB transfers, UHCI TD ring, pinned queue limit (2026-10-22)
+
+Evidence (T23, image b453bc92): `[files] job=copy done ms=62239
+bytes=5458058 rate_kbs=85`, `[storage] queue name=usb-storage … split=1295
+… limit=4096` with service buckets `svc=0/0/1365/38` (8–32 ms per command).
+Every READ(10) carried 8 sectors: the f1-83 adaptive split (C3) shrinks a
+queue whose command exceeds 10 ms and grows it only after commands of at
+most 5 ms, which a full-speed device can never meet for 4 KiB, so the limit
+stayed on the one-page floor of 7c5b9878. The bind field `max_sectors=1`
+was the largest bind-time read (the FAT mount reads single sectors), not a
+transfer limit. Each 4 KiB command also paid TEST UNIT READY, CBW, two
+32-TD data batches and CSW at about three frames per phase.
+
+Research before implementation:
+[BOT 1.0 §§5.1–5.3, 6.5–6.7](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf):
+dCBWDataTransferLength is a 32-bit byte count without a class limit;
+dCSWDataResidue is the difference between expected and processed data and
+never exceeds it; data starts on a packet boundary; an invalid CSW or Phase
+Error requires Reset Recovery; a device may STALL the data pipe when host
+and device disagree. [UHCI 1.1 §§1.3, 3.2.2, 3.4.1.3, 4.1.3](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf):
+depth-first (Vf) queues execute TD after TD inside a frame and write each
+successful TD's link pointer back to the QH element; SPD leaves a short IN
+at the element; IOC is reported at the end of the frame; without bandwidth
+reclamation the HC idles after the terminating QH until the next frame.
+[USB 2.0 §5.8.4, Table 5-9](https://www.usb.org/document-library/usb-20-specification):
+at most 19 full-speed 64-byte bulk transactions per frame (1216 bytes); the
+host model keeps its conservative 16. [T10 SBC-3](https://www.t10.org/ftp/t10/document.05/05-344r0.pdf):
+READ(10)/WRITE(10) carry a 32-bit LBA and a 16-bit TRANSFER LENGTH in
+blocks. Linux [usb-storage scsiglue.c](https://raw.githubusercontent.com/torvalds/linux/master/drivers/usb/storage/scsiglue.c)
+limits USB mass storage to 240 sectors by default, notes that Windows 7
+uses 128, keeps US_FL_MAX_SECTORS_64 for devices that fail above 32/64 KiB
+and skips VPD pages for usb-storage. Linux [uhci-q.c](https://raw.githubusercontent.com/torvalds/linux/master/drivers/usb/host/uhci-q.c)
+appends to a running queue by filling an inactive dummy TD and activating it
+after a write barrier (`uhci_submit_common`): the controller stops at an
+inactive TD. `uhci_advance_check` documents early Intel controllers whose
+QH element sometimes does not advance after a successful TD; Linux moves it
+by hand after 200 ms. No upstream code is imported.
+
+Decision:
+
+- Transfer length is host policy, recorded as `[usb-storage] bind …
+  read_max=<largest bind read> max_sectors=<negotiated>`: 128 sectors
+  (64 KiB, the Windows value and our `BLKDEV_READ_SECTORS`) on a host with
+  a chained bulk engine (UHCI), 8 sectors on a packet-at-a-time host (OHCI,
+  about one packet per frame), never a VPD request. A WRITE(10) never
+  exceeds the longest READ(10) that completed with a passed CSW on this
+  medium; enabling writes scans the FAT with 64 KiB reads first.
+- The usb-storage queue pins its limit (`blk_queue_set_limits`, max = floor
+  = negotiated size). C3 already exempts USB source commands from the 20 ms
+  same-device bound; the ATA queues keep the adaptive split and floor.
+- A data stage longer than the 128-TD window streams through it as a ring:
+  slot k%128 holds packet k, links are depth-first to the next slot, the
+  final packet terminates the chain with IOC. The HC stops at a slot not yet
+  re-armed and resumes in a later frame. Slots are harvested in order and
+  re-armed with Active written last, only after the following packet
+  completed, so no link changes under a pending QH writeback. A phase of at
+  most 128 packets is the former single chain. Completion still requires
+  every TD and the HC-written terminating element.
+- Fallback: a multi-sector READ(10) that fails with a STALL or CSW error
+  (data STALL, CBW STALL, invalid or persistently STALLed CSW, Phase Error,
+  passed CSW with residue, ILLEGAL REQUEST) performs the existing recovery
+  and re-reads the range one sector per command; the device then keeps one
+  sector per command and its queue limit becomes 512 bytes:
+  `[usb-storage] max_sectors addr=… cmd=28 lba=… sectors=… from=128 to=1
+  reason=… resend=1 fallbacks=N`. A NAK timeout keeps the F1-74 single
+  same-size retry. A failed multi-sector WRITE(10) is recorded with
+  `resend=0` and quarantines; no issued write is retried. CRC/babble errors
+  still fail closed without retry.
+- DMA arena: `USB_DMA_BYTES` 20480 (five pages per controller; TDs at
+  7680–9728, 64-byte buffers at 12288–20480).
+
+Host model (fixture FAT16, 5,458,058 bytes in 64 KiB chunks as Files
+copies, 16 transactions per frame; `wake` = frames per driver sleep, 3 is
+the T23 cadence): copy from the stick 5795 ms (919 KB/s) at wake 1 and
+6681 ms (797 KB/s) at wake 3, 89 READ(10) of up to 128 sectors; the
+f1-83 adaptive floor on the same path needs 10035 ms and 24519 ms
+(limit=4096, as on the T23). Copy to the stick 8761/15789 ms: per 64 KiB
+the FAT transaction issues two 64-sector writebacks, four SYNCHRONIZE
+CACHE and four to five single-sector metadata writes, each READ/WRITE
+behind TEST UNIT READY. A 64 KiB data stage takes 64 frames at wake 1 and 66 at
+wake 3 (the old 32-TD batches needed a service wake per 2 KiB).
+
+Not changed: the TEST UNIT READY before each block request, the cache
+writeback run size (64 sectors) and the OHCI packet path. The early-Intel
+QH element workaround is not implemented; on such a controller a stuck
+element still ends in the bulk deadline, as before.
+
 ## F1-81: completion-based bulk retirement (2026-10-18)
 
 Research before implementation: [UHCI 1.1 §§3.4.1.3/4.1.2](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf)
