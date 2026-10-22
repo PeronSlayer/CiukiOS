@@ -35,27 +35,48 @@ static void record(unsigned state,const char *reason)
     snprintf(v->driver,sizeof(v->driver),"savage2d"); snprintf(v->reason,sizeof(v->reason),"%s",reason);
     inventory.count=2;
 }
+static int notice_at(struct desktop *d,uint64_t ns) { d->now_ns=ns; return accel_notice(d); }
 int main(void)
 {
     struct desktop d={.now_ns=5000000000ull};
     char text[160];
-    accel_notice_text(text,sizeof(text),1,"none");
+    /* f2-92: YES only once the engine has drawn; OK (drawing: software) before. */
+    accel_notice_text(text,sizeof(text),1,1,"accelerated");
     CHECK(!strcmp(text,"2D acceleration: YES \xE2\x80\x94 Savage"));
-    accel_notice_text(text,sizeof(text),0,"bci_test_readback_failed");
-    CHECK(!strcmp(text,"2D acceleration: NO \xE2\x80\x94 software rendering (bci_test_readback_failed)"));
-    accel_notice_text(text,sizeof(text),0,"");
+    accel_notice_text(text,sizeof(text),1,0,"engine_ok_drawing_software");
+    CHECK(!strcmp(text,"2D engine: OK (drawing: software)"));
+    accel_notice_text(text,sizeof(text),0,0,"bci_test_readback_failed");
+    CHECK(!strcmp(text,"2D engine: NO (bci_test_readback_failed)"));
+    accel_notice_text(text,sizeof(text),0,0,"");
     CHECK(strstr(text,"(unknown)"));
     record(CIUKI_DEVICE_READY,"accelerated");
-    CHECK(accel_notice(&d)==1 && notices==1);
+    CHECK(notice_at(&d,5000000000ull)==1 && notices==1);
     CHECK(!strcmp(last_text,"2D acceleration: YES \xE2\x80\x94 Savage") && d.sh.notification.expires==15000000000ull);
-    record(CIUKI_DEVICE_QUARANTINED,"unsupported_device");
-    CHECK(accel_notice(&d)==1 && notices==2);
-    CHECK(!strcmp(last_text,"2D acceleration: NO \xE2\x80\x94 software rendering (unsupported_device)"));
-    inventory.count=1;                              /* no record: nothing to say */
-    CHECK(accel_notice(&d)==1 && notices==2);
-    query_error=1;                                  /* retried twice, then given up */
+    /* Ready but unused: 3 s for the first engine draw, polled twice a second. */
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
+    record(CIUKI_DEVICE_READY,"engine_ok_drawing_software");
     unsigned before=queries;
-    CHECK(accel_notice(&d)==0 && accel_notice(&d)==0 && accel_notice(&d)==1 && notices==2 && queries==before+3);
-    printf("desktop accel notice: YES/NO text, 10 s expiry, device record PASS\n");
+    CHECK(notice_at(&d,20000000000ull)==0 && notice_at(&d,20100000000ull)==0 && queries==before+1);
+    CHECK(notice_at(&d,20600000000ull)==0 && notices==1);
+    record(CIUKI_DEVICE_READY,"accelerated");             /* drew meanwhile */
+    CHECK(notice_at(&d,21200000000ull)==1 && notices==2 && strstr(last_text,"YES"));
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
+    record(CIUKI_DEVICE_READY,"engine_ok_drawing_software");
+    CHECK(notice_at(&d,30000000000ull)==0 && notice_at(&d,31000000000ull)==0 && notice_at(&d,33100000000ull)==1);
+    CHECK(notices==3 && !strcmp(last_text,"2D engine: OK (drawing: software)"));
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
+    record(CIUKI_DEVICE_QUARANTINED,"unsupported_device");
+    CHECK(notice_at(&d,40000000000ull)==1 && notices==4);
+    CHECK(!strcmp(last_text,"2D engine: NO (unsupported_device)"));
+    /* No record yet: the activation decides later; give up after 60 s. */
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
+    inventory.count=1;
+    CHECK(notice_at(&d,50000000000ull)==0 && notice_at(&d,80000000000ull)==0 && notice_at(&d,110000000000ull)==1 && notices==4);
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
+    query_error=1;                                  /* retried twice, then given up */
+    before=queries;
+    CHECK(notice_at(&d,120000000000ull)==0 && notice_at(&d,121000000000ull)==0 && notice_at(&d,122000000000ull)==1 &&
+          notices==4 && queries==before+3);
+    printf("desktop accel notice: YES only after an engine draw, OK (drawing: software), NO (<reason>), late decision, 10 s expiry PASS\n");
     return 0;
 }

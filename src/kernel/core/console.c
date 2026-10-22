@@ -495,16 +495,17 @@ static void splash_accel_update(bool yield)
     irq_restore(f);
 }
 
-/* f1-97: the accelerator decision (savage2d.c, thread context): the text is
- * `2D acceleration: YES` or `2D acceleration: NO (<reason>)`; drawn by the
- * console worker (or at the handover), never from the caller. */
-void console_splash_accel(bool accelerated, const char *reason)
+/* f1-97/f2-92: the accelerator state (savage2d.c, thread context): the text
+ * is `2D engine: NO (<reason>)`, `2D engine: OK (drawing: software)` until
+ * the engine has drawn a presenter's request, then `2D acceleration: YES`;
+ * drawn by the console worker (or at the handover), never from the caller. */
+void console_splash_accel(bool accelerated, bool used, const char *reason)
 {
     char text[SPLASH_ACCEL_TEXT] = { 0 };
     unsigned n = 0;
-    const char *parts[] = { "2D acceleration: ", accelerated ? "YES" : "NO",
-                            accelerated ? "" : " (", accelerated || !reason ? "" : reason,
-                            accelerated ? "" : ")" };
+    const char *parts[] = { accelerated && used ? "2D acceleration: YES" : "2D engine: ",
+                            !accelerated ? "NO (" : used ? "" : "OK (drawing: software)",
+                            accelerated || !reason ? "" : reason, accelerated ? "" : ")" };
     for (unsigned i = 0; i < sizeof(parts) / sizeof(parts[0]); i++)
         for (const char *c = parts[i]; *c && n + 1 < SPLASH_ACCEL_TEXT; c++) text[n++] = *c;
     uint32_t f = irq_save();
@@ -657,7 +658,7 @@ static uint32_t splash_service(void) { return 100; }
 static void splash_stop(void) {}
 static void splash_worker_class(void) {}
 void console_splash_phase(enum splash_phase phase) { (void)phase; }
-void console_splash_accel(bool accelerated, const char *reason) { (void)accelerated; (void)reason; }
+void console_splash_accel(bool accelerated, bool used, const char *reason) { (void)accelerated; (void)used; (void)reason; }
 #endif
 
 static void clear_screen(void)
