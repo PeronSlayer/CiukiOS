@@ -59,7 +59,7 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT /* 16-byte damage; RESULT deferred until completed frame */
+    DESK_V3_PRESENT /* 16-byte damage; RESULT after frame, immediate if covered/identical */
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
@@ -79,6 +79,9 @@ enum desk_cursor_shape {
 #define DESK_TITLE_MAX 63u
 #define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message */
 enum desk_opcode {
+    /* DAMAGE remains a rectangle in every version. A legacy producer with
+     * no finer damage sends its full backing bounds; no new negotiation is
+     * required for precise Win32, DOS-window or NetSurf updates. */
     DESK_HELLO = 1, DESK_CREATE_WINDOW, DESK_DAMAGE, DESK_MOVE, DESK_CLOSE,
     DESK_PING, DESK_CONFIGURE, DESK_KEY, DESK_MOTION, DESK_BUTTON,
     DESK_FOCUS, DESK_PONG, DESK_CLOSED, DESK_CLOSE_REQUEST,

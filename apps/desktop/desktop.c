@@ -1232,7 +1232,6 @@ static void mixer_write(struct desktop *d)
     if (e==-EAGAIN) { d->sh.want_mixer=1; return; }
     if (e) {
         desk_shell_notify_error(d,"Volume change failed",e);
-        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
     }
 }
 static void mixer_poll(struct desktop *d,uint64_t now,uint64_t *next)
@@ -1387,7 +1386,6 @@ static int launch_pending(struct desktop *d)
     int pid=selected<d->program_count ? desk_task_launch(d,d->programs[selected].name,NULL) : -ENOENT;
     if (pid<0) {
         desk_shell_notify_error(d,"Program did not start",-pid);
-        desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
     } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
         d->shell_pid=(uint32_t)pid; d->shell_stage=2;
     } else if (d->tasks_test && d->tasks_stage==0 && !strcmp(d->programs[selected].name,"tasks")) {
@@ -1476,8 +1474,6 @@ static void shell_service(struct desktop *d)
         if (job_error) desk_shell_notify_error(d,"Volume change failed",job_error);
         else if (job.master.save_state==CIUKI_MIXER_UNSAVED)
             desk_shell_notify_error(d,"Volume applied but not saved",(int)job.master.save_error);
-        if (job_error || job.master.save_state==CIUKI_MIXER_UNSAVED)
-            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
         if (!job_error && !job.save_only) desk_sound(d,SOUND_VOLUME);
         if (job.serial == mixer_serial && !sh->volume_drag && !sh->want_mixer) sh->want_reload|=4;
     }
@@ -1485,7 +1481,6 @@ static void shell_service(struct desktop *d)
     desktop_wait("settings-save-result");
     if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
         desk_shell_notify_error(d,"Settings not saved",save_error);
-        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
     }
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) { desk_power_tick(d); return; }
@@ -1507,8 +1502,7 @@ static void shell_service(struct desktop *d)
     }
     if (settings_reload_pending && !settings_writer_started) {
         settings_reload_pending=settings_reload_request=settings_reload_wallpaper=0;
-        snprintf(d->notice,sizeof(d->notice),"Settings worker unavailable");
-        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+        desk_shell_notify_error(d,"Settings worker unavailable",ENOSYS);
     }
     desktop_wait("settings-read-submit");
     if (settings_reload_request && settings_writer_started && !cfg_writer_read(&settings_writer))
@@ -1521,7 +1515,6 @@ static void shell_service(struct desktop *d)
         if (reload_error && reload_error!=ENOENT) {
             desk_shell_notify_error(d,"Settings not loaded",reload_error);
             settings_reload_wallpaper=0;
-            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
         } else {
             int old_tray_width = desk_shell_tray_box(d).w;
             char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
@@ -1587,8 +1580,7 @@ static void shell_service(struct desktop *d)
         desktop_wait("settings-save-submit");
         sh->want_save=0;
         if (settings_save(d)) {
-            snprintf(d->notice,sizeof(d->notice),"Settings not saved (errno %d)",errno);
-            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+            desk_shell_notify_error(d,"Settings not saved",errno);
         }
     }
     if (sh->want_mixer) { desktop_wait("mixer-submit"); sh->want_mixer=0; mixer_write(d); }

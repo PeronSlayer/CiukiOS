@@ -42,6 +42,9 @@ struct ciuki_browser_surface {
     int close_detail;
     unsigned overflows;
     nsfb_bbox_t damage;
+    void *damage_region; /* private pixman region; bounds above are diagnostic */
+    nsfb_bbox_t retry_damage; /* copied before a refused channel send */
+    bool retry_present;
     int mouse_x, mouse_y;
     unsigned buttons;
     unsigned cursor_shape;

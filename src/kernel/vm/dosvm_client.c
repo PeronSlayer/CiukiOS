@@ -132,8 +132,26 @@ struct dosvm *dosvm_client_first(uint32_t *owner)
     return 0;
 }
 
+struct row_target { struct surface *surface; bool force; };
 static int put_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
-{ return surface_write(arg, y * CIUKI_DOSVM_WIDTH * 4, pixels, bytes); }
+{
+    struct row_target *target=arg;
+    unsigned offset=y*CIUKI_DOSVM_WIDTH*4;
+    /* Compare the existing shared surface, including text/VBE paths which
+     * have page/band dirt rather than an exact indexed-plane row diff.
+     * A small stack chunk avoids another retained VM frame or large stack. */
+    if (!target->force) {
+        uint8_t previous[256];unsigned at=0;
+        for (;at<bytes;at+=sizeof(previous)) {
+            unsigned n=bytes-at;if(n>sizeof(previous))n=sizeof(previous);
+            int error=surface_read(target->surface,offset+at,previous,n);
+            if(error)return error;
+            if(memcmp(previous,(const uint8_t *)pixels+at,n))break;
+        }
+        if(at>=bytes)return 1; /* unchanged; presenter must not mark damage */
+    }
+    return surface_write(target->surface,offset,pixels,bytes);
+}
 static bool event_valid(const struct ciuki_input_event *e)
 {
     switch (e->type) {
@@ -295,8 +313,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         allowed.wait.timeout_ms = c.wait.timeout_ms;
     }
     if (op == CIUKI_DOSVM_PRESENT_BANDS) {
-        if (c.presentation.redraw > 1) return -EINVAL;
+        if (c.presentation.redraw > 1 || c.presentation.flags>CIUKI_DOSVM_PRESENT_SCANLINES) return -EINVAL;
         allowed.presentation.redraw = c.presentation.redraw;
+        allowed.presentation.flags = c.presentation.flags;
     }
     if (memcmp(&allowed, &c, sizeof(c))) return -EINVAL;
     /* The record stays writable across a sleeping create/close. */
@@ -430,9 +449,11 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 dosvm_startup_report(v, true);
             }
         } else if (op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS) {
+            bool scanlines=op==CIUKI_DOSVM_PRESENT_BANDS && c.presentation.flags==CIUKI_DOSVM_PRESENT_SCANLINES;
             uint32_t samples = v->present_samples;
             if (op == CIUKI_DOSVM_PRESENT_BANDS && c.presentation.redraw) v->video_presented = false;
-            e = dosvm_vga_present(v, put_row, b->surface, g_ticks, &c.damage);
+            struct row_target target={b->surface,!v->video_presented};
+            e = dosvm_vga_present(v, put_row, &target, g_ticks, &c.damage);
             if (e >= 0) {
                 /* A cadence-deferred call must not acknowledge the pending
                  * frame. The last store may otherwise never reach the window. */
@@ -445,8 +466,13 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 }
                 c.changed = (uint32_t)e; e = 0; video_mode(v, &c);
                 if (op == CIUKI_DOSVM_PRESENT_BANDS) {
-                    c.presentation.bands[0] = (uint32_t)v->video_bands;
-                    c.presentation.bands[1] = (uint32_t)(v->video_bands >> 32);
+                    if (scanlines) {
+                        memset(&c.scanlines,0,sizeof(c.scanlines));
+                        memcpy(c.scanlines.bits,v->video_rows,sizeof(v->video_rows));
+                    } else {
+                        c.presentation.bands[0] = (uint32_t)v->video_bands;
+                        c.presentation.bands[1] = (uint32_t)(v->video_bands >> 32);
+                    }
                 }
             }
             else e = -EIO;

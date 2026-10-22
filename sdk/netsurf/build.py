@@ -100,6 +100,7 @@ def inputs(host=False):
             "python":{"version":list(sys.version_info[:3]),"sha256":digest(Path(sys.executable).resolve()),
                       "zlib":host_zlib.ZLIB_RUNTIME_VERSION},
             "bearssl": hashes(ROOT / "third_party/bearssl"),
+            "pixman": hashes(ROOT / "third_party/pixman"),
             "cacert": hashes(ROOT / "third_party/cacert"),
             "test_ca": digest(ROOT / "tests/suites/fixtures/f6-browser/ca.pem"),  # f6-18 test-profile anchor
             "host_header":digest(ROOT / "tests/host/desktop/replay_base.h") if host else None}
@@ -341,6 +342,7 @@ def build(host=False, clean=False, directory=None):
         shutil.copy2(notice, notices / (name + ".txt"))
     shutil.copy2(tree / "libnspsl/public_suffix_list.dat", notices / "public_suffix_list.dat")
     shutil.copy2(src["zlib"] / "README", notices / "zlib.txt")
+    shutil.copy2(ROOT / "third_party/pixman/COPYING",notices / "pixman.txt")
     shutil.copy2(ROOT / "third_party/bearssl/LICENSE.txt",notices / "BearSSL.txt")
     shutil.copy2(ROOT / "third_party/bearssl/README.ciuki",notices / "BearSSL-SOURCE.txt")
     shutil.copy2(ROOT / "third_party/cacert/MPL-2.0.txt",notices / "CACERT-MPL-2.0.txt")

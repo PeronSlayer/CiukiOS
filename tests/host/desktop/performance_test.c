@@ -170,7 +170,7 @@ static void assertions(void)
         desk_move(&d,0,680,500);
         desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
         redraw();
-        desk_move(&d,0,640,480); assert(!d.copy_pending); redraw();
+        desk_move(&d,0,640,480); assert(d.copy_pending); redraw();
         assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
         d.sh.network_open=d.sh.media_open=0;
         desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);

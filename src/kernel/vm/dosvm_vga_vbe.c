@@ -214,7 +214,7 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     uint16_t mode=v->vbe_mode;
     uint32_t base=v->vbe_buffer.base;
     v->video_present_rate=(unsigned)((1000000u+dos_video_frame_us(m)/2)/dos_video_frame_us(m));
-    uint8_t pixels[1600];
+    uint8_t pixels[1600];unsigned first=DOSVM_VIDEO_HEIGHT,last=0;
     for (unsigned y=0;y<DOSVM_VIDEO_HEIGHT;y++) {
         if (!(y&3)) kpreempt_point();
         /* A mode change may release/reallocate the linear buffer. Never
@@ -239,14 +239,20 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
             v->video_pixels[x]=color;
         }
         int e=row(arg,y,v->video_pixels,sizeof(v->video_pixels));
-        if (e) { v->video_presented=false; return e; }
+        if (e<0) { v->video_presented=false; return e; }
+        if (e>0) continue;
+        v->video_rows[y/32]|=1u<<(y%32);
+        v->video_bands|=1ull<<(y/DOSVM_VIDEO_BAND);
+        if(y<first)first=y;
+        last=y+1;
     }
     /* A surface writer may yield to the guest. Preserve a pending mode or
      * palette change rather than acknowledging a mixed frame as current. */
     v->video_presented=v->vbe_mode==mode && v->vga.display_changes==display;
     v->video_tick=tick;v->video_display=display;
-    v->video_frames++; v->video_bands=(1ull<<(DOSVM_VIDEO_HEIGHT/DOSVM_VIDEO_BAND))-1;
     v->video_geometry=(cvga_geometry){.width=m->width,.height=m->height};
-    *damage=(struct ciuki_rect){0,0,0,0,DOSVM_VIDEO_WIDTH,DOSVM_VIDEO_HEIGHT};
+    if(!last)return 0;
+    v->video_frames++;
+    *damage=(struct ciuki_rect){0,(int32_t)first,0,(int32_t)first,DOSVM_VIDEO_WIDTH,last-first};
     return 1;
 }

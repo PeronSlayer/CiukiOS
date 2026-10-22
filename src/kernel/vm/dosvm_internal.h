@@ -272,6 +272,7 @@ struct dosvm {
     bool video_lut_valid;
     uint32_t video_lut[256];
     uint64_t video_bands; /* destination 8-line bands written by the last present */
+    uint32_t video_rows[15]; /* exact destination scanlines, PRESENT_BANDS opt-in */
     struct {
         uint32_t harvests, direct_pages, trapped_bytes, converted_bytes, rows;
         uint32_t port_remaps, burst_insn, latch_read_windows;
@@ -477,6 +478,7 @@ bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, boo
  * Returns 1 with *damage set when rows changed, 0 when nothing changed or the
  * frame period has not elapsed, or the negative row-writer error. */
 struct ciuki_rect;
+/* Row callback: negative error, zero written, positive already identical. */
 int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t tick, struct ciuki_rect *damage);
 /* Same complete scan as frame_digest, optionally retaining those exact rows. */

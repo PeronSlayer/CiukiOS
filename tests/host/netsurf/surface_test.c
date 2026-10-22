@@ -91,16 +91,33 @@ int main(void)
     assert(s->current.map[2*640+1]==saved);
     p=result(DESK_DAMAGE,desk_get32(sent[sends-1].data+4),0);ciuki_browser_packet(s,&p);
     assert(s->current.map[2*640+1]==saved);
-    assert(!ciuki_browser_present(s) && sends==before+1);
-    assert(s->current.map[2*640+1]==0xabcdef);
+    assert(!ciuki_browser_present(s) && sends>before);
+    /* This pixel lies in the gap between the reported rectangles. */
+    assert(s->current.map[2*640+1]==saved);
+    before=sends;
     s->current.back[2*640+1]=0x654321;
-    assert(s->current.map[2*640+1]==0xabcdef);
+    assert(s->current.map[2*640+1]==saved);
     ciuki_browser_damage(s,(nsfb_bbox_t){1,2,2,3});
-    assert(!ciuki_browser_present(s) && sends==before+2); /* no RESULT wait */
+    assert(!ciuki_browser_present(s) && sends==before+1); /* no RESULT wait */
     assert(s->current.map[2*640+1]==0x654321);
     ciuki_browser_damage(s,(nsfb_bbox_t){1,2,2,3});
+    s->current.back[2*640+1]=0xabcdef;
     fail_send=1;assert(ciuki_browser_present(s)==-1 && s->dirty);fail_send=0;
     assert(!ciuki_browser_present(s));
+    assert(s->current.map[2*640+1]==0xabcdef && !s->retry_present);
+    before=sends;
+    ciuki_browser_damage(s,(nsfb_bbox_t){1,2,2,3});
+    assert(!ciuki_browser_present(s) && sends==before); /* identical frame */
+    /* Two distant updates preserve their exact regions even when private
+     * rendering changed an unreported pixel in the covering box's gap. */
+    s->current.back[20*640+10]=0x334455;s->current.back[200*640+600]=0x556677;
+    saved=s->current.map[100*640+300];s->current.back[100*640+300]=0xfefefe;
+    ciuki_browser_damage(s,(nsfb_bbox_t){10,20,11,21});
+    ciuki_browser_damage(s,(nsfb_bbox_t){600,200,601,201});
+    assert(!ciuki_browser_present(s) && sends==before+2);
+    assert(s->current.map[100*640+300]==saved);
+    assert(s->current.map[20*640+10]==0x334455 && s->current.map[200*640+600]==0x556677);
+    puts("PASS F2-98b NetSurf: exact disjoint regions, unchanged frame sends nothing, backpressure retains copied-but-unsent damage");
     int old=s->current.fd;
     p=configure(800,600,10);ciuki_browser_packet(s,&p);assert(s->pending.fd>=0 && s->current.fd==old && fds[old].live);
     unsigned swap=s->swap_request;

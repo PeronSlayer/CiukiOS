@@ -55,6 +55,7 @@ struct desk_frame_stats {
      * offscreen-cache copies, writes = cache uploads), engine requests that
      * fell back to software, and rows served from the offscreen caches. */
     uint64_t accel_fills, accel_copies, accel_writes, accel_fallback, cache_rows;
+    uint64_t copy_bytes, compare_px; /* clipped RAM copies and pixel equality proofs */
 };
 /* f2-92: an unchanged surface kept in engine-only video memory below the
  * scanout (CIUKI_ACCEL_OFFSCREEN rows): the wallpaper/icon background, or a
@@ -319,7 +320,7 @@ struct desktop {
     uint64_t hw_cursor_retry_ns;
     unsigned hw_cursor_retries, hw_cursor_fallbacks;
     int32_t cursor_x, cursor_y;
-    /* A move can copy only a clean, unobscured window. Other exposure is damage. */
+    /* Clean moves copy pixels visible at both endpoints; other exposure is damage. */
     int copy_pending, copy_client;
     struct ciuki_rect copy_rect;
     /* f2-92: offscreen rows [vram_first, vram_end), their surface caches,
@@ -386,6 +387,9 @@ int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
+int desk_client_damage(struct desktop *, int, struct desk_box);
+void desk_caption_damage(struct desktop *, int);
+unsigned desk_shell_occluders(const struct desktop *, struct desk_box *); /* SH_LEVELS+6 slots */
 static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
 int desk_v3_receive(struct desktop *, int, const struct ciuki_message *);

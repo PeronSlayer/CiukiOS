@@ -162,9 +162,12 @@ static void test_titles(void)
     d.damage.count=0; desk_receive(&d, indices[0], &m);
     assert(!strcmp(d.clients[indices[0]].title, "Files - C:\\X") && !strcmp(d.clients[indices[1]].title, "Test"));
     int taskbar=0, frame=0;
+    struct desk_box button=desk_task_button(&d,indices[0]),caption=d.clients[indices[0]].frame;
     for (unsigned k=0; k<d.damage.count; k++) {
-        taskbar |= covers(d.damage.boxes[k], 1, 479);
-        frame |= covers(d.damage.boxes[k], d.clients[indices[0]].frame.x, d.clients[indices[0]].frame.y);
+        taskbar |= covers(d.damage.boxes[k],button.x+button.w/2,button.y+button.h/2);
+        frame |= covers(d.damage.boxes[k],caption.x+caption.w/2,caption.y+DESK_TITLE/2);
+        struct desk_box ignored;
+        assert(!desk_intersect(d.damage.boxes[k],desk_content(&d.clients[indices[0]]),&ignored));
     }
     assert(taskbar && frame);
     d.damage.count=0; desk_receive(&d, indices[0], &m); assert(!d.damage.count);

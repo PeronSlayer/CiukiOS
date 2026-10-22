@@ -34,6 +34,7 @@ class T23CpuModelTests(unittest.TestCase):
                                 env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"}, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS F2-95 T23 CPU model", result.stdout)
+        self.assertIn("PASS F2-98b T23 budgets", result.stdout)
         print(result.stdout, end="")
 
 

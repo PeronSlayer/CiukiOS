@@ -49,6 +49,11 @@ static void completed_ram_frame(void)
     struct desktop *oracle=malloc(sizeof(d)); assert(oracle); *oracle=d;
     oracle->pixels=expected;
     desk_composite(oracle,(struct desk_box){0,0,(int)d.width,(int)d.height});
+    if (memcmp(d.pixels,expected,(size_t)d.width*d.height*4))
+        for (unsigned p=0;p<d.width*d.height;p++) if (d.pixels[p]!=expected[p]) {
+            fprintf(stderr,"RAM mismatch at %u,%u got=%x expected=%x copy=%d client=%d\n",
+                p%d.width,p/d.width,d.pixels[p],expected[p],d.copy_pending,d.copy_client);break;
+        }
     assert(!memcmp(d.pixels,expected,(size_t)d.width*d.height*4));
     free(oracle); free(expected);
 }
@@ -242,7 +247,7 @@ static void scenario(unsigned available)
     desk_move(&d,i,60,260);assert(d.copy_pending);redraw();
     if (available&2u) assert(window_copies==before_copies+1);
     /* Only the destination intersects. Then only the source intersects. */
-    desk_move(&d,i,settled.x+10,settled.y+10);assert(!d.copy_pending);redraw();
+    desk_move(&d,i,settled.x+10,settled.y+10);assert(d.copy_pending);redraw();
     shell_paints=0;
     content=desk_content(&d.clients[i]);
     desk_composite(&d,(struct desk_box){content.x+2,content.y+2,20,10});
@@ -250,12 +255,14 @@ static void scenario(unsigned available)
     before_copies=window_copies;
     memmove(pixels+5*width,pixels,(height-5)*width*4);
     for (unsigned p=0;p<5*width;p++) pixels[p]=(p*5939u)&0xffffff;
-    dirty_client(i);redraw();assert(window_copies==before_copies);
-    desk_move(&d,i,60,260);assert(!d.copy_pending);redraw();
+    dirty_client(i);redraw();
+    /* Its entire small client can lie in the protected shadow/entry sweep;
+     * the full-frame oracle also checks the no-safe-source fallback. */
+    desk_move(&d,i,60,260);assert(d.copy_pending);redraw();
     /* A frame whose rightmost client column touches only the left shadow. */
     int shadow_x=settled.x-(int)width-DESK_BORDER;
-    desk_move(&d,i,shadow_x,settled.y);assert(!d.copy_pending);redraw();
-    desk_move(&d,i,60,260);assert(!d.copy_pending);redraw();
+    desk_move(&d,i,shadow_x,settled.y);assert(d.copy_pending);redraw();
+    desk_move(&d,i,60,260);assert(d.copy_pending);redraw();
     /* The lower, clipped entry sweep is protected too. */
     assert(desk_notification_intersects(&d,(struct desk_box){settled.x,settled.y+settled.h-1,1,1}));
     assert(!desk_notification_intersects(&d,(struct desk_box){settled.x-1,settled.y,1,1}));
@@ -427,8 +434,79 @@ static void late_cursor_ready(void)
     for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
     desk_render_release(&d);free(d.pixels);free(scanout);vram_first=vram_end=0;assert(!fake_live());
 }
+static void foreign_regions(void)
+{
+    fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;
+    desk_init(&d,&ops,640,480);d.display=7;
+    d.pixels=calloc((size_t)d.width*d.height,4);scanout=calloc((size_t)d.width*d.height,4);
+    assert(d.pixels && scanout);caps=3;shown=0;fail_copy=fail_fill=fail_cursor=fail_cursor_set=0;
+    copies=window_copies=fills=uploads=0;d.accel=service;desk_accel_reset(&d,55);
+    int low=window_new(10,20,400,260,40,70);
+    int high=window_new(11,21,180,120,130,150);redraw();
+    struct desk_box content=desk_content(&d.clients[low]);
+    struct desk_box covered={160,200,32,8};
+    uint32_t *p=(uint32_t *)d.clients[low].pixels;
+    for (int y=covered.y;y<covered.y+covered.h;y++) for (int x=covered.x;x<covered.x+covered.w;x++)
+        p[(unsigned)(y-content.y)*400+(unsigned)(x-content.x)]=0x765432;
+    assert(!desk_client_damage(&d,low,covered) && !d.damage.count);
+    uint64_t frames=d.stats.frames, presents=d.presents;
+    assert(!desk_redraw(&d) && d.stats.frames==frames && d.presents==presents);
+    /* Partial coverage is clipped before either the scene or presenter. */
+    assert(desk_client_damage(&d,low,content));
+    uint64_t area=0;for (unsigned k=0;k<d.damage.count;k++) area+=(uint64_t)d.damage.boxes[k].w*d.damage.boxes[k].h;
+    assert(area<(uint64_t)content.w*content.h);redraw();
+    unsigned before=window_copies;
+    const int moves[][2]={{48,76},{32,68},{48,60},{32,76},{40,70}};
+    for (unsigned k=0;k<sizeof(moves)/sizeof(moves[0]);k++) {
+        desk_move(&d,low,moves[k][0],moves[k][1]);assert(d.copy_pending);redraw();
+    }
+    assert(window_copies>before);
+    /* Scroll beneath the covering window, both directions. */
+    content=desk_content(&d.clients[low]);before=window_copies;
+    memmove(p,p+7*400,(260-7)*400*4);
+    for (unsigned n=(260-7)*400;n<260*400;n++)p[n]=(n*7631u)&0xffffff;
+    desk_client_damage(&d,low,content);redraw();assert(window_copies>before);
+    for(int direction=-1;direction<=1;direction+=2) {
+        before=window_copies;
+        for(unsigned y=0;y<260;y++) {
+            uint32_t *row=p+y*400;
+            if(direction<0) {
+                memmove(row,row+9,(400-9)*4);
+                for(unsigned x=400-9;x<400;x++)row[x]=(y*92761u+x*7631u)&0xffffff;
+            } else {
+                memmove(row+9,row,(400-9)*4);
+                for(unsigned x=0;x<9;x++)row[x]=(y*3871u+x*8271u)&0xffffff;
+            }
+        }
+        desk_client_damage(&d,low,content);redraw();assert(window_copies>before);
+    }
+    desk_shell_enable(&d);desk_menu_open(&d,SH_MENU_START,0,0);redraw();
+    struct sh_menu *menu=&d.sh.menus[0];menu->hot=3;
+    desk_damage_add(&d.damage,menu->box,d.width,d.height);redraw();
+    d.mouse_x=menu->box.x+40;d.mouse_y=menu->box.y+3+4*menu->row_h+2;
+    desk_cursor_motion(&d);
+    desk_shell_motion(&d);area=0;
+    for(unsigned k=0;k<d.damage.count;k++)area+=(uint64_t)d.damage.boxes[k].w*d.damage.boxes[k].h;
+    assert(menu->hot==4 && area<=2u*(unsigned)(menu->box.w-4)*(unsigned)menu->row_h);redraw();
+    struct desk_box under_menu={menu->box.x+60,menu->box.y+100,8,4};
+    assert(!desk_client_damage(&d,low,under_menu) && !d.damage.count);
+    desk_menu_close(&d);redraw();
+    /* A z-order change in the same batch cannot reuse stale copy sources. */
+    desk_move(&d,low,48,76);desk_focus(&d,low);redraw();
+    content=desk_content(&d.clients[low]);
+    before=window_copies;
+    memmove(p+5*400,p,(260-5)*400*4);
+    for (unsigned n=0;n<5*400;n++)p[n]=(n*3871u)&0xffffff;
+    desk_client_damage(&d,low,content);redraw();assert(window_copies>before);
+    /* Exposure reconstructs even changes that arrived while covered. */
+    desk_drop_client(&d,high);redraw();
+    for (int k=0;k<DESK_CLIENTS;k++)desk_drop_client(&d,k);
+    desk_render_release(&d);free(d.sh.icons);free(d.sh.wall);free(d.pixels);free(scanout);assert(!fake_live());
+    puts("PASS F2-98b foreign regions: hidden damage has zero writes, clipped moves in four directions, clipped scrolls and exposure match the full-frame oracle");
+}
 int main(void)
 {
+    foreign_regions();
     late_cursor_ready();
     cache_scenario();
     move_measurement(0); move_measurement(3);

@@ -160,7 +160,7 @@ int main(int argc, char **argv)
     int loading = !!typed_length, shown = !loading;
     int failure_painted = 0;
     int panel_sent = 0, panel_redraw = 0, notice_painted = 0, redraw = 1;
-    unsigned frame_ms = 15;
+    unsigned precise_rows = 1;
     const char *failure = NULL;
     char detail[80] = "Preparing...";
     char fullscreen_notice[128]="";
@@ -307,13 +307,14 @@ int main(int argc, char **argv)
             continue;
         }
         if (failure) goto panel;
-        command(&c,id,generation); c.wait.timeout_ms=frame_ms;
+        /* Producer events and the VM's fractional VGA deadline determine
+         * the frame rate. This timeout bounds input/lifecycle service only. */
+        command(&c,id,generation); c.wait.timeout_ms=CIUKI_DOSVM_WAIT_MAX_MS;
         if (ciuki_dosvm(CIUKI_DOSVM_WAIT_PRESENT,&c)) {
             if (errno==EINTR) continue;
             if (errno==ESRCH) break;
             goto done;
         }
-        frame_ms=c.wait.frame_ms;
         unsigned video_events=c.wait.events;
         int polled_launch = autorun_launch_armed;
         command(&c, id, generation);
@@ -394,19 +395,32 @@ int main(int argc, char **argv)
         if (configured && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
             command(&c, id, generation);
             c.presentation.redraw=redraw;
-            if (ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS, &c)) {
+            c.presentation.flags=precise_rows ? CIUKI_DOSVM_PRESENT_SCANLINES : 0;
+            int error=ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS, &c);
+            if (error && errno==EINVAL && precise_rows) {
+                /* Older kernels retain the original eight-line protocol. */
+                precise_rows=0;command(&c,id,generation);c.presentation.redraw=redraw;
+                error=ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS,&c);
+            }
+            if (error) {
                 if (errno == ESRCH) break;
                 goto done;
             }
             if (c.changed) {
-                uint64_t bands = c.presentation.bands[0] | ((uint64_t)c.presentation.bands[1] << 32);
-                for (unsigned y = 0; y < CIUKI_DOSVM_HEIGHT / 8;) {
-                    if (!(bands & (1ull << y))) { y++; continue; }
+                uint32_t rows[15]={0};
+                if (precise_rows) memcpy(rows,c.scanlines.bits,sizeof(rows));
+                else {
+                    uint64_t bands=c.presentation.bands[0]|((uint64_t)c.presentation.bands[1]<<32);
+                    for (unsigned y=0;y<CIUKI_DOSVM_HEIGHT;y++)
+                        if (bands&(1ull<<(y/8))) rows[y/32]|=1u<<(y%32);
+                }
+                for (unsigned y = 0; y < CIUKI_DOSVM_HEIGHT;) {
+                    if (!(rows[y/32] & (1u<<(y%32)))) { y++; continue; }
                     unsigned first = y++;
-                    while (y < CIUKI_DOSVM_HEIGHT / 8 && (bands & (1ull << y))) y++;
+                    while (y < CIUKI_DOSVM_HEIGHT && (rows[y/32] & (1u<<(y%32)))) y++;
                     desk_message(&m, DESK_DAMAGE, 20);
-                    desk_put32(m.data + 4, 0); desk_put32(m.data + 8, first * 8);
-                    desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, (y - first) * 8);
+                    desk_put32(m.data + 4, 0); desk_put32(m.data + 8, first);
+                    desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, y - first);
                     if (send_packet(channel, &m)) goto done;
                 }
             }

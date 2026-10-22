@@ -99,7 +99,7 @@ static int window_new(int ch,int surf,unsigned w,unsigned h,int x,int y)
 }
 struct tally {
     double seconds; uint64_t turns, frames, scene_px, lfb_bytes, fills, copies, writes, cache_rows, ram_bytes, events;
-    uint64_t entries, write_px, engine_ops, compared;
+    uint64_t entries, write_px, engine_ops, compared, proof_px;
 };
 static void tally_begin(void)
 {
@@ -110,7 +110,9 @@ static void tally_end(struct tally *t, double seconds, uint64_t turns, uint64_t 
     *t=(struct tally){.seconds=seconds,.turns=turns,.frames=d.stats.frames,.scene_px=d.stats.scene_px,
         .lfb_bytes=d.stats.lfb_bytes,.fills=d.stats.accel_fills,.copies=d.stats.accel_copies,
         .writes=d.stats.accel_writes,.cache_rows=d.stats.cache_rows,.ram_bytes=ram_bytes,.events=events,
-        .entries=k.entries,.write_px=k.write_px,.engine_ops=k.engine_ops,.compared=__real_memcmp_bytes};
+        .entries=k.entries,.write_px=k.write_px,.engine_ops=k.engine_ops,.compared=__real_memcmp_bytes,
+        .proof_px=d.stats.compare_px};
+    if(d.stats.copy_bytes>t->ram_bytes)t->ram_bytes=d.stats.copy_bytes;
 }
 /* Per mille of one CPU over the window; entry_us varies for sensitivity. */
 static double main_pm(const struct tally *t, unsigned turn_entries, double entry_us)
@@ -119,7 +121,8 @@ static double main_pm(const struct tally *t, unsigned turn_entries, double entry
         +(double)t->turns*TURN_USER_US+(double)t->scene_px*COMPOSE_NS/1000.0
         +(double)t->lfb_bytes*LFB_NS_B/1000.0+(double)t->write_px*4.0*WRITE_NS_B/1000.0
         +(double)t->ram_bytes*RAM_NS_B/1000.0+(double)t->compared*CMP_NS_B/1000.0
-        +(double)t->engine_ops*ENGINE_US+(double)t->events*INPUT_US;
+        +(double)t->engine_ops*ENGINE_US+(double)t->events*INPUT_US
+        +(double)t->proof_px*8.0*CMP_NS_B/1000.0;
     return us/(t->seconds*1000000.0)*1000.0;
 }
 static void report(const char *name, const struct tally *t)
@@ -233,6 +236,47 @@ static void music_drag(struct tally *t)
     tally_end(t,(double)(vnow-begin)/1e9,turns,ram,events);
     scene_free();
 }
+/* F2-98b: producer-paced DOS at 70.09 Hz changing 32 full scanlines;
+ * Win32 at 30 Hz filling a 200x200 area; NetSurf's two separate UI labels
+ * at 5 Hz. These are explicit workloads, not a guarantee for arbitrary
+ * full-screen random pixels (the LFB throughput alone rules that out). */
+static void foreign_load(unsigned kind,struct tally *t)
+{
+    scene_setup();vnow=1000000000ull;
+    int client=kind ? window_new(10,20,640,480,100,100) : -1;
+    if(kind==1)d.clients[client].dosbox=1;
+    warm();tally_begin();
+    uint64_t begin=vnow,end=begin+3000000000ull,next=begin,turns=0,events=0;
+    uint64_t period=kind==1 ? 14268000ull : kind==2 ? 33333334ull : 200000000ull;
+    unsigned tick=0;
+    while(vnow<end) {
+        d.now_ns=vnow;turns++;
+        if(kind && vnow>=next) {
+            struct desk_client *c=&d.clients[client];uint32_t *p=(uint32_t *)c->pixels;
+            unsigned count=kind==3 ? 2 : 1;
+            for(unsigned part=0;part<count;part++) {
+                unsigned x=kind==3 ? (part ? 600 : 10) : 0,y=20;
+                unsigned w=kind==1 ? 640 : kind==2 ? 200 : 8,h=kind==1 ? 32 : kind==2 ? 200 : 16;
+                for(unsigned row=y;row<y+h;row++)for(unsigned col=x;col<x+w;col++)
+                    p[row*640+col]=kind==1 ? ((row*92761u+col*817u+tick*7631u)&0xffffff) : (0x112233u+tick);
+                struct ciuki_message m;desk_message(&m,DESK_DAMAGE,20);
+                m.sender_pid=c->pid;
+                desk_put32(m.data+4,x);desk_put32(m.data+8,y);desk_put32(m.data+12,w);desk_put32(m.data+16,h);
+                desk_receive(&d,client,&m);events++;
+            }
+            next+=period;tick++;
+        }
+        if(desk_frame_due(&d,vnow))assert(!desk_redraw(&d));
+        else if(!d.damage.count)desk_accel_cache_step(&d,vnow);
+        vnow+=wait_ns(kind ? next : end);
+    }
+    tally_end(t,(double)(vnow-begin)/1e9,turns,0,events);
+    if(kind==0)assert(!t->frames && !t->lfb_bytes && !t->engine_ops);
+    if(kind==1)assert(t->frames>=209 && t->frames<=211); /* no 30/60 Hz quantization */
+    if(kind==2)assert(t->scene_px<=t->frames*200u*200u);
+    if(kind==3)assert(t->scene_px<=t->frames*2u*8u*16u);
+    scene_free();
+}
 int main(void)
 {
     struct tally idle, drag;
@@ -255,5 +299,16 @@ int main(void)
     assert(after<100.0 && main_idle10+LINKS_AFTER_PM<100.0);
     assert(main_drag<400.0 && main_drag10<400.0);
     puts("PASS F2-95 T23 CPU model: music player idle and window drag within budget");
+    const char *names[]={"desktop-idle","dos-70hz-32rows","win32-200x200-fill","netsurf-disjoint-labels"};
+    const double budgets[]={20.0,250.0,50.0,50.0};
+    for(unsigned kind=0;kind<4;kind++) {
+        struct tally t;foreign_load(kind,&t);report(names[kind],&t);
+        double cpu=main_pm(&t,TURN_ENTRIES_AFTER,ENTRY_US)+LINKS_AFTER_PM;
+        printf("CPU F2-98b %s total_pm=%.2f budget_pm=%.0f entry_10us_pm=%.2f proof_px=%llu\n",
+            names[kind],cpu,budgets[kind],main_pm(&t,TURN_ENTRIES_AFTER,10.0)+LINKS_AFTER_PM,
+            (unsigned long long)t.proof_px);
+        assert(cpu<=budgets[kind]);
+    }
+    puts("PASS F2-98b T23 budgets: idle, native-rate DOS scanlines, Win32 area, NetSurf separated labels");
     return 0;
 }
