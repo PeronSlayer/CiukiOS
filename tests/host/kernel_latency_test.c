@@ -108,6 +108,10 @@ static void reset(void)
     memset(device_cpu,0,sizeof(device_cpu));device_cpu_total=device_cpu_tick=0;
     device_cpu_slot=0;device_cpu_scale=1;device_cpu_refresh=false;
     memset(device_consumers,0,sizeof(device_consumers));audio_over=0;device_seq++;device_attribution=true;
+    /* f1-98 desktop share and inheritance records */
+    share_ready=0;share_credit=0;share_tick=0;share_scale=1;share_turn=share_picked=false;desktop_share=true;
+    memset(&share_stats,0,sizeof(share_stats));memset(&share_base,0,sizeof(share_base));
+    inherit_used=inherit_lost=0;
     last_measured=0;last_preempted=false;
     g_task_switches=g_task_switches_other=g_switch_target=0;g_measure_stop=false;
     memset(classes,0,sizeof(classes));memset(paths,0,sizeof(paths));

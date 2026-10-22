@@ -172,6 +172,7 @@ static void volume_mutexes(struct vfs *v,uint32_t mask,bool take) {
 }
 struct vfs_waiter {
     struct vfs_waiter *next;
+    uintptr_t token; /* f1-98: the waiting task, named by later tickets */
     uint32_t mask, ticket[26], started;
     struct vfs_file_identity *file; /* retained by the calling description */
     struct vfs_hold_info owner;
@@ -193,6 +194,23 @@ static void request_wait(const struct vfs_request *r,uint64_t begin,uint32_t mas
     uint64_t elapsed=r->now(r->arg)-begin;
     if ((elapsed || outcome) && (!r->wait->valid || !r->wait->outcome)) *r->wait=(struct vfs_wait_info){r->owner,elapsed,mask,reason,outcome,true};
 }
+/* f1-98 (R2): whom a waiter for drive d depends on: the holder of the
+ * drive's reservation or guard, else the queued waiter whose ticket is served
+ * next (it must run to be admitted). In-flight open-file readers are several
+ * short device phases, not one owner: nobody is named for them. A token
+ * stays valid for its hold: a task is never stopped inside a VFS call
+ * (native stops wait for the syscall to unwind, proc_stop). */
+static uintptr_t drive_holder(struct vfs *v,unsigned d) {
+    if ((v->reserved|v->mutating)&(1u<<d)) return v->hold_token[d];
+    for (struct vfs_waiter *w=v->waiters;w;w=w->next)
+        if ((w->mask&(1u<<d)) && w->ticket[d]==v->serving[d]) return w->token;
+    return 0;
+}
+/* The calling task gives drive d's turn up (unlock, device-window pause or a
+ * cancelled ticket): every waiter's edge to it on that drive ends here. */
+static void drives_released(struct vfs *v,uint32_t mask) {
+    for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) fs_depend_release(&v->hold_token[d]);
+}
 /* Every queued ticket, including native untimed callers, is represented while
  * sleeping. Cancellation advances over holes without stealing a live ticket. */
 static void advance_cancelled(struct vfs *v) {
@@ -211,7 +229,7 @@ static int reserve_file_request(struct vfs *v,uint32_t mask,const struct vfs_req
     mask &= VFS_ALL_DRIVES; mask &= ~v->active;
     if (mask && request && request->wait && !request->wait->outcome) request->wait->drives=mask;
     if (!mask) return vfs_request_check(request);
-    struct vfs_waiter waiter={.next=v->waiters,.mask=mask,.started=fs_now_ms()};
+    struct vfs_waiter waiter={.next=v->waiters,.token=fs_task_token(),.mask=mask,.started=fs_now_ms()};
     /* f1-93: an operation that changes no file's chain (stat, lookup, find,
      * readdir, open, ...) is admitted while open-file readers are in flight,
      * the converse of reader_admitted; otherwise the desktop's stat waits
@@ -249,10 +267,19 @@ static int reserve_file_request(struct vfs *v,uint32_t mask,const struct vfs_req
         for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) &&
             (waiter.ticket[d]!=v->serving[d] || (v->readers[d] && !compatible) || (v->mutating&(1u<<d)))) ready=false;
         if (error || ready) break;
+        /* f1-98: lend this waiter's priority to the task it waits for on its
+         * first unready drive while it sleeps. */
+        uintptr_t needed=0; const void *object=0;
+        for (unsigned d=0;d<26 && !needed;d++) if ((mask&(1u<<d)) &&
+            (waiter.ticket[d]!=v->serving[d] || (v->mutating&(1u<<d)))) {
+            needed=drive_holder(v,d); object=&v->hold_token[d];
+        }
+        fs_depend(needed,object,FS_DEPEND_DRIVE);
         if (request) {
             fs_lock_drop(&v->lock); request->pause(request->arg); (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
         } else fs_event_wait(&v->volume_changed,&v->lock);
     }
+    fs_depend(0,0,0);
     struct vfs_waiter **link=&v->waiters;
     while (*link!=&waiter) link=&(*link)->next;
     *link=waiter.next;
@@ -260,9 +287,10 @@ static int reserve_file_request(struct vfs *v,uint32_t mask,const struct vfs_req
     v->diagnostic_pending=pending;
     request_wait(request,request_start,mask,VFS_WAIT_VOLUME,error);
     wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
-    if (error) { advance_cancelled(v); fs_event_wake(&v->volume_changed); return error; }
+    if (error) { advance_cancelled(v); drives_released(v,mask); fs_event_wake(&v->volume_changed); return error; }
     v->reserved |= mask;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
+        v->hold_token[d]=waiter.token;
         v->holds[d]=(struct vfs_hold_info){.task=task,.started=fs_now_ms(),.attribution=attribution};
         memcpy(v->holds[d].op,operation,sizeof(operation));
         memcpy(v->holds[d].site,site,sizeof(site));
@@ -299,16 +327,21 @@ static int admit_request(struct vfs *v,uint32_t mask,const struct vfs_request *r
     struct vfs_hold_info owner=holder_snapshot(&v->namespace_owner);
     struct fs_task_identity task=fs_request_identity(request);
     char holder=__atomic_load_n(&v->holder,__ATOMIC_RELAXED);
+    bool blocked=false;
     while (!fs_lock_try_take(&v->lock)) {
         if ((error=vfs_request_check(request))) {
+            if (blocked) fs_depend(0,0,0);
             request_wait(request,begin,mask,VFS_WAIT_NAMESPACE,error);
             struct vfs_pending_waits pending={0};
             wait_capture(&pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "namespace:timeout" : "namespace:cancelled",&task,&owner);
             diagnostics_publish(v,0,0,&pending);
             return error;
         }
+        /* f1-98: the namespace owner holds the drives being reserved. */
+        blocked=true; fs_depend(fs_lock_holder(&v->lock),&v->lock,FS_DEPEND_DRIVE);
         request->pause(request->arg);
     }
+    if (blocked) fs_depend(0,0,0);
     request_wait(request,begin,mask,VFS_WAIT_NAMESPACE,0);
     wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,"namespace",&task,&owner);
     namespace_owner(v,request);
@@ -343,7 +376,9 @@ void vfs_unlock(struct vfs *v) {
             holds[count].waiters=v->diagnostic_waiters[d]; holds[count++].drive='A'+d;
         }
         memset(&v->holds[d],0,sizeof(v->holds[d]));
+        v->hold_token[d]=0;
     }
+    drives_released(v,mask);
     v->active=0; v->active_tickets=0; v->reserved &= ~mask; v->mutating &= ~mask;
     for (unsigned d=0;d<26;d++) if (tickets&(1u<<d)) v->serving[d]++;
     advance_cancelled(v);
@@ -411,6 +446,7 @@ static void window_pause(struct vfs *v,unsigned d,struct vfs_hold_info *saved) {
     uint32_t held=fs_now_ms()-saved->started;
     if (held>=50) { record=(struct hold_record){*saved,held,v->diagnostic_waiters[d],(char)('A'+d)}; count=1; }
     memset(&v->holds[d],0,sizeof(v->holds[d]));
+    v->hold_token[d]=0; drives_released(v,1u<<d);
     v->mutating&=~(1u<<d);
     __atomic_store_n(&v->io_owner[d],0,__ATOMIC_RELAXED); v->io_mode[d]=0;
     v->transaction_users[d]++; v->window_pauses++;
@@ -965,6 +1001,7 @@ void vfs_turn_drop_locked(struct vfs *v,uint32_t mask) {
     for (unsigned d=0;d<26;d++)
         if ((mask&(1u<<d)) && v->turn_depth[d] && v->turn_owner[d]==self && !--v->turn_depth[d]) {
             v->turn_owner[d]=0; turn_freed(v,d); wake=true;
+            fs_depend_release(&v->turn_owner[d]);
         }
     if (wake) fs_event_wake(&v->volume_changed);
 }
@@ -977,14 +1014,25 @@ static void turn_wait_record(struct vfs *v,uint32_t mask,uint32_t start) {
         v->turn_waits[d]++; if (end-start>v->turn_wait_max_ms[d]) v->turn_wait_max_ms[d]=end-start;
     }
 }
+/* f1-98: a queued writer lends its priority to the turn's owner. */
+static void turn_depend(struct vfs *v,uint32_t mask) {
+    uintptr_t self=fs_task_token();
+    for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) && v->turn_depth[d] && v->turn_owner[d]!=self) {
+        fs_depend(v->turn_owner[d],&v->turn_owner[d],FS_DEPEND_DRIVE); return;
+    }
+    fs_depend(0,0,0);
+}
 /* Namespace held; the caller holds no reservation that the owner could
  * need. Cancellable through the current request; on error nothing is held. */
 static int turn_queue_locked(struct vfs *v,uint32_t mask) {
     if (turn_available(v,mask,false)) { turn_hold(v,mask); return 0; }
     uint32_t start=fs_now_ms(); int e=0;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->turn_waiters[d]++;
-    while (!e && !turn_available(v,mask,true))
+    while (!e && !turn_available(v,mask,true)) {
+        turn_depend(v,mask);
         e=fs_event_wait_request(&v->volume_changed,&v->lock,VFS_WAIT_VOLUME);
+    }
+    fs_depend(0,0,0);
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->turn_waiters[d]--;
     if (!e) turn_hold(v,mask);
     turn_wait_record(v,mask,start);
@@ -995,6 +1043,7 @@ uint32_t vfs_turn_suspend_locked(struct vfs *v,unsigned drive) {
     if (drive>=26 || !v->turn_depth[drive] || v->turn_owner[drive]!=fs_task_token()) return 0;
     uint32_t depth=v->turn_depth[drive];
     v->turn_depth[drive]=0; v->turn_owner[drive]=0; turn_freed(v,drive);
+    fs_depend_release(&v->turn_owner[drive]);
     fs_event_wake(&v->volume_changed); return depth;
 }
 bool vfs_turn_try_resume_locked(struct vfs *v,unsigned drive,uint32_t depth) {
@@ -1011,7 +1060,8 @@ void vfs_turn_resume_locked(struct vfs *v,unsigned drive,uint32_t depth) {
     if (!turn_available(v,mask,false)) {
         uint32_t start=fs_now_ms();
         v->turn_waiters[drive]++;
-        while (!turn_available(v,mask,true)) fs_event_wait(&v->volume_changed,&v->lock);
+        while (!turn_available(v,mask,true)) { turn_depend(v,mask); fs_event_wait(&v->volume_changed,&v->lock); }
+        fs_depend(0,0,0);
         v->turn_waiters[drive]--;
         turn_wait_record(v,mask,start);
     }

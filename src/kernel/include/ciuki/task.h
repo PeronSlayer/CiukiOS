@@ -78,6 +78,14 @@ struct task {
      * tasks' device consumption) and the device-window consumer slot hint. */
     bool audio_class;
     uint8_t device_slot;
+    /* f1-98: desktop minimum-share group (the desktop process and its window
+     * server) and the reservation dependency of a polling waiter: the task
+     * holding the drive reservation, writer turn or lock this task waits
+     * for (sync.c ksync_depend; never a physical device wait). */
+    bool share_group, share_lent; /* lent: a member waits for this task */
+    uint8_t depend_reason;
+    struct task *depends_on, *depend_next;
+    const void *depend_object;
     uint64_t device_ticks;
     uint64_t device_cycles, device_base; /* shared-budget CPU, report windows */
     uint64_t run_cycles, window_base, kernel_ticks, user_ticks;
@@ -123,6 +131,20 @@ void task_io_completed(struct task *t);
 void task_device_deadline(struct task *t, uint64_t deadline);
 /* f1-90: the audio DMA refill worker; its device CPU uses its own budget. */
 void task_set_audio_class(struct task *t);
+/* f1-98 (R2): members of the desktop group keep a minimum CPU share (25 %,
+ * at most 2.5 ms banked) against any ready task below the device band that
+ * would otherwise run first, such as a focused DOS VM or a Win32 game. */
+void task_set_share_group(struct task *t, bool member);
+/* sync.c: a member (or a task lent the share) waits for t through a kwait
+ * owner or a reservation dependency, so t runs on the group's share. */
+void task_set_share_lent(struct task *t, bool lent);
+struct sched_share_stats {
+    uint32_t turns;          /* dispatches made by the share preference */
+    uint32_t lent_turns;     /* of which to a non-member lent the share */
+    uint64_t turn_cycles;    /* CPU those turns used */
+    uint64_t group_cycles;   /* CPU debited to the share (members, lent holders) */
+};
+void sched_share_snapshot(struct sched_share_stats *out);
 void sched_snapshot(struct sched_stats *out);
 /* cpustat charges actual execution at IRQ/switch boundaries. Tick accounting
  * remains a conservative fallback before a calibrated clock is available. */
@@ -143,6 +165,10 @@ void cpu_point(void) __attribute__((weak));
 /* consumed: the task's own device CPU in the 10 ms budget window. */
 void cpu_overrun(struct task *t, uint64_t consumed) __attribute__((weak));
 void cpu_audio_overrun(struct task *t, uint64_t consumed) __attribute__((weak));
+/* f1-98: a reservation dependency raised `to` to `level` (reason: sync.h
+ * KSYNC_DEPEND_*); called with interrupts disabled, aggregated per window. */
+void cpu_inherit(const struct task *from, const struct task *to, unsigned level,
+                 unsigned reason) __attribute__((weak));
 void task_sleep_ms(uint32_t ms);
 __attribute__((noreturn)) void task_exit(int code);
 void task_kill(struct task *t, int code);

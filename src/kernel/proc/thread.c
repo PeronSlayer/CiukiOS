@@ -139,6 +139,14 @@ int proc_thread_prepare(struct process *p, uint32_t entry, uint32_t argument,
     return 0;
 }
 
+void proc_share_group(struct process *p)
+{
+    p->share_group = true;
+    for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++)
+        if (threads[i] && threads[i]->process == p && threads[i]->task)
+            task_set_share_group(threads[i]->task, true);
+}
+
 void proc_thread_discard(struct proc_thread *t)
 {
     struct process *p = t->process;

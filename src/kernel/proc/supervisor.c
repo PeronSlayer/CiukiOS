@@ -88,6 +88,8 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     struct proc_thread *thread = 0;
     uint32_t esp = 0;
     if (!err) err = proc_prepare(proc_supervisor(), &p);
+    /* f1-98: the desktop's threads keep a minimum CPU share beside a game. */
+    if (!err && desktop) proc_share_group(p);
     if (!err) proc_set_name(p, path);
     if (!err) err = elf_validate(&file, &image);
     if (!err) err = elf_load(&file, &image, p->memory);

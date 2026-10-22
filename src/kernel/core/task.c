@@ -50,6 +50,58 @@ static uint64_t device_cpu[FOCUS_PERIOD], device_cpu_total, device_cpu_tick, dev
 static unsigned device_cpu_slot;
 static bool device_cpu_refresh;
 static struct sched_stats scheduler_stats;
+/* f1-98 (R2): desktop minimum share. The Windows VMM time slicer gives
+ * every runnable VM a share of the CPU proportional to its time-slice
+ * priority, boosting each in turn (Cur_Run_VM_Boost) for its slice, and never
+ * suspends the System VM, home of the shell and every Win32 thread (Windows
+ * 3.1 DDK, VxD Adaptation Guide ch. 24-25; Win95 DDK "Multitasking"). Here
+ * the desktop process and its window server (share_group) keep 25 % of the
+ * CPU against any ready task below the device band that would otherwise run
+ * first: a focused DOS VM, a Win32 game, any task at the same or a higher
+ * level. The group accrues SHARE_PERMILLE of every millisecond as credit, at
+ * most SHARE_BURST_US banked and SHARE_BURST_US of debt; every member's CPU
+ * is debited, so the preference only tops the group up to its share and a
+ * turn lasts at most the remaining credit. Device service, urgent deadlines,
+ * service-level inheritance and the starvation dispatch stay ahead of it.
+ * Evidence: docs/validation/f1-98-reservation-boost-desktop-share.md. */
+#define SHARE_PERMILLE 250u
+#define SHARE_BURST_US 2500u
+static unsigned share_ready;          /* members in the run queues */
+static int64_t share_credit;          /* milli-cycles (cycles x 1000) */
+static uint64_t share_tick, share_scale = 1;
+static bool share_turn, share_picked;
+/* False only in the replay's negative control (the pre-f1-98 scheduler). */
+static bool desktop_share = true;
+static struct sched_share_stats share_stats;
+static bool share_member(const struct task *t) { return t->share_group || t->share_lent; }
+static int64_t share_cap(void) { return (int64_t)SHARE_BURST_US * (int64_t)share_scale; }
+static void share_advance(void)
+{
+    uint64_t elapsed = g_ticks - share_tick;
+    share_tick = g_ticks;
+    if (!elapsed) return;
+    int64_t cap = share_cap();
+    /* elapsed also covers a clock that moved backwards: a full bucket. */
+    if (elapsed >= 1000u) { share_credit = cap; return; }
+    share_credit += (int64_t)elapsed * SHARE_PERMILLE * (int64_t)share_scale;
+    if (share_credit > cap) share_credit = cap;
+}
+/* The highest ready member, when the group has credit and some other ready
+ * task below the device band would run first: the focused VM's preference,
+ * or any non-member queued at the same or a higher level. */
+static struct task *share_pick(const struct task *focus)
+{
+    if (!desktop_share || !share_ready) return 0;
+    share_advance();
+    if (share_credit <= 0) return 0;
+    bool competitor = focus && focus->state == T_READY && !share_member(focus);
+    for (int p = SCHED_BOOST_CAP - 1; p >= 0; p--)
+        for (struct task *t = rq_head[p]; t; t = t->next) {
+            if (share_member(t)) return competitor ? t : 0;
+            competitor = true;
+        }
+    return 0;
+}
 static struct task *all_tasks;
 static struct task *idle_task;
 static uint32_t next_id = 1;
@@ -67,6 +119,7 @@ static void rq_remove(struct task *t)
     if (t->next) t->next->rq_prev = t->rq_prev;
     else rq_tail[p] = t->rq_prev;
     t->next = t->rq_prev = 0;
+    if (share_member(t)) share_ready--;
 }
 
 static unsigned priority_base(struct task *t)
@@ -92,7 +145,10 @@ static void rq_link(struct task *t)
     if (rq_tail[t->effective_priority]) rq_tail[t->effective_priority]->next = t;
     else rq_head[t->effective_priority] = t;
     rq_tail[t->effective_priority] = t;
+    if (share_member(t)) share_ready++;
 }
+static bool rq_linked(const struct task *t)
+{ return t->rq_prev || rq_head[t->effective_priority] == t; }
 static bool device_urgent(const struct task *t);
 static void device_cpu_advance(void)
 {
@@ -265,8 +321,44 @@ static void device_audio_poll(void)
     for (unsigned i = 0; audio_over && i < DEVICE_CONSUMERS; i++)
         if (device_consumers[i].over) device_window_advance(&device_consumers[i]);
 }
+static void share_charge(struct task *t, uint64_t cycles, uint64_t scale)
+{
+    if (share_scale != scale) { share_scale = scale; share_credit = 0; share_tick = g_ticks; }
+    share_advance();
+    share_stats.group_cycles += cycles;
+    int64_t cap = share_cap();
+    /* At most 2 x cap: the balance never falls below -cap anyway. */
+    uint64_t milli = cycles > UINT64_MAX / 1000u ? UINT64_MAX : cycles * 1000u;
+    int64_t debit = milli > (uint64_t)(2 * cap) ? 2 * cap : (int64_t)milli;
+    share_credit = share_credit - debit < -cap ? -cap : share_credit - debit;
+    if (share_turn && t == g_current) {
+        share_stats.turn_cycles += cycles;
+        /* The turn ends with its credit; never inside a dispatch decision. */
+        if (share_credit <= 0 && t->state == T_RUNNING) g_need_resched = true;
+    }
+}
+static void share_set(struct task *t, bool *flag, bool value)
+{
+    uint32_t f = irq_save();
+    if (*flag != value) {
+        bool queued = t->state == T_READY && rq_linked(t);
+        if (queued) rq_remove(t);
+        *flag = value;
+        if (queued) rq_link(t);
+    }
+    irq_restore(f);
+}
+void task_set_share_group(struct task *t, bool member) { share_set(t, &t->share_group, member); }
+/* A holder that a member waits for (sync.c donation walk) runs on the
+ * group's share and is debited from it, like an inherited priority. */
+void task_set_share_lent(struct task *t, bool lent) { share_set(t, &t->share_lent, lent); }
+void sched_share_snapshot(struct sched_share_stats *out)
+{
+    uint32_t f = irq_save(); *out = share_stats; irq_restore(f);
+}
 void sched_charge_runtime(struct task *t, uint64_t cycles, uint64_t scale)
 {
+    if (t && share_member(t) && cycles && scale) share_charge(t, cycles, scale);
     if (!t || !cycles || !scale || t->effective_priority < SCHED_SERVICE_MIN) return;
     if (device_cpu_scale != scale) {
         memset(device_cpu, 0, sizeof(device_cpu));
@@ -498,6 +590,15 @@ static struct task *rq_pop(void)
         if (t->boosted) { rq_remove(t); return t; }
     for (int p = SCHED_LEVELS - 1; p >= (int)SCHED_BOOST_CAP; p--)
         if (rq_head[p]) return rq_take(p);
+    /* f1-98: the desktop group's minimum share precedes the focused VM's
+     * preference and every other level below the device band. */
+    struct task *member = share_pick(focus);
+    if (member) {
+        ktimer_cancel(&member->ready_timer); rq_remove(member);
+        share_picked = true; share_stats.turns++;
+        if (!member->share_group) share_stats.lent_turns++;
+        return member;
+    }
     if (focus && focus->state == T_READY && focus_ticks < FOCUS_BUDGET &&
         focus->effective_priority >= CIUKI_SCHED_NORMAL) {
         /* A foreground native input boost or donated lock owner beats a VM. */
@@ -664,6 +765,7 @@ struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
     task_set_base(t, P_NORMAL, p->personality == PROC_WIN32 ?
         (unsigned)proc_priority_win32(0x20, 0, false) : (unsigned)proc_priority_posix(0, 0, 0));
     t->as = p->memory->as;           /* borrowed directory, never destroyed by task */
+    t->share_group = p->share_group; /* f1-98: before the thread is ever queued */
     struct trap_frame tf;
     memset(&tf, 0, sizeof(tf));
     t->win32 = p->personality == PROC_WIN32;
@@ -722,6 +824,7 @@ void schedule(void)
             rq_push(prev);
         }
     }
+    share_picked = false;
     struct task *next = rq_pop();
     if (!next)
         next = idle_task;
@@ -734,6 +837,12 @@ void schedule(void)
         slice_left = FOCUS_BUDGET - focus_ticks;
     if (focus_task && focus_task->state == T_READY && next != focus_task && next->prio != P_DEVICE && slice_left > 2)
         slice_left = 2;
+    if (share_picked) { /* a share turn lasts at most its credit (>= one tick) */
+        uint64_t tick = share_scale * 1000u, credit = share_credit > 0 ? (uint64_t)share_credit : 0;
+        uint32_t ticks = 1; /* credit <= SHARE_BURST_US: at most 3 ticks, no division */
+        while (ticks < 8 && credit > ticks * tick) ticks++;
+        if (slice_left > ticks) slice_left = ticks;
+    }
     if (device_urgent(next)) {
         next->state = T_RUNNING; /* already removed from the ready queue */
         next->device_demoted = false;
@@ -741,6 +850,7 @@ void schedule(void)
     }
     next->service_deadline = 0; /* a dispatch serves the annotated wake deadline */
     if (cpu_switch) cpu_switch(prev, next);
+    share_turn = share_picked; /* after prev's last interval is charged */
     if (cpu_irqoff_tasks) cpu_irqoff_tasks(prev,next);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_OTHER);
     if (next == prev) {

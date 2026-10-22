@@ -22,6 +22,11 @@ static uint32_t stretch_id;
 struct overrun_event { char name[16]; uint32_t id, count, consumed_us; };
 static struct overrun_event overrun_events[16], audio_events[4];
 static unsigned overrun_used, overrun_lost, audio_used, audio_lost;
+/* f1-98: reservation inheritances per window (from waiter to holder). */
+struct inherit_event { char from[16], to[16]; uint32_t from_id, to_id, count; uint8_t level, reason; };
+static struct inherit_event inherit_events[8];
+static unsigned inherit_used, inherit_lost;
+static struct sched_share_stats share_base;
 static bool forced, threshold, resched_pending;
 static struct sched_stats sched_base;
 static struct {
@@ -200,6 +205,24 @@ void cpu_audio_overrun(struct task *t, uint64_t consumed)
 {
     overrun_note(audio_events, ARRAY_SIZE(audio_events), &audio_used, &audio_lost, t, consumed);
 }
+void cpu_inherit(const struct task *from, const struct task *to, unsigned level, unsigned reason)
+{
+    uint32_t f = irq_save();
+    unsigned i = 0;
+    while (i < inherit_used && (inherit_events[i].from_id != from->id ||
+           inherit_events[i].to_id != to->id || inherit_events[i].reason != reason)) i++;
+    if (i == ARRAY_SIZE(inherit_events)) { inherit_lost++; irq_restore(f); return; }
+    struct inherit_event *e = &inherit_events[i];
+    if (i == inherit_used) {
+        inherit_used++;
+        name_copy(e->from, from->name); name_copy(e->to, to->name);
+        e->from_id = from->id; e->to_id = to->id; e->reason = (uint8_t)reason;
+        e->count = 0; e->level = 0;
+    }
+    e->count++;
+    if (level > e->level) e->level = (uint8_t)level;
+    irq_restore(f);
+}
 void cpu_trap_enter(const struct trap_frame *tf)
 {
     if (g_current && ((tf->cs & 3) == 3 || (tf->eflags & (1u << 17)))) {
@@ -271,6 +294,8 @@ static void cpu_emit(void)
 {
     struct top top[5] = {0};
     struct overrun_event events[16], audio_overruns[4];
+    struct inherit_event inherits[8];
+    struct sched_share_stats share_now, share_delta;
     struct { char name[16]; uint32_t id; uint64_t cycles; } device_top = { "none", 0, 0 };
     uint64_t counts[P_COUNT], path[CPU_PATHS];
     uint32_t f = irq_save();
@@ -311,6 +336,14 @@ static void cpu_emit(void)
     unsigned audio_count = audio_used, audio_dropped = audio_lost;
     memcpy(audio_overruns, audio_events, audio_count * sizeof(*audio_overruns));
     audio_used = audio_lost = 0;
+    unsigned inherit_count = inherit_used, inherit_dropped = inherit_lost;
+    memcpy(inherits, inherit_events, inherit_count * sizeof(*inherits));
+    inherit_used = inherit_lost = 0;
+    sched_share_snapshot(&share_now);
+    share_delta = (struct sched_share_stats){ share_now.turns - share_base.turns,
+        share_now.lent_turns - share_base.lent_turns, share_now.turn_cycles - share_base.turn_cycles,
+        share_now.group_cycles - share_base.group_cycles };
+    share_base = share_now;
     memcpy(path, paths, sizeof(path));
     window_start = now; irq_cycles = exited_cycles = 0;
     memset(classes, 0, sizeof(classes)); memset(paths, 0, sizeof(paths));
@@ -433,6 +466,16 @@ static void cpu_emit(void)
         klog_periodic("[sched] audio_refill_overrun task=%s#%u count=%u consumed_us=%u",
             audio_overruns[i].name, audio_overruns[i].id, audio_overruns[i].count, audio_overruns[i].consumed_us);
     if (audio_dropped) klog_periodic("[sched] audio_refill_overrun lost=%u", audio_dropped);
+    for (unsigned i = 0; i < inherit_count; i++)
+        klog_periodic("[sched] inherit from=%s#%u to=%s#%u level=%u reason=%s count=%u",
+            inherits[i].from, inherits[i].from_id, inherits[i].to, inherits[i].to_id, inherits[i].level,
+            inherits[i].reason == KSYNC_DEPEND_CACHE ? "cache" : "drive", inherits[i].count);
+    if (inherit_dropped) klog_periodic("[sched] inherit lost=%u", inherit_dropped);
+    /* f1-98: the desktop group's CPU and the turns its minimum share gave it. */
+    if (share_delta.group_cycles || share_delta.turns)
+        klog_periodic("[sched] desktop_share group_pm=%u turns=%u lent_turns=%u turn_ms=%u",
+            pm(share_delta.group_cycles, total), share_delta.turns, share_delta.lent_turns,
+            ms(share_delta.turn_cycles));
 }
 static void cpu_worker(void *arg)
 {

@@ -11,3 +11,13 @@
 4. Host tests: inheritance on a drive hold with a priority-9 waiter, the share accounting, the VM cadence bound, `test_kernel_latency`, the strict FS gate, `host_kernel_tests.sh`; validation document `docs/validation/f1-98-reservation-boost-desktop-share.md`.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (Windows 98 Resource Kit scheduling chapter in build/rskt, Win95 DDK Adjust_Exec_Priority as used by f1-90).
+
+## Amendment 1 (lead, 2026-10-22 12:20, decisions on the delivery)
+
+Accepted with the 25 % share (window open 97 ms on the replay; 15 % would
+give 157 ms); the 5.42 % cadence cost for a vsync game needing 62 % of the
+CPU per frame is accepted for the 1.0.0 alpha and recorded; deferring the
+desktop's turns to the end of the game's frame is a follow-up if the T23
+shows it. R2 of the resource contract is amended by the lead (share, lending,
+holder boost). Scope against any higher-priority program and the boot task
+is accepted.
