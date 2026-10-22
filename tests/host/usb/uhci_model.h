@@ -8,8 +8,10 @@ struct uhci_model_io {
     volatile uint32_t *(*dma)(void *, uint32_t, unsigned);
     bool (*transaction)(void *, uint32_t, uint32_t, volatile uint32_t *);
     uint32_t *status;
-    /* Optional separation of TD status from the later QH element writeback. */
-    void (*advance)(void *, uint32_t, volatile uint32_t *, uint32_t);
+    /* Optional separation of TD status from the later QH element writeback.
+     * f1-96b: returns whether the element advanced; a queue whose element
+     * did not advance (early-Intel erratum) is left for the horizontal link. */
+    bool (*advance)(void *, uint32_t, volatile uint32_t *, uint32_t);
 };
 static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
 {
@@ -47,11 +49,12 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
         unsigned actual = ((td[1] & 0x7ff) + 1) & 0x7ff;
         bool short_packet = ack && (td[1] & (1u << 29)) && (td[2] & 255) == USB_PID_IN && actual < expected;
         if (short_packet) *io->status |= 1;
+        bool advanced = false;
         if (ack && !short_packet) {
-            if (io->advance) io->advance(io->cookie, address, qh, td[0]);
-            else qh[1] = td[0];
+            if (io->advance) advanced = io->advance(io->cookie, address, qh, td[0]);
+            else { qh[1] = td[0]; advanced = true; }
         }
-        if (ack && !short_packet && (td[0] & 4)) { link = td[0]; reserved = 8; }
+        if (advanced && (td[0] & 4)) { link = td[0]; reserved = 8; }
         else { link = horizontal; qh = NULL; reserved = 12; }
     }
     return -USB_EPROTO;

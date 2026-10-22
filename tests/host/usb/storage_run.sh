@@ -47,3 +47,6 @@ for name in ("rq_remove", "priority_base", "priority_init", "rq_link", "rq_push"
 PYTHON
 build_test bind_freeze_test
 "$out/bind_freeze_test" "$root/build/host/fs/fat12.img" "$root/build/host/fs/fat16.img" "$root/build/host/fs/fat32.img"
+# f1-96b: drained TD ring, early-Intel element erratum, same-chain retry, 128/8/1 ladder.
+build_test f1_96b_test
+"$out/f1_96b_test" "$root/build/host/fs/fat16.img"

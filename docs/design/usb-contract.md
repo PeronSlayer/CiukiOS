@@ -1,5 +1,120 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-96b: drained TD ring, QH element erratum, recovery ladder, re-plug (2026-10-22)
+
+Evidence (T23, image 5a10eef4, serial `t23-5a10eef4-serial.txt` lines
+4444–4537): a 64 KiB READ(10) (tag 155) ended its data stage after 44 ms
+(`frames=45`, deadline 10 s later) with `td=388007ff`: Active, C_ERR=3, no
+NAK/error bit, ActLen unwritten, i.e. a TD the HC never executed;
+`packets=273 index=272 offset=17408 stop=packet result=-110`. The BOT class
+reset then timed out (`reset addr=2 result=-110`, 500 ms packet budget),
+`quarantine addr=2 reason=reset_recovery`, the port was disabled and, by the
+F1-53 rule, stayed blocked (`reason=quarantined`) for the rest of the boot.
+
+Root cause (driver, reproduced on the host model): the f1-96 ring loop kept
+`stopped` = the status of the last TD it walked. When the HC had executed
+every armed TD before the driver woke (the walk reached `armed`), `stopped`
+held that TD's inactive full-ACK status; the refill then armed new TDs and
+`progress<armed && !(stopped&Active)` ended the stage as if a short packet
+had arrived, unlinking the QH under the TD the HC was about to run. The
+T23 index 272 means the HC drained 127 TDs (145–271) between two driver
+polls, at least 7 frames at the 19-packet full-speed maximum. The host model
+with a driver waking every 9 frames reproduces the exact record
+(`td=388007ff … stop=packet … result=-110`, then reset and quarantine).
+
+Research before implementation:
+[UHCI 1.1 §3.4.1.3, §3.3.2, Table 8](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf):
+the HC fetches the QH element; an inactive element sends it to the
+horizontal link without advancing (step 2→10); a successful TD is marked
+inactive, then its link is written to the element (steps 6, 9); a queue is
+never advanced on error or NAK; element bit 2 may vary as a side effect of
+the update. [ICH3-M §5.16.2.2](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+repeats the order for the 82801CAM (status update step 10, element write
+step 11, inactive element step 2→12) and states UHCI 1.1 compliance; it
+lists no queue-advance erratum. Linux [b761d9d867bc "UHCI: Work around old
+Intel bug"](https://github.com/torvalds/linux/commit/b761d9d867bcc29e8de3e62d1d72b27e75078ca6)
+(Alan Stern, 2006-05-12, seen on PIIX3 "Neptune"): `uhci_advance_check` in
+[uhci-q.c v6.12](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/uhci-q.c)
+— "Early Intel controllers have a bug which causes qh->element sometimes
+not to advance when a TD completes successfully. The queue remains stuck on
+the inactive completed TD" — sets `qh->element = qh->post_td->link` when
+the element equals the last completed TD after `QH_WAIT_TIMEOUT` (200 ms,
+uhci-hcd.h). Linux links TDs breadth-first (`LINK_TO_TD`, no `UHCI_PTR_DEPTH`
+since v2.6.17; v2.6.16 set depth-first on every few TDs only after an FSBR
+timeout) and relies on FSBR for several transactions per frame; it
+appends by activating an inactive dummy TD (`uhci_submit_common`). We keep
+depth-first links without FSBR (f1-96). Linux
+[usb-storage transport.c v6.12](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/storage/transport.c)
+`usb_stor_reset_common` sends the Bulk-Only reset with a 5 s timeout, then
+clears both halts; a failed reset escalates to `usb_stor_port_reset`
+(USB device reset). [BOT 1.0 §5.3.4](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf):
+Reset Recovery (class reset, clear HALT IN, clear HALT OUT) is the only
+way to restore framing after the host abandons a phase. No upstream code is
+imported.
+
+Decision:
+
+- The ring walk records `stopped` only for the TD that ended it; a walk that
+  reached `armed` leaves it Active, so a drained ring keeps streaming once
+  the refill re-arms the slot where the HC waits.
+- Early-Intel workaround: when the QH element still points at the newest
+  full-ACK TD after `USB_UHCI_ADVANCE_FRAMES` (4) frame boundaries without
+  progress, the driver writes that TD's link to the element (the value the
+  HC should have written; the slot is not re-armed before its successor
+  completes). The HC writes an element only after executing an active
+  element TD, so it cannot race this write; 4 frames instead of Linux's
+  200 ms because the HC writes the element right after the status, not
+  frames later. A fix of the final TD retires the queue as usual. Record
+  `[usb] uhci_advance controller=… addr=… ep=… tag=… packet=… element=…
+  link=… frames=… fixes=N` (fixes 1–4, then every 64th).
+- Same-chain retry, once per data stage: after `USB_BULK_STALL_MS` (200 ms,
+  Linux `QH_WAIT_TIMEOUT`) without progress, if the next TD was never
+  executed (Active, C_ERR=3, no status bit, ActLen unwritten) or the element
+  is off the chain, the QH is unlinked, retired for two frames, the
+  completed prefix re-read and the element pointed at the first incomplete
+  TD again: same TDs, toggles and buffers, no new CBW. A NAKing device keeps
+  its bounded wait. Record `[usb-storage] data_retry addr=… tag=… packet=…
+  offset=… element=… td=… stalled_ms=… frames=… relink=… result=…`.
+- Recovery ladder for READ(10): any recoverable transport fault of a
+  multi-sector command (NAK timeout after the same-chain retry, data/CBW
+  STALL, invalid or STALLed CSW, Phase Error, short data with residue,
+  ILLEGAL REQUEST) performs Reset Recovery and re-issues the range with the
+  next size: more than 8 sectors → 8, otherwise → 1, each with
+  `[usb-storage] max_sectors … from=128 to=8 …` / `from=8 to=1`; the device
+  keeps the lowered size and its queue limit (4096, then 512 bytes) until
+  re-plug. A one-sector READ keeps the F1-74 reset-qualified single retry;
+  quarantine (with terminal Reset Recovery) follows only when that fails, or
+  when the device no longer answers: a failed Reset Recovery, disconnect,
+  host/DMA error or CRC/babble (still fail-closed). Writes are never resent;
+  a failed multi-sector WRITE(10) records the next ladder size with
+  `resend=0` and quarantines. This supersedes the F1-96 one-sector fallback
+  and the F1-74 same-size retry of multi-sector READ(10).
+- The Bulk-Only reset request waits up to `USB_STORAGE_RESET_MS` (5 s) for
+  its status stage (`usb_device.control_timeout_ms`, bounded by the bind
+  deadline); halt clears keep the 500 ms packet budget.
+- Re-plug: a quarantined root or hub port stays blocked while the device is
+  connected (F1-53/F0-40 unchanged); an observed disconnect (CCS=0) releases
+  it (`[usb] release port=… controller=… reason=disconnect`, `[usb] release
+  hub=… port=…`), and the next connection is debounced, reset and enumerated
+  as a new device generation with a new address and record. A persisting
+  overcurrent blocks it again before enumeration. This supersedes F1-53's
+  "Quarantine remains permanent for this boot" for device-level port
+  quarantine; controller quarantine is unchanged. Device records, addresses
+  and drive letters are still not recycled (16 records per controller).
+
+Host model (`tests/host/usb/f1_96b_test.c`, FAT16 fixture, 16 transactions
+per frame): 8 × 128-sector READ(10) with the driver waking every 9/20/40
+frames complete (the base code fails the first one with the T23 record);
+an element stuck after packet 0, 127, 272, 1022 or 1023 costs 72–75 ms per
+64 KiB READ(10) instead of the 10 s deadline; a lost element or a wedged
+queue is relinked once after 200 ms; a 1.5 s NAK is waited out without
+retry; the ladder 128 → 8 → 1, quarantine only after the one-sector retry
+and on a reset not answered within 5 s; a 2 MiB copy from E: at wake 9 with
+an element stuck every 700 packets completes without reset or fallback.
+`usb_test.c` port flood: disconnect releases root and hub ports (UHCI and
+OHCI, device and storage-block quarantine) and a re-plug enumerates a new
+device. T23 qualification belongs to the lead.
+
 ## F1-96: negotiated 64 KiB transfers, UHCI TD ring, pinned queue limit (2026-10-22)
 
 Evidence (T23, image b453bc92): `[files] job=copy done ms=62239
@@ -85,7 +200,8 @@ wake 3 (the old 32-TD batches needed a service wake per 2 KiB).
 Not changed: the TEST UNIT READY before each block request, the cache
 writeback run size (64 sectors) and the OHCI packet path. The early-Intel
 QH element workaround is not implemented; on such a controller a stuck
-element still ends in the bulk deadline, as before.
+element still ends in the bulk deadline, as before (superseded by F1-96b:
+workaround implemented, fallback ladder 128 → 8 → 1).
 
 ## F1-81: completion-based bulk retirement (2026-10-18)
 
@@ -595,6 +711,8 @@ event is coalesced and emitted on a later scan. Quarantined ports acknowledge
 changes, emit one connect record with reason=quarantined, and stay silent until
 disconnect. Storage-block quarantine also blocks its port. Quarantine remains
 permanent for this boot; disconnect logging does not authorize enumeration.
+(Superseded by F1-96b: an observed disconnect releases a device-quarantined
+port and the next connection is enumerated as a new device.)
 
 Only the first unpublished attach INQUIRY may be retried once after successful
 BOT recovery for timeout, endpoint STALL or SCSI command failure. Failed

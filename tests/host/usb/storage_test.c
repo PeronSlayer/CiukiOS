@@ -25,7 +25,7 @@ static void (*port_read_hook)(void);
 static void (*hid_poll_hook)(struct usb_device *,struct usb_hid *);
 static bool (*private_transaction_hook)(uint32_t,uint32_t,volatile uint32_t *);
 static void (*command_hook)(void); /* f1-96: after a CBW is decoded */
-static void (*qh_advance_hook)(void *,uint32_t,volatile uint32_t *,uint32_t);
+static bool (*qh_advance_hook)(void *,uint32_t,volatile uint32_t *,uint32_t);
 void klog_diag(const char *fmt,...)
 {
     if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
@@ -93,6 +93,13 @@ static struct model {
     uint32_t injected_status;
     uint32_t latched_qh, latched_td, hc_status;
     unsigned interrupt_mask, native_gate;
+    /* f1-96b: an HC that stops executing bulk TDs (untouched, no NAK) until
+     * the driver unlinks the bulk QH; a device that NAKs the class reset's
+     * status stage for reset_nak_ms; a READ(10) data stage NAKed at byte
+     * data_nak_offset until data_nak_ms after its CBW. */
+    bool wedged, data_nak;
+    unsigned reset_nak_ms, data_nak_offset, data_nak_ms;
+    uint64_t setup_at;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
 static struct usb_device *device(void);
@@ -111,6 +118,7 @@ static bool uhci_transaction(void *c,uint32_t address,uint32_t qh,volatile uint3
         assert(private_transaction_hook);return private_transaction_hook(address,qh,td);
     }
     assert(qh==m.h.dma_phys+(((td[2]>>15)&15) ? USB_UHCI_BULK_QH:USB_UHCI_CONTROL_QH));
+    if(m.wedged && address!=m.h.dma_phys+USB_TD) return false; /* never executed */
     unsigned other=((td[2]>>15)&15) ? USB_UHCI_CONTROL_QH:USB_UHCI_BULK_QH;
     assert(uhci_dma(NULL,m.h.dma_phys+other,8)[1]&1); /* shared TD has one owner */
     assert(address==m.h.dma_phys+USB_TD ? td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER :
@@ -234,10 +242,11 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
     (void)d; assert(!periodic && n<=64); m.packets++;
     uint8_t *b=buffer;
     if(!ep) {
-        if(pid==USB_PID_SETUP) {assert(n==8);memcpy(m.setup,b,8);return 8;}
+        if(pid==USB_PID_SETUP) {assert(n==8);memcpy(m.setup,b,8);m.setup_at=m.now;return 8;}
         unsigned req=m.setup[1];
         if(req==0xfe && pid==USB_PID_IN && n) {if(m.max_lun_stall)return -USB_EPIPE;b[0]=0;return 1;}
         if(!n) {
+            if(req==0xff && m.now-m.setup_at<m.reset_nak_ms) return -USB_EAGAIN;
             if(req==0xff) {m.resets++;if(m.reset_fail)return -USB_EPIPE;m.stage=0;m.cbw_at=0;m.reset_order=1;}
             if(req==1) {
                 if(m.clear_fail) {m.clear_fail=false;return -USB_EPIPE;}
@@ -264,6 +273,8 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
            m.read_fault_kind==1 && m.at==512) return -USB_EAGAIN;
         if(m.cbw[15]==0x28 && m.read_commands==1 &&
            m.now-m.command_at<m.first_read_delay) return -USB_EAGAIN;
+        if(m.data_nak && m.cbw[15]==0x28 && m.at==m.data_nak_offset &&
+           m.now-m.command_at<m.data_nak_ms) return -USB_EAGAIN;
         if(m.forever_data || (m.nak_capacity && m.cbw[15]==0x25) ||
            (m.nak_mount && m.cbw[15]==0x28) ||
            (m.nak_prepare && m.cbw[15]==0x28 && m.read_commands>=3) ||
