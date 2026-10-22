@@ -1,0 +1,15 @@
+# f1-94 — The 2.1 ms interrupt-off blackout (audio lag, window lag): attribution and mitigation
+
+- **Phase/model:** F1, Claude agent (Opus). **Worktree:** `wt/f1-94` from `main`.
+- Evidence: T23 trial of image b453bc92… (2026-10-22 ~08:30, serial copy `build/lead-scratch/t23-b453bc92-serial.txt`, disk log `legacy/local/physical/b453bc92/BOOT.LOG` copied to `build/lead-scratch/t23-b453bc92-BOOT.LOG`).
+- Records: `[kernel] irqoff_section=schedule site=c0153971 irqoff_max_us=2137 violations=1341 work_us=2137 firmware_us=0 unclassified=1341`; 205 `irqoff_long` lines, all 2,11x µs, phases pick/ldt-debug/address_space/vm-enter/gap, mostly `from=device-work to=usb-hid` and `to=device-work`; `audio_refill_overrun consumed_us=2114..2233`; music reservoir `starvations=41` while a window moves; `stretch_max_ms=9`. Site c0153971 is `schedule()` (irq_save in cpu.h:110), c015134a is `wait_wake`. The same 2.1 ms sections were seen in every T23 trial since b51f034f (≈4 per second). A constant-length blackout that lands in whatever kernel code is running with interrupts off, independent of the phase, is the signature of System Management Interrupts (SMI) on the ICH3-M, not of our code.
+
+## Required
+
+1. Attribute: before and after every long section, sample the ICH3-M SMI status (`SMI_STS`/`SMI_EN` at PMBASE+0x34/0x30, PMBASE from LPC PCI config 0x40; see the Intel 82801CAM datasheet) and the TSC; classify the blackout as SMI when SMI_STS changed or the TSC gap exceeds the executed work; record `[kernel] smi count= sources=<bits> max_us=` per window and the SMI rate. Keep the sampling cost below 2 µs per section.
+2. Mitigate: after the UHCI legacy handoff (already done: `legsup 003b→0000`), also clear the SMI sources that are ours to clear once the OS owns the devices — USB legacy (`LEGACY_USB_EN`), periodic SMI timer (`PERIODIC_EN`), software SMI timer (`SWSMI_TMR_EN`), TCO if armed — only when the firmware ACPI/SMM handoff rules allow it (document each bit against the datasheet and the ThinkPad T23 BIOS behaviour; never touch `GBL_SMI_EN` or BIOS_EN without a stated reason). If the BIOS re-arms a source, say so with the record.
+3. If the blackout is not SMI, find the real site with the TSC marks (`cpu_irqoff_mark`) at finer granularity inside `schedule()` and fix it; a 2 ms LDT/debug-register or address-space switch is a bug.
+4. Second cause in the same trial: the USB scan/usb-hid interaction (`usbscan=0` token exists, never tried): make the kernel record the time between usb-hid turns and the 2.1 ms sections so the T23 serial answers whether they coincide.
+5. Host tests: SMI classification from recorded samples, the SMI_EN mask computation per chipset id, the records. Validation document `docs/validation/f1-94-irqoff-blackout.md` with the expected T23 lines.
+
+Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-94-report.md`.
