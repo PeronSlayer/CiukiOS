@@ -103,7 +103,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
-                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance", "title" };
+                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance", "title", "vm-game" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio", "media-remove", "vm-audio-jitter" };
     static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects", "w32-dialogs", "w32-upper-dlls", "w32-media", "w32-fixtures", "w32-kernel32", "w32-fullscreen", "w32-registry", "w32-audio", "w32-gdi32", "w32-crash", "w32-user32", "w32-codecs", "w32-ddraw", "w32-input", "w32-restart", "w32-installer-nsis", "w32-gl",
         /* f5-15C installers tier (title aliases of tests/win32/workloads.json) */
@@ -145,6 +145,13 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         else if (len-i != 15 || memcmp(s+i," guest=ciukidos",15)) return false;
         *selection=parsed;
         return true;
+    }
+    /* f3-61: f3:vm-game run=<id> [kernel=unified|kernel=freedos-1.3], then
+     * the ordinary optional suffixes; default the unified kernel, the DOS
+     * Box's own default for a game without a saved choice. */
+    if (parsed.phase == 3 && !strncmp(parsed.probe,"vm-game",sizeof(parsed.probe))) {
+        if (len-i >= 19 && !memcmp(s+i," kernel=freedos-1.3",19)) { parsed.flags |= PROBE_DOS_FREEDOS; i += 19; }
+        else if (len-i >= 15 && !memcmp(s+i," kernel=unified",15)) { parsed.flags |= PROBE_DOS_UNIFIED; i += 15; }
     }
     if (parsed.phase == 6 && !strncmp(parsed.probe, "browser", 8)) {
         if (!browser_url(s, len, &i, parsed.url)) return false;
@@ -235,7 +242,8 @@ unsigned sweep_count(unsigned phase, const struct probe_tables *t)
     if (phase == 3) {
         unsigned count=0;
         for (unsigned i=0;i<t->f3_count;i++)
-            if (strncmp(t->f3[i].name,"dos-conformance",16) && strncmp(t->f3[i].name,"title",24)) count++;
+            if (strncmp(t->f3[i].name,"dos-conformance",16) && strncmp(t->f3[i].name,"title",24) &&
+                strncmp(t->f3[i].name,"vm-game",24)) count++;
         return count;
     }
     if (phase == 0) return t->f0_count + 1;
@@ -262,7 +270,8 @@ bool sweep_at(unsigned phase, unsigned step, const struct probe_tables *t, struc
     } else if (phase == 3) {
         bool found=false;
         for (unsigned i=0;i<t->f3_count;i++) {
-            if (!strncmp(t->f3[i].name,"dos-conformance",16) || !strncmp(t->f3[i].name,"title",24)) continue;
+            if (!strncmp(t->f3[i].name,"dos-conformance",16) || !strncmp(t->f3[i].name,"title",24) ||
+                !strncmp(t->f3[i].name,"vm-game",24)) continue;
             if (!step--) { s.index=i; s.name=t->f3[i].name; found=true; break; }
         }
         if (!found) return false;

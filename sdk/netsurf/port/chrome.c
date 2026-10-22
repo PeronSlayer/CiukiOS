@@ -29,6 +29,7 @@
 #include "surface.h"
 #include "profile.h"
 #include "chrome.h"
+#include "budget.h"
 
 enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,OPEN=20,FILE_PICKER,NOTICE };
 static struct du_ui ui;
@@ -311,6 +312,11 @@ int ciuki_chrome_arguments(int *argc,char **argv)
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-capture=",16)) { ciuki_capture_path=a+16;consumed=true; }
+        else if(!strncmp(a,"--ciuki-clock-scale=",20)) {
+            /* f6-20 T23 model: charge host layouts as a slower CPU. */
+            char *end;unsigned long n=strtoul(a+20,&end,10);if(*end || !n || n>1000000)return -1;
+            ciuki_layout_clock_scale=(uint32_t)n;consumed=true;
+        }
 #endif
         if(consumed) { memmove(argv+i,argv+i+1,(size_t)(*argc-i)*sizeof(*argv));(*argc)--; } else i++;
     }
@@ -342,13 +348,32 @@ void ciuki_chrome_finish(void)
     if(shown_url) { nsurl_unref(shown_url);shown_url=NULL; }
     ciuki_profile_fini();active=profile_ready=hotlist_ready=false;
 }
+static const char *exit_reason;
+static int exit_detail;
+void ciuki_chrome_exit_reason(const char *reason)
+{
+    if(exit_reason)return;
+    if(reason) { exit_reason=reason;return; }
+    struct ciuki_browser_surface *s=ciuki_browser_active;
+    exit_reason=s && s->close_reason?s->close_reason:"quit-event";
+    exit_detail=s && s->close_reason?s->close_detail:0;
+}
+void ciuki_chrome_exit_report(void)
+{
+    struct ciuki_browser_surface *s=ciuki_browser_active;
+    fprintf(stderr,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u\n",
+            exit_reason?exit_reason:"unknown",exit_detail,ciuki_layout_rejections,
+            (unsigned long long)(ciuki_layout_max_ns/1000u),(unsigned long long)(ciuki_layout_local_max_ns/1000u),
+            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u);
+}
 void ciuki_chrome_capture(void *context)
 {
 #ifdef CIUKI_HOST
     if(!ciuki_capture_path)return;
-    extern uint64_t ciuki_layout_max_ns;
     extern unsigned ciuki_file_slices;
-    fprintf(stderr,"NetSurf local capture: layout_max_ns=%llu file_slices=%u\n",(unsigned long long)ciuki_layout_max_ns,ciuki_file_slices);
+    fprintf(stderr,"NetSurf local capture: layout_max_ns=%llu local_max_ns=%llu remote_max_ns=%llu clock_scale=%u file_slices=%u\n",
+            (unsigned long long)ciuki_layout_max_ns,(unsigned long long)ciuki_layout_local_max_ns,
+            (unsigned long long)ciuki_layout_remote_max_ns,(unsigned)ciuki_layout_clock_scale,ciuki_file_slices);
     if(browser())fprintf(stderr,"NetSurf local title: %s\n",browser_window_get_title(browser()));
     nsfb_t *fb=context;uint8_t *pixels;int stride;
     nsfb_get_buffer(fb,&pixels,&stride);

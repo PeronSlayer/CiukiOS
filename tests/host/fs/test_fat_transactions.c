@@ -261,19 +261,22 @@ static void guarded_lookup_scenario(void) {
     assert(!cache.dirty_bytes); cache_invalidate(&cache,&dev,false);
     atomic_store(&guarded_reads,0); atomic_store(&watched_reads,0); atomic_store(&guard_watch,true);
     vfs_lock(&space,1u<<2);
-    struct fat_entry found; int e; unsigned attempts=0;
+    struct fat_entry found; int e; unsigned attempts=0, warms=space.warm_restarts;
     do e=vfs_fat_transaction_locked(&space,&volume,(struct fat_transaction_args){.op=FAT_TX_LOOKUP,
         .directory=big.first,.name="ZZZ.BIN",.entry=&found,.guarded=true}); while (e==-FS_EAGAIN && ++attempts<512);
     vfs_unlock(&space);
-    assert(!e && found.index==file.index && attempts>1);
+    /* f1-93b: the cache-warming restarts resume inside the call while
+     * nothing is published; the caller's walk restarts only after one. */
+    warms=space.warm_restarts-warms;
+    assert(!e && found.index==file.index && !attempts && warms>1);
     assert(atomic_load(&watched_reads)>0 && !atomic_load(&guarded_reads));
     /* The public walk over more than 32 sectors also completes. */
     cache_invalidate(&cache,&dev,false);
     assert(!vfs_stat(&peer,"C:/BIG/ZZZ.BIN",&found) && !atomic_load(&guarded_reads));
     atomic_store(&guard_watch,false);
     vfs_table_destroy(&peer); assert(!vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache);
-    printf("PASS FAT guarded lookup: %u cache-warming restarts over a %u-sector directory, %u device reads, none under the guard\n",
-        attempts,file.index/16+1,atomic_load(&watched_reads));
+    printf("PASS FAT guarded lookup: %u cache-warming restarts (resumed in place) over a %u-sector directory, %u device reads, none under the guard\n",
+        warms,file.index/16+1,atomic_load(&watched_reads));
 }
 int main(void) {
     for (scenario=0;scenario<7;scenario++) {

@@ -16,9 +16,37 @@
 #include "surface.h"
 #include "plot.h"
 #include "ciuki_port/surface.h"
+#include "ciuki_port/budget.h"
 
 struct ciuki_browser_surface *ciuki_browser_active;
 int ciuki_browser_channel=-1;
+/* The next packet for this window from the desktop channel; channel loss is
+ * recorded as the close reason. EAGAIN/EINTR: nothing to read now. */
+static bool receive(struct ciuki_browser_surface *s,struct desk_packet *p)
+{
+    for(unsigned foreign=0;foreign<CIUKI_BROWSER_DRAIN;foreign++) {
+        int r=du3_next(&s->connection,p);
+        if(r<=0) {
+            if(r==0)ciuki_browser_mark_closed(s,"channel-eof",0);
+            else if(errno!=EAGAIN && errno!=EINTR)ciuki_browser_mark_closed(s,"channel-error",errno);
+            return false;
+        }
+        if(p->window_id==s->window && p->generation==s->generation)return true;
+    }
+    return false;
+}
+/* f6-20 keepalive: called (rate-limited) from long layouts and paints on the
+ * UI thread. Read the channel so the desktop's queue for this client never
+ * fills, but process nothing: PONG stays a UI-turn acknowledgement. */
+static void pump(void)
+{
+    struct ciuki_browser_surface *s=ciuki_browser_active;
+    if(!s || s->in_input || s->closed)return;
+    struct desk_packet p;
+    s->pumps++;
+    while(s->held_count<CIUKI_BROWSER_HELD && receive(s,&p))
+        if(!ciuki_browser_hold(s,&p))break;
+}
 static int defaults(nsfb_t *fb)
 { fb->width=800;fb->height=542;fb->format=NSFB_FMT_XRGB8888;select_plotters(fb);return 0; }
 static void bind(nsfb_t *fb,struct ciuki_browser_surface *s)
@@ -42,11 +70,12 @@ static int initialise(nsfb_t *fb)
         .transport={ciuki_channel_send,ciuki_channel_recv,ciuki_surface_info,close},
         .create=ciuki_surface_create,.map=ciuki_surface_map,.unmap=munmap};
     if(ciuki_browser_open(s,&ops,channel,fb->width,fb->height+CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)) { free(s);return -1; }
-    fb->surface_priv=ciuki_browser_active=s; bind(fb,s); ciuki_chrome_init(s);return 0;
+    fb->surface_priv=ciuki_browser_active=s; bind(fb,s); ciuki_chrome_init(s);ciuki_ui_pump=pump;return 0;
 }
 static int finalise(nsfb_t *fb)
 {
     struct ciuki_browser_surface *s=fb->surface_priv;
+    ciuki_ui_pump=NULL;
     if(s) { ciuki_chrome_release();ciuki_browser_close(s);free(s); }
     ciuki_browser_active=NULL;fb->ptr=NULL;fb->surface_priv=NULL;return 0;
 }
@@ -63,18 +92,22 @@ static bool input(nsfb_t *fb,nsfb_event_t *event,int timeout)
     struct ciuki_browser_surface *s=fb->surface_priv;
     if(!s)return false;
     if(ciuki_browser_event(s,event))return true;
-    for(unsigned turns=0;turns<64;turns++) {
+    /* f6-20: drain the channel, held packets first, instead of one input
+     * packet per UI turn: a slow turn (the T23) with the pointer moving over
+     * the window otherwise fell behind until the desktop's 64-message queue
+     * for this v3 client filled and the desktop dropped the client (the
+     * browser then quit on channel EOF). Motion is coalesced in the queue. */
+    s->in_input=true;
+    for(unsigned turns=0;turns<CIUKI_BROWSER_DRAIN;turns++) {
         struct desk_packet p;
-        int r=du3_next(&s->connection,&p);
-        if(r<=0) { if(r==0 || (errno!=EAGAIN && errno!=EINTR))s->closed=true;break; }
-        if(p.window_id!=s->window || p.generation!=s->generation)continue;
+        if(!ciuki_browser_unhold(s,&p) && !receive(s,&p))break;
         ciuki_browser_packet(s,&p);
         if(p.opcode==DESK_KEY || p.opcode==DESK_MOTION || p.opcode==DESK_BUTTON) {
             bool content_drag=s->buttons && (p.event.type==CIUKI_INPUT_MOTION || p.event.type==CIUKI_INPUT_BUTTON);
             if(content_drag || !ciuki_chrome_input(&p.event))ciuki_browser_input(s,&p.event);
         } else if((p.opcode==DESK_V3_ACTIVATE && !p.focused) || p.opcode==DESK_V3_POINTER_STATE)ciuki_chrome_release();
-        if(s->count)break;
     }
+    s->in_input=false;
     if(s->resized) {
         bind(fb,s);s->resized=false;ciuki_chrome_resize();
         event->type=NSFB_EVENT_RESIZE;event->value.resize.w=fb->width;event->value.resize.h=fb->height;return true;

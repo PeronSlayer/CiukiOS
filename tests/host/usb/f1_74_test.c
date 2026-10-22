@@ -23,15 +23,30 @@ static void irq_loss_reads(const char *path)
 }
 static void read_recovery(const char *path)
 {
-    for(unsigned kind=1;kind<=3;kind++) for(unsigned failures=1;failures<=2;failures++) {
+    /* NAK timeouts (partial data, missing CSW) keep the same-size retry. */
+    for(unsigned kind=1;kind<=2;kind++) for(unsigned failures=1;failures<=2;failures++) {
         setup(path,false);use_uhci();m.h.irq_attached=true;attach();
         m.read_fault_kind=kind;m.read_fault_commands=failures;
         uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
         int e=block()->read(block(),0,128,buf);
         assert(m.read_commands==2 && m.resets>=1 && m.clear_in==m.resets && m.clear_out==m.resets);
-        assert(strstr(records,"retry addr=1 cmd=28 attempt=2"));
+        assert(strstr(records,"retry addr=1 cmd=28 attempt=2") && !strstr(records,"max_sectors addr="));
         if(failures==1) assert(!e && !block()->quarantined && !memcmp(buf,m.image,BLKDEV_READ_BYTES));
         else assert(e==-FS_EIO && block()->quarantined);
+        free(buf);cleanup();
+    }
+    /* f1-96: an invalid CSW of a 128-sector READ(10) is a CSW error: after
+     * reset recovery the range is re-read one sector per command; a single
+     * sector keeps its own reset-qualified retry. */
+    for(unsigned failures=1;failures<=2;failures++) {
+        setup(path,false);use_uhci();m.h.irq_attached=true;attach();
+        m.read_fault_kind=3;m.read_fault_commands=failures;
+        uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
+        assert(!block()->read(block(),0,128,buf) && !block()->quarantined && !memcmp(buf,m.image,BLKDEV_READ_BYTES));
+        assert(m.read_commands==128+failures && m.resets==failures && m.clear_in==m.resets && m.clear_out==m.resets);
+        assert(strstr(records,"max_sectors addr=1 cmd=28 lba=0 sectors=128 from=128 to=1 reason=invalid_csw resend=1"));
+        assert(!strstr(records,"retry addr=1 cmd=28 attempt=2")==(failures==1));
+        assert(device()->storage.max_sectors==1);
         free(buf);cleanup();
     }
     setup(path,false);use_uhci();m.h.irq_attached=true;attach();
@@ -40,19 +55,21 @@ static void read_recovery(const char *path)
     assert(block()->read(block(),0,128,buf)==-FS_EIO && block()->quarantined);
     assert(m.read_commands==1 && m.resets==1 && !m.clear_in && !m.clear_out);
     free(buf);cleanup();
+    /* Single-sector READ(10): the f1-74 reset-qualified retry. Multi-sector
+     * STALL/CSW faults take the f1-96 one-sector fallback (f1_96_test.c). */
     setup(path,false);use_uhci();m.h.irq_attached=true;attach();m.read_csw_stalls=2;
-    uint8_t stalled_buf[1024];
-    assert(!block()->read(block(),0,2,stalled_buf) && m.read_commands==2 && m.resets==1);
+    uint8_t stalled_buf[512];
+    assert(!block()->read(block(),0,1,stalled_buf) && m.read_commands==2 && m.resets==1);
     assert(m.clear_in==2 && m.clear_out==1 && !block()->quarantined);
     cleanup();
     setup(path,false);use_uhci();m.h.irq_attached=true;attach();m.data_stall=m.clear_fail=true;
-    assert(!block()->read(block(),0,2,stalled_buf) && m.read_commands==2 && m.resets==1);
+    assert(!block()->read(block(),0,1,stalled_buf) && m.read_commands==2 && m.resets==1);
     assert(m.clear_in==1 && m.clear_out==1 && !block()->quarantined);
     cleanup();
     for(unsigned short_bytes=64;short_bytes<=96;short_bytes+=32) {
         setup(path,false);use_uhci();m.h.irq_attached=true;attach();m.read_limit=short_bytes;
-        uint8_t buf[1024];
-        assert(block()->read(block(),0,2,buf)==-FS_EIO && block()->quarantined);
+        uint8_t buf[512];
+        assert(block()->read(block(),0,1,buf)==-FS_EIO && block()->quarantined);
         assert(m.read_commands==2 && device()->storage.trace.csw_available);
         assert(device()->storage.trace.data_actual==short_bytes && m.in_toggle==device()->storage.in_toggle);
         assert(strstr(records,"reason=short_command"));cleanup();

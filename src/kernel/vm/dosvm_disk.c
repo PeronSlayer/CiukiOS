@@ -525,7 +525,12 @@ static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
 
 int dosvm_disk_read(struct dosvm *v, uint32_t lba, void *sector)
 {
-    if (dosvm_file_disk && v->file_volume) return dosvm_file_disk(v,lba,sector,false);
+    /* -ENOSYS: a sector outside the file owner's logical volume (f3-61:
+     * the MBR of a partitioned kernel=unified base) takes the plain path. */
+    if (dosvm_file_disk && v->file_volume) {
+        int e=dosvm_file_disk(v,lba,sector,false);
+        if (e!=-ENOSYS) return e;
+    }
     disk_gate_take(v);
     int e = disk_read_locked(v, lba, sector);
     disk_gate_drop(v);
@@ -536,7 +541,10 @@ int dosvm_disk_read(struct dosvm *v, uint32_t lba, void *sector)
 }
 int dosvm_disk_write(struct dosvm *v, uint32_t lba, const void *sector)
 {
-    if (dosvm_file_disk && v->file_volume) return dosvm_file_disk(v,lba,(void *)sector,true);
+    if (dosvm_file_disk && v->file_volume) {
+        int e=dosvm_file_disk(v,lba,(void *)sector,true);
+        if (e!=-ENOSYS) return e;
+    }
     disk_gate_take(v);
     int e = disk_write_locked(v, lba, sector);
     disk_gate_drop(v);

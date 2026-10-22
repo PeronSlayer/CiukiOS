@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT
- * Exercise the actual min/max and plain-text workers with deterministic time. */
+ * Exercise the actual min/max and plain-text workers with deterministic time.
+ * Timed (remote) spans: local content is never time-limited (f6-20). */
 #include <assert.h>
 #include "html/layout.c"
 #include "text/textplain.c"
@@ -7,7 +8,7 @@ extern unsigned test_clock_reads,test_expire_read;
 void amendment_layout_checks(struct content *document)
 {
     html_content *html=(html_content *)document;
-    uint64_t start=ciuki_layout_begin();
+    struct ciuki_layout_span start=ciuki_layout_begin(true);
     test_expire_read=test_clock_reads+1;
     layout_minmax_block(html->layout,html->font_func,html);
     assert(ciuki_layout_expired());
@@ -17,7 +18,7 @@ void amendment_layout_checks(struct content *document)
     textplain_content text={0};
     char data[4097];memset(data,'x',sizeof(data)-1);data[sizeof(data)-1]=0;
     text.utf8_data=data;text.utf8_data_size=sizeof(data)-1;
-    start=ciuki_layout_begin();
+    start=ciuki_layout_begin(true);
     /* entry check + font pre/post + loop: expire in the bounded UTF-8 walk. */
     test_expire_read=test_clock_reads+5;
     assert(!ciuki_text_reformat(&text.base,640,480));

@@ -9,6 +9,8 @@
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
 #define DESK_TX_MAX 64
+#define DESK_V3_OVER_MAX 64              /* f2-91: v3 transport overflow behind a full tx ring (lazily allocated) */
+#define DESK_V3_SILENT_NS 5000000000ull  /* f2-91: a v3 client silent this long with 128 pending is dropped */
 #define DESK_BORDER DESK_FRAME_BORDER   /* theme.h: one frame geometry for windows and dialogs */
 #define DESK_TITLE DESK_FRAME_TITLE
 #define DESK_RESIZE_MARGIN 7
@@ -68,6 +70,10 @@ struct desk_client {
     uint32_t gl_present_request; /* result waits for completed compositor frame */
     uint32_t v3_win32_hwnd; /* f5-07B: copied identity for session z-order */
     unsigned v3_failed, v3_last[DESK_CLIENTS], v3_pointer;
+    /* f2-91 (transport roots): ordered overflow behind the full tx ring, busy marks, silence clock. */
+    struct ciuki_message *v3_over; unsigned v3_over_head, v3_over_count, v3_over_lost;
+    int v3_busy, v3_busy_mark;
+    uint64_t v3_progress_ns;
     struct desk_box v3_clip;
     int32_t v3_visibility;
     unsigned v3_cursor, v3_cursor_valid;
@@ -333,6 +339,8 @@ int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
 /* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */
 int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
+/* Programs > Games entry index; kernel NULL keeps the game's saved setting. */
+int desk_launch_game(struct desktop *, int index, const char *kernel);
 int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);

@@ -71,6 +71,8 @@ selector_validate:
     je .dos_suffix
     cmp bx, f6_browser_name
     je .browser_suffix
+    cmp bx, f3_game_name
+    je .game_suffix
     cmp si, [selector_end]
     jne .suffix
     cmp bx, f3_title_name
@@ -181,6 +183,22 @@ selector_validate:
     call token_match
     jc .bad
     jmp .exact_end
+.game_suffix:
+    ; f3-61 grammar, as selector.c and the model: an optional
+    ; ' kernel=freedos-1.3' or ' kernel=unified', then the F3 suffixes.
+    cmp si, [selector_end]
+    je .good
+    mov di, game_freedos_suffix
+    call token_match
+    jnc .game_kernel
+    mov di, dos_kernel_suffix
+    call token_match
+    jc .suffix
+.game_kernel:
+    mov si, ax
+    cmp si, [selector_end]
+    je .good
+    jmp .suffix
 .browser_suffix:
     ; f6-18 grammar for every source, as selector.c browser_url and the
     ; model: ' url=' http[s]://host[:port]/path, host [A-Za-z0-9.-]+, port
@@ -387,6 +405,7 @@ f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
     db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
               db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+f3_game_name db 'vm-game',0
 dos_conformance_name db 'dos-conformance',0
 f3_title_name db 'title',0,0
 ; NUL-terminated suffix tokens for token_match/token_hex.
@@ -396,6 +415,7 @@ state_suffix db ' state=',0
 dos_freedos_suffix db ' guest=freedos',0
 dos_ciukidos_suffix db ' guest=ciukidos',0
 dos_kernel_suffix db ' kernel=unified',0
+game_freedos_suffix db ' kernel=freedos-1.3',0
 url_suffix db ' url=',0
 https_prefix db 'https://',0
 http_prefix db 'http://',0

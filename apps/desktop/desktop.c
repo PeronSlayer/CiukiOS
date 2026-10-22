@@ -1177,6 +1177,37 @@ static void system_read(struct desktop *d)
     struct utsname u;
     if (!uname(&u)) snprintf(d->sh.cpu_name,sizeof(d->sh.cpu_name),"%.40s",u.machine);
 }
+/* f1-97: one-line 2D acceleration answer at the first desktop frame, from the
+ * kernel's `2D accelerator` device record (driver "savage2d"; reason = the
+ * quarantine token). A shell notice card, never a dialog: it expires after
+ * 10 s and any click dismisses it. */
+static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, const char *reason)
+{
+    if (accelerated) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 Savage");
+    else snprintf(out,size,"2D acceleration: NO \xE2\x80\x94 software rendering (%s)",reason && *reason ? reason : "unknown");
+}
+/* Returns 1 when finished (shown, nothing recorded, or given up), 0 to retry. */
+static int accel_notice(struct desktop *d)
+{
+#ifdef __i386__
+    static struct ciuki_devices_info info;
+    static unsigned failures;
+    info.version=CIUKI_DEVICES_VERSION; info.size=sizeof(info);
+    if (ciuki_devices(&info)) return ++failures>=3;
+    for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
+        const struct ciuki_device_record *v=&info.devices[i];
+        if (strcmp(v->driver,"savage2d")) continue;
+        char text[160];
+        accel_notice_text(text,sizeof(text),v->state==CIUKI_DEVICE_READY,v->reason);
+        desk_shell_notify(d,"Graphics",text,DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
+        d->sh.notification.expires=d->now_ns+10000000000ull;
+        return 1;
+    }
+    return 1;
+#else
+    (void)d; return 1;
+#endif
+}
 static void storage_poll(struct desktop *d, uint64_t now)
 {
 #ifdef __i386__
@@ -1245,8 +1276,16 @@ static void startup_launch(struct desktop *d,const char *name)
     for (unsigned i=0;i<d->program_count;i++) if (!strcmp(d->programs[i].name,name)) d->action=(int)i;
     if (d->action<0) snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",name);
 }
+/* f3-61 f3:vm-game: one Programs > Games entry launched at startup through
+ * the menu's own path, optionally with the DOS Box's --dos-kernel= choice. */
+static int startup_game_index=-1;
+static const char *startup_game_kernel;
 static int launch_pending(struct desktop *d)
 {
+    if (d->action<0 && startup_game_index>=0) {
+        int index=startup_game_index; startup_game_index=-1;
+        return desk_launch_game(d,index,startup_game_kernel);
+    }
     if (d->action<0) return desk_autoplay_launch(d);
     unsigned selected=(unsigned)d->action; d->action=-1;
     int pid=selected<d->program_count ? desk_task_launch(d,d->programs[selected].name,NULL) : -ENOENT;
@@ -1731,6 +1770,7 @@ int main(int argc, char **argv)
     int channels[DESK_CLIENTS], channel_count = 0;
     const char *demos[DESK_CLIENTS], *victim = NULL, *launch = NULL;
     for (int a = 1; a < argc; a++) if (!strcmp(argv[a],"--test=crash-isolation")) test = 1;
+    for (int a = 1; a < argc; a++) if (!strcmp(argv[a],"--test=vm-fullscreen")) fullscreen_test = 1;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a],"--test=crash-isolation")) continue;
         if (!strcmp(argv[a],"--test=vm-fullscreen")) { fullscreen_test=1; continue; }
@@ -1748,6 +1788,11 @@ int main(int argc, char **argv)
             victim = argv[a]+9;
         else if (test && !strncmp(argv[a],"--cycles=",9)) cycles = number(argv[a]+9,100);
         else if (!strncmp(argv[a],"--launch=",9) && argv[a][9] && !launch) launch = argv[a]+9;
+        else if (fullscreen_test && !strncmp(argv[a],"--launch-game=",14) && startup_game_index<0) {
+            for (unsigned g=0;g<DESK_GAME_COUNT;g++) if (!strcmp(argv[a]+14,desk_games[g].title)) startup_game_index=(int)g;
+            if (startup_game_index<0) return 2;
+        } else if (fullscreen_test && !strncmp(argv[a],"--game-kernel=",14) && !startup_game_kernel &&
+                   (!strcmp(argv[a]+14,"unified") || !strcmp(argv[a]+14,"freedos-1.3"))) startup_game_kernel=argv[a]+14;
         else return 2;
     }
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
@@ -1806,7 +1851,7 @@ int main(int argc, char **argv)
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
     unsigned reported_progress=0;
-    int holding=0, shifted=0, startup_sound=0;
+    int holding=0, shifted=0, startup_sound=0, accel_noticed=0;
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
@@ -2016,6 +2061,7 @@ int main(int argc, char **argv)
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
+        if (!gate && d->shell && d->presents && !accel_noticed) accel_noticed=accel_notice(d);
         desk_v3_fixture_tick(d);
         desk_dialogs_fixture_tick(d);
         desk_upper_fixture_tick(d);

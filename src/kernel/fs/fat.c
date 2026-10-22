@@ -471,12 +471,16 @@ static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t 
 /* Decode within resident 64 KiB runs. The census and ownership walk do not
  * copy a sector or acquire the shared cache mutex for each FAT entry. FAT12
  * entries spanning sectors retain the byte decoder. */
+static int cache_charge(struct fat_volume *v, unsigned units);
 static int get_copy(struct fat_volume *v, unsigned copy, uint32_t c, uint32_t *out) {
     /* Cached entry decode: 128 * 1 us = 128 us. This also covers callers
      * whose outer loops skip allocated clusters or follow fragmented links.
-     * The volume reservation retains FAT ordering across fs_service. */
+     * The volume reservation retains FAT ordering across fs_service.
+     * f1-93b: a cache-only section (the caller holds the volume guard) is
+     * bounded by work instead and never reaches a preemption point. */
     static unsigned work;
-    if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 127u)) fs_service();
+    if (v->cache_only) { int e=cache_charge(v,2); if (e) return e; }
+    else if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 127u)) fs_service();
     uint32_t off=offset(v,c), x;
     if (v->prepare_cache && (v->type!=12 || off%512!=511)) {
         const uint8_t *p;struct fat_prepare_cache *w=v->prepare_cache;
@@ -528,16 +532,19 @@ static int set_clean(struct fat_volume *v, bool clean) {
     return 0;
 }
 static uint32_t cluster_sector(struct fat_volume *v, uint32_t c) { return v->data_sector+(c-2)*v->spc; }
-static int chain_at(struct fat_volume *v, uint32_t first, uint32_t index, uint32_t *out) {
-    if (index>=v->clusters || !valid(v,first)) return corrupt(v,"chain_bounds",first);
-    uint32_t c=first;
-    for (uint32_t i=0;i<index;i++) {
+/* hops links after c (c already validated). */
+static int chain_from(struct fat_volume *v, uint32_t c, uint32_t hops, uint32_t *out) {
+    for (uint32_t i=0;i<hops;i++) {
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
         if (eoc(v,n)) return -FS_ENOENT;
         if (!valid(v,n)) return corrupt(v,"chain_link",n);
         c=n;
     }
     *out=c; return 0;
+}
+static int chain_at(struct fat_volume *v, uint32_t first, uint32_t index, uint32_t *out) {
+    if (index>=v->clusters || !valid(v,first)) return corrupt(v,"chain_bounds",first);
+    return chain_from(v,first,index,out);
 }
 /* f3-51c chain generations. Issued under the volume reservation that also
  * serializes every lookup and FAT mutation of this volume; a remount starts
@@ -589,6 +596,64 @@ static int dir_write(struct fat_volume *v, uint32_t dir, uint32_t i, const uint8
     if ((e=readsec(v,s,b))) return write_error(v,e);
     memcpy(b+(i%16)*32,in,32); return writesec(v,s,b);
 }
+/* f1-93b: one directory walk (a step, a lookup, an alias scan). It keeps
+ * the cluster of the last slot range and the last sector read, so a scan
+ * costs one FAT decode per cluster and one sector read per 16 slots instead
+ * of a chain walk from the start and a sector read for every slot. Only
+ * readers use it: nothing the walk itself writes can stale it. */
+struct dir_position { uint32_t index, cluster; };
+struct dir_walk {
+    struct fat_dir_hint *hint;
+    uint32_t first;
+    /* at[0]: the cluster of the last slot read; at[1]: the one before it,
+     * where an entry (LFN slots) that a section did not finish began. */
+    struct dir_position at[2];
+    unsigned located; /* valid entries of at[] */
+    bool buffered;
+    uint64_t sector;
+    uint8_t data[512];
+};
+static uint32_t dir_first(struct fat_volume *v, uint32_t dir) { return dir ? dir : v->root; }
+static bool fixed_root(struct fat_volume *v, uint32_t dir) { return !dir && v->type!=32; }
+static void walk_begin(struct dir_walk *w, struct fat_volume *v, uint32_t dir, struct fat_dir_hint *hint) {
+    w->hint=hint; w->located=0; w->buffered=false; w->first=fixed_root(v,dir) ? 0 : dir_first(v,dir);
+    if (hint && hint->valid && !fixed_root(v,dir) && hint->first==w->first &&
+        hint->sequence==v->mutation_sequence && hint->generation==v->dev->media_generation &&
+        hint->index<v->clusters && valid(v,hint->cluster)) {
+        w->at[0]=(struct dir_position){hint->index,hint->cluster}; w->located=1;
+    }
+}
+static void walk_end(struct dir_walk *w, struct fat_volume *v) {
+    if (!w->hint || !w->located) return;
+    const struct dir_position *p=&w->at[w->located-1];
+    *w->hint=(struct fat_dir_hint){.sequence=v->mutation_sequence,.generation=v->dev->media_generation,
+        .first=w->first,.index=p->index,.cluster=p->cluster,.valid=true};
+}
+static int walk_sector(struct fat_volume *v, struct dir_walk *w, uint32_t dir, uint32_t index, uint32_t *sec) {
+    if (fixed_root(v,dir)) return dir_sector(v,dir,index,sec);
+    uint32_t ci=index/(16u*v->spc), c;
+    if (ci>=v->clusters) return corrupt(v,"chain_bounds",w->first);
+    const struct dir_position *from=0;
+    for (unsigned i=0;i<w->located;i++) if (w->at[i].index<=ci && (!from || w->at[i].index>from->index)) from=&w->at[i];
+    int e=from ? chain_from(v,from->cluster,ci-from->index,&c) : chain_at(v,w->first,ci,&c);
+    if (e) return e;
+    if (!w->located || w->at[0].index!=ci) {
+        if (w->located) { w->at[1]=w->at[0]; w->located=2; } else w->located=1;
+        w->at[0]=(struct dir_position){ci,c};
+    }
+    *sec=cluster_sector(v,c)+(index/16)%v->spc; return 0;
+}
+static int walk_read(struct fat_volume *v, struct dir_walk *w, uint32_t dir, uint32_t i, uint8_t out[32]) {
+    uint32_t s; int e=walk_sector(v,w,dir,i,&s); if (e) return e;
+    if (!w->buffered || w->sector!=s) {
+        w->buffered=false;
+        if (v->cache_only && v->cache_progress && (e=cache_charge(v,2))) return e;
+        if ((e=readsec(v,s,w->data))) return e;
+        w->sector=s; w->buffered=true;
+        if (v->cache_only) v->cache_progress=true;
+    }
+    memcpy(out,w->data+(i%16)*32,32); return 0;
+}
 static uint8_t checksum(const uint8_t *s) {
     uint8_t x=0; for (unsigned i=0;i<11;i++) x=(uint8_t)((x>>1)|((x&1)<<7)) + s[i]; return x;
 }
@@ -618,12 +683,17 @@ static void encode_entry(struct fat_volume *v, uint8_t b[32], const struct fat_e
     fs_wr16(b+22,e->times.write_time); fs_wr16(b+24,e->times.write_date);
     fs_wr16(b+26,(uint16_t)e->first); fs_wr32(b+28,e->size);
 }
-static int next_entry(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_entry *entry,bool labels) {
+/* *settled: the first slot of the entry being decoded (every slot before
+ * it is decided), where a cache-only section that stopped resumes. */
+static __attribute__((noinline)) int next_entry(struct fat_volume *v, uint32_t dir, uint32_t *cursor,
+                                                struct fat_entry *entry, bool labels, struct dir_walk *w, uint32_t *settled) {
     uint16_t name[260]; unsigned expected=0,total=0; uint8_t sum=0; uint32_t start=0;
     uint64_t limit=dir || v->type==32 ? (uint64_t)v->clusters*v->spc*16 : v->root_entries;
     if (limit>UINT32_MAX) limit=UINT32_MAX;
+    *settled=*cursor;
     while (*cursor<limit) {
-        uint8_t b[32]; uint32_t i=(*cursor)++; int e=dir_read(v,dir,i,b); if (e) return e;
+        if (!total) *settled=*cursor;
+        uint8_t b[32]; uint32_t i=(*cursor)++; int e=walk_read(v,w,dir,i,b); if (e) return e;
         if (!b[0]) { if (total) v->lfn_orphans++; return -FS_ENOENT; }
         if (b[0]==0xe5) { if (total) v->lfn_orphans++; expected=total=0; continue; }
         if (b[11]==15) {
@@ -663,22 +733,26 @@ static int next_entry(struct fat_volume *v, uint32_t dir, uint32_t *cursor, stru
      * The cursor cannot represent larger directories; that is a capability
      * limit, not evidence of damaged allocation. */
     if (limit==UINT32_MAX) return -FS_EOPNOTSUPP;
-    uint32_t c,n;
-    int e=chain_at(v,dir ? dir : v->root,(uint32_t)(limit-1)/(16u*v->spc),&c);
+    uint32_t c,n,sector;
+    int e=walk_sector(v,w,dir,(uint32_t)(limit-1),&sector); /* the walk's last cluster */
     if (e) return e;
+    c=w->at[0].cluster;
     if ((e=fat_get_cluster(v,c,&n))) return e;
     return eoc(v,n) ? -FS_ENOENT : corrupt(v,"directory_limit",c);
 }
 int fat_next(struct fat_volume *v,uint32_t dir,uint32_t *cursor,struct fat_entry *entry) {
-    return next_entry(v,dir,cursor,entry,false);
+    struct dir_walk w; uint32_t settled; walk_begin(&w,v,dir,0);
+    return next_entry(v,dir,cursor,entry,false,&w,&settled);
 }
 int fat_next_dos(struct fat_volume *v,uint32_t dir,uint32_t *cursor,struct fat_entry *entry) {
-    return next_entry(v,dir,cursor,entry,true);
+    struct dir_walk w; uint32_t settled; walk_begin(&w,v,dir,0);
+    return next_entry(v,dir,cursor,entry,true,&w,&settled);
 }
 int fat_lookup(struct fat_volume *v, uint32_t dir, const char *name, struct fat_entry *e) {
     context(v,name);
-    uint32_t i=0; int err;
-    while (!(err=fat_next(v,dir,&i,e))) if (path_equal(name,e->name) || path_equal(name,e->alias)) return 0;
+    struct dir_walk w; walk_begin(&w,v,dir,0);
+    uint32_t i=0, settled; int err;
+    while (!(err=next_entry(v,dir,&i,e,false,&w,&settled))) if (path_equal(name,e->name) || path_equal(name,e->alias)) return 0;
     return err;
 }
 static int update(struct fat_volume *v, const struct fat_entry *e) {
@@ -804,10 +878,11 @@ static bool short_ok(uint16_t c) {
     if (c<=32 || c=='.' || c=='"' || c=='*' || c=='+' || c==',' || c=='/' || c==':' || c==';' || c=='<' || c=='=' || c=='>' || c=='?' || c=='[' || c=='\\' || c==']' || c=='|') return false;
     return true;
 }
-static int alias_exists(struct fat_volume *v, uint32_t dir, const uint8_t alias[11], const struct fat_entry *ignore) {
+static __attribute__((noinline)) int alias_exists(struct fat_volume *v, uint32_t dir, const uint8_t alias[11], const struct fat_entry *ignore) {
     uint8_t b[32]; memcpy(b,alias,11); b[12]=0; char text[40]; int e=alias_decode(b,text); if (e) return e;
-    struct fat_entry *entry=&v->alias_scratch; uint32_t i=0;
-    while (!(e=fat_next(v,dir,&i,entry))) {
+    struct fat_entry *entry=&v->alias_scratch; uint32_t i=0, settled;
+    struct dir_walk w; walk_begin(&w,v,dir,0);
+    while (!(e=next_entry(v,dir,&i,entry,false,&w,&settled))) {
         if (ignore && entry->index==ignore->index && dir==ignore->parent) continue;
         if (path_equal(text,entry->alias) || path_equal(text,entry->name)) return 1;
     }
@@ -2138,50 +2213,84 @@ static bool reads_current(struct fat_transaction *t) {
     }
     return true;
 }
-int fat_lookup_cached(struct fat_volume *v, uint32_t dir, const char *name, uint32_t *cursor,
-                      struct fat_entry *e, uint64_t *miss) {
-    uint32_t start=cursor ? *cursor : 0;
-    v->cache_only=true; v->cache_miss=UINT64_MAX;
-    int r=name ? fat_lookup(v,dir,name,e) : fat_next(v,dir,cursor,e);
-    v->cache_only=false; *miss=v->cache_miss;
-    if (*miss==UINT64_MAX) return r;
-    if (cursor) *cursor=start;
+/* f1-93b: the work bound of a cache-only section. Counted only once the
+ * step has read its first directory sector, so a section always settles at
+ * least the entry it resumed at (at most 21 slots, 3 sectors) before it
+ * stops: no livelock, whatever the bound. */
+static int cache_charge(struct fat_volume *v, unsigned units) {
+    if (!v->cache_progress) return 0;
+    v->cache_work+=units;
+    if (v->cache_work<=FAT_CACHED_BUDGET) return 0;
+    if (v->cache_miss==UINT64_MAX) v->cache_miss=FAT_CACHE_YIELD;
     return -FS_EAGAIN;
 }
-int fat_next_cached(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_entry *e,
-                    bool labels, uint64_t *miss) {
-    uint32_t start=*cursor;
-    v->cache_only=true; v->cache_miss=UINT64_MAX;
-    int r=next_entry(v,dir,cursor,e,labels);
-    v->cache_only=false; *miss=v->cache_miss;
-    if (*miss==UINT64_MAX) return r;
-    *cursor=start;
-    return -FS_EAGAIN;
+static __attribute__((noinline)) int dir_cached(struct fat_volume *v, uint32_t dir, const char *name, uint32_t *cursor,
+                                                struct fat_entry *e, bool labels, struct fat_dir_hint *hint) {
+    struct dir_walk w; walk_begin(&w,v,dir,hint);
+    uint32_t at=*cursor, settled=at; int r;
+    for (;;) {
+        r=next_entry(v,dir,&at,e,name ? false : labels,&w,&settled);
+        if (r || !name || path_equal(name,e->name) || path_equal(name,e->alias)) break;
+        /* A decoded entry (LFN to UTF-8, name compare) costs as a sector. */
+        if ((r=cache_charge(v,2))) { settled=at; break; }
+    }
+    walk_end(&w,v);
+    *cursor=v->cache_miss==UINT64_MAX ? at : settled;
+    return r;
+}
+int fat_dir_cached(struct fat_volume *v, uint32_t dir, const char *name, uint32_t *cursor,
+                   struct fat_entry *e, bool labels, struct fat_dir_hint *hint, uint64_t *miss) {
+    if (name) context(v,name);
+    v->cache_only=true; v->cache_miss=UINT64_MAX; v->cache_work=0; v->cache_progress=false;
+    int r=dir_cached(v,dir,name,cursor,e,labels,hint);
+    v->cache_only=v->cache_progress=false; *miss=v->cache_miss;
+    return *miss==UINT64_MAX ? r : -FS_EAGAIN;
+}
+/* f1-93b: the FAT link of cluster c from a resident FAT sector, if any (a
+ * warm prefetch decision only: no device read, no guard). */
+static bool link_resident(const struct fat_volume *v, uint32_t c, uint32_t *next) {
+    if (v->type!=16 && v->type!=32) return false;
+    uint32_t off=c*(v->type/8u);
+    uint64_t s=v->reserved+(uint64_t)v->active_fat*v->fat_sectors+off/512;
+    uint8_t b[512];
+    if (cache_peek(v->cache,v->dev,v->start+s,b)) return false;
+    *next=v->type==32 ? fs_rd32(b+off%512)&0x0fffffffu : fs_rd16(b+off%512);
+    return true;
 }
 int fat_warm(const struct fat_volume *v, uint64_t s) {
     if (!v->dev || v->dev->logical) return 0;
     if (s>=v->sectors) return -FS_EINVAL;
     if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
+    unsigned n=readahead_count(v,s);
+    if (v->type && v->spc && s>=v->data_sector) {
+        /* A directory's next cluster, when it is the adjacent one. */
+        uint32_t c=(uint32_t)((s-v->data_sector)/v->spc)+2, next;
+        while (n+v->spc<=BLKDEV_READ_SECTORS && s+n+v->spc<=v->sectors && c+1<v->clusters+2 &&
+               link_resident(v,c,&next) && next==c+1) { n+=v->spc; c=next; }
+    }
     uint8_t b[512];
-    int e=cache_read_ahead(v->cache,v->dev,v->start+s,readahead_count(v,s),b);
+    int e=cache_read_ahead(v->cache,v->dev,v->start+s,n,b);
     return e==-FS_EQUARANTINED ? -FS_EIO : e;
 }
 int fat_chain_clusters(struct fat_volume *v, struct fat_chain_walk *w, bool cached, uint64_t *miss) {
     uint8_t b[512]; uint64_t loaded=UINT64_MAX; unsigned visited=0; int e=0;
     uint32_t c=w->cluster;
     *miss=UINT64_MAX;
-    if (cached) { v->cache_only=true; v->cache_miss=UINT64_MAX; }
+    if (cached) { v->cache_only=true; v->cache_miss=UINT64_MAX; v->cache_work=0; v->cache_progress=false; }
     while (c) {
         if (!valid(v,c) || w->count>=v->clusters) { e=-FS_EIO; break; }
-        if (!(w->count & 127u)) fs_service(); /* as get_copy: 128 decodes per checkpoint */
+        /* As get_copy: 128 decodes per checkpoint. f1-93b: a cached section
+         * (guard held) is bounded by FAT_CHAIN_CACHED_SECTORS instead and
+         * never reaches a preemption point. */
+        if (!cached && !(w->count & 127u)) fs_service();
         uint32_t off=offset(v,c), next;
         if (v->type==12 && off%512==511) {
             if ((e=fat_get_cluster(v,c,&next))) break; /* entry spans two sectors */
         } else {
             uint64_t s=v->reserved+(uint64_t)v->active_fat*v->fat_sectors+off/512;
             if (s!=loaded) {
-                if (visited==FAT_CHAIN_SECTORS) { e=-FS_EAGAIN; break; } /* yield */
+                if (visited==(cached ? FAT_CHAIN_CACHED_SECTORS : FAT_CHAIN_SECTORS)) { e=-FS_EAGAIN; break; } /* yield */
                 if ((e=readsec(v,s,b))) break;
                 loaded=s; visited++;
             }
