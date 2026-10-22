@@ -4,5 +4,7 @@
   "1106:3043": "VIA VT86C100A Rhine Fast Ethernet Controller",
   "1106:3065": "VIA VT6102 Rhine II Fast Ethernet Controller",
   "1106:3106": "VIA VT6105 Rhine III Fast Ethernet Controller",
+  "1234:1111": "QEMU/Bochs VGA display adapter",
+  "8086:00d1": "Intel i740 PCI display adapter",
   "8086:1017": "Intel PRO/1000 MT Desktop Connection (82540EP)"
 }

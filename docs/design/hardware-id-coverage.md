@@ -1,5 +1,9 @@
 # Hardware ID database coverage
 
+This is the historical f2-43 snapshot. For the current f2-123 generator,
+class scope, display-family coverage and table sizes, see
+[the current validation record](../validation/f2-123-hardware-names.md).
+
 Generated from the owner's read-only Ultimate Windows Driver Pack INF
 collection on 2026-10-13. `assets/hwids/README.md` records provenance and the
 generation command. The database contains 1,155 PCI pairs and 218 USB pairs

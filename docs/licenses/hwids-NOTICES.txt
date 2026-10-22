@@ -1,0 +1,41 @@
+CiukiOS hardware identification data (names only)
+
+PCI ID Repository
+https://pci-ids.ucw.cz/
+https://pci-ids.ucw.cz/v2.2/pci.ids
+Maintained by Albert Pool, Martin Mares and other volunteers.
+Copyright in the compilation/formatting: Martin Mares and Albert Pool.
+The original snapshot permits GPL version 2 or later, or BSD-3-Clause.
+CiukiOS uses the GPL version 2 or later option.
+Snapshot version: 2026.10.01 (original date 2026-10-01 03:15:02).
+SHA-256: 4f020f031d1f2d011b2a656a191519a056cb9744229551aed2cf7f90dfc2e18a
+
+USB ID Repository
+http://www.linux-usb.org/usb.ids
+https://github.com/usbids/usbids
+Maintained by Stephen J. Gowdy and contributors.
+Snapshot version: 2026.06.26 (original date 2026-06-26 20:34:02).
+SHA-256: 34b2b2289508a866cf38b96e54b37ac52c0ab7ce8361a56116af24e3fd094421
+
+Both snapshots were obtained from the local hwdata distribution, not freshly
+retrieved from their upstream URLs. Direct network retrieval was unavailable.
+https://github.com/vcrhonek/hwdata
+https://github.com/vcrhonek/hwdata/blob/master/LICENSE
+hwdata permits GPL version 2 or later, or XFree86 1.0; CiukiOS uses GPL
+version 2 or later. See hwids-GPL-2.0.txt for the GPL text.
+
+The original snapshot files remain local, ignored inputs in build/downloads.
+The installed JSON files contain selected, sanitized ID/name pairs only.
+The generator is scripts/build_hwids.py; selection is documented in
+assets/hwids/README.md and assets/hwids/retro-scope.json in the source tree.
+Upstream names fill gaps after INF-derived names and native reference labels.
+The owner's Windows INF collection and all driver binaries remain external;
+they are neither copied into the repository nor distributed in the image.
+
+Additional reference labels absent from both pinned ID databases:
+8086:00d1 Intel i740 PCI display adapter, Linux i740fb device table:
+https://cos.googlesource.com/third_party/kernel/+/2b8f68b99ba64d78e9109b4ddae1d2927e7e8623/drivers/video/fbdev/i740fb.c
+1234:1111 QEMU/Bochs VGA display adapter, QEMU v9.2.0:
+https://gitlab.com/qemu-project/qemu/-/blob/v9.2.0/include/hw/pci/pci.h
+https://gitlab.com/qemu-project/qemu/-/blob/v9.2.0/hw/display/bochs-display.c
+These are descriptive facts only; no driver code is imported here.
