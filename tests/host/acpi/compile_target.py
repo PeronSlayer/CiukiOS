@@ -25,7 +25,9 @@ def main():
         objects.append(obj)
     combined = OUT / 'acpica-osl.o'
     subprocess.run(['ld.lld', '-m', 'elf_i386', '-r', *(str(p) for p in objects), '-o', str(combined)], check=True, env=env)
-    for rel in ('tests/host/acpi/abi.c', 'src/kernel/core/devices.c', 'src/kernel/core/init.c'):
+    for rel in ('tests/host/acpi/abi.c', 'src/kernel/core/devices.c', 'src/kernel/core/init.c',
+                'src/kernel/core/power.c', 'src/kernel/core/power_quiesce.c', 'src/kernel/core/syscall.c',
+                'src/kernel/drivers/thinkpad_ec.c', 'src/kernel/audio/audio_dev.c', 'src/kernel/usb/usb_core.c', 'src/kernel/drivers/net.c'):
         subprocess.run(['clang', *build['CFLAGS'], '-I', str(ROOT / 'src/kernel/include'), '-c', str(ROOT / rel),
                         '-o', str(OUT / (Path(rel).stem + '-integration.o'))], env=env, check=True)
     subprocess.run(['clang', *build['CFLAGS'], '-I', str(ROOT / 'sdk/sysroot-overlay/include'),

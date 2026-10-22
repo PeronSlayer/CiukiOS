@@ -15,3 +15,8 @@ The per-file manifest, blob hashes and legacy exceptions are recorded in
 src/kernel/acpi/manifest.json and docs/design/peripheral-driver-source-audit.md.
 Ciuki's separate OSL and build-generated platform/parser adapters are documented
 in docs/design/peripheral-driver-coverage.md and src/kernel/acpi/build.py.
+The f1-110 generated evregion.c adapter reads the _REG name byte-safely;
+the generated exmutex.c adapter refuses unsupported firmware global locks.
+Both derive from the exact 20260930 files with all original notices retained.
+The byte-safe NameSeg seam and these changes are original CiukiOS work.
+See docs/design/acpi-events-power.md for the event/EC/thermal OSL boundary.

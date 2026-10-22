@@ -9,7 +9,7 @@
 #define FW_MAX 64u
 #define FW_TABLE_MAX (256u * 1024u)
 #define FW_ALLOC_MAX (1024u * 1024u)
-/* This backend is private to the serialized inventory thread. All callbacks
+/* This backend is private to the serialized firmware worker. All callbacks
  * are bounded; table_map validates firmware ownership and returns RO pages.
  * access revalidates the live registry lease immediately before device I/O. */
 struct fw_ops {
@@ -25,6 +25,11 @@ struct fw_ops {
     uint32_t (*lock)(void);
     void (*unlock)(uint32_t);
     ACPI_STATUS (*access)(unsigned, uint64_t, unsigned, UINT64 *, const ACPI_PCI_ID *);
+    ACPI_STATUS (*write)(unsigned, uint64_t, unsigned, UINT64, const ACPI_PCI_ID *);
+    ACPI_STATUS (*claim)(uint32_t, uint32_t);
+    ACPI_STATUS (*sci)(uint32_t, ACPI_OSD_HANDLER, void *);
+    ACPI_STATUS (*unsci)(uint32_t, ACPI_OSD_HANDLER);
+    void (*finish)(bool); /* false: retain uncertain claims in quarantine */
 };
 extern const struct fw_ops fw_kernel_ops;
 extern const struct fw_ops *fw_os;
@@ -45,8 +50,9 @@ void fw_os_cleanup(void);
 ACPI_STATUS fw_inventory_run(const struct fw_ops *ops, uint32_t rsdp);
 void fw_inventory_unavailable(ACPI_STATUS status);
 void fw_pnp_discover(void);
-/* Explicit lease token, admitted by a later reviewed owner. No boot grant is
- * issued by f1-109. PCI grants name one exact segment-zero BDF. */
+/* Explicit lease token. Read-only inventory issues no boot grant; the power
+ * owner admits only checked PM/EC SystemIO ranges. PCI grants name one BDF. */
 int fw_region_grant(unsigned space, int handle, uint32_t generation, const ACPI_PCI_ID *pci);
 bool fw_region_check(unsigned space, uint64_t address, unsigned width, const ACPI_PCI_ID *pci);
+void fw_regions_reset(void);
 #endif

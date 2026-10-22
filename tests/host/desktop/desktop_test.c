@@ -968,6 +968,23 @@ static void test_dos_fullscreen_restore_frame(void)
     cleanup(); free(pixels);
     puts("PASS DOS full-screen restore: settled desktop presents nothing, RESYNC presents one full frame");
 }
+static void test_power_status(void)
+{
+    setup(640,480); desk_shell_enable(&d);
+    int old=desk_shell_tray_box(&d).w;
+    struct ciuki_power_status p={.version=1,.size=sizeof(p),.ac_online=CIUKI_POWER_UNKNOWN,.lid_open=CIUKI_POWER_UNKNOWN};
+    assert(!desk_shell_power_update(&d,&p));
+    assert(desk_shell_tray_box(&d).w==old+SH_TRAY_ICON_SIZE+SH_TRAY_GAP);
+    struct desk_box b=desk_shell_tray_icon_box(&d,SH_TRAY_POWER);
+    assert(b.w==16 && b.x>=desk_shell_tray_box(&d).x);
+    p.shutdown_requests=1; assert(!desk_shell_power_update(&d,&p) && d.sh.want_power==2);
+    d.sh.want_power=0; assert(!desk_shell_power_update(&d,&p) && !d.sh.want_power);
+    d.sh.gate=1; p.shutdown_requests=2; assert(!desk_shell_power_update(&d,&p) && !d.sh.want_power);
+    d.sh.gate=0; d.power.state=DESK_POWER_CLOSING; p.shutdown_requests=3;
+    assert(!desk_shell_power_update(&d,&p) && !d.sh.want_power);
+    p.battery_count=5; assert(desk_shell_power_update(&d,&p)==-1);
+    puts("PASS power desktop: tray geometry, unknown values, coalesced orderly request, gate and shutdown guards");
+}
 int main(void)
 {
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
@@ -975,5 +992,6 @@ int main(void)
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
+    test_power_status();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

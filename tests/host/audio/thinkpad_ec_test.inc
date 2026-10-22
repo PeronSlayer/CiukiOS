@@ -1,6 +1,4 @@
 /* Production EC transactions and mixer integration with a port model. */
-static uint8_t ec_native_read_port(uint16_t);
-static void ec_native_write_port(uint16_t, uint8_t);
 static void ec_native_sleep(uint32_t);
 static uint32_t ec_native_pte(uint32_t);
 static void *ec_native_phys(uint32_t);
@@ -68,8 +66,6 @@ static uint64_t ec_mock_now(void *ctx) { return ((struct ec_model *)ctx)->tick; 
 static void ec_mock_pause(void *ctx) { struct ec_model *h=ctx;h->pauses++;if(!h->frozen_clock)h->tick++; }
 static struct thinkpad_ec_io ec_mock_io(void)
 { return (struct thinkpad_ec_io){&ehw,ec_mock_read,ec_mock_write,ec_mock_now,ec_mock_pause}; }
-static uint8_t ec_native_read_port(uint16_t p) { return ec_mock_read(&ehw,p); }
-static void ec_native_write_port(uint16_t p,uint8_t v) { ec_mock_write(&ehw,p,v); }
 static void ec_native_sleep(uint32_t ms) { CHECK(ms==1 || ms==EC_POLL_MS); while(ms--)ec_mock_pause(&ehw);g_ticks=ehw.tick; }
 static uint32_t ec_native_pte(uint32_t va)
 {
@@ -149,29 +145,17 @@ static void test_thinkpad_ec_init(void)
         if(scenario==1) { audio.initialized=false;audio_init(NULL);CHECK(audio.reason && !strcmp(audio.reason,"safe_mode")); }
         else thinkpad_ec_init();
         CHECK(ec_record_count>=4 && strstr(ec_records[1],"[smbios] version=") && strstr(ec_records[2],"[smbios] bios vendor="));
-        if(!scenario) {
-            CHECK(hec.active && audio.master_in_hardware && audio.master.left==20 && ehw.volume_writes==0);
-            CHECK(second_claim_next==2 && audio_resources[0].state==RS_ACTIVE && audio_resources[1].state==RS_ACTIVE);
-            char record[128];snprintf(record,sizeof(record),"[smbios] entry=ok address=000f0000 table=000e0000 bytes=%zu",n);
-            ec_expect_record(0,record);
-            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=7 mute=0");
-        } else {
-            const char *reason=scenario==1?"safe_mode":(scenario==2 || scenario==9)?"qemu":scenario==3?"not_ibm":(scenario==8 || scenario>=10)?"ec_handshake_failed":"no_smbios";
-            char expected[80];snprintf(expected,sizeof(expected),"[ec] thinkpad gate=%s",reason);
-            CHECK(!hec.active && !audio.master_in_hardware && strstr(ec_records[ec_record_count-1],expected));
-            if(scenario==8)CHECK(second_claim_next==2 && audio_resources[0].state==RS_QUARANTINED && audio_resources[1].state==RS_QUARANTINED);
-            else if(scenario==11) {
-                CHECK(!ehw.reads && !ehw.writes && second_claim_next==1 && audio_resources[0].state==RS_QUARANTINED);
-                ec_expect_record(4,"[ec] thinkpad gate=ec_handshake_failed stage=claim_command error=-16");
-            } else CHECK(!ehw.reads && !ehw.writes && !second_claim_next);
-            if(scenario==10)ec_expect_record(4,"[ec] thinkpad gate=ec_handshake_failed stage=claim_data error=-16");
-        }
+        const char *reason=scenario==1?"safe_mode":(scenario==2 || scenario==9)?"qemu":scenario==3?"not_ibm":
+            (!scenario || scenario==8 || scenario>=10)?"generic_ec_unavailable":"no_smbios";
+        char gate[80];snprintf(gate,sizeof(gate),"[ec] thinkpad gate=%s",reason);
+        CHECK(!hec.active && !audio.master_in_hardware && strstr(ec_records[ec_record_count-1],gate));
+        CHECK(!ehw.reads && !ehw.writes && !second_claim_next);
         const char *verdict=scenario==4?"not_found":scenario==5?"bad_entry":scenario==6?"unmapped_table":scenario==7?"malformed_table":"ok";
         char expected[64];snprintf(expected,sizeof(expected),"[smbios] entry=%s ",verdict);CHECK(strstr(ec_records[0],expected));
     }
     ec_table_mapped=true;capture_ec_records=false;memset(&hec,0,sizeof(hec));
     second_claim_next=0;second_claim_failure=-1;audio=saved_audio;g_boot.flags=flags;g_ticks=ticks;
-    puts("ThinkPad EC init: production BIOS scan/checksums/mapping, T23 handshake, off-gate records, safe audio init and port quarantine PASS");
+    puts("ThinkPad EC init: production BIOS scan/checksums/mapping, generic EC absence, no independent claims or I/O, safe audio init PASS");
 }
 static void test_thinkpad_ec_records(void)
 {
@@ -325,18 +309,15 @@ static void test_thinkpad_ec_reserved_table(void)
         bool success=scenario<=5 || scenario==18 || scenario==20;
         bool attempted=success?scenario!=5:scenario==16 || scenario==17;
         CHECK(ec_map_calls==attempted && ec_unmap_calls==(attempted && !ec_map_failed) && !ec_window_active);
-        CHECK(hec.active==success && audio.master_in_hardware==success);
+        CHECK(!hec.active && !audio.master_in_hardware);
         char record[128];snprintf(record,sizeof(record),"[smbios] entry=%s address=000f7350 table=%08x bytes=%u",
             success?"ok":scenario==17?"malformed_table":"unmapped_table",address,bytes);
         ec_expect_record(0,record);
         if(success) {
             ec_expect_record(1,"[smbios] version=2.31 vendor=\"IBM\" product=\"26475FU\" version=\"Not Available\" type1=1");
             ec_expect_record(2,"[smbios] bios vendor=\"IBM\" version=\"1AET64WW (1.20 )\" type0=1");
-            CHECK(audio.master.left==20 && ehw.volume_writes==0 && second_claim_next==2);
-            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=7 mute=0");
-            CHECK(!hec.poll_ms && hec.total_transactions==1); /* no poll before thinkpad_ec_start */
-            hec.poll_ms=EC_POLL_MS;ehw.reg=0xe8;ehw.tick=hec.next_poll;g_ticks=ehw.tick;
-            CHECK(thinkpad_ec_master_poll(&audio.master)==1 && audio.master.left==25 && audio.master.mute);
+            CHECK(audio.master.left==20 && !ehw.reads && !ehw.writes && !second_claim_next);
+            ec_expect_record(ec_record_count-1,"[ec] thinkpad gate=generic_ec_unavailable");
         } else {
             ec_expect_record(ec_record_count-1,"[ec] thinkpad gate=no_smbios");
             CHECK(!ehw.reads && !ehw.writes && !second_claim_next);

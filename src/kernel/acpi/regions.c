@@ -11,7 +11,8 @@ static struct {
     ACPI_PCI_ID pci;
 } grants[16];
 static bool owner(const struct resource *r)
-{ return r && r->owner && !strcmp(r->owner, "acpi-inventory") && r->state == RS_ACTIVE; }
+{ return r && r->owner && (!strcmp(r->owner, "acpi-inventory") || !strcmp(r->owner, "acpi-power")) && r->state == RS_ACTIVE; }
+void fw_regions_reset(void) { memset(grants, 0, sizeof(grants)); }
 int fw_region_grant(unsigned space, int handle, uint32_t generation, const ACPI_PCI_ID *pci)
 {
     if (space > 2 || handle < 0 || !registry_valid(handle, generation)) return -22;

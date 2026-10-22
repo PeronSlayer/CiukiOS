@@ -1179,12 +1179,64 @@ _Static_assert(sizeof(struct ciuki_mixer_master) == 32, "mixer master");
 /* Power control (call 73, execution-abi.md amendment 2026-10-12): B=action.
  * Only the supervisor-spawned desktop may call it. REBOOT and OFF flush
  * storage first; OFF returns ENOTSUP or EIO when the machine stays on, with
- * storage already stopped. QUERY returns the CIUKI_POWER_CAN_* bits. */
+ * storage already stopped. QUERY returns capability and irreversible
+ * shutdown progress bits; UNCERTAIN forbids resuming the session. */
 #define CIUKI_POWER_REBOOT 1u
 #define CIUKI_POWER_OFF 2u
 #define CIUKI_POWER_QUERY 3u
 #define CIUKI_POWER_CAN_REBOOT 1u
 #define CIUKI_POWER_CAN_OFF 2u
+/* QUERY progress: after either bit is set, the session cannot resume. */
+#define CIUKI_POWER_STOPPED 4u
+#define CIUKI_POWER_UNCERTAIN 8u
+/* Call 73 B=STATUS, C=record, D=sizeof(record). Cached read-only facts,
+ * available to native clients; never evaluates AML in the caller. */
+#define CIUKI_POWER_STATUS 4u
+#define CIUKI_POWER_VERSION 1u
+#define CIUKI_POWER_UNKNOWN 0xffffffffu
+#define CIUKI_POWER_FIRMWARE 0u
+#define CIUKI_POWER_OWNED 1u
+#define CIUKI_POWER_QUARANTINED 2u
+#define CIUKI_POWER_PENDING 3u
+#define CIUKI_POWER_BATTERIES 4u
+#define CIUKI_POWER_ZONES 8u
+struct ciuki_power_battery {
+    uint32_t id;
+    uint32_t present;
+    uint32_t unit; /* 0: mWh/mW; 1: mAh/mA */
+    uint32_t state; /* _BST bits; UNKNOWN when unavailable */
+    uint32_t design;
+    uint32_t full;
+    uint32_t remaining;
+    uint32_t rate;
+    uint32_t voltage; /* mV */
+};
+struct ciuki_power_zone {
+    uint32_t id;
+    uint32_t temperature; /* absolute tenths Kelvin */
+    uint32_t critical;
+    uint32_t hot;
+    uint32_t passive;
+    uint32_t active[10];
+    uint32_t cooling; /* active trip bitmask */
+    int32_t passive_delta; /* thermal trend; UNKNOWN as INT32_MIN */
+};
+struct ciuki_power_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t ownership;
+    uint32_t error; /* ACPICA status, zero on success */
+    uint32_t sequence;
+    uint32_t shutdown_requests; /* monotonic/coalesced; desktop handles changes */
+    uint32_t ac_online;
+    uint32_t lid_open;
+    uint32_t battery_count;
+    uint32_t zone_count;
+    uint32_t event_overflows;
+    uint32_t reserved;
+    struct ciuki_power_battery batteries[CIUKI_POWER_BATTERIES];
+    struct ciuki_power_zone zones[CIUKI_POWER_ZONES];
+};
 
 /* f2-33: process enumeration (call 70) and termination request (call 71).
  * One system record, then process records in ascending PID order. */

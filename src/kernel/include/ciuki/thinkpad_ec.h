@@ -74,6 +74,7 @@ int thinkpad_ec_volume_refresh(struct thinkpad_ec *, struct ciuki_mixer_master *
 bool thinkpad_ec_window(struct thinkpad_ec *, char *out, size_t size);
 void thinkpad_ec_init(void);
 void thinkpad_ec_start(void);
+int thinkpad_ec_stop(void); /* bounded quirk stop; the generic EC stays available for _PTS */
 int thinkpad_ec_master_set(struct ciuki_mixer_master *);
 int thinkpad_ec_master_poll(struct ciuki_mixer_master *);
 int thinkpad_ec_master_refresh(struct ciuki_mixer_master *);

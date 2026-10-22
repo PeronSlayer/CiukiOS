@@ -89,6 +89,7 @@ struct cp_host {
     int (*network_poll)(void *, struct cp_network_result *);
     int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
     int (*power)(void *); /* opens the shell's safe shutdown dialog */
+    int (*power_status)(void *, struct ciuki_power_status *);
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
@@ -122,6 +123,7 @@ struct cp_app {
     unsigned remove_pending;
     struct du_ui *ui;
     struct cp_host host;
+    char power_lines[20][128];
     struct ciuki_settings cfg;
     struct ciuki_settings display_original;
     int display_tab, display_session, display_dirty, display_preview, display_write;

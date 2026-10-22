@@ -30,7 +30,9 @@ def main():
     objects = []
     headers = b''.join(p.read_bytes() for p in sorted((OUT / 'include').rglob('*.h')))
     headers += b''.join(p.read_bytes() for p in sorted((ROOT / 'src/kernel/acpi').glob('*.h')))
-    for p in [*sources, *(ROOT / 'src/kernel/acpi' / n for n in ('osl.c', 'tables.c', 'inventory.c', 'regions.c'))]:
+    headers += b''.join((ROOT / 'src/kernel/include/ciuki' / n).read_bytes() for n in
+                        ('abi.h', 'firmware.h', 'firmware_abi.h', 'registry.h', 'sync.h'))
+    for p in [*sources, *(ROOT / 'src/kernel/acpi' / n for n in ('osl.c', 'tables.c', 'inventory.c', 'regions.c', 'sources.c', 'thermal.c', 'ec.c', 'events.c'))]:
         obj = OUT / (p.stem + '.o')
         cmd = [*common, '-DCIUKI_ACPI_HOST', *recipe['flags'](OUT), '-c', p, '-o', obj]
         digest = hashlib.sha256(headers + p.read_bytes() + repr(cmd).encode()).hexdigest()
@@ -43,9 +45,16 @@ def main():
          '-I', OUT / 'include', '-I', ROOT / 'src/kernel/acpi', '-I', ROOT / 'src/kernel/include',
          '-c', ROOT / 'tests/host/acpi/test.c', '-o', OUT / 'test.o'])
     run([*common, *objects, OUT / 'test.o', '-Wl,-Map=' + str(OUT / 'host.map'), '-o', OUT / 'test'])
+    run([*common, '-U__linux__', '-U_LINUX', '-DCIUKI_ACPICA', '-DCIUKI_ACPI_HOST',
+         '-I', OUT / 'include', '-I', ROOT / 'src/kernel/acpi', '-I', ROOT / 'src/kernel/include',
+         '-c', ROOT / 'tests/host/acpi/events_test.c', '-o', OUT / 'events_test.o'])
+    run([*common, *objects, OUT / 'events_test.o', '-o', OUT / 'events_test'])
     run([*common, '-I', ROOT / 'src/kernel/include', ROOT / 'tests/host/acpi/abi.c', '-o', OUT / 'abi'])
     runpy.run_path(str(ROOT / 'tests/host/acpi/fixtures.py'))['generate'](OUT)
     cases = [[OUT / 'abi']]
+    cases += [[OUT / 'events_test', OUT, case] for case in ('events', 'no-crt', 'passive', 'hot', 'unit', 'unknown', 'bix',
+        'ec-events', 'ec-timeout', 'route', 'enable-timeout', 'rollback', 'init-failure', 'pts-failure', 'storm', 'thermal-change', 'global-lock',
+        'gpe-loop', 'shared-power', 'critical-battery', 'lid-open', 'battery-limit', 'eisa-button', 'cid-button', 'already-enabled')]
     cases += [[OUT / 'test', OUT, case] for case in ('inventory', 'ssdt', 'checksum', 'root64', 'dsdt64', 'length', 'aml', 'loop', 'sleep', 'write', 'region', 'osl', 'broker', 'pnp', 'page')]
     cases += [[OUT / 'test', OUT, case] for case in ('crs-bad', 'mem64', 'large', 'module-loop', 'rsdt', 'rsdp-checksum', 'pnp-bad', 'no-acpi', 'eisa', 'ec', 'module-write', 'start-failure')]
     failures = blocked = 0
@@ -61,7 +70,7 @@ def main():
                            env={**os.environ, 'TMPDIR': str(OUT)})
         if r.stdout: print(r.stdout, end='')
         match = re.search(r'allocations=(\d+)', r.stdout)
-        if match: fault_count = max(fault_count, int(match[1]))
+        if match and cmd[0] == OUT / 'test': fault_count = max(fault_count, int(match[1]))
         if r.returncode:
             if 'LeakSanitizer has encountered a fatal error' in r.stderr:
                 blocked += 1

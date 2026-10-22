@@ -123,6 +123,7 @@ typedef void (*net_input_fn)(struct netif *, const uint8_t *, unsigned, void *);
 void net_set_input(net_input_fn, void *);
 int net_init(void);
 void net_shutdown(void);
+int net_power_quiesce(void); /* bounded shutdown barrier; errors retain uncertain DMA */
 unsigned net_count(void);
 struct netif *net_get(unsigned);
 void net_worker_step(void);

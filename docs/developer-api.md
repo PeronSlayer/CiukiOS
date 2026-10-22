@@ -24,6 +24,79 @@ include it and link the SDK runtime; the kernel itself stays GPL-2.0-only.
 #define CIUKI_ABI_H
 
 #include <stdint.h>
+#include <ciuki/input_abi.h>
+```
+
+f1-111: independent COM v1 records, all fields fixed-width.
+
+```c
+#define CIUKI_COM_VERSION 1u
+#define CIUKI_COM_MAX 8u
+#define CIUKI_COM_QUEUE 1024u
+#define COM_GET_LINE   0x434f0101u
+#define COM_SET_LINE   0x434f0102u
+#define COM_GET_STATUS 0x434f0103u
+#define COM_SET_MODEM  0x434f0104u
+enum ciuki_com_chip { CIUKI_COM_UNKNOWN, CIUKI_COM_8250, CIUKI_COM_16450,
+    CIUKI_COM_16550, CIUKI_COM_16550A, CIUKI_COM_16650, CIUKI_COM_16750 };
+enum ciuki_com_origin { CIUKI_COM_BDA = 1, CIUKI_COM_PNP, CIUKI_COM_PCI };
+enum ciuki_com_parity { CIUKI_COM_PARITY_NONE, CIUKI_COM_PARITY_ODD,
+    CIUKI_COM_PARITY_EVEN, CIUKI_COM_PARITY_MARK, CIUKI_COM_PARITY_SPACE };
+#define CIUKI_COM_DTR 1u
+#define CIUKI_COM_RTS 2u
+#define CIUKI_COM_BREAK 4u
+#define CIUKI_COM_LOGGER 1u
+#define CIUKI_COM_OPEN 2u
+#define CIUKI_COM_READY 4u
+#define CIUKI_COM_QUARANTINED 8u
+```
+
+errors use LSR bits 1..4, modem uses MSR bits 0..7
+
+```c
+struct ciuki_com_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t baud;
+    uint32_t data_bits;
+    uint32_t stop_bits;
+    uint32_t parity;
+    uint32_t rx_trigger;
+    uint32_t read_timeout_ms;
+    uint32_t write_timeout_ms;
+    uint32_t reserved;
+};
+struct ciuki_com_modem {
+    uint32_t version;
+    uint32_t size;
+    uint32_t outputs;
+    uint32_t reserved;
+};
+struct ciuki_com_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t generation;
+    uint32_t number;
+    uint32_t base;
+    uint32_t irq;
+    uint32_t origin;
+    uint32_t chip;
+    uint32_t fifo_depth;
+    uint32_t flags;
+    uint32_t modem;
+    uint32_t errors;
+    uint32_t rx_queued;
+    uint32_t tx_queued;
+    uint32_t rx_capacity;
+    uint32_t tx_capacity;
+    uint32_t received;
+    uint32_t transmitted;
+    uint32_t dropped;
+    uint32_t reserved;
+};
+
+
+
 
 #define CIUKI_ABI_VERSION 1
 #define __CIUKI_ABI_VERSION__ CIUKI_ABI_VERSION
@@ -1368,7 +1441,8 @@ struct ciuki_mixer_master {
 Power control (call 73, execution-abi.md amendment 2026-10-12): B=action.
 Only the supervisor-spawned desktop may call it. REBOOT and OFF flush
 storage first; OFF returns ENOTSUP or EIO when the machine stays on, with
-storage already stopped. QUERY returns the CIUKI_POWER_CAN_* bits.
+storage already stopped. QUERY returns capability and irreversible
+shutdown progress bits; UNCERTAIN forbids resuming the session.
 
 ```c
 #define CIUKI_POWER_REBOOT 1u
@@ -1376,6 +1450,105 @@ storage already stopped. QUERY returns the CIUKI_POWER_CAN_* bits.
 #define CIUKI_POWER_QUERY 3u
 #define CIUKI_POWER_CAN_REBOOT 1u
 #define CIUKI_POWER_CAN_OFF 2u
+```
+
+QUERY progress: after either bit is set, the session cannot resume.
+
+```c
+#define CIUKI_POWER_STOPPED 4u
+#define CIUKI_POWER_UNCERTAIN 8u
+```
+
+Call 73 B=STATUS, C=record, D=sizeof(record). Cached read-only facts,
+available to native clients; never evaluates AML in the caller.
+
+```c
+#define CIUKI_POWER_STATUS 4u
+#define CIUKI_POWER_VERSION 1u
+#define CIUKI_POWER_UNKNOWN 0xffffffffu
+#define CIUKI_POWER_FIRMWARE 0u
+#define CIUKI_POWER_OWNED 1u
+#define CIUKI_POWER_QUARANTINED 2u
+#define CIUKI_POWER_PENDING 3u
+#define CIUKI_POWER_BATTERIES 4u
+#define CIUKI_POWER_ZONES 8u
+struct ciuki_power_battery {
+    uint32_t id;
+    uint32_t present;
+    uint32_t unit;
+```
+
+0: mWh/mW; 1: mAh/mA
+
+```c
+uint32_t state;
+```
+
+_BST bits; UNKNOWN when unavailable
+
+```c
+uint32_t design;
+    uint32_t full;
+    uint32_t remaining;
+    uint32_t rate;
+    uint32_t voltage;
+```
+
+mV
+
+```c
+};
+struct ciuki_power_zone {
+    uint32_t id;
+    uint32_t temperature;
+```
+
+absolute tenths Kelvin
+
+```c
+uint32_t critical;
+    uint32_t hot;
+    uint32_t passive;
+    uint32_t active[10];
+    uint32_t cooling;
+```
+
+active trip bitmask
+
+```c
+int32_t passive_delta;
+```
+
+thermal trend; UNKNOWN as INT32_MIN
+
+```c
+};
+struct ciuki_power_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t ownership;
+    uint32_t error;
+```
+
+ACPICA status, zero on success
+
+```c
+uint32_t sequence;
+    uint32_t shutdown_requests;
+```
+
+monotonic/coalesced; desktop handles changes
+
+```c
+uint32_t ac_online;
+    uint32_t lid_open;
+    uint32_t battery_count;
+    uint32_t zone_count;
+    uint32_t event_overflows;
+    uint32_t reserved;
+    struct ciuki_power_battery batteries[CIUKI_POWER_BATTERIES];
+    struct ciuki_power_zone zones[CIUKI_POWER_ZONES];
+};
 ```
 
 f2-33: process enumeration (call 70) and termination request (call 71).
@@ -2650,8 +2823,9 @@ delegated program-management authority; no VM handle
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
 ```
 
-CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
-a reference/unified override is permitted only for an explicit game, never the shell.
+CREATE launch.kernel: all three historical values map to unified (2).
+Values 0/1 are retired compatibility inputs, never another kernel.
+game is the catalog index+1, or zero for the interactive shell.
 
 ```c
 #define CIUKI_DOSVM_CIUKIDOS 0u
@@ -2659,7 +2833,7 @@ a reference/unified override is permitted only for an explicit game, never the s
 #define CIUKI_DOSVM_UNIFIED 2u
 ```
 
-opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57)
+sole CiukiDOS K2043 fork, DFV2 binding and native IFS
 
 ```c
 #define CIUKI_DOSVM_GAME_COUNT 3u
@@ -2686,6 +2860,12 @@ STATUS.changed
 
 ```c
 #define CIUKI_DOSVM_SUSPENDED 8u
+#define CIUKI_DOSVM_SHELL_READY 32u
+```
+
+STATUS: shell blocked for input, guest key queues empty
+
+```c
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u
 ```
 
@@ -3299,6 +3479,20 @@ int ciuki_wake_word(uint32_t *,uint32_t);
 #endif
 ```
 
+## `ciuki/com.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/com.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_COM_H
+#define CIUKI_SDK_COM_H
+#include <ciuki/abi.h>
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
+#endif
+```
+
 ## `ciuki/desktop.h`
 
 Source: `apps/desktop/protocol.h`.
@@ -3646,6 +3840,7 @@ SPDX-License-Identifier: MIT
 #ifndef CIUKI_SDK_DEVICES_H
 #define CIUKI_SDK_DEVICES_H
 #include <ciuki/abi.h>
+#include <ciuki/firmware_abi.h>
 ```
 
 Initialize version=CIUKI_DEVICES_VERSION and size=sizeof(*info).
@@ -3655,6 +3850,13 @@ See docs/design/device-manager.md.
 
 ```c
 int ciuki_devices(struct ciuki_devices_info *info);
+```
+
+Version 2, exact sizeof(*page), cursor/generation paging; same call 76.
+No firmware calls occur during this query.
+
+```c
+int ciuki_firmware_inventory(struct ciuki_firmware_page *page);
 #endif
 ```
 
@@ -3903,14 +4105,24 @@ SPDX-License-Identifier: MIT
 ```
 
 action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
-QUERY returns the CIUKI_POWER_CAN_* bits. REBOOT does not return on
+QUERY returns CIUKI_POWER_CAN_* and CIUKI_POWER_STOPPED/UNCERTAIN bits.
+Either progress bit means the session cannot resume. REBOOT does not return on
 success. OFF flushes storage and powers off through ACPI S5; it returns -1
 with errno ENOTSUP (no soft-off method) or EIO (the machine stayed on)
 after storage has stopped: show "It is now safe to turn off your
-computer". EBUSY means files are still open and nothing was changed.
+computer" only when QUERY also reports STOPPED. EBUSY with no progress
+bit means open files prevented flushing; UNCERTAIN means a stop proof
+failed after shutdown began: retain a terminal diagnostic and require reset.
 
 ```c
 int ciuki_power(uint32_t action);
+```
+
+Read-only cached firmware status; initializes version/size for the caller.
+Unknown values use CIUKI_POWER_UNKNOWN. No AML runs during this query.
+
+```c
+int ciuki_power_status(struct ciuki_power_status *status);
 #endif
 ```
 
@@ -4739,7 +4951,7 @@ struct du_menu { const char *label; struct du_menu_item *items; unsigned count; 
 enum du_event_type {
     DU_EV_ACTIVATE = 1, DU_EV_SELECT, DU_EV_OPEN, DU_EV_SORT, DU_EV_CONTEXT, DU_EV_CHANGE,
     DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS,
-    DU_EV_POINTER, DU_EV_DRAG
+    DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER
 };
 ```
 

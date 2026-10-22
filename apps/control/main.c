@@ -20,6 +20,7 @@
 #include <ciuki/proc.h>
 #include <ciuki/devices.h>
 #include <ciuki/net.h>
+#include <ciuki/power.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -340,6 +341,8 @@ static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *leng
     return close(fd) ? -errno : 0;
 }
 static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
+static int read_power_status(void *ctx, struct ciuki_power_status *out)
+{ (void)ctx; return ciuki_power_status(out) ? -errno : 0; }
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -628,7 +631,7 @@ int main(int argc, char **argv)
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
-    h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
+    h->engine=engine_query; h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;

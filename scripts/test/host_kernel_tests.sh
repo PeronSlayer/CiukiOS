@@ -210,6 +210,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/sdk/sysroot-overlay/include" -I "$root/src/kernel/include" \
+    "$root/tests/host/power_sdk_test.c" -o "$out/power_sdk_test"
+"$out/power_sdk_test"
 
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.

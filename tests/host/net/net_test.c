@@ -53,6 +53,14 @@ gen_t gen_alloc(void) { static gen_t n; return ++n; }
 void klog(const char *fmt, ...) { (void)fmt; }
 void kmutex_init(struct kmutex *m) { memset(m, 0, sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { CHECK(host_flags & 0x200); CHECK(!m->owner); m->owner = (void *)(uintptr_t)1; }
+static int power_lock_fault = -1;
+bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
+{ if (!power_lock_fault || deadline_passed(deadline)) return false; if (power_lock_fault>0) power_lock_fault--; kmutex_lock(m); return true; }
+struct task *g_current;
+static bool power_worker_alive;
+static unsigned power_reaps;
+bool task_alive(const struct task *t) { CHECK(t); return power_worker_alive; }
+void task_reap(struct task *t) { CHECK(t && !power_worker_alive); power_reaps++; }
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner); m->owner = 0; }
 void task_sleep_ms(uint32_t ms)
 {
@@ -758,6 +766,32 @@ static void test_smi_budget(void)
     CHECK(!netif_stop(&d)); callback_work_us = 0;
     puts("net F0-39: 2100us no-work SMI vs same-length real work; third strike quarantines, sparse overruns survive PASS");
 }
+static void test_power_barrier(void)
+{
+    struct model h; struct netif *d=&devices[0]; struct task fake_worker;
+    for (unsigned fault=0;fault<2;fault++) {
+        model_setup(&h,d,M_RTL); CHECK(!model_attach(&h,d)); device_count=1;
+        kmutex_init(&registration_mutex); input_active=bridge_tap.active=false;
+        worker=NULL; shutting_down=false; power_lock_fault=0;
+        CHECK(net_power_quiesce()==-NET_EBUSY && d->running && d->dma);
+        power_lock_fault=-1; input_active=true; uint64_t start=g_ticks;
+        CHECK(net_power_quiesce()==-NET_EBUSY && g_ticks-start==2000 && d->dma);
+        input_active=false;
+        if (fault) {
+            h.reset_stuck=true;
+            CHECK(net_power_quiesce()==-NET_EIO && d->quarantined && d->dma);
+            for (unsigned i=0;i<d->driver->dma_pages;i++) pmm_free(d->dma_phys+i*PAGE_SIZE);
+            d->dma_phys=0; d->dma=NULL;
+        } else {
+            worker=&fake_worker; power_worker_alive=true; start=g_ticks;
+            CHECK(net_power_quiesce()==-NET_EBUSY && g_ticks-start==2000 && !d->running && !d->dma);
+            power_worker_alive=false; CHECK(!net_power_quiesce() && !worker && power_reaps==1);
+            unsigned writes=h.writes; CHECK(!net_power_quiesce() && h.writes==writes);
+        }
+        device_count=0; shutting_down=false;
+    }
+    puts("PASS network power barrier: lock/callback/worker deadlines, stop proof, idempotent retry, uncertain DMA retention");
+}
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
@@ -772,6 +806,7 @@ int main(void)
     test_arp();
     test_public_state();
     test_second_set();
+    test_power_barrier();
     printf("net: %u checks PASS (production framework, eight NIC register/DMA models, ARP)\n", checks);
     return 0;
 }

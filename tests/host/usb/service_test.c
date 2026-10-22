@@ -361,6 +361,19 @@ int main(int argc,char **argv)
     if(!strcmp(argv[1],"firmware")) {g_boot.input_policy=CBI_INPUT_FIRMWARE;policy=true;}
     unsigned before=writes,c=claims;
     usb_init();
+    if (!strncmp(argv[1],"shutdown",8)) {
+        struct usb_host *h=(struct usb_host *)usb_get(0); assert(h && h->owned && h->ready);
+        bool busy=!strcmp(argv[1],"shutdown-busy"), stuck=!strcmp(argv[1],"shutdown-stuck");
+        if (busy) h->busy=true;
+        if (stuck) m.bme_stuck=true;
+        uint64_t start=m.now;
+        int e=usb_power_quiesce();
+        assert(e==(busy ? -16 : stuck ? -USB_EIO : 0));
+        if (busy) assert(h->ready && !h->quarantined && m.now-start<=2000);
+        else assert(!h->ready && h->quarantined && h->dma);
+        if (!e) assert(!(m.config[1]&4) && !usb_power_quiesce());
+        puts("PASS USB native power barrier: bounded reservation, proved stop, idempotence and uncertain DMA retention"); return 0;
+    }
     if(policy || no_pci) {
         assert(!usb_count() && !created && !started && !allocations && writes==before && claims==c);
     } else if(create_failed || input_create_failed) {

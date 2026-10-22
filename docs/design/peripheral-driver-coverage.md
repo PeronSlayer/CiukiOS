@@ -354,6 +354,12 @@ pairing on Intel ICH4, VIA, SiS, ALi and NVIDIA boards separately.
 
 ### Power
 
+The f1-110 implementation, its versioned call-73 status interface, admission
+limits and primary-source decisions are specified in
+[Generic ACPI events and power](acpi-events-power.md). Unsupported thermal
+control retains firmware ownership; inventory capability bits remain facts,
+not activation evidence.
+
 Use **ACPICA 20260930**, the upstream interpreter/runtime, through a Ciuki
 OS Services Layer (OSL). Its audited runtime consists of 164 C files and 43
 headers (3,499,399 source bytes); debug/disassembler/tool/foreign-OS glue

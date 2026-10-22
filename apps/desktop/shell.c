@@ -1099,6 +1099,18 @@ static void bar_text(struct du_canvas *c, int x, int y, const char *text)
         du_text(c,x,y+1,text,desk_mix(0,t->topbar,100));
     du_text(c,x,y,text,t->topbar_text);
 }
+int desk_shell_power_update(struct desktop *d, const struct ciuki_power_status *p)
+{
+    if (!p || p->version != CIUKI_POWER_VERSION || p->size != sizeof(*p) ||
+        p->battery_count > CIUKI_POWER_BATTERIES || p->zone_count > CIUKI_POWER_ZONES || p->reserved) return -1;
+    int width = desk_shell_tray_box(d).w;
+    d->sh.power_status = *p; desk_shell_tray_damage(d,width);
+    if (p->shutdown_requests != d->sh.power_seen) {
+        d->sh.power_seen = p->shutdown_requests;
+        if (!d->sh.gate && !d->power.state) d->sh.want_power = 2;
+    }
+    return 0;
+}
 static void draw_tray(struct desktop *d, struct du_canvas *canvas)
 {
     struct du_canvas c = *canvas;
@@ -1118,6 +1130,23 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
     struct desk_box notification = notification_icon_box(d);
     du_icon_blit(&c,notification.x,notification.y,desk_shell_icon("dialog-information",16),16,
                  d->sh.notification.active ? DU_ICON_NORMAL : DU_ICON_GHOST);
+    if (d->sh.power_status.version == CIUKI_POWER_VERSION) {
+        const struct ciuki_power_status *p = &d->sh.power_status;
+        struct desk_box bi = desk_shell_tray_icon_box(d, SH_TRAY_POWER);
+        uint64_t full = 0, remaining = 0; unsigned unit = CIUKI_POWER_UNKNOWN; int known = p->battery_count > 0;
+        for (unsigned i = 0; i < p->battery_count && i < CIUKI_POWER_BATTERIES; i++) {
+            const struct ciuki_power_battery *b = &p->batteries[i];
+            if (b->present != 1 || b->unit > 1 || !b->full || b->full == CIUKI_POWER_UNKNOWN || b->remaining == CIUKI_POWER_UNKNOWN ||
+                (unit != CIUKI_POWER_UNKNOWN && unit != b->unit)) { known = 0; break; }
+            unit = b->unit; full += b->full; remaining += b->remaining;
+        }
+        unsigned percent = known && full ? (unsigned)(remaining * 100 / full) : 0;
+        if (percent > 100) percent = 100;
+        du_icon_blit(&c,bi.x,bi.y,desk_shell_icon(known && percent < 10 ? "battery-caution" : "battery",16),16,
+                     known ? DU_ICON_NORMAL : DU_ICON_DISABLED);
+        /* AC is separate from charge: '+' connected, '-' on battery, '?' unknown. */
+        du_text(&c,bi.x+9,bi.y+4,p->ac_online == 1 ? "+" : p->ac_online == 0 ? "-" : "?",desk_theme->topbar_text);
+    }
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
@@ -2211,7 +2240,8 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     }
     case DESK_INTERNAL_POWER:
         multiline(&c, content.x + 14, content.y + 18, d->power.text, SH_INK);
-        push_button(&c, button_box(content, 0, d->power.state==DESK_POWER_BUSY ? 2 : 1), "Cancel", 1);
+        if (d->power.state!=DESK_POWER_DONE)
+            push_button(&c, button_box(content, 0, d->power.state==DESK_POWER_BUSY ? 2 : 1), "Cancel", 1);
         if (d->power.state==DESK_POWER_BUSY) push_button(&c, button_box(content, 1, 2), "&Force", 0);
         break;
     default:
@@ -2392,6 +2422,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     if (button==CIUKI_BUTTON_RIGHT) {
         int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
+            desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) ? CP_POWER :
             desk_contains(network_icon_box(d),x,y) ? CP_NETWORK :
             desk_contains(media_icon_box(d),x,y) ? CP_AUTOPLAY :
             desk_contains(desk_shell_clock_box(d),x,y) ? CP_DATETIME : CP_HOME;
@@ -2466,6 +2497,10 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     struct desk_box bar = desk_taskbar(d);
     if (y >= 0 && y < DESK_BAR) {
+        if (desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) && button == CIUKI_BUTTON_LEFT) {
+            if (program_index(d,"control")>=0) launch_named(d,"control","--panel=power");
+            return 1;
+        }
         if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
             d->sh.media_open=1; d->sh.want_reload|=32;
             damage(d,outer(media_popup(d))); return 1;

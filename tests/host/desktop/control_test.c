@@ -146,6 +146,23 @@ static void programs_page(void)
     program_overflow=0;
     cp_detach(&a);du_release(&u);
 }
+static int power_fixture(void *ctx, struct ciuki_power_status *p)
+{
+    (void)ctx; memset(p,0xff,sizeof(*p)); p->version=1; p->size=sizeof(*p);
+    p->ownership=CIUKI_POWER_FIRMWARE; p->error=0; p->battery_count=1; p->zone_count=0;
+    p->batteries[0].id=7; p->batteries[0].present=1; return 0;
+}
+static void power_page(void)
+{
+    attach(CP_HOME); a.host.power_status=power_fixture; cp_open(&a,CP_POWER);
+    assert(strstr(du_get(&u,1800)->text,"AC: Unknown") && strstr(du_get(&u,1800)->text,"Lid: Unknown"));
+    assert(strstr(du_get(&u,1801)->text,"Firmware retained"));
+    assert(strstr(du_get(&u,1802)->text,"Unknown / Unknown") && strstr(du_get(&u,1802)->text,"units unknown"));
+    a.host.power_status=NULL; cp_open(&a,CP_POWER);
+    assert(!strcmp(du_get(&u,1800)->text,"Power status: Unknown"));
+    assert(!du_get(&u,1802)->text[0]); cp_detach(&a);
+    puts("PASS power Control Panel: firmware ownership, AC/lid/battery unknowns and stale-value clearing");
+}
 int main(int argc, char **argv)
 {
     assert(argc == 3 || argc == 4);
@@ -154,6 +171,7 @@ int main(int argc, char **argv)
     const char *renders = argc == 4 ? argv[3] : NULL;
 
     programs_page();
+    power_page();
     /* No desktop.cfg yet: the defaults, Ciuk2 filled. */
     attach(CP_DISPLAY);
     assert(!strcmp(a.cfg.theme, "Ciuki Blue") && !strcmp(desk_theme->name, "Ciuki Blue"));

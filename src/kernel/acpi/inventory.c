@@ -1,6 +1,6 @@
 /* Cached namespace/PnP facts; no activation or I/O in the page ABI.
  * SPDX-License-Identifier: GPL-2.0-only */
-#include "internal.h"
+#include "runtime.h"
 #include "accommon.h"
 #include "acinterp.h"
 
@@ -53,6 +53,12 @@ static void identifier(ACPI_OBJECT *o, char *out, size_t size, struct ciuki_firm
 }
 static bool has(ACPI_HANDLE h, char *name)
 { ACPI_HANDLE child; return ACPI_SUCCESS(AcpiGetHandle(h, name, &child)); }
+static bool matches(const struct ciuki_firmware_record *r, const char *id)
+{
+    if (!strcmp(r->hid,id)) return true;
+    for (unsigned i = 0; i < r->cid_count; i++) if (!strcmp(r->cid[i],id)) return true;
+    return false;
+}
 static void ids(ACPI_HANDLE h, struct ciuki_firmware_record *r)
 {
     ACPI_BUFFER out = {ACPI_ALLOCATE_BUFFER, NULL};
@@ -142,8 +148,8 @@ static ACPI_STATUS device(ACPI_HANDLE handle, UINT32 level, void *ctx, void **re
     }
     text(r->reason, sizeof(r->reason), "Firmware description only; device and power ownership unchanged.", r);
     ids(handle, r);
-    if (!strcmp(r->hid, "PNP0C0C") || !strcmp(r->hid, "PNP0C0E")) r->capabilities |= CIUKI_FW_CAP_BUTTON;
-    if (!strcmp(r->hid, "PNP0C09")) r->capabilities |= CIUKI_FW_CAP_EC;
+    if (matches(r,"PNP0C0C") || matches(r,"PNP0C0E")) r->capabilities |= CIUKI_FW_CAP_BUTTON;
+    if (matches(r,"PNP0C09")) r->capabilities |= CIUKI_FW_CAP_EC;
     if (has(handle, "_LID")) r->capabilities |= CIUKI_FW_CAP_LID;
     if (has(handle, "_PSR")) r->capabilities |= CIUKI_FW_CAP_AC;
     if (has(handle, "_BST") || has(handle, "_BIF") || has(handle, "_BIX")) r->capabilities |= CIUKI_FW_CAP_BATTERY;
@@ -175,10 +181,12 @@ void fw_pnp_discover(void)
     }
     fw_os->table_unmap(rom, 65536);
 }
-ACPI_STATUS fw_inventory_run(const struct fw_ops *ops, uint32_t rsdp)
+static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool power)
 {
     complete = false; count = 0; flags = 0; status = 0; memset(handles, 0, sizeof(handles));
-    fw_bind(ops); fw_pnp_discover();
+    fw_bind(ops); fw_runtime = power;
+    fw_classes_reset();
+    fw_pnp_discover();
     status = fw_tables_discover(rsdp);
     bool initialized = false;
     if (!status) {
@@ -201,18 +209,41 @@ ACPI_STATUS fw_inventory_run(const struct fw_ops *ops, uint32_t rsdp)
             }
             status = AcpiWalkNamespace(ACPI_TYPE_ANY, ACPI_ROOT_OBJECT, 64, device, NULL, NULL, NULL);
         }
+        if (!status && power) {
+            if (flags & CIUKI_FIRMWARE_TRUNCATED) status = AE_LIMIT;
+            /* Bind EC first, before dependent thermal/battery AML. */
+            for (unsigned pass = 0; pass < 2 && !status; pass++)
+                for (unsigned i = 0; i < count && !status; i++) {
+                    uint32_t caps = records[i].capabilities;
+                    if (!handles[i] || handles[i] == AcpiGbl_RootNode || !!(caps & CIUKI_FW_CAP_EC) != !pass) continue;
+                    status = fw_power_collect(handles[i], caps, records[i].id,matches(&records[i],"PNP0C0C"));
+                }
+            if (!status) status = fw_power_takeover();
+            if (status) { fw_power.error = status; fw_power_stop(); }
+        }
         uint32_t live; fw_alloc_stats(&live, &high_water);
-        if (initialized) (void)AcpiTerminate();
+        if (initialized && !fw_owned) (void)AcpiTerminate();
     }
-    if (!status && fw_run_error()) status = fw_run_error();
+    if (!power && !status && fw_run_error()) status = fw_run_error();
+    if (power && status && !fw_owned) {
+        fw_power.error = status;
+        if (fw_power.ownership == CIUKI_POWER_PENDING) fw_power.ownership = CIUKI_POWER_FIRMWARE;
+        fw_power_publish();
+    }
     if (status) flags |= CIUKI_FIRMWARE_INCOMPLETE;
-    fw_budget_end(); fw_os_cleanup(); complete = true;
+    fw_budget_end();
+    if (!fw_owned) { fw_os_cleanup(); fw_runtime = false; }
+    if (!power) { fw_power.error = status; fw_power.ownership = CIUKI_POWER_FIRMWARE; fw_power_publish(); }
+    complete = true;
     return status;
 }
+ACPI_STATUS fw_inventory_run(const struct fw_ops *ops, uint32_t rsdp) { return inventory_run(ops, rsdp, false); }
+ACPI_STATUS fw_inventory_power_run(const struct fw_ops *ops, uint32_t rsdp) { return inventory_run(ops, rsdp, true); }
 void fw_inventory_unavailable(ACPI_STATUS error)
 {
     count = high_water = fw_table_count = 0;
     flags = CIUKI_FIRMWARE_INCOMPLETE; status = error; complete = true;
+    fw_classes_reset(); fw_power.error = error; fw_power.ownership = CIUKI_POWER_FIRMWARE; fw_power_publish();
 }
 int firmware_inventory_page(struct ciuki_firmware_page *p)
 {

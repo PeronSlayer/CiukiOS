@@ -592,6 +592,40 @@ void net_shutdown(void)
         task_reap(worker); worker = 0;
     }
 }
+int net_power_quiesce(void)
+{
+    /* The general shutdown API is also used at initialization failure. S5
+     * needs a bounded barrier and must observe every driver's stop result. */
+    uint64_t end = deadline_after_ms(2000);
+    shutting_down = true;
+    if (!kmutex_lock_until(&registration_mutex,end)) return -NET_EBUSY;
+    uint32_t flags = irq_save();
+    input = 0; bridge_tap.fn = 0; bridge_tap.work = 0;
+    irq_restore(flags);
+    unsigned waits = 0;
+    while (input_active || bridge_tap.active) {
+        if (waits++ == 2000 || deadline_passed(end)) { kmutex_unlock(&registration_mutex); return -NET_EBUSY; }
+        task_sleep_ms(1);
+    }
+    input_cookie = 0; bridge_tap.cookie = 0; bridge_tap.type = 0;
+    kmutex_unlock(&registration_mutex);
+    for (unsigned i = 0; i < device_count; i++) {
+        struct netif *d = &devices[i];
+        if (deadline_passed(end)) return -NET_EBUSY;
+        if (!kmutex_lock_until(&d->mutex,end)) return -NET_EBUSY;
+        if (d->stopping && !d->ready && !d->running && !d->quarantined && !d->dma_phys && !d->mmio &&
+            d->claims[0] < 0 && d->claims[1] < 0 && d->claims[2] < 0) { kmutex_unlock(&d->mutex); continue; }
+        int e = stop_locked(d); kmutex_unlock(&d->mutex);
+        if (e) return e;
+    }
+    waits = 0;
+    while (worker && task_alive(worker)) {
+        if (worker == g_current || waits++ == 2000 || deadline_passed(end)) return -NET_EBUSY;
+        task_sleep_ms(1);
+    }
+    if (worker) { task_reap(worker); worker = 0; }
+    return 0;
+}
 unsigned net_count(void) { return device_count; }
 struct netif *net_get(unsigned i) { return i < device_count ? &devices[i] : 0; }
 

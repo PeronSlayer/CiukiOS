@@ -1,114 +1,73 @@
-/* Production power syscall with fake storage/port/time boundaries. */
+/* Production shutdown ordering: no register path bypasses the qualified owner. */
 #define POWER_HOST 1
 #define POWER_HOST_RUNTIME 1
 #define CIUKI_CPU_H
+#include <assert.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
 #include <ciuki/process.h>
-static uint32_t irq_save(void);
-static void irq_restore(uint32_t);
+static inline uint32_t irq_save(void) { return 0x200; }
+static inline void irq_restore(uint32_t flags) { (void)flags; }
 #define P2V(p) ((void *)(uintptr_t)(p))
 #define V2P(p) ((uint32_t)(uintptr_t)(p))
 #include <ciuki/storage.h>
 #include <ciuki/reboot.h>
-static unsigned failures, sync_calls, writes, enables, sleeps, reboots;
-static int sync_error;
-static unsigned ownership_after;
-static uint16_t pm1a, pm1b;
-static uint32_t irq_flags = 0x200;
-static bool timeout_logged;
-static char power_record[256],power_durable_record[256];
-static unsigned checkpoint_calls;
-static int checkpoint_error;
 static struct storage disk;
 static struct process desktop;
-struct ciuki_boot_info g_boot;
+static int sync_error, quiesce_error, off_error;
+static bool qualified;
+static char order[32], durable[256], last[256];
+static unsigned stages, checkpoints;
 static jmp_buf reboot_return;
-#define CHECK(c) do { if (!(c)) { printf("FAIL %d %s\n", __LINE__, #c); failures++; } } while (0)
+bool acpi_power_can_off(void) __attribute__((weak));
+int acpi_power_off_owned(void) __attribute__((weak));
+int power_devices_quiesce(void) __attribute__((weak));
+static void stage(char c) { assert(stages<sizeof(order)-1); order[stages++]=c; order[stages]=0; }
 struct process *proc_current(void) { return &desktop; }
 uint32_t supervisor_desktop_pid(void) { return 42; }
 struct storage *storage_get(void) { return &disk; }
-int storage_sync(void) { sync_calls++; disk.stopped = true; return sync_error; }
-void *vmm_map_mmio(uint32_t p, uint32_t n, bool wc) { (void)p; (void)n; (void)wc; return 0; }
-static uint32_t irq_save(void) { uint32_t f = irq_flags; irq_flags = 0; return f; }
-static void irq_restore(uint32_t f) { irq_flags = f; }
-static uint16_t inw(uint16_t p) { CHECK(p == 0x604 || p == 0x644); return p == 0x604 ? pm1a : pm1b; }
-static void outw(uint16_t p, uint16_t v) { CHECK(!irq_flags && (p == 0x604 || p == 0x644)); (void)v; writes++; }
-static void outb(uint16_t p, uint8_t v) { CHECK(p == 0xB2 && v == 0xF1); enables++; }
-void task_sleep_ms(uint32_t ms)
-{
-    CHECK(irq_flags == 0x200);
-    if (ms == 10 && ++sleeps == ownership_after) pm1a = pm1b = 1;
-}
-void klog(const char *fmt, ...)
-{
-    if (strstr(fmt, "SCI_EN")) timeout_logged = true;
-    va_list ap;va_start(ap,fmt);vsnprintf(power_record,sizeof(power_record),fmt,ap);va_end(ap);
-}
-int blackbox_checkpoint(void)
-{ CHECK(irq_flags==0x200);checkpoint_calls++;strcpy(power_durable_record,power_record);return checkpoint_error; }
-__attribute__((noreturn)) void kernel_reboot(void) { reboots++; longjmp(reboot_return, 1); }
+int storage_sync(void) { stage('S'); if (!sync_error) disk.stopped=true; return sync_error; }
+void net_shutdown(void) { assert(disk.stopped); stage('N'); }
+int power_devices_quiesce(void) { assert(disk.stopped); net_shutdown(); stage('Q'); return quiesce_error; }
+bool acpi_power_can_off(void) { return qualified; }
+int acpi_power_off_owned(void) { assert(!strcmp(order,"SNQ")); stage('P'); return off_error; }
+void klog(const char *fmt, ...) { va_list ap; va_start(ap,fmt); vsnprintf(last,sizeof(last),fmt,ap); va_end(ap); }
+int blackbox_checkpoint(void) { checkpoints++; strcpy(durable,last); return 0; }
+__attribute__((noreturn)) void kernel_reboot(void) { stage('R'); longjmp(reboot_return,1); }
 #include "../../src/kernel/core/power.c"
-static void reset_power(void)
+static void reset(void)
 {
-    disk = (struct storage){.ready = true}; desktop.pid = 42;
-    soft_off = (struct acpi_soft_off){.pm1a_cnt=0x604, .smi_cmd=0xB2, .acpi_enable=0xF1, .slp_typa=5, .slp_typb=5};
-    soft_off_state = 1;
-    sync_calls = writes = enables = sleeps = reboots = 0;
-    pm1a = pm1b = 1; sync_error = 0; ownership_after = 0; timeout_logged = false;
-    checkpoint_calls=0;checkpoint_error=0;power_record[0]=power_durable_record[0]=0;
-}
-static void test_power_sync_retry(void)
-{
-    for (unsigned action = CIUKI_POWER_REBOOT; action <= CIUKI_POWER_OFF; action++) {
-        for (unsigned error = 0; error < 2; error++) {
-            reset_power(); sync_error = error ? -EIO : -EBUSY;
-            for (unsigned attempt = 0; attempt < 2; attempt++) {
-                if (!setjmp(reboot_return)) CHECK(power_syscall(action) == sync_error);
-                else CHECK(false);
-                CHECK(sync_calls == attempt + 1 && !writes && !reboots);
-                CHECK(strstr(power_durable_record,"storage flush failed:") && checkpoint_calls==attempt+1);
-            }
-            sync_error = 0;
-            if (!setjmp(reboot_return)) {
-                CHECK(power_syscall(action) == -EIO); CHECK(action == CIUKI_POWER_OFF);
-            } else CHECK(action == CIUKI_POWER_REBOOT);
-            CHECK(sync_calls == 3 && (action == CIUKI_POWER_OFF ? writes == 2 : reboots == 1));
-        }
-    }
-    reset_power(); desktop.pid = 7; CHECK(power_syscall(CIUKI_POWER_OFF) == -EPERM && !sync_calls && !writes);
-    puts("power sync retry: EBUSY/EIO retained, every request syncs, hardware only after success PASS");
-}
-static void test_power_sci(void)
-{
-    for (unsigned form = 0; form < 3; form++) {
-        reset_power(); pm1a = 0;
-        if (form == 1) soft_off.smi_cmd = 0;
-        if (form == 2) { pm1a = 1; pm1b = 0; soft_off.pm1b_cnt = 0x644; }
-        if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_OFF); CHECK(false); }
-        CHECK(!writes && reboots == 1 && timeout_logged);
-        CHECK(sleeps == (form == 1 ? 0u : 300u));
-    }
-    reset_power(); pm1a = pm1b = 0; soft_off.pm1b_cnt = 0x644; ownership_after = 3;
-    CHECK(power_syscall(CIUKI_POWER_OFF) == -EIO && writes == 4 && enables == 1 && sleeps == 3 && !reboots);
-    reset_power(); CHECK(power_syscall(CIUKI_POWER_OFF) == -EIO && writes == 2 && !enables);
-    CHECK(strstr(power_durable_record,"soft-off had no effect") && checkpoint_calls==2);
-    reset_power();pm1a=0;checkpoint_error=-EIO;
-    if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_OFF);CHECK(false); }
-    CHECK(reboots==1 && !writes && checkpoint_calls==1 && strstr(power_durable_record,"SCI_EN"));
-    reset_power();soft_off_state=-1;
-    CHECK(power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !writes && checkpoint_calls==1);
-    CHECK(strstr(power_durable_record,"safe to turn off"));
-    puts("power SCI_EN: missing handshake/PM1a/PM1b timeout refuses PM writes and reboots, ownership succeeds PASS");
-    puts("power f0-40: post-FAT-shutdown failures checkpoint the raw recorder, failed recorder never prevents reset fallback PASS");
+    disk=(struct storage){.ready=true}; desktop.pid=42; stages=checkpoints=0;
+    power_progress=0;
+    order[0]=durable[0]=last[0]=0; sync_error=quiesce_error=0; off_error=-EIO; qualified=true;
 }
 int main(void)
 {
-    if (!getenv("POWER_REVIEW") || !strcmp(getenv("POWER_REVIEW"), "5")) test_power_sync_retry();
-    if (!getenv("POWER_REVIEW") || !strcmp(getenv("POWER_REVIEW"), "7")) test_power_sci();
-    printf("power runtime: %u failures\n", failures); return failures != 0;
+    reset(); desktop.pid=7; assert(power_syscall(CIUKI_POWER_OFF)==-EPERM && !stages);
+    reset(); assert(power_syscall(99)==-EINVAL && !stages);
+    assert(power_syscall(CIUKI_POWER_QUERY)==3 && !stages);
+    qualified=false; assert(power_syscall(CIUKI_POWER_QUERY)==1 && !stages);
+    for (unsigned action=1;action<=2;action++) {
+        reset(); sync_error=-EBUSY;
+        assert(power_syscall(action)==-EBUSY && !strcmp(order,"S") && !disk.stopped);
+        assert(strstr(durable,"storage flush failed"));
+        reset(); sync_error=-EIO; assert(power_syscall(action)==-EIO && !strcmp(order,"S"));
+        reset(); quiesce_error=-EBUSY; assert(power_syscall(action)==-EBUSY && !strcmp(order,"SNQ"));
+        assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
+        assert(strstr(durable,"native quiesce failed"));
+        reset(); quiesce_error=-EIO; assert(power_syscall(action)==-EBUSY && !strcmp(order,"SNQ"));
+    }
+    reset(); assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQP"));
+    assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_STOPPED);
+    assert(strstr(durable,"stopped devices and leases retained") && checkpoints==2);
+    reset(); qualified=false;
+    assert(power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !strcmp(order,"SNQ"));
+    assert(strstr(durable,"safe to turn off"));
+    reset(); if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_REBOOT); assert(0); }
+    assert(!strcmp(order,"SNQR"));
+    puts("PASS power runtime: authority, query, flush refusal, quiesce refusal, S5 worker ordering, retained diagnostics, reboot");
+    return 0;
 }
