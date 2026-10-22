@@ -442,3 +442,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-115b-native-fat12-mount](f1-115b-native-fat12-mount.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-23 00:09 (FAT12 read/write in the FAT driver, removable-media semantics) |
 | [f9-07-hardware-report](f9-07-hardware-report.md) | F9 | gpt-6.1-sol / high | written 2026-10-23 00:09 (Hardware Report app for public trials; after f1-109) |
 | [f2-98c-event-driven-native-apps](f2-98c-event-driven-native-apps.md) | F2 | gpt-6.1-sol / high | written 2026-10-23 00:09 (du_run and every native app blocking on events; after f2-88c) |
+| [f3-64-persistent-dos-saves](f3-64-persistent-dos-saves.md) | F3 | gpt-6.1-sol / xhigh | written 2026-10-23 00:17 (per-title persistent overlays: saves kept across sessions, crash-consistent, reset/export, quota; after f3-63) |
