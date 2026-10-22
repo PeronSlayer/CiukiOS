@@ -429,3 +429,5 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-106-usb-controller-inventory-and-ehci](f1-106-usb-controller-inventory-and-ehci.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-22 23:47 (f1-105 controller inventory plus the EHCI engine) |
 | [f1-109-acpi-pnp-readonly-inventory-acpica](f1-109-acpi-pnp-readonly-inventory-acpica.md) | F1/F4 | gpt-6.1-sol / xhigh | written 2026-10-22 23:47 (ACPICA 20260930 vendored, Ciuki OSL, read-only ACPI/PnP inventory) |
 | [f1-111-uart-generations-native-com-abi](f1-111-uart-generations-native-com-abi.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-22 23:47 (UART generations, COM resources, native COM ABI, logger arbitration) |
+| [f2-123-hardware-names-complete](f2-123-hardware-names-complete.md) | F2 | gpt-6.1-sol / medium (--search) | written 2026-10-22 23:58 (INF literal descriptions, pci.ids/usb.ids as second source, size measured) |
+| [f2-101c-display-command-semantics](f2-101c-display-command-semantics.md) | F2 | gpt-6.1-sol / high (--search, no code) | written 2026-10-22 23:58 (pixel, aliasing, clip, line, batch and fence semantics with golden vectors before part C code) |
