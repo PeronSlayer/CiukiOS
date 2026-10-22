@@ -268,7 +268,7 @@ static void test_irq_restore(uint32_t f) {
         with tempfile.TemporaryDirectory(prefix='accel-notice-', dir=out) as directory:
             temp = Path(directory)
             source = (ROOT / 'apps/desktop/desktop.c').read_text()
-            begin = source.index('static void accel_notice_text(')
+            begin = source.index('void accel_notice_text(')
             end = source.index('static void storage_poll(', begin)
             (temp / 'latency_accel_notice.inc').write_text(source[begin:end])
             binary = temp / 'notice'
