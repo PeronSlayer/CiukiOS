@@ -461,3 +461,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-117-3dfx-voodoo3-5](f2-117-3dfx-voodoo3-5.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: 3dfx Voodoo3/VSA-100) |
 | [f2-118-s3-trio64-virge](f2-118-s3-trio64-virge.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:03 (family port: S3 Trio64/ViRGE) |
 | [f9-04b-setup-native-integration](f9-04b-setup-native-integration.md) | F9 | gpt-6.1-sol / xhigh | written 2026-10-23 01:05 (Setup native integration: VFS query, destination-aware writers, manifest, Setup-mode authority, interface amendment, real libsetup in the wizard) |
+| [f1-113b-joystick-persistence](f1-113b-joystick-persistence.md) | F1 | gpt-6.1-sol / high | written 2026-10-23 01:11 (joystick selection and calibration persisted by controller identity) |
