@@ -113,6 +113,7 @@ struct task {
     struct task *next, *rq_prev;    /* constant-time timer-driven reinsert */
     struct task *all_next;
     uint8_t pager_order;            /* f0-49 held lock-order levels (bitmask) */
+    struct ndis_execution *ndis_execution; /* pinned foreign callback, task-local */
 };
 
 extern struct task *g_current;

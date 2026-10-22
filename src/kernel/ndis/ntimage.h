@@ -47,6 +47,7 @@ struct ntimage_platform {
     const struct ndis_export *exports;
     size_t export_count;
     uint32_t image_budget; /* already reserved from the common 4 MiB F6 budget */
+    void (*scan_record)(void *, const char *file, uint32_t rva, const char *reason);
 };
 struct ntimage {
     struct pe_image pe;
@@ -54,7 +55,8 @@ struct ntimage {
     struct pe_ops ops;
     struct ntimage_platform platform;
     const char *file; /* pinned caller-owned name */
-    bool loaded, entered, quarantined;
+    bool loaded, entered, quarantined, scanned;
+    uint32_t scan_rva;
 };
 int ntimage_load(struct ntimage *, const void *, uint32_t, const char *, const struct ntimage_platform *);
 int ntimage_unload(struct ntimage *);

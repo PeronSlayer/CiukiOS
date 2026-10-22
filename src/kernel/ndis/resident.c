@@ -42,7 +42,11 @@ static void record(void *ctx,const char *file,const char *module,const char *nam
     else if(module) klog("[ndis] load refused driver=%s import=%s!#%u reason=%s",file,module,ordinal,reason);
     else klog("[ndis] load refused driver=%s reason=%s",file,reason);
 }
+static void scan_record(void *ctx,const char *file,uint32_t rva,const char *reason) {
+    (void)ctx;
+    klog("[ndis] scan refused driver=%s eip=+%x reason=%s",file,rva,reason);
+}
 void ntimage_kernel_platform(struct ntimage_platform *p,struct ndis_resident_memory *m) {
     *p=(struct ntimage_platform){.memory={.context=m,.allocate=allocate,.release=release},
-        .resident=resident,.record=record,.image_budget=m->reserved_bytes};
+        .resident=resident,.record=record,.image_budget=m->reserved_bytes,.scan_record=scan_record};
 }

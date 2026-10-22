@@ -24,7 +24,7 @@ static void fixture(void) {
     put(O+56,0x4000);put(O+60,512);pe_put16(raw+O+68,1);put(O+92,16);
     put(T+8,512);put(T+12,0x1000);put(T+16,512);put(T+20,512);put(T+36,0x60000020);
     put(T+48,8192);put(T+52,0x2000);put(T+56,8192);put(T+60,1024);put(T+76,0xc0000040);
-    raw[512]=0xc3;
+    memset(raw+512,0x90,512); raw[512]=0xc3;
 }
 static void import(const char *module,const char *name,uint32_t ordinal,bool fallback,bool bound) {
     dir(1,0x2000,40);put(at(0x2000),fallback?0:0x2100);
@@ -80,6 +80,7 @@ static void policies(void) {
     assert(!strcmp(d.error.reason,"network-image-budget"));
 }
 static void hostile(void) {
+    fixture();raw[515]=0xfa;reject("instruction-cli");
     fixture();put(T+52,0x1000);reject("section-virtual-overlap");
     fixture();put(T+60,512);reject("driver-raw-overlap");
     fixture();put(T+20,0);reject("driver-raw-header-overlap");

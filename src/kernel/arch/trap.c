@@ -15,6 +15,10 @@ extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
 extern void dosvm_perf_enter(void) __attribute__((weak));
 extern bool dosvm_client(const struct task *) __attribute__((weak));
 extern void entropy_irq(unsigned) __attribute__((weak));
+extern bool ndis_execution_exception(struct trap_frame *) __attribute__((weak));
+extern void ndis_execution_timer(struct trap_frame *) __attribute__((weak));
+extern void ndis_execution_irq_enter(void) __attribute__((weak));
+extern void ndis_execution_irq_leave(void) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -49,6 +53,7 @@ static void handle_irq(struct trap_frame *tf)
         "irq8", "irq9", "irq10", "irq11", "irq12", "irq13", "irq14", "irq15"
     };
     unsigned irq = tf->vector - 0x20;
+    if (ndis_execution_irq_enter) ndis_execution_irq_enter();
     if (ledger_irq_context) ledger_irq_context(true);
     if (crit_label) crit_label(sections[irq]);
     if (crit_owner) crit_owner(sections[irq], (uint32_t)(uintptr_t)irq_handlers[irq]);
@@ -56,6 +61,7 @@ static void handle_irq(struct trap_frame *tf)
         g_spurious_irq7++;              /* spurious: no handler, no EOI */
         irq_chain_spurious(7);
         if (ledger_irq_context) ledger_irq_context(false);
+        if (ndis_execution_irq_leave) ndis_execution_irq_leave();
         return;
     }
     if (irq == 15 && !(pic_isr(0xA0) & 0x80)) {
@@ -63,6 +69,7 @@ static void handle_irq(struct trap_frame *tf)
         irq_chain_spurious(15);
         outb(0x20, 0x62);               /* acknowledge the master cascade only */
         if (ledger_irq_context) ledger_irq_context(false);
+        if (ndis_execution_irq_leave) ndis_execution_irq_leave();
         return;
     }
     if (entropy_irq) entropy_irq(irq);
@@ -76,6 +83,7 @@ static void handle_irq(struct trap_frame *tf)
     pic_eoi(irq);
     biosvm_account_irq(irq, true, irq_handlers[irq] != 0);
     if (ledger_irq_context) ledger_irq_context(false);
+    if (ndis_execution_irq_leave) ndis_execution_irq_leave();
 }
 
 static bool try_expected(struct trap_frame *tf)
@@ -103,6 +111,9 @@ static bool try_expected(struct trap_frame *tf)
 
 void trap_dispatch(struct trap_frame *tf)
 {
+    /* Recover before the pinned-context assertion/fatal exception path.
+     * No registered foreign callback means this hook is inert. */
+    if (ndis_execution_exception && ndis_execution_exception(tf)) return;
     if (tf->vector==14 && ledger_assert_pinned_context) ledger_assert_pinned_context(true,tf->eip);
     cpu_trap_enter(tf);
     /* F1: VM has CPL3 regardless of the low bits in real-mode CS.
@@ -157,6 +168,7 @@ void trap_dispatch(struct trap_frame *tf)
         if (from_user && g_need_resched)
             schedule();               /* still inside the IF-disabled interval */
         crit_end();
+        if (ndis_execution_timer) ndis_execution_timer(tf);
         if (from_user) cpu_user_return();
         return;
     } else if (tf->vector == 0x80) {

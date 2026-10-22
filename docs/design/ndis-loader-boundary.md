@@ -104,3 +104,7 @@ Before opening the gate the lead must cross-review and demonstrate:
    these gates.
 
 No owner-pack payload or external implementation code is used by this step.
+
+The staged, incomplete f6-05 recovery mechanisms and their host-test limits
+are documented in [ndis-containment.md](ndis-containment.md). They do not open
+the production gate described here or qualify the three pinned profiles.

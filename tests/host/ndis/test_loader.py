@@ -11,7 +11,8 @@ class LoaderTests(unittest.TestCase):
         out = ROOT/'build/host/ndis'; out.mkdir(parents=True, exist_ok=True)
         sources = ['sdk/pe/pe.c', 'sdk/win32/ldr/pe.c', 'tests/host/ndis/user_policy.c',
                    'src/kernel/ndis/ntimage.c', 'src/kernel/ndis/exports.c',
-                   'src/kernel/ndis/callback.c', 'tests/host/ndis/loader_test.c']
+                   'src/kernel/ndis/callback.c', 'src/kernel/ndis/scan.c',
+                   'tests/host/ndis/loader_test.c']
         command = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                    '-DW32_HOST_MODEL', '-DCIUKI_NDIS_HOST_MODEL', '-ffunction-sections',
                    '-fdata-sections', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
@@ -39,7 +40,8 @@ class LoaderTests(unittest.TestCase):
 
     def test_production_i686_objects_compile_without_model_execution_hook(self):
         out = ROOT/'build/host/ndis/kernel'; out.mkdir(parents=True, exist_ok=True)
-        for source in sorted((ROOT/'src/kernel/ndis').glob('*.c')):
+        sources = [*sorted((ROOT/'src/kernel/ndis').glob('*.c')), ROOT/'src/kernel/arch/trap.c']
+        for source in sources:
             subprocess.run(['clang', '--target=i686-unknown-elf', '-march=pentiumpro',
                             '-ffreestanding', '-fno-builtin', '-fno-pic', '-fno-pie',
                             '-mno-sse', '-mno-sse2', '-mno-mmx', '-mno-80387',
@@ -49,6 +51,12 @@ class LoaderTests(unittest.TestCase):
                            cwd=ROOT, check=True)
         symbols = subprocess.check_output(['llvm-nm', str(out/'callback.o')], text=True)
         self.assertNotIn('ndis_callback_model_call2', symbols)
+        subprocess.run(['nasm', '-f', 'elf32', 'src/kernel/arch/ndis_context.asm',
+                        '-o', str(out/'ndis_context.o')], cwd=ROOT, check=True)
+        asm = subprocess.check_output(['llvm-objdump', '-dr', str(out/'execution.o')], text=True)
+        gate = asm.split('<ndis_execute2>:', 1)[1].split('<ndis_shim_enter>:', 1)[0]
+        self.assertNotIn('ndis_context_save', gate)
+        self.assertNotRegex(gate, r'call[l]?\s+\*')
 
     def build_abi(self):
         out = ROOT/'build/host/ndis/abi'; out.mkdir(parents=True, exist_ok=True)
