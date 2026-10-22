@@ -8,6 +8,7 @@
 static struct {
     struct net_packet frames[NET_QUEUE_MAX];
     uint32_t generation[NET_QUEUE_MAX];
+    uint32_t config_epoch[NET_QUEUE_MAX];
     unsigned head, count;
     struct kmutex lock;
 } outgoing[2];
@@ -25,9 +26,10 @@ int net_stack_transmit(unsigned index, const void *frame, unsigned bytes)
     if (!e) {
         unsigned at = (outgoing[index].head + count) % NET_QUEUE_MAX;
         struct netif *d = net_get(index);
-        if (!d || !d->running || d->quarantined) { kmutex_unlock(&outgoing[index].lock); return -ENETDOWN; }
+        if (!d || !d->running || d->administratively_down || d->quarantined) { kmutex_unlock(&outgoing[index].lock); return -ENETDOWN; }
         struct net_packet *p = &outgoing[index].frames[at];
         outgoing[index].generation[at] = d->generation;
+        outgoing[index].config_epoch[at] = d->config_epoch;
         memcpy(p->data, frame, bytes); p->length = (uint16_t)bytes; outgoing[index].count++;
     }
     kmutex_unlock(&outgoing[index].lock); return e;
@@ -68,8 +70,8 @@ void net_stack_driver_service(void)
     net_stack_watch();
     for (unsigned i = 0; i < net_count() && i < 2; i++) {
         struct netif *d = net_get(i);
-        net_stack_link(i, d->running && !d->quarantined && d->link != NET_LINK_DOWN);
-        if (!d->running || d->quarantined || d->link == NET_LINK_DOWN) {
+        net_stack_link(i, d->running && !d->administratively_down && !d->quarantined && d->link != NET_LINK_DOWN);
+        if (!d->running || d->administratively_down || d->quarantined || d->link == NET_LINK_DOWN) {
             kmutex_lock(&outgoing[i].lock); outgoing[i].head = outgoing[i].count = 0;
             kmutex_unlock(&outgoing[i].lock); continue;
         }
@@ -78,8 +80,9 @@ void net_stack_driver_service(void)
             if (!outgoing[i].count) { kmutex_unlock(&outgoing[i].lock); break; }
             packet = outgoing[i].frames[outgoing[i].head];
             uint32_t generation = outgoing[i].generation[outgoing[i].head];
+            uint32_t epoch = outgoing[i].config_epoch[outgoing[i].head];
             kmutex_unlock(&outgoing[i].lock);
-            int e = netif_transmit(d, generation, packet.data, packet.length);
+            int e = epoch != d->config_epoch ? -ENETDOWN : netif_transmit(d, generation, packet.data, packet.length);
             if (e == -16) break;
             kmutex_lock(&outgoing[i].lock);
             outgoing[i].head = (outgoing[i].head + 1) % NET_QUEUE_MAX; outgoing[i].count--;

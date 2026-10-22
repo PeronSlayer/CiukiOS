@@ -65,6 +65,7 @@ struct netif {
     enum net_link link;
     gen_t generation;
     uint32_t bridge_epoch; /* latched link loss/revocation, including down/up */
+    uint32_t config_epoch; /* rejects native frames queued before an apply */
     uint32_t dma_phys;
     uint8_t *dma;
     int claims[3];
@@ -79,11 +80,14 @@ struct netif {
     uint16_t tx_length[4];
     uint32_t pending, media_control;
     unsigned tx_head;
+    unsigned configured_speed, configured_duplex, speed, duplex;
     uint64_t tx_deadline[4], link_deadline;
-    bool ready, running, stopping, quarantined, touched, irq_attached;
+    bool ready, running, stopping, quarantined, touched, irq_attached, administratively_down;
     bool irq_pending, fault_pending, servicing, promiscuous;
     const char *reason;
 };
+int net_e100_media(struct netif *, unsigned, unsigned);
+int net_e1000_media(struct netif *, unsigned, unsigned);
 extern const struct netif_driver net_e100, net_rtl8139, net_ne2000;
 extern const struct netif_driver net_e1000, net_pcnet, net_tulip, net_3c90x, net_rhine;
 uint32_t net_read(struct netif *, unsigned reg, unsigned width);

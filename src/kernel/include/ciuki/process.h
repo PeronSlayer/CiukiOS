@@ -52,7 +52,7 @@ struct process {
     uint64_t pending, cpu_ticks;
     struct kwait changed;
     uint32_t threads, live_threads;
-    bool published, dosvm_capability, programs_capability;
+    bool published, dosvm_capability, programs_capability, network_capability;
     /* f1-98: the desktop and its Win32 window server keep a minimum CPU
      * share (task.c share_group); every thread inherits it at creation. */
     bool share_group;

@@ -10,6 +10,7 @@
 #include "lwip/stats.h"
 #include "netif/ethernet.h"
 #include <ciuki/net_stack.h>
+#include <ciuki/net_control.h>
 #include <ciuki/kernel.h>
 #ifndef LWIP_HOST
 #include <ciuki/ledger.h>
@@ -22,6 +23,9 @@ struct ethernet_port {
     unsigned index;
     bool attached, desired_link, applied_link;
     bool dhcp_started, primary;
+    struct ciuki_net_config config;
+    uint32_t acquired_dns[3];
+    bool released;
     int dhcp_error;
     uint64_t dhcp_retry;
     uint32_t address;
@@ -71,6 +75,22 @@ int cu_sockets_init(void);
 void ciuki_resolver_counts(unsigned *, unsigned *);
 void ciuki_sockets_address_lost(uint32_t);
 static void link_dispatch(void *);
+void ciuki_stack_dhcp_dns(struct netif *n, unsigned index, uint32_t address)
+{
+    struct ethernet_port *p = n->state;
+    if (!p || index >= 3) return;
+    p->acquired_dns[index] = address;
+    if (p->primary && !p->config.dns[0]) {
+        ip_addr_t a; ip_addr_set_ip4_u32_val(a, address); dns_setserver((u8_t)index, &a);
+    }
+}
+static void configured_dns(struct ethernet_port *p)
+{
+    if (p->primary && p->config.enabled && p->address && !p->released && p->config.dns[0] && netif_is_link_up(&p->interface))
+        for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) {
+            ip_addr_t a; ip_addr_set_ip4_u32_val(a, p->config.dns[i]); dns_setserver((u8_t)i, &a);
+        }
+}
 
 /* Network byte order to dotted decimal, without libc formatting. */
 static const char *dotted(uint32_t address, char out[16])
@@ -225,6 +245,8 @@ void net_stack_watch(void)
  * (OFFER -> offer, ACK -> checking or bound, NAK -> discover again). */
 static err_t observed_input(struct pbuf *p, struct netif *n)
 {
+    struct ethernet_port *port = n->state;
+    if (!port->config.enabled || port->released) { pbuf_free(p); return ERR_OK; }
     err_t e = ethernet_input(p, n);
     dhcp_observe(n->state);
     return e;
@@ -232,10 +254,11 @@ static err_t observed_input(struct pbuf *p, struct netif *n)
 
 static err_t output(struct netif *n, struct pbuf *p)
 {
+    struct ethernet_port *port = n->state;
+    if (!port->config.enabled || port->released) return ERR_IF;
     if (p->tot_len < 14 || p->tot_len > 1514) return ERR_IF;
     uint8_t frame[1514];
     if (pbuf_copy_partial(p, frame, p->tot_len, 0) != p->tot_len) return ERR_IF;
-    struct ethernet_port *port = n->state;
     int r = net_stack_transmit(port->index, frame, p->tot_len);
     if (!r) { sys_prot_t f = sys_arch_protect(); port->frames_out++; sys_arch_unprotect(f); }
     return r == -EAGAIN ? ERR_MEM : r ? ERR_IF : ERR_OK;
@@ -245,7 +268,7 @@ static void status(struct netif *n)
     struct ethernet_port *p = n->state;
     sys_prot_t f = sys_arch_protect();
     uint32_t old = p->address;
-    p->address = netif_is_link_up(n) ? ip4_addr_get_u32(netif_ip4_addr(n)) : 0;
+    p->address = netif_is_up(n) && netif_is_link_up(n) ? ip4_addr_get_u32(netif_ip4_addr(n)) : 0;
     uint32_t current = p->address;
     sys_arch_unprotect(f);
     if (old && old != current) {
@@ -253,6 +276,7 @@ static void status(struct netif *n)
         if (netif_default == n && !current)
             for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) dns_setserver(i, IP_ADDR_ANY);
     }
+    configured_dns(p);
     if (p->attached) dhcp_observe(p);
     cu_changed();
 }
@@ -282,7 +306,7 @@ static void link_update(void *arg)
             f = sys_arch_protect(); p->dhcp_started = false; p->dhcp_error = 0; p->dhcp_retry = 0; sys_arch_unprotect(f);
         }
     }
-    if (up && netif_default == &p->interface && !p->dhcp_started && cu_now() >= p->dhcp_retry) {
+    if (up && p->config.enabled && p->config.dhcp && !p->released && !p->dhcp_started && cu_now() >= p->dhcp_retry) {
         err_t e = dhcp_start(&p->interface);
         f = sys_arch_protect(); p->dhcp_started = e == ERR_OK;
         p->dhcp_error = e == ERR_OK ? 0 : e == ERR_MEM ? -ENOMEM : -ENETDOWN;
@@ -302,6 +326,13 @@ static void link_update(void *arg)
         p->start_recorded = error;
         dhcp_observe(p);
     }
+    if (up && p->config.enabled && !p->config.dhcp) {
+        ip4_addr_t a = {p->config.address}, m = {p->config.mask}, g = {p->config.gateway};
+        netif_set_addr(&p->interface, &a, &m, &g);
+        if (p->primary) for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) {
+            ip_addr_t dns; ip_addr_set_ip4_u32_val(dns, p->config.dns[i]); dns_setserver((u8_t)i, &dns);
+        }
+    }
     status(&p->interface);
 }
 static void attach_core(void *arg)
@@ -315,8 +346,10 @@ static void attach_core(void *arg)
     netif_set_link_callback(&p->interface, status);
     if (!netif_default || netif_default->name[0] == 'l') netif_set_default(&p->interface);
     p->primary = netif_default == &p->interface;
-    netif_set_up(&p->interface);
+    netif_set_hostname(&p->interface, p->config.hostname);
+    if (p->config.enabled) netif_set_up(&p->interface);
     sys_prot_t f = sys_arch_protect(); p->attached = true; sys_arch_unprotect(f);
+    klog("[net] config iface=en%u mode=%s enabled=%u source=boot", p->index, p->config.dhcp ? "dhcp" : "static", p->config.enabled);
     link_update(p);
 }
 int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
@@ -324,11 +357,77 @@ int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
     if (!started || index >= 2 || ports[index].attached) return -EINVAL;
     struct ethernet_port *p = &ports[index]; p->index = index;
     memcpy(p->mac, mac, 6); p->desired_link = link;
+    extern void net_settings_get(unsigned, struct ciuki_net_config *) __attribute__((weak));
+    net_config_default(&p->config);
+    if (net_settings_get) net_settings_get(index, &p->config);
+    extern int net_control_driver(unsigned, struct ciuki_net_control *, bool) __attribute__((weak));
+    if (net_control_driver) {
+        struct ciuki_net_control cfg = {.index = index, .config = p->config};
+        if (net_control_driver(index, &cfg, true)) {
+            net_config_default(&p->config);
+            klog("[net] config iface=en%u mode=dhcp fallback=adapter_options", index);
+        }
+    }
     p->link_message = tcpip_callbackmsg_new(link_dispatch, p);
     if (!p->link_message) return -ENOMEM;
     err_t r = tcpip_callback_wait(attach_core, p);
     if (r || !p->attached) { tcpip_callbackmsg_delete(p->link_message); p->link_message = NULL; return -ENOMEM; }
     return 0;
+}
+struct config_request { unsigned index, operation; struct ciuki_net_control *record; int error; };
+static void config_core(void *arg)
+{
+    struct config_request *r = arg;
+    struct ethernet_port *p = &ports[r->index]; struct netif *n = &p->interface;
+    struct ciuki_net_control *o = r->record;
+    if (!p->attached) { r->error = -ENODEV; return; }
+    if (r->operation == CIUKI_NETCTL_SET) {
+        dhcp_release_and_stop(n); p->dhcp_started = false; p->dhcp_retry = 0; p->released = false;
+        netif_set_down(n);
+        netif_set_addr(n, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
+        sys_prot_t f = sys_arch_protect(); p->config = o->config; sys_arch_unprotect(f);
+        netif_set_hostname(n, p->config.hostname);
+        if (p->config.enabled) netif_set_up(n);
+        link_update(p);
+    } else if (r->operation == CIUKI_NETCTL_RELEASE) {
+        if (!p->config.dhcp) { r->error = -EINVAL; return; }
+        dhcp_release_and_stop(n); p->dhcp_started = false; p->released = true;
+        netif_set_addr(n, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
+    } else if (r->operation == CIUKI_NETCTL_RENEW) {
+        if (!p->config.enabled || !p->config.dhcp || !netif_is_link_up(n)) { r->error = -ENETDOWN; return; }
+        struct dhcp *d = netif_dhcp_data(n);
+        bool bound = d && dhcp_supplied_address(n);
+        p->released = false;
+        err_t e = bound ? dhcp_renew(n) : dhcp_start(n);
+        p->dhcp_started = e == ERR_OK;
+        r->error = e == ERR_OK ? 0 : e == ERR_MEM ? -ENOMEM : -ENETDOWN;
+    }
+    status(n);
+    o->config = p->config;
+    o->address = p->address; o->mask = ip4_addr_get_u32(netif_ip4_netmask(n)); o->gateway = ip4_addr_get_u32(netif_ip4_gw(n));
+    for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) o->dns[i] = !p->address ? 0 : p->primary ? dns_server(i) :
+        p->config.dns[0] || !p->config.dhcp ? p->config.dns[i] : p->acquired_dns[i];
+    struct dhcp *d = netif_dhcp_data(n);
+    if (d && dhcp_supplied_address(n)) {
+        o->lease_seconds = d->offered_t0_lease;
+        uint64_t used = (uint64_t)d->lease_used * 60;
+        o->lease_remaining = used < o->lease_seconds ? o->lease_seconds - (uint32_t)used : 0;
+    }
+}
+int net_stack_config(unsigned index, unsigned operation, struct ciuki_net_control *record)
+{
+    if (!started || index >= 2 || !ports[index].attached) return -ENODEV;
+    struct config_request r = {index, operation, record, 0};
+    err_t e = tcpip_callback_wait(config_core, &r);
+    return e == ERR_OK ? r.error : -ENOMEM;
+}
+void net_stack_search_domain(char out[128])
+{
+    out[0] = 0; sys_prot_t f = sys_arch_protect();
+    for (unsigned i = 0; i < 2; i++) if (ports[i].attached && ports[i].primary) {
+        memcpy(out, ports[i].config.domain, 128); break;
+    }
+    sys_arch_unprotect(f);
 }
 int net_stack_primary(void)
 {
@@ -368,7 +467,7 @@ static void link_dispatch(void *arg)
 void cu_stack_schedule_link(void *arg)
 {
     struct ethernet_port *p = arg; sys_prot_t f = sys_arch_protect();
-    bool retry = p->primary && p->desired_link && !p->dhcp_started && cu_now() >= p->dhcp_retry;
+    bool retry = p->config.enabled && p->config.dhcp && !p->released && p->desired_link && !p->dhcp_started && cu_now() >= p->dhcp_retry;
     bool post = !link_pending[p->index] && (p->desired_link != p->applied_link || retry);
     if (post) link_pending[p->index] = true;
     sys_arch_unprotect(f);
@@ -443,6 +542,8 @@ int net_stack_init(void)
     if (sys_arch_sem_wait(&initialized, 2000) == SYS_ARCH_TIMEOUT) return -ENOMEM;
     sys_sem_free(&initialized);
     if (cu_sockets_init()) return -ENOMEM;
+    extern int net_control_init(void);
+    if (net_control_init()) return -ENOMEM;
     /* Records only: without the message the stack runs, unobserved. */
     watch_message = tcpip_callbackmsg_new(watch, NULL); stack_started = cu_now();
     started = true; return 0;

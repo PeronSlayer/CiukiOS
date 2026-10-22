@@ -965,6 +965,7 @@ static void tooltip_text(const struct desktop *d, char *text, size_t size)
     if (d->sh.tooltip != 2) { date_text(d, text, size, 1); return; }
     const struct ciuki_net_state *n = &d->sh.network;
     if (!n->present) snprintf(text, size, "No network adapter");
+    else if (n->state==CIUKI_NET_STOPPED && !strncmp(n->reason,"disabled",9)) snprintf(text,size,"Network: disabled");
     else if (n->link == CIUKI_NET_LINK_UP) {
         if (n->address_configured) {
             snprintf(text,size,"Network: connected (%u.%u.%u.%u)",n->ipv4[0],n->ipv4[1],n->ipv4[2],n->ipv4[3]); return;
@@ -1091,11 +1092,12 @@ static void bar_text(struct du_canvas *c, int x, int y, const char *text)
 static void draw_tray(struct desktop *d, struct du_canvas *canvas)
 {
     struct du_canvas c = *canvas;
+    int net_disabled=d->sh.network.state==CIUKI_NET_STOPPED && !strncmp(d->sh.network.reason,"disabled",9);
     const char *net_icon = !d->sh.network.present ? "network-error" :
-                          d->sh.network.link == CIUKI_NET_LINK_UP ? "network-wired" : "network-offline";
+                          !net_disabled && d->sh.network.link == CIUKI_NET_LINK_UP ? "network-wired" : "network-offline";
     struct desk_box ni = network_icon_box(d);
     du_icon_blit(&c, ni.x, ni.y, desk_shell_icon(net_icon, 16), 16,
-                 d->sh.network.present ? DU_ICON_NORMAL : DU_ICON_DISABLED);
+                 d->sh.network.present && !net_disabled ? DU_ICON_NORMAL : DU_ICON_DISABLED);
     const uint32_t *speaker = desk_shell_icon(d->sh.muted ? "audio-volume-muted" : "audio-volume-high", 16);
     struct desk_box vi = volume_icon_box(d);
     du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);   /* muted: Tango's red cross */
@@ -2424,7 +2426,10 @@ int desk_shell_button(struct desktop *d, int button, int down)
             int close=desk_contains((struct desk_box){b.x+b.w-26,b.y+12,18,18},x,y);
             damage(d,notification_outer(d)); n->active=0; damage(d,notification_icon_box(d));
             if (close) return 1;
-            if (n->action==SH_NOTIFY_NETWORK) { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
+            if (n->action==SH_NOTIFY_NETWORK) {
+                if (program_index(d,"control")>=0) launch_named(d,"control","--panel=network");
+                else { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
+            }
             else if (n->action==SH_NOTIFY_VOLUME) { d->sh.volume_open=1; damage(d,outer(volume_popup(d))); }
             else if (n->action==SH_NOTIFY_MEDIA && d->sh.media.removable_mask) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
             else desk_shell_message_class(d,n->title,n->text,n->icon);
@@ -2441,8 +2446,8 @@ int desk_shell_button(struct desktop *d, int button, int down)
             damage(d,outer(media_popup(d))); return 1;
         }
         if (desk_contains(network_icon_box(d), x, y) && button == CIUKI_BUTTON_LEFT) {
-            d->sh.network_open = 1; d->sh.want_reload |= 16;
-            damage(d, outer(network_popup(d)));
+            if (program_index(d,"control")>=0) launch_named(d,"control","--panel=network");
+            else { d->sh.network_open=1; d->sh.want_reload|=16; damage(d,outer(network_popup(d))); }
             return 1;
         }
         if (desk_contains(volume_icon_box(d), x, y) && button == CIUKI_BUTTON_LEFT) {

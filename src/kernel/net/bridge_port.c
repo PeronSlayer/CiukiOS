@@ -35,7 +35,7 @@ void net_bridge_port_carrier(struct net_bridge_port *p)
         p->epoch = d->bridge_epoch;
     }
     bool up = d && d->generation == p->generation && d->ready && d->running &&
-        !d->stopping && !d->quarantined && d->link != NET_LINK_DOWN;
+        !d->stopping && !d->administratively_down && !d->quarantined && d->link != NET_LINK_DOWN;
     if (p->bridge.link != up) net_bridge_link(&p->bridge, up);
 }
 static void port_work(struct netif *d, void *arg)
@@ -61,7 +61,7 @@ int net_bridge_port_open(struct net_bridge_port *p, struct bridge_pool *pool, st
                          int (*mode)(struct netif *, bool))
 {
     if (!p || !d || !mode || p->registered || p->busy || p->bridge.count || p->bridge.promiscuous ||
-        !d->generation || !d->ready || !d->running ||
+        !d->generation || !d->ready || !d->running || d->administratively_down ||
         d->stopping || d->quarantined) return -EINVAL;
     memset(p, 0, sizeof(*p)); p->device = d; p->generation = d->generation; p->receive_mode = mode;
     p->epoch = d->bridge_epoch;

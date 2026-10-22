@@ -694,6 +694,40 @@ struct ciuki_net_state {
 };
 _Static_assert(sizeof(struct ciuki_net_state) == 96, "network state ABI");
 
+/* Syscall 90: ebx=operation, ecx=pointer, edx=sizeof(record), others zero.
+ * All operations require the supervisor-delegated network capability. IPv4
+ * words are in network byte order. Speed 0 / duplex 0 select auto negotiation;
+ * forced modes require speed 10 or 100 and duplex 1 (half) or 2 (full).
+ * GET enumerates index [0,count); mutations require the returned generation.
+ * SET persists the complete validated config.
+ * DHCP renew/release are transient. No user pointers occur in these records. */
+#define CIUKI_NETCTL_VERSION 1u
+#define CIUKI_NETCTL_GET 0u
+#define CIUKI_NETCTL_SET 1u
+#define CIUKI_NETCTL_RENEW 2u
+#define CIUKI_NETCTL_RELEASE 3u
+#define CIUKI_NET_MEDIA_AUTO 1u
+#define CIUKI_NET_MEDIA_10 2u
+#define CIUKI_NET_MEDIA_100 4u
+struct ciuki_net_config {
+    uint32_t enabled, dhcp, speed, duplex;
+    uint32_t address, mask, gateway, dns[3];
+    char hostname[64], domain[128];
+};
+struct ciuki_net_control {
+    uint32_t version, size, index, count;
+    struct ciuki_net_config config;
+    char name[8], driver[16];
+    uint8_t mac[6], reserved0[2];
+    uint32_t pci_vendor, pci_device, irq, io_base, mmio_base;
+    uint32_t link, state, media_caps, speed, duplex;
+    uint32_t address, mask, gateway, dns[3], lease_seconds, lease_remaining;
+    uint64_t rx_packets, tx_packets, rx_errors, tx_errors;
+    uint32_t generation, reserved[3];
+};
+_Static_assert(sizeof(struct ciuki_net_config) == 232, "network configuration ABI");
+_Static_assert(sizeof(struct ciuki_net_control) == 400, "network control ABI");
+
 /* /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
  * removable_mask includes ejectable USB and optical media; type[] distinguishes them.
  * A removal names a generation and ejects the physical USB device or CD. */

@@ -40,6 +40,7 @@
     "0001-preserve-tcp-pcbs.patch": "9b08ebc1b973099d520d39bcbc9a40360ee034547314f8a73b78b428eefbe917",
     "0002-dns-server-generation.patch": "dd2f81964a343094f4c39e4babe686540751ab35b5e572b4dc851c3f04d22d2a",
     "0003-typed-loopback-callback.patch": "0466bc1d1b884c4a7572ecfd4e00a47a27aad64987a6ea214138c6af5f4b999e",
-    "0004-dhcp-complete-dns-list.patch": "ad66e1a595923f0bbeb4659a4b74af0abab6ad4c78eb79f98bae800e6a2f6d19"
+    "0004-dhcp-complete-dns-list.patch": "ad66e1a595923f0bbeb4659a4b74af0abab6ad4c78eb79f98bae800e6a2f6d19",
+    "0005-dhcp-interface-dns.patch": "1e60f2f28bda95d0cf4c1f92756ce7d98e8ebc193fc38259bc2cb4a179495890"
   }
 }

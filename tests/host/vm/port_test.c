@@ -21,6 +21,7 @@ static int mode(struct netif *d,bool enabled)
 #endif
 int PORT_TEST_MAIN(void)
 {
+    setvbuf(stdout,NULL,_IOLBF,0);
     struct bridge_identity_ops identity={0,identity_read,identity_write,identity_random};
     uint8_t id[16],zero[16]={0};
     read_error=-2; CHECK(!net_bridge_identity_load(&identity,id));
@@ -66,6 +67,12 @@ int PORT_TEST_MAIN(void)
     frame_tap(d,frame,64,&port); CHECK(pool.used==1);
     d->link=NET_LINK_DOWN; bridge_tap_changed(d); d->link=NET_LINK_UP;
     net_worker_step(); CHECK(!pool.used && port.bridge.link); /* latched down/up */
+    frame_tap(d,frame,64,&port); CHECK(pool.used==1);
+    struct ciuki_net_control control={.config={.enabled=0}};
+    CHECK(!net_control_driver(0,&control,true));net_worker_step();
+    CHECK(!pool.used && !port.bridge.link && d->administratively_down);
+    control.config.enabled=1;CHECK(!net_control_driver(0,&control,true));net_worker_step();CHECK(port.bridge.link);
+    puts("PASS f2-100 physical administrative disable revokes DOS carrier and drains shared pool references; re-enable restores carrier");
     frame_tap(d,frame,64,&port); CHECK(pool.used==1);
     d->generation++; net_worker_step(); CHECK(!pool.used && !port.bridge.link);
     d->generation--; net_bridge_disable(&port.bridge,peer);

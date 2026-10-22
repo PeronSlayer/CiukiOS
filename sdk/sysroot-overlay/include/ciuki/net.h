@@ -7,6 +7,8 @@
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
 /* Existing /dev/net NET_GET_STATE helper: opens read-only, initializes the
  * version/size, queries and closes. present/link/state/address_configured
- * describe local availability; syscall 90 remains reserved ENOSYS. */
+ * describe local availability. */
 int ciuki_net_status(struct ciuki_net_state *);
+/* Privileged configuration; returns 0 or -1 with errno. */
+int ciuki_net_control(unsigned operation, struct ciuki_net_control *);
 #endif

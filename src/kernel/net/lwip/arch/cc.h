@@ -33,4 +33,6 @@ void ciuki_lwip_alive(void);
 uint32_t ciuki_lwip_rand(void);
 void ciuki_lwip_seed(uint64_t);
 typedef uintptr_t sys_prot_t;
+struct netif;
+void ciuki_stack_dhcp_dns(struct netif *, unsigned, uint32_t);
 #endif

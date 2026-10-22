@@ -5,6 +5,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/task.h>
 #include <ciuki/net.h>
+#include <ciuki/net_control.h>
 #include <ciuki/timing.h>
 #include <ciuki/net_bridge.h>
 
@@ -391,7 +392,7 @@ int netif_transmit(struct netif *d, gen_t generation, const void *frame, unsigne
 {
     if (!d || !frame || length < 14 || length > NET_FRAME_MAX) return -EINVAL;
     kmutex_lock(&d->mutex);
-    int err = !d->ready || !d->running || d->stopping || d->quarantined || generation != d->generation ? -NET_ENODEV : 0;
+    int err = !d->ready || !d->running || d->stopping || d->quarantined || d->administratively_down || generation != d->generation ? -NET_ENODEV : 0;
     if (!err) err = d->driver->transmit(d, frame, length);
     if (err == -NET_EBUSY) d->stats.tx_busy++;
     else if (err && err != -NET_ENODEV) quarantine_locked(d, "transmit_fault");
@@ -429,7 +430,7 @@ void netif_poll(struct netif *d)
     if (len < 0 || len > (int)NET_FRAME_MAX) quarantine_locked(d, "receive_fault");
     else if (len) {
         d->stats.rx_packets++; d->stats.rx_bytes += len;
-        if (d->queue_count == NET_QUEUE_MAX) d->stats.rx_dropped++;
+        if (d->administratively_down || d->queue_count == NET_QUEUE_MAX) d->stats.rx_dropped++;
         else {
             unsigned at = (d->queue_head + d->queue_count) % NET_QUEUE_MAX;
             d->queue[at].length = len; memcpy(d->queue[at].data, d->scratch.data, len);
@@ -458,7 +459,7 @@ bool netif_pop(struct netif *d, struct net_packet *out)
 {
     if (!d || !out) return false;
     kmutex_lock(&d->mutex);
-    bool available = d->queue_count && !d->quarantined;
+    bool available = d->queue_count && !d->quarantined && !d->administratively_down;
     if (available) {
         *out = d->queue[d->queue_head]; d->queue_head = (d->queue_head + 1) % NET_QUEUE_MAX; d->queue_count--;
     }
@@ -476,7 +477,7 @@ void net_state_snapshot(struct ciuki_net_state *out)
     struct netif *d = net_get(0);
     for (unsigned i = 0; i < net_count(); i++) {
         struct netif *candidate = net_get(i);
-        if (candidate->running && !candidate->quarantined) { d = candidate; break; }
+        if (candidate->running && !candidate->quarantined && !candidate->administratively_down) { d = candidate; break; }
     }
     if (!d) {
         ksnprintf(out->reason, sizeof(out->reason), "%s", g_boot.flags & CBI_F_SAFE_MODE ? "safe_mode" : "no_adapter");
@@ -487,8 +488,8 @@ void net_state_snapshot(struct ciuki_net_state *out)
     ksnprintf(out->driver, sizeof(out->driver), "%s", d->driver->name);
     memcpy(out->mac, d->address, sizeof(out->mac));
     out->link = d->link;
-    out->state = d->quarantined ? CIUKI_NET_QUARANTINED : d->running ? CIUKI_NET_RUNNING : CIUKI_NET_STOPPED;
-    ksnprintf(out->reason, sizeof(out->reason), "%s", d->reason ? d->reason : "unknown");
+    out->state = d->quarantined ? CIUKI_NET_QUARANTINED : d->running && !d->administratively_down ? CIUKI_NET_RUNNING : CIUKI_NET_STOPPED;
+    ksnprintf(out->reason, sizeof(out->reason), "%s", d->administratively_down ? "disabled" : d->reason ? d->reason : "unknown");
     out->rx_frames = d->stats.rx_packets;
     out->tx_frames = d->stats.tx_completed;
     if (net_stack_address) {
@@ -593,3 +594,41 @@ void net_shutdown(void)
 }
 unsigned net_count(void) { return device_count; }
 struct netif *net_get(unsigned i) { return i < device_count ? &devices[i] : 0; }
+
+/* Device mutex protects registers and the counters. No lwIP callback or disk
+ * operation runs while this mutex is held. Unsupported drivers expose auto. */
+int net_control_driver(unsigned index, struct ciuki_net_control *out, bool apply)
+{
+    struct netif *d = net_get(index); out->count = net_count();
+    if (!d) return -ENODEV;
+    kmutex_lock(&d->mutex);
+    bool media = d->driver == &net_e100 || (d->driver == &net_e1000 && !d->media_control);
+    int e = 0;
+    if (apply) {
+        if (!d->running || d->quarantined) e = -ENETDOWN;
+        else if (!media && out->config.speed) e = -EOPNOTSUPP;
+        else if (d->configured_speed != out->config.speed || d->configured_duplex != out->config.duplex) {
+            e = d->driver == &net_e100 ? net_e100_media(d, out->config.speed, out->config.duplex) :
+                d->driver == &net_e1000 ? net_e1000_media(d, out->config.speed, out->config.duplex) : 0;
+            if (!e) { d->configured_speed = out->config.speed; d->configured_duplex = out->config.duplex; }
+        }
+        if (!e && d->administratively_down != !out->config.enabled) {
+            d->administratively_down = !out->config.enabled;
+            d->queue_head = d->queue_count = 0; bridge_tap_changed(d);
+        }
+        if (!e) d->config_epoch++;
+    } else {
+        ksnprintf(out->name, sizeof(out->name), "en%u", index);
+        ksnprintf(out->driver, sizeof(out->driver), "%s", d->driver->name);
+        memcpy(out->mac, d->address, 6);
+        out->generation = d->generation;
+        out->pci_vendor = d->pci.vendor; out->pci_device = d->pci.device; out->irq = d->pci.irq_line;
+        out->io_base = d->base; out->mmio_base = d->mmio_phys;
+        out->link = d->link; out->state = d->quarantined ? CIUKI_NET_QUARANTINED : d->running && !d->administratively_down ? CIUKI_NET_RUNNING : CIUKI_NET_STOPPED;
+        out->media_caps = CIUKI_NET_MEDIA_AUTO | (media ? CIUKI_NET_MEDIA_10 | CIUKI_NET_MEDIA_100 : 0);
+        out->speed = d->speed; out->duplex = d->duplex;
+        out->rx_packets = d->stats.rx_packets; out->tx_packets = d->stats.tx_completed;
+        out->rx_errors = d->stats.rx_errors; out->tx_errors = d->stats.tx_errors;
+    }
+    kmutex_unlock(&d->mutex); return e;
+}

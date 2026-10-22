@@ -47,6 +47,58 @@ static int e1_reset(struct netif *d)
     }
     return -110;
 }
+/* MDIC uses PHY address 1 on the supported copper 82540/45 parts.
+ * STATUS.TBIMODE, rather than a guessed PCI id, distinguishes fiber. */
+static int e1_mdic(struct netif *d, bool write, unsigned reg, uint16_t *value)
+{
+    e1_write(d, 0x20, (write ? 1u << 26 : 2u << 26) | (1u << 21) | (reg << 16) | (write ? *value : 0));
+    for (unsigned i = 0; i < 20; i++) {
+        uint32_t v = e1_read(d, 0x20);
+        if (v == UINT32_MAX || (v & (1u << 30))) return -5;
+        if (v & (1u << 28)) { *value = (uint16_t)v; return 0; }
+        d->io.sleep(d->io.cookie, 1);
+    }
+    return -110;
+}
+int net_e1000_media(struct netif *d, unsigned speed, unsigned duplex)
+{
+    if (d->media_control) return speed ? -95 : 0;
+    uint32_t ctrl = e1_read(d, 0); uint16_t phy, crossover;
+    if (ctrl == UINT32_MAX || e1_mdic(d, false, 0, &phy) || e1_mdic(d, false, 16, &crossover)) return -5;
+    uint16_t old_phy = phy, old_crossover = crossover;
+    phy &= (uint16_t)~(0x8000u | 0x2000u | 0x1000u | 0x0200u | 0x0100u | 0x0040u);
+    phy |= speed ? (speed == 100 ? 0x2000 : 0) | (duplex == 2 ? 0x100 : 0) : 0x1200;
+    uint32_t next = ctrl & ~((1u << 11) | (1u << 12) | (3u << 8) | 1u);
+    next |= (3u << 5);
+    if (speed) next = (next & ~((1u << 5) | (3u << 27))) | (1u << 11) | (1u << 12) | (speed == 100 ? 1u << 8 : 0) | (duplex == 2 ? 1 : 0);
+    e1_write(d, 0, next);
+    /* M88 PHY crossover selection is latched by software reset. Forced
+     * 10/100 requires manual MDI; automatic mode restores auto crossover. */
+    crossover = (uint16_t)((crossover & ~0x60u) | (speed ? 0 : 0x60u));
+    int e = e1_read(d, 0) == UINT32_MAX ? -5 : e1_mdic(d, true, 16, &crossover);
+    phy |= 0x8000;
+    if (!e) e = e1_mdic(d, true, 0, &phy);
+    if (!e) for (unsigned i = 0; i < 20; i++) {
+        if (e1_mdic(d, false, 0, &phy)) { e = -5; break; }
+        if (!(phy & 0x8000)) {
+            /* Software reset drops the M88 transmit-clock selection and
+             * CRS-on-transmit setting. Restore both before accepting it. */
+            uint16_t clock;
+            if (e1_mdic(d, false, 20, &clock)) { e = -5; break; }
+            clock |= 0x70;
+            if (e1_mdic(d, true, 20, &clock) || e1_mdic(d, false, 16, &crossover)) { e = -5; break; }
+            crossover |= 0x800;
+            e = e1_mdic(d, true, 16, &crossover);
+            if (!e) return 0;
+            break;
+        }
+        d->io.sleep(d->io.cookie, 1); e = i == 19 ? -110 : 0;
+    }
+    e1_write(d, 0, ctrl);
+    (void)e1_mdic(d, true, 16, &old_crossover);
+    old_phy |= 0x8000; (void)e1_mdic(d, true, 0, &old_phy);
+    return e ? e : -5;
+}
 static int e1_init(struct netif *d)
 {
     int err = e1_reset(d); if (err) return err;
@@ -130,6 +182,9 @@ static enum net_link e1_link(struct netif *d)
 {
     uint32_t status = e1_read(d, 8);
     if (status == 0xffffffff) { d->fault_pending = true; return NET_LINK_UNKNOWN; }
+    d->media_control = status & 0x20;
+    d->speed = status & 2 ? ((status >> 6 & 3) >= 2 ? 1000 : status & 0x40 ? 100 : 10) : 0;
+    d->duplex = status & 2 ? (status & 1 ? 2 : 1) : 0;
     return status & 2 ? NET_LINK_UP : NET_LINK_DOWN;
 }
 static int e1_promiscuous(struct netif *d, bool on)

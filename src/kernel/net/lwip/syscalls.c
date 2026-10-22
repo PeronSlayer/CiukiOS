@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/net_stack.h>
+#include <ciuki/net_control.h>
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
 #include "lwip/sys.h"
@@ -178,7 +179,29 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
 }
 int32_t net_socket_call(struct trap_frame *tf)
 {
-    if (tf->eax == CIUKI_SYS_NETCTL) return -ENOSYS;
+    if (tf->eax == CIUKI_SYS_NETCTL) {
+        struct process *p = proc_current();
+        if (!p || !p->network_capability) return -EPERM;
+        if (tf->esi || tf->edi || tf->ebp || tf->edx != sizeof(struct ciuki_net_control)) return -EINVAL;
+        struct ciuki_net_control record;
+        int e = copy_from_user(&record, tf->ecx, sizeof(record));
+        if (e) return e;
+        if (record.version != CIUKI_NETCTL_VERSION) return -EOPNOTSUPP;
+        if (record.size != sizeof(record) || record.reserved0[0] || record.reserved0[1] ||
+            record.reserved[0] || record.reserved[1] || record.reserved[2]) return -EINVAL;
+        /* Validate writable output before any configuration side effect. */
+        struct user_operation output = {.process = p};
+        struct proc_thread *t = proc_thread_for(g_current);
+        if (t) { t->cleanup = user_free; t->operation = &output; }
+        e = pin(&output, tf->ecx, sizeof(record));
+        struct ciuki_net_config config = record.config; unsigned index = record.index, generation = record.generation;
+        memset(&record, 0, sizeof(record)); record.version = CIUKI_NETCTL_VERSION;
+        record.size = sizeof(record); record.index = index; record.config = config; record.generation = generation;
+        if (!e) e = net_control(tf->ebx, &record);
+        if (!e) e = copy_to_user(tf->ecx, &record, sizeof(record));
+        if (t) { t->cleanup = NULL; t->operation = NULL; }
+        user_free(&output); return e;
+    }
     struct process *p = proc_current(); if (!p) return -ENOSYS;
     struct user_operation local = { .process = p };
     bool data = tf->eax == CIUKI_SYS_SENDTO || tf->eax == CIUKI_SYS_RECVFROM || tf->eax == CIUKI_SYS_POLL;

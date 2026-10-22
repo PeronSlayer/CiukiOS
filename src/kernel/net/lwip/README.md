@@ -15,7 +15,7 @@ also under `docs/licenses/`; the image recipe installs them under
 `/system/licenses`. CiukiOS port code is GPL-2.0-only; SDK headers/wrappers and
 the shared native ABI remain MIT as required by F2.
 
-The four upstream patches have narrow purposes:
+The five upstream patches have narrow purposes:
 
 1. Return allocation failure when the TCP PCB pool is exhausted, preserving
    live/TIME_WAIT PCBs instead of using upstream's eviction fallback.
@@ -28,6 +28,14 @@ The four upstream patches have narrow purposes:
 4. Replace the entire DHCP lease DNS list on ACK, clearing omitted server slots
    through the existing generation/cache invalidation hook. This covers
    same-address renewals from two servers to one or no servers.
+5. Deliver DHCP DNS options to the interface owner. Each port retains its
+   acquired list; only the primary updates the global resolver, and explicit
+   DNS settings take precedence over DHCP. The bounded list now has three slots.
+
+F2-100 adds privileged syscall 90 and the settings/apply boundary described in
+`docs/design/network-settings.md`. Core-thread callbacks own lwIP changes;
+the applet's worker owns slow requests. Kernel file persistence runs outside
+the core and uses the existing native atomic rename path.
 
 Amendment 1 (2026-10-21) retains fd identity before user-memory preparation,
 checks cancellation/deadlines at queued commitment, and keeps connect results

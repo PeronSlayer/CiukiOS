@@ -557,7 +557,8 @@ POSIX conformance macros remain excluded. Newlib's host-dependent socket or
 resolver records must not replace the frozen SDK overlay headers.
 
 Public headers: `sys/socket.h`, `netinet/in.h`, `netinet/tcp.h`, `arpa/inet.h`,
-`netdb.h`, `poll.h`, `sys/select.h`. Native calls are 78–89; netctl=90 is ENOSYS.
+`netdb.h`, `poll.h`, `sys/select.h`. Native sockets use calls 78–89; f2-100 adds
+privileged netctl=90 ([network-settings.md](network-settings.md)).
 The SDK provides IPv4 TCP/UDP, the contract's socket options, byte-order and
 strict dotted-decimal address conversion, poll, select and getaddrinfo A lookup.
 Select makes one poll request, preserves its timeout and counts ready set bits;
