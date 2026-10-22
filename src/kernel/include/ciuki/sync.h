@@ -69,6 +69,7 @@ struct kmutex {
  * task.c is outside f1-00's allowed files; its lead must install that hook. */
 typedef bool (*kwait_cond_fn)(void *arg);
 void kwait_init(struct kwait *q);
+/* UINT64_MAX waits for the predicate without a deadline timer. */
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t deadline_ticks);
 /* FIFO tickets stay reserved across safety timeouts. Task cancellation closes
  * the abandoned ticket and shifts later live tickets, preserving their order. */

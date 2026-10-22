@@ -122,6 +122,7 @@ void net_fd_changed(struct process *p, unsigned fd)
     sys_arch_unprotect(f);
     cu_changed();
 }
+void net_input_changed(void) { cu_changed_irq(); }
 static int error_number(err_t e)
 {
     switch (e) {
@@ -922,7 +923,7 @@ int net_poll(struct process *p, struct ciuki_pollfd *fds, unsigned count, int ti
         if (result || !timeout) break;
         if (interrupted(p)) { result = -EINTR; break; }
         if (cu_now() >= deadline) break;
-        cu_wait_change(seq, cu_now() + 1);
+        cu_wait_change(seq, deadline);
     }
     if (owned) {
         if (op->thread) { op->thread->cleanup = op->outer_cleanup; op->thread->operation = op->outer_operation; }

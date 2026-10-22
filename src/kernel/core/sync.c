@@ -454,14 +454,14 @@ static bool wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t 
     waiters = &w;
     w.task->sync_waiter = &w;
     bool ready;
-    while (!(ready = cond(arg)) && !deadline_passed(d)) {
+    while (!(ready = cond(arg)) && (d == UINT64_MAX || !deadline_passed(d))) {
         if (q->owner) {
             w.donating = !donation_cycle(w.task, q->owner);
             if (!w.donating) klog("[sched] donation_cycle waiter=%u owner=%u", w.task->id, q->owner->id);
             w.task->waiting_on = w.donating ? q : 0;
             donation_update(q->owner);
         }
-        ktimer_wait_task(w.task, d);
+        if (d != UINT64_MAX) ktimer_wait_task(w.task, d);
         w.task->state = T_BLOCKED;
         /* The waiter is visible before IF opens. A wake here changes it
          * to READY and queues it once; schedule handles that state without

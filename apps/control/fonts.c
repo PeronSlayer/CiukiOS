@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Read-only enumeration and preview of the installed trusted font store. */
 #include "control.h"
-#include "../libdeskui/job.h"
+#include "job.h"
 #include <stdlib.h>
 #include <dirent.h>
 #include <errno.h>
@@ -9,12 +9,12 @@
 #include <string.h>
 #include <strings.h>
 
-struct cp_font_job { struct du_job job; struct cp_app *result; };
+struct cp_font_job { struct cp_job job; struct cp_app *result; };
 static const char *directory(struct cp_app *a) { return a->host.fonts_path ? a->host.fonts_path : "/System/fonts"; }
 void cp_fonts_close(struct cp_app *a)
 {
     if (a->font_job) {
-        du_job_finish(&a->font_job->job);
+        cp_job_finish(&a->font_job->job);
         ciuki_font_close(a->font_job->result->font_face); free(a->font_job->result); free(a->font_job); a->font_job=NULL;
     }
     ciuki_font_close(a->font_face); a->font_face = NULL;
@@ -92,12 +92,12 @@ void cp_fonts_poll(struct cp_app *a)
         if (j) j->result=calloc(1,sizeof(*j->result));
         if (!j || !j->result) { free(j); a->fonts_loaded=1; strcpy(a->font_status,"Font list unavailable: not enough memory."); return; }
         j->result->host.fonts_path=a->host.fonts_path;
-        if (du_job_start(&j->job,read_fonts,j)) { free(j->result); free(j); a->fonts_loaded=1; strcpy(a->font_status,"Font worker unavailable."); return; }
+        if (cp_job_start(&j->job,read_fonts,j,a->host.job_notify,a->host.ctx)) { free(j->result); free(j); a->fonts_loaded=1; strcpy(a->font_status,"Font worker unavailable."); return; }
         a->font_job=j; return;
     }
     struct cp_font_job *j=a->font_job;
-    if (!du_job_ready(&j->job)) return;
-    du_job_finish(&j->job);
+    if (!cp_job_ready(&j->job)) return;
+    cp_job_finish(&j->job);
     memcpy(a->fonts,j->result->fonts,sizeof(a->fonts)); a->font_count=j->result->font_count;
     a->font_face=j->result->font_face; a->font_selected=0; a->fonts_loaded=1;
     strcpy(a->font_status,j->result->font_status);

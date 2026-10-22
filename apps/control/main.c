@@ -8,7 +8,8 @@
 #include "control.h"
 #include "programs.h"
 #include "decoder.h"
-#include "../libdeskui/job.h"
+#include "job.h"
+#include <ciuki/channel.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #ifdef __i386__
 #include <ciuki/raw.h>
@@ -24,6 +25,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -34,18 +36,73 @@
 #include "network_io.inc"
 
 struct cp_main { struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
-    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
+    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h;
-    struct du_job assets; int assets_requested, assets_ready;
+    const char *disp_state, *disp_decode, *disp_wait;
+    unsigned disp_done;
+    struct cp_job assets; int assets_requested, assets_ready;
     char wall_cache[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
     char *pci_cache,*usb_cache; int portrait_ready;
-    struct du_job program_scan; int programs_requested,programs_ready,program_count,next_program_count;
+    struct cp_job program_scan; int programs_requested,programs_ready,program_count,next_program_count;
     struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
-    /* f2-88b: Display page timing: open, first frame, worker job, worst gap between UI turns (= ping latency). */
-    uint64_t disp_open, disp_first, disp_last_idle, disp_gap_max, disp_gap_logged; unsigned disp_decode_seen; int disp_open_logged; };
+    pthread_mutex_t completion_lock;
+    int completion[2];
+    uint64_t tick_next;
+};
 
 static void programs_poll(struct cp_main *);
+/* All applet jobs share one bounded notification channel. Queue saturation
+ * already means readable; other send failures close the peer and wake HUP.
+ * Serialize send/close so concurrent producers cannot use a recycled fd. */
+static void notify_completion(void *ctx)
+{
+    struct cp_main *m=ctx;
+    pthread_mutex_lock(&m->completion_lock);
+    if (m->completion[1]>=0) {
+        struct ciuki_message token={.length=4};
+        int r;
+        do r=ciuki_channel_send(m->completion[1],&token,DONTWAIT); while (r<0 && errno==EINTR);
+        if (r<0 && errno!=EAGAIN) { close(m->completion[1]); m->completion[1]=-1; }
+    }
+    pthread_mutex_unlock(&m->completion_lock);
+}
+static int completion_start(struct cp_main *m)
+{
+    m->completion[0]=m->completion[1]=-1;
+    int error=pthread_mutex_init(&m->completion_lock,NULL);
+    if (error) { errno=error; return -1; }
+    if (ciuki_channel_pair(m->completion)) { pthread_mutex_destroy(&m->completion_lock); return -1; }
+    for (unsigned i=0;i<2;i++) (void)fcntl(m->completion[i],F_SETFD,FD_CLOEXEC);
+    return 0;
+}
+/* Only after every producer is joined. */
+static void completion_stop(struct cp_main *m)
+{
+    close(m->completion[0]);
+    if (m->completion[1]>=0) close(m->completion[1]);
+    pthread_mutex_destroy(&m->completion_lock);
+}
+/* The shared writer's desktop API uses trylock. An event consumer must read
+ * its published result exactly once, without depending on a retry timer.
+ * These critical sections never contain disk I/O. */
+static int settings_busy(struct cp_main *m)
+{
+    if (!m->writer_started) return 0;
+    pthread_mutex_lock(&m->writer.lock);
+    int busy=m->writer.busy || m->writer.pending;
+    pthread_mutex_unlock(&m->writer.lock);
+    return busy;
+}
+static int settings_result(struct cp_main *m, int *error)
+{
+    if (!m->writer_started) return 0;
+    pthread_mutex_lock(&m->writer.lock);
+    int ready=m->writer.completed;
+    if (ready) { *error=m->writer.error; m->writer.completed=0; }
+    pthread_mutex_unlock(&m->writer.lock);
+    return ready;
+}
 /* Panel geometry is independent of desktop preferences and display rollback. */
 static void panel_size(int *width, int *height)
 {
@@ -211,6 +268,7 @@ static int wallpapers(void *ctx, char names[][CFG_PATH_MAX], unsigned capacity)
 }
 static int decode_begin(void *ctx, const struct cp_preview_req *req) { (void)ctx; return cp_decoder_begin(req); }
 static int decode_poll(void *ctx, struct cp_preview_done *out) { (void)ctx; return cp_decoder_poll(out); }
+static void decode_cancel(void *ctx) { (void)ctx; cp_decoder_cancel(); }
 static int mixer(void *ctx, int *volume, int *muted)
 {
     (void)ctx;
@@ -226,7 +284,7 @@ static int mixer(void *ctx, int *volume, int *muted)
 static int apply(void *ctx, unsigned request, int volume, int muted)
 {
     struct cp_main *m = ctx;
-    if ((request==DESK_SETTINGS_RELOAD || request==DESK_SETTINGS_PROGRAMS) && m->writer_started && cfg_writer_busy(&m->writer)) {
+    if ((request==DESK_SETTINGS_RELOAD || request==DESK_SETTINGS_PROGRAMS) && settings_busy(m)) {
         m->reload_pending=(int)request; return 0;
     }
     struct ciuki_message msg;
@@ -327,7 +385,7 @@ static uint64_t monotonic(void *ctx) { (void)ctx; return du_now(); }
 static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gettime(CLOCK_REALTIME, &t) || t.tv_sec < 0 ? 0 : (uint64_t)t.tv_sec; }
 static int close_request(struct du_window *w, void *user)
 { (void)w; struct cp_main *m = user;
-  if (m->writer_started && cfg_writer_busy(&m->writer)) {
+  if (settings_busy(m)) {
       m->app.close_pending=1; m->app.display_accept=0;
       du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); du_invalidate_widget(&m->ui,3); return 0;
   }
@@ -343,49 +401,38 @@ static void raw_log(const char *line)
     fputs(line,stderr);
 #endif
 }
-static unsigned ms_since(uint64_t from, uint64_t to) { return to > from ? (unsigned)((to - from) / 1000000ull) : 0; }
-static void display_log(struct cp_main *m, uint64_t mono)
+static void display_log(struct cp_main *m, const char *wait)
 {
-    char line[160]; struct cp_app *a=&m->app;
-    if (a->page != CP_DISPLAY) { m->disp_open = 0; return; }
-    if (!m->disp_open) { m->disp_open = m->disp_last_idle = mono; m->disp_first = 0; m->disp_gap_max = 0; m->disp_open_logged = 0; m->disp_decode_seen = a->decode_done; }
-    uint64_t gap = m->disp_last_idle && mono > m->disp_last_idle ? mono - m->disp_last_idle : 0;
-    m->disp_last_idle = mono;
-    if (gap > m->disp_gap_max) m->disp_gap_max = gap;
-    if (!m->disp_first && m->window.configured && !m->ui.dirty && !m->window.swap_sent) m->disp_first = mono;
-    if (gap >= 100000000ull && mono - m->disp_gap_logged >= 1000000000ull) {   /* a turn the ping had to wait for */
-        m->disp_gap_logged = mono;
-        snprintf(line, sizeof(line), "[control] display turn_gap_ms=%u at_ms=%u decode_wait=%d\n", ms_since(0, gap), ms_since(m->disp_open, mono), a->decode_wait);
-        raw_log(line);
-    }
-    if (m->disp_first && !m->disp_open_logged) {
-        m->disp_open_logged = 1;
-        snprintf(line, sizeof(line), "[control] display open ms=%u decode=pending first_frame=%u ping_answered=%u\n",
-                 ms_since(m->disp_open, mono), ms_since(m->disp_open, m->disp_first), ms_since(0, m->disp_gap_max));
-        raw_log(line);
-    }
-    if (a->decode_done != m->disp_decode_seen) {
-        m->disp_decode_seen = a->decode_done;
-        snprintf(line, sizeof(line), "[control] display open ms=%u decode=%u render=%u first_frame=%u ping_answered=%u\n",
-                 ms_since(m->disp_open, mono), a->decode_ms, a->render_ms, ms_since(m->disp_open, m->disp_first ? m->disp_first : mono), ms_since(0, m->disp_gap_max));
-        raw_log(line);
-    }
+    struct cp_app *a = &m->app;
+    const char *state = a->page != CP_DISPLAY ? "closed" : a->display_tab == CP_BACKGROUND ? "background" :
+                        a->display_tab == CP_APPEARANCE ? "appearance" : "settings";
+    char thumb[64];
+    const char *decode = a->decode_cancelled ? "cancelling" : a->decode_wait ?
+        (cp_system_thumbnail(a->decode_path, thumb, sizeof(thumb)) ? "thumbnail" : "user") :
+        a->preview_pending == 1 ? "deferred" : a->decode_failed[0] && !strcmp(a->decode_failed, a->cfg.wallpaper) ? "failed" :
+        a->image.pixels ? "ready" : "idle";
+    if (a->page != CP_DISPLAY && !m->disp_state) return;
+    if (m->disp_state == state && m->disp_decode == decode && m->disp_wait == wait && m->disp_done == a->decode_done) return;
+    char line[192];
+    snprintf(line, sizeof(line), "[control] display state=%s decode=%s ui_wait=%s jobs=%u decode_ms=%u render_ms=%u\n",
+             state, decode, wait, a->decode_done, a->decode_ms, a->render_ms);
+    raw_log(line);
+    m->disp_state = state; m->disp_decode = decode; m->disp_wait = wait; m->disp_done = a->decode_done;
 }
 static void idle(void *arg)
 {
     struct cp_main *m=arg;
     if (m->app.page==CP_DISPLAY || m->app.page==CP_SYSTEM || m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS) m->assets_requested=1;
     if (m->window.configured && m->ui.frame_count) programs_poll(m);
-    if (m->assets.started && du_job_ready(&m->assets) && m->ui.capture<0 && !m->ui.dialog.kind) {
-        du_job_finish(&m->assets); m->assets_ready=1;
+    if (m->assets.started && cp_job_ready(&m->assets) && m->ui.capture<0 && !m->ui.dialog.kind) {
+        cp_job_finish(&m->assets); m->assets_ready=1;
         m->hwid_pci=m->pci_cache; m->hwid_usb=m->usb_cache;
         if (m->portrait_ready) m->app.host.portrait=m->portrait;
         cp_assets_ready(&m->app);
     } else if (m->assets_requested && !m->assets_ready && !m->assets.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
-        if (du_job_start(&m->assets,read_assets,m)) m->assets_ready=1;
+        if (cp_job_start(&m->assets,read_assets,m,notify_completion,m)) m->assets_ready=1;
     }
     if (m->window.configured && m->ui.frame_count) cp_fonts_poll(&m->app);
-    display_log(m, du_now());
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
@@ -402,14 +449,20 @@ static void idle(void *arg)
         m->engine_next=mono+2000000000ull;
     }
     int error;
-    if (m->writer_started && cfg_writer_result(&m->writer,&error)) {
+    if (settings_result(m,&error)) {
         if (m->reload_pending) {unsigned request=(unsigned)m->reload_pending;m->reload_pending=0; if (!error) apply(m,request,0,0); }
         cp_settings_saved(&m->app,error);
     }
-    if (m->writer_started && cfg_writer_busy(&m->writer) && m->app.quit) return;
+    /* Clocks, uptime and external mixer state have genuine one-second work.
+     * Other pages have no heartbeat. Navigation/close also runs on input and
+     * completion, even when the wall clock has not changed. */
+    int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS;
+    if (ticking && (!m->tick_next || mono>=m->tick_next)) {
+        cp_tick(&m->app); m->tick_next=mono+1000000000ull;
+    } else if (!ticking) m->tick_next=0;
+    if (m->app.close_pending || m->app.navigation_pending) cp_tick(&m->app);
+    if (settings_busy(m) && m->app.quit) return;
     if (m->app.quit) { remember_size(m); du_window_close(&m->window); m->app.quit = 0; }
-    uint64_t t = now(m);
-    if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); }
 }
 __attribute__((weak)) int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 { (void)out; (void)cap; return -ENOSYS; }
@@ -450,7 +503,14 @@ static int program_save(void *ctx)
     /* The removal identity stays durable until the settings worker commits.
      * This applet's removal already waits for disk/uninstaller completion. */
     int error=0;
-    while(!cfg_writer_result(&m->writer,&error)){struct timespec delay={.tv_sec=0,.tv_nsec=1000000};nanosleep(&delay,NULL);}
+    while (!settings_result(m,&error)) {
+        struct pollfd fd={.fd=m->completion[0],.events=POLLIN};
+        int r=poll(&fd,1,-1);
+        if (r<0 && errno==EINTR) continue;
+        if (r<0 || fd.revents&(POLLERR|POLLHUP|POLLNVAL)) return -EIO;
+        struct ciuki_message token;
+        if (ciuki_channel_recv(fd.fd,&token,DONTWAIT) && errno!=EINTR && errno!=EAGAIN) return -EIO;
+    }
     return error ? -error : 0;
 }
 static struct cp_program_store programs={.root="",.registry_list=registry_list,.registry_run=registry_run,.registry_check=registry_check,.game=game_program,.forget_icon=forget_icon,.persist=program_save};
@@ -461,8 +521,8 @@ static void scan_programs(void *ctx)
 }
 static void programs_poll(struct cp_main *m)
 {
-    if (du_job_ready(&m->program_scan) && m->ui.capture<0 && !m->ui.dialog.kind) {
-        du_job_finish(&m->program_scan);
+    if (cp_job_ready(&m->program_scan) && m->ui.capture<0 && !m->ui.dialog.kind) {
+        cp_job_finish(&m->program_scan);
         m->program_count=m->next_program_count; m->programs_ready=1;
         if (m->program_count>0) memcpy(m->program_cache,m->program_next,(unsigned)m->program_count*sizeof(*m->program_next));
         free(m->program_next); m->program_next=NULL;
@@ -470,7 +530,7 @@ static void programs_poll(struct cp_main *m)
         m->programs_requested=0;
     } else if (m->programs_requested && !m->program_scan.started && !m->ui.dirty) {
         m->program_next=calloc(CP_PROGRAM_MAX,sizeof(*m->program_next));
-        int error=m->program_next ? du_job_start(&m->program_scan,scan_programs,m) : -ENOMEM;
+        int error=m->program_next ? cp_job_start(&m->program_scan,scan_programs,m,notify_completion,m) : -ENOMEM;
         if (error) { free(m->program_next); m->program_next=NULL; m->programs_ready=1; m->program_count=error; m->programs_requested=0; }
     }
 }
@@ -504,6 +564,47 @@ static int program_install(void *ctx,const char *path)
     memcpy(request.data+16+t,path,n);
     int result=du_window_queue(&m->window,&request);if(!result)m->install_serial=m->serial;return result;
 }
+static uint64_t control_deadline(struct cp_main *m)
+{
+    uint64_t next=du_next_deadline(&m->ui);
+    if (m->tick_next && m->tick_next<next) next=m->tick_next;
+    if (m->window.configured && m->app.page==CP_DISPLAY && !m->engine_serial && !m->app.mode_state && m->engine_next<next)
+        next=m->engine_next;
+    return next;
+}
+/* Input, decoder and all other applet jobs are in the same event wait set. */
+static int control_run(struct cp_main *m)
+{
+    for (;;) {
+        int r = du_window_turn(&m->window, du_now());
+        if (r <= 0) return r;
+        idle(m);
+        /* idle may finish a deferred Close. Queue its protocol request before
+         * sleeping; du_window_close() itself only changes closing state. */
+        if (m->window.closing==1 && m->window.count<16) continue;
+        uint64_t mono = du_now(), next = control_deadline(m);
+        int timeout = cp_display_wait_ms(mono, next);
+        if (m->ui.dirty && m->window.configured && !m->window.swap_sent && !m->window.present_pending && m->window.count < 16) continue;
+        struct pollfd fds[3] = {
+            {.fd = m->window.channel, .events = POLLIN | (m->window.count ? POLLOUT : 0)},
+            {.fd = cp_decoder_fd(), .events = POLLIN},
+            {.fd = m->completion[0], .events = POLLIN}
+        };
+        display_log(m, next != UINT64_MAX ? "timer" : "event");
+        r = poll(fds, 3, timeout);
+        if (r < 0) { if (errno == EINTR) continue; return -1; }
+        if ((fds[0].revents | fds[1].revents | fds[2].revents) & POLLNVAL) { errno = EBADF; return -1; }
+        if (fds[1].revents & POLLIN) cp_preview_ready(&m->app);
+        if ((fds[1].revents | fds[2].revents) & (POLLERR | POLLHUP)) { errno = EIO; return -1; }
+        if (fds[2].revents & POLLIN) {
+            struct ciuki_message token;
+            /* One token is enough; further queued publications stay readable.
+             * No producer can race a reset or lose the transition to sleep. */
+            if (ciuki_channel_recv(fds[2].fd,&token,DONTWAIT) && errno!=EAGAIN && errno!=EINTR) return -1;
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
@@ -517,16 +618,18 @@ int main(int argc, char **argv)
     }
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
+    if (completion_start(m)) { free(m); return 1; }
+    m->writer.notify=notify_completion; m->writer.notify_ctx=m;
     m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
-    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
-    h->save_async=1; h->fonts_async=1;
+    h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;
     h->devices = devices; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
 
@@ -547,18 +650,19 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
-        free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, page)) {
-        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
-    int r = du_run(&m->window, idle, m);
-    du_job_finish(&m->program_scan); free(m->program_next);
-    du_job_finish(&m->assets);
+    int r = control_run(m);
+    cp_decoder_stop();
+    cp_job_finish(&m->program_scan); free(m->program_next);
+    cp_job_finish(&m->assets);
     if (!m->assets_ready) { free(m->pci_cache); free(m->usb_cache); }
     if (m->writer_started) cfg_writer_stop(&m->writer);
     network_worker_stop(&m->network_worker);
-    cp_detach(&m->app); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
+    cp_detach(&m->app); completion_stop(m); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
     return r < 0 ? 1 : 0;
 }

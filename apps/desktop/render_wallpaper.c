@@ -33,7 +33,7 @@ static int transfer(int fd, void *data, size_t bytes, int output)
 
 int main(int argc, char **argv)
 {
-    if (argc!=4) return 2; /* source PNG, output directory, FAT UTC mtime */
+    if (argc!=4) return 2; /* source PNG, output directory, FAT UTC mtime (or thumbnail) */
     struct stat s; if (stat(argv[1],&s) || s.st_size<=0 || s.st_size>DESK_IMAGE_FILE_MAX) return 1;
     int fd=open(argv[1],O_RDONLY); if (fd<0) return 1;
     size_t n=(size_t)s.st_size; uint8_t *data=malloc(n);
@@ -42,6 +42,16 @@ int main(int argc, char **argv)
     struct desk_image image={0};
     if (!error) error=desk_image_decode(data,n,&image);
     free(data); if (error) return 1;
+    if (!strcmp(argv[3], "thumbnail")) {
+        uint32_t pixels[192 * 144];
+        desk_image_scale(&image, pixels, 192, 144, CFG_WALL_STRETCH, 0);
+        for (unsigned i = 0; i < 192 * 144; i++) pixels[i] &= 0x00ffffffu;
+        fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        error = fd < 0;
+        if (!error) { error = transfer(fd, pixels, sizeof(pixels), 1); if (close(fd)) error = 1; }
+        desk_image_free(&image);
+        return error ? 1 : 0;
+    }
     /* Same resolution as desktop.c wallpaper_load: the default colour is the active theme's. */
     struct ciuki_settings cfg; cfg_defaults(&cfg);
     const uint32_t sizes[][2]={{800,600},{1024,768},{1280,800},{1280,1024},{1400,1050}};

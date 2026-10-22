@@ -218,7 +218,7 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
         }
         if ((flags & DONTWAIT) || (d->flags & O_NONBLOCK)) return channel_end(op, -EAGAIN);
         if (channel_interrupted(p)) return channel_end(op, -EINTR);
-        kwait_wait_until(&c->changed[peer], channel_send_ready, op, g_ticks + 1);
+        kwait_wait_until(&c->changed[peer], channel_send_ready, op, UINT64_MAX);
     }
 }
 
@@ -297,7 +297,7 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
         if (!c->open[side ^ 1]) { err = 0; break; }
         if ((flags & DONTWAIT) || (d->flags & O_NONBLOCK)) { err = -EAGAIN; break; }
         if (channel_interrupted(p)) { err = -EINTR; break; }
-        kwait_wait_until(&c->changed[side], channel_receive_ready, &op, g_ticks + 1);
+        kwait_wait_until(&c->changed[side], channel_receive_ready, &op, UINT64_MAX);
     }
     if (t) { t->operation = 0; t->cleanup = 0; }
     channel_receive_cleanup(&op);

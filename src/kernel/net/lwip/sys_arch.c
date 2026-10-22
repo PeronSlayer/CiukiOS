@@ -127,7 +127,7 @@ static void event_wait(struct event *e, uint64_t deadline, bool forever, sys_pro
 #ifdef LWIP_HOST
     (void)saved;
     pthread_cleanup_push(unlock_cancel, &gate);
-    if (forever) pthread_cond_wait(&e->condition, &gate);
+    if (forever || deadline == UINT64_MAX) pthread_cond_wait(&e->condition, &gate);
     else {
         uint64_t real = deadline - clock_offset;
         struct timespec t = { (time_t)(real / 1000), (long)(real % 1000) * 1000000 };
@@ -393,6 +393,19 @@ unsigned cu_change_snapshot(void)
 void cu_changed(void)
 {
     sys_prot_t f = sys_arch_protect(); change_init(); event_wake(&changes); sys_arch_unprotect(f);
+}
+void cu_changed_irq(void)
+{
+#ifdef LWIP_HOST
+    cu_changed();
+#else
+    sys_prot_t f = sys_arch_protect(); change_init();
+    changes.sequence++;
+    /* Input can publish from IRQ context. This static queue outlives its
+     * deferred notification; no waiter/donation walk belongs in the IRQ. */
+    kwait_wake_irq(&changes.queue, false);
+    sys_arch_unprotect(f);
+#endif
 }
 void cu_wait_change(unsigned sequence, uint64_t deadline)
 {
