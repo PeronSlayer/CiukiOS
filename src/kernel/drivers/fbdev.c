@@ -16,6 +16,7 @@ extern int savage2d_attempt_failed(struct vfs *) __attribute__((weak));
 extern void savage2d_quarantine(const char *) __attribute__((weak));
 extern void savage2d_record(void) __attribute__((weak));
 extern void savage2d_snapshot(struct ciuki_accel_info *) __attribute__((weak));
+extern void savage2d_summary_safe_mode(void) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
 
@@ -282,7 +283,10 @@ static void accel_marker_main(void *arg)
 
 void fbdev_accel_schedule(struct vfs *vfs)
 {
-    if (g_boot.flags & CBI_F_SAFE_MODE) return;
+    if (g_boot.flags & CBI_F_SAFE_MODE) {
+        if (savage2d_summary_safe_mode) savage2d_summary_safe_mode();
+        return;
+    }
     if (accel_queued) return; /* keep the pending attempt's volume stable */
     accel_vfs = vfs;
     if (!initialized || !device.present || !savage2d_init || acceleration) return;

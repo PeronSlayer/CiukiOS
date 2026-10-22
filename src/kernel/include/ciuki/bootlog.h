@@ -5,9 +5,12 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#define BOOTLOG_BUDGET (1024u * 1024u)
-/* Three boots share the original budget, including cluster rounding. */
-#define BOOTLOG_LIMIT (320u * 1024u)
+/* f0-56: three boot logs of 2.75 MiB (8.25 MiB, >= the 8 MiB the T23 trial
+ * needs) share the budget, including cluster rounding. Before f0-56 each was
+ * 320 KiB (960 KiB in all), which held ~1,975 of the 13,588 lines of a 12
+ * minute boot. */
+#define BOOTLOG_BUDGET (9u * 1024u * 1024u)
+#define BOOTLOG_LIMIT (2816u * 1024u)
 #define BOOTLOG_PROTECTED (128u * 1024u)
 #define BOOTLOG_RING (BOOTLOG_LIMIT - BOOTLOG_PROTECTED)
 #define BOOTLOG_RAM 65536u
@@ -19,6 +22,13 @@
 #define BOOTLOG_RECORD_BYTES 256u
 #define BOOTLOG_RECORDS (BOOTLOG_RAM / BOOTLOG_RECORD_BYTES)
 #define BOOTLOG_METADATA_MS 5000u
+/* Periodic statistics: at most LINES per window overall and KIND_LINES per
+ * kind (e.g. "cpu/task"); the rest is summarized by one line per window. The
+ * last STATISTIC_RESERVE free RAM slots are kept for protected records. */
+#define BOOTLOG_BUDGET_WINDOW_MS 2000u
+#define BOOTLOG_BUDGET_LINES 40u
+#define BOOTLOG_BUDGET_KIND_LINES 8u
+#define BOOTLOG_STATISTIC_RESERVE 32u
 #define BOOTLOG_PATH "C:/SYSTEM/LOGS/BOOT.LOG"
 #define BOOTLOG_PREVIOUS "C:/SYSTEM/LOGS/BOOT1.LOG"
 #define BOOTLOG_OLDEST "C:/SYSTEM/LOGS/BOOT2.LOG"
@@ -36,6 +46,10 @@ struct bootlog_stats {
     /* Loss is bytes (legacy dropped), plus evicted/refused publication slices. */
     uint32_t dropped_protected, dropped_verbose;
     uint32_t records_dropped_protected, records_dropped_verbose;
+    /* f0-56: involuntary loss of budgeted statistics (queue pressure), and the
+     * deliberate per-window suppression, which is not part of `dropped`. */
+    uint32_t dropped_statistic, records_dropped_statistic;
+    uint32_t budget_dropped_lines, budget_windows;
 };
 /* No allocation, no VFS, no logging. Ordinary output only; never call from
  * kputs_raw/rec_emit_panicsafe/panic. May collect before storage_init. */

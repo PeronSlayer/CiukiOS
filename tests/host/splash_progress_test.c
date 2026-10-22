@@ -95,9 +95,15 @@ void task_sleep_ms(uint32_t n) { (void)n; }
 __attribute__((noreturn)) void panic(const char *s, ...) { fprintf(stderr, "%s\n", s); exit(1); }
 #include "../../src/kernel/core/console.c"
 
+static bool in_accel(uint32_t x, uint32_t y)
+{
+    const struct splash_layout *g = &splash_bar.g;
+    return g->accel && x >= g->x0 && x < g->x0 + g->dw && y >= g->ay && y < g->ay + 17;
+}
 static bool in_bar(uint32_t x, uint32_t y)
 {
     const struct splash_layout *g = &splash_bar.g;
+    if (in_accel(x, y)) return true;           /* f1-97: the line under the bar */
     return x >= g->bx && x < g->bx + g->bw && y >= g->by && y < g->by + g->bh;
 }
 /* Every pixel a claim changed lies in the bar; the claim wrote at most
@@ -336,6 +342,105 @@ static void worker_runs_above_init(void)
 
 /* f0-55b: phases a quiet boot reports before the splash is painted are on
  * the first frame; the bar continues from there. */
+/* f1-97: `2D acceleration: YES|NO (<reason>)` under the bar. */
+static unsigned diff_outside_accel(const uint8_t *a, const uint8_t *b)
+{
+    unsigned inside = 0;
+    for (uint32_t y = 0; y < g_boot.fb_height; y++)
+        for (uint32_t x = 0; x < g_boot.fb_width; x++)
+            if (memcmp(a + y * lfb_pitch + x * lfb_bytes, b + y * lfb_pitch + x * lfb_bytes, lfb_bytes)) {
+                CHECK(in_accel(x, y));
+                inside++;
+            }
+    return inside;
+}
+
+static uint8_t *accel_boot(const char *name, bool yes, const char *reason, const char *out, uint8_t *plain)
+{
+    screen(1024, 768, 32, true, 800);
+    const struct splash_layout *g = &splash_bar.g;
+    CHECK(g->accel && g->ay >= g->by + g->bh && g->ay + 17 <= g->y0 + g->dh);
+    console_splash_phase(SPLASH_PHASE_DRIVERS);
+    uint8_t *before = snapshot();
+    unsigned claims_before = claims, logs_before = log_count;
+    console_splash_accel(yes, reason);
+    /* The caller never draws: the console worker does, in budgeted claims. */
+    CHECK(claims == claims_before && !memcmp(before, lfb, lfb_size) && log_count == logs_before);
+    free(before);
+    CHECK(splash_service() == 100);
+    CHECK(claims > claims_before + 1 && !splash_bar.accel_busy &&
+          !memcmp(splash_bar.accel, splash_bar.accel_shown, SPLASH_ACCEL_TEXT));
+    CHECK(splash_bar.max_claim_pixels <= SPLASH_CLAIM_PIXELS);      /* the bar's lock budget */
+    uint8_t *shown = snapshot();
+    claims_before = claims;
+    splash_service();
+    CHECK(claims == claims_before);                                 /* nothing left to draw */
+    uint8_t *frame = boot_sequence(normal_boot, sizeof(normal_boot) / sizeof(normal_boot[0]));
+    save(out, name);
+    CHECK(diff_outside_accel(plain, frame) > 200);                  /* only the line differs, in ink */
+    free(shown);
+    return frame;
+}
+
+static void accel_indicator(const char *out)
+{
+    check_claims = true;
+    screen(1024, 768, 32, true, 800);
+    uint8_t *plain = boot_sequence(normal_boot, sizeof(normal_boot) / sizeof(normal_boot[0]));
+    CHECK(!splash_bar.accel[0]);
+    uint8_t *yes = accel_boot("splash-accel-yes", true, 0, out, plain);
+    CHECK(!strcmp(splash_bar.accel, "2D acceleration: YES"));
+    const char *token = "bci_test_readback_failed";
+    uint8_t *no = accel_boot("splash-accel-no", false, token, out, plain);
+    CHECK(!strcmp(splash_bar.accel, "2D acceleration: NO (bci_test_readback_failed)"));
+    CHECK(memcmp(yes, no, lfb_size));
+    const struct splash_layout *g = &splash_bar.g;
+    uint32_t w = splash_string_width(splash_bar.accel);
+    CHECK(g->x0 + (g->dw - w) / 2 >= g->x0 && w + 1 < g->dw);
+    /* A decision that flips (YES, then a later quarantine) leaves no old ink. */
+    screen(1024, 768, 32, true, 800);
+    console_splash_phase(SPLASH_PHASE_DRIVERS);
+    console_splash_accel(true, 0);
+    splash_service();
+    console_splash_accel(false, token);
+    splash_service();
+    uint8_t *flipped = boot_sequence(normal_boot, sizeof(normal_boot) / sizeof(normal_boot[0]));
+    CHECK(!memcmp(flipped, no, lfb_size));
+    free(flipped);
+    /* A denied claim defers the line; the next worker turn finishes it. */
+    screen(1024, 768, 32, true, 800);
+    console_splash_accel(false, "unsupported_device");
+    deny_claim = true;
+    unsigned deferred = splash_bar.deferred;
+    splash_service();
+    CHECK(splash_bar.deferred > deferred && splash_bar.accel_shown[0] == 0 && !splash_bar.accel_busy);
+    deny_claim = false;
+    splash_service();
+    CHECK(!strcmp(splash_bar.accel_shown, "2D acceleration: NO (unsupported_device)"));
+    /* The handover draws a line still pending. */
+    screen(1024, 768, 32, true, 800);
+    console_splash_phase(SPLASH_PHASE_DRIVERS);
+    console_splash_accel(true, 0);
+    console_display_owned(true);
+    CHECK(!strcmp(splash_bar.accel_shown, "2D acceleration: YES"));
+    /* Decided before the first paint: it is on the first frame. */
+    memset(&splash_bar, 0, sizeof(splash_bar));
+    console_set_quiet(true);
+    console_splash_accel(false, "boot_disabled");
+    keep_progress = true;
+    screen(1024, 768, 32, true, 800);
+    keep_progress = false;
+    CHECK(!strcmp(splash_bar.accel_shown, "2D acceleration: NO (boot_disabled)"));
+    /* No ink outside the photograph area on a small mode, and a tiny one has no line. */
+    screen(640, 480, 32, true, 800);
+    CHECK(splash_bar.g.accel);
+    console_splash_accel(false, token);
+    splash_service();
+    CHECK(splash_bar.accel_shown[0] && splash_bar.max_claim_pixels <= SPLASH_CLAIM_PIXELS);
+    free(plain); free(yes); free(no);
+    check_claims = false;
+}
+
 static void phases_before_first_paint(void)
 {
     memset(&splash_bar, 0, sizeof(splash_bar));
@@ -551,6 +656,7 @@ int main(int argc, char **argv)
         free(first); free(done);
     }
     /* f0-55b: first frame, worker turns, worker class, phase records. */
+    accel_indicator(out);
     sweep_moves_on_worker_turns();
     worker_runs_above_init();
     phases_before_first_paint();

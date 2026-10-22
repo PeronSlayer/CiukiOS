@@ -12,3 +12,14 @@
 4. Report the expected `[accel]` lines on the T23 (caps non-zero, no quarantine) in `docs/validation/f1-95-savage-bci-32bpp.md`.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-95-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 09:31, decision on the delivery)
+
+The delivery refutes the directive's premise: the descriptor `10200401` and
+the fill command match X.org and savagefb; the measured behaviour is that the
+first colour fill after the engine reset repeats the colour's low byte and
+every later fill is exact (five T23 boots, the a395ffa8 sweep). Accepted: the
+self-test primes with a colour-0 fill, then a marker fill and a
+screen-to-screen copy on a saved 8×2 block, re-run after every engine reset;
+the quarantine stays the safety net. The f1-69/f1-88 conclusions are
+superseded. T23 acceptance: `result=ok … phase=done pixels=16`, `caps=3`.
