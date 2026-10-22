@@ -24,6 +24,8 @@ struct ndis_user_memory {
     /* Sole user task is stopped; no fork/exec/native mmap owns this AS. */
     bool (*quiescent)(void *);
     void *context;
+    struct ndis_flag_table *flag_table;
+    struct ndis_flag_workspace *flag_workspace;
 };
 /* Called in passive context before exposure. BAR grants must be a whole-page
  * qualified aperture, exactly owned by the active claim; no page rounding. */

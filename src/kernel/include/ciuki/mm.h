@@ -117,6 +117,8 @@ int as_create(struct aspace *as);
 int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags);
 int as_map_borrowed(struct aspace *, uint32_t va, uint32_t phys, uint32_t flags);
 int as_revoke_borrowed(struct aspace *, uint32_t va, uint32_t phys);
+/* Drop write access on an exact borrowed alias; never changes cache/ownership. */
+int as_seal_borrowed(struct aspace *, uint32_t va, uint32_t phys);
 /* Replace 1..32 already-present pages within one table; no allocation or
  * ownership change. Caller excludes guest execution/interrupts. Return old
  * D/A bits as page masks, clear D, and flush the active AS once if changed.

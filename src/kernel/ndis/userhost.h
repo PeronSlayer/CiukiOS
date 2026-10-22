@@ -26,6 +26,9 @@ struct ndis_host_event {
     uint64_t deadline;
 };
 struct ndis_user_host;
+struct ndis_native;
+struct ndis_channel;
+struct ndis_nt_runtime;
 /* These are trusted, nonblocking native operations. All state transitions run
  * with UP IRQ exclusion. No callback here may call a driver or wait for one.
  * Map validation includes registry generation, whole-page ownership, ledger
@@ -64,9 +67,13 @@ struct ndis_user_host {
     bool syscall_active, cancellation_stalled;
     uint64_t cancel_deadline;
     uint32_t fault_vector, fault_offset;
+    struct ndis_native *native;
+    struct ndis_channel *channel;
+    bool qualified;
+    struct ndis_nt_runtime *nt;
 };
-/* Only a host-model setup can reach LIVE in this directive. Production process
- * creation/foreign entry stays unconditionally closed until reviewed evidence. */
+/* Production LIVE requires the native binding and a compiled exact profile
+ * qualification. No profile is qualified by default. */
 bool ndis_user_host_available(void);
 int ndis_host_init(struct ndis_user_host *,struct ntimage *,uint32_t generation,
                     const struct ndis_host_ops *,bool shared,bool qualified_masker,uint8_t dirql);
@@ -80,6 +87,7 @@ int ndis_host_enqueue(struct ndis_user_host *,enum ndis_host_kind,uint32_t addre
                        uint32_t argument,uint64_t now,uint32_t *token);
 int ndis_host_take(struct ndis_user_host *,uint64_t now,struct ndis_host_event *);
 int ndis_host_complete(struct ndis_user_host *,uint32_t generation,uint32_t token,uint64_t now);
+bool ndis_host_cancel_queued(struct ndis_user_host *,uint32_t generation,uint32_t token);
 /* Kernel-owned upcall/return records: user completion cannot keep executing an
  * abandoned callback, erase an outer deadline, or supply a return context. */
 int ndis_host_deliver(struct ndis_user_host *,struct trap_frame *,uint64_t now);

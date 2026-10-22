@@ -63,6 +63,7 @@ int main(void)
     assert(ndis_user_mapping_apply(&m,&collision,true)<0);
     assert(!as_lookup(&as,0x1ff000,0) && as_lookup(&as,0x200000,0)==bar.start);
     bar.state=RS_QUARANTINED;assert(!ndis_user_mapping_owned(&m,&view));bar.state=RS_ACTIVE;
+    bar.state=RS_QUIESCING;assert(!ndis_user_mapping_owned(&m,&view));bar.state=RS_ACTIVE;
     assert(!ndis_user_mapping_apply(&m,&view,false));assert(!g_user_mappings && !freed);
     /* Kernel WB alias blocks a UC grant; matching UC attributes pass. */
     kpd[768]=0x2000|PTE_P|PTE_W;table_va(0x2000)[0]=bar.start|PTE_P|PTE_W;
@@ -74,7 +75,12 @@ int main(void)
     struct ntimage_platform p;ntimage_user_platform(&p,&m);
     uint32_t base=0;void *image=p.memory.allocate(&m,0xc1000000,8192,&base);
     assert(image==P2V(m.physical) && base==0x100000 && m.mapped==8192);
-    assert(p.resident(&m,image,8192,base));assert(!p.resident(&m,image,8192,base+4096));
+    assert(p.resident(&m,image,8192,base));
+    struct pe_image code={.base=base,.size=8192,.section_count=2,
+        .sections={{.rva=0,.span=4096,.flags=0x60000000},{.rva=4096,.span=4096,.flags=0xc0000000}}};
+    assert(p.seal_code(&m,&code));
+    assert(!as_range_ok(&as,base,1,true) && as_range_ok(&as,base+4096,1,true));
+    code.sections[1].rva=4000;assert(!p.seal_code(&m,&code));assert(!p.resident(&m,image,8192,base+4096));
     quiescent=false;assert(!p.resident(&m,image,8192,base));quiescent=true;
     struct mm_pin original=m.image_pin;
     assert(ndis_user_grant_dma(&m,2,&original));

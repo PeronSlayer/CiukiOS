@@ -7,12 +7,31 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include "src/kernel/ndis/userhost.h"
 static struct ndis_user_host h;
 static struct ntimage image;
+static struct ndis_flag_table flag_table;
+static struct ndis_flag_workspace flag_workspace;
+static uint8_t *flag_code,*flag_stack;
+static int flag_read(void *ctx,uint32_t address,void *out,uint32_t bytes)
+{
+    (void)ctx;
+    if((address>=(uintptr_t)flag_code && address-(uintptr_t)flag_code<4096 && bytes<=4096-(address-(uintptr_t)flag_code)) ||
+       (address>=(uintptr_t)flag_stack && address-(uintptr_t)flag_stack<16384 && bytes<=16384-(address-(uintptr_t)flag_stack))) {
+        memcpy(out,(const void *)(uintptr_t)address,bytes);return 1;
+    }
+    return 0;
+}
+static int flag_write(void *ctx,uint32_t address,const void *in,uint32_t bytes)
+{
+    (void)ctx;
+    if(address<(uintptr_t)flag_stack || address-(uintptr_t)flag_stack>=16384 || bytes>16384-(address-(uintptr_t)flag_stack)) return 0;
+    memcpy((void *)(uintptr_t)address,in,bytes);return 1;
+}
 static volatile sig_atomic_t emulating,steps,fenced,retained,cancelled;
 static bool own(void *c,uint32_t g) { (void)c;return g==77; }
 static bool mapping(void *c,const struct ndis_host_map *m) { (void)c;(void)m;return true; }
@@ -29,14 +48,20 @@ static void handler(int signal,siginfo_t *info,void *context)
 {
     (void)info;
     ucontext_t *uc=context;
-    if(emulating && signal==SIGSEGV) {
+    if(emulating && (signal==SIGSEGV || signal==SIGTRAP)) {
         struct trap_frame tf={.vector=(uint32_t)uc->uc_mcontext.gregs[REG_TRAPNO],
             .err=(uint32_t)uc->uc_mcontext.gregs[REG_ERR],
             .eip=(uint32_t)uc->uc_mcontext.gregs[REG_EIP],
             .cs=(uint32_t)uc->uc_mcontext.gregs[REG_CS],
-            .eflags=(uint32_t)uc->uc_mcontext.gregs[REG_EFL]};
-        uint8_t op=*(const uint8_t *)(uintptr_t)tf.eip;
-        if(!ndis_host_gp(&h,&tf,op) || !(tf.eflags&0x200)) _exit(91);
+            .eflags=(uint32_t)uc->uc_mcontext.gregs[REG_EFL],
+            .user_esp=(uint32_t)uc->uc_mcontext.gregs[REG_UESP]};
+        int result;
+        if(signal==SIGTRAP) {
+            struct ndis_flag_access access={0,flag_read,flag_write};
+            result=ndis_flags_breakpoint(&h,&tf,&access);
+        } else result=ndis_host_gp(&h,&tf,*(const uint8_t *)(uintptr_t)tf.eip);
+        if(!result || !(tf.eflags&0x200)) _exit(91);
+        uc->uc_mcontext.gregs[REG_UESP]=(greg_t)tf.user_esp;
         steps++;uc->uc_mcontext.gregs[REG_EIP]=(greg_t)tf.eip;
         uc->uc_mcontext.gregs[REG_EFL]=(greg_t)tf.eflags;return;
     }
@@ -56,7 +81,7 @@ static void setup(void)
     struct sigaction sa={.sa_sigaction=handler,.sa_flags=SA_SIGINFO};
     sigemptyset(&sa.sa_mask);
     assert(!sigaction(SIGSEGV,&sa,0) && !sigaction(SIGILL,&sa,0) &&
-           !sigaction(SIGFPE,&sa,0) && !sigaction(SIGALRM,&sa,0));
+           !sigaction(SIGFPE,&sa,0) && !sigaction(SIGALRM,&sa,0) && !sigaction(SIGTRAP,&sa,0));
 }
 __attribute__((noinline)) static void shim_fault(unsigned kind)
 {
@@ -64,6 +89,40 @@ __attribute__((noinline)) static void shim_fault(unsigned kind)
     else if(kind==1) __asm__ volatile("xor %%edx,%%edx; xor %%ecx,%%ecx; div %%ecx" :::"eax","edx","ecx","cc");
     else if(kind==2) __asm__ volatile("ud2");
     else __asm__ volatile("outb %%al,$0x80" ::: "memory");
+}
+static uint32_t execute_flag_code(void)
+{
+    uint32_t result;
+    uint32_t top=(uint32_t)(uintptr_t)flag_stack+16384;
+    __asm__ volatile("movl %%esp,%%esi; movl %2,%%esp; call *%1; movl %%esi,%%esp"
+        : "=a"(result) : "r"(flag_code),"r"(top) : "esi","ecx","edx","cc","memory");
+    return result;
+}
+static void binary_flags(void)
+{
+    setup();
+    flag_code=mmap((void *)0x20000000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+    flag_stack=mmap((void *)0x30000000,16384,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+    assert(flag_code!=(void *)-1 && flag_stack!=(void *)-1);
+    memset(flag_code,0x90,4096);
+    /* PUSHFD; CLI; CALL callee; POPFD; RET. The callee saves/restores IF twice. */
+    const uint8_t code[]={0x9c,0xfa,0xe8,9,0,0,0,0x9d,0xc3};
+    memcpy(flag_code,code,sizeof(code));
+    const uint8_t callee[]={0x9c,0xfa,0x9c,0x9d,0x9d,0x9c,0x58,0xc3};memcpy(flag_code+16,callee,sizeof(callee));
+    image.pe=(struct pe_image){.image=flag_code,.base=(uint32_t)(uintptr_t)flag_code,.size=4096,.section_count=1,
+        .sections={{.rva=0,.span=64,.flags=0x60000000}}};
+    image.hash[0]=12;image.platform.flag_table=&flag_table;
+    assert(ndis_flags_patch(&image.pe,&flag_table,&flag_workspace,image.hash));
+    assert(!mprotect(flag_code,4096,PROT_READ|PROT_EXEC));emulating=2;
+    assert(!(execute_flag_code()&0x200) && h.virtual_if);
+    emulating=0;assert(!mprotect(flag_code,4096,PROT_READ|PROT_WRITE));
+    memset(flag_code,0x90,4096);memset(&flag_table,0,sizeof(flag_table));
+    /* PUSHFD; zero extend CS; PUSH CS; PUSH target; IRETD; target: RET. */
+    const uint8_t iret_code[]={0x9c,0x31,0xc0,0x66,0x8c,0xc8,0x50,0x68,0,0,0,0,0xcf};
+    memcpy(flag_code,iret_code,sizeof(iret_code));pe_put32(flag_code+8,(uint32_t)(uintptr_t)flag_code+32);flag_code[32]=0xc3;
+    assert(ndis_flags_patch(&image.pe,&flag_table,&flag_workspace,image.hash));
+    assert(!mprotect(flag_code,4096,PROT_READ|PROT_EXEC));emulating=2;(void)execute_flag_code();
+    assert(h.virtual_if);emulating=0;assert(!munmap(flag_code,4096) && !munmap(flag_stack,16384));
 }
 int main(void)
 {
@@ -100,6 +159,7 @@ int main(void)
         }
         int status;assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && !WEXITSTATUS(status));
     }
+    binary_flags();
     puts("PASS i386 CPL3 CLI/STI/HLT traps, physical PUSHFD/POPFD, forbidden OUT, PF/DE/UD, nonreturn deadlines");
     return 0;
 }

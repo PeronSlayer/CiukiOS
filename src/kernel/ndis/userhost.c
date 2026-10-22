@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "userhost.h"
 #include <ciuki/kernel.h>
+#include "nt_runtime.h"
+#ifndef CIUKI_NDIS_HOST_MODEL
+#include "native.h"
+#endif
 static uint64_t budget(enum ndis_host_kind k)
 {
     switch(k) {
@@ -13,7 +17,14 @@ static uint64_t budget(enum ndis_host_kind k)
 }
 static uint64_t deadline(uint64_t now,uint64_t us)
 { return now>UINT64_MAX-us?UINT64_MAX:now+us; }
-bool ndis_user_host_available(void) { return false; }
+extern bool ndis_profiles_available(void);
+bool ndis_user_host_available(void) {
+#ifdef CIUKI_NDIS_HOST_MODEL
+    return false;
+#else
+    return ndis_profiles_available();
+#endif
+}
 bool ndis_host_live(const struct ndis_user_host *h)
 { return h && h->image && h->ops.owned && h->state==NDIS_HOST_LIVE && h->generation &&
     !h->image->quarantined && h->ops.owned(h->ops.context,h->generation); }
@@ -21,9 +32,9 @@ int ndis_host_init(struct ndis_user_host *h,struct ntimage *image,uint32_t gener
                     const struct ndis_host_ops *ops,bool shared,bool masker,uint8_t dirql)
 {
 #ifndef CIUKI_NDIS_HOST_MODEL
-    (void)h;(void)image;(void)generation;(void)ops;(void)shared;(void)masker;(void)dirql;
-    return 0; /* closed before consulting any callbacks */
-#else
+    if(!ndis_user_host_available() || !h || !h->qualified || !h->native || &h->native->host!=h ||
+       h->native->qualification!=ndis_qualified_profile(image,&h->native->pci)) return 0;
+#endif
     if(!h || h->state!=NDIS_HOST_NEW || !image || !image->loaded ||
        !image->platform.user_host || image->quarantined || !generation || !ops ||
        !ops->owned || !ops->mapping || !ops->map || !ops->mask || !ops->cause ||
@@ -32,7 +43,6 @@ int ndis_host_init(struct ndis_user_host *h,struct ntimage *image,uint32_t gener
     h->image=image; h->generation=generation; h->ops=*ops; h->dirql=dirql;
     h->virtual_if=true; h->state=NDIS_HOST_LIVE;
     return 1;
-#endif
 }
 void ndis_host_stop(struct ndis_user_host *h,const char *why,uint32_t vector,uint32_t eip,uint64_t now)
 {
@@ -138,6 +148,10 @@ int ndis_host_take(struct ndis_user_host *h,uint64_t now,struct ndis_host_event 
     if(h->depth && e.deadline>h->active[0].deadline) e.deadline=h->active[0].deadline;
     h->active[h->depth++]=e;
     h->irql=e.kind==NDIS_HOST_ISR?h->dirql:e.kind==NDIS_HOST_DPC?2:0;
+    if(h->nt) {
+        h->nt->callback_irql_depth[h->depth-1]=h->nt->irql_depth;
+        ndis_nt_dpc_started(h->nt,e.token);
+    }
     *event=e; return 1;
 }
 int ndis_host_complete(struct ndis_user_host *h,uint32_t generation,uint32_t token,uint64_t now)
@@ -145,10 +159,25 @@ int ndis_host_complete(struct ndis_user_host *h,uint32_t generation,uint32_t tok
     ndis_host_watchdog(h,now);
     if(!ndis_host_live(h) || generation!=h->generation || !h->depth ||
        h->active[h->depth-1].token!=token || h->synchronized) return 0;
+    if(h->nt) {
+        if(h->nt->irql_depth!=h->nt->callback_irql_depth[h->depth-1]) return 0;
+        for(unsigned i=0;i<NDIS_NT_OBJECTS;i++)
+            if(h->nt->lock[i].held && h->nt->lock[i].holder==token) return 0;
+    }
     h->depth--;
     h->irql=!h->depth?0:h->active[h->depth-1].kind==NDIS_HOST_ISR?h->dirql:
         h->active[h->depth-1].kind==NDIS_HOST_DPC?2:0;
     return 1;
+}
+bool ndis_host_cancel_queued(struct ndis_user_host *h,uint32_t generation,uint32_t token)
+{
+    if(!ndis_host_live(h) || h->generation!=generation || !token) return false;
+    for(unsigned i=0;i<h->count;i++) if(h->queue[(h->head+i)%NDIS_HOST_QUEUE].token==token) {
+        for(unsigned j=i;j+1<h->count;j++)
+            h->queue[(h->head+j)%NDIS_HOST_QUEUE]=h->queue[(h->head+j+1)%NDIS_HOST_QUEUE];
+        h->count--;return true;
+    }
+    return false;
 }
 int ndis_host_deliver(struct ndis_user_host *h,struct trap_frame *tf,uint64_t now)
 {
@@ -218,7 +247,7 @@ uint32_t ndis_host_flags(const struct ndis_user_host *h,uint32_t physical)
 { return (physical&~0x3200u)|2u|(h->virtual_if?0x200u:0); }
 int ndis_host_restore_flags(struct ndis_user_host *h,uint32_t saved)
 {
-    if(!ndis_host_live(h) || (saved&(0x3000u|0x20000u))) return 0;
+    if(!ndis_host_live(h) || (saved&(0x3000u|0x4000u|0x20000u))) return 0;
     h->virtual_if=!!(saved&0x200u);
     if(h->virtual_if) h->ops.notify(h->ops.context);
     return 1;

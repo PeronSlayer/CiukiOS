@@ -130,7 +130,7 @@ static void imports(void) {
     size_t n;const struct ndis_export *table=ndis_exports(&n);assert(n);
     p.exports=0;
     for(size_t i=0;i<n;i++) {
-        assert(!table[i].implemented && !table[i].address && !table[i].ordinal);
+        assert(!table[i].address && !table[i].ordinal);
         fixture();import(table[i].module,table[i].name,0,false,false);d=(struct ntimage){0};
         assert(!ntimage_load(&d,raw,sizeof(raw),"unimplemented.sys",&p));
         assert(!strcmp(d.error.reason,"unimplemented-export"));assert(!live);
@@ -175,10 +175,14 @@ static int user_import(void *ctx,const struct ndis_export *e,uint32_t *address)
     *address=bad_user_import?e->address:0x500000+(e->address-0xc2000000);
     return 1;
 }
+static int seal_code(void *ctx,const struct pe_image *p) { (void)ctx;(void)p;return 1; }
+static struct ndis_flag_table flag_table;
+static struct ndis_flag_workspace flag_workspace;
 static void user_policy(void)
 {
     struct ntimage d={0};struct ntimage_platform p=platform();
     p.user_host=true;p.user_import=user_import;mapped_base=0x100000;
+    p.flag_table=&flag_table;p.flag_workspace=&flag_workspace;p.seal_code=seal_code;
     fixture();import("NTOSKRNL.EXE","KeTickCount",0,false,false);
     dir(5,0x2700,12);put(at(0x2700),0x2000);put(at(0x2704),12);
     pe_put16(raw+at(0x2708),0x3600);put(at(0x2600),BASE+0x1234);

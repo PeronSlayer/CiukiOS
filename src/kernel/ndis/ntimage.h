@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "../../../sdk/pe/pe.h"
+#include "flags.h"
 #if defined(__i386__)
 #define NDIS_STDCALL __attribute__((stdcall))
 #define NDIS_FASTCALL __attribute__((fastcall))
@@ -53,6 +54,9 @@ struct ntimage_platform {
      * distinct process execution VA. resident proves owned user mappings. */
     bool user_host;
     int (*user_import)(void *, const struct ndis_export *, uint32_t *address);
+    struct ndis_flag_table *flag_table;
+    struct ndis_flag_workspace *flag_workspace;
+    int (*seal_code)(void *,const struct pe_image *);
 };
 struct ntimage {
     struct pe_image pe;
@@ -60,8 +64,9 @@ struct ntimage {
     struct pe_ops ops;
     struct ntimage_platform platform;
     const char *file; /* pinned caller-owned name */
-    bool loaded, entered, quarantined, scanned;
+    bool loaded, entered, quarantined, scanned, flags_prepared;
     uint32_t scan_rva;
+    uint8_t hash[32];
 };
 int ntimage_load(struct ntimage *, const void *, uint32_t, const char *, const struct ntimage_platform *);
 int ntimage_unload(struct ntimage *);

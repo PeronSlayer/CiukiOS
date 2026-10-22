@@ -3,7 +3,7 @@
  * Authored here, with no imported disassembler implementation. */
 #include "scan.h"
 static int no(const char **why, const char *reason) { *why=reason; return 0; }
-int ndis_instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char **why) {
+static int instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char **why,bool diagnostic) {
     unsigned n=0,operand=4,address=4,immediate=0;
     bool modrm=false,group3=false;
     *length=0; *why=0;
@@ -19,25 +19,28 @@ int ndis_instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char
         n++;
     }
     unsigned op=p[n++], second=256;
-    if(op==0xfa) return no(why,"instruction-cli");
-    if(op==0xfb) return no(why,"instruction-sti");
-    if(op==0xf4) return no(why,"instruction-hlt");
-    if(op==0x9d || op==0xcf) return no(why,"instruction-flags-restore");
-    if(op==0x9a || op==0xea || op==0xca || op==0xcb)
+    if(!diagnostic && (op==0xfa || op==0xfb || op==0xf4 || op==0xcf)) {
+        *length=n;return 1;
+    }
+    if(diagnostic && op==0xfa) return no(why,"instruction-cli");
+    if(diagnostic && op==0xfb) return no(why,"instruction-sti");
+    if(diagnostic && op==0xf4) return no(why,"instruction-hlt");
+    if(diagnostic && (op==0x9d || op==0xcf)) return no(why,"instruction-flags-restore");
+    if(diagnostic && (op==0x9a || op==0xea || op==0xca || op==0xcb))
         return no(why,"instruction-far-transfer");
-    if(op==0x07 || op==0x17 || op==0x1f || op==0x8e || op==0xc4 || op==0xc5)
+    if(diagnostic && (op==0x07 || op==0x17 || op==0x1f || op==0x8e || op==0xc4 || op==0xc5))
         return no(why,"instruction-segment-load");
-    if(op==0xf1 || op==0xce) return no(why,"instruction-int");
+    if(diagnostic && (op==0xf1 || op==0xce)) return no(why,"instruction-int");
     if(op==0xcd) {
         if(n==bytes) return no(why,"instruction-truncated");
-        if(p[n]!=3) return no(why,"instruction-int");
+        if(diagnostic && p[n]!=3) return no(why,"instruction-int");
         immediate=1;
     } else if(op==0x0f) {
         if(n==bytes) return no(why,"instruction-truncated");
         second=p[n++];
-        if(second==0x22) return no(why,"instruction-control-register-write");
-        if(second==0x30) return no(why,"instruction-msr-write");
-        if(second==0x00 || second==0x01) {
+        if(diagnostic && second==0x22) return no(why,"instruction-control-register-write");
+        if(diagnostic && second==0x30) return no(why,"instruction-msr-write");
+        if(diagnostic && (second==0x00 || second==0x01)) {
             if(n==bytes) return no(why,"instruction-truncated");
             unsigned ext=(p[n]>>3)&7;
             if(second==0x00 && ext==3) return no(why,"instruction-ltr");
@@ -45,7 +48,9 @@ int ndis_instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char
             if(second==0x01 && ext==3) return no(why,"instruction-lidt");
             return no(why,"instruction-system");
         }
-        if(second==0x02 || second==0x03 || (second>=0x40 && second<=0x4f) ||
+        if((!diagnostic && (second==0x00 || second==0x01 || (second>=0x20 && second<=0x23) ||
+                           second==0xb2 || second==0xb4 || second==0xb5)) || second==0x1f ||
+           second==0x02 || second==0x03 || (second>=0x40 && second<=0x4f) ||
            (second>=0x90 && second<=0x9f) || second==0xa3 || second==0xa5 ||
            second==0xab || second==0xad || second==0xaf || second==0xb0 ||
            second==0xb1 || second==0xb3 || second==0xb6 || second==0xb7 ||
@@ -53,10 +58,17 @@ int ndis_instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char
            second==0xbf || second==0xc0 || second==0xc1 || second==0xc7) modrm=true;
         else if(second==0xa4 || second==0xac || second==0xba) { modrm=true; immediate=1; }
         else if(second>=0x80 && second<=0x8f) immediate=operand;
-        else if(second==0x0b || second==0x31 || second==0xa2 ||
+        else if((!diagnostic && (second==0x06 || second==0x08 || second==0x09 || second==0x30 ||
+                                second==0x32 || second==0x33 || second==0x34 || second==0x35 ||
+                                second==0xa0 || second==0xa1 || second==0xa8 || second==0xa9)) ||
+                second==0x0b || second==0x31 || second==0xa2 ||
                 (second>=0xc8 && second<=0xcf)) { /* UD2, RDTSC, CPUID, BSWAP */ }
         else return no(why,"instruction-outside-i686-policy");
-    } else if(op<=0x3f) {
+    } else if(!diagnostic && (op==0x9a || op==0xea)) immediate=operand+2;
+    else if(!diagnostic && op==0xca) immediate=2;
+    else if(!diagnostic && (op==0xcb || op==0xce || op==0xf1)) { }
+    else if(!diagnostic && (op==0xc4 || op==0xc5)) modrm=true;
+    else if(op<=0x3f) {
         unsigned low=op&7;
         if(low<=3) modrm=true;
         else if(low==4) immediate=1;
@@ -101,7 +113,7 @@ int ndis_instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char
     if(modrm) {
         if(n==bytes) return no(why,"instruction-truncated");
         unsigned m=p[n++],mod=m>>6,rm=m&7,ext=(m>>3)&7;
-        if(op==0xff && (ext==3 || ext==5)) return no(why,"instruction-far-transfer");
+        if(diagnostic && op==0xff && (ext==3 || ext==5)) return no(why,"instruction-far-transfer");
         if(op==0xff && ext==7) return no(why,"instruction-invalid-group");
         if(op==0xfe && ext>1) return no(why,"instruction-invalid-group");
         if((op==0xc6 || op==0xc7 || op==0x8f) && ext)
@@ -127,6 +139,10 @@ int ndis_instruction(const uint8_t *p,uint32_t bytes,uint32_t *length,const char
     if(n>bytes || immediate>bytes-n) return no(why,"instruction-truncated");
     *length=n+immediate; return 1;
 }
+int ndis_instruction(const uint8_t *p,uint32_t n,uint32_t *len,const char **why)
+{ return instruction(p,n,len,why,true); }
+int ndis_instruction_length(const uint8_t *p,uint32_t n,uint32_t *len,const char **why)
+{ return instruction(p,n,len,why,false); }
 int ndis_scan_image(const struct pe_image *p,struct ndis_scan_error *error) {
     *error=(struct ndis_scan_error){0};
     if(!p || !p->image) { error->reason="scan-no-image"; return 0; }

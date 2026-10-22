@@ -1,6 +1,7 @@
 /* Native scheduler/trap adapter; all foreign code remains at CPL3.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "userhost_kernel.h"
+#include "native.h"
 #include <ciuki/cpu.h>
 #include <ciuki/kernel.h>
 #include <ciuki/timing.h>
@@ -24,11 +25,13 @@ static bool user_resident(const struct task *t,uint32_t base,uint32_t bytes,bool
 }
 int ndis_user_attach(struct task *t,struct ndis_user_host *h)
 {
-    /* This is not a production entry switch. Even a caller with a model-like
-     * LIVE record cannot bind a task until the compile-time gate is reviewed. */
+    /* Availability comes only from compiled, exact per-profile qualifications. */
     if(!ndis_user_host_available() || !t || !h || !t->user || t->as.memory ||
        proc_thread_for(t) || t->state!=T_BLOCKED || t->ndis_user_host ||
        !ndis_host_live(h) || !user_resident(t,h->dispatcher,1,false) || !h->stack_bytes) return 0;
+    if(!h->native || &h->native->host!=h || h->native->qualification!=ndis_qualified_profile(h->image,&h->native->pci)) return 0;
+    uint32_t dispatcher_pte=0;
+    if(!as_lookup(&t->as,h->dispatcher,&dispatcher_pte) || (dispatcher_pte&PTE_W)) return 0;
     for(unsigned i=0;i<NDIS_HOST_DEPTH;i++) {
         uint32_t top=h->dispatch_stack[i];
         if(top<h->stack_bytes || (top&15) ||
@@ -72,6 +75,7 @@ void ndis_user_timer(void)
     uint64_t now=now_us();
     for(unsigned i=0;i<NDIS_HOST_MAX;i++) if(hosts[i]) {
         struct task *t=hosts[i]; struct ndis_user_host *h=t->ndis_user_host;
+        if(h->native) ndis_native_tick(h->native);
         ndis_host_watchdog(h,now);
         if(!ndis_host_live(h) && !h->syscall_active && t!=g_current && task_alive(t))
             task_kill(t,-1);
@@ -103,17 +107,57 @@ static void user_call(struct ndis_user_host *h,struct trap_frame *tf)
     case NDIS_USER_YIELD: tf->eax=0; g_need_resched=true; break;
     /* TAKE is reserved: callbacks are delivered only by the kernel return
      * hook, never admitted by an untrusted userspace scheduler. */
-    case NDIS_USER_COMPLETE:
+    case NDIS_USER_COMPLETE: {
+        struct ndis_host_event event={0};
+        if(h->depth) event=h->active[h->depth-1];
+        uint32_t result=tf->esi;
         if(!ndis_host_return_event(h,tf,tf->ebx,tf->ecx,now))
             ndis_host_stop(h,"invalid-callback-completion",0,tf->eip,now);
+        else if(h->native) ndis_native_callback_result(h->native,&event,result);
         break;
+    }
     case NDIS_USER_REARM:
-        tf->eax=ndis_host_rearm(h,tf->ebx,tf->ecx,now); break;
+        if(h->native) ndis_host_stop(h,"unpaired-native-rearm",0,tf->eip,now);
+        else tf->eax=ndis_host_rearm(h,tf->ebx,tf->ecx,now);
+        break;
     case NDIS_USER_FLAGS: tf->eax=ndis_host_flags(h,tf->eflags); break;
     case NDIS_USER_RESTORE_FLAGS: tf->eax=ndis_host_restore_flags(h,tf->ebx); break;
+    case NDIS_USER_DOORBELL:
+        tf->eax=ndis_channel_doorbell(h->channel,tf->ebx);
+        if(!tf->eax) ndis_host_stop(h,"invalid-packet-doorbell",0,tf->eip,now);
+        break;
+    case NDIS_USER_WAIT:
+        /* Trap entry holds UP IRQ exclusion. Epoch check and parking share
+         * that exclusion with producer publication: no check/sleep gap. */
+        if(!h->channel || tf->ebx!=h->generation) {
+            ndis_host_stop(h,"invalid-host-wait",0,tf->eip,now);break;
+        }
+        tf->eax=h->channel->epoch;
+        if(!h->count && ndis_channel_wait(h->channel,tf->ebx,tf->ecx)) {
+            g_current->state=T_BLOCKED;g_need_resched=true;
+        }
+        break;
+    case NDIS_USER_TX_COMPLETE:
+        tf->eax=ndis_channel_tx_complete(h->channel,tf->ebx,tf->ecx,tf->edx,(int)tf->esi);
+        if(!tf->eax) ndis_host_stop(h,"invalid-packet-completion",0,tf->eip,now);
+        break;
+    case NDIS_USER_NT: {
+        uint64_t result=h->native?ndis_nt_service(&h->native->services,tf->ebx,tf->ecx):NDIS_NT_CANCELLED;
+        tf->eax=(uint32_t)result;tf->edx=(uint32_t)(result>>32);break;
+    }
     default: ndis_host_stop(h,"unsupported-host-syscall",0,tf->eip,now); break;
     }
     h->syscall_active=false;
+}
+static int flag_read(void *ctx,uint32_t address,void *out,uint32_t bytes)
+{
+    struct task *t=ctx;
+    return as_range_ok(&t->as,address,bytes,false) && !copy_user(out,(const void *)(uintptr_t)address,bytes);
+}
+static int flag_write(void *ctx,uint32_t address,const void *in,uint32_t bytes)
+{
+    struct task *t=ctx;
+    return as_range_ok(&t->as,address,bytes,true) && !copy_user((void *)(uintptr_t)address,in,bytes);
 }
 bool ndis_user_trap(struct trap_frame *tf)
 {
@@ -126,6 +170,10 @@ bool ndis_user_trap(struct trap_frame *tf)
         /* No pager/native signal handler. Raw host memory is resident and the
          * kernel copy fixup is the only allowed fault inside this read. */
         int emulated=0;
+        if(tf->vector==3) {
+            struct ndis_flag_access access={g_current,flag_read,flag_write};
+            emulated=ndis_flags_breakpoint(h,tf,&access);
+        }
         if(tf->vector==13 && as_range_ok(&g_current->as,tf->eip,1,false) &&
            !copy_user(&opcode,(const void *)(uintptr_t)tf->eip,1))
             emulated=ndis_host_gp(h,tf,opcode);

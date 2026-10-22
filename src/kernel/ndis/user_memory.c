@@ -42,7 +42,11 @@ bool ndis_user_mapping_owned(void *ctx,const struct ndis_host_map *view)
         if(!g->admitted || g->view.kind!=view->kind || g->view.physical!=view->physical ||
            g->view.bytes!=view->bytes || g->view.ticket!=view->ticket ||
            g->view.uncached!=view->uncached) continue;
-        if(view->kind==NDIS_HOST_BAR) return registry_valid(g->claim,g->claim_generation);
+        if(view->kind==NDIS_HOST_BAR) {
+            const struct resource *r=registry_get((unsigned)g->claim);
+            return registry_valid(g->claim,g->claim_generation) && r && r->state==RS_ACTIVE &&
+                r->type==RES_MMIO && r->start==view->physical && r->end-r->start==view->bytes;
+        }
         if(!mm_pin_valid || !mm_pin_valid(&g->pin,m->generation)) return false;
         for(uint32_t p=0;p<g->pin.pages;p++)
             if(!ledger_page_pinned(g->pin.first_pfn+p)) return false;
@@ -133,6 +137,7 @@ static int user_import(void *ctx,const struct ndis_export *symbol,uint32_t *addr
         for(uint32_t at=0;at<e->bytes;) {
             uint32_t pte=0,phys=as_lookup(m->as,e->address+at,&pte);
             if(!(pte&PTE_U) || !ledger_page_pinned(phys/4096)) return 0;
+            if(pte&PTE_W) return 0; /* immutable function veneers and tick data */
             uint32_t step=4096-((e->address+at)&4095);
             if(step>=e->bytes-at) break;
             at+=step;
@@ -141,8 +146,32 @@ static int user_import(void *ctx,const struct ndis_export *symbol,uint32_t *addr
     }
     return 0;
 }
+static int seal_code(void *ctx,const struct pe_image *p)
+{
+    struct ndis_user_memory *m=ctx;
+    if(!stopped(m) || !p || p->base!=m->execution_base || p->size>m->bytes) return 0;
+    /* Validate page sharing before changing anything. A writable section must
+     * not inhabit any executable page (i686 has no NX bit here). */
+    for(unsigned i=0;i<p->section_count;i++) {
+        const struct pe_section *s=&p->sections[i];
+        if(!(s->flags&0x20000000) || !s->span) continue;
+        uint32_t first=s->rva&~4095u,last=PAGE_ALIGN_UP(s->rva+s->span);
+        for(unsigned j=0;j<p->section_count;j++) {
+            const struct pe_section *d=&p->sections[j];
+            if((d->flags&0x80000000) && d->span && d->rva<last && first<d->rva+d->span) return 0;
+        }
+    }
+    for(unsigned i=0;i<p->section_count;i++) {
+        const struct pe_section *s=&p->sections[i];
+        if(!(s->flags&0x20000000) || !s->span) continue;
+        for(uint32_t at=s->rva&~4095u;at<PAGE_ALIGN_UP(s->rva+s->span);at+=4096)
+            if(as_seal_borrowed(m->as,p->base+at,m->physical+at)) return 0;
+    }
+    return 1;
+}
 void ntimage_user_platform(struct ntimage_platform *p,struct ndis_user_memory *m)
 {
     *p=(struct ntimage_platform){.memory={.context=m,.allocate=allocate,.release=release},
-        .resident=resident,.image_budget=m->reserved_bytes,.user_host=true,.user_import=user_import};
+        .resident=resident,.image_budget=m->reserved_bytes,.user_host=true,.user_import=user_import,
+        .flag_table=m->flag_table,.flag_workspace=m->flag_workspace,.seal_code=seal_code};
 }

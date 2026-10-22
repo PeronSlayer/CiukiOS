@@ -12,6 +12,7 @@ class LoaderTests(unittest.TestCase):
         sources = ['sdk/pe/pe.c', 'sdk/win32/ldr/pe.c', 'tests/host/ndis/user_policy.c',
                    'src/kernel/ndis/ntimage.c', 'src/kernel/ndis/exports.c',
                    'src/kernel/ndis/callback.c', 'src/kernel/ndis/scan.c',
+                   'src/kernel/ndis/flags.c', 'src/kernel/ndis/userhost.c', 'src/kernel/ndis/nt_runtime.c', 'src/kernel/lib/sha256.c',
                    'tests/host/ndis/loader_test.c']
         command = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                    '-DW32_HOST_MODEL', '-DCIUKI_NDIS_HOST_MODEL', '-ffunction-sections',
@@ -69,7 +70,11 @@ class LoaderTests(unittest.TestCase):
         host = subprocess.check_output(['llvm-objdump', '-dr', str(out/'userhost.o')], text=True)
         init = host.split('<ndis_host_init>:', 1)[1].split('<ndis_host_stop>:', 1)[0]
         self.assertNotIn('NDIS_HOST_LIVE', init)
-        self.assertNotRegex(init, r'call[l]?\s+\*')
+        self.assertIn('ndis_profiles_available', init)
+        profiles = subprocess.check_output(['llvm-objdump', '-dr', str(out/'profiles.o')], text=True)
+        self.assertNotRegex(profiles, r'call[l]?\s+')
+        subprocess.run(['nasm', '-f', 'elf32', 'src/kernel/arch/ndis_dispatch.asm',
+                        '-o', str(out/'ndis_dispatch.o')], cwd=ROOT, check=True)
 
     def build_abi(self):
         out = ROOT/'build/host/ndis/abi'; out.mkdir(parents=True, exist_ok=True)

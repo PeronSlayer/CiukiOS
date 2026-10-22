@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ntimage.h"
 #include "scan.h"
+#include <ciuki/sha256.h>
 static int refuse(struct ntimage *d,const char *why) {
     pe_fail(&d->pe,why); return 0;
 }
@@ -86,6 +87,7 @@ int ntimage_load(struct ntimage *d,const void *file,uint32_t n,const char *name,
     /* Caller provides a fresh zeroed module; never overwrite a live pin token. */
     if(d->loaded || d->pe.image || d->entered || d->quarantined) return 0;
     if(!platform || !platform->memory.allocate || !platform->memory.release || !platform->resident) return 0;
+    if(platform->user_host && platform->flag_table && platform->flag_table->sealed) return 0;
     d->scanned=false; d->scan_rva=0;
     d->platform=*platform; d->file=name?name:"<unnamed>";
 #ifdef CIUKI_NDIS_HOST_MODEL
@@ -101,6 +103,16 @@ int ntimage_load(struct ntimage *d,const void *file,uint32_t n,const char *name,
     for(unsigned i=0;i<16;i++) if(i!=4 && d->pe.dirs[i].size &&
         !pe_span(&d->pe,d->pe.dirs[i].rva,d->pe.dirs[i].size)) goto failed;
     if(!pe_walk_imports(&d->pe,d,module,symbol)) goto failed;
+    sha256(file,n,d->hash);
+    if(d->platform.user_host) {
+        if(!ndis_flags_patch(&d->pe,d->platform.flag_table,d->platform.flag_workspace,d->hash)) {
+            refuse(d,"flag-patch-or-code-seal-failed");goto failed;
+        }
+        d->flags_prepared=true;
+        if(!d->platform.seal_code || !d->platform.seal_code(d->platform.memory.context,&d->pe)) {
+            refuse(d,"flag-patch-or-code-seal-failed");goto failed;
+        }
+    }
     struct ndis_scan_error scan;
     if(!ndis_scan_image(&d->pe,&scan)) {
         d->scan_rva=scan.rva;
@@ -116,6 +128,7 @@ int ntimage_load(struct ntimage *d,const void *file,uint32_t n,const char *name,
     d->pe.file=0; d->pe.file_size=0;
     return 1;
 failed:
+    if(d->flags_prepared) { d->platform.flag_table->sealed=false;d->platform.flag_table->count=0;d->flags_prepared=false; }
     if(d->pe.image) { release(d,d->pe.image,d->pe.size); d->pe.image=0; }
     if(d->platform.record) d->platform.record(d->platform.memory.context,d->file,0,0,0,
                                               d->error.reason?d->error.reason:"load-refused");
@@ -124,6 +137,7 @@ failed:
 int ntimage_unload(struct ntimage *d) {
     if(d->entered || d->quarantined) return 0; /* no uncertain callback/DMA reuse */
     if(d->pe.image) { release(d,d->pe.image,d->pe.size); d->pe.image=0; }
+    if(d->flags_prepared) { d->platform.flag_table->sealed=false;d->platform.flag_table->count=0;d->flags_prepared=false; }
     d->loaded=false; d->scanned=false; return 1;
 }
 bool ndis_execution_available(void) { return false; }

@@ -429,6 +429,18 @@ int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
 int as_map_borrowed(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
 { return as_map_internal(as, va, phys, flags, true); }
 
+int as_seal_borrowed(struct aspace *as,uint32_t va,uint32_t phys)
+{
+    if (!as->pd_phys || as->memory || va>=KERNEL_VBASE || (va&4095) || (phys&4095)) return -EINVAL;
+    uint32_t de=table_va(as->pd_phys)[va>>22];
+    if (!(de&PTE_P)) return -EFAULT;
+    uint32_t *p=&table_va(de&~4095u)[(va>>12)&1023];
+    if ((*p&(PTE_P|PTE_BORROWED))!=(PTE_P|PTE_BORROWED) || (*p&~4095u)!=phys) return -EFAULT;
+    *p &= ~PTE_W;
+    if (read_cr3()==as->pd_phys) invlpg(va);
+    return 0;
+}
+
 int as_revoke_borrowed(struct aspace *as, uint32_t va, uint32_t phys)
 {
     if (!as->pd_phys || as->memory || va>=KERNEL_VBASE || (va&4095) || (phys&4095)) return -EINVAL;

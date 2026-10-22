@@ -15,11 +15,64 @@ class UserHostTests(unittest.TestCase):
                         '-DCIUKI_NDIS_HOST_MODEL', '-fsanitize='+sanitizer,
                         '-fno-sanitize-recover=all', '-ffunction-sections', '-fdata-sections',
                         '-Wl,--gc-sections', '-I.', '-Isrc/kernel/include', '-I'+str(OUT),
-                        *sources, '-o', str(OUT/name)], cwd=ROOT, check=True)
+                        *sources, 'src/kernel/ndis/nt_runtime.c', '-o', str(OUT/name)], cwd=ROOT, check=True)
         result = subprocess.run([OUT/name], cwd=ROOT, text=True, capture_output=True, timeout=30,
                                 env=dict(os.environ, ASAN_OPTIONS='detect_leaks=1'))
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertIn('PASS ', result.stdout)
+
+    def nt_runtime(self, sanitizer):
+        self.native("nt-"+sanitizer.replace(",", "-"),
+                    ["src/kernel/ndis/userhost.c", "src/kernel/ndis/ntimage.c",
+                     "src/kernel/ndis/nt_services.c", "src/kernel/ndis/exports.c",
+                     "tests/host/ndis/nt_runtime_test.c"], sanitizer)
+
+    def test_nt_undefined(self): self.nt_runtime("undefined")
+    def test_nt_sanitizers(self): self.nt_runtime("address,undefined")
+
+    def test_veneer_machine_code(self):
+        self.nt_runtime("undefined")
+        result = subprocess.run([OUT/'nt-undefined', OUT/'veneers.bin'], cwd=ROOT,
+                                capture_output=True, text=True, timeout=30,
+                                env=dict(os.environ, ASAN_OPTIONS='detect_leaks=1'))
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        subprocess.run(['llvm-objcopy', '-I', 'binary', '-O', 'elf32-i386', '-B', 'i386',
+                        str(OUT/'veneers.bin'), str(OUT/'veneers.o')], cwd=ROOT, check=True)
+        asm = subprocess.check_output(['llvm-objdump', '-D', str(OUT/'veneers.o')], text=True)
+        self.assertRegex(asm, r'int[l]?\s+\$(?:0x)?80')
+        self.assertRegex(asm, r'ret[l]?\s+\$(?:0x)?10')  # compiler int64 helpers: 16 bytes
+        self.assertRegex(asm, r'ret[l]?\s+\$(?:0x)?18')  # six-argument NT services: 24 bytes
+        self.assertIn('pushl\t%edx', asm)
+        self.assertIn('pushl\t%ecx', asm)
+        self.assertIn('popl\t%ebx', asm)
+        self.assertRegex(asm, r'ret[l]?\s*\n')  # cdecl/fastcall do not pop stdcall arguments
+
+    def native_binding(self, sanitizer):
+        self.native("native-"+sanitizer.replace(",", "-"),
+                    ["src/kernel/ndis/channel.c", "src/kernel/ndis/packet_ring.c",
+                     "src/kernel/ndis/userhost.c", "src/kernel/ndis/ntimage.c",
+                     "src/kernel/ndis/nt_services.c", "src/kernel/ndis/exports.c",
+                     "tests/host/ndis/native_test.c"], sanitizer)
+
+    def test_native_undefined(self): self.native_binding("undefined")
+    def test_native_sanitizers(self): self.native_binding("address,undefined")
+
+    def channel(self, sanitizer):
+        self.native("channel-"+sanitizer.replace(",", "-"),
+                    ["src/kernel/ndis/channel.c", "src/kernel/ndis/packet_ring.c",
+                     "tests/host/ndis/channel_test.c"], sanitizer)
+
+    def test_channel_undefined(self): self.channel("undefined")
+    def test_channel_sanitizers(self): self.channel("address,undefined")
+
+    def flags(self, sanitizer):
+        self.native("flags-"+sanitizer.replace(",", "-"),
+                    ["src/kernel/ndis/flags.c", "src/kernel/ndis/scan.c",
+                     "src/kernel/ndis/userhost.c", "src/kernel/ndis/ntimage.c",
+                     "tests/host/ndis/flags_test.c"], sanitizer)
+
+    def test_flags_undefined(self): self.flags("undefined")
+    def test_flags_sanitizers(self): self.flags("address,undefined")
 
     def host(self, sanitizer):
         self.native('state-'+sanitizer.replace(',', '-'),
@@ -67,7 +120,8 @@ class UserHostTests(unittest.TestCase):
                         '-mno-sse', '-mno-sse2', '-mno-mmx', '-Wall', '-Wextra', '-Werror',
                         '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                         '-I.', '-Isrc/kernel/include', 'src/kernel/ndis/userhost.c',
-                        'src/kernel/ndis/ntimage.c', 'tests/host/ndis/user_process_test.c',
+                        'src/kernel/ndis/ntimage.c', 'src/kernel/ndis/nt_runtime.c',
+                        'src/kernel/ndis/flags.c', 'src/kernel/ndis/scan.c', 'tests/host/ndis/user_process_test.c',
                         '-o', str(OUT/'process-i386')], cwd=ROOT, check=True)
         result = subprocess.run([OUT/'process-i386'], cwd=ROOT, text=True,
                                 capture_output=True, timeout=15)

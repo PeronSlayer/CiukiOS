@@ -12,7 +12,7 @@ unsigned ndis_execution_irq_depth(void) { return host_irq_depth; }
 void ndis_execution_irq_enter(void) { host_irq_depth++; }
 void ndis_execution_irq_leave(void) { if(host_irq_depth) host_irq_depth--; }
 static uint64_t now_us(void) {
-    if(!g_cpu_tsc || !g_tsc_per_ms) return 0;
+    if(!g_cpu_tsc || !g_tsc_per_ms) return g_ticks*1000u;
     uint64_t cycles=read_tsc_serialized();
     return (cycles/g_tsc_per_ms)*1000+(cycles%g_tsc_per_ms)*1000/g_tsc_per_ms;
 }
