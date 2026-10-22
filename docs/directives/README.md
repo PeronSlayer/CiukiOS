@@ -469,3 +469,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-121-neomagic](f2-121-neomagic.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: NeoMagic) |
 | [f2-122-chips-hiqv](f2-122-chips-hiqv.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: Chips & Technologies HiQV) |
 | [f1-123-promise-highpoint-pata](f1-123-promise-highpoint-pata.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-23 01:24 (Promise and HighPoint add-in PATA, plain disks, RAID members refused) |
+| [f2-125-game-properties-ports-joystick](f2-125-game-properties-ports-joystick.md) | F2/F3 | gpt-6.1-sol / xhigh | written 2026-10-23 01:36 (per-game joystick, COM and LPT panel; resolves the f1-112/f1-113/f1-114 merge) |
