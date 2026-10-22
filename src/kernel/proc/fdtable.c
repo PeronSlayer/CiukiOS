@@ -455,6 +455,85 @@ static int image_read(void *cookie, uint32_t offset, void *buffer, uint32_t byte
     }
     return 0;
 }
+/* Append one read run to the image pages. */
+static int image_append(struct file_image *image, const uint8_t *buffer, uint32_t bytes)
+{
+    for (uint32_t off=0; off<bytes; off+=PAGE_SIZE) {
+        unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
+        if (!image->lists[list_index]) {
+            image->lists[list_index] = pmm_alloc();
+            if (!image->lists[list_index]) return -ENOMEM;
+            memset(P2V(image->lists[list_index]), 0, PAGE_SIZE);
+        }
+        uint32_t page = pmm_alloc();
+        if (!page) return -ENOMEM;
+        ((uint32_t *)P2V(image->lists[list_index]))[image->pages % (PAGE_SIZE / sizeof(uint32_t))] = page;
+        image->pages++;
+        uint32_t take=bytes-off;
+        if (take>PAGE_SIZE) take=PAGE_SIZE;
+        memcpy(P2V(page),buffer+off,take);
+    }
+    return 0;
+}
+static void image_reset(struct file_image *image)
+{
+    for (unsigned i = 0; i < image->pages; i++) pmm_free(V2P(image_page(image, i)));
+    image->pages = 0;
+}
+struct image_range { struct px_node *node; };
+static int image_range_check(void *arg, uint64_t position, size_t bytes)
+{
+    struct image_range *r = arg;
+    return px_range_locked(r->node, position, bytes) ? -EACCES : 0;
+}
+/* f1-93: FAT executable bytes come through the open-file reader path, one
+ * 64 KiB run per admission, with no volume reservation across a device read
+ * (the T23 1.0.0 alpha launch held drive C for 2294 ms reading a binary
+ * under the reservation, tagged op=lookup). The snapshot stays consistent:
+ * the entry and the f3-51c write generation are compared after the last
+ * run, and the whole image is read again (at most twice) if the file
+ * changed meanwhile. Mandatory record locks are checked for every run.
+ * Namespace and the drive's reservation held on entry and return. */
+static int image_fat(struct px_namespace *s, struct px_node *n, struct file_image *image, void *buffer)
+{
+    struct vfs *v = s->vfs;
+    struct vfs_file_identity *id = 0;
+    int err = px_error(vfs_identity_get(v, n->volume, &n->entry, &id));
+    if (err) return err;
+    px_retain(n);
+    uint32_t mask = v->active;
+    vfs_unlock(v); vfs_lock(v, 0);
+    vfs_tag_locked(v, "read"); vfs_site_locked(v, "native");
+    struct image_range range = { n };
+    for (unsigned attempt = 0;; attempt++) {
+        if (!n->linked) { err = -ENOENT; break; }
+        struct fat_entry entry = n->entry;
+        if (entry.size > CIUKI_ELF_BYTES_MAX) { err = -ENOEXEC; break; }
+        image_reset(image); image->bytes = entry.size;
+        uint64_t generation = vfs_change_generation(v, n->volume, entry.parent, entry.index);
+        struct fat_cursor cursor = {0}; bool busy = false;
+        for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
+            uint32_t bytes = image->bytes - offset;
+            if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
+            uint64_t position = offset; size_t done = 0;
+            err = px_error(vfs_read_identity_locked(v, id, n->volume, &n->entry, &cursor, &busy, &position, &position,
+                true, image_range_check, &range, buffer, bytes, &done));
+            proc_launch_volume_read(bytes, done);
+            if (!err && done != bytes) err = -EIO;
+            if (!err) err = image_append(image, buffer, bytes);
+        }
+        if (err) break;
+        /* Changed while it was read: read it again from the new entry. */
+        if (n->linked && n->entry.first == entry.first && n->entry.size == entry.size &&
+            n->entry.chain_generation == entry.chain_generation && vfs_identity_live(v, id) &&
+            vfs_change_generation(v, n->volume, entry.parent, entry.index) == generation) break;
+        if (attempt == 2) { err = -EAGAIN; break; }
+    }
+    vfs_identity_put(v, id);
+    vfs_reserve_locked(v, mask);
+    int drop = px_drop_locked(n);
+    return err ? err : drop;
+}
 static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
 {
     struct px_node *cwd = cwd_arg;
@@ -465,37 +544,27 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     vfs_lock(s->vfs,0);
     struct px_path r;
     int err = px_resolve_locked(s, cwd, path, false, &r);
+    vfs_tag_locked(s->vfs,"open"); vfs_site_locked(s->vfs,"native");
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
     if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
     if (!err) err = px_range_locked(r.node,0,r.node->ro ? r.node->ro_size : r.node->entry.size);
     if (!err) image->bytes = (uint32_t)(r.node->ro ? r.node->ro_size : r.node->entry.size);
-    uint32_t buffer_bytes=image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
+    /* A FAT image can be read again with a different size: one full run. */
+    uint32_t buffer_bytes=err ? 0 : !r.node->ro ? BLKDEV_READ_BYTES :
+        image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
     void *buffer=!err && buffer_bytes ? fs_contig_alloc(buffer_bytes) : 0;
     if (!err && buffer_bytes && !buffer) err=-ENOMEM;
-    struct fat_cursor cursor = {0}; /* f3-51c: sequential image read, linear in the chain */
-    for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
-        uint32_t bytes = image->bytes - offset;
-        if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
-        size_t done = 0;
-        err = px_error(r.node->ro ? VFS_IO(s->vfs,fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done)) :
-                       VFS_IO(s->vfs,fat_read_cursor(r.node->volume, &r.node->entry, &cursor, offset, buffer, bytes, &done)));
-        proc_launch_volume_read(bytes, done);
-        if (!err && done != bytes) err = -EIO;
-        for (uint32_t off=0; !err && off<bytes; off+=PAGE_SIZE) {
-            unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
-            if (!image->lists[list_index]) {
-                image->lists[list_index] = pmm_alloc();
-                if (!image->lists[list_index]) { err = -ENOMEM; break; }
-                memset(P2V(image->lists[list_index]), 0, PAGE_SIZE);
-            }
-            uint32_t page = pmm_alloc();
-            if (!page) { err = -ENOMEM; break; }
-            ((uint32_t *)P2V(image->lists[list_index]))[image->pages % (PAGE_SIZE / sizeof(uint32_t))] = page;
-            image->pages++;
-            uint32_t take=bytes-off;
-            if (take>PAGE_SIZE) take=PAGE_SIZE;
-            memcpy(P2V(page),(uint8_t *)buffer+off,take);
+    if (!err && !r.node->ro && r.node->volume) err = image_fat(s, r.node, image, buffer);
+    else if (!err) {
+        for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
+            uint32_t bytes = image->bytes - offset;
+            if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
+            size_t done = 0;
+            err = px_error(VFS_IO(s->vfs,fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done)));
+            proc_launch_volume_read(bytes, done);
+            if (!err && done != bytes) err = -EIO;
+            if (!err) err = image_append(image, buffer, bytes);
         }
     }
     fs_contig_free(buffer,buffer_bytes);

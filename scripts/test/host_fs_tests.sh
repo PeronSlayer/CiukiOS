@@ -45,10 +45,12 @@ build/host/fs/test_vfs_urgent_admission
 rm build/host/fs/test_vfs_urgent_admission
 # f1-87: T23 request mix and 111 ms device commands. The strict amendment-1
 # gate also requires bounded logical holds; diagnostics alone cannot pass B.
+# f1-93 (unconditional): the 1.0.0 alpha cold paths at 106 ms per command,
+# including the DOS VM's logical C: through the production dos_file_volume.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
-    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/vm/dos_file_volume.c \
     tests/host/fs/test_t23_holds.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_t23_holds
 tag_status=0
 build/host/fs/test_t23_holds --missing-tag || tag_status=$?
@@ -110,7 +112,8 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
-# Native desktop path/fd adapters must meet the same cold-device hold bound.
+# Native desktop path/fd adapters must meet the same cold-device hold bound;
+# f1-93 adds stat, executable image read, readdir and open at 106 ms.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
