@@ -4,6 +4,85 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f2-92: the display service draws with the engine
+
+Written 2026-10-22. Evidence: T23 image 5a10eef4 (`build/codex/t23-5a10eef4-serial.txt`
+lines 210–265): `bci_test result=ok … pixels=16`, `caps=3`, `summary
+accelerated=1`, the activation completing after `[supervisor] desktop pid=2`.
+Validation and expected records: [f2-92](../validation/f2-92-desktop-2d-engine.md).
+
+Findings. The service already existed (syscall 77: FILL, COPY, PATTERN,
+cursor) and the compositor called it, but on the T23 the engine became ready
+after the desktop's first frame with the same mode generation. The desktop
+learned the new capabilities each frame yet never loaded the hardware cursor,
+and window-move and scroll copies require it: no window copy ever ran. Only
+whole-row solid fills and one-row duplicate copies could, and nothing recorded
+whether they did. The completion wait was also bounded by 256 polls at 5 µs
+(about 1.5 ms), less than a large fill or copy needs, and a drawing failure
+quarantined silently.
+
+Upstream programming used (cited, nothing invented):
+
+| Operation | Source | Words |
+| --- | --- | --- |
+| Solid fill | savagefb_fillrect, `savagefb_accel.c:65-90` (local `build/downloads/savage/`) | unchanged `4bcc8000`, colour, XY, WH |
+| Screen copy | savagefb_copyarea, `savagefb_accel.c:31-63` | unchanged `4bcc0020`/±XP/YP, src XY, dst XY, WH |
+| Host image write | X.Org EXA `SavageUploadToScreen`, [savage_exa.c](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_exa.c) lines 433-561: `RECT\|XP\|YP\|CLIP_LR\|SRC_COLOR`, ROP CC, `CLIP_LR(x,x+w-1)`, XY, WH, rows padded to a dword; destination GBD as savagefb_imageblit (`savagefb_accel.c:115-134`) | `4bcc4040`, `(right<<16)\|left`, XY, WH, data |
+| Bit fields | `savage_bci.h:68` CLIP_LR `4000`, `:80` SRC_COLOR `40`, `:130` CLIP_LR word, `:48` BCI_RESET (any window offset feeds the queue) | |
+| Queue space | X.Org `WaitQueue4`, `savage_driver.c:501-516`, and savagefb `savage4_waitfifo`, `savagefb_driver.c:266-270`: MM48C60 bits 20:0 = used entries; without a COB X.Org sets `bciThresholdHi = 32` (`savage_driver.c:1941`) | ≤ 32 outstanding |
+| Offscreen rows | X.Org addresses offscreen memory with the global descriptor below the screen, capped at 2048 lines (`savage_accel.c:271-272`; scissor 2047, [savage_xaa.c](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_xaa.c) lines 319-333) | rows `[ceil(size/pitch), min(2048, cursor page/pitch))` |
+
+X.Org's default `NoPCIRetry=1` (`savage_driver.c:1215`) and its unthrottled
+COB-less writes rely on bus retry; CiukiOS keeps the "no PCI retry" rule and
+never has more than 32 entries outstanding: each status read bounds the next
+burst. RE046-B gives no other queue rule.
+
+Decisions:
+
+- Kernel service (syscall 77, display grant): FILL, COPY (visible or
+  offscreen endpoints), new `CIUKI_ACCEL_WRITE` (host-to-screen, clipped:
+  source bounds, optional destination clip, rows outside skipped, columns
+  bounded by CLIP_LR) and `CIUKI_ACCEL_OFFSCREEN` (`(end<<16)|first`). Writes
+  copy user rows into one staging page outside every lock, then submit one
+  BCI command per band.
+- Waits: service requests poll in 1 ms slices with the existing 5 µs pacing
+  and 20 ms deadline (iteration bound scaled to it). Between slices fbdev
+  releases the presenter lock and passes a preemption point, keeping the
+  full-screen `drawing` claim (no CPU writer, no console pixels) and
+  `accel_inflight` (mode changes return EBUSY). Setup, self-tests and kernel
+  callers keep the unsliced bound.
+- Failure: any timeout, dead MMIO, queue timeout or fault quarantines as
+  before; for a drawing request the records `[accel] savage quarantined …
+  phase=draw` and `[accel] summary accelerated=0 … used=…` follow after the
+  lock is released and the splash/device record flip. Fills and visible
+  writes then complete on the CPU once idle is proven; copies and offscreen
+  writes return -EAGAIN/-EINVAL and the desktop repaints from RAM.
+- First use of writes/offscreen rows: a hardware self-test on the f1-95 8x2
+  block (4x2 image write, then the same image written offscreen and copied
+  back), read through the LFB, pixels restored after proven idle. A mismatch
+  disables writes and offscreen rows (or offscreen rows only); fills and
+  copies are unaffected. Record `[accel] savage write_test result=… phase=…`.
+- Offscreen lease `savage-offscreen`: exclusive, never CPU-mapped, released
+  with the engine (mode change, quarantine). T23 1024x768x32: rows 768-2047
+  (5 MiB).
+- Indicator: `2D engine: OK (drawing: software)` from the activation until
+  the engine has drawn a presenter's request, then `2D acceleration: YES`;
+  `2D engine: NO (<reason>)`. Summary record gains `used=0|1` (a second record
+  when it turns 1); the device record's READY reason is `accelerated` only
+  after use, `engine_ok_drawing_software` before.
+- Desktop: same-generation capability gains rerun the accelerator reset
+  (hardware cursor, offscreen rows, one software frame), so window moves use
+  engine copies; offscreen caches hold the wallpaper/icon background and the
+  two front-most ordinary windows' content, uploaded with WRITE between
+  frames (16 rows per idle turn) and copied to the scanout only after an
+  exact comparison of each row with the composed RAM frame; solid rows stay
+  FILLs. Record `[desktop] accel fills=… copies=… writes=… fallback=…
+  cache_rows=… frames=… lfb_bytes=… caps=… vram_rows=…` every 2 s with drawing.
+
+Open: the engine's own speed on the T23 (only CPU bus bytes are modelled),
+whether firmware/SMI code touches offscreen VRAM, and the image write's
+behaviour on silicon (the write self-test decides at first use).
+
 ## f1-95: the first fill after the engine reset
 
 Supersedes the f1-69 interpretation and the f1-88 preamble-depth hypothesis;

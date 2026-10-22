@@ -11,3 +11,13 @@
 4. Host tests on the register model: the three operations, clipping, the bounded wait, the fallback; the desktop golden frames unchanged with the engine model; measurement on the model of a window move at 1024×768×32 (software vs engine).
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f2-92-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 15:20, decision on the delivery)
+
+Accepted; the directive's premise was half wrong: syscall 77 already offered
+fill and copy and the compositor called them, but on the T23 the engine
+became ready after the desktop's first frame, the desktop never loaded the
+hardware cursor and window copies require it, waits gave up after ~1.5 ms
+and a drawing failure quarantined silently. Reserved: `CIUKI_ACCEL_WRITE`,
+`CIUKI_ACCEL_OFFSCREEN`, the `used=` field. The engine's own rate on the T23
+and the host-to-screen write on the real chip are confirmed by the trial.

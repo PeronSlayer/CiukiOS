@@ -710,12 +710,37 @@ static int gfx_benchmark(struct desktop *d, unsigned index, uint64_t values[3])
     if (!e) { values[0]=result.bytes; values[1]=result.ns; values[2]=result.operations; }
     return e;
 }
+/* f2-92: what the 2D engine did in the last 2 s window, on every boot:
+ * engine fills, copies (screen and offscreen-cache), writes (cache uploads),
+ * requests that fell back to software, rows served from the caches, frames
+ * and CPU-uploaded bytes. Every window with engine activity; otherwise at
+ * most once a minute while frames are drawn (a seconds clock alone would
+ * add a record every 2 s), silent when idle. */
+static int accel_record_line(const struct desktop *d, char *line, size_t size, uint64_t now, uint64_t *quiet_ns)
+{
+    const struct desk_frame_stats *s=&d->sample;
+    int engine=s->accel_fills || s->accel_copies || s->accel_writes || s->accel_fallback;
+    if (!engine && (!s->frames || now-*quiet_ns<60000000000ull)) return 0;
+    if (!engine) *quiet_ns=now;
+    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u\n",
+        (unsigned long long)s->accel_fills,(unsigned long long)s->accel_copies,(unsigned long long)s->accel_writes,
+        (unsigned long long)s->accel_fallback,(unsigned long long)s->cache_rows,(unsigned long long)s->frames,
+        (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u);
+    return n>0 && (size_t)n<size ? n : 0;
+}
+static void accel_record(struct desktop *d, uint64_t now)
+{
+    static uint64_t quiet_ns;
+    char line[256]; int n=accel_record_line(d,line,sizeof(line),now,&quiet_ns);
+    if (n) (void)write(STDERR_FILENO,line,(size_t)n);
+}
 static void performance_sample(struct desktop *d, uint64_t now)
 {
     if (!d->sample_begin_ns) { d->sample_begin_ns=now; return; }
     if (now-d->sample_begin_ns<2000000000ull) return;
     desk_stats_sample(d); d->sample_ns=now-d->sample_begin_ns;
     d->sample_begin_ns=now;
+    accel_record(d,now);
     if (verbose_boot) {
         const struct desk_frame_stats *s=&d->sample;
         char line[CFG_LOG_MAX];
@@ -1180,30 +1205,44 @@ static void system_read(struct desktop *d)
 /* f1-97: one-line 2D acceleration answer at the first desktop frame, from the
  * kernel's `2D accelerator` device record (driver "savage2d"; reason = the
  * quarantine token). A shell notice card, never a dialog: it expires after
- * 10 s and any click dismisses it. */
-static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, const char *reason)
+ * 10 s and any click dismisses it. f2-92: "YES" only once the engine has
+ * drawn for a presenter (record reason "accelerated"); before that the
+ * engine is "OK (drawing: software)". */
+static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, int used, const char *reason)
 {
-    if (accelerated) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 Savage");
-    else snprintf(out,size,"2D acceleration: NO \xE2\x80\x94 software rendering (%s)",reason && *reason ? reason : "unknown");
+    if (accelerated && used) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 Savage");
+    else if (accelerated) snprintf(out,size,"2D engine: OK (drawing: software)");
+    else snprintf(out,size,"2D engine: NO (%s)",reason && *reason ? reason : "unknown");
 }
+/* The activation is asynchronous and usually decides after the first frame:
+ * poll the inventory twice a second for up to 60 s; an engine that is ready
+ * gets 3 s to draw before it is reported as unused. */
+static struct { unsigned failures; uint64_t first_ns, next_ns, ready_ns; } accel_notice_state;
 /* Returns 1 when finished (shown, nothing recorded, or given up), 0 to retry. */
 static int accel_notice(struct desktop *d)
 {
 #ifdef __i386__
     static struct ciuki_devices_info info;
-    static unsigned failures;
+    if (!accel_notice_state.first_ns) accel_notice_state.first_ns=d->now_ns ? d->now_ns : 1;
+    if (d->now_ns<accel_notice_state.next_ns) return 0;
+    accel_notice_state.next_ns=d->now_ns+500000000ull;
     info.version=CIUKI_DEVICES_VERSION; info.size=sizeof(info);
-    if (ciuki_devices(&info)) return ++failures>=3;
+    if (ciuki_devices(&info)) return ++accel_notice_state.failures>=3;
     for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
         const struct ciuki_device_record *v=&info.devices[i];
         if (strcmp(v->driver,"savage2d")) continue;
+        int ready=v->state==CIUKI_DEVICE_READY, used=ready && !strcmp(v->reason,"accelerated");
+        if (ready && !used) {
+            if (!accel_notice_state.ready_ns) accel_notice_state.ready_ns=d->now_ns ? d->now_ns : 1;
+            if (d->now_ns-accel_notice_state.ready_ns<3000000000ull) return 0;
+        }
         char text[160];
-        accel_notice_text(text,sizeof(text),v->state==CIUKI_DEVICE_READY,v->reason);
+        accel_notice_text(text,sizeof(text),ready,used,v->reason);
         desk_shell_notify(d,"Graphics",text,DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
         d->sh.notification.expires=d->now_ns+10000000000ull;
         return 1;
     }
-    return 1;
+    return d->now_ns-accel_notice_state.first_ns>=60000000000ull;
 #else
     (void)d; return 1;
 #endif
@@ -2061,7 +2100,12 @@ int main(int argc, char **argv)
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
-        if (!gate && d->shell && d->presents && !accel_noticed) accel_noticed=accel_notice(d);
+        if (!gate && d->shell && d->presents && !accel_noticed && (accel_noticed=accel_notice(d))) d->accel_lost=0;
+        if (d->accel_lost && accel_noticed) {
+            /* f2-92: the engine was quarantined after the notice: say so. */
+            d->accel_lost=0; accel_noticed=0;
+            memset(&accel_notice_state,0,sizeof(accel_notice_state));
+        }
         desk_v3_fixture_tick(d);
         desk_dialogs_fixture_tick(d);
         desk_upper_fixture_tick(d);
@@ -2139,10 +2183,15 @@ int main(int argc, char **argv)
         /* Input drains and all service polls run together. An unchanged
          * desktop sleeps 10 ms; real work retains its earlier deadline. */
         desktop_stage(STALL_IDLE);
+        /* f2-92: offscreen-cache uploads and checks between frames, one
+         * bounded engine request per turn while nothing is due. */
+        int cache_more=!gate && !d->damage.count && !d->move_damage.count && !d->present_damage.count &&
+            desk_accel_cache_step(d,monotonic());
         uint64_t sleep_now=monotonic();
         __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(sleep_now/1000000ull),__ATOMIC_RELEASE);
         uint64_t timer=d->shell && !gate && !d->power.state ? mixer_poll_next : UINT64_MAX;
         uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count!=0,timer);
+        if (cache_more && wait>1000000ull) wait=1000000ull;
         struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait}; nanosleep(&pause,NULL);
     }
 }
