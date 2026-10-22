@@ -1,7 +1,6 @@
 {
  "schema_version": 1,
  "image": "full",
- "host_tests": true,
  "prerequisites": [
   "f0-smoke",
   "f0-core",

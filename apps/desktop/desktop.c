@@ -1181,7 +1181,7 @@ static void system_read(struct desktop *d)
  * kernel's `2D accelerator` device record (driver "savage2d"; reason = the
  * quarantine token). A shell notice card, never a dialog: it expires after
  * 10 s and any click dismisses it. */
-static void accel_notice_text(char *out, size_t size, int accelerated, const char *reason)
+static __attribute__((unused)) void accel_notice_text(char *out, size_t size, int accelerated, const char *reason)
 {
     if (accelerated) snprintf(out,size,"2D acceleration: YES \xE2\x80\x94 Savage");
     else snprintf(out,size,"2D acceleration: NO \xE2\x80\x94 software rendering (%s)",reason && *reason ? reason : "unknown");
