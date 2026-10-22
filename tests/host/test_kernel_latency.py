@@ -337,6 +337,10 @@ static void test_irq_restore(uint32_t f) {
                 # f1-98: desktop minimum share and reservation-holder boost
                 # on the T23 b453bc92 replay model (negative controls inside).
                 ('t23_desktop_share_test.c', []),
+                # f1-101: audio producer boost on the T23 a4d9454e replay
+                # (trial windows, 50 % interactive load, budget bound, unit
+                # checks; zero refill overruns in every scenario).
+                ('t23_audio_producer_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
                 binary = temp / Path(unit).stem
@@ -372,6 +376,20 @@ static void test_irq_restore(uint32_t f) {
                            ['--old-vfs'], ['--vfs', *strict]):
                 subprocess.run([str(binary), *policy, '--trial-device-work'], check=True,
                                env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            # f2-96: 2.1 ms SMI blackouts (the T23 EC transaction's SMIs) at
+            # 1 Hz, in the refill's own service (worst case) and anywhere; the
+            # default 2 s EC poll's pair anywhere and in the device worker;
+            # ecpoll=1's pair in the device worker. No transport gap, no
+            # refill own-budget overrun, no service deadline miss. The pair
+            # inside the refill is a reported stress case; without the
+            # firmware proof the pre-f2-96 charge reproduces the T23 5a10eef4
+            # audio_refill_overrun records (negative control).
+            for smi in ('1000:1:refill', '1000:1:any', '2000:2:any', '2000:2:device', '1000:2:device',
+                        '2000:2:refill', '1000:1:refill:unproven'):
+                result = subprocess.run([str(binary), '--smi=' + smi], text=True, capture_output=True,
+                                        env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+                print(''.join(line + '\n' for line in result.stdout.splitlines() if 'F2-96' in line), end='')
+                self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
 
             if os.environ.get('CIUKI_SCHED_BENCH') == '1':
                 binary = temp / 'scheduler_benchmark'

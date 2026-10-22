@@ -916,6 +916,51 @@ static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
     q->size=sizeof(*q); q->generation=d->accel_generation;
     return d->accel ? d->accel(d->display,q) : -ENOSYS;
 }
+/* f2-96: answers that leave the engine and its cursor exactly as they were
+ * (fbdev: a mode change or another presenter owns the display, a stale
+ * generation, a caught signal). The request is repeated, never treated as
+ * an engine loss. */
+static int accel_retry(int error) { return error==-EBUSY || error==-EAGAIN || error==-EINTR; }
+/* QUERY; a busy or stale answer keeps the capabilities already known. */
+static uint32_t accel_query(struct desktop *d)
+{
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
+    int caps=accel_call(d,&q);
+    if (accel_retry(caps)) return d->accel_caps;
+    return caps>0 ? (uint32_t)caps : 0;
+}
+/* f2-96: one pointer on screen. CURSOR_SET hides the hardware cursor before
+ * loading the shape (savage2d cursor_set), so a loaded cursor is hidden
+ * until the frame's MOVE and SHOW. */
+static int pointer_load(struct desktop *d)
+{
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
+    struct desk_cursor_raster r=cursor_raster(d);
+    memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
+    int error=accel_call(d,&q);
+    if (!error) { d->hw_cursor=1; d->hw_cursor_shown=0; d->cursor_loaded=d->cursor_shape; d->cursor_dirty=1; }
+    return error;
+}
+/* Hide a hardware cursor that no longer owns the pointer. A refusal other
+ * than busy/stale means the engine is gone, and the kernel hides the cursor
+ * whenever it stops or quarantines the engine (savage2d stop_engine/fault). */
+static void pointer_hide(struct desktop *d)
+{
+    if (d->hw_cursor || !d->hw_cursor_shown) return;
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SHOW,.colour=0};
+    int error=accel_call(d,&q);
+    if (!error || !accel_retry(error)) d->hw_cursor_shown=0;
+    else d->hw_cursor_retries++;
+    d->cursor_dirty=1; /* draw the software pointer, or ask again next frame */
+}
+/* A cursor request failed for good: the software pointer takes over after
+ * the hardware cursor is hidden; the engine is offered it again later. */
+static void pointer_software(struct desktop *d, uint64_t now)
+{
+    d->hw_cursor=0; d->cursor_dirty=1; d->cursor_loaded=DESK_CURSOR_COUNT;
+    d->hw_cursor_fallbacks++; d->hw_cursor_retry_ns=now+DESK_POINTER_RETRY_NS;
+    pointer_hide(d);
+}
 /* f2-92: offscreen caches. Video memory below the scanout holds unchanged
  * surfaces; uploads go through the engine's host-to-screen write and each
  * use is an engine copy, after an exact comparison with the RAM frame. */
@@ -945,18 +990,17 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
     d->scanout_valid=0; d->move_damage.count=0;
     d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
+    /* f2-96: a new generation follows a stopped engine (fbdev_change_begin)
+     * or a display lease (display_present), both of which hide the cursor. */
+    if (generation!=d->accel_generation) d->hw_cursor_shown=0;
     d->accel_generation=generation;
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+    if (!(d->accel_caps&2u) && !accel_retry(caps)) d->hw_cursor_shown=0;
     vram_reset(d);
     d->cursor_loaded=DESK_CURSOR_COUNT;
-    if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) {
-        q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-        struct desk_cursor_raster r=cursor_raster(d);
-        memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
-        if (!accel_call(d,&q)) { d->hw_cursor=1; d->cursor_loaded=d->cursor_shape; }
-    }
+    if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) (void)pointer_load(d);
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
 }
 void desk_cursor_motion(struct desktop *d)
@@ -977,10 +1021,8 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
     if (accel_call(d,&q)) {
         d->frame_stats.accel_fallback++;
         d->scanout_valid=0;
-        q.operation=CIUKI_ACCEL_QUERY;
-        int caps=accel_call(d,&q);
-        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-        if (!(d->accel_caps&2u)) d->hw_cursor=0;
+        d->accel_caps=accel_query(d);
+        if (!(d->accel_caps&2u)) d->hw_cursor=d->hw_cursor_shown=0; /* engine loss hid it */
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         return -1;
     }
@@ -1364,10 +1406,10 @@ int desk_redraw(struct desktop *d)
     /* f2-95: while a leased program owns the display, retained damage waits
      * at the frame cadence (it is drawn when the lease ends). */
     if (d->v3_lease_state) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
-    if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) {
-        struct ciuki_accel_request hide={.operation=CIUKI_ACCEL_CURSOR_SHOW,.colour=0};
-        (void)accel_call(d,&hide); d->hw_cursor=0;
-    }
+    /* A client bitmap or a hidden pointer needs the software path; it draws
+     * only once the hardware cursor is known hidden (f2-96). */
+    if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) { d->hw_cursor=0; d->cursor_dirty=1; }
+    if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
     /* A RESYNC/damage can precede the mode-counter service turn. Refresh
      * the existing grant query before any generation-tagged engine request;
@@ -1395,9 +1437,8 @@ int desk_redraw(struct desktop *d)
     memset(s,0,sizeof(*s)); s->frames=1;
     uint64_t begin=time_now(d);
     if (d->accel) {
-        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
         uint32_t had=d->accel_caps;
-        int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        d->accel_caps=accel_query(d);
         if ((had&1u) && !(d->accel_caps&1u)) {
             /* f2-92: the engine went away while in use (quarantine). */
             d->accel_lost=1;
@@ -1410,10 +1451,21 @@ int desk_redraw(struct desktop *d)
              * the offscreen rows exactly as for a new generation (one full
              * software frame), otherwise window moves never use the engine. */
             desk_accel_reset(d,d->accel_generation);
-        } else if (d->hw_cursor && !(d->accel_caps&2u)) {
-            d->hw_cursor=0; d->cursor_dirty=1; d->scanout_valid=0;
+        } else if ((d->hw_cursor || d->hw_cursor_shown) && !(d->accel_caps&2u)) {
+            /* Engine loss: the kernel hid the cursor; software returns. */
+            d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; d->scanout_valid=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        } else if (!d->hw_cursor && (d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden &&
+                   frame_begin>=d->hw_cursor_retry_ns) {
+            /* f2-96: the engine takes the pointer back (after a client
+             * pointer or a failed request). The scanout still holds the
+             * software pointer: no screen copy this frame; its footprint
+             * is restored from RAM below (cursor_dirty). */
+            int error=pointer_load(d);
+            if (!error) d->scanout_valid=0;
+            else if (!accel_retry(error)) d->hw_cursor_retry_ns=frame_begin+DESK_POINTER_RETRY_NS;
         }
+        if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
     }
     s->present_ns+=time_now(d)-begin;
     /* f2-95: the frame is the region of its damage; nothing outside it is
@@ -1440,14 +1492,16 @@ int desk_redraw(struct desktop *d)
     region_each(d,&damage_region,(struct desk_box){0},0);
     d->frame_valid=1;
     struct desk_box b;
-    if (!d->hw_cursor && desk_intersect(pointer_box(d),
+    /* Never a software pointer while the hardware cursor may be visible. */
+    int soft=!d->hw_cursor && !d->hw_cursor_shown;
+    if (soft && desk_intersect(pointer_box(d),
                        (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) {
         for (int y=0;y<b.h;y++)
             memcpy(d->cursor_under+y*32,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
         d->cursor_box=b; d->cursor_valid=1; DESK_PROFILE("cursor", cursor(d,b));
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     } else d->cursor_valid=0;
-    if (!d->hw_cursor) d->cursor_dirty=0;
+    if (soft) d->cursor_dirty=0;
     s->composite_ns=time_now(d)-begin;
     begin=time_now(d);
     int complete=1;
@@ -1463,30 +1517,26 @@ int desk_redraw(struct desktop *d)
         if (present_box(d,dirty)) { complete=0; break; }
     }
     pixman_region32_fini(&move_region); pixman_region32_fini(&damage_region);
-    /* Faults may hide the hardware pointer. Reconstruct with a software
-     * cursor before acknowledging either launch or a display-mode change. */
+    /* Faults hide the hardware pointer (the kernel clears it when it stops
+     * or quarantines the engine). Reconstruct with a software cursor before
+     * acknowledging either launch or a display-mode change. */
     if (d->hw_cursor) {
-        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
-        int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-        if (!(d->accel_caps&2u)) { d->hw_cursor=0; d->cursor_dirty=1; complete=0; }
+        d->accel_caps=accel_query(d);
+        if (!(d->accel_caps&2u)) { d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; complete=0; }
     }
     if (d->hw_cursor && d->cursor_dirty && complete) {
-        if (d->cursor_loaded!=d->cursor_shape) {
-            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-            struct desk_cursor_raster r=cursor_raster(d);
-            memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
-            if (accel_call(d,&q)) { d->hw_cursor=0; complete=0; }
-            else d->cursor_loaded=d->cursor_shape;
-        }
-    }
-    if (d->hw_cursor && d->cursor_dirty && complete) {
+        /* f2-96: busy/stale answers keep the hardware owner and retry on the
+         * next frame (cursor_dirty stays set; the scanout is complete). Any
+         * other refusal hides the hardware cursor before software draws. */
+        int error=d->cursor_loaded!=d->cursor_shape ? pointer_load(d) : 0;
         struct desk_box box=pointer_box(d);
-        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,
-            .rect={0,0,box.x,box.y,0,0}};
-        int error=accel_call(d,&q); q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,.rect={0,0,box.x,box.y,0,0}};
         if (!error) error=accel_call(d,&q);
-        if (error) { d->hw_cursor=0; complete=0; }
-        else { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
+        q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+        if (!error && !(error=accel_call(d,&q))) d->hw_cursor_shown=1;
+        if (!error) { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
+        else if (accel_retry(error)) d->hw_cursor_retries++;
+        else { pointer_software(d,time_now(d)); complete=0; }
     }
     uint64_t end=time_now(d);
     s->present_ns+=end-begin;

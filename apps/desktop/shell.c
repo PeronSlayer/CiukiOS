@@ -1764,7 +1764,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
     switch (kind) {
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
     case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
-    case DESK_INTERNAL_ABOUT: *w = 440; *h = 300; break;
+    case DESK_INTERNAL_ABOUT: *w = 540; *h = 420; break;
     case DESK_INTERNAL_AUTOPLAY: *w = 430; *h = 252; break;
     case DESK_INTERNAL_RUN: *w = 372; *h = 128; break;
     case DESK_INTERNAL_SHUTDOWN: *w = 352; *h = 132; break;
@@ -1816,7 +1816,7 @@ int desk_internal_open(struct desktop *d, int kind)
     snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
              kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
-    if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.want_reload |= 2; }
+    if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.about_scroll = 0; d->sh.want_reload |= 2; }
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
     if (kind == DESK_INTERNAL_SHUTDOWN) d->sh.shutdown_choice = 0;
     int32_t x = ((int32_t)d->width - c->frame.w) / 2, y = DESK_BAR + 20;
@@ -1929,6 +1929,98 @@ static void tab_strip(struct du_canvas *c, struct desk_box content, int active)
         du_text_font(c, font, r.x + (r.w - tw) / 2, r.y + (DU_TAB_H - 2 - DU_GLYPH_H) / 2 + (sel ? 1 : 0), about_tabs[k], SH_INK);
     }
 }
+/* ---- About: scrollable credits (f2-97) --------------------------------- */
+struct credit { unsigned char group; const char *name, *version, *licence; };
+#define CREDIT(group, name, version, licence) {group, name, version, licence},
+static const struct credit credits_list[] = {
+#include "credits.inc"
+};
+#undef CREDIT
+static const char *const credit_groups[] = {CREDIT_GROUPS};
+#define CREDIT_COUNT (sizeof(credits_list) / sizeof(credits_list[0]))
+#define CREDIT_GROUP_COUNT (sizeof(credit_groups) / sizeof(credit_groups[0]))
+#define CREDIT_ROWS (CREDIT_COUNT + CREDIT_GROUP_COUNT)
+#define ABOUT_HEADER_H 74
+/* Geometry of the Credits page: the identity header on top, the scrolling list, the Licences row below. */
+static void credits_geometry(struct desk_box page, struct desk_box *view, struct desk_box *licences, int *rows)
+{
+    int step = line_h();
+    int top = page.y + 8 + ABOUT_HEADER_H, bottom = page.y + page.h - 38;
+    *view = (struct desk_box){page.x + 8, top, page.w - 16, bottom - top};
+    *licences = (struct desk_box){page.x + 12, page.y + page.h - 30, 96, 22};
+    *rows = view->h / step;
+}
+static struct desk_box about_page_box(struct desk_box content)
+{ return (struct desk_box){content.x + 8, content.y + 8 + DU_TAB_H - 1, content.w - 16, content.h - 27 - 42}; }
+static int about_scroll_max(struct desk_box content)
+{
+    struct desk_box view, licences; int rows;
+    credits_geometry(about_page_box(content), &view, &licences, &rows);
+    return (int)CREDIT_ROWS > rows ? (int)CREDIT_ROWS - rows : 0;
+}
+static void about_scroll_to(struct desktop *d, int index, int row)
+{
+    struct desk_box content = desk_content(&d->clients[index]);
+    int max = about_scroll_max(content);
+    row = row < 0 ? 0 : row > max ? max : row;
+    if (row == d->sh.about_scroll) return;
+    d->sh.about_scroll = row;
+    damage(d, desk_outer(&d->clients[index]));
+    d->sh.want_reload |= 2;
+}
+static void about_open_licences(struct desktop *d)
+{
+    if (desk_task_launch(d, "files", "/system/licenses") < 0)
+        desk_shell_message(d, "Licences", "Files could not be started.\n\nThe notices are in /system/licenses.", 1);
+}
+static void credits_page(struct desktop *d, struct du_canvas *c, struct desk_box content, struct desk_box page)
+{
+    const struct desk_theme *t = desk_theme;
+    int step = line_h(), x = page.x + 12, y = page.y + 8;
+    char line[160];
+    if (d->portrait) {
+        /* The approved portrait, unchanged, in a sunken frame (56 px area-sampled). */
+        du_edge(c, (struct du_rect){x - 2, y - 2, 60, 60}, DU_SUNKEN);
+        for (int32_t yy = 0; yy < 56; yy++) for (int32_t xx = 0; xx < 56; xx++)
+            du_fill(c, (struct du_rect){x + xx, y + yy, 1, 1},
+                    d->portrait[(yy * DESK_PORTRAIT_SIZE / 56) * DESK_PORTRAIT_SIZE + xx * DESK_PORTRAIT_SIZE / 56]);
+    }
+    int32_t tx = x + 70, right = page.x + page.w - tx - 8;
+    du_text_font(c, t->font_large, tx, y - 1, "CiukiOS", t->select);
+    du_text_fit(c, tx, y + 26, right, "Classic computing, one woof at a time.", SH_INK);
+    snprintf(line, sizeof(line), "Dedicated to Ciuki.  Version %s", d->version[0] ? d->version : "unknown");
+    du_text_fit(c, tx, y + 26 + step, right, line, t->dark);
+    struct desk_box view, licences; int rows;
+    credits_geometry(page, &view, &licences, &rows);
+    du_hline(c, page.x + 8, view.y - 4, page.w - 16, DU_SHADOW);
+    du_hline(c, page.x + 8, view.y - 3, page.w - 16, DU_HILITE);
+    int32_t name_x = view.x + 6, version_x = view.x + view.w - 270, licence_x = view.x + view.w - 162;
+    int skip = d->sh.about_scroll, row = 0, shown = 0;
+    for (unsigned g = 0; g < CREDIT_GROUP_COUNT && shown < rows; g++) {
+        if (row++ >= skip) { bold(c, name_x, view.y + shown * step + 1, credit_groups[g], t->select); shown++; }
+        for (unsigned k = 0; k < CREDIT_COUNT && shown < rows; k++) {
+            if (credits_list[k].group != g) continue;
+            if (row++ < skip) continue;
+            int32_t ly = view.y + shown * step + 1;
+            du_text_fit(c, name_x + 8, ly, version_x - name_x - 12, credits_list[k].name, SH_INK);
+            du_text_fit(c, version_x, ly, licence_x - version_x - 6, credits_list[k].version, t->dark);
+            du_text_fit(c, licence_x, ly, view.x + view.w - licence_x - 14, credits_list[k].licence, SH_INK);
+            shown++;
+        }
+    }
+    int max = about_scroll_max(content);
+    if (max > 0) {   /* a thin scroll bar: track and thumb */
+        int32_t bx = view.x + view.w - 8, bh = rows * step;
+        du_fill(c, (struct du_rect){bx, view.y, 7, bh}, DU_SHADOW);
+        int th = bh * rows / (int)CREDIT_ROWS; if (th < 12) th = 12;
+        int ty = (bh - th) * d->sh.about_scroll / max;
+        du_fill(c, (struct du_rect){bx, view.y + ty, 7, th}, DU_FACE);
+        du_edge(c, (struct du_rect){bx, view.y + ty, 7, th}, DU_BUTTON_EDGE);
+    }
+    push_button(c, licences, "&Licences", 0);
+    du_text_fit(c, licences.x + licences.w + 10, licences.y + (licences.h - DU_GLYPH_H) / 2, page.x + page.w - licences.x - licences.w - 20,
+                "Opens /system/licenses in Files. Scroll with keys or wheel.", DU_GRAY);
+}
 static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box content)
 {
     const struct desk_theme *t = desk_theme;
@@ -1998,17 +2090,7 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         du_text(c, x, y, names[5], t->dark);
         du_text(c, x + 130, y, line, SH_INK);
     } else {
-        static const char *const credits[] = {
-            "CiukiOS: kernel, desktop and tools, MIT licence",
-            "Ciuki portrait: approved project asset (not PD)",
-            "Icons: Tango Icon Theme 0.8.90, Public Domain",
-            "Fonts: Inter and Inconsolata, SIL OFL 1.1",
-            "Images: stb_image 2.30, Sean Barrett (MIT/PD)",
-            "C library: newlib (BSD-style, COPYING.NEWLIB)",
-            "Lua 5.4.8: Lua.org, PUC-Rio (MIT licence)",
-            "OPL3: DBOPL, DOSBox Team (GPL-2.0-or-later)",
-            "Notices: /system/licenses"};
-        for (size_t k = 0; k < sizeof(credits) / sizeof(credits[0]); k++) du_text(c, x, y + (int32_t)k * (step + 1), credits[k], SH_INK);
+        credits_page(d, c, content, page);
     }
 }
 static int programs_entry(const struct desktop *d, int row)
@@ -2165,7 +2247,17 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         damage(d,desk_outer(cl)); return 1;
     }
     case DESK_INTERNAL_ABOUT:
-        for (int k = 0; k < 3; k++) if (desk_contains(about_tab(content, k), x, y)) { d->sh.about_tab = k; damage(d, desk_outer(cl)); d->sh.want_reload |= 2; return 1; }
+        for (int k = 0; k < 3; k++) if (desk_contains(about_tab(content, k), x, y)) { d->sh.about_tab = k; d->sh.about_scroll = 0; damage(d, desk_outer(cl)); d->sh.want_reload |= 2; return 1; }
+        if (d->sh.about_tab == 2) {
+            struct desk_box view, licences; int rows;
+            credits_geometry(about_page_box(content), &view, &licences, &rows);
+            if (desk_contains(licences, x, y)) { about_open_licences(d); return 1; }
+            if (desk_contains(view, x, y) && x >= view.x + view.w - 10) {   /* scroll bar: page up or down, thumb row proportional */
+                int max = about_scroll_max(content);
+                about_scroll_to(d, index, max ? (y - view.y) * max / (rows * line_h()) : 0);
+                return 1;
+            }
+        }
         if (desk_contains(button_box(content, 0, 1), x, y)) desk_request_close(d, index);
         return 1;
     case DESK_INTERNAL_RUN:
@@ -2553,6 +2645,12 @@ static int menu_key(struct desktop *d, int code)
     default: return 1;
     }
 }
+int desk_shell_wheel(struct desktop *d, int detents)
+{
+    if (!d->shell || d->focus < 0 || d->clients[d->focus].internal != DESK_INTERNAL_ABOUT || d->sh.about_tab != 2) return 0;
+    about_scroll_to(d, d->focus, d->sh.about_scroll - detents * 3);
+    return 1;
+}
 static unsigned keymap_mods(const struct desktop *d)
 {
     return (d->sh.modifiers & DU_SHIFT ? CIUKI_KEYMAP_SHIFT : 0) | (d->sh.alt_code == 0x138 ? CIUKI_KEYMAP_ALTGR : 0);
@@ -2599,8 +2697,17 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         return 1;
     case DESK_INTERNAL_ABOUT:
         if (code == DU_KEY_ESC || code == DU_KEY_ENTER) desk_request_close(d, index);
+        else if (d->sh.about_tab == 2 && (code == DU_KEY_UP || code == DU_KEY_DOWN || code == DU_KEY_PGUP || code == DU_KEY_PGDN ||
+                                           code == DU_KEY_HOME || code == DU_KEY_END)) {
+            struct desk_box view, licences; int rows, max = about_scroll_max(desk_content(c)), at = d->sh.about_scroll;
+            credits_geometry(about_page_box(desk_content(c)), &view, &licences, &rows);
+            about_scroll_to(d, index, code == DU_KEY_UP ? at - 1 : code == DU_KEY_DOWN ? at + 1 : code == DU_KEY_PGUP ? at - rows + 1 :
+                                       code == DU_KEY_PGDN ? at + rows - 1 : code == DU_KEY_HOME ? 0 : max);
+        }
+        else if (d->sh.about_tab == 2 && code == 0x26) about_open_licences(d);   /* L */
         else if (code == DU_KEY_TAB || code == DU_KEY_RIGHT || code == DU_KEY_LEFT) {
             d->sh.about_tab = (d->sh.about_tab + (code == DU_KEY_LEFT || (d->sh.modifiers & DU_SHIFT) ? 2 : 1)) % 3;
+            d->sh.about_scroll = 0;
             d->sh.want_reload |= 2;
             damage(d, desk_outer(c));
         }

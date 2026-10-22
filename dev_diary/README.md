@@ -175,3 +175,5 @@ Documenti di design, validazione, fonti esterne.
 | [Quarta immagine 1.0.0 alpha 5a10eef4…: tredici fusioni correttive, gate f0-core verde su QEMU (parziale), prova T23 con esperimento ecpoll](2026-10-22-04-immagine-1-0-0-alpha-quarta.md) | 22 ottobre 2026 | release, integrazione |
 | [Prova T23 5a10eef4…: motore Savage ok ma inutilizzato, blackout = accessi EC, TD UHCI bloccato, NetSurf senza rete; quattro direttive](2026-10-22-05-prova-t23-5a10eef4.md) | 22 ottobre 2026 | prova hardware, analisi |
 | [Quinta immagine 1.0.0 alpha a4d9454e…: EC→SMI risolto, ring UHCI, motore 2D usato dal desktop, e100 e DHCP; gate QEMU e suite verdi](2026-10-22-06-immagine-1-0-0-alpha-quinta.md) | 22 ottobre 2026 | release, integrazione |
+| [Prova T23 a4d9454e…: SMI risolti, ma il desktop satura la CPU (40 fps interi), musica e browser affamati, cursore doppio, tasti volume; tre direttive](2026-10-22-07-prova-t23-a4d9454e.md) | 22 ottobre 2026 | prova hardware, analisi |
+| [Decisione: compositore sul modello Windows 98/X11 con regioni X11 e pixman (f2-95 em. 1)](2026-10-22-08-decisione-compositore-modello-win98-x11.md) | 22 ottobre 2026 | decisione (desktop) |

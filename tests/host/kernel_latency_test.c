@@ -112,6 +112,10 @@ static void reset(void)
     share_ready=0;share_credit=0;share_tick=0;share_scale=1;share_turn=share_picked=false;desktop_share=true;
     memset(&share_stats,0,sizeof(share_stats));memset(&share_base,0,sizeof(share_base));
     inherit_used=inherit_lost=0;
+    /* f1-101 audio producer boost and records */
+    memset(producer_sources,0,sizeof(producer_sources));memset(producer_cpu,0,sizeof(producer_cpu));
+    producer_cpu_total=producer_tick=0;producer_scale=1;producer_slot=0;producer_over=false;audio_producer=true;
+    producer_used=producer_lost=0;
     last_measured=0;last_preempted=false;
     g_task_switches=g_task_switches_other=g_switch_target=0;g_measure_stop=false;
     memset(classes,0,sizeof(classes));memset(paths,0,sizeof(paths));
@@ -120,6 +124,7 @@ static void reset(void)
     forced=threshold=resched_pending=false;record_bytes=0;records[0]=0;g_boot.flags=0;
     memset(&timing_fixture,0,sizeof(timing_fixture));
     memset(&irqoff,0,sizeof(irqoff)); memset(&irqoff_window,0,sizeof(irqoff_window)); fpu_cost=0;
+    irqoff_credited=irqoff_last_end=pit_last=pit_phase=0; firmware_window=firmware_max=0; firmware_count=0; /* f2-96 */
     cpu_switch(0,&idle);
 }
 static void run_tick(uint32_t eip)

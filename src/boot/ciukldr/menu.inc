@@ -541,9 +541,9 @@ config_read:
     ; safe=0, serial=1, accel=0, usbscan=0 and ecpoll=0/1 change nothing
     ; here: a normal option never clears a positive safe-mode source;
     ; B(options) keeps accel=0 (the kernel declines acceleration before
-    ; marker I/O), usbscan=0 and ecpoll=0/1 (f1-100: the ThinkPad EC volume
-    ; poll is off unless ecpoll=1), policies the kernel reads from the copied
-    ; options.
+    ; marker I/O), usbscan=0 and ecpoll=0/1 (f2-96: the ThinkPad EC volume
+    ; poll runs every 2 s by default, ecpoll=0 turns it off, ecpoll=1 selects
+    ; 1 Hz), policies the kernel reads from the copied options.
     cmp bx, safe_option
     jne .serial
     or dword [B(flags)], CBI_F_SAFE_MODE

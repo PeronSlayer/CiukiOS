@@ -138,3 +138,19 @@ Decode up to 4096 frames per batch, yield only above half-full, and wake the
 reader when audible retirement frees a complete batch. Publishing PCM does
 not block or rendezvous with the pump. Existing timed pumping needs no new
 kernel readiness feature.
+
+## F1-101 prefill, reservoir target and the kernel producer boost (2026-10-22)
+
+Playback starts after `MUSIC_PREFILL_MS` (1 s) of decoded PCM instead of two
+seconds. The player defends a `MUSIC_TARGET_MS` (500 ms) reservoir: below it
+the pump keeps the device stream at `MUSIC_DEVICE_BEHIND` (1280 frames), one
+period under the kernel's producer mark, so the mixer reports the stream
+behind its target lead and the kernel raises the decoder (the thread that
+issues `AUDIO_REFILL_READ`) and the pump (the writer) to the device band's
+lower edge within the shared 20 %/100 ms producer budget; at the target, or
+at the end of the file, the pump fills the 2048-frame stream as before. The
+reader still fills the ring when the CPU allows, so the f4-34 storage-stall
+tolerance stays. The level record ends with
+`boost=<flags> boosts=<n> boost_ms=<n> over=<n>` from `AUDIO_GET_PRODUCER`
+(flags 1 behind, 2 boosted, 4 withheld; window deltas). Research, decisions
+and replay results: `docs/validation/f1-101-audio-producer-priority.md`.

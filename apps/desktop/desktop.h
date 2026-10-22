@@ -75,6 +75,7 @@ struct desk_vram_entry {
 #define DESK_FRAME_NS 16666667ull /* VBE does not expose measured refresh; conservative 60 Hz */
 #define DESK_SMALL_FRAME_NS 33333333ull  /* f2-95: 30 fps for continuous small damage */
 #define DESK_INPUT_ACTIVE_NS 250000000ull /* f2-95: input this recent keeps the display rate */
+#define DESK_POINTER_RETRY_NS 1000000000ull /* f2-96: software pointer offered back to the engine */
 struct desk_gfx_stats {
     uint32_t serial,app_serial,render_us,submit_us,wait_us;
     uint32_t width,height,source_w,source_h,view_w,view_h;
@@ -306,7 +307,17 @@ struct desktop {
     int (*gfx_benchmark)(struct desktop *, unsigned, uint64_t result[3]);
     uint64_t gfx_next_bench_ns;
     uint32_t accel_generation, accel_caps;
-    int hw_cursor;
+    /* hw_cursor: the hardware cursor is loaded and owns the pointer.
+     * f2-96: hw_cursor_shown: the hardware cursor may be visible (SHOW 1
+     * succeeded and no CURSOR_SET, SHOW 0, engine loss or new generation
+     * hid it since). The software pointer is drawn only when both are 0,
+     * so the two are never on screen together. Busy/stale answers keep the
+     * owner and retry next frame; other errors hide the hardware cursor and
+     * fall back to software; a software pointer is offered back to the
+     * engine at most once per DESK_POINTER_RETRY_NS. */
+    int hw_cursor, hw_cursor_shown;
+    uint64_t hw_cursor_retry_ns;
+    unsigned hw_cursor_retries, hw_cursor_fallbacks;
     int32_t cursor_x, cursor_y;
     /* A move can copy only a clean, unobscured window. Other exposure is damage. */
     int copy_pending, copy_client;

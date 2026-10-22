@@ -769,16 +769,20 @@ static int accel_record_line(const struct desktop *d, char *line, size_t size, u
     int engine=s->accel_fills || s->accel_copies || s->accel_writes || s->accel_fallback;
     if (!engine && (!s->frames || now-*quiet_ns<60000000000ull)) return 0;
     if (!engine) *quiet_ns=now;
-    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u\n",
+    /* f2-96: who draws the pointer (hw, sw, or hiding: a hardware cursor
+     * still to be hidden), busy retries and software fallbacks since boot. */
+    const char *pointer=d->hw_cursor ? "hw" : d->hw_cursor_shown ? "hiding" : "sw";
+    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u\n",
         (unsigned long long)s->accel_fills,(unsigned long long)s->accel_copies,(unsigned long long)s->accel_writes,
         (unsigned long long)s->accel_fallback,(unsigned long long)s->cache_rows,(unsigned long long)s->frames,
-        (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u);
+        (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u,
+        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks);
     return n>0 && (size_t)n<size ? n : 0;
 }
 static void accel_record(struct desktop *d, uint64_t now)
 {
     static uint64_t quiet_ns;
-    char line[256]; int n=accel_record_line(d,line,sizeof(line),now,&quiet_ns);
+    char line[320]; int n=accel_record_line(d,line,sizeof(line),now,&quiet_ns);
     if (n) (void)write(STDERR_FILENO,line,(size_t)n);
 }
 static void performance_sample(struct desktop *d, uint64_t now)

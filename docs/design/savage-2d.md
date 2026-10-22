@@ -4,6 +4,47 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f2-96: one pointer on screen
+
+Written 2026-10-22. Evidence: T23 image a4d9454e, owner's photo of the
+hardware cursor and the software cursor a few pixels apart; disk log records
+`[accel] savage mapped … cursor=f869f000` three times (two full-screen DOS
+transitions restarted the engine). Validation and expected records:
+[f2-96](../validation/f2-96-cursor-ec-volume.md).
+
+Finding. The compositor dropped the hardware owner (`hw_cursor=0`) on *any*
+failed CURSOR_SET/MOVE/SHOW and on any failed QUERY, without hiding the
+hardware cursor, and re-armed it only on a capability gain or a new
+generation. fbdev answers EBUSY (`changing`, another presenter's drawing
+claim, including the f2-92 1 ms in-flight slices) or EAGAIN (stale
+generation) without touching the cursor, so one busy answer left the
+hardware cursor frozen at its last position and the software pointer drawn
+beside it, for good. A busy QUERY also raised a false engine-loss notice. A
+client (v3) pointer likewise left the software pointer in place after it
+ended.
+
+Decision (`apps/desktop/compositor.c`, `desktop.h`):
+- `hw_cursor` (the engine owns the pointer) and `hw_cursor_shown` (the
+  hardware cursor may be visible); the software pointer is drawn only when
+  both are clear.
+- EBUSY/EAGAIN/EINTR keep the owner and the known capabilities; the request
+  is repeated on the next frame (the scanout is complete).
+- Any other refusal hides the hardware cursor (CURSOR_SHOW 0) before the
+  software pointer is drawn; while that hide is busy nothing is drawn beside
+  the frozen hardware cursor.
+- Engine loss (capabilities without bit 1), a new generation (fbdev stops the
+  engine, the lease path hides the cursor) and CURSOR_SET (savage2d hides
+  before loading) clear `hw_cursor_shown` without a request.
+- A software pointer is offered back to the engine on the next frame after a
+  client pointer ends, and at most once a second after a refusal; that frame
+  restores the old footprint from RAM and makes no screen copy.
+- `[desktop] accel … pointer=hw|sw|hiding pointer_retries=<n>
+  pointer_fallbacks=<n>`.
+
+Host evidence: `tests/host/desktop/pointer_test.c` with 20 golden frames
+(`pointer-goldens.json`); the pre-f2-96 compositor shows both pointers after
+one busy CURSOR_MOVE (negative control in the validation record).
+
 ## f2-92: the display service draws with the engine
 
 Written 2026-10-22. Evidence: T23 image 5a10eef4 (`build/codex/t23-5a10eef4-serial.txt`

@@ -126,7 +126,7 @@ static void engine(const char *fixtures, const char *scratch)
 {
     _Static_assert(sizeof(((struct music_player *)0)->ring)==512*1024,"reservoir budget");
     struct music_player *p=calloc(1,sizeof(*p)); assert(p);
-    struct sink s={.blocked=1}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s,NULL};
+    struct sink s={.blocked=1}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s,NULL,NULL};
     music_player_init(p,&o,NULL,NULL); struct music_command c={.action=MUSIC_OPEN}; path(c.path,fixtures,"tone.ogg");
     assert(!music_player_command(p,&c) && p->view.state==MUSIC_LOADING && p->view.playlist.count==1);
     ready(p);
@@ -167,7 +167,7 @@ static void engine(const char *fixtures, const char *scratch)
 }
 static void runtime(const char *fixtures)
 {
-    struct sink s={.blocked=1}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s,NULL};
+    struct sink s={.blocked=1}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s,NULL,NULL};
     struct music_runtime *rt=music_runtime_start(&o); assert(rt);
     struct music_command c={.action=MUSIC_OPEN}; path(c.path,fixtures,"tone.mp3"); assert(!music_runtime_send(rt,&c));
     struct music_snapshot *snapshot=calloc(1,sizeof(*snapshot)); assert(snapshot);

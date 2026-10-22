@@ -34,7 +34,8 @@ int ciuki_win32_presenter_lease(struct desktop *d,uint32_t pid,int acquire,int m
         d->v3_lease_tuple.token=a.token;d->v3_lease_tuple.generation=a.generation;
         d->v3_lease_tuple.mode=a.mode;d->v3_lease_tuple.scale=a.scale;
         d->v3_lease_tuple.surface=a.surface;
-        d->hw_cursor=0;d->cursor_loaded=DESK_CURSOR_COUNT;d->cursor_valid=0;
+        /* The kernel hid the hardware cursor before granting (display_present). */
+        d->hw_cursor=d->hw_cursor_shown=0;d->cursor_loaded=DESK_CURSOR_COUNT;d->cursor_valid=0;
     }
     if (!acquire || error) {
         d->scanout_valid=d->frame_valid=0;d->cursor_valid=0;

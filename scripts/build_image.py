@@ -42,7 +42,7 @@ def wallpaper_cache_payloads(out=None):
     # the checkout time of the asset no longer affects the seeded file names.
     mtime = 0
     units = ("render_wallpaper.c", "wallpaper_io.c", "wallpaper.c", "image.c", "settings.c", "theme.c")
-    inputs = {"sources": {name: sha256(ROOT / "apps/desktop" / name) for name in (*units, "wallpaper_io.h", "wallpaper.h", "settings.h", "theme.h", "ui_fonts.h", "desktop.h", "shell.h", "protocol.h")},
+    inputs = {"sources": {name: sha256(ROOT / "apps/desktop" / name) for name in (*units, "wallpaper_io.h", "wallpaper.h", "settings.h", "theme.h", "ui_fonts.h", "desktop.h", "shell.h", "credits.inc", "protocol.h")},
               "stb_sha256": sha256(ROOT / "third_party/stb/stb_image.h"),
               "source_sha256": sha256(source), "source_size": source.stat().st_size}
     manifest = out / "manifest.json"

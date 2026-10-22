@@ -676,6 +676,14 @@ from the shared budget and has its own 2 ms per 10 ms budget, so device-class
 CPU may reach 6 ms per 10 ms; refill overruns are recorded separately
 (`audio_refill_overrun`). `device_attribution` keeps the previous all-tasks
 demotion as the replay's negative control only.
+Amendment f2-96 (2026-10-22): firmware (SMM) time proven by cpustat is left
+out of every scheduler budget (device, audio refill, desktop share) and of
+the audio service deadline; CPU statistics stay raw. Proofs: a gap of 1 ms or
+more between two marks of straight-line IF-clear phases (the f1-94 rule), and
+a PIT interrupt more than one period late with IF set, credited from the
+missed edge (by the PIT phase) to the entry. Record `[sched] firmware_credit
+count= us= max_us=` per window with credit
+([f2-96](../validation/f2-96-cursor-ec-volume.md)).
 Focused DOS preference must fit into the CPU time left after device service;
 it may use at most 80% of that remainder, preserving desktop/background
 progress. This is a proposed reconciliation of the existing 8/10 policy,
@@ -703,6 +711,13 @@ of every millisecond (2.5 ms banked) ahead of the focused VM's preference,
 behind device service and the starvation boost; a holder that a desktop
 thread waits for borrows that share (`[sched] desktop_share` record). The
 80 % cap stays.
+
+Amendment f1-101 (lead, 2026-10-22): the threads that write to an open
+audio stream or read its refill (`AUDIO_REFILL_READ`) run at level 16, the
+device band's lower edge, while the mixer measures the stream more than one
+period behind its target lead; all such producers share 20 ms of boosted CPU
+per sliding 100 ms, not charged to the device or refill budgets
+(`[sched] audio_producer` record; `AUDIO_GET_PRODUCER` reads the state).
 
 ### R3: timer and audio deadlines (R03/R06)
 

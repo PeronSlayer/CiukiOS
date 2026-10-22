@@ -11,3 +11,13 @@
 3. Loader tokens within the budget; `test_kernel_latency`, the EC and desktop tests.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f2-96-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 19:22, decisions on the delivery)
+
+Accepted. The kernel mirrors the EC level into the shared master and leaves
+the codec at unity (the ThinkPad amplifier follows the AC'97 mixer under
+firmware control); if the T23 shows the tray moving without an audible
+change, the codec master takes the level (one-line policy in `ac97.c`). The
+exclusion of kernel-proven SMI time from the scheduler budgets and the audio
+deadline (`[sched] firmware_credit`) is accepted as an amendment to the
+f1-90/f1-94 accounting in R1/R2; CPU statistics stay raw.
