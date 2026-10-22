@@ -20,11 +20,9 @@ import qmp  # noqa: E402
 # (label, qcode list pressed together then released, pause after in seconds)
 ROUTE = [
     ('start', ['meta_l'], 1.5),
-    ('down1', ['down'], .4), ('down2', ['down'], .4), ('settings', ['down'], .4),
-    ('open-settings', ['right'], .8),
-    ('down-sep', ['down'], .4), ('appearance', ['down'], .4),
-    ('open-appearance', ['right'], .8),
-    ('display', ['ret'], 0),
+    ('down1', ['down'], .4), ('settings', ['down'], .4),
+    ('open-settings', ['right'], 3.0),
+    ('display', 'mouse', 0),  # double-click the Display item (list at ~265,141 from the pointer's centre 512,395)
 ]
 
 
@@ -81,6 +79,15 @@ def main():
         spawned = time.monotonic() - t0
         time.sleep(args.desktop_wait); shot('desktop')
         for label, keys, pause in ROUTE:
+            if keys == 'mouse':
+                # Settings submenu is open: hover Appearance (255,135), then click Display (412,136).
+                q.input_events([{'type': 'rel', 'data': {'axis': 'x', 'value': -257}}, {'type': 'rel', 'data': {'axis': 'y', 'value': -260}}])
+                time.sleep(.8); shot('hover-appearance')
+                q.input_events([{'type': 'rel', 'data': {'axis': 'x', 'value': 157}}, {'type': 'rel', 'data': {'axis': 'y', 'value': 1}}])
+                time.sleep(.4)
+                q.input_events([{'type': 'btn', 'data': {'down': True, 'button': 'left'}}]); time.sleep(.06)
+                q.input_events([{'type': 'btn', 'data': {'down': False, 'button': 'left'}}])
+                time.sleep(pause); continue
             q.input_events([key(k, True) for k in keys]); time.sleep(.08); q.input_events([key(k, False) for k in keys])
             if label in ('start', 'open-appearance'): time.sleep(.5); shot(label)
             time.sleep(pause)

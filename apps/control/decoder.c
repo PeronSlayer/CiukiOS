@@ -27,7 +27,9 @@ static int read_decode(const char *path, struct desk_image *out)
     size_t cap = 1 << 16, n = 0; uint8_t *data = malloc(cap);
     while (data) {
         if (n == cap) { if (cap >= DESK_IMAGE_FILE_MAX) { free(data); data = NULL; break; } uint8_t *g = realloc(data, cap * 2); if (!g) { free(data); data = NULL; break; } data = g; cap *= 2; }
-        size_t got = fread(data + n, 1, cap - n, f);
+        size_t want = cap - n > 65536 ? 65536 : cap - n;
+        size_t got = fread(data + n, 1, want, f);
+        nanosleep(&(struct timespec){.tv_sec = 0, .tv_nsec = 1000000}, NULL);   /* no thread priority API in the SDK: give the UI thread the CPU between chunks */
         if (!got) break;
         n += got;
     }

@@ -224,6 +224,19 @@ static void preview_build(struct cp_app *a)
     } else for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
     a->preview_valid = 1;
 }
+/* f2-88b: the 192x144 preview as one clipped row copy per scanline (was 27,648 one-pixel fills). */
+static void preview_blit(struct du_canvas *c, int x, int y, const uint32_t *src)
+{
+    int x0 = x < c->clip.x ? c->clip.x : x, x1 = x + 192 > c->clip.x + c->clip.w ? c->clip.x + c->clip.w : x + 192;
+    int y0 = y < c->clip.y ? c->clip.y : y, y1 = y + 144 > c->clip.y + c->clip.h ? c->clip.y + c->clip.h : y + 144;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > c->width) x1 = c->width;
+    if (y1 > c->height) y1 = c->height;
+    if (x1 <= x0 || y1 <= y0) return;
+    for (int row = y0; row < y1; row++)
+        memcpy(c->pixels + (size_t)row * (size_t)c->width + (size_t)x0, src + (row - y) * 192 + (x0 - x), (size_t)(x1 - x0) * sizeof(uint32_t));
+}
 static void put(struct du_canvas *c, int x, int y, int w, int h, uint32_t colour) { du_fill(c, (struct du_rect){x, y, w, h}, colour); }
 static void paint(struct du_ui *u, void *user)
 {
@@ -245,7 +258,7 @@ static void paint(struct du_ui *u, void *user)
         put(c, 24, 44, 208, 160, DU_FACE);
         du_edge(c, (struct du_rect){24, 44, 208, 160}, DU_RAISED);
         du_edge(c, (struct du_rect){30, 50, 196, 148}, DU_SUNKEN);
-        for (int y = 0; y < 144; y++) for (int x = 0; x < 192; x++) put(c, 32 + x, 52 + y, 1, 1, a->preview[y * 192 + x]);
+        preview_blit(c, 32, 52, a->preview);
         put(c, 108, 204, 40, 6, DU_SHADOW); put(c, 92, 210, 72, 4, DU_FACE); du_edge(c, (struct du_rect){92, 210, 72, 5}, DU_RAISED_THIN);
         /* The chosen theme in miniature: top bar with the Ciuki button, taskbar and a window. */
         const struct desk_theme *t = chosen(a);

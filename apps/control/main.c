@@ -313,10 +313,13 @@ static int close_request(struct du_window *w, void *user)
       du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); m->ui.dirty=1; return 0;
   }
   remember_size(m); return cp_close(&m->app); }
+/* The kernel's debug_write path is a plain klog line ("[user N] ...": serial, console and the protected boot
+ * log), not a debug-only sink. The trailing newline is dropped: debug_write maps control bytes to '.'. */
 static void raw_log(const char *line)
 {
 #ifdef __i386__
-    (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line,(uint32_t)strlen(line),0,0,0,0);
+    size_t n=strlen(line); if (n && line[n-1]=='\n') n--;
+    (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line,(uint32_t)n,0,0,0,0);
 #else
     fputs(line,stderr);
 #endif

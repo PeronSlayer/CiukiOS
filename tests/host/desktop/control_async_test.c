@@ -106,6 +106,16 @@ int main(void)
         assert(a.decode_wait && worst < 100000000ull);
     }
     cp_detach(&a); desk_image_free(&a.image);
+    /* f2-88b: the preview reaches the canvas by row copies, pixel-exact, in a few ms of UI time. */
+    pending_polls = 0; attach(CP_DISPLAY, 0, 1); du_render(&u); settle(3);
+    assert(a.preview_valid && a.preview[20 * 192 + 150] == 0xff445566u);
+    {
+        struct timespec t0, t1; u.dirty = 1;
+        clock_gettime(CLOCK_MONOTONIC, &t0); du_render(&u); clock_gettime(CLOCK_MONOTONIC, &t1);
+        assert(u.canvas.pixels[(52 + 20) * CP_WIDTH + 32 + 150] == 0xff445566u);
+        assert((t1.tv_sec - t0.tv_sec) * 1000000000ll + (t1.tv_nsec - t0.tv_nsec) < 50000000ll);   /* 5 ms target on the T23; 50 ms host/ASan ceiling */
+    }
+    cp_detach(&a); desk_image_free(&a.image);
     pending_polls = 0;
     attach(CP_DISPLAY, 1, 1); du_render(&u);
     assert(strstr(a.engine_line, "status unavailable"));
