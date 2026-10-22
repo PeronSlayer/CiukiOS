@@ -13,6 +13,9 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.frame_ms)==76,
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.events)==80,"DOSVM events ABI");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.reserved)==84,"DOSVM wait reserved ABI");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.redraw)==80,"DOSVM redraw ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)==84,"DOSVM row opt-in ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
+_Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
 static const struct expectation expectations[] = {
     {"constant.ENOTSOCK", ENOTSOCK, 88u},
     {"constant.EDESTADDRREQ", EDESTADDRREQ, 89u},
@@ -783,6 +786,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_STATUS", (uint32_t)(CIUKI_DOSVM_STATUS), 6u},
     {"constant.CIUKI_DOSVM_LAUNCH", (uint32_t)(CIUKI_DOSVM_LAUNCH), 7u},
     {"constant.CIUKI_DOSVM_PRESENT_BANDS", (uint32_t)(CIUKI_DOSVM_PRESENT_BANDS), 8u},
+    {"constant.CIUKI_DOSVM_PRESENT_SCANLINES", (uint32_t)(CIUKI_DOSVM_PRESENT_SCANLINES), 1u},
     {"constant.CIUKI_DOSVM_FULLSCREEN", (uint32_t)(CIUKI_DOSVM_FULLSCREEN), 9u},
     {"constant.CIUKI_DOSVM_BACKGROUND", (uint32_t)(CIUKI_DOSVM_BACKGROUND), 10u},
     {"constant.CIUKI_DOSVM_WAIT_PRESENT", CIUKI_DOSVM_WAIT_PRESENT, 11u},
@@ -1791,5 +1795,6 @@ int main(int argc, char **argv)
         CIUKI_SIGBIT(SIGCHLD) != UINT64_C(65536))
         return fail("signal/wait macros", "contract result differs");
     printf("abi layout: PASS (%zu target/native contract checks; off_t=8 time_t=8)\n", count);
+    fflush(stdout);
     return 0;
 }

@@ -565,6 +565,14 @@ static int menu_hit(const struct sh_menu *m, int32_t x, int32_t y)
     }
     return -2;
 }
+static void menu_highlight(struct desktop *d,struct sh_menu *m,int hot)
+{
+    if(hot==m->hot)return;
+    int rows[]={m->hot,hot};
+    for(unsigned i=0;i<2;i++)if(rows[i]>=0 && rows[i]<m->count)
+        damage(d,(struct desk_box){m->box.x+2,item_y(m,rows[i]),m->box.w-4,item_h(m,rows[i])});
+    m->hot=hot;
+}
 static void icon_open(struct desktop *d, int index);
 static void launch_named(struct desktop *d, const char *name, const char *argument)
 {
@@ -1012,7 +1020,8 @@ void desk_shell_tray_damage(struct desktop *d, int previous_width)
     struct desk_box t = tray_box(d);
     int dx = t.w - previous_width;
     if (!dx) { damage(d, t); return; }
-    damage(d, (struct desk_box){0,0,(int)d->width,DESK_BAR});
+    int left=t.x+(dx<0 ? dx : 0);
+    damage(d, (struct desk_box){left,0,(int)d->width-left,DESK_BAR});
     if (d->sh.volume_open) damage_moved_popup(d, volume_icon_box(d), dx, 92, 168);
     if (d->sh.network_open) damage_moved_popup(d, network_icon_box(d), dx, 272, 112);
     if (d->sh.media_open) damage_moved_popup(d, media_icon_box(d), dx, 248, 28 + (int)media_rows(d) * 22);
@@ -1748,6 +1757,21 @@ void desk_shell_overlay(struct desktop *d, struct desk_box clip)
     if (d->sh.media_open) draw_media(d,clip);
     if (d->sh.tooltip && !d->sh.notification.active && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels) draw_tooltip(d, clip);
     if (d->sh.switcher) draw_switcher(d, clip);
+}
+/* Opaque overlay bodies, shared with foreign-surface clipping. Shadows and
+ * the notification's tail remain dependent on the pixels underneath. */
+unsigned desk_shell_occluders(const struct desktop *d,struct desk_box *boxes)
+{
+    unsigned n=0;if(!d->shell)return 0;
+    if(d->sh.notification.active)boxes[n++]=notification_box(d);
+    for(int l=0;l<d->sh.levels;l++)boxes[n++]=d->sh.menus[l].box;
+    if(d->sh.volume_open)boxes[n++]=volume_popup(d);
+    if(d->sh.network_open)boxes[n++]=network_popup(d);
+    if(d->sh.media_open)boxes[n++]=media_popup(d);
+    if(d->sh.tooltip && !d->sh.notification.active && !d->sh.volume_open &&
+       !d->sh.network_open && !d->sh.media_open && !d->sh.levels)boxes[n++]=tooltip_box(d);
+    if(d->sh.switcher)boxes[n++]=switcher_box(d);
+    return n;
 }
 /* The window icon in a gradient title bar (compositor.c, weak hook). */
 const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
@@ -2522,7 +2546,7 @@ void desk_shell_motion(struct desktop *d)
         int k = desk_start_contains(d,x,y) ? -1 : menu_hit(m, x, y);
         if (k == -1) continue;
         int hot = k >= 0 ? k : -1;
-        if (hot != m->hot) { m->hot = hot; damage(d, m->box); }
+        menu_highlight(d,m,hot);
         if (k >= 0 && m->items[k].action == SH_ACT_SUBMENU) submenu(d, l, k);
         else if (k >= 0 && l + 1 < d->sh.levels) {
             for (int j = l + 1; j < d->sh.levels; j++) damage(d, outer(d->sh.menus[j].box));
@@ -2596,7 +2620,10 @@ void desk_shell_clock_damage(struct desktop *d, uint64_t previous)
          * width can differ, so clear the bounded date region at that edge. */
         if (d->realtime_second/86400!=previous/86400)
             damage(d,(struct desk_box){(int)d->width-300,0,300,DESK_BAR});
-        if (d->sh.tooltip) damage(d,tooltip_box(d));
+        if (d->sh.tooltip==1 && d->realtime_second/86400!=previous/86400) {
+            if(d->sh.tooltip_painted)damage(d,d->sh.tooltip_last);
+            damage(d,tooltip_box(d));
+        }
     }
     if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) {
         /* Proportional digits and 12-hour rollover can move every tray icon
@@ -2621,13 +2648,13 @@ static int menu_key(struct desktop *d, int code)
     struct sh_menu *m = &d->sh.menus[l];
     switch (code) {
     case DU_KEY_UP: case DU_KEY_DOWN:
-        m->hot = menu_step(m, m->hot < 0 ? (code == DU_KEY_UP ? 0 : m->count - 1) : m->hot, code == DU_KEY_UP ? -1 : 1);
-        damage(d, m->box); return 1;
+        menu_highlight(d,m,menu_step(m, m->hot < 0 ? (code == DU_KEY_UP ? 0 : m->count - 1) : m->hot, code == DU_KEY_UP ? -1 : 1));
+        return 1;
     case DU_KEY_RIGHT:
         if (m->hot >= 0 && m->items[m->hot].action == SH_ACT_SUBMENU) {
             submenu(d, l, m->hot);
             struct sh_menu *s = &d->sh.menus[d->sh.levels - 1];
-            if (s != m) { s->hot = menu_step(s, s->count - 1, 1); damage(d, s->box); }
+            if (s != m) menu_highlight(d,s,menu_step(s,s->count-1,1));
         }
         return 1;
     case DU_KEY_LEFT:

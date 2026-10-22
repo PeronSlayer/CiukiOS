@@ -1447,6 +1447,7 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_STATUS 6u
 #define CIUKI_DOSVM_LAUNCH 7u /* arm command visibility before its final Enter */
 #define CIUKI_DOSVM_PRESENT_BANDS 8u /* PRESENT plus destination 8-line damage */
+#define CIUKI_DOSVM_PRESENT_SCANLINES 1u /* opt-in PRESENT_BANDS flags */
 #define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
 #define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
 #define CIUKI_DOSVM_WAIT_PRESENT 11u /* observe frame/lifecycle events, no drawing */
@@ -1489,12 +1490,21 @@ struct ciuki_dosvm_command {
     uint32_t video_mode; /* 36 */
     char name[32]; /* 40 */
     union {
+      struct {
+       union {
         struct ciuki_input_event event; /* 72: INPUT */
         struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
-        struct { uint32_t bands[2], redraw, reserved[7]; } presentation; /* bands output; redraw input 0/1 */
+        struct { uint32_t bands[2], redraw, flags, reserved[6]; } presentation; /* bands output; redraw input 0/1 */
         struct { uint32_t timeout_ms, frame_ms, events, reserved[7]; } wait; /* WAIT_PRESENT */
+       };
+       struct ciuki_rect damage; /* 112 */
+      };
+      /* PRESENT_BANDS with flags=SCANLINES returns 480 exact row bits.
+       * The bitmap overlays the entire event/presentation/damage tail.
+       * Legacy callers (flags=0) retain the original damage rectangle.
+       * An older kernel rejects flags with EINVAL; retry with flags=0. */
+      struct { uint32_t bits[15], reserved; } scanlines;
     };
-    struct ciuki_rect damage; /* 112 */
 };
 
 #pragma pack(pop)

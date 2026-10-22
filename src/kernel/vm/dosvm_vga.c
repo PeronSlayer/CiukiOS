@@ -887,6 +887,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
 {
     memset(damage, 0, sizeof(*damage));
     v->video_bands = 0;
+    memset(v->video_rows,0,sizeof(v->video_rows));
     if (v->fullscreen || v->fullscreen_hold) return 0;
     if (v->launch_armed && !v->launch_ready) return 0;
     if (v->vbe_mode) return dosvm_vbe_present(v,row,arg,tick,damage);
@@ -940,7 +941,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     bool full = !v->video_presented || v->video_display != display ||
                 memcmp(&g, &v->video_geometry, sizeof(g));
     bool borders = !v->video_presented || memcmp(&g, &v->video_geometry, sizeof(g));
-    bool planar_cached = v->video_modex && v->video_presented;
+    bool planar_cached = (v->video_modex || v->video_chain4) && v->video_presented;
     if (full) {
         unsigned base, pan;
         v->video_chain4 = supported && cvga_chain4_row(scan, 0, &base, &pan);
@@ -982,7 +983,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             (g.text && (phase ^ v->video_phase) && cvga_row_phase_sensitive(scan, y)))) {
             bool force = !planar_cached || borders || palette_changed || g.blank ||
                 v->video_geometry.blank != g.blank || v->video_dac_mask != scan->dac_mask;
-            if (!v->video_modex || video_planar_changed(v, scan, y, g.width, force)) {
+            if (!indexed || video_planar_changed(v, scan, y, g.width, force)) {
                 bands[band] = 1; dirty_rows[y] = 1;
             }
         }
@@ -1025,12 +1026,14 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             rendered = source;
         }
         int e = row(arg, y, v->video_pixels, sizeof(v->video_pixels));
-        if (e) {
+        if (e<0) {
             v->perf.present_cycles += dosvm_perf_task_clock() - begin;
             v->video_presented = false; return e;
         } /* retry whole after a partial write */
+        if (e>0) continue; /* destination already contains this scanline */
         v->perf.rows++;
         v->video_bands |= 1ull << (y / DOSVM_VIDEO_BAND);
+        v->video_rows[y/32] |= 1u<<(y%32);
         if (y < first) first = y;
         last = y + 1;
     }

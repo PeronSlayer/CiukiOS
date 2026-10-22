@@ -453,23 +453,13 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
     struct desk_box old = desk_outer(c), frame = c->frame;
     int continuing=d->copy_pending && d->copy_client==i &&
         d->copy_rect.width==(uint32_t)frame.w && d->copy_rect.height==(uint32_t)(frame.h-desk_theme->radius);
-    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->menu_open && !d->sh.levels &&
-        !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state && !d->animation.active &&
+    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->power.state && !d->animation.active &&
         !c->internal && !c->collapsed && !c->minimized && c->order>0;
-    struct desk_box next = {x,y,frame.w,frame.h}, ignored;
-    struct desk_box source=continuing ?
-        (struct desk_box){d->copy_rect.src_x,d->copy_rect.src_y,(int)d->copy_rect.width,(int)d->copy_rect.height} :
-        (struct desk_box){frame.x,frame.y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
-    struct desk_box destination={x,y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
-    if (desk_shell_chrome_intersects(d,source) || desk_shell_chrome_intersects(d,destination)) copy=0;
 
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
         frame.y+frame.h > (int32_t)d->height) copy=0;
-    for (int j=0; j<DESK_CLIENTS && copy; j++) {
-        struct desk_client *other=&d->clients[j];
-        if (j!=i && other->window && !other->minimized && other->order>c->order &&
-            (desk_intersect(desk_outer(other),frame,&ignored) || desk_intersect(desk_outer(other),next,&ignored))) copy=0;
-    }
+    /* The compositor clips the copy against both the old and new visible
+     * regions. A higher window no longer disables the entire BitBlt. */
     if (d->copy_pending && !copy) {
         for (unsigned k=0;k<d->move_damage.count;k++)
             desk_damage_add(&d->damage,d->move_damage.boxes[k],d->width,d->height);
@@ -608,11 +598,11 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             .view_w=p.width,.view_h=p.height,
             .slot_ns=d->next_frame_ns>received ? d->next_frame_ns-received : 0};
         if (c->minimized || c->collapsed) { desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS); break; }
-        if (p.ui_w && p.ui_h) desk_damage_add(&d->damage,
-            (struct desk_box){content.x+(int)p.ui_x,content.y+(int)p.ui_y,(int)p.ui_w,(int)p.ui_h},d->width,d->height);
+        if (p.ui_w && p.ui_h) desk_client_damage(d,i,
+            (struct desk_box){content.x+(int)p.ui_x,content.y+(int)p.ui_y,(int)p.ui_w,(int)p.ui_h});
         if (changed && old.w && old.h) {
             old.x+=content.x; old.y+=content.y;
-            desk_damage_add(&d->damage,old,d->width,d->height);
+            desk_client_damage(d,i,old);
         }
         struct desk_box dirty=region;
         if (!changed && p.source_w && p.damage_w && p.damage_h) {
@@ -624,7 +614,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         /* No changed texels still needs a completion, but no upload. */
         if (changed || (p.damage_w && p.damage_h)) {
             dirty.x+=content.x; dirty.y+=content.y;
-            desk_damage_add(&d->damage,dirty,d->width,d->height);
+            desk_client_damage(d,i,dirty);
         }
         if (!d->damage.count) desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS);
         break;
@@ -726,7 +716,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         } else {
             struct desk_box b = desk_content(c);
             b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
-            if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
+            int visible=desk_client_damage(d,i,b);
+            /* The DOS producer has already waited for its VM's real VGA
+             * deadline. Do not quantize 35/70 Hz to the shell's 30/60 Hz. */
+            if (visible && c->dosbox && d->next_frame_ns>d->now_ns) d->next_frame_ns=d->now_ns;
         }
         /* A valid replacement surface can also carry the first rendered frame. */
         client_frame_ready(d,c);
@@ -746,8 +739,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_SET_TITLE:
         if (strcmp(c->title, p.title)) {
             memcpy(c->title, p.title, sizeof(c->title));
-            if (!c->minimized) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
-            if (d->shell) desk_damage_add(&d->damage, desk_taskbar(d), d->width, d->height);
+            desk_caption_damage(d,i);
         }
         break;
     case DESK_MOVE: desk_move(d, i, p.x, p.y); break;
@@ -1648,8 +1640,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         unsigned right=(((unsigned)p.x+p.width)*(unsigned)b.w+c->info.width-1)/c->info.width;
         unsigned bottom=(((unsigned)p.y+p.height)*(unsigned)b.h+c->info.height-1)/c->info.height;
         b.x+=(int)left; b.y+=(int)top; b.w=(int)(right-left); b.h=(int)(bottom-top);
-        if (!c->minimized) desk_damage_add(&d->damage,b,d->width,d->height);
-        if(p.opcode==DESK_V3_PRESENT){c->gl_present_request=p.request;return 0;}
+        int visible=desk_client_damage(d,i,b);
+        if(p.opcode==DESK_V3_PRESENT && visible){c->gl_present_request=p.request;return 0;}
         break;
     }
     case DESK_V3_WIN32_HWND:
@@ -1687,7 +1679,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         else if (d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
         break;
     case DESK_SET_TITLE:
-        memcpy(c->title,p.title,sizeof(c->title)); desk_damage_add(&d->damage,desk_outer(c),d->width,d->height); break;
+        if(strcmp(c->title,p.title)) { memcpy(c->title,p.title,sizeof(c->title));desk_caption_damage(d,i); }
+        break;
     case DESK_SET_CURSOR:
         if (p.index && !(c->v3_cursor_valid&(1u<<(p.index-1)))) error=-ENOENT;
         else { c->cursor=p.flags; c->v3_cursor=p.index; c->v3_visibility=p.result; d->cursor_loaded=DESK_CURSOR_COUNT; desk_cursor_update(d); }

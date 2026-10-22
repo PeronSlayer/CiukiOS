@@ -161,6 +161,50 @@ static void present_action_hook(void)
         present_action==11 || present_action==13 || present_action==14 || present_action==17 || present_action==18)
         CHECK(host_present_wakes>wakes);
 }
+static void test_exact_scanlines(void)
+{
+    window_fixtures();g_ticks=10000;
+    CHECK(!create_window(0,"Exact rows",&present_window));
+    struct dosvm *v=dosvm_lookup((struct dosvm_key){present_window.id,present_window.generation});
+    int10(v,0x13,0,0,0);
+    struct ciuki_dosvm_command c=command_for(present_window.id,present_window.generation);
+    c.presentation.flags=CIUKI_DOSVM_PRESENT_SCANLINES;c.presentation.redraw=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && c.changed);
+    for(unsigned i=0;i<15;i++)CHECK(c.scanlines.bits[i]==UINT32_MAX);
+    unsigned before=surface_rows;
+    uint8_t pixel=0x21;CHECK(!dosvm_write(v,0xA0000+17*320,&pixel,1));g_ticks+=50;
+    c=command_for(present_window.id,present_window.generation);c.presentation.flags=CIUKI_DOSVM_PRESENT_SCANLINES;
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && c.changed);
+    unsigned rows=0;for(unsigned i=0;i<15;i++)rows+=(unsigned)__builtin_popcount(c.scanlines.bits[i]);
+    CHECK(rows==2 && surface_rows-before==2);
+    CHECK(c.scanlines.bits[74/32]==((1u<<(74%32))|(1u<<(75%32))));
+    /* Dirty writes with identical values produce no surface copies/damage. */
+    before=surface_rows;CHECK(!dosvm_write(v,0xA0000+17*320,&pixel,1));g_ticks+=50;
+    c=command_for(present_window.id,present_window.generation);c.presentation.flags=CIUKI_DOSVM_PRESENT_SCANLINES;
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && !c.changed && surface_rows==before);
+    for(unsigned i=0;i<15;i++)CHECK(!c.scanlines.bits[i]);
+    /* Legacy bands remain usable; unknown option bits are rejected. */
+    pixel++;CHECK(!dosvm_write(v,0xA0000+25*320,&pixel,1));g_ticks+=50;
+    c=command_for(present_window.id,present_window.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && c.changed);
+    CHECK(c.presentation.bands[0]==(1u<<11) && !c.presentation.bands[1] && c.damage.height==2);
+    c=command_for(present_window.id,present_window.generation);c.presentation.flags=2;
+    CHECK(dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c))==-EINVAL);
+    struct v86_frame f=vf(0x4F02,0x4111,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+    g_ticks+=50;c=command_for(present_window.id,present_window.generation);
+    c.presentation.flags=CIUKI_DOSVM_PRESENT_SCANLINES;c.presentation.redraw=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && c.changed);
+    uint16_t white=0xffff;CHECK(!dosvm_write(v,v->vbe_buffer.base+17*1280,&white,2));
+    *vbe_pte(v,(17*1280)/PAGE_SIZE)|=0x40; /* host substitute for the CPU D bit */
+    before=surface_rows;g_ticks+=50;c=command_for(present_window.id,present_window.generation);
+    c.presentation.flags=CIUKI_DOSVM_PRESENT_SCANLINES;
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS,&c,sizeof(c)) && c.changed && surface_rows-before==1);
+    for(unsigned i=0;i<15;i++)CHECK(c.scanlines.bits[i]==(i==0 ? 1u<<17 : 0));
+    c=command_for(present_window.id,present_window.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&c,sizeof(c)));empty();fake_current=0;
+    puts("PASS F2-98b exact DOS rows: 136-byte ABI, initial/forced frame, two scaled scanlines, VBE single row, unchanged dirty stores, legacy bands, unknown flags");
+}
 static void test_wait_present(void)
 {
     window_fixtures(); unsigned saved_base=g_current->base_priority;
@@ -357,4 +401,5 @@ static void test_wait_present(void)
     printf("F3-52 pins: 100 requests former_record_walks=%u unchanged_present_walks=0 unchanged_wait_walks=0 surface_pin_walks=0 unchanged_rows=0 sparse_rows=%u sparse_walks=0; forced frame writes only rows, no pin walk PASS\n",old_walks,sparse_rows);
     test_wait_record_protection();
     test_wait_cadence();
+    test_exact_scanlines();
 }

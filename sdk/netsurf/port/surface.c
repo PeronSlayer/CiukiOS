@@ -6,6 +6,12 @@
 #include <sys/mman.h>
 #include "surface.h"
 #include "apps/libdeskui/keymap.h"
+#include "third_party/pixman/pixman-region32.c"
+
+static void damage_release(struct ciuki_browser_surface *s)
+{
+    if(s->damage_region) { pixman_region32_fini(s->damage_region);free(s->damage_region);s->damage_region=NULL; }
+}
 
 static void drop(struct ciuki_browser_surface *s,struct ciuki_browser_storage *b)
 {
@@ -56,6 +62,7 @@ void ciuki_browser_mark_closed(struct ciuki_browser_surface *s,const char *reaso
 }
 void ciuki_browser_close(struct ciuki_browser_surface *s)
 {
+    damage_release(s);
     if(s->ready && !s->connection.disconnected)
         du3_request(&s->connection,DESK_CLOSE,s->window,s->generation,NULL,0,-1);
     drop(s,&s->pending); drop(s,&s->current);
@@ -69,28 +76,68 @@ void ciuki_browser_damage(struct ciuki_browser_surface *s,nsfb_bbox_t b)
     if(b.x0<0)b.x0=0; if(b.y0<0)b.y0=0;
     if(b.x1>w)b.x1=w; if(b.y1>h)b.y1=h;
     if(b.x1<=b.x0 || b.y1<=b.y0)return;
-    if(!s->dirty)s->damage=b;
+    if(!s->dirty) {
+        s->damage=b;damage_release(s);
+        s->damage_region=malloc(sizeof(pixman_region32_t));
+        if(s->damage_region)pixman_region32_init(s->damage_region);
+    }
     else {
         if(b.x0<s->damage.x0)s->damage.x0=b.x0; if(b.y0<s->damage.y0)s->damage.y0=b.y0;
         if(b.x1>s->damage.x1)s->damage.x1=b.x1; if(b.y1>s->damage.y1)s->damage.y1=b.y1;
     }
+    if(s->damage_region && !pixman_region32_union_rect(s->damage_region,s->damage_region,
+        b.x0,b.y0,(unsigned)(b.x1-b.x0),(unsigned)(b.y1-b.y0)))damage_release(s);
     s->dirty=true;
 }
-int ciuki_browser_present(struct ciuki_browser_surface *s)
+static int publish(struct ciuki_browser_surface *s,nsfb_bbox_t b)
 {
-    if(!s->ready || !s->dirty || s->swap_request)return 0;
-    nsfb_bbox_t b=s->damage;
     unsigned stride=s->current.info.stride/4;
     for(int y=b.y0;y<b.y1;y++)
         memcpy(s->current.map+(size_t)y*stride+b.x0,s->current.back+(size_t)y*stride+b.x0,(size_t)(b.x1-b.x0)*4);
     uint8_t wire[16]; desk_put32(wire,b.x0); desk_put32(wire+4,b.y0);
     desk_put32(wire+8,b.x1-b.x0); desk_put32(wire+12,b.y1-b.y0);
     uint32_t request=du3_request(&s->connection,DESK_DAMAGE,s->window,s->generation,wire,16,-1);
-    if(!request)return -1;
+    if(!request) { s->retry_damage=b;s->retry_present=true;return -1; }
+    s->retry_present=false;
     /* RESULT acknowledges queuing only. As in libdeskui, drawing stays in
      * back; copy damaged rows just before DAMAGE, without a consumption wait.
      * The compositor may read during this copy (accepted intra-frame tearing). */
-    s->dirty=false; return 0;
+    return 0;
+}
+static int present_area(struct ciuki_browser_surface *s,nsfb_bbox_t bounds)
+{
+    /* The covering box bounds comparison only. Separate changes never
+     * upload the untouched space between them. Coalesce equal runs on
+     * adjacent rows so a rectangular update is one channel message. */
+    nsfb_bbox_t pending={0};
+    unsigned stride=s->current.info.stride/4;
+    for(int y=bounds.y0;y<bounds.y1;y++) {
+        for(int x=bounds.x0;x<bounds.x1;) {
+            size_t at=(size_t)y*stride;
+            while(x<bounds.x1 && s->current.map[at+x]==s->current.back[at+x])x++;
+            if(x==bounds.x1)break;
+            int first=x++;
+            while(x<bounds.x1 && s->current.map[at+x]!=s->current.back[at+x])x++;
+            if(pending.x0==first && pending.x1==x && pending.y1==y)pending.y1++;
+            else {
+                if(pending.x1>pending.x0 && publish(s,pending))return -1;
+                pending=(nsfb_bbox_t){first,y,x,y+1};
+            }
+        }
+    }
+    if(pending.x1>pending.x0 && publish(s,pending))return -1;
+    return 0;
+}
+int ciuki_browser_present(struct ciuki_browser_surface *s)
+{
+    if(!s->ready || !s->dirty || s->swap_request)return 0;
+    if(s->retry_present && publish(s,s->retry_damage))return -1;
+    if(s->damage_region) {
+        int count;const pixman_box32_t *boxes=pixman_region32_rectangles(s->damage_region,&count);
+        for(int i=0;i<count;i++)
+            if(present_area(s,(nsfb_bbox_t){boxes[i].x1,boxes[i].y1,boxes[i].x2,boxes[i].y2}))return -1;
+    } else if(present_area(s,s->damage))return -1; /* bounded ENOMEM recovery */
+    damage_release(s);s->dirty=false;return 0;
 }
 static void resize_request(struct ciuki_browser_surface *s)
 {
@@ -221,7 +268,7 @@ int ciuki_browser_packet(struct ciuki_browser_surface *s,const struct desk_packe
             s->swap_request=0;
             if(!p->result) {
                 drop(s,&s->current); s->current=s->pending; memset(&s->pending,0,sizeof(s->pending));s->pending.fd=-1;
-                s->resized=true; s->dirty=false;
+                damage_release(s);s->resized=true; s->dirty=false; s->retry_present=false;
             } else drop(s,&s->pending);
         }
     } else if(p->opcode==DESK_CONFIGURE) {

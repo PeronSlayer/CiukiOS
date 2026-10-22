@@ -35,6 +35,11 @@ struct desktop_description *desktop_fd(const struct process *p, int32_t fd)
 const struct ciuki_surface_info *surface_geometry(const struct surface *s) { return &s->info; }
 void surface_retain(struct surface *s) { s->references++; }
 void surface_release(struct surface *s) { CHECK(s->references > 1); s->references--; }
+int surface_read(struct surface *s, uint32_t offset, void *data, uint32_t bytes)
+{
+    if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
+    memcpy(data,s->pixels+offset,bytes);return 0;
+}
 int surface_write(struct surface *s, uint32_t offset, const void *data, uint32_t bytes)
 {
     surface_rows++;

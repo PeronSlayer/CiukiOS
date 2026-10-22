@@ -4,6 +4,12 @@ The desktop compositor (`apps/desktop/compositor.c`) keeps its damage and
 clip regions with the region algorithms of the X11 sample server as
 maintained in pixman (f2-95, lead amendment of 2026-10-22).
 
+F2-98b also uses this exact region implementation in NetSurf's private
+surface transport (`sdk/netsurf/port/surface.c`) to retain separate invalid
+rectangles. The compositor keeps its existing fixed pool; the browser uses
+ordinary allocation and releases the region after publication or resize.
+Its build fingerprints these files and installs `COPYING` as `pixman.txt`.
+
 Upstream release: pixman **0.46.4**, archive
 <https://www.cairographics.org/releases/pixman-0.46.4.tar.xz>
 

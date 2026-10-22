@@ -25,10 +25,15 @@ class SurfaceTests(unittest.TestCase):
     def test_v3_surface(self):
         out=ROOT / "build/host/netsurf"
         out.mkdir(parents=True,exist_ok=True)
+        headers=ROOT / "build/external/netsurf-host/prefix/include"
+        if not (headers / "libnsfb.h").exists():
+            # This transport-only test needs patched upstream types, no host browser
+            # build, native libraries or target SDK.
+            headers=ROOT / "build/external/netsurf-target/prefix/include"
         flags=["clang","-std=c17","-D_POSIX_C_SOURCE=200809L","-O1","-g","-Wall","-Wextra","-Werror",
                "-include",str(ROOT / "tests/host/desktop/replay_base.h"),"-fsanitize=address,undefined","-fno-sanitize-recover=undefined","-I"+str(ROOT),
                "-I"+str(ROOT / "src/kernel/include"),
-               "-I"+str(ROOT / "build/external/netsurf-host/prefix/include")]
+               "-I"+str(headers)]
         sources=["sdk/netsurf/port/surface.c","apps/libdeskui/v3.c","apps/desktop/protocol.c",
                  "apps/libdeskui/keymap.c","tests/host/netsurf/surface_test.c"]
         subprocess.run([*flags,*[str(ROOT / s) for s in sources],"-o",str(out / "surface")],check=True)

@@ -94,6 +94,7 @@ extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attr
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__((weak));
+extern unsigned desk_shell_occluders(const struct desktop *,struct desk_box *) __attribute__((weak));
 extern void desk_shell_start(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_internal_paint(struct desktop *, int, struct desk_box, struct desk_box) __attribute__((weak));
 extern const uint32_t *desk_shell_window_icon(struct desktop *, int, int) __attribute__((weak));
@@ -773,6 +774,103 @@ static void paint_background(struct desktop *d, int index, struct desk_box clip)
     if (d->shell && desk_shell_background) DESK_PROFILE("background_rows", desk_shell_background(d,clip));
     else { fill(d,clip,clip,desk_theme->desktop); portrait(d,clip); }
 }
+static void damage_visible(struct desktop *d, int index, struct desk_box clip)
+{
+    (void)index;
+    /* Split only at actual opaque bodies. Unlike their bounding shadows,
+     * these pixels do not depend on the foreign surface below them. */
+    if(d->shell && desk_shell_occluders) {
+        struct desk_box boxes[SH_LEVELS+6];unsigned n=desk_shell_occluders(d,boxes);
+        struct desk_damage list={.count=1,.boxes={clip}};
+        for(unsigned k=0;k<n;k++) {
+            struct desk_damage next={0};
+            for(unsigned j=0;j<list.count;j++) {
+                struct desk_box a=list.boxes[j],b;
+                if(!desk_intersect(a,boxes[k],&b)) { desk_damage_add(&next,a,d->width,d->height);continue; }
+                struct desk_box parts[]={{a.x,a.y,a.w,b.y-a.y},{a.x,b.y+b.h,a.w,a.y+a.h-b.y-b.h},
+                    {a.x,b.y,b.x-a.x,b.h},{b.x+b.w,b.y,a.x+a.w-b.x-b.w,b.h}};
+                for(unsigned p=0;p<4;p++)desk_damage_add(&next,parts[p],d->width,d->height);
+            }
+            list=next;
+        }
+        for(unsigned i=0;i<list.count;i++)desk_damage_add(&d->damage,list.boxes[i],d->width,d->height);
+        return;
+    }
+    desk_damage_add(&d->damage,clip,d->width,d->height);
+}
+/* DAMAGE describes a client's backing store, not an instruction to upload
+ * the covering window again. Retained pixels are used when it is exposed.
+ * Keep shadow/corner pixels: they depend on the surface underneath them. */
+static int window_damage(struct desktop *d, int index, struct desk_box box)
+{
+    struct desk_client *c=&d->clients[index];
+    if (!c->window || c->minimized ||
+        !desk_intersect(box,(struct desk_box){0,DESK_BAR,(int)d->width,
+            (int)d->height-DESK_BAR-(d->shell ? DESK_BAR : 0)},&box)) return 0;
+    int windows[DESK_CLIENTS]; unsigned count=0;
+    for (int i=0;i<DESK_CLIENTS;i++) if (i!=index && d->clients[i].window &&
+        !d->clients[i].minimized && d->clients[i].order>c->order) windows[count++]=i;
+    /* Determine visibility independently of the accumulated damage: a
+     * synchronous PRESENT can be covered while another window is dirty. */
+    struct desk_damage saved=d->damage;
+    d->damage.count=0;
+    visible_paint(d,box,windows,count,damage_visible,index);
+    struct desk_damage visible=d->damage;
+    d->damage=saved;
+    for (unsigned i=0;i<visible.count;i++) desk_damage_add(&d->damage,visible.boxes[i],d->width,d->height);
+    return visible.count!=0;
+}
+int desk_client_damage(struct desktop *d,int index,struct desk_box box)
+{
+    struct desk_client *c=&d->clients[index];
+    if(c->collapsed || !desk_intersect(box,desk_content(c),&box))return 0;
+    /* Legacy/full-surface presents can repeat an identical frame. Prove
+     * equality against the completed opaque RAM scene, stopping at the
+     * first changed row. Overlays, scaling and pending geometry retain the
+     * ordinary conservative damage path. The saved scene under a software
+     * pointer is read without changing its ownership or drawing code. */
+    struct desk_box content=desk_content(c),ignored;
+    int comparable=d->frame_valid && !d->damage.count && !d->move_damage.count && !d->copy_pending &&
+        !d->present_damage.count && c->pixels && !c->gfxdemo &&
+        !c->awaiting_frame && !c->launch_frame_pending &&
+        content.w==(int)c->info.width && content.h==(int)c->info.height &&
+        box.x>=0 && box.y>=0 && box.x+box.w<=(int)d->width && box.y+box.h<=(int)d->height;
+    for(int i=0;i<DESK_CLIENTS && comparable;i++)if(i!=index && d->clients[i].window &&
+        !d->clients[i].minimized && d->clients[i].order>c->order &&
+        desk_intersect(box,desk_outer(&d->clients[i]),&ignored))comparable=0;
+    if(comparable && d->shell) {
+        struct desk_box boxes[SH_LEVELS+6];unsigned n=desk_shell_occluders ? desk_shell_occluders(d,boxes) : 0;
+        for(unsigned i=0;i<n;i++) {
+            struct desk_box b=boxes[i];b.x-=6;b.y-=16;b.w+=12;b.h+=32;
+            if(desk_intersect(box,b,&ignored))comparable=0;
+        }
+        if(desk_shell_chrome_intersects(d,box))comparable=0;
+    }
+    if(comparable) {
+        int same=1;
+        for(int y=box.y;y<box.y+box.h && same;y++) {
+            const uint32_t *src=c->pixels+(size_t)(y-content.y)*c->info.width+(unsigned)(box.x-content.x);
+            const uint32_t *old=d->pixels+(size_t)y*d->width+(unsigned)box.x;
+            struct desk_box pointer;
+            int covered=d->cursor_valid && desk_intersect((struct desk_box){box.x,y,box.w,1},d->cursor_box,&pointer);
+            if(!covered && !memcmp(src,old,(size_t)box.w*4))continue;
+            for(int x=0;x<box.w;x++) {
+                d->stats.compare_px++;
+                uint32_t previous=covered && box.x+x>=pointer.x && box.x+x<pointer.x+pointer.w ?
+                    d->cursor_under[(y-d->cursor_box.y)*32+box.x+x-d->cursor_box.x] : old[x];
+                if((src[x]&0xffffffu)!=previous) { same=0;break; }
+            }
+        }
+        if(same)return 0;
+    }
+    return window_damage(d,index,box);
+}
+void desk_caption_damage(struct desktop *d,int index)
+{
+    struct desk_box b=d->clients[index].frame;b.h=DESK_TITLE;
+    window_damage(d,index,b);
+    if(d->shell)desk_damage_add(&d->damage,desk_task_button(d,index),d->width,d->height);
+}
 static void visible_window(struct desktop *d, int index, struct desk_box clip)
 { DESK_PROFILE("windows", window(d,index,clip)); }
 static void scene(struct desktop *d, struct desk_box clip)
@@ -894,7 +992,8 @@ int desk_small_damage(const struct desktop *d, uint64_t now)
     if (area*16>(uint64_t)d->width*d->height) return 0;
     for (int i=0;i<DESK_CLIENTS;i++) {
         const struct desk_client *c=&d->clients[i];
-        if (c->gfx_pending || c->awaiting_frame || c->launch_frame_pending) return 0;
+        if (c->gfx_pending || c->gl_present_request || c->awaiting_frame || c->launch_frame_pending ||
+            (c->dosbox && c->window && !c->minimized && !c->collapsed)) return 0;
     }
     return 1;
 }
@@ -1009,6 +1108,7 @@ void desk_cursor_motion(struct desktop *d)
 }
 static void ram_copy(struct desktop *d, const struct ciuki_rect *r)
 {
+    d->frame_stats.copy_bytes+=(uint64_t)r->width*r->height*4;
     for (uint32_t n=0; n<r->height; n++) {
         uint32_t y=r->dst_y>r->src_y ? r->height-1-n : n;
         memmove(d->pixels+((uint32_t)r->dst_y+y)*d->width+(uint32_t)r->dst_x,
@@ -1027,6 +1127,91 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
         return -1;
     }
     d->presents++; d->frame_stats.presents++; d->frame_stats.accel_copies++;
+    return 0;
+}
+static int region_cut(pixman_region32_t *region, struct desk_box b)
+{
+    if (b.w<=0 || b.h<=0) return 1;
+    pixman_region32_t cut;
+    pixman_region32_init_rect(&cut,b.x,b.y,(unsigned)b.w,(unsigned)b.h);
+    int ok=pixman_region32_subtract(region,region,&cut);
+    pixman_region32_fini(&cut);
+    return ok;
+}
+/* Opaque frame interiors only; shadows and rounded corners still need
+ * the retained surfaces below them. dx/dy translate a source clip into
+ * destination coordinates. */
+static int region_uncovered(struct desktop *d,pixman_region32_t *region,int index,int dx,int dy)
+{
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];
+        if (i==index || !c->window || c->minimized || c->order<=d->clients[index].order ||
+            (!c->internal && !c->collapsed && !c->pixels)) continue;
+        struct desk_box f=c->frame; f.x+=dx;f.y+=dy;
+        int radius=desk_theme->radius;
+        if (!region_cut(region,(struct desk_box){f.x+radius+1,f.y,f.w-2*(radius+1),radius}) ||
+            !region_cut(region,(struct desk_box){f.x,f.y+radius,f.w,f.h-radius})) return 0;
+    }
+    if(d->shell && desk_shell_occluders) {
+        struct desk_box boxes[SH_LEVELS+6];unsigned n=desk_shell_occluders(d,boxes);
+        for(unsigned i=0;i<n;i++) {
+            struct desk_box b=boxes[i];b.x+=dx;b.y+=dy;
+            if(!region_cut(region,b))return 0;
+        }
+    }
+    return 1;
+}
+static int copy_cut(pixman_region32_t *region,const struct ciuki_rect *r,struct desk_box b)
+{
+    struct desk_box source=b;source.x+=r->dst_x-r->src_x;source.y+=r->dst_y-r->src_y;
+    return region_cut(region,b) && region_cut(region,source);
+}
+static int copy_region(struct desktop *d,pixman_region32_t *region,const struct ciuki_rect *r,int index)
+{
+    pixman_region32_init_rect(region,r->dst_x,r->dst_y,r->width,r->height);
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];
+        if (i==index || !c->window || c->minimized || c->order<=d->clients[index].order) continue;
+        /* A higher shadow is translucent: recompute it rather than moving
+         * its old blend along with the window underneath. */
+        if (!copy_cut(region,r,desk_outer(c))) {
+            pixman_region32_clear(region);return 0;
+        }
+    }
+    if(d->shell) {
+        struct desk_box boxes[SH_LEVELS+6];unsigned n=desk_shell_occluders ? desk_shell_occluders(d,boxes) : 0;
+        for(unsigned i=0;i<n;i++) {
+            struct desk_box b=boxes[i];
+            if(desk_theme->shadow_size) { b.x-=6;b.y-=6;b.w+=12;b.h+=12; }
+            if(!copy_cut(region,r,b)) { pixman_region32_clear(region);return 0; }
+        }
+        struct desk_box notice=desk_shell_notification_bounds ? desk_shell_notification_bounds(d) : (struct desk_box){0};
+        if(!copy_cut(region,r,desk_start_bounds(d)) ||
+           (d->sh.notification.active && !copy_cut(region,r,notice))) {
+            pixman_region32_clear(region);return 0;
+        }
+    }
+    return pixman_region32_not_empty(region);
+}
+/* Banded regions are sorted top-to-bottom, left-to-right. Reverse them
+ * when moving down/right so no rectangle overwrites another one's source. */
+static int copy_each(struct desktop *d,const pixman_region32_t *region,const struct ciuki_rect *copy,int engine)
+{
+    int n;const pixman_box32_t *boxes=pixman_region32_rectangles(region,&n);
+    int down=copy->dst_y>copy->src_y, right=copy->dst_x>copy->src_x;
+    for (int done=0;done<n;) {
+        int first=down ? n-done-1 : done, last=first+1;
+        if (down) { while (first && boxes[first-1].y1==boxes[last-1].y1) first--; }
+        else { while (last<n && boxes[last].y1==boxes[first].y1) last++; }
+        for (int k=first;k<last;k++) {
+            struct desk_box b=box_region(boxes[right ? last-1-(k-first) : k]);
+            struct ciuki_rect r={b.x+copy->src_x-copy->dst_x,b.y+copy->src_y-copy->dst_y,
+                b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
+            if (engine) { if (screen_copy(d,&r)) return -1; }
+            else ram_copy(d,&r);
+        }
+        done+=last-first;
+    }
     return 0;
 }
 /* The shell background is the cached image itself; a window has its own
@@ -1180,41 +1365,61 @@ static void vram_check(struct desktop *d, uint64_t now, uint32_t next)
 }
 /* A scroll is accelerated only after comparing every translated client pixel
  * with the last completed RAM frame. Samples merely reject candidates early. */
-static int scroll_plan(struct desktop *d, struct ciuki_rect *out)
+static void region_load(struct desktop *,pixman_region32_t *,const struct desk_damage *);
+static int scroll_plan(struct desktop *d, struct ciuki_rect *out, pixman_region32_t *copied)
 {
     if (!(d->accel_caps&1u) || !d->hw_cursor || !d->scanout_valid ||
-        !d->damage.count || d->menu_open || d->sh.levels || d->sh.volume_open || d->sh.network_open || d->sh.media_open ||
-        d->sh.switcher || d->sh.tooltip || d->power.state) return 0;
+        !d->damage.count || d->power.state) return 0;
+    pixman_region32_t dirty;region_load(d,&dirty,&d->damage);
     for (unsigned i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
         struct desk_box b=desk_content(c), ignored;
         if (!c->window || c->internal || c->minimized || c->collapsed || !c->pixels ||
             b.w<64 || b.h<32 || b.x<0 || b.y<0 || b.x+b.w>(int32_t)d->width || b.y+b.h>(int32_t)d->height ||
             b.w!=(int32_t)c->info.width || b.h!=(int32_t)c->info.height) continue;
-        int visible=1, damaged=0;
-        for (unsigned j=0; j<DESK_CLIENTS; j++) if (j!=i && d->clients[j].window && !d->clients[j].minimized &&
-            d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),b,&ignored)) visible=0;
+        int damaged=0;
         for (unsigned j=0; j<d->damage.count; j++) if (desk_intersect(d->damage.boxes[j],b,&ignored)) damaged=1;
-        if (!visible || !damaged || desk_shell_chrome_intersects(d,b)) continue;
-        for (int delta=1; delta<=64 && delta<b.h/2; delta++) for (int dir=-1; dir<=1; dir+=2) {
-            int sy=dir<0 ? delta : 0, dy=dir<0 ? 0 : delta, same=1, changed=0;
-            const uint32_t *a=c->pixels+(uint32_t)dy*c->info.width;
-            const uint32_t *old=d->pixels+(uint32_t)(b.y+sy)*d->width+(uint32_t)b.x;
-            if ((a[0]&0xffffffu)!=old[0] || (a[b.w/2]&0xffffffu)!=old[b.w/2] || (a[b.w-1]&0xffffffu)!=old[b.w-1]) continue;
-            const uint32_t *at=d->pixels+(uint32_t)(b.y+dy)*d->width+(uint32_t)b.x;
-            if ((a[0]&0xffffffu)==at[0] && (a[b.w/2]&0xffffffu)==at[b.w/2] && (a[b.w-1]&0xffffffu)==at[b.w-1]) continue;
-            for (int y=0; y<b.h-delta && same; y++) for (int x=0; x<b.w; x++) {
-                uint32_t v=c->pixels[(uint32_t)(dy+y)*c->info.width+(uint32_t)x]&0xffffffu;
-                if (v!=d->pixels[(uint32_t)(b.y+sy+y)*d->width+(uint32_t)(b.x+x)]) { same=0; break; }
-                if (v!=d->pixels[(uint32_t)(b.y+dy+y)*d->width+(uint32_t)(b.x+x)]) changed=1;
+        if (!damaged) continue;
+        for (int horizontal=0;horizontal<2;horizontal++)
+        for (int delta=1; delta<=64 && delta<(horizontal ? b.w : b.h)/2; delta++) for (int dir=-1; dir<=1; dir+=2) {
+            int sy=!horizontal && dir<0 ? delta : 0, dy=!horizontal && dir>0 ? delta : 0;
+            int sx=horizontal && dir<0 ? delta : 0, dx=horizontal && dir>0 ? delta : 0, same=1, changed=0;
+            struct ciuki_rect r={b.x+sx,b.y+sy,b.x+dx,b.y+dy,
+                (uint32_t)(b.w-(horizontal ? delta : 0)),(uint32_t)(b.h-(horizontal ? 0 : delta))};
+            pixman_region32_t candidate;
+            if (!copy_region(d,&candidate,&r,(int)i)) { pixman_region32_fini(&candidate);continue; }
+            if(!pixman_region32_intersect(&candidate,&candidate,&dirty) || !pixman_region32_not_empty(&candidate)) {
+                pixman_region32_fini(&candidate);continue;
             }
-            if (same && changed) {
-                struct ciuki_rect r={b.x,b.y+sy,b.x,b.y+dy,(uint32_t)b.w,(uint32_t)(b.h-delta)};
-                *out=r; return 1; /* one candidate per frame */
+            int n;const pixman_box32_t *boxes=pixman_region32_rectangles(&candidate,&n);
+            /* Reject mismatched translations before walking every visible
+             * pixel. Hidden rows and shadows never supply a copy source. */
+            struct desk_box sample=box_region(boxes[0]);
+            const uint32_t *a=c->pixels+(size_t)(sample.y-b.y)*c->info.width+(unsigned)(sample.x-b.x);
+            const uint32_t *old=d->pixels+(size_t)(sample.y+sy-dy)*d->width+(unsigned)(sample.x+sx-dx);
+            const uint32_t *at=d->pixels+(size_t)sample.y*d->width+(unsigned)sample.x;
+            if ((a[0]&0xffffffu)==at[0] && (a[sample.w/2]&0xffffffu)==at[sample.w/2] &&
+                (a[sample.w-1]&0xffffffu)==at[sample.w-1]) {
+                pixman_region32_fini(&candidate);continue;
             }
+            if ((a[0]&0xffffffu)!=old[0] || (a[sample.w/2]&0xffffffu)!=old[sample.w/2] ||
+                (a[sample.w-1]&0xffffffu)!=old[sample.w-1]) same=0;
+            for (int k=0;k<n && same;k++) {
+                struct desk_box part=box_region(boxes[k]);
+                for (int y=part.y;y<part.y+part.h && same;y++) for (int x=part.x;x<part.x+part.w;x++) {
+                    d->frame_stats.compare_px++;
+                    uint32_t v=c->pixels[(size_t)(y-b.y)*c->info.width+(unsigned)(x-b.x)]&0xffffffu;
+                    if (v!=d->pixels[(size_t)(y+sy-dy)*d->width+(unsigned)(x+sx-dx)]) { same=0;break; }
+                    if (v!=d->pixels[(size_t)y*d->width+(unsigned)x]) changed=1;
+                }
+            }
+            if (same && changed && pixman_region32_copy(copied,&candidate)) {
+                pixman_region32_fini(&candidate);pixman_region32_fini(&dirty);*out=r;return 1;
+            }
+            pixman_region32_fini(&candidate);
         }
     }
-    return 0;
+    pixman_region32_fini(&dirty);return 0;
 }
 /* Present the composite surface directly. There is no second frame to copy
  * or compare. COPY's exact destination is excluded from upload rows by the
@@ -1355,15 +1560,11 @@ static void region_load(struct desktop *d, pixman_region32_t *region, const stru
  * except the cut, a destination the engine or the RAM copy already holds.
  * Without memory for the subtraction the whole region is used: the cut
  * holds the same composed pixels, so the superset is only redundant. */
-static int region_each(struct desktop *d, const pixman_region32_t *region, struct desk_box cut, int present)
+static int region_each(struct desktop *d, const pixman_region32_t *region, const pixman_region32_t *cut, int present)
 {
     pixman_region32_t clipped; const pixman_region32_t *use=region;
     pixman_region32_init(&clipped);
-    if (cut.w>0 && cut.h>0) {
-        pixman_region32_t c; pixman_region32_init_rect(&c,cut.x,cut.y,(unsigned)cut.w,(unsigned)cut.h);
-        if (pixman_region32_subtract(&clipped,region,&c)) use=&clipped;
-        pixman_region32_fini(&c);
-    }
+    if (cut && pixman_region32_subtract(&clipped,region,cut)) use=&clipped;
     int n, result=0; const pixman_box32_t *r=pixman_region32_rectangles(use,&n);
     for (int k=0;k<n && !result;k++) {
         struct desk_box b=box_region(r[k]);
@@ -1482,14 +1683,29 @@ int desk_redraw(struct desktop *d)
     struct ciuki_rect copy=d->copy_rect;
     int moving=d->copy_pending && d->frame_valid;
     int engine_copy=moving && d->accel && (d->accel_caps&1u) && d->hw_cursor && d->scanout_valid;
-    int scrolling=!moving && scroll_plan(d,&copy);
+    pixman_region32_t copied;pixman_region32_init(&copied);
+    int scrolling=!moving && scroll_plan(d,&copy,&copied);
     engine_copy|=scrolling;
-    struct desk_box copied={copy.dst_x,copy.dst_y,(int)copy.width,(int)copy.height};
     if (moving) {
-        DESK_PROFILE("windows", ram_copy(d,&copy));
-        region_each(d,&move_region,copied,0);
+        pixman_region32_fini(&copied);
+        copy_region(d,&copied,&copy,d->copy_client);
+        /* A raise, close or client update can arrive after the move was
+         * planned. Never copy a source whose ownership/content changed in
+         * that batch, or overwrite pixels already scheduled for repaint. */
+        for(unsigned i=0;i<d->damage.count;i++) {
+            struct desk_box dirty=d->damage.boxes[i],source=dirty;
+            source.x+=copy.dst_x-copy.src_x;source.y+=copy.dst_y-copy.src_y;
+            if(!region_cut(&copied,dirty) || !region_cut(&copied,source)) {
+                pixman_region32_clear(&copied);break;
+            }
+        }
+        if (!region_uncovered(d,&move_region,d->copy_client,0,0)) {
+            pixman_region32_fini(&move_region);region_load(d,&move_region,&d->move_damage);
+        }
     }
-    region_each(d,&damage_region,(struct desk_box){0},0);
+    if (moving || scrolling) DESK_PROFILE("windows", copy_each(d,&copied,&copy,0));
+    if (moving) region_each(d,&move_region,&copied,0);
+    region_each(d,&damage_region,scrolling ? &copied : NULL,0);
     d->frame_valid=1;
     struct desk_box b;
     /* Never a software pointer while the hardware cursor may be visible. */
@@ -1505,18 +1721,18 @@ int desk_redraw(struct desktop *d)
     s->composite_ns=time_now(d)-begin;
     begin=time_now(d);
     int complete=1;
-    if (engine_copy && screen_copy(d,&copy)) complete=0;
+    if (engine_copy && copy_each(d,&copied,&copy,1)) complete=0;
     /* Move exposure excludes the exact scanout copy. General damage (new
      * client pixels, changed captions) must still overwrite that destination. */
-    if (complete && moving && region_each(d,&move_region,engine_copy ? copied : (struct desk_box){0},1)) complete=0;
-    if (complete && region_each(d,&damage_region,scrolling ? copied : (struct desk_box){0},1)) complete=0;
+    if (complete && moving && region_each(d,&move_region,engine_copy ? &copied : NULL,1)) complete=0;
+    if (complete && region_each(d,&damage_region,scrolling ? &copied : NULL,1)) complete=0;
     if (complete) for (unsigned i=0;i<d->present_damage.count;i++) {
         struct desk_box dirty=d->present_damage.boxes[i];
         if (region_covers(&damage_region,dirty) && !scrolling) continue;
         s->damage_px+=(uint64_t)dirty.w*dirty.h;
         if (present_box(d,dirty)) { complete=0; break; }
     }
-    pixman_region32_fini(&move_region); pixman_region32_fini(&damage_region);
+    pixman_region32_fini(&copied);pixman_region32_fini(&move_region); pixman_region32_fini(&damage_region);
     /* Faults hide the hardware pointer (the kernel clears it when it stops
      * or quarantines the engine). Reconstruct with a software cursor before
      * acknowledging either launch or a display-mode change. */
@@ -1576,6 +1792,7 @@ int desk_redraw(struct desktop *d)
     d->stats.accel_fills+=s->accel_fills; d->stats.accel_copies+=s->accel_copies;
     d->stats.accel_writes+=s->accel_writes; d->stats.accel_fallback+=s->accel_fallback;
     d->stats.cache_rows+=s->cache_rows;
+    d->stats.copy_bytes+=s->copy_bytes;d->stats.compare_px+=s->compare_px;
     d->stats.composite_ns+=s->composite_ns; d->stats.present_ns+=s->present_ns;
     uint64_t slot=frame_begin;
     if (d->next_frame_ns && d->next_frame_ns<=frame_begin)

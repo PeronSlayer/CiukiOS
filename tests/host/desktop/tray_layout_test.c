@@ -109,7 +109,10 @@ static void transitions(void)
         int old_width = desk_shell_tray_box(&d).w;
         d.realtime_second = 10 * 3600;
         assert(desk_shell_tray_box(&d).w >= old_width);
-        desk_shell_clock_damage(&d, previous); redraw();
+        desk_shell_clock_damage(&d, previous);
+        for(unsigned k=0;k<d.damage.count;k++)
+            assert(d.damage.boxes[k].w<(int)d.width); /* tray rollover never the whole bar */
+        redraw();
         old_width = desk_shell_tray_box(&d).w;
         d.sh.cfg.clock_seconds = 1;
         desk_shell_tray_damage(&d, old_width); redraw();
@@ -118,6 +121,8 @@ static void transitions(void)
         desk_shell_tray_damage(&d, old_width); redraw();
     }
     d.sh.volume_open = d.sh.network_open = d.sh.media_open = d.sh.tooltip = 0;
+    d.sh.cfg.clock_seconds=0;d.realtime_second=12*3600+2;d.damage.count=0;
+    desk_shell_clock_damage(&d,12*3600+1);assert(!d.damage.count);
     d.realtime_second = 12 * 3600; desk_composite(&d, (struct desk_box){0, 0, d.width, d.height});
     d.damage.count = 0; d.realtime_second = 13 * 3600;
     desk_shell_clock_damage(&d, 12 * 3600); redraw();

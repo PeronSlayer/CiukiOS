@@ -93,7 +93,8 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
             assert(x==80 && y==120); settings_damage++;
         } else if (fs_panel_seen && h==480) { assert(!y); full_damage++; }
         else if (presents && !(scenario>=11 && desk_get32(m->data+16)==480)) {
-            assert(h == 8 && (y == 0 || y == 16 || y == 264));
+            if(scenario==0)assert(h==8 && (y==0 || y==16 || y==264));
+            else assert(h==1 && (y==1 || y==17 || y==265));
         } else { assert(screen[0] == replay_theme.face); full_damage++; }
     }
     return 0;
@@ -147,7 +148,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     assert(c->id == 1 && c->generation == 9);
     switch (op) {
     case CIUKI_DOSVM_WAIT_PRESENT:
-        assert(c->wait.timeout_ms>0 && c->wait.timeout_ms<=50);
+        assert(c->wait.timeout_ms==CIUKI_DOSVM_WAIT_MAX_MS);
         clock_ms+=c->wait.timeout_ms; c->wait.frame_ms=15;
         c->wait.events=nonvideo==1 ? CIUKI_DOSVM_EVENT_TIMEOUT : nonvideo==2 ? CIUKI_DOSVM_EVENT_STATE : CIUKI_DOSVM_EVENT_VIDEO;
         last_events=c->wait.events;
@@ -182,10 +183,15 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         }
         return 0;
     case CIUKI_DOSVM_PRESENT_BANDS:
+        if (scenario==0 && c->presentation.flags) { errno=EINVAL;return -1; } /* legacy kernel */
         if (!(last_events&CIUKI_DOSVM_EVENT_VIDEO)) { assert(c->presentation.redraw); nonvideo_presents++; }
         if (scenario != 6) assert(entered && clock_ms > enter_ms + 500 && !error_seen);
         presents++;
-        c->changed = 1; c->presentation.bands[0] = 5; c->presentation.bands[1] = 2;
+        c->changed = 1;
+        if(c->presentation.flags==CIUKI_DOSVM_PRESENT_SCANLINES) {
+            memset(&c->scanlines,0,sizeof(c->scanlines));
+            c->scanlines.bits[0]=(1u<<1)|(1u<<17);c->scanlines.bits[265/32]=1u<<(265%32);
+        } else { c->presentation.bands[0] = 5; c->presentation.bands[1] = 2; }
         return 0;
     case CIUKI_DOSVM_CLOSE: closed++; return 0;
     default: assert(0); return -1;
@@ -269,7 +275,7 @@ int main(int argc, char **argv)
     if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : 1u)); /* fullscreen's static page shares the title */
     assert(damage_count);
     if (nonvideo) {
-        assert((nonvideo==1 ? timeout_waits : state_waits)>10);
+        assert((nonvideo==1 ? timeout_waits : state_waits)>=4);
         assert(nonvideo_presents==(scenario==0 ? 1u : scenario==8 ? 2u : 0u));
         printf("PASS no-VIDEO events: TIMEOUT=%u STATE=%u redraw_presents=%u scenario=%d\n",timeout_waits,state_waits,nonvideo_presents,scenario);
     }

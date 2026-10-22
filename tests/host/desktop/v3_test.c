@@ -486,12 +486,31 @@ static void gl_completion(void)
     unsigned replies=0;for(unsigned i=before;i<fake_sent;i++)
         replies+=fake_messages[i].data[1]==DESK_V3_RESULT && desk_get32(fake_messages[i].data+4)==request;
     assert(replies==1);before=fake_sent;assert(!desk_redraw(&d));flush();assert(fake_sent==before);
+    before=fake_presents;
+    request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);bridge_wire.sender_pid=42;
+    assert(request && !desk_v3_receive(&d,root,&bridge_wire));
+    assert(!d.clients[a].gl_present_request && !d.damage.count);
+    assert(!desk_redraw(&d) && fake_presents==before);flush();
+    puts("PASS F2-98b identical visible GL PRESENT: immediate completion, zero screen writes");
     d.v3_lease=lease;desk_focus(&d,a);request_lease(root,1);flush();assert(d.v3_lease_state);
     struct ciuki_message release;msg(&release,DESK_V3_LEASE,16,1,1);
     assert(!desk_v3_receive(&d,root,&release) && !d.v3_lease_state);flush();
     request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);bridge_wire.sender_pid=42;
     assert(request && !desk_v3_receive(&d,root,&bridge_wire));
     assert(!desk_redraw(&d) && !d.clients[a].gl_present_request);flush();
+    int cover=create(root,21,2,1,0,0);
+    desk_move(&d,cover,d.clients[a].frame.x,d.clients[a].frame.y);
+    assert(!desk_redraw(&d));flush();
+    before=fake_sent;unsigned screen_writes=fake_presents;
+    request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);bridge_wire.sender_pid=42;
+    assert(request && !desk_v3_receive(&d,root,&bridge_wire));
+    assert(!d.clients[a].gl_present_request && !d.damage.count);
+    assert(!desk_redraw(&d) && fake_presents==screen_writes);flush();
+    replies=0;for(unsigned i=before;i<fake_sent;i++)
+        replies+=fake_messages[i].data[1]==DESK_V3_RESULT && desk_get32(fake_messages[i].data+4)==request;
+    assert(replies==1);
+    desk_drop_client(&d,cover);assert(!desk_redraw(&d));flush();
+    puts("PASS F2-98b covered GL PRESENT: one completion, zero screen writes, exposure restores the retained surface");
     request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);bridge_wire.sender_pid=42;
     assert(request && !desk_v3_receive(&d,root,&bridge_wire));
     desk_drop_client(&d,root);assert(!d.clients[a].gl_present_request);
