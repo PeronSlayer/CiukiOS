@@ -90,6 +90,9 @@ struct task {
     uint64_t device_cycles, device_base; /* shared-budget CPU, report windows */
     uint64_t run_cycles, window_base, kernel_ticks, user_ticks;
     uint64_t kernel_base, user_base, account_start, stretch_start, max_stretch;
+    /* f2-96: firmware (SMM) time proven inside the open accounting interval;
+     * the next charge leaves it out of the scheduler budgets (cpustat.c). */
+    uint64_t firmware_credit;
     enum task_prio account_prio;
     uint32_t stretch_eip, active_stretch_eip;
     bool stretch_sampled;

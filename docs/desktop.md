@@ -229,7 +229,8 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   the public read-only state, without `/dev/mixer` "No audio device".
   Opening the popup also sends `MIXER_REFRESH_MASTER` on the delegated
   handle (f1-100): on a ThinkPad the kernel reads the EC once, so the popup
-  then follows the hardware volume keys; there is no periodic EC polling.
+  shows the hardware volume keys at once; the kernel also reads the EC every
+  2 s (f2-96, `BOOT.CFG` `ecpoll=0` turns that poll off).
 - **Desktop icons** (desktop as a folder since f2-42,
   [design](design/desktop-folder.md)): the fixed icons Computer (Files at
   Computer; the icon carries the Ciuki portrait), Documents (Files at

@@ -1,0 +1,22 @@
+{
+  "01-software": "53550e11347542ba28940520cbfcbf35d6ea862d9883592f6231ffb88e3c6c1e",
+  "02-hardware-late-ready": "6d5e39127ef61e880564c530538a7128b0d9509e2cfeb3be2d4c5707c7e8f91c",
+  "03-hardware-moved": "b0ab5402b626fd16dbb1cc3aafac670bf43d3a8bd5b7d92bbdfbd5a1a64c32d3",
+  "04-busy-move-held": "b0ab5402b626fd16dbb1cc3aafac670bf43d3a8bd5b7d92bbdfbd5a1a64c32d3",
+  "05-busy-move-retried": "9ff702e0993186f5abad210cc8bb8901bc3814030762801b522e63728697bd5a",
+  "06-busy-shape-held": "9ff702e0993186f5abad210cc8bb8901bc3814030762801b522e63728697bd5a",
+  "07-busy-shape-retried": "8c9e3ffcd33001212c878f03b4b414a9fab8777659f354bae2493b9a48060ea8",
+  "08-busy-query": "002a188f7f3fda0fe7c2178b1647e3221257160ac327819685ead6a7d17a272c",
+  "09-v3-hide-busy": "002a188f7f3fda0fe7c2178b1647e3221257160ac327819685ead6a7d17a272c",
+  "10-v3-custom": "ede0bd7a574fca8dfba5df2c78ae752bd3be7c835f7bc82c9ada3947833d9198",
+  "11-v3-end-hardware": "002a188f7f3fda0fe7c2178b1647e3221257160ac327819685ead6a7d17a272c",
+  "12-engine-loss-software": "accbdd135f750e460baeb57b49c6a20aae50e8a8812564afce2803bcae7fa1ce",
+  "13-engine-back-hardware": "965e62c7a2001a8659d4147f0a0448c193dd2024463cbe12224e9db94afafc40",
+  "14-refused-move-software": "e68330ec51b12d16fb958dc335648fc2138f36175cbd03d4aa7bb18ca7636285",
+  "15-rearm-hardware": "9cdafb130f1fb16bdebbc3ab7c26babf4a1e534ec8c79f123f45c32f64a0af3f",
+  "16-refused-hide-busy": "9cdafb130f1fb16bdebbc3ab7c26babf4a1e534ec8c79f123f45c32f64a0af3f",
+  "17-refused-hide-done": "e3a869960d8aee4b27dc66c2a074438acd51e0b950575739874bef98c3a64491",
+  "18-loss-on-move-software": "63bb71492aca19ac4e5e2c23b9af46feab6d50bbc1f7105286dcc116148af3b3",
+  "19-new-generation-hardware": "63bb71492aca19ac4e5e2c23b9af46feab6d50bbc1f7105286dcc116148af3b3",
+  "20-window-move-hardware": "e481851ec01b8242ebfdee105fbd47481063d708fb6db9509f6f1cc16d7f431e"
+}

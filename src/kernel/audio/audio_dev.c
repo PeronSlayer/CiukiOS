@@ -231,11 +231,21 @@ void audio_fail(int error)
     audio_wake();
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
+/* The service start moved later by the firmware time proven since `firmware`. */
+static uint64_t service_start(uint64_t start, uint64_t firmware)
+{
+    uint64_t now = ktime_cycles(), smm = cpu_firmware_cycles ? cpu_firmware_cycles() - firmware : 0;
+    return smm < now - start ? start + smm : now;
+}
 static void audio_service_locked(void)
 {
     if (!audio.ready) return;
     struct audio_transport b; audio_backend_snapshot(&b);
     uint64_t start = ktime_cycles();
+    /* f2-96: SMM time inside the service (a T23 SMI lasts 2.1 ms, proven
+     * by cpustat) is not refill work: the 1 ms yield, the 2 ms deadline and
+     * the service maximum measure the work alone. */
+    uint64_t firmware = cpu_firmware_cycles ? cpu_firmware_cycles() : 0;
     uint32_t service_gap = 0;
     if (audio.running && audio.last_service_cycles && g_tsc_per_ms) {
         uint64_t gap = (start - audio.last_service_cycles) * 1000 / g_tsc_per_ms;
@@ -429,7 +439,7 @@ static void audio_service_locked(void)
         }
         /* Reserve the second millisecond for one conversion/publication and
          * bookkeeping. If one quantum itself overruns, count it below. */
-        if (ktime_elapsed_us(start, AUDIO_SERVICE_US / 2)) { audio_wake(); break; }
+        if (ktime_elapsed_us(service_start(start, firmware), AUDIO_SERVICE_US / 2)) { audio_wake(); break; }
     }
     if (!err && !cursor_retry && !active && audio.running && !quantum_pending) {
         /* Client drains have already waited their fetched/tail allowance.
@@ -452,6 +462,7 @@ static void audio_service_locked(void)
     } else if (active) {
         idle_since = 0; /* a new source cancels the idle tail */
     }
+    start = service_start(start, firmware);
     if (!control && ktime_elapsed_us(start, AUDIO_SERVICE_US)) { audio.deadlines++; audio_backend_deadline(); }
     uint64_t elapsed = (g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0);
     /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */

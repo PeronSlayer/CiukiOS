@@ -120,6 +120,7 @@ static void reset(void)
     forced=threshold=resched_pending=false;record_bytes=0;records[0]=0;g_boot.flags=0;
     memset(&timing_fixture,0,sizeof(timing_fixture));
     memset(&irqoff,0,sizeof(irqoff)); memset(&irqoff_window,0,sizeof(irqoff_window)); fpu_cost=0;
+    irqoff_credited=irqoff_last_end=pit_last=pit_phase=0; firmware_window=firmware_max=0; firmware_count=0; /* f2-96 */
     cpu_switch(0,&idle);
 }
 static void run_tick(uint32_t eip)

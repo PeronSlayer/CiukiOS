@@ -203,3 +203,10 @@ and up to seven gaps. A level drag: no EC record.
   parser and model accept `ecpoll=0` and `ecpoll=1`, reject variants).
   `scripts/loader_budget.py`: free 791 bytes before and after (the nine bytes
   of `'ecpoll=1',0` fall into an existing `align 16` pad).
+
+## Follow-up f2-96 (2026-10-22)
+
+The a4d9454e trial showed that without a poll the system volume no longer
+followed the volume keys. The default is now one RD_EC every 2 s (`ecpoll=0`
+off, `ecpoll=1` 1 Hz), and proven SMI time no longer reaches the audio
+refill budget: [f2-96](f2-96-cursor-ec-volume.md).
