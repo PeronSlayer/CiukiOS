@@ -1,7 +1,7 @@
 # f2-97 — Documentation and credits up to date; readable credits in About CiukiOS
 
 - **Phase/model:** F2/docs, Claude agent (Sonnet). **Worktree:** `wt/f2-97` from `main`.
-- **Owner request (2026-10-22 18:40):** after the current fixes, update the documentation and the credits, and fix the credits in the system's About dialog, which are not very readable.
+- **Owner request (2026-10-22 18:44):** after the current fixes, update the documentation and the credits, and fix the credits in the system's About dialog, which are not very readable.
 
 ## Required
 
