@@ -16,3 +16,13 @@
 5. Report the counts of early edges to expect on the T23 (`early_irq`), and the record format in `docs/validation/f1-92-ata-early-interrupt.md`.
 
 Rules: no QEMU, no image build, no git mutations, no diary edits, nothing deleted outside the worktree, `date` before timestamps, English. Report `build/codex/f1-92-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 03:04, decision on the delivery)
+
+The delivered root cause replaces the lead's reading: since f3-49b
+(`5785261e`) a cancelled or out-of-budget request ended an issued command and
+`failure()` treated it as a device fault (DMA quarantine, then channel
+quarantine on PIO, then the volume read-only). Accepted as the cause of the
+trial's I/O errors. The USB storage cancellation seam, the hardware-check
+cut-off (`cause=check_cancel`) and the one-command DOS budget overrun are
+follow-ups after the 1.0.0 alpha.

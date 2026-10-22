@@ -82,8 +82,40 @@ static void device_control(struct ata_channel *c, uint8_t v)
     c->ops->out8(c->port_ctx, c->control, v);
 }
 static uint64_t now(struct ata_channel *c) { return c->ops->now_ms(c->port_ctx); }
+/* f1-92: why a command boundary expired, for the fault/quarantine records. */
+enum { ATA_EXPIRY_NONE, ATA_EXPIRY_DEADLINE, ATA_EXPIRY_CHECK, ATA_EXPIRY_NO_BM_IRQ };
+/* Device deadline only. ATA-6 has no way to withdraw an issued command short
+ * of a reset (9.x protocols end only in the device's idle states), so a
+ * caller's cancellation or request budget (f3-49b request seam) must not end
+ * an issued command: that turned cancelled prefetch/DOS reads into DMA and
+ * channel quarantines on the T23 (f1-92). Interruption is honoured only
+ * before a command is issued (ata_transfer). The hardware check keeps its
+ * own explicit I/O cut-off. */
 static bool expired(struct ata_channel *c, uint64_t d) {
-    return (blk_request_interrupted && blk_request_interrupted()) || (hardware_check_io_cancelled && hardware_check_io_cancelled()) || now(c) - d < (1ull << 63);
+    if (hardware_check_io_cancelled && hardware_check_io_cancelled()) { c->expiry = ATA_EXPIRY_CHECK; return true; }
+    if (now(c) - d < (1ull << 63)) { c->expiry = ATA_EXPIRY_DEADLINE; return true; }
+    return false;
+}
+static bool request_interrupted(void) { return blk_request_interrupted && blk_request_interrupted(); }
+/* Bounded per-unit records: the first four, then each power of two. */
+static bool record_due(uint32_t count) { return count <= 4 || !(count & (count - 1)); }
+static const char *fault_cause(struct ata_device *d, uint8_t status, uint8_t bm, bool dma)
+{
+    struct ata_channel *c = d->channel;
+    uint8_t expiry = c->expiry;
+    c->expiry = ATA_EXPIRY_NONE;
+    if (c->quiescing) return "quiesce";
+    if (expiry == ATA_EXPIRY_CHECK) return "check_cancel";
+    if (expiry == ATA_EXPIRY_NO_BM_IRQ) return "bm_no_interrupt";
+    if (expiry == ATA_EXPIRY_DEADLINE) return "timeout";
+    if (dma && !d->issued) return "dma_prepare";
+    if (status == 0xff || !status) return "no_device";
+    if (status & (ATA_ERR | ATA_DF)) return "device_error";
+    if (dma && (bm & ATA_BM_ERROR)) return "bm_error";
+    if (dma && !c->dma.started) return "dma_not_started";
+    if (dma && (bm & ATA_BM_ACTIVE)) return "bm_active";
+    if (dma && !(bm & ATA_BM_IRQ)) return "bm_no_interrupt";
+    return "protocol";
 }
 static int pace(struct ata_channel *c)
 {
@@ -151,6 +183,7 @@ static int dma_failure(struct ata_device *d, uint64_t start, uint8_t status)
     struct ata_channel *c = d->channel;
     bool unstarted = c->dma.armed && d->issued && !c->dma.started && !(status & ATA_ERR);
     uint8_t bm = c->dma.irq_status | c->dma.ops->in8(c->dma.ctx, c->dma.base + 2);
+    const char *cause = fault_cause(d, status, bm, true);
     bool idle = ata_dma_stop(c);
     if (!idle) ata_dma_revoke(c);
     c->dma.armed = false;
@@ -160,21 +193,24 @@ static int dma_failure(struct ata_device *d, uint64_t start, uint8_t status)
     uint8_t ending = alternate(c);
     bool fallback = idle && !unstarted && !c->quiescing && (ending & ATA_DRDY) && ending != 0xff &&
                     !(ending & (ATA_BSY | ATA_DRQ | ATA_DF));
-    klog("[ata%u] dma quarantine unit=%u mode=udma%u generation=%u command=%02x issued=%u bm=%02x status=%02x error=%02x elapsed_ms=%llu fallback=%s",
+    klog("[ata%u] dma quarantine unit=%u mode=udma%u generation=%u command=%02x issued=%u bm=%02x status=%02x error=%02x elapsed_ms=%llu fallback=%s cause=%s",
          c->irq - 14, d->unit, d->udma_mode, d->generation, d->command, d->issued, bm,
-         status, d->error, d->elapsed_ms, fallback ? "pio" : "blocked");
+         status, d->error, d->elapsed_ms, fallback ? "pio" : "blocked", cause);
     if (fallback) klog("[ata%u] dma fallback unit=%u generation=%u command=%02x bm=%02x status=%02x mode=pio",
          c->irq - 14, d->unit, d->generation, d->command, bm, ending);
-    /* A failed command is never replayed. Only a later independent request
-     * may use PIO, after proving both engines idle. Busy/DRQ/DF or missing
+    /* The failed DMA command itself is never resumed. With both engines
+     * proven idle, ata_transfer repeats the same request once through PIO
+     * (f1-92) before any error reaches the volume. Busy/DRQ/DF or missing
      * devices retain the old whole-channel quarantine and pinned memory. */
-    if (!fallback) return failure(d, start, ending);
+    if (!fallback) { c->fault_cause = cause; return failure(d, start, ending); }
     return -FS_EIO;
 }
 static int failure(struct ata_device *d, uint64_t start, uint8_t status)
 {
     struct ata_channel *c = d->channel;
     if (c->dma.armed || d->dma_configuring) return dma_failure(d, start, status);
+    const char *cause = c->fault_cause ? c->fault_cause : fault_cause(d, status, 0, false);
+    c->fault_cause = 0;
     d->status = status;
     d->error = reg_read(c, 1);       /* diagnostic only while BSY is set */
     d->elapsed_ms = now(c) - start;
@@ -191,8 +227,8 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
             if (c->claims[i] >= 0)
                 registry_quarantine(c->claims[i], c->generations[i]);
         if (c->dma.claim >= 0) registry_quarantine(c->dma.claim, c->dma.generation);
-        klog("[ata%u] fault unit=%u command=%02x issued=%u status=%02x error=%02x elapsed_ms=%llu",
-             c->irq - 14, d->unit, d->command, d->issued, d->status, d->error, d->elapsed_ms);
+        klog("[ata%u] fault unit=%u command=%02x issued=%u status=%02x error=%02x elapsed_ms=%llu cause=%s",
+             c->irq - 14, d->unit, d->command, d->issued, d->status, d->error, d->elapsed_ms, cause);
     }
     return -FS_EIO;
 }
@@ -264,37 +300,56 @@ struct irq_wait { struct ata_channel *channel; uint32_t sequence; gen_t generati
 static bool irq_ready(void *arg)
 {
     struct irq_wait *w = arg;
-    return (blk_request_interrupted && blk_request_interrupted()) || w->channel->stopped || w->channel->quiescing ||
+    /* f1-92: no request-interruption term. An issued command waits for its
+     * device interrupt or its own device deadline, never for a caller. */
+    return w->channel->stopped || w->channel->quiescing ||
         (w->channel->irq_sequence != w->sequence && w->channel->irq_generation == w->generation);
 }
 
-static int wait_irq_result(struct ata_device *d, uint32_t *sequence, uint64_t start,
-                           uint64_t deadline, bool classify)
+static int wait_irq_until(struct ata_device *d, uint32_t *sequence, uint64_t start,
+                          uint64_t deadline, bool classify, uint8_t timeout_cause)
 {
     uint64_t check = hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
     if (check && check < deadline) deadline = check;
     struct ata_channel *c = d->channel;
-    uint32_t left=blk_request_remaining_ms ? blk_request_remaining_ms() : UINT32_MAX;
-    if (left!=UINT32_MAX && now(c)+left<deadline) deadline=now(c)+left;
     struct irq_wait w = { c, *sequence, c->request_generation };
     if (expired(c, deadline) || !kwait_wait_until(&c->wait, irq_ready, &w,
-                                                c->ops->deadline_ticks(c->port_ctx, deadline)))
+                                                c->ops->deadline_ticks(c->port_ctx, deadline))) {
+        if (c->expiry != ATA_EXPIRY_CHECK) c->expiry = timeout_cause;
         return failure(d, start, alternate(c));
+    }
     uint32_t f = irq_save();
     uint8_t s = c->irq_status;
     *sequence = c->irq_sequence;
     irq_restore(f);
     d->status = s;
-    if (c->stopped || c->quiescing || expired(c, deadline))
+    if (c->stopped || c->quiescing || expired(c, deadline)) {
+        if (c->expiry == ATA_EXPIRY_DEADLINE) c->expiry = timeout_cause;
         return failure(d, start, s);
+    }
     if (classify && packet_identify_abort(d, s)) return 1;
     if (!(s & ATA_BSY) && (s & (ATA_ERR | ATA_DF)))
         return failure(d, start, s);
     return 0;
 }
+static int wait_irq_result(struct ata_device *d, uint32_t *sequence, uint64_t start,
+                           uint64_t deadline, bool classify)
+{
+    return wait_irq_until(d, sequence, start, deadline, classify, ATA_EXPIRY_DEADLINE);
+}
 static int wait_irq(struct ata_device *d, uint32_t *sequence, uint64_t start, uint64_t deadline)
 {
     return wait_irq_result(d, sequence, start, deadline, false);
+}
+/* f1-92: an interrupt edge that was not the awaited event (early, stale or a
+ * late edge of an earlier command). Thread context only; bounded records. */
+static void early_irq(struct ata_device *d, const char *phase, uint8_t status, uint8_t bm)
+{
+    struct ata_channel *c = d->channel;
+    if (d->early_irqs != UINT32_MAX) d->early_irqs++;
+    if (record_due(d->early_irqs))
+        klog("[ata%u] early_irq unit=%u phase=%s command=%02x generation=%u status=%02x bm=%02x count=%u",
+             c->irq - 14, d->unit, phase, d->command, d->generation, status, bm, d->early_irqs);
 }
 
 static int select_device(struct ata_device *d, uint64_t start, uint64_t deadline, uint8_t head)
@@ -1026,6 +1081,66 @@ static int transfer_block(struct ata_device *d, uint8_t *buf, unsigned sectors,
     return 0;
 }
 
+/* f1-92: an edge counted between the DMA command and Start. ATA-6 9.7: a DMA
+ * data command interrupts once, after all of its data or on an abort with
+ * ERR; with the master never started no data can have moved, so an edge
+ * without ERR/DF from a present drive (BSY, DRQ/DMARQ or a stale DRDY) and a
+ * master without Active/Error is not this command's end. The ISR already
+ * acknowledged the drive and cleared the master's Interrupt bit (W1C):
+ * consume the edge, start the master and keep the command's deadline.
+ * Anything else stays a DMA failure with the existing classification. */
+static int dma_early(struct ata_device *d, uint32_t *sequence, uint64_t start)
+{
+    struct ata_channel *c = d->channel;
+    uint32_t f = irq_save();
+    uint8_t snapshot = c->irq_status, bm = c->dma.irq_status;
+    irq_restore(f);
+    uint8_t s = alternate(c);
+    bm |= c->dma.ops->in8(c->dma.ctx, c->dma.base + 2);
+    uint8_t fault = (uint8_t)((s | snapshot) & (ATA_ERR | ATA_DF));
+    if (fault || s == 0xff || !s || snapshot == 0xff || (bm & (ATA_BM_ACTIVE | ATA_BM_ERROR))) {
+        d->status = fault && !(s & fault) ? snapshot : s;
+        return dma_failure(d, start, d->status);
+    }
+    early_irq(d, "before_start", snapshot, bm);
+    f = irq_save();
+    *sequence = c->irq_sequence;
+    c->dma.irq_status = 0;
+    ata_dma_start(c);
+    irq_restore(f);
+    return 0;
+}
+/* f1-92: after Start, return at the bus-master completion (Interrupt or
+ * Error captured by the ISR). A stray edge left the master running (see
+ * ata_dma_irq): while the drive shows BSY or DRQ the transfer is live, wait
+ * on with the same deadline (ATA-6 9.7 HDMA1/HDMA2). If the drive already
+ * reports the end of the command without a latched Interrupt, the real edge
+ * is either in flight or missing: wait a bounded grace, then fail as
+ * bm_no_interrupt (the timeout path stops the master and proves idle). */
+#define ATA_DMA_IRQ_GRACE_MS 10u
+static int dma_wait(struct ata_device *d, uint32_t *sequence, uint64_t start, uint64_t deadline)
+{
+    struct ata_channel *c = d->channel;
+    uint64_t limit = deadline;
+    uint8_t cause = ATA_EXPIRY_DEADLINE;
+    for (;;) {
+        int e = wait_irq_until(d, sequence, start, limit, false, cause);
+        if (e) return e;
+        uint32_t f = irq_save();
+        uint8_t bm = c->dma.irq_status, snapshot = c->irq_status;
+        irq_restore(f);
+        if (bm & (ATA_BM_IRQ | ATA_BM_ERROR)) return 0;
+        early_irq(d, "dma_active", snapshot, bm);
+        uint8_t s = alternate(c);
+        if (s != 0xff && (s & (ATA_BSY | ATA_DRQ)) && !(s & (ATA_ERR | ATA_DF))) {
+            limit = deadline; cause = ATA_EXPIRY_DEADLINE;
+            continue;
+        }
+        uint64_t grace = now(c) + ATA_DMA_IRQ_GRACE_MS;
+        if (grace < limit) { limit = grace; cause = ATA_EXPIRY_NO_BM_IRQ; }
+    }
+}
+
 static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t *buf, bool write)
 {
     struct ata_channel *c = d->channel;
@@ -1065,12 +1180,17 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     if (dma) command = write ? (d->lba48 ? 0x35 : 0xca) : (d->lba48 ? 0x25 : 0xc8);
     e = issue(d, command, start, &sequence);
     if (dma) {
-        /* An immediate device abort can precede Start. Do not restart a
-         * master already stopped by that interrupt or a failure path. */
-        uint32_t f = irq_save();
-        if (!e && c->irq_sequence == sequence) ata_dma_start(c);
-        irq_restore(f);
-        if (!e) e = wait_irq(d, &sequence, start, deadline);
+        /* SFF/Intel bus master 3.1: command, then Start. An edge counted in
+         * between is classified by dma_early (f1-92) before any Start. */
+        bool early = false;
+        if (!e) {
+            uint32_t f = irq_save();
+            early = c->irq_sequence != sequence;
+            if (!early) ata_dma_start(c);
+            irq_restore(f);
+        }
+        if (!e && early) e = dma_early(d, &sequence, start);
+        if (!e) e = dma_wait(d, &sequence, start, deadline);
         uint8_t s = alternate(c), bm = c->dma.irq_status;
         if (!e && (!c->dma.started || (bm & (ATA_BM_ACTIVE | ATA_BM_ERROR | ATA_BM_IRQ)) != ATA_BM_IRQ || !(s & ATA_DRDY) ||
                    (s & (ATA_BSY | ATA_DRQ | ATA_ERR | ATA_DF)))) e = dma_failure(d, start, s);
@@ -1097,8 +1217,14 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
         if (sectors > n - i) sectors = n - i;
         /* 9.6: first WRITE DRQ is NOT accompanied by INTRQ. All READ
          * blocks and subsequent WRITE blocks require an IRQ. */
-        if (!write || i)
+        if (!write || i) {
             e = wait_irq(d, &sequence, start, deadline);
+            /* f1-92, ATA-6 9.5/9.6: the drive asserts INTRQ only with BSY=0
+             * (DRQ for a block, or the error/end status). A BSY snapshot is
+             * an early or stale edge; the DRQ poll below waits for the real
+             * block, which is the data phase (status 58h), never a fault. */
+            if (!e && (c->irq_status & ATA_BSY)) early_irq(d, "pio", c->irq_status, 0);
+        }
         if (!e)
             e = poll_status(d, start, deadline, ATA_DRQ, 0);
         if (!e)
@@ -1107,8 +1233,10 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
         if (!e && i < n)
             task_yield();
     }
-    if (!e && write)
+    if (!e && write) {
         e = wait_irq(d, &sequence, start, deadline);
+        if (!e && (c->irq_status & ATA_BSY)) early_irq(d, "pio", c->irq_status, 0);
+    }
     if (!e)
         e = poll_status(d, start, deadline, 0, ATA_DRQ);
     disarm(c);
@@ -1134,8 +1262,33 @@ static int ata_transfer(struct blkdev *b, uint64_t lba, uint32_t n, void *buf, b
         e = -FS_EQUARANTINED;
     uint8_t *p = buf;
     while (!e && n) {
+        /* f1-92: a cancelled or out-of-budget request stops here, between
+         * commands, with no port access; an issued command always ends on
+         * the device's own terms. */
+        if (request_interrupted()) { e = -FS_EAGAIN; break; }
         uint32_t chunk = n > BLKDEV_READ_SECTORS ? BLKDEV_READ_SECTORS : n;
+        bool dma = d->dma_enabled;
+        uint64_t started = now(c);
         e = command_data(d, lba, chunk, p, write);
+        if (e == -FS_EIO && dma && d->dma_quarantined && !d->dma_enabled &&
+            !c->stopped && !c->quiescing && !b->quarantined) {
+            /* f1-92 fallback policy: dma_failure proved drive and master idle
+             * (fallback=pio). Repeat this same request once through PIO with
+             * the same buffer and LBAs (sector writes are idempotent) before
+             * any error reaches the volume; only a failed PIO repeat ends in
+             * the channel quarantine and a read-only volume. */
+            if (d->dma_retries != UINT32_MAX) d->dma_retries++;
+            gen_t failed = d->generation;
+            e = command_data(d, lba, chunk, p, write);
+            klog("[ata%u] dma retry unit=%u generation=%u command=%02x mode=pio result=%d count=%u",
+                 c->irq - 14, d->unit, failed, d->command, e, d->dma_retries);
+        }
+        if (d->issued && request_interrupted()) {
+            if (d->interrupted_inflight != UINT32_MAX) d->interrupted_inflight++;
+            if (record_due(d->interrupted_inflight))
+                klog("[ata%u] interrupted_inflight unit=%u command=%02x result=%d elapsed_ms=%llu count=%u",
+                     c->irq - 14, d->unit, d->command, e, now(c) - started, d->interrupted_inflight);
+        }
         if (e)
             break;
         lba += chunk;
