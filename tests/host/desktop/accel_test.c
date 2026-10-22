@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #include "fake.h"
 #include "../../../apps/libdeskui/deskui.h"
-#include "../../../assets/cursors/cursors.h"
+#include "../../../assets/cursors/paint.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -104,8 +104,18 @@ static void identical_frame(void)
     uint32_t *expected=calloc((size_t)d.width*d.height,4), *visible=malloc((size_t)d.width*d.height*4);
     assert(expected && visible);
     struct desktop *oracle=malloc(sizeof(d)); assert(oracle); *oracle=d;
-    oracle->pixels=expected; oracle->hw_cursor=0;
+    oracle->pixels=expected; oracle->hw_cursor=shown;
     desk_composite(oracle,(struct desk_box){0,0,(int32_t)d.width,(int32_t)d.height});
+    /* Hardware uses the same silhouette/hotspot without a soft shadow. */
+    if (shown) {
+        struct desk_tool_cursor art=desk_tool_cursor(d.cursor_shape);
+        for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
+            int px=d.mouse_x-art.hot_x+x, py=d.mouse_y-art.hot_y+y;
+            uint32_t bit=0x80000000u>>x;
+            if (px>=0 && py>=0 && (unsigned)px<d.width && (unsigned)py<d.height && (art.mask[y]&bit))
+                expected[(unsigned)py*d.width+(unsigned)px]=art.image[y]&bit ? 0xffffffu : 0;
+        }
+    }
     memcpy(visible,scanout,(size_t)d.width*d.height*4);
     if (shown) for (unsigned y=0;y<32;y++) for (unsigned x=0;x<32;x++) {
         int px=cursor_x+(int)x,py=cursor_y+(int)y;

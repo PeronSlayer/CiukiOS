@@ -78,11 +78,13 @@ Status: **image** is installed in the image, **build only** is used to build or 
 | --- | --- | --- | --- | --- |
 | Tango Icon Theme | 0.8.90 | Public Domain | `assets/icons/README.md` | image |
 | Ciuki portrait | approved asset | Project asset, not PD | `assets/brand/ciuki-logo.png` | image |
+| Ciuki cursor artwork | f2-99 | GPL-2.0 | `assets/cursors/README.md` | image |
 
 ## Notes
 
 - The CiukiOS code is GPL-2.0 (`LICENSE`); the SDK and `libciuki` are MIT (`sdk/LICENSE`). Code ported into the unified DOS kernel is GPL-2.0-or-later by the owner's grant.
 - The Ciuki portrait is a separate project asset, not part of Tango's Public Domain release, and must not be redrawn or replaced. Tango authors and the source archive hash are in `assets/icons/README.md` and `assets/icons/CREDITS.TXT`.
+- The Ciuki cursor SVGs and generated rasters are original project artwork drawn by OpenAI Codex for CiukiOS (2026-10-22), GPL-2.0. No Apple artwork is included. The inactive DMZ-White (CC BY-SA 3.0, Novell) and Hackneyed (MIT, Richard Ferreira) notices remain in `assets/cursors/` with their retained material.
 - The Wine DLLs are LGPL-2.1-or-later; corresponding source and the written offer are `third_party/wine/SOURCE-OFFER.txt`. A release must carry them before publication resumes.
 - Game data are not part of the engines' licences: only public shareware packages are pre-installed, with their own terms (`third_party/games/*/UPSTREAM.json`).
 - The Microsoft and vendor driver collections under `third_party/drivers` are research references, are not installed and are not redistributed.

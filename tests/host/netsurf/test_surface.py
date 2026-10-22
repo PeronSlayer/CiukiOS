@@ -5,8 +5,26 @@ import subprocess
 import unittest
 
 ROOT=Path(__file__).resolve().parents[3]
+# Reuse an existing prepared source/prefix read-only; tests never build the browser.
+SOURCE=Path(os.environ.get("CIUKI_NETSURF_SOURCE",ROOT / "build/external/netsurf-host/source"))
 
 class SurfaceTests(unittest.TestCase):
+    def test_chrome_cursor(self):
+        out=ROOT / "build/host/netsurf";out.mkdir(parents=True,exist_ok=True)
+        prefix=Path(os.environ.get("CIUKI_NETSURF_PREFIX",ROOT / "build/external/netsurf-host/prefix"))
+        source=SOURCE / "netsurf"
+        flags=["clang","-std=c17","-D_POSIX_C_SOURCE=200809L","-DCIUKI_HOST","-DCIUKI_NETSURF","-Dnsframebuffer",
+               "-O1","-g","-ffunction-sections","-fdata-sections","-fsanitize=address,undefined",
+               "-fno-sanitize-recover=undefined","-Wl,--gc-sections","-I"+str(ROOT),"-I"+str(ROOT / "src/kernel/include"),
+               "-I"+str(prefix / "include"),"-I"+str(source),"-I"+str(source / "include"),
+               "-I"+str(source / "frontends"),"-I"+str(source / "frontends/framebuffer/ciuki"),
+               "-include",str(ROOT / "tests/host/desktop/replay_base.h")]
+        subprocess.run([*flags,str(ROOT / "tests/host/netsurf/chrome_cursor_test.c"),
+                        str(ROOT / "apps/libdeskui/widgets.c"),str(ROOT / "apps/libdeskui/draw.c"),
+                        "-o",str(out / "chrome-cursor")],check=True)
+        subprocess.run([str(out / "chrome-cursor")],check=True,
+                       env=dict(os.environ,ASAN_OPTIONS="detect_leaks=1",UBSAN_OPTIONS="halt_on_error=1"),timeout=30)
+
     def test_registered_surface(self):
         out=ROOT / "build/host/netsurf";out.mkdir(parents=True,exist_ok=True)
         host=ROOT / "build/external/netsurf-host"
@@ -28,7 +46,8 @@ class SurfaceTests(unittest.TestCase):
         flags=["clang","-std=c17","-D_POSIX_C_SOURCE=200809L","-O1","-g","-Wall","-Wextra","-Werror",
                "-include",str(ROOT / "tests/host/desktop/replay_base.h"),"-fsanitize=address,undefined","-fno-sanitize-recover=undefined","-I"+str(ROOT),
                "-I"+str(ROOT / "src/kernel/include"),
-               "-I"+str(ROOT / "build/external/netsurf-host/prefix/include")]
+               "-I"+str(ROOT / "build/external/netsurf-host/prefix/include"),
+               "-I"+str(SOURCE / "libnsfb/include"),"-I"+str(SOURCE / "netsurf/include")]
         sources=["sdk/netsurf/port/surface.c","apps/libdeskui/v3.c","apps/desktop/protocol.c",
                  "apps/libdeskui/keymap.c","tests/host/netsurf/surface_test.c"]
         subprocess.run([*flags,*[str(ROOT / s) for s in sources],"-o",str(out / "surface")],check=True)
