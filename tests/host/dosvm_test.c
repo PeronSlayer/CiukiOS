@@ -577,6 +577,18 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
 #define cvga_write_vram creation_cost_store
 #include "../../src/kernel/vm/dosvm.c"
 #include "dosvm_request_context.inc"
+/* This historical transport models only transient files. Persistent title
+ * storage has a production FAT/VFS harness in dos/persistent_saves_test.c;
+ * here exercise the supported read-only system-volume launch path. */
+void fs_service(void) { }
+int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
+                        char path[128],unsigned *archived)
+{
+    (void)s; *archived=0; f->fd=-1; f->absent=true;
+    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    return -FS_EROFS;
+}
+#include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
@@ -596,6 +608,8 @@ static unsigned program_calls;
 static int program_result;
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 { CHECK(game && game<=3);(void)remove;program_calls++;*size=8192;return program_result; }
+int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
+{ CHECK(game && game<=3 && op>=14 && op<=16); c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0; }
 #include "../../src/kernel/vm/dosvm_client.c"
 #include "../../src/kernel/vm/vga_hardware.c"
 #include "../../src/kernel/vm/dosvm_fullscreen.c"
@@ -618,7 +632,7 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 static unsigned vm_owned_pages(const struct dosvm *v)
 {
     return DOSVM_PAGES + v->memory.pool.resident + v->memory.pool.dir_pages + v->as.tables + 1 +
-           v->audio.q.page_count + v->read_pages;
+           v->audio.q.page_count + v->read_pages + v->save.index_pages;
 }
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
@@ -942,6 +956,7 @@ static void test_memory_services(bool locked)
 #include "dos/launch_test.inc"
 #include "dosvm_disk_trace_test.inc"
 #include "dosvm_disk_cache_test.inc"
+#include "dosvm_persistent_test.inc"
 #include "dosvm_zone_memory_test.inc"
 #include "dosvm_conformance_test.inc"
 #include "dosvm_paging_test.inc"
@@ -949,6 +964,10 @@ static void test_memory_services(bool locked)
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_SAVE_TEST")) {
+        test_persistent_provider(); test_client_boundary();
+        free(ram); fflush(stdout); return 0;
+    }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
         free(ram); fflush(stdout); return 0;
@@ -967,6 +986,7 @@ int main(void)
     }
     test_d48_bios_and_export();
     test_disk_cache(); test_disk_provider_deadline(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
+    test_persistent_provider();
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();

@@ -187,6 +187,7 @@ static uint32_t status_flags(const struct dosvm *v)
            (v->fullscreen ? CIUKI_DOSVM_FULL_SCREEN : 0) |
            (v->fullscreen_suspended ? CIUKI_DOSVM_SUSPENDED : 0) |
            (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0) |
+           (v->persistent && v->save.full ? CIUKI_DOSVM_SAVE_FULL : 0) |
            (dosvm_shell_idle(v) && v->idle.sleeping && !v->key_count && !v->kbd.count ? CIUKI_DOSVM_SHELL_READY : 0);
 }
 static uint32_t wait_phase(void)
@@ -267,6 +268,19 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p) return -EPERM;
     unsigned op = tf->ebx;
+    if (op>=CIUKI_DOSVM_SAVE_QUERY && op<=CIUKI_DOSVM_SAVE_EXPORT) {
+        if (op!=CIUKI_DOSVM_SAVE_QUERY && !p->programs_capability) return -EPERM;
+        if (tf->edx!=sizeof(struct ciuki_dosvm_command)) return -EINVAL;
+        struct ciuki_dosvm_command c,valid={0};
+        int e=copy_from_user(&c,tf->ecx,sizeof(c)); if (e) return e;
+        if (c.version!=CIUKI_DOSVM_VERSION) return -EOPNOTSUPP;
+        valid.version=CIUKI_DOSVM_VERSION; valid.size=sizeof(valid); valid.launch.game=c.launch.game;
+        if (!c.launch.game || c.launch.game>CIUKI_DOSVM_GAME_COUNT || memcmp(&c,&valid,sizeof(c))) return -EINVAL;
+        struct ua_pin pin; e=ua_pin(p->memory,&pin,tf->ecx,sizeof(c),true); if (e) return e;
+        e=dosvm_game_data(c.launch.game,op,&c);
+        if (!e) e=copy_to_user(tf->ecx,&c,sizeof(c));
+        ua_unpin(p->memory,&pin); return e;
+    }
     /* Query is read-only. Removal requires the separately delegated applet
      * authority; C: write admission alone never grants process authority. */
     if(op==CIUKI_DOSVM_GAME_QUERY || op==CIUKI_DOSVM_GAME_REMOVE) {

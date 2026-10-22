@@ -554,6 +554,19 @@ static void test_client_boundary(void)
 {
     window_fixtures();
     struct ciuki_dosvm_command c, w;
+    /* F3-64 game-data management uses strict records and separate authority. */
+    fake_current=&fake_proc[2];
+    for (unsigned op=CIUKI_DOSVM_SAVE_QUERY;op<=CIUKI_DOSVM_SAVE_EXPORT;op++) {
+        struct ciuki_dosvm_command data=command_for(0,0); data.launch.game=1;
+        fake_proc[2].programs_capability=false;
+        if (op!=CIUKI_DOSVM_SAVE_QUERY) CHECK(dosvm_call(op,&data,sizeof(data))==-EPERM);
+        fake_proc[2].programs_capability=true;
+        data.launch.reserved[1]=1; CHECK(dosvm_call(op,&data,sizeof(data))==-EINVAL);
+        data.launch.reserved[1]=0; data.name[0]='x'; CHECK(dosvm_call(op,&data,sizeof(data))==-EINVAL);
+        data.name[0]=0; user_fault=true; CHECK(dosvm_call(op,&data,sizeof(data))==-EFAULT); user_fault=false;
+        CHECK(!dosvm_call(op,&data,sizeof(data)) && data.changed==1024 && data.reason==DOS_SAVE_QUOTA);
+    }
+    fake_proc[2].programs_capability=false;
     /* Query/remove use the actual syscall validation and fixture storage. */
     struct ciuki_dosvm_command q=command_for(0,0);q.launch.game=2;
     unsigned before=program_calls;

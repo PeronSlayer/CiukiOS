@@ -46,17 +46,22 @@ static int image_flush(struct blkdev *d)
 {(void)d;return vfs_commit(&owner.table,owner.fd);}
 static int remove_overlays(unsigned game)
 {
-    char pattern[64];ksnprintf(pattern,sizeof(pattern),"C:\\SYSTEM\\DOS\\G%uK*.COW",game);
+    char pattern[80];
     struct vfs_find find;struct fat_entry entry;
     /* Restart after deletion: directory indices may be reused. */
-    for(unsigned budget=0;budget<4096;budget++) {
-        int e=vfs_find_first(&owner.table,pattern,0,&find,&entry);
-        if(e==-FS_ENOENT)return 0;
-        if(e)return e;
-        char path[FS_PATH_BYTES];ksnprintf(path,sizeof(path),"C:\\SYSTEM\\DOS\\%s",entry.name);
-        e=vfs_delete(&owner.table,path);if(e)return e;
+    for (unsigned pass=0;pass<2;pass++) {
+        const char *directory=pass ? "C:\\SYSTEM\\DOS\\SAVES" : "C:\\SYSTEM\\DOS";
+        ksnprintf(pattern,sizeof(pattern),"%s\\G%uK*.COW",directory,game);
+        for(unsigned budget=0;;budget++) {
+            int e=vfs_find_first(&owner.table,pattern,0,&find,&entry);
+            if(e==-FS_ENOENT)break;
+            if(e)return e;
+            if(budget==4096)return -FS_ELOOP;
+            char path[FS_PATH_BYTES];ksnprintf(path,sizeof(path),"%s\\%s",directory,entry.name);
+            e=vfs_delete(&owner.table,path);if(e)return e;
+        }
     }
-    return -FS_ELOOP;
+    return 0;
 }
 /* Authorized base mutation publishes a fresh full-file digest before another
  * launch. A failed update leaves the old sidecar, so launch fails closed. */

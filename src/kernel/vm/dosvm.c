@@ -413,7 +413,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         const struct vm_pool *pool = &v->memory.pool;
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + pool->resident + pool->dir_pages + v->as.tables + 1;
         out->pages += v->audio.q.page_count; /* f3-05 PCM/event queues */
-        out->pages += v->read_pages;
+        out->pages += v->read_pages + v->save.index_pages;
         out->committed += pool->commit; out->swapped += pool->swapped;
         out->pinned += pool->pinned; out->cache += v->read_pages;
         out->overlay_rows += v->sector_count;
@@ -1305,6 +1305,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         return video_error;
     }
     int file_cleanup=0;
+    v->save_discarding=forced || v->info.reason!=DOSVM_EXIT;
     if (dosvm_file_destroy) {
         int file_error=dosvm_file_destroy(v);
         if (file_error) {
@@ -1315,7 +1316,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     }
     dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
-    int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
+    int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT || (v->persistent && file_cleanup));
     if (!e) e=file_cleanup;
     if (e && v->info.dirty) v->info.data_loss = true;
     if (audio_vm_detach) audio_vm_detach(key); /* f4-05: revoke the mixer source first */

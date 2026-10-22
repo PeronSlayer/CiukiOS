@@ -1582,6 +1582,13 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_WAIT_PRESENT 11u /* observe frame/lifecycle events, no drawing */
 #define CIUKI_DOSVM_GAME_QUERY 12u /* launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes */
 #define CIUKI_DOSVM_GAME_REMOVE 13u /* delegated program-management authority; no VM handle */
+/* Per-title game data: launch.game input, remaining inputs zero. QUERY returns
+ * changed=file bytes, reason=quota bytes. EXPORT returns files in changed and
+ * destination folder in name. RESET/EXPORT require program-management authority
+ * and an idle title. RESET is issued only after the UI confirms the request. */
+#define CIUKI_DOSVM_SAVE_QUERY 14u
+#define CIUKI_DOSVM_SAVE_RESET 15u
+#define CIUKI_DOSVM_SAVE_EXPORT 16u
 #define CIUKI_DOSVM_WAIT_MAX_MS 50u
 #define CIUKI_DOSVM_EVENT_VIDEO 1u
 #define CIUKI_DOSVM_EVENT_STATE 2u
@@ -1605,6 +1612,7 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_SUSPENDED 8u
 #define CIUKI_DOSVM_SHELL_READY 32u /* STATUS: shell blocked for input, guest key queues empty */
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
+#define CIUKI_DOSVM_SAVE_FULL 64u /* STATUS.changed: game data quota/disk space exhausted */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u

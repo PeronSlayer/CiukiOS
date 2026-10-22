@@ -2715,7 +2715,15 @@ launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes
 
 delegated program-management authority; no VM handle
 
+Per-title game data: launch.game input, remaining inputs zero. QUERY returns
+changed=file bytes, reason=quota bytes. EXPORT returns files in changed and
+destination folder in name. RESET/EXPORT require program-management authority
+and an idle title. RESET is issued only after the UI confirms the request.
+
 ```c
+#define CIUKI_DOSVM_SAVE_QUERY 14u
+#define CIUKI_DOSVM_SAVE_RESET 15u
+#define CIUKI_DOSVM_SAVE_EXPORT 16u
 #define CIUKI_DOSVM_WAIT_MAX_MS 50u
 #define CIUKI_DOSVM_EVENT_VIDEO 1u
 #define CIUKI_DOSVM_EVENT_STATE 2u
@@ -2770,6 +2778,12 @@ STATUS: shell blocked for input, guest key queues empty
 ```
 
 STATUS.reason is positive errno
+
+```c
+#define CIUKI_DOSVM_SAVE_FULL 64u
+```
+
+STATUS.changed: game data quota/disk space exhausted
 
 ```c
 #define CIUKI_DOSVM_BOOTING 0u

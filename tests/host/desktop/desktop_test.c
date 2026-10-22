@@ -968,6 +968,40 @@ static void test_dos_fullscreen_restore_frame(void)
     cleanup(); free(pixels);
     puts("PASS DOS full-screen restore: settled desktop presents nothing, RESYNC presents one full frame");
 }
+static void test_game_data_properties(void)
+{
+    setup(640,480); desk_shell_enable(&d);
+    desk_menu_open(&d,SH_MENU_GAMES,10,50); d.sh.menus[0].hot=0;
+    desk_shell_key(&d,0x2a,1); assert(desk_shell_key(&d,DU_KEY_F10,1));
+    desk_shell_key(&d,DU_KEY_F10,0); desk_shell_key(&d,0x2a,0);
+    assert(!d.sh.levels && d.sh.save_game==1);
+    assert(d.sh.save_busy && d.sh.save_op==CIUKI_DOSVM_SAVE_QUERY);
+    int index=d.focus; assert(index>=0 && d.clients[index].internal==DESK_INTERNAL_GAME_DATA);
+    struct ciuki_dosvm_command result={.changed=3072,.reason=64u*1024u*1024u};
+    d.sh.save_op=0; desk_game_data_result(&d,1,CIUKI_DOSVM_SAVE_QUERY,0,&result);
+    assert(!d.sh.save_busy && d.sh.save_bytes==3072 && d.sh.save_quota==result.reason);
+    struct desk_box content=desk_content(&d.clients[index]);
+    /* Reset is a question first. Escape and the default Enter both cancel. */
+    desk_internal_click(&d,index,content.x+20,content.y+content.h-25);
+    assert(d.sh.save_confirm && !d.sh.save_op);
+    desk_shell_key(&d,DU_KEY_ESC,1); desk_shell_key(&d,DU_KEY_ESC,0);
+    assert(!d.sh.save_confirm && !d.sh.save_op);
+    desk_internal_click(&d,index,content.x+20,content.y+content.h-25);
+    desk_shell_key(&d,DU_KEY_ENTER,1); desk_shell_key(&d,DU_KEY_ENTER,0);
+    assert(!d.sh.save_confirm && !d.sh.save_op && !d.sh.save_busy);
+    desk_internal_click(&d,index,content.x+20,content.y+content.h-25);
+    desk_internal_click(&d,index,content.x+20,content.y+content.h-25);
+    assert(!d.sh.save_confirm && d.sh.save_op==CIUKI_DOSVM_SAVE_RESET && d.sh.save_busy);
+    d.sh.save_op=0; desk_game_data_result(&d,1,CIUKI_DOSVM_SAVE_RESET,-EBUSY,&result);
+    assert(strstr(d.sh.save_status,"Close the game") && d.sh.save_bytes==3072);
+    desk_internal_click(&d,index,content.x+174,content.y+content.h-25);
+    assert(d.sh.save_op==CIUKI_DOSVM_SAVE_EXPORT && d.sh.save_busy);
+    d.sh.save_op=0; result.changed=2; strcpy(result.name,"C:\\Documents\\Saves\\G1-0");
+    desk_game_data_result(&d,1,CIUKI_DOSVM_SAVE_EXPORT,0,&result);
+    assert(strstr(d.sh.save_status,"2 changed file(s)") && strstr(d.sh.save_status,result.name));
+    cleanup();
+    puts("PASS game data properties: async query, size/quota, reset confirmation/cancel, busy refusal, export folder");
+}
 int main(void)
 {
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
@@ -975,5 +1009,6 @@ int main(void)
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
+    test_game_data_properties();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

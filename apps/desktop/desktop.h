@@ -383,6 +383,8 @@ int desk_task_launch(struct desktop *, const char *name, const char *argument);
 int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
 /* Programs > Games entry index; kernel NULL keeps the game's saved setting. */
 int desk_launch_game(struct desktop *, int index, const char *kernel);
+void desk_game_properties(struct desktop *,unsigned game);
+void desk_game_data_result(struct desktop *,unsigned game,unsigned op,int error,const struct ciuki_dosvm_command *);
 int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
