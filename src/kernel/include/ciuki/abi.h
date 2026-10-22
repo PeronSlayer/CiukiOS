@@ -917,6 +917,7 @@ _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position 
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
+#define MIXER_REFRESH_MASTER 0x4204u /* f1-100: control handle; master record, one requested hardware read */
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u

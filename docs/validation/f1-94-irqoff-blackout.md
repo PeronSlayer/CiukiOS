@@ -309,3 +309,11 @@ One T23 trial answers the question (same image, two boots, same workload):
 each a command, an address and a data byte with at least four status
 reads.) A 1 Hz default that leaves `rate` near 4/s also rules out the EC
 poll without the second boot.
+
+## Follow-up f1-100 (2026-10-22)
+
+The T23 trial of image 5a10eef4 answered the table above: every tick-gap
+blackout coincided with an EC access, two per EC read transaction. The EC
+poll is now off by default (`ecpoll=1` restores 1 Hz for diagnosis); see
+[f1-100](f1-100-ec-traffic.md) for the GPI[12] explanation, why SMI_STS and
+MON_SMI show nothing, the traffic record and the expected lines.

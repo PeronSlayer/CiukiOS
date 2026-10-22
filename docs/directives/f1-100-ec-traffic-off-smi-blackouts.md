@@ -12,3 +12,15 @@
 4. Host tests: default off, token parsing, transaction counting, the coincidence record; `test_kernel_latency`, `host_kernel_tests.sh`, loader tests with the budget.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-100-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 14:27, decisions on the delivery)
+
+Accepted. The delivery corrects the directive's reading: no I/O trap is
+armed; the EC's event line GPI[12] is routed to SMI# (`gpe1_en=1000`,
+`gpi_rout=01000000`, SCI_EN=0) and the EC raises it for each byte, two SMIs
+per read, with the firmware clearing GPE1_STS inside SMM. Decisions: the
+new devctl `MIXER_REFRESH_MASTER` (4204h, delegated handle) is reserved; a
+level-only change makes no EC access and a hardware mute persists until the
+popup is opened or Mute is clicked (documented in f4-18). Follow-up: the
+pre-existing `desktop.test_memory_footprint` failures (wallpaper_boot_test.h:145,
+sound_runtime_test.c:130) are directive f2-93.

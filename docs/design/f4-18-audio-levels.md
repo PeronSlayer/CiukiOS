@@ -109,6 +109,34 @@ disables the poll (`[ec] thinkpad poll_ms=0 source=ecpoll=0`). Reason: the
 T23's 2.1 ms interrupt-off blackouts arrive at about the old 4 Hz rate and
 the legacy-mode EC GPE can become an SMI; see
 [f1-94](../validation/f1-94-irqoff-blackout.md).
+
+Amendment f1-100 (2026-10-22): no periodic EC traffic by default. The T23
+trial of 5a10eef4 showed exactly two 2.1 ms SMIs per EC read transaction:
+the EC's event line (GPI[12], GPE 1Ch) is routed to SMI# while SCI_EN is
+clear, so the 1 Hz poll alone cost about 4 ms of interrupt-off time per
+second ([f1-100](../validation/f1-100-ec-traffic.md)). Now the poll is off
+unless the exact `BOOT.CFG` token `ecpoll=1` is present (diagnosis;
+`ecpoll=0` wins over it). The boot probe is one RD_EC when the register
+already holds the saved mute preference (a stable second read is required
+only before a first write); a mute change from the desktop keeps its read,
+write and proving read; a level-only change makes no EC access. Every
+operation is bounded to four transactions and counted in the `[ec] thinkpad
+io=... transactions=...` window record. **Limitation:** the desktop mirror
+of the hardware volume keys (tray and Control Panel percentage and mute) is
+updated only by an explicit user action: opening the tray volume popup sends
+`MIXER_REFRESH_MASTER`, which makes the EC worker read register 30h once
+(at most once per second); the H page key window asks once per second. The
+EC still drives its amplifier from the keys at all times, so the sound
+follows the keys; only the displayed and saved preference can lag until the
+popup is opened. A level change from the desktop never rewrites the EC level
+and does not undo a hardware mute that has not been observed yet; a mute
+change from the desktop reads the register first and writes the requested
+state. Between two observations, several key presses can change the EC
+level by more than one step; the mirror then keeps its percentage and
+follows the mute bit, as the 1 Hz poll already did for presses inside one
+second. Without a poll, a user change or refresh is also the retry after an
+EC failure, at the existing cadence (1 s, 10 s after eight failures).
+
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already
 qualified at boot, without bypassing quarantined resources.

@@ -192,7 +192,7 @@ static struct ciuki_net_state network_fixture;
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
 #define MIXER_FD 1001
 static struct ciuki_mixer_master mixer_fixture;
-static unsigned mixer_queries,mixer_sets;
+static unsigned mixer_queries,mixer_sets,mixer_refreshes;
 static int mixer_available, mixer_error;
 #endif
 static int media_volume_error;
@@ -373,7 +373,9 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
     if (fd==MIXER_FD) {
         if (mixer_error) { errno=EIO; return -1; }
         assert(size==sizeof(mixer_fixture));
-        if (op==MIXER_GET_MASTER) { mixer_queries++; memcpy(record,&mixer_fixture,size); }
+        if (op==MIXER_GET_MASTER || op==MIXER_REFRESH_MASTER) {
+            mixer_queries++; mixer_refreshes+=op==MIXER_REFRESH_MASTER; memcpy(record,&mixer_fixture,size);
+        }
         else { assert(op==MIXER_SET_MASTER); mixer_sets++; memcpy(&mixer_fixture,record,size); }
         return 0;
     }
