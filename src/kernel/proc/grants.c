@@ -313,7 +313,7 @@ void desktop_input_event(const struct input_event *in, uint32_t lost, uint32_t b
         break;
     case INPUT_BTN: out->type = CIUKI_INPUT_BUTTON; out->code = in->code + 1; out->value = in->value; break;
     case INPUT_RESYNC:
-        out->type = CIUKI_INPUT_RESYNC; out->lost_count = lost; out->value = (int32_t)(buttons & 7); break;
+        out->type = CIUKI_INPUT_RESYNC; out->lost_count = lost; out->value = (int32_t)(buttons & 31); break;
     }
 }
 

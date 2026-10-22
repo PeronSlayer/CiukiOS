@@ -40,7 +40,7 @@ struct i8042_stats {
     uint32_t last_elapsed_ms;
     gen_t generation;
     int last_error;
-    uint8_t initial_config, config;
+    uint8_t initial_config, config, aux_id; /* last proven PS/2 protocol: 0/3/4 */
     bool active, pending_command, quarantined, firmware;
 };
 

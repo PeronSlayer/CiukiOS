@@ -103,6 +103,42 @@ changing existing ownership or memory policy.
 
 ### Input
 
+#### f1-103 implementation contract (2026-10-22)
+
+Research checked Microsoft's linked PS/2 packet tables and
+[Linux v6.12 `psmouse-base.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/psmouse-base.c)
+(`intellimouse_detect`, `im_explorer_detect`,
+`psmouse_process_byte`, `psmouse_receive_byte`) against Ciuki's current
+ID-0-only activation, three-byte decoder and merged input queue before code.
+Use the two Microsoft rate sequences below while AUX reporting is disabled.
+Accept an already negotiated ID 4 directly; F6 is not proof of ID 0. After
+each complete sequence, a fresh supported ID 0/3/4 proves the packet format;
+ID 0 or 3 is a supported fallback when the mouse declines an upgrade.
+ACK errors, exhausted RESEND, unknown IDs and timeouts retain the existing
+quarantine and failure stage, without resetting either device or controller.
+The existing 200 ms reply / 500 ms total setup budgets remain unchanged.
+The canonical i686 layout measures 12,524 to 12,532 bytes per controller
+(8 bytes for the packet gap clock, including alignment); stats remain 76
+bytes. The native and private fixture together grow by 16 static bytes.
+Queue, registry, heap and memory limits are unchanged.
+
+Existing input event ABI v1 layouts and numbers remain unchanged: native
+button codes 0..4 become desktop button numbers 1..5; RESYNC retains bits
+0..4 of the button bitmap. `INPUT_WHEEL` is positive upwards, matching USB;
+negate the signed PS/2 wheel once in the native decoder. No horizontal mode
+sequence, new input ABI, resource claim, or firmware-owned activation is added.
+The f1-104 versioned input ABI remains a separate directive.
+
+Reject invalid headers and Explorer reserved fourth-byte bits. Preserve
+possible suffix headers after a malformed Explorer packet, and discard an
+incomplete packet after an inter-byte gap greater than 500 ms (Linux's
+half-second lost-synchronization precedent), or on a controller parity/timeout
+status. This is bounded stream recovery, without controller writes. PS/2 has
+no checksum or unique delimiter: byte loss that still forms a legal packet
+cannot always be detected, particularly with ID 3's unrestricted wheel byte.
+Host traces cover detectable corruption, lost bytes and gap recovery; physical
+KVM/disconnect timing and peripheral qualification remain lead validation.
+
 [Microsoft's PS/2 wheel and five-button specification](https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/keyboard-and-mouse-hid-client-drivers#activating-buttons-4-5-and-wheel-on-ps2-mice)
 and Linux `psmouse-base.c:intellimouse_detect/im_explorer_detect` agree:
 send sample rates 200,100,80 and read ID 3; then 200,200,80 and read ID 4.

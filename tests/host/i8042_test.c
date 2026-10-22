@@ -48,6 +48,9 @@ struct fake_bus {
     uint32_t controller_ack_delay, iface_delay;
     unsigned controller_ack_count;
     unsigned config_reads;
+    uint8_t mouse_capability, rate_history[3], aux_trace[128], fault_reply, query_reply;
+    unsigned rate_count, aux_sends, fail_aux_send, id_queries, fail_id_query;
+    bool rate_next, persistent_fault, missing_id, wrong_id_aux;
 };
 static struct fake_bus hw;
 static irq_handler_t host_handlers[16];
@@ -181,6 +184,17 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         return;
     }
     b->sends++;
+    if (b->aux) {
+        CHECK(b->aux_sends < ARRAY_SIZE(b->aux_trace));
+        if (b->aux_sends < ARRAY_SIZE(b->aux_trace)) b->aux_trace[b->aux_sends] = data;
+        b->aux_sends++;
+        if (b->fail_aux_send && (b->aux_sends == b->fail_aux_send ||
+                                (b->persistent_fault && b->aux_sends > b->fail_aux_send))) {
+            if (b->fault_reply) fake_push(b, true, b->fault_reply, b->ack_delay);
+            b->aux = false;
+            return;
+        }
+    }
     if (!b->missing && !(b->missing_aux && b->aux) && data != b->missing_command) {
         if (b->mixed) {
             fake_push(b, false, 0x1C, 0);
@@ -193,8 +207,27 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         uint8_t reply = b->sends <= b->resend_count ? 0xFE : 0xFA;
         fake_push(b, b->aux ^ b->wrong_aux, reply, b->ack_delay);
         if (b->bad_ack) b->bytes[(b->head + b->count - 1) % ARRAY_SIZE(b->bytes)].status |= 0x80;
-        if (b->aux && data == 0xF2 && reply == 0xFA)
-            fake_push(b, true, b->mouse_id, b->ack_delay);
+        if (b->aux && reply == 0xFA) {
+            if (b->rate_next) {
+                b->rate_next = false;
+                b->rate_history[0] = b->rate_history[1];
+                b->rate_history[1] = b->rate_history[2];
+                b->rate_history[2] = data;
+                b->rate_count++;
+                if (b->mouse_capability >= 3 && b->rate_history[0] == 200 &&
+                    b->rate_history[1] == 100 && data == 80) b->mouse_id = 3;
+                if (b->mouse_capability == 4 && b->mouse_id == 3 &&
+                    b->rate_history[0] == 200 && b->rate_history[1] == 200 && data == 80)
+                    b->mouse_id = 4;
+            } else if (data == 0xF3) b->rate_next = true;
+            else if (data == 0xF2) {
+                b->id_queries++;
+                bool fault = b->id_queries == b->fail_id_query;
+                if (!(fault && b->missing_id))
+                    fake_push(b, !(fault && b->wrong_id_aux),
+                              fault ? b->query_reply : b->mouse_id, b->ack_delay);
+            }
+        }
         if (b->aux && data == 0xF4 && b->final_obf) b->obf_after_ack = true;
     }
     b->aux = false;
@@ -733,7 +766,7 @@ static void test_native_failures(void)
     hw.bad_selftest = true;
     CHECK(i8042_init() == -I8042_EIO && !hw.resets && hw.selftests == 1);
     reset_native();
-    hw.mouse_id = 3;                    /* F6 does not undo IntelliMouse negotiation */
+    hw.mouse_id = 2;                    /* an unknown protocol cannot be decoded */
     CHECK(i8042_init() == -I8042_EPROTO && !hw.resets);
     reset_native();
     CHECK(i8042_init() == 0);
@@ -773,6 +806,205 @@ static struct i8042_init_record init_failure(enum i8042_init_step step, int resu
         CHECK(registry_get(native.handle[i])->state == RS_QUARANTINED);
     CHECK(!hw.resets && hw.selftests <= 1);
     return r;
+}
+
+static void test_mouse_negotiation(void)
+{
+    const uint8_t standard[] = { 0xF5, 0xF6, 0xF2, 0xF3, 200, 0xF3, 100,
+                                0xF3, 80, 0xF2, 0xEA, 0xE6, 0xF4 };
+    const uint8_t extended[] = { 0xF5, 0xF6, 0xF2, 0xF3, 200, 0xF3, 100,
+                                0xF3, 80, 0xF2, 0xF3, 200, 0xF3, 200,
+                                0xF3, 80, 0xF2, 0xEA, 0xE6, 0xF4 };
+    const uint8_t explorer[] = { 0xF5, 0xF6, 0xF2, 0xEA, 0xE6, 0xF4 };
+    const uint8_t ids[] = { 0, 3, 4 };
+    for (unsigned i = 0; i < ARRAY_SIZE(ids); i++) {
+        reset_native();
+        hw.mouse_capability = ids[i];
+        CHECK(!i8042_init());
+        struct i8042_stats s;
+        i8042_snapshot(&s);
+        CHECK(s.aux_id == ids[i] && s.active && !s.pending_command && !s.quarantined);
+        const uint8_t *trace = i ? extended : standard;
+        unsigned length = i ? sizeof(extended) : sizeof(standard);
+        CHECK(hw.aux_sends == length && !memcmp(hw.aux_trace, trace, length));
+        CHECK(hw.rate_count == (i ? 6u : 3u) && hw.id_queries == (i ? 3u : 2u));
+        CHECK(s.last_elapsed_ms <= I8042_SETUP_MS && !hw.resets && native.init_count == 15);
+        CHECK(!native.queue.stats.pending && !native.queue.mouse_pos);
+        char expected[80];
+        snprintf(expected, sizeof(expected), "[i8042] aux id=%u protocol=%s", ids[i],
+                 ids[i] == 4 ? "explorer" : ids[i] == 3 ? "intellimouse" : "ps2");
+        CHECK(!strcmp(last_log, expected));
+    }
+    /* F6 must not cause a negotiated device to be mistaken for ID 0. */
+    for (unsigned i = 1; i < ARRAY_SIZE(ids); i++) {
+        reset_native();
+        hw.mouse_id = hw.mouse_capability = ids[i];
+        CHECK(!i8042_init() && native.stats.aux_id == ids[i] && !hw.resets);
+        if (ids[i] == 4)
+            CHECK(hw.aux_sends == sizeof(explorer) && !memcmp(hw.aux_trace, explorer, sizeof(explorer)));
+    }
+    /* A fresh supported ID proves the lower format, even after stage two. */
+    reset_native();
+    hw.mouse_capability = 4; hw.fail_id_query = 3; hw.query_reply = 0;
+    CHECK(!i8042_init() && native.stats.aux_id == 0 && !hw.resets);
+
+    /* Refuse every unknown ID, including reply-looking bytes, at each query. */
+    const uint8_t unknown[] = { 1, 2, 5, 0xFA, 0xFE, 0xAA, 0xFF };
+    for (unsigned query = 1; query <= 3; query++) {
+        for (unsigned i = 0; i < ARRAY_SIZE(unknown); i++) {
+            reset_native();
+            hw.mouse_capability = 4; hw.fail_id_query = query; hw.query_reply = unknown[i];
+            CHECK(i8042_init() == -I8042_EPROTO);
+            struct i8042_init_record r = init_failure(I8042_INIT_RESET_AUX, -I8042_EPROTO);
+            CHECK(r.command == 0xF2 && r.reply == unknown[i]);
+            CHECK(native.stats.aux_id == (query == 3 ? 3 : 0));
+            CHECK(native.stats.quarantined && !native.stats.active && !native.stats.pending_command);
+            CHECK(!hw.resets && host_masked[1] && host_masked[12]);
+            unsigned writes = hw.writes, reads = hw.reads;
+            CHECK(i8042_init() == -I8042_EIO && writes == hw.writes && reads == hw.reads);
+            for (unsigned j = 0; j < ARRAY_SIZE(native.handle); j++)
+                CHECK(registry_get(native.handle[j])->state == RS_QUARANTINED);
+        }
+        for (unsigned mode = 0; mode < 2; mode++) {
+            reset_native();
+            hw.mouse_capability = 4; hw.fail_id_query = query;
+            hw.missing_id = !mode; hw.wrong_id_aux = mode;
+            CHECK(i8042_init() == -I8042_ETIMEDOUT);
+            CHECK(native.stats.quarantined && !native.stats.pending_command && !hw.resets);
+            CHECK(native.stats.last_elapsed_ms <= I8042_SETUP_MS);
+        }
+    }
+    /* Every rate command, parameter and GETID ACK can fail. Never enable
+     * streaming from an old ID after an uncertain protocol transaction. */
+    const uint8_t replies[] = { 0, 0xFC, 0xFD, 0xFE };
+    for (unsigned send = 4; send <= 17; send++) {
+        for (unsigned mode = 0; mode < ARRAY_SIZE(replies); mode++) {
+            reset_native();
+            hw.mouse_capability = 4; hw.fail_aux_send = send;
+            hw.fault_reply = replies[mode]; hw.persistent_fault = true;
+            int expected = mode ? -I8042_EPROTO : -I8042_ETIMEDOUT;
+            CHECK(i8042_init() == expected);
+            struct i8042_init_record r = init_failure(I8042_INIT_RESET_AUX, expected);
+            CHECK(r.command == extended[send - 1]);
+            CHECK(hw.aux_sends == send + (replies[mode] == 0xFE ? I8042_RESENDS : 0));
+            CHECK(native.stats.quarantined && !native.stats.active && !native.stats.pending_command);
+            CHECK(native.stats.last_elapsed_ms <= I8042_SETUP_MS && !hw.resets);
+        }
+        reset_native();
+        hw.mouse_capability = 4; hw.fail_aux_send = send; hw.fault_reply = 0xFE;
+        CHECK(!i8042_init() && native.stats.aux_id == 4 && native.stats.resends == 1);
+        CHECK(hw.aux_trace[send - 1] == hw.aux_trace[send] && hw.aux_sends == sizeof(extended) + 1);
+    }
+    reset_native();
+    hw.mouse_capability = 4; hw.ack_delay = 3; hw.write_delay = 1; hw.mixed = true;
+    CHECK(!i8042_init() && native.stats.aux_id == 4 && !native.queue.stats.pending);
+    CHECK(!native.queue.extended && !native.queue.mouse_pos && !native.queue.stats.keys_down);
+    puts("i8042 ID 0/3/4: exact rate sequences, proven fallback, unknown/missing/wrong-source IDs, every negotiation ACK refusal/RESEND PASS");
+}
+
+static void native_packet(const uint8_t *packet, unsigned length)
+{
+    for (unsigned i = 0; i < length; i++) capture_at(&native, 0x21, packet[i], g_ticks);
+}
+
+static void native_event(unsigned type, unsigned code, int value)
+{
+    struct input_event e;
+    CHECK(input_read(&e));
+    CHECK(e.type == type && e.code == code && e.value == value);
+    CHECK(e.source == INPUT_NATIVE && e.generation == native.stats.generation && e.tick == g_ticks);
+}
+
+static void test_extended_mouse_packets(void)
+{
+    struct input_event e;
+    for (unsigned id = 3; id <= 4; id++) {
+        reset_native(); hw.mouse_capability = id;
+        CHECK(!i8042_init());
+        g_ticks = 123;
+        /* Every signed byte (ID 3) / nibble+button combination (ID 4). */
+        for (unsigned byte = 0; byte < (id == 3 ? 256u : 64u); byte++) {
+            uint8_t packet[] = { 0x38, 0xFE, 0xFF, (uint8_t)byte };
+            unsigned before = native.queue.stats.buttons;
+            native_packet(packet, sizeof(packet));
+            native_event(INPUT_REL, INPUT_X, -2);
+            native_event(INPUT_REL, INPUT_Y, 1);
+            int wheel = id == 3 ? (int)byte - ((byte & 0x80) ? 256 : 0) :
+                                  (int)(byte & 15) - ((byte & 8) ? 16 : 0);
+            if (wheel) native_event(INPUT_REL, INPUT_WHEEL, -wheel);
+            unsigned buttons = id == 4 ? (byte & 0x30) >> 1 : 0;
+            for (unsigned i = 0; i < 5; i++)
+                if ((before ^ buttons) & (1u << i))
+                    native_event(INPUT_BTN, i, !!(buttons & (1u << i)));
+            CHECK(!input_read(&e) && native.queue.stats.buttons == buttons);
+        }
+        uint8_t all[] = { 0x0F, 200, 200, id == 4 ? 0x30 : 0 };
+        native_packet(all, 3);
+        CHECK(!input_read(&e));         /* never publish three of four bytes */
+        native_packet(all + 3, 1);
+        native_event(INPUT_REL, INPUT_X, 200); native_event(INPUT_REL, INPUT_Y, -200);
+        for (unsigned i = 0; i < 3; i++) native_event(INPUT_BTN, i, 1);
+        CHECK(!input_read(&e));
+        uint8_t release[] = { 0x38, 0, 0, 0 }; /* zero payload with sign bits is zero */
+        native_packet(release, 4);
+        for (unsigned i = 0; i < (id == 4 ? 5u : 3u); i++) native_event(INPUT_BTN, i, 0);
+        CHECK(!input_read(&e));
+
+        /* Lost suffix of a packet, then idle: recover without publishing
+         * stale coordinates/buttons. Exercise every partial packet length. */
+        for (unsigned prefix = 1; prefix < 4; prefix++) {
+            native_packet(all, prefix);
+            CHECK(!input_read(&e));
+            uint64_t resync = native.queue.stats.resync;
+            g_ticks += MOUSE_PACKET_GAP_MS + 1;
+            uint8_t clean[] = { 0x08, 2, 0, 1 };
+            native_packet(clean, 4);
+            native_event(INPUT_REL, INPUT_X, 2); native_event(INPUT_REL, INPUT_WHEEL, -1);
+            CHECK(!input_read(&e) && native.queue.stats.resync == resync + 1);
+        }
+        /* A status error aborts partial packets; ACK/RESEND outside a
+         * transaction are rejected as headers, not decoded as wheel data. */
+        native_packet(all, 2);
+        capture_at(&native, 0xE1, 0, g_ticks);
+        uint8_t noise[] = { 0xFA, 0xFE, 0x00, 0xC8 };
+        native_packet(noise, sizeof(noise));
+        native_packet(release, 4);
+        CHECK(!input_read(&e) && !native.queue.mouse_pos && native.queue.stats.errors == 1);
+        capture_at(&native, 1, 0x1C, g_ticks);
+        native_event(INPUT_KEY, INPUT_KEY_A, 1); native_event(INPUT_TEXT, 'a', 0);
+        capture_at(&native, 1, 0xF0, g_ticks); capture_at(&native, 1, 0x1C, g_ticks);
+        native_event(INPUT_KEY, INPUT_KEY_A, 0);
+        CHECK(!input_read(&e));
+    }
+    reset_native(); hw.mouse_capability = 4; CHECK(!i8042_init());
+    const uint8_t bad[] = { 0x0F, 0, 0, 0xC0 };
+    native_packet(bad, 4);
+    CHECK(!input_read(&e) && !native.queue.stats.buttons && !native.queue.mouse_pos);
+    /* Missing payload creates an invalid fourth byte; retain suffix header. */
+    const uint8_t lost[] = { 0x08, 0x08, 0, 0x80, 0 };
+    native_packet(lost, sizeof(lost));
+    native_event(INPUT_REL, INPUT_Y, -128);
+    CHECK(!input_read(&e) && native.queue.stats.resync == 2 && !native.queue.mouse_pos);
+    /* Overflow RESYNC snapshots include held buttons 4/5, and USB's three
+     * buttons neither erase nor alias those native bits. */
+    uint8_t side[] = { 0x08, 0, 0, 0x30 };
+    native_packet(side, 4);
+    native_event(INPUT_BTN, INPUT_SIDE, 1); native_event(INPUT_BTN, INPUT_EXTRA, 1);
+    input_usb_event(INPUT_BTN, INPUT_LEFT, 1, 77, g_ticks);
+    CHECK(input_read(&e) && e.source == INPUT_USB && e.code == INPUT_LEFT && e.value == 1);
+    native_packet(side, 4); CHECK(!input_read(&e) && native.queue.stats.buttons == 25);
+    side[1] = 1;
+    for (unsigned i = 0; i <= INPUT_CAPACITY; i++) native_packet(side, 4);
+    CHECK(input_read(&e) && e.type == INPUT_RESYNC && e.value == 25 && e.lost_count == INPUT_CAPACITY);
+    CHECK(input_read(&e) && e.type == INPUT_REL && e.code == INPUT_X && e.value == 1);
+    CHECK(!input_read(&e));
+    side[1] = side[3] = 0;
+    native_packet(side, 4);
+    native_event(INPUT_BTN, INPUT_SIDE, 0); native_event(INPUT_BTN, INPUT_EXTRA, 0);
+    CHECK(!input_read(&e) && native.queue.stats.buttons == 1);
+    input_usb_event(INPUT_BTN, INPUT_LEFT, 0, 77, g_ticks);
+    CHECK(input_read(&e) && e.source == INPUT_USB && !e.value && !input_read(&e));
+    puts("i8042 ID 3/4 decode: exhaustive signed wheel/buttons, motion, no early events, lost-byte/gap/status/reserved-byte resync, USB merge/overflow PASS");
 }
 
 static void test_init_diagnostics(void)
@@ -896,7 +1128,7 @@ static void test_advisory_interfaces_and_controller_acks(void)
     t23_bus();
     CHECK(i8042_init() == 0 && native.stats.active && !native.stats.quarantined);
     CHECK(native.stats.initial_config == 0x77 && hw.last_config == 0x07);
-    CHECK(native.init_count == 15 && hw.sends == 10 && !hw.resets);
+    CHECK(native.init_count == 15 && hw.sends == 17 && !hw.resets); /* includes wheel probe */
     const uint8_t replies[] = { 0x00, 0x01, 0x03, 0x55, 0xFA, 0xFF };
     for (unsigned i = 0; i < ARRAY_SIZE(replies); i++) {
         reset_native();
@@ -913,7 +1145,7 @@ static void test_advisory_interfaces_and_controller_acks(void)
     struct i8042_init_record r;
     CHECK(i8042_init_record(5, &r) && !r.result && !r.bytes && r.elapsed_ms == I8042_REPLY_MS);
     CHECK(i8042_init_record(6, &r) && !r.result && r.reply == 0x5A && r.bytes == 1);
-    CHECK(r.elapsed_ms >= I8042_REPLY_MS && hw.sends == 10);
+    CHECK(r.elapsed_ms >= I8042_REPLY_MS && hw.sends == 17);
     reset_native();
     hw.silent_kbd_test = hw.silent_aux_test = true;
     hw.missing_command = 0xF5;
@@ -942,7 +1174,7 @@ static void test_advisory_interfaces_and_controller_acks(void)
         unsigned stray = 0;
         for (unsigned j = 0; j < native.init_count; j++) stray += native.init_records[j].stray_ack;
         CHECK(stray && !native.queue.stats.errors && !native.queue.stats.state_lost);
-        CHECK(hw.sends == 10 && !hw.resets);
+        CHECK(hw.sends == 17 && !hw.resets);
         reset_native();
         t23_bus();
         hw.aux_test_reply = 0xFA;
@@ -1653,6 +1885,8 @@ int main(int argc, char **argv)
     test_policy_and_lifecycle();
     test_native_failures();
     test_init_diagnostics();
+    test_mouse_negotiation();
+    test_extended_mouse_packets();
     test_advisory_interfaces_and_controller_acks();
     test_hook_selection();
     test_commands();
