@@ -23,6 +23,14 @@ enum fat_identity_change { FAT_ID_WRITE, FAT_ID_TRUNCATE, FAT_ID_RENAME, FAT_ID_
  * only while the entry still names the same first cluster and chain
  * generation; volatile, never encoded on disk. A zero cursor is empty. */
 struct fat_cursor { uint64_t generation; uint32_t first, index, cluster; };
+/* f1-93b: a directory walk position, the (cluster index -> cluster) pair of
+ * a directory chain, carried across directory steps (a readdir cursor, a
+ * resumed lookup). Valid only while the volume's mutation_sequence and
+ * media generation are those recorded: any publication (every FAT, directory
+ * or data write bumps the sequence) retires it, so a walk never follows a
+ * stale link. Without it each slot resolved its cluster from the chain
+ * start, O(slots x clusters) per directory scan. Volatile, never on disk. */
+struct fat_dir_hint { uint64_t sequence; uint32_t generation, first, index, cluster; bool valid; };
 struct fat_entry {
     char name[FS_NAME_BYTES], alias[40];
     uint32_t parent, index, first, size, lfn_index;
@@ -81,6 +89,10 @@ struct fat_volume {
      * cache slots only; the first missing sector is reported, never read. */
     bool cache_only;
     uint64_t cache_miss;
+    /* f1-93b: work of the current cache-only section (FAT_CACHED_BUDGET),
+     * counted once the step has read its first directory sector. */
+    uint32_t cache_work;
+    bool cache_progress;
     struct fat_transaction *transaction, *transactions;
     /* f1-93: logical providers only (no block cache). Set by the VFS that
      * attached this source volume: every device call of the volume goes
@@ -155,26 +167,41 @@ struct fat_transaction_args {
 };
 int fat_transaction_run(struct fat_volume *, const struct fat_transaction_args *,
                          const struct fat_transaction_guard *);
-/* Lookup (name) or next entry (name 0, cursor) from resident cache slots
- * only. -FS_EAGAIN with *miss set: warm that volume sector and restart. */
-int fat_lookup_cached(struct fat_volume *, uint32_t dir, const char *name, uint32_t *cursor,
-                      struct fat_entry *, uint64_t *miss);
-/* f1-93: next entry (labels: fat_next_dos) from resident cache slots only;
- * -FS_EAGAIN with *miss set restores *cursor. Caller holds the guard. */
-int fat_next_cached(struct fat_volume *, uint32_t dir, uint32_t *cursor, struct fat_entry *,
-                    bool labels, uint64_t *miss);
+/* f1-93/f1-93b: one directory step from resident cache sectors only, under
+ * the caller's guard. name 0: the next entry at or after *cursor (labels:
+ * fat_next_dos); otherwise the lookup of name from the entry boundary
+ * *cursor (0: the whole directory). Returns as fat_next/fat_lookup, or
+ * -FS_EAGAIN with *miss set and *cursor at the first entry boundary not yet
+ * settled (resume there while the volume is unchanged, else from the start):
+ * *miss is a missing sector (warm it with nothing held) or FAT_CACHE_YIELD,
+ * the section's work bound (release the guard, offer a preemption point,
+ * readmit). A section never calls fs_service: the holder is never preempted
+ * while it holds the volume (T23 b453bc92, f1-93b). hint (optional) is the
+ * walk position kept across calls; it is used only while still valid. */
+#define FAT_CACHE_YIELD (UINT64_MAX-1)
+/* Work units of one cache-only section, about one microsecond each on the
+ * T23 (one resident sector copy or FAT decode: 2 units), the same order as
+ * the 128 us cadence between fs_service points of the uncached walks. */
+#define FAT_CACHED_BUDGET 128u
+int fat_dir_cached(struct fat_volume *, uint32_t dir, const char *name, uint32_t *cursor,
+                   struct fat_entry *, bool labels, struct fat_dir_hint *, uint64_t *miss);
 /* f1-93: read sector s (with readsec's FAT/cluster read-ahead extent) into
  * the block cache. Geometry only: callable with no guard held. A logical
- * provider has no block cache: nothing is read. */
+ * provider has no block cache: nothing is read. f1-93b: a cluster run
+ * continues into the next cluster while the resident FAT names the adjacent
+ * cluster as its link (a contiguous directory), up to one 64 KiB command. */
 int fat_warm(const struct fat_volume *, uint64_t s);
 /* f1-93: cluster count of a chain (st_blocks), one FAT sector read per
  * sector visited instead of one guarded call per cluster. Resumable:
  * cluster is the next cluster to visit (start: cluster=first, count=0).
  * cached: resident sectors only, the first missing one is reported in *miss
- * with -FS_EAGAIN. At most FAT_CHAIN_SECTORS sectors are visited per call:
- * a yield returns -FS_EAGAIN with *miss=UINT64_MAX and the walk resumes.
+ * with -FS_EAGAIN. At most FAT_CHAIN_SECTORS sectors are visited per call
+ * (FAT_CHAIN_CACHED_SECTORS when cached, which never calls fs_service: the
+ * guard is not held across a preemption point, f1-93b): a yield returns
+ * -FS_EAGAIN with *miss=UINT64_MAX and the walk resumes.
  * An invalid link or a cycle is -FS_EIO (no write revocation). */
 #define FAT_CHAIN_SECTORS 128u
+#define FAT_CHAIN_CACHED_SECTORS 32u
 struct fat_chain_walk { uint32_t first, cluster, count; };
 int fat_chain_clusters(struct fat_volume *, struct fat_chain_walk *, bool cached, uint64_t *miss);
 /* Mount does not write unless requested AND validation and durability pass.

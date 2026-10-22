@@ -12,3 +12,14 @@
 4. Host tests failing on main for each remaining caller; strict FS gate, `test_t23_holds`, `test_kernel_latency`.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-93b-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 10:03, decision on the delivery)
+
+Accepted: the long holds were the holding thread preempted at `fs_service()`
+while a DOS VM at priority 9 kept the CPU (100 ms starvation-boost
+multiples), not device reads; the step helpers now never reach a preemption
+point with the drive held, directory scans keep their position, cold
+directories read in 64 KiB runs, close and lseek holds are tagged. The
+scheduler side (boost the holder of a drive reservation, a minimum share for
+desktop workers while a VM runs) is directive f1-98. Win32 `ReadFile` across
+cold data, the pagefile walk and the publication waits are follow-ups.

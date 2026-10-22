@@ -123,6 +123,24 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     src/kernel/probes/f2_probes_files.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released \
     -o build/host/fs/files_holds_test
 build/host/fs/files_holds_test build/host/fs/fat32.img build/host/fs/fat16.img
+# f1-93b: the T23 b453bc92 desktop#31 directory compare (2,000 entries, cold
+# cache, 106 ms per command, a starved holder that loses 100 ms at every
+# preemption point), on the T23 C: geometry (FAT32, 4 KiB clusters, as
+# scripts/build_image.py) and on 512-byte clusters. Sorted copy: the
+# directory order does not depend on the host file system.
+rm -rf build/host/fs/folder-src build/host/fs/folder32.img build/host/fs/folder32s1.img
+python3 -c 'import os,sys; r=os.path.join(sys.argv[1],"Desktop"); os.makedirs(r,exist_ok=True); [open(os.path.join(r,"i%04d Desktop item.txt"%i),"wb").close() for i in range(2000)]' build/host/fs/folder-src
+truncate -s 288M build/host/fs/folder32.img
+mkfs.fat --invariant -F 32 -S 512 -s 8 -f 2 -i 00C1A93B build/host/fs/folder32.img > /dev/null
+cp --sparse=always build/host/fs/fat32.img build/host/fs/folder32s1.img
+for folder in folder32 folder32s1; do
+    MTOOLSRC=build/host/fs/mtoolsrc mmd -i "build/host/fs/$folder.img" ::/Documents ::/Documents/Desktop
+    ( export LC_ALL=C; MTOOLSRC=build/host/fs/mtoolsrc mcopy -i "build/host/fs/$folder.img" build/host/fs/folder-src/Desktop/* ::/Documents/Desktop/ )
+    MTOOLSRC=build/host/fs/mtoolsrc mmd -i "build/host/fs/$folder.img" "::/Documents/Desktop/Zz Sub"
+    build/host/fs/files_holds_test --desktop31 "build/host/fs/$folder.img" build/host/fs/fat16.img
+    fsck.fat -n "build/host/fs/$folder.img" > /dev/null
+done
+rm -rf build/host/fs/folder-src build/host/fs/folder32.img build/host/fs/folder32s1.img
 rm build/host/fs/files_holds_test
 # f0-49: production pagefile adapter: slot map oracle, in-place growth and
 # shrink, exclusivity, reserved records, I/O failures and power cuts.
