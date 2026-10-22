@@ -2158,7 +2158,90 @@ Generation prevents stale operations across a firmware mode change.
 ```c
 enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
        CIUKI_ACCEL_PATTERN, CIUKI_ACCEL_CURSOR_SET, CIUKI_ACCEL_CURSOR_MOVE,
-       CIUKI_ACCEL_CURSOR_SHOW };
+       CIUKI_ACCEL_CURSOR_SHOW,
+```
+
+f2-92: host-to-screen image write through the 2D engine. rect
+selects source (src_x, src_y) pixels of `write` and the destination
+(dst_x, dst_y), width x height; `write.clip` bounds the written
+destination pixels (zero width or height: no extra clip). Returns
+0 when the engine wrote every band, 1 when the CPU wrote visible
+rows instead; engine-only rows (below) fail when the engine cannot
+write them.
+
+```c
+CIUKI_ACCEL_WRITE,
+```
+
+f2-92: engine-only video memory below the visible screen. Returns
+(end << 16) | first: rows [first, end) at the screen's width are
+valid COPY sources/destinations and WRITE destinations; 0 when
+there are none (no engine, no lease, quarantined).
+
+```c
+CIUKI_ACCEL_OFFSCREEN };
+```
+
+f2-92 WRITE source: 32-bit 0xXXRRGGBB rows in the caller's memory. The
+address is split so the request keeps 4-byte alignment on 64-bit hosts.
+
+```c
+struct ciuki_accel_write {
+    uint32_t pixels_lo;
+```
+
+0: user address of pixel (0,0)
+
+```c
+uint32_t pixels_hi;
+```
+
+4: zero on i386
+
+```c
+uint32_t stride;
+```
+
+8: bytes per source row, multiple of 4
+
+```c
+uint32_t source_width;
+```
+
+12
+
+```c
+uint32_t source_height;
+```
+
+16
+
+```c
+int32_t clip_x;
+```
+
+20: destination clip rectangle
+
+```c
+int32_t clip_y;
+```
+
+24
+
+```c
+uint32_t clip_width;
+```
+
+28
+
+```c
+uint32_t clip_height;
+```
+
+32
+
+```c
+};
 struct ciuki_accel_request {
     uint32_t size;
     uint32_t operation;
@@ -2167,13 +2250,23 @@ struct ciuki_accel_request {
     uint32_t background;
     struct ciuki_rect rect;
     uint8_t pattern[8];
-    uint32_t cursor_mask[32];
+    union {
+        struct {
+            uint32_t cursor_mask[32];
 ```
 
 MSB first
 
 ```c
 uint32_t cursor_image[32];
+        };
+        struct ciuki_accel_write write;
+```
+
+CIUKI_ACCEL_WRITE only
+
+```c
+};
 };
 ```
 
