@@ -232,13 +232,10 @@ int main(int argc,char **argv)
     while ((result=du_window_turn(&r->window,du_now()))>0) {
         idle(r);
         if (r->benchmark_done || r->window.closed) break;
-        uint64_t now=du_now();
-        /* NANOSLEEP rounds UP to milliseconds. Never request a fractional
-         * sleep that would cross the desktop's upcoming nominal slot. */
-        uint64_t wait=gfx_wait_ns(now,r->next_slot);
-        struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait};
-        if (wait) nanosleep(&pause,NULL);
-        else (void)ciuki_syscall(CIUKI_SYS_YIELD,0,0,0,0,0,0);
+        uint64_t next=du_next_deadline(&r->ui);
+        if (r->app.page && !r->app.paused && !r->window.present_pending && r->app.next_ns<next) next=r->app.next_ns;
+        if (r->benchmark_started && r->fps.end<next) next=r->fps.end;
+        if (du_window_wait(&r->window,next)) { result=-1;break; }
     }
     int failed=result<0 || r->window.error || r->benchmark_error ||
         (r->benchmark_seconds && !r->benchmark_done);

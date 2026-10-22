@@ -36,7 +36,8 @@ static uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint
 static uint32_t pixels[WIDTH*HEIGHT], last_serial;
 static int phase, pipe_fd, grant_checks, forged_checks, turn_reports, expected_fd=3, barrier_sent;
 static int fault_mode;
-static bool report_error;
+static bool report_error, ordinary_idle;
+static unsigned idle_polls;
 static FILE *client_messages, *server_messages;
 static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t bytes,uint32_t a,uint32_t b,uint32_t c,uint32_t d)
 {
@@ -62,6 +63,7 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
     (void)flags;
     if (fd==10 && pipe_fd) { raise(SIGPIPE);errno=EPIPE;return -1; }
     assert(fd==expected_fd);
+    if (ordinary_idle) assert(m->data[1]!=DESK_PING);
     if (client_messages) {
         struct ciuki_message delivered=*m; delivered.sender_pid=42;
         assert(fwrite(&delivered,sizeof(delivered),1,client_messages)==1);
@@ -75,6 +77,12 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
     assert(fd==expected_fd && flags==DONTWAIT);
+    if(ordinary_idle){
+        if(!phase++) {desk_message(m,DESK_CONFIGURE,12);desk_put32(m->data+4,WIDTH);desk_put32(m->data+8,HEIGHT);}
+        else if(idle_polls) desk_message(m,DESK_CLOSE_REQUEST,4);
+        else {errno=EAGAIN;return -1;}
+        m->data[0]=protocol_version;m->sender_pid=42;return 1;
+    }
     if (client_messages) return 0;
     if (server_messages) {
         if (fread(m,sizeof(*m),1,server_messages)==1) return 1;
@@ -93,8 +101,14 @@ int close(int fd) { if (fd==11) pipe_fd=1;return 0; }
 int munmap(void *p,size_t n) { assert(p==pixels && n==sizeof(pixels));return 0; }
 int nanosleep(const struct timespec *t,struct timespec *remain)
 { (void)remain;assert(t->tv_nsec==1000000);return 0; }
+int poll(struct pollfd *fds,nfds_t n,int timeout)
+{ assert(ordinary_idle && n==1 && fds[0].fd==expected_fd && timeout==-1);idle_polls++;fds[0].revents=POLLIN;return 1; }
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--idle")){
+        ordinary_idle=true;char *args[]={"demo",NULL};assert(!demo_main(1,args) && idle_polls==1);
+        puts("PASS Demo: one infinite wait for 10 s modeled idle, input in one turn, no self-PING loop");return 0;
+    }
     if (argc==2 && !strcmp(argv[1],"--report-error")) { report_error=true; demo_report(2,0,0,0);assert(0); }
     if (argc==3 && (!strcmp(argv[1],"--hello") || !strcmp(argv[1],"--handshake"))) {
         if (!strcmp(argv[1],"--hello")) client_messages=fopen(argv[2],"wb");

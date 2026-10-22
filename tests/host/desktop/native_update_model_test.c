@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <poll.h>
 static struct du_ui ui;
 static struct du_window window;
 static uint32_t back[760*520],front[760*520];
@@ -208,6 +209,48 @@ static void cleanup(void) {}
 #else
 #error Missing case
 #endif
+/* Execute the production window wait against model time. Application
+ * timers remain enabled: each timeout must be its exact nearest deadline,
+ * never an added completion-service cadence. The channel delivers input or
+ * completion at ten seconds, and the next turn must service it immediately. */
+static uint64_t wait_event;
+static unsigned wait_calls,wait_timeouts,wait_events;
+int __real_clock_gettime(clockid_t,struct timespec *);
+int __wrap_clock_gettime(clockid_t id,struct timespec *t)
+{
+    if(id!=CLOCK_MONOTONIC)return __real_clock_gettime(id,t);
+    t->tv_sec=(time_t)(virtual_ns/1000000000ull);t->tv_nsec=(long)(virtual_ns%1000000000ull);return 0;
+}
+int __wrap_poll(struct pollfd *fds,nfds_t count,int timeout)
+{
+    assert(count==1 && fds[0].fd==77 && fds[0].events==POLLIN);
+    uint64_t deadline=du_next_deadline(&ui),ns=deadline>virtual_ns?deadline-virtual_ns:0;
+    int exact=deadline==UINT64_MAX ? -1 : (int)(ns/1000000ull+(ns%1000000ull!=0));
+    assert(timeout==exact);wait_calls++;
+    uint64_t until=timeout<0?UINT64_MAX:virtual_ns+(unsigned)timeout*1000000ull;
+    if(wait_event<=until){virtual_ns=wait_event;fds[0].revents=POLLIN;wait_events++;return 1;}
+    assert(until>virtual_ns);virtual_ns=until;wait_timeouts++;return 0;
+}
+/* The model uses no completion transport; real channels/jobs are covered
+ * by native_event_wait_test.c and f2-88c's native kernel-wait replay. */
+int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
+{ (void)fd;(void)m;(void)flags;assert(0);return -1; }
+static void event_wait_budget(const char *name)
+{
+    window.channel=77;window.configured=1;window.damaged=0;window.count=0;
+    unsigned total=0;
+    for(unsigned source=0;source<2;source++){
+        wait_event=virtual_ns+10000000000ull;wait_calls=wait_timeouts=wait_events=0;
+        while(virtual_ns<wait_event){
+            assert(!du_window_wait(&window,du_next_deadline(&ui)));
+            du_tick(&ui,virtual_ns);step();render();
+        }
+        assert(wait_events==1 && wait_calls==wait_timeouts+1);total+=wait_timeouts;
+        /* With no feature timer armed this was one blocking wait for 10 s. */
+        if(du_next_deadline(&ui)==UINT64_MAX)assert(wait_calls==1);
+    }
+    printf("EVENT %s seconds=20 service_timeouts=0 feature_timeouts=%u input_turns=1 completion_turns=1\n",name,total);
+}
 static void budgets(const char *name)
 {
     init(); uint64_t before=cpu_ns(); setup(); render();
@@ -245,6 +288,7 @@ static void budgets(const char *name)
     assert(stroke_pct<=15.0); assert(cost.fills<20000); /* catches the old per-pixel fills */
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=0}; du_input(&ui,&e);
 #endif
+    event_wait_budget(name);
     cleanup(); du_dialog_close(&ui);
 }
 int main(void)

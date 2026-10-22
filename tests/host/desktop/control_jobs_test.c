@@ -7,6 +7,9 @@
 #include <poll.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#undef IPPROTO_IP
+#undef IPPROTO_TCP
+#undef IPPROTO_UDP
 static int loop_poll(struct pollfd *,nfds_t,int);
 #define poll loop_poll
 #define main cp_native_main
@@ -68,7 +71,7 @@ int ciuki_channel_recv(int fd,struct ciuki_message *msg,uint32_t flags)
 {
     (void)flags; ssize_t n=read(fd,msg,sizeof(*msg));
     if (!n) { memset(msg,0,sizeof(*msg)); return 0; }
-    return n==(ssize_t)sizeof(*msg) ? 0 : -1;
+    return n==(ssize_t)sizeof(*msg) ? 1 : -1;
 }
 /* Native services are outside the fixture; program inventory has one record. */
 int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
@@ -102,7 +105,7 @@ static void drain(struct cp_main *m)
 {
     struct ciuki_message msg;
     unsigned count=0;
-    while (!ciuki_channel_recv(m->completion[0],&msg,DONTWAIT)) { assert(msg.length==4 && ++count<2048); }
+    while (ciuki_channel_recv(m->completion[0],&msg,DONTWAIT)>0) { assert(msg.length==4 && ++count<2048); }
     assert(errno==EAGAIN);
 }
 static void await_completion(struct cp_main *m)

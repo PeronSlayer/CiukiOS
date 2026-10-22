@@ -69,6 +69,13 @@ static void enqueue(unsigned op,unsigned type,int code,int value,int value2)
     event(op,type,code,value,value2);available=0;
     fifo[(fifo_head+fifo_count++)%128]=incoming;
 }
+extern int (*ciuki_browser_wait)(int,int);
+static unsigned waits;
+static int wait_input(int channel,int timeout)
+{
+    assert(channel==3 && timeout==10000);waits++;
+    enqueue(DESK_MOTION,CIUKI_INPUT_MOTION,0,70,110);return 1;
+}
 int main(void)
 {
     ciuki_browser_channel=3;
@@ -98,6 +105,16 @@ int main(void)
     s=ciuki_browser_active;assert(s && s->connection.channel==CIUKI_BROWSER_CHANNEL_FD && sends==2 && live==1);
     result(DESK_CREATE_WINDOW,s->create_request);assert(!nsfb_event(fb,&e,0) && s->ready);
     nsfb_free(fb);assert(!ciuki_browser_active && !live && ciuki_browser_channel==-1);
+    /* A static browser has one ten-second wait, then dispatches the new input
+     * on the following turn. The frontend passes the real scheduler timeout. */
+    fb=nsfb_new(NSFB_SURFACE_CIUKI);assert(fb);
+    assert(!nsfb_set_geometry(fb,640,422,NSFB_FMT_XRGB8888));assert(!nsfb_init(fb));
+    s=ciuki_browser_active;result(DESK_CREATE_WINDOW,s->create_request);assert(!nsfb_event(fb,&e,0));
+    ciuki_browser_wait=wait_input;
+    assert(!nsfb_event(fb,&e,10000) && waits==1);
+    assert(nsfb_event(fb,&e,0) && e.type==NSFB_EVENT_MOVE_ABSOLUTE && waits==1);
+    ciuki_browser_wait=NULL;nsfb_free(fb);assert(!ciuki_browser_active && !live);
+    puts("PASS F2-98c NetSurf chrome: 10 s idle wait, input dispatched in one turn");
     /* f6-20: one UI turn drains the whole channel (not one input packet per
      * turn) and coalesces consecutive pointer motion around input edges. */
     fb=nsfb_new(NSFB_SURFACE_CIUKI);assert(fb);

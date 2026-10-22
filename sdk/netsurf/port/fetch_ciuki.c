@@ -1,5 +1,6 @@
 /* NetSurf 3.11 fetcher binding. SPDX-License-Identifier: GPL-2.0-only */
 #include <stdbool.h>
+#include "apps/libdeskui/completion.h"
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -34,6 +35,8 @@ static void observe(struct ciuki_fetch *f)
     ciuki_test_fetch_observe(status,f->delivered,tls,f->error?f->error:f->job?f->job->error:NULL);
 }
 static struct ciuki_net *network;
+static struct du_completion completion;
+static int completion_live;
 static struct ciuki_fetch *jobs;
 static unsigned references;
 static bool in_poll;
@@ -122,6 +125,7 @@ static bool initialise(lwc_string *scheme)
     if(!references){
         size_t count=0;const br_x509_trust_anchor *anchors=ciuki_test_anchors(&count);
         network=ciuki_net_create(anchors,count);if(!network)return false;
+        if(completion_live)ciuki_net_notify(network,du_completion_notify,&completion);
     }
     references++;return true;
 }
@@ -213,8 +217,29 @@ static int fdset(lwc_string *scheme,fd_set *read,fd_set *write,fd_set *error)
 }
 static void finalise(lwc_string *scheme)
 { (void)scheme;if(references && !--references){ciuki_net_destroy(network);network=NULL;} }
+extern int (*ciuki_browser_wait)(int,int);
+static int event_wait(int channel,int timeout)
+{
+    /* The main-turn pump runs before schedule_run(). Do not progress fetchers
+     * here: a callback could schedule work after that timeout was computed. */
+    struct pollfd fds[10];unsigned count=2;
+    fds[0]=(struct pollfd){channel,POLLIN,0};
+    fds[1]=(struct pollfd){completion.fd[0],POLLIN,0};
+    if(network)count+=ciuki_net_fds(network,fds+2);
+    int r=poll(fds,count,ciuki_net_timeout(network,timeout));
+    if(r<0)return r;
+    for(unsigned i=0;i<count;i++)if(fds[i].revents&POLLNVAL){errno=EBADF;return -1;}
+    if(fds[1].revents&(POLLERR|POLLHUP)){errno=EIO;return -1;}
+    if((fds[1].revents&POLLIN) && du_completion_take(&completion))return -1;
+    return r;
+}
 nserror fetch_ciuki_register(void)
 {
+    if(!completion_live){
+        if(du_completion_init(&completion))return NSERROR_NOMEM;
+        completion_live=1;
+    }
+    ciuki_browser_wait=event_wait;
     static const struct fetcher_operation_table operations={initialise,acceptable,setup,start,abort_fetch,free_fetch,poll_fetch,fdset,finalise};
     const char *names[]={"http","https"};
     for(unsigned i=0;i<2;i++){
@@ -226,7 +251,7 @@ nserror fetch_ciuki_register(void)
 void ciuki_fetch_pump(void)
 {
     /* fetch_fdset progresses all fetchers. poll is a readiness bridge only;
-     * libnsfb owns the bounded (<=10 ms) UI wait, including desktop events. */
+     * libnsfb waits on readiness, DNS completion and the real scheduler deadline. */
     if(network)ciuki_net_service_idle(network);
     fd_set read,write,error;int max=-1;
     fetch_fdset(&read,&write,&error,&max);

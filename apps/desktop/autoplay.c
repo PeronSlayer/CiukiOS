@@ -67,6 +67,7 @@ static void *autoplay_worker(void *arg)
         }
         pthread_mutex_lock(&w->lock);
         w->busy=0; w->ready=1;
+        desk_wake(w->desktop);
     }
     pthread_mutex_unlock(&w->lock); return NULL;
 }
@@ -95,7 +96,8 @@ int desk_autoplay_busy(struct desktop *d)
     /* Shutdown stops ordinary service, but an accepted preference still
      * needs submission. Retrying here does not wait for its disk write. */
     if (a->phase==AP_SAVE_PENDING && submit(a,AP_JOB_SAVE)) a->phase=AP_SAVING;
-    if (pthread_mutex_trylock(&w->lock)) return 1;
+    if (w->desktop && w->desktop->wake) pthread_mutex_lock(&w->lock);
+    else if (pthread_mutex_trylock(&w->lock)) return 1;
     int busy=w->job || w->busy || a->phase==AP_SAVE_PENDING;
     pthread_mutex_unlock(&w->lock); return busy;
 }
@@ -117,7 +119,8 @@ const char *desk_autoplay_activity(const struct desktop *d)
 static int submit(struct desk_autoplay *a,int job)
 {
     struct ap_worker *w=a->worker;
-    if (!w || pthread_mutex_trylock(&w->lock)) return 0;
+    if (!w) return 0;
+    pthread_mutex_lock(&w->lock);
     int available=!w->job && !w->busy && !w->ready && !w->stopping;
     if (available) {
         w->volume=a->active; w->action=a->selected;
@@ -129,7 +132,8 @@ static int submit(struct desk_autoplay *a,int job)
 static int take(struct desk_autoplay *a,int *error)
 {
     struct ap_worker *w=a->worker;
-    if (!w || pthread_mutex_trylock(&w->lock)) return 0;
+    if (!w) return 0;
+    pthread_mutex_lock(&w->lock);
     int ready=w->ready;
     if (ready) {
         if (a->phase==AP_PROBING) { a->content=w->content; a->saved=w->saved; }

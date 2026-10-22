@@ -119,8 +119,8 @@ static void *run(void *arg)
         struct ciuki_message token = {0};
         int r;
         do r = ciuki_channel_recv(d.fd[1], &token, 0); while (r < 0 && errno == EINTR);
-        if (!r && token.length && token.data[0]) return NULL; /* orderly shutdown */
-        if (r < 0 || !token.length) break;
+        if (r>0 && token.length && token.data[0]) return NULL; /* orderly shutdown */
+        if (r <= 0 || !token.length) break;
         (void)__atomic_load_n(&d.state, __ATOMIC_ACQUIRE);
         struct cp_preview_req req = d.req;
         struct cp_preview_done done = {.req = req}; done.req.image = (struct desk_image){0};
@@ -166,7 +166,7 @@ int cp_decoder_poll(struct cp_preview_done *out)
 {
     /* Called only after the completion endpoint is readable. No retry timer. */
     struct ciuki_message token;
-    if (ciuki_channel_recv(d.fd[0], &token, DONTWAIT)) return 0;
+    if (ciuki_channel_recv(d.fd[0], &token, DONTWAIT)<=0) return 0;
     if (__atomic_load_n(&d.state, __ATOMIC_ACQUIRE) != 2) return 0;
     uint32_t *buf = out->preview;
     *out = d.done; out->preview = buf;

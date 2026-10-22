@@ -110,6 +110,7 @@ void job_record(const char *fmt, ...)
 static void transfer_publish(struct files_transfer *w, uint64_t started, int finished)
 {
     struct fm_job *j = w->job;
+    uint64_t now=job_now();
     struct transfer_view v = {.state=j->state, .kind=j->kind, .bytes=j->bytes, .total=j->total_bytes,
         .elapsed=job_now()-started, .items=j->items_done,
         .count=j->total_items, .counting=j->counting, .files=j->files, .folders=j->folders};
@@ -126,9 +127,12 @@ static void transfer_publish(struct files_transfer *w, uint64_t started, int fin
     else if (j->next) source=j->sources[j->next-1];
     snprintf(v.source, sizeof(v.source), "%s", source);
     pthread_mutex_lock(&w->lock);
+    int changed=finished || v.state!=w->view.state || !w->notified_at || now-w->notified_at>=100000000ull;
     w->view = v;
     w->finished = finished;
+    if (changed) w->publication++;
     pthread_mutex_unlock(&w->lock);
+    if (changed && w->notify) { w->notified_at=now; w->notify(w->notify_ctx); }
 }
 static void *transfer_run(void *arg)
 {

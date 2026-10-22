@@ -41,6 +41,7 @@ struct files_scan {
     unsigned listed;
 };
 struct files_worker {
+    struct du_ui *ui;
     pthread_mutex_t lock;
     pthread_cond_t changed;
     pthread_t thread;
@@ -803,7 +804,7 @@ static void *scan_run(void *arg)
         pthread_mutex_lock(&w->lock);
         struct files_scan *old = w->result;
         if (scan_cancelled(s) || w->stopping) { w->busy = 0; pthread_mutex_unlock(&w->lock); scan_free(s); }
-        else { w->result = s; w->busy = 0; pthread_mutex_unlock(&w->lock); scan_free(old); }
+        else { w->result = s; w->busy = 0; pthread_mutex_unlock(&w->lock); scan_free(old); du_wake(w->ui); }
     }
     return NULL;
 }
@@ -815,6 +816,7 @@ static int scan_start(struct files_app *a)
     if (e) { free(w); return -e; }
     e = pthread_cond_init(&w->changed, NULL);
     if (e) { pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    w->ui=a->ui;
     e = pthread_create(&w->thread, NULL, scan_run, w);
     if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); free(w); return -e; }
     a->worker = w;
@@ -864,8 +866,6 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     pthread_mutex_unlock(&w->lock);
     scan_free(old); scan_free(result);
     a->tree_dirty = 0;
-    /* Replacing an outstanding request keeps its existing 20 ms cadence. */
-    if (!a->reading) du_timer_start(a->ui, T_BROWSER, 20000000u, 1);
     a->reading = 1;
     if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH) {
         a->loading = 1;
@@ -881,7 +881,8 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
 static void scan_poll(struct files_app *a)
 {
     struct files_worker *w = a->worker;
-    if (!w || pthread_mutex_trylock(&w->lock)) return;
+    if (!w) return;
+    pthread_mutex_lock(&w->lock);
     struct files_scan *s = w->result; w->result = NULL;
     pthread_mutex_unlock(&w->lock);
     if (!s) return;
@@ -1047,8 +1048,14 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
 static const char *verb(enum fm_job_kind kind)
 { return kind == FM_COPY ? "copy" : kind == FM_MOVE ? "move" : kind == FM_DELETE ? "delete" : "read"; }
 
+static void transfer_notify(void *ctx) { du_wake(ctx); }
 static int transfer_start(struct files_app *a)
-{ return fm_transfer_create(&a->transfer,&a->job); }
+{
+    if (a->transfer) return 0;
+    int r=fm_transfer_create(&a->transfer,&a->job);
+    if (!r) { a->transfer->notify=transfer_notify; a->transfer->notify_ctx=a->ui; }
+    return r;
+}
 static void transfer_command(struct files_app *a, int cancel, int answer)
 { if (a->job_active) fm_transfer_command(a->transfer,cancel,answer); }
 static void transfer_stop(struct files_app *a)
@@ -1056,7 +1063,8 @@ static void transfer_stop(struct files_app *a)
 static void progress(struct files_app *a)
 {
     struct files_transfer *w=a->transfer; struct transfer_view v;
-    if (!w || pthread_mutex_trylock(&w->lock)) return;
+    if (!w) return;
+    pthread_mutex_lock(&w->lock);
     v=w->view; pthread_mutex_unlock(&w->lock);
     fm_progress_dialog(a->ui,D_PROGRESS,a->job.kind,a->job.destination,v,w->started_at);
 }
@@ -1071,7 +1079,8 @@ static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *pa
     a->job.chunk=FM_CHUNK;
     a->job_active=1;
     fm_transfer_reset(a->transfer);
-    du_timer_start(a->ui,T_JOB,100000000u,1);
+    a->job_ui_ns=job_now();
+    du_timer_start(a->ui,T_JOB,1000000000ull,0); /* visible elapsed time, not result polling */
     progress(a);
     fm_transfer_submit(a->transfer);
     return 0;
@@ -1154,11 +1163,14 @@ static void job_tick(struct files_app *a)
 {
     if (!a->job_active) return;
     struct files_transfer *w=a->transfer;
-    if (pthread_mutex_trylock(&w->lock)) return;
+    pthread_mutex_lock(&w->lock);
     enum fm_job_state state=w->view.state; int finished=w->finished;
-    uint64_t bytes=w->view.bytes; unsigned items=w->view.items;
+    uint64_t bytes=w->view.bytes; unsigned items=w->view.items, publication=w->publication;
     pthread_mutex_unlock(&w->lock);
     uint64_t now=job_now();
+    if (publication==a->job_publication && !finished && now-a->job_ui_ns<1000000000ull) return;
+    a->job_publication=publication; a->job_ui_ns=now;
+    if (!finished && state==FM_RUNNING) du_timer_start(a->ui,T_JOB,1000000000ull,0);
     if (!finished && a->job.kind!=FM_PROPERTIES && now-w->progress_logged>=5000000000ull) {
         job_record("[files] job=%s progress items=%u bytes=%llu",verb(a->job.kind),items,(unsigned long long)bytes);
         w->progress_logged=now;
@@ -1167,6 +1179,14 @@ static void job_tick(struct files_app *a)
     if (finished) { job_finished(a); return; }
     if (state==FM_REPLACE) { if (du_dialog_id(a->ui)!=D_REPLACE) replace_prompt(a); return; }
     progress(a);
+}
+
+/* A completion or an ordinary UI event services both mailboxes. No retry
+ * timer is armed; the short mailbox locks never contain VFS operations. */
+static void files_service(struct du_ui *u,void *ctx)
+{
+    (void)u; struct files_app *a=ctx;
+    scan_poll(a); job_tick(a);
 }
 
 /* ---- commands ---- */
@@ -1634,6 +1654,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     places_build(a);
     files_layout(a);
     du_focus(u, W_LIST);
+    u->service=files_service;
     int worker_error = scan_start(a);
     if (worker_error) return worker_error;
     if (files_navigate(a, path ? path : FM_COMPUTER)) {
@@ -1646,6 +1667,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
 
 void files_destroy(struct files_app *a)
 {
+    a->ui->service=NULL;
     du_timer_stop(a->ui,T_MEDIA);
     du_timer_stop(a->ui,T_BROWSER);
     scan_stop(a);

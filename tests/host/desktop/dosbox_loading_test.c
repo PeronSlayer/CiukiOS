@@ -14,6 +14,7 @@
 #undef BUS_ADRALN
 #include <signal.h>
 #include <time.h>
+#include <poll.h>
 #undef _SC_ARG_MAX
 #undef _SC_OPEN_MAX
 #undef _SC_PAGESIZE
@@ -22,20 +23,21 @@
 #include <unistd.h>
 static int replay_close(int);
 static int replay_clock(clockid_t, struct timespec *);
-static int replay_sleep(const struct timespec *, struct timespec *);
+static int replay_poll(struct pollfd *,nfds_t,int);
 #define close replay_close
 #define clock_gettime replay_clock
-#define nanosleep replay_sleep
+#define poll replay_poll
 #define main dosbox_main
 #include "../../../apps/dosbox/dosbox.c"
 #undef main
 #undef close
 #undef clock_gettime
-#undef nanosleep
+#undef poll
 
 static uint32_t screen[640 * 480];
 static uint64_t clock_ms, enter_ms, first_frame_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
+static unsigned error_idle_waits;
 static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
 static int input_refused;
 static int focus_loss;
@@ -50,8 +52,8 @@ const struct desk_theme *desk_theme = &replay_theme;
 static int replay_close(int fd) { assert(fd == 7 || fd == 3); return 0; }
 static int replay_clock(clockid_t id, struct timespec *t)
 { assert(id == CLOCK_MONOTONIC); t->tv_sec = (time_t)(clock_ms / 1000); t->tv_nsec = (long)(clock_ms % 1000) * 1000000; return 0; }
-static int replay_sleep(const struct timespec *t, struct timespec *unused)
-{ assert(!unused && !t->tv_sec); clock_ms += (uint64_t)t->tv_nsec / 1000000; return 0; }
+static int replay_poll(struct pollfd *fds,nfds_t n,int timeout)
+{ assert(n==1 && fds[0].fd==3 && fds[0].events==POLLIN && timeout==-1);error_idle_waits++;clock_ms+=10000;fds[0].revents=POLLIN;return 1; }
 int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t f)
 { assert(w == 640 && h == 480 && f == CIUKI_SURFACE_XRGB8888); return 7; }
 void *ciuki_surface_map(int fd, int prot)
@@ -206,6 +208,7 @@ void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,
 void du_well(struct du_canvas *c,struct du_rect b,uint32_t ink) { du_fill(c,b,ink); }
 int main(int argc, char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
     assert(scenario>=0 && scenario<=17);
@@ -229,7 +232,8 @@ int main(int argc, char **argv)
     if (scenario == 6) assert(!armed && !entered);
     if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active && back_seen==1 && !notice_seen);
     else assert(!back_seen);
-    if (error_seen) assert(error_seen==1);
+    if (error_seen) { assert(error_seen==1 && error_idle_waits==1);
+        puts("PASS DOS error window: one infinite wait for 10 s modeled idle, close in one turn"); }
     if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : 1u)); /* fullscreen's static page shares the title */
     assert(damage_count);
     if (scenario==0 && !nonvideo) {

@@ -25,7 +25,9 @@ struct cfg_writer {
     const char *path, *temporary;
     int (*write)(struct cfg_writer *, const char *, size_t);
     /* Optional event publication after a result is visible under lock.
-     * Must not perform blocking I/O or access a UI; set before start(). */
+     * Must not perform blocking I/O or access a UI; set before start().
+     * Event consumers take the short mailbox lock without retry polling;
+     * writers without a notifier preserve the legacy try-lock interface. */
     void (*notify)(void *);
     void *notify_ctx;
 };

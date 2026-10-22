@@ -133,6 +133,7 @@ static const struct desk_w32_supervisor_ops supervision={spawn_service,record_se
 /* One bounded transfer from the sleeping shortcut worker to the shell thread. */
 static pthread_mutex_t launch_lock=PTHREAD_MUTEX_INITIALIZER;
 static unsigned launch_inflight;
+static int launch_published;
 static struct {int ready,fd,pid,kind;uint32_t show;char title[64];struct desk_launch_record record;} pending;
 static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_record *r,int wait)
 {
@@ -161,7 +162,8 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     int result=-EIO;
     if(kind==DESK_W32_ELF || kind==DESK_W32_DOS){
         pending.ready=1;pending.kind=kind;pending.record=*r;
-        pthread_mutex_unlock(&launch_lock);return 0;
+        pthread_mutex_unlock(&launch_lock);
+        __atomic_store_n(&launch_published,1,__ATOMIC_RELEASE);desk_wake(owner);return 0;
     }
     if(kind!=DESK_W32_PE && ciuki_channel_pair(pair)<0){result=-errno;goto done;}
     if(ciuki_channel_pair(report)<0){result=-errno;goto done;}
@@ -195,7 +197,9 @@ done:
         int status=0,joined;do {joined=waitpid(helper,&status,0);} while(joined<0 && errno==EINTR);
         if(joined<0 && !result)result=-errno;
     }
-    pthread_mutex_unlock(&launch_lock);return result;
+    int publish=pending.ready;pthread_mutex_unlock(&launch_lock);
+    if(publish){__atomic_store_n(&launch_published,1,__ATOMIC_RELEASE);desk_wake(owner);}
+    return result;
 }
 int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
 {
@@ -367,7 +371,7 @@ static void *restart_launch_worker(void *unused)
         }
     }
     for(unsigned i=0;i<2;i++)if(report[i]>=0)close(report[i]);
-    pthread_mutex_lock(&restart_launch_lock);restart_launch_result=result;restart_launch_ready=1;pthread_mutex_unlock(&restart_launch_lock);return NULL;
+    pthread_mutex_lock(&restart_launch_lock);restart_launch_result=result;restart_launch_ready=1;desk_wake(owner);pthread_mutex_unlock(&restart_launch_lock);return NULL;
 }
 static int restart_launch(void *ctx,const char *command)
 {
@@ -408,7 +412,7 @@ static void *restart_idle_worker(void *unused)
         struct w32r_reply reply={0};char message[W32R_SESSION_MESSAGE];
         uint32_t error=restart_call(NULL,W32R_SHUTDOWN,W32R_SHUTDOWN_POLL,flags,&reply,message,sizeof(message));
         pthread_mutex_lock(&idle_lock);
-        idle.reply=reply;idle.error=error;idle.result_epoch=epoch;idle.ready=1;
+        idle.reply=reply;idle.error=error;idle.result_epoch=epoch;idle.ready=1;desk_wake(owner);
     }
     return NULL;
 }
@@ -419,7 +423,7 @@ static void restart_idle_poll(struct desktop *d,uint64_t now)
     if(!pthread_mutex_trylock(&launch_lock)){
         active|=pending.ready;pthread_mutex_unlock(&launch_lock);
     }else active=1;
-    if(pthread_mutex_trylock(&idle_lock))return;
+    pthread_mutex_lock(&idle_lock);
     if(!idle.started){
         pthread_t thread;
         if(pthread_create(&thread,NULL,restart_idle_worker,NULL)){
@@ -439,7 +443,7 @@ static void restart_idle_poll(struct desktop *d,uint64_t now)
     if(restart.stage || d->v3_dialog_kind)return;
     unsigned interval=active?DESK_RESTART_IDLE_MS:DESK_RESTART_QUIET_MS;
     if(idle_polled && now-idle_last<interval)return;
-    if(pthread_mutex_trylock(&idle_lock))return;
+    pthread_mutex_lock(&idle_lock);
     if(!idle.busy){
         idle.busy=idle.request=1;idle.flags=restart.boot_checked?0:1;idle.epoch=idle_epoch;
         idle_last=now;idle_polled=1;pthread_cond_signal(&idle_wake);
@@ -478,7 +482,8 @@ void desk_w32_poll(struct desktop *d)
         int i=desk_add_client(d,(int)a.endpoint);
         if(i<0)close((int)a.endpoint);else d->clients[i].pid=a.pid;
     }
-    if(!pthread_mutex_trylock(&launch_lock)){
+    if(__atomic_load_n(&launch_published,__ATOMIC_ACQUIRE)){
+        pthread_mutex_lock(&launch_lock);
         if(pending.ready && (pending.kind==DESK_W32_ELF || pending.kind==DESK_W32_DOS)){
             int result;
             if(pending.kind==DESK_W32_DOS){
@@ -498,6 +503,7 @@ void desk_w32_poll(struct desktop *d)
             }
             pending.ready=0;
         }
+        __atomic_store_n(&launch_published,0,__ATOMIC_RELEASE);
         pthread_mutex_unlock(&launch_lock);
     }
 }

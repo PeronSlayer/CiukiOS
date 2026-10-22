@@ -168,6 +168,8 @@ struct desk_power_sequence {
 };
 struct desk_render_cache;
 struct desktop {
+    void (*wake)(void *);
+    void *wake_ctx;
     uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
     unsigned games_removed;
     int (*install_program)(struct desktop *,const char *);
@@ -330,6 +332,10 @@ struct desktop {
     uint64_t vram_check_ns, vram_query_ns;
     int accel_lost;
 };
+/* Worker publication only; never inspect live shell state from a worker. */
+static inline void desk_wake(struct desktop *d)
+{ if (d && d->wake) d->wake(d->wake_ctx); }
+
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
  * 6 demo reaped with status 0, 7 Tasks reported the PID gone and the

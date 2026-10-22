@@ -14,6 +14,7 @@
 #include <ciuki/surface.h>
 #include <ciuki/desktop.h>
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -369,7 +370,11 @@ panel:
             panel_sent=1;
             if (failure) failure_painted = 1;
         }
-        if (failure) { struct timespec pause = {.tv_nsec = 50000000}; nanosleep(&pause, NULL); }
+        if (failure) {
+            struct pollfd fd={channel,POLLIN,0};
+            int r=poll(&fd,1,-1);
+            if ((r<0 && errno!=EINTR) || (fd.revents&POLLNVAL)) goto done;
+        }
     }
     if (!failure) result = 0;
 done:

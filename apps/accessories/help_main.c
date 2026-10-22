@@ -29,7 +29,7 @@ static void idle(void *arg)
         free(m->text); m->text=NULL; m->path=NULL;
     } else if (m->path && !m->opening.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         m->open_revision=m->app.ta.revision;
-        int r=du_job_start(&m->opening,read_help,m);
+        int r=du_job_start_ui(&m->opening,read_help,m,&m->ui);
         if (r) { m->path=NULL; du_message(&m->ui,H_D_INFO,"CiukiOS Help",strerror(-r),DU_DLG_ICON_WARNING,NULL,0,0,0); }
     }
 }

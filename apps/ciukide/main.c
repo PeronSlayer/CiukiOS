@@ -8,7 +8,41 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-struct ide_main { struct ide_app app; struct du_ui ui; struct du_window window; uint32_t serial; int closing, pending; struct du_job opening; const char *folder; struct ide_app *loaded; struct du_ui *load_ui; int load_error; uint64_t open_revision; };
+struct ide_main { struct ide_app app; struct du_ui ui; struct du_window window; uint32_t serial; int closing, pending; struct du_job opening, reaping; int child_pid, child_status, child_error; const char *folder; struct ide_app *loaded; struct du_ui *load_ui; int load_error; uint64_t open_revision; };
+/* The two output channels wake for log data. A blocking reaper publishes
+ * process exit separately, including exit after both channels reached EOF. */
+static void reap_child(void *ctx)
+{
+    struct ide_main *m=ctx;int r;
+    do { r=waitpid(m->child_pid,&m->child_status,0); } while(r<0 && errno==EINTR);
+    m->child_error=r<0 ? -errno : 0;
+}
+static int start_child(void *ctx,const char *compiler,char *const argv[],int fds[2])
+{
+    struct ide_main *m=ctx;
+    int pid=ide_native_process()->start(NULL,compiler,argv,fds);
+    if(pid<0)return pid;
+    m->child_pid=pid;m->child_error=0;
+    int error=du_job_start_ui(&m->reaping,reap_child,m,&m->ui);
+    if(error){
+        kill(pid,SIGKILL);int status;while(waitpid(pid,&status,0)<0 && errno==EINTR){}
+        for(unsigned i=0;i<2;i++)if(fds[i]>=0)close(fds[i]);
+        return error;
+    }
+    return pid;
+}
+static int child_status(void *ctx,int pid,int *status)
+{
+    struct ide_main *m=ctx;
+    if(!du_job_ready(&m->reaping))return 0;
+    du_job_finish(&m->reaping);*status=m->child_status;
+    return m->child_error ? m->child_error : pid;
+}
+static ssize_t child_read(void *ctx,int fd,char *p,size_t n)
+{ (void)ctx;return ide_native_process()->read(NULL,fd,p,n); }
+static void child_close(void *ctx,int fd)
+{ (void)ctx;ide_native_process()->close(NULL,fd); }
+static const struct ide_process_ops child_ops={start_child,child_read,child_status,child_close};
 static int launch(void *ctx,const char *path)
 {
     struct ide_main *m=ctx;
@@ -61,6 +95,9 @@ static void free_project(struct ide_main *m)
 static void idle(void *ctx)
 {
     struct ide_main *m=ctx; ide_idle(&m->app);
+    m->ui.wait_count=0;
+    for (unsigned i=0;i<2;i++) if (m->app.job.pid && m->app.job.fd[i]>=0)
+        m->ui.wait_fds[m->ui.wait_count++]=m->app.job.fd[i];
     if (du_job_ready(&m->opening)) {
         du_job_finish(&m->opening);
         if (!m->load_error && m->open_revision==m->app.editor.revision && !m->app.editor.modified) ide_adopt_project(&m->app,m->loaded);
@@ -68,7 +105,7 @@ static void idle(void *ctx)
         free_project(m); m->folder=NULL;
     } else if (m->folder && !m->opening.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         m->open_revision=m->app.editor.revision;
-        int r=du_job_start(&m->opening,read_project,m);
+        int r=du_job_start_ui(&m->opening,read_project,m,&m->ui);
         if (r) { m->folder=NULL; du_message(&m->ui,IDE_MESSAGE,"CiukIDE",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0); }
     }
     if (m->closing && !m->app.job.pid) du_window_close(&m->window);
@@ -86,7 +123,7 @@ int main(int argc,char **argv)
     int width=560,height=330; const char *display=getenv("CIUKI_DISPLAY");
     if (display && atoi(display)>=800) { width=760; height=500; }
     if (du_window_open_resizable(&m->window,&m->ui,channel,width,height,"CiukIDE",500,300)) { free(m); return 1; }
-    m->app.fs=cn_native_fs(); m->app.process=ide_native_process(); m->app.launch=launch; m->app.launch_ctx=m;
+    m->app.fs=cn_native_fs(); m->app.process=&child_ops; m->app.process_ctx=m; m->app.launch=launch; m->app.launch_ctx=m;
     m->window.user=m; m->window.message=message; m->window.close_request=close_request;
     if (ide_attach(&m->app,&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
     m->folder=folder;
@@ -94,7 +131,7 @@ int main(int argc,char **argv)
     if (m->app.job.pid) {
         kill(m->app.job.pid,SIGKILL);
         for (unsigned i=0;i<2;++i) if (m->app.job.fd[i]>=0) close(m->app.job.fd[i]);
-        int status; while (waitpid(m->app.job.pid,&status,0)<0 && errno==EINTR) {}
+        du_job_finish(&m->reaping);
     }
     du_job_finish(&m->opening); free_project(m);
     ide_detach(&m->app); du_window_destroy(&m->window); free(m); return r<0 ? 1 : 0;

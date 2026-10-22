@@ -14,6 +14,8 @@
 #include "catalog.h"
 #include "gate.h"
 #include "../libdeskui/deskui.h"
+#include "../libdeskui/completion.h"
+#include <poll.h>
 #include <ciuki/raw.h>
 #include <ciuki/runtime.h>
 #include <ciuki/channel.h>
@@ -46,6 +48,7 @@ static uint64_t monotonic(void)
     if (clock_gettime(CLOCK_MONOTONIC,&t)) return 0;
     return (uint64_t)t.tv_sec*1000000000ull+(uint32_t)t.tv_nsec;
 }
+static struct du_completion desktop_completion;
 static uint64_t startup_begin;
 static uint32_t startup_us[CFG_STARTUP_STAGES];
 static unsigned startup_cached;
@@ -139,8 +142,7 @@ static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
 #define GATE_HOLD_MAX_NS 30000000000ull
 static struct ciuki_input_event input_fifo[GATE_INPUT_FIFO];
 static unsigned fifo_head, fifo_count;
-/* No timed input/channel wait in the native ABI. Empty service polls share
- * this 10 ms idle cadence; actual deadlines and active input may shorten it. */
+/* Input and completion descriptors use the f2-88c native wait. */
 /* f2-95: which deadline shortened the wait (the [desktop] loop record). */
 enum { PAUSE_IDLE, PAUSE_INPUT, PAUSE_FRAME, PAUSE_ANIMATION, PAUSE_TIMER, PAUSE_PING, PAUSE_CLOSE,
        PAUSE_NOTIFY, PAUSE_HOVER, PAUSE_POWER, PAUSE_CACHE, PAUSE_REASONS };
@@ -149,13 +151,14 @@ static const char *const pause_names[PAUSE_REASONS]={"idle","input","frame","ani
 static unsigned pause_reason;
 static void loop_deadline_for(uint64_t now,uint64_t deadline,uint64_t *wait,unsigned reason)
 {
+    if (deadline==UINT64_MAX) return;
     uint64_t left=deadline>now ? deadline-now : 1000000ull;
     if (left<*wait) { *wait=left; pause_reason=reason; }
 }
 #define loop_deadline(now,deadline,wait) loop_deadline_for(now,deadline,wait,reason)
 static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_pending,uint64_t timer)
 {
-    uint64_t wait=input_pending ? 1000000ull : 10000000ull;
+    uint64_t wait=input_pending ? 0 : UINT64_MAX;
     unsigned reason=PAUSE_FRAME;
     pause_reason=input_pending ? PAUSE_INPUT : PAUSE_IDLE;
     if (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty)
@@ -476,6 +479,8 @@ static struct {
     unsigned live, stop, stage, pending, work, frame_ms, loop_ms;
     const char *wait;
 } desktop_watchdog;
+static pthread_mutex_t watchdog_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t watchdog_changed=PTHREAD_COND_INITIALIZER;
 static const char *const desktop_stages[]={"idle","input","ipc","display",
     "theme","launch","shell","render","report"};
 static void desktop_wait(const char *name)
@@ -483,7 +488,10 @@ static void desktop_wait(const char *name)
 static void desktop_stage(unsigned stage)
 {
     desktop_wait(stage<sizeof(desktop_stages)/sizeof(*desktop_stages) ? desktop_stages[stage] : "unknown");
-    __atomic_store_n(&desktop_watchdog.stage,stage,__ATOMIC_RELEASE);
+    unsigned previous=__atomic_exchange_n(&desktop_watchdog.stage,stage,__ATOMIC_ACQ_REL);
+    if (previous==STALL_IDLE && stage!=STALL_IDLE && desktop_watchdog.live) {
+        pthread_mutex_lock(&watchdog_lock);pthread_cond_signal(&watchdog_changed);pthread_mutex_unlock(&watchdog_lock);
+    }
 }
 static void desktop_input_pending(void)
 { __atomic_store_n(&desktop_watchdog.pending,1,__ATOMIC_RELEASE); }
@@ -553,7 +561,21 @@ static void *desktop_watchdog_run(void *unused)
 #endif
             reported=now;
         }
-        struct timespec pause={.tv_sec=0,.tv_nsec=100000000}; nanosleep(&pause,NULL);
+        pthread_mutex_lock(&watchdog_lock);
+        /* Idle needs no watchdog sampling. Active work retains the existing
+         * diagnostic deadline; an input/service turn wakes this condition. */
+        const struct desktop *d=desktop_watchdog.desktop;
+        if (__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE)==STALL_IDLE &&
+            !__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE) &&
+            !__atomic_load_n(&desktop_watchdog.work,__ATOMIC_ACQUIRE) &&
+            (!d || !__atomic_load_n(&d->v3_restore_watchdog_pending,__ATOMIC_ACQUIRE))) {
+            pthread_cond_wait(&watchdog_changed,&watchdog_lock);
+        } else {
+            struct timespec until;clock_gettime(CLOCK_REALTIME,&until);until.tv_nsec+=100000000;
+            if(until.tv_nsec>=1000000000){until.tv_sec++;until.tv_nsec-=1000000000;}
+            pthread_cond_timedwait(&watchdog_changed,&watchdog_lock,&until);
+        }
+        pthread_mutex_unlock(&watchdog_lock);
     }
     return NULL;
 }
@@ -953,6 +975,7 @@ static void wallpaper_worker_prepare(struct desktop *d)
     if (!d->shell || d->sh.gate || wallpaper_worker_started || wallpaper_worker_failed) return;
     int e=desk_wall_worker_start(&wallpaper_worker,DESK_WALL_CACHE,startup_stage);
     if (e) { wallpaper_worker_failed=1; desk_shell_notify_error(d,"Wallpaper worker unavailable",e); return; }
+    wallpaper_worker.notify=d->wake; wallpaper_worker.notify_ctx=d->wake_ctx;
     wallpaper_worker_started=1;
 }
 static void wallpaper_poll(struct desktop *d)
@@ -966,6 +989,7 @@ static void wallpaper_poll(struct desktop *d)
             wallpaper_worker_failed=1; d->sh.wallpaper_pending=0;
             desk_shell_notify_error(d,"Wallpaper worker unavailable",e); return;
         }
+        wallpaper_worker.notify=d->wake; wallpaper_worker.notify_ctx=d->wake_ctx;
         wallpaper_worker_started=1;
     }
     if (wallpaper_worker_started && !wallpaper_serial) {
@@ -1059,7 +1083,7 @@ static void media_sound(struct desktop *d,int connected)
  * touches desktop/shell state. Device queries are outside the mailbox lock. */
 static void *media_run(void *arg)
 {
-    int fd=(int)(intptr_t)arg;
+    struct desktop *d=arg; int fd=-1;
     for (;;) {
         pthread_mutex_lock(&media_worker.lock);
         while (!media_worker.pending && !media_worker.stopping)
@@ -1088,6 +1112,7 @@ static void *media_run(void *arg)
         memcpy(media_worker.cd_states,cd_states,sizeof(cd_states));
         media_worker.observed=observed; media_worker.ok=ok;
         media_worker.completed=serial; media_worker.ready=1; media_worker.busy=0;
+        desk_wake(d);
         pthread_mutex_unlock(&media_worker.lock);
     }
     observer_close(&fd);
@@ -1099,13 +1124,13 @@ static int media_read(struct desktop *d)
     if (!media_worker.started && !media_worker.failed) {
         media_worker.stopping=media_worker.pending=media_worker.busy=media_worker.ready=0;
         media_worker.commit=0; media_worker.confirm_pending=0;
-        int error=pthread_create(&media_worker.thread,NULL,media_run,(void *)(intptr_t)d->media_fd);
+        int error=pthread_create(&media_worker.thread,NULL,media_run,d);
         if (error) { media_worker.failed=1; desk_shell_notify_error(d,"Media worker unavailable",error); }
-        else { media_worker.started=1; d->media_fd=-1; }
+        else { media_worker.started=1; observer_close(&d->media_fd); }
     }
     if (!media_worker.started) return 0;
     /* Polling and submissions never wait for a busy mailbox. */
-    if (pthread_mutex_trylock(&media_worker.lock)) return 0;
+    pthread_mutex_lock(&media_worker.lock);
     if (media_worker.rescan || (!media_worker.pending && !media_worker.busy && !media_worker.ready)) {
         media_worker.rescan=0; media_worker.ready=0;
         media_worker.requested++; media_worker.pending=1;
@@ -1116,7 +1141,8 @@ static int media_read(struct desktop *d)
 }
 static void media_poll(struct desktop *d)
 {
-    if (d->power.state || !media_worker.started || pthread_mutex_trylock(&media_worker.lock)) return;
+    if (d->power.state || !media_worker.started) return;
+    pthread_mutex_lock(&media_worker.lock);
     int ready=media_worker.ready, observed=media_worker.observed, ok=media_worker.ok;
     unsigned serial=media_worker.completed;
     if (serial < media_worker.requested) ready=0;
@@ -1142,7 +1168,7 @@ static void media_poll(struct desktop *d)
 static int media_busy(void)
 {
     if (!media_worker.started) return 0;
-    if (pthread_mutex_trylock(&media_worker.lock)) return 1;
+    pthread_mutex_lock(&media_worker.lock);
     int busy=media_worker.busy || media_worker.pending;
     pthread_mutex_unlock(&media_worker.lock);
     return busy;
@@ -1739,6 +1765,7 @@ struct links_worker {
     int scan_requested, games_requested, scanning, launch_requested, launch_busy, completed, result;
     unsigned games_removed;
     unsigned count;
+    struct desktop *desktop;
     uint64_t scanned_ns;                       /* f2-95: last completed scan, 0 = none yet */
     unsigned scans, game_scans, stats, reads;  /* f2-95: totals for tests and diagnostics */
     char source[260];
@@ -1765,6 +1792,7 @@ static void links_scan_once(struct links_worker *w, int games)
     memcpy(w->published_stamps,w->scratch_stamps,w->count*sizeof(*w->published_stamps));
     w->scanned_ns=monotonic(); w->scanning=0;
     w->scans++; w->game_scans+=!!games; w->stats+=s.stats; w->reads+=s.reads;
+    desk_wake(w->desktop);
     pthread_mutex_unlock(&w->mutex);
 }
 static void *links_thread(void *arg)
@@ -1789,7 +1817,7 @@ static void *links_thread(void *arg)
             }else if(r)result=link_read(NULL,path,r);
             if (!result) result=ciuki_win32_shell_launch(r);
             free(r);
-            pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; pthread_mutex_unlock(&w->mutex);
+            pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
         } else links_scan_once(w,games);
     }
     return NULL;
@@ -1810,7 +1838,8 @@ static void links_request(struct links_worker *w, struct desktop *d, uint64_t no
 static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsigned cap)
 {
     struct links_worker *w=links_worker;
-    if (!w || pthread_mutex_trylock(&w->mutex)) return -EAGAIN;
+    if (!w) return -EAGAIN;
+    pthread_mutex_lock(&w->mutex);
     unsigned n=w->count<cap ? w->count : cap;
     int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
     if (!same) memcpy(out,w->published,n*sizeof(*out));
@@ -1857,6 +1886,7 @@ static void links_start(struct desktop *d)
     struct links_worker *w=calloc(1,sizeof(*w)); if (!w) return;
     if (pthread_mutex_init(&w->mutex,NULL)) { free(w); return; }
     if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
+    w->desktop=d;
     w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
     links_worker=w;
@@ -1865,7 +1895,8 @@ static void links_start(struct desktop *d)
 }
 static void links_service(struct desktop *d)
 {
-    struct links_worker *w=links_worker; if (!w || pthread_mutex_trylock(&w->mutex)) return;
+    struct links_worker *w=links_worker; if (!w) return;
+    pthread_mutex_lock(&w->mutex);
     d->games_removed=w->games_removed;
     int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
@@ -1911,6 +1942,7 @@ static void shell_setup(struct desktop *d, int gate)
     if (!gate) {
         int result=desk_folder_init(d,fm_native_vfs());
         if (result) desk_shell_notify_error(d,"Desktop folder unavailable",result);
+        settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx;
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
         int autoplay_error=desk_autoplay_prepare(d);
@@ -1988,14 +2020,15 @@ int main(int argc, char **argv)
     desk_accel_reset(d,info.generation);
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
+    if (du_completion_init(&desktop_completion)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
+    d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
     shell_setup(d,gate);
     if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) startup_launch(d,launch);
-    /* The ABI has no timed input read or poll/select. A bounded nonblocking
-     * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
+    /* Channels and input now share a blocking native poll wait. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);
     for (int i=0; i<demo_count; i++) if (spawn_demo(d,demos[i],0) < 0) fprintf(stderr,"desktop: demo spawn failed\n");
     struct gate_control *control = NULL;
@@ -2304,8 +2337,7 @@ int main(int argc, char **argv)
         if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
-        /* Input drains and all service polls run together. An unchanged
-         * desktop sleeps 10 ms; real work retains its earlier deadline. */
+        /* Input and completed work share a turn; feature deadlines remain explicit. */
         desktop_stage(STALL_IDLE);
         /* f2-92: offscreen-cache uploads and checks between frames, one
          * bounded engine request per turn while nothing is due. */
@@ -2330,8 +2362,26 @@ int main(int argc, char **argv)
         __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(sleep_now/1000000ull),__ATOMIC_RELEASE);
         uint64_t timer=d->shell && !gate && !d->power.state ? mixer_poll_next : UINT64_MAX;
         uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count!=0 || late_input,timer);
+        /* The explicit crash-isolation probe has a shared-memory control
+         * page without a descriptor. Its controller sampling is diagnostic
+         * work, never the normal desktop's idle policy. */
+        if (gate && wait>10000000ull) wait=10000000ull;
         if (cache_more && wait>1000000ull) { wait=1000000ull; pause_reason=PAUSE_CACHE; }
         loop_turn(wait);
-        struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait}; nanosleep(&pause,NULL);
+        if (d->shell && !gate && !d->power.state) {
+            /* Shell clock/directory snapshots have a genuine one-second deadline. */
+            uint64_t second=1000000000ull-sleep_now%1000000000ull;
+            if (second<wait) wait=second;
+        }
+        struct pollfd fds[DESK_CLIENTS+2]; unsigned nfds=0;
+        fds[nfds++]=(struct pollfd){d->input,POLLIN,0};
+        fds[nfds++]=(struct pollfd){desktop_completion.fd[0],POLLIN,0};
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0)
+            fds[nfds++]=(struct pollfd){d->clients[i].channel,POLLIN | (d->clients[i].tx_count ? POLLOUT : 0),0};
+        int ready=poll(fds,nfds,du_wait_ms(sleep_now,wait==UINT64_MAX ? UINT64_MAX : sleep_now+wait));
+        if (ready<0 && errno!=EINTR) return 1;
+        for (unsigned i=0;i<nfds;i++) if (fds[i].revents&POLLNVAL) return 1;
+        if (fds[1].revents&(POLLERR|POLLHUP)) return 1;
+        if ((fds[1].revents&POLLIN) && du_completion_take(&desktop_completion)) return 1;
     }
 }

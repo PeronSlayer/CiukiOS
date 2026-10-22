@@ -7,6 +7,7 @@
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -208,12 +209,18 @@ int main(int argc, char **argv)
         if (gate && configured && !pending && !announced && turns==target) {
             demo_report(!strcmp(kind,"none") ? 2 : 1,turns,0,0); announced=1;
         }
-        if (configured && !pending && (!gate || turns<target || released)) {
+        if (configured && !pending && (gate ? turns<target || released : strcmp(kind,"none")!=0)) {
             desk_message(&m,DESK_PING,8); desk_put32(m.data+4,++serial);
             if (send_wait(channel,&m)) break;
             pending=1; fault(channel,surface,kind,gate);
         }
-        struct timespec pause={.tv_sec=0,.tv_nsec=gate ? 1000000 : 10000000}; nanosleep(&pause,NULL);
+        if (gate) { /* explicit diagnostic workload/controller cadence */
+            struct timespec pause={.tv_sec=0,.tv_nsec=1000000};nanosleep(&pause,NULL);
+        } else {
+            struct pollfd fd={channel,POLLIN,0};
+            int r=poll(&fd,1,-1);
+            if ((r<0 && errno!=EINTR) || (fd.revents&POLLNVAL)) return 1;
+        }
     }
     struct ciuki_surface_info info;
     if (!ciuki_surface_info(surface,&info)) munmap(pixels,info.allocation_bytes);

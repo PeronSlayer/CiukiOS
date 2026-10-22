@@ -331,7 +331,7 @@ int fcntl(int fd,int cmd,...) {
     uint32_t arg=0;
     if (cmd==F_SETFL || cmd==F_SETFD) { va_list ap; va_start(ap,cmd); arg=(uint32_t)va_arg(ap,int); va_end(ap); }
     if (input_error && cmd==F_SETFL) { errno=EIO; return -1; }
-    if (inherit_error && cmd==F_SETFD) { errno=EACCES; return -1; }
+    if (inherit_error && cmd==F_SETFD && arg==0) { errno=EACCES; return -1; }
     int result=desktop_spawn_host_fcntl(fd,cmd,arg);
     if (result<0) { errno=-result; return -1; }
     return result;
@@ -371,6 +371,14 @@ int nanosleep(const struct timespec *t,struct timespec *rest)
         longjmp(done,1);
     }
     if (running && !remaining && pongs==running*100 && !page.command && !interact_ready) command(GATE_SNAPSHOT);
+    return 0;
+}
+/* Native readiness is replayed at the same deterministic OS boundary as
+ * input/channel receive. Probe-controller deadlines advance model time. */
+int poll(struct pollfd *fds,nfds_t n,int timeout)
+{
+    (void)fds;(void)n;assert(timeout>=0 && timeout<=10);
+    if(timeout){struct timespec t={.tv_nsec=(long)timeout*1000000};nanosleep(&t,NULL);}
     return 0;
 }
 static int run_desktop(int argc,char **argv)
@@ -439,13 +447,14 @@ static void idle_policy_test(void)
     struct desk_ops ops={0}; desk_init(d,&ops,320,320);
     memset(&d->damage,0,sizeof(d->damage)); d->cursor_dirty=0;
     uint64_t now=1000000000ull, wait;
-    for(unsigned i=0;i<100;i++) { wait=desktop_pause_ns(d,now,0,UINT64_MAX); assert(wait==10000000ull); now+=wait; }
-    assert(now==2000000000ull);
+    wait=desktop_pause_ns(d,now,0,UINT64_MAX); assert(wait==UINT64_MAX);
+    now+=10000000000ull; /* ten seconds without a timeout/service turn */
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==UINT64_MAX);
     /* A stationary held button/drag has no work or deadline of its own. */
     d->buttons=1; d->drag=0; d->sh.volume_drag=1;
-    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==UINT64_MAX);
     d->buttons=0; d->drag=-1; d->sh.volume_drag=0;
-    assert(desktop_pause_ns(d,now,1,UINT64_MAX)==1000000ull);
+    assert(desktop_pause_ns(d,now,1,UINT64_MAX)==0);
     assert(desktop_pause_ns(d,now,0,now+500000ull)==500000ull);
     d->damage.count=1; d->next_frame_ns=now+2000000ull;
     assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull);
@@ -466,21 +475,22 @@ static void idle_policy_test(void)
     /* Suspended shell work cannot keep a static shutdown panel polling. */
     d->power.state=DESK_POWER_BUSY; d->children[0].close_ns=now-1;
     d->sh.notification.active=1; d->sh.notification.expires=now-1;
-    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==UINT64_MAX);
     d->power.state=DESK_POWER_CLOSING; d->power.close_deadline=now+3000000ull;
     assert(desktop_pause_ns(d,now,0,UINT64_MAX)==3000000ull);
     d->power.state=DESK_POWER_RETRY; d->power.next_try=now+2000000ull;
     assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull);
-    d->sh.gate=1; assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
-    /* Input arriving just after the last drain waits at most 10 ms. Its
-     * presentation slot adds <=16.667 ms, within the existing 50 ms target. */
+    d->sh.gate=1; assert(desktop_pause_ns(d,now,0,UINT64_MAX)==UINT64_MAX);
+    /* Native poll returns when input arrives, independent of an idle timeout.
+     * Presentation remains bounded by the next frame slot. */
     d->shell=0; d->now_ns=now;
     struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.monotonic_ns=now+1,.value=10,.value2=10};
-    wait=desktop_pause_ns(d,now,0,UINT64_MAX); d->now_ns+=wait; desk_input(d,&e);
-    assert(d->stats.input_lag_ns==wait-1 && d->stats.input_lag_ns<=10000000ull);
+    wait=desktop_pause_ns(d,now,0,UINT64_MAX); assert(wait==UINT64_MAX);
+    d->now_ns=e.monotonic_ns; desk_input(d,&e);
+    assert(d->stats.input_lag_ns==0);
     assert(d->stats.input_lag_ns+DESK_FRAME_NS<50000000ull);
     free(d);
-    puts("PASS F2-86 idle policy: 100 turns/s, input lag <=10 ms, frame budget <50 ms, timer/frame/animation/heartbeat/shell deadlines");
+    puts("PASS F2-98c idle policy: 10 s no service timeout, input wakes immediately, real timer/frame/animation/heartbeat/shell deadlines");
 }
 /* f2-95: input arriving at any moment of the idle wait is read when the wait
  * ends (<=10 ms) and is shown by the next frame slot: the small-damage cap
@@ -505,18 +515,16 @@ static void idle_wake_test(void)
         if (state==4) c->next_ping_ns=now+3000000ull;
         uint64_t wait=desktop_pause_ns(d,now,0,UINT64_MAX);
         d->shell=0; d->sh.hover_target=0; d->sh.hover_since=0;
-        assert(wait<=10000000ull);
         if (offset>wait) continue;
-        /* The loop drains at now+wait; input that arrived at now+offset waits wait-offset. */
-        if (wait-offset>worst_wait) worst_wait=wait-offset;
-        uint64_t drained=now+wait;
+        /* Readiness interrupts even an infinite timeout. */
+        uint64_t drained=now+offset;
         struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.monotonic_ns=now+offset,.value=1,.value2=0};
         d->now_ns=drained; desk_input(d,&e);
         assert(!desk_small_damage(d,drained));
         uint64_t due=desk_frame_time(d,drained);
-        uint64_t show=(due>drained ? due-drained : 0)+(wait-offset);
+        uint64_t show=(due>drained ? due-drained : 0);
         if (show>worst_show) worst_show=show;
-        assert(wait-offset<=10000000ull && show<=10000000ull+DESK_FRAME_NS);
+        assert(show<=DESK_FRAME_NS);
     }
     /* Without input the same small damage is spaced at 30 fps, never more. */
     memset(&d->damage,0,sizeof(d->damage)); d->cursor_dirty=0; d->frame_input_ns=0; c->next_ping_ns=now+60000000000ull;
@@ -524,7 +532,7 @@ static void idle_wake_test(void)
     desk_damage_add(&d->damage,(struct desk_box){100,100,20,20},d->width,d->height);
     assert(desk_small_damage(d,now) && desk_frame_time(d,now)==now+DESK_SMALL_FRAME_NS);
     assert(!desk_frame_due(d,now+DESK_FRAME_NS) && desk_frame_due(d,now+DESK_SMALL_FRAME_NS));
-    assert(desktop_pause_ns(d,now+DESK_FRAME_NS,0,UINT64_MAX)==10000000ull);
+    assert(desktop_pause_ns(d,now+DESK_FRAME_NS,0,UINT64_MAX)==DESK_SMALL_FRAME_NS-DESK_FRAME_NS);
     assert(desktop_pause_ns(d,now+DESK_FRAME_NS+10000000ull,0,UINT64_MAX)==DESK_SMALL_FRAME_NS-DESK_FRAME_NS-10000000ull);
     /* An isolated update is not delayed: the previous frame is long past. */
     d->last_frame_ns=now-1000000000ull; assert(desk_frame_time(d,now)==d->next_frame_ns);

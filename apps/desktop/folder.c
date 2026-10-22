@@ -10,6 +10,7 @@
 #include <string.h>
 #include <pthread.h>
 struct folder_worker {
+    struct desktop *desktop;
     pthread_mutex_t lock; pthread_cond_t changed; pthread_t thread;
     struct fm_model snapshot, result;
     uint16_t index[DESK_FOLDER_POLL_SLOTS];
@@ -17,7 +18,7 @@ struct folder_worker {
     int pending, busy, ready, stopping, error, different;
     const char *activity;
 };
-static int poll_start(struct desk_folder *);
+static int poll_start(struct desk_folder *,struct desktop *);
 static void poll_stop(struct desk_folder *);
 static void poll_service(struct desktop *);
 
@@ -40,7 +41,7 @@ int desk_folder_init(struct desktop *d, const struct fm_vfs *fs)
     struct desk_folder *f = calloc(1, sizeof(*f)); if (!f) return -ENOMEM;
     fm_init(&f->model, fs); fm_init(&f->result,fs); f->dialog_window=-1; f->editing = -1; f->index = -1;
     int r = fm_navigate(&f->model, DESK_FOLDER);
-    if (!r) r=poll_start(f);
+    if (!r) r=poll_start(f,d);
     if (r) { fm_destroy(&f->model); free(f); return r; }
     f->ready = 1; d->sh.folder = f; desk_folder_changed(d); return 0;
 }
@@ -177,7 +178,9 @@ static int job(struct desktop *d, enum fm_job_kind kind, char **paths, unsigned 
         if (!f->dialog || !f->dialog_pixels) { free(f->dialog); free(f->dialog_pixels); f->dialog=NULL; f->dialog_pixels=NULL; return -ENOMEM; }
         du_init(f->dialog,f->dialog_pixels,600,400); f->dialog->event=dialog_event; f->dialog->user=d;
     }
+    int created=!f->transfer;
     int r=fm_transfer_create(&f->transfer,&f->job); if (r) return r;
+    if (created) { f->transfer->notify=d->wake; f->transfer->notify_ctx=d->wake_ctx; }
     f->transfer->prepare=transfer_prepare; f->transfer->complete=transfer_complete; f->transfer->ctx=f;
     f->clipboard_job=clipboard; f->trash_job=trash; f->display_kind=trash ? FM_DELETE : kind;
     fm_job_destroy(&f->job);
@@ -280,12 +283,14 @@ static void *folder_poll_worker(void *arg)
         }
         pthread_mutex_lock(&w->lock);
         w->busy=0; w->ready=1;
+        desk_wake(w->desktop);
     }
     pthread_mutex_unlock(&w->lock); return NULL;
 }
-static int poll_start(struct desk_folder *f)
+static int poll_start(struct desk_folder *f,struct desktop *d)
 {
     struct folder_worker *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
+    w->desktop=d;
     fm_init(&w->snapshot,&f->model.fs); fm_init(&w->result,&f->model.fs);
     snprintf(w->result.path,sizeof(w->result.path),"%s",DESK_FOLDER);
     w->snapshot.capacity=f->model.capacity;
@@ -315,7 +320,8 @@ int desk_folder_busy(struct desktop *d)
 {
     struct desk_folder *f=d->sh.folder; if (!f) return 0;
     struct folder_worker *w=f->worker; if (!w) return f->busy;
-    if (pthread_mutex_trylock(&w->lock)) return 1;
+    if (d->wake) pthread_mutex_lock(&w->lock);
+    else if (pthread_mutex_trylock(&w->lock)) return 1;
     int busy=f->busy || w->pending || w->busy;
     pthread_mutex_unlock(&w->lock); return busy;
 }
@@ -327,7 +333,8 @@ const char *desk_folder_activity(const struct desktop *d)
 static void poll_service(struct desktop *d)
 {
     struct desk_folder *f=d->sh.folder; struct folder_worker *w=f->worker;
-    if (!w || pthread_mutex_trylock(&w->lock)) return;
+    if (!w) return;
+    pthread_mutex_lock(&w->lock);
     struct fm_model *m=&f->model;
     if (w->ready) {
         if (!w->error && w->different && w->revision==f->revision) {
@@ -360,7 +367,7 @@ void desk_folder_service(struct desktop *d)
     if (f->busy) {
         if (d->sh.want_power) desk_folder_cancel(d);
         struct transfer_view v; int finished;
-        if (pthread_mutex_trylock(&f->transfer->lock)) return;
+        pthread_mutex_lock(&f->transfer->lock);
         v=f->transfer->view; finished=f->transfer->finished;
         pthread_mutex_unlock(&f->transfer->lock);
         if (!f->trash_job) f->display_kind=v.kind;

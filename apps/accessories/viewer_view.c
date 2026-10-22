@@ -136,7 +136,7 @@ int viewer_open(struct viewer_app *a, const char *path)
         if (a->loading) return -EBUSY;
         struct viewer_load *l=calloc(1,sizeof(*l)); if (!l) return -ENOMEM;
         l->result.fs=a->fs; strcpy(l->path,path);
-        int error=du_job_start(&l->job,load_image,l);
+        int error=du_job_start_ui(&l->job,load_image,l,a->ui);
         if (error) { free(l); return error; }
         a->loading=l; return 0;
     }

@@ -46,7 +46,7 @@ static void idle(void *arg)
         free(m->raw); m->raw=NULL; m->path=NULL;
     } else if (m->path && !m->opening.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         m->open_revision=m->app.ta.revision;
-        int r=du_job_start(&m->opening,load_argument,m);
+        int r=du_job_start_ui(&m->opening,load_argument,m,&m->ui);
         if (r) { du_message(&m->ui,999,"CiukNote",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0); m->path=NULL; }
     }
     if (m->checkpoint > m->sent && !m->window.damaged && !m->ui.dirty &&

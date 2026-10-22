@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * libnsfb surface glue; no PS/2, display grant, lease, or networking access. */
 #include <errno.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,8 @@
 
 struct ciuki_browser_surface *ciuki_browser_active;
 int ciuki_browser_channel=-1;
+/* The native fetcher supplies its sockets, DNS completion and real expiry. */
+int (*ciuki_browser_wait)(int,int);
 /* The next packet for this window from the desktop channel; channel loss is
  * recorded as the close reason. EAGAIN/EINTR: nothing to read now. */
 static bool receive(struct ciuki_browser_surface *s,struct desk_packet *p)
@@ -116,7 +119,12 @@ static bool input(nsfb_t *fb,nsfb_event_t *event,int timeout)
     if(s->ping && !du3_ui_progress(&s->connection,s->window,s->generation,s->ping))s->ping=0;
     if(s->closed) { event->type=NSFB_EVENT_CONTROL;event->value.controlcode=NSFB_CONTROL_QUIT;return true; }
     if(ciuki_browser_event(s,event))return true;
-    if(timeout) { struct timespec delay={0,(timeout<0 || timeout>10?10:timeout)*1000000L};nanosleep(&delay,NULL); }
+    if(timeout) {
+        int r;
+        if(ciuki_browser_wait)r=ciuki_browser_wait(s->connection.channel,timeout);
+        else { struct pollfd fd={s->connection.channel,POLLIN,0};r=poll(&fd,1,timeout); }
+        if(r<0 && errno!=EINTR)ciuki_browser_mark_closed(s,"event-wait",errno);
+    }
     return false;
 }
 static int claim(nsfb_t *fb,nsfb_bbox_t *box) { (void)fb;(void)box;return 0; }

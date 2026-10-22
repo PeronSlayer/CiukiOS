@@ -13,6 +13,8 @@ struct music_runtime {
     unsigned ui_cycles; /* f4-37: below 1024, carried to the next report (UI thread) */
     struct music_snapshot snapshot;
     struct music_player player;
+    void (*notify)(void *);
+    void *notify_ctx;
 };
 static int cancel(void *ctx)
 {
@@ -40,6 +42,7 @@ static void publish(void *ctx, const struct music_snapshot *view)
         unsigned publication=r->snapshot.publication+1;
         r->snapshot=*view; r->snapshot.publication=publication ? publication : 1;
         r->last_publish=now; atomic_fetch_add(&r->player.ui_publishes,1);
+        if (r->notify) r->notify(r->notify_ctx);
     }
     pthread_mutex_unlock(&r->lock);
 }
@@ -70,6 +73,7 @@ static void *worker(void *ctx)
     }
     music_player_destroy(&r->player);
     pthread_mutex_lock(&r->lock); r->snapshot=r->player.view; r->done=1;
+    if (r->notify) r->notify(r->notify_ctx);
     pthread_mutex_unlock(&r->lock); return NULL;
 }
 struct music_runtime *music_runtime_start(const struct music_output *output)
@@ -93,6 +97,13 @@ int music_runtime_send(struct music_runtime *r, const struct music_command *c)
     int err=r->closing ? -ECANCELED : r->count==MUSIC_COMMANDS ? -EBUSY : 0;
     if (!err) { r->commands[(r->head+r->count++)%MUSIC_COMMANDS]=*c; pthread_cond_signal(&r->changed); }
     pthread_mutex_unlock(&r->lock); return err;
+}
+void music_runtime_notify(struct music_runtime *r,void (*notify)(void *),void *ctx)
+{
+    pthread_mutex_lock(&r->lock);
+    r->notify=notify; r->notify_ctx=ctx;
+    if (notify) notify(ctx); /* includes any result published before registration */
+    pthread_mutex_unlock(&r->lock);
 }
 void music_runtime_snapshot(struct music_runtime *r, struct music_snapshot *s)
 { pthread_mutex_lock(&r->lock); *s=r->snapshot; pthread_mutex_unlock(&r->lock); }

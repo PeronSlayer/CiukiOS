@@ -22,10 +22,14 @@ struct files_transfer {
     int (*prepare)(void *);
     void (*complete)(void *);
     void *ctx;
+    void (*notify)(void *);
+    void *notify_ctx;
     struct transfer_view view;
+    uint64_t notified_at; /* worker-owned progress coalescing */
     uint64_t samples_started; /* worker-owned, after preflight */
     uint64_t started_at, progress_logged; /* UI-owned; advance during blocked I/O */
     int pending, stopping, cancel, answer, finished;
+    unsigned publication;
 };
 
 uint64_t job_now(void);
