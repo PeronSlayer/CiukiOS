@@ -38,6 +38,7 @@ static unsigned host_if = 0x200;
 static uint32_t irq_save(void) { unsigned old = host_if; host_if = 0; return old; }
 static void irq_restore(uint32_t flags) { host_if = flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
+const uint8_t font_cfn_sans[95+95*32] = { 0 };       /* f0-55 tagline font */
 void serial_write(const char *s, size_t n) { CHECK(s && n); }
 void kpreempt_point(void) { }
 void task_sleep_ms(uint32_t ms) { CHECK(ms == 100); }

@@ -11,3 +11,11 @@
 4. Host tests: the bar renderer (golden frames at 0 %, 40 %, 100 %, indeterminate), the phase mapping, the handover rule. The lead takes the QEMU screenshot after the merge.
 
 Rules as f2-89 (the loader extent has 887 free bytes; prefer the kernel splash path). Report `build/codex/f0-55-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 02:25, decisions on the delivery)
+
+Safe mode (`safe=1`) keeps the text log instead of the splash, as
+`docs/boot.md` defines; the bar is drawn on every splash boot (normal and
+serial-log boots). The 100 % hold while the desktop starts and the mode
+switch blank are accepted for the 1.0.0 alpha; a desktop-reported stage is a
+follow-up.

@@ -10,6 +10,7 @@
 #include <ciuki/task.h>
 #include <ciuki/cpustat.h>
 #include <ciuki/sync.h>
+#include <ciuki/splash.h>
 
 extern const uint8_t font_cfn_regular[];   /* 95 widths + 95 * 16 rows (u16 LE) */
 
@@ -133,35 +134,343 @@ static void draw_cell(unsigned col, unsigned row, char ch)
 #ifdef CIUKI_SPLASH_BIN
 /* Quiet-boot splash: the original Ciuki photograph, 512x384 RGB565 from
  * scripts/convert_splash.py, scaled (nearest neighbour) to the largest 4:3
- * area that fits and centred on black. Drawn once, before any line. */
+ * area that fits and centred on black. Drawn once, before any line.
+ * f0-55: under the photograph's wordmark, the tagline in CiukiOS Sans and a
+ * thin rounded progress bar in colours taken from the photograph (cream
+ * track, Ciuki's fur for the fill). The bar is indeterminate until the
+ * first kernel phase (ciuki/splash.h), then determinate; it is drawn only
+ * while the boot is quiet and nobody holds the display grant, and the
+ * grant (console_display_owned) completes it to 100 % before the desktop
+ * owns the pixels. The splash is never cleared: the desktop's first frame
+ * replaces it. Each update claims the console region for at most
+ * SPLASH_CLAIM_PIXELS pixels computed from the embedded photograph: no LFB
+ * reads, no allocation, no disk read. */
 #define SPLASH_W 512u
 #define SPLASH_H 384u
 __asm__(".pushsection .rodata.splash,\"a\"\n.balign 4\n"
         ".global console_splash, console_splash_end\nconsole_splash:\n"
         ".incbin \"" CIUKI_SPLASH_BIN "\"\nconsole_splash_end:\n.popsection\n");
 extern const uint8_t console_splash[], console_splash_end[];
+extern const uint8_t font_cfn_sans[];      /* CiukiOS Sans: 95 widths + 95 * 16 rows (u16 LE) */
+extern uint64_t g_tsc_per_ms;
+
+#define SPLASH_TRACK        0xFFF4E4u     /* cream of the wordmark, 25 % over the photo */
+#define SPLASH_TRACK_ALPHA  64u
+#define SPLASH_FILL_FROM    0xD99A41u     /* Ciuki's fur, hue 35 degrees */
+#define SPLASH_FILL_TO      0xF7D099u
+#define SPLASH_TEXT         0xFFF4E4u
+#define SPLASH_TEXT_ALPHA   236u
+#define SPLASH_SHADOW_ALPHA 120u
+#define SPLASH_CLAIM_PIXELS 1024u         /* per console claim: well under 1 ms */
+#define SPLASH_TICK_MS      40u           /* indeterminate animation step */
+static const char splash_tagline[] = "Classic computing, one woof at a time.";
+
+struct splash_layout {
+    uint32_t x0, y0, dw, dh;              /* the photograph's 4:3 area */
+    uint32_t bx, by, bw, bh;              /* progress bar */
+    uint32_t tx, ty, tw;                  /* tagline, 16 rows */
+    bool bar;
+};
+static struct {
+    struct splash_layout g;
+    bool active, busy, determinate, shown_valid, shown_determinate;
+    uint32_t level, shown_level;
+    int32_t segment, shown_segment;
+    uint32_t phases, updates, claims, deferred, max_claim_pixels;
+    uint64_t max_claim_cycles;
+} splash_bar;
+
+static uint32_t splash_rgb565(const uint8_t *s)
+{
+    uint32_t v = s[0] | (uint32_t)s[1] << 8;
+    uint32_t r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+    return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
+}
+
+static uint32_t splash_photo(const struct splash_layout *g, uint32_t x, uint32_t y)
+{
+    if (x < g->x0 || x >= g->x0 + g->dw || y < g->y0 || y >= g->y0 + g->dh) return 0;
+    return splash_rgb565(console_splash + ((y - g->y0) * SPLASH_H / g->dh * SPLASH_W +
+                                           (x - g->x0) * SPLASH_W / g->dw) * 2);
+}
+
+static uint32_t splash_blend(uint32_t under, uint32_t over, uint32_t alpha)   /* alpha 0..256 */
+{
+    uint32_t out = 0;
+    for (unsigned s = 0; s < 24; s += 8)
+        out |= (((under >> s & 255) * (256 - alpha) + (over >> s & 255) * alpha) >> 8) << s;
+    return out;
+}
+
+static uint32_t splash_text_width(void)
+{
+    uint32_t w = 0;
+    for (const char *s = splash_tagline; *s; s++) w += font_cfn_sans[*s - 32];
+    return w;
+}
+
+/* Reference layout 1024x768: wordmark ink ends at row 681; tagline at 690,
+ * bar centred on row 728, 3/8 of the width, 6 rows. Scaled to the area. */
+static void splash_layout(uint32_t w, uint32_t h, struct splash_layout *g)
+{
+    memset(g, 0, sizeof(*g));
+    g->dw = w; g->dh = w * 3 / 4;
+    if (g->dh > h) { g->dh = h; g->dw = h * 4 / 3; }
+    g->x0 = (w - g->dw) / 2; g->y0 = (h - g->dh) / 2;
+    if (g->dw < 320 || g->dh < 240) return;
+    g->bh = (g->dh * 6 + 384) / 768;
+    if (g->bh < 4) g->bh = 4;
+    g->bw = g->dw * 3 / 8 & ~1u;
+    g->bx = g->x0 + (g->dw - g->bw) / 2;
+    g->by = g->y0 + g->dh * 728 / 768 - g->bh / 2;
+    g->tw = splash_text_width();
+    g->tx = g->x0 + (g->dw - g->tw) / 2;
+    g->ty = g->y0 + g->dh * 690 / 768;
+    g->bar = g->tw < g->dw && g->ty + 17 <= g->by && g->by + g->bh <= g->y0 + g->dh;
+}
+
+static uint32_t splash_fill_width(const struct splash_layout *g, uint32_t level)
+{
+    if (!level) return 0;
+    uint32_t w = g->bw * (level > SPLASH_PERMILLE_FULL ? SPLASH_PERMILLE_FULL : level) / SPLASH_PERMILLE_FULL;
+    return w < g->bh ? g->bh : w;
+}
+static uint32_t splash_segment_width(const struct splash_layout *g) { return g->bw / 4; }
+/* Indeterminate: a quarter-length segment sweeps the track left to right. */
+static int32_t splash_segment_at(const struct splash_layout *g, uint64_t ticks)
+{
+    uint32_t period = g->bw + splash_segment_width(g), stride = period / 40 ? period / 40 : 1;
+    return (int32_t)((uint32_t)(ticks / SPLASH_TICK_MS) % 40u * stride % period) - (int32_t)splash_segment_width(g);
+}
+
+/* Capsule coverage in 4x4 samples (0..16), coordinates in 1/8 pixel. The
+ * capsule spans [l8, r8) over the bar rows; a clipped capsule (the moving
+ * segment) also has to be inside the track. */
+static bool splash_in_capsule(int32_t l8, int32_t r8, int32_t cy8, int32_t rad8, int32_t px, int32_t py)
+{
+    int32_t a = l8 + rad8, b = r8 - rad8;
+    if (b < a) a = b = (l8 + r8) / 2;
+    int32_t dx = px < a ? a - px : px > b ? px - b : 0, dy = py - cy8;
+    return dx * dx + dy * dy <= rad8 * rad8;
+}
+static unsigned splash_cover(const struct splash_layout *g, int32_t l8, int32_t r8, int32_t x, int32_t y)
+{
+    int32_t tl8 = (int32_t)g->bx * 8, tr8 = (int32_t)(g->bx + g->bw) * 8;
+    int32_t rad8 = (int32_t)g->bh * 4, cy8 = (int32_t)g->by * 8 + rad8, x8 = x * 8, y8 = y * 8;
+    bool clip = l8 < tl8 || r8 > tr8;
+    if (r8 <= l8 || x8 + 8 <= l8 || x8 >= r8 || x8 + 8 <= tl8 || x8 >= tr8 ||
+        y8 + 8 <= cy8 - rad8 || y8 >= cy8 + rad8) return 0;
+    if (!clip && x8 >= l8 + rad8 && x8 + 8 <= r8 - rad8) return 16;
+    unsigned n = 0;
+    for (int32_t sy = 1; sy < 8; sy += 2)
+        for (int32_t sx = 1; sx < 8; sx += 2)
+            n += splash_in_capsule(l8, r8, cy8, rad8, x8 + sx, y8 + sy) &&
+                 (!clip || splash_in_capsule(tl8, tr8, cy8, rad8, x8 + sx, y8 + sy));
+    return n;
+}
+
+static uint32_t splash_bar_rgb(const struct splash_layout *g, uint32_t x, uint32_t y,
+                               bool determinate, uint32_t level, int32_t segment)
+{
+    uint32_t c = splash_photo(g, x, y);
+    int32_t l8 = (int32_t)g->bx * 8;
+    unsigned track = splash_cover(g, l8, (int32_t)(g->bx + g->bw) * 8, (int32_t)x, (int32_t)y), fill;
+    if (!track) return c;
+    c = splash_blend(c, SPLASH_TRACK, SPLASH_TRACK_ALPHA * track / 16);
+    if (determinate) fill = splash_cover(g, l8, l8 + (int32_t)splash_fill_width(g, level) * 8, (int32_t)x, (int32_t)y);
+    else fill = splash_cover(g, l8 + segment * 8, l8 + (segment + (int32_t)splash_segment_width(g)) * 8,
+                             (int32_t)x, (int32_t)y);
+    if (!fill) return c;
+    uint32_t t = (x - g->bx) * 256 / (g->bw - 1);
+    return splash_blend(c, splash_blend(SPLASH_FILL_FROM, SPLASH_FILL_TO, t), fill * 16);
+}
+
+/* Columns [c0, c1) of the bar, relative to bx. */
+static uint32_t splash_bar_pixels(uint32_t c0, uint32_t c1, bool determinate, uint32_t level, int32_t segment)
+{
+    const struct splash_layout *g = &splash_bar.g;
+    for (uint32_t y = g->by; y < g->by + g->bh; y++)
+        for (uint32_t x = g->bx + c0; x < g->bx + c1; x++)
+            put_px(x, y, pack(splash_bar_rgb(g, x, y, determinate, level, segment)));
+    return (c1 - c0) * g->bh;
+}
+
+static bool splash_tagline_bit(const struct splash_layout *g, uint32_t x, uint32_t y)
+{
+    if (y < g->ty || y >= g->ty + 16 || x < g->tx) return false;
+    uint32_t cx = g->tx;
+    for (const char *s = splash_tagline; *s; s++) {
+        unsigned i = (unsigned)(*s - 32), w = font_cfn_sans[i];
+        if (x < cx + w) {
+            const uint8_t *r = font_cfn_sans + 95 + (i * 16 + (y - g->ty)) * 2;
+            return ((uint32_t)(r[0] | r[1] << 8) & (0x8000u >> (x - cx))) != 0;
+        }
+        cx += w;
+    }
+    return false;
+}
+
+static void splash_draw_tagline(const struct splash_layout *g)
+{
+    for (uint32_t y = g->ty; y < g->ty + 17; y++)
+        for (uint32_t x = g->tx; x < g->tx + g->tw + 1; x++) {
+            bool ink = splash_tagline_bit(g, x, y), shadow = splash_tagline_bit(g, x - 1, y - 1);
+            if (!ink && !shadow) continue;
+            uint32_t c = splash_photo(g, x, y);
+            if (shadow) c = splash_blend(c, 0, SPLASH_SHADOW_ALPHA);
+            if (ink) c = splash_blend(c, SPLASH_TEXT, SPLASH_TEXT_ALPHA);
+            put_px(x, y, pack(c));
+        }
+}
 
 static void draw_splash(void)
 {
+    memset(&splash_bar, 0, sizeof(splash_bar));
     if ((uint32_t)(console_splash_end - console_splash) != SPLASH_W * SPLASH_H * 2)
         return;
-    uint32_t dw = width, dh = width * 3 / 4;
-    if (dh > height) { dh = height; dw = height * 4 / 3; }
-    uint32_t x0 = (width - dw) / 2, y0 = (height - dh) / 2, black = pack(0);
+    struct splash_layout *g = &splash_bar.g;
+    splash_layout(width, height, g);
+    uint32_t black = pack(0);
     for (uint32_t y = 0; y < height; y++) {
-        bool inside = y >= y0 && y < y0 + dh;
-        const uint8_t *row = console_splash + (inside ? (y - y0) * SPLASH_H / dh : 0) * SPLASH_W * 2;
+        bool inside = y >= g->y0 && y < g->y0 + g->dh;
+        const uint8_t *row = console_splash + (inside ? (y - g->y0) * SPLASH_H / g->dh : 0) * SPLASH_W * 2;
         for (uint32_t x = 0; x < width; x++) {
-            if (!inside || x < x0 || x >= x0 + dw) { put_px(x, y, black); continue; }
-            const uint8_t *s = row + (x - x0) * SPLASH_W / dw * 2;
-            uint32_t v = s[0] | (uint32_t)s[1] << 8;
-            uint32_t r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
-            put_px(x, y, pack((r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2)));
+            if (!inside || x < g->x0 || x >= g->x0 + g->dw) { put_px(x, y, black); continue; }
+            put_px(x, y, pack(splash_rgb565(row + (x - g->x0) * SPLASH_W / g->dw * 2)));
         }
     }
+    if (!g->bar) return;
+    splash_draw_tagline(g);
+    splash_bar.segment = splash_bar.shown_segment = splash_segment_at(g, g_ticks);
+    splash_bar_pixels(0, g->bw, false, 0, splash_bar.segment);
+    splash_bar.shown_valid = splash_bar.active = true;
 }
+
+static bool splash_drawable(void)
+{
+    return splash_bar.active && quiet && !display_owned && !panic_drawing && fb;
+}
+
+/* One console claim: columns [c0, c1) for the given state. */
+static bool splash_chunk(uint32_t c0, uint32_t c1, bool determinate, uint32_t level, int32_t segment)
+{
+    uint32_t f = irq_save();
+    bool claimed = splash_drawable() && fbdev_console_begin();
+    irq_restore(f);
+    if (!claimed) return false;
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
+    uint32_t pixels = splash_bar_pixels(c0, c1, determinate, level, segment);
+    fbdev_console_end();
+    uint64_t cycles = cpu_path_clock ? cpu_path_clock() - start : 0;
+    splash_bar.claims++;
+    if (pixels > splash_bar.max_claim_pixels) splash_bar.max_claim_pixels = pixels;
+    if (cycles > splash_bar.max_claim_cycles) splash_bar.max_claim_cycles = cycles;
+    if (cpu_path_add) cpu_path_add(CPU_CONSOLE, cycles);
+    return true;
+}
+
+/* Bring the screen to the current target: only the columns that differ
+ * from what is shown, in claims of at most SPLASH_CLAIM_PIXELS pixels.
+ * A failed claim leaves the update to the console worker. */
+static void splash_update(bool yield)
+{
+    const struct splash_layout *g = &splash_bar.g;
+    uint32_t f = irq_save();
+    bool start = !splash_bar.busy && splash_drawable();
+    if (start) splash_bar.busy = true;
+    irq_restore(f);
+    if (!start) return;
+    uint32_t per = SPLASH_CLAIM_PIXELS / g->bh;
+    for (unsigned pass = 0; pass < 4; pass++) {
+        f = irq_save();
+        bool det = splash_bar.determinate, valid = splash_bar.shown_valid && splash_bar.shown_determinate == det;
+        uint32_t level = splash_bar.level;
+        int32_t segment = splash_bar.segment, lo = 0, hi = (int32_t)g->bw;
+        bool same = valid && (det ? splash_bar.shown_level == level : splash_bar.shown_segment == segment);
+        if (valid && det) {
+            int32_t a = (int32_t)splash_fill_width(g, splash_bar.shown_level), b = (int32_t)splash_fill_width(g, level);
+            lo = (a < b ? a : b) - (int32_t)g->bh - 1; hi = (a < b ? b : a) + 1;
+        } else if (valid) {
+            int32_t a = splash_bar.shown_segment, b = segment;
+            lo = (a < b ? a : b) - 1; hi = (a < b ? b : a) + (int32_t)splash_segment_width(g) + 1;
+        }
+        irq_restore(f);
+        if (same) break;
+        if (lo < 0) lo = 0;
+        if (hi > (int32_t)g->bw) hi = (int32_t)g->bw;
+        splash_bar.shown_valid = false;
+        bool done = true;
+        for (uint32_t c = (uint32_t)lo; done && c < (uint32_t)hi; c += per) {
+            done = splash_chunk(c, c + per < (uint32_t)hi ? c + per : (uint32_t)hi, det, level, segment);
+            if (done && yield) kpreempt_point();
+        }
+        if (!done) { splash_bar.deferred++; break; }
+        if (!splash_drawable()) break;     /* the handover redrew it at a yield */
+        splash_bar.shown_valid = true; splash_bar.shown_determinate = det;
+        splash_bar.shown_level = level; splash_bar.shown_segment = segment;
+        splash_bar.updates++;
+    }
+    splash_bar.busy = false;
+}
+
+/* The display grant: complete the bar, then never draw it again. An update
+ * interrupted at its yield is superseded by a full redraw at 100 %. */
+static void splash_handover(void)
+{
+    uint32_t f = irq_save();
+    bool draw = splash_bar.active && quiet && !display_owned;
+    if (draw) {
+        splash_bar.phases++;
+        splash_bar.determinate = true;
+        splash_bar.level = SPLASH_PERMILLE_FULL;
+        if (splash_bar.busy) { splash_bar.busy = false; splash_bar.shown_valid = false; }
+    }
+    irq_restore(f);
+    if (!draw) return;
+    splash_update(false);
+    bool complete = splash_bar.shown_valid && splash_bar.shown_level == SPLASH_PERMILLE_FULL;
+    splash_bar.active = false;
+    uint32_t us = g_tsc_per_ms ? (uint32_t)(splash_bar.max_claim_cycles * 1000u / g_tsc_per_ms) : 0;
+    klog("[console] splash handover progress=%u complete=%u phases=%u updates=%u claims=%u deferred=%u max_claim_pixels=%u max_claim_us=%u",
+         complete ? SPLASH_PERMILLE_FULL : splash_bar.shown_level, complete, splash_bar.phases, splash_bar.updates,
+         splash_bar.claims, splash_bar.deferred, splash_bar.max_claim_pixels, us);
+}
+
+void console_splash_phase(enum splash_phase phase)
+{
+    uint32_t level = splash_phase_permille(phase);
+    if (!level) return;
+    if (phase == SPLASH_PHASE_HANDOVER) { splash_handover(); return; }
+    uint32_t f = irq_save();
+    bool active = splash_bar.active;
+    if (active) {
+        splash_bar.phases++;
+        splash_bar.determinate = true;
+        if (level > splash_bar.level) splash_bar.level = level;
+    }
+    irq_restore(f);
+    if (active) splash_update(true);
+}
+
+/* Console worker turn: animate the indeterminate bar, retry deferred
+ * updates. Returns the next sleep in milliseconds. */
+static uint32_t splash_service(void)
+{
+    if (!splash_drawable()) return 100;
+    uint32_t f = irq_save();
+    if (!splash_bar.determinate) splash_bar.segment = splash_segment_at(&splash_bar.g, g_ticks);
+    irq_restore(f);
+    splash_update(true);
+    return splash_drawable() && (!splash_bar.determinate || !splash_bar.shown_valid ||
+                                 splash_bar.shown_level != splash_bar.level) ? SPLASH_TICK_MS : 100;
+}
+static void splash_stop(void) { splash_bar.active = false; }
 #else
 static void draw_splash(void) {}
+static void splash_handover(void) {}
+static uint32_t splash_service(void) { return 100; }
+static void splash_stop(void) {}
+void console_splash_phase(enum splash_phase phase) { (void)phase; }
 #endif
 
 static void clear_screen(void)
@@ -190,6 +499,7 @@ static void commit_line(void)
 void console_init_text(void)
 {
     quiet = false;
+    splash_stop();
     con_kind = CON_TEXT;
     cols = 80;
     rows = 25;
@@ -218,6 +528,7 @@ bool console_init_lfb(void)
     rows = height / CELL_H;
     fbdev_console_region(rows * CELL_H);
     con_kind = CON_LFB;
+    splash_stop();
     if (quiet) {
         draw_splash();             /* nothing else is drawn until a wake */
         cur_col = cur_row = 0;
@@ -236,6 +547,7 @@ void console_framebuffer_revoke(void)
 void console_framebuffer_changed(const struct fb_device *d)
 {
     paint.active = false;
+    splash_stop();                 /* the mode set replaced the splash */
     pitch = d->pitch; bpp = d->bpp; width = d->width; height = d->height;
     cols = width / CELL_W; if (cols > MAX_COLS) cols = MAX_COLS;
     rows = height / CELL_H; cur_col = cur_row = 0; con_kind = CON_LFB;
@@ -252,15 +564,19 @@ void console_wake(void)
 {
     if (!quiet)
         return;
+    splash_stop();
     quiet = false;
     repaint_pending = true;
 }
 
 void console_set_color(uint32_t f, uint32_t b) { fg = f; bg = b; }
 
-/* Display grant hook (proc/grants.c): owned while a process holds it. */
+/* Display grant hook (proc/grants.c): owned while a process holds it. The
+ * first grant completes the splash bar; its pixels then belong to the
+ * owner, whose first frame replaces the splash (f0-55). */
 void console_display_owned(bool owned)
 {
+    if (owned) splash_handover();
     paint.active = false;
     display_owned = owned;
     paint_valid = false;
@@ -273,6 +589,7 @@ void console_display_owned(bool owned)
 void console_reclaim(void)
 {
     pinned_page=0;
+    splash_stop();
     quiet = false;
     panic_drawing = true;
     console_display_owned(false);
@@ -440,7 +757,11 @@ void console_pin_page(const char *text)
 static void console_worker(void *arg)
 {
     (void)arg;
-    for (;;) { console_service(); task_sleep_ms(paint.active ? 1 : 100); }
+    for (;;) {
+        console_service();
+        uint32_t splash_ms = splash_service();
+        task_sleep_ms(paint.active ? 1 : splash_ms);
+    }
 }
 void console_worker_init(void)
 {

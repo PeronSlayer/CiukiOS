@@ -14,6 +14,7 @@ python3 "$root/tests/host/entropy/run.py" --kernel
 python3 "$root/tests/host/record_scope_test.py"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
+python3 -B -m unittest discover -s "$root/tests/host" -p test_splash_progress.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
 python3 -B "$root/tests/host/test_presenter_display.py"
