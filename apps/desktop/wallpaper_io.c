@@ -113,6 +113,10 @@ static uint32_t sha8(const char *text)
 void desk_wall_cache_name(char out[DESK_WALL_NAME_MAX], const struct desk_wall_request *r, uint64_t size, int64_t mtime)
 {
     char identity[320];
+    /* f2-90b: read-only system sources are identified by path and size only. Their
+     * FAT mtime depends on the build host's checkout time and the kernel's
+     * timezone handling, so it must not change the seeded frame's name. */
+    if (!strncmp(r->path,"/system/",8)) mtime=0;
     snprintf(identity,sizeof(identity),"wallpaper-v1\n%s\n%llu\n%lld\n%ux%u\n%d\n%06x\n%u,%u\n",
              r->path,(unsigned long long)size,(long long)mtime,r->width,r->height,r->mode,r->colour&0xffffffu,r->top,r->bottom);
     if (r->path[0]!='/') snprintf(identity,sizeof(identity),"wallpaper-builtin-v1\n%s\n%ux%u\n%d\n%06x\n%u,%u\n%d,%06x,%d\n",

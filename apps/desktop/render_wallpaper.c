@@ -42,12 +42,13 @@ int main(int argc, char **argv)
     struct desk_image image={0};
     if (!error) error=desk_image_decode(data,n,&image);
     free(data); if (error) return 1;
+    /* Same resolution as desktop.c wallpaper_load: the default colour is the active theme's. */
     struct ciuki_settings cfg; cfg_defaults(&cfg);
     const uint32_t sizes[][2]={{800,600},{1024,768},{1280,800},{1280,1024},{1400,1050}};
     char *end; int64_t mtime=strtoll(argv[3],&end,10); if (!*argv[3] || *end) { desk_image_free(&image); return 2; }
     for (unsigned i=0;i<5;i++) {
         struct desk_wall_request r={.width=sizes[i][0],.height=sizes[i][1],.top=DESK_BAR,.bottom=DESK_BAR,
-            .colour=cfg.desktop_color,.mode=cfg.wallpaper_mode};
+            .colour=cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : cfg.desktop_color,.mode=cfg.wallpaper_mode};
         snprintf(r.path,sizeof(r.path),"%s",cfg.wallpaper);
         size_t bytes=(size_t)r.width*r.height*4;
         uint32_t *pixels=malloc(bytes); if (!pixels) { error=1; break; }
