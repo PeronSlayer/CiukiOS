@@ -206,7 +206,7 @@ boot is verbose; always on the ICH3-M):
 
 ```
 [kernel] smi count=<sts+tsc> sources=<bits> max_us=<us> min_us=<us> sts=<n> tsc=<n> unproven=<n> gaps=<n> rate=<n.nn>/s period_ms=<min>/<max>
-[kernel] smi_coincide gaps=<n> hid_near=<n> scan_near=<n> ec_near=<n> hid_turns=<n> scans=<n> ec_io=<n> leads=<n> hid_lead_us=<min>/<max> scan_lead_us=<min>/<max> ec_lead_us=<min>/<max>
+[kernel] smi_coincide gaps=<n> hid_near=<n> scan_near=<n> ec_near=<n> hid_turns=<n> scans=<n> ec_io=<n> ec_poll=<ms|off|none> leads=<n> hid_lead_us=<min>/<max> scan_lead_us=<min>/<max> ec_lead_us=<min>/<max>
 ```
 
 On change, on a re-arm, otherwise every 15 windows (ICH3-M):
@@ -271,3 +271,41 @@ switch. A gap in a bounded phase under TCG is emulator time.
 
 Full `scripts/test/host_kernel_tests.sh` green on 2026-10-22; commands and
 results: `build/codex/f1-94-report.md`.
+
+## Amendment 1 (lead decisions, implemented 2026-10-22)
+
+- **R1.** The R1 paragraph in
+  [win98-class-resource-management.md](../design/win98-class-resource-management.md)
+  now states that clearing the SMI enable that belongs to a completed
+  firmware handoff (today only `LEGACY_USB_EN`) is part of that handoff; all
+  other enables stay with the firmware. The clear above is kept unchanged.
+- **EC-poll experiment.** The ThinkPad EC volume poll becomes a boot-time
+  setting: 1 Hz (1000 ms) by default instead of 4 Hz, and the exact
+  `BOOT.CFG` token `ecpoll=0` disables it (`thinkpad_ec_poll_option`, same
+  separators and exactness as the loader). With the poll off there is no
+  periodic 62h/66h traffic at all (`thinkpad_ec_volume_poll` returns before
+  any port access, the worker is not started); the probe at boot and
+  user-initiated volume writes still talk to the EC. Failure retries follow
+  the poll cadence (1 s); the 10 s re-probe after eight failures and the 1 s
+  timeout-record limit are unchanged. The EC keeps driving the amplifier
+  from the volume keys; with `ecpoll=0` only the desktop mirror of those
+  keys stops. The loader accepts `ecpoll=0` in `option_tokens` and leaves it
+  in the copied boot options, like `accel=0`/`usbscan=0`
+  (`scripts/test/loader_model.py` in step; `scripts/loader_budget.py`: 887
+  free bytes before, 871 after on this branch).
+- **Record.** `[kernel] smi_coincide` carries `ec_io=<n>` (every EC port
+  access in the window) and `ec_poll=<ms>|off|none`; the EC driver logs
+  `[ec] thinkpad poll_ms=1000 source=default` or
+  `[ec] thinkpad poll_ms=0 source=ecpoll=0` once at start.
+
+One T23 trial answers the question (same image, two boots, same workload):
+
+| Boot | Expected if the EC poll triggers the SMI | Expected if it does not |
+| --- | --- | --- |
+| default (1 Hz) | `rate` falls to the poll rate (1–2/s), `ec_near` ≈ `gaps`, `ec_io` ≥ 14 per window (at least 7 port accesses per poll) | `rate` stays ≈ 4–8/s, `ec_near` at chance |
+| `ecpoll=0` | `rate` ≈ 0, `ec_io=0 ec_poll=off`, no 2.1 ms `irqoff_long` | `rate` unchanged with `ec_io=0` |
+
+(The b453bc92 image polled at 4 Hz: four EC read transactions per second,
+each a command, an address and a data byte with at least four status
+reads.) A 1 Hz default that leaves `rate` near 4/s also rules out the EC
+poll without the second boot.

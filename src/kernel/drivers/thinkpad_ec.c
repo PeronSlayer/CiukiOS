@@ -16,10 +16,23 @@
 #define EC_AUDIO 0x30
 #define EC_MASK 0x4f
 #define EC_TIMEOUT_MS 500u
-#define EC_POLL_MS 250u
+#define EC_POLL_MS THINKPAD_EC_POLL_DEFAULT_MS
 #define EC_REPROBE_MS 10000u
 #define EC_FAILURE_LIMIT 8u
 
+uint32_t thinkpad_ec_poll_option(const char *s, size_t size)
+{
+    /* Same token rules as the loader: separators are space, CR and LF (any
+     * control byte here), the match is exact; anything else keeps 1 Hz. */
+    size_t i = 0;
+    while (i < size && s[i]) {
+        while (i < size && s[i] && (unsigned char)s[i] <= 32) i++;
+        size_t start = i;
+        while (i < size && s[i] && (unsigned char)s[i] > 32) i++;
+        if (i - start == 8 && !memcmp(s + start, "ecpoll=0", 8)) return 0;
+    }
+    return EC_POLL_MS;
+}
 static bool ec_sum(const uint8_t *p, size_t n)
 { uint8_t sum = 0; for (size_t i = 0; i < n; i++) sum += p[i]; return sum == 0; }
 bool thinkpad_ec_entry(const uint8_t *p, size_t n, uint32_t *address, uint16_t *bytes)
@@ -224,14 +237,16 @@ static int ec_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m, struct ec
 static void ec_result(struct thinkpad_ec *e, int err)
 {
     uint64_t now = e->io.now(e->io.ctx);
-    if (!err) { e->active = e->available = true; e->failures = 0; e->next_poll = now + EC_POLL_MS; return; }
+    /* Retries follow the poll cadence; a disabled poll keeps the default. */
+    uint64_t poll = e->poll_ms ? e->poll_ms : EC_POLL_MS;
+    if (!err) { e->active = e->available = true; e->failures = 0; e->next_poll = now + poll; return; }
     e->available = false;
     if (e->failures < EC_FAILURE_LIMIT) e->failures++;
     if (e->active && e->failures == EC_FAILURE_LIMIT) {
         e->active = false;
         klog("[ec] thinkpad disabled error=%d", err);
     }
-    e->next_poll = now + (e->active ? EC_POLL_MS : EC_REPROBE_MS);
+    e->next_poll = now + (e->active ? poll : EC_REPROBE_MS);
 }
 int thinkpad_ec_volume_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
@@ -256,6 +271,7 @@ int thinkpad_ec_probe(struct thinkpad_ec *e, const struct thinkpad_ec_io *io, bo
     memset(e, 0, sizeof(*e));
     if (!identified || !io || !io->read || !io->write || !io->now || !io->pause) return -ENODEV;
     e->io = *io;
+    e->poll_ms = EC_POLL_MS;
     struct ec_budget b = ec_budget_begin(e);
     int err = ec_discover(e, m, &b);
     if (!err) { ec_result(e, 0); ec_log(e->status); }
@@ -270,6 +286,7 @@ int thinkpad_ec_probe(struct thinkpad_ec *e, const struct thinkpad_ec_io *io, bo
 int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
     if (!e->io.now) return -ENODEV;
+    if (!e->poll_ms) return e->available ? 0 : -ENODEV; /* ecpoll=0: no EC traffic */
     uint64_t now = e->io.now(e->io.ctx);
     if ((int64_t)(now - e->next_poll) < 0) return e->available ? 0 : -ENODEV;
     bool recovering = !e->available, disabled = !e->active;
@@ -397,10 +414,18 @@ int thinkpad_ec_master_poll(struct ciuki_mixer_master *m)
     kmutex_unlock(&ec_lock); return err;
 }
 static void ec_worker(void *arg)
-{ (void)arg; while (native_ec.io.now) { task_sleep_ms(EC_POLL_MS); audio_master_refresh(); } }
+{ (void)arg; while (native_ec.io.now && native_ec.poll_ms) { task_sleep_ms(native_ec.poll_ms); audio_master_refresh(); } }
+int thinkpad_ec_poll_state(void)
+{ return native_ec.io.now ? (int)native_ec.poll_ms : -1; }
 void thinkpad_ec_start(void)
 {
     if (!native_ec.active) return;
+    /* f1-94 amendment 1: 1 Hz unless BOOT.CFG says ecpoll=0. The EC keeps
+     * driving the amplifier from the keys; only the mixer mirror stops. */
+    native_ec.poll_ms = thinkpad_ec_poll_option(g_boot.options, sizeof(g_boot.options));
+    klog("[ec] thinkpad poll_ms=%u source=%s", native_ec.poll_ms,
+         native_ec.poll_ms ? "default" : "ecpoll=0");
+    if (!native_ec.poll_ms) return;
     struct task *t = task_create_kernel("thinkpad-volume", ec_worker, 0, P_DEVICE);
     if (t) { task_start(t); audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE; }
     else klog("[ec] thinkpad poller unavailable error=%d", -ENOMEM);

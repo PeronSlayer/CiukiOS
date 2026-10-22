@@ -13,6 +13,8 @@
 #include <ciuki/smi.h>
 
 #define SMI_SUSPECTS 3u        /* usb-hid turn, USB root scan, EC port I/O */
+/* f1-94 amendment 1: the EC poll setting (ms, 0 off, -1 no EC) in the record. */
+extern int thinkpad_ec_poll_state(void) __attribute__((weak));
 #define SMI_REGS_EVERY 15u     /* windows between unchanged register records */
 
 struct smi_window {
@@ -243,8 +245,12 @@ void smi_window_emit(uint64_t window_cycles, bool verbose)
             lo[i] = w.lead_min[i] == UINT64_MAX ? 0 : us(w.lead_min[i]);
             hi[i] = us(w.lead_max[i]);
         }
-        klog_periodic("[kernel] smi_coincide gaps=%u hid_near=%u scan_near=%u ec_near=%u hid_turns=%u scans=%u ec_io=%u leads=%u hid_lead_us=%u/%u scan_lead_us=%u/%u ec_lead_us=%u/%u",
-            w.gaps, w.near[0], w.near[1], w.near[2], counts[0], counts[1], counts[2], w.leads,
+        int poll = thinkpad_ec_poll_state ? thinkpad_ec_poll_state() : -1;
+        char ec_poll[12];
+        if (poll > 0) ksnprintf(ec_poll, sizeof(ec_poll), "%u", (unsigned)poll);
+        else ksnprintf(ec_poll, sizeof(ec_poll), "%s", poll ? "none" : "off");
+        klog_periodic("[kernel] smi_coincide gaps=%u hid_near=%u scan_near=%u ec_near=%u hid_turns=%u scans=%u ec_io=%u ec_poll=%s leads=%u hid_lead_us=%u/%u scan_lead_us=%u/%u ec_lead_us=%u/%u",
+            w.gaps, w.near[0], w.near[1], w.near[2], counts[0], counts[1], counts[2], ec_poll, w.leads,
             lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
     }
     if (!base) return;

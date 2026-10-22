@@ -71,6 +71,9 @@ static uint16_t cpu_inw(uint16_t port)
     }
 }
 bool registry_smi_snapshot(struct registry_smi *out) { *out = snap; return snap_ok; }
+static int ec_poll_state = 1000;
+int thinkpad_ec_poll_state(void) __attribute__((weak)); /* as smi.c sees it */
+int thinkpad_ec_poll_state(void) { return ec_poll_state; }
 unsigned usb_count(void) { return 3; }
 const struct usb_host *usb_get(unsigned i) { return i < 3 ? &hosts[i] : 0; }
 static void record(const char *fmt, va_list ap)
@@ -270,7 +273,7 @@ static void init_and_records(void)
     smi_mark(SMI_HID_BEGIN); smi_mark(SMI_HID_BEGIN); smi_mark(SMI_EC_IO);
     smi_window_emit(2000ull * 1000000, false);
     assert(strstr(logbuf, "[kernel] smi count=3 sources=00008020 max_us=2120 min_us=2100 sts=1 tsc=2 unproven=1 gaps=2 rate=1.00/s period_ms=251/251\n"));
-    assert(strstr(logbuf, "[kernel] smi_coincide gaps=2 hid_near=1 scan_near=0 ec_near=1 hid_turns=3 scans=1 ec_io=2 leads=2 hid_lead_us="));
+    assert(strstr(logbuf, "[kernel] smi_coincide gaps=2 hid_near=1 scan_near=0 ec_near=1 hid_turns=3 scans=1 ec_io=2 ec_poll=1000 leads=2 hid_lead_us="));
     assert(strstr(logbuf, "[kernel] smi_regs en=00004023 sts=00000900 rise=00008000 mitigated=00000008 rearm=0 legkey=2000/2000/2000\n"));
     assert(!win.gaps && !win.tsc && win.min == UINT64_MAX && !mark_count[0]);
 
@@ -314,7 +317,15 @@ static void refusal_tests(void)
     cycles += 3000000; smi_tick(cycles, cycles - 3000000);
     smi_window_emit(2000ull * 1000000, true);
     assert(strstr(logbuf, "[kernel] smi count=0 sources=00000000") && !strstr(logbuf, "smi_regs") && !pm_reads);
-    puts("PASS f1-94 refusals: H page/safe mode, armed LEGKEY, unowned/quarantined UHCI, failed readback, unsupported bridge without port I/O");
+    /* ecpoll=0 and a machine without the EC are named in the record. */
+    for (unsigned i = 0; i < 2; i++) {
+        ec_poll_state = i ? -1 : 0; logat = 0;
+        cycles += 3000000; smi_tick(cycles, cycles - 3000000);
+        smi_window_emit(2000ull * 1000000, true);
+        assert(strstr(logbuf, i ? " ec_io=0 ec_poll=none leads=0" : " ec_io=0 ec_poll=off leads=0"));
+    }
+    ec_poll_state = 1000;
+    puts("PASS f1-94 refusals: H page/safe mode, armed LEGKEY, unowned/quarantined UHCI, failed readback, unsupported bridge without port I/O; ec_poll=1000/off/none in smi_coincide");
 }
 
 int main(void)

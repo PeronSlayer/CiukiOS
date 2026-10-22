@@ -381,6 +381,9 @@ static void test_thinkpad_ec_tolerance(void)
     /* A dead EC fails eight operations, not eight constituent transfers.
      * User writes during backoff save exact stereo/mute without retrying it. */
     ehw.busy_every=0;ehw.stuck_ibf=true;
+    /* A 250 ms cadence (the pre-f1-94 4 Hz) still exercises the 1 s
+     * timeout-record limit; the default 1 Hz cadence is checked below. */
+    hec.poll_ms=250;
     for(unsigned i=1;i<=8;i++) {
         ehw.tick=hec.next_poll;uint64_t start=ehw.tick;
         seq=saved_sequence;audio_master_refresh();
@@ -399,6 +402,7 @@ static void test_thinkpad_ec_tolerance(void)
     CHECK(ec_records_containing("timeout stage=ibf ms=500")>=1);
     CHECK(ec_records_containing("timeout")<8); /* one-second rate limit */
     CHECK(hec.next_poll==ehw.tick+10000);
+    hec.poll_ms=EC_POLL_MS;
     unsigned reads=ehw.reads;ehw.tick=hec.next_poll-1;audio_master_refresh();CHECK(ehw.reads==reads);
     ehw.tick=hec.next_poll;audio_master_refresh();
     CHECK(!hec.active && hec.failures==8 && ec_records_containing("disabled")==1);
@@ -507,5 +511,21 @@ static void test_thinkpad_ec(void)
     }
     memset(&ehw,0,sizeof(ehw));ehw.reg=15;io=ec_mock_io();CHECK(thinkpad_ec_probe(&hec,&io,true,&m)==-EIO);
     test_thinkpad_ec_tolerance();
-    puts("ThinkPad EC: IBM/DMI gates, timed IBF/OBF read/write/readback, 4 Hz levels/mute, preserved bits, amplifier unity and bounded faults PASS");
+    /* f1-94 amendment 1: 1 Hz default cadence, BOOT.CFG ecpoll=0 stops all
+     * periodic EC port traffic; exact token, loader separators. */
+    CHECK(EC_POLL_MS==1000u && thinkpad_ec_poll_option("",128)==1000u);
+    static const char *const off[]={"ecpoll=0","safe=1 ecpoll=0","serial=0\r\necpoll=0\r\n"," ecpoll=0 usbscan=0"};
+    static const char *const on[]={"ecpoll=1","ecpoll=00","xecpoll=0","ECPOLL=0","ecpoll=","usbscan=0 accel=0"};
+    for(unsigned i=0;i<4;i++) CHECK(thinkpad_ec_poll_option(off[i],strlen(off[i])+1)==0);
+    for(unsigned i=0;i<6;i++) CHECK(thinkpad_ec_poll_option(on[i],strlen(on[i])+1)==1000u);
+    CHECK(thinkpad_ec_poll_option("ecpoll=01",8)==0); /* bounded: the 9th byte is outside */
+    memset(&ehw,0,sizeof(ehw));ehw.reg=0xa7;io=ec_mock_io();m=(struct ciuki_mixer_master){.left=20,.right=20};
+    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m)&&hec.poll_ms==1000u);
+    uint64_t probed=ehw.tick;CHECK(hec.next_poll==probed+1000u);
+    ehw.reg=0xe8;ehw.tick=hec.next_poll-1;reads=ehw.reads;
+    CHECK(!thinkpad_ec_volume_poll(&hec,&m)&&ehw.reads==reads);           /* not due before 1 s */
+    ehw.tick=hec.next_poll;CHECK(thinkpad_ec_volume_poll(&hec,&m)==1&&hec.next_poll==ehw.tick+1000u);
+    hec.poll_ms=0;ehw.reg=0xe9;ehw.tick=hec.next_poll+5000;reads=ehw.reads;unsigned writes=ehw.writes;
+    CHECK(!thinkpad_ec_volume_poll(&hec,&m)&&ehw.reads==reads&&ehw.writes==writes&&m.left==25);
+    puts("ThinkPad EC: IBM/DMI gates, timed IBF/OBF read/write/readback, 1 Hz levels/mute, ecpoll=0 no traffic, preserved bits, amplifier unity and bounded faults PASS");
 }

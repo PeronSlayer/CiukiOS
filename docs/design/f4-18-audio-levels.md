@@ -102,6 +102,13 @@ retries after 250 ms, and counts once toward eight consecutive failures.
 Success resets that count. At eight failures log `disabled` once and retry
 at 10 s intervals; successful re-probe logs `resumed`. Timeout records include
 the stalled stage and elapsed milliseconds and are limited to one per second.
+
+Amendment f1-94 (2026-10-22): the poll and its failure retry run at 1 Hz
+(1000 ms) instead of 250 ms, and the exact `BOOT.CFG` token `ecpoll=0`
+disables the poll (`[ec] thinkpad poll_ms=0 source=ecpoll=0`). Reason: the
+T23's 2.1 ms interrupt-off blackouts arrive at about the old 4 Hz rate and
+the legacy-mode EC GPE can become an SMI; see
+[f1-94](../validation/f1-94-irqoff-blackout.md).
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already
 qualified at boot, without bypassing quarantined resources.
