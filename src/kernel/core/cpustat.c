@@ -423,6 +423,8 @@ static void cpu_emit(void)
         log.writes, log.bytes_written, log.metadata_writes, log.rotations, log.dropped);
     klog_periodic("[kernel] bootlog dropped_protected=%u dropped_verbose=%u records_protected=%u records_verbose=%u",
         log.dropped_protected, log.dropped_verbose, log.records_dropped_protected, log.records_dropped_verbose);
+    klog_periodic("[kernel] bootlog dropped_statistic=%u records_statistic=%u budget_dropped_lines=%u budget_windows=%u",
+        log.dropped_statistic, log.records_dropped_statistic, log.budget_dropped_lines, log.budget_windows);
     for (unsigned i = 0; i < event_count; i++)
         klog_periodic("[sched] device_overrun task=%s#%u count=%u consumed_us=%u",
             events[i].name, events[i].id, events[i].count, events[i].consumed_us);

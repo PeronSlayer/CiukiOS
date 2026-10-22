@@ -323,3 +323,36 @@ builder install the fork kernel, `CIUKIDF.SYS` and the `DEVICE=` line for
 `kernel=unified` (`scripts/unified_dos.py` `fork_guest_files`), which the
 script also reads back. Part of `scripts/test/host_kernel_tests.sh`.
 Decisions: `docs/validation/f3-57-unified-file-channel.md`.
+
+## Unified CiukiDOS in the production VM path (f3-61)
+
+`run_unified_file.sh` ends with the H61 production-VM boots (`production_vm`
+in `unified_file.py`): the H50 hook-CPU build of `tests/host/dosvm_guest.c`
+(production dosvm/BIOS/DPMI/`dos_file_vm.c`, real VFS, libx86emu) boots a
+`kernel=unified` base made by the canonical `build_reference` (MBR, FAT16 at
+LBA 63, `.SHA` sidecar) with `GUEST_KERNEL=unified`, i.e. `config.kernel=2`
+and the v1 bridge disabled exactly as `/Programs/dosbox` creates it. It
+requires the DFV2 binding and the C: IFS (no `CIUKIDF: no DFV2 host`), a
+replay of the pre-f3-61 state (`GUEST_UNIFIED_UNBOUND=1`: the fork unbound)
+and an unbound `freedos-1.3` base.
+
+The same build replays a game from the canonical image's DOS bases (read
+only; the harness writes its scratch overlay under `build/host/`):
+
+```sh
+# after tests/host/dos/hook_cpu.py --prepare and the run_hook_cpu.sh compile
+# (add -O2 and drop the sanitizers for long replays)
+GUEST_KERNEL=unified GUEST_INT21_TRACE=1 GUEST_PLAY_MS=40000 \
+  build/host/dos/dosvm_hook_cpu build/f0/dos/UNIFIED.IMG \
+  'shell:CD \DOOM' - 'play:DOOM.EXE -config CIUKI.CFG' DOOM
+```
+
+`GUEST_KERNEL=freedos-1.3|unified` selects the base and sidecar,
+`GUEST_INT21_TRACE=1` prints every INT 21h the guest kernel serves as one
+`I21` entry/return line (V86 INT 21h matched to the kernel's IRET; DOS/4GW's
+0302h calls into the INT 21h vector and reflected PM INT 21h at the host's
+real-mode return stub), `play:` runs `GUEST_PLAY_MS` simulated milliseconds
+with one `H61 PLAY` progress line per second, and `GUEST_PLAY_QUIT=1` leaves
+DOOM through its menu (Esc, Up, Enter, y) and requires the shell prompt with
+no EXEC frame outstanding. Not QEMU or hardware evidence. Decisions:
+`docs/validation/f3-61-unified-dos-game-watchdog.md`.

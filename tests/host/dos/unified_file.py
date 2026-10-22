@@ -13,6 +13,7 @@ SPDX-License-Identifier: GPL-2.0-only
 """
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -107,6 +108,65 @@ def passed(run, test):
 H57_TESTS = ("classify", "files", "dup", "find", "attr", "rename", "dirs", "space", "lock", "extopen", "time",
              "fcb-close-metadata", "readonly-d", "critical-retry", "critical-fail", "nocrit", "critical-abort",
              "after-abort")
+
+
+def production_vm(installed, identity):
+    """f3-61: the production VM path the H57 CPU harness bypasses. The real
+    dosvm/BIOS/DPMI/dos_file_vm.c code on libx86emu (tests/host/dosvm_guest.c,
+    the H50 hook CPU build) boots the kernel=unified base the canonical builder
+    makes (MBR, FAT16 at LBA 63, .SHA sidecar) exactly as /Programs/dosbox
+    creates it: config.kernel=2 with the v1 bridge disabled. Before f3-61 the
+    DFV2 gates were refused with the v1 bridge, CIUKIDF.SYS found no host and
+    the fork ran unbound on its local FAT (T23 image b453bc92); once served,
+    the native mount took LBA 0 (the MBR) as the FAT volume. Also the
+    freedos-1.3 base, which must stay unbound."""
+    hook = module("h61_hook_cpu", ROOT / "tests/host/dos/hook_cpu.py")
+    hook.prepare()
+    cpu = OUT / "dosvm_vm_cpu"
+    subprocess.run(["clang", "-DFS_HOST", "-DCIUKI_DOSVM_FILE_CPU", "-D_POSIX_C_SOURCE=200809L", "-std=c17", "-O1", "-g",
+                    "-Wall", "-Wextra", "-Werror", "-Wno-pointer-to-int-cast", "-fsanitize=address,undefined", "-pthread",
+                    "-Isrc/kernel/include", "-Ibuild/host", "tests/host/dosvm_guest.c", "tests/host/dosvm_guest_cpu.c",
+                    "src/kernel/lib/fmt.c", "src/kernel/lib/sha256.c", "src/kernel/vm/virtual_vga.c",
+                    "src/kernel/vm/virtual_vga_bios.c", "src/kernel/vm/vga_x86.c", "src/kernel/vm/vga_presenter.c",
+                    *h56.FS, "src/kernel/fs/partition.c", "src/kernel/drivers/blkpart.c", *VM, "-lx86emu", "-o", str(cpu)],
+                   cwd=ROOT, check=True)
+    ready = dos.assemble("src/probes/doscompat/dosready.asm", OUT / "programs/DOSREADY.COM")
+    folder = h56.release_folder()
+    ref = unified.reference_module()
+    pristine, pristine_identity = ref.reference_files(folder)
+    results = {}
+    for name, guest in (("UNIFIED", (installed, identity)), ("FREEDOS", (pristine, pristine_identity))):
+        image = OUT / "h61" / name / f"{name}.IMG"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        ref.build_reference(image, {"/DOSREADY.COM": ready}, ("D48",), None, folder, guest=guest)
+        check(image.read_bytes()[510:512] == b"\x55\xaa" and image.read_bytes()[0x1c6:0x1ca] == (63).to_bytes(4, "little"),
+              f"h61 {name}: partitioned base (MBR, FAT16 at LBA 63)")
+        variants = [("", {})] if name == "FREEDOS" else [("", {}), ("-unbound", {"GUEST_UNIFIED_UNBOUND": "1"})]
+        for suffix, extra in variants:
+            env = dict(os.environ, GUEST_KERNEL="unified" if name == "UNIFIED" else "freedos-1.3",
+                       ASAN_OPTIONS="detect_leaks=0:halt_on_error=1", UBSAN_OPTIONS="halt_on_error=1", **extra)
+            run = subprocess.run([str(cpu), str(image), "shell:TYPE C:\\FDAUTO.BAT", "-"], cwd=ROOT, env=env,
+                                 capture_output=True, text=True, timeout=600)
+            log = run.stdout + run.stderr
+            (OUT / f"h61-{name.lower()}{suffix}.log").write_text(log)
+            end = re.search(r"^H61 IFS end (.*)$", log, re.M)
+            fields = dict(item.split("=", 1) for item in end.group(1).split() if "=" in item) if end else {}
+            results[name + suffix] = fields
+            check(run.returncode == 0 and "guest runner: PASS" in log, f"h61 {name}{suffix}: production VM boot")
+            absent = "CIUKIDF: no DFV2 host; driver not installed" in log
+            if name == "FREEDOS":
+                check(fields.get("bound") == "0", f"h61 FREEDOS: never bound {fields}")
+            elif suffix:
+                check(absent and fields.get("bound") == "0", f"h61 UNIFIED unbound replay: pre-f3-61 state {fields}")
+            else:
+                check(not absent and fields.get("active") == "1" and int(fields.get("owned", "0"), 16) & 4 and
+                      fields.get("forged") == "0" and fields.get("critical") == "0" and fields.get("held") == "0" and
+                      int(fields.get("reads", "0")) > 0 and fields.get("opens") == fields.get("closes"),
+                      f"h61 UNIFIED: DFV2 bound and C: IFS active on the partitioned base {fields}")
+    print(f"H61 production VM: unified base IFS active={results.get('UNIFIED', {}).get('active')} "
+          f"owned={results.get('UNIFIED', {}).get('owned')} reads={results.get('UNIFIED', {}).get('reads')}; "
+          f"unbound replay bound={results.get('UNIFIED-unbound', {}).get('bound')}; "
+          f"freedos-1.3 bound={results.get('FREEDOS', {}).get('bound')}", flush=True)
 
 
 def released(run, name):
@@ -249,6 +309,11 @@ def main():
         return 1
     print("H57 install: kernel=unified guest = fork kernel + CIUKIDF.SYS + DEVICE line; tampered records and "
           "a corrupted driver refused", flush=True)
+    production_vm(installed, identity)
+    if failures:
+        QUALIFIED.unlink(missing_ok=True)
+        print(f"H57 FAIL: {len(failures)} checks failed")
+        return 1
     print(f"H57 PASS: {boots} CPU boots (live IFS suite, f3-56 suite on the IFS, strict/LOCAL/LASTDRIVE "
           f"activation refusals, f3-48 basic battery pristine vs IFS); qualification {QUALIFIED.relative_to(ROOT)}")
     return 0

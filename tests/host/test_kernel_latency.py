@@ -262,6 +262,22 @@ static void test_irq_restore(uint32_t f) {
                             str(ROOT / 'tests/host/desktop/storage_notice_test.c'), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
+    def test_desktop_accel_notice(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='accel-notice-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'apps/desktop/desktop.c').read_text()
+            begin = source.index('static void accel_notice_text(')
+            end = source.index('static void storage_poll(', begin)
+            (temp / 'latency_accel_notice.inc').write_text(source[begin:end])
+            binary = temp / 'notice'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-I', str(temp),
+                            '-I', str(ROOT / 'src/kernel/include'),
+                            str(ROOT / 'tests/host/desktop/accel_notice_test.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_diagnostics_require_explicit_boot_selection(self):
         menu = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
         platform = (ROOT / 'src/boot/ciukldr/platform.inc').read_text()

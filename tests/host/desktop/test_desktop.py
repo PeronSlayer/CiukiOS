@@ -485,6 +485,24 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS control async display", result.stdout)
         print(result.stdout.strip())
 
+    def test_control_decoder_worker(self):
+        """f2-88b: the preview worker never makes the UI thread wait."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="control-decoder-", dir=parent) as temp:
+            binary = Path(temp) / "control-decoder-test"
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            sources = ["tests/host/desktop/control_decoder_test.c", "apps/control/decoder.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c",
+                       "apps/desktop/settings.c", "apps/desktop/theme.c", "apps/desktop/protocol.c", "apps/desktop/compositor.c", "apps/desktop/sounds.c"]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L", "-fsanitize=address,undefined",
+                            "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
+                            "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
+                            *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
+            result = subprocess.run([str(binary)], check=False, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS control decoder", result.stdout)
+        print(result.stdout.strip())
+
     def test_shell_launcher(self):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)

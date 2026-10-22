@@ -2103,10 +2103,13 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     qmp.command('screendump',{'filename':str(window_shot)})
                     try:result['window_screen']=observe_window_screen(window_shot,spec,arms[0])
                     finally:window_shot.unlink(missing_ok=True)
-            if case.get('fullscreen_screen') and qmp:
-                for group, actions2, shots, observe in (
+            # f3-61: fullscreen_demo_screen takes only the changing-frames pair
+            # (f3:vm-game) and keeps both screendumps as run evidence.
+            if (case.get('fullscreen_screen') or case.get('fullscreen_demo_screen')) and qmp:
+                demo_group = ('fullscreen_demo', ('fullscreen_demo_start', 'fullscreen_demo_end'), fullscreen_demo_shots, observe_fullscreen_demo)
+                for group, actions2, shots, observe in ((
                     ('fullscreen_screen', ('fullscreen_before', 'fullscreen_after'), fullscreen_shots, observe_fullscreen_screen),
-                    ('fullscreen_demo', ('fullscreen_demo_start', 'fullscreen_demo_end'), fullscreen_demo_shots, observe_fullscreen_demo)):
+                    demo_group) if case.get('fullscreen_screen') else (demo_group,)):
                     for index, action in enumerate(actions2):
                         arms = [r for r in parser.records if r.get('event') == 'ARM' and r.get('action') == action]
                         if len(arms) > 1:raise EvidenceError('duplicate full-screen observation ARM')
@@ -2116,7 +2119,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                             qmp.command('screendump', {'filename': str(shots[index])})
                             if index:
                                 result[group] = observe(*shots)
-                                for shot in shots:shot.unlink()
+                                if not case.get('fullscreen_demo_screen'):
+                                    for shot in shots:shot.unlink()
             # A trace is serialized before the subsequent request can reach
             # blkdebug. Drain the FIFO before resuming that suspended request;
             # never select a prefix from a partially collected serial batch.
@@ -2147,6 +2151,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     raise EvidenceError('DOS window lacks live screendump')
                 if case.get('fullscreen_screen') and ('fullscreen_screen' not in result or 'fullscreen_demo' not in result):
                     raise EvidenceError('DOS full-screen lacks changing demo/equal return live screendumps')
+                if case.get('fullscreen_demo_screen') and 'fullscreen_demo' not in result:
+                    raise EvidenceError('DOS full-screen game lacks changing live screendumps')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']

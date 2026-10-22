@@ -11,3 +11,14 @@
 3. The watchdog must not lose data: on `return-or-fault` the VM returns to the window with its state and a message, not `stop … data_loss=1`, unless the guest really faulted (vector≠0).
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. (the lead runs the QEMU case and sends you its serial and console capture). Report `build/codex/f3-61-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 09:59, decision on the delivery)
+
+Accepted. The delivery shows that on every image so far the unified kernel
+ran unbound (the VM refused the DFV2 requests before checking
+`kernel=unified`; once bound, the native mount read sector 0 instead of the
+partition at sector 63), so no previous "unified" evidence covered the
+native IFS. The f3-48 comparison is re-run by the lead on QEMU with the
+bound fork. The `return-or-fault` record was an Alt+Enter/Alt+Tab return;
+the stop was the window close. Follow-up: the Quake VM creation error
+`-16` seen in the same trial (f3-62).
