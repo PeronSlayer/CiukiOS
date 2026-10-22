@@ -31,13 +31,17 @@ static void bind(nsfb_t *fb,struct ciuki_browser_surface *s)
 }
 static int initialise(nsfb_t *fb)
 {
-    if(ciuki_browser_active || ciuki_browser_channel<0)return -1;
+    if(ciuki_browser_active)return -1;
+    /* f6-19: a launch without --channel-fd (Programs menu, desktop icon, Run,
+     * ShellExecute before the program record granted it) still owns the
+     * desktop channel the launcher mapped at fd 3; a non-channel fd fails HELLO. */
+    int channel=ciuki_browser_channel>=0 ? ciuki_browser_channel : CIUKI_BROWSER_CHANNEL_FD;
     struct ciuki_browser_surface *s=calloc(1,sizeof(*s));
     if(!s)return -1;
     const struct ciuki_browser_ops ops={
         .transport={ciuki_channel_send,ciuki_channel_recv,ciuki_surface_info,close},
         .create=ciuki_surface_create,.map=ciuki_surface_map,.unmap=munmap};
-    if(ciuki_browser_open(s,&ops,ciuki_browser_channel,fb->width,fb->height+CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)) { free(s);return -1; }
+    if(ciuki_browser_open(s,&ops,channel,fb->width,fb->height+CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)) { free(s);return -1; }
     fb->surface_priv=ciuki_browser_active=s; bind(fb,s); ciuki_chrome_init(s);return 0;
 }
 static int finalise(nsfb_t *fb)
