@@ -27,3 +27,7 @@ fx-8 measured that the built-in programs are 65–80 % DWARF (NetSurf 13.5 MB fi
 ## fx-13 Cursor too large (owner, lead decision 2026-10-23 15:59)
 
 Owner: the cursor is too big. The f2-99 Ciuki arrow (`assets/cursors/ciuki/arrow.svg`) spans about 18×26 px of its 32×32 cell; the Windows 98 standard arrow and the classic Mac arrow are about 12×19 px. Scale every Ciuki cursor drawing (all sixteen SVGs) uniformly around its hotspot so the arrow is about 12×19 px and the other shapes keep their relative proportions (I-beam, hands, resize, busy, help…), keeping the 32×32 viewBox, the integer hotspots (recomputed exactly), the black-with-white-outline style and line weights that still read at the smaller size (adjust stroke width if the outline breaks). Regenerate `assets/cursors/cursors.h` with `scripts/cursors/build_ciuki.py`, update the README, the hardware-plane and software golden tests of f2-99 and any desktop golden that shows the pointer; look at the cursor sheet (`--sheet`) before accepting. Cite the Windows 98 arrow size source. Implementer: Sonnet, high.
+
+## Open item recorded by the lead (2026-10-23 16:15)
+
+- RTC time base: CiukiOS reads the BIOS clock as UTC, but machines set up for Windows (the T23 included) keep local time in the RTC, so the guest clock is ahead by the UTC offset (2 h in summer in Italy). Windows 9x keeps the RTC in local time with a time-zone setting; a later directive adds a time-zone setting (Setup and Control Panel) and treats the RTC as local time. Not a cause of the fx-11 fetch failure.
