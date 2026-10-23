@@ -53,6 +53,7 @@ static int write_file(void *c,const char *path,const char *text,size_t length){
     snprintf(f.last_path,sizeof(f.last_path),"%s",path);
     if(length>=sizeof(f.written))length=sizeof(f.written)-1;memcpy(f.written,text,length);f.written[length]=0;return 0;
 }
+static int make_dir(void *c,const char *path){(void)c;assert(!strncmp(path,"F:\\CIUKIOS-RESCUE-",18));return 0;}
 static int list(void *c,const char *path,char (*out)[64],unsigned cap){(void)c;(void)path;assert(cap);strcpy(out[0],"GPL.TXT");return 1;}
 static void record(void *c,const char *line){(void)c;size_t k=strlen(f.records);snprintf(f.records+k,sizeof(f.records)-k,"%s\n",line);}
 static int eject(void *c){(void)c;f.eject++;return 0;}
@@ -102,7 +103,7 @@ static void fixture(void){
     setup_fake.entered=entered;
 }
 static void init(void){
-    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.dest_letter=letter,.portrait=portrait};
+    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.dest_letter=letter,.portrait=portrait};
     du_init(&ui,pixels,ST_W,ST_H);ui.focused_window=1;assert(!st_init(&a,&ui,&h));
 }
 static void no_writes(void){assert(!setup_fake.execute_calls&&!setup_fake.mutations&&!f.writes);}

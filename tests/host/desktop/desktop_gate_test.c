@@ -698,3 +698,6 @@ int ciuki_display_accel_info(int fd,uint32_t generation,struct ciuki_accel_info 
 int ap_preference_get(const char *dir,const char *id) { (void)dir; (void)id; return -1; }
 int ap_preference_set(const char *dir,const char *id,const char *label,int action)
 { (void)dir; (void)id; (void)label; (void)action; return -1; }
+
+/* This desktop fixture has no installed SETUP.STATE. */
+int desk_firstboot(struct desktop *d) { (void)d; return 0; }

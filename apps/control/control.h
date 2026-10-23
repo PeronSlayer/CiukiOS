@@ -73,6 +73,7 @@ struct cp_host {
     int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*engine)(void *, struct ciuki_accel_info *);
+    int (*accel_retry)(void *); /* re-arm existing marker; restart required */
     int (*network)(void *, struct ciuki_net_state *);
     int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
     int (*power)(void *); /* opens the shell's safe shutdown dialog */

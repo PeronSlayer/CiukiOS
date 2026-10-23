@@ -1348,3 +1348,6 @@ int main(int argc,char **argv)
 
 int ciuki_display_query(struct ciuki_display_info *i) { assert(i->version==CIUKI_DISPLAY_VERSION && i->size==sizeof(*i)); return -ENOSYS; }
 int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }
+
+/* This desktop fixture has no installed SETUP.STATE. */
+int desk_firstboot(struct desktop *d) { (void)d; return 0; }

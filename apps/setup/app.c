@@ -540,6 +540,7 @@ static void restart_tick(struct st_app *a)
 static void rescue_open(struct st_app *a)
 {
     a->rescue_return = a->page;
+    st_record(a,"[rescue] action=inventory result=ok");
     int disks = a->h.disks ? a->h.disks(a->h.ctx, a->disks, 4) : -1;
     a->disk_count = disks > 0 && disks <= 4 ? disks : 0;
     int n = a->h.volumes ? a->h.volumes(a->h.ctx, a->volumes, 26) : -1;   /* a USB drive may be new */
@@ -638,7 +639,7 @@ void st_action(struct st_app *a, int id)
     }
     case ST_ID_RESCUE: rescue_open(a); break;
     case ST_ID_COPY_LOGS: st_rescue_copy(a, a->status_line, sizeof(a->status_line)); a->ui->dirty = 1; break;
-    case ST_ID_REPORT: text_open(a, "Hardware report", NULL, a->report, a->report_length); break;
+    case ST_ID_REPORT: st_record(a,"[rescue] action=hardware_view result=ok"); text_open(a, "Hardware report", NULL, a->report, a->report_length); break;
     case ST_ID_CLOSE:
         if (a->page == ST_PAGE_TEXT) st_goto(a, a->back_page);
         else if (a->page == ST_PAGE_RESCUE) st_goto(a, a->rescue_return);

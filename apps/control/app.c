@@ -541,6 +541,12 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         if (e->type == DU_EV_OPEN && e->index >= 0 && (unsigned)e->index < du_get(u,C_APPLETS)->count)
             cp_open(a, a->applet_pages[e->index]);
         break;
+    case 976:
+        if(e->type==DU_EV_ACTIVATE && a->host.accel_retry){
+            int r=a->host.accel_retry(a->host.ctx);
+            text(a,975,r?"Could not re-arm acceleration; the marker was retained.":"Acceleration will be retried after you restart CiukiOS.");
+        }
+        break;
     case CP_DISPLAY_TABS_ID:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_DISPLAY_TABS && !a->mode_state) {
             a->display_tab=e->index; build(a); du_focus(u,CP_DISPLAY_TABS_ID);
@@ -1138,6 +1144,10 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,974,24,254,CP_WIDTH-48,16,a->engine_line);
             add(a,DU_LABEL,975,24,280,CP_WIDTH-48,16,"Engine information is read-only.");
             add(a,DU_BUTTON,CP_REFRESH,24,316,88,24,"Refresh");
+            if(a->host.accel_retry){
+                text(a,975,"Retry re-arms the boot test; restart is required.");
+                add(a,DU_BUTTON,976,128,316,252,24,"Retry acceleration after restart");
+            }
         }
     } else if (a->page == CP_MOUSE) {
     /* Mouse */

@@ -38,6 +38,7 @@ static struct {
     struct disk_list disks;
     unsigned cd_slot; uint32_t cd_generation;
     int mouse_x,mouse_y;
+    uint32_t export_generation[26], export_pinned;
 } N;
 static int path(char *out,size_t cap,const char *dos)
 {
@@ -72,7 +73,10 @@ static int usb(const char *dos)
     if(N.media<0||ciuki_devctl(N.media,MEDIA_GET_STATE,&state,sizeof(state)) ||
        !(state.removable_mask&(1u<<letter)) || state.type[letter]!=CIUKI_MEDIA_USB)return 0;
     /* D: is reserved for the boot ISO even if a broken inventory claims it. */
-    return letter>=4;
+    if(letter<4)return 0;
+    if(N.export_pinned&(1u<<letter))return state.generation[letter]==N.export_generation[letter];
+    N.export_pinned|=1u<<letter;N.export_generation[letter]=state.generation[letter];
+    return 1;
 }
 static int write_all(int fd,const char *buf,size_t n)
 {
@@ -84,7 +88,14 @@ static int write_file(void *ctx,const char *dos,const char *buf,size_t n)
     (void)ctx;if(!usb(dos))return -EROFS;
     char name[512];int r=path(name,sizeof(name),dos);if(r)return r;
     int fd=open(name,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd<0)return -errno;
-    r=write_all(fd,buf,n);if(!r&&fsync(fd))r=-errno;if(close(fd)&&!r)r=-errno;return r;
+    r=write_all(fd,buf,n);if(!r&&!usb(dos))r=-ESTALE;if(!r&&fsync(fd))r=-errno;if(close(fd)&&!r)r=-errno;return r;
+}
+static int make_dir(void *ctx,const char *dos)
+{
+    (void)ctx;
+    if(!usb(dos))return -EROFS;
+    char name[512];int r=path(name,sizeof(name),dos);if(r)return r;
+    return mkdir(name,0700)?-errno:0;
 }
 static int copy_file(void *ctx,const char *from,const char *to,char *buffer,size_t cap)
 {
@@ -93,7 +104,9 @@ static int copy_file(void *ctx,const char *from,const char *to,char *buffer,size
     int in=open(source,O_RDONLY);if(in<0)return -errno;
     int out=open(dest,O_WRONLY|O_CREAT|O_TRUNC,0600);if(out<0){r=-errno;close(in);return r;}
     for(;;){ssize_t n=read(in,buffer,cap);if(n<0&&errno==EINTR)continue;if(n<=0){if(n<0)r=-errno;break;}
+        if(!usb(to)){r=-ESTALE;break;}
         r=write_all(out,buffer,(size_t)n);if(r)break;}
+    if(!r&&!usb(to))r=-ESTALE;
     if(!r&&fsync(out))r=-errno;
     if(close(out)&&!r)r=-errno;if(close(in)&&!r)r=-errno;return r;
 }
@@ -220,7 +233,7 @@ int st_native_open(struct st_host *h,int display_fd,int input_fd)
     if(r||length!=sizeof(N.portrait)){st_native_close();return r?r:-EINVAL;}
     *h=(struct st_host){.monotonic=monotonic,.realtime=realtime,.input=input,.present=present,.idle=idle,
         .devices=devices,.memory=memory,.display=display,.framebuffer=framebuffer,.network=network,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=catalogue,.release=release,
-        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.list_dir=list_dir,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.dest_letter=dest_letter,.portrait=N.portrait};
+        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.dest_letter=dest_letter,.portrait=N.portrait};
     return 0;
 }
 void st_native_close(void){if(N.pixels){munmap(N.pixels,N.mapped);N.pixels=NULL;}if(N.surface>=0){close(N.surface);N.surface=-1;}if(N.media>=0){close(N.media);N.media=-1;}}
