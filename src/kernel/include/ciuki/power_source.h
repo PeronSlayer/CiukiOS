@@ -46,6 +46,8 @@ struct power_source_platform {
     int (*resume)(void *, uint16_t event, uint16_t info);
 };
 int power_source_set_platform(const struct power_source_platform *);
+/* core/power_platform.c: the owner of these services on pre-ACPI machines. */
+int power_platform_start(void);
 bool power_source_platform_ready(void);
 int power_source_quiesce_dma(uint64_t deadline_ms);
 int power_source_resume(uint16_t event, uint16_t info);

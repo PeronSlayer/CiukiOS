@@ -349,10 +349,10 @@ static int cursor_test(const struct accel_ops *a,uint64_t deadline,bool (*cancel
     if (!sis_cursor_hide(&engine)) { sis_quarantine(&engine,"cursor_disable_failed"); if (!e) e=-EIO; }
     return e;
 }
-#define SIS_DRIVER(id_,name_,matches_,probe_) { \
-    .id=id_,.name=name_,.matches=matches_,.match_count=ARRAY_SIZE(matches_),.framebuffer_bar=0, \
+#define SIS_DRIVER(id_,name_,matches_,probe_,marker_) { \
+    .id=id_,.attempt_files={"C:/system/settings/accel.cfg",marker_},.name=name_,.matches=matches_,.match_count=ARRAY_SIZE(matches_),.framebuffer_bar=0, \
     .probe=probe_,.eligible=eligible,.start=start,.fallback=fallback, \
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed, \
     .record=record,.quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=cursor_test }
-const struct display_driver sis300_driver=SIS_DRIVER("sis300","SiS 300 / 540 / 630",matches300,probe300);
-const struct display_driver sis315_driver=SIS_DRIVER("sis315","SiS 315 / 330",matches315,probe315);
+const struct display_driver sis300_driver=SIS_DRIVER("sis300","SiS 300 / 540 / 630",matches300,probe300,"C:/system/settings/sis300.cfg");
+const struct display_driver sis315_driver=SIS_DRIVER("sis315","SiS 315 / 330",matches315,probe315,"C:/system/settings/sis315.cfg");

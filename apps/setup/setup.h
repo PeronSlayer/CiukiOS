@@ -29,6 +29,7 @@
 #define ST_COUNTDOWN_S 15u             /* Restart page */
 #define ST_EJECT_WAIT_S 60u            /* Restart=eject and force */
 #define ST_TIP_S 20u                   /* "Did you know?" rotation */
+#define ST_POWER_POLL_NS 200000000ull  /* call 73 STATUS: cached, no AML/BIOS call */
 
 enum st_page {
     ST_PAGE_WELCOME, ST_PAGE_LICENCE, ST_PAGE_HARDWARE, ST_PAGE_DISK, ST_PAGE_COMPONENTS,
@@ -87,6 +88,7 @@ struct st_host {
     int (*media_present)(void *);                                         /* 1 in, 0 removed, <0 unknown */
     int (*reboot)(void *);
     int (*power_off)(void *);
+    int (*power_status)(void *, struct ciuki_power_status *);            /* call 73 STATUS, read-only */
     char (*dest_letter)(void *);                                          /* published destination */
     const uint32_t *portrait;                                             /* 256x256 XRGB or NULL */
 };
@@ -101,6 +103,10 @@ struct st_app {
     enum st_page page, back_page, rescue_return;   /* where Text and Rescue return */
     enum st_stop stop;
     int quit, restart_requested, power_requested;
+    /* ACPI power button with no desktop (lead decision 2026-10-23): the
+     * coalesced request count last seen, a request waiting for a free dialog
+     * slot, and a confirmed power off that waits for the copy to stop. */
+    uint32_t power_seen; int power_pending, power_after_copy; uint64_t power_poll_at;
     int unattended, answers_found;
     struct setup_answers answers;
     struct setup_inf_status status; int status_valid;
@@ -165,7 +171,8 @@ enum {
     ST_ID_USER = 40, ST_ID_COMPUTER, ST_ID_KBD, ST_ID_CLOCK, ST_ID_TZ, ST_ID_UTC,
     ST_ID_DHCP = 50, ST_ID_MANUAL, ST_ID_IP, ST_ID_MASK, ST_ID_GATEWAY, ST_ID_DNS, ST_ID_IPX, ST_ID_LOBBY,
     ST_ID_TEXT = 60,
-    ST_DLG_EXIT = 100, ST_DLG_HELP, ST_DLG_ERROR, ST_DLG_CANCEL, ST_DLG_MESSAGE, ST_DLG_PREPARE, ST_DLG_SHUTDOWN
+    ST_DLG_EXIT = 100, ST_DLG_HELP, ST_DLG_ERROR, ST_DLG_CANCEL, ST_DLG_MESSAGE, ST_DLG_PREPARE, ST_DLG_SHUTDOWN,
+    ST_DLG_POWER
 };
 /* app.c actions shared with pages.c */
 void st_action(struct st_app *, int id);

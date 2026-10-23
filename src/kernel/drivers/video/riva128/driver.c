@@ -360,7 +360,7 @@ static int cursor_test(const struct accel_ops *selected,uint64_t deadline,bool (
     return nv3_engine_cursor_test(&engine,now_us(0)+left*1000u,cancel,ctx);
 }
 const struct display_driver riva128_driver={
-    .id="riva128",.name="NVIDIA Riva 128",.matches=matches,.match_count=ARRAY_SIZE(matches),
+    .id="riva128",.attempt_files={LEGACY_MARKER,MARKER},.name="NVIDIA Riva 128",.matches=matches,.match_count=ARRAY_SIZE(matches),
     .framebuffer_bar=1,.probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,
     .quarantine=quarantine,.summary=summary,.snapshot=snapshot,.record=record,.cursor_test=cursor_test

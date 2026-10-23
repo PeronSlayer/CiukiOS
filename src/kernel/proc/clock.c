@@ -33,6 +33,25 @@ void file_clock_set_utc(int64_t seconds)
     proc_clock_seed(seconds,clock_source.tick);
 }
 
+/* After a firmware suspend the PIT stopped: reseed the realtime clock from
+ * the RTC, only when boot qualified that RTC as the clock source. */
+bool file_clock_resync(void)
+{
+    uint16_t date = 0, time = 0; uint8_t tenths = 0;
+    int64_t seconds;
+    if (!clock_source.source || !clock_source.qualified || !fs_calendar_sample ||
+        !fs_calendar_sample(&date, &time, &tenths) || tenths >= 200 || !clock_fat_utc(date, time, &seconds))
+        return false;
+    seconds += tenths / 100;
+    if (file_clock_rtc_offset) seconds -= file_clock_rtc_offset();
+    uint32_t flags = irq_save();
+    clock_source.utc = seconds; clock_source.tick = g_ticks;
+    uint64_t tick = clock_source.tick;
+    irq_restore(flags);
+    proc_clock_seed(seconds, tick);
+    return true;
+}
+
 static bool leap(unsigned y) { return !(y % 4) && (y % 100 || !(y % 400)); }
 
 bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)

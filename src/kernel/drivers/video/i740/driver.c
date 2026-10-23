@@ -279,7 +279,7 @@ static bool summary(bool *r, bool *u, const char **why) { return video_summary(&
 static void snapshot(struct ciuki_accel_info *out) { video_snapshot(&engine.native,out); }
 static struct i740_engine engine={.native={.id="i740",.name="Intel i740",
     .marker="C:/system/settings/accel-i740.cfg",.reason="pending",.cpu_safe=true}};
-const struct display_driver i740_driver={.id="i740",.name="Intel i740",.matches=matches,
+const struct display_driver i740_driver={.id="i740",.attempt_files={"C:/system/settings/accel.cfg","C:/system/settings/accel-i740.cfg"},.name="Intel i740",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,.start=start,
     .fallback=fallback,.attempt_begin=begin,.attempt_end=end,.attempt_failed=failed,.record=record,
     .quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=video_cursor_test};

@@ -339,7 +339,7 @@ static void snapshot(struct ciuki_accel_info *out)
     out->operations=engine.operations; out->idle_waits=engine.waits;
 }
 const struct display_driver trident_blade_driver={
-    .id="trident",.name="Trident Blade / CyberBlade",.matches=matches,
+    .id="trident",.attempt_files={ATTEMPT_PATH},.name="Trident Blade / CyberBlade",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,

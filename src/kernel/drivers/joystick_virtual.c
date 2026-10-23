@@ -1,4 +1,5 @@
 /* Per-subscription RC model. No physical I/O. SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/abi.h>
 #include <ciuki/joystick.h>
 uint8_t joystick_virtual_io(struct joystick_virtual *v, uint64_t clocks, bool write)
 {

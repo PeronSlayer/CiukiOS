@@ -441,7 +441,7 @@ static bool summary(bool *r, bool *u, const char **why) { return video_summary(&
 static void snapshot(struct ciuki_accel_info *out) { video_snapshot(&engine.native,out); }
 static struct i810_engine engine={.native={.id="i810",.name="Intel i810/i815",
     .marker="C:/system/settings/accel-i810.cfg",.reason="pending",.cpu_safe=true}};
-const struct display_driver i810_driver={.id="i810",.name="Intel i810/i815",.matches=matches,
+const struct display_driver i810_driver={.id="i810",.attempt_files={"C:/system/settings/accel.cfg","C:/system/settings/accel-i810.cfg"},.name="Intel i810/i815",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,.start=start,
     .fallback=fallback,.attempt_begin=begin,.attempt_end=end,.attempt_failed=failed,.record=record,
     .quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=video_cursor_test};

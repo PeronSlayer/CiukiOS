@@ -43,7 +43,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
     return e ? e : hidden;
 }
 const struct display_driver s3savage_driver = {
-    .id="s3savage", .name="S3 Savage", .matches=matches,
+    .id="s3savage", .attempt_files={"C:/system/settings/accel.cfg"}, .name="S3 Savage", .matches=matches,
     .match_count=sizeof(matches)/sizeof(matches[0]), .framebuffer_bar=1,
     .probe=savage2d_supported, .eligible=savage2d_eligible,
     .start=savage2d_init, .fallback=savage2d_fallback_ops,

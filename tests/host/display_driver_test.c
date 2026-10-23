@@ -1,6 +1,7 @@
 /* Integrated production registry/fbdev/swdib with a recording adapter.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define DISPLAY_DRIVER_FIXTURE_REAL
+#define DISPLAY_ATTEMPT_FIXTURE_CUSTOM
 #define main fbdev_regression_main
 #include "fbdev_test.c"
 #undef main
@@ -28,6 +29,11 @@ const struct display_driver intel2d_gen3_driver = {0};
 #include "../../src/kernel/drivers/video/registry.c"
 
 static uint8_t pixels[32*32*4], before[sizeof(pixels)];
+/* Registry keyed attempt status (DM8): the production storage side is
+ * display_attempt_test.c; here the integrated fbdev/registry outcome. */
+static bool attempt_retained_fixture;
+static int attempt_status_fixture;
+static unsigned attempt_prepares;
 static struct pci_func gpu;
 static unsigned gpu_count, probes, eligible_calls, starts, begins, clears, records;
 static bool refuse_probe, unsafe, quarantined, start_fail, marker_fail, clear_fail, stop_fail, sliced, corrupt;
@@ -121,6 +127,11 @@ const struct display_driver s3savage_driver={
     .quarantine=fake_quarantine,.record=fake_record,.summary=fake_summary,.snapshot=fake_snapshot,
     .modes=&fake_modes,.mode_adapter=fake_mode_adapter,.cursor_test=fake_cursor_test
 };
+int display_attempt_prepare(struct vfs *vfs,const struct display_driver *d,const struct pci_func *p,bool *retained)
+{
+    CHECK(!locks && !vfs && d==&s3savage_driver && p==&gpu && retained);
+    attempt_prepares++; *retained=attempt_retained_fixture; return attempt_status_fixture;
+}
 void grants_display_yield(void)
 {
     CHECK(!locks && drawing==PRESENT_BUSY && accel_inflight); yields++;
@@ -152,6 +163,7 @@ static void setup(void)
         .owner="fbdev",.state=RS_ACTIVE,.generation=42};
     gpu=(struct pci_func){.vendor=0x1234,.device=0x5678,.class_code=3,.command=3,.bar={0,device.phys}};
     gpu_count=1; probes=eligible_calls=starts=begins=clears=records=0;
+    attempt_retained_fixture=false; attempt_status_fixture=0; attempt_prepares=0;
     unsafe=quarantined=start_fail=marker_fail=clear_fail=stop_fail=sliced=corrupt=refuse_probe=false;
     syncs=submissions=stops=hides=yields=cursor_checks=0; native_cursor=false; refuse=0; pause_fn=NULL; pause_ctx=NULL;
     acceleration=NULL; adapter=NULL; bound=NULL; owner=NULL;
@@ -227,6 +239,23 @@ static void lifecycle(void)
     quarantined=true; CHECK(!fbdev_accel_request(&q) && accel_blocked);
     q.operation=CIUKI_ACCEL_COPY; q.rect=(struct ciuki_rect){0,32,0,0,4,4}; CHECK(fbdev_accel_request(&q)<0);
 }
+static void registry_status(void)
+{
+    /* A retained attempt is the registry's status: the driver's own marker
+     * hook and activation never run, and the engine record says why. */
+    struct ciuki_display_engine_info info;
+    setup(); attempt_retained_fixture=true; activate();
+    CHECK(attempt_prepares==1 && !begins && !starts && accel_blocked && !acceleration);
+    CHECK(!fbdev_engine_info(42,&info) && !info.ready && info.kind==CIUKI_ENGINE_SOFTWARE);
+    CHECK(!strcmp(info.reason,DISPLAY_ATTEMPT_RETAINED) && !strcmp(info.driver_id,"fake"));
+    fbdev_accel_schedule(NULL); CHECK(attempt_prepares==1 && !begins); /* this boot stays software */
+    setup(); attempt_status_fixture=-EIO; activate();
+    CHECK(attempt_prepares==1 && !begins && !starts && accel_blocked);
+    CHECK(!fbdev_engine_info(42,&info) && !strcmp(info.reason,"marker_unavailable"));
+    setup(); activate(); /* clean status: the driver's own marker still runs */
+    CHECK(attempt_prepares==1 && begins==1 && starts==1 && clears==1 && acceleration==&fake_ops);
+    CHECK(!fbdev_engine_info(42,&info) && strcmp(info.reason,DISPLAY_ATTEMPT_RETAINED));
+}
 static void punting(void)
 {
     setup(); activate(); refuse=-EOPNOTSUPP;
@@ -268,7 +297,7 @@ static void native_comparison(void)
 #endif
 int main(void)
 {
-    selection(); lifecycle(); punting(); native_comparison();
-    printf("display driver integration: %u failures (registry, policy, marker, unsafe guard, sliced waits, mode race, offscreen revocation, punts, native-only comparison)\n",failures);
+    selection(); lifecycle(); registry_status(); punting(); native_comparison();
+    printf("display driver integration: %u failures (registry, policy, marker, retained-attempt status, unsafe guard, sliced waits, mode race, offscreen revocation, punts, native-only comparison)\n",failures);
     return failures ? 1 : 0;
 }

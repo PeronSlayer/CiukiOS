@@ -366,12 +366,66 @@ static int is_system_path(const char *p)
     return 0;
 }
 
+/* ---- ACPI power button (lead decision 2026-10-23) ----
+ * In Setup mode no desktop observes the kernel's coalesced shutdown request,
+ * so Setup owns it with its own dialog. Before the copy, confirmation powers
+ * off through call 73 OFF (storage flush, native device quiesce, the stopped
+ * latch, then ACPI S5 or APM Off). During the copy the dialog warns that the
+ * installation is incomplete, defaults to continuing, and a confirmed power
+ * off first cancels libsetup at its next safe boundary. */
+static void power_off_now(struct st_app *a, const char *source)
+{
+    if (source) st_record(a, "[setup] power off source=%s page=%s", source, st_page_name(a->page));
+    else st_record(a, "[setup] power off");
+    a->power_requested = 1;
+    if (!a->h.power_off || a->h.power_off(a->h.ctx)) {
+        st_message(a, "Shut down", "Shut down is unavailable. Remove the CD and turn off the computer after Setup has stopped.", DU_DLG_ICON_INFO);
+    } else a->quit = 1;
+}
+
+static void power_dialog(struct st_app *a)
+{
+    static const char *const before[] = {"Power off", "Resume"};
+    static const char *const during[] = {"Power off", "Continue installation"};
+    if (a->executing)
+        du_message(a->ui, ST_DLG_POWER, "Exit Setup and power off?",
+                   "The installation is incomplete. If you power off now, the disk is not bootable. "
+                   "Restart Setup from the CD to install again.\n\nExit Setup and power off?",
+                   DU_DLG_ICON_WARNING, during, 2, 1, 1);
+    else
+        du_message(a->ui, ST_DLG_POWER, "Exit Setup and power off?",
+                   a->execute_calls ? "Exit Setup and power off the computer? If Setup did not complete, restart from the CD to install again." :
+                   "CiukiOS is not installed. Nothing has been written to the disk.\n\nExit Setup and power off the computer?",
+                   DU_DLG_ICON_QUESTION, before, 2, 0, 1);
+    a->ui->dirty = 1;
+}
+
+static void power_poll(struct st_app *a)
+{
+    if (!a->h.power_status || a->quit || a->power_requested || a->power_after_copy) return;
+    if (a->now >= a->power_poll_at) {
+        a->power_poll_at = a->now + ST_POWER_POLL_NS;
+        struct ciuki_power_status p = {.version = CIUKI_POWER_VERSION, .size = sizeof(p)};
+        if (!a->h.power_status(a->h.ctx, &p) && p.version == CIUKI_POWER_VERSION && p.size == sizeof(p) &&
+            p.shutdown_requests != a->power_seen) {
+            a->power_seen = p.shutdown_requests;
+            a->power_pending = 1;
+            st_record(a, "[setup] power button request=%u page=%s", (unsigned)p.shutdown_requests, st_page_name(a->page));
+        }
+    }
+    /* Never replace another dialog (an error modal may be waiting on it). */
+    if (!a->power_pending || a->ui->dialog.kind) return;
+    a->power_pending = 0;
+    power_dialog(a);
+}
+
 static int pump(struct st_app *a, int wait)
 {
     struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
     int n = a->h.input ? a->h.input(a->h.ctx, events, CIUKI_INPUT_READ_MAX) : -1;
     for (int i = 0; i < n; i++) st_input_event(a, &events[i]);
     a->now = now_ns(a);
+    power_poll(a);
     if (a->page == ST_PAGE_COPY && a->now >= a->tip_deadline) {
         a->tip = (a->tip + 1) % st_tip_count;
         a->tip_deadline = a->now + (uint64_t)ST_TIP_S * 1000000000ull;
@@ -418,6 +472,8 @@ static enum setup_decision cb_error(void *ctx, const struct setup_error *e)
            st_error_id(e->cls), e->err, e->phase, e->path, e->lba, e->attempt, e->retryable);
     if (a->unattended) return retry ? SETUP_DECISION_RETRY : SETUP_DECISION_CANCEL;
     if (a->ui->dialog.kind && a->ui->dialog.id == ST_DLG_CANCEL) du_dialog_close(a->ui);
+    /* The error decides first; an unanswered power request is asked again. */
+    if (a->ui->dialog.kind && a->ui->dialog.id == ST_DLG_POWER) { a->power_pending = 1; du_dialog_close(a->ui); }
     char text[700], where[300] = "";
     if (e->path[0]) snprintf(where, sizeof(where), "\n\nFile: %s", e->path);
     else if (e->count) snprintf(where, sizeof(where), "\n\nSectors: LBA %" PRIu64 ", %" PRIu64 " sectors", e->lba, e->count);
@@ -439,7 +495,15 @@ static bool cb_cancel(void *ctx)
 
 static void cb_log(void *ctx, const char *line) { setup_log_append(&((struct st_app *)ctx)->log, line); }
 
+static void install_run(struct st_app *a);
 static void install(struct st_app *a)
+{
+    install_run(a);
+    /* A power off confirmed during the copy runs once libsetup stopped. */
+    if (a->power_after_copy) { a->power_after_copy = 0; power_off_now(a, "button"); }
+}
+
+static void install_run(struct st_app *a)
 {
     if (a->page != ST_PAGE_SUMMARY || !a->plan_ok || a->executing || a->execute_calls) return;
     a->plan.answers.log = &a->log;
@@ -454,6 +518,8 @@ static void install(struct st_app *a)
     static const struct setup_callbacks callbacks = {cb_progress, cb_error, cb_cancel, cb_log};
     int r = setup_txn_execute(&a->plan, &callbacks, a);
     a->executing = 0;
+    /* An unanswered power dialog is asked again with the post-copy text. */
+    if (a->ui->dialog.kind && a->ui->dialog.id == ST_DLG_POWER) a->power_pending = 1;
     if (a->ui->dialog.kind) du_dialog_close(a->ui);
     st_log(a, "execute result=%d", r);
     if (r == 0) {
@@ -621,13 +687,7 @@ void st_action(struct st_app *a, int id)
         if (a->page == ST_PAGE_RESTART) begin_restart(a);
         else reboot(a);
         break;
-    case ST_ID_SHUTDOWN:
-        st_record(a, "[setup] power off");
-        a->power_requested = 1;
-        if (!a->h.power_off || a->h.power_off(a->h.ctx)) {
-            st_message(a, "Shut down", "Shut down is unavailable. Remove the CD and turn off the computer after Setup has stopped.", DU_DLG_ICON_INFO);
-        } else a->quit = 1;
-        break;
+    case ST_ID_SHUTDOWN: power_off_now(a, NULL); break;
     case ST_ID_SAVE_REPORT: case ST_ID_LINK_SAVE: {
         char result[200];
         int r = st_save_report(a, result, sizeof(result));
@@ -654,6 +714,14 @@ static void dialog_result(struct st_app *a, int id, int index)
         break;
     case ST_DLG_CANCEL:
         if (index == 0 && a->executing) { a->cancel = 1; st_log(a, "cancel requested"); }
+        break;
+    case ST_DLG_POWER:
+        if (index != 0) { st_record(a, "[setup] power button declined page=%s", st_page_name(a->page)); break; }
+        if (a->executing) {
+            /* Explicitly confirmed over the incomplete-installation warning. */
+            a->cancel = 1; a->power_after_copy = 1;
+            st_record(a, "[setup] power button confirmed during copy; cancelling");
+        } else power_off_now(a, "button");
         break;
     case ST_DLG_PREPARE:
         if (index == 0 && (a->failed_class == SETUP_ERR_SOURCE_READ || a->failed_class == SETUP_ERR_MEDIA_REMOVED)) prepare(a);
@@ -766,7 +834,9 @@ static void unattended_tick(struct st_app *a)
 static void tick(struct st_app *a)
 {
     a->now = now_ns(a);
-    if (a->page == ST_PAGE_RESTART) restart_tick(a);
+    power_poll(a);
+    /* The restart countdown waits while the power dialog asks. */
+    if (a->page == ST_PAGE_RESTART && !(a->ui->dialog.kind && a->ui->dialog.id == ST_DLG_POWER)) restart_tick(a);
     if (a->page == ST_PAGE_COPY && a->now >= a->tip_deadline) {
         a->tip = (a->tip + 1) % st_tip_count;
         a->tip_deadline = a->now + (uint64_t)ST_TIP_S * 1000000000ull;

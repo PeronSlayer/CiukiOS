@@ -265,7 +265,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t until,bool (*cancel)
     return vmsvga_engine_cursor_test(&engine,until,cancel,ctx);
 }
 const struct display_driver vmwaresvga_driver={
-    .id="vmwaresvga",.name="VMware SVGA II",.matches=matches,.match_count=1,.framebuffer_bar=1,
+    .id="vmwaresvga",.attempt_files={MARKER},.name="VMware SVGA II",.matches=matches,.match_count=1,.framebuffer_bar=1,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,
     .record=record,.quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=cursor_test

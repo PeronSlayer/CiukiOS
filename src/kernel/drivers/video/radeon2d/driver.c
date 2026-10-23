@@ -421,7 +421,7 @@ static int cursor_test(const struct accel_ops *ops, uint64_t deadline, bool (*ca
     return e ? e : hidden;
 }
 const struct display_driver radeon2d_driver={
-    .id="radeon2d", .name="ATI Radeon R100/R200/R300/R4xx", .matches=matches,
+    .id="radeon2d", .attempt_files={ATTEMPT_PATH}, .name="ATI Radeon R100/R200/R300/R4xx", .matches=matches,
     .match_count=ARRAY_SIZE(matches), .framebuffer_bar=0, .probe=probe, .eligible=eligible,
     .start=start, .fallback=fallback, .attempt_begin=attempt_begin, .attempt_end=attempt_end,
     .attempt_failed=attempt_failed, .quarantine=quarantine, .summary=summary,

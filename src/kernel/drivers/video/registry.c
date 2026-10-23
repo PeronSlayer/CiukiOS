@@ -194,6 +194,11 @@ bool display_driver_summary(bool *ready, bool *used, const char **reason)
     if (display_accel_disabled(reason)) return true;
     if (bound && bound->summary) (void)bound->summary(ready,used,reason);
     if (*reason && !strncmp(*reason,"pending",sizeof("pending"))) *reason=software_reason;
+    /* DM8: a retained attempt is the registry's own status. The driver never
+     * started this boot, so its reason cannot override it. */
+    if (!strncmp(software_reason,DISPLAY_ATTEMPT_RETAINED,sizeof(DISPLAY_ATTEMPT_RETAINED))) {
+        *ready=false; *reason=software_reason;
+    }
     /* Driver setup and diagnostic draws do not establish presenter usage. */
     *used = false;
     for (unsigned i=0;i<CIUKI_ENGINE_OPERATIONS;i++) if (native_count[i]) *used=true;

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
+#include <ciuki/abi.h>
 #include "dosvm_internal.h"
 int dosvm_joystick_port(struct dosvm *v, uint16_t port, unsigned width, bool write, uint32_t *value, void *arg)
 {

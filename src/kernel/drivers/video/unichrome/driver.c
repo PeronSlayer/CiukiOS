@@ -387,7 +387,7 @@ static int selftest(uint64_t deadline, void (*line)(void *,const char *),void *c
     return 0;
 }
 const struct display_driver unichrome_driver={
-    .id="unichrome",.name="VIA UniChrome / UniChrome Pro",.matches=matches,
+    .id="unichrome",.attempt_files={LEGACY_PATH,MARKER_PATH},.name="VIA UniChrome / UniChrome Pro",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=uc_pci_supported,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,
     .attempt_failed=attempt_failed,.quarantine=quarantine,.summary=summary,.snapshot=snapshot,

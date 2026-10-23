@@ -260,7 +260,7 @@ static void record(void)
         engine.waits,engine.timeouts,engine.status,engine.quarantined ? engine.reason : reason);
 }
 const struct display_driver cirrus_driver={
-    .id="cirrus",.name="Cirrus Logic GD54xx",.matches=matches,
+    .id="cirrus",.attempt_files={"C:/system/settings/accel.cfg"},.name="Cirrus Logic GD54xx",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,
     .attempt_failed=attempt_failed,.quarantine=quarantine,.summary=summary,

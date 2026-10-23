@@ -325,7 +325,7 @@ static int selftest(uint64_t deadline, void (*line)(void *, const char *), void 
     return e;
 }
 const struct display_driver nv2d_driver={
-    .id="nv2d",.name="NVIDIA TNT-GeForce6",.matches=nv2d_matches,
+    .id="nv2d",.attempt_files={"C:/system/settings/nv2d%04x.cfg"},.name="NVIDIA TNT-GeForce6",.matches=nv2d_matches,
     .match_count=ARRAY_SIZE(nv2d_matches),.framebuffer_bar=1,.probe=probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,
     .attempt_failed=attempt_failed,.record=record,.quarantine=quarantine,.summary=summary,

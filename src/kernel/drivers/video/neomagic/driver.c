@@ -308,7 +308,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
     return e ? e : hidden;
 }
 const struct display_driver neomagic_driver={
-    .id="neomagic",.name="NeoMagic MagicGraph",.matches=matches,.match_count=ARRAY_SIZE(matches),
+    .id="neomagic",.attempt_files={ATTEMPT_PATH},.name="NeoMagic MagicGraph",.matches=matches,.match_count=ARRAY_SIZE(matches),
     .framebuffer_bar=0,.probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,
     .record=record,.quarantine=quarantine,.summary=summary,.snapshot=snapshot,

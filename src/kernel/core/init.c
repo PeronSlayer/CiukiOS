@@ -32,6 +32,7 @@
 #include "../drivers/floppy.h"
 #pragma weak floppy_init
 extern void apm_start(void) __attribute__((weak));
+extern int power_platform_start(void) __attribute__((weak));
 #pragma weak entropy_start
 #pragma weak console_splash_phase
 #pragma weak usb_init
@@ -109,13 +110,15 @@ const struct activation_entry *drivers_mount_get(unsigned drive)
 }
 
 /* After USB: joystick settings and game port (f1-113b), the firmware
- * inventory, then floppy (f1-115) and APM (f1-121), in that order. */
+ * inventory, then floppy (f1-115), the APM suspend-service owner and APM
+ * (f1-121), in that order: the owner must exist before APM connects. */
 static void platform_devices_start(bool safe)
 {
     if (joystick_storage_init && !safe) joystick_storage_init(&storage_get()->vfs);
     if (gameport_init && !safe) gameport_init();
     if (firmware_inventory_start) firmware_inventory_start();
     if (floppy_init && !safe) floppy_init();
+    if (power_platform_start && !safe) (void)power_platform_start();
     if (apm_start && !safe) apm_start();
 }
 void drivers_init(void)

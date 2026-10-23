@@ -54,6 +54,7 @@ uint8_t arch_cpu_family(void);          /* CPUID family, 3..6, for DPMI CL */
 
 /* PIC / IRQ */
 void pic_init(void);
+void pic_pit_resume(void); /* after a firmware suspend: ICWs, current masks, PIT rate */
 void pic_unmask(unsigned irq);
 void pic_mask(unsigned irq);
 extern volatile uint32_t g_spurious_irq7, g_spurious_irq15;

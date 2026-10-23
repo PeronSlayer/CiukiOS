@@ -29,6 +29,7 @@ int ciuki_devices(struct ciuki_devices_info *d){d->count=0;return 0;}
 int ciuki_display_query(struct ciuki_display_info *d){d->vbe_version=0x200;return 0;}
 int ciuki_net_status(struct ciuki_net_state *s){s->present=0;return 0;}
 int ciuki_power(uint32_t action){assert(action==CIUKI_POWER_REBOOT||action==CIUKI_POWER_OFF);power_calls++;return 0;}
+int ciuki_power_status(struct ciuki_power_status *s){s->version=CIUKI_POWER_VERSION;s->size=sizeof(*s);s->shutdown_requests=5;return 0;}
 int ciuki_proc_list(void *b,uint32_t cap){assert(cap==sizeof(struct ciuki_proc_system));((struct ciuki_proc_system *)b)->usable_pages=32768;return 0;}
 int ciuki_devctl(int fd,uint32_t op,void *b,uint32_t cap){
     (void)fd;(void)cap;
@@ -76,7 +77,9 @@ void native_tests(const uint32_t *portrait)
     struct st_volume v[26];int count=h.volumes(NULL,v,26);assert(count==4);int found=0;for(int i=0;i<count;i++)if(v[i].letter=='F'){assert(v[i].usb&&v[i].writable);found=1;}assert(found);
     uint64_t mem=0;assert(!h.memory(NULL,&mem)&&mem==128*1024);
     uint32_t *pixels=calloc(ST_W*ST_H,4);assert(pixels);h.present(NULL,pixels,ST_W,ST_H);free(pixels);assert(presents==1);
-    assert(!h.reboot(NULL)&&power_calls==1);st_native_close();
+    assert(!h.reboot(NULL)&&power_calls==1);
+    struct ciuki_power_status ps={0};assert(!h.power_status(NULL,&ps)&&ps.shutdown_requests==5&&ps.size==sizeof(ps));
+    assert(!h.power_off(NULL)&&power_calls==2);st_native_close();
     const char *invalid[]={"{}","{\"x\":01}","{\"x\":1,}","{\"x\":true garbage}","{\"x\":\"unterminated}","{\"path\":\"/bad\",\"component\":\"system\",\"size\":18446744073709551615}"};
     for(unsigned i=0;i<sizeof(invalid)/sizeof(invalid[0]);i++){FILE *in=tmpfile();assert(in);fputs(invalid[i],in);rewind(in);assert(st_manifest_sizes(in,s)<0);fclose(in);}
     puts("PASS production VFS adapter, USB provenance, streaming logs, manifest sizes, generic inventories");

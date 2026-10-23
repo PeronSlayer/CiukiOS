@@ -23,6 +23,10 @@ struct fixture {
     const char *cd_inf, *usb_inf;
     unsigned reads, writes, enumerations, dialogs, frames;
     int refusal, no_nic, media, reboot, eject, cancel_on_copy;
+    /* ACPI power button: kernel request count, power-off calls/failure and
+     * how the scripted user answers Setup's power dialog. */
+    uint32_t power_requests; int power_off, power_fail, power_on_copy, power_confirm, power_moved, hold_power, hold_dialogs;
+    unsigned power_dialogs, copy_power_dialogs, power_kept; int no_error_frame;
     uint64_t now;
     char records[8192], written[1024], last_path[128];
 } f;
@@ -60,6 +64,11 @@ static void record(void *c,const char *line){(void)c;size_t k=strlen(f.records);
 static int eject(void *c){(void)c;f.eject++;return 0;}
 static int media(void *c){(void)c;return f.media;}
 static int reboot(void *c){(void)c;f.reboot++;return 0;}
+static int power_off(void *c){(void)c;f.power_off++;return f.power_fail?-EIO:0;}
+static int power_status(void *c,struct ciuki_power_status *s){
+    (void)c;assert(s->version==CIUKI_POWER_VERSION&&s->size==sizeof(*s));
+    s->provider=CIUKI_POWER_PROVIDER_ACPI;s->shutdown_requests=f.power_requests;return 0;
+}
 static char letter(void *c){(void)c;return 'E';}
 static void frame(const char *name){
     st_render(&a);char path[1024];snprintf(path,sizeof(path),"%s/%s.frame",folder,name);
@@ -71,13 +80,26 @@ static void present(void *c,const uint32_t *p,int w,int h){(void)c;(void)p;asser
 static int input(void *c,struct ciuki_input_event *out,unsigned cap){
     (void)c;assert(cap>=1);f.now+=60000000;
     if(ui.dialog.kind){
+        if(f.hold_dialogs)return 0;
+        if(ui.dialog.id==ST_DLG_POWER){
+            f.power_dialogs++;
+            if(f.hold_power)return 0;
+            if(a.executing){
+                assert(strstr(ui.dialog.text,"installation is incomplete")&&strstr(ui.dialog.text,"Exit Setup and power off?"));
+                if(!f.copy_power_dialogs++)frame("power-during-copy");
+                /* The warning defaults to continuing: confirming takes a move. */
+                if(f.power_confirm&&!f.power_moved){f.power_moved=1;*out=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=DU_KEY_LEFT,.value=1};return 1;}
+            }
+            *out=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=DU_KEY_ENTER,.value=1};return 1;
+        }
         if(ui.dialog.id==ST_DLG_ERROR){
-            f.dialogs++;
+            f.dialogs++;if(a.power_pending)f.power_kept++;
             if(a.error.attempt){assert(strstr(ui.dialog.text,"Attempt"));assert(ui.dialog.count==(a.error.retryable && a.error.attempt<5?2u:1u));}
-            frame(ui.dialog.count==2?"error-retry":"error-cancel");
+            if(!f.no_error_frame)frame(ui.dialog.count==2?"error-retry":"error-cancel");
         }
         *out=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=DU_KEY_ENTER,.value=1};return 1;
     }
+    if(f.power_on_copy && a.page==ST_PAGE_COPY && a.progress.phase==SETUP_PHASE_COPY){f.power_on_copy=0;f.power_requests++;return 0;}
     if(f.cancel_on_copy && a.page==ST_PAGE_COPY && a.progress.phase==SETUP_PHASE_COPY){
         f.cancel_on_copy=0;st_action(&a,ST_ID_CANCEL);
         /* Cancellation defaults to Continue: move to Cancel first. */
@@ -104,7 +126,7 @@ static void fixture(void){
     setup_fake.entered=entered;
 }
 static void init(void){
-    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.dest_letter=letter,.portrait=portrait};
+    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=letter,.portrait=portrait};
     du_init(&ui,pixels,ST_W,ST_H);ui.focused_window=1;assert(!st_init(&a,&ui,&h));
 }
 static void no_writes(void){assert(!setup_fake.execute_calls&&!setup_fake.mutations&&!f.writes);}
@@ -236,6 +258,52 @@ static void errors(void){
     fixture();init();summary();f.cancel_on_copy=1;setup_fake_progress(SETUP_PHASE_COPY,"SYSTEM/test",4096,8192,1000);setup_fake_progress(SETUP_PHASE_COPY,"SYSTEM/next",8192,16384,2000);setup_fake_progress(SETUP_PHASE_COPY,"SYSTEM/last",16384,16384,3000);tap(DU_KEY_F10);assert(a.page==ST_PAGE_FAILED&&a.failed_class==SETUP_ERR_CANCELLED);assert(setup_fake.cancels==1);st_free(&a);
     puts("PASS retry exhaustion, matching media, nonretryable errors, cancel");
 }
+static void copy_steps(unsigned n){for(unsigned i=0;i<n;i++)setup_fake_progress(SETUP_PHASE_COPY,"SYSTEM/test",4096*(i+1),4096*n,1000*(i+1));setup_fake_progress(SETUP_PHASE_COMPLETE,"Complete",4096*n,4096*n,1000*(n+1));}
+static void power_button(void){
+    /* Before the copy: Setup's own dialog; Resume keeps Setup, the default
+     * powers off through call 73 OFF. Nothing is written to the disk. */
+    fixture();init();assert(a.page==ST_PAGE_WELCOME);st_turn(&a);assert(!ui.dialog.kind);
+    f.power_requests=1;f.hold_power=1;f.now+=ST_POWER_POLL_NS;st_turn(&a);
+    assert(ui.dialog.kind&&ui.dialog.id==ST_DLG_POWER&&!strcmp(ui.dialog.title,"Exit Setup and power off?"));
+    assert(strstr(ui.dialog.text,"Nothing has been written to the disk"));frame("power-before-copy");
+    assert(strstr(f.records,"[setup] power button request=1 page=welcome"));
+    tap(DU_KEY_ESC);assert(!ui.dialog.kind&&!f.power_off&&!a.quit&&strstr(f.records,"power button declined"));
+    for(unsigned i=0;i<5;i++){f.now+=ST_POWER_POLL_NS;st_turn(&a);}assert(!ui.dialog.kind); /* one request, one dialog */
+    f.power_requests=2;f.now+=ST_POWER_POLL_NS;st_turn(&a);assert(ui.dialog.id==ST_DLG_POWER);
+    tap(DU_KEY_ENTER);assert(f.power_off==1&&a.quit&&a.power_requested&&strstr(f.records,"[setup] power off source=button page=welcome"));
+    no_writes();st_free(&a);
+
+    /* Another dialog is never replaced: the request waits for it. */
+    fixture();init();tap(0x3d);assert(ui.dialog.id==ST_DLG_EXIT);
+    f.power_requests=7;f.hold_dialogs=1;f.now+=ST_POWER_POLL_NS;st_turn(&a);assert(ui.dialog.id==ST_DLG_EXIT&&a.power_pending);
+    tap(DU_KEY_ESC);f.now+=ST_POWER_POLL_NS;st_turn(&a);assert(ui.dialog.id==ST_DLG_POWER&&!a.power_pending);
+    f.power_fail=1;tap(DU_KEY_ENTER);assert(f.power_off==1&&!a.quit&&ui.dialog.kind&&strstr(ui.dialog.text,"Shut down is unavailable"));
+    no_writes();st_free(&a);
+
+    /* During the copy: an incomplete-installation warning that defaults to
+     * continuing. Enter keeps installing. */
+    fixture();init();summary();copy_steps(12);f.power_on_copy=1;
+    tap(DU_KEY_F10);assert(f.copy_power_dialogs==1&&!f.power_off&&a.page==ST_PAGE_RESTART&&setup_fake.execute_calls==1&&!setup_fake.cancels);
+    assert(strstr(f.records,"page=copy")&&strstr(f.records,"status=complete"));st_free(&a);
+    /* Explicit confirmation cancels libsetup at its next boundary, then powers off. */
+    fixture();init();summary();copy_steps(12);f.power_on_copy=1;f.power_confirm=1;
+    tap(DU_KEY_F10);assert(f.copy_power_dialogs==2&&f.power_moved&&setup_fake.cancels==1&&a.failed_class==SETUP_ERR_CANCELLED);
+    assert(f.power_off==1&&a.quit&&strstr(f.records,"confirmed during copy")&&strstr(f.records,"power off source=button page=failed"));st_free(&a);
+    /* Unanswered when the copy ends: asked again with the post-copy text,
+     * and the restart countdown waits for the answer. */
+    fixture();init();summary();copy_steps(12);f.power_on_copy=1;f.hold_power=1;
+    tap(DU_KEY_F10);assert(a.page==ST_PAGE_RESTART&&f.copy_power_dialogs==0&&f.power_dialogs);
+    st_turn(&a);assert(ui.dialog.id==ST_DLG_POWER&&strstr(ui.dialog.text,"If Setup did not complete"));
+    f.now+=61000000000ull;st_turn(&a);assert(!f.reboot&&!f.eject&&ui.dialog.id==ST_DLG_POWER);
+    tap(DU_KEY_ENTER);assert(f.power_off==1&&a.quit&&!f.reboot);st_free(&a);
+    /* A copy error takes the dialog slot; the power request is kept and
+     * asked again afterwards, never lost. */
+    fixture();init();summary();for(unsigned i=0;i<8;i++)setup_fake_progress(SETUP_PHASE_COPY,"SYSTEM/test",4096*(i+1),65536,1000*(i+1));
+    setup_fake_error(SETUP_ERR_SOURCE_READ,1,true);copy_steps(4);f.power_on_copy=1;f.hold_power=1;f.no_error_frame=1;
+    tap(DU_KEY_F10);assert(f.power_kept==1&&setup_fake.retries==1&&a.page==ST_PAGE_RESTART&&!f.power_off);
+    st_turn(&a);assert(ui.dialog.id==ST_DLG_POWER);tap(DU_KEY_ESC);assert(!ui.dialog.kind&&!f.power_off);st_free(&a);
+    puts("PASS power button: Setup dialog, call-73 power off before the copy, incomplete-copy warning with explicit confirmation, no dialog replacement (a copy error keeps the request), restart countdown pause");
+}
 static void memory_failures(void){
     for(unsigned failure=1;failure<=4;failure++) {
         fixture();fail_allocation=failure;allocation=0;init();fail_allocation=0;
@@ -258,4 +326,4 @@ static void unattended(void){
     f.usb_inf=without_erase;f.disks[0].part_count=0;f.disks[0].occupied=1;init();assert(a.page==ST_PAGE_STATUS&&!strcmp(a.status.reason,SETUP_ST_CONSENT));assert(!setup_fake.execute_calls);st_free(&a);
     puts("PASS CD precedence, unattended completion/status, USB-only rescue");
 }
-int main(int argc,char **argv){setvbuf(stdout,NULL,_IOLBF,0);assert(argc==3);folder=argv[2];FILE *fp=fopen(argv[1],"rb");assert(fp);assert(fread(portrait,4,256*256,fp)==256*256);fclose(fp);parser();renders();interactive();errors();memory_failures();unattended();native_tests(portrait);return 0;}
+int main(int argc,char **argv){setvbuf(stdout,NULL,_IOLBF,0);assert(argc==3);folder=argv[2];FILE *fp=fopen(argv[1],"rb");assert(fp);assert(fread(portrait,4,256*256,fp)==256*256);fclose(fp);parser();renders();interactive();errors();power_button();memory_failures();unattended();native_tests(portrait);return 0;}

@@ -96,7 +96,8 @@ static void quarantine(const char *r) { s3_fault(&state,r); } \
 static bool summary(bool *r,bool *u,const char **why) { return s3_summary(&state,r,u,why); } \
 static void snapshot(struct ciuki_accel_info *i) { s3_snapshot(&state,i); } \
 static void record(void) { s3_record(&state); } \
-const struct display_driver symbol = { .id=ident,.name=label,.matches=table, \
+const struct display_driver symbol = { .id=ident,.attempt_files={"C:/system/settings/accel.cfg"}, \
+    .name=label,.matches=table, \
     .match_count=ARRAY_SIZE(table),.framebuffer_bar=0,.probe=probe,.eligible=eligible, \
     .start=start,.fallback=fallback,.attempt_begin=begin,.attempt_end=end, \
     .attempt_failed=failed,.check_begin=check,.quarantine=quarantine,.summary=summary, \

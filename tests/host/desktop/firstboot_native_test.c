@@ -2,11 +2,22 @@
 #include "../../../apps/desktop/firstboot_native.c"
 #include <assert.h>
 static unsigned synced,fail_sync,net_calls,audio_calls,accel_caps=1;
+static const char *accel_reason="active";
 static int entropy_pending,network_pending;
 int __real_fsync(int);
 int __wrap_fsync(int fd){synced++;if(fail_sync){errno=EIO;return -1;}return __real_fsync(fd);}
-int ciuki_display_accel_info(int fd,uint32_t generation,struct ciuki_accel_info *out)
-{assert(fd==61&&generation==7);out->capabilities=accel_caps;return 0;}
+/* The registry's engine record, as the kernel fills it: a bound driver
+ * (never named by first boot) with its readiness and reason. */
+int ciuki_display_engine_info(int fd,uint32_t generation,struct ciuki_display_engine_info *out)
+{
+    assert(fd==61&&generation==7&&out->version==CIUKI_DISPLAY_ENGINE_VERSION&&out->size==sizeof(*out));
+    memset(out,0,sizeof(*out));out->version=CIUKI_DISPLAY_ENGINE_VERSION;out->size=sizeof(*out);
+    out->kind=accel_caps?CIUKI_ENGINE_NATIVE:CIUKI_ENGINE_SOFTWARE;out->ready=accel_caps!=0;out->capabilities=accel_caps;
+    snprintf(out->driver_id,sizeof(out->driver_id),"trident");out->pci_vendor=0x1023;out->pci_device=0x8820;
+    snprintf(out->reason,sizeof(out->reason),"%s",accel_reason);return 0;
+}
+static int read_file(const char *path,char *out,size_t cap)
+{FILE *f=fopen(path,"rb");if(!f)return -1;size_t n=fread(out,1,cap-1,f);out[n]=0;fclose(f);return (int)n;}
 int ciuki_net_status(struct ciuki_net_state *out)
 {net_calls++;out->present=1;out->address_configured=!network_pending;out->ipv4[0]=192;out->ipv4[1]=0;out->ipv4[2]=2;out->ipv4[3]=5;return 0;}
 int ciuki_devctl(int fd,uint32_t op,void *out,uint32_t bytes)
@@ -34,9 +45,25 @@ int main(void)
     fail_sync=1;assert(append(&n,"\nstep=sound result=ok\n",22)==-EIO);fail_sync=0;
     char text[192];assert(!service(&n,FB_ACCEL,1,text,sizeof(text))&&strstr(text,"is on"));
     accel_caps=0;assert(service(&n,FB_ACCEL,1,text,sizeof(text))==1&&strstr(text,"Software"));
-    put(FB_ROOT "/system/settings/accel.cfg","accel=attempt\n",14);accel_caps=1;
+    /* DM8: the registry's retained-attempt status, not a marker file, makes
+     * this boot software; a leftover shared marker alone changes nothing. */
+    accel_caps=0;accel_reason="attempt_retained";
     assert(service(&n,FB_ACCEL,1,text,sizeof(text))==1&&strstr(text,"Software"));
-    assert(!cp_accel_retry_at(FB_ROOT "/system/settings/accel.cfg"));struct stat st;assert(!stat(FB_ROOT "/system/settings/accel.cfg",&st)&&st.st_size==0);
+    put(FB_ROOT "/system/settings/accel.cfg","accel=attempt\n",14);accel_caps=1;accel_reason="active";
+    assert(!service(&n,FB_ACCEL,1,text,sizeof(text))&&strstr(text,"is on"));
+    /* Retry: one request keyed by the engine record, for any bound driver. */
+    struct ciuki_display_engine_info e={.version=CIUKI_DISPLAY_ENGINE_VERSION,.size=sizeof(e),.pci_vendor=0x5333,.pci_device=0x8c2e};
+    char request[64];const char *retry=FB_ROOT "/system/settings/accel-retry.cfg";
+    snprintf(e.driver_id,sizeof(e.driver_id),"s3savage");
+    assert(!cp_accel_retry_request(retry,&e)&&read_file(retry,request,sizeof(request))>0&&!strcmp(request,"driver=s3savage\npci=5333:8c2e\n"));
+    snprintf(e.driver_id,sizeof(e.driver_id),"trident");e.pci_vendor=0x1023;e.pci_device=0x8820;
+    assert(!cp_accel_retry_request(retry,&e)&&read_file(retry,request,sizeof(request))>0&&!strcmp(request,"driver=trident\npci=1023:8820\n"));
+    unsigned before=synced;snprintf(e.driver_id,sizeof(e.driver_id),"swdib");e.pci_vendor=0;
+    assert(cp_accel_retry_request(retry,&e)==-ENODEV&&synced==before&&read_file(retry,request,sizeof(request))>0&&strstr(request,"trident"));
+    e.pci_vendor=0x1023;snprintf(e.driver_id,sizeof(e.driver_id),"Bad/id");assert(cp_accel_retry_request(retry,&e)==-EINVAL);
+    memset(e.driver_id,'a',sizeof(e.driver_id));assert(cp_accel_retry_request(retry,&e)==-EINVAL);
+    e.version=2;snprintf(e.driver_id,sizeof(e.driver_id),"trident");assert(cp_accel_retry_request(retry,&e)==-EINVAL);
+    e.version=CIUKI_DISPLAY_ENGINE_VERSION;fail_sync=1;assert(cp_accel_retry_request(retry,&e)==-EIO);fail_sync=0;
     assert(!service(&n,FB_NETWORK,1,text,sizeof(text))&&strstr(text,"192.0.2.5"));
     network_pending=1;assert(service(&n,FB_NETWORK,1,text,sizeof(text))==-EAGAIN&&net_calls==2);
     entropy_pending=1;assert(service(&n,FB_ENTROPY,1,text,sizeof(text))==-EAGAIN&&strstr(text,"HTTPS"));entropy_pending=0;
@@ -49,6 +76,6 @@ int main(void)
     struct sound_scheme scheme;sound_defaults(&scheme);char path[160],full[512];assert(!sound_path(&scheme,SOUND_STARTUP,path,sizeof(path)));snprintf(full,sizeof(full),"%s%s",FB_ROOT,path);put(full,wav,sizeof(wav));put(FB_ROOT "/dev/audio","",0);
     int r=service(&n,FB_SOUND,1,text,sizeof(text));for(unsigned i=0;i<10&&r==-EAGAIN;i++)r=service(&n,FB_SOUND,0,text,sizeof(text));assert(!r&&audio_calls);cancel_service(&n,FB_SOUND);assert(n.audio==-1&&!n.wav);
     assert(!service(&n,FB_GAMES,1,text,sizeof(text))&&strstr(text,"3 bundled"));
-    puts("PASS native firstboot: fsync failures, marker outcomes/retry, real WAV/audio, network, entropy, RTC, games");
+    puts("PASS native firstboot: fsync failures, registry status/keyed retry request, real WAV/audio, network, entropy, RTC, games");
     return 0;
 }

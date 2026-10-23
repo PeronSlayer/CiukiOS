@@ -107,12 +107,15 @@ static int service(void *ctx,unsigned step,int start,char *text,size_t cap)
 {
     struct native_fb *n=ctx;
     if(step==FB_ACCEL){
-        struct ciuki_accel_info a={0};
-        if(ciuki_display_accel_info(n->desktop->display,n->desktop->accel_generation,&a))return -errno;
-        /* A leftover attempt from an interrupted boot is software mode too.
-         * Do not write or interpret driver-specific register status here. */
-        struct stat marker;int pending=!stat(FB_ROOT "/system/settings/accel.cfg",&marker)&&marker.st_size>0;
-        return fb_accel_outcome(a.capabilities,a.quarantined,pending,text,cap);
+        /* The registry's status (DM8) for whichever driver is bound: a
+         * retained attempt from an interrupted boot is software mode too.
+         * No marker file or driver-specific register status is read here. */
+        struct ciuki_display_engine_info e={.version=CIUKI_DISPLAY_ENGINE_VERSION,.size=sizeof(e)};
+        int r=ciuki_display_engine_info(n->desktop->display,n->desktop->accel_generation,&e);
+        if(r<0)return r;
+        int retained=!strncmp(e.reason,"attempt_retained",sizeof(e.reason));
+        unsigned native=e.kind==CIUKI_ENGINE_NATIVE&&e.ready?e.capabilities:0;
+        return fb_accel_outcome(native,e.quarantined,retained,text,cap);
     }
     if(step==FB_SOUND)return sound(n,start,text,cap);
     if(step==FB_NETWORK){

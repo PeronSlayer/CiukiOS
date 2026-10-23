@@ -23,6 +23,7 @@ struct display_selftest_result {
     int first, error;
     bool restored;
 };
+#define DISPLAY_ATTEMPT_FILES 2
 struct display_driver {
     const char *id, *name;
     const struct display_match *matches;
@@ -66,6 +67,12 @@ struct display_driver {
     /* Optional read-only per-device BAR selection. The registry still proves
      * the full active framebuffer lease and extent; this hook grants nothing. */
     unsigned (*framebuffer_bar_for)(const struct pci_func *);
+    /* Declarative (DM8): every durable attempt file the driver itself reads
+     * at attempt_begin, besides the registry keyed marker, as literal
+     * C:/system/settings paths; one "%04x" expands to the PCI device id.
+     * The driver keeps its own I/O. The registry only stats these for its
+     * retained-attempt status and truncates them for an explicit retry. */
+    const char *attempt_files[DISPLAY_ATTEMPT_FILES];
 };
 #define DISPLAY_CHECK_CURSOR (1u << 4)
 /* Selection is read-only, before any activation. Ambiguous PCI ownership
@@ -101,4 +108,15 @@ bool display_driver_summary(bool *, bool *, const char **);
 int display_attempt_marker(struct vfs *, const char *id, uint16_t vendor,
     uint16_t device, const char *legacy_path, bool clear, bool *previous,
     const char *diagnostic);
+/* Registry status before every activation attempt (DM8), worker context only.
+ * The attempt files of a bound driver are its keyed marker plus its declared
+ * attempt_files. A user retry request (DISPLAY_RETRY_PATH, exactly
+ * "driver=<id>\npci=<vvvv>:<dddd>\n", lowercase hex) keyed to this driver
+ * and PCI function first truncates every nonempty attempt file, then is
+ * consumed; a request for another key is consumed without clearing anything.
+ * *retained then reports any nonempty attempt file. Errors fail closed. */
+#define DISPLAY_ATTEMPT_RETAINED "attempt_retained"
+#define DISPLAY_RETRY_PATH "C:/system/settings/accel-retry.cfg"
+int display_attempt_prepare(struct vfs *, const struct display_driver *,
+    const struct pci_func *, bool *retained);
 #endif

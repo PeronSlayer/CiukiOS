@@ -288,11 +288,15 @@ static void accel_marker_run(void)
     bool clear = accel_marker_request == ACCEL_MARKER_CLEAR;
     accel_marker_request = ACCEL_MARKER_IDLE;
     if (!clear) {
-        /* VFS/ATA locks must never nest under the presenter mutex. */
-        if (!adapter->attempt_begin || adapter->attempt_begin(accel_vfs)) {
+        /* VFS/ATA locks must never nest under the presenter mutex. The
+         * registry's keyed status (DM8, including an explicit user retry)
+         * comes first: a retained attempt never reaches the driver. */
+        bool retained = false;
+        int status = display_attempt_prepare(accel_vfs, adapter, display_driver_owner(), &retained);
+        if (status || retained || !adapter->attempt_begin || adapter->attempt_begin(accel_vfs)) {
             accel_queued = false;
             accel_blocked = true;
-            display_driver_software("marker_unavailable");
+            display_driver_software(!status && retained ? DISPLAY_ATTEMPT_RETAINED : "marker_unavailable");
             return;
         }
         accel_marker_request = ACCEL_MARKER_INIT;

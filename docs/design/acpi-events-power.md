@@ -93,8 +93,7 @@ collection are released on refusal), activates once owned and releases on
 `fw_power_stop`; an uncertain rollback keeps the reservation, so APM can never
 take over after a partial ACPI ownership. APM is additionally excluded by any
 RSDP and connects only on pre-ACPI machines once the global DMA/time owner
-installs `power_source_set_platform` (still absent; APM reports
-`connected=0 reason=platform_quiesce_owner`).
+installs `power_source_set_platform` (see "APM suspend-service owner" below).
 
 The kernel ACPI backend (`acpi/platform.c`) wires the reservation and
 publication through four optional `fw_ops` hooks; read-only inventory and
@@ -121,3 +120,34 @@ suspend services (`quiesce_dma`, `resume`). QUERY's CAN_OFF is
 `power_source_can_off`: an active provider whose cached qualification (for
 ACPI, an evaluated `\_S5`) allows Off. The Control Panel Power page reads the
 cached record once per second while it is open (no firmware call).
+
+## APM suspend-service owner (lead decision, 2026-10-23)
+
+`core/power_platform.c` installs `power_source_set_platform` during boot,
+after the firmware inventory and floppy and before `apm_start`, only when
+the loader found no RSDP and the boot is neither safe mode nor a hardware
+check. ACPI never uses these services, so an ACPI machine keeps them absent
+and APM excluded; once APM holds the reservation a second installation is
+refused (EBUSY). APM therefore connects on pre-ACPI machines.
+
+- `quiesce_dma` runs call 73's native stop path (`power_devices_quiesce`:
+  network including NDIS external netifs, audio, USB) on the owner's
+  `power-quiesce` worker, so the APM worker keeps servicing firmware every
+  10 ms. It answers EAGAIN while the stop runs, the stop's result once done,
+  and ETIMEDOUT after the deadline. An expired request still starts the stop;
+  its own failure path keeps uncertain claims in quarantine and nothing
+  retires another caller's I/O. The stop is the S5 barrier, terminal for the
+  boot: a later critical suspend gets the first result.
+- `resume` restores the time base before workloads continue. After a resume
+  notification (APM events 3, 4 and 11) it repeats the 8259A ICW sequence
+  with the current masks and reprograms PIT channel 0 to 1000 Hz, as Linux
+  v6.12 `apm_32.c` (`reinit_timer`) and `i8259A_resume` do; for every
+  notification, including 7 (update time), it reseeds the realtime clock
+  from the RTC when boot qualified the RTC as the clock source.
+- Native devices stopped by `quiesce_dma` stay stopped, proved idle or
+  quarantined, until the next boot: no driver restart path exists yet.
+  Restarting network, audio and USB after a critical suspend is open work.
+
+Ordinary suspend requests stay rejected; soft-off remains call 73's.
+Evidence: `tests/host/power_platform_test.c` (production APM provider,
+worker and arbiter with the owner).

@@ -174,6 +174,13 @@ int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool 
 #undef eligible
 #include "../../src/kernel/drivers/video/batch.c"
 #include "../../src/kernel/drivers/fbdev.c"
+#ifndef DISPLAY_ATTEMPT_FIXTURE_CUSTOM
+/* The registry's keyed attempt status (DM8) and user retry are covered with
+ * production attempt.c in display_attempt_test.c; here nothing is retained. */
+int display_attempt_prepare(struct vfs *vfs, const struct display_driver *d,
+    const struct pci_func *p, bool *retained)
+{ (void)vfs; (void)d; (void)p; *retained = false; return 0; }
+#endif
 #ifndef DISPLAY_DRIVER_FIXTURE_REAL
 #include "display_driver_legacy_fixture.h"
 #endif

@@ -2,8 +2,11 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_JOYSTICK_H
 #define CIUKI_JOYSTICK_H
-#include <ciuki/abi.h>
+/* Kernel-private: no user ABI here, so dosvm_internal.h (which embeds
+ * struct joystick_virtual) stays usable by host tests that include the C
+ * library first. Units that need the ABI records include <ciuki/abi.h>. */
 #include <ciuki/registry.h>
+struct ciuki_joystick_control;
 struct joystick_route {
     uint32_t device, generation, second_device, second_generation, mode;
 };

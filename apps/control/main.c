@@ -409,7 +409,12 @@ static int generic_engine_query(void *ctx,struct ciuki_display_engine_info *info
     *info=m->generic_engine; return 0;
 }
 #include "accel_retry.h"
-static int accel_retry(void *ctx){(void)ctx;return cp_accel_retry_at("/system/settings/accel.cfg");}
+static int accel_retry(void *ctx)
+{
+    struct cp_main *m=ctx;
+    if (!m->engine_ok || m->generic_engine.version!=CIUKI_DISPLAY_ENGINE_VERSION) return -EAGAIN;
+    return cp_accel_retry_request(CP_ACCEL_RETRY_PATH,&m->generic_engine);
+}
 static int engine_query(void *ctx, struct ciuki_accel_info *info)
 {
     struct cp_main *m=ctx;

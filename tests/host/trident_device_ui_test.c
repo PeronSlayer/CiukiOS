@@ -1,6 +1,7 @@
 /* Production Device Manager Properties and Control Panel 2D identity.
  * SPDX-License-Identifier: MIT */
 #include <assert.h>
+#include <stdlib.h>
 #include "../../apps/control/app.c"
 static char message[DU_DIALOG_TEXT];
 static struct cp_app app;
@@ -18,6 +19,23 @@ const char *du_icon_name(const char *object) { return object; }
 struct du_widget *du_get(struct du_ui *u,int id) { assert(u==&ui && id==974); return NULL; }
 void du_set_text(struct du_widget *w,const char *s) { (void)w; (void)s; assert(!"unexpected widget"); }
 void du_invalidate(struct du_ui *u,struct du_rect r) { (void)u; (void)r; assert(!"unexpected invalidate"); }
+/* The rest of the Control Panel links against libdeskui; this test drives only
+ * Properties and the engine line, so any other widget, dialog, timer or text
+ * area call is a failure (the settings and sound tables are linked for real). */
+#define UNEXPECTED(what) do { assert(!"unexpected " what); abort(); } while (0)
+struct du_widget *du_add(struct du_ui *u,enum du_kind k,int id,struct du_rect r,const char *t)
+{ (void)u; (void)k; (void)id; (void)r; (void)t; UNEXPECTED("du_add"); }
+void du_invalidate_widget(struct du_ui *u,int id) { (void)u; (void)id; UNEXPECTED("du_invalidate_widget"); }
+void du_release(struct du_ui *u) { (void)u; UNEXPECTED("du_release"); }
+void du_list_ensure(struct du_widget *w,unsigned index) { (void)w; (void)index; UNEXPECTED("du_list_ensure"); }
+void du_dialog_close(struct du_ui *u) { (void)u; UNEXPECTED("du_dialog_close"); }
+int du_dialog_id(const struct du_ui *u) { (void)u; UNEXPECTED("du_dialog_id"); }
+int du_timer_start(struct du_ui *u,int id,uint64_t ns,int repeat) { (void)u; (void)id; (void)ns; (void)repeat; UNEXPECTED("du_timer_start"); }
+void du_timer_stop(struct du_ui *u,int id) { (void)u; (void)id; UNEXPECTED("du_timer_stop"); }
+int du_theme_use(struct du_ui *u,const char *name) { (void)u; (void)name; UNEXPECTED("du_theme_use"); }
+int du_ta_init(struct du_textarea *t,size_t cap) { (void)t; (void)cap; UNEXPECTED("du_ta_init"); }
+int du_ta_set_text(struct du_textarea *t,const char *s,size_t n) { (void)t; (void)s; (void)n; UNEXPECTED("du_ta_set_text"); }
+const char *desk_theme_preference(const char *name) { (void)name; UNEXPECTED("desk_theme_preference"); }
 static int inventory_query(void *ctx,struct ciuki_devices_info *out)
 { (void)ctx; *out=app.devices; return 0; }
 int main(void)

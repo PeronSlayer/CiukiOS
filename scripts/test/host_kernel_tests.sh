@@ -260,6 +260,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/apm_platform_test.c" \
     "$root/src/kernel/core/apm.c" -o "$out/apm_platform_test"
 "$out/apm_platform_test"
+# APM suspend-service owner: call-73 stop path as quiesce_dma, PIC/PIT/RTC resume.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_platform_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/power_platform_test"
+"$out/power_platform_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/storage_power_test.c" -o "$out/storage_power_test"
 "$out/storage_power_test"

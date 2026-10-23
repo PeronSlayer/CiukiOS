@@ -216,6 +216,7 @@ static int eject(void *c){(void)c;struct ciuki_media_cd_tray t={.version=CIUKI_M
 static int media_present(void *c){(void)c;struct ciuki_media_cd_state s={.version=CIUKI_MEDIA_CD_VERSION,.size=sizeof(s),.slot=N.cd_slot};if(N.media<0||ciuki_devctl(N.media,MEDIA_CD_STATE,&s,sizeof(s)))return -1;N.cd_generation=s.generation;return s.state==CIUKI_CD_NO_MEDIUM?0:1;}
 static int reboot(void *c){(void)c;return ciuki_power(CIUKI_POWER_REBOOT);}
 static int power_off(void *c){(void)c;return ciuki_power(CIUKI_POWER_OFF);}
+static int power_status(void *c,struct ciuki_power_status *s){(void)c;return ciuki_power_status(s)?-errno:0;}
 static char dest_letter(void *c){(void)c;if(disk_enumerate(&N.disks))return 0;return N.disks.disk[0].volumes?N.disks.disk[0].volume[0].letter:0;}
 int st_native_open(struct st_host *h,int display_fd,int input_fd)
 {
@@ -233,7 +234,7 @@ int st_native_open(struct st_host *h,int display_fd,int input_fd)
     if(r||length!=sizeof(N.portrait)){st_native_close();return r?r:-EINVAL;}
     *h=(struct st_host){.monotonic=monotonic,.realtime=realtime,.input=input,.present=present,.idle=idle,
         .devices=devices,.memory=memory,.display=display,.framebuffer=framebuffer,.network=network,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=catalogue,.release=release,
-        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.dest_letter=dest_letter,.portrait=N.portrait};
+        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=dest_letter,.portrait=N.portrait};
     return 0;
 }
 void st_native_close(void){if(N.pixels){munmap(N.pixels,N.mapped);N.pixels=NULL;}if(N.surface>=0){close(N.surface);N.surface=-1;}if(N.media>=0){close(N.media);N.media=-1;}}

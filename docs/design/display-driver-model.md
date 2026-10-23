@@ -128,6 +128,26 @@ keyed by driver id and PCI id. A crash during one driver's engine bring-up
 disables that driver on the next boot, with a reason, and the software engine
 takes over.
 
+DM8 amendment (lead decision, 2026-10-23): retry and the first-boot check
+work for every registered driver. Each `struct display_driver` declares in
+`attempt_files` every durable attempt file its sources read besides the
+registry keyed marker (the shared `accel.cfg` only for drivers that honour
+it; one `%04x` expands to the PCI device id). Before every activation the
+registry (`display_attempt_prepare`, worker context) first consumes a user
+retry request, `C:/system/settings/accel-retry.cfg` with exactly
+`driver=<id>\npci=<vvvv>:<dddd>\n`: for the bound key it truncates the keyed
+marker and every nonempty declared file, then the request; another key or
+a malformed request is consumed without clearing. A nonempty attempt file
+then blocks the attempt before the driver's own hook with the registry
+reason `attempt_retained`, which outranks the driver's reason in the engine
+record. Control Panel "Retry acceleration after restart" writes that
+request from the engine record (no driver path in applications); first
+boot reports software mode from the engine record's readiness and
+`attempt_retained`, never from a marker file. Host evidence:
+`display_attempt_test.c` (Savage and Trident declarations, storage cuts),
+`display_driver_test.c` (integrated status), and
+`test_display_driver_model.py` `test_attempt_files_cover_every_driver`.
+
 **[DM9] Hardware check.** One generic test covers every bound driver. Each
 advertised command runs on a saved screen block, and the read-back is compared
 with the software engine. The test covers fill, copy in both overlap
@@ -167,6 +187,15 @@ neomagic and via. The generic code covers:
 
 Documentation describes "native 2D drivers" and lists the families in one
 table in this file.
+
+Scope amendment (lead decision, 2026-10-23): the check covers generic
+*display* code only. Audio (`ac97.h`, `audio_backend.h`), ACPI/APM power
+(the Control Panel Power page) and non-display device records (audio owners,
+ATA chipset families) legitimately name chip vendors. The test exempts the
+two audio headers as whole files and the non-display lines of mixed files
+(`devices.c`, `apps/control/app.c`) as exact lines; it also fails when an
+exemption no longer matches the source. Display generic code stays free of
+driver names.
 
 **[DM13] Scope boundaries.**
 - **DOS VM monitor:** `src/vm` keeps its own native GPU session files. They are reviewed after the unified-DOS work (f3-63) merges.

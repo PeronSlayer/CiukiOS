@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_JOYSTICK_SETTINGS_H
 #define CIUKI_JOYSTICK_SETTINGS_H
+#include <ciuki/abi.h>
 #include <ciuki/joystick.h>
 #define JOY_SETTINGS_CONTROLLERS CIUKI_JOYSTICK_LAST
 #define JOY_SETTINGS_GAMES CIUKI_DOSVM_GAME_COUNT

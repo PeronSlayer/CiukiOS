@@ -775,3 +775,22 @@ the Setup token transformation. Loader bytes come from offset 512 of
 `D:/CIUKBOOT.IMG`. Shared configuration writers accept a destination prefix;
 IPX/lobby persistence remains deferred. The durable log ends at `seal`;
 post-publication completion stays in memory to preserve clean-bit ordering.
+
+## Setup power button (lead decision, 2026-10-23)
+
+With no desktop, Setup observes the kernel's coalesced ACPI power-button
+request itself: it reads call 73 STATUS (`shutdown_requests`, cached, no
+firmware call) every 200 ms, also from the copy loop's progress and cancel
+callbacks. A changed count opens Setup's own dialog "Exit Setup and power
+off?"; it never replaces another dialog (an error modal may be waiting on
+it) and waits until that one closes. Before the copy, the default button
+powers off through the call-73 OFF path that Setup's capability holds in
+Setup mode (storage flush, native device quiesce, the stopped latch, then
+ACPI S5 or APM Off); "Resume" keeps Setup. During the copy the dialog warns
+that the installation is incomplete and the disk not bootable, and defaults
+to "Continue installation": powering off needs an explicit choice, which
+cancels libsetup at its next safe boundary and then takes the same call-73
+path. A dialog still open when the copy ends is asked again with the
+post-copy text, and the Restart countdown waits while it is open. Records:
+`[setup] power button request=N page=P`, `declined`, `confirmed during
+copy; cancelling`, `[setup] power off source=button page=P`.

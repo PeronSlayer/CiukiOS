@@ -37,7 +37,10 @@ class TridentTests(unittest.TestCase):
         self.run_host('trident_driver_test.c')
 
     def test_device_manager_name(self):
-        self.run_host('trident_device_ui_test.c', ['apps/control/display.c'])
+        # app.c references the settings and sound tables; libdeskui is stubbed
+        # in the test so an unexpected widget/dialog call fails.
+        self.run_host('trident_device_ui_test.c', ['apps/control/display.c',
+            'apps/desktop/settings.c', 'apps/desktop/sounds.c'])
 
     def test_packaged_notices(self):
         spec = importlib.util.spec_from_file_location('tb_image_payloads', ROOT/'scripts/build_image.py')

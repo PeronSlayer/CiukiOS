@@ -269,7 +269,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
     return e ? e : hidden;
 }
 const struct display_driver mach64_driver={
-    .id="mach64",.name="ATI Mach64 / Rage Mobility",.matches=matches,
+    .id="mach64",.attempt_files={ATTEMPT_PATH},.name="ATI Mach64 / Rage Mobility",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,
     .attempt_failed=attempt_failed,.record=record,.quarantine=quarantine,.summary=summary,

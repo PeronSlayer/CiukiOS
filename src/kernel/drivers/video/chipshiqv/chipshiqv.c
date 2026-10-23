@@ -327,6 +327,7 @@ static void hiqv_record(void)
 }
 const struct display_driver chipshiqv_driver={
     .id="chipshiqv",.name="Chips & Technologies HiQV",.matches=hiqv_matches,
+    .attempt_files={"C:/system/settings/accel.cfg"},
     .match_count=ARRAY_SIZE(hiqv_matches),.framebuffer_bar=0,.probe=hiqv_probe,.eligible=hiqv_eligible,
     .start=hiqv_start,.fallback=hiqv_fallback,.attempt_begin=hiqv_attempt_begin,.attempt_end=hiqv_attempt_end,
     .attempt_failed=hiqv_attempt_failed,.quarantine=hiqv_quarantine,.summary=hiqv_summary,

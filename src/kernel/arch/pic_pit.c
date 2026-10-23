@@ -99,6 +99,29 @@ void pit_init(void)
     pic_unmask(0);
 }
 
+/* After a firmware suspend/resume (APM): the BIOS may have reinitialized
+ * the 8259A pair or reprogrammed PIT channel 0 (Linux v6.12 apm_32.c
+ * reinit_timer and i8259A_resume do the same). Repeat the ICW sequence,
+ * restore the current masks (ICW1 clears the IMR) and the 1000 Hz rate. */
+void pic_pit_resume(void)
+{
+    uint32_t f = irq_save();
+    outb(0x20, 0x11); io_wait();
+    outb(0xA0, 0x11); io_wait();
+    outb(0x21, 0x20); io_wait();
+    outb(0xA1, 0x28); io_wait();
+    outb(0x21, 0x04); io_wait();
+    outb(0xA1, 0x02); io_wait();
+    outb(0x21, 0x01); io_wait();
+    outb(0xA1, 0x01); io_wait();
+    outb(0x21, mask_master);
+    outb(0xA1, mask_slave);
+    outb(0x43, 0x34);
+    outb(0x40, 1193 & 0xFF);
+    outb(0x40, 1193 >> 8);
+    irq_restore(f);
+}
+
 uint32_t ticks_lo(void) { return (uint32_t)g_ticks; }
 
 static uint16_t pit_latch(void)

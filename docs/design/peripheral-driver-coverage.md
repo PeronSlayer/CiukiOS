@@ -1252,7 +1252,10 @@ interface before its ownership writes, call 73 STATUS reads only
 `power_source_status` (ACPI record, or APM facts while APM holds the
 reservation), and the orderly-shutdown proof for both ACPI S5 and APM Off is
 call 73's stopped latch. The platform service keeps only DMA stop and
-device/time resume; it is still unassigned, so APM does not connect yet.
+device/time resume. Its owner is `core/power_platform.c` (lead decision
+2026-10-23; `acpi-events-power.md`, "APM suspend-service owner"), so APM
+connects on pre-ACPI machines; devices stopped for a critical suspend stay
+stopped until the next boot.
 
 [Linux v6.12 `arch/x86/kernel/apm_32.c`](https://github.com/torvalds/linux/blob/v6.12/arch/x86/kernel/apm_32.c)
 is reference only; no donor code, notices or library objects are imported.

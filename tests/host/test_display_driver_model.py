@@ -72,6 +72,53 @@ class DisplayDriverTests(unittest.TestCase):
         output.write_text(json.dumps(entries, indent=2)+'\n')
         print(f'Integrated nominations: {len(order)} descriptors, {len(owners)} exclusive PCI pairs, {len(sources)} sources PASS')
 
+    def test_attempt_files_cover_every_driver(self):
+        # DM8 (lead decision 2026-10-23): retry and the first-boot status work
+        # for every registered driver only if each declares every durable
+        # attempt file its sources read. Shared marker code counts for the
+        # drivers built on it.
+        shared = {'s3trio64': ['s3legacy'], 's3virge': ['s3legacy'],
+                  'i740': ['native.c'], 'i810': ['native.c']}
+        video = ROOT/'src/kernel/drivers/video'
+        registry = (video/'registry.c').read_text()
+        order = re.findall(r'&(\w+)', re.search(r'const drivers\[\]\s*=\s*\{(.*?)\};', registry, re.S)[1])
+        literal = re.compile(r'"(C:/system/settings/[^"]+\.cfg)"')
+        def texts(paths):
+            for path in paths:
+                for f in ([path] if path.is_file() else sorted(path.rglob('*'))):
+                    if f.suffix in ('.c', '.h'): yield f.read_text()
+        declared, groups = {}, {}
+        for source in sorted(video.rglob('*.c')):
+            text = subprocess.check_output(['clang', '--target=i686-unknown-elf', '-ffreestanding',
+                '-I', str(ROOT/'src/kernel/include'), '-E', '-P', str(source)], text=True)
+            for name, body in re.findall(r'const struct display_driver\s+(\w+)\s*=\s*\{(.*?)\};', text, re.S):
+                if name not in order: continue
+                files = re.search(r'\.attempt_files\s*=\s*\{([^}]*)\}', body)
+                declared[name] = re.findall(r'"([^"]*)"', files[1]) if files else []
+                folder = source.parent.name
+                key = tuple(sorted([folder, *shared.get(folder, [])]))
+                groups.setdefault(key, []).append(name)
+        self.assertEqual(set(declared), set(order))
+        for key, names in groups.items():
+            paths = [video/k for k in key]
+            sources = '\n'.join(texts(paths))
+            found = set(literal.findall(sources))
+            patterns = {d for n in names for d in declared[n]}
+            for pattern in patterns:
+                self.assertTrue(pattern.startswith('C:/system/settings/') and pattern.count('%') <= 1, pattern)
+                self.assertTrue(pattern.count('%') == pattern.count('%04x'), pattern)
+            def covered(path):
+                return any(re.fullmatch(re.escape(d).replace('%04x', '(?:[0-9a-f]{4}|%04x)'), path) for d in patterns)
+            missing = sorted(p for p in found if not covered(p))
+            self.assertEqual(missing, [], f'{names}: undeclared attempt files')
+            for pattern in patterns:
+                rx = re.escape(pattern).replace('%04x', '(?:[0-9a-f]{4}|%04x)')
+                self.assertTrue(any(re.fullmatch(rx, p) for p in found), f'{names}: stale {pattern}')
+            for name in names:
+                if not declared[name]:
+                    self.assertIn('display_attempt_marker(', sources, f'{name}: no attempt file and no keyed marker')
+        print(f'Attempt files: {len(order)} registered drivers, {sum(map(len, declared.values()))} declarations PASS')
+
     def run_host(self, sources, extra=(), wrapper=False, arguments=()):
         folder = ROOT / 'build/host'
         folder.mkdir(parents=True, exist_ok=True)

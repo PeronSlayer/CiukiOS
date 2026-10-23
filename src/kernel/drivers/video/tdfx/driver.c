@@ -315,7 +315,7 @@ static void record(void)
         engine.active && !engine.quarantined,engine.quarantined,engine.cpu_safe,engine.status,engine.reason);
 }
 const struct display_driver tdfx_driver={
-    .id="tdfx",.name="3dfx Voodoo3 / VSA-100",.matches=matches,
+    .id="tdfx",.attempt_files={"C:/system/settings/tdfx%04x.cfg"},.name="3dfx Voodoo3 / VSA-100",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=1,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,

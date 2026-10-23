@@ -68,7 +68,11 @@ static void *binding_reserve(uint32_t capacity)
 #define outb test_outb
 #define vmm_reserve_mmio binding_reserve
 #include "../../src/kernel/fs/vfs.h"
+/* fbdev_test.c supplies the registry status fixture (nothing retained);
+ * production status/retry is display_attempt_test.c. */
+#define display_attempt_prepare savage_unused_attempt_prepare
 #include "../../src/kernel/drivers/video/attempt.c"
+#undef display_attempt_prepare
 static void *sweep_alloc(size_t n) { return calloc(1,n); }
 static void sweep_free(void *p,size_t n) { (void)n; free(p); }
 #define fs_contig_alloc sweep_alloc

@@ -31,8 +31,19 @@ PRIVATE_DRIVERS=(
     'src/kernel/drivers/video/vmwaresvga/',
 )
 PRIVATE_DRIVER='src/kernel/drivers/video/s3savage/'
-# Audio identity is outside the graphics-driver policy. These exact lines are
-# allowed, not all occurrences of a chip substring or an entire generic file.
+# Scope (lead decision, 2026-10-23): DM12 covers generic DISPLAY code only.
+# Audio (AC97 and PCI audio backends), ACPI/APM power (the Control Panel Power
+# page) and the non-display device records legitimately name chip vendors.
+# Files whose whole subject is not display are exempt as files; files that mix
+# display with other subjects (the device inventory, the Control Panel shell)
+# exempt only the exact non-display lines listed in EXACT, so any display code
+# in them is still checked. Display generic code itself stays name-free.
+NON_DISPLAY_FILES=(
+    'src/kernel/include/ciuki/ac97.h',          # audio: AC97 controller quirks
+    'src/kernel/include/ciuki/audio_backend.h', # audio: PCI audio backends
+)
+# These exact lines are allowed, not all occurrences of a chip substring or an
+# entire generic file: declarative registration and non-display identity.
 EXACT={
     'src/kernel/drivers/video/registry.c': {
         'extern const struct display_driver mach64_driver; /* declarative registration */',
@@ -80,14 +91,24 @@ EXACT={
         '&intel2d_gen2_driver,',
         '&intel2d_gen3_driver,',
     },
-    'src/kernel/include/ciuki/ac97.h': {'bool sis, nvidia, sis_gate_changed;',
-        'bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;'},
-    'src/kernel/core/devices.c': {'{"ac97", "Intel ICH, SiS 7012 and nForce AC97; safe mode disables activation"},'},
+    'src/kernel/core/devices.c': {
+        # audio driver description
+        '{"ac97", "Intel ICH, SiS 7012 and nForce AC97; safe mode disables activation"},',
+        # audio and storage owners represented by their own records
+        '!strncmp(r->owner, "usb-", 4) || !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma") || equal(r->owner, "es137x") || equal(r->owner, "via82xx") || equal(r->owner, "ess1978") || equal(r->owner, "emu10k1") || equal(r->owner, "cmipci") || equal(r->owner, "ymfpci") || equal(r->owner, "trident") || equal(r->owner, "ali5451") || equal(r->owner, "sb16")) continue;',
+        # ATA chipset family names in the disk record
+        'static const char *const chips[] = {"firmware", "PIIX/ICH", "VIA", "SiS", "ALi", "NVIDIA",',
+    },
+    'apps/control/app.c': {
+        # Power page: the ACPI/APM provider label ("via" is the variable)
+        'const char *via=p.provider==CIUKI_POWER_PROVIDER_ACPI ? " (ACPI)" : p.provider==CIUKI_POWER_PROVIDER_APM ? " (APM 1.2)" : "";',
+        'p.ownership==CIUKI_POWER_QUARANTINED ? "Uncertain; claims retained" : "Pending",via,p.error);',
+    },
 }
 VENDORED=('sdk/win32/lz32/mspack/',)
 
 def violations(path,source):
-    if path.startswith(PRIVATE_DRIVERS) or path.startswith(VENDORED): return []
+    if path.startswith(PRIVATE_DRIVERS) or path.startswith(VENDORED) or path in NON_DISPLAY_FILES: return []
     # Comments are not policy or calls. Retain newlines for actionable locations.
     source=re.sub(r'/\*.*?\*/|//[^\n]*',lambda m:'\n'*m[0].count('\n'),source,flags=re.S)
     result=[]
@@ -120,5 +141,23 @@ class NamesTests(unittest.TestCase):
 
         self.assertTrue(violations('example.c','radeon2d_driver.start(fb,0);'))
         self.assertTrue(violations('example.c','cirrus_start(fb);'))
+
+    def test_non_display_scope(self):
+        # Lead decision 2026-10-23: only the listed non-display files are exempt
+        # as files; display headers and mixed files keep the check.
+        self.assertFalse(violations('src/kernel/include/ciuki/audio_backend.h','bool trident_match(void);'))
+        self.assertTrue(violations('src/kernel/include/ciuki/display.h','bool trident_match(void);'))
+        self.assertTrue(violations('src/kernel/include/ciuki/accel.h','bool sis, nvidia;'))
+        self.assertTrue(violations('apps/control/app.c','savage2d_init(fb,0);'))
+        self.assertTrue(violations('src/kernel/core/devices.c','equal(r->owner, "trident")'))
+
+    def test_allowlist_is_current(self):
+        # Every exempt file and exact line still exists, so stale exemptions
+        # cannot silently cover new code.
+        for path in NON_DISPLAY_FILES:
+            self.assertTrue((ROOT/path).is_file(),path)
+        for path,lines in EXACT.items():
+            present={line.strip() for line in (ROOT/path).read_text().splitlines()}
+            self.assertEqual(sorted(lines-present),[],path)
 
 if __name__=='__main__': unittest.main()

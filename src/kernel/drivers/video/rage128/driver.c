@@ -350,7 +350,7 @@ static int selftest(uint64_t deadline, void (*line)(void *, const char *), void 
     return e;
 }
 const struct display_driver rage128_driver={
-    .id="rage128", .name="ATI Rage 128 / Rage 128 Pro",
+    .id="rage128", .attempt_files={ATTEMPT_PATH}, .name="ATI Rage 128 / Rage 128 Pro",
     .matches=matches,.match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,
