@@ -16,6 +16,7 @@ struct ndis_service_ops {
     uint32_t (*mmio)(void *,uint32_t physical,unsigned bytes,bool release);
     unsigned (*resources)(void *,void *out,unsigned capacity);
     void (*log)(void *,uint32_t code,const uint32_t *,unsigned count);
+    void (*refuse)(void *,const char *driver); /* optional: records a refused control device */
 };
 struct ndis_services {
     struct ndis_miniport *miniport;

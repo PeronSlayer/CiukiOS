@@ -165,6 +165,13 @@ uint32_t ndis_service(struct ndis_services *s,uint32_t op,uint32_t arguments)
     case NDIS_OP_NdisTerminateWrapper:
         if(!s->wrapper_open || a[0]!=m->wrapper || a[1] || (m->state!=NDIS_MP_STOPPED && m->state!=NDIS_MP_ENTRY)) return fault(s,"ndis-wrapper-terminate");
         s->wrapper_open=false;return 0;
+    /* NDIS 5.1 stdcall: NdisMRegisterDevice(6 args, 24 bytes), NdisMDeregisterDevice(1, 4),
+     * NdisMSetMiniportSecondary(2, 8), NdisMPromoteMiniport(1, 4). Honest refusals only. */
+    case NDIS_OP_NdisMRegisterDevice:
+        if(s->ops.refuse) s->ops.refuse(s->ops.context,r->host->image && r->host->image->file?r->host->image->file:"<unnamed>");
+        return NDIS_NOT_SUPPORTED;
+    case NDIS_OP_NdisMDeregisterDevice:return NDIS_FAILURE;
+    case NDIS_OP_NdisMSetMiniportSecondary:case NDIS_OP_NdisMPromoteMiniport:return NDIS_NOT_SUPPORTED;
     case NDIS_OP_NdisMRegisterMiniport:
         return s->wrapper_open && a[0]==m->wrapper?ndis_mp_register(m,a[1],a[2]):NDIS_FAILURE;
     case NDIS_OP_NdisMSetAttributesEx:

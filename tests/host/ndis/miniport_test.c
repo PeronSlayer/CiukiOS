@@ -4,6 +4,7 @@
 #undef main
 #include "src/kernel/ndis/ndis_services.h"
 #include <stddef.h>
+#include "tests/host/ndis/census_imports.h"
 static struct ndis_miniport mp;
 static struct ndis_services ns;
 static struct ndis_channel channel;
@@ -13,6 +14,9 @@ static struct ndis_chars32 chars;
 static unsigned completed,returned,records,irqs,transferred;
 static bool deserialize,pending_oid,reset_async,inline_complete,carrier;
 static uint32_t send_status,rx_packet;
+static unsigned device_refusals;
+static char refused_driver[32];
+static void mp_refuse(void *ctx,const char *driver) { (void)ctx;device_refusals++;snprintf(refused_driver,sizeof(refused_driver),"%s",driver); }
 enum { ENTRY=0,INIT=16,HALT=32,QUERY=48,SET=64,RESET=80,SEND=96,RETURN=112,HANG=128,TRANSFER=144,ISR=160,DPC=176,PNP=192,SHUTDOWN=208,SYNC=224 };
 static uint32_t svc(unsigned op,const uint32_t *a,unsigned count)
 { memcpy(memory+0xe000,a,count*4);return ndis_service(&ns,op,0x20e000); }
@@ -85,6 +89,11 @@ static bool run_callback(void)
         uint32_t context=ndis_nt_pool(&r,0,64,1);
         uint32_t v[5]={mp.adapter,context,3,NDIS_BUS_MASTER|(deserialize?NDIS_DESERIALIZE:0),5};
         assert(!svc(NDIS_OP_NdisMSetAttributesEx,v,5) && mp.hang_seconds==2);
+        /* A miniport that treats its optional control device as optional continues initialization. */
+        uint32_t dev[6]={mp.wrapper,0x20d000,0x20d100,0x20d200,0x20d300,0x20d400},unchanged=0xa5a5a5a5;
+        assert(wr(0,0x20d400,&unchanged,4));
+        assert(svc(NDIS_OP_NdisMRegisterDevice,dev,6)==NDIS_NOT_SUPPORTED && mp.state!=NDIS_MP_FAILED);
+        assert(rd(0,0x20d400,&unchanged,4) && unchanged==0xa5a5a5a5); /* no handle was produced */
         uint32_t irq[7]={context,mp.adapter,11,11,1,1,0};assert(!svc(NDIS_OP_NdisMRegisterInterrupt,irq,7));break;
     }
     case QUERY:result=query_oid(a);break;
@@ -118,7 +127,7 @@ static void mp_setup(bool deserialized)
     memset(cq,0,sizeof(cq));memset(&ns,0,sizeof(ns));completed=returned=records=irqs=transferred=0;
     deserialize=deserialized;pending_oid=true;reset_async=inline_complete=false;send_status=NDIS_PENDING;
     struct ndis_mp_ops ops={0,mp_queue,mp_result,mp_irq,mp_link,mp_record};
-    struct ndis_service_ops so={0,fake_pci,fake_port,fake_mmio,fake_resources,fake_log};
+    struct ndis_service_ops so={0,fake_pci,fake_port,fake_mmio,fake_resources,fake_log,mp_refuse};
     assert(ndis_channel_init(&channel,&shared,7,0,simple,simple,done));
     assert(ndis_mp_init(&mp,&r,&channel,&ops));mp.raw_irq=11;
     assert(ndis_services_init(&ns,&mp,&so,0x500000));
@@ -146,8 +155,43 @@ static void rx(void)
     struct ndis_nt_mdl32 b;assert(rd(0,mdl,&b,sizeof(b)));b.next=mdl;assert(wr(0,mdl,&b,sizeof(b)));
     assert(!ndis_mp_receive(&mp,&rx_packet,1)); /* cycle refused before any copy */
 }
+static void census_resolution(void)
+{
+    size_t total;const struct ndis_export *table=ndis_exports(&total);
+    const char *const (*sets[3])[2]={census_e1000325,census_atnicm51,census_e100b325};
+    const size_t counts[3]={sizeof(census_e1000325)/sizeof(census_e1000325[0]),
+        sizeof(census_atnicm51)/sizeof(census_atnicm51[0]),sizeof(census_e100b325)/sizeof(census_e100b325[0])};
+    assert(counts[0]==80 && counts[1]==60 && counts[2]==76);
+    for(unsigned d=0;d<3;d++) for(size_t i=0;i<counts[d];i++) {
+        const struct ndis_export *e=ndis_export_find(table,total,sets[d][i][0],sets[d][i][1],0);
+        if(!e || !e->implemented) fprintf(stderr,"unresolved %u %s!%s\n",d,sets[d][i][0],sets[d][i][1]);
+        assert(e && e->implemented);
+    }
+    /* Exact NDIS 5.1 stdcall stack bytes (Microsoft DDK pages cited in the design note). */
+    static const struct { const char *name;unsigned bytes; } refused[]={
+        {"NdisMRegisterDevice",24},{"NdisMDeregisterDevice",4},{"NdisMSetMiniportSecondary",8},{"NdisMPromoteMiniport",4}};
+    for(unsigned i=0;i<4;i++) {
+        const struct ndis_export *e=ndis_export_find(table,total,"NDIS.SYS",refused[i].name,0);
+        assert(e && e->implemented && e->stack_bytes==refused[i].bytes && e->abi==NDIS_ABI_STDCALL);
+    }
+}
+static void refusal_paths(void)
+{
+    mp_setup(false);device_refusals=0;refused_driver[0]=0;
+    uint32_t dev[6]={mp.wrapper,0x20d000,0x20d100,0x20d200,0x20d300,0x20d400};
+    assert(svc(NDIS_OP_NdisMRegisterDevice,dev,6)==NDIS_NOT_SUPPORTED && device_refusals==1 && refused_driver[0]);
+    uint32_t handle[1]={0};
+    assert(svc(NDIS_OP_NdisMDeregisterDevice,handle,1)==NDIS_FAILURE);
+    handle[0]=0x20d400;assert(svc(NDIS_OP_NdisMDeregisterDevice,handle,1)==NDIS_FAILURE);
+    handle[0]=mp.adapter;assert(svc(NDIS_OP_NdisMDeregisterDevice,handle,1)==NDIS_FAILURE);
+    uint32_t sec[2]={mp.adapter,mp.adapter};
+    assert(svc(NDIS_OP_NdisMSetMiniportSecondary,sec,2)==NDIS_NOT_SUPPORTED);
+    handle[0]=mp.adapter;assert(svc(NDIS_OP_NdisMPromoteMiniport,handle,1)==NDIS_NOT_SUPPORTED);
+    assert(mp.state==NDIS_MP_RUNNING && device_refusals==1); /* refusals never fault or succeed */
+}
 int main(void)
 {
+    census_resolution();refusal_paths();
     mp_setup(false);uint8_t frame[60]={0};frame[12]=8;uint32_t token;
     assert(ndis_channel_send(&channel,frame,14,&token)==1);send_status=NDIS_RESOURCES;tick();assert(mp.tx_blocked && completed==0);
     uint32_t token2;assert(ndis_channel_send(&channel,frame,60,&token2)==1);tick();assert(mp.tx_consumed==1);

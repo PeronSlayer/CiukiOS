@@ -52,30 +52,24 @@ boundary contains CPU faults, not arbitrary device DMA.
 
 - **Export union.** The NDIS import union of the three pinned profiles is 75
   symbols (plus the macro-reached `NdisM*` completion/indication slots). All are
-  implemented except four, which are deliberate explicit refusals (no success
-  stub; the loader fails such a resolution closed), recorded for a reviewed
-  follow-up:
-  - `NdisMRegisterDevice`/`NdisMDeregisterDevice` (imported by `e1000325.sys`
-    and `e100b325.sys`) create a stand-alone control device object with an
-    `IRP_MJ_*` dispatch table. Per
-    [NdisMRegisterDevice](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ndis/nf-ndis-ndismregisterdevice)
-    this is a full user-facing IOCTL control path, which ND7 flags as
-    additional work rather than a harmless stub; CiukiOS routes no IOCTLs to
-    such a device. Left disabled pending a reviewed restricted upper-edge path.
-  - `NdisMSetMiniportSecondary`/`NdisMPromoteMiniport` (LBFO; imported by
-    `atnicm51.sys` and `e1000325.sys`) are the load-balancing/failover bundle
-    API. Per
+  implemented; four are **supported-with-refusal** (Amendment 1, 2026-10-23):
+  real NDIS 5.1 stdcall exports that return honest refusal statuses, never
+  success, so the pinned images pass import resolution.
+  - `NdisMRegisterDevice` (6 arguments, 24 stack bytes) returns
+    `NDIS_STATUS_NOT_SUPPORTED`, creates no device or handle, writes no output
+    and records `[ndis] control-device refused driver=<file>`. The host serves no
+    user-mode I/O to a miniport, so no `IRP_MJ_*` path exists. See
+    [NdisMRegisterDevice](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ndis/nf-ndis-ndismregisterdevice).
+  - `NdisMDeregisterDevice` (1 argument, 4 bytes) returns `NDIS_STATUS_FAILURE`
+    for any handle, since none can exist.
+  - `NdisMSetMiniportSecondary` (2 arguments, 8 bytes) and `NdisMPromoteMiniport`
+    (1 argument, 4 bytes) return `NDIS_STATUS_NOT_SUPPORTED`: a host serves one
+    adapter and teaming (LBFO) is unsupported. See
     [NdisMSetMiniportSecondary](https://learn.microsoft.com/en-us/previous-versions/windows/hardware/network/ff553629(v=vs.85))
-    and [NdisMPromoteMiniport](https://learn.microsoft.com/en-us/previous-versions/windows/hardware/network/ff553566(v=vs.85))
-    a single-adapter host has no bundle; a driver calls `SetMiniportSecondary`
-    only after matching a registry `BundleIdentifier` against an already
-    initialized sibling, which cannot occur here. They remain refused pending a
-    lead decision rather than returning a never-exercised `NDIS_STATUS_FAILURE`.
+    and [NdisMPromoteMiniport](https://learn.microsoft.com/en-us/previous-versions/windows/hardware/network/ff553566(v=vs.85)).
 
-  Consequently none of the three pinned images resolves its complete import set
-  yet, so none can load even if a qualification record existed. Qualification is
-  lead-owned and `profiles.c` stays empty; opening a profile requires both the
-  lead's runtime evidence and a decision on these four exports.
+  Resolving imports remains necessary but not sufficient: execution stays closed
+  because `profiles.c` holds no qualification record (lead-owned).
 - **STI one-instruction shadow.** An emulated STI that transitions virtual
   IF 0->1 arms `sti_shadow` and sets the architectural TF so the next
   instruction single-steps. `ndis_host_take` refuses every callback while the

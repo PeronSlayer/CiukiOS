@@ -70,10 +70,12 @@ static unsigned resources(void *ctx,void *out,unsigned capacity)
 }
 static void log_event(void *ctx,uint32_t code,const uint32_t *data,unsigned count)
 { (void)ctx;klog("[ndis] event=%x words=%u first=%x",code,count,count?data[0]:0); }
+static void refuse_device(void *ctx,const char *driver)
+{ (void)ctx;klog("[ndis] control-device refused driver=%s",driver); }
 int ndis_native_miniport_init(struct ndis_native *n)
 {
     struct ndis_mp_ops ops={n,queue,result,interrupt,link,record};
-    struct ndis_service_ops services={n,pci,ports,mmio,resources,log_event};
+    struct ndis_service_ops services={n,pci,ports,mmio,resources,log_event,refuse_device};
     if(!ndis_mp_init(&n->miniport,&n->nt,&n->channel,&ops)) return 0;
     n->miniport.raw_irq=n->pci.irq_line;
     if(!ndis_services_init(&n->ndis,&n->miniport,&services,n->runtime_base+256+NDIS_NT_EXPORTS*32)) return 0;
