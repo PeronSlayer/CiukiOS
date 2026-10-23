@@ -2537,9 +2537,26 @@ const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
 
 /* ---- built-in windows -------------------------------------------------- */
 static const char *const about_tabs[] = {"General", "System", "Credits"};
+/* G3: the Windows 98 texts, with CiukiOS for Windows. */
+static const char *end_task_text(const struct desktop *d)
+{
+    return d->end_task.kind==DESK_HANG_DOS ?
+        "Windows cannot shut down this program automatically. It is recommended that you quit this program with its quit or exit command.\n\n"
+        "If you close it now, you will lose any unsaved information in this program. Do you want to close it now?" :
+        "This program is not responding. It may be busy, waiting for a response from you, or it may have stopped running.\n\n"
+        "Click Cancel to return to CiukiOS and check the status of the program.\n\n"
+        "Click End Task to close the program immediately. You will lose any unsaved information in this program.";
+}
 static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32_t *h)
 {
     switch (kind) {
+    case DESK_INTERNAL_END_TASK: {
+        int width,height;
+        du_message_size(end_task_text(d),DU_DLG_ICON_WARNING,2,420,&width,&height);
+        if (width<400) width=400;
+        *w=(uint32_t)width; *h=(uint32_t)height;
+        break;
+    }
     case DESK_INTERNAL_GAME_DATA: *w=480; *h=230; break;
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
     case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
@@ -2588,12 +2605,13 @@ int desk_internal_open(struct desktop *d, int kind)
     c->internal = kind; c->window = 1;
     c->owner_id=owner;
     if (kind != DESK_INTERNAL_MESSAGE && kind != DESK_INTERNAL_POWER)
-        desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : SOUND_WINDOW_OPEN);
+        desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : kind==DESK_INTERNAL_END_TASK ? du_message_sound(DU_DLG_ICON_WARNING) : SOUND_WINDOW_OPEN);
     if (!++d->next_window_id) ++d->next_window_id;
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
     snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
-             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" : d->sh.message_title);
+             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" :
+             kind==DESK_INTERNAL_END_TASK ? d->end_task.name : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
     if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.about_scroll = 0; d->sh.want_reload |= 2; }
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
@@ -2620,6 +2638,10 @@ void desk_internal_closed(struct desktop *d, int index)
         d->v3_dialog_kind=0; d->v3_dialog_pid=0;
     }
     if (d->clients[index].internal == DESK_INTERNAL_AUTOPLAY) d->sh.autoplay.open=0;
+    /* G3: closing the dialog itself (title button, Esc) is Cancel / No. */
+    if (d->clients[index].internal == DESK_INTERNAL_END_TASK && d->end_task.kind && d->end_task.window==index) {
+        d->end_task.window=-1; desk_end_task_choice(d,0);
+    }
 }
 void desk_shell_message(struct desktop *d, const char *title, const char *text, int error)
 {
@@ -2974,9 +2996,16 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         bold(&c, content.x + 64, content.y + 18, "What do you want CiukiOS to do?", SH_INK);
         multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Programs\nand virtual machines will be closed.", SH_INK);
         static const char *const labels[] = {"&Restart", "&Shut Down", "Cancel"};
-        for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == 1 + 0 * d->sh.shutdown_choice);
+        /* shutdown_choice 1: Restart is the default (Ctrl+Alt+Del pressed again in Task Manager). */
+        for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == (d->sh.shutdown_choice == 1 ? 0 : 1));
         break;
     }
+    case DESK_INTERNAL_END_TASK:
+        du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(du_message_icon_name(DU_DLG_ICON_WARNING), 32), 32, DU_ICON_NORMAL);
+        du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},end_task_text(d),SH_INK);
+        push_button(&c, button_box(content, 0, 2), d->end_task.kind==DESK_HANG_DOS ? "&Yes" : "&End Task", 0);
+        push_button(&c, button_box(content, 1, 2), d->end_task.kind==DESK_HANG_DOS ? "&No" : "Cancel", 1);
+        break;
     case DESK_INTERNAL_POWER:
         multiline(&c, content.x + 14, content.y + 18, d->power.text, SH_INK);
         if (d->power.state!=DESK_POWER_DONE)
@@ -3064,6 +3093,10 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
     case DESK_INTERNAL_RUN:
         if (desk_contains(button_box(content, 0, 2), x, y)) run_commit(d, index);
         else if (desk_contains(button_box(content, 1, 2), x, y)) desk_request_close(d, index);
+        return 1;
+    case DESK_INTERNAL_END_TASK:
+        if (desk_contains(button_box(content,0,2),x,y)) desk_end_task_choice(d,1);
+        else if (desk_contains(button_box(content,1,2),x,y)) desk_end_task_choice(d,0);
         return 1;
     case DESK_INTERNAL_SHUTDOWN:
         for (int k = 0; k < 3; k++) if (desk_contains(button_box(content, k, 3), x, y)) {
@@ -3546,8 +3579,15 @@ static int internal_key(struct desktop *d, int index, int code, int value)
             damage(d, desk_outer(c));
         }
         return 1;
+    case DESK_INTERNAL_END_TASK:
+        /* Cancel / No is the default button: Enter keeps the program. */
+        if (code == DU_KEY_ESC || code == DU_KEY_ENTER || code == 0x2e || code == 0x31) desk_end_task_choice(d, 0);
+        else if ((d->end_task.kind == DESK_HANG_DOS && code == 0x15) || (d->end_task.kind == DESK_HANG_NOT_RESPONDING && code == 0x12))
+            desk_end_task_choice(d, 1);   /* Y (Yes) / E (End Task) */
+        return 1;
     case DESK_INTERNAL_SHUTDOWN:
         if (code == DU_KEY_ESC) desk_request_close(d, index);
+        else if (code == DU_KEY_ENTER && d->sh.shutdown_choice == 1) { d->sh.want_power = 1; desk_request_close(d, index); }
         else if (code == DU_KEY_ENTER || code == 0x1f) { d->sh.want_power = 2; desk_request_close(d, index); }
         else if (code == 0x13) { d->sh.want_power = 1; desk_request_close(d, index); }
         return 1;
@@ -3645,7 +3685,18 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (value) d->sh.logo_down = 0;
     if (value==1 && code==0x153 && (d->sh.modifiers&(DU_CTRL|DU_ALT))==(DU_CTRL|DU_ALT)) {
-        desk_v3_revoke(d); desk_v3_pointer_release(d); launch_named(d,"tasks",NULL); d->sh.alt_used=1; return 1;
+        desk_v3_revoke(d); desk_v3_pointer_release(d);
+        /* Windows 98 (RK-apps "Closing Failed Applications"): one Close Program
+         * list; pressed again it restarts the computer. G3 offers the restart
+         * through the Shut Down dialog (Restart the default button), so every
+         * program is still asked and nothing unsaved is lost. */
+        int tasks=-1;
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].taskman) tasks=i;
+        if (tasks>=0 && d->focus==tasks && !d->session.state) {
+            if (desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)>=0) { d->sh.shutdown_choice=1; damage_all(d); }
+        } else if (tasks>=0) { if (d->clients[tasks].minimized) desk_minimize(d,tasks); else desk_focus(d,tasks); }
+        else launch_named(d,"tasks",NULL);
+        d->sh.alt_used=1; return 1;
     }
     if (d->sh.modifiers & DU_ALT) {
         if (code==DU_KEY_ENTER && d->focus>=0 && d->clients[d->focus].version==DESK_V3_VERSION) {

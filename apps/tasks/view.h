@@ -16,7 +16,7 @@ enum {
     A_KERNEL_GROUP, A_KERNEL_HEAP, A_KERNEL_PEAK, A_KERNEL_POOL,
     A_TOTALS_GROUP, A_TOTAL_PROCESSES, A_TOTAL_THREADS, A_TOTAL_UPTIME,
     A_SYSTEM, A_SYSTEM_TIME, A_SYSTEM_IO,
-    M_NEW = 100, M_EXIT, M_REFRESH, M_HIGH, M_NORMAL, M_LOW, M_PAUSED, M_ABOUT,
+    M_NEW = 100, M_EXIT, M_REFRESH, M_HIGH, M_NORMAL, M_LOW, M_PAUSED, M_ABOUT, M_SHUTDOWN,
     D_NEW = 200, D_INFO, D_CONFIRM
 };
 struct tasks_view {
@@ -28,7 +28,7 @@ struct tasks_view {
     struct du_item tab_items[TV_PAGES];
     struct du_item app_items[TM_WINDOWS];
     struct du_item proc_items[TM_PROCESSES];
-    struct du_menu_item file_items[3], view_items[6], help_items[1];
+    struct du_menu_item file_items[4], view_items[6], help_items[1];
     struct du_menu menus[3];
     const uint32_t *app_icon;
 };

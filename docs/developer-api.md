@@ -4898,7 +4898,9 @@ Legacy 20-byte events remain readable; v1/v2.1 are unchanged.
 KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
 CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
 POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
-CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+CLOSE_ACK: disposition (0 declined, 1 deferred), per window. A deferred
+close has no deadline while the window answers PINGs; an unresponsive one
+gets the desktop's "This program is not responding" dialog (G3).
 WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
 owner id,owner-generation. Unselected fields are zero; no descriptors.
 CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
@@ -5044,8 +5046,11 @@ desktop to DOS client, no payload
 
 v2 client to desktop: uint32 shape, own client area only
 
-v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
-1 closing later). One later reply within 2 s grants 30 s total.
+v2 client to desktop, 8 bytes, no fds: uint32 disposition
+(DESK_CLOSE_DECLINED, DESK_CLOSE_LATER, DESK_CLOSE_DOS_ACTIVE). G3:
+no close deadline while the program answers PINGs (Windows 9x
+WM_CLOSE); a program unresponsive for DESK_HUNG_NS gets the desktop's
+"This program is not responding" dialog with End Task and Cancel.
 
 ```c
 DESK_CLOSE_ACK,
@@ -5081,8 +5086,75 @@ DROP_FILES (desktop to an accepting client): serial, client x, y;
 
 ```c
 DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
-    DESK_ACCEPT_FILES, DESK_DROP_FILES
+    DESK_ACCEPT_FILES, DESK_DROP_FILES,
+```
+
+G3 end of session (WM_QUERYENDSESSION / WM_ENDSESSION), version 2,
+no fds, all u32 after the 4-byte header:
+QUERY_END_SESSION (desktop to client, 12 bytes): serial (nonzero),
+  flags (DESK_ENDSESSION_*, the WM_QUERYENDSESSION lParam). The client
+  answers once with SESSION_ANSWER; it may show its own save prompt
+  first (answer ASKING, then AGREE or VETO when the user decides).
+  A registered client that answers a PING sent after the query
+  without answering it agrees, as DefWindowProc returns TRUE.
+END_SESSION (desktop to client, 16 bytes): serial, ending (1: every
+  program agreed, exit now without prompting; 0: the session goes
+  on), flags. Sent only to clients that answered the query.
+SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
+  answer (DESK_SESSION_*). Serial 0 with AGREE, sent once after
+  CREATE_WINDOW, registers the window for queries; the desktop never
+  sends QUERY_END_SESSION or END_SESSION to an unregistered client
+  (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end).
+
+```c
+DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
 };
+#define DESK_ENDSESSION_CLOSEAPP 0x00000001u
+```
+
+lParam bits, as WinUser.h
+
+```c
+#define DESK_ENDSESSION_CRITICAL 0x40000000u
+#define DESK_ENDSESSION_LOGOFF 0x80000000u
+#define DESK_ENDSESSION_FLAGS 0xc0000001u
+#define DESK_SESSION_VETO 0u
+```
+
+WM_QUERYENDSESSION returned FALSE (the user cancelled)
+
+```c
+#define DESK_SESSION_AGREE 1u
+```
+
+TRUE: data saved or discarded by the user
+
+```c
+#define DESK_SESSION_ASKING 2u
+```
+
+the program shows its own prompt; the session waits
+
+```c
+#define DESK_SESSION_DOS_ACTIVE 3u
+```
+
+a DOS window whose program is running: "cannot shut down automatically"
+
+```c
+#define DESK_SESSION_ANSWERS 4u
+```
+
+CLOSE_ACK dispositions (v2): 0 declined (the user cancelled the program's
+own prompt), 1 the program asks the user and closes later (no deadline
+while it keeps answering PINGs), 2 a DOS window whose program is running
+(the desktop shows the Windows 98 "cannot shut down this program
+automatically" warning). V3 accepts 0 and 1 only.
+
+```c
+#define DESK_CLOSE_DECLINED 0u
+#define DESK_CLOSE_LATER 1u
+#define DESK_CLOSE_DOS_ACTIVE 2u
 #define DESK_DRAG_FILE "/system/settings/files.drag"
 #define DESK_DRAG_ITEMS 4096u
 #define DESK_SETTINGS_RELOAD 1u
@@ -6732,7 +6804,34 @@ f2-33: v2 messages the glue does not consume (WINDOW_INFO, TASK_RESULT).
 
 ```c
 void (*message)(struct du_window *, const struct desk_packet *, void *);
+```
+
+G3 end of session (WM_QUERYENDSESSION, protocol.h QUERY_END_SESSION).
+query_end_session, when set, answers the query: DU_SESSION_AGREE,
+DU_SESSION_VETO, or DU_SESSION_ASKING after showing a prompt (then
+du_window_session_reply). When NULL, the glue asks close_request: a
+nonzero result agrees; zero means the program shows its save prompt,
+and the program's later du_window_close() agrees (the window stays
+open until END_SESSION) while du_window_close_reply(w, 0) vetoes.
+END_SESSION(1) closes the window without asking again.
+
+```c
+int (*query_end_session)(struct du_window *, uint32_t flags, void *);
+    int session;
+```
+
+DU_SESSION_* state, internal
+
+```c
+uint32_t session_serial, session_flags;
+    int session_reply_pending;
+```
+
+answer+1, retried if the queue is full
+
+```c
 };
+enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
 int du_window_open_resizable(struct du_window *, struct du_ui *, int channel, int width, int height,
                              const char *title, int min_width, int min_height);
@@ -6750,11 +6849,19 @@ int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
 ```
 
-Reply to CLOSE_REQUEST: later=1 defers once to 30 s, later=0 declines it.
-A close_request callback returning zero automatically queues later=1.
+Reply to CLOSE_REQUEST: later=1 (the program asks the user; no deadline
+while it answers PINGs), later=0 declines it (the user cancelled). A
+close_request callback returning zero automatically queues later=1. While
+an end-of-session query waits for the user, later=0 vetoes the session.
 
 ```c
 void du_window_close_reply(struct du_window *, int later);
+```
+
+G3: the answer to a query that returned DU_SESSION_ASKING (1 agree, 0 veto).
+
+```c
+void du_window_session_reply(struct du_window *, int agree);
 ```
 
 fx-19 DragAcceptFiles: on=1 makes the window a WM_DROPFILES-style drop

@@ -581,7 +581,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS dosbox autorun", result.stdout)
 
     def test_dosbox_loading(self):
-        self.dosbox_loading_replay(range(22), True)  # fx-4b: 20 verify wait, 21 mismatch
+        self.dosbox_loading_replay(range(23), True)  # fx-4b: 20 verify wait, 21 mismatch; G3: 22 end of session
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)

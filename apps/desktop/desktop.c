@@ -178,6 +178,8 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
     }
     if (d->shell && !d->power.state) {
         reason=PAUSE_CLOSE;
+        uint64_t session=desk_session_deadline(d);   /* G3: queries, Win32 broker polls, hung closes */
+        if (session) loop_deadline(now,session,&wait);
         for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid && d->children[i].close_ns && !d->children[i].term_sent)
             loop_deadline(now,d->children[i].close_ns,&wait);
         reason=PAUSE_NOTIFY;
@@ -197,7 +199,7 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
          * 1 ms poll; only the active shutdown phase supplies a deadline. */
         reason=PAUSE_POWER;
         if (d->power.state==DESK_POWER_CLOSING)
-            loop_deadline(now,d->power.close_deadline,&wait);
+            loop_deadline(now,now<d->power.close_deadline ? d->power.close_deadline : now+DESK_POWER_RETRY_NS,&wait);
         else if (d->power.state==DESK_POWER_RETRY || d->power.state==DESK_POWER_FORCE)
             loop_deadline(now,d->power.next_try,&wait);
     }
@@ -1813,8 +1815,9 @@ static void shell_service(struct desktop *d)
     desktop_wait("folder-service"); desk_folder_service(d);
     if (sh->want_power) {
         int action=sh->want_power; sh->want_power=0;
+        if (d->session.state) return;   /* G3: the programs are being asked already */
         if (settings_save(d)) { /* still try: settings are a convenience */ }
-        desk_power_begin(d,action);
+        desk_session_begin(d,action);   /* G3: ask every program; power only when all agreed */
         return;
     }
     if (sh->want_programs) {

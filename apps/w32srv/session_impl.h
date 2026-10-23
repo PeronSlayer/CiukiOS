@@ -2,7 +2,11 @@
  * owning USER threads; desktop alone starts/resets the coordinator.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 struct wr_end_window {struct w32r_window w; unsigned queried,delivered,ended;};
-struct wr_end {uint32_t flags,count,at,stage,veto;uint64_t deadline;struct wr_end_window windows[4096];};
+/* G3: a HOLD session (the desktop's Shut Down, Restart, Log Off) has no
+ * deadline: the desktop watches the window in turn for hangs and ends a
+ * hung process (its windows are then skipped). After every window agreed it
+ * waits for COMMIT (WM_ENDSESSION TRUE) or CANCEL (FALSE to the queried). */
+struct wr_end {uint32_t flags,count,at,stage,veto,hold,decided;uint64_t deadline;struct wr_end_window windows[4096];};
 static int wr_end_live(struct wr_server *s,uint32_t pid)
 {for(unsigned i=0;i<s->live_count;i++)if(s->live[i]==pid)return 1;return 0;}
 static void wr_end_advance(struct wr_server *s)
@@ -15,7 +19,10 @@ static void wr_end_advance(struct wr_server *s)
             if(s->now>=e->deadline){e->at++;continue;}
             return;
         }
-        if(!e->stage){e->stage=1;e->at=0;}
+        if(!e->stage){
+            if(e->hold && !e->decided && !e->veto)return;   /* held: every window agreed */
+            e->stage=1;e->at=0;
+        }
         else e->stage=2;
     }
 }
@@ -25,10 +32,11 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
     if(*path || *name || a->access || (a->index!=W32R_SESSION_BEGIN && a->data_bytes))return 87;
     if(a->index==W32R_SESSION_BEGIN){
         if(pid!=s->compat_writer_pid || !pid)return 5;
-        if(a->key || a->type || a->flags&~0x1fu || a->data_bytes%8 || a->data_bytes>128u*8)return 87;
+        if(a->key || a->type || a->flags&~(0x1fu|W32R_SESSION_HOLD) || a->data_bytes%8 || a->data_bytes>128u*8)return 87;
         if(s->ending)return 1115;
         struct wr_end *e=calloc(1,sizeof(*e));if(!e)return 8;
-        e->flags=a->flags;e->deadline=s->now+10000;
+        e->flags=a->flags&0x1fu;e->hold=!!(a->flags&W32R_SESSION_HOLD);
+        e->deadline=e->hold?UINT64_MAX:s->now+10000;
         uint8_t bytes[24+W32R_NAME];
         for(unsigned i=0;i<4096;i++){
             struct w32r_request q={.op=W32R_WINDOW_ENUM,.index=i};struct w32r_reply v={0};
@@ -50,11 +58,30 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
         s->ending=e;wr_end_advance(s);return 0;
     }
     struct wr_end *e=s->ending;
-    if(a->index==W32R_SESSION_STATUS || a->index==W32R_SESSION_RESET){
+    if(a->index==W32R_SESSION_STATUS || a->index==W32R_SESSION_RESET ||
+       a->index==W32R_SESSION_CANCEL || a->index==W32R_SESSION_COMMIT){
         if(pid!=s->compat_writer_pid || !pid)return 5;
         if(a->key || a->type || a->flags)return 87;
         if(a->index==W32R_SESSION_RESET){free(e);s->ending=NULL;return 0;}
-        wr_end_advance(s);r->key=e&&e->stage==2?(e->veto?2:1):0;return 0;
+        if(a->index==W32R_SESSION_CANCEL){
+            /* Another program vetoed or the user cancelled: the windows that
+             * agreed get WM_ENDSESSION(FALSE). */
+            if(e && !e->stage){e->veto=1;e->decided=1;e->at=e->count;}
+            wr_end_advance(s);return 0;
+        }
+        if(a->index==W32R_SESSION_COMMIT){
+            if(!e || !e->hold || e->stage || e->veto || e->at<e->count)return 87;
+            e->decided=1;wr_end_advance(s);return 0;
+        }
+        wr_end_advance(s);
+        if(e && e->stage==2)r->key=e->veto?2:1;
+        else if(e && e->hold && !e->stage && !e->veto && e->at>=e->count)r->key=3;
+        else r->key=0;
+        if(e && !e->stage && e->at<e->count){   /* the window in turn, for the desktop's hung check */
+            const struct wr_end_window *w=&e->windows[e->at];
+            r->count=w->w.pid;r->type=w->w.hwnd;r->disposition=w->delivered;
+        }
+        return 0;
     }
     if(a->index!=W32R_SESSION_POLL && a->index!=W32R_SESSION_REPLY)return 87;
     if(!a->type || (a->index==W32R_SESSION_POLL && (a->key || a->flags)))return 87;

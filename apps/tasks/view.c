@@ -31,8 +31,9 @@ void tv_init(struct tasks_view *v, struct du_ui *u, const uint32_t *app_icon)
     memset(v, 0, sizeof(*v));
     v->ui = u; v->app_icon = app_icon;
     v->file_items[0] = (struct du_menu_item){ "&New Task (Run...)", M_NEW, 0, 0, 0 };
-    v->file_items[1] = (struct du_menu_item){ NULL, 0, 0, 0, DU_ITEM_SEPARATOR };
-    v->file_items[2] = (struct du_menu_item){ "E&xit Task Manager", M_EXIT, 0, 0, 0 };
+    v->file_items[1] = (struct du_menu_item){ "&Shut Down...", M_SHUTDOWN, 0, 0, 0 };   /* G3: the Close Program dialog's Shut Down */
+    v->file_items[2] = (struct du_menu_item){ NULL, 0, 0, 0, DU_ITEM_SEPARATOR };
+    v->file_items[3] = (struct du_menu_item){ "E&xit Task Manager", M_EXIT, 0, 0, 0 };
     v->view_items[0] = (struct du_menu_item){ "&Refresh Now", M_REFRESH, DU_KEY_F5, 0, 0 };
     v->view_items[1] = (struct du_menu_item){ NULL, 0, 0, 0, DU_ITEM_SEPARATOR };
     v->view_items[2] = (struct du_menu_item){ "Update Speed: &High", M_HIGH, 0, 0, DU_ITEM_RADIO };
@@ -40,7 +41,7 @@ void tv_init(struct tasks_view *v, struct du_ui *u, const uint32_t *app_icon)
     v->view_items[4] = (struct du_menu_item){ "Update Speed: &Low", M_LOW, 0, 0, DU_ITEM_RADIO };
     v->view_items[5] = (struct du_menu_item){ "Update Speed: &Paused", M_PAUSED, 0, 0, DU_ITEM_RADIO };
     v->help_items[0] = (struct du_menu_item){ "&About Task Manager", M_ABOUT, 0, 0, 0 };
-    v->menus[0] = (struct du_menu){ "&File", v->file_items, 3 };
+    v->menus[0] = (struct du_menu){ "&File", v->file_items, 4 };
     v->menus[1] = (struct du_menu){ "&View", v->view_items, 6 };
     v->menus[2] = (struct du_menu){ "&Help", v->help_items, 1 };
     u->menus = v->menus; u->menu_count = 3;
