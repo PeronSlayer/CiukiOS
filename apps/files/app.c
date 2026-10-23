@@ -1062,11 +1062,11 @@ static void transfer_stop(struct files_app *a)
 { fm_transfer_destroy(a->transfer); a->transfer=NULL; }
 static void progress(struct files_app *a)
 {
-    struct files_transfer *w=a->transfer; struct transfer_view v;
+    struct files_transfer *w=a->transfer;
     if (!w) return;
     pthread_mutex_lock(&w->lock);
-    v=w->view; pthread_mutex_unlock(&w->lock);
-    fm_progress_dialog(a->ui,D_PROGRESS,a->job.kind,a->job.destination,v,w->started_at);
+    w->ui_view=w->view; pthread_mutex_unlock(&w->lock);
+    fm_progress_dialog(a->ui,D_PROGRESS,a->job.kind,a->job.destination,&w->ui_view,w->started_at);
 }
 static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
 {
@@ -1154,9 +1154,9 @@ static void job_finished(struct files_app *a)
 
 static void replace_prompt(struct files_app *a)
 {
-    struct transfer_view v;
-    pthread_mutex_lock(&a->transfer->lock); v=a->transfer->view; pthread_mutex_unlock(&a->transfer->lock);
-    fm_replace_dialog(a->ui,D_REPLACE,v);
+    struct files_transfer *w=a->transfer;
+    pthread_mutex_lock(&w->lock); w->ui_view=w->view; pthread_mutex_unlock(&w->lock);
+    fm_replace_dialog(a->ui,D_REPLACE,&w->ui_view);
 }
 
 static void job_tick(struct files_app *a)

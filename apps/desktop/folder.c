@@ -127,11 +127,11 @@ static void dialog_event(struct du_ui *ui, const struct du_event *e, void *arg)
     else if (e->id==F_PROGRESS) fm_transfer_command(f->transfer,1,-1);
     f->progress_ns=0;
 }
-static void dialog_update(struct desktop *d, struct transfer_view v)
+static void dialog_update(struct desktop *d, struct transfer_view *v)
 {
     struct desk_folder *f=d->sh.folder; struct du_ui *u=f->dialog;
     if (!u) return;
-    if (v.state==FM_REPLACE) { if (du_dialog_id(u)!=F_REPLACE) fm_replace_dialog(u,F_REPLACE,v); }
+    if (v->state==FM_REPLACE) { if (du_dialog_id(u)!=F_REPLACE) fm_replace_dialog(u,F_REPLACE,v); }
     else fm_progress_dialog(u,F_PROGRESS,f->display_kind,f->destination,v,f->transfer->started_at);
     int i=f->dialog_window;
     if (i<0 || !d->clients[i].window) i=f->dialog_window=desk_internal_open(d,DESK_INTERNAL_TRANSFER);
@@ -190,8 +190,9 @@ static int job(struct desktop *d, enum fm_job_kind kind, char **paths, unsigned 
     if (r) return r;
     f->busy=1; f->revision++; f->progress_ns=d->now_ns;
     /* Initialize the visible dialog before handing ownership to the worker. */
-    struct transfer_view view={.state=FM_RUNNING,.counting=1,.preparing=1};
-    snprintf(view.source,sizeof(view.source),"%s",f->job.sources[0]);
+    struct transfer_view *view=&f->transfer->ui_view;
+    memset(view,0,sizeof(*view)); view->state=FM_RUNNING; view->counting=view->preparing=1;
+    snprintf(view->source,sizeof(view->source),"%s",f->job.sources[0]);
     fm_transfer_reset(f->transfer); dialog_update(d,view);
     if (f->dialog_window<0) { f->busy=0; fm_job_destroy(&f->job); return -ENOMEM; }
     fm_transfer_submit(f->transfer); return 0;
@@ -366,11 +367,11 @@ void desk_folder_service(struct desktop *d)
     struct fm_model *m=&f->model;
     if (f->busy) {
         if (d->sh.want_power) desk_folder_cancel(d);
-        struct transfer_view v; int finished;
+        struct transfer_view *v=&f->transfer->ui_view; int finished;
         pthread_mutex_lock(&f->transfer->lock);
-        v=f->transfer->view; finished=f->transfer->finished;
+        *v=f->transfer->view; finished=f->transfer->finished;
         pthread_mutex_unlock(&f->transfer->lock);
-        if (!f->trash_job) f->display_kind=v.kind;
+        if (!f->trash_job) f->display_kind=v->kind;
         if (finished) {
             f->busy=0;
             if (f->dialog_window>=0) { desk_drop_client(d,f->dialog_window); f->dialog_window=-1; }
