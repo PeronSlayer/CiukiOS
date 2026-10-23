@@ -13,7 +13,7 @@ static uint32_t requests;
 static volatile unsigned off_request; /* 0 idle, 1 requested, 2 completed */
 static int off_result;
 static bool s5_available;
-static uint64_t refresh_at;
+
 static uint64_t sources_at, request_at;
 static struct ciuki_power_status published;
 static ACPI_HANDLE power_buttons[FW_MAX];
@@ -63,7 +63,9 @@ static void notify(ACPI_HANDLE h, UINT32 value, void *ctx)
     if (value == 0x80) {
         for (unsigned i = 0; i < button_count; i++) if (power_buttons[i] == h) fw_power_request();
     }
-    if (value == 0x80 || value == 0x81 || value == 0x82) refresh_needed = true;
+    /* fx-3 follow-up 2: a thermal zone's notification re-reads that zone
+     * (ACPI 6.5 11.1.3.1); other device notifications refresh sources. */
+    if ((value == 0x80 || value == 0x81 || value == 0x82) && !fw_thermal_notify(h)) refresh_needed = true;
 }
 static ACPI_STATUS gas_claim(const ACPI_GENERIC_ADDRESS *gas, unsigned bytes, bool required)
 {
@@ -290,10 +292,15 @@ void fw_power_poll(void)
     if (event_error) { fw_power.error = event_error; fw_power_request(); fw_power_stop(); return; }
     fw_ec_poll();
     if (fw_ec_faulted()) { fw_power.error = AE_TIME; fw_power_request(); fw_power_stop(); return; }
-    if (refresh_needed || fw_os->clock() >= refresh_at) {
-        refresh_needed = false; refresh_at = fw_os->clock() + 1000000;
-        ACPI_STATUS s = fw_thermal_refresh(true);
-        if (fw_os->clock() >= sources_at) { sources_at = fw_os->clock() + 10000000; fw_sources_refresh(); }
+    /* fx-3 follow-up 2: no fixed 100 ms thermal read; zones are read when
+     * their _TZP period is due or they were notified (thermal.c). */
+    uint64_t now = fw_os->clock();
+    bool thermal = fw_thermal_pending(now);
+    if (refresh_needed || thermal || now >= sources_at) {
+        bool sources = refresh_needed || now >= sources_at;
+        refresh_needed = false;
+        ACPI_STATUS s = thermal ? fw_thermal_service(now) : AE_OK;
+        if (sources) { sources_at = fw_os->clock() + 10000000; fw_sources_refresh(); }
         fw_power.sequence++;
         if (s) { fw_power.error = s; fw_power_request(); fw_power_stop(); }
         else fw_power_publish();

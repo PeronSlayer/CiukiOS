@@ -19,7 +19,8 @@ static struct kmutex service_lock; /* serialize write-side startup and worker */
 static bool power_stopped;
 void audio_ec_attach(void)
 {
-    if (!audio.initialized || !kmutex_lock_until(&control_lock,deadline_after_ms(2000))) return;
+    if (!__atomic_load_n(&audio.initialized, __ATOMIC_ACQUIRE) ||
+        !kmutex_lock_until(&control_lock,deadline_after_ms(2000))) return;
     if (!power_stopped) { thinkpad_ec_init(); thinkpad_ec_start(); }
     kmutex_unlock(&control_lock);
 }
@@ -666,10 +667,13 @@ static void audio_init_log(int err)
 void audio_init(struct vfs *v)
 {
     if (audio.initialized) return;
-    audio.initialized = true;
     kwait_init(&audio.changed); kmutex_init(&control_lock); kmutex_init(&service_lock);
+    /* fx-3: audio_ec_attach (acpi-power task) runs once the inventory has
+     * settled and may race this init; both serialize on control_lock, and
+     * the locks exist before initialized is published. */
+    __atomic_store_n(&audio.initialized, true, __ATOMIC_RELEASE);
     audio_settings_load(v);
-    thinkpad_ec_init();
+    kmutex_lock(&control_lock); thinkpad_ec_init(); kmutex_unlock(&control_lock);
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
     int err = audio_backend_init();
     audio.init_error = err;
@@ -685,7 +689,7 @@ void audio_init(struct vfs *v)
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
-    thinkpad_ec_start();
+    kmutex_lock(&control_lock); thinkpad_ec_start(); kmutex_unlock(&control_lock);
     audio_boot_tone();
 }
 int audio_device_open(struct file_description *d, uint32_t flags)

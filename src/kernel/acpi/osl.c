@@ -5,11 +5,25 @@
 #include <stdarg.h>
 
 const struct fw_ops *fw_os;
-static uint64_t deadline;
-static uint32_t steps_left, steps_done, allocated, peak;
+/* fx-3 (T23 trial 9a60215f: `[acpi] inventory status=17 devices=1`, the
+ * acpi-power task `device_overrun count=49` while the desktop started): the
+ * budget was 250 ms of wall clock per operation, so time the P_DEVICE scan
+ * task spent waiting for the CPU counted as firmware work. `ms` is now the
+ * scan task's own execution time (cpustat run_cycles through
+ * fw_ops.run_clock); a wall cap keeps sleeping/starved operations bounded:
+ * max(ms, FW_WALL_CAP_MS) per operation, FW_SCAN_WALL_MS per scan. ACPICA
+ * itself bounds a While loop by 30 s of timer (ACPI_MAX_LOOP_TIMEOUT,
+ * dscontrol.c) and one Sleep by ACPI_MAX_SLEEP (2 s, acconfig.h); the caps
+ * stay below those and the steps bound is unchanged. The first expiry and
+ * the first failure are kept for one honest record per scan. */
+static uint64_t deadline, run_deadline, run_start, wall_start, scan_wall_start, scan_run_start;
+static uint32_t steps_left, steps_done, allocated, peak, run_limit_ms, wall_cap_ms;
 static ACPI_STATUS failure;
 static ACPI_STATUS run_failure;
-static bool budgeting;
+static bool budgeting, scanning;
+static const char *stage_name = "none";
+static char stage_node[5];
+static struct fw_budget_report report;
 struct allocation {
     struct allocation *next, *prev;
     size_t bytes, charge;
@@ -23,11 +37,57 @@ struct semaphore { uint32_t units, max, waiters; };
 static struct { ACPI_OSD_EXEC_CALLBACK fn; void *arg; } queue[16];
 static unsigned queued;
 
-void fw_bind(const struct fw_ops *ops) { fw_os = ops; failure = run_failure = AE_OK; peak = allocated; }
+void fw_bind(const struct fw_ops *ops)
+{
+    fw_os = ops; failure = run_failure = AE_OK; peak = allocated;
+    memset(&report, 0, sizeof(report)); report.reason = report.stage = report.first_stage = "none";
+    stage_name = "none"; memset(stage_node, 0, sizeof(stage_node)); scanning = budgeting = false;
+}
+static uint64_t run_now(void) { return fw_os->run_clock ? fw_os->run_clock() : fw_os->clock(); }
+static uint32_t us_of(uint64_t ticks100ns) { uint64_t us = ticks100ns / 10; return us > UINT32_MAX ? UINT32_MAX : (uint32_t)us; }
 void fw_fail(ACPI_STATUS status)
 {
     if (!failure && status) failure = status;
     if (!run_failure && status) run_failure = status;
+    if (status && !report.first_error) {
+        report.first_error = status; report.first_stage = stage_name;
+        memcpy(report.first_node, stage_node, sizeof(stage_node));
+    }
+}
+void fw_budget_stage(const char *stage, ACPI_HANDLE node)
+{
+    stage_name = stage ? stage : "none";
+    memset(stage_node, 0, sizeof(stage_node));
+    if (node) {
+        /* Caller-supplied buffer: no allocation; the name is four bytes. */
+        ACPI_BUFFER name = {sizeof(stage_node), stage_node};
+        if (AcpiGetName(node, ACPI_SINGLE_NAME, &name)) memset(stage_node, 0, sizeof(stage_node));
+        stage_node[4] = 0;
+    }
+}
+void fw_scan_begin(void)
+{
+    scanning = true; scan_wall_start = fw_os->clock(); scan_run_start = run_now();
+    report.run_clock = fw_os->run_clock != NULL;
+}
+void fw_scan_end(void)
+{
+    if (!scanning) return;
+    scanning = false;
+    report.scan_wall_us = us_of(fw_os->clock() - scan_wall_start);
+    report.scan_run_us = us_of(run_now() - scan_run_start);
+}
+void fw_budget_snapshot(struct fw_budget_report *out) { *out = report; }
+static ACPI_STATUS expire(const char *reason)
+{
+    fw_fail(AE_TIME);
+    if (!report.expired) {
+        report.expired = true; report.reason = reason; report.stage = stage_name;
+        memcpy(report.node, stage_node, sizeof(stage_node));
+        report.run_us = us_of(run_now() - run_start); report.wall_us = us_of(fw_os->clock() - wall_start);
+        report.steps = steps_done; report.run_limit_ms = run_limit_ms; report.wall_cap_ms = wall_cap_ms;
+    }
+    return failure;
 }
 ACPI_STATUS fw_error(void) { return failure; }
 ACPI_STATUS fw_run_error(void) { return run_failure; }
@@ -39,16 +99,27 @@ ACPI_STATUS AcpiCiukiParseResult(ACPI_STATUS s)
 void fw_budget_begin(uint32_t steps, uint32_t ms)
 {
     failure = AE_OK; steps_left = steps; steps_done = 0; budgeting = true;
-    deadline = fw_os->clock() + (uint64_t)ms * 10000;
+    wall_start = fw_os->clock(); run_start = run_now();
+    run_limit_ms = ms; wall_cap_ms = ms > FW_WALL_CAP_MS ? ms : FW_WALL_CAP_MS;
+    deadline = wall_start + (uint64_t)wall_cap_ms * 10000;
+    run_deadline = run_start + (uint64_t)ms * 10000;
+    if (scanning) {
+        uint64_t scan_end = scan_wall_start + (uint64_t)FW_SCAN_WALL_MS * 10000;
+        if (deadline > scan_end) deadline = scan_end;
+    }
 }
 void fw_budget_end(void) { budgeting = false; }
-void fw_budget_cancel(void) { fw_fail(AE_TIME); }
+void fw_budget_cancel(void) { (void)expire("cancel"); }
 ACPI_STATUS AcpiCiukiBudgetStep(void)
 {
     if (fw_interrupt) return AE_OK;
     if (failure) return failure;
     if (!budgeting) return AE_OK; /* ACPICA shutdown is always allowed to unwind. */
-    if (!steps_left || fw_os->clock() >= deadline) { fw_fail(AE_TIME); return failure; }
+    if (!steps_left) return expire("steps");
+    uint64_t now = fw_os->clock();
+    if (now >= deadline)
+        return expire(scanning && now >= scan_wall_start + (uint64_t)FW_SCAN_WALL_MS * 10000 ? "scan_wall" : "wall");
+    if (run_now() >= run_deadline) return expire("run");
     steps_left--;
     if (!(++steps_done & 63u)) fw_os->pause(0);
     return AE_OK;
@@ -178,6 +249,8 @@ ACPI_STATUS AcpiOsWaitSemaphore(ACPI_SEMAPHORE handle, UINT32 units, UINT16 time
         if (!timeout || fw_os->clock() >= end || ACPI_FAILURE(AcpiCiukiBudgetStep())) break;
         fw_os->pause(1);
     }
+    /* fx-3: a timed-out wait (no fw_fail of its own) is counted for the record. */
+    if (timeout && report.semaphore_timeouts != UINT32_MAX) report.semaphore_timeouts++;
     s->waiters--; return AE_TIME;
 }
 ACPI_STATUS AcpiOsSignalSemaphore(ACPI_SEMAPHORE handle, UINT32 units)

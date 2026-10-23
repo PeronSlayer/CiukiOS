@@ -273,6 +273,28 @@ reports also permit two-finger scrolling. Pressure hysteresis and palm rejection
 are explicit policy, with movement/timing thresholds documented in the adapter.
 
 Internal input event values 1–5 and all public ABI layouts remain unchanged.
+
+Amendment fx-3 (2026-10-23, T23 trial of 9a60215f, `[kernel]
+irqoff_section=i8042_sample site=c01c6cce irqoff_max_us=2156`): the command
+engine samples the controller with interrupts enabled. Each poll used to read
+status and data and run the decoder with IF clear; setup and reset waits spend
+most of their time in that section, so a 2.1 ms firmware SMI landing in it was
+charged to the kernel as a 2 ms interrupt-off section. IF=0 gave no exclusion:
+while the native IRQ path is live (handlers installed, `accepting`),
+`input_irq` is the only reader of port 60h and a command poll reads the
+side-effect-free status register only, with replies reaching the armed
+transaction through `input_work`/`capture_at` (the Linux libps2
+`ps2_handle_ack`/`ps2_handle_response` model); otherwise (setup, stop, the
+fault fixture) `input_irq` is not installed or returns before any port access
+and the command-mutex holder is the only port user. The IBM PS/2 Hardware
+Interface Technical Reference (status register: reading 64h has no side
+effect; reading 60h clears OBF) fixes which access needs a single owner.
+Sources: [IBM HITR](https://www.ardent-tool.com/docs/pdf/ibm_hitrc07.pdf),
+[Linux v6.12 i8042.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/serio/i8042.c?h=v6.12),
+[libps2.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/serio/libps2.c?h=v6.12).
+Host evidence: `tests/host/i8042_test.c` `test_irqoff_sampling` (zero
+controller port accesses with IF clear outside `input_irq` across T23-shaped
+setup, live commands and stop).
 Append kernel-only INPUT_ABS=6 with X, downward Y, pressure, fingers and width
 codes 0–4. Each pad packet emits one such ordered sample; the existing native
 REL/BTN events carry its pointer projection to desktop/DOS. Stick packets never

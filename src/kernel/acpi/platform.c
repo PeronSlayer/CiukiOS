@@ -11,6 +11,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/thinkpad_ec.h>
 #include <ciuki/power_source.h>
+#include <ciuki/cpustat.h>
 extern void audio_ec_attach(void);
 
 struct large { uint32_t pages, physical; uint64_t reserved; };
@@ -67,6 +68,15 @@ static uint64_t clock100ns(void)
     }
     if (now < last) now = last; else last = now;
     irq_restore(f); return now;
+}
+/* fx-3: the scan task's own execution time (cpustat run_cycles, IRQ time
+ * excluded, SMM time included), 100 ns units; without a calibrated TSC or
+ * cpustat it is the wall clock, the pre-fx-3 behaviour. */
+static uint64_t run_clock100ns(void)
+{
+    if (!cpu_path_clock || !g_cpu_tsc || !g_tsc_per_ms) return clock100ns();
+    uint64_t cycles = cpu_path_clock();
+    return (cycles / g_tsc_per_ms) * 10000 + ((cycles % g_tsc_per_ms) * 10000) / g_tsc_per_ms;
 }
 static void pause_ms(uint32_t n) { if (n) task_sleep_ms(n); else task_yield(); }
 static uint64_t thread(void) { return g_current ? g_current->id : 1; }
@@ -194,7 +204,8 @@ static int provider_activate(void) { return power_source_activate(POWER_SOURCE_A
 static void provider_retire(bool uncertain) { power_source_release(POWER_SOURCE_ACPI, uncertain, uncertain ? -EIO : 0); }
 static void provider_publish(const struct ciuki_power_status *p) { power_source_publish_record(POWER_SOURCE_ACPI, p); }
 const struct fw_ops fw_kernel_ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, udelay, thread, lock, unlock, access,
-    write_access, claim_port, sci, unsci, finish, provider_reserve, provider_activate, provider_retire, provider_publish};
+    write_access, claim_port, sci, unsci, finish, provider_reserve, provider_activate, provider_retire, provider_publish,
+    run_clock100ns};
 static void com_pnp_thread(void *unused)
 {
     (void)unused;
@@ -209,6 +220,15 @@ static void inventory_thread(void *unused)
     struct ciuki_firmware_page p = {.version = CIUKI_FIRMWARE_VERSION, .size = sizeof(p)};
     (void)firmware_inventory_page(&p);
     klog("[acpi] inventory status=%u devices=%u tables=%u peak=%u flags=%u power_owner=%u", s, p.total, p.table_count, p.peak_bytes, p.flags, fw_power.ownership);
+    /* fx-3: one honest scan record: execution vs wall time, the first
+     * failure and where it happened, and the budget expiry if any. */
+    struct fw_budget_report b; fw_budget_snapshot(&b);
+    klog("[acpi] scan run_us=%u wall_us=%u run_clock=%s first_error=%u first_stage=%s first_node=%s semaphore_timeouts=%u",
+         b.scan_run_us, b.scan_wall_us, b.run_clock ? "task" : "wall", b.first_error, b.first_stage,
+         b.first_node[0] ? b.first_node : "-", b.semaphore_timeouts);
+    if (b.expired)
+        klog("[acpi] budget expired reason=%s stage=%s node=%s run_us=%u wall_us=%u steps=%u run_limit_ms=%u wall_cap_ms=%u scan_cap_ms=%u",
+             b.reason, b.stage, b.node[0] ? b.node : "-", b.run_us, b.wall_us, b.steps, b.run_limit_ms, b.wall_cap_ms, FW_SCAN_WALL_MS);
     /* Discovery stays read-only for devices. Import assigned routes from the
      * completed inventory records (the interpreter is terminated, or retained
      * only by the power owner); the COM owner claims before probing. */
@@ -219,12 +239,15 @@ static void inventory_thread(void *unused)
             if (!p.cursor) break;
         } while (!firmware_inventory_page(&p));
     }
+    /* fx-3: the EC quirk attaches once ownership is decided, owned or not
+     * (on a firmware-owned platform through the legacy EC binding), before
+     * serial PnP can spend seconds here. */
+    audio_ec_attach();
     /* Serial PnP enumeration waits seconds per port; once ACPI owns SCI,
      * thermal and button events, it must not delay this thread's poll. */
     struct task *com = fw_owned ? task_create_kernel("com-pnp", com_pnp_thread, NULL, P_DEVICE) : NULL;
     if (com) task_start(com);
     else com_peripherals_start();
-    if (fw_owned) audio_ec_attach();
     while (fw_owned) { fw_power_poll(); task_sleep_ms(20); }
 }
 void firmware_inventory_start(void)
@@ -234,6 +257,6 @@ void firmware_inventory_start(void)
     attempted = true;
     struct task *t = task_create_kernel("acpi-power", inventory_thread, NULL, P_DEVICE);
     /* Bound so the unavailable record also reaches the power_source cache. */
-    if (!t) { fw_bind(&fw_kernel_ops); fw_inventory_unavailable(AE_NO_MEMORY); }
+    if (!t) { fw_bind(&fw_kernel_ops); fw_inventory_unavailable(AE_NO_MEMORY); audio_ec_attach(); }
     else task_start(t);
 }
