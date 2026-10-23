@@ -762,6 +762,27 @@ struct ciuki_hardware_info {
  * Initialize version/size and zero reserved fields before NET_GET_STATE. */
 #define CIUKI_NET_VERSION 1u
 #define NET_GET_STATE 0x4301u
+#define NET_QUERY_DRIVER_PACK 0x4302u
+#define CIUKI_DRIVER_PACK_VERSION 1u
+/* Read-only compiled qualification and retained-host observation. No enable
+ * authority: boot admission always rechecks the exact installed manifest. */
+struct ciuki_driver_pack_query {
+    uint32_t version;
+    uint32_t size;
+    uint32_t bus;
+    uint32_t slot;
+    uint32_t function;
+    uint32_t vendor;
+    uint32_t device;
+    uint32_t sub_vendor;
+    uint32_t sub_device;
+    uint32_t revision;
+    uint8_t binary_hash[32];
+    uint8_t package_seal[32];
+    uint32_t qualified;
+    uint32_t busy;
+    uint32_t reserved[2];
+};
 #define CIUKI_NET_LINK_UNKNOWN 0u
 #define CIUKI_NET_LINK_DOWN 1u
 #define CIUKI_NET_LINK_UP 2u

@@ -13,6 +13,17 @@ bool ndis_profiles_available(void)
     for(unsigned i=0;i<sizeof(profiles)/sizeof(profiles[0]);i++) if(accepted(&profiles[i])) return true;
     return false;
 }
+bool ndis_qualified_package(const uint8_t hash[32],const struct pci_func *p,const uint8_t seal[32])
+{
+    if(!hash || !p || !seal) return false;
+    for(unsigned i=0;i<sizeof(profiles)/sizeof(profiles[0]);i++) {
+        const struct ndis_qualification *q=&profiles[i]; unsigned different=0;
+        for(unsigned j=0;j<32;j++) different|=(q->hash[j]^hash[j])|(q->package_seal[j]^seal[j]);
+        if(accepted(q) && !different && q->vendor==p->vendor && q->device==p->device &&
+           q->sub_vendor==p->sub_vendor && q->sub_device==p->sub_device && q->revision==p->revision) return true;
+    }
+    return false;
+}
 const struct ndis_qualification *ndis_qualified_profile(const struct ntimage *image,const struct pci_func *p)
 {
     if(!image || !p || !image->loaded || image->quarantined || !image->platform.user_host ||

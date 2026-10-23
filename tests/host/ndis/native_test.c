@@ -33,6 +33,9 @@ struct task *g_current;
 volatile bool g_need_resched;
 static unsigned masks,fences,wakes,worker_wakes,tx_done,detached,quarantines;
 static bool qualified,claim_live=true,device_pending;
+static bool installed=true;
+int ndis_package_admit(const char *path,const uint8_t hash[32],const struct pci_func *p,const uint8_t seal[32])
+{ (void)path; (void)hash; (void)p; (void)seal; return installed; }
 static uint64_t now;
 volatile uint64_t g_ticks;
 static struct pci_func pci={.vendor=0x8086,.device=0x100e,.irq_line=11,.irq_pin=1};
@@ -95,7 +98,9 @@ int main(void)
     irq.owner=owner;n.memory.generation=7;n.shared_address=0x300000;n.isr=0x101000;n.dpc=0x101010;
     n.wake_worker=worker;n.complete_tx=tx;
     assert(!ndis_native_bind(&n,&task,&image,0,2,3,owner,7,0x200000,0x290000,4096,&shared,true) && !masks);
-    qualified=true;assert(ndis_native_bind(&n,&task,&image,0,2,3,owner,7,0x200000,0x290000,4096,&shared,true));
+    qualified=true; installed=false;
+    assert(!ndis_native_bind(&n,&task,&image,0,2,3,owner,7,0x200000,0x290000,4096,&shared,true) && !masks);
+    installed=true;assert(ndis_native_bind(&n,&task,&image,0,2,3,owner,7,0x200000,0x290000,4096,&shared,true));
     assert(n.host.state==NDIS_HOST_LIVE && n.irq_attached && irq_handler && masks);
     uint8_t bytes[8];assert(ndis_native_pci_read(&n,1,bytes,7)==7 && !memcmp(bytes,config+1,7));
     assert(ndis_native_pci_intx_mask(&n,true) && (config[5]&4));

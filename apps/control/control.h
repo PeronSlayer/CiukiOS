@@ -18,6 +18,13 @@
 #include <ciuki/firmware_abi.h>
 #include <ciuki/font.h>
 #include <stdint.h>
+#include "driver_pack.h"
+#define CP_PACK_INSTALL 1450
+#define CP_PACK_REMOVE 1451
+#define CP_PACK_LOCATION 1452
+#define CP_PACK_PREVIEW 1453
+#define CP_PACK_CONFIRM_REMOVE 1454
+#define CP_PACK_FILES 1455
 #define CP_PROGRAM_MAX 96u
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
@@ -57,6 +64,10 @@ struct cp_network_result {
     char message[96];
 };
 struct cp_host {
+    int (*pack_scan)(void *, const char *, char names[][192], unsigned);
+    int (*pack_preview)(void *, struct dp_plan *, const char *, const char *, const struct ndp_device *, char reason[160]);
+    int (*pack_install)(void *, const struct dp_plan *, const char *, char reason[160]);
+    int (*pack_remove)(void *, const struct ndp_device *, char reason[160]);
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
     int save_async; /* save queued; main calls cp_settings_saved after durable completion */
@@ -116,6 +127,11 @@ struct cp_app {
     char network_names[2][64], network_message[96], network_test_name[128];
     unsigned network_selected, network_tab;
     int network_busy, network_loaded, building;
+    struct dp_plan *pack;
+    char pack_root[DP_PATH], pack_names[32][192], pack_reason[160];
+    int pack_count, pack_index, pack_valid;
+    unsigned pack_file_page;
+    struct ndp_device pack_device;
     struct desk_uninstall_entry uninstall[CP_PROGRAM_MAX];
     struct du_item uninstall_items[CP_PROGRAM_MAX];
     unsigned uninstall_count, uninstall_selected;
@@ -231,4 +247,6 @@ int cp_fonts_event(struct cp_app *, const struct du_event *);
 /* Service after first paint/input/completion; job_notify supplies native wakeups. */
 void cp_fonts_poll(struct cp_app *);
 void cp_fonts_close(struct cp_app *);
+int cp_pack_event(struct cp_app *, const struct du_event *);
+void cp_pack_buttons(struct cp_app *);
 #endif

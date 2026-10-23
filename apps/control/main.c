@@ -184,6 +184,65 @@ static int boot_save(void *ctx, const char *text, size_t length)
 }
 static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; return ciuki_devices(out); }
 static int firmware(void *ctx, struct ciuki_firmware_page *out) { (void)ctx; return ciuki_firmware_inventory(out); }
+static int pack_scan(void *ctx,const char *root,char names[][192],unsigned capacity)
+{ (void)ctx; return dp_scan(root,names,capacity); }
+static int pack_query(const struct ndp_device *d,const struct ndp_manifest *m,struct ciuki_driver_pack_query *q)
+{
+    memset(q,0,sizeof(*q)); q->version=CIUKI_DRIVER_PACK_VERSION; q->size=sizeof(*q);
+    q->bus=d->bus; q->slot=d->slot; q->function=d->function; q->vendor=d->vendor; q->device=d->device;
+    q->sub_vendor=d->sub_vendor; q->sub_device=d->sub_device; q->revision=d->revision;
+    if(m) { memcpy(q->binary_hash,m->files[m->binary].hash,32); memcpy(q->package_seal,m->seal,32); }
+    int fd=open("/dev/net",O_RDONLY|O_CLOEXEC); if(fd<0) return -errno;
+    int r=ciuki_devctl(fd,NET_QUERY_DRIVER_PACK,q,sizeof(*q));
+    if(close(fd) && !r) r=-errno;
+    return r;
+}
+static int pack_preview(void *ctx,struct dp_plan *plan,const char *root,const char *inf,const struct ndp_device *d,char reason[160])
+{
+    (void)ctx; int r=dp_preview(plan,root,inf,d,reason); if(r) return r;
+    struct ndp_manifest *m=&plan->manifest; struct ciuki_driver_pack_query q;
+    m->enabled=1; snprintf(m->reason,sizeof(m->reason),"%s",NDP_QUALIFIED); ndp_seal(m);
+    if(pack_query(d,m,&q) || !q.qualified) { m->enabled=0; snprintf(m->reason,sizeof(m->reason),"%s",NDP_DISABLED); ndp_seal(m); }
+    snprintf(reason,160,"%s",m->reason); return 0;
+}
+static int pack_present(const struct ndp_device *d)
+{
+    struct ciuki_devices_info *info=calloc(1,sizeof(*info)); if(!info) return 0;
+    info->version=CIUKI_DEVICES_VERSION; info->size=sizeof(*info); int found=0;
+    if(!ciuki_devices(info) && cp_snapshot_valid(info)) for(unsigned i=0;i<info->count;i++) {
+        const struct ciuki_device_record *r=&info->devices[i];
+        struct ndp_device actual={r->bus,r->slot,r->function,r->vendor,r->device,r->sub_vendor,r->sub_device,r->revision};
+        if(r->bus_type==CIUKI_BUS_PCI && r->class_id==CIUKI_DEVICE_NETWORK &&
+           r->state!=CIUKI_DEVICE_QUARANTINED && r->state!=CIUKI_DEVICE_ABSENT && !memcmp(&actual,d,sizeof(*d))) found=1;
+    }
+    free(info); return found;
+}
+static int pack_install(void *ctx,const struct dp_plan *plan,const char *root,char reason[160])
+{
+    (void)ctx;
+    if(!pack_present(&plan->manifest.device)) { snprintf(reason,160,"Device changed or is quarantined. Refresh the inventory."); return -EBUSY; }
+    if(plan->manifest.enabled) {
+        struct ciuki_driver_pack_query q;
+        if(pack_query(&plan->manifest.device,&plan->manifest,&q) || !q.qualified || q.busy) {
+            snprintf(reason,160,"Qualification changed or the driver host is busy. Select the package again."); return -EBUSY;
+        }
+    }
+    /* /System already belongs to the installed OS; never create a source-media store. */
+    if(mkdir(NDP_ROOT,0700) && errno!=EEXIST) { snprintf(reason,160,"The system driver store is unavailable."); return -errno; }
+    return dp_install(plan,root,NDP_ROOT,reason);
+}
+static int pack_busy(void *ctx,const struct ndp_device *d)
+{
+    (void)ctx; struct ciuki_driver_pack_query q;
+    /* Fail closed: an unreadable host state counts as busy. */
+    return pack_query(d,NULL,&q) || q.busy;
+}
+static int pack_remove(void *ctx,const struct ndp_device *d,char reason[160])
+{
+    (void)ctx;
+    if(!pack_present(d)) { snprintf(reason,160,"Device changed or is quarantined. Refresh the inventory."); return -EBUSY; }
+    return dp_uninstall_checked(d,NDP_ROOT,pack_busy,ctx,reason);
+}
 /* The id database is intentionally opened on first Device Manager lookup.
  * Its generator emits a flat, deterministic JSON object with no escaped
  * strings, so lookup needs only bounded string scanning. */
@@ -628,6 +687,8 @@ int main(int argc, char **argv)
     m->writer.notify=notify_completion; m->writer.notify_ctx=m;
     m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
+    h->pack_scan=pack_scan; h->pack_preview=pack_preview;
+    h->pack_install=pack_install; h->pack_remove=pack_remove;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;

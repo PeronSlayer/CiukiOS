@@ -447,6 +447,7 @@ static void log_refresh(struct cp_app *a)
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
+    if (cp_pack_event(a, e)) return;
     int save = 0;
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ESC) { cp_close(a); return; }
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ENTER && a->page == CP_DISPLAY) {
@@ -576,6 +577,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             int index = a->tree_device[e->index];
             a->selected_device_id = index >= 0 ? a->devices.devices[index].id : 0;
             du_get(u, C_PROPERTIES)->disabled = !a->devices_ok || index < 0;
+            cp_pack_buttons(a);
         }
         if (e->type == DU_EV_OPEN && e->index >= 0 && (unsigned)e->index < a->tree_count) {
             int device = a->tree_device[e->index];
@@ -838,6 +840,7 @@ void cp_tree_build(struct cp_app *a)
     }
     struct du_widget *properties_button = du_get(a->ui, C_PROPERTIES);
     if (properties_button) properties_button->disabled = !a->devices_ok || !w || w->active >= a->tree_count || a->tree_device[w->active] < 0;
+    cp_pack_buttons(a);
     a->ui->dirty = 1;
 }
 int cp_boot_serial(const char *src, size_t n, int serial, char *out, size_t cap)
@@ -1007,12 +1010,15 @@ static void system_pages(struct cp_app *a)
         w->active=(unsigned)a->system_tab;
     }
     if (a->page == CP_DEVICES) {
-        w = add(a, DU_TREE, C_TREE, 24, 40, 452, 270, ""); w->inactive_selection = 1;
+        w = add(a, DU_TREE, C_TREE, 24, 40, 452, 240, ""); w->inactive_selection = 1;
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
-        add(a, DU_BUTTON, C_PROPERTIES, 24, 320, 110, 24, "Properties...")->anchors = DU_ANCHOR_BOTTOM;
-        add(a, DU_BUTTON, C_FIRMWARE, 146, 320, 110, 24, "Firmware...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, C_PROPERTIES, 24, 288, 110, 24, "Properties...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, C_FIRMWARE, 146, 288, 110, 24, "Firmware...")->anchors = DU_ANCHOR_BOTTOM;
         cp_tree_build(a);
-        add(a, DU_BUTTON, C_REFRESH, 366, 320, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, C_REFRESH, 366, 288, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, CP_PACK_INSTALL, 24, 320, 250, 24, "Install driver from pack...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, CP_PACK_REMOVE, 282, 320, 194, 24, "Remove driver package...")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+        cp_pack_buttons(a);
     } else if (a->page == CP_DRIVERS) {
         unsigned n = a->devices_ok ? a->devices.driver_count : 0;
         for (unsigned k = 0; k < n; k++) {
@@ -1351,4 +1357,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { cp_preview_cancel(a); du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

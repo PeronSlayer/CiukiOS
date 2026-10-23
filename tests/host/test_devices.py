@@ -64,7 +64,7 @@ class DeviceTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS='detect_leaks=0')
             binary = folder / 'control'
             icons = load('devices_icons', ROOT / 'tests/host/desktop/icon_assets.py')
-            sources = ['tests/host/desktop/device_manager_test.c', 'apps/control/app.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
+            sources = ['tests/host/desktop/device_manager_test.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                        *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
                        *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
             ft = load('devices_freetype', ROOT / 'sdk/freetype/build.py'); library = ft.host()  # f2-63: libfont needs FreeType
@@ -80,7 +80,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/host/f2-75'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 30)  # f1-109 firmware inventory dialog
+            self.assertEqual(len(captures), 37)  # f1-109 firmware dialog + f6-07 driver pack frames
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.control_frame(self,path.stem,path.read_bytes(),width,height)
@@ -106,7 +106,7 @@ class DeviceTests(unittest.TestCase):
             env=dict(os.environ, TMPDIR=temp, ASAN_OPTIONS='detect_leaks=0')
             binary=folder / 'network-settings'
             icons=load('network_settings_icons', ROOT / 'tests/host/desktop/icon_assets.py')
-            sources=['tests/host/desktop/network_settings_test.c', 'apps/control/app.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
+            sources=['tests/host/desktop/network_settings_test.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                 *(f'apps/desktop/{n}.c' for n in ('settings','sounds','wallpaper','image','compositor','theme')),
                 *(f'apps/libdeskui/{n}.c' for n in ('draw','widgets','list','menu','dialog','textarea','icons','icon_map'))]
             ft=load('network_settings_freetype', ROOT / 'sdk/freetype/build.py'); library=ft.host()
