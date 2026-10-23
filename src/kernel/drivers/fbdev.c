@@ -1,7 +1,15 @@
 /* F1 LFB presenter and f1-23 quiesced runtime remapping.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
-#include <ciuki/cpu.h>
+/* Batch slice timing reads the TSC directly instead of including cpu.h, whose
+ * P2V/irq_save macros collide with host harness stubs that include this file
+ * (test_boot_modes); same unserialized P6 RDTSC as cpu.h. Lead fix 2026-10-23. */
+static inline uint64_t fb_read_tsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
 #include <ciuki/registry.h>
@@ -582,7 +590,7 @@ static int accel_pause(void *arg)
     presenter_unlock();
     if (grants_display_yield) grants_display_yield();
     kmutex_lock(&presenter);
-    if (batch_owner && g_cpu_tsc && g_tsc_per_ms) batch_slice_start=read_tsc_unserialized();
+    if (batch_owner && g_cpu_tsc && g_tsc_per_ms) batch_slice_start=fb_read_tsc();
     if (validate_deadline && g_ticks >= validate_deadline) return -ETIMEDOUT;
     if (validate_cancel && validate_cancel(validate_context)) return -EINTR;
     return 0;
@@ -1073,7 +1081,7 @@ static int batch_begin(void *arg, struct display_batch *b)
     unsigned idle=0;
     if (!__atomic_compare_exchange_n(&drawing,&idle,PRESENT_BUSY,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) return -EBUSY;
     batch_owner=b; b->cursor_shape=batch_cursor_shape;
-    batch_slice_start=g_cpu_tsc && g_tsc_per_ms ? read_tsc_unserialized() : 0;
+    batch_slice_start=g_cpu_tsc && g_tsc_per_ms ? fb_read_tsc() : 0;
     service_begin();
     return 0;
 }
@@ -1143,7 +1151,7 @@ static void batch_tile(void *arg)
     /* Check frequently, but yield only when the measured slice is due.
      * Half a millisecond leaves room for the next bounded CPU tile; without
      * calibrated TSC, every eight-sample checkpoint yields conservatively. */
-    if (g_cpu_tsc && g_tsc_per_ms>1 && read_tsc_unserialized()-batch_slice_start<g_tsc_per_ms/2) return;
+    if (g_cpu_tsc && g_tsc_per_ms>1 && fb_read_tsc()-batch_slice_start<g_tsc_per_ms/2) return;
     framebuffer_write_drain();
     (void)accel_pause(0);
     if (batch_cancelled(b)) b->cancel=true;
