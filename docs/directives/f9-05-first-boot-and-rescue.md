@@ -24,3 +24,12 @@ Host tests (`tests/host/desktop/firstboot_test.c` with the desktop test harness;
 Acceptance: the canonical image's normal boot unchanged (desktop tests green, `normal-boot` evidence unchanged); the installed system's first boot completes with a durable `firstboot=done` and the desktop; the lead's QEMU `f9-install` second boot (f9-06) shows `[firstboot] step=summary result=ok` and the desktop milestones.
 
 Report `build/codex/f9-05-report.md` with the placement decision, exact commands and results. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment R (lead, 2026-10-23 02:08): resumed for the public distribution
+
+The owner wants CiukiOS distributed for people's retro PCs. This directive runs on the combined Setup branch: f9-01 to f9-04 merged, with f9-04b, the native integration, running in parallel. It must not change the frozen libsetup interface or f9-04b's files.
+
+Additional items:
+1. **Build identity.** `scripts/build_image.py` installs `/System/BUILD.TXT` with the source commit, the kernel ELF SHA-256, the build manifest id and the build date. The Hardware Report (f9-07) quotes it. An image cannot contain its own SHA-256; testers quote that from the release page.
+2. **Rescue page.** The Setup rescue page offers the Hardware Report (f9-07): save the report to a USB stick or floppy from the CD environment.
+3. **Universal hardware.** First boot detects the target machine's hardware with the generic inventories and the display driver registry (`display-driver-model.md`); there are no T23 assumptions.
