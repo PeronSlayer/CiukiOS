@@ -43,6 +43,10 @@ CFLAGS = [
 # Only these routines may contain FPU/SIMD instructions.
 FPU_ALLOWED = {"fpu_fxsave", "fpu_fxrstor", "fpu_fnsave", "fpu_frstor", "fpu_reset_state", "trap_dispatch"}
 FPU_ALLOWED_MNEMONICS = {"fxsave", "fxrstor", "fnsave", "frstor", "fninit", "ldmxcsr", "xorps", "fnclex"}
+# Per-function admissions outside the FPU context switch. intel2d flushes CPU
+# cache lines only after its probe saw CPUID.1:EDX[19] (CLFSH); no other
+# function may contain CLFLUSH.
+FPU_ALLOWED_PER_FUNCTION = {"intel2d_clflush_range": {"clflush"}}
 
 
 def frame_flags(source: Path) -> list[str]:
@@ -148,6 +152,7 @@ def audit(elf: Path) -> None:
     dis = subprocess.run(["llvm-objdump", "-d", "--no-show-raw-insn", str(elf)],
                          capture_output=True, text=True, check=True).stdout
     allowed = {f: FPU_ALLOWED_MNEMONICS for f in FPU_ALLOWED}
+    allowed.update(FPU_ALLOWED_PER_FUNCTION)
     bad = audit_disassembly(dis, allowed)
     if bad:
         raise SystemExit("FPU/SIMD audit failed:\n" + "\n".join(bad[:20]))

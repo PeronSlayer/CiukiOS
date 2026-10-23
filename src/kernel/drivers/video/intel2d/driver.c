@@ -110,11 +110,19 @@ static uint32_t read_pte(void *ctx, unsigned i)
 { (void)ctx; return ((volatile uint32_t *)leases[1].mapping)[i]; }
 static void write_pte(void *ctx, unsigned i, uint32_t pte)
 { (void)ctx; ((volatile uint32_t *)leases[1].mapping)[i]=pte; }
-static void clean(const void *p, unsigned bytes)
+/* CLFLUSH runs only after the probe's CPUID.1:EDX[19] check above
+ * (cache_flush_unavailable otherwise; the Pentium III has no CLFLUSH). One
+ * noinline function under one name, so the kernel FPU/SIMD audit admits
+ * exactly this instruction here (scripts/build_kernel.py). */
+__attribute__((noinline)) static void intel2d_clflush_range(const void *p, unsigned bytes)
 {
     uintptr_t end=(uintptr_t)p+bytes;
     for (uintptr_t at=(uintptr_t)p&~(uintptr_t)(cache_line-1);at<end;at+=cache_line)
         __asm__ volatile("clflush (%0)" :: "r"(at) : "memory");
+}
+static void clean(const void *p, unsigned bytes)
+{
+    intel2d_clflush_range(p,bytes);
     cpu_write_drain();
 }
 static uint64_t now(void *ctx);
