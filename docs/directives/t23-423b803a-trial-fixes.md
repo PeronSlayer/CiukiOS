@@ -1,0 +1,21 @@
+# T23 trial of preview image 423b803a: four recurring problems
+
+- **Written:** 2026-10-23 15:15 by the lead, from the owner's trial of preview `423b803a…` (source `279fd77e`). Evidence (private, never committed): `legacy/local/physical/423b803a/serial.log` (COM1) and `legacy/local/physical/423b803a/disk/` (`LOGS/BOOT.LOG`, `LOGS/NETSURF.LOG`, `settings/`, `Registry/`, `AUDIO.CFG`).
+- **Owner:** these problems have recurred for a week. Every item therefore starts by reading the earlier diary entries and directives on the same problem (list in each item) and stating in the report which earlier fixes were tried, what they measured and why they did not hold; no fix is accepted without a host test that reproduces the trial's own figures and fails on the current code.
+- **Implementers:** Claude subagents (Codex out of usage until 2026-10-29 19:31), one worktree each from `main`. Rules as in `t23-9a60215f-trial-fixes.md` (research first with cited sources; host tests; no QEMU, no systemd-run, no image builds, no git mutations, no dev_diary edits; `date` before timestamps; English; report in `build/codex/<id>-report.md`).
+
+## fx-8 Applications and windows open slowly
+
+Evidence: `[desktop] stall stage=launch worker=idle/idle no_frame_ms=3891 input_pending=1 … wait=launch` (and 3332, 2759, 2218, 1665, 1141, 1133 ms); `stall stage=ipc … no_frame_ms=598`. The desktop draws no frame while it waits for a launch. Find what the launch path waits for (spawn, ELF load from disk, cache misses, hashing, channel handshake, first client frame) with the records' timestamps, and make the desktop keep presenting and accepting input while a launch proceeds (Windows 9x: the shell returns at once, the hourglass/AppStarting cursor shows, the window appears when the program creates it). Then cut the launch time itself where the evidence points (target: the window frame within 1 s on the T23 for the built-in programs; state the measured budget). Earlier work: f2-98c (event-driven native apps), f2-95/f2-96 (desktop CPU), dev diary 2026-10-20-09 and 2026-10-22-*.
+
+## fx-9 DOS games lag; DOOM full-screen audio
+
+Evidence: `[vm-audio] vm=1 cadence_late hist_lt1=284 hist_1_5=975 hist_5_20=2362 hist_gt20=161372`, `cadence_drop runs=4165 max=128`, `cadence … late_acks=2 merged=15 ack_max_ms=1318 … descheduled=2363 parked=0`, full-screen steps in the log; the owner reports the DOS games lag and DOOM full-screen audio is still broken. Find why the VM is descheduled and its audio acknowledgements arrive up to 1.3 s late (scheduler class/budget of the VM task, device workers, background tasks such as the fx-4b image check, EC/ACPI work, storage), using the `[cpu]`, `[sched]`, `[kernel]` records of the same windows. Fix the root cause so a DOS game in a window and full screen keeps its cadence (Windows 98: the foreground VM gets the time-slice priority, background work yields). Earlier work to read first: dev diary 2026-10-15-02/04/05/06, 2026-10-16-01/02, 2026-10-17-02, 2026-10-18-01/02, 2026-10-19-01/02/05, 2026-10-20-09; f4-32 and the vm-audio directives.
+
+## fx-10 Quake plays sound effects but no music
+
+Evidence: owner report. Find how Quake's music is supplied in CiukiOS (Quake shareware's music is CD audio: the virtual CD/MSCDEX path, the packaged tracks, the game's cdaudio driver and its INT 2Fh calls), why it is silent on the T23 (check the serial/BOOT.LOG for CD/MSCDEX/cdaudio records), and fix it. Earlier work: diary entries on Quake and the games disk (f3-* directives, `scripts/build_games_disk.py`).
+
+## fx-11 NetSurf: remote pages fail, local page renders slowly
+
+Evidence: `NETSURF.LOG`: `exit … layout_max_us=2175000 local_max_us=2175000 remote_max_us=0 … network=dns-ok`; `[net] stack … dhcp=bound … dns_ok=1 dns_fail=0`, few packets after DNS. The owner always gets an error page for remote sites. Find the exact failing stage (TCP connect, TLS handshake, certificate store, HTTP, redirect, fetcher scheduling) — add the stage records to NETSURF.LOG if they are missing — and fix it; then cut the local page layout time (2.2 s) where the evidence points. QEMU is allowed to the lead for F6 network evidence; the implementer delivers host tests and a QEMU probe case definition the lead will run. Earlier work: f6-18..f6-24 directives, dev diary 2026-10-21-08/10, 2026-10-22-*.
