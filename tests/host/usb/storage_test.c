@@ -99,6 +99,10 @@ static struct model {
      * data_nak_offset until data_nak_ms after its CBW. */
     bool wedged, data_nak;
     unsigned reset_nak_ms, data_nak_offset, data_nak_ms;
+    /* fx-17: a flash stick NAKs one IN token after every nak_every data
+     * packets of a READ(10) (fetching its next page); no_reclamation removes
+     * the driver's FSBR loop from the modelled schedule (negative control). */
+    unsigned nak_every, nak_seen; bool no_reclamation;
     uint64_t setup_at;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
@@ -144,7 +148,8 @@ static void sleep_ms(void *c,unsigned ms)
         m.now++;
         if(!m.uhci) { if(sleep_hook)sleep_hook();continue; }
         unsigned frame=(unsigned)(m.now+m.frame_offset)&1023;
-        struct uhci_model_io io={NULL,uhci_dma,uhci_transaction,&m.hc_status,qh_advance_hook};
+        struct uhci_model_io io={NULL,uhci_dma,uhci_transaction,&m.hc_status,qh_advance_hook,
+            m.no_reclamation ? m.h.dma_phys+USB_UHCI_TERM_QH : 0};
         assert(!uhci_model_frame(&io,((uint32_t *)m.dma)[frame]));
         if(m.latched && (uhci_dma(NULL,m.latched_qh,8)[1]&1)) {
             /* The HC fetched this TD before unlink and completes it while
@@ -276,6 +281,7 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
            m.read_fault_kind==1 && m.at==512) return -USB_EAGAIN;
         if(m.cbw[15]==0x28 && m.read_commands==1 &&
            m.now-m.command_at<m.first_read_delay) return -USB_EAGAIN;
+        if(m.nak_every && m.cbw[15]==0x28 && m.at && !(m.at/64%m.nak_every) && m.nak_seen!=m.at) {m.nak_seen=m.at;return -USB_EAGAIN;}
         if(m.data_nak && m.cbw[15]==0x28 && m.at==m.data_nak_offset &&
            m.now-m.command_at<m.data_nak_ms) return -USB_EAGAIN;
         if(m.forever_data || (m.nak_capacity && m.cbw[15]==0x25) ||
@@ -353,7 +359,12 @@ static void use_uhci(void)
     m.interrupt_mask=0x0d;m.native_gate=0x2000;
     volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_UHCI_CONTROL_QH);
     qh[0]=(m.h.dma_phys+USB_UHCI_BULK_QH)|2;qh[1]=1;
-    qh=(volatile uint32_t *)(m.dma+USB_UHCI_BULK_QH);qh[0]=qh[1]=1;
+    /* The schedule tail as uhci.c start() builds it (fx-17): bulk QH ->
+     * terminating QH (element: the inactive tail TD), whose horizontal link
+     * the driver loops back to the control QH during a bulk stage. */
+    qh=(volatile uint32_t *)(m.dma+USB_UHCI_BULK_QH);qh[0]=(m.h.dma_phys+USB_UHCI_TERM_QH)|2;qh[1]=1;
+    qh=(volatile uint32_t *)(m.dma+USB_UHCI_TERM_QH);qh[0]=1;qh[1]=m.h.dma_phys+USB_TAIL;
+    ((uint32_t *)(m.dma+USB_TAIL))[0]=1;((uint32_t *)(m.dma+USB_TAIL))[1]=0;
     for(unsigned i=0;i<1024;i++) ((uint32_t *)m.dma)[i]=(m.h.dma_phys+USB_ED)|2;
 }
 static void cleanup(void)
@@ -371,8 +382,10 @@ static unsigned clean_flag(void)
 static void io_mount(const char *path,bool partitioned,unsigned bits)
 {
     setup(path,partitioned);m.max_lun_stall=true;m.initial_ua=1;mount_device();
-    struct storage *s=storage_get();assert(s->volumes[4].fat.type==bits && s->volumes[4].fat.readonly);
-    assert(s->volumes[4].fat.scan_deferred && !s->volumes[4].fat.scan_complete && !m.writes);
+    /* fx-17: a writable stick is read-write at publication, without an
+     * ownership scan; only the clean flag is cleared (FAT12 has none). */
+    struct storage *s=storage_get();assert(s->volumes[4].fat.type==bits && !s->volumes[4].fat.readonly && s->volumes[4].fat.removable_trusted);
+    assert(s->volumes[4].fat.scan_deferred && !s->volumes[4].fat.scan_complete && (bits==12 ? !m.writes : m.writes>0) && (bits==12 || !clean_flag()));
     assert(s->volumes[4].part.start==m.offset && s->vfs.drive_flags[4]==VFS_DRIVE_REMOVABLE);
     assert(s->volumes[4].io.media_generation==block()->media_generation);
     struct vfs_table *t=calloc(1,sizeof(*t));assert(t && !vfs_table_init(&s->vfs,t,4));
@@ -383,7 +396,7 @@ static void io_mount(const char *path,bool partitioned,unsigned bits)
     assert(usb_storage_eject(s,4,block()->media_generation)==-FS_EBUSY);
     assert(m.writes==writes && m.flushes==flushes && s->vfs.volumes[4]);
     assert(!vfs_close(t,h));
-    assert(!storage_enable_write(s,4) && s->volumes[4].fat.scan_complete && !s->volumes[4].fat.scan_deferred);
+    assert(!storage_enable_write(s,4) && !s->volumes[4].fat.readonly);
     h=vfs_open(t,"E:/USB copy.bin",VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0);assert(h>=0);
     memset(payload,0xa7,sizeof(payload));assert(!vfs_write(t,h,payload,sizeof(payload),&done)&&done==sizeof(payload));
     uint64_t pos;assert(!vfs_seek(t,h,0,VFS_SEEK_SET,&pos));
@@ -411,6 +424,12 @@ static void errors(const char *path)
         case 0:m.cbw_stall=true;break;case 1:m.data_stall=true;break;case 2:m.phase_error=true;break;
         case 3:m.bad_tag=true;break;case 4:m.bad_signature=true;break;case 5:m.bad_residue=true;break;
         case 6:m.short_csw=true;break;case 7:m.timeout=true;break;case 8:m.remove_data=true;break;case 9:m.ua=true;break;
+        }
+        if(mode==1) {
+            /* fx-17: MEDIUM ERROR (CHECK CONDITION 3/11/00 after a data
+             * STALL) fails the read; the stick stays online and mounted. */
+            assert(block()->read(block(),0,1,b)<0 && !block()->quarantined && device()->storage.online);
+            assert(!block()->read(block(),0,1,b));usb_storage_service(&m.h);assert(storage_get()->vfs.volumes[4]);cleanup();continue;
         }
         assert(block()->read(block(),0,1,b)<0 && block()->quarantined);
         unsigned stopped=m.commands;assert(stopped>=before && block()->write(block(),1,1,b)<0 && m.commands==stopped);
@@ -455,11 +474,14 @@ static void readonly(const char *path)
     setup(path,false);unsigned reserved=fs_rd16(m.image+14),fats=m.image[16],fsz=fs_rd16(m.image+22);
     assert(fsz);
     for(unsigned i=0;i<fats;i++) {uint8_t *flag=m.image+(reserved+i*fsz)*512+2;fs_wr16(flag,fs_rd16(flag)&~0x8000u);}
-    mount_device();assert(storage_get()->volumes[4].fat.readonly && !m.writes);
-    assert(!storage_enable_write(storage_get(),4));cleanup();
+    /* fx-17: a dirty stick is writable at once, unwritten at insertion, and
+     * a safe removal keeps the dirty indication for a later check. */
+    mount_device();assert(!storage_get()->volumes[4].fat.readonly && storage_get()->volumes[4].fat.dirty_preserved && !m.writes);
+    assert(!storage_enable_write(storage_get(),4));
+    assert(!usb_storage_eject(storage_get(),4,block()->media_generation) && !clean_flag());cleanup();
     setup(path,false);m.sector_size=4096;assert(usb_storage_attach(device())<0);
     assert(!device()->storage.online && !m.writes);cleanup();
-    puts("PASS USB write admission: all mounts read-only without writes, unsupported flush/protected FAT, explicit dirty repair, non-512 sectors rejected");
+    puts("PASS USB write admission: unsupported flush/write-protected stay read-only without writes, dirty stick writable with its indication kept, non-512 sectors rejected");
 }
 static void uhci_transport(const char *path)
 {
@@ -518,9 +540,13 @@ static void uhci_transport(const char *path)
     assert(!block()->read(block(),0,1,readback) && m.clear_in==1 && !m.resets);
     assert(strstr(records,"stall addr=1 reason=csw") && !block()->quarantined);cleanup();
     setup(path,false);use_uhci();attach();m.data_stall=true;uint8_t buffer[512]={0};
-    assert(block()->write(block(),1,1,buffer)<0 && m.writes==1 && block()->quarantined);
-    unsigned commands=m.commands;
-    assert(block()->write(block(),1,1,buffer)<0 && m.commands==commands && m.writes==1);cleanup();
+    /* fx-17: a WRITE ended by CHECK CONDITION with valid sense fails that
+     * request only; the stick stays online and published. An issued write
+     * is never resent: each failing request issues exactly one WRITE(10). */
+    assert(block()->write(block(),1,1,buffer)<0 && m.writes==1 && !block()->quarantined && device()->storage.online);
+    assert(strstr(records,"[usb-storage] command_error addr=1 cmd=2a lba=1 sectors=1") && strstr(records,"state=online"));
+    assert(strstr(records,"sense=03/11/00"));
+    assert(!block()->write(block(),1,1,buffer) && m.writes==2 && device()->storage.command_errors==1 && !block()->quarantined);cleanup();
     puts("PASS USB UHCI/BOT: 1 ms frames, 64-byte MPS, delayed/short INQUIRY, late ACK retirement, first data STALL, CSW stall/tag diagnostics, babble, preserved fault snapshots, wrapped frame count, reset ordering, no write resend");
 }
 static void complete_fault_record(void)
@@ -662,24 +688,28 @@ static void prepare_validation(const char *path)
         if(kind<2) for(unsigned copy=0;copy<2;copy++)
             fs_wr32(m.image+(reserved+copy*sectors)*512+4,0x07ffffff);
         attach();usb_storage_service(&m.h);
+        /* fx-17 supersedes F1-74's read-only publication for removable
+         * media: a writable stick is read-write once published, without the
+         * ownership scan (Windows 98 VFAT / Linux vfat). A dirty medium is
+         * not written at insertion and keeps its dirty indication; an
+         * explicit check (storage_enable_write on a read-only volume, the
+         * f0-25 workflow) still owns repair. */
+        struct storage_volume *v=&storage_get()->volumes[4];
+        assert(device()->storage.published && !block()->quarantined && v->fat.scan_deferred && !v->fat.scan_passes);
+        assert(!v->fat.readonly && v->fat.writable_session && v->fat.removable_trusted && !v->fat.ro_reasons);
+        assert(strstr(records,"[storage] removable drive=E mode=rw"));
+        assert(strstr(records,"[usb-storage] volume drive=E part=1 fat=32 mode=rw"));
         if(kind<2) {
-            struct storage_volume *v=&storage_get()->volumes[4];
-            assert(device()->storage.published && v->fat.readonly && !m.writes && v->fat.scan_deferred);
-            assert(!storage_enable_write(storage_get(),4) && !v->fat.readonly && m.writes);
-            assert(!v->fat.ro_reasons && v->fat.repaired_lost==1);
-            if (!kind) assert(v->fat.repaired_copies==1);
-            assert(!v->fat.prepare_cache);
-        } else if(kind==2) {
-            assert(device()->storage.published && !block()->quarantined && !m.writes);
-            assert(storage_enable_write(storage_get(),4)==-FS_ENOMEM && storage_get()->volumes[4].fat.readonly);
-            fs_host_contig_fail=0;
+            assert(!m.writes && v->fat.dirty_preserved && !v->fat.repaired_lost && strstr(records,"mode=rw dirty=1"));
+            assert(!storage_enable_write(storage_get(),4) && !v->fat.readonly);
         } else {
-            assert(device()->storage.published && storage_get()->volumes[4].fat.readonly);
-            assert(!storage_enable_write(storage_get(),4));
+            assert(m.writes && !v->fat.dirty_preserved && strstr(records,"mode=rw dirty=0"));
+            if(kind==2) fs_host_contig_fail=0;
         }
+        assert(!v->fat.prepare_cache);
         cleanup();
     }
-    puts("PASS F1-74 deferred upgrades: repair unowned copy/lost-cluster allocation, refuse writes on allocation failure, padding excluded, release all pages");
+    puts("PASS fx-17 removable activation: dirty media writable with the indication kept and no insertion write, clean media marked in use, no ownership scan or window allocation");
 }
 static bool budget_log_delay;
 static void delay_after_publication(const char *line,size_t n)
@@ -718,17 +748,24 @@ static void fat32_budget(const char *path)
     mount_device();
     uint64_t bind_ms=m.now-begin;
     struct usb_storage *s=&device()->storage;
-    assert(bind_ms<1000 && s->published && !block()->quarantined && storage_get()->volumes[4].fat.readonly);
-    assert(storage_get()->volumes[4].fat.scan_deferred && !storage_get()->volumes[4].fat.scan_complete);
-    assert(s->bind_read_max==1 && s->bind_read_requests<=9 && s->bind_read_sectors<=9 && !m.writes);
+    /* fx-17: FSInfo says the free count is unknown. A 4 GiB FAT (512 KiB
+     * per copy) is counted at activation and the stick is writable; the
+     * 32 GiB FAT (4 MiB) is not counted under the drive reservation, so it
+     * stays read-only with reason free_count_unknown until the explicit
+     * full upgrade. Publication itself still reads nine single sectors. */
+    struct storage_volume *sv=&storage_get()->volumes[4];
+    assert(bind_ms<1000 && s->published && !block()->quarantined && sv->fat.scan_deferred && !sv->fat.scan_complete);
+    assert(s->bind_read_max==1 && s->bind_read_requests<=9 && s->bind_read_sectors<=9);
+    if(gib==4) assert(!sv->fat.readonly && !sv->fat.free_unknown && sv->fat.free_clusters==sv->fat.clusters-2 && m.writes && strstr(records,"[storage] removable drive=E mode=rw"));
+    else assert(sv->fat.readonly && sv->fat.free_unknown && !m.writes && strstr(records,"[storage] removable drive=E mode=ro dirty=0 reason=free_count_unknown"));
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
     int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
     uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==512);
     for(unsigned i=0;i<512;i++)assert(data[i]==0x5a);
     assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
     assert(s->max_sectors==USB_STORAGE_MAX_SECTORS && strstr(records," read_max=1 max_sectors=128\n"));
-    printf("PASS F1-74 %u GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u read_max=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: read-only with scan deferred\n",
-           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->max_sectors,s->bind_poll_frames,s->bind_retire_frames);
+    printf("PASS F1-74 %u GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u read_max=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: %s with scan deferred\n",
+           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->max_sectors,s->bind_poll_frames,s->bind_retire_frames,sv->fat.readonly ? "read-only (free count unknown)" : "writable after a 512 KiB census");
     m.bytes=mapped;cleanup();
     }
     setup(path,true);use_uhci();budget_log_delay=true;log_hook=delay_after_publication;

@@ -132,6 +132,10 @@ int storage_ntfs_mount(struct storage *, unsigned slot);
 int storage_ntfs_unmount(struct storage *, unsigned slot);
 struct storage_volume *storage_volume(struct storage *, unsigned drive);
 int storage_enable_write(struct storage *, unsigned drive);
+/* fx-17: after a removable device's volumes are published read-only, make
+ * each writable one read-write (Windows 98 model, no ownership scan).
+ * Returns the number of volumes made writable; records each outcome. */
+int storage_activate_removable(struct storage *, struct blkdev *);
 int storage_writeback(struct storage *, uint32_t now_ms);
 int storage_shutdown(struct storage *); /* no clean mark following any error */
 void storage_destroy(struct storage *); /* quiescent host tests / failed init only */

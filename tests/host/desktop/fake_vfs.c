@@ -9,11 +9,23 @@ struct fake_node fake_nodes[FAKE_NODES];
 static struct { int node, live; unsigned offset; } fds[16];
 int fake_countdown, fake_operations, fake_metadata_count, fake_short_io;
 struct fake_read_stats fake_reads;
+char fake_readonly[FM_PATH], fake_gone[FM_PATH];
+int fake_gone_after = -1, fake_rofs_first;
 
 static int injection(void) { fake_operations++; return fake_countdown > 0 && --fake_countdown == 0 ? -EIO : 0; }
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int same(const char *a, const char *b)
 { while (*a && fold((unsigned char)*a) == fold((unsigned char)*b)) { a++; b++; } return !*a && !*b; }
+/* Volume identity: C: is 1, /mnt/d is 2, /mnt/e 3, ... */
+uint32_t fake_volume(const char *p)
+{
+    if (!strncmp(p, "/mnt/", 5) && fold((unsigned char)p[5]) >= 'a' && fold((unsigned char)p[5]) <= 'z' && (!p[6] || p[6] == '/'))
+        { unsigned c = fold((unsigned char)p[5]); return c >= 'd' ? 2u + (c - 'd') : 40u + (c - 'a'); }
+    return 1;
+}
+static int under(const char *p, const char *prefix) { return prefix[0] && fm_beneath(p, prefix); }
+static int gone(const char *p) { return under(p, fake_gone) && !fake_gone_after; }
+static int readonly(const char *p) { return under(p, fake_readonly); }
 
 int fake_lookup(const char *p) { for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live && same(fake_nodes[i].path, p)) return i; return -1; }
 
@@ -23,7 +35,7 @@ int fake_create(const char *p, enum fm_type type)
     for (int i = 0; i < FAKE_NODES; i++) if (!fake_nodes[i].live) {
         memset(&fake_nodes[i], 0, sizeof(fake_nodes[i]));
         fake_nodes[i].live = 1; snprintf(fake_nodes[i].path, FM_PATH, "%s", p);
-        fake_nodes[i].meta = (struct fm_meta){type, 0, (uint64_t)i + 1, strncmp(p, "/mnt/d", 6) ? 1u : 2u,
+        fake_nodes[i].meta = (struct fm_meta){type, 0, (uint64_t)i + 1, fake_volume(p),
                                                type == FM_DIR ? 0040777u : 0100666u, 1791700000 + i * 60, 0};
         return i;
     }
@@ -46,11 +58,16 @@ static int parent_of(const char *p)
 }
 
 static int stat_node(void *ctx, const char *p, struct fm_meta *m)
-{ (void)ctx; int r = injection(); if (r) return r; int n = fake_lookup(p); if (n < 0) return -ENOENT; *m = fake_nodes[n].meta; return 0; }
+{
+    (void)ctx; int r = injection(); if (r) return r;
+    if (gone(p)) return same(p, fake_gone) ? -ENOENT : -EIO;
+    int n = fake_lookup(p); if (n < 0) return -ENOENT; *m = fake_nodes[n].meta; return 0;
+}
 
 static int list(void *ctx, const char *p, unsigned flags,fm_emit emit, void *arg)
 {
     (void)ctx; (void)flags; int r = injection(); if (r) return r;
+    if (gone(p)) return -EIO;
     int n = fake_lookup(p); if (n < 0) return -ENOENT;
     if (fake_nodes[n].meta.type != FM_DIR) return -ENOTDIR;
     /* Emit in creation order, like an unsorted FAT directory. */
@@ -63,16 +80,26 @@ static int list(void *ctx, const char *p, unsigned flags,fm_emit emit, void *arg
 }
 
 static int mkdir_node(void *ctx, const char *p)
-{ (void)ctx; int r = injection(); if (r) return r; if (parent_of(p) < 0) return -ENOENT; int n = fake_create(p, FM_DIR); return n < 0 ? n : 0; }
+{
+    (void)ctx; int r = injection(); if (r) return r;
+    if (gone(p)) return -EIO;
+    if (readonly(p)) return -EROFS;
+    if (parent_of(p) < 0) return -ENOENT; int n = fake_create(p, FM_DIR); return n < 0 ? n : 0;
+}
 
 static int rename_node(void *ctx, const char *a, const char *b)
 {
     (void)ctx; int r = injection(); if (r) return r;
+    if (gone(a) || gone(b)) return -EIO;
+    /* The native rename (px rename_inner) reports EXDEV before a read-only
+     * source volume; the DOS-facing VFS path checks read-only first. */
+    if (fake_rofs_first && (readonly(a) || readonly(b))) return -EROFS;
     int source = fake_lookup(a), target = fake_lookup(b);
     if (source < 0) return -ENOENT;
     if (parent_of(b) < 0) return -ENOENT;
-    unsigned volume = strncmp(b, "/mnt/d", 6) ? 1 : 2;
+    unsigned volume = fake_volume(b);
     if (fake_nodes[source].meta.dev != volume) return -EXDEV;
+    if (readonly(a) || readonly(b)) return -EROFS;
     if (fm_beneath(b, a) && !same(a, b)) return -EINVAL;
     if (target >= 0 && target != source) {
         if (fake_nodes[target].meta.type != fake_nodes[source].meta.type) return fake_nodes[source].meta.type == FM_DIR ? -ENOTDIR : -EISDIR;
@@ -87,11 +114,13 @@ static int rename_node(void *ctx, const char *a, const char *b)
 }
 
 static int unlink_node(void *ctx, const char *p)
-{ (void)ctx; int r = injection(); if (r) return r; int n = fake_lookup(p); if (n < 0) return -ENOENT; if (fake_nodes[n].meta.type != FM_FILE) return -EISDIR; fake_nodes[n].live = 0; return 0; }
+{ (void)ctx; int r = injection(); if (r) return r; if (gone(p)) return -EIO; if (readonly(p)) return -EROFS; int n = fake_lookup(p); if (n < 0) return -ENOENT; if (fake_nodes[n].meta.type != FM_FILE) return -EISDIR; fake_nodes[n].live = 0; return 0; }
 
 static int rmdir_node(void *ctx, const char *p)
 {
     (void)ctx; int r = injection(); if (r) return r;
+    if (gone(p)) return -EIO;
+    if (readonly(p)) return -EROFS;
     int n = fake_lookup(p); if (n < 0) return -ENOENT;
     for (int i = 0; i < FAKE_NODES; i++) if (i != n && fake_nodes[i].live && fm_beneath(fake_nodes[i].path, fake_nodes[n].path)) return -ENOTEMPTY;
     fake_nodes[n].live = 0; return 0;
@@ -100,6 +129,8 @@ static int rmdir_node(void *ctx, const char *p)
 static int open_node(void *ctx, const char *p, int make)
 {
     (void)ctx; int r = injection(); if (r) return r;
+    if (gone(p)) return -EIO;
+    if (make && readonly(p)) return -EROFS;
     if (make && parent_of(p) < 0) return -ENOENT;
     int n = make ? fake_create(p, FM_FILE) : fake_lookup(p);
     if (n < 0) return make ? n : -ENOENT;
@@ -113,6 +144,7 @@ static int read_node(void *ctx, int fd, void *p, unsigned size)
     if (size > fake_reads.max_request) fake_reads.max_request = size;
     (void)ctx; int r = injection(); if (r) return r;
     assert(fds[fd].live); struct fake_node *n = &fake_nodes[fds[fd].node];
+    if (under(n->path, fake_gone)) { if (fake_gone_after > 0) fake_gone_after--; if (!fake_gone_after) return -EIO; }
     unsigned count = (unsigned)n->meta.size - fds[fd].offset;
     if (count > size) count = size;
     if (fake_short_io && count > 113) count = 113;
@@ -125,6 +157,7 @@ static int write_node(void *ctx, int fd, const void *p, unsigned size)
 {
     (void)ctx; int r = injection(); if (r) return r;
     assert(fds[fd].live); struct fake_node *n = &fake_nodes[fds[fd].node];
+    if (gone(n->path)) return -EIO;
     if (fake_short_io && size > 71) size = 71;
     if (fds[fd].offset + size > sizeof(n->data)) return -ENOSPC;
     memcpy(n->data + fds[fd].offset, p, size); fds[fd].offset += size; n->meta.size = fds[fd].offset;
@@ -147,6 +180,7 @@ void fake_reset(void)
 {
     memset(fake_nodes, 0, sizeof(fake_nodes)); memset(fds, 0, sizeof(fds));
     fake_countdown = fake_operations = fake_metadata_count = fake_short_io = 0;
+    fake_readonly[0] = fake_gone[0] = 0; fake_gone_after = -1; fake_rofs_first = 0;
     memset(&fake_reads, 0, sizeof(fake_reads));
     fake_create("/", FM_DIR);
 }

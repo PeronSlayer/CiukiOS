@@ -619,6 +619,36 @@ int storage_enable_write(struct storage *s, unsigned d)
     fs_service();
     return e;
 }
+int storage_activate_removable(struct storage *s, struct blkdev *dev)
+{
+    if (!s || !s->ready || s->stopped || !dev) return 0;
+    int writable=0;
+    for (unsigned d=0;d<26;d++) {
+        vfs_lock(&s->vfs,0);
+        struct storage_volume *v=&s->volumes[d];
+        bool candidate=v->present && v->removable && v->part.parent==dev && v->fat.mounted && v->fat.readonly &&
+            !v->error && v->read_gate && !v->writes_before_gate && !s->setup_mode && !s->writer_error;
+        vfs_unlock(&s->vfs);
+        if (!candidate) continue;
+        vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
+        int e=-FS_ENOENT; bool dirty=false;
+        if (v->present && v->part.parent==dev && v->fat.mounted) {
+            dirty=(v->fat.ro_reasons&(FAT_RO_DIRTY|FAT_RO_IO_FLAG))!=0;
+            refresh_volume(v);
+            e=VFS_IO(&s->vfs,fat_enable_write_removable(&v->fat));
+            if (!e && !v->write_sequence) v->write_sequence=++s->sequence;
+            if (e) v->refused++;
+        }
+        klog("[storage] removable drive=%c mode=%s dirty=%u reason=%s free=%u census_ms=%u result=%d",
+             'A'+d,v->fat.readonly ? "ro" : "rw",dirty,v->fat.readonly ? fat_readonly_reason(&v->fat) : "writable",
+             v->fat.free_clusters,v->fat.repair_ms,e);
+        vfs_unlock(&s->vfs);
+        fs_service();
+        if (!e) writable++;
+    }
+    if (writable) fs_event_wake(&s->vfs.volume_changed);
+    return writable;
+}
 int storage_writeback(struct storage *s, uint32_t now)
 {
     if (!s || !s->ready || s->stopped) return -FS_EINVAL;

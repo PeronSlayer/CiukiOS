@@ -95,3 +95,50 @@ Image Viewer precedes Paint in the catalogue, retaining F4-07's default image
 associations. Paint still advertises BMP/PNG support so F2-42's Open With menu
 can launch the editor. Regression checks exercise both the default Viewer
 launch and explicit Open With > CiukPaint for the same Desktop BMP.
+
+## fx-17: drop effect, moves across drives, removable media errors (2026-10-23)
+
+T23 trial of `e831e685`: a song dragged from the stick (E:) to the desktop
+ran as `[files] job=move` (before fx-19 Files sent "copy" only for Ctrl;
+anything else moved), copied 7,139,466 bytes, then failed to delete the read-only
+source and reported `errors=1` with "Cannot complete the file operation …
+The original item is kept", although both copies existed.
+
+Research: [Handling Shell Data Transfer Scenarios](https://learn.microsoft.com/en-us/windows/win32/shell/datascenarios)
+(a conventional move is a copy followed by deleting the original; drop
+targets support right-drag); Explorer's rule as documented by Microsoft's
+community answers ([ways to drag files or folders](https://answers.microsoft.com/en-us/windows/forum/all/ways-to-drag-files-or-folders/b83a8ee6-a9d6-4e8e-8e9b-778dc6d90b8b):
+Ctrl copies, Shift moves, right-drag offers Copy Here/Move Here/Create
+Shortcuts Here) and [Windows XP Pocket Reference ch. 2](https://oreilly.com/library/view/windows-xp-pocket/0596004257/ch02.html)
+(a drag within one drive moves, to another drive copies); Windows 98
+Resource Kit ch. 10 (removable media volume tracking reports improper
+removal).
+
+Drop effect: one rule, fx-19's `fm_drop_effect()` in `apps/files/model.c`
+(Ctrl copies, Shift moves, Ctrl+Shift/Alt link; otherwise the same drive
+moves and another drive copies), called by Files and the desktop. fx-17
+does not duplicate it; the transfer engine below performs whatever effect
+that rule chose. Cut/Paste is a move (copy then delete across drives).
+
+Transfers (`fm_job_step()`):
+
+- A cross-volume move publishes the complete copy, then deletes the
+  source. A source that cannot be deleted (read-only or write-protected
+  medium, access denied, in use) keeps both copies: the item counts as
+  copied, the job ends `FM_DONE` with `kept`/`kept_folders`, and
+  `fm_job_report()` shows a warning "'NAME' was copied to DEST, but the
+  original on E: could not be deleted: REASON. Both copies are kept." It
+  never says the copy failed. A rename refused by a read-only source
+  volume before its EXDEV check also falls back to copy when the
+  destination is on another volume (`destination_dev`).
+- A move within a read-only medium fails at once with nothing copied.
+- Every failure names the item and Explorer's reason text; a removed
+  medium (EIO/ENOENT whose `/mnt/<x>` root then disappears, polled up to
+  2 s for the 250 ms port scan) is reported as "the disk in drive E: was
+  removed", with the number of completed items and whether the partial
+  copy was deleted or may remain on the removed destination.
+- Copies read 64 KiB per step (progress and Cancel stay responsive) and
+  write up to 1 MiB per `write()`: each FAT `write()` is one durable growth
+  group closed by device cache flushes, so a stick with 8 KiB clusters
+  receives 4 flushes per MiB instead of 64.
+

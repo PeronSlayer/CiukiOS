@@ -438,7 +438,22 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
                 s->trace.fault_reason ? s->trace.fault_reason : s->trace.csw_status ? "csw_status" : "write_failed",false);
             lowered=true;
         }
-        if (e && !b->quarantined) e=fault(d,write ? "write_failed" : "read_failed",false);
+        /* fx-17: a READ/WRITE the device ended with CHECK CONDITION and valid
+         * sense (command_policy got here without a transport fault) is a
+         * failed command, not a lost device: the request fails, the medium
+         * stays mounted (SBC-3 sense keys; Linux sd completes the request
+         * with an error and keeps the disk). DATA PROTECT (7/27/xx) means
+         * write protection: later writes are refused with EROFS. Transport,
+         * medium-change and readiness faults still quarantine above. */
+        if (e==-FS_EIO && !b->quarantined && s->online && live(d)) {
+            if (write && s->sense_key==7) {
+                s->write_protected=true; b->write=0; b->flush=0; b->write_cache_state=BLKDEV_CACHE_UNKNOWN;
+                e=-FS_EROFS;
+            }
+            s->command_errors++;
+            klog("[usb-storage] command_error addr=%u cmd=%02x lba=%u sectors=%u sense=%02x/%02x/%02x result=%d errors=%u state=online",
+                 d->address,cmd,(uint32_t)(lba+done),n,s->sense_key,s->asc,s->ascq,e,s->command_errors);
+        } else if (e && !b->quarantined) e=fault(d,write ? "write_failed" : "read_failed",false);
     }
     usb_host_drop(d->host);
     /* Outside the host reservation: the queue then issues commands of the
@@ -661,6 +676,9 @@ void usb_storage_service(struct usb_host *h)
                 /* Publication is the commit point. Diagnostic output may
                  * exceed the budget but cannot revoke a completed mount. */
                 s->binding=false;
+                /* fx-17: a writable medium is read-write once published
+                 * (Windows 98 removable model; no ownership scan). */
+                (void)storage_activate_removable(store,&s->block);
                 for (unsigned drive=4;drive<26;drive++) {
                     struct storage_volume *v=&store->volumes[drive];
                     if (!v->present || !v->removable || v->part.parent!=&s->block) continue;

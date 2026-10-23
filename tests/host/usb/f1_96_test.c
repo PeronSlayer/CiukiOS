@@ -40,6 +40,11 @@ static void begin(const char *path,unsigned latency)
     m.h.irq_attached=true;m.interrupt_mask=0x0d;m.native_gate=0x2000;
     wake=latency;sleep_hook=wake_latency;command_hook=record_cbw;ncbw=0;
     mount_device();
+    /* fx-17: the writable activation after publication counted the FAT
+     * with read-ahead READ(10)s and wrote the clean flag. These cases model
+     * the transfer ladder from a device that completed only the bind's
+     * single-sector reads. */
+    device()->storage.read_qualified=1;m.max_read_sectors=m.max_write_sectors=0;
 }
 static void end(void) {sleep_hook=NULL;command_hook=NULL;wake=1;cleanup();}
 static uint32_t queue_limit(void)
@@ -51,6 +56,9 @@ static void negotiation(const char *path)
 {
     begin(path,1);
     struct usb_storage *s=&device()->storage;
+    /* fx-17: the writable activation after publication counts the FAT with
+     * read-ahead READ(10)s; the bind itself still read one sector at a
+     * time. Model a device that has only completed single-sector reads. */
     assert(s->max_sectors==USB_STORAGE_MAX_SECTORS && s->max_sectors==128 && s->read_qualified==1);
     assert(strstr(records,"[usb-storage] bind addr=1 ") && strstr(records," read_max=1 max_sectors=128\n"));
     assert(strstr(records,"[usb-storage] cadence addr=1 ") && strstr(records," batch=128\n"));
@@ -180,14 +188,15 @@ static void stall_fallback(const char *path)
     assert(!block()->read(block(),0,128,buf) && s->read_qualified==128);
     unsigned writes=m.writes;fill(buf,BLKDEV_READ_BYTES,4);
     uint32_t lba=(uint32_t)block()->capacity-128;
-    assert(block()->write(block(),lba,64,buf)<0 && block()->quarantined && m.writes==writes+1);
+    /* fx-17: the device answered with CHECK CONDITION (ILLEGAL REQUEST):
+     * the request fails once, unrepeated, and the stick stays online. */
+    assert(block()->write(block(),lba,64,buf)<0 && !block()->quarantined && m.writes==writes+1);
     char needle[160];
     snprintf(needle,sizeof(needle),"max_sectors addr=1 cmd=2a lba=%u sectors=64 from=128 to=8 reason=data_stall resend=0 fallbacks=1",lba);
-    assert(strstr(records,needle) && strstr(records,"quarantine addr=1 reason=write_failed"));
-    unsigned commands=m.commands;
-    assert(block()->write(block(),lba,1,buf)<0 && m.commands==commands && m.writes==writes+1);
+    assert(strstr(records,needle) && strstr(records,"command_error addr=1 cmd=2a") && !strstr(records,"quarantine addr=1 reason=write_failed"));
+    assert(!block()->write(block(),lba,1,buf) && m.writes==writes+2);
     free(buf);end();
-    puts("PASS F1-96 STALL/CSW fallback: data STALL + ILLEGAL REQUEST, phase error and CBW STALL step to 8 sectors (f1-96b ladder) with a record and re-read the range; queue limit 4096; a failed multi-sector write is recorded and never resent");
+    puts("PASS F1-96 STALL/CSW fallback: data STALL + ILLEGAL REQUEST, phase error and CBW STALL step to 8 sectors (f1-96b ladder) with a record and re-read the range; queue limit 4096; a failed multi-sector write is recorded, never resent, and leaves the stick online (fx-17)");
 }
 
 /* 5 MB copy to and from the stick in Files' 64 KiB chunks. The read side
@@ -202,8 +211,10 @@ static void copy(const char *path,unsigned latency,bool old_policy,uint64_t *rea
      * competing reader), so the old outcome is modelled by its end state:
      * a one-page queue maximum with no pinned floor. */
     if(old_policy) blk_queue_set_limits(&u->requests,4096,0);
-    assert(!storage_enable_write(s,4));
-    /* The write-enable FAT scan reads whole 32 KiB FATs: writes may use 64 sectors. */
+    assert(!storage_enable_write(s,4) && !s->volumes[4].fat.readonly);
+    /* fx-17: the stick is writable at publication without the FAT scan
+     * that used to qualify long READ(10)s; one 64 KiB read qualifies them. */
+    { uint8_t *warm=malloc(BLKDEV_READ_BYTES);assert(warm && !block()->read(block(),0,128,warm));free(warm); }
     assert(old_policy || u->read_qualified>=64);
     uint8_t *pattern=malloc(COPY_BYTES),*back=malloc(COPY_BYTES);assert(pattern && back);
     fill(pattern,COPY_BYTES,5);
@@ -244,6 +255,56 @@ static void copy(const char *path,unsigned latency,bool old_policy,uint64_t *rea
     vfs_table_destroy(&table);vfs_destroy(&v);cache_destroy(&cache);
     free(pattern);free(back);end();
 }
+/* fx-17: the same 5 MB written to the stick in Files' former 64 KiB
+ * application chunks and in 1 MiB chunks. Each write() is one FAT growth
+ * group: data, detached chain, link and directory entry, each closed by a
+ * SYNCHRONIZE CACHE barrier, so larger chunks issue far fewer barriers. */
+static void write_chunks(const char *path)
+{
+    uint64_t ms[2]; unsigned flushes[2], commands[2];
+    for(unsigned big=0;big<2;big++) {
+        begin(path,1);
+        struct storage *s=storage_get();
+        { uint8_t *warm=malloc(BLKDEV_READ_BYTES);assert(warm && !block()->read(block(),0,128,warm));free(warm); }
+        uint8_t *pattern=malloc(COPY_BYTES);assert(pattern);fill(pattern,COPY_BYTES,7);
+        struct vfs_table *t=calloc(1,sizeof(*t));assert(t && !vfs_table_init(&s->vfs,t,4));
+        int h=vfs_open(t,"E:/CHUNK.BIN",VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0);assert(h>=0);
+        unsigned chunk=big ? 1u<<20 : 65536u;size_t done;
+        uint64_t start=m.now;unsigned f0=m.flushes,w0=m.writes;
+        for(unsigned at=0;at<COPY_BYTES;at+=chunk) {
+            unsigned n=COPY_BYTES-at<chunk ? COPY_BYTES-at : chunk;
+            assert(!vfs_write(t,h,pattern+at,n,&done) && done==n);
+        }
+        assert(!vfs_commit(t,h) && !vfs_close(t,h));
+        ms[big]=m.now-start;flushes[big]=m.flushes-f0;commands[big]=m.writes-w0;
+        printf("fx-17 write chunk=%u KiB: 5 MB to stick ms=%llu KB/s=%llu WRITE(10)=%u SYNCHRONIZE_CACHE=%u\n",chunk/1024,
+               (unsigned long long)ms[big],(unsigned long long)(COPY_BYTES*1000ull/1024/ms[big]),commands[big],flushes[big]);
+        vfs_table_destroy(t);free(t);free(pattern);end();
+    }
+    assert(flushes[1]*4<=flushes[0] && ms[1]<ms[0]);
+    puts("PASS fx-17 1 MiB application writes cut the stick barrier count fourfold on 512-byte clusters (sixteenfold with the T23 stick 8 KiB clusters: one 256-cluster group per MiB) and finish sooner than 64 KiB writes");
+}
+/* fx-17: T23 e831e685 read 7 MB from the stick at 192 KB/s overall with
+ * 64 KiB READ(10)s (about 5 packets per frame). A stick that NAKs while it
+ * fetches the next flash page ends the bulk QH's single per-frame visit;
+ * the reclamation loop retries within the frame. */
+static void reclamation(const char *path)
+{
+    uint64_t frames[2];
+    for(unsigned loop=0;loop<2;loop++) {
+        begin(path,1);m.no_reclamation=!loop;m.nak_every=8;m.nak_seen=0;
+        uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
+        unsigned naks=m.naks;uint64_t start=m.now;
+        assert(!block()->read(block(),256,128,buf) && !memcmp(buf,m.image+256*512,BLKDEV_READ_BYTES));
+        frames[loop]=m.now-start;
+        printf("fx-17 64 KiB READ(10), NAK every 8 packets, %s: ms=%llu KB/s=%llu naks=%u\n",loop ? "FSBR loop" : "no reclamation",
+               (unsigned long long)frames[loop],(unsigned long long)(BLKDEV_READ_BYTES*1000ull/1024/frames[loop]),m.naks-naks);
+        assert(!block()->quarantined && !m.resets);
+        free(buf);m.nak_every=0;m.no_reclamation=false;end();
+    }
+    assert(frames[1]*10<=frames[0]*6);
+    puts("PASS fx-17 full-speed bandwidth reclamation: a NAK no longer ends the frame's bulk work; a 64 KiB READ(10) from a page-fetching stick takes at most 60% of the frames");
+}
 static void throughput(const char *path)
 {
     uint64_t ms[2][2];
@@ -258,7 +319,7 @@ static void throughput(const char *path)
 int main(int argc,char **argv)
 {
     assert(argc==2);
-    negotiation(argv[1]);td_ring(argv[1]);residue(argv[1]);stall_fallback(argv[1]);throughput(argv[1]);
+    negotiation(argv[1]);td_ring(argv[1]);residue(argv[1]);stall_fallback(argv[1]);throughput(argv[1]);write_chunks(argv[1]);reclamation(argv[1]);
     puts("PASS F1-96 USB storage throughput suite (ASan/UBSan)");
     return 0;
 }

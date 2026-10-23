@@ -123,26 +123,7 @@ static void time_text(char *out, size_t n, int64_t when)
     snprintf(out, n, "%04d-%02d-%02d %02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
 }
 
-static const char *reason(int error)
-{
-    switch (error < 0 ? -error : error) {
-    case EEXIST: return "A file or folder with the name you specified already exists.\nSpecify a different name.";
-    case EINVAL: return "The name or destination is not valid. A file name cannot\ncontain any of the following characters: \\ / : * ? \" < > |";
-    case ENOENT: return "The file or folder cannot be found. It may have been moved or deleted.";
-    case EROFS: return "The disk is read-only.";
-    case ENOSPC: return "There is not enough free disk space.";
-    case EACCES: case EPERM: return "Access is denied. The file may be read-only.";
-    case ENOTEMPTY: return "The folder is not empty.";
-    case EBUSY: return "The file or folder is in use.";
-    case ENAMETOOLONG: return "The name is too long.";
-    case ENOTDIR: return "The path does not name a folder.";
-    case EISDIR: return "A folder has that name.";
-    case EIO: return "A disk error occurred (I/O error).";
-    case ENOMEM: return "There is not enough memory.";
-    case ENOEXEC: return "The file is not a CiukiOS program.";
-    default: return "The operation failed.";
-    }
-}
+static const char *reason(int error) { return fm_error_reason(error); }
 
 static void error_box(struct files_app *a, const char *title, const char *what, int error)
 {
@@ -1125,13 +1106,14 @@ static void job_finished(struct files_app *a)
     if (du_dialog_id(a->ui) == D_PROGRESS || du_dialog_id(a->ui) == D_REPLACE) du_dialog_close(a->ui);
     if (a->close_pending) { if (a->close) a->close(a); return; }
     enum fm_job_kind kind = j->kind;
-    if (j->state == FM_FAILED) {
+    char report_title[64], report[DU_DIALOG_TEXT]; int report_icon = 0;
+    if (kind != FM_PROPERTIES && fm_job_report(j, report_title, sizeof(report_title), report, sizeof(report), &report_icon))
+        du_message(a->ui, D_ERROR, report_title, report, report_icon, NULL, 0, 0, 0);
+    else if (j->state == FM_FAILED) {
         const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->sources[0];
-        char what[FM_NAME + 40], title[64];
+        char what[FM_NAME + 40];
         snprintf(what, sizeof(what), "Cannot %s %.200s:", verb(kind), fm_basename(source));
-        snprintf(title, sizeof(title), "Error %s File or Folder", kind == FM_COPY ? "Copying" : kind == FM_MOVE ? "Moving" :
-                 kind == FM_DELETE ? "Deleting" : "Reading");
-        error_box(a, title, what, -j->error);
+        error_box(a, "Error Reading File or Folder", what, -j->error);
     }
     if (kind == FM_PROPERTIES) {
         if (j->state == FM_DONE) properties_dialog(a);
@@ -1140,11 +1122,11 @@ static void job_finished(struct files_app *a)
     }
     a->select_created = (kind == FM_COPY || kind == FM_MOVE) && j->created_count && fm_same_path(j->destination, a->model.path);
     scan_submit(a, SCAN_REFRESH, NULL, 0);
-    if (kind == FM_MOVE && j->state == FM_DONE && !j->skipped && a->model.cut) fm_clipboard_consume(&a->model);
+    if (kind == FM_MOVE && j->state == FM_DONE && !j->skipped && !j->kept && !j->kept_folders && a->model.cut) fm_clipboard_consume(&a->model);
     if (j->state == FM_CANCELLED) snprintf(a->note, sizeof(a->note), "Cancelled; %u item(s) completed", j->completed);
     else if (j->state == FM_DONE)
         snprintf(a->note, sizeof(a->note), "%u item(s) %s%s%s", j->completed - j->skipped,
-                 kind == FM_COPY ? "copied" : kind == FM_MOVE ? "moved" : "deleted",
+                 kind == FM_COPY ? "copied" : kind == FM_MOVE ? (j->kept || j->kept_folders ? "copied; originals kept" : "moved") : "deleted",
                  j->skipped ? ", some skipped" : "", kind == FM_COPY && j->metadata_warnings ? " (dates not kept)" : "");
     files_update(a);
     du_list_ensure(W(a, W_LIST), W(a, W_LIST)->active);

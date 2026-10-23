@@ -11,6 +11,12 @@
 #define FM_HISTORY 32
 #define FM_DEPTH 32
 #define FM_CHUNK 65536
+/* fx-17: a copy reads FM_CHUNK at a time (cancel and progress stay
+ * responsive) but writes up to FM_WRITE_BATCH per write(): each write() on
+ * FAT is one durable growth group (data, chain, link, entry, each closed by
+ * a device cache flush), so 64 KiB writes cost a stick 64 flushes per MiB
+ * with 8 KiB clusters, 1 MiB writes four. */
+#define FM_WRITE_BATCH (1024u * 1024u)
 #define FM_CREATED 64
 /* Empty is a virtual location, never a filesystem pathname. */
 #define FM_COMPUTER ""
@@ -59,7 +65,7 @@ struct fm_job {
     int trash; char trash_name[FM_NAME];
     struct fm_frame frames[FM_DEPTH];
     int input, output, error, cleanup_error, yes_all, cancel, skip_seen, prompt_dir;
-    unsigned used, written, chunk; unsigned char buffer[FM_CHUNK];
+    unsigned used, written, chunk, batch; int eof; unsigned char *buffer; /* FM_WRITE_BATCH bytes while copying */
     uint64_t bytes, files, folders, total_bytes;
     uint64_t file_bytes;
     unsigned total_items, items_done;
@@ -67,6 +73,17 @@ struct fm_job {
     struct fm_totals { uint64_t bytes; unsigned items; } *totals;
     struct fm_meta property_meta;
     char created[FM_CREATED][FM_NAME]; unsigned created_count;
+    /* fx-17: a move publishes the complete copy before removing its source.
+     * A source that cannot then be removed (read-only or write-protected
+     * medium, in use, access denied) keeps both copies: the item counts as
+     * copied, never as a failed copy. kept_error/kept_source name the first. */
+    unsigned kept, kept_folders; int kept_error; char kept_source[FM_PATH];
+    /* Destination volume identity (stat of the destination folder), so a
+     * cross-volume move falls back to copy+delete whatever error the
+     * source volume's rename reports first (EXDEV, EROFS, EACCES). */
+    uint32_t destination_dev; int destination_known;
+    /* Drive letter ('A'..'Z') whose medium disappeared during the job, or 0. */
+    char gone;
 };
 int fm_join(char *, const char *, const char *);
 int fm_beneath(const char *, const char *);
@@ -105,6 +122,9 @@ int fm_clipboard_load(struct fm_model *);
 int fm_unique(struct fm_model *, const char *base, const char *suffix, char *out);
 int fm_create(struct fm_model *, const char *, int directory);
 int fm_rename(struct fm_model *, unsigned, const char *);
+/* fx-17: the drive a POSIX path lives on ('A'..'Z'; 0 for Computer or a
+ * relative path), by fm_display_path's /mnt/<letter> rule. */
+char fm_drive_letter(const char *posix);
 int fm_job_start(struct fm_job *, const struct fm_vfs *, enum fm_job_kind, char *const *, unsigned, const char *);
 int fm_job_step(struct fm_job *);
 void fm_job_answer(struct fm_job *, enum fm_replace);

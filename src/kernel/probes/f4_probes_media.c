@@ -359,8 +359,9 @@ static int probe_media_remove(void)
         struct storage_volume *v=&s->volumes[drive];
         struct blkdev *block=v->part.parent; device=block->ctx;
         uint32_t generation=block->media_generation;
-        /* Removable publication is read-only; this write/removal probe
-         * explicitly requests the normal ownership-checked upgrade. */
+        /* fx-17: a writable stick is already read-write after publication;
+         * this explicit request is then a no-op, and it still performs the
+         * ownership-checked upgrade for a volume left read-only. */
         e=storage_enable_write(s,drive);
         if (!e) e=vfs_table_init(&s->vfs,&removal_table,2);
         pass=!e && !v->fat.readonly;

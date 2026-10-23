@@ -2,7 +2,9 @@
  * Files model against the fake tree: navigation, canonical case, history,
  * selection, sorting, type names, find, create/rename, and incremental
  * copy/move/delete/properties jobs with short I/O and injected errors. */
+#include "../../../apps/libdeskui/deskui.h" /* before <time.h>: the CiukiOS ABI header defines CLOCKS_PER_SEC */
 #include "fake_vfs.h"
+#include "../../../apps/files/transfer_ui.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -103,8 +105,107 @@ static void read_accounting(void)
     fake_reset(); assert(!fake_reads.calls && !fake_reads.bytes && !fake_reads.max_request);
     puts("PASS VFS read accounting: requested/returned bytes, sizes, short reads, EOF, errors, reset");
 }
+/* fx-17: the T23 trial of e831e685. A song dragged from a USB stick (E:,
+ * published read-only) to the desktop folder on C: ran as a move; the copy
+ * completed, deleting the source failed with EROFS and the job reported a
+ * failed move ("errors=1"). A move whose source cannot be deleted keeps
+ * both copies (the drop rule itself is fx-19's fm_drop_effect). */
+static void stick(void)
+{
+    fixture(); fake_create("/mnt/e", FM_DIR); fake_create("/mnt/e/Music", FM_DIR);
+    fake_file("/mnt/e/song.mp3", 30000, 3); fake_file("/mnt/e/Music/one.mp3", 9000, 4); fake_file("/mnt/e/Music/two.mp3", 7000, 5);
+    fake_create("/Documents/Desktop", FM_DIR);
+}
+static void report(const struct fm_job *j, char *title, char *text, int *icon)
+{ title[0] = text[0] = 0; *icon = 0; fm_job_report(j, title, 64, text, 320, icon); }
+static void fx17_tests(void)
+{
+    /* Drive of a path (fx-19 owns the drop-effect rule, fm_drop_effect). */
+    assert(fm_drive_letter("/mnt/e/song.mp3") == 'E' && fm_drive_letter("/Documents") == 'C' && fm_drive_letter("/mnt/E") == 'E');
+    assert(fm_drive_letter("/mnt/data/x") == 'C' && !fm_drive_letter("") && !fm_drive_letter("relative"));
+    struct fm_job j; char title[64], text[320]; int icon;
+    char *song[] = {"/mnt/e/song.mp3"}, *music[] = {"/mnt/e/Music"};
+    /* The trial: a move from the read-only stick keeps both copies. */
+    stick(); snprintf(fake_readonly, sizeof(fake_readonly), "/mnt/e");
+    assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, song, 1, "/Documents/Desktop")); finish(&j);
+    assert(j.state == FM_DONE && !j.error && j.kept == 1 && j.kept_error == EROFS && j.completed == 1 && j.bytes == 30000);
+    same("/mnt/e/song.mp3", "/Documents/Desktop/song.mp3");
+    report(&j, title, text, &icon);
+    assert(icon == DU_DLG_ICON_WARNING && strstr(text, "'song.mp3' was copied to C:\\Documents\\Desktop") && strstr(text, "Both copies are kept"));
+    assert(strstr(text, "on E:") && strstr(text, "read-only") && !strstr(text, "Cannot") && !strstr(title, "Error"));
+    fm_job_destroy(&j); fake_assert_clean();
+    /* The same when the source volume reports read-only before EXDEV. */
+    stick(); snprintf(fake_readonly, sizeof(fake_readonly), "/mnt/e"); fake_rofs_first = 1;
+    assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, song, 1, "/Documents/Desktop")); finish(&j);
+    assert(j.state == FM_DONE && j.kept == 1 && fake_lookup("/Documents/Desktop/song.mp3") >= 0 && fake_lookup(song[0]) >= 0);
+    fm_job_destroy(&j); fake_assert_clean();
+    /* A folder move from it: every file copied, files and folders kept. */
+    stick(); snprintf(fake_readonly, sizeof(fake_readonly), "/mnt/e");
+    assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, music, 1, "/Documents")); finish(&j);
+    assert(j.state == FM_DONE && j.kept == 2 && j.kept_folders == 1 && fake_lookup("/mnt/e/Music/one.mp3") >= 0);
+    same("/mnt/e/Music/one.mp3", "/Documents/Music/one.mp3"); same("/mnt/e/Music/two.mp3", "/Documents/Music/two.mp3");
+    report(&j, title, text, &icon); assert(strstr(text, "2 original file(s) and 1 folder(s) on E:") && strstr(text, "Both copies are kept"));
+    fm_job_destroy(&j); fake_assert_clean();
+    /* A move within the read-only stick changes nothing and says why. */
+    stick(); snprintf(fake_readonly, sizeof(fake_readonly), "/mnt/e");
+    assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, song, 1, "/mnt/e/Music")); finish(&j);
+    assert(j.state == FM_FAILED && j.error == EROFS && !j.gone && fake_lookup("/mnt/e/song.mp3") >= 0 && fake_lookup("/mnt/e/Music/song.mp3") < 0);
+    report(&j, title, text, &icon);
+    assert(icon == DU_DLG_ICON_ERROR && !strcmp(title, "Error Moving File or Folder") && strstr(text, "Cannot move 'song.mp3':\nThe disk is read-only or write-protected."));
+    fm_job_destroy(&j); fake_assert_clean();
+    /* Delete, copy to and rename on a write-protected medium name the file. */
+    stick(); snprintf(fake_readonly, sizeof(fake_readonly), "/mnt/e");
+    assert(!fm_job_start(&j, &fake_vfs, FM_DELETE, song, 1, NULL)); finish(&j);
+    assert(j.state == FM_FAILED && j.error == EROFS && fake_lookup(song[0]) >= 0);
+    report(&j, title, text, &icon); assert(strstr(text, "Cannot delete 'song.mp3':\nThe disk is read-only")); fm_job_destroy(&j);
+    char *readme[] = {"/system/readme.txt"};
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, readme, 1, "/mnt/e")); finish(&j);
+    assert(j.state == FM_FAILED && j.error == EROFS && fake_lookup("/mnt/e/readme.txt") < 0);
+    report(&j, title, text, &icon); assert(strstr(text, "Cannot copy 'readme.txt'")); fm_job_destroy(&j); fake_assert_clean();
+    struct fm_model m; fm_init(&m, &fake_vfs); assert(!fm_navigate(&m, "/mnt/e"));
+    assert(fm_rename(&m, index_of(&m, "song.mp3"), "renamed.mp3") == -EROFS && fake_lookup(song[0]) >= 0); fm_destroy(&m);
+    /* A writable stick: move off it deletes the source; to it, from C:. */
+    stick();
+    assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, song, 1, "/Documents/Desktop")); finish(&j);
+    assert(j.state == FM_DONE && !j.kept && fake_lookup(song[0]) < 0 && fake_lookup("/Documents/Desktop/song.mp3") >= 0);
+    report(&j, title, text, &icon); assert(!text[0]); fm_job_destroy(&j);
+    char *back[] = {"/Documents/Desktop/song.mp3"};
+    assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, back, 1, "/mnt/e/Music")); finish(&j);
+    assert(j.state == FM_DONE && fake_lookup("/mnt/e/Music/song.mp3") >= 0 && fake_lookup(back[0]) < 0); fm_job_destroy(&j);
+    fm_init(&m, &fake_vfs); assert(!fm_navigate(&m, "/mnt/e/Music"));
+    assert(!fm_rename(&m, index_of(&m, "song.mp3"), "renamed.mp3") && fake_lookup("/mnt/e/Music/renamed.mp3") >= 0); fm_destroy(&m);
+    char *renamed[] = {"/mnt/e/Music/renamed.mp3"};
+    assert(!fm_job_start(&j, &fake_vfs, FM_DELETE, renamed, 1, NULL)); finish(&j);
+    assert(j.state == FM_DONE && fake_lookup(renamed[0]) < 0); fm_job_destroy(&j); fake_assert_clean();
+    /* Removal mid-copy: the job names the drive, the partial copy is gone. */
+    stick(); snprintf(fake_gone, sizeof(fake_gone), "/mnt/e"); fake_gone_after = 2;
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, song, 1, "/Documents/Desktop")); j.chunk = 4096; finish(&j);
+    assert(j.state == FM_FAILED && j.error == EIO && j.gone == 'E' && fake_lookup("/Documents/Desktop/song.mp3") < 0);
+    report(&j, title, text, &icon);
+    assert(strstr(text, "Cannot copy 'song.mp3': the disk in drive E: was removed.") && strstr(text, "The incomplete copy was deleted."));
+    fm_job_destroy(&j); fake_assert_clean();
+    /* ...and while copying to the stick. */
+    stick(); snprintf(fake_gone, sizeof(fake_gone), "/mnt/e"); fake_gone_after = -1;
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, readme, 1, "/mnt/e")); j.chunk = 4096;
+    for (unsigned i = 0; i < 6 && j.state == FM_RUNNING; i++) fm_job_step(&j);
+    fake_gone_after = 0; finish(&j);
+    assert(j.state == FM_FAILED && j.gone == 'E' && fake_lookup(readme[0]) >= 0);
+    report(&j, title, text, &icon); assert(strstr(text, "drive E: was removed") && strstr(text, "may remain"));
+    fm_job_destroy(&j);
+    /* An I/O error on a present medium is not a removal. */
+    stick(); fake_countdown = 0;
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, song, 1, "/Documents/Desktop")); j.chunk = 4096;
+    while (j.counting && j.state == FM_RUNNING) fm_job_step(&j);
+    fake_countdown = 4; finish(&j); fake_countdown = 0;
+    assert(j.state == FM_FAILED && j.error == EIO && !j.gone);
+    report(&j, title, text, &icon); assert(strstr(text, "Cannot copy 'song.mp3':\nA disk error occurred (I/O error)."));
+    fm_job_destroy(&j); fake_assert_clean();
+    puts("PASS Files fx-17: drive letters, move from a read-only stick keeps both copies, removal mid-copy names the drive, read-only delete/copy/rename name the file");
+}
+
 int main(void)
 {
+    fx17_tests();
     read_accounting();
     computer_tests();
     /* Paths and names. */

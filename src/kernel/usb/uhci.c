@@ -2,6 +2,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 _Static_assert(USB_UHCI_BULK_QH + 16 <= USB_TD, "UHCI queues overlap the general TD");
+_Static_assert(USB_UHCI_TERM_QH % 16 == 0 && USB_UHCI_TERM_QH >= USB_TAIL + 16 && USB_UHCI_TERM_QH + 16 <= USB_BUFFER, "UHCI terminating QH placement");
 static volatile uint32_t *words(struct usb_host *h, unsigned at)
 { return (volatile uint32_t *)(h->dma + at); }
 static int start(struct usb_host *h)
@@ -30,7 +31,9 @@ static int start(struct usb_host *h)
     control[0] = (h->dma_phys + USB_UHCI_BULK_QH) | 2; control[1] = 1;
     /* Keep the inactive tail silent: IOC here would interrupt every frame,
      * even with no transaction. Actual transfer TDs request completion. */
-    bulk[0] = h->dma_phys + USB_TAIL; bulk[1] = 1;
+    volatile uint32_t *term = words(h, USB_UHCI_TERM_QH);
+    bulk[0] = (h->dma_phys + USB_UHCI_TERM_QH) | 2; bulk[1] = 1;
+    term[0] = 1; term[1] = h->dma_phys + USB_TAIL;
     words(h, USB_TAIL)[0] = 1;
     words(h, USB_TAIL)[1] = 0;
     for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
@@ -79,7 +82,7 @@ void usb_uhci_dump_schedule(struct usb_host *h)
      * including empty QHs; printing only active pipes could hide a broken link.
      * Validate DMA bounds before dereferencing even a diagnostic pointer. */
     uint32_t link = words(h, 0)[0];
-    for (unsigned n = 0; n < USB_DEVICE_MAX * USB_HID_MAX + 3; n++) {
+    for (unsigned n = 0; n < USB_DEVICE_MAX * USB_HID_MAX + 4; n++) {
         dump_preempt(h);
         if (link & 1) return;
         uint32_t address = link & ~15u;
@@ -110,6 +113,11 @@ void usb_uhci_dump_schedule(struct usb_host *h)
                 klog_diag("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x addr=%u interface=%u state=%u controller=%s",
                      address + 16, td[0], td[1], td[2], td[3], d->address, p->interface, p->pipe_state, h->owner);
             }
+        }
+        if (at == USB_UHCI_TERM_QH && element == h->dma_phys + USB_TAIL) {
+            volatile uint32_t *td = words(h, USB_TAIL);
+            klog_diag("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x controller=%s",
+                 element, td[0], td[1], td[2], td[3], h->owner);
         }
         link = horizontal;
     }
@@ -354,7 +362,26 @@ static bool bulk_advance(struct usb_device *d, unsigned ep, unsigned k, unsigned
              h->owner,d->address,ep,s->trace.tag,k,element,link,frames,s->advance_fixes);
     return true;
 }
+/* fx-17: full-speed bandwidth reclamation (FSBR). Without it the HC visits
+ * the bulk QH once per frame: the first NAK (a flash stick fetching its next
+ * page) ends bulk work until the next 1 ms frame, which held the T23's
+ * 64 KiB READ(10)s to about 250 KB/s. While a bulk stage runs, the
+ * terminating QH links back to the control QH, so the HC retries the NAKed
+ * TD within the same frame until the frame's bandwidth is spent (UHCI 1.1
+ * section 3.4.3 / 2.3.1 SOFMOD reclamation; Linux uhci-q.c uhci_fsbr_on and
+ * uhci_fsbr_off, used for every full-speed bulk queue). It is switched off
+ * when the stage ends, so an idle schedule never loops. */
+static int bulk_stage(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual);
 static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual)
+{
+    struct usb_host *h=d->host;
+    volatile uint32_t *term=words(h,USB_UHCI_TERM_QH);
+    usb_barrier(); term[0]=(h->dma_phys+USB_UHCI_CONTROL_QH)|2; usb_barrier();
+    int e=bulk_stage(d,in,data,bytes,actual);
+    usb_barrier(); term[0]=1; usb_barrier();
+    return e;
+}
+static int bulk_stage(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual)
 {
     struct usb_host *h=d->host; struct usb_storage *s=&d->storage;
     unsigned mps=in ? s->in_packet : s->out_packet, ep=in ? s->in : s->out;

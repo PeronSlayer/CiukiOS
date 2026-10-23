@@ -942,3 +942,33 @@ beyond a 2 ms grace period without ISR acknowledgement before the 4 ms
 fallback is recorded. OHCI polling preserves WDH during that grace period.
 The separate 250 ms topology deadline remains; this is not a claim of zero
 total host-task wakes. See [research and host evidence](../validation/f1-106b-ehci-tt.md).
+
+## fx-17: full-speed bandwidth reclamation and command errors (2026-10-23)
+
+T23 trial of `e831e685`: a 7,139,466-byte move from the stick ran at
+192 KB/s overall; the usb-storage queue issued about 21 READ(10)s of
+64 KiB per 5 s record window (about 240 ms, five packets per frame, per
+command). The bulk QH was visited once per frame (no reclamation loop),
+so the first NAK of a stick fetching its next flash page ended bulk work
+until the next 1 ms frame.
+
+Research: UHCI 1.1 Design Guide, §3.4 queue traversal and full-speed
+bandwidth reclamation (the schedule may
+loop back so the HC keeps executing full-speed control/bulk until the
+frame's reclamation point); [Linux v6.12 `uhci-q.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/uhci-q.c)
+`uhci_fsbr_on()`/`uhci_fsbr_off()` link the terminating skeleton QH back to
+the first full-speed QH while a bulk URB wants FSBR and remove the link
+when the queues are idle; Linux `uhci-hcd.h` keeps an inactive TD in the
+terminating QH as the Intel PIIX errata workaround.
+
+Decision: `USB_UHCI_TERM_QH` follows the bulk QH; its element is the
+inactive `USB_TAIL` TD and its horizontal link terminates. `bulk()` links
+it back to the control QH for the duration of each BOT stage and
+terminates it again afterwards, so an idle schedule never loops. Host
+model: a stick that NAKs one IN token every 8 packets reads 64 KiB in 76
+frames instead of 132 (842 vs 484 KB/s at the model's 16 transactions
+per frame). The QEMU and T23 confirmation is the lead's.
+
+READ(10)/WRITE(10) ending in CHECK CONDITION with valid sense no longer
+quarantine the device (see `vfs-storage-contract.md`, fx-17).
+

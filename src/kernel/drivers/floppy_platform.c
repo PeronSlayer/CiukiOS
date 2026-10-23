@@ -139,7 +139,7 @@ int floppy_mount(unsigned drive)
     if (e) return e;
     e=storage_add_floppy(storage_get(),b,drive);
     if (e) (void)floppy_native_close(drive);
-    else native_mounted[drive]=true;
+    else { native_mounted[drive]=true; (void)storage_activate_removable(storage_get(),b); }
     return e;
 }
 int floppy_unmount(unsigned drive, bool surprise)

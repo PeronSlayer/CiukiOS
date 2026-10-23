@@ -461,6 +461,72 @@ The safe-remove write probe explicitly requests that same writable upgrade
 before creating its test file, so read-only publication is not mistaken for
 a failed durability gate.
 
+### fx-17 removable media writable at insertion (2026-10-23)
+
+This supersedes, for removable FAT only, F1-74's read-only publication
+with writes gated on an explicit ownership-scan upgrade, and F2-74's
+"volume repair at the next insertion" for a yanked device. T23 trial of
+`e831e685`: `[usb-storage] ready … mode=rw_capable` then
+`volume drive=E … mode=ro dirty=0`. Nothing on the user path ever asked
+for the F1-74 upgrade, so every stick stayed read-only; a move from it
+copied the file and then failed with EROFS.
+
+Research: Windows 98 Resource Kit ch. 10 (File Systems; local copy
+`build/rskt/wrkc10_1.htm`): ScanDisk runs after an improper shutdown at
+the next start-up for the system's disks, not when a medium is inserted;
+ch. 26 (`wrkc26_4.htm`) makes write-behind caching for removable disks an
+option, off by default. [Microsoft FAT specification §§4.2/5](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf):
+`ClnShutBitMask` clear means the volume "was not dismounted properly …
+it would be a good idea to run a Chkdsk/Scandisk"; `FSI_Free_Count`
+0xFFFFFFFF means unknown and "must be computed". [Linux v6.12
+`fs/fat/inode.c`](https://github.com/torvalds/linux/blob/v6.12/fs/fat/inode.c)
+`fat_set_state()`: a read-write mount marks the volume dirty, a dirty
+volume is mounted read-write with the warning "Volume was not properly
+unmounted … Please run fsck", and its state is not changed ("do not
+change state if fs was dirty"); an unknown free count is counted when
+needed.
+
+Decision (`storage_activate_removable()` → `fat_enable_write_removable()`,
+called by the USB storage service after publication and by
+`floppy_mount()`):
+
+- Publication is unchanged (single-sector BPB/FSInfo/reserved-entry
+  reads, zero writes). Activation then makes the volume read-write without
+  an ownership scan when the medium is writable: block device writable
+  (MODE SENSE WP clear), durability qualified, and no reason beyond
+  requested/dirty/error-flag. Write-protected media, unqualified
+  durability, divergent reserved FAT entries, a corrupt backup BPB, an
+  active-FAT-only FAT32 and DMF disks stay read-only with their reason.
+- Allocation only takes clusters whose active-FAT entry is zero, and this
+  driver's publication order leaves at worst lost clusters after a cut
+  (growth: data, detached chain, link, entry; delete: entry before
+  reclamation). Writing a dirty medium is therefore safe; its dirty or
+  hardware-error indication is preserved (`dirty_preserved`: no clearing
+  at insertion, none at a clean unmount) for an explicit check, as Linux
+  does. A clean medium has its clean flag cleared for the session (two
+  FAT[1] writes with barriers) and set again by Safely Remove.
+- Free count: FAT32 trusts an in-range FSInfo hint (Windows and Linux
+  both do). FAT12/16, and FAT32 whose hint is unknown, are counted at
+  activation when the active FAT is at most 512 KiB; a larger FAT32 with
+  an unknown hint stays read-only (`reason=free_count_unknown`) until the
+  explicit full upgrade, because counting megabytes of FAT under the
+  drive reservation would stall its readers on USB 1.1.
+- The explicit `storage_enable_write()`/`fat_scan()` path (f0-25
+  workflow, hardware check) keeps the F1-70 full ownership proof and
+  repair for any volume still read-only.
+- Record: `[storage] removable drive=E mode=rw dirty=0 reason=writable
+  free=… census_ms=… result=0`, before the `[usb-storage] volume` line.
+
+USB command failures: a READ(10)/WRITE(10) the device ends with CHECK
+CONDITION and valid sense is a failed request, not a lost device (SBC-3
+sense keys; Linux sd completes the request with an error). The stick
+stays online and published (`[usb-storage] command_error … state=online`);
+DATA PROTECT (sense key 7) on a write marks the device write-protected and
+returns EROFS. Transport faults, medium change/absence and readiness
+failures still quarantine and unpublish. A FAT metadata write failure
+keeps the existing rule: the volume becomes read-only for the session
+with the failing file named, and stays mounted and readable.
+
 ## Filesystem driver rules
 
 - FAT12/16/32 share one driver. FAT12/16 keep a fixed root directory; FAT32

@@ -80,6 +80,17 @@ int fm_display_path(char *out, const char *in)
     return 0;
 }
 
+/* fx-17: the drive a POSIX path lives on, by the same /mnt/<letter> rule as
+ * fm_display_path. Pure string work: no filesystem call on the UI thread. */
+char fm_drive_letter(const char *path)
+{
+    if (!path || path[0] != '/') return 0;
+    if (!strncmp(path, "/mnt/", 5)) {
+        unsigned c = fold((unsigned char)path[5]);
+        if (c >= 'a' && c <= 'z' && (!path[6] || path[6] == '/')) return (char)(c - 'a' + 'A');
+    }
+    return 'C';
+}
 struct volumes { struct fm_meta meta[23]; uint32_t seen; };
 static int collect_volume(const char *name, const struct fm_meta *meta, void *ctx)
 {
@@ -570,7 +581,51 @@ static int cleanup(struct fm_job *j)
     }
     return error;
 }
-static int fail(struct fm_job *j, int r) { j->error = -r; j->cleanup_error = -cleanup(j); j->state = FM_FAILED; return r; }
+/* fx-17: a medium removed mid-job surfaces as EIO/ENOENT on its paths; its
+ * drive root then disappears once the device worker unpublishes it (the
+ * USB port scan runs every 250 ms). Name that drive instead of a generic
+ * disk error. Only /mnt/<letter> drives are removable; C: never vanishes. */
+static int root_gone(struct fm_job *j, const char *path)
+{
+    char letter = fm_drive_letter(path);
+    if (!letter || letter == 'C') return 0;
+    char root[8]; snprintf(root, sizeof(root), "/mnt/%c", (char)(letter - 'A' + 'a'));
+    struct fm_meta meta;
+    for (unsigned attempt = 0; attempt < 8; attempt++) {
+        int r = j->fs.stat_path(j->fs.ctx, root, &meta);
+        if (r == -ENOENT || r == -ENODEV || r == -ENXIO) return letter;
+        if (!r) return 0;
+        struct timespec delay = {.tv_sec = 0, .tv_nsec = 250000000};
+        while (nanosleep(&delay, &delay) && errno == EINTR) {}
+    }
+    return letter; /* the root itself keeps failing: the medium is unusable */
+}
+static void classify(struct fm_job *j, int r)
+{
+    if (r != -EIO && r != -ENOENT && r != -ENODEV && r != -ENXIO && r != -ESTALE
+#ifdef ENOMEDIUM
+        && r != -ENOMEDIUM
+#endif
+        ) return;
+    const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : NULL;
+    const char *target = j->depth ? j->frames[j->depth - 1].target : NULL;
+    int gone = source ? root_gone(j, source) : 0;
+    if (!gone && target && target[0]) gone = root_gone(j, target);
+    j->gone = (char)gone;
+}
+static int fail(struct fm_job *j, int r)
+{
+    j->error = -r; classify(j, r);
+    j->cleanup_error = -cleanup(j); j->state = FM_FAILED; return r;
+}
+/* The complete copy is already published: failing to remove the source is
+ * reported as a kept original, never as a failed copy (Windows 98 Explorer
+ * performs a cross-volume move as copy, then delete). */
+static void keep_source(struct fm_job *j, const char *source, int r, int folder)
+{
+    if (folder) j->kept_folders++; else j->kept++;
+    if (!j->kept_error) { j->kept_error = -r; snprintf(j->kept_source, sizeof(j->kept_source), "%s", source); }
+}
 static void pop(struct fm_job *j)
 {
     struct fm_frame *f = &j->frames[j->depth - 1];
@@ -610,6 +665,10 @@ int fm_job_start(struct fm_job *j, const struct fm_vfs *fs, enum fm_job_kind kin
         if ((kind == FM_COPY || kind == FM_MOVE) && fm_beneath(destination, paths[i])) { fm_job_destroy(j); return -EINVAL; }
         if (!strcmp(paths[i], "/") && kind != FM_PROPERTIES) { fm_job_destroy(j); return -EBUSY; }
     }
+    if (kind == FM_COPY || kind == FM_MOVE) {
+        j->buffer = malloc(FM_WRITE_BATCH);
+        if (!j->buffer) { fm_job_destroy(j); return -ENOMEM; }
+    }
     j->counting = kind != FM_PROPERTIES;
     j->state = FM_RUNNING;
     return 0;
@@ -637,7 +696,7 @@ static int begin_file(struct fm_job *j, struct fm_frame *f)
         if (r != -EEXIST) return r;
     }
     if (j->output < 0) return -EEXIST;
-    j->used = j->written = 0; j->file_bytes = 0; f->phase = 1;
+    j->used = j->written = 0; j->eof = 0; j->file_bytes = 0; f->phase = 1;
     return 0;
 }
 
@@ -717,6 +776,11 @@ int fm_job_step(struct fm_job *j)
         if (j->next == j->count) { j->state = FM_DONE; return 0; }
         const char *source = j->sources[j->next++];
         char target[FM_PATH] = ""; int r = 0;
+        if ((j->kind == FM_COPY || j->kind == FM_MOVE) && !j->destination_known) {
+            struct fm_meta where;
+            j->destination_known = j->fs.stat_path(j->fs.ctx, j->destination, &where) ? -1 : 1;
+            if (j->destination_known > 0) j->destination_dev = where.dev;
+        }
         if (j->kind == FM_COPY || j->kind == FM_MOVE) {
             r = fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
             if (!r && fm_same_path(target, source)) {
@@ -755,7 +819,10 @@ int fm_job_step(struct fm_job *j)
                     else { j->folders++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items-1; }
                     pop(j); return 1;
                 }
-                if (r != -EXDEV) return fail(j, r);
+                /* A read-only source volume may refuse the rename before
+                 * it compares volumes; another volume still copies first. */
+                int other = j->destination_known > 0 && f->meta.dev != j->destination_dev;
+                if (r != -EXDEV && !(other && (r == -EROFS || r == -EACCES || r == -EPERM))) return fail(j, r);
             }
             if (f->meta.type == FM_FILE) { r = begin_file(j, f); if (r) return fail(j, r); return 1; }
             if (!f->exists) { r = j->fs.mkdir(j->fs.ctx, f->target); if (r) return fail(j, r); }
@@ -768,20 +835,27 @@ int fm_job_step(struct fm_job *j)
         return 1;
     }
     if (f->phase == 1) {
-        if (j->written < j->used) {
+        unsigned capacity = j->batch && j->batch <= FM_WRITE_BATCH ? j->batch : FM_WRITE_BATCH;
+        if (j->written < j->used && (j->eof || j->used >= capacity || j->written)) {
             r = j->fs.write(j->fs.ctx, j->output, j->buffer + j->written, j->used - j->written);
             if (r == -EINTR) return interrupted();
             if (r <= 0) return fail(j, r ? r : -EIO);
             if ((unsigned)r > j->used - j->written) return fail(j, -EIO);
             j->written += (unsigned)r; j->bytes += (unsigned)r; j->file_bytes += (unsigned)r;
+            if (j->written == j->used) j->used = j->written = 0;
             return 1;
         }
-        unsigned chunk = j->chunk && j->chunk <= FM_CHUNK ? j->chunk : FM_CHUNK;
-        r = j->fs.read(j->fs.ctx, j->input, j->buffer, chunk);
-        if (r == -EINTR) return interrupted();
-        if (r < 0) return fail(j, r);
-        if ((unsigned)r > chunk) return fail(j, -EIO);
-        if (r) { j->used = (unsigned)r; j->written = 0; return 1; }
+        if (!j->eof) {
+            unsigned chunk = j->chunk && j->chunk <= FM_CHUNK ? j->chunk : FM_CHUNK;
+            if (chunk > capacity - j->used) chunk = capacity - j->used;
+            r = j->fs.read(j->fs.ctx, j->input, j->buffer + j->used, chunk);
+            if (r == -EINTR) return interrupted();
+            if (r < 0) return fail(j, r);
+            if ((unsigned)r > chunk) return fail(j, -EIO);
+            if (r) { j->used += (unsigned)r; return 1; }
+            j->eof = 1;
+            if (j->used) return 1;
+        }
         r = j->fs.sync(j->fs.ctx, j->output);
         if (r) return fail(j, r);
         r = j->fs.close(j->fs.ctx, j->output); j->output = -1;
@@ -800,7 +874,7 @@ int fm_job_step(struct fm_job *j)
         if (r) return fail(j, r);
         j->temporary[0] = 0;
         metadata(j, f);
-        if (j->kind == FM_MOVE) { r = j->fs.unlink(j->fs.ctx, f->source); if (r) return fail(j, r); }
+        if (j->kind == FM_MOVE) { r = j->fs.unlink(j->fs.ctx, f->source); if (r) keep_source(j, f->source, r, 0); }
         j->files++; pop(j);
         return 1;
     }
@@ -815,7 +889,11 @@ int fm_job_step(struct fm_job *j)
     }
     if (j->kind == FM_DELETE || (j->kind == FM_MOVE && !j->skip_seen)) {
         r = j->fs.rmdir(j->fs.ctx, f->source);
-        if (r) return fail(j, r);
+        /* A folder whose files were kept, or whose medium refuses removal,
+         * stays beside its complete copy. */
+        if (r && j->kind == FM_MOVE && (j->kept || j->kept_folders || r == -EROFS || r == -EACCES || r == -EPERM || r == -EBUSY))
+            keep_source(j, f->source, r, 1);
+        else if (r) return fail(j, r);
         if (j->kind == FM_DELETE) j->folders++;
     }
     if (j->kind == FM_COPY || j->kind == FM_MOVE) metadata(j, f);
@@ -849,5 +927,6 @@ void fm_job_destroy(struct fm_job *j)
     for (unsigned i = 0; i < j->count; i++) free(j->sources ? j->sources[i] : NULL);
     free(j->sources);
     free(j->totals);
+    free(j->buffer);
     memset(j, 0, sizeof(*j)); j->input = j->output = -1;
 }

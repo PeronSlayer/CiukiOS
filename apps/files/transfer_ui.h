@@ -4,6 +4,8 @@
 #define CIUKI_FILES_TRANSFER_UI_H
 #include "transfer.h"
 #include "../libdeskui/deskui.h"
+#include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -32,6 +34,72 @@ static inline void fm_progress_dialog(struct du_ui *ui, int id, enum fm_job_kind
     }
     unsigned value=kind==FM_DELETE ? v->items : percent, total=kind==FM_DELETE ? v->count : 100;
     du_progress(ui,id,title,text,value,total);
+}
+/* Explorer wording for errno values (Files and the desktop folder share it). */
+static inline const char *fm_error_reason(int error)
+{
+    switch (error < 0 ? -error : error) {
+    case EEXIST: return "A file or folder with the name you specified already exists.\nSpecify a different name.";
+    case EINVAL: return "The name or destination is not valid. A file name cannot\ncontain any of the following characters: \\ / : * ? \" < > |";
+    case ENOENT: return "The file or folder cannot be found. It may have been moved or deleted.";
+    case EROFS: return "The disk is read-only or write-protected.";
+    case ENOSPC: return "There is not enough free disk space.";
+    case EACCES: case EPERM: return "Access is denied. The file may be read-only.";
+    case ENOTEMPTY: return "The folder is not empty.";
+    case EBUSY: return "The file or folder is in use.";
+    case ENAMETOOLONG: return "The name is too long.";
+    case ENOTDIR: return "The path does not name a folder.";
+    case EISDIR: return "A folder has that name.";
+    case EIO: return "A disk error occurred (I/O error).";
+    case ENOMEM: return "There is not enough memory.";
+    case ENOEXEC: return "The file is not a CiukiOS program.";
+    case EXDEV: return "The destination is on another disk.";
+    default: return "The operation failed.";
+    }
+}
+/* fx-17: the outcome of a finished copy/move/delete, Windows 98 Explorer
+ * style. A failure names the item and the reason; a removed medium names
+ * its drive; a move whose originals could not be deleted reports both copies
+ * kept (it never says the copy failed). Returns 0 when there is nothing to
+ * report (success, or a cancel the progress dialog already showed). */
+/* Dialog text is bounded by the dialog buffer; long names are cut on purpose. */
+__attribute__((format(printf, 3, 4)))
+static inline void fm_report_text(char *out, size_t size, const char *format, ...)
+{
+    va_list ap; va_start(ap, format); (void)vsnprintf(out, size, format, ap); va_end(ap);
+}
+static inline int fm_job_report(const struct fm_job *j, char *title, size_t title_size,
+                                char *text, size_t size, int *icon)
+{
+    const char *verb = j->kind == FM_COPY ? "copy" : j->kind == FM_MOVE ? "move" : j->kind == FM_DELETE ? "delete" : "read";
+    if (j->state == FM_FAILED) {
+        const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->count ? j->sources[0] : "";
+        fm_report_text(title, title_size, "Error %s File or Folder", j->kind == FM_COPY ? "Copying" : j->kind == FM_MOVE ? "Moving" :
+                 j->kind == FM_DELETE ? "Deleting" : "Reading");
+        char done[96] = "";
+        if (j->completed) fm_report_text(done, sizeof(done), "\n\n%u of %u item(s) were completed before the error.", j->completed, j->count);
+        if (j->gone)
+            fm_report_text(text, size, "Cannot %s '%.60s': the disk in drive %c: was removed.%s%s", verb, fm_basename(source), j->gone, done,
+                     j->kind == FM_DELETE ? "" : j->cleanup_error ? "\nAn incomplete .ciuki-copy file may remain on the destination." :
+                     "\nThe incomplete copy was deleted.");
+        else
+            fm_report_text(text, size, "Cannot %s '%.60s':\n%s%s", verb, fm_basename(source), fm_error_reason(-j->error), done);
+        *icon = DU_DLG_ICON_ERROR; return 1;
+    }
+    if (j->state == FM_DONE && j->kind == FM_MOVE && (j->kept || j->kept_folders)) {
+        char where[FM_PATH], drive[8];
+        fm_display_path(where, j->destination);
+        fm_report_text(drive, sizeof(drive), "%c:", fm_drive_letter(j->kept_source) ? fm_drive_letter(j->kept_source) : 'C');
+        fm_report_text(title, title_size, "Moving Files");
+        if (j->kept + j->kept_folders == 1)
+            fm_report_text(text, size, "'%.60s' was copied to %.80s, but the original on %s could not be deleted:\n%s\n\nBoth copies are kept.",
+                     fm_basename(j->kept_source), where, drive, fm_error_reason(j->kept_error));
+        else
+            fm_report_text(text, size, "The items were copied to %.80s, but %u original file(s) and %u folder(s) on %s could not be deleted:\n%s\n\nBoth copies are kept.",
+                     where, j->kept, j->kept_folders, drive, fm_error_reason(j->kept_error));
+        *icon = DU_DLG_ICON_WARNING; return 1;
+    }
+    return 0;
 }
 static inline void fm_dialog_size(char *out, size_t n, uint64_t bytes)
 {
