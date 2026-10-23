@@ -12,6 +12,8 @@
 #define FILES_CACHE 64
 
 struct files_row { char label[80], size[32], type[40], modified[24]; };
+/* G2: the Recycle Bin view's extra columns. */
+struct files_bin_row { char name[FM_NAME], where[RB_PATH], deleted[24]; };
 struct files_place { char name[64], path[FM_PATH]; };
 struct files_node { char name[FM_NAME], path[FM_PATH]; unsigned depth; uint8_t expanded, children; };
 
@@ -50,7 +52,7 @@ struct files_app {
     int width, height, split, test, stage, rename_index, rename_new, job_active, close_pending, context_folder, tree_dirty;
     char note[160], rename_original[FM_NAME];
     struct du_menu menus[5];
-    struct du_menu_item file_items[12], edit_items[6], view_items[10], go_items[13], help_items[3];
+    struct du_menu_item file_items[12], edit_items[6], view_items[10], go_items[14], help_items[3];
     struct du_menu_item popup[18]; unsigned popup_count;
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
     void (*close)(struct files_app *);
@@ -74,6 +76,13 @@ struct files_app {
     int (*media_remove)(unsigned drive, uint32_t generation);
     int (*media_blockers)(unsigned drive, uint32_t generation, struct ciuki_media_blockers *);
     char removal_label[96];
+    /* G2 Recycle Bin: the policy read when a delete starts, the rows of the
+     * bin view, its File menu, the Properties dialog's edit state. */
+    struct rb_policy policy, bin_edit;
+    struct files_bin_row *bin_rows; unsigned bin_row_capacity;
+    struct du_menu_item bin_items[8];
+    int bin_menu, bin_scope, delete_flags, show_bin_properties, bin_op;
+    char **drop_paths; unsigned drop_count;   /* items dropped on the bin window, awaiting the confirmation */
     void *user;
 };
 

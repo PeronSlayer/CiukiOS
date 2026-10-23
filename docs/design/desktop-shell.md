@@ -25,8 +25,9 @@ changes still replace the listing. Idle browser polling must not paint.
 The desktop uses the same transfer mailbox and dialog formatter as Files.
 Clipboard reads, trash preparation, 64 KiB copy steps, cancellation cleanup,
 clipboard consumption and the final folder refresh all run on the worker.
-Desktop Delete keeps the existing move-to-Trash semantics and collision-safe
-names, displaying the shared Deleting dialog. The shell hosts the toolkit
+Desktop Delete (G2, `recycle-bin.md`) sends the selection to the Recycle Bin
+after a Yes/No question in the shell's message window, displaying the shared
+Deleting dialog; Shift+Delete deletes at once. The shell hosts the toolkit
 body in an internal window with its ordinary title frame and input routing.
 
 Protocol: v2 client-to-shell `DESK_CLOSE_ACK` has exactly eight bytes, no

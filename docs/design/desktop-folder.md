@@ -29,10 +29,12 @@ worker-owned descriptor and a mailbox; shell state and AutoPlay decisions are
 updated only by the frame thread. AutoPlay confirmation waits for a fresh media
 observation. Failed observations preserve the previous successful state.
 
-The shell projects `/Documents/Desktop` after Computer, Documents and Trash.
-File operations reuse the Files VFS/model and incremental copy/move engine;
-Trash is `/Documents/Trash`, with unique names and no overwriting. The image
-builder creates both directories. The existing Files FAT name validation is
+The shell projects `/Documents/Desktop` after Computer, Documents and the
+Recycle Bin. File operations reuse the Files VFS/model and incremental
+copy/move engine. The Recycle Bin replaced the plain `/Documents/Trash` folder
+(G2, `recycle-bin.md`): deleted items go to `RECYCLED` with their original path
+recorded, and the old folder's items are migrated into it. The image builder
+creates `/Documents/Desktop` only. The existing Files FAT name validation is
 shared, including forbidden characters and trailing spaces/periods. Microsoft
 [filename conventions](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
 confirm these restrictions. CiukiOS retains its existing POSIX/FAT rules rather
@@ -152,4 +154,15 @@ Transfers (`fm_job_step()`):
   write up to 1 MiB per `write()`: each FAT `write()` is one durable growth
   group closed by device cache flushes, so a stick with 8 KiB clusters
   receives 4 flushes per MiB instead of 64.
+
+## G2 Recycle Bin (2026-10-23)
+
+The Trash described above is superseded by the Recycle Bin of
+`recycle-bin.md`: the icon is "Recycle Bin" (saved position key `/Trash`
+unchanged), Delete, Shift+Delete and the drop on the icon ask first and run an
+`rb_delete_job` on the same worker and dialog as every other transfer, Empty is
+an `rb_empty_job`, and the icon follows the bin's state (polled beside the
+Desktop folder). The `trash` modes of the job (`trash_job`, `fm_job.trash`
+naming) and `DESK_TRASH` as a target are gone; `desk_folder_transfer(.., trash=1)`
+now means "delete".
 

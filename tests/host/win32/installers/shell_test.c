@@ -83,6 +83,53 @@ static void operations(void){
   op.from="C:\\.\\\0";assert(SHFileOperationA(&op)==0x74);
   puts("PASS shell trees multi-source / spaces / subtree / cancel / disk-full / CD errors");
 }
+/* G2: FOF_ALLOWUNDO deletes go to the Recycle Bin with Windows 9x INFO2 records. */
+static DWORD read_all(const char *path,uint8_t *out,DWORD cap){
+  HANDLE h=CreateFileA(path,0x80000000u,1,0,3,0,0);if(h==K32_INVALID)return ~0u;
+  DWORD got=0;assert(ReadFile(h,out,cap,&got,0));CloseHandle(h);return got;
+}
+static void recycle(void){
+  uint8_t info[4096];
+  assert(shell_mkdirs("C:\\Work\\Tree\\Deep"));
+  host_put("C:\\Work\\a.txt","12345");host_put("C:\\Work\\Tree\\Deep\\b.dat","0123456789");host_put("C:\\Work\\Tree\\c.dat","abc");
+  SHELL_FILEOP op={.operation=3,.from="C:\\Work\\a.txt\0C:\\Work\\Tree\\Deep\\..\\..\\Tree\0",.flags=0x54};   /* ALLOWUNDO | SILENT | NOCONFIRMATION */
+  assert(!SHFileOperationA(&op) && !op.aborted);
+  assert(GetFileAttributesA("C:\\Work\\a.txt")==~0u && GetFileAttributesA("C:\\Work\\Tree")==~0u);
+  assert(GetFileAttributesA("C:\\RECYCLED\\Dc1.txt")==128 && (GetFileAttributesA("C:\\RECYCLED\\Dc2")&16));
+  assert(GetFileAttributesA("C:\\RECYCLED\\Dc2\\Deep\\b.dat")==128 && GetFileAttributesA("C:\\RECYCLED\\INFO2.lck")==~0u);
+  DWORD n=read_all("C:\\RECYCLED\\INFO2",info,sizeof(info));
+  assert(n==20+2*280 && w32_u32(info)==4 && w32_u32(info+4)==3 && w32_u32(info+8)==2 && w32_u32(info+12)==280);
+  assert(!strcmp((char *)info+20,"C:\\Work\\a.txt") && w32_u32(info+20+260)==1 && w32_u32(info+20+264)==2 && w32_u32(info+20+276)==5);
+  uint64_t ft=(uint64_t)(1792000000ull+11644473600ull)*10000000ull;
+  assert(w32_u32(info+20+268)==(DWORD)ft && w32_u32(info+20+272)==(DWORD)(ft>>32));
+  assert(!strcmp((char *)info+20+280,"C:\\Work\\Tree") && w32_u32(info+20+280+260)==2 && w32_u32(info+20+280+276)==13);
+  /* A second delete continues the numbering. */
+  host_put("C:\\Work\\again.txt","x");op.from="C:\\Work\\again.txt\0";assert(!SHFileOperationA(&op) && GetFileAttributesA("C:\\RECYCLED\\Dc3.txt")==128);
+  assert(read_all("C:\\RECYCLED\\INFO2",info,sizeof(info))==20+3*280 && w32_u32(info+4)==4);
+  /* The confirmation says Recycle Bin when the item will be recycled. */
+  host_put("C:\\Work\\ask.txt","x");op.flags=0x44;op.from="C:\\Work\\ask.txt\0";assert(!SHFileOperationA(&op) && GetFileAttributesA("C:\\RECYCLED\\Dc4.txt")==128);
+  /* CD-ROM and removable drives, relative names and the bin's own items delete at once. */
+  host_put("E:\\fixed.txt","y");op.from="E:\\fixed.txt\0";op.flags=0x54;assert(!SHFileOperationA(&op) && GetFileAttributesA("E:\\RECYCLED\\De1.txt")==128);
+  host_put("F:\\usb.txt","y");op.from="F:\\usb.txt\0";assert(!SHFileOperationA(&op) && GetFileAttributesA("F:\\usb.txt")==~0u && GetFileAttributesA("F:\\RECYCLED")==~0u);
+  op.from="C:\\RECYCLED\\Dc1.txt\0";assert(!SHFileOperationA(&op) && GetFileAttributesA("C:\\RECYCLED\\Dc1.txt")==~0u);
+  /* No ALLOWUNDO: the old permanent delete. "Do not move files" and a too-large item are honoured. */
+  host_put("C:\\Work\\perm.txt","z");op.from="C:\\Work\\perm.txt\0";op.flags=0x14;assert(!SHFileOperationA(&op) && GetFileAttributesA("C:\\RECYCLED\\Dc5.txt")==~0u);
+  assert(shell_mkdirs("C:\\system\\settings"));host_put("C:\\system\\settings\\recycle.cfg","nuke=1\n");
+  host_put("C:\\Work\\nuke.txt","z");op.from="C:\\Work\\nuke.txt\0";op.flags=0x54;assert(!SHFileOperationA(&op) && GetFileAttributesA("C:\\Work\\nuke.txt")==~0u && GetFileAttributesA("C:\\RECYCLED\\Dc5.txt")==~0u);
+  host_put("C:\\system\\settings\\recycle.cfg","independent=1\ndrive.c.percent=1\ndrive.c.nuke=0\nnuke=1\n");
+  {size_t big=6u<<20;char *data=malloc(big+1);assert(data);memset(data,'q',big);data[big]=0;host_put("C:\\Work\\big.bin",data);free(data);}
+  op.from="C:\\Work\\big.bin\0";assert(SHFileOperationA(&op)==112 && GetFileAttributesA("C:\\Work\\big.bin")==128);   /* 1 % of 512 MiB is 5 MiB */
+  host_put("C:\\system\\settings\\recycle.cfg","percent=10\n");
+  op.flags=0x54;assert(!SHFileOperationA(&op) && GetFileAttributesA("C:\\Work\\big.bin")==~0u && GetFileAttributesA("C:\\RECYCLED\\Dc5.bin")==128);
+  op.flags=0x74;assert(SHFileOperationA(&op)==120);                                        /* name mappings: still not provided */
+  /* Leave the fixture tree as it was. */
+  const char *junk[]={"C:\\RECYCLED\\Dc1.txt","C:\\RECYCLED\\Dc3.txt","C:\\RECYCLED\\Dc4.txt","C:\\RECYCLED\\Dc5.bin","C:\\RECYCLED\\Dc2\\Deep\\b.dat","C:\\RECYCLED\\Dc2\\c.dat",
+    "C:\\RECYCLED\\INFO2","E:\\RECYCLED\\De1.txt","E:\\RECYCLED\\INFO2","C:\\system\\settings\\recycle.cfg"};
+  for(unsigned i=0;i<sizeof(junk)/sizeof(*junk);i++)DeleteFileA(junk[i]);
+  const char *dirs[]={"C:\\RECYCLED\\Dc2\\Deep","C:\\RECYCLED\\Dc2","C:\\RECYCLED","E:\\RECYCLED","C:\\Work","C:\\system\\settings","C:\\system"};
+  for(unsigned i=0;i<sizeof(dirs)/sizeof(*dirs);i++)RemoveDirectoryA(dirs[i]);
+  puts("PASS shell FOF_ALLOWUNDO: Recycle Bin move with INFO2 records, numbering, fixed second drive, removable/relative/in-bin deletes, policy, too-large refusal");
+}
 static void execute(void){
   host_registry("Software\\Classes\\.ciuki","","CiukiFixture");
   host_registry("Software\\Classes\\CiukiFixture\\shell\\open\\command","","\"C:\\Program Files\\Ciuki Fixture\\fixture.exe\" \"%1\" %*");
@@ -121,5 +168,5 @@ int main(int argc,char **argv){
   for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++)assert(SHGetSpecialFolderPathA(0,path,(int)ids[i],1));
   assert(!SHGetSpecialFolderPathA(0,path,3,0) && !path[0]);
   assert(!SHGetSpecialFolderPathA(0,path,31,0) && !path[0]);
-  folder_identifiers();links();operations();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
+  folder_identifiers();links();operations();recycle();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
 }

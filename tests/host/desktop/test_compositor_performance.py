@@ -32,8 +32,8 @@ THEMES = ("Platinum", "Ciuki Blue")
 # F2-99: original cursor silhouette and software shadow replace DMZ-White.
 # fx-13: cursor set scaled to the classic 13x19 arrow.
 GOLDENS = {
-    "Ciuki Blue": "b93aa55b6adae53d793de7443a0482b732ce4b8c973df886995dd8dbf40c0908",
-    "Platinum": "4033a51ffa7c7c1d29d0ecbff26e09c818435de4093265edf5788a0aa5899ae1"
+    "Ciuki Blue": "e58f78953ff512de3b5673c582fd50dc022d63efc842fc2a84ab9955c20cd58e",
+    "Platinum": "e91633e9e4af420c1b4731cbcbfac1db3be921cd85759508ea1f00cffc20e482"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

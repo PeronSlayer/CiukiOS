@@ -121,6 +121,7 @@ struct desk_shell {
     struct sh_notification notification;
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, about_scroll, shutdown_choice, message_kind;
+    int confirm;                    /* G2: SH_CONFIRM_*, the message window asks Yes or No */
     char run_text[160]; unsigned run_length;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
@@ -172,6 +173,10 @@ void desk_internal_paint(struct desktop *, int index, struct desk_box content, s
 void desk_internal_closed(struct desktop *, int index);
 int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
+/* G2: a Yes/No question in the message window; Yes runs desk_folder_confirmed(action), No or closing it desk_folder_cancelled. */
+enum { SH_CONFIRM_NONE, SH_CONFIRM_DELETE, SH_CONFIRM_EMPTY };
+void desk_shell_confirm(struct desktop *, const char *title, const char *text, int icon, int action);
+void desk_shell_bin_state(struct desktop *, int full);   /* the Recycle Bin icon's full or empty picture */
 void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);
 void desk_shell_notify(struct desktop *, const char *title, const char *text, int icon, int action);
 struct desk_box desk_shell_notification_bounds(const struct desktop *);
