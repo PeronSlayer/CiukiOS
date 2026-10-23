@@ -1102,7 +1102,7 @@ static void test_media_node(void)
     CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,UINT32_MAX,sizeof(s),0)==-EFAULT);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s)-1,0)==-EINVAL);
-    s.reserved=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
+    s.usb_unrecognized=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
     struct ciuki_media_remove r={1,sizeof(r),4,123};CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));
     media_result=-FS_EBUSY;CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)==-EBUSY&&media_removals==1);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,UINT32_MAX,sizeof(r),0)==-EFAULT&&media_removals==1);

@@ -295,7 +295,7 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
             break;
         }
         if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
-        if (usb_expired(h, end)) break;
+        if (usb_expired(h, end) || usb_control_cancelled(d)) break;
         usb_poll_pause(h, 1);
     }
     trace->poll_frames=frames;

@@ -57,6 +57,7 @@ struct fx_dev {
     bool present, stick, in_reset, post_reset, suspended, wedged, wedge_on_post_reset_suspend;
     bool bios_configured; /* attached at boot: POST enumerated and configured it */
     unsigned address, pending_address, config, idle_ms, setups, nak_tokens;
+    unsigned slow_ms; /* fx-21b: every standard request's data/status ready after this */
     uint8_t setup[8], data[64];
     unsigned stage, at, length; /* stage: 0 idle, 1 data, 2 status */
     bool local; /* standard request answered by this layer, not storage_test.c */
@@ -76,6 +77,7 @@ static struct fx {
     bool enabled_after_release;
     unsigned frame_bulk_tokens, max_bulk_tokens_frame;
     bool count_bulk;
+    uint64_t quiesce_at; /* fx-21b: usb_power_quiesce() raises the host flag then */
 } fx;
 
 static unsigned fx_frame(void) { return (unsigned)((int64_t)m.now+fx.frame_base)&0x7ff; }
@@ -191,6 +193,7 @@ static int fx_control(struct fx_dev *d,unsigned pid,unsigned toggle,uint8_t *b,u
          * request's status stage NAKed 60 ms; SET_ADDRESS status 10 ms. */
         d->data_ready_at=m.now+(d->stick ? 4:0);
         d->status_ready_at=m.now+(d->stick ? (d->requests==1 ? 60u : req==5 ? 10u : 1u) : 0u);
+        if(d->slow_ms) d->data_ready_at=d->status_ready_at=m.now+d->slow_ms;
         if(d->local) {
             if(req==6 && (value>>8)==1) {
                 d->length=length<18 ? length:18;memcpy(d->data,d->stick ? stick_device:vendor_device,18);
@@ -257,6 +260,7 @@ static bool fx_transaction(void *c,uint32_t address,uint32_t qh,volatile uint32_
 static void fx_tick(void)
 {
     m.now++;
+    if(fx.quiesce_at && m.now>=fx.quiesce_at) m.h.quiescing=true;
     bool running=(fx.cmd&1) && (fx.pci_command&4);
     for(unsigned p=0;p<FX_PORTS;p++) {
         struct fx_dev *d=&fx.dev[p];
@@ -316,7 +320,11 @@ static void fx_begin(const char *path,unsigned overshoot)
     p.bar[4]=0x1821;
     struct usb_io io={NULL,fx_read,fx_write,fx_config_read,fx_config_write,fx_now,fx_sleep};
     assert(!usb_attach(&m.h,&p,&io,m.dma,0x100000));
-    assert(m.h.ready && m.h.irq_attached && fx.flbase==m.h.dma_phys);
+    /* usb_core.c keeps USB_HOST_MAX IRQ slots for the process lifetime:
+     * the first four fixtures run in IRQ mode (as the T23), later ones poll. */
+    static unsigned attaches;
+    attaches++;
+    assert(m.h.ready && (m.h.irq_attached || attaches>USB_HOST_MAX) && fx.flbase==m.h.dma_phys);
     /* start() built the fx-17 tail: bulk QH -> terminating QH, whose element
      * is the inactive pseudo TD (fx-21: IN to address 127) and whose
      * horizontal link terminates while no bulk stage runs. */
@@ -328,6 +336,108 @@ static void fx_begin(const char *path,unsigned overshoot)
     fx_tick();
 }
 static void fx_end(void) { cleanup(); }
+/* The worker's cadence: a scan is due every 250 ms. */
+static void fx_scan(unsigned ms)
+{
+    for(unsigned elapsed=0;elapsed<ms;elapsed+=10) {fx_sleep(NULL,10);usb_step(&m.h);}
+}
+static uint64_t record_tick(const char *needle)
+{
+    const char *at=strstr(records,needle);assert(at);
+    const char *tick=strstr(at,"tick=");assert(tick && tick<strchr(at,'\n'));
+    return strtoull(tick+5,NULL,10);
+}
+/* Physical removal and insertion on port 2 (CCS/CSC as UHCI 1.1 2.1.7). A
+ * re-plugged stick is freshly powered: not BIOS-configured, not wedged. */
+static void fx_unplug(void)
+{
+    fx.dev[FX_STICK].present=false;fx.portsc[FX_STICK]=(fx.portsc[FX_STICK]&~5u)|2u;
+}
+static void fx_plug_healthy(bool csc_only)
+{
+    fx.dev[FX_STICK]=(struct fx_dev){.present=true,.stick=true,.suspended=true};
+    fx.portsc[FX_STICK]=csc_only ? (fx.portsc[FX_STICK]|3u) : 3u;
+    m.stage=0;m.cbw_at=0;m.in_toggle=m.out_toggle=0;
+}
+static void assert_mounted(unsigned slot)
+{
+    m.storage_slot=slot;struct usb_device *stick=device();
+    assert(stick->configured && stick->storage.online && stick->storage.published && !stick->quarantined);
+    struct storage *s=storage_get();assert(s->vfs.volumes[4] && s->volumes[4].part.parent==&stick->storage.block);
+}
+/* fx-21b 1: a slow but valid stick. Each standard request of its enumeration
+ * answers after 1.5 s: within Linux's 5 s per message, beyond the former
+ * 500 ms per stage (which gave six -110 and a quarantine). */
+static void slow_stick(const char *path)
+{
+    fx_begin(path,0);fx.dev[FX_STICK].slow_ms=1500;
+    uint32_t before=usb_unrecognized_devices();
+    usb_step(&m.h);
+    assert(fx.dev[FX_STICK].address==2 && fx.dev[FX_STICK].config==1);
+    assert(strstr(records,"port=2 parent=0 attempt=1 tick=") && !record_count("result=-110"));
+    unsigned long long elapsed=0;const char *line=strstr(records,"port=2 parent=0 attempt=1 tick=");
+    assert(line && sscanf(strstr(line,"elapsed_ms="),"elapsed_ms=%llu",&elapsed)==1 && elapsed>=1500 && elapsed<5000);
+    assert_mounted(1);
+    assert(usb_unrecognized_devices()==before && !record_count("[usb] unrecognized"));
+    printf("fx-21b slow stick: first GET_DESCRIPTOR(8) %llu ms, enumerated and mounted\n",elapsed);
+    fx_end();
+}
+/* fx-21b 2/3: a dead stick (SETUP ACKed, every data stage NAKed, as the
+ * f441c5bd stick). Worst case to quarantine: 2 series x 3 attempts of one
+ * 5000 ms message (+ <=20 ms two-frame retirement each), 2 x 2 pauses of
+ * 100 ms and one 60 ms root reset: 6 x 5020 + 400 + 60 = 30580 ms from the
+ * first attempt (plus the debounce, at most 2 s, and the first 60 ms reset).
+ * Exactly one unrecognized count; a re-plug re-enumerates the port. */
+static void dead_stick(const char *path,bool fast_replug)
+{
+    fx_begin(path,0);fx.dev[FX_STICK].wedged=true;
+    uint32_t before=usb_unrecognized_devices();
+    usb_step(&m.h);
+    assert(record_count("port=2 parent=0 attempt=")==12 && record_count("result=-110")==6);
+    uint64_t first=record_tick("port=2 parent=0 attempt=1 series=1 operation=1 tick=");
+    uint64_t quarantined=record_tick("[usb] unrecognized controller=");
+    assert(quarantined-first<=30580);
+    assert(strstr(records,"[usb] quarantine device addr=0 reason=enumeration_transfer stage=enumeration"));
+    assert(record_count("[usb] unrecognized ")==1 && usb_unrecognized_devices()==before+1);
+    assert(strstr(records,"reason=enumeration_transfer count=") && strstr(records,"notify=desktop"));
+    assert(m.h.devices[FX_STICK].quarantined && m.h.root_blocked[FX_STICK]);
+    printf("fx-21b dead stick: quarantined %llu ms after the first attempt (bound 30580)\n",(unsigned long long)(quarantined-first));
+    /* Still connected: no second notification however long it stays. */
+    fx_scan(3000);
+    assert(record_count("[usb] unrecognized ")==1 && usb_unrecognized_devices()==before+1);
+    assert(record_count("port=2 parent=0 attempt=")==12 && m.h.root_blocked[FX_STICK]);
+    if(fast_replug) {
+        /* Unplugged and plugged back between two 250 ms scans: CCS stays 1,
+         * CSC reports the connect change. */
+        fx_plug_healthy(true);
+        fx_scan(300);
+        assert(strstr(records,"[usb] release port=2") && strstr(records,"reason=reconnect"));
+    } else {
+        fx_unplug();fx_scan(300);
+        assert(strstr(records,"[usb] release port=2") && strstr(records,"reason=disconnect"));
+        assert(!m.h.root_blocked[FX_STICK] && !m.h.root_child[FX_STICK]);
+        fx_plug_healthy(false);
+    }
+    fx_scan(3000);
+    assert(m.h.device_count==3 && fx.dev[FX_STICK].address==2);
+    assert_mounted(2);
+    assert(record_count("[usb] unrecognized ")==1 && usb_unrecognized_devices()==before+1);
+    fx_end();
+}
+/* fx-21b: a shutdown during a dead device's 5 s wait. usb_power_quiesce()
+ * flags the host first; the message ends at once and the device is not
+ * counted as unrecognized (the 2 s quiesce reservation bound still holds). */
+static void quiesce_abort(const char *path)
+{
+    fx_begin(path,0);fx.dev[FX_STICK].wedged=true;
+    uint32_t before=usb_unrecognized_devices();
+    fx.quiesce_at=m.now+1500; /* debounce and the first attempt are under way */
+    uint64_t start=m.now;
+    usb_step(&m.h);
+    assert(m.now-start<fx.quiesce_at-start+500);
+    assert(m.h.devices[FX_STICK].quarantined && usb_unrecognized_devices()==before && !record_count("[usb] unrecognized"));
+    m.h.quiescing=false;fx_end();
+}
 
 /* The stick enumerates, binds and mounts; the 64 KiB read keeps fx-17's
  * in-frame bulk reclamation. `overshoot` is the trial's scheduler load. */
@@ -391,6 +501,14 @@ int main(int argc,char **argv)
     /* Unloaded boot, as on e831e685. */
     enumerate_stick(argv[1],0);
     puts("PASS fx-21 stick enumerated through the full UHCI schedule (addr 0, SET_ADDRESS, descriptors, configuration), BOT bound and E: mounted, 64 KiB read with the fx-17 reclamation loop");
+    slow_stick(argv[1]);
+    puts("PASS fx-21b slow stick: every enumeration request answered after 1.5 s (Linux 5 s per message) enumerates and mounts, no notification");
+    dead_stick(argv[1],false);
+    puts("PASS fx-21b dead stick: quarantined within the 30.58 s bound with exactly one unrecognized count; unplug, replug: enumerated and mounted");
+    dead_stick(argv[1],true);
+    puts("PASS fx-21b dead stick, fast re-plug (connect change between scans): port released, enumerated and mounted");
+    quiesce_abort(argv[1]);
+    puts("PASS fx-21b power quiesce ends a 5 s enumeration wait at once without an unrecognized count");
     puts("PASS fx-21 UHCI enumeration suite (ASan/UBSan)");
     return 0;
 }

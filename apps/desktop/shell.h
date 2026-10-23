@@ -25,6 +25,11 @@
 /* Tray identifiers; geometry places Notifications next to the clock. */
 enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
+/* fx-21b: wording of the Windows notification (Microsoft KB 2654149, KB 314634). */
+#define DESK_USB_UNRECOGNIZED_TITLE "USB Device Not Recognized"
+#define DESK_USB_UNRECOGNIZED_TEXT "One of the USB devices attached to this computer has malfunctioned, " \
+    "and CiukiOS does not recognize it. Unplug the device, wait a few seconds and plug it in again. " \
+    "If the problem continues, try another USB port."
 struct sh_notification {
     char title[64], text[320];
     uint64_t started, expires;
