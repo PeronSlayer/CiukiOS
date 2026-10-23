@@ -1119,7 +1119,10 @@ static int fold_drive(char c) { return (c >= 'A' && c <= 'Z' ? c - 'A' : c - 'a'
 static void properties_dialog(struct files_app *a)
 {
     struct fm_job *j = &a->job;
-    char text[DU_DIALOG_TEXT], size[48], g[32], contains[96] = "", type[48], when[24] = "", parent[FM_PATH];
+    /* text and parent are static: UI thread only, the dialog copies them, and
+     * on the stack they exceeded the 4 KiB frame limit of the i686 build. */
+    static char text[DU_DIALOG_TEXT], parent[FM_PATH];
+    char size[48], g[32], contains[96] = "", type[48], when[24] = "";
     struct fm_meta meta = j->property_meta;
     const char *path = j->sources[0];
     files_size_text(size, sizeof(size), j->bytes); group(g, sizeof(g), j->bytes);
@@ -1162,7 +1165,9 @@ static void properties_dialog(struct files_app *a)
     du_dialog_icon(a->ui, icon);
 }
 
-static void job_finished(struct files_app *a)
+/* Not inlined into job_tick: its name and report buffers would push job_tick
+ * past the 4 KiB frame limit of the i686 build. */
+__attribute__((noinline)) static void job_finished(struct files_app *a)
 {
     struct fm_job *j = &a->job;
     a->job_active = 0;
@@ -1170,7 +1175,10 @@ static void job_finished(struct files_app *a)
     if (du_dialog_id(a->ui) == D_PROGRESS || du_dialog_id(a->ui) == D_REPLACE) du_dialog_close(a->ui);
     if (a->close_pending) { if (a->close) a->close(a); return; }
     enum fm_job_kind kind = j->kind;
-    char report_title[64], report[DU_DIALOG_TEXT]; int report_icon = 0;
+    /* Static: job_finished runs once per job on the UI thread and du_message
+     * copies the text; on the stack it pushed job_tick over the 4 KiB frame limit. */
+    static char report[DU_DIALOG_TEXT];
+    char report_title[64]; int report_icon = 0;
     if (kind != FM_PROPERTIES && fm_job_report(j, report_title, sizeof(report_title), report, sizeof(report), &report_icon))
         du_message(a->ui, D_ERROR, report_title, report, report_icon, NULL, 0, 0, 0);
     else if (j->state == FM_FAILED) {

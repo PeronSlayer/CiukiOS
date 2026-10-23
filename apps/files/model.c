@@ -646,7 +646,10 @@ static int root_gone(struct fm_job *j, const char *path)
 }
 static void classify(struct fm_job *j, int r)
 {
-    if (r != -EIO && r != -ENOENT && r != -ENODEV && r != -ENXIO && r != -ESTALE
+    if (r != -EIO && r != -ENOENT && r != -ENODEV && r != -ENXIO
+#ifdef ESTALE
+        && r != -ESTALE
+#endif
 #ifdef ENOMEDIUM
         && r != -ENOMEDIUM
 #endif
