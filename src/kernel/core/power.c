@@ -298,12 +298,45 @@ int32_t power_status_query(uint32_t address, uint32_t bytes)
     return copy_to_user(address, &out, sizeof(out));
 }
 #endif
+/* fx-5: call 73 is one sequence. A concurrent request is refused with EBUSY
+ * (nothing changed; the desktop retries). Completed stages are latched so a
+ * repeated request resumes after them: storage once durable is not flushed
+ * again, and a stopped machine goes straight to reset or soft-off. */
+static bool power_running, storage_flushed;
+static uint32_t power_requests;
 static int flush_storage(void)
 {
+    if (storage_flushed) return 0;
     struct storage *s = storage_get();
     if (!s || !s->ready) return 0;
     int e = storage_sync();
     if (e) { klog("[power] storage flush failed: %d", e); power_checkpoint(); }
+    else storage_flushed = true;
+    return e;
+}
+static int power_sequence(bool off)
+{
+    int e;
+    if (!(power_progress & CIUKI_POWER_STOPPED)) {
+        e = flush_storage();
+        /* EBUSY before any irreversible step: the session continues intact. */
+        if (e) { if (e != -EBUSY) power_progress = CIUKI_POWER_UNCERTAIN; return e; }
+        power_progress = CIUKI_POWER_UNCERTAIN;
+        e = power_devices_quiesce ? power_devices_quiesce() : -ENOTSUP;
+        if (e) { klog("[power] native quiesce failed: %d", e); power_checkpoint(); return -EBUSY; }
+        power_progress = CIUKI_POWER_STOPPED;
+        /* The orderly-shutdown proof for every provider: ACPI S5 and APM Off. */
+        power_source_mark_stopped();
+    }
+    if (!off) { klog("[power] stage=reset fallback=8042-triple-fault"); power_checkpoint(); kernel_reboot(); }
+    struct power_source_snapshot provider; power_source_snapshot(&provider);
+    const char *name = provider.provider == POWER_SOURCE_ACPI ? "acpi" : provider.provider == POWER_SOURCE_APM ? "apm" : "none";
+    if (!power_source_can_off()) {
+        klog("[power] no qualified soft-off provider=%s; devices stopped, safe to turn off", name); power_checkpoint(); return -ENOTSUP;
+    }
+    klog("[power] stage=%s-off state=quiescent", name); power_checkpoint();
+    e = power_source_soft_off();
+    klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
     return e;
 }
 int32_t power_syscall(uint32_t action)
@@ -320,24 +353,16 @@ int32_t power_syscall(uint32_t action)
         return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0);
     if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;
     bool off = action == CIUKI_POWER_OFF;
-    klog("[power] %s requested by pid %u", off ? "power off" : "reboot", caller->pid);
-    int e = flush_storage();
-    if (e) { if (e != -EBUSY) power_progress = CIUKI_POWER_UNCERTAIN; return e; }
-    power_progress = CIUKI_POWER_UNCERTAIN;
-    e = power_devices_quiesce ? power_devices_quiesce() : -ENOTSUP;
-    if (e) { klog("[power] native quiesce failed: %d", e); power_checkpoint(); return -EBUSY; }
-    power_progress = CIUKI_POWER_STOPPED;
-    /* The orderly-shutdown proof for every provider: ACPI S5 and APM Off. */
-    power_source_mark_stopped();
-    if (!off) { klog("[power] stage=reset fallback=8042-triple-fault"); power_checkpoint(); kernel_reboot(); }
-    struct power_source_snapshot provider; power_source_snapshot(&provider);
-    const char *name = provider.provider == POWER_SOURCE_ACPI ? "acpi" : provider.provider == POWER_SOURCE_APM ? "apm" : "none";
-    if (!power_source_can_off()) {
-        klog("[power] no qualified soft-off provider=%s; devices stopped, safe to turn off", name); power_checkpoint(); return -ENOTSUP;
-    }
-    klog("[power] stage=%s-off state=quiescent", name); power_checkpoint();
-    e = power_source_soft_off();
-    klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
+    uint32_t f = irq_save();
+    bool busy = power_running;
+    if (!busy) { power_running = true; power_requests++; }
+    uint32_t attempt = power_requests;
+    irq_restore(f);
+    if (busy) { klog("[power] %s request by pid %u refused: sequence in progress", off ? "power off" : "reboot", caller->pid); return -EBUSY; }
+    klog("[power] %s requested by pid %u attempt=%u progress=%u storage=%s", off ? "power off" : "reboot", caller->pid,
+         attempt, power_progress, storage_flushed ? "durable" : "pending");
+    int e = power_sequence(off);
+    f = irq_save(); power_running = false; irq_restore(f);
     return e;
 }
 #endif

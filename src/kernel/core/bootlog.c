@@ -594,12 +594,32 @@ int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *ctx)
     f=lock_ram();sync_waiters[slot]=0;sync_next_commit();unlock_ram(f);
     return result;
 }
+#ifdef FS_HOST
+void bootlog_host_pause(void) __attribute__((weak)); /* host fixture clock/owner step */
+static void shutdown_pause(void)
+{
+    if (bootlog_host_pause) { bootlog_host_pause(); return; }
+    const struct timespec pause={0,1000000}; nanosleep(&pause,0);
+}
+#else
+static void shutdown_pause(void) { task_sleep_ms(1); }
+#endif
 int bootlog_shutdown(void)
 {
 #ifndef FS_HOST
     if (!(read_eflags() & 0x200)) return -FS_EBUSY;
 #endif
-    if (!take_drain()) return -FS_EBUSY;
+    /* fx-5: the storage task's drain turn is transient (bounded batches; at
+     * most 39 ms on the T23 trial). Refusing it with EBUSY failed the first
+     * call-73 flush of image 9a60215f. Wait for the owner, as
+     * blackbox_checkpoint waits for its flusher, with a finite bound; only
+     * an owner that outlives it (a probe pause) still refuses, unchanged. */
+    uint32_t start=fs_now_ms();
+    for (unsigned turn=0;!take_drain();turn++) {
+        if (turn>=BOOTLOG_SYNC_TIMEOUT_MS || (uint32_t)(fs_now_ms()-start)>=BOOTLOG_SYNC_TIMEOUT_MS)
+            return -FS_EBUSY;
+        shutdown_pause();
+    }
     stopping = true;
     { uint32_t f=lock_ram();budget_close_locked(fs_now_ms());unlock_ram(f); }
     int result = stats.error;

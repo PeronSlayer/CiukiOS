@@ -670,4 +670,38 @@ static void report_snapshot(void)
     stats.active=false; reset_model();
     puts("PASS bootlog report: newest whole pending slices, publication order, fixed cap, wrap position, no consume/watermark/storage mutation");
 }
-int main(void) { report_snapshot();statistic_budget(); stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+/* fx-5: call 73 met the storage task's drain turn on the T23 (image
+ * 9a60215f) and bootlog_shutdown refused at once with EBUSY. It now waits
+ * for the owner within BOOTLOG_SYNC_TIMEOUT_MS; this fixture's pause hook
+ * models one millisecond per turn and ends the owner's turn on cue. */
+static unsigned shutdown_pauses, release_after;
+static bool advance_clock;
+void bootlog_host_pause(void)
+{
+    shutdown_pauses++;
+    if (advance_clock) model_now++;
+    if (release_after && shutdown_pauses==release_after) draining=false; /* drain turn ends */
+}
+static void shutdown_drain_owner(void)
+{
+    static const char line[]="[power] power off requested by pid 2\n";
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    bootlog_capture(line,sizeof(line)-1);
+    draining=true;shutdown_pauses=0;release_after=39;advance_clock=true; /* 39 ms: T23 bootlog_drain_ms */
+    CHECK(!bootlog_shutdown() && shutdown_pauses==39 && !snapshot().active && !draining);
+    CHECK(disk_size==sizeof(line)-1 && !memcmp(disk,line,sizeof(line)-1));
+    /* An owner outliving the bound: refusal without any change, then retry. */
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    bootlog_capture(line,sizeof(line)-1);
+    unsigned before=calls;
+    draining=true;shutdown_pauses=0;release_after=0;
+    CHECK(bootlog_shutdown()==-FS_EBUSY && shutdown_pauses==BOOTLOG_SYNC_TIMEOUT_MS && calls==before);
+    CHECK(snapshot().active && snapshot().queued && !stopping && !disabled && draining && !snapshot().error);
+    /* A stalled clock is bounded by turns alone. */
+    model_now=0;advance_clock=false;shutdown_pauses=0;
+    CHECK(bootlog_shutdown()==-FS_EBUSY && shutdown_pauses==BOOTLOG_SYNC_TIMEOUT_MS && calls==before);
+    draining=false;shutdown_pauses=0;
+    CHECK(!bootlog_shutdown() && !shutdown_pauses && !snapshot().active && !memcmp(disk,line,sizeof(line)-1));
+    puts("bootlog: shutdown waits for the storage task's drain turn (39 ms T23 case), bounded refusal changes nothing, retry seals the log PASS");
+}
+int main(void) { report_snapshot();statistic_budget(); stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); shutdown_drain_owner(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

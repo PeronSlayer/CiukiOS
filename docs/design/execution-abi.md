@@ -409,8 +409,28 @@ and yields between continuations. Physical qualification remains separate.
   owner and never donate. A cycle produces a protected `[sched]
   donation_cycle` record and its closing edge does not donate; the actual
   wait still follows its condition/deadline. `kmutex_lock_until` provides
-  a finite timeout. Address-ordered acquisition remains mandatory outside
-  detected cycles. The void lock API waits without donation for its 1000 ms
+  a finite timeout. Ordered acquisition remains mandatory outside detected
+  cycles. **fx-5 (2026-10-23):** the order key is (level, address).
+  Ordinary mutexes have level 0 and keep the address rule. Mutexes of one
+  module that nest are members of one struct declared in acquisition order:
+  C fixes member addresses in declaration order
+  ([N1570](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+  6.7.2.1p15). The compiler and the linker place separate statics, so a
+  nesting across objects never rests on their addresses. Its outer class
+  takes `KMUTEX_LEVEL_OUTER` instead, for example the audio service/control
+  pair around the DMA register lock and the ThinkPad EC lock. The T23 trial of
+  image `9a60215f` panicked when two statics, audio control (`c06a89b0`) and
+  service (`c06adb20`), nested service→control. A violation record names both
+  locks, as Linux lockdep's report names the lock being acquired and the lock
+  already held, each with its acquisition site
+  ([lockdep design](https://docs.kernel.org/locking/lockdep-design.html)):
+  `mutex: lock order want=CLASS/ADDRESS@SITE held=CLASS/ADDRESS@SITE task=NAME`.
+  CLASS is the `kmutex_init_named`/`kmutex_init_level` name. An unnamed
+  mutex prints `init@ADDRESS` of its `kmutex_init` caller, as lockdep keys a
+  class by its `mutex_init` site
+  ([mutex.h](https://github.com/torvalds/linux/blob/v6.12/include/linux/mutex.h)).
+  The address is resolved with `build/f0/VMM.map`. Recursion, unlock-order,
+  non-owner and cyclic-timeout panics use the same record. The void lock API waits without donation for its 1000 ms
   safety interval, then panics on a persistent cycle instead of deadlocking
   indefinitely; callers needing recovery use the timed API. Owner death retires kmutex ownership
   and wakes waiters before the owner's stack is freed. FIFO filesystem

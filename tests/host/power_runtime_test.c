@@ -30,12 +30,24 @@ static void stage(char c) { assert(stages<sizeof(order)-1); order[stages++]=c; o
 struct process *proc_current(void) { return &desktop; }
 uint32_t supervisor_desktop_pid(void) { return 42; }
 struct storage *storage_get(void) { return &disk; }
-int storage_sync(void) { stage('S'); if (!sync_error) disk.stopped=true; return sync_error; }
+static int (*during_sync)(void);
+static int nested_result;
+int storage_sync(void)
+{
+    stage('S');
+    if (during_sync) { int (*nested)(void)=during_sync; during_sync=0; nested_result=nested(); }
+    if (!sync_error) disk.stopped=true;
+    return sync_error;
+}
 void net_shutdown(void) { assert(disk.stopped); stage('N'); }
 int power_devices_quiesce(void) { assert(disk.stopped); net_shutdown(); stage('Q'); return quiesce_error; }
 static bool provider_can_off(void *ctx) { (void)ctx; return qualified; }
 static int provider_off(void *ctx)
-{ (void)ctx; assert(!strcmp(order,"SNQ") && !power_source_orderly_shutdown(0)); stage('P'); return off_error; }
+{
+    (void)ctx; /* every soft-off follows the latch, after S and the last N/Q */
+    assert(stages>=3 && order[0]=='S' && strstr(order,"NQ") && !power_source_orderly_shutdown(0));
+    stage('P'); return off_error;
+}
 void klog(const char *fmt, ...) { va_list ap; va_start(ap,fmt); vsnprintf(last,sizeof(last),fmt,ap); va_end(ap); }
 int blackbox_checkpoint(void) { checkpoints++; strcpy(durable,last); return 0; }
 __attribute__((noreturn)) void kernel_reboot(void) { stage('R'); longjmp(reboot_return,1); }
@@ -51,7 +63,8 @@ static void reset(void)
 {
     disk=(struct storage){.ready=true}; desktop.pid=42; stages=checkpoints=0;
     desktop.setup_capability=false; setup_active=false;
-    power_progress=0; stopped=false;
+    power_progress=0; stopped=false; power_running=storage_flushed=false; power_requests=0;
+    during_sync=0; nested_result=0;
     order[0]=durable[0]=last[0]=0; sync_error=quiesce_error=0; off_error=-EIO; qualified=true;
     provide(POWER_SOURCE_ACPI);
 }
@@ -81,6 +94,37 @@ static void test_setup_authority(void)
     setup_caller(); if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_REBOOT); assert(0); }
     assert(!strcmp(order,"SNQR"));
     puts("PASS power runtime Setup authority: capability needs Setup mode, same flush/quiesce/latch path, ACPI and APM soft-off, reset");
+}
+/* fx-5: the T23 trial of image 9a60215f. The first flush met a transient
+ * holder (EBUSY), the desktop retried 250 ms later: the second request runs
+ * the whole sequence once. Completed stages are latched; a concurrent
+ * request is refused without touching any stage. */
+static int second_request(void) { return power_syscall(CIUKI_POWER_OFF); }
+static void test_repeated_requests(void)
+{
+    reset(); sync_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !strcmp(order,"S") && !disk.stopped);
+    assert(power_syscall(CIUKI_POWER_QUERY)==3); /* no UNCERTAIN: the session continues */
+    assert(strstr(durable,"storage flush failed: -16"));
+    sync_error=0;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SSNQP") && disk.stopped);
+    assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_STOPPED);
+    assert(strstr(last,"acpi soft-off returned error=-5") && power_requests==2);
+    /* After the stopped latch a repeat goes straight to the provider. */
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SSNQPP"));
+    /* Durable storage is not flushed again when a device stop must be retried. */
+    reset(); quiesce_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !strcmp(order,"SNQ"));
+    assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
+    quiesce_error=0;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQNQP"));
+    /* A request arriving while one runs (here: inside its flush) is refused. */
+    reset(); during_sync=second_request;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && nested_result==-EBUSY && !strcmp(order,"SNQP"));
+    assert(power_requests==1 && !power_running);
+    reset(); during_sync=second_request; sync_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_REBOOT)==-EBUSY && nested_result==-EBUSY && !strcmp(order,"S") && !power_running);
+    puts("PASS power runtime fx-5: EBUSY flush retried by a second request completes once (SSNQP), stages latched, stopped repeat goes to the provider, concurrent request refused");
 }
 int main(void)
 {
@@ -114,5 +158,6 @@ int main(void)
     assert(!strcmp(order,"SNQR"));
     puts("PASS power runtime: authority, query, flush refusal, quiesce refusal, one ACPI/APM soft-off path after the stopped latch, retained diagnostics, reboot");
     test_setup_authority();
+    test_repeated_requests();
     return 0;
 }
