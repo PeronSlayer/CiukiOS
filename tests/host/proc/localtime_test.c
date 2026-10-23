@@ -215,6 +215,20 @@ static void test_fat(void)
     /* The summer stamp keeps its wall-clock value in winter (FAT local). */
     fd = file_open(client, "/summer.txt", O_RDONLY, 0); CHECK(fd >= 0);
     CHECK(!locked_stat(file_fd(client, fd)->node, &st) && st.st_mtim.tv_sec == civil(2026, 7, 1, 10, 0, 0));
+    /* G6 inverse: writing a summer stamp in winter uses the summer rule. */
+    uint16_t date, time; int64_t utc;
+    CHECK(clock_utc_fat(civil(2026,7,1,10,0,2), &date, &time) && (time>>11)==12);
+    CHECK(clock_fat_utc(date,time,&utc) && utc==civil(2026,7,1,10,0,2));
+    CHECK(clock_utc_fat(civil(2026,12,1,8,0,2), &date, &time) && (time>>11)==9);
+    CHECK(clock_fat_utc(date,time,&utc) && utc==civil(2026,12,1,8,0,2));
+    CHECK(!clock_utc_fat(INT64_MIN,&date,&time) && !clock_utc_fat(INT64_MAX,&date,&time));
+    /* POSIX rules may carry seconds as well as minutes. Creation's odd
+     * second belongs to the local stamp, not the UTC input. */
+    strcpy(q.zone,"Etc/Custom"); strcpy(q.rule,"XST-0:00:01"); q.flags=0;
+    CHECK(!op(CIUKI_TIME_SET_ZONE,&q));
+    struct ciuki_file_info created={.created=civil(2026,7,1,10,0,2),.created_ms=500},result;
+    CHECK(!info_set("/summer.txt",CIUKI_FILE_INFO_CREATED,created));
+    CHECK(!info_get("/summer.txt",&result) && result.created==created.created && result.created_ms==500);
     all_closed();
     CHECK(!remove_path_native("/summer.txt", false) && !remove_path_native("/winter.txt", false));
     fs_set_timestamp_clock(0); fs_set_calendar_clock(0);

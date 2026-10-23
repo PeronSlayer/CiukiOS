@@ -121,6 +121,7 @@ static const char *file_tag(uint32_t nr) {
     case CIUKI_SYS_GETCWD: return "getcwd";
     case CIUKI_SYS_LSEEK64: return "seek";
     case CIUKI_SYS_OPEN: return "open";
+    case CIUKI_SYS_FILE_INFO: return "attributes";
     default: return "metadata";
     }
 }
@@ -292,12 +293,36 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     return err;
 }
 
+/* G6 call 98: the record is copied once and validated before the path is
+ * resolved; GET pins the output before the namespace lock (as stat does). */
+static int file_info_call(struct file_operation *op, const struct trap_frame *tf)
+{
+    struct ciuki_file_info record;
+    int err = copy_from_user(&record, tf->ecx, sizeof(record));
+    if (!err) err = px_file_info_check(&record);
+    if (!err && record.operation == CIUKI_FILE_INFO_GET) err = output_pin(op, tf->ecx, sizeof(record), true);
+    if (err) return err;
+    struct px_namespace *s = op->cwd->space;
+    vfs_lock(s->vfs,0);
+    if (caught()) err = -EINTR;
+    else if (record.operation == CIUKI_FILE_INFO_SET) err = px_file_info_set_locked(s, op->cwd, op->path[0], &record);
+    else {
+        struct px_path result;
+        err = px_resolve_locked(s, op->cwd, op->path[0], false, &result);
+        if (!err) err = px_file_info_get_locked(result.node, &record);
+        if (!err) err = copy_to_user(tf->ecx, &record, sizeof(record));
+    }
+    vfs_unlock(s->vfs);
+    return err;
+}
+
 static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
 {
     if (!op->cwd) return -ENOENT;
     int err = path_copy(op, 0, tf->ebx);
     if (!err && tf->eax == CIUKI_SYS_RENAME) err = path_copy(op, 1, tf->ecx);
     if (!err && tf->eax == CIUKI_SYS_STAT) err = output_pin(op, tf->ecx, sizeof(struct ciuki_stat), true);
+    if (!err && tf->eax == CIUKI_SYS_FILE_INFO) return file_info_call(op, tf);
     if (err) return err;
     struct px_namespace *s = op->cwd->space;
     if (tf->eax == CIUKI_SYS_OPEN) {
@@ -377,6 +402,7 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     /* Flags/structure checks precede descriptor and pointer validation. */
     if (nr == CIUKI_SYS_OPEN) { int err = file_open_flags(tf->ecx, tf->edx); if (err) return err; }
     if (nr == CIUKI_SYS_MKDIR && (tf->ecx & ~0777u)) return -EINVAL;
+    if (nr == CIUKI_SYS_FILE_INFO && (tf->edx != sizeof(struct ciuki_file_info) || tf->esi || tf->edi)) return -EINVAL;
     if ((nr == CIUKI_SYS_READ || nr == CIUKI_SYS_WRITE || nr == CIUKI_SYS_PREAD || nr == CIUKI_SYS_PWRITE) && tf->edx > CIUKI_IO_MAX) return -EINVAL;
     if (nr == CIUKI_SYS_GETDENTS && (tf->edx < CIUKI_GETDENTS_MIN || tf->edx > CIUKI_GETDENTS_MAX)) return -EINVAL;
     if (nr == CIUKI_SYS_LSEEK64 && tf->esi > SEEK_END) return -EINVAL;
@@ -457,7 +483,8 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
 }
 bool file_syscall(struct trap_frame *tf)
 {
-    if ((tf->eax < CIUKI_SYS_OPEN || tf->eax > CIUKI_SYS_NANOSLEEP) && tf->eax != CIUKI_SYS_UNAME && tf->eax != CIUKI_SYS_DEVCTL) return false;
+    if ((tf->eax < CIUKI_SYS_OPEN || tf->eax > CIUKI_SYS_NANOSLEEP) && tf->eax != CIUKI_SYS_UNAME && tf->eax != CIUKI_SYS_DEVCTL &&
+        tf->eax != CIUKI_SYS_FILE_INFO) return false;
     struct process *p = proc_current();
     tf->eax = (uint32_t)(p ? file_dispatch(p, tf) : -ENOSYS);
     return true;

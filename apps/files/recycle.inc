@@ -554,8 +554,9 @@ static int rb_list_into(const struct fm_vfs *fs, uint32_t fixed, struct listing 
             struct fm_entry *e = &l->entries[l->count];
             memset(e, 0, sizeof(*e));
             snprintf(e->name, sizeof(e->name), "%s", item->stored);
-            e->meta = (struct fm_meta){item->directory ? FM_DIR : FM_FILE, item->size, item->index, (uint32_t)item->drive,
-                                       item->directory ? 0040777u : 0100666u, item->modified ? item->modified : item->deleted, 0};
+            e->meta = (struct fm_meta){.type=item->directory ? FM_DIR : FM_FILE, .size=item->size,
+                .ino=item->index, .dev=(uint32_t)item->drive, .mode=item->directory ? 0040777u : 0100666u,
+                .modified=item->modified ? item->modified : item->deleted};
             l->bin[l->count] = *item;
             e->bin = ++l->count;
             l->bin_count = l->count;
