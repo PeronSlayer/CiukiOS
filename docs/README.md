@@ -56,6 +56,7 @@ F2 contracts (approved 2026-10-10, dev diary 2026-10-10-05) and desktop records:
 - [Desktop redraw pipeline](design/desktop-redraw-performance.md) and [rendering architecture](design/desktop-rendering-architecture.md)
 - [Scalable fonts](design/fonts-contract.md), [system registry](design/registry-contract.md), [Terminal](design/terminal-contract.md), [Device Manager](design/device-manager.md)
 - [CiukPaint](design/ciukpaint-native.md), [Graphics Demo](design/graphics-demo.md), [legacy 0.8 feature inventory](design/legacy-0.8-feature-inventory.md)
+- [Operating-system feature inventory](design/os-feature-inventory.md) — the Windows 98-class feature set (cited), the CiukiOS status of each feature, and the prioritised gap list (fx-20)
 
 F3 and F4 documents:
 
