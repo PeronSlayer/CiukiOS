@@ -4,6 +4,7 @@
 #include "../../../src/kernel/vm/dos_save_store.h"
 #include "../../../src/kernel/vm/dos_file_volume.h"
 #include <ciuki/storage.h>
+#include <ciuki/blkpart.h>
 #include <assert.h>
 #include <stdio.h>
 #define OK(x) assert((x)==0)
@@ -270,6 +271,39 @@ static void store_tests(void)
     vfs_table_destroy(&table); OK(vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache);
     puts("PASS FAT/VFS: save/close/reboot/reopen, setup, identity archive, two titles isolated, changed-file export, reset");
 }
+/* fx-4: the canonical UNIFIED.IMG is partitioned (MBR, one active FAT16
+ * partition of type 0Eh at LBA 63). Export mounted only type 06h and
+ * refused that layout with EIO; it now mounts the volume the VM uses as C:. */
+static uint8_t part_disk[DISK_SECTORS*512u];
+static void partitioned_export_test(void)
+{
+    const unsigned volume=DISK_SECTORS-256u; /* format()'s FAT sizing needs whole 256-sector units */
+    memset(part_disk,0,sizeof(part_disk)); format(part_disk+63u*512u,volume);
+    part_disk[446]=0x80; part_disk[450]=0x0e; fs_wr32(part_disk+454,63); fs_wr32(part_disk+458,volume);
+    part_disk[510]=0x55; part_disk[511]=0xaa;
+    format(system_disk,SYSTEM_SECTORS);
+    OK(cache_init(&cache,65536)); OK(fat_mount(&native,&cache,&system_device,0,SYSTEM_SECTORS,true));
+    vfs_init(&space); OK(vfs_attach(&space,2,&native)); OK(vfs_table_init(&space,&table,2));
+    OK(vfs_mkdir(&table,"C:\\SYSTEM",0)); OK(vfs_mkdir(&table,"C:\\SYSTEM\\DOS",0)); OK(vfs_mkdir(&table,"C:\\Documents",0));
+    base_device.ctx=part_disk;
+    struct dos_save_identity id=identity(2,'e'); unsigned archived; char path[128];
+    namespace_open(&id,path,&archived); assert(!archived);
+    /* The guest writes through the same C: view dos_file_vm.c builds. */
+    static struct partition_table parts; static struct blkpart view;
+    OK(partition_scan(&merged_device,&parts));
+    const struct partition *c=partition_dos_primary(&parts); assert(c && c->type==0x0e && c->start==63 && c->bootable);
+    OK(blkpart_init(&view,&merged_device,c)); struct blkdev *drive=blkpart_device(&view); drive->logical=true;
+    struct dos_file_volume *guest=calloc(1,sizeof(*guest)); assert(guest);
+    OK(dos_file_volume_open(guest,&cache,drive,true));
+    OK(vfs_mkdir(&guest->table,"C:\\DOOM",0)); write_file(&guest->table,"C:\\DOOM\\DOOMSAV0.DSG","e1m1 saved");
+    OK(dos_file_volume_close(guest)); free(guest);
+    char exported[32]; uint32_t files=0;
+    OK(dos_save_store_export(&table,&merged_device,&base_device,&cache,2,exported,&files)); assert(files==1);
+    char saved[128]; snprintf(saved,sizeof(saved),"%s\\DOOM\\DOOMSAV0.DSG",exported); read_file(&table,saved,"e1m1 saved");
+    namespace_close(true); base_device.ctx=base_disk;
+    vfs_table_destroy(&table); OK(vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache);
+    printf("PASS fx-4 export: 0Eh partition at LBA 63 (unified layout), changed file exported as %s\n",saved);
+}
 static void physical_mount(void)
 {
     physical_stopped=false; physical_cut_at=0;
@@ -308,4 +342,4 @@ static void physical_cut_tests(void)
     free(baseline);
     printf("PASS outer FAT/VFS power cuts: every physical write, writes=%u cuts=%u (lost/torn), both saved sectors atomic after remount\n",events,events*2u);
 }
-int main(void) { crash_tests(); store_tests(); physical_cut_tests(); assert(!fs_host_contig_live); fflush(stdout); return 0; }
+int main(void) { crash_tests(); store_tests(); partitioned_export_test(); physical_cut_tests(); assert(!fs_host_contig_live); fflush(stdout); return 0; }

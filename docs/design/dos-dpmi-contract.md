@@ -1027,3 +1027,112 @@ reclaimed/regrown blocks and overlay rows.
 folds A/D bits of frames that are pinned or not of a replaceable owner
 (`MM_USER_PRIVATE`, `MM_USER_SHARED`, `MM_VM_POOL`): the VGA window (VM
 private) and the pinned VBE buffer harvest by PTE dirty bits.
+
+### fx-4 creation refusal records, unified partition, cancelled cold hash (2026-10-23)
+
+T23 trial of image `9a60215f` (source `9e6e8721`): DOOM and Quake windows
+ended `[launch] … error=-5 stage=vm-create` with no other record, and the
+CiukiDOS window `error=-4`. Root cause: the game inventory in
+`dosvm_programs.c` (run by every game CREATE before admission) accepted only
+MBR type `06h`; the canonical `UNIFIED.IMG` carries the reference MBR of
+`scripts/dos_conformance.py` (one active type `0Eh` FAT16 partition at
+LBA 63), so it mounted the MBR itself as a BPB, the FAT driver refused it
+(`EINVAL`, "BPB signature/sector size/jump") and `closed_error` reported
+`EIO`. Low memory was not involved: zone 1 stayed at `usable=3840
+free=574` in all 47 ledger snapshots, before and after each refusal, and
+every creation allocation is `ZONE_NORMAL` first (low pages, pool, read
+cache, worker).
+
+- **One C: rule.** `partition_dos_primary()` (`fs/partition.h`) is the
+  FreeDOS kernel's `ScanForPrimaryPartitions` order
+  ([initdisk.c](https://github.com/FDOS/kernel/blob/master/kernel/initdisk.c):
+  first active primary FAT partition, else the first primary FAT one) over
+  the FAT system IDs `01h 04h 06h 0Bh 0Ch 0Eh`
+  ([Microsoft Disk Partition Types](https://learn.microsoft.com/en-us/windows/win32/fileio/disk-partition-types),
+  [PARTITION_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_partition_information):
+  `PARTITION_XINT13` is the Windows 95 FAT16 partition using INT 13h
+  extensions). The VM's C: view (`dos_file_vm.c`), game inventory/removal
+  (`dosvm_programs.c`) and save export (`dos_save_store.c`, which had the
+  same type-`06h`-only test) now share it; a disk without a valid table
+  keeps the whole-disk (superfloppy) view.
+- **Refusal record.** Every failed `dosvm_create` emits one
+  `[dosvm] create refused stage=<stage> error=<internal errno> game=<n>
+  reason=<memory|vm-slots|owner-gone|busy|not-installed|invalid|io|…>`
+  record before the client's `[launch]` line. Non-memory refusals add
+  `step=` (inventory or disk-open step) and `detail=` (FAT mount
+  diagnostic); admission refusals add the arithmetic (`free_kib`,
+  `outstanding_kib`, `request_kib`, `headroom_kib`); both add
+  `dma_free_pages` and `normal_free_pages`. The window ABI error mapping is
+  unchanged.
+- **Cancelled cold hash.** `dosvm_config.cancelled` lets the creating owner's
+  exit end the cold base identity hash at the next 64 KiB block with
+  `EINTR` (nothing cached). On the trial the CiukiDOS CREATE ran from about
+  289 s (DOS Box input boost until 289.526 s) to the `maximum-vm-created`
+  snapshot at 308.784 s (cold hash of the 27,676,672-byte base,
+  `cached=0`); the owner had been ended meanwhile, so the completed VM was
+  closed `owner-gone` 17 ms later and CREATE returned `EINTR`. That
+  cold-launch cost is the open f3-63 start-up item, not changed here.
+
+### fx-4b background verification of the DOS system image (2026-10-23)
+
+Lead decision 2026-10-23 13:46: the user never waits for the cold SHA-256 of
+`UNIFIED.IMG` (about 20 s on the T23, fx-4). Windows 98 does not hash its
+system files at each start: System File Checker (`Sfc.exe`) "verifies the
+integrity of system files" on demand against a verification data file
+(`Default.sfc`), and only Registry Checker runs at every start (Windows 98
+Resource Kit, `wrkc27_2.htm` and `wrkc10_7.htm`, read in place; public
+summary: [System File Checker](https://en.wikipedia.org/wiki/System_File_Checker),
+[Microsoft: System File Checker](https://learn.microsoft.com/en-us/windows/win32/wfp/system-file-checker)).
+CiukiOS keeps the f3-51 guarantee (the digest names the bytes the VM boots
+and must equal `UNIFIED.SHA`) and moves the work out of CREATE
+(`src/kernel/vm/dosvm_image.c`):
+
+- **Background check.** The first full desktop frame (or the console
+  stand-in) arms one verification; deterministic test and hardware-check
+  boots keep the synchronous path. After 5 s (or at once when a launch asks)
+  an idle-class task hashes the image in 64 KiB blocks with 4 KiB hash steps
+  and preemption points, pausing at least three times each block's read time
+  (at most a quarter of the disk; no starvation boost applies to the idle
+  class). A launch that watches (`CIUKI_DOSVM_IMAGE_QUERY`) or waits (CREATE)
+  makes it urgent: no pauses, normal class, and a CREATE waiter lends its
+  priority through the `kwait` owner. Results go to the session digest cache.
+- **Verified stamp** `C:\SYSTEM\DOS\UNIFIED.VFY`, 128 bytes: magic, the
+  file's on-disk identity (size, first cluster, directory cluster and slot,
+  write date and time), the digest, and a SHA-256 of the record. It is
+  written only when a complete hash matched `UNIFIED.SHA` and the version did
+  not change during the hash. A later boot reuses it, without reading the
+  image, only when the identity and the current `UNIFIED.SHA` match. FAT has
+  no persistent write generation, so the stamp also lapses when the volume
+  was recovered dirty at this mount (FAT[1] `ClnShutBitMask`: "If bit is 0,
+  volume is dirty … the file system driver did not Dismount the volume
+  properly", Microsoft, *FAT: General Overview of On-Disk Format* 1.02,
+  [copy](https://www.cs.miami.edu/home/burt/learning/Csc521.071/docs/FatFormat.pdf))
+  or a `REMOVEn.PND` game-removal marker exists; game removal, the kernel's
+  only writer of the image, stops a running check (it held the image
+  deny-write), deletes the stamp after committing its marker and re-arms the
+  check. Residual risk, as in Windows 98: a foreign in-place edit that keeps
+  size, clusters and time stamp is detected only by an explicit re-check
+  (delete the stamp).
+- **Launches.** DOS Box polls the check and shows "Checking the DOS system
+  files: N%" with a determinate bar, answers desktop pings and honours a
+  close request, then calls CREATE. CREATE uses, in order: the session cache,
+  the in-flight or armed check of the same version (waiting, EINTR when the
+  owner stops, never a second hash), a valid stamp, else the synchronous hash
+  (stamped when it matches). The `game_launch` record names the source
+  (`session`, `background`, `stamp`, `hash`).
+- **Mismatch** is published with the actual digest, recorded
+  (`[dosvm] image verify result=mismatch expected=… actual=…`), never
+  stamped; CREATE refuses at the sidecar check
+  (`[dosvm] create refused stage=disk error=-5 … step=base-sidecar`) and DOS
+  Box names it ("The DOS system files are damaged").
+- **Records:** `[dosvm] image verify stage=start bytes=…`,
+  `result=verified|cancelled|stopped source=… bytes ms blocks pauses`,
+  `result=failed step=… error=…`, `[dosvm] image stamp write error=…`.
+
+Host evidence: `tests/host/dos/test_image_verify.py` (production FAT/VFS:
+background hash and progress, stamp reuse without image reads, re-hash on
+write time, pending removal, dirty volume and sidecar changes, launch joining
+the in-flight check and EINTR on owner exit, mismatch never stamped, removal
+hold/release), `tests/host/dosvm_fx4_test.inc` (`test_fx4b_launch_paths`:
+CREATE with each result, record sources, mismatch refusal) and the DOS Box
+replay scenarios 20 and 21 (`tests/host/desktop/dosbox_loading_test.c`).

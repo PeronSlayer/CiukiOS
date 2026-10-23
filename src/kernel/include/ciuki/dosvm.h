@@ -38,6 +38,11 @@ struct dosvm_config {
     void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
     void *record_arg; /* selected controller only, lifetime through destroy */
     uint8_t serial[4]; /* trusted launch: 0=null, 1..8=native COM1..8 */
+    /* fx-4: true once the creating owner is stopping; polled between the
+     * blocks of the cold base identity hash, which then returns EINTR.
+     * Called only during dosvm_create, on the creating thread. */
+    bool (*cancelled)(void *arg);
+    void *cancel_arg;
 };
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after

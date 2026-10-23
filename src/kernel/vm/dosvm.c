@@ -13,6 +13,10 @@
 #pragma weak dosvm_game_ports_apply
 #pragma weak dosvm_game_ports_close
 #pragma weak dosvm_lpt_stop
+/* fx-4 refusal record: zone figures and the inventory step. Weak only so the
+ * guest-CPU harness, which links neither, keeps its fixture seams. */
+#pragma weak pmm_zone_free
+#pragma weak dosvm_game_program_checked
 #include "dosvm_network.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
@@ -1378,31 +1382,85 @@ void dosvm_game_remove_release(unsigned game)
 {
     uint32_t flags=irq_save();game_removing[game]=false;irq_restore(flags);
 }
-static int game_create(const struct dosvm_config *,struct dosvm **);
-int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
+/* fx-4 (T23 trial 9a60215f): the window ABI folds most creation errors into
+ * EIO (dosvm_client.c closed_error), and DOOM/Quake failed with error=-5 and
+ * no other record. Every refused creation now leaves one record naming the
+ * stage, the internal error and step, and for a memory refusal the shortage:
+ * admission arithmetic and free pages per zone. */
+struct create_trace {
+    const char *stage, *step, *detail;
+    struct dosvm_admission admission;
+    bool admission_known;
+};
+static const char *refusal_reason(int e)
+{
+    switch (e) {
+    case -ENOMEM: return "memory";
+    case -ENOSPC: return "vm-slots";
+    case -EINTR: return "owner-gone";
+    case -EBUSY: return "busy";
+    case -ENOENT: return "not-installed";
+    case -EINVAL: return "invalid";
+    case -EIO: return "io";
+    case -EROFS: return "read-only";
+    default: return "error";
+    }
+}
+static void create_refused(const struct dosvm_config *config, int e, const struct create_trace *t)
+{
+    unsigned game = config ? config->game : 0;
+    uint32_t dma = pmm_zone_free ? pmm_zone_free(ZONE_DMA) : 0;
+    uint32_t normal = pmm_zone_free ? pmm_zone_free(ZONE_NORMAL) : pmm_free_count();
+    if (t->admission_known) {
+        const struct dosvm_admission *a = &t->admission;
+        klog("[dosvm] create refused stage=%s error=%d game=%u reason=%s free_kib=%llu outstanding_kib=%llu request_kib=%u headroom_kib=%u dma_free_pages=%u normal_free_pages=%u",
+             t->stage, e, game, refusal_reason(e), (unsigned long long)(a->free_bytes >> 10),
+             (unsigned long long)(a->outstanding_bytes >> 10), a->requested_bytes >> 10,
+             a->headroom_bytes >> 10, dma, normal);
+    } else {
+        klog("[dosvm] create refused stage=%s error=%d game=%u reason=%s step=%s detail=%s dma_free_pages=%u normal_free_pages=%u",
+             t->stage, e, game, refusal_reason(e), t->step, t->detail, dma, normal);
+    }
+}
+static int game_create(const struct dosvm_config *,struct dosvm **,struct create_trace *);
+static int create_checked(const struct dosvm_config *config,struct dosvm **out,struct create_trace *trace)
 {
     if(out)*out=0;
+    trace->stage="config";
     if (config && config->kernel && config->kernel!=CIUKI_DOSVM_UNIFIED) return -EINVAL;
     if (config) for (unsigned i=0;i<4;i++) if (config->serial[i]>8) return -EINVAL;
     unsigned game=config ? config->game : 0;
     if(game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
+    trace->stage="game-reservation";
     uint32_t flags=irq_save();
     if(game && game_removing[game]){irq_restore(flags);return -EBUSY;}
     if(game)game_creating[game]++;
     irq_restore(flags);
     uint32_t bytes=0;
-    int e=game ? dosvm_game_program(game,false,&bytes) : 0;
-    if(e>0)e=-ENOENT; /* a pending removal cannot be relaunched */
-    if(!e)e=game_create(config,out);
+    trace->stage="game-inventory";
+    int e=!game ? 0 : dosvm_game_program_checked ?
+        dosvm_game_program_checked(game,false,&bytes,&trace->step,&trace->detail) :
+        dosvm_game_program(game,false,&bytes);
+    if(e>0){e=-ENOENT;trace->step="pending-removal";} /* a pending removal cannot be relaunched */
+    if(!e)e=game_create(config,out,trace);
     flags=irq_save();if(game)game_creating[game]--;irq_restore(flags);
+    return e;
+}
+int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
+{
+    struct create_trace trace={.stage="request",.step="none",.detail="none"};
+    int e=create_checked(config,out,&trace);
+    if (e) create_refused(config,e,&trace);
     return e;
 }
 
 extern void joystick_default_route(struct joystick_route *) __attribute__((weak));
-static int game_create(const struct dosvm_config *config, struct dosvm **out)
+static int game_create(const struct dosvm_config *config, struct dosvm **out, struct create_trace *trace)
 {
+    trace->stage = "request"; trace->step = trace->detail = "none";
     if (!out) return -EINVAL;
     *out = 0;
+    trace->stage = "admission";
     uint32_t commitment = config && config->commitment ? config->commitment : DOSVM_RESIDENT_CAP;
     struct dosvm_ledger ledger;
     struct dosvm_admission admission;
@@ -1412,7 +1470,8 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     if (rec_active()) rec_emit(config && config->probe ? config->probe : "vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
              admission.free_bytes, admission.reserved_bytes, admission.resident_bytes,
              admission.outstanding_bytes, commitment, DOSVM_HEADROOM, admit);
-    if (!admit) return -ENOMEM;
+    if (!admit) { trace->admission = admission; trace->admission_known = true; return -ENOMEM; }
+    trace->stage = "slot";
     struct dosvm *v = 0;
     unsigned slot;
     for (slot = 0; slot < DOSVM_LIMIT; slot++)
@@ -1454,9 +1513,11 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     v->present_wait.owner_preemptible = true;
     v->present_due_us = v->present_sample_due_us = g_ticks * 1000u;
     kwait_init(&v->disk_wait); v->disk_busy = false;
+    trace->stage = "address-space";
     int e = as_create(&v->as);
     if (e) goto fail;
     v->as.owner=MM_VM_PRIVATE; v->as.pool_base=VM_POOL_BASE;
+    trace->stage = "low-memory";
     for (unsigned i = 0; i < DOSVM_PAGES; i++) {
         uint32_t phys = pmm_alloc_zone(ZONE_NORMAL);
         if (!phys) { e = -ENOMEM; goto fail; }
@@ -1480,6 +1541,7 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     dosvm_pit_init(v); dosvm_kbd_init(v); dosvm_mouse_init(v);
     if (joystick_default_route) joystick_default_route(&v->joystick.route);
     kpreempt_point();
+    trace->stage = "devices";
     if ((e = dosvm_port_register(v->info.key, 0x40, 0x43, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x61, 0x61, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x60, 0x60, dosvm_kbd_port, 0)) ||
@@ -1487,8 +1549,10 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
         (dosvm_joystick_port && (e = dosvm_port_register(v->info.key,0x201,0x201,dosvm_joystick_port,0))) ||
         (e = dosvm_audio_init(v)) || (e = dosvm_floppy_init(v))) goto fail; /* virtual devices only */
     kpreempt_point();
+    trace->stage = "bios";
     e = dosvm_bios_init(v);
     if (e) goto fail;
+    trace->stage = "serial";
     if ((e=dosvm_uart_init(v))) goto fail;
     if (config) for (unsigned i=0;i<4;i++) if (config->serial[i]) {
         const char *reason=0;
@@ -1496,25 +1560,39 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
         if (e) { klog("[dosvm] COM%u lease refused: %s (%d)",i+1,reason,e); goto fail; }
     }
     kpreempt_point();
+    trace->stage = "memory";
     e = dosvm_memory_init(v, config);
     if (e) goto fail;
     kpreempt_point();
+    trace->stage = "pool-pin";
     e = pool_pin(v);
     if (e) goto fail;
+    trace->stage = "vga";
     e = dosvm_vga_init(v);
     if (e) goto fail;
+    trace->stage = "dpmi-rom";
     if ((e = dpmi_rom_init(v))) goto fail;
     kpreempt_point();
-    e = dosvm_disk_open(v, config ? config->base : 0);
+    /* The cold base identity hash can take seconds on a 1 GHz machine
+     * (about 20 s for the 27.7 MB unified base on the T23 trial); an owner
+     * that stops meanwhile ends it with EINTR instead of waiting it out. */
+    trace->stage = "disk";
+    if (config) { v->create_cancelled = config->cancelled; v->create_cancel_arg = config->cancel_arg; }
+    e = dosvm_disk_open_step(v, config ? config->base : 0, &trace->step);
+    v->create_cancelled = 0; v->create_cancel_arg = 0;
     if (e) goto fail;
+    trace->stage = "game-ports";
     if (v->game && dosvm_game_ports_apply && (e=dosvm_game_ports_apply(v))) goto fail;
     if (v->game || v->kernel)
-        rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u",
+        rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u source=%s",
                       v->game,v->kernel==2 ? "unified" : "fixture",v->base_sha256,
-                      v->info.key.generation,!v->disable_file_bridge,v->base_cached);
+                      v->info.key.generation,!v->disable_file_bridge,v->base_cached,
+                      v->base_source ? v->base_source : "none");
     kpreempt_point();
+    trace->stage = "worker";
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }
+    trace->stage = "resident-bound";
     v->info.resident += KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
     /* The image cache has its own charged backing inside the commitment;
      * retain the low/device/table bound independently of that cache. */

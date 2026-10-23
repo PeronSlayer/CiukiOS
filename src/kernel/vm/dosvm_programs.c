@@ -7,15 +7,23 @@
 #include <ciuki/task.h>
 #include <ciuki/sha256.h>
 #include "../fs/program_tree.h"
+#include "../fs/partition.h"
 int dosvm_game_remove_reserve(unsigned);
 void dosvm_game_remove_release(unsigned);
 #define GAME_SECTORS 262144u
+/* fx-4b: removal is the kernel's only writer of UNIFIED.IMG. It stops a
+ * background verification that holds the image open, deletes the verified
+ * stamp before the first destructive write and re-arms verification. */
+extern void dosvm_image_hold(void) __attribute__((weak));
+extern void dosvm_image_release(void) __attribute__((weak));
+#define IMAGE_STAMP "C:\\SYSTEM\\DOS\\UNIFIED.VFY"
 void dosvm_game_digest_invalidate(void);
 /* One serialized owner-side mount, not one resident cache per operation. */
 static struct {
     struct vfs_table table;
     struct fat_volume fat;
     struct blkdev device;
+    struct partition_table parts;
     int fd;
     uint32_t sectors;
     uint8_t hash_buffer[4096];
@@ -86,18 +94,29 @@ static int update_identity(void)
     if (!e) e=vfs_commit(&owner.table,h);
     int closed=vfs_close(&owner.table,h); return e ? e : closed;
 }
+int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const char **step,const char **detail);
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
+{ const char *step,*detail; return dosvm_game_program_checked(game,remove,size,&step,&detail); }
+/* step names the first operation that failed and detail the FAT mount
+ * diagnostic, both static strings, for the launch refusal record (fx-4). */
+int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const char **step,const char **detail)
 {
+    *step="request";*detail="none";
     if(!size || !game || game>3)return -FS_EINVAL;
     *size=0;
+    *step="reservation";
     int reservation=remove ? dosvm_game_remove_reserve(game) : 0;
     if(reservation)return reservation;
+    *step="storage";
     struct storage *s=storage_get();if(!s || !s->ready || s->stopped){if(remove)dosvm_game_remove_release(game);return -FS_EIO;}
     /* Refuse competing requests; do not hold interrupt/preemption locks over
      * filesystem calls or scans. Exclusive file sharing serializes VM opens. */
+    *step="owner-busy";
     uint32_t flags=irq_save();
     if(owner.busy){irq_restore(flags);if(remove)dosvm_game_remove_release(game);return -FS_EBUSY;}
     owner.busy=true;irq_restore(flags);
+    if(remove && dosvm_image_hold)dosvm_image_hold();
+    *step="table";
     int e=vfs_table_init(&s->vfs,&owner.table,2);
     bool table=!e;
     owner.fd=-1;
@@ -105,12 +124,14 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
     struct fat_entry entry;
     bool pending=false;
     if(!e){
+        *step="pending-marker";
         int pe=vfs_stat(&owner.table,pending_path,&entry);
         if(!pe)pending=true;else if(pe!=-FS_ENOENT)e=pe;
     }
-    if(!e)e=vfs_stat(&owner.table,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",&entry);
-    if(!e && ((entry.attr&FAT_ATTR_DIR) || entry.size%512u || entry.size/512u>GAME_SECTORS))e=-FS_EINVAL;
+    if(!e){*step="image-stat";e=vfs_stat(&owner.table,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",&entry);}
+    if(!e && ((entry.attr&FAT_ATTR_DIR) || entry.size%512u || entry.size/512u>GAME_SECTORS)){*step="image-size";e=-FS_EINVAL;}
     if(!e) {
+        *step="image-open";
         owner.sectors=entry.size/512u;
         owner.fd=vfs_open(&owner.table,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",
             remove ? VFS_READ|VFS_WRITE : VFS_READ,remove ? VFS_DENY_ALL : VFS_DENY_WRITE,0);
@@ -120,36 +141,52 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
         .capacity=GAME_SECTORS,.sector_size=512,.logical=true,.write_cache_state=BLKDEV_CACHE_ENABLED};
     bool mounted=false;
     if(!e) {
-        uint8_t mbr[512];
-        e=image_read(&owner.device,0,1,mbr);
-        uint32_t start=!e && mbr[450]==0x06 ? fs_rd32(mbr+454) : 0;
-        if (!e) e=start>=GAME_SECTORS ? -FS_EIO :
-            fat_prepare_removable(&owner.fat,&s->cache,&owner.device,start,GAME_SECTORS-start);
+        /* fx-4: the unified base is partitioned (reference MBR: one active
+         * 0Eh FAT16 partition at LBA 63, scripts/dos_conformance.py). The
+         * former test accepted only type 06h, mounted the MBR itself as a
+         * BPB and failed every game launch with EINVAL, reported as EIO
+         * (T23 trial 9a60215f). Address the volume DOS mounts as C:, as the
+         * VM's own view does; a superfloppy keeps the whole-image view. */
+        uint64_t start=0,count=GAME_SECTORS;
+        *step="partition";
+        if(!partition_scan(&owner.device,&owner.parts)) {
+            const struct partition *p=partition_dos_primary(&owner.parts);
+            if(p){start=p->start;count=p->count;}
+        }
+        *step="mount";
+        e=fat_prepare_removable(&owner.fat,&s->cache,&owner.device,start,count);
+        if(e && owner.fat.diagnostic)*detail=owner.fat.diagnostic;
         mounted=!e;
     }
     /* Prove traversal bounds and ownership before deleting any entry. */
-    if(!e)e=program_tree(&owner.fat,game,false,size);
+    if(!e){*step="program-tree";e=program_tree(&owner.fat,game,false,size);}
     /* An absent directory after a committed deletion still owns cleanup. */
     bool absent=e==-FS_ENOENT && mounted;
     if(absent && (remove || pending))e=0;
     if(!e && remove) {
         /* Commit identity before the first destructive write. Existence is
          * the record; fixed filename supplies the only permitted game ID. */
+        *step="pending-write";
         int marker=vfs_open(&owner.table,pending_path,VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,0);
         if(marker<0)e=marker;
         else {e=vfs_commit(&owner.table,marker);int ce=vfs_close(&owner.table,marker);if(!e)e=ce;}
+        /* The committed marker already voids the stamp; delete it too. */
+        if(!e)(void)vfs_delete(&owner.table,IMAGE_STAMP);
     }
     if(!e && remove && !absent) {
+        *step="remove";
         e=fat_enable_write(&owner.fat);
         if(!e)e=program_tree(&owner.fat,game,true,size);
         dosvm_game_digest_invalidate(); /* also after a partially issued write */
     }
-    if(mounted){int close_error=fat_unmount(&owner.fat);if(!e)e=close_error;}
-    if(!e && remove)e=update_identity();
-    if(!e && remove)e=remove_overlays(game);
-    if(owner.fd>=0){int close_error=vfs_close(&owner.table,owner.fd);if(!e)e=close_error;}
+    if(mounted){int close_error=fat_unmount(&owner.fat);if(!e && close_error){*step="unmount";e=close_error;}}
+    if(!e && remove){*step="identity";e=update_identity();}
+    if(!e && remove){*step="overlays";e=remove_overlays(game);}
+    if(owner.fd>=0){int close_error=vfs_close(&owner.table,owner.fd);if(!e && close_error){*step="image-close";e=close_error;}}
+    if(!e)*step="none";
     if(table)vfs_table_destroy(&owner.table);
     flags=irq_save();owner.busy=false;irq_restore(flags);
+    if(remove && dosvm_image_release)dosvm_image_release();
     if(remove)dosvm_game_remove_release(game);
     return !e && !remove && pending ? 1 : e;
 }

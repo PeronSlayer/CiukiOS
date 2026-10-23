@@ -153,6 +153,8 @@ static unsigned log_sequence, launch_stages, launch_errors, launch_stage_sequenc
 static unsigned launch_stage_pages;
 static unsigned vm_audio_logs;
 static char lifecycle_stop[256],lifecycle_cleanup[256];
+static char last_refusal_log[256]; /* fx-4 creation refusal record */
+static unsigned refusal_logs, refusal_sequence;
 static char last_vm_audio_log[256];
 /* f1-86: the periodic VM exit profile logs through klog_periodic; the host harness ignores it like klog. */
 void klog_periodic(const char *fmt, ...) { (void)fmt; }
@@ -187,6 +189,9 @@ void klog(const char *fmt, ...)
     if (!strncmp(fmt, "[dosvm] disk", 12)) strcpy(last_disk_log, last_dosvm_log);
     if (strstr(last_dosvm_log,"lifecycle stage=stop")) strcpy(lifecycle_stop,last_dosvm_log);
     if (strstr(last_dosvm_log,"lifecycle stage=cleanup")) strcpy(lifecycle_cleanup,last_dosvm_log);
+    if (!strncmp(fmt,"[dosvm] create refused",22)) {
+        strcpy(last_refusal_log,last_dosvm_log); refusal_logs++; refusal_sequence=log_sequence;
+    }
     dosvm_logs++;
 }
 void klog_diag(const char *fmt,...)
@@ -634,6 +639,18 @@ static unsigned program_calls;
 static int program_result;
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 { CHECK(game && game<=3);(void)remove;program_calls++;*size=8192;return program_result; }
+/* fx-4: the production inventory names its failed step; this fixture
+ * reports the step/detail a case selects (dosvm_fx4_test.inc). */
+static const char *program_step="fixture",*program_detail="none";
+int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const char **step,const char **detail)
+{
+    int e=dosvm_game_program(game,remove,size);
+    *step=e ? program_step : "none"; *detail=e ? program_detail : "none"; return e;
+}
+/* fx-4: zone-split free pages for the refusal record. The host models only
+ * NORMAL (pmm_alloc_zone CHECKs it); a case may set the DMA figure. */
+static uint32_t fake_dma_free_pages;
+uint32_t pmm_zone_free(int zone) { return zone==ZONE_NORMAL ? pmm_free_count() : zone==ZONE_DMA ? fake_dma_free_pages : 0; }
 int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
 { CHECK(game && game<=3 && op>=14 && op<=16); c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0; }
 #include "../../src/kernel/vm/dosvm_client.c"
@@ -989,6 +1006,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_wait_present_test.inc"
 #include "dosvm_floppy_test.inc"
 #include "dosvm_uart_test.inc"
+#include "dosvm_fx4_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -1014,6 +1032,7 @@ int main(void)
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
+    if (getenv("CIUKI_VM_FX4")) { test_fx4_vm_create(); test_fx4b_launch_paths(); printf("fx-4 checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
     if(getenv("CIUKI_VM_PROGRAMS")){test_client_boundary();fflush(stdout);free(ram);return 0;}
     if(getenv("CIUKI_VM_KERNEL_CHOICE")){
         test_kernel_choice();test_client_boundary();
@@ -1035,6 +1054,8 @@ int main(void)
     test_kernel_choice();
     test_game_window_base_hash();
     test_game_digest_cache();
+    test_fx4_vm_create();
+    test_fx4b_launch_paths();
     test_timer();
     test_menu();
     test_irq_stall();

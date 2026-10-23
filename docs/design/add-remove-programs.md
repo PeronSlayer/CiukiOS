@@ -139,5 +139,22 @@ notes above:
   Its main thread calls `desk_task_launch` for DOS Box, preserving supervisor
   delegation. The unprivileged shell helper refuses a DOS spawn.
 
+fx-4 (2026-10-23) amends the owner provider: since f3-63 the titles live in
+`C:\SYSTEM\DOS\UNIFIED.IMG`, whose reference MBR holds one active FAT16
+partition of type `0Eh` at LBA 63. The provider recognised only type `06h`,
+mounted the MBR as a BPB and refused every query, launch and removal with
+`EINVAL` (DOOM and Quake `error=-5` on the T23 trial of image `9a60215f`).
+It now selects the partition with `partition_dos_primary()`, the rule the
+VM uses for C: (`docs/design/dos-dpmi-contract.md`, fx-4 section, with the
+Microsoft and FreeDOS sources), and reports the failed step and the FAT
+diagnostic for the creation refusal record. Host evidence:
+`test_actual_owner_provider_partitioned` in
+`tests/host/desktop/test_add_remove.py`.
+
+fx-4b: removal first stops a running background check of `UNIFIED.IMG`
+(it holds the image deny-write), deletes the verified stamp
+`C:\SYSTEM\DOS\UNIFIED.VFY` after committing its `REMOVEn.PND` marker, and
+re-arms the check when it ends (`dos-dpmi-contract.md`, fx-4b section).
+
 Focused host evidence and environmental sanitizer limitations are recorded in
 `build/codex/f2-87-report.md`. Guest evidence remains the lead's responsibility.

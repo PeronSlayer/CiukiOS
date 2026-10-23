@@ -138,14 +138,16 @@ static int save_mount(struct save_export *x,struct fat_volume *v,struct blkdev *
                       struct block_cache *cache,unsigned which)
 {
     struct blkdev *view=d;
-    int e=partition_scan(d,&x->parts); if (e) return e;
-    if (x->parts.count) {
-        const struct partition *p=0;
-        for (unsigned i=0;i<x->parts.count;i++)
-            if (x->parts.entries[i].type==6) { p=&x->parts.entries[i]; break; }
-        if (!p) return -FS_EIO;
-        e=blkpart_init(&x->partition[which],d,p); if (e) return e;
-        view=&x->partition[which].block; view->logical=true;
+    /* fx-4: the volume the VM mounts as C: (partition_dos_primary; the
+     * unified base is one active 0Eh partition at LBA 63, which the former
+     * type-06h-only test refused with EIO). A superfloppy without a valid
+     * table keeps the whole-disk view, as dos_file_vm.c does. */
+    if (!partition_scan(d,&x->parts)) {
+        const struct partition *p=partition_dos_primary(&x->parts);
+        if (p) {
+            int e=blkpart_init(&x->partition[which],d,p); if (e) return e;
+            view=&x->partition[which].block; view->logical=true;
+        }
     }
     return fat_mount(v,cache,view,0,view->capacity,false);
 }

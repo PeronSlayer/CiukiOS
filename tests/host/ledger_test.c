@@ -86,6 +86,14 @@ static void fresh_kernel(unsigned mib, unsigned kernel_mib)
     CHECK(ledger_reconcile());
 }
 static void fresh(unsigned mib) { fresh_kernel(mib,2); }
+/* fx-4: a loaded kernel image ending at an exact physical address. */
+static void fresh_kernel_end(unsigned mib, uint32_t end)
+{
+    fresh_kernel(mib,1); /* reconcile and reset as every profile does */
+    g_boot.kernel_start=0x100000; g_boot.kernel_end=end;
+    pmm_init(); kpd=host_pd; cr3=0;
+    CHECK(ledger_reconcile());
+}
 static struct mm_ledger snapshot(void) { struct mm_ledger v; ledger_snapshot(&v); return v; }
 static uint32_t resident(enum mm_owner owner)
 { struct mm_ledger v=snapshot(); return v.zone[0].resident[owner]+v.zone[1].resident[owner]+v.zone[2].resident[owner]; }
@@ -310,6 +318,66 @@ static uint64_t vm_admit_margin(uint32_t free_pages, uint64_t reserved, uint64_t
     uint64_t need = (uint64_t)DOSVM_RESIDENT_CAP + DOSVM_HEADROOM + outstanding;
     return free >= need ? free - need : 0;
 }
+/* fx-4 (T23 trial of image 9a60215f): the canonical kernel's zone-1 layout,
+ * identical on every machine size. VMM.ELF (source 9e6e8721) loads .text to
+ * .bss from 0x100000 to 0xCB9000: 3001 pages, the trial's owner=image 2482
+ * plus owner=net 519 (lwIP pools moved out of the image). vmm_init takes
+ * the kernel directory and 255 tables from ZONE_DMA (owner=tables 256, the
+ * 16 MiB boot map) and drivers 9 ISA DMA pages (owner=dma 9): the trial's
+ * "zone=1 usable=3840 free=574". The default VM's measured created/touched
+ * charges replay through the production PMM at 128/256/512 MiB without
+ * taking one zone-1 page: DOS VM creation does not depend on low memory. */
+static void trial_zone_profiles(const unsigned *created, const unsigned *touched,
+                                unsigned worker_stack, unsigned worker_heap)
+{
+    const unsigned sizes[]={128,256,512};
+    for (unsigned i=0;i<ARRAY_SIZE(sizes);i++) {
+        fresh_kernel_end(sizes[i],0xCB9000u);
+        struct mm_ledger v=snapshot();
+        CHECK(v.zone[ZONE_DMA].usable==3840 && resident(MM_KERNEL_IMAGE)==3001);
+        static uint32_t tables[256];
+        for (unsigned t=0;t<256;t++) { tables[t]=pmm_alloc_zone(ZONE_DMA); CHECK(tables[t]); mm_claim(tables[t],1,MM_TABLE); }
+        uint32_t dma=pmm_alloc_dma_run(9,1); CHECK(dma); mm_claim(dma,9,MM_DMA);
+        CHECK(ledger_reconcile() && pmm_zone_free(ZONE_DMA)==574);
+        uint32_t heap=pmm_alloc_contig(1024), syscache=pmm_alloc_contig(2048), desktop=pmm_alloc_contig(768);
+        CHECK(heap && syscache && desktop);
+        mm_claim(heap,1024,MM_HEAP); mm_claim(syscache,2048,MM_CACHE_DATA); mm_claim(desktop,768,MM_USER_SHARED);
+        CHECK(ledger_reconcile());
+        uint32_t settled=pmm_free_count();
+        uint64_t margin=vm_admit_margin(settled,0,0);
+        CHECK(margin); /* admitted with the trial's 574 low pages counted or not */
+        CHECK(vm_admit_margin(settled-574,0,0)); /* zone 1 is not needed for admission */
+        uint32_t backing[MM_OWNERS]={0};
+        for (unsigned o=0;o<MM_OWNERS;o++) if (created[o]) {
+            backing[o]=pmm_alloc_contig(created[o]); CHECK(backing[o] >= 0x1000000u);
+            mm_claim(backing[o],created[o],o);
+        }
+        uint32_t stack=pmm_alloc_contig(worker_stack), task=pmm_alloc_contig(worker_heap);
+        CHECK(stack>=0x1000000u && task>=0x1000000u);
+        mm_claim(stack,worker_stack,MM_STACK); mm_claim(task,worker_heap,MM_HEAP);
+        CHECK(ledger_reconcile());
+        uint32_t created_dma=pmm_zone_free(ZONE_DMA);
+        uint32_t pool=pmm_alloc_contig(touched[MM_VM_POOL]); CHECK(pool>=0x1000000u);
+        mm_claim(pool,touched[MM_VM_POOL],MM_VM_POOL); CHECK(ledger_reconcile());
+        uint32_t touched_dma=pmm_zone_free(ZONE_DMA), touched_free=pmm_free_count();
+        CHECK(created_dma==574 && touched_dma==574);
+        mm_release(pool,touched[MM_VM_POOL],MM_VM_POOL); release_run(pool,touched[MM_VM_POOL]);
+        for (unsigned o=0;o<MM_OWNERS;o++) if (backing[o]) { mm_release(backing[o],created[o],o); release_run(backing[o],created[o]); }
+        mm_release(stack,worker_stack,MM_STACK); release_run(stack,worker_stack);
+        mm_release(task,worker_heap,MM_HEAP); release_run(task,worker_heap);
+        CHECK(pmm_free_count()==settled && pmm_zone_free(ZONE_DMA)==574);
+        printf("fx-4 trial-zones model=%u kernel_end=0x00cb9000 zone1_usable=3840 zone1_free=574/%u/%u/%u "
+               "settled_free=%u touched_free=%u first_vm_margin=%llu admitted=1 reconciled=1\n",
+               sizes[i],created_dma,touched_dma,pmm_zone_free(ZONE_DMA),settled*PAGE_SIZE,touched_free*PAGE_SIZE,
+               (unsigned long long)margin);
+        mm_release(desktop,768,MM_USER_SHARED); release_run(desktop,768);
+        mm_release(syscache,2048,MM_CACHE_DATA); release_run(syscache,2048);
+        mm_release(heap,1024,MM_HEAP); release_run(heap,1024);
+        mm_release(dma,9,MM_DMA); release_run(dma,9);
+        for (unsigned t=0;t<256;t++) { mm_release(tables[t],1,MM_TABLE); pmm_free(tables[t]); }
+        CHECK(ledger_reconcile() && pmm_zone_free(ZONE_DMA)==839);
+    }
+}
 static void dosvm_profiles(int argc, char **argv)
 {
     CHECK(argc == 2 * MM_OWNERS + 7);
@@ -393,6 +461,7 @@ static void dosvm_profiles(int argc, char **argv)
         mm_release(tables,384,MM_TABLE); release_run(tables,384);
         mm_release(syscache,2048,MM_CACHE_DATA); release_run(syscache,2048);
     }
+    trial_zone_profiles(created,touched,worker_stack,worker_heap);
 }
 static struct uaddr *racing_space;
 static void unmap_during_fault(void)

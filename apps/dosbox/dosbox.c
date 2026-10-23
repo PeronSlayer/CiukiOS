@@ -87,6 +87,34 @@ static int autorun_step(uint32_t id, uint32_t generation, int focused, int promp
     }
     return 0;
 }
+/* fx-4b: desktop messages before the VM exists (the kernel is checking the
+ * DOS system files). 1: closed by the user or the desktop; -1: protocol
+ * error; 0: continue. Focus is kept and forwarded once the VM exists. */
+static int pre_create_service(int channel, uint32_t *server, int *configured, int *focused)
+{
+    for (unsigned budget = 0; budget < 32; budget++) {
+        struct ciuki_message m;
+        int n = ciuki_channel_recv(channel, &m, DONTWAIT);
+        if (n < 0 && (errno == EAGAIN || errno == EINTR)) return 0;
+        if (n <= 0) return 1;                                     /* desktop gone */
+        struct desk_packet packet;
+        int valid = m.sender_pid && (!*server || *server == m.sender_pid) &&
+                    m.data[0] == DESK_SHELL_VERSION && desk_parse(&m, 0, NULL, &packet);
+        for (unsigned i = 0; i < m.fd_count && i < CIUKI_MESSAGE_FD_MAX; i++) close(m.fds[i]);
+        if (!valid) return -1;
+        *server = m.sender_pid;
+        if (packet.opcode == DESK_CLOSED || packet.opcode == DESK_CLOSE_REQUEST) return 1;
+        if (packet.opcode == DESK_CONFIGURE) {
+            if (packet.width != CIUKI_DOSVM_WIDTH || packet.height != CIUKI_DOSVM_HEIGHT) return -1;
+            *configured = 1;
+        } else if (packet.opcode == DESK_FOCUS) *focused = packet.focused ? 1 : 0;
+        else if (packet.opcode == DESK_PING) {
+            desk_message(&m, DESK_PONG, 8); desk_put32(m.data + 4, packet.serial);
+            if (send_packet(channel, &m)) return -1;
+        }
+    }
+    return 0;
+}
 static int name_valid(const char *name)
 {
     size_t n = strlen(name);
@@ -164,15 +192,49 @@ int main(int argc, char **argv)
     desk_put32(m.data + 12, (uint32_t)len); memcpy(m.data + 16, name, len);
     m.fd_count = 1; m.fds[0] = surface;
     if (send_packet(channel, &m)) goto done;
+    int configured = 0, focused = 0;
+    /* fx-4b: after the desktop starts, the kernel checks the DOS system files
+     * in the background. While it runs, show its progress and keep answering
+     * the desktop instead of blocking inside CREATE (the window would look
+     * "Not responding"); a close request ends the launch here. */
+    for (unsigned checks = 0;; checks++) {
+        command(&c, 0, 0);
+        if (ciuki_dosvm(CIUKI_DOSVM_IMAGE_QUERY, &c) || c.state != CIUKI_DOSVM_IMAGE_VERIFYING) {
+            if (checks && loading) dosbox_panel(&canvas, name, icon, NULL, "Preparing...", 0);
+            break;
+        }
+        int service = pre_create_service(channel, &server, &configured, &focused);
+        if (service) { result = service > 0 ? 0 : 1; goto done; }
+        snprintf(detail, sizeof(detail), "Checking the DOS system files: %u%%", (unsigned)(c.changed > 1000u ? 100u : c.changed / 10u));
+        dosbox_panel_progress(&canvas, name, icon, detail, c.changed);
+        if (configured) {
+            desk_message(&m, DESK_DAMAGE, 20);
+            desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, CIUKI_DOSVM_HEIGHT);
+            if (send_packet(channel, &m)) goto done;
+        }
+        struct pollfd wait = {channel, POLLIN, 0};
+        if (poll(&wait, 1, 200) < 0 && errno != EINTR) goto done;
+    }
+    snprintf(detail, sizeof(detail), "Preparing...");
     command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
     c.launch.kernel=kernel; c.launch.game=game; c.launch.memory=memory;
     dosvm_launch_network_set(&c,network);
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
+        int error = errno;
+        struct ciuki_dosvm_command image;
+        command(&image, 0, 0);
         failure = "Unable to start";
-        snprintf(detail, sizeof(detail), "%s", errno==EBUSY ? "A COM or LPT port is in use. Check Game properties." : strerror(errno));
+        snprintf(detail, sizeof(detail), "%s", error==EBUSY ? "A COM or LPT port is in use. Check Game properties." : strerror(error));
+        if (error == EIO && !ciuki_dosvm(CIUKI_DOSVM_IMAGE_QUERY, &image) && image.state == CIUKI_DOSVM_IMAGE_MISMATCH)
+            snprintf(detail, sizeof(detail), "The DOS system files are damaged (checksum mismatch).");
         loading = 1; result = 1;
     } else {
         id = c.id; generation = c.generation;
+        if (focused) {                       /* focus that arrived during the check */
+            struct ciuki_dosvm_command f;
+            command(&f, id, generation); f.focused = 1;
+            if (ciuki_dosvm(CIUKI_DOSVM_FOCUS, &f)) focused = 0;
+        }
         if (c.changed&CIUKI_DOSVM_JOYSTICK_FALLBACK) {
             fullscreen_title="Game controller";
             snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Selected controller is absent. Using the first available joystick, or none if disconnected.");
@@ -194,7 +256,7 @@ int main(int argc, char **argv)
         command(&c,id,generation); c.focused=1;
         if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c)) goto done;
     }
-    int configured = 0, running = 1, focused = 0, fullscreen = 0, fullscreen_painted = 0;
+    int running = 1, fullscreen = 0, fullscreen_painted = 0;
     while (running) {
         for (unsigned budget = 0; budget < 32; budget++) {
             int n = ciuki_channel_recv(channel, &m, DONTWAIT);

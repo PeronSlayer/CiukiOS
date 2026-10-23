@@ -5,6 +5,10 @@
 #include <ciuki/abi.h>
 #include <ciuki/sha256.h>
 #include "dosvm_internal.h"
+/* fx-4b background verifier (dosvm_image.c); weak for the harnesses that
+ * link this file without it, which keep the synchronous hash. */
+#pragma weak dosvm_image_lookup
+#pragma weak dosvm_image_publish
 
 /* f3-06: base names a read-only image of the same private geometry (a
  * local workload disk built by scripts/test/dos_fixtures.py, or the bundled
@@ -194,6 +198,8 @@ static int base_hash_read(struct dosvm *v, uint8_t *buffer, uint32_t size)
         if (e || got != amount) return e ? e : -FS_EIO;
         sha256_update(&hash, buffer, amount); at += amount;
         kpreempt_point();
+        /* fx-4: an owner stopped during a cold hash ends creation now. */
+        if (v->create_cancelled && v->create_cancelled(v->create_cancel_arg)) return -EINTR;
     }
     sha256_final(&hash, binary); sha256_hex(binary, v->base_sha256);
     return 0;
@@ -250,10 +256,10 @@ static bool digest_lookup(const struct vfs_file_version *version, char out[65])
     irq_restore(flags);
     return hit;
 }
-static void digest_store(struct dosvm *v,const struct vfs_file_version *version, const char sha256[65])
+static void digest_store(struct vfs_table *table,int handle,const struct vfs_file_version *version, const char sha256[65])
 {
     struct vfs_version_pin pin={0};
-    (void)vfs_version_pin(&v->disk_table,v->base,version,&pin);
+    (void)vfs_version_pin(table,handle,version,&pin);
     uint32_t flags = irq_save();
     unsigned slot = DOSVM_DIGESTS;
     for (unsigned i = 0; i < DOSVM_DIGESTS && slot == DOSVM_DIGESTS; i++)
@@ -273,18 +279,42 @@ static void digest_store(struct dosvm *v,const struct vfs_file_version *version,
     irq_restore(flags);
     vfs_version_unpin(&old);
 }
-/* Hash once per base content version; the first launch after boot hashes. */
-static int base_identity(struct dosvm *v, uint32_t size)
+/* fx-4b: the background verifier shares the session cache. */
+bool dosvm_game_digest_find(const struct vfs_file_version *version, char out[65])
+{ return digest_lookup(version, out); }
+void dosvm_game_digest_publish(struct vfs_table *table, int handle, const struct vfs_file_version *version,
+                               const char sha256[65])
+{ digest_store(table, handle, version, sha256); }
+/* Hash once per base content version. fx-4b: for the unified base a valid
+ * verified stamp or the in-flight background verification of the same
+ * version replaces the hash; otherwise the launch still hashes. */
+static int base_identity(struct dosvm *v, uint32_t size, bool unified,
+                         struct vfs_file_version *version, bool *versioned_out)
 {
-    struct vfs_file_version version, after;
-    bool versioned = !vfs_handle_version(&v->disk_table, v->base, &version) && version.size == size;
-    v->base_cached = versioned && digest_lookup(&version, v->base_sha256);
+    struct vfs_file_version after;
+    bool versioned = !vfs_handle_version(&v->disk_table, v->base, version) && version->size == size;
+    *versioned_out = versioned;
+    v->base_cached = versioned && digest_lookup(version, v->base_sha256);
+    v->base_source = "session";
     if (v->base_cached) return 0;
+    if (unified && versioned && dosvm_image_lookup) {
+        const char *source = 0;
+        int e = dosvm_image_lookup(&v->disk_table, version, v->base_sha256, &source,
+                                   v->create_cancelled, v->create_cancel_arg);
+        if (e == -EINTR) return e;
+        if (!e) {
+            v->base_cached = true; v->base_source = source;
+            digest_store(&v->disk_table, v->base, version, v->base_sha256);
+            return 0;
+        }
+    }
+    v->base_source = "hash";
     int e = base_hash(v, size);
     if (e) return e;
     if (versioned && !vfs_handle_version(&v->disk_table, v->base, &after) &&
-        vfs_file_version_equal(&version, &after))
-        digest_store(v, &version, v->base_sha256);
+        vfs_file_version_equal(version, &after))
+        digest_store(&v->disk_table, v->base, version, v->base_sha256);
+    else *versioned_out = false;
     return 0;
 }
 static void *save_index_alloc(void *arg)
@@ -301,33 +331,49 @@ static void save_index_release(void *arg,void *page)
 }
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
+    const char *step;
+    return dosvm_disk_open_step(v, base, &step);
+}
+int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
+{
+    *step = "disk-state";
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
     if (!base) base = DOSVM_DEFAULT_BASE;
+    *step = "disk-base";
     if (!strncmp(base,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG",sizeof("C:\\SYSTEM\\DOS\\DOSBOOT.IMG")) ||
         !strncmp(base,"C:\\SYSTEM\\DOS\\FREEDOS.IMG",sizeof("C:\\SYSTEM\\DOS\\FREEDOS.IMG"))) return -EINVAL;
     unsigned length = 0;
     while (length < 64 && base[length]) length++;
     if (!length || length == 64) return -EINVAL;
     const char *reason = !strncmp(base, DOSVM_BUNDLED_BASE, sizeof(DOSVM_BUNDLED_BASE)) ? "bundled" : "probe";
+    *step = "storage";
     struct storage *s = storage_get();
     if (!s || !s->ready || s->stopped) return base_error(base, -V86_EIO, reason);
     int e = vfs_table_init(&s->vfs, &v->disk_table, 2);
     if (e) return base_error(base, e, reason);
     v->table_ready = true;
+    *step = "base-stat";
     struct fat_entry entry;
     e = vfs_stat(&v->disk_table, base, &entry);
     if (e) return base_error(base, e, reason);
+    *step = "base-size";
     if (!base_size_valid(entry.size) || (entry.attr & 0x10)) return base_error(base, -EINVAL, reason);
     v->base_sectors = entry.size / 512u;
+    *step = "base-open";
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return base_error(base, v->base, reason);
     v->base_open = true;
+    *step = "read-cache";
     e = read_cache_open(v);
     if (e) return e; /* lifecycle failure unwinds the base/table as before */
     if (v->game || v->kernel) {
-        e = base_identity(v, entry.size);
+        *step = "base-identity";
+        bool unified = v->kernel==2 && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE));
+        struct vfs_file_version version; bool versioned = false;
+        e = base_identity(v, entry.size, unified, &version, &versioned);
         if (e) return e;
-        if (v->kernel==2 && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
+        if (unified) {
+            *step = "base-sidecar";
             char expected[66];
             const char *sidecar="C:\\SYSTEM\\DOS\\UNIFIED.SHA";
             int identity=vfs_open(&v->disk_table,sidecar,VFS_READ,VFS_DENY_WRITE,0);
@@ -338,9 +384,13 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
             disk_gate_drop(v);
             int closed=vfs_close(&v->disk_table,identity);
             if (read_error || got!=65 || expected[64]!='\n' || memcmp(expected,v->base_sha256,64) || closed) return -FS_EIO;
+            /* fx-4b: a fresh synchronous hash that matched is stamped. */
+            if (!v->base_cached && versioned && dosvm_image_publish)
+                dosvm_image_publish(&v->disk_table, &version, v->base_sha256);
         }
     }
     if (v->game && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
+        *step = "game-data";
         v->persistent=true;
         v->save.alloc=save_index_alloc; v->save.release=save_index_release; v->save.memory=v;
         v->save_file.table=&v->disk_table;
@@ -359,8 +409,10 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
         if (v->save.recovered_bytes || !v->save.sealed)
             klog("[dosvm] game-data game=%u reason=forced-session-end lost_bytes=%u committed_bytes=%u volatile_loss=unknown",
                  v->game,v->save.recovered_bytes,v->save.committed);
+        *step = "none";
         return 0;
     }
+    *step = "overlay";
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
     if (v->game || v->kernel)
@@ -370,9 +422,10 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
         VFS_READ | VFS_WRITE | VFS_CREATE | VFS_EXCLUSIVE, VFS_DENY_ALL, 0);
     /* A metadata write gate must not hide readable game sectors. A caller
      * may open a read-only DOS disk; guest writes report write protection. */
-    if (v->overlay == -FS_EROFS) return 0;
+    if (v->overlay == -FS_EROFS) { *step = "none"; return 0; }
     if (v->overlay < 0) return v->overlay;
     v->overlay_open = v->overlay_created = true;
+    *step = "none";
     return 0;
 }
 

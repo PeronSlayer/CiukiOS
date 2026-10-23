@@ -26,7 +26,7 @@ class NativeEventWaitTests(unittest.TestCase):
                             '-DDOSBOX_SETTINGS_DIR="' + str(work / "prefs") + '"', "-I", str(work / "include"),
                             "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/desktop/dosbox_loading_test.c"),
                             str(ROOT / "apps/desktop/protocol.c"), "-o", str(binary)], check=True)
-            for scenario in (1, 2, 3, 5, 9):
+            for scenario in (1, 2, 3, 5, 9, 21):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run([binary, str(scenario)], capture_output=True, text=True, timeout=10,
                                             env={**os.environ, "TMPDIR":tmp})

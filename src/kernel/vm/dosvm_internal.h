@@ -17,6 +17,10 @@
 int dosvm_game_remove_reserve(unsigned game);
 void dosvm_game_remove_release(unsigned game);
 int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
+/* The same check naming the failed step and the FAT mount diagnostic
+ * (static strings) for the launch refusal record (fx-4). */
+int dosvm_game_program_checked(unsigned game, bool remove, uint32_t *size,
+                               const char **step, const char **detail);
 struct ciuki_dosvm_command;
 int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *);
 #define DOSVM_PAGES 272u
@@ -241,6 +245,10 @@ struct dosvm {
     void *record_arg;
     char base_sha256[65];
     bool base_cached; /* f3-51c: base_sha256 reused from the session digest cache */
+    const char *base_source; /* fx-4b: session, stamp, background or hash */
+    /* fx-4: dosvm_config.cancelled while dosvm_create opens the disk only. */
+    bool (*create_cancelled)(void *arg);
+    void *create_cancel_arg;
     struct vfs_table disk_table;
     int base, overlay;
     uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
@@ -511,7 +519,11 @@ int dosvm_frame_capture(struct dosvm *, uint64_t, struct dosvm_frame *,
                         int (*row)(void *,unsigned,const void *,unsigned),void *);
 uint8_t dosvm_vga_status(struct dosvm *, uint64_t tick);
 int dosvm_disk_open(struct dosvm *, const char *base);
+/* fx-4: the same, naming the failed step (a static string) for the
+ * creation refusal record. */
+int dosvm_disk_open_step(struct dosvm *, const char *base, const char **step);
 int dosvm_disk_close(struct dosvm *, bool forced);
+#include "dosvm_image.h" /* fx-4b */
 int dosvm_bios_init(struct dosvm *);
 int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);
 bool dosvm_io_hot(struct dosvm *,uint16_t,unsigned,bool,uint32_t *,int *);

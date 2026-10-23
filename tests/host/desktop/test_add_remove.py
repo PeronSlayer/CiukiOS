@@ -166,14 +166,8 @@ int main(void){
             subprocess.run(['mcopy','-i',outer,sidecar,'::/System/DOS/UNIFIED.SHA'],check=True,env=env)
             for name in ('G2K0.COW','G2K1.COW','G1K0.COW'):
                 subprocess.run(['mcopy','-i',outer,payload,'::/System/DOS/'+name],check=True,env=env)
-            sources=['src/kernel/fs/'+name+'.c' for name in ('fs_port','blkreq','cache','path','fat','vfs','fs_ro','program_tree')]
-            sources+=['tests/host/fs/fake.c','src/kernel/lib/fmt.c','src/kernel/lib/sha256.c','tests/host/desktop/program_owner_test.c']
             binary=folder/'owner-test'
-            subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
-                            '-DFS_HOST','-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
-                            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
-                            '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'src/kernel/fs'),
-                            *(str(ROOT/s) for s in sources),'-pthread','-o',binary],check=True,env=env)
+            owner_test_build(binary,env)
             ran=subprocess.run([binary,outer],env=env)
             subprocess.run(['fsck.fat','-n',outer],check=True,env=env)
             subprocess.run(['mcopy','-o','-i',outer,'::/System/DOS/UNIFIED.IMG',image],check=True,env=env)
@@ -181,4 +175,58 @@ int main(void){
             self.assertEqual(sidecar.read_text(),hashlib.sha256(image.read_bytes()).hexdigest()+'\n')
             subprocess.run(['fsck.fat','-n',image],check=True,env=env)
             self.assertEqual(ran.returncode,0)
+    def test_actual_owner_provider_partitioned(self):
+        # fx-4: the canonical UNIFIED.IMG is partitioned like the unified
+        # reference (scripts/dos_conformance.py): MBR, one active FAT16
+        # partition of type 0Eh at LBA 63. The T23 trial of 9a60215f failed
+        # every game launch because the inventory accepted only type 06h.
+        work=ROOT/'build/host/f2-87';work.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as temporary:
+            folder=Path(temporary);image=folder/'inner.img';outer=folder/'outer.img'
+            env=dict(os.environ,TMPDIR=temporary,MTOOLS_SKIP_CHECK='1')
+            sectors,start=32768,63
+            with image.open('wb') as stream:stream.truncate(sectors*512)
+            subprocess.run(['mkfs.fat','--invariant','-F','16','-s','2','-h',str(start),'--offset',str(start),
+                            image,str((sectors-start)//2)],check=True,env=env,capture_output=True)
+            mbr=bytearray(512)
+            mbr[446:462]=bytes([0x80,1,1,0,0x0e,0xfe,0xff,0xff])+start.to_bytes(4,'little')+(sectors-start).to_bytes(4,'little')
+            mbr[510:512]=b'\x55\xaa'
+            with image.open('r+b') as stream:stream.write(mbr)
+            part=f'{image}@@{start*512}'
+            for name in ('WOLF3D','DOOM','QUAKE'):
+                subprocess.run(['mmd','-i',part,'::/'+name],check=True,env=env)
+            payload=folder/'data';payload.write_bytes(b'fixture data'*300)
+            for name in ('WOLF3D/KEEP.BIN','DOOM/DOOM.EXE','QUAKE/KEEP.BIN'):
+                subprocess.run(['mcopy','-i',part,payload,'::/'+name],check=True,env=env)
+            with outer.open('wb') as stream:stream.truncate(32*1024*1024)
+            subprocess.run(['mkfs.fat','--invariant','-F','16','-s','2',outer],check=True,env=env,capture_output=True)
+            for name in ('Games','System','System/DOS'):
+                subprocess.run(['mmd','-i',outer,'::/'+name],check=True,env=env)
+            subprocess.run(['mcopy','-i',outer,image,'::/System/DOS/UNIFIED.IMG'],check=True,env=env)
+            sidecar=folder/'UNIFIED.SHA'
+            sidecar.write_text(hashlib.sha256(image.read_bytes()).hexdigest()+'\n')
+            subprocess.run(['mcopy','-i',outer,sidecar,'::/System/DOS/UNIFIED.SHA'],check=True,env=env)
+            binary=folder/'owner-test'
+            owner_test_build(binary,env)
+            ran=subprocess.run([binary,outer,'partitioned'],env=env)
+            self.assertEqual(ran.returncode,0)
+            subprocess.run(['fsck.fat','-n',outer],check=True,env=env)
+            subprocess.run(['mcopy','-o','-i',outer,'::/System/DOS/UNIFIED.IMG',image],check=True,env=env)
+            subprocess.run(['mcopy','-o','-i',outer,'::/System/DOS/UNIFIED.SHA',sidecar],check=True,env=env)
+            data=image.read_bytes()
+            self.assertEqual(sidecar.read_text(),hashlib.sha256(data).hexdigest()+'\n')
+            self.assertEqual(data[446:462],mbr[446:462])   # 0Eh restored, table intact
+            volume=folder/'partition.img';volume.write_bytes(data[start*512:])
+            subprocess.run(['fsck.fat','-n',volume],check=True,env=env)
+            listing=subprocess.run(['mdir','-b','-i',part,'::/'],check=True,env=env,capture_output=True,text=True).stdout
+            self.assertNotIn('DOOM',listing.upper())
+            self.assertIn('QUAKE',listing.upper());self.assertIn('WOLF3D',listing.upper())
+def owner_test_build(binary,env):
+    sources=['src/kernel/fs/'+name+'.c' for name in ('fs_port','blkreq','cache','path','fat','vfs','fs_ro','program_tree','partition')]
+    sources+=['tests/host/fs/fake.c','src/kernel/lib/fmt.c','src/kernel/lib/sha256.c','tests/host/desktop/program_owner_test.c']
+    subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
+                    '-DFS_HOST','-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
+                    '-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                    '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'src/kernel/fs'),
+                    *(str(ROOT/s) for s in sources),'-pthread','-o',binary],check=True,env=env)
 if __name__=='__main__':unittest.main()
