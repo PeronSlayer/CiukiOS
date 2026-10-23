@@ -6,11 +6,14 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).resolve().parent
+sys.path.insert(0,str(HERE))  # fx-14: pages.py
+import pages  # noqa: E402
 # f6-20 T23 model for the port's layout budget clock: host layout time is
 # charged 32x, a conservative model of a 1.1 GHz Pentium III-M (i686 code,
 # 512 KiB L2, PC133 SDRAM) against this host class (Ryzen 7 7800X3D):
@@ -188,45 +191,76 @@ class LocalTests(unittest.TestCase):
             self.assertNotIn("[netsurf] exit reason=",completed.stderr)
             self.assertRegex(log.read_text(),"^"+stamp+"\\[netsurf\\] exit reason=bad-arguments detail=0 .* network=unknown\n$")
 
-    def test_layout_rejection(self):
-        with tempfile.TemporaryDirectory(dir=self.out) as directory:
-            page=Path(directory) / "oversized.html"
-            page.write_text("<!doctype html><title>Must be rejected</title><p>"+"x"*20000+"</p>")
-            out=Path(directory) / "error.xrgb"
-            completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","640","-h","480",
-                "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-capture="+str(out),page.as_uri()],
-                capture_output=True,text=True,timeout=15)
-            self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
-            self.assertEqual(out.stat().st_size,640*480*4)
-            self.assertIn("NetSurf structure rejected:",completed.stderr)
-            self.assert_exit_reason(completed,"capture")
+    def run_file(self,directory,name,body,env=None,limit_stack=False):
+        """Lay out one local page; the capture ends the run (f6-20)."""
+        page=Path(directory) / name;page.write_text(body)
+        out=Path(directory) / (name+".xrgb")
+        def stack():
+            import resource
+            resource.setrlimit(resource.RLIMIT_STACK,(1024*1024,resource.getrlimit(resource.RLIMIT_STACK)[1]))
+        completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","800","-h","600",
+            "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-profile="+str(Path(directory) / "profile"),
+            "--ciuki-capture="+str(out),page.as_uri()],capture_output=True,text=True,timeout=60,
+            env=dict(os.environ,**(env or {})),preexec_fn=stack if limit_stack else None)
+        self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+        self.assertEqual(out.stat().st_size,800*600*4)
+        self.assert_exit_reason(completed,"capture")
+        return page,completed
 
-    def test_structural_and_plain_text_rejections(self):
-        cases={"deep.html":"<div>"*20000+"x"+"</div>"*20000,
-               "wide.html":"<p>x</p>"*10000,
-               "columns.html":"<table><tr><td colspan=5000>x</td></tr></table>",
-               "large.txt":"x"*150000}
+    def test_ordinary_pages_load(self):
+        """fx-14: pages shaped like a search engine home page (more than 48 KB
+        of inline script), news front pages (about 9,000 and 20,000 DOM nodes
+        with a 60 KB JSON script), a 300 KB encyclopedia article, a forum
+        thread and constructs the f6-14 constants refused (a 20 KB unbroken run,
+        10,000 paragraphs, colspan 5000, 150 KB of plain text) load under the
+        128 MiB baseline model. Host layout times x32 model the T23."""
+        cases=[(name,make(),"NetSurf local title: "+title) for (name,make),title in zip(pages.PAGES.items(),pages.TITLES)]
+        cases+=[("run.html","<!doctype html><title>Run</title><p>"+"x"*20000+"</p>","NetSurf local title: Run"),
+                ("wide.html","<title>Wide</title>"+"<p>x</p>"*10000,"NetSurf local title: Wide"),
+                ("colspan.html","<title>Colspan</title><table><tr><td colspan=5000>x</td></tr><tr><td>a</td><td>b</td></tr></table>","NetSurf local title: Colspan"),
+                ("large.txt","x"*150000+"\n"+"plain text line\n"*4000,None)]
+        for name,body,title in cases:
+            with self.subTest(page=name),tempfile.TemporaryDirectory(dir=self.out) as directory:
+                page,completed=self.run_file(directory,name,body)
+                self.assertNotIn("rejected",completed.stderr)
+                self.assertNotIn("NetSurf error page:",completed.stderr)
+                if title:self.assertIn(title,completed.stderr)
+                self.assertIn("layout_rejections=0",completed.stderr)
+                self.assertIn(page.as_uri(),(Path(directory) / "profile/History.html").read_text())
+                layout=int(re.search(r"layout_max_ns=(\d+)",completed.stderr)[1])
+                print(f"{name}: {len(body)} bytes, host layout {layout/1e6:.1f} ms, T23 model {layout*T23_CLOCK_SCALE/1e9:.2f} s",flush=True)
+                self.assertLess(layout*T23_CLOCK_SCALE,10_000_000_000)  # fx-11 top-level document limit
+
+    def test_deep_pages_within_main_stack(self):
+        """fx-14: nesting just inside the new DOM depth (128) lays out and
+        paints with the main stack limited to CiukiOS's 1 MiB."""
+        cases={"divs.html":pages.nested(124),
+               "tables.html":"<title>Tables</title>"+"<table><tr><td>"*30+"cell"+"</td></tr></table>"*30,
+               "inline.html":"<title>Inline</title>"+"<span style='display:inline-block;border:1px solid'>"*120+"x"+"</span>"*120}
         for name,body in cases.items():
             with self.subTest(page=name),tempfile.TemporaryDirectory(dir=self.out) as directory:
-                page=Path(directory) / name;page.write_text(body)
-                out=Path(directory) / "rejected.xrgb"
-                completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","640","-h","480",
-                    "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-profile="+str(Path(directory) / "profile"),
-                    "--ciuki-capture="+str(out),page.as_uri()],
-                    capture_output=True,text=True,timeout=15)
-                self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
-                self.assertEqual(out.stat().st_size,640*480*4)
+                _,completed=self.run_file(directory,name,body,limit_stack=True)
+                self.assertNotIn("rejected",completed.stderr)
+
+    def test_admission_rejections(self):
+        """fx-14: only an exceeded memory budget, nesting beyond 128 levels or
+        a table wider than 1000 columns refuse a page, each with an error page
+        that says why; the browser stays on it."""
+        memory="This page is too large for the memory available to the browser."
+        cases=[("oversized.html",pages.oversized(),None,"page too large for available memory",memory),
+               ("budget.html",pages.news_front(),{"CIUKI_NETSURF_FREE_BYTES":str(4*1024*1024)},"page too large for available memory",memory),
+               ("deep.html","<div>"*20000+"x"+"</div>"*20000,None,"nesting depth","This page nests its elements more deeply than the browser supports."),
+               ("columns.html","<table><tr><td colspan=600>a</td><td colspan=600>b</td></tr></table>",None,"table columns","This page has a table with more columns than the browser supports."),
+               ("large.txt","plain text line\n"*20000,{"CIUKI_NETSURF_FREE_BYTES":str(1024*1024)},"page too large for available memory",memory)]
+        for name,body,env,cause,message in cases:
+            with self.subTest(page=name),tempfile.TemporaryDirectory(dir=self.out) as directory:
+                page,completed=self.run_file(directory,name,body,env=env)
+                self.assertIn("NetSurf structure rejected: "+cause,completed.stderr)
+                self.assertIn("NetSurf error page: "+message,completed.stderr)
+                self.assertIn("NetSurf local title: Error occurred fetching page",completed.stderr)
                 self.assertNotIn(page.as_uri(),(Path(directory) / "profile/History.html").read_text())
-                # f6-20: a rejected page leaves the browser on its error page;
-                # only the capture ends these runs.
-                self.assert_exit_reason(completed,"capture")
                 if name=="large.txt":
                     self.assertIn("NetSurf layout rejected: plain text, local, admission limit",completed.stderr)
-                    self.assertGreater(int(re.search(r"layout_max_ns=(\d+)",completed.stderr)[1]),0)
-                elif name=="columns.html":
-                    self.assertIn("Error occurred fetching page",completed.stderr)
-                else:
-                    self.assertIn("rejected:",completed.stderr)
 
     def test_completed_history_restart_and_page(self):
         with tempfile.TemporaryDirectory(dir=self.out) as directory:

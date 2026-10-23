@@ -107,7 +107,9 @@ bool fb_font_finalise(void)
 nserror fb_font_width(const plot_font_style_t *style,const char *s,size_t n,int *width)
 {
     *width=0;
-    if(n>8192 || ciuki_layout_expired())return NSERROR_BAD_SIZE;
+    /* fx-14: no run-length cap (it was 8192 bytes); one measurement is
+     * linear in n and long layouts stay bounded by the layout deadline. */
+    if(ciuki_layout_expired())return NSERROR_BAD_SIZE;
     unsigned key=face_key(style),size=em(style),slot=key*33u+size;
     for(size_t i=0;i<n;i++)slot=slot*33u+(unsigned char)s[i];
     slot%=WIDTH_SLOTS;
@@ -130,14 +132,14 @@ nserror fb_font_width(const plot_font_style_t *style,const char *s,size_t n,int 
     }
     return NSERROR_OK;
 }
-/* At most ceil(log2(8193))+2 complete measurements, rather than one
+/* At most ceil(log2(n+1))+2 complete measurements, rather than one
  * measurement per growing prefix. Boundaries are UTF-8 byte offsets. */
 nserror fb_font_position(const plot_font_style_t *style,const char *s,size_t n,int x,size_t *offset,int *actual)
 {
-    if(n>8192)return NSERROR_BAD_SIZE;
     *offset=0;*actual=0;
     if(x<=0 || !n)return NSERROR_OK;
-    uint16_t *ends=malloc((n+1)*sizeof(*ends));
+    if(n>=SIZE_MAX/sizeof(size_t))return NSERROR_BAD_SIZE;
+    size_t *ends=malloc((n+1)*sizeof(*ends));
     if(!ends)return NSERROR_NOMEM;
     size_t count=0;
     ends[count++]=0;
@@ -158,26 +160,41 @@ nserror fb_font_position(const plot_font_style_t *style,const char *s,size_t n,i
 done:
     free(ends);return err;
 }
+/* fx-14: linear in the length of the line, not of the run. The f6-14 split
+ * measured the whole remainder and binary-searched its spaces with one
+ * prefix measurement each: O(n log n) per line, quadratic per paragraph,
+ * which the 8192-byte run cap used to hide. It now walks the run word by
+ * word (words hit the width cache) and stops at the first word past x;
+ * the chosen prefix is then measured exactly (kerning across a space is
+ * not in the word sum) and steps back a word while it exceeds x. Same
+ * result as before: the last space whose prefix fits, the first space when
+ * none fits, the whole run when it fits or has no space (spaces from
+ * offset 1). */
 static nserror split(const plot_font_style_t *style,const char *s,size_t n,int x,size_t *offset,int *actual)
 {
-    int width;
-    nserror err=fb_font_width(style,s,n,&width);if(err)return err;
-    *offset=n;*actual=width;
-    if(width<=x || !n)return NSERROR_OK;
-    uint16_t *spaces=malloc(n*sizeof(*spaces));if(!spaces)return NSERROR_NOMEM;
-    size_t count=0;
-    for(size_t at=1;at<n;at++)if(s[at]==' ')spaces[count++]=at;
-    if(!count) { free(spaces);return NSERROR_OK; }
-    size_t lo=0,hi=count;
-    while(lo<hi) {
-        size_t mid=lo+(hi-lo)/2;
-        err=fb_font_width(style,s,spaces[mid],&width);if(err)goto done;
-        if(width<=x)lo=mid+1;else hi=mid;
+    *offset=n;*actual=0;
+    size_t start=0,candidate=0,first=0;
+    int64_t sum=0;int width=0;nserror err;
+    if(!n)return fb_font_width(style,s,0,actual);
+    for(size_t at=1;at<=n;at++) {
+        if(at<n && s[at]!=' ')continue;
+        err=fb_font_width(style,s+start,at-start,&width);if(err)return err;
+        sum+=width;start=at;
+        if(at<n && !first)first=at;
+        if(sum>x)break;
+        candidate=at;
     }
-    *offset=spaces[lo?lo-1:0];
-    err=fb_font_width(style,s,*offset,actual);
-done:
-    free(spaces);return err;
+    /* No space: the single measured piece is the whole run. */
+    if(!first) { *actual=(int)sum;return NSERROR_OK; }
+    if(!candidate)candidate=first;
+    for(;;) {
+        err=fb_font_width(style,s,candidate,actual);if(err)return err;
+        if(*actual<=x || candidate==first)break;
+        size_t back=candidate-1;
+        while(back>first && s[back]!=' ')back--;
+        candidate=back;
+    }
+    *offset=candidate;return NSERROR_OK;
 }
 struct paint_context { nsfb_t *surface; nsfb_colour_t colour; };
 static int paint(void *context,int x,int y,const struct ciuki_font_bitmap *bitmap)

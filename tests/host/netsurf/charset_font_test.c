@@ -101,7 +101,24 @@ int main(void)
     assert(framebuffer_layout_table->split(&style,long_run,8192,32768,&offset,&actual)==NSERROR_OK);
     assert(measure_calls<=16 && processed_bytes<=16*8192);
     assert(fb_font_width(&style,long_run,offset,&measured)==NSERROR_OK && measured==actual);
-    assert(fb_font_width(&style,long_run,8193,&measured)==NSERROR_BAD_SIZE);
+    /* fx-14: no 8192-byte run cap; a 64 KiB paragraph is measured whole and
+     * split in work linear in the line, not in the paragraph. */
+    size_t big=65536;char *para=malloc(big);assert(para);
+    static const char *const vocabulary[]={"ciuki","retro","window","pixel","floppy","kernel","garden","modem"};
+    for(size_t at=0,w=0;at<big;w++) {
+        const char *word=vocabulary[(w*5+w/8)%8];
+        for(size_t i=0;word[i] && at<big;i++)para[at++]=word[i];
+        if(at<big)para[at++]=' ';
+    }
+    assert(fb_font_width(&style,para,big,&measured)==NSERROR_OK && measured>600);
+    measure_calls=processed_bytes=0;
+    assert(framebuffer_layout_table->split(&style,para,big,600,&offset,&actual)==NSERROR_OK);
+    assert(offset>0 && offset<big && para[offset]==' ' && actual<=600);
+    assert(processed_bytes<=4*offset+256);
+    assert(fb_font_width(&style,para,offset,&measured)==NSERROR_OK && measured==actual);
+    size_t next=offset+1;while(next<big && para[next]!=' ')next++;
+    assert(fb_font_width(&style,para,next,&measured)==NSERROR_OK && measured>600);
+    free(para);
     nsfb_free(fb);assert(fb_font_finalise());
     puts("NetSurf charset/font: four encodings, errors, split codec, metrics, positions, scale and clipped paint passed");
     fflush(stdout);

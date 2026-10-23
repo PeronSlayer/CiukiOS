@@ -29,6 +29,7 @@ void amendment_layout_checks(struct content *);
 #include "netsurf/bitmap.h"
 #include "framebuffer/ciuki/chrome.c"
 #include "framebuffer/fbtk/event.c"
+#include "sdk/netsurf/port/docmem.h"
 static bool running,finished;
 static unsigned damages,clicks;
 static bool intercept_actions,navigation_done;
@@ -185,7 +186,8 @@ static void exercise(void)
 {
     amendment_layout_checks(hlcache_handle_get_content(browser_window_get_content(window_list->bw)));
     int *budget=talloc_zero(NULL,int);assert(budget);
-    *budget=8192;unsigned before_alloc=allocation_count;
+    /* fx-14: the box ledger's count from the memory budget, not 8192. */
+    *budget=(int)ciuki_doc_box_limit();unsigned before_alloc=allocation_count;
     fail_allocation=allocation_count+1;
     assert(!box_create(NULL,NULL,false,NULL,NULL,NULL,NULL,budget));
     assert(allocation_count==before_alloc);fail_allocation=0;

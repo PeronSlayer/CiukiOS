@@ -5,7 +5,16 @@
 #include <stdint.h>
 #include <string.h>
 #include "sdk/netsurf/port/image_memory.h"
-static size_t image_bytes;
+#include "sdk/netsurf/port/docmem_query.h"
+static size_t image_bytes,image_limit;
+size_t ciuki_image_limit(void)
+{
+    if(!image_limit) {
+        size_t share=ciuki_docmem_query()/8;
+        image_limit=share<CIUKI_IMAGE_MIN_BYTES?CIUKI_IMAGE_MIN_BYTES:share>CIUKI_IMAGE_MAX_BYTES?CIUKI_IMAGE_MAX_BYTES:share;
+    }
+    return image_limit;
+}
 union image_header { size_t bytes; long double align; void *pointer; };
 int ciuki_image_reserve(size_t n)
 {
