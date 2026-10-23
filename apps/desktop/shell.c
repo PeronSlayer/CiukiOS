@@ -259,6 +259,7 @@ static const struct program_info programs[] = {
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
     {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
+    {"clipbrd", "Clipboard Viewer", "edit-paste", "system-tools", NULL},
     {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
     {"hello", "Hello", "face-smile", "developer", NULL},
@@ -489,6 +490,12 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Maximize", NULL, SH_ACT_TASK_MAXIMIZE, owner, blocked || !c || !c->resizable || c->zoomed ? SH_ITEM_DISABLED : 0);
         if (owner>=0 && owner<DESK_CLIENTS && d->clients[owner].dosbox)
             item(m,"Full screen    Alt+Enter",NULL,SH_ACT_DOS_FULLSCREEN,owner,0);
+        if (c && c->dosbox) {
+            item(m,"Mark",NULL,SH_ACT_DOS_MARK,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"Copy",NULL,SH_ACT_DOS_COPY,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"Paste",NULL,SH_ACT_DOS_PASTE,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"QuickEdit on/off",NULL,SH_ACT_DOS_QUICKEDIT,owner,blocked ? SH_ITEM_DISABLED : 0);
+        }
         separator(m);
         item(m, "Close    Alt+F4", "process-stop", SH_ACT_TASK_CLOSE, owner, minimized ? 0 : SH_ITEM_DEFAULT);
         break;
@@ -824,6 +831,14 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
     case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
+    case SH_ACT_DOS_MARK: case SH_ACT_DOS_COPY: case SH_ACT_DOS_PASTE: case SH_ACT_DOS_QUICKEDIT:
+        if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
+            desk_focus(d,it->arg); struct ciuki_message message;
+            desk_message(&message,DESK_DOS_CLIPBOARD,8); message.data[0]=2;
+            desk_put32(message.data+4,it->action==SH_ACT_DOS_MARK ? 1 : it->action==SH_ACT_DOS_COPY ? 2 : it->action==SH_ACT_DOS_PASTE ? 3 : 4);
+            desk_queue(d,it->arg,&message);
+        }
+        break;
     case SH_ACT_DOS_FULLSCREEN:
         if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
             if (d->clients[it->arg].minimized) desk_minimize(d,it->arg);
@@ -3650,6 +3665,13 @@ int desk_shell_consumer(struct desktop *d, unsigned action, int value)
 }
 int desk_shell_key(struct desktop *d, int code, int value)
 {
+    if (code==CIUKI_KEY_PRINTSCREEN || code==0x54) {
+        extern int desk_clip_key(struct desktop *, int, int, int) __attribute__((weak));
+        if (desk_clip_key && desk_clip_key(d,code,value,!!(d->sh.modifiers&DU_ALT))<0)
+            desk_shell_message(d,"Clipboard","The screen could not be copied to the clipboard.",1);
+        return 1;
+    }
+
     if (!d->shell) return 0;
     if (value && d->sh.tooltip) { tooltip_hide(d); d->sh.hover_since=0; }
     int alt = code == 0x38 || code == 0x138, ctrl = code == 0x1d || code == 0x11d, shift = code == 0x2a || code == 0x36;

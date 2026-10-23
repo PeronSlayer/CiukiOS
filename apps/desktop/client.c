@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+extern void desk_clip_receive(struct desktop *, int, const struct ciuki_message *, const struct desk_packet *) __attribute__((weak));
+extern void desk_clip_drop(struct desktop *, int) __attribute__((weak));
 static void power_target(struct desktop *, uint32_t, const char *, int);
 static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
@@ -53,6 +55,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (d->v3_pointer_window==i+1) desk_v3_pointer_release(d);
     if (c->v3_peer && c->window_id) for (int j=0;j<DESK_CLIENTS;j++)
         if (d->clients[j].v3_peer==c->v3_peer && d->clients[j].owner_id==c->window_id) desk_drop_client(d,j);
+    if (desk_clip_drop) desk_clip_drop(d,i);
     uint32_t pid=c->pid, owner=c->owner_id, id=c->window_id;
     char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
     int was_focused=d->focus==i;
@@ -607,6 +610,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     d->received++;
     struct ciuki_message reply;
     switch (p.opcode) {
+    case DESK_CLIPBOARD:
+        if (desk_clip_receive) desk_clip_receive(d,i,m,&p);
+        else close_attachments(d,m,-1);
+        break;
     case DESK_GFX_FRAME: {
         if (!c->gfxdemo || !c->window || c->closing || c->gfx_pending) {
             /* A rejected request never changes the persistent scene mapping. */
@@ -2100,6 +2107,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (p.opcode==DESK_HELLO) {
         anchor->pid=m->sender_pid; anchor->hello=1; anchor->version=DESK_V3_VERSION; return 0;
     }
+    if (p.opcode==DESK_V3_CLIPBOARD && desk_clip_receive) { desk_clip_receive(d,peer,m,&p); return 0; }
     int error=0;
     if (!p.request && p.opcode!=DESK_PONG) error=-EINVAL;
     if (p.opcode==DESK_CREATE_WINDOW && !error) {

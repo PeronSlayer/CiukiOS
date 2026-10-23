@@ -50,6 +50,7 @@ struct fm_model {
     struct fm_entry *entries; unsigned count, capacity, active, anchor, sort; int descending;
     char find[FM_NAME]; size_t find_length; uint64_t find_deadline;
     char **clipboard; unsigned clipboard_count; int cut;
+    uint32_t clipboard_sequence;
     uint32_t drive_slots; /* fx-17b: drives listed in Computer without a medium (floppies) */
 };
 enum fm_job_kind { FM_COPY, FM_MOVE, FM_DELETE, FM_PROPERTIES };

@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#if defined(__i386__) || defined(CIUKI_SYSTEM_CLIPBOARD)
+#define SYSTEM_CLIPBOARD 1
+int fm_system_clipboard_save(struct fm_model *);
+int fm_system_clipboard_load(struct fm_model *);
+int fm_system_clipboard_consume(struct fm_model *);
+#endif
 #define CLIP "/system/settings/files.clip"
 
 static int write_all(const struct fm_vfs *f, int fd, const void *buffer, unsigned n)
@@ -16,6 +22,9 @@ static int write_all(const struct fm_vfs *f, int fd, const void *buffer, unsigne
 }
 int fm_clipboard_save(struct fm_model *m)
 {
+#ifdef SYSTEM_CLIPBOARD
+    return fm_system_clipboard_save(m);
+#else
     int r = m->fs.mkdir(m->fs.ctx, "/system/settings");
     if (r && r != -EEXIST) return r;
     char temp[64]; int fd=-EEXIST;
@@ -36,9 +45,13 @@ int fm_clipboard_save(struct fm_model *m)
     if (!r) r = m->fs.rename(m->fs.ctx, temp, CLIP);
     if (r) m->fs.unlink(m->fs.ctx, temp);
     return r;
+#endif
 }
 int fm_clipboard_load(struct fm_model *m)
 {
+#ifdef SYSTEM_CLIPBOARD
+    return fm_system_clipboard_load(m);
+#else
     int fd = m->fs.open(m->fs.ctx, CLIP, 0);
     if (fd == -ENOENT) { fm_clipboard_clear(m); return 0; }
     if (fd < 0) return fd;
@@ -68,6 +81,7 @@ int fm_clipboard_load(struct fm_model *m)
     int closed = m->fs.close(m->fs.ctx, fd); if (!r) r = closed;
     if (!r) { fm_clipboard_clear(m); m->clipboard = next->clipboard; m->clipboard_count = next->clipboard_count; m->cut = next->cut; next->clipboard = NULL; next->clipboard_count = 0; }
     fm_clipboard_clear(next); free(next); return r;
+#endif
 }
 
 /* fx-19 drag data object: "X\n" then one "<D|F>/path\n" per item, written
@@ -142,12 +156,16 @@ int fm_drag_load(const struct fm_vfs *fs, char ***out, char **out_types, unsigne
 
 int fm_clipboard_consume(struct fm_model *m)
 {
+#ifdef SYSTEM_CLIPBOARD
+    return fm_system_clipboard_consume(m);
+#else
     struct fm_model *now=calloc(1,sizeof(*now)); if (!now) return -ENOMEM;
     now->fs=m->fs; int r=fm_clipboard_load(now);
     int same=!r && now->cut==m->cut && now->clipboard_count==m->clipboard_count;
     for (unsigned i=0;same && i<m->clipboard_count;i++) same=fm_same_path(now->clipboard[i],m->clipboard[i]);
     if (same) { fm_clipboard_clear(now); r=fm_clipboard_save(now); }
     fm_destroy(now); free(now); fm_clipboard_clear(m); return r;
+#endif
 }
 
 #include "transfer.h"

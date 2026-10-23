@@ -107,9 +107,9 @@ static void unhold(struct dosvm *v)
 }
 void dosvm_fullscreen_checkpoint(struct dosvm *v)
 {
-    if (!v->fullscreen_hold && !v->fullscreen_suspended) return;
+    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->clipboard_mark) return;
     v->fullscreen_parked=true;
-    while ((v->fullscreen_hold || v->fullscreen_suspended) && v->info.state<DOSVM_STOPPING)
+    while ((v->fullscreen_hold || v->fullscreen_suspended || v->clipboard_mark) && v->info.state<DOSVM_STOPPING)
         task_sleep_ms(1);
     v->fullscreen_parked=false;
 }
