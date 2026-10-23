@@ -52,6 +52,8 @@ static int cwd(void *ctx,const char *path) { (void)ctx; return chdir(path) ? -er
 static time_t now(void *ctx) { (void)ctx; return time(NULL); }
 static void quit(void *ctx) { struct native_terminal *x=ctx; x->app.quit=1; x->app.interrupted=1; du_window_close(&x->window); }
 static int close_request(struct du_window *w,void *ctx) { (void)w; quit(ctx); return 1; }
+/* G3: agree without interrupting the running command; END_SESSION(1) closes. */
+static int query_end_session(struct du_window *w,uint32_t flags,void *ctx) { (void)w; (void)flags; (void)ctx; return DU_SESSION_AGREE; }
 static void pump(void *ctx)
 {
     struct native_terminal *x=ctx; uint64_t tick=du_now(); if(tick<x->next_pump)return; x->next_pump=tick+10000000ull;
@@ -82,6 +84,7 @@ int main(int argc,char **argv)
         .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit};
     if(term_attach(&x->app,&x->ui,&h)) { du_window_destroy(&x->window); free(x); return 1; }
     x->window.user=x; x->window.message=message; x->window.close_request=close_request;
+    x->window.query_end_session=query_end_session;
     if(chdir("/Documents"))term_printf(&x->app,"Working directory: %s\n",strerror(errno));
     if(script) { x->app.busy=1; int r=term_lua(&x->app,script,0,NULL); x->app.busy=0; if(r)term_printf(&x->app,"Lua: %s\n",strerror(-r)); }
     int r=du_run(&x->window,NULL,NULL); term_detach(&x->app); du_window_destroy(&x->window); free(x); return r<0 ? 1 : 0;

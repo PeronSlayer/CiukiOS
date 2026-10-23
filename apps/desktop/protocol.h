@@ -47,7 +47,9 @@
  * KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
  * CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
  * POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
- * CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+ * CLOSE_ACK: disposition (0 declined, 1 deferred), per window. A deferred
+ * close has no deadline while the window answers PINGs; an unresponsive one
+ * gets the desktop's "This program is not responding" dialog (G3).
  * WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
  * owner id,owner-generation. Unselected fields are zero; no descriptors.
  * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
@@ -114,8 +116,11 @@ enum desk_opcode {
     DESK_GFX_FRAME, DESK_GFX_PRESENTED, /* f2-59: bounded scene region and completion */
     DESK_DOS_FULLSCREEN /* desktop to DOS client, no payload */,
     DESK_SET_CURSOR, /* v2 client to desktop: uint32 shape, own client area only */
-    /* v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
-     * 1 closing later). One later reply within 2 s grants 30 s total. */
+    /* v2 client to desktop, 8 bytes, no fds: uint32 disposition
+     * (DESK_CLOSE_DECLINED, DESK_CLOSE_LATER, DESK_CLOSE_DOS_ACTIVE). G3:
+     * no close deadline while the program answers PINGs (Windows 9x
+     * WM_CLOSE); a program unresponsive for DESK_HUNG_NS gets the desktop's
+     * "This program is not responding" dialog with End Task and Cancel. */
     DESK_CLOSE_ACK,
     DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE, /* v1 generic engine payload, 256 bytes */
     DESK_JOYSTICK, DESK_JOYSTICK_RESULT /* v2 Control Panel broker, serial + 100-byte record (+ result on reply) */,
@@ -134,8 +139,42 @@ enum desk_opcode {
      * DROP_FILES (desktop to an accepting client): serial, client x, y;
      *   WM_DROPFILES, the client reads the data object (du_drop_file). */
     DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
-    DESK_ACCEPT_FILES, DESK_DROP_FILES
+    DESK_ACCEPT_FILES, DESK_DROP_FILES,
+    /* G3 end of session (WM_QUERYENDSESSION / WM_ENDSESSION), version 2,
+     * no fds, all u32 after the 4-byte header:
+     * QUERY_END_SESSION (desktop to client, 12 bytes): serial (nonzero),
+     *   flags (DESK_ENDSESSION_*, the WM_QUERYENDSESSION lParam). The client
+     *   answers once with SESSION_ANSWER; it may show its own save prompt
+     *   first (answer ASKING, then AGREE or VETO when the user decides).
+     *   A registered client that answers a PING sent after the query
+     *   without answering it agrees, as DefWindowProc returns TRUE.
+     * END_SESSION (desktop to client, 16 bytes): serial, ending (1: every
+     *   program agreed, exit now without prompting; 0: the session goes
+     *   on), flags. Sent only to clients that answered the query.
+     * SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
+     *   answer (DESK_SESSION_*). Serial 0 with AGREE, sent once after
+     *   CREATE_WINDOW, registers the window for queries; the desktop never
+     *   sends QUERY_END_SESSION or END_SESSION to an unregistered client
+     *   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end). */
+    DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
 };
+#define DESK_ENDSESSION_CLOSEAPP 0x00000001u   /* lParam bits, as WinUser.h */
+#define DESK_ENDSESSION_CRITICAL 0x40000000u
+#define DESK_ENDSESSION_LOGOFF 0x80000000u
+#define DESK_ENDSESSION_FLAGS 0xc0000001u
+#define DESK_SESSION_VETO 0u      /* WM_QUERYENDSESSION returned FALSE (the user cancelled) */
+#define DESK_SESSION_AGREE 1u     /* TRUE: data saved or discarded by the user */
+#define DESK_SESSION_ASKING 2u    /* the program shows its own prompt; the session waits */
+#define DESK_SESSION_DOS_ACTIVE 3u /* a DOS window whose program is running: "cannot shut down automatically" */
+#define DESK_SESSION_ANSWERS 4u
+/* CLOSE_ACK dispositions (v2): 0 declined (the user cancelled the program's
+ * own prompt), 1 the program asks the user and closes later (no deadline
+ * while it keeps answering PINGs), 2 a DOS window whose program is running
+ * (the desktop shows the Windows 98 "cannot shut down this program
+ * automatically" warning). V3 accepts 0 and 1 only. */
+#define DESK_CLOSE_DECLINED 0u
+#define DESK_CLOSE_LATER 1u
+#define DESK_CLOSE_DOS_ACTIVE 2u
 #define DESK_DRAG_FILE "/system/settings/files.drag"
 #define DESK_DRAG_ITEMS 4096u
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */

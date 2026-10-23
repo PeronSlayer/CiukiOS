@@ -627,7 +627,7 @@ __attribute__((noinline)) static void test_tasks_scenario(void)
     assert(request(&d,0,300,DESK_END_TASK,0,77,0)==-EPERM && request(&d,0,300,DESK_END_TASK,0,50,0)==-EPERM);
     drain(&d,1);
     assert(request(&d,0,300,DESK_END_TASK,2,301,0)==0 && d.tasks_stage==5);
-    assert(d.clients[1].closing && queued(&d,1,DESK_CLOSE_REQUEST,0)==1 && d.children[1].close_ns);
+    assert(d.clients[1].closing && queued(&d,1,DESK_CLOSE_REQUEST,0)==1 && !d.children[1].close_ns); /* G3: WM_CLOSE, no deadline */
     struct ciuki_message m; desk_message(&m,DESK_PING,8); desk_put32(m.data+4,DESK_TASKS_CHECKPOINT);
     v2(&d,1,301,&m); assert(!d.tasks_checkpoint);   /* only the Task Manager reports */
     desk_child_exited(&d,301,9); assert(d.tasks_stage==5); /* a killed demo cannot qualify */
@@ -1138,6 +1138,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling, shutdown blocks launch before tracing");
 }
 #include "shutdown_sequence_test.h"
+#include "end_session_test.h"
 static pthread_mutex_t wallpaper_test_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wallpaper_test_changed=PTHREAD_COND_INITIALIZER;
 static int wallpaper_test_entered, wallpaper_test_release;
@@ -1325,7 +1326,7 @@ int main(int argc,char **argv)
     e.type=CIUKI_INPUT_BUTTON; e.code=1; e.value=e.value2=0; desk_input(&d,&e);
     struct desk_box close=desk_close_box(&d.clients[0]);
     d.mouse_x=close.x+4; d.mouse_y=close.y+4; e.value=1; desk_input(&d,&e);
-    assert(d.shell_stage==5 && d.children[0].close_ns==DESK_CLOSE_NS && d.clients[0].window);
+    assert(d.shell_stage==5 && !d.children[0].close_ns && d.clients[0].closing && d.clients[0].window); /* G3: no deadline for v2 */
     desk_flush(&d,0);
     message(&d,0,DESK_CLOSE,4);
     assert(!fake_live() && d.shell_stage==5); /* EOF alone cannot qualify exit. */
@@ -1398,6 +1399,7 @@ int main(int argc,char **argv)
     test_launch_timing();
     test_wallpaper_startup();
     test_shutdown_sequence();
+    test_end_session();
     return 0;
 }
 

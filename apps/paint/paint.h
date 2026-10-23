@@ -33,6 +33,7 @@ int paint_open_poll(void); /* 0 pending, 1 installed, negative error */
 int paint_open(const char *);
 int paint_save(const char *, enum paint_format);
 int paint_request_close(void); /* 1: unsaved prompt pending; 0: safe to close */
+void paint_decline_callback(void (*declined)(void *)); /* G3: an exit the user cancelled (host = paint_callbacks host) */
 void paint_snapshot(struct paint_state *);
 uint8_t paint_pixel(int x, int y);
 uint32_t paint_rgb(uint8_t index);

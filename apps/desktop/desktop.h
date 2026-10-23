@@ -117,6 +117,12 @@ struct desk_client {
     uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
     int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
     int accept_files;             /* fx-19: DragAcceptFiles (DESK_ACCEPT_FILES) */
+    /* G3: session_aware: the window registered for QUERY_END_SESSION;
+     * session_end: 1 send END_SESSION(1) at the end of the session, 2 the
+     * Win32 broker delivered WM_ENDSESSION (no close message); close_sent_ns:
+     * when the pending close request was sent (hung-program detection). */
+    int session_aware, session_end;
+    uint64_t close_sent_ns;
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
@@ -181,6 +187,55 @@ struct desk_power_sequence {
     uint64_t close_deadline, busy_deadline, next_try;
     struct desk_power_target targets[DESK_CLIENTS * 2];
     char text[320];
+};
+/* G3 end of session (docs/design/desktop-shell.md, "End of session"):
+ * Windows 9x WM_QUERYENDSESSION / WM_ENDSESSION. Shut Down, Restart and Log
+ * Off ask every program in turn, topmost window first; a program may show
+ * its own prompt and the session waits for the user with no deadline while
+ * the program answers PINGs. A program unresponsive for DESK_HUNG_NS (the
+ * Windows 9x HungAppTimeout, 5000 ms) gets "This program is not responding"
+ * with End Task and Cancel; a running DOS program gets the Windows 98
+ * "cannot shut down this program automatically" warning. Any veto, No or
+ * Cancel ends the session with every program still running; only when all
+ * agreed does desk_power_begin run the fx-5 power sequence. */
+#define DESK_HUNG_NS 5000000000ull
+#define DESK_SESSION_POLL_NS 20000000ull  /* Win32 broker status cadence */
+enum { DESK_SESSION_IDLE, DESK_SESSION_QUERY };
+enum { DESK_PART_WINDOW, DESK_PART_LEGACY, DESK_PART_WIN32 };
+enum { DESK_PART_WAITING, DESK_PART_QUERIED, DESK_PART_ASKING, DESK_PART_AGREED, DESK_PART_GONE };
+struct desk_session_part {
+    int kind, state, answered;
+    uint32_t window_id, pid, serial, ping; /* ping: first PING serial sent after the query */
+    uint64_t sent_ns;
+};
+/* Win32 broker seam (w32srv W32R_ENDSESSION; the values are W32R_SESSION_*). */
+#define DESK_W32_SESSION_BEGIN 1u
+#define DESK_W32_SESSION_STATUS 4u
+#define DESK_W32_SESSION_RESET 5u
+#define DESK_W32_SESSION_CANCEL 6u
+#define DESK_W32_SESSION_COMMIT 7u
+#define DESK_W32_SESSION_HOLD 0x100u   /* BEGIN flag: wait for COMMIT/CANCEL after the queries */
+#define DESK_EWX_LOGOFF 0u
+#define DESK_EWX_SHUTDOWN 1u
+#define DESK_EWX_REBOOT 2u
+#define DESK_EWX_POWEROFF 8u
+enum { DESK_W32_PENDING, DESK_W32_ENDED, DESK_W32_VETOED, DESK_W32_HELD };
+struct desk_w32_status { uint32_t state, pid, hwnd, delivered; };
+struct desk_session {
+    int state, action;
+    unsigned count, at;
+    uint32_t flags, serial;
+    struct desk_session_part parts[DESK_CLIENTS + 1];
+    uint32_t w32_pid, w32_hwnd, w32_delivered;
+    uint64_t w32_since, w32_next;
+};
+/* The "This program is not responding" (End Task, Cancel) and DOS warning
+ * (Yes, No) dialogs: one at a time, for a window close, End Task or the session. */
+enum { DESK_HANG_NONE, DESK_HANG_NOT_RESPONDING, DESK_HANG_DOS };
+struct desk_end_task {
+    int kind, window, session;
+    uint32_t pid, target;          /* target: the program's window id, 0 for a Win32 broker target */
+    char name[DESK_TITLE_MAX + 1];
 };
 struct desk_render_cache;
 struct desktop {
@@ -324,6 +379,10 @@ struct desktop {
     void (*media_sound)(struct desktop *, int connected);
     struct desk_shell sh;
     struct desk_power_sequence power;
+    struct desk_session session;   /* G3: the end-of-session queries before power */
+    struct desk_end_task end_task;
+    /* G3: the Win32 end-session broker; NULL or an error: no Win32 programs to ask. */
+    int (*w32_session)(struct desktop *, unsigned action, uint32_t flags, struct desk_w32_status *);
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
     void (*sound_event)(struct desktop *, unsigned event);
@@ -432,6 +491,13 @@ void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
+void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */
+void desk_session_tick(struct desktop *);
+void desk_session_cancel(struct desktop *);
+uint64_t desk_session_deadline(const struct desktop *);  /* next session/hung-close turn, 0 none */
+int desk_session_busy(const struct desktop *);             /* a session query or the power sequence runs */
+void desk_end_task_open(struct desktop *, int kind, int session, uint32_t pid, uint32_t target, const char *name);
+void desk_end_task_choice(struct desktop *, int end);       /* 1 End Task / Yes, 0 Cancel / No */
 void desk_power_begin(struct desktop *, int action);
 void desk_power_tick(struct desktop *);
 void desk_power_cancel(struct desktop *);
