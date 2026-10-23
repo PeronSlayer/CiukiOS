@@ -501,11 +501,11 @@ void devices_snapshot(struct ciuki_devices_info *out)
         activation(d, "input"); owner_resources(d, "i8042"); owner_resources(d, "firmware-input"); owner_resources(d, "input");
     }
     for (unsigned c = 0; c < ATA_CHANNELS; c++) {
-        const char *owner = c ? "ata1" : "ata0";
+        const char *owner = ata_channel_owner(c);
         bool present = false;
         for (unsigned unit = 0; unit < ATA_DEVICES; unit++) if (ata_inventory_get(c, unit)) present = true;
         d = append(out, 0x40000 + c, CIUKI_DEVICE_SYSTEM, CIUKI_BUS_LEGACY,
-            c ? "Secondary ATA channel" : "Primary ATA channel", "ata-pio",
+            c>=2 ? "Add-in ATA channel" : c ? "Secondary ATA channel" : "Primary ATA channel", "ata-pio",
             present ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, "No identified units.");
         activation(d, "ata"); owner_resources(d, owner);
         for (unsigned unit = 0; unit < ATA_DEVICES; unit++) {
@@ -514,11 +514,13 @@ void devices_snapshot(struct ciuki_devices_info *out)
             d = append(out, 0x40100 + c * 2 + unit, disk->atapi ? CIUKI_DEVICE_CDROM : CIUKI_DEVICE_DISK,
                 CIUKI_BUS_LEGACY, disk->model, "ata-pio", disk->block.quarantined || disk->channel->quiescing ?
                 CIUKI_DEVICE_QUARANTINED : CIUKI_DEVICE_READY, disk->atapi ?
-                disk->media==ATAPI_NO_MEDIUM ? "no_medium_or_ejected" : disk->media==ATAPI_READY ? "media_ready" : "media_unavailable" : "Identified ATA/ATAPI unit.");
+                disk->media==ATAPI_NO_MEDIUM ? "no_medium_or_ejected" : disk->media==ATAPI_READY ? "media_ready" : "media_unavailable" :
+                disk->raid_reason ? disk->raid_reason : "Identified ATA/ATAPI unit.");
             if (d) { d->slot = c; d->function = unit; d->generation = disk->generation; }
             activation(d, "ata"); owner_resources(d, owner);
             if (d && d->state == CIUKI_DEVICE_READY && !disk->atapi) {
-                static const char *const chips[] = {"firmware", "PIIX/ICH", "VIA", "SiS", "ALi", "NVIDIA"};
+                static const char *const chips[] = {"firmware", "PIIX/ICH", "VIA", "SiS", "ALi", "NVIDIA",
+                    "Promise old", "Promise TX", "HPT36x", "HPT37x", "HPTN"};
                 unsigned family = disk->channel->chipset.family;
                 const char *chip = family < ARRAY_SIZE(chips) ? chips[family] : "unknown";
                 unsigned revision = disk->channel->pci ? disk->channel->pci->revision : 0;

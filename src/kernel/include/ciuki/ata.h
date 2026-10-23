@@ -8,7 +8,7 @@
 #include "ata_chipset.h"
 #include "../../fs/blkdev.h"
 
-#define ATA_CHANNELS 2u
+#define ATA_CHANNELS 8u
 #define ATA_DEVICES 2u
 #define ATA_COMMAND_MS 30000u
 #define ATA_FLUSH_MS 60000u
@@ -61,6 +61,8 @@ struct ata_device {
     uint8_t multiple_max, multiple_sectors;
     bool issued;
     bool dma_enabled, dma_quarantined, dma_configuring;
+    bool raid_checked, raid_member;
+    const char *raid_reason;
     uint8_t udma_mode;
     int8_t firmware_udma;            /* measured before the discovery SRST */
     uint64_t dma_requests, dma_bytes, dma_bounces, dma_errors;
@@ -89,6 +91,16 @@ struct ata_device {
 struct ata_channel {
     struct ata_chipset chipset;
     const struct pci_func *pci;
+    const struct ata_addin_ops *addin_ops;
+    void *addin_ctx;
+    volatile uint8_t *mmio;
+    uint32_t mmio_phys;
+    uint16_t addin_base;
+    int addin_claim;
+    gen_t addin_generation;
+    int peer_claims[2];
+    gen_t peer_generations[2];
+    bool addin_fault;
     unsigned index;
     bool native_irq, native_irq_attached, modes_published;
     uint8_t selected_shadow;
@@ -115,6 +127,11 @@ struct ata_channel {
     const char *fault_cause;        /* f1-92: cause carried from DMA to channel fault */
     bool native, stopped, discovered, quiescing;
 };
+
+const char *ata_channel_owner(unsigned);
+/* f9 must consult this before offering a raw installation target. Add-in
+ * controllers remain false until the lead's separate hardware qualification. */
+bool ata_setup_install_allowed(const struct ata_device *);
 
 int ata_channel_setup(struct ata_channel *channel, unsigned index,
                       const struct ata_port_ops *ops, void *ctx);

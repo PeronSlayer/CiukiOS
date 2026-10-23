@@ -685,6 +685,69 @@ contracts. SATA378 in the owner's names is not authorization to treat it as
 a PDC2027x. AHCI is a separate native SATA interface outside the current
 hardware baseline, even on a late-period board; no AHCI directive is proposed.
 
+#### f1-123 add-in PATA contract
+
+The f1-108 boot-only transaction and failure rules also apply to Promise and
+HighPoint. Exact PCI IDs/revisions select a backend, including RAID/other-storage
+class functions with native resources; no option-ROM array is assembled. SATA378
+and unrelated IDs remain excluded. HPT366/368 exposes one channel per function;
+HPT374 exposes two per function. Inventory is bounded at eight channels (six
+additional native channels), with sixteen storage slots. Excess functions are
+reported and left untouched. ISA compatibility aliases remain unique.
+
+PDC20246/62/65/67 and HighPoint use native I/O BARs. PDC20268/69/71/75/76/77
+uses the donor's BAR5 16-KiB MMIO aperture, sparse task-file offsets and MMIO
+BMIDE; it must never be probed as SFF I/O. Claim before mapping, map uncached,
+reject invalid decode, wrap, alignment, unqualified PCI IRQs and resource aliases.
+Both I/O task-file apertures are claimed before a shared clock can change.
+Releasing a shared BMIDE/MMIO claim requires every channel to prove quiescence.
+Clean MMIO release revokes the shared mapping and makes retained adapters inert;
+uncertain DMA retains the mapping and claims in quarantine.
+Do not size BARs live. Serialize controller-wide clock work and commands before
+publication and at runtime. PDC20265 behind an Intel i960 RAID bridge is refused.
+
+Promise old chips use the donor's DMA timing masks and 33/66 MHz transfer clock
+switch with PIO clock restoration; EXT DMA receives its direction/word count.
+PDC20246 uses PIO for EXT commands. PDC2027x measures its split down-counter,
+checks a 5–70 MHz PLL input, programs 100/133 MHz and waits for stabilization.
+133-MHz chips repair both PIO and UDMA timing after SET FEATURES hardware
+autotiming; slave UDMA6 is conservatively capped at 5. HighPoint selects 25/33/40
+MHz HPT36x tables or measured 33/50/66 MHz HPT37x tables with bounded DPLL
+calibration; N variants use the DPLL clock and donor timing masks. Preserve
+command/PIO fields unless a clock change requires a complete PIO0 rebase.
+Drive model errata, valid IDENTIFY and both cable endpoints constrain UDMA.
+Unknown clocks retain firmware PIO only before any clock mutation; a failed
+clock/programming/readback transaction quarantines the function. Never retry
+uncertain DMA through PIO or BIOS. No new panic path.
+
+Before block publication, read metadata using PIO only: dmraid Promise end
+offsets (including secondary copies and the large-disk absolute location),
+HighPoint sector 9 and capacity minus 11. Recognized signatures, including
+broken/stale metadata, quarantine that unit and remove all single-disk write,
+flush and emergency-write entry points. Failed metadata reads quarantine the
+channel; an unreadable/too-small disk cannot qualify as plain. Every disk on
+these add-in controllers is screened, regardless of PCI storage subclass.
+Plain disks use the existing partition/mount path. Setup installation to these
+controllers remains forbidden until the lead records later physical qualification.
+
+Primary donors are Linux v6.12
+[`pata_pdc202xx_old.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_pdc202xx_old.c),
+[`pata_pdc2027x.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_pdc2027x.c),
+[`pata_hpt366.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_hpt366.c),
+[`pata_hpt37x.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_hpt37x.c),
+[`pata_hpt3x2n.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_hpt3x2n.c)
+and `include/linux/pci_ids.h`. Metadata locations/signatures are checked against
+dmraid [`pdc.h`](https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/pdc.h),
+[`pdc.c`](https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/pdc.c),
+[`hpt37x.h`](https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/hpt37x.h),
+[`hpt45x.h`](https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/hpt45x.h).
+The compatible FreeBSD signature is checked against
+[`md_promise.c`, releng/14.2](https://github.com/freebsd/freebsd-src/blob/releng/14.2/sys/geom/raid/md_promise.c).
+The local Resource Kit `wrkc10_6.htm` and `wrkc26_11.htm` confirm the need for
+controller-specific drivers in addition to drive DMA capability. Host models
+verify software/register sequencing; PLL/cable/electrical and installation
+qualification remains the lead's responsibility.
+
 ## Port size, host adapters and tests
 
 Estimates below are engineering ranges for **new/adapted Ciuki code**, not

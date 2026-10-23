@@ -229,7 +229,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"
 "$out/pmm_contig_test"
 "$out/ata_test"
-for family in piix via sis ali nv resources transaction; do
+for family in piix via sis ali nv resources transaction addin-promise addin-highpoint addin-resources addin-raid addin-faults addin-transactions; do
     "$out/ata_test" "$family"
 done
 

@@ -15,6 +15,7 @@
 #include <ciuki/work.h>
 #include <ciuki/ata.h>
 #include <ciuki/timing.h>
+#include <ciuki/mm.h>
 
 #define ATA_ERR 0x01u
 #define ATA_DRQ 0x08u
@@ -28,33 +29,85 @@
 static struct ata_channel channels[ATA_CHANNELS];
 static int ata_emergency_write(struct blkdev *,uint64_t,const void *);
 static bool initialized;
-static const char *const owners[ATA_CHANNELS] = { "ata0", "ata1" };
+static int command_data(struct ata_device *, uint64_t, uint32_t, uint8_t *, bool);
+static const char *const owners[ATA_CHANNELS] = { "ata0", "ata1", "ata2", "ata3", "ata4", "ata5", "ata6", "ata7" };
+static struct kmutex addin_mutex;
+static bool addin_mutex_ready;
+static void ata_lock(struct ata_channel *c)
+{
+    if(!ata_addin_match(c->pci)) {kmutex_lock(&c->mutex);return;}
+    if((uintptr_t)&addin_mutex<(uintptr_t)&c->mutex) {
+        kmutex_lock(&addin_mutex);kmutex_lock(&c->mutex);
+    } else {kmutex_lock(&c->mutex);kmutex_lock(&addin_mutex);}
+}
+static void ata_unlock(struct ata_channel *c)
+{
+    if(!ata_addin_match(c->pci)) {kmutex_unlock(&c->mutex);return;}
+    if((uintptr_t)&addin_mutex<(uintptr_t)&c->mutex) {
+        kmutex_unlock(&c->mutex);kmutex_unlock(&addin_mutex);
+    } else {kmutex_unlock(&addin_mutex);kmutex_unlock(&c->mutex);}
+}
+int ata_addin_wait(struct ata_channel *c, unsigned ms)
+{
+    if(c->native) {task_sleep_ms(ms);return 0;}
+    for(unsigned i=0;i<ms;i++) if(c->ops->delay_us(c->port_ctx,1000)) return -FS_EIO;
+    return 0;
+}
+const char *ata_channel_owner(unsigned i) { return i<ATA_CHANNELS ? owners[i] : "ata?"; }
+bool ata_setup_install_allowed(const struct ata_device *d)
+{
+    return d && !ata_addin_match(d->channel->pci) && !d->raid_member && !d->block.quarantined;
+}
+static unsigned mmio_port(struct ata_channel *c, unsigned p)
+{
+    static const uint8_t offsets[]={0,5,10,15,16,21,26,31};
+    return p>=c->base && p<c->base+8u ? c->base+offsets[p-c->base] : p;
+}
 void proc_launch_dma_read(uint32_t bytes, uint64_t ms, bool bounce);
 #pragma weak proc_launch_dma_read
 
-static uint8_t native_in8(void *ctx, uint16_t p) { (void)ctx; return inb(p); }
-static void native_out8(void *ctx, uint16_t p, uint8_t v) { (void)ctx; outb(p, v); }
+static uint8_t native_in8(void *ctx, uint16_t p) {
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio && p!=0xcfc) return 0xff;
+    return c && c->mmio && p!=0xcfc ? c->mmio[mmio_port(c,p)] : inb(p);
+}
+static void native_out8(void *ctx, uint16_t p, uint8_t v) {
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio && p!=0xcfc) return;
+    /* Flush posted task-file writes with Alternate Status. Reading back
+     * the Command address would read Status and acknowledge INTRQ. */
+    if(c && c->mmio && p!=0xcfc) {c->mmio[mmio_port(c,p)]=v;(void)c->mmio[c->control];}
+    else outb(p,v);
+}
 static uint16_t native_in16(void *ctx, uint16_t p)
 {
-    (void)ctx;
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio && p!=0xcfc) return 0xffff;
+    if(c && c->mmio && p!=0xcfc) return *(volatile uint16_t *)(c->mmio+mmio_port(c,p));
     uint16_t v;
     __asm__ volatile("inw %1, %0" : "=a"(v) : "Nd"(p));
     return v;
 }
 static void native_out16(void *ctx, uint16_t p, uint16_t v)
 {
-    (void)ctx;
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio && p!=0xcfc) return;
+    if(c && c->mmio && p!=0xcfc) {*(volatile uint16_t *)(c->mmio+mmio_port(c,p))=v;return;}
     __asm__ volatile("outw %0, %1" :: "a"(v), "Nd"(p));
 }
 static uint64_t native_now(void *ctx) { (void)ctx; return deadline_after_ms(0); }
 static void native_insw(void *ctx, uint16_t port, void *buffer, uint32_t words)
 {
-    (void)ctx;
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio) return;
+    if(c && c->mmio) {uint8_t *b=buffer;while(words--) {fs_wr16(b,native_in16(ctx,port));b+=2;}return;}
     __asm__ volatile("cld; rep insw" : "+D"(buffer), "+c"(words) : "d"(port) : "memory");
 }
 static void native_outsw(void *ctx, uint16_t port, const void *buffer, uint32_t words)
 {
-    (void)ctx;
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio) return;
+    if(c && c->mmio) {const uint8_t *b=buffer;while(words--) {native_out16(ctx,port,fs_rd16(b));b+=2;}return;}
     __asm__ volatile("cld; rep outsw" : "+S"(buffer), "+c"(words) : "d"(port) : "memory");
 }
 static uint64_t native_deadline(void *ctx, uint64_t d) { (void)ctx; return d; }
@@ -138,8 +191,9 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
     if (!c || index >= ATA_CHANNELS || !ops || !ops->in8 || !ops->out8 || !ops->in16 ||
         !ops->out16 || !ops->now_ms || !ops->deadline_ticks || !ops->delay_us)
         return -FS_EINVAL;
-    if ((c == &channels[0] || c == &channels[1]) && (c->native || c->discovered || c->stopped))
-        return -FS_EQUARANTINED;    /* exported fake setup cannot rearm a real controller */
+    for(unsigned i=0;i<ATA_CHANNELS;i++)
+        if(c==&channels[i] && (c->native || c->discovered || c->stopped)) return -FS_EQUARANTINED;
+    if(!addin_mutex_ready) {kmutex_init(&addin_mutex);addin_mutex_ready=true;}
     memset(c, 0, sizeof(*c));
     c->ops = ops;
     c->index = index;
@@ -149,9 +203,11 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
     c->control = index ? 0x376 : 0x3f6;
     c->irq = index ? 15 : 14;
     c->dma.claim = -1;
+    c->addin_claim = -1;
+    c->peer_claims[0]=c->peer_claims[1]=-1;
     c->control_shadow = ATA_NIEN;   /* ATA-6: all other implemented bits zero */
     kmutex_init(&c->mutex);
-    blk_queue_init(&c->requests,index ? "ata1" : "ata0",BLKREQ_COMMAND_BYTES);
+    blk_queue_init(&c->requests,owners[index],BLKREQ_COMMAND_BYTES);
     kwait_init(&c->wait);
     for (unsigned i = 0; i < 3; i++)
         c->claims[i] = -1;
@@ -192,7 +248,7 @@ static bool ata_pci_interrupt(unsigned irq, const char *owner)
         struct ata_channel *c = &channels[i];
         if (!c->native_irq || c->irq != irq || strncmp(owner, owners[i], 5) || !c->dma.ops) continue;
         uint8_t s = c->dma.ops->in8(c->dma.ctx, (uint16_t)(c->dma.base + 2));
-        if (!(s & ATA_BM_IRQ)) return false;
+        if (!ata_addin_irq_pending(c)) return false;
         bool armed = c->dma.armed;
         ata_channel_irq(c);
         if (!armed) c->dma.ops->out8(c->dma.ctx, (uint16_t)(c->dma.base + 2), (s & 0x60) | ATA_BM_IRQ);
@@ -244,6 +300,13 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
     c->stopped = true;
     for (unsigned i = 0; i < ATA_DEVICES; i++)
         c->devices[i].block.quarantined = true;
+    if(c->native && ata_addin_match(c->pci)) for(unsigned j=0;j<ATA_CHANNELS;j++) {
+        struct ata_channel *peer=&channels[j];
+        if(peer!=c && peer->pci==c->pci) {
+            peer->stopped=true;
+            for(unsigned u=0;u<ATA_DEVICES;u++) peer->devices[u].block.quarantined=true;
+        }
+    }
     device_control(c, c->control_shadow | ATA_NIEN);
     if (c->native) {
         if (!c->native_irq) pic_mask(c->irq);
@@ -251,6 +314,8 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
             if (c->claims[i] >= 0)
                 registry_quarantine(c->claims[i], c->generations[i]);
         if (c->dma.claim >= 0) registry_quarantine(c->dma.claim, c->dma.generation);
+        if (c->addin_claim >= 0) registry_quarantine(c->addin_claim, c->addin_generation);
+        for(unsigned i=0;i<2;i++) if(c->peer_claims[i]>=0) registry_quarantine(c->peer_claims[i],c->peer_generations[i]);
         klog("[ata%u] fault unit=%u command=%02x issued=%u status=%02x error=%02x elapsed_ms=%llu cause=%s",
              c->index, d->unit, d->command, d->issued, d->status, d->error, d->elapsed_ms, cause);
     }
@@ -764,6 +829,7 @@ int atapi_start(struct ata_device *d)
 static int atapi_check_block(struct blkdev *b) { return atapi_ready(b->ctx); }
 static int identify_packet(struct ata_device *d)
 {
+    if(ata_addin_match(d->channel->pci)) return -FS_EOPNOTSUPP;
     struct ata_channel *c = d->channel; uint8_t data[512];
     uint64_t start = now(c), deadline = start + ATAPI_COMMAND_MS; uint32_t sequence;
     d->issued = false;
@@ -924,7 +990,7 @@ static int identify(struct ata_device *d)
     if (mode >= 0 && d->lba48 && c->chipset.no_lba48_dma) {
         /* This transport always uses EXT commands on LBA48 disks. ALi C2-C4
          * cannot DMA those commands, even for low addresses. */
-        mode = -1; c->chipset.reason = "ali_lba48_pio";
+        mode = -1; c->chipset.reason = c->chipset.family==ATA_CHIP_PDC_OLD ? "promise_ext_pio" : "ali_lba48_pio";
     }
     if (mode >= 0 && negotiated) {
         e = ata_chipset_program(c, &plan);
@@ -949,6 +1015,10 @@ static int identify(struct ata_device *d)
         d->dma_configuring = false;
         disarm(c);
         if (c->stopped) return e;
+        if(!e && negotiated && ata_addin_post_mode(d)) {
+            c->fault_cause="promise_autotiming_readback";
+            return failure(d,now(c),alternate(c));
+        }
         if (!e && negotiated) e = verify_udma(d, mode, data);
         if (c->stopped) return e;
         d->dma_enabled = !e;
@@ -956,11 +1026,12 @@ static int identify(struct ata_device *d)
                       c->index, d->udma_mode, d->unit, c->dma.base,
                       (!negotiated || c->chipset.cable80) && (fs_rd16(data + 93 * 2) & 0xe000) == 0x6000, ATA_DMA_BYTES);
     }
-    klog("[ata%u] chipset family=%u pci=%04x:%04x revision=%02x native=%u unit=%u mode=%s reason=%s",
+    klog("[ata%u] chipset family=%u pci=%04x:%04x revision=%02x native=%u unit=%u mode=%s reason=%s clock_mhz=%u cable80=%u",
          c->index, c->chipset.family, c->pci ? c->pci->vendor : 0, c->pci ? c->pci->device : 0,
          c->pci ? c->pci->revision : 0, c->native_irq, d->unit,
          d->dma_enabled ? "udma" : "pio", d->dma_enabled ? (negotiated ? "negotiated" : "firmware_restore") :
-         !c->dma.ops ? "bm_unavailable" : negotiated ? c->chipset.reason : "firmware_mode_unavailable");
+         !c->dma.ops ? "bm_unavailable" : negotiated ? c->chipset.reason : "firmware_mode_unavailable",
+         c->chipset.clock_mhz,c->chipset.cable80);
     d->elapsed_ms = now(c) - start;
     return 0;
 }
@@ -1061,22 +1132,73 @@ static int read_reset_signature(struct ata_device *d, struct reset_signature *si
     }
 }
 
+static int ata_raid_screen(struct ata_device *d)
+{
+    uint64_t locations[54]; uint8_t data[512];
+    unsigned count=ata_raid_locations(d->block.capacity,locations,ARRAY_SIZE(locations));
+    bool dma=d->dma_enabled;d->dma_enabled=false;
+    int e=count ? 0 : -FS_EIO;
+    for(unsigned i=0;i<count && !e;i++) {
+        e=command_data(d,locations[i],1,data,false);
+        if(e) break;
+        d->raid_reason=ata_raid_signature(data);
+        if(d->raid_reason) {d->raid_member=true;break;}
+    }
+    d->raid_checked=!e;
+    d->dma_enabled=dma && !e && !d->raid_member;
+    if(e || d->raid_member) {
+        d->block.quarantined=true;
+        d->block.write=0;d->block.request_write=0;d->block.flush=0;
+        d->block.request_flush=0;d->block.emergency_write=0;
+        if(e) d->raid_reason="raid_metadata_unreadable";
+    }
+    klog("[ata%u] unit=%u raid=%s reason=%s setup_install=unqualified",
+        d->channel->index,d->unit,e ? "unknown" : d->raid_member ? "member" : "plain",
+        d->raid_reason ? d->raid_reason : "metadata_absent");
+    return e;
+}
 int ata_channel_discover(struct ata_channel *c)
 {
     if (!c || !c->ops)
         return -FS_EINVAL;
-    kmutex_lock(&c->mutex);
+    ata_lock(c);
     if (c->discovered || c->stopped || c->quiescing) {
         int e = c->stopped || c->quiescing ? -FS_EQUARANTINED : 0;
-        kmutex_unlock(&c->mutex);
+        ata_unlock(c);
         return e;
     }
     c->discovered = true;
     int e = 0;
+    bool addin=ata_addin_match(c->pci);
+    if(addin) {
+        for(unsigned i=0;c->native && i<c->index;i++) if(channels[i].pci==c->pci) {
+            struct ata_chipset *p=&channels[i].chipset;
+            if(channels[i].stopped) {e=-FS_EQUARANTINED;break;}
+            if(p->prepared) {
+                c->chipset.prepared=true;c->chipset.layout=p->layout;
+                c->chipset.clock_mhz=p->clock_mhz;c->chipset.maximum=p->maximum;
+                c->chipset.pci_mhz=p->pci_mhz;
+            }
+        }
+        if(c->native && c->pci->vendor==0x1103 && c->pci->device==8 && (c->pci->fn&1))
+            for(unsigned i=0;i<c->index;i++) {
+                const struct ata_channel *p=&channels[i];
+                if(p->pci && p->pci->bus==c->pci->bus && p->pci->dev==c->pci->dev &&
+                    p->pci->fn+1==c->pci->fn && !p->stopped && p->chipset.prepared)
+                    c->chipset.pci_mhz=p->chipset.pci_mhz;
+            }
+        if(!e) e=ata_addin_prepare(c);
+        if(e) {
+            c->fault_cause="addin_prepare";
+            klog("[ata%u] mode=pio unavailable=1 reason=%s clock_mhz=%u",c->index,c->chipset.reason,c->chipset.clock_mhz);
+            failure(&c->devices[0],now(c),alternate(c));
+            ata_unlock(c);return e;
+        }
+    }
     if (c->dma.ops) {
         device_control(c, c->control_shadow | ATA_NIEN);
         for (unsigned i = 0; i < ATA_DEVICES && !e; i++) e = firmware_mode(&c->devices[i]);
-        if (e) { kmutex_unlock(&c->mutex); return e; }
+        if (e) { ata_unlock(c); return e; }
     }
     /* 9.2: SRST >=5 us, then >=2 ms before inspecting reset signature.
      * Discovery is the only reset; failures never rearm native channels. */
@@ -1106,6 +1228,7 @@ int ata_channel_discover(struct ata_channel *c)
         reg_write(c, 6, (uint8_t)(0xa0 | i << 4));
         if (pace(c)) { e = failure(d, start, alternate(c)); break; }
         if (packet_signature(sig[i].value)) {
+            if(addin) {klog("[ata%u] unit=%u reason=addin_plain_disk_only",c->index,i);continue;}
             d->present = d->atapi = true;
             e = identify_packet(d);
             if (e == -FS_EOPNOTSUPP) { e = 0; continue; }
@@ -1124,9 +1247,16 @@ int ata_channel_discover(struct ata_channel *c)
         if (!e)
             found++;
     }
+    /* No member or unexamined disk reaches a request worker or a mount. */
+    for(unsigned i=0;addin && i<ATA_DEVICES && !e;i++) {
+        struct ata_device *d=&c->devices[i];
+        if(!d->identified || d->atapi) continue;
+        e=ata_raid_screen(d);
+        if(d->raid_member) found--;
+    }
     if (e && !c->stopped)
         e = failure(&c->devices[0], start, alternate(c));
-    kmutex_unlock(&c->mutex);
+    ata_unlock(c);
     return e ? e : found;
 }
 
@@ -1235,6 +1365,13 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     if (dma) {
         e = ata_dma_prepare(c, buf, n * 512, write);
         if (e) return dma_failure(d, start, alternate(c));
+        if(ata_addin_dma_begin(d,n*512,write)) {
+            c->fault_cause="addin_dma_clock";
+            /* A failed clock change cannot authorize the generic PIO retry. */
+            (void)ata_dma_stop(c);c->dma.armed=false;
+            ata_dma_finish(c,buf,write,false);
+            return failure(d,start,alternate(c));
+        }
     }
     device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
     /* 6.20/8.35/8.63: LBA48 high-order task file first, then low-order.
@@ -1331,12 +1468,14 @@ static int ata_transfer(struct blkdev *b, uint64_t lba, uint32_t n, void *buf, b
         return e ? e : -FS_EINVAL;
     struct ata_device *d = b->ctx;
     struct ata_channel *c = d->channel;
-    kmutex_lock(&c->mutex);
+    ata_lock(c);
+    bool addin=ata_addin_match(c->pci);
     /* Recheck after sleeping behind a failed request. No port write on
      * invalid/quarantined requests, including requests queued on a sibling. */
     e = blkdev_range(b, lba, n);
     if (!e && (!d->identified || c->stopped || c->quiescing))
         e = -FS_EQUARANTINED;
+    if(!e && addin && (!d->raid_checked || d->raid_member)) e=-FS_EQUARANTINED;
     uint8_t *p = buf;
     while (!e && n) {
         /* f1-92: a cancelled or out-of-budget request stops here, between
@@ -1374,7 +1513,7 @@ static int ata_transfer(struct blkdev *b, uint64_t lba, uint32_t n, void *buf, b
         if (n)
             task_yield();
     }
-    kmutex_unlock(&c->mutex);
+    ata_unlock(c);
     return e;
 }
 
@@ -1391,8 +1530,10 @@ static int ata_flush(struct blkdev *b)
     if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     struct ata_device *d = b->ctx;
     struct ata_channel *c = d->channel;
-    kmutex_lock(&c->mutex);
+    ata_lock(c);
+    bool addin=ata_addin_match(c->pci);
     int e = b->quarantined || c->stopped || c->quiescing ? -FS_EQUARANTINED : 0;
+    if(!e && addin && (!d->raid_checked || d->raid_member)) e=-FS_EQUARANTINED;
     if (!e) {
         /* 8.12.8 permits >30 s; f1-acceptance sets a 60 s flush limit. */
         uint64_t start = now(c), deadline = start + ATA_FLUSH_MS;
@@ -1410,7 +1551,7 @@ static int ata_flush(struct blkdev *b)
         disarm(c);
         d->elapsed_ms = now(c) - start;
     }
-    kmutex_unlock(&c->mutex);
+    ata_unlock(c);
     return e;
 }
 
@@ -1429,7 +1570,7 @@ static int emergency_poll(struct ata_channel *c, uint8_t required) {
 }
 static int ata_emergency_write(struct blkdev *b,uint64_t lba,const void *data) {
     struct ata_device *d=b->ctx;struct ata_channel *c=d->channel;
-    if ((read_eflags()&0x200) || !data || blkdev_range(b,lba,1) || !d->identified || d->atapi ||
+    if (ata_addin_match(c->pci) || (read_eflags()&0x200) || !data || blkdev_range(b,lba,1) || !d->identified || d->atapi ||
         c->stopped || c->quiescing || c->active || c->mutex.owner || c->dma.armed)
         return -FS_EBUSY;
     if (c->dma.ops && ((c->dma.ops->in8(c->dma.ctx,c->dma.base)&1) ||
@@ -1498,15 +1639,28 @@ bool ata_channel_idle(struct ata_channel *c)
 
 bool ata_registry_idle(int handle, gen_t generation)
 {
+    bool matched=false, idle=true;
     for (unsigned i = 0; i < ATA_CHANNELS; i++) {
         struct ata_channel *c = &channels[i];
-        if (c->native && c->dma.claim == handle && gen_matches(c->dma.generation, generation))
-            return ata_channel_idle(c);
+        if(!c->native) continue;
+        bool owns=(c->dma.claim==handle && gen_matches(c->dma.generation,generation)) ||
+            (c->addin_claim==handle && gen_matches(c->addin_generation,generation));
         for (unsigned j = 0; j < 3; j++)
-            if (c->native && c->claims[j] == handle && gen_matches(c->generations[j], generation))
-                return ata_channel_idle(c);
+            if(c->claims[j]==handle && gen_matches(c->generations[j],generation)) owns=true;
+        if(owns) {
+            matched=true;
+            if(!(c->quiescing && c->mmio_phys && !c->mmio) && !ata_channel_idle(c)) idle=false;
+        }
     }
-    return false;
+    if(matched && idle) for(unsigned i=0;i<ATA_CHANNELS;i++) {
+        struct ata_channel *c=&channels[i];
+        if(c->native && c->mmio && c->addin_claim==handle && gen_matches(c->addin_generation,generation)) {
+            volatile uint8_t *mapped=c->mmio;
+            vmm_revoke_mmio((void *)mapped,0x4000);
+            for(unsigned j=0;j<ATA_CHANNELS;j++) if(channels[j].mmio==mapped) channels[j].mmio=0;
+        }
+    }
+    return matched && idle;
 }
 
 static int claim_channel(struct ata_channel *c, unsigned index)
@@ -1516,6 +1670,13 @@ static int claim_channel(struct ata_channel *c, unsigned index)
     uint32_t ends[3] = { c->base + 8u, c->control + 1u, c->irq + 1u };
     if (c->native_irq) { starts[1] -= 2; ends[1] = starts[1] + 4; }
     for (unsigned i = 0; i < 3; i++) {
+        if(c->mmio_phys && i<2) {
+            c->claims[i]=c->addin_claim;c->generations[i]=c->addin_generation;continue;
+        }
+        if(ata_addin_match(c->pci) && i<2) {
+            if(c->claims[i]<0) return -FS_EINVAL;
+            continue; /* Both channels were claimed before any clock mutation. */
+        }
         int h = registry_claim(types[i], starts[i], ends[i], owners[index], i == 2 && c->native_irq);
         if (h < 0) {
             /* Registry has no CLAIMED -> RELEASED rollback interface.
@@ -1533,20 +1694,89 @@ static int claim_channel(struct ata_channel *c, unsigned index)
 static int ata_bind_resources(struct ata_channel *c, unsigned index)
 {
     const struct pci_func *selected = 0;
+    unsigned local=index;
+    if(index>=2) {
+        unsigned slot=2;
+        for(unsigned j=0;j<pci_count();j++) {
+            const struct pci_func *p=pci_get(j);
+            if(!ata_addin_match(p)) continue;
+            unsigned n=ata_addin_channels(p);
+            if(index>=slot && index<slot+n) {
+                if(slot+n>ATA_CHANNELS) return -FS_EOPNOTSUPP;
+                selected=p;local=index-slot;break;
+            }
+            slot+=n;
+        }
+        if(!selected) return -FS_EOPNOTSUPP;
+    }
+    if(index<2)
     for (unsigned j = 0; j < pci_count(); j++) {
         const struct pci_func *p = pci_get(j);
+        if(ata_addin_match(p)) continue;
         if (p->class_code != 1 || p->subclass != 1 || (p->header_type & 0x7f)) continue;
         if (selected) return -FS_EBUSY; /* never probe an ambiguous legacy alias */
         selected = p;
     }
     if (!selected) return 0; /* actual ISA compatibility controller */
     struct ata_resources r;
-    bool native_irq = !!(selected->prog_if & (1u << (2 * index)));
-    int e = ata_pci_resources(selected, index, native_irq && pci_irq_routed(selected), &r);
+    bool native_irq = ata_addin_match(selected) || !!(selected->prog_if & (1u << (2 * local)));
+    int e = ata_pci_resources(selected, local, native_irq && pci_irq_routed(selected), &r);
     if (e) return e;
     c->pci = selected; c->native_irq = r.native_irq;
     c->base = r.base; c->control = r.control; c->irq = r.irq;
+    c->mmio_phys=r.mmio;
+    c->addin_base=(uint16_t)(r.bm-8*local);
+    c->chipset.channel=local;
     return 0;
+}
+
+static int addin_claim(struct ata_channel *c)
+{
+    if(!ata_addin_match(c->pci)) return 0;
+    for(unsigned i=0;i<c->index;i++) if(channels[i].pci==c->pci && channels[i].addin_claim>=0) {
+        struct ata_channel *peer=&channels[i];
+        if(peer->stopped) return -FS_EQUARANTINED;
+        c->addin_claim=peer->addin_claim;c->addin_generation=peer->addin_generation;
+        for(unsigned k=0;k<2;k++) {c->claims[k]=peer->peer_claims[k];c->generations[k]=peer->peer_generations[k];}
+        c->mmio=peer->mmio; return 0;
+    }
+    unsigned base=c->mmio_phys ? c->mmio_phys : c->addin_base;
+    unsigned size=c->mmio_phys ? 0x4000 : c->pci->vendor==0x1103 ? 256 : 64;
+    int h=registry_claim(c->mmio_phys ? RES_MMIO : RES_PORT,base,base+size,owners[c->index],false);
+    if(h<0) return h;
+    c->addin_claim=h;c->addin_generation=registry_get((unsigned)h)->generation;
+    if(!c->mmio_phys) {
+        int error=0;
+        for(unsigned ch=0;ch<ata_addin_channels(c->pci) && !error;ch++) {
+            struct ata_resources r;
+            error=ata_addin_resources(c->pci,ch,true,&r);
+            for(unsigned k=0;k<2 && !error;k++) {
+                unsigned start=k ? r.control-2u : r.base, size=k ? 4 : 8;
+                int handle=registry_claim(RES_PORT,start,start+size,owners[c->index+ch],false);
+                if(handle<0) {error=handle;break;}
+                gen_t gen=registry_get((unsigned)handle)->generation;
+                if(ch) {c->peer_claims[k]=handle;c->peer_generations[k]=gen;}
+                else {c->claims[k]=handle;c->generations[k]=gen;}
+            }
+        }
+        if(error) {
+            for(unsigned k=0;k<2;k++) {
+                if(c->claims[k]>=0) registry_quarantine(c->claims[k],c->generations[k]);
+                if(c->peer_claims[k]>=0) registry_quarantine(c->peer_claims[k],c->peer_generations[k]);
+            }
+            registry_quarantine(h,c->addin_generation);return error;
+        }
+    }
+    if(c->mmio_phys) {
+        c->mmio=vmm_map_mmio(c->mmio_phys,0x4000,true);
+        if(!c->mmio) {registry_quarantine(h,c->addin_generation);return -FS_ENOMEM;}
+    }
+    return 0;
+}
+static int activate_once(int h, gen_t generation)
+{
+    const struct resource *r=h>=0 ? registry_get((unsigned)h) : 0;
+    return r && r->generation==generation && r->state==RS_ACTIVE ? 0 : registry_activate(h,generation);
 }
 
 int ata_init(void)
@@ -1559,19 +1789,31 @@ int ata_init(void)
     if (e)
         return e;
     initialized = true;
+    unsigned slots=2;
+    for(unsigned j=0;j<pci_count();j++) {
+        const struct pci_func *p=pci_get(j);
+        if(!ata_addin_match(p)) continue;
+        slots+=ata_addin_channels(p);
+        if(slots>ATA_CHANNELS) klog("[ata] pci=%04x:%04x bus=%u device=%u function=%u reason=channel_capacity limit=%u",
+            p->vendor,p->device,p->bus,p->dev,p->fn,ATA_CHANNELS);
+    }
     int found[ATA_CHANNELS] = {0};
     for (unsigned i = 0; i < ATA_CHANNELS; i++) {
         struct ata_channel *c = &channels[i];
         ata_channel_setup(c, i, &native_ops, 0);
+        c->port_ctx=c;
         e = ata_bind_resources(c, i);
+        if(!e) e=addin_claim(c);
         if (!e) e = claim_channel(c, i);
         if (e) {
             klog("[ata%u] mode=pio unavailable=1 reason=resources error=%d", i, e);
             c->stopped = true;
             continue;
         }
+        unsigned local=c->chipset.channel;
+        if (c->pci) ata_chipset_init(&c->chipset, c->pci, local, &ata_native_config, 0);
+        if(ata_addin_match(c->pci)) {c->addin_ops=&ata_addin_native_ops;c->addin_ctx=c;}
         ata_dma_attach(c, i);
-        if (c->pci) ata_chipset_init(&c->chipset, c->pci, i, &ata_native_config, 0);
         c->native = true;
         if (c->native_irq && !c->dma.ops) {
             failure(&c->devices[0], now(c), 0);
@@ -1602,17 +1844,17 @@ int ata_init(void)
         struct ata_channel *c = &channels[i];
         if (found[i] > 0 && !c->stopped) {
             if (blk_queue_start(&c->requests)) {
-                klog("[storage] queue name=%s worker=unavailable",i ? "ata1" : "ata0");
+                klog("[storage] queue name=%s worker=unavailable",owners[i]);
                 c->stopped=true;
                 for (unsigned unit=0;unit<ATA_DEVICES;unit++) c->devices[unit].block.quarantined=true;
                 continue;
             }
             for (unsigned j = 0; j < (c->native_irq ? 2u : 3u); j++)
-                if (registry_activate(c->claims[j], c->generations[j])) {
+                if (activate_once(c->claims[j], c->generations[j])) {
                     failure(&c->devices[0], now(c), alternate(c));
                     break;
                 }
-            if (!c->stopped && c->dma.claim >= 0 && registry_activate(c->dma.claim, c->dma.generation))
+            if (!c->stopped && c->dma.claim >= 0 && activate_once(c->dma.claim, c->dma.generation))
                 failure(&c->devices[0], now(c), alternate(c));
         }
         /* IDENTIFY completed before activation. IRQ source is off while

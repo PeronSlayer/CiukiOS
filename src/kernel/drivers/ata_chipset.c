@@ -26,6 +26,7 @@ const struct ata_config_ops ata_native_config = { ata_cfg_read, ata_cfg_write };
 
 int ata_pci_resources(const struct pci_func *p, unsigned ch, bool routed, struct ata_resources *r)
 {
+    if (ata_addin_match(p)) return ata_addin_resources(p, ch, routed, r);
     if (!p || !r || ch >= 2 || p->class_code != 1 || p->subclass != 1 ||
         (p->header_type & 0x7f) || !(p->command & 1)) return -FS_EINVAL;
     if (p->vendor == 0x8086 && (p->device == 0x248a || p->device == 0x248b) && (p->prog_if & 5))
@@ -102,6 +103,7 @@ void ata_chipset_init(struct ata_chipset *s, const struct pci_func *p, unsigned 
         .maximum = -1, .reason = "unsupported_chipset" };
     if (!p || ch >= 2 || !ops || !ops->read || !ops->write) return;
     switch (p->vendor) {
+    case 0x105a: case 0x1103: ata_addin_detect(s); break;
     case 0x8086: ata_piix_detect(s); break;
     case 0x1106: ata_via_detect(s); break;
     case 0x1039: ata_sis_detect(s); break;
@@ -147,9 +149,12 @@ int ata_chipset_plan(struct ata_chipset *s, unsigned unit, const uint8_t id[512]
         if (match) { s->reason = "via_ssd_erratum"; return -1; }
     }
     while (mode >= 0 && (supported & ((1u << (mode + 1)) - 1)) != ((1u << (mode + 1)) - 1)) mode--;
+    if (s->family >= ATA_CHIP_PDC_OLD) mode = ata_addin_limit(s, unit, id, mode);
     if (mode < 0) return -1;
     bool ok = false;
     switch (s->family) {
+    case ATA_CHIP_PDC_OLD: case ATA_CHIP_PDC_NEW: case ATA_CHIP_HPT36:
+    case ATA_CHIP_HPT37: case ATA_CHIP_HPTN: ok = ata_addin_plan(s, unit, (unsigned)mode, p); break;
     case ATA_CHIP_PIIX: ok = ata_piix_plan(s, unit, (unsigned)mode, p); break;
     case ATA_CHIP_VIA: ok = ata_via_plan(s, unit, (unsigned)mode, p); break;
     case ATA_CHIP_SIS: ok = ata_sis_plan(s, unit, (unsigned)mode, p); break;
@@ -162,6 +167,9 @@ int ata_chipset_plan(struct ata_chipset *s, unsigned unit, const uint8_t id[512]
 }
 int ata_chipset_program(struct ata_channel *c, const struct ata_timing_plan *p)
 {
+    /* Promise MMIO timing is repaired after hardware SET FEATURES autotiming. */
+    if (c && c->chipset.family == ATA_CHIP_PDC_NEW && p && !p->count)
+        return ata_addin_idle(c) && !c->modes_published ? 0 : -FS_EBUSY;
     if (!c || !p || !p->count || p->count > ATA_TIMING_WRITES || !c->chipset.pci ||
         !c->chipset.ops || !c->dma.ops || c->mutex.owner != g_current || !g_current ||
         c->active || c->dma.armed || c->dma.started || c->stopped || c->quiescing || c->modes_published)
@@ -171,7 +179,8 @@ int ata_chipset_program(struct ata_channel *c, const struct ata_timing_plan *p)
     if (!drive_status || drive_status == 0xff || (drive_status & 0x88)) return -FS_EBUSY;
     /* Both engines must be idle before touching shared PCI timing fields. */
     uint16_t base = (uint16_t)(c->dma.base - s->channel * 8);
-    for (unsigned i = 0; i < 2; i++) {
+    unsigned engines=ata_addin_match(s->pci) ? ata_addin_channels(s->pci) : 2;
+    for (unsigned i = 0; i < engines; i++) {
         unsigned port = base + i * 8;
         if ((c->dma.ops->in8(c->dma.ctx, (uint16_t)port) & 1) ||
             (c->dma.ops->in8(c->dma.ctx, (uint16_t)(port + 2)) & ATA_BM_ACTIVE)) return -FS_EBUSY;

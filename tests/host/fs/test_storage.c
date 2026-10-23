@@ -681,12 +681,12 @@ static void probe_tests(void) {
     host_mount_snapshot(s);
     CHECK(s->volumes[3].fat.type==12 && s->volumes[4].fat.type==16);
     fixture_present=fixture_absent=fat_read_not_run=fat_read_terminal_not_run=0;
-    OK(probe_fat_read()); CHECK(fixture_present==6 && fixture_absent==8);
+    OK(probe_fat_read()); CHECK(fixture_present==6 && fixture_absent==(((1u<<STORAGE_DISKS)-1)&~7u));
     CHECK(!fat_read_not_run && !fat_read_terminal_not_run);
     CHECK(!media[0].writes && !media[1].writes && !media[2].writes);
     stop(s,true); reset();
     s=start(); fixture_present=fixture_absent=fat_read_not_run=fat_read_terminal_not_run=0;
-    OK(probe_fat_read()); CHECK(!fixture_present && fixture_absent==14);
+    OK(probe_fat_read()); CHECK(!fixture_present && fixture_absent==(((1u<<STORAGE_DISKS)-1)&~1u));
     CHECK(fat_read_not_run==1 && fat_read_terminal_not_run==1);
     CHECK(!media[0].writes); stop(s,true); reset();
     s=start(); bool reboot=true; OK(storage_write_workload(s,&table,&reboot)); CHECK(!reboot);

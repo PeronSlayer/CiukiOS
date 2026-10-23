@@ -133,6 +133,10 @@ void display_driver_info(struct ciuki_display_engine_info *out)
     out->kind=CIUKI_ENGINE_SOFTWARE; strcpy(out->driver_id,"swdib"); strcpy(out->display_name,"Software renderer"); strcpy(out->reason,"no_driver"); out->cpu_ready=1;
 }
 const struct ata_device *ata_inventory_get(unsigned c, unsigned u) { return c == 0 && u == 0 && disk.identified ? &disk : NULL; }
+const char *ata_channel_owner(unsigned c) {
+    static const char *const names[]={"ata0","ata1","ata2","ata3","ata4","ata5","ata6","ata7"};
+    return c<ATA_CHANNELS ? names[c] : "ata?";
+}
 static struct process process;
 struct process *proc_current(void) { return &process; }
 static struct ciuki_devices_info user;

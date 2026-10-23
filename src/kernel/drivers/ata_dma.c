@@ -45,7 +45,11 @@ int ata_dma_mode(const uint8_t data[512])
 
 uint16_t ata_dma_pci_base(const struct pci_func *p, unsigned channel)
 {
-    if (!p || channel >= ATA_CHANNELS || p->class_code != 1 || p->subclass != 1 ||
+    if(ata_addin_match(p)) {
+        struct ata_resources r;
+        return !ata_addin_resources(p,channel,pci_irq_routed(p),&r) ? r.bm : 0;
+    }
+    if (!p || channel >= 2 || p->class_code != 1 || p->subclass != 1 ||
         (p->header_type & 0x7f) != 0 || !(p->prog_if & 0x80) ||
         !(p->command & 1)) return 0;
     uint32_t bar = p->bar[4], base = bar & ~3u;
@@ -69,9 +73,22 @@ int ata_dma_setup(struct ata_channel *c, uint16_t base, const struct ata_dma_ops
     return 0;
 }
 
-static uint8_t bm_read(void *ctx, uint16_t port) { (void)ctx; return inb(port); }
-static void bm_write(void *ctx, uint16_t port, uint8_t v) { (void)ctx; outb(port, v); }
-static void bm_write32(void *ctx, uint16_t port, uint32_t v) { (void)ctx; outl(port, v); }
+static uint8_t bm_read(void *ctx, uint16_t port) {
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio) return 0xff;
+    return c && c->mmio ? c->mmio[port] : inb(port);
+}
+static void bm_write(void *ctx, uint16_t port, uint8_t v) {
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio) return;
+    if(c && c->mmio) {c->mmio[port]=v;(void)c->mmio[port];} else outb(port,v);
+}
+static void bm_write32(void *ctx, uint16_t port, uint32_t v) {
+    struct ata_channel *c=ctx;
+    if(c && c->mmio_phys && !c->mmio) return;
+    if(c && c->mmio) {*(volatile uint32_t *)(c->mmio+port)=v;(void)*(volatile uint32_t *)(c->mmio+port);}
+    else outl(port,v);
+}
 static bool bm_physical(void *ctx, const void *buf, uint32_t bytes, bool write, uint32_t *phys)
 {
     (void)ctx;
@@ -99,35 +116,36 @@ void ata_dma_attach(struct ata_channel *c, unsigned index)
     if (index >= ATA_CHANNELS) return;
     const struct pci_func *p = 0;
     uint16_t base = 0;
+    unsigned ch=c->pci ? c->chipset.channel : index;
     for (unsigned i = 0; i < pci_count(); i++) {
         if (c->pci && pci_get(i) != c->pci) continue;
         if (!c->pci && (pci_get(i)->prog_if & (1u << (index * 2)))) continue;
-        uint16_t candidate = ata_dma_pci_base(pci_get(i), index);
+        uint16_t candidate = ata_dma_pci_base(pci_get(i), ch);
         if (!candidate) continue;
         if (p) return; /* ambiguous ownership, no port/config writes */
         p = pci_get(i); base = candidate;
     }
     if (!p) return;
-    const char *owner = index ? "ata1" : "ata0";
-    int claim = registry_claim(RES_PORT, base, base + 8u, owner, false);
+    const char *owner = ata_channel_owner(index);
+    int claim = c->addin_claim>=0 ? c->addin_claim : registry_claim(RES_PORT, base, base + 8u, owner, false);
     if (claim < 0) return;
     gen_t generation = registry_get((unsigned)claim)->generation;
     /* No rollback transition exists for a claimed resource. Retain its
      * quarantine on failed setup, without affecting the PIO claims. */
-    uint8_t status = inb(base + 2);
-    uint8_t master_command = inb(base);
+    uint8_t status = bm_read(c,base + 2);
+    uint8_t master_command = bm_read(c,base);
     if ((status & ATA_BM_ACTIVE) || (master_command & 1)) {
         /* An unfinished firmware transfer cannot become a PIO channel.
          * Own/stop its master first, retain every claim and refuse discovery. */
-        outb(base, master_command & ATA_BM_READ);
+        bm_write(c,base, master_command & ATA_BM_READ);
         c->dma.claim = claim; c->dma.generation = generation;
         c->dma.pci_config = 0x80000004u | (uint32_t)p->bus << 16 | (uint32_t)p->dev << 11 | (uint32_t)p->fn << 8;
-        if ((inb(base + 2) & ATA_BM_ACTIVE) || (inb(base) & 1)) ata_dma_revoke(c);
+        if ((bm_read(c,base + 2) & ATA_BM_ACTIVE) || (bm_read(c,base) & 1)) ata_dma_revoke(c);
         c->stopped = true;
         for (unsigned i = 0; i < 3; i++) if (c->claims[i] >= 0) registry_quarantine(c->claims[i], c->generations[i]);
         registry_quarantine(claim, generation); return;
     }
-    if (index && (status & 0x80)) {
+    if (!ata_addin_match(p) && ch && (status & 0x80)) {
         registry_quarantine(claim, generation); return;
     }
     uint32_t table = pmm_alloc_contig(1), bounce = table ? pmm_alloc_contig(ATA_DMA_BYTES / PAGE_SIZE) : 0;
@@ -152,13 +170,13 @@ void ata_dma_attach(struct ata_channel *c, unsigned index)
     uint32_t address = 0x80000004u | (uint32_t)p->bus << 16 | (uint32_t)p->dev << 11 | (uint32_t)p->fn << 8;
     outl(0xcf8, address);
     uint16_t command = c->ops->in16(c->port_ctx, 0xcfc);
-    bool enabled = command != 0xffff && (command & 1);
+    bool enabled = command != 0xffff && (command & (c->mmio ? 2 : 1));
     if (enabled) {
         c->ops->out16(c->port_ctx, 0xcfc, command | 4);
         enabled = c->ops->in16(c->port_ctx, 0xcfc) == (uint16_t)(command | 4);
     }
     irq_restore(f);
-    if (!enabled || ata_dma_setup(c, base, &bm_ops, 0, P2V(table), table, P2V(bounce), bounce)) {
+    if (!enabled || ata_dma_setup(c, base, &bm_ops, c, P2V(table), table, P2V(bounce), bounce)) {
         if (mm_unpin) for (unsigned i=0;i<2;i++) if (pins[i].ticket) (void)mm_unpin(&pins[i],generation);
         pmm_free(table);
         for (unsigned i = 0; i < ATA_DMA_BYTES / PAGE_SIZE; i++) pmm_free(bounce + i * PAGE_SIZE);
@@ -278,6 +296,7 @@ void ata_dma_irq(struct ata_channel *c)
         }
         if (stray) { m->irq_status = (uint8_t)(s & ~ATA_BM_IRQ); return; }
     }
+    ata_addin_dma_stopping(c);
     m->ops->out8(m->ctx, m->base, m->direction);
     uint8_t stopped = m->ops->in8(m->ctx, m->base + 2);
     m->irq_status = s | (stopped & (ATA_BM_ACTIVE | ATA_BM_ERROR));
@@ -287,11 +306,13 @@ bool ata_dma_stop(struct ata_channel *c)
 {
     struct ata_dma *m = &c->dma;
     if (!m->ops) return true;
+    ata_addin_dma_stopping(c);
     m->ops->out8(m->ctx, m->base, m->direction);
     uint8_t s = m->ops->in8(m->ctx, m->base + 2);
     m->ops->out8(m->ctx, m->base + 2, (s & 0x60) | ATA_BM_IRQ | ATA_BM_ERROR);
     __asm__ volatile("" ::: "memory");
-    return !(s & ATA_BM_ACTIVE) && !(m->ops->in8(m->ctx, m->base) & 1);
+    return !(s & ATA_BM_ACTIVE) && !(m->ops->in8(m->ctx, m->base) & 1) &&
+        ata_addin_dma_end(c) && !c->addin_fault;
 }
 void ata_dma_revoke(struct ata_channel *c)
 {

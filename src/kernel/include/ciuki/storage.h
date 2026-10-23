@@ -5,7 +5,7 @@
 #include "blkpart.h"
 #include "../../fs/vfs.h"
 
-#define STORAGE_DISKS 4u
+#define STORAGE_DISKS 16u
 #define STORAGE_NTFS 8u
 struct ata_device;
 struct optical_binding {

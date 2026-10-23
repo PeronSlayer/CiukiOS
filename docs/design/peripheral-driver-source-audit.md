@@ -389,6 +389,31 @@ microcode redistribution rights. A later directive must obtain and record the
 specific applicable grant or leave DS-XG disabled with a clear missing-firmware
 reason. Firmware bytes downloaded here are research-only, never image payloads.
 
+## f1-123 add-in ATA sources
+
+The f1-123 adaptations also use Linux v6.12 `pata_hpt3x2n.c`, blob
+`5b1ecccf3c8388aaaf51768e79f71982e9a9ea93` (GPL-2.0-only). The Promise
+and HighPoint donor blobs in the table above were fetched again through the
+GitHub contents API and matched those pins. Complete donor files remain
+research-only under `build/research/f1-123/`; no libata framework is linked.
+Ciuki adapters replace PCI/MMIO/I/O, clocks, IRQs, locks, DMA and block services.
+`ata_highpoint_tables.h` retains the donor timing values and drive blacklists.
+All five original headers are in `docs/licenses/ata-addin-NOTICES.txt` and
+every donor has a separate credit.
+
+RAID refusal uses dmraid metadata constants: `pdc.h` blob
+`f0baf9ec70c7d96b6ff6061d7b876c42832bb8f7`, `pdc.c` blob
+`475bf6bb9a589afddbeb83b5306d31bb0c78e050`, `hpt37x.h` blob
+`23e94607faa59df50202c9acae9be614f0a67c3f`, and `hpt45x.h` blob
+`bcb315a997ad04e2cab0b7a96d52982540c51e52` from
+[`Distrotech/dmraid`](https://github.com/Distrotech/dmraid/tree/master/lib/format/ataraid).
+dmraid is GPL-2.0-or-later; the hpt37x format header retains its BSD-3-Clause
+Søren Schmidt / Heinz Mauelshagen notice. The compatible FreeBSD signature
+comes from `freebsd/freebsd-src` releng/14.2 `sys/geom/raid/md_promise.c`,
+blob `da2ea3d7da4eb6a1bd5281c44039dfa14bcde75c` (BSD-2-Clause).
+Those notices and the dmraid licence statement are retained in the same
+notice file. There is no array assembly, repair or metadata write code.
+
 ## f1-108 additional ATA timing source
 
 Linux v6.12 `drivers/ata/libata-pata-timings.c`, blob

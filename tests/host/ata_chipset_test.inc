@@ -6,6 +6,7 @@ static struct {
     uint8_t regs[4][256];
     unsigned writes, drop_write;
     uint8_t peer_status, peer_command;
+    bool pll_model, pll_fail;
 } chip_model;
 static unsigned chip_slot(const struct pci_func *p)
 {
@@ -14,7 +15,10 @@ static unsigned chip_slot(const struct pci_func *p)
 }
 static uint8_t chip_read(void *ctx, const struct pci_func *p, unsigned reg)
 {
-    (void)ctx; CHECK(reg < 256); return chip_model.regs[chip_slot(p)][reg];
+    (void)ctx; CHECK(reg < 256);
+    uint8_t value=chip_model.regs[chip_slot(p)][reg];
+    if(reg==0x5b && chip_model.pll_model && !chip_model.pll_fail) value|=0x80;
+    return value;
 }
 static void chip_write(void *ctx, const struct pci_func *p, unsigned reg, uint8_t v)
 {

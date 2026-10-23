@@ -27,6 +27,16 @@ static struct task actor = { .id = 1, .state = T_RUNNING };
 static struct task user_actor;
 static _Alignas(4) uint8_t user_pages[3][4096];
 static _Alignas(4096) uint8_t native_dma_table[4096], native_dma_bounce[ATA_DMA_BYTES];
+static _Alignas(4096) uint8_t native_addin_mmio[0x4000];
+static unsigned addin_mmio_revokes;
+void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached) {
+    CHECK(phys==0xf0000000u && bytes==sizeof(native_addin_mmio) && uncached);
+    return native_addin_mmio;
+}
+void vmm_revoke_mmio(void *mapped, uint32_t bytes) {
+    CHECK(mapped==native_addin_mmio && bytes==sizeof(native_addin_mmio));
+    addin_mmio_revokes++;
+}
 static bool native_dma_ports, native_dma_config_fail;
 static uint8_t native_dma_status[2], native_dma_command[2];
 static uint16_t native_dma_pci_command;
@@ -232,6 +242,9 @@ bool pci_irq_routed(const struct pci_func *p) { (void)p; return ata_test_route; 
 #include "../../src/kernel/drivers/ata_sis.c"
 #include "../../src/kernel/drivers/ata_ali.c"
 #include "../../src/kernel/drivers/ata_nv.c"
+#include "../../src/kernel/drivers/ata_addin.c"
+#include "../../src/kernel/drivers/ata_promise.c"
+#include "../../src/kernel/drivers/ata_highpoint.c"
 #include "../../src/kernel/drivers/ata_dma.c"
 static unsigned ata_stamp_reads;
 static uint64_t ata_command_clock(void) { return (uint64_t)++ata_stamp_reads*1000; }
@@ -301,6 +314,9 @@ struct fake {
     /* Discovery model: per-unit reset publication and task files, with host
      * task-file writes broadcast to both units as in QEMU ide/core.c. */
     bool discovery_model, reset_started, hide_packet[2], signature_seen[2], signature_published[2];
+    bool raid_fixture;
+    uint64_t raid_lba;
+    uint8_t raid_sector[512];
     bool zero_transient[2], unstable_signature;
     uint8_t taskfile[2][6], unit_status[2], unit_command[2], abort_error;
     uint16_t reset_low[2], abort_low;
@@ -627,6 +643,7 @@ static uint16_t fake_in16(void *ctx, uint16_t port)
     struct fake *f = ctx;
     CHECK(port == f->channel.base && f->status == 0x48 && !f->writing);
     uint16_t v = (f->command == 0xec || f->command == 0xa1) ? f->identify[f->selected][f->words] :
+        f->raid_fixture && f->lba==f->raid_lba ? fs_rd16(f->raid_sector+f->words*2) :
         f->media_bytes ? fs_rd16(f->media_bytes + f->lba * 512 + f->words * 2) : sector_word(f->lba, f->words);
     f->data_reads++;
     if (++f->words == 256)
@@ -1397,9 +1414,14 @@ static void test_emergency_recorder(void)
     puts("PASS ATA emergency recorder: LBA28/LBA48 PIO + FLUSH, no scheduler/locks, busy/owned/quarantined refusal, finite stalled-command polls/no replay");
 }
 #include "ata_chipset_test.inc"
+#include "ata_addin_test.inc"
 int main(int argc, char **argv)
 {
-    if (argc == 2) { test_ata_chipset(argv[1]); return failures ? 1 : 0; }
+    if (argc == 2) {
+        if(!strncmp(argv[1],"addin-",6)) test_ata_addin(argv[1]+6);
+        else test_ata_chipset(argv[1]);
+        return failures ? 1 : 0;
+    }
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
     test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder();

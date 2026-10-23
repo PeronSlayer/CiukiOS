@@ -1,0 +1,201 @@
+CiukiOS f1-123 add-in PATA adaptations. Linux v6.12; GPL v2 selected.
+No Linux/libata framework is imported. GPL v2 text: repository LICENSE.
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_pdc202xx_old.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * pata_pdc202xx_old.c 	- Promise PDC202xx PATA for new ATA layer
+ *			  (C) 2005 Red Hat Inc
+ *			  Alan Cox <alan@lxorguk.ukuu.org.uk>
+ *			  (C) 2007,2009,2010 Bartlomiej Zolnierkiewicz
+ *
+ * Based in part on linux/drivers/ide/pci/pdc202xx_old.c
+ *
+ * First cut with LBA48/ATAPI
+ *
+ * TODO:
+ *	Channel interlock/reset on both required ?
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_pdc2027x.c
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ *  Promise PATA TX2/TX4/TX2000/133 IDE driver for pdc20268 to pdc20277.
+ *
+ *  Ported to libata by:
+ *  Albert Lee <albertcc@tw.ibm.com> IBM Corporation
+ *
+ *  Copyright (C) 1998-2002		Andre Hedrick <andre@linux-ide.org>
+ *  Portions Copyright (C) 1999 Promise Technology, Inc.
+ *
+ *  Author: Frank Tiernan (frankt@promise.com)
+ *  Released under terms of General Public License
+ *
+ *  libata documentation is available via 'make {ps|pdf}docs',
+ *  as Documentation/driver-api/libata.rst
+ *
+ *  Hardware information only available under NDA.
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_hpt366.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Libata driver for the highpoint 366 and 368 UDMA66 ATA controllers.
+ *
+ * This driver is heavily based upon:
+ *
+ * linux/drivers/ide/pci/hpt366.c		Version 0.36	April 25, 2003
+ *
+ * Copyright (C) 1999-2003		Andre Hedrick <andre@linux-ide.org>
+ * Portions Copyright (C) 2001	        Sun Microsystems, Inc.
+ * Portions Copyright (C) 2003		Red Hat Inc
+ *
+ *
+ * TODO
+ *	Look into engine reset on timeout errors. Should not be required.
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_hpt37x.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Libata driver for the highpoint 37x and 30x UDMA66 ATA controllers.
+ *
+ * This driver is heavily based upon:
+ *
+ * linux/drivers/ide/pci/hpt366.c		Version 0.36	April 25, 2003
+ *
+ * Copyright (C) 1999-2003		Andre Hedrick <andre@linux-ide.org>
+ * Portions Copyright (C) 2001	        Sun Microsystems, Inc.
+ * Portions Copyright (C) 2003		Red Hat Inc
+ * Portions Copyright (C) 2005-2010	MontaVista Software, Inc.
+ *
+ * TODO
+ *	Look into engine reset on timeout errors. Should not be	required.
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_hpt3x2n.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Libata driver for the HighPoint 371N, 372N, and 302N UDMA66 ATA controllers.
+ *
+ * This driver is heavily based upon:
+ *
+ * linux/drivers/ide/pci/hpt366.c		Version 0.36	April 25, 2003
+ *
+ * Copyright (C) 1999-2003		Andre Hedrick <andre@linux-ide.org>
+ * Portions Copyright (C) 2001	        Sun Microsystems, Inc.
+ * Portions Copyright (C) 2003		Red Hat Inc
+ * Portions Copyright (C) 2005-2010	MontaVista Software, Inc.
+ *
+ *
+ * TODO
+ *	Work out best PLL policy
+ */
+
+RAID signature/location research (constants adapted, no dmraid framework):
+
+Origin: https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/hpt37x.h
+Git blob: 23e94607faa59df50202c9acae9be614f0a67c3f
+/*
+ * Copyright (c) 2000,2001 Søren Schmidt <sos@FreeBSD.org>
+ * All rights reserved.
+ *
+ * dmraid modifications:
+ * Copyright (C) 2004,2005  Heinz Mauelshagen, Red Hat GmbH.
+ *                          All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer,
+ *    without modification, immediately at the beginning of the file.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. The name of the author may not be used to endorse or promote products
+ *    derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR `AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+Origin: https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/hpt45x.h
+Git blob: bcb315a997ad04e2cab0b7a96d52982540c51e52
+/*
+ * Copyright (C) 2004,2005  Heinz Mauelshagen, Red Hat GmbH.
+ *                          All rights reserved.
+ *
+ * See file LICENSE at the top of this source tree for license information.
+ */
+
+Origin: https://github.com/Distrotech/dmraid/blob/master/lib/format/ataraid/pdc.h
+Git blob: f0baf9ec70c7d96b6ff6061d7b876c42832bb8f7
+/*
+ * Copyright (C) 2004-2010  Heinz Mauelshagen, Red Hat GmbH.
+ *                          All rights reserved.
+ *
+ * See file LICENSE at the top of this source tree for license information.
+ */
+
+Origin: https://github.com/Distrotech/dmraid/blob/master/LICENSE
+  
+   Copyright (C) 2004-2006  Heinz Mauelshagen, Red Hat GmbH.
+   All rights reserved.
+  
+   This dmraid code is free software;
+   you can redistribute and/or modify it under the terms of
+   the GNU General Public License as published by the
+   Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+  
+   dmraid is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+   General Public License for more details.
+  
+   You should have received a copy of the GNU (Lesser) General Public
+   License along with this dmraid code; if not, write to the Free
+   Software Foundation, Inc., 59 Temple Place - Suite 330, Boston,
+   MA 02111-1307, USA
+
+Origin: https://github.com/freebsd/freebsd-src/blob/releng/14.2/sys/geom/raid/md_promise.c
+Git blob: da2ea3d7da4eb6a1bd5281c44039dfa14bcde75c
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2011 Alexander Motin <mav@FreeBSD.org>
+ * Copyright (c) 2000 - 2008 Søren Schmidt <sos@FreeBSD.org>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
+
