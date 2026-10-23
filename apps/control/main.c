@@ -160,6 +160,12 @@ static int pack_install(void *ctx,const struct dp_plan *plan,const char *root,ch
     if(mkdir(NDP_ROOT,0700) && errno!=EEXIST) { snprintf(reason,160,"The system driver store is unavailable."); return -errno; }
     return dp_install(plan,root,NDP_ROOT,reason);
 }
+static int pack_busy(void *ctx,const struct ndp_device *d)
+{
+    (void)ctx; struct ciuki_driver_pack_query q;
+    /* Fail closed: an unreadable host state counts as busy. */
+    return pack_query(d,NULL,&q) || q.busy;
+}
 static int pack_remove(void *ctx,const struct ndp_device *d,char reason[160])
 {
     (void)ctx;
