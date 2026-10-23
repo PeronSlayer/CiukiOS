@@ -194,6 +194,8 @@ static struct ciuki_net_state network_fixture;
 static struct ciuki_mixer_master mixer_fixture;
 static unsigned mixer_queries,mixer_sets,mixer_refreshes;
 static int mixer_available, mixer_error;
+/* fx-26: the kernel's per-description readiness (POLLIN until read). */
+static unsigned mixer_fixture_serial=1, mixer_observed_serial __attribute__((unused));
 #endif
 static int media_volume_error;
 static int media_slow;
@@ -392,6 +394,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
         assert(size==sizeof(mixer_fixture));
         if (op==MIXER_GET_MASTER || op==MIXER_REFRESH_MASTER) {
             mixer_queries++; mixer_refreshes+=op==MIXER_REFRESH_MASTER; memcpy(record,&mixer_fixture,size);
+            mixer_observed_serial=mixer_fixture_serial;
         }
         else { assert(op==MIXER_SET_MASTER); mixer_sets++; memcpy(&mixer_fixture,record,size); }
         return 0;
@@ -1256,6 +1259,7 @@ __attribute__((noinline)) static void test_network_service(void)
 #include "theme_wallpaper_sequence_test.h"
 #include "theme_wallpaper_performance_test.h"
 #include "wallpaper_boot_test.h"
+#include "event_latency_test.h"
 #endif
 int main(int argc,char **argv)
 {
@@ -1268,6 +1272,7 @@ int main(int argc,char **argv)
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper")) { test_theme_wallpaper(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper-performance")) { test_theme_wallpaper_performance(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--event-latency")) { test_event_latency(); return 0; }
 #else
     if (argc==2 && !strcmp(argv[1],"--autoplay-startup")) { test_autoplay_startup(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--slow-stick-folder")) { test_slow_stick_folder(); return 0; }

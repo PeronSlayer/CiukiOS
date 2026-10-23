@@ -1628,6 +1628,20 @@ AUDIO open additionally permits ENODEV/ENOMEM; byte writes retain F2 positive
 partial-count precedence over EINTR/EIO. Device seeks/positioned I/O: ESPIPE.
 No ioctl, poll/select, recording or master authority through public opens.
 
+### fx-26 amendment: mixer and media change readiness
+
+`poll` (call 88) accepts `/dev/mixer` (public and delegated control
+descriptions) and `/dev/media` descriptions with POLLIN. A mixer
+description is readable while the current master record differs from the
+one it last read (`MIXER_GET_MASTER`, `MIXER_REFRESH_MASTER`, or its own
+successful `MIXER_SET_MASTER`), or before its first read; a media
+description while the drive namespace changed (a volume published or
+withdrawn) after its last `MEDIA_GET_STATE`, or before its first. Each
+description keeps its own state; dup shares it. Readiness never changes
+state and needs no grant; reads keep every rule above. Other events stay
+0; audio stream descriptions keep no poll support. A master change or a
+namespace change wakes waiting polls at once.
+
 ### F4-08 amendment: hardware observations
 
 `MIXER_GET_DIAGNOSTICS` (4203h) is a read-only operation on `/dev/mixer`,

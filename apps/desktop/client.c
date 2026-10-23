@@ -466,11 +466,36 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
      * a caption) changed what the planned copy would carry from the
      * original source, and the redraw can only exclude it at the source or
      * the final destination. Recompose this move instead of copying. */
+    /* fx-26: only damage inside the carried rectangle at the intermediate
+     * position can change what the copy carries (the compositor clips the
+     * copy to the window's opaque visible region). Damage of a window below
+     * that merely touches the moving window's shadow ring, a DOS window
+     * playing under the dragged one, cancelled the copy on every motion
+     * and recomposed both outer boxes in software (T23 model: 34-71 ms
+     * frames for an 800x560 drag). */
+    struct desk_box carried={frame.x,frame.y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
     for (unsigned k=0;continuing && k<d->damage.count;k++) {
         struct desk_box touched;
-        if (desk_intersect(d->damage.boxes[k],old,&touched)) continuing=0;
+        if (desk_intersect(d->damage.boxes[k],carried,&touched)) continuing=0;
     }
-    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->power.state && !d->animation.active &&
+    /* A new copy is useful only when its source is clean: damage inside
+     * the window's own carried area (its update, a cancelled move's boxes)
+     * is recomposed there anyway. */
+    int clean=1;
+    for (unsigned k=0;!continuing && clean && k<d->damage.count;k++) {
+        struct desk_box touched;
+        if (desk_intersect(d->damage.boxes[k],carried,&touched)) clean=0;
+    }
+    /* fx-26: a new move copies even while other damage is pending (a clock,
+     * a playing DOS window, a notification sliding in), as long as none is
+     * inside its own source: the compositor cuts every damage box, and its
+     * image at the source, out of the copy
+     * (copy_region/region_cut in desk_redraw), as Windows 98 copies the
+     * window bits with BitBlt and repaints only the invalid parts
+     * (SetWindowPos without SWP_NOCOPYBITS). Requiring no damage at all made
+     * every drag frame a software recomposition of both outer boxes while
+     * anything else on screen changed (T23 f441c5bd). */
+    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && clean)) && !d->power.state && !d->animation.active &&
         !c->internal && !c->collapsed && !c->minimized && c->order>0;
 
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||

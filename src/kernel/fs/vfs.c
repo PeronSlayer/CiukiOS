@@ -726,7 +726,7 @@ int vfs_attach_locked(struct vfs *v, unsigned d, struct fat_volume *vol) {
     if (!e) {
         fs_lock_take(&v->identity_lock);
         vol->identity_mount_generation=++v->next_identity_generation;
-        v->volumes[d]=vol; v->generation[d]++;
+        v->volumes[d]=vol; v->generation[d]++; namespace_changed();
         vol->identity_changed=identity_change; vol->identity_ctx=v;
         /* f1-93: a logical provider has no block cache; its device calls
          * are windows of the caller's VFS_IO_MODE (see io_window). */
@@ -749,7 +749,7 @@ int vfs_attach_ro_locked(struct vfs *v, unsigned d, struct fs_ro_volume *vol)
         if (v->volumes[i] && (v->volumes[i]->cache != vol->cache || v->volumes[i]->dev == vol->dev)) e = -FS_EBUSY;
         if (v->ro_volumes[i] && (v->ro_volumes[i]->cache != vol->cache || v->ro_volumes[i]->dev == vol->dev)) e = -FS_EBUSY;
     }
-    if (!e) { v->ro_volumes[d] = vol; v->generation[d]++; }
+    if (!e) { v->ro_volumes[d] = vol; v->generation[d]++; namespace_changed(); }
     return e;
 }
 int vfs_attach_ro(struct vfs *v, unsigned d, struct fs_ro_volume *vol)
@@ -773,7 +773,7 @@ void vfs_ro_expire_locked(struct vfs *v, unsigned d)
     if (d >= 26 || !v->ro_volumes[d]) return;
     struct fs_ro_volume *ro = v->ro_volumes[d];
     if (px_volume_detached) px_volume_detached(v, d);
-    VFS_IO_VOID(v,fs_ro_unmount(ro)); v->ro_volumes[d] = 0; v->generation[d]++;
+    VFS_IO_VOID(v,fs_ro_unmount(ro)); v->ro_volumes[d] = 0; v->generation[d]++; namespace_changed();
     for (unsigned i = 0; i < VFS_TABLES; i++) if (v->tables[i]) {
         memcpy(v->tables[i]->cwd[d], "/", 2); v->tables[i]->cwd_cluster[d] = 0;
     }
@@ -874,7 +874,7 @@ int vfs_detach_locked(struct vfs *v, unsigned d) {
         for (unsigned i=0; i<VFS_NODES; i++) if (v->nodes[i].refs && v->nodes[i].ro==ro && v->nodes[i].generation==v->generation[d]) return -FS_EBUSY;
         if (px_ro_busy && px_ro_busy(v,ro)) return -FS_EBUSY;
         if (px_volume_detached) px_volume_detached(v,d);
-        VFS_IO_VOID(v,fs_ro_unmount(ro)); v->ro_volumes[d]=0; v->generation[d]++;
+        VFS_IO_VOID(v,fs_ro_unmount(ro)); v->ro_volumes[d]=0; v->generation[d]++; namespace_changed();
         for (unsigned i=0; i<VFS_TABLES; i++) if (v->tables[i]) { memcpy(v->tables[i]->cwd[d],"/",2); v->tables[i]->cwd_cluster[d]=0; }
         return 0;
     }
@@ -888,7 +888,7 @@ int vfs_detach_locked(struct vfs *v, unsigned d) {
         if (px_volume_detached) px_volume_detached(v,d);
         vfs_identity_expire(v,vol); vol->identity_changed=0; vol->identity_ctx=0;
         vol->io_window=0; vol->io_window_ctx=0;
-        v->volumes[d]=0; v->generation[d]++;
+        v->volumes[d]=0; v->generation[d]++; namespace_changed();
         for (unsigned i=0;i<VFS_TABLES;i++) if (v->tables[i]) {
             v->tables[i]->cwd[d][0]='/'; v->tables[i]->cwd[d][1]=0; v->tables[i]->cwd_cluster[d]=0;
         }

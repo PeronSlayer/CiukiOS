@@ -1466,6 +1466,32 @@ static void test_persistence(void)
     CHECK(audio.master.left==10&&audio.master.mute);
     volumes[0].readonly=false;saved_sequence=0;audio_settings_load(&vfs);
     CHECK(audio.master.left==25&&!audio.master.mute);
+    /* fx-26: poll readiness. Readable until this description reads the
+     * master; a change by another path (a key mirrored by the EC worker, a
+     * tray set on another description) makes it readable again; its own SET
+     * and a GET consume it; a second description is independent. */
+    {
+        struct file_description *fd=file_fd(client,mixer);
+        int other=file_open(client,"/dev/mixer",O_RDONLY,0);CHECK(other>=0);
+        struct file_description *od=file_fd(client,other);
+        CHECK(audio_mixer_poll_events(od)==POLLIN);
+        struct ciuki_mixer_master seen={1,32,0,0,0,0,0,0};
+        CHECK(!ctl(mixer,MIXER_GET_MASTER,&seen,32) && !audio_mixer_poll_events(fd));
+        CHECK(!ctl(other,MIXER_GET_MASTER,&seen,32) && !audio_mixer_poll_events(od));
+        audio.master.left=audio.master.right=55;          /* the EC worker mirrored a key */
+        CHECK(audio_mixer_poll_events(fd)==POLLIN && audio_mixer_poll_events(od)==POLLIN);
+        CHECK(!ctl(mixer,MIXER_GET_MASTER,&seen,32) && seen.left==55 && !audio_mixer_poll_events(fd));
+        CHECK(audio_mixer_poll_events(od)==POLLIN);
+        m=(struct ciuki_mixer_master){1,32,30,30,0,0,0,0};CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,32));
+        CHECK(!audio_mixer_poll_events(fd) && audio_mixer_poll_events(od)==POLLIN);
+        CHECK(!ctl(other,MIXER_GET_MASTER,&seen,32) && seen.left==30 && !audio_mixer_poll_events(od));
+        audio.master.save_state=CIUKI_MIXER_UNSAVED;     /* a save-state change is a change too */
+        CHECK(audio_mixer_poll_events(od)==POLLIN);
+        CHECK(!ctl(other,MIXER_GET_MASTER,&seen,32) && !audio_mixer_poll_events(od));
+        CHECK(!file_close(client,other));
+        m=(struct ciuki_mixer_master){1,32,25,75,0,0,0,0};CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,32));
+        puts("audio fx-26: /dev/mixer poll readiness per description (unread, changed elsewhere, own SET, save state) PASS");
+    }
     CHECK(!file_close(client,mixer));
     struct process *supervisor=proc_supervisor();supervisor->cwd=space->root;
     int delegated=audio_mixer_delegate(supervisor,client);CHECK(delegated>=0);

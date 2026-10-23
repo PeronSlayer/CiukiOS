@@ -34,6 +34,7 @@ int fs_request_check(void);
 /* Read through the platform RTC owner; never infer the NMI mask from a
  * read of port 70h (not a readable index register on the PC/AT). */
 uint8_t fs_floppy_cmos_types(void);
+uint8_t fs_cmos_read(uint8_t reg); /* fx-26: native only (no FS_HOST definition) */
 void fs_request_wait(enum vfs_wait_reason,uint64_t begin,int outcome);
 /* f1-98 (R2): a waiter that polls (request pause, event wait) for a drive's
  * reservation, guard or writer turn, or for a lock, names the holder (an
