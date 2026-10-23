@@ -424,6 +424,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | Native program fault dialog (G13, ER-1; Windows 98 "This program has performed an illegal operation" box): a message window with Close and a Details panel that opens and closes in place | the dialog's outer box, its task button, the Details text swap | `desk_w32_fault_dialog` (`client.c`), `fault_text.h`, `shell.c` message window | none (the Win32 crash dialog already used the same message window; this adds the native record) | native fault dialog |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

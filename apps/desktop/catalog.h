@@ -12,6 +12,7 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"gfxdemo", "Graphics Demo", "applications-graphics", 0, ""},
     {"hwreport", "Hardware Report", "preferences-system", 0, ""},
     {"regedit", "Registry Editor", "preferences-system", 0, ""},
+    {"logview", "Log Viewer", "text-x-generic", 0, ""},   /* G13: boot, NetSurf, Setup and crash logs */
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},
     {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */

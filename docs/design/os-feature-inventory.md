@@ -558,7 +558,7 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 | SY-5 | Device Manager | RK-dev | partial | CP-19 |
 | SY-6 | Registry Editor (find, edit, import and export `.reg`) | RK-reg | done | `apps/regedit/app.c`; `tests/host/desktop/regedit_test.c`. It edits the CiukiOS registry tree; the Win32 HKLM view goes through `apps/w32srv/registry.c` |
 | SY-7 | Scheduled Tasks (Task Scheduler) and Maintenance Wizard | RK-tools | absent | — |
-| SY-8 | Dr. Watson: logs every program fault with a snapshot | RK-tools | partial | Win32 faults write `/WINDOWS/CRASH/CRASH0-7.TXT` (`apps/desktop/win32_crash.c`); native faults write nothing (see ER-1) |
+| SY-8 | Dr. Watson: logs every program fault with a snapshot | RK-tools | done | G13: a native fault is logged (`[fault] native ...` in BOOT.LOG) and written as `/system/logs/CRASH0-7.TXT` by the desktop (`apps/desktop/win32_crash.c`, rotation of eight, registers, fault address, stack words); Win32 faults keep `/WINDOWS/CRASH/CRASH0-7.TXT`; both are listed by the Log Viewer (`docs/design/fault-reporting.md`) |
 | SY-9 | System File Checker, Signature Verification, Version Conflict Manager | RK-tools | absent | BT-12 |
 | SY-10 | Registry Checker | RK-reg | partial | BT-7 |
 | SY-11 | System Configuration Utility | RK-tools | absent | BT-11 |
@@ -581,11 +581,11 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| ER-1 | A faulting program shows a dialog ("…has performed an illegal operation", Details) and the system keeps running | RK-tools | partial | Win32 programs: W32-8. Native programs: the kernel kills the process (`src/kernel/proc/signal.c:226`) and nothing tells the user |
-| ER-2 | Fatal system error screen with the faulting module, and an option to continue or restart | RK-vmm | partial | `src/kernel/core/output.c:234-300` draws registers and the vector on a red console; no formatted message, no automatic restart |
-| ER-3 | Desktop (shell) crash recovers by restarting the shell | RK-vmm ("User Interface") | absent | `src/kernel/proc/supervisor.c:246-265` falls back to the console and does not restart the desktop |
+| ER-1 | A faulting program shows a dialog ("…has performed an illegal operation", Details) and the system keeps running | RK-tools | done | G13: `native_fault_report` (`src/kernel/proc/win32/diagnostics.c`) queues the fault for the desktop, which shows "This program has performed an illegal operation and will be shut down." with Close and Details (`apps/desktop/client.c` `desk_w32_fault_dialog`, `fault_text.h`); Win32 programs: W32-8 |
+| ER-2 | Fatal system error screen with the faulting module, and an option to continue or restart | RK-vmm | done | G13: `panic`, `panic_frame` and the double fault draw the Windows 98 text ("A fatal exception 0E has occurred at cs:eip in task ...") and wait for Enter or Ctrl+Alt+Del (restart through `kernel_reboot`) or Esc (stay) (`src/kernel/core/fatal.c`); the PS/2 decoder handles set 1 and set 2. USB-only keyboards have no choice and the screen stays |
+| ER-3 | Desktop (shell) crash recovers by restarting the shell | RK-vmm ("User Interface") | done | G13: `supervisor_poll` restarts the bootstrap desktop after an abnormal death once the old grants are free, at most three times a minute, then falls back to the console (`src/kernel/proc/supervisor.c`); the new desktop shows the crash dialog of the old one. Other programs' windows end with the desktop (their channel closes); `TaskbarCreated` re-registration is not modelled |
 | ER-4 | Startup and setup logs (`BOOTLOG.TXT`, `SETUPLOG.TXT`, `DETLOG.TXT`) | RK-start | done | BT-6, BT-13 (`SYSTEM/SETUP.LOG`) |
-| ER-5 | Log viewer for the user | RK-tools | partial | The Control Panel Logs tab shows the boot log read-only (`apps/control/app.c:440-460,1020`); no viewer for `NETSURF.LOG` or the crash files |
+| ER-5 | Log viewer for the user | RK-tools | done | G13: Log Viewer accessory (`apps/accessories/logview_*.c`, Start > Programs > System Tools): boot log, NetSurf log, Setup log and the native and Win32 crash files, last 60 KB of large files, refresh, copy |
 | ER-6 | Low-resource and low-disk warnings | RK-disk | absent | ST-11 |
 
 ## Summary of the inventory

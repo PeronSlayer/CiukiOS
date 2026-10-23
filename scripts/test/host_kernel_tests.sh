@@ -82,6 +82,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/blackbox_test.c" -o "$out/blackbox_test"
 "$out/blackbox_test"
 "$out/bootlog_test"
+# G13 (ER-2): the fatal-error screen text and its restart choice.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/fatal_test.c" \
+    "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/string.c" -o "$out/fatal_test"
+"$out/fatal_test"
 python3 "$root/tests/host/test_system_stalls.py"
 python3 "$root/tests/host/fbdev_fixture_size_test.py"
 

@@ -115,6 +115,28 @@ void w32_crash_capture(struct proc_thread *t,const struct ciuki_w32_context *c,u
         f.stack[0],f.stack[1],f.stack[2],f.stack[3],f.stack[4],f.stack[5],f.stack[6],f.stack[7]);
     s->dialog_queued=diag_enqueue(&f);
 }
+/* G13 (ER-1, SY-8): a native program killed by a processor fault goes to the
+ * same desktop mailbox as a Win32 crash, so the desktop shows "has performed
+ * an illegal operation" and writes the crash file (the Dr. Watson snapshot,
+ * RK-tools Table 27.1). Only while a desktop is running or being restarted:
+ * nobody would drain the queue otherwise. */
+extern bool supervisor_desktop_expected(void) __attribute__((weak));
+void native_fault_report(struct proc_thread *t,const struct trap_frame *tf,uint32_t address){
+    struct process *p=t->process;
+    if(!tf||(tf->cs&3)!=3||p->personality!=PROC_NATIVE)return;
+    uint32_t error=tf->err&0xffffffu;
+    klog("[fault] native pid=%u tid=%u name=%s vector=%u error=%08x eip=%08x address=%08x",
+        p->pid,t->tid,p->name,tf->vector,tf->err,tf->eip,address);
+    if(!supervisor_desktop_pid()&&!(supervisor_desktop_expected&&supervisor_desktop_expected()))return;
+    for(unsigned i=0;i<w32_fault_count;i++)
+        if(w32_fault_queue[(w32_fault_head+i)%16].pid==p->pid&&w32_fault_queue[(w32_fault_head+i)%16].kind==W32_REPORT_NATIVE_FAULT)return;
+    struct ciuki_w32_fault f={.kind=W32_REPORT_NATIVE_FAULT,.pid=p->pid,.tid=t->tid,.code=(tf->vector&0xffu)|error<<8,.eip=tf->eip,.offset=address};
+    uint32_t regs[9]={tf->eax,tf->ebx,tf->ecx,tf->edx,tf->esi,tf->edi,tf->ebp,tf->user_esp,tf->eflags};memcpy(f.registers,regs,sizeof(regs));
+    diag_name(f.exe,sizeof(f.exe),p->name);
+    for(unsigned i=0;i<8;i++)
+        if(tf->user_esp<=UINT32_MAX-4*i-3&&ua_range(p->memory,tf->user_esp+4*i,4,PROT_READ)&&!ua_read(p->memory,&f.stack[i],tf->user_esp+4*i,4))f.valid|=1u<<i;
+    diag_enqueue(&f);
+}
 static bool diag_crash_closed(void *arg){struct process *p=arg;return p->state!=PROC_LIVE||!proc_find(supervisor_desktop_pid());}
 uint32_t w32_report_call(struct proc_thread *t,struct ciuki_w32_report_args *a){
     struct process *p=t->process;
