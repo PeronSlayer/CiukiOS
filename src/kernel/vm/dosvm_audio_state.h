@@ -8,7 +8,7 @@
 #define DOSVM_AUDIO_PER_MS (DOSVM_AUDIO_HZ / 1000u)
 /* DSP work per tick call; the remainder stays as backlog for later ticks. */
 #define DOSVM_AUDIO_SLICE (64u * DOSVM_AUDIO_PER_MS)
-/* F0-46: worker return every half millisecond of virtual DSP time. */
+/* F0-46/fx-9: a preemption point every half millisecond of virtual DSP time. */
 #define DOSVM_AUDIO_TURN (DOSVM_AUDIO_PER_MS / 2u)
 /* Backlog beyond one second is dropped from device time and counted. */
 #define DOSVM_AUDIO_BACKLOG (1000u * DOSVM_AUDIO_PER_MS)
@@ -60,7 +60,8 @@ struct dosvm_sb_cadence {
     uint32_t blocks, late_acks, merged, ack_max_frames;
     uint32_t irq_latency_max_us, irq_entries;
     uint64_t irq_latency_sum_us;
-    uint32_t descheduled, parked, if_clear; /* pending-entry milliseconds */
+    uint32_t descheduled, parked, if_clear; /* pending-entry milliseconds (PIT top half) */
+    uint32_t clock_gap_max_ms, dsp_lag_max_frames; /* fx-9: clock service lateness */
 };
 struct dosvm_sb16 {
     uint16_t base;
@@ -121,7 +122,6 @@ struct dosvm_audio {
     uint32_t title_irq_latency_max_us, title_music_windows;
     uint64_t clock, ms;
     uint64_t advance_end; /* current tick's original 64 ms catch-up ceiling */
-    bool clock_descheduled; /* sampled producer context, before worker dispatch */
     struct dosvm_dma dma;
     struct dosvm_sb16 sb;
     struct dosvm_opl opl;
@@ -162,6 +162,9 @@ void dosvm_audio_record(struct dosvm *, unsigned kind, uint32_t, uint32_t, uint3
 void dosvm_sb_record_state(struct dosvm *, unsigned reason, uint16_t port);
 /* After successful frame construction/virtual INTA, before guest return. */
 void dosvm_audio_irq_enter(struct dosvm *, unsigned irq);
+/* fx-9: PIT top half sample of a pending SB16 entry; running = the tick
+ * interrupted this VM's task. */
+void dosvm_audio_sample(struct dosvm *, bool running);
 /* 8237A */
 void dosvm_dma_init(struct dosvm *);
 uint8_t dosvm_dma_io(struct dosvm *, uint16_t port, bool write, uint8_t value);

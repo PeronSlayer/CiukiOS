@@ -533,6 +533,9 @@ void dosvm_input_poll(struct dosvm *);
 void dosvm_idle_wake(struct dosvm *);
 void dosvm_present_notify(struct dosvm *);
 void dosvm_present_checkpoint(struct dosvm *);
+#include "dosvm_clock.h" /* fx-9 VM clock task */
+_Static_assert(DOSVM_CLOCK_SLOTS == DOSVM_LIMIT, "vm-clock serves every VM slot");
+_Static_assert(DOSVM_CLOCK_TURNS == DOSVM_AUDIO_SLICE / DOSVM_AUDIO_TURN + 2u, "vm-clock turns per tick");
 unsigned dosvm_vga_period_ms(struct dosvm *);
 uint64_t dosvm_vga_period_us(struct dosvm *, uint64_t tick);
 uint64_t dosvm_vga_next_due(uint64_t due_us, uint64_t period_us, uint64_t tick);

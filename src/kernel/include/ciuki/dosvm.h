@@ -147,7 +147,9 @@ int dosvm_port_unregister(struct dosvm_key, uint16_t first);
 int dosvm_uart_bind(struct dosvm_key, unsigned slot, int native_index, const char **reason);
 bool dosvm_irq_raise(struct dosvm_key, unsigned irq);
 bool dosvm_keyboard(struct dosvm_key, uint16_t bios_key);
-void dosvm_tick(void); /* host timer hook; bounded, no allocations or I/O */
+/* PIT top half (fx-9): O(DOSVM_LIMIT) sampling and an O(1) wake of the
+ * vm-clock task; no allocations, I/O or VM state advance. */
+void dosvm_tick(void);
 const uint16_t *dosvm_text(const struct dosvm *, unsigned *cursor);
 /* f3-02: SHA-256 of the complete 640x480 XRGB presenter frame at the given
  * blink/cursor clock, without a window surface; mode is BDA 0049h. */

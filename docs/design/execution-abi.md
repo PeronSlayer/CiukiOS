@@ -396,6 +396,24 @@ the ring's saturating count, each continuation requeues and returns,
 and failed enqueue is retried by the next tick without losing elapsed time.
 The generic worker measures each returned callback's CPU service separately
 and yields between continuations. Physical qualification remains separate.
+
+Amendment fx-9 (2026-10-23, `docs/validation/fx-9-vm-clock-task.md`): the
+VM clock no longer rides the shared `device-work` ring. On the T23 (trial
+423b803a) another device task exhausting the shared device budget demoted
+the worker below the focused VM; the DSP timeline then trailed the VM clock
+up to the one-second backlog and every SB16 IRQ and acknowledgement carried
+that age. The PIT top half (`sched_tick` -> `dosvm_tick`) now only samples
+which task it interrupted while an SB16 entry is pending (the cadence
+record's `descheduled`/`if_clear`/`parked` milliseconds) and wakes the
+audio-class `vm-clock` task in O(1) with an immediate service deadline
+(`vm/dosvm_clock.c`). That task runs every due VM to its tick allowance in
+the same `DOSVM_AUDIO_TURN` steps, with a preemption point between turns
+instead of a worker return, at most `DOSVM_CLOCK_TURNS` per VM per tick;
+its CPU is charged to its own audio-class budget and other tasks'
+consumption never demotes it (Win95 DDK: VPICD simulates hardware
+interrupts with `Time_Critical_Boost`). The generation pin, the 64 ms
+allowance, the one-second backlog drop and the 64-tick PIT cap are
+unchanged.
 - Starvation guard: at 100 ms READY age, an ordinary thread receives one
   bounded dispatch at 15, without changing class. Actual device deadlines
   retain precedence; overdue dispatches precede nonurgent device work.

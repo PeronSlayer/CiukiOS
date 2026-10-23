@@ -302,9 +302,10 @@ static int sb_consume(struct dosvm *v, unsigned n, struct sb_run *r)
     return (int)done;
 }
 
-/* DSP playback on the VM timeline, driven by dosvm_tick whatever the guest
- * IF/PIC state. Worker returns split the original DOSVM_AUDIO_SLICE allowance
- * into DOSVM_AUDIO_TURN frames without resetting DMA phase or block state.
+/* DSP playback on the VM timeline, driven by the vm-clock task whatever the
+ * guest IF/PIC state. Its preemption points split the original
+ * DOSVM_AUDIO_SLICE allowance into DOSVM_AUDIO_TURN frames without resetting
+ * DMA phase or block state.
  * Neither a latched IRQ nor the diagnostic waiting state gates DMA. */
 static void sb_advance(struct dosvm *v)
 {
@@ -632,6 +633,18 @@ void dosvm_audio_close(struct dosvm *v)
     q->page_count = 0;
     memset(q->pcm, 0, sizeof(q->pcm)); memset(q->events, 0, sizeof(q->events));
 }
+/* fx-9: PIT top half (dosvm_tick, IF clear), one millisecond sample while
+ * the SB16 entry is pending: parked by a full-screen switch, descheduled
+ * (the tick interrupted another task: host scheduling), guest IF clear with
+ * the VM on the CPU, or none (delivery in progress). Scalars only. */
+void dosvm_audio_sample(struct dosvm *v, bool running)
+{
+    struct dosvm_sb16 *s = &v->audio.sb;
+    if (!s->irq_entry_pending) return;
+    if (v->fullscreen_parked || v->fullscreen_hold || v->fullscreen_suspended) s->cadence.parked++;
+    else if (!running) s->cadence.descheduled++;
+    else if (!s->irq_entry_ready && !v->monitor.vif) s->cadence.if_clear++;
+}
 bool dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
 {
     if (!v->audio.q.page_count) return false;
@@ -652,15 +665,18 @@ bool dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
      * Keep its original age and a coherent PIC snapshot, even when the
      * ordinary state queue is full. No formatting or output in the tick. */
     struct dosvm_sb16 *s = &v->audio.sb;
-    if (s->irq_entry_pending) {
-        if (v->fullscreen_parked || v->fullscreen_hold || v->fullscreen_suspended)
-            s->cadence.parked += elapsed;
-        else if (v->audio.clock_descheduled) s->cadence.descheduled += elapsed;
-        else if (!s->irq_entry_ready && !v->monitor.vif) s->cadence.if_clear += elapsed;
-    }
+    /* fx-9: how late the clock service ran and how far the DSP timeline
+     * trails the VM clock (the backlog every IRQ age includes). */
+    if (elapsed > s->cadence.clock_gap_max_ms)
+        s->cadence.clock_gap_max_ms = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+    if (s->x.active && v->audio.clock > s->pos && v->audio.clock - s->pos > s->cadence.dsp_lag_max_frames)
+        s->cadence.dsp_lag_max_frames = (uint32_t)(v->audio.clock - s->pos > UINT32_MAX ? UINT32_MAX : v->audio.clock - s->pos);
     if (s->x.active && deadline_passed(v->audio.diag.next_cadence) && !v->audio.diag.cadence_pending) {
+        /* The PIT top half adds the pending-entry samples (dosvm_audio_sample). */
+        uint32_t f = irq_save();
         v->audio.diag.cadence = s->cadence;
         memset(&s->cadence, 0, sizeof(s->cadence));
+        irq_restore(f);
         v->audio.diag.cadence_pending = true;
         v->audio.diag.next_cadence = g_ticks + 5000;
     }
@@ -895,6 +911,11 @@ void dosvm_audio_log(struct dosvm *v)
         uint64_t underruns = d.starved >= v->audio.diag.underruns ?
             d.starved - v->audio.diag.underruns : d.starved;
         v->audio.diag.underruns = d.starved;
+        /* fx-9: the VM clock service's largest gap between two services and
+         * the largest DSP backlog behind the VM clock (both in ms). */
+        klog("[vm-audio] vm=%u cadence_clock gap_max_ms=%u dsp_lag_max_ms=%u",
+             v->info.key.id, c.clock_gap_max_ms,
+             (unsigned)((c.dsp_lag_max_frames + DOSVM_AUDIO_PER_MS - 1u) / DOSVM_AUDIO_PER_MS));
         klog("[vm-audio] vm=%u cadence blocks=%u late_acks=%u merged=%u ack_max_ms=%u irq_latency_max_us=%u underruns=%llu irq_latency_avg_us=%llu descheduled=%u parked=%u if_clear=%u",
              v->info.key.id, c.blocks, c.late_acks, c.merged,
              (unsigned)((c.ack_max_frames + DOSVM_AUDIO_PER_MS - 1ull) / DOSVM_AUDIO_PER_MS),

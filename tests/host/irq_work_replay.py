@@ -63,7 +63,7 @@ def main():
         from vm_creation_model import write_model
         task_source = (ROOT / 'src/kernel/core/task.c').read_text()
         scheduler = task_source[task_source.index('static struct task *rq_head'):task_source.index('void task_stack_init')]
-        for fn in ('schedule', 'sched_vm_tick_work', 'sched_tick', 'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
+        for fn in ('schedule', 'sched_tick', 'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
             match = re.search(r'^(?:static )?[^\n]+\b' + fn + r'\([^\n]*\)\s*\{', task_source, re.M)
             depth, end = 1, match.end()
             while depth:
@@ -98,9 +98,10 @@ def main():
         vm_source=vm_source[:vm_source.index('int main(void)')] + 'int main(void) { ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram); test_audio(); test_timer(); test_game_audio(); printf("VM clock coverage checks=%u guest_enters=%u deletes=%u\\n",checks,guest_enters,deletes); free(ram); return 0; }\n'
         vm_source=re.sub(r'(#include ")([^"]+)(")', lambda m:m[1]+str(((HOST / m[2]) if (HOST / m[2]).is_file() else (OUT / m[2])).resolve())+m[3],vm_source)
         replay(folder, 'vm-clock', None,
-               [('dosvm_tick', 'DOS-virtual-clock-deferred', 1000),
-                ('dosvm_clock_work', 'DOS-clock-continuation', 1000),
-                ('kwork_run_one', 'DOS-clock-worker-turn', 1000),
+               # fx-9: the PIT top half samples and signals only (R1 100 us);
+               # every vm-clock turn is bounded work between safe points.
+               [('dosvm_tick', 'DOS-clock-top-half', 100),
+                ('dosvm_clock_turn', 'DOS-clock-turn', 1000),
                 ('dosvm_audio_advance', 'DOS-audio-clock-per-VM', 250)], [],
                # The included DOSVM boundary fixtures use the real-uaddr model.
                ['tests/host/dosvm_uaddr_model.c',

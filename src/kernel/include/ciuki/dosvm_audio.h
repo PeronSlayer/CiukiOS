@@ -10,7 +10,8 @@
 #include <ciuki/dosvm.h>
 
 /* The VM audio timeline counts frames of a 48 kHz clock from VM creation,
- * advanced by dosvm_tick independently of guest IF. Every PCM block and event
+ * advanced by the vm-clock task (fx-9, vm/dosvm_clock.c) on every PIT tick,
+ * independently of guest IF. Every PCM block and event
  * carries a position on it; F4 maps it to its output cursor. */
 #define DOSVM_AUDIO_HZ 48000u
 

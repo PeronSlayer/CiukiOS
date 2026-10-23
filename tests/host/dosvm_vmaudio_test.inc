@@ -934,19 +934,19 @@ static void test_sb_cadence_record(void)
     struct dosvm_sb_cadence c = v->audio.diag.cadence;
     CHECK(c.blocks == 430 && c.merged == 428 && c.late_acks == 1 && c.ack_max_frames > 90000);
     CHECK(c.descheduled && c.parked && c.if_clear);
-    dosvm_audio_log(v);
-    CHECK(vm_audio_logs == logs + 1 && !v->audio.diag.cadence_pending);
+    dosvm_audio_log(v); /* fx-9: cadence_clock, then the cadence line */
+    CHECK(vm_audio_logs == logs + 2 && !v->audio.diag.cadence_pending);
     CHECK(strstr(last_vm_audio_log, "cadence blocks=430 late_acks=1 merged=428 ack_max_ms=") &&
           strstr(last_vm_audio_log, "irq_latency_max_us=0 underruns=0 irq_latency_avg_us=0") &&
           strstr(last_vm_audio_log, "descheduled=") && strstr(last_vm_audio_log, "parked=") &&
           strstr(last_vm_audio_log, "if_clear="));
-    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 1);
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 2);
     ms(4999); CHECK(!v->audio.diag.cadence_pending);
     ms(1); CHECK(v->audio.diag.cadence_pending);
     v->dpmi.depth = 1; v->dpmi.rec[0].flags = DPMI_RF_HWINT;
-    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 1 && v->audio.diag.cadence_pending);
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 2 && v->audio.diag.cadence_pending);
     v->dpmi.depth = 0;
-    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 2 && !v->audio.diag.cadence_pending);
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 4 && !v->audio.diag.cadence_pending);
     CHECK(v->audio.diag.cadence.blocks == 431 && !v->audio.diag.cadence.late_acks);
     dsp_reset(v); destroy(v, true); empty();
     puts("f3-40 protected cadence: five-second snapshots, real late ack age, merged IRQs, parked/descheduled/IF-clear counters, deferred outside ISR, no timer logging PASS");

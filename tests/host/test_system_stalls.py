@@ -70,7 +70,7 @@ int main(void)
         source = (ROOT / 'src/kernel/core/task.c').read_text()
         declarations = source[source.index('static struct task *rq_head'):source.index('void task_stack_init')]
         functions = []
-        for name in ('schedule', 'sched_vm_tick_work', 'sched_tick',
+        for name in ('schedule', 'sched_tick',
                      'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
             match = re.search(r'^(?:static )?[^\n]+\b' + name + r'\([^\n]*\)\s*\{', source, re.M)
             self.assertIsNotNone(match, name)

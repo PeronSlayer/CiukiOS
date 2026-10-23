@@ -1097,12 +1097,6 @@ void schedule(void)
     irq_restore(f);
 }
 
-static void sched_vm_tick_work(void *arg)
-{
-    (void)arg;
-    if (dosvm_tick) dosvm_tick(); /* computes elapsed from the current absolute tick */
-}
-
 void sched_tick(void)
 {
     bool was_throttled = device_throttled();
@@ -1120,7 +1114,12 @@ void sched_tick(void)
         if (ordinary_ticks == FOCUS_PERIOD) ordinary_ticks = focus_ticks = 0;
     }
     file_clock_tick();
-    if (dosvm_tick) kwork_queue(sched_vm_tick_work, 0);
+    /* fx-9 (R1/R3): the DOS VM clock is simulated-hardware time. Its top
+     * half samples the interrupted task and wakes the audio-class vm-clock
+     * task in O(1) (vm/dosvm_clock.c); it is no longer queued on the shared
+     * device worker, whose demotion under other devices' load stopped the
+     * VM's PIT and SB16 timeline (T23 trial 423b803a). */
+    if (dosvm_tick) dosvm_tick();
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_TIMERS);
     ktimer_tick(g_ticks);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_TICK_SCHED);
