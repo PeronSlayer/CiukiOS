@@ -226,6 +226,10 @@ struct desktop {
     uint64_t chrome_rebuilds;
     int frame_valid, scanout_valid;
     struct desk_damage move_damage;
+    /* fx-2: the stacking the composed frame shows (window id per slot, 0
+     * when hidden, and its order). desk_stack_damage reconciles it: a
+     * changed relative order invalidates the pair's overlap. */
+    uint32_t stack_window[DESK_CLIENTS]; uint64_t stack_order[DESK_CLIENTS];
     uint32_t cursor_under[32*32]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
     unsigned cursor_shape, cursor_loaded;
@@ -410,6 +414,7 @@ void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
 int desk_client_damage(struct desktop *, int, struct desk_box);
+void desk_stack_damage(struct desktop *);
 void desk_caption_damage(struct desktop *, int);
 unsigned desk_shell_occluders(const struct desktop *, struct desk_box *); /* SH_LEVELS+6 slots */
 static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }

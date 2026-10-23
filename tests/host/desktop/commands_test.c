@@ -101,6 +101,7 @@ static int packed_upload(int display,int surface,const struct ciuki_rect *r)
     }
     return 0;
 }
+#ifndef DESKTOP_COMMANDS_NO_MAIN /* fx-2: occlusion_test.c reuses the harness above */
 static void scenario_commands(unsigned bpp)
 {
     pixel_bpp=bpp;
@@ -129,3 +130,4 @@ static void scenario_commands(unsigned bpp)
     printf("desktop command batches %u bpp: %u batches, %u released fences, %u MONO rows, KEYED and INVERT, exact frames and ARGB hotspot/MOVE/SHOW PASS\n",bpp,batches,released,command_counts[5]);
 }
 int main(void) { scenario_commands(32); scenario_commands(16); return 0; }
+#endif
