@@ -10,6 +10,7 @@
 #include <ciuki/sync.h>
 #include <ciuki/work.h>
 #include <ciuki/registry.h>
+#include <ciuki/vga_ports.h>
 #include <ciuki/init.h>
 #define SEL_KCODE 0x08
 
@@ -1130,6 +1131,43 @@ static bool takeover_idle(int h, gen_t g)
 static bool takeover_busy(int h, gen_t g) { (void)h; (void)g; return false; }
 static bool takeover_cancelled(int h, gen_t g)
 { CHECK(!registry_quarantine(h,g)); return true; }
+static void release_active_or_claimed(int h)
+{
+    gen_t g = registry_get((unsigned)h)->generation;
+    CHECK(registry_activate(h, g) == 0);
+    release_active(h);
+}
+/* fx-1 on the production registry: LPT1 at 3BCh (the T23's BDA value) holds
+ * 3BCh-3BEh; the display claims the Windows pair 3B0h-3BBh + 3C0h-3DFh. */
+static void test_vga_ports_with_lpt(void)
+{
+    static const uint16_t lpt_bases[] = {0x3BC, 0x378, 0x278};
+    for (unsigned i = 0; i < 3; i++) {
+        registry_init();
+        int lpt = registry_claim(RES_PORT, lpt_bases[i], lpt_bases[i] + 3u, "lpt1", false);
+        CHECK(lpt >= 0);
+        gen_t lg = registry_get((unsigned)lpt)->generation;
+        CHECK(registry_activate(lpt, lg) == 0);
+        /* The pre-fx-1 single span collides only where LPT1 really lives. */
+        int span = registry_claim(RES_PORT, 0x3B0, 0x3E0, "savage-vga", false);
+        CHECK((span < 0) == (lpt_bases[i] == 0x3BC));
+        if (span >= 0) release_active_or_claimed(span);
+        int color = registry_claim(RES_PORT, CIUKI_VGA_COLOR_FIRST, CIUKI_VGA_COLOR_END, "savage-vga", false);
+        int mono = registry_claim(RES_PORT, CIUKI_VGA_MONO_FIRST, CIUKI_VGA_MONO_END, "i810", false);
+        CHECK(color >= 0 && mono >= 0);
+        /* Genuine overlaps with either side are still refused and change nothing. */
+        struct registry_stats before, after; registry_snapshot(&before);
+        CHECK(registry_claim(RES_PORT, 0x3C8, 0x3CC, "intruder", false) == -EINVAL);
+        CHECK(registry_claim(RES_PORT, 0x3B4, 0x3B6, "intruder", false) == -EINVAL);
+        CHECK(registry_claim(RES_PORT, lpt_bases[i] + 2u, lpt_bases[i] + 4u, "intruder", false) == -EINVAL);
+        registry_snapshot(&after);
+        CHECK(after.live == before.live && after.claims == before.claims);
+        if (color >= 0) { gen_t g = registry_get((unsigned)color)->generation; CHECK(registry_activate(color, g) == 0); release_active(color); }
+        if (mono >= 0) { gen_t g = registry_get((unsigned)mono)->generation; CHECK(registry_activate(mono, g) == 0); release_active(mono); }
+        release_active(lpt);
+    }
+    puts("VGA ports with LPT: PASS (3BCh/378h/278h x Windows VGA ranges; old single span refused only at 3BCh; true overlaps refused)");
+}
 static void test_takeover(void)
 {
     for (unsigned kind=0;kind<2;kind++) {
@@ -1186,6 +1224,7 @@ int main(void)
     test_fs_wait_lock();
     test_work_report_bound();
     test_takeover();
+    test_vga_ports_with_lpt();
     test_generation_exhaustion();
     printf("kernel services: %s (%u failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

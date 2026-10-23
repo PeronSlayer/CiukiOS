@@ -245,7 +245,7 @@ static const struct accel_ops *start(const struct fb_device *fb, struct vfs *vfs
     uint32_t base=p->bar[1]&~15u;
     if ((base&0x7ffff) || !video_disjoint(base,0x80000,fb->phys,g_boot.display.vram_bytes)) return 0;
     void *mmio=video_map(s,RES_MMIO,base,0x80000);
-    if (!mmio || !video_map(s,RES_PORT,0x3b0,0x30)) goto fail;
+    if (!mmio || !video_claim_vga_ports(s)) goto fail;
     video_hardware_io(s,mmio);
     uint32_t pitch=((uint32_t)s->io.indexed_read(s->io.ctx,0x3d4,0x13)|
         (uint32_t)s->io.indexed_read(s->io.ctx,0x3d4,EXT_OFFSET)<<8)*8;

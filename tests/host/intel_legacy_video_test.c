@@ -506,6 +506,14 @@ static void production_tests(bool newer, const char *kind)
         assert(releases==claims-(claim_fail_at ? 1 : 0)); return;
     }
     assert(ops && model.packets>=4 && !memcmp(reference,model.vram,live.size)); /* saved pixels restored */
+    /* fx-1: VGA I/O is claimed as 3B0h-3BBh + 3C0h-3DFh, never 3BCh-3BFh (LPT). */
+    { unsigned ports=0; bool mono=false,color=false;
+      for (unsigned i=0;i<slots;i++) if (resources[i].type==RES_PORT) {
+          ports++; assert(resources[i].end<=0x3bc || resources[i].start>=0x3c0);
+          mono|=resources[i].start==0x3b0 && resources[i].end==0x3bc;
+          color|=resources[i].start==0x3c0 && resources[i].end==0x3e0;
+      }
+      assert(ports==2 && mono && color); }
     if (newer && !strcmp(kind,"lease-loss")) {
         unsigned writes=model.writes,reads=model.reads;
         resources[0].state=RS_QUARANTINED;

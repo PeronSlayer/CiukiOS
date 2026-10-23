@@ -1469,13 +1469,20 @@ static void test_video_calls(void)
         CHECK(biosvm_video_switch(0x111, m) == -V86_EIO && enters == before);
         CHECK(!video_active && !vm_memory(0, 0xA0000, 1, false));
         for (unsigned i = 0; i < video_lease_count; i++) CHECK(registry_get(video_leases[i].handle)->state == RS_QUARANTINED);
-        CHECK(video_lease_count==3 && video_claimed);
+        CHECK(video_lease_count==4 && video_claimed);
+        /* fx-1: firmware video holds 3B0h-3BBh and 3C0h-3DFh, never 3BCh-3BFh (LPT). */
+        { bool lo=false,hi=false;
+          for (unsigned i=0;i<video_lease_count;i++) { const struct resource *r=registry_get(video_leases[i].handle);
+              if (r->type!=RES_PORT) continue;
+              CHECK(r->end<=0x3BC || r->start>=0x3C0 || r->start==0x1CE);
+              lo|=r->start==0x3B0 && r->end==0x3BC; hi|=r->start==0x3C0 && r->end==0x3E0; }
+          CHECK(lo && hi); }
     }
     /* Preparation may run while Savage owns the same VGA ports. It performs
      * no video claim or firmware call; switch is invoked only after stop. */
     boot_fixture(true); g_boot.input_policy=CBI_INPUT_NATIVE;
     video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
-    int h=registry_claim(RES_PORT,0x3b0,0x3e0,"savage-vga",false);
+    int h=registry_claim(RES_PORT,0x3c0,0x3e0,"savage-vga",false);
     CHECK(h>=0); gen_t gen=registry_get(h)->generation;
     CHECK(!registry_activate(h,gen));
     unsigned before=enters;
@@ -1483,7 +1490,7 @@ static void test_video_calls(void)
     CHECK(registry_get(h)->state==RS_ACTIVE && registry_get(h)->generation==gen);
     CHECK(!registry_quiesce(h,gen,video_idle) && !registry_release(h,gen));
     uint8_t m[256]; CHECK(!biosvm_video_switch(0x111,m) && !video_claimed && !video_lease_count);
-    h=registry_claim(RES_PORT,0x3b0,0x3e0,"savage-vga",false);
+    h=registry_claim(RES_PORT,0x3c0,0x3e0,"savage-vga",false);
     CHECK(h>=0); /* firmware released the port interval for the next accelerator */
     puts("PASS biosvm video: serialized 4F02(LFB)/4F01/4F03, query failure/restore, temporary aperture/leases, native-input isolation, timeout quarantine");
 }
@@ -1500,7 +1507,7 @@ static void test_fullscreen_calls(void)
     unsigned checkpoints=video_checkpoints;
     CHECK(!biosvm_video_fullscreen_begin(0x13));
     CHECK(video_checkpoints>checkpoints);
-    CHECK(fullscreen_video && fullscreen_bytes==1024 && video_claimed && video_lease_count==3);
+    CHECK(fullscreen_video && fullscreen_bytes==1024 && video_claimed && video_lease_count==4);
     CHECK(!video_active && !firmware.io && !vm_memory(0,0xA0000,1,false));
     CHECK(video_current_mode==0x13 && video_call_count==4);
     uint8_t info[256];

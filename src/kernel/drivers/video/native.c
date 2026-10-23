@@ -1,6 +1,7 @@
 /* Private native-port lifecycle, bounded polling and activation reference.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "native.h"
+#include <ciuki/vga_ports.h>
 #include <ciuki/mm.h>
 #include <ciuki/swdib.h>
 #include "../../fs/vfs.h"
@@ -159,6 +160,14 @@ static void *claim_access(struct video_native *s, enum res_type type, uint32_t b
 }
 void *video_map(struct video_native *s, enum res_type type, uint32_t base, uint32_t bytes)
 { return claim_access(s,type,base,bytes,true); }
+/* VGA legacy I/O as Windows assigns it: 3B0h-3BBh and 3C0h-3DFh, never 3BCh-3BFh
+ * (a parallel port lives there). A partial success leaves its lease in the
+ * access list; the caller's failure path releases it with video_release. */
+bool video_claim_vga_ports(struct video_native *s)
+{
+    return video_map(s,RES_PORT,CIUKI_VGA_MONO_FIRST,CIUKI_VGA_MONO_END-CIUKI_VGA_MONO_FIRST) &&
+           video_map(s,RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END-CIUKI_VGA_COLOR_FIRST);
+}
 bool video_claim(struct video_native *s, uint32_t base, uint32_t bytes)
 { return claim_access(s,RES_MMIO,base,bytes,false)!=0; }
 void video_release(struct video_native *s)

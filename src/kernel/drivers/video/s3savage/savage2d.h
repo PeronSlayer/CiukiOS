@@ -35,7 +35,7 @@ struct savage_io {
     /* Optional MMIO VGA alias diagnostic, never the operational transport. */
     uint8_t (*read8)(void *, uint32_t);
     void (*write8)(void *, uint32_t, uint8_t);
-    /* Byte VGA I/O only: inclusive 0x3b0, exclusive 0x3e0. */
+    /* Byte VGA colour-range I/O only: 0x3c0 inclusive, 0x3e0 exclusive. */
     uint8_t (*read_port)(void *, uint16_t);
     void (*write_port)(void *, uint16_t, uint8_t);
     /* RE046-B section 7: 2D readback supports halfword bus cycles only. */

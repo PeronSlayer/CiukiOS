@@ -7,6 +7,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/mtrr.h>
 #include <ciuki/registry.h>
+#include <ciuki/vga_ports.h>
 #include "savage2d.h"
 #include <ciuki/display_driver.h>
 #include <ciuki/task.h>
@@ -982,13 +983,13 @@ static void hw_write16(void *ctx, uint32_t offset, uint16_t value)
 static uint8_t hw_port_read(void *ctx, uint16_t port)
 {
     (void)ctx;
-    uint8_t value = port >= 0x3b0 && port < 0x3e0 ? inb(port) : 0xff;
+    uint8_t value = ciuki_vga_color_port(port) ? inb(port) : 0xff;
     return value;
 }
 static void hw_port_write(void *ctx, uint16_t port, uint8_t value)
 {
     (void)ctx;
-    if (port >= 0x3b0 && port < 0x3e0) outb(port, value);
+    if (ciuki_vga_color_port(port)) outb(port, value);
 }
 static int hw_delay(void *ctx, uint32_t us)
 {
@@ -1574,7 +1575,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         gpu->vendor, gpu->device, gpu->command, gpu->bar[0], gpu->bar[1], d->phys,
         g_boot.display.tag == CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0);
     if (port_claim < 0) {
-        port_claim = registry_claim(RES_PORT, 0x3b0, 0x3e0, "savage-vga", false);
+        port_claim = registry_claim(RES_PORT, CIUKI_VGA_COLOR_FIRST, CIUKI_VGA_COLOR_END, "savage-vga", false);
         if (port_claim < 0) { attempt_blocked = true; return decline("port_claim_failed"); }
         port_generation = registry_get(port_claim)->generation;
         if (registry_activate(port_claim, port_generation)) {
@@ -2042,7 +2043,7 @@ int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line line, void *
         return out->error=-ENOSPC;
     int claims[3]={-1,-1,-1}; gen_t generations[3]={0};
     uint32_t base=gpu->bar[0]&~15u;
-    claims[0]=registry_claim(RES_PORT,0x3b0,0x3e0,"savage-check-vga",false);
+    claims[0]=registry_claim(RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END,"savage-check-vga",false);
     if (claims[0]>=0) claims[1]=registry_claim(RES_MMIO,base,base+SAVAGE_MMIO_BYTES,"savage-check",false);
     if (claims[1]>=0) claims[2]=registry_claim(RES_MMIO,d->phys+offset,d->phys+offset+SAVAGE_SWEEP_BYTES,"savage-check-vram",false);
     int e=0; bool safe=true;

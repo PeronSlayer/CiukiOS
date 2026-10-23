@@ -2,6 +2,7 @@
  * Register references: Linux v6.12 tridentfb.c and include/video/trident.h.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/vga_ports.h>
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
 #include <ciuki/mtrr.h>
@@ -244,7 +245,7 @@ static const struct accel_ops *start(const struct fb_device *d,struct vfs *vfs)
     if (!p) return 0;
     struct tb_io io={0,read8,read32,write8,write32,now_us,access_valid};
     tb_construct(&engine,tb_device(p->device),d,&io);
-    port_claim=registry_claim(RES_PORT,0x3b0,0x3e0,"trident-vga",false);
+    port_claim=registry_claim(RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END,"trident-vga",false);
     if (port_claim<0) { engine.reason="port_claim_failed"; return 0; }
     port_generation=registry_get(port_claim)->generation;
     if (registry_activate(port_claim,port_generation) || !firmware_ready(d)) {
