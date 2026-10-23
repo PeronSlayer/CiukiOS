@@ -302,6 +302,8 @@ static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; return ap_preference_forget(NULL,id); }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
+#include "accel_retry.h"
+static int accel_retry(void *ctx){(void)ctx;return cp_accel_retry_at("/system/settings/accel.cfg");}
 static int engine_query(void *ctx, struct ciuki_accel_info *info)
 {
     struct cp_main *m=ctx;
@@ -631,7 +633,7 @@ int main(int argc, char **argv)
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
-    h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
+    h->engine=engine_query; h->accel_retry=accel_retry; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;

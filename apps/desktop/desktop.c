@@ -4,6 +4,7 @@
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
+#include "firstboot.h"
 #include "sound_storage.h"
 #include "media_notice.h"
 #include "settings_io.h"
@@ -2052,9 +2053,12 @@ int main(int argc, char **argv)
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (du_completion_init(&desktop_completion)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
+    int firstboot_pages=gate?0:desk_firstboot(d);
     shell_setup(d,gate);
     if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
+    if(firstboot_pages&(1u<<FB_DISPLAY))desk_task_launch_args(d,"control",(const char *const[]){"--panel=display"},1);
+    if(firstboot_pages&(1u<<FB_CHANGE_CLOCK))desk_task_launch_args(d,"control",(const char *const[]){"--panel=datetime"},1);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) startup_launch(d,launch);

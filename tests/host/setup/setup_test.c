@@ -44,6 +44,7 @@ static int read_file(void *c,const char *path,char *out,size_t cap,size_t *lengt
     if(!strcmp(path,"F:\\SETUP.INF"))text=f.usb_inf;
     if(!strcmp(path,"C:\\system\\licenses\\GPL.TXT"))text="GNU General Public License version 2\nOrigin: Free Software Foundation\n";
     if(!strcmp(path,"D:\\LICENSES\\INDEX.TXT"))text="L0001.TXT  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  123  payload:/system/licenses/GPL.TXT\n";
+    if(!strcmp(path,"C:\\SYSTEM\\BUILD.TXT"))text="schema=1\nsource_commit=aaaa\nbuild_date=2026-10-23T00:00:00Z\n";
     if(!strcmp(path,"D:\\LICENSES\\SOURCES.TXT"))text="Corresponding source archives: \\SOURCES\\CIUKIOS.ZIP\n";
     if(!text)return -ENOENT;
     *length=strlen(text);if(*length>cap)return -EFBIG;memcpy(out,text,*length);return 0;
@@ -53,6 +54,7 @@ static int write_file(void *c,const char *path,const char *text,size_t length){
     snprintf(f.last_path,sizeof(f.last_path),"%s",path);
     if(length>=sizeof(f.written))length=sizeof(f.written)-1;memcpy(f.written,text,length);f.written[length]=0;return 0;
 }
+static int make_dir(void *c,const char *path){(void)c;assert(!strncmp(path,"F:\\CIUKIOS-RESCUE-",18));return 0;}
 static int list(void *c,const char *path,char (*out)[64],unsigned cap){(void)c;(void)path;assert(cap);strcpy(out[0],"GPL.TXT");return 1;}
 static void record(void *c,const char *line){(void)c;size_t k=strlen(f.records);snprintf(f.records+k,sizeof(f.records)-k,"%s\n",line);}
 static int eject(void *c){(void)c;f.eject++;return 0;}
@@ -102,7 +104,7 @@ static void fixture(void){
     setup_fake.entered=entered;
 }
 static void init(void){
-    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.dest_letter=letter,.portrait=portrait};
+    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.dest_letter=letter,.portrait=portrait};
     du_init(&ui,pixels,ST_W,ST_H);ui.focused_window=1;assert(!st_init(&a,&ui,&h));
 }
 static void no_writes(void){assert(!setup_fake.execute_calls&&!setup_fake.mutations&&!f.writes);}
@@ -204,7 +206,7 @@ static void interactive(void){
     tap(0x3d);assert(ui.dialog.id==ST_DLG_EXIT);tap(DU_KEY_ESC);assert(!ui.dialog.kind);no_writes();st_free(&a);
     for(int refusal=ST_STOP_VIDEO;refusal<=ST_STOP_DISK;refusal++){fixture();f.refusal=refusal;if(refusal==ST_STOP_NO_DISK)f.disks_n=0;if(refusal==ST_STOP_DISK)f.disks[0].installable=0;init();assert(a.page==ST_PAGE_STOP&&(int)a.stop==refusal);char name[64];snprintf(name,sizeof(name),"hardware-refusal-%d",refusal);frame(name);no_writes();tap(DU_KEY_F10);assert(f.reboot==1);no_writes();st_free(&a);}
     fixture();init();st_action(&a,ST_ID_RESCUE);assert(a.page==ST_PAGE_RESCUE);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();
-    st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();st_free(&a);
+    assert(strstr(a.report,"source_commit=aaaa"));st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();st_free(&a);
     fixture();init();summary();tap(DU_KEY_ESC);assert(a.page==ST_PAGE_NETWORK&&!a.plan_ok);no_writes();st_free(&a);
     fixture();init();summary();a.disks[0].part_count=24;setup_fake.plan.erased_partitions=16;setup_fake.plan.erased_total=24;
     st_goto(&a,ST_PAGE_NETWORK);tap(DU_KEY_F10);assert(a.page==ST_PAGE_SUMMARY&&a.plan_ok);
