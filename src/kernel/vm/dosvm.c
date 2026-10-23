@@ -1693,6 +1693,19 @@ bool dosvm_clock_turn(unsigned slot, uint32_t *generation)
     dosvm_uart_service(v,g_ticks); /* wakes a halted COM client, no hard-IRQ I/O */
     v->monitor.ticks = g_ticks;
     uint64_t elapsed = g_ticks - v->ticks;
+    /* fx-16: a VM parked at its full-screen checkpoint (the switch, or a
+     * background full-screen VM suspended by its settings) is a suspended
+     * VM: VPICD simulates no interrupt into it (Win95 DDK,
+     * VPICD_Set_Int_Request) and its devices do not advance. Before, the
+     * PIT and the SB16 DSP kept running for the whole switch (T23 trial
+     * e831e685: parked=808 ms, merged=102, underruns=94): the unrefilled
+     * auto-init buffer replayed as a buzz and the game resumed 0.9 s later
+     * with its timer ticks merged away. Parked time is discarded. */
+    if (v->fullscreen_parked && elapsed) {
+        v->parked_ms += elapsed;
+        v->ticks = g_ticks;
+        elapsed = 0;
+    }
     v->perf.if_samples_ms += elapsed;
     if (!v->monitor.vif) {
         v->perf.if_clear_ms += elapsed;

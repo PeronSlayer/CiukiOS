@@ -101,6 +101,23 @@ struct dpmi_client {
 struct dpmi_block { struct vm_block b; uint32_t handle; uint8_t owner; };
 struct dpmi_dos { uint16_t seg, paras, sel, count; uint8_t owner; };
 struct dpmi_watch { bool used, hit; uint8_t owner, size, type; uint32_t addr; };
+/* fx-16: a CLI site whose PUSHF[;POP r] adjacency was proven by the
+ * forward decode from an observed boundary (flags_preceding). The bytes
+ * [linear-len, linear) are kept and compared on every reuse; the saved
+ * image is still checked against the live flags at each CLI. */
+#define DPMI_CLI_SITES 32u
+#define DPMI_CLI_BYTES 16u
+struct dpmi_cli_site {
+    uint32_t linear, used;
+    uint8_t pop, width, len, big, client;
+    bool provisional;               /* pattern rule only, no forward decode yet */
+    uint8_t code[DPMI_CLI_BYTES];
+};
+/* fx-16 IF-tracking evidence (per VM, internal, not ABI). */
+struct dpmi_cli_stats {
+    uint32_t candidates, hits, proved, control, pattern, missed;
+    uint32_t seeds, seeds_skipped, irq_proofs, irq_proofs_skipped;
+};
 struct dpmi {
     uint32_t ldt[DPMI_LDT_ENTRIES][2] __attribute__((aligned(8)));
     uint8_t kind[DPMI_LDT_ENTRIES], owner[DPMI_LDT_ENTRIES];
@@ -133,6 +150,15 @@ struct dpmi {
     uint32_t decode_stack[8];       /* root return proof, captured at that boundary */
     bool decode_ds_valid;
     uint32_t decode_stack_linear, decode_ds_base;
+    /* fx-16: proven CLI sites and the boundary-seeding demand. Seeds
+     * (return tracker breakpoints, IRQ-boundary proofs, stack snapshots)
+     * serve only CLI proofs; once every flags-saving CLI is a proven site
+     * for DPMI_SEED_IDLE_MS, no seed is acquired until a CLI misses. */
+    struct dpmi_cli_site cli_site[DPMI_CLI_SITES];
+    uint32_t cli_clock;
+    uint64_t cli_miss_tick;
+    bool cli_settled;               /* a site was proven since the last reset */
+    struct dpmi_cli_stats cli;
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */
     uint32_t shadow_eip;
     unsigned clients, depth;
@@ -205,6 +231,7 @@ int dpmi_default_int(struct dosvm *, struct v86_frame *, uint8_t vector, bool ir
 int dpmi_enter_pm_handler(struct dosvm *, struct v86_frame *, uint8_t vector, uint8_t flags);
 int dpmi_stub_trap(struct dosvm *, struct v86_frame *, uint32_t offset);
 bool dpmi_handler_live(struct dosvm *, struct dpmi_vec);
+void dpmi_cli_sites_reset(struct dosvm *);  /* fx-16: client entry/exit */
 void dpmi_trace_irq_target(struct dosvm *, const struct v86_frame *, const char *, uint8_t, struct dpmi_vec);
 
 /* dpmi.c */

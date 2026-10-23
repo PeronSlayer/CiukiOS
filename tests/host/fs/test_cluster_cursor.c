@@ -106,6 +106,45 @@ static uint32_t cluster_of(const struct fat_entry *e, uint32_t index) {
     for (uint32_t i=0;i<index;i++) CHECK(!fat_get_cluster(&vol,c,&c));
     return c;
 }
+/* fx-16: DOOM's W_ReadLump is lseek(position) + read(size) in the order the
+ * game asks for lumps, not in file order (id Software linuxdoom-1.10
+ * w_wad.c). T23 trial e831e685: INT FEh (the unified DOS IFS) cost 736 ms
+ * in one 5 s window of full-screen play while the SB16 IRQ waited up to
+ * 69 ms. Each backward seek walked the chain from the first cluster (MS-DOS
+ * FNDCLUS); fat.c's own cost note gives ~1 us per cached FAT entry decode on
+ * the T23. Replay 400 lump reads of 1-48 KiB at scattered offsets of the
+ * 6674-cluster file and count FAT lookups per read. */
+static void doom_lump_reads(void) {
+    int h=vfs_open(&t,GAME,VFS_READ,VFS_DENY_WRITE,0); CHECK(h>=0);
+    static uint8_t buf[49152]; uint64_t at; size_t done;
+    uint32_t seed=0x1993u, backward=0, reads=0, last=0;
+    uint64_t begin=lookups, worst=0, start=now_ns(), backward_lookups=0;
+    for (unsigned i=0;i<400;i++) {
+        seed=seed*1103515245u+12345u; uint32_t pos=(seed>>4)%(GAME_BYTES-sizeof(buf));
+        seed=seed*1103515245u+12345u; uint32_t n=1024u+(seed>>8)%(sizeof(buf)-1024u);
+        uint64_t before=lookups;
+        CHECK(!vfs_seek(&t,h,pos,VFS_SEEK_SET,&at) && !vfs_read(&t,h,buf,n,&done) && done==n);
+        for (size_t k=0;k<n;k+=1021) CHECK(buf[k]==game_byte(pos+k));
+        uint64_t cost=lookups-before;
+        if (i && pos<last) { backward++; backward_lookups+=cost; }
+        if (i>=200 && cost>worst) worst=cost;   /* first reads learn the leading run */
+        last=pos; reads++;
+        while (cache_prefetch_tick(&cache)) { }
+    }
+    uint64_t total=lookups-begin, ns=now_ns()-start;
+    CHECK(!vfs_close(&t,h));
+    printf("TRACE fx-16 lump_reads=%u backward=%u fat_lookups=%llu per_read=%.1f per_backward=%.1f worst=%llu t23_ms_per_backward=%.2f host_ms=%.1f\n",
+        reads,backward,(unsigned long long)total,(double)total/reads,
+        backward ? (double)backward_lookups/backward : 0.0,(unsigned long long)worst,
+        backward ? (double)backward_lookups/backward/1000.0 : 0.0,ns/1e6);
+    /* A read covers at most 13 clusters; with the learned run it needs only
+     * the contiguity checks inside its own span (and the stream planner's
+     * window), independent of where in the file it starts. Learning the run
+     * costs one pass over the chain in total, spread over the walks the
+     * reads make anyway. */
+    CHECK(backward>100 && worst<=64 && backward_lookups<=backward*40u);
+    CHECK(total<=GAME_BYTES/4096u+reads*40u);
+}
 static void cursor_rules(void) {
     int a=vfs_open(&w,"C:/FRAG.BIN",VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0); CHECK(a>=0);
     fragmented(0,a);
@@ -318,6 +357,7 @@ int main(int argc, char **argv) {
     vfs_init(&space); mount();
     CHECK(!vfs_table_init(&space,&t,2) && !vfs_table_init(&space,&w,2));
     sequential_reads(argv[2]);
+    doom_lump_reads();
     cursor_rules();
     write_generations();
     digest_version_watches();

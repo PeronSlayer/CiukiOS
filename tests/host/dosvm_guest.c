@@ -499,6 +499,47 @@ static unsigned last_cli_depth;
 /* Optional startup cost replay, usable with both pre-f3-14 and current VM
  * sources. Classify the trapped bytes, never execute or patch guest code. */
 static uint64_t replay_cost[14], replay_ns[14];
+/* fx-16 GUEST_T23=1 (with GUEST_PERF=1): the T23 time model of trial
+ * e831e685. Every monitor exit costs wall time: this host's measured
+ * monitor time of that exit (production trap_cycles) times the ratio of the
+ * T23's average for its cause (BOOT.LOG vm_perf_cost, banks n=7 and n=8,
+ * DOOM full screen) to this host's HEAD average for the same cause in the
+ * same replay window (fx-16 report, calibration table). An exit made
+ * cheaper on the host is cheaper on the model T23 by the same factor. Monitor
+ * time and the trial's off-CPU time (vm-clock 40 us each ms, refill/device
+ * work 1.2 ms each 10 ms, a 7 ms desktop stretch each 100 ms: about 23 %,
+ * the trial measured 30 % off-CPU) consume the instruction clock; PIT ticks
+ * inside them are sampled as monitor time (VM current, no trap) or as
+ * descheduled time (another task current). Not hardware evidence. */
+static bool t23_model;
+/* GUEST_T23_FULLSCREEN=1: the full-screen DOS VM owns the physical VGA
+ * ports and aperture (arch_vga_io, map_aperture): its VGA cycles are not
+ * monitor exits on the T23; the runner still emulates them, charged 1 us. */
+static bool t23_fullscreen;
+static uint64_t t23_monitor, t23_off;       /* owed time, instruction units */
+static uint64_t t23_charged_ns[DOSVM_COST_COUNT], t23_exits[DOSVM_COST_COUNT];
+static double t23_ratio(unsigned cause)
+{
+    /* T23 us/exit (n=7+8) / host HEAD us/exit (shooting window). */
+    switch (cause) {
+    case DOSVM_COST_IO: return 21.6 / 0.79;
+    case DOSVM_COST_PIT_PIC: return 19.2 / 0.79;
+    case DOSVM_COST_PM_FLAGS: return 56.6 / 3.04;
+    case DOSVM_COST_DB: return 37.4 / 0.83;
+    case DOSVM_COST_TIMER: return 60.7 / 4.84;
+    case DOSVM_COST_VGA_IO: return 19.7 / 1.86;
+    default: return 21.6 / 0.79;           /* the I/O exit ratio */
+    }
+}
+static void t23_charge(void)
+{
+    if (!t23_model || !g_tsc_per_ms) return;
+    unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
+    double ns = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms * t23_ratio(cause);
+    if (t23_fullscreen && (cause == DOSVM_COST_VGA_IO || cause == DOSVM_COST_VGA_PF)) ns = 1000.0;
+    t23_charged_ns[cause] += (uint64_t)ns; t23_exits[cause]++;
+    t23_monitor += (uint64_t)(ns * guest_slice / 1000000.0);
+}
 static uint64_t replay_clock(void)
 {
     struct timespec t;
@@ -755,6 +796,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }
     if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
     else cpu = gv->frame;
+    t23_charge();
     if (guest_perf && gv->perf.if_enable[DOSVM_IF_FORCED] != forced)
         printf("isr_forced cli=%04x:%08x ss:sp=%04x:%08x depth=%u seed=%04x:%08x at=%04x:%08x\n",
                last_cli.tf.cs, last_cli.tf.eip, last_cli.tf.user_ss, last_cli.tf.user_esp,
@@ -777,9 +819,49 @@ static bool video_started(void)
     return dosvm_video_info(gv->info.key, &video) && video.mode == 0x13 && video.unchained &&
         video.starts >= 2 && gv->dpmi.stats.irqs_pm - startup_irqs >= 10;
 }
-/* Run until done() or the VM stops or the instruction budget runs out. */
 static int perf_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 { (void)arg; (void)y; (void)pixels; (void)bytes; return 0; }
+static void guest_timer_tick(void)
+{
+    g_ticks++;
+    if (guest_perf) perf_phase(gv, 2);
+    host_clock_tick();
+    deliver(0x20, 0, 0);        /* the host's 1 kHz timer IRQ: a delivery point */
+    if (guest_perf && !(g_ticks % 16)) {
+        dosvm_task_switch(&caller);
+        struct ciuki_rect damage;
+        /* Time one whole sample, outside production accounting.
+         * Per-yield clocks would dominate the cheap row groups. */
+        uint64_t presenter_begin = replay_clock();
+        dosvm_vga_present(gv, perf_row, 0, g_ticks, &damage);
+        uint64_t elapsed = replay_clock() - presenter_begin;
+        if (elapsed > presenter_sample_max) presenter_sample_max = elapsed;
+        dosvm_task_switch(gv->task);
+    }
+    if (t23_model) {
+        uint64_t off_us = 40 + (g_ticks % 10 == 0 ? 1200 : 0) + (g_ticks % 100 == 50 ? 7000 : 0);
+        t23_off += off_us * guest_slice / 1000;
+    }
+}
+/* fx-16: consume owed monitor and off-CPU time before the guest runs on.
+ * A tick inside monitor time interrupts the VM's kernel code (sampled as
+ * running, no trap); a tick inside off-CPU time interrupts another task. */
+static void t23_settle(void)
+{
+    while (t23_model && (t23_monitor || t23_off) && !stopped()) {
+        bool off = !t23_monitor;
+        uint64_t *debt = off ? &t23_off : &t23_monitor;
+        if (*debt < slice_left) { slice_left -= (unsigned)*debt; *debt = 0; continue; }
+        *debt -= slice_left; slice_left = guest_slice;
+        g_ticks++;
+        g_current = off ? &caller : gv->task;
+        host_clock_tick();
+        g_current = gv->task;
+        uint64_t off_us = 40 + (g_ticks % 10 == 0 ? 1200 : 0) + (g_ticks % 100 == 50 ? 7000 : 0);
+        t23_off += off_us * guest_slice / 1000;
+    }
+}
+/* Run until done() or the VM stops or the instruction budget runs out. */
 static int run(uint64_t budget, bool (*done)(void))
 {
     if (guest_perf) { dosvm_task_switch(gv->task); perf_phase(gv, 1); }
@@ -841,6 +923,7 @@ static int run(uint64_t budget, bool (*done)(void))
             }
             i21_observe(&ev);
             deliver(ev.vector, ev.err, ev.cr2);
+            t23_settle();
             if (quake_exec_mode && quake_alias_calls && !quake_alias_returned &&
                 frame_pm() && cpu.tf.cs == quake_alias_cs && cpu.tf.eip == quake_alias_ip &&
                 !(cpu.tf.eflags & V86_CF)) {
@@ -856,21 +939,8 @@ static int run(uint64_t budget, bool (*done)(void))
         if (stopped() || unexpected) break;
         if (ev.executed >= slice_left && !(rc == GCPU_BUDGET && ev.ss_shadow)) {
             slice_left = guest_slice;
-            g_ticks++;
-            if (guest_perf) perf_phase(gv, 2);
-            host_clock_tick();
-            deliver(0x20, 0, 0);        /* the host's 1 kHz timer IRQ: a delivery point */
-            if (guest_perf && !(g_ticks % 16)) {
-                dosvm_task_switch(&caller);
-                struct ciuki_rect damage;
-                /* Time one whole sample, outside production accounting.
-                 * Per-yield clocks would dominate the cheap row groups. */
-                uint64_t presenter_begin = replay_clock();
-                dosvm_vga_present(gv, perf_row, 0, g_ticks, &damage);
-                uint64_t elapsed = replay_clock() - presenter_begin;
-                if (elapsed > presenter_sample_max) presenter_sample_max = elapsed;
-                dosvm_task_switch(gv->task);
-            }
+            guest_timer_tick();
+            t23_settle();
         } else if (ev.executed < slice_left) slice_left -= ev.executed ? ev.executed : (rc == GCPU_BUDGET ? 1 : 0);
         else slice_left = 1;            /* MOV SS shadow: the timer waits one instruction */
     }
@@ -1166,6 +1236,8 @@ int main(int argc, char **argv)
     if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG|CIUKIGAM.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
     setvbuf(stdout, 0, _IOLBF, 0);
     guest_perf = getenv("GUEST_PERF") != 0;
+    t23_model = guest_perf && getenv("GUEST_T23") != 0;
+    t23_fullscreen = t23_model && getenv("GUEST_T23_FULLSCREEN") != 0;
     if (guest_perf) {
         g_tsc_per_ms = 1000000;
         puts("host perf: CPU=thread nanoseconds, interval ms=instruction-clock; guest includes emulation, paging/IRQ transport are fakes; NOT hardware share/FPS");

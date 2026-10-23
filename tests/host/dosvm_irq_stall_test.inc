@@ -303,12 +303,17 @@ static void test_if_stall_watchdog(void)
     v->monitor.pic[0].imr=0xFF; CHECK(dosvm_irq_raise(v->info.key,0)); step(v,0x20,0);
     CHECK(!v->dpmi.if_waiting && !v->dpmi.if_step);
     v->monitor.pic[0].imr=0xFE; step(v,0x20,0);
+    /* fx-16: an armed image reports its own restore: no recovery step. */
+    CHECK(v->dpmi.if_waiting && !v->dpmi.if_step && !v->monitor.vif && !v->monitor.stats.delivered[0] &&
+          !(cur.tf.eflags & V86_TF));
+    v->dpmi.if_armed=false; step(v,0x20,0);    /* unarmed: the budgeted steps */
     for(unsigned i=0;i<DPMI_IF_STEPS;i++) {
         CHECK(v->dpmi.if_step && !v->monitor.vif && !v->monitor.stats.delivered[0]);
         debug_dr6=1u<<14; step(v,1,0);
     }
     CHECK(!v->monitor.vif && !v->monitor.stats.delivered[0] && !v->dpmi.if_step);
     step(v,0x20,0); CHECK(!v->dpmi.if_step && !v->monitor.vif); /* bounded tracing, no early enable */
+    v->dpmi.if_armed=true;                      /* a patched image owner across the forced restore */
     g_ticks += DPMI_IF_WAIT_MS; step(v,0x20,0);
     CHECK(cur.tf.eip==0x700 && v->monitor.stats.delivered[0]==1 && !v->dpmi.if_step &&
           !v->dpmi.stats.if_restored && v->dpmi.if_armed); /* patched image owner survives */

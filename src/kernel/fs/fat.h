@@ -22,7 +22,9 @@ enum fat_identity_change { FAT_ID_WRITE, FAT_ID_TRUNCATE, FAT_ID_RENAME, FAT_ID_
  * the target is at or after it, else from sf_firclus). It is a hint, valid
  * only while the entry still names the same first cluster and chain
  * generation; volatile, never encoded on disk. A zero cursor is empty. */
-struct fat_cursor { uint64_t generation; uint32_t first, index, cluster; };
+/* run0 (fx-16): clusters 0..run0-1 of the chain are first..first+run0-1,
+ * learned by a read walk under this chain generation (0 = not known). */
+struct fat_cursor { uint64_t generation; uint32_t first, index, cluster, run0; };
 /* f1-93b: a directory walk position, the (cluster index -> cluster) pair of
  * a directory chain, carried across directory steps (a readdir cursor, a
  * resumed lookup). Valid only while the volume's mutation_sequence and

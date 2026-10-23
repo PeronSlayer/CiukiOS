@@ -228,6 +228,7 @@ struct dosvm {
      * rule forbids; nobody takes this gate while holding those mutexes. */
     bool disk_busy; struct kwait disk_wait;
     uint64_t boot_deadline, input_since, ticks, timer_cycles, clock_ms, record_window;
+    uint64_t parked_ms;              /* fx-16: virtual time discarded while parked */
     uint32_t bios_ticks, record_lines;
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;

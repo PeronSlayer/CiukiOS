@@ -1007,6 +1007,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_floppy_test.inc"
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
+#include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -1021,6 +1022,7 @@ int main(void)
 #endif
         free(ram);fflush(stdout);return 0;
     }
+    if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1057,6 +1059,7 @@ int main(void)
     test_fx4_vm_create();
     test_fx4b_launch_paths();
     test_timer();
+    test_fx16();
     test_menu();
     test_irq_stall();
     test_isr_recovery_boundary(); test_isr_nested_hardware();

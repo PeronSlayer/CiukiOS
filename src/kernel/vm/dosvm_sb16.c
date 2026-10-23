@@ -913,9 +913,16 @@ void dosvm_audio_log(struct dosvm *v)
         v->audio.diag.underruns = d.starved;
         /* fx-9: the VM clock service's largest gap between two services and
          * the largest DSP backlog behind the VM clock (both in ms). */
-        klog("[vm-audio] vm=%u cadence_clock gap_max_ms=%u dsp_lag_max_ms=%u",
+        /* fx-16: lifetime IRQ0 reinjection/loss, time discarded while
+         * parked, and the PM CLI proof cache (hits, learned sites, CLIs
+         * left without a proof, boundary seeds no longer acquired). */
+        const struct dpmi_cli_stats *cli = &v->dpmi.cli;
+        klog("[vm-audio] vm=%u cadence_clock gap_max_ms=%u dsp_lag_max_ms=%u irq0_reinjected=%llu irq0_lost=%llu irq0_owed_max=%u parked_ms=%llu cli_hits=%u cli_learned=%u cli_missed=%u seeds_skipped=%u",
              v->info.key.id, c.clock_gap_max_ms,
-             (unsigned)((c.dsp_lag_max_frames + DOSVM_AUDIO_PER_MS - 1u) / DOSVM_AUDIO_PER_MS));
+             (unsigned)((c.dsp_lag_max_frames + DOSVM_AUDIO_PER_MS - 1u) / DOSVM_AUDIO_PER_MS),
+             (unsigned long long)v->pit.reinjected, (unsigned long long)v->pit.lost_edges, v->pit.owed_max,
+             (unsigned long long)v->parked_ms, cli->hits, cli->proved + cli->pattern, cli->missed,
+             cli->seeds_skipped);
         klog("[vm-audio] vm=%u cadence blocks=%u late_acks=%u merged=%u ack_max_ms=%u irq_latency_max_us=%u underruns=%llu irq_latency_avg_us=%llu descheduled=%u parked=%u if_clear=%u",
              v->info.key.id, c.blocks, c.late_acks, c.merged,
              (unsigned)((c.ack_max_frames + DOSVM_AUDIO_PER_MS - 1ull) / DOSVM_AUDIO_PER_MS),
