@@ -47,7 +47,7 @@ uint16_t ata_dma_pci_base(const struct pci_func *p, unsigned channel)
 {
     if (!p || channel >= ATA_CHANNELS || p->class_code != 1 || p->subclass != 1 ||
         (p->header_type & 0x7f) != 0 || !(p->prog_if & 0x80) ||
-        (p->prog_if & (1u << (channel * 2))) || !(p->command & 1)) return 0;
+        !(p->command & 1)) return 0;
     uint32_t bar = p->bar[4], base = bar & ~3u;
     if (!(bar & 1) || !base || (base & 15) || base > 0xfff0) return 0;
     return (uint16_t)(base + channel * 8);
@@ -100,6 +100,8 @@ void ata_dma_attach(struct ata_channel *c, unsigned index)
     const struct pci_func *p = 0;
     uint16_t base = 0;
     for (unsigned i = 0; i < pci_count(); i++) {
+        if (c->pci && pci_get(i) != c->pci) continue;
+        if (!c->pci && (pci_get(i)->prog_if & (1u << (index * 2)))) continue;
         uint16_t candidate = ata_dma_pci_base(pci_get(i), index);
         if (!candidate) continue;
         if (p) return; /* ambiguous ownership, no port/config writes */

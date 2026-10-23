@@ -404,6 +404,8 @@ static int disk_gate_request(struct dosvm *v)
     fs_request_wait(VFS_WAIT_PROVIDER,begin,e); return e;
 }
 static void disk_gate_drop(struct dosvm *v) { v->disk_busy = false; kwait_wake_all(&v->disk_wait); }
+int dosvm_disk_gate_enter(struct dosvm *v) { return disk_gate_request(v); }
+void dosvm_disk_gate_leave(struct dosvm *v) { disk_gate_drop(v); }
 static void disk_access(struct dosvm *v, uint32_t lba)
 {
     uint32_t flags = irq_save();

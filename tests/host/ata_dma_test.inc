@@ -143,7 +143,7 @@ static void test_dma_prds_modes(void)
     fs_wr16(data + 49 * 2, 0x100); fs_wr16(data + 63 * 2, 0x100); CHECK(ata_dma_mode(data) == -1);
     struct pci_func p = { .class_code = 1, .subclass = 1, .prog_if = 0x80, .command = 1, .bar = { 0, 0, 0, 0, 0xc001 } };
     CHECK(ata_dma_pci_base(&p, 0) == 0xc000 && ata_dma_pci_base(&p, 1) == 0xc008);
-    p.prog_if = 0x85; CHECK(!ata_dma_pci_base(&p, 0) && !ata_dma_pci_base(&p, 1));
+    p.prog_if = 0x85; CHECK(ata_dma_pci_base(&p, 0) == 0xc000 && ata_dma_pci_base(&p, 1) == 0xc008);
     p.prog_if = 0x82; CHECK(ata_dma_pci_base(&p, 0) == 0xc000);
     p.prog_if = 0; CHECK(!ata_dma_pci_base(&p, 0)); p.prog_if = 0x80;
     const uint32_t bars[] = { 0, 1, 0xc000, 0xc009, 0x10001, 0xffffffff };

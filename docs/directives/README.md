@@ -481,3 +481,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-104b-hid-64-byte-reports](f1-104b-hid-64-byte-reports.md) | F1/F4 | gpt-6.1-sol / high | written 2026-10-23 00:31 (HID reports up to 64 bytes) |
 | [integ-periph-peripheral-integration](integ-periph-peripheral-integration.md) | integration | gpt-6.1-sol / xhigh | written 2026-10-23 01:54 (one tree for 17 peripheral branches; audio backend numbering, shared records, INT 11h) |
 | [integ-fix2-post-merge-build-errors](integ-fix2-post-merge-build-errors.md) | integration | gpt-6.1-sol / high | written 2026-10-23 02:16 (Files job_tick stack frame; abi.h include in dosvm_internal.h) |
+| [integ-periph-peripheral-integration](integ-periph-peripheral-integration.md) | integration | gpt-6.1-sol / xhigh | written 2026-10-23 01:57 (one tree for 17 peripheral branches; audio backend numbering, shared records, INT 11h) |

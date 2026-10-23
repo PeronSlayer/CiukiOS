@@ -13,9 +13,14 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
 # are mandatory; leak detection is explicitly not claimed by this runner.
 printf '%s\n' 'SANITIZERS ASan=on UBSan=on LSan=off (sandbox ptrace restriction)'
 missing=0
-for tool in clang python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm; do
+for tool in clang python3 mkfs.fat fsck.fat mcopy mmd mdir mtype mdel nm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
+if [[ ${1:-} == --fat12 ]]; then
+    if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
+    python3 tests/host/fs/fat12.py
+    exit 0
+fi
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
@@ -111,6 +116,7 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
     tests/host/fs/test_writeback.c -Wl,--wrap=cache_read_ahead,--wrap=cache_write -o build/host/fs/test_writeback
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
+python3 tests/host/fs/fat12.py
 python3 tests/host/fs/fixtures.py
 # Native desktop path/fd adapters must meet the same cold-device hold bound;
 # f1-93 adds stat, executable image read, readdir and open at 106 ms.

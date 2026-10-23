@@ -11,6 +11,7 @@ build_test() {
  -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$out" -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
  "$root/tests/host/audio/audio_test.c" "$root/tests/host/proc/signal_legacy.c" \
  "$root/src/kernel/audio/registry_master.c" \
+ "$root/src/kernel/lib/sha256.c" \
  "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
  "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
  "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
@@ -55,6 +56,9 @@ for unit in mixer vm_source opl3; do
   exit 1
  fi
 done
+# The separately compiled Maestro driver must also satisfy the kernel target
+# and bounded stack rules; host inclusion alone would miss target-only errors.
+clang "${target_flags[@]}" -c "$root/src/kernel/drivers/maestro.c" -o "$out/audio_maestro_i686.o"
 # Pin the gain operation's actual lowering, including the high half needed
 # by +18 dB. Widening two 32-bit operands must be one native IMUL, no helper.
 cat > "$out/audio_gain_i686.c" <<'C'

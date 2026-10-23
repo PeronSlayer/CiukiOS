@@ -4,6 +4,55 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
+#include <ciuki/sha256.h>
+
+/* USB 2.0 9.6.1/9.6.7. The descriptor is never truncated or converted through
+ * an ASCII display name. Bad advertised serials refuse durable identity. */
+void usb_identity_serial(struct usb_device *d, unsigned index)
+{
+    d->serial_advertised=index!=0; d->serial_valid=false;
+    memset(d->serial_identity,0,sizeof(d->serial_identity));
+    if (!index) return;
+    uint8_t b[256]={0};
+    int n=usb_control(d,0x80,6,0x300,0,b,sizeof(b));
+    if (n<4 || b[1]!=3 || b[0]!=n || (n&1)) goto failed;
+    uint16_t language=(uint16_t)(b[2]|(unsigned)b[3]<<8);
+    n=usb_control(d,0x80,6,(uint16_t)(0x300|index),language,b,sizeof(b));
+    if (n<4 || n>254 || b[0]!=n || b[1]!=3 || (n&1)) goto failed;
+    sha256(b+2,(size_t)n-2,d->serial_identity); d->serial_valid=true; return;
+failed:
+    klog("[joystick-settings] serial unavailable; identity persistence refused vid=%04x pid=%04x",d->vendor,d->product);
+}
+
+int usb_joystick_identity(uint32_t device, uint32_t generation, uint8_t out[32])
+{
+    if (!device || device>CIUKI_HID_DEVICES || !generation) return -ENODEV;
+    unsigned slot=device-1;
+    const struct usb_host *host=usb_get(slot/(USB_DEVICE_MAX*USB_HID_MAX));
+    if (!host) return -ENODEV;
+    const struct usb_device *d=&host->devices[(slot/USB_HID_MAX)%USB_DEVICE_MAX];
+    const struct usb_hid *h=&d->hid[slot%USB_HID_MAX];
+    if (!h->reports || !h->reports->caps.attached || h->reports->caps.generation!=generation ||
+        !(h->reports->caps.classes&CIUKI_HID_JOYSTICK)) return -ENODEV;
+    if (d->serial_advertised && !d->serial_valid) return -EAGAIN;
+    uint8_t key[48]={ 'J','U','S','B',1,d->vendor,d->vendor>>8,d->product,d->product>>8,h->interface };
+    if (d->serial_valid) {
+        key[10]=1; memcpy(key+11,d->serial_identity,32);
+    } else {
+        key[11]=host->pci.bus; key[12]=host->pci.dev; key[13]=host->pci.fn;
+        key[14]=d->root_port;
+        /* Enumeration currently permits one external hub; retain a bounded
+         * chain so device addresses/retained slot numbers never enter the key. */
+        const struct usb_device *p=d; unsigned depth=0;
+        while (p->parent) {
+            if (depth==USB_DEVICE_MAX || p->parent>USB_DEVICE_MAX) return -EIO;
+            if (15+depth>=sizeof(key)) return -EIO;
+            key[15+depth++]=p->port+1; p=&host->devices[p->parent-1];
+        }
+        key[10]=(uint8_t)(2+depth);
+    }
+    sha256(key,sizeof(key),out); return 0;
+}
 
 static unsigned locator(struct usb_device *d, struct usb_hid *h, unsigned *host)
 {
@@ -172,4 +221,17 @@ int usb_hid_query(uint32_t command, void *record)
         return 0;
     }
     return -ENOTTY;
+}
+
+/* Cached raw axes for the desktop's common calibration page, never USB I/O. */
+int usb_hid_raw(uint32_t device, uint32_t generation, int32_t raw[4])
+{
+    if (!device || device>CIUKI_HID_DEVICES || !generation) return -ENODEV;
+    unsigned slot=device-1, hi=slot/(USB_DEVICE_MAX*USB_HID_MAX);
+    const struct usb_host *host=usb_get(hi);
+    if (!host) return -ENODEV;
+    const struct usb_device *d=&host->devices[(slot/USB_HID_MAX)%USB_DEVICE_MAX];
+    const struct usb_hid_reports *p=d->hid[slot%USB_HID_MAX].reports;
+    if (!p || !p->caps.attached || p->caps.generation!=generation) return -ENODEV;
+    memcpy(raw,p->raw,4*sizeof(*raw)); return 0;
 }

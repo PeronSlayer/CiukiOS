@@ -630,7 +630,9 @@ static void test_client_boundary(void)
     c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.reserved[0]=0; c.launch.reserved[1]=1;
-    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); c.launch.reserved[1]=0;
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENODEV); c.launch.reserved[1]=0;
+    c.launch.reserved[7]=1; /* words 1..6 now carry the joystick selection */
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); c.launch.reserved[7]=0;
     c.launch.reserved[0]=0; workload_disk=true;
     struct ciuki_dosvm_command local=c;
     CHECK(!dosvm_call(CIUKI_DOSVM_CREATE,&local,sizeof(local)));

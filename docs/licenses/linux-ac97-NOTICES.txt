@@ -1,0 +1,76 @@
+Linux AC'97 driver adaptations in CiukiOS (f1-107)
+================================================
+
+Origin: https://github.com/torvalds/linux/tree/v6.12
+Selected licence: GNU General Public License version 2 (project LICENSE).
+All original GPL-2.0-or-later / GPL-2.0+ grants below remain available for
+the upstream portions. No complete ALSA driver or Linux framework is imported.
+Ciuki modifications adapt IDs, masks and register algorithms to its existing
+leases, bounded deadlines, DMA, mixer and Device Manager interfaces.
+
+Adapted files, original notices and exact Git blob identities:
+
+sound/pci/intel8x0.c (GPL-2.0-or-later)
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/intel8x0.c
+e4bb99f71c2c9e98e31cc240ad31e54519186d70
+ALSA driver for Intel ICH (i8x0) chipsets
+Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
+This code also contains alpha support for SiS 735 chipsets provided
+by Mike Pieper <mptei@users.sourceforge.net>. We have no datasheet
+for SiS735, so the code is not fully functional.
+Ciuki destination: src/kernel/drivers/ac97.c (IDs, layout, ALi command/DMA),
+src/kernel/drivers/ac97_codec.c (exact X31 amplifier exception).
+
+sound/pci/via82xx.c (GPL-2.0-or-later)
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/via82xx.c
+89838b4fb118a30f51924eca79568fbd4e1d61eb
+ALSA driver for VIA VT82xx (South Bridge)
+VT82C686A/B/C, VT8233A/C, VT8235
+Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
+                   Tjeerd.Mulder <Tjeerd.Mulder@fujitsu-siemens.com>
+              2002 Takashi Iwai <tiwai@suse.de>
+Ciuki destination: src/kernel/drivers/via82xx.c (VT8237 revision).
+
+sound/pci/ac97/ac97_codec.c (GPL-2.0-or-later)
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/ac97/ac97_codec.c
+25f93e56cfc7a5c93e1ff51c32781f36b2dd12e5
+sound/pci/ac97/ac97_patch.c (GPL-2.0-or-later)
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/ac97/ac97_patch.c
+cd83aa864ea3e6e966140803a19818d663c49d72
+sound/pci/ac97/ac97_id.h (GPL-2.0-or-later)
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/ac97/ac97_id.h
+ed6ed048bc50acb606a827c13d927cdb405a13b5
+include/sound/ac97_codec.h (GPL-2.0+)
+https://github.com/torvalds/linux/blob/v6.12/include/sound/ac97_codec.h
+4bd3be3a3192af27afcab6d1885e981507eee039
+include/sound/ac97/regs.h (GPL-2.0+)
+https://github.com/torvalds/linux/blob/v6.12/include/sound/ac97/regs.h
+843f73f3705aec45de3d007cf6ca449923e17274
+Shared original notice:
+Copyright (c) by Jaroslav Kysela <perex@perex.cz>
+Universal interface for Audio Codec '97
+For more details look to AC '97 component specification revision 2.2
+(2.1 in the include/sound headers) by Intel Corporation
+(http://developer.intel.com) and to datasheets for specific codecs.
+Ciuki destinations: src/kernel/drivers/ac97_codec.c and
+src/kernel/include/ciuki/ac97_codec.h (identity/masks, selected stereo quirks),
+src/kernel/drivers/{ac97,via82xx,es137x}.c and src/kernel/audio/backend.c
+(per-codec mixer/rate/power policy).
+
+arch/x86/pci/irq.c (GPL-2.0)
+https://github.com/torvalds/linux/blob/v6.12/arch/x86/pci/irq.c
+0de436316a1dd147c057ac6b2db56701e357834f
+Low-Level PCI Support for PC -- Routing of Interrupts
+(c) 1999--2000 Martin Mares <mj@ucw.cz>
+Ciuki destination: src/kernel/drivers/audio_pci.c (read-only VIA/ALi route
+decoding and ALi IRQ translation table; no route programming imported).
+
+Research-only supporting file (not compiled or imported):
+sound/pci/ac97/ac97_patch.h, GPL-2.0-or-later,
+a8cd89cfd6ff66d34cbdce2507680892a4b29c18.
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/ac97/ac97_patch.h
+Original Copyright (c) by Jaroslav Kysela <perex@perex.cz>.
+
+Corresponding adapted source is shipped with CiukiOS source under the paths
+above. The root LICENSE contains the full GPL version 2 text. This notice
+does not change the licence of the separate Ciuki portrait or Tango assets.

@@ -48,6 +48,7 @@ def main():
     cases = [[OUT / 'abi']]
     cases += [[OUT / 'test', OUT, case] for case in ('inventory', 'ssdt', 'checksum', 'root64', 'dsdt64', 'length', 'aml', 'loop', 'sleep', 'write', 'region', 'osl', 'broker', 'pnp', 'page')]
     cases += [[OUT / 'test', OUT, case] for case in ('crs-bad', 'mem64', 'large', 'module-loop', 'rsdt', 'rsdp-checksum', 'pnp-bad', 'no-acpi', 'eisa', 'ec', 'module-write', 'start-failure')]
+    cases += [[OUT / 'test', OUT, case] for case in ('serial', 'serial-disabled', 'serial-cid', 'serial-level', 'serial-low', 'serial-variable')]
     failures = blocked = 0
     fault_count = 96
     # The successful fixture measures how many allocation sites are reached;

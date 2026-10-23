@@ -10,6 +10,8 @@
 #include <ciuki/com.h>
 #include <ciuki/task.h>
 #include <ciuki/work.h>
+#include <ciuki/input.h>
+#include <ciuki/serial_protocol.h>
 
 struct com_port {
     struct com_resource resource;
@@ -27,6 +29,8 @@ struct com_port {
     bool present, deferred, closing, has_efr;
     uint32_t deferred_generation;
     const char *reason;
+    uint32_t owner, owner_id;
+    struct serial_mouse_decoder mouse;
 };
 static struct com_port ports[CIUKI_COM_MAX];
 static const char *const names[CIUKI_COM_MAX] = {
@@ -126,14 +130,40 @@ static int probe(struct com_port *p)
     return divisor_ok ? 0 : -EIO;
 }
 
+static void mouse_release(struct com_port *p);
 static void quarantine(struct com_port *p, const char *reason)
 {
+    mouse_release(p);
     wr(p,1,0); p->status.flags&=~CIUKI_COM_READY;
     p->status.flags|=CIUKI_COM_QUARANTINED; p->reason=reason;
     if (p->claim>=0) registry_quarantine(p->claim,p->claim_generation);
     kwait_wake_irq(&p->wait,false);
 }
 static void service_deferred(void *arg);
+static void mouse_packet(struct com_port *p, const struct serial_mouse_packet *packet)
+{
+    if (packet->dx) input_serial_event(INPUT_REL,INPUT_X,packet->dx,p->status.generation,g_ticks);
+    if (packet->dy) input_serial_event(INPUT_REL,INPUT_Y,packet->dy,p->status.generation,g_ticks);
+    if (packet->wheel) input_serial_event(INPUT_REL,INPUT_WHEEL,packet->wheel,p->status.generation,g_ticks);
+}
+static void mouse_release(struct com_port *p)
+{
+    for (unsigned i=0;i<3;i++) if (p->mouse.buttons&(1u<<i))
+        input_serial_event(INPUT_BTN,i,0,p->status.generation,g_ticks);
+    memset(&p->mouse,0,sizeof(p->mouse));
+}
+static void receive_byte(struct com_port *p, uint8_t c, uint8_t lsr)
+{
+    if (p->mouse.protocol) {
+        unsigned before=p->mouse.buttons; struct serial_mouse_packet packet;
+        if (serial_mouse_byte(&p->mouse,c,!!(lsr&0x1e),g_ticks,&packet)) {
+            for (unsigned i=0;i<3;i++) if ((before^packet.buttons)&(1u<<i))
+                input_serial_event(INPUT_BTN,i,!!(packet.buttons&(1u<<i)),p->status.generation,g_ticks);
+            mouse_packet(p,&packet);
+        }
+    } else if (p->status.rx_queued==CIUKI_COM_QUEUE) p->status.dropped++;
+    else { p->queues[(p->rx_head+p->status.rx_queued)%CIUKI_COM_QUEUE]=c; p->status.rx_queued++; }
+}
 static void transmit(struct com_port *p)
 {
     unsigned n=p->status.tx_queued;
@@ -162,8 +192,7 @@ static bool service(struct com_port *p)
             lsr=rd(p,5); p->status.errors|=lsr&0x1e;
             if (!(lsr&1)) break;
             uint8_t c=rd(p,0); p->status.received++;
-            if (p->status.rx_queued==CIUKI_COM_QUEUE) p->status.dropped++;
-            else { p->queues[(p->rx_head+p->status.rx_queued)%CIUKI_COM_QUEUE]=c; p->status.rx_queued++; }
+            receive_byte(p,c,lsr);
         }
     } else if (cause==2) {
         transmit(p);
@@ -191,8 +220,7 @@ static void service_deferred(void *arg)
             if (lsr==0xff) { quarantine(p,"UART stopped responding; resources retained."); break; }
             if (!(lsr&1)) break;
             uint8_t c=rd(p,0); p->status.received++;
-            if (p->status.rx_queued==CIUKI_COM_QUEUE) p->status.dropped++;
-            else { p->queues[(p->rx_head+p->status.rx_queued)%CIUKI_COM_QUEUE]=c; p->status.rx_queued++; }
+            receive_byte(p,c,lsr);
         }
         /* RX has higher IIR priority. Service TX too so continuous incoming
          * traffic cannot starve a full-duplex application's output. */
@@ -302,6 +330,10 @@ int com_admit(const struct com_resource *r, const struct com_io *io)
                 struct com_resource assigned=*r; assigned.number=i+1;
                 ports[i].present=false; return com_admit(&assigned,io);
             }
+            if (r->origin==CIUKI_COM_PNP && r->routed && (ports[i].status.flags&CIUKI_COM_READY) &&
+                !ports[i].queues && !ports[i].closing && !ports[i].deferred) {
+                ports[i].resource.origin=ports[i].status.origin=CIUKI_COM_PNP;
+            }
             return (int)i;
         }
         if (!r->number && !ports[i].present && index==CIUKI_COM_MAX) index=i;
@@ -400,6 +432,22 @@ bool com_snapshot(unsigned i, struct ciuki_com_status *out, const char **reason)
 }
 static struct ciuki_com_line default_line(void)
 { return (struct ciuki_com_line){1,sizeof(struct ciuki_com_line),38400,8,1,CIUKI_COM_PARITY_NONE,0,0,0,0}; }
+bool com_transmitter_idle(unsigned i, uint32_t g)
+{
+    if (i>=CIUKI_COM_MAX) return false;
+    uint32_t f=irq_save(); struct com_port *p=&ports[i];
+    bool idle=live(p,g) && !p->status.tx_queued;
+    if (idle) { uint8_t s=rd(p,5); idle=s!=0xff && (s&0x40); }
+    irq_restore(f); return idle;
+}
+int com_vm_line_errors(unsigned i, uint32_t g)
+{
+    if (i>=CIUKI_COM_MAX) return -ENODEV;
+    uint32_t f=irq_save(); struct com_port *p=&ports[i];
+    int e=!live(p,g) ? -ENODEV : p->owner!=CIUKI_COM_OWNER_VM ? -EACCES : (int)p->status.errors;
+    if (e>=0) p->status.errors=0;
+    irq_restore(f); return e;
+}
 static bool program(struct com_port *p)
 {
     unsigned divisor=p->resource.clock/(16*p->line.baud);
@@ -422,11 +470,21 @@ static bool program(struct com_port *p)
     if (!ok) quarantine(p,"UART divisor readback failed; resources retained.");
     return ok;
 }
-int com_open(unsigned i, uint32_t *generation)
+int com_lease_open(unsigned i, unsigned owner, uint32_t id, uint32_t *generation, const char **reason)
 {
+    if (reason) *reason="COM port unavailable.";
+    if (owner<CIUKI_COM_OWNER_NATIVE || owner>CIUKI_COM_OWNER_ENUMERATOR ||
+        (owner==CIUKI_COM_OWNER_VM && !id)) return -EINVAL;
     if (i>=CIUKI_COM_MAX || !generation || !ports[i].present) return -ENODEV;
     struct com_port *p=&ports[i];
-    if (p->status.flags&(CIUKI_COM_LOGGER|CIUKI_COM_OPEN)) return -EBUSY;
+    if (p->status.flags&(CIUKI_COM_LOGGER|CIUKI_COM_OPEN)) {
+        if (reason) *reason=p->status.flags&CIUKI_COM_LOGGER ? "Kernel logger owns this COM port." :
+            p->owner==CIUKI_COM_OWNER_VM ? "A DOS VM owns this COM port." :
+            p->owner==CIUKI_COM_OWNER_MOUSE ? "Serial mouse owns this COM port." :
+            p->owner==CIUKI_COM_OWNER_ENUMERATOR ? "Serial PnP enumeration owns this COM port." :
+            "A native application owns this COM port.";
+        return -EBUSY;
+    }
     if (!(p->status.flags&CIUKI_COM_READY) || !leases_valid(p)) return -ENODEV;
     uint8_t *queues=kzalloc(2*CIUKI_COM_QUEUE); if (!queues) return -ENOMEM;
     uint32_t f=irq_save();
@@ -436,18 +494,32 @@ int com_open(unsigned i, uint32_t *generation)
     p->queues=queues; p->rx_head=p->tx_head=0; p->status.rx_queued=p->status.tx_queued=0;
     p->status.errors=p->status.received=p->status.transmitted=p->status.dropped=0;
     p->status.generation=++open_generation; p->status.flags|=CIUKI_COM_OPEN;
+    p->owner=owner; p->owner_id=id;
     p->line=default_line(); p->lcr=0; p->ier=13; p->mcr=0x0b;
     if (!program(p)) {
-        p->queues=0; p->status.generation=0; p->status.flags&=~CIUKI_COM_OPEN;
+        p->queues=0; p->status.generation=0; p->status.flags&=~CIUKI_COM_OPEN; p->owner=p->owner_id=0;
         irq_restore(f); kfree(queues); return -EIO;
     }
-    p->status.modem=rd(p,6); *generation=p->status.generation; irq_restore(f); return 0;
+    p->status.modem=rd(p,6); *generation=p->status.generation;
+    if (reason) *reason="COM lease acquired.";
+    irq_restore(f); return 0;
+}
+int com_open(unsigned i, uint32_t *generation)
+{ return com_lease_open(i,CIUKI_COM_OWNER_NATIVE,0,generation,0); }
+bool com_owner_snapshot(unsigned i, struct ciuki_com_owner *out)
+{
+    if (!out || i>=CIUKI_COM_MAX || !ports[i].present) return false;
+    uint32_t f=irq_save(); struct com_port *p=&ports[i];
+    *out=(struct ciuki_com_owner){1,sizeof(*out),p->status.flags&CIUKI_COM_LOGGER ?
+        CIUKI_COM_OWNER_LOGGER : p->owner,p->owner_id,p->status.generation,0};
+    irq_restore(f); return true;
 }
 void com_close(unsigned i, uint32_t generation)
 {
     if (i>=CIUKI_COM_MAX) return;
     struct com_port *p=&ports[i]; uint32_t f=irq_save();
     if (!p->queues || p->status.generation!=generation) { irq_restore(f); return; }
+    mouse_release(p);
     wr(p,1,0); p->ier=0; wr(p,3,p->lcr&~0x40u); wr(p,4,0);
     uint8_t *queues=p->queues; p->queues=0; p->status.flags&=~CIUKI_COM_OPEN;
     p->closing=true;
@@ -465,6 +537,7 @@ void com_close(unsigned i, uint32_t generation)
     f=irq_save();
     if (!idle) quarantine(p,"Close idle timeout; resources retained.");
     p->closing=false;
+    p->owner=p->owner_id=0;
     kwait_wake_irq(&p->wait,false); irq_restore(f); kfree(queues);
 }
 int com_transfer(unsigned i, uint32_t g, void *data, unsigned bytes, bool write)
@@ -472,6 +545,7 @@ int com_transfer(unsigned i, uint32_t g, void *data, unsigned bytes, bool write)
     if (i>=CIUKI_COM_MAX || (!data && bytes)) return -EINVAL;
     struct com_port *p=&ports[i]; uint8_t *b=data; uint32_t f=irq_save();
     if (!live(p,g)) { irq_restore(f); return -ENODEV; }
+    if (p->mouse.protocol) { irq_restore(f); return -EBUSY; }
     unsigned n=write ? CIUKI_COM_QUEUE-p->status.tx_queued : p->status.rx_queued;
     if (n>bytes) n=bytes;
     for (unsigned k=0;k<n;k++) {
@@ -501,17 +575,39 @@ int com_wait(unsigned i, uint32_t g, bool write, unsigned timeout, bool (*cancel
 int com_control(unsigned i, uint32_t g, uint32_t op, void *record, unsigned bytes, bool writable)
 {
     unsigned size=op==COM_GET_LINE || op==COM_SET_LINE ? sizeof(struct ciuki_com_line) :
-        op==COM_GET_STATUS ? sizeof(struct ciuki_com_status) : op==COM_SET_MODEM ? sizeof(struct ciuki_com_modem) : 0;
+        op==COM_GET_STATUS ? sizeof(struct ciuki_com_status) : op==COM_SET_MODEM ? sizeof(struct ciuki_com_modem) :
+        op==COM_GET_OWNER ? sizeof(struct ciuki_com_owner) : op==COM_SET_MOUSE ? sizeof(struct ciuki_com_mouse) : 0;
     if (!size) return -ENOTTY;
     if (!record || size!=bytes) return -EINVAL;
     uint32_t *header=record;
     if (header[0]!=1 || header[1]!=size || i>=CIUKI_COM_MAX) return -EINVAL;
     struct com_port *p=&ports[i]; uint32_t f=irq_save(); int e=0;
     if (!live(p,g)) e=-ENODEV;
-    else if ((op==COM_SET_LINE || op==COM_SET_MODEM) && !writable) e=-EACCES;
+    else if ((op==COM_SET_LINE || op==COM_SET_MODEM || op==COM_SET_MOUSE) && !writable) e=-EACCES;
+    else if (op==COM_GET_OWNER) {
+        if (((struct ciuki_com_owner *)record)->reserved) e=-EINVAL;
+        else (void)com_owner_snapshot(i,record);
+    } else if (op==COM_SET_MOUSE) {
+        struct ciuki_com_mouse *m=record;
+        if (m->reserved || m->protocol>CIUKI_SERIAL_MOUSE_WHEEL ||
+            (p->owner!=CIUKI_COM_OWNER_NATIVE && p->owner!=CIUKI_COM_OWNER_MOUSE)) e=-EINVAL;
+        else if (p->status.tx_queued || !(rd(p,5)&0x40) || p->status.rx_queued || (rd(p,5)&1)) e=-EBUSY;
+        else {
+            mouse_release(p); p->line=default_line();
+            if (m->protocol) {
+                p->line.baud=1200; p->line.data_bits=m->protocol==CIUKI_SERIAL_MOUSE_SYSTEMS ? 8 : 7;
+                p->line.stop_bits=m->protocol==CIUKI_SERIAL_MOUSE_SYSTEMS ? 2 : 1;
+            }
+            if (!program(p)) e=-EIO;
+            else { p->mouse.protocol=(uint8_t)m->protocol;
+                p->owner=m->protocol ? CIUKI_COM_OWNER_MOUSE : CIUKI_COM_OWNER_NATIVE; }
+        }
+    }
+    else if (p->mouse.protocol && (op==COM_SET_LINE || op==COM_SET_MODEM)) e=-EBUSY;
     else if (op==COM_GET_STATUS) {
         if (((struct ciuki_com_status *)record)->reserved) e=-EINVAL;
-        else *(struct ciuki_com_status *)record=p->status;
+        else { p->status.modem=(p->status.modem&15)|rd(p,6);
+            *(struct ciuki_com_status *)record=p->status; }
     } else if (op==COM_GET_LINE) {
         if (((struct ciuki_com_line *)record)->reserved) e=-EINVAL;
         else *(struct ciuki_com_line *)record=p->line;
@@ -532,4 +628,104 @@ int com_control(unsigned i, uint32_t g, uint32_t op, void *record, unsigned byte
         else { p->line=*l; if (!program(p)) e=-EIO; }
     }
     irq_restore(f); return e;
+}
+
+int com_firmware_assigned(const struct ciuki_firmware_record *r)
+{
+    if (!initialized) return -ENODEV; /* safe boot never enabled the COM owner */
+    if (!r || r->origin!=CIUKI_FIRMWARE_ACPI || r->flags ||
+        r->state==CIUKI_FIRMWARE_UNSUPPORTED || r->resource_count>8 || r->cid_count>4) return -EINVAL;
+    const char *id=0;
+    if (!strncmp(r->hid,"PNP0500",8) || !strncmp(r->hid,"PNP0501",8)) id=r->hid;
+    for (unsigned i=0;!id && i<r->cid_count;i++)
+        if (!strncmp(r->cid[i],"PNP0500",8) || !strncmp(r->cid[i],"PNP0501",8)) id=r->cid[i];
+    if (!id) return -ENODEV;
+    const struct ciuki_firmware_resource *io=0,*irq=0;
+    for (unsigned i=0;i<r->resource_count;i++) {
+        const struct ciuki_firmware_resource *a=&r->resources[i];
+        if (a->end<=a->start) return -EINVAL;
+        if (a->type==RES_PORT) { if (io) return -EINVAL; io=a; }
+        else if (a->type==RES_IRQ) { if (irq) return -EINVAL; irq=a; }
+        else return -EINVAL;
+    }
+    if (!io || !irq || io->flags || io->end>65536 || io->end-io->start!=8 ||
+        irq->end-irq->start!=1 || irq->flags!=7 || (irq->start!=3 && irq->start!=4)) return -EINVAL;
+    /* Current open generations cannot be moved to a new firmware route. */
+    for (unsigned i=0;i<CIUKI_COM_MAX;i++) if (ports[i].present && ports[i].resource.base==io->start &&
+        (ports[i].queues || ports[i].closing || ports[i].deferred)) return -EBUSY;
+    return com_pnp_assigned(id,(uint32_t)io->start,8,(unsigned)irq->start);
+}
+struct pnp_context { unsigned index; uint32_t generation; };
+static int pnp_modem(void *arg, unsigned outputs)
+{
+    struct pnp_context *c=arg;
+    struct ciuki_com_modem m={1,sizeof(m),outputs,0};
+    return com_control(c->index,c->generation,COM_SET_MODEM,&m,sizeof(m),true);
+}
+static int pnp_setup(void *arg)
+{
+    struct pnp_context *c=arg; uint8_t discard[32];
+    for (unsigned n=0;n<CIUKI_COM_QUEUE/32;n++)
+        if (com_transfer(c->index,c->generation,discard,sizeof(discard),false)<0) break;
+    struct ciuki_com_line l=default_line(); l.baud=1200; l.data_bits=7;
+    return com_control(c->index,c->generation,COM_SET_LINE,&l,sizeof(l),true);
+}
+static int pnp_dsr(void *arg)
+{
+    struct pnp_context *c=arg; uint32_t f=irq_save(); struct com_port *p=&ports[c->index];
+    int e=live(p,c->generation) ? !!(rd(p,6)&0x20) : -ENODEV;
+    irq_restore(f); return e;
+}
+static int pnp_receive(void *arg, uint8_t *b)
+{
+    struct pnp_context *c=arg;
+    struct ciuki_com_status status={.version=1,.size=sizeof(status)};
+    int e=com_control(c->index,c->generation,COM_GET_STATUS,&status,sizeof(status),false);
+    if (e || status.errors) return e ? e : -EIO;
+    return com_transfer(c->index,c->generation,b,1,false);
+}
+static void pnp_pause(void *arg)
+{ struct pnp_context *c=arg; ports[c->index].io.pause(ports[c->index].io.context); }
+static uint64_t pnp_now(void *arg) { (void)arg; return g_ticks; }
+static int mouse_select(unsigned i, uint32_t generation, unsigned protocol)
+{
+    struct ciuki_com_mouse m={1,sizeof(m),protocol,0};
+    return com_control(i,generation,COM_SET_MOUSE,&m,sizeof(m),true);
+}
+int com_mouse_attach(unsigned i, unsigned protocol, const char **reason)
+{
+    if (!protocol || protocol>CIUKI_SERIAL_MOUSE_WHEEL) return -EINVAL;
+    uint32_t g; int e=com_lease_open(i,CIUKI_COM_OWNER_MOUSE,0,&g,reason);
+    if (e) return e;
+    e=mouse_select(i,g,protocol); if (e) com_close(i,g);
+    return e;
+}
+void com_mouse_detach(unsigned i)
+{
+    if (i<CIUKI_COM_MAX && ports[i].owner==CIUKI_COM_OWNER_MOUSE)
+        com_close(i,ports[i].status.generation);
+}
+void com_peripherals_start(void)
+{
+    if (!initialized) return;
+    /* Runs on the firmware discovery thread, after assigned-resource import.
+     * Every port is acquired before toggling; no open logger/modem/VM touched. */
+    for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
+        struct pnp_context c={.index=i};
+        if (com_lease_open(i,CIUKI_COM_OWNER_ENUMERATOR,0,&c.generation,0)) continue;
+        struct serial_pnp_ops ops={pnp_modem,pnp_setup,pnp_dsr,pnp_receive,pnp_pause,pnp_now,&c};
+        struct serial_pnp_id id; int e=serial_pnp_enumerate(&ops,&id);
+        unsigned protocol=e ? 0 : serial_pnp_mouse(&id);
+        if (protocol) {
+            /* Same generation throughout enumeration -> mouse handoff. */
+            uint32_t f=irq_save(); ports[i].owner=CIUKI_COM_OWNER_MOUSE; irq_restore(f);
+            /* Consume trailing ID bytes before selecting the packet stream. */
+            uint8_t discard[32];
+            for (unsigned n=0;n<CIUKI_COM_QUEUE/32;n++)
+                if (com_transfer(i,c.generation,discard,sizeof(discard),false)<0) break;
+            e=mouse_select(i,c.generation,protocol);
+        }
+        klog("[com] peripheral port=%u id=%s protocol=%u result=%d",i+1,e ? "unknown" : id.hid,protocol,e);
+        if (e || !protocol) com_close(i,c.generation);
+    }
 }

@@ -8,6 +8,8 @@
 #include <ciuki/audio.h>
 #include <ciuki/com.h>
 #pragma weak com_device_close
+#include <ciuki/lpt.h>
+#pragma weak lpt_device_close
 #pragma weak audio_device_close
 #pragma weak px_fat_transaction_locked
 #pragma weak vfs_file_wait_locked
@@ -105,6 +107,7 @@ int file_description_close(struct file_description *d)
     int err = 0;
     if (audio_device_close) audio_device_close(d);
     if (com_device_close) com_device_close(d);
+    if (lpt_device_close) lpt_device_close(d);
     if (d->node) {
         struct px_namespace *s = d->node->space;
         vfs_lock(s->vfs,0);
@@ -182,7 +185,7 @@ int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)
     uint32_t *status = d ? &d->flags : desktop ? &desktop->flags : socket_status;
     if (!status) return -EINVAL;
     if (cmd == F_GETFL) return (int)*status;
-    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || d->node->kind==PX_COM) && (arg & O_APPEND)) return -EINVAL;
+    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || (d->node->kind==PX_COM || d->node->kind==PX_LPT)) && (arg & O_APPEND)) return -EINVAL;
     if (cmd == F_SETFL) { *status = (*status & O_ACCMODE) | arg; return 0; }
     return -EINVAL;
 }
@@ -219,7 +222,7 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (whence > SEEK_END) return -EINVAL;
-    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || d->node->kind==PX_COM) return -ESPIPE;
+    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || (d->node->kind==PX_COM || d->node->kind==PX_LPT)) return -ESPIPE;
     if (d->node->kind != PX_FILE) {
         if (off || whence != SEEK_SET) return -EINVAL;
         d->position = 0; d->cursor = 0; *out = 0; return 0;

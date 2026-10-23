@@ -17,6 +17,52 @@
 #include <stdint.h>
 #include <ciuki/input_abi.h>
 
+/* f1-113: common USB/analog joystick controls on the input grant. */
+#define CIUKI_JOYSTICK_VERSION 1u
+#define CIUKI_GAMEPORT_FIRST 257u
+#define CIUKI_JOYSTICK_LAST 264u
+#define INPUT_JOY_CONTROL 0x4904u
+#define CIUKI_JOY_QUERY 0u
+#define CIUKI_JOY_CALIBRATE 1u
+#define CIUKI_JOY_ROUTE 2u
+#define CIUKI_JOY_CONFIGURE 3u
+#define CIUKI_JOY_GET_ROUTE 4u
+#define CIUKI_JOY_NEXT 5u
+#define CIUKI_JOY_SAVE_GAME 6u /* axis=catalog game; route saved by hardware identity */
+#define CIUKI_JOY_SAVE_STATUS 7u /* zero request; buttons=pending, minimum=negative save error */
+#define CIUKI_DOSVM_JOYSTICK_FALLBACK 1u /* CREATE.changed output only; selected source absent */
+#define CIUKI_JOY_FOUR_AXIS 0u
+#define CIUKI_JOY_TWO_STICKS 1u
+#define CIUKI_JOY_DISABLED 0xffffffffu
+#pragma pack(push, 4)
+struct ciuki_joystick_control {
+    uint32_t version;
+    uint32_t size;
+    uint32_t device;
+    uint32_t generation;
+    uint32_t operation;
+    uint32_t axis;
+    int32_t minimum;
+    int32_t centre;
+    int32_t maximum;
+    uint32_t axes;
+    uint32_t buttons;
+    uint32_t attached;
+    uint32_t mode;
+    uint32_t second_device;
+    uint32_t second_generation;
+    uint32_t reserved;
+    int32_t position[4];
+    int32_t raw[4];
+    uint32_t session; /* nonzero boot discriminator for saved explicit selections */
+};
+#pragma pack(pop)
+_Static_assert(sizeof(struct ciuki_joystick_control)==100, "joystick control ABI");
+/* CREATE reserved[1..6] are joystick device/generation/second device/
+ * second generation/mode/session. Explicit selections require the current
+ * nonzero boot session; stale saved locators never select a replacement.
+ * Zero tuple uses the desktop default; CIUKI_JOY_DISABLED explicitly disables. */
+
 /* f1-111: independent COM v1 records, all fields fixed-width. */
 #define CIUKI_COM_VERSION 1u
 #define CIUKI_COM_MAX 8u
@@ -25,6 +71,33 @@
 #define COM_SET_LINE   0x434f0102u
 #define COM_GET_STATUS 0x434f0103u
 #define COM_SET_MODEM  0x434f0104u
+#define COM_GET_OWNER  0x434f0105u
+#define COM_SET_MOUSE  0x434f0106u
+#define CIUKI_COM_OWNER_NONE 0u
+#define CIUKI_COM_OWNER_NATIVE 1u
+#define CIUKI_COM_OWNER_VM 2u
+#define CIUKI_COM_OWNER_MOUSE 3u
+#define CIUKI_COM_OWNER_ENUMERATOR 4u
+#define CIUKI_COM_OWNER_LOGGER 5u
+#define CIUKI_SERIAL_MOUSE_OFF 0u
+#define CIUKI_SERIAL_MOUSE_MICROSOFT 1u
+#define CIUKI_SERIAL_MOUSE_LOGITECH 2u
+#define CIUKI_SERIAL_MOUSE_SYSTEMS 3u
+#define CIUKI_SERIAL_MOUSE_WHEEL 4u
+struct ciuki_com_owner {
+    uint32_t version;
+    uint32_t size;
+    uint32_t kind;
+    uint32_t id;
+    uint32_t generation;
+    uint32_t reserved;
+};
+struct ciuki_com_mouse {
+    uint32_t version;
+    uint32_t size;
+    uint32_t protocol;
+    uint32_t reserved;
+};
 enum ciuki_com_chip { CIUKI_COM_UNKNOWN, CIUKI_COM_8250, CIUKI_COM_16450,
     CIUKI_COM_16550, CIUKI_COM_16550A, CIUKI_COM_16650, CIUKI_COM_16750 };
 enum ciuki_com_origin { CIUKI_COM_BDA = 1, CIUKI_COM_PNP, CIUKI_COM_PCI };
@@ -81,6 +154,69 @@ struct ciuki_com_status {
 _Static_assert(sizeof(struct ciuki_com_line) == 40, "COM line v1");
 _Static_assert(sizeof(struct ciuki_com_modem) == 16, "COM modem v1");
 _Static_assert(sizeof(struct ciuki_com_status) == 80, "COM status v1");
+
+/* f1-114: exclusive parallel-port ABI; peripheral-driver-coverage.md. */
+#define CIUKI_LPT_VERSION 1u
+#define CIUKI_LPT_MAX 8u
+#define CIUKI_LPT_CHUNK 256u
+#define LPT_GET_CONFIG 0x4c500101u
+#define LPT_SET_CONFIG 0x4c500102u
+#define LPT_GET_STATUS 0x4c500103u
+#define LPT_INIT 0x4c500104u
+#define CIUKI_LPT_SPP 0u
+#define CIUKI_LPT_PS2 1u
+#define CIUKI_LPT_EPP 2u
+#define CIUKI_LPT_ECP 3u
+#define CIUKI_LPT_BDA 1u
+#define CIUKI_LPT_PNP 2u
+#define CIUKI_LPT_PCI 3u
+#define CIUKI_LPT_CAP_SPP 1u
+#define CIUKI_LPT_CAP_PS2 2u
+#define CIUKI_LPT_CAP_EPP 4u
+#define CIUKI_LPT_CAP_ECP 8u
+#define CIUKI_LPT_CAP_DMA 16u
+#define CIUKI_LPT_READY 1u
+#define CIUKI_LPT_OPEN 2u
+#define CIUKI_LPT_VM 4u
+#define CIUKI_LPT_RAW 8u
+#define CIUKI_LPT_QUARANTINED 16u
+#define CIUKI_LPT_NO_DMA 0xffffffffu
+struct ciuki_lpt_config {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mode;
+    uint32_t reverse;
+    uint32_t timeout_ms;
+    uint32_t dma;
+    uint32_t address;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_lpt_config) == 32, "LPT v1 ciuki_lpt_config");
+struct ciuki_lpt_init {
+    uint32_t version;
+    uint32_t size;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_lpt_init) == 12, "LPT v1 ciuki_lpt_init");
+struct ciuki_lpt_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t generation;
+    uint32_t number;
+    uint32_t base;
+    uint32_t base_hi;
+    uint32_t origin;
+    uint32_t capabilities;
+    uint32_t flags;
+    uint32_t status;
+    uint32_t transferred;
+    uint32_t fifo_depth;
+    uint32_t dma_channel;
+    uint32_t owner_id;
+    uint32_t owner_generation;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_lpt_status) == 64, "LPT v1 ciuki_lpt_status");
 
 #define CIUKI_ABI_VERSION 1
 #define __CIUKI_ABI_VERSION__ CIUKI_ABI_VERSION

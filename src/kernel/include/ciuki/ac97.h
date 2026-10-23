@@ -3,6 +3,7 @@
 #define CIUKI_AC97_H
 #include <ciuki/audio.h>
 #include <ciuki/registry.h>
+#include <ciuki/ac97_codec.h>
 #define AC97_SLOTS 32u
 #define AC97_DCH 1u
 #define AC97_CELV 2u
@@ -20,6 +21,7 @@ struct ac97_io {
 struct ac97_cursor { uint8_t civ, piv, lvi; uint16_t status, remaining; };
 struct ac97_failure {
     const char *stage; /* first failure, captured before rollback */
+    const char *access;
     uint16_t ext_control, rate, status[3];
     struct ac97_cursor cursor;
     uint8_t control, lvi;
@@ -27,6 +29,7 @@ struct ac97_failure {
 struct ac97_device {
     struct ac97_io io;
     struct pci_func pci;
+    struct ac97_codec_policy codec;
     uint16_t nam, nabm, nam_bytes, nabm_bytes, command, codec_caps, pcm_unity;
     uint32_t bdl_phys, payload_pages[8], generation, codec_id;
     struct ac97_bd *bdl;
@@ -51,7 +54,7 @@ struct ac97_device {
     struct ac97_cursor cursor;
     bool ready, running, stopping, quarantine, irq_attached, touched;
     bool dma_enabled; /* once PCI BME publication has been attempted */
-    bool sis, nvidia, sis_gate_changed;
+    bool sis, nvidia, ich4, ali, sis_gate_changed;
     uint16_t saved_sis_gate;
     bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;
     bool idle_tail; /* no started source: silence cushion, halts not counted */

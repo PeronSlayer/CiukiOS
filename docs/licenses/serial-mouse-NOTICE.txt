@@ -1,0 +1,26 @@
+CiukiOS serial mouse wire decoder
+
+Origin: Linux v6.12, drivers/input/mouse/sermouse.c
+https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/sermouse.c
+Git blob: 218c8432a13bc9addfe54a8818ee3701f7dd6795
+Upstream notice:
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ *  Copyright (c) 1999-2001 Vojtech Pavlik
+ */
+
+Adapted file: src/kernel/drivers/serial_protocol.c (mouse wire equations).
+Ciuki changes: emit complete packets without motion prediction; explicit
+protocol selection; bounded resynchronization, error handling and input merge.
+No Linux driver framework is linked. This file retains GPL-2.0-or-later.
+The GPL version 2 text is supplied in the repository LICENSE and in the
+image's existing kernel licence notice. Corresponding source includes this
+adaptation and the build files with the CiukiOS kernel source distribution.
+
+The PnP parser, enumerator, UART model and lease adapters are Ciuki code.
+The PnP-ID-to-protocol facts were checked against FreeBSD release/14.2.0,
+usr.sbin/moused/moused.c, blob dcfd72099cb9a77711067df87eeb8fc52bd21cbe:
+https://github.com/freebsd/freebsd-src/blob/release/14.2.0/usr.sbin/moused/moused.c
+No FreeBSD implementation code is imported.
+Microsoft/Hayes specifications, TI datasheets, SeaBIOS and Microsoft's
+serenum sample are behavioral references only; none is shipped as code.

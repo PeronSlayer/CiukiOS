@@ -7,9 +7,12 @@
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
 #include "dosvm_devices.h"
+#include "dosvm_lpt.h"
 #include "virtual_vga_bios.h"
 #include "dosvm_audio_state.h"
 #include "dos_save_store.h"
+#include "dosvm_floppy.h"
+#include "dosvm_uart.h"
 #include <ciuki/dos_video_modes.h>
 int dosvm_game_remove_reserve(unsigned game);
 void dosvm_game_remove_release(unsigned game);
@@ -26,7 +29,12 @@ void dosvm_client_priority(struct dosvm *);
  * still hold the boot sector, loader area, both FATs and the root directory
  * of the private FAT16 geometry (scripts/build_dos_image.py DATA_LBA). */
 #define DOSVM_BASE_MIN_SECTORS 361u
-#define DOSVM_PORTS 16u
+/* Integrated legacy frontends need 23 disjoint ranges: four core, five
+ * audio/DMA, joystick, three FDC, three LPT, four COM, two VGA and one NIC.
+ * Eight extra descriptors occupy existing page-alignment padding (96 bytes
+ * on i686); the VM allocation, memory quotas and number of VMs are unchanged. */
+#define DOSVM_PORTS 24u
+_Static_assert(DOSVM_PORTS >= 23, "integrated peripheral port ranges");
 /* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
  * Graphics follows completion writes or the guest's programmed refresh;
  * unchanged pages do not trigger harvest. */
@@ -149,6 +157,7 @@ struct dos_file_ops;
 struct vm_cache_block;
 struct dos_file_volume;
 struct dos_unified;
+#include <ciuki/joystick.h>
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -171,7 +180,11 @@ struct dosvm {
     struct dosvm_pit pit;
     struct dosvm_kbd kbd;
     struct dosvm_mouse mouse;
+    struct dosvm_uart uart[4];
+    bool uart_irq[2]; /* aggregate level: IRQ3 and IRQ4 */
+    struct joystick_virtual joystick;
     struct dosvm_audio audio; /* f3-05: SB16 DSP/mixer, OPL3, 8237 and F4 queues */
+    struct dosvm_floppy floppy;
     bool window_input;
     int32_t input_x, input_y;
     bool pointer_known;
@@ -214,6 +227,7 @@ struct dosvm {
     uint32_t bios_ticks, record_lines;
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;
+    struct dosvm_lpt_state lpt[3];
     const char *probe;
     bool disable_file_bridge;
     struct d48_media conformance_media; /* controller configures before boot */
@@ -424,6 +438,8 @@ struct dosvm_unified_info {
 };
 bool dosvm_file_unified_info(const struct dosvm *,struct dosvm_unified_info *) __attribute__((weak));
 void dosvm_disk_provider_init(struct dosvm *,struct blkdev *);
+int dosvm_disk_gate_enter(struct dosvm *);
+void dosvm_disk_gate_leave(struct dosvm *);
 void dosvm_file_rom_init(struct dosvm *) __attribute__((weak));
 void dosvm_file_ops_init(struct dosvm *,struct dos_file_ops *);
 uint64_t dosvm_file_monitor_us(void *);

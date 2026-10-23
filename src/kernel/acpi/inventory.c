@@ -88,13 +88,28 @@ static ACPI_STATUS resource(ACPI_RESOURCE *res, void *ctx)
     if (AcpiCiukiBudgetStep()) return fw_error();
     struct ciuki_firmware_record *r = ctx;
     switch (res->Type) {
-    case ACPI_RESOURCE_TYPE_IO: extent(r, 0, res->Data.Io.Minimum, res->Data.Io.AddressLength); break;
+    case ACPI_RESOURCE_TYPE_IO:
+        if (res->Data.Io.Minimum!=res->Data.Io.Maximum) unavailable(r,AE_BAD_DATA);
+        else extent(r, 0, res->Data.Io.Minimum, res->Data.Io.AddressLength);
+        break;
     case ACPI_RESOURCE_TYPE_FIXED_IO: extent(r, 0, res->Data.FixedIo.Address, res->Data.FixedIo.AddressLength); break;
     case ACPI_RESOURCE_TYPE_IRQ:
-        for (unsigned i = 0; i < res->Data.Irq.InterruptCount; i++) extent(r, 1, res->Data.Irq.Interrupts[i], 1);
+        for (unsigned i = 0; i < res->Data.Irq.InterruptCount; i++) {
+            unsigned before=r->resource_count; extent(r, 1, res->Data.Irq.Interrupts[i], 1);
+            if (r->resource_count>before) r->resources[before].flags=
+                (res->Data.Irq.Triggering==ACPI_EDGE_SENSITIVE ? 1u : 0u) |
+                (res->Data.Irq.Shareable==ACPI_EXCLUSIVE ? 2u : 0u) |
+                (res->Data.Irq.Polarity==ACPI_ACTIVE_HIGH ? 4u : 0u);
+        }
         break;
     case ACPI_RESOURCE_TYPE_EXTENDED_IRQ:
-        for (unsigned i = 0; i < res->Data.ExtendedIrq.InterruptCount; i++) extent(r, 1, res->Data.ExtendedIrq.Interrupts[i], 1);
+        for (unsigned i = 0; i < res->Data.ExtendedIrq.InterruptCount; i++) {
+            unsigned before=r->resource_count; extent(r, 1, res->Data.ExtendedIrq.Interrupts[i], 1);
+            if (r->resource_count>before) r->resources[before].flags=
+                (res->Data.ExtendedIrq.Triggering==ACPI_EDGE_SENSITIVE ? 1u : 0u) |
+                (res->Data.ExtendedIrq.Shareable==ACPI_EXCLUSIVE ? 2u : 0u) |
+                (res->Data.ExtendedIrq.Polarity==ACPI_ACTIVE_HIGH ? 4u : 0u);
+        }
         break;
     case ACPI_RESOURCE_TYPE_DMA:
         for (unsigned i = 0; i < res->Data.Dma.ChannelCount; i++) extent(r, 2, res->Data.Dma.Channels[i], 1);
@@ -142,6 +157,20 @@ static ACPI_STATUS device(ACPI_HANDLE handle, UINT32 level, void *ctx, void **re
     }
     text(r->reason, sizeof(r->reason), "Firmware description only; device and power ownership unchanged.", r);
     ids(handle, r);
+    bool serial=!strcmp(r->hid,"PNP0500") || !strcmp(r->hid,"PNP0501");
+    for (unsigned i=0;i<r->cid_count;i++)
+        serial=serial || !strcmp(r->cid[i],"PNP0500") || !strcmp(r->cid[i],"PNP0501");
+    if (serial) {
+        ACPI_BUFFER sta={ACPI_ALLOCATE_BUFFER,NULL}; ACPI_STATUS error=evaluate(handle,"_STA",&sta);
+        if (!error && (!sta.Pointer || ((ACPI_OBJECT *)sta.Pointer)->Type!=ACPI_TYPE_INTEGER)) error=AE_TYPE;
+        bool enabled=error==AE_NOT_FOUND || (!error && (((ACPI_OBJECT *)sta.Pointer)->Integer.Value&3)==3);
+        unavailable(r,error); AcpiOsFree(sta.Pointer);
+        if (!enabled) {
+            r->state=CIUKI_FIRMWARE_UNSUPPORTED;
+            text(r->reason,sizeof(r->reason),"Serial device absent, disabled or status unavailable; no activation.",r);
+            return AE_OK;
+        }
+    }
     if (!strcmp(r->hid, "PNP0C0C") || !strcmp(r->hid, "PNP0C0E")) r->capabilities |= CIUKI_FW_CAP_BUTTON;
     if (!strcmp(r->hid, "PNP0C09")) r->capabilities |= CIUKI_FW_CAP_EC;
     if (has(handle, "_LID")) r->capabilities |= CIUKI_FW_CAP_LID;

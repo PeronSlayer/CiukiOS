@@ -1,0 +1,51 @@
+CiukiOS Trident 4DWave and ALi M5451 adaptations
+
+Origin: Linux v6.12 (torvalds/linux), ALSA PCI audio drivers.
+Each donor file carries SPDX-License-Identifier: GPL-2.0-or-later.
+CiukiOS selects GPL version 2 for these adaptations. The complete GNU General
+Public License version 2 is supplied alongside this notice as f1-120-GPL-2.0.txt.
+
+sound/pci/trident/trident.h
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/trident/trident.h
+Git blob: ed2d4eecc704affad9dca73e906d81dbb4305c44
+Original notice:
+  audio@tridentmicro.com
+  Fri Feb 19 15:55:28 MST 1999
+  Definitions for Trident 4DWave DX/NX chips
+
+sound/pci/trident/trident_main.c
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/trident/trident_main.c
+Git blob: e98eea1e6d81e0d5fe123792c6b6f659b77102f5
+Original notice:
+  Maintained by Jaroslav Kysela <perex@perex.cz>
+  Originated by audio@tridentmicro.com
+  Fri Feb 19 15:55:28 MST 1999
+  Routines for control of Trident 4DWave (DX and NX) chip
+  SiS7018 S/PDIF support by Thomas Winischhofer <thomas@winischhofer.net>
+
+sound/pci/ali5451/ali5451.c
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/ali5451/ali5451.c
+Git blob: 793d2f13267ea1212c30b0ff3e4e941f53ad08fb
+Original notice:
+  Matt Wu <Matt_Wu@acersoftech.com.cn>
+  Apr 26, 2001
+  Routines for control of ALi pci audio M5451
+
+Adapted portions: register constants, voice/rate/control packing, codec
+transactions and revision quirks, PCM capture/playback prepare, start/stop
+and cursor algorithms. No ALSA driver framework is compiled into CiukiOS.
+Modification: replaced Linux/ALSA services with CiukiOS resource claims,
+bounded elapsed deadlines, constrained pinned rings, copied capture with
+generation tokens, IRQ ownership and permanent failed-stop quarantine.
+Targets: src/kernel/drivers/trident.c, src/kernel/drivers/ali5451.c,
+src/kernel/audio/voice.c. No firmware or vendor driver binaries are imported.
+
+Additional route readback adaptation in src/kernel/drivers/audio_pci.c:
+arch/x86/pci/irq.c, Linux v6.12
+https://github.com/torvalds/linux/blob/v6.12/arch/x86/pci/irq.c
+Git blob: 0de436316a1dd147c057ac6b2db56701e357834f
+SPDX-License-Identifier: GPL-2.0 (GPL version 2 only)
+  Low-Level PCI Support for PC -- Routing of Interrupts
+  (c) 1999--2000 Martin Mares <mj@ucw.cz>
+Adapted portion: read_config_nybble/pirq_ali_get, bounded read-only ALi
+M1533/M1563 mapping. No upstream IRQ route writes or WARN paths are copied.

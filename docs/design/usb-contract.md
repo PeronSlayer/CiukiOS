@@ -1,5 +1,37 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-104b: 64-byte HID reports
+
+Research before implementation: [USB 2.0 §5.7.3](https://sinelab.net/pdf/usb-20-specification.pdf)
+limits full-speed interrupt packets to 64 bytes and low-speed packets to eight.
+[HID 1.11 §§6.2.2 and 8](https://www.usb.org/sites/default/files/documents/hid1_11.pdf)
+defines report bit counts and the optional one-byte report ID. The bounded
+parser therefore admits at most 64 wire bytes, including that ID, independently
+for Input, Output and Feature. [HUT 1.12](https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf)
+supplies the existing keyboard, gamepad, hat and button meanings. Linux v6.12
+[`drivers/hid/hid-core.c:hid_add_field`](https://raw.githubusercontent.com/torvalds/linux/refs/tags/v6.12/drivers/hid/hid-core.c)
+corroborates checking the transport buffer bound including report IDs; no code
+is copied. [OpenHCI 1.0a §4.3.1](https://www.cs.usfca.edu/~cruse/cs698s10/hcir1_0a.pdf)
+requires aligned 16-byte TDs and inclusive buffer ends; [EHCI 1.0 §§3.5–3.6](https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/ehci-specification-for-usb.pdf)
+defines the separate QH/qTD and payload regions.
+
+Repository comparison: `hid.h:HID_PACKET_MAX` previously bounded all report
+kinds to 16 bytes. UHCI/OHCI `usb_interrupt.c` put that payload at slot offset
+32 in a 48-byte slot; EHCI already reserved 64 payload bytes at offset 160
+in its 224-byte slot. Expand UHCI/OHCI slots to 96 bytes, retaining their
+QH/ED at +0 and TD at +16. The 64 slots now occupy [4608,10752), followed
+by 128 bulk TDs at [10752,12800) and bulk buffers at [12800,20992).
+The arena is rounded from five to six pages (20480 to 24576 bytes).
+Slot storage grows by 3072 bytes; the pinned allocation grows by 4096 bytes
+per controller, at most 16384 bytes for the existing four-host bound. The
+shared arena size also applies to EHCI, whose internal offsets stay unchanged.
+The PMM allocation/free, registry DMA claim, storage pin and request page
+extent already derive from `USB_DMA_BYTES`; retain that accounting path.
+No global memory, heap, registry, host/device/interface or bulk-ring limit
+changes. Boot fallback, low-speed endpoint admission and retirement rules
+remain in force. Host evidence and exact commands belong to
+`build/codex/f1-104b-report.md`; hardware qualification remains lead work.
+
 ## F1-105/F1-106: controller inventory and EHCI high-speed service (2026-10-23)
 
 This extension supersedes the route-only EHCI scope below when activation
@@ -890,3 +922,23 @@ fallback; neither port quarantine nor a detached shared IRQ member may
 disable a peer's claims. No register sequence or transfer recovery policy
 changes. Sources and both UHCI/OHCI failure-injection cases are listed in
 the [F0-40 audit](../validation/f0-40-reliability-audit.md).
+
+## F1-106b: EHCI translators and completion-driven HID
+
+F1-106b supersedes the F1-106 refusal of full/low-speed children behind an
+HS hub. One external hub level supports split control, FS bulk and FS/LS
+interrupt input. QHs carry the actual hub address/port and endpoint speed;
+the selected alternate-zero interface determines single versus multi-TT.
+Periodic admission charges both the 80 us HS microframe limit and the shared
+TT bus, including descriptor think time. Conservative frame-contained masks
+reserve three complete-split opportunities; unschedulable pipes fail before
+publication. TT errors use bounded hub recovery; uncertain stop still
+quarantines retained DMA. No uncertain storage write is retried.
+
+The native HID worker sleeps on IOC/WDH notifications. It sets deadlines
+only for retirement/rearm, repeat keys, a pending interrupt qualification
+check, or an unavailable/proven-lost IRQ. A pending completion must persist
+beyond a 2 ms grace period without ISR acknowledgement before the 4 ms
+fallback is recorded. OHCI polling preserves WDH during that grace period.
+The separate 250 ms topology deadline remains; this is not a claim of zero
+total host-task wakes. See [research and host evidence](../validation/f1-106b-ehci-tt.md).

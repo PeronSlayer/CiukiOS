@@ -21,8 +21,8 @@ enum {
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -44,6 +44,7 @@ static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 
 #include "network.inc"
+#include "joystick.inc"
 
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
 static void load(struct cp_app *a, struct ciuki_settings *out)
@@ -382,6 +383,12 @@ void cp_audio_result(struct cp_app *a, int result)
 void cp_tick(struct cp_app *a)
 {
     network_poll(a);
+    if (a->page==CP_JOYSTICK) {
+        if (a->joystick_save_pending && !a->joystick_busy && !a->joystick_calibrating) {
+            struct ciuki_joystick_control c={.version=CIUKI_JOYSTICK_VERSION,.size=sizeof(c),.operation=CIUKI_JOY_SAVE_STATUS};
+            (void)joystick_send(a,&c);
+        } else joystick_query(a,CIUKI_JOY_QUERY);
+    }
     if (a->close_pending && !a->display_write && !a->mode_state) cp_close(a);
     if (a->navigation_pending && !a->display_write && !a->mode_state) {
         int page=a->next_page; a->navigation_pending=0; cp_open(a,page);
@@ -516,6 +523,9 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case C_BACK: if (e->type == DU_EV_ACTIVATE) cp_open(a, CP_HOME); break;
+    case J_NEXT: case J_CALIBRATE: case J_CAPTURE: case J_ROUTE: case J_OFF: case J_MODE: case J_GAME: case J_SAVE_GAME: case J_DEFAULT_GAME: case J_SECOND: case J_GAME_OFF:
+        if (e->type==DU_EV_ACTIVATE) joystick_event(a,e->id);
+        break;
     case CP_CATEGORY:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_CATEGORIES) {
             a->category=e->index; build(a); du_focus(u,CP_CATEGORY);
@@ -955,6 +965,9 @@ static void properties(struct cp_app *a, int resources)
         snprintf(body + at, sizeof(body) - at, "%s", d->flags & CIUKI_DEVICES_TRUNCATED ? "More resources in the lease list." :
                  d->resource_count ? "Assigned resources are read-only." : "No resource assignment recorded.");
     }
+    if (!strcmp(d->driver,"gameport") || (d->bus_type==CIUKI_BUS_USB && !strcmp(d->name,"USB HID game controller"))) {
+        cp_open(a,CP_JOYSTICK); return;
+    }
     static const char *const buttons[] = {"General", "Resources", "Close"};
     du_message(a->ui, D_PROPERTIES, title, body, DU_DLG_ICON_INFO, buttons, 3, resources ? 1 : 0, 2);
     du_dialog_icon(a->ui, du_icon_argb(du_icon_name(class_icon(d->class_id)), 32));
@@ -1161,6 +1174,8 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,975,24,280,CP_WIDTH-48,16,"Engine information is read-only.");
             add(a,DU_BUTTON,CP_REFRESH,24,316,88,24,"Refresh");
         }
+    } else if (a->page == CP_JOYSTICK) {
+        joystick_build(a);
     } else if (a->page == CP_MOUSE) {
     /* Mouse */
     add(a, DU_LABEL, C_SPEED_L, 24, 44, 200, 14, "Pointer &speed:");

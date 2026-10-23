@@ -1778,23 +1778,44 @@ static void unsupported_hid_peer(bool ohci)
 static void hid_packet_capacity(bool ohci)
 {
     setup(ohci,false); assert(!attach()); model_step();
-    struct usb_device *d=&m.host.devices[0]; struct usb_hid *p=&d->hid[0];
-    usb_interrupt_stop(d,p); sleep_ms(&m,3);
-    p->active=false; p->packet=HID_PACKET_MAX;
-    unsigned at=USB_HID_BASE+32;
-    memset(m.dma+at,0xa5,HID_PACKET_MAX);
-    uint8_t guard[16]; memcpy(guard,m.dma+USB_HID_BASE+USB_HID_STRIDE,sizeof(guard));
-    uint8_t wanted[HID_PACKET_MAX], got[HID_PACKET_MAX];
-    for (unsigned i=0;i<HID_PACKET_MAX;i++) wanted[i]=(uint8_t)(i+0x40);
-    memcpy(m.dev[0].report,wanted,sizeof(wanted)); m.dev[0].report_len=sizeof(wanted);
-    int n=-USB_EAGAIN;
-    for (unsigned turns=0;turns<20 && n==-USB_EAGAIN;turns++) {
-        n=usb_interrupt(d,p,got,sizeof(got)); sleep_ms(&m,1);
+    const struct resource *arena=registry_get(m.host.claims[2]);
+    assert(arena && arena->state==RS_ACTIVE && arena->start==m.host.dma_phys &&
+           arena->end-arena->start==USB_DMA_BYTES);
+    for (unsigned i=0;i<m.host.device_count;i++) for (unsigned j=0;j<USB_HID_MAX;j++)
+        usb_interrupt_stop(&m.host.devices[i],&m.host.devices[i].hid[j]);
+    sleep_ms(&m,3);
+    for (unsigned index=0;index<USB_DEVICE_MAX*USB_HID_MAX;index++) {
+        struct usb_device *d=&m.host.devices[index/USB_HID_MAX];
+        struct usb_hid *p=&d->hid[index%USB_HID_MAX];
+        d->host=&m.host; d->address=1; d->low_speed=false;
+        p->active=false; p->packet=64; p->endpoint=1; p->interval=1; p->toggle=m.dev[0].in_toggle;
+        unsigned base=USB_HID_BASE+index*USB_HID_STRIDE;
+        /* The final slot is guarded by the first bulk TD, not just arena ASan. */
+        uint8_t after[USB_HID_STRIDE], before[USB_HID_STRIDE];
+        memcpy(after,m.dma+base+USB_HID_STRIDE,sizeof(after));
+        memcpy(before,m.dma+base-USB_HID_STRIDE,sizeof(before));
+        for (unsigned bytes=32;bytes<=64;bytes+=32) {
+            memset(m.dma+base+32,0xa5,64);
+            uint8_t wanted[64], got[64]; memset(got,0x5a,sizeof(got));
+            for (unsigned i=0;i<bytes;i++) wanted[i]=(uint8_t)(i+index+0x40);
+            memcpy(m.dev[0].report,wanted,bytes); m.dev[0].report_len=bytes;
+            int n=-USB_EAGAIN;
+            for (unsigned turns=0;turns<20 && n==-USB_EAGAIN;turns++) {
+                n=usb_interrupt(d,p,got,bytes); sleep_ms(&m,1);
+            }
+            assert(n==(int)bytes && !memcmp(got,wanted,bytes) && !m.host.quarantined);
+            assert(p->trace.retired==0 && p->trace.actual==(int)bytes);
+            p->toggle^=1;
+            for (unsigned i=bytes;i<64;i++) assert(got[i]==0x5a && m.dma[base+32+i]==0xa5);
+            assert(!memcmp(after,m.dma+base+USB_HID_STRIDE,sizeof(after)));
+            assert(!memcmp(before,m.dma+base-USB_HID_STRIDE,sizeof(before)));
+        }
+        uint8_t got[65];
+        assert(usb_interrupt(d,p,got,sizeof(got))==-USB_EPROTO);
+        p->packet=32; assert(usb_interrupt(d,p,got,64)==-USB_EPROTO);
     }
-    assert(n==(int)sizeof(got) && !memcmp(got,wanted,sizeof(got)) && !d->quarantined);
-    assert(!memcmp(guard,m.dma+USB_HID_BASE+USB_HID_STRIDE,sizeof(guard)));
-    assert(usb_interrupt(d,p,got,HID_PACKET_MAX+1)==-USB_EPROTO);
-    printf("PASS F1-104 %s interrupt: full 16-byte payload, retired completion, adjacent DMA slot unchanged, oversize refused\n",ohci ? "OHCI" : "UHCI");
+    printf("PASS F1-104b %s interrupt: 32/64 bytes in all 64 slots, retirement, previous/next/bulk guards, oversize/MPS refusal; arena=%u slot=%u bulk_td=%u bulk_buffer=%u\n",
+           ohci ? "OHCI" : "UHCI",USB_DMA_BYTES,USB_HID_STRIDE,USB_BULK_TD,USB_BULK_BUFFER);
 }
 int main(void)
 {

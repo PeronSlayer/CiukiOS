@@ -61,6 +61,8 @@ int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
 /* USB records/views are retained for the boot. Letters are E: onward and
  * never reused. Dirty removable media stay read-only; no recovery writes. */
 int storage_add_removable(struct storage *, struct blkdev *);
+/* Whole floppy media only, with a native drive lease held through detach. */
+int storage_add_floppy(struct storage *, struct blkdev *, unsigned drive);
 int storage_add_removable_bounded(struct storage *, struct blkdev *,
                                   bool (*cancel)(void *), void (*pause)(void *), void *);
 int storage_remove_removable(struct storage *, struct blkdev *, bool surprise);
@@ -87,6 +89,15 @@ struct storage *storage_get(void);
 bool storage_readonly_info(unsigned drive, char *text, unsigned bytes);
 void storage_init(void);
 int storage_sync(void);
+/* Suspend flush: caller-scoped deadline in microseconds, propagated into
+ * VFS/cache/controller waits. Keeps mounts and dirty flags for resume.
+ * This synchronous worker entry retires in-flight references before return. */
+int storage_sync_until(struct storage *, const struct vfs_request *);
+/* Bounded, nonblocking system-volume adapter: absolute PIT milliseconds.
+ * -EAGAIN while pending, -VFS_ETIMEOUT on expiry. Retains the worker/context
+ * until transport cleanup completes; expiry never frees uncertain buffers. */
+int storage_power_init(void);
+int storage_sync_bounded(uint64_t deadline_ms);
 /* f0-49: bind the pager's backing file on a writable fixed FAT volume. */
 struct pagefile;
 int storage_pagefile_bind(struct storage *, unsigned drive, const char *path);

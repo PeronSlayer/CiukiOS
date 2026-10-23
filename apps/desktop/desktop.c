@@ -621,6 +621,15 @@ static void startup_flush(void)
         }
     }
 }
+static int desktop_joystick_control(struct desktop *d, struct ciuki_joystick_control *c)
+{
+#ifdef __i386__
+    if (d->input<0) return -ENODEV;
+    return ciuki_devctl(d->input,INPUT_JOY_CONTROL,c,sizeof(*c)) ? -errno : 0;
+#else
+    (void)d; (void)c; return -ENODEV;
+#endif
+}
 static uint32_t mixer_serial;
 static int32_t last_ec_preference=-1;
 struct mixer_job { uint32_t serial; int fd; struct ciuki_mixer_master master; int save_only; };
@@ -1951,6 +1960,7 @@ static void shell_setup(struct desktop *d, int gate)
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     observers_prepare(d);
     d->mixer_set=mixer_apply;
+    d->joystick_control=desktop_joystick_control;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
     d->version[0]=0;

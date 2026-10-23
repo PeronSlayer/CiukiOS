@@ -1,4 +1,7 @@
-/* Firmware PCI INTx routes; no route writes. SPDX-License-Identifier: GPL-2.0-only */
+/* Firmware PCI INTx routes; no route writes. SPDX-License-Identifier: GPL-2.0-only
+ * ALi/VIA route decoding adapted from Linux v6.12 arch/x86/pci/irq.c,
+ * (c) 1999--2000 Martin Mares <mj@ucw.cz>, upstream GPL-2.0.
+ * See docs/licenses/linux-ac97-NOTICES.txt and f1-120-alsa-NOTICES.txt. */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/audio_backend.h>
@@ -31,7 +34,7 @@ static bool audio_pir_route(const struct ac97_io *io, const struct pci_func *p, 
         const struct pci_func *r = pci_get(i);
         if (r->bus == table[8] && (r->dev * 8u + r->fn) == table[9] && r->class_code == 6 && r->subclass == 1) router = r;
     }
-    if (!router) return false;
+    if (!router || audio_le16(table+12)!=router->vendor || audio_le16(table+14)!=router->device) return false;
     for (unsigned i = 32; i < size; i += 16) {
         if (table[i] != p->bus || (table[i + 1] >> 3) != p->dev) continue;
         unsigned at = i + 2 + (p->irq_pin - 1) * 3;
@@ -43,7 +46,7 @@ static bool audio_pir_route(const struct ac97_io *io, const struct pci_func *p, 
             return route == p->irq_line;
         }
         if (router->vendor == 0x1106 && link <= 4 &&
-            (router->device == 0x0686 || router->device == 0x3074 || router->device == 0x3147 || router->device == 0x3177)) {
+            (router->device == 0x0686 || router->device == 0x3074 || router->device == 0x3147 || router->device == 0x3177 || router->device==0x3227)) {
             unsigned nibble = link == 4 ? 5 : link;
             unsigned reg = 0x55 + nibble / 2;
             route = (audio_pci_read(io, router, reg) >> ((reg & 3) * 8 + (nibble & 1) * 4)) & 15;
@@ -57,10 +60,19 @@ static bool audio_pir_route(const struct ac97_io *io, const struct pci_func *p, 
             route = (audio_pci_read(io, router, reg) >> ((reg & 3) * 8)) & 255;
             return !(route & 0x80) && (route & 15) == p->irq_line;
         }
+        if (router->vendor == 0x10b9 && (router->device == 0x1533 || router->device == 0x1563)) {
+            static const uint8_t irqmap[16] = {0,9,3,10,4,5,7,6,1,11,0,12,0,14,0,15};
+            if (link > 16) return false;
+            unsigned index = link - 1, reg = 0x48 + index / 2;
+            uint32_t value = audio_pci_read(io, router, reg);
+            if (value == UINT32_MAX) return false;
+            route = (value >> ((reg & 3) * 8 + (index & 1) * 4)) & 15;
+            return irqmap[route] == p->irq_line;
+        }
         /* nForce firmware tables describe chipset-private links. Require the
          * BIOS-assigned line, matching pin bitmap and ELCR; never steer it. */
         return router->vendor == 0x10de && p->vendor == 0x10de &&
-               (p->device == 0x01b1 || p->device == 0x006a);
+               (p->device == 0x01b1 || p->device == 0x006a || p->device==0x008a || p->device==0x00da || p->device==0x00ea);
     }
     return false;
 }

@@ -10,6 +10,11 @@ struct ehci_model {
     bool bios_stuck, smi_stuck, os_stuck, reset_stuck, halt_stuck, mask_stuck;
     bool iaa_lost, ass_stuck, freeze, host_error, dma_error, bme_stuck;
     bool deliver_irq, nak, late_ack;
+    unsigned starts, completes, nyets, tt_clear, tt_reset, clear_value, clear_port;
+    unsigned hid_interval;
+    bool clear_fail, tt_reset_fail, tt_busy, split_wait, bulk_fault, control_fault, periodic_fault;
+    unsigned split_started[USB_DMA_BYTES / 32];
+    bool split_pending[USB_DMA_BYTES / 32];
     unsigned inject, short_bytes, bulk_toggles[2], port_speed[USB_PORT_MAX];
     int (*transaction)(struct ehci_model *, unsigned, unsigned, unsigned, unsigned, uint8_t *, unsigned);
 };
@@ -94,10 +99,34 @@ static void ehci_cfg_write(void *ctx, unsigned at, uint32_t v, unsigned width)
 static void ehci_qh(struct ehci_model *e, unsigned address, bool periodic, unsigned u)
 {
     uint32_t *q = ehci_ram(e, address, 68);
-    if (periodic && !(q[2] & (1u << u))) return;
+    unsigned speed = (q[1] >> 12) & 3, index = (address - e->host->dma_phys) / 32;
+    bool split = speed != 2 && !(q[4] & 1) && !(q[6] & 0x40);
+    if (split && !(q[6] & 2)) e->split_pending[index] = false;
+    if (periodic && !(q[2] & (1u << (u + (split && e->split_pending[index] ? 8 : 0))))) return;
     if ((q[4] & 1) || (q[6] & 0x40)) return;
     assert(q[1] & (1u << 14)); /* qTD owns data toggle */
-    assert(((q[1] >> 12) & 3) == 2 && !(q[2] & 0x3fffff00)); /* no unsupported TT */
+    if (!split) assert(speed == 2 && !(q[2] & 0x3fffff00));
+    else {
+        assert(speed < 2 && ((q[2] >> 16) & 127) && ((q[2] >> 23) & 127));
+        unsigned ep = (q[1] >> 8) & 15;
+        assert(!!(q[1] & (1u << 27)) == (!periodic && !ep));
+        if (periodic) {
+            unsigned smask = q[2] & 255, cmask = (q[2] >> 8) & 255;
+            assert(smask && !(smask & (smask - 1)) && !(smask & 0xf0));
+            assert(cmask == smask * 0x1c); /* three CS, same frame */
+        } else assert(!(q[2] & 65535));
+        if (!e->split_pending[index]) {
+            if (!periodic && e->tt_busy) return;
+            e->starts++; e->split_pending[index] = true;
+            e->split_started[index] = e->frame; q[6] |= 2;
+            return; /* SS never completes the device transfer */
+        }
+        if (e->split_wait || ((e->frame - e->split_started[index]) & 0x3fff) < 2) {
+            e->nyets++; return;
+        }
+        e->completes++;
+        e->split_pending[index] = false; q[6] &= ~2u;
+    }
     unsigned tdaddr = q[4] & ~31u;
     uint32_t *td = ehci_ram(e, tdaddr, 52);
     if (!(td[2] & 0x80)) return;
@@ -106,15 +135,21 @@ static void ehci_qh(struct ehci_model *e, unsigned address, bool periodic, unsig
     unsigned left = (td[2] >> 16) & 0x7fff, mps = (q[1] >> 16) & 0x7ff;
     unsigned n = left < mps ? left : mps, pid = (td[2] >> 8) & 3;
     assert(mps && pid < 3 && (td[3] & 4095) + n <= 4096);
+    if (split) assert(mps <= (speed == 1 ? 8u : 64u));
     uint8_t *buffer = (uint8_t *)ehci_ram(e, td[3], n ? n : 1);
     e->packets++;
     if (!periodic && e->late_ack) { e->cached_qh = address; return; }
-    int got = e->inject ? -USB_EIO : e->nak ? -USB_EAGAIN : e->transaction(e, q[1] & 127, (q[1] >> 8) & 15,
+    bool fault = e->periodic_fault ? periodic : e->control_fault ? !periodic :
+        !e->bulk_fault || (!periodic && ((q[1] >> 8) & 15));
+    int got = e->inject && fault ? -USB_EIO : e->nak && fault ? -USB_EAGAIN : e->transaction(e, q[1] & 127, (q[1] >> 8) & 15,
         pid == 2 ? USB_PID_SETUP : pid == 1 ? USB_PID_IN : USB_PID_OUT, td[2] >> 31, buffer, n);
     if (got == -USB_EAGAIN) return;
-    unsigned error = e->inject ? e->inject : got == -USB_EPIPE ? 0x40 : got < 0 ? 0x48 : 0;
-    e->inject = 0;
-    if (error) { td[2] = (td[2] & ~0x80u) | error | 0x40; q[6] = td[2]; e->regs[0x24/4] |= 2; return; }
+    unsigned error = e->inject && fault ? e->inject : got == -USB_EPIPE ? 0x40 : got < 0 ? 0x48 : 0;
+    if (fault) e->inject = 0;
+    if (error) {
+        if (split && !periodic) e->tt_busy = true;
+        td[2] = (td[2] & ~0x80u) | error | 0x40; q[6] = td[2]; e->regs[0x24/4] |= 2; return;
+    }
     assert(got >= 0 && (unsigned)got <= n);
     left -= (unsigned)got;
     td[2] = (td[2] & ~0x7fff0000u) | (left << 16); td[2] ^= 1u << 31;

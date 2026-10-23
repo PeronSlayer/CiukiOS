@@ -39,6 +39,7 @@ struct cp_main { struct cp_network_worker network_worker; struct cp_app app; str
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
+    uint32_t joystick_serial;
     int saved_w, saved_h;
     const char *disp_state, *disp_decode, *disp_wait;
     unsigned disp_done;
@@ -297,6 +298,23 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
     if (!r && request == DESK_SETTINGS_AUDIO_TEST) m->audio_serial = m->serial;
     return r;
 }
+static int joystick_request(void *ctx, const struct ciuki_joystick_control *c)
+{
+    struct cp_main *m=ctx; struct ciuki_message msg;
+    if (m->joystick_serial) return -EBUSY;
+    if (!++m->serial) ++m->serial;
+    desk_message(&msg,DESK_JOYSTICK,108); msg.data[0]=DESK_SHELL_VERSION;
+    desk_put32(msg.data+4,m->serial); memcpy(msg.data+8,c,sizeof(*c));
+    int e=du_window_queue(&m->window,&msg);
+    if (!e) m->joystick_serial=m->serial;
+    return e;
+}
+static int joystick_save_game(void *ctx,unsigned game,const struct ciuki_joystick_control *c)
+{
+    struct ciuki_joystick_control request=*c;
+    request.operation=CIUKI_JOY_SAVE_GAME; request.axis=game;
+    return joystick_request(ctx,&request);
+}
 static int autoplay_list(void *ctx,struct ap_preference *out,unsigned capacity)
 { (void)ctx; return ap_preference_list(NULL,out,capacity); }
 static int autoplay_forget(void *ctx,const char *id)
@@ -372,6 +390,9 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
     if (p->opcode==DESK_TASK_RESULT && (p->request==DESK_GFX_QUERY || p->request==DESK_GFX_QUERY_ENGINE) && p->serial==m->engine_serial) {
         m->engine_serial=0; m->engine_ok=0; m->engine_next=du_now()+2000000000ull;
         cp_engine_refresh(&m->app); return;
+    }
+    if (p->opcode==DESK_JOYSTICK_RESULT && p->serial==m->joystick_serial) {
+        m->joystick_serial=0; cp_joystick_result(&m->app,&p->joystick,p->result); return;
     }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && m->audio_serial && p->serial == m->audio_serial) {
         m->audio_serial = 0; cp_audio_result(&m->app, p->result); return;
@@ -464,7 +485,7 @@ static void idle(void *arg)
     /* Clocks, uptime and external mixer state have genuine one-second work.
      * Other pages have no heartbeat. Navigation/close also runs on input and
      * completion, even when the wall clock has not changed. */
-    int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS;
+    int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS || m->app.page==CP_JOYSTICK;
     if (ticking && (!m->tick_next || mono>=m->tick_next)) {
         cp_tick(&m->app); m->tick_next=mono+1000000000ull;
     } else if (!ticking) m->tick_next=0;
@@ -642,7 +663,7 @@ int main(int argc, char **argv)
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;
-    h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
+    h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
 
     const char *display = getenv("CIUKI_DISPLAY");
     h->screen_w = 1024; h->screen_h = 768;

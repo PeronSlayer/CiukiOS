@@ -48,11 +48,17 @@ struct fake_bus {
     uint32_t controller_ack_delay, iface_delay;
     unsigned controller_ack_count;
     unsigned config_reads;
-    uint8_t mouse_capability, rate_history[3], aux_trace[128], fault_reply, query_reply;
+    uint8_t mouse_capability, rate_history[3], aux_trace[256], fault_reply, query_reply;
     unsigned rate_count, aux_sends, fail_aux_send, id_queries, fail_id_query;
     bool rate_next, persistent_fault, missing_id, wrong_id_aux;
+    unsigned touchpad_kind, alps_model, slice_count, repeat_count;
+    uint8_t slice, repeat, syn_mode, syn_major;
+    uint32_t syn_model, syn_caps;
+    bool resolution_next, rollback_bad, absolute, mode_mismatch, query_missing_once, burst_reply;
+    unsigned missing_query_byte;
 };
 static struct fake_bus hw;
+static void fake_reply_burst(struct fake_bus *b);
 static irq_handler_t host_handlers[16];
 static unsigned pic_changes, host_yields;
 static bool host_masked[16];
@@ -208,18 +214,62 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         fake_push(b, b->aux ^ b->wrong_aux, reply, b->ack_delay);
         if (b->bad_ack) b->bytes[(b->head + b->count - 1) % ARRAY_SIZE(b->bytes)].status |= 0x80;
         if (b->aux && reply == 0xFA) {
-            if (b->rate_next) {
+            if (b->resolution_next) {
+                b->resolution_next = false;
+                b->slice = (uint8_t)((b->slice << 2) | (data & 3));
+                b->slice_count++;
+                b->repeat_count = 0;
+            } else if (b->rate_next) {
                 b->rate_next = false;
                 b->rate_history[0] = b->rate_history[1];
                 b->rate_history[1] = b->rate_history[2];
                 b->rate_history[2] = data;
                 b->rate_count++;
+                if (b->touchpad_kind == 1 && b->slice_count == 4 && data == 20) {
+                    b->syn_mode = b->slice;
+                    b->absolute = !!(b->syn_mode & 0x80);
+                }
                 if (b->mouse_capability >= 3 && b->rate_history[0] == 200 &&
                     b->rate_history[1] == 100 && data == 80) b->mouse_id = 3;
                 if (b->mouse_capability == 4 && b->mouse_id == 3 &&
                     b->rate_history[0] == 200 && b->rate_history[1] == 200 && data == 80)
                     b->mouse_id = 4;
+            } else if (data == 0xE8) b->resolution_next = true;
+            else if (data == 0xE6 || data == 0xE7 || data == 0xF5) {
+                b->repeat_count = b->repeat == data ? b->repeat_count + 1 : 1;
+                b->repeat = data;
+                if (data == 0xE6) b->slice_count = b->slice = 0;
             } else if (data == 0xF3) b->rate_next = true;
+            else if (data == 0xF6) {
+                b->absolute = false;
+                b->resolution_next = b->rate_next = false;
+                b->slice_count = b->repeat_count = 0;
+            } else if (data == 0xE9 || data == 0xEB) {
+                uint32_t value = data == 0xEB ? 0x080000 : 100;
+                if (data == 0xEB && b->rollback_bad) value = 0xF80000;
+                if (data == 0xE9 && b->touchpad_kind == 1 && b->slice_count == 4) {
+                    switch (b->slice) {
+                    case 0: value = 0x024700 | (b->syn_major ? b->syn_major : 4); break;
+                    case 1: value = 0x3B4700 | (b->syn_mode ^ (b->mode_mismatch ? 0x80 : 0)); break;
+                    case 2: value = b->syn_caps; break;
+                    case 3: value = b->syn_model; break;
+                    }
+                }
+                if (data == 0xE9 && b->touchpad_kind == 2 && b->repeat == 0xE7 && b->repeat_count == 3) {
+                    /* Independent signature corpus; includes unsupported v3. */
+                    static const uint32_t signatures[] = {
+                        0x33020a,0x22020a,0x220214,0x520114,0x620214,
+                        0x63020a,0x630228,0x63023c,0x630250,0x730250,
+                        0x20020e,0x320214,0x53020a,0x530214,0x6003c8,
+                        0x630214,0x630264,0x6303c8,0x73000a,0x73020a,0x730214,
+                        0x730264};
+                    value = signatures[b->alps_model];
+                }
+                for (unsigned i = 0; i < 3; i++)
+                    if (b->missing_query_byte != i + 1)
+                        fake_push(b, true, (uint8_t)(value >> (16 - i * 8)), b->ack_delay);
+                if (b->query_missing_once) b->missing_query_byte = 0;
+            }
             else if (data == 0xF2) {
                 b->id_queries++;
                 bool fault = b->id_queries == b->fail_id_query;
@@ -230,6 +280,7 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         }
         if (b->aux && data == 0xF4 && b->final_obf) b->obf_after_ack = true;
     }
+    if (b->burst_reply) fake_reply_burst(b);
     b->aux = false;
 }
 static uint64_t fake_now(void *arg) { return ((struct fake_bus *)arg)->now; }
@@ -495,6 +546,16 @@ static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
 #include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/i8042.c"
+
+static void fake_reply_burst(struct fake_bus *b)
+{
+    if (b != &hw) return;
+    while (b->count && b->bytes[b->head].ready <= b->now) {
+        uint8_t status = fake_read(b, 0x64);
+        uint8_t data = fake_read(b, 0x60);
+        capture_at(&native, status, data, b->now);
+    }
+}
 #include "../../src/kernel/drivers/fwinput_adapter.c"
 #include "../../src/kernel/probes/selector.c"
 static unsigned operator_prompts;
@@ -531,6 +592,7 @@ static void reset_native(void)
     fake_fw_state = BIOSVM_READY;
     memset(&hw, 0, sizeof(hw));
     hw.pause_step = 1;
+    hw.missing_command = 0xFF; /* zero is now a valid resolution argument */
     hw.config = 0x47;                 /* preserve system flag, disable translation/IRQs */
     hw.selftest_reenable = true;
     hw.loop_reply = 0x5A;
@@ -810,12 +872,16 @@ static struct i8042_init_record init_failure(enum i8042_init_step step, int resu
 
 static void test_mouse_negotiation(void)
 {
-    const uint8_t standard[] = { 0xF5, 0xF6, 0xF2, 0xF3, 200, 0xF3, 100,
+    /* Exact additional discovery/recovery prefix; wheel sequences unchanged. */
+#define TP_PREFIX 0xF5,0xF6,0xE6,0xE8,0,0xE8,0,0xE8,0,0xE8,0,0xE9, \
+    0xE8,0,0xE6,0xE6,0xE6,0xE9,0xE8,0,0xE7,0xE7,0xE7,0xE9,0xF6,0xF5,0xEA,0xEB
+    const uint8_t standard[] = { TP_PREFIX, 0xF2, 0xF3, 200, 0xF3, 100,
                                 0xF3, 80, 0xF2, 0xEA, 0xE6, 0xF4 };
-    const uint8_t extended[] = { 0xF5, 0xF6, 0xF2, 0xF3, 200, 0xF3, 100,
+    const uint8_t extended[] = { TP_PREFIX, 0xF2, 0xF3, 200, 0xF3, 100,
                                 0xF3, 80, 0xF2, 0xF3, 200, 0xF3, 200,
                                 0xF3, 80, 0xF2, 0xEA, 0xE6, 0xF4 };
-    const uint8_t explorer[] = { 0xF5, 0xF6, 0xF2, 0xEA, 0xE6, 0xF4 };
+    const uint8_t explorer[] = { TP_PREFIX, 0xF2, 0xEA, 0xE6, 0xF4 };
+#undef TP_PREFIX
     const uint8_t ids[] = { 0, 3, 4 };
     for (unsigned i = 0; i < ARRAY_SIZE(ids); i++) {
         reset_native();
@@ -877,7 +943,7 @@ static void test_mouse_negotiation(void)
     /* Every rate command, parameter and GETID ACK can fail. Never enable
      * streaming from an old ID after an uncertain protocol transaction. */
     const uint8_t replies[] = { 0, 0xFC, 0xFD, 0xFE };
-    for (unsigned send = 4; send <= 17; send++) {
+    for (unsigned send = 30; send <= 43; send++) {
         for (unsigned mode = 0; mode < ARRAY_SIZE(replies); mode++) {
             reset_native();
             hw.mouse_capability = 4; hw.fail_aux_send = send;
@@ -1128,7 +1194,7 @@ static void test_advisory_interfaces_and_controller_acks(void)
     t23_bus();
     CHECK(i8042_init() == 0 && native.stats.active && !native.stats.quarantined);
     CHECK(native.stats.initial_config == 0x77 && hw.last_config == 0x07);
-    CHECK(native.init_count == 15 && hw.sends == 17 && !hw.resets); /* includes wheel probe */
+    CHECK(native.init_count == 15 && hw.sends == 43 && !hw.resets); /* includes wheel probe */
     const uint8_t replies[] = { 0x00, 0x01, 0x03, 0x55, 0xFA, 0xFF };
     for (unsigned i = 0; i < ARRAY_SIZE(replies); i++) {
         reset_native();
@@ -1145,7 +1211,7 @@ static void test_advisory_interfaces_and_controller_acks(void)
     struct i8042_init_record r;
     CHECK(i8042_init_record(5, &r) && !r.result && !r.bytes && r.elapsed_ms == I8042_REPLY_MS);
     CHECK(i8042_init_record(6, &r) && !r.result && r.reply == 0x5A && r.bytes == 1);
-    CHECK(r.elapsed_ms >= I8042_REPLY_MS && hw.sends == 17);
+    CHECK(r.elapsed_ms >= I8042_REPLY_MS && hw.sends == 17); /* probe skipped after slow diagnostics */
     reset_native();
     hw.silent_kbd_test = hw.silent_aux_test = true;
     hw.missing_command = 0xF5;
@@ -1174,7 +1240,7 @@ static void test_advisory_interfaces_and_controller_acks(void)
         unsigned stray = 0;
         for (unsigned j = 0; j < native.init_count; j++) stray += native.init_records[j].stray_ack;
         CHECK(stray && !native.queue.stats.errors && !native.queue.stats.state_lost);
-        CHECK(hw.sends == 17 && !hw.resets);
+        CHECK(hw.sends == 43 && !hw.resets);
         reset_native();
         t23_bus();
         hw.aux_test_reply = 0xFA;
@@ -1866,6 +1932,8 @@ static void test_usb_shared_queue(void)
     printf("USB shared input: PASS (PS/2 absence, merged keys/buttons, two keyboards, repeat, wheel, firmware guard)\n");
 }
 
+#include "../../tests/host/i8042_touchpad_test.inc"
+
 int main(int argc, char **argv)
 {
     if (argc == 2) {
@@ -1887,6 +1955,7 @@ int main(int argc, char **argv)
     test_init_diagnostics();
     test_mouse_negotiation();
     test_extended_mouse_packets();
+    test_touchpad_protocols();
     test_advisory_interfaces_and_controller_acks();
     test_hook_selection();
     test_commands();

@@ -5,6 +5,7 @@
 #undef FD_TABLE_STACK_TEST
 #include <stdarg.h>
 #include <ciuki/ac97.h>
+#include <ciuki/audio_backend.h>
 #include <ciuki/registry_value.h>
 #include <ciuki/timing.h>
 static uint32_t read_eflags(void) { return host_flags; }
@@ -12,7 +13,8 @@ static bool vm_active_hook;
 static bool fullscreen_hook;
 struct ciuki_boot_info g_boot;
 uint64_t g_tsc_per_ms = 1000;
-static uint8_t inb(uint16_t p) { (void)p; return 0; }
+static uint8_t qualification_elcr[2];
+static uint8_t inb(uint16_t p) { return p==0x4d0 || p==0x4d1 ? qualification_elcr[p-0x4d0] : 0; }
 static uint32_t inl(uint16_t p) { (void)p; return 0; }
 static void outb(uint16_t p, uint8_t v) { (void)p; (void)v; }
 static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
@@ -101,6 +103,29 @@ static unsigned second_pci_count, second_claim_next, second_irq_adds, second_pic
 static bool second_pic_masked = true;
 static irq_handler_t second_isa_handler;
 static int second_claim_failure=-1;
+static unsigned voice_pins;
+static bool voice_unpin_failure;
+_Static_assert(AUDIO_ICH==1 && AUDIO_ES1370==2 && AUDIO_ES1371==3 && AUDIO_SB16==4 &&
+    AUDIO_VIA686==5 && AUDIO_VIA8233==6 && AUDIO_MAESTRO1==7 && AUDIO_MAESTRO2==8 &&
+    AUDIO_MAESTRO2E==9 && AUDIO_EMU10K1==10 && AUDIO_EMU10K2==11 && AUDIO_CMIPCI==12 &&
+    AUDIO_YMFPCI==13 && AUDIO_TRIDENT_DX==14 && AUDIO_TRIDENT_NX==15 && AUDIO_ALI5451==16,
+    "integrated transport IDs retain the original six and distinct chip variants");
+static int voice_model_pin(struct mm_pin *pin)
+{
+    /* Other fixture engines keep their previous no-ledger boundary. */
+    if (audio_dma.kind < AUDIO_TRIDENT_DX) return 0;
+    CHECK(pin->pages==8 && pin->alignment==4 && !pin->boundary);
+    CHECK(pin->address_mask==(audio_dma.kind==AUDIO_ALI5451 ? 0x7fffffffu : 0x3fffffffu));
+    CHECK(pin->direction==MM_PIN_TO_DEVICE || pin->direction==MM_PIN_FROM_DEVICE);
+    CHECK((uint64_t)pin->first_pfn*PAGE_SIZE+pin->pages*PAGE_SIZE-1<=pin->address_mask);
+    pin->ticket=++voice_pins; return 0;
+}
+static int voice_model_unpin(struct mm_pin *pin,uint32_t generation)
+{
+    CHECK(pin->ticket && pin->generation==generation && voice_pins);
+    if(voice_unpin_failure) return -EIO;
+    voice_pins--; pin->ticket=0; return 0;
+}
 unsigned pci_count(void) { return second_pci_count; }
 const struct pci_func *pci_get(unsigned i) { CHECK(i<second_pci_count); return &second_pci[i]; }
 int registry_claim(enum res_type type,uint32_t start,uint32_t end,const char *owner,bool share)
@@ -143,10 +168,18 @@ uint32_t pmm_alloc_dma_run(uint32_t pages,uint32_t alignment)
 #include "../../../src/kernel/audio/stream.c"
 #include "../../../src/kernel/audio/mixer.c"
 #include "../../../src/kernel/drivers/audio_pci.c"
+#include "../../../src/kernel/drivers/ac97_codec.c"
 #include "../../../src/kernel/drivers/ac97.c"
 #include "../../../src/kernel/drivers/es137x.c"
 #include "../../../src/kernel/drivers/sb16.c"
 #include "../../../src/kernel/drivers/via82xx.c"
+#include "../../../src/kernel/drivers/maestro.c"
+#include "../../../src/kernel/drivers/emu10k1.c"
+#include "../../../src/kernel/drivers/cmipci.c"
+#include "../../../src/kernel/drivers/ymfpci.c"
+#include "../../../src/kernel/drivers/trident.c"
+#include "../../../src/kernel/drivers/ali5451.c"
+#include "../../../src/kernel/audio/voice.c"
 #include "../../../src/kernel/audio/backend.c"
 #include "../../../src/kernel/audio/audio_dev.c"
 bool display_fullscreen_active(void) { return fullscreen_hook; }
@@ -179,11 +212,13 @@ struct mock_hw {
     uint16_t read_timeout_reg;
     unsigned codec_resets, codec_reads;
     uint64_t analog_wait_started;
-    bool ich3, start_stuck, exhausted_start, bdbar_stuck, run_clear_stuck;
+    bool ich3, start_stuck, no_progress, exhausted_start, bdbar_stuck, run_clear_stuck;
     unsigned reset_delay, start_delay, resets, starts;
     uint64_t reset_at, start_at;
     uint32_t bdbar, pci_address;
     uint16_t pci_command, input_sr, mic_sr, sis_gate;
+    uint8_t sibling_cr[8];
+    uint16_t sibling_sr[8];
     uint8_t modem_cr[2];
     uint16_t modem_sr[2];
     struct { uint16_t port; unsigned width; uint32_t value; } trace[1024];
@@ -220,9 +255,16 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         if(reg==0x26) return (h->codec[reg/2]&0xff00) | (!h->power_stuck && h->tick>=h->power_ready_at ? 0xf : 0);
         return h->codec[reg/2];
     }
-    unsigned off=ac97_offset(h->device,port-0x200);
+    unsigned off=port-0x200;
+    /* Independent physical SiS register model, not ac97_offset(). */
+    if (h->device->sis && off<0x30) {
+        unsigned lane=off & 15;
+        if (lane==8) off-=2;
+        if (lane==6) off+=2;
+    }
     if(off==0x4c) return h->sis_gate;
-    if(off==0x76) return AC97_DCH;
+    if(off>=0x40 && off<0x80 && (off & 15)==6) return h->sibling_sr[off/16];
+    if(off>=0x40 && off<0x80 && (off & 15)==11) return h->sibling_cr[off/16];
     if(off==0x34) {
         CHECK(width==1);
         if(h->busy || h->cas_owned || h->tick < h->busy_until)return 1;
@@ -266,6 +308,10 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         if(h->ich3 && (h->cr&1) && !h->start_stuck && h->tick>=h->start_at &&
            (!(h->codec[0x2a/2]&1) || h->codec[0x2c/2]==48000)) {
             h->sr&=~AC97_DCH;h->remaining=ac97_units(h->device);h->piv=1;
+            if(!h->no_progress) {
+                unsigned used=(unsigned)(h->tick-h->start_at)*96;
+                h->remaining-=used<h->remaining ? used : h->remaining-1;
+            }
             if(h->exhausted_start) { h->sr|=AC97_DCH|AC97_CELV|AC97_LVBCI;h->civ=h->lvi;h->remaining=0; }
         }
         if(!h->cr && !h->stop_stuck && h->tick >= h->stop_after)h->sr|=AC97_DCH;
@@ -300,8 +346,15 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
         h->posted=true;h->posted_reg=port-0x100;h->posted_value=h->reject ? value^1u : value;
         h->busy_until=h->tick+h->post_delay;return;
     }
-    unsigned off=ac97_offset(h->device,port-0x200);
+    unsigned off=port-0x200;
+    if (h->device->sis && off<0x30) {
+        unsigned lane=off & 15;
+        if (lane==8) off-=2;
+        if (lane==6) off+=2;
+    }
     if(off==0x4c) { CHECK(width==2); h->sis_gate=value; return; }
+    if(off>=0x40 && off<0x80 && (off & 15)==6) { h->sibling_sr[off/16]&=~value; return; }
+    if(off>=0x40 && off<0x80 && (off & 15)==11) { h->sibling_cr[off/16]=value; return; }
     if(off==0x2c) {
         if(h->cold_stuck) return;
         if(h->ich3) CHECK(!(h->pci_command&4));
@@ -383,6 +436,7 @@ static void hardware_setup(struct ac97_device *d)
     d->io=(struct ac97_io){&hw,mock_read,mock_write,mock_now,mock_sleep};
     hw.sr=AC97_DCH;hw.codec[0x7c/2]=0x8384;hw.codec[0x7e/2]=0x7600;
     hw.input_sr=hw.mic_sr=AC97_DCH;
+    for(unsigned i=0;i<8;i++)hw.sibling_sr[i]=AC97_DCH;
     hw.codec[0x26/2]=0xf;hw.codec[0x28/2]=1;hw.codec[0x2a/2]=1;hw.codec[0x2c/2]=48000;
     hw.codec[2/2]=0x8000;hw.codec[0x18/2]=0x8808;
 }
@@ -1371,6 +1425,40 @@ static void test_persistence(void)
     puts("audio settings: defaults, public refusal/delegation, alternating durable records and applied-unsaved/last saved restoration PASS");
 }
 #include "second_set_test.inc"
+#include "ac97_qualification_test.inc"
+#include "maestro_test.inc"
+#define mm_pin(...) emu_model_pin(__VA_ARGS__)
+#define mm_unpin(...) emu_model_unpin(__VA_ARGS__)
+#include "emu10k1_test.inc"
+#undef mm_pin
+#undef mm_unpin
+#define mm_pin(...) cmi_model_pin(__VA_ARGS__)
+#define mm_unpin(...) cmi_model_unpin(__VA_ARGS__)
+#include "cmipci_test.inc"
+#undef mm_pin
+#undef mm_unpin
+#define mm_pin(...) ymf_model_pin(__VA_ARGS__)
+#define mm_unpin(...) ymf_model_unpin(__VA_ARGS__)
+#include "ymfpci_test.inc"
+#undef mm_pin
+#undef mm_unpin
+#include "voice_test.inc"
+/* Each engine retains its independent pin oracle; one ledger adapter dispatches
+ * requests from the integrated production backend to the selected model. */
+int mm_pin(struct mm_pin *pin)
+{
+    if (emu10k1_kind(audio_dma.kind)) return emu_model_pin(pin);
+    if (audio_dma.kind==AUDIO_CMIPCI) return cmi_model_pin(pin);
+    if (audio_dma.kind==AUDIO_YMFPCI) return ymf_model_pin(pin);
+    return voice_model_pin(pin);
+}
+int mm_unpin(struct mm_pin *pin,uint32_t generation)
+{
+    if (emu10k1_kind(audio_dma.kind)) return emu_model_unpin(pin,generation);
+    if (audio_dma.kind==AUDIO_CMIPCI) return cmi_model_unpin(pin,generation);
+    if (audio_dma.kind==AUDIO_YMFPCI) return ymf_model_unpin(pin,generation);
+    return voice_model_unpin(pin,generation);
+}
 #include "late_refill_test.inc"
 #include "vm_creation_test.inc"
 #include "vm_paging_test.inc"
@@ -1415,8 +1503,10 @@ static void test_registry_master(void)
 }
 int main(int argc,char **argv)
 {
+    setvbuf(stdout,NULL,_IOLBF,0);
     CHECK(argc==3);ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);
     controller.state=T_RUNNING;g_current=&controller;proc_init();
+    if(getenv("CIUKI_AC97_ONLY")) { test_ac97_qualification(); printf("AC97 qualification: %u checks PASS\n",checks); free(ram);return 0; }
     if(getenv("CIUKI_AUDIO_COST")) { test_service_budget();test_cost_breakdown();test_cubic_cost();free(ram);return 0; }
     CHECK(!fake_open(&disk[0],argv[1])&&!fake_open(&disk[1],argv[2]));
     disk[0].undo_enabled=disk[1].undo_enabled=true;CHECK(!cache_init(&cache,0));vfs_init(&vfs);
@@ -1424,11 +1514,16 @@ int main(int argc,char **argv)
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
     test_transient_transport();
+    test_cmipci();
+    test_voice_engines();
     test_vm_creation_lead();
     test_vm_paging_replay();
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_pipeline();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
+    test_maestro();
     test_refill_demand();
     test_producer_lead();
+    test_ac97_qualification();
+    test_emu10k1();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

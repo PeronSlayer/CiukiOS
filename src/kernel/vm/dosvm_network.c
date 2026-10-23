@@ -181,9 +181,12 @@ void dosvm_network_rom_init(struct dosvm *v)
 bool dosvm_network_irq_available(const struct dosvm *v, unsigned irq)
 {
     if (irq != DOSVM_NE2000_IRQ) return true;
-    /* IRQ3 is otherwise unallocated in the current ISA devices (SB16=7,
-     * selectable 2/5/7/10; PIT=0, keyboard=1). Reject a future conflicting SB. */
-    return v->audio.sb.irq != irq;
+    /* A physical COM lease or an interrupt-enabled null UART reserves IRQ3.
+     * Inactive null UARTs do not prevent launching the network personality. */
+    if (v->audio.sb.irq==irq) return false;
+    for (unsigned i=1;i<4;i+=2) if (v->uart[i].bound &&
+        (v->uart[i].native>=0 || ((v->uart[i].model.mcr&8) && v->uart[i].model.ier))) return false;
+    return true;
 }
 int dosvm_network_attach(struct dosvm *v, struct net_bridge_port *port)
 {

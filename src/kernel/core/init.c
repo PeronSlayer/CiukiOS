@@ -20,9 +20,18 @@
 #include <ciuki/splash.h>
 #include <ciuki/smi.h>
 #include <ciuki/com.h>
+#include <ciuki/joystick.h>
+#include <ciuki/joystick_settings.h>
+#pragma weak joystick_storage_init
+#pragma weak gameport_init
 #pragma weak com_init
+#include <ciuki/lpt.h>
+#pragma weak lpt_init
 #include <ciuki/firmware.h>
 #pragma weak firmware_inventory_start
+#include "../drivers/floppy.h"
+#pragma weak floppy_init
+extern void apm_start(void) __attribute__((weak));
 #pragma weak entropy_start
 #pragma weak console_splash_phase
 #pragma weak usb_init
@@ -99,6 +108,16 @@ const struct activation_entry *drivers_mount_get(unsigned drive)
     return 0;
 }
 
+/* After USB: joystick settings and game port (f1-113b), the firmware
+ * inventory, then floppy (f1-115) and APM (f1-121), in that order. */
+static void platform_devices_start(bool safe)
+{
+    if (joystick_storage_init && !safe) joystick_storage_init(&storage_get()->vfs);
+    if (gameport_init && !safe) gameport_init();
+    if (firmware_inventory_start) firmware_inventory_start();
+    if (floppy_init && !safe) floppy_init();
+    if (apm_start && !safe) apm_start();
+}
 void drivers_init(void)
 {
     if (state.initialized) return;
@@ -182,6 +201,7 @@ void drivers_init(void)
     klog("[init] storage done; files bootstrap");
     splash_report(SPLASH_PHASE_STORAGE);
     if (com_init && !state.safe) com_init();
+    if (lpt_init && !state.safe) lpt_init();
     int native_files = files_bootstrap(&storage_get()->vfs);
     klog("[init] files result=%d; audio init", native_files);
     splash_report(SPLASH_PHASE_FILES);
@@ -191,7 +211,7 @@ void drivers_init(void)
     if (net_settings_load) net_settings_load(&storage_get()->vfs);
     if (net_init) net_init();
     if (usb_init) usb_init();
-    if (firmware_inventory_start) firmware_inventory_start();
+    platform_devices_start(state.safe);
     /* f1-94: after every UHCI handoff; SMI sampling and LEGACY_USB_EN. */
     if (smi_attribution_init) smi_attribution_init();
     splash_report(SPLASH_PHASE_DEVICES);

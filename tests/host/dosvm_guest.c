@@ -255,11 +255,14 @@ struct storage *storage_get(void) { return &store; }
 #define vfs_write transport_vfs_write
 #define vfs_commit transport_vfs_commit
 #define vfs_handle_version transport_vfs_handle_version
+#define vfs_handle_stat transport_vfs_handle_stat
 #define vfs_version_pin(...) transport_vfs_version_pin(__VA_ARGS__)
 #define vfs_version_unpin transport_vfs_version_unpin
 #endif
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
+int vfs_handle_stat(struct vfs_table *table,int h,struct fat_entry *entry,uint64_t *pos)
+{ (void)table;(void)h;(void)entry;(void)pos;return -FS_EOPNOTSUPP; }
 /* The image's real size: a cut base (the bundled games disk, owner decision
  * 2026-10-12) must be read through dosvm_disk.c's zero fill, never past its end. */
 static uint64_t disk_bytes;
@@ -404,14 +407,21 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 #undef vfs_write
 #undef vfs_commit
 #undef vfs_handle_version
+#undef vfs_handle_stat
 #undef vfs_version_pin
 #undef vfs_version_unpin
 #endif
 
 #include "../../src/kernel/vm/dosvm_bios.c"
+#include "../../src/kernel/vm/dosvm_floppy.c"
+#include "../../src/kernel/vm/floppy_model.c"
+#include "../../src/kernel/drivers/floppy_media.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
+#include "dosvm_uart_seams.inc"
+#include "../../src/kernel/vm/uart16550.c"
+#include "../../src/kernel/vm/dosvm_uart.c"
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_pool.c"
 #include "../../src/kernel/vm/dosvm_umb.c"

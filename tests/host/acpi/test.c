@@ -143,6 +143,23 @@ int main(int argc, char **argv)
         struct ciuki_firmware_page p = {.version = 2, .size = sizeof(p)};
         assert(!firmware_inventory_page(&p));
         assert(!live && !maps && !accesses && !(p.flags & CIUKI_FIRMWARE_PENDING));
+        if (!strncmp(scenario,"serial",6)) {
+            bool found=false;
+            for (unsigned i=0;i<p.count;i++) {
+                const struct ciuki_firmware_record *r=&p.records[i];
+                if (strcmp(r->hid,"PNP0501") && strcmp(r->hid,"ACME0001")) continue;
+                found=true;
+                if (!strcmp(scenario,"serial-disabled")) assert(r->state==CIUKI_FIRMWARE_UNSUPPORTED && !r->resource_count);
+                else if (!strcmp(scenario,"serial-variable")) assert(r->state==CIUKI_FIRMWARE_UNSUPPORTED && r->flags);
+                else {
+                    assert(r->resource_count==2 && r->resources[0].start==0x3f8 && r->resources[0].end==0x400);
+                    unsigned expected=!strcmp(scenario,"serial-level") ? 6 : !strcmp(scenario,"serial-low") ? 3 : 7;
+                    assert(r->resources[1].flags==expected && r->resources[1].start==4 && r->resources[1].end==5);
+                    if (!strcmp(scenario,"serial-cid")) assert(r->cid_count==2);
+                }
+            }
+            assert(found);
+        }
         if (!strcmp(scenario, "inventory") || !strcmp(scenario, "ssdt") || !strcmp(scenario, "page") || !strcmp(scenario, "pnp") || !strcmp(scenario, "rsdt")) {
             /* ACPICA's predefined _SB_ and _TZ_ device containers are part
              * of the hierarchy, in addition to the seven fixture devices. */
@@ -184,6 +201,9 @@ int main(int argc, char **argv)
                 assert(p.records[i].resources[0].start == 0x100000000ull && p.records[i].state == CIUKI_FIRMWARE_UNSUPPORTED); found = true;
             }
             assert(found && p.flags & CIUKI_FIRMWARE_INCOMPLETE);
+        } else if (!strncmp(scenario,"serial",6) && strcmp(scenario,"serial-variable")) {
+            assert(!s && !(p.flags&CIUKI_FIRMWARE_INCOMPLETE));
+            printf("PASS acpi %s: assigned serial status and IRQ facts\n",scenario);
         } else if (!strcmp(scenario, "allocation")) {
             assert(s || p.flags & CIUKI_FIRMWARE_INCOMPLETE || fail_after >= alloc_calls);
         } else {

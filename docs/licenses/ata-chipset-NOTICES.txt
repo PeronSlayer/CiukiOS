@@ -1,0 +1,211 @@
+ATA chipset adaptations in CiukiOS (f1-108)
+Donors: torvalds/linux, tag v6.12; local changes replace Linux/libata services
+with boot-only register plans, conservative firmware prerequisites and Ciuki
+resource/transaction adapters. No Linux driver framework is imported.
+The GPL version 2 text is in the repository LICENSE.
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/ata_piix.c
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ *    ata_piix.c - Intel PATA/SATA controllers
+ *
+ *    Maintained by:  Tejun Heo <tj@kernel.org>
+ *    		    Please ALWAYS copy linux-ide@vger.kernel.org
+ *		    on emails.
+ *
+ *	Copyright 2003-2005 Red Hat Inc
+ *	Copyright 2003-2005 Jeff Garzik
+ *
+ *	Copyright header from piix.c:
+ *
+ *  Copyright (C) 1998-1999 Andrzej Krzysztofowicz, Author and Maintainer
+ *  Copyright (C) 1998-2000 Andre Hedrick <andre@linux-ide.org>
+ *  Copyright (C) 2003 Red Hat Inc
+ *
+ *  libata documentation is available via 'make {ps|pdf}docs',
+ *  as Documentation/driver-api/libata.rst
+ *
+ *  Hardware documentation available at http://developer.intel.com/
+ *
+ * Documentation
+ *	Publicly available from Intel web site. Errata documentation
+ * is also publicly available. As an aide to anyone hacking on this
+ * driver the list of errata that are relevant is below, going back to
+ * PIIX4. Older device documentation is now a bit tricky to find.
+ *
+ * The chipsets all follow very much the same design. The original Triton
+ * series chipsets do _not_ support independent device timings, but this
+ * is fixed in Triton II. With the odd mobile exception the chips then
+ * change little except in gaining more modes until SATA arrives. This
+ * driver supports only the chips with independent timing (that is those
+ * with SITRE and the 0x44 timing register). See pata_oldpiix and pata_mpiix
+ * for the early chip drivers.
+ *
+ * Errata of note:
+ *
+ * Unfixable
+ *	PIIX4    errata #9	- Only on ultra obscure hw
+ *	ICH3	 errata #13     - Not observed to affect real hw
+ *				  by Intel
+ *
+ * Things we must deal with
+ *	PIIX4	errata #10	- BM IDE hang with non UDMA
+ *				  (must stop/start dma to recover)
+ *	440MX   errata #15	- As PIIX4 errata #10
+ *	PIIX4	errata #15	- Must not read control registers
+ * 				  during a PIO transfer
+ *	440MX   errata #13	- As PIIX4 errata #15
+ *	ICH2	errata #21	- DMA mode 0 doesn't work right
+ *	ICH0/1  errata #55	- As ICH2 errata #21
+ *	ICH2	spec c #9	- Extra operations needed to handle
+ *				  drive hotswap [NOT YET SUPPORTED]
+ *	ICH2    spec c #20	- IDE PRD must not cross a 64K boundary
+ *				  and must be dword aligned
+ *	ICH2    spec c #24	- UDMA mode 4,5 t85/86 should be 6ns not 3.3
+ *	ICH7	errata #16	- MWDMA1 timings are incorrect
+ *
+ * Should have been BIOS fixed:
+ *	450NX:	errata #19	- DMA hangs on old 450NX
+ *	450NX:  errata #20	- DMA hangs on old 450NX
+ *	450NX:  errata #25	- Corruption with DMA on old 450NX
+ *	ICH3    errata #15      - IDE deadlock under high load
+ *				  (BIOS must set dev 31 fn 0 bit 23)
+ *	ICH3	errata #18	- Don't use native mode
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_via.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * pata_via.c 	- VIA PATA for new ATA layer
+ *			  (C) 2005-2006 Red Hat Inc
+ *
+ *  Documentation
+ *	Most chipset documentation available under NDA only
+ *
+ *  VIA version guide
+ *	VIA VT82C561	-	early design, uses ata_generic currently
+ *	VIA VT82C576	-	MWDMA, 33Mhz
+ *	VIA VT82C586	-	MWDMA, 33Mhz
+ *	VIA VT82C586a	-	Added UDMA to 33Mhz
+ *	VIA VT82C586b	-	UDMA33
+ *	VIA VT82C596a	-	Nonfunctional UDMA66
+ *	VIA VT82C596b	-	Working UDMA66
+ *	VIA VT82C686	-	Nonfunctional UDMA66
+ *	VIA VT82C686a	-	Working UDMA66
+ *	VIA VT82C686b	-	Updated to UDMA100
+ *	VIA VT8231	-	UDMA100
+ *	VIA VT8233	-	UDMA100
+ *	VIA VT8233a	-	UDMA133
+ *	VIA VT8233c	-	UDMA100
+ *	VIA VT8235	-	UDMA133
+ *	VIA VT8237	-	UDMA133
+ *	VIA VT8237A	-	UDMA133
+ *	VIA VT8237S	-	UDMA133
+ *	VIA VT8251	-	UDMA133
+ *
+ *	Most registers remain compatible across chips. Others start reserved
+ *	and acquire sensible semantics if set to 1 (eg cable detect). A few
+ *	exceptions exist, notably around the FIFO settings.
+ *
+ *	One additional quirk of the VIA design is that like ALi they use few
+ *	PCI IDs for a lot of chips.
+ *
+ *	Based heavily on:
+ *
+ * Version 3.38
+ *
+ * VIA IDE driver for Linux. Supported southbridges:
+ *
+ *   vt82c576, vt82c586, vt82c586a, vt82c586b, vt82c596a, vt82c596b,
+ *   vt82c686, vt82c686a, vt82c686b, vt8231, vt8233, vt8233c, vt8233a,
+ *   vt8235, vt8237
+ *
+ * Copyright (c) 2000-2002 Vojtech Pavlik
+ *
+ * Based on the work of:
+ *	Michel Aubry
+ *	Jeff Garzik
+ *	Andre Hedrick
+
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_sis.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ *    pata_sis.c - SiS ATA driver
+ *
+ *	(C) 2005 Red Hat
+ *	(C) 2007,2009 Bartlomiej Zolnierkiewicz
+ *
+ *    Based upon linux/drivers/ide/pci/sis5513.c
+ * Copyright (C) 1999-2000	Andre Hedrick <andre@linux-ide.org>
+ * Copyright (C) 2002		Lionel Bouton <Lionel.Bouton@inet6.fr>, Maintainer
+ * Copyright (C) 2003		Vojtech Pavlik <vojtech@suse.cz>
+ * SiS Taiwan		: for direct support and hardware.
+ * Daniela Engert	: for initial ATA100 advices and numerous others.
+ * John Fremlin, Manfred Spraul, Dave Morgan, Peter Kjellerstedt	:
+ *			  for checking code correctness, providing patches.
+ * Original tests and design on the SiS620 chipset.
+ * ATA100 tests and design on the SiS735 chipset.
+ * ATA16/33 support from specs
+ * ATA133 support for SiS961/962 by L.C. Chang <lcchang@sis.com.tw>
+ *
+ *
+ *	TODO
+ *	Check MWDMA on drives that don't support MWDMA speed pio cycles ?
+ *	More Testing
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_ali.c
+/*
+ * pata_ali.c 	- ALI 15x3 PATA for new ATA layer
+ *			  (C) 2005 Red Hat Inc
+ *
+ * based in part upon
+ * linux/drivers/ide/pci/alim15x3.c		Version 0.17	2003/01/02
+ *
+ *  Copyright (C) 1998-2000 Michel Aubry, Maintainer
+ *  Copyright (C) 1998-2000 Andrzej Krzysztofowicz, Maintainer
+ *  Copyright (C) 1999-2000 CJ, cjtsai@ali.com.tw, Maintainer
+ *
+ *  Copyright (C) 1998-2000 Andre Hedrick (andre@linux-ide.org)
+ *  May be copied or modified under the terms of the GNU General Public License
+ *  Copyright (C) 2002 Alan Cox <alan@redhat.com>
+ *  ALi (now ULi M5228) support by Clear Zhang <Clear.Zhang@ali.com.tw>
+ *
+ *  Documentation
+ *	Chipset documentation available under NDA only
+ *
+ *  TODO/CHECK
+ *	Cannot have ATAPI on both master & slave for rev < c2 (???) but
+ *	otherwise should do atapi DMA (For now for old we do PIO only for
+ *	ATAPI)
+ *	Review Sunblade workaround.
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_amd.c
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * pata_amd.c 	- AMD PATA for new ATA layer
+ *			  (C) 2005-2006 Red Hat Inc
+ *
+ *  Based on pata-sil680. Errata information is taken from data sheets
+ *  and the amd74xx.c driver by Vojtech Pavlik. Nvidia SATA devices are
+ *  claimed by sata-nv.c.
+ *
+ *  TODO:
+ *	Variable system clock when/if it makes sense
+ *	Power management on ports
+ *
+ *
+ *  Documentation publicly available.
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/ata/libata-pata-timings.c
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ *  Helper library for PATA timings
+ *
+ *  Copyright 2003-2004 Red Hat, Inc.  All rights reserved.
+ *  Copyright 2003-2004 Jeff Garzik
+ */

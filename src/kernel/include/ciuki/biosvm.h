@@ -29,6 +29,14 @@ int biosvm_init(void);
  * No physical register writes. The VM remains available for video. */
 int biosvm_input_fallback(void);
 int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
+/* Kernel-only real-mode APM broker. INT15/5300..530F and 5380/BH=7F query;
+ * 5302/5303 PM connections are refused. Serialized V86, 1..2000 ms budget
+ * including mutex/queue admission. Faults/timeouts quarantine the VM; no
+ * bypass for disconnect. Native-owned ports remain denied. No DOS entry. */
+int biosvm_apm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
+/* Kernel-only, fixed INT15/5300 installation check, 100 ms. Does not
+ * connect, accept caller registers, or widen input/DOS firmware access. */
+int biosvm_apm_probe(struct biosvm_regs *out);
 /* Only fbdev's quiesced transaction calls this kernel-only entry. 4F02
  * (LFB), 4F01 into private scratch, 4F03 readback; serialized as one request.
  * No allowlist widening for biosvm_call or DOS guests. */

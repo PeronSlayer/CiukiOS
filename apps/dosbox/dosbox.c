@@ -171,7 +171,15 @@ int main(int argc, char **argv)
         failure = "Unable to start";
         snprintf(detail, sizeof(detail), "%s", strerror(errno));
         loading = 1; result = 1;
-    } else { id = c.id; generation = c.generation; }
+    } else {
+        id = c.id; generation = c.generation;
+        if (c.changed==CIUKI_DOSVM_JOYSTICK_FALLBACK) {
+            fullscreen_title="Game controller";
+            snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Selected controller is absent. Using the first available joystick, or none if disconnected.");
+            fullscreen_notice_until=now_ms()+5000;
+            fprintf(stderr,"dosbox: %s\n",fullscreen_notice);
+        }
+    }
     if (id && pause_background) {
         command(&c,id,generation); c.focused=1;
         if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c)) goto done;

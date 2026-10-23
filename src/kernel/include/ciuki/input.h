@@ -9,7 +9,7 @@
 #include <ciuki/input_abi.h>
 
 #define INPUT_CAPACITY 256u
-enum input_type { INPUT_KEY = 1, INPUT_REL, INPUT_BTN, INPUT_TEXT, INPUT_RESYNC };
+enum input_type { INPUT_KEY = 1, INPUT_REL, INPUT_BTN, INPUT_TEXT, INPUT_RESYNC, INPUT_ABS };
 enum input_hid_type { INPUT_USAGE = 7, INPUT_CONSUMER, INPUT_JOY_AXIS,
     INPUT_JOY_HAT, INPUT_JOY_BUTTON, INPUT_DEVICE };
 enum input_axis { INPUT_X, INPUT_Y, INPUT_WHEEL };
@@ -30,6 +30,8 @@ void input_devices_changed(enum input_source source, bool attached);
 /* USB producer: balanced transitions per HID interface, thread context.
  * Merges with native PS/2 held state, even when i8042 activation failed. */
 void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick);
+/* Balanced serial-mouse transitions merge with the existing pointer state. */
+void input_serial_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick);
 void input_hid_event(uint16_t type, uint16_t code, int32_t value, uint32_t device,
                      gen_t generation, uint64_t tick);
 

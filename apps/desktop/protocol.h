@@ -114,7 +114,8 @@ enum desk_opcode {
     /* v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
      * 1 closing later). One later reply within 2 s grants 30 s total. */
     DESK_CLOSE_ACK,
-    DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE /* v1 generic engine payload, 256 bytes */
+    DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE, /* v1 generic engine payload, 256 bytes */
+    DESK_JOYSTICK, DESK_JOYSTICK_RESULT /* v2 Control Panel broker, serial + 100-byte record (+ result on reply) */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
@@ -134,6 +135,7 @@ struct desk_lease_tuple {
     uint32_t native_width, native_height, native_bpp;
 };
 struct desk_packet {
+    struct ciuki_joystick_control joystick;
     struct desk_lease_tuple lease;
     unsigned opcode;
     uint32_t generation, owner, owner_generation, style, scale;

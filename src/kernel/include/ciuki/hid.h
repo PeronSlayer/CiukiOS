@@ -9,7 +9,7 @@
 #define HID_REPORT_MAX 8u
 #define HID_FIELD_MAX 32u
 #define HID_USAGE_MAX 64u
-#define HID_PACKET_MAX 16u
+#define HID_PACKET_MAX 64u /* wire bytes, including an optional report ID */
 #define HID_EPROTO 71
 enum hid_kind { HID_INPUT, HID_OUTPUT, HID_FEATURE };
 struct hid_usage { uint32_t low, high; };

@@ -183,6 +183,7 @@ const char *fat_readonly_reason(const struct fat_volume *v) {
     if (v->readonly_reason) return v->readonly_reason;
     uint32_t r=v->ro_reasons;
     return r&FAT_RO_CORRUPT ? "backup_bpb" : r&FAT_RO_COPIES ? "fat_copies" :
+        r&FAT_RO_DMF ? "dmf_read_only" : r&FAT_RO_WRITE_PROTECTED ? "write_protected" :
         r&FAT_RO_IO_FLAG ? "io_flag" : r&FAT_RO_LOST ? "lost_clusters" :
         r&FAT_RO_WRITE_ERROR ? "write_error" : r&FAT_RO_ACTIVE_ONLY ? "active_fat_only" :
         r&FAT_RO_DURABILITY ? "durability" : r&FAT_RO_DIRTY ? "dirty" : "requested";
@@ -337,7 +338,9 @@ static int readsec_device(struct fat_volume *v, uint64_t s, void *b) {
 static int write_error(struct fat_volume *v, int e) {
     if (v->transaction && (e==-FS_EAGAIN || e==-FS_ENOSPC || e==-VFS_ECANCELLED || e==-VFS_ETIMEOUT)) return e;
     if (e) {
-        v->ro_reasons|=FAT_RO_WRITE_ERROR; fat_revoke_write(v,"write_error",0);
+        v->ro_reasons|=FAT_RO_WRITE_ERROR;
+        if (e==-FS_EROFS) v->ro_reasons|=FAT_RO_WRITE_PROTECTED;
+        fat_revoke_write(v,e==-FS_EROFS ? "write_protected" : "write_error",0);
         const struct vfs_request *r=fs_request_current();
         if (r && r->cleanup_status && !*r->cleanup_status) *r->cleanup_status=e;
     }
@@ -346,6 +349,7 @@ static int write_error(struct fat_volume *v, int e) {
 static int writable(struct fat_volume *v) {
     int e=v->dev->logical ? 0 : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
     if (!v->mounted || v->readonly) return -FS_EROFS;
+    if (!v->dev->write) return write_error(v,-FS_EROFS);
     if (!blkdev_durable(v->dev)) return write_error(v,-FS_EIO);
     return 0;
 }
@@ -1847,6 +1851,11 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     }
     if (!v->clusters || v->clusters>=0x0ffffff5 || ((uint64_t)(v->clusters+2)*v->type+7)/8>(uint64_t)v->fat_sectors*512) return reject(v,"FAT capacity/cluster count");
     if ((v->type==32 && (fat16 || v->root_entries || fs_rd16(b+19))) || (v->type!=32 && (!fat16 || !v->root_entries || (v->root_entries%16)))) return reject(v,"cluster type contradicts BPB layout");
+    /* Resource Kit Appendix B: DMF distribution disks are read-only. CHS
+     * describes this format only; it never gates generic FAT12 USB/images.
+     * See docs/validation/f1-115b-native-fat12.md. */
+    if (v->type==12 && total==3360 && fs_rd16(b+24)==21 && fs_rd16(b+26)==2)
+        v->ro_reasons|=FAT_RO_DMF;
     if (v->type==32) {
         v->root=fs_rd32(b+44); v->fsinfo=fs_rd16(b+48); v->backup=fs_rd16(b+50);
         uint16_t flags=fs_rd16(b+40);
@@ -1877,6 +1886,7 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
         if (errorbit(v) && !(one&errorbit(v))) v->ro_reasons|=FAT_RO_IO_FLAG;
     }
     if (!wr) v->ro_reasons|=FAT_RO_REQUEST;
+    if (!dev->write) v->ro_reasons|=FAT_RO_WRITE_PROTECTED;
     if (!blkdev_durable(dev)) v->ro_reasons|=FAT_RO_DURABILITY;
     v->readonly=v->ro_reasons!=0; v->mounted=true;
     /* Only the removable header path has no windows. No full FAT read or
@@ -2044,8 +2054,11 @@ static int transaction_durable(struct fat_volume *v) {
     } else {
         /* Cancellation after publication can have uncertain durable
          * metadata. Retain the old write gate until mount recovery. */
-        v->ro_reasons|=FAT_RO_WRITE_ERROR;
-        fat_revoke_write(v,"transaction_durability",0);
+        if (e==-FS_EROFS) (void)write_error(v,e);
+        else {
+            v->ro_reasons|=FAT_RO_WRITE_ERROR;
+            fat_revoke_write(v,"transaction_durability",0);
+        }
     }
     if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,e ? 'E' : 'B',e);
     return e;

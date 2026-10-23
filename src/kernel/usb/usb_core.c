@@ -4,6 +4,8 @@
 #include <ciuki/input.h>
 #include <ciuki/init.h>
 #include <ciuki/smi.h>
+/* Standalone storage-only host models omit HID support. */
+#pragma weak usb_identity_serial
 #ifndef CIUKI_USB_HOST
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
@@ -113,6 +115,12 @@ static void ohci_capture_done(struct usb_host *h)
 void usb_ohci_service_done(struct usb_host *h)
 {
     if (h->pci.prog_if != 0x10) return;
+    usb_irq_completion_check(h);
+    /* Give WDH a chance to reach the native IRQ before a task acknowledges
+     * it. The ISR calls capture directly and never waits. This also prevents
+     * polling from destroying the evidence used to qualify a lost IRQ. */
+    if (h->irq_probe_pending && !h->irq_fallback &&
+        !usb_expired(h, h->irq_probe_at + USB_IRQ_GRACE_MS)) return;
     ohci_capture_done(h);
     /* The transfer mutex serializes task consumers and descriptor reuse.
      * IRQ only appends heads; each list remains pinned until consumed here.
@@ -158,6 +166,7 @@ bool usb_host_irq(struct usb_host *h)
             if (h->io.read(h->io.cookie, off + 8, 4) & 0x3f) quarantine_irq(h);
         }
         if (status != UINT32_MAX) usb_write(h, off + 4, causes, 4);
+        if (causes & 3) { h->completion_irq = true; h->completion_interrupts++; h->irq_probe_pending = false; }
         h->interrupts++; h->irq_pending = input_pending = true;
         kwait_wake_irq(&h->changed, !(causes & 0x10));
         kwait_wake_irq(&input_changed, false);
@@ -192,6 +201,10 @@ bool usb_host_irq(struct usb_host *h)
         usb_write(h, off, causes, width);
     }
     h->interrupts++; h->irq_pending = input_pending = true;
+    if (!fatal && (causes & (uhci ? 3u : 2u))) {
+        h->completion_irq = true; h->completion_interrupts++;
+        h->irq_probe_pending = false;
+    }
     if (!fatal && !gone && (causes & (uhci ? 1u : 2u))) kwait_wake_irq(&h->changed, true);
     else kwait_wake_irq(&h->changed, false);
     kwait_wake_irq(&input_changed, false);
@@ -284,6 +297,7 @@ void usb_hid_service(struct usb_host *h)
     if (!h->ready || h->quarantined) return;
     if (h->irq_status) { usb_host_quarantine(h, "interrupt_host_error"); return; }
     if (!usb_leases_valid(h)) return;
+    usb_irq_completion_check(h);
     usb_ohci_service_done(h);
     if (!h->ready) return;
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {
@@ -291,7 +305,60 @@ void usb_hid_service(struct usb_host *h)
         if (!d->present || !d->configured || d->quarantined || d->hid_fault) continue;
         for (unsigned j = 0; j < USB_HID_MAX && !d->hid_fault && h->ready; j++)
             usb_hid_poll(d, &d->hid[j]);
+        bool general = d->tt_pending || d->hid_fault;
+        for (unsigned j = 0; j < USB_HID_MAX; j++) general |= d->hid[j].recovery_pending;
+        if (general) { h->irq_pending = true; kwait_wake_all(&h->changed); }
     }
+}
+void usb_irq_completion_check(struct usb_host *h)
+{
+    uint32_t flags = usb_irq_save();
+    if (!h->irq_attached || h->irq_fallback) {
+        h->irq_probe_pending = false; usb_irq_restore(flags); return;
+    }
+    /* Called from the topology deadline or a synchronous transfer after the
+     * HC had a chance to signal IOC. A pending device-local completion,
+     * still unacknowledged by our ISR, is evidence; an idle NAK is not. */
+    unsigned off = h->pci.prog_if == 0x20 ? h->ehci_caplen + 4u : h->pci.prog_if ? 0x0cu : 2u;
+    unsigned status = h->io.read(h->io.cookie, off, h->pci.prog_if ? 4 : 2);
+    if (status == UINT32_MAX || !(status & (h->pci.prog_if == 0x10 ? 2u : 3u))) {
+        h->irq_probe_pending = false; usb_irq_restore(flags); return;
+    }
+    if (!h->irq_probe_pending || h->irq_probe_count != h->completion_interrupts) {
+        h->irq_probe_pending = true;
+        h->irq_probe_at = h->io.now(h->io.cookie);
+        h->irq_probe_count = h->completion_interrupts;
+        input_pending = true;
+        usb_irq_restore(flags); kwait_wake_all(&input_changed);
+        return;
+    }
+    if (!usb_expired(h, h->irq_probe_at + USB_IRQ_GRACE_MS)) { usb_irq_restore(flags); return; }
+    h->irq_fallback = true;
+    h->irq_probe_pending = false;
+    usb_irq_restore(flags);
+    klog("[usb] controller=%s mode=hid_fallback interval_ms=%u reason=completion_without_irq",
+         h->owner, USB_HID_FALLBACK_MS);
+}
+uint64_t usb_hid_deadline(struct usb_host *h)
+{
+    if (!h->ready || h->quarantined) return UINT64_MAX;
+    uint64_t now = h->io.now(h->io.cookie), due = UINT64_MAX;
+    if (h->irq_probe_pending) due = h->irq_probe_at + USB_IRQ_GRACE_MS;
+    for (unsigned i = 0; i < h->device_count; i++) {
+        struct usb_device *d = &h->devices[i];
+        if (!d->present || !d->configured || d->quarantined || d->hid_fault || d->tt_pending) continue;
+        for (unsigned j = 0; j < USB_HID_MAX; j++) {
+            struct usb_hid *p = &d->hid[j];
+            if (!p->active || p->recovery_pending) continue;
+            uint64_t next = UINT64_MAX;
+            if (!p->pipe_state) next = p->next_poll > now ? p->next_poll : now;
+            else if (p->pipe_state == 2) next = p->retire_begin + 2 > now ? p->retire_begin + 2 : now + 1;
+            else if (!h->irq_attached || h->irq_fallback) next = now + USB_HID_FALLBACK_MS;
+            if (p->repeat_key && p->repeat_at < next) next = p->repeat_at;
+            if (next < due) due = next;
+        }
+    }
+    return due;
 }
 void usb_host_take(struct usb_host *h)
 {
@@ -639,7 +706,7 @@ int usb_controller_snapshot(const struct usb_host *h, struct usb_controller_inve
         }
     }
     out->flags = (h->owned ? USB_CONTROLLER_OWNED : 0) |
-        (h->pci.prog_if == 0x20 ? USB_CONTROLLER_TT_UNSUPPORTED |
+        (h->pci.prog_if == 0x20 ?
          (h->ready ? USB_CONTROLLER_HIGH_SPEED : h->owned ? USB_CONTROLLER_ROUTE_ONLY : 0) : 0) |
         (h->quarantined ? USB_CONTROLLER_QUARANTINED : 0);
     return 0;
@@ -691,7 +758,7 @@ int usb_ehci_activate(struct usb_host *h, struct usb_host *group, unsigned count
     if (err) { usb_host_quarantine(h, "ehci_activation"); return err; }
     h->ready = true;
     if (intx && enable_irq(h)) return -USB_EIO;
-    h->reason = h->irq_attached ? "ready_irq_hs_tt_unsupported" : "ready_polling_hs_tt_unsupported";
+    h->reason = h->irq_attached ? "ready_irq_hs_tt" : "ready_polling_hs_tt";
     klog("[usb] controller=ehci ports=%u pci=%02x:%02x.%u reason=%s companions=%02x ready=%02x",
          h->ports, h->pci.bus, h->pci.dev, h->pci.fn, h->reason,
          h->inventory.companion_functions, h->inventory.ready_functions);
@@ -736,6 +803,7 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
         if (p[1] == 4) {
             if (size < 9) return -USB_EPROTO;
             hid = 0; storage = 0; report_len = 0;
+            if (!p[3] && p[5] == 9) d->tt_multi = p[7] == 2;
             if (!p[3]) {
                 unsigned bit = 1u << (p[2] & 7);
                 if (seen_interface[p[2] / 8] & bit) return -USB_EPROTO;
@@ -790,6 +858,8 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
 int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned port, bool low)
 {
     if (!h->ready || h->quarantined) return -USB_EIO;
+    if (root >= h->ports || parent > h->device_count ||
+        (parent && port >= h->devices[parent - 1].hub_ports)) return -EINVAL;
     if (h->device_count == USB_DEVICE_MAX || h->next_address > 127) {
         klog("[usb] quarantine port=%u reason=device_capacity", port); return -ENOSPC;
     }
@@ -797,7 +867,8 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
     struct usb_device *d = &h->devices[slot]; memset(d, 0, sizeof(*d));
     d->host = h; d->ep0 = 8; d->low_speed = low; d->root_port = (uint8_t)root;
     d->parent = (uint8_t)parent; d->port = (uint8_t)port; d->present = true;
-    d->high_speed = h->pci.prog_if == 0x20 && !low;
+    d->high_speed = h->pci.prog_if == 0x20 && !low &&
+        (!parent || (h->devices[parent - 1].hub_status[port] & 0x400));
     if (d->high_speed) d->ep0 = 64;
     d->generation = gen_alloc(); d->reason = "enumerating";
     uint8_t b[USB_CONFIG_MAX];
@@ -834,6 +905,7 @@ descriptor_ready:
     err = usb_control(d, 0x80, 6, 0x100, 0, b, 18);
     if (err != 18 || b[0] != 18 || b[1] != 1 || b[7] != d->ep0 || !b[17]) goto failed;
     d->class_code = b[4]; d->vendor = (uint16_t)le16(b + 8); d->product = (uint16_t)le16(b + 10);
+    unsigned serial_index=b[16];
     klog("[usb] device addr=%u vid:pid=%04x:%04x class=%02x speed=%s", d->address, d->vendor, d->product, d->class_code, low ? "low" : d->high_speed ? "high" : "full");
     err = usb_control(d, 0x80, 6, 0x200, 0, b, 9);
     if (err != 9 || b[0] != 9 || b[1] != 2) goto failed;
@@ -847,6 +919,10 @@ descriptor_ready:
         err = usb_hub_attach(d); if (err) goto failed;
         d->reason = "hub_ready";
     }
+    /* Optional descriptor reads stay in the serialized enumeration worker. */
+    bool has_hid=false;
+    for (unsigned i=0;i<USB_HID_MAX;i++) if (d->hid[i].endpoint) has_hid=true;
+    if (has_hid && usb_identity_serial) usb_identity_serial(d,serial_index);
     for (unsigned i = 0; i < USB_HID_MAX; i++) if (d->hid[i].endpoint) {
         unsigned report_len = d->hid[i].report_length;
         err = usb_hid_attach(d, &d->hid[i], report_len);
@@ -856,6 +932,7 @@ descriptor_ready:
             continue; /* An unhandled vendor interface must not detach its peers. */
         }
         if (err) goto failed;
+        input_pending = true; kwait_wake_all(&input_changed);
         d->reason = "hid_ready";
     }
     if (d->storage.bound) {
@@ -1007,6 +1084,7 @@ void usb_step(struct usb_host *h)
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {
         struct usb_device *d = &h->devices[i];
         if (!d->configured || !d->present || d->quarantined) continue;
+        if (d->tt_pending) usb_ehci_tt_service(d);
         /* A scan first recognizes disconnect/change. A TD failure caused
          * by unplug must not permanently block that port's next generation. */
         if (d->hid_fault) { usb_device_quarantine(d,d->hid_fault); continue; }
@@ -1078,8 +1156,7 @@ static void service(void *arg)
         if (g_current) g_current->device_worker_site=0;
         uint64_t now = native_now(0);
         uint64_t due = periodic_scan() ? h->next_scan : now+250;
-        /* Control/BOT sleeps retain their per-host reservation. The separate
-         * HID task services completed reports at 1 ms, independently. */
+        /* Topology deadlines are independent of completion-driven HID. */
         unsigned ms = due > now && due - now <= 250 ? (uint32_t)(due - now) : 1;
         if (h->irq_attached) kwait_wait_until(&h->changed, host_pending, h, deadline_after_ms(ms));
         else task_sleep_ms(ms);
@@ -1090,16 +1167,23 @@ static void input_service(void *arg)
     (void)arg;
     for (;;) {
         uint32_t f = irq_save(); input_pending = false; irq_restore(f);
+        uint64_t due = UINT64_MAX;
         if (smi_mark) smi_mark(SMI_HID_BEGIN); /* f1-94: one usb-hid turn */
         for (unsigned i = 0; i < host_count; i++) {
             fs_lock_take(&hosts[i].transfer_lock);
             if (g_current) g_current->device_worker_site=(uint32_t)(uintptr_t)usb_hid_service;
             usb_hid_service(&hosts[i]);
+            uint64_t next = usb_hid_deadline(&hosts[i]);
+            if (next < due) due = next;
             if (g_current) g_current->device_worker_site=0;
             fs_lock_drop(&hosts[i].transfer_lock);
         }
         if (smi_mark) smi_mark(SMI_HID_END);
-        kwait_wait_until(&input_changed, hid_pending, 0, deadline_after_ms(1));
+        /* kwait deadlines use modular comparison, so UINT64_MAX is already
+         * expired near boot. A half-range-safe horizon represents IRQ-only
+         * sleep without a periodic timer in any supported machine lifetime. */
+        if (due == UINT64_MAX) due = native_now(0) + (1ull << 62);
+        kwait_wait_until(&input_changed, hid_pending, 0, due);
     }
 }
 static void start_services(void)

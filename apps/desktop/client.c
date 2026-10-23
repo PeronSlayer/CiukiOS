@@ -839,6 +839,13 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         if (!result) desk_power_begin(d, (int)p.flags);
         break;
     }
+    case DESK_JOYSTICK: {
+        int result=c->program!=DESK_APP_CONTROL || !d->shell || d->sh.gate ? -EPERM :
+            d->power.state ? -EBUSY : d->joystick_control ? d->joystick_control(d,&p.joystick) : -ENODEV;
+        desk_message(&reply,DESK_JOYSTICK_RESULT,112); reply.data[0]=DESK_SHELL_VERSION;
+        desk_put32(reply.data+4,p.serial); memcpy(reply.data+8,&p.joystick,sizeof(p.joystick));
+        desk_put32(reply.data+108,(uint32_t)result); desk_queue(d,i,&reply); break;
+    }
     case DESK_SETTINGS: {
         /* Control Panel settings use the real display callback and share
          * the shutdown guard with the other preference requests. */

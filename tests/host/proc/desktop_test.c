@@ -684,6 +684,20 @@ static void test_desktop_grants(void)
     CHECK(grant_input_read(p, grants[1], BUFFER, 1) == 1 && input_at == 3);
     CHECK(!ua_read(p->memory, events, BUFFER, sizeof(events[0])));
     CHECK(events[0].type == CIUKI_INPUT_KEY && !events[0].value && events[0].sequence == 260);
+    /* f1-122: raw pad coordinates/pressure stay inside the kernel stream;
+     * public grants deliver only the existing pointer/button projection. */
+    input_count = 4; input_at = 0;
+    input_events[0] = (struct input_event){ .type = INPUT_ABS, .code = 0, .value = 2000 };
+    input_events[1] = (struct input_event){ .type = INPUT_REL, .code = INPUT_X, .value = 4, .sequence = 262 };
+    input_events[2] = (struct input_event){ .type = INPUT_ABS, .code = 2, .value = 40 };
+    input_events[3] = (struct input_event){ .type = INPUT_BTN, .code = INPUT_LEFT, .value = 1, .sequence = 264 };
+    CHECK(grant_input_read(p, grants[1], BUFFER, 2) == 2 && input_at == 4);
+    CHECK(!ua_read(p->memory, events, BUFFER, 2 * sizeof(events[0])));
+    CHECK(events[0].type == CIUKI_INPUT_MOTION && events[0].value == 4 && events[0].sequence == 262);
+    CHECK(events[1].type == CIUKI_INPUT_BUTTON && events[1].code == 1 && events[1].sequence == 264);
+    input_count = 1; input_at = 0;
+    input_events[0] = (struct input_event){ .type = INPUT_ABS, .code = 2, .value = 0 };
+    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EAGAIN && input_at == 1);
     CHECK(console_owned);   /* the display duplicate and the input grant are still open */
     desktop_clean(p);
     CHECK(!console_owned && !desktop_objects.grants);

@@ -5,6 +5,7 @@
 #define main usb_model_main
 #include "usb_test.c"
 #undef main
+volatile uint64_t g_ticks;
 uint64_t deadline_after_ms(uint32_t ms) { return m.now+ms; }
 
 #define REPORTS 24u

@@ -1,12 +1,16 @@
 /* VIA SGD (not Intel NAM/NABM). SPDX-License-Identifier: GPL-2.0-only.
- * References/quirks: docs/design/f4-audio-second-set.md. */
+ * References/quirks: docs/design/f4-audio-second-set.md.
+ * Revision table adapted from Linux v6.12 sound/pci/via82xx.c,
+ * Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>,
+ * Tjeerd.Mulder <Tjeerd.Mulder@fujitsu-siemens.com>, 2002 Takashi Iwai <tiwai@suse.de>.
+ * Upstream GPL-2.0-or-later; docs/licenses/linux-ac97-NOTICES.txt. */
 #include <ciuki/kernel.h>
 #include <ciuki/audio_backend.h>
 bool via82xx_match(const struct pci_func *p, enum audio_backend_kind *kind)
 {
     if (p->vendor!=0x1106 || p->class_code!=4 || p->subclass!=1) return false;
     if (p->device==0x3058) *kind=AUDIO_VIA686;
-    else if (p->device==0x3059 && (p->revision==0x20 || p->revision==0x30 || p->revision==0x40 || p->revision==0x50)) *kind=AUDIO_VIA8233;
+    else if (p->device==0x3059 && (p->revision==0x20 || p->revision==0x30 || p->revision==0x40 || p->revision==0x50 || p->revision==0x60)) *kind=AUDIO_VIA8233;
     else return false;
     return true;
 }
@@ -29,7 +33,9 @@ int via82xx_codec_write(struct audio_dma_device *d, uint16_t reg, uint16_t value
     e=audio_hw_wait(d,0x80,1u<<24,0,100);
     uint16_t got;
     if (!e) e=via82xx_codec_read(d,reg,&got);
-    unsigned mask=reg==0x26 ? 0xff00 : reg==2 || reg==0x18 ? 0x9f1f : 0xffff;
+    const struct ac97_codec_profile *p=ac97_codec_lookup(d->state.codec_id);
+    unsigned mask=reg==0x26 ? 0xff00 : reg==0x2a ? 0x000f : reg==2 ? p->master_mask : reg==0x18 ? p->pcm_mask : reg==4 ? p->headphone_mask : 0xffff;
+    if (!mask) mask=0x8000; /* absent C-Media control: only the upstream reset mute */
     return e ? e : ((got^value)&mask) ? -EIO : 0;
 }
 static int via_mute(struct audio_dma_device *d, bool mute)
@@ -108,6 +114,12 @@ static bool via_ack(struct audio_dma_device *d)
 static int via_prepare(struct audio_dma_device *d)
 {
     d->channel=d->kind==AUDIO_VIA8233 && d->pci.revision==0x40 ? 0x40 : 0;
+    for (unsigned i=0;i<pci_count();i++) {
+        const struct pci_func *peer=pci_get(i);
+        if (peer->vendor==d->pci.vendor && peer->class_code==7 && peer->subclass==3 && (peer->command & 5)) {
+            d->reason="aclink_dependency"; return -EBUSY;
+        }
+    }
     if (d->command&1) {
         for (unsigned i=0;i<8;i++) {
             unsigned ch=i*0x10;
@@ -138,7 +150,7 @@ static int via_prepare(struct audio_dma_device *d)
     }
     int e=via_halt(d);
     if (!e) e=audio_dma_codec_prepare(d,via82xx_codec_read,via82xx_codec_write);
-    if (e) { d->reason="codec_prepare"; return e; }
+    if (e) { if (!d->reason) d->reason="codec_prepare"; return e; }
     d->state.rate=48000;
     audio_pci_write(&d->io,&d->pci,4,d->command | 5,2); /* VT8233 may ignore BME; engine proof is required */
     return 0;

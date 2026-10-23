@@ -16,7 +16,8 @@ class ComTests(unittest.TestCase):
                             '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
                             '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                             '-I', str(ROOT / 'src/kernel/include'),
-                            str(ROOT / 'tests/host/com_test.c'), '-o', str(binary)], check=True)
+                            str(ROOT / 'tests/host/com_test.c'),
+                            str(ROOT / 'src/kernel/drivers/serial_protocol.c'), '-o', str(binary)], check=True)
             subprocess.run([binary], check=True)
 
 if __name__ == '__main__':

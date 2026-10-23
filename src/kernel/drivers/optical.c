@@ -14,7 +14,7 @@ int optical_bind(struct storage *s, unsigned slot, struct ata_device *d)
         (d->packet_bytes != 12 && d->packet_bytes != 16) ? -FS_EOPNOTSUPP :
         d->block.quarantined || d->channel->stopped || d->channel->quiescing ? -FS_EQUARANTINED : 0;
     klog("[optical] bind slot=%u channel=%u unit=%u identified=%u type=%u packet_bytes=%u dma=%u mode=pio sector_size=%u blkpart=skip result=%d",
-         slot, d->channel->irq - 14, d->unit, d->identified, d->packet_type,
+         slot, d->channel->index, d->unit, d->identified, d->packet_type,
          d->packet_bytes, d->dma_enabled, d->block.sector_size, e);
     if (e) return e;
     if (s->optical_bindings[slot].device) return -FS_EBUSY;

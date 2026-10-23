@@ -6,6 +6,8 @@
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
 #include "dosvm_internal.h"
+#pragma weak dosvm_lpt_init
+#pragma weak dosvm_lpt_bios
 
 static void low(uint32_t *reg, uint16_t value) { *reg = (*reg & 0xFFFF0000u) | value; }
 static void ah(struct v86_frame *f, uint8_t value) { f->tf.eax = (f->tf.eax & ~0xFF00u) | ((uint32_t)value << 8); }
@@ -53,6 +55,7 @@ static int disk_result(struct dosvm *v, struct v86_frame *f, uint8_t status)
 
 static int disk_bios(struct dosvm *v, struct v86_frame *f)
 {
+    if ((uint8_t)f->tf.edx<0x80) return dosvm_floppy_bios(v,f);
     uint8_t fn = f->tf.eax >> 8, count = f->tf.eax;
     uint8_t packet[26];
     uint32_t lba = 0, buffer = 0, dap = 0;
@@ -223,7 +226,13 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
     case 0x33: return dosvm_mouse_bios(v, f);
     case 0x1C: return 0;
     case 0x10: return dosvm_vga_bios(v, f);
-    case 0x11: low(&f->tf.eax, 0x22); return 0;
+    case 0x11: {
+        uint8_t equipment[2];
+        int e = dosvm_read(v, 0x410, equipment, sizeof(equipment));
+        if (e) return e;
+        low(&f->tf.eax, u16(equipment)); return 0;
+    }
+    case 0x17: return dosvm_lpt_bios ? dosvm_lpt_bios(v,f) : 0;
     case 0x12: low(&f->tf.eax, 640); return 0;
     case 0x13: {
         uint64_t begin = dosvm_perf_clock(), tick = g_ticks;
@@ -236,8 +245,10 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
         irq_restore(flags);
         return e;
     }
+    case 0x14: return dosvm_uart_bios(v,f);
     case 0x15:
         carry(f, false);
+        if (fn == 0x84 && dosvm_joystick_bios) return dosvm_joystick_bios(v,f);
         if (fn == 0x86) {
             uint32_t us = ((uint32_t)(uint16_t)f->tf.ecx << 16) | (uint16_t)f->tf.edx;
             if (us > 60000000) { ah(f, 0x86); carry(f, true); return 0; }
@@ -333,7 +344,7 @@ int dosvm_bios_init(struct dosvm *v)
     }
     static const uint8_t timer[] = {0xCD,0xFE,0x50,0xB0,0x20,0xE6,0x20,0x58,0xCD,0x1C,0xCF};
     memcpy(rom + 8 * 16, timer, sizeof(timer));
-    bda16(v, 0x410, 0x22); bda16(v, 0x413, 640);
+    bda16(v, 0x410, 0x822); bda16(v, 0x413, 640);
     bda16(v, 0x41A, 0x1E); bda16(v, 0x41C, 0x1E);
     bda16(v, 0x480, 0x1E); bda16(v, 0x482, 0x3E);
     uint8_t mode = 3, rows = 24, disks = 1;
@@ -346,6 +357,7 @@ int dosvm_bios_init(struct dosvm *v)
     memcpy(rom + 9 * 16, keyboard_irq, sizeof(keyboard_irq));
     uint8_t *callback_rom = (uint8_t *)P2V(v->frames[0xF1]) + (DOSVM_MOUSE_RETURN & 0xFFF);
     callback_rom[0] = 0xCD; callback_rom[1] = 0xFD; callback_rom[2] = 0xF4;
+    if (dosvm_lpt_init) { int e=dosvm_lpt_init(v); if (e) return e; }
     if (dosvm_file_rom_init) dosvm_file_rom_init(v);
     return 0;
 }

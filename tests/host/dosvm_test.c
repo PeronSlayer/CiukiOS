@@ -353,7 +353,10 @@ static void run_worker(struct dosvm *v)
 
 /* File-backed fake VFS transport. Production overlay indexing remains real. */
 static struct storage store = {.ready=true};
-static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open, identity_open, unified_identity; uint64_t pos[2], base_bytes; char path[80]; void (*base_sector)(uint32_t, void *); } files[DOSVM_LIMIT];
+static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open, identity_open, unified_identity, floppy_open, floppy_writable; uint64_t floppy_pos, pos[2], base_bytes; char path[80]; void (*base_sector)(uint32_t, void *); } files[DOSVM_LIMIT];
+static struct vfs_table *floppy_image_owner;
+static uint8_t *floppy_image_bytes;
+static uint32_t floppy_image_size=1440u*1024;
 static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes, base_seeks;
 static unsigned io_calls, io_fail_at;
 static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_signature;
@@ -410,6 +413,12 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     unsigned i=file_slot(table); CHECK(attr==0); if (io_fails()) return -V86_EIO;
+    if (!strcmp(path,"C:\\TESTFLOP.IMG")) {
+        CHECK((access==VFS_READ || access==(VFS_READ|VFS_WRITE)) && share==VFS_DENY_ALL);
+        if (floppy_image_owner) return -FS_EACCES;
+        floppy_image_owner=table; files[i].floppy_open=true; files[i].floppy_writable=access&VFS_WRITE;
+        files[i].floppy_pos=0; handles++; return 3;
+    }
     if (!strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.SHA") || !strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.SHA")) {
         files[i].unified_identity=!strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.SHA");
         if (files[i].unified_identity ? unified_checksum_missing : reference_checksum_missing) return -ENOENT;
@@ -451,15 +460,24 @@ int vfs_handle_version(struct vfs_table *table, int handle, struct vfs_file_vers
     return 0;
 }
 int vfs_close(struct vfs_table *table, int handle)
-{ unsigned i=file_slot(table); if (handle==0) { CHECK(files[i].base_open); files[i].base_open=false; } else if (handle==2) { CHECK(files[i].identity_open); files[i].identity_open=false; }
+{ unsigned i=file_slot(table); if (handle==3) { CHECK(files[i].floppy_open && floppy_image_owner==table); files[i].floppy_open=false;floppy_image_owner=0; }
+  else if (handle==0) { CHECK(files[i].base_open); files[i].base_open=false; } else if (handle==2) { CHECK(files[i].identity_open); files[i].identity_open=false; }
   else { CHECK(handle==1 && files[i].cow_open); files[i].cow_open=false; } handles--; return fail_close ? -V86_EIO : 0; }
 int vfs_delete(struct vfs_table *table, const char *path)
 { unsigned i=file_slot(table); CHECK(strstr(path,".COW") && !files[i].cow_open); if (fail_delete) return -V86_EIO; CHECK(files[i].cow); CHECK(fclose(files[i].cow)==0 && unlink(files[i].path)==0); files[i].cow=0; scratch--; deletes++; return 0; }
 int vfs_seek(struct vfs_table *table, int handle, int64_t offset, enum vfs_whence whence, uint64_t *position)
-{ unsigned i=file_slot(table); disk_owned(table); CHECK(handle>=0 && handle<=1 && whence==VFS_SEEK_SET && offset>=0); if (!handle) base_seeks++; if (io_fails()) return -V86_EIO; files[i].pos[handle]=offset; *position=offset; return 0; }
+{ unsigned i=file_slot(table); disk_owned(table); CHECK(handle>=0 && (handle<=1 || handle==3) && whence==VFS_SEEK_SET && offset>=0); if (!handle) base_seeks++; if (io_fails()) return -V86_EIO; if(handle==3) files[i].floppy_pos=offset;else files[i].pos[handle]=offset; *position=offset; return 0; }
+int vfs_handle_stat(struct vfs_table *table,int handle,struct fat_entry *entry,uint64_t *position)
+{ unsigned i=file_slot(table); CHECK(handle==3);if(!files[i].floppy_open)return -FS_EBADF;
+  if(entry){memset(entry,0,sizeof(*entry));entry->size=floppy_image_size;}if(position)*position=files[i].floppy_pos;return 0; }
 int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size_t *done)
 {
     unsigned i=file_slot(table); disk_owned(table);
+    if (handle==3) {
+        CHECK(files[i].floppy_open && files[i].floppy_pos+bytes<=floppy_image_size);
+        if(io_fails())return -FS_EIO;
+        *done=short_read ? bytes-1 : bytes;memcpy(data,floppy_image_bytes+files[i].floppy_pos,*done);files[i].floppy_pos+=*done;return 0;
+    }
     if (handle==2) {
         CHECK(files[i].identity_open && bytes==66); *done=65;
         if (files[i].unified_identity && !unified_identity[0]) {
@@ -505,9 +523,11 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
     return 0;
 }
 int vfs_write(struct vfs_table *table, int handle, const void *data, size_t bytes, size_t *done)
-{ unsigned i=file_slot(table); disk_owned(table); CHECK(handle==1 && bytes==512); disk_writes++; if (io_fails()) return -V86_EIO; *done=short_write ? 511 : bytes; CHECK(fseek(files[i].cow,(long)files[i].pos[1],SEEK_SET)==0); CHECK(fwrite(data,1,*done,files[i].cow)==*done); return 0; }
+{ unsigned i=file_slot(table); disk_owned(table);if(handle==3){CHECK(files[i].floppy_open && files[i].floppy_writable && files[i].floppy_pos+bytes<=floppy_image_size);if(io_fails())return -FS_EIO;*done=short_write ? bytes-1 : bytes;memcpy(floppy_image_bytes+files[i].floppy_pos,data,*done);files[i].floppy_pos+=*done;return 0;}
+  CHECK(handle==1 && bytes==512); disk_writes++; if (io_fails()) return -V86_EIO; *done=short_write ? 511 : bytes; CHECK(fseek(files[i].cow,(long)files[i].pos[1],SEEK_SET)==0); CHECK(fwrite(data,1,*done,files[i].cow)==*done); return 0; }
 int vfs_commit(struct vfs_table *table, int handle)
-{ unsigned i=file_slot(table); CHECK(handle==1); commits++; if (fail_commit) return -V86_EIO; CHECK(fflush(files[i].cow)==0); return 0; }
+{ unsigned i=file_slot(table);if(handle==3){CHECK(files[i].floppy_open);return fail_commit ? -FS_EIO : 0;}
+  CHECK(handle==1); commits++; if (fail_commit) return -V86_EIO; CHECK(fflush(files[i].cow)==0); return 0; }
 
 static char last_record[256];
 static char recent_records[8][256];
@@ -591,9 +611,15 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 #include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
+#include "../../src/kernel/vm/dosvm_floppy.c"
+#include "../../src/kernel/vm/floppy_model.c"
+#include "../../src/kernel/drivers/floppy_media.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
+#include "dosvm_uart_seams.inc"
+#include "../../src/kernel/vm/uart16550.c"
+#include "../../src/kernel/vm/dosvm_uart.c"
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_pool.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
@@ -961,6 +987,8 @@ static void test_memory_services(bool locked)
 #include "dosvm_conformance_test.inc"
 #include "dosvm_paging_test.inc"
 #include "dosvm_wait_present_test.inc"
+#include "dosvm_floppy_test.inc"
+#include "dosvm_uart_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -968,6 +996,14 @@ int main(void)
         test_persistent_provider(); test_client_boundary();
         free(ram); fflush(stdout); return 0;
     }
+    if(getenv("CIUKI_VM_FLOPPY")){
+        test_floppy_vm();
+#ifdef CIUKI_FDC_FIXTURE
+        test_floppy_physical_vm();
+#endif
+        free(ram);fflush(stdout);return 0;
+    }
+    if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
         free(ram); fflush(stdout); return 0;
@@ -984,7 +1020,7 @@ int main(void)
         printf("H55-04 native selector/overlay tests: PASS (%u checks)\n",checks);
         fflush(stdout);free(ram);return 0;
     }
-    test_d48_bios_and_export();
+    test_serial_uart(); test_d48_bios_and_export();
     test_disk_cache(); test_disk_provider_deadline(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
     test_persistent_provider();
     test_maximum_creation();

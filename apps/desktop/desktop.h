@@ -293,6 +293,7 @@ struct desktop {
     int (*power_alive)(struct desktop *, uint32_t pid);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
+    int (*joystick_control)(struct desktop *, struct ciuki_joystick_control *);
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
     /* Title-bar double-click (maximize and restore). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;

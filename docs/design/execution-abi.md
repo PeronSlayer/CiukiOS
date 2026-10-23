@@ -1437,6 +1437,27 @@ data has zero latency. Music position and EOF use this stream-specific delay.
 F4-11 transport IDs (record layout and existing commands unchanged): 1 is the
 Intel-layout AC'97 engine (Intel ICH, SiS 7012, nForce/nForce2), 2 ES1370,
 3 ES1371/ES1373/CT5880, 4 ISA SB16, 5 VIA VT82C686, 6 VIA VT8233/VT8235.
+F1-116 appends 7 ESS Maestro1, 8 ESS Maestro2, 9 ESS Maestro2E; all use
+the existing S16LE stereo playback contract at 48,000 Hz with a measured
+APU clock. Kernel diagnostic capture adds no public or guest recording ABI.
+See [Maestro source and transport decisions](f4-maestro.md).
+F1-117 appends 10 EMU10K1 (SB Live!) and 11 EMU10K2 (original Audigy),
+both at 48,000 Hz. Their cyclic cursors count stereo frames, including the
+documented voice-cache offset compensation. No record layout or command changes;
+capture remains private to the kernel, pending a separately approved recording ABI.
+F1-118 adds 12 C-Media CMI8338/8738, with 48,000 Hz S16LE stereo output.
+Its `codec_id` is zero (no external codec ID); PCI device/revision identify
+the integrated codec. Private capture is not a public recording capability.
+See [C-Media transport](f4-cmipci.md).
+F1-119 adds 13 Yamaha DS-XG (YMF724/740/744/754),
+fixed 48,000 Hz stereo output; record bytes and existing IDs are unchanged.
+DS-XG bank positions and remaining counts are stereo frames; its hardware
+legacy functions stay disabled and DOS SB16 uses the common virtual source.
+See [the DS-XG transport decision](f1-119-yamaha-ds-xg.md).
+F1-120 adds 14 Trident 4DWave DX, 15 Trident 4DWave NX and 16 ALi M5451,
+all with 48,000-Hz output. Existing values and record layouts are unchanged.
+Their private kernel capture interface does not advertise native or DOS
+recording; `/dev/audio` remains the playback ABI described above.
 `output_rate` is the effective physical rate: 44,100 Hz on ES1370/SB16,
 48,000 Hz on the AC'97 transports. The default *input* remains 48,000 Hz;
 SET_FORMAT reports both rates and never substitutes the requested source rate.

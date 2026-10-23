@@ -30,9 +30,11 @@ class DeviceTests(unittest.TestCase):
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-ffunction-sections', '-fdata-sections', '-fsanitize=address,undefined',
                             '-fno-sanitize-recover=undefined', '-I', str(ROOT / 'src/kernel/include'),
-                            str(ROOT / 'tests/host/devices_test.c'), '-Wl,--gc-sections', '-o', str(binary)], check=True, env=env)
-            r = subprocess.run([binary], env=env, capture_output=True, text=True)
-            self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+                            str(ROOT / 'tests/host/devices_test.c'),
+                            str(ROOT / 'src/kernel/drivers/ac97_codec.c'),
+                            '-Wl,--gc-sections', '-o', str(binary)], check=True, env=env)
+            r = subprocess.run([binary], check=False, env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn('PASS devices:', r.stdout)
             print(r.stdout.strip())
 
@@ -80,7 +82,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/host/f2-75'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 30)  # f1-109 firmware inventory dialog
+            self.assertEqual(len(captures), 31)  # firmware dialog plus game controllers
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.control_frame(self,path.stem,path.read_bytes(),width,height)

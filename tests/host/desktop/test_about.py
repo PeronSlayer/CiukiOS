@@ -12,12 +12,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
-# F2-99 cursor; F1-109/F2-123 and integ-video credits rows, re-recorded in stage-video.
+# F2-99 cursor; F1-109/F2-123, integ-video and integ-periph credits rows, re-recorded at the staging merge (lead).
 GOLDENS = {
-    "about-credits": "0b59b2036e6b22941764eaa418f79e640678004c3a1071cfe2b2f275a98895c4",
-    "about-credits-end": "76a5776cf032273b9dbe64d6155366835653d4c91874bfa3e373d2a1bcd3ed44",
-    "about-credits-pgdn": "e1587657752e065a28e45343c8a3cf2a09302b2296195635ba7364c74b5e8003",
-    "about-credits-wheel": "62451ff89e997c469ed62be7ba67010e4d772e0d66d72dc465a11445a0dde90d",
+    "about-credits": "80c4a81a40d446df36e8510adaa5ea1450ce2004f3ab135f0a1834ba7a26ca0c",
+    "about-credits-end": "cf9e3a87a6d86ba619557a5d94e366763829cf97a2e1d2c91766e2ba6b962b71",
+    "about-credits-pgdn": "a581408add48ced84fb63799f890b7f848c0ac4ae3e25521cb918df77c580d13",
+    "about-credits-wheel": "82c6884f87cd5c529ca3711b7d68ad71389dea5e6491a898f8b38595785a7b3d",
 }
 
 

@@ -14,7 +14,9 @@ aspace = aspace.replace("if (pd[i] & PTE_P) {", "AS_AUDIT_CHARGE(1000); if (pd[i
 # F4-13: replay the exact production cursor functions beside VM sources,
 # replacing only the register transport, as for the paging functions above.
 source = (root / "src/kernel/drivers/ac97.c").read_text()
-helpers = source[source.index("static unsigned ac97_offset("):source.index("static void stage_log(")]
+# Include channel helpers and ALi's raw read used by the cursor, excluding
+# codec/global-write helpers that this standalone cursor fixture never calls.
+helpers = source[source.index("static unsigned ac97_offset("):source.index("static void raw_wr(")]
 cursor = source[source.index("int ac97_observe("):source.index("int ac97_publish(")]
 (out / "dosvm_audio_cursor.inc").write_text(helpers + cursor)
 # f3-02: the exact bytes src/kernel/arch/font.asm includes (offset 64,
