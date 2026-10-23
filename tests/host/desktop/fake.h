@@ -14,4 +14,5 @@ void fake_reset(void);
 void fake_channel(int);
 void fake_surface(int, uint32_t, uint32_t, uint32_t);
 unsigned fake_live(void);
+int fake_fd_free(int);
 #endif
