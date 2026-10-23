@@ -170,7 +170,7 @@ application are in that application's section.
 | KB-7 | F10 / Alt: menu bar mode; Alt+letter: menu; Shift+letter or letter: menu item | RK-keys | done | `apps/libdeskui/widgets.c:1193-1270`; Win32 `user32/menu.c:1514-1570` |
 | KB-8 | Shift+F10 and the Application key: context menu for the selection | RK-keys | partial | List and tree widgets only (`widgets.c:1230-1236`). Missing: text fields, desktop icons, taskbar, Win32 `VK_APPS` |
 | KB-9 | Alt+F6: next window of the same program; Ctrl+F4 / Ctrl+F6: MDI | RK-keys | absent | — |
-| KB-10 | Print Screen: screen to clipboard; Alt+Print Screen: active window to clipboard | RK-keys | absent | `CIUKI_KEY_PRINTSCREEN` exists (`src/kernel/include/ciuki/abi.h:622`) but nothing handles it |
+| KB-10 | Print Screen: screen to clipboard; Alt+Print Screen: active window to clipboard | RK-keys | partial | G5: Print Screen captures the composed desktop, Alt+Print Screen the active frame, as a DIB on the system clipboard (`apps/desktop/clipboard.c`); `tests/host/desktop/test_system_clipboard.py`. Exclusive full-screen framebuffer capture still missing |
 | KB-11 | F1: Help; Shift+F1: What's This? | RK-keys | partial | F1 in CiukNote, Files, Calculator and CiukIDE opens a static message box (`apps/files/app.c:1335`, `apps/accessories/calc_view.c:126`), not Help topics. No What's This? |
 | KB-12 | Win+E Explorer, Win+F Find, Win+Ctrl+F Find Computer, Win+R Run, Win+M Minimize All, Shift+Win+M Undo, Win+Tab cycle taskbar buttons, Win+F1 Help, Win+Break System Properties, Win+D desktop | RK-keys (`wrkappg_4`) | absent | `logo_down` is cleared by any other key (`shell.c:2974`); there is no chord handling |
 | KB-13 | Alt+M with focus on the taskbar or desktop: minimise all; Ctrl+Esc, Esc: focus the taskbar, then Tab through it | RK-keys (`wrkappg_2`) | absent | Taskbar keyboard focus is not implemented |
@@ -284,14 +284,14 @@ application are in that application's section.
 
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| CB-1 | One system clipboard shared by every program, with several formats at once (text, bitmap, files, private formats) | MS-clip | partial | Native text store `/system/settings/text.clip` (`apps/libdeskui/widgets.c:21-81`), the Win32 store inside w32srv (`apps/w32srv/directory.c:108-137`) and the file store `files.clip` are three separate stores. Missing: one store with formats and change notification |
+| CB-1 | One system clipboard shared by every program, with several formats at once (text, bitmap, files, private formats) | MS-clip | partial | G5: one desktop-owned store with several formats, global sequence, owner, exclusive open, watchers and delayed render (2 s deadline) (`apps/libdeskui/clipstore.c`, `apps/desktop/clipboard.c`, `docs/design/system-clipboard.md`); `tests/host/desktop/test_system_clipboard.py`. DOS INT 2Fh AX=1700h programmatic clipboard still missing |
 | CB-2 | Cut, Copy and Paste in every text field | RK-keys | done | `widgets.c:360-369`, `textarea.c:495-507`; `tests/host/desktop/text_selection_test.c` |
-| CB-3 | Text between native and Win32 programs | MS-clip | absent | No bridge between the two stores |
-| CB-4 | Win32 formats CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, CF_LOCALE, CF_BITMAP, CF_DIB, CF_HDROP, CF_METAFILEPICT, CF_PALETTE, registered formats, delayed rendering | MS-clip (Standard Clipboard Formats) | partial | Types 1, 2, 7, 8 and 13 up to 64 KiB (`directory.c:131`, `sdk/win32/user32/clipboard.c`); `user32_test.c:686-709`. Missing: CF_HDROP, metafiles, palette, registered formats, WM_RENDERFORMAT |
-| CB-5 | Copy and paste in DOS windows (toolbar Mark, Copy, Paste; QuickEdit) | RK-apps | absent | Nothing in `apps/dosbox` or `src/kernel/vm` |
-| CB-6 | Bitmaps between Paint and other programs | MS-clip | partial | Paint keeps its own in-process clip (`apps/paint/paint.c:751,1292`) |
-| CB-7 | Print Screen and Alt+Print Screen put a bitmap on the clipboard | RK-keys | absent | See KB-10 |
-| CB-8 | Clipboard Viewer accessory (view and save the clipboard as `.clp`) | RK-comp | absent | — |
+| CB-3 | Text between native and Win32 programs | MS-clip | done | G5: native UTF-8/LF to Win32 UTF-16/CRLF, ANSI/OEM synthesis and CF_LOCALE (`sdk/win32/user32/system_clipboard.c`); code pages beyond 1252/437/850 missing |
+| CB-4 | Win32 formats CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, CF_LOCALE, CF_BITMAP, CF_DIB, CF_HDROP, CF_METAFILEPICT, CF_PALETTE, registered formats, delayed rendering | MS-clip (Standard Clipboard Formats) | partial | G5: CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, CF_LOCALE, CF_DIB, CF_BITMAP (eager), CF_HDROP, registered and private formats, WM_RENDERFORMAT/WM_RENDERALLFORMATS (`sdk/win32/user32/system_clipboard.c`). Missing: CF_PALETTE, CF_METAFILEPICT, CF_ENHMETAFILE, CF_OWNERDISPLAY, delayed CF_BITMAP |
+| CB-5 | Copy and paste in DOS windows (toolbar Mark, Copy, Paste; QuickEdit) | RK-apps | partial | G5: DOS window menu Mark/Copy/Paste and QuickEdit, text and graphics selection, paced CP437 paste (`apps/dosbox/clipboard.c`, dosvm TEXT/MARK operations). Missing: DOS window toolbar and persisted properties (with G17) |
+| CB-6 | Bitmaps between Paint and other programs | MS-clip | done | G5: Paint copies and pastes DIBs through the system clipboard, palette preserved (`apps/paint/paint.c`); `paint_clipboard_test.c`. RLE DIBs refused |
+| CB-7 | Print Screen and Alt+Print Screen put a bitmap on the clipboard | RK-keys | partial | G5: see KB-10 (full-screen capture missing) |
+| CB-8 | Clipboard Viewer accessory (view and save the clipboard as `.clp`) | RK-comp | done | G5: Clipboard Viewer accessory with text, image and file previews and Windows 3.1/9x `.clp` Open/Save As (`apps/accessories/clipbrd_main.c`, `apps/libdeskui/clipfile.c`); `clipboard_viewer_test.c` |
 
 ## 12. Common dialogs, message boxes and controls
 
