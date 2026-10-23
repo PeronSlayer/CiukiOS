@@ -472,6 +472,34 @@ ignores keys it does not know). `build_cd.py` compares `build-clock.json`
 with `kernel_full_sha256` and copies both hashes into its build record.
 Host tests: `tests/host/test_image_kernel.py`.
 
+### Installed programs without debug sections (fx-12)
+
+The same rule holds for every native ELF the image installs (`/Programs/*`,
+`/System/Win32/w32srv`, `/System/Win32/shell-launch`, NetSurf, TinyCC, Lua, the
+SDK test programs) and for `/Programs/setup` on the Setup CD:
+`strip_payloads()` in `scripts/build_image.py` replaces each little-endian
+ELF32 executable (ET_EXEC/ET_DYN with program headers) by its
+`llvm-objcopy --strip-debug` copy in the build scratch directory
+(`.image-strip-*` beside the image). `strip_elf()` checks every copy against
+the complete file: same type, entry, program headers and header fields except
+the section table, byte-identical file-backed segment bytes, no `.debug*`
+section left (`.symtab` stays). The `build/apps/...` outputs keep the complete
+files. Relocatable objects and archives (SDK `.o`/`.a`), PE files and data are
+not touched. Measured on the current `build/apps` outputs: the on-disk programs
+shrink from 57.1 MB to 14.1 MB (NetSurf 13.5 MB to 2.9 MB; `/Programs/setup`
+on the CD 2.45 MB to 0.62 MB).
+
+Consumers use the installed bytes: `payloads` records (hash and size read back
+from the final disk by `check_payloads`), the app-gate `P path sha256` lines
+(`application_provenance`, written after stripping), `build_cd.py`
+(`stage_payloads` verifies the disk's files against the manifest; the Setup
+program is stripped and `setup_program_sha256` is the installed file,
+`setup_program_full_sha256` the complete one). `build-manifest.json` gains
+`native_elf`: per stripped file `path`, `full_sha256`, `full_bytes`,
+`installed_sha256`, `installed_bytes`. The per-file `elf` evidence under
+`lua`/`desktop`/`tcc`/`netsurf` still describes the complete build outputs.
+Host tests: `tests/host/test_image_native_strip.py`.
+
 
 ### Unattended hardware sweep
 

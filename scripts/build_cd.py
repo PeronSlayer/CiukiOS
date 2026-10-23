@@ -739,7 +739,11 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
         require(SETUP_TOKEN not in options.split(), "the disk image BOOT.CFG must not carry setup=1")
         setup_options = options.rstrip(b"\r\n ") + b" " + SETUP_TOKEN + b"\n"
         require(len(setup_options) <= 127 and all(32 <= c < 127 or c in (10, 13) for c in setup_options), "Setup BOOT.CFG extent")
-        extra = {"/system/BOOT.CFG": setup_options, "/Programs/setup": Path(setup_elf).read_bytes()}
+        # fx-12: the CD installs the Setup program without DWARF, like the disk's programs.
+        setup_installed = Path(setup_elf)
+        if bi.is_native_elf(setup_elf):
+            setup_installed = bi.strip_elf(setup_elf, work / "setup-installed" / "setup", "payload /Programs/setup")
+        extra = {"/system/BOOT.CFG": setup_options, "/Programs/setup": setup_installed.read_bytes()}
         for path, data in extra.items():
             target = stage / path.lstrip("/")
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -803,7 +807,8 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
                       "kernel_sha256": manifest["kernel_sha256"],
                       "kernel_full_sha256": manifest.get("kernel_full_sha256", manifest["kernel_sha256"]),
                       "loader_sha256": sha256_bytes(loader),
-                      "sibling_ciukldr_bin": sibling_state, "build_clock": clock_state, "setup_program_sha256": sha256_file(setup_elf),
+                      "sibling_ciukldr_bin": sibling_state, "build_clock": clock_state, "setup_program_sha256": sha256_file(setup_installed),
+                      "setup_program_full_sha256": sha256_file(setup_elf),
                       "tools": {"xorriso": subprocess.run(["xorriso", "-version"], capture_output=True, text=True).stdout.splitlines()[0],
                                 "mtools": subprocess.run(["mtools", "--version"], capture_output=True, text=True).stdout.splitlines()[0]}},
             "boot_image": {"file": "ciukios-setup-boot.img", "iso_path": BOOT_IMAGE, "sha256": boot_sha,
