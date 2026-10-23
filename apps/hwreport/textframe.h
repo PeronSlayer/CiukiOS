@@ -24,6 +24,10 @@
 #define HR_FRAME_DATA 2u
 #define HR_FRAME_END 3u
 #define HR_FRAME_MAX 256u                         /* CIUKI_MESSAGE_PAYLOAD_MAX */
+/* The CiukiOS errno set (abi.h) has no EPROTO or EBADMSG: a malformed frame
+ * reports EILSEQ and a checksum mismatch EIO. */
+#define HR_EFRAME EILSEQ
+#define HR_ECHECKSUM EIO
 #define HR_FRAME_DATA_HEADER 12u
 #define HR_FRAME_CHUNK (HR_FRAME_MAX - HR_FRAME_DATA_HEADER)
 /* Hard bound on the transferred text: Setup's text viewer holds 256 KiB
@@ -71,32 +75,32 @@ static inline void hr_frame_rx_init(struct hr_frame_rx *rx, char *buffer, size_t
     rx->buffer = buffer; rx->capacity = capacity > HR_LINK_MAX ? HR_LINK_MAX : capacity;
 }
 /* Returns 0 (more frames expected), 1 (transfer complete), or a negative
- * errno: -EPROTO bad magic/version/type/order/length/offset, -EMSGSIZE a
- * declared or actual size over the bound, -EBADMSG checksum mismatch. */
+ * errno: -HR_EFRAME bad magic/version/type/order/length/offset, -EMSGSIZE a
+ * declared or actual size over the bound, -HR_ECHECKSUM checksum mismatch. */
 static inline int hr_frame_rx_feed(struct hr_frame_rx *rx, const uint8_t *data, size_t n)
 {
     if (rx->state == 2 || n < 8 || n > HR_FRAME_MAX || hr_get32(data) != HR_FRAME_MAGIC ||
-        hr_get16(data + 4) != HR_FRAME_VERSION) return -EPROTO;
+        hr_get16(data + 4) != HR_FRAME_VERSION) return -HR_EFRAME;
     unsigned type = hr_get16(data + 6);
     if (type == HR_FRAME_BEGIN) {
-        if (rx->state != 0 || n != 12) return -EPROTO;
+        if (rx->state != 0 || n != 12) return -HR_EFRAME;
         rx->total = hr_get32(data + 8);
         if (rx->total > rx->capacity) return -EMSGSIZE;
         rx->state = 1; return 0;
     }
-    if (rx->state != 1) return -EPROTO;
+    if (rx->state != 1) return -HR_EFRAME;
     if (type == HR_FRAME_DATA) {
-        if (n <= HR_FRAME_DATA_HEADER || hr_get32(data + 8) != rx->received) return -EPROTO;
+        if (n <= HR_FRAME_DATA_HEADER || hr_get32(data + 8) != rx->received) return -HR_EFRAME;
         size_t bytes = n - HR_FRAME_DATA_HEADER;
         if (bytes > rx->total - rx->received) return -EMSGSIZE;
         memcpy(rx->buffer + rx->received, data + HR_FRAME_DATA_HEADER, bytes);
         rx->received += (uint32_t)bytes; return 0;
     }
     if (type == HR_FRAME_END) {
-        if (n != 20 || hr_get32(data + 12) != rx->total || rx->received != rx->total) return -EPROTO;
-        if (hr_get32(data + 16) != hr_crc32(0, (const uint8_t *)rx->buffer, rx->received)) return -EBADMSG;
+        if (n != 20 || hr_get32(data + 12) != rx->total || rx->received != rx->total) return -HR_EFRAME;
+        if (hr_get32(data + 16) != hr_crc32(0, (const uint8_t *)rx->buffer, rx->received)) return -HR_ECHECKSUM;
         rx->status = (int32_t)hr_get32(data + 8); rx->state = 2; return 1;
     }
-    return -EPROTO;
+    return -HR_EFRAME;
 }
 #endif

@@ -152,7 +152,7 @@ static int link_recv(void *c,int fd,uint8_t data[256],size_t *bytes)
     if(r<0)return -errno;
     if(!r)return 0;
     for(unsigned i=0;i<m.fd_count&&i<4;i++)close(m.fds[i]);   /* the program never sends descriptors */
-    if(m.length>sizeof(m.data)||m.fd_count)return -EPROTO;
+    if(m.length>sizeof(m.data)||m.fd_count)return -EILSEQ;
     memcpy(data,m.data,m.length);*bytes=m.length;return 1;
 }
 static int link_reap(void *c,int pid,int *status)

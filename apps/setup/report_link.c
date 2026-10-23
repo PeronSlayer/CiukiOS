@@ -68,7 +68,7 @@ int st_link_report(const struct st_link_io *io, char *buffer, size_t cap, size_t
         if (r < 0) { result = r; fail(reason, "closed"); break; }
         if (r == 0) { result = -EPIPE; fail(reason, "closed"); break; }   /* peer gone before END */
         int f = hr_frame_rx_feed(&rx, data, bytes);
-        if (f < 0) { result = f; fail(reason, f == -EMSGSIZE ? "size" : f == -EBADMSG ? "checksum" : "frame"); break; }
+        if (f < 0) { result = f; fail(reason, f == -EMSGSIZE ? "size" : f == -HR_ECHECKSUM ? "checksum" : "frame"); break; }
         done = f;
     }
     io->close_fd(io->ctx, fds[0]);

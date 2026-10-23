@@ -336,7 +336,7 @@ static void rescue_report(void){
     assert(!st_save_report(&a,result,sizeof(result))&&f.writes==1&&!strcmp(f.last_path,"F:\\HARDWARE.TXT"));
     st_free(&a);
     static const struct{int result,hook;const char *text,*reason,*logged;}failures[]={
-        {-ENOENT,1,"","missing","missing"},{-ECHILD,1,"","exit","exit"},{-EPROTO,1,"","frame","frame"},{-EPIPE,1,"","closed","closed"},
+        {-ENOENT,1,"","missing","missing"},{-ECHILD,1,"","exit","exit"},{-HR_EFRAME,1,"","frame","frame"},{-EPIPE,1,"","closed","closed"},
         {-EIO,1,"","","failed"},{0,1,"","","empty"},{0,0,"","","unavailable"}};
     for(unsigned i=0;i<sizeof(failures)/sizeof(*failures);i++){
         fixture();f.report_result=failures[i].result;f.report_reason=failures[i].reason;f.report_text=failures[i].text;f.no_report_hook=!failures[i].hook;init();

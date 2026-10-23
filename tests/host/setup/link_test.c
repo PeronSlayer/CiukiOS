@@ -93,14 +93,14 @@ void link_tests(void)
     reset();frames("abc\n",4,0);F.child_status=1;run(-ECHILD,"exit",0);
     /* Bad frames: each kills and reaps the running child. */
     char *t=pattern(1000);
-    reset();frames(t,1000,0);F.frames[1][0]^=0xff;F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1);                   /* bad magic */
-    reset();frames(t,1000,0);F.frames[0][4]=2;F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1);                       /* bad version */
-    reset();frames(t,1000,0);F.frames[1][6]=9;F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1);                       /* bad type */
-    reset();frames(t,1000,0);F.next=1;F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1);                               /* DATA before BEGIN */
-    reset();frames(t,1000,0);memmove(F.frames[1],F.frames[2],HR_FRAME_MAX);F.sizes[1]=F.sizes[2];F.count--;F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1); /* offset gap */
-    reset();frames(t,1000,0);F.sizes[1]=5;F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1);                           /* short frame */
-    reset();frames(t,1000,0);F.frames[F.count-1][16]^=1;F.hang=1;run(-EBADMSG,"checksum",0);assert(F.kills==1);        /* bad CRC */
-    reset();frames(t,1000,0);hr_put32(F.frames[F.count-1]+12,999);F.hang=1;run(-EPROTO,"frame",0);assert(F.kills==1);  /* END total differs */
+    reset();frames(t,1000,0);F.frames[1][0]^=0xff;F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1);                   /* bad magic */
+    reset();frames(t,1000,0);F.frames[0][4]=2;F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1);                       /* bad version */
+    reset();frames(t,1000,0);F.frames[1][6]=9;F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1);                       /* bad type */
+    reset();frames(t,1000,0);F.next=1;F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1);                               /* DATA before BEGIN */
+    reset();frames(t,1000,0);memmove(F.frames[1],F.frames[2],HR_FRAME_MAX);F.sizes[1]=F.sizes[2];F.count--;F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1); /* offset gap */
+    reset();frames(t,1000,0);F.sizes[1]=5;F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1);                           /* short frame */
+    reset();frames(t,1000,0);F.frames[F.count-1][16]^=1;F.hang=1;run(-HR_ECHECKSUM,"checksum",0);assert(F.kills==1);        /* bad CRC */
+    reset();frames(t,1000,0);hr_put32(F.frames[F.count-1]+12,999);F.hang=1;run(-HR_EFRAME,"frame",0);assert(F.kills==1);  /* END total differs */
     reset();frames(t,1000,0);hr_put32(F.frames[0]+8,HR_LINK_MAX+1);F.hang=1;run(-EMSGSIZE,"size",0);assert(F.kills==1);/* oversized declaration */
     reset();frames(t,1000,0);hr_put32(F.frames[0]+8,10);F.hang=1;run(-EMSGSIZE,"size",0);assert(F.kills==1);           /* data beyond the declared total */
     reset();frames(t,1000,0);F.count--;F.hang=1;run(-EPIPE,"closed",0);assert(F.kills==1);                              /* truncated: closed before END */
@@ -115,7 +115,7 @@ void link_tests(void)
     /* Complete transfer but a child that never exits: bounded wait, kill, reap. */
     reset();frames("abc\n",4,0);F.hang=1;run(-ETIMEDOUT,"timeout",0);assert(F.kills==1);
     /* A child that survives the first kill checks is still reaped after SIGKILL lands. */
-    reset();frames(t,1000,0);F.frames[1][0]^=0xff;F.hang=1;F.ignore_kill_exit=5;run(-EPROTO,"frame",0);assert(F.kills==1&&F.sleeps>=5);
+    reset();frames(t,1000,0);F.frames[1][0]^=0xff;F.hang=1;F.ignore_kill_exit=5;run(-HR_EFRAME,"frame",0);assert(F.kills==1&&F.sleeps>=5);
     free(t);
     puts("PASS report link: framing round trip, bad/truncated/oversized frames, status and exit failures, timeout with kill and reap, missing binary, spawn refusal");
 }
