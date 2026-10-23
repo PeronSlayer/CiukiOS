@@ -756,6 +756,9 @@ def build(kernel, out, boot_cfg):
         payloads = payload_records(sources)
         # f3-06: owner-local game files never enter the canonical image; only
         # files pinned in the vendored shareware packages may equal one.
+        dos_spec = importlib.util.spec_from_file_location("build_dos_image", ROOT / "scripts/build_dos_image.py")
+        dos_build = importlib.util.module_from_spec(dos_spec)
+        dos_spec.loader.exec_module(dos_build)
         dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads}, free=free)
         populate_payloads(volume, sources, directories)
         # mtools updates the primary allocation hint but not its backup.
