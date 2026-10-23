@@ -1032,7 +1032,7 @@ int main(void)
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
-    if (getenv("CIUKI_VM_FX4")) { test_fx4_vm_create(); printf("fx-4 checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_FX4")) { test_fx4_vm_create(); test_fx4b_launch_paths(); printf("fx-4 checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
     if(getenv("CIUKI_VM_PROGRAMS")){test_client_boundary();fflush(stdout);free(ram);return 0;}
     if(getenv("CIUKI_VM_KERNEL_CHOICE")){
         test_kernel_choice();test_client_boundary();
@@ -1055,6 +1055,7 @@ int main(void)
     test_game_window_base_hash();
     test_game_digest_cache();
     test_fx4_vm_create();
+    test_fx4b_launch_paths();
     test_timer();
     test_menu();
     test_irq_stall();

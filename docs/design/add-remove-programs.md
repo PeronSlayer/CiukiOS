@@ -151,5 +151,10 @@ diagnostic for the creation refusal record. Host evidence:
 `test_actual_owner_provider_partitioned` in
 `tests/host/desktop/test_add_remove.py`.
 
+fx-4b: removal first stops a running background check of `UNIFIED.IMG`
+(it holds the image deny-write), deletes the verified stamp
+`C:\SYSTEM\DOS\UNIFIED.VFY` after committing its `REMOVEn.PND` marker, and
+re-arms the check when it ends (`dos-dpmi-contract.md`, fx-4b section).
+
 Focused host evidence and environmental sanitizer limitations are recorded in
 `build/codex/f2-87-report.md`. Guest evidence remains the lead's responsibility.

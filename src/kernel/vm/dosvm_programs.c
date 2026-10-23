@@ -11,6 +11,12 @@
 int dosvm_game_remove_reserve(unsigned);
 void dosvm_game_remove_release(unsigned);
 #define GAME_SECTORS 262144u
+/* fx-4b: removal is the kernel's only writer of UNIFIED.IMG. It stops a
+ * background verification that holds the image open, deletes the verified
+ * stamp before the first destructive write and re-arms verification. */
+extern void dosvm_image_hold(void) __attribute__((weak));
+extern void dosvm_image_release(void) __attribute__((weak));
+#define IMAGE_STAMP "C:\\SYSTEM\\DOS\\UNIFIED.VFY"
 void dosvm_game_digest_invalidate(void);
 /* One serialized owner-side mount, not one resident cache per operation. */
 static struct {
@@ -109,6 +115,7 @@ int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const ch
     uint32_t flags=irq_save();
     if(owner.busy){irq_restore(flags);if(remove)dosvm_game_remove_release(game);return -FS_EBUSY;}
     owner.busy=true;irq_restore(flags);
+    if(remove && dosvm_image_hold)dosvm_image_hold();
     *step="table";
     int e=vfs_table_init(&s->vfs,&owner.table,2);
     bool table=!e;
@@ -163,6 +170,8 @@ int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const ch
         int marker=vfs_open(&owner.table,pending_path,VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,0);
         if(marker<0)e=marker;
         else {e=vfs_commit(&owner.table,marker);int ce=vfs_close(&owner.table,marker);if(!e)e=ce;}
+        /* The committed marker already voids the stamp; delete it too. */
+        if(!e)(void)vfs_delete(&owner.table,IMAGE_STAMP);
     }
     if(!e && remove && !absent) {
         *step="remove";
@@ -177,6 +186,7 @@ int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const ch
     if(!e)*step="none";
     if(table)vfs_table_destroy(&owner.table);
     flags=irq_save();owner.busy=false;irq_restore(flags);
+    if(remove && dosvm_image_release)dosvm_image_release();
     if(remove)dosvm_game_remove_release(game);
     return !e && !remove && pending ? 1 : e;
 }

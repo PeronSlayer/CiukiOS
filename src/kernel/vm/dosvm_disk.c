@@ -5,6 +5,10 @@
 #include <ciuki/abi.h>
 #include <ciuki/sha256.h>
 #include "dosvm_internal.h"
+/* fx-4b background verifier (dosvm_image.c); weak for the harnesses that
+ * link this file without it, which keep the synchronous hash. */
+#pragma weak dosvm_image_lookup
+#pragma weak dosvm_image_publish
 
 /* f3-06: base names a read-only image of the same private geometry (a
  * local workload disk built by scripts/test/dos_fixtures.py, or the bundled
@@ -252,10 +256,10 @@ static bool digest_lookup(const struct vfs_file_version *version, char out[65])
     irq_restore(flags);
     return hit;
 }
-static void digest_store(struct dosvm *v,const struct vfs_file_version *version, const char sha256[65])
+static void digest_store(struct vfs_table *table,int handle,const struct vfs_file_version *version, const char sha256[65])
 {
     struct vfs_version_pin pin={0};
-    (void)vfs_version_pin(&v->disk_table,v->base,version,&pin);
+    (void)vfs_version_pin(table,handle,version,&pin);
     uint32_t flags = irq_save();
     unsigned slot = DOSVM_DIGESTS;
     for (unsigned i = 0; i < DOSVM_DIGESTS && slot == DOSVM_DIGESTS; i++)
@@ -275,18 +279,42 @@ static void digest_store(struct dosvm *v,const struct vfs_file_version *version,
     irq_restore(flags);
     vfs_version_unpin(&old);
 }
-/* Hash once per base content version; the first launch after boot hashes. */
-static int base_identity(struct dosvm *v, uint32_t size)
+/* fx-4b: the background verifier shares the session cache. */
+bool dosvm_game_digest_find(const struct vfs_file_version *version, char out[65])
+{ return digest_lookup(version, out); }
+void dosvm_game_digest_publish(struct vfs_table *table, int handle, const struct vfs_file_version *version,
+                               const char sha256[65])
+{ digest_store(table, handle, version, sha256); }
+/* Hash once per base content version. fx-4b: for the unified base a valid
+ * verified stamp or the in-flight background verification of the same
+ * version replaces the hash; otherwise the launch still hashes. */
+static int base_identity(struct dosvm *v, uint32_t size, bool unified,
+                         struct vfs_file_version *version, bool *versioned_out)
 {
-    struct vfs_file_version version, after;
-    bool versioned = !vfs_handle_version(&v->disk_table, v->base, &version) && version.size == size;
-    v->base_cached = versioned && digest_lookup(&version, v->base_sha256);
+    struct vfs_file_version after;
+    bool versioned = !vfs_handle_version(&v->disk_table, v->base, version) && version->size == size;
+    *versioned_out = versioned;
+    v->base_cached = versioned && digest_lookup(version, v->base_sha256);
+    v->base_source = "session";
     if (v->base_cached) return 0;
+    if (unified && versioned && dosvm_image_lookup) {
+        const char *source = 0;
+        int e = dosvm_image_lookup(&v->disk_table, version, v->base_sha256, &source,
+                                   v->create_cancelled, v->create_cancel_arg);
+        if (e == -EINTR) return e;
+        if (!e) {
+            v->base_cached = true; v->base_source = source;
+            digest_store(&v->disk_table, v->base, version, v->base_sha256);
+            return 0;
+        }
+    }
+    v->base_source = "hash";
     int e = base_hash(v, size);
     if (e) return e;
     if (versioned && !vfs_handle_version(&v->disk_table, v->base, &after) &&
-        vfs_file_version_equal(&version, &after))
-        digest_store(v, &version, v->base_sha256);
+        vfs_file_version_equal(version, &after))
+        digest_store(&v->disk_table, v->base, version, v->base_sha256);
+    else *versioned_out = false;
     return 0;
 }
 static void *save_index_alloc(void *arg)
@@ -340,9 +368,11 @@ int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
     if (e) return e; /* lifecycle failure unwinds the base/table as before */
     if (v->game || v->kernel) {
         *step = "base-identity";
-        e = base_identity(v, entry.size);
+        bool unified = v->kernel==2 && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE));
+        struct vfs_file_version version; bool versioned = false;
+        e = base_identity(v, entry.size, unified, &version, &versioned);
         if (e) return e;
-        if (v->kernel==2 && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
+        if (unified) {
             *step = "base-sidecar";
             char expected[66];
             const char *sidecar="C:\\SYSTEM\\DOS\\UNIFIED.SHA";
@@ -354,6 +384,9 @@ int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
             disk_gate_drop(v);
             int closed=vfs_close(&v->disk_table,identity);
             if (read_error || got!=65 || expected[64]!='\n' || memcmp(expected,v->base_sha256,64) || closed) return -FS_EIO;
+            /* fx-4b: a fresh synchronous hash that matched is stamped. */
+            if (!v->base_cached && versioned && dosvm_image_publish)
+                dosvm_image_publish(&v->disk_table, &version, v->base_sha256);
         }
     }
     if (v->game && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {

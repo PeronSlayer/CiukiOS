@@ -1072,3 +1072,67 @@ cache, worker).
   `cached=0`); the owner had been ended meanwhile, so the completed VM was
   closed `owner-gone` 17 ms later and CREATE returned `EINTR`. That
   cold-launch cost is the open f3-63 start-up item, not changed here.
+
+### fx-4b background verification of the DOS system image (2026-10-23)
+
+Lead decision 2026-10-23 13:46: the user never waits for the cold SHA-256 of
+`UNIFIED.IMG` (about 20 s on the T23, fx-4). Windows 98 does not hash its
+system files at each start: System File Checker (`Sfc.exe`) "verifies the
+integrity of system files" on demand against a verification data file
+(`Default.sfc`), and only Registry Checker runs at every start (Windows 98
+Resource Kit, `wrkc27_2.htm` and `wrkc10_7.htm`, read in place; public
+summary: [System File Checker](https://en.wikipedia.org/wiki/System_File_Checker),
+[Microsoft: System File Checker](https://learn.microsoft.com/en-us/windows/win32/wfp/system-file-checker)).
+CiukiOS keeps the f3-51 guarantee (the digest names the bytes the VM boots
+and must equal `UNIFIED.SHA`) and moves the work out of CREATE
+(`src/kernel/vm/dosvm_image.c`):
+
+- **Background check.** The first full desktop frame (or the console
+  stand-in) arms one verification; deterministic test and hardware-check
+  boots keep the synchronous path. After 5 s (or at once when a launch asks)
+  an idle-class task hashes the image in 64 KiB blocks with 4 KiB hash steps
+  and preemption points, pausing at least three times each block's read time
+  (at most a quarter of the disk; no starvation boost applies to the idle
+  class). A launch that watches (`CIUKI_DOSVM_IMAGE_QUERY`) or waits (CREATE)
+  makes it urgent: no pauses, normal class, and a CREATE waiter lends its
+  priority through the `kwait` owner. Results go to the session digest cache.
+- **Verified stamp** `C:\SYSTEM\DOS\UNIFIED.VFY`, 128 bytes: magic, the
+  file's on-disk identity (size, first cluster, directory cluster and slot,
+  write date and time), the digest, and a SHA-256 of the record. It is
+  written only when a complete hash matched `UNIFIED.SHA` and the version did
+  not change during the hash. A later boot reuses it, without reading the
+  image, only when the identity and the current `UNIFIED.SHA` match. FAT has
+  no persistent write generation, so the stamp also lapses when the volume
+  was recovered dirty at this mount (FAT[1] `ClnShutBitMask`: "If bit is 0,
+  volume is dirty … the file system driver did not Dismount the volume
+  properly", Microsoft, *FAT: General Overview of On-Disk Format* 1.02,
+  [copy](https://www.cs.miami.edu/home/burt/learning/Csc521.071/docs/FatFormat.pdf))
+  or a `REMOVEn.PND` game-removal marker exists; game removal, the kernel's
+  only writer of the image, stops a running check (it held the image
+  deny-write), deletes the stamp after committing its marker and re-arms the
+  check. Residual risk, as in Windows 98: a foreign in-place edit that keeps
+  size, clusters and time stamp is detected only by an explicit re-check
+  (delete the stamp).
+- **Launches.** DOS Box polls the check and shows "Checking the DOS system
+  files: N%" with a determinate bar, answers desktop pings and honours a
+  close request, then calls CREATE. CREATE uses, in order: the session cache,
+  the in-flight or armed check of the same version (waiting, EINTR when the
+  owner stops, never a second hash), a valid stamp, else the synchronous hash
+  (stamped when it matches). The `game_launch` record names the source
+  (`session`, `background`, `stamp`, `hash`).
+- **Mismatch** is published with the actual digest, recorded
+  (`[dosvm] image verify result=mismatch expected=… actual=…`), never
+  stamped; CREATE refuses at the sidecar check
+  (`[dosvm] create refused stage=disk error=-5 … step=base-sidecar`) and DOS
+  Box names it ("The DOS system files are damaged").
+- **Records:** `[dosvm] image verify stage=start bytes=…`,
+  `result=verified|cancelled|stopped source=… bytes ms blocks pauses`,
+  `result=failed step=… error=…`, `[dosvm] image stamp write error=…`.
+
+Host evidence: `tests/host/dos/test_image_verify.py` (production FAT/VFS:
+background hash and progress, stamp reuse without image reads, re-hash on
+write time, pending removal, dirty volume and sidecar changes, launch joining
+the in-flight check and EINTR on owner exit, mismatch never stamped, removal
+hold/release), `tests/host/dosvm_fx4_test.inc` (`test_fx4b_launch_paths`:
+CREATE with each result, record sources, mismatch refusal) and the DOS Box
+replay scenarios 20 and 21 (`tests/host/desktop/dosbox_loading_test.c`).

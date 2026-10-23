@@ -245,6 +245,7 @@ struct dosvm {
     void *record_arg;
     char base_sha256[65];
     bool base_cached; /* f3-51c: base_sha256 reused from the session digest cache */
+    const char *base_source; /* fx-4b: session, stamp, background or hash */
     /* fx-4: dosvm_config.cancelled while dosvm_create opens the disk only. */
     bool (*create_cancelled)(void *arg);
     void *create_cancel_arg;
@@ -522,6 +523,7 @@ int dosvm_disk_open(struct dosvm *, const char *base);
  * creation refusal record. */
 int dosvm_disk_open_step(struct dosvm *, const char *base, const char **step);
 int dosvm_disk_close(struct dosvm *, bool forced);
+#include "dosvm_image.h" /* fx-4b */
 int dosvm_bios_init(struct dosvm *);
 int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);
 bool dosvm_io_hot(struct dosvm *,uint16_t,unsigned,bool,uint32_t *,int *);

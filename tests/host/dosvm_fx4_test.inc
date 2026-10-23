@@ -112,3 +112,85 @@ static void test_fx4_vm_create(void)
     bundled_bytes = saved_bytes; disk_base_sector = saved_sector;
     puts("fx-4 VM creation: PASS trial EINVAL->EIO refusal named (stage/step/detail), not-installed, admission shortage with zone figures and boundary, allocation stage, owner-gone cold hash stopped (EINTR), 12 create/close cycles at 128 MiB settled free memory without leaks");
 }
+
+/* fx-4b: dosvm_disk.c with the background verifier's results. The verifier
+ * itself (background hash, stamp, in-flight join, mismatch, removal hold)
+ * runs over the production FAT/VFS in tests/host/dos/image_verify_test.c;
+ * here its two calls are replaced by this fixture. Mode 0 (default for every
+ * other case of this harness): no result, the launch hashes as before. */
+static int image_mode;
+static char image_sha[65];
+static unsigned image_lookups, image_publishes;
+static uint32_t image_published_size;
+int dosvm_image_lookup(struct vfs_table *t, const struct vfs_file_version *version, char sha[65],
+                       const char **source, bool (*cancelled)(void *), void *arg)
+{
+    (void)t; CHECK(version && sha && source); image_lookups++;
+    if (image_mode == 2) { CHECK(cancelled && cancelled(arg)); return -EINTR; }
+    if (!image_mode) return -ENOENT;
+    memcpy(sha, image_sha, 65); *source = image_mode == 1 ? "background" : "stamp";
+    return 0;
+}
+void dosvm_image_publish(struct vfs_table *t, const struct vfs_file_version *version, const char sha[65])
+{ (void)t; CHECK(version && sha && strlen(sha) == 64); image_publishes++; image_published_size = version->size; }
+static uint32_t image_state = CIUKI_DOSVM_IMAGE_VERIFYING, image_progress = 420;
+void dosvm_image_query(uint32_t *state, uint32_t *progress, uint32_t *error)
+{ *state = image_state; *progress = image_progress; *error = 0; }
+static void test_fx4b_launch_paths(void)
+{
+    window_fixtures(); empty();
+    uint32_t saved_bytes = bundled_bytes; void (*saved_sector)(uint32_t, void *) = disk_base_sector;
+    bundled_bytes = 27676672u; disk_base_sector = 0;
+    fake_current = &fake_proc[0];
+    const unsigned blocks = (bundled_bytes + DOSVM_READ_SECTORS * 512u - 1) / (DOSVM_READ_SECTORS * 512u);
+    /* IMAGE_QUERY: strict record, read-only, no VM capability needed. */
+    fake_current = &fake_proc[2];
+    struct ciuki_dosvm_command q = command_for(0, 0);
+    CHECK(!dosvm_call(CIUKI_DOSVM_IMAGE_QUERY, &q, sizeof(q)) && q.state == CIUKI_DOSVM_IMAGE_VERIFYING && q.changed == 420 && !q.reason);
+    q = command_for(0, 0); q.launch.game = 1; CHECK(dosvm_call(CIUKI_DOSVM_IMAGE_QUERY, &q, sizeof(q)) == -EINVAL);
+    q = command_for(0, 0); q.version = 2; CHECK(dosvm_call(CIUKI_DOSVM_IMAGE_QUERY, &q, sizeof(q)) == -EOPNOTSUPP);
+    q = command_for(0, 0); CHECK(dosvm_call(CIUKI_DOSVM_IMAGE_QUERY, &q, sizeof(q) - 1) == -EINVAL);
+    fake_current = &fake_proc[0];
+    /* No background result: the launch hashes and stamps its match. */
+    dosvm_game_digest_invalidate(); image_mode = 0; image_publishes = image_lookups = 0;
+    unsigned reads = disk_reads;
+    struct ciuki_dosvm_command w = fx4_window("DOOM", 2);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CREATE, &w, sizeof(w)) && disk_reads - reads == blocks + 1);
+    CHECK(image_lookups == 1 && image_publishes == 1 && image_published_size == bundled_bytes);
+    CHECK(strstr(game_launch_record, " cached=0 source=hash"));
+    struct dosvm *v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+    memcpy(image_sha, v->base_sha256, 65);
+    struct ciuki_dosvm_command shut = command_for(w.id, w.generation); CHECK(!finish_test_vm(&shut, sizeof(shut))); empty();
+    /* The session cache: neither the verifier nor the hash. */
+    reads = disk_reads; w = fx4_window("Quake", 3);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CREATE, &w, sizeof(w)) && disk_reads - reads == 1 && image_lookups == 1);
+    CHECK(strstr(game_launch_record, " cached=1 source=session"));
+    shut = command_for(w.id, w.generation); CHECK(!finish_test_vm(&shut, sizeof(shut))); empty();
+    /* The in-flight/background result (or a stamp): no base block read. */
+    for (int mode = 1; mode <= 3; mode += 2) {
+        dosvm_game_digest_invalidate(); image_mode = mode; reads = disk_reads;
+        w = fx4_window("DOOM", 2);
+        CHECK(!dosvm_call(CIUKI_DOSVM_CREATE, &w, sizeof(w)) && disk_reads - reads == 1);
+        CHECK(strstr(game_launch_record, mode == 1 ? " cached=1 source=background" : " cached=1 source=stamp"));
+        CHECK(image_publishes == 1);                    /* reused results are not re-stamped */
+        shut = command_for(w.id, w.generation); CHECK(!finish_test_vm(&shut, sizeof(shut))); empty();
+    }
+    /* The owner ends while the launch waits for the background check. */
+    dosvm_game_digest_invalidate(); image_mode = 2; fake_proc[0].state = PROC_STOPPING;
+    unsigned refusals = refusal_logs; w = fx4_window("DOOM", 2);
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &w, sizeof(w)) == -EINTR && refusal_logs == refusals + 1);
+    fake_proc[0].state = PROC_LIVE;
+    CHECK(strstr(last_refusal_log, "stage=disk error=-4 game=2 reason=owner-gone step=base-identity"));
+    CHECK(strstr(last_launch_log, "error=-4 stage=vm-create window=DOOM")); empty();
+    /* Mismatch: the verifier's digest names other bytes than UNIFIED.SHA.
+     * The launch refuses honestly at the sidecar check. */
+    dosvm_game_digest_invalidate(); image_mode = 1; image_sha[0] = image_sha[0] == '0' ? '1' : '0';
+    w = fx4_window("DOOM", 2);
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &w, sizeof(w)) == -EIO && refusal_logs == refusals + 2);
+    CHECK(strstr(last_refusal_log, "stage=disk error=-5 game=2 reason=io step=base-sidecar"));
+    CHECK(strstr(last_launch_log, "error=-5 stage=vm-create window=DOOM") && image_publishes == 1);
+    CHECK(fake_surface[0].references == 1 && !creating[0]); empty();
+    image_mode = 0; dosvm_game_digest_invalidate();
+    bundled_bytes = saved_bytes; disk_base_sector = saved_sector;
+    puts("fx-4b launch paths: PASS IMAGE_QUERY record, hash+stamp when no result, session cache, background/stamp result without base reads, owner-gone wait EINTR, mismatch refused at base-sidecar");
+}

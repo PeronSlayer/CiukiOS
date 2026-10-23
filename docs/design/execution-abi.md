@@ -1717,6 +1717,22 @@ loaded per VM by the same switch hook.
 76-byte ring-3 frame otherwise; the VM worker re-enters after every mode
 change. Every client frame passes `dpmi_frame_check` before the kernel IRET.
 
+### fx-4b amendment: DOS system image check (2026-10-23)
+
+Operation 17 (`CIUKI_DOSVM_IMAGE_QUERY`) preserves version 1, size 136 and
+all offsets. Only version and size are inputs; every other byte must be zero
+(EINVAL), other versions return EOPNOTSUPP. It needs no VM or management
+capability and changes nothing. It returns `state` 0 `UNCHECKED` (not
+verified this boot: CREATE verifies synchronously as before), 1 `VERIFYING`
+(the background check of `C:\SYSTEM\DOS\UNIFIED.IMG` is armed or running),
+2 `VERIFIED`, 3 `MISMATCH` (the image does not match `UNIFIED.SHA`; CREATE of
+a DOS window refuses with EIO) or 4 `FAILED` (`reason` = positive errno);
+`changed` is the progress in per mille. A launcher polls it before CREATE,
+shows the progress and keeps serving its window; a VERIFYING answer makes
+the check urgent (no pacing, normal class). A CREATE issued during the check
+waits for it inside the kernel (EINTR if the owner stops) and reuses its
+result. Design: `dos-dpmi-contract.md`, fx-4b section.
+
 ### F3-44 virtual IF and hardware ISR obligations (2026-10-19)
 
 CPL 3, IOPL 0 clients execute with physical IF set. CLI/STI trap, but

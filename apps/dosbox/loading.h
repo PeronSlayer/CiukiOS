@@ -57,6 +57,14 @@ static inline void dosbox_panel_framed(struct du_canvas *canvas, const char *fra
     if (!error) dosbox_panel_pulse(canvas,elapsed);
     else du_well(canvas,bar,DU_FACE);
 }
+/* fx-4b: the background check of the DOS system files, with its progress
+ * (per mille, from CIUKI_DOSVM_IMAGE_QUERY). */
+static inline void dosbox_panel_progress(struct du_canvas *canvas, const char *name, const char *icon,
+                                         const char *detail, unsigned permille)
+{
+    dosbox_panel_framed(canvas,"Starting program",name,icon,NULL,detail,0);
+    du_progress_paint(canvas,(struct du_rect){120,272,400,18},(int)(permille>1000u ? 1000u : permille),1000,0);
+}
 static inline void dosbox_panel(struct du_canvas *canvas, const char *name,
                                 const char *icon, const char *error, const char *detail,
                                 uint64_t elapsed)

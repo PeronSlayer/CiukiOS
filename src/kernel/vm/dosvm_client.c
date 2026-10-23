@@ -11,6 +11,7 @@
 #include <ciuki/signal.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
+#pragma weak dosvm_image_query
 extern uint32_t joystick_session(void) __attribute__((weak));
 extern int joystick_route_validate(const struct joystick_route *) __attribute__((weak));
 extern bool joystick_settings_game(unsigned, struct joystick_route *) __attribute__((weak));
@@ -279,6 +280,18 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p) return -EPERM;
     unsigned op = tf->ebx;
+    /* fx-4b: read-only state of the DOS system image verification, so a
+     * launcher shows progress instead of blocking inside CREATE. */
+    if (op==CIUKI_DOSVM_IMAGE_QUERY) {
+        if (tf->edx!=sizeof(struct ciuki_dosvm_command)) return -EINVAL;
+        struct ciuki_dosvm_command c,valid={0};
+        int e=copy_from_user(&c,tf->ecx,sizeof(c)); if (e) return e;
+        if (c.version!=CIUKI_DOSVM_VERSION) return -EOPNOTSUPP;
+        valid.version=CIUKI_DOSVM_VERSION; valid.size=sizeof(valid);
+        if (memcmp(&c,&valid,sizeof(c))) return -EINVAL;
+        if (dosvm_image_query) dosvm_image_query(&c.state,&c.changed,&c.reason);
+        return copy_to_user(tf->ecx,&c,sizeof(c));
+    }
     if (op>=CIUKI_DOSVM_SAVE_QUERY && op<=CIUKI_DOSVM_SAVE_EXPORT) {
         if (op!=CIUKI_DOSVM_SAVE_QUERY && !p->programs_capability) return -EPERM;
         if (tf->edx!=sizeof(struct ciuki_dosvm_command)) return -EINVAL;

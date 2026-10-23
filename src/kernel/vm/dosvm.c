@@ -1584,9 +1584,10 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out, st
     trace->stage = "game-ports";
     if (v->game && dosvm_game_ports_apply && (e=dosvm_game_ports_apply(v))) goto fail;
     if (v->game || v->kernel)
-        rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u",
+        rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u source=%s",
                       v->game,v->kernel==2 ? "unified" : "fixture",v->base_sha256,
-                      v->info.key.generation,!v->disable_file_bridge,v->base_cached);
+                      v->info.key.generation,!v->disable_file_bridge,v->base_cached,
+                      v->base_source ? v->base_source : "none");
     kpreempt_point();
     trace->stage = "worker";
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);

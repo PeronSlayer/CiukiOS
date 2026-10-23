@@ -12,6 +12,7 @@
 #pragma weak console_splash_phase
 extern void dosvm_client_poll(void) __attribute__((weak));
 extern void entropy_desktop_presented(void) __attribute__((weak)); /* f6-21 */
+extern void dosvm_image_desktop_presented(void) __attribute__((weak)); /* fx-4b */
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
 
@@ -235,10 +236,12 @@ void supervisor_bootstrap(void)
         result = supervisor_spawn_standin(proc_supervisor(), &p);
         if (result >= 0 && pager_bootstrap_complete) pager_bootstrap_complete();
         if (result >= 0 && entropy_desktop_presented) entropy_desktop_presented();
+        if (result >= 0 && dosvm_image_desktop_presented) dosvm_image_desktop_presented();
     }
     if (result < 0) {
         if (pager_bootstrap_complete) pager_bootstrap_complete();
         if (entropy_desktop_presented) entropy_desktop_presented(); /* f6-21: no desktop frame */
+        if (dosvm_image_desktop_presented) dosvm_image_desktop_presented(); /* fx-4b */
         console_wake();   /* a quiet boot shows its log instead of the desktop */
         klog("[supervisor] desktop unavailable: %d; console ready", result);
         return;
