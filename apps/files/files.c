@@ -215,7 +215,7 @@ static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_
 }
 int main(int argc, char **argv)
 {
-    int channel = 3, test = 0;
+    int channel = 3, test = 0, bin_properties = 0;
     const char *path = FM_COMPUTER, *property=NULL;
     char property_parent[FM_PATH];
     for (int i = 1; i < argc; i++) {
@@ -225,6 +225,8 @@ int main(int argc, char **argv)
             channel = (int)n;
         } else if (!strcmp(argv[i], "--test=files")) test = 1;
         else if (!strncmp(argv[i],"--properties=",13)) { property=argv[i]+13; if (!property[0]) return 2; }
+        /* G2: the desktop's Recycle Bin icon opens the bin, or its Properties. */
+        else if (!strcmp(argv[i], "recycle:properties")) { path = "Recycle Bin"; bin_properties = 1; }
         else if (argv[i][0] != '-') path = argv[i];
         else return 2;
     }
@@ -252,6 +254,7 @@ int main(int argc, char **argv)
     if (property) snprintf(a->property_request,sizeof(a->property_request),"%s",property);
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
+    a->show_bin_properties = bin_properties;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }
     /* Fixed placement keeps the scripted desktop case deterministic. */
     if (test) du_window_move(&m->window, 4, 36);

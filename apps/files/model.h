@@ -23,7 +23,10 @@
 enum fm_type { FM_FILE, FM_DIR, FM_OTHER };
 enum fm_kind { FM_KIND_FOLDER, FM_KIND_TEXT, FM_KIND_APP, FM_KIND_IMAGE, FM_KIND_AUDIO, FM_KIND_SCRIPT, FM_KIND_FILE };
 struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int64_t modified; uint32_t exec; uint32_t attributes; uint64_t allocated; int allocated_known; };
-struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; };
+/* bin: 0, or index + 1 of the entry's record in fm_model.bin (G2: the Recycle
+ * Bin view lists stored items under their stored names; the record has the
+ * original name, location and deletion date). */
+struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
 /* Cheap enumeration metadata (type/size/mtime/ino); METADATA fills missing
  * portable-host metadata without opening contents. SNIFF also classifies ELF.
@@ -45,12 +48,17 @@ struct fm_vfs {
     int (*close)(void *, int);
     int (*metadata)(void *, const char *, const struct fm_meta *); /* optional: no setter in the F2 ABI */
 };
+struct rb_item;
+struct rb_job;
 struct fm_model {
     struct fm_vfs fs; char path[FM_PATH], history[FM_HISTORY][FM_PATH]; unsigned history_count, history_at;
     struct fm_entry *entries; unsigned count, capacity, active, anchor, sort; int descending;
     char find[FM_NAME]; size_t find_length; uint64_t find_deadline;
     char **clipboard; unsigned clipboard_count; int cut;
     int show_hidden, hide_system, hide_extensions;
+    /* G2: records behind the Recycle Bin view's entries, and the drives whose
+     * volumes are fixed disks (bit 0 = A:; C: always counts). */
+    struct rb_item *bin; unsigned bin_count; uint32_t fixed;
     uint32_t drive_slots; /* fx-17b: drives listed in Computer without a medium (floppies) */
 };
 enum fm_job_kind { FM_COPY, FM_MOVE, FM_DELETE, FM_PROPERTIES };
@@ -87,6 +95,8 @@ struct fm_job {
     uint32_t destination_dev; int destination_known;
     /* Drive letter ('A'..'Z') whose medium disappeared during the job, or 0. */
     char gone;
+    /* G2 Recycle Bin bookkeeping (recycle.inc), or NULL for an ordinary job. */
+    struct rb_job *bin;
 };
 int fm_join(char *, const char *, const char *);
 int fm_beneath(const char *, const char *);
@@ -163,4 +173,92 @@ int fm_drop_check(char *const *sources, unsigned count, const char *destination,
 int fm_drag_save(const struct fm_vfs *, char *const *paths, const char *types, unsigned count);
 int fm_drag_load(const struct fm_vfs *, char ***paths, char **types, unsigned *count);
 void fm_drag_free(char **paths, char *types, unsigned count);
+
+/* ---- G2: the Windows 98 Recycle Bin (recycle.inc, compiled into model.c) ----
+ * One RECYCLED folder at the root of every fixed FAT volume holds the deleted
+ * items under the names D<drive><n>[.ext]; its INFO2 file is Windows 9x's
+ * record list (original path, record number, drive, deletion time, size).
+ * Delete moves an item there with a rename; Shift+Delete, drives set to "Do
+ * not move files to the Recycle Bin", removable media and the bin's own items
+ * delete for good. The work is done by the ordinary fm_job engine (a delete job
+ * whose sources carry a destination); see docs/design/recycle-bin.md. */
+#define FM_RECYCLE "/::{645FF040-5081-101B-9F08-00AA002F954E}"   /* the bin's virtual location; ':' cannot occur in a FAT name */
+#define RB_DIR "RECYCLED"
+#define RB_INFO "INFO2"
+#define RB_PATH 260                    /* Windows 9x MAX_PATH: the INFO2 original-path field */
+#define RB_NAME 64
+#define RB_DIRLEN 32                   /* "/mnt/x/RECYCLED" */
+#define RB_RECORD 280                  /* INFO2 record size of Windows 95/98/ME */
+#define RB_HEADER 20
+#define RB_POLICY_FILE "/system/settings/recycle.cfg"
+#define RB_DEFAULT_PERCENT 10          /* Windows' default maximum size of the bin, percent of the drive */
+#define RB_ASSUMED_CAPACITY (512ull << 20)  /* until the ABI reports volume capacity (G6) */
+#define RB_LEGACY_TRASH "/Documents/Trash"  /* the pre-G2 desktop Trash folder, migrated into the bin */
+struct rb_item {
+    uint32_t index;                    /* INFO2 record number, also in the stored name */
+    char drive;                        /* 'C'..'Z' */
+    uint8_t directory;
+    int64_t deleted, modified;         /* Unix seconds: deletion time; the stored item's own time */
+    uint64_t size;
+    char stored[RB_NAME];              /* D<drive><index>[.ext] in <drive>:\\RECYCLED */
+    char original[RB_PATH];            /* DOS path before the deletion; empty when unknown (an orphan) */
+};
+struct rb_policy {
+    int confirm;                       /* Display delete confirmation dialog */
+    int independent;                   /* Configure drives independently */
+    int nuke;                          /* Do not move files to the Recycle Bin (global) */
+    unsigned percent;                  /* maximum size, percent of the drive (global) */
+    int drive_nuke[26]; unsigned drive_percent[26];
+};
+enum rb_mode { RB_NONE, RB_RECYCLE, RB_PURGE, RB_RESTORE };
+enum { RB_REFUSE_NONE, RB_REFUSE_LARGE, RB_REFUSE_LONG, RB_REFUSE_UNKNOWN };
+/* Delete flags. */
+enum { RB_PERMANENT = 1 };
+struct rb_job {
+    enum rb_mode mode; struct rb_policy policy; uint32_t fixed; int64_t now;
+    char **target;                     /* per source: POSIX destination in the bin (or the restore path); NULL: ordinary delete */
+    struct rb_item *item;              /* per source: the record to add */
+    uint8_t *recycle, *done, *refused;
+    unsigned refused_count, recycled, start_skips; int refused_reason; char refused_name[FM_NAME];
+    unsigned limit_percent; uint64_t limit_bytes; char limit_drive;
+    int begun, finished;
+};
+int fm_is_recycle(const char *path);
+void rb_policy_default(struct rb_policy *);
+int rb_policy_load(const struct fm_vfs *, struct rb_policy *);
+int rb_policy_save(const struct fm_vfs *, const struct rb_policy *);
+unsigned rb_policy_percent(const struct rb_policy *, char drive);
+int rb_policy_nuke(const struct rb_policy *, char drive);
+/* Test seams: the clock (Unix seconds) and the volume capacity in bytes. */
+extern int64_t (*rb_clock_hook)(void);
+extern uint64_t (*rb_capacity_hook)(char drive);
+uint64_t rb_capacity(char drive);
+uint64_t rb_limit(const struct rb_policy *, char drive);
+int rb_dir(char drive, char out[RB_DIRLEN]);
+const struct rb_item *rb_entry_item(const struct fm_model *, const struct fm_entry *);
+void rb_item_name(const struct rb_item *, char out[FM_NAME]);
+const char *rb_item_leaf(const struct rb_item *);   /* the original file name in place, or the stored name */
+int rb_item_compare_location(const struct rb_item *, const struct rb_item *);          /* original file name (stored name for an orphan) */
+void rb_item_location(const struct rb_item *, char out[RB_PATH]);      /* DOS folder it was deleted from */
+/* Whether an item at this path is recycled under this policy, and how many of
+ * these paths are (the rest delete permanently). */
+int rb_would_recycle(const struct rb_policy *, uint32_t fixed, unsigned flags, const char *path);
+unsigned rb_classify(const struct rb_policy *, uint32_t fixed, unsigned flags, char *const *paths, unsigned count);
+/* Delete confirmation wording (Windows 98 shell32 strings). recycle: the
+ * items go to the bin; folder: a single item that is a folder. */
+void rb_delete_prompt(unsigned count, int folder, const char *name, int recycle, char *title, size_t title_size, char *text, size_t text_size);
+/* Jobs. All return 0 or -errno and leave *j untouched on failure. */
+int rb_delete_job(struct fm_job *, const struct fm_vfs *, char *const *paths, unsigned count,
+                  const struct rb_policy *, uint32_t fixed, unsigned flags);
+int rb_purge_job(struct fm_job *, const struct fm_vfs *, char *const *stored_paths, unsigned count);
+int rb_restore_job(struct fm_job *, const struct fm_vfs *, char *const *stored_paths, unsigned count);
+int rb_empty_job(struct fm_job *, const struct fm_vfs *, uint32_t fixed);
+/* State of the bins on the fixed drives, for the desktop icon and Properties. */
+struct rb_usage { unsigned items; uint64_t bytes; };
+int rb_usage(const struct fm_vfs *, char drive, struct rb_usage *);
+int rb_describe(const struct fm_vfs *, uint32_t fixed, unsigned *count, char name[FM_NAME], int *folder);  /* items in all bins; the only item's name */
+int rb_full(const struct fm_vfs *, uint32_t fixed);             /* 1 when any bin or the legacy Trash holds something */
+int rb_migrate(const struct fm_vfs *);                           /* /Documents/Trash -> C:\RECYCLED */
+unsigned rb_drives(const struct fm_vfs *, uint32_t fixed, char out[26]);  /* fixed drives that exist */
+const char *rb_refusal_text(int reason);
 #endif

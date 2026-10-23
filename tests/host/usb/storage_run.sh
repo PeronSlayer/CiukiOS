@@ -50,3 +50,7 @@ build_test bind_freeze_test
 # f1-96b: drained TD ring, early-Intel element erratum, same-chain retry, 128/8/1 ladder.
 build_test f1_96b_test
 "$out/f1_96b_test" "$root/build/host/fs/fat16.img"
+# fx-21: a stick enumerated through the full UHCI schedule (PORTSC reset and
+# PE, address 0, SET_ADDRESS, descriptors, BOT bind, E: mount, fx-17 loop).
+build_test fx21_test
+"$out/fx21_test" "$root/build/host/fs/fat16.img"

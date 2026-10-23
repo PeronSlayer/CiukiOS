@@ -75,6 +75,7 @@ void klog(const char *fmt, ...)
 #include <ciuki/apm_ports.h>
 int biosvm_apm_set_window(const struct apm_port_window *w) { CHECK(w && w->count); return 0; }
 void biosvm_apm_io_snapshot(struct biosvm_apm_io *out) { *out = (struct biosvm_apm_io){0}; }
+void biosvm_last_failure(struct biosvm_failure *out) { *out = (struct biosvm_failure){0}; }
 #define APM_PLATFORM_HOST_CLOCK
 static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000; }
 #include "../../src/kernel/core/power_source.c"

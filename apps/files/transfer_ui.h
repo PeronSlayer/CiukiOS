@@ -99,6 +99,15 @@ static inline int fm_job_report(const struct fm_job *j, char *title, size_t titl
                      where, j->kept, j->kept_folders, drive, fm_error_reason(j->kept_error));
         *icon = DU_DLG_ICON_WARNING; return 1;
     }
+    /* G2: items the Recycle Bin would not take, or that cannot be restored, were left where they are. */
+    if (j->state == FM_DONE && j->bin && j->bin->refused_count) {
+        fm_report_text(title, title_size, j->bin->mode == RB_RESTORE ? "Restore" : "Delete");
+        if (j->bin->refused_count == 1)
+            fm_report_text(text, size, "'%.80s' %s", j->bin->refused_name, rb_refusal_text(j->bin->refused_reason));
+        else
+            fm_report_text(text, size, "'%.80s' %s\n\n%u items were skipped in all.", j->bin->refused_name, rb_refusal_text(j->bin->refused_reason), j->bin->refused_count);
+        *icon = DU_DLG_ICON_WARNING; return 1;
+    }
     return 0;
 }
 static inline void fm_dialog_size(char *out, size_t n, uint64_t bytes)

@@ -42,9 +42,8 @@ only after all 22050 source frames are accepted, or an error/timeout; replies
 also match the original window identity. Existing v1/v2 traffic keeps its
 encoding. The SDK public desktop header must be rebuilt after this extension.
 
-Empty Trash is currently an explicit no-op: Files has no recycling storage
-and deletes permanently. Its existing desktop icon's context menu invokes the
-empty_recycle sound without claiming to recover or remove stored files.
+Empty Recycle Bin (G2, `recycle-bin.md`) plays the `empty_recycle` event when
+the Empty job finishes successfully, from the desktop icon's menu and from Files.
 Runtime gate scenarios leave audio hooks unset so their framebuffer evidence
 and deterministic interactions remain independent of an audio device.
 

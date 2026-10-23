@@ -190,6 +190,7 @@ static int slow_folder_list(void *ctx,const char *path,unsigned flags,fm_emit em
     (void)ctx; slow_folder_pause(); struct fm_meta meta={.type=FM_DIR};
     if (!strcmp(path,"/")) return emit("Documents",&meta,arg);
     if (!strcmp(path,"/Documents")) return emit("Desktop",&meta,arg);
+    if (!strcmp(path,"/Documents/Trash") || !strcmp(path,"/RECYCLED")) return -ENOENT;   /* G2: the Recycle Bin icon's poll */
     int media=!strcmp(path,"/mnt/e");
     assert(media || !strcmp(path,DESK_FOLDER));
     if (media || (slow_folder_polling && flags==FM_LIST_NAMES_ONLY)) {
@@ -206,7 +207,10 @@ static int slow_folder_list(void *ctx,const char *path,unsigned flags,fm_emit em
     return 0;
 }
 static int slow_folder_stat(void *ctx,const char *path,struct fm_meta *meta)
-{ (void)ctx; assert(!strcmp(path,DESK_FOLDER)); slow_folder_pause(); *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+{
+    (void)ctx; if (!strcmp(path,"/RECYCLED/INFO2")) return -ENOENT;   /* G2: the Recycle Bin icon's poll */
+    assert(!strcmp(path,DESK_FOLDER)); slow_folder_pause(); *meta=(struct fm_meta){.type=FM_DIR}; return 0;
+}
 static void test_slow_stick_folder(void)
 {
     static const struct fm_vfs fs={.list=slow_folder_list,.stat_path=slow_folder_stat};

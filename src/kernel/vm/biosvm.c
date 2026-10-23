@@ -394,6 +394,43 @@ static void save_regs(struct biosvm_regs *r)
     r->flags = (uint16_t)((frame.tf.eflags & ~V86_IF) | (firmware.vif ? V86_IF : 0));
 }
 
+/* fx-25: one exact record per failed call: why, where, which port, and
+ * the time actually used against the caller's budget. */
+static struct biosvm_failure last_failure;
+static uint32_t call_budget_ms;
+static const char *failure_reason(int rc)
+{
+    if (rc == -V86_EPERM && firmware.denied) return "port_denied";
+    if (rc == -V86_ETIMEDOUT) {
+        if (firmware.abort_state != V86_HALTED) return "timeout";
+        bool sentinel = firmware.fault.cs == firmware.sentinel_cs &&
+                        firmware.fault.ip == (uint32_t)firmware.sentinel_ip + 1;
+        return sentinel ? "halted_at_sentinel" : "halted";
+    }
+    if (rc == -EFAULT && firmware.fault.vector == 14) return "page_fault";
+    if (rc == -EFAULT && firmware.fault.vector == 13) return "emulation";
+    if (rc == -EFAULT) return "cpu_fault";
+    return "error";
+}
+static void record_failure(const struct biosvm_regs *regs, int rc, uint32_t elapsed, uint32_t ms)
+{
+    last_failure = (struct biosvm_failure){
+        .error = rc, .function = (uint16_t)regs->eax, .interrupt = regs->interrupt, .reason = failure_reason(rc),
+        .cs = (uint16_t)firmware.fault.cs, .ip = (uint16_t)firmware.fault.ip, .ss = firmware.abort_ss,
+        .sp = firmware.abort_sp, .vector = (uint8_t)firmware.fault.vector,
+        .port = firmware.denied ? firmware.denied_port : 0, .width = firmware.denied ? firmware.denied_width : 0,
+        .write = firmware.denied && firmware.denied_write, .elapsed_ms = elapsed, .deadline_ms = ms,
+        .budget_ms = call_budget_ms ? call_budget_ms : ms};
+    const struct biosvm_failure *x = &last_failure;
+    klog("[biosvm] step=failure int=%02x fn=%04x error=%d reason=%s cs=%04x ip=%04x ss=%04x sp=%04x vector=%u "
+         "port=%04x width=%u write=%u elapsed_ms=%u deadline_ms=%u budget_ms=%u",
+         x->interrupt, x->function, x->error, x->reason, x->cs, x->ip, x->ss, x->sp, x->vector,
+         x->port, x->width, (unsigned)x->write, x->elapsed_ms, x->deadline_ms, x->budget_ms);
+}
+void biosvm_last_failure(struct biosvm_failure *out)
+{
+    if (out) *out = last_failure;
+}
 static int run_vm_body(struct biosvm_regs *regs, uint32_t ms, unsigned test)
 {
     int entry_irq = -1;
@@ -466,7 +503,8 @@ static int run_vm_body(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         klog("[biosvm] step=fault bytes=%02x%02x%02x%02x count=%u state=%u",
              firmware.fault.bytes[0], firmware.fault.bytes[1], firmware.fault.bytes[2], firmware.fault.bytes[3],
              firmware.fault.count, firmware.state);
-    }
+        record_failure(&input, rc, (uint32_t)elapsed, ms);
+    } else last_failure = (struct biosvm_failure){0};
     if (firmware.state == V86_DISABLED && !synthetic)
         quarantine();
     return rc;
@@ -516,6 +554,8 @@ static int apm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t
     if (kind == APM_PORT_NONE) return -ENOSYS; /* virtual devices, then the generic denial */
     if (v == APM_PORT_DENY) {
         apm_io_stats.denied++; firmware.stats.disallowed_io++;
+        firmware.denied = true; firmware.denied_port = port; firmware.denied_width = (uint8_t)width;
+        firmware.denied_write = write;
         if (apm_denials_logged < 8) {
             apm_denials_logged++;
             klog("[apm] io denied port=%04x width=%u write=%u value=%08x fn=%04x kind=%s reason=%s",
@@ -690,7 +730,9 @@ int biosvm_apm_call(struct biosvm_regs *regs, uint32_t ms)
          * requests never execute; live faults/timeouts retain quarantine. */
         apm_deadline = end;
         apm_deadline_active = true;
+        call_budget_ms = ms;
         e = submit(regs, ms, 0);
+        call_budget_ms = 0;
         apm_deadline_active = false;
     }
     kmutex_unlock(&request_mutex);

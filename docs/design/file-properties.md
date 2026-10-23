@@ -90,3 +90,24 @@ the G29 engines exist; Sharing needs the file-sharing service. Desktop real
 objects route context Properties and Alt+Enter to the same Files sheet using
 `--properties=<path>`; virtual system objects and arbitrary shortcuts keep their
 existing shell pages. No boot image or runtime hardware evidence is claimed.
+
+## G2 integration
+
+The merge rechecks Microsoft's [property-sheet contract](https://learn.microsoft.com/en-us/windows/win32/controls/property-sheets)
+and [SHFILEOPSTRUCT](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shfileopstructa)
+against the two existing controllers. Normal filesystem objects retain the G6
+transactional sheet; Recycle Bin items retain G2's information dialog because
+their original location and deletion date belong to the INFO2 record, whereas
+the generic sheet describes the stored filesystem path. Bin policy Properties
+remain separate. The normal Attributes column and the bin's Original Location
+sort key both use model key 4, interpreted according to the current location;
+only the bin accepts deletion-date key 5. Crossing the bin boundary resets
+location-specific sort keys to Name. Browser visibility options never
+filter the bin's records or recursive operations.
+
+The lead-approved command allocation preserves G2 Recycle Bin commands
+305–309 and assigns G6 Folder Options 310 and Attributes column 311.
+Microsoft's [WM_COMMAND reference](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-command)
+identifies menu commands by their command identifier; the Files controller
+likewise dispatches activation events by ID. Distinct IDs therefore preserve
+both command routes. Bin dialogs remain 207–210; Insert Disk is 211.
