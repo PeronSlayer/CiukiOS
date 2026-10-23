@@ -96,6 +96,9 @@ struct mscdex_regs { uint16_t ax, bx, cx, dx, si, di, es, flags; };
 void mscdex_init(struct mscdex *, const struct mscdex_ops *, uint8_t drive);
 /* 0: answered (registers and CF in r); -ENOSYS: not an AH=15h call. */
 int mscdex_interrupt(struct mscdex *, struct mscdex_regs *r);
+/* A new disc was published into m->disc: play and resume state end; the
+ * next Media Changed IOCTL reports FFh when changed is true. */
+void mscdex_media_changed(struct mscdex *, bool changed);
 /* Current head sector; retires a completed play first. */
 uint32_t mscdex_position(struct mscdex *);
 uint32_t mscdex_redbook(uint32_t lba);

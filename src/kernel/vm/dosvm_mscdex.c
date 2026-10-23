@@ -106,6 +106,11 @@ void mscdex_init(struct mscdex *m, const struct mscdex_ops *ops, uint8_t drive)
     for (unsigned i = 0; i < 4; i++) { m->channel[i][0] = (uint8_t)i; m->channel[i][1] = 0xFF; }
 }
 static bool ready(const struct mscdex *m) { return m->disc.present && !m->door_open; }
+void mscdex_media_changed(struct mscdex *m, bool changed)
+{
+    m->playing = m->paused = false; m->start = m->end = m->head = 0;
+    if (changed) m->changed = true;
+}
 uint32_t mscdex_position(struct mscdex *m)
 {
     if (m->paused) return m->start;

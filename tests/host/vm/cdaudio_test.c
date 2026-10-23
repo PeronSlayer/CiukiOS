@@ -1,13 +1,16 @@
-/* fx-10: Quake's CD audio through the production MSCDEX model, its VM glue
- * (V86 INT 2Fh and DPMI 0300h entries, streaming task, records) and the
- * production native stream and mixer. The guest's requests are laid out as
- * id Software's WinQuake cd_audio.c (GPL release) builds them; the VFS is a
- * fake holding synthetic CD-DA WAV tracks. SPDX-License-Identifier: GPL-2.0-only */
+/* fx-10/fx-10b: Quake's CD audio through the production MSCDEX model, its
+ * VM glue (V86 INT 2Fh and DPMI 0300h entries, vm-cdread and vm-cdaudio
+ * steps, records), the production f5-12B2 ATAPI CD path (optical_cd.c, here
+ * over a fake packet boundary that answers READ TOC, MODE SENSE page 2Ah and
+ * READ CD like a drive) and the production native stream and mixer. The
+ * guest's requests are laid out as id Software's WinQuake cd_audio.c (GPL
+ * release) builds them; the VFS is a fake holding synthetic CD-DA WAV tracks.
+ * SPDX-License-Identifier: GPL-2.0-only */
 #include <stdio.h>
 #include <string.h>
 #include <ciuki/kernel.h>
 #define CIUKI_CPU_H
-static uint8_t host_pages[16][4096];
+static uint8_t host_pages[160][4096];
 static unsigned host_page_count;
 #define P2V(p) ((void *)host_pages[(p) - 1])
 #define V2P(p) ((uint32_t)0)
@@ -44,7 +47,10 @@ static const char *find_record(const char *needle)
     for (unsigned i = 0; i < record_count; i++) if (strstr(records[i], needle)) return records[i];
     return 0;
 }
-uint32_t pmm_alloc(void) { return host_page_count < 16 ? ++host_page_count : 0; }
+uint32_t pmm_alloc(void) { return host_page_count < 160 ? ++host_page_count : 0; }
+static unsigned contig_runs;
+uint32_t pmm_alloc_contig(uint32_t n)
+{ if (host_page_count + n > 160) return 0; contig_runs++; host_page_count += n; return host_page_count - n + 1; }
 void pmm_free(uint32_t p) { (void)p; }
 void *kzalloc(size_t n) { return calloc(1, n); }
 void kfree(void *p) { free(p); }
@@ -55,11 +61,13 @@ void kwait_wake_io(struct kwait *q) { (void)q; }
 void audio_wake(void) {}
 void audio_fail(int e) { audio.error = e; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
-/* The streaming task runs where a caller would sleep for it. */
+/* One pass of each task, reader first. */
+static void pump(unsigned n) { while (n--) { (void)dosvm_cdaudio_read_step(); (void)dosvm_cdaudio_step(); } }
+/* The tasks run where a caller would sleep for them. */
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t deadline)
 {
     (void)q; (void)deadline;
-    for (unsigned i = 0; i < 8 && !cond(arg); i++) (void)dosvm_cdaudio_step();
+    for (unsigned i = 0; i < 8 && !cond(arg); i++) pump(1);
     return cond(arg);
 }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
@@ -118,6 +126,65 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done)
     memcpy(buf, f->data + handles[h].at, n); handles[h].at += n; *done = n; vfs_reads++;
     return 0;
 }
+
+/* Fake ATAPI drive under the production optical_cd.c: optical slot 2 on
+ * channel 1, as on the T23 ("[optical] bind slot=2 channel=1 unit=0"). */
+static struct ata_channel cd_channel = {.index = 1};
+static struct ata_device cd = {.channel = &cd_channel, .atapi = true, .identified = true, .media = ATAPI_NO_MEDIUM};
+static struct { unsigned count; uint8_t control[4]; uint32_t start[4], leadout; } disc;
+static unsigned toc_reads, read_packets, read_sectors;
+static int16_t cd_sample(uint32_t lba, unsigned frame, unsigned channel)
+{ return (int16_t)((channel ? -1 : 1) * (int)((lba * 588u + frame) * 3u % 30000u)); }
+static void insert(unsigned count, const uint8_t *control, const uint32_t *start, uint32_t leadout)
+{
+    disc.count = count; disc.leadout = leadout;
+    for (unsigned i = 0; i < count; i++) { disc.control[i] = control[i]; disc.start[i] = start[i]; }
+    cd.media = ATAPI_READY; cd.block.media_generation++;
+}
+static void remove_disc(void) { cd.media = ATAPI_NO_MEDIUM; cd.block.media_generation++; }
+static void be32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; }
+int atapi_packet(struct ata_device *d, const uint8_t *p, unsigned length, void *buffer, uint32_t capacity, uint32_t *done)
+{
+    CHECK(d == &cd && length == 12);
+    uint8_t *raw = buffer;
+    if (cd.media != ATAPI_READY) return -FS_ENOENT;
+    if (p[0] == 0x43) {                                 /* READ TOC format 0, LBA */
+        CHECK(!p[1] && !p[2] && capacity >= 4 + 8 * (disc.count + 1));
+        unsigned bytes = 4 + 8 * (disc.count + 1);
+        memset(raw, 0, bytes); raw[0] = (uint8_t)((bytes - 2) >> 8); raw[1] = (uint8_t)(bytes - 2);
+        raw[2] = 1; raw[3] = (uint8_t)disc.count;
+        for (unsigned i = 0; i <= disc.count; i++) {
+            uint8_t *t = raw + 4 + 8 * i;
+            t[1] = (uint8_t)(1u << 4 | (i < disc.count ? disc.control[i] : 0));
+            t[2] = i < disc.count ? (uint8_t)(i + 1) : 0xAA;
+            be32(t + 4, i < disc.count ? disc.start[i] : disc.leadout);
+        }
+        toc_reads++; *done = bytes; return 0;
+    }
+    if (p[0] == 0x5A && p[2] == 0x2A) {                  /* MODE SENSE(10) page 2Ah */
+        memset(raw, 0, 28); raw[8] = 0x2A; raw[9] = 18; raw[12] = 1; raw[13] = 3; raw[14] = 8;
+        *done = 28; return 0;
+    }
+    return -FS_EINVAL;
+}
+int atapi_packet_generation(struct ata_device *d, const uint8_t *p, unsigned length, void *buffer,
+                            uint32_t capacity, uint32_t *done, uint32_t generation)
+{
+    CHECK(d == &cd && length == 12);
+    if (cd.media != ATAPI_READY) return -FS_ENOENT;
+    if (generation != cd.block.media_generation) return -FS_EAGAIN;
+    CHECK(p[0] == 0xBE && p[1] == 4 && p[9] == 0x10);   /* READ CD, CD-DA, user data only */
+    uint32_t lba = (uint32_t)p[2] << 24 | (uint32_t)p[3] << 16 | (uint32_t)p[4] << 8 | p[5];
+    uint32_t sectors = (uint32_t)p[6] << 16 | (uint32_t)p[7] << 8 | p[8];
+    CHECK(sectors && sectors <= CD_CHUNK && capacity == sectors * 2352u);  /* bounded packet */
+    int16_t *pcm = buffer;
+    for (uint32_t k = 0; k < sectors; k++)
+        for (unsigned i = 0; i < 588; i++) {
+            pcm[(k * 588 + i) * 2] = cd_sample(lba + k, i, 0); pcm[(k * 588 + i) * 2 + 1] = cd_sample(lba + k, i, 1);
+        }
+    read_packets++; read_sectors += sectors; *done = capacity; return 0;
+}
+int atapi_start(struct ata_device *d) { (void)d; return 0; }
 
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 static void put32(uint8_t *p, uint32_t v) { put16(p, (uint16_t)v); put16(p + 2, (uint16_t)(v >> 16)); }
@@ -217,10 +284,31 @@ static void test_model(void)
     CHECK(mscdex_track_at(&d, 0) == 1 && mscdex_track_at(&d, 300) == 0 && mscdex_track_at(&d, 450) == 2);
 }
 
+static uint8_t c10[11] = {10}, status6[5] = {6}, audio15[11] = {15}, changed9[2] = {9};
+/* CDAudio_Init's 1500h/150Ch, then GetAudioDiskInfo: returns the drive. */
+static unsigned quake_init(struct dosvm *v)
+{
+    int2f(v, 0x1500, 0, 0, 0);
+    CHECK((uint16_t)frame.tf.ebx == 1);
+    unsigned cdrom = (uint16_t)frame.tf.ecx;
+    int2f(v, 0x150C, 0, 0, 0);
+    CHECK((uint16_t)frame.tf.ebx == 0x0217 && (frame.tf.eax >> 16) == 0xABCD);
+    return cdrom;
+}
+static uint32_t track_start(struct dosvm *v, unsigned cdrom, unsigned t, uint8_t *control)
+{
+    uint8_t q[7] = {11, (uint8_t)t};
+    CHECK(ioctl(v, cdrom, 3, q, 7) == MSCDEX_ST_DONE && mem(v, INFO)[1] == t);
+    *control = mem(v, INFO)[6];
+    return get32(mem(v, INFO) + 2);
+}
+static void mix(unsigned quanta) { struct audio_frame out[AUDIO_QUANTUM]; while (quanta--) audio_mix(out, AUDIO_QUANTUM); }
+
 int main(void)
 {
     test_model();
     fake_storage.ready = true;
+    fake_storage.optical_bindings[2].device = &cd;   /* drive present, no medium */
     audio.ready = true; audio.master.left = audio.master.right = 100;
     dosvm_cdaudio_test_mode();
 
@@ -235,166 +323,233 @@ int main(void)
     add_file("C:\\GAMES\\CDAUDIO\\QUAKE\\TRACK03.WAV", t3, s3);
     add_file("C:\\GAMES\\CDAUDIO\\QUAKE\\TRACK04.WAV", t4, s4);
 
+    /* ---- 1. WAV folder (no disc in the drive) ---- */
     struct dosvm *v = &vm[0];
     v->info.key = (struct dosvm_key){1, 7};
     strcpy(v->name, "Quake");
     for (unsigned i = 0x30; i <= 0x37; i++) v->audio.sb.mixer[i] = 31u << 3;
     g_ticks = 5000;
     CHECK(!dosvm_cdaudio_open(v));
+    CHECK(find_record("cdaudio drive slot=2 generation=0 result=no_medium tracks=0 audio=0"));
     CHECK(find_record("cdaudio track file=C:\\GAMES\\CDAUDIO\\QUAKE\\TRACK04.WAV result=refused reason=bits"));
     CHECK(find_record("cdaudio disc vm=1 generation=7 source=C:\\GAMES\\CDAUDIO\\QUAKE tracks=3 audio=2 leadout=456 result=disc"));
-    CHECK(!tables);                                                              /* returned after the scan */
+    CHECK(find_record("cdaudio source vm=1 source=wav generation=0 tracks=3 audio=2 leadout=456 reason=wav"));
+    CHECK(!tables && !toc_reads);                                                /* table returned after the scan */
 
-    /* Not ours: other multiplex calls go on to the guest's chain. */
-    memset(&frame, 0, sizeof(frame)); frame.tf.eax = 0x1680;
+    memset(&frame, 0, sizeof(frame)); frame.tf.eax = 0x1680;                    /* not ours */
     CHECK(dosvm_cdaudio_reflect(v, &frame, 0x202) == -ENOSYS && dosvm_cdaudio_interrupt(v, &frame) == -ENOSYS);
-
-    /* CDAudio_Init: 1500h with BX=0, then 150Ch. */
-    int2f(v, 0x1500, 0, 0, 0);
-    CHECK((uint16_t)frame.tf.ebx == 1 && (uint16_t)frame.tf.ecx == 5);          /* one drive, F: */
-    unsigned cdrom = (uint16_t)frame.tf.ecx;
-    int2f(v, 0x150C, 0, 0, 0);
-    CHECK((uint16_t)frame.tf.ebx == 0x0217 && (frame.tf.eax >> 16) == 0xABCD);
-    /* V86 INT 2Fh path: drive check. */
-    memset(&frame, 0, sizeof(frame)); frame.tf.eax = 0x150B; frame.tf.ecx = cdrom;
+    unsigned cdrom = quake_init(v);
+    CHECK(cdrom == 5);                                                           /* F: after C:-E: */
+    memset(&frame, 0, sizeof(frame)); frame.tf.eax = 0x150B; frame.tf.ecx = cdrom;  /* V86 path */
     CHECK(!dosvm_cdaudio_interrupt(v, &frame) && (uint16_t)frame.tf.ebx == 0xADAD && (uint16_t)frame.tf.eax);
-    /* CDAudio_SetVolume(255), then CDAudio_GetAudioDiskInfo. */
     CHECK(set_volume(v, cdrom, 255) == MSCDEX_ST_DONE);
-    uint8_t c[11] = {10};
-    CHECK(ioctl(v, cdrom, 3, c, 7) == MSCDEX_ST_DONE);
+    CHECK(ioctl(v, cdrom, 3, changed9, 2) == MSCDEX_ST_DONE && mem(v, INFO)[1] == 1); /* boot disc: not "changed" */
+    CHECK(ioctl(v, cdrom, 3, c10, 7) == MSCDEX_ST_DONE);
     const uint8_t *info = mem(v, INFO);
     CHECK(info[1] == 1 && info[2] == 3 && get32(info + 3) == mscdex_redbook(456));
-    int start[4] = {0}; bool data[4] = {0};
-    for (unsigned t = 1; t <= 3; t++) {
-        uint8_t q[7] = {11, (uint8_t)t};
-        CHECK(ioctl(v, cdrom, 3, q, 7) == MSCDEX_ST_DONE && info[1] == t);
-        start[t] = (int)get32(info + 2); data[t] = (info[6] & 0xd0) == 0x40;
-    }
-    CHECK(data[1] && !data[2] && !data[3]);
-    CHECK(RedBookToSector((uint32_t)start[2]) - 150 == 450 && RedBookToSector((uint32_t)start[3]) - 150 == 454);
-    int length2 = RedBookToSector((uint32_t)start[3]) - RedBookToSector((uint32_t)start[2]);
-    CHECK(length2 == 4);
-    uint8_t status[5] = {6};
-    CHECK(ioctl(v, cdrom, 3, status, 5) == MSCDEX_ST_DONE);
+    uint8_t control[4];
+    uint32_t start[4];
+    for (unsigned t = 1; t <= 3; t++) start[t] = track_start(v, cdrom, t, &control[t]);
+    CHECK(control[1] == 0x41 && control[2] == 0x01 && control[3] == 0x01);
+    CHECK(RedBookToSector(start[2]) - 150 == 450 && RedBookToSector(start[3]) - 150 == 454);
+    uint32_t length2 = (uint32_t)(RedBookToSector(start[3]) - RedBookToSector(start[2]));
+    CHECK(ioctl(v, cdrom, 3, status6, 5) == MSCDEX_ST_DONE);
     CHECK(get32(info + 1) == (MSCDEX_DEV_UNLOCKED | MSCDEX_DEV_RAW | MSCDEX_DEV_AUDIO | MSCDEX_DEV_CHANNELS | MSCDEX_DEV_REDBOOK));
 
-    /* CDAudio_Play(2, true): volume, then PLAY AUDIO in Red Book. */
+    /* CDAudio_Play(2, true). */
     CHECK(set_volume(v, cdrom, 255) == MSCDEX_ST_DONE);
-    CHECK(play(v, cdrom, 1, (uint32_t)start[2], (uint32_t)length2) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
-    CHECK(dosvm_cdaudio_step());
-    CHECK(find_record("cdaudio mscdex vm=1 drive=F version=2.23 disc=1 source=C:\\GAMES\\CDAUDIO\\QUAKE result=disc"));
-    CHECK(find_record("cdaudio play vm=1 track=2 lba=450 sectors=4 gain=100/100"));
-    /* Mixer routing: a native 44.1 kHz stereo stream holding the track's samples. */
+    CHECK(play(v, cdrom, 1, start[2], length2) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
+    pump(2);
+    CHECK(find_record("cdaudio mscdex vm=1 drive=F version=2.23 disc=1 source=wav dir=C:\\GAMES\\CDAUDIO\\QUAKE result=disc"));
+    CHECK(find_record("cdaudio play vm=1 source=wav track=2 lba=450 sectors=4 gain=100/100"));
     struct audio_stream *st = slots[0].stream;
     CHECK(st && audio.streams[0] == st && st->rate == 44100 && st->channels == 2 && st->gain[0] == 100);
-    CHECK(st->queued == AUDIO_RING);                                             /* fed to the ring's end */
+    CHECK(slots[0].cap == CD_RING && contig_runs == 1);                           /* 37-page reservoir */
+    CHECK(st->queued == AUDIO_RING);
     for (unsigned i = 0; i < 64; i++)
         CHECK(audio_frame_at(st, i)->left == sample(2, i, 0) && audio_frame_at(st, i)->right == sample(2, i, 1));
     struct audio_frame out[AUDIO_QUANTUM];
     audio_mix(out, AUDIO_QUANTUM);
-    CHECK(out[0].left == sample(2, 0, 0) && out[0].right == sample(2, 0, 1));    /* phase 0 */
+    CHECK(out[0].left == sample(2, 0, 0) && out[0].right == sample(2, 0, 1));    /* mixer routing, phase 0 */
     unsigned moving = 0;
     for (unsigned i = 1; i < AUDIO_QUANTUM; i++) moving += out[i].left != out[i - 1].left;
     CHECK(moving > 200 && st->consumed > 200 && st->consumed < 240);            /* 256 * 44100 / 48000 */
-    for (unsigned i = 0; i < 40 && slots[0].playing; i++) { audio_mix(out, AUDIO_QUANTUM); (void)dosvm_cdaudio_step(); }
-    CHECK(!slots[0].playing && slots[0].streamed == 4 && st->draining && st->queued);  /* all 4 sectors queued */
-    CHECK(st->accepted == 4 * 588 && st->drain_goal == 4 * 588);
-    /* The partial last sector is padded with silence, never read beyond the file. */
+    for (unsigned i = 0; i < 40 && slots[0].playing; i++) { mix(1); pump(1); }
+    CHECK(!slots[0].playing && st->draining && st->accepted == 4 * 588 && st->drain_goal == 4 * 588);
     CHECK(!slots[0].read_errors && vfs_reads);
 
-    /* CDAudio_Update: busy while playing; done after 4 sectors (53 ms). */
-    uint8_t audio_status[11] = {15};
+    /* CDAudio_Update: busy while playing, done after 4 sectors (53 ms). */
     g_ticks += 40;
-    CHECK(ioctl(v, cdrom, 3, audio_status, 11) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
+    CHECK(ioctl(v, cdrom, 3, audio15, 11) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
     CHECK(get16(info + 1) == 0 && get32(info + 3) == mscdex_redbook(450) && get32(info + 7) == mscdex_redbook(454));
     g_ticks += 20;
-    CHECK(ioctl(v, cdrom, 3, audio_status, 11) == MSCDEX_ST_DONE);              /* completed: loop replays */
-    (void)dosvm_cdaudio_step();
-    CHECK(find_record("cdaudio complete vm=1 end=454"));
-    for (unsigned i = 0; i < 20; i++) { audio_mix(out, AUDIO_QUANTUM); (void)dosvm_cdaudio_step(); }
-    CHECK(!slots[0].stream && !audio.streams[0]);                                /* drained, released */
+    CHECK(ioctl(v, cdrom, 3, audio15, 11) == MSCDEX_ST_DONE);
+    for (unsigned i = 0; i < 20; i++) { mix(1); pump(1); }
+    CHECK(find_record("cdaudio complete vm=1 end=454 streamed=4 read_errors=0 underruns=0"));
+    CHECK(!slots[0].stream && !audio.streams[0]);
 
-    /* Looping replay, then CDAudio_Pause (STOP) and CDAudio_Resume. */
-    CHECK(play(v, cdrom, 1, (uint32_t)start[2], (uint32_t)length2) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
-    (void)dosvm_cdaudio_step();
+    /* Looping replay, CDAudio_Pause (STOP) and CDAudio_Resume. */
+    CHECK(play(v, cdrom, 1, start[2], length2) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
+    pump(2);
     CHECK(slots[0].stream);
     g_ticks += 27;                                                                /* 2 sectors */
     CHECK(request(v, cdrom, 133, 0, 0) == MSCDEX_ST_DONE);
-    (void)dosvm_cdaudio_step();
-    CHECK(!slots[0].stream && !audio.streams[0]);                                /* stop is immediate */
+    pump(1);
+    CHECK(!slots[0].stream && !audio.streams[0] && !slots[0].job_active);         /* stop is immediate */
     CHECK(find_record("cdaudio stop vm=1 position=452 paused=1"));
-    CHECK(ioctl(v, cdrom, 3, audio_status, 11) == MSCDEX_ST_DONE && get16(info + 1) == 1 &&
+    CHECK(ioctl(v, cdrom, 3, audio15, 11) == MSCDEX_ST_DONE && get16(info + 1) == 1 &&
           get32(info + 3) == mscdex_redbook(452) && get32(info + 7) == mscdex_redbook(454));
     CHECK(request(v, cdrom, 136, 0, 0) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
-    (void)dosvm_cdaudio_step();
-    CHECK(slots[0].stream && slots[0].streamed == 4 + 4 + 2 && !slots[0].playing);   /* from 452 to 454 */
-    CHECK(audio_frame_at(slots[0].stream, 0)->left == sample(2, 2 * 588, 0));
+    pump(2);
+    CHECK(slots[0].stream && audio_frame_at(slots[0].stream, 0)->left == sample(2, 2 * 588, 0));
     CHECK(find_record("cdaudio resume vm=1 lba=452 sectors=2"));
     /* bgmvolume 0.5 and the guest's CT1745 CD level move the stream gain. */
     CHECK(set_volume(v, cdrom, 128) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
     v->audio.sb.mixer[0x37] = 26u << 3;
-    CHECK(ioctl(v, cdrom, 3, audio_status, 11) & MSCDEX_ST_BUSY);
-    (void)dosvm_cdaudio_step();
+    CHECK(ioctl(v, cdrom, 3, audio15, 11) & MSCDEX_ST_BUSY);
+    pump(1);
     CHECK(slots[0].stream->gain[0] == 50 && slots[0].stream->gain[1] == 16);
+    v->audio.sb.mixer[0x37] = 31u << 3;
+    CHECK(set_volume(v, cdrom, 255) & MSCDEX_ST_DONE);
     /* Second STOP clears the resume point; RESUME then fails. */
     CHECK(request(v, cdrom, 133, 0, 0) == MSCDEX_ST_DONE && request(v, cdrom, 133, 0, 0) == MSCDEX_ST_DONE);
     CHECK(request(v, cdrom, 136, 0, 0) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_GENERAL));
-    /* Data track, wrong drive, HSG play and unknown command. */
-    CHECK(play(v, cdrom, 1, (uint32_t)start[1], 10) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_GENERAL));
+    /* Data track, wrong drive, HSG play clipped to the lead-out, unknown command. */
+    CHECK(play(v, cdrom, 1, start[1], 10) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_GENERAL));
     memset(mem(v, REQ), 0, 26); mem(v, REQ)[2] = 133;
     int2f(v, 0x1510, REQ & 15, 2, REQ >> 4);
     CHECK((frame.tf.eflags & V86_CF) && (uint16_t)frame.tf.eax == 0x000F);
-    CHECK(play(v, cdrom, 0, 453, 100) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));     /* clipped to the lead-out */
+    CHECK(play(v, cdrom, 0, 453, 100) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
     CHECK(slots[0].want_lba == 453 && slots[0].want_sectors == 3);
     CHECK(request(v, cdrom, 134, 0, 0) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY | MSCDEX_ST_ERROR | MSCDEX_ERR_UNKNOWN_COMMAND));
-    (void)dosvm_cdaudio_step();
-    CHECK(slots[0].stream && !slots[0].playing && slots[0].fd < 0 && !tables);   /* 3 sectors fit the ring */
-    /* Shutdown: a stopping volume closes the track file and the stream. */
-    CHECK(play(v, cdrom, 0, 450, 100) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));     /* 6 sectors > ring */
-    (void)dosvm_cdaudio_step();
-    CHECK(slots[0].stream && slots[0].playing && slots[0].fd >= 0 && tables == 1);
+    /* Shutdown: a stopping volume closes the track file and the VFS table. */
+    CHECK(play(v, cdrom, 0, 450, 100) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));    /* 6 sectors */
+    pump(2);
+    CHECK(slots[0].job_active && slots[0].fd >= 0 && tables == 1);
     fake_storage.stopped = true;
-    (void)dosvm_cdaudio_step();
-    CHECK(!slots[0].stream && slots[0].fd < 0 && !tables && !audio.streams[0]);
+    pump(2);
+    CHECK(slots[0].fd < 0 && !tables && find_record("cdaudio read vm=1 source=wav track=3"));
     fake_storage.stopped = false;
     /* Eject ends play and the disc until the tray closes; media changed once. */
-    uint8_t eject[1] = {0}, tray[1] = {5}, changed[2] = {9};
+    uint8_t eject[1] = {0}, tray[1] = {5};
     CHECK(ioctl(v, cdrom, 12, eject, 1) == MSCDEX_ST_DONE);
-    CHECK(ioctl(v, cdrom, 3, status, 5) == MSCDEX_ST_DONE && (get32(info + 1) & (MSCDEX_DEV_DOOR_OPEN | MSCDEX_DEV_NO_DISC)) == (MSCDEX_DEV_DOOR_OPEN | MSCDEX_DEV_NO_DISC));
-    CHECK(ioctl(v, cdrom, 3, c, 7) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_NOT_READY));
+    CHECK(ioctl(v, cdrom, 3, status6, 5) == MSCDEX_ST_DONE &&
+          (get32(info + 1) & (MSCDEX_DEV_DOOR_OPEN | MSCDEX_DEV_NO_DISC)) == (MSCDEX_DEV_DOOR_OPEN | MSCDEX_DEV_NO_DISC));
+    CHECK(ioctl(v, cdrom, 3, c10, 7) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_NOT_READY));
     CHECK(ioctl(v, cdrom, 12, tray, 1) == MSCDEX_ST_DONE);
-    CHECK(ioctl(v, cdrom, 3, changed, 2) == MSCDEX_ST_DONE && info[1] == 0xFF);
-    CHECK(ioctl(v, cdrom, 3, changed, 2) == MSCDEX_ST_DONE && info[1] == 1);
+    CHECK(ioctl(v, cdrom, 3, changed9, 2) == MSCDEX_ST_DONE && info[1] == 0xFF);
+    CHECK(ioctl(v, cdrom, 3, changed9, 2) == MSCDEX_ST_DONE && info[1] == 1);
+    pump(2);
 
-    /* A second VM ("Doom") with no tracks: the drive exists, holds no disc,
-     * and the records say why Quake would print "No CD in player". */
+    /* ---- 2. A VM with no tracks and no disc ---- */
     struct dosvm *w = &vm[1];
     w->info.key = (struct dosvm_key){2, 9};
     strcpy(w->name, "Doom");
+    for (unsigned i = 0x30; i <= 0x37; i++) w->audio.sb.mixer[i] = 31u << 3;
     CHECK(!dosvm_cdaudio_open(w));
     CHECK(find_record("cdaudio disc vm=2 generation=9 source=C:\\GAMES\\CDAUDIO tracks=0 audio=0 leadout=0 result=no_tracks"));
-    int2f(w, 0x1500, 0, 0, 0);
-    CHECK((uint16_t)frame.tf.ebx == 1);                                          /* not "MSCDEX not loaded" */
-    cdrom = (uint16_t)frame.tf.ecx;
-    int2f(w, 0x150C, 0, 0, 0);
-    CHECK((uint16_t)frame.tf.ebx == 0x0217);
-    CHECK(set_volume(w, cdrom, 255) == MSCDEX_ST_DONE);
-    CHECK(ioctl(w, cdrom, 3, c, 7) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_NOT_READY));
-    CHECK(ioctl(w, cdrom, 3, status, 5) == MSCDEX_ST_DONE && (get32(mem(w, INFO) + 1) & MSCDEX_DEV_NO_DISC));
-    CHECK(play(w, cdrom, 1, 0x000200, 75) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_NOT_READY));
-    (void)dosvm_cdaudio_step();
-    CHECK(find_record("cdaudio mscdex vm=2 drive=F version=2.23 disc=0 source=C:\\GAMES\\CDAUDIO result=no_tracks"));
-    CHECK(find_record("cdaudio refused vm=2 command=3 code=10 error=2 reason=no_tracks source=C:\\GAMES\\CDAUDIO"));
+    CHECK(find_record("cdaudio source vm=2 source=none generation=0 tracks=0 audio=0 leadout=0 reason=no_tracks"));
+    unsigned wdrive = quake_init(w);                                              /* not "MSCDEX not loaded" */
+    CHECK(set_volume(w, wdrive, 255) == MSCDEX_ST_DONE);
+    CHECK(ioctl(w, wdrive, 3, c10, 7) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_NOT_READY)); /* "No CD in player" */
+    CHECK(ioctl(w, wdrive, 3, status6, 5) == MSCDEX_ST_DONE && (get32(mem(w, INFO) + 1) & MSCDEX_DEV_NO_DISC));
+    pump(1);
+    CHECK(find_record("cdaudio mscdex vm=2 drive=F version=2.23 disc=0 source=none dir=C:\\GAMES\\CDAUDIO result=no_tracks"));
+    CHECK(find_record("cdaudio refused vm=2 command=3 code=10 error=2 reason=no_tracks source=none dir=C:\\GAMES\\CDAUDIO"));
     unsigned before = record_count;
-    CHECK(ioctl(w, cdrom, 3, c, 7) & MSCDEX_ST_ERROR);
-    (void)dosvm_cdaudio_step();
+    CHECK(ioctl(w, wdrive, 3, c10, 7) & MSCDEX_ST_ERROR);
+    pump(1);
     CHECK(record_count == before);                                               /* polls are not re-recorded */
-    CHECK(!slots[1].stream && !audio.streams[0] == !slots[0].stream);
 
-    /* Closing the playing VM stops its stream and frees the slot. */
+    /* ---- 3. The original CD in the drive wins over the WAV folder ---- */
+    const uint8_t mixed_control[3] = {4, 0, 0};            /* track 1 data, 2-3 audio, as Quake's CD */
+    const uint32_t mixed_start[3] = {0, 1200, 1300};
+    insert(3, mixed_control, mixed_start, 1400);
+    pump(1);
+    CHECK(toc_reads == 1);
+    CHECK(find_record("cdaudio drive slot=2 generation=1 result=audio tracks=3 audio=2 first=1 last=3 leadout=1400 cdda=1"));
+    CHECK(find_record("cdaudio source vm=1 source=cd generation=1 tracks=3 audio=2 leadout=1400 reason=audio_disc"));
+    CHECK(find_record("cdaudio source vm=2 source=cd generation=1 tracks=3 audio=2 leadout=1400 reason=audio_disc"));
+    /* Quake with -cdmediacheck (or "cd reset"): media changed, then the TOC. */
+    CHECK(ioctl(v, cdrom, 3, changed9, 2) == MSCDEX_ST_DONE && info[1] == 0xFF);
+    CHECK(ioctl(v, cdrom, 3, c10, 7) == MSCDEX_ST_DONE && info[1] == 1 && info[2] == 3 &&
+          get32(info + 3) == mscdex_redbook(1400));
+    for (unsigned t = 1; t <= 3; t++) start[t] = track_start(v, cdrom, t, &control[t]);
+    CHECK(control[1] == 0x41 && control[2] == 0x01 && control[3] == 0x01);
+    CHECK(start[2] == mscdex_redbook(1200) && start[3] == mscdex_redbook(1300));
+    CHECK(ioctl(v, cdrom, 3, status6, 5) == MSCDEX_ST_DONE && !(get32(info + 1) & MSCDEX_DEV_NO_DISC));
+    uint32_t length = (uint32_t)(RedBookToSector(start[3]) - RedBookToSector(start[2]));
+    CHECK(length == 100);
+    CHECK(set_volume(v, cdrom, 255) == MSCDEX_ST_DONE);
+    uint32_t streamed0 = slots[0].streamed, errors0 = slots[0].read_errors;
+    CHECK(play(v, cdrom, 1, start[2], length) == (MSCDEX_ST_DONE | MSCDEX_ST_BUSY));
+    pump(1);                                                                      /* job starts */
+    CHECK(find_record("cdaudio play vm=1 source=cd track=2 lba=1200 sectors=100 gain=100/100"));
+    unsigned packets = read_packets;
+    pump(1);                                                                      /* one 8-sector READ CD */
+    CHECK(read_packets == packets + 1 && read_sectors == 8);
+    st = slots[0].stream;
+    CHECK(st && st->rate == 44100 && st->queued == AUDIO_RING);
+    for (unsigned i = 0; i < 588; i += 7)
+        CHECK(audio_frame_at(st, i)->left == cd_sample(1200, i, 0) && audio_frame_at(st, i)->right == cd_sample(1200, i, 1));
+    /* Bounded prefetch: without consumption the reservoir fills to 64 sectors
+     * and stops; one packet per pass. */
+    for (unsigned i = 0; i < 20; i++) {
+        unsigned p0 = read_packets;
+        pump(1);
+        CHECK(read_packets - p0 <= 1 && slots[0].count <= slots[0].cap);
+    }
+    CHECK(slots[0].count <= CD_RING && read_sectors == slots[0].count + (slots[0].streamed - streamed0));
+    CHECK(read_sectors <= CD_RING + CD_CHUNK);                                    /* reservoir + what the stream holds */
+    CHECK(slots[0].cap - slots[0].count < CD_CHUNK);
+    audio_mix(out, AUDIO_QUANTUM);
+    CHECK(out[0].left == cd_sample(1200, 0, 0) && out[0].right == cd_sample(1200, 0, 1));
+    /* Steady state: the music plays out sector by sector from the drive. */
+    for (unsigned i = 0; i < 30; i++) { mix(2); pump(1); }
+    CHECK(slots[0].streamed - streamed0 > 20 && slots[0].read_errors == errors0 && slots[0].playing && !slots[0].underruns);
+
+    /* ---- 4. Disc removed mid-play: stop, record, back to the WAV folder ---- */
+    for (unsigned i = 0; i < 40 && slots[0].cap - slots[0].count < CD_CHUNK; i++) { mix(2); (void)dosvm_cdaudio_step(); }
+    CHECK(slots[0].cap - slots[0].count >= CD_CHUNK && slots[0].job_remaining);
+    remove_disc();
+    (void)dosvm_cdaudio_read_step();
+    CHECK(find_record("cdaudio drive slot=2 generation=2 result=no_medium"));
+    CHECK(find_record("cdaudio read vm=1 source=cd track=2") && find_record("reason=no_medium fallback=stop"));
+    (void)dosvm_cdaudio_step();
+    CHECK(!slots[0].stream && !slots[0].job_active && !audio.streams[0]);
+    CHECK(find_record("cdaudio source vm=1 source=wav generation=0 tracks=3 audio=2 leadout=456 reason=wav"));
+    CHECK(find_record("cdaudio source vm=2 source=none"));
+    CHECK(ioctl(v, cdrom, 3, audio15, 11) == MSCDEX_ST_DONE);                      /* busy cleared */
+    CHECK(ioctl(v, cdrom, 3, changed9, 2) == MSCDEX_ST_DONE && info[1] == 0xFF);
+    CHECK(ioctl(v, cdrom, 3, c10, 7) == MSCDEX_ST_DONE && info[2] == 3 && get32(info + 3) == mscdex_redbook(456));
+    CHECK(ioctl(w, wdrive, 3, c10, 7) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_NOT_READY));
+    /* A play request made for the removed disc is void. */
+    pump(2);
+    CHECK(!slots[0].stream);
+
+    /* ---- 5. A data-only disc: the WAV folder stays first; without one the
+     * drive reports the data track, as MSCDEX does, and nothing plays ---- */
+    const uint8_t data_control[1] = {4};
+    const uint32_t data_start[1] = {0};
+    unsigned vm1_seq = slots[0].disc_seq;
+    insert(1, data_control, data_start, 5000);
+    pump(1);
+    CHECK(find_record("cdaudio drive slot=2 generation=3 result=data_only tracks=1 audio=0 first=1 last=1 leadout=5000"));
+    CHECK(slots[0].disc_seq == vm1_seq && slots[0].source == CD_SRC_WAV);
+    CHECK(find_record("cdaudio source vm=2 source=cd generation=3 tracks=1 audio=0 leadout=5000 reason=data_only"));
+    CHECK(ioctl(w, wdrive, 3, c10, 7) == MSCDEX_ST_DONE);
+    const uint8_t *winfo = mem(w, INFO);
+    CHECK(winfo[1] == 1 && winfo[2] == 1 && get32(winfo + 3) == mscdex_redbook(5000));
+    uint8_t wcontrol;
+    CHECK(track_start(w, wdrive, 1, &wcontrol) == mscdex_redbook(0) && wcontrol == 0x41);
+    CHECK(play(w, wdrive, 1, mscdex_redbook(0), 75) == (MSCDEX_ST_DONE | MSCDEX_ST_ERROR | MSCDEX_ERR_GENERAL));
+    pump(2);
+    CHECK(!slots[1].stream && !slots[1].job_active);
+
+    /* ---- 6. Close: streams stop, files close, slots free ---- */
     dosvm_cdaudio_close(v);
-    CHECK(!slots[0].used && !slots[0].stream && !audio.streams[0]);
-    CHECK(find_record("cdaudio close vm=1 gen=7 req=32 play=4 stop=2 resume=1 done=1 refused=4 sectors=17 read_err=0 stream_err=0 dropped=0"));
+    CHECK(!slots[0].used && !slots[0].stream && !slots[0].res && !audio.streams[0]);
+    CHECK(find_record("cdaudio close vm=1 gen=7 req="));
     for (int h = 0; h < 8; h++) CHECK(!handles[h].open);
     CHECK(!tables);
     memset(&frame, 0, sizeof(frame)); frame.tf.eax = 0x1500;

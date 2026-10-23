@@ -156,6 +156,48 @@ Host evidence: `tests/host/vm/cdaudio_test.c` (Quake's request sequence over
 0300h and V86, play/stop/resume, mixer routing through the production stream
 and mixer, the missing-track record) and `tests/host/test_cdaudio_wiring.py`.
 Not qualified by host execution: audible output, the T23 mixer level and
-cadence under a running game. A physical CD drive is not used by this path;
-routing the drive's own CD-DA (the f5-12B2 transport) to MSCDEX is a separate
-step.
+cadence under a running game.
+
+### Physical CD (fx-10b, 2026-10-23)
+
+Lead decision: an audio disc in the optical drive (for example the owner's
+original Quake CD: track 1 data, music from track 2) is the MSCDEX disc.
+
+- Source order per VM: a drive disc with at least one audio track; else the
+  WAV folder; else a data-only drive disc (its TOC is reported, as MSCDEX
+  does, and nothing plays); else no disc. A change of the drive's medium or
+  generation publishes the new disc: the VM's play state ends, Media Changed
+  answers FFh once, and a request made for the replaced disc is void.
+- TOC: the f5-12B2 `atapi_cd_toc` (READ TOC 43h format 0, cached per media
+  generation). Track control is CONTROL<<4 | ADR, a track runs to the next
+  start or the lead-out. Page 2Ah is read once per drive; a drive reporting
+  "CD-DA Commands Supported = 0" is recorded `cdda=0` and its play ends with
+  `reason=no_cdda`.
+- Audio: digital extraction, `atapi_cd_read_audio` (READ CD BEh, CD-DA, user
+  data only), the primary path of the f5-12B2 contract. Analog PLAY AUDIO
+  MSF is not used: CiukiOS's AC'97 driver programs only the master (02h) and
+  PCM (18h) registers, so the codec's CD input (12h) keeps its muted reset
+  value 8808h, bit 15 mute (AC'97 2.3 register map as in the
+  [Realtek ALC203 datasheet](https://atta.szlcsc.com/upload/public/pdf/source/20121122/1457706561706.pdf)
+  section 6.1.9 "MX12 CD Volume, Default: 8808h", and Linux
+  [`ac97/regs.h`](https://codebrowser.dev/linux/linux/include/sound/ac97/regs.h.html)
+  `AC97_CD 0x12`), and whether the T23's UltraBay drive reaches its
+  CS4299 codec's CD input is undocumented ([ThinkWiki CS4299](https://thinkwiki.org/wiki/CS4299)
+  lists a "CD" mixer only); `f4-audio-media-contract.md` keeps analog routing
+  a hardware qualification.
+- Bounds: all drive and file I/O runs in the `vm-cdread` task (also the WAV
+  scan). Per playing VM a reservoir of 64 sectors (150,528 bytes, 853 ms at
+  1x; halved down to 8 sectors if a contiguous run is unavailable), filled
+  by at most one 8-sector packet (18,816 bytes, 107 ms of audio) per 20 ms
+  and only while 8 sectors are free: steady state 75 sectors/s, at most 400
+  sectors/s while the reservoir refills. `vm-cdaudio` never blocks: it copies
+  the reservoir into the mixer stream every 10 ms. The VM worker and its
+  game audio (SB16/OPL through `vm_source.c`) are not on this path. The
+  stream registers vm-cdaudio as writer and vm-cdread as reader producer, so
+  only the scheduler's bounded producer boost (f1-101) can raise them.
+- Records: `drive slot= generation= result=audio|data_only|no_medium|not_ready|toc_error|no_drive tracks= audio= first= last= leadout= cdda=`,
+  `source vm= source=cd|wav|none generation= tracks= audio= leadout= reason=audio_disc|wav|drive_data_only|data_only|no_tracks`,
+  `read vm= source= track= lba= sectors= result= reason=no_medium|no_cdda|read|file fallback=stop|silence`,
+  `play vm= source=...`, `complete ... underruns=` and `close ... underruns=`.
+- Not done: the CD's data track is not a DOS drive in the VM (MSCDEX file
+  access); IOCTL eject/close act on the virtual door only, never the tray.
