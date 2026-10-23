@@ -913,6 +913,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int taskman_power = c->taskman && p.request == DESK_SETTINGS_OPEN_POWER;
         int32_t result = (c->program != DESK_APP_CONTROL && !taskman_power) || !d->shell ? -EPERM : desk_session_busy(d) ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
+        if (!result && p.request==DESK_SETTINGS_SAVER_PREVIEW) result=desk_saver_start(d,p.values[0]);
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
         if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;d->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
@@ -980,9 +981,127 @@ static void v3_restore_poll(struct desktop *d,uint64_t now)
         if (complete) {d->v3_restoring=0;__atomic_store_n(&d->v3_restore_watchdog_pending,0,__ATOMIC_RELEASE);}
     }
 }
+/* G10: no input polling; heartbeat plus the explicit idle/frame deadline. */
+static void saver_damage(struct desktop *d)
+{
+    d->copy_pending=0; d->scanout_valid=d->frame_valid=d->cursor_valid=0;
+    d->cursor_dirty=1;
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+}
+static int saver_suppressed(const struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || d->saver_external_running || d->saver_display_inhibited || desk_session_busy(d) || d->v3_lease_state ||
+        d->v3_restoring || d->drag>=0 || d->sh.dnd.active) return 1;
+    if (d->focus>=0) {
+        const struct desk_client *c=&d->clients[d->focus];
+        if (c->window && !c->minimized && c->frame.x<=0 && c->frame.y<=0 &&
+            c->frame.w>=(int)d->width && c->frame.h>=(int)d->height) return 1;
+    }
+    return 0;
+}
+void desk_saver_config(struct desktop *d)
+{
+    if (!d->screen_control) return;
+    struct ciuki_screen_control q={.version=CIUKI_SCREEN_VERSION,.size=sizeof(q),
+        .action=CIUKI_SCREEN_CONFIG,.enabled=(uint32_t)d->sh.cfg.saver_enabled,
+        .timeout=(uint32_t)d->sh.cfg.saver_seconds,.saver=(uint32_t)d->sh.cfg.saver_kind,
+        .monitor_seconds=(uint32_t)d->sh.cfg.monitor_seconds};
+    if (!d->screen_control(&q)) d->saver_poll=0;
+    d->saver_idle=d->now_ns; d->monitor_failed=0;
+}
+int desk_saver_start(struct desktop *d, unsigned kind)
+{
+    if (kind>2) return -EINVAL;
+    if (d->screen_control) {
+        struct ciuki_screen_control q={.version=CIUKI_SCREEN_VERSION,.size=sizeof(q)};
+        int e=d->screen_control(&q);
+        if (e) return e;
+        d->saver_display_inhibited=q.inhibited!=0;
+    }
+    if (saver_suppressed(d) || d->monitor_off) return -EBUSY;
+    d->saver_active=1; d->saver_poll=0; d->saver_kind=kind; d->saver_frame=d->now_ns;
+    saver_damage(d); return 0;
+}
+static int saver_wake(struct desktop *d)
+{
+    if (d->monitor_off) {
+        int e=d->monitor_power ? d->monitor_power(-1) : -ENOSYS;
+        if (e) return e;
+        d->monitor_off=0; saver_damage(d);
+    }
+    if (d->saver_active) { d->saver_active=0; saver_damage(d); }
+    return 0;
+}
+int desk_saver_input(struct desktop *d, const struct ciuki_input_event *e)
+{
+    if (e->type==CIUKI_INPUT_RESYNC) return 0;
+    if (e->type==CIUKI_INPUT_MOTION && !e->value && !e->value2) return 0;
+    int consumed=d->saver_active || d->monitor_off;
+    d->saver_idle=d->now_ns; d->monitor_failed=0;
+    if (consumed) {
+        (void)saver_wake(d);
+        /* RESYNC cancels held keys/buttons, including keys pressed before
+         * a forced saver start. The dismissing click never reaches an app. */
+        struct ciuki_input_event reset={.type=CIUKI_INPUT_RESYNC};
+        desk_input(d,&reset);
+        d->saver_poll=0;
+    }
+    return consumed;
+}
+void desk_saver_tick(struct desktop *d)
+{
+    if (!d->shell) return;
+    if (!d->saver_idle) d->saver_idle=d->now_ns;
+    if (saver_suppressed(d)) {
+        d->saver_idle=d->now_ns;
+        (void)saver_wake(d);
+    }
+    if (d->screen_control && d->now_ns>=d->saver_poll) {
+        struct ciuki_screen_control q={.version=CIUKI_SCREEN_VERSION,.size=sizeof(q)};
+        d->saver_poll=d->now_ns+1000000000ull;
+        if (!d->screen_control(&q)) {
+            d->saver_display_inhibited=q.inhibited!=0;
+            d->saver_external_running=q.running && !d->saver_active && !d->saver_reported;
+            d->sh.cfg.saver_enabled=(int)q.enabled; d->sh.cfg.saver_seconds=(int)q.timeout;
+            d->sh.cfg.saver_kind=(int)q.saver; d->sh.cfg.monitor_seconds=(int)q.monitor_seconds;
+            if (q.sequence!=d->saver_sequence) {
+                d->saver_sequence=q.sequence;
+                if (q.flags&CIUKI_SCREEN_PERSIST) d->sh.want_save=1;
+                if (q.command==0xf140) (void)desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument);
+                if (q.command==0xf170 && !saver_suppressed(d)) {
+                    if (q.argument==-1) (void)saver_wake(d);
+                    else if (d->monitor_power) {
+                        int e=d->monitor_power(q.argument);
+                        if (!e) d->monitor_off=1;
+                    }
+                }
+            }
+            q.action=CIUKI_SCREEN_STATUS;
+            q.value=(int)(d->saver_active!=d->saver_reported ? d->saver_active : q.running);
+            d->saver_reported=d->saver_active;
+            (void)d->screen_control(&q);
+        }
+    }
+    if (saver_suppressed(d)) return;
+    uint64_t idle=d->now_ns>=d->saver_idle ? d->now_ns-d->saver_idle : 0;
+    if (!d->saver_active && d->sh.cfg.saver_enabled && d->sh.cfg.saver_seconds>0 &&
+        idle>=(uint64_t)d->sh.cfg.saver_seconds*1000000000ull)
+        (void)desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind);
+    if (!d->monitor_off && !d->monitor_failed && d->sh.cfg.monitor_seconds>0 &&
+        idle>=(uint64_t)d->sh.cfg.monitor_seconds*1000000000ull) {
+        int e=d->monitor_power ? d->monitor_power(2) : -ENOSYS;
+        if (!e) d->monitor_off=1;
+        else { d->monitor_failed=1; snprintf(d->notice,sizeof(d->notice),"Monitor power is unavailable (%d).",-e); }
+    }
+    if (d->saver_active && !d->monitor_off && d->now_ns>=d->saver_frame) {
+        saver_damage(d); d->saver_frame=d->saver_kind ? d->now_ns+50000000ull : UINT64_MAX;
+    }
+}
+
 void desk_heartbeat(struct desktop *d, uint64_t now)
 {
     d->now_ns = now;
+    desk_saver_tick(d);
     if (d->v3_lease_poll) d->v3_lease_poll(d);
     if (d->v3_lease_state==2) desk_v3_revoke(d);
     v3_restore_poll(d,now);

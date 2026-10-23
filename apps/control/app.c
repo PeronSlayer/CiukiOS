@@ -61,6 +61,7 @@ static void changed(struct cp_app *a)
     static struct ciuki_settings now;
     load(a, &now);            /* keep what the desktop wrote meanwhile: recent documents, unknown keys */
     if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.double_click_ms=a->cfg.double_click_ms; }
+    else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
     static char out[CFG_TEXT_MAX];
@@ -76,6 +77,8 @@ static void display_copy(struct ciuki_settings *to, const struct ciuki_settings 
     memcpy(to->theme, from->theme, sizeof(to->theme));
     memcpy(to->wallpaper, from->wallpaper, sizeof(to->wallpaper));
     to->wallpaper_mode = from->wallpaper_mode; to->desktop_color = from->desktop_color;
+    to->saver_enabled=from->saver_enabled; to->saver_seconds=from->saver_seconds;
+    to->saver_kind=from->saver_kind;
     to->desktop_icons = from->desktop_icons; to->display_mode = from->display_mode;
 }
 int cp_display_store(struct cp_app *a)
@@ -576,6 +579,29 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             if (e->id==CP_LOG_NEXT && a->log_offset+a->log.len<a->log_total) a->log_offset+=CP_LOG_BYTES;
             log_refresh(a);
         }
+        break;
+    case CP_SAVER_KIND:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<3) { a->cfg.saver_kind=e->index; save=1; }
+        break;
+    case CP_SAVER_ENABLE:
+        if (e->type==DU_EV_ACTIVATE) { a->cfg.saver_enabled=!a->cfg.saver_enabled; save=1; build(a); }
+        break;
+    case CP_SAVER_WAIT:
+    case CP_MONITOR_WAIT:
+        if (e->type==DU_EV_CHANGE && e->index>=0 && e->index<=1440) {
+            if (e->id==CP_SAVER_WAIT) a->cfg.saver_seconds=e->index*60;
+            else a->cfg.monitor_seconds=e->index*60;
+            save=1; build(a);
+        }
+        break;
+    case CP_SAVER_SETTINGS:
+        if (e->type==DU_EV_ACTIVATE)
+            du_message(u,CP_SAVER_SETTINGS,"Screen Saver Settings","This screen saver has no additional settings.",DU_DLG_ICON_INFO,NULL,0,0,0);
+        break;
+    case CP_SAVER_PREVIEW:
+        if (e->type==DU_EV_ACTIVATE && a->host.apply &&
+            a->host.apply(a->host.ctx,DESK_SETTINGS_SAVER_PREVIEW,a->cfg.saver_kind,0))
+            text(a,C_STATUS,"Screen saver preview could not be started.");
         break;
     case CP_POWER_ACTION:
         if (e->type == DU_EV_ACTIVATE && a->host.power && a->host.power(a->host.ctx))
@@ -1112,7 +1138,10 @@ static void system_pages(struct cp_app *a)
     } else if (a->page == CP_NETWORK) {
         network_build(a);
     } else if (a->page == CP_POWER) {
-        add(a, DU_LABEL, C_SYS0, 24, 40, 500, 14, "Firmware power status (standby is unavailable)");
+        char monitor[80]; snprintf(monitor,sizeof(monitor),"Monitor off: %d min (0 = Never)",a->cfg.monitor_seconds/60);
+        add(a,DU_LABEL,CP_SAVER_NOTE,24,40,300,16,monitor);
+        struct du_widget *mw=add(a,DU_SCROLLBAR,CP_MONITOR_WAIT,340,40,192,16,"");
+        mw->vertical=0; mw->total=1441; mw->page=1; mw->value=a->cfg.monitor_seconds/60;
         unsigned lines = power_read(a);
         for (unsigned i = 0; i < 20; i++) add(a,DU_LABEL,1800+(int)i,24,64+(int)i*14,CP_WIDTH-48,14,i<lines ? a->power_lines[i] : "");
         add(a, DU_BUTTON, CP_POWER_ACTION, 24, 350, 160, 24, "Shut Down...")->disabled=!a->host.power;
@@ -1204,7 +1233,7 @@ static void build(struct cp_app *a)
     add(a, DU_LABEL, C_STATUS, 12, CP_HEIGHT - 52, 476, 16, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
     if (a->page == CP_HOME) text(a, C_STATUS, "Open an applet to change its settings.");
     if (a->page == CP_DISPLAY) {
-        static const char *const tabs[]={"Background","Appearance","Settings"};
+        static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver"};
         for (int k=0;k<CP_DISPLAY_TABS;k++) a->display_tabs[k].text[0]=tabs[k];
         w=du_get(u,C_TABS); w->id=CP_DISPLAY_TABS_ID; w->items=a->display_tabs;
         w->count=CP_DISPLAY_TABS; w->active=(unsigned)a->display_tab; w->disabled=a->mode_state!=0;
@@ -1229,6 +1258,22 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,970,240,64,292,16,"Colours and UI fonts follow the theme.");
             add(a,DU_LABEL,971,240,88,292,16,"Installed fonts can be previewed below.");
             cp_fonts_build(a);
+        } else if (a->display_tab==CP_SCREEN_SAVER) {
+            static const char *const names[]={"Blank","Ciuki logo","Starfield"};
+            add(a,DU_LABEL,1979,24,44,200,16,"Screen saver:");
+            for (int k=0;k<3;k++) a->saver_items[k]=(struct du_item){.text={names[k]},.selected=k==a->cfg.saver_kind};
+            w=add(a,DU_LISTVIEW,CP_SAVER_KIND,24,66,230,84,"");
+            w->items=a->saver_items; w->count=3; w->active=(unsigned)a->cfg.saver_kind; list_style(w,"Saver");
+            add(a,DU_BUTTON,CP_SAVER_ENABLE,24,166,230,24,a->cfg.saver_enabled ? "Enabled: Yes" : "Enabled: No");
+            char wait[80]; snprintf(wait,sizeof(wait),"Wait: %d minutes (0 = Never)",a->cfg.saver_seconds/60);
+            add(a,DU_LABEL,1978,24,208,350,16,wait);
+            w=add(a,DU_SCROLLBAR,CP_SAVER_WAIT,24,232,350,18,"");
+            w->vertical=0; w->total=1441; w->page=1; w->value=a->cfg.saver_seconds/60;
+            add(a,DU_BUTTON,CP_SAVER_PREVIEW,280,66,120,24,"Preview");
+            add(a,DU_BUTTON,CP_SAVER_SETTINGS,280,100,120,24,"Settings...");
+            add(a,DU_LABEL,1977,24,278,480,16,"Preview ends when you move the mouse or press a key.");
+            add(a,DU_LABEL,1976,24,302,480,16,"These savers have no additional settings.");
+            add(a,DU_LABEL,1975,24,326,480,16,"Monitor power: Power applet. Password protection: unavailable.");
         } else {
             add(a,DU_LABEL,CP_AREA_LABEL,24,44,232,16,"Resolution:");
             w=add(a,DU_LISTVIEW,CP_AREA,24,64,232,100,""); w->items=a->area_items; list_style(w,"Screen area");

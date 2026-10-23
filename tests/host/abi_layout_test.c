@@ -4,7 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
+#include "../../sdk/win32/include/w32/screen_saver.h"
+_Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
+_Static_assert(SC_MONITORPOWER==0xf170u,"G10 SC_MONITORPOWER");
+_Static_assert(SPI_GETSCREENSAVETIMEOUT==0xeu,"G10 SPI_GETSCREENSAVETIMEOUT");
+_Static_assert(SPI_SETSCREENSAVETIMEOUT==0xfu,"G10 SPI_SETSCREENSAVETIMEOUT");
+_Static_assert(SPI_GETSCREENSAVEACTIVE==0x10u,"G10 SPI_GETSCREENSAVEACTIVE");
+_Static_assert(SPI_SETSCREENSAVEACTIVE==0x11u,"G10 SPI_SETSCREENSAVEACTIVE");
+_Static_assert(SPI_SETSCREENSAVERRUNNING==0x61u,"G10 SPI_SETSCREENSAVERRUNNING");
+_Static_assert(SPI_GETSCREENSAVERRUNNING==0x72u,"G10 SPI_GETSCREENSAVERRUNNING");
+_Static_assert(SPI_GETSCREENSAVESECURE==0x76u,"G10 SPI_GETSCREENSAVESECURE");
+_Static_assert(SPI_SETSCREENSAVESECURE==0x77u,"G10 SPI_SETSCREENSAVESECURE");
+
 #include "../../apps/desktop/protocol.h"
+#include "../../apps/desktop/settings_catalog.h"
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
@@ -26,7 +39,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -42,8 +55,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1024);
-SETUP_OFFSET(source_iso_sha,1089);
+SETUP_OFFSET(source_image_sha,1072);
+SETUP_OFFSET(source_iso_sha,1137);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -67,7 +80,30 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.redraw
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)==84,"DOSVM row opt-in ABI");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
 _Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
+_Static_assert(DESK_SETTINGS_SAVER_PREVIEW==10u,"G10 settings request");
 static const struct expectation expectations[] = {
+    {"constant.CIUKI_DISPLAY_SCREEN",CIUKI_DISPLAY_SCREEN,2u},
+    {"constant.CIUKI_DISPLAY_DPMS",CIUKI_DISPLAY_DPMS,3u},
+    {"constant.CIUKI_SCREEN_VERSION",CIUKI_SCREEN_VERSION,1u},
+    {"constant.CIUKI_SCREEN_CONFIG",CIUKI_SCREEN_CONFIG,1u},
+    {"constant.CIUKI_SCREEN_STATUS",CIUKI_SCREEN_STATUS,2u},
+    {"constant.CIUKI_SCREEN_PERSIST",CIUKI_SCREEN_PERSIST,1u},
+    {"offsetof.ciuki_screen_control.version",__builtin_offsetof(struct ciuki_screen_control,version),0u},
+    {"offsetof.ciuki_screen_control.size",__builtin_offsetof(struct ciuki_screen_control,size),4u},
+    {"offsetof.ciuki_screen_control.action",__builtin_offsetof(struct ciuki_screen_control,action),8u},
+    {"offsetof.ciuki_screen_control.value",__builtin_offsetof(struct ciuki_screen_control,value),12u},
+    {"offsetof.ciuki_screen_control.flags",__builtin_offsetof(struct ciuki_screen_control,flags),16u},
+    {"offsetof.ciuki_screen_control.enabled",__builtin_offsetof(struct ciuki_screen_control,enabled),20u},
+    {"offsetof.ciuki_screen_control.timeout",__builtin_offsetof(struct ciuki_screen_control,timeout),24u},
+    {"offsetof.ciuki_screen_control.saver",__builtin_offsetof(struct ciuki_screen_control,saver),28u},
+    {"offsetof.ciuki_screen_control.monitor_seconds",__builtin_offsetof(struct ciuki_screen_control,monitor_seconds),32u},
+    {"offsetof.ciuki_screen_control.running",__builtin_offsetof(struct ciuki_screen_control,running),36u},
+    {"offsetof.ciuki_screen_control.sequence",__builtin_offsetof(struct ciuki_screen_control,sequence),40u},
+    {"offsetof.ciuki_screen_control.command",__builtin_offsetof(struct ciuki_screen_control,command),44u},
+    {"offsetof.ciuki_screen_control.argument",__builtin_offsetof(struct ciuki_screen_control,argument),48u},
+    {"offsetof.ciuki_screen_control.inhibited",__builtin_offsetof(struct ciuki_screen_control,inhibited),52u},
+    {"sizeof.ciuki_screen_control",sizeof(struct ciuki_screen_control),56u},
+    {"alignof.ciuki_screen_control",_Alignof(struct ciuki_screen_control),4u},
     {"constant.CIUKI_HARDWARE_VERSION", CIUKI_HARDWARE_VERSION, 3u},
     {"sizeof.ciuki_hardware_info", sizeof(struct ciuki_hardware_info), 4500u},
     {"alignof.ciuki_hardware_info", _Alignof(struct ciuki_hardware_info), 4u},

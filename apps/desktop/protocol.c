@@ -647,6 +647,8 @@ int desk_parse(const struct ciuki_message *m, int client,
             if (p->values[0] > 100 || p->values[1] > 100 || p->values[2] > 1) return 0;
         } else if (p->request == DESK_SETTINGS_DISPLAY || p->request == DESK_SETTINGS_DISPLAY_PREVIEW) {
             if (p->values[0] > UINT16_MAX || p->values[1] || p->values[2]) return 0;
+        } else if (p->request==DESK_SETTINGS_SAVER_PREVIEW) {
+            if (p->values[0]>2 || p->values[1] || p->values[2]) return 0;
         } else if (p->request == DESK_SETTINGS_SOUND_TEST) {
             if (p->values[0] >= SOUND_EVENTS || p->values[1] || p->values[2]) return 0;
         } else if ((p->request != DESK_SETTINGS_RELOAD && p->request != DESK_SETTINGS_SOUND_RELOAD &&

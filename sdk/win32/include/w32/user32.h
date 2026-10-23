@@ -3,6 +3,7 @@
 #define CIUKI_USER32_H
 #include <ciuki/w32_transport.h>
 #include <w32/kernel32.h>
+#include <w32/screen_saver.h>
 typedef HANDLE HWND;
 typedef HANDLE HDC;
 typedef HANDLE HICON;

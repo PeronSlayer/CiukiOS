@@ -31,8 +31,9 @@
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_DISPLAY_TABS };
+enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_DISPLAY_TABS };
 enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
+enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS };
 #define CP_LOG_BYTES 8192u
 #define CP_LOG_FILE "/system/logs/BOOT.LOG"
 #define CP_FONTS_MAX 32
@@ -150,6 +151,7 @@ struct cp_app {
 
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
+    struct du_item saver_items[3];
     struct du_item network_items[2], network_tabs[3];
     char network_names[2][64], network_message[96], network_test_name[128];
     unsigned network_selected, network_tab;

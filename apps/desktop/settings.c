@@ -22,6 +22,7 @@ void cfg_defaults(struct ciuki_settings *s)
     s->mouse_speed = CFG_MOUSE_NORMAL;
     s->double_click_ms = 500;
     s->keyboard = CFG_KEYS_US;
+    s->saver_seconds=600; s->saver_kind=1;
 }
 
 int cfg_theme_index(const char *name)
@@ -42,7 +43,7 @@ static int number(const char *v, int lo, int hi, int *out)
     long n = 0;
     if (!*v) return 0;
     for (; *v; v++) {
-        if (*v < '0' || *v > '9' || n > 100000) return 0;
+        if (*v < '0' || *v > '9' || (*v-'0')>hi || n>(hi-(*v-'0'))/10) return 0;
         n = n * 10 + (*v - '0');
     }
     if (n < lo || n > hi) return 0;
@@ -114,6 +115,10 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
 
+    if (!strcmp(key,"saver_enabled")) return flag(v,&s->saver_enabled);
+    if (!strcmp(key,"saver_seconds")) return number(v,0,2147483647,&s->saver_seconds);
+    if (!strcmp(key,"saver_kind")) return number(v,0,2,&s->saver_kind);
+    if (!strcmp(key,"monitor_seconds")) return number(v,0,2147483647,&s->monitor_seconds);
     if (!strcmp(key, "keyboard")) {
         for (int i = 0; i < CFG_KEYS_COUNT; i++) if (!strcmp(v, cfg_keyboard_names[i])) { s->keyboard = i; return 1; }
         return 0;
@@ -178,6 +183,10 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
     size_t used = (size_t)n;
+    n=snprintf(out+used,size-used,"saver_enabled=%d\nsaver_seconds=%d\nsaver_kind=%d\nmonitor_seconds=%d\n",
+               !!s->saver_enabled,s->saver_seconds,s->saver_kind,s->monitor_seconds);
+    if (n<0 || (size_t)n>=size-used) return 0;
+    used+=(size_t)n;
     for (unsigned i = 0; i < s->recent_count && i < CFG_RECENT_MAX; i++) {
         n = snprintf(out + used, size - used, "recent=%s\n", s->recent[i]);
         if (n <= 0 || (size_t)n >= size - used) return 0;
