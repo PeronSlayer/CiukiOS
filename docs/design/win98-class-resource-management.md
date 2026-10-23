@@ -735,7 +735,7 @@ no VTD/VPICD timing guarantee or PIT divisor. Keep divisor 1193/nominal
 naming and asynchronous input descriptions do not prove interrupt delivery
 latency.
 
-Amendment fx-9 (implementer proposal for the lead, 2026-10-23): the DOS VM
+Amendment fx-9 (implementer proposal, accepted by the lead 2026-10-23 16:13; this closes the deferred f1-91): the DOS VM
 clock (virtual PIT, SB16 DSP/DMA timeline, OPL timers) is simulated
 hardware time, served like the refill: the PIT top half wakes the
 audio-class `vm-clock` task in O(1) with an immediate service deadline,
