@@ -1,7 +1,7 @@
 # integ-fix2 — Build errors on main after the 01:52 merges
 
 - **Phase/model:** integration, Codex gpt-6.1-sol, reasoning high. **Worktree:** `wt/integ-fix2` from `main`.
-- **Evidence (lead, 2026-10-23 02:17, main `5ade83dd` and later):**
+- **Evidence (lead, 2026-10-23 02:16, main `5ade83dd` and later):**
   1. **Apps build.** `make CAP= apps` fails because `apps/files/app.c:1162` `job_tick` has a 5220-byte stack frame, over the 4096 limit (`-Wframe-larger-than`). This came with f2-98c (`4e7e12b6`), the event-driven native apps.
   2. **Host build.** The host suite fails to compile `tests/host/contention_budget_test.c`, which includes `dosvm_perf_irq_test.c`, which includes `src/kernel/vm/dosvm_internal.h`. `ciuki/abi.h:521–524` redefines `WIFEXITED`, `WEXITSTATUS`, `WIFSIGNALED` and `WTERMSIG` after the host `stdlib.h`. This came with f3-64 (`e97c9971`), which added `#include <ciuki/abi.h>` to `dosvm_internal.h`.
 
