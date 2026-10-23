@@ -422,6 +422,7 @@ static void fuzz(unsigned m, unsigned run)
     snprintf(step_name,sizeof(step_name),"run=%u final",run); frame();
     fuzzing=0; end();
 }
+#ifndef DESKTOP_OCCLUSION_NO_MAIN /* fx-15: window_model_test.c reuses the harness above */
 static void report_abort(int sig)
 { (void)sig; fprintf(stderr,"aborted in mode %s at %s\n",mode_names[mode],step_name); signal(SIGABRT,SIG_DFL); }
 int main(int argc, char **argv)
@@ -442,3 +443,4 @@ int main(int argc, char **argv)
            frames_checked,visible_pixels_checked);
     return 0;
 }
+#endif

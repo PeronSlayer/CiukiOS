@@ -63,6 +63,13 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     if (ciuki_surface_info(w->surface, &w->info) || !desk_surface_valid(&w->info)) goto fail;
     w->pixels = ciuki_surface_map(w->surface, PROT_READ | PROT_WRITE);
     if (w->pixels == MAP_FAILED) { w->pixels = NULL; goto fail; }
+    /* fx-15: WM_ERASEBKGND with the window class brush. The desktop shows
+     * the window from CREATE_WINDOW on, before the first frame (startup,
+     * file reads): the erased face, never a black (zeroed) surface. The
+     * first present then damages only what differs from it. The shell's
+     * theme is read first, as the first turn would. */
+    (void)desk_theme_poll(DESK_SETTINGS_PATH, du_now());
+    for (size_t k = 0, n = (size_t)w->info.stride / 4 * w->info.height; k < n; k++) w->pixels[k] = DU_FACE;
     w->back = malloc((size_t)width * (size_t)height * 4);
     if (!w->back) { errno = ENOMEM; goto fail; }
     du_init(u, w->back, width, height);

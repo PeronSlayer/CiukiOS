@@ -635,6 +635,22 @@ static void client_rows(struct desktop *d, struct desk_client *c, struct desk_bo
         (unsigned)(scaled.x-region.x),(unsigned)(scaled.y-region.y),(unsigned)scaled.w,(unsigned)scaled.h);
     if (timed) c->gfx_stats.convert_ns+=time_now(d)-begin;
 }
+/* The decorations a window is painted with: window() and the fx-15
+ * reconcile share it, so a change of any input is a change of the record. */
+static struct desk_frame_style frame_style(struct desktop *d, int i)
+{
+    const struct desk_client *c=&d->clients[i];
+    /* Hover and pressed title buttons follow the pointer (input.c tracks
+     * the damage): the button under it, held while the left button is down. */
+    int code=desk_title_code(d,d->mouse_x,d->mouse_y);
+    unsigned hot=code && (code-1)/4==i ? 1u<<((code-1)%4) : 0;
+    return (struct desk_frame_style){
+        .title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title,
+        .icon=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL,
+        .active=i==d->focus && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed, .maximized=c->zoomed,
+        .buttons=d->shell && !c->owner_id && (c->v3_style&3)!=DESK_V3_TOOL ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
+        .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
+}
 static void window(struct desktop *d, int i, struct desk_box clip)
 {
     /* Every window (programs, the DOS window, the built-in About/Run/Shut
@@ -649,16 +665,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     if (t->shadow_size) DESK_PROFILE("shadows", desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow));
     if (!desk_intersect(f,clip,&clip)) return;
     p=paint_of(d,clip);
-    /* Hover and pressed title buttons follow the pointer (input.c tracks
-     * the damage): the button under it, held while the left button is down. */
-    int code=desk_title_code(d,d->mouse_x,d->mouse_y);
-    unsigned hot=code && (code-1)/4==i ? 1u<<((code-1)%4) : 0;
-    struct desk_frame_style s={
-        .title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title,
-        .icon=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL,
-        .active=i==d->focus && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed, .maximized=c->zoomed,
-        .buttons=d->shell && !c->owner_id && (c->v3_style&3)!=DESK_V3_TOOL ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
-        .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
+    struct desk_frame_style s=frame_style(d,i);
     DESK_PROFILE("captions", {
         if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
         else frame_border(d,&p,i,f,&s);
@@ -827,9 +834,13 @@ static void damage_visible(struct desktop *d, int index, struct desk_box clip)
 static int window_damage(struct desktop *d, int index, struct desk_box box)
 {
     struct desk_client *c=&d->clients[index];
+    /* fx-15: windows are painted over the top bar (scene() draws it first;
+     * v3 windows and popups may be placed there) and under the taskbar
+     * and its overlays (drawn after the windows). Updates in the top-bar
+     * rows were dropped and stayed stale on screen. */
     if (!c->window || c->minimized ||
-        !desk_intersect(box,(struct desk_box){0,DESK_BAR,(int)d->width,
-            (int)d->height-DESK_BAR-(d->shell ? DESK_BAR : 0)},&box)) return 0;
+        !desk_intersect(box,(struct desk_box){0,0,(int)d->width,
+            (int)d->height-(d->shell ? DESK_BAR : 0)},&box)) return 0;
     int windows[DESK_CLIENTS]; unsigned count=0;
     for (int i=0;i<DESK_CLIENTS;i++) if (i!=index && d->clients[i].window &&
         !d->clients[i].minimized && d->clients[i].order>c->order) windows[count++]=i;
@@ -912,6 +923,61 @@ void desk_stack_damage(struct desktop *d)
         d->stack_window[i]=c->window && !c->minimized ? c->window_id : 0;
         d->stack_order[i]=c->order;
     }
+}
+/* fx-15: the Windows 9x invalidation rules, applied to the state the last
+ * composed frame showed rather than to each call site (the effect of
+ * EndDeferWindowPos for every change of the frame). A window that appears,
+ * disappears (close, crash, minimise, hide) or changes its outer box
+ * invalidates its old and new outer boxes; a caption whose text, icon,
+ * activation, alert, shade, zoom or buttons change is repainted (frame
+ * edges with it, the content of a built-in window whose focus indicators
+ * follow its activation); a hovered or pressed title button repaints only
+ * itself. A move the compositor is copying (copy_pending) is already
+ * described by its move damage. Runs before every frame decision. */
+static void caption_parts(struct desktop *d, struct desk_box f)
+{
+    struct desk_box parts[4]={{f.x,f.y,f.w,DESK_TITLE},
+        {f.x,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
+        {f.x+f.w-DESK_BORDER,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
+        {f.x,f.y+f.h-DESK_BORDER,f.w,DESK_BORDER}};
+    for (unsigned k=0;k<4;k++) desk_damage_add(&d->damage,parts[k],d->width,d->height);
+}
+extern void desk_shell_reconcile(struct desktop *) __attribute__((weak));
+void desk_scene_reconcile(struct desktop *d)
+{
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];
+        struct desk_shown *s=&d->shown[i];
+        int shown=c->window && !c->minimized;
+        struct desk_box outer=shown ? desk_outer(c) : (struct desk_box){0,0,0,0};
+        int moving=d->copy_pending && d->copy_client==i, framed=shown && (c->v3_style&3)!=DESK_V3_POPUP;
+        struct desk_frame_style st=framed ? frame_style(d,i) : (struct desk_frame_style){0};
+        if (s->window_id!=c->window_id || s->shown!=shown ||
+            (shown && !moving && memcmp(&s->outer,&outer,sizeof(outer)))) {
+            if (s->shown) desk_damage_add(&d->damage,s->outer,d->width,d->height);
+            if (shown) desk_damage_add(&d->damage,outer,d->width,d->height);
+        } else if (framed) {
+            int whole=strcmp(s->title,st.title ? st.title : "") || s->icon!=st.icon || s->buttons!=st.buttons ||
+                s->active!=st.active || s->alert!=st.alert || s->collapsed!=st.collapsed || s->maximized!=st.maximized;
+            if (whole) {
+                caption_parts(d,c->frame);
+                if (c->internal && s->active!=st.active)
+                    desk_damage_add(&d->damage,desk_content(c),d->width,d->height);
+            } else if (s->hot!=st.hot || s->pressed!=st.pressed) {
+                unsigned buttons=s->hot|st.hot|s->pressed|st.pressed;
+                for (unsigned b=DESK_TB_CLOSE;b<=DESK_TB_COLLAPSE;b<<=1) if (buttons&b)
+                    desk_damage_add(&d->damage,title_box(c,b),d->width,d->height);
+            }
+        }
+        s->window_id=c->window_id; s->shown=shown; s->outer=outer;
+        if (framed) {
+            snprintf(s->title,sizeof(s->title),"%s",st.title ? st.title : "");
+            s->icon=st.icon; s->buttons=st.buttons; s->hot=st.hot; s->pressed=st.pressed;
+            s->active=st.active; s->alert=st.alert; s->collapsed=st.collapsed; s->maximized=st.maximized;
+        } else { s->title[0]=0; s->icon=NULL; s->buttons=s->hot=s->pressed=0; s->active=s->alert=s->collapsed=s->maximized=0; }
+    }
+    desk_stack_damage(d);
+    if (d->shell && desk_shell_reconcile) desk_shell_reconcile(d);
 }
 void desk_caption_damage(struct desktop *d,int index)
 {
@@ -1374,8 +1440,17 @@ static int copy_region(struct desktop *d,pixman_region32_t *region,const struct 
             pixman_region32_clear(region);return 0;
         }
     }
+    /* fx-15: everything scene() paints above the windows: the taskbar and
+     * its overlays, the zoom/minimise outline, the Start orb, notifications.
+     * A copy may neither carry those pixels away nor cover them. */
+    if (d->animation.active) {
+        struct desk_box a=d->animation.box;
+        struct desk_box edges[4]={{a.x,a.y,a.w,3},{a.x,a.y+a.h-3,a.w,3},{a.x,a.y,3,a.h},{a.x+a.w-3,a.y,3,a.h}};
+        for (unsigned k=0;k<4;k++) if (!copy_cut(region,r,edges[k])) { pixman_region32_clear(region);return 0; }
+    }
     if(d->shell) {
         struct desk_box boxes[SH_LEVELS+6];unsigned n=desk_shell_occluders ? desk_shell_occluders(d,boxes) : 0;
+        if(!copy_cut(region,r,desk_taskbar(d))) { pixman_region32_clear(region);return 0; }
         for(unsigned i=0;i<n;i++) {
             struct desk_box b=boxes[i];
             if(desk_theme->shadow_size) { b.x-=6;b.y-=6;b.w+=12;b.h+=12; }
@@ -1937,7 +2012,7 @@ int desk_redraw(struct desktop *d)
      * only once the hardware cursor is known hidden (f2-96). */
     if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) { d->hw_cursor=0; d->cursor_dirty=1; }
     if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
-    desk_stack_damage(d);
+    desk_scene_reconcile(d);
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
     /* A RESYNC/damage can precede the mode-counter service turn. Refresh
      * the existing grant query before any generation-tagged engine request;
@@ -2104,6 +2179,7 @@ int desk_redraw(struct desktop *d)
                 if (click && (!input || click<input)) input=click;
                 c->launch_frame_pending=0;
                 if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
+                if (d->first_frame) d->first_frame(d,c,end);
             }
         }
         uint64_t start=input && input<=end ? input : frame_begin;

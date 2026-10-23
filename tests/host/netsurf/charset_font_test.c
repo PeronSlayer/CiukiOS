@@ -120,6 +120,19 @@ int main(void)
     assert(fb_font_width(&style,para,next,&measured)==NSERROR_OK && measured>600);
     free(para);
     nsfb_free(fb);assert(fb_font_finalise());
+    /* fx-15: the body faces opened on the start-up worker are adopted at the
+     * first use: no open on the UI thread, identical metrics. */
+    ciuki_font_prefetch();
+    struct ciuki_font_work pre=ciuki_font_work_read();
+    int prefetched;assert(fb_font_width(&style,text,length,&prefetched)==NSERROR_OK);
+    plot_font_style_t bold=style;bold.weight=700;bold.size=12*PLOT_STYLE_SCALE;style.size=12*PLOT_STYLE_SCALE;
+    assert(fb_font_width(&style,text,length,&prefetched)==NSERROR_OK && prefetched==width);
+    int heavy;assert(fb_font_width(&bold,text,length,&heavy)==NSERROR_OK && heavy>=width);
+    assert(ciuki_font_work_read().opens==pre.opens);
+    plot_font_style_t serif=style;serif.family=PLOT_FONT_FAMILY_SERIF;
+    int other_width;assert(fb_font_width(&serif,text,length,&other_width)==NSERROR_OK);
+    assert(ciuki_font_work_read().opens==pre.opens+1);
+    assert(fb_font_finalise());
     puts("NetSurf charset/font: four encodings, errors, split codec, metrics, positions, scale and clipped paint passed");
     fflush(stdout);
     return 0;
