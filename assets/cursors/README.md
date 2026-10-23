@@ -15,6 +15,24 @@ the existing desktop cursor API. Existing IDs 0–18 retain their meanings;
 open hand, closed hand and help append IDs 19–21. The six existing Paint tool
 drawings remain in `paint.h`, with their separate MIT notice.
 
+## Size (fx-13, 2026-10-23)
+
+The first set (2026-10-22) drew the arrow about 19 by 27 opaque pixels,
+well above the Windows 9x and classic Mac arrows. Since fx-13 every drawing
+is scaled by the same factor, 0.7, around its hotspot (the `<g transform>`
+in each SVG; the viewBox stays 0 0 32 32) so shapes keep their proportion to
+the arrow. The arrow now spans 13 by 19 opaque pixels (white outline
+included); hotspots are unchanged because the scale is centred on them:
+arrow, arrow+busy, help 4,3; pointing hand 12,3; the other shapes 15,15.
+Vector strokes were not scaled with the shapes (outlines stay about one
+pixel, lines about two) and arrow-like drawings sit on a half-pixel offset so
+the 1 px white outline has no gaps at the threshold below. The reference:
+Windows 95 extracted cursors on Wikimedia Commons (public domain) are the
+standard arrow at 125 % (15 by 25) and 150 % (18 by 30), i.e. a 12 by 20
+standard arrow.
+Measured sizes are in `docs/validation/f2-99-cursors.md`; the tests pin the
+arrow's 13x19 extent (`tests/host/desktop/cursor_set_test.c`).
+
 ## Deterministic conversion
 
 `scripts/cursors/build_ciuki.py` produces `cursors.h` directly from the SVGs.
@@ -24,7 +42,7 @@ or network access is needed at OS build time. Regenerate with:
 ```sh
 python3 scripts/cursors/build_ciuki.py
 python3 scripts/cursors/build_ciuki.py --check
-python3 scripts/cursors/build_ciuki.py --check --sheet build/codex/f2-99-cursor-sheet.png
+python3 scripts/cursors/build_ciuki.py --check --sheet build/codex/cursor-sheet.png
 ```
 
 Reference toolchain: rsvg-convert/librsvg 2.63.3, cairo 1.18.6, Pillow 13.0.0.

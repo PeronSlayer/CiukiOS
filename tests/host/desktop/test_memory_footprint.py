@@ -15,16 +15,17 @@ import hashlib
 # F2-82: boot shell frames include the larger orb and clipped recess.
 # F2-83: deliberately re-recorded for the new bar gradients and coverage rims.
 # F2-99: new software arrow/shadow; old raster reproduces all former pins (integ-fix1).
+# fx-13: cursor set scaled to the classic 13x19 arrow.
 BOOT_GOLDENS = {
-    "absent-ro": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
-    "absent-rw": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
-    "identical-unpresented": "51602a69716bab6c7eff08236b1b03f2337569e0476f65e64c63246d4c167387",
-    "present-ro": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
-    "present-ro-seeded": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
-    "present-rw": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
-    "present-rw-seeded": "85f2019b7e693649819a74868d05a78d74ccda31327306755fbd414870e35d43",
-    "theme": "fe9e7ecf2f2c87e9f4cbb9ed1bad5eb989abaf94dad7dfaae7f301413e3b6a34",
-    "wallpaper-change": "51602a69716bab6c7eff08236b1b03f2337569e0476f65e64c63246d4c167387"
+    "absent-ro": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
+    "absent-rw": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
+    "identical-unpresented": "aa5f22e44c13cb6ae825dde4176fad7ad7df04a4f9c6749d9686b9bfa3933887",
+    "present-ro": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
+    "present-ro-seeded": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
+    "present-rw": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
+    "present-rw-seeded": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
+    "theme": "3aa32a85ada1353687f0b1955423e53ec5bd75c6b1905d209371a63d1e700530",
+    "wallpaper-change": "aa5f22e44c13cb6ae825dde4176fad7ad7df04a4f9c6749d9686b9bfa3933887"
 }
 
 class MemoryFootprintTests(unittest.TestCase):

@@ -78,6 +78,17 @@ static void artwork(const char *folder)
             black+=!!((r->mask[y]&~r->image[y])&bit); white+=!!(r->image[y]&bit);
         }
         assert(shadow && black && white);
+        /* fx-13: the arrow is the classic size (Windows 9x standard arrow is
+         * about 12x19-20 px): opaque pixels span 13x19 and the hotspot pixel
+         * is the opaque tip. Every other shape is scaled by the same factor. */
+        if (!i) {
+            unsigned minx=32,maxx=0,miny=32,maxy=0;
+            for (unsigned y=0;y<32;y++) for (unsigned x=0;x<32;x++) if (r->mask[y]&(0x80000000u>>x)) {
+                minx=x<minx?x:minx; maxx=x>maxx?x:maxx; miny=y<miny?y:miny; maxy=y>maxy?y:maxy;
+            }
+            assert(maxx-minx+1==13 && maxy-miny+1==19);
+            assert(minx==r->hot_x && miny==r->hot_y && (r->mask[r->hot_y]&(0x80000000u>>r->hot_x)));
+        }
         for (unsigned k=0;k<sizeof(points)/sizeof(*points);k++) {
             d.cursor_shape=shapes[i]; d.mouse_x=points[k][0]; d.mouse_y=points[k][1]; desk_cursor_motion(&d);
             redraw(); oracle();

@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only; original CiukiOS project artwork. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" data-hot-x="12" data-hot-y="3">
-  <path d="M11 15 V5 Q11 2 13 3 Q14.5 3 14.5 5 V12 Q17 10 18 13 Q21 11 22 14 Q25 13 25 17 V21 Q25 25 22 27 H13 L6 19 Q4 16 6 15 Q8 14 11 18 Z" fill="white" stroke="black" stroke-width="1.5" stroke-linejoin="round"/>
-  <path d="M15 14 V19 M18.5 14 V19 M22 16 V20" fill="none" stroke="black"/>
+  <g transform="translate(12.5 3.5) scale(0.7) translate(-12 -3)">
+    <path d="M11 15 V5 Q11 2 13 3 Q14.5 3 14.5 5 V12 Q17 10 18 13 Q21 11 22 14 Q25 13 25 17 V21 Q25 25 22 27 H13 L6 19 Q4 16 6 15 Q8 14 11 18 Z" fill="white" stroke="black" stroke-width="1.429" stroke-linejoin="round"/>
+    <path d="M15 14 V19 M18.5 14 V19 M22 16 V20" fill="none" stroke-width="1.143" stroke="black"/>
+  </g>
 </svg>
