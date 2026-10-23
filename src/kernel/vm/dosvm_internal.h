@@ -503,6 +503,15 @@ int dosvm_vbe_flush(struct dosvm *, bool force);
 int dosvm_vbe_present(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t, struct ciuki_rect *);
 void dosvm_fullscreen_mode_changed(struct dosvm *);
+/* fx-22: true when the calling task may use the physical aperture for this
+ * full-screen owner now (its continuation before the revoke, or the switch
+ * service); a write marks the pages it touches dirty. */
+bool dosvm_fullscreen_aperture(struct dosvm *, uint32_t linear, unsigned bytes, bool write);
+/* fx-22: a switch transaction holds this VM (entry/return in progress). */
+bool dosvm_fullscreen_pinned(const struct dosvm *);
+/* fx-22: the calling task is running the switch transaction itself. */
+bool dosvm_fullscreen_service(void);
+#define DOSVM_FULLSCREEN_PIN_WAIT_MS 3000u
 bool dosvm_shell_idle(const struct dosvm *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
 void dosvm_vga_burst(struct dosvm *, struct v86_frame *);
