@@ -8,10 +8,14 @@
  *
  * Active profile: the fixture CA (test_anchors.h, generated at build time from
  * tests/suites/fixtures/f6-browser/ca.pem) replaces the production bundle for
- * every TLS connection; the first completed navigation reports one line
+ * every TLS connection; the requested navigation's outcome is reported once
  * through probe call 3, "case=browser-page status=<n> bytes=<n> tls=<verdict>
  * url=<sanitised>", which the kernel's f6:browser controller validates and
- * republishes as evidence. SPDX-License-Identifier: MIT */
+ * republishes as evidence. fx-11c: the outcome is the first throbber stop
+ * with a document in the window AND an observed http/https fetch; the
+ * navigation's own initial stop (empty window, "about:blank") is not one.
+ * The bound is the fetcher's 30 s request limit (then the error page) inside
+ * the probe's 120 s. SPDX-License-Identifier: MIT */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -92,10 +96,11 @@ static int ciuki_test_format(char *line,size_t cap,unsigned status,size_t bytes,
 #include <ciuki/runtime.h>
 #endif
 static bool test_requested,test_active,test_reported;
-static unsigned test_status;
-static size_t test_bytes;
-static int test_tls=-1;
-static const char *test_error;
+/* fx-11c: the last terminal http/https fetches, newest last. */
+#define CIUKI_TEST_SEEN 8
+struct ciuki_test_seen { char url[256]; unsigned status; size_t bytes; int tls; bool error; };
+static struct ciuki_test_seen test_seen[CIUKI_TEST_SEEN];
+static unsigned test_seen_count;
 
 static size_t ciuki_test_request(char *out,size_t cap)
 {
@@ -131,10 +136,24 @@ const br_x509_trust_anchor *ciuki_test_anchors(size_t *count)
     *count=CIUKI_TEST_ANCHOR_COUNT;
     return ciuki_test_anchors_table;
 }
-void ciuki_test_fetch_observe(unsigned status,size_t bytes,int tls_error,const char *error)
+void ciuki_test_fetch_observe(const char *url,unsigned status,size_t bytes,int tls_error,const char *error)
 {
     if(!test_active)return;
-    test_status=status;test_bytes=bytes;test_tls=tls_error;test_error=error;
+    if(test_seen_count==CIUKI_TEST_SEEN) {
+        memmove(test_seen,test_seen+1,sizeof(test_seen)-sizeof(*test_seen));test_seen_count--;
+    }
+    struct ciuki_test_seen *seen=&test_seen[test_seen_count++];
+    snprintf(seen->url,sizeof(seen->url),"%s",url?url:"");
+    seen->status=status;seen->bytes=bytes;seen->tls=tls_error;seen->error=error!=NULL;
+}
+/* The fetch behind the shown document: the newest one for its URL; for an
+ * internal page (the error page of a failed fetch) the newest failure. */
+static int ciuki_test_outcome(const char *shown)
+{
+    bool remote=shown && (!strncmp(shown,"http://",7) || !strncmp(shown,"https://",8));
+    for(int i=(int)test_seen_count-1;i>=0;i--)
+        if(remote ? !strncmp(test_seen[i].url,shown,sizeof(test_seen[i].url)-1) : test_seen[i].error)return i;
+    return test_seen_count ? (int)test_seen_count-1 : -1;
 }
 
 static void ciuki_test_send(const char *line,size_t n)
@@ -146,16 +165,22 @@ static void ciuki_test_send(const char *line,size_t n)
 #endif
 }
 
-/* Called when the throbber stops: the first completed navigation is the
- * case's outcome; the kernel accepts exactly one report per case. */
+/* Called when the throbber stops; the kernel accepts exactly one report per
+ * case. fx-11c: browser_window_navigate stops the window before it fetches,
+ * which also stops the throbber; with no document yet the window "is"
+ * about:blank and no fetch has finished, so that stop is not the outcome. */
 static void ciuki_test_page_done(void)
 {
-    if(!test_active || test_reported)return;
+    if(!test_active || test_reported || !test_seen_count)return;
     struct browser_window *bw=browser();
-    const char *url=NULL;
-    if(bw){nsurl *current=browser_window_access_url(bw);if(current)url=nsurl_access(current);}
+    if(!bw || !browser_window_has_content(bw))return;
+    nsurl *current=browser_window_access_url(bw);
+    const char *url=current?nsurl_access(current):NULL;
+    int i=ciuki_test_outcome(url);
+    if(!url || i<0)return;
     char line[CIUKI_TEST_LINE_MAX+1];
-    int n=ciuki_test_format(line,sizeof(line),test_status,test_bytes,test_tls,test_error,url);
+    int n=ciuki_test_format(line,sizeof(line),test_seen[i].status,test_seen[i].bytes,test_seen[i].tls,
+                            test_seen[i].error?"error":NULL,url);
     test_reported=true;
     if(n>0)ciuki_test_send(line,(size_t)n);
 }
