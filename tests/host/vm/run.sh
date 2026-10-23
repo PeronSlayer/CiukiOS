@@ -26,7 +26,10 @@ clang "${flags[@]}" "${gc[@]}" "$root/tests/host/vm/network_test.c" "$root/src/k
 clang "${flags[@]}" "$root/tests/host/vm/irq_test.c" "$root/src/kernel/vm/dosvm_ne2000.c" \
     "$root/src/kernel/vm/v86.c" "$root/src/kernel/vm/dosvm_pic.c" -o "$out/irq_test"
 clang "${flags[@]}" "${gc[@]}" "$root/tests/host/vm/receive_mode_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/receive_mode_test"
-for test in bridge ne2000 ipx tap port primary identity identity_vfs settings network irq receive_mode; do
+# fx-10: MSCDEX model, VM glue and streaming task with the production native mixer.
+clang "${flags[@]}" -I "$root/src/kernel/fs" "$root/tests/host/vm/cdaudio_test.c" \
+    "$root/src/kernel/vm/dosvm_mscdex.c" "$root/src/kernel/lib/fmt.c" -o "$out/cdaudio_test"
+for test in bridge ne2000 ipx tap port primary identity identity_vfs settings network irq receive_mode cdaudio; do
     (cd "$root" && "$out/${test}_test")
 done
 bash "$root/tests/host/vm/run_lifecycle.sh"

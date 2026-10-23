@@ -440,6 +440,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         *b = (struct binding){.key=key, .pid=p->pid, .surface=surface, .busy=true};
         v->owner_pid = p->pid;
         memcpy(v->name, c.name, sizeof(v->name));
+        /* fx-10: MSCDEX drive and virtual disc (never fatal: no disc is a record). */
+        if (p->state == PROC_LIVE && dosvm_cdaudio_open) (void)dosvm_cdaudio_open(v);
         if (p->state != PROC_LIVE) e = -EINTR;
         else if (!(e = dosvm_network_launch(v,dosvm_launch_network(&c)))) e = dosvm_boot(v);
         /* Focus belongs to the native endpoint. Its +2 promotion is never

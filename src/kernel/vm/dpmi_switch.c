@@ -265,7 +265,13 @@ int dpmi_translation(struct dosvm *v, struct v86_frame *f, unsigned ax)
      * 0301h: the structure's flags. */
     v->monitor.vif = ax == 0x0301 ? (image & V86_IF) != 0 : false;
     n.tf.eflags = (image & 0x0CD5u & ~V86_TF) | V86_VM | V86_IF | 2u;
-    if (ax==0x0300 && dosvm_file_reflect && (vector==0x21 || vector==0x2f)) {
+    /* fx-10: MSCDEX answers INT 2Fh AH=15h on the translated frame. */
+    int cd=-ENOSYS;
+    if (ax==0x0300 && vector==0x2f && dosvm_cdaudio_reflect) {
+        cd=dosvm_cdaudio_reflect(v,&n,image);
+        if (cd!=-ENOSYS && cd) { pop_record(v); return cd; }
+    }
+    if (cd==-ENOSYS && ax==0x0300 && dosvm_file_reflect && (vector==0x21 || vector==0x2f)) {
         int file=dosvm_file_reflect(v,&n,vector,1,image); /* DOS_FILE_DPMI_0300 */
         if (file!=-ENOSYS && file) { pop_record(v); return file; }
     }
