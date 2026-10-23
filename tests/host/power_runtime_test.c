@@ -26,6 +26,8 @@ static unsigned checkpoint_calls;
 static int checkpoint_error;
 static struct storage disk;
 static struct process desktop;
+static bool setup_active;
+bool setup_mode(void) { return setup_active; }
 struct ciuki_boot_info g_boot;
 static jmp_buf reboot_return;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %d %s\n", __LINE__, #c); failures++; } } while (0)
@@ -55,7 +57,7 @@ __attribute__((noreturn)) void kernel_reboot(void) { reboots++; longjmp(reboot_r
 #include "../../src/kernel/core/power.c"
 static void reset_power(void)
 {
-    disk = (struct storage){.ready = true}; desktop.pid = 42;
+    disk = (struct storage){.ready = true}; desktop.pid = 42; desktop.setup_capability=false; setup_active=false;
     soft_off = (struct acpi_soft_off){.pm1a_cnt=0x604, .smi_cmd=0xB2, .acpi_enable=0xF1, .slp_typa=5, .slp_typb=5};
     soft_off_state = 1;
     sync_calls = writes = enables = sleeps = reboots = 0;
@@ -81,6 +83,12 @@ static void test_power_sync_retry(void)
         }
     }
     reset_power(); desktop.pid = 7; CHECK(power_syscall(CIUKI_POWER_OFF) == -EPERM && !sync_calls && !writes);
+    desktop.setup_capability=true;
+    CHECK(power_syscall(CIUKI_POWER_QUERY)==-EPERM);
+    setup_active=true;
+    CHECK(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_CAN_REBOOT);
+    desktop.setup_capability=false;
+    CHECK(power_syscall(CIUKI_POWER_QUERY)==-EPERM);
     puts("power sync retry: EBUSY/EIO retained, every request syncs, hardware only after success PASS");
 }
 static void test_power_sci(void)

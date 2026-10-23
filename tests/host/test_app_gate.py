@@ -235,7 +235,7 @@ class AppGateTests(unittest.TestCase):
         source = (ROOT / "src/kernel/proc/supervisor.c").read_text()
         # Execute production argv/env construction up to the private ELF
         # preparation boundary; fake only file lookup and string storage.
-        first = source.index("int supervisor_spawn(")
+        first = source.index("static int spawn_process(")
         spawn = source[first:source.index("    /* Prepare privately;", first)]
         first = source.index("int supervisor_spawn_gate(")
         gate = source[first:source.index("\n}", first)+3]
@@ -261,7 +261,7 @@ int proc_strings_add(struct proc_strings *s, const char *text, uint32_t bytes, b
     if (s != &strings || bytes != strlen(text)+1) abort();
     printf("%s %s\\n", env ? "env" : "argv", text); return 0;
 }
-''' + spawn + '    (void)cwd; (void)desktop; (void)out; return err;\n}\n' + gate + '''
+''' + spawn + '    (void)cwd; (void)desktop; (void)setup; (void)out; return err;\n}\n' + gate + '''
 int main(void) {
     struct process *p = 0;
     if (supervisor_spawn_gate(false, &p)) return 1;

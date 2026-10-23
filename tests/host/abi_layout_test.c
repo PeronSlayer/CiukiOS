@@ -4,6 +4,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
+#include "../../sdk/libsetup/include/setup_txn.h"
+_Static_assert(SETUP_TXN_VERSION==2u,"Setup interface version");
+_Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
+#if defined(__i386__)
+_Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
+_Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
+_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+#define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
+SETUP_OFFSET(version,0);
+SETUP_OFFSET(disk,4);
+SETUP_OFFSET(erased_partitions,108);
+SETUP_OFFSET(erased_total,112);
+SETUP_OFFSET(erased,116);
+SETUP_OFFSET(partition_start,628);
+SETUP_OFFSET(partition_count,636);
+SETUP_OFFSET(required_bytes,644);
+SETUP_OFFSET(payload_bytes,652);
+SETUP_OFFSET(overhead_bytes,660);
+SETUP_OFFSET(reserve_bytes,668);
+SETUP_OFFSET(free_after_bytes,676);
+SETUP_OFFSET(components,684);
+SETUP_OFFSET(answers,688);
+SETUP_OFFSET(source_image_sha,1024);
+SETUP_OFFSET(source_iso_sha,1089);
+_Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
+_Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
+_Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
+_Static_assert(__builtin_offsetof(struct setup_erased_partition,label)==20,"erased label");
+#undef SETUP_OFFSET
+#endif
 
 struct expectation { const char *key; uint32_t native, expected; };
 _Static_assert(CIUKI_COM_UNKNOWN==0 && CIUKI_COM_8250==1 && CIUKI_COM_16450==2 &&
@@ -100,6 +130,57 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_com_status.transmitted", __builtin_offsetof(struct ciuki_com_status, transmitted), 68u},
     {"offsetof.ciuki_com_status.dropped", __builtin_offsetof(struct ciuki_com_status, dropped), 72u},
     {"offsetof.ciuki_com_status.reserved", __builtin_offsetof(struct ciuki_com_status, reserved), 76u},
+    {"constant.CIUKI_SETUP_NET_QUERY", CIUKI_SETUP_NET_QUERY, 1398013956u},
+    {"sizeof.ciuki_setup_net_identity", sizeof(struct ciuki_setup_net_identity), 16u},
+    {"alignof.ciuki_setup_net_identity", _Alignof(struct ciuki_setup_net_identity), 4u},
+    {"offsetof.ciuki_setup_net_identity.vendor", __builtin_offsetof(struct ciuki_setup_net_identity,vendor), 0u},
+    {"offsetof.ciuki_setup_net_identity.device", __builtin_offsetof(struct ciuki_setup_net_identity,device), 4u},
+    {"offsetof.ciuki_setup_net_identity.mac", __builtin_offsetof(struct ciuki_setup_net_identity,mac), 8u},
+    {"offsetof.ciuki_setup_net_identity.reserved", __builtin_offsetof(struct ciuki_setup_net_identity,reserved), 14u},
+    {"sizeof.ciuki_setup_net", sizeof(struct ciuki_setup_net), 48u},
+    {"alignof.ciuki_setup_net", _Alignof(struct ciuki_setup_net), 4u},
+    {"offsetof.ciuki_setup_net.version", __builtin_offsetof(struct ciuki_setup_net,version), 0u},
+    {"offsetof.ciuki_setup_net.size", __builtin_offsetof(struct ciuki_setup_net,size), 4u},
+    {"offsetof.ciuki_setup_net.count", __builtin_offsetof(struct ciuki_setup_net,count), 8u},
+    {"offsetof.ciuki_setup_net.reserved", __builtin_offsetof(struct ciuki_setup_net,reserved), 12u},
+    {"offsetof.ciuki_setup_net.identity", __builtin_offsetof(struct ciuki_setup_net,identity), 16u},
+    {"constant.CIUKI_SETUP_FAT_VERSION", CIUKI_SETUP_FAT_VERSION, 1u},
+    {"constant.CIUKI_SETUP_FAT_QUERY", CIUKI_SETUP_FAT_QUERY, 1398013953u},
+    {"constant.CIUKI_SETUP_FAT_ATTRIB", CIUKI_SETUP_FAT_ATTRIB, 1398013954u},
+    {"constant.CIUKI_SETUP_CLOCK_SET", CIUKI_SETUP_CLOCK_SET, 1398013955u},
+    {"constant.CIUKI_SETUP_INDEX_NONE", CIUKI_SETUP_INDEX_NONE, 4294967295u},
+    {"sizeof.ciuki_net_config", sizeof(struct ciuki_net_config), 232u},
+    {"alignof.ciuki_net_config", _Alignof(struct ciuki_net_config), 4u},
+    {"offsetof.ciuki_net_config.enabled", __builtin_offsetof(struct ciuki_net_config,enabled), 0u},
+    {"offsetof.ciuki_net_config.dhcp", __builtin_offsetof(struct ciuki_net_config,dhcp), 4u},
+    {"offsetof.ciuki_net_config.speed", __builtin_offsetof(struct ciuki_net_config,speed), 8u},
+    {"offsetof.ciuki_net_config.duplex", __builtin_offsetof(struct ciuki_net_config,duplex), 12u},
+    {"offsetof.ciuki_net_config.address", __builtin_offsetof(struct ciuki_net_config,address), 16u},
+    {"offsetof.ciuki_net_config.mask", __builtin_offsetof(struct ciuki_net_config,mask), 20u},
+    {"offsetof.ciuki_net_config.gateway", __builtin_offsetof(struct ciuki_net_config,gateway), 24u},
+    {"offsetof.ciuki_net_config.dns", __builtin_offsetof(struct ciuki_net_config,dns), 28u},
+    {"offsetof.ciuki_net_config.hostname", __builtin_offsetof(struct ciuki_net_config,hostname), 40u},
+    {"offsetof.ciuki_net_config.domain", __builtin_offsetof(struct ciuki_net_config,domain), 104u},
+    {"sizeof.ciuki_setup_fat", sizeof(struct ciuki_setup_fat), 348u},
+    {"alignof.ciuki_setup_fat", _Alignof(struct ciuki_setup_fat), 4u},
+    {"offsetof.ciuki_setup_fat.version", __builtin_offsetof(struct ciuki_setup_fat,version), 0u},
+    {"offsetof.ciuki_setup_fat.size", __builtin_offsetof(struct ciuki_setup_fat,size), 4u},
+    {"offsetof.ciuki_setup_fat.mount_generation", __builtin_offsetof(struct ciuki_setup_fat,mount_generation), 8u},
+    {"offsetof.ciuki_setup_fat.attributes", __builtin_offsetof(struct ciuki_setup_fat,attributes), 12u},
+    {"offsetof.ciuki_setup_fat.cluster_index", __builtin_offsetof(struct ciuki_setup_fat,cluster_index), 16u},
+    {"offsetof.ciuki_setup_fat.cluster_sectors", __builtin_offsetof(struct ciuki_setup_fat,cluster_sectors), 20u},
+    {"offsetof.ciuki_setup_fat.file_size", __builtin_offsetof(struct ciuki_setup_fat,file_size), 24u},
+    {"offsetof.ciuki_setup_fat.chain_generation", __builtin_offsetof(struct ciuki_setup_fat,chain_generation), 32u},
+    {"offsetof.ciuki_setup_fat.lba", __builtin_offsetof(struct ciuki_setup_fat,lba), 40u},
+    {"offsetof.ciuki_setup_fat.name", __builtin_offsetof(struct ciuki_setup_fat,name), 48u},
+    {"offsetof.ciuki_setup_fat.alias", __builtin_offsetof(struct ciuki_setup_fat,alias), 308u},
+    {"sizeof.ciuki_setup_clock", sizeof(struct ciuki_setup_clock), 24u},
+    {"alignof.ciuki_setup_clock", _Alignof(struct ciuki_setup_clock), 4u},
+    {"offsetof.ciuki_setup_clock.version", __builtin_offsetof(struct ciuki_setup_clock,version), 0u},
+    {"offsetof.ciuki_setup_clock.size", __builtin_offsetof(struct ciuki_setup_clock,size), 4u},
+    {"offsetof.ciuki_setup_clock.seconds", __builtin_offsetof(struct ciuki_setup_clock,seconds), 8u},
+    {"offsetof.ciuki_setup_clock.offset_minutes", __builtin_offsetof(struct ciuki_setup_clock,offset_minutes), 16u},
+    {"offsetof.ciuki_setup_clock.rtc_local", __builtin_offsetof(struct ciuki_setup_clock,rtc_local), 20u},
     {"constant.ENOTSOCK", ENOTSOCK, 88u},
     {"constant.EDESTADDRREQ", EDESTADDRREQ, 89u},
     {"constant.EPROTOTYPE", EPROTOTYPE, 91u},
@@ -769,7 +850,6 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_net_state.address_configured", __builtin_offsetof(struct ciuki_net_state, address_configured), 88u},
     {"offsetof.ciuki_net_state.ipv4", __builtin_offsetof(struct ciuki_net_state, ipv4), 92u},
     /* f2-100: netctl (syscall 90) records and constants. */
-    {"alignof.ciuki_net_config", _Alignof(struct ciuki_net_config), 4u},
     {"alignof.ciuki_net_control", _Alignof(struct ciuki_net_control), 4u},
     {"constant.CIUKI_NETCTL_GET", CIUKI_NETCTL_GET, 0u},
     {"constant.CIUKI_NETCTL_RELEASE", CIUKI_NETCTL_RELEASE, 3u},
@@ -779,16 +859,6 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_NET_MEDIA_10", CIUKI_NET_MEDIA_10, 2u},
     {"constant.CIUKI_NET_MEDIA_100", CIUKI_NET_MEDIA_100, 4u},
     {"constant.CIUKI_NET_MEDIA_AUTO", CIUKI_NET_MEDIA_AUTO, 1u},
-    {"offsetof.ciuki_net_config.address", __builtin_offsetof(struct ciuki_net_config, address), 16u},
-    {"offsetof.ciuki_net_config.dhcp", __builtin_offsetof(struct ciuki_net_config, dhcp), 4u},
-    {"offsetof.ciuki_net_config.dns", __builtin_offsetof(struct ciuki_net_config, dns), 28u},
-    {"offsetof.ciuki_net_config.domain", __builtin_offsetof(struct ciuki_net_config, domain), 104u},
-    {"offsetof.ciuki_net_config.duplex", __builtin_offsetof(struct ciuki_net_config, duplex), 12u},
-    {"offsetof.ciuki_net_config.enabled", __builtin_offsetof(struct ciuki_net_config, enabled), 0u},
-    {"offsetof.ciuki_net_config.gateway", __builtin_offsetof(struct ciuki_net_config, gateway), 24u},
-    {"offsetof.ciuki_net_config.hostname", __builtin_offsetof(struct ciuki_net_config, hostname), 40u},
-    {"offsetof.ciuki_net_config.mask", __builtin_offsetof(struct ciuki_net_config, mask), 20u},
-    {"offsetof.ciuki_net_config.speed", __builtin_offsetof(struct ciuki_net_config, speed), 8u},
     {"offsetof.ciuki_net_control.address", __builtin_offsetof(struct ciuki_net_control, address), 320u},
     {"offsetof.ciuki_net_control.config", __builtin_offsetof(struct ciuki_net_control, config), 16u},
     {"offsetof.ciuki_net_control.count", __builtin_offsetof(struct ciuki_net_control, count), 12u},
@@ -820,7 +890,6 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_net_control.tx_errors", __builtin_offsetof(struct ciuki_net_control, tx_errors), 376u},
     {"offsetof.ciuki_net_control.tx_packets", __builtin_offsetof(struct ciuki_net_control, tx_packets), 360u},
     {"offsetof.ciuki_net_control.version", __builtin_offsetof(struct ciuki_net_control, version), 0u},
-    {"sizeof.ciuki_net_config", sizeof(struct ciuki_net_config), 232u},
     {"sizeof.ciuki_net_control", sizeof(struct ciuki_net_control), 400u},
     /* f1-26: optional display-grant accelerator, literal wire contract. */
     {"constant.CIUKI_SYS_DISPLAY_ACCEL", CIUKI_SYS_DISPLAY_ACCEL, 77u},

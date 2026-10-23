@@ -849,6 +849,56 @@ struct ciuki_net_control {
 _Static_assert(sizeof(struct ciuki_net_config) == 232, "network configuration ABI");
 _Static_assert(sizeof(struct ciuki_net_control) == 400, "network control ABI");
 
+/* f9-04b: DEVCTL on a retained FAT file/directory description. Setup mode
+ * and setup_capability are mandatory. INDEX_NONE queries metadata only.
+ * Continuations must echo mount_generation and chain_generation. A changed
+ * mount/chain returns EAGAIN; EOF is ENOENT. lba is an absolute disk sector.
+ * ATTRIB preserves the directory/volume bits and never changes file data. */
+#define CIUKI_SETUP_FAT_VERSION 1u
+#define CIUKI_SETUP_FAT_QUERY 0x53540001u
+#define CIUKI_SETUP_FAT_ATTRIB 0x53540002u
+#define CIUKI_SETUP_CLOCK_SET 0x53540003u
+#define CIUKI_SETUP_NET_QUERY 0x53540004u
+#define CIUKI_SETUP_INDEX_NONE 0xffffffffu
+struct ciuki_setup_fat {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mount_generation;
+    uint32_t attributes;
+    uint32_t cluster_index;
+    uint32_t cluster_sectors;
+    uint64_t file_size;
+    uint64_t chain_generation;
+    uint64_t lba;
+    char name[260];
+    char alias[40];
+};
+/* SET is authorized by the same capability; seconds is UTC, offset is east
+ * of UTC. rtc_local is 0/1. The persistent convention is written by the
+ * shared configuration writer before this call. */
+struct ciuki_setup_clock {
+    uint32_t version;
+    uint32_t size;
+    int64_t seconds;
+    int32_t offset_minutes;
+    uint32_t rtc_local;
+};
+/* Read-only physical identities for f2-100 NETWORK.INI, at most two NICs. */
+struct ciuki_setup_net_identity {
+    uint32_t vendor;
+    uint32_t device;
+    uint8_t mac[6];
+    uint8_t reserved[2];
+};
+struct ciuki_setup_net {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_setup_net_identity identity[2];
+};
+
+
 /* /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
  * removable_mask includes ejectable USB and optical media; type[] distinguishes them.
  * A removal names a generation and ejects the physical USB device or CD. */

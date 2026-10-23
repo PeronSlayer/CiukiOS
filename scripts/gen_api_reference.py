@@ -16,6 +16,8 @@ def headers(root=ROOT):
     result["deskui.h"] = root / "apps/libdeskui/deskui.h"
     result["deskui/v3.h"] = root / "apps/libdeskui/v3.h"
     result["deskui/textarea.h"] = root / "apps/libdeskui/textarea.h"
+    for name in ("setup_txn.h", "setup_inf.h"):
+        result[name] = root / "sdk/libsetup/include" / name
     return dict(sorted(result.items()))
 
 

@@ -28,6 +28,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/storage.h>
 #include <ciuki/reboot.h>
+#include <ciuki/setup_mode.h>
+#pragma weak setup_mode
 #include <ciuki/net.h>
 #include <ciuki/blackbox.h>
 #pragma weak net_shutdown
@@ -372,7 +374,8 @@ static int flush_storage(void)
 int32_t power_syscall(uint32_t action)
 {
     struct process *caller = proc_current();
-    if (!caller || !supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid())
+    if (!caller || (!(setup_mode && setup_mode() && caller->setup_capability) &&
+        (!supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid())))
         return -EPERM;
     if (action == CIUKI_POWER_QUERY)
         return (int32_t)(CIUKI_POWER_CAN_REBOOT | (soft_off_available() ? CIUKI_POWER_CAN_OFF : 0));

@@ -383,7 +383,13 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(release["boot_options"], cfg.decode())
         self.assertEqual(release["payload_files"], len(PAYLOAD) + 2)          # + setup, RELEASE.JSON
         self.assertEqual(release["content_digest"], self.manifest["content_digest"])
-        records = {r["path"]: r for r in self.manifest["boot_image"]["files"]}
+        boot = self.manifest["boot_image"]
+        self.assertEqual(boot["boot_cfg_template"].encode("ascii"), PAYLOAD["/system/BOOT.CFG"])
+        self.assertEqual(boot["boot_cfg_sha256"], sha(PAYLOAD["/system/BOOT.CFG"]))
+        self.assertIn("/Program Files/Common Files", [r["path"] for r in boot["directories"]])
+        self.assertTrue(all(r["attributes"] & 16 for r in boot["directories"]))
+        self.assertTrue(all(isinstance(r["attributes"], int) for r in boot["files"]))
+        records = {r["path"]: r for r in boot["files"]}
         for path, data in PAYLOAD.items():
             if path == "/system/BOOT.CFG":
                 continue
