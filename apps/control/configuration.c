@@ -6,6 +6,8 @@
 #include "../desktop/settings.h"
 #include "../desktop/catalog.h"
 #include "../../sdk/libreg/internal.h"
+#include <ciuki/tzrule.h>
+#include <ciuki/tzdata.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +33,12 @@ static int registry(const struct cp_configuration_store *s,const char *root,cons
         if (!e) e=string_value(t,"System\\Identity","ComputerName",a->computer_name);
         if (!e) e=number_value(t,"System\\TimeZone","OffsetMinutes",a->tz_minutes);
         if (!e) e=number_value(t,"System\\TimeZone","RTCLocal",a->clock==SETUP_CLOCK_LOCAL);
+        /* G1: the zone and its POSIX rule (clock.cfg is the kernel's copy). */
+        int zone=ciuki_tz_find(a->tz_zone);
+        char rule[TZR_TEXT]; if (zone<0) tzr_fixed_text(a->tz_minutes,rule,sizeof(rule));
+        if (!e) e=string_value(t,"System\\TimeZone","Zone",zone>=0 ? ciuki_tz_zones[zone].id : "");
+        if (!e) e=string_value(t,"System\\TimeZone","TZ",zone>=0 ? ciuki_tz_zones[zone].tz : rule);
+        if (!e) e=number_value(t,"System\\TimeZone","AutoDST",1);
     } else {
         static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware"};
         for (unsigned i=0;!e && i<DESK_GAME_COUNT;i++) {
@@ -91,15 +99,27 @@ int cp_configuration_write(const struct cp_configuration_store *s,const struct s
     if (!e) e=registry(s,"System",a);
     if (!e) e=registry(s,"Programs",a);
     if (!e) e=network(s,a);
+    /* G1: clock.cfg version 2 (lib/tzrule.c): the zone's rule, automatic
+     * daylight saving, and the offset of the local time written to the RTC
+     * now (rtc_bias_minutes), so boot reads the RTC back exactly. */
+    int64_t seconds=0; int32_t offset=a->tz_minutes;
     if (!e) {
-        char text[96]; int n=snprintf(text,sizeof(text),"version=1\nrtc_local=%u\noffset_minutes=%d\n",a->clock==SETUP_CLOCK_LOCAL,a->tz_minutes);
-        e=s->write(s->ctx,"system/settings/clock.cfg",text,(unsigned)n);
-    }
-    if (!e) {
-        int64_t seconds=s->now(s->ctx);
+        seconds=s->now(s->ctx);
         if ((a->clock_adjust_s>0 && seconds>INT64_MAX-a->clock_adjust_s) ||
             (a->clock_adjust_s<0 && seconds<INT64_MIN-a->clock_adjust_s)) return -EOVERFLOW;
-        e=s->clock(s->ctx,seconds+a->clock_adjust_s,a->tz_minutes,a->clock==SETUP_CLOCK_LOCAL);
+        seconds+=a->clock_adjust_s;
+        struct tzr_config c; tzr_config_default(&c);
+        int zone=ciuki_tz_find(a->tz_zone);
+        c.rtc_local=a->clock==SETUP_CLOCK_LOCAL; c.auto_dst=true; c.offset_minutes=a->tz_minutes;
+        if (zone>=0) { snprintf(c.zone,sizeof(c.zone),"%s",ciuki_tz_zones[zone].id); snprintf(c.tz,sizeof(c.tz),"%s",ciuki_tz_zones[zone].tz); }
+        else tzr_fixed_text(a->tz_minutes,c.tz,sizeof(c.tz));
+        struct tzr r;
+        if (!tzr_config_rule(&c,&r)) return -EINVAL;
+        offset=tzr_offset(&r,seconds,0)/60;
+        c.rtc_bias_minutes=c.rtc_local ? offset : 0;
+        char text[512]; size_t n=tzr_config_format(&c,text,sizeof(text));
+        e=n ? s->write(s->ctx,"system/settings/clock.cfg",text,(unsigned)n) : -E2BIG;
     }
+    if (!e) e=s->clock(s->ctx,seconds,offset,a->clock==SETUP_CLOCK_LOCAL);
     return e;
 }

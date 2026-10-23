@@ -4,6 +4,7 @@
 #include <ciuki/clock.h>
 #include <ciuki/setup_mode.h>
 #include <ciuki/storage.h>
+#include <ciuki/systime.h>
 extern bool fs_rtc_store(uint16_t,uint16_t,uint8_t) __attribute__((weak));
 static bool leap_year(unsigned y) { return !(y%4) && (y%100 || !(y%400)); }
 int file_setup_clock(struct process *p,const struct ciuki_setup_clock *q)
@@ -27,31 +28,47 @@ int file_setup_clock(struct process *p,const struct ciuki_setup_clock *q)
     return 0;
 }
 
-/* Clock starts after storage_init but before native process bootstrap. Read
- * only; malformed/missing settings retain the historical UTC convention. */
-int file_clock_rtc_offset(void)
+/* G1: system/settings/clock.cfg store of the time-zone service
+ * (proc/timezone.c, codec in lib/tzrule.c). Clock start runs after
+ * storage_init but before native process bootstrap; a missing or malformed
+ * file keeps the historical UTC convention. */
+#define CLOCK_CFG "C:\\system\\settings\\clock.cfg"
+static int clock_table(struct vfs_table **out)
 {
     struct storage *s=storage_get();
-    if (!s || !s->vfs.volumes[2]) return 0;
+    if (!s || !s->vfs.volumes[2]) return -ENODEV;
     struct vfs_table *t=kzalloc(sizeof(*t));
-    if (!t) return 0;
-    int offset=0;
-    if (!vfs_table_init(&s->vfs,t,2)) {
-        int h=vfs_open(t,"C:\\system\\settings\\clock.cfg",VFS_READ,VFS_DENY_NONE,0);
-        char text[96]={0}; size_t n=0;
-        if (h>=0) {
-            int e=vfs_read(t,h,text,sizeof(text)-1,&n); vfs_close(t,h);
-            const char prefix[]="version=1\nrtc_local=1\noffset_minutes=";
-            if (!e && n>sizeof(prefix)-1 && !memcmp(text,prefix,sizeof(prefix)-1)) {
-                size_t i=sizeof(prefix)-1; int sign=1,value=0;
-                if (text[i]=='-') { sign=-1; i++; }
-                size_t start=i;
-                while (i<n && text[i]>='0' && text[i]<='9' && i-start<4) value=value*10+text[i++]-'0';
-                value*=sign;
-                if (i>start && i+1==n && text[i]=='\n' && value>=-720 && value<=840) offset=value*60;
-            }
-        }
-        vfs_table_destroy(t);
+    if (!t) return -ENOMEM;
+    if (vfs_table_init(&s->vfs,t,2)) { kfree(t); return -EIO; }
+    *out=t; return 0;
+}
+int timezone_store_read(char *text,size_t capacity,size_t *length)
+{
+    struct vfs_table *t; int e=clock_table(&t); if (e) return e;
+    int h=vfs_open(t,CLOCK_CFG,VFS_READ,VFS_DENY_NONE,0);
+    if (h<0) e=-ENOENT;
+    else {
+        size_t n=0; e=vfs_read(t,h,text,capacity,&n); vfs_close(t,h);
+        if (!e && n==capacity) e=-E2BIG;
+        if (!e) *length=n; else e=-EIO;
     }
-    kfree(t); return offset;
+    vfs_table_destroy(t); kfree(t); return e;
+}
+int timezone_store_write(const char *text,size_t length)
+{
+    struct vfs_table *t; int e=clock_table(&t); if (e) return e;
+    e=vfs_mkdir(t,"C:\\system\\settings",0);
+    if (e && e!=-FS_EEXIST) e=-EIO;
+    else {
+        int h=vfs_open(t,CLOCK_CFG,VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_ALL,0);
+        if (h<0) e=-EIO;
+        else {
+            size_t n=0; e=vfs_write(t,h,text,length,&n);
+            if (!e && n!=length) e=-FS_EIO;
+            if (!e) e=vfs_commit(t,h);
+            int closed=vfs_close(t,h);
+            e=e || closed ? -EIO : 0;
+        }
+    }
+    vfs_table_destroy(t); kfree(t); return e;
 }

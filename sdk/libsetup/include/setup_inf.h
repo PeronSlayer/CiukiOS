@@ -82,7 +82,9 @@ struct setup_answers {
     char user_name[4 * SETUP_USER_MAX + 1];
     char computer_name[SETUP_COMPUTER_MAX + 1]; /* upper case */
     char keyboard[8];                      /* layout id of the Control Panel page: "us", "it" */
-    int16_t tz_minutes;                    /* offset east of UTC */
+    int16_t tz_minutes;                    /* standard offset east of UTC */
+    char tz_zone[48];                      /* G1: bundled IANA zone (ciuki/tzdata.h) with its
+                                              daylight-saving rule; empty = fixed tz_minutes */
     enum setup_clock clock;                /* RTC convention; default local */
     int64_t clock_adjust_s;                /* interactive only: confirmed clock minus the system
                                               clock when confirmed; 0 keeps the current time */

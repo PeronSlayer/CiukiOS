@@ -218,7 +218,7 @@ application are in that application's section.
 | TB-3 | Move the taskbar to any screen edge and resize it | RK-tb | absent | — |
 | TB-4 | Toolbars: Quick Launch (with Show Desktop), Address, Links, Desktop, New Toolbar from a folder | RK-tb | absent | — |
 | TB-5 | Notification area: programs add icons with tooltips and menus (Shell_NotifyIcon) | MS-taskbar | partial | Fixed system icons for network, volume, removable media, notifications and battery (`shell.c:1179-1226`). Missing: a protocol message for program icons; Win32 `Shell_NotifyIconA` only logs (`sdk/win32/shell/execute.c:104`) |
-| TB-6 | Clock: time in the tray, date in the tooltip, double-click opens Date/Time properties | RK-cpl | partial | Clock, 12/24 h, seconds, date tooltip (`shell.c:889-914,1049`); right-click menu with a Date and Time entry (`shell.c:2509-2516`). Missing: double-click; the clock shows UTC, not local time (see TM-2) |
+| TB-6 | Clock: time in the tray, date in the tooltip, double-click opens Date/Time properties | RK-cpl | done | G1: the tray clock shows local time; a double-click opens Date/Time Properties (`shell.c`); date tooltip and right-click entry unchanged |
 | TB-7 | Volume icon: click for a master slider and mute; double-click for Volume Control | RK-mm | partial | Slider, mute, tooltip, media keys (`shell.c:1234+,2528`; `desktop_test.c:914`). Missing: double-click to open the mixer |
 | TB-8 | Battery meter in the tray with tooltip (percent, time left), a click for the power meter | RK-power | partial | Icon, caution state and AC mark (`shell.c:1198-1224`). Missing: tooltip, percent; no data on the T23 (directive fx-18) |
 | TB-9 | Network and removable-media icons | — | done | `shell.c:923,1040-1049,1104`; `tests/host/desktop/network_tray_test.c`, `media_tray_test.c` |
@@ -230,7 +230,7 @@ application are in that application's section.
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | FM-1 | Views: Large Icons, Small Icons, List, Details, Thumbnails, as Web Page | MS-shell, RK-keys | partial | Large Icons, List and Details (`apps/libdeskui/deskui.h:187`, `apps/files/app.c:72,497`). Missing: Small Icons and Thumbnails (Web view is out of scope) |
-| FM-2 | Details columns Name, Size, Type, Modified (Attributes optional); click to sort; drag to resize; double-click to auto-fit | MS-shell | partial | Name, Size, Type and Modified; click sorts (`app.c:234-238,1592-1597`); the toolkit resizes (`list.c:472-478`). Missing: Attributes column; widths reset on every navigation (`files_layout`, `app.c:232-238,946`); no auto-fit; dates shown in UTC |
+| FM-2 | Details columns Name, Size, Type, Modified (Attributes optional); click to sort; drag to resize; double-click to auto-fit | MS-shell | partial | Name, Size, Type and Modified; click sorts (`app.c:234-238,1592-1597`); the toolkit resizes (`list.c:472-478`). Missing: Attributes column; widths reset on every navigation (`files_layout`, `app.c:232-238,946`); no auto-fit. Dates are local since G1 |
 | FM-3 | Arrange Icons by Name, Type, Size, Date; Auto Arrange; Line Up Icons | MS-shell | partial | "Sort by" in the View menu (`app.c:74-75,1421`); no Auto Arrange or Line Up |
 | FM-4 | Address bar with drop-down history and autocomplete | RK-keys (F4) | partial | Typed path, Enter, Esc, F4 (`app.c:1504,1560-1564`); no history or autocomplete |
 | FM-5 | Explorer two-pane view (folder tree) with F6 to switch panes, keypad +, − and * in the tree | RK-keys | partial | Places and Folders trees with splitter (`app.c:283-396`). Missing: hiding the tree (separate "Open" and "Explore" windows), keypad expand/collapse-all |
@@ -407,9 +407,9 @@ application are in that application's section.
 
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| TM-1 | Date/Time applet: calendar and clock to set date and time | RK-cpl, MS-time (SetLocalTime) | partial | The page shows the time and the 12/24 h and seconds toggles, then says "Setting it is not available yet: the kernel has no call for it." (`apps/control/app.c:1287-1293`). `CIUKI_SETUP_CLOCK_SET` (`abi.h:1025`) and `fs_rtc_write` (`src/kernel/fs/fs_port.c:146,203-215`) exist but only Setup uses them |
-| TM-2 | Time Zone tab with a map and "Automatically adjust clock for daylight saving changes"; local time everywhere | RK-cpl, MS-time (GetTimeZoneInformation) | partial | Setup stores `System\TimeZone` (`apps/control/configuration.c:32-33`, `apps/setup/pages.c:482`). Missing: it is never applied: every program gets `TZ=UTC0` (`apps/desktop/desktop.c:283,477`, `apps/files/files.c:59`, `win32_launcher.c:37`), the clock shows "RTC (UTC)" (`shell.c:2183`), there is no DST rule (`apps/setup/catalog.c:27`) |
-| TM-3 | RTC kept in local time, with time synchronisation tools | RK-cpl | partial | RTC as local or UTC through `clock.cfg` (`src/kernel/proc/setup_clock.c`); `tests/host/rtc_test.c`. No network time |
+| TM-1 | Date/Time applet: calendar and clock to set date and time | RK-cpl, MS-time (SetLocalTime) | done | G1: Date/Time Properties, Date & Time tab (calendar, clock, time edit, Apply = SetLocalTime through call 97, RTC written in local time); `apps/control/datetime.inc`, `tests/host/desktop/datetime_control_test.c`; [local-time.md](local-time.md) |
+| TM-2 | Time Zone tab with a map and "Automatically adjust clock for daylight saving changes"; local time everywhere | RK-cpl, MS-time (GetTimeZoneInformation) | partial | G1: Time Zone tab (60 bundled IANA zones with their POSIX rules, "Automatically adjust clock for daylight saving changes"); the zone applies to the kernel, every launched program (`TZ`), libc, FAT stamps, kernel32 GetTimeZoneInformation/GetLocalTime and DOS INT 1Ah. No map |
+| TM-3 | RTC kept in local time, with time synchronisation tools | RK-cpl | partial | G1: the RTC keeps local time (or UTC) with the bias recorded in clock.cfg version 2 and moved at every daylight-saving change, also after a change while switched off (`tests/host/proc/localtime_test.c`). No network time |
 | TM-4 | Regional Settings: locale with number, currency, time and date formats, used by programs (GetLocaleInfo, GetDateFormat) | RK-intl, MS-time (NLS) | absent | Programs run with `LC_ALL=C`; Win32 locale code exists in `sdk/win32/kernel32/locale.c` but no user setting feeds it |
 
 ## 21. Storage and file systems
@@ -541,7 +541,7 @@ The component list is RK-comp `[OptionalComponents]`.
 | AX-12 | Briefcase (synchronise files with a portable computer) | RK-comp, RK-mobile | absent | — |
 | AX-13 | Address Book, Outlook Express, NetMeeting, FrontPage Express, Chat | RK-comp | absent (scope) | Not in the 1.0 Beta goals |
 | AX-14 | Windows Scripting Host (`.vbs`, `.js`) | RK-comp | partial | CiukiOS runs Lua scripts in the Terminal (`apps/terminal/lua.c`); there is no Windows Script Host |
-| AX-15 | Clock (a Windows 3.x leftover, not in Windows 98) | — | done | `apps/accessories/clock_*`; UTC only (TM-2) |
+| AX-15 | Clock (a Windows 3.x leftover, not in Windows 98) | — | done | `apps/accessories/clock_*`; local time of the system zone since G1 |
 | AX-16 | MS-DOS Prompt | RK-comp | done | DOS-1 |
 | AX-17 | Command prompt for the native system | — | partial | Terminal with built-in commands and Lua (`apps/terminal/commands.c`, `docs/terminal.md`). Missing: pipes, redirection, batch files, and the `FORMAT`, `CHKDSK`, `ATTRIB`, `LABEL`, `PING` and `IPCONFIG` commands; `RUN` and `REG` are stubs (`commands.c:304`) |
 

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "../desktop/tz_env.h"
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
@@ -72,7 +73,8 @@ static int launch(struct files_app *a, const char *program, char *const argv[])
     const struct desk_catalog_entry *entry = name ? desk_catalog_find(name) : NULL;
     if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/control") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
-    char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
+    char tz[DESK_TZ_ENV_BYTES];
+    char *env[] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }

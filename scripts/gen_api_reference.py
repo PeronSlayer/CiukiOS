@@ -12,6 +12,8 @@ DEFAULT = ROOT / "docs/developer-api.md"
 def headers(root=ROOT):
     result = {"ciuki/" + p.name: p for p in sorted((root / "sdk/sysroot-overlay/include/ciuki").glob("*.h"))}
     result["ciuki/abi.h"] = root / "src/kernel/include/ciuki/abi.h"
+    for name in ("tzrule.h", "tzdata.h"):  # G1: installed into the SDK by build_sdk.py
+        result["ciuki/" + name] = root / "src/kernel/include/ciuki" / name
     result["ciuki/desktop.h"] = root / "apps/desktop/protocol.h"
     result["deskui.h"] = root / "apps/libdeskui/deskui.h"
     result["deskui/v3.h"] = root / "apps/libdeskui/v3.h"

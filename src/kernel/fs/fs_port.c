@@ -67,7 +67,12 @@ void fs_set_calendar_clock(fs_calendar_clock clock) { calendar=clock; }
 bool fs_calendar_sample(uint16_t *date, uint16_t *time, uint8_t *tenths) {
     return calendar && calendar(date,time,tenths);
 }
+/* G1: the kernel's local clock once the RTC seeded it (proc/clock.c);
+ * until then, and in host harnesses, the RTC calendar itself. */
+static fs_calendar_clock stamp;
+void fs_set_timestamp_clock(fs_calendar_clock clock) { stamp=clock; }
 void fs_timestamp(uint16_t *date, uint16_t *time, uint8_t *tenths) {
+    if (stamp && stamp(date,time,tenths)) return;
     if (calendar && calendar(date,time,tenths)) return;
     *date=0x21; *time=0; *tenths=0;
 }

@@ -85,6 +85,7 @@ struct desk_shell {
     unsigned save_game, save_op, save_bytes, save_quota, save_confirm, save_focus, save_busy;
     char save_status[160];
     uint64_t programs_click_ns;
+    uint64_t clock_click_ns;        /* G1: first click of a tray-clock double-click */
     int gate;                       /* runtime gate scenarios: defaults only, no settings I/O */
     struct sh_menu menus[SH_LEVELS];
     int levels, menu_owner;         /* menu_owner: client for SH_MENU_TASK, icon for SH_MENU_ICON */

@@ -278,6 +278,7 @@ static inline int fs_event_wait_request(struct fs_event *event,fs_lock *lock,enu
  * The same hook is used by the host, keeping FAT independent of the target. */
 typedef bool (*fs_calendar_clock)(uint16_t *date, uint16_t *time, uint8_t *tenths);
 void fs_set_calendar_clock(fs_calendar_clock);
+void fs_set_timestamp_clock(fs_calendar_clock);
 void fs_timestamp(uint16_t *date, uint16_t *time, uint8_t *tenths);
 /* Read-only MC146818 boundary. begin/end serialize a single sample, never
  * the timeout; read must not acknowledge register C or write CMOS data. */

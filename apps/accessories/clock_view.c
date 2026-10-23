@@ -100,10 +100,10 @@ void clock_paint(struct du_ui *u, void *user)
     hand(c, m * 12 + s / 5, FACE_R * 78 / 100, 3, HAND_COLOR);
     if (a->seconds_hand) hand(c, s * 12, FACE_R * 86 / 100, 1, SECOND_COLOR);
     acc_disc(c, FACE_X, FACE_Y, 4, a->seconds_hand ? SECOND_COLOR : HAND_COLOR);
-    /* Digital time and the zone below the dial. */
+    /* Digital local time below the dial (G1). */
     char text[64];
-    if (a->h24) snprintf(text, sizeof(text), "%02d:%02d:%02d UTC", h, m, s);
-    else snprintf(text, sizeof(text), "%d:%02d:%02d %s UTC", h % 12 ? h % 12 : 12, m, s, h < 12 ? "AM" : "PM");
+    if (a->h24) snprintf(text, sizeof(text), "%02d:%02d:%02d", h, m, s);
+    else snprintf(text, sizeof(text), "%d:%02d:%02d %s", h % 12 ? h % 12 : 12, m, s, h < 12 ? "AM" : "PM");
     struct du_rect box = { FACE_X - 70, 222, 140, 16 };
     du_fill(c, box, DU_WINDOW); du_edge(c, box, DU_SUNKEN_THIN);
     du_text(c, FACE_X - du_text_width(text) / 2, box.y + 5, text, DU_INK);
@@ -170,7 +170,7 @@ void clock_event(struct du_ui *u, const struct du_event *e, void *user)
         else if (e->id == CLOCK_M_24H) { a->h24 = !a->h24; a->view_items[1].flags = a->h24 ? DU_ITEM_CHECKED : 0; }
         else if (e->id == CLOCK_M_ABOUT)
             du_message(u, 1, "About Clock", "CiukiOS Clock and Calendar - Classic computing, one woof at a time.\n"
-                       "The system clock keeps UTC (battery clock).\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+                       "It shows the local time of the system time zone (Date/Time Properties).\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         u->focus = -1;
         break;
     case DU_EV_KEY: {

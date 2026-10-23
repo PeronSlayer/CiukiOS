@@ -193,7 +193,12 @@ int st_init(struct st_app *a, struct du_ui *u, const struct st_host *h)
     int licences = st_licences_load(a);
     int answers = st_answers_load(a);
     for (unsigned i = 0; i < st_keyboard_count; i++) if (!strcmp(st_keyboards[i].id, a->answers.keyboard)) a->kbd = (int)i;
-    int zone = st_zone_index(a->answers.tz_minutes);
+    /* G1: a TimeZone answer wins; otherwise an Italian keyboard selects
+     * Europe/Rome (Windows takes the default zone from the locale). */
+    int zone = st_zone_find(a->answers.tz_zone);
+    if (zone < 0 && (a->answers.present & (1u << SETUP_KEY_TIME_ZONE))) zone = st_zone_index(a->answers.tz_minutes);
+    if (zone >= 0) a->tz_chosen = 1;
+    else if (!strcmp(a->answers.keyboard, "it")) zone = st_zone_find(CIUKI_TZ_DEFAULT_ITALY);
     if (zone >= 0) a->tz = zone;
     a->clock_utc = a->answers.clock == SETUP_CLOCK_UTC;
     a->net_manual = a->answers.network == SETUP_NET_STATIC;
@@ -287,7 +292,7 @@ static int validate(struct st_app *a)
         if (parse_clock(a->clock_text, &local)) return invalid(a, ST_ID_CLOCK, "Type the date and time as YYYY-MM-DD HH:MM.");
         int64_t now = a->h.realtime ? a->h.realtime(a->h.ctx) : 0;
         int64_t shown = a->clock_shown - a->clock_shown % 60;   /* the minute that was shown */
-        int64_t typed = local - (int64_t)s->tz_minutes * 60;
+        int64_t typed = st_zone_local_to_utc(st_zone_find(s->tz_zone), s->tz_minutes, local);
         s->clock_adjust_s = a->clock_edited && typed != shown + 0 ? typed - (now - now % 60) : 0;
         s->present |= 1u << SETUP_KEY_USER_NAME | 1u << SETUP_KEY_COMPUTER_NAME | 1u << SETUP_KEY_KEYBOARD |
                       1u << SETUP_KEY_TIME_ZONE | 1u << SETUP_KEY_CLOCK;

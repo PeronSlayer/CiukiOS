@@ -828,6 +828,30 @@ __attribute__((noinline)) static void test_cd_player_menu(void)
     cd_player_error=0; desk_render_release(&d); fake_reset();
     puts("PASS CD Player: Accessories catalogue, Tango icon, Windows target, Win32 launch and failure dialog; native inventory unchanged");
 }
+/* G1: a double-click on the tray clock opens Date/Time Properties; a single
+ * click or two clicks too far apart do not. */
+__attribute__((noinline)) static void test_clock_double_click(void)
+{
+    struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
+    desk_program_add(&d,"control",elf,sizeof(elf));
+    struct desk_box b=desk_shell_clock_box(&d);
+    d.mouse_x=b.x+b.w/2; d.mouse_y=b.y+b.h/2;
+    expect_control_arg="--panel=datetime"; unsigned before=control_spawns;
+    uint64_t gap=(uint64_t)d.sh.cfg.double_click_ms*1000000ull;
+    d.now_ns=5000000000ull; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before);
+    d.now_ns+=gap+1; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before);                     /* too slow: a new first click */
+    d.now_ns+=gap/2; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before+1);
+    d.now_ns+=gap/2; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before+1);                   /* a third click starts over */
+    expect_control_arg=NULL; drop_all(&d); desk_render_release(&d); fake_reset();
+    puts("PASS G1 tray clock: double-click opens Date/Time Properties (--panel=datetime), single and slow clicks do not");
+}
 __attribute__((noinline)) static void test_games_menu(void)
 {
     struct desktop d;
@@ -1276,6 +1300,7 @@ int main(int argc,char **argv)
     if (argc==2 && !strcmp(argv[1],"--launch-async")) { test_launch_async(); return 0; }
 #endif
     test_network_service();
+    test_clock_double_click();
     test_media_removal_service();
     test_music_mixer();
     struct desktop d;

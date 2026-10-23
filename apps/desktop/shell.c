@@ -931,7 +931,8 @@ static void civil(uint64_t seconds, int *year, int *month, int *day, int *weekda
 static const char *const weekdays[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 static const char *const months[] = {"January", "February", "March", "April", "May", "June", "July",
                                      "August", "September", "October", "November", "December"};
-static uint64_t wall_seconds(const struct desktop *d) { return d->app_test ? 12 * 3600 : d->realtime_second; }
+/* G1: the tray shows local time (the system zone's current offset). */
+static uint64_t wall_seconds(const struct desktop *d) { return d->app_test ? 12 * 3600 : d->realtime_second + (uint64_t)(int64_t)d->local_offset; }
 static void clock_text(const struct desktop *d, char *out, size_t size)
 { desk_shell_clock_text_at(d, wall_seconds(d), out, size); }
 static void date_text(const struct desktop *d, char *out, size_t size, int long_form)
@@ -2857,7 +2858,7 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         du_text_fit(c, tx, y + 36 + 2 * step, right, line, SH_INK);
         snprintf(line, sizeof(line), "Build: %s", d->build_identity);
         du_text_fit(c, tx, y + 36 + 3 * step, right, line, SH_INK);
-        du_text(c, tx, y + 36 + 4 * step, d->realtime_source ? "Clock: RTC (UTC)" : "Clock: build seed (UTC)", SH_INK);
+        du_text(c, tx, y + 36 + 4 * step, !d->realtime_source ? "Clock: build seed (UTC)" : (d->time_flags & CIUKI_TIME_RTC_LOCAL) ? "Clock: RTC (local time)" : "Clock: RTC (UTC)", SH_INK);
         snprintf(line, sizeof(line), "Display: %u x %u, 32-bit colour", (unsigned)d->width, (unsigned)d->height);
         du_text(c, tx, y + 36 + 5 * step, line, SH_INK);
         du_hline(c, page.x + 10, page.y + page.h - 30, page.w - 20, DU_SHADOW);
@@ -3188,6 +3189,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
         }
         desk_menu_close(d);
     }
+    /* G1: double-clicking the tray clock opens Date/Time Properties. */
+    if (button==CIUKI_BUTTON_LEFT && desk_contains(desk_shell_clock_box(d),x,y)) {
+        if (d->sh.clock_click_ns && d->now_ns-d->sh.clock_click_ns<=(uint64_t)d->sh.cfg.double_click_ms*1000000ull) {
+            d->sh.clock_click_ns=0;
+            if (program_index(d,"control")>=0) launch_named(d,"control","--panel=datetime");
+        } else d->sh.clock_click_ns=d->now_ns ? d->now_ns : 1;
+        return 1;
+    }
     if (button==CIUKI_BUTTON_RIGHT) {
         int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
             desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) ? CP_POWER :
@@ -3444,17 +3453,18 @@ void desk_shell_scale_motion(struct desktop *d, int32_t *dx, int32_t *dy)
 }
 void desk_shell_clock_damage(struct desktop *d, uint64_t previous)
 {
-    if (d->realtime_second/60!=previous/60) {
+    uint64_t now = d->realtime_second + (uint64_t)(int64_t)d->local_offset;   /* G1: local edges */
+    if (now/60!=previous/60) {
         /* Date text changes only at midnight; its right-aligned previous
          * width can differ, so clear the bounded date region at that edge. */
-        if (d->realtime_second/86400!=previous/86400)
+        if (now/86400!=previous/86400)
             damage(d,(struct desk_box){(int)d->width-300,0,300,DESK_BAR});
-        if (d->sh.tooltip==1 && d->realtime_second/86400!=previous/86400) {
+        if (d->sh.tooltip==1 && now/86400!=previous/86400) {
             if(d->sh.tooltip_painted)damage(d,d->sh.tooltip_last);
             damage(d,tooltip_box(d));
         }
     }
-    if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) {
+    if (d->sh.cfg.clock_seconds || now/60!=previous/60) {
         /* Proportional digits and 12-hour rollover can move every tray icon
          * in the top bar. Erase their previous positions as well. */
         uint64_t old = d->app_test ? 12 * 3600 : previous;

@@ -822,6 +822,12 @@ enum ciuki_syscall {
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
     CIUKI_SYS_GETENTROPY = 91,
+```
+
+G1: outside 78-95 (left to F6) and after the Win32 family's 96.
+
+```c
+CIUKI_SYS_TIME = 97,
 };
 ```
 
@@ -1164,6 +1170,51 @@ struct ciuki_setup_net {
     uint32_t count;
     uint32_t reserved;
     struct ciuki_setup_net_identity identity[2];
+};
+```
+
+G1: system time zone and clock, syscall 97 (CIUKI_SYS_TIME): EBX=record,
+ECX=exact size; 0 or -errno. GET is open to every process and returns the
+live state. SET_ZONE, SET_LOCAL, SET_UTC and ACKNOWLEDGE need the time
+authority (desktop and Control Panel, delegated like the network one):
+EPERM otherwise. The kernel keeps UTC; the RTC holds local time when
+RTC_LOCAL (the Windows convention) and is rewritten at every change of
+zone, clock or daylight-saving period. offset_minutes are east of UTC.
+rule is a POSIX TZ string (ciuki/tzrule.h); zone an IANA identifier.
+
+```c
+#define CIUKI_TIME_VERSION 1u
+#define CIUKI_TIME_GET 0u
+#define CIUKI_TIME_SET_ZONE 1u
+#define CIUKI_TIME_SET_LOCAL 2u
+#define CIUKI_TIME_SET_UTC 3u
+#define CIUKI_TIME_ACKNOWLEDGE 4u
+#define CIUKI_TIME_AUTO_DST 1u
+#define CIUKI_TIME_RTC_LOCAL 2u
+#define CIUKI_TIME_DAYLIGHT 4u
+#define CIUKI_TIME_ADJUSTED 8u
+#define CIUKI_TIME_AUTHORITY 16u
+#define CIUKI_TIME_ZONE_MAX 48u
+#define CIUKI_TIME_RULE_MAX 64u
+#define CIUKI_TIME_NAME_MAX 16u
+struct ciuki_time_zone {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t flags;
+    int64_t utc_seconds;
+    int64_t local_seconds;
+    uint32_t milliseconds;
+    int32_t offset_minutes;
+    int32_t standard_minutes;
+    int32_t daylight_minutes;
+    int32_t rtc_bias_minutes;
+    uint32_t generation;
+    int64_t next_change;
+    char zone[48];
+    char rule[64];
+    char standard_name[16];
+    char daylight_name[16];
 };
 ```
 
@@ -5921,6 +5972,339 @@ int ciuki_input_read(int,struct ciuki_input_event *,uint32_t);
 #endif
 ```
 
+## `ciuki/timezone.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/timezone.h`.
+
+G1: the system time zone and clock (call 97, CIUKI_SYS_TIME; record and
+flags in ciuki/abi.h, docs/design/local-time.md).
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_USER_TIMEZONE_H
+#define CIUKI_USER_TIMEZONE_H
+#include <ciuki/abi.h>
+#include <stddef.h>
+```
+
+One operation (CIUKI_TIME_GET, _SET_ZONE, _SET_LOCAL, _SET_UTC,
+_ACKNOWLEDGE); version, size and operation are filled in. The record
+holds the state after the call. 0, or -1 with errno (EPERM without the
+time authority, EINVAL for a malformed rule or time, EBUSY, EIO).
+
+```c
+int ciuki_time_zone(struct ciuki_time_zone *zone, uint32_t operation);
+```
+
+"TZ=<rule>" of the system zone for a program about to be spawned (the
+standard-time part when automatic daylight saving is off); "TZ=UTC0"
+when the service is unavailable. Returns out.
+
+```c
+char *ciuki_tz_env(char *out, size_t capacity);
+#endif
+```
+
+## `ciuki/tzdata.h`
+
+Source: `src/kernel/include/ciuki/tzdata.h`.
+
+G1: the bundled time-zone list of Setup, Date/Time Properties and
+kernel32 GetTimeZoneInformation. The tz column is the POSIX footer line of
+the IANA tz database zone named in id (release 2026e,
+https://www.iana.org/time-zones; each footer is the last line of the
+compiled TZif file, RFC 9636 section 3.3), which states the rule in force
+today. Labels follow the Windows 98 "(GMT+hh:mm) cities" style; the
+standard/daylight names are the Windows time-zone key names returned by
+GetTimeZoneInformation. Ordered by standard offset, as the Windows list.
+Header-only data: every consumer gets its own read-only copy.
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_TZDATA_H
+#define CIUKI_TZDATA_H
+#include <stddef.h>
+#include <stdint.h>
+struct ciuki_tz_zone {
+    int16_t minutes;
+```
+
+standard offset east of UTC
+
+```c
+const char *id, *label, *tz, *standard, *daylight;
+};
+#define CIUKI_TZ_DEFAULT_ITALY "Europe/Rome"
+#define CIUKI_TZ_UTC "Etc/UTC"
+static const struct ciuki_tz_zone ciuki_tz_zones[] __attribute__((unused)) = {
+    {-720, "Etc/GMT+12", "(GMT-12:00) International Date Line West", "<-12>12", "Dateline Standard Time", ""},
+    {-660, "Pacific/Pago_Pago", "(GMT-11:00) Midway Island, Samoa", "SST11", "UTC-11", ""},
+    {-600, "Pacific/Honolulu", "(GMT-10:00) Hawaii", "HST10", "Hawaiian Standard Time", ""},
+    {-570, "Pacific/Marquesas", "(GMT-09:30) Marquesas Islands", "<-0930>9:30", "Marquesas Standard Time", ""},
+    {-540, "America/Anchorage", "(GMT-09:00) Alaska", "AKST9AKDT,M3.2.0,M11.1.0", "Alaskan Standard Time", "Alaskan Daylight Time"},
+    {-480, "America/Los_Angeles", "(GMT-08:00) Pacific Time (US & Canada)", "PST8PDT,M3.2.0,M11.1.0", "Pacific Standard Time", "Pacific Daylight Time"},
+    {-420, "America/Phoenix", "(GMT-07:00) Arizona", "MST7", "US Mountain Standard Time", ""},
+    {-420, "America/Denver", "(GMT-07:00) Mountain Time (US & Canada)", "MST7MDT,M3.2.0,M11.1.0", "Mountain Standard Time", "Mountain Daylight Time"},
+    {-360, "America/Chicago", "(GMT-06:00) Central Time (US & Canada)", "CST6CDT,M3.2.0,M11.1.0", "Central Standard Time", "Central Daylight Time"},
+    {-360, "America/Mexico_City", "(GMT-06:00) Mexico City", "CST6", "Central Standard Time (Mexico)", ""},
+    {-360, "America/Regina", "(GMT-06:00) Saskatchewan", "CST6", "Canada Central Standard Time", ""},
+    {-300, "America/New_York", "(GMT-05:00) Eastern Time (US & Canada)", "EST5EDT,M3.2.0,M11.1.0", "Eastern Standard Time", "Eastern Daylight Time"},
+    {-300, "America/Bogota", "(GMT-05:00) Bogota, Lima, Quito", "<-05>5", "SA Pacific Standard Time", ""},
+    {-240, "America/Halifax", "(GMT-04:00) Atlantic Time (Canada)", "AST4ADT,M3.2.0,M11.1.0", "Atlantic Standard Time", "Atlantic Daylight Time"},
+    {-240, "America/Caracas", "(GMT-04:00) Caracas, La Paz", "<-04>4", "SA Western Standard Time", ""},
+    {-210, "America/St_Johns", "(GMT-03:30) Newfoundland", "NST3:30NDT,M3.2.0,M11.1.0", "Newfoundland Standard Time", "Newfoundland Daylight Time"},
+    {-180, "America/Sao_Paulo", "(GMT-03:00) Brasilia", "<-03>3", "E. South America Standard Time", ""},
+    {-180, "America/Argentina/Buenos_Aires", "(GMT-03:00) Buenos Aires", "<-03>3", "Argentina Standard Time", ""},
+    {-120, "Atlantic/South_Georgia", "(GMT-02:00) Mid-Atlantic", "<-02>2", "UTC-02", ""},
+    {-60, "Atlantic/Azores", "(GMT-01:00) Azores", "<-01>1<+00>,M3.5.0/0,M10.5.0/1", "Azores Standard Time", "Azores Daylight Time"},
+    {-60, "Atlantic/Cape_Verde", "(GMT-01:00) Cape Verde Islands", "<-01>1", "Cape Verde Standard Time", ""},
+    {0, "Etc/UTC", "(GMT) Coordinated Universal Time", "UTC0", "Coordinated Universal Time", ""},
+    {0, "Europe/London", "(GMT) Dublin, Edinburgh, Lisbon, London", "GMT0BST,M3.5.0/1,M10.5.0", "GMT Standard Time", "GMT Daylight Time"},
+    {60, "Europe/Rome", "(GMT+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna", "CET-1CEST,M3.5.0,M10.5.0/3", "W. Europe Standard Time", "W. Europe Daylight Time"},
+    {60, "Europe/Paris", "(GMT+01:00) Brussels, Copenhagen, Madrid, Paris", "CET-1CEST,M3.5.0,M10.5.0/3", "Romance Standard Time", "Romance Daylight Time"},
+    {60, "Africa/Lagos", "(GMT+01:00) West Central Africa", "WAT-1", "W. Central Africa Standard Time", ""},
+    {120, "Europe/Athens", "(GMT+02:00) Athens, Bucharest", "EET-2EEST,M3.5.0/3,M10.5.0/4", "GTB Standard Time", "GTB Daylight Time"},
+    {120, "Europe/Helsinki", "(GMT+02:00) Helsinki, Kyiv, Riga, Sofia, Tallinn, Vilnius", "EET-2EEST,M3.5.0/3,M10.5.0/4", "FLE Standard Time", "FLE Daylight Time"},
+    {120, "Africa/Cairo", "(GMT+02:00) Cairo", "EET-2EEST,M4.5.5/0,M10.5.4/24", "Egypt Standard Time", "Egypt Daylight Time"},
+    {120, "Asia/Jerusalem", "(GMT+02:00) Jerusalem", "IST-2IDT,M3.4.4/26,M10.5.0", "Israel Standard Time", "Israel Daylight Time"},
+    {120, "Africa/Johannesburg", "(GMT+02:00) Harare, Pretoria", "SAST-2", "South Africa Standard Time", ""},
+    {180, "Europe/Moscow", "(GMT+03:00) Moscow, St. Petersburg", "MSK-3", "Russian Standard Time", ""},
+    {180, "Europe/Istanbul", "(GMT+03:00) Istanbul", "<+03>-3", "Turkey Standard Time", ""},
+    {180, "Africa/Nairobi", "(GMT+03:00) Nairobi", "EAT-3", "E. Africa Standard Time", ""},
+    {210, "Asia/Tehran", "(GMT+03:30) Tehran", "<+0330>-3:30", "Iran Standard Time", ""},
+    {240, "Asia/Dubai", "(GMT+04:00) Abu Dhabi, Muscat", "<+04>-4", "Arabian Standard Time", ""},
+    {240, "Asia/Baku", "(GMT+04:00) Baku", "<+04>-4", "Azerbaijan Standard Time", ""},
+    {270, "Asia/Kabul", "(GMT+04:30) Kabul", "<+0430>-4:30", "Afghanistan Standard Time", ""},
+    {300, "Asia/Karachi", "(GMT+05:00) Islamabad, Karachi", "PKT-5", "Pakistan Standard Time", ""},
+    {300, "Asia/Tashkent", "(GMT+05:00) Tashkent", "<+05>-5", "West Asia Standard Time", ""},
+    {330, "Asia/Kolkata", "(GMT+05:30) Chennai, Kolkata, Mumbai, New Delhi", "IST-5:30", "India Standard Time", ""},
+    {345, "Asia/Kathmandu", "(GMT+05:45) Kathmandu", "<+0545>-5:45", "Nepal Standard Time", ""},
+    {360, "Asia/Dhaka", "(GMT+06:00) Dhaka", "<+06>-6", "Bangladesh Standard Time", ""},
+    {390, "Asia/Yangon", "(GMT+06:30) Yangon (Rangoon)", "<+0630>-6:30", "Myanmar Standard Time", ""},
+    {420, "Asia/Bangkok", "(GMT+07:00) Bangkok, Hanoi, Jakarta", "<+07>-7", "SE Asia Standard Time", ""},
+    {480, "Asia/Shanghai", "(GMT+08:00) Beijing, Chongqing, Hong Kong, Urumqi", "CST-8", "China Standard Time", ""},
+    {480, "Asia/Singapore", "(GMT+08:00) Kuala Lumpur, Singapore", "<+08>-8", "Singapore Standard Time", ""},
+    {480, "Australia/Perth", "(GMT+08:00) Perth", "AWST-8", "W. Australia Standard Time", ""},
+    {540, "Asia/Tokyo", "(GMT+09:00) Osaka, Sapporo, Tokyo", "JST-9", "Tokyo Standard Time", ""},
+    {540, "Asia/Seoul", "(GMT+09:00) Seoul", "KST-9", "Korea Standard Time", ""},
+    {570, "Australia/Adelaide", "(GMT+09:30) Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3", "Cen. Australia Standard Time", "Cen. Australia Daylight Time"},
+    {570, "Australia/Darwin", "(GMT+09:30) Darwin", "ACST-9:30", "AUS Central Standard Time", ""},
+    {600, "Australia/Brisbane", "(GMT+10:00) Brisbane", "AEST-10", "E. Australia Standard Time", ""},
+    {600, "Australia/Sydney", "(GMT+10:00) Canberra, Melbourne, Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3", "AUS Eastern Standard Time", "AUS Eastern Daylight Time"},
+    {600, "Pacific/Guam", "(GMT+10:00) Guam, Port Moresby", "ChST-10", "West Pacific Standard Time", ""},
+    {660, "Pacific/Noumea", "(GMT+11:00) Solomon Is., New Caledonia", "<+11>-11", "Central Pacific Standard Time", ""},
+    {720, "Pacific/Auckland", "(GMT+12:00) Auckland, Wellington", "NZST-12NZDT,M9.5.0,M4.1.0/3", "New Zealand Standard Time", "New Zealand Daylight Time"},
+    {720, "Pacific/Fiji", "(GMT+12:00) Fiji", "<+12>-12", "Fiji Standard Time", ""},
+    {780, "Pacific/Tongatapu", "(GMT+13:00) Nuku'alofa", "<+13>-13", "Tonga Standard Time", ""},
+    {840, "Pacific/Kiritimati", "(GMT+14:00) Kiritimati Island", "<+14>-14", "Line Islands Standard Time", ""},
+};
+#define CIUKI_TZ_ZONE_COUNT (sizeof(ciuki_tz_zones) / sizeof(ciuki_tz_zones[0]))
+static inline int ciuki_tz_same(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+```
+
+Index of an IANA id, -1 when not bundled.
+
+```c
+static inline int ciuki_tz_find(const char *id)
+{
+    for (unsigned i = 0; id && i < CIUKI_TZ_ZONE_COUNT; i++) if (ciuki_tz_same(ciuki_tz_zones[i].id, id)) return (int)i;
+    return -1;
+}
+```
+
+First zone with this standard offset (the SETUP.INF "+hh:mm" form).
+
+```c
+static inline int ciuki_tz_find_minutes(int minutes)
+{
+    for (unsigned i = 0; i < CIUKI_TZ_ZONE_COUNT; i++) if (ciuki_tz_zones[i].minutes == minutes) return (int)i;
+    return -1;
+}
+#endif
+```
+
+## `ciuki/tzrule.h`
+
+Source: `src/kernel/include/ciuki/tzrule.h`.
+
+G1: POSIX TZ rules, civil calendar and the clock.cfg codec. Pure code with
+no library calls, shared by the kernel (src/kernel/lib/tzrule.c), libciuki
+(localtime/mktime), kernel32 and the host tests. All offsets are seconds
+EAST of UTC (the negation of the POSIX TZ offset).
+Sources: POSIX.1-2024 XBD 8.3 "TZ" (std offset dst [offset],start[/time],end[/time];
+Mm.w.d, Jn and n dates; time default 02:00:00; RFC 9636 3.3.1 extends the
+rule hours to -167..167) and the IANA tz database
+(https://www.iana.org/time-zones, release 2026e: the POSIX footer lines of
+the zones listed in ciuki/tzdata.h).
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_TZRULE_H
+#define CIUKI_TZRULE_H
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#define TZR_NAME 16u
+```
+
+abbreviation incl. NUL ("CEST", "+0530")
+
+```c
+#define TZR_TEXT 64u
+```
+
+longest accepted TZ string incl. NUL
+
+```c
+#define TZR_ZONE 48u
+```
+
+IANA identifier incl. NUL
+
+```c
+enum { TZR_DATE_NONE, TZR_DATE_M, TZR_DATE_J, TZR_DATE_N };
+struct tzr_when {
+    uint8_t kind, month, week, wday;
+```
+
+M: month 1..12, week 1..5 (5 = last), wday 0 = Sunday
+
+```c
+uint16_t day;
+```
+
+J: 1..365 (no leap day); N: 0..365
+
+```c
+int32_t seconds;
+```
+
+local wall time of the change, -167h..167h
+
+```c
+};
+struct tzr {
+    char std[TZR_NAME], dst[TZR_NAME];
+    int32_t std_offset, dst_offset;
+```
+
+seconds east of UTC
+
+```c
+bool has_dst;
+    struct tzr_when start, end;
+```
+
+start: std->dst, in standard time; end: dst->std, in daylight time
+
+```c
+};
+```
+
+Civil (proleptic Gregorian) helpers; days are counted from 1970-01-01.
+
+```c
+int64_t tzr_days_from_civil(int64_t year, unsigned month, unsigned day);
+void tzr_civil_from_days(int64_t days, int64_t *year, unsigned *month, unsigned *day);
+unsigned tzr_weekday(int64_t days);
+```
+
+0 = Sunday
+
+```c
+bool tzr_leap(int64_t year);
+unsigned tzr_month_days(int64_t year, unsigned month);
+int64_t tzr_floor_div(int64_t a, int64_t b);
+```
+
+Parses a complete POSIX TZ string. False leaves *out unspecified.
+
+```c
+bool tzr_parse(const char *text, struct tzr *out);
+```
+
+The "UTC0" rule: the historical convention when no zone is configured.
+
+```c
+void tzr_utc(struct tzr *out);
+```
+
+Offset in force at a UTC instant; *dst (optional) tells which side.
+
+```c
+int32_t tzr_offset(const struct tzr *, int64_t utc, bool *dst);
+```
+
+Local wall time to UTC. isdst: 1 prefer daylight, 0 prefer standard,
+-1 automatic (an ambiguous hour resolves to its first occurrence, the
+daylight one; a skipped hour is read with the standard offset, so 02:30 on
+the spring day becomes 03:30 daylight). *dst (optional) is the side used.
+
+```c
+int64_t tzr_local_to_utc(const struct tzr *, int64_t local, int isdst, bool *dst);
+```
+
+First change strictly after utc, false when the zone has no daylight time.
+
+```c
+bool tzr_next_change(const struct tzr *, int64_t utc, int64_t *at);
+```
+
+UTC instants of the year's two changes (start = std->dst).
+
+```c
+void tzr_changes(const struct tzr *, int64_t year, int64_t *start, int64_t *end);
+```
+
+The standard-time part of a rule ("CET-1" of "CET-1CEST,..."), used when
+automatic daylight-saving adjustment is off. Returns the length, 0 on
+a malformed rule or a short buffer.
+
+```c
+size_t tzr_standard_only(const char *text, char *out, size_t cap);
+```
+
+system/settings/clock.cfg, LF lines key=value. Version 1 (f9-04b):
+rtc_local and a fixed offset_minutes. Version 2 (G1) adds zone (IANA id),
+tz (POSIX rule), auto_dst and rtc_bias_minutes, the offset of the local
+time the RTC currently holds (it changes when the RTC is moved for a
+daylight-saving change). offset_minutes stays: the standard offset.
+
+```c
+struct tzr_config {
+    uint32_t version;
+    bool rtc_local, auto_dst;
+    int32_t offset_minutes, rtc_bias_minutes;
+    char zone[TZR_ZONE], tz[TZR_TEXT];
+};
+void tzr_config_default(struct tzr_config *);
+```
+
+version 2, UTC0, RTC in UTC
+
+```c
+bool tzr_config_parse(const char *text, size_t length, struct tzr_config *out);
+size_t tzr_config_format(const struct tzr_config *, char *out, size_t cap);
+```
+
+The rule a configuration selects (tz, its standard part without auto_dst).
+
+```c
+bool tzr_config_rule(const struct tzr_config *, struct tzr *out);
+```
+
+"<+0130>-1:30" style fixed rule for a minute offset; returns the length.
+
+```c
+size_t tzr_fixed_text(int32_t minutes, char *out, size_t cap);
+#endif
+```
+
 ## `ciuki/w32_diagnostics.h`
 
 Source: `sdk/sysroot-overlay/include/ciuki/w32_diagnostics.h`.
@@ -7307,7 +7691,14 @@ layout id of the Control Panel page: "us", "it"
 int16_t tz_minutes;
 ```
 
-offset east of UTC
+standard offset east of UTC
+
+```c
+char tz_zone[48];
+```
+
+G1: bundled IANA zone (ciuki/tzdata.h) with its
+                                              daylight-saving rule; empty = fixed tz_minutes
 
 ```c
 enum setup_clock clock;
