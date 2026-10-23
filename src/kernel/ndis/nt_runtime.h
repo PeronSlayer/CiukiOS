@@ -14,6 +14,7 @@
 #define NDIS_NT_INVALID 0xc000000du
 #define NDIS_NT_SMALL 0xc0000023u
 #define NDIS_NT_NOT_FOUND 0xc0000034u
+#define NDIS_NT_PENDING 0x103u
 struct ndis_nt_string { uint16_t length,maximum; uint32_t buffer; };
 struct ndis_nt_mdl32 {
     uint32_t next;
@@ -49,6 +50,13 @@ struct ndis_nt_runtime {
     unsigned callback_irql_depth[NDIS_HOST_DEPTH];
     struct { struct mm_pin pin;uint32_t mdl,bytes;bool active; } dma[NDIS_NT_MAP_REGISTERS];
     unsigned map_registers;uint32_t dma_bytes,map_maximum_buffer;
+    struct {
+        struct trap_frame frame;
+        uint32_t object[NDIS_NT_OBJECTS],token,generation,result;
+        unsigned count;
+        uint64_t due;
+        bool active,parked,ready,all,boolean_result,delay;
+    } wait[NDIS_HOST_DEPTH];
 };
 int ndis_nt_init(struct ndis_nt_runtime *,struct ndis_user_host *,const struct ndis_nt_ops *,
                   uint32_t arena,uint32_t bytes,const struct mm_pin *,uint32_t pin_offset);
@@ -68,6 +76,12 @@ int ndis_nt_event_init(struct ndis_nt_runtime *,uint32_t object,bool notificatio
 int ndis_nt_event_set(struct ndis_nt_runtime *,uint32_t object,int32_t increment,int32_t *previous);
 int ndis_nt_event_reset(struct ndis_nt_runtime *,uint32_t object,int32_t *previous);
 uint32_t ndis_nt_wait(struct ndis_nt_runtime *,uint32_t object,const int64_t *timeout);
+uint32_t ndis_nt_wait_begin(struct ndis_nt_runtime *,const uint32_t *,unsigned count,
+                            bool all,const int64_t *timeout,bool boolean_result);
+int ndis_nt_wait_park(struct ndis_nt_runtime *,struct trap_frame *);
+/* 1 resumed, 0 no wait, -1 top callback still waiting. */
+int ndis_nt_wait_resume(struct ndis_nt_runtime *,struct trap_frame *);
+uint32_t ndis_nt_delay_begin(struct ndis_nt_runtime *,uint64_t delta_100ns);
 int ndis_nt_timer_init(struct ndis_nt_runtime *,uint32_t object);
 int ndis_nt_timer_set(struct ndis_nt_runtime *,uint32_t object,int64_t due,uint32_t period_ms,uint32_t dpc,bool *was_set);
 int ndis_nt_timer_cancel(struct ndis_nt_runtime *,uint32_t object,bool *was_set);

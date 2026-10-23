@@ -5,6 +5,7 @@
 #include "user_memory.h"
 #include "channel.h"
 #include "nt_services.h"
+#include "ndis_services.h"
 struct ndis_native;
 /* Only compiled, reviewed records can admit execution. No user enable switch.
  * Exact revision/subsystem and image hash; qualification is lead-owned. */
@@ -43,10 +44,14 @@ struct ndis_native {
     void (*complete_tx)(void *,uint32_t,int);
     struct mm_pin runtime_pin;
     uint32_t runtime_physical,runtime_bytes,runtime_base,runtime_mapped;
-    struct ndis_user_export nt_exports[NDIS_NT_EXPORTS];
+    struct ndis_user_export nt_exports[NDIS_NT_EXPORTS+NDIS_SERVICE_COUNT];
     struct ndis_nt_runtime nt;
     struct ndis_nt_services services;
     struct kwait nt_wait;
+    struct ndis_miniport miniport;
+    struct ndis_services ndis;
+    struct netif *netif;
+    uint32_t net_token[NDIS_RING_SLOTS];uint16_t net_length[NDIS_RING_SLOTS];
 };
 /* n and its metadata have boot-pinned lifetime (never stack storage). Caller
  * reserves all image, payload, stacks, rings and metadata in F6 budget,
@@ -62,6 +67,8 @@ void ndis_native_tick(struct ndis_native *);
 int ndis_native_enqueue(struct ndis_native *,enum ndis_host_kind,uint32_t address,
                          unsigned argc,const uint32_t *arguments,uint64_t now,uint32_t *token);
 int ndis_native_irq_bind(struct ndis_native *,uint32_t isr,uint32_t dpc);
+int ndis_native_irq_unbind(struct ndis_native *);
+int ndis_native_miniport_init(struct ndis_native *);
 int ndis_native_take_result(struct ndis_native *,uint32_t generation,uint32_t token,uint32_t *result);
 unsigned ndis_native_pci_read(struct ndis_native *,unsigned offset,void *,unsigned bytes);
 unsigned ndis_native_pci_write(struct ndis_native *,unsigned offset,const void *,unsigned bytes);
@@ -80,4 +87,5 @@ int ndis_native_prepare(struct ndis_native *,struct ntimage *,const void *file,u
                          uint32_t image_base,uint32_t runtime_base);
 /* Pre-entry rollback only; quarantined/entered memory is retained. */
 int ndis_native_discard(struct ndis_native *);
+int ndis_native_miniport_start(struct ndis_native *,uint32_t driver,uint32_t path);
 #endif

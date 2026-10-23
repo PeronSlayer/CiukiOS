@@ -83,7 +83,7 @@ static void setup(void)
 static void service_tests(void)
 {
     setup();services=(struct ndis_nt_services){.runtime=&r,.port=port,.mmio=mmio,.stall=stall};
-    assert(ndis_nt_veneers(veneer_page,sizeof(veneer_page),0x500000,0x501000,veneers,32,&veneer_count) && veneer_count==32);
+    assert(ndis_nt_veneers(veneer_page,sizeof(veneer_page),0x500000,0x501000,veneers,NDIS_NT_EXPORTS,&veneer_count) && veneer_count==39);
     for(unsigned i=0;i<veneer_count;i++) {
         assert(veneers[i].address<0xc0000000 && veneers[i].symbol->implemented && !veneers[i].symbol->ordinal);
         if(veneers[i].symbol->kind==NDIS_DATA) assert(veneers[i].address==0x501000 && veneers[i].bytes==12);
@@ -115,6 +115,44 @@ static void service_tests(void)
     assert(call("ZwOpenFile",args,6)==0 && pe_u32(memory+0x3540)==1 && pe_u32(memory+0x3554)==1);
     args[0]=1;assert(call("ZwClose",args,1)==0 && call("ZwClose",args,1)==0xc0000008u);
     args[0]=0x203400;args[1]=0;assert(call("IofCompleteRequest",args,2)==NDIS_NT_INVALID && image.quarantined);
+}
+static void continuation_wait_tests(void)
+{
+    setup();uint32_t object[2]={0x200100,0x200120};int32_t previous;
+    assert(ndis_nt_event_init(&r,object[0],false,0,1));
+    assert(ndis_nt_event_init(&r,object[1],false,0,3));
+    struct trap_frame tf={.cs=0x1b,.eip=0x100090,.eflags=0x202,.user_esp=0x20f000,.ebx=42};
+    uint64_t outer=h.active[0].deadline;
+    assert(ndis_nt_wait_begin(&r,object,2,true,0,false)==NDIS_NT_PENDING);
+    assert(ndis_nt_wait_park(&r,&tf) && ndis_nt_wait_resume(&r,&tf)==-1);
+    uint32_t token;struct ndis_host_event event;
+    assert(ndis_host_enqueue(&h,NDIS_HOST_ISR,0x100010,0,now/10,&token));
+    assert(ndis_host_take(&h,now/10,&event) && h.irql==5);
+    assert(ndis_host_complete(&h,7,token,now/10) && h.irql==0);
+    assert(ndis_host_enqueue(&h,NDIS_HOST_DPC,0x100020,0,now/10,&token));
+    assert(ndis_host_take(&h,now/10,&event) && h.irql==2);
+    assert(ndis_nt_event_set(&r,object[0],1,&previous));
+    assert(ndis_nt_event_set(&r,object[1],2,&previous));
+    assert(ndis_host_complete(&h,7,token,now/10));
+    assert(ndis_nt_wait_resume(&r,&tf)==1 && tf.eax==0 && tf.ebx==42 && tf.eip==0x100090);
+    assert(h.active[0].deadline==outer && r.event[0].count==0 && r.event[1].count==1);
+    assert(ndis_nt_wait_begin(&r,object,2,false,0,false)==1); /* WaitAny index */
+    int64_t timeout=-100;
+    assert(ndis_nt_wait_begin(&r,object,1,false,&timeout,true)==NDIS_NT_PENDING);
+    assert(ndis_nt_wait_park(&r,&tf));now+=99;ndis_nt_poll(&r);
+    assert(ndis_nt_wait_resume(&r,&tf)==-1);now++;ndis_nt_poll(&r);
+    assert(ndis_nt_wait_resume(&r,&tf)==1 && tf.eax==0);
+    timeout=0;assert(ndis_nt_wait_begin(&r,object,1,false,&timeout,false)==NDIS_NT_TIMEOUT);
+    assert(ndis_nt_event_init(&r,object[0],true,0,1));
+    assert(ndis_nt_wait_begin(&r,object,1,false,0,true)==NDIS_NT_PENDING && r.wait[0].due==UINT64_MAX);
+    assert(ndis_nt_wait_park(&r,&tf) && ndis_nt_event_set(&r,object[0],1,&previous));
+    assert(ndis_nt_wait_resume(&r,&tf)==1 && tf.eax==1 && r.event[0].count==1);
+    assert(ndis_nt_delay_begin(&r,50)==NDIS_NT_PENDING && ndis_nt_wait_park(&r,&tf));
+    now+=50;assert(ndis_nt_wait_resume(&r,&tf)==1 && tf.eax==0);
+    setup();assert(ndis_nt_event_init(&r,object[0],true,0,1));
+    assert(ndis_nt_wait_begin(&r,object,1,false,0,true)==NDIS_NT_PENDING);
+    assert(ndis_nt_wait_park(&r,&tf));ndis_host_watchdog(&h,h.active[0].deadline);
+    assert(image.quarantined && !r.wait[0].active); /* indefinite wait never extends callback budget */
 }
 int main(int argc,char **argv)
 {
@@ -169,6 +207,7 @@ int main(int argc,char **argv)
     setup();assert(ndis_nt_raise(&r,2,&old));assert(!ndis_nt_pool(&r,1,8,1) && image.quarantined);
     setup();assert(ndis_nt_raise(&r,2,&old));assert(ndis_nt_wait(&r,0x200100,0)==NDIS_NT_INVALID && image.quarantined);
     service_tests();
+    continuation_wait_tests();
     if(argc==2) {
         FILE *out=fopen(argv[1],"wb");assert(out);
         assert(fwrite(veneer_page,1,31*32,out)==31*32 && !fclose(out));

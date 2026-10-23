@@ -57,5 +57,22 @@ int main(void)
     setup();memory[0]=0xf3;memory[1]=0x9c;assert(!ndis_flags_patch(&image.pe,&table,&workspace,image.hash));
     setup();memory[0]=0x9c;image.pe.sections[0].flags|=0x80000000;
     assert(!ndis_flags_patch(&image.pe,&table,&workspace,image.hash) && memory[0]==0x9c);
+    /* A pending ISR cannot pass STI until exactly one following instruction
+     * retires, including a trapped HLT and an INT3-patched PUSHFD. */
+    setup();host.dirql=5;memory[2]=0x9c;patch();
+    tf=(struct trap_frame){.cs=0x1b,.vector=13,.eflags=0x202,.eip=0x100000,.user_esp=0x104000};
+    host.virtual_if=false;
+    assert(ndis_host_gp(&host,&tf,0xfb) && host.sti_shadow && (tf.eflags&0x100));
+    uint32_t token;struct ndis_host_event event;
+    assert(ndis_host_enqueue(&host,NDIS_HOST_ISR,0x100010,0,0,&token));
+    assert(!ndis_host_take(&host,0,&event));
+    assert(ndis_host_gp(&host,&tf,0xf4)==2 && !host.sti_shadow && !(tf.eflags&0x100));
+    assert(ndis_host_take(&host,0,&event) && ndis_host_complete(&host,7,token,0));
+    host.virtual_if=false;tf.vector=13;assert(ndis_host_gp(&host,&tf,0xfb));
+    bp(&tf,2);assert(!host.sti_shadow && !(pe_u32(memory+0x3ffc)&0x100));
+    host.virtual_if=false;tf.vector=13;assert(ndis_host_gp(&host,&tf,0xfb));
+    /* Native RET retires on #DB at its target. */
+    tf.eip=0x100040;tf.vector=1;assert(ndis_host_debug(&host,&tf) && !host.sti_shadow && !(tf.eflags&0x100));
+    tf.vector=13;assert(ndis_host_gp(&host,&tf,0xfb) && !host.sti_shadow); /* already IF=1 */
     puts("PASS binary flag sites, nesting, callee, operand16, IRET, operands and tamper");fflush(stdout);return 0;
 }

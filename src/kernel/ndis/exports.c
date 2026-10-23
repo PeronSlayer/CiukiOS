@@ -9,22 +9,9 @@
 #define U(m,n,b,a) {m,n,NDIS_NO_ORDINAL,b,a,NDIS_FUNCTION,0,true}
 #define C(m,n) {m,n,NDIS_NO_ORDINAL,0,NDIS_ABI_CDECL,NDIS_FUNCTION,0,false}
 static const struct ndis_export exports[] = {
-    S("NDIS.SYS","NdisInitializeWrapper",16),
-    S("NDIS.SYS","NdisTerminateWrapper",8),
-    S("NDIS.SYS","NdisMRegisterMiniport",12),
-    S("NDIS.SYS","NdisMSetAttributesEx",20),
-    S("NDIS.SYS","NdisGetRoutineAddress",4),
-    S("NDIS.SYS","NdisMRegisterInterrupt",28),
-    S("NDIS.SYS","NdisMDeregisterInterrupt",4),
-    S("NDIS.SYS","NdisMSynchronizeWithInterrupt",12),
-    S("NDIS.SYS","NdisMAllocateSharedMemory",20),
-    S("NDIS.SYS","NdisMFreeSharedMemory",24),
-    S("NDIS.SYS","NdisMAllocateMapRegisters",20),
-    S("NDIS.SYS","NdisMFreeMapRegisters",4),
-    S("NDIS.SYS","NdisReadConfiguration",20),
-    S("NDIS.SYS","NdisOpenConfiguration",12),
-    S("NDIS.SYS","NdisCloseConfiguration",4),
-    S("NDIS.SYS","NdisMIndicateReceivePacket",12),
+#define ND(name,args,bytes,implemented) {"NDIS.SYS",#name,NDIS_NO_ORDINAL,bytes,bytes?NDIS_ABI_STDCALL:NDIS_ABI_CDECL,NDIS_FUNCTION,0,implemented},
+#include "ndis_exports.def"
+#undef ND
     S("NTOSKRNL.EXE","MmGetSystemRoutineAddress",4),
     S("NTOSKRNL.EXE","ExAllocatePoolWithTag",12),
     S("NTOSKRNL.EXE","ExFreePool",4),
@@ -33,10 +20,13 @@ static const struct ndis_export exports[] = {
     S("NTOSKRNL.EXE","KeRemoveQueueDpc",4),
     S("NTOSKRNL.EXE","KeSetTimer",16),
     S("NTOSKRNL.EXE","KeCancelTimer",4),
-    S("NTOSKRNL.EXE","KeInitializeEvent",12),
-    S("NTOSKRNL.EXE","KeSetEvent",12),
-    S("NTOSKRNL.EXE","KeResetEvent",4),
-    S("NTOSKRNL.EXE","KeWaitForSingleObject",20),
+    U("NTOSKRNL.EXE","KeInitializeEvent",12,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeSetEvent",12,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeResetEvent",4,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeWaitForSingleObject",20,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeWaitForMultipleObjects",32,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeInitializeSemaphore",12,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeReleaseSemaphore",16,NDIS_ABI_STDCALL),
 
     {"NTOSKRNL.EXE","KeTickCount",NDIS_NO_ORDINAL,0,NDIS_ABI_DATA,NDIS_DATA,0,true},
     C("NTOSKRNL.EXE","memcpy"), C("NTOSKRNL.EXE","memset"),

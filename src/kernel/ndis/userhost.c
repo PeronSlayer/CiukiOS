@@ -12,6 +12,7 @@ static uint64_t budget(enum ndis_host_kind k)
     case NDIS_HOST_DPC:return 50000;
     case NDIS_HOST_PASSIVE:return 500000;
     case NDIS_HOST_LIFECYCLE:return 10000000;
+    case NDIS_HOST_INLINE:return 50000;
     }
     return 0;
 }
@@ -127,15 +128,26 @@ int ndis_host_enqueue(struct ndis_user_host *h,enum ndis_host_kind kind,uint32_t
 int ndis_host_take(struct ndis_user_host *h,uint64_t now,struct ndis_host_event *event)
 {
     ndis_host_watchdog(h,now);
-    if(!ndis_host_live(h) || !event || !h->count || h->depth==NDIS_HOST_DEPTH) return 0;
+    if(!ndis_host_live(h) || !event || !h->count || h->depth==NDIS_HOST_DEPTH || h->sti_shadow) return 0;
     unsigned pick=h->head;
     if(h->depth) {
-        if(!h->virtual_if || h->synchronized || h->irql>=h->dirql) return 0;
-        /* Only an ISR preempts an ordinary callback on UP. */
+        if((!h->virtual_if || h->synchronized || h->irql>=h->dirql) && !h->inline_token[h->depth-1]) return 0;
+        /* A pending ISR preempts ordinary work; a parked wait admits DPCs,
+         * and an inline call admits only its kernel-owned continuation token. */
         unsigned i=0;
-        for(;i<h->count;i++) if(h->queue[(h->head+i)%NDIS_HOST_QUEUE].kind==NDIS_HOST_ISR) break;
+        bool waiting=h->nt && h->nt->wait[h->depth-1].active;
+        for(;i<h->count;i++) {
+            enum ndis_host_kind k=h->queue[(h->head+i)%NDIS_HOST_QUEUE].kind;
+            if((h->queue[(h->head+i)%NDIS_HOST_QUEUE].token==h->inline_token[h->depth-1] && k==NDIS_HOST_INLINE) ||
+               (k==NDIS_HOST_ISR && h->virtual_if && !h->synchronized && h->irql<h->dirql) ||
+               (waiting && k==NDIS_HOST_DPC && h->irql<2)) break;
+        }
         if(i==h->count) return 0;
         pick=(h->head+i)%NDIS_HOST_QUEUE;
+    } else if(h->virtual_if && !h->synchronized) {
+        for(unsigned i=0;i<h->count;i++) if(h->queue[(h->head+i)%NDIS_HOST_QUEUE].kind==NDIS_HOST_ISR) {
+            pick=(h->head+i)%NDIS_HOST_QUEUE;break;
+        }
     }
     struct ndis_host_event e=h->queue[pick];
     if(e.kind==NDIS_HOST_ISR && (!h->virtual_if || h->synchronized)) return 0;
@@ -146,8 +158,9 @@ int ndis_host_take(struct ndis_user_host *h,uint64_t now,struct ndis_host_event 
     }
     h->head=(h->head+1)%NDIS_HOST_QUEUE; h->count--;
     if(h->depth && e.deadline>h->active[0].deadline) e.deadline=h->active[0].deadline;
+    h->saved_irql[h->depth]=h->irql;
     h->active[h->depth++]=e;
-    h->irql=e.kind==NDIS_HOST_ISR?h->dirql:e.kind==NDIS_HOST_DPC?2:0;
+    h->irql=e.kind==NDIS_HOST_INLINE?h->irql:e.kind==NDIS_HOST_ISR?h->dirql:e.kind==NDIS_HOST_DPC?2:0;
     if(h->nt) {
         h->nt->callback_irql_depth[h->depth-1]=h->nt->irql_depth;
         ndis_nt_dpc_started(h->nt,e.token);
@@ -158,15 +171,14 @@ int ndis_host_complete(struct ndis_user_host *h,uint32_t generation,uint32_t tok
 {
     ndis_host_watchdog(h,now);
     if(!ndis_host_live(h) || generation!=h->generation || !h->depth ||
-       h->active[h->depth-1].token!=token || h->synchronized) return 0;
+       h->active[h->depth-1].token!=token || (h->synchronized && h->active[h->depth-1].kind!=NDIS_HOST_INLINE)) return 0;
     if(h->nt) {
         if(h->nt->irql_depth!=h->nt->callback_irql_depth[h->depth-1]) return 0;
         for(unsigned i=0;i<NDIS_NT_OBJECTS;i++)
             if(h->nt->lock[i].held && h->nt->lock[i].holder==token) return 0;
     }
     h->depth--;
-    h->irql=!h->depth?0:h->active[h->depth-1].kind==NDIS_HOST_ISR?h->dirql:
-        h->active[h->depth-1].kind==NDIS_HOST_DPC?2:0;
+    h->irql=h->saved_irql[h->depth];
     return 1;
 }
 bool ndis_host_cancel_queued(struct ndis_user_host *h,uint32_t generation,uint32_t token)
@@ -236,15 +248,34 @@ int ndis_host_gp(struct ndis_user_host *h,struct trap_frame *tf,uint8_t opcode)
 {
     if(!ndis_host_live(h) || !tf || tf->vector!=13 || tf->err ||
        (tf->cs&3)!=3 || (tf->eflags&0x20000) || tf->eip>=0xbfffffff) return 0;
+    if(opcode!=0xfa && opcode!=0xfb && opcode!=0xf4) return 0;
+    bool enable=opcode==0xfb && !h->virtual_if;
+    ndis_host_retired(h,tf);
     if(opcode==0xfa) h->virtual_if=false;
-    else if(opcode==0xfb) h->virtual_if=true;
-    else if(opcode!=0xf4) return 0;
+    else if(opcode==0xfb) {
+        h->virtual_if=true;
+        if(enable) { h->sti_shadow=true;h->shadow_tf=!!(tf->eflags&0x100);tf->eflags|=0x100; }
+    }
     tf->eip++; tf->eflags=(tf->eflags&~0x3000u)|0x202u;
     if(opcode==0xfb) h->ops.notify(h->ops.context);
     return opcode==0xf4?2:1; /* native caller yields; timer remains enabled */
 }
+void ndis_host_retired(struct ndis_user_host *h,struct trap_frame *tf)
+{
+    if(!h || !tf || !h->sti_shadow) return;
+    h->sti_shadow=false;
+    tf->eflags=(tf->eflags&~0x100u)|(h->shadow_tf?0x100u:0);
+    h->ops.notify(h->ops.context);
+}
+int ndis_host_debug(struct ndis_user_host *h,struct trap_frame *tf)
+{
+    if(!ndis_host_live(h) || !tf || tf->vector!=1 || (tf->cs&3)!=3 || !h->sti_shadow) return 0;
+    bool external=h->shadow_tf;
+    ndis_host_retired(h,tf);
+    return !external; /* Guest-requested debug remains an unsupported fault. */
+}
 uint32_t ndis_host_flags(const struct ndis_user_host *h,uint32_t physical)
-{ return (physical&~0x3200u)|2u|(h->virtual_if?0x200u:0); }
+{ return (physical&~(0x3200u|(h->sti_shadow&&!h->shadow_tf?0x100u:0)))|2u|(h->virtual_if?0x200u:0); }
 int ndis_host_restore_flags(struct ndis_user_host *h,uint32_t saved)
 {
     if(!ndis_host_live(h) || (saved&(0x3000u|0x4000u|0x20000u))) return 0;

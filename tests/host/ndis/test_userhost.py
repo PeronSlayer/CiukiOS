@@ -52,6 +52,8 @@ class UserHostTests(unittest.TestCase):
                     ["src/kernel/ndis/channel.c", "src/kernel/ndis/packet_ring.c",
                      "src/kernel/ndis/userhost.c", "src/kernel/ndis/ntimage.c",
                      "src/kernel/ndis/nt_services.c", "src/kernel/ndis/exports.c",
+                     "src/kernel/ndis/native_ndis.c", "src/kernel/ndis/miniport.c",
+                     "src/kernel/ndis/ndis_services.c", "src/kernel/ndis/netif.c",
                      "tests/host/ndis/native_test.c"], sanitizer)
 
     def test_native_undefined(self): self.native_binding("undefined")

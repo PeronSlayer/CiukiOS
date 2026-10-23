@@ -11,6 +11,7 @@ static bool live(struct ndis_nt_runtime *r)
 { return r && ndis_host_live(r->host) && mm_pin_valid && mm_pin_valid(&r->pin,r->host->generation); }
 static int bad(struct ndis_nt_runtime *r,const char *why)
 { if(r && r->host) ndis_host_stop(r->host,why,0,0,r->ops.now?r->ops.now(r->ops.context)/10:0);return 0; }
+static void poll_waits(struct ndis_nt_runtime *);
 static int read_mem(struct ndis_nt_runtime *r,uint32_t address,void *out,uint32_t bytes)
 { return live(r) && r->ops.read(r->ops.context,address,out,bytes); }
 static int write_mem(struct ndis_nt_runtime *r,uint32_t address,const void *in,uint32_t bytes)
@@ -35,6 +36,7 @@ void ndis_nt_stop(struct ndis_nt_runtime *r)
         r->dpc[i].queued=false;r->dpc[i].running_token=0;r->timer[i].armed=false;r->lock[i].held=false;
     }
     r->irql_depth=0;r->host->irql=0;r->host->synchronized=false;r->ops.wake(r->ops.context);
+    for(unsigned i=0;i<NDIS_HOST_DEPTH;i++) r->wait[i].active=false;
     /* Pool/MDL and original ledger pins deliberately survive quarantine. */
 }
 int ndis_nt_raise(struct ndis_nt_runtime *r,uint8_t level,uint8_t *old)
@@ -166,7 +168,11 @@ void ndis_nt_dpc_started(struct ndis_nt_runtime *r,uint32_t token)
 int ndis_nt_event_init(struct ndis_nt_runtime *r,uint32_t object,bool notification,int32_t count,int32_t limit)
 {
     if(!live(r) || !object || count<0 || count>limit || limit<1) return bad(r,"nt-event-state");
+    for(unsigned d=0;d<NDIS_HOST_DEPTH;d++) if(r->wait[d].active)
+        for(unsigned j=0;j<r->wait[d].count;j++) if(r->wait[d].object[j]==object) return bad(r,"nt-event-waiting");
     for(unsigned i=0;i<NDIS_NT_OBJECTS;i++) if(!r->event[i].live || r->event[i].address==object) {
+        uint32_t header[4]={notification?0x00040000u:0x00040001u,(uint32_t)count,object+8,object+8};
+        if(!write_mem(r,object,header,sizeof(header))) return bad(r,"nt-event-memory");
         r->event[i].address=object;r->event[i].count=count;r->event[i].limit=limit;
         r->event[i].notification=notification;r->event[i].live=true;return 1;
     }
@@ -179,7 +185,7 @@ int ndis_nt_event_set(struct ndis_nt_runtime *r,uint32_t object,int32_t incremen
         *previous=r->event[i].count;
         if(r->event[i].limit==1) r->event[i].count=1;
         else { if(increment>r->event[i].limit-r->event[i].count) return bad(r,"nt-semaphore-limit");r->event[i].count+=increment; }
-        r->ops.wake(r->ops.context);return 1;
+        poll_waits(r);r->ops.wake(r->ops.context);return 1;
     }
     return bad(r,"nt-event-uninitialized");
 }
@@ -206,6 +212,91 @@ static int due_time(struct ndis_nt_runtime *r,int64_t due,uint64_t *out)
 struct wait_context { struct ndis_nt_runtime *r; unsigned index; };
 static bool ready(void *ctx)
 { struct wait_context *w=ctx;return !live(w->r) || w->r->event[w->index].count>0; }
+static int event_index(struct ndis_nt_runtime *r,uint32_t object)
+{
+    for(unsigned i=0;i<NDIS_NT_OBJECTS;i++) if(r->event[i].live && r->event[i].address==object) return (int)i;
+    return -1;
+}
+static void poll_waits(struct ndis_nt_runtime *r)
+{
+    if(!live(r)) return;
+    for(unsigned d=0;d<NDIS_HOST_DEPTH;d++) {
+        if(!r->wait[d].active || r->wait[d].ready) continue;
+        unsigned signaled=0,first=NDIS_NT_OBJECTS;
+        for(unsigned j=0;j<r->wait[d].count;j++) {
+            int i=event_index(r,r->wait[d].object[j]);
+            if(i<0) { bad(r,"nt-wait-object-lost");return; }
+            if(r->event[i].count>0) { signaled++;if(first==NDIS_NT_OBJECTS) first=j; }
+        }
+        if((r->wait[d].all && signaled==r->wait[d].count) || (!r->wait[d].all && signaled)) {
+            for(unsigned j=0;j<r->wait[d].count;j++) if(r->wait[d].all || j==first) {
+                int i=event_index(r,r->wait[d].object[j]);
+                if(!r->event[i].notification) r->event[i].count--;
+            }
+            r->wait[d].result=r->wait[d].boolean_result?1:r->wait[d].all?0:first;
+        } else if(r->ops.now(r->ops.context)>=r->wait[d].due)
+            r->wait[d].result=r->wait[d].boolean_result || r->wait[d].delay?0:NDIS_NT_TIMEOUT;
+        else continue;
+        r->wait[d].ready=true;r->ops.wake(r->ops.context);
+    }
+}
+uint32_t ndis_nt_wait_begin(struct ndis_nt_runtime *r,const uint32_t *objects,unsigned count,
+                            bool all,const int64_t *timeout,bool boolean_result)
+{
+    if(!live(r)) return NDIS_NT_CANCELLED;
+    if(!objects || !count || count>NDIS_NT_OBJECTS || !r->host->depth || r->host->irql>1 ||
+       !r->host->virtual_if || r->host->synchronized) { bad(r,"nt-wait-context");return NDIS_NT_INVALID; }
+    for(unsigned i=0;i<NDIS_NT_OBJECTS;i++) if(r->lock[i].held) { bad(r,"nt-wait-lock");return NDIS_NT_INVALID; }
+    for(unsigned i=0;i<count;i++) {
+        if(event_index(r,objects[i])<0) { bad(r,"nt-wait-object");return NDIS_NT_INVALID; }
+        for(unsigned j=0;j<i;j++) if(objects[j]==objects[i]) return NDIS_NT_INVALID;
+    }
+    unsigned d=r->host->depth-1;
+    if(r->wait[d].active) { bad(r,"nt-wait-reentry");return NDIS_NT_INVALID; }
+    uint64_t due=UINT64_MAX;
+    if(timeout && *timeout==0) due=r->ops.now(r->ops.context);
+    else if(timeout && !due_time(r,*timeout,&due)) return NDIS_NT_INVALID;
+    memset(&r->wait[d],0,sizeof(r->wait[d]));
+    memcpy(r->wait[d].object,objects,count*4);r->wait[d].count=count;
+    r->wait[d].all=all;r->wait[d].due=due;r->wait[d].boolean_result=boolean_result;
+    r->wait[d].token=r->host->active[d].token;r->wait[d].generation=r->host->generation;
+    r->wait[d].active=true;poll_waits(r);
+    if(r->wait[d].ready) { r->wait[d].active=false;return r->wait[d].result; }
+    return NDIS_NT_PENDING;
+}
+uint32_t ndis_nt_delay_begin(struct ndis_nt_runtime *r,uint64_t delta)
+{
+    if(!live(r) || r->host->irql || !r->host->depth || !r->host->virtual_if || r->host->synchronized) {
+        bad(r,"nt-delay-context");return NDIS_NT_INVALID;
+    }
+    unsigned d=r->host->depth-1;
+    if(r->wait[d].active) return NDIS_NT_INVALID;
+    memset(&r->wait[d],0,sizeof(r->wait[d]));r->wait[d].active=true;r->wait[d].delay=true;
+    r->wait[d].due=add_time(r->ops.now(r->ops.context),delta);
+    r->wait[d].token=r->host->active[d].token;r->wait[d].generation=r->host->generation;
+    poll_waits(r);
+    if(r->wait[d].ready) { r->wait[d].active=false;return 0; }
+    return NDIS_NT_PENDING;
+}
+int ndis_nt_wait_park(struct ndis_nt_runtime *r,struct trap_frame *tf)
+{
+    if(!live(r) || !tf || !r->host->depth) return 0;
+    unsigned d=r->host->depth-1;
+    if(!r->wait[d].active || r->wait[d].parked) return 0;
+    r->wait[d].frame=*tf;r->wait[d].parked=true;return 1;
+}
+int ndis_nt_wait_resume(struct ndis_nt_runtime *r,struct trap_frame *tf)
+{
+    if(!live(r) || !tf || !r->host->depth) return 0;
+    unsigned d=r->host->depth-1;
+    if(!r->wait[d].active || !r->wait[d].parked) return 0;
+    poll_waits(r);
+    if(!r->wait[d].ready) return -1;
+    if(r->wait[d].generation!=r->host->generation || r->wait[d].token!=r->host->active[d].token) {
+        bad(r,"nt-wait-generation");return -1;
+    }
+    *tf=r->wait[d].frame;tf->eax=r->wait[d].result;tf->edx=0;r->wait[d].active=false;return 1;
+}
 uint32_t ndis_nt_wait(struct ndis_nt_runtime *r,uint32_t object,const int64_t *timeout)
 {
     if(!live(r)) return NDIS_NT_CANCELLED;
@@ -254,6 +345,7 @@ int ndis_nt_timer_cancel(struct ndis_nt_runtime *r,uint32_t object,bool *previou
 void ndis_nt_poll(struct ndis_nt_runtime *r)
 {
     if(!live(r)) return;
+    poll_waits(r);
     uint64_t now=r->ops.now(r->ops.context);
     for(unsigned i=0;i<NDIS_NT_OBJECTS;i++) if(r->timer[i].armed && now>=r->timer[i].due) {
         uint64_t period=r->timer[i].period;r->timer[i].armed=period && now<=UINT64_MAX-period;
@@ -352,7 +444,11 @@ int ndis_nt_dma_start(struct ndis_nt_runtime *r,unsigned index,uint32_t mdl,enum
     if(m==NDIS_NT_OBJECTS) return 0;
     for(unsigned i=0;i<r->map_registers;i++) if(r->dma[i].active && r->dma[i].mdl==mdl) return 0;
     uint64_t first=(uint64_t)r->pin.first_pfn*4096+r->pin_offset+r->mdl[m].buffer-r->arena;
-    uint32_t bytes=r->mdl[m].bytes;
+    struct ndis_nt_mdl32 descriptor;
+    if(!read_mem(r,mdl,&descriptor,sizeof(descriptor)) || descriptor.mapped!=r->mdl[m].buffer ||
+       descriptor.offset!=(r->mdl[m].buffer&4095) || descriptor.start!=(r->mdl[m].buffer&~4095u) ||
+       !descriptor.bytes || descriptor.bytes>r->mdl[m].bytes) return 0;
+    uint32_t bytes=descriptor.bytes;
     if(bytes>r->map_maximum_buffer) return 0;
     if(bytes>NDIS_NT_DMA_RESERVATION-r->dma_bytes) return 0;
     if(first>UINT32_MAX || bytes-1>UINT32_MAX-first || (first&(alignment-1)) ||

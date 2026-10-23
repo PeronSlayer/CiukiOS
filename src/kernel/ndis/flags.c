@@ -94,7 +94,7 @@ int ndis_flags_breakpoint(struct ndis_user_host *h,struct trap_frame *tf,const s
         if(tf->user_esp<0x10000u+width) return 0;
         pe_put32(frame,flags&~0x30000u); /* PUSHFD clears RF and VM in saved copy */
         if(!a->write(a->context,tf->user_esp-width,frame,width)) return 0;
-        tf->user_esp-=width;return 1;
+        tf->user_esp-=width;ndis_host_retired(h,tf);return 1;
     }
     unsigned bytes=s->opcode==0xcf?width*3:width;
     if(tf->user_esp<0x10000 || tf->user_esp>=0xc0000000u || bytes>0xc0000000u-tf->user_esp ||
@@ -111,5 +111,6 @@ int ndis_flags_breakpoint(struct ndis_user_host *h,struct trap_frame *tf,const s
     uint32_t mask=width==2?0x0dd5u:0x240dd5u;
     if(s->opcode==0xcf && width==4) mask|=0x10000u; /* IRETD restores RF */
     tf->eflags=((tf->eflags&~mask)|(saved&mask))&~(0x3000u|0x4000u|0x20000u);
-    tf->eflags|=0x202u;tf->eip=next;tf->user_esp+=bytes;return 1;
+    if(h->sti_shadow) h->shadow_tf=!!(saved&0x100u);
+    tf->eflags|=0x202u;tf->eip=next;tf->user_esp+=bytes;ndis_host_retired(h,tf);return 1;
 }

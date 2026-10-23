@@ -3,7 +3,7 @@
 #define CIUKI_NDIS_NT_SERVICES_H
 #include "nt_runtime.h"
 struct ndis_user_export;
-#define NDIS_NT_EXPORTS 32u
+#define NDIS_NT_EXPORTS 40u
 struct ndis_nt_file { uint16_t name[256]; uint16_t bytes; bool present; };
 struct ndis_nt_irp {
     uint32_t address,status_address,generation,maximum_information;

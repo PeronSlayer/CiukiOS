@@ -58,7 +58,7 @@ static void handler(int signal,siginfo_t *info,void *context)
         int result;
         if(signal==SIGTRAP) {
             struct ndis_flag_access access={0,flag_read,flag_write};
-            result=ndis_flags_breakpoint(&h,&tf,&access);
+            result=tf.vector==1?ndis_host_debug(&h,&tf):ndis_flags_breakpoint(&h,&tf,&access);
         } else result=ndis_host_gp(&h,&tf,*(const uint8_t *)(uintptr_t)tf.eip);
         if(!result || !(tf.eflags&0x200)) _exit(91);
         uc->uc_mcontext.gregs[REG_UESP]=(greg_t)tf.user_esp;
@@ -122,7 +122,18 @@ static void binary_flags(void)
     memcpy(flag_code,iret_code,sizeof(iret_code));pe_put32(flag_code+8,(uint32_t)(uintptr_t)flag_code+32);flag_code[32]=0xc3;
     assert(ndis_flags_patch(&image.pe,&flag_table,&flag_workspace,image.hash));
     assert(!mprotect(flag_code,4096,PROT_READ|PROT_EXEC));emulating=2;(void)execute_flag_code();
-    assert(h.virtual_if);emulating=0;assert(!munmap(flag_code,4096) && !munmap(flag_stack,16384));
+    assert(h.virtual_if);emulating=0;
+    const uint8_t shadow[][5]={{0xfa,0xfb,0xc3,0x90,0x90},{0xfa,0xfb,0x9c,0x58,0xc3}};
+    for(unsigned i=0;i<2;i++) {
+        assert(!mprotect(flag_code,4096,PROT_READ|PROT_WRITE));
+        memset(flag_code,0x90,4096);memset(&flag_table,0,sizeof(flag_table));memcpy(flag_code,shadow[i],5);
+        assert(ndis_flags_patch(&image.pe,&flag_table,&flag_workspace,image.hash));
+        assert(!mprotect(flag_code,4096,PROT_READ|PROT_EXEC));emulating=2;
+        uint32_t saved_flags=execute_flag_code();emulating=0;
+        assert(h.virtual_if && !h.sti_shadow);
+        if(i) assert((saved_flags&0x300)==0x200); /* internal TF is absent */
+    }
+    assert(!munmap(flag_code,4096) && !munmap(flag_stack,16384));
 }
 int main(void)
 {

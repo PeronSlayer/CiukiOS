@@ -4,6 +4,7 @@
 #include "fence.h"
 #include "execution.h"
 #include "nt_runtime.h"
+#include "netif.h"
 #include <stddef.h>
 #include <ciuki/clock.h>
 #include <ciuki/kernel.h>
@@ -44,7 +45,7 @@ static void wake_worker(void *ctx)
 { struct ndis_native *n=ctx;if(n->wake_worker) n->wake_worker(n->worker_context); }
 static void notify(void *ctx) { wake_host(ctx);wake_worker(ctx); }
 static void complete_tx(void *ctx,uint32_t token,int status)
-{ struct ndis_native *n=ctx;if(n->complete_tx) n->complete_tx(n->worker_context,token,status); }
+{ struct ndis_native *n=ctx;ndis_netif_tx_done(n,token,status);if(n->complete_tx) n->complete_tx(n->worker_context,token,status); }
 static bool fence(void *ctx)
 {
     struct ndis_native *n=ctx;uint16_t before=0,after=0;
@@ -168,6 +169,7 @@ int ndis_native_bind(struct ndis_native *n,struct task *task,struct ntimage *ima
         ndis_host_stop(&n->host,"nt-service-init-failed",0,0,ndis_execution_now());return 0;
     }
     if(!ndis_channel_init(&n->channel,shared,generation,n,wake_host,wake_worker,complete_tx) ||
+       (n->host.nt && !ndis_native_miniport_init(n)) ||
        !mask(n,true) || !ndis_user_attach(task,&n->host)) {
         ndis_host_stop(&n->host,"native-bind-failed",0,0,ndis_execution_now());return 0;
     }
@@ -183,7 +185,17 @@ int ndis_native_irq_bind(struct ndis_native *n,uint32_t isr,uint32_t dpc)
     if(irq_chain_add(n->pci.irq_line,interrupt,n->owner)) {
         ndis_host_stop(&n->host,"irq-registration-failed",0,0,ndis_execution_now());return 0;
     }
-    n->irq_attached=true;return 1;
+    n->irq_attached=true;
+    if(!n->qualification->mask(n,false)) {
+        ndis_host_stop(&n->host,"irq-initial-rearm-failed",0,0,ndis_execution_now());return 0;
+    }
+    int pending=n->qualification->cause(n);
+    if(pending<0) { ndis_host_stop(&n->host,"irq-initial-cause-failed",0,0,ndis_execution_now());return 0; }
+    if(pending) {
+        if(!ndis_host_interrupt(&n->host,ndis_execution_now())) return 0;
+        n->irq_delivery=n->host.irq_token;n->irq_accounted=true;wake_worker(n);
+    }
+    return 1;
 }
 int ndis_native_take_result(struct ndis_native *n,uint32_t generation,uint32_t token,uint32_t *result)
 {
@@ -193,6 +205,12 @@ int ndis_native_take_result(struct ndis_native *n,uint32_t generation,uint32_t t
         *result=n->result[i];n->result_token[i]=0;irq_restore(flags);return 1;
     }
     irq_restore(flags);return 0;
+}
+int ndis_native_irq_unbind(struct ndis_native *n)
+{
+    if(!n || !ndis_host_live(&n->host) || !n->irq_attached || n->isr_callback || n->dpc_callback || n->host.irq_pending ||
+       !n->qualification->mask(n,true) || irq_chain_remove(n->pci.irq_line,interrupt,n->owner)) return 0;
+    n->irq_attached=false;n->isr=n->dpc=0;return 1;
 }
 int ndis_native_enqueue(struct ndis_native *n,enum ndis_host_kind kind,uint32_t address,
                          unsigned argc,const uint32_t *args,uint64_t now,uint32_t *token)
@@ -213,6 +231,7 @@ void ndis_native_poll(struct ndis_native *n)
 {
     if(!n) return;
     if(n->host.nt) ndis_nt_poll(n->host.nt);
+    if(n->ndis.miniport) ndis_mp_poll(&n->miniport);
     if(n->detach_pending) {
         int rc=irq_chain_remove(n->pci.irq_line,interrupt,n->owner);
         if(!rc) n->detach_pending=n->irq_attached=false;
@@ -302,7 +321,7 @@ int ndis_native_prepare(struct ndis_native *n,struct ntimage *image,const void *
     extern const uint8_t ndis_dispatch_start[],ndis_dispatch_end[];
     uint32_t dispatch_bytes=(uint32_t)(ndis_dispatch_end-ndis_dispatch_start);
     const uint32_t stacks=NDIS_HOST_DEPTH*4096;
-    const uint32_t runtime_bytes=8192+stacks+PAGE_ALIGN_UP(sizeof(struct ndis_channel_shared))+NT_POOL_BYTES;
+    const uint32_t runtime_bytes=12288+stacks+PAGE_ALIGN_UP(sizeof(struct ndis_channel_shared))+NT_POOL_BYTES;
     const uint32_t metadata_bytes=PAGE_ALIGN_UP(sizeof(*n)+sizeof(struct ndis_flag_table)+sizeof(struct ndis_flag_workspace));
     /* No task or allocation before a reviewed profile exists. Reservation is
      * supplied by the common F6 owner; this function never increases it. */
@@ -311,7 +330,7 @@ int ndis_native_prepare(struct ndis_native *n,struct ntimage *image,const void *
        !reserved_bytes || reserved_bytes>NDIS_IMAGE_LIMIT || reserved_bytes<=runtime_bytes+metadata_bytes ||
        (runtime_base&4095) || runtime_base<0x10000 || runtime_base>=0xc0000000 ||
        runtime_bytes>0xc0000000-runtime_base || dispatch_bytes>256) return 0;
-    struct task *t=task_create_user(name,P_DEVICE,runtime_base,runtime_base+8192+stacks,0,0,0);
+    struct task *t=task_create_user(name,P_DEVICE,runtime_base,runtime_base+12288+stacks,0,0,0);
     if(!t) return 0;
     n->task=t;n->host.image=image;
     n->memory.as=&t->as;n->memory.generation=generation;n->memory.execution_base=image_base;
@@ -326,17 +345,23 @@ int ndis_native_prepare(struct ndis_native *n,struct ntimage *image,const void *
     for(;n->runtime_mapped<runtime_bytes;n->runtime_mapped+=4096)
         if(as_map_borrowed(&t->as,runtime_base+n->runtime_mapped,n->runtime_physical+n->runtime_mapped,PTE_U|PTE_W)) goto failed;
     memcpy(P2V(n->runtime_physical),ndis_dispatch_start,dispatch_bytes);
-    if(!ndis_nt_veneers((uint8_t *)P2V(n->runtime_physical)+256,4096-256,runtime_base+256,
-        runtime_base+4096,n->nt_exports,NDIS_NT_EXPORTS,&n->memory.export_count)) goto failed;
+    if(!ndis_nt_veneers((uint8_t *)P2V(n->runtime_physical)+256,NDIS_NT_EXPORTS*32,runtime_base+256,
+        runtime_base+8192,n->nt_exports,NDIS_NT_EXPORTS,&n->memory.export_count)) goto failed;
+    unsigned ndis_count=0;
+    if(!ndis_veneers((uint8_t *)P2V(n->runtime_physical)+256+NDIS_NT_EXPORTS*32,
+        8192-256-NDIS_NT_EXPORTS*32,runtime_base+256+NDIS_NT_EXPORTS*32,
+        n->nt_exports+n->memory.export_count,NDIS_SERVICE_COUNT,&ndis_count)) goto failed;
+    n->memory.export_count+=ndis_count;
     n->memory.exports=n->nt_exports;
     if(as_seal_borrowed(&t->as,runtime_base,n->runtime_physical) ||
-       as_seal_borrowed(&t->as,runtime_base+4096,n->runtime_physical+4096)) goto failed;
+       as_seal_borrowed(&t->as,runtime_base+4096,n->runtime_physical+4096) ||
+       as_seal_borrowed(&t->as,runtime_base+8192,n->runtime_physical+8192)) goto failed;
     struct ntimage_platform platform;ntimage_user_platform(&platform,&n->memory);
     if(!ntimage_load(image,file,bytes,name,&platform)) goto failed;
     if(image_base<runtime_base+runtime_bytes && runtime_base<image_base+image->pe.size) goto failed;
     n->host.dispatcher=runtime_base;n->host.stack_bytes=4096;
-    for(unsigned i=0;i<NDIS_HOST_DEPTH;i++) n->host.dispatch_stack[i]=runtime_base+8192+(i+1)*4096;
-    n->shared_address=runtime_base+8192+stacks;
+    for(unsigned i=0;i<NDIS_HOST_DEPTH;i++) n->host.dispatch_stack[i]=runtime_base+12288+(i+1)*4096;
+    n->shared_address=runtime_base+12288+stacks;
     return 1;
 failed:
     (void)ndis_native_discard(n);return 0;
@@ -346,12 +371,29 @@ extern int copy_user(void *,const void *,uint32_t);
 static int nt_read(void *ctx,uint32_t address,void *out,uint32_t bytes)
 {
     struct ndis_native *n=ctx;
-    return as_range_ok(&n->task->as,address,bytes,false) && !copy_user(out,(const void *)(uintptr_t)address,bytes);
+    if(!n->task || !as_range_ok(&n->task->as,address,bytes,false)) return 0;
+    uint8_t *p=out;
+    while(bytes) {
+        uint32_t flags=0,physical=as_lookup(&n->task->as,address,&flags);
+        if(!physical || physical>=0x30000000 || !(flags&PTE_U) || (flags&(PTE_PCD|PTE_PWT)) || !ledger_page_pinned(physical/4096)) return 0;
+        unsigned count=4096-(address&4095);if(count>bytes) count=bytes;
+        memcpy(p,P2V(physical),count);p+=count;address+=count;bytes-=count;
+    }
+    return 1;
 }
 static int nt_write(void *ctx,uint32_t address,const void *in,uint32_t bytes)
 {
     struct ndis_native *n=ctx;
-    return as_range_ok(&n->task->as,address,bytes,true) && !copy_user((void *)(uintptr_t)address,in,bytes);
+    if(!n->task || !as_range_ok(&n->task->as,address,bytes,true)) return 0;
+    const uint8_t *p=in;
+    while(bytes) {
+        uint32_t flags=0,physical=as_lookup(&n->task->as,address,&flags);
+        if(!physical || physical>=0x30000000 || (flags&(PTE_U|PTE_W))!=(PTE_U|PTE_W) ||
+           (flags&(PTE_PCD|PTE_PWT)) || !ledger_page_pinned(physical/4096)) return 0;
+        unsigned count=4096-(address&4095);if(count>bytes) count=bytes;
+        memcpy(P2V(physical),p,count);p+=count;address+=count;bytes-=count;
+    }
+    return 1;
 }
 static uint64_t nt_now(void *ctx)
 { (void)ctx;uint64_t us=ndis_execution_now();return us>UINT64_MAX/10?UINT64_MAX:us*10; }
@@ -390,7 +432,7 @@ static bool nt_wait(void *ctx,bool (*predicate)(void *),void *argument,uint64_t 
     irq_restore(flags);return result;
 }
 static void nt_wake(void *ctx)
-{ struct ndis_native *n=ctx;kwait_wake_irq(&n->nt_wait,false); }
+{ struct ndis_native *n=ctx;kwait_wake_irq(&n->nt_wait,false);wake_host(n); }
 static int nt_stall(void *ctx,uint32_t us)
 {
     (void)ctx;if(us>1000) return -EINVAL;
@@ -438,7 +480,8 @@ static int nt_start(struct ndis_native *n)
 void ndis_native_tick(struct ndis_native *n)
 {
     if(!n || !n->runtime_physical || !ndis_host_live(&n->host)) return;
-    uint32_t *tick=(uint32_t *)((uint8_t *)P2V(n->runtime_physical)+4096);
+    if(n->host.nt) ndis_nt_poll(n->host.nt);
+    uint32_t *tick=(uint32_t *)((uint8_t *)P2V(n->runtime_physical)+8192);
     uint64_t value=g_ticks;
     __atomic_store_n(tick+2,(uint32_t)(value>>32),__ATOMIC_RELEASE);
     __atomic_store_n(tick,(uint32_t)value,__ATOMIC_RELEASE);

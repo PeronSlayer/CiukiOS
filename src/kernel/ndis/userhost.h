@@ -13,7 +13,7 @@
 enum ndis_host_state { NDIS_HOST_NEW, NDIS_HOST_LIVE, NDIS_HOST_FENCING,
                        NDIS_HOST_QUARANTINED };
 enum ndis_host_kind { NDIS_HOST_ISR, NDIS_HOST_DPC, NDIS_HOST_PASSIVE,
-                      NDIS_HOST_LIFECYCLE };
+                      NDIS_HOST_LIFECYCLE, NDIS_HOST_INLINE };
 enum ndis_host_memory { NDIS_HOST_BAR, NDIS_HOST_DMA };
 struct ndis_host_map {
     uint32_t va, physical, bytes, generation, ticket;
@@ -64,6 +64,9 @@ struct ndis_user_host {
     bool continuation_valid[NDIS_HOST_DEPTH];
     uint8_t irql, dirql;
     bool virtual_if, synchronized, irq_pending, irq_masked, idle_proved;
+    bool sti_shadow, shadow_tf;
+    uint8_t saved_irql[NDIS_HOST_DEPTH];
+    uint32_t inline_token[NDIS_HOST_DEPTH];
     bool syscall_active, cancellation_stalled;
     uint64_t cancel_deadline;
     uint32_t fault_vector, fault_offset;
@@ -98,6 +101,9 @@ int ndis_host_interrupt(struct ndis_user_host *,uint64_t now);
 int ndis_host_rearm(struct ndis_user_host *,uint32_t generation,uint32_t token,uint64_t now);
 /* Exact unprefixed CLI/STI/HLT only. Others fail into host quarantine. */
 int ndis_host_gp(struct ndis_user_host *,struct trap_frame *,uint8_t opcode);
+/* Retire an emulated instruction, or consume the TF #DB after a native one. */
+void ndis_host_retired(struct ndis_user_host *,struct trap_frame *);
+int ndis_host_debug(struct ndis_user_host *,struct trap_frame *);
 /* Explicit shim flag protocol, NOT transparent PUSHF/POPF virtualization.
  * Dependent raw flag patterns stay unqualified. Physical IF always stays 1. */
 uint32_t ndis_host_flags(const struct ndis_user_host *,uint32_t physical);

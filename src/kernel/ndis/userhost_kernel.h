@@ -16,5 +16,5 @@ void ndis_user_return(struct trap_frame *);
  * Unsupported calls quarantine; native mmap/clone/exec are never delegated. */
 enum ndis_user_call { NDIS_USER_YIELD=0x4e440000u, NDIS_USER_TAKE,
     NDIS_USER_COMPLETE, NDIS_USER_REARM, NDIS_USER_FLAGS, NDIS_USER_RESTORE_FLAGS,
-    NDIS_USER_DOORBELL, NDIS_USER_WAIT, NDIS_USER_TX_COMPLETE, NDIS_USER_NT };
+    NDIS_USER_DOORBELL, NDIS_USER_WAIT, NDIS_USER_TX_COMPLETE, NDIS_USER_NT, NDIS_USER_NDIS };
 #endif

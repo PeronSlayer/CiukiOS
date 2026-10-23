@@ -91,7 +91,11 @@ void ndis_user_return(struct trap_frame *tf)
     for(;;) {
         ndis_host_watchdog(h,now_us());
         if(!ndis_host_live(h)) { arch_io_install(0,0); task_exit(-1); }
-        if(ndis_host_deliver(h,tf,now_us()) || h->depth) break;
+        if(h->nt) (void)ndis_nt_wait_resume(h->nt,tf);
+        if(h->native) (void)ndis_mp_resume(&h->native->miniport,tf);
+        if(ndis_host_deliver(h,tf,now_us())) break;
+        if(h->depth && (!h->nt || !h->nt->wait[h->depth-1].active) &&
+           (!h->native || !h->native->miniport.call[h->depth-1].active)) break;
         /* Completion abandons the callback stack. No unbudgeted user spin
          * while idle: notification wakes this same parked continuation. */
         g_current->state=T_BLOCKED;
@@ -143,8 +147,15 @@ static void user_call(struct ndis_user_host *h,struct trap_frame *tf)
         break;
     case NDIS_USER_NT: {
         uint64_t result=h->native?ndis_nt_service(&h->native->services,tf->ebx,tf->ecx):NDIS_NT_CANCELLED;
-        tf->eax=(uint32_t)result;tf->edx=(uint32_t)(result>>32);break;
+        tf->eax=(uint32_t)result;tf->edx=(uint32_t)(result>>32);
+        if(h->nt) (void)ndis_nt_wait_park(h->nt,tf);
+        break;
     }
+    case NDIS_USER_NDIS:
+        tf->eax=h->native?ndis_service(&h->native->ndis,tf->ebx,tf->ecx):NDIS_FAILURE;
+        if(h->nt) (void)ndis_nt_wait_park(h->nt,tf);
+        if(h->native) (void)ndis_mp_park(&h->native->miniport,tf);
+        break;
     default: ndis_host_stop(h,"unsupported-host-syscall",0,tf->eip,now); break;
     }
     h->syscall_active=false;
@@ -164,12 +175,13 @@ bool ndis_user_trap(struct trap_frame *tf)
     if(!g_current || !g_current->ndis_user_host || (tf->cs&3)!=3 ||
        (tf->eflags&0x20000) || (tf->vector>=0x20 && tf->vector<0x30) || tf->vector==7) return false;
     struct ndis_user_host *h=g_current->ndis_user_host;
-    if(tf->vector==0x80 && ndis_host_live(h)) user_call(h,tf);
+    if(tf->vector==0x80 && ndis_host_live(h)) { ndis_host_retired(h,tf);user_call(h,tf); }
     else {
         uint8_t opcode=0;
         /* No pager/native signal handler. Raw host memory is resident and the
          * kernel copy fixup is the only allowed fault inside this read. */
         int emulated=0;
+        if(tf->vector==1) emulated=ndis_host_debug(h,tf);
         if(tf->vector==3) {
             struct ndis_flag_access access={g_current,flag_read,flag_write};
             emulated=ndis_flags_breakpoint(h,tf,&access);

@@ -38,7 +38,14 @@ static const struct spec specs[]={
     H("READ_PORT_USHORT",NDIS_ABI_STDCALL,4,1),
     H("WRITE_PORT_UCHAR",NDIS_ABI_STDCALL,8,2),
     H("WRITE_PORT_ULONG",NDIS_ABI_STDCALL,8,2),
-    H("WRITE_PORT_USHORT",NDIS_ABI_STDCALL,8,2)
+    H("WRITE_PORT_USHORT",NDIS_ABI_STDCALL,8,2),
+    N("KeInitializeEvent",NDIS_ABI_STDCALL,12,3),
+    N("KeSetEvent",NDIS_ABI_STDCALL,12,3),
+    N("KeResetEvent",NDIS_ABI_STDCALL,4,1),
+    N("KeWaitForSingleObject",NDIS_ABI_STDCALL,20,5),
+    N("KeWaitForMultipleObjects",NDIS_ABI_STDCALL,32,8),
+    N("KeInitializeSemaphore",NDIS_ABI_STDCALL,12,3),
+    N("KeReleaseSemaphore",NDIS_ABI_STDCALL,16,4)
 };
 #undef N
 #undef H
@@ -95,7 +102,7 @@ static uint64_t divide(struct ndis_nt_services *s,uint64_t a,uint64_t b)
 uint64_t ndis_nt_service(struct ndis_nt_services *s,uint32_t op,uint32_t arguments)
 {
     if(!s || !s->runtime || !ndis_host_live(s->runtime->host)) return NDIS_NT_CANCELLED;
-    struct ndis_nt_runtime *r=s->runtime;uint32_t a[6]={0};
+    struct ndis_nt_runtime *r=s->runtime;uint32_t a[8]={0};
     if(op>=sizeof(specs)/sizeof(specs[0]) || (specs[op].args && !rd(s,arguments,a,specs[op].args*4))) return fault(s,"nt-service-arguments");
     uint8_t old=0;
     switch(op) {
@@ -204,6 +211,29 @@ uint64_t ndis_nt_service(struct ndis_nt_services *s,uint32_t op,uint32_t argumen
         return s->stall && !s->stall(s->context,a[0])?0:fault(s,"nt-stall-unqualified");
     case 23:return ndis_nt_lock(r,a[0],false,&old)?old:NDIS_NT_INVALID;
     case 24:return ndis_nt_unlock(r,a[0],false,(uint8_t)a[1])?0:NDIS_NT_INVALID;
+    case 31:return a[1]<=1 && ndis_nt_event_init(r,a[0],a[1]==0,(int32_t)a[2],1)?0:fault(s,"nt-event-init");
+    case 32:case 33: {
+        int32_t previous;
+        if(op==32 && (a[2] || !ndis_nt_event_set(r,a[0],1,&previous))) return fault(s,"nt-event-set");
+        if(op==33 && !ndis_nt_event_reset(r,a[0],&previous)) return fault(s,"nt-event-reset");
+        return (uint32_t)previous;
+    }
+    case 34:case 35: {
+        uint32_t objects[NDIS_NT_OBJECTS];unsigned count=op==34?1:a[0];
+        uint32_t timeout=op==34?a[4]:a[6];int64_t due;
+        if((op==34 && (a[2] || a[3])) || (op==35 && (a[2]>1 || a[4] || a[5])) ||
+           !count || count>NDIS_NT_OBJECTS || (count>3 && !a[7]) ||
+           (timeout && !rd(s,timeout,&due,8))) return fault(s,"nt-wait-arguments");
+        if(op==34) objects[0]=a[0];
+        else if(!rd(s,a[1],objects,count*4)) return fault(s,"nt-wait-objects");
+        return ndis_nt_wait_begin(r,objects,count,op==35 && a[2]==0,timeout?&due:0,false);
+    }
+    case 36:return ndis_nt_event_init(r,a[0],false,(int32_t)a[1],(int32_t)a[2])?0:fault(s,"nt-semaphore-init");
+    case 37: {
+        int32_t previous;
+        if(a[3] || !ndis_nt_event_set(r,a[0],(int32_t)a[2],&previous)) return fault(s,"nt-semaphore-release");
+        return (uint32_t)previous;
+    }
     default: {
         unsigned width=(op==25 || op==28)?1:(op==26 || op==29)?4:2;bool ok=false;
         uint32_t result=s->port?s->port(s->context,a[0],width,op>=28,a[1],&ok):0;
