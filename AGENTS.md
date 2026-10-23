@@ -34,8 +34,10 @@ through `scripts/test/run.py` (`make qemu-test-full` = `f0-smoke`); see
 `docs/build-and-run.md`. The 0.8 image is built only on branch `legacy-0.8`;
 on `main` its scripts remain as `make legacy-*` targets until each component
 is migrated or retired (`docs/design/foundations-transition.md`). Do not
-build, run or test the floppy profile; the CiukiDOS kernel source
-(`src/boot/floppy_stage1.asm`) stays as the future DOS personality.
+build, run or test the floppy profile. Since the owner's decision of
+2026-10-22 images carry only the unified CiukiDOS kernel
+(`docs/design/unified-dos-contract.md`); the old CiukiDOS kernel source
+(`src/boot/floppy_stage1.asm`) is kept only as a historical reference.
 
 The Windows portable bundle (`scripts/package_windows_portable.py`) belongs to
 the 0.8 line until the new image passes F1; it must never contain local
