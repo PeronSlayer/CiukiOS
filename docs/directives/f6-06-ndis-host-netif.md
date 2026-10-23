@@ -16,7 +16,7 @@
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (NDIS 5.1 DDK pages). Host tests one at a time with `nice -n 19`. Write `build/codex/f6-06-report.md`.
 
-## Amendment 1 (lead, 2026-10-23 03:51): the four refused exports
+## Amendment 1 (lead, 2026-10-23 04:10): the four refused exports
 
 Implement `NdisMRegisterDevice`, `NdisMDeregisterDevice`, `NdisMSetMiniportSecondary` and `NdisMPromoteMiniport` as real exports with honest results; never fake success.
 - **`NdisMRegisterDevice`** returns `NDIS_STATUS_NOT_SUPPORTED` (no control device is created; the host serves no user-mode I/O to a miniport) and records `[ndis] control-device refused driver=…`.
