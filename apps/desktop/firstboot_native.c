@@ -185,7 +185,7 @@ int desk_firstboot(struct desktop *d)
         for(int y=0;y<12;y++)for(int x=0;x<=y/2;x++)du_fill(&canvas,(struct du_rect){ox+mx+x,oy+my+y,1,1},!x||x==y/2?0:0xffffff);
         struct ciuki_rect rect={.width=(unsigned)d->width,.height=(unsigned)d->height};
         if(ciuki_present(d->display,d->output,&rect)){record(NULL,"[firstboot] present=failed result=failed");break;}
-        struct timespec pause={0,20000000};nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=20000000};nanosleep(&pause,NULL);
     }
     cancel_service(&native,FB_SOUND);
     return (int)native.actions;
