@@ -55,7 +55,7 @@ def main():
     cases += [[OUT / 'events_test', OUT, case] for case in ('events', 'no-crt', 'passive', 'hot', 'unit', 'unknown', 'bix',
         'ec-events', 'ec-timeout', 'route', 'enable-timeout', 'rollback', 'init-failure', 'pts-failure', 'storm', 'thermal-change', 'global-lock',
         'gpe-loop', 'shared-power', 'critical-battery', 'lid-open', 'battery-limit', 'eisa-button', 'cid-button', 'already-enabled',
-        'provider-busy')]
+        'provider-busy', 't23-legacy')]
     cases += [[OUT / 'test', OUT, case] for case in ('inventory', 'ssdt', 'checksum', 'root64', 'dsdt64', 'length', 'aml', 'loop', 'sleep', 'write', 'region', 'osl', 'broker', 'pnp', 'page')]
     cases += [[OUT / 'test', OUT, case] for case in ('crs-bad', 'mem64', 'large', 'module-loop', 'rsdt', 'rsdp-checksum', 'pnp-bad', 'no-acpi', 'eisa', 'ec', 'module-write', 'start-failure')]
     cases += [[OUT / 'test', OUT, case] for case in ('serial', 'serial-disabled', 'serial-cid', 'serial-level', 'serial-low', 'serial-variable')]

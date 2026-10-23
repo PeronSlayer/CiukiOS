@@ -103,7 +103,7 @@ def generate(out):
                      'ec-events', 'ec-timeout', 'route', 'enable-timeout', 'rollback',
                      'init-failure', 'pts-failure', 'storm', 'thermal-change', 'global-lock',
                      'gpe-loop', 'shared-power', 'critical-battery', 'lid-open', 'battery-limit', 'eisa-button', 'cid-button', 'already-enabled',
-                     'provider-busy')
+                     'provider-busy', 't23-legacy')
     for case in runtime_cases:
         battery_info = [integer(2 if case == 'unit' else 0), integer(6000), integer(5000), integer(1), integer(11000),
                         integer(500), integer(100), integer(1), integer(1)] + [string('fixture')] * 4
@@ -124,7 +124,7 @@ def generate(out):
                   method('_ON_', b'\x70\x01STAT') + method('_OFF', b'\x70\x00STAT') + method('_STA', b'\xa4STAT'))
         sb += device('FAN0', name('_PR0', package([b'FANR'])))
         if case == 'shared-power': sb += device('OTH0',name('_PR0',package([b'FANR'])))
-        if case in ('ec-events','ec-timeout'):
+        if case in ('ec-events','ec-timeout','t23-legacy'):
             crs = b'\x4b\x62\x00\x01\x4b\x66\x00\x01\x79\x00'
             region = b'\x5b\x80ERAM\x03' + integer(0) + integer(256)
             field = pkg(b'\x5b\x81', b'ERAM\x01REG0\x08')
@@ -132,7 +132,7 @@ def generate(out):
                          region + field + method('_Q42', b'\x86\\\x2e_SB_PWRB\x0a\x80') + method('READ',b'\xa4REG0'))
         if case == 'init-failure': sb += device('BAD0', method('_INI',pkg(b'\xa2',b'\x01\xa3')))
         thermal = name('_TMP', integer(3200))
-        if case != 'no-crt': thermal += name('_CRT',integer(3700))
+        if case not in ('no-crt', 't23-legacy'): thermal += name('_CRT',integer(3700))  # t23-legacy: takeover refused, firmware keeps ACPI
         thermal += name('_AC0',integer(3100)) + name('_AL0',package([b'\\\x2e_SB_FAN0']))
         thermal += method('HEAT', b'\x70' + integer(3800) + b'_TMP')
         if case == 'hot': thermal += name('_HOT',integer(3600))

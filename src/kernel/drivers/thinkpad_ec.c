@@ -35,6 +35,8 @@
 static uint8_t native_read(void *, uint16_t);
 extern int acpi_ec_quirk_transfer(bool, uint8_t, uint8_t *) __attribute__((weak));
 extern int acpi_ec_quirk_transfer_counted(bool, uint8_t, uint8_t *, unsigned, unsigned *) __attribute__((weak));
+extern int acpi_ec_quirk_attach(void) __attribute__((weak));
+extern bool acpi_ec_quirk_legacy(void) __attribute__((weak));
 #endif
 
 uint32_t thinkpad_ec_poll_option(const char *s, size_t size, const char **source)
@@ -279,15 +281,17 @@ static int ec_read(struct thinkpad_ec *e, uint8_t *status, struct ec_budget *b)
     if (!err && (*status & 15) > 14) err = -EIO;
     return err;
 }
+/* f4-29: five master points per key press. fx-3: the EC level is a
+ * saturating 0..14 counter (Linux v6.12 thinkpad_acpi.c: TP_EC_VOLUME_MAX
+ * 14; issue_volchange sends one key per level step between two samples; the
+ * firmware keeps the level at its bounds), so a 2 s poll that sees several
+ * presses applies every step instead of dropping them; no 14<->0 wrap. */
 static void ec_master(uint8_t status, uint8_t previous, struct ciuki_mixer_master *m)
 {
-    unsigned old = previous & 15u, level = status & 15u;
-    unsigned up = (level + 15u - old) % 15u;
-    int step = up == 1 ? 1 : up == 14 ? -1 : 0;
-    unsigned master = (m->left + m->right) / 2u;
-    if (step > 0) master = master > 95 ? 100 : master + 5;
-    if (step < 0) master = master < 5 ? 0 : master - 5;
-    m->left = m->right = master;
+    int steps = (int)(status & 15u) - (int)(previous & 15u);
+    int master = (int)(m->left + m->right) / 2 + 5 * steps;
+    master = master < 0 ? 0 : master > 100 ? 100 : master;
+    m->left = m->right = (unsigned)master;
     m->mute = !!(status & 0x40);
 }
 static void ec_log(uint8_t status)
@@ -493,16 +497,34 @@ static void native_identity(struct thinkpad_ec_smbios *s)
 static struct thinkpad_ec_smbios retained_identity;
 void thinkpad_ec_smbios_snapshot(struct thinkpad_ec_smbios *out)
 { *out = retained_identity; }
+/* fx-3: the probe waits for the generic EC (audio init runs before the
+ * ACPI inventory has decided ownership); the identity of a deferred call is
+ * retained, so the resumed call neither rescans nor logs it again. */
+static bool ec_deferred;
 void thinkpad_ec_init(void)
 {
-    struct thinkpad_ec_smbios s;
-    native_identity(&s);
-    retained_identity = s;
-    thinkpad_ec_smbios_log(&s);
-    if (!thinkpad_ec_gate(&s, g_boot.flags)) return;
     if (native_ec.active) return;
-    kmutex_init(&ec_lock);
+    if (!ec_deferred) {
+        struct thinkpad_ec_smbios s;
+        native_identity(&s);
+        retained_identity = s;
+        thinkpad_ec_smbios_log(&s);
+        if (!thinkpad_ec_gate(&s, g_boot.flags)) return;
+        kmutex_init(&ec_lock);
+    }
     if (!acpi_ec_quirk_transfer) { klog("[ec] thinkpad gate=generic_ec_unavailable"); return; }
+    int attached = acpi_ec_quirk_attach ? acpi_ec_quirk_attach() : 0;
+    if (attached == -EAGAIN) {
+        if (!ec_deferred) klog("[ec] thinkpad deferred until=acpi_inventory");
+        ec_deferred = true;
+        return;
+    }
+    ec_deferred = false;
+    if (attached) {
+        klog("[ec] thinkpad gate=ec_handshake_failed stage=attach error=%d", attached);
+        return;
+    }
+    klog("[ec] thinkpad transport=%s", acpi_ec_quirk_legacy && acpi_ec_quirk_legacy() ? "legacy" : "acpi");
     struct thinkpad_ec_io io = {0, native_read, native_write, native_now, native_pause};
     int err = thinkpad_ec_probe(&native_ec, &io, true, &audio.master);
     if (err) {
@@ -575,7 +597,8 @@ int thinkpad_ec_poll_state(void)
 { return native_ec.io.now ? (int)native_ec.poll_ms : -1; }
 void thinkpad_ec_start(void)
 {
-    if (!native_ec.active) return;
+    /* fx-3: audio init and the post-inventory attach both start it. */
+    if (!native_ec.active || __atomic_load_n(&ec_worker_running, __ATOMIC_ACQUIRE)) return;
     /* f2-96: one RD_EC every 2 s by default (ecpoll=1: 1 Hz, ecpoll=0:
      * none). The EC drives the amplifier from the keys; this poll mirrors
      * the key presses into the shared master (tray, Control Panel, saved

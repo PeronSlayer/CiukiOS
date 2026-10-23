@@ -606,10 +606,31 @@ static void capture_at(struct controller *c, uint8_t status, uint8_t b, uint64_t
 static void capture(struct controller *c, uint8_t status, uint8_t b)
 { capture_at(c, status, b, c->io->now(c->io_arg)); }
 
+/* fx-3 (T23 trial of 9a60215f: `irqoff_section=i8042_sample
+ * irqoff_max_us=2156`): the command engine samples the controller with
+ * interrupts enabled. Each poll used to run status read, data read and the
+ * decoder with IF clear; a setup or reset wait spends most of its time in
+ * that section, so a firmware SMI (2.1 ms on the T23) landing there became a
+ * 2 ms interrupt-off section of the kernel. IF=0 bought no exclusion:
+ * - while the native IRQ path is live (handlers installed, accepting),
+ *   input_irq is the only reader of the data port; a poll reads the
+ *   non-destructive status register only and every byte, replies included,
+ *   reaches capture_at through input_work (event-driven, Linux libps2
+ *   ps2_handle_ack/ps2_handle_response model);
+ * - otherwise (setup, stop, the fault fixture) input_irq is not installed or
+ *   returns before any port access, input_work drops bytes while
+ *   !accepting, and the command mutex holder is the only port user.
+ * IBM PS/2 Hardware Interface Technical Reference (keyboard/auxiliary
+ * controller, status register): reading 64h has no side effect; reading 60h
+ * clears OBF. Only the data read must have one owner. */
+static bool irq_path_live(const struct controller *c)
+{
+    return c == &native && c->accepting;
+}
+
 static bool capture_one(struct controller *c, bool discard)
 {
-    uint32_t f = irq_save();
-    if ((f & 0x200) && crit_label) crit_label("i8042_sample");
+    if (irq_path_live(c)) return false;     /* input_irq owns port 60h */
     uint8_t status = read_port(c, STATUS_PORT);
     bool have = status & OBF;
     if (have) {
@@ -617,7 +638,6 @@ static bool capture_one(struct controller *c, bool discard)
         if (discard) c->stats.drained++;
         else capture(c, status, b);
     }
-    irq_restore(f);
     return have;
 }
 
@@ -636,16 +656,15 @@ static int write_when_ready(struct controller *c, struct poll_deadline *d, uint1
     for (;;) {
         int err = poll_check(c, d);
         if (err) return err;
-        uint32_t f = irq_save();
+        /* fx-3: IF stays set. Pending output is consumed first: by this
+         * poll when the IRQ path is not live, by input_irq when it is. */
         uint8_t status = read_port(c, STATUS_PORT);
         if (status & OBF) {
-            capture(c, status, read_port(c, DATA_PORT));
+            if (!irq_path_live(c)) capture(c, status, read_port(c, DATA_PORT));
         } else if (!(status & IBF)) {
             write_port(c, port, b);
-            irq_restore(f);
             return 0;
         }
-        irq_restore(f);
         poll_pause(c, d);
     }
 }
@@ -696,7 +715,7 @@ static int controller_ack_drain(struct controller *c, struct poll_deadline *d)
     for (;;) {
         int err = poll_check(c, d);
         if (err) return err;
-        uint32_t f = irq_save();
+        /* Setup only (init_recording): the IRQ path is not live; IF set. */
         uint8_t status = read_port(c, STATUS_PORT);
         if (status & OBF) {
             uint8_t byte = read_port(c, DATA_PORT);
@@ -707,7 +726,6 @@ static int controller_ack_drain(struct controller *c, struct poll_deadline *d)
                 seen = true;
             }
         }
-        irq_restore(f);
         if (err) return err;
         if (!(status & IBF)) {
             if (!idle) { quiet_end = c->io->now(c->io_arg) + 1; idle = true; }
@@ -1363,11 +1381,7 @@ int i8042_stop(gen_t generation)
     if (!err && (cfg & (DISABLED | IRQ_BITS)) != DISABLED) err = -I8042_EIO;
     d = limit(&native, end, I8042_REPLY_MS);
     if (!err) err = drain(&native, &d, true);
-    if (!err) {
-        uint32_t f = irq_save();
-        if (read_port(&native, STATUS_PORT) & (IBF | OBF)) err = -I8042_EIO;
-        irq_restore(f);
-    }
+    if (!err && (read_port(&native, STATUS_PORT) & (IBF | OBF))) err = -I8042_EIO;
     for (unsigned i = 0; !err && i < ARRAY_SIZE(native.handle); i++)
         err = registry_quiesce(native.handle[i], native.claim_gen[i], idle_proof);
     if (err) quarantine(&native, err);

@@ -108,10 +108,15 @@ static void fake_push(struct fake_bus *b, bool aux, uint8_t data, uint32_t delay
     unsigned n = (b->head + b->count++) % ARRAY_SIZE(b->bytes);
     b->bytes[n] = (struct fake_byte){ aux ? 0x21 : 0x01, data, b->now + delay };
 }
+/* fx-3: controller port accesses made with IF clear outside an IRQ handler
+ * (the kernel's former `irqoff_section=i8042_sample`). */
+static unsigned irqoff_port_accesses;
+static bool host_in_irq;
 static uint8_t fake_read(void *arg, uint16_t port)
 {
     struct fake_bus *b = arg;
     b->reads++;
+    if (!(host_flags & 0x200) && !host_in_irq) irqoff_port_accesses++;
     if (port == 0x64) {
         uint8_t status = b->status_base | ((b->stuck_ibf || b->now < b->ibf_until) ? 2 : 0);
         if (b->stuck_obf) return status | 1;
@@ -129,6 +134,7 @@ static uint8_t fake_read(void *arg, uint16_t port)
 }
 static void fake_write(void *arg, uint16_t port, uint8_t data)
 {
+    if (!(host_flags & 0x200) && !host_in_irq) irqoff_port_accesses++;
     struct fake_bus *b = arg;
     b->writes++;
     b->ibf_until = b->now + b->write_delay;
@@ -294,7 +300,9 @@ static void fake_pause(void *arg)
         if (b->irq_reply && host_handlers[1] && b->count && b->bytes[b->head].ready <= b->now) {
             uint32_t f = irq_save();
             struct trap_frame tf = { .vector = 0x21 };
+            host_in_irq = true;
             host_handlers[1](&tf);
+            host_in_irq = false;
             irq_restore(f);
         }
     }
@@ -1188,6 +1196,57 @@ static void t23_bus(void)
     hw.iface_delay = 1;
 }
 
+/* fx-3: the T23 trial recorded `irqoff_section=i8042_sample irqoff_max_us=2156`
+ * (one firmware SMI inside a polled sample taken with IF clear). Setup,
+ * live commands, stop and the fault fixture now sample the controller with
+ * interrupts enabled; while the IRQ path is live only input_irq reads 60h. */
+static void test_irqoff_sampling(void)
+{
+    struct i8042_stats s;
+    struct input_event event;
+    reset_native();
+    t23_bus();
+    hw.ack_delay = 1;
+    irqoff_port_accesses = 0;
+    unsigned reads = hw.reads;
+    CHECK(i8042_init() == 0 && native.stats.active && hw.reads > reads);
+    CHECK(irqoff_port_accesses == 0 && (host_flags & 0x200));
+    /* Live path: replies arrive through input_irq/input_work only. */
+    hw.irq_reply = true;
+    unsigned handler_reads = 0;
+    for (unsigned i = 0; i < 8; i++) {
+        unsigned before = hw.reads;
+        kmutex_lock(&native.mutex);
+        CHECK(device_command(&native, i & 1, 0xF4, hw.now + 100) == 0);
+        kmutex_unlock(&native.mutex);
+        CHECK(hw.reads > before);
+        handler_reads += hw.reads - before;
+    }
+    CHECK(handler_reads && irqoff_port_accesses == 0 && !native.stats.pending_command);
+    CHECK(!hw.count && !input_read(&event));
+    hw.irq_reply = false;
+    /* A pending byte while live is never read by the command engine. */
+    fake_push(&hw, false, 0x1C, 0);
+    reads = hw.reads;
+    kmutex_lock(&native.mutex);
+    struct poll_deadline d = limit(&native, hw.now + 5, 5);
+    CHECK(drain(&native, &d, false) == 0 && !capture_one(&native, false));
+    kmutex_unlock(&native.mutex);
+    CHECK(hw.count == 1 && hw.reads == reads);
+    host_in_irq = true;
+    uint32_t f = irq_save();
+    struct trap_frame tf = { .vector = 0x21 };
+    host_handlers[1](&tf);
+    irq_restore(f);
+    host_in_irq = false;
+    CHECK(!hw.count && input_read(&event) && event.type == INPUT_KEY && event.code == INPUT_KEY_A);
+    while (input_read(&event)) {}
+    i8042_snapshot(&s);
+    CHECK(i8042_stop(s.generation) == 0 && irqoff_port_accesses == 0);
+    hw.ack_delay = 0;
+    printf("i8042 interrupt-on sampling: setup/live commands/stop, zero IF-off port accesses outside input_irq PASS\n");
+}
+
 static void test_advisory_interfaces_and_controller_acks(void)
 {
     reset_native();
@@ -1957,6 +2016,7 @@ int main(int argc, char **argv)
     test_extended_mouse_packets();
     test_touchpad_protocols();
     test_advisory_interfaces_and_controller_acks();
+    test_irqoff_sampling();
     test_hook_selection();
     test_commands();
     test_keyboard_and_mouse();

@@ -157,6 +157,20 @@ The SMI time of the poll no longer reaches the audio refill's budget:
 cpustat leaves proven firmware time out of the scheduler budgets and the
 service deadline (see the f2-96 validation record).
 
+Amendment fx-3 (2026-10-23, supersedes the multi-press limitation above
+and the f4-29 14<->0 wrap): the EC level of register 30h is a saturating
+0–14 counter ([Linux v6.12 thinkpad_acpi.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/platform/x86/thinkpad_acpi.c?h=v6.12):
+`TP_EC_VOLUME_MAX` 14; `issue_volchange` emits one key per level step between
+two samples; the firmware keeps the level at its bounds). Every level step
+between two observations now moves the master by five points (clamped
+0–100), so several presses inside one 2 s poll are all applied; a 14 -> 0
+change is fourteen presses down, not a wrap. The T23 trial of 9a60215f had
+no EC transport at all (see `acpi-events-power.md`, legacy EC binding); with
+the binding restored the hardware keys again move the tray, Control Panel,
+saved preference and mute gate, a desktop level change still makes no EC
+access and is not undone by the next poll, and a desktop mute change is
+written to the EC and proved by a read.
+
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already
 qualified at boot, without bypassing quarantined resources.

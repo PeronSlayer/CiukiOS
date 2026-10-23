@@ -219,12 +219,15 @@ static void inventory_thread(void *unused)
             if (!p.cursor) break;
         } while (!firmware_inventory_page(&p));
     }
+    /* fx-3: the EC quirk attaches once ownership is decided, owned or not
+     * (on a firmware-owned platform through the legacy EC binding), before
+     * serial PnP can spend seconds here. */
+    audio_ec_attach();
     /* Serial PnP enumeration waits seconds per port; once ACPI owns SCI,
      * thermal and button events, it must not delay this thread's poll. */
     struct task *com = fw_owned ? task_create_kernel("com-pnp", com_pnp_thread, NULL, P_DEVICE) : NULL;
     if (com) task_start(com);
     else com_peripherals_start();
-    if (fw_owned) audio_ec_attach();
     while (fw_owned) { fw_power_poll(); task_sleep_ms(20); }
 }
 void firmware_inventory_start(void)
@@ -234,6 +237,6 @@ void firmware_inventory_start(void)
     attempted = true;
     struct task *t = task_create_kernel("acpi-power", inventory_thread, NULL, P_DEVICE);
     /* Bound so the unavailable record also reaches the power_source cache. */
-    if (!t) { fw_bind(&fw_kernel_ops); fw_inventory_unavailable(AE_NO_MEMORY); }
+    if (!t) { fw_bind(&fw_kernel_ops); fw_inventory_unavailable(AE_NO_MEMORY); audio_ec_attach(); }
     else task_start(t);
 }

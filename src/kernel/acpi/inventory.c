@@ -262,6 +262,7 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
     if (!fw_owned) { fw_os_cleanup(); fw_runtime = false; }
     if (!power) { fw_power.error = status; fw_power.ownership = CIUKI_POWER_FIRMWARE; fw_power_publish(); }
     complete = true;
+    fw_ec_settle(); /* fx-3: ownership decided; a kernel EC quirk may attach */
     return status;
 }
 ACPI_STATUS fw_inventory_run(const struct fw_ops *ops, uint32_t rsdp) { return inventory_run(ops, rsdp, false); }
@@ -271,6 +272,7 @@ void fw_inventory_unavailable(ACPI_STATUS error)
     count = high_water = fw_table_count = 0;
     flags = CIUKI_FIRMWARE_INCOMPLETE; status = error; complete = true;
     fw_classes_reset(); fw_power.error = error; fw_power.ownership = CIUKI_POWER_FIRMWARE; fw_power_publish();
+    fw_ec_settle(); /* fx-3: ownership decided (firmware) */
 }
 int firmware_inventory_page(struct ciuki_firmware_page *p)
 {

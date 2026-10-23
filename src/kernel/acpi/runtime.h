@@ -26,6 +26,10 @@ void fw_ec_reset(void);
 bool fw_ec_ready(void);
 bool fw_ec_idle(void);
 bool fw_ec_faulted(void);
+void fw_ec_settle(void);
+/* fx-3: kernel quirk attach (-11 before the inventory settles) and mode. */
+int acpi_ec_quirk_attach(void);
+bool acpi_ec_quirk_legacy(void);
 int acpi_ec_quirk_transfer(bool, uint8_t, uint8_t *);
 int acpi_ec_quirk_transfer_counted(bool, uint8_t, uint8_t *, unsigned, unsigned *);
 bool acpi_power_can_off(void);

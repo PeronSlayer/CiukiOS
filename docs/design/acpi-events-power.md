@@ -151,3 +151,44 @@ refused (EBUSY). APM therefore connects on pre-ACPI machines.
 Ordinary suspend requests stay rejected; soft-off remains call 73's.
 Evidence: `tests/host/power_platform_test.c` (production APM provider,
 worker and arbiter with the owner).
+
+## Legacy EC binding for kernel quirks (fx-3, 2026-10-23)
+
+The T23 trial of 9a60215f logged `[ec] thinkpad gate=ec_handshake_failed
+stage=probe error=-19`, then `[acpi] inventory status=17 ... power_owner=0`
+(AE_TIME, firmware ownership). Two defects made the f1-110 EC service
+unreachable for the ThinkPad volume quirk: the quirk probed at audio init,
+before the inventory had bound any EC (`acpi_ec_quirk_transfer_counted`
+refuses while the ports are not 62h/66h, so -19), and the engine admitted
+transactions only on an ACPI-owned platform, so a firmware-owned machine
+never got a transport and `audio_ec_attach` was called only when
+`fw_owned`. The volume poll of f2-96 therefore never started.
+
+- The inventory marks the engine settled (`fw_ec_settle`) once ownership is
+  decided, in every outcome, and ends the collection-time AML preflight when
+  the takeover was refused. `acpi_ec_quirk_attach` answers -EAGAIN before
+  that; the quirk logs `[ec] thinkpad deferred until=acpi_inventory` and the
+  acpi-power task calls `audio_ec_attach` after the inventory whether or not
+  ACPI is owned (and on the no-task fallback).
+- ACPI-owned: the quirk uses the ACPI-bound engine (62h/66h only).
+- Clean firmware ownership (`CIUKI_POWER_FIRMWARE`: SCI_EN clear, SMM owns
+  EC events, no interpreter left): the same engine is bound to 62h/66h
+  through the owner's port claims for the quirk alone (`[ec] thinkpad
+  transport=legacy`). It issues RD_EC/WR_EC only, never QR_EC, installs no
+  GPE and runs no AML. This is the transport the quirk used on the T23 from
+  f4-18 to f2-96, now without a second engine.
+- Quarantined or uncertain ownership, no ACPI tables (an APM machine: the
+  APM provider may call the BIOS concurrently), a faulted engine, or an
+  ACPI EC described at other ports: refused without I/O.
+- A legacy timeout does not latch the engine: the next transaction waits for
+  IBF to clear and drops a late reply to its own read (the pre-f1-110
+  recovery); the quirk keeps its own bound (eight failures, 10 s re-probes).
+- Every EC port access is again marked for the f1-94 SMI coincidence record
+  (`smi_mark(SMI_EC_IO)`), lost in f1-110.
+
+Sources: [ACPI 6.5 chapter 12](https://uefi.org/specs/ACPI/6.5/12_ACPI_Embedded_Controller_Interface_Specification.html)
+(EC_SC bits, RD_EC/WR_EC/QR_EC); [Linux v6.12 thinkpad_acpi.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/platform/x86/thinkpad_acpi.c?h=v6.12)
+(volume subdriver: EC register 30h, level bits 0–3 up to 14, mute bit 6;
+`issue_volchange`). Host evidence: `tests/host/acpi/events_test.c` scenario
+`t23-legacy` (and `no-crt`, `rollback`), `tests/host/audio/thinkpad_ec_test.inc`
+`test_thinkpad_ec_t23_attach`.
