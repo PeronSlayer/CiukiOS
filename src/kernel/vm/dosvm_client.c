@@ -252,7 +252,15 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
     b->console = v->console_sequence; b->observed = true;
     return 0;
 }
-/* Closed error set (execution-abi.md): internal storage/boot errors are EIO. */
+/* fx-4: the creating owner was ended (for example from Tasks) while a cold
+ * base identity hash ran inside CREATE; stop hashing for it. */
+static bool owner_stopping(void *arg)
+{
+    const struct process *p = arg;
+    return p->state != PROC_LIVE;
+}
+/* Closed error set (execution-abi.md): internal storage/boot errors are EIO.
+ * dosvm_create records the internal error first (fx-4 refusal record). */
 static int closed_error(int e)
 {
     switch (e) {
@@ -396,7 +404,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
             .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
             .memory_locked=c.launch.memory==CIUKI_DOSVM_MEMORY_LOCKED,
-            .disable_file_bridge=true};
+            .disable_file_bridge=true,.cancelled=owner_stopping,.cancel_arg=p};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }

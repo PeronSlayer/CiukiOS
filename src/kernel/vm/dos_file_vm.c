@@ -154,23 +154,14 @@ struct unified_runtime {
     struct blkpart partition;
     uint32_t start,sectors;
 };
-static bool fat_partition(uint8_t type) {
-    return type==0x01 || type==0x04 || type==0x06 || type==0x0e || type==0x0b || type==0x0c;
-}
-/* The partition FreeDOS itself assigns to C: (K2043 initdisk.c
- * ScanForPrimaryPartitions: SCAN_PRIMARYBOOT, then SCAN_PRIMARY): the
- * first active primary FAT partition, else the first primary FAT one.
+/* The partition FreeDOS itself assigns to C: (partition_dos_primary, the
+ * K2043 initdisk.c rule shared with game inventory and save export).
  * A disk without a valid partition table (a superfloppy image whose LBA 0
  * is the FAT boot sector) keeps the whole-disk view. */
 static struct blkdev *unified_source(struct unified_runtime *r) {
     r->start=0; r->sectors=(uint32_t)r->provider.capacity;
     if (partition_scan(&r->provider,&r->table)) return &r->provider;
-    const struct partition *pick=0;
-    for (unsigned pass=0;pass<2 && !pick;pass++)
-        for (unsigned i=0;i<r->table.count && !pick;i++) {
-            const struct partition *p=&r->table.entries[i];
-            if (!p->logical && fat_partition(p->type) && (pass || p->bootable)) pick=p;
-        }
+    const struct partition *pick=partition_dos_primary(&r->table);
     if (!pick || blkpart_init(&r->partition,&r->provider,pick)) return &r->provider;
     struct blkdev *view=blkpart_device(&r->partition);
     view->logical=true;                  /* the VM provider owns caching/coherence */

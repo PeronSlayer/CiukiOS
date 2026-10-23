@@ -194,6 +194,8 @@ static int base_hash_read(struct dosvm *v, uint8_t *buffer, uint32_t size)
         if (e || got != amount) return e ? e : -FS_EIO;
         sha256_update(&hash, buffer, amount); at += amount;
         kpreempt_point();
+        /* fx-4: an owner stopped during a cold hash ends creation now. */
+        if (v->create_cancelled && v->create_cancelled(v->create_cancel_arg)) return -EINTR;
     }
     sha256_final(&hash, binary); sha256_hex(binary, v->base_sha256);
     return 0;
@@ -301,33 +303,47 @@ static void save_index_release(void *arg,void *page)
 }
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
+    const char *step;
+    return dosvm_disk_open_step(v, base, &step);
+}
+int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
+{
+    *step = "disk-state";
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
     if (!base) base = DOSVM_DEFAULT_BASE;
+    *step = "disk-base";
     if (!strncmp(base,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG",sizeof("C:\\SYSTEM\\DOS\\DOSBOOT.IMG")) ||
         !strncmp(base,"C:\\SYSTEM\\DOS\\FREEDOS.IMG",sizeof("C:\\SYSTEM\\DOS\\FREEDOS.IMG"))) return -EINVAL;
     unsigned length = 0;
     while (length < 64 && base[length]) length++;
     if (!length || length == 64) return -EINVAL;
     const char *reason = !strncmp(base, DOSVM_BUNDLED_BASE, sizeof(DOSVM_BUNDLED_BASE)) ? "bundled" : "probe";
+    *step = "storage";
     struct storage *s = storage_get();
     if (!s || !s->ready || s->stopped) return base_error(base, -V86_EIO, reason);
     int e = vfs_table_init(&s->vfs, &v->disk_table, 2);
     if (e) return base_error(base, e, reason);
     v->table_ready = true;
+    *step = "base-stat";
     struct fat_entry entry;
     e = vfs_stat(&v->disk_table, base, &entry);
     if (e) return base_error(base, e, reason);
+    *step = "base-size";
     if (!base_size_valid(entry.size) || (entry.attr & 0x10)) return base_error(base, -EINVAL, reason);
     v->base_sectors = entry.size / 512u;
+    *step = "base-open";
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return base_error(base, v->base, reason);
     v->base_open = true;
+    *step = "read-cache";
     e = read_cache_open(v);
     if (e) return e; /* lifecycle failure unwinds the base/table as before */
     if (v->game || v->kernel) {
+        *step = "base-identity";
         e = base_identity(v, entry.size);
         if (e) return e;
         if (v->kernel==2 && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
+            *step = "base-sidecar";
             char expected[66];
             const char *sidecar="C:\\SYSTEM\\DOS\\UNIFIED.SHA";
             int identity=vfs_open(&v->disk_table,sidecar,VFS_READ,VFS_DENY_WRITE,0);
@@ -341,6 +357,7 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
         }
     }
     if (v->game && !strncmp(base,DOSVM_DEFAULT_BASE,sizeof(DOSVM_DEFAULT_BASE))) {
+        *step = "game-data";
         v->persistent=true;
         v->save.alloc=save_index_alloc; v->save.release=save_index_release; v->save.memory=v;
         v->save_file.table=&v->disk_table;
@@ -359,8 +376,10 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
         if (v->save.recovered_bytes || !v->save.sealed)
             klog("[dosvm] game-data game=%u reason=forced-session-end lost_bytes=%u committed_bytes=%u volatile_loss=unknown",
                  v->game,v->save.recovered_bytes,v->save.committed);
+        *step = "none";
         return 0;
     }
+    *step = "overlay";
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
     if (v->game || v->kernel)
@@ -370,9 +389,10 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
         VFS_READ | VFS_WRITE | VFS_CREATE | VFS_EXCLUSIVE, VFS_DENY_ALL, 0);
     /* A metadata write gate must not hide readable game sectors. A caller
      * may open a read-only DOS disk; guest writes report write protection. */
-    if (v->overlay == -FS_EROFS) return 0;
+    if (v->overlay == -FS_EROFS) { *step = "none"; return 0; }
     if (v->overlay < 0) return v->overlay;
     v->overlay_open = v->overlay_created = true;
+    *step = "none";
     return 0;
 }
 

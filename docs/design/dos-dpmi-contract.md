@@ -1027,3 +1027,48 @@ reclaimed/regrown blocks and overlay rows.
 folds A/D bits of frames that are pinned or not of a replaceable owner
 (`MM_USER_PRIVATE`, `MM_USER_SHARED`, `MM_VM_POOL`): the VGA window (VM
 private) and the pinned VBE buffer harvest by PTE dirty bits.
+
+### fx-4 creation refusal records, unified partition, cancelled cold hash (2026-10-23)
+
+T23 trial of image `9a60215f` (source `9e6e8721`): DOOM and Quake windows
+ended `[launch] … error=-5 stage=vm-create` with no other record, and the
+CiukiDOS window `error=-4`. Root cause: the game inventory in
+`dosvm_programs.c` (run by every game CREATE before admission) accepted only
+MBR type `06h`; the canonical `UNIFIED.IMG` carries the reference MBR of
+`scripts/dos_conformance.py` (one active type `0Eh` FAT16 partition at
+LBA 63), so it mounted the MBR itself as a BPB, the FAT driver refused it
+(`EINVAL`, "BPB signature/sector size/jump") and `closed_error` reported
+`EIO`. Low memory was not involved: zone 1 stayed at `usable=3840
+free=574` in all 47 ledger snapshots, before and after each refusal, and
+every creation allocation is `ZONE_NORMAL` first (low pages, pool, read
+cache, worker).
+
+- **One C: rule.** `partition_dos_primary()` (`fs/partition.h`) is the
+  FreeDOS kernel's `ScanForPrimaryPartitions` order
+  ([initdisk.c](https://github.com/FDOS/kernel/blob/master/kernel/initdisk.c):
+  first active primary FAT partition, else the first primary FAT one) over
+  the FAT system IDs `01h 04h 06h 0Bh 0Ch 0Eh`
+  ([Microsoft Disk Partition Types](https://learn.microsoft.com/en-us/windows/win32/fileio/disk-partition-types),
+  [PARTITION_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_partition_information):
+  `PARTITION_XINT13` is the Windows 95 FAT16 partition using INT 13h
+  extensions). The VM's C: view (`dos_file_vm.c`), game inventory/removal
+  (`dosvm_programs.c`) and save export (`dos_save_store.c`, which had the
+  same type-`06h`-only test) now share it; a disk without a valid table
+  keeps the whole-disk (superfloppy) view.
+- **Refusal record.** Every failed `dosvm_create` emits one
+  `[dosvm] create refused stage=<stage> error=<internal errno> game=<n>
+  reason=<memory|vm-slots|owner-gone|busy|not-installed|invalid|io|…>`
+  record before the client's `[launch]` line. Non-memory refusals add
+  `step=` (inventory or disk-open step) and `detail=` (FAT mount
+  diagnostic); admission refusals add the arithmetic (`free_kib`,
+  `outstanding_kib`, `request_kib`, `headroom_kib`); both add
+  `dma_free_pages` and `normal_free_pages`. The window ABI error mapping is
+  unchanged.
+- **Cancelled cold hash.** `dosvm_config.cancelled` lets the creating owner's
+  exit end the cold base identity hash at the next 64 KiB block with
+  `EINTR` (nothing cached). On the trial the CiukiDOS CREATE ran from about
+  289 s (DOS Box input boost until 289.526 s) to the `maximum-vm-created`
+  snapshot at 308.784 s (cold hash of the 27,676,672-byte base,
+  `cached=0`); the owner had been ended meanwhile, so the completed VM was
+  closed `owner-gone` 17 ms later and CREATE returned `EINTR`. That
+  cold-launch cost is the open f3-63 start-up item, not changed here.
