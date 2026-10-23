@@ -196,7 +196,12 @@ static void copy(const char *path,unsigned latency,bool old_policy,uint64_t *rea
 {
     begin(path,latency);
     struct storage *s=storage_get();struct usb_storage *u=&device()->storage;
-    if(old_policy) blk_queue_set_limits(&u->requests,65536,0); /* f1-83 adaptive split, one-page floor */
+    /* The f1-83 adaptive policy ratcheted the queue to its one-page floor
+     * (T23: limit=4096). Since f3-63 (b72f282f) a lone reader no longer
+     * ratchets (the limit is restored to max after every command with no
+     * competing reader), so the old outcome is modelled by its end state:
+     * a one-page queue maximum with no pinned floor. */
+    if(old_policy) blk_queue_set_limits(&u->requests,4096,0);
     assert(!storage_enable_write(s,4));
     /* The write-enable FAT scan reads whole 32 KiB FATs: writes may use 64 sectors. */
     assert(old_policy || u->read_qualified>=64);
