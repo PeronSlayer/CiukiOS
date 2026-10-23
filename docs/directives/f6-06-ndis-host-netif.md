@@ -15,3 +15,12 @@
 4. **Lead hooks.** Provide the probe commands and records the lead needs to qualify `e1000325.sys` on QEMU `e1000` and `atnicm51.sys` on `pcnet`: the exact hashes from the pack, and the expected record sequence.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (NDIS 5.1 DDK pages). Host tests one at a time with `nice -n 19`. Write `build/codex/f6-06-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 03:51): the four refused exports
+
+Implement `NdisMRegisterDevice`, `NdisMDeregisterDevice`, `NdisMSetMiniportSecondary` and `NdisMPromoteMiniport` as real exports with honest results; never fake success.
+- **`NdisMRegisterDevice`** returns `NDIS_STATUS_NOT_SUPPORTED` (no control device is created; the host serves no user-mode I/O to a miniport) and records `[ndis] control-device refused driver=…`.
+- **`NdisMDeregisterDevice`** returns `NDIS_STATUS_FAILURE` for any handle, since none can exist.
+- **`NdisMSetMiniportSecondary` and `NdisMPromoteMiniport`** return `NDIS_STATUS_NOT_SUPPORTED`, because a host serves exactly one adapter and teaming is unsupported.
+
+The four are documented in the export table as supported-with-refusal, and the three pinned drivers then pass import resolution. Tests: import resolution of the three exact import sets (from the census), each refusal path, and a synthetic miniport that treats a refused control device as optional and continues initialization.
