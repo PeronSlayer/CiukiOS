@@ -41,8 +41,9 @@ class DisplayDriverTests(unittest.TestCase):
     def test_target_translation_units(self):
         spec=importlib.util.spec_from_file_location('display_kernel_flags',ROOT/'scripts/build_kernel.py')
         module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        sources=['drivers/video/registry.c','drivers/video/s3savage_register.c','drivers/video/swdib.c',
-            'drivers/fbdev.c','core/devices.c','core/display.c','core/hardware_check.c',
+        sources=['drivers/video/registry.c','drivers/video/s3savage_register.c','drivers/video/swdib.c','drivers/video/batch.c',
+            'proc/display_batch.c','proc/surface.c','proc/grants.c',
+            'drivers/fbdev.c','drivers/savage2d.c','core/devices.c','core/display.c','core/hardware_check.c',
             'core/hardware_check_model.c','proc/syscalls_desktop.c']
         folder=ROOT/'build/host'; folder.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='display-target-',dir=folder) as tmp:

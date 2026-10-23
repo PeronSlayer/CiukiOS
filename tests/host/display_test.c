@@ -190,6 +190,7 @@ int copy_from_user(void *dst, uint32_t src, uint32_t n) { copies++; if (src > si
 int copy_to_user(uint32_t dst, const void *src, uint32_t n) { copies++; if (dst > sizeof(user) || n > sizeof(user) - dst) return -EFAULT; memcpy(user + dst, src, n); return 0; }
 
 #include "../../src/kernel/drivers/video/swdib.c"
+#include "../../src/kernel/drivers/video/batch.c"
 #include "../../src/kernel/drivers/fbdev.c"
 #include "display_driver_software_fixture.h"
 #include "../../src/kernel/core/display.c"

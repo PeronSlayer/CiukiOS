@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rows.h"
+#include "../libdeskui/deskui.h"
+#pragma weak du_commands
 /* f2-95 (lead amendment): damage and clip regions are the X11 sample
  * server's region algorithms as maintained in pixman 0.46.4 (MIT,
  * third_party/pixman, pinned in its README.md), compiled into this unit
@@ -720,10 +722,25 @@ static struct desk_cursor_raster cursor_raster(const struct desktop *d)
     if (shape<=DESK_CURSOR_PRECISION) return desk_cursors[shape];
     if (shape>=DESK_CURSOR_COUNT) return desk_cursors[DESK_CURSOR_ARROW];
     struct desk_tool_cursor tool=desk_tool_cursor(shape);
-    struct desk_cursor_raster raster={(unsigned)tool.hot_x,(unsigned)tool.hot_y,32,32,{0},{0}};
+    struct desk_cursor_raster raster={.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
     memcpy(raster.mask,tool.mask,sizeof(raster.mask));
     memcpy(raster.image,tool.image,sizeof(raster.image));
     return raster;
+}
+static uint32_t cursor_background(void)
+{ return desk_cursors[0].shadow ? 0 : 0x101010u; }
+static uint32_t cursor_display_rgb(const struct desktop *d, uint32_t rgb)
+{
+    const struct ciuki_framebuffer_info *f=&d->command_format;
+    const unsigned sizes[]={f->blue_size,f->green_size,f->red_size};
+    if (f->generation!=d->accel_generation) return rgb;
+    uint32_t out=0;
+    for (unsigned i=0;i<3;i++) {
+        unsigned n=sizes[i]; if (!n || n>8) return rgb;
+        unsigned m=(1u<<n)-1, v=((rgb>>(i*8))&255)>>(8-n);
+        out|=((255*v+m/2)/m)<<(i*8);
+    }
+    return out;
 }
 static struct desk_box pointer_box(const struct desktop *d)
 {
@@ -840,6 +857,19 @@ static void cursor(struct desktop *d, struct desk_box clip)
     struct desk_box box=pointer_box(d);
     struct desk_cursor_raster r=cursor_raster(d);
     if (d->hw_cursor || d->v3_cursor_hidden || !desk_intersect(box,clip,&b)) return;
+    if (!d->v3_cursor_id && !r.shadow && du_commands) {
+        uint8_t planes[256]={0}; unsigned stride=(r.width+7)/8, extent=stride*r.height;
+        for (unsigned y=0;y<r.height;y++) for (unsigned x=0;x<r.width;x++) {
+            unsigned bit=0x80000000u>>x;
+            if (r.mask[y]&bit) planes[(r.image[y]&bit ? 0 : extent)+y*stride+x/8]|=128u>>(x%8);
+        }
+        struct ciuki_batch_record records[2];
+        for (unsigned i=0;i<2;i++) records[i]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_MONO,.record_bytes=128,
+            .flags=CIUKI_CMD_TRANSPARENT_BG,.dx=box.x,.dy=box.y,.dw=r.width,.dh=r.height,.sw=r.width,.sh=r.height,
+            .foreground=i ? cursor_background() : 0xffffffu,.data_offset=i*extent,.data_bytes=extent,.stride=stride};
+        struct du_canvas canvas={d->pixels,(int)d->width,(int)d->height,{b.x,b.y,b.w,b.h}};
+        if (!du_commands(&canvas,records,2,planes,NULL,0,0)) return;
+    }
     uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
     int stride=(int)d->width;
     for (int y=0; y<b.h; y++) {
@@ -856,7 +886,16 @@ static void cursor(struct desktop *d, struct desk_box clip)
             }
             uint32_t bit=0x80000000u>>(b.x+x-box.x);
             unsigned row=(unsigned)(b.y+y-box.y);
-            if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : 0x101010u;
+            if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : cursor_background();
+            else if (r.shadow) {
+                unsigned a=r.shadow[row*32+(unsigned)(b.x+x-box.x)], inv=255-a;
+                if (!a) continue;
+                uint32_t under=cursor_display_rgb(d,dst[x]);
+                unsigned red=(((under>>16)&255)*inv+127)/255;
+                unsigned green=(((under>>8)&255)*inv+127)/255;
+                unsigned blue=((under&255)*inv+127)/255;
+                dst[x]=(red<<16)|(green<<8)|blue;
+            }
         }
     }
 }
@@ -869,6 +908,7 @@ void desk_composite(struct desktop *d, struct desk_box clip)
 }
 void desk_render_release(struct desktop *d)
 {
+    free(d->command_old_pixels); d->command_old_pixels=NULL;
     free(d->render_cache); d->render_cache=NULL; d->render_cache_prepared=0;
     d->scanout_valid=d->frame_valid=0;
     d->copy_pending=0; d->move_damage.count=0;
@@ -929,16 +969,86 @@ static uint32_t accel_query(struct desktop *d)
     if (accel_retry(caps)) return d->accel_caps;
     return caps>0 ? (uint32_t)caps : 0;
 }
+static void command_query(struct desktop *d)
+{
+    if (!d->commands || !d->batch || !d->fence) return;
+    struct ciuki_command_info info;
+    int e=d->commands(d->display,d->accel_generation,&info);
+    if (accel_retry(e)) return;
+    d->command_caps=!e && info.version==1 && info.size==sizeof(info) ? info.capabilities : 0;
+    d->command_native=!e ? info.native_commands : 0;
+    d->colour_cursor_width=!e ? info.cursor_width : 0;
+    d->colour_cursor_height=!e ? info.cursor_height : 0;
+    if (!e && d->display_info && d->command_format.generation!=d->accel_generation) {
+        struct ciuki_framebuffer_info format;
+        if (!d->display_info(d->display,&format)) d->command_format=format;
+    }
+}
+static int pointer_capable(const struct desktop *d)
+{ return (d->accel_caps&2u) || (d->command_caps&CIUKI_CAP_CURSOR_ARGB); }
+/* No caller retries a failed admitted batch. The authoritative RAM scene is
+ * reconstructed after CPU safety, and unsafe fences suppress presentation. */
+static int command_submit_targets(struct desktop *d, const struct ciuki_batch_record *records, unsigned count,
+                           const void *payload, unsigned bytes, int video)
+{
+    unsigned targets=video ? 2 : 1;
+    unsigned prefix=64+128*count+32*targets, padded=(bytes+7)&~7u, total=prefix+padded;
+    if (!d->batch || !d->fence || d->recovering_fence || count>64 || total>CIUKI_BATCH_MAX_BYTES) return -EOPNOTSUPP;
+    uint8_t *blob=calloc(1,total); if (!blob) return -ENOMEM;
+    struct ciuki_batch_header *h=(void *)blob;
+    *h=(struct ciuki_batch_header){CIUKI_BATCH_MAGIC,1,64,total,count,64,64+128*count,targets,prefix,padded,0,d->accel_generation,{0}};
+    struct ciuki_batch_record *out=(void *)(blob+64);
+    for (unsigned i=0;i<count;i++) {
+        out[i]=records[i]; out[i].record_bytes=128;
+        if (out[i].opcode!=CIUKI_CMD_SYNC && !out[i].dst) out[i].dst=1;
+        if (out[i].data_bytes) out[i].data_offset+=prefix;
+        if (out[i].clip_count) out[i].clip_offset+=prefix;
+    }
+    struct ciuki_batch_target target={.kind=CIUKI_TARGET_SCANOUT,.generation=d->accel_generation};
+    memcpy(blob+h->targets_offset,&target,32);
+    if (video) {
+        target.kind=CIUKI_TARGET_VIDEO; target.handle=(uint32_t)d->display;
+        memcpy(blob+h->targets_offset+32,&target,32);
+    }
+    if (bytes) memcpy(blob+prefix,payload,bytes);
+    struct ciuki_batch_reply reply={0};
+    int e=d->batch(d->display,blob,total,&reply);
+    free(blob);
+    if (reply.fence) {
+        if (!(reply.flags&CIUKI_FENCE_CPU_SAFE)) d->recovering_fence=reply.fence;
+        else {
+            struct ciuki_batch_reply released;
+            (void)d->fence(d->display,reply.fence,CIUKI_FENCE_RELEASE,0,&released);
+        }
+    }
+    return e;
+}
+static int command_submit(struct desktop *d, const struct ciuki_batch_record *records, unsigned count,
+                           const void *payload, unsigned bytes)
+{ return command_submit_targets(d,records,count,payload,bytes,0); }
 /* f2-96: one pointer on screen. CURSOR_SET hides the hardware cursor before
  * loading the shape (native cursor_set), so a loaded cursor is hidden
  * until the frame's MOVE and SHOW. */
 static int pointer_load(struct desktop *d)
 {
-    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=cursor_background()};
     struct desk_cursor_raster r=cursor_raster(d);
+    if ((d->command_caps&CIUKI_CAP_CURSOR_ARGB) && r.width<=d->colour_cursor_width && r.height<=d->colour_cursor_height) {
+        uint32_t *argb=calloc((size_t)r.width*r.height,4); if (!argb) return -ENOMEM;
+        for (unsigned y=0;y<r.height;y++) for (unsigned x=0;x<r.width;x++) {
+            uint32_t bit=0x80000000u>>x;
+            if (r.mask[y]&bit) argb[y*r.width+x]=r.image[y]&bit ? 0xffffffffu : 0xff000000u|cursor_background();
+            else if (r.shadow) argb[y*r.width+x]=(uint32_t)r.shadow[y*32+x]<<24;
+        }
+        struct ciuki_batch_record record={.opcode=CIUKI_CMD_CURSOR_ARGB_SET,.dw=r.width,.dh=r.height,
+            .origin_x=(int)r.hot_x,.origin_y=(int)r.hot_y,.stride=r.width*4,.data_bytes=r.width*r.height*4};
+        int error=command_submit(d,&record,1,argb,record.data_bytes); free(argb);
+        if (!error) { d->hw_colour_cursor=1; d->hw_cursor=1; d->hw_cursor_shown=0; d->cursor_loaded=d->cursor_shape; d->cursor_dirty=1; }
+        return error;
+    }
     memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
     int error=accel_call(d,&q);
-    if (!error) { d->hw_cursor=1; d->hw_cursor_shown=0; d->cursor_loaded=d->cursor_shape; d->cursor_dirty=1; }
+    if (!error) { d->hw_colour_cursor=0; d->hw_cursor=1; d->hw_cursor_shown=0; d->cursor_loaded=d->cursor_shape; d->cursor_dirty=1; }
     return error;
 }
 /* Hide a hardware cursor that no longer owns the pointer. A refusal other
@@ -948,7 +1058,12 @@ static void pointer_hide(struct desktop *d)
 {
     if (d->hw_cursor || !d->hw_cursor_shown) return;
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SHOW,.colour=0};
-    int error=accel_call(d,&q);
+    int error=d->hw_colour_cursor ? 0 : accel_call(d,&q);
+    if (d->hw_colour_cursor) {
+        struct ciuki_batch_record record={.opcode=CIUKI_CMD_CURSOR_SHOW};
+        error=command_submit(d,&record,1,NULL,0);
+    }
+    if (d->recovering_fence) return;
     if (!error || !accel_retry(error)) d->hw_cursor_shown=0;
     else d->hw_cursor_retries++;
     d->cursor_dirty=1; /* draw the software pointer, or ask again next frame */
@@ -979,10 +1094,17 @@ static void vram_query(struct desktop *d)
     int rows=accel_call(d,&q);
     uint32_t first=rows>0 ? (uint32_t)rows&0xffffu : 0, end=rows>0 ? (uint32_t)rows>>16 : 0;
     if (end>first && first>=d->height) { d->vram_first=first; d->vram_end=end; }
+    d->command_video_valid=0;
+    if (end>first && first>=d->height && (d->command_caps&CIUKI_CAP_KEYED) &&
+        (d->command_native&(1u<<CIUKI_CMD_WRITE))) {
+        d->command_video_row=end-first-1; d->command_video_valid=1;
+        d->vram_end=end-1; /* reserve one row, disjoint from legacy caches */
+    }
 }
 static void vram_reset(struct desktop *d)
 {
     for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) vram_free(&d->vram[i]);
+    d->command_video_valid=0;
     d->vram_first=d->vram_end=0; d->vram_check_ns=d->vram_query_ns=0; d->vram_queries=d->vram_failures=0;
     if (d->accel && (d->accel_caps&1u)) vram_query(d);
 }
@@ -994,13 +1116,14 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
      * or a display lease (display_present), both of which hide the cursor. */
     if (generation!=d->accel_generation) d->hw_cursor_shown=0;
     d->accel_generation=generation;
+    command_query(d);
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-    if (!(d->accel_caps&2u) && !accel_retry(caps)) d->hw_cursor_shown=0;
+    if (!pointer_capable(d) && !accel_retry(caps)) d->hw_cursor_shown=0;
     vram_reset(d);
     d->cursor_loaded=DESK_CURSOR_COUNT;
-    if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) (void)pointer_load(d);
+    if (pointer_capable(d) && !d->v3_cursor_id && !d->v3_cursor_hidden) (void)pointer_load(d);
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
 }
 void desk_cursor_motion(struct desktop *d)
@@ -1022,7 +1145,7 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
         d->frame_stats.accel_fallback++;
         d->scanout_valid=0;
         d->accel_caps=accel_query(d);
-        if (!(d->accel_caps&2u)) d->hw_cursor=d->hw_cursor_shown=0; /* engine loss hid it */
+        if (!pointer_capable(d)) d->hw_cursor=d->hw_cursor_shown=0; /* engine loss hid it */
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         return -1;
     }
@@ -1228,8 +1351,118 @@ static int engine_failed(struct desktop *d)
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     return -1;
 }
+/* Batch only when a native command family is advertised. Legacy adapters
+ * retain their existing fill/copy/cache paths. Binary rows (including text)
+ * use MONO; coverage/photographic rows retain exact XRGB uploads. */
+static const uint32_t *command_previous(const struct desktop *d, struct desk_box b, int y)
+{
+    struct desk_box old=d->command_old_box;
+    if (!d->command_old_pixels || b.x<old.x || b.x+b.w>old.x+old.w || y<old.y || y>=old.y+old.h) return NULL;
+    return d->command_old_pixels+(size_t)(y-old.y)*old.w+b.x-old.x;
+}
+static int invert_spans(const uint32_t *old, const uint32_t *row, int width, int x, int y,
+                        struct ciuki_batch_clip clips[16], unsigned *count)
+{
+    *count=0;
+    for (int i=0;i<width;) {
+        if (((old[i]^row[i])&0xffffffu)==0) { i++; continue; }
+        if (((old[i]^row[i])&0xffffffu)!=0xffffffu || *count==16) return 0;
+        int start=i++;
+        while (i<width && ((old[i]^row[i])&0xffffffu)==0xffffffu) i++;
+        clips[(*count)++]=(struct ciuki_batch_clip){x+start,y,(unsigned)(i-start),1};
+    }
+    return 1;
+}
+static int row_key(const struct desktop *d, const uint32_t *old, const uint32_t *row, int width, uint32_t *key)
+{
+    const struct ciuki_framebuffer_info *f=&d->command_format;
+    unsigned r=f->red_size,g=f->green_size,b=f->blue_size;
+    if (f->generation!=d->accel_generation || !r || !g || !b || r>8 || g>8 || b>8) return 0;
+    unsigned palette=1u<<(r+g+b);
+    for (unsigned candidate=0;candidate<palette && candidate<=(unsigned)width;candidate++) {
+        unsigned red=(candidate>>(g+b))&((1u<<r)-1), green=(candidate>>b)&((1u<<g)-1), blue=candidate&((1u<<b)-1);
+        uint32_t rgb=red<<(24-r)|green<<(16-g)|blue<<(8-b); int found=0;
+        for (int x=0;x<width;x++) if (((row[x]^old[x])&0xffffffu) &&
+            ((row[x]>>(24-r))&((1u<<r)-1))==red && ((row[x]>>(16-g))&((1u<<g)-1))==green &&
+            ((row[x]>>(8-b))&((1u<<b)-1))==blue) { found=1; break; }
+        if (!found) { *key=rgb; return 1; }
+    }
+    return 0;
+}
+static void command_capture_previous(struct desktop *d)
+{
+    free(d->command_old_pixels); d->command_old_pixels=NULL;
+    if (!(d->command_caps&(CIUKI_CAP_INVERT|CIUKI_CAP_KEYED)) || !d->hw_cursor || !d->scanout_valid ||
+        d->copy_pending || d->move_damage.count || d->damage.count!=1) return;
+    struct desk_box b;
+    if (!desk_intersect(d->damage.boxes[0],(struct desk_box){0,0,(int)d->width,(int)d->height},&b) ||
+        (uint64_t)b.w*b.h*4>65536) return;
+    d->command_old_pixels=malloc((size_t)b.w*b.h*4); if (!d->command_old_pixels) return;
+    d->command_old_box=b;
+    for (int y=0;y<b.h;y++) memcpy(d->command_old_pixels+(size_t)y*b.w,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
+}
+static int present_box_commands(struct desktop *d, struct desk_box b)
+{
+    unsigned row_bytes=(((unsigned)b.w*4+7)&~7u), capacity=(row_bytes>256 ? row_bytes : 256)*32;
+    uint8_t *payload=calloc(1,capacity);
+    struct ciuki_batch_record *records=calloc(64,sizeof(*records));
+    if (!payload || !records) { free(payload); free(records); return -ENOMEM; }
+    for (int y=b.y;y<b.y+b.h;) {
+        memset(payload,0,capacity);
+        unsigned n=0, bytes=0; int video=0;
+        for (unsigned rows=0;rows<32 && y<b.y+b.h;rows++,y++) {
+            const uint32_t *row=d->pixels+(size_t)y*d->width+b.x, *old=command_previous(d,b,y);
+            struct ciuki_batch_clip clips[16]; unsigned count=0; uint32_t key;
+            if (old && (d->command_caps&CIUKI_CAP_INVERT) && invert_spans(old,row,b.w,b.x,y,clips,&count)) {
+                if (count) {
+                    records[n++]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_INVERT,.dx=b.x,.dy=y,.dw=b.w,.dh=1,
+                        .clip_offset=bytes,.clip_count=count};
+                    memcpy(payload+bytes,clips,count*16); bytes+=count*16;
+                }
+                continue;
+            }
+            if (old && d->command_video_valid && (d->command_caps&CIUKI_CAP_KEYED) && row_key(d,old,row,b.w,&key)) {
+                records[n++]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_WRITE,.dst=2,.dy=(int)d->command_video_row,
+                    .dw=b.w,.dh=1,.sw=b.w,.sh=1,.data_offset=bytes,.data_bytes=(unsigned)b.w*4,.stride=(unsigned)b.w*4};
+                for (int x=0;x<b.w;x++) {
+                    uint32_t value=((row[x]^old[x])&0xffffffu) ? row[x]&0xffffffu : key;
+                    memcpy(payload+bytes+x*4,&value,4);
+                }
+                bytes+=row_bytes; video=1;
+                records[n++]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_KEYED,.src=2,.sy=(int)d->command_video_row,
+                    .dx=b.x,.dy=y,.dw=b.w,.dh=1,.key=key};
+                continue;
+            }
+            uint32_t fg=row[0]&0xffffffu, bg=fg; unsigned colours=1;
+            for (int x=1;x<b.w;x++) if ((row[x]&0xffffffu)!=fg) {
+                if (colours==1) { bg=row[x]&0xffffffu; colours=2; }
+                else if ((row[x]&0xffffffu)!=bg) { colours=3; break; }
+            }
+            struct ciuki_batch_record *r=&records[n++];
+            *r=(struct ciuki_batch_record){.dx=b.x,.dy=y,.dw=b.w,.dh=1};
+            if (colours==1) { r->opcode=CIUKI_CMD_FILL; r->foreground=fg; continue; }
+            r->sw=b.w; r->sh=1; r->data_offset=bytes;
+            if (colours==2 && (d->command_caps&CIUKI_CAP_MONO)) {
+                r->opcode=CIUKI_CMD_MONO; r->foreground=fg; r->background=bg;
+                r->stride=r->data_bytes=((unsigned)b.w+7)/8;
+                for (int x=0;x<b.w;x++) if ((row[x]&0xffffffu)==fg) payload[bytes+x/8]|=128u>>(x%8);
+            } else {
+                r->opcode=CIUKI_CMD_WRITE; r->stride=r->data_bytes=(unsigned)b.w*4;
+                memcpy(payload+bytes,row,(size_t)b.w*4);
+            }
+            bytes+=(r->data_bytes+7)&~7u;
+        }
+        int e=n ? command_submit_targets(d,records,n,payload,bytes,video) : 0;
+        if (e) { free(payload); free(records); return e; }
+        if (n) { d->presents++; d->frame_stats.presents++; }
+    }
+    free(payload); free(records); return 0;
+}
 static int present_box_raw(struct desktop *d, struct desk_box b)
 {
+    if (d->batch && (d->command_caps&(CIUKI_CAP_MONO|CIUKI_CAP_INVERT|CIUKI_CAP_KEYED)))
+        return present_box_commands(d,b) ? engine_failed(d) : 0;
+
     int engine=(d->accel_caps&1u) && d->accel;
     /* f2-92: offscreen-cache copies need no previous scanout; fills and
      * duplicate-row copies keep requiring a completed engine-era frame. */
@@ -1403,6 +1636,17 @@ void desk_stats_sample(struct desktop *d)
 extern void desk_v3_present_complete(struct desktop *) __attribute__((weak));
 int desk_redraw(struct desktop *d)
 {
+    if (d->recovering_fence) {
+        struct ciuki_batch_reply result;
+        int e=d->fence(d->display,d->recovering_fence,CIUKI_FENCE_WAIT,1,&result);
+        if (e || !(result.flags&CIUKI_FENCE_CPU_SAFE)) return 0;
+        (void)d->fence(d->display,d->recovering_fence,CIUKI_FENCE_RELEASE,0,&result);
+        d->recovering_fence=0; d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1;
+        d->scanout_valid=0;
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        command_query(d);
+    }
+
     /* f2-95: while a leased program owns the display, retained damage waits
      * at the frame cadence (it is drawn when the lease ends). */
     if (d->v3_lease_state) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
@@ -1437,6 +1681,7 @@ int desk_redraw(struct desktop *d)
     memset(s,0,sizeof(*s)); s->frames=1;
     uint64_t begin=time_now(d);
     if (d->accel) {
+        command_query(d);
         uint32_t had=d->accel_caps;
         d->accel_caps=accel_query(d);
         if ((had&1u) && !(d->accel_caps&1u)) {
@@ -1451,11 +1696,11 @@ int desk_redraw(struct desktop *d)
              * the offscreen rows exactly as for a new generation (one full
              * software frame), otherwise window moves never use the engine. */
             desk_accel_reset(d,d->accel_generation);
-        } else if ((d->hw_cursor || d->hw_cursor_shown) && !(d->accel_caps&2u)) {
+        } else if ((d->hw_cursor || d->hw_cursor_shown) && !pointer_capable(d)) {
             /* Engine loss: the kernel hid the cursor; software returns. */
             d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; d->scanout_valid=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
-        } else if (!d->hw_cursor && (d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden &&
+        } else if (!d->hw_cursor && pointer_capable(d) && !d->v3_cursor_id && !d->v3_cursor_hidden &&
                    frame_begin>=d->hw_cursor_retry_ns) {
             /* f2-96: the engine takes the pointer back (after a client
              * pointer or a failed request). The scanout still holds the
@@ -1473,6 +1718,7 @@ int desk_redraw(struct desktop *d)
     pixman_region32_t move_region, damage_region;
     region_load(d,&move_region,&d->move_damage); region_load(d,&damage_region,&d->damage);
     begin=time_now(d);
+    command_capture_previous(d);
     if (d->cursor_valid) {
         struct desk_box b=d->cursor_box;
         for (int y=0;y<b.h;y++)
@@ -1522,7 +1768,7 @@ int desk_redraw(struct desktop *d)
      * acknowledging either launch or a display-mode change. */
     if (d->hw_cursor) {
         d->accel_caps=accel_query(d);
-        if (!(d->accel_caps&2u)) { d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; complete=0; }
+        if (!pointer_capable(d)) { d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; complete=0; }
     }
     if (d->hw_cursor && d->cursor_dirty && complete) {
         /* f2-96: busy/stale answers keep the hardware owner and retry on the
@@ -1531,9 +1777,16 @@ int desk_redraw(struct desktop *d)
         int error=d->cursor_loaded!=d->cursor_shape ? pointer_load(d) : 0;
         struct desk_box box=pointer_box(d);
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,.rect={0,0,box.x,box.y,0,0}};
-        if (!error) error=accel_call(d,&q);
-        q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
-        if (!error && !(error=accel_call(d,&q))) d->hw_cursor_shown=1;
+        if (d->hw_colour_cursor) {
+            struct ciuki_batch_record records[2]={{.opcode=CIUKI_CMD_CURSOR_MOVE,.dx=d->mouse_x,.dy=d->mouse_y},
+                {.opcode=CIUKI_CMD_CURSOR_SHOW,.flags=CIUKI_CMD_SHOW}};
+            if (!error) error=command_submit(d,records,2,NULL,0);
+            if (!error) d->hw_cursor_shown=1;
+        } else {
+            if (!error) error=accel_call(d,&q);
+            q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+            if (!error && !(error=accel_call(d,&q))) d->hw_cursor_shown=1;
+        }
         if (!error) { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
         else if (accel_retry(error)) d->hw_cursor_retries++;
         else { pointer_software(d,time_now(d)); complete=0; }

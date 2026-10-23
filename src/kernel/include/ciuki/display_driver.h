@@ -84,5 +84,7 @@ void display_driver_record(void);
 bool display_driver_refresh(void);
 void display_driver_info(struct ciuki_display_engine_info *);
 void display_driver_count(unsigned operation, bool native);
+void display_driver_command_count(unsigned opcode, bool native);
+void display_driver_command_counters(struct ciuki_command_info *);
 bool display_driver_summary(bool *, bool *, const char **);
 #endif

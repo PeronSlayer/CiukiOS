@@ -20,6 +20,7 @@
 static unsigned failures, cases;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 struct ciuki_boot_info g_boot;
+struct task *g_current;
 static struct resource reservation;
 static uint8_t *fake_lfb;
 static unsigned map_calls, locks, ends, passes, data_records;
@@ -166,6 +167,7 @@ int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool 
 { (void)t; (void)s; (void)e; (void)o; (void)share; return -EINVAL; }
 
 #include "../../src/kernel/drivers/video/swdib.c"
+#include "../../src/kernel/drivers/video/batch.c"
 #include "../../src/kernel/drivers/fbdev.c"
 #ifndef DISPLAY_DRIVER_FIXTURE_REAL
 #include "display_driver_legacy_fixture.h"

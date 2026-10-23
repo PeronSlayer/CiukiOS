@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/desktop.h>
+#include <ciuki/display_batch.h>
 extern uint32_t display_change_counter(void) __attribute__((weak));
 
 int32_t desktop_syscall(struct trap_frame *tf)
@@ -15,6 +16,27 @@ int32_t desktop_syscall(struct trap_frame *tf)
         if (!d || d->kind != DESKTOP_DISPLAY) return -EBADF;
         if (d->owner != p->pid || !(d->maximum & PROT_WRITE)) return -EACCES;
         int err = copy_from_user(&q,tf->ecx,sizeof(q));
+        if (!err && q.size==sizeof(q) && (q.operation==CIUKI_ACCEL_BATCH || q.operation==CIUKI_ACCEL_FENCE))
+            return grant_batch_request(p,(int32_t)tf->ebx,tf->edx,q.operation==CIUKI_ACCEL_FENCE);
+        if (!err && q.operation==CIUKI_ACCEL_QUERY_SURFACE) {
+            if (q.size!=sizeof(q) || q.colour!=1 || q.background<sizeof(struct ciuki_batch_surface_info)) return -EINVAL;
+            struct swdib_target target;
+            struct desktop_description *surface=desktop_fd(p,q.rect.src_x);
+            int e=surface_batch_target(surface,0,&target);
+            if (e) return e;
+            struct ciuki_batch_surface_info out={sizeof(out),1,target.device.generation,*surface_geometry(surface->u.surface)};
+            return copy_to_user(tf->edx,&out,sizeof(out));
+        }
+        if (!err && q.operation==CIUKI_ACCEL_QUERY_COMMANDS) {
+            if (q.size!=sizeof(q) || q.colour!=1 || q.background<sizeof(struct ciuki_command_info)) return -EINVAL;
+            struct ciuki_accel_request legacy=q; legacy.operation=CIUKI_ACCEL_QUERY;
+            struct ciuki_accel_info ignored;
+            err=grant_accel_info(p,(int32_t)tf->ebx,&legacy,&ignored);
+            if (err) return err;
+            struct ciuki_command_info out;
+            err=fbdev_command_info(q.generation,&out);
+            return err ? err : copy_to_user(tf->edx,&out,sizeof(out));
+        }
         if (!err && q.operation == CIUKI_ACCEL_QUERY_ENGINE) {
             if (q.size != sizeof(q) || q.colour != CIUKI_DISPLAY_ENGINE_VERSION ||
                 q.background < sizeof(struct ciuki_display_engine_info) || !tf->edx) return -EINVAL;

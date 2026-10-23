@@ -1988,6 +1988,9 @@ int main(int argc, char **argv)
     d->accel=ciuki_display_accel;
     d->accel_info=ciuki_display_accel_info;
     d->engine_info=ciuki_display_engine_info;
+    d->commands=ciuki_display_commands;
+    d->batch=ciuki_display_batch;
+    d->fence=ciuki_display_fence;
     d->display_info=ciuki_display_info;
     d->gfx_benchmark=gfx_benchmark;
     if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }

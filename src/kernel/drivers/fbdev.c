@@ -1,6 +1,7 @@
 /* F1 LFB presenter and f1-23 quiesced runtime remapping.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h>
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
 #include <ciuki/registry.h>
@@ -8,6 +9,7 @@
 #include <ciuki/accel.h>
 #include <ciuki/display_driver.h>
 #include <ciuki/swdib.h>
+#include <ciuki/display_batch.h>
 #include <ciuki/task.h>
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
@@ -39,12 +41,22 @@ static unsigned drawing;
  * its proven completion; it may have released the presenter lock between
  * 1 ms wait slices while keeping its `drawing` claim. Mode changes wait. */
 static bool accel_inflight;
+static struct display_batch *batch_owner;
+static bool batch_cursor_shape;
+static uint64_t batch_slice_start;
+static bool batch_recovery_active;
+static struct task *batch_recovery_task;
+static uint32_t batch_video_first, batch_video_end, batch_video_generation;
+static uint32_t offscreen_end(uint32_t *first);
 static uint64_t full_count, full_bytes, full_total_us, full_last_us, full_max_us, full_log_tick;
 enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
 
 static void presenter_unlock(void)
 {
     if (!accel_initializing && display_driver_refresh()) accel_blocked=true;
+    batch_video_first=batch_video_end=0;
+    batch_video_generation=device.generation;
+    if (!accel_initializing && !accel_blocked) batch_video_end=offscreen_end(&batch_video_first);
     kmutex_unlock(&presenter);
 }
 
@@ -75,6 +87,7 @@ void fbdev_console_end(void)
 
 static bool present_begin(const struct fb_device *d, const struct fb_rect *c)
 {
+    if (d == &device && batch_owner) return false;
     if (d != &device || (!acceleration && (unsigned)c->y >= __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE)))
         return true;
     unsigned idle = 0;
@@ -569,6 +582,7 @@ static int accel_pause(void *arg)
     presenter_unlock();
     if (grants_display_yield) grants_display_yield();
     kmutex_lock(&presenter);
+    if (batch_owner && g_cpu_tsc && g_tsc_per_ms) batch_slice_start=read_tsc_unserialized();
     if (validate_deadline && g_ticks >= validate_deadline) return -ETIMEDOUT;
     if (validate_cancel && validate_cancel(validate_context)) return -EINTR;
     return 0;
@@ -695,6 +709,7 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
         cursor.foreground=swdib_pack(&device,q->colour); cursor.background=swdib_pack(&device,q->background);
         err=acceleration->cursor_show(acceleration->ctx,false);
         if (!err) err=acceleration->cursor_set(acceleration->ctx,&cursor);
+        if (!err) batch_cursor_shape=true;
     } else if (q->operation == CIUKI_ACCEL_CURSOR_MOVE)
         err=acceleration->cursor_move(acceleration->ctx,q->rect.dst_x,q->rect.dst_y);
     else err=acceleration->cursor_show(acceleration->ctx,q->colour!=0);
@@ -944,6 +959,7 @@ static bool change_idle(int handle, gen_t generation)
 
 int fbdev_change_begin(void)
 {
+    if (batch_owner) { batch_owner->cancel=true; return -EBUSY; }
     if (!initialized || changing || accel_initializing || accel_inflight || !live()) return -EBUSY;
     if (!console_framebuffer_revoke || !console_framebuffer_changed) return -ENODEV;
     changing = true; /* stop submissions before waiting for the last presenter */
@@ -955,6 +971,7 @@ int fbdev_change_begin(void)
         changing = false; presenter_unlock(); return -EIO;
     }
     acceleration=0; /* successful stop may have revoked register mappings */
+    batch_cursor_shape=false;
     if (!change_window) {
         uint32_t capacity = device.size;
         for (unsigned i = 0; i < g_boot.display.mode_count; i++) {
@@ -1000,4 +1017,209 @@ void fbdev_change_end(void)
     changing = false;
     presenter_unlock();
     if (accel_vfs) fbdev_accel_schedule(accel_vfs);
+}
+
+/* Batch ownership is deliberately stronger than presenter ownership. begin
+ * claims the entire drawing domain even on a software-only boot; that claim
+ * and accel_inflight survive every CPU/native wait slice and unsafe return. */
+static int video_target_snapshot(uint32_t generation, uint32_t first, uint32_t end, struct swdib_target *out)
+{
+    if (!live() || generation!=device.generation) return -EAGAIN;
+    if (end<=first || first<device.height) return -EAGAIN;
+    uint64_t offset=(uint64_t)first*device.pitch, size=(uint64_t)(end-first)*device.pitch;
+    if (size>CIUKI_BATCH_MAX_EXTENT || (uint64_t)device.phys+offset+size>UINT32_MAX) return -EOVERFLOW;
+    *out=(struct swdib_target){.device=device,.identity=&device,.offset=offset,.rights=PROT_READ|PROT_WRITE,.kind=CIUKI_TARGET_VIDEO};
+    out->device.phys+=(uint32_t)offset; out->device.height=end-first;
+    out->device.size=(uint32_t)size; out->device.mapped=NULL;
+    return 0;
+}
+static int video_target_locked(uint32_t generation, struct swdib_target *out)
+{
+    uint32_t first=0, end=offscreen_end(&first);
+    return video_target_snapshot(generation,first,end,out);
+}
+int fbdev_batch_video_target(uint32_t generation, struct swdib_target *out)
+{
+    /* Cached UP snapshot: preflight takes no display lock and issues no
+     * driver call. Admission rechecks the live lease under presenter. */
+    if (accel_inflight || accel_initializing) return -EBUSY;
+    if (generation!=batch_video_generation) return -EAGAIN;
+    return video_target_snapshot(generation,batch_video_first,batch_video_end,out);
+}
+static int batch_begin(void *arg, struct display_batch *b)
+{
+    (void)arg;
+    if (b->authority) { int e=b->authority(b->interrupted_arg); if (e) return e; }
+    if (changing || batch_owner || accel_inflight || accel_initializing) return -EBUSY;
+    if (!initialized || !device.present) return -ENODEV;
+    if (b->header.generation!=device.generation) return -EAGAIN;
+    if (!live()) return -EAGAIN;
+    if (!fbdev_cpu_ready()) return -EAGAIN;
+    bool shape=batch_cursor_shape;
+    for (unsigned i=0;i<b->header.record_count;i++) {
+        const struct ciuki_batch_record *r=(const void *)(b->blob+64+i*128);
+        if (r->opcode==CIUKI_CMD_CURSOR_MONO_SET || r->opcode==CIUKI_CMD_CURSOR_ARGB_SET) shape=true;
+        else if ((r->opcode==CIUKI_CMD_CURSOR_MOVE || r->opcode==CIUKI_CMD_CURSOR_SHOW) && !shape) return -EINVAL;
+    }
+    for (unsigned i=0;i<b->header.target_count;i++) if (b->targets[i].kind==CIUKI_TARGET_SCANOUT &&
+        (b->targets[i].device.generation!=device.generation || b->targets[i].device.mapped!=device.mapped ||
+         b->targets[i].device.handle!=device.handle)) return -EAGAIN;
+    for (unsigned i=0;i<b->header.target_count;i++) if (b->targets[i].kind==CIUKI_TARGET_VIDEO) {
+        struct swdib_target now;
+        int e=video_target_locked(b->targets[i].device.generation,&now); if (e) return e;
+        if (now.offset!=b->targets[i].offset || now.device.size!=b->targets[i].device.size ||
+            now.device.phys!=b->targets[i].device.phys) return -EAGAIN;
+    }
+    unsigned idle=0;
+    if (!__atomic_compare_exchange_n(&drawing,&idle,PRESENT_BUSY,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) return -EBUSY;
+    batch_owner=b; b->cursor_shape=batch_cursor_shape;
+    batch_slice_start=g_cpu_tsc && g_tsc_per_ms ? read_tsc_unserialized() : 0;
+    service_begin();
+    return 0;
+}
+static int batch_native(void *arg, const struct swdib_command *c)
+{
+    (void)arg;
+    if (!acceleration || accel_blocked || !acceleration->command || !acceleration->command_bits ||
+        !(acceleration->command_bits(acceleration->ctx)&(1u<<c->record->opcode)) ||
+        (c->dst && c->dst->kind==CIUKI_TARGET_SYSTEM) || (c->src && c->src->kind==CIUKI_TARGET_SYSTEM)) return -EOPNOTSUPP;
+    if (c->record->opcode==CIUKI_CMD_SCALED && c->record->filter==CIUKI_FILTER_BILINEAR &&
+        (!acceleration->command_features || !(acceleration->command_features(acceleration->ctx)&CIUKI_CAP_BILINEAR))) return -EOPNOTSUPP;
+    if (c->record->opcode==CIUKI_CMD_CURSOR_ARGB_SET) {
+        uint32_t w=0,h=0;
+        if (acceleration->cursor_limits) acceleration->cursor_limits(acceleration->ctx,&w,&h);
+        if (!w || !h || w>64 || h>64 || c->record->dw>w || c->record->dh>h) return -EOPNOTSUPP;
+    }
+    framebuffer_write_drain();
+    return acceleration->command(acceleration->ctx,c);
+}
+static int batch_sync(void *arg)
+{
+    (void)arg;
+    int e=acceleration ? acceleration->sync(acceleration->ctx) : 0;
+    if (!e && !fbdev_cpu_ready()) e=-EIO;
+    framebuffer_write_drain();
+    return e;
+}
+static bool batch_recovery(void *arg)
+{
+    struct display_batch *b=arg;
+    if (batch_recovery_active) return false;
+    batch_recovery_active=true; batch_recovery_task=g_current;
+    int e=batch_sync(arg);
+    if (b->reply.flags&CIUKI_FENCE_PARTIAL_DIRTY) {
+        accel_blocked=true;
+        if (adapter && adapter->quarantine) adapter->quarantine("batch completion failure");
+        /* stop is also the authoritative cursor disable. Quarantine by itself
+         * never authorizes CPU pixels or the desktop software cursor. */
+        if (acceleration) {
+            e=acceleration->stop(acceleration->ctx);
+            if (!e && acceleration->cpu_ready(acceleration->ctx)) acceleration=0;
+            else if (!e) e=-EIO;
+        }
+        batch_cursor_shape=false;
+        if (!e && !fbdev_cpu_ready()) e=-EIO;
+    }
+    batch_recovery_active=false; batch_recovery_task=NULL;
+    return !e;
+}
+static void batch_end(void *arg)
+{
+    struct display_batch *b=arg;
+    framebuffer_write_drain();
+    batch_cursor_shape=b->cursor_shape && !(b->reply.flags&CIUKI_FENCE_PARTIAL_DIRTY);
+    service_end(); batch_owner=0;
+    __atomic_store_n(&drawing,0,__ATOMIC_RELEASE);
+}
+static bool batch_cancelled(void *arg)
+{
+    struct display_batch *b=arg;
+    if (b->interrupted && b->interrupted(b->interrupted_arg)) b->interrupt_error=-EINTR;
+    return b->cancel || b->interrupt_error;
+}
+static void batch_tile(void *arg)
+{
+    struct display_batch *b=arg;
+    /* Check frequently, but yield only when the measured slice is due.
+     * Half a millisecond leaves room for the next bounded CPU tile; without
+     * calibrated TSC, every eight-sample checkpoint yields conservatively. */
+    if (g_cpu_tsc && g_tsc_per_ms>1 && read_tsc_unserialized()-batch_slice_start<g_tsc_per_ms/2) return;
+    framebuffer_write_drain();
+    (void)accel_pause(0);
+    if (batch_cancelled(b)) b->cancel=true;
+}
+static void batch_count(void *arg, unsigned opcode, bool native)
+{ (void)arg; display_driver_command_count(opcode,native); }
+static struct display_batch_ops batch_ops(struct display_batch *b)
+{
+    return (struct display_batch_ops){b,batch_begin,batch_native,batch_sync,batch_recovery,batch_end,batch_tile,batch_cancelled,batch_count};
+}
+int fbdev_batch_execute(struct display_batch *b)
+{
+    kmutex_lock(&presenter);
+    struct display_batch_ops ops=batch_ops(b);
+    int e=display_batch_execute(b,&ops);
+    presenter_unlock();
+    display_driver_record();
+    return e;
+}
+bool fbdev_batch_recover(struct display_batch *b)
+{
+    kmutex_lock(&presenter);
+    bool safe=(b->reply.state==CIUKI_FENCE_SUCCEEDED || b->reply.state==CIUKI_FENCE_STOPPED) &&
+        (b->reply.flags&CIUKI_FENCE_CPU_SAFE);
+    if (b->reply.state==CIUKI_FENCE_RECOVERING && batch_owner==b && !batch_recovery_active) {
+        struct display_batch_ops ops=batch_ops(b);
+        safe=display_batch_recover(b,&ops);
+    }
+    presenter_unlock();
+    display_driver_record();
+    return safe;
+}
+void fbdev_batch_abort(struct display_batch *b)
+{
+    kmutex_lock(&presenter);
+    if (batch_owner==b) {
+        b->cancel=true;
+        b->reply.error=-ECANCELED;
+        b->reply.first_uncompleted=b->reply.completed;
+        b->reply.flags|=CIUKI_FENCE_CANCEL_REQUESTED|CIUKI_FENCE_PARTIAL_DIRTY;
+        b->reply.state=CIUKI_FENCE_RECOVERING;
+        /* The exiting caller abandons its stack. Recovery is performed by
+         * the retained kernel owner, never by resuming or replaying a record. */
+        if (batch_recovery_task==g_current) { batch_recovery_active=false; batch_recovery_task=NULL; }
+    }
+    presenter_unlock();
+}
+void fbdev_batch_recovery_abandon(struct display_batch *b)
+{
+    kmutex_lock(&presenter);
+    if (batch_owner==b && batch_recovery_task==g_current) { batch_recovery_active=false; batch_recovery_task=NULL; }
+    presenter_unlock();
+}
+int fbdev_command_info(uint32_t generation, struct ciuki_command_info *out)
+{
+    if (!out) return -EINVAL;
+    kmutex_lock(&presenter);
+    int e=!live() ? -ENODEV : generation!=device.generation ? -EAGAIN : 0;
+    if (!e) {
+        uint32_t native=acceleration && !accel_initializing && !accel_blocked && acceleration->command_bits ? acceleration->command_bits(acceleration->ctx) : 0;
+        *out=(struct ciuki_command_info){.size=sizeof(*out),.version=1,.software_commands=0x7fe,.native_commands=native,.capabilities=CIUKI_CAP_BATCH};
+        display_driver_command_counters(out);
+        if (native&(1u<<CIUKI_CMD_MONO)) out->capabilities|=CIUKI_CAP_MONO;
+        if (native&(1u<<CIUKI_CMD_INVERT)) out->capabilities|=CIUKI_CAP_INVERT;
+        if (native&(1u<<CIUKI_CMD_KEYED)) out->capabilities|=CIUKI_CAP_KEYED;
+        if (native&(1u<<CIUKI_CMD_SCALED)) {
+            out->capabilities|=CIUKI_CAP_SCALED;
+            if (acceleration->command_features) out->capabilities|=acceleration->command_features(acceleration->ctx)&CIUKI_CAP_BILINEAR;
+        }
+        if (native&(1u<<CIUKI_CMD_LINE)) out->capabilities|=CIUKI_CAP_LINE;
+        if (native&(1u<<CIUKI_CMD_CURSOR_ARGB_SET)) {
+            if (acceleration->cursor_limits) acceleration->cursor_limits(acceleration->ctx,&out->cursor_width,&out->cursor_height);
+            if (out->cursor_width && out->cursor_height && out->cursor_width<=64 && out->cursor_height<=64) out->capabilities|=CIUKI_CAP_CURSOR_ARGB;
+            else out->native_commands&=~(1u<<CIUKI_CMD_CURSOR_ARGB_SET);
+        }
+    }
+    presenter_unlock();
+    return e;
 }

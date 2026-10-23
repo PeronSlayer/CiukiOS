@@ -304,6 +304,17 @@ struct desktop {
     int (*accel)(int, const struct ciuki_accel_request *);
     int (*accel_info)(int, uint32_t, struct ciuki_accel_info *);
     int (*engine_info)(int, uint32_t, struct ciuki_display_engine_info *);
+    int (*commands)(int, uint32_t, struct ciuki_command_info *);
+    int (*batch)(int, const void *, uint32_t, struct ciuki_batch_reply *);
+    int (*fence)(int, uint64_t, uint16_t, uint32_t, struct ciuki_batch_reply *);
+    uint32_t command_caps, colour_cursor_width, colour_cursor_height;
+    uint64_t recovering_fence;
+    int hw_colour_cursor;
+    uint32_t command_native, command_video_row;
+    int command_video_valid;
+    struct ciuki_framebuffer_info command_format;
+    struct desk_box command_old_box;
+    uint32_t *command_old_pixels;
     int (*display_info)(int, struct ciuki_framebuffer_info *);
     int (*gfx_benchmark)(struct desktop *, unsigned, uint64_t result[3]);
     uint64_t gfx_next_bench_ns;

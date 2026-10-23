@@ -694,6 +694,10 @@ int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS;
 int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }
 int ciuki_display_accel(int fd,const struct ciuki_accel_request *q) { (void)fd;(void)q;return -ENOSYS; }
 int ciuki_display_accel_info(int fd,uint32_t generation,struct ciuki_accel_info *out) { (void)fd;(void)generation;(void)out;return -ENOSYS; }
+int ciuki_display_commands(int fd,uint32_t gen,struct ciuki_command_info *out) { (void)fd;(void)gen;(void)out;return -ENOSYS; }
+int ciuki_display_batch(int fd,const void *p,uint32_t n,struct ciuki_batch_reply *out) { (void)fd;(void)p;(void)n;(void)out;return -ENOSYS; }
+int ciuki_display_fence(int fd,uint64_t f,uint16_t a,uint32_t t,struct ciuki_batch_reply *out) { (void)fd;(void)f;(void)a;(void)t;(void)out;return -ENOSYS; }
+
 
 int ap_preference_get(const char *dir,const char *id) { (void)dir; (void)id; return -1; }
 int ap_preference_set(const char *dir,const char *id,const char *label,int action)

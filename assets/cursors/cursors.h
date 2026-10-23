@@ -3,7 +3,7 @@
 #ifndef CIUKI_CURSOR_RASTERS_H
 #define CIUKI_CURSOR_RASTERS_H
 #include <stdint.h>
-struct desk_cursor_raster { unsigned hot_x, hot_y, width, height; uint32_t mask[32], image[32]; };
+struct desk_cursor_raster { unsigned hot_x, hot_y, width, height; uint32_t mask[32], image[32]; const uint8_t *shadow; };
 static const struct desk_cursor_raster desk_cursors[] = {
     /* arrow */
     {10, 5, 24, 29, {
@@ -24,7 +24,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x007f8000u, 0x007b8000u, 0x0061c000u, 0x0041c000u,
         0x0000e000u, 0x0000e000u, 0x00006000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* busy */
     {18, 18, 28, 28, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -44,7 +44,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x03ffffc0u, 0x01ffff80u, 0x00ffff00u, 0x00ffff00u,
         0x003ffc00u, 0x001ff800u, 0x00018000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* arrow_busy */
     {8, 5, 28, 28, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x01000000u,
@@ -64,7 +64,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x00ffffe0u, 0x00ffffe0u, 0x00dfffc0u, 0x008fff80u,
         0x0007ff80u, 0x0003fe00u, 0x0000fc00u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* text */
     {15, 15, 22, 27, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -84,7 +84,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x00008000u, 0x00008000u, 0x00008000u, 0x00008000u,
         0x0007f000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* forbidden */
     {15, 15, 28, 28, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -104,7 +104,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x03fc07c0u, 0x01f80f80u, 0x00fc3f00u, 0x007fff00u,
         0x003ffc00u, 0x001ff800u, 0x00018000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* resize_ew */
     {15, 15, 30, 25, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -124,7 +124,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x00600600u, 0x00200400u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* resize_ns */
     {15, 15, 25, 29, {
         0x00000000u, 0x00010000u, 0x00038000u, 0x0007c000u,
@@ -144,7 +144,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x007ffc00u, 0x003ff800u, 0x001ff000u, 0x000fe000u,
         0x0007c000u, 0x00038000u, 0x00010000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* resize_nwse */
     {15, 15, 27, 25, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -164,7 +164,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x00001f80u, 0x00003f80u, 0x00007f80u, 0x0000ff80u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* resize_nesw */
     {15, 15, 26, 25, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -184,7 +184,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x01f80000u, 0x01fc0000u, 0x01fe0000u, 0x01ff0000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* move */
     {6, 8, 31, 31, {
         0x00000000u, 0x00000000u, 0x06000000u, 0x07000000u,
@@ -204,7 +204,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x018e0000u, 0x010e03f0u, 0x000707f8u, 0x000707f8u,
         0x000307f8u, 0x000107f8u, 0x000007f8u, 0x000007f8u,
         0x000003f8u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* hand */
     {14, 8, 27, 26, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -224,7 +224,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x01ffff80u, 0x01ffff80u, 0x01ffff80u, 0x01ffff80u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* crosshair */
     {15, 15, 28, 28, {
         0x00000000u, 0x00070000u, 0x000f8000u, 0x000f8000u,
@@ -244,7 +244,7 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x00070000u, 0x00070000u, 0x00070000u, 0x00070000u,
         0x00070000u, 0x00070000u, 0x00030000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
     /* precision */
     {15, 15, 27, 25, {
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
@@ -264,6 +264,6 @@ static const struct desk_cursor_raster desk_cursors[] = {
         0x00008000u, 0x00008000u, 0x00008000u, 0x00008000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
-    }},
+    }, 0},
 };
 #endif

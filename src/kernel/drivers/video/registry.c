@@ -16,6 +16,7 @@ static void driver_text(char *out, unsigned size, const char *in)
     out[i]=0;
 }
 static uint64_t native_count[CIUKI_ENGINE_OPERATIONS], software_count[CIUKI_ENGINE_OPERATIONS];
+static uint64_t command_native_count[14], command_software_count[14];
 
 bool display_accel_disabled(const char **reason)
 {
@@ -132,6 +133,15 @@ void display_driver_count(unsigned operation, bool native)
 {
     if (operation < CIUKI_ENGINE_OPERATIONS) (native ? native_count : software_count)[operation]++;
 }
+void display_driver_command_count(unsigned opcode, bool native)
+{
+    if (opcode>=1 && opcode<=14) (native ? command_native_count : command_software_count)[opcode-1]++;
+}
+void display_driver_command_counters(struct ciuki_command_info *out)
+{
+    memcpy(out->native,command_native_count,sizeof(command_native_count));
+    memcpy(out->software,command_software_count,sizeof(command_software_count));
+}
 bool display_driver_summary(bool *ready, bool *used, const char **reason)
 {
     *ready = *used = false; *reason = software_reason;
@@ -141,6 +151,7 @@ bool display_driver_summary(bool *ready, bool *used, const char **reason)
     /* Driver setup and diagnostic draws do not establish presenter usage. */
     *used = false;
     for (unsigned i=0;i<CIUKI_ENGINE_OPERATIONS;i++) if (native_count[i]) *used=true;
+    for (unsigned i=0;i<9;i++) if (command_native_count[i]) *used=true;
     return true;
 }
 bool display_driver_refresh(void)

@@ -7,6 +7,7 @@ struct accel_cursor {
     uint32_t mask[32], image[32]; /* 32x32, left pixel in bit 31; image selects fg */
     uint32_t foreground, background; /* native framebuffer pixel values */
 };
+struct swdib_command;
 struct accel_ops {
     void *ctx;
     int (*sync)(void *);
@@ -33,6 +34,16 @@ struct accel_ops {
      * hardware (saved block, LFB readback). Caller holds the presenter lock
      * and a full-screen drawing claim. 0: writes usable. */
     int (*verify_write)(void *);
+    /* Part C: whole-record preparation/submission. Receives only immutable
+     * kernel staging and retained targets, with one clip union. A refusal
+     * must precede ALL fragments and cursor changes. Success proves idle.
+     * Only scanout/video targets are eligible; system surfaces use swdib.
+     * command_bits uses (1u << CIUKI_CMD_*). ARGB is exact premultiplied
+     * composition at current bpp, otherwise it must not be advertised. */
+    uint32_t (*command_bits)(void *);
+    int (*command)(void *, const struct swdib_command *);
+    void (*cursor_limits)(void *, uint32_t *width, uint32_t *height);
+    uint32_t (*command_features)(void *); /* optional CIUKI_CAP_BILINEAR */
 };
 struct vfs;
 /* -EOPNOTSUPP guarantees no submission and no modified pixels. Success
