@@ -226,6 +226,7 @@ struct model {
     struct usb_host *sleep_host;
     unsigned frame_ms; /* Independent HC clock; zero keeps the 1 ms model. */
     uint64_t reset_at[2], recovery_at[2];
+    bool release_pending[2]; /* fx-21: reset released, PE not yet written */
     unsigned root_resets[2], root_enables[2], root_acks[2], hub_acks[USB_PORT_MAX];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool fatal_reassert, gate_stuck, source_stuck, run_stuck, halt_stuck, bme_stuck;
@@ -471,10 +472,16 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
             m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->reset_at[p]=m->now;m->root_resets[p]++;m->dev[p].reset_series++;
         }
         if(!(value&0x200) && (old&0x200)) {
-            assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;
+            assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;m->release_pending[p]=true;
         }
         if((value&4) && !(old&4) && (old&1)) {
-            assert(!(value&0x200) && m->now-m->recovery_at[p]>=1);m->root_enables[p]++;
+            /* fx-21: PE follows the reset release in the same IRQ-off section
+             * (Linux uhci_check_ports: 10 us), never after a task sleep: an
+             * idle port for more than 3 ms suspends the device in the Default
+             * state (USB 2.0 7.1.7.6). A later PE recovery is not a reset. */
+            assert(!(value&0x200));
+            if(m->release_pending[p]) assert(m->now==m->recovery_at[p]);
+            m->release_pending[p]=false;m->root_enables[p]++;
         }
         /* QEMU preserves RO bits, accepts PE only for CCS, and clears
          * CSC/PEC only on an explicit write of one (uhci_port_write). */

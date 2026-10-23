@@ -972,3 +972,131 @@ per frame). The QEMU and T23 confirmation is the lead's.
 READ(10)/WRITE(10) ending in CHECK CONDITION with valid sense no longer
 quarantine the device (see `vfs-storage-contract.md`, fx-17).
 
+
+## fx-21: UHCI root-port reset release and enable in one section (2026-10-23)
+
+T23 trial of `f441c5bd`: the stick (05dc:a81d), attached at boot to
+`usb-388` port 2, ACKed the SETUP of every `GET_DESCRIPTOR(8)` at address 0
+(`pid=2d … td=19000007`). It NAKed the data stage for the whole 500 ms
+(`pid=69 … td=198807ff`: active, NAK, C_ERR still 3), six times across two
+port resets. Then `[usb] quarantine device addr=0
+reason=enumeration_transfer`. The same stick enumerated in every earlier
+T23 boot that had it (35 boots, `e831e685` included). Its first descriptor
+read took 9 to 126 ms, at boot or on hot-plug.
+
+### Findings
+
+Excluded:
+
+- **The fx-17 schedule.**
+  - The NAK bit proves the controller executed the IN TD and the device
+    answered.
+  - The reclamation loop exists only inside `bulk()`. Control and bulk
+    transfers share the host reservation, so no control transfer ever
+    runs with the loop closed.
+  - The terminating QH's inactive element is never executed: no HC process
+    error, `command=00c1` throughout.
+  - The Logitech receiver on port 1 of the same controller enumerated at
+    address 0 with the fx-17 schedule 450 ms earlier.
+  - At enumeration, a device sees the same bus traffic with or without the
+    terminating QH.
+  - In the host model, the `e831e685` driver (`2cfed3a8`, no terminating
+    QH) fails the trial replay in the same way.
+- **APM SMIs.** The fx-18 APM BIOS VM ran during this reset, but it
+  accessed only PM1_CNT (`[apm] io port=1004`, read). It never accessed the
+  APM_CNT port B2h, so it raised no SMI. `biosvm.c` logs every first
+  access to a window port. The three SMIs of that window (2 to 4 ms) were
+  EC SMIs, as in every boot.
+
+The one anomaly in the driver's control:
+
+- The port-2 reset was released at tick 2387, and PE was written at tick
+  2396. The `usb_sleep(h, 1)` between them took 9 ms. In that window the
+  ACPI scan held the CPU (`stretch_max_ms=59 task=acpi-power`), and the
+  APM BIOS VM and an SMI also ran.
+- The other 79 UHCI root-port reset sequences in the 43 T23 logs had gaps
+  of 1–2 ms (74 sequences) or 34–74 ms (5 sequences). The long ones were
+  older polling-mode images; four were on the receiver.
+- During that gap the port forwards no SOF, so a device that sees more
+  than 3 ms of idle bus enters Suspend in the Default state.
+
+Not proven:
+
+- The logs do not prove that the gap wedged the stick. The same stick
+  survived a 34 ms gap when it was hot-plugged (never configured) in
+  `445e91c7`. The second-series reset (gap 1 ms) did not recover it.
+- A fault inside the stick that started in this boot cannot be excluded.
+- The hypothesis consistent with every T23 record: a BIOS-configured stick
+  that suspends in the Default state before its first SOF stops answering
+  until it is power-cycled.
+
+### Research
+
+- [UHCI 1.1 §2.1.7](https://ftp.netbsd.org/pub/NetBSD/misc/blymn/uhci11d.pdf)
+  and the
+  [ICH3-M datasheet §11.2.7](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf):
+  PORTSC PE is written by host software only, and a disabled port forwards
+  no traffic.
+- USB 2.0:
+  - §7.1.7.6: a device that sees more than 3.0 ms of idle bus enters
+    Suspend from any state.
+  - §7.1.7.5: a hub port is Enabled when its reset ends.
+- EHCI 1.0 §2.3.9: the controller enables the port within 2 ms of the Port
+  Reset write.
+- Linux
+  [uhci-hub.c `uhci_check_ports()`](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/uhci-hub.c):
+  clears PR, waits `udelay(10)`, clears CSC/PEC and sets PE, all under the
+  HCD spinlock.
+- FreeBSD
+  [uhci.c `uhci_portreset()`](https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/dev/usb/controller/uhci.c):
+  "This delay needs to be exactly 100us, else some USB devices fail to
+  attach!".
+- Reclamation:
+  - The [PIIX4 specification update](https://www.intel.com/Assets/PDF/specupdate/297738.pdf),
+    erratum 4: a loop made only of empty QHs never fetches the next frame
+    pointer. Its workaround is a pseudo QH whose element is an inactive
+    pseudo TD, corrected by item 23.
+  - Linux
+    [uhci-hcd.c `uhci_start()`](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/uhci-hcd.c)
+    fills `term_td` as a null IN to address 127.
+  - Linux 630aa3cfd5f0 ("UHCI: No FSBR until device is configured") keeps
+    enumeration out of the loop. The CiukiOS reservation already
+    guarantees this.
+
+### Decision
+
+- `reset()` keeps the 50 ms reset and the 10 ms TRSTRCY task sleeps.
+- `release_enable()` releases PR, waits 10 µs (`udelay`), clears the
+  reset's CSC/PEC and writes PE, all in one IRQ-off section that never
+  crosses a task sleep. PE is written only for a present port without
+  overcurrent, as before.
+- The frame counter measures that window:
+  `[usb] port_reset port=… assert_ms=… release_to_enable_frames=… connected=… result=…`.
+- The pseudo TD's token is Linux's (IN, address 127, null length), never
+  address 0.
+- The fx-17 reclamation is unchanged.
+
+### Host evidence
+
+`tests/host/usb/fx21_test.c` (in `storage_run.sh`) enumerates the stick
+through the full UHCI schedule. It covers PORTSC reset and PE, address 0,
+SET_ADDRESS, descriptors, configuration, the BOT bind, the E: mount and a
+64 KiB READ(10). Its stick model follows the hypothesis above.
+
+| Driver | Trial load (8 ms stretch after release) | Unloaded |
+| --- | --- | --- |
+| Before fx-21 | Trial records reproduced: 9 ms gap, `td=198807ff`, six `result=-110 elapsed_ms=505`, quarantine | Enumerates |
+| Pre-fx-17 (`2cfed3a8`) | Same failure | Enumerates |
+| fx-21 | Enumerates and mounts | Enumerates and mounts |
+
+- During enumeration the NAKed control TD is retried once per frame.
+- The 64 KiB read takes 132 frames without the loop and 76 frames with it
+  (fx-17's figures).
+
+### T23 check
+
+- `release_to_enable_frames` must be 0 or 1.
+- If a stick still fails with that window, the gap hypothesis is false.
+  The next suspects are the stick itself (replug test) and the 500 ms
+  per-stage budget: USB 2.0 §9.2.6.4 allows 500 ms, Linux
+  `USB_CTRL_GET_TIMEOUT` waits 5 s.

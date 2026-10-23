@@ -1,6 +1,10 @@
 /* UHCI 1.1 schedule and root hub. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
+#ifndef CIUKI_USB_HOST
+#include <ciuki/cpu.h>
+#include <ciuki/sync.h>
+#endif
 _Static_assert(USB_UHCI_BULK_QH + 16 <= USB_TD, "UHCI queues overlap the general TD");
 _Static_assert(USB_UHCI_TERM_QH % 16 == 0 && USB_UHCI_TERM_QH >= USB_TAIL + 16 && USB_UHCI_TERM_QH + 16 <= USB_BUFFER, "UHCI terminating QH placement");
 static volatile uint32_t *words(struct usb_host *h, unsigned at)
@@ -25,7 +29,8 @@ static int start(struct usb_host *h)
     memset(h->dma, 0, USB_DMA_BYTES);
     /* UHCI 1.1 sections 1.2.3/3.4: interrupt queues precede control and
      * bulk. Both general QHs are always reachable through horizontal links;
-     * only one owns the reserved TD/buffer at a time. No reclamation loop. */
+     * only one owns the reserved TD/buffer at a time. The terminating QH
+     * closes the fx-17 reclamation loop only while a bulk stage runs. */
     volatile uint32_t *control = words(h, USB_UHCI_CONTROL_QH);
     volatile uint32_t *bulk = words(h, USB_UHCI_BULK_QH);
     control[0] = (h->dma_phys + USB_UHCI_BULK_QH) | 2; control[1] = 1;
@@ -36,6 +41,11 @@ static int start(struct usb_host *h)
     term[0] = 1; term[1] = h->dma_phys + USB_TAIL;
     words(h, USB_TAIL)[0] = 1;
     words(h, USB_TAIL)[1] = 0;
+    /* fx-21: the pseudo TD never executes (inactive, UHCI 1.1 section
+     * 3.4.1.3 step 2). Its token is still Linux uhci_start()'s term_td, a
+     * null-length IN to address 127, never address 0, which is where every
+     * device being enumerated answers. */
+    words(h, USB_TAIL)[2] = (0x7ffu << 21) | (0x7fu << 8) | USB_PID_IN;
     for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
         volatile uint32_t *pipe = words(h, USB_HID_BASE + i * USB_HID_STRIDE);
         pipe[0] = i + 1 < USB_DEVICE_MAX * USB_HID_MAX ?
@@ -157,18 +167,75 @@ static int enable(struct usb_host *h, unsigned port)
     usb_port_record(h, port, "enable", err);
     return err;
 }
+/* fx-21: a UHCI root port is enabled by software only (UHCI 1.1 section
+ * 2.1.7 bit 2; ICH3-M 11.2.7). Between the end of the reset and PE the port
+ * forwards no SOF, and a device that sees more than 3 ms of idle bus enters
+ * Suspend (USB 2.0 section 7.1.7.6), here in the Default state just after
+ * its reset. Hub ports are Enabled when the reset ends (USB 2.0 section
+ * 7.1.7.5, chapter 11.5) and EHCI root ports within 2 ms (EHCI 1.0 section
+ * 2.3.9, PORTSC Port Reset), so devices never see that gap elsewhere.
+ * Linux uhci_check_ports() clears PR, waits 10 us, clears CSC/PEC and sets
+ * PE under the HCD lock; FreeBSD uhci_portreset(): "This delay needs to be
+ * exactly 100us, else some USB devices fail to attach!". The T23 trial of
+ * f441c5bd spent 9 ms in a 1 ms task sleep there (ACPI scan and APM BIOS
+ * start-up running), and its stick then ACKed every SETUP and NAKed every
+ * data stage at address 0. Release and enable therefore share one IRQ-off
+ * section with a microsecond delay and never cross a task sleep. The frame
+ * counter, which an SMI cannot stop, measures the window for the record.
+ * Evidence and open points: docs/design/usb-contract.md, fx-21. */
+#define UHCI_RELEASE_DELAY_US 10u
+struct release_window { unsigned before, released, ready, enabled, frames; bool connected; };
+static void release_enable(struct usb_host *h, unsigned port, struct release_window *w)
+{
+    unsigned off = 0x10 + 2 * port;
+#ifndef CIUKI_USB_HOST
+    uint32_t flags = irq_save();
+#endif
+    unsigned start = usb_read(h, 6, 2) & 0x7ff;
+    unsigned v = usb_read(h, off, 2);
+    w->before = v;
+    /* CSC/PEC/OCC are W1C and not echoed here; reserved 13-15 stay zero. */
+    w->released = v & ~0xea0au;
+    usb_write(h, off, w->released, 2);
+#ifndef CIUKI_USB_HOST
+    /* Only before TSC calibration: an ICH I/O read takes about 1 us. */
+    if (udelay(UHCI_RELEASE_DELAY_US))
+        for (unsigned i = 0; i < 4 * UHCI_RELEASE_DELAY_US; i++) (void)usb_read(h, off, 2);
+#endif
+    v = usb_read(h, off, 2);
+    if (v & 0x80a) usb_write(h, off, v & ~0xe200u, 2); /* the reset's CSC/PEC */
+    v = w->ready = usb_read(h, off, 2);
+    /* PE only for a present device without overcurrent, as enable(). */
+    w->connected = v != 0xffff && (v & 1) && !(v & 0x400);
+    w->enabled = (v & ~0xea0au) | (w->connected ? 4u : 0u);
+    if (w->connected) usb_write(h, off, w->enabled, 2);
+    w->frames = ((usb_read(h, 6, 2) & 0x7ff) - start) & 0x7ff;
+#ifndef CIUKI_USB_HOST
+    irq_restore(flags);
+#endif
+}
 static int reset(struct usb_host *h, unsigned port)
 {
     if (port >= h->ports) return -EINVAL;
     if ((status(h, port) & USB_PORT_CONNECTED) && usb_port_has_live_child(h, port)) return -USB_EAGAIN;
+    uint64_t asserted = h->io.now(h->io.cookie);
     port_write(h, port, 0x200, 4);
     usb_port_record(h, port, "reset", 0);
     usb_sleep(h, 50);
-    port_write(h, port, 0, 0x200);
+    struct release_window w;
+    release_enable(h, port, &w);
+    uint64_t released = h->io.now(h->io.cookie);
+    usb_port_action(h, port, "reset_release", w.before, w.released, 0);
     usb_port_record(h, port, "reset", 0);
-    usb_sleep(h, 1); /* >= Linux's 10 us release-to-PE delay */
-    ack_changes(h, port);
-    int err = enable(h, port);
+    int err = -USB_EIO;
+    if (w.connected) {
+        usb_port_action(h, port, "enable", w.ready, w.enabled, 0);
+        /* PE may follow a transaction in progress (UHCI 1.1 section 2.1.7). */
+        err = usb_wait_register(h, 0x10 + 2 * port, 2, 5, 5, 100);
+        usb_port_record(h, port, "enable", err);
+    }
+    klog("[usb] port_reset port=%u controller=%s assert_ms=%llu release_to_enable_frames=%u connected=%u result=%d",
+         port + 1, h->owner, (unsigned long long)(released - asserted), w.frames, w.connected, err);
     usb_sleep(h, 10); /* TRSTRCY, with the port explicitly enabled */
     ack_changes(h, port);
     return err;

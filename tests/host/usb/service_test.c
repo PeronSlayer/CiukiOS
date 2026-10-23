@@ -258,10 +258,12 @@ static void phased_delays(void)
     m.host.io.sleep=phase_native_sleep;
     uint64_t begin=phase_us;
     assert(!m.host.ops->port_reset(&m.host,0));
-    assert(phase_us-begin==61000 && m.root_resets[0]==1 && m.root_enables[0]==1);
+    /* fx-21: 50 ms reset + 10 ms TRSTRCY; PE follows the release in the
+     * same IRQ-off section, without the former 1 ms task sleep. */
+    assert(phase_us-begin==60000 && m.root_resets[0]==1 && m.root_enables[0]==1);
     assert(m.recovery_at[0]-m.reset_at[0]==50);
     usb_host_drop(&m.host);
-    puts("PASS USB phased delays: native completion wait returns at 0.5 ms IRQ; mandatory sleep retains 50 ms across IRQ wakes; reset/address/debounce 50/2/100 ms; production root reset 61 ms");
+    puts("PASS USB phased delays: native completion wait returns at 0.5 ms IRQ; mandatory sleep retains 50 ms across IRQ wakes; reset/address/debounce 50/2/100 ms; production root reset 60 ms, PE in the release section");
 }
 static void fatal_isolation(const char *mode)
 {
