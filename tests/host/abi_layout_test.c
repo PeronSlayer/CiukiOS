@@ -8,6 +8,12 @@
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
+/* fx-19 shell drag and drop: appended after the joystick pair; cursor IDs appended after help (21). */
+_Static_assert(DESK_DRAG_BEGIN==42 && DESK_DRAG_OVER==43 && DESK_DRAG_STATUS==44 && DESK_DRAG_DROP==45 &&
+               DESK_DRAG_END==46 && DESK_ACCEPT_FILES==47 && DESK_DROP_FILES==48,"drag-and-drop desktop opcodes");
+_Static_assert(DESK_CURSOR_HELP==21 && DESK_CURSOR_DRAG_MOVE==22 && DESK_CURSOR_DRAG_COPY==23 && DESK_CURSOR_DRAG_LINK==24 &&
+               DESK_CURSOR_COUNT==25,"drag-and-drop cursor IDs");
+_Static_assert(DESK_DRAG_ITEMS==4096u,"drag data object item bound");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[1])==88,"launch joystick device");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[2])==92,"launch joystick generation");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[3])==96,"launch second joystick device");

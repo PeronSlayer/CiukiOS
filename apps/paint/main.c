@@ -32,6 +32,7 @@ int main(int argc, char **argv)
     if (paint_attach(&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
     paint_callbacks(quit,title,m); m->window.close_request=closing;
     m->path=path;
+    du_window_accept_files(&m->window,1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window,24,48);
     fprintf(stderr,"[PAINT] ready\n");
     int r=du_run(&m->window,idle,m);

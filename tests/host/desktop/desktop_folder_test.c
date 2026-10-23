@@ -95,9 +95,10 @@ static void settle(void)
 #include "folder_transfer_test.h"
 static void close_message(void)
 { for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal) desk_drop_client(&d,i); }
+#include "desktop_dnd_test.h"
 int main(int argc,char **argv)
 {
-    assert(argc==3); poll_frame=pthread_self(); out=argv[1]; fake_reset(); fake_image_tree();
+    setvbuf(stdout,NULL,_IOLBF,0); assert(argc==3); poll_frame=pthread_self(); out=argv[1]; fake_reset(); fake_image_tree();
     fake_create(DESK_FOLDER,FM_DIR); fake_create(DESK_TRASH,FM_DIR);
     fake_create(DESK_FOLDER "/Projects",FM_DIR); fake_file(DESK_FOLDER "/readme.txt",5,20);
     fake_file(DESK_FOLDER "/Scene.BMP",58,1);
@@ -143,13 +144,13 @@ int main(int argc,char **argv)
     n=named("Renamed = Folder"); struct desk_box b=d.sh.icons[n].box;
     d.mouse_x=b.x+40; d.mouse_y=b.y+20; d.now_ns=2000000000ull; desk_shell_button(&d,1,1);
     d.mouse_x=400; d.mouse_y=350; desk_shell_motion(&d); desk_shell_button(&d,1,0);
-    int x,y; assert(cfg_icon_position(&d.sh.cfg,"Renamed = Folder",&x,&y) && x==352 && y==303);
+    int x,y; assert(cfg_icon_position(&d.sh.cfg,"Renamed = Folder",&x,&y) && x==360 && y==330);
     static char text[CFG_TEXT_MAX]; static struct ciuki_settings parsed;
     size_t len=cfg_format(&d.sh.cfg,text,sizeof(text)); assert(len); cfg_defaults(&parsed); assert(!cfg_parse(&parsed,text,len));
-    assert(cfg_icon_position(&parsed,"Renamed = Folder",&x,&y) && x==352 && y==303);
-    d.sh.cfg=parsed; desk_folder_changed(&d); n=named("Renamed = Folder"); assert(d.sh.icons[n].box.x==352); capture("positions");
+    assert(cfg_icon_position(&parsed,"Renamed = Folder",&x,&y) && x==360 && y==330);
+    d.sh.cfg=parsed; desk_folder_changed(&d); n=named("Renamed = Folder"); assert(d.sh.icons[n].box.x==360); capture("positions");
     /* Rename carries the position to the new name. */
-    desk_folder_rename(&d,n); strcpy(d.sh.folder->edit,"Moved name"); key(DU_KEY_ENTER); desk_folder_service(&d); n=named("Moved name"); assert(d.sh.icons[n].box.x==352);
+    desk_folder_rename(&d,n); strcpy(d.sh.folder->edit,"Moved name"); key(DU_KEY_ENTER); desk_folder_service(&d); n=named("Moved name"); assert(d.sh.icons[n].box.x==360);
     d.sh.icon_selected=n; key(DU_KEY_ENTER); assert(!strcmp(program,"files") && !strcmp(launched,DESK_FOLDER "/Moved name"));
     d.sh.icon_selected=named("Scene.BMP"); key(DU_KEY_ENTER); assert(!strcmp(program,"viewer"));
     d.sh.menu_owner=d.sh.icon_selected; desk_menu_open(&d,SH_MENU_OPEN_WITH,500,200);
@@ -210,6 +211,7 @@ int main(int argc,char **argv)
     d.sh.want_power=2; desk_folder_service(&d); settle(); d.sh.want_power=0;
     assert(!d.sh.folder->busy && d.sh.folder->job.state==FM_CANCELLED && fake_lookup("/Documents/Cancel.txt")>=0);
     folder_transfer_cases(other);
+    fx19_desktop_cases();
     fm_destroy(snapshot); free(snapshot);
     fm_destroy(other); free(other);
     /* Line up snaps without placing two icons in the same grid cell. */
@@ -248,7 +250,7 @@ int main(int argc,char **argv)
     b=d.sh.icons[n].box; d.mouse_x=b.x+30; d.mouse_y=b.y+20;
     d.now_ns=10000000000ull; desk_shell_button(&d,1,1);
     d.mouse_x=650; d.mouse_y=600; desk_shell_motion(&d); desk_shell_button(&d,1,0);
-    assert(d.sh.icons[n].box.x==602); cache_equivalent();
+    assert(d.sh.icons[n].box.x==620); cache_equivalent();
     puts("PASS desktop folder wallpaper cache: live rename, cancel and icon drag match fresh render");
     /* Periodic scans preserve an unchanged model and notice external edits. */
     struct fm_entry *original=d.sh.folder->model.entries;

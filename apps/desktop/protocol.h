@@ -74,6 +74,9 @@ enum desk_cursor_shape {
     DESK_CURSOR_ZOOM, DESK_CURSOR_ERASER,
     /* f2-99: append only; the existing native/v3 cursor IDs stay stable. */
     DESK_CURSOR_OPEN_HAND, DESK_CURSOR_CLOSED_HAND, DESK_CURSOR_HELP,
+    /* fx-19: drag-and-drop feedback (IDropSource::GiveFeedback defaults);
+     * no-drop uses DESK_CURSOR_FORBIDDEN. */
+    DESK_CURSOR_DRAG_MOVE, DESK_CURSOR_DRAG_COPY, DESK_CURSOR_DRAG_LINK,
     DESK_CURSOR_COUNT
 };
 #define DESK_TITLE_MAX 63u
@@ -115,8 +118,26 @@ enum desk_opcode {
      * 1 closing later). One later reply within 2 s grants 30 s total. */
     DESK_CLOSE_ACK,
     DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE, /* v1 generic engine payload, 256 bytes */
-    DESK_JOYSTICK, DESK_JOYSTICK_RESULT /* v2 Control Panel broker, serial + 100-byte record (+ result on reply) */
+    DESK_JOYSTICK, DESK_JOYSTICK_RESULT /* v2 Control Panel broker, serial + 100-byte record (+ result on reply) */,
+    /* fx-19 shell drag and drop (OLE DoDragDrop roles), version 2, no fds.
+     * The data object is /system/settings/files.drag (fm_drag_save); paths
+     * never travel in messages. All u32 after the 4-byte header:
+     * DRAG_BEGIN (desktop-launched Files to desktop): button (1 left,
+     *   2 right), item count 1..4096; the desktop then owns the pointer.
+     * DRAG_OVER (desktop to a Files target): serial, phase (0 enter/over or
+     *   the 100 ms DragOver repeat, 1 leave), client x, y, keys (FM_KEY_*).
+     * DRAG_STATUS (Files target to desktop): serial, effect (DROPEFFECT
+     *   bits, one or none), allowed effects (mask).
+     * DRAG_DROP (desktop to the Files target): serial, client x, y, effect.
+     * DRAG_END (desktop to the Files source): effect performed (0 none).
+     * ACCEPT_FILES (any v2 client to desktop): 0/1, DragAcceptFiles.
+     * DROP_FILES (desktop to an accepting client): serial, client x, y;
+     *   WM_DROPFILES, the client reads the data object (du_drop_file). */
+    DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
+    DESK_ACCEPT_FILES, DESK_DROP_FILES
 };
+#define DESK_DRAG_FILE "/system/settings/files.drag"
+#define DESK_DRAG_ITEMS 4096u
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
 #define DESK_SETTINGS_MASTER 2u   /* set the master volume: left, right 0..100, mute 0/1 */

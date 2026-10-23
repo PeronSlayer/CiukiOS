@@ -105,6 +105,15 @@ int main(int argc, char **argv)
     du_resize(&ui, pixels, VIEWER_W, VIEWER_H); free(large);
     snprintf(path, sizeof(path), "%s/missing.png", scratch);
     assert(viewer_open(&app, path) == -ENOENT && strstr(app.error, "not found"));
+    /* fx-19 WM_DROPFILES: the first dropped picture is shown. */
+    {
+        char drop[1100]; snprintf(drop,sizeof(drop),"%s/viewer-drop.data",scratch);
+        FILE *f=fopen(drop,"wb"); assert(f && fprintf(f,"X\nF%s/c-wallpaper.png\nF%s/b-photo.jpg\n",scratch,scratch)>0 && !fclose(f));
+        assert(!du_drop_source(drop));
+        struct du_event dropped={.type=DU_EV_DROPFILES,.x=10,.y=10}; viewer_event(&ui,&dropped,&app);
+        assert(app.loaded && app.index==2 && !strcmp(app.image.format,"PNG"));
+        remove(drop); puts("PASS fx-19 viewer drop: first dropped picture shown");
+    }
     app.asynchronous=1; snprintf(path,sizeof(path),"%s/b-photo.jpg",scratch);
     assert(!viewer_open(&app,path)); assert(viewer_open(&app,path)==-EBUSY);
     for(unsigned i=0;i<2000 && app.loading;i++) { viewer_poll(&app); if(app.loading) nanosleep(&(struct timespec){.tv_nsec=1000000},NULL); }

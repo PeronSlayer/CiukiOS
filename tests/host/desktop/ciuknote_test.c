@@ -456,6 +456,25 @@ static void test_time_log_encoding(void)
     add_file("/system/log3.txt", ".LOG", 4, 1); assert(!cn_open_argument(&app, "/system/log3.txt")); assert(has_text(".LOG\n9:41 AM 10/11/2026\n"));
     add_file("/system/log4.txt", ".LOGX\n", 6, 1); assert(!cn_open_argument(&app, "/system/log4.txt")); assert(has_text(".LOGX\n") && !app.ta.modified);
     add_file("/system/log5.txt", " .LOG\n", 6, 1); assert(!cn_open_argument(&app, "/system/log5.txt")); assert(has_text(" .LOG\n"));
+    /* fx-19 WM_DROPFILES: Notepad opens the first dropped file, after the unsaved-changes question. */
+    {
+        char drop[512]; const char *tmp = getenv("TMPDIR"); snprintf(drop, sizeof(drop), "%s/ciuknote-drop.data", tmp ? tmp : ".");
+        FILE *f = fopen(drop, "wb"); assert(f && fputs("X\nF/system/hello.txt\nF/system/tests/beta.txt\n", f) >= 0 && !fclose(f));
+        assert(!du_drop_source(drop));
+        char first[64]; assert(du_drop_file(0, first, sizeof(first)) == 2 && !strcmp(first, "/system/hello.txt"));
+        assert(du_drop_file(1, first, sizeof(first)) == 2 && !strcmp(first, "/system/tests/beta.txt"));
+        assert(du_drop_file(2, first, sizeof(first)) == 2 && !first[0]);
+        reset(0); fresh_text("unsaved"); app.ta.modified = 1;
+        cn_event(&ui, &(struct du_event){.type = DU_EV_DROPFILES, .x = 20, .y = 30}, &app);
+        assert(dialog_is(D_CHANGES) && app.after == CN_AFTER_DROP && has_text("unsaved"));
+        du_dialog_close(&ui); cn_event(&ui, &(struct du_event){.type = DU_EV_DIALOG, .id = D_CHANGES, .index = 1}, &app);
+        assert(has_text("hello") && !strcmp(app.path, "/system/hello.txt"));
+        reset(0); cn_event(&ui, &(struct du_event){.type = DU_EV_DROPFILES, .x = 20, .y = 30}, &app); assert(has_text("hello"));
+        f = fopen(drop, "wb"); assert(f && fputs("garbage\n", f) >= 0 && !fclose(f));
+        reset(0); cn_event(&ui, &(struct du_event){.type = DU_EV_DROPFILES}, &app); assert(has_text("") && !ui.dialog.kind);
+        remove(drop); assert(!du_drop_source("/system/settings/files.drag"));
+        puts("PASS fx-19 CiukNote drop: DragAcceptFiles data object, first file, unsaved-changes question, malformed data ignored");
+    }
     /* Line endings: CRLF files stay CRLF, LF files stay LF; new documents use CRLF. */
     reset(0); assert(!cn_open_argument(&app, "/system/tests/Alpha.TXT")); assert(has_text("Alpha\nline two\n") && app.crlf);
     CTRL(0x14f); type("x"); CTRL(0x1f); assert(expect_file("/system/tests/Alpha.TXT", "Alpha\r\nline two\r\nx"));

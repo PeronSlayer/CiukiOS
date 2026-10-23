@@ -70,6 +70,76 @@ int fm_clipboard_load(struct fm_model *m)
     fm_clipboard_clear(next); free(next); return r;
 }
 
+/* fx-19 drag data object: "X\n" then one "<D|F>/path\n" per item, written
+ * like the clipboard (exclusive temporary, sync, replacing rename). */
+#define DRAG "/system/settings/files.drag"
+int fm_drag_save(const struct fm_vfs *fs, char *const *paths, const char *types, unsigned count)
+{
+    if (!count || count > FM_ENTRIES) return -EINVAL;
+    int r = fs->mkdir(fs->ctx, "/system/settings");
+    if (r && r != -EEXIST) return r;
+    char temp[64]; int fd = -EEXIST;
+    for (unsigned n = 0; n < 1000 && fd == -EEXIST; n++) {
+        snprintf(temp, sizeof(temp), "/system/settings/drag.%u.new", n);
+        fd = fs->open(fs->ctx, temp, 1);
+    }
+    if (fd < 0) return fd;
+    r = write_all(fs, fd, "X\n", 2);
+    for (unsigned i = 0; i < count && !r; i++) {
+        size_t n = strlen(paths[i]);
+        if (paths[i][0] != '/' || n >= FM_PATH || strchr(paths[i], '\n') || strchr(paths[i], '\r')) { r = -EINVAL; break; }
+        char type = types && types[i] == 'D' ? 'D' : 'F';
+        r = write_all(fs, fd, &type, 1);
+        if (!r) r = write_all(fs, fd, paths[i], (unsigned)n);
+        if (!r) r = write_all(fs, fd, "\n", 1);
+    }
+    if (!r) r = fs->sync(fs->ctx, fd);
+    int closed = fs->close(fs->ctx, fd); if (!r) r = closed;
+    if (!r) r = fs->rename(fs->ctx, temp, DRAG);
+    if (r) fs->unlink(fs->ctx, temp);
+    return r;
+}
+void fm_drag_free(char **paths, char *types, unsigned count)
+{
+    for (unsigned i = 0; paths && i < count; i++) free(paths[i]);
+    free(paths); free(types);
+}
+int fm_drag_load(const struct fm_vfs *fs, char ***out, char **out_types, unsigned *out_count)
+{
+    *out = NULL; if (out_types) *out_types = NULL; *out_count = 0;
+    int fd = fs->open(fs->ctx, DRAG, 0);
+    if (fd < 0) return fd;
+    char **paths = NULL, *types = NULL, line[FM_PATH + 1], block[256];
+    unsigned count = 0, used = 0, lines = 0, at = 0, available = 0; int r = 0;
+    for (;;) {
+        if (at == available) {
+            int got = fs->read(fs->ctx, fd, block, sizeof(block));
+            if (got <= 0) { if (got < 0) r = got; else if (used || lines < 2) r = -EINVAL; break; }
+            at = 0; available = (unsigned)got;
+        }
+        char c = block[at++];
+        if (c != '\n') { if (!c || c == '\r' || used + 1 >= sizeof(line)) { r = -EINVAL; break; } line[used++] = c; continue; }
+        line[used] = 0;
+        if (!lines++) { if (strcmp(line, "X")) { r = -EINVAL; break; } }
+        else {
+            if ((line[0] != 'D' && line[0] != 'F') || line[1] != '/' || count >= FM_ENTRIES) { r = -EINVAL; break; }
+            char **p = realloc(paths, (count + 1) * sizeof(*p));
+            if (!p) { r = -ENOMEM; break; } paths = p;
+            char *t = realloc(types, count + 1);
+            if (!t) { r = -ENOMEM; break; } types = t;
+            paths[count] = malloc(used);
+            if (!paths[count]) { r = -ENOMEM; break; }
+            memcpy(paths[count], line + 1, used); types[count++] = line[0];
+        }
+        used = 0;
+    }
+    int closed = fs->close(fs->ctx, fd); if (!r) r = closed;
+    if (r) { fm_drag_free(paths, types, count); return r; }
+    *out = paths; *out_count = count;
+    if (out_types) *out_types = types; else free(types);
+    return 0;
+}
+
 int fm_clipboard_consume(struct fm_model *m)
 {
     struct fm_model *now=calloc(1,sizeof(*now)); if (!now) return -ENOMEM;

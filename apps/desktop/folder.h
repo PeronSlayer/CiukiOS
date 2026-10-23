@@ -20,6 +20,8 @@ struct desk_folder {
     uint32_t *dialog_pixels;
     uint64_t progress_ns;
     int busy, command, index, ready, editing, select_all;
+    int multi;                      /* fx-19: CUT/COPY/DELETE act on model.entries[].selected */
+    int place; int32_t place_x, place_y; /* fx-19: position the dropped items at the drop point */
     unsigned cursor;
     char edit[FM_NAME];
     uint64_t poll_ns;
@@ -33,6 +35,14 @@ void desk_folder_destroy(struct desktop *);
 void desk_folder_service(struct desktop *);
 void desk_folder_rename(struct desktop *, int);
 void desk_folder_drop(struct desktop *, int source, int copy);
+/* fx-19: copy or move dragged items into destination (FM_EFFECT_COPY or
+ * FM_EFFECT_MOVE), or move them to the Trash with free names (trash=1);
+ * place records the desktop drop point for the new icons. */
+/* fx-19 drag data object through the folder's VFS (the shell does no I/O). */
+int desk_folder_drag_save(struct desktop *, char *const *paths, const char *types, unsigned count);
+int desk_folder_drag_load(struct desktop *, char ***paths, char **types, unsigned *count);
+int desk_folder_transfer(struct desktop *, char *const *paths, unsigned count, const char *destination,
+                         unsigned effect, int trash, int place, int32_t x, int32_t y);
 void desk_folder_dialog_paint(struct desktop *, struct desk_box, struct desk_box);
 void desk_folder_dialog_click(struct desktop *, int x, int y);
 void desk_folder_dialog_key(struct desktop *, int code, int value);

@@ -15,6 +15,15 @@ the existing desktop cursor API. Existing IDs 0–18 retain their meanings;
 open hand, closed hand and help append IDs 19–21. The six existing Paint tool
 drawings remain in `paint.h`, with their separate MIT notice.
 
+## Drag-and-drop feedback (fx-19, 2026-10-23)
+
+Three further original drawings append IDs 22–24: `drag_move` (the arrow
+with a small dashed box), `drag_copy` (the box with a plus) and `drag_link`
+(the box with a shortcut arrow), the shapes Windows' default
+`IDropSource::GiveFeedback` cursors convey. They reuse the arrow path, scale
+and hotspot (4,3) unchanged; no-drop uses the existing not-allowed shape.
+`scripts/cursors/build_ciuki.py` rasterises all nineteen drawings.
+
 ## Size (fx-13, 2026-10-23)
 
 The first set (2026-10-22) drew the arrow about 19 by 27 opaque pixels,

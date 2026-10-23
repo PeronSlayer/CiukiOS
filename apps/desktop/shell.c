@@ -26,6 +26,13 @@
 #define SH_WINDOW    DU_WINDOW
 #define SH_TIP       0xffffe1u      /* tooltip paper */
 static void tooltip_hide(struct desktop *d);
+/* fx-19 selection and drag session (defined after the icon painter). */
+static int drop_lit(const struct desktop *d, int k);
+static void dnd_commit(struct desktop *d, unsigned effect);
+static void draw_band(struct desktop *d, struct desk_box clip);
+static void draw_drag_image(struct desktop *d, struct desk_box clip);
+static int selection_sync(struct desktop *d);
+static int marked_count(const struct desktop *d, int files_only);
 
 static struct du_canvas canvas(struct desktop *d, struct desk_box clip)
 {
@@ -455,12 +462,22 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
                 item(m,"Open With",NULL,SH_ACT_SUBMENU,SH_MENU_OPEN_WITH,0);
             item(m,"Cut", "edit-cut", SH_ACT_FILE, DF_CUT,0);
             item(m,"Copy", "edit-copy", SH_ACT_FILE, DF_COPY,0);
-            item(m,"Rename    F2", NULL, SH_ACT_RENAME,d->sh.menu_owner,0);
+            item(m,"Rename    F2", NULL, SH_ACT_RENAME,d->sh.menu_owner,marked_count(d,0)>1 ? SH_ITEM_DISABLED : 0);
             item(m,"Delete", "edit-delete", SH_ACT_FILE, DF_DELETE,0);
         }
         separator(m);
         item(m, "Properties", "document-properties", SH_ACT_ICON_PROPERTIES, d->sh.menu_owner, 0);
         break;
+    case SH_MENU_DRAG: {
+        /* Windows 98 right-drag menu; the default is the plain-drag effect. */
+        unsigned allowed=d->sh.dnd.allowed, def=d->sh.dnd.effect;
+        item(m,"Move Here",NULL,SH_ACT_DRAG,FM_EFFECT_MOVE,!(allowed&FM_EFFECT_MOVE) ? SH_ITEM_DISABLED : def==FM_EFFECT_MOVE ? SH_ITEM_DEFAULT : 0);
+        item(m,"Copy Here",NULL,SH_ACT_DRAG,FM_EFFECT_COPY,!(allowed&FM_EFFECT_COPY) ? SH_ITEM_DISABLED : def==FM_EFFECT_COPY ? SH_ITEM_DEFAULT : 0);
+        item(m,"Create Shortcut(s) Here",NULL,SH_ACT_DRAG,FM_EFFECT_LINK,!(allowed&FM_EFFECT_LINK) ? SH_ITEM_DISABLED : def==FM_EFFECT_LINK ? SH_ITEM_DEFAULT : 0);
+        separator(m);
+        item(m,"Cancel",NULL,SH_ACT_DRAG,0,0);
+        break;
+    }
     case SH_MENU_TASK: {
         int owner = d->sh.menu_owner, minimized = owner >= 0 && owner < DESK_CLIENTS && d->clients[owner].minimized;
         struct desk_client *c=owner>=0 && owner<DESK_CLIENTS ? &d->clients[owner] : NULL;
@@ -537,6 +554,12 @@ void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 void desk_menu_close(struct desktop *d)
 {
     if (!d->sh.levels) return;
+    /* Dismissing the right-drag menu is its Cancel. */
+    if (d->sh.dnd.active && d->sh.dnd.menu == 1 && d->sh.menus[0].kind == SH_MENU_DRAG) {
+        menus_damage(d); d->sh.levels = 0;
+        desk_shell_drag_cancel(d);
+        return;
+    }
     if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
     menus_damage(d);
     int start = d->sh.menus[0].kind == SH_MENU_START;
@@ -751,7 +774,13 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_RENAME: desk_folder_rename(d,it->arg); break;
     case SH_ACT_FILE:
-        if (d->sh.folder) { d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3; }
+        if (d->sh.folder) {
+            d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3;
+            if (it->arg==DF_CUT || it->arg==DF_COPY || it->arg==DF_DELETE) d->sh.folder->multi=selection_sync(d)>1;
+        }
+        break;
+    case SH_ACT_DRAG:
+        if (d->sh.dnd.active && d->sh.dnd.menu) dnd_commit(d,(unsigned)it->arg);
         break;
     case SH_ACT_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner))
@@ -814,6 +843,7 @@ static void activate(struct desktop *d, int level, int index)
     if (it.flags & SH_ITEM_DISABLED) return;
     desk_sound(d,SOUND_MENU_SELECT);
     if (it.action == SH_ACT_SUBMENU) { submenu(d, level, index); return; }
+    if (it.action == SH_ACT_DRAG && d->sh.dnd.menu) d->sh.dnd.menu = 2;   /* a choice, not a dismissal */
     desk_menu_close(d);
     act(d, &it);
 }
@@ -1437,7 +1467,10 @@ static void icons_layout(struct desktop *d)
 }
 static void icons_build(struct desktop *d)
 {
-    d->sh.icon_count = 0; d->sh.icon_selected=-1;
+    /* Indices change: a desktop-source drag and a band end here. */
+    if (d->sh.dnd.active && d->sh.dnd.source < 0) desk_shell_drag_cancel(d);
+    d->sh.band = 0; d->sh.icon_pending = 0;
+    d->sh.icon_count = 0; d->sh.icon_selected=-1; d->sh.focus_unselected=0; d->sh.anchor=-1;
     icon_add(d, "Computer", "files", "Computer", "ciuki-computer", SH_ACT_LAUNCH, 1);
     if (d->sh.icon_count!=1) return;
     icon_add(d, "Documents", "files", "/Documents", "user-home", SH_ACT_LAUNCH, 0);
@@ -1466,6 +1499,13 @@ static void icon_open(struct desktop *d, int index)
     }
     else if (ic->action == SH_ACT_LAUNCH) launch_named(d, ic->program, ic->argument[0] ? ic->argument : NULL);
     else desk_shell_message(d, "Trash", "The Trash is empty.\n\nCiukiOS does not keep deleted files yet:\nFiles deletes them permanently.", 0);
+}
+/* Double-click or Enter on a selected icon opens every selected icon. */
+static void open_selection(struct desktop *d, int index)
+{
+    if (!desk_shell_icon_marked(d, index)) { icon_open(d, index); return; }
+    int opened = 0;
+    for (int k = 0; k < d->sh.icon_count && opened < 16; k++) if (desk_shell_icon_marked(d, k)) { icon_open(d, k); opened++; }
 }
 static int icon_hit(const struct desktop *d, int32_t x, int32_t y)
 {
@@ -1551,7 +1591,7 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         if (!desk_intersect(ic->box, clip, &b)) continue;
         struct du_canvas c = canvas(d, b);
         struct desk_paint p = painter(&c);
-        int selected = k == d->sh.icon_selected;
+        int selected = desk_shell_icon_marked(d, k) || drop_lit(d, k);
         int32_t ix = ic->box.x + (ic->box.w - SH_DESKTOP_ICON) / 2, iy = ic->box.y + 4;
         du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
         char lines[2][32];
@@ -1588,7 +1628,7 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
                 du_vline(&c,box.x+4+du_text_width(prefix),box.y+4,16,DU_INK);
             }
         }
-        if (selected && d->focus < 0 && !d->sh.levels) du_dotted(&c, (struct du_rect){sel.x + 2, sel.y + 2, sel.w - 4, sel.h - 4});
+        if (k == d->sh.icon_selected && d->focus < 0 && !d->sh.levels) du_dotted(&c, (struct du_rect){sel.x + 2, sel.y + 2, sel.w - 4, sel.h - 4});
     }
 }
 unsigned desk_shell_cursor(const struct desktop *d)
@@ -1607,6 +1647,545 @@ unsigned desk_shell_cursor(const struct desktop *d)
         }
     }
     return DESK_CURSOR_ARROW;
+}
+
+/* ---- fx-19 desktop selection, rubber band and drag and drop ------------
+ * Windows 98 desktop list view: Ctrl toggles, Shift extends from the anchor
+ * (icon view: the rectangle between anchor and item), a press on empty
+ * space starts a rubber band (Ctrl toggles what it covers, Shift adds).
+ * Dragging follows OLE DoDragDrop: the shell owns the pointer from the
+ * SM_CXDRAG threshold to the drop; targets report DROPEFFECT values; Esc
+ * cancels; the right button ends in a Move/Copy/Shortcut/Cancel menu.
+ * Paths are handed to the folder layer (folder.c); this file does no I/O. */
+int desk_shell_icon_marked(const struct desktop *d, int k)
+{
+    if (k < 0 || k >= d->sh.icon_count) return 0;
+    return d->sh.icons[k].selected || (k == d->sh.icon_selected && !d->sh.focus_unselected);
+}
+static int drop_lit(const struct desktop *d, int k)
+{ return d->sh.dnd.active && !d->sh.dnd.menu && d->sh.dnd.drop_index == k && k >= 0; }
+/* One icon's look changed: repair the cached wallpaper/icon layer there. */
+static void icon_repaint(struct desktop *d, int k)
+{
+    struct desk_shell *s = &d->sh;
+    if (k < 0 || k >= s->icon_count) return;
+    struct desk_box b;
+    if (s->background && s->background_valid && s->wall &&
+        desk_intersect(s->icons[k].box, (struct desk_box){0, 0, (int)d->width, (int)d->height}, &b)) {
+        uint32_t *out = d->pixels; d->pixels = s->background;
+        for (int y = b.y; y < b.y + b.h; y++)
+            memcpy(s->background + (size_t)y * d->width + b.x, s->wall + (size_t)y * d->width + b.x, (size_t)b.w * 4);
+        draw_icons(d, b); s->background_serial++;
+        d->pixels = out;
+    }
+    damage(d, s->icons[k].box);
+}
+static void mark(struct desktop *d, int k, int on)
+{
+    if (k < 0 || k >= d->sh.icon_count || desk_shell_icon_marked(d, k) == (on != 0)) return;
+    d->sh.icons[k].selected = on != 0;
+    if (k == d->sh.icon_selected) d->sh.focus_unselected = !on;
+    icon_repaint(d, k);
+}
+static void select_none(struct desktop *d) { for (int k = 0; k < d->sh.icon_count; k++) mark(d, k, 0); }
+/* Moves the focus rectangle, keeping every icon's selection state. */
+static void icon_focus(struct desktop *d, int k)
+{
+    int old = d->sh.icon_selected;
+    if (old == k) return;
+    if (old >= 0 && old < d->sh.icon_count) { d->sh.icons[old].selected = desk_shell_icon_marked(d, old); damage(d, d->sh.icons[old].box); }
+    d->sh.icon_selected = k;
+    d->sh.focus_unselected = k >= 0 && k < d->sh.icon_count && !d->sh.icons[k].selected;
+    if (k >= 0 && k < d->sh.icon_count) damage(d, d->sh.icons[k].box);
+}
+static void select_only(struct desktop *d, int k)
+{
+    select_none(d); icon_focus(d, k);
+    if (k >= 0) { mark(d, k, 1); d->sh.anchor = k; }
+}
+static int marked_count(const struct desktop *d, int files_only)
+{
+    int n = 0;
+    for (int k = 0; k < d->sh.icon_count; k++) n += desk_shell_icon_marked(d, k) && (!files_only || icon_is_entry(d, k));
+    return n;
+}
+/* Shift: every icon inside the rectangle spanned by the anchor and k. */
+static void select_range(struct desktop *d, int k, int add)
+{
+    int a = d->sh.anchor >= 0 && d->sh.anchor < d->sh.icon_count ? d->sh.anchor : k;
+    struct desk_box A = d->sh.icons[a].box, B = d->sh.icons[k].box;
+    int x0 = A.x < B.x ? A.x : B.x, y0 = A.y < B.y ? A.y : B.y;
+    int x1 = A.x + A.w > B.x + B.w ? A.x + A.w : B.x + B.w, y1 = A.y + A.h > B.y + B.h ? A.y + A.h : B.y + B.h;
+    for (int i = 0; i < d->sh.icon_count; i++) {
+        struct desk_box b = d->sh.icons[i].box;
+        int cx = b.x + b.w / 2, cy = b.y + b.h / 2, inside = cx >= x0 && cx < x1 && cy >= y0 && cy < y1;
+        if (inside) mark(d, i, 1); else if (!add) mark(d, i, 0);
+    }
+    icon_focus(d, k); mark(d, k, 1);
+}
+/* Synchronise the Files model's selection with the desktop's (commands). */
+static int selection_sync(struct desktop *d)
+{
+    if (!d->sh.folder) return 0;
+    struct fm_model *m = &d->sh.folder->model; int n = 0;
+    for (unsigned i = 0; i < m->count; i++) {
+        int k = (int)i + 3;
+        m->entries[i].selected = k < d->sh.icon_count && desk_shell_icon_marked(d, k);
+        n += m->entries[i].selected != 0;
+    }
+    return n;
+}
+
+static struct desk_box band_box(const struct desktop *d)
+{
+    const struct desk_shell *s = &d->sh;
+    int x0 = s->band_x0 < s->band_x1 ? s->band_x0 : s->band_x1, x1 = s->band_x0 < s->band_x1 ? s->band_x1 : s->band_x0;
+    int y0 = s->band_y0 < s->band_y1 ? s->band_y0 : s->band_y1, y1 = s->band_y0 < s->band_y1 ? s->band_y1 : s->band_y0;
+    return (struct desk_box){x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+}
+static void band_damage(struct desktop *d, struct desk_box b)
+{
+    damage(d, (struct desk_box){b.x, b.y, b.w, 1}); damage(d, (struct desk_box){b.x, b.y + b.h - 1, b.w, 1});
+    damage(d, (struct desk_box){b.x, b.y, 1, b.h}); damage(d, (struct desk_box){b.x + b.w - 1, b.y, 1, b.h});
+}
+/* The desktop marquee: every other pixel of its outline inverted, as the
+ * Windows 9x focus-rectangle XOR, visible on any wallpaper. */
+static void draw_band(struct desktop *d, struct desk_box clip)
+{
+    if (!d->sh.band) return;
+    struct desk_box b = band_box(d);
+    if (b.w < 2 && b.h < 2) return;
+    struct desk_box edges[4] = {{b.x, b.y, b.w, 1}, {b.x, b.y + b.h - 1, b.w, 1}, {b.x, b.y, 1, b.h}, {b.x + b.w - 1, b.y, 1, b.h}};
+    for (unsigned e = 0; e < 4; e++) {
+        struct desk_box r;
+        if (!desk_intersect(edges[e], clip, &r)) continue;
+        for (int y = r.y; y < r.y + r.h; y++) for (int x = r.x; x < r.x + r.w; x++)
+            if (!((x + y) & 1)) { uint32_t *p = d->pixels + (size_t)y * d->width + x; *p ^= 0xffffffu; }
+    }
+}
+static void band_begin(struct desktop *d, int x, int y)
+{
+    struct desk_shell *s = &d->sh;
+    if (s->icon_count > s->band_capacity) {
+        uint8_t *o = realloc(s->band_original, (size_t)s->icon_count);
+        if (!o) return;
+        s->band_original = o; s->band_capacity = s->icon_count;
+    }
+    s->band_modifiers = s->modifiers & (DU_CTRL | DU_SHIFT);
+    if (!s->band_modifiers) select_none(d);
+    for (int k = 0; k < s->icon_count; k++) s->band_original[k] = (uint8_t)desk_shell_icon_marked(d, k);
+    s->band = 1; s->band_x0 = s->band_x1 = x; s->band_y0 = s->band_y1 = y;
+}
+static void band_update(struct desktop *d, int x, int y)
+{
+    struct desk_shell *s = &d->sh;
+    if (y < DESK_BAR) y = DESK_BAR;
+    if (y >= (int)d->height - DESK_BAR) y = (int)d->height - DESK_BAR - 1;
+    if (x == s->band_x1 && y == s->band_y1) return;
+    band_damage(d, band_box(d));
+    s->band_x1 = x; s->band_y1 = y;
+    struct desk_box b = band_box(d);
+    band_damage(d, b);
+    for (int k = 0; k < s->icon_count && k < s->band_capacity; k++) {
+        struct desk_box ib = s->icons[k].box, hit = {ib.x + 10, ib.y + 2, ib.w - 20, ib.h - 4}, ignored;
+        unsigned in = desk_intersect(hit, b, &ignored) != 0;
+        mark(d, k, s->band_modifiers & DU_CTRL ? s->band_original[k] ^ in : s->band_original[k] | in);
+    }
+}
+static void band_end(struct desktop *d)
+{
+    struct desk_shell *s = &d->sh;
+    if (!s->band) return;
+    band_damage(d, band_box(d)); s->band = 0;
+    /* The focus goes to the first icon the band selected. */
+    for (int k = 0; k < s->icon_count; k++) if (desk_shell_icon_marked(d, k) && (k >= s->band_capacity || !s->band_original[k])) {
+        int keep = desk_shell_icon_marked(d, k); icon_focus(d, k); mark(d, k, keep);
+        if (!(s->band_modifiers & DU_SHIFT)) s->anchor = k;
+        break;
+    }
+}
+
+/* ---- drag session ---- */
+static uint32_t dnd_counter;
+static unsigned dnd_keys(const struct desktop *d)
+{
+    unsigned m = d->sh.modifiers;
+    return (m & DU_SHIFT ? FM_KEY_SHIFT : 0) | (m & DU_CTRL ? FM_KEY_CTRL : 0) | (m & DU_ALT ? FM_KEY_ALT : 0);
+}
+static int volume_optical(const struct desktop *d, int volume)
+{
+    return volume >= 'D' && volume <= 'Z' && (d->sh.media.removable_mask & (1u << (volume - 'A'))) &&
+           d->sh.media.type[volume - 'A'] == CIUKI_MEDIA_OPTICAL;
+}
+static int files_target(const struct desktop *d, int i)
+{
+    const struct desk_client *c = &d->clients[i];
+    return c->window && !c->closing && c->program == DESK_APP_FILES && c->version == DESK_SHELL_VERSION;
+}
+static int app_target(const struct desktop *d, int i)
+{
+    const struct desk_client *c = &d->clients[i];
+    return c->window && !c->closing && c->accept_files && c->version == DESK_SHELL_VERSION;
+}
+static void dnd_send(struct desktop *d, int i, unsigned op, unsigned length, const uint32_t *words, unsigned n)
+{
+    if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
+    struct ciuki_message m; desk_message(&m, op, length);
+    m.data[0] = (uint8_t)d->clients[i].version; m.data[2] = (uint8_t)d->clients[i].minor;
+    for (unsigned k = 0; k < n; k++) desk_put32(m.data + 4 + 4 * k, words[k]);
+    desk_queue(d, i, &m);
+}
+static void dnd_over(struct desktop *d, int phase)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (g->kind != SH_DROP_FILES || g->target < 0 || !files_target(d, g->target)) return;
+    struct desk_box b = desk_content(&d->clients[g->target]);
+    uint32_t w[5] = {g->serial, (uint32_t)phase, (uint32_t)(d->mouse_x - b.x), (uint32_t)(d->mouse_y - b.y), g->keys};
+    dnd_send(d, g->target, DESK_DRAG_OVER, 24, w, 5);
+    g->repeat_ns = d->now_ns;
+}
+static struct desk_box dnd_image_box(const struct desktop *d)
+{
+    const struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active || g->menu) return (struct desk_box){0, 0, 0, 0};
+    int dx = d->mouse_x - g->start_x, dy = d->mouse_y - g->start_y;
+    if (g->source < 0) {
+        struct desk_box u = {0, 0, 0, 0};
+        for (unsigned n = 0; n < g->icon_count; n++) {
+            struct desk_box b = d->sh.icons[g->icons[n]].box; b.x += dx; b.y += dy;
+            if (!u.w) u = b;
+            else {
+                int x0 = u.x < b.x ? u.x : b.x, y0 = u.y < b.y ? u.y : b.y;
+                int x1 = u.x + u.w > b.x + b.w ? u.x + u.w : b.x + b.w, y1 = u.y + u.h > b.y + b.h ? u.y + u.h : b.y + b.h;
+                u = (struct desk_box){x0, y0, x1 - x0, y1 - y0};
+            }
+        }
+        return u;
+    }
+    unsigned rows = g->count < 4 ? g->count : 4;
+    return (struct desk_box){d->mouse_x - 16, d->mouse_y - 16, 220, (int)rows * 36 + (g->count > 4 ? 18 : 0)};
+}
+static void dnd_image_damage(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (g->image.w) damage(d, g->image);
+    g->image = dnd_image_box(d);
+    if (g->image.w) damage(d, g->image);
+}
+static void dnd_free(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    for (unsigned i = 0; g->paths && i < g->count; i++) free(g->paths[i]);
+    free(g->paths); free(g->types);
+    g->paths = NULL; g->types = NULL; g->count = 0;
+}
+/* Which object is under the pointer and what a drop there would do. */
+static void dnd_evaluate(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active || g->menu) return;
+    int x = d->mouse_x, y = d->mouse_y, kind = SH_DROP_NONE, target = -1, drop_index = -1, task = -1;
+    unsigned allowed = 0, effect = FM_EFFECT_NONE;
+    char destination[FM_PATH] = "";
+    g->keys = dnd_keys(d);
+    int window = desk_hit(d, x, y);
+    if (y < DESK_BAR) kind = SH_DROP_NONE;
+    else if (d->shell && desk_contains(desk_taskbar(d), x, y)) {
+        for (int i = 0; i < DESK_CLIENTS; i++) if (desk_task_visible(&d->clients[i]) && desk_contains(desk_task_button(d, i), x, y)) task = i;
+        kind = SH_DROP_TASK;
+    } else if (window >= 0) {
+        const struct desk_client *c = &d->clients[window];
+        if (desk_modal_target(d, window) == window && desk_contains(desk_content(c), x, y) && g->count) {
+            if (files_target(d, window)) {
+                kind = SH_DROP_FILES; target = window;
+                if (g->status_target == window) { effect = g->effect; allowed = g->allowed; }
+            } else if (app_target(d, window)) {
+                /* WM_DROPFILES targets open what they receive: the copy cursor. */
+                kind = SH_DROP_APP; target = window; allowed = FM_EFFECT_COPY;
+                effect = g->keys & (FM_KEY_SHIFT | FM_KEY_ALT) ? FM_EFFECT_NONE : FM_EFFECT_COPY;
+            }
+        }
+    } else {
+        int k = icon_hit(d, x, y);
+        if (k >= 0 && !(g->source < 0 && desk_shell_icon_marked(d, k))) {
+            const struct sh_icon *ic = &d->sh.icons[k];
+            int entry_dir = icon_is_entry(d, k) && d->sh.folder->model.entries[k - 3].meta.type == FM_DIR;
+            if (k == 2 && g->count) {
+                kind = SH_DROP_TRASH; target = k; allowed = FM_EFFECT_MOVE;
+                snprintf(destination, sizeof(destination), "%s", DESK_TRASH);
+            } else if (g->count && (k == 1 || entry_dir || (ic->action == SH_ACT_LAUNCH && !strcmp(ic->program, "files") && ic->argument[0] == '/'))) {
+                kind = SH_DROP_ICON; target = k; allowed = g->source_allowed;
+                snprintf(destination, sizeof(destination), "%s", ic->argument);
+            }
+        } else {
+            kind = SH_DROP_DESKTOP;
+            snprintf(destination, sizeof(destination), "%s", DESK_FOLDER);
+            if (g->source < 0) allowed = FM_EFFECT_MOVE | (g->count ? FM_EFFECT_COPY : 0);   /* reposition, or Ctrl: copy beside */
+            else allowed = g->source_allowed;
+        }
+        if (kind == SH_DROP_TRASH) {
+            effect = g->keys & (FM_KEY_CTRL | FM_KEY_ALT) ? FM_EFFECT_NONE : FM_EFFECT_MOVE;
+            for (unsigned i = 0; i < g->count && effect; i++) if (fm_beneath(g->paths[i], DESK_TRASH)) effect = FM_EFFECT_NONE;
+        } else if (kind == SH_DROP_DESKTOP && g->source < 0) {
+            effect = (g->keys & FM_KEY_ALT) || (g->keys & (FM_KEY_CTRL | FM_KEY_SHIFT)) == (FM_KEY_CTRL | FM_KEY_SHIFT) ? FM_EFFECT_NONE :
+                     g->keys & FM_KEY_CTRL ? allowed & FM_EFFECT_COPY : FM_EFFECT_MOVE;
+        } else if (kind == SH_DROP_ICON || kind == SH_DROP_DESKTOP) {
+            if (volume_optical(d, fm_volume(destination))) allowed = 0;
+            for (unsigned i = 0; i < g->count && allowed; i++) if (g->types[i] == 'D' && fm_beneath(destination, g->paths[i])) allowed = 0;
+            effect = fm_drop_effect(g->source_volume, fm_volume(destination), g->keys, allowed);
+            if (effect && fm_drop_check(g->paths, g->count, destination, effect)) effect = FM_EFFECT_NONE;
+        }
+        if ((kind == SH_DROP_ICON || kind == SH_DROP_TRASH) && effect) drop_index = target;
+    }
+    if (kind != g->kind || target != g->target) {
+        if (g->kind == SH_DROP_FILES) dnd_over(d, 1);
+        g->status_target = -1;
+        if (kind == SH_DROP_FILES) effect = FM_EFFECT_NONE, allowed = 0;   /* until the target answers */
+    }
+    g->kind = kind; g->target = target;
+    snprintf(g->destination, sizeof(g->destination), "%s", destination);
+    g->effect = effect; g->allowed = allowed;
+    if (kind == SH_DROP_FILES) dnd_over(d, 0);
+    if (task != g->hover_task) { g->hover_task = task; g->hover_ns = d->now_ns ? d->now_ns : 1; }
+    if (drop_index != g->drop_index) { int old = g->drop_index; g->drop_index = drop_index; icon_repaint(d, old); icon_repaint(d, drop_index); }
+}
+static void dnd_start(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    g->active = 1; g->menu = 0; g->serial = ++dnd_counter ? dnd_counter : ++dnd_counter;
+    g->kind = SH_DROP_NONE; g->target = -1; g->status_target = -1; g->hover_task = -1; g->drop_index = -1;
+    g->start_x = d->mouse_x; g->start_y = d->mouse_y; g->image = (struct desk_box){0, 0, 0, 0};
+    g->source_volume = g->count ? fm_volume(g->paths[0]) : 0;
+    g->source_allowed = volume_optical(d, g->source_volume) ? FM_EFFECT_COPY : FM_EFFECT_COPY | FM_EFFECT_MOVE;
+    tooltip_hide(d);
+    dnd_evaluate(d); dnd_image_damage(d); desk_cursor_update(d);
+}
+/* A Files window started a drag (client.c: DRAG_BEGIN from its own press). */
+int desk_shell_drag_begin(struct desktop *d, int client, unsigned button, unsigned count)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!d->shell || g->active || d->sh.levels || d->sh.band || d->drag >= 0 || d->power.state) return -EBUSY;
+    dnd_free(d);
+    int r = desk_folder_drag_load(d, &g->paths, &g->types, &g->count);
+    if (!r && g->count != count) r = -EINVAL;
+    if (r) { dnd_free(d); return r; }
+    g->source = client; g->source_pid = d->clients[client].pid; g->button = button == 2 ? CIUKI_BUTTON_RIGHT : CIUKI_BUTTON_LEFT;
+    g->icon_count = 0;
+    /* The source still holds the button: it stops receiving motion. */
+    dnd_start(d);
+    return 0;
+}
+/* The desktop's own selection leaves the threshold square. */
+static void dnd_desktop_begin(struct desktop *d, unsigned button)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    dnd_free(d); g->icon_count = 0;
+    int files = marked_count(d, 1), n = 0;
+    if (files) {
+        g->paths = calloc((size_t)files, sizeof(*g->paths)); g->types = calloc((size_t)files, 1);
+        if (!g->paths || !g->types) { dnd_free(d); return; }
+    }
+    for (int k = 0; k < d->sh.icon_count; k++) if (desk_shell_icon_marked(d, k)) {
+        if (g->icon_count < SH_DRAG_IMAGE_ITEMS) g->icons[g->icon_count++] = k;
+        if (!icon_is_entry(d, k) || n >= files) continue;
+        g->paths[n] = malloc(FM_PATH);
+        if (!g->paths[n]) { dnd_free(d); return; }
+        snprintf(g->paths[n], FM_PATH, "%s", d->sh.icons[k].argument);
+        g->types[n] = d->sh.folder->model.entries[k - 3].meta.type == FM_DIR ? 'D' : 'F';
+        g->count = (unsigned)++n;
+    }
+    if (!g->icon_count) { dnd_free(d); return; }
+    if (g->count && desk_folder_drag_save(d, g->paths, g->types, g->count)) { dnd_free(d); g->count = 0; }
+    g->source = -1; g->source_pid = 0; g->button = button;
+    d->sh.icon_drag = -1; d->sh.icon_pending = 0;
+    int x = d->mouse_x, y = d->mouse_y;
+    d->mouse_x = d->sh.drag_start_x; d->mouse_y = d->sh.drag_start_y;
+    dnd_start(d);                       /* the image origin is the press point */
+    d->mouse_x = x; d->mouse_y = y;
+    dnd_evaluate(d); dnd_image_damage(d);
+}
+static void dnd_finish(struct desktop *d, unsigned performed)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (g->source >= 0 && g->source < DESK_CLIENTS && d->clients[g->source].window && d->clients[g->source].pid == g->source_pid) {
+        uint32_t w[1] = {performed};
+        dnd_send(d, g->source, DESK_DRAG_END, 8, w, 1);
+    }
+    int old = g->drop_index;
+    if (g->image.w) damage(d, g->image);
+    dnd_free(d);
+    memset(g, 0, sizeof(*g)); g->drop_index = -1; g->hover_task = -1; g->target = -1; g->status_target = -1; g->source = -1;
+    icon_repaint(d, old);
+    desk_cursor_update(d);
+}
+void desk_shell_drag_cancel(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active) return;
+    if (g->kind == SH_DROP_FILES) dnd_over(d, 1);
+    dnd_finish(d, FM_EFFECT_NONE);
+}
+/* Desktop source onto free space: the icons keep their offsets (Windows). */
+static void dnd_reposition(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    int dx = g->menu ? g->menu_x - g->start_x : d->mouse_x - g->start_x, dy = g->menu ? g->menu_y - g->start_y : d->mouse_y - g->start_y;
+    int saved = 1;
+    for (int k = 0; k < d->sh.icon_count; k++) if (desk_shell_icon_marked(d, k)) {
+        struct desk_box *b = &d->sh.icons[k].box; damage(d, *b);
+        b->x += dx; b->y += dy;
+        if (b->x < 0) b->x = 0;
+        if (b->x + b->w > (int)d->width) b->x = (int)d->width - b->w;
+        if (b->y < DESK_BAR + 10) b->y = DESK_BAR + 10;
+        if (b->y + b->h > (int)d->height - DESK_BAR) b->y = (int)d->height - DESK_BAR - b->h;
+        if (cfg_icon_move(&d->sh.cfg, icon_position_name(d, k), b->x, b->y)) d->sh.want_save = 1; else saved = 0;
+        damage(d, *b);
+    }
+    d->sh.background_valid = 0;
+    if (!saved) desk_shell_message(d, "Desktop", "No space remains for icon positions in desktop.cfg.", 1);
+}
+static void dnd_commit(struct desktop *d, unsigned effect)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active) return;
+    int x = g->menu ? g->menu_x : d->mouse_x, y = g->menu ? g->menu_y : d->mouse_y;
+    unsigned performed = FM_EFFECT_NONE;
+    if (effect && (effect & g->allowed) == effect) switch (g->kind) {
+    case SH_DROP_FILES:
+        if (g->target >= 0 && files_target(d, g->target)) {
+            struct desk_box b = desk_content(&d->clients[g->target]);
+            uint32_t w[4] = {g->serial, (uint32_t)(x - b.x), (uint32_t)(y - b.y), effect};
+            dnd_send(d, g->target, DESK_DRAG_DROP, 20, w, 4); performed = effect;
+        }
+        break;
+    case SH_DROP_APP:
+        if (g->target >= 0 && app_target(d, g->target)) {
+            struct desk_box b = desk_content(&d->clients[g->target]);
+            uint32_t w[3] = {g->serial, (uint32_t)(x - b.x), (uint32_t)(y - b.y)};
+            dnd_send(d, g->target, DESK_DROP_FILES, 16, w, 3); performed = FM_EFFECT_COPY;
+            desk_focus(d, g->target);
+        }
+        break;
+    case SH_DROP_DESKTOP: case SH_DROP_ICON: case SH_DROP_TRASH: {
+        if (g->kind == SH_DROP_DESKTOP && g->source < 0 && effect == FM_EFFECT_MOVE) { dnd_reposition(d); performed = effect; break; }
+        if (!g->count) break;
+        int r = desk_folder_transfer(d, g->paths, g->count, g->destination, effect, g->kind == SH_DROP_TRASH,
+                                     g->kind == SH_DROP_DESKTOP, x, y);
+        if (r == -EBUSY) desk_shell_message(d, "Desktop", "Another file operation is in progress.\nTry again when it has finished.", 1);
+        else if (r) desk_shell_notify_error(d, "Desktop", r);
+        else performed = effect;
+        break;
+    }
+    default: break;
+    }
+    else if (g->kind == SH_DROP_TASK && !g->menu)
+        desk_shell_message(d, "Taskbar", "You cannot drop an item onto a button on the taskbar.\n\nHowever, if you drag the item over a button "
+                           "without releasing the mouse button, the window will come forward after a moment, allowing you to drop the item inside the window.", 0);
+    if (g->kind == SH_DROP_FILES && !performed) dnd_over(d, 1);
+    dnd_finish(d, performed);
+}
+int desk_shell_drag_motion(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active) return 0;
+    if (g->menu) return 1;
+    dnd_evaluate(d); dnd_image_damage(d);
+    return 1;
+}
+void desk_shell_drag_status(struct desktop *d, int client, uint32_t serial, unsigned effect, unsigned allowed)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active || g->menu || serial != g->serial || g->kind != SH_DROP_FILES || client != g->target) return;
+    g->allowed = allowed & g->source_allowed; g->effect = effect & g->allowed; g->status_target = client;
+    desk_cursor_update(d);
+}
+/* Release of the drag button drops; a right drag asks first. Returns 0 so
+ * the release still reaches a source window that holds the button. */
+int desk_shell_drag_button(struct desktop *d, int button, int down)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active || g->menu) return 0;
+    if (down) return 1;                  /* no chords during a drag */
+    if ((unsigned)button != g->button) return 1;
+    if (g->button == CIUKI_BUTTON_RIGHT && g->kind != SH_DROP_NONE && g->kind != SH_DROP_TASK && g->allowed) {
+        /* The menu's default is the effect without modifier keys. */
+        unsigned keys = d->sh.modifiers; d->sh.modifiers &= ~(unsigned)(DU_CTRL | DU_SHIFT | DU_ALT);
+        if (g->kind != SH_DROP_FILES) dnd_evaluate(d);
+        else g->effect = fm_drop_effect(g->source_volume, fm_volume(g->destination[0] ? g->destination : "/"), 0, g->allowed);
+        d->sh.modifiers = keys;
+        if (g->image.w) damage(d, g->image);
+        g->image = (struct desk_box){0, 0, 0, 0};
+        g->menu = 1; g->menu_x = d->mouse_x; g->menu_y = d->mouse_y;
+        desk_menu_open(d, SH_MENU_DRAG, d->mouse_x, d->mouse_y);
+        desk_cursor_update(d);
+        return 0;
+    }
+    dnd_commit(d, g->effect);
+    return 0;
+}
+static void dnd_key(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active || g->menu) return;
+    unsigned keys = dnd_keys(d);
+    if (keys != g->keys) { dnd_evaluate(d); desk_cursor_update(d); }
+}
+static void dnd_tick(struct desktop *d)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    if (!g->active || g->menu) return;
+    /* OLE repeats DragOver while the pointer rests (auto-scroll, hover). */
+    if (g->kind == SH_DROP_FILES && d->now_ns - g->repeat_ns >= 100000000ull) dnd_over(d, 0);
+    /* Windows 98: resting on a taskbar button brings its window forward. */
+    if (g->hover_task >= 0 && g->hover_ns && d->now_ns - g->hover_ns >= 1000000000ull) {
+        int i = g->hover_task; g->hover_ns = 0;
+        if (d->clients[i].window) {
+            if (d->clients[i].minimized) desk_minimize(d, i);
+            desk_focus(d, i);
+        }
+    }
+}
+/* The drag image: the dragged icons, translucent, following the pointer. */
+static void draw_drag_image(struct desktop *d, struct desk_box clip)
+{
+    struct sh_dnd *g = &d->sh.dnd;
+    struct desk_box image = dnd_image_box(d), b;
+    if (!image.w || !desk_intersect(image, clip, &b)) return;
+    struct du_canvas c = canvas(d, b);
+    struct desk_paint p = painter(&c);
+    int dx = d->mouse_x - g->start_x, dy = d->mouse_y - g->start_y;
+    if (g->source < 0) {
+        for (unsigned n = 0; n < g->icon_count; n++) {
+            const struct sh_icon *ic = &d->sh.icons[g->icons[n]];
+            int x = ic->box.x + dx, y = ic->box.y + dy;
+            du_icon_blit(&c, x + (ICON_CELL_W - SH_DESKTOP_ICON) / 2, y + 4, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, DU_ICON_GHOST);
+            char lines[2][32]; int count = label_lines(ic->label, lines), widest = 0;
+            for (int l = 0; l < count; l++) { int w = desk_text_measure(DESK_FONT_LABEL, lines[l]); if (w > widest) widest = w; }
+            desk_paint_round_blend(&p, x + (ICON_CELL_W - widest) / 2 - 5, y + LABEL_TOP + 1, widest + 10, count * LABEL_PITCH + 4, 4,
+                                   SH_HOT, 110, SH_HOT, 140);
+            for (int l = 0; l < count; l++)
+                desk_paint_text(&p, DESK_FONT_LABEL, x + (ICON_CELL_W - desk_text_measure(DESK_FONT_LABEL, lines[l])) / 2,
+                                y + LABEL_TOP + LABEL_BASE + l * LABEL_PITCH, lines[l], 0xffffffu);
+        }
+        return;
+    }
+    unsigned rows = g->count < 4 ? g->count : 4;
+    for (unsigned r = 0; r < rows; r++) {
+        const struct desk_catalog_entry *cat = g->types[r] == 'D' ? NULL : desk_catalog_file(g->paths[r]);
+        const char *icon = g->types[r] == 'D' ? "folder" : cat ? cat->tango : "text-x-generic";
+        int x = image.x, y = image.y + (int)r * 36;
+        du_icon_blit(&c, x, y, desk_shell_icon(icon, 32), 32, DU_ICON_GHOST);
+        char label[40]; snprintf(label, sizeof(label), "%.39s", fm_basename(g->paths[r]));
+        int w = du_text_width(label); if (w > 170) w = 170;
+        desk_paint_round_blend(&p, x + 36, y + 7, w + 8, 18, 3, SH_HOT, 110, SH_HOT, 140);
+        du_text_fit(&c, x + 40, y + 9, 170, label, SH_HOT_INK);
+    }
+    if (g->count > 4) {
+        char more[48]; snprintf(more, sizeof(more), "and %u more", g->count - 4);
+        int w = du_text_width(more);
+        desk_paint_round_blend(&p, image.x + 36, image.y + (int)rows * 36, w + 8, 16, 3, SH_HOT, 110, SH_HOT, 140);
+        du_text(&c, image.x + 40, image.y + (int)rows * 36 + 1, more, SH_HOT_INK);
+    }
 }
 
 /* ---- Alt+Tab switcher -------------------------------------------------- */
@@ -1716,6 +2295,7 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
             d->pixels=out; s->background_selected=s->icon_selected; s->background_outline=outline;
             for (int y=clip.y;y<clip.y+clip.h;y++) memcpy(out+(size_t)y*d->width+clip.x,
                     s->background+(size_t)y*d->width+clip.x,(size_t)clip.w*4);
+            draw_band(d,clip);
             return;
         }
         for (int32_t y = clip.y; y < clip.y + clip.h; y++)
@@ -1747,6 +2327,7 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
         }
     }
     draw_icons(d, clip);
+    draw_band(d, clip);
 }
 /* Sixteen coverage samples, in eighth-pixel integer coordinates. */
 static unsigned circle_coverage(int x, int y, int diameter)
@@ -1856,6 +2437,7 @@ void desk_shell_overlay(struct desktop *d, struct desk_box clip)
     if (d->sh.media_open) draw_media(d,clip);
     if (d->sh.tooltip && !d->sh.notification.active && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels) draw_tooltip(d, clip);
     if (d->sh.switcher) draw_switcher(d, clip);
+    if (d->sh.dnd.active) draw_drag_image(d, clip);
 }
 /* Opaque overlay bodies, shared with foreign-surface clipping. Shadows and
  * the notification's tail remain dependent on the pixels underneath. */
@@ -2454,6 +3036,9 @@ static void tooltip_hide(struct desktop *d)
 int desk_shell_button(struct desktop *d, int button, int down)
 {
     if (!d->shell) return 0;
+    /* fx-19: a drag session sees the buttons first (drop, right-drag menu);
+     * a release still reaches the source window that holds the button. */
+    if (d->sh.dnd.active && !d->sh.dnd.menu) return desk_shell_drag_button(d, button, down) && down;
     int32_t x = d->mouse_x, y = d->mouse_y;
     if (down && d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
@@ -2463,28 +3048,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
         f->command=DF_RENAME; f->index=f->editing; return 1;
     }
     if (!down) {
-        if (button == CIUKI_BUTTON_LEFT && d->sh.icon_drag>=0) {
-            int index=d->sh.icon_drag; d->sh.icon_drag=-1;
-            if (d->sh.icon_dragged) {
-                d->sh.click_icon=-1;
-                int to=icon_hit(d,x,y);
-                int folder_target=icon_is_entry(d, to) && to!=index &&
-                    d->sh.folder->model.entries[to-3].meta.type==FM_DIR;
-                if (icon_is_entry(d, index) && (desk_hit(d,x,y)>=0 || folder_target)) desk_folder_drop(d,-1,(d->sh.modifiers&DU_CTRL)!=0);
-                else if (desk_hit(d,x,y)<0) {
-                    struct desk_box *b=&d->sh.icons[index].box; damage(d,*b);
-                    d->sh.background_valid=0;
-                    b->x=x-b->w/2; b->y=y-b->h/2;
-                    if (b->x<0) b->x=0;
-                    if (b->x+b->w>(int)d->width) b->x=(int)d->width-b->w;
-                    if (b->y<DESK_BAR+10) b->y=DESK_BAR+10;
-                    if (b->y+b->h>(int)d->height-DESK_BAR) b->y=(int)d->height-DESK_BAR-b->h;
-                    const char *name=icon_position_name(d, index);
-                    if (cfg_icon_move(&d->sh.cfg,name,b->x,b->y)) d->sh.want_save=1;
-                    else desk_shell_message(d,"Desktop","No space remains for icon positions in desktop.cfg.",1);
-                    damage(d,*b);
-                }
-                return 1;
+        if (button == CIUKI_BUTTON_LEFT && d->sh.band) { band_end(d); return 1; }
+        if (d->sh.icon_drag>=0 && button==d->sh.icon_button) {
+            /* A press without a drag: the deferred click applies now. */
+            int index=d->sh.icon_drag, pending=d->sh.icon_pending; d->sh.icon_drag=-1; d->sh.icon_pending=0;
+            if (index<d->sh.icon_count && pending==2) mark(d,index,0);
+            else if (index<d->sh.icon_count && pending==1) select_only(d,index);
+            if (button==CIUKI_BUTTON_RIGHT && index<d->sh.icon_count) {
+                d->sh.menu_owner=index; desk_menu_open(d,SH_MENU_ICON,x,y); return 1;
             }
         }
         if (button == CIUKI_BUTTON_LEFT && d->sh.volume_drag) { d->sh.volume_drag = 0; return 1; }
@@ -2630,27 +3201,41 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     if (desk_hit(d, x, y) >= 0) return 0;
     int icon = icon_hit(d, x, y);
+    unsigned mods = d->sh.modifiers;
     if (button == CIUKI_BUTTON_LEFT) {
         if (icon >= 0 && icon == d->sh.click_icon && d->now_ns - d->sh.click_ns <= (uint64_t)d->sh.cfg.double_click_ms * 1000000ull) {
-            d->sh.click_icon = -1;
-            icon_open(d, icon);
+            d->sh.click_icon = -1; d->sh.icon_drag = -1; d->sh.icon_pending = 0;
+            open_selection(d, icon);
             return 1;
         }
-        if (icon != d->sh.icon_selected) {
-            if (d->sh.icon_selected >= 0 && d->sh.icon_selected < d->sh.icon_count) damage(d, d->sh.icons[d->sh.icon_selected].box);
-            d->sh.icon_selected = icon;
-            if (icon >= 0) damage(d, d->sh.icons[icon].box);
+        /* Windows 98 desktop list view: Shift extends from the anchor, Ctrl
+         * toggles; a press on a selected icon keeps the selection for a
+         * drag and applies the click at release. Empty space: rubber band. */
+        d->sh.icon_pending = 0;
+        if (icon >= 0) {
+            if (mods & DU_SHIFT) select_range(d, icon, (mods & DU_CTRL) != 0);
+            else if (mods & DU_CTRL) {
+                int was = desk_shell_icon_marked(d, icon);
+                icon_focus(d, icon); mark(d, icon, 1); d->sh.anchor = icon;
+                if (was) d->sh.icon_pending = 2;
+            } else if (desk_shell_icon_marked(d, icon)) { icon_focus(d, icon); mark(d, icon, 1); d->sh.anchor = icon; d->sh.icon_pending = 1; }
+            else select_only(d, icon);
+        } else {
+            if (!(mods & (DU_CTRL | DU_SHIFT))) { select_none(d); icon_focus(d, -1); }
+            if (d->sh.cfg.desktop_icons) band_begin(d, x, y);
         }
-        d->sh.icon_drag=icon; d->sh.icon_dragged=0; d->sh.drag_start_x=x; d->sh.drag_start_y=y;
+        d->sh.icon_drag=icon; d->sh.icon_button=CIUKI_BUTTON_LEFT; d->sh.icon_dragged=0; d->sh.drag_start_x=x; d->sh.drag_start_y=y;
         d->sh.click_icon = icon; d->sh.click_ns = d->now_ns;
         return 0;   /* the window manager still clears the focus */
     }
     if (button == CIUKI_BUTTON_RIGHT) {
         if (icon >= 0) {
-            if (d->sh.icon_selected >= 0 && d->sh.icon_selected < d->sh.icon_count) damage(d, d->sh.icons[d->sh.icon_selected].box);
-            d->sh.icon_selected = icon; damage(d, d->sh.icons[icon].box);
-            d->sh.menu_owner = icon;
-            desk_menu_open(d, SH_MENU_ICON, x, y);
+            /* Right press selects; the menu waits for the release so that a
+             * right-drag can start (WM_CONTEXTMENU follows the button up). */
+            if (!desk_shell_icon_marked(d, icon)) { if (mods & DU_CTRL) { icon_focus(d, icon); mark(d, icon, 1); } else select_only(d, icon); }
+            else { icon_focus(d, icon); mark(d, icon, 1); }
+            d->sh.icon_drag=icon; d->sh.icon_button=CIUKI_BUTTON_RIGHT; d->sh.icon_dragged=0; d->sh.icon_pending=0;
+            d->sh.drag_start_x=x; d->sh.drag_start_y=y;
         } else desk_menu_open(d, SH_MENU_DESKTOP, x, y);
         return 1;
     }
@@ -2671,7 +3256,12 @@ void desk_shell_motion(struct desktop *d)
 {
     if (!d->shell) return;
     int32_t x = d->mouse_x, y = d->mouse_y;
-    if (d->sh.icon_drag>=0 && (abs(x-d->sh.drag_start_x)>4 || abs(y-d->sh.drag_start_y)>4)) d->sh.icon_dragged=1;
+    if (d->sh.dnd.active && !d->sh.dnd.menu) { desk_shell_drag_motion(d); return; }
+    /* SM_CXDRAG/SM_CYDRAG: 4 pixels on either side of the press point. */
+    if (d->sh.icon_drag>=0 && !d->sh.icon_dragged && (abs(x-d->sh.drag_start_x)>4 || abs(y-d->sh.drag_start_y)>4)) {
+        d->sh.icon_dragged=1; d->sh.click_icon=-1; dnd_desktop_begin(d,(unsigned)d->sh.icon_button);
+    }
+    if (d->sh.band) band_update(d,x,y);
     if (d->sh.volume_drag) volume_set_from(d, y);
     for (int l = d->sh.levels - 1; l >= 0; l--) {
         struct sh_menu *m = &d->sh.menus[l];
@@ -2699,6 +3289,7 @@ void desk_shell_motion(struct desktop *d)
 void desk_shell_tick(struct desktop *d)
 {
     if (!d->shell) return;
+    dnd_tick(d);
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
         d->now_ns - d->sh.network_poll_ns >= 2000000000ull)) {
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;
@@ -2905,12 +3496,6 @@ static void toggle_start(struct desktop *d)
     if (d->sh.levels && d->sh.menus[0].kind == SH_MENU_START) desk_menu_close(d);
     else { desk_menu_close(d); desk_menu_open(d, SH_MENU_START, 0, 0); d->sh.menus[0].hot = 0; }
 }
-static void icon_select(struct desktop *d, int icon)
-{
-    if (d->sh.icon_selected >= 0 && d->sh.icon_selected < d->sh.icon_count) damage(d, d->sh.icons[d->sh.icon_selected].box);
-    d->sh.icon_selected = icon;
-    if (icon >= 0) damage(d, d->sh.icons[icon].box);
-}
 static int volume_action(struct desktop *d, unsigned action, int value, int notify)
 {
     if (action<CIUKI_CONSUMER_VOLUME_UP || action>CIUKI_CONSUMER_MUTE) return 0;
@@ -2945,6 +3530,20 @@ int desk_shell_key(struct desktop *d, int code, int value)
     if (!d->shell) return 0;
     if (value && d->sh.tooltip) { tooltip_hide(d); d->sh.hover_since=0; }
     int alt = code == 0x38 || code == 0x138, ctrl = code == 0x1d || code == 0x11d, shift = code == 0x2a || code == 0x36;
+    if (d->sh.dnd.active && !d->sh.dnd.menu) {
+        /* QueryContinueDrag: Esc cancels; modifier changes update the effect. */
+        if (code == DU_KEY_ESC) { if (value) desk_shell_drag_cancel(d); return 1; }
+        if (ctrl || shift) {
+            unsigned bit = ctrl ? DU_CTRL : DU_SHIFT;
+            if (value) d->sh.modifiers |= bit; else d->sh.modifiers &= ~bit;
+            dnd_key(d); return 0;
+        }
+        if (alt) {
+            if (value) d->sh.modifiers |= DU_ALT; else d->sh.modifiers &= ~DU_ALT;
+            d->sh.alt_used = 1; d->sh.alt_code = value ? code : 0; dnd_key(d); return 1;
+        }
+        return 1;
+    }
     int logo = code == 0x15b || code == 0x15c;
     if (ctrl || shift) {
         unsigned bit = ctrl ? DU_CTRL : DU_SHIFT;
@@ -3107,18 +3706,42 @@ int desk_shell_key(struct desktop *d, int code, int value)
                 int64_t distance=(int64_t)dx*dx+(int64_t)dy*dy;
                 if (distance<best) { best=distance; next=i; }
             }
-            icon_select(d,next); return 1;
+            /* Shift extends from the anchor, Ctrl moves only the focus. */
+            unsigned mods=d->sh.modifiers;
+            if (mods&DU_SHIFT) select_range(d,next,(mods&DU_CTRL)!=0);
+            else if (mods&DU_CTRL) icon_focus(d,next);
+            else select_only(d,next);
+            return 1;
         }
+        if (code==DU_KEY_SPACE && (d->sh.modifiers&DU_CTRL)) {
+            if (s>=0) { mark(d,s,!desk_shell_icon_marked(d,s)); d->sh.anchor=s; }
+            return 1;
+        }
+        if (code==0x1e && (d->sh.modifiers&(DU_CTRL|DU_ALT))==DU_CTRL) {
+            for (int k=0;k<d->sh.icon_count;k++) mark(d,k,1);
+            return 1;
+        }
+        /* File commands act on the selection; the focus, or the first
+         * selected file when the focus is a system icon. */
+        int primary=icon_is_entry(d,s) && desk_shell_icon_marked(d,s) ? s : -1;
+        for (int k=3;primary<0 && k<d->sh.icon_count;k++) if (icon_is_entry(d,k) && desk_shell_icon_marked(d,k)) primary=k;
+        if (primary<0 && icon_is_entry(d,s)) primary=s;
         if (d->sh.folder) {
             if (code==DU_KEY_F2 && icon_is_entry(d, s)) { desk_folder_rename(d,s); return 1; }
-            if (code==DU_KEY_DELETE && icon_is_entry(d, s)) { d->sh.folder->command=DF_DELETE; d->sh.folder->index=s-3; return 1; }
+            if (code==DU_KEY_DELETE && primary>=0) {
+                d->sh.folder->command=DF_DELETE; d->sh.folder->index=primary-3; d->sh.folder->multi=selection_sync(d)>1; return 1;
+            }
             if (code==DU_KEY_F5) { d->sh.folder->command=DF_REFRESH; return 1; }
             if (d->sh.modifiers&DU_CTRL) {
                 int command=code==0x2f ? DF_PASTE : code==0x2e ? DF_COPY : code==0x2d ? DF_CUT : 0;
-                if (command && (command==DF_PASTE || icon_is_entry(d, s))) { d->sh.folder->command=command; d->sh.folder->index=s-3; return 1; }
+                if (command && (command==DF_PASTE || primary>=0)) {
+                    d->sh.folder->command=command; d->sh.folder->index=primary-3;
+                    if (command!=DF_PASTE) d->sh.folder->multi=selection_sync(d)>1;
+                    return 1;
+                }
             }
         }
-        if (code == DU_KEY_ENTER && s >= 0) { icon_open(d, s); return 1; }
+        if (code == DU_KEY_ENTER && s >= 0) { open_selection(d, s); return 1; }
     }
     return 0;
 }
@@ -3148,6 +3771,7 @@ void desk_shell_reset(struct desktop *d)
     icons_prepare();
     cfg_defaults(&d->sh.cfg);
     d->sh.icon_selected = d->sh.click_icon = d->sh.icon_drag = -1;
+    d->sh.anchor = -1; d->sh.dnd.drop_index = d->sh.dnd.target = d->sh.dnd.status_target = d->sh.dnd.hover_task = -1;
     d->sh.volume = 20;
 }
 void desk_shell_apply(struct desktop *d)

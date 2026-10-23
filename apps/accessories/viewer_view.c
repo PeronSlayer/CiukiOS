@@ -247,6 +247,12 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
     case DU_EV_DIALOG:
         if (id == V_D_OPEN && !e->index && e->text && e->text[0]) viewer_open(a, e->text);
         break;
+    case DU_EV_DROPFILES: {
+        /* fx-19 WM_DROPFILES: show the first dropped picture. */
+        char path[VIEWER_PATH];
+        if (!u->dialog.kind && du_drop_file(0, path, sizeof(path)) > 0 && path[0]) viewer_open(a, path);
+        break;
+    }
     case DU_EV_ACTIVATE:
         switch (id) {
         case V_M_OPEN: du_file_dialog(u, V_D_OPEN, 0, "Open", a->folder[0] ? a->folder : "/", "", a->fs->list, a->fs->ctx); break;

@@ -396,6 +396,37 @@ int desk_parse(const struct ciuki_message *m, int client,
         for (unsigned i=0;i<9;i++) p->performance[i]=(uint64_t)desk_get32(m->data+8+i*8) |
             (uint64_t)desk_get32(m->data+12+i*8)<<32;
         n=80; break;
+    case DESK_DRAG_BEGIN:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=12) return 0;
+        p->flags=desk_get32(m->data+4); p->count=desk_get32(m->data+8);
+        if ((p->flags!=1 && p->flags!=2) || !p->count || p->count>DESK_DRAG_ITEMS) return 0;
+        n=12; break;
+    case DESK_DRAG_OVER:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=24) return 0;
+        p->serial=desk_get32(m->data+4); p->flags=desk_get32(m->data+8);
+        p->x=(int32_t)desk_get32(m->data+12); p->y=(int32_t)desk_get32(m->data+16); p->index=desk_get32(m->data+20);
+        if (!p->serial || p->flags>1 || p->index>7 || p->x < -65535 || p->x > 65535 || p->y < -65535 || p->y > 65535) return 0;
+        n=24; break;
+    case DESK_DRAG_STATUS:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=16) return 0;
+        p->serial=desk_get32(m->data+4); p->flags=desk_get32(m->data+8); p->values[0]=desk_get32(m->data+12);
+        if (!p->serial || (p->flags!=0 && p->flags!=1 && p->flags!=2 && p->flags!=4) || p->values[0]>7 ||
+            (p->flags && !(p->values[0]&p->flags))) return 0;
+        n=16; break;
+    case DESK_DRAG_DROP: case DESK_DROP_FILES: {
+        unsigned size=p->opcode==DESK_DRAG_DROP ? 20u : 16u;
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=size) return 0;
+        p->serial=desk_get32(m->data+4); p->x=(int32_t)desk_get32(m->data+8); p->y=(int32_t)desk_get32(m->data+12);
+        if (size==20) p->flags=desk_get32(m->data+16);
+        if (!p->serial || p->x < -65535 || p->x > 65535 || p->y < -65535 || p->y > 65535 ||
+            (size==20 && p->flags!=1 && p->flags!=2 && p->flags!=4)) return 0;
+        n=size; break;
+    }
+    case DESK_DRAG_END: case DESK_ACCEPT_FILES:
+        if (client!=(p->opcode==DESK_ACCEPT_FILES) || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
+        p->flags=desk_get32(m->data+4);
+        if (p->opcode==DESK_ACCEPT_FILES ? p->flags>1 : p->flags>7) return 0;
+        n=8; break;
     case DESK_FILE_DROP:
         if (m->data[0]!=DESK_SHELL_VERSION || m->length!=16) return 0;
         p->flags=desk_get32(m->data+4); p->x=(int32_t)desk_get32(m->data+8); p->y=(int32_t)desk_get32(m->data+12);

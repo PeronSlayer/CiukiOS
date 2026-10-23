@@ -115,6 +115,23 @@ struct du_rect du_list_row(const struct du_widget *w, unsigned index)
     return du_intersection(cell(w,&l,index),l.area);
 }
 
+/* ---- fx-19 rubber band, kept in scroll-independent "virtual" coordinates
+ * (list body origin, unscrolled), so the anchor stays on its item while the
+ * view auto-scrolls as in the Windows list view. */
+static int vstep(const struct du_widget *w) { return w->kind != DU_TREE && w->view == DU_ICONS ? CELL_H : DU_ROW; }
+static int virtual_dx(const struct du_widget *w, const struct layout *l)
+{ return -l->area.x + (w->kind == DU_LISTVIEW && w->view == DU_LIST ? w->hscroll * l->colw : 0); }
+static int virtual_dy(const struct du_widget *w, const struct layout *l)
+{ return -l->area.y + (w->kind == DU_LISTVIEW && w->view == DU_LIST ? 0 : w->scroll * vstep(w)); }
+static struct du_rect band_screen(const struct du_widget *w, const struct layout *l)
+{
+    if (!w->band) return (struct du_rect){0, 0, 0, 0};
+    int x0 = w->band_x0 < w->band_x1 ? w->band_x0 : w->band_x1, x1 = w->band_x0 < w->band_x1 ? w->band_x1 : w->band_x0;
+    int y0 = w->band_y0 < w->band_y1 ? w->band_y0 : w->band_y1, y1 = w->band_y0 < w->band_y1 ? w->band_y1 : w->band_y0;
+    return (struct du_rect){x0 - virtual_dx(w, l), y0 - virtual_dy(w, l), x1 - x0 + 1, y1 - y0 + 1};
+}
+struct du_rect du_list_band(const struct du_widget *w) { struct layout l = compute(w); return band_screen(w, &l); }
+
 
 static int tree_x(const struct du_widget *w, const struct layout *l, unsigned depth)
 { (void)w; return l->area.x + 9 + (int)depth * 16; }
@@ -170,6 +187,41 @@ struct du_rect du_list_label(const struct du_widget *w, unsigned index)
     if (index >= w->count) return (struct du_rect){l.area.x, l.area.y, 0, 0};
     return label_rect(w, &l, index);
 }
+
+/* The item's selectable bounds: icon and label, as the list view's
+ * LVIR_SELECTBOUNDS; a band selects every item it touches. */
+static struct du_rect select_bounds(const struct du_widget *w, const struct layout *l, unsigned i)
+{
+    struct du_rect r = cell(w, l, i), lab = label_rect(w, l, i);
+    if (w->kind != DU_TREE && w->view == DU_ICONS) {
+        struct du_rect icon = {r.x + (CELL_W - 32) / 2, r.y + 4, 32, 32};
+        int x0 = icon.x < lab.x ? icon.x : lab.x, x1 = icon.x + icon.w > lab.x + lab.w ? icon.x + icon.w : lab.x + lab.w;
+        return (struct du_rect){x0, icon.y, x1 - x0, lab.y + lab.h - icon.y};
+    }
+    return (struct du_rect){r.x + 2, r.y, lab.x + lab.w - r.x - 2, DU_ROW};
+}
+int du_list_in_band(const struct du_widget *w, unsigned i)
+{
+    if (!w->band || i >= w->count) return 0;
+    struct layout l = compute(w);
+    struct du_rect b = band_screen(w, &l), r = select_bounds(w, &l, i);
+    return r.x < b.x + b.w && b.x < r.x + r.w && r.y < b.y + b.h && b.y < r.y + r.h;
+}
+unsigned du_list_band_hits(const struct du_widget *w, uint8_t *hits)
+{
+    unsigned n = 0;
+    if (!w->band) { memset(hits, 0, w->count); return 0; }
+    struct layout l = compute(w);
+    struct du_rect b = band_screen(w, &l);
+    for (unsigned i = 0; i < w->count; i++) {
+        struct du_rect r = select_bounds(w, &l, i);
+        hits[i] = r.x < b.x + b.w && b.x < r.x + r.w && r.y < b.y + b.h && b.y < r.y + r.h;
+        n += hits[i];
+    }
+    return n;
+}
+static int label_hit(const struct du_widget *w, const struct layout *l, unsigned i, int x, int y)
+{ return du_contains(select_bounds(w, l, i), x, y); }
 
 int du_list_hit(const struct du_widget *w, int x, int y)
 {
@@ -325,14 +377,17 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
         const struct du_item *it = &w->items[i];
         int act = i == w->active;
         int sel = it->selected || (!w->selection_external && w->selection_active && act);
-        enum du_icon_mode mode = it->ghost ? DU_ICON_GHOST : sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL;
+        /* fx-19: a drop target shows the active selection colour whether or
+         * not its window has the focus (Explorer's DROPHILITED state). */
+        int drop = w->drop_hot == (int)i + 1, lit = drop || (sel && focused && window);
+        enum du_icon_mode mode = it->ghost && !drop ? DU_ICON_GHOST : lit ? DU_ICON_SELECTED : DU_ICON_NORMAL;
         const char *name = it->text[0] ? it->text[0] : "";
         if (w->view == DU_ICONS) {
             du_icon_blit(c, r.x + (CELL_W - 32) / 2, r.y + 4, it->icon32 ? it->icon32 : it->icon16, it->icon32 ? 32 : 16, mode);
             char lines[2][64]; unsigned n = wrap(name, lines);
             struct du_rect lab = label_rect(w, &l, i);
             uint32_t ink = DU_INK;
-            if (sel && focused && window) { du_fill(c, lab, DU_SELECT); ink = DU_SELECT_INK; }
+            if (lit) { du_fill(c, lab, DU_SELECT); ink = DU_SELECT_INK; }
             else if (sel && w->inactive_selection) du_fill(c, lab, DU_FACE);
             for (unsigned k = 0; k < n; k++)
                 du_text(c, r.x + (CELL_W - du_text_width(lines[k])) / 2, lab.y + 2 + (int)k * 13, lines[k], ink);
@@ -342,7 +397,7 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
         du_icon_blit(c, r.x + 2, r.y + (DU_ROW - 16) / 2, it->icon16, 16, mode);
         struct du_rect lab = label_rect(w, &l, i);
         int limit = (w->view == DU_DETAILS && w->column_count ? w->columns[0].width : l.colw) - 26;
-        draw_label(c, lab, name, limit, sel, act, focused, window, w->inactive_selection);
+        draw_label(c, lab, name, limit, sel || drop, act, focused || drop, window || drop, w->inactive_selection);
         if (w->view == DU_DETAILS) {
             int x = r.x;
             for (unsigned col = 0; col < w->column_count; col++) {
@@ -359,6 +414,11 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
                 x += width;
             }
         }
+    }
+    if (w->band) {
+        /* The Windows 9x list-view marquee: a dotted (focus) rectangle. */
+        struct du_rect b = band_screen(w, &l);
+        if (b.w > 1 || b.h > 1) du_dotted(c, b);
     }
     c->clip = old;
     if (l.has_v) { l.v.value = w->scroll; du_sb_draw(c, &l.v, w->drag >= 10 && w->drag < 20 ? w->drag - 10 : 0); }
@@ -409,9 +469,10 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
             if (!it->expanded) du_vline(c, cx, cy - 2, 5, DU_INK);
         }
         int sel = it->selected || (!w->selection_external && w->selection_active && i == w->active);
-        du_icon_blit(c, cx + 8, r.y + (DU_ROW - 16) / 2, it->icon16, 16, sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        int drop = w->drop_hot == (int)i + 1;
+        du_icon_blit(c, cx + 8, r.y + (DU_ROW - 16) / 2, it->icon16, 16, drop || (sel && focused && window) ? DU_ICON_SELECTED : DU_ICON_NORMAL);
         struct du_rect lab = label_rect(w, &l, i);
-        draw_label(c, lab, it->text[0] ? it->text[0] : "", l.area.x + l.area.w - lab.x - 4, sel, i == w->active, focused, window, 1);
+        draw_label(c, lab, it->text[0] ? it->text[0] : "", l.area.x + l.area.w - lab.x - 4, sel || drop, i == w->active && !drop, focused || drop, window || drop, 1);
     }
     c->clip = old;
     if (l.has_v) { l.v.value = w->scroll; du_sb_draw(c, &l.v, w->drag >= 10 && w->drag < 20 ? w->drag - 10 : 0); }
@@ -482,33 +543,77 @@ int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y
     int toggle = du_tree_toggle_hit(w, x, y);
     if (toggle >= 0 && button == 1) { du_emit(u, (struct du_event){.type = DU_EV_CHANGE, .id = w->id, .index = toggle}); return 1; }
     int index = du_list_hit(w, x, y);
+    /* Windows 98 Explorer details view: only the icon and name select a
+     * row; the rest of the row is empty space that starts a marquee. */
+    if (index >= 0 && w->marquee && w->kind == DU_LISTVIEW && w->view == DU_DETAILS && !label_hit(w, &l, (unsigned)index, x, y)) index = -1;
     if (button == 2) {
+        if (index >= 0 && w->file_drag) {
+            /* Right press selects (keeping a selection that contains the item);
+             * the context menu waits for the release so a right-drag can start. */
+            w->active = (unsigned)index;
+            select_event(u, w, index, 0, w->items[index].selected && !(u->modifiers & (DU_SHIFT | DU_CTRL)) ? DU_SELECT_PENDING : 0);
+            w->drag = 52; w->file_drag_button = 2; w->file_drag_x = x; w->file_drag_y = y; w->file_drag_pending = 0;
+            return 1;
+        }
         if (index >= 0) w->active = (unsigned)index;
         du_emit(u, (struct du_event){.type = DU_EV_CONTEXT, .id = w->id, .index = index, .x = x, .y = y});
         return 1;
     }
     if (button != 1) return 1;
+    if (index < 0 && w->marquee && w->kind == DU_LISTVIEW && du_contains(l.area, x, y)) {
+        select_event(u, w, -1, 0, 0);
+        w->band = 1; w->drag = 60;
+        w->band_x0 = w->band_x1 = x + virtual_dx(w, &l); w->band_y0 = w->band_y1 = y + virtual_dy(w, &l);
+        u->last_click_widget = -1;
+        du_emit(u, (struct du_event){.type = DU_EV_MARQUEE, .id = w->id, .index = 0, .x = x, .y = y});
+        du_timer_start(u, DU_TIMER_BAND, 50000000u, 1);
+        du_invalidate(u, l.area);
+        return 1;
+    }
     int dbl = index >= 0 && u->last_click_widget == w->id && u->last_click_index == index &&
               u->now - u->last_click_ns < DU_DOUBLE_CLICK_NS &&
               x - u->last_click_x <= 4 && u->last_click_x - x <= 4 && y - u->last_click_y <= 4 && u->last_click_y - y <= 4;
     if (index >= 0) w->active = (unsigned)index;
-    select_event(u, w, index, 0, 0);
+    /* fx-19: a press on a selected item (without Shift) keeps the selection
+     * so it can be dragged; the click applies on release (Explorer). */
+    int pending = w->file_drag && index >= 0 && !dbl && w->items[index].selected && !(u->modifiers & DU_SHIFT);
+    select_event(u, w, index, 0, pending ? DU_SELECT_PENDING : 0);
     if (dbl) {
         u->last_click_widget = -1;
         du_emit(u, (struct du_event){.type = DU_EV_OPEN, .id = w->id, .index = index});
     } else {
-        if (w->file_drag && index>=0) { w->drag=50; w->file_drag_x=x; w->file_drag_y=y; }
+        if (w->file_drag && index>=0) { w->drag=50; w->file_drag_button=1; w->file_drag_x=x; w->file_drag_y=y; w->file_drag_pending=pending; }
         u->last_click_widget = w->id; u->last_click_index = index; u->last_click_ns = u->now;
         u->last_click_x = x; u->last_click_y = y;
     }
     return 1;
 }
 
+static void band_update(struct du_ui *u, struct du_widget *w, int x, int y)
+{
+    struct layout l = compute(w);
+    int ox = w->band_x1, oy = w->band_y1;
+    int bx = x < l.area.x ? l.area.x : x >= l.area.x + l.area.w ? l.area.x + l.area.w - 1 : x;
+    int by = y < l.area.y ? l.area.y : y >= l.area.y + l.area.h ? l.area.y + l.area.h - 1 : y;
+    w->band_x1 = bx + virtual_dx(w, &l); w->band_y1 = by + virtual_dy(w, &l);
+    if (ox == w->band_x1 && oy == w->band_y1) return;
+    du_invalidate(u, l.area);
+    du_emit(u, (struct du_event){.type = DU_EV_MARQUEE, .id = w->id, .index = 1, .x = x, .y = y});
+}
+
 void du_list_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 {
     struct layout l = compute(w);
     int old_v=w->scroll,old_h=w->hscroll;
-    if (w->drag==50 && (abs(x-w->file_drag_x)>4 || abs(y-w->file_drag_y)>4)) { w->drag=51; u->last_click_widget=-1; }
+    /* SM_CXDRAG/SM_CYDRAG (4): the drag begins once the pointer leaves the
+     * square of 4 pixels on either side of the press point (DragDetect). */
+    if ((w->drag==50 || w->drag==52) && (abs(x-w->file_drag_x)>4 || abs(y-w->file_drag_y)>4)) {
+        w->drag++; u->last_click_widget=-1; w->file_drag_pending=0;
+        du_emit(u,(struct du_event){.type=DU_EV_DRAG,.id=w->id,.index=(int)w->active,.key=(unsigned)w->file_drag_button,
+                                    .x=w->file_drag_x,.y=w->file_drag_y});
+        return;
+    }
+    if (w->drag == 60) { du_list_autoscroll(u, w, x, y); band_update(u, w, x, y); return; }
     if (w->drag == 13 && l.has_v) { l.v.value = w->scroll; w->scroll = du_sb_drag(&l.v, x, y, w->drag_offset); du_list_scrolled(u,w,old_v,old_h); }
     else if (w->drag == 23 && l.has_h) { l.h.value = w->hscroll; w->hscroll = du_sb_drag(&l.h, x, y, w->drag_offset); du_list_scrolled(u,w,old_v,old_h); }
     else if (w->drag >= 30 && w->drag < 30 + DU_COLUMNS) {
@@ -520,9 +625,47 @@ void du_list_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 
 void du_list_release(struct du_ui *u, struct du_widget *w)
 {
-    int drag=w->drag; w->drag=0;
+    int drag=w->drag, pending=w->file_drag_pending; w->drag=0; w->file_drag_pending=0;
     struct layout l=compute(w);
     if (drag>=10 && drag<=13) du_invalidate(u,l.v.box);
     else if (drag>=20 && drag<=23) du_invalidate(u,l.h.box);
-    if (drag==51 && w->file_drag) du_emit(u,(struct du_event){.type=DU_EV_DRAG,.id=w->id,.index=(int)w->active,.x=u->mouse_x,.y=u->mouse_y});
+    if (drag==50 && pending && w->active<w->count) select_event(u,w,(int)w->active,0,DU_SELECT_RELEASE);
+    if (drag==52) {
+        if (pending && w->active<w->count) select_event(u,w,(int)w->active,0,DU_SELECT_RELEASE);
+        du_emit(u,(struct du_event){.type=DU_EV_CONTEXT,.id=w->id,.index=(int)w->active,.x=u->mouse_x,.y=u->mouse_y});
+    }
+    if (drag==60) {
+        du_timer_stop(u,DU_TIMER_BAND);
+        du_emit(u,(struct du_event){.type=DU_EV_MARQUEE,.id=w->id,.index=2,.x=u->mouse_x,.y=u->mouse_y});
+        w->band=0; du_invalidate(u,l.area);
+    }
+}
+
+/* Auto-scroll (Windows list view and DoDragDrop targets): the edge zone is
+ * the outer 16 pixels of the body, or anywhere outside it during a band. */
+int du_list_autoscroll(struct du_ui *u, struct du_widget *w, int x, int y)
+{
+    struct layout l=compute(w);
+    int zone=16, old_v=w->scroll, old_h=w->hscroll;
+    int horizontal=w->kind==DU_LISTVIEW && w->view==DU_LIST;
+    if (horizontal) {
+        if (x<l.area.x+zone && w->hscroll>0) w->hscroll--;
+        else if (x>=l.area.x+l.area.w-zone) w->hscroll=du_sb_clamp(w->hscroll+1,l.cols,l.visible);
+    } else {
+        int total=w->kind!=DU_TREE && w->view==DU_ICONS ? l.rows : (int)w->count;
+        if (y<l.area.y+zone && w->scroll>0) w->scroll--;
+        else if (y>=l.area.y+l.area.h-zone) w->scroll=du_sb_clamp(w->scroll+1,total,l.visible);
+    }
+    if (old_v==w->scroll && old_h==w->hscroll) return 0;
+    if (u) du_invalidate(u,w->box);
+    return 1;
+}
+
+/* DU_TIMER_BAND: keep scrolling while a band rests outside the body. */
+void du_list_band_tick(struct du_ui *u, struct du_widget *w)
+{
+    if (w->drag!=60) return;
+    struct layout l=compute(w);
+    if (du_contains((struct du_rect){l.area.x+16,l.area.y+16,l.area.w-32,l.area.h-32},u->mouse_x,u->mouse_y)) return;
+    if (du_list_autoscroll(u,w,u->mouse_x,u->mouse_y)) band_update(u,w,u->mouse_x,u->mouse_y);
 }

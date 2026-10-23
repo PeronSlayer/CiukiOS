@@ -269,7 +269,10 @@ int desk_shell_chrome_intersects(const struct desktop *d, struct desk_box box)
 {
     struct desk_box ignored;
     return desk_notification_intersects(d,box) ||
-        (d->shell && desk_intersect(box,desk_start_bounds(d),&ignored));
+        (d->shell && desk_intersect(box,desk_start_bounds(d),&ignored)) ||
+        /* fx-19: the translucent drag image and the desktop marquee. */
+        (d->shell && d->sh.dnd.active && d->sh.dnd.image.w && desk_intersect(box,d->sh.dnd.image,&ignored)) ||
+        (d->shell && d->sh.band);
 }
 /* The Start menu's box (open or not): shell.c drops it from the start
  * button, under the top bar, kept above the taskbar on short screens. */
@@ -1379,6 +1382,7 @@ static int copy_region(struct desktop *d,pixman_region32_t *region,const struct 
             if(!copy_cut(region,r,b)) { pixman_region32_clear(region);return 0; }
         }
         struct desk_box notice=desk_shell_notification_bounds ? desk_shell_notification_bounds(d) : (struct desk_box){0};
+        if(d->sh.dnd.active && d->sh.dnd.image.w && !copy_cut(region,r,d->sh.dnd.image)) { pixman_region32_clear(region);return 0; }
         if(!copy_cut(region,r,desk_start_bounds(d)) ||
            (d->sh.notification.active && !copy_cut(region,r,notice))) {
             pixman_region32_clear(region);return 0;

@@ -32,6 +32,7 @@ int main(int argc, char **argv)
     viewer_attach(&m->app, &m->ui, viewer_native_fs());
     m->app.quit = quit; m->app.host = m;
     m->app.asynchronous=1; m->path=path;
+    du_window_accept_files(&m->window, 1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window, 24, 48);
     int r = du_run(&m->window, idle, m);
     viewer_detach(&m->app); du_window_destroy(&m->window); free(m);

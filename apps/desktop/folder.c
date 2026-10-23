@@ -182,12 +182,13 @@ static int job(struct desktop *d, enum fm_job_kind kind, char **paths, unsigned 
     int r=fm_transfer_create(&f->transfer,&f->job); if (r) return r;
     if (created) { f->transfer->notify=d->wake; f->transfer->notify_ctx=d->wake_ctx; }
     f->transfer->prepare=transfer_prepare; f->transfer->complete=transfer_complete; f->transfer->ctx=f;
-    f->clipboard_job=clipboard; f->trash_job=trash; f->display_kind=trash ? FM_DELETE : kind;
+    f->clipboard_job=clipboard; f->trash_job=trash==1; f->display_kind=trash ? FM_DELETE : kind;
     fm_job_destroy(&f->job);
     snprintf(f->destination,sizeof(f->destination),"%s",to ? to : "");
     char *placeholder[]={"/system/settings/files.clip"};
     r=fm_job_start(&f->job,&f->model.fs,kind,clipboard ? placeholder : paths,clipboard ? 1 : n,to);
     if (r) return r;
+    if (trash==2) f->job.trash=2;   /* fx-19: several items, a free Trash name each */
     f->busy=1; f->revision++; f->progress_ns=d->now_ns;
     /* Initialize the visible dialog before handing ownership to the worker. */
     struct transfer_view *view=&f->transfer->ui_view;
@@ -227,6 +228,46 @@ void desk_folder_drop(struct desktop *d, int source, int copy)
         r=job(d,copy ? FM_COPY : FM_MOVE,NULL,0,destination,1,0);
     }
     if (r) error(d,r);
+}
+int desk_folder_drag_save(struct desktop *d, char *const *paths, const char *types, unsigned count)
+{ return d->sh.folder ? fm_drag_save(&d->sh.folder->model.fs,paths,types,count) : -ENODEV; }
+int desk_folder_drag_load(struct desktop *d, char ***paths, char **types, unsigned *count)
+{ *paths=NULL; *types=NULL; *count=0; return d->sh.folder ? fm_drag_load(&d->sh.folder->model.fs,paths,types,count) : -ENODEV; }
+int desk_folder_transfer(struct desktop *d, char *const *paths, unsigned count, const char *destination,
+                         unsigned effect, int trash, int place, int32_t x, int32_t y)
+{
+    struct desk_folder *f=d->sh.folder;
+    if (!f || d->power.state) return -EAGAIN;
+    if (f->busy) return -EBUSY;
+    if (!count) return -ENOENT;
+    if (!trash && effect!=FM_EFFECT_COPY && effect!=FM_EFFECT_MOVE) return -EINVAL;
+    f->revision++;
+    int r=job(d,trash || effect==FM_EFFECT_MOVE ? FM_MOVE : FM_COPY,(char **)paths,count,trash ? DESK_TRASH : destination,0,trash ? 2 : 0);
+    if (!r) { f->place=place; f->place_x=x; f->place_y=y; }
+    return r;
+}
+/* Saved desktop positions follow the items: forgotten when they leave the
+ * Desktop folder, placed at the drop point when they arrive. */
+static void positions_after(struct desktop *d, struct fm_job *j)
+{
+    struct desk_folder *f=d->sh.folder; int changed=0;
+    if (j->kind==FM_MOVE || j->trash) for (unsigned i=0;i<j->completed && i<j->count;i++) {
+        char parent[FM_PATH];
+        if (!fm_parent(parent,j->sources[i]) && fm_same_path(parent,DESK_FOLDER) && !fm_same_path(j->destination,DESK_FOLDER))
+            { cfg_icon_forget(&d->sh.cfg,fm_basename(j->sources[i])); changed=1; }
+    }
+    if (f->place && fm_same_path(j->destination,DESK_FOLDER)) {
+        int top=DESK_BAR+10, cell_h=94, rows=((int)d->height-DESK_BAR-4-top)/cell_h;
+        if (rows<1) rows=1;
+        for (unsigned k=0;k<j->created_count;k++) {
+            int x=f->place_x-48+(int)(k/(unsigned)rows)*96, y=f->place_y-24+(int)(k%(unsigned)rows)*cell_h;
+            if (x<0) x=0;
+            if (y<top) y=top;
+            changed|=cfg_icon_move(&d->sh.cfg,j->created[k],x,y);
+        }
+    }
+    f->place=0;
+    if (changed) d->sh.want_save=1;
 }
 _Static_assert(FM_ENTRIES<UINT16_MAX,"folder poll index fits its reserved slots");
 static unsigned entry_bucket(const char *name)
@@ -377,6 +418,7 @@ void desk_folder_service(struct desktop *d)
             if (f->dialog_window>=0) { desk_drop_client(d,f->dialog_window); f->dialog_window=-1; }
             du_dialog_close(f->dialog);
             if (f->trash_job && f->job.state==FM_DONE) { cfg_icon_forget(&d->sh.cfg,fm_basename(f->job.sources[0])); d->sh.want_save=1; }
+            else if (!f->clipboard_job) positions_after(d,&f->job);
             if (!f->result_error) {
                 free(m->entries); m->entries=f->result.entries; m->count=f->result.count; m->capacity=f->result.capacity;
                 m->active=m->anchor=0; f->result.entries=NULL; f->result.count=f->result.capacity=0;
@@ -388,7 +430,7 @@ void desk_folder_service(struct desktop *d)
             dialog_update(d,v); f->progress_ns=d->now_ns;
         }
     }
-    int command=f->command, index=f->index; f->command=DF_NONE;
+    int command=f->command, index=f->index, multi=f->multi; f->command=DF_NONE; f->multi=0;
     if (f->busy || !command) {
         if (!f->busy && f->editing<0) poll_service(d);
         return;
@@ -407,11 +449,25 @@ void desk_folder_service(struct desktop *d)
             snprintf(name,sizeof(name),"%s",m->entries[index].name);
             r=fm_rename(m,(unsigned)index,f->edit);
             if (!r) { cfg_icon_forget(&d->sh.cfg,name); d->sh.want_save=1; if (placed) { cfg_icon_move(&d->sh.cfg,f->edit,x,y); d->sh.want_save=1; } f->editing=-1; desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; }
+        } else if (command==DF_DELETE && multi && fm_selected(m,NULL)>1) {
+            unsigned n=fm_selected(m,NULL),k=0; char **paths=calloc(n,sizeof(*paths));
+            if (!paths) r=-ENOMEM;
+            for (unsigned i=0;!r && i<m->count;i++) if (m->entries[i].selected) {
+                paths[k]=malloc(FM_PATH);
+                if (!paths[k]) { r=-ENOMEM; break; }
+                r=fm_entry_path(m,i,paths[k++]);
+            }
+            if (!r) r=job(d,FM_MOVE,paths,n,DESK_TRASH,0,2);
+            for (unsigned i=0;paths && i<k;i++) free(paths[i]);
+            free(paths);
         } else if (command==DF_DELETE) {
             r=fm_entry_path(m,(unsigned)index,path);
             char *paths[]={path};
             if (!r) r=job(d,FM_MOVE,paths,1,DESK_TRASH,0,1);
-        } else if (command==DF_CUT || command==DF_COPY) { fm_select(m,(unsigned)index,0); r=fm_clipboard(m,command==DF_CUT); if (!r) r=fm_clipboard_save(m); }
+        } else if (command==DF_CUT || command==DF_COPY) {
+            if (!multi || !fm_selected(m,NULL)) fm_select(m,(unsigned)index,0);
+            r=fm_clipboard(m,command==DF_CUT); if (!r) r=fm_clipboard_save(m);
+        }
         else if (command==DF_PROPERTIES) {
             char text[360], type[48]; const struct fm_entry *e=&m->entries[index];
             snprintf(text,sizeof(text),"%.180s\n\nType: %s\nLocation: C:\\Documents\\Desktop\nSize: %llu bytes",e->name,fm_type_name(e,type,sizeof(type)),(unsigned long long)e->meta.size);

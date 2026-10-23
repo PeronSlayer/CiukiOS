@@ -1947,7 +1947,8 @@ static void render(struct du_ui *u, void *arg)
 
 /* Modal controls on libdeskui. The accept hook reads values before release. */
 enum { D_CHANGES=500, D_OPEN, D_SAVE, D_OVERWRITE, D_FORMAT, D_ATTR, D_FLIP, D_FONT };
-enum { A_NONE, A_NEW, A_OPEN, A_EXIT };
+enum { A_NONE, A_NEW, A_OPEN, A_EXIT, A_DROP };
+static char dropped_path[DU_TEXT_MAX];   /* fx-19: a picture dropped on the window */
 static int pending, closing, candidate_w, candidate_h, candidate_transform;
 static enum paint_format save_format = PAINT_BMP8, candidate_format;
 static char pending_path[DU_TEXT_MAX];
@@ -2091,6 +2092,7 @@ static void run_pending(void)
     if (action==A_NEW) new_image(cv.w,cv.h);
     else if (action==A_OPEN) file_dialog(0);
     else if (action==A_EXIT) { closing=1; if (quit_cb) quit_cb(callback_host); }
+    else if (action==A_DROP) error_message(paint_open(dropped_path));
 }
 static void ask_then(int action)
 {
@@ -2254,6 +2256,12 @@ static void event(struct du_ui *u, const struct du_event *e, void *arg)
 {
     (void)arg;
     if (e->type==DU_EV_DIALOG) { dialog_result(e); return; }
+    /* fx-19 WM_DROPFILES, as Windows Paint: open the first dropped picture
+     * after the question about unsaved changes. */
+    if (e->type==DU_EV_DROPFILES) {
+        if (!u->dialog.kind && du_drop_file(0,dropped_path,sizeof(dropped_path))>0 && dropped_path[0]) ask_then(A_DROP);
+        return;
+    }
     if (e->type==DU_EV_ACTIVATE) { paint_command(e->id); return; }
     if (e->type==DU_EV_CHANGE && (e->id==P_HSCROLL || e->id==P_VSCROLL)) {
         int ox=scx,oy=scy;

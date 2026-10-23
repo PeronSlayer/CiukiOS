@@ -338,45 +338,180 @@ static void script_coordinates(void)
            fbox.x + 40, fbox.y + 3 + 2 * DU_MENU_ITEM_H + DU_MENU_SEP_H + DU_MENU_ITEM_H / 2);
 }
 
-static int drop_count, drop_copy, drop_x, drop_y;
-static void on_drop(struct files_app *a, int x, int y, int copy)
-{ (void)a; drop_count++; drop_copy=copy; drop_x=x; drop_y=y; }
-static void drag_name(const char *name, int copy)
+/* ---- fx-19: drag sources, drop targets, rubber band and keyboard selection ---- */
+static int drag_begins, drag_button, statuses; static unsigned drag_items, status_effect, status_allowed; static uint32_t status_serial;
+static int on_begin(struct files_app *a, int button, unsigned count) { (void)a; drag_begins++; drag_button=button; drag_items=count; return 0; }
+static void on_status(struct files_app *a, uint32_t serial, unsigned effect, unsigned allowed)
+{ (void)a; statuses++; status_serial=serial; status_effect=effect; status_allowed=allowed; }
+static struct du_widget *LIST(void) { return du_get(&ui,107); }
+static struct du_widget *TREE(void) { return du_get(&ui,105); }
+static void label_point(const char *name, int *x, int *y)
 {
     int index=list_find(name); assert(index>=0);
-    struct du_rect label=du_list_label(du_get(&ui,107),(unsigned)index);
-    motion(label.x+8,label.y+5); press(1);
-    if (copy) event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0);
-    motion(-50,HEIGHT+60); release(1);
-    if (copy) event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
-    assert(drop_copy==copy && drop_x==-50 && drop_y==HEIGHT+60);
+    struct du_rect r=du_list_label(LIST(),(unsigned)index); *x=r.x+6; *y=r.y+r.h/2;
+}
+static unsigned selected_names(const char *a, const char *b, const char *c)
+{
+    unsigned n=fm_selected(&app.model,NULL);
+    const char *want[3]={a,b,c};
+    for (unsigned k=0;k<3;k++) if (want[k]) { int i=list_find(want[k]); assert(i>=0 && app.model.entries[i].selected); }
+    return n;
+}
+static void drag_data(unsigned count, const char *first)
+{
+    char **paths; char *types; unsigned n;
+    assert(!fm_drag_load(&fake_vfs,&paths,&types,&n) && n==count && !strcmp(paths[0],first));
+    fm_drag_free(paths,types,n);
+}
+/* A drag over (x, y) answered with keys; returns the effect reported. */
+static unsigned over(uint32_t serial, int x, int y, unsigned keys)
+{ int before=statuses; files_drag_over(&app,serial,0,x,y,keys); assert(statuses==before+1 && status_serial==serial); return status_effect; }
+static void save_drag(const char *path, char type)
+{ char *paths[]={(char *)path}; assert(!fm_drag_save(&fake_vfs,paths,&type,1)); }
+static void band(int x0, int y0, int x1, int y1, int mod)
+{
+    if (mod) event(CIUKI_INPUT_KEY,mod,1,0);
+    motion(x0,y0); press(1); motion((x0+x1)/2,(y0+y1)/2); motion(x1,y1);
+    if (mod) event(CIUKI_INPUT_KEY,mod,0,0);
 }
 static void file_drag_tests(void)
 {
-    fake_image_tree(); fake_file("/Documents/Desktop/Source.txt",100,1);
-    fake_file("/Documents/Desktop/Move.txt",200,2); fake_create("/Documents/Target",FM_DIR);
+    fake_image_tree();
+    fake_file("/Documents/Desktop/Source.txt",100,1); fake_file("/Documents/Desktop/Move.txt",200,2);
+    fake_file("/Documents/Desktop/Third.txt",30,3); fake_create("/Documents/Target",FM_DIR);
+    fake_create("/Documents/Target/Inner",FM_DIR); fake_create("/mnt",FM_DIR); fake_create("/mnt/e",FM_DIR);
+    fake_file("/mnt/e/Stick.txt",40,4);
     memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
-    assert(!files_setup(&app,&ui,&fake_vfs,"/Documents/Desktop")); app.drop=on_drop;
-    int desktop=0;
-    for (unsigned i=0;i<app.place_count;i++) desktop |= !strcmp(app.places[i].name,"Desktop") && !strcmp(app.places[i].path,"/Documents/Desktop");
-    assert(desktop);
-    int tree=0; for (unsigned i=0;i<app.tree_count;i++) tree |= !strcmp(app.tree[i].path,"/Documents/Desktop"); assert(tree);
-    drag_name("Source.txt",1); assert(drop_count==1);
+    assert(!files_setup(&app,&ui,&fake_vfs,"/Documents/Desktop"));
+    app.drag_begin=on_begin; app.drag_status=on_status;
+    assert(LIST()->file_drag && LIST()->marquee && TREE()->file_drag);
+    /* The shared clipboard is never the drag data object. */
+    int x,y,x2,y2; label_point("Source.txt",&x,&y);
+    /* Below SM_CXDRAG (4 px) nothing starts; past it the drag begins once. */
+    motion(x,y); press(1); motion(x+4,y-4); assert(!drag_begins); motion(x+5,y); assert(drag_begins==1 && drag_button==1 && drag_items==1);
+    motion(x+40,y+40); release(1); assert(drag_begins==1);
+    drag_data(1,"/Documents/Desktop/Source.txt");
+    assert(fake_lookup("/system/settings/files.clip")<0);
+    /* Ctrl-click builds a selection; a press on a selected item keeps it for the drag. */
+    clock_ns+=600000000ull; label_point("Move.txt",&x2,&y2);
+    event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0); click(x2,y2); event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
+    assert(selected_names("Source.txt","Move.txt",NULL)==2);
+    motion(x,y); press(1); assert(selected_names("Source.txt","Move.txt",NULL)==2);
+    motion(x+20,y+20); assert(drag_begins==2 && drag_items==2); release(1);
+    drag_data(2,"/Documents/Desktop/Move.txt");
+    /* The same press without a drag applies the click at release: only that item. */
+    clock_ns+=600000000ull; motion(x,y); press(1); assert(fm_selected(&app.model,NULL)==2); release(1);
+    assert(selected_names("Source.txt",NULL,NULL)==1);
+    /* Ctrl on a selected item toggles it off at release (no drag). */
+    clock_ns+=600000000ull; event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0); click(x2,y2); click(x,y); event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
+    assert(selected_names("Move.txt",NULL,NULL)==1);
+    /* Right-drag starts with button 2; a right click without a drag shows the menu at release. */
+    clock_ns+=600000000ull; motion(x2,y2); press(2); assert(!ui.popup); motion(x2+10,y2+10); assert(drag_begins==3 && drag_button==2); release(2); assert(!ui.popup);
+    clock_ns+=600000000ull; motion(x2,y2); press(2); assert(!ui.popup); release(2); assert(ui.popup); key(DU_KEY_ESC);
+    puts("PASS fx-19 Files drag source: SM_CXDRAG threshold, multi-selection kept on press, deferred click/Ctrl toggle, right-drag and release-time context menu, data object separate from the clipboard");
+
+    /* Drop target: same drive moves, Ctrl copies, Shift moves, Ctrl+Shift/Alt link is refused (no shortcuts). */
     assert(!files_navigate(&app,"/Documents"));
-    int target=list_find("Target"); assert(target>=0);
-    struct du_rect label=du_list_label(du_get(&ui,107),(unsigned)target);
-    files_drop(&app,label.x+8,label.y+5,1); tick();
+    save_drag("/Documents/Desktop/Source.txt",'F');
+    int tx,ty; label_point("Target",&tx,&ty);
+    assert(over(7,tx,ty,0)==FM_EFFECT_MOVE && status_allowed==(FM_EFFECT_COPY|FM_EFFECT_MOVE));
+    assert(LIST()->drop_hot==list_find("Target")+1);
+    dump("drop-target");
+    assert(over(7,tx,ty,FM_KEY_CTRL)==FM_EFFECT_COPY && over(7,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_MOVE);
+    assert(over(7,tx,ty,FM_KEY_CTRL|FM_KEY_SHIFT)==FM_EFFECT_NONE && over(7,tx,ty,FM_KEY_ALT)==FM_EFFECT_NONE && !LIST()->drop_hot);
+    struct du_rect body=du_list_body(LIST());
+    assert(over(7,body.x+body.w-30,body.y+body.h-30,0)==FM_EFFECT_MOVE && !LIST()->drop_hot);   /* background: this folder */
+    files_drag_over(&app,7,1,0,0,0); assert(status_effect==FM_EFFECT_NONE && !LIST()->drop_hot);
+    files_drag_drop(&app,7,tx,ty,FM_EFFECT_COPY); tick();
     assert(fake_lookup("/Documents/Target/Source.txt")>=0 && fake_lookup("/Documents/Desktop/Source.txt")>=0);
-    assert(!files_navigate(&app,"/Documents/Desktop")); drag_name("Move.txt",0); assert(drop_count==2);
-    assert(!files_navigate(&app,"/Documents/Target"));
-    struct du_rect body=du_list_body(du_get(&ui,107)); files_drop(&app,body.x+body.w-30,body.y+body.h-30,0); tick();
-    assert(fake_lookup("/Documents/Target/Move.txt")>=0 && fake_lookup("/Documents/Desktop/Move.txt")<0);
-    /* Resync cancels a pending drag instead of publishing a drop. */
-    assert(!files_navigate(&app,"/Documents/Desktop"));
-    label=du_list_label(du_get(&ui,107),0); motion(label.x+8,label.y+5); press(1); motion(-50,100);
-    event(CIUKI_INPUT_RESYNC,0,0,0); release(1); assert(drop_count==2);
+    /* Another drive copies by default; Shift moves. */
+    save_drag("/mnt/e/Stick.txt",'F');
+    assert(over(8,tx,ty,0)==FM_EFFECT_COPY && over(8,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_MOVE);
+    files_drag_drop(&app,8,tx,ty,FM_EFFECT_MOVE); tick();
+    assert(fake_lookup("/Documents/Target/Stick.txt")>=0 && fake_lookup("/mnt/e/Stick.txt")<0);
+    /* A CD source is copy-only; a folder never enters itself; its own folder is a no-op move. */
+    app.media.removable_mask=1u<<4; app.media.type[4]=CIUKI_MEDIA_OPTICAL;
+    save_drag("/mnt/e/Other.txt",'F');
+    assert(over(9,tx,ty,0)==FM_EFFECT_COPY && status_allowed==FM_EFFECT_COPY && over(9,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_NONE);
+    app.media.removable_mask=0; app.media.type[4]=0;
+    save_drag("/Documents/Target",'D');
+    assert(over(10,tx,ty,0)==FM_EFFECT_NONE && status_allowed==0);
+    assert(over(10,body.x+body.w-30,body.y+body.h-30,0)==FM_EFFECT_NONE);   /* already in /Documents */
+    assert(over(10,body.x+body.w-30,body.y+body.h-30,FM_KEY_CTRL)==FM_EFFECT_COPY);
+    /* Drops onto the folder tree and Places use their folder. */
+    save_drag("/Documents/Desktop/Move.txt",'F');
+    int node=-1; for (unsigned i=0;i<app.tree_count;i++) if (!strcmp(app.tree[i].path,"/Documents/Target")) node=(int)i;
+    assert(node>=0);
+    struct du_rect nl=du_list_label(TREE(),(unsigned)node);
+    assert(over(11,nl.x+4,nl.y+nl.h/2,0)==FM_EFFECT_MOVE && TREE()->drop_hot==node+1);
+    files_drag_drop(&app,11,nl.x+4,nl.y+nl.h/2,FM_EFFECT_MOVE); tick();
+    assert(fake_lookup("/Documents/Target/Move.txt")>=0 && fake_lookup("/Documents/Desktop/Move.txt")<0 && !TREE()->drop_hot);
+    /* A stale or mismatched effect does nothing. */
+    save_drag("/Documents/Desktop/Third.txt",'F');
+    files_drag_drop(&app,12,tx,ty,FM_EFFECT_LINK); tick(); assert(fake_lookup("/Documents/Target/Third.txt")<0);
+    /* Hovering a collapsed tree folder expands it after one second (Explorer). */
+    node=-1; for (unsigned i=0;i<app.tree_count;i++) if (!strcmp(app.tree[i].path,"/Documents/Target")) node=(int)i;
+    assert(node>=0 && app.tree[node].children && !app.tree[node].expanded);
+    nl=du_list_label(TREE(),(unsigned)node);
+    over(13,nl.x+4,nl.y+nl.h/2,0); ui.now+=600000000ull; over(13,nl.x+4,nl.y+nl.h/2,0); assert(!app.tree[node].expanded);
+    ui.now+=500000000ull; over(13,nl.x+4,nl.y+nl.h/2,0); files_test_wait(&app);
+    int expanded=0; for (unsigned i=0;i<app.tree_count;i++) expanded|=!strcmp(app.tree[i].path,"/Documents/Target/Inner"); assert(expanded);
+    files_drag_over(&app,13,1,0,0,0);
+    /* The source refreshes after a move performed elsewhere. */
+    files_drag_end(&app,FM_EFFECT_MOVE); assert(app.drag_refresh_until>ui.now);
+    puts("PASS fx-19 Files drop target: same/other drive default, Ctrl/Shift/Ctrl+Shift/Alt, CD copy-only, folder into itself, own folder no-op, list/tree/background targets and highlight, hover expansion, source refresh");
+
+    /* Rubber band in every view: plain, Ctrl toggles, Shift adds. */
+    for (int k=0;k<6;k++) { char name[32]; snprintf(name,sizeof(name),"/Documents/Band%d.txt",k); fake_file(name,10,(unsigned char)k); }
+    assert(!files_navigate(&app,"/Documents"));
+    enum du_view views[3]={DU_DETAILS,DU_LIST,DU_ICONS}; const char *frame[3]={"band-details","band-list","band-icons"};
+    for (int v=0;v<3;v++) {
+        LIST()->view=views[v]; LIST()->scroll=LIST()->hscroll=0; files_update(&app); du_render(&ui);
+        int a=list_find("Band1.txt"), b=list_find("Band3.txt"); assert(a>=0 && b>=0);
+        struct du_rect ra=du_list_label(LIST(),(unsigned)a), rb=du_list_label(LIST(),(unsigned)b);
+        body=du_list_body(LIST());
+        /* Start in empty space (right of the names in details/list, below the icons). */
+        int sx=views[v]==DU_ICONS ? body.x+body.w-6 : body.x+body.w-8, sy=views[v]==DU_ICONS ? body.y+body.h-6 : ra.y+2;
+        if (views[v]==DU_LIST) { sx=ra.x+ra.w+6; sy=ra.y+2; }
+        clock_ns+=600000000ull;
+        band(sx,sy,views[v]==DU_ICONS ? ra.x+2 : rb.x+4,views[v]==DU_ICONS ? ra.y+2 : rb.y+rb.h-2,0);
+        assert(LIST()->band); unsigned n=fm_selected(&app.model,NULL);
+        assert(n>=2 && app.model.entries[a].selected);
+        if (views[v]!=DU_ICONS) assert(app.model.entries[b].selected);
+        dump(frame[v]);
+        release(1); assert(!LIST()->band && fm_selected(&app.model,NULL)==n);
+        /* Ctrl band over the same items toggles them off; Shift band adds back. */
+        clock_ns+=600000000ull;
+        band(sx,sy,views[v]==DU_ICONS ? ra.x+2 : rb.x+4,views[v]==DU_ICONS ? ra.y+2 : rb.y+rb.h-2,DU_KEY_LCTRL); release(1);
+        assert(fm_selected(&app.model,NULL)==0);
+        int c=list_find("Band5.txt"); fm_select(&app.model,(unsigned)c,0); files_update(&app);
+        clock_ns+=600000000ull;
+        band(sx,sy,views[v]==DU_ICONS ? ra.x+2 : rb.x+4,views[v]==DU_ICONS ? ra.y+2 : rb.y+rb.h-2,DU_KEY_LSHIFT); release(1);
+        assert(fm_selected(&app.model,NULL)==n+1 && app.model.entries[c].selected);
+        /* A plain click in empty space clears the selection. */
+        clock_ns+=600000000ull; click(sx,sy); assert(fm_selected(&app.model,NULL)==0);
+    }
+    LIST()->view=DU_DETAILS; files_update(&app);
+    /* The band auto-scrolls past the bottom edge. */
+    for (int k=0;k<30;k++) { char name[32]; snprintf(name,sizeof(name),"/Documents/More%02d.txt",k); fake_file(name,1,1); }
+    assert(!files_navigate(&app,"/Documents"));
+    body=du_list_body(LIST()); clock_ns+=600000000ull;
+    motion(body.x+body.w-8,body.y+4); press(1); motion(body.x+30,body.y+body.h+20);
+    int before=LIST()->scroll; clock_ns+=60000000ull; du_tick(&ui,clock_ns); clock_ns+=60000000ull; du_tick(&ui,clock_ns);
+    assert(LIST()->scroll>before && LIST()->band); release(1);
+    assert(fm_selected(&app.model,NULL)>(unsigned)(body.h/DU_ROW));
+    puts("PASS fx-19 Files rubber band: details/list/icons, plain/Ctrl toggle/Shift add, empty click clears, auto-scroll past the edge, dotted band frames");
+
+    /* Keyboard selection: Ctrl+A, Shift+arrows extend from the anchor, Ctrl+arrows move the focus, Ctrl+Space toggles. */
+    du_focus(&ui,107); clock_ns+=600000000ull;
+    chord(DU_KEY_LCTRL,0x1e); assert(fm_selected(&app.model,NULL)==app.model.count);
+    key(DU_KEY_HOME); assert(fm_selected(&app.model,NULL)==1 && app.model.active==0);
+    event(CIUKI_INPUT_KEY,DU_KEY_LSHIFT,1,0); key(DU_KEY_DOWN); key(DU_KEY_DOWN); event(CIUKI_INPUT_KEY,DU_KEY_LSHIFT,0,0);
+    assert(fm_selected(&app.model,NULL)==3 && app.model.active==2);
+    event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_SPACE); event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
+    assert(fm_selected(&app.model,NULL)==4 && app.model.entries[4].selected && !app.model.entries[3].selected);
+    puts("PASS fx-19 Files keyboard selection: Ctrl+A, Shift+arrows, Ctrl+arrows, Ctrl+Space");
     files_destroy(&app); fake_assert_clean();
-    puts("PASS Files drag: Desktop Places/tree, Ctrl-copy, move, folder/background drop, cross-window coordinates, resync cancellation");
 }
 
 int main(int argc, char **argv)

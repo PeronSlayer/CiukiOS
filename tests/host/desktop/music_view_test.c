@@ -41,6 +41,18 @@ int main(int argc, char **argv)
     at_tap(&ui,DU_KEY_RIGHT); assert(last.action==MUSIC_SEEK && last.value==48000*28);
     at_tap(&ui,0x1f); assert(last.action==MUSIC_STOP);
     struct du_event open={.type=DU_EV_OPEN,.id=M_LIST,.index=2}; music_event(&ui,&open,&app); assert(last.action==MUSIC_SELECT && last.value==2);
+    /* fx-19 WM_DROPFILES: a dropped song plays now; further items join the playlist; a dropped folder replaces it. */
+    {
+        char drop[1100]; snprintf(drop,sizeof(drop),"%s/music-drop.data",argv[1]);
+        FILE *f=fopen(drop,"wb"); assert(f && fputs("X\nF/Documents/Music/Evening.mp3\nD/Documents/Music/Albums\n",f)>=0 && !fclose(f));
+        assert(!du_drop_source(drop)); unsigned before=sends;
+        struct du_event dropped={.type=DU_EV_DROPFILES,.x=40,.y=40}; music_event(&ui,&dropped,&app);
+        assert(sends==before+2 && last.action==MUSIC_ADD && !strcmp(last.path,"/Documents/Music/Albums"));
+        f=fopen(drop,"wb"); assert(f && fputs("X\nD/Documents/Music/Albums\n",f)>=0 && !fclose(f));
+        before=sends; music_event(&ui,&dropped,&app); assert(sends==before+2 && last.action==MUSIC_ADD);
+        remove(drop); before=sends; music_event(&ui,&dropped,&app); assert(sends==before);
+        puts("PASS fx-19 Music Player drop: song opens, further items and folders are added, missing data ignored");
+    }
     du_get(&ui,M_VOLUME)->value=40; struct du_event volume={.type=DU_EV_CHANGE,.id=M_VOLUME}; music_event(&ui,&volume,&app);
     volume.type=DU_EV_TICK; volume.id=M_APPLY; music_event(&ui,&volume,&app); assert(master==40);
     s.state=MUSIC_PAUSED; music_update(&app,&s); du_render(&ui); at_save(argv[1],"music-paused",&ui);

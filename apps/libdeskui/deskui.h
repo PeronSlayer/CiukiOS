@@ -205,7 +205,15 @@ enum du_kind { DU_LABEL, DU_BUTTON, DU_TOOLBUTTON, DU_EDIT, DU_LISTVIEW, DU_TREE
 #define DU_TAB_H 20
 
 struct du_widget {
-    int file_drag, file_drag_x, file_drag_y;
+    /* fx-19 shell drag and drop on lists and trees: file_drag makes the
+     * widget a drag source (DU_EV_DRAG once the pointer leaves the
+     * SM_CXDRAG square, key = button 1/2; a right press then shows the
+     * context menu on release), file_drag_button/x/y are its press state.
+     * marquee enables rubber-band selection from empty space (DU_EV_MARQUEE:
+     * index 0 begin, 1 update, 2 end, x/y/key unused; du_list_in_band).
+     * drop_hot is the drop-target highlight, item index + 1 (0 none). */
+    int file_drag, file_drag_x, file_drag_y, file_drag_button, file_drag_pending;
+    int marquee, band, band_x0, band_y0, band_x1, band_y1, drop_hot;
     enum du_kind kind;
     int id;
     struct du_rect box;
@@ -253,8 +261,16 @@ struct du_menu { const char *label; struct du_menu_item *items; unsigned count; 
 enum du_event_type {
     DU_EV_ACTIVATE = 1, DU_EV_SELECT, DU_EV_OPEN, DU_EV_SORT, DU_EV_CONTEXT, DU_EV_CHANGE,
     DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS,
-    DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER
+    DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER,
+    /* fx-19: rubber-band selection phases, and files dropped on the window
+     * (x/y client position; du_drop_file reads the paths). */
+    DU_EV_MARQUEE, DU_EV_DROPFILES
 };
+/* fx-19 DU_EV_SELECT .key from a file_drag list press: PENDING on an
+ * already selected item without Shift (keep the selection so it can be
+ * dragged), RELEASE when that press ends without a drag (apply it now). */
+#define DU_SELECT_PENDING 0x1000u
+#define DU_SELECT_RELEASE 0x2000u
 /* DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
  * zero on hover), x/y are client coordinates. CANCEL follows focus loss,
  * input resynchronization or resize. The application paints DU_CANVAS. */
@@ -372,6 +388,14 @@ struct du_rect du_list_row(const struct du_widget *, unsigned index);
 void du_list_ensure(struct du_widget *, unsigned index);
 int du_list_page(const struct du_widget *);
 int du_list_target(const struct du_widget *, unsigned code);
+/* fx-19: item i intersects the rubber band (icon and label bounds), and the
+ * band itself in client coordinates (zero size when none). */
+int du_list_in_band(const struct du_widget *, unsigned index);
+struct du_rect du_list_band(const struct du_widget *);
+unsigned du_list_band_hits(const struct du_widget *, uint8_t *hits);  /* one byte per item; returns the count */
+/* fx-19 drag auto-scroll: scroll one step towards (x, y) when it lies in the
+ * edge zone of the list body; returns 1 when the view scrolled. */
+int du_list_autoscroll(struct du_ui *, struct du_widget *, int x, int y);
 int du_header_hit(const struct du_widget *, int x, int y);
 int du_tree_toggle_hit(const struct du_widget *, int x, int y);
 int du_tabs_hit(const struct du_widget *, int x, int y);          /* f2-33: tab index or -1 */
@@ -426,6 +450,7 @@ struct du_window {
      * previous surface until CONFIGURE(COMMITTED) confirms the swap. */
     int old_surface, replacement, swap_sent, resizable;
     unsigned cursor_sent;
+    int accept_files;        /* fx-19: DragAcceptFiles state sent to the desktop */
     struct ciuki_surface_info old_info;
     uint32_t *old_pixels, *old_back;
     uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
@@ -451,6 +476,14 @@ void du_window_close(struct du_window *);
 /* Reply to CLOSE_REQUEST: later=1 defers once to 30 s, later=0 declines it.
  * A close_request callback returning zero automatically queues later=1. */
 void du_window_close_reply(struct du_window *, int later);
+/* fx-19 DragAcceptFiles: on=1 makes the window a WM_DROPFILES-style drop
+ * target; dropped files arrive as DU_EV_DROPFILES. du_drop_file copies the
+ * index-th dropped path (POSIX) and returns the number of dropped items, or
+ * -errno; out is empty past the last item. */
+int du_window_accept_files(struct du_window *, int on);
+int du_drop_file(unsigned index, char *out, size_t size);
+int du_drop_entry(unsigned index, char *out, size_t size, int *folder);   /* also reports a folder item */
+int du_drop_source(const char *path);   /* host tests: read dropped files from another data object */
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);
 /* Absolute monotonic deadline; UINT64_MAX waits indefinitely. Includes

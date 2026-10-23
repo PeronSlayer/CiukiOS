@@ -21,7 +21,7 @@ enum {
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
-    T_JOB = 1, T_MEDIA, T_BROWSER
+    T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
 #define STATUS_H 20
@@ -227,7 +227,8 @@ void files_layout(struct files_app *a)
     W(a, W_TREE)->box = (struct du_rect){0, fy + 18, a->split, bottom - fy - 18};
     W(a, W_SPLIT)->box = (struct du_rect){a->split, PANE_TOP, 4, bottom - PANE_TOP};
     struct du_widget *list = W(a, W_LIST);
-    list->file_drag=1;
+    list->file_drag=1; list->marquee=1;
+    W(a, W_TREE)->file_drag=1;
     list->box = (struct du_rect){a->split + 4, PANE_TOP, w - a->split - 4, bottom - PANE_TOP};
     int name = list->box.w - 4 - 16 - 70 - 132 - 108;
     if (name < 120) name = 120;
@@ -1488,6 +1489,9 @@ static void list_select(struct files_app *a, const struct du_event *e)
         files_update(a); return;
     }
     unsigned i = (unsigned)e->index, shift = (e->modifiers & DU_SHIFT) != 0, ctrl = (e->modifiers & DU_CTRL) != 0;
+    /* fx-19: a press on a selected item only moves the focus, so the whole
+     * selection can be dragged; the click applies at release (Explorer). */
+    if (!e->keyboard && e->key == DU_SELECT_PENDING) { fm_focus(m, i); files_update(a); return; }
     if (e->keyboard) {
         m->find_length = 0;
         if (e->key == DU_KEY_SPACE && ctrl) fm_select(m, i, 2);
@@ -1529,6 +1533,190 @@ static void toggle_node(struct files_app *a, int index)
     files_update(a);
 }
 
+/* ---- fx-19 drag and drop and rubber-band selection ---- */
+static void marquee(struct files_app *a, const struct du_event *e)
+{
+    struct fm_model *m = &a->model; struct du_widget *list = W(a, W_LIST);
+    if (a->loading || !m->count || list->count != m->count) return;
+    if (m->count > a->band_capacity) {
+        uint8_t *o = realloc(a->band_original, m->count), *h = o ? realloc(a->band_hits, m->count) : NULL;
+        if (o) a->band_original = o;
+        if (!o || !h) return;
+        a->band_hits = h; a->band_capacity = m->count;
+    }
+    if (e->index == 0) {
+        /* Without modifiers the press already cleared the selection. Ctrl
+         * toggles the items the band covers, Shift adds them (Windows 98). */
+        a->band_modifiers = e->modifiers & (DU_CTRL | DU_SHIFT);
+        for (unsigned i = 0; i < m->count; i++) a->band_original[i] = (uint8_t)(m->entries[i].selected != 0);
+        a->note[0] = 0; return;
+    }
+    du_list_band_hits(list, a->band_hits);
+    int changed = 0, first = -1;
+    for (unsigned i = 0; i < m->count; i++) {
+        unsigned sel = a->band_modifiers & DU_CTRL ? a->band_original[i] ^ a->band_hits[i] : a->band_original[i] | a->band_hits[i];
+        if (a->band_hits[i] && first < 0) first = (int)i;
+        if (m->entries[i].selected != sel) { m->entries[i].selected = sel; changed = 1; }
+    }
+    if (first >= 0 && e->index == 2) { m->active = (unsigned)first; if (!(a->band_modifiers & DU_SHIFT)) m->anchor = (unsigned)first; }
+    if (changed || e->index == 2) files_update(a);
+}
+
+static int drag_source_paths(struct files_app *a, const struct du_event *e, char ***paths, char **types, unsigned *count)
+{
+    if (e->id == W_TREE) {
+        if (e->index < 0 || (unsigned)e->index >= a->tree_count || fm_drive_root(a->tree[e->index].path)) return -EPERM;
+        char **p = calloc(1, sizeof(*p)); char *t = malloc(1);
+        if (!p || !t || !(p[0] = malloc(FM_PATH))) { free(p ? p[0] : NULL); free(p); free(t); return -ENOMEM; }
+        snprintf(p[0], FM_PATH, "%s", a->tree[e->index].path); t[0] = 'D';
+        *paths = p; *types = t; *count = 1; return 0;
+    }
+    if (!a->model.path[0]) return -EPERM;   /* drives in Computer: link only, unsupported */
+    int r = selection_paths(a, paths, count);
+    if (r) return r;
+    char *t = malloc(*count);
+    if (!t) { fm_drag_free(*paths, NULL, *count); return -ENOMEM; }
+    unsigned k = 0;
+    for (unsigned i = 0; i < a->model.count && k < *count; i++) if (a->model.entries[i].selected)
+        t[k++] = a->model.entries[i].meta.type == FM_DIR ? 'D' : 'F';
+    *types = t; return 0;
+}
+static void drag_start(struct files_app *a, const struct du_event *e)
+{
+    if ((e->id != W_LIST && e->id != W_TREE) || !a->drag_begin || a->loading || a->rename_index >= 0) return;
+    char **paths; char *types; unsigned count;
+    if (drag_source_paths(a, e, &paths, &types, &count)) return;
+    int r = fm_drag_save(&a->model.fs, paths, types, count);
+    fm_drag_free(paths, types, count);
+    if (r) { error_box(a, "Files", "Cannot start dragging the selection:", r); return; }
+    if (!a->drag_begin(a, e->key == 2 ? 2 : 1, count)) a->note[0] = 0;
+}
+
+static void drag_highlight(struct files_app *a, int widget, int index)
+{
+    int ids[] = {W_LIST, W_TREE, W_PLACES};
+    for (unsigned k = 0; k < 3; k++) {
+        struct du_widget *w = W(a, ids[k]);
+        int hot = ids[k] == widget && index >= 0 ? index + 1 : 0;
+        if (w->drop_hot != hot) { w->drop_hot = hot; du_invalidate(a->ui, w->box); }
+    }
+    a->drag_widget = widget; a->drag_index = index;
+}
+static int drag_data(struct files_app *a, uint32_t serial)
+{
+    if (serial == a->drag_serial && a->drag_count) return 0;
+    fm_drag_free(a->drag_paths, a->drag_types, a->drag_count);
+    a->drag_paths = NULL; a->drag_types = NULL; a->drag_count = 0; a->drag_serial = serial;
+    a->drag_hover_node = -1; a->drag_hover_ns = 0;
+    return fm_drag_load(&a->model.fs, &a->drag_paths, &a->drag_types, &a->drag_count);
+}
+static int read_only_volume(const struct files_app *a, int volume)
+{ return volume >= 'D' && volume <= 'Z' && a->media.type[volume - 'A'] == CIUKI_MEDIA_OPTICAL; }
+/* Destination folder under (x, y), with its highlighted item; 0 when the
+ * point is a valid drop location. */
+static int drag_destination(struct files_app *a, int x, int y, char destination[FM_PATH], int *widget, int *index)
+{
+    *widget = 0; *index = -1;
+    if (a->loading || a->job_active || du_dialog_id(a->ui) || a->rename_index >= 0) return -EBUSY;
+    struct du_widget *list = W(a, W_LIST), *tree = W(a, W_TREE), *places = W(a, W_PLACES);
+    if (du_contains(du_list_body(list), x, y)) {
+        int i = du_list_hit(list, x, y);
+        if (i >= 0 && (unsigned)i < a->model.count && (a->model.entries[i].meta.type == FM_DIR || !a->model.path[0])) {
+            *widget = W_LIST; *index = i;
+            return fm_entry_path(&a->model, (unsigned)i, destination);
+        }
+        if (!a->model.path[0]) return -EPERM;
+        *widget = W_LIST;
+        snprintf(destination, FM_PATH, "%s", a->model.path); return 0;
+    }
+    if (du_contains(du_list_body(tree), x, y)) {
+        int i = du_list_hit(tree, x, y);
+        if (i < 0 || (unsigned)i >= a->tree_count) return -ENOENT;
+        *widget = W_TREE; *index = i;
+        snprintf(destination, FM_PATH, "%s", a->tree[i].path); return 0;
+    }
+    if (du_contains(du_list_body(places), x, y)) {
+        int i = du_list_hit(places, x, y);
+        if (i < 0 || (unsigned)i >= a->place_count || a->places[i].path[0] != '/') return -ENOENT;
+        *widget = W_PLACES; *index = i;
+        snprintf(destination, FM_PATH, "%s", a->places[i].path); return 0;
+    }
+    return -ENOENT;
+}
+static unsigned drag_evaluate(struct files_app *a, int x, int y, unsigned keys, char destination[FM_PATH], unsigned *allowed)
+{
+    int widget, index; *allowed = 0;
+    if (!a->drag_count || drag_destination(a, x, y, destination, &widget, &index)) { drag_highlight(a, 0, -1); return FM_EFFECT_NONE; }
+    int source = fm_volume(a->drag_paths[0]), target = fm_volume(destination);
+    /* Copy and move only: CiukiOS has no native file shortcuts (link). A CD
+     * source cannot be moved; a CD target accepts nothing. */
+    *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY : FM_EFFECT_COPY | FM_EFFECT_MOVE;
+    for (unsigned i = 0; i < a->drag_count && *allowed; i++) if (a->drag_types[i] == 'D' && fm_beneath(destination, a->drag_paths[i])) *allowed = 0;
+    unsigned effect = fm_drop_effect(source, target, keys, *allowed);
+    if (effect && fm_drop_check(a->drag_paths, a->drag_count, destination, effect)) effect = FM_EFFECT_NONE;
+    /* Only a folder that will receive the items is highlighted. */
+    drag_highlight(a, effect ? widget : 0, effect ? index : -1);
+    return effect;
+}
+void files_drag_over(struct files_app *a, uint32_t serial, int phase, int x, int y, unsigned keys)
+{
+    if (phase == 1) {
+        drag_highlight(a, 0, -1); a->drag_hover_node = -1;
+        if (a->drag_status) a->drag_status(a, serial, FM_EFFECT_NONE, 0);
+        return;
+    }
+    int r = drag_data(a, serial);
+    char destination[FM_PATH]; unsigned allowed = 0, effect = FM_EFFECT_NONE;
+    if (!r) {
+        /* DragOver auto-scroll and the Explorer folder tree's hover expansion. */
+        struct du_widget *list = W(a, W_LIST), *tree = W(a, W_TREE);
+        if (du_contains(list->box, x, y)) du_list_autoscroll(a->ui, list, x, y);
+        else if (du_contains(tree->box, x, y)) du_list_autoscroll(a->ui, tree, x, y);
+        effect = drag_evaluate(a, x, y, keys, destination, &allowed);
+        if (a->drag_widget == W_TREE && a->drag_index >= 0) {
+            if (a->drag_hover_node != a->drag_index) { a->drag_hover_node = a->drag_index; a->drag_hover_ns = a->ui->now; }
+            else if (a->ui->now - a->drag_hover_ns >= 1000000000ull && (unsigned)a->drag_index < a->tree_count &&
+                     !a->tree[a->drag_index].expanded && a->tree[a->drag_index].children) {
+                toggle_node(a, a->drag_index); a->drag_hover_ns = a->ui->now;
+            }
+        } else a->drag_hover_node = -1;
+    } else drag_highlight(a, 0, -1);
+    a->drag_effect = effect; a->drag_allowed = allowed;
+    if (a->drag_status) a->drag_status(a, serial, effect, allowed);
+}
+void files_drag_drop(struct files_app *a, uint32_t serial, int x, int y, unsigned effect)
+{
+    char destination[FM_PATH]; unsigned allowed = 0;
+    int r = drag_data(a, serial);
+    unsigned keys = effect == FM_EFFECT_MOVE ? FM_KEY_SHIFT : effect == FM_EFFECT_COPY ? FM_KEY_CTRL : FM_KEY_ALT;
+    unsigned chosen = r ? FM_EFFECT_NONE : drag_evaluate(a, x, y, keys, destination, &allowed);
+    drag_highlight(a, 0, -1);
+    if (r) { error_box(a, "Files", "Cannot read the dragged items:", r); return; }
+    if (chosen != effect || (effect != FM_EFFECT_COPY && effect != FM_EFFECT_MOVE)) return;
+    job_record("[files] drop effect=%s items=%u", effect == FM_EFFECT_MOVE ? "move" : "copy", a->drag_count);
+    start_job(a, effect == FM_EFFECT_MOVE ? FM_MOVE : FM_COPY, a->drag_paths, a->drag_count, destination);
+}
+static void drag_refresh(struct files_app *a)
+{
+    if (a->ui->now >= a->drag_refresh_until) { du_timer_stop(a->ui, T_DRAG_REFRESH); return; }
+    if (a->loading || a->job_active || du_dialog_id(a->ui) || W(a, W_LIST)->band || W(a, W_LIST)->drag) return;
+    struct files_worker *w = a->worker;
+    if (w && !pthread_mutex_trylock(&w->lock)) {
+        int idle = !w->busy && !w->pending && !w->result;
+        pthread_mutex_unlock(&w->lock);
+        if (idle) scan_submit(a, SCAN_REFRESH, NULL, 0);
+    }
+}
+void files_drag_end(struct files_app *a, unsigned effect)
+{
+    /* A move performed by another window empties this folder later: watch
+     * it briefly, as Explorer's change notification would refresh it. */
+    if (effect == FM_EFFECT_MOVE) {
+        a->drag_refresh_until = a->ui->now + 10000000000ull;
+        du_timer_start(a->ui, T_DRAG_REFRESH, 500000000u, 1);
+    }
+}
+
 void files_event(struct du_ui *u, const struct du_event *e, void *arg)
 {
     struct files_app *a = arg;
@@ -1538,12 +1726,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         rename_commit(a);
     if (du_dialog_id(a->ui) && e->type != DU_EV_TICK && e->type != DU_EV_DIALOG && e->type != DU_EV_FOCUS) return;
     switch (e->type) {
-    case DU_EV_DRAG:
-        if (e->id==W_LIST && a->drop && !a->loading && !a->job_active && !fm_clipboard(&a->model,!(e->modifiers&DU_CTRL)) && !fm_clipboard_save(&a->model))
-            a->drop(a,e->x,e->y,(e->modifiers&DU_CTRL)!=0);
-        break;
+    case DU_EV_DRAG: drag_start(a, e); break;
+    case DU_EV_MARQUEE: if (e->id == W_LIST) marquee(a, e); break;
     case DU_EV_TICK:
         if (e->id == T_JOB) job_tick(a);
+        else if (e->id == T_DRAG_REFRESH) drag_refresh(a);
         else if (e->id == T_BROWSER) scan_poll(a);
         else if (e->id == T_MEDIA && a->media_read && !a->loading && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
             struct files_worker *w = a->worker;
@@ -1668,6 +1855,9 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
 void files_destroy(struct files_app *a)
 {
     a->ui->service=NULL;
+    du_timer_stop(a->ui,T_DRAG_REFRESH);
+    fm_drag_free(a->drag_paths,a->drag_types,a->drag_count); a->drag_paths=NULL; a->drag_types=NULL; a->drag_count=0;
+    free(a->band_original); free(a->band_hits); a->band_original=a->band_hits=NULL; a->band_capacity=0;
     du_timer_stop(a->ui,T_MEDIA);
     du_timer_stop(a->ui,T_BROWSER);
     scan_stop(a);

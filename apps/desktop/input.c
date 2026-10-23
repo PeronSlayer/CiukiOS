@@ -168,6 +168,10 @@ void desk_cursor_update(struct desktop *d)
     unsigned shape=DESK_CURSOR_ARROW, edges=0;
     if (d->power.state) {
         /* The power dialog owns pointer feedback while it blocks clients. */
+    } else if (d->shell && d->sh.dnd.active && !d->sh.dnd.menu) {
+        /* fx-19: IDropSource::GiveFeedback default cursors for the effect. */
+        unsigned e=d->sh.dnd.effect;
+        shape=e==1 ? DESK_CURSOR_DRAG_COPY : e==2 ? DESK_CURSOR_DRAG_MOVE : e==4 ? DESK_CURSOR_DRAG_LINK : DESK_CURSOR_FORBIDDEN;
     } else if (d->drag>=0) {
         shape=DESK_CURSOR_MOVE; edges=d->resize_edges;
     } else if (d->routed_buttons && d->focus>=0) {
@@ -327,6 +331,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
          * check needs one whole-screen present, so distrust the scanout. */
         d->scanout_valid = 0;
         if (d->keyboard_geometry) desk_geometry_end(d,1);
+        if (d->shell && d->sh.dnd.active) desk_shell_drag_cancel(d);   /* fx-19: a cut input stream ends a drag */
         release(d, &e); d->drag = -1; d->resize_edges=0;
         if (d->shell) {
             const int modifiers[]={0x38,0x138,0x1D,0x11D,0x2A,0x36};
@@ -402,6 +407,8 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
             }
         }
         if (d->shell) desk_shell_motion(d);
+        /* fx-19: during a drag the shell owns the pointer; no client sees motion. */
+        if (d->shell && d->sh.dnd.active && !d->sh.dnd.menu) break;
         if (d->drag >= 0 && !d->keyboard_geometry) {
             if (d->resize_edges) {
                 struct desk_box f = d->resize_start;

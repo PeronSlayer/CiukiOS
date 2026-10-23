@@ -95,3 +95,14 @@ Image Viewer precedes Paint in the catalogue, retaining F4-07's default image
 associations. Paint still advertises BMP/PNG support so F2-42's Open With menu
 can launch the editor. Regression checks exercise both the default Viewer
 launch and explicit Open With > CiukPaint for the same Desktop BMP.
+
+## FX-19 drag and drop (2026-10-23)
+
+The drag description above (selection published through the shared file
+clipboard, Ctrl copies and every other drag moves) is superseded by
+`shell-drag-drop.md`: a desktop-owned drag session with its own data object
+(`/system/settings/files.drag`), the shared same-drive/other-drive rule
+(`fm_drop_effect`), feedback cursors, drag image, target highlight,
+right-drag menu, Esc, WM_DROPFILES-style application targets, desktop
+multi-selection and rubber-band selection. The legacy `DESK_FILE_DROP`
+messages remain accepted for compatibility; Files no longer sends them.

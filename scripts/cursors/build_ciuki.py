@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "assets/cursors/ciuki"
 NAMES = ("arrow", "busy", "arrow_busy", "text", "forbidden", "resize_ew",
          "resize_ns", "resize_nwse", "resize_nesw", "move", "hand", "crosshair",
-         "precision", "open_hand", "closed_hand", "help")
+         "precision", "open_hand", "closed_hand", "help",
+         "drag_move", "drag_copy", "drag_link")
 
 
 def raster(name):
@@ -71,7 +72,7 @@ def header():
         lines.append(f"static const uint8_t desk_shadow_{name}[32*32] = {{")
         lines += ["    " + ",".join(str(v) for v in row[5][y*32:(y+1)*32]) + "," for y in range(32)]
         lines.append("};")
-    for array, start, end in (("desk_cursors", 0, 13), ("desk_extra_cursors", 13, 16)):
+    for array, start, end in (("desk_cursors", 0, 13), ("desk_extra_cursors", 13, 19)):
         lines.append(f"static const struct desk_cursor_raster {array}[] = {{")
         for name, (hot, w, h, mask, image, _) in zip(NAMES[start:end], rows[start:end]):
             lines += [f"    /* {name} */", f"    {{{hot[0]}, {hot[1]}, {w}, {h}, {{"]
@@ -86,7 +87,7 @@ def header():
 
 def sheet(path):
     """Review aid: hardware silhouette and software shadow at 2x scale."""
-    result = Image.new("RGB", (640, 4*144), "#e8e8e8")
+    result = Image.new("RGB", (640, (len(NAMES)+3)//4*144), "#e8e8e8")
     draw = ImageDraw.Draw(result)
     for i, name in enumerate(NAMES):
         hot, _, _, mask, image, shadow = raster(name)

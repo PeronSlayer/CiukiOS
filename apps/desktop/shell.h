@@ -41,12 +41,14 @@ enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
-                    SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1 };
+                    SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
+                    SH_MENU_DRAG };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
                  SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN,
-                 SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM };
+                 SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
+                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */ };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -54,7 +56,28 @@ struct sh_item { char label[44]; const char *icon; uint8_t action, flags; int16_
 struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
-struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki; struct desk_box box; };
+struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };
+/* fx-19 shell drag session (DoDragDrop): the desktop owns the pointer from
+ * the drag threshold until the drop, Esc or a right-drag menu choice. */
+enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK };
+#define SH_DRAG_IMAGE_ITEMS 8
+struct sh_dnd {
+    int active, menu;                 /* menu: right-drag menu waits for a choice */
+    int source;                       /* Files client index, or -1 for desktop icons */
+    uint32_t source_pid, serial;
+    unsigned button;                  /* CIUKI_BUTTON_LEFT or CIUKI_BUTTON_RIGHT */
+    char **paths; char *types; unsigned count;
+    int source_volume; unsigned source_allowed;
+    int kind, target;                 /* SH_DROP_*, icon or client index */
+    unsigned effect, allowed, keys;
+    int status_target; uint32_t status_serial; /* DRAG_STATUS of the current Files target */
+    int32_t start_x, start_y, menu_x, menu_y;
+    char destination[FM_PATH];
+    uint64_t hover_ns, repeat_ns;
+    int hover_task, drop_index;
+    int icons[SH_DRAG_IMAGE_ITEMS]; unsigned icon_count;   /* desktop source: dragged icons drawn */
+    struct desk_box image;            /* drag image bounds as last painted */
+};
 struct desk_shell {
     struct ciuki_settings cfg;
     int programs_selected, programs_scroll, programs_click;
@@ -68,6 +91,13 @@ struct desk_shell {
     struct desk_folder *folder;
     int icon_drag, icon_dragged, drag_start_x, drag_start_y;
     int icon_count, icon_selected;
+    /* fx-19 multi-selection: icons[k].selected, with icon_selected the focus
+     * (selected unless focus_unselected); anchor for Shift ranges; the
+     * rubber band in screen coordinates and the selection it started from. */
+    int focus_unselected, anchor, icon_button, icon_pending;
+    int band, band_x0, band_y0, band_x1, band_y1; unsigned band_modifiers;
+    uint8_t *band_original; int band_capacity;
+    struct sh_dnd dnd;
     uint64_t click_ns; int click_icon;
     int volume_open, volume, muted, mixer_state;   /* mixer_state: 0 unknown, 1 read-only, 2 controllable, -1 absent */
     int volume_drag;
@@ -156,4 +186,11 @@ const char *desk_program_category(const char *program);
 const uint32_t *desk_shell_icon(const char *tango_name, int size);
 const uint32_t *desk_shell_window_icon(struct desktop *, int index, int size);   /* title-bar icon (compositor) */
 int desk_shell_wallpaper_update(struct desktop *);
+/* fx-19 drag session hooks (input.c, client.c). */
+int desk_shell_drag_begin(struct desktop *, int client, unsigned button, unsigned count);
+void desk_shell_drag_status(struct desktop *, int client, uint32_t serial, unsigned effect, unsigned allowed);
+int desk_shell_drag_motion(struct desktop *);
+int desk_shell_drag_button(struct desktop *, int button, int down);
+void desk_shell_drag_cancel(struct desktop *);
+int desk_shell_icon_marked(const struct desktop *, int index);
 #endif

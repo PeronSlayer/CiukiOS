@@ -38,6 +38,9 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 {
     struct files_app *a = user; struct files_main *m = a->user; (void)w;
     if (p->opcode == DESK_FILE_DROP) files_drop(a,p->x,p->y,(int)p->flags);
+    if (p->opcode == DESK_DRAG_OVER) files_drag_over(a,p->serial,(int)p->flags,p->x,p->y,p->index);
+    if (p->opcode == DESK_DRAG_DROP) files_drag_drop(a,p->serial,p->x,p->y,p->flags);
+    if (p->opcode == DESK_DRAG_END) files_drag_end(a,p->flags);
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_LAUNCH && p->serial == m->launch_serial && p->result < 0)
         files_launch_failed(a, -p->result);
 }
@@ -48,6 +51,19 @@ static void drop(struct files_app *a, int x, int y, int copy)
     desk_message(&msg,DESK_FILE_DROP,16); desk_put32(msg.data+4,copy ? 1u : 0u);
     desk_put32(msg.data+8,(uint32_t)x); desk_put32(msg.data+12,(uint32_t)y);
     if (du_window_queue(&m->window,&msg)) files_launch_failed(a,errno);
+}
+static int drag_begin(struct files_app *a, int button, unsigned count)
+{
+    struct files_main *m=a->user; struct ciuki_message msg;
+    desk_message(&msg,DESK_DRAG_BEGIN,12); desk_put32(msg.data+4,(uint32_t)button); desk_put32(msg.data+8,count);
+    return du_window_queue(&m->window,&msg) ? -errno : 0;
+}
+static void drag_status(struct files_app *a, uint32_t serial, unsigned effect, unsigned allowed)
+{
+    struct files_main *m=a->user; struct ciuki_message msg;
+    desk_message(&msg,DESK_DRAG_STATUS,16); desk_put32(msg.data+4,serial);
+    desk_put32(msg.data+8,effect); desk_put32(msg.data+12,allowed);
+    (void)du_window_queue(&m->window,&msg);
 }
 static int launch(struct files_app *a, const char *program, char *const argv[])
 {
@@ -184,7 +200,7 @@ int main(int argc, char **argv)
         return 1;
     }
     struct files_app *a = &m->app;
-    a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
+    a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
