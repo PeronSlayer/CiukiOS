@@ -56,6 +56,16 @@ ACPI_STATUS fw_tables_discover(uint32_t rsdp);
  * (fw_scan_begin..fw_scan_end) the whole scan also has FW_SCAN_WALL_MS. */
 #define FW_WALL_CAP_MS 2000u   /* = ACPICA ACPI_MAX_SLEEP, the longest single AML wait upstream admits */
 #define FW_SCAN_WALL_MS 10000u /* whole namespace scan, five operation caps */
+/* fx-7: the one-shot "load" stage (AcpiInitializeSubsystem + tables +
+ * AcpiLoadTables: the whole DSDT/SSDT set is parsed once, in the background
+ * acpi task) has its own run-time budget. T23 trial of preview image
+ * 423b803a: the load needed ~270 ms of run time (run_us=271905) and the
+ * generic 250 ms budget expired it (reason=run stage=load run_us=250006,
+ * steps=12322); slower baseline CPUs (hardware-baseline.md) need several
+ * times that. 4000 ms of run time gives its wall cap max(4000, 2000) = 4000 ms,
+ * still inside FW_SCAN_WALL_MS and the 100000-step bound. Every other stage
+ * keeps 250 ms. */
+#define FW_LOAD_RUN_MS 4000u
 void fw_budget_begin(uint32_t steps, uint32_t ms);
 void fw_budget_stage(const char *stage, ACPI_HANDLE node);
 void fw_scan_begin(void);

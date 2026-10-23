@@ -37,9 +37,9 @@ static uint64_t clock100ns(void) { now += clock_jump; return now; }
 /* fx-3: a yield (pause 0) can hand the CPU to other tasks for
  * yield_jump_ms of wall time; run_clock advances 1 us per budget check only. */
 static uint32_t yield_jump_ms;
-static uint64_t run_ticks;
+static uint64_t run_ticks, run_step = 10; /* 100 ns ticks per run_clock call: 1 us by default */
 static void pause_ms(uint32_t n) { pauses++; now += n ? (uint64_t)n * 10000 : 1 + (uint64_t)yield_jump_ms * 10000; }
-static uint64_t run_clock(void) { run_ticks += 10; return run_ticks; }
+static uint64_t run_clock(void) { run_ticks += run_step; return run_ticks; }
 static int stall_us(uint32_t n) { now += (uint64_t)n * 10; return 0; }
 static uint64_t thread(void) { return 1; }
 static uint32_t lock(void) { return 0x200; }
@@ -152,8 +152,13 @@ int main(int argc, char **argv)
         /* fx-3: preempted = the T23 shape (scan task starved by the desktop
          * start: 1 ms of other tasks between two clock reads); preempted-wall is the same
          * with the pre-fx-3 wall-clock budget; starved hits the wall caps. */
-        bool timed = !strcmp(scenario, "preempted") || !strcmp(scenario, "preempted-wall") || !strcmp(scenario, "starved");
-        if (timed) clock_jump = !strcmp(scenario, "starved") ? 500000 : 10000; /* 50 ms or 1 ms per clock read */
+        /* fx-7: run time modelled per run_clock call. The fixture's load stage makes 64..83 of them, so
+         * 4.5 ms each is a load of ~290..370 ms (the T23's 270 ms DSDT parse, which the pre-fx-7 250 ms
+         * budget expired) and 80 ms each is one of 5..6 s, beyond FW_LOAD_RUN_MS. */
+        if (!strcmp(scenario, "t23-load")) run_step = 45000;
+        else if (!strcmp(scenario, "t23-load-over")) run_step = 800000;
+        bool timed = !strcmp(scenario, "t23-load") || !strcmp(scenario, "t23-load-over") || !strcmp(scenario, "preempted") || !strcmp(scenario, "preempted-wall") || !strcmp(scenario, "starved");
+        if (timed) clock_jump = !strcmp(scenario, "starved") ? 500000 : !strncmp(scenario, "t23-load", 8) ? 0 : !strcmp(scenario, "preempted-wall") ? 100000 : 10000; /* 50, 10 or 1 ms per clock read */
         if (!strcmp(scenario, "start-failure")) { s = AE_NO_MEMORY; fw_inventory_unavailable(s); }
         else s = fw_inventory_run(timed && strcmp(scenario, "preempted-wall") ? &run_ops : &ops, !strcmp(scenario, "no-acpi") ? 0 : 0xe0000);
         struct fw_budget_report b; fw_budget_snapshot(&b);
@@ -163,11 +168,24 @@ int main(int argc, char **argv)
             if (!strcmp(scenario, "preempted")) {
                 assert(!s && !b.expired && b.run_clock && b.scan_wall_us > 10 * b.scan_run_us && b.scan_wall_us > 250000);
             } else if (!strcmp(scenario, "preempted-wall")) {
+                /* fx-7: with no run clock the run budget is the wall clock. 10 ms of other tasks per
+                 * clock read exhaust the load stage's 4000 ms (run == wall caps there, wall checked first). */
                 assert(s == AE_TIME || b.expired);
-                assert(b.expired && !strcmp(b.reason, "run") && b.first_error == AE_TIME && !b.run_clock);
+                assert(b.expired && (!strcmp(b.reason, "run") || !strcmp(b.reason, "wall")) && !strcmp(b.stage, "load") &&
+                       b.first_error == AE_TIME && !b.run_clock && b.wall_cap_ms == FW_LOAD_RUN_MS);
+            } else if (!strcmp(scenario, "t23-load")) {
+                /* fx-7: the T23 load needed ~270 ms of run time; the generic 250 ms budget expired it. */
+                assert(!s && !b.expired && b.run_clock && !b.first_error && b.scan_run_us > 250000 && b.scan_run_us < 4000000);
+            } else if (!strcmp(scenario, "t23-load-over")) {
+                assert(b.expired && !strcmp(b.reason, "run") && !strcmp(b.stage, "load") && !strcmp(b.first_stage, "load") &&
+                       b.first_error == AE_TIME && b.run_clock && b.run_limit_ms == FW_LOAD_RUN_MS && b.wall_cap_ms == FW_LOAD_RUN_MS &&
+                       b.run_us >= FW_LOAD_RUN_MS * 1000 && b.scan_wall_us < FW_SCAN_WALL_MS * 1000);
             } else {
+                /* The load stage is the first budgeted stage and the first to starve: its cap is FW_LOAD_RUN_MS,
+                 * the generic operations keep FW_WALL_CAP_MS. */
+                unsigned cap = !strcmp(b.stage, "load") ? FW_LOAD_RUN_MS : FW_WALL_CAP_MS;
                 assert(b.expired && (!strcmp(b.reason, "wall") || !strcmp(b.reason, "scan_wall")) && b.run_us < 250000 &&
-                       b.wall_us >= 2000000 && b.wall_cap_ms == FW_WALL_CAP_MS && b.scan_wall_us <= (FW_SCAN_WALL_MS + 3000) * 1000);
+                       b.wall_us >= cap * 1000u && b.wall_cap_ms == cap && b.scan_wall_us <= (FW_SCAN_WALL_MS + 3000) * 1000);
             }
         }
         struct ciuki_firmware_page p = {.version = 2, .size = sizeof(p)};
@@ -235,7 +253,7 @@ int main(int argc, char **argv)
             assert(!s && !(p.flags&CIUKI_FIRMWARE_INCOMPLETE));
             printf("PASS acpi %s: assigned serial status and IRQ facts\n",scenario);
         } else if (timed) {
-            printf("PASS acpi %s: scan budget counts the scan task's run time; wall caps %ums/op, %ums/scan\n", scenario, FW_WALL_CAP_MS, FW_SCAN_WALL_MS);
+            printf("PASS acpi %s: scan budget counts the scan task's run time; wall caps %ums/op (%ums load), %ums/scan\n", scenario, FW_WALL_CAP_MS, FW_LOAD_RUN_MS, FW_SCAN_WALL_MS);
         } else if (!strcmp(scenario, "allocation")) {
             assert(s || p.flags & CIUKI_FIRMWARE_INCOMPLETE || fail_after >= alloc_calls);
         } else {

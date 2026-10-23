@@ -256,6 +256,39 @@ for the CPU counted as firmware work.
   (ticks 1786–1970), shorter than one 250 ms budget, so the AE_TIME there may
   also come from a step bound or a semaphore wait; the new record names it.
 
+### The load stage has its own run budget (fx-7, lead decision 2026-10-23)
+
+The next T23 trial (preview image 423b803a, serial) showed that the record
+named the cause: `[acpi] budget expired reason=run stage=load node=-
+run_us=250006 wall_us=497584 steps=12322 run_limit_ms=250 wall_cap_ms=2000
+scan_cap_ms=10000` and `[acpi] scan run_us=271905 wall_us=519736
+run_clock=task first_error=17 first_stage=load`. The scan was not starved
+any more (run_us is the task's own time); the load stage itself, which
+parses the whole DSDT/SSDT set once (`AcpiInitializeSubsystem`,
+`AcpiInitializeTables`, `AcpiLoadTables` in `inventory.c`), needs about
+270 ms of run time on that ThinkPad DSDT, and the generic 250 ms operation
+budget cut it off at 12322 steps.
+
+- `FW_LOAD_RUN_MS = 4000` (`internal.h`) is the load stage's run-time
+  budget, `fw_budget_begin(100000, FW_LOAD_RUN_MS)`. By the existing
+  `max(ms, FW_WALL_CAP_MS)` rule its wall cap is 4000 ms too. The margin is
+  about 15 times the T23 figure because the baseline CPUs
+  (`hardware-baseline.md`, i686 desktops of 1998-2004, down to the slower
+  Pentium II/Celeron class) run the same parse several times slower; 4 s is
+  still inside `FW_SCAN_WALL_MS` (10 s) and the 100000-step bound, which
+  stay unchanged and keep a runaway load bounded.
+- Every other stage (tables, walk, the evaluated methods, collect,
+  takeover, the event and EC paths) keeps 250 ms of run time and the 2000 ms
+  wall cap: the load is a one-shot parse, the others are per-device work
+  that must stay short.
+- Host tests (`tests/host/acpi`): `t23-load` (a load of ~290-370 ms of
+  modelled run time completes without expiry; the pre-fx-7 250 ms budget
+  expires it, checked while writing the test) and `t23-load-over` (a load of
+  5-6 s expires with `reason=run stage=load run_limit_ms=4000`).
+  `preempted-wall` starves the wall-clock budget by 10 ms per clock read and
+  expires the load stage at its 4000 ms cap; `starved` expects the load
+  stage's 4000 ms cap (the 2000 ms cap stays asserted for any other stage).
+
 Windows 98 decides ACPI vs APM at Setup: ACPI is installed only on systems
 on the retail CD's good-ACPI list unless `HKLM\Software\Microsoft\Windows\
 CurrentVersion\Detect\ACPIOption` is 1 (any ACPI BIOS) or 2 (never)

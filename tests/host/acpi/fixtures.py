@@ -44,7 +44,7 @@ def generate(out):
     cases = ('inventory', 'ssdt', 'checksum', 'root64', 'dsdt64', 'length', 'aml', 'loop', 'sleep', 'write', 'region', 'osl', 'broker', 'pnp', 'page', 'allocation',
              'crs-bad', 'mem64', 'large', 'module-loop', 'rsdt', 'rsdp-checksum', 'pnp-bad', 'no-acpi', 'eisa', 'ec', 'module-write', 'start-failure',
              'serial', 'serial-disabled', 'serial-cid', 'serial-level', 'serial-low', 'serial-variable',
-             'preempted', 'preempted-wall', 'starved')
+             'preempted', 'preempted-wall', 'starved', 't23-load', 't23-load-over')
     for case in cases:
         aml = base
         if case.startswith('serial'):
