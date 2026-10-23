@@ -794,3 +794,14 @@ path. A dialog still open when the copy ends is asked again with the
 post-copy text, and the Restart countdown waits while it is open. Records:
 `[setup] power button request=N page=P`, `declined`, `confirmed during
 copy; cancelling`, `[setup] power off source=button page=P`.
+
+## Owner decision: Setup only, no live mode (2026-10-23 12:38)
+
+The owner decided that the Setup CD starts Setup and nothing else, as the Windows 95/98 Setup CD does: no live session, no desktop and no "try without installing" mode from the CD. This confirms the current design, which is now binding:
+
+- The CD's `/system/BOOT.CFG` always carries `setup=1` (`scripts/build_cd.py`), and the build refuses a disk image whose own `BOOT.CFG` carries it.
+- In Setup mode the supervisor spawns only `/Programs/setup` (`src/kernel/proc/supervisor.c`, `setup_bootstrap`), never `/Programs/desktop`, and the loader menu (N/S/L/P/H) cannot remove `setup=1`.
+- Leaving Setup powers the computer off; finishing it restarts from the installed disk with the CD removed (screens 1 and 10).
+- The rescue page's Hardware Report (f9-07 Amendment 1) runs `/Programs/hwreport --rescue --text-fd=3` headless as a helper of Setup: no window server, no desktop, no session; Setup shows and saves its text.
+
+Any future change that would start the desktop, a shell or another interactive session from the CD needs a new owner decision.
