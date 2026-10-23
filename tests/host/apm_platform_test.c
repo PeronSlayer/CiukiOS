@@ -37,7 +37,9 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
     case 0x5301: connects++; break;
     case 0x5304: break;
     case 0x530e: r->eax = 0x0102; break;
-    case 0x530a: r->ebx = 0x0100; r->ecx = 75; r->edx = 120; break;
+    case 0x530a:
+        if (r->ebx & 0x8000) { r->flags = 1; r->eax = 0x0900; break; } /* no battery sockets */
+        r->ebx = 0x0100; r->ecx = 75; r->edx = 120; break;
     case 0x530b:
         polls++;
         if (next_event) { r->ebx = next_event; next_event = 0; }
@@ -70,6 +72,13 @@ void klog(const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt); vsnprintf(log_line, sizeof(log_line), fmt, ap); va_end(ap);
 }
+/* fx-18 seams: the BIOS VM window and its counters, a millisecond clock. */
+#include <ciuki/apm_ports.h>
+static unsigned windows;
+int biosvm_apm_set_window(const struct apm_port_window *w) { CHECK(w && w->count); windows++; return 0; }
+void biosvm_apm_io_snapshot(struct biosvm_apm_io *out) { *out = (struct biosvm_apm_io){0}; }
+#define APM_PLATFORM_HOST_CLOCK
+static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000; }
 #include "../../src/kernel/core/power_source.c"
 #include "../../src/kernel/core/apm_platform.c"
 void task_sleep_ms(uint32_t ms) { ticks += ms; service_once(); }
@@ -83,9 +92,18 @@ int main(void)
     CHECK(tasks == 1); CHECK(discover() == -ENOTSUP && connects == 0);
     CHECK(strstr(log_line, "platform_quiesce_owner"));
     apm_start(); CHECK(tasks == 1);
-    g_boot.acpi_rsdp_phys = 0xe0000;
+    /* fx-18: with ACPI tables APM waits (bounded) for the inventory's
+     * decision; OS-owned or uncertain ACPI excludes it after the probe. */
+    g_boot.acpi_rsdp_phys = 0xe0000; unsigned seen = probes;
+    uint64_t before = ticks;
+    CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && !connects && probes == seen);
+    CHECK(strstr(log_line, "acpi_unsettled") && ticks - before >= APM_SETTLE_MS);
+    power_source_acpi_settled(CIUKI_POWER_OWNED);
     CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && !connects);
-    CHECK(strstr(log_line, "acpi_present"));
+    CHECK(strstr(log_line, "acpi_owner"));
+    acpi_ownership = CIUKI_POWER_QUARANTINED;
+    CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && !connects);
+    acpi_settled = false; acpi_ownership = CIUKI_POWER_PENDING;
     g_boot.acpi_rsdp_phys = 0;
     attempted = false; fail_task = true; apm_start();
     CHECK(tasks == 2 && strstr(log_line, "reason=worker")); fail_task = false;
@@ -96,7 +114,7 @@ int main(void)
     CHECK(power_source_set_platform(&platform) == -EBUSY);
     g_current = &fake_tasks[0]; apm_worker = &fake_tasks[1];
     storage_init_error = -ENOMEM;
-    CHECK(discover() == -ENOMEM && !connects);
+    CHECK(discover() == -ENOMEM && !connects && windows);
     struct power_source_snapshot unreserved;
     power_source_snapshot(&unreserved);
     CHECK(unreserved.provider == POWER_SOURCE_NONE && !unreserved.active);
@@ -106,11 +124,15 @@ int main(void)
     power_source_snapshot(&snap);
     CHECK(snap.provider == POWER_SOURCE_APM && snap.active && snap.status.ac == POWER_SOURCE_UNKNOWN);
     struct power_source_ops ops = {.soft_off=request_off};
-    CHECK(power_source_reserve(POWER_SOURCE_ACPI, &ops) == -EBUSY);
+    /* fx-18: ACPI asks a healthy APM to yield (EAGAIN); cancelled here, the
+     * handoff itself is exercised at the end. */
+    CHECK(power_source_reserve(POWER_SOURCE_ACPI, &ops) == -EAGAIN && power_source_handoff_requested(POWER_SOURCE_APM));
+    CHECK(!power_source_apm_admitted(false));
+    power_source_handoff_cancel(); CHECK(power_source_apm_admitted(false));
     service_once();
     power_source_snapshot(&snap); CHECK(snap.status.ac == 1 && snap.status.percent == 75 && snap.status.seconds == 120);
     unsigned calls = polls; power_source_snapshot(&snap); CHECK(polls == calls);
-    next_event = 6; ticks = 1000; service_once();
+    next_event = 6; ticks += 1000; service_once();
     power_source_snapshot(&snap); CHECK(snap.events == 1 && snap.last_event == 6);
     /* Without the call-73 stopped latch neither the arbiter nor the APM
      * backend reaches firmware Off. */

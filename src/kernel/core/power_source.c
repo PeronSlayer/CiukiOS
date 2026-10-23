@@ -5,10 +5,9 @@
 #include <ciuki/cpu.h>
 #include <ciuki/power_source.h>
 
-static struct power_source_snapshot source = {
-    .status = {POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN,
-               POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN}
-};
+#define STATUS_UNKNOWN {.ac = POWER_SOURCE_UNKNOWN, .percent = POWER_SOURCE_UNKNOWN, \
+                        .seconds = POWER_SOURCE_UNKNOWN, .battery_flags = POWER_SOURCE_UNKNOWN}
+static struct power_source_snapshot source = {.status = STATUS_UNKNOWN};
 static struct power_source_ops provider_ops;
 static struct power_source_platform platform_ops;
 static bool platform_ready, off_running, stopped;
@@ -16,12 +15,17 @@ static bool platform_ready, off_running, stopped;
 static struct ciuki_power_status acpi_record;
 static bool acpi_record_valid;
 static uint32_t summary_sequence;
+/* fx-18: the ACPI inventory's decision and a requested APM -> ACPI handoff. */
+static bool acpi_settled, handoff_pending;
+static uint32_t acpi_ownership = CIUKI_POWER_PENDING;
 
 int power_source_set_platform(const struct power_source_platform *p)
 {
     if (!p || !p->quiesce_dma || !p->resume) return -EINVAL;
     uint32_t f = irq_save();
-    int e = platform_ready || source.provider != POWER_SOURCE_NONE ? -EBUSY : 0;
+    /* fx-18: installed on every machine (only APM uses it); an ACPI
+     * reservation taken first does not prevent a later APM admission. */
+    int e = platform_ready || source.provider == POWER_SOURCE_APM ? -EBUSY : 0;
     if (!e) { platform_ops = *p; platform_ready = true; }
     irq_restore(f);
     return e;
@@ -50,13 +54,43 @@ int power_source_reserve(enum power_source_kind kind, const struct power_source_
         return -EINVAL;
     uint32_t f = irq_save();
     int e = source.provider == POWER_SOURCE_NONE && !off_running ? 0 : -EBUSY;
+    /* fx-18: ACPI ownership replaces a healthy APM connection: APM's worker
+     * disconnects and releases, then this reservation succeeds. */
+    if (e && kind == POWER_SOURCE_ACPI && source.provider == POWER_SOURCE_APM && source.active &&
+        !source.error && !off_running && !stopped) { handoff_pending = true; e = -EAGAIN; }
+    if (!e && kind == POWER_SOURCE_APM && handoff_pending) e = -EBUSY;
     if (!e) {
         source.provider = kind; source.active = false; source.error = 0;
         source.events = 0; source.last_event = source.event_info = 0;
         provider_ops = *ops;
+        if (kind == POWER_SOURCE_ACPI) handoff_pending = false;
     }
     irq_restore(f);
     return e;
+}
+bool power_source_handoff_requested(enum power_source_kind kind)
+{
+    uint32_t f = irq_save(); bool r = handoff_pending && source.provider == kind && kind == POWER_SOURCE_APM; irq_restore(f);
+    return r;
+}
+void power_source_handoff_cancel(void)
+{
+    uint32_t f = irq_save(); handoff_pending = false; irq_restore(f);
+}
+void power_source_acpi_settled(uint32_t ownership)
+{
+    uint32_t f = irq_save();
+    if (!acpi_settled) { acpi_settled = true; acpi_ownership = ownership; }
+    irq_restore(f);
+}
+bool power_source_acpi_decided(void) { return acpi_settled; }
+bool power_source_apm_admitted(bool acpi_tables)
+{
+    uint32_t f = irq_save();
+    bool ok = !handoff_pending && (source.provider == POWER_SOURCE_NONE || source.provider == POWER_SOURCE_APM) &&
+              (!acpi_tables || (acpi_settled && acpi_ownership == CIUKI_POWER_FIRMWARE));
+    irq_restore(f);
+    return ok;
 }
 int power_source_activate(enum power_source_kind kind)
 {
@@ -72,8 +106,7 @@ void power_source_release(enum power_source_kind kind, bool uncertain, int error
     if (kind != POWER_SOURCE_NONE && source.provider == kind) {
         source.active = false;
         source.error = error;
-        source.status = (struct power_source_status){POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN,
-                                                    POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN};
+        source.status = (struct power_source_status)STATUS_UNKNOWN;
         if (!uncertain) source.provider = POWER_SOURCE_NONE;
         provider_ops = (struct power_source_ops){0};
     }
@@ -87,6 +120,9 @@ void power_source_publish(enum power_source_kind kind, const struct power_source
         source.status = *s;
         if (source.status.ac > 2) source.status.ac = POWER_SOURCE_UNKNOWN;
         if (source.status.percent > 100) source.status.percent = POWER_SOURCE_UNKNOWN;
+        if (source.status.units > POWER_SOURCE_BATTERIES) source.status.units = POWER_SOURCE_BATTERIES;
+        for (unsigned i = 0; i < POWER_SOURCE_BATTERIES; i++)
+            if (source.status.battery[i].percent > 100) source.status.battery[i].percent = POWER_SOURCE_UNKNOWN;
         summary_sequence++;
     }
     irq_restore(f);
@@ -106,6 +142,7 @@ static uint32_t record_percent(const struct ciuki_power_status *p)
     uint64_t full = 0, remaining = 0; uint32_t unit = POWER_SOURCE_UNKNOWN;
     for (unsigned i = 0; i < p->battery_count; i++) {
         const struct ciuki_power_battery *b = &p->batteries[i];
+        if (b->present == 0) continue; /* fx-18: an empty bay is not unknown charge */
         if (b->present != 1 || b->unit > CIUKI_POWER_UNIT_PERCENT || !b->full || b->full == CIUKI_POWER_UNKNOWN ||
             b->remaining == CIUKI_POWER_UNKNOWN || (unit != POWER_SOURCE_UNKNOWN && unit != b->unit))
             return POWER_SOURCE_UNKNOWN;
@@ -121,8 +158,8 @@ void power_source_publish_record(enum power_source_kind kind, const struct ciuki
     uint32_t f = irq_save();
     acpi_record = *p; acpi_record_valid = true;
     if (source.active && source.provider == POWER_SOURCE_ACPI) {
-        source.status = (struct power_source_status){p->ac_online <= 1 ? p->ac_online : POWER_SOURCE_UNKNOWN,
-            record_percent(p), POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN};
+        source.status = (struct power_source_status){.ac = p->ac_online <= 1 ? p->ac_online : POWER_SOURCE_UNKNOWN,
+            .percent = record_percent(p), .seconds = POWER_SOURCE_UNKNOWN, .battery_flags = POWER_SOURCE_UNKNOWN};
         summary_sequence++;
     }
     irq_restore(f);
@@ -139,10 +176,32 @@ static void pending(struct ciuki_power_status *out)
     out->ownership = CIUKI_POWER_PENDING; out->battery_count = out->zone_count = 0;
     out->shutdown_requests = out->sequence = out->event_overflows = out->reserved = 0;
 }
-/* APM 1.2 section 4.6.8 (Get Power Status) reports one system battery as a
- * percentage and remaining life; apm_status_decode validated the fields. */
+/* APM 1.2 section 4.6.11 (Get Power Status): BX=0001h reports the
+ * aggregate of all batteries, BX=80nnh battery unit nn as a percentage and
+ * remaining life; apm_status_decode validated the fields. */
+static uint32_t apm_state(uint32_t flags, uint32_t ac)
+{
+    /* Charging and critical are reported; discharging only follows from a
+     * known AC state (off-line or backup power). Otherwise it stays unknown. */
+    if (flags == POWER_SOURCE_UNKNOWN) return CIUKI_POWER_UNKNOWN;
+    uint32_t critical = flags & 4 ? 4u : 0u;
+    if (flags & 8) return 2u | critical;
+    if (ac == 1) return critical;
+    if (ac == 0 || ac == 2) return 1u | critical;
+    return CIUKI_POWER_UNKNOWN;
+}
+static void apm_battery(struct ciuki_power_battery *b, uint32_t id, uint32_t present, uint32_t percent,
+                        uint32_t seconds, uint32_t flags, uint32_t ac)
+{
+    memset(b, 0xff, sizeof(*b));
+    b->id = id; b->present = present;
+    if (present == 0) return; /* an empty bay: nothing else is known */
+    b->unit = CIUKI_POWER_UNIT_PERCENT; b->full = 100;
+    b->remaining = percent; b->seconds = seconds;
+    b->state = apm_state(flags, ac);
+}
 static void apm_record(struct ciuki_power_status *out, const struct power_source_snapshot *s,
-                       uint32_t requests, uint32_t sequence)
+                       uint32_t requests, uint32_t sequence, const struct ciuki_power_status *acpi)
 {
     memset(out, 0xff, sizeof(*out));
     out->version = CIUKI_POWER_VERSION; out->size = sizeof(*out);
@@ -152,22 +211,30 @@ static void apm_record(struct ciuki_power_status *out, const struct power_source
     out->sequence = sequence; out->shutdown_requests = requests;
     out->ac_online = s->status.ac <= CIUKI_POWER_AC_BACKUP ? s->status.ac : CIUKI_POWER_UNKNOWN;
     out->zone_count = 0; out->event_overflows = 0; out->reserved = 0;
+    /* fx-18: lid and thermal descriptions from ACPI's firmware-owned
+     * record when one exists (APM reports neither). */
+    if (acpi) {
+        out->lid_open = acpi->lid_open;
+        out->zone_count = acpi->zone_count <= CIUKI_POWER_ZONES ? acpi->zone_count : 0;
+        memcpy(out->zones, acpi->zones, sizeof(out->zones));
+    }
+    out->battery_count = 0;
+    if (!s->active) return;
     uint32_t flags = s->status.battery_flags;
+    if (s->status.units) {
+        for (unsigned i = 0; i < s->status.units && i < CIUKI_POWER_BATTERIES; i++) {
+            const struct power_source_battery *u = &s->status.battery[i];
+            apm_battery(&out->batteries[out->battery_count++], i + 1, u->present == 0 ? 0u : 1u,
+                        u->percent, u->seconds, u->flags, s->status.ac);
+        }
+        return;
+    }
     bool absent = flags != POWER_SOURCE_UNKNOWN && (flags & 0x80);
     bool known = flags != POWER_SOURCE_UNKNOWN || s->status.percent != POWER_SOURCE_UNKNOWN ||
                  s->status.seconds != POWER_SOURCE_UNKNOWN;
-    out->battery_count = !absent && known ? 1 : 0;
-    if (!out->battery_count) return;
-    struct ciuki_power_battery *b = &out->batteries[0];
-    b->id = 1; b->present = 1; b->unit = CIUKI_POWER_UNIT_PERCENT; b->full = 100;
-    b->remaining = s->status.percent; b->seconds = s->status.seconds;
-    /* Charging and critical are reported; discharging only follows from a
-     * known AC state (off-line or backup power). Otherwise it stays unknown. */
-    if (flags == POWER_SOURCE_UNKNOWN) return;
-    uint32_t critical = flags & 4 ? 4u : 0u;
-    if (flags & 8) b->state = 2u | critical;
-    else if (s->status.ac == 1) b->state = critical;
-    else if (s->status.ac == 0 || s->status.ac == 2) b->state = 1u | critical;
+    if (absent || !known) return;
+    out->battery_count = 1;
+    apm_battery(&out->batteries[0], 1, 1, s->status.percent, s->status.seconds, flags, s->status.ac);
 }
 void power_source_status(struct ciuki_power_status *out)
 {
@@ -181,8 +248,10 @@ void power_source_status(struct ciuki_power_status *out)
         irq_restore(f);
         return;
     }
+    struct ciuki_power_status acpi = acpi_record;
+    bool acpi_valid = acpi_record_valid;
     irq_restore(f);
-    apm_record(out, &s, requests, sequence);
+    apm_record(out, &s, requests, sequence, acpi_valid ? &acpi : NULL);
 }
 bool power_source_can_off(void)
 {

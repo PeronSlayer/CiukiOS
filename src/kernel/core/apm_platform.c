@@ -6,7 +6,16 @@
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/power_source.h>
+#include <ciuki/apm_ports.h>
+#include <ciuki/registry.h>
 #include "apm.h"
+
+/* fx-18: the ACPI layer supplies the FADT blocks and the legacy-EC hold;
+ * weak so that builds and host tests without ACPI link. */
+int acpi_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
+int acpi_ec_firmware_hold(unsigned ms) __attribute__((weak));
+void acpi_ec_firmware_release(void) __attribute__((weak));
+bool registry_smi_snapshot(struct registry_smi *) __attribute__((weak));
 
 static struct apm_backend backend;
 static bool attempted;
@@ -15,15 +24,54 @@ static bool off_pending, off_done;
 static int off_result;
 static uint64_t off_deadline;
 
+/* fx-18: every APM call holds the legacy EC engine (acpi/ec.c) so the SMI
+ * it raises never interleaves with a ThinkPad quirk transaction. Half the
+ * call's budget waits for the engine (all of it, up to 500 ms, for
+ * disconnect and Set Power State, which must not be skipped); EAGAIN means
+ * nothing ran. */
 static int firmware_call(void *ctx, struct biosvm_regs *r, uint32_t ms)
 {
     (void)ctx;
-    return biosvm_apm_call(r, ms);
+    uint16_t fn = (uint16_t)r->eax;
+    bool must = fn == 0x5304 || fn == 0x5307;
+    uint32_t wait = must ? ms : ms / 2;
+    if (wait > 500) wait = 500;
+    uint64_t start = deadline_after_ms(0);
+    if (acpi_ec_firmware_hold && acpi_ec_firmware_hold(wait ? wait : 1)) return -EAGAIN;
+    uint64_t spent = deadline_after_ms(0) - start;
+    uint32_t left = spent >= ms ? 1u : ms - (uint32_t)spent;
+    int e = biosvm_apm_call(r, left);
+    if (acpi_ec_firmware_release) acpi_ec_firmware_release();
+    return e;
 }
+/* fx-18: APM is excluded unless admitted: no ACPI tables, or ACPI settled
+ * with clean firmware ownership (and no handoff to ACPI requested). */
 static bool acpi_present(void *ctx)
 {
     (void)ctx;
-    return g_boot.acpi_rsdp_phys != 0;
+    return !power_source_apm_admitted(g_boot.acpi_rsdp_phys != 0);
+}
+static bool handoff(void *ctx)
+{
+    (void)ctx;
+    return power_source_handoff_requested(POWER_SOURCE_APM);
+}
+#ifndef APM_PLATFORM_HOST_CLOCK
+#include <ciuki/timing.h>
+static uint64_t now_us(void *ctx)
+{
+    (void)ctx;
+    if (g_cpu_tsc && g_tsc_per_ms) {
+        uint64_t c = read_tsc_unserialized();
+        return c / g_tsc_per_ms * 1000u + c % g_tsc_per_ms * 1000u / g_tsc_per_ms;
+    }
+    return g_ticks * 1000u;
+}
+#endif
+static void low_battery(void *ctx, int error)
+{
+    (void)ctx;
+    klog("[apm] event=battery_low flush_error=%d action=notify", error);
 }
 static int request_off(void *ctx)
 {
@@ -74,7 +122,11 @@ static int resume(void *ctx, uint16_t event, uint16_t info)
 static void publish(void *ctx, const struct apm_status *s)
 {
     (void)ctx;
-    struct power_source_status status = {s->ac, s->percent, s->seconds, s->battery_flags};
+    struct power_source_status status = {.ac = s->ac, .percent = s->percent, .seconds = s->seconds,
+                                         .battery_flags = s->battery_flags, .units = s->units};
+    for (unsigned i = 0; i < APM_UNITS && i < POWER_SOURCE_BATTERIES; i++)
+        status.battery[i] = (struct power_source_battery){s->unit[i].present, s->unit[i].percent,
+                                                          s->unit[i].seconds, s->unit[i].flags};
     power_source_publish(POWER_SOURCE_APM, &status);
 }
 static void event(void *ctx, uint16_t code, uint16_t info)
@@ -92,15 +144,72 @@ static void emergency_record(void *ctx, int error)
     (void)ctx;
     klog("[apm] stage=emergency-quiesce error=%d acknowledge=suspend", error);
 }
+/* fx-18: the chipset window the APM BIOS needs, from the FADT and the
+ * qualified chipset (ICH3-M PMBASE, 128 bytes), installed before the probe. */
+static uint16_t sci_state = 0xffff;
+static struct apm_port_window window;
+static void install_window(void)
+{
+    struct apm_pm_blocks fadt;
+    bool have_fadt = acpi_pm_blocks && !acpi_pm_blocks(&fadt);
+    struct registry_smi chip;
+    bool have_chip = registry_smi_snapshot && registry_smi_snapshot(&chip) && chip.decoded && chip.base;
+    apm_port_window_build(&window, have_fadt ? &fadt : NULL, have_chip ? chip.base : 0, have_chip ? 128 : 0);
+    if (have_chip) sci_state = chip.pm1_cnt & 1;
+    (void)biosvm_apm_set_window(&window);
+    klog("[apm] window ranges=%u source=%s%s pm1_cnt=%04x chipset=%04x sci_en=%s",
+         window.count, window.source & APM_PORT_SOURCE_FADT ? "fadt" : "none",
+         window.source & APM_PORT_SOURCE_CHIPSET ? "+chipset" : "",
+         have_fadt ? fadt.pm1a_cnt : 0, have_chip ? chip.base : 0,
+         sci_state == 0xffff ? "unknown" : sci_state ? "1" : "0");
+}
+/* fx-18: with ACPI tables, the first firmware call waits for the ACPI
+ * inventory's ownership decision (bounded). */
+#define APM_SETTLE_MS 60000u
+static bool wait_acpi(void)
+{
+    if (!g_boot.acpi_rsdp_phys) return true;
+    uint64_t end = deadline_after_ms(APM_SETTLE_MS);
+    while (!power_source_acpi_decided()) {
+        if (deadline_passed(end)) return false;
+        task_sleep_ms(50);
+    }
+    return true;
+}
+static const char *reason(int e)
+{
+    if (backend.state == APM_CONNECTED) return "real_mode";
+    if (backend.state == APM_EXCLUDED)
+        return g_boot.acpi_rsdp_phys && !power_source_acpi_decided() ? "acpi_unsettled" :
+               g_boot.acpi_rsdp_phys ? "acpi_owner" : "acpi_present";
+    if (backend.state == APM_DISCOVERED) return e == -EAGAIN ? "ec_busy" : "platform_quiesce_owner";
+    if (backend.state == APM_ABSENT && backend.bios_error == 0x86) return "no_apm_bios";
+    return e ? "firmware" : "real_mode";
+}
 static int discover(void)
 {
     const struct apm_ops ops = {.real_call = firmware_call, .acpi_present = acpi_present,
         .reserve = reserve, .release = release, .now_ms = now, .step = step,
         .resume = resume, .publish = publish, .event = event,
-        .orderly_shutdown = orderly, .emergency_record = emergency_record};
+        .orderly_shutdown = orderly, .emergency_record = emergency_record,
+        .now_us = now_us, .low_battery = low_battery, .handoff = handoff};
     apm_backend_init(&backend, &ops);
-    int e = apm_backend_probe(&backend);
-    if (!e) e = apm_backend_connect(&backend);
+    int e;
+    if (!wait_acpi()) {
+        backend.state = APM_EXCLUDED; e = -EBUSY;
+        klog("[apm] state=%u version=0000 flags=0000 error=%d connected=0 reason=acpi_unsettled", backend.state, e);
+        return e;
+    }
+    if (acpi_present(NULL)) {
+        /* OS-owned or uncertain ACPI: no APM BIOS call at all. */
+        backend.state = APM_EXCLUDED; e = -EBUSY;
+        klog("[apm] state=%u version=0000 flags=0000 error=%d connected=0 reason=%s", backend.state, e, reason(e));
+        return e;
+    }
+    install_window();
+    /* EAGAIN: the EC hold was busy and nothing ran; retry a few times. */
+    for (unsigned i = 0; (e = apm_backend_probe(&backend)) == -EAGAIN && i < 5; i++) task_sleep_ms(100);
+    if (!e) for (unsigned i = 0; (e = apm_backend_connect(&backend)) == -EAGAIN && i < 5; i++) task_sleep_ms(100);
     if (!e) {
         e = power_source_activate(POWER_SOURCE_APM);
         /* Only our reservation can be activated. On failure disconnect
@@ -113,16 +222,37 @@ static int discover(void)
             backend.connected = backend.reserved = false;
         }
     }
-    klog("[apm] state=%u version=%04x flags=%04x error=%d connected=%u reason=%s",
-         backend.state, backend.version, backend.flags, e, backend.state == APM_CONNECTED,
-         backend.state == APM_EXCLUDED ? "acpi_present" :
-         backend.state == APM_DISCOVERED ? "platform_quiesce_owner" : e ? "firmware" : "real_mode");
+    klog("[apm] state=%u version=%04x flags=%04x error=%d connected=%u reason=%s bios_error=%02x",
+         backend.state, backend.version, backend.flags, e, backend.state == APM_CONNECTED, reason(e),
+         backend.bios_error);
     return e;
+}
+/* fx-18: one cost record per 60 s (f1-100 SMI budget): every firmware
+ * call's wall time includes the SMIs it raised. */
+static uint64_t window_end;
+static void cost_record(void)
+{
+    uint64_t t = deadline_after_ms(0);
+    if (!window_end) { window_end = t + APM_WINDOW_MS; return; }
+    if (t < window_end) return;
+    window_end = t + APM_WINDOW_MS;
+    struct apm_cost c; apm_backend_cost(&backend, &c);
+    struct biosvm_apm_io io = {0}; biosvm_apm_io_snapshot(&io);
+    struct power_source_snapshot s; power_source_snapshot(&s);
+    klog("[apm] window calls=%u events=%u event_calls=%u status_calls=%u skipped=%u max_us=%u total_us=%llu "
+         "io_allowed=%llu io_denied=%llu ac=%d percent=%d seconds=%d units=%u",
+         c.calls, c.events, c.event_calls, c.status_calls, c.skipped, c.max_us, (unsigned long long)c.total_us,
+         (unsigned long long)io.allowed, (unsigned long long)io.denied,
+         (int)s.status.ac, (int)s.status.percent, (int)s.status.seconds, s.status.units);
 }
 static void service_once(void)
 {
+    bool was_connected = backend.state == APM_CONNECTED;
     int e = apm_backend_service(&backend);
-    if (e) klog("[apm] service error=%d emergency_error=%d state=%u", e, backend.emergency_error, backend.state);
+    if (was_connected && backend.state == APM_EXCLUDED)
+        klog("[apm] handoff to=acpi disconnect=%s error=%d", e ? "uncertain" : "clean", e);
+    else if (e) klog("[apm] service error=%d emergency_error=%d state=%u", e, backend.emergency_error, backend.state);
+    if (backend.state == APM_CONNECTED) cost_record();
     if (off_pending) {
         int r = deadline_passed(off_deadline) ? -V86_ETIMEDOUT :
                 backend.emergency ? -EBUSY : apm_backend_off(&backend);

@@ -1198,13 +1198,16 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
     if (d->sh.power_status.version == CIUKI_POWER_VERSION) {
         const struct ciuki_power_status *p = &d->sh.power_status;
         struct desk_box bi = desk_shell_tray_icon_box(d, SH_TRAY_POWER);
-        uint64_t full = 0, remaining = 0; unsigned unit = CIUKI_POWER_UNKNOWN; int known = p->battery_count > 0;
+        uint64_t full = 0, remaining = 0; unsigned unit = CIUKI_POWER_UNKNOWN, present = 0; int known = p->battery_count > 0;
         for (unsigned i = 0; i < p->battery_count && i < CIUKI_POWER_BATTERIES; i++) {
             const struct ciuki_power_battery *b = &p->batteries[i];
+            if (b->present == 0) continue; /* fx-18: an empty bay (APM CH bit 4) is not unknown charge */
+            present++;
             if (b->present != 1 || b->unit > CIUKI_POWER_UNIT_PERCENT || !b->full || b->full == CIUKI_POWER_UNKNOWN || b->remaining == CIUKI_POWER_UNKNOWN ||
                 (unit != CIUKI_POWER_UNKNOWN && unit != b->unit)) { known = 0; break; }
             unit = b->unit; full += b->full; remaining += b->remaining;
         }
+        if (!present) known = 0;
         unsigned percent = known && full ? (unsigned)(remaining * 100 / full) : 0;
         if (percent > 100) percent = 100;
         du_icon_blit(&c,bi.x,bi.y,desk_shell_icon(known && percent < 10 ? "battery-caution" : "battery",16),16,

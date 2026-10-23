@@ -17,7 +17,7 @@
  * failed after shutdown began: retain a terminal diagnostic and require reset. */
 int ciuki_power(uint32_t action);
 /* Read-only cached firmware status of the one active power provider (ACPI,
- * or APM 1.2 on pre-ACPI machines; see `provider`); initializes version/size
+ * or APM 1.2 when the OS does not own ACPI; see `provider`); initializes version/size
  * for the caller. Unknown values use CIUKI_POWER_UNKNOWN. No AML or BIOS
  * call runs during this query. */
 int ciuki_power_status(struct ciuki_power_status *status);

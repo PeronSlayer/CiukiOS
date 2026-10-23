@@ -198,6 +198,7 @@ static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "../../src/kernel/vm/biosvm.c"
+#include "../../src/kernel/core/apm_ports.c"
 #include "../../src/kernel/vm/fwinput.c"
 
 /* Exercise the real boot/adapter/safe path. Only the public input queue and
@@ -1528,6 +1529,42 @@ static void test_fullscreen_calls(void)
     CHECK(biosvm_video_fullscreen_end(0x118,info)==-V86_EIO && !video_claimed && !fullscreen_video);
     puts("PASS biosvm full-screen: bounded 4F04(000F) save/restore, standard VGA-only, persistent leases, serialized VBE refusal, restore errors");
 }
+/* fx-18: the T23 APM BIOS installation check as executed in the trial of
+ * e831e685 (f000:4ccf: IN AL,DX with DX=1004h), followed by the
+ * software SMI (OUT B2h) and a POST/delay write (OUT 80h). Without the
+ * window the read faults and quarantines the VM (the trial); with the T23
+ * window it reads PM1_CNT once, writes APM_CNT once, absorbs port 80h. */
+static void test_apm_t23_window(void)
+{
+    /* TEST AL,1 is omitted: the host decoder models only the trapping
+     * instructions and simple moves; the read itself is what faulted. */
+    static const uint8_t t23[] = {0xba,0x04,0x10, 0xec, 0xe6,0xb2, 0xe6,0x80,
+                                  0xb8,0x02,0x01, 0xbb,0x4d,0x50, 0xb9,0x03,0x00, 0xcf};
+    struct biosvm_regs r;
+    boot_fixture(false); g_boot.flags = 0; apm_window_set = false;
+    ivt(0x15, 0xf000, 0x400); memcpy(ram + 0xf0400, t23, sizeof(t23));
+    CHECK(biosvm_apm_probe(&r) == -V86_EPERM && quarantined && !hw_reads && !hw_writes);
+    boot_fixture(false); g_boot.flags = 0;
+    ivt(0x15, 0xf000, 0x400); memcpy(ram + 0xf0400, t23, sizeof(t23));
+    const struct apm_pm_blocks fadt = {.pm1a_evt = 0x1000, .pm1a_cnt = 0x1004, .pm_tmr = 0x1008, .gpe0 = 0x1028,
+        .gpe1 = 0x102c, .smi_cmd = 0xb2, .pm1_evt_len = 4, .pm1_cnt_len = 2, .pm_tmr_len = 4, .gpe0_len = 4, .gpe1_len = 4};
+    struct apm_port_window w; apm_port_window_build(&w, &fadt, 0x1000, 128);
+    CHECK(!biosvm_apm_set_window(&w));
+    physical[0x1004] = 0; physical[0x80] = 0x5a; hw_reads = hw_writes = 0;
+    struct biosvm_apm_io io0; biosvm_apm_io_snapshot(&io0);
+    CHECK(!biosvm_apm_probe(&r) && !quarantined);
+    CHECK(r.eax == 0x0102 && r.ebx == 0x504d && r.ecx == 3 && hw_reads == 1 && hw_writes == 1);
+    CHECK(physical[0xb2] == 0x00 && physical[0x80] == 0x5a); /* AL from PM1_CNT; 80h absorbed */
+    struct biosvm_apm_io io; biosvm_apm_io_snapshot(&io);
+    CHECK(io.allowed == io0.allowed + 2 && io.writes == io0.writes + 1 && io.absorbed == io0.absorbed + 1 && io.denied == io0.denied);
+    /* The same window never reaches outside an APM call: a DOS/input call
+     * reading 1004h is still the generic policy denial. */
+    static const uint8_t sci[] = {0xba,0x04,0x10, 0xb0,0x01, 0xee, 0xcf}; /* OUT DX,AL with SCI_EN */
+    memcpy(ram + 0xf0400, sci, sizeof(sci)); hw_writes = 0;
+    CHECK(biosvm_apm_probe(&r) == -V86_EPERM && !hw_writes && quarantined);
+    boot_fixture(false); apm_window_set = false;
+    puts("PASS APM T23 window: trial fault reproduced without it; PM1_CNT read, APM_CNT write, 80h absorbed; SCI_EN write denied");
+}
 static void test_apm_probe(void)
 {
     for (unsigned native = 0; native < 2; native++) {
@@ -1633,6 +1670,7 @@ int main(void)
     test_video_calls();
     test_fullscreen_calls();
     test_apm_probe();
+    test_apm_t23_window();
     printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
     printf("v86/firmware host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

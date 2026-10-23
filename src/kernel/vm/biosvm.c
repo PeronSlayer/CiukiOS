@@ -15,6 +15,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/display.h>
 #include <ciuki/init.h>
+#include <ciuki/apm_ports.h>
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -471,14 +472,71 @@ static int run_vm_body(struct biosvm_regs *regs, uint32_t ms, unsigned test)
     return rc;
 }
 
+/* fx-18: the APM BIOS's chipset window (core/apm_ports.c), installed by
+ * the APM worker before its first call. Only APM calls see it. */
+static struct apm_port_window apm_window;
+static bool apm_window_set;
+static uint16_t apm_function;
+static struct biosvm_apm_io apm_io_stats;
+static uint16_t apm_logged[16];
+static unsigned apm_logged_count, apm_denials_logged;
+int biosvm_apm_set_window(const struct apm_port_window *w)
+{
+    if (!w || w->count > APM_PORT_RANGES) return -EINVAL;
+    /* Only the APM worker sets it, and its calls are synchronous: no APM
+     * call can be reading the window while it changes. */
+    uint32_t f = irq_save(); apm_window = *w; apm_window_set = true; irq_restore(f);
+    return 0;
+}
+void biosvm_apm_io_snapshot(struct biosvm_apm_io *out)
+{
+    if (!out) return;
+    uint32_t f = irq_save(); *out = apm_io_stats; irq_restore(f);
+}
+static void apm_note(uint16_t port, unsigned width, bool write, uint8_t kind)
+{
+    for (unsigned i = 0; i < apm_logged_count; i++) if (apm_logged[i] == port) return;
+    if (apm_logged_count == sizeof(apm_logged) / sizeof(apm_logged[0])) return;
+    apm_logged[apm_logged_count++] = port;
+    klog("[apm] io port=%04x width=%u write=%u fn=%04x kind=%s", port, width, (unsigned)write,
+         apm_function, apm_port_kind_name(kind));
+}
 static int apm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
 {
-    (void)arg; (void)width; (void)write; (void)value;
+    (void)arg;
     /* APM has no physical resource claim of its own.
      * Native i8042 ownership must not be bypassed by the firmware monitor's
-     * input port rules. PIC/PIT/RTC remain virtual; other ports stay denied. */
+     * input port rules. PIC/PIT/RTC remain virtual. fx-18: the chipset
+     * power-management window the APM BIOS needs is admitted, bounded and
+     * logged; every other port stays denied. */
     if (!input_enabled && (port == 0x60 || port == 0x64)) return -V86_EPERM;
-    return -ENOSYS;
+    if (!apm_window_set) return -ENOSYS;
+    uint8_t kind = APM_PORT_NONE; const char *reason = "outside_window";
+    enum apm_port_verdict v = apm_port_check(&apm_window, port, width, write, *value, apm_function, &kind, &reason);
+    if (kind == APM_PORT_NONE) return -ENOSYS; /* virtual devices, then the generic denial */
+    if (v == APM_PORT_DENY) {
+        apm_io_stats.denied++; firmware.stats.disallowed_io++;
+        if (apm_denials_logged < 8) {
+            apm_denials_logged++;
+            klog("[apm] io denied port=%04x width=%u write=%u value=%08x fn=%04x kind=%s reason=%s",
+                 port, width, (unsigned)write, *value, apm_function, apm_port_kind_name(kind), reason);
+        }
+        return -V86_EPERM;
+    }
+    apm_note(port, width, write, kind);
+    if (v == APM_PORT_ABSORB) {
+        apm_io_stats.absorbed++;
+        if (!write) *value = width == 1 ? 0xffu : width == 2 ? 0xffffu : 0xffffffffu;
+        return 0;
+    }
+    apm_io_stats.allowed++;
+    if (write) {
+        apm_io_stats.writes++;
+        if (width == 1) outb(port, (uint8_t)*value);
+        else if (width == 2) cpu_outw(port, (uint16_t)*value);
+        else outl(port, *value);
+    } else *value = width == 1 ? inb(port) : width == 2 ? cpu_inw(port) : inl(port);
+    return 0;
 }
 
 static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
@@ -492,7 +550,7 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         uint64_t left = apm_deadline - now;
         if (left < ms) ms = (uint32_t)left;
     }
-    if (apm) firmware.io = apm_io;
+    if (apm) { apm_function = (uint16_t)regs->eax; firmware.io = apm_io; }
     int e = run_vm_body(regs, ms, test);
     if (apm) firmware.io = 0;
     return e;

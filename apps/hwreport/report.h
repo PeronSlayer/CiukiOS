@@ -18,6 +18,8 @@ struct hr_source {
     const struct ciuki_display_info *display;
     const struct ciuki_accel_info *engine;
     const struct ciuki_net_state *network;
+    /* fx-18: call-73 STATUS (ACPI or APM provider), NULL when unavailable. */
+    const struct ciuki_power_status *power;
     int (*firmware)(void *, struct ciuki_firmware_page *);
     const char *boot_log, *latest_log;
     size_t boot_length, latest_length;

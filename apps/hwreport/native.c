@@ -3,6 +3,7 @@
 #include <ciuki/devices.h>
 #include <ciuki/display.h>
 #include <ciuki/media.h>
+#include <ciuki/power.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -144,6 +145,7 @@ void hr_native_collect(struct hr_native *n)
         if (!ciuki_devctl(fd,NET_GET_STATE,&n->network,sizeof(n->network))) s->network=&n->network;
         close(fd);
     }
+    if (!ciuki_power_status(&n->power)) s->power=&n->power; /* fx-18: cached, no firmware call */
     n->pci_names=names("/system/hwids/pci-ids.json"); n->usb_names=names("/system/hwids/usb-ids.json");
     s->boot_error=read_log(n->boot,&s->boot_length,0,s->hardware); if (!s->boot_error) s->boot_log=n->boot;
     s->latest_error=read_log(n->latest,&s->latest_length,1,s->hardware); if (!s->latest_error) s->latest_log=n->latest;

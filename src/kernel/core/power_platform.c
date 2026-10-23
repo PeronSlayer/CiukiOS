@@ -1,7 +1,9 @@
 /* Native DMA/time owner of the APM suspend services (f1-121 platform service,
- * lead decision 2026-10-23). Installed only on pre-ACPI machines, before APM
- * connects. ACPI never uses these services; any RSDP leaves them absent and
- * APM excluded, so the ACPI/APM exclusivity is unchanged.
+ * lead decision 2026-10-23). fx-18: installed on every machine (not on safe
+ * or hardware-check boots), before APM connects: APM is also the provider
+ * when ACPI tables exist but the OS does not own ACPI (the T23). ACPI never
+ * uses these services; the ACPI/APM exclusivity is the power_source
+ * reservation and APM's admission (docs/design/acpi-events-power.md).
  *
  * quiesce_dma runs call 73's native stop path (power_devices_quiesce:
  * network including NDIS external netifs, audio, USB) on its own worker, so
@@ -78,7 +80,6 @@ static int platform_resume(void *ctx, uint16_t event, uint16_t info)
 int power_platform_start(void)
 {
     if (owner_installed) return 0;
-    if (g_boot.acpi_rsdp_phys) { klog("[power] platform owner=none reason=acpi_present"); return -EBUSY; }
     if (g_boot.flags & (CBI_F_SAFE_MODE | CBI_F_HW_CHECK)) return -EPERM;
     kwait_init(&quiesce_wake);
     quiesce_worker = task_create_kernel("power-quiesce", quiesce_main, NULL, P_DEVICE);
@@ -89,6 +90,6 @@ int power_platform_start(void)
     if (e) { klog("[power] platform owner=none error=%d", e); return e; } /* worker never started */
     task_start(quiesce_worker);
     owner_installed = true;
-    klog("[power] platform owner=installed services=quiesce_dma,resume");
+    klog("[power] platform owner=installed services=quiesce_dma,resume acpi_tables=%u", g_boot.acpi_rsdp_phys != 0);
     return 0;
 }
