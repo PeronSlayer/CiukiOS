@@ -7,7 +7,8 @@
 
 const char hr_summary[] =
     "CPU and memory map; SMBIOS and BIOS; PCI and USB; ACPI/PnP;\n"
-    "display and modes; audio, network and storage; build identity;\n"
+    "display and modes; audio, network and storage; power (AC, batteries);\n"
+    "build identity;\n"
     "privacy-filtered boot log, recent disk records and pending kernel records.";
 const char hr_privacy[] =
     "Saved locally only. No user files, network addresses, host names,\n"
@@ -246,6 +247,21 @@ int hr_format(const struct hr_source *s, char *out, size_t cap, size_t *length)
             cursor=p.next;
         } while (cursor && ++pages<256 && !t.error);
         if (cursor) add(&t,"Firmware inventory incomplete (page limit or query failure)\n");
+    }
+    add(&t,"\n[Power]\n");
+    const struct ciuki_power_status *w=s->power;
+    if (!w || w->version!=CIUKI_POWER_VERSION || w->size!=sizeof(*w) || w->battery_count>CIUKI_POWER_BATTERIES ||
+        w->zone_count>CIUKI_POWER_ZONES) add(&t,"Unavailable\n");
+    else {
+        static const char *const owners[]={"firmware","os","quarantined","pending"};
+        add(&t,"Provider=%s ownership=%s error=%u ac=%d lid=%d batteries=%u zones=%u\n",
+            w->provider==CIUKI_POWER_PROVIDER_ACPI ? "acpi" : w->provider==CIUKI_POWER_PROVIDER_APM ? "apm" : "none",
+            w->ownership<4 ? owners[w->ownership] : "unknown",w->error,(int)w->ac_online,(int)w->lid_open,w->battery_count,w->zone_count);
+        for (unsigned i=0;i<w->battery_count;i++) {
+            const struct ciuki_power_battery *b=&w->batteries[i];
+            add(&t,"Battery %u present=%d unit=%d state=%d full=%d remaining=%d seconds=%d design=%d\n",b->id,(int)b->present,
+                (int)b->unit,(int)b->state,(int)b->full,(int)b->remaining,(int)b->seconds,(int)b->design);
+        }
     }
     add(&t,"\n[Display]\n");
     const struct ciuki_display_info *v=s->display;

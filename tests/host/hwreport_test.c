@@ -84,13 +84,21 @@ int main(int argc,char **argv)
     const char log[]="[ata] count=3 error=-5 path=/private/secret.txt\n[net] hostname=secret-host mac=de:ad:be:ef:12:34 ipv4=203.0.113.78\n"
         "[cpu] bytes=17 status=123.456 host=secret-host status=-123 count=3:4 free=9999999999999999999\n"
         "[kernel] pages=42 user=secret-user file=secret.txt\n";
-    struct hr_source s={.devices=&d,.hardware=&h,.display=&v,.engine=&e,.network=&net,.firmware=firmware,.device_name=names,
+    /* fx-18: the T23 under APM (main battery, empty UltraBay). */
+    struct ciuki_power_status pw; memset(&pw,0xff,sizeof(pw));
+    pw.version=CIUKI_POWER_VERSION; pw.size=sizeof(pw); pw.provider=CIUKI_POWER_PROVIDER_APM; pw.ownership=CIUKI_POWER_OWNED;
+    pw.error=0; pw.ac_online=0; pw.battery_count=2; pw.zone_count=0; pw.reserved=0;
+    pw.batteries[0]=(struct ciuki_power_battery){.id=1,.present=1,.unit=CIUKI_POWER_UNIT_PERCENT,.state=1,.design=CIUKI_POWER_UNKNOWN,
+        .full=100,.remaining=75,.rate=CIUKI_POWER_UNKNOWN,.voltage=CIUKI_POWER_UNKNOWN,.seconds=5400};
+    pw.batteries[1].id=2; pw.batteries[1].present=0;
+    struct hr_source s={.devices=&d,.hardware=&h,.display=&v,.engine=&e,.network=&net,.power=&pw,.firmware=firmware,.device_name=names,
         .boot_log=log,.latest_log=log,.boot_length=sizeof(log)-1,.latest_length=sizeof(log)-1};
     size_t n=0; assert(!hr_format(&s,text,HR_TEXT_MAX,&n) && n==strlen(text) && fw_calls==2);
     const char *required[]={"[CPU]","GenuineIntel","Family 6 model 11 stepping 1","EDX=0x00008001","[Memory map]","ACPI NVS bytes=16384",
         "[SMBIOS]","BIOS date: 10/22/1999","[PCI devices]","Fixture PCI product","[USB devices]","Fixture USB product",
         "end-exclusive=0x1f8","primary=native secondary=native bus-master-capable=1","[ACPI/PnP inventory]","PNP0C0A","CID: PNP0303",
-        "Device 2 parent=1","[Display]","Mode 0111 640x480x16","2D engine driver=1","[Audio, network and storage bindings]",
+        "Device 2 parent=1","[Power]","Provider=apm ownership=os error=0 ac=0 lid=-1 batteries=2",
+        "Battery 1 present=1 unit=2 state=1 full=100 remaining=75 seconds=5400","Battery 2 present=0","[Display]","Mode 0111 640x480x16","2D engine driver=1","[Audio, network and storage bindings]",
         "Network present=1 link=2 state=1","fixture-build","Build file: /System/BUILD.TXT unavailable (not read)","Image SHA-256: not stored in the image","[Boot log","[Latest kernel records",
         "error=-5","count=3","count=9","[Pending kernel records","pages=42","other log records redacted"};
     for (unsigned i=0;i<sizeof(required)/sizeof(*required);i++) { if (!strstr(text,required[i])) fprintf(stderr,"missing: %s\n",required[i]); assert(strstr(text,required[i])); }

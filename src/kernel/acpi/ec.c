@@ -112,9 +112,9 @@ int acpi_ec_quirk_attach(void)
     if (ec_failed) return -5;
     if (fw_owned) return ec_bound && ports[0] == 0x62 && ports[1] == 0x66 ? 0 : -19;
     if (ec_legacy) return 0;
-    /* ACPI tables present: the firmware is ACPI-aware and the APM provider
-     * is excluded (power_platform_start: owner=none reason=acpi_present), so
-     * no APM BIOS call can interleave EC transactions with the quirk. */
+    /* fx-18: on this firmware-owned machine the APM provider may be
+     * connected; each of its BIOS calls holds the engine
+     * (acpi_ec_firmware_hold), so no APM SMI interleaves with the quirk. */
     if (!fw_os || !fw_os->claim || !fw_os->access || !fw_os->write || !fw_table_count ||
         fw_power.ownership != CIUKI_POWER_FIRMWARE) return -19;
     if (port_count == 2 && (ports[0] != 0x62 || ports[1] != 0x66)) return -19;
@@ -129,6 +129,35 @@ int acpi_ec_quirk_attach(void)
     return 0;
 }
 bool acpi_ec_quirk_legacy(void) { return ec_legacy; }
+/* fx-18: an APM BIOS call on a firmware-owned machine raises an SMI whose
+ * handler reads the EC (battery data). Hold the one engine across the call
+ * so the SMI never lands between two bytes of a legacy quirk transaction
+ * (ACPI 6.5 chapter 12: one command at a time on EC_SC/EC_DATA). 0 when no
+ * legacy binding exists (nothing of ours to exclude) or once held; -11
+ * (EAGAIN) if a transaction still runs at the deadline. */
+static bool ec_firmware_held;
+int acpi_ec_firmware_hold(unsigned ms)
+{
+    if (!ec_legacy || !fw_os) return 0;
+    if (ms > 500) ms = 500;
+    uint64_t end = fw_os->clock() + (uint64_t)ms * 10000;
+    for (;;) {
+        uint32_t flags = fw_os->lock();
+        bool held = !ec_busy && !ec_firmware_held;
+        if (held) ec_busy = ec_firmware_held = true;
+        fw_os->unlock(flags);
+        if (held) return 0;
+        if (fw_os->clock() >= end) return -11;
+        fw_os->pause(1);
+    }
+}
+void acpi_ec_firmware_release(void)
+{
+    if (!fw_os) return;
+    uint32_t flags = fw_os->lock();
+    if (ec_firmware_held) ec_busy = ec_firmware_held = false;
+    fw_os->unlock(flags);
+}
 /* Kernel-only quirk broker. No AML or shared worker budget in this call. */
 int acpi_ec_quirk_transfer_counted(bool write, uint8_t address, uint8_t *value, unsigned ms, unsigned *cost)
 {

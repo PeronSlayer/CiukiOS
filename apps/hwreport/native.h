@@ -10,6 +10,7 @@ struct hr_native {
     struct ciuki_accel_info engine;
     struct ciuki_net_state network;
     struct ciuki_media_state media;
+    struct ciuki_power_status power;
     char *pci_names, *usb_names;
     char boot[HR_LOG_MAX], latest[HR_LOG_MAX];
     char build[HR_BUILD_MAX + 1];

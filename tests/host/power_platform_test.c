@@ -36,7 +36,9 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
     case 0x5301: connects++; break;
     case 0x5304: disconnects++; break;
     case 0x530e: r->eax = 0x0102; break;
-    case 0x530a: r->ebx = 0x0100; r->ecx = 40; r->edx = 600; break;
+    case 0x530a:
+        if (r->ebx & 0x8000) { r->flags = 1; r->eax = 0x0900; break; } /* no battery sockets */
+        r->ebx = 0x0100; r->ecx = 40; r->edx = 600; break;
     case 0x530b: if (next_event) { r->ebx = next_event; next_event = 0; } else { r->flags = 1; r->eax = 0x8000; } break;
     case 0x5307:
         CHECK(r->ebx == 1);
@@ -70,6 +72,11 @@ void klog(const char *fmt, ...)
     va_list ap; va_start(ap, fmt); vsnprintf(log_line, sizeof(log_line), fmt, ap); va_end(ap);
     if (strstr(log_line, "[power] platform resume")) memcpy(resume_line, log_line, sizeof(resume_line));
 }
+#include <ciuki/apm_ports.h>
+int biosvm_apm_set_window(const struct apm_port_window *w) { CHECK(w && w->count); return 0; }
+void biosvm_apm_io_snapshot(struct biosvm_apm_io *out) { *out = (struct biosvm_apm_io){0}; }
+#define APM_PLATFORM_HOST_CLOCK
+static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000; }
 #include "../../src/kernel/core/power_source.c"
 #include "../../src/kernel/core/apm_platform.c"
 #include "../../src/kernel/core/power_platform.c"
@@ -81,11 +88,11 @@ static void reset_owner(void) { quiesce_stage = PLATFORM_IDLE; quiesce_result = 
 static void critical_event(void) { next_event = 8; ticks += 1000; service_once(); }
 int main(void)
 {
-    /* Any RSDP: no owner, APM excluded (the ACPI/APM exclusivity). */
-    g_boot.acpi_rsdp_phys = 0xe0000;
-    CHECK(power_platform_start() == -EBUSY && !platform_tasks && !power_source_platform_ready());
-    CHECK(strstr(log_line, "reason=acpi_present"));
-    CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && !connects);
+    /* fx-18: the owner no longer depends on the RSDP (APM is admitted on a
+     * firmware-owned ACPI machine); an OS-owned ACPI still excludes APM. */
+    g_boot.acpi_rsdp_phys = 0xe0000; power_source_acpi_settled(CIUKI_POWER_OWNED);
+    CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && !connects && strstr(log_line, "acpi_owner"));
+    acpi_settled = false; acpi_ownership = CIUKI_POWER_PENDING;
     g_boot.acpi_rsdp_phys = 0;
     g_boot.flags = CBI_F_HW_CHECK; CHECK(power_platform_start() == -EPERM && !platform_tasks); g_boot.flags = 0;
     /* No worker: no owner, never a success-returning substitute. */
@@ -104,7 +111,7 @@ int main(void)
     CHECK(!discover() && connects == 1 && backend.state == APM_CONNECTED);
     CHECK(strstr(log_line, "connected=1"));
     struct power_source_ops acpi = {.soft_off = request_off};
-    CHECK(power_source_reserve(POWER_SOURCE_ACPI, &acpi) == -EBUSY);
+    CHECK(power_source_reserve(POWER_SOURCE_ACPI, &acpi) == -EAGAIN); power_source_handoff_cancel();
     service_once();
     struct ciuki_power_status record; power_source_status(&record);
     CHECK(record.provider == CIUKI_POWER_PROVIDER_APM && record.ownership == CIUKI_POWER_OWNED &&

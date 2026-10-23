@@ -220,6 +220,13 @@ static int apm_fixture(void *ctx, struct ciuki_power_status *p)
     p->batteries[0].id=1; p->batteries[0].present=1; p->batteries[0].unit=CIUKI_POWER_UNIT_PERCENT;
     p->batteries[0].full=100; p->batteries[0].remaining=40; p->batteries[0].seconds=3720; p->batteries[0].state=5; return 0;
 }
+/* fx-18: the T23 under APM: main battery discharging, UltraBay empty. */
+static int apm_t23_fixture(void *ctx, struct ciuki_power_status *p)
+{
+    (void)apm_fixture(ctx,p); p->ac_online=0; p->battery_count=2;
+    p->batteries[0].remaining=75; p->batteries[0].seconds=5400; p->batteries[0].state=1;
+    memset(&p->batteries[1],0xff,sizeof(p->batteries[1])); p->batteries[1].id=2; p->batteries[1].present=0; return 0;
+}
 static void power_page(void)
 {
     attach(CP_HOME); a.host.power_status=power_fixture; cp_open(&a,CP_POWER);
@@ -231,10 +238,13 @@ static void power_page(void)
     assert(strstr(du_get(&u,1801)->text,"CiukiOS (APM 1.2)"));
     assert(strstr(du_get(&u,1802)->text,"Discharging; capacity 40 / 100 %"));
     assert(!strcmp(du_get(&u,1803)->text,"Remaining life: 1 h 02 min; critical"));
+    a.host.power_status=apm_t23_fixture; cp_tick(&a);
+    assert(strstr(du_get(&u,1800)->text,"AC: Disconnected") && strstr(du_get(&u,1802)->text,"Battery 1: Discharging; capacity 75 / 100 %"));
+    assert(!strcmp(du_get(&u,1803)->text,"Remaining life: 1 h 30 min") && !strcmp(du_get(&u,1804)->text,"Battery 2: Not installed"));
     a.host.power_status=NULL; cp_open(&a,CP_POWER);
     assert(!strcmp(du_get(&u,1800)->text,"Power status: Unknown"));
     assert(!du_get(&u,1802)->text[0]); cp_detach(&a);
-    puts("PASS power Control Panel: firmware ownership, AC/lid/battery unknowns, APM percent/life refresh and stale-value clearing");
+    puts("PASS power Control Panel: firmware ownership, AC/lid/battery unknowns, APM percent/life refresh, T23 empty bay, stale-value clearing");
 }
 int main(int argc, char **argv)
 {

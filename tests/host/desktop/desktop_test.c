@@ -1060,9 +1060,26 @@ static void test_power_status(void)
     assert(!desk_redraw(&d)); /* tray: caution battery with the on-battery mark */
     struct desk_box tray=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); unsigned painted=0;
     for (int y=tray.y;y<tray.y+tray.h;y++) for (int x=tray.x;x<tray.x+tray.w;x++) painted+=pixels[y*640+x]!=pixels[tray.y*640+tray.x];
-    assert(painted); d.pixels=NULL; free(pixels);
+    assert(painted);
+    /* fx-18: the T23 under APM (main battery 75 %, UltraBay empty) draws
+     * exactly as the main battery alone: an empty bay is not unknown. */
+    apm.ac_online=0; apm.batteries[0].remaining=75;
+    struct desk_box tb=desk_shell_tray_icon_box(&d,SH_TRAY_POWER);
+    uint32_t one[16*16], two[16*16];
+    assert(!desk_shell_power_update(&d,&apm) && !desk_redraw(&d));
+    for (int y=0;y<16;y++) for (int x=0;x<16;x++) one[y*16+x]=pixels[(tb.y+y)*640+tb.x+x];
+    apm.battery_count=2; memset(&apm.batteries[1],0xff,sizeof(apm.batteries[1])); apm.batteries[1].id=2; apm.batteries[1].present=0;
+    assert(!desk_shell_power_update(&d,&apm) && !desk_redraw(&d));
+    for (int y=0;y<16;y++) for (int x=0;x<16;x++) two[y*16+x]=pixels[(tb.y+y)*640+tb.x+x];
+    assert(!memcmp(one,two,sizeof(one)));
+    apm.batteries[1].present=CIUKI_POWER_UNKNOWN; /* an unknown bay still makes the charge unknown */
+    assert(!desk_shell_power_update(&d,&apm) && !desk_redraw(&d));
+    unsigned differ=0;
+    for (int y=0;y<16;y++) for (int x=0;x<16;x++) differ+=one[y*16+x]!=pixels[(tb.y+y)*640+tb.x+x];
+    assert(differ);
+    d.pixels=NULL; free(pixels);
     p.battery_count=5; assert(desk_shell_power_update(&d,&p)==-1);
-    puts("PASS power desktop: tray geometry, unknown values, coalesced orderly request, gate and shutdown guards, APM percent record");
+    puts("PASS power desktop: tray geometry, unknown values, coalesced orderly request, gate and shutdown guards, APM percent record, T23 empty bay");
 }
 int main(void)
 {

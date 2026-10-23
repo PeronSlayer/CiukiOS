@@ -1141,6 +1141,8 @@ static unsigned power_read(struct cp_app *a)
     for (unsigned i=0;i<p.battery_count;i++) {
         const struct ciuki_power_battery *b=&p.batteries[i]; char x[16],y[16],z[16];
         int percent=b->unit==CIUKI_POWER_UNIT_PERCENT;
+        /* fx-18: an empty battery bay (APM 1.2 CH bit 4) has no other facts. */
+        if (b->present==0) { snprintf(a->power_lines[n++],128,"Battery %u: Not installed",b->id); continue; }
         snprintf(a->power_lines[n++],128,"Battery %u: %s; capacity %s / %s %s",b->id,
             b->present==0 ? "Absent" : b->state==CIUKI_POWER_UNKNOWN ? "Unknown" : b->state&1 ? "Discharging" : b->state&2 ? "Charging" : "Idle",
             power_number(x,b->remaining),power_number(y,b->full),b->unit==0 ? "mWh" : b->unit==1 ? "mAh" : percent ? "%" : "(units unknown)");

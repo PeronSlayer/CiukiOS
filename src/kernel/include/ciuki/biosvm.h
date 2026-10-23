@@ -37,6 +37,14 @@ int biosvm_apm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
 /* Kernel-only, fixed INT15/5300 installation check, 100 ms. Does not
  * connect, accept caller registers, or widen input/DOS firmware access. */
 int biosvm_apm_probe(struct biosvm_regs *out);
+/* fx-18: the chipset power-management window the APM BIOS may use during
+ * APM calls only (ciuki/apm_ports.h), set by the APM worker before its
+ * first call. Each distinct admitted port and the first denials are
+ * logged; the counters below are cumulative. */
+struct apm_port_window;
+int biosvm_apm_set_window(const struct apm_port_window *w);
+struct biosvm_apm_io { uint64_t allowed, writes, absorbed, denied; };
+void biosvm_apm_io_snapshot(struct biosvm_apm_io *out);
 /* Only fbdev's quiesced transaction calls this kernel-only entry. 4F02
  * (LFB), 4F01 into private scratch, 4F03 readback; serialized as one request.
  * No allowlist widening for biosvm_call or DOS guests. */

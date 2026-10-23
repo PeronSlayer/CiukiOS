@@ -3,6 +3,7 @@
 #include "accommon.h"
 #include "acevents.h"
 #include "achware.h"
+#include <ciuki/apm_ports.h>
 
 struct ciuki_power_status fw_power;
 bool fw_runtime, fw_writes, fw_owned, fw_interrupt;
@@ -95,6 +96,33 @@ static ACPI_STATUS mode(bool enable)
         fw_os->pause(1);
     }
     return s ? s : AE_NO_HARDWARE_RESPONSE;
+}
+/* fx-18: the FADT's SystemIO fixed-hardware blocks, captured after the
+ * tables load (before AcpiTerminate), for the APM BIOS port window. */
+static struct apm_pm_blocks pm_blocks;
+static bool pm_blocks_valid;
+static uint16_t gas_io(const ACPI_GENERIC_ADDRESS *gas)
+{
+    uint64_t address; memcpy(&address, &gas->Address, sizeof(address));
+    return gas->SpaceId == ACPI_ADR_SPACE_SYSTEM_IO && !gas->BitOffset && address && address <= 0xffff ? (uint16_t)address : 0;
+}
+void fw_pm_blocks_capture(void)
+{
+    struct apm_pm_blocks b = {
+        .pm1a_evt = gas_io(&AcpiGbl_FADT.XPm1aEventBlock), .pm1b_evt = gas_io(&AcpiGbl_FADT.XPm1bEventBlock),
+        .pm1a_cnt = gas_io(&AcpiGbl_FADT.XPm1aControlBlock), .pm1b_cnt = gas_io(&AcpiGbl_FADT.XPm1bControlBlock),
+        .pm2_cnt = gas_io(&AcpiGbl_FADT.XPm2ControlBlock), .pm_tmr = gas_io(&AcpiGbl_FADT.XPmTimerBlock),
+        .gpe0 = gas_io(&AcpiGbl_FADT.XGpe0Block), .gpe1 = gas_io(&AcpiGbl_FADT.XGpe1Block),
+        .smi_cmd = AcpiGbl_FADT.SmiCommand <= 0xffff ? (uint16_t)AcpiGbl_FADT.SmiCommand : 0,
+        .pm1_evt_len = AcpiGbl_FADT.Pm1EventLength, .pm1_cnt_len = AcpiGbl_FADT.Pm1ControlLength,
+        .pm2_cnt_len = AcpiGbl_FADT.Pm2ControlLength, .pm_tmr_len = AcpiGbl_FADT.PmTimerLength,
+        .gpe0_len = AcpiGbl_FADT.Gpe0BlockLength, .gpe1_len = AcpiGbl_FADT.Gpe1BlockLength};
+    pm_blocks = b; pm_blocks_valid = b.pm1a_cnt != 0;
+}
+int acpi_pm_blocks(struct apm_pm_blocks *out)
+{
+    if (!out || !pm_blocks_valid) return -2; /* ENOENT */
+    *out = pm_blocks; return 0;
 }
 ACPI_STATUS fw_power_collect(ACPI_HANDLE h, uint32_t caps, uint32_t id, bool power_button)
 {

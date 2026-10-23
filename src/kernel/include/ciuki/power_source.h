@@ -10,11 +10,22 @@
 struct ciuki_power_status;
 
 enum power_source_kind { POWER_SOURCE_NONE, POWER_SOURCE_ACPI, POWER_SOURCE_APM };
+#define POWER_SOURCE_BATTERIES 4u
+/* fx-18: one APM 1.2 battery unit (Get Power Status BX=80nnh). */
+struct power_source_battery {
+    uint32_t present;            /* 0 absent (CH bit 4), 1 present, or UNKNOWN */
+    uint32_t percent;
+    uint32_t seconds;
+    uint32_t flags;              /* validated APM battery flag or UNKNOWN */
+};
 struct power_source_status {
     uint32_t ac;                 /* 0 offline, 1 online, 2 backup, or UNKNOWN */
     uint32_t percent;            /* 0..100 or UNKNOWN */
     uint32_t seconds;            /* remaining life or UNKNOWN */
     uint32_t battery_flags;      /* provider-specific validated flags or UNKNOWN */
+    /* fx-18: battery units with per-unit facts (0: aggregate only). */
+    uint32_t units;
+    struct power_source_battery battery[POWER_SOURCE_BATTERIES];
 };
 struct power_source_snapshot {
     enum power_source_kind provider;
@@ -58,8 +69,18 @@ int power_source_resume(uint16_t event, uint16_t info);
 void power_source_mark_stopped(void);
 /* 0 once stopped, EBUSY before. Performs no shutdown work itself. */
 int power_source_orderly_shutdown(uint64_t deadline_ms);
-/* Reservation excludes both active and failed/uncertain providers. */
+/* Reservation excludes both active and failed/uncertain providers.
+ * fx-18: an ACPI reservation while APM is active and healthy asks APM to
+ * yield and returns -EAGAIN; ACPI retries (bounded) until APM released. */
 int power_source_reserve(enum power_source_kind, const struct power_source_ops *);
+bool power_source_handoff_requested(enum power_source_kind);
+void power_source_handoff_cancel(void);
+/* fx-18: the ACPI inventory's ownership decision, reported once
+ * (CIUKI_POWER_FIRMWARE/OWNED/QUARANTINED). APM is admitted without ACPI
+ * tables, or once ACPI settled with clean firmware ownership. */
+void power_source_acpi_settled(uint32_t ownership);
+bool power_source_acpi_decided(void);
+bool power_source_apm_admitted(bool acpi_tables);
 int power_source_activate(enum power_source_kind);
 void power_source_release(enum power_source_kind, bool uncertain, int error);
 void power_source_publish(enum power_source_kind, const struct power_source_status *);

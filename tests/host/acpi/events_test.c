@@ -6,6 +6,7 @@
 #include <string.h>
 #include "runtime.h"
 #include <ciuki/registry.h>
+#include <ciuki/apm_ports.h>
 static uint8_t rom[0x100000], io[65536];
 static struct resource leases[16];
 static unsigned lease_count, enables, disables, writes, maps, allocation_count, callbacks;
@@ -174,7 +175,18 @@ static void legacy_quirk(void)
     unsigned data_reads=ec_reads_of_data; ec_value=0x0c;
     assert(!acpi_ec_quirk_transfer(false,0x30,&value) && value==0x0c && ec_reads_of_data==data_reads+2);
     assert(acpi_ec_quirk_attach()==0 && ec_query_commands==queries);
-    printf("PASS power %s: firmware-owned EC, legacy quirk binding on 62h/66h, RD/WR 30h, no QR_EC, late reply recovered\n",scenario);
+    /* fx-18: an APM BIOS call holds the engine; a quirk transfer waits
+     * within its own deadline and never interleaves; release reopens it. */
+    assert(!acpi_ec_firmware_hold(100));
+    start=now; assert(acpi_ec_quirk_transfer_counted(false,0x30,&value,5,&cost)==-16 && now-start>=5*10000);
+    assert(acpi_ec_firmware_hold(3)==-11); /* one hold at a time */
+    acpi_ec_firmware_release();
+    assert(!acpi_ec_quirk_transfer(false,0x30,&value) && value==0x0c);
+    /* fx-18: the FADT blocks the APM BIOS port window is built from. */
+    struct apm_pm_blocks pm; assert(!acpi_pm_blocks(&pm));
+    assert(pm.pm1a_evt==0x600 && pm.pm1_evt_len==4 && pm.pm1a_cnt==0x604 && pm.pm1_cnt_len==2 &&
+           pm.gpe0==0x620 && pm.gpe0_len==4 && pm.smi_cmd==0xb2 && !pm.pm1b_cnt && !pm.gpe1);
+    printf("PASS power %s: firmware-owned EC, legacy quirk binding on 62h/66h, RD/WR 30h, no QR_EC, late reply recovered, APM hold, FADT blocks\n",scenario);
 }
 int main(int argc, char **argv)
 {

@@ -39,6 +39,10 @@ int acpi_ec_quirk_attach(void);
 bool acpi_ec_quirk_legacy(void);
 int acpi_ec_quirk_transfer(bool, uint8_t, uint8_t *);
 int acpi_ec_quirk_transfer_counted(bool, uint8_t, uint8_t *, unsigned, unsigned *);
+/* fx-18: APM BIOS calls hold the legacy EC engine; FADT blocks for APM. */
+int acpi_ec_firmware_hold(unsigned ms);
+void acpi_ec_firmware_release(void);
+void fw_pm_blocks_capture(void);
 bool acpi_power_can_off(void);
 int acpi_power_off_owned(void);
 int acpi_power_snapshot(struct ciuki_power_status *);

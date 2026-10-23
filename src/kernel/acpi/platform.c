@@ -195,10 +195,16 @@ static void finish(bool safe)
  * worker only through power_source_soft_off, after the call-73 latch. */
 static int acpi_soft_off(void *ctx) { (void)ctx; return acpi_power_off_owned(); }
 static bool acpi_can_off(void *ctx) { (void)ctx; return acpi_power_can_off(); }
+/* fx-18: a healthy APM connection yields to ACPI ownership (EAGAIN until
+ * the APM worker disconnected and released); bounded at 3 s. */
 static int provider_reserve(void)
 {
     const struct power_source_ops ops = {.soft_off = acpi_soft_off, .can_off = acpi_can_off};
-    return power_source_reserve(POWER_SOURCE_ACPI, &ops);
+    uint64_t end = deadline_after_ms(3000);
+    int e;
+    while ((e = power_source_reserve(POWER_SOURCE_ACPI, &ops)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
+    if (e == -EAGAIN) { power_source_handoff_cancel(); e = -EBUSY; }
+    return e;
 }
 static int provider_activate(void) { return power_source_activate(POWER_SOURCE_ACPI); }
 static void provider_retire(bool uncertain) { power_source_release(POWER_SOURCE_ACPI, uncertain, uncertain ? -EIO : 0); }
@@ -220,6 +226,9 @@ static void inventory_thread(void *unused)
     struct ciuki_firmware_page p = {.version = CIUKI_FIRMWARE_VERSION, .size = sizeof(p)};
     (void)firmware_inventory_page(&p);
     klog("[acpi] inventory status=%u devices=%u tables=%u peak=%u flags=%u power_owner=%u", s, p.total, p.table_count, p.peak_bytes, p.flags, fw_power.ownership);
+    /* fx-18: APM's admission waits for this decision (firmware-owned ACPI
+     * leaves battery/AC/soft-off to the APM BIOS, as Windows 98 does). */
+    power_source_acpi_settled(fw_power.ownership);
     /* fx-3: one honest scan record: execution vs wall time, the first
      * failure and where it happened, and the budget expiry if any. */
     struct fw_budget_report b; fw_budget_snapshot(&b);
@@ -257,6 +266,6 @@ void firmware_inventory_start(void)
     attempted = true;
     struct task *t = task_create_kernel("acpi-power", inventory_thread, NULL, P_DEVICE);
     /* Bound so the unavailable record also reaches the power_source cache. */
-    if (!t) { fw_bind(&fw_kernel_ops); fw_inventory_unavailable(AE_NO_MEMORY); audio_ec_attach(); }
+    if (!t) { fw_bind(&fw_kernel_ops); fw_inventory_unavailable(AE_NO_MEMORY); power_source_acpi_settled(fw_power.ownership); audio_ec_attach(); }
     else task_start(t);
 }

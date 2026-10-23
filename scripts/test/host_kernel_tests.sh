@@ -260,12 +260,18 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/apm_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/apm_platform_test.c" \
-    "$root/src/kernel/core/apm.c" -o "$out/apm_platform_test"
+    "$root/src/kernel/core/apm.c" "$root/src/kernel/core/apm_ports.c" -o "$out/apm_platform_test"
 "$out/apm_platform_test"
+# fx-18: T23-shaped APM BIOS on firmware-owned ACPI (port window, EC hold,
+# battery units, events, soft-off, ACPI handoff, OS-owned exclusion).
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/apm_t23_test.c" \
+    "$root/src/kernel/core/apm.c" "$root/src/kernel/core/apm_ports.c" -o "$out/apm_t23_test"
+"$out/apm_t23_test"
 # APM suspend-service owner: call-73 stop path as quiesce_dma, PIC/PIT/RTC resume.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_platform_test.c" \
-    "$root/src/kernel/core/apm.c" -o "$out/power_platform_test"
+    "$root/src/kernel/core/apm.c" "$root/src/kernel/core/apm_ports.c" -o "$out/power_platform_test"
 "$out/power_platform_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/storage_power_test.c" -o "$out/storage_power_test"

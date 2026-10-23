@@ -388,3 +388,177 @@ absent: 60 s without a read, the zone's Notify reads it at once),
 `tzp-ec` (`_TMP` reads the EC, `_TZP`=10 asks 1 s: 3 RD_EC in 30 s, a
 Notify reads at once).
 
+
+## APM when the OS does not own ACPI (fx-18, 2026-10-23)
+
+T23 trial of preview e831e685 (private serial and `LOGS/BOOT.LOG`): no
+provider ever reported AC or battery data.
+
+- `[power] platform owner=none reason=acpi_present`: the suspend-service
+  owner was refused on any RSDP, so APM could never be admitted.
+- `[v86] step=io error=-1 port=1004 width=1 write=0 ... reason=policy`,
+  then `[biosvm] step=execute error=-1 vector=13 cs=f000 ip=4ccf` with the
+  faulting bytes `ec a8 01 5a` (`IN AL,DX; TEST AL,1; POP DX`, DX=1004h):
+  the ThinkPad APM BIOS reads PM1_CNT (PMBASE 1000h + 4, `smi_config
+  pmbase=1000`) and tests SCI_EN during the installation check. The APM
+  broker denied every chipset port, the V86 call faulted, and the fault
+  quarantined the BIOS VM (`state=4`) for the rest of the boot.
+- `[apm] state=1 ... error=-1 connected=0 reason=firmware`: the probe ran
+  before the ACPI inventory (line 166 against `[acpi] inventory` at 321)
+  and would have been excluded by the RSDP anyway.
+- `[acpi] inventory status=16 ... power_owner=0`: firmware ownership
+  (AE_LIMIT here; the passive-cooling refusal above applies as well).
+
+Why the earlier work did not hold: f1-121 and the lead decision above
+("APM suspend-service owner") defined APM as the alternative for *pre-ACPI*
+machines only, i.e. no RSDP at all. Every machine of the 1998-2004 baseline
+has ACPI tables, and the T23 keeps firmware ownership by lead decision, so
+the case "ACPI tables present, not owned by the OS" had no power provider.
+The f1-121 V86 broker was host-tested against a register model that never
+touches I/O ports, so the port policy was never exercised.
+
+### Reference behaviour
+
+- Windows 98 installs ACPI only on qualified BIOSes; otherwise the machine
+  runs under APM, where "the BIOS controls system power management" and
+  "the APM BIOS is also responsible for monitoring the battery status"
+  (Windows 98 Resource Kit, chapter 30, "Understanding Advanced Power
+  Management", owner's media `build/rskt/wrkc30_4.htm`; ACPIOption 0/1/2
+  in the same page). The battery meter, alarms and the Power Management
+  control panel work in both modes (same page, "Using Power Management for
+  Portable Computers").
+- [APM 1.2](https://intel-vintage-developer.eu5.org/IAL/POWERMGM/APMV12.PDF)
+  section 4.3: "An APM 1.2 Operating System Driver must poll the system
+  BIOS at a minimum rate of once per second, with a grace period of one
+  second"; 4.3.6 Battery Low (0005h) is a warning sent "with at least 10
+  minutes of battery power remaining", not a suspend request; 4.3.7 Power
+  Status Change (0006h): "the APM Driver must issue the Get Power Status
+  call"; 4.3.9 Critical System Suspend (0008h) must be answered with Set
+  Power State Suspend (BX=0001h, CX=0002h), the BIOS waits at least 5 s;
+  4.3.13 Capabilities Change (000Ch): call Get Capabilities and Get Power
+  Status. 4.6.11 Get Power Status: BX=0001h is the aggregate of all
+  batteries; BX=80nnh is battery unit nn (1-based); CH bit 4 "selected
+  battery not present", bit 7 "no system battery"; AH=09h for a unit with
+  no socket; DX bit 15 selects minutes. 4.6.17 Get Capabilities (5310h,
+  BX=0000h): BL = number of battery units, CX bit 0/1 global standby or
+  suspend supported.
+- [Linux v6.12 `arch/x86/kernel/apm_32.c`](https://github.com/torvalds/linux/blob/v6.12/arch/x86/kernel/apm_32.c)
+  (reference only): `APM_CHECK_TIMEOUT (HZ)` (one poll per second);
+  `APM_LOW_BATTERY` and `APM_POWER_STATUS_CHANGE` are queued to user space,
+  no suspend; `APM_CRITICAL_SUSPEND` cannot be rejected; APM is not used
+  when the kernel runs ACPI ("overridden by ACPI").
+- Intel 82801CAM ICH3-M datasheet 290716-001 section 9.8.2: B2h APM_CNT
+  (a write raises an SMI when APMC_EN is set; the T23's `smi_config
+  en=0000402b` has APMC_EN) and B3h APM_STS, the APM BIOS's software SMI
+  interface; section 9.8.3: the PMBASE block (128 bytes) with PM1_STS/EN
+  (+0), PM1_CNT (+4, SCI_EN bit 0, SLP_TYP 10-12, SLP_EN bit 13), PM1_TMR
+  (+8), GPE0/GPE1 and the SMI/TCO registers.
+
+### Expected behaviour (binding for the implementation)
+
+1. **Admission.** APM is admitted when no RSDP exists, or when the ACPI
+   inventory has settled with clean firmware ownership
+   (`CIUKI_POWER_FIRMWARE`). OWNED, QUARANTINED or a pending inventory
+   exclude it; an uncertain ACPI rollback keeps ACPI's reservation as
+   before. The ACPI worker reports its decision once
+   (`power_source_acpi_settled`); the APM worker waits for it (bounded,
+   60 s) before its first firmware call, so the installation check never
+   races the inventory. The suspend-service owner (`power_platform_start`)
+   is installed on every machine (not on safe/hardware-check boots): only
+   APM uses it, and installation no longer depends on the RSDP.
+2. **BIOS port window.** During an APM call (and only then) the BIOS VM
+   admits a bounded, logged window built once before the probe:
+   - B2h/B3h (APM_CNT/APM_STS) and the FADT SMI_CMD port: byte read/write;
+   - the FADT PM1a/PM1b event and control blocks, PM2_CNT and the GPE0/GPE1
+     blocks (SystemIO only, exact FADT lengths): read and write, except a
+     PM1_CNT write with SCI_EN set (never: the BIOS must not switch the
+     machine to ACPI mode under the OS) or with SLP_EN set outside Set
+     Power State (5307h);
+   - the FADT PM timer: read only;
+   - on a qualified chipset (ICH3-M, `registry_smi_snapshot` decoded) the
+     rest of the 128-byte PMBASE block: read only (status bits there are
+     write-one-to-clear; no read side effect is documented);
+   - port 80h (POST/delay): absorbed, never forwarded.
+   Everything else stays denied; a denial is logged once per port
+   (`[apm] io denied port=… fn=… reason=…`) and makes APM unavailable as
+   before. Every distinct admitted port is logged once
+   (`[apm] io port=… kind=… fn=…`), so a trial shows exactly what the BIOS
+   touched. i8042 and PIC/PIT/RTC keep their existing virtual rules.
+3. **EC exclusion.** On a firmware-owned ACPI machine the ThinkPad volume
+   quirk uses the legacy EC binding (fx-3), and the APM BIOS's SMM handler
+   reads the EC for battery data. Each APM call therefore holds the one EC
+   engine (`acpi_ec_firmware_hold`, bounded by the call's deadline) so an
+   SMI raised by the call never lands between two bytes of a quirk
+   transaction; a quirk transfer waits for the hold within its own
+   deadline. If the engine stays busy, that poll is skipped (EAGAIN), never
+   failed.
+4. **Data.** After connect and 1.2 negotiation the battery units are found
+   with Get Power Status BX=8001h, 8002h, ... up to four: section 4.6.11
+   requires AH=09h for a unit with no socket, so the first 09h ends the
+   count. Get Capabilities (5310h) is not used: the f1-121 broker admits
+   only 5300h-530Fh and 5380h, and the unit probe needs nothing more
+   (standby and suspend capabilities are moot while both stay rejected).
+   Get PM Event (530Bh) is polled once per second (spec minimum). Get Power
+   Status runs at connect, every 10 s, and at once after events 0003h,
+   0004h, 0005h, 0006h, 000Bh and 000Ch (000Ch also repeats the unit
+   probe): first BX=0001h (AC line and the aggregate), then BX=80nnh for
+   each unit. The call-73
+   record shows one battery per unit (`id`=nn, `present`=0 for CH bit 4),
+   or one aggregate battery when the BIOS reports no units; percent,
+   remaining seconds, charging/critical/discharging as before. If CH is
+   unknown (FFh), the battery status BL (00h high, 01h low, 02h critical,
+   03h charging) supplies the flag. Lid and thermal fields come from the
+   ACPI description record when one exists.
+5. **Events.** 0001h/0002h/0009h/000Ah (standby/suspend requests) are
+   rejected (5307h CX=0005h): no driver restart path exists, so standby and
+   suspend are not qualified (gap, listed in the report). 0005h Battery Low
+   flushes storage within the 2 s budget and is published (the tray shows
+   the caution icon); it never calls Set Power State. 0008h Critical
+   Suspend keeps the f1-121 flush, DMA stop and acknowledgement (a battery
+   low already flushing is upgraded and its budget restarts at the critical
+   event). Resume and update-time notifications restore the time base as
+   before.
+6. **Cost (f1-100).** Each call's wall time, including any SMI it raises,
+   is measured; a 60 s window record `[apm] window calls=… events=…
+   status=… max_us=… total_us=… skipped=…` reports it. Steady state is one
+   530Bh per second plus (1 + units) 530Ah per 10 s: 1.2 calls/s for the
+   aggregate and one unit, 1.3 with a second (UltraBay) unit. If every call raised one
+   SMI of the 2.1 ms measured for EC transactions in f1-100, that is
+   about 2.7 ms per second (0.27 %) and one blackout per second; the window
+   record measures the real figure. The 1 Hz event poll is the APM 1.2
+   minimum and is not lowered.
+7. **Soft-off.** Unchanged: call 73's orderly path, then 5307h CX=0003h
+   from the APM worker.
+8. **ACPI replaces APM cleanly.** A later ACPI reservation while APM is
+   active returns EAGAIN and asks APM to yield: the APM worker disconnects
+   (5304h) and releases the reservation, then ACPI reserves (ACPI's reserve
+   waits up to 3 s). A disconnect that fails leaves APM's reservation
+   uncertain and ACPI stays refused, the mirror of the ACPI rule.
+
+### Superseded statements and open points (fx-18)
+
+- "APM is additionally excluded by any RSDP" (section "One power-source
+  interface"), "installs ... only when the loader found no RSDP" (section
+  "APM suspend-service owner") and `peripheral-driver-coverage.md`
+  ("Any ACPI RSDP excludes APM") are replaced by item 1 above. Partial or
+  uncertain ACPI ownership still never falls back to APM.
+- Lead decision 3 of `peripheral-driver-coverage.md` groups "a critical
+  suspend or low-battery event" for the flush/quiesce/acknowledge policy.
+  fx-18 keeps the full policy for Critical Suspend only; Battery Low gets
+  the bounded flush and a notification, because APM 1.2 4.3.6 defines it
+  as a warning and acknowledging it with Set Power State Suspend would
+  suspend a running machine with about ten minutes of charge left, while
+  the stop path is terminal for the boot. The lead confirms or reverses
+  this at merge.
+- Evidence: `tests/host/apm_t23_test.c` (production provider, arbiter and
+  window against the T23-shaped BIOS: the trial fault reproduced without
+  the window, connection with it, two battery units with an empty bay,
+  status change, battery low, rejection, the 60 s cost record, soft-off,
+  ACPI handoff, OS-owned exclusion), `tests/host/apm_test.c` (unit probe,
+  BL fallback, EC-busy skip, rejection retry, handoff), `tests/host/v86_test.c`
+  `test_apm_t23_window` (the trial's `IN AL,DX` at 1004h through the real
+  BIOS VM monitor), `tests/host/acpi/events_test.c` `t23-legacy` (EC hold,
+  FADT blocks).
+
+  Lead confirmation 2026-10-23 (fx-18 merge): Battery Low flushes storage and
+  notifies without suspending; only Critical Suspend keeps the f1-121 policy.
