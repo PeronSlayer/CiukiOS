@@ -29,6 +29,8 @@ int du_list_key(struct du_ui *, struct du_widget *, unsigned code);
 int du_list_press(struct du_ui *, struct du_widget *, int button, int x, int y);
 void du_list_motion(struct du_ui *, struct du_widget *, int x, int y);
 void du_list_release(struct du_ui *, struct du_widget *);
+#define DU_TIMER_BAND (-0x4642)   /* fx-19: toolkit-owned marquee auto-scroll timer */
+void du_list_band_tick(struct du_ui *, struct du_widget *);
 void du_list_scrolled(struct du_ui *, struct du_widget *, int old_v, int old_h);
 int du_list_wheel(struct du_widget *, int detents);
 

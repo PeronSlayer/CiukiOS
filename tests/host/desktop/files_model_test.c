@@ -269,6 +269,20 @@ int main(void)
     fixture(); struct fm_vfs plain = fake_vfs; plain.metadata = NULL;
     assert(!fm_job_start(&j, &plain, FM_COPY, file, 1, "/Documents")); finish(&j);
     assert(j.state == FM_DONE && j.metadata_warnings == 1); fm_job_destroy(&j); fake_assert_clean();
+    /* fx-19 shared drop-effect rule (Raymond Chen, "Will dragging a file result in a move or a copy?"). */
+    assert(fm_volume("/")=='C' && fm_volume("/Documents/x")=='C' && fm_volume("/mnt/e")=='E' && fm_volume("/mnt/E/a")=='E' &&
+           fm_volume("/mnt/ex")=='C' && !fm_volume("") && !fm_volume("C:"));
+    const unsigned cm=FM_EFFECT_COPY|FM_EFFECT_MOVE;
+    assert(fm_drop_effect('C','C',0,cm)==FM_EFFECT_MOVE && fm_drop_effect('E','C',0,cm)==FM_EFFECT_COPY);
+    assert(fm_drop_effect('E','C',FM_KEY_SHIFT,cm)==FM_EFFECT_MOVE && fm_drop_effect('C','C',FM_KEY_CTRL,cm)==FM_EFFECT_COPY);
+    assert(fm_drop_effect('C','C',FM_KEY_CTRL|FM_KEY_SHIFT,cm)==FM_EFFECT_NONE && fm_drop_effect('C','C',FM_KEY_ALT,FM_EFFECTS)==FM_EFFECT_LINK);
+    assert(fm_drop_effect('C','C',FM_KEY_CTRL|FM_KEY_SHIFT,FM_EFFECTS)==FM_EFFECT_LINK);
+    assert(fm_drop_effect('C','C',0,FM_EFFECT_COPY)==FM_EFFECT_COPY && fm_drop_effect('E','C',0,FM_EFFECT_MOVE)==FM_EFFECT_MOVE);
+    assert(fm_drop_effect('C','C',FM_KEY_SHIFT,FM_EFFECT_COPY)==FM_EFFECT_NONE && fm_drop_effect('C',0,0,cm)==FM_EFFECT_NONE && fm_drop_effect('C','C',0,0)==FM_EFFECT_NONE);
+    char *drop_items[]={"/Documents/a.txt","/Documents/Sub"};
+    assert(!fm_drop_check(drop_items,2,"/Documents/Other",FM_EFFECT_MOVE) && fm_drop_check(drop_items,2,"/Documents/Sub/In",FM_EFFECT_COPY)==-EINVAL);
+    assert(fm_drop_check(drop_items,2,"/Documents",FM_EFFECT_MOVE)==-EEXIST && !fm_drop_check(drop_items,2,"/Documents",FM_EFFECT_COPY));
+    puts("PASS fx-19 drop effect rule: volumes, same/other drive default, Shift/Ctrl/Ctrl+Shift/Alt, allowed-set fallback, folder into itself, same-folder move");
     puts("PASS Files model: names/types, canonical case, history, selection, sorting, find, create/rename, copy/move/delete/properties, prompts, Copy of, EXDEV, Cancel, injected errors");
     return 0;
 }

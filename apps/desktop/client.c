@@ -55,6 +55,13 @@ void desk_drop_client(struct desktop *d, int i)
     int was_focused=d->focus==i;
     if (d->focus == i) desk_focus(d, -1);
     if (d->drag == i) { d->drag = -1; d->resize_edges=0; d->keyboard_geometry=0; }
+    /* fx-19: a drag whose source window closes ends; a target that closes is left. */
+    if (d->shell && d->sh.dnd.active) {
+        if (d->sh.dnd.source==i) desk_shell_drag_cancel(d);
+        else if (d->sh.dnd.target==i && (d->sh.dnd.kind==SH_DROP_FILES || d->sh.dnd.kind==SH_DROP_APP)) {
+            d->sh.dnd.kind=SH_DROP_NONE; d->sh.dnd.target=-1; d->sh.dnd.status_target=-1; d->sh.dnd.effect=0; d->sh.dnd.allowed=0;
+        }
+    }
     if (c->window) desk_sound(d,SOUND_WINDOW_CLOSE);
     if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
     /* f2-95: a closing program (an installer) may have added shortcuts. */
@@ -753,6 +760,18 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             d->mouse_x=x; d->mouse_y=y;
         }
         break;
+    case DESK_DRAG_BEGIN:
+        /* fx-19: only a desktop-launched Files window that holds the button
+         * it reports (it received the press) can start a shell drag. */
+        if (d->shell && !d->sh.gate && !d->power.state && c->window && c->program==DESK_APP_FILES && d->focus==i &&
+            (d->routed_buttons & (p.flags==2 ? 2u : 1u)))
+            (void)desk_shell_drag_begin(d,i,p.flags,p.count);
+        break;
+    case DESK_DRAG_STATUS:
+        if (d->shell && c->program==DESK_APP_FILES) desk_shell_drag_status(d,i,p.serial,p.flags,p.values[0]);
+        break;
+    case DESK_ACCEPT_FILES:
+        c->accept_files=(int)p.flags; break;
     case DESK_SET_CURSOR:
         c->cursor=p.flags; desk_cursor_update(d); break;
     case DESK_SET_TITLE:

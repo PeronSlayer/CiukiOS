@@ -115,6 +115,7 @@ struct desk_client {
     uint64_t launch_input_ns;     /* original click, retained through first-frame presentation */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
+    int accept_files;             /* fx-19: DragAcceptFiles (DESK_ACCEPT_FILES) */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;

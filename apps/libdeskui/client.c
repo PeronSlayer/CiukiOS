@@ -196,6 +196,15 @@ void du_window_close_reply(struct du_window *w, int later)
 { w->close_reply_pending=later ? 2 : 1; }
 void du_window_close(struct du_window *w) { if (!w->closing) w->closing = 1; du_release(w->ui); }
 
+int du_window_accept_files(struct du_window *w, int on)
+{
+    struct ciuki_message m;
+    desk_message(&m, DESK_ACCEPT_FILES, 8); desk_put32(m.data + 4, on ? 1u : 0u);
+    if (queue(w, &m)) return -1;
+    w->accept_files = on != 0;
+    return 0;
+}
+
 int du_window_set_title(struct du_window *w, const char *title)
 {
     size_t n = title ? strlen(title) : 0;
@@ -247,6 +256,10 @@ int du_window_turn(struct du_window *w, uint64_t now)
             else du_window_close_reply(w,1);
             break;
         case DESK_FOCUS: du_window_focus(w->ui, p.focused != 0); break;
+        case DESK_DROP_FILES:
+            if (w->accept_files) du_emit(w->ui, (struct du_event){.type = DU_EV_DROPFILES, .x = p.x, .y = p.y, .index = (int)p.serial});
+            if (w->message) w->message(w, &p, w->user);
+            break;
         case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
             /* Repair remembered input on the desktop's backlog RESYNC too. */
             du_input(w->ui, &p.event); break;

@@ -58,6 +58,14 @@ struct files_app {
     void (*checkpoint)(struct files_app *, int stage);
     int (*portrait)(uint32_t *pixels256);
     void (*drop)(struct files_app *, int x, int y, int copy);
+    /* fx-19 drag and drop: source (drag_begin queues DRAG_BEGIN after the
+     * data object is saved) and target (drag_status answers DRAG_OVER). */
+    int (*drag_begin)(struct files_app *, int button, unsigned count);
+    void (*drag_status)(struct files_app *, uint32_t serial, unsigned effect, unsigned allowed);
+    uint32_t drag_serial; char **drag_paths; char *drag_types; unsigned drag_count;
+    int drag_widget, drag_index, drag_hover_node; uint64_t drag_hover_ns, drag_refresh_until;
+    unsigned drag_effect, drag_allowed;
+    uint8_t *band_original, *band_hits; unsigned band_capacity, band_modifiers;
     struct ciuki_media_state media;
     struct files_drive_label drive_labels[26];
     int (*media_label)(unsigned drive, char out[33]);
@@ -70,6 +78,11 @@ struct files_app {
 };
 
 void files_drop(struct files_app *, int x, int y, int copy);
+/* fx-19 drop target and source, driven by the desktop's drag session.
+ * keys are FM_KEY_* bits; phase 0 enter/over/repeat, 1 leave. */
+void files_drag_over(struct files_app *, uint32_t serial, int phase, int x, int y, unsigned keys);
+void files_drag_drop(struct files_app *, uint32_t serial, int x, int y, unsigned effect);
+void files_drag_end(struct files_app *, unsigned effect);
 int files_setup(struct files_app *, struct du_ui *, const struct fm_vfs *, const char *path);
 void files_destroy(struct files_app *);
 void files_event(struct du_ui *, const struct du_event *, void *);

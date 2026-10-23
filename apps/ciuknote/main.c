@@ -111,6 +111,7 @@ int main(int argc, char **argv)
     if (test) a->checkpoint = on_checkpoint;
     if (cn_attach(a, &m->ui)) { fprintf(stderr, "CiukNote: out of memory\n"); du_window_destroy(&m->window); free(m); return 1; }
     m->path=path;
+    du_window_accept_files(&m->window, 1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window, 24, 48); /* fixed placement for the scripted QEMU case */
     int r = du_run(&m->window, idle, m);
     du_job_finish(&m->opening); free(m->raw);

@@ -142,6 +142,15 @@ void music_event(struct du_ui *u, const struct du_event *e, void *ctx)
         if (e->id==M_D_OPEN) send(a,MUSIC_OPEN,e->text,0);
         else if (e->id==M_D_ADD || e->id==M_D_FOLDER) send(a,MUSIC_ADD,e->text,0);
         else if (e->id==M_D_SAVE) send(a,MUSIC_SAVE,e->text,0);
+    } else if (e->type==DU_EV_DROPFILES) {
+        /* fx-19 WM_DROPFILES: a dropped song or playlist plays now, as Windows
+         * Media Player; further items and folders join the playlist. */
+        if (u->dialog.kind) return;
+        char path[MUSIC_PATH]; int folder=0, n=du_drop_entry(0,path,sizeof(path),&folder);
+        if (n<=0 || !path[0]) return;
+        if (!folder) send(a,MUSIC_OPEN,path,0);
+        else { send(a,MUSIC_CLEAR,NULL,0); send(a,MUSIC_ADD,path,0); }
+        for (int i=1;i<n && i<64 && !a->local_error;i++) if (du_drop_file((unsigned)i,path,sizeof(path))>0 && path[0]) send(a,MUSIC_ADD,path,0);
     } else if (e->type==DU_EV_OPEN && e->id==M_LIST && e->index>=0) send(a,MUSIC_SELECT,NULL,(unsigned)e->index);
     else if (e->type==DU_EV_CHANGE) {
         if (e->id==M_SEEK) {

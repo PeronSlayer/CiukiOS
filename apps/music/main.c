@@ -157,6 +157,7 @@ int main(int argc, char **argv)
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
     m->window.present_rendered=1; /* f4-37: everything is drawn in du_render */
     music_attach(&m->app,&m->ui,&m->backend);
+    du_window_accept_files(&m->window,1);   /* fx-19: DragAcceptFiles */
     m->ui.paint=painted;
     if (path) {
         struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path);

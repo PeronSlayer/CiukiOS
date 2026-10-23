@@ -239,6 +239,7 @@ static void proceed(struct cn_app *a)
     if (after == CN_AFTER_NEW) new_document(a);
     else if (after == CN_AFTER_OPEN) file_dialog(a, 0, "");
     else if (after == CN_AFTER_EXIT) a->quit(a->host);
+    else if (after == CN_AFTER_DROP) cn_open_argument(a, a->dropped);
 }
 static void ask_save_changes(struct cn_app *a, enum cn_after after)
 {
@@ -559,6 +560,12 @@ void cn_event(struct du_ui *u, const struct du_event *e, void *ctx)
         if (e->key == DU_KEY_ESC && a->find_mode && id >= W_FLABEL && id <= W_RALL) hide_find(a);
         return;
     case DU_EV_DIALOG: dialog_result(a, id, e->index, e->text); break;
+    case DU_EV_DROPFILES:
+        /* fx-19 WM_DROPFILES, as Windows Notepad: the first dropped file is
+         * opened, after the usual question about unsaved changes. */
+        if (u->dialog.kind || du_drop_file(0, a->dropped, sizeof(a->dropped)) <= 0 || !a->dropped[0]) return;
+        guard(a, CN_AFTER_DROP);
+        break;
     case DU_EV_ACTIVATE:
         if (id >= W_TEXT) widget_command(a, id); else menu_command(a, id);
         break;

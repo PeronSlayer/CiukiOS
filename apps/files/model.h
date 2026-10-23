@@ -56,7 +56,7 @@ struct fm_job {
     struct fm_vfs fs; enum fm_job_kind kind; enum fm_job_state state;
     char **sources; unsigned count, next, depth, completed, skipped, metadata_warnings;
     char destination[FM_PATH], temporary[FM_PATH]; unsigned serial;
-    int trash; char trash_name[FM_NAME];
+    int trash; char trash_name[FM_NAME]; /* trash 2: a free name per item (fx-19) */
     struct fm_frame frames[FM_DEPTH];
     int input, output, error, cleanup_error, yes_all, cancel, skip_seen, prompt_dir;
     unsigned used, written, chunk; unsigned char buffer[FM_CHUNK];
@@ -111,4 +111,29 @@ void fm_job_answer(struct fm_job *, enum fm_replace);
 void fm_job_cancel(struct fm_job *);
 void fm_job_destroy(struct fm_job *);
 const struct fm_vfs *fm_native_vfs(void);
+/* fx-19 drag and drop: the one shared effect rule (Windows 95/98 Explorer,
+ * DROPEFFECT values). Drag sources and drop targets, in Files and in the
+ * desktop shell, call only fm_drop_effect; fx-17's transfer engine performs
+ * the chosen copy or move. Keys are FM_KEY_* bits sampled at each DragOver. */
+enum { FM_EFFECT_NONE = 0, FM_EFFECT_COPY = 1, FM_EFFECT_MOVE = 2, FM_EFFECT_LINK = 4, FM_EFFECTS = 7 };
+enum { FM_KEY_SHIFT = 1, FM_KEY_CTRL = 2, FM_KEY_ALT = 4 };
+/* Drive identity of an absolute path: 'C' for /, 'D'..'Z' for /mnt/d.. ;
+ * 0 for the virtual Computer location or a relative path. */
+int fm_volume(const char *path);
+/* Effect for a drag of items from source_volume onto a target folder on
+ * target_volume. allowed: effects both the source and the target permit.
+ * Ctrl+Shift or Alt link, Shift moves, Ctrl copies; without modifiers the
+ * same drive moves and another drive copies. An explicit request the
+ * target cannot perform is NONE; a default falls back to copy, then move. */
+unsigned fm_drop_effect(int source_volume, int target_volume, unsigned keys, unsigned allowed);
+/* Whether dropping these sources into the destination folder can do
+ * anything with this effect: -EINVAL for a folder into itself or a
+ * descendant, -EEXIST for a move into the folder that already holds every
+ * item (a no-op), 0 otherwise. */
+int fm_drop_check(char *const *sources, unsigned count, const char *destination, unsigned effect);
+/* Drag data object (CF_HDROP role): the source's item list in its own
+ * file, never the shared clipboard. types[i] is 'D' folder or 'F' other. */
+int fm_drag_save(const struct fm_vfs *, char *const *paths, const char *types, unsigned count);
+int fm_drag_load(const struct fm_vfs *, char ***paths, char **types, unsigned *count);
+void fm_drag_free(char **paths, char *types, unsigned count);
 #endif

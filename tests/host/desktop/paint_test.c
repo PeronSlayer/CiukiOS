@@ -383,6 +383,18 @@ static void files(const char *scratch)
     for(unsigned i=0;i<2000 && !stale;i++) { stale=paint_open_poll();if(!stale)nanosleep(&(struct timespec){.tv_nsec=1000000},NULL); }
     assert(stale==-EBUSY && state().dirty); assert(!paint_open(path));
     assert(paint_open(bad)==-EINVAL && state().width==s.width); /* old image retained */
+    /* fx-19 WM_DROPFILES: the first dropped picture opens after the unsaved-changes question. */
+    {
+        char drop[1100]; snprintf(drop,sizeof(drop),"%s/paint-drop.data",scratch);
+        FILE *f=fopen(drop,"wb"); assert(f && fprintf(f,"X\nF%s\nF%s\n",path,bad)>0 && !fclose(f));
+        assert(!du_drop_source(drop));
+        foreground(2); stroke(T_PENCIL,1,1,4,1,1); assert(state().dirty);
+        struct du_event dropped={.type=DU_EV_DROPFILES,.x=50,.y=50}; ui.event(&ui,&dropped,ui.user);
+        assert(ui.dialog.kind && state().dirty); dialog_button(1);
+        assert(!ui.dialog.kind && !state().dirty && !strcmp(paint_path(),path));
+        remove(drop); assert(!du_drop_source("/system/settings/files.drag"));
+        puts("PASS fx-19 Paint drop: unsaved-changes question, first dropped picture opened");
+    }
     snprintf(path,sizeof(path),"%s/no-directory/fail.png",scratch);
     foreground(2); stroke(T_PENCIL,1,1,4,1,1); assert(state().dirty);
     assert(paint_save(path,PAINT_PNG)==-ENOENT && state().dirty);

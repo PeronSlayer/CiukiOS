@@ -81,6 +81,42 @@ const char *du_clipboard_get(void)
     return clipboard ? clipboard : "";
 }
 
+/* The shell's drag data object (apps/files/transfer.c fm_drag_save): "X",
+ * then one "<D|F>/path" line per item. */
+static char drop_source[DU_TEXT_MAX] = DESK_DRAG_FILE;
+int du_drop_source(const char *path)
+{
+    if (!path || !*path || strlen(path) >= sizeof(drop_source)) return -1;
+    strcpy(drop_source, path); return 0;
+}
+int du_drop_file(unsigned index, char *out, size_t size) { return du_drop_entry(index, out, size, NULL); }
+int du_drop_entry(unsigned index, char *out, size_t size, int *folder)
+{
+    if (out && size) out[0] = 0;
+    if (folder) *folder = 0;
+    int fd = open(drop_source, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    char block[256], line[DU_TEXT_MAX + 2]; size_t used = 0; unsigned lines = 0; int result = 0;
+    for (;;) {
+        ssize_t got = read(fd, block, sizeof(block));
+        if (got < 0) { if (errno == EINTR) continue; result = -errno; break; }
+        if (!got) { if (used) result = -EINVAL; break; }
+        for (ssize_t k = 0; k < got && !result; k++) {
+            char c = block[k];
+            if (c != '\n') { if (!c || used + 1 >= sizeof(line)) result = -EINVAL; else line[used++] = c; continue; }
+            line[used] = 0;
+            if (!lines) { if (strcmp(line, "X")) result = -EINVAL; }
+            else if ((line[0] != 'D' && line[0] != 'F') || line[1] != '/') result = -EINVAL;
+            else if (lines - 1 == index) { if (out && size) snprintf(out, size, "%s", line + 1); if (folder) *folder = line[0] == 'D'; }
+            lines++; used = 0;
+        }
+        if (result) break;
+    }
+    close(fd);
+    if (result) { if (out && size) out[0] = 0; return result; }
+    return lines ? (int)(lines - 1) : -EINVAL;
+}
+
 void du_emit(struct du_ui *u, struct du_event e)
 {
     if (!e.x && !e.y) { e.x = u->mouse_x; e.y = u->mouse_y; }
@@ -236,8 +272,10 @@ void du_release(struct du_ui *u)
     if (u->capture >= 0 && (unsigned)u->capture < u->count) {
         struct du_widget *w = &u->widgets[u->capture];
         if (w->kind == DU_CANVAS) du_post(u, DU_EV_POINTER, w->id, DU_POINTER_CANCEL);
-        w->pressed = 0; w->drag = 0;
+        if (w->band) { w->band = 0; du_emit(u, (struct du_event){.type = DU_EV_MARQUEE, .id = w->id, .index = 2}); }
+        w->pressed = 0; w->drag = 0; w->file_drag_pending = 0;
     }
+    du_timer_stop(u, DU_TIMER_BAND);
     for (unsigned i = 0; i < u->count; i++) {
         struct du_widget *w = &u->widgets[i];
         w->selection.ns = 0;
@@ -306,6 +344,12 @@ void du_tick(struct du_ui *u, uint64_t now)
         int id = t->id;
         if (t->repeat) t->deadline = UINT64_MAX - u->now < t->interval ? UINT64_MAX : u->now + t->interval;
         else t->active = 0;
+        if (id == DU_TIMER_BAND) {
+            if (u->capture >= 0 && (unsigned)u->capture < u->count && u->widgets[u->capture].kind == DU_LISTVIEW)
+                du_list_band_tick(u, &u->widgets[u->capture]);
+            else t->active = 0;
+            continue;
+        }
         du_emit(u, (struct du_event){.type = DU_EV_TICK, .id = id});
     }
 }
@@ -1164,6 +1208,10 @@ void du_widget_release(struct du_ui *u, struct du_widget *w, int button, int x, 
         du_emit(u, (struct du_event){.type = DU_EV_POINTER, .id = w->id, .index = DU_POINTER_UP, .key = (unsigned)button, .x = x, .y = y});
         return;
     }
+    if (button == 2 && (w->kind == DU_LISTVIEW || w->kind == DU_TREE)) {
+        if (w->drag == 52 || w->drag == 53) du_list_release(u, w);
+        return;
+    }
     if (button != 1) return;
     int fire = (w->kind == DU_BUTTON || w->kind == DU_TOOLBUTTON) && w->pressed && w->drag == 1 && du_contains(w->box, x, y) && !w->disabled;
     int flip = (w->kind == DU_CHECKBOX || w->kind == DU_RADIO) && w->pressed && du_contains(w->box, x, y) && !w->disabled;
@@ -1316,14 +1364,17 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         }
         struct du_widget *w = &u->widgets[hit];
         if (du_focusable(w)) { if (u->focus != hit) { if (u->focus>=0) du_invalidate(u,u->widgets[u->focus].box); du_invalidate(u,w->box); } u->focus = hit; }
-        if (button == 1 || (w->kind == DU_CANVAS && !w->drag)) u->capture = hit;
+        if (button == 1 || (w->kind == DU_CANVAS && !w->drag) ||
+            (button == 2 && (w->kind == DU_LISTVIEW || w->kind == DU_TREE) && w->file_drag)) u->capture = hit;
         du_widget_press(u, w, button, u->mouse_x, u->mouse_y);
     } else {
         if (du_menu_release(u, button)) return;
         if (u->capture >= 0 && (unsigned)u->capture < u->count) {
             int captured = u->capture;
-            if ((u->widgets[captured].kind == DU_CANVAS && u->widgets[captured].drag == button) ||
-                (u->widgets[captured].kind != DU_CANVAS && button == 1)) u->capture = -1;
+            const struct du_widget *cw = &u->widgets[captured];
+            int list_right = button == 2 && (cw->kind == DU_LISTVIEW || cw->kind == DU_TREE) && cw->file_drag;
+            if ((cw->kind == DU_CANVAS && cw->drag == button) || (cw->kind != DU_CANVAS && button == 1) || list_right) u->capture = -1;
+            else if (button != 1 && cw->kind != DU_CANVAS) return;
             du_widget_release(u, &u->widgets[captured], button, u->mouse_x, u->mouse_y);
         }
     }

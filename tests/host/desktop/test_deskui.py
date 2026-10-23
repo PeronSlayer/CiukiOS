@@ -47,6 +47,10 @@ TOOLKIT_FRAMES = {
     'deskui-view2.xrgb': 'dc03906560ba1b1543e63a6d5959f7541d75651eecde32496f6c21eb0d2fc8d0',
 }
 FILES_FRAMES = {
+    'files-drop-target.xrgb': 'fa3e0f26a2db9c30dd775cd57bdf5925669e1d72872289e5c9e0dff9a778a977',
+    'files-band-details.xrgb': '4080b44e53eef99b7c25e4662588fe20350324862aa8a6900b9a72860ce94ece',
+    'files-band-list.xrgb': '3e462501fda2ce487945b057fa78a88e85ac92ad40650dde027e23fba3c6368e',
+    'files-band-icons.xrgb': 'aa131944918d592a600592c10d13d5fa0c05aaf9e4972c3d8dbc99400d621276',
     'files-about.xrgb': '1a93a771a447517d1872b950e12418dac641d4f1f0c7c21841a1e5115bdc68f6',
     'files-programs-icons.xrgb': 'ba85b84b556aeaeba0165ed54fcbc5762f2dc8af5a911922e6652400fbbbad1c',
     'files-confirm-delete.xrgb': '234df65cb79ae751a7549bfc9cc3ab99204b51290c506f84296448b01ff505da',
@@ -215,7 +219,7 @@ class DeskuiTests(unittest.TestCase):
     def test_files_ui_script_and_frames(self):
         stdout, digests = self.files_ui()
         self.assertIn("PASS Files UI", stdout)
-        self.assertEqual(len(digests), 25)
+        self.assertEqual(len(digests), 29)
         self.check_frames(digests, FILES_FRAMES, "FILES")
 
     def test_files_qemu_script_targets(self):

@@ -15,7 +15,7 @@ enum { W_TEXT = 100, W_STATUS, W_FLABEL, W_FIND, W_FNEXT, W_FDIR, W_FCASE, W_FCL
        W_RLABEL, W_REPL, W_RONE, W_RALL };
 enum { D_CHANGES = 200, D_REPLACE, D_INFO, D_GOTO, D_FONT, D_CREATE, D_OPEN, D_SAVE };
 
-enum cn_after { CN_AFTER_NONE, CN_AFTER_NEW, CN_AFTER_OPEN, CN_AFTER_EXIT };
+enum cn_after { CN_AFTER_NONE, CN_AFTER_NEW, CN_AFTER_OPEN, CN_AFTER_EXIT, CN_AFTER_DROP };
 /* Test-mode checkpoints (the frame after the event is presented, then reported). */
 enum { CN_CP_READY = 1, CN_CP_SAVED, CN_CP_OPENED, CN_CHECKPOINTS = 3 };
 
@@ -39,6 +39,7 @@ struct cn_app {
     enum cn_after after;
     char dir[CN_PATH];         /* last folder of the file dialogs */
     char pending[CN_PATH];     /* a Save As target waiting for the replace answer */
+    char dropped[CN_PATH];     /* fx-19: a file dropped on the window, opened after the save question */
     uint32_t ciuki32[1024]; int ciuki;
     /* menus */
     struct du_menu menus[5];

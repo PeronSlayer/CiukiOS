@@ -25,6 +25,43 @@ int fm_drive_root(const char *path)
            fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' && !path[6]);
 }
 
+int fm_volume(const char *path)
+{
+    if (!path || path[0] != '/') return 0;
+    if (!strncmp(path, "/mnt/", 5) && fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' &&
+        (!path[6] || path[6] == '/')) return (int)(fold((unsigned char)path[5]) - 'a' + 'A');
+    return 'C';
+}
+
+unsigned fm_drop_effect(int source_volume, int target_volume, unsigned keys, unsigned allowed)
+{
+    allowed &= FM_EFFECTS;
+    if (!target_volume) return FM_EFFECT_NONE;
+    unsigned wanted;
+    if ((keys & (FM_KEY_CTRL | FM_KEY_SHIFT)) == (FM_KEY_CTRL | FM_KEY_SHIFT) || (keys & FM_KEY_ALT)) wanted = FM_EFFECT_LINK;
+    else if (keys & FM_KEY_SHIFT) wanted = FM_EFFECT_MOVE;
+    else if (keys & FM_KEY_CTRL) wanted = FM_EFFECT_COPY;
+    else {
+        wanted = source_volume && source_volume == target_volume ? FM_EFFECT_MOVE : FM_EFFECT_COPY;
+        if (!(allowed & wanted)) wanted = allowed & FM_EFFECT_COPY ? FM_EFFECT_COPY : allowed & FM_EFFECT_MOVE ? FM_EFFECT_MOVE : allowed & FM_EFFECT_LINK;
+        return wanted;
+    }
+    return allowed & wanted ? wanted : FM_EFFECT_NONE;
+}
+
+int fm_drop_check(char *const *sources, unsigned count, const char *destination, unsigned effect)
+{
+    if (!count || !destination || destination[0] != '/') return -EINVAL;
+    unsigned already = 0;
+    for (unsigned i = 0; i < count; i++) {
+        if (sources[i][0] != '/' || !strcmp(sources[i], "/")) return -EINVAL;
+        if ((effect & (FM_EFFECT_COPY | FM_EFFECT_MOVE)) && fm_beneath(destination, sources[i])) return -EINVAL;
+        char parent[FM_PATH];
+        if (!fm_parent(parent, sources[i]) && fm_same_path(parent, destination)) already++;
+    }
+    return effect == FM_EFFECT_MOVE && already == count ? -EEXIST : 0;
+}
+
 int fm_hidden(const char *parent, const char *name)
 {
     static const char *const hidden[] = {"dev", "mnt", "tmp"};
@@ -658,6 +695,24 @@ static int copy_name(struct fm_job *j, const char *source, char *target)
     return -EEXIST;
 }
 
+/* fx-19: a multi-item move to the Trash picks a free name per item, as
+ * fm_unique does for the single-item desktop Delete ("name (2)"). */
+static int trash_target(struct fm_job *j, const char *source, char *target)
+{
+    const char *base = fm_basename(source);
+    for (unsigned n = 1; n < 1000; n++) {
+        char name[FM_NAME]; struct fm_meta meta;
+        if (n == 1) snprintf(name, sizeof(name), "%s", base);
+        else snprintf(name, sizeof(name), "%s (%u)", base, n);
+        int r = fm_join(target, j->destination, name);
+        if (r) return r;
+        r = j->fs.stat_path(j->fs.ctx, target, &meta);
+        if (r == -ENOENT) return 0;
+        if (r) return r;
+    }
+    return -EEXIST;
+}
+
 /* Count using directory metadata, never opening/sniffing file contents.
  * The same bounded stack is reused by the mutation pass. */
 static int count_step(struct fm_job *j)
@@ -718,7 +773,7 @@ int fm_job_step(struct fm_job *j)
         const char *source = j->sources[j->next++];
         char target[FM_PATH] = ""; int r = 0;
         if (j->kind == FM_COPY || j->kind == FM_MOVE) {
-            r = fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
+            r = j->trash == 2 ? trash_target(j, source, target) : fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
             if (!r && fm_same_path(target, source)) {
                 if (j->kind == FM_MOVE) { j->completed++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items; return 1; }
                 r = copy_name(j, source, target);
