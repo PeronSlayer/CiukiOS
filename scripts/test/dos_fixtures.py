@@ -186,7 +186,11 @@ def mtools_image(path):
     """Address the FAT partition of a unified guest, or a synthetic host FAT."""
     with Path(path).open('rb') as stream:
         header=stream.read(512)
-    if len(header)==512 and header[450]==0x06:
+    # A FAT boot sector at LBA 0 is a superfloppy; otherwise the first MBR
+    # entry addresses the volume when its type is a FAT type (Microsoft
+    # partition types 01h/04h/06h/0Bh/0Ch/0Eh; the unified image uses 0Eh, fx-4).
+    vbr=header[:1] in (b'\xeb',b'\xe9') and struct.unpack_from('<H',header,11)[0]==512
+    if len(header)==512 and not vbr and header[510:512]==b'\x55\xaa' and header[450] in (0x01,0x04,0x06,0x0B,0x0C,0x0E):
         return str(path)+'@@'+str(struct.unpack_from('<I',header,454)[0]*512)
     return str(path)
 
