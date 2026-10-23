@@ -160,12 +160,12 @@ def check_kernel_budget(installed, limit=None):
     return size, limit
 
 
-def elf32_layout(data):
+def elf32_layout(data, label="kernel"):
     """(entry, program headers, section names) of a little-endian ELF32 file."""
-    require(data[:7] == b"\x7fELF\x01\x01\x01", "kernel is not a little-endian ELF32 file")
+    require(data[:7] == b"\x7fELF\x01\x01\x01", f"{label} is not a little-endian ELF32 file")
     entry, phoff, shoff = struct.unpack_from("<III", data, 24)
     phentsize, phnum, shentsize, shnum, shstrndx = struct.unpack_from("<HHHHH", data, 42)
-    require(phentsize == 32 and phnum >= 1 and (not shnum or shentsize == 40), "kernel ELF header")
+    require(phentsize == 32 and phnum >= 1 and (not shnum or shentsize == 40), f"{label} ELF header")
     phdrs = [struct.unpack_from("<8I", data, phoff + i * 32) for i in range(phnum)]
     names = []
     if shnum:
@@ -176,28 +176,78 @@ def elf32_layout(data):
     return entry, phdrs, names
 
 
-def strip_kernel(full, installed):
-    """Write the image's kernel: `full` without its DWARF sections.
+def strip_elf(full, installed, label="kernel"):
+    """Write `installed`: `full` without its DWARF sections.
 
     llvm-objcopy --strip-debug drops only the debug sections; the loaded
     segments, the program headers and .symtab/.strtab stay. The same input
-    gives the same bytes. The result is checked against `full`: same entry,
-    same program headers, byte-identical file-backed segments, no debug
-    section left."""
+    gives the same bytes. The result is checked against `full`: same ELF
+    type, entry and program headers, byte-identical file-backed segments, no
+    debug section left."""
     tool = shutil.which("llvm-objcopy")
     require(tool is not None, "missing host tool: llvm-objcopy")
     full, installed = Path(full), Path(installed)
+    installed.parent.mkdir(parents=True, exist_ok=True)
     installed.unlink(missing_ok=True)
     run(tool, "--strip-debug", full, installed)
     original, stripped = full.read_bytes(), installed.read_bytes()
-    a, b = elf32_layout(original), elf32_layout(stripped)
-    require(a[0] == b[0] and a[1] == b[1], "stripped kernel changed its entry or program headers")
-    for kind, offset, _vaddr, _paddr, filesz, _memsz, _flags, _align in a[1]:
-        if kind == 1:
-            require(original[offset:offset + filesz] == stripped[offset:offset + filesz],
-                    "stripped kernel changed a loaded segment")
-    require(not [n for n in b[2] if n.startswith((".debug", ".zdebug"))], "stripped kernel still has debug sections")
+    a, b = elf32_layout(original, label), elf32_layout(stripped, label)
+    require(a[0] == b[0] and a[1] == b[1] and original[16:18] == stripped[16:18],
+            f"stripped {label} changed its entry or program headers")
+    # A linker-made first segment usually maps the ELF header itself (offset
+    # 0). Only the section-table fields (e_shoff, e_shentsize, e_shnum,
+    # e_shstrndx) legitimately change; every other header byte, and every
+    # segment byte after the header, must be identical.
+    require(original[:32] == stripped[:32] and original[36:46] == stripped[36:46],
+            f"stripped {label} changed its ELF header")
+    for _kind, offset, _vaddr, _paddr, filesz, _memsz, _flags, _align in a[1]:
+        start = max(offset, 52)
+        require(original[start:offset + filesz] == stripped[start:offset + filesz],
+                f"stripped {label} changed a loaded segment")
+    require(not [n for n in b[2] if n.startswith((".debug", ".zdebug"))], f"stripped {label} still has debug sections")
     return installed
+
+
+def strip_kernel(full, installed):
+    """The image's kernel (fx-6): see strip_elf."""
+    return strip_elf(full, installed, "kernel")
+
+
+def is_native_elf(path):
+    """True for a little-endian ELF32 executable (ET_EXEC/ET_DYN with program
+    headers): the files the loader runs. Relocatable objects (the SDK's crt
+    files), archives, PE files and data are not."""
+    with Path(path).open("rb") as stream:
+        head = stream.read(52)
+    if len(head) < 52 or head[:7] != b"\x7fELF\x01\x01\x01":
+        return False
+    etype = struct.unpack_from("<H", head, 16)[0]
+    phnum = struct.unpack_from("<H", head, 44)[0]
+    return etype in (2, 3) and phnum >= 1
+
+
+def strip_payloads(sources, stage):
+    """fx-12: replace every native ELF source by its --strip-debug copy.
+
+    `sources` maps image path -> file; a native ELF entry is rewritten in
+    place to a copy under `stage` (deterministic name, checked by strip_elf);
+    other entries, PE files included, are untouched. The build/apps outputs
+    keep the complete files. Entries already under `stage` are skipped.
+    Returns one record per stripped file for build-manifest.json."""
+    stage = Path(stage)
+    records, done = [], {}
+    for name, source in sorted(sources.items()):
+        source = Path(source)
+        if stage in source.parents or not is_native_elf(source):
+            continue
+        if source not in done:
+            target = stage / hashlib.sha256(str(source).encode()).hexdigest()[:16] / source.name
+            done[source] = strip_elf(source, target, f"payload {name}")
+        installed = done[source]
+        sources[name] = installed
+        records.append({"path": name, "full_sha256": sha256(source), "full_bytes": source.stat().st_size,
+                        "installed_sha256": sha256(installed), "installed_bytes": installed.stat().st_size})
+    return records
 
 
 def read_version():
@@ -345,8 +395,12 @@ def sound_payloads():
     return sources, sounds
 
 
-def application_payloads():
-    """Validate SDK/Lua/desktop provenance before creating an image."""
+def application_payloads(stage=None):
+    """Validate SDK/Lua/desktop provenance before creating an image.
+
+    stage: scratch directory for the fx-12 debug-stripped copies of the native
+    ELF payloads (the image installs those; the app-gate hash lines below are
+    taken from them). Without it the sources stay the complete build/apps files."""
     spec = importlib.util.spec_from_file_location("build_lua", ROOT / "apps/lua/build_lua.py")
     lua_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lua_build)
@@ -410,6 +464,7 @@ def application_payloads():
     metadata["desktop"] = desktop_metadata
     metadata["tcc"] = tcc_metadata
     metadata["w32srv"] = w32_metadata
+    metadata["native_elf"] = strip_payloads(sources, stage) if stage is not None else []
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
     # absolute path as an alias; both copies are separately verified in T1.
     # Runtime provenance cannot be recovered from a host-only build manifest.
@@ -756,6 +811,14 @@ def registry_payloads(directory):
 
 
 def build(kernel, out, boot_cfg):
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # fx-12: debug-stripped copies of the native ELF payloads live here, beside
+    # the output (large files stay out of /tmp), for the whole build.
+    with tempfile.TemporaryDirectory(prefix=".image-strip-", dir=out.parent) as stage:
+        build_with_stage(kernel, out, boot_cfg, Path(stage))
+
+
+def build_with_stage(kernel, out, boot_cfg, stage):
     for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "mattrib", "fsck.fat", "llvm-objcopy"):
         if not shutil.which(tool):
             raise SystemExit(f"missing host tool: {tool}")
@@ -770,7 +833,7 @@ def build(kernel, out, boot_cfg):
     options = boot_cfg.read_bytes() if boot_cfg else DEFAULT_CONFIG
     if len(options) > 127 or b"\0" in options or any(c > 127 for c in options):
         raise SystemExit("BOOT.CFG must be <=127 ASCII bytes without NUL")
-    sources, directories, metadata = application_payloads()
+    sources, directories, metadata = application_payloads(stage)
     builtin_sources, builtin_directories, metadata["win32"] = win32_payloads()
     sources.update(builtin_sources)
     directories.update(builtin_directories)
@@ -781,6 +844,9 @@ def build(kernel, out, boot_cfg):
     directories.update(registry_directories)
     dos_sources, dos_directories, dos_metadata, free = dos_payloads(out)
     sources.update(dos_sources); directories.update(dos_directories); metadata.update(dos_metadata)
+    # Any other native ELF the builder staged (the Win32 and DOS stores hold PE
+    # files and data, which stay untouched); application_payloads did its own.
+    metadata["native_elf"] += strip_payloads(sources, stage)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
