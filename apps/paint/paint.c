@@ -26,6 +26,7 @@ typedef u8 *fptr;
 #define BLACK 79
 static struct du_ui *ui;
 static void (*quit_cb)(void *);
+static void (*decline_cb)(void *);
 static void (*title_cb)(void *, const char *);
 static void *callback_host;
 static void fmt_u32(char *out, u32 n) { sprintf(out, "%u", (unsigned)n); }
@@ -2103,29 +2104,36 @@ static void ask_then(int action)
     static const char *const buttons[]={"Yes","No","Cancel"};
     du_message(ui,D_CHANGES,"CiukPaint","Save changes to the picture?",DU_DLG_ICON_QUESTION,buttons,3,0,2);
 }
+/* G3: the pending command is dropped; an abandoned exit declines the close. */
+static void abandon(void)
+{
+    int action=pending; pending=A_NONE;
+    if (action==A_EXIT && decline_cb) decline_cb(callback_host);
+}
+void paint_decline_callback(void (*declined)(void *)) { decline_cb=declined; }
 static void do_save(const char *p)
 {
     int r=paint_save(p,save_format);
-    if (r) { pending=A_NONE; error_message(r); } else if (pending) run_pending();
+    if (r) { abandon(); error_message(r); } else if (pending) run_pending();
 }
 static void dialog_result(const struct du_event *e)
 {
     if (e->id==D_CHANGES) {
-        if (e->index==2) pending=A_NONE;
+        if (e->index==2) abandon();
         else if (e->index==1) run_pending();
         else if (!path[0]) file_dialog(1); else do_save(path);
     } else if (e->id==D_OPEN) { if (!e->index) error_message(paint_open(e->text)); }
     else if (e->id==D_SAVE) {
-        if (e->index) { pending=A_NONE; return; }
+        if (e->index) { abandon(); return; }
         const char *ext=strrchr(e->text,'.');
         if (!ext) {
             int n=snprintf(pending_path,sizeof(pending_path),"%s%s",e->text,save_format==PAINT_PNG?".png":".bmp");
-            if (n<0 || (size_t)n>=sizeof(pending_path)) { pending=A_NONE; error_message(-ENAMETOOLONG); return; }
+            if (n<0 || (size_t)n>=sizeof(pending_path)) { abandon(); error_message(-ENAMETOOLONG); return; }
         } else {
             snprintf(pending_path,sizeof(pending_path),"%s",e->text);
             if (!strcmp(ext,".png") || !strcmp(ext,".PNG")) save_format=PAINT_PNG;
             else if (!strcmp(ext,".bmp") || !strcmp(ext,".BMP")) { if (save_format==PAINT_PNG) save_format=PAINT_BMP8; }
-            else { pending=A_NONE; message("Use the .bmp or .png extension."); return; }
+            else { abandon(); message("Use the .bmp or .png extension."); return; }
         }
         struct stat st;
         if (!stat(pending_path,&st)) {
@@ -2338,7 +2346,7 @@ int paint_attach(struct du_ui *u)
     if (ui) return -EBUSY;
     if (!u || u->count) return -EINVAL;
     partial_layout=0; dx0=dy0=0; dx1=dy1=-1;
-    ui=u; quit_cb=NULL; title_cb=NULL; callback_host=NULL;
+    ui=u; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL;
     fg=BLACK; bg=WHITE; tool=prev_tool=T_PENCIL; tool_hot=-1; zoom=1;
     line_w=pen_size=1; fill_style=0; brush_kind=PEN_ROUND; brush_size=eraser_size=air_size=1;
     text_scale=1; text_bold=0; opaque=1; font_file[0]=0;
@@ -2373,7 +2381,7 @@ void paint_detach(void)
     cancel_pointer(); du_dialog_close(ui); du_menu_close(ui);
     img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); img_free(&selection_mask); du_ta_free(&text_edit);
     ui->event=NULL; ui->paint=NULL; ui->layout=NULL; ui->menus=NULL; ui->menu_count=ui->count=0;
-    ui=NULL; quit_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
+    ui=NULL; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
 }
 static int install_image(const char *p, struct paint_image next)
 {

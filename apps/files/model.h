@@ -58,6 +58,7 @@ struct fm_model {
     /* G2: records behind the Recycle Bin view's entries, and the drives whose
      * volumes are fixed disks (bit 0 = A:; C: always counts). */
     struct rb_item *bin; unsigned bin_count; uint32_t fixed;
+    uint32_t drive_slots; /* fx-17b: drives listed in Computer without a medium (floppies) */
 };
 enum fm_job_kind { FM_COPY, FM_MOVE, FM_DELETE, FM_PROPERTIES };
 enum fm_job_state { FM_IDLE, FM_RUNNING, FM_REPLACE, FM_DONE, FM_CANCELLED, FM_FAILED };
@@ -103,6 +104,7 @@ int fm_posix_path(char *out, const char *display);
 int fm_drive_root(const char *);
 int fm_hidden(const char *parent, const char *name);
 int fm_volumes(const struct fm_vfs *, fm_emit, void *);
+int fm_volumes_slots(const struct fm_vfs *, uint32_t slots, fm_emit, void *);
 int fm_entry_path(const struct fm_model *, unsigned, char *out);
 int fm_parent(char *out, const char *path);
 int fm_valid_name(const char *);

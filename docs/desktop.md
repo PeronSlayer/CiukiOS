@@ -647,8 +647,11 @@ contents are treated as disposable and are initialized before use.
 
 - **Applications:** columns Task and Status (Running / Not Responding from
   the desktop's heartbeat), sorted by title, PID and window id. End Task
-  (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
-  after 2 s for its own children. Switch To (Alt+S, Enter, double-click) restores and
+  (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST
+  (the program may ask to save; no deadline while it answers PINGs); a window
+  already closing or not responding gets "This program is not responding",
+  whose End Task terminates it (G3, `docs/design/desktop-shell.md`). File >
+  Shut Down opens the desktop's Shut Down dialog. Switch To (Alt+S, Enter, double-click) restores and
   focuses. New Task (Alt+N) asks the desktop to launch an admitted `/Programs`
   program (name or `/Programs/name`), so graphical programs get their channel and
   appear here; the launched program's row is selected once it appears.

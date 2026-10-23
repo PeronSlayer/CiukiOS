@@ -17,6 +17,7 @@
 #include <ciuki/abi.h>
 #include "../../src/kernel/include/ciuki/game_ports_settings.h"
 #include <ciuki/firmware_abi.h>
+#include <ciuki/tzdata.h>
 #include <ciuki/font.h>
 #include <stdint.h>
 #include "driver_pack.h"
@@ -123,6 +124,9 @@ struct cp_host {
     int (*program_remove)(void *,const struct desk_uninstall_entry *);
     int (*program_install)(void *,const char *);
     void (*programs_changed)(void *);
+    /* G1: the system time-zone record (syscall 97): GET, SET_LOCAL,
+     * SET_ZONE; 0 or -errno. NULL: Date/Time shows the host clock read-only. */
+    int (*time_zone)(void *, struct ciuki_time_zone *, uint32_t operation);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -230,6 +234,13 @@ struct cp_app {
     struct cp_font_job *font_job;
     struct ciuki_font_face *font_face;
     char font_status[96];
+    /* G1 Date/Time Properties (datetime.inc). */
+#define CP_TZ_MAX 64u
+    struct ciuki_time_zone time;
+    int time_ok, dt_tab, dt_zone, dt_auto, dt_zone_dirty, dt_date_dirty, dt_time_dirty;
+    int dt_year, dt_month, dt_day;
+    struct du_item dt_tabs[2], dt_zone_items[CP_TZ_MAX];
+    char dt_time_text[16], dt_zone_line[160], dt_dst_line[192];
 };
 void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);

@@ -12,7 +12,8 @@ struct clock_seed {
     uint32_t source;
     bool qualified, valid;
 };
-bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds);
+bool clock_fat_civil(uint16_t date, uint16_t time, int64_t *seconds); /* same calendar */
+bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds);   /* FAT local -> UTC (G1) */
 void file_clock_init(int64_t build_epoch, bool qualified, bool valid,
                      uint16_t date, uint16_t time, uint8_t tenths, uint64_t tick);
 void file_clock_start(int64_t build_epoch, bool rtc_qualified);

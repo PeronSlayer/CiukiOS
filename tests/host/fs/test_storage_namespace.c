@@ -290,7 +290,18 @@ int usb_storage_eject(struct storage *s,unsigned d,uint32_t g) { (void)s;(void)d
 /* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */
 int media_cd_devctl(struct process *p,struct storage *s,uint32_t op,uint32_t a,uint32_t b)
 { (void)p;(void)s;(void)a;(void)b;(void)op; return -ENOTTY; }
+/* fx-17b: a modelled floppy controller with drive A: (media_dev's weak
+ * platform hooks); floppy_disk is the diskette in the drive, or none. */
 #include "../../../src/kernel/drivers/media_dev.c"
+static struct storage *floppy_store; static struct blkdev *floppy_disk; static unsigned floppy_reads;
+bool floppy_drive_present(unsigned d) { return d==0 && floppy_store; }
+int floppy_mount(unsigned d)
+{
+    floppy_reads++; if (floppy_store && floppy_store->vfs.volumes[d]) return 0;
+    int e=floppy_disk ? storage_add_floppy(floppy_store,floppy_disk,d) : -FS_EIO;
+    if (!e) (void)storage_activate_removable(floppy_store,floppy_disk); /* as floppy_platform.c */
+    return e;
+}
 
 #define LAT_ASSERT(x) do { if (!(x)) { fprintf(stderr,"latency line %d: %s\n",__LINE__,#x); abort(); } } while (0)
 struct latency_run {
@@ -598,13 +609,57 @@ static void latency_tests(void)
     namespace_stop(s,true); fake_reset(&media[2]);
 }
 
+/* fx-17b: floppy diskettes are native drives /mnt/a and /mnt/b, listed
+ * before D:..Z:; /mnt/c is never published (C: is "/"). */
+static void floppy_namespace_tests(void)
+{
+    struct px_namespace *space;struct storage *s=namespace_start(&space);(void)space;
+    /* /dev/media: A: is a floppy drive with no disk until MEDIA_FLOPPY_LOAD
+     * (Files' Retry) reads the diskette. */
+    floppy_store=s; floppy_disk=0;
+    int control=file_open(&supervisor,"/dev/media",O_RDONLY,0);CHECK(control>=0);
+    struct ciuki_media_state st={.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};media_user=&st;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));
+    CHECK(st.type[0]==CIUKI_MEDIA_FLOPPY && !(st.removable_mask&1u) && st.type[1]==CIUKI_MEDIA_NONE);
+    struct ciuki_media_remove load={CIUKI_MEDIA_VERSION,sizeof(load),0,0};media_user=&load;
+    CHECK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load))==-ENXIO && !s->vfs.volumes[0]);
+    load.drive=1;CHECK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load))==-ENODEV);load.drive=0;
+    floppy_disk=&media[1].dev;OK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load)));
+    CHECK(s->vfs.volumes[0] && s->volumes[0].fat.type==12 && floppy_reads==2 && !s->volumes[0].fat.readonly && !s->volumes[0].fat.free_unknown);
+    st=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};media_user=&st;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));CHECK((st.removable_mask&1u) && st.type[0]==CIUKI_MEDIA_FLOPPY && st.generation[0]==media[1].dev.media_generation);
+    struct ciuki_media_space sp={.version=CIUKI_MEDIA_VERSION,.size=sizeof(sp),.drive=0};media_user=&sp;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_SPACE,1,sizeof(sp)));
+    CHECK(!sp.flags && sp.total_clusters==s->volumes[0].fat.clusters && sp.free_clusters==s->volumes[0].fat.free_clusters && sp.cluster_bytes);
+    sp=(struct ciuki_media_space){.version=CIUKI_MEDIA_VERSION,.size=sizeof(sp),.drive=1};
+    CHECK(media_devctl(&supervisor,control,MEDIA_GET_SPACE,1,sizeof(sp))==-ENOENT);
+    OK(file_close(&supervisor,control));
+    int dir=file_open(&supervisor,"/mnt",O_RDONLY|O_DIRECTORY,0);CHECK(dir>=3);
+    struct ciuki_dirent ent;char first[8]="";unsigned seen=0;
+    while (native_next(file_fd(&supervisor,dir),&ent)>0) {
+        if (!strcmp(ent.d_name,".") || !strcmp(ent.d_name,"..")) continue;
+        if (!seen++) snprintf(first,sizeof(first),"%s",ent.d_name);
+        CHECK(strcmp(ent.d_name,"c"));
+    }
+    CHECK(!strcmp(first,"a"));OK(file_close(&supervisor,dir));
+    int fd=file_open(&supervisor,"/mnt/a/SHORT.BIN",O_RDONLY,0);CHECK(fd>=3);
+    uint8_t bytes[512];size_t done;CHECK(!native_read(file_fd(&supervisor,fd),bytes,&done) && done>0);OK(file_close(&supervisor,fd));
+    CHECK(file_open(&supervisor,"/mnt/c",O_RDONLY|O_DIRECTORY,0)==-ENOENT);
+    CHECK(file_open(&supervisor,"/mnt/b",O_RDONLY|O_DIRECTORY,0)==-ENOENT);
+    OK(px_chdir(&supervisor,"/mnt/a"));OK(px_chdir(&supervisor,"/"));
+    OK(storage_remove_removable(s,&media[1].dev,false));
+    CHECK(file_open(&supervisor,"/mnt/a/SHORT.BIN",O_RDONLY,0)==-ENOENT);
+    floppy_store=0;floppy_disk=0;
+    namespace_stop(s,true);
+    puts("PASS fx-17b floppy namespace: /dev/media floppy type, Retry load without and with a diskette, volume space, A: listed first under /mnt, files readable, no /mnt/c, B: absent, removal");
+}
 int main(int argc, char **argv)
 {
     setvbuf(stdout,0,_IOLBF,0);
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
     baseline(); media[2].undo_enabled = true;
-    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests();
+    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;

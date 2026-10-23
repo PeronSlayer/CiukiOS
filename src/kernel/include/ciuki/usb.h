@@ -193,6 +193,7 @@ struct usb_storage {
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
     unsigned command_errors; /* fx-17: CHECK CONDITION READ/WRITE failures kept online */
+    bool write_through; /* fx-17b: no SYNCHRONIZE CACHE; every WRITE(10) completes on the medium */
     bool binding, bind_reserved, bind_stage_active;
     uint32_t bind_read_requests, bind_read_sectors, bind_read_max;
     uint32_t bind_packets, bind_poll_frames, bind_retire_frames;

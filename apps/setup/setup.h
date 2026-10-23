@@ -15,6 +15,7 @@
 #include "setup_txn.h"
 #include "report_link.h"
 #include <ciuki/abi.h>
+#include <ciuki/tzdata.h>
 #include <stdint.h>
 
 #define ST_W 640                       /* design size; larger modes centre it */
@@ -134,6 +135,7 @@ struct st_app {
     char *link_text; size_t link_length;    /* CIUKIREP.TXT text received from the f9-07 program */
     /* pages */
     int kbd, tz, clock_utc, net_manual;
+    int tz_chosen;                      /* G1: the user picked the zone (no keyboard default) */
     char clock_text[24]; int clock_edited; int64_t clock_shown;
     char status_line[96];
     char licence_names[ST_LICENCES_MAX][64]; char licence_labels[ST_LICENCES_MAX][96]; unsigned licence_count;
@@ -208,10 +210,14 @@ struct st_component { uint32_t bit; const char *id, *label; uint32_t requires; }
 extern const struct st_component st_components[SETUP_COMP_COUNT];
 struct st_keyboard { const char *id, *label; };
 extern const struct st_keyboard st_keyboards[]; extern const unsigned st_keyboard_count;
-struct st_zone { int minutes; const char *label; };
-extern const struct st_zone st_zones[]; extern const unsigned st_zone_count;
+/* G1: the bundled zones with their daylight-saving rules (ciuki/tzdata.h). */
+#define st_zones ciuki_tz_zones
+#define st_zone_count ((unsigned)CIUKI_TZ_ZONE_COUNT)
+int st_zone_find(const char *id);                       /* -1 when not bundled */
+int32_t st_zone_offset(int zone, int minutes, int64_t utc);         /* seconds east, zone<0: fixed minutes */
+int64_t st_zone_local_to_utc(int zone, int minutes, int64_t local); /* wall time to UTC */
 extern const char *const st_tips[]; extern const unsigned st_tip_count;
-int st_zone_index(int minutes);
+int st_zone_index(int minutes);   /* first bundled zone with this standard offset */
 uint64_t st_required_estimate(const struct st_app *, uint32_t components);
 uint64_t st_partition_sectors(uint64_t capacity);
 const char *st_error_title(enum setup_error_class);

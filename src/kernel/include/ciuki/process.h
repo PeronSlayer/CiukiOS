@@ -56,6 +56,10 @@ struct process {
     /* f2-100: supervisor/desktop-authorized desktop and Control Panel only;
      * network configuration authority is delegated explicitly at spawn. */
     bool network_capability;
+    /* G1: authority to set the clock and the system time zone (the
+     * SE_SYSTEMTIME_NAME equivalent): desktop and Control Panel only,
+     * delegated like network_capability, never inherited. */
+    bool time_capability;
     /* f9-01 D5 / f9-02: destination-disk authority for /dev/ata0..3
      * (mutating requests and the lease). Set only by the supervisor's
      * Setup-mode spawn of /Programs/setup, before publication; zero in every

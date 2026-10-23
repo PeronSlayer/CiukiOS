@@ -529,6 +529,7 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
         }
         if (!surprise) cache_invalidate(&s->cache,&v->io,true);
         s->vfs.drive_flags[d]=0;
+        fat_census_end(&v->fat); /* fx-17b: a removed medium cancels its count */
         v->fat.mounted=false; v->present=false;
     }
     if (!surprise) for (unsigned d=0;d<26;d++) {
@@ -638,8 +639,11 @@ int storage_activate_removable(struct storage *s, struct blkdev *dev)
             e=VFS_IO(&s->vfs,fat_enable_write_removable(&v->fat));
             if (!e && !v->write_sequence) v->write_sequence=++s->sequence;
             if (e) v->refused++;
+            if (v->fat.free_unknown && !v->fat.census) (void)VFS_IO(&s->vfs,fat_census_start(&v->fat));
         }
-        klog("[storage] removable drive=%c mode=%s dirty=%u reason=%s free=%u census_ms=%u result=%d",
+        if (v->fat.census) klog("[storage] removable drive=%c mode=%s dirty=%u reason=%s free=counting census_ms=%u result=%d",
+             'A'+d,v->fat.readonly ? "ro" : "rw",dirty,v->fat.readonly ? fat_readonly_reason(&v->fat) : "writable",v->fat.repair_ms,e);
+        else klog("[storage] removable drive=%c mode=%s dirty=%u reason=%s free=%u census_ms=%u result=%d",
              'A'+d,v->fat.readonly ? "ro" : "rw",dirty,v->fat.readonly ? fat_readonly_reason(&v->fat) : "writable",
              v->fat.free_clusters,v->fat.repair_ms,e);
         vfs_unlock(&s->vfs);
@@ -648,6 +652,38 @@ int storage_activate_removable(struct storage *s, struct blkdev *dev)
     }
     if (writable) fs_event_wake(&s->vfs.volume_changed);
     return writable;
+}
+unsigned storage_census_service(struct storage *s, uint32_t now)
+{
+    if (!s || !s->ready || s->stopped) return 0;
+    unsigned running=0;
+    for (unsigned d=0;d<26;d++) {
+        vfs_lock(&s->vfs,0);
+        struct storage_volume *v=&s->volumes[d];
+        bool due=v->present && v->removable && v->fat.census && v->fat.mounted &&
+            (!v->census_next_ms || (int32_t)(now-v->census_next_ms)>=0);
+        bool counting=v->present && v->fat.census;
+        vfs_unlock(&s->vfs);
+        if (!due) { running+=counting; continue; }
+        vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"census"); vfs_site_locked(&s->vfs,"mount");
+        int e=1; uint32_t began=fs_now_ms();
+        if (v->present && v->fat.census && v->fat.mounted) {
+            refresh_volume(v);
+            e=VFS_IO(&s->vfs,fat_census_step(&v->fat,128));
+            if (e<0) {
+                klog("[storage] free_count drive=%c result=%d state=abandoned",'A'+d,e);
+                fat_census_end(&v->fat);
+            }
+        }
+        uint32_t spent=fs_now_ms()-began;
+        /* At most a quarter of the medium's time: the reservation is held
+         * for one FAT read-ahead window, then readers and writers own it. */
+        v->census_next_ms=fs_now_ms()+3*spent+20;
+        if (!e) running++;
+        vfs_unlock(&s->vfs);
+        fs_service();
+    }
+    return running;
 }
 int storage_writeback(struct storage *s, uint32_t now)
 {
@@ -773,6 +809,7 @@ void storage_destroy(struct storage *s)
     if (pagefile_on(s,0) && !pager_attach && pagefile_close) { pagefile_close(&system_pagefile); memset(&system_pagefile,0,sizeof(system_pagefile)); }
     for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
     for (unsigned i=0; i<STORAGE_NTFS; i++) if (s->ntfs[i].ro.mounted) fs_ro_unmount(&s->ntfs[i].ro);
+    for (unsigned d=0; d<26; d++) fat_census_end(&s->volumes[d].fat);
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
     if (cdview_release) cdview_release(&s->boot_cd);
 }
@@ -1021,6 +1058,7 @@ static void storage_timer(void *arg)
         /* The writer_running reservation covers resize/prefetch too, so
          * shutdown quiesces every cache user before destroying its pages. */
         if (!s->stopped) storage_writeback(s,fs_now_ms());
+        if (!s->stopped) (void)storage_census_service(s,(uint32_t)fs_now_ms());
     }
     task_exit(0);
 }

@@ -92,6 +92,8 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
         desk_put32(m.data + n + 20, 1); desk_put32(m.data + n + 24, 1);
     }
     queue(w, &m);
+    /* G3: this window answers QUERY_END_SESSION (registration: serial 0, AGREE). */
+    desk_message(&m, DESK_SESSION_ANSWER, 12); desk_put32(m.data + 8, DU_SESSION_AGREE); queue(w, &m);
     return flush(w);
 fail: { int error = errno ? errno : EINVAL; du_window_destroy(w); errno = error; return -1; }
 }
@@ -199,9 +201,36 @@ int du_window_move(struct du_window *w, int x, int y)
     return queue(w, &m);
 }
 
+/* G3 session states: 0 none, 1 inside the query callback, 2 the program
+ * asks the user, 3 agreed (waiting for END_SESSION). */
+enum { SESSION_NONE, SESSION_QUERY, SESSION_ASKING, SESSION_AGREED };
+static void session_answer(struct du_window *w, int answer)
+{
+    w->session = answer == DU_SESSION_AGREE ? SESSION_AGREED : answer == DU_SESSION_ASKING ? SESSION_ASKING : SESSION_NONE;
+    struct ciuki_message m; desk_message(&m, DESK_SESSION_ANSWER, 12);
+    desk_put32(m.data + 4, w->session_serial); desk_put32(m.data + 8, (uint32_t)answer);
+    if (queue(w, &m)) w->session_reply_pending = answer + 1;
+    else w->session_reply_pending = 0;
+}
+void du_window_session_reply(struct du_window *w, int agree)
+{ if (w->session == SESSION_ASKING) session_answer(w, agree ? DU_SESSION_AGREE : DU_SESSION_VETO); }
 void du_window_close_reply(struct du_window *w, int later)
-{ w->close_reply_pending=later ? 2 : 1; }
-void du_window_close(struct du_window *w) { if (!w->closing) w->closing = 1; du_release(w->ui); }
+{
+    if (w->session == SESSION_QUERY || w->session == SESSION_ASKING) {
+        if (!later) session_answer(w, DU_SESSION_VETO);   /* the user cancelled the prompt */
+        return;
+    }
+    w->close_reply_pending=later ? 2 : 1;
+}
+void du_window_close(struct du_window *w)
+{
+    /* The program's own close during a query (its prompt answered Yes or
+     * No) agrees: the window stays until END_SESSION. */
+    if (w->session == SESSION_QUERY || w->session == SESSION_ASKING) { session_answer(w, DU_SESSION_AGREE); return; }
+    if (w->session == SESSION_AGREED) return;
+    if (!w->closing) w->closing = 1;
+    du_release(w->ui);
+}
 
 int du_window_accept_files(struct du_window *w, int on)
 {
@@ -255,12 +284,30 @@ int du_window_turn(struct du_window *w, uint64_t now)
             }
             break;
         case DESK_PING:
+            if (w->session_reply_pending) session_answer(w, w->session_reply_pending - 1);   /* answer before PONG */
             desk_message(&m, DESK_PONG, 8); desk_put32(m.data + 4, p.serial); queue(w, &m); break;
         case DESK_PONG: break;
         case DESK_CLOSED: w->closed = 1; du_release(w->ui); return 0;
         case DESK_CLOSE_REQUEST:
+            if (w->closing || w->session) break;   /* already closing, or the session owns the window */
             if (!w->close_request || w->close_request(w, w->user)) du_window_close(w);
             else du_window_close_reply(w,1);
+            break;
+        case DESK_QUERY_END_SESSION: {
+            w->session_serial = p.serial; w->session_flags = p.flags;
+            if (w->closing) { session_answer(w, DU_SESSION_AGREE); break; }
+            w->session = SESSION_QUERY;
+            int answer = w->query_end_session ? w->query_end_session(w, p.flags, w->user) :
+                         !w->close_request || w->close_request(w, w->user) ? DU_SESSION_AGREE : DU_SESSION_ASKING;
+            /* The callback may already have answered (its own close, a veto). */
+            if (w->session == SESSION_QUERY)
+                session_answer(w, answer == DU_SESSION_VETO || answer == DU_SESSION_ASKING ? answer : DU_SESSION_AGREE);
+            break;
+        }
+        case DESK_END_SESSION:
+            if (p.serial != w->session_serial) break;
+            w->session = SESSION_NONE; w->session_reply_pending = 0;
+            if (p.focused) { if (!w->closing) w->closing = 1; du_release(w->ui); }   /* exit without asking again */
             break;
         case DESK_FOCUS: du_window_focus(w->ui, p.focused != 0); break;
         case DESK_DROP_FILES:
@@ -273,6 +320,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
         default: if (w->message) w->message(w, &p, w->user); break;
         }
     }
+    if (w->session_reply_pending && w->count<16) session_answer(w, w->session_reply_pending - 1);
     if (w->close_reply_pending && w->count<16) {
         struct ciuki_message m; desk_message(&m,DESK_CLOSE_ACK,8);
         desk_put32(m.data+4,(uint32_t)(w->close_reply_pending-1));

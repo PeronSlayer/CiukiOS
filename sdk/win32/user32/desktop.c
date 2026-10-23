@@ -254,6 +254,7 @@ void u32_event(const struct desk_packet *p) {
     w->ping = p->serial;
     break;
   case DESK_CLOSE_REQUEST:
+    w->desktop_close = 1;
     u32_queue(w->tid, h, WM_CLOSE, 0, 0, QS_POSTMESSAGE, u32_ticks(),
               u32_pointer);
     break;

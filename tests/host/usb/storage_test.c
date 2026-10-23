@@ -469,8 +469,19 @@ static void partitions(const char *path)
 }
 static void readonly(const char *path)
 {
-    setup(path,false);m.no_flush=true;mount_device();assert(storage_get()->volumes[4].fat.readonly && !m.writes);cleanup();
-    setup(path,false);m.wp=true;mount_device();assert(storage_get()->volumes[4].fat.readonly && !m.writes);cleanup();
+    /* fx-17b: a stick without SYNCHRONIZE CACHE mounts read-write in
+     * write-through mode; no flush is ever sent, safe removal still works. */
+    setup(path,false);m.no_flush=true;mount_device();
+    assert(!storage_get()->volumes[4].fat.readonly && device()->storage.write_through && m.writes);
+    assert(strstr(records,"[usb-storage] flush addr=1 result=unsupported sense=05/20/00 cache=write_through"));
+    assert(strstr(records,"mode=rw_write_through"));
+    { struct vfs_table *t=calloc(1,sizeof(*t));assert(t && !vfs_table_init(&storage_get()->vfs,t,4));
+      int h=vfs_open(t,"E:/WT.BIN",VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0);assert(h>=0);
+      uint8_t p[4096];size_t done;memset(p,0x5c,sizeof(p));unsigned flushes=m.flushes,writes=m.writes;
+      assert(!vfs_write(t,h,p,sizeof(p),&done) && done==sizeof(p) && !vfs_commit(t,h) && !vfs_close(t,h));
+      assert(m.writes>writes && m.flushes==flushes);vfs_table_destroy(t);free(t); }
+    assert(!usb_storage_eject(storage_get(),4,block()->media_generation) && clean_flag());cleanup();
+    setup(path,false);m.wp=true;mount_device();assert(storage_get()->volumes[4].fat.readonly && !m.writes && strstr(records,"mode=ro_write_protected"));cleanup();
     setup(path,false);unsigned reserved=fs_rd16(m.image+14),fats=m.image[16],fsz=fs_rd16(m.image+22);
     assert(fsz);
     for(unsigned i=0;i<fats;i++) {uint8_t *flag=m.image+(reserved+i*fsz)*512+2;fs_wr16(flag,fs_rd16(flag)&~0x8000u);}
@@ -481,7 +492,7 @@ static void readonly(const char *path)
     assert(!usb_storage_eject(storage_get(),4,block()->media_generation) && !clean_flag());cleanup();
     setup(path,false);m.sector_size=4096;assert(usb_storage_attach(device())<0);
     assert(!device()->storage.online && !m.writes);cleanup();
-    puts("PASS USB write admission: unsupported flush/write-protected stay read-only without writes, dirty stick writable with its indication kept, non-512 sectors rejected");
+    puts("PASS USB write admission: flush-less stick read-write in write-through mode (no flush sent), write-protected stays read-only without writes, dirty stick writable with its indication kept, non-512 sectors rejected");
 }
 static void uhci_transport(const char *path)
 {
@@ -584,12 +595,12 @@ static void attach_tolerance(const char *path)
         if(mode==2)m.no_flush=true;
         attach();assert(m.inquiries==1 && m.modes==1 && !block()->quarantined && !m.writes);
         assert(device()->storage.online && !device()->storage.write_protected);
-        assert(blkdev_durable(block())==(mode!=2));
+        assert(blkdev_durable(block())); /* fx-17b: no SYNCHRONIZE CACHE = write-through */
+        assert(mode!=2 || (device()->storage.write_through && block()->write_cache_state==BLKDEV_CACHE_DISABLED && !block()->flush));
         assert(strstr(records,"mode_sense addr=1 reason=stalled assume_writable=1"));
         assert(m.resets==(mode==1 ? 1u:0u));
         uint8_t b[512];assert(!block()->read(block(),0,1,b));
-        if(mode!=2)assert(!block()->write(block(),1,1,b) && m.writes==1);
-        else assert(block()->write(block(),1,1,b)==-FS_EROFS && !m.writes);
+        assert(!block()->write(block(),1,1,b) && m.writes==1);
         cleanup();
     }
     for(unsigned bytes=0;bytes<8;bytes++) {
@@ -748,25 +759,73 @@ static void fat32_budget(const char *path)
     mount_device();
     uint64_t bind_ms=m.now-begin;
     struct usb_storage *s=&device()->storage;
-    /* fx-17: FSInfo says the free count is unknown. A 4 GiB FAT (512 KiB
-     * per copy) is counted at activation and the stick is writable; the
-     * 32 GiB FAT (4 MiB) is not counted under the drive reservation, so it
-     * stays read-only with reason free_count_unknown until the explicit
-     * full upgrade. Publication itself still reads nine single sectors. */
+    /* fx-17/fx-17b: FSInfo says the free count is unknown. A 4 GiB FAT (512
+     * KiB per copy) is counted at activation. The 32 GiB FAT (4 MiB) is
+     * writable at once and counted in the background by the storage writer;
+     * meanwhile FSInfo keeps 0xFFFFFFFF and allocation scans from the hint.
+     * Publication itself still reads nine single sectors. */
     struct storage_volume *sv=&storage_get()->volumes[4];
     assert(bind_ms<1000 && s->published && !block()->quarantined && sv->fat.scan_deferred && !sv->fat.scan_complete);
     assert(s->bind_read_max==1 && s->bind_read_requests<=9 && s->bind_read_sectors<=9);
-    if(gib==4) assert(!sv->fat.readonly && !sv->fat.free_unknown && sv->fat.free_clusters==sv->fat.clusters-2 && m.writes && strstr(records,"[storage] removable drive=E mode=rw"));
-    else assert(sv->fat.readonly && sv->fat.free_unknown && !m.writes && strstr(records,"[storage] removable drive=E mode=ro dirty=0 reason=free_count_unknown"));
+    assert(!sv->fat.readonly && m.writes && strstr(records,"[storage] removable drive=E mode=rw"));
+    if(gib==4) assert(!sv->fat.free_unknown && sv->fat.free_clusters==sv->fat.clusters-2);
+    else assert(sv->fat.free_unknown && sv->fat.census && strstr(records,"mode=rw dirty=0 reason=writable free=counting"));
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
     int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
     uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==512);
     for(unsigned i=0;i<512;i++)assert(data[i]==0x5a);
-    assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
+    assert(!vfs_close(&table,fd));
+    if(gib==32) {
+        /* A write during the count lands in free clusters found from the
+         * next-free hint; the provisional bound never reaches FSInfo. */
+        bool known;uint32_t bound=fat_free_estimate(&sv->fat,&known);assert(!known && bound<=sv->fat.clusters);
+        uint8_t *payload=malloc(65536);assert(payload);memset(payload,0x77,65536);size_t done;
+        fd=vfs_open(&table,"E:/DURING.BIN",VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0);assert(fd>=0);
+        assert(!vfs_write(&table,fd,payload,65536,&done) && done==65536 && !vfs_commit(&table,fd) && !vfs_close(&table,fd));
+        assert(fs_rd32(m.image+512+488)==0xffffffffu);
+        unsigned steps=0;uint64_t census_begin=m.now;
+        while(sv->fat.census) {
+            sv->census_next_ms=0;(void)storage_census_service(storage_get(),fs_now_ms());
+            if(steps==3) { /* a write between steps dirties counted sectors */
+                fd=vfs_open(&table,"E:/BETWEEN.BIN",VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0);assert(fd>=0);
+                assert(!vfs_write(&table,fd,payload,65536,&done) && !vfs_commit(&table,fd) && !vfs_close(&table,fd));
+            }
+            assert(++steps<200);
+        }
+        /* root (2), SHORT.BIN (3), two 64 KiB files of 32 KiB clusters. */
+        assert(!sv->fat.free_unknown && sv->fat.free_clusters==sv->fat.clusters-2-4);
+        assert(fat_free_estimate(&sv->fat,&known)==sv->fat.free_clusters && known);
+        assert(strstr(records,"[storage] free_count clusters=") && strstr(records,"source=background"));
+        printf("fx-17b 32 GiB FAT32 unknown FSInfo: writable at once, background count steps=%u model_ms=%llu free=%u\n",
+               steps,(unsigned long long)(m.now-census_begin),sv->fat.free_clusters);
+        free(payload);
+    }
+    vfs_table_destroy(&table);
     assert(s->max_sectors==USB_STORAGE_MAX_SECTORS && strstr(records," read_max=1 max_sectors=128\n"));
     printf("PASS F1-74 %u GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u read_max=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: %s with scan deferred\n",
-           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->max_sectors,s->bind_poll_frames,s->bind_retire_frames,sv->fat.readonly ? "read-only (free count unknown)" : "writable after a 512 KiB census");
+           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->max_sectors,s->bind_poll_frames,s->bind_retire_frames,gib==4 ? "writable after a 512 KiB census" : "writable at once, free count in the background");
     m.bytes=mapped;cleanup();
+    }
+    {
+        /* fx-17b: pulling the stick cancels its background count. */
+        setup(path,true);use_uhci();size_t mapped=m.bytes;
+        unsigned total=32u*2097152u,fat_sectors=32u*256u;
+        memset(m.image,0,(32+2*fat_sectors+128)*512);
+        uint8_t *b=m.image;
+        b[0]=0xeb;b[1]=0x58;b[2]=0x90;fs_wr16(b+11,512);b[13]=64;fs_wr16(b+14,32);b[16]=2;b[21]=0xf8;
+        fs_wr32(b+32,total);fs_wr32(b+36,fat_sectors);fs_wr32(b+44,2);fs_wr16(b+48,1);fs_wr16(b+50,6);fs_wr16(b+510,0xaa55);
+        memcpy(b+6*512,b,512);
+        fs_wr32(b+512,0x41615252);fs_wr32(b+512+484,0x61417272);fs_wr32(b+512+508,0xaa550000);
+        fs_wr32(b+512+488,UINT32_MAX);fs_wr32(b+512+492,UINT32_MAX);
+        for(unsigned copy=0;copy<2;copy++) {uint8_t *fat=b+(32+copy*fat_sectors)*512;fs_wr32(fat,0x0ffffff8);fs_wr32(fat+4,0x0fffffff);fs_wr32(fat+8,0x0fffffff);}
+        m.bytes=32ull*1024*1024*1024;m.mbr[450]=0x0c;fs_wr32(m.mbr+458,total);
+        mount_device();struct storage_volume *sv=&storage_get()->volumes[4];
+        assert(sv->fat.census);sv->census_next_ms=0;(void)storage_census_service(storage_get(),fs_now_ms());
+        assert(sv->fat.census && sv->fat.free_unknown);
+        m.connected=false;device()->present=false;usb_storage_detach(device());usb_storage_service(&m.h);
+        assert(!storage_get()->vfs.volumes[4] && !sv->fat.census && !storage_census_service(storage_get(),fs_now_ms()));
+        m.bytes=mapped;cleanup(); /* cleanup asserts no contiguous allocation is left */
+        puts("PASS fx-17b removal mid-count: the background free count is cancelled and its memory released");
     }
     setup(path,true);use_uhci();budget_log_delay=true;log_hook=delay_after_publication;
     mount_device();log_hook=NULL;

@@ -176,6 +176,21 @@ static bool wait_acpi(void)
     }
     return true;
 }
+/* fx-25: a transport failure names the function and the BIOS VM's exact
+ * reason (port, CS:IP, SS:SP, time against the budget). */
+static void call_failure(int e)
+{
+    if (!e || !backend.transport_error || e == -EAGAIN) return;
+    struct biosvm_failure f; biosvm_last_failure(&f);
+    if (!f.error) {
+        klog("[apm] call fn=%04x error=%d reason=broker", backend.last_function, e);
+        return;
+    }
+    klog("[apm] call fn=%04x error=%d reason=%s cs=%04x ip=%04x ss=%04x sp=%04x port=%04x width=%u write=%u "
+         "elapsed_ms=%u deadline_ms=%u budget_ms=%u",
+         backend.last_function, e, f.reason ? f.reason : "error", f.cs, f.ip, f.ss, f.sp, f.port, f.width,
+         (unsigned)f.write, f.elapsed_ms, f.deadline_ms, f.budget_ms);
+}
 static const char *reason(int e)
 {
     if (backend.state == APM_CONNECTED) return "real_mode";
@@ -222,6 +237,7 @@ static int discover(void)
             backend.connected = backend.reserved = false;
         }
     }
+    if (e) call_failure(e);
     klog("[apm] state=%u version=%04x flags=%04x error=%d connected=%u reason=%s bios_error=%02x",
          backend.state, backend.version, backend.flags, e, backend.state == APM_CONNECTED, reason(e),
          backend.bios_error);
@@ -251,7 +267,10 @@ static void service_once(void)
     int e = apm_backend_service(&backend);
     if (was_connected && backend.state == APM_EXCLUDED)
         klog("[apm] handoff to=acpi disconnect=%s error=%d", e ? "uncertain" : "clean", e);
-    else if (e) klog("[apm] service error=%d emergency_error=%d state=%u", e, backend.emergency_error, backend.state);
+    else if (e) {
+        call_failure(e);
+        klog("[apm] service error=%d emergency_error=%d state=%u", e, backend.emergency_error, backend.state);
+    }
     if (backend.state == APM_CONNECTED) cost_record();
     if (off_pending) {
         int r = deadline_passed(off_deadline) ? -V86_ETIMEDOUT :

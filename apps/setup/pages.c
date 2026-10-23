@@ -333,7 +333,7 @@ static void clock_refresh(struct st_app *a)
 {
     if (a->clock_edited) return;
     int64_t now = a->h.realtime ? a->h.realtime(a->h.ctx) : 0;
-    time_t local = (time_t)(now + (int64_t)st_zones[a->tz].minutes * 60);
+    time_t local = (time_t)(now + st_zone_offset(a->tz, st_zones[a->tz].minutes, now));   /* G1: with DST */
     struct tm tm; gmtime_r(&local, &tm);
     snprintf(a->clock_text, sizeof(a->clock_text), "%04d-%02d-%02d %02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1,
              tm.tm_mday, tm.tm_hour, tm.tm_min);
@@ -479,10 +479,12 @@ static void build_summary(struct st_app *a)
     const char *kbd = s->keyboard;
     for (unsigned i = 0; i < st_keyboard_count; i++) if (!strcmp(st_keyboards[i].id, s->keyboard)) kbd = st_keyboards[i].label;
     st_view_add(&a->view, st_pool(a, ST_B "User:" ST_B " %s " MID " computer %s " MID " keyboard %s", s->user_name, s->computer_name, kbd), 0, F_UI, DU_INK, 0);
-    int zone = st_zone_index(s->tz_minutes);
-    st_view_add(&a->view, st_pool(a, ST_B "Clock:" ST_B " UTC%c%02d:%02d (%s), the RTC keeps %s%s", s->tz_minutes < 0 ? '-' : '+',
-                (s->tz_minutes < 0 ? -s->tz_minutes : s->tz_minutes) / 60, (s->tz_minutes < 0 ? -s->tz_minutes : s->tz_minutes) % 60,
-                zone >= 0 ? st_zones[zone].label : "custom offset", s->clock == SETUP_CLOCK_UTC ? "UTC" : "local time", s->clock_adjust_s ? st_pool(a, ", set to %s when the files are copied", a->clock_text) : ""),
+    int zone = st_zone_find(s->tz_zone);
+    const char *where = zone >= 0 ? st_pool(a, "%s%s", st_zones[zone].label, st_zones[zone].daylight[0] ? ", daylight saving automatic" : "") :
+        st_pool(a, "UTC%c%02d:%02d fixed offset", s->tz_minutes < 0 ? '-' : '+',
+                (s->tz_minutes < 0 ? -s->tz_minutes : s->tz_minutes) / 60, (s->tz_minutes < 0 ? -s->tz_minutes : s->tz_minutes) % 60);
+    st_view_add(&a->view, st_pool(a, ST_B "Clock:" ST_B " %s, the RTC keeps %s%s", where,
+                s->clock == SETUP_CLOCK_UTC ? "UTC" : "local time", s->clock_adjust_s ? st_pool(a, ", set to %s when the files are copied", a->clock_text) : ""),
                 0, F_UI, DU_INK, 0);
     if (s->network == SETUP_NET_STATIC)
         st_view_add(&a->view, st_pool(a, ST_B "Network:" ST_B " manual %u.%u.%u.%u/%u, gateway %u.%u.%u.%u, DNS %u.%u.%u.%u " MID " IPX %s " MID " game lobby %s",
@@ -632,6 +634,7 @@ void st_page_collect(struct st_app *a)
         for (char *p = s->computer_name; *p; p++) if (*p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
         snprintf(s->keyboard, sizeof(s->keyboard), "%s", st_keyboards[a->kbd].id);
         s->tz_minutes = (int16_t)st_zones[a->tz].minutes;
+        snprintf(s->tz_zone, sizeof(s->tz_zone), "%s", st_zones[a->tz].id);
         a->clock_utc = value_of(a, ST_ID_UTC);
         s->clock = a->clock_utc ? SETUP_CLOCK_UTC : SETUP_CLOCK_LOCAL;
         snprintf(a->clock_text, sizeof(a->clock_text), "%s", text_of(a, ST_ID_CLOCK));
@@ -1216,8 +1219,15 @@ static void combo_set(struct st_app *a, int id, int index)
     unsigned count = id == ST_ID_KBD ? st_keyboard_count : st_zone_count;
     if (index < 0) index = 0;
     if (index >= (int)count) index = (int)count - 1;
-    if (id == ST_ID_KBD) a->kbd = index;
-    else { a->tz = index; clock_refresh(a); }
+    if (id == ST_ID_KBD) {
+        a->kbd = index;
+        /* G1: until the user picks a zone, the keyboard's country decides. */
+        if (!a->tz_chosen) {
+            int zone = st_zone_find(!strcmp(st_keyboards[index].id, "it") ? CIUKI_TZ_DEFAULT_ITALY : CIUKI_TZ_UTC);
+            if (zone >= 0 && zone != a->tz) { a->tz = zone; clock_refresh(a); }
+        }
+    }
+    else { a->tz = index; a->tz_chosen = 1; clock_refresh(a); }
     a->ui->dirty = 1;
 }
 static int combo_value(struct st_app *a, int id) { return id == ST_ID_KBD ? a->kbd : a->tz; }

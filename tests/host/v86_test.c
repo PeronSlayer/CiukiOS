@@ -380,6 +380,19 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             live.tf.eip += 2;
             if (live.tf.eflags & V86_ZF) live.tf.eip += (int8_t)code[1];
             continue;
+        } else if (code[0] == 0xCA || code[0] == 0xCB) {
+            /* fx-25: RETF / RETF imm16 run natively in V86 mode (not
+             * IOPL-sensitive): pop IP and CS, then discard imm16 bytes. */
+            uint8_t *st = vm_memory(0, (live.tf.user_ss << 4) + (uint16_t)live.tf.user_esp, 4, false);
+            CHECK(st != 0); if (!st) exit(2);
+            uint16_t extra = code[0] == 0xCA ? (uint16_t)getword(code + 1, 2) : 0;
+            live.tf.eip = getword(st, 2); live.tf.cs = getword(st + 2, 2);
+            live.tf.user_esp = (uint16_t)(live.tf.user_esp + 4 + extra);
+            continue;
+        } else if (code[0] == 0xF8 || code[0] == 0xF9) {
+            live.tf.eflags = (live.tf.eflags & ~1u) | (code[0] == 0xF9);
+            live.tf.eip++;
+            continue;
         } else if (code[0] == 0x90) {
             live.tf.eip++;
             if (!firmware.shadow)
@@ -1565,6 +1578,51 @@ static void test_apm_t23_window(void)
     boot_fixture(false); apm_window_set = false;
     puts("PASS APM T23 window: trial fault reproduced without it; PM1_CNT read, APM_CNT write, 80h absorbed; SCI_EN write denied");
 }
+/* fx-25: the T23 APM BIOS (trial of f441c5bd) completes 5300h and returns
+ * by a far return, not IRET: the registers were AX=0102h BX=504Dh CX=0003h
+ * with CF clear, then the sentinel's HLT (1000:0001) waited for the
+ * deadline (error -110) and the VM was quarantined. */
+static void t23_handler(const uint8_t *tail, unsigned n)
+{
+    static const uint8_t head[] = {0xba,0x04,0x10, 0xec, 0xb8,0x02,0x01, 0xbb,0x4d,0x50, 0xb9,0x03,0x00};
+    boot_fixture(false); g_boot.flags = 0;
+    ivt(0x15, 0xf000, 0x400); memcpy(ram + 0xf0400, head, sizeof(head)); memcpy(ram + 0xf0400 + sizeof(head), tail, n);
+    const struct apm_pm_blocks fadt = {.pm1a_cnt = 0x1004, .pm1_cnt_len = 2, .smi_cmd = 0xb2};
+    struct apm_port_window w; apm_port_window_build(&w, &fadt, 0x1000, 128);
+    CHECK(!biosvm_apm_set_window(&w));
+}
+static void test_apm_t23_retf(void)
+{
+    struct biosvm_regs r; struct biosvm_failure x;
+    static const uint8_t retf2[] = {0xf8, 0xca,0x02,0x00};   /* CLC; RETF 2 */
+    t23_handler(retf2, sizeof(retf2)); unsigned far = firmware.far_returns;
+    CHECK(!biosvm_apm_probe(&r) && !quarantined && firmware.far_returns == far + 1);
+    CHECK(r.eax == 0x0102 && r.ebx == 0x504d && r.ecx == 3 && !(r.flags & 1));
+    biosvm_last_failure(&x); CHECK(!x.error);
+    static const uint8_t retf[] = {0xf9, 0xcb};               /* STC; RETF (saved FLAGS left) */
+    t23_handler(retf, sizeof(retf));
+    CHECK(!biosvm_apm_probe(&r) && !quarantined && (r.flags & 1) && r.eax == 0x0102);
+    /* Any other stack at the sentinel is not a return: an exact record. */
+    static const uint8_t retf4[] = {0xca,0x04,0x00};
+    t23_handler(retf4, sizeof(retf4));
+    CHECK(biosvm_apm_probe(&r) == -V86_ETIMEDOUT && quarantined);
+    biosvm_last_failure(&x);
+    CHECK(x.error == -V86_ETIMEDOUT && !strcmp(x.reason, "halted_at_sentinel") && x.cs == 0x1000 && x.ip == 1 &&
+          x.sp == 0x1002 && x.budget_ms == 100 && x.function == 0x5300 && x.interrupt == 0x15);
+    /* A BIOS that halts by itself, and a denied port, name where. */
+    static const uint8_t hlt[] = {0xf4};
+    t23_handler(hlt, sizeof(hlt));
+    CHECK(biosvm_apm_probe(&r) == -V86_ETIMEDOUT && quarantined);
+    biosvm_last_failure(&x);
+    CHECK(!strcmp(x.reason, "halted") && x.cs == 0xf000 && x.ip == 0x040e);
+    static const uint8_t port[] = {0xe4,0x62};                /* IN AL,62h (EC data) */
+    t23_handler(port, sizeof(port));
+    CHECK(biosvm_apm_probe(&r) == -V86_EPERM && quarantined);
+    biosvm_last_failure(&x);
+    CHECK(!strcmp(x.reason, "port_denied") && x.port == 0x62 && x.width == 1 && !x.write && x.cs == 0xf000 && x.ip == 0x040d);
+    boot_fixture(false); apm_window_set = false;
+    puts("PASS APM T23 RETF: RETF 2/RETF to the sentinel complete with the handler's flags; halt/port failures recorded exactly");
+}
 static void test_apm_probe(void)
 {
     for (unsigned native = 0; native < 2; native++) {
@@ -1671,6 +1729,7 @@ int main(void)
     test_fullscreen_calls();
     test_apm_probe();
     test_apm_t23_window();
+    test_apm_t23_retf();
     printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
     printf("v86/firmware host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

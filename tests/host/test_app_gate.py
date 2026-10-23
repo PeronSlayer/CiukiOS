@@ -242,6 +242,8 @@ class AppGateTests(unittest.TestCase):
         harness = self.work / "environment.c"
         harness.write_text('''#include <ciuki/kernel.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/systime.h>
+#pragma weak timezone_env
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -21,6 +21,7 @@
 #include <ciuki/devices.h>
 #include <ciuki/net.h>
 #include <ciuki/power.h>
+#include <ciuki/timezone.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -502,6 +503,8 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 }
 static uint64_t monotonic(void *ctx) { (void)ctx; return du_now(); }
 static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gettime(CLOCK_REALTIME, &t) || t.tv_sec < 0 ? 0 : (uint64_t)t.tv_sec; }
+/* G1: Date/Time Properties through syscall 97 (the Control Panel holds the time authority). */
+static int time_zone(void *ctx, struct ciuki_time_zone *z, uint32_t op) { (void)ctx; return ciuki_time_zone(z, op) ? -errno : 0; }
 static int close_request(struct du_window *w, void *user)
 { (void)w; struct cp_main *m = user;
   if (settings_busy(m)) {
@@ -756,7 +759,7 @@ int main(int argc, char **argv)
     h->pack_install=pack_install; h->pack_remove=pack_remove;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
-    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;

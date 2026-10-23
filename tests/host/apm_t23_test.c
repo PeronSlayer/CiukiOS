@@ -38,6 +38,8 @@ static char log_line[256], logs[8192];
 static size_t log_size;
 
 /* ---- T23 machine model ---- */
+static struct biosvm_failure failure;
+static bool retf_halts;
 static struct apm_port_window window;
 static bool window_set, vm_quarantined, ec_held, fadt_present = true, chip_present = true;
 static uint16_t pm1_cnt;            /* SCI_EN clear: firmware (legacy) mode */
@@ -68,9 +70,22 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
     if (vm_quarantined) return -V86_EIO;
     uint16_t fn = (uint16_t)r->eax;
     calls++;
+    failure = (struct biosvm_failure){0};
     /* Every function: IN AL,DX (PM1_CNT); TEST AL,1 (SCI_EN). */
     int e = port(0x1004, 1, false, 0, fn);
-    if (e) return e;
+    if (e) {
+        failure = (struct biosvm_failure){.error = e, .function = fn, .interrupt = 0x15, .reason = "port_denied",
+            .cs = 0xf000, .ip = 0x4ccf, .port = 0x1004, .width = 1, .elapsed_ms = 1, .deadline_ms = ms, .budget_ms = ms};
+        return e;
+    }
+    if (retf_halts) {
+        /* Pre-fx-25 monitor: the handler's RETF 2 reached the sentinel HLT. */
+        vm_quarantined = true;
+        failure = (struct biosvm_failure){.error = -V86_ETIMEDOUT, .function = fn, .interrupt = 0x15,
+            .reason = "halted_at_sentinel", .cs = 0x1000, .ip = 1, .ss = 0x1100, .sp = 0x1000,
+            .elapsed_ms = 87, .deadline_ms = 87, .budget_ms = 100};
+        return -V86_ETIMEDOUT;
+    }
     r->flags = 0;
     if (pm1_cnt & 1) { r->flags = 1; r->eax = 0x8600; return 0; } /* OS runs ACPI: APM not present */
     if (fn != 0x5300) { e = port(0xb2, 1, true, fn & 0xff, fn); if (e) return e; } /* software SMI */
@@ -105,6 +120,9 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
 }
 int biosvm_apm_set_window(const struct apm_port_window *w) { window = *w; window_set = true; return 0; }
 void biosvm_apm_io_snapshot(struct biosvm_apm_io *out) { *out = (struct biosvm_apm_io){.denied = denials}; }
+/* fx-25: the BIOS VM's record of the last failure, as the f441c5bd trial
+ * produced it before the RETF 2 fix (or a port denial). */
+void biosvm_last_failure(struct biosvm_failure *out) { *out = failure; }
 int acpi_ec_firmware_hold(unsigned ms)
 {
     CHECK(ms && ms <= 500 && !ec_held);
@@ -182,6 +200,16 @@ int main(void)
     CHECK(strstr(log_line, "[apm] state=1") && strstr(log_line, "reason=firmware"));
     struct ciuki_power_status record; power_source_status(&record);
     CHECK(record.provider == CIUKI_POWER_PROVIDER_NONE && !record.battery_count && record.ac_online == CIUKI_POWER_UNKNOWN);
+
+    CHECK(strstr(logs, "[apm] call fn=5300 error=-1 reason=port_denied cs=f000 ip=4ccf") && strstr(logs, "port=1004 width=1 write=0"));
+    /* 1b. The f441c5bd trial: the window admits PM1_CNT, the BIOS returns by
+     * RETF 2 and the old monitor waited at the sentinel HLT; the record now
+     * names the reason, the place and the budget. */
+    reset_machine(); fadt_present = chip_present = true; retf_halts = true;
+    CHECK(discover() == -V86_ETIMEDOUT && !connects);
+    CHECK(strstr(logs, "[apm] call fn=5300 error=-110 reason=halted_at_sentinel cs=1000 ip=0001 ss=1100 sp=1000") &&
+          strstr(logs, "elapsed_ms=87 deadline_ms=87 budget_ms=100"));
+    retf_halts = false;
 
     /* 2. fx-18: the FADT + ICH3-M window admits exactly what the BIOS uses. */
     reset_machine(); fadt_present = chip_present = true;

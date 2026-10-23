@@ -1,5 +1,175 @@
 # Desktop shell bars and protruding Start orb (f2-82)
 
+## End of session and closing without data loss (G3)
+
+- **Written:** 2026-10-23 21:17 CEST for directive G3
+  (`docs/directives/g1-g6-os-gaps-batch-1.md`), inventory rows SD-1, SD-2,
+  SD-5, DOS-5 and WM-16. It supersedes the f2-85 close deadline below (2 s,
+  30 s after a "later" acknowledgement) and the 3 s shutdown deadline while
+  programs could still be asked.
+- **Sources:**
+  - [WM_QUERYENDSESSION](https://learn.microsoft.com/en-us/windows/win32/shutdown/wm-queryendsession):
+    every application is asked; "If any application returns zero, the session
+    is not ended"; the system stops asking at the first zero; `DefWindowProc`
+    returns TRUE; lParam is 0 for shut down or restart, `ENDSESSION_LOGOFF`
+    (0x80000000) for log off, with `ENDSESSION_CLOSEAPP` and
+    `ENDSESSION_CRITICAL`; an application that returned TRUE receives
+    WM_ENDSESSION whatever the others answer.
+  - [WM_ENDSESSION](https://learn.microsoft.com/en-us/windows/win32/shutdown/wm-endsession):
+    wParam TRUE when the session ends ("the session can end any time after all
+    applications have returned from processing this message"), FALSE when it
+    goes on.
+  - [ExitWindowsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-exitwindowsex):
+    the EWX_LOGOFF (0), EWX_SHUTDOWN (1), EWX_REBOOT (2), EWX_FORCE (4) and
+    EWX_POWEROFF (8) flags the Win32 broker already carries.
+  - Windows 98 Resource Kit, ch. 25 "Using Applications", "Closing Failed
+    Applications" (`wrkc25_4.htm`): CTRL+ALT+DEL ends a program that stops
+    responding; "it is possible to restart your computer by pressing
+    CTRL+ALT+DEL twice", not recommended; ch. 25 "Technical Notes"
+    (`wrkc25_5.htm`): the Close Program dialog closes an unresponsive
+    application without affecting the others.
+  - Windows 9x `HungAppTimeout` (HKCU\Control Panel\Desktop, default 5000 ms):
+    the time after which a window that does not process messages is treated
+    as not responding.
+  - The texts of the "This program is not responding" (End Task, Cancel) and
+    MS-DOS "Windows cannot shut down this program automatically" dialogs are
+    Windows 98's in substance, with CiukiOS for Windows. Microsoft's current
+    documentation no longer carries the MS-DOS text; it is recorded from the
+    Windows 95/98 dialog and is not quoted from a citable source.
+
+### Behaviour
+
+1. **Shut Down, Restart and Log Off ask every program in turn**
+   (`desk_session_begin`, `apps/desktop/client.c`). Windows are asked
+   topmost first. Each answer comes before the next program is asked. The
+   program being asked comes to the front, so its prompt is visible. The
+   desktop shows no modal panel during the queries: the program's own dialog
+   takes input.
+   - A registered v2 window (libdeskui programs, the DOS window) gets
+     `QUERY_END_SESSION` with the WM_QUERYENDSESSION lParam.
+   - An unregistered v2 window, a v1 window and a v3 window that is not a
+     Win32 window (NetSurf) agree at once, as `DefWindowProc` returns TRUE.
+     At the end they get their ordinary close message.
+   - The Win32 windows are one turn, at the position of their topmost window
+     (or last, when they only have hidden windows). The w32srv broker sends
+     WM_QUERYENDSESSION to each Win32 window in turn (`BEGIN` with
+     `W32R_SESSION_HOLD`).
+2. **A program may show its own save prompt.** It answers ASKING; the
+   session then waits for the user with no deadline while the program
+   answers PINGs. Yes or No in its prompt agrees; Cancel vetoes. A
+   registered window that answers a PING sent after its query, without
+   answering the query, agrees (DefWindowProc).
+3. **A program that does not answer:** when the program being asked has not
+   answered a PING for 5 s (HungAppTimeout), and at least 5 s have passed
+   since its query, the desktop shows "This program is not responding" with
+   End Task and Cancel (Cancel is the default button). For a Win32 turn the
+   rule is the same for the window being asked: its windows do not answer
+   PINGs, or its USER thread has not fetched WM_QUERYENDSESSION for 5 s.
+   - End Task terminates the program's process (SIGKILL, as TerminateProcess)
+     and the session goes on with the next program.
+   - Cancel ends the session.
+   - If the program answers again, the dialog closes by itself.
+4. **A DOS window whose program runs** (not at an idle prompt, not stopped)
+   answers DOS_ACTIVE. The desktop shows the Windows 98 warning, "Windows
+   cannot shut down this program automatically. It is recommended that you
+   quit this program with its quit or exit command", with Yes and No (No is
+   the default). Yes agrees: the window closes at the end of the session and
+   the VM is ended. No ends the session.
+5. **Any veto, No or Cancel ends the session with every program still
+   running.** The programs that already agreed get `END_SESSION(0)` (the
+   vetoing one does not). The broker sends WM_ENDSESSION(FALSE) to the Win32
+   windows that agreed (`W32R_SESSION_CANCEL`). No window is closed, nothing
+   is terminated and the power sequence does not start.
+6. **Only when every program agreed** do the following happen:
+   - the registered windows get `END_SESSION(1)` and exit without prompting
+     again;
+   - the broker sends WM_ENDSESSION(TRUE) to the Win32 windows
+     (`W32R_SESSION_COMMIT`);
+   - the other windows get their ordinary close message;
+   - then the fx-5 sequence runs unchanged (`desk_power_begin`): programs
+     still alive after 3 s are terminated (they all agreed), then the storage
+     flush, the devices and soft-off or reset through call 73. The power call
+     is issued once.
+   - Log Off runs the same queries with `ENDSESSION_LOGOFF` and EWX_LOGOFF,
+     closes every program and stops there: no power call, and the desktop
+     stays (no logon dialog before G32).
+7. **Closing one window** (title button, Alt+F4, the task button menu) sends
+   `CLOSE_REQUEST` (WM_CLOSE), which carries no deadline for a v2 or v3
+   program.
+   - The program may answer `CLOSE_ACK LATER` and show its prompt; the
+     window stays "Closing..." for as long as the user takes, while the
+     program answers PINGs.
+   - `CLOSE_ACK DECLINED` ends the request. A Win32 window that survives its
+     WM_CLOSE (the user cancelled "Save changes?") declines automatically
+     (user32 `DispatchMessageA`).
+   - A closing window that does not answer PINGs for 5 s gets "This program
+     is not responding". End Task terminates it; Cancel leaves the request
+     queued for when the program recovers, without asking again.
+   - A DOS window whose program runs answers `CLOSE_ACK DOS_ACTIVE` and gets
+     the MS-DOS warning: Yes ends its process and No keeps it.
+   - Only a v1 window, told `CLOSED` and unable to prompt, keeps the 2 s
+     termination.
+8. **Task Manager.**
+   - End Task asks the program to close, as Windows 98's Close Program does
+     (WM_CLOSE, with its prompt).
+   - On a window that is already closing or not responding, End Task shows
+     "This program is not responding" at once, and its End Task terminates
+     the process.
+   - File > Shut Down opens the desktop's Shut Down dialog
+     (`DESK_SETTINGS_OPEN_POWER`, now allowed to Task Manager).
+   - Ctrl+Alt+Del with Task Manager in front opens Shut Down with Restart as
+     the default button. Windows 98 restarts at once (Resource Kit: "not
+     recommended"); CiukiOS keeps the orderly session, so no unsaved data is
+     lost.
+
+### Protocol (`apps/desktop/protocol.h`, version 2)
+
+| Message | Direction | Payload (u32) |
+| --- | --- | --- |
+| `QUERY_END_SESSION` (49) | desktop to client | serial (nonzero), flags (`DESK_ENDSESSION_*`) |
+| `END_SESSION` (50) | desktop to client | serial, ending (0/1), flags |
+| `SESSION_ANSWER` (51) | client to desktop | serial, answer: 0 VETO, 1 AGREE, 2 ASKING, 3 DOS_ACTIVE; serial 0 with AGREE registers the window |
+| `CLOSE_ACK` (37) | client to desktop | disposition 0 declined, 1 later (no deadline), 2 DOS program running (v2 only) |
+
+- The desktop never sends `QUERY_END_SESSION` or `END_SESSION` to an
+  unregistered client, so older v2 clients (the demo) cannot receive an
+  opcode they do not know.
+- libdeskui registers every window. For a program without a
+  `query_end_session` callback, it answers through `close_request`:
+  - a nonzero result agrees;
+  - zero means the program shows its prompt (ASKING);
+  - the program's own `du_window_close()` during the query agrees, and the
+    window stays open until `END_SESSION`;
+  - `du_window_close_reply(w, 0)` vetoes.
+
+  Music and the Terminal agree directly (nothing to save). CiukNote and
+  CiukPaint decline or veto when their "Save changes?" is cancelled, or when
+  the save fails.
+- Paint's close callback was inverted: the window closed under its own save
+  prompt, and a clean picture never closed until the desktop's deadline. It
+  is fixed here.
+- Win32 broker (`sdk/win32/include/w32/server.h`):
+  - `BEGIN` takes `W32R_SESSION_HOLD` (0x100). With it there is no 10 s
+    deadline.
+  - `STATUS` returns key 3 (held, every window agreed) and, while a query
+    runs, the window being asked: count = PID, type = HWND, disposition = 1
+    once fetched.
+  - `COMMIT` (7) delivers WM_ENDSESSION(TRUE); `CANCEL` (6) delivers FALSE to
+    the windows that agreed.
+  - ExitWindowsEx sessions (no HOLD) are unchanged.
+
+### Not covered (gaps, owned elsewhere)
+
+- Stand by (PW-6, G11) and Restart in MS-DOS mode (DOS-9) in the Shut Down
+  dialog.
+- Log Off has no Start menu entry or logon dialog (SD-6, G32): the engine
+  supports it (action 3), and the Shut Down dialog offers Restart and Shut
+  Down.
+- The per-program "Warn if still active" choice of the MS-DOS Misc page: every
+  DOS window warns.
+- An ExitWindowsEx restart from a Win32 installer (`desk_restart`) keeps its
+  10 s bound.
+
 ## Desktop transfers, close acknowledgement and Files refresh (f2-85)
 
 Primary sources rechecked on 2026-10-19 before code changes:
@@ -32,6 +202,8 @@ body in an internal window with its ordinary title frame and input routing.
 
 Protocol: v2 client-to-shell `DESK_CLOSE_ACK` has exactly eight bytes, no
 attachments, with a uint32 disposition: 1 = closing later, 0 = close declined.
+(G3 superseded the deadlines in this paragraph: a v2 close has no deadline
+while the program answers PINGs; see "End of session" above.)
 Only the authenticated sender's closing window can acknowledge. Its first
 later acknowledgement must arrive before the original two-second deadline and
 grants a total of 30 seconds from the original request; duplicates never extend it. A declined
@@ -408,7 +580,10 @@ V3 CLOSE_ACK carries one disposition word (0 decline, 1 defer), scoped to its
 window. A frame-close request does not start the native process-wide timeout:
 closing one top-level window cannot terminate its siblings. Explicit End Task
 uses the authenticated host PID and the existing termination authority, and
-works independently of guest UI progress. Legacy Task Manager window lists
+works independently of guest UI progress. (G3: End Task first asks the
+program to close; the termination is the End Task button of "This program is
+not responding", offered at once for a window already closing or not
+responding.) Legacy Task Manager window lists
 retain their v2 ASCII schema; only non-ASCII code points are replaced by `?`
 in that legacy view, while v3 captions remain intact. Empty captions use
 `Windows program` there. Lease release is idempotent, regrant notification

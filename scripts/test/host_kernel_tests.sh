@@ -155,6 +155,16 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/rtc_test.c" "$root/src/kernel/fs/fs_port.c" -o "$out/rtc_test"
 "$out/rtc_test"
 
+# G1: POSIX TZ rules and the bundled zone table against the host C library,
+# and libciuki's localtime/mktime/tzset over the same evaluator.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/tzrule_test.c" "$root/src/kernel/lib/tzrule.c" -o "$out/tzrule_test"
+"$out/tzrule_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-macro-redefined -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -I "$root/tests/host/libciuki_tz" -I "$root/src/kernel/include" -idirafter "$root/sdk/sysroot-overlay/include" \
+    "$root/tests/host/libciuki_tz/tz_test.c" -o "$out/libciuki_tz_test"
+"$out/libciuki_tz_test"
+
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" \
     "$root/tests/host/entropy/unavailable_stub.c" -o "$out/kernel_sync_test"
@@ -614,6 +624,18 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
     "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
 "$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"
+# G1: the time-zone service, the RTC in local time and FAT stamps on the
+# same production FAT/VFS/posix path (fresh fixtures: files_test writes them).
+python3 "$root/tests/host/fs/fixtures.py"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
+    "$root/tests/host/proc/localtime_test.c" "$root/tests/host/proc/signal_legacy.c" \
+    "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
+    "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
+    "$root/src/kernel/probes/f2_probes_files.c" -o "$out/localtime_test"
+"$out/localtime_test" "$out/fs/fat32.img" "$out/fs/fat16.img"
 
 # f9-01: Setup CD media (boot image, ISO, eligibility, manifest) and the
 # kernel model (cdview, boot-CD identification, Setup-mode storage start).

@@ -22,7 +22,7 @@ static int places_close_fd(int);
 #undef open
 static unsigned opens, closes, state_reads, volume_reads;
 static uint32_t mounted=(1u<<3)|(1u<<4), transport=12;
-static int unavailable, changed_mid_snapshot, bad_volume;
+static int unavailable, changed_mid_snapshot, bad_volume, floppy_present;
 static const char *usb_label="CIUKI USB";
 static int places_open(const char *path,int flags,...)
 {
@@ -38,6 +38,7 @@ int places_devctl(int fd,uint32_t op,void *record,uint32_t bytes)
     if (op==MEDIA_GET_STATE) {
         assert(bytes==sizeof(struct ciuki_media_state)); state_reads++;
         struct ciuki_media_state *s=record; s->removable_mask=mounted;
+        if (floppy_present) s->type[0]=CIUKI_MEDIA_FLOPPY; /* fx-17b: drive A:, no disk */
         for (unsigned d=3;d<26;d++) if (mounted&(1u<<d)) {
             s->type[d]=d==3 ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_USB;
             s->generation[d]=transport;
@@ -121,7 +122,13 @@ int main(int argc,char **argv)
     assert(d->places->count==6 && d->places->rows[5].selected);
     render(&u,argv[1],"places-save-small");
     du_message(&u,3,"Question","Replace playlist?",0,NULL,0,0,0); assert(closes==3 && !d->places);
-    du_dialog_close(&u); du_release(&u);
-    puts("PASS Places: native media labels/generations, render, mouse/keyboard navigation, hotplug, query errors and close");
+    du_dialog_close(&u);
+    /* fx-17b: a floppy drive is a Place with or without a diskette. */
+    floppy_present=1; mounted=0;
+    assert(!du_file_dialog(&u,4,0,"Open","/Documents","",list,NULL));
+    assert(d->places->count==6 && !strcmp(d->places->entries[5].label,"3.5 Floppy (A:)") &&
+           !strcmp(d->places->entries[5].path,"/mnt/a") && d->places->rows[5].icon16);
+    du_dialog_close(&u); floppy_present=0; du_release(&u);
+    puts("PASS Places: native media labels/generations, floppy A: place, render, mouse/keyboard navigation, hotplug, query errors and close");
     puts("PASS F2-86 Places: unchanged polls render=0; renamed label invalidates pane only; retained row pointers/selection/scroll");
 }

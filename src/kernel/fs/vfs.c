@@ -2725,6 +2725,6 @@ int vfs_free_space(struct vfs_table *t, unsigned d, uint64_t *bytes, uint32_t *c
 
     if (d>=26 || !bytes || !cb) return -FS_EINVAL; vfs_lock(t->vfs,vfs_drive_mask(d));
     struct fat_volume *v=t->vfs->volumes[d]; int e=v ? 0 : -FS_ENOENT;
-    if (v) { *cb=(uint32_t)v->spc*512; *bytes=(uint64_t)v->free_clusters * *cb; }
+    if (v) { *cb=(uint32_t)v->spc*512; *bytes=(uint64_t)fat_free_estimate(v,0) * *cb; } /* fx-17b: bound while counting */
     vfs_unlock(t->vfs); return e;
 }

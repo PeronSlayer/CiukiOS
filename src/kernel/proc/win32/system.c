@@ -2,6 +2,8 @@
 #include <ciuki/kernel.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/systime.h>
+#pragma weak timezone_call
 static void priority_apply(struct proc_thread *t) {
   if (!t->w32 || !t->task)
     return;
@@ -44,6 +46,18 @@ uint32_t w32_system_call(struct proc_thread *t,
     uint64_t n = w32_system_time();
     a->low = (uint32_t)n;
     a->high = (uint32_t)(n >> 32);
+  } else if (a->action == W32_S_TIME_ZONE) {
+    struct ciuki_time_zone z;
+    if (a->extra != sizeof(z) || copy_from_user(&z, a->low, sizeof(z)))
+      a->error = 998;
+    else {
+      int e = timezone_call ? timezone_call(t->process, &z) : -ENOSYS;
+      if (e == -EPERM) a->error = 1314;      /* ERROR_PRIVILEGE_NOT_HELD */
+      else if (e == -EINVAL) a->error = 87;
+      else if (e == -EBUSY) a->error = 170;  /* ERROR_BUSY */
+      else if (e) a->error = 31;             /* ERROR_GEN_FAILURE */
+      else if (copy_to_user(a->low, &z, sizeof(z))) a->error = 998;
+    }
   } else if (a->action == W32_S_MEMORY) {
     a->low = pmm_total_usable();
     a->high = pmm_free_count();

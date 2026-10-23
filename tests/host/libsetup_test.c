@@ -9,6 +9,7 @@
 #include "../../sdk/libreg/internal.h"
 #include "../../apps/desktop/settings.h"
 #include <ciuki/net_config.h>
+#include <ciuki/tzrule.h>
 #include "../../sdk/libsetup/internal.h"
 int st_hopen(const char *);
 int st_hread(int,void *,unsigned);
@@ -548,8 +549,35 @@ static void test_native_configuration(void)
         CHECK(installed);reg_tree_free(tree);
         n=b_read_file(NULL,'E',"system/settings/desktop.cfg",text,sizeof(text));CHECK(n>0);
         struct ciuki_settings cfg;cfg_defaults(&cfg);CHECK(!cfg_parse(&cfg,text,(unsigned)n) && cfg.keyboard==CFG_KEYS_IT);
+        /* G1: a fixed offset is recorded as such (clock.cfg version 2). */
+        n=b_read_file(NULL,'E',"system/settings/clock.cfg",text,sizeof(text));CHECK(n>0);
+        struct tzr_config clock;CHECK(tzr_config_parse(text,(size_t)n,&clock) && !strcmp(clock.tz,"<+02>-2") && !clock.zone[0]);
+        CHECK(clock.rtc_local==(a.clock==SETUP_CLOCK_LOCAL) && clock.rtc_bias_minutes==(clock.rtc_local ? 120 : 0));
         end();
     }
+    /* G1: Europe/Rome. The confirmed time 1792703600 (22 October 2026) is
+     * CEST: the RTC gets UTC+2 and clock.cfg records that bias; the
+     * registry names the zone and its rule. */
+    static const int64_t adjust[2]={3600,3600+60*86400};   /* 22 October (CEST), 21 December (CET) */
+    for(unsigned k=0;k<2;k++) {
+        begin(2097152);S.nics=true;struct setup_answers a=answers();struct setup_plan p;
+        a.tz_minutes=60;snprintf(a.tz_zone,sizeof(a.tz_zone),"Europe/Rome");a.clock=SETUP_CLOCK_LOCAL;a.clock_adjust_s=adjust[k];
+        st_set_platform(NULL);unsigned rtc_before=rtc_writes;
+        OK(setup_txn_prepare(&a,&p));OK(setup_txn_execute(&p,&callbacks,NULL));
+        CHECK(rtc_writes==rtc_before+1 && last_clock.offset_minutes==(k ? 60 : 120) && last_clock.rtc_local);
+        char text[4096]={0};int n=b_read_file(NULL,'E',"system/settings/clock.cfg",text,sizeof(text));CHECK(n>0);
+        struct tzr_config clock;CHECK(tzr_config_parse(text,(size_t)n,&clock));
+        CHECK(!strcmp(clock.zone,"Europe/Rome") && !strcmp(clock.tz,"CET-1CEST,M3.5.0,M10.5.0/3") && clock.auto_dst && clock.offset_minutes==60);
+        CHECK(clock.rtc_local && clock.rtc_bias_minutes==(k ? 60 : 120));
+        n=b_read_file(NULL,'E',"System/Registry/System.reg",text,sizeof(text));CHECK(n>0);text[n]=0;
+        CHECK(strstr(text,"Europe/Rome") && strstr(text,"CET-1CEST,M3.5.0,M10.5.0/3") && strstr(text,"AutoDST"));
+        end();
+    }
+    /* A zone that is not bundled, or whose offset disagrees, is refused before any write. */
+    begin(2097152);{struct setup_answers a=answers();struct setup_plan p;
+        snprintf(a.tz_zone,sizeof(a.tz_zone),"Mars/Olympus");CHECK(setup_txn_prepare(&a,&p)!=0);
+        snprintf(a.tz_zone,sizeof(a.tz_zone),"Europe/Rome");a.tz_minutes=120;CHECK(setup_txn_prepare(&a,&p)!=0);}
+    end();
 }
 static void test_restart(void)
 {

@@ -27,11 +27,13 @@ static struct px_namespace *spaces;
 static uint32_t path_drives(struct px_namespace *s,struct px_node *cwd,const char *path)
 {
     uint8_t kinds[CIUKI_PATH_MAX/2+2]; unsigned depth=0;
-    kinds[0]=2; /* 0=/mnt, 1=/dev, 2=C root, 3..25=mount letters */
+    /* 0=/mnt, 1=/dev (no drive), 2+d=drive d (C root is 4). fx-17b: A:/B:
+     * floppies (d 0/1) sit under /mnt like every other letter but C:. */
+    kinds[0]=2+2;
     if (path[0]!='/' && cwd) {
         struct px_node *n=cwd; unsigned count=0;
         while (n!=s->root && count<CIUKI_PATH_MAX/2) {
-            kinds[++count]=n==s->mnt ? 0 : n==s->dev || (!n->volume && !n->ro) ? 1 : n->drive;
+            kinds[++count]=n==s->mnt ? 0 : n==s->dev || (!n->volume && !n->ro) ? 1 : 2+n->drive;
             n=n->parent;
         }
         depth=count;
@@ -48,11 +50,11 @@ static uint32_t path_drives(struct px_namespace *s,struct px_node *cwd,const cha
         if (len==2 && start[0]=='.' && start[1]=='.') { if (depth) depth--; continue; }
         if (!depth && len==3 && path_upper(start[0])=='M' && path_upper(start[1])=='N' && path_upper(start[2])=='T') kind=0;
         else if (!depth && len==3 && path_upper(start[0])=='D' && path_upper(start[1])=='E' && path_upper(start[2])=='V') kind=1;
-        else if (kind==0) { kind=len==1 ? (unsigned)(path_upper(start[0])-'A') : 26; if (kind<3 || kind>=26) kind=1; else mask|=1u<<kind; }
-        else if (kind>=2) mask|=vfs_drive_mask(kind);
+        else if (kind==0) { unsigned d=len==1 ? (unsigned)(path_upper(start[0])-'A') : 26; if (d==2 || d>=26) kind=1; else { kind=2+d; mask|=1u<<d; } }
+        else if (kind>=2) mask|=vfs_drive_mask(kind-2);
         if (depth+1<sizeof(kinds)/sizeof(*kinds)) kinds[++depth]=kind;
     }
-    return mask | (kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]) : 0);
+    return mask | (kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]-2) : 0);
 }
 static void reserve_paths(struct px_namespace *s,struct px_node *cwd,const char *a,const char *b)
 {
@@ -419,7 +421,7 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
     }
     if (p == s->mnt) {
         unsigned d = (unsigned)(path_upper((uint8_t)name[0]) - 'A');
-        if (name[1] || d < 3 || d >= 26 || !vfs_drive_present(s->vfs,d)) return -ENOENT;
+        if (name[1] || d == 2 || d >= 26 || !vfs_drive_present(s->vfs,d)) return -ENOENT;
         *out = mount_root(s, d); return *out ? 0 : -ENOMEM;
     }
     if (p->ro) {
@@ -1033,10 +1035,12 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
         if (!n) return 0;
         name = n->entry.name;
     } else if (dir == dir->space->mnt) {
-        if (!cursor) cursor = 3;
-        while (cursor < 26 && !vfs_drive_present(dir->space->vfs,cursor)) cursor++;
-        if (cursor == 26) return 0;
-        n = mount_root(dir->space, cursor++); if (!n) return -ENOMEM;
+        /* cursor: next drive index + 1 (fx-17b: A:/B: first, never C:). */
+        unsigned drive = cursor ? cursor - 1 : 0;
+        while (drive < 26 && (drive == 2 || !vfs_drive_present(dir->space->vfs,drive))) drive++;
+        if (drive >= 26) return 0;
+        n = mount_root(dir->space, drive); if (!n) return -ENOMEM;
+        cursor = drive + 2;
         name = n->entry.name;
     } else if (dir == dir->space->root && d->position < 4) {
         n = d->position == 2 ? dir->space->mnt : dir->space->dev; name = n->entry.name;

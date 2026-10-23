@@ -31,6 +31,7 @@ def generate(inc,lib,work):
     abi=ABI.read_text(); shutil.copy2(ABI,inc/'ciuki/abi.h')
     shutil.copy2(ABI.parent/'firmware_abi.h',inc/'ciuki/firmware_abi.h')
     shutil.copy2(ABI.with_name('input_abi.h'),inc/'ciuki/input_abi.h')
+    for name in ('tzrule.h','tzdata.h'): shutil.copy2(ABI.with_name(name),inc/'ciuki'/name) # G1
     shutil.copy2(ROOT/'apps/desktop/protocol.h',inc/'ciuki/desktop.h')
     calls=re.findall(r'CIUKI_SYS_(\w+)\s*=\s*(\d+)',abi)
     defs=['/* Generated from ciuki/abi.h. */']

@@ -601,7 +601,8 @@ static void test_shell(void)
       assert(s.x==DESK_START_X && s.y+s.h>DESK_BAR && s.w==38 && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
     event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
     event(CIUKI_INPUT_BUTTON,1,0,0);
-    /* Negotiated v2, request survives backlog and deadline survives EOF. */
+    /* Negotiated v2, request survives backlog. G3: no close deadline for a
+     * v2 program (it may show its save prompt); only v1 keeps DESK_CLOSE_NS. */
     d.clients[a].version=DESK_SHELL_VERSION; d.children[0].pid=42;
     d.terminate=terminate; d.now_ns=100; term_calls=term_pid=0;
     fake_block=1;
@@ -613,40 +614,34 @@ static void test_shell(void)
     for (unsigned k=0; k<fake_sent; k++) if (fake_messages[k].data[1]==DESK_CLOSE_REQUEST) {
         struct desk_packet p; assert(fake_messages[k].data[0]==2 && desk_parse(&fake_messages[k],0,NULL,&p)); requested++;
     }
-    assert(requested==1); desk_drop_client(&d,a);
-    d.now_ns=100+DESK_CLOSE_NS-1; desk_close_timeouts(&d); assert(!term_calls);
+    assert(requested==1 && !d.children[0].close_ns);
+    d.now_ns=100+DESK_CLOSE_NS+60000000000ull; desk_close_timeouts(&d); assert(!term_calls);
+    desk_drop_client(&d,a); desk_close_timeouts(&d); assert(!term_calls);
+    desk_child_exited(&d,42,0); assert(!d.children[0].pid);
+    /* v1 (told CLOSED, it cannot prompt) keeps the bounded termination. */
+    b=client(22,23,8,8,0);
+    d.children[0].pid=42; d.now_ns=10000000000ull; term_calls=term_pid=0;
+    desk_request_close(&d,b); assert(d.children[0].close_ns==d.now_ns+DESK_CLOSE_NS);
+    d.now_ns+=DESK_CLOSE_NS-1; desk_close_timeouts(&d); assert(!term_calls);
     d.now_ns++; desk_close_timeouts(&d); assert(term_calls==1 && term_pid==42);
     desk_close_timeouts(&d); assert(term_calls==1);
-    desk_child_exited(&d,42,0); assert(!d.children[0].pid);
-    /* The authenticated v2 acknowledgement grants one bounded extension. */
+    desk_child_exited(&d,42,0);
+    /* The v2 acknowledgement: strict wire; LATER has no deadline, DECLINED ends the close. */
     b=client(22,23,8,8,0);
-    d.children[0].pid=42; d.clients[b].version=2; d.now_ns=10000000000ull;
+    d.children[0].pid=42; d.clients[b].version=2; d.now_ns=20000000000ull;
     term_calls=term_pid=0; desk_request_close(&d,b);
-    uint64_t original=d.children[0].close_ns;
     struct ciuki_message ack; request(&ack,DESK_CLOSE_ACK,8); ack.data[0]=2; desk_put32(ack.data+4,1);
     struct desk_packet parsed;
     assert(desk_parse(&ack,1,NULL,&parsed) && !desk_parse(&ack,0,NULL,&parsed));
     ack.data[0]=1; assert(!desk_parse(&ack,1,NULL,&parsed)); ack.data[0]=2;
-    desk_put32(ack.data+4,2); assert(!desk_parse(&ack,1,NULL,&parsed)); desk_put32(ack.data+4,1);
+    desk_put32(ack.data+4,2); assert(desk_parse(&ack,1,NULL,&parsed) && parsed.flags==DESK_CLOSE_DOS_ACTIVE);
+    desk_put32(ack.data+4,3); assert(!desk_parse(&ack,1,NULL,&parsed)); desk_put32(ack.data+4,1);
     ack.fd_count=1; ack.fds[0]=4; assert(!desk_parse(&ack,1,NULL,&parsed)); ack.fd_count=0; ack.fds[0]=0;
     d.now_ns+=1000000000ull; desk_receive(&d,b,&ack);
-    assert(d.children[0].close_ns==original+28000000000ull);
-    uint64_t deferred=d.children[0].close_ns;
-    d.now_ns=original+1000000000ull; desk_receive(&d,b,&ack); assert(d.children[0].close_ns==deferred);
-    desk_close_timeouts(&d); assert(!term_calls);
+    assert(d.clients[b].closing && !d.children[0].close_ns);
+    d.now_ns+=600000000000ull; desk_close_timeouts(&d); assert(!term_calls && d.clients[b].closing);
     desk_put32(ack.data+4,0); desk_receive(&d,b,&ack);
-    assert(!d.clients[b].closing && !d.children[0].close_ns);
-    desk_request_close(&d,b); original=d.children[0].close_ns;
-    d.now_ns=original; desk_put32(ack.data+4,1); desk_receive(&d,b,&ack);
-    assert(d.children[0].close_ns==original); desk_close_timeouts(&d); assert(term_calls==1);
-    desk_child_exited(&d,42,0);
-    int deferred_client=client(22,23,8,8,0); d.clients[deferred_client].version=2;
-    d.children[0].pid=42; term_calls=0; d.now_ns+=1000000000ull;
-    desk_request_close(&d,deferred_client); original=d.children[0].close_ns;
-    d.now_ns+=1000000000ull; desk_receive(&d,deferred_client,&ack);
-    assert(d.children[0].close_ns==original+28000000000ull);
-    d.now_ns=d.children[0].close_ns-1; desk_close_timeouts(&d); assert(!term_calls);
-    d.now_ns++; desk_close_timeouts(&d); assert(term_calls==1);
+    assert(!d.clients[b].closing && !d.children[0].close_ns && !term_calls);
     desk_child_exited(&d,42,0);
     desk_about(&d); int about=d.about; assert(about>=0 && d.clients[about].internal);
     desk_about(&d); assert(d.about==about);
@@ -654,7 +649,7 @@ static void test_shell(void)
     desk_about(&d); assert(!d.clients[about].minimized && d.focus==about);
     desk_request_close(&d,about); assert(d.about<0);
     cleanup();
-    puts("PASS shell: hit/z-order, taskbar restore, releases, drag RESYNC, work area, v2 close/backpressure/EOF timeout, About lifecycle");
+    puts("PASS shell: hit/z-order, taskbar restore, releases, drag RESYNC, work area, v2 close/backpressure without deadline, v1 timeout, CLOSE_ACK, About lifecycle");
 }
 static void test_media_shell(void)
 {

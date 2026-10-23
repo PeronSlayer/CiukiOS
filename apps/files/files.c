@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "../desktop/tz_env.h"
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
@@ -72,7 +73,8 @@ static int launch(struct files_app *a, const char *program, char *const argv[])
     const struct desk_catalog_entry *entry = name ? desk_catalog_find(name) : NULL;
     if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/control") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
-    char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
+    char tz[DESK_TZ_ENV_BYTES];
+    char *env[] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }
@@ -165,6 +167,18 @@ static int media_remove(unsigned d,uint32_t generation)
     struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),d,generation};
     int e=ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
 }
+static int media_load(unsigned d)
+{
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),d,0};
+    int e=ciuki_devctl(fd,MEDIA_FLOPPY_LOAD,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
+}
+static int media_space(unsigned d,struct ciuki_media_space *sp)
+{
+    *sp=(struct ciuki_media_space){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*sp),.drive=d};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_SPACE,sp,sizeof(*sp)) ? -errno : 0; close(fd); return e;
+}
 static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_blockers *b)
 {
     *b=(struct ciuki_media_blockers){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*b),.drive=drive,.generation=generation};
@@ -204,6 +218,7 @@ int main(int argc, char **argv)
     struct files_app *a = &m->app;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
+    a->media_load=media_load; a->media_space=media_space;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     a->show_bin_properties = bin_properties;

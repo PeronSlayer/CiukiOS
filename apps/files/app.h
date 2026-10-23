@@ -75,6 +75,11 @@ struct files_app {
     int (*media_read)(struct ciuki_media_state *);
     int (*media_remove)(unsigned drive, uint32_t generation);
     int (*media_blockers)(unsigned drive, uint32_t generation, struct ciuki_media_blockers *);
+    /* fx-17b: read the diskette in floppy drive A:/B: (MEDIA_FLOPPY_LOAD);
+     * 0 mounted, -ENXIO no disk. space: volume capacity and free count. */
+    int (*media_load)(unsigned drive);
+    int (*media_space)(unsigned drive, struct ciuki_media_space *);
+    char insert_path[1040]; int insert_drive;
     char removal_label[96];
     /* G2 Recycle Bin: the policy read when a delete starts, the rows of the
      * bin view, its File menu, the Properties dialog's edit state. */

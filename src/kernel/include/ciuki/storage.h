@@ -24,6 +24,7 @@ struct storage_volume {
     bool present, read_gate, removable, safely_removed;
     bool optical; /* f9-01: Setup C: over the boot CD's image view; disk = ATA slot */
     uint32_t read_sequence, write_sequence;
+    uint32_t census_next_ms; /* fx-17b: next background free-count step */
     uint64_t reads, writes, flushes, refused, writes_before_gate;
     /* Selected crash probe only; notification after synchronous completion.
      * No callback in ordinary boot, no controller fault/recovery backdoor. */
@@ -136,6 +137,10 @@ int storage_enable_write(struct storage *, unsigned drive);
  * each writable one read-write (Windows 98 model, no ownership scan).
  * Returns the number of volumes made writable; records each outcome. */
 int storage_activate_removable(struct storage *, struct blkdev *);
+/* fx-17b: run due background free-count steps (storage writer). At most one
+ * 128-sector step per volume per call, paced to a quarter of the device
+ * time it used; returns the number of counts still running. */
+unsigned storage_census_service(struct storage *, uint32_t now_ms);
 int storage_writeback(struct storage *, uint32_t now_ms);
 int storage_shutdown(struct storage *); /* no clean mark following any error */
 void storage_destroy(struct storage *); /* quiescent host tests / failed init only */

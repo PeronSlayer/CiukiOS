@@ -89,7 +89,14 @@ void du_dialog_tick(struct du_ui *u)
     struct ciuki_media_state state={.version=CIUKI_MEDIA_VERSION,.size=sizeof(state)};
     if (published->fd>=0) {
         if (ciuki_devctl(published->fd,MEDIA_GET_STATE,&state,sizeof(state))) { close(published->fd); published->fd=-1; }
-        else for (unsigned drive=3;drive<26;drive++) {
+        else {
+        /* fx-17b: floppy drives are Places whether or not a disk is in. */
+        for (unsigned drive=0;drive<2;drive++) if (state.type[drive]==CIUKI_MEDIA_FLOPPY) {
+            char label[32],path[16];
+            snprintf(label,sizeof(label),"3.5 Floppy (%c:)",'A'+drive); snprintf(path,sizeof(path),"/mnt/%c",'a'+drive);
+            place_add(p,label,path,"media-floppy");
+        }
+        for (unsigned drive=3;drive<26;drive++) {
             if (!(state.removable_mask&(1u<<drive)) ||
                 (state.type[drive]!=CIUKI_MEDIA_USB && state.type[drive]!=CIUKI_MEDIA_OPTICAL)) continue;
             struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
@@ -100,6 +107,7 @@ void du_dialog_tick(struct du_ui *u)
             snprintf(label,sizeof(label),"%s (%c:)",v.label[0] ? v.label : state.type[drive]==CIUKI_MEDIA_USB ? "Removable Volume" : "CD-ROM",'A'+drive);
             snprintf(path,sizeof(path),"/mnt/%c",'a'+drive);
             place_add(p,label,path,state.type[drive]==CIUKI_MEDIA_OPTICAL ? "drive-optical" : "drive-removable-media");
+        }
         }
         /* Mount generations returned by GET_VOLUME differ from the transport
          * generations in GET_STATE. Recheck the latter across enumeration. */

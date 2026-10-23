@@ -166,3 +166,36 @@ Desktop folder). The `trash` modes of the job (`trash_job`, `fm_job.trash`
 naming) and `DESK_TRASH` as a target are gone; `desk_folder_transfer(.., trash=1)`
 now means "delete".
 
+## fx-17b: floppy drives and free space in Files (2026-10-23)
+
+- **Computer view and tree:** A: and B: are listed (icon `media-floppy`,
+  type "3.5-Inch Floppy Disk") whenever the controller found the drive,
+  with or without a diskette (`fm_volumes_slots`, `fm_model.drive_slots`
+  from the media state). Drive paths `A:\` ↔ `/mnt/a` convert both ways;
+  `fm_volume()` maps floppies to A:/B:, so fx-19's drop rule treats them as
+  their own drive.
+- **Opening a drive without a diskette:** the worker first asks the kernel
+  to read the diskette (`MEDIA_FLOPPY_LOAD`, Windows 98 reads the disk on
+  access). If none is there, Files asks "Please insert a disk into drive
+  A:" with Retry and Cancel; Retry reads the drive again and opens it.
+  Windows 98 Explorer words this "A:\ is not accessible. The device is not
+  ready."; the lead chose the insert-a-disk wording.
+- **Removing a diskette while browsing it:** returns to Computer, and A:
+  stays listed.
+- **Floppies have no tray "Safely remove" entry**, as in Windows 98: the
+  tray ignores bits 0–1.
+- **File dialogs:** "3.5 Floppy (A:)" is listed in Places.
+- **Free space:** a single selected drive in Computer shows "Free Space:
+  …, Capacity: …" in the status bar, as Windows 98 My Computer does, from
+  `MEDIA_GET_SPACE`. It shows "calculating..." while a background free
+  count runs. A drive root's Properties dialog shows the same Used/Free/
+  Capacity lines.
+
+
+Merge compatibility check: Microsoft's [GetDriveTypeA reference](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdrivetypea)
+distinguishes removable drives (including floppies) from fixed drives, and
+[SHFILEOPSTRUCTA](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shfileopstructa)
+defines `FOF_ALLOWUNDO` for preserving undo information with fully qualified
+source paths. The merged Files model keeps the fixed-volume Recycle Bin mask
+and the floppy-slot visibility mask separately; both are passed to browser
+listings, so showing an empty floppy drive does not make it eligible for the bin.
