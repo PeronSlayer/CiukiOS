@@ -4097,6 +4097,29 @@ and an idle title. RESET is issued only after the UI confirms the request.
 #define CIUKI_DOSVM_SAVE_QUERY 14u
 #define CIUKI_DOSVM_SAVE_RESET 15u
 #define CIUKI_DOSVM_SAVE_EXPORT 16u
+```
+
+fx-4b: background verification of the DOS system image. Only version and
+size are inputs. Returns state (below), changed = progress in per mille,
+reason = positive errno when FAILED. No VM capability is required.
+
+```c
+#define CIUKI_DOSVM_IMAGE_QUERY 17u
+#define CIUKI_DOSVM_IMAGE_UNCHECKED 0u
+```
+
+not verified yet: CREATE verifies
+
+```c
+#define CIUKI_DOSVM_IMAGE_VERIFYING 1u
+#define CIUKI_DOSVM_IMAGE_VERIFIED 2u
+#define CIUKI_DOSVM_IMAGE_MISMATCH 3u
+```
+
+UNIFIED.IMG differs from UNIFIED.SHA
+
+```c
+#define CIUKI_DOSVM_IMAGE_FAILED 4u
 #define CIUKI_DOSVM_WAIT_MAX_MS 50u
 #define CIUKI_DOSVM_EVENT_VIDEO 1u
 #define CIUKI_DOSVM_EVENT_STATE 2u
