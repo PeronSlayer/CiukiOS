@@ -578,6 +578,31 @@ yielding or document limits. Nonblocking networking alone proves no UI bound.
 Proposed fixture acceptance is <=100 ms input/Stop response; accept or revise
 with measured T23 evidence, never suppress genuine unresponsive-window state.
 
+### Document admission against available memory (fx-14, 2026-10-23)
+
+The f6-14 amendment-1 structural constants (8192 DOM nodes, 8192-byte text
+chunks, 128 KiB of document text, 8192 boxes, depth 64, 64 table columns,
+128 KiB of plain text) refused ordinary pages on the T23 (trial e831e685:
+Google's home page and BBC News downloaded, then "parser admission limit"
+and the out-of-memory page). They are replaced by ledgers charged against
+the memory actually free (`sdk/netsurf/port/docmem.h`, patch 0008): CiukiOS
+reads `free_pages` through call 70 (`ciuki_proc_list`, system record only);
+host builds use a model of the 128 MiB baseline (56 MiB free while parsing).
+The DOM ledger (libdom hubbub binding: 64 KiB per document, 352 bytes per
+node or attribute plus its strings, measured on x86-64) and the box ledger
+(352 bytes per box from the i686 `struct box`, plus its text; box creation,
+layout line splits) may each use a quarter of free memory; plain text is
+admitted as its bytes plus an upper bound of its line records. There is no
+count, chunk or run cap below the budget. Script element text is dropped
+(no JavaScript). DOM depth 128 and box depth 256 (verified under a 1 MiB
+stack), colspan clamped to 1000 and tables wider than 1000 columns refused.
+Refusals log `NetSurf structure rejected: <cause> (charged=… budget=…)` and
+show an error page that names the cause ("This page is too large for the
+memory available to the browser."). Images: one bitmap up to 1024x1024
+pixels in any shape up to 4096 per side; the decoded-image ledger is free/8
+clamped to 2–16 MiB; 1024 GIF frame records. Evidence:
+`build/codex/fx-14-report.md`, `tests/host/netsurf` (`pages.py` fixtures).
+
 ### Layout time limits (f6-14 budget; lead decision 2026-10-23)
 
 f6-14 accepted a 75 ms monotonic layout deadline provisionally ("revised by

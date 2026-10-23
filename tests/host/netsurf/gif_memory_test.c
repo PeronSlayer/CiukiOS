@@ -60,11 +60,16 @@ int main(int argc,char **argv)
         assert(ciuki_image_used()==0);
     }
     nsgif_t *gif=NULL;assert(nsgif_create(&ops,NSGIF_BITMAP_FMT_R8G8B8A8,&gif)==NSGIF_OK);
-    assert(nsgif__get_frame(gif,63));
+    /* fx-14: 1024 frame records (charged to the ledger), not 64. */
+    assert(nsgif__get_frame(gif,1023));
     size_t metadata=ciuki_image_used();assert(metadata>sizeof(*gif));
-    assert(!nsgif__get_frame(gif,64) && ciuki_image_used()==metadata);
-    gif->info.width=512;gif->info.height=512;gif->decoded_frame=1;
-    /* Bitmap + restore would exceed the same 2 MiB ledger. */
+    assert(!nsgif__get_frame(gif,1024) && ciuki_image_used()==metadata);
+    /* fx-14: the ledger is an eighth of free memory (7 MiB in the 128 MiB
+     * baseline model), clamped to 2..16 MiB. */
+    assert(CIUKI_IMAGE_BYTES>=CIUKI_IMAGE_MIN_BYTES && CIUKI_IMAGE_BYTES<=CIUKI_IMAGE_MAX_BYTES);
+    if(!getenv("CIUKI_NETSURF_FREE_BYTES"))assert(CIUKI_IMAGE_BYTES==7u*1024u*1024u);
+    gif->info.width=1024;gif->info.height=(uint32_t)(CIUKI_IMAGE_BYTES*3/5/(4*1024));gif->decoded_frame=1;
+    /* Bitmap + restore would exceed the same ledger. */
     assert(nsgif__record_frame(gif,NULL)==NSGIF_ERR_OOM);
     assert(gif->frame_image && !gif->prev_frame && ciuki_image_used()<=CIUKI_IMAGE_BYTES);
     nsgif_destroy(gif);assert(!ciuki_image_used());
@@ -72,6 +77,6 @@ int main(int argc,char **argv)
     size_t used=ciuki_image_used();
     assert(!ciuki_image_realloc(p,CIUKI_IMAGE_BYTES) && ciuki_image_used()==used && *(unsigned char *)p==0x7a);
     assert(!ciuki_image_calloc(SIZE_MAX,2));ciuki_image_free(p);assert(!ciuki_image_used());
-    puts("NetSurf GIF: shared 2 MiB ledger, restore rejection/OOM, frame cap, overflow and allocation sweep passed");
+    puts("NetSurf GIF: shared memory-derived ledger, restore rejection/OOM, 1024-frame cap, overflow and allocation sweep passed");
     fflush(stdout);
 }

@@ -5,12 +5,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).resolve().parent
+sys.path.insert(0,str(HERE))  # fx-14: pages.py
 
 def recipe():
     spec=importlib.util.spec_from_file_location("netsurf_amendment_recipe",ROOT / "sdk/netsurf/build.py")
@@ -53,7 +55,7 @@ class SanitizerTests(unittest.TestCase):
         cls.source=cls.base / "source/netsurf"
         cls.out=ROOT / "build/host/netsurf";cls.out.mkdir(parents=True,exist_ok=True)
 
-    def compile_run(self,name,sources,extra=(),args=()):
+    def compile_run(self,name,sources,extra=(),args=(),env=None,build=True):
         flags=["clang","-std=c17","-D_POSIX_C_SOURCE=200809L","-O1","-g","-Wall","-Wextra",
             "-Wno-unused-parameter","-Wno-unused-function","-ffunction-sections","-fdata-sections",
             "-fsanitize=address,undefined","-fno-sanitize-recover=undefined",
@@ -61,10 +63,11 @@ class SanitizerTests(unittest.TestCase):
             "-I"+str(self.source / "frontends"),"-I"+str(self.source / "content/handlers"),"-I"+str(self.base / "native-headers"),
             "-I"+str(self.base / "prefix/include")]
         executable=self.out / name
-        subprocess.run([*flags,*map(str,sources),"-Wl,--gc-sections","-L"+str(self.base / "prefix/lib"),
-                        *extra,"-o",str(executable)],check=True)
-        subprocess.run([str(executable),*map(str,args)],check=True,timeout=60,
-                       env=dict(os.environ,ASAN_OPTIONS="detect_leaks=1",UBSAN_OPTIONS="halt_on_error=1"))
+        if build:
+            subprocess.run([*flags,*map(str,sources),"-Wl,--gc-sections","-L"+str(self.base / "prefix/lib"),
+                            *extra,"-o",str(executable)],check=True)
+        subprocess.run([str(executable),*map(str,args)],check=True,timeout=120,
+                       env=dict(os.environ,ASAN_OPTIONS="detect_leaks=1",UBSAN_OPTIONS="halt_on_error=1",**(env or {})))
 
     def test_layout_budget(self):
         self.compile_run("budget",[HERE / "budget_test.c",ROOT / "sdk/netsurf/port/budget.c"],
@@ -95,10 +98,23 @@ class SanitizerTests(unittest.TestCase):
         self.compile_run("short-data",[HERE / "data_test.c"],["-lnsutils","-lwapcaplet"])
 
     def test_parser_admission_and_oom(self):
+        """fx-14: synthetic ordinary pages (pages.py) are admitted by the
+        binding under the 128 MiB baseline model, their DOM's measured live
+        bytes stay within the ledger's charge; with 4 MiB free the same pages
+        are refused for memory before allocating."""
+        import pages
         dom=self.base / "source/libdom"
-        self.compile_run("admission",[HERE / "admission_test.c"],[
-            "-iquote"+str(dom / "src"),"-I"+str(dom / "bindings/hubbub"),"-I"+str(dom / "src"),"-ldom","-lhubbub","-lparserutils","-lwapcaplet",
-            "-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc"])
+        with tempfile.TemporaryDirectory(dir=self.out) as directory:
+            files=[]
+            for name,make in pages.PAGES.items():
+                files.append(Path(directory) / name);files[-1].write_text(make())
+            oversized=Path(directory) / "oversized.html";oversized.write_text(pages.oversized())
+            extra=["-iquote"+str(dom / "src"),"-I"+str(dom / "bindings/hubbub"),"-I"+str(dom / "src"),"-ldom","-lhubbub","-lparserutils","-lwapcaplet",
+                   "-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc"]
+            self.compile_run("admission",[HERE / "admission_test.c"],extra,[*files,"--",oversized])
+            # 2 MiB free: a 512 KiB DOM budget, below these pages' charge.
+            self.compile_run("admission",[],extra,["--",*[f for f in files if f.name in ("news-front.html","article.html","forum-thread.html")]],
+                             env={"CIUKI_NETSURF_FREE_BYTES":str(2*1024*1024)},build=False)
 
     def test_gif_memory_and_oom(self):
         gif=self.base / "source/libnsgif/src"

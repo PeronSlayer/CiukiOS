@@ -1,0 +1,640 @@
+CiukiOS fx-14: document admission against the memory actually available to
+the browser, replacing the f6-14 amendment-1 constants that rejected ordinary
+pages (T23 trial e831e685: http://www.google.com and https://www.bbc.co.uk/news
+downloaded, then "NetSurf structure rejected: parser admission limit." and the
+out-of-memory error page). The libdom hubbub binding charges every node and
+attribute (CIUKI_DOM_NODE_BYTES plus its string bytes) against a budget of a
+quarter of the free memory (sdk/netsurf/port/docmem.h; CiukiOS call 70,
+host model of the 128 MiB baseline); the box tree, its layout splits and
+plain text use the same share. No node-count, per-chunk or per-run cap below
+the budget; script element text is dropped (no JavaScript here). DOM depth
+64 -> 128, box depth 64 -> 256 (1 MiB main stack), table columns 64 -> 1000
+with colspan clamped to 1000 as HTML specifies. Refused pages get an error
+page that says why ("too large for the memory available to the browser",
+nesting, columns). Bitmaps: 1024x1024 pixels in any shape up to 4096 wide or
+high; GIF frame records 64 -> 1024 (charged to the image ledger).
+Evidence: build/codex/fx-14-report.md, tests/host/netsurf.
+
+--- a/libdom/bindings/hubbub/parser.c
++++ b/libdom/bindings/hubbub/parser.c
+@@ -45,8 +45,9 @@
+ 					/**< The document's encoding source */
+ 	const char *encoding; 		/**< The document's encoding */
+ 
+-	unsigned ciuki_nodes;
+-	size_t ciuki_text;
++	size_t ciuki_charged;	/* fx-14: cumulative DOM ledger charge */
++	size_t ciuki_budget;	/* fx-14: ledger budget, fixed at creation */
++	int ciuki_reason;	/* fx-14: enum ciuki_doc_reason */
+ 	bool ciuki_rejected;
+ 	bool complete;			/**< Indicate stream completion */
+ 
+@@ -57,28 +58,57 @@
+ 	void *mctx;		/**< Pointer to client data */
+ };
+ 
+-/* Ciuki M1: cumulative allocations, not just the final DOM size. Failed
+- * admissions never recurse or allocate, including malformed-tree reparenting. */
++#include <strings.h>
++#include "sdk/netsurf/port/docmem.inc"
++
++/* Ciuki M1, revised by fx-14: cumulative allocations, not just the final DOM
++ * size, charged before allocating against the memory actually available
++ * (docmem.h): CIUKI_DOM_NODE_BYTES per node or attribute plus its string
++ * bytes. There is no node-count or per-chunk cap below the budget. Failed
++ * admissions never recurse or allocate, including malformed-tree
++ * reparenting. */
++static bool ciuki_reject(dom_hubbub_parser *p, int reason)
++{
++    if (!p->ciuki_rejected) {
++        p->ciuki_reason = reason;
++        ciuki_doc_report(reason, p->ciuki_charged, p->ciuki_budget);
++    }
++    p->ciuki_rejected = true;
++    return false;
++}
+ static bool ciuki_take(dom_hubbub_parser *p, size_t bytes)
+ {
+-    if (p->ciuki_rejected || p->ciuki_nodes >= 8192 || bytes > 8192 ||
+-        bytes > 131072 - p->ciuki_text) {
+-        p->ciuki_rejected = true;
+-        fprintf(stderr, "NetSurf structure rejected: parser admission limit.\n");
+-        return false;
+-    }
+-    p->ciuki_nodes++;
+-    p->ciuki_text += bytes;
++    if (p->ciuki_rejected) return false;
++    if (bytes > p->ciuki_budget || CIUKI_DOM_NODE_BYTES > p->ciuki_budget - bytes ||
++        bytes + CIUKI_DOM_NODE_BYTES > p->ciuki_budget - p->ciuki_charged)
++        return ciuki_reject(p, CIUKI_DOC_MEMORY);
++    p->ciuki_charged += bytes + CIUKI_DOM_NODE_BYTES;
+     return true;
+ }
++/* A discarded node returns its charge (its memory is released with it). */
++static void ciuki_refund(dom_hubbub_parser *p, size_t bytes)
++{
++    size_t n = bytes > SIZE_MAX - CIUKI_DOM_NODE_BYTES ? SIZE_MAX : bytes + CIUKI_DOM_NODE_BYTES;
++    p->ciuki_charged -= n < p->ciuki_charged ? n : p->ciuki_charged;
++}
++/* fx-14: NetSurf runs without JavaScript here, so the text of a script
++ * element is never used; the element stays in the DOM, empty. */
++static bool ciuki_script_text(void *parent, void *child)
++{
++    dom_node_internal *p = parent, *c = child;
++    return p && c && c->type == DOM_TEXT_NODE && p->type == DOM_ELEMENT_NODE &&
++           p->name && dom_string_byte_length(p->name) == 6 &&
++           strncasecmp(dom_string_data(p->name), "script", 6) == 0;
++}
++/* Depth before attach, including a reparented subtree's own depth. */
+ static bool ciuki_attach(void *parent, void *child)
+ {
+     dom_node_internal *p = parent, *root = child, *node = child;
+-    unsigned depth = 0, seen = 0;
+-    for (; p; p = p->parent) if (++depth >= 64) return false;
++    unsigned depth = 0;
++    for (; p; p = p->parent) if (++depth >= CIUKI_DOM_DEPTH) return false;
+     unsigned at = depth + 1;
+     while (node) {
+-        if (at > 64 || ++seen > 8192) return false;
++        if (at > CIUKI_DOM_DEPTH) return false;
+         if (node->first_child) { node = node->first_child; at++; continue; }
+         while (node != root && !node->next) { node = node->parent; at--; }
+         if (node == root) break;
+@@ -382,9 +412,14 @@
+ 	dom_exception err;
+ 
+ 	*result = NULL;
++	if (ciuki_script_text(parent, child)) {
++		dom_string *data = ((dom_node_internal *) child)->value;
++		ciuki_refund(dom_parser, data ? dom_string_byte_length(data) : 0);
++		*result = dom_node_ref((struct dom_node *) child);
++		return HUBBUB_OK;
++	}
+ 	if (!ciuki_attach(parent, child)) {
+-		dom_parser->ciuki_rejected = true;
+-		fprintf(stderr, "NetSurf structure rejected: DOM depth.\n");
++		ciuki_reject(dom_parser, CIUKI_DOC_DEPTH);
+ 		return HUBBUB_NOMEM;
+ 	}
+ 
+@@ -409,8 +444,7 @@
+ 
+ 	*result = NULL;
+ 	if (!ciuki_attach(parent, child)) {
+-		dom_parser->ciuki_rejected = true;
+-		fprintf(stderr, "NetSurf structure rejected: DOM depth.\n");
++		ciuki_reject(dom_parser, CIUKI_DOC_DEPTH);
+ 		return HUBBUB_NOMEM;
+ 	}
+ 
+@@ -497,7 +531,7 @@
+ 			break;
+ 
+ 		if (!ciuki_attach(new_parent, child)) {
+-			dom_parser->ciuki_rejected = true;
++			ciuki_reject(dom_parser, CIUKI_DOC_DEPTH);
+ 			dom_node_unref(child);
+ 			return HUBBUB_NOMEM;
+ 		}
+@@ -639,12 +673,11 @@
+ 	dom_exception err;
+ 	uint32_t i;
+ 
+-	if (n_attributes > 64) { dom_parser->ciuki_rejected = true;return HUBBUB_NOMEM; }
+ 	for (i = 0; i < n_attributes; i++) {
+ 		dom_string *name, *value;
+ 
+-		if (!ciuki_take(dom_parser, attributes[i].name.len) ||
+-		    !ciuki_take(dom_parser, attributes[i].value.len)) return HUBBUB_NOMEM;
++		if (!ciuki_take(dom_parser, (size_t) attributes[i].name.len +
++				attributes[i].value.len)) return HUBBUB_NOMEM;
+ 		err = dom_string_create_interned(attributes[i].name.ptr,
+ 				attributes[i].name.len, &name);
+ 		if (err != DOM_NO_ERR) {
+@@ -849,8 +882,10 @@
+ 		return DOM_HUBBUB_NOMEM;
+ 	}
+ 
+-	binding->ciuki_nodes = 0;
+-	binding->ciuki_text = 0;
++	binding->ciuki_budget = ciuki_doc_budget_refresh();
++	binding->ciuki_charged = CIUKI_DOM_DOCUMENT_BYTES < binding->ciuki_budget ?
++			CIUKI_DOM_DOCUMENT_BYTES : binding->ciuki_budget;
++	binding->ciuki_reason = CIUKI_DOC_ADMITTED;
+ 	binding->ciuki_rejected = false;
+ 	binding->parser = NULL;
+ 	binding->doc = NULL;
+@@ -983,8 +1018,10 @@
+ 		return DOM_HUBBUB_NOMEM;
+ 	}
+ 
+-	binding->ciuki_nodes = 0;
+-	binding->ciuki_text = 0;
++	binding->ciuki_budget = ciuki_doc_budget_refresh();
++	binding->ciuki_charged = CIUKI_DOM_DOCUMENT_BYTES < binding->ciuki_budget ?
++			CIUKI_DOM_DOCUMENT_BYTES : binding->ciuki_budget;
++	binding->ciuki_reason = CIUKI_DOC_ADMITTED;
+ 	binding->ciuki_rejected = false;
+ 	binding->parser = NULL;
+ 	binding->doc = (struct dom_document *)dom_node_ref(document);
+@@ -1175,3 +1212,10 @@
+ 
+ 	return DOM_HUBBUB_OK;
+ }
++
++/* fx-14: why the binding refused the document (enum ciuki_doc_reason),
++ * CIUKI_DOC_ADMITTED when it did not. */
++int dom_hubbub_parser_ciuki_reason(dom_hubbub_parser *parser)
++{
++	return parser != NULL && parser->ciuki_rejected ? parser->ciuki_reason : 0;
++}
+--- a/libdom/bindings/hubbub/parser.h
++++ b/libdom/bindings/hubbub/parser.h
+@@ -104,4 +104,8 @@
+  */
+ dom_hubbub_error dom_hubbub_parser_pause(dom_hubbub_parser *parser, bool pause);
+ 
++/* CiukiOS fx-14: the admission reason of a refused document (0: none;
++ * enum ciuki_doc_reason in sdk/netsurf/port/docmem.h). */
++int dom_hubbub_parser_ciuki_reason(dom_hubbub_parser *parser);
++
+ #endif
+--- a/libnsgif/src/gif.c
++++ b/libnsgif/src/gif.c
+@@ -1278,8 +1278,10 @@
+ {
+ 	struct nsgif_frame *frame;
+ 
+-	/* Bound metadata as well as decoded pixels. */
+-	if (frame_idx >= 64) return NULL;
++	/* Bound metadata as well as decoded pixels. fx-14: frame records are
++	 * charged to the image ledger (malloc is ciuki_image_malloc here), so
++	 * the cap only bounds scanning; animations commonly exceed 64 frames. */
++	if (frame_idx >= 1024) return NULL;
+ 	if (gif->frame_holders > frame_idx) {
+ 		frame = &gif->frames[frame_idx];
+ 	} else {
+--- a/netsurf/content/handlers/html/box_construct.c
++++ b/netsurf/content/handlers/html/box_construct.c
+@@ -47,6 +47,7 @@
+ #include "html/box_special.h"
+ #include "html/box_normalise.h"
+ #include "html/form_internal.h"
++#include "sdk/netsurf/port/docmem.h"
+ 
+ /**
+  * Context for box tree construction
+@@ -536,7 +537,11 @@
+ 
+ 	unsigned ciuki_depth = 0;
+ 	for (struct box *p = props.containing_block; p; p = p->parent)
+-		if (++ciuki_depth >= 64) return false;
++		if (++ciuki_depth >= CIUKI_BOX_DEPTH) {
++			ctx->content->ciuki_admission = CIUKI_DOC_DEPTH;
++			ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH);
++			return false;
++		}
+ 
+ 	box = box_create(styles, styles->styles[CSS_PSEUDO_ELEMENT_NONE], false,
+ 			props.href, props.target, props.title, id,
+@@ -556,14 +561,17 @@
+ 	if (s != NULL) {
+ 		const char *val = dom_string_data(s);
+ 
+-		if ('0' <= val[0] && val[0] <= '9')
+-			box->columns = strtol(val, NULL, 10);
++		/* fx-14: HTML clamps colspan to 1000 (HTML Living Standard
++		 * 4.9.11), as other browsers do; whole tables wider than that
++		 * are refused in box_normalise.c. */
++		if ('0' <= val[0] && val[0] <= '9') {
++			long span = strtol(val, NULL, 10);
++			box->columns = span > CIUKI_TABLE_COLUMNS ? CIUKI_TABLE_COLUMNS : span;
++		}
+ 
+ 		dom_string_unref(s);
+ 	}
+ 
+-	if (box->columns > 64) return false;
+-
+ 	err = dom_element_get_attribute(ctx->n, corestring_dom_rowspan, &s);
+ 	if (err != DOM_NO_ERR)
+ 		return false;
+@@ -1010,10 +1018,6 @@
+ 	if (err != DOM_NO_ERR || content == NULL)
+ 		return false;
+ 
+-	if (dom_string_byte_length(content) > 8192) {
+-		dom_string_unref(content);return false;
+-	}
+-
+ 	if (css_computed_white_space(props.parent_style) ==
+ 			CSS_WHITE_SPACE_NORMAL ||
+ 			css_computed_white_space(props.parent_style) ==
+@@ -1299,22 +1303,27 @@
+ 			root.children = root.last = ctx->root_box;
+ 			root.children->parent = &root;
+ 
++            /* fx-14: the box ledger (docmem.h): CIUKI_BOX_BYTES per box
++             * plus its text against the budget, nesting and columns. */
+             struct box *node = ctx->root_box;
+-            unsigned seen = 0, depth = 0;
+-            size_t bytes = 0;
+-            bool admitted = true;
++            size_t seen = 0, depth = 0, bytes = 0, budget = ciuki_doc_budget();
++            int reason = CIUKI_DOC_ADMITTED;
+             while (node) {
+-                if (++seen > 8192 || depth > 64 || node->length > 8192 ||
+-                    node->columns > 64 || node->length > 131072 - bytes) {
+-                    admitted = false;break;
+-                }
+-                bytes += node->length;
++                if (depth > CIUKI_BOX_DEPTH) reason = CIUKI_DOC_DEPTH;
++                else if (node->columns > CIUKI_TABLE_COLUMNS) reason = CIUKI_DOC_COLUMNS;
++                else if (node->length > budget - bytes ||
++                         CIUKI_BOX_BYTES > budget - bytes - node->length)
++                    reason = CIUKI_DOC_MEMORY;
++                if (reason) break;
++                bytes += node->length + CIUKI_BOX_BYTES;seen++;
+                 if (node->children) { node = node->children;depth++;continue; }
+                 while (node != ctx->root_box && !node->next) { node = node->parent;depth--; }
+                 if (node == ctx->root_box) break;
+                 node = node->next;
+             }
+-            if (!admitted) {
++            if (reason) {
++                ctx->content->ciuki_admission = reason;
++                ciuki_doc_report(reason, bytes, budget);
+                 ctx->root_box->parent = NULL;
+                 ctx->cb(ctx->content, false);free(ctx);return;
+             }
+@@ -1353,6 +1362,10 @@
+ 
+ 	assert(box_conversion_context != NULL);
+ 
++	/* fx-14: the box ledger's budget is a share of the memory free now. */
++	ciuki_doc_budget_refresh();
++	c->ciuki_admission = 0;
++
+ 	if (c->bctx == NULL) {
+ 		/* create a context allocation for this box tree */
+ 		c->bctx = talloc_zero(0, int);
+--- a/netsurf/content/handlers/html/box_manipulate.c
++++ b/netsurf/content/handlers/html/box_manipulate.c
+@@ -38,6 +38,7 @@
+ #include "html/interaction.h"
+ #include "html/box.h"
+ #include "html/box_manipulate.h"
++#include "sdk/netsurf/port/docmem.h"
+ 
+ 
+ /**
+@@ -101,8 +102,9 @@
+ 	unsigned int i;
+ 	struct box *box;
+ 
+-	/* context is the per-document bctx counter, including implied boxes. */
+-	if (context == NULL || *(int *)context >= 8192) return NULL;
++	/* context is the per-document bctx counter, including implied boxes.
++	 * fx-14: the count the box ledger's memory budget admits (docmem.h). */
++	if (context == NULL || (size_t)*(int *)context >= ciuki_doc_box_limit()) return NULL;
+ 	box = talloc(context, struct box);
+ 	if (!box) {
+ 		return 0;
+--- a/netsurf/content/handlers/html/box_normalise.c
++++ b/netsurf/content/handlers/html/box_normalise.c
+@@ -37,6 +37,7 @@
+ #include "html/box.h"
+ #include "html/box_manipulate.h"
+ #include "html/box_normalise.h"
++#include "sdk/netsurf/port/docmem.h"
+ 
+ /* Define to enable box normalise debug */
+ #undef BOX_NORMALISE_DEBUG
+@@ -84,7 +85,8 @@
+ 		    unsigned int col_span,
+ 		    unsigned int row_span,
+ 		    unsigned int *start_column,
+-		    struct box *cell)
++		    struct box *cell,
++		    html_content *c)
+ {
+ 	unsigned int cell_start_col = col_info->current_column;
+ 	unsigned int cell_end_col;
+@@ -108,7 +110,12 @@
+ 	if (col_span == 0)
+ 		col_span = 1;
+ 
+-	if (cell_start_col >= 64 || col_span > 64 - cell_start_col) return false;
++	/* fx-14: HTML's colspan maximum bounds the whole table too. */
++	if (cell_start_col >= CIUKI_TABLE_COLUMNS || col_span > CIUKI_TABLE_COLUMNS - cell_start_col) {
++		c->ciuki_admission = CIUKI_DOC_COLUMNS;
++		ciuki_doc_report(CIUKI_DOC_COLUMNS, cell_start_col + (size_t)col_span, CIUKI_TABLE_COLUMNS);
++		return false;
++	}
+ 	cell_end_col = cell_start_col + col_span;
+ 
+ 	if (col_info->num_columns < cell_end_col) {
+@@ -154,7 +161,7 @@
+ {
+ 	unsigned ciuki_depth = 0;
+ 	for (const struct box *p = row; p; p = p->parent)
+-		if (++ciuki_depth > 64) return false;
++		if (++ciuki_depth > CIUKI_BOX_DEPTH) { c->ciuki_admission = CIUKI_DOC_DEPTH; ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH); return false; }
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *cell = NULL;
+@@ -259,7 +266,7 @@
+ 		}
+ 
+ 		if (calculate_table_row(col_info, cell->columns, cell->rows,
+-				&cell->start_column, cell) == false)
++				&cell->start_column, cell, c) == false)
+ 			return false;
+ 	}
+ 
+@@ -296,7 +303,7 @@
+ {
+ 	unsigned ciuki_depth = 0;
+ 	for (const struct box *p = row_group; p; p = p->parent)
+-		if (++ciuki_depth > 64) return false;
++		if (++ciuki_depth > CIUKI_BOX_DEPTH) { c->ciuki_admission = CIUKI_DOC_DEPTH; ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH); return false; }
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *row;
+@@ -625,7 +632,7 @@
+ {
+ 	unsigned ciuki_depth = 0;
+ 	for (const struct box *p = table; p; p = p->parent)
+-		if (++ciuki_depth > 64) return false;
++		if (++ciuki_depth > CIUKI_BOX_DEPTH) { c->ciuki_admission = CIUKI_DOC_DEPTH; ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH); return false; }
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *row_group;
+@@ -832,7 +839,7 @@
+ {
+ 	unsigned ciuki_depth = 0;
+ 	for (const struct box *p = flex_container; p; p = p->parent)
+-		if (++ciuki_depth > 64) return false;
++		if (++ciuki_depth > CIUKI_BOX_DEPTH) { c->ciuki_admission = CIUKI_DOC_DEPTH; ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH); return false; }
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *implied_flex_item;
+@@ -1011,7 +1018,7 @@
+ {
+ 	unsigned ciuki_depth = 0;
+ 	for (const struct box *p = cont; p; p = p->parent)
+-		if (++ciuki_depth > 64) return false;
++		if (++ciuki_depth > CIUKI_BOX_DEPTH) { c->ciuki_admission = CIUKI_DOC_DEPTH; ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH); return false; }
+ 	struct box *child;
+ 	struct box *next_child;
+ 
+@@ -1105,7 +1112,7 @@
+ {
+ 	unsigned ciuki_depth = 0;
+ 	for (const struct box *p = block; p; p = p->parent)
+-		if (++ciuki_depth > 64) return false;
++		if (++ciuki_depth > CIUKI_BOX_DEPTH) { c->ciuki_admission = CIUKI_DOC_DEPTH; ciuki_doc_report(CIUKI_DOC_DEPTH, ciuki_depth, CIUKI_BOX_DEPTH); return false; }
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *table;
+--- a/netsurf/content/handlers/html/html.c
++++ b/netsurf/content/handlers/html/html.c
+@@ -72,6 +72,19 @@
+ #include "html/layout.h"
+ #include "html/textselection.h"
+ #include "framebuffer/ciuki/budget.h"
++#include "sdk/netsurf/port/docmem.h"
++
++/* fx-14: a document refused by the memory/structure admission (docmem.h)
++ * gets an error page that says why, not the generic out-of-memory text. */
++static bool ciuki_admission_error(struct content *c, int reason)
++{
++	const char *message = ciuki_doc_message(reason);
++	if (message == NULL) return false;
++	fprintf(stderr, "NetSurf error page: %s\n", message);
++	content_broadcast_error(c, reason == CIUKI_DOC_MEMORY ? NSERROR_NOMEM :
++				NSERROR_BOX_CONVERT, message);
++	return true;
++}
+ 
+ #define CHUNK 4096
+ 
+@@ -229,7 +242,14 @@
+ 		html_object_free_objects(c);
+ 
+ 		if (success == false) {
+-			content_broadcast_error(&c->base, NSERROR_BOX_CONVERT, NULL);
++			int reason = c->ciuki_admission;
++			if (!reason && c->bctx != NULL &&
++			    (size_t)*(int *)c->bctx >= ciuki_doc_box_limit()) {
++				reason = CIUKI_DOC_MEMORY;
++				ciuki_doc_report(reason, (size_t)*(int *)c->bctx * CIUKI_BOX_BYTES, ciuki_doc_budget());
++			}
++			if (!ciuki_admission_error(&c->base, reason))
++				content_broadcast_error(&c->base, NSERROR_BOX_CONVERT, NULL);
+ 		} else {
+ 			content_broadcast_error(&c->base, NSERROR_STOPPED, NULL);
+ 		}
+@@ -753,7 +773,8 @@
+ 
+ 	/* broadcast the error if necessary */
+ 	if (err != NSERROR_OK) {
+-		content_broadcast_error(c, err, NULL);
++		if (!ciuki_admission_error(c, dom_hubbub_parser_ciuki_reason(html->parser)))
++			content_broadcast_error(c, err, NULL);
+ 		return false;
+ 	}
+ 
+@@ -865,7 +886,9 @@
+ 		if (error != DOM_HUBBUB_OK) {
+ 			NSLOG(netsurf, INFO, "Parsing failed");
+ 
+-			content_broadcast_error(&htmlc->base,
++			if (!ciuki_admission_error(&htmlc->base,
++					dom_hubbub_parser_ciuki_reason(htmlc->parser)))
++				content_broadcast_error(&htmlc->base,
+ 						libdom_hubbub_error_to_nserror(error),
+ 						NULL);
+ 
+@@ -1053,6 +1076,7 @@
+ 
+ static const char *ciuki_layout_message(html_content *htmlc)
+ {
++    if (ciuki_doc_message(htmlc->ciuki_admission)) return ciuki_doc_message(htmlc->ciuki_admission);
+     return htmlc->ciuki_layout_timeout ? "This page needs more layout time than the browser allows for web content."
+                                        : "This page exceeds the browser's layout size limits.";
+ }
+--- a/netsurf/content/handlers/html/layout.c
++++ b/netsurf/content/handlers/html/layout.c
+@@ -114,6 +114,7 @@
+ /* Ciuki local-document admission and a monotonic long-layout rejection gate.
+  * A failed layout returns to the event pump; it never re-enters core APIs. */
+ #include "framebuffer/ciuki/budget.h"
++#include "sdk/netsurf/port/docmem.h"
+ 
+ static void layout_minmax_block(
+ 		struct box *block,
+@@ -2415,7 +2416,13 @@
+ 	if (!space)
+ 		space_width = 0;
+ 
+-	if (*content->bctx >= 8192 || ciuki_layout_expired()) return false;
++	/* fx-14: line splits are boxes of the same memory-derived ledger. */
++	if ((size_t)*content->bctx >= ciuki_doc_box_limit()) {
++		content->ciuki_admission = CIUKI_DOC_MEMORY;
++		ciuki_doc_report(CIUKI_DOC_MEMORY, (size_t)*content->bctx * CIUKI_BOX_BYTES, ciuki_doc_budget());
++		return false;
++	}
++	if (ciuki_layout_expired()) return false;
+ 	++*content->bctx;
+ 	/* Create clone of split_box, c2 */
+ 	c2 = talloc_memdup(content->bctx, split_box, sizeof *c2);
+@@ -5444,12 +5451,18 @@
+ /* exported function documented in html/layout.h */
+ static bool ciuki_layout_document(html_content *content, int width, int height)
+ {
++    /* fx-14: the box ledger (docmem.h) instead of 8192 boxes, depth 64,
++     * 8192-byte runs, 64 columns and 128 KiB of text. */
+     struct box *node=content->layout;
+-    unsigned nodes=0,depth=0;
+-    size_t text_bytes=0;
++    size_t depth=0,bytes=0,budget=ciuki_doc_budget();
++    int reason=CIUKI_DOC_ADMITTED;
+     while (node) {
+-        if (++nodes>8192 || depth>64 || node->length>8192 || node->columns>64 || ciuki_layout_expired()) return false;
+-        text_bytes+=node->length; if (text_bytes>131072) return false;
++        if (ciuki_layout_expired()) return false;
++        if (depth>CIUKI_BOX_DEPTH) reason=CIUKI_DOC_DEPTH;
++        else if (node->columns>CIUKI_TABLE_COLUMNS) reason=CIUKI_DOC_COLUMNS;
++        else if (node->length>budget-bytes || CIUKI_BOX_BYTES>budget-bytes-node->length) reason=CIUKI_DOC_MEMORY;
++        if (reason) { content->ciuki_admission=reason;ciuki_doc_report(reason,bytes,budget);return false; }
++        bytes+=node->length+CIUKI_BOX_BYTES;
+         if (node->children) { node=node->children;depth++;continue; }
+         while (node!=content->layout && !node->next) { node=node->parent;depth--; }
+         if (node==content->layout) break;
+--- a/netsurf/content/handlers/html/private.h
++++ b/netsurf/content/handlers/html/private.h
+@@ -122,6 +122,7 @@
+ 	bool reflowing;
+     bool ciuki_layout_failed;
+     bool ciuki_layout_timeout; /* f6-20: rejected by the remote time limit */
++    int ciuki_admission; /* fx-14: enum ciuki_doc_reason of a box rejection */
+ 
+ 	/** Whether an initial layout has been done */
+ 	bool had_initial_layout;
+--- a/netsurf/content/handlers/text/textplain.c
++++ b/netsurf/content/handlers/text/textplain.c
+@@ -69,6 +69,7 @@
+ 	struct textplain_line *physical_line;
+ 	bool ciuki_layout_failed;
+ 	bool ciuki_layout_timeout;
++	bool ciuki_layout_memory; /* fx-14: over the document memory budget */
+ 	int formatted_width;
+ 	struct browser_window *bw;
+ 
+@@ -403,12 +404,19 @@
+  */
+ #include "netsurf/misc.h"
+ #include "framebuffer/ciuki/budget.h"
++#include "sdk/netsurf/port/docmem.h"
+ #include "desktop/browser_private.h"
+ static void ciuki_text_error(void *context)
+ {
+     struct content *c=context;
++    textplain_content *text=(textplain_content *)c;
+     content_set_error(c);
+-    content_broadcast_error(c,NSERROR_STOPPED,((textplain_content *)c)->ciuki_layout_timeout
++    if (text->ciuki_layout_memory) {
++        fprintf(stderr,"NetSurf error page: %s\n",ciuki_doc_message(CIUKI_DOC_MEMORY));
++        content_broadcast_error(c,NSERROR_NOMEM,ciuki_doc_message(CIUKI_DOC_MEMORY));
++        return;
++    }
++    content_broadcast_error(c,NSERROR_STOPPED,text->ciuki_layout_timeout
+         ? "This text needs more layout time than the browser allows for web content."
+         : "This text exceeds the browser's layout size limits.");
+ }
+@@ -426,7 +434,7 @@
+ 	size_t line_start;
+ 	nserror res;
+ 
+-    if (utf8_data_size>131072 || ciuki_layout_expired()) return false;
++    if (ciuki_layout_expired()) return false;
+ 	NSLOG(netsurf, INFO, "content %p w:%d h:%d", c, width, height);
+ 
+ 	/* compute available columns (assuming monospaced font) - use 8
+@@ -442,6 +450,21 @@
+ 	columns = (width - MARGIN - MARGIN) * 8 / character_width;
+ 	textplain_tab_width = (TAB_WIDTH * character_width) / 8;
+ 
++    /* fx-14: the text plus an upper bound of its line records (one per
++     * line terminator and one per wrapped line) against the document memory
++     * budget (docmem.h), instead of a fixed 128 KiB of text. */
++    {
++        size_t budget=ciuki_doc_budget_refresh(),wrap=width>2*MARGIN && columns>=1?columns:1;
++        size_t lines=utf8_data_size/wrap+2;
++        for (size_t at=0;at<utf8_data_size;at++) lines+=utf8_data[at]=='\n' || utf8_data[at]=='\r';
++        size_t need=lines>(SIZE_MAX-utf8_data_size)/sizeof(*line)?SIZE_MAX:utf8_data_size+lines*sizeof(*line);
++        if (need>budget) {
++            text->ciuki_layout_memory=true;
++            ciuki_doc_report(CIUKI_DOC_MEMORY,need,budget);
++            return false;
++        }
++    }
++
+ 	text->formatted_width = width;
+ 
+ 	text->physical_line_count = 0;
+--- a/netsurf/frontends/framebuffer/bitmap.c
++++ b/netsurf/frontends/framebuffer/bitmap.c
+@@ -54,7 +54,10 @@
+ static void *bitmap_create(int width, int height, enum gui_bitmap_flags flags)
+ {
+ 	nsfb_t *bm;
+-    if (width<=0 || height<=0 || width>1024 || height>1024) return NULL;
++    /* fx-14: one bitmap holds at most 1024x1024 pixels (4 MiB, the plan's
++     * single-image maximum) in any shape up to 4096 wide or high, so wide
++     * banners decode; the image ledger (image_memory.h) bounds the total. */
++    if (width<=0 || height<=0 || width>4096 || height>4096 || (size_t)width*height>1024u*1024u) return NULL;
+     size_t charge=(size_t)width*height*4+4096;
+     if (ciuki_image_reserve(charge)) return NULL;
+ 
