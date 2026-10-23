@@ -25,14 +25,14 @@ struct ciuki_fetch {
     size_t delivered; /* decoded body bytes handed to the core (f6-18 observer) */
 };
 /* Host harnesses link the fetcher without chrome.c: silent defaults. */
-__attribute__((weak)) void ciuki_test_fetch_observe(unsigned status,size_t bytes,int tls_error,const char *error)
-{ (void)status;(void)bytes;(void)tls_error;(void)error; }
+__attribute__((weak)) void ciuki_test_fetch_observe(const char *url,unsigned status,size_t bytes,int tls_error,const char *error)
+{ (void)url;(void)status;(void)bytes;(void)tls_error;(void)error; }
 __attribute__((weak)) const br_x509_trust_anchor *ciuki_test_anchors(size_t *count) { *count=0;return NULL; }
 static void observe(struct ciuki_fetch *f)
 {
     unsigned status=f->job && f->job->http ? f->job->http->status : 0;
     int tls=f->job && f->job->secure ? (int)f->job->tls_error : -1;
-    ciuki_test_fetch_observe(status,f->delivered,tls,f->error?f->error:f->job?f->job->error:NULL);
+    ciuki_test_fetch_observe(f->url?nsurl_access(f->url):NULL,status,f->delivered,tls,f->error?f->error:f->job?f->job->error:NULL);
 }
 #ifdef CIUKI_HOST
 /* Host harness equivalents of the native channel syscalls and the browser

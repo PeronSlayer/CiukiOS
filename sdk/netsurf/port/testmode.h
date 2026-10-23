@@ -10,8 +10,10 @@
  * NULL and 0 otherwise, which keeps the production bundle. */
 const br_x509_trust_anchor *ciuki_test_anchors(size_t *count);
 bool ciuki_test_active(void);
-/* The fetcher reports every terminal http/https fetch: HTTP status (0 when no
- * response arrived), decoded body bytes delivered, the job's TLS verdict
- * (enum ciuki_tls_error, -1 for a plain-HTTP fetch) and the error text. */
-void ciuki_test_fetch_observe(unsigned status,size_t bytes,int tls_error,const char *error);
+/* The fetcher reports every terminal http/https fetch: its URL, HTTP status
+ * (0 when no response arrived), decoded body bytes delivered, the job's TLS
+ * verdict (enum ciuki_tls_error, -1 for a plain-HTTP fetch) and the error
+ * text (only its presence is kept). fx-11c: the URL lets the report pick the
+ * shown document's fetch, not a favicon's or an earlier redirect hop's. */
+void ciuki_test_fetch_observe(const char *url,unsigned status,size_t bytes,int tls_error,const char *error);
 #endif

@@ -293,14 +293,18 @@ class NetworkTests(unittest.TestCase):
         for mode in ("stale-retry","post-no-replay","tls-stale-retry","tls-post-no-replay"):
             with self.subTest(mode=mode):self.engine(mode)
 
-    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None,port=None,inspect=None):
+    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None,port=None,inspect=None,test_mode=False):
         with tempfile.TemporaryDirectory(dir=OUT) as folder:
             capture=Path(folder) / "page.xrgb"
             log=Path(folder) / "NETSURF.LOG"
+            url=f"{scheme}://{host}:{port or (8443 if scheme=='https' else 8080)}{path}"
+            env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der"))
+            # f6-18 test profile: --test=browser plus the kernel test request
+            # (probe call 5 on CiukiOS; this environment variable on the host).
+            if test_mode:env["CIUKI_TEST_REQUEST"]="f6:browser run=0123abcd url="+url;self.assertLessEqual(len(env["CIUKI_TEST_REQUEST"]),64)
             result=subprocess.run([str(OUT / "browser"),"-w","640","-h","480",
                 "--ciuki-resources="+str(BASE / "stage/system/netsurf"),"--ciuki-profile="+folder,"--ciuki-log="+str(log),
-                "--ciuki-capture="+str(capture),f"{scheme}://{host}:{port or (8443 if scheme=='https' else 8080)}{path}"],capture_output=True,text=True,timeout=25,
-                env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der")))
+                *(["--test=browser"] if test_mode else []),"--ciuki-capture="+str(capture),url],capture_output=True,text=True,timeout=25,env=env)
             result.netsurf_log=log.read_text() if log.exists() else ""
             self.assertTrue(capture.exists(),result.stdout+result.stderr)
             self.assertEqual(capture.stat().st_size,640*480*4)
@@ -310,6 +314,27 @@ class NetworkTests(unittest.TestCase):
             print(f"PASS rendered fixture {mode} {path}",flush=True)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             return result
+
+    def test_browser_test_mode_reports_the_requested_page(self):
+        """fx-11c: the first QEMU run of e100-http-page reported 'case=page
+        status=0 bytes=0 tls=none url=about:blank' and ended while NetSurf's
+        fetch was at stage=dns. browser_window_navigate stops the (empty)
+        window before fetching, the stop raises the frontend's stop-throbber
+        event, and the test profile took that for the completed page. The one
+        report must name the requested navigation's outcome: the page, its
+        redirect target, or the error page after a failed fetch."""
+        cases=[("/page",{},r"status=200 bytes=\d+ tls=none url=http://fixture.example:8080/page$"),
+               ("/page",{"scheme":"https"},r"status=200 bytes=\d+ tls=ok url=https://fixture.example:8443/page$"),
+               ("/upgrade",{},r"status=200 bytes=\d+ tls=ok url=https://fixture.example:8443/tls-cookie-end$"),
+               ("/page",{"port":9},r"status=0 bytes=0 tls=none url=about:query/fetcherror$"),
+               ("/page",{"scheme":"https","mode":"browser-untrusted"},r"status=0 bytes=0 tls=cert url=about:query/fetcherror$")]
+        for path,options,pattern in cases:
+            with self.subTest(path=path,options=options):
+                result=self.browser(path,test_mode=True,**options)
+                reports=[line for line in result.stderr.splitlines() if line.startswith("[browser-test] case=browser-page ")]
+                self.assertEqual(len(reports),1,result.stderr)
+                self.assertNotIn("url=about:blank",reports[0])
+                self.assertRegex(reports[0],pattern)
 
     def test_fetch_failure_pages_name_the_stage(self):
         for options in (
