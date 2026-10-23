@@ -152,6 +152,15 @@ int main(int argc,char **argv)
     /* Rename carries the position to the new name. */
     desk_folder_rename(&d,n); strcpy(d.sh.folder->edit,"Moved name"); key(DU_KEY_ENTER); desk_folder_service(&d); n=named("Moved name"); assert(d.sh.icons[n].box.x==360);
     d.sh.icon_selected=n; key(DU_KEY_ENTER); assert(!strcmp(program,"files") && !strcmp(launched,DESK_FOLDER "/Moved name"));
+    /* G6: desktop Alt+Enter and context Properties route to the same sheet. */
+    d.focus=-1; desk_shell_key(&d,DU_KEY_LALT,1); key(DU_KEY_ENTER); desk_shell_key(&d,DU_KEY_LALT,0);
+    assert(!strcmp(program,"files") && !strcmp(launched,"--properties=" DESK_FOLDER "/Moved name"));
+    d.sh.menu_owner=n; desk_menu_open(&d,SH_MENU_ICON,500,200);
+    int properties_item=-1;
+    for (int i=0;i<d.sh.menus[0].count;i++) if (!strcmp(d.sh.menus[0].items[i].label,"Properties")) properties_item=i;
+    assert(properties_item>=0); d.sh.menus[0].hot=properties_item; key(DU_KEY_ENTER);
+    assert(!strcmp(program,"files") && !strcmp(launched,"--properties=" DESK_FOLDER "/Moved name"));
+    puts("PASS G6 desktop Properties: Alt+Enter and context menu share the Files sheet path");
     d.sh.icon_selected=named("Scene.BMP"); key(DU_KEY_ENTER); assert(!strcmp(program,"viewer"));
     d.sh.menu_owner=d.sh.icon_selected; desk_menu_open(&d,SH_MENU_OPEN_WITH,500,200);
     int paint_item=-1;

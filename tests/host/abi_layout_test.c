@@ -26,7 +26,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -42,8 +42,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1024);
-SETUP_OFFSET(source_iso_sha,1089);
+SETUP_OFFSET(source_image_sha,1072);
+SETUP_OFFSET(source_iso_sha,1137);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -68,6 +68,55 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
 _Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
 static const struct expectation expectations[] = {
+    {"constant.CIUKI_SYS_FILE_INFO", CIUKI_SYS_FILE_INFO, 98u},
+    {"constant.MEDIA_GET_LABEL", MEDIA_GET_LABEL, 0x4d18u},
+    {"constant.MEDIA_SET_LABEL", MEDIA_SET_LABEL, 0x4d19u},
+    {"constant.CIUKI_MEDIA_LABEL_READ_ONLY", CIUKI_MEDIA_LABEL_READ_ONLY, 1u},
+    {"constant.CIUKI_MEDIA_LABEL_MAX", CIUKI_MEDIA_LABEL_MAX, 11u},
+    {"constant.CIUKI_FILE_INFO_VERSION", CIUKI_FILE_INFO_VERSION, 1u},
+    {"constant.CIUKI_FILE_INFO_GET", CIUKI_FILE_INFO_GET, 0u},
+    {"constant.CIUKI_FILE_INFO_SET", CIUKI_FILE_INFO_SET, 1u},
+    {"constant.CIUKI_ATTR_READONLY", CIUKI_ATTR_READONLY, 0x01u},
+    {"constant.CIUKI_ATTR_HIDDEN", CIUKI_ATTR_HIDDEN, 0x02u},
+    {"constant.CIUKI_ATTR_SYSTEM", CIUKI_ATTR_SYSTEM, 0x04u},
+    {"constant.CIUKI_ATTR_DIRECTORY", CIUKI_ATTR_DIRECTORY, 0x10u},
+    {"constant.CIUKI_ATTR_ARCHIVE", CIUKI_ATTR_ARCHIVE, 0x20u},
+    {"constant.CIUKI_ATTR_SETTABLE", CIUKI_ATTR_SETTABLE, 0x27u},
+    {"constant.CIUKI_FILE_INFO_ATTRIBUTES", CIUKI_FILE_INFO_ATTRIBUTES, 1u},
+    {"constant.CIUKI_FILE_INFO_CREATED", CIUKI_FILE_INFO_CREATED, 2u},
+    {"constant.CIUKI_FILE_INFO_ACCESSED", CIUKI_FILE_INFO_ACCESSED, 4u},
+    {"constant.CIUKI_FILE_INFO_MODIFIED", CIUKI_FILE_INFO_MODIFIED, 8u},
+    {"constant.CIUKI_FILE_INFO_SHORT_NAME", CIUKI_FILE_INFO_SHORT_NAME, 16u},
+    {"constant.CIUKI_FILE_INFO_ALLOCATED", CIUKI_FILE_INFO_ALLOCATED, 32u},
+    {"constant.CIUKI_FILE_INFO_SETTABLE", CIUKI_FILE_INFO_SETTABLE, 15u},
+    {"constant.CIUKI_FILE_INFO_READ_ONLY_MEDIUM", CIUKI_FILE_INFO_READ_ONLY_MEDIUM, 1u},
+    {"constant.CIUKI_FILE_INFO_VOLUME_ROOT", CIUKI_FILE_INFO_VOLUME_ROOT, 2u},
+    {"constant.CIUKI_SHORT_NAME_MAX", CIUKI_SHORT_NAME_MAX, 16u},
+    {"sizeof.ciuki_file_info", sizeof(struct ciuki_file_info), 88u},
+    {"alignof.ciuki_file_info", _Alignof(struct ciuki_file_info), 4u},
+    {"offsetof.ciuki_file_info.version", __builtin_offsetof(struct ciuki_file_info, version), 0u},
+    {"offsetof.ciuki_file_info.size", __builtin_offsetof(struct ciuki_file_info, size), 4u},
+    {"offsetof.ciuki_file_info.operation", __builtin_offsetof(struct ciuki_file_info, operation), 8u},
+    {"offsetof.ciuki_file_info.mask", __builtin_offsetof(struct ciuki_file_info, mask), 12u},
+    {"offsetof.ciuki_file_info.attributes", __builtin_offsetof(struct ciuki_file_info, attributes), 16u},
+    {"offsetof.ciuki_file_info.flags", __builtin_offsetof(struct ciuki_file_info, flags), 20u},
+    {"offsetof.ciuki_file_info.file_size", __builtin_offsetof(struct ciuki_file_info, file_size), 24u},
+    {"offsetof.ciuki_file_info.allocated", __builtin_offsetof(struct ciuki_file_info, allocated), 32u},
+    {"offsetof.ciuki_file_info.created", __builtin_offsetof(struct ciuki_file_info, created), 40u},
+    {"offsetof.ciuki_file_info.accessed", __builtin_offsetof(struct ciuki_file_info, accessed), 48u},
+    {"offsetof.ciuki_file_info.modified", __builtin_offsetof(struct ciuki_file_info, modified), 56u},
+    {"offsetof.ciuki_file_info.created_ms", __builtin_offsetof(struct ciuki_file_info, created_ms), 64u},
+    {"offsetof.ciuki_file_info.reserved", __builtin_offsetof(struct ciuki_file_info, reserved), 68u},
+    {"offsetof.ciuki_file_info.short_name", __builtin_offsetof(struct ciuki_file_info, short_name), 72u},
+    {"sizeof.ciuki_media_label", sizeof(struct ciuki_media_label), 32u},
+    {"alignof.ciuki_media_label", _Alignof(struct ciuki_media_label), 4u},
+    {"offsetof.ciuki_media_label.version", __builtin_offsetof(struct ciuki_media_label, version), 0u},
+    {"offsetof.ciuki_media_label.size", __builtin_offsetof(struct ciuki_media_label, size), 4u},
+    {"offsetof.ciuki_media_label.drive", __builtin_offsetof(struct ciuki_media_label, drive), 8u},
+    {"offsetof.ciuki_media_label.flags", __builtin_offsetof(struct ciuki_media_label, flags), 12u},
+    {"offsetof.ciuki_media_label.label", __builtin_offsetof(struct ciuki_media_label, label), 16u},
+    {"offsetof.ciuki_media_label.reserved", __builtin_offsetof(struct ciuki_media_label, reserved), 28u},
+    {"offsetof.ciuki_dirent.d_attributes", __builtin_offsetof(struct ciuki_dirent, d_attributes), 21u},
     {"constant.CIUKI_HARDWARE_VERSION", CIUKI_HARDWARE_VERSION, 3u},
     {"sizeof.ciuki_hardware_info", sizeof(struct ciuki_hardware_info), 4500u},
     {"alignof.ciuki_hardware_info", _Alignof(struct ciuki_hardware_info), 4u},
@@ -2274,7 +2323,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_dirent.d_reclen", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_reclen)), 16u},
     {"offsetof.ciuki_dirent.d_namlen", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_namlen)), 18u},
     {"offsetof.ciuki_dirent.d_type", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_type)), 20u},
-    {"offsetof.ciuki_dirent.reserved", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, reserved)), 21u},
+    {"offsetof.ciuki_dirent.reserved", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, reserved)), 22u},
     {"offsetof.ciuki_dirent.d_name", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_name)), 24u},
     {"offsetof.ciuki_dirent.d_size", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_size)), 792u},
     {"offsetof.ciuki_dirent.d_mtime", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_mtime)), 800u},

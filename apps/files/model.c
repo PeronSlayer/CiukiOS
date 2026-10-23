@@ -285,7 +285,7 @@ static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
 
 /* Jobs use raw listing(): hiding belongs only to the browser, not to copies
  * or recursive deletion/properties. */
-static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *l, uint32_t slots)
+static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *l, uint32_t slots, int show_hidden, int hide_system)
 {
     int r;
     if (!path[0]) {
@@ -300,7 +300,9 @@ static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *
     if (!r) {
         unsigned count = 0;
         for (unsigned i = 0; i < l->count; i++)
-            if (!fm_hidden(path, l->entries[i].name)) l->entries[count++] = l->entries[i];
+            if (!fm_hidden(path, l->entries[i].name) &&
+                (show_hidden || !(l->entries[i].meta.attributes & 2u)) &&
+                (!hide_system || !(l->entries[i].meta.attributes & 4u))) l->entries[count++] = l->entries[i];
         l->count = count;
     }
     return r;
@@ -360,6 +362,7 @@ static int order(const struct fm_entry *a, const struct fm_entry *b, unsigned co
     int result = 0;
     if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
     else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
+    else if (column == 4) result = a->meta.attributes < b->meta.attributes ? -1 : a->meta.attributes > b->meta.attributes;
     else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
     if (!result) result = compare(a->name, b->name);
     if (!result) result = strcmp(a->name, b->name);
@@ -368,7 +371,7 @@ static int order(const struct fm_entry *a, const struct fm_entry *b, unsigned co
 
 void fm_sort(struct fm_model *m, unsigned column, int descending)
 {
-    if (column > 3) return;
+    if (column > 4) return;
     m->sort = column; m->descending = descending;
     if (m->count < 2) return;
     /* Stable bottom-up merge sort; focus/anchor follow entries, not indices. */
@@ -397,7 +400,7 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
 static int load(struct fm_model *m, const char *path)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, path, &l, m->drive_slots);
+    int r = browser_listing(&m->fs, path, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
     free(m->entries);
     m->entries = l.entries; m->count = l.count; m->capacity = l.capacity;
@@ -438,7 +441,7 @@ int fm_navigate(struct fm_model *m, const char *path)
 int fm_refresh(struct fm_model *m)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, m->path, &l, m->drive_slots);
+    int r = browser_listing(&m->fs, m->path, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
     char active[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);
@@ -863,6 +866,10 @@ int fm_job_step(struct fm_job *j)
         if (r) return fail(j, r);
         if (f->meta.type == FM_OTHER) return fail(j, -ENOTSUP);
         if (j->kind == FM_PROPERTIES) {
+            if (f->meta.type == FM_FILE) {
+                j->allocated += f->meta.allocated;
+                if (!f->meta.allocated_known) j->allocated_unknown = 1;
+            }
             if (j->depth == 1 && j->next == 1) j->property_meta = f->meta;
             if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; pop(j); return 1; }
             if (j->depth > 1) j->folders++;

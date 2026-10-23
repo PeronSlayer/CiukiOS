@@ -79,6 +79,24 @@ bool clock_fat_civil(uint16_t date, uint16_t time, int64_t *seconds)
     return true;
 }
 
+bool clock_utc_fat(int64_t seconds, uint16_t *date, uint16_t *time)
+{
+    static const uint8_t days[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    /* Reject unrepresentable user times before calling the civil evaluator. */
+    if (seconds < 315360000LL || seconds > 4354992000LL) return false;
+    int32_t offset = timezone_offset_at ? timezone_offset_at(seconds) : 0;
+    if ((offset > 0 && seconds > INT64_MAX - offset) || (offset < 0 && seconds < INT64_MIN - offset)) return false;
+    int64_t local = seconds + offset;
+    if (local < 315532800 || local >= 4354819200LL) return false; /* 1980-01-01 .. 2108-01-01 */
+    int64_t day = local / 86400, rest = local % 86400;
+    unsigned y = 1970, m = 1;
+    while (day >= 365 + leap(y)) { day -= 365 + leap(y); y++; }
+    while (day >= days[m - 1] + (m == 2 && leap(y))) { day -= days[m - 1] + (m == 2 && leap(y)); m++; }
+    *date = (uint16_t)(((y - 1980) << 9) | (m << 5) | (unsigned)(day + 1));
+    *time = (uint16_t)(((unsigned)(rest / 3600) << 11) | ((unsigned)(rest / 60 % 60) << 5) | (unsigned)(rest % 60 / 2));
+    return true;
+}
+
 /* G1: FAT stores local time (Microsoft, "File Times"): the stamp is read
  * back through the zone rule of its own instant, so a summer stamp keeps
  * its wall-clock value in winter. */

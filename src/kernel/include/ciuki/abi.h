@@ -758,8 +758,9 @@ enum ciuki_syscall {
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
     CIUKI_SYS_GETENTROPY = 91,
-    /* G1: outside 78-95 (left to F6) and after the Win32 family's 96. */
+    /* G1 TIME=97 is preserved; G6 follows the highest allocated syscall. */
     CIUKI_SYS_TIME = 97,
+    CIUKI_SYS_FILE_INFO = 98,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
@@ -1192,6 +1193,27 @@ struct ciuki_media_space {
     uint32_t free_clusters;
     uint32_t reserved;
 };
+/* G6: volume label of a mounted FAT drive (C: included). GET fills label
+ * (no padding, "" when none) and flags; SET writes the root-directory
+ * volume-ID entry and the boot sector BS_VolLab (FAT spec 1.03, pp. 9-12, 25;
+ * Win32 SetVolumeLabel). Label: at most 11 bytes of printable ASCII, stored
+ * upper case; * ? . , ; : / \ | + = < > [ ] " refused with EINVAL; "" removes
+ * the label. EROFS on a read-only, write-protected or optical medium;
+ * ENOENT without a mounted FAT volume. reserved must be zero. */
+/* Appended after MEDIA_CD_POSITION=0x4d17; existing values stay fixed. */
+#define MEDIA_GET_LABEL 0x4d18u
+#define MEDIA_SET_LABEL 0x4d19u
+#define CIUKI_MEDIA_LABEL_READ_ONLY 1u
+#define CIUKI_MEDIA_LABEL_MAX 11u
+struct ciuki_media_label {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    char label[12];
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_media_label) == 32, "media label ABI");
 _Static_assert(sizeof(struct ciuki_media_space) == 32, "media space ABI");
 _Static_assert(sizeof(struct ciuki_media_state_v1) == 120, "media state v1 ABI");
 _Static_assert(sizeof(struct ciuki_media_state) == 224, "media state ABI");
@@ -1765,10 +1787,62 @@ struct ciuki_dirent {
     uint16_t d_reclen; /* 16 */
     uint16_t d_namlen; /* 18 */
     uint8_t d_type; /* 20 */
-    uint8_t reserved[3]; /* 21 */
+    uint8_t d_attributes; /* 21: G6 CIUKI_ATTR_* of the entry, 0 when none */
+    uint8_t reserved[2]; /* 22 */
     char d_name[768]; /* 24 */
     uint64_t d_size; /* 792: enumeration metadata, no allocation-chain walk */
     int64_t d_mtime; /* 800: Unix seconds, zero when unavailable */
+};
+
+/* G6: FAT attributes, times and MS-DOS name through the native file API,
+ * call 98 file_info(B=path, C=record, D=sizeof(record)); 0 or -errno.
+ * GET fills every field the object has and reports them in mask; SET
+ * changes only the mask fields (ATTRIBUTES, CREATED, ACCESSED, MODIFIED) in
+ * one directory-entry publication. Times are Unix seconds through the same
+ * FAT conversion as stat; FAT keeps created to 10 ms, modified to 2 s and
+ * accessed to the day (Microsoft "File Times"). attributes are the FAT
+ * byte (Microsoft FAT 1.03 p. 23): SET accepts READONLY|HIDDEN|SYSTEM|
+ * ARCHIVE plus the object's own DIRECTORY bit. Errors: EINVAL (version,
+ * size, operation, mask, attribute bits, a time outside 1980-2107, a
+ * volume root), ENOENT/ENOTDIR/ENAMETOOLONG (path), EFAULT, EROFS (CD,
+ * NTFS, write-protected or read-only FAT volume), EOPNOTSUPP (device and
+ * synthetic nodes), EIO (medium gone). Win32 GetFileAttributes/SetFile-
+ * Attributes/GetFileTime/SetFileTime and DOS INT 21h AX=4300h/4301h and
+ * AX=5700h/5701h read and write the same directory entry. */
+#define CIUKI_FILE_INFO_VERSION 1u
+#define CIUKI_FILE_INFO_GET 0u
+#define CIUKI_FILE_INFO_SET 1u
+#define CIUKI_ATTR_READONLY 0x01u
+#define CIUKI_ATTR_HIDDEN 0x02u
+#define CIUKI_ATTR_SYSTEM 0x04u
+#define CIUKI_ATTR_DIRECTORY 0x10u
+#define CIUKI_ATTR_ARCHIVE 0x20u
+#define CIUKI_ATTR_SETTABLE 0x27u
+#define CIUKI_FILE_INFO_ATTRIBUTES 1u
+#define CIUKI_FILE_INFO_CREATED 2u
+#define CIUKI_FILE_INFO_ACCESSED 4u
+#define CIUKI_FILE_INFO_MODIFIED 8u
+#define CIUKI_FILE_INFO_SHORT_NAME 16u
+#define CIUKI_FILE_INFO_ALLOCATED 32u
+#define CIUKI_FILE_INFO_SETTABLE 15u
+#define CIUKI_FILE_INFO_READ_ONLY_MEDIUM 1u
+#define CIUKI_FILE_INFO_VOLUME_ROOT 2u
+#define CIUKI_SHORT_NAME_MAX 16u
+struct ciuki_file_info {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t operation; /* 8 */
+    uint32_t mask; /* 12 */
+    uint32_t attributes; /* 16 */
+    uint32_t flags; /* 20: GET output */
+    uint64_t file_size; /* 24 */
+    uint64_t allocated; /* 32: bytes in whole clusters ("size on disk") */
+    int64_t created; /* 40 */
+    int64_t accessed; /* 48 */
+    int64_t modified; /* 56 */
+    uint32_t created_ms; /* 64: 0-999 past created */
+    uint32_t reserved; /* 68 */
+    char short_name[16]; /* 72: 8.3 alias, NUL terminated */
 };
 
 struct ciuki_spawn_fd {
@@ -2458,10 +2532,16 @@ _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_off) == 8, "ciuki_diren
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_reclen) == 16, "ciuki_dirent.d_reclen offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_namlen) == 18, "ciuki_dirent.d_namlen offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_type) == 20, "ciuki_dirent.d_type offset");
-_Static_assert(__builtin_offsetof(struct ciuki_dirent, reserved) == 21, "ciuki_dirent.reserved offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dirent, d_attributes) == 21, "ciuki_dirent.d_attributes offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dirent, reserved) == 22, "ciuki_dirent.reserved offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_name) == 24, "ciuki_dirent.d_name offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_size) == 792, "ciuki_dirent.d_size offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_mtime) == 800, "ciuki_dirent.d_mtime offset");
+_Static_assert(sizeof(struct ciuki_file_info) == 88, "ciuki_file_info size");
+_Static_assert(_Alignof(struct ciuki_file_info) == 4, "ciuki_file_info alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_file_info, file_size) == 24, "ciuki_file_info.file_size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_file_info, created) == 40, "ciuki_file_info.created offset");
+_Static_assert(__builtin_offsetof(struct ciuki_file_info, short_name) == 72, "ciuki_file_info.short_name offset");
 _Static_assert(sizeof(struct ciuki_spawn_fd) == 8, "ciuki_spawn_fd size");
 _Static_assert(_Alignof(struct ciuki_spawn_fd) == 4, "ciuki_spawn_fd alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_spawn_fd, source) == 0, "ciuki_spawn_fd.source offset");

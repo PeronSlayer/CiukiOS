@@ -64,12 +64,12 @@ FILES_FRAMES = {
     'files-cp5-deleted.xrgb': '6c7575f21d5b59a7ded0a34fdf2c67827bb06994f55e84c509d0064a8c91e79b',
     'files-help.xrgb': '4268a86667b2c80bddb6305cbc95e97a62b49d3d6295f83142cbf5301cf669b7',
     'files-menu-file.xrgb': 'fa3bbac3d311703fbbc92762a3fe6a5171b7ae731e99c8c7176a1131a170fe89',
-    'files-menu-view.xrgb': '7013f8ce64dbb1d862723dc904841a2faaef2891420f91215c977ab19e0a5b66',
+    'files-menu-view.xrgb': '18cb22210b89067d6a9195eddcc261b5c8336a1ea5878482261a433663f5d078',
     'files-multi-select.xrgb': 'ddbec86351caf942f8658ea586bc859121e5c2cdd34af1eaa250920f2f9f211d',
-    'files-properties.xrgb': 'e0162e8f809fb79da89eaddd5f3e9ebfda4721ef28d5d05d85ced33134142c5e',
+    'files-properties.xrgb': '8308013ed6c5cf7372d0d415e9f32ac9de578f9d8970c65ed75f4c24de7f7798',
     'files-rename-error.xrgb': '2a28adc4ea67265026e8fb2c779dfecc04204e9a167e9811754f50188bb3c52f',
     'files-replace-prompt.xrgb': '8e66a2b9a7c423e2678dfffd1f12e86083f59df196243b3dfde95cb466dac85e',
-    'files-computer.xrgb': 'bc470809de26754b7e4dc84d4388f06e7d77eeaf85fa629ffd293fc459220c88',
+    'files-computer.xrgb': '506bb594021dc02a639b7551b5d076d67610323859d387e55a583a2d1e2f8e14',
     'files-c-drive.xrgb': 'f7f83a31eb52f51ae109a81a4e50dc60a27c238521451adc77e5e038c2dc2b8d',
     'files-root-details.xrgb': '113608285b83719291c9f25f492f077bdb9567e3a379424927c51105a9ed4eb7',
     'files-sort-size-desc.xrgb': '98a9556f0422749d1e8aa9a483df84ef328b86db81cb1e137c2d85c5aa31eb48',
@@ -82,6 +82,17 @@ FILES_FRAMES = {
 # rendered frame. Entries set to PIN-FROM-FIRST-RUN print their new digest and
 # are re-pinned by the lead after a visual review; pinned entries still compare.
 PIN = "PIN-FROM-FIRST-RUN"
+
+# G6: reviewed property sheets, drive pie/counting, Version and Attributes.
+G6_FRAMES = {
+    "g6-attributes.xrgb": "4ec32dfe992e81b6410a27d69633378555a5ba2ace43694a2f3b01d43df7c3a5",
+    "g6-counting.xrgb": "42b3305b9c527cd7f17357243d80e9a0b41881ddcf48236cdd018197e02054e4",
+    "g6-drive.xrgb": "498d8688f28d739299d4b71bc2567cc7ff1e98784a8172e9c07e3cd5417e2648",
+    "g6-file.xrgb": "5bfaba21d7f7629d31aa78b3edfbc71d472e207f632032aca0596d060cd2c165",
+    "g6-folder.xrgb": "c7cde320492cac790ffb8e74c6ece5f449c6e88659de20cf4e58f3173d3e58d1",
+    "g6-tools.xrgb": "eee7fead585b45aa113857a8f7f27184b2e9b50a1759813e99be6fa420159b2f",
+    "g6-version.xrgb": "96976f0bb3f2a2100d69c50ed0f6819ce2a3cc7043ac7d28d58327e1751c6526"
+}
 
 
 def assert_pins(test, actual, pinned, label):
@@ -199,6 +210,17 @@ class DeskuiTests(unittest.TestCase):
             "apps/files/model.c", "apps/files/transfer.c", "apps/files/vfs.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"], directory)
         self.assertIn("PASS Files idle", stdout)
+
+    def test_files_version(self):
+        stdout, _ = self.run_harness("files-version", ["tests/host/desktop/files_version_test.c", "apps/files/vfs.c", "apps/files/model.c"])
+        self.assertIn("PASS G6 PE Version", stdout)
+
+    def test_files_properties(self):
+        stdout, digests = self.run_harness("g6-properties", ["tests/host/desktop/files_properties_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/app.c", "apps/files/model.c",
+            "apps/files/transfer.c", *TOOLKIT], frames=True)
+        self.assertIn("PASS G6 Properties", stdout)
+        self.check_frames(digests, G6_FRAMES, "G6")
 
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",

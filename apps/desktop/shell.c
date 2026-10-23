@@ -796,7 +796,16 @@ static void act(struct desktop *d, const struct sh_item *it)
                     launch_named(d,"control",arg);return;
                 }
         }
-        if (icon_is_entry(d, it->arg)) { d->sh.folder->command=DF_PROPERTIES; d->sh.folder->index=it->arg-3; break; }
+        if (icon_is_entry(d, it->arg)) {
+            char argument[FM_PATH+16];
+            snprintf(argument,sizeof(argument),"--properties=%s",d->sh.icons[it->arg].argument);
+            launch_named(d,"files",argument); break;
+        }
+        if (it->arg>=0 && it->arg<d->sh.icon_count && !strcmp(d->sh.icons[it->arg].program,"files")) {
+            char argument[FM_PATH+16];
+            const char *path=d->sh.icons[it->arg].argument;
+            if (path[0]) { snprintf(argument,sizeof(argument),"--properties=%s",path); launch_named(d,"files",argument); break; }
+        }
         if (it->arg >= 0 && it->arg < d->sh.icon_count) {
             const struct sh_icon *ic = &d->sh.icons[it->arg];
             char text[200];
@@ -3709,6 +3718,10 @@ int desk_shell_key(struct desktop *d, int code, int value)
         d->sh.alt_used=1; return 1;
     }
     if (d->sh.modifiers & DU_ALT) {
+        if (code==DU_KEY_ENTER && d->focus<0 && d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count) {
+            if (value==1) act(d,&(struct sh_item){.action=SH_ACT_ICON_PROPERTIES,.arg=d->sh.icon_selected});
+            d->sh.alt_used=1; return 1;
+        }
         if (code==DU_KEY_ENTER && d->focus>=0 && d->clients[d->focus].version==DESK_V3_VERSION) {
             if (value==1) {
                 struct desk_client *c=&d->clients[d->focus]; struct ciuki_message m;
