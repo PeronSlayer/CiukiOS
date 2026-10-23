@@ -16,6 +16,9 @@
 extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((weak));
 extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
 extern void dosvm_task_switch(const struct task *) __attribute__((weak)); /* f3-04 LDT/watchpoints */
+extern void ndis_user_switch(const struct task *) __attribute__((weak));
+extern void ndis_user_task_stopping(struct task *,int) __attribute__((weak));
+extern void ndis_user_reaped(struct task *) __attribute__((weak));
 extern void dosvm_tick(void) __attribute__((weak));
 extern void cpu_init(void);
 
@@ -1077,7 +1080,9 @@ void schedule(void)
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_VM_ENTER);
     tss_set_kernel_stack(dosvm_task_esp0 ? dosvm_task_esp0(next, esp0) : esp0);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_LDT_DEBUG);
+    arch_io_install(0, 0); /* default-deny before any incoming task's grants */
     if (dosvm_task_switch) dosvm_task_switch(next);
+    if (ndis_user_switch) ndis_user_switch(next);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_PROC);
     proc_task_switch(next);
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_FPU);
@@ -1195,6 +1200,7 @@ void task_exit(int code)
 {
     cli();
     struct task *t = g_current;
+    if (ndis_user_task_stopping) ndis_user_task_stopping(t,code);
     bool native = proc_task_exiting(t, code);
     t->exit_code = code;
     task_input_withdraw(t);
@@ -1219,6 +1225,7 @@ void task_kill(struct task *t, int code)
     }
     uint32_t f = irq_save();
     if (t->state != T_ZOMBIE && t->state != T_DEAD) {
+        if (ndis_user_task_stopping) ndis_user_task_stopping(t,code);
         bool native = proc_task_exiting(t, code);
         t->exit_code = code;
         task_input_withdraw(t);
@@ -1276,6 +1283,7 @@ void task_reap(struct task *t)
     if (cpu_reap) cpu_reap(t);
     irq_restore(f);
     t->state = T_DEAD;
+    if (ndis_user_reaped) ndis_user_reaped(t);
     if (t->user)
         as_destroy(&t->as);
     kstack_free(t->kstack);
@@ -1318,6 +1326,8 @@ __attribute__((noreturn)) void sched_start(void)
     if (cpu_switch) cpu_switch(0, first);
     slice_left = g_quantum_ticks;
     tss_set_kernel_stack((uint32_t)first->kstack + KSTACK_SIZE);
+    arch_io_install(0, 0);
+    if (ndis_user_switch) ndis_user_switch(first);
     proc_task_switch(first);
     fpu_task_switch(first);
     switch_context(&boot_esp, first->saved_esp);

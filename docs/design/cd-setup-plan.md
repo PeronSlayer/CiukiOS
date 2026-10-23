@@ -322,6 +322,7 @@ ScanDisk with a surface scan on the next boot).
 | --- | --- | --- |
 | Partition start | first partition at head 1 (LBA 63, CHS-aligned) | LBA 2048 (1 MiB) so the loader gap 1–2047 holds `ciukldr`; the only start the loader accepts |
 | Cluster size | table 10.2: 4 KiB up to 8 GB, 8 KiB to 16 GB, 16 KiB to 32 GB, 32 KiB above | fixed 4 KiB (8 sectors) at every size: the loader pins it and the fs suite's fsck/mtools oracles assume it |
+| FAT size | not described in chapter 10 (Format picks the cluster size of table 10.2, `wrkc10_6.htm`); the FAT specification's formula `ceil((DskSize − ResvdSecCnt) / ((256 × SecPerClus + NumFATs) / 2))` may over-allocate | mkfs.fat 4.2's exact need, `ceil((clusters + 2) × 4 / 512)`, so the volume is byte-identical to `build_image.py`'s; the specification value is computed and recorded (never smaller); one extra sector only where mkfs.fat's rounding would leave the last cluster without an entry (f9-02) |
 | Reserved sectors | 32 typical (FAT spec) | 160, blackbox descriptor and ring inside them (`build_image.py`; `boot-memory.md` corrected by this rework) |
 | Partition types | primary, extended, logical; active flag chosen by the user | one primary, active; no extended/logical; foreign entries are erased by whole-disk |
 | Table refresh | reboot after repartitioning | the kernel invalidates the disk's cache and rescans the table under the lease before publishing the new volume, no reboot |
@@ -329,6 +330,7 @@ ScanDisk with a surface scan on the next boot).
 | Resizing | not offered | not offered; occupied filesystems are never resized |
 | Disk overlays, compression (DriveSpace) | supported by Windows 98 | unsupported; a disk with an overlay or a non-MBR scheme (GPT `0xEE`) is refused |
 | LBA limit | INT 13h extensions | 28-bit LBA per `partition.c`; the partition is capped, the rest stays unallocated |
+| Write confirmation | not described in chapter 10 (VCACHE caches reads and writes, `wrkc10_6.htm`) | an unknown write-cache state, or an enabled cache without a qualified FLUSH CACHE path, is refused ("the disk cannot confirm writes"), the same durability rule as every writable FAT mount; a confirmed disabled cache needs no device FLUSH command (f9-02) |
 | Destructive confirmation | Fdisk/Format warnings | the final transaction summary (section 4) with the disk identity and the erased partitions; unattended needs `EraseDisk=yes` |
 
 ### 5.3 Raw-disk ownership: the destination lease (D5; F6)
@@ -375,6 +377,27 @@ ScanDisk with a surface scan on the next boot).
   page; **execution revalidates identity, capacity and fingerprint
   immediately after acquiring the lease** and refuses with "the disk has
   changed since the preview" when they differ.
+
+The native boundary checks the caller's current capability on raw operations
+and on writes to the published volume, including an already-open description.
+Ioctl output records are pinned writable before a lease or publication can
+change state. Volume reads retain the normal generation/media check and the
+reservation-free cold-read path; a raw request does not enter volume admission.
+These are also host-test obligations after integrating f9-01 (f9-02 Amendment R).
+Publication starts the storage writer before exposing the volume; failure
+retains the lease without publishing. Raw flush follows the existing FAT/cache
+durability rule: with a positively identified disabled device write cache,
+completed synchronous writes need no device FLUSH command; an enabled cache
+requires a qualified path, and unknown cache state is refused (section 5.2).
+
+`libdisk.a` must pull in its native backend through an ordinary undefined
+reference; applications need only `-ldisk`, without naming a backend symbol.
+This follows the [ELF symbol binding rules](https://gabi.xinuos.com/elf/05-symtab.html#symbol-binding)
+and [LLD's archive extraction rules](https://lld.llvm.org/ELF/warn_backrefs.html).
+The formatter continues to follow the [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+(FAT[1], FSInfo and backup BPB), checked against [dosfstools 4.2](https://github.com/dosfstools/dosfstools/blob/v4.2/src/mkfs.fat.c).
+MBR offsets follow [UEFI 2.10 §5.2.1](https://uefi.org/specs/UEFI/2.10/05_GUID_Partition_Table_Format.html#legacy-master-boot-record-mbr).
+The final MBR still follows the durability barrier of [T13 ATA/ATAPI-6 revision 3a §§8.12–8.13](https://flint.cs.yale.edu/cs422/readings/hardware/ATA-d1410r3a.pdf).
 
 ## 6. Installation transaction (D6; F7) and the shared interface (D14)
 
@@ -433,10 +456,31 @@ enum setup_error_class { SETUP_ERR_NONE, SETUP_ERR_SOURCE_READ /* retryable */,
     SETUP_ERR_DEST_WRITE, SETUP_ERR_DEST_FLUSH, SETUP_ERR_DEST_FULL, SETUP_ERR_DEST_CHANGED,
     SETUP_ERR_LEASE, SETUP_ERR_CONSISTENCY, SETUP_ERR_CANCELLED, SETUP_ERR_MEMORY, SETUP_ERR_INTERNAL };
 struct setup_disk_identity { char model[41], serial[21]; uint64_t sectors; uint8_t table_fingerprint[32]; };
-struct setup_plan {            /* produced by setup_txn_prepare(), shown on the summary page */
-    struct setup_disk_identity disk; unsigned erased_partitions; struct { uint8_t type; uint64_t start, count; char label[12]; } erased[16];
-    uint64_t partition_start, partition_count; uint64_t required_bytes, overhead_bytes, reserve_bytes, free_after_bytes;
-    uint32_t components; /* bitmask over the catalogue */ struct setup_answers answers; char source_image_sha[65], source_iso_sha[65];
+#define SETUP_TXN_VERSION 2u
+#define SETUP_ERASED_MAX 16u
+struct setup_erased_partition {
+    uint8_t type;
+    uint64_t start;
+    uint64_t count;
+    char label[12];
+};
+struct setup_plan { /* version 2; produced by prepare, shown before confirmation */
+    uint32_t version;
+    struct setup_disk_identity disk;
+    unsigned erased_partitions; /* represented prefix */
+    unsigned erased_total; /* every partition erased, including the omitted suffix */
+    struct setup_erased_partition erased[SETUP_ERASED_MAX];
+    uint64_t partition_start;
+    uint64_t partition_count;
+    uint64_t required_bytes; /* inclusive libdisk total */
+    uint64_t payload_bytes;
+    uint64_t overhead_bytes;
+    uint64_t reserve_bytes;
+    uint64_t free_after_bytes;
+    uint32_t components;
+    struct setup_answers answers;
+    char source_image_sha[65];
+    char source_iso_sha[65]; /* embedded CDMANIFE.JSN SHA-256 (media identity) */
 };
 struct setup_progress { enum setup_phase phase; const char *step; uint64_t bytes_done, bytes_total; uint32_t files_done, files_total; uint32_t elapsed_ms, eta_ms, throughput_kbps; };
 struct setup_error { enum setup_error_class cls; int err; enum setup_phase phase; char path[260]; uint64_t lba, count; unsigned attempt; bool retryable; };
@@ -711,3 +755,23 @@ Before the CD is called distributable, on the recorded ISO SHA-256:
 - O2: the `setup=1` token is parsed by the loader with the ~24-byte addition inside f9-01, after f0-54 frees the budget (f9-01 may stage it last).
 - O3: the Wine 10.0 source archive ships on the ISO under `\SOURCES` with the other copyleft sources (`CIUKIOS.ZIP` plus `SOURCE-OFFER.txt` remain as the written offer for anything the ISO cannot carry).
 - O4: owners are Claude agents while Codex is unavailable; ioctl numbers `0x4401`–`0x440F` reserved for the disk lease group; the reserved CD signature `0x4B554943` and the 1 GiB minimum destination are accepted; Setup-mode drive letters as the plan states; the frozen `setup_txn.h` is reviewed by the lead at the f9-03/f9-04 launch.
+
+## f9-04b binding integration amendment
+
+The Setup transaction interface is version 2 (`SETUP_TXN_VERSION`).
+`erased_partitions` is the represented prefix (at most 16), `erased_total`
+is the complete libdisk count; Summary prints the prefix and "and N more".
+`required_bytes` is libdisk's inclusive total, with `payload_bytes`,
+`overhead_bytes` and `reserve_bytes` as breakdowns. `source_iso_sha` is the
+embedded `CDMANIFE.JSN` SHA-256, the media identity; the final ISO hash is
+external. Native FAT metadata queries and attribute changes require both
+Setup mode and the supervisor's non-inherited Setup capability. Setup gets
+display/input grants and POWER authority for its own lifetime.
+
+The boot manifest records directories, numeric attributes, and
+`boot_cfg_template`/`boot_cfg_sha256` with the exact canonical disk BOOT.CFG
+bytes (ASCII). Setup validates and copies the template; it does not reverse
+the Setup token transformation. Loader bytes come from offset 512 of
+`D:/CIUKBOOT.IMG`. Shared configuration writers accept a destination prefix;
+IPX/lobby persistence remains deferred. The durable log ends at `seal`;
+post-publication completion stays in memory to preserve clean-bit ordering.

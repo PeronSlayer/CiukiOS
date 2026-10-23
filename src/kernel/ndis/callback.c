@@ -10,14 +10,23 @@ void ndis_callback_fault(struct ndis_callback *c,const char *reason) {
     /* Fence first; no mutex, foreign Halt, native netif callback, or freeing.
      * Existing registry quarantine permanently denies reuse of exact claims. */
     c->fence_idle=c->ops.fence && c->ops.fence(c->ops.context,reason);
-    trace(c,"fault",reason);
     unsigned n=c->claim_count;
     if(n>NDIS_CALLBACK_CLAIMS) n=NDIS_CALLBACK_CLAIMS;
     for(unsigned i=0;i<n;i++) registry_quarantine(c->claims[i],c->generations[i]);
+    if(c->ops.fault_record && c->image) c->ops.fault_record(c->ops.context,c->image->file,
+        c->fault_vector,c->fault_offset,c->fault_in_shim);
+    while(c->lock_count) {
+        uint32_t *word=c->locks[--c->lock_count].word;
+        __atomic_store_n(word,0,__ATOMIC_RELEASE);
+    }
+    if(c->depth) c->irql=c->stack[0].previous;
+    c->depth=0;
+    trace(c,"fault",reason);
     trace(c,"quarantine",c->fence_idle?"fence-idle-proved":"fence-idle-unproved-pins-retained");
 }
 int ndis_callback_begin(struct ndis_callback *c,uint32_t address,uint8_t level,uint64_t now,uint64_t budget) {
     if(c->state==NDIS_CALLBACK_QUARANTINED) return 0;
+    if(c->image && c->image->quarantined) { c->state=NDIS_CALLBACK_QUARANTINED; return 0; }
     if(!c->image || !c->image->loaded || !ntimage_executable(c->image,address) ||
        !c->ops.fence || c->claim_count>NDIS_CALLBACK_CLAIMS || !c->dirql || c->dirql<=2 ||
        c->depth==NDIS_CALLBACK_DEPTH || !budget || now>UINT64_MAX-budget ||
@@ -28,13 +37,15 @@ int ndis_callback_begin(struct ndis_callback *c,uint32_t address,uint8_t level,u
     for(unsigned i=0;i<c->claim_count;i++) if(!registry_valid(c->claims[i],c->generations[i])) {
         ndis_callback_fault(c,"stale-claim"); return 0;
     }
-    c->stack[c->depth++]=(struct ndis_callback_frame){c->irql,level,now+budget};
+    if(!c->depth) { c->fault_vector=UINT32_MAX; c->fault_offset=0; c->fault_in_shim=false; }
+    c->stack[c->depth++]=(struct ndis_callback_frame){c->irql,level,now+budget,c->lock_count};
     c->irql=level; c->state=NDIS_CALLBACK_ACTIVE; c->image->entered=true;
     trace(c,"entry",0); return 1;
 }
 int ndis_callback_end(struct ndis_callback *c) {
     if(c->state==NDIS_CALLBACK_QUARANTINED) return 0;
-    if(!c->depth || c->irql!=c->stack[c->depth-1].level) {
+    if(!c->depth || c->irql!=c->stack[c->depth-1].level ||
+       c->lock_count!=c->stack[c->depth-1].locks) {
         ndis_callback_fault(c,"callback-irql-unbalanced"); return 0;
     }
     trace(c,"exit",0); c->irql=c->stack[--c->depth].previous;
@@ -42,10 +53,12 @@ int ndis_callback_end(struct ndis_callback *c) {
     return 1;
 }
 void ndis_callback_watchdog(struct ndis_callback *c,uint64_t now) {
-    if(c->state!=NDIS_CALLBACK_ACTIVE) return;
-    for(unsigned i=0;i<c->depth;i++) if(now>=c->stack[i].deadline) {
-        ndis_callback_fault(c,"callback-nonreturn-timeout"); return;
-    }
+    if(ndis_callback_expired(c,now)) ndis_callback_fault(c,"callback-nonreturn-timeout");
+}
+bool ndis_callback_expired(const struct ndis_callback *c,uint64_t now) {
+    if(c->state!=NDIS_CALLBACK_ACTIVE) return false;
+    for(unsigned i=0;i<c->depth;i++) if(now>=c->stack[i].deadline) return true;
+    return false;
 }
 int ndis_irql_raise(struct ndis_callback *c,uint8_t level,uint8_t *old) {
     if(c->state==NDIS_CALLBACK_QUARANTINED) return 0;
@@ -66,6 +79,32 @@ int ndis_irql_lower(struct ndis_callback *c,uint8_t level) {
 int ndis_irql_wait(struct ndis_callback *c) {
     if(c->state==NDIS_CALLBACK_QUARANTINED) return 0;
     if(!c->depth || c->irql>1) { ndis_callback_fault(c,"wait-at-raised-irql"); return 0; }
+    return 1;
+}
+int ndis_spin_acquire(struct ndis_callback *c,uint32_t *word,bool dpc,uint8_t *old) {
+    if(c->state==NDIS_CALLBACK_QUARANTINED) return 0;
+    if(!word || ((uintptr_t)word&3) || !old || !c->depth || c->irql>2 ||
+       (dpc && c->irql!=2) || c->lock_count==NDIS_CALLBACK_LOCKS) {
+        ndis_callback_fault(c,"spin-lock-admission"); return 0;
+    }
+    uint8_t previous=c->irql;
+    c->irql=2;
+    uint32_t expected=0;
+    if(!__atomic_compare_exchange_n(word,&expected,1,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) {
+        ndis_callback_fault(c,"spin-lock-contention"); return 0;
+    }
+    unsigned i=c->lock_count++;
+    c->locks[i].word=word; c->locks[i].previous=previous; c->locks[i].dpc=dpc;
+    *old=previous; return 1;
+}
+int ndis_spin_release(struct ndis_callback *c,uint32_t *word,bool dpc,uint8_t old) {
+    if(c->state==NDIS_CALLBACK_QUARANTINED) return 0;
+    if(!c->lock_count || c->irql!=2 || c->locks[c->lock_count-1].word!=word ||
+       c->locks[c->lock_count-1].dpc!=dpc || c->locks[c->lock_count-1].previous!=old) {
+        ndis_callback_fault(c,"spin-lock-release"); return 0;
+    }
+    c->lock_count--; __atomic_store_n(word,0,__ATOMIC_RELEASE);
+    if(!dpc) c->irql=old;
     return 1;
 }
 #ifdef CIUKI_NDIS_HOST_MODEL

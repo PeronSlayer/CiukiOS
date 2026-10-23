@@ -715,8 +715,12 @@ meaning, and reject other bits with EINVAL.
 
 **[F2]** Stat MUST report st_dev as volume number (C=3, D=4, synthetic=0),
 mount-lifetime stable node identities in st_ino, nlink=1 for named files and
-directories, nlink=0 for open-unlinked files, uid/gid=0, rdev=0 except null=1
-and console=2, and 512-byte allocation units in st_blocks. Regular modes MUST
+directories, nlink=0 for open-unlinked files, uid/gid=0, rdev=0 except the
+character devices, and 512-byte allocation units in st_blocks. Device numbers
+are disjoint: null=1, console=2, audio=3, mixer=4, net=5, media=6,
+/dev/com1..8=16..23, /dev/lpt1..8=24..31 and /dev/ata0..3=32..35 (staging
+merge 2026-10-23: LPT moved from 32+slot, which overlapped the f9-02 ATA
+nodes; compile-time assertions in posixpath.c guard the ranges). Regular modes MUST
 be S_IFREG|0666 (0444 for FAT read-only); directories S_IFDIR|0777; streams
 S_IFCHR|0666. St_blksize MUST be the cluster size for FAT and 4096 for synthetic
 nodes. Directory/stream st_size MUST be zero. FAT timestamps MUST be interpreted
@@ -1851,6 +1855,15 @@ Set Power State Off on pre-ACPI machines. `CIUKI_POWER_CAN_OFF` reflects that
 provider. B=`CIUKI_POWER_STATUS` (4), C=record, D=756 copies the cached
 `ciuki_power_status` record without firmware calls; `provider` names ACPI (1),
 APM (2) or none (0). Details: [`acpi-events-power.md`](acpi-events-power.md).
+
+**Amendment (f9 Setup authority, staging merge 2026-10-23).** In Setup mode
+(`setup=1`, `core/setup_mode.c`) the process holding the supervisor's
+non-inherited Setup capability may also call 73, besides the live desktop;
+the capability without Setup mode, or Setup mode without the capability,
+still gives `EPERM`. Setup's restart and shutdown take exactly the path
+above: storage flush, native device quiescence, the stopped latch, then
+`kernel_reboot()` for REBOOT or `power_source_soft_off()` (ACPI S5 or APM Off)
+for OFF. Host test: `tests/host/power_runtime_test.c`.
 
 
 ### f1-23 display ABI amendment

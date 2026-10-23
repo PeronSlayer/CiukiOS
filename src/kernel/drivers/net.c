@@ -222,6 +222,10 @@ static void quarantine_locked(struct netif *d, const char *reason)
     d->quarantined = d->stopping = true; d->ready = d->running = false;
     d->link = NET_LINK_DOWN; d->reason = reason; d->stats.quarantines++;
     bridge_tap_changed(d); /* bounded worker drains after the NIC mutex */
+    if(d->external_owner) {
+        if(d->external_fault) d->external_fault(d,reason);
+        d->queue_count=0;record(d);return;
+    }
     /* Mask sources and revoke PCI bus mastering, but never reset or release
      * buffers after fault. Neither write by itself is an idle proof. */
     if (d->touched) {
@@ -244,6 +248,12 @@ static int stop_locked(struct netif *d)
     if (d->quarantined) return -NET_EIO;
     d->stopping = true; d->ready = false;
     bridge_tap_changed(d);
+    if(d->external_owner) {
+        int result=d->driver->stop(d);
+        if(result==-EAGAIN || result==-NET_EBUSY) return result;
+        if(result) { quarantine_locked(d,"stop_unproved");return result; }
+        d->running=false;d->link=NET_LINK_DOWN;d->queue_count=0;record(d);return 0;
+    }
     if (d->touched) {
         d->driver->irq_enable(d, false);
         if (d->driver->stop(d)) { quarantine_locked(d, "stop_unproved"); return -NET_EIO; }
@@ -394,7 +404,7 @@ int netif_transmit(struct netif *d, gen_t generation, const void *frame, unsigne
     kmutex_lock(&d->mutex);
     int err = !d->ready || !d->running || d->stopping || d->quarantined || d->administratively_down || generation != d->generation ? -NET_ENODEV : 0;
     if (!err) err = d->driver->transmit(d, frame, length);
-    if (err == -NET_EBUSY) d->stats.tx_busy++;
+    if (err == -NET_EBUSY || err == -EAGAIN) d->stats.tx_busy++;
     else if (err && err != -NET_ENODEV) quarantine_locked(d, "transmit_fault");
     else if (!err) d->stats.tx_submitted++;
     kmutex_unlock(&d->mutex); return err;
@@ -665,4 +675,38 @@ int net_control_driver(unsigned index, struct ciuki_net_control *out, bool apply
         out->rx_errors = d->stats.rx_errors; out->tx_errors = d->stats.tx_errors;
     }
     kmutex_unlock(&d->mutex); return e;
+}
+
+struct netif *netif_publish_external(const struct pci_func *p,const struct netif_driver *driver,
+                                      void *context,const uint8_t mac[6],gen_t generation,bool carrier,
+                                      void (*fault)(struct netif *,const char *))
+{
+    if(!initialized || shutting_down || !p || !driver || !context || !fault || !generation ||
+       !valid_mac(mac) || (g_boot.flags&CBI_F_SAFE_MODE)) return 0;
+    kmutex_lock(&registration_mutex);
+    unsigned slot=device_count;
+    for(unsigned i=0;i<device_count;i++) if(devices[i].pci.bus==p->bus && devices[i].pci.dev==p->dev && devices[i].pci.fn==p->fn) { slot=i;break; }
+    struct netif *d=slot<NETIF_MAX?&devices[slot]:0;
+    if(d && slot<device_count) {
+        bool free=!d->running && !d->quarantined && !d->irq_attached && !d->dma_phys && !d->servicing;
+        for(unsigned i=0;i<3;i++) if(d->claims[i]>=0) free=false;
+        if(!free) d=0;
+    }
+    bool start_worker=false;
+    if(d && !worker) {
+        worker=task_create_kernel("net-input",worker_main,0,P_DEVICE);
+        if(worker) start_worker=true;else d=0;
+    }
+    if(d) {
+        memset(d,0,sizeof(*d));kmutex_init(&d->mutex);
+        d->pci=*p;d->driver=driver;d->driver_context=context;d->external_owner=true;d->external_fault=fault;
+        d->generation=generation;d->ready=d->running=true;d->link=carrier?NET_LINK_UP:NET_LINK_DOWN;
+        d->reason="ndis_running";memcpy(d->address,mac,6);ksnprintf(d->owner,sizeof(d->owner),"ndis-%u:%u.%u",p->bus,p->dev,p->fn);
+        for(unsigned i=0;i<3;i++) d->claims[i]=-1;
+        d->io=(struct net_io){0,port_read,port_write,port_now,port_sleep,port_delay,mmio_read,mmio_write};
+        if(slot==device_count) device_count++;
+        if(start_worker) task_start(worker);
+        if(d) record(d);
+    }
+    kmutex_unlock(&registration_mutex);return d;
 }

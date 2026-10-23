@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "settings_io.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,20 +11,39 @@
 const char *const cfg_startup_stage_names[CFG_STARTUP_STAGES]={"entry","settings_read","fonts_icons_ready",
     "first_frame_presented","wallpaper_file_read","wallpaper_decoded","wallpaper_scaled",
     "wallpaper_applied","first_input_handled","wallpaper_cache_read"};
-int cfg_write_file(struct cfg_writer *w, const char *text, size_t n)
+int cfg_write_at(const char *path,const char *temporary,const char *text,size_t n)
 {
-    if (mkdir(CFG_DIR,0755) && errno!=EEXIST) return errno;
-    FILE *f=fopen(w->temporary,"wb"); if (!f) return errno;
-    int error=0;
-    if (fwrite(text,1,n,f)!=n || fflush(f) || fsync(fileno(f))) error=errno ? errno : EIO;
-    if (fclose(f) && !error) error=errno;
-    if (!error && rename(w->temporary,w->path)) {
-        /* Preserve the native filesystem's non-replacing rename fallback. */
-        if (unlink(w->path) || rename(w->temporary,w->path)) error=errno;
+    char parent[512];size_t length=strlen(path);
+    if(length>=sizeof(parent))return ENAMETOOLONG;
+    memcpy(parent,path,length+1);char *slash=strrchr(parent,'/');
+    if(slash && slash!=parent) { *slash=0; if(mkdir(parent,0755) && errno!=EEXIST)return errno; }
+    int fd=open(temporary,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0666);if(fd<0)return errno;
+    int error=0;size_t done=0;
+    while(done<n) {
+        ssize_t bytes=write(fd,text+done,n-done);
+        if(bytes<0 && errno==EINTR)continue;
+        if(bytes<=0) { error=bytes<0 ? errno : EIO;break; }
+        done+=(size_t)bytes;
     }
-    if (error) unlink(w->temporary);
+    if(!error && fsync(fd))error=errno;
+    if(close(fd) && !error)error=errno;
+    if(!error && rename(temporary,path)) {
+        error=errno;
+        /* Native POSIX rename replaces atomically. Retain the established
+         * fallback only for a non-replacing backend's explicit EEXIST. */
+        if(error==EEXIST && !unlink(path) && !rename(temporary,path))error=0;
+        else if(error==EEXIST)error=errno;
+    }
+    if(!error) {
+        fd=open(path,O_RDONLY|O_CLOEXEC);
+        if(fd<0)error=errno;
+        else { if(fsync(fd))error=errno;if(close(fd) && !error)error=errno; }
+    }
+    if(error)unlink(temporary);
     return error;
 }
+int cfg_write_file(struct cfg_writer *w,const char *text,size_t n)
+{ return cfg_write_at(w->path,w->temporary,text,n); }
 static void *worker(void *arg)
 {
     struct cfg_writer *w=arg;

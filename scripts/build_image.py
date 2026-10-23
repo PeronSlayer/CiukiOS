@@ -460,7 +460,8 @@ def games_payloads(dos_image, out=None):
 
 
 def payload_records(sources):
-    return [{"path": name, "sha256": sha256(source), "size": source.stat().st_size}
+    return [{"path": name, "sha256": sha256(source), "size": source.stat().st_size,
+             "attributes": 32 | (1 if name.startswith("/WINDOWS/FONTS/") and source.parent == ROOT / "assets/fonts/liberation" else 0)}
             for name, source in sorted(sources.items())]
 
 
@@ -744,6 +745,14 @@ def build(kernel, out, boot_cfg):
             "-n", "CIUKIOS", volume)
         initialize_blackbox(volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
+        # /System/BUILD.TXT: provenance quoted by the Hardware Report. It
+        # carries no image hash (an image cannot contain its own SHA-256).
+        revision, source_dirty = git_identity()
+        identity_spec = importlib.util.spec_from_file_location("build_identity", ROOT / "scripts/build_identity.py")
+        identity_module = importlib.util.module_from_spec(identity_spec)
+        identity_spec.loader.exec_module(identity_module)
+        identity_module.stage_identity(kernel, scratch / "identity", sources, metadata,
+                       revision, source_dirty, wanted)
         payloads = payload_records(sources)
         # f3-06: owner-local game files never enter the canonical image; only
         # files pinned in the vendored shareware packages may equal one.
@@ -783,8 +792,11 @@ def build(kernel, out, boot_cfg):
         check_payloads(candidate, payloads, directories)
         verify_unified_payloads(candidate, metadata["dos"])
         os.replace(candidate, out)
+    # f9-01: the loader of this build beside the image; the Setup CD boot
+    # image carries the same bytes (scripts/build_cd.py checks all three).
+    (out.parent / "ciukldr.bin").write_bytes(loader)
     image_sha = sha256(out)
-    write_manifest(out, kernel, image_sha, payloads, metadata)
+    write_manifest(out, kernel, image_sha, payloads, metadata, directories=directories, boot_cfg=options)
     (out.parent/"dos-conformance.json").unlink(missing_ok=True)
     print(f"SHA256 {image_sha}  {out}")
 
@@ -802,7 +814,7 @@ def git_identity():
         return "unknown", "unknown"
 
 
-def write_manifest(image, kernel, image_sha, payloads, metadata):
+def write_manifest(image, kernel, image_sha, payloads, metadata, *, directories=(), boot_cfg=DEFAULT_CONFIG):
     """build-manifest.json beside the image: read by scripts/test/run.py."""
     rev, dirty = git_identity()
     clock_record = json.loads((kernel.parent / "build-clock.json").read_text())
@@ -821,6 +833,9 @@ def write_manifest(image, kernel, image_sha, payloads, metadata):
         "kernel_sha256": sha256(kernel),
         "build_epoch": clock_record["utc_epoch"],
         "payloads": payloads,
+        "directories": [{"path": p, "attributes": 16} for p in sorted(directories)],
+        "boot_cfg_template": boot_cfg.decode("ascii"),
+        "boot_cfg_sha256": hashlib.sha256(boot_cfg).hexdigest(),
         **metadata,
     }
     (image.parent / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

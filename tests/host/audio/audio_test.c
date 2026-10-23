@@ -1,6 +1,7 @@
 /* Production fd/path/syscall, converter, persistence and transport with fake
  * RAM, disk, time and register boundary. SPDX-License-Identifier: GPL-2.0-only */
 #define FD_TABLE_STACK_TEST
+#define FILES_TEST_OWN_PLATFORM /* pci_count/pci_get/pmm_alloc_contig below */
 #include "../proc/files_test.c"
 #undef FD_TABLE_STACK_TEST
 #include <stdarg.h>

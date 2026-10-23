@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "image": "setup-cd",
+  "directive": "f9-01 (definition); f9-06 qualification runs it",
+  "runner_support": "pending: scripts/test/run.py has no case kind that boots an ISO with -boot d and attaches fixture disks instead of the canonical image; the lead or f9-06 adds kind 'setup-cd' with the semantics below",
+  "media": {"iso": "build/f0/ciukios-setup.iso", "manifest": "build/f0/cd-manifest.json", "disk_manifest": "build/f0/build-manifest.json"},
+  "prerequisites": ["f0-smoke"],
+  "fixtures": {
+    "blank": {"generator": "blank", "size_mib": 2048, "description": "all-zero ATA disk 0 (primary master)"},
+    "occupied-fat": {"generator": "mkfs.fat", "fat": 32, "size_mib": 1024, "partition": {"type": "0c", "start": 2048},
+                     "files": {"/OCCUPIED.TXT": "existing data that Setup must not touch\n"},
+                     "description": "ATA disk 1 (primary slave) with an MBR and a FAT32 volume"}
+  },
+  "case_defaults": {
+    "kind": "setup-cd",
+    "boot": "cdrom",
+    "qemu": ["-boot", "d"],
+    "cdrom": {"source": "media.iso", "device": "ide-cd", "bus": "ide.1", "unit": 0, "readonly": true},
+    "disks": [{"index": 0, "bus": "ide.0", "unit": 0, "fixture": "blank"}, {"index": 1, "bus": "ide.0", "unit": 1, "fixture": "occupied-fat"}],
+    "test_request": "none (a normal boot: the fw_cfg test selector would disable Setup mode)",
+    "record_serial_prefixes": ["L:"],
+    "disks_unchanged": "SHA-256 of every fixture disk before the boot equals the value after QEMU exits",
+    "placeholders": {"content_digest": "cd-manifest.json content_digest", "disk_image_sha256": "build-manifest.json image_sha256",
+                     "payload_files": "length of cd-manifest.json boot_image.files"}
+  },
+  "cases": [
+    {"id": "setup-cd-qemu-t23", "kind": "setup-cd", "profile": "qemu-t23", "boot": "cdrom", "timeout": 300,
+     "disks": [{"index": 0, "fixture": "blank"}, {"index": 1, "fixture": "occupied-fat"}],
+     "expected": {
+       "serial_contains": ["[storage] setup_mode=1 writable=0", "[setup] candidate slot=2", "result=0 reason=ok",
+                           "[setup] media bound slot=2 system=C iso=D result=0",
+                           "[setup] writes disk=0 count=0", "[setup] writes disk=1 count=0",
+                           "[supervisor] setup pid=", "setup_capability=1",
+                           "[setup] media ok iso=${content_digest} image=${disk_image_sha256} payload=${payload_files} mode=placeholder",
+                           "L:"],
+       "serial_absent": ["panic", "[setup] media missing", "[setup] refused", "[storage] disk_log=available", "[storage] pagefile drive=C"],
+       "screen": {"text_contains": ["CiukiOS Setup", "Nothing was written to any disk."]},
+       "disks_unchanged": [0, 1]}},
+    {"id": "setup-cd-qemu-desktop-1998", "kind": "setup-cd", "profile": "qemu-desktop-1998", "boot": "cdrom", "timeout": 600,
+     "disks": [{"index": 0, "fixture": "blank"}, {"index": 1, "fixture": "occupied-fat"}],
+     "expected": {
+       "serial_contains": ["[storage] setup_mode=1 writable=0", "result=0 reason=ok", "[setup] writes disk=0 count=0", "[setup] writes disk=1 count=0",
+                           "[setup] media ok iso=${content_digest} image=${disk_image_sha256} payload=${payload_files} mode=placeholder", "L:"],
+       "serial_absent": ["panic", "[setup] media missing", "[setup] refused"],
+       "screen": {"text_contains": ["CiukiOS Setup"]},
+       "disks_unchanged": [0, 1]}},
+    {"id": "setup-cd-qemu-desktop-2002", "kind": "setup-cd", "profile": "qemu-desktop-2002", "boot": "cdrom", "timeout": 300,
+     "disks": [{"index": 0, "fixture": "blank"}, {"index": 1, "fixture": "occupied-fat"}],
+     "expected": {
+       "serial_contains": ["[storage] setup_mode=1 writable=0", "result=0 reason=ok", "[setup] writes disk=0 count=0", "[setup] writes disk=1 count=0",
+                           "[setup] media ok iso=${content_digest} image=${disk_image_sha256} payload=${payload_files} mode=placeholder", "L:"],
+       "serial_absent": ["panic", "[setup] media missing", "[setup] refused"],
+       "screen": {"text_contains": ["CiukiOS Setup"]},
+       "disks_unchanged": [0, 1]}},
+    {"id": "setup-cd-memory-64", "kind": "setup-cd", "profile": "qemu-desktop-1998", "ram_mib": 64, "boot": "cdrom", "timeout": 300,
+     "disks": [{"index": 0, "fixture": "blank"}, {"index": 1, "fixture": "occupied-fat"}],
+     "expected": {
+       "serial_contains": ["CiukiOS Setup needs at least 128 MB of memory", "[setup] refused reason=memory usable_kib=", "L:"],
+       "serial_absent": ["panic", "[setup] media ok", "[storage] setup_mode=1", "[supervisor] bootstrap: spawning"],
+       "screen": {"text_contains": ["CiukiOS Setup needs at least 128 MB of memory"]},
+       "disks_unchanged": [0, 1]}}
+  ]
+}

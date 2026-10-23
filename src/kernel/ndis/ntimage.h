@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "../../../sdk/pe/pe.h"
+#include "flags.h"
 #if defined(__i386__)
 #define NDIS_STDCALL __attribute__((stdcall))
 #define NDIS_FASTCALL __attribute__((fastcall))
@@ -39,7 +40,8 @@ uint32_t ndis_mm_get_system_routine_address(const uint16_t *, uint16_t);
 uint32_t ndis_get_routine_address(const uint16_t *, uint16_t);
 struct ntimage_platform {
     struct pe_ops memory;
-    /* Must prove every page is private, supervisor and pinned, at actual VA.
+    /* Prove private pinned pages at the actual execution VA: supervisor for
+     * the old policy, owned user mappings for user_host. Staging may differ.
      * This is not a statement that the driver has DMA-safe access to it. */
     int (*resident)(void *, void *, uint32_t, uint32_t);
     void (*record)(void *, const char *file, const char *module, const char *symbol,
@@ -47,6 +49,14 @@ struct ntimage_platform {
     const struct ndis_export *exports;
     size_t export_count;
     uint32_t image_budget; /* already reserved from the common 4 MiB F6 budget */
+    void (*scan_record)(void *, const char *file, uint32_t rva, const char *reason);
+    /* ND14: the returned pointer is a supervisor staging view; base is the
+     * distinct process execution VA. resident proves owned user mappings. */
+    bool user_host;
+    int (*user_import)(void *, const struct ndis_export *, uint32_t *address);
+    struct ndis_flag_table *flag_table;
+    struct ndis_flag_workspace *flag_workspace;
+    int (*seal_code)(void *,const struct pe_image *);
 };
 struct ntimage {
     struct pe_image pe;
@@ -54,7 +64,9 @@ struct ntimage {
     struct pe_ops ops;
     struct ntimage_platform platform;
     const char *file; /* pinned caller-owned name */
-    bool loaded, entered, quarantined;
+    bool loaded, entered, quarantined, scanned, flags_prepared;
+    uint32_t scan_rva;
+    uint8_t hash[32];
 };
 int ntimage_load(struct ntimage *, const void *, uint32_t, const char *, const struct ntimage_platform *);
 int ntimage_unload(struct ntimage *);

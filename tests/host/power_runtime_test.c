@@ -20,9 +20,10 @@ static inline void irq_restore(uint32_t flags) { (void)flags; }
 static struct storage disk;
 static struct process desktop;
 static int sync_error, quiesce_error, off_error;
-static bool qualified;
+static bool qualified, setup_active;
 static char order[32], durable[256], last[256];
 static unsigned stages, checkpoints;
+bool setup_mode(void) { return setup_active; }
 static jmp_buf reboot_return;
 int power_devices_quiesce(void) __attribute__((weak));
 static void stage(char c) { assert(stages<sizeof(order)-1); order[stages++]=c; order[stages]=0; }
@@ -49,9 +50,37 @@ static void provide(enum power_source_kind kind)
 static void reset(void)
 {
     disk=(struct storage){.ready=true}; desktop.pid=42; stages=checkpoints=0;
+    desktop.setup_capability=false; setup_active=false;
     power_progress=0; stopped=false;
     order[0]=durable[0]=last[0]=0; sync_error=quiesce_error=0; off_error=-EIO; qualified=true;
     provide(POWER_SOURCE_ACPI);
+}
+/* f9 Setup authority: only Setup's capability holder in Setup mode, and it
+ * takes the desktop's orderly path (flush, quiesce, latch, reset or soft-off). */
+static void setup_caller(void) { reset(); desktop.pid=7; desktop.setup_capability=true; setup_active=true; }
+static void test_setup_authority(void)
+{
+    reset(); desktop.pid=7; desktop.setup_capability=true;
+    assert(power_syscall(CIUKI_POWER_QUERY)==-EPERM && power_syscall(CIUKI_POWER_OFF)==-EPERM && !stages);
+    reset(); desktop.pid=7; setup_active=true;
+    assert(power_syscall(CIUKI_POWER_QUERY)==-EPERM && power_syscall(CIUKI_POWER_REBOOT)==-EPERM && !stages);
+    setup_caller(); assert(power_syscall(CIUKI_POWER_QUERY)==3 && !stages);
+    assert(power_source_soft_off()==-EBUSY && !stages); /* no orderly proof yet */
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQP") && strstr(durable,"acpi soft-off"));
+    assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_STOPPED);
+    setup_caller(); provide(POWER_SOURCE_APM); assert(power_syscall(CIUKI_POWER_QUERY)==3);
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQP") && strstr(durable,"apm soft-off"));
+    setup_caller(); qualified=false;
+    assert(power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !strcmp(order,"SNQ") && strstr(durable,"safe to turn off"));
+    for (unsigned action=1;action<=2;action++) {
+        setup_caller(); sync_error=-EBUSY;
+        assert(power_syscall(action)==-EBUSY && !strcmp(order,"S") && !disk.stopped);
+        setup_caller(); quiesce_error=-EBUSY;
+        assert(power_syscall(action)==-EBUSY && !strcmp(order,"SNQ"));
+    }
+    setup_caller(); if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_REBOOT); assert(0); }
+    assert(!strcmp(order,"SNQR"));
+    puts("PASS power runtime Setup authority: capability needs Setup mode, same flush/quiesce/latch path, ACPI and APM soft-off, reset");
 }
 int main(void)
 {
@@ -84,5 +113,6 @@ int main(void)
     reset(); if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_REBOOT); assert(0); }
     assert(!strcmp(order,"SNQR"));
     puts("PASS power runtime: authority, query, flush refusal, quiesce refusal, one ACPI/APM soft-off path after the stopped latch, retained diagnostics, reboot");
+    test_setup_authority();
     return 0;
 }

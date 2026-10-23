@@ -41,6 +41,8 @@ static struct ciuki_devices_info query_buffer;
 static struct ciuki_firmware_page firmware_buffer;
 static struct ciuki_hardware_info hardware_buffer;
 extern bool storage_readonly_info(unsigned, char *, unsigned) __attribute__((weak));
+/* f9-01: Setup mode (core/setup_mode.c); absent in standalone harnesses. */
+extern bool setup_mode(void) __attribute__((weak));
 
 static void string(char *out, unsigned size, const char *in)
 {
@@ -50,6 +52,18 @@ static void string(char *out, unsigned size, const char *in)
 }
 static bool equal(const char *a, const char *b)
 { return a && b && !strncmp(a, b, strlen(b) + 1); }
+/* f9-01: "Setup mode; writes=<n>" for the zero-write assertion on request. */
+static const char *setup_writes(char out[48], uint64_t value)
+{
+    static const char prefix[] = "Setup mode; writes=";
+    char digits[21]; unsigned n = 0;
+    do { digits[n++] = (char)('0' + value % 10); value /= 10; } while (value);
+    memcpy(out, prefix, sizeof(prefix) - 1);
+    unsigned at = sizeof(prefix) - 1;
+    while (n) out[at++] = digits[--n];
+    out[at] = 0;
+    return out;
+}
 static struct ciuki_device_record *append(struct ciuki_devices_info *out, unsigned id,
                                          unsigned class_id, unsigned bus, const char *name,
                                          const char *driver, unsigned state, const char *reason)
@@ -511,11 +525,15 @@ void devices_snapshot(struct ciuki_devices_info *out)
         for (unsigned unit = 0; unit < ATA_DEVICES; unit++) {
             const struct ata_device *disk = ata_inventory_get(c, unit);
             if (!disk) continue;
+            char writes[48];
+            bool setup = !disk->atapi && setup_mode && setup_mode();
+            if (setup) klog("[setup] writes disk=%u count=%llu", c * 2 + unit, (unsigned long long)disk->write_commands);
             d = append(out, 0x40100 + c * 2 + unit, disk->atapi ? CIUKI_DEVICE_CDROM : CIUKI_DEVICE_DISK,
                 CIUKI_BUS_LEGACY, disk->model, "ata-pio", disk->block.quarantined || disk->channel->quiescing ?
                 CIUKI_DEVICE_QUARANTINED : CIUKI_DEVICE_READY, disk->atapi ?
                 disk->media==ATAPI_NO_MEDIUM ? "no_medium_or_ejected" : disk->media==ATAPI_READY ? "media_ready" : "media_unavailable" :
-                disk->raid_reason ? disk->raid_reason : "Identified ATA/ATAPI unit.");
+                disk->raid_reason ? disk->raid_reason : setup ? setup_writes(writes, disk->write_commands) :
+                "Identified ATA/ATAPI unit.");
             if (d) { d->slot = c; d->function = unit; d->generation = disk->generation; }
             activation(d, "ata"); owner_resources(d, owner);
             if (d && d->state == CIUKI_DEVICE_READY && !disk->atapi) {
@@ -530,6 +548,12 @@ void devices_snapshot(struct ciuki_devices_info *out)
                 else ksnprintf(d->reason, sizeof(d->reason), "PIO; %s rev %02x: %s", chip, revision,
                     disk->dma_quarantined ? "DMA quarantined" : !disk->channel->dma.ops ? "bus master unavailable" :
                     disk->channel->chipset.reason ? disk->channel->chipset.reason : "firmware PIO");
+                /* f9-01: Setup's zero-write evidence leads the chipset line. */
+                if (setup) {
+                    char line[sizeof(d->reason)];
+                    string(line, sizeof(line), d->reason);
+                    ksnprintf(d->reason, sizeof(d->reason), "%s; %s", setup_writes(writes, disk->write_commands), line);
+                }
             }
         }
     }

@@ -22,7 +22,7 @@ class ControlJobsTests(unittest.TestCase):
         icons = module("control_jobs_icons", ROOT / "tests/host/desktop/icon_assets.py")
         ft = module("control_jobs_ft", ROOT / "sdk/freetype/build.py")
         library = ft.host()
-        sources = ["tests/host/desktop/control_jobs_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c",
+        sources = ["tests/host/desktop/control_jobs_test.c", "apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                    *(f"apps/desktop/{n}.c" for n in ("settings", "settings_io", "sounds", "wallpaper", "image", "compositor", "theme")),
                    *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]

@@ -48,7 +48,7 @@ class NativeUpdateModelTests(unittest.TestCase):
             "ide": ["apps/ciukide/app.c", "apps/ciukide/model.c", "apps/ciukide/job.c", "apps/ciuknote/doc.c"],
             "regedit": ["apps/regedit/app.c", *(str(p.relative_to(ROOT)) for p in sorted((ROOT / "sdk/libreg").glob("*.c")))],
             "files": ["apps/files/app.c", "apps/files/model.c", "apps/files/transfer.c", "tests/host/desktop/fake_vfs.c", "apps/desktop/autoplay_content.c"],
-            "control": ["apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "apps/desktop/settings.c", "apps/desktop/sounds.c",
+            "control": ["apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "apps/desktop/settings.c", "apps/desktop/sounds.c",
                         "apps/desktop/wallpaper.c", "apps/desktop/image.c", "apps/desktop/protocol.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c"],
         }
         with tempfile.TemporaryDirectory(prefix="native-update-", dir=parent) as tmp:

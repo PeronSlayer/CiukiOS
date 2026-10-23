@@ -906,6 +906,27 @@ struct ciuki_hardware_info {
  * Initialize version/size and zero reserved fields before NET_GET_STATE. */
 #define CIUKI_NET_VERSION 1u
 #define NET_GET_STATE 0x4301u
+#define NET_QUERY_DRIVER_PACK 0x4302u
+#define CIUKI_DRIVER_PACK_VERSION 1u
+/* Read-only compiled qualification and retained-host observation. No enable
+ * authority: boot admission always rechecks the exact installed manifest. */
+struct ciuki_driver_pack_query {
+    uint32_t version;
+    uint32_t size;
+    uint32_t bus;
+    uint32_t slot;
+    uint32_t function;
+    uint32_t vendor;
+    uint32_t device;
+    uint32_t sub_vendor;
+    uint32_t sub_device;
+    uint32_t revision;
+    uint8_t binary_hash[32];
+    uint8_t package_seal[32];
+    uint32_t qualified;
+    uint32_t busy;
+    uint32_t reserved[2];
+};
 #define CIUKI_NET_LINK_UNKNOWN 0u
 #define CIUKI_NET_LINK_DOWN 1u
 #define CIUKI_NET_LINK_UP 2u
@@ -992,6 +1013,56 @@ struct ciuki_net_control {
 };
 _Static_assert(sizeof(struct ciuki_net_config) == 232, "network configuration ABI");
 _Static_assert(sizeof(struct ciuki_net_control) == 400, "network control ABI");
+
+/* f9-04b: DEVCTL on a retained FAT file/directory description. Setup mode
+ * and setup_capability are mandatory. INDEX_NONE queries metadata only.
+ * Continuations must echo mount_generation and chain_generation. A changed
+ * mount/chain returns EAGAIN; EOF is ENOENT. lba is an absolute disk sector.
+ * ATTRIB preserves the directory/volume bits and never changes file data. */
+#define CIUKI_SETUP_FAT_VERSION 1u
+#define CIUKI_SETUP_FAT_QUERY 0x53540001u
+#define CIUKI_SETUP_FAT_ATTRIB 0x53540002u
+#define CIUKI_SETUP_CLOCK_SET 0x53540003u
+#define CIUKI_SETUP_NET_QUERY 0x53540004u
+#define CIUKI_SETUP_INDEX_NONE 0xffffffffu
+struct ciuki_setup_fat {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mount_generation;
+    uint32_t attributes;
+    uint32_t cluster_index;
+    uint32_t cluster_sectors;
+    uint64_t file_size;
+    uint64_t chain_generation;
+    uint64_t lba;
+    char name[260];
+    char alias[40];
+};
+/* SET is authorized by the same capability; seconds is UTC, offset is east
+ * of UTC. rtc_local is 0/1. The persistent convention is written by the
+ * shared configuration writer before this call. */
+struct ciuki_setup_clock {
+    uint32_t version;
+    uint32_t size;
+    int64_t seconds;
+    int32_t offset_minutes;
+    uint32_t rtc_local;
+};
+/* Read-only physical identities for f2-100 NETWORK.INI, at most two NICs. */
+struct ciuki_setup_net_identity {
+    uint32_t vendor;
+    uint32_t device;
+    uint8_t mac[6];
+    uint8_t reserved[2];
+};
+struct ciuki_setup_net {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_setup_net_identity identity[2];
+};
+
 
 /* /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
  * removable_mask includes ejectable USB and optical media; type[] distinguishes them.
@@ -1201,6 +1272,134 @@ _Static_assert(sizeof(struct ciuki_media_cd_tray) == 20, "media cd tray ABI");
 _Static_assert(sizeof(struct ciuki_media_cd_play) == 24, "media cd play ABI");
 _Static_assert(sizeof(struct ciuki_media_cd_pause) == 24, "media cd pause ABI");
 _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position ABI");
+
+/* f9-02: raw whole-disk nodes /dev/ata0../dev/ata3 (slot = channel * 2 +
+ * unit) and the destination-disk lease group 0x4401..0x440F (lead reservation,
+ * cd-setup-plan.md "Lead decisions"; 0x4409..0x440F stay reserved). An absent
+ * or ATAPI slot fails open with ENXIO. Only pread/pwrite move data: offset
+ * and length are multiples of 512, one call transfers at most 65536 bytes
+ * (128 sectors) and may return short at that bound. Reads, DISK_GET_INFO and
+ * DISK_LEASE_STATE are open to every process. pwrite, fsync and every other
+ * DISK_* request need the Setup capability of the CALLING process (EPERM),
+ * checked on each call (a descriptor inherited or duplicated into another
+ * process is read-only there), and the lease held by that process (EACCES;
+ * DISK_LEASE_ACQUIRE itself refuses EBUSY while the disk is in use). While a
+ * volume is published, raw writes inside its partition are refused (EBUSY).
+ * Each record starts with version 1 and its own size; reserved fields are 0. */
+#define CIUKI_DISK_VERSION 1u
+#define DISK_GET_INFO 0x4401u       /* struct ciuki_disk_info (out) */
+#define DISK_LEASE_ACQUIRE 0x4402u  /* struct ciuki_disk_info (identity out) */
+#define DISK_LEASE_RELEASE 0x4403u  /* struct ciuki_disk_request */
+#define DISK_FLUSH 0x4404u          /* struct ciuki_disk_request; fsync is the same */
+#define DISK_PUBLISH 0x4405u        /* struct ciuki_disk_lease (drive, reasons out) */
+#define DISK_LEASE_STATE 0x4406u    /* struct ciuki_disk_lease (out) */
+#define DISK_SET_PHASE 0x4407u      /* struct ciuki_disk_lease (phase in) */
+#define DISK_RECHECK 0x4408u        /* struct ciuki_disk_recheck */
+#define CIUKI_DISK_SLOTS 4u
+#define CIUKI_DISK_SECTOR 512u
+#define CIUKI_DISK_IO_MAX 65536u
+#define CIUKI_DISK_LBA28 (1ull << 28)
+/* ciuki_disk_info.flags */
+#define CIUKI_DISK_PRESENT 1u
+#define CIUKI_DISK_LBA48 2u
+#define CIUKI_DISK_FLUSH_CACHE 4u   /* qualified FLUSH CACHE durability path */
+#define CIUKI_DISK_LEASED 8u
+#define CIUKI_DISK_PUBLISHED 16u
+/* ciuki_disk_info.write_cache (blkdev write_cache_state) */
+#define CIUKI_DISK_CACHE_UNKNOWN 0u
+#define CIUKI_DISK_CACHE_DISABLED 1u
+#define CIUKI_DISK_CACHE_ENABLED 2u
+/* ciuki_disk_volume.fs and .flags */
+#define CIUKI_DISK_FS_FAT12 12u
+#define CIUKI_DISK_FS_FAT16 16u
+#define CIUKI_DISK_FS_FAT32 32u
+#define CIUKI_DISK_FS_NTFS 7u
+#define CIUKI_DISK_VOLUME_READONLY 1u
+#define CIUKI_DISK_VOLUMES_MAX 8u
+/* FAT read-only reasons (fat.h enum fat_ro_reason, same values). */
+#define CIUKI_FAT_RO_REQUEST 1u
+#define CIUKI_FAT_RO_DURABILITY 2u
+#define CIUKI_FAT_RO_DIRTY 4u
+#define CIUKI_FAT_RO_IO_FLAG 8u
+#define CIUKI_FAT_RO_COPIES 16u
+#define CIUKI_FAT_RO_CORRUPT 32u
+#define CIUKI_FAT_RO_LOST 64u
+#define CIUKI_FAT_RO_WRITE_ERROR 128u
+#define CIUKI_FAT_RO_ACTIVE_ONLY 256u
+struct ciuki_disk_volume {
+    uint32_t drive;      /* letter index, 3 = D: */
+    uint32_t partition;  /* 1-based table order (primary, then logical) */
+    uint32_t fs;         /* CIUKI_DISK_FS_* */
+    uint32_t flags;      /* CIUKI_DISK_VOLUME_* */
+    char label[12];
+};
+struct ciuki_disk_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t disk;
+    uint32_t flags;
+    uint64_t sectors;            /* capacity in sector_size units */
+    uint32_t sector_size;
+    uint32_t write_cache;
+    uint64_t lba_limit;          /* partitions must end at or below this LBA */
+    char model[41];              /* ATA IDENTIFY words 27-46 */
+    char serial[21];             /* ATA IDENTIFY words 10-19 */
+    char firmware[9];            /* ATA IDENTIFY words 23-26 */
+    uint8_t reserved0;
+    uint32_t volume_count;
+    uint32_t reserved1;
+    struct ciuki_disk_volume volumes[CIUKI_DISK_VOLUMES_MAX]; /* mounted now */
+};
+struct ciuki_disk_request {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    uint32_t reserved;
+};
+/* ciuki_disk_lease.state */
+#define CIUKI_DISK_LEASE_NONE 0u
+#define CIUKI_DISK_LEASE_HELD 1u
+#define CIUKI_DISK_LEASE_PUBLISHED 2u
+#define CIUKI_DISK_LEASE_RELEASED 3u
+#define CIUKI_DISK_LEASE_REVOKED 4u
+struct ciuki_disk_lease {
+    uint32_t version;
+    uint32_t size;
+    uint32_t disk;
+    uint32_t state;
+    uint32_t holder;
+    uint32_t generation;
+    uint32_t drive;              /* published letter index, 0 when none */
+    uint32_t reasons;            /* CIUKI_FAT_RO_* seen by the publication mount */
+    uint64_t reads;              /* raw node sectors since boot */
+    uint64_t writes;             /* raw node sectors since boot */
+    uint64_t flushes;            /* raw node flushes since boot */
+    char phase[32];              /* free text set by DISK_SET_PHASE */
+    char reason[24];             /* last refusal or release reason */
+};
+#define CIUKI_DISK_RECHECK_SEAL 1u  /* leave the volume clean and read-only */
+struct ciuki_disk_recheck {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    uint32_t drive;              /* out */
+    uint32_t reasons;
+    uint32_t fat_type;
+    uint32_t clusters;
+    uint32_t free_clusters;
+    uint32_t lost_clusters;
+    uint32_t scan_passes;
+    uint32_t scan_ms;
+    uint32_t lfn_orphans;
+    uint32_t lfn_invalid;
+    uint32_t lfn_bad_checksum;
+    uint32_t reserved[2];
+};
+_Static_assert(sizeof(struct ciuki_disk_volume) == 28, "disk volume ABI");
+_Static_assert(sizeof(struct ciuki_disk_info) == 344, "disk info ABI");
+_Static_assert(sizeof(struct ciuki_disk_request) == 16, "disk request ABI");
+_Static_assert(sizeof(struct ciuki_disk_lease) == 112, "disk lease ABI");
+_Static_assert(sizeof(struct ciuki_disk_recheck) == 64, "disk recheck ABI");
 
 /* F4-01: fixed copied device-control extension. */
 #define CIUKI_AUDIO_VERSION 1u

@@ -26,6 +26,8 @@ extern struct tss g_tss;
 void gdt_init(void);
 void idt_init(void);
 void tss_set_kernel_stack(uint32_t esp0);
+struct arch_io_range;
+void arch_io_install(const struct arch_io_range *, unsigned count); /* IF=0 */
 void arch_vga_io(bool enabled); /* current task only; IOPL remains zero */
 void df_tss_init(uint32_t cr3);
 

@@ -1397,8 +1397,10 @@ static void test_emergency_recorder(void)
         struct fake f;struct blkdev *d=qualify(&f,!!ext);
         uint64_t lba=ext ? 0x123456789ull : 8192;uint8_t data[512];fill(data,lba,1);
         unsigned commands=f.commands,before_yields=yields,before_waits=schedules;
+        uint64_t issued=f.channel.devices[0].write_commands;
         flags=0;CHECK(d->emergency_write && !d->emergency_write(d,lba,data));
         CHECK(f.commands==commands+2 && f.data_writes==256 && !flags);
+        CHECK(f.channel.devices[0].write_commands==issued+2);
         CHECK(yields==before_yields && schedules==before_waits && !f.channel.active && !f.channel.mutex.owner);
         unsigned writes=f.writes;
         f.channel.active=&f.channel.devices[0];CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
@@ -1406,8 +1408,10 @@ static void test_emergency_recorder(void)
         f.channel.mutex.owner=0;f.channel.stopped=true;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
         f.channel.stopped=false;f.status=0x80;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
         CHECK(f.writes==writes);
+        CHECK(f.channel.devices[0].write_commands==issued+2);
         f.status=0x40;f.fault=BUSY;commands=f.commands;
         CHECK(d->emergency_write(d,lba,data)==-FS_EIO && f.commands==commands+1);
+        CHECK(f.channel.devices[0].write_commands==issued+3);
         CHECK(yields==before_yields && schedules==before_waits);
         flags=0x200;
     }

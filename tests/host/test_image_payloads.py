@@ -113,16 +113,20 @@ class ImagePayloadTests(unittest.TestCase):
         self.assertEqual([p["path"] for p in records], sorted(sources))
         self.assertEqual(records[1], {"path": "/system/tests/long-name.lua",
                                      "sha256": hashlib.sha256(a.read_bytes()).hexdigest(),
-                                     "size": 65536})
+                                     "size": 65536, "attributes": 32})
         disk = self.work / "disk.img"
         # The kernel build records its UTC epoch and binds it to the ELF hash;
         # the image builder consumes that record rather than choosing a new time.
         clock_record = {"utc_epoch": int(time.time()), "kernel_sha256": image.sha256(a)}
         (self.work / "build-clock.json").write_text(json.dumps(clock_record, indent=2) + "\n")
         with patch.object(image, "git_identity", return_value=("unknown", "unknown")):
-            image.write_manifest(disk, a, "image-hash", records, {"sdk_manifest_sha256": "sdk-hash"})
+            image.write_manifest(disk, a, "image-hash", records, {"sdk_manifest_sha256": "sdk-hash"},
+                                 directories={"/Documents", "/Documents/Empty"}, boot_cfg=b"safe=0 serial=1  \r\n")
         manifest = json.loads((self.work / "build-manifest.json").read_text())
         self.assertEqual(manifest["payloads"], records)
+        self.assertEqual(manifest["boot_cfg_template"], "safe=0 serial=1  \r\n")
+        self.assertEqual(manifest["boot_cfg_sha256"], hashlib.sha256(b"safe=0 serial=1  \r\n").hexdigest())
+        self.assertEqual(manifest["directories"], [{"path": p, "attributes": 16} for p in ("/Documents", "/Documents/Empty")])
         self.assertEqual(manifest["sdk_manifest_sha256"], "sdk-hash")
         self.assertEqual(manifest["image_sha256"], "image-hash")
         self.assertEqual(manifest["build_epoch"], clock_record["utc_epoch"])

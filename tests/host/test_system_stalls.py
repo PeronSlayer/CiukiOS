@@ -83,7 +83,15 @@ int main(void)
         base.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='system-stalls-', dir=base) as scratch:
             scratch = Path(scratch)
-            (scratch / 'latency_scheduler.inc').write_text(declarations + '\n'.join(functions))
+            # f6-05/f6-06: task.c's scheduler calls the weak NDIS user-host
+            # hooks and the TSS I/O-bitmap installer, defined outside this slice.
+            ndis_hooks = ('extern void ndis_user_switch(const struct task *) __attribute__((weak));\n'
+                          'extern void ndis_user_task_stopping(struct task *,int) __attribute__((weak));\n'
+                          'extern void ndis_user_reaped(struct task *) __attribute__((weak));\n'
+                          'struct arch_io_range;\n'
+                          '__attribute__((weak)) void arch_io_install(const struct arch_io_range *r, unsigned n)'
+                          ' { (void)r; (void)n; }\n')
+            (scratch / 'latency_scheduler.inc').write_text(ndis_hooks + declarations + '\n'.join(functions))
             timers = (ROOT / 'src/kernel/core/sync.c').read_text()
             (scratch / 'deadline_timers.inc').write_text(timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')])
             write_model(scratch / 'vm_creation_model.inc')

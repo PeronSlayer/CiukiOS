@@ -16,6 +16,12 @@ int device_open(enum px_kind kind, uint32_t flags)
         if (flags & O_APPEND) return -EINVAL;
         if ((flags & O_ACCMODE) != (kind == PX_AUDIO ? O_WRONLY : O_RDONLY)) return -EACCES;
     }
+    /* f9-02: /dev/ataN opens read-only or read-write for anyone; authority
+     * is checked on every mutating request, never at open. */
+    if (kind == PX_DISK) {
+        if (flags & O_APPEND) return -EINVAL;
+        if ((flags & O_ACCMODE) == O_WRONLY) return -EACCES;
+    }
     return 0;
 }
 int device_write(const void *buffer, uint32_t bytes)

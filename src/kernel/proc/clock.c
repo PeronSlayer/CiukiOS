@@ -8,6 +8,7 @@
 static struct clock_seed clock_source;
 /* Provider extension required because fs_timestamp hides invalid samples. */
 extern bool fs_calendar_sample(uint16_t *, uint16_t *, uint8_t *) __attribute__((weak));
+extern int file_clock_rtc_offset(void) __attribute__((weak));
 
 void file_clock_start(int64_t build_epoch, bool rtc_qualified)
 {
@@ -17,6 +18,19 @@ void file_clock_start(int64_t build_epoch, bool rtc_qualified)
     uint64_t tick = g_ticks;
     irq_restore(flags);
     file_clock_init(build_epoch, rtc_qualified, valid, date, time, tenths, tick);
+    if (clock_source.source && file_clock_rtc_offset) {
+        clock_source.utc-=file_clock_rtc_offset();
+        proc_clock_seed(clock_source.utc,clock_source.tick);
+    }
+}
+
+void file_clock_set_utc(int64_t seconds)
+{
+    uint32_t flags=irq_save();
+    clock_source.utc=seconds; clock_source.tick=g_ticks;
+    clock_source.source=1; clock_source.valid=true; clock_source.qualified=true;
+    irq_restore(flags);
+    proc_clock_seed(seconds,clock_source.tick);
 }
 
 static bool leap(unsigned y) { return !(y % 4) && (y % 100 || !(y % 400)); }

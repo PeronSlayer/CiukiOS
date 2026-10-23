@@ -166,7 +166,12 @@ int registry_release(int h, uint32_t g) { (void)h; (void)g; return -EINVAL; }
 int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool share)
 { (void)t; (void)s; (void)e; (void)o; (void)share; return -EINVAL; }
 
+/* Unity build: driver fixtures included after this file (radeon2d, mach64)
+ * define their own static eligible(); swdib.c's helper is renamed here only.
+ * swdib.c pulls no header that declares an eligible member. */
+#define eligible swdib_eligible
 #include "../../src/kernel/drivers/video/swdib.c"
+#undef eligible
 #include "../../src/kernel/drivers/video/batch.c"
 #include "../../src/kernel/drivers/fbdev.c"
 #ifndef DISPLAY_DRIVER_FIXTURE_REAL

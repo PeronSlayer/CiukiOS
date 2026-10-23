@@ -72,6 +72,10 @@ void task_yield(void) { CHECK(host_flags & 0x200); yields++;stack_service_needs_
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
 { (void)n; (void)fn; (void)arg; (void)p; return 0; }
 void task_start(struct task *t) { (void)t; }
+/* f6-06: the external-publication case installs a sentinel worker, so the
+ * compiler can no longer fold net_shutdown's worker teardown away. g_current,
+ * task_alive and task_reap are the power-barrier stubs above (no live worker
+ * unless power_worker_alive is set). */
 __attribute__((noreturn)) void task_exit(int status) { exit(status); }
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
@@ -792,10 +796,66 @@ static void test_power_barrier(void)
     }
     puts("PASS network power barrier: lock/callback/worker deadlines, stop proof, idempotent retry, uncertain DMA retention");
 }
+static unsigned external_faults,external_polls;
+static int external_stop_result;
+static int external_rx(struct netif *d,uint8_t *out)
+{ (void)d;if(external_polls++) return 0;memset(out,0x42,60);return 60; }
+static int external_tx(struct netif *d,const uint8_t *frame,unsigned bytes)
+{ CHECK(d->driver_context && frame && bytes==60);return -EAGAIN; }
+static int external_stop(struct netif *d) { (void)d;return external_stop_result; }
+static enum net_link external_link(struct netif *d) { return d->link; }
+static void external_irq(struct netif *d,bool on) { (void)d;(void)on; }
+static void external_fault(struct netif *d,const char *why) { CHECK(d->external_owner && why);external_faults++; }
+static void test_external_publication(void)
+{
+    memset(devices,0,sizeof(devices));device_count=0;initialized=true;shutting_down=false;
+    worker=(struct task *)(uintptr_t)1;g_boot.flags=0;host_flags=0x200;external_polls=external_faults=0;
+    struct netif_driver driver=net_e100;driver.name="ndis-model";driver.receive_poll=external_rx;
+    driver.transmit=external_tx;driver.stop=external_stop;driver.link_state=external_link;driver.irq_enable=external_irq;
+    struct pci_func pci={.bus=1,.dev=2,.fn=0,.vendor=0x8086,.device=0x100e};
+    uint8_t address[6]={2,0,0,0,0,7};unsigned context=1;
+    struct netif *d=netif_publish_external(&pci,&driver,&context,address,7,true,external_fault);
+    CHECK(d && d==net_get(0) && net_count()==1 && d->external_owner && d->running);
+    CHECK(!netif_publish_external(&pci,&driver,&context,address,8,true,external_fault));
+    uint8_t frame[60]={0};CHECK(netif_transmit(d,7,frame,60)==-EAGAIN && d->stats.tx_busy==1 && !d->quarantined);
+    netif_poll(d);struct net_packet copied;CHECK(netif_pop(d,&copied) && copied.length==60 && copied.data[0]==0x42);
+    struct ciuki_net_state state;net_state_snapshot(&state);CHECK(state.state==CIUKI_NET_RUNNING && state.link==NET_LINK_UP);
+    unsigned writes=config_writes;external_stop_result=-EAGAIN;
+    CHECK(netif_stop(d)==-EAGAIN && !d->quarantined && config_writes==writes);
+    external_stop_result=0;CHECK(!netif_stop(d) && !d->running && config_writes==writes);
+    d=netif_publish_external(&pci,&driver,&context,address,8,false,external_fault);CHECK(d && d->link==NET_LINK_DOWN);
+    netif_quarantine(d,"synthetic");CHECK(d->quarantined && external_faults==1 && config_writes==writes);
+    CHECK(!netif_publish_external(&pci,&driver,&context,address,9,true,external_fault));
+    memset(devices,0,sizeof(devices));device_count=0;worker=0;initialized=false;
+    puts("PASS external netif publication, private RX copy, EAGAIN, netctl state, stop and quarantine ownership");
+}
+/* f6-06 x f1-110: the S5 barrier stops an NDIS-published netif through its
+ * external owner: EAGAIN refuses the barrier, success is idempotent. */
+static void test_external_power_barrier(void)
+{
+    memset(devices,0,sizeof(devices));device_count=0;initialized=true;shutting_down=false;
+    worker=(struct task *)(uintptr_t)1;g_boot.flags=0;host_flags=0x200;external_polls=external_faults=0;
+    kmutex_init(&registration_mutex);input_active=bridge_tap.active=false;power_lock_fault=-1;power_worker_alive=false;
+    struct netif_driver driver=net_e100;driver.name="ndis-model";driver.receive_poll=external_rx;
+    driver.transmit=external_tx;driver.stop=external_stop;driver.link_state=external_link;driver.irq_enable=external_irq;
+    struct pci_func pci={.bus=1,.dev=3,.fn=0,.vendor=0x8086,.device=0x100e};
+    uint8_t address[6]={2,0,0,0,0,9};unsigned context=1;
+    struct netif *d=netif_publish_external(&pci,&driver,&context,address,11,true,external_fault);
+    CHECK(d && d->external_owner && d->running);
+    unsigned writes=config_writes,reaps=power_reaps;external_stop_result=-EAGAIN;
+    CHECK(net_power_quiesce()==-EAGAIN && !d->quarantined && worker && config_writes==writes);
+    external_stop_result=0;
+    CHECK(!net_power_quiesce() && !d->running && !d->quarantined && !worker && power_reaps==reaps+1);
+    CHECK(!net_power_quiesce() && !external_faults && config_writes==writes);
+    CHECK(!netif_publish_external(&pci,&driver,&context,address,12,true,external_fault)); /* shutting down */
+    memset(devices,0,sizeof(devices));device_count=0;worker=0;initialized=false;shutting_down=false;
+    puts("PASS external netif under the power barrier: owner stop refusal, stop proof, idempotent retry, no publication after shutdown");
+}
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
     test_media_options();
+    test_external_publication();
     test_smi_budget();
     test_e100_irq();
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) { test_paths(kind); test_faults(kind); test_admission(kind); }
@@ -807,6 +867,7 @@ int main(void)
     test_public_state();
     test_second_set();
     test_power_barrier();
+    test_external_power_barrier();
     printf("net: %u checks PASS (production framework, eight NIC register/DMA models, ARP)\n", checks);
     return 0;
 }

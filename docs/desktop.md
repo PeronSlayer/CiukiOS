@@ -1706,3 +1706,37 @@ Busy removal queries `MEDIA_GET_BLOCKERS` and shows program names and PIDs.
 Safe USB removal retains an absent-volume result so the later unplug does not
 warn again. See [the implementation and validation record](validation/f2-74-removable-media.md)
 for the additive query, replay captures and pending guest/hardware qualification.
+
+## First boot (f9-05)
+
+After a Setup CD installation, `C:\SYSTEM\SETUP.STATE` carries `phase=installed`
+and `firstboot=pending`. On a normal boot the desktop (`apps/desktop/firstboot.c`,
+`firstboot_native.c`) runs a finishing wizard before the ordinary session; the
+placement is inside the desktop so it uses the grants the desktop already holds
+and needs no new supervisor authority. Without the file, or with
+`firstboot=done`, nothing runs and the canonical image boots as before.
+
+Steps run in order and each is bounded: `accel`, `sound` (10 s), `network`
+(10 s, observes the network service snapshot; never blocks), `games`
+(registration by catalogue identity, idempotent), `entropy` (5 s, one-byte
+`getentropy`; EAGAIN means not ready), `clock`, `summary`. Each result is one
+`step=<name> result=<ok|skipped|failed>` line appended to `SETUP.STATE` with
+`fsync`; a restart resumes at the first step without a result. Completion
+appends `firstboot=done`; the file is never deleted. The kernel log gets
+`[firstboot] step=<name> result=<r> ms=<n>`.
+
+The accelerator message only reports what the kernel did during this boot:
+"Hardware acceleration is on" means the display driver registry reports
+acceleration and the attempt marker `C:\system\settings\accel.cfg` is empty.
+"Software rendering is in use" means the driver reported none, quarantined the
+engine, or the marker was left non-empty by an earlier hang. Control Panel >
+Display offers "Retry acceleration after restart", which only empties that
+marker. The wizard decides nothing per machine model.
+
+Records: `C:\SYSTEM\SETUP.LOG`, `C:\SYSTEM\HARDWARE.TXT`, `C:\SYSTEM\SETUP.STATE`
+and `C:\SYSTEM\BUILD.TXT` (source commit, kernel ELF SHA-256, build manifest id,
+build date; the image SHA-256 is on the release page, since an image cannot
+contain its own hash). The Setup CD rescue page lists disks, views the hardware
+report (which quotes `BUILD.TXT`), and exports logs and the report to
+`\CIUKIOS-RESCUE-<date>\` on the first USB FAT volume; it never writes to an
+ATA disk.

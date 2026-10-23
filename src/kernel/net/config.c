@@ -1,6 +1,14 @@
 /* Bounded NETWORK.INI codec shared with host tests. SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/net_config.h>
+#if defined(CIUKI_CONFIG_USER) || __STDC_HOSTED__
+#include <stdint.h>
+#include <string.h>
+#include <errno.h>
+#include <stdio.h>
+#define ksnprintf snprintf
+#else
 #include <ciuki/kernel.h>
-#include <ciuki/net_control.h>
+#endif
 static int config_cmp(const char *a, const char *b)
 { while (*a && *a == *b) { a++; b++; } return (unsigned char)*a - (unsigned char)*b; }
 void net_config_default(struct ciuki_net_config *c)

@@ -48,6 +48,7 @@ python3 -B "$root/tests/host/test_chipshiqv.py"
 python3 -B "$root/tests/host/test_display_commands.py"
 python3 -B "$root/tests/host/test_display_driver_names.py"
 python3 -B "$root/tests/host/test_savage_family.py"
+python3 -B -m unittest discover -s "$root/tests/host/ndis" -p test_package.py
 python3 -B "$root/tests/host/test_presenter_display.py"
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_kernel_switch
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_checkpoint_queue
@@ -504,7 +505,15 @@ for name in ("schedule", "sched_vm_tick_work", "sched_tick", "task_sleep_ms", "t
     functions.append(source[match.start():end] + "\n")
 timers = (root / "src/kernel/core/sync.c").read_text()
 (out / "deadline_timers.inc").write_text(timers[timers.index("/* F0-46 timers:"):timers.index("/* End F0-46 timers. */")])
-(out / "signal_scheduler.inc").write_text("void task_start(struct task *);\n" + declarations + "\n".join(functions))
+# f6-05/f6-06: task.c's scheduler calls the weak NDIS user-host hooks and the
+# TSS I/O-bitmap installer, defined outside this slice.
+ndis_hooks = ("extern void ndis_user_switch(const struct task *) __attribute__((weak));\n"
+              "extern void ndis_user_task_stopping(struct task *,int) __attribute__((weak));\n"
+              "extern void ndis_user_reaped(struct task *) __attribute__((weak));\n"
+              "struct arch_io_range;\n"
+              "__attribute__((weak)) void arch_io_install(const struct arch_io_range *r, unsigned n)"
+              " { (void)r; (void)n; }\n")
+(out / "signal_scheduler.inc").write_text("void task_start(struct task *);\n" + ndis_hooks + declarations + "\n".join(functions))
 PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" -I "$out" \
@@ -592,6 +601,13 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
     "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
 "$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"
+
+# f9-01: Setup CD media (boot image, ISO, eligibility, manifest) and the
+# kernel model (cdview, boot-CD identification, Setup-mode storage start).
+python3 "$root/scripts/test/cd_media_tests.py"
+
+# f9-03: production Setup pages, keyboard flow, strict INF and fake transaction.
+python3 "$root/tests/host/setup/run.py"
 
 # F2 app controller: sanitized records/captures plus an exact 8 KiB guarded
 # stack regression, and negative controls for the stack and compiler guards.

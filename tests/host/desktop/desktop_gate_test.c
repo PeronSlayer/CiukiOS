@@ -711,3 +711,6 @@ int ciuki_display_fence(int fd,uint64_t f,uint16_t a,uint32_t t,struct ciuki_bat
 int ap_preference_get(const char *dir,const char *id) { (void)dir; (void)id; return -1; }
 int ap_preference_set(const char *dir,const char *id,const char *label,int action)
 { (void)dir; (void)id; (void)label; (void)action; return -1; }
+
+/* This desktop fixture has no installed SETUP.STATE. */
+int desk_firstboot(struct desktop *d) { (void)d; return 0; }

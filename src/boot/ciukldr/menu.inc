@@ -538,7 +538,7 @@ config_read:
     mov [preferred_mode], dx
     jmp .next
 .apply:
-    ; safe=0, serial=1, accel=0, usbscan=0 and ecpoll=0/1 change nothing
+    ; safe=0, serial=1, accel=0, usbscan=0, ecpoll=0/1 and setup=1 change nothing
     ; here: a normal option never clears a positive safe-mode source;
     ; B(options) keeps accel=0 (the kernel declines acceleration before
     ; marker I/O), usbscan=0 and ecpoll=0/1 (f2-96: the ThinkPad EC volume
@@ -578,7 +578,7 @@ config_read:
 .done:
     ret
 ; Exact BOOT.CFG options; an empty name ends the list.
-option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0,'ecpoll=0',0,'ecpoll=1',0
+option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0,'ecpoll=0',0,'ecpoll=1',0,'setup=1',0
 safe_option db 'safe=1',0
 serial_option db 'serial=0',0,0
 mode_prefix db 'mode=0x',0

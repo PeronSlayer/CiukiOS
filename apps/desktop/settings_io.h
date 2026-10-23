@@ -47,5 +47,8 @@ int cfg_writer_read_result(struct cfg_writer *, char *, size_t *, int *);
 int cfg_writer_job(struct cfg_writer *, const void *, size_t);
 int cfg_writer_job_result(struct cfg_writer *, void *, size_t *, int *);
 void cfg_writer_stop(struct cfg_writer *);
+/* Durable destination-aware file writer shared with offline Setup.
+ * Paths may include a target volume prefix. Returns 0 or positive errno. */
+int cfg_write_at(const char *path, const char *temporary, const char *, size_t);
 int cfg_write_file(struct cfg_writer *, const char *, size_t);
 #endif

@@ -7,14 +7,16 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 
 class LoaderTests(unittest.TestCase):
-    def test_synthetic_loader_under_address_undefined_and_leak_sanitizers(self):
+    def synthetic_loader(self, sanitizer):
         out = ROOT/'build/host/ndis'; out.mkdir(parents=True, exist_ok=True)
         sources = ['sdk/pe/pe.c', 'sdk/win32/ldr/pe.c', 'tests/host/ndis/user_policy.c',
                    'src/kernel/ndis/ntimage.c', 'src/kernel/ndis/exports.c',
-                   'src/kernel/ndis/callback.c', 'tests/host/ndis/loader_test.c']
+                   'src/kernel/ndis/callback.c', 'src/kernel/ndis/scan.c',
+                   'src/kernel/ndis/flags.c', 'src/kernel/ndis/userhost.c', 'src/kernel/ndis/nt_runtime.c', 'src/kernel/lib/sha256.c',
+                   'tests/host/ndis/loader_test.c']
         command = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                    '-DW32_HOST_MODEL', '-DCIUKI_NDIS_HOST_MODEL', '-ffunction-sections',
-                   '-fdata-sections', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                   '-fdata-sections', '-fsanitize='+sanitizer, '-fno-sanitize-recover=all',
                    '-I.', '-Isrc/kernel/include', '-Isdk/win32/include',
                    *sources, '-Wl,--gc-sections', '-o', str(out/'loader')]
         subprocess.run(command, cwd=ROOT, check=True)
@@ -24,6 +26,12 @@ class LoaderTests(unittest.TestCase):
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertIn('PASS shared PE/kernel policy', result.stdout)
+
+    def test_synthetic_loader_under_address_undefined_and_leak_sanitizers(self):
+        self.synthetic_loader('address,undefined')
+
+    def test_synthetic_loader_undefined(self):
+        self.synthetic_loader('undefined')
 
     def test_resident_allocator_under_address_undefined_and_leak_sanitizers(self):
         out = ROOT/'build/host/ndis'; out.mkdir(parents=True, exist_ok=True)
@@ -39,7 +47,11 @@ class LoaderTests(unittest.TestCase):
 
     def test_production_i686_objects_compile_without_model_execution_hook(self):
         out = ROOT/'build/host/ndis/kernel'; out.mkdir(parents=True, exist_ok=True)
-        for source in sorted((ROOT/'src/kernel/ndis').glob('*.c')):
+        sources = [*sorted((ROOT/'src/kernel/ndis').glob('*.c')),
+                   *(ROOT/'src/kernel'/s for s in ('arch/trap.c', 'arch/desc.c',
+                     'core/task.c', 'core/vmm.c', 'core/registry.c', 'core/ledger.c',
+                     'proc/signal.c', 'probes/registry_probe.c'))]
+        for source in sources:
             subprocess.run(['clang', '--target=i686-unknown-elf', '-march=pentiumpro',
                             '-ffreestanding', '-fno-builtin', '-fno-pic', '-fno-pie',
                             '-mno-sse', '-mno-sse2', '-mno-mmx', '-mno-80387',
@@ -49,6 +61,20 @@ class LoaderTests(unittest.TestCase):
                            cwd=ROOT, check=True)
         symbols = subprocess.check_output(['llvm-nm', str(out/'callback.o')], text=True)
         self.assertNotIn('ndis_callback_model_call2', symbols)
+        subprocess.run(['nasm', '-f', 'elf32', 'src/kernel/arch/ndis_context.asm',
+                        '-o', str(out/'ndis_context.o')], cwd=ROOT, check=True)
+        asm = subprocess.check_output(['llvm-objdump', '-dr', str(out/'execution.o')], text=True)
+        gate = asm.split('<ndis_execute2>:', 1)[1].split('<ndis_shim_enter>:', 1)[0]
+        self.assertNotIn('ndis_context_save', gate)
+        self.assertNotRegex(gate, r'call[l]?\s+\*')
+        host = subprocess.check_output(['llvm-objdump', '-dr', str(out/'userhost.o')], text=True)
+        init = host.split('<ndis_host_init>:', 1)[1].split('<ndis_host_stop>:', 1)[0]
+        self.assertNotIn('NDIS_HOST_LIVE', init)
+        self.assertIn('ndis_profiles_available', init)
+        profiles = subprocess.check_output(['llvm-objdump', '-dr', str(out/'profiles.o')], text=True)
+        self.assertNotRegex(profiles, r'call[l]?\s+')
+        subprocess.run(['nasm', '-f', 'elf32', 'src/kernel/arch/ndis_dispatch.asm',
+                        '-o', str(out/'ndis_dispatch.o')], cwd=ROOT, check=True)
 
     def build_abi(self):
         out = ROOT/'build/host/ndis/abi'; out.mkdir(parents=True, exist_ok=True)

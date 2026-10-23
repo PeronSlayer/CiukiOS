@@ -291,6 +291,9 @@ struct fs_rtc_ops {
 struct fs_rtc_sample { uint8_t second, minute, hour, day, month, year, control, valid; };
 bool fs_rtc_decode(const struct fs_rtc_sample *, uint16_t *, uint16_t *, uint8_t *);
 bool fs_rtc_read(const struct fs_rtc_ops *, void *, uint16_t *, uint16_t *, uint8_t *);
+struct fs_rtc_writer { struct fs_rtc_ops sample; void (*write)(void *, uint8_t, uint8_t); };
+bool fs_rtc_write(const struct fs_rtc_writer *, void *, uint16_t, uint16_t, uint8_t);
+bool fs_rtc_store(uint16_t, uint16_t, uint8_t);
 void fs_calendar_init(void);
 /* Long cache/scan loops cooperate with the scheduler. Only the storage
  * callback brackets worker context; ordinary VFS callers use task_yield. */

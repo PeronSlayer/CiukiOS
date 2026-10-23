@@ -24,7 +24,7 @@ static void fixture(void) {
     put(O+56,0x4000);put(O+60,512);pe_put16(raw+O+68,1);put(O+92,16);
     put(T+8,512);put(T+12,0x1000);put(T+16,512);put(T+20,512);put(T+36,0x60000020);
     put(T+48,8192);put(T+52,0x2000);put(T+56,8192);put(T+60,1024);put(T+76,0xc0000040);
-    raw[512]=0xc3;
+    memset(raw+512,0x90,512); raw[512]=0xc3;
 }
 static void import(const char *module,const char *name,uint32_t ordinal,bool fallback,bool bound) {
     dir(1,0x2000,40);put(at(0x2000),fallback?0:0x2100);
@@ -80,6 +80,11 @@ static void policies(void) {
     assert(!strcmp(d.error.reason,"network-image-budget"));
 }
 static void hostile(void) {
+    fixture();raw[515]=0xfa;
+    struct ntimage diagnostic={0};struct ntimage_platform pp=platform();
+    assert(ntimage_load(&diagnostic,raw,sizeof(raw),"diagnostic.sys",&pp));
+    assert(!diagnostic.scanned && diagnostic.scan_rva==0x1003);
+    assert(ntimage_unload(&diagnostic));
     fixture();put(T+52,0x1000);reject("section-virtual-overlap");
     fixture();put(T+60,512);reject("driver-raw-overlap");
     fixture();put(T+20,0);reject("driver-raw-header-overlap");
@@ -125,7 +130,7 @@ static void imports(void) {
     size_t n;const struct ndis_export *table=ndis_exports(&n);assert(n);
     p.exports=0;
     for(size_t i=0;i<n;i++) {
-        assert(!table[i].implemented && !table[i].address && !table[i].ordinal);
+        assert(!table[i].address && !table[i].ordinal);
         fixture();import(table[i].module,table[i].name,0,false,false);d=(struct ntimage){0};
         assert(!ntimage_load(&d,raw,sizeof(raw),"unimplemented.sys",&p));
         assert(!strcmp(d.error.reason,"unimplemented-export"));assert(!live);
@@ -162,6 +167,36 @@ static void relocations(void) {
     /* Overflow in the requested mapping is distinct from defined PE32 value wrap. */
     fixture();dir(5,0x2700,12);put(at(0x2700),0x2000);put(at(0x2704),12);pe_put16(raw+at(0x2708),0x5600);
     reject("relocation-type");
+}
+static bool bad_user_import;
+static int user_import(void *ctx,const struct ndis_export *e,uint32_t *address)
+{
+    (void)ctx;
+    *address=bad_user_import?e->address:0x500000+(e->address-0xc2000000);
+    return 1;
+}
+static int seal_code(void *ctx,const struct pe_image *p) { (void)ctx;(void)p;return 1; }
+static struct ndis_flag_table flag_table;
+static struct ndis_flag_workspace flag_workspace;
+static void user_policy(void)
+{
+    struct ntimage d={0};struct ntimage_platform p=platform();
+    p.user_host=true;p.user_import=user_import;mapped_base=0x100000;
+    p.flag_table=&flag_table;p.flag_workspace=&flag_workspace;p.seal_code=seal_code;
+    fixture();import("NTOSKRNL.EXE","KeTickCount",0,false,false);
+    dir(5,0x2700,12);put(at(0x2700),0x2000);put(at(0x2704),12);
+    pe_put16(raw+at(0x2708),0x3600);put(at(0x2600),BASE+0x1234);
+    raw[512]=0xfa; /* admitted diagnostically, never executed by this model */
+    assert(ntimage_load(&d,raw,sizeof(raw),"user.sys",&p));
+    assert(d.pe.base==0x100000 && pe_u32(d.pe.image+0x2600)==0x101234);
+    assert(pe_u32(d.pe.image+0x2120)==0x502000 && !d.scanned);
+    assert(ntimage_unload(&d));
+    bad_user_import=true;d=(struct ntimage){0};
+    assert(!ntimage_load(&d,raw,sizeof(raw),"kernel-import.sys",&p));
+    assert(!strcmp(d.error.reason,"user-import-unavailable") && !live);
+    bad_user_import=false;mapped_base=BASE;d=(struct ntimage){0};
+    assert(!ntimage_load(&d,raw,sizeof(raw),"kernel-va.sys",&p));
+    assert(!strcmp(d.error.reason,"image-not-user-pinned") && !live);
 }
 bool registry_valid(int handle,gen_t generation) { return claims_ok && handle==7 && generation==11; }
 int registry_quarantine(int handle,gen_t generation) { assert(handle==7 && generation==11);quarantines++;return 0; }
@@ -205,7 +240,7 @@ static void callbacks(void) {
     }
 }
 int main(void) {
-    policies();hostile();imports();modified_imports();relocations();callbacks();
+    policies();hostile();imports();modified_imports();relocations();user_policy();callbacks();
     assert(!live && allocations==frees && records && quarantines==6);
     puts("PASS shared PE/kernel policy imports ordinals data rollback fault nonreturn IRQL model");fflush(stdout);return 0;
 }

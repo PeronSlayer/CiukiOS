@@ -17,6 +17,7 @@ void file_clock_init(int64_t build_epoch, bool qualified, bool valid,
                      uint16_t date, uint16_t time, uint8_t tenths, uint64_t tick);
 void file_clock_start(int64_t build_epoch, bool rtc_qualified);
 void file_clock_snapshot(struct clock_seed *out);
+void file_clock_set_utc(int64_t);
 void file_clock_tick(void); /* PIT, once per scheduled 1 ms quantum */
 int file_clock_now(uint32_t clock, const struct process *, struct ciuki_timespec *out);
 int file_clock_res(uint32_t clock, struct ciuki_timespec *out);

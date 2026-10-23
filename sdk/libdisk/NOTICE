@@ -1,0 +1,23 @@
+libdisk origins and notices
+
+The CiukiOS C library sources in sdk/libdisk/ are supplied under the MIT
+notice in sdk/LICENSE, with the following embedded-code exceptions.
+
+The FAT32 boot program at bytes 90..218 of each formatted boot sector is
+reproduced from dosfstools 4.2, src/mkfs.fat.c (dummy_boot_code and its message):
+https://github.com/dosfstools/dosfstools/blob/v4.2/src/mkfs.fat.c
+Upstream license: GNU GPL version 3 or later (GPL-3.0-or-later).
+https://www.gnu.org/licenses/gpl-3.0.html
+Upstream source copyright holders: Linus Torvalds (1991), Remy Card
+(1992-1993), David Hudson (1993-1994), H. Peter Anvin (1998), Roman Hodek
+(1998-2005), Daniel Baumann (2008-2014), Andreas Bombe (2015-2016),
+Pali Rohár (2018). Consult the upstream source for its complete notices.
+
+The 440-byte stub and canonical MBR code arrays are assembled from
+src/boot/setup_stub_mbr.asm and src/boot/mbr.asm, respectively.
+Their source notices are GPL-2.0-only. The generated source and SDK manifest
+identify the source paths, source digests and assembled-code digests.
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+The manifest retains these origins separately from the SDK's MIT notice.
+The complete corresponding sources belong to the distribution source set.

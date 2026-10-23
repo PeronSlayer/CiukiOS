@@ -31,6 +31,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/storage.h>
 #include <ciuki/reboot.h>
+#include <ciuki/setup_mode.h>
+#pragma weak setup_mode
 #include <ciuki/blackbox.h>
 #include <ciuki/uaddr.h>
 #include <ciuki/power_source.h>
@@ -307,7 +309,13 @@ static int flush_storage(void)
 int32_t power_syscall(uint32_t action)
 {
     struct process *caller = proc_current();
-    if (!caller || !supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid()) return -EPERM;
+    /* The desktop, or Setup's capability holder in Setup mode, owns call 73.
+     * Both take the same orderly path below: storage flush, native device
+     * quiesce, the stopped latch, then reset or the active provider's
+     * soft-off (ACPI S5 or APM Off). */
+    if (!caller || (!(setup_mode && setup_mode() && caller->setup_capability) &&
+        (!supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid())))
+        return -EPERM;
     if (action == CIUKI_POWER_QUERY)
         return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0);
     if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;

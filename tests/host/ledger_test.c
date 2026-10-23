@@ -153,9 +153,14 @@ static void pins(void)
     struct mm_pin pin={.generation=17,.first_pfn=p/PAGE_SIZE,.pages=2,.address_mask=UINT32_MAX,
         .alignment=PAGE_SIZE,.boundary=65536,.direction=MM_PIN_FROM_DEVICE};
     CHECK(!mm_pin(&pin) && snapshot().pinned_pages==2); CHECK(ledger_reconcile());
+    CHECK(mm_pin_valid(&pin,17) && !mm_pin_valid(&pin,18));
     struct mm_pin stale=pin;
+    struct mm_pin changed=pin;changed.ticket++;
+    CHECK(!mm_pin_valid(&changed,17));changed=pin;changed.pages--;
+    CHECK(!mm_pin_valid(&changed,17));
     CHECK(mm_unpin(&pin,18)==-EINVAL && snapshot().pin_tokens==1);
     CHECK(!mm_pin_retire(&pin,17,MM_DMA));
+    CHECK(!mm_pin_valid(&pin,17));
     CHECK(pmm_free_count()==baseline-2 && snapshot().retired_pages==2);
     CHECK(!mm_unpin(&pin,17)); CHECK(ledger_reconcile());
     CHECK(pmm_free_count()==baseline && snapshot().pinned_pages==0);
@@ -164,6 +169,7 @@ static void pins(void)
     struct mm_pin next={.generation=18,.first_pfn=p/PAGE_SIZE,.pages=1,.address_mask=UINT32_MAX,
         .alignment=PAGE_SIZE,.direction=MM_PIN_CPU};
     CHECK(!mm_pin(&next) && next.ticket!=stale.ticket);
+    CHECK(!mm_pin_valid(&stale,17) && mm_pin_valid(&next,18));
     CHECK(mm_unpin(&stale,17)==-EINVAL && ledger_page_pinned(p/PAGE_SIZE));
     CHECK(!mm_unpin(&next,18)); pmm_free(p); CHECK(ledger_reconcile());
     /* Constraint failure is transactional. */

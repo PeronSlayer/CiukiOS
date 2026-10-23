@@ -88,12 +88,38 @@ bool supervisor_output(struct task *t, unsigned stream, const void *b, uint32_t 
 void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { (void)ops; }
 void grant_release(struct desktop_description *d) { (void)d; }
 void channel_release(struct desktop_description *d) { (void)d; }
+/* surface.c's batch/managed surfaces allocate direct-map runs (part C), and
+ * net_dev.c's f6-07 driver-pack query walks PCI; this fixture has no PCI.
+ * A including harness with its own PCI/contiguous allocator (audio_test.c)
+ * defines FILES_TEST_OWN_PLATFORM first. */
+#ifndef FILES_TEST_OWN_PLATFORM
+uint32_t pmm_alloc_contig(uint32_t count)
+{
+    if (fail_alloc()) return 0;
+    for (unsigned i=1;i+count<=HOST_PAGES;i++) {
+        unsigned n=0; while (n<count && !allocated[i+n]) n++;
+        if (n!=count) continue;
+        for (n=0;n<count;n++) { allocated[i+n]=true; pages_used++; memset(P2V((i+n)*PAGE_SIZE),0xa5,PAGE_SIZE); }
+        return i*PAGE_SIZE;
+    }
+    return 0;
+}
+unsigned pci_count(void) { return 0; }
+const struct pci_func *pci_get(unsigned i) { (void)i; return 0; }
+#endif
 #include "../../../src/kernel/proc/surface.c"
 #include "../../../src/kernel/proc/clock.c"
 #include "../../../src/kernel/proc/posixpath.c"
 #include "../../../src/kernel/proc/fdtable.c"
 #include "../../../src/kernel/proc/devnodes.c"
 #include "../../../src/kernel/proc/syscalls_file.c"
+static bool setup_test_mode;
+bool setup_mode(void) { return setup_test_mode; }
+#include "../../../src/kernel/proc/setup_file.c"
+#include "../../../src/kernel/proc/setup_clock.c"
+static unsigned setup_rtc_writes;
+static uint16_t setup_rtc_date,setup_rtc_time;
+bool fs_rtc_store(uint16_t d,uint16_t t,uint8_t tenths) { CHECK(tenths<200);setup_rtc_writes++;setup_rtc_date=d;setup_rtc_time=t;return true; }
 #include "../../../src/kernel/drivers/net_dev.c"
 /* Register-model net suite checks the production snapshot. This boundary
  * fixture exercises the real namespace/fd/syscall/user-copy path without a NIC. */
@@ -883,7 +909,9 @@ static void test_launch_throughput(void)
 static struct storage media_observation;
 static unsigned media_removals;
 static int media_result;
+#ifndef NATIVE_DISK_TEST
 struct storage *storage_get(void) { return &media_observation; }
+#endif
 int usb_storage_eject(struct storage *s,unsigned drive,uint32_t gen)
 { CHECK(s==&media_observation && drive==4 && gen==123); media_removals++; return media_result; }
 /* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */
@@ -989,6 +1017,36 @@ static void test_media_node(void)
 }
 static void test_com_nodes(void)
 {
+    /* Check all eight possible COM and LPT ports, including absent ones,
+     * against all ATA slots and the fixed devices using the production stat
+     * path: fixed 1..6, COM 16..23, LPT 24..31, ATA 32..35. */
+    uint32_t numbers[6+4+CIUKI_COM_MAX+CIUKI_LPT_MAX]; unsigned count=0;
+    struct px_node *fixed[]={space->null,space->console,space->audio,space->mixer,space->net,space->media};
+    struct ciuki_stat device_stat;
+    for (unsigned i=0;i<6;i++) {
+        CHECK(!locked_stat(fixed[i],&device_stat) && device_stat.st_rdev==i+1);
+        numbers[count++]=device_stat.st_rdev;
+    }
+    for (unsigned i=0;i<4;i++) {
+        char name[]="/dev/ata0"; name[8]+=(char)i;
+        struct px_path disk_path;
+        CHECK(!resolve_path(name,&disk_path) && disk_path.node==space->disks[i]);
+        CHECK(!locked_stat(disk_path.node,&device_stat) && device_stat.st_rdev==32+i);
+        CHECK(device_stat.st_mode==(S_IFCHR|0644));
+        numbers[count++]=device_stat.st_rdev;
+    }
+    for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
+        struct px_node port={.space=space,.kind=PX_COM,.drive=i,.linked=true};
+        CHECK(!locked_stat(&port,&device_stat) && device_stat.st_rdev==16+i);
+        numbers[count++]=device_stat.st_rdev;
+    }
+    for (unsigned i=0;i<CIUKI_LPT_MAX;i++) {
+        struct px_node port={.space=space,.kind=PX_LPT,.drive=i,.linked=true};
+        CHECK(!locked_stat(&port,&device_stat) && device_stat.st_rdev==24+i);
+        numbers[count++]=device_stat.st_rdev;
+    }
+    CHECK(count==sizeof(numbers)/sizeof(numbers[0]));
+    for (unsigned i=0;i<count;i++) for (unsigned j=0;j<i;j++) CHECK(numbers[i]!=numbers[j]);
     struct px_path path; CHECK(!resolve_path("/dev/com2",&path) && path.node->kind==PX_COM);
     struct ciuki_stat st; CHECK(!locked_stat(path.node,&st) && st.st_mode==(S_IFCHR|0666) && st.st_rdev==17);
     CHECK(file_open(client,"/dev/com1",O_RDONLY,0)==-EBUSY);
@@ -996,6 +1054,8 @@ static void test_com_nodes(void)
     int fd=file_open(client,"/dev/com2",O_RDWR,0); CHECK(fd>=0);
     CHECK(file_open(client,"/dev/com2",O_RDONLY,0)==-EBUSY);
     CHECK(file_fcntl(client,fd,F_SETFL,O_APPEND)==-EINVAL);
+    CHECK(!file_fcntl(client,fd,F_SETFL,O_NONBLOCK));
+    CHECK(file_fcntl(client,fd,F_GETFL,0)==(O_RDWR|O_NONBLOCK));
     CHECK(call(CIUKI_SYS_READ,fd,0x1234,17,0,0)==7 && mock_com_reads==1);
     CHECK(call(CIUKI_SYS_WRITE,fd,0x1234,17,0,0)==7 && mock_com_writes==1);
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,COM_GET_STATUS,0x1234,80,0) && mock_com_controls==1);
@@ -1003,14 +1063,40 @@ static void test_com_nodes(void)
     CHECK(call(CIUKI_SYS_PREAD,fd,USER,1,0,0)==-ESPIPE);
     CHECK(call(CIUKI_SYS_PWRITE,fd,USER,1,0,0)==-ESPIPE);
     CHECK(call(CIUKI_SYS_FSYNC,fd,0,0,0,0)==-EINVAL);
+    CHECK(call(CIUKI_SYS_FTRUNCATE,fd,0,0,0,0)==-EINVAL);
     int dup=file_dup(client,fd,0,false,0); CHECK(dup>=0);
     CHECK(!file_close(client,fd) && !mock_com_closes && mock_com_generation==77);
     CHECK(!file_close(client,dup) && mock_com_closes==1 && !mock_com_generation);
     int dir=file_open(client,"/dev",O_RDONLY|O_DIRECTORY,0); CHECK(dir>=0);
-    struct ciuki_dirent entry; unsigned seen=0;
-    while (locked_dents(file_fd(client,dir),&entry)>0)
-        if (!strcmp(entry.d_name,"com1") || !strcmp(entry.d_name,"com2")) { CHECK(entry.d_type==DT_CHR); seen++; }
-    CHECK(seen==2 && !file_close(client,dir));
+    struct ciuki_dirent entry;
+    const char *names[]={".","..","null","console","audio","mixer","net","media",
+                         "ata0","ata1","ata2","ata3","com1","com2"};
+    for (unsigned pass=0;pass<2;pass++) {
+        for (unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++) {
+            CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+            CHECK(!strcmp(entry.d_name,names[i]) && entry.d_off==(int64_t)i+1);
+            CHECK(entry.d_type==(i<2 ? DT_DIR : DT_CHR));
+        }
+        uint64_t end=file_fd(client,dir)->position;
+        CHECK(!locked_dents(file_fd(client,dir),&entry) && file_fd(client,dir)->position==end);
+        CHECK(!locked_dents(file_fd(client,dir),&entry) && file_fd(client,dir)->position==end);
+        int64_t pos; CHECK(!locked_seek(file_fd(client,dir),0,SEEK_SET,&pos) && !pos);
+    }
+    /* Sparse/unlinked ports must be skipped without dereferencing NULL or
+     * disturbing the fixed-device and ATA prefix. Restore the fixture. */
+    space->com[0]->linked=false;
+    file_fd(client,dir)->position=12;
+    CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+    CHECK(!strcmp(entry.d_name,"com2") && entry.d_off==13);
+    CHECK(!locked_dents(file_fd(client,dir),&entry));
+    space->com[0]->linked=true;
+    struct px_node *first=space->com[0]; space->com[0]=0;
+    file_fd(client,dir)->position=12;
+    CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+    CHECK(!strcmp(entry.d_name,"com2") && entry.d_off==13);
+    CHECK(!locked_dents(file_fd(client,dir),&entry));
+    space->com[0]=first;
+    CHECK(!file_close(client,dir));
     puts("PASS COM namespace/fd/syscall: lookup/stat/readdir, logger refusal, exclusive/dup/final-close and stream dispatch");
 }
 static void test_lpt_nodes(void)
@@ -1018,7 +1104,7 @@ static void test_lpt_nodes(void)
     struct px_path path;
     CHECK(resolve_path("/dev/lpt2",&path)==-ENOENT); mock_lpt_visible=true;
     CHECK(!resolve_path("/dev/lpt2",&path) && path.node->kind==PX_LPT);
-    struct ciuki_stat st; CHECK(!locked_stat(path.node,&st) && st.st_mode==(S_IFCHR|0666) && st.st_rdev==33);
+    struct ciuki_stat st; CHECK(!locked_stat(path.node,&st) && st.st_mode==(S_IFCHR|0666) && st.st_rdev==25);
     CHECK(file_open(client,"/dev/lpt2",O_RDWR|O_APPEND,0)==-EINVAL);
     int fd=file_open(client,"/dev/lpt2",O_RDWR,0); CHECK(fd>=0);
     CHECK(file_open(client,"/dev/lpt2",O_RDONLY,0)==-EBUSY);
@@ -1037,7 +1123,29 @@ static void test_lpt_nodes(void)
     struct ciuki_dirent entry; unsigned seen=0;
     while (locked_dents(file_fd(client,dir),&entry)>0)
         if (!strcmp(entry.d_name,"lpt2")) { CHECK(entry.d_type==DT_CHR); seen++; }
-    CHECK(seen==1 && !file_close(client,dir));
+    CHECK(seen==1);
+    /* Combined order: fixed nodes, ata0..3, linked COM, then linked LPT.
+     * LPT slot 0 is a hole (only lpt2 is discovered); rewind reproduces it. */
+    const char *names[]={".","..","null","console","audio","mixer","net","media",
+                         "ata0","ata1","ata2","ata3","com1","com2","lpt2"};
+    CHECK(!space->lpt[0] && space->lpt[1]);
+    for (unsigned pass=0;pass<2;pass++) {
+        int64_t pos; CHECK(!locked_seek(file_fd(client,dir),0,SEEK_SET,&pos) && !pos);
+        for (unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++) {
+            CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+            CHECK(!strcmp(entry.d_name,names[i]) && entry.d_off==(int64_t)i+1);
+        }
+        uint64_t end=file_fd(client,dir)->position;
+        CHECK(!locked_dents(file_fd(client,dir),&entry) && file_fd(client,dir)->position==end);
+    }
+    /* An unlinked COM port shifts the LPT entry down without a NULL access. */
+    space->com[1]->linked=false;
+    file_fd(client,dir)->position=13;
+    CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(entry));
+    CHECK(!strcmp(entry.d_name,"lpt2") && entry.d_off==14);
+    CHECK(!locked_dents(file_fd(client,dir),&entry));
+    space->com[1]->linked=true;
+    CHECK(!file_close(client,dir));
     puts("PASS LPT namespace/fd/syscall: late discovery, stat/readdir, exclusive/dup/final-close and stream dispatch");
 }
 static void test_net_node(void)
@@ -1169,6 +1277,64 @@ static void test_registry_commit(void)
     all_closed();
     puts("PASS registry directory commit via syscalls: open O_CREAT|O_TRUNC/write/close, open/fsync/close, open/lseek64/write 4/close, open/fsync/close on SERVICE.CRS.0/1 x24 plus hive flushes, reread exact");
 }
+static void test_setup_metadata(void)
+{
+    const char *name="/Setup long metadata name.bin";
+    int fd=file_open(client,name,O_CREAT|O_RDWR,0600); CHECK(fd>=0);
+    uint8_t data[9000]; memset(data,0x5a,sizeof(data)); CHECK(io(fd,data,sizeof(data),true,false,0)==sizeof(data));
+    CHECK(!locked_sync(file_fd(client,fd)));
+    struct ciuki_setup_fat q={.version=CIUKI_SETUP_FAT_VERSION,.size=sizeof(q),.cluster_index=CIUKI_SETUP_INDEX_NONE};
+    CHECK(!ua_write(client->memory,USER,&q,sizeof(q)));
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0)==-EPERM);
+    client->setup_capability=true;
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0)==-EPERM);
+    setup_test_mode=true;
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0));
+    CHECK(!ua_read(client->memory,&q,USER,sizeof(q)));
+    CHECK(q.file_size==sizeof(data) && q.mount_generation && q.chain_generation && q.alias[0] && !strcmp(q.name,name+1));
+    struct ciuki_setup_fat original=q;
+    unsigned clusters=(sizeof(data)+q.cluster_sectors*512-1)/(q.cluster_sectors*512);
+    uint64_t prior=0;
+    for(unsigned i=0;i<clusters;i++) {
+        q.cluster_index=i; CHECK(!ua_write(client->memory,USER,&q,sizeof(q)));
+        CHECK(!call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0));
+        CHECK(!ua_read(client->memory,&q,USER,sizeof(q)) && q.lba && q.lba!=prior);prior=q.lba;
+    }
+    q.cluster_index=clusters; CHECK(file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_QUERY,&q)==-ENOENT);
+    q=original;q.mount_generation++;
+    CHECK(file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_QUERY,&q)==-EAGAIN);
+    q=original;q.chain_generation++;
+    CHECK(file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_QUERY,&q)==-EAGAIN);
+    q=original;q.attributes=FAT_ATTR_RO|FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM|FAT_ATTR_ARCHIVE;
+    CHECK(!file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_ATTRIB,&q));
+    CHECK(q.attributes==39);
+    q.attributes|=FAT_ATTR_DIR;CHECK(file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_ATTRIB,&q)==-EINVAL);
+    q.attributes=32; CHECK(!file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_ATTRIB,&q));
+    CHECK(!locked_truncate(file_fd(client,fd),4096));
+    q=original;CHECK(file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_QUERY,&q)==-EAGAIN);
+    q=(struct ciuki_setup_fat){.version=1,.size=sizeof(q),.cluster_index=CIUKI_SETUP_INDEX_NONE};
+    CHECK(!file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_QUERY,&q));
+    space->vfs->generation[2]++;
+    CHECK(file_setup_fat(client,file_fd(client,fd),CIUKI_SETUP_FAT_QUERY,&q)==-EIO);
+    space->vfs->generation[2]--;
+    CHECK(!file_close(client,fd));CHECK(!remove_path_native(name,false));
+    struct ciuki_setup_clock clock={.version=1,.size=sizeof(clock),.seconds=1709251200,.offset_minutes=60,.rtc_local=1};
+    CHECK(!file_setup_clock(client,&clock) && setup_rtc_writes==1);
+    CHECK(setup_rtc_date==((2024-1980)*512+3*32+1) && (setup_rtc_time>>11)==1);
+    clock.rtc_local=0;CHECK(!file_setup_clock(client,&clock) && (setup_rtc_time>>11)==0);
+    clock.offset_minutes=841;CHECK(file_setup_clock(client,&clock)==-EINVAL && setup_rtc_writes==2);
+    int netfd=file_open(client,"/dev/net",O_RDONLY,0);CHECK(netfd>=0);
+    struct ciuki_setup_net net={.version=1,.size=sizeof(net)};
+    CHECK(!ua_write(client->memory,USER,&net,sizeof(net)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,netfd,CIUKI_SETUP_NET_QUERY,USER,sizeof(net),0));
+    CHECK(!ua_read(client->memory,&net,USER,sizeof(net)) && net.count==0);
+    client->setup_capability=false;
+    CHECK(call(CIUKI_SYS_DEVCTL,netfd,CIUKI_SETUP_NET_QUERY,USER,sizeof(net),0)==-EPERM);
+    CHECK(!file_close(client,netfd));
+    CHECK(file_setup_clock(client,&clock)==-EPERM);
+    setup_test_mode=false;
+    puts("Setup native metadata: authority, attributes, alias, bounded chain, EOF, mount/chain invalidation, UTC/local RTC PASS");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -1185,7 +1351,7 @@ int main(int argc, char **argv)
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput();
-    test_registry_commit();
+    test_registry_commit(); test_setup_metadata();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());
     CHECK(pages_used == prior_pages && heap_blocks == prior_heap);
