@@ -41,14 +41,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "3dccb1ea75847efa4b4a66bb8aa30d06b6effb090a8ca7b0f2e0f97a2b345ed0",
-    "ciuki-blue-dialogs.ppm": "237073cf27cabaa634b3f71c4dce66ad33b4391f97a7b89909fbcc6fa4c91b3f",
-    "ciuki-blue-tray-disabled.ppm": "bf6abefa91ed40f5e49817c1c14010151869fc3e06f2bdd26af512dff38f2e99",
-    "ciuki-blue-tray-media.ppm": "17846f4ddd2fba69cd26475e699e25a62c7e7a7ca254f8b78c93fc18721c7f4a",
-    "platinum-desktop.ppm": "2f72f27c37a3638bb699b86ed3ba5d909317c03fc35c17f24f906b025c259b6e",
-    "platinum-dialogs.ppm": "c4aa0d8373771d7306914fa23e64ffd471fb42ea378dfe106cc0197312ded52a",
-    "platinum-tray-disabled.ppm": "f610a538bb99571b4ecf557ddf9557cc40e47fb52d1a67b89663c99610e754a1",
-    "platinum-tray-media.ppm": "c40e0355f9bfce0110a03b71859af14fb9f21fde86b67cc079bd12b03ef1d998"
+    "ciuki-blue-desktop.ppm": "058a4fbb4c4e04bf6ac01288c495745c83337b5aa7e915ac484e05598703a0bd",
+    "ciuki-blue-dialogs.ppm": "c00e28e8dabc55a2ac0088b8742dd842a9676ebd86cddf80cd69601d88edbbef",
+    "ciuki-blue-tray-disabled.ppm": "3b0a7e9cc1586ca34dce02ce0426e05f083634fefeff1f650f0d1384b34f7239",
+    "ciuki-blue-tray-media.ppm": "a4e67c10442f7ff18bff873fc947e5152fab95e58c7062eef36ffd360025d530",
+    "platinum-desktop.ppm": "3f03a4849901fe6227d7d39794d87b1a7e3fe633203ed3eccc4e3a1d16637246",
+    "platinum-dialogs.ppm": "36daf4f99be6dbb9173e469ca1897597fa04818f7fecd9aabd84f861aca07a24",
+    "platinum-tray-disabled.ppm": "44f8b04ddc8ac22ad50af2812015343a74528121d2bf15a0dcdf71ee302d5844",
+    "platinum-tray-media.ppm": "7709f3264ee868c51a1ad09c848b3d2fe8dd45f2baf33ed6b1f8a6f8f221c8fb"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -187,7 +187,8 @@ class DesktopTests(unittest.TestCase):
                     # F2-62: the missing-settings desktop now uses Ciuki Blue.
                     # F2-63: re-recorded for the pinned FreeType UI atlases.
                     # F2-99: original cursor silhouette and software shadow.
-                    pinned = "dbb84ed9259ddbb1153904eea8862d40e59e664e84692a397d6cfa6b5852a5d9"
+                    # fx-13: cursor set scaled to the classic 13x19 arrow.
+                    pinned = "2464f056067226c740da98119b0452da2daf386eaa67a47f4eab326e7e853f69"
                     actual = hashlib.sha256(pixels).hexdigest()
                     self.assertEqual(actual, pinned)
                 else:

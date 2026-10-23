@@ -30,9 +30,10 @@ THEMES = ("Platinum", "Ciuki Blue")
 # F2-82: shell scene includes the larger orb and well.
 # F2-83: deliberately re-recorded for the shared shaded bar surfaces/tasks.
 # F2-99: original cursor silhouette and software shadow replace DMZ-White.
+# fx-13: cursor set scaled to the classic 13x19 arrow.
 GOLDENS = {
-    "Ciuki Blue": "4027986b8d82bcb436a0b19db751032c247ef452a808e33d58e7d6d06c52b6fd",
-    "Platinum": "3acaab2c1dce7fd14ade92b44897194dc8d37af709ee041ad3972575c396b49a"
+    "Ciuki Blue": "b93aa55b6adae53d793de7443a0482b732ce4b8c973df886995dd8dbf40c0908",
+    "Platinum": "4033a51ffa7c7c1d29d0ecbff26e09c818435de4093265edf5788a0aa5899ae1"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

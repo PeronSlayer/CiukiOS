@@ -84,3 +84,33 @@ Exact commands, results and source fingerprint are recorded in
 `build/codex/f2-99-report.md`. No image build, QEMU or hardware run is part of
 this implementation. Lead integration must preserve the f2-98b compositor
 changes and review the pointer-only compositor edits.
+
+## fx-13 size reduction (2026-10-23)
+
+Owner report: the pointer is too big. Opaque extent (pixels, white outline
+included, shadow excluded) before and after scaling all sixteen drawings by
+0.7 around their hotspots:
+
+| shape | before | after |
+| --- | --- | --- |
+| arrow | 19x27 | 13x19 |
+| arrow+busy / help | 27x27 / 27x26 | 19x19 / 20x18 |
+| busy | 26x26 | 20x20 |
+| I-beam | 10x27 | 8x19 |
+| not-allowed | 24x24 | 18x18 |
+| resize E-W / N-S | 25x14 / 14x25 | 18x10 / 10x18 |
+| resize diagonals | 23x23 | 16x16 |
+| move | 24x24 | 18x18 |
+| pointing / open / closed hand | 22x26 / 23x24 / 23x20 | 15x18 / 16x16 / 16x14 |
+| crosshair / precision | 22x22 | 16x16 |
+
+Reference sizes: Windows 95 standard arrow cursors extracted from the
+operating system and published on Wikimedia Commons as
+[ARROW M](https://commons.wikimedia.org/wiki/File:Windows_95_ARROW_M_32x32-4.png)
+(15x25 visible pixels) and
+[ARROW L](https://commons.wikimedia.org/wiki/File:Windows_95_ARROW_L_32x32-4.png)
+(18x30), measured from the 10x enlargements, are the 125 % and 150 % schemes
+of a 12x20 standard arrow. No Microsoft document states the arrow's drawn
+size; Win32 documents only the 32x32 cursor bitmap and the hotspot at the
+arrow tip. Hotspots are unchanged; hardware and software pixel masks, the
+shadow and all goldens were regenerated from the new header.

@@ -14,10 +14,10 @@ W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
 # F2-99 cursor; F1-109/F2-123, integ-video and integ-periph credits rows, re-recorded at the staging merge (lead); stage-fix6: seven ATA add-in rows.
 GOLDENS = {
-    "about-credits": "9d9f5b562d6aa6ebfb4c0a1216a1785bad6948d1436f2d555519464e5c83111d",
-    "about-credits-end": "91209ebc0361fa7811cceb8b8bce22c764e032fe79b3f972a6aa05d10fc48605",
-    "about-credits-pgdn": "e5e2735a39bdddf85679b3f3e8a678ba07c6dfb3beb72ebe8d2fdd3a3368840c",
-    "about-credits-wheel": "d84b087a80f30d30121476b76c01924b0c8da5272a689e32aadef38ca926310b",
+    "about-credits": "75e3262f3d31a43c81189f91a9f6de4aa53506058ba90bbf1244c39dad476c64",
+    "about-credits-end": "1cc8fad79fd456a39f93919bc9a0038543b9cfa6ad8da337062b2a75e5a06c52",
+    "about-credits-pgdn": "37472a214eeee3ce009ca4600549cffdd8c96f73c7ca38b4940b9759a7d35ccd",
+    "about-credits-wheel": "2c29641d149a83ff609254fdd924e9684270f7833d2cc5a162dd1bd940b67fb2",
 }
 
 
