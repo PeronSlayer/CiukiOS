@@ -583,10 +583,13 @@ int main(void)
         power = (ROOT / 'src/kernel/core/power.c').read_text()
         body = power.split('int32_t power_syscall(uint32_t action)', 1)[1]
         self.assertLess(body.index('caller->pid != supervisor_desktop_pid()'), body.index('CIUKI_POWER_QUERY'))
-        self.assertLess(body.index('flush_storage()'), body.index('kernel_reboot()'))
+        # fx-5: call 73 runs one serialized sequence after the caller check.
+        self.assertLess(body.index('CIUKI_POWER_QUERY'), body.index('power_sequence(off)'))
+        sequence = power.split('static int power_sequence(bool off)', 1)[1].split('int32_t power_syscall(uint32_t action)', 1)[0]
+        self.assertLess(sequence.index('flush_storage()'), sequence.index('kernel_reboot()'))
         # One soft-off path for both providers (ACPI S5, APM Off), after the stopped latch.
-        self.assertLess(body.index('flush_storage()'), body.index('power_source_mark_stopped()'))
-        self.assertLess(body.index('power_source_mark_stopped()'), body.index('power_source_soft_off()'))
+        self.assertLess(sequence.index('flush_storage()'), sequence.index('power_source_mark_stopped()'))
+        self.assertLess(sequence.index('power_source_mark_stopped()'), sequence.index('power_source_soft_off()'))
         wrapper = (ROOT / 'sdk/libciuki/power.c').read_text()
         self.assertIn('CU_CALL(POWER, action, 0, 0, 0, 0, 0)', wrapper)
         header = (ROOT / 'sdk/sysroot-overlay/include/ciuki/power.h').read_text()
