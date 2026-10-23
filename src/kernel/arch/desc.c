@@ -2,13 +2,15 @@
  * GDT: null, kcode 0x08, kdata 0x10, ucode 0x1B, udata 0x23, TSS 0x28,
  * double-fault TSS 0x30, native GS TLS 0x3B, DOS VM LDT 0x40 (f3-04; null
  * unless a DPMI VM worker runs). Ordinary segments remain flat.
- * The TSS bitmap denies every port except the full-screen owner's VGA range.
+ * Every switch installs a complete TSS bitmap; only the active full-screen
+ * VGA owner or a generation-validated NDIS host may have port grants.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/arch.h>
 #include <ciuki/cpu.h>
 #include <ciuki/abi.h>
 #include "vga_io.h"
+#include "io_permissions.h"
 
 struct gdt_entry { uint16_t lim0, base0; uint8_t base1, access, gran, base2; } __attribute__((packed));
 struct idt_entry { uint16_t off0, sel; uint8_t zero, type; uint16_t off1; } __attribute__((packed));
@@ -66,6 +68,11 @@ void gdt_init(void)
 }
 
 void tss_set_kernel_stack(uint32_t esp0) { g_tss.esp0 = esp0; }
+
+void arch_io_install(const struct arch_io_range *ranges, unsigned count)
+{
+    (void)arch_io_bitmap(g_tss.io_bitmap, ranges, count);
+}
 
 void arch_vga_io(bool enabled)
 {

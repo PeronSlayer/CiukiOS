@@ -750,6 +750,41 @@ static int irq_claim(unsigned irq, const char *owner)
     CHECK(registry_activate(h, registry_get((unsigned)h)->generation) == 0);
     return h;
 }
+static int async_claim;
+static gen_t async_generation;
+static uint32_t async_token=1;
+static bool async_source(unsigned irq,const char *owner)
+{
+    CHECK(irq==7 && !strcmp(owner,"async-net") && eoi_pending);
+    /* Qualified native function mask occurs here, before pending/EOI;
+     * this model never masks the shared PIC line. */
+    CHECK(!irq_chain_pending(irq,async_claim,async_generation+1,async_token));
+    CHECK(irq_chain_pending(irq,async_claim,async_generation,async_token));
+    return false; /* pending is separate from the synchronous Boolean */
+}
+static void test_async_irq(void)
+{
+    current(0);
+    async_claim=irq_claim(7,"async-net");
+    async_generation=registry_get((unsigned)async_claim)->generation;
+    int peer=irq_claim(7,"irq-b");source_b=false;
+    CHECK(!irq_chain_add(7,async_source,"async-net") && !irq_chain_add(7,irq_b,"irq-b"));
+    struct irq_chain_stats before,after;CHECK(irq_chain_snapshot(7,&before));
+    CHECK(!irq_chain_pending(7,async_claim,async_generation,async_token)); /* outside callback */
+    for(unsigned i=0;i<IRQ_CHAIN_STUCK_PASSES+2;i++) fake_irq(7);
+    CHECK(irq_chain_snapshot(7,&after) && !after.quarantined && !masked[7]);
+    CHECK(after.unclaimed==before.unclaimed && after.pending_passes==before.pending_passes+IRQ_CHAIN_STUCK_PASSES+2);
+    CHECK(irq_chain_resolve_pending(7,async_claim,async_generation,1,false));
+    CHECK(!irq_chain_resolve_pending(7,async_claim,async_generation,1,true));
+    async_token=2;fake_irq(7);
+    CHECK(!irq_chain_resolve_pending(7,async_claim,async_generation,1,true));
+    CHECK(!registry_quarantine(async_claim,async_generation));
+    CHECK(!irq_chain_resolve_pending(7,async_claim,async_generation,2,true));
+    source_b=true;unsigned calls=calls_b;fake_irq(7);
+    CHECK(calls_b==calls+1 && !masked[7]);drain_work();
+    CHECK(!irq_chain_remove(7,irq_b,"irq-b"));release_active(peer);
+    puts("ND14 shared IRQ: pending separated from not-mine, stale/duplicate generations/tokens refused, peer survives PASS");
+}
 static unsigned shared_status[3], shared_acks[3], shared_calls[3];
 static bool assert_during_handler;
 static bool three_devices(unsigned irq, const char *owner)
@@ -1144,6 +1179,7 @@ int main(void)
     test_audio_irq_wake();
     test_irq_chain();
     test_three_shared_devices();
+    test_async_irq();
     test_claimed_fatal_quarantine();
     test_chain_smi_budget();
     test_registry_probe();

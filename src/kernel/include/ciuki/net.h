@@ -85,6 +85,11 @@ struct netif {
     bool ready, running, stopping, quarantined, touched, irq_attached, administratively_down;
     bool irq_pending, fault_pending, servicing, promiscuous;
     const char *reason;
+    /* A foreign host owns its own registry/fence lifecycle. The common
+     * network worker still owns copied queues and public state records. */
+    void *driver_context;
+    bool external_owner;
+    void (*external_fault)(struct netif *,const char *);
 };
 int net_e100_media(struct netif *, unsigned, unsigned);
 int net_e1000_media(struct netif *, unsigned, unsigned);
@@ -125,6 +130,9 @@ int net_init(void);
 void net_shutdown(void);
 unsigned net_count(void);
 struct netif *net_get(unsigned);
+struct netif *netif_publish_external(const struct pci_func *,const struct netif_driver *,
+                                      void *context,const uint8_t mac[6],gen_t,bool carrier,
+                                      void (*fault)(struct netif *,const char *));
 void net_worker_step(void);
 unsigned net_arp_request(uint8_t frame[60], const uint8_t mac[6]);
 bool net_arp_reply(const uint8_t *, unsigned, const uint8_t local[6], uint8_t peer[6]);

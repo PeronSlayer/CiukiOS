@@ -1,29 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Native shim ABI reservations for ND6/ND7 and f6-06. No stubs or guessed
- * NT5 ordinals. Addresses remain zero until the corresponding real shim lands.
+ * Native shim ABI reservations for ND6/ND7 and f6-06. No success stubs or guessed
+ * NT5 ordinals. Kernel addresses remain zero; implemented entries require pinned user veneers.
  * Stack bytes describe stack arguments (fastcall register arguments excluded).
  * Sources and ordinal admission rule: docs/design/ndis-loader-boundary.md. */
 #include "ntimage.h"
 #define S(m,n,b) {m,n,NDIS_NO_ORDINAL,b,NDIS_ABI_STDCALL,NDIS_FUNCTION,0,false}
 #define F(m,n,b) {m,n,NDIS_NO_ORDINAL,b,NDIS_ABI_FASTCALL,NDIS_FUNCTION,0,false}
+#define U(m,n,b,a) {m,n,NDIS_NO_ORDINAL,b,a,NDIS_FUNCTION,0,true}
 #define C(m,n) {m,n,NDIS_NO_ORDINAL,0,NDIS_ABI_CDECL,NDIS_FUNCTION,0,false}
 static const struct ndis_export exports[] = {
-    S("NDIS.SYS","NdisInitializeWrapper",16),
-    S("NDIS.SYS","NdisTerminateWrapper",8),
-    S("NDIS.SYS","NdisMRegisterMiniport",12),
-    S("NDIS.SYS","NdisMSetAttributesEx",20),
-    S("NDIS.SYS","NdisGetRoutineAddress",4),
-    S("NDIS.SYS","NdisMRegisterInterrupt",28),
-    S("NDIS.SYS","NdisMDeregisterInterrupt",4),
-    S("NDIS.SYS","NdisMSynchronizeWithInterrupt",12),
-    S("NDIS.SYS","NdisMAllocateSharedMemory",20),
-    S("NDIS.SYS","NdisMFreeSharedMemory",24),
-    S("NDIS.SYS","NdisMAllocateMapRegisters",20),
-    S("NDIS.SYS","NdisMFreeMapRegisters",4),
-    S("NDIS.SYS","NdisReadConfiguration",20),
-    S("NDIS.SYS","NdisOpenConfiguration",12),
-    S("NDIS.SYS","NdisCloseConfiguration",4),
-    S("NDIS.SYS","NdisMIndicateReceivePacket",12),
+#define ND(name,args,bytes,implemented) {"NDIS.SYS",#name,NDIS_NO_ORDINAL,bytes,bytes?NDIS_ABI_STDCALL:NDIS_ABI_CDECL,NDIS_FUNCTION,0,implemented},
+#include "ndis_exports.def"
+#undef ND
     S("NTOSKRNL.EXE","MmGetSystemRoutineAddress",4),
     S("NTOSKRNL.EXE","ExAllocatePoolWithTag",12),
     S("NTOSKRNL.EXE","ExFreePool",4),
@@ -32,23 +20,54 @@ static const struct ndis_export exports[] = {
     S("NTOSKRNL.EXE","KeRemoveQueueDpc",4),
     S("NTOSKRNL.EXE","KeSetTimer",16),
     S("NTOSKRNL.EXE","KeCancelTimer",4),
-    S("NTOSKRNL.EXE","KeInitializeEvent",12),
-    S("NTOSKRNL.EXE","KeSetEvent",12),
-    S("NTOSKRNL.EXE","KeResetEvent",4),
-    S("NTOSKRNL.EXE","KeWaitForSingleObject",20),
-    S("NTOSKRNL.EXE","KeBugCheckEx",20),
-    F("NTOSKRNL.EXE","KefAcquireSpinLockAtDpcLevel",0),
-    F("NTOSKRNL.EXE","KefReleaseSpinLockFromDpcLevel",0),
-    {"NTOSKRNL.EXE","KeTickCount",NDIS_NO_ORDINAL,0,NDIS_ABI_DATA,NDIS_DATA,0,false},
+    U("NTOSKRNL.EXE","KeInitializeEvent",12,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeSetEvent",12,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeResetEvent",4,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeWaitForSingleObject",20,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeWaitForMultipleObjects",32,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeInitializeSemaphore",12,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeReleaseSemaphore",16,NDIS_ABI_STDCALL),
+
+    {"NTOSKRNL.EXE","KeTickCount",NDIS_NO_ORDINAL,0,NDIS_ABI_DATA,NDIS_DATA,0,true},
     C("NTOSKRNL.EXE","memcpy"), C("NTOSKRNL.EXE","memset"),
     F("HAL.DLL","KfRaiseIrql",0), F("HAL.DLL","KfLowerIrql",0),
-    F("HAL.DLL","KfAcquireSpinLock",0), F("HAL.DLL","KfReleaseSpinLock",0),
-    S("HAL.DLL","KeGetCurrentIrql",0),
-    S("HAL.DLL","KeStallExecutionProcessor",4)
+
+    U("NTOSKRNL.EXE","InterlockedPopEntrySList",0,NDIS_ABI_FASTCALL),
+    U("NTOSKRNL.EXE","InterlockedPushEntrySList",0,NDIS_ABI_FASTCALL),
+    U("NTOSKRNL.EXE","IoFreeMdl",4,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","IofCompleteRequest",0,NDIS_ABI_FASTCALL),
+    U("NTOSKRNL.EXE","KeBugCheckEx",20,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeInitializeSpinLock",4,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KeQueryTimeIncrement",0,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","KefAcquireSpinLockAtDpcLevel",0,NDIS_ABI_FASTCALL),
+    U("NTOSKRNL.EXE","KefReleaseSpinLockFromDpcLevel",0,NDIS_ABI_FASTCALL),
+    U("NTOSKRNL.EXE","MmMapLockedPagesSpecifyCache",24,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","RtlAppendUnicodeStringToString",8,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","RtlCopyUnicodeString",8,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","RtlInitUnicodeString",8,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","WRITE_REGISTER_UCHAR",8,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","WRITE_REGISTER_ULONG",8,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","WRITE_REGISTER_USHORT",8,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","ZwClose",4,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","ZwOpenFile",24,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","_alldiv",16,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","_allmul",16,NDIS_ABI_STDCALL),
+    U("NTOSKRNL.EXE","strncpy",0,NDIS_ABI_CDECL),
+    U("HAL.DLL","KeGetCurrentIrql",0,NDIS_ABI_STDCALL),
+    U("HAL.DLL","KeStallExecutionProcessor",4,NDIS_ABI_STDCALL),
+    U("HAL.DLL","KfAcquireSpinLock",0,NDIS_ABI_FASTCALL),
+    U("HAL.DLL","KfReleaseSpinLock",0,NDIS_ABI_FASTCALL),
+    U("HAL.DLL","READ_PORT_UCHAR",4,NDIS_ABI_STDCALL),
+    U("HAL.DLL","READ_PORT_ULONG",4,NDIS_ABI_STDCALL),
+    U("HAL.DLL","READ_PORT_USHORT",4,NDIS_ABI_STDCALL),
+    U("HAL.DLL","WRITE_PORT_UCHAR",8,NDIS_ABI_STDCALL),
+    U("HAL.DLL","WRITE_PORT_ULONG",8,NDIS_ABI_STDCALL),
+    U("HAL.DLL","WRITE_PORT_USHORT",8,NDIS_ABI_STDCALL),
 };
 #undef S
 #undef F
 #undef C
+#undef U
 static bool equal(const char *a,const char *b,bool fold) {
     if(!a || !b) return false;
     for(;;a++,b++) {

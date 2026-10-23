@@ -436,17 +436,47 @@ struct irq_member {
     int handle;
     gen_t generation;
     struct irq_budget budget;
+    uint32_t pending_token;
 };
 static struct irq_chain {
     struct irq_member members[IRQ_CHAIN_MAX];
     struct irq_chain_stats stats;
     unsigned next;
-    bool servicing, claimed, report, masked, detach_queued, budget_smi;
+    bool servicing, claimed, pending, report, masked, detach_queued, budget_smi;
+    int executing_slot;
     char budget_owner[32];
     char detached[IRQ_CHAIN_MAX][32];
     uint64_t budget_us, budget_work_us;
     uint32_t budget_site;
 } chains[16];
+
+bool irq_chain_pending(unsigned irq,int handle,gen_t generation,uint32_t token)
+{
+    if(irq>=16 || !token) return false;
+    struct irq_chain *c=&chains[irq];
+    if(!c->servicing || c->executing_slot<0 || c->executing_slot>=(int)IRQ_CHAIN_MAX) return false;
+    struct irq_member *m=&c->members[c->executing_slot];
+    if(!m->handler || m->handle!=handle || !gen_matches(m->generation,generation) ||
+       !registry_valid(handle,generation) || (m->pending_token && m->pending_token!=token)) return false;
+    m->pending_token=token; c->pending=true; return true;
+}
+
+bool irq_chain_resolve_pending(unsigned irq,int handle,gen_t generation,uint32_t token,bool recognized)
+{
+    if(irq>=16 || !token) return false;
+    uint32_t f=irq_save();
+    struct irq_chain *c=&chains[irq];
+    for(unsigned i=0;i<IRQ_CHAIN_MAX;i++) {
+        struct irq_member *m=&c->members[i];
+        if(!m->handler || m->handle!=handle || !gen_matches(m->generation,generation) ||
+           m->pending_token!=token || !registry_valid(handle,generation)) continue;
+        m->pending_token=0;
+        if(recognized) c->stats.async_handled++;
+        else c->stats.async_unclaimed++;
+        irq_restore(f); return true;
+    }
+    irq_restore(f); return false;
+}
 
 static bool irq_line_accepts_peer(unsigned irq)
 {
@@ -577,8 +607,10 @@ static void chain_service(unsigned irq, bool hard_irq)
         struct irq_stamp member_start = irq_budget_stamp();
         if (crit_owner) crit_owner(member.owner, (uint32_t)(uintptr_t)member.handler);
         uint32_t before = read_eflags();
+        c->executing_slot=(int)slot;
         if (member.handler(irq, member.owner))
             c->claimed = true;
+        c->executing_slot=-1;
         if ((read_eflags() ^ before) & 0x200)
             panic("irq: handler changed IF irq=%u owner=%s", irq, member.owner);
         struct irq_elapsed duration = irq_budget_elapsed(member_start);
@@ -609,6 +641,11 @@ static void chain_service(unsigned irq, bool hard_irq)
 static void chain_finish(unsigned irq)
 {
     struct irq_chain *c = &chains[irq];
+    if(c->pending) {
+        c->stats.pending_passes++;
+        if(c->claimed) { c->stats.handled++; c->stats.consecutive_unclaimed=0; }
+        return;
+    }
     if (c->claimed) {
         c->stats.handled++;
         c->stats.consecutive_unclaimed = 0;
@@ -663,6 +700,7 @@ static void chain_irq(struct trap_frame *tf)
     c->stats.passes++;
     c->next = 0;
     c->claimed = false;
+    c->pending = false;
     chain_service(irq, true);
     if (c->next == IRQ_CHAIN_MAX)
         chain_finish(irq);
