@@ -221,6 +221,11 @@ int files_attach(struct vfs *v, struct px_namespace **out)
             s->net = node_new(s, s->dev, PX_NET);
             s->media = node_new(s, s->dev, PX_MEDIA);
             if (!s->null || !s->console || !s->audio || !s->mixer || !s->net || !s->media) err = -ENOMEM;
+            for (unsigned i = 0; !err && i < 4; i++) {
+                s->disks[i] = node_new(s, s->dev, PX_DISK);
+                if (!s->disks[i]) err = -ENOMEM;
+                else { memcpy(s->disks[i]->entry.name, "ata0", 5); s->disks[i]->entry.name[3] = (char)('0' + i); s->disks[i]->drive = i; }
+            }
         }
         if (!err) {
             memcpy(s->null->entry.name, "null", 5); memcpy(s->console->entry.name, "console", 8);
@@ -378,6 +383,8 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
         else if (path_equal(name, "mixer")) *out = s->mixer;
         else if (path_equal(name, "net")) *out = s->net;
         else if (path_equal(name, "media")) *out = s->media;
+        else if (path_equal(name, "ata0") || path_equal(name, "ata1") || path_equal(name, "ata2") || path_equal(name, "ata3"))
+            *out = s->disks[name[3] - '0'];
         else {
             for (unsigned i=0;i<CIUKI_COM_MAX;i++) {
                 struct px_node *n=s->com[i];
@@ -626,14 +633,24 @@ static int px_stat_fill(struct px_node *n, struct ciuki_stat *out, uint32_t chai
     memset(out, 0, sizeof(*out));
     out->st_ino = n->ino; out->st_nlink = n->linked ? 1 : 0;
     out->st_mode = directory(n) ? S_IFDIR | 0777 : n->kind == PX_FILE ?
-        S_IFREG | (n->entry.attr & FAT_ATTR_RO ? 0444 : 0666) : S_IFCHR | ((n->kind == PX_NET || n->kind == PX_MEDIA) ? 0444 : 0666);
+        S_IFREG | (n->entry.attr & FAT_ATTR_RO ? 0444 : 0666) : S_IFCHR | ((n->kind == PX_NET || n->kind == PX_MEDIA) ? 0444 :
+        n->kind == PX_DISK ? 0644 : 0666);
     out->st_blksize = 4096;
     if (n->ro) {
         out->st_dev=n->drive+1; out->st_size=n->kind==PX_FILE ? (int64_t)n->ro_size : 0;
         out->st_blksize=n->ro->dev->sector_size; out->st_blocks=(n->ro_size+511)/512;
         out->st_mode=directory(n) ? S_IFDIR|0555 : S_IFREG|0444; return 0;
     }
-    if (!n->volume) { out->st_rdev = n->kind == PX_COM ? 16+n->drive : n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 : n->kind == PX_NET ? 5 : n->kind == PX_MEDIA ? 6 : 0; return 0; }
+    if (!n->volume) {
+        /* COM retains main's 16..23; ATA uses 32..35 because both merge
+         * sides originally allocated 16 + the zero-based device index. */
+        _Static_assert(16 + CIUKI_COM_MAX <= 32, "COM and ATA device numbers overlap");
+        out->st_rdev = n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 :
+            n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 :
+            n->kind == PX_NET ? 5 : n->kind == PX_MEDIA ? 6 :
+            n->kind == PX_COM ? 16 + n->drive : n->kind == PX_DISK ? 32 + n->drive : 0;
+        return 0;
+    }
     out->st_dev = n->drive + 1;
     out->st_size = n->kind == PX_FILE ? n->entry.size : 0;
     out->st_blksize = n->volume->spc * 512;
@@ -677,8 +694,9 @@ static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *p
         ((flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_TRUNC)))) return -EROFS;
     if (r.node && r.node->delete_pending) return -EACCES;
     if (r.node && r.node->ro && (err=px_share_locked(r.node,d->win32 ? d->share_access : VFS_READ,d->deny))) return err;
-    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER || r.node->kind == PX_NET || r.node->kind == PX_MEDIA || r.node->kind==PX_COM)) {
+    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER || r.node->kind == PX_NET || r.node->kind == PX_MEDIA || r.node->kind == PX_COM || r.node->kind == PX_DISK)) {
         if ((err = device_open(r.node->kind, flags))) return err;
+        if (r.node->kind == PX_DISK && !(disk_node_present && disk_node_present(r.node->drive))) return -ENXIO;
     } else if (r.node && directory(r.node)) {
         if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return -EISDIR;
     } else if (flags & O_DIRECTORY) return -ENOTDIR;
@@ -689,10 +707,12 @@ static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *p
                           (flags & O_ACCMODE) == O_WRONLY ? VFS_WRITE : VFS_READ | VFS_WRITE;
         if ((err = px_share_locked(r.node, d->win32 ? d->share_access : access, d->deny))) return err;
         if (access & VFS_WRITE) {
-            if (r.node->volume->readonly) return -EROFS;
+            if (r.node->volume->readonly || px_write_denied(r.node)) return -EROFS;
             if (r.node->entry.attr & FAT_ATTR_RO) return -EACCES;
         }
     }
+    if (!r.node && px_write_denied(r.parent)) return -EROFS;
+    if (r.node && (flags & O_TRUNC) && px_write_denied(r.node)) return -EROFS;
     if (!r.node) {
         /* Reserve metadata BEFORE FAT create; allocation failure is pure. */
         struct px_node *n = node_new(s, r.parent, PX_FILE);
@@ -747,6 +767,7 @@ static int mkdir_inner(struct px_namespace *s, struct px_node *cwd, const char *
     if (err) return err;
     if ((r.node && r.node->ro) || (r.parent && r.parent->ro)) return -EROFS;
     if (r.node) return -EEXIST;
+    if (px_write_denied(r.parent)) return -EROFS;
     struct px_node *n = node_new(s, r.parent, PX_DIRECTORY);
     if (!n) return -ENOMEM;
     n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
@@ -831,7 +852,7 @@ static int remove_inner(struct px_namespace *s, struct px_node *cwd, const char 
     vfs_site_locked(s->vfs,"native");
     struct px_path r; int err = px_resolve_locked(s, cwd, path, false, &r);
     if (err) return err;
-    if (r.node->ro) return -EROFS;
+    if (r.node->ro || px_write_denied(r.node)) return -EROFS;
     if (dir && r.dot) return -EINVAL;
     if (!dir && directory(r.node)) return -EISDIR;
     if (dir && !directory(r.node)) return -ENOTDIR;
@@ -878,7 +899,7 @@ static int rename_inner(struct px_namespace *s, struct px_node *cwd, const char 
         px_release(a.parent); px_release(a.node);
     }
     if (err) return err;
-    if (a.node->ro || (b.parent && b.parent->ro)) return -EROFS;
+    if (a.node->ro || (b.parent && b.parent->ro) || px_write_denied(a.node) || px_write_denied(b.parent)) return -EROFS;
     if (a.dot || b.dot) return -EINVAL;
     if (a.node->delete_pending || (b.node && b.node->delete_pending)) return -EACCES;
     if (px_share_locked(a.node,4,0) || (b.node && px_share_locked(b.node,4,0))) return -EACCES;
@@ -960,17 +981,19 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     uint32_t cursor = d->cursor;
     if (d->position < 2) { name = d->position ? ".." : "."; n = d->position ? dir->parent : dir; }
     else if (dir == dir->space->dev) {
-        struct px_node *devices[] = { dir->space->null, dir->space->console, dir->space->audio, dir->space->mixer, dir->space->net, dir->space->media };
-        if (d->position<8) n=devices[d->position-2];
+        struct px_node *devices[] = { dir->space->null, dir->space->console, dir->space->audio, dir->space->mixer, dir->space->net, dir->space->media,
+                                      dir->space->disks[0], dir->space->disks[1], dir->space->disks[2], dir->space->disks[3] };
+        const unsigned first_com = 2 + sizeof(devices) / sizeof(devices[0]);
+        if (d->position < first_com) n = devices[d->position - 2];
         else {
             unsigned index=0;
             for (unsigned port=0;port<CIUKI_COM_MAX;port++) {
                 struct px_node *com=dir->space->com[port];
-                if (com && com->linked && index++==d->position-8) n=com;
+                if (com && com->linked && index++ == d->position - first_com) { n = com; break; }
             }
-            if (!n) return 0;
         }
-        name=n->entry.name;
+        if (!n) return 0;
+        name = n->entry.name;
     } else if (dir == dir->space->mnt) {
         if (!cursor) cursor = 3;
         while (cursor < 26 && !vfs_drive_present(dir->space->vfs,cursor)) cursor++;

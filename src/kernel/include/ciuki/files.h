@@ -6,7 +6,7 @@
 #include <ciuki/process.h>
 #include "../../fs/vfs.h"
 
-enum px_kind { PX_FILE, PX_DIRECTORY, PX_NULL, PX_CONSOLE, PX_MNT, PX_DEV, PX_AUDIO, PX_MIXER, PX_NET, PX_MEDIA, PX_COM };
+enum px_kind { PX_FILE, PX_DIRECTORY, PX_NULL, PX_CONSOLE, PX_MNT, PX_DEV, PX_AUDIO, PX_MIXER, PX_NET, PX_MEDIA, PX_COM, PX_DISK };
 struct px_namespace;
 struct px_node {
     struct px_namespace *space;
@@ -46,6 +46,7 @@ struct px_namespace {
     struct px_namespace *next;
     struct px_node *nodes, *root, *mnt, *dev, *null, *console, *audio, *mixer, *net, *media;
     struct px_node *com[CIUKI_COM_MAX];
+    struct px_node *disks[4]; /* f9-02 /dev/ata0..3; node->drive is the ATA slot */
     struct file_description *descriptions;
     uint64_t next_ino;
 };
@@ -115,6 +116,17 @@ int file_sync_locked(struct file_description *);
 int device_open(enum px_kind kind, uint32_t flags);
 int device_write(const void *, uint32_t bytes);
 bool file_syscall(struct trap_frame *tf); /* true only for rows 29..51 */
+/* f9-02 raw disk nodes (drivers/disk_dev.c). Presence needs no lock; the
+ * write gate runs with the namespace lock held. */
+bool disk_node_present(unsigned slot) __attribute__((weak));
+bool disk_write_denied(unsigned drive) __attribute__((weak));
+int disk_node_io(struct process *, unsigned slot, bool write, uint64_t offset, void *, uint32_t bytes) __attribute__((weak));
+int disk_node_sync(struct process *, unsigned slot) __attribute__((weak));
+int disk_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes) __attribute__((weak));
+static inline bool px_write_denied(const struct px_node *n)
+{
+    return n && n->volume && disk_write_denied && disk_write_denied(n->drive);
+}
 
 /* F1 integration notifications, under the SAME namespace lock. The legacy
  * VFS uses weak imports so its standalone harness retains no proc dependency. */

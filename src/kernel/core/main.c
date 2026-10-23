@@ -10,6 +10,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/version.h>
 #include <ciuki/timing.h>
+#include <ciuki/setup_mode.h>
 #include "loader_progress.inc"
 
 struct ciuki_boot_info g_boot;
@@ -40,6 +41,7 @@ void kmain(uint32_t magic, uint32_t bi_phys)
         early_fail(why);
     memset(&g_boot, 0, sizeof(g_boot));
     memcpy(&g_boot, src, src->size); /* v1 never reads the v2 extension */
+    setup_mode_init(); /* f9-01: setup=1 recognized before any driver */
 
     bool text = (g_boot.flags & CBI_F_TEXT_MODE) != 0;
     if (text)

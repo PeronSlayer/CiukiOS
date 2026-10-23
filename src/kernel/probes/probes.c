@@ -21,6 +21,7 @@
 #include <ciuki/reboot.h>
 #include <ciuki/storage.h>
 #include <ciuki/power.h>
+#include <ciuki/setup_mode.h>
 
 /* Reuse process.h's existing CIUKI_F2_PROBE layout and registration macro. */
 extern const struct ciuki_f2_probe __f2probes_start[], __f2probes_end[];
@@ -1080,6 +1081,11 @@ void probes_main(void *arg)
             struct task *watchdog = task_create_kernel("quiet-watchdog", quiet_watchdog, 0, P_INTERACTIVE);
             if (watchdog) task_start(watchdog);
         }
+        /* f9-01 (D11): Setup with too little memory stops before drivers
+         * and processes; the console shows the refusal. */
+        if (setup_memory_refused())
+            for (;;)
+                task_sleep_ms(60000);
         drivers_init();
         supervisor_bootstrap();
         ledger_reconcile(); ledger_record("boot-end");
