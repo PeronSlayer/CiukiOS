@@ -40,6 +40,22 @@ def prepare(out):
             if p.name == 'acpi.h':
                 data += b'\n#include "seam.h"\n'
             dst.write_bytes(data)
+        elif p.name == 'evregion.c':
+            old = b'*RegNamePtr, Node, ACPI_TYPE_METHOD, &MethodNode)'
+            assert data.count(old) == 1
+            data = data.replace(old, b'AcpiCiukiName32 ((const char *) RegNamePtr), Node, ACPI_TYPE_METHOD, &MethodNode)')
+            dst = out / 'evregion.c'
+            dst.write_bytes(data)
+            sources.append(dst)
+        elif p.name == 'exmutex.c':
+            old = b'    if (ObjDesc == AcpiGbl_GlobalLockMutex)\n    {\n'
+            assert data.count(old) == 2
+            # No fake success for firmware global-lock dependent AML. The
+            # sticky error also blocks Field I/O whose upstream helper is void.
+            data = data.replace(old, old + b'        (void) AcpiCiukiParseResult (AE_SUPPORT);\n        return_ACPI_STATUS (AE_SUPPORT);\n', 1)
+            dst = out / 'exmutex.c'
+            dst.write_bytes(data)
+            sources.append(dst)
         elif p.name == 'nsaccess.c':
             old = b'*ACPI_CAST_PTR (UINT32, InitVal->Name)'
             assert data.count(old) == 1

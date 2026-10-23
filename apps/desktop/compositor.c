@@ -207,7 +207,7 @@ int desk_shell_clock_width_at(const struct desktop *d, uint64_t second)
 }
 static int tray_width_at(const struct desktop *d, uint64_t second)
 {
-    unsigned icons = 3 + (d->sh.media.removable_mask != 0);
+    unsigned icons = 3 + (d->sh.media.removable_mask != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION);
     return 2 * SH_TRAY_MARGIN + desk_shell_clock_width_at(d, second) +
            (int)icons * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP);
 }
@@ -224,10 +224,11 @@ struct desk_box desk_shell_clock_box(const struct desktop *d)
 }
 struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_icon icon)
 {
-    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_MEDIA ||
+    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_POWER ||
+        (icon == SH_TRAY_POWER && d->sh.power_status.version != CIUKI_POWER_VERSION) ||
         (icon == SH_TRAY_MEDIA && !d->sh.media.removable_mask)) return (struct desk_box){0, 0, 0, 0};
     struct desk_box c = desk_shell_clock_box(d);
-    int slot = icon == SH_TRAY_NOTIFICATION ? 0 : icon == SH_TRAY_MEDIA ? 3 : icon + 1;
+    int slot = icon == SH_TRAY_NOTIFICATION ? 0 : icon == SH_TRAY_POWER ? 3 + (d->sh.media.removable_mask != 0) : icon == SH_TRAY_MEDIA ? 3 : icon + 1;
     return (struct desk_box){c.x - (slot + 1) * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP),
                             c.y + (c.h - SH_TRAY_ICON_SIZE) / 2, SH_TRAY_ICON_SIZE, SH_TRAY_ICON_SIZE};
 }

@@ -66,6 +66,14 @@ uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_DMA); return pmm_alloc();
 void task_yield(void) { task_sleep_ms(0); }
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { CHECK(!m->owner); m->owner=g_current; }
+static int power_lock_fault = -1;
+bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
+{
+    CHECK(deadline >= g_ticks);
+    if (!power_lock_fault) return false;
+    if (power_lock_fault > 0) power_lock_fault--;
+    kmutex_lock(m); return true;
+}
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner==g_current); m->owner=0; }
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn condition, void *arg, uint64_t deadline)
 {
@@ -1037,7 +1045,15 @@ static void test_shutdown(void)
             hw.cr=1;hw.sr=0;hw.stop_stuck=true;
         }
         uint32_t canary=ac97.bdl[0].address;
-        ac97_shutdown();
+        audio.initialized=true; power_stopped=false;
+        kmutex_init(&control_lock); kmutex_init(&service_lock);
+        for (int lock=0;lock<2;lock++) {
+            power_lock_fault=lock;
+            CHECK(audio_power_quiesce()==-EBUSY && !control_lock.owner && !service_lock.owner && !resource_releases);
+        }
+        power_lock_fault=-1;
+        CHECK(audio_power_quiesce()==(fault ? -EIO : 0));
+        if (!fault) CHECK(!audio_power_quiesce()); /* successful barrier is idempotent */
         if(fault) {
             CHECK(ac97.quarantine && audio.quarantined && resource_quarantines==12 && !resource_releases);
             CHECK(pages_used==before+9 && audio.commitment_pages==9 && ac97.bdl[0].address==canary && irq_removals==1);
@@ -1052,6 +1068,7 @@ static void test_shutdown(void)
         }
     }
     memset(&ac97,0,sizeof(ac97));
+    power_stopped=false;
     puts("audio shutdown: preactivation claims released; unproved stop retains all nine DMA pages/claims; no quarantine reset PASS");
 }
 static void test_codec_failure_release(void)

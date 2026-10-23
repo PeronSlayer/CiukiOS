@@ -31,6 +31,11 @@
  * five non-status accesses, and every further status read follows one of the
  * operation's EC_TIMEOUT_MS sleeping polls. */
 #define EC_OP_IO_BOUND (EC_TIMEOUT_MS + 10u * EC_OP_TRANSACTIONS)
+#ifndef THINKPAD_EC_HOST
+static uint8_t native_read(void *, uint16_t);
+extern int acpi_ec_quirk_transfer(bool, uint8_t, uint8_t *) __attribute__((weak));
+extern int acpi_ec_quirk_transfer_counted(bool, uint8_t, uint8_t *, unsigned, unsigned *) __attribute__((weak));
+#endif
 
 uint32_t thinkpad_ec_poll_option(const char *s, size_t size, const char **source)
 {
@@ -218,6 +223,20 @@ static int ec_wait(struct thinkpad_ec *e, unsigned mask, unsigned value,
 }
 static int ec_transfer(struct thinkpad_ec *e, bool write, uint8_t *value, struct ec_budget *b)
 {
+#ifndef THINKPAD_EC_HOST
+    if (e->io.read == native_read) {
+        if (b->transactions >= EC_OP_TRANSACTIONS) { b->refused = true; return -EBUSY; }
+        uint64_t now = e->io.now(e->io.ctx);
+        if (now >= b->end) return -ETIMEDOUT;
+        b->transactions++;
+        if (acpi_ec_quirk_transfer_counted) {
+            unsigned cost = 0;
+            int err = acpi_ec_quirk_transfer_counted(write, EC_AUDIO, value, (unsigned)(b->end-now), &cost);
+            b->io += cost; return err;
+        }
+        return acpi_ec_quirk_transfer ? acpi_ec_quirk_transfer(write, EC_AUDIO, value) : -ENODEV;
+    }
+#endif
     /* f1-100: no operation issues more transactions than its bound. */
     if (b->transactions >= EC_OP_TRANSACTIONS) { b->refused = true; return -EBUSY; }
     int err = 0;
@@ -414,9 +433,9 @@ static struct kwait ec_wake;
 static bool ec_refresh_wanted, ec_worker_running;
 /* f1-94: every EC port access is a candidate SMI trigger in legacy mode. */
 static uint8_t native_read(void *ctx, uint16_t port)
-{ (void)ctx; if (smi_mark) smi_mark(SMI_EC_IO); return inb(port); }
+{ (void)ctx; (void)port; return 0xff; } /* transport is the generic broker */
 static void native_write(void *ctx, uint16_t port, uint8_t v)
-{ (void)ctx; if (smi_mark) smi_mark(SMI_EC_IO); outb(port, v); }
+{ (void)ctx; (void)port; (void)v; }
 static uint64_t native_now(void *ctx) { (void)ctx; return g_ticks; }
 static void native_pause(void *ctx) { (void)ctx; task_sleep_ms(1); }
 static bool native_table_reserved(uint32_t address, uint16_t length)
@@ -481,30 +500,14 @@ void thinkpad_ec_init(void)
     retained_identity = s;
     thinkpad_ec_smbios_log(&s);
     if (!thinkpad_ec_gate(&s, g_boot.flags)) return;
+    if (native_ec.active) return;
     kmutex_init(&ec_lock);
-    int data = registry_claim(RES_PORT, EC_DATA, EC_DATA + 1, "thinkpad-ec", false);
-    if (data < 0) {
-        klog("[ec] thinkpad gate=ec_handshake_failed stage=claim_data error=%d", data); return;
-    }
-    int command = registry_claim(RES_PORT, EC_SC, EC_SC + 1, "thinkpad-ec", false);
-    /* Keep claims quarantined on a partial claim/protocol failure: no other
-     * driver may issue a different command into an ambiguous transaction. */
-    gen_t dg = registry_get(data)->generation;
-    if (command < 0) {
-        registry_quarantine(data, dg);
-        klog("[ec] thinkpad gate=ec_handshake_failed stage=claim_command error=%d", command); return;
-    }
-    gen_t cg = registry_get(command)->generation;
+    if (!acpi_ec_quirk_transfer) { klog("[ec] thinkpad gate=generic_ec_unavailable"); return; }
     struct thinkpad_ec_io io = {0, native_read, native_write, native_now, native_pause};
     int err = thinkpad_ec_probe(&native_ec, &io, true, &audio.master);
-    bool probed = !err;
-    if (!err) err = registry_activate(data, dg);
-    if (!err) err = registry_activate(command, cg);
     if (err) {
         native_ec.active = native_ec.available = false;
         memset(&native_ec.io, 0, sizeof(native_ec.io));
-        registry_quarantine(data, dg); registry_quarantine(command, cg);
-        if (probed) klog("[ec] thinkpad gate=ec_handshake_failed stage=activate error=%d", err);
         return;
     }
     audio.master_in_hardware = true;
@@ -542,6 +545,19 @@ static void ec_worker(void *arg)
         if (__atomic_exchange_n(&ec_refresh_wanted, false, __ATOMIC_RELAXED)) audio_master_refresh_requested();
         else if (native_ec.poll_ms) audio_master_refresh();
     }
+    __atomic_store_n(&ec_worker_running, false, __ATOMIC_RELEASE);
+    __atomic_fetch_sub(&audio.commitment_pages, KSTACK_SIZE / PAGE_SIZE, __ATOMIC_RELAXED);
+}
+int thinkpad_ec_stop(void)
+{
+    if (!native_ec.io.now) return 0;
+    if (!kmutex_lock_until(&ec_lock,deadline_after_ms(500))) return -EBUSY;
+    native_ec.active = native_ec.available = false;
+    native_ec.io.now = NULL;
+    audio.master_in_hardware = false;
+    kmutex_unlock(&ec_lock);
+    if (__atomic_load_n(&ec_worker_running,__ATOMIC_ACQUIRE)) kwait_wake_all(&ec_wake);
+    return 0;
 }
 void thinkpad_ec_refresh_request(void)
 {

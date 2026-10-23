@@ -289,6 +289,7 @@ struct desktop {
     int (*sound_shutdown)(struct desktop *); /* 1 complete, 0 still within the 2 s allowance */
     void (*sound_cancel)(struct desktop *);
     int (*power_request)(int action);
+    int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
     int (*power_alive)(struct desktop *, uint32_t pid);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer

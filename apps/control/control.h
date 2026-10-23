@@ -15,6 +15,7 @@
 #include "../desktop/settings_catalog.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
+#include "../../src/kernel/include/ciuki/game_ports_settings.h"
 #include <ciuki/firmware_abi.h>
 #include <ciuki/font.h>
 #include <stdint.h>
@@ -56,6 +57,11 @@ struct cp_network_result {
     int error;
     char message[96];
 };
+struct cp_game_result {
+    struct game_ports_settings ports;
+    unsigned game;
+    int saved, error, rejected;
+};
 struct cp_host {
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
@@ -74,6 +80,8 @@ struct cp_host {
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
+    int (*game_begin)(void *, unsigned, const struct game_ports_settings *); /* NULL=load */
+    int (*game_poll)(void *, struct cp_game_result *);
     int (*joystick)(void *, const struct ciuki_joystick_control *);
     int (*joystick_save_game)(void *, unsigned, const struct ciuki_joystick_control *);
     int (*devices)(void *, struct ciuki_devices_info *);
@@ -92,6 +100,7 @@ struct cp_host {
     int (*network_poll)(void *, struct cp_network_result *);
     int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
     int (*power)(void *); /* opens the shell's safe shutdown dialog */
+    int (*power_status)(void *, struct ciuki_power_status *);
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
@@ -112,6 +121,10 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct game_ports_settings game_ports;
+    struct ciuki_joystick_control game_joystick;
+    int game_open, game_busy, game_loaded, game_joy_ready, game_joy_dirty, game_save;
+    char game_note[128];
     struct ciuki_joystick_control joystick, joystick_dos;
     int joystick_busy, joystick_calibrating, joystick_capture_pending;
     int joystick_save_pending;
@@ -132,6 +145,7 @@ struct cp_app {
     unsigned remove_pending;
     struct du_ui *ui;
     struct cp_host host;
+    char power_lines[20][128];
     struct ciuki_settings cfg;
     struct ciuki_settings display_original;
     int display_tab, display_session, display_dirty, display_preview, display_write;
@@ -200,6 +214,7 @@ struct cp_app {
     struct ciuki_font_face *font_face;
     char font_status[96];
 };
+void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);
 void cp_assets_ready(struct cp_app *);
 int cp_attach(struct cp_app *, struct du_ui *, int page);

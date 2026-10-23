@@ -3,6 +3,10 @@
  * Only the desktop turn and clock/poll boundary are replaced. Native wait
  * scheduling is independently exercised by control_display_wait_test.c. */
 #include "replay_base.h"
+#undef IPPROTO_IP
+#undef IPPROTO_TCP
+#undef IPPROTO_UDP
+#include <netdb.h>
 #include <assert.h>
 #include <poll.h>
 #include <pthread.h>
@@ -119,9 +123,10 @@ static void idle_pages(void)
     static struct cp_main m;
     for (int page=CP_HOME;page<CP_PAGES;page++) {
         virtual_ns=10000000000ull; init_panel(&m,page);
-        /* f1-113: the Game controllers page samples live axes and save status once per second. */
+        /* f1-113: the Game controllers page samples live axes and save status once per second.
+         * f1-110/f1-121: the Power page refreshes the cached ACPI/APM status once per second. */
         expected_timeout=m.app.page==CP_DATETIME || m.app.page==CP_SYSTEM || m.app.page==CP_SOUNDS ||
-            m.app.page==CP_JOYSTICK ? 1000 : -1;
+            m.app.page==CP_JOYSTICK || m.app.page==CP_POWER ? 1000 : -1;
         assert(!control_run(&m) && waits==1);
         finish_panel(&m);
     }
@@ -132,7 +137,7 @@ static void idle_pages(void)
     expected_timeout=-1; assert(!control_run(&m) && waits==1); finish_panel(&m);
     init_panel(&m,CP_HOME); m.app.close_pending=1;
     assert(!control_run(&m) && !waits && m.window.closing==1); finish_panel(&m);
-    puts("PASS every Control Panel page: one event/deadline wait, no service polling; clocks/mixer/joystick 1s, graphics query 2s only");
+    puts("PASS every Control Panel page: one event/deadline wait, no service polling; clocks/mixer/joystick/power 1s, graphics query 2s only");
 }
 static int gate, result;
 static pthread_mutex_t gate_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -158,6 +163,13 @@ static void jobs(const char *fonts)
     event_mode=1; event_panel=&m; expected_timeout=-1;
     assert(!control_run(&m) && waits==2 && !event_mode); finish_panel(&m);
     init_panel(&m,CP_HOME);
+    assert(!mkdir(DOSBOX_SETTINGS_DIR,0700));
+    struct game_ports_settings ports;game_ports_defaults(&ports);
+    assert(!game_begin(&m,1,&ports));ports.com[0]=0; /* copied before the worker starts */
+    await_completion(&m);struct cp_game_result game_result;
+    assert(game_poll_result(&m,&game_result)==1 && !game_result.error && game_result.saved && game_result.ports.com[0]==1);
+    assert(!game_begin(&m,1,NULL));await_completion(&m);
+    assert(game_poll_result(&m,&game_result)==1 && !game_result.error && !game_result.saved && game_result.ports.sequence==1);
     struct cp_job job={0}; pthread_t release;
     assert(!cp_job_start(&job,gated_work,NULL,notify_completion,&m));
     assert(!cp_job_ready(&job)); assert(cp_job_start(&job,gated_work,NULL,NULL,NULL)==-EBUSY);
@@ -205,6 +217,7 @@ static void jobs(const char *fonts)
 }
 int main(int argc,char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc==2); idle_pages(); jobs(argv[1]);
     puts("PASS Control Panel event-driven jobs"); fflush(stdout); return 0;

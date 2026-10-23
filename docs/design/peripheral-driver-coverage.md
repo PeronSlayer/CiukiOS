@@ -499,6 +499,12 @@ pairing on Intel ICH4, VIA, SiS, ALi and NVIDIA boards separately.
 
 ### Power
 
+The f1-110 implementation, its versioned call-73 status interface, admission
+limits and primary-source decisions are specified in
+[Generic ACPI events and power](acpi-events-power.md). Unsupported thermal
+control retains firmware ownership; inventory capability bits remain facts,
+not activation evidence.
+
 Use **ACPICA 20260930**, the upstream interpreter/runtime, through a Ciuki
 OS Services Layer (OSL). Its audited runtime consists of 164 C files and 43
 headers (3,499,399 source bytes); debug/disassembler/tool/foreign-OS glue
@@ -1240,6 +1246,14 @@ do not extend it. Expiry/error is recorded and critical suspend is still
 acknowledged, never Processing or Rejected. Ordinary suspend is rejected.
 A stopped DMA owner must recover devices/time before admitting workloads.
 
+Reconciled with f1-110 at staging integration (2026-10-23), recorded in
+`acpi-events-power.md`, "One power-source interface": ACPI reserves the same
+interface before its ownership writes, call 73 STATUS reads only
+`power_source_status` (ACPI record, or APM facts while APM holds the
+reservation), and the orderly-shutdown proof for both ACPI S5 and APM Off is
+call 73's stopped latch. The platform service keeps only DMA stop and
+device/time resume; it is still unassigned, so APM does not connect yet.
+
 [Linux v6.12 `arch/x86/kernel/apm_32.c`](https://github.com/torvalds/linux/blob/v6.12/arch/x86/kernel/apm_32.c)
 is reference only; no donor code, notices or library objects are imported.
 The host model measures per-call overhead in microseconds; that is not
@@ -1474,3 +1488,13 @@ launcher shows a note. Running VMs retain their generation-qualified snapshot.
 No implicit rebinding takes place inside VM reads. Direct explicit session
 tuples keep their original validation. Limits, IRQ/timing and physical-port
 ownership are unchanged. Newly authored code only; no donor implementation.
+
+### f2-125 per-game properties integration
+
+The shared joystick/COM/LPT panel, next-start snapshot, persistent port format,
+missing-device fallbacks and joint BIOS equipment word are specified in
+[Game properties](game-properties.md). The joystick ABI adds GET_GAME=8 in the
+existing control record; public record sizes and existing operation values stay
+unchanged. Analog game-port inventory IDs use 72000h onward and LPT IDs
+71000h onward (the integ-periph Device Manager assignment), so both classes
+keep distinct IDs.

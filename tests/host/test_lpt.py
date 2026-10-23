@@ -25,7 +25,7 @@ class LptTests(unittest.TestCase):
         out.mkdir(parents=True, exist_ok=True)
         flags = runpy.run_path(str(ROOT / "scripts/build_kernel.py"))["CFLAGS"]
         sources = ("drivers/lpt.c", "drivers/lpt_native.c", "vm/dosvm_lpt.c",
-                   "vm/dosvm_bios.c", "vm/dosvm.c", "vm/dosvm_vga.c", "core/init.c", "core/devices.c",
+                   "vm/dosvm_bios.c", "vm/dosvm_game_ports.c", "vm/dosvm_uart.c", "vm/dosvm_client.c", "vm/dosvm.c", "vm/dosvm_vga.c", "core/init.c", "core/devices.c",
                    "proc/posixpath.c", "proc/fdtable.c", "proc/syscalls_file.c")
         for rel in sources:
             source = ROOT / "src/kernel" / rel
@@ -42,7 +42,7 @@ class LptTests(unittest.TestCase):
         subprocess.run(["clang", *flags, "-I", str(ROOT / "sdk/sysroot-overlay/include"),
                         "-I", str(ROOT / "src/kernel/include"), "-c", str(client),
                         "-o", str(out / "sdk-client.o")], check=True)
-        print("PASS LPT i686 canonical flags: eleven integration units and relocatable service link")
+        print("PASS LPT i686 canonical flags: integration units and relocatable service link")
 
 
 if __name__ == "__main__":

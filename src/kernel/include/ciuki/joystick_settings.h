@@ -17,6 +17,7 @@ void joystick_settings_service(void); /* thread context, IRQs enabled */
 int joystick_settings_calibrate(const struct ciuki_joystick_control *);
 int joystick_settings_route(unsigned game, const struct ciuki_joystick_control *);
 int joystick_settings_mode(uint32_t device, uint32_t generation, unsigned mode);
+int joystick_settings_get_game(struct ciuki_joystick_control *);
 void joystick_settings_status(struct ciuki_joystick_control *);
 /* Caller holds the input snapshot boundary. Returns true for fallback. */
 bool joystick_settings_game(unsigned game, struct joystick_route *);

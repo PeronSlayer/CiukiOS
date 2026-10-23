@@ -138,6 +138,7 @@ int dosvm_port_register(struct dosvm_key, uint16_t first, uint16_t last,
 int dosvm_port_unregister(struct dosvm_key, uint16_t first);
 /* Trusted launcher only. slot=0..3, native_index=-1 for the null sink.
  * Bind before boot; running VMs cannot change physical ownership. */
+/* native_index -2=none, -1=null, 0..7=physical. */
 int dosvm_uart_bind(struct dosvm_key, unsigned slot, int native_index, const char **reason);
 bool dosvm_irq_raise(struct dosvm_key, unsigned irq);
 bool dosvm_keyboard(struct dosvm_key, uint16_t bios_key);

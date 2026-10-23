@@ -14,6 +14,8 @@ static inline UINT32 AcpiCiukiName32(const char *p)
     __builtin_memcpy(&value, p, sizeof(value));
     return value;
 }
+#undef ACPI_COMPARE_NAMESEG
+#define ACPI_COMPARE_NAMESEG(a, b) (AcpiCiukiName32((const char *)(a)) == AcpiCiukiName32((const char *)(b)))
 ACPI_STATUS AcpiCiukiBudgetStep(void);
 ACPI_STATUS AcpiCiukiParseResult(ACPI_STATUS status);
 #endif

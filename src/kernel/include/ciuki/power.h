@@ -29,7 +29,7 @@ int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
 #ifndef POWER_HOST
 /* The caller is the current process; see CIUKI_POWER_* in abi.h. */
 int32_t power_syscall(uint32_t action);
-/* Normal boot: parse the tables once and log the soft-off facts. */
+/* Boot diagnostic; ownership and AML preparation run on the ACPI worker. */
 void power_discover(void);
 #endif
 #endif

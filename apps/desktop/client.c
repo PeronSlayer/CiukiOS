@@ -1279,6 +1279,7 @@ void desk_power_begin(struct desktop *d, int action)
 }
 void desk_power_cancel(struct desktop *d)
 {
+    if (d->power.state==DESK_POWER_DONE) return; /* flushed/stopped session cannot resume */
     if (d->sound_cancel) d->sound_cancel(d);
     if (!d->power.state || d->power.state==DESK_POWER_DONE) return;
     int window=d->power.window, focus=d->power.previous_focus;
@@ -1343,6 +1344,15 @@ void desk_power_tick(struct desktop *d)
     else { errno=ENOSYS; r=-1; }
     if (!r) { p->state=DESK_POWER_DONE; return; } /* real success never returns */
     int error=errno;
+    int progress=d->power_state ? d->power_state() : 0;
+    if (progress>=0 && (progress&(CIUKI_POWER_STOPPED|CIUKI_POWER_UNCERTAIN))) {
+        p->state=DESK_POWER_DONE;
+        if (progress&CIUKI_POWER_UNCERTAIN)
+            snprintf(p->text,sizeof(p->text),"Shutdown could not complete (error %d).\nA device or disk could not be stopped safely.\nIts resources remain reserved.\nUse the computer's reset button to restart CiukiOS.",error);
+        else
+            snprintf(p->text,sizeof(p->text),"Programs are closed and devices have stopped.\nIt is now safe to turn off your computer.\nPower-off returned error %d.",error);
+        desk_theme_changed(d); return;
+    }
     if (error==EBUSY) {
         if (p->state==DESK_POWER_FORCE || d->now_ns>=p->busy_deadline) power_busy(d);
         else p->next_try=d->now_ns+DESK_POWER_RETRY_NS;

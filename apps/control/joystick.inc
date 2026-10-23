@@ -1,7 +1,7 @@
 /* Common analog/USB calibration and DOS subscriptions. SPDX-License-Identifier: MIT */
 #include "../desktop/catalog.h"
 enum { J_NEXT=1100, J_CALIBRATE, J_CAPTURE, J_ROUTE, J_OFF, J_MODE, J_GAME, J_SAVE_GAME,
-       J_NAME, J_POSITION, J_INSTRUCTIONS, J_SECOND, J_TWO, J_DEFAULT_GAME, J_GAME_OFF };
+       J_PROPERTIES=1120, J_NAME, J_POSITION, J_INSTRUCTIONS, J_SECOND, J_TWO, J_DEFAULT_GAME, J_GAME_OFF };
 static struct ciuki_joystick_control joystick_request_record(struct cp_app *a, unsigned op)
 {
     return (struct ciuki_joystick_control){.version=CIUKI_JOYSTICK_VERSION,.size=sizeof(a->joystick),
@@ -41,6 +41,7 @@ static void joystick_axis_calibrate(struct cp_app *a)
 void cp_joystick_result(struct cp_app *a, const struct ciuki_joystick_control *c, int error)
 {
     a->joystick_busy=0;
+    if (game_joystick_result(a,c,error)) return;
     if (error) {
         a->joystick_calibrating=0; a->joystick_capture_pending=0;
         if (c->operation==CIUKI_JOY_NEXT) { a->joystick.device=0; a->joystick.generation=0; }
@@ -86,6 +87,7 @@ void cp_joystick_result(struct cp_app *a, const struct ciuki_joystick_control *c
 }
 static void joystick_event(struct cp_app *a, int id)
 {
+    if (id==J_PROPERTIES) { cp_game_open(a,a->joystick_game ? a->joystick_game : 1);return; }
     if (id==J_NEXT) { a->joystick_calibrating=0; joystick_query(a,CIUKI_JOY_NEXT); return; }
     if (id==J_GAME) {
         a->joystick_game=(a->joystick_game+1)%(DESK_GAME_COUNT+1);
@@ -136,6 +138,7 @@ static void joystick_capture(struct cp_app *a)
 
 static void joystick_build(struct cp_app *a)
 {
+    if (a->game_open) { game_build(a);return; }
     add(a,DU_LABEL,J_NAME,24,44,500,20,"Select Next to discover a game controller.");
     add(a,DU_LABEL,J_POSITION,24,70,510,20,"");
     add(a,DU_BUTTON,J_NEXT,24,100,100,24,"Next");
@@ -146,9 +149,7 @@ static void joystick_build(struct cp_app *a)
     add(a,DU_BUTTON,J_ROUTE,24,184,150,24,"Use as DOS stick A");
     add(a,DU_BUTTON,J_SECOND,182,184,150,24,"Use as DOS stick B");
     add(a,DU_BUTTON,J_OFF,340,184,164,24,"Disable DOS input");
-    add(a,DU_BUTTON,J_GAME,24,230,320,24,"Game properties: select a game");
-    add(a,DU_BUTTON,J_SAVE_GAME,24,264,230,24,"Save DOS selection for game");
-    add(a,DU_BUTTON,J_DEFAULT_GAME,264,264,240,24,"Use DOS default for game");
-    add(a,DU_BUTTON,J_GAME_OFF,24,300,230,24,"Disable joystick for game");
+    add(a,DU_BUTTON,J_PROPERTIES,24,244,320,28,"Game properties...");
+    add(a,DU_LABEL,J_GAME,24,288,500,40,"Choose a joystick and COM/LPT bindings for each game.");
     joystick_query(a,CIUKI_JOY_QUERY);
 }

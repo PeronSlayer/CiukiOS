@@ -164,7 +164,7 @@ static void joystick_page(void)
     assert(joystick_pending.operation==CIUKI_JOY_NEXT && a.joystick_busy);
     struct ciuki_joystick_control reply=joystick_pending;
     reply.device=257;reply.generation=42;reply.session=123456;reply.axes=3;reply.attached=1;
-    cp_joystick_result(&a,&reply,0);assert(!a.joystick_busy && strstr(du_get(&u,1108)->text,"Analog"));
+    cp_joystick_result(&a,&reply,0);assert(!a.joystick_busy && strstr(du_get(&u,1121)->text,"Analog"));
     at_click_widget(&u,1101);assert(a.joystick_calibrating==1);
     for (unsigned phase=0;phase<3;phase++) {
         unsigned before=joystick_sent;at_click_widget(&u,1102);
@@ -181,27 +181,60 @@ static void joystick_page(void)
     at_click_widget(&u,1103);assert(joystick_pending.operation==CIUKI_JOY_ROUTE && joystick_pending.device==257);
     reply=joystick_pending;cp_joystick_result(&a,&reply,0);
     at_click_widget(&u,1100);reply=joystick_pending;reply.device=258;reply.generation=43;reply.session=123456;reply.axes=3;reply.attached=1;
-    cp_joystick_result(&a,&reply,0);at_click_widget(&u,1111);
+    cp_joystick_result(&a,&reply,0);at_click_widget(&u,1124);
     assert(joystick_pending.mode==1 && joystick_pending.device==257 && joystick_pending.second_device==258);
     reply=joystick_pending;cp_joystick_result(&a,&reply,-ENODEV);assert(!a.joystick_busy);
     at_click_widget(&u,1104);assert(!joystick_pending.device && !joystick_pending.generation);
     reply=joystick_pending;cp_joystick_result(&a,&reply,0);
-    at_click_widget(&u,1106);at_click_widget(&u,1107);
-    assert(joystick_game_saved==1 && joystick_game_record.device==258 && joystick_game_record.session==123456);
-    reply=(struct ciuki_joystick_control){.version=1,.size=100,.operation=CIUKI_JOY_SAVE_GAME};
-    cp_joystick_result(&a,&reply,0);assert(a.joystick_save_pending && !a.joystick_busy);
+    /* f2-125: per-game joystick/COM/LPT choices moved to the shared Game
+     * properties view (game_properties_test.c covers its saves and frames). */
+    assert(!du_get(&u,1107) && du_get(&u,1106));
+    if (a.joystick_busy) { reply=joystick_pending;cp_joystick_result(&a,&reply,0); } /* the page's own query */
+    /* The DOS route persists by controller identity; the panel waits for it. */
+    at_click_widget(&u,1120);assert(!a.game_open && a.joystick_save_pending);
     cp_tick(&a);assert(joystick_pending.operation==CIUKI_JOY_SAVE_STATUS && a.joystick_busy);
     reply=joystick_pending;reply.buttons=1;cp_joystick_result(&a,&reply,0);assert(a.joystick_save_pending);
     cp_tick(&a);reply=joystick_pending;cp_joystick_result(&a,&reply,0);
-    assert(!a.joystick_save_pending && strstr(du_get(&u,3)->text,"saved for future sessions"));
-    at_click_widget(&u,1113);assert(!joystick_game_record.device);
-    reply.operation=CIUKI_JOY_SAVE_GAME;cp_joystick_result(&a,&reply,0);
-    cp_tick(&a);reply=joystick_pending;reply.minimum=-EIO;cp_joystick_result(&a,&reply,0);
-    assert(!a.joystick_save_pending && strstr(du_get(&u,3)->text,"could not be saved"));
-    at_click_widget(&u,1114);assert(joystick_game_record.device==CIUKI_JOY_DISABLED);
+    assert(!a.joystick_save_pending && !a.joystick_busy && strstr(du_get(&u,3)->text,"saved for future sessions"));
+    at_click_widget(&u,1120);
+    assert(a.game_open && joystick_pending.operation==CIUKI_JOY_GET_GAME && joystick_pending.axis==1 && a.joystick_busy);
+    reply=joystick_pending;reply.attached=0;cp_joystick_result(&a,&reply,0);
+    assert(!a.joystick_busy && a.game_joy_ready && strstr(du_get(&u,1500)->text,"Game: ") && strstr(du_get(&u,1501)->text,"DOS default"));
+    at_click_widget(&u,1510);assert(!a.game_open && du_get(&u,1121) && !joystick_game_saved && !joystick_game_record.device);
     assert(cp_page_index("joystick")==CP_JOYSTICK);
     cp_detach(&a);du_release(&u);
-    puts("PASS joystick Control Panel: discovery, fresh three-point capture, per-axis calibration, A/B/default/off and stale refusal");
+    puts("PASS joystick Control Panel: discovery, fresh three-point capture, per-axis calibration, A/B/off, stale refusal and the per-game properties entry");
+}
+static int power_fixture(void *ctx, struct ciuki_power_status *p)
+{
+    (void)ctx; memset(p,0xff,sizeof(*p)); p->version=1; p->size=sizeof(*p);
+    p->ownership=CIUKI_POWER_FIRMWARE; p->error=0; p->battery_count=1; p->zone_count=0;
+    p->batteries[0].id=7; p->batteries[0].present=1; return 0;
+}
+/* APM 1.2 provider record (power_source.c apm_record): one percent battery. */
+static int apm_fixture(void *ctx, struct ciuki_power_status *p)
+{
+    (void)ctx; memset(p,0xff,sizeof(*p)); p->version=1; p->size=sizeof(*p);
+    p->provider=CIUKI_POWER_PROVIDER_APM; p->ownership=CIUKI_POWER_OWNED; p->error=0; p->reserved=0;
+    p->ac_online=CIUKI_POWER_AC_BACKUP; p->battery_count=1; p->zone_count=0;
+    p->batteries[0].id=1; p->batteries[0].present=1; p->batteries[0].unit=CIUKI_POWER_UNIT_PERCENT;
+    p->batteries[0].full=100; p->batteries[0].remaining=40; p->batteries[0].seconds=3720; p->batteries[0].state=5; return 0;
+}
+static void power_page(void)
+{
+    attach(CP_HOME); a.host.power_status=power_fixture; cp_open(&a,CP_POWER);
+    assert(strstr(du_get(&u,1800)->text,"AC: Unknown") && strstr(du_get(&u,1800)->text,"Lid: Unknown"));
+    assert(strstr(du_get(&u,1801)->text,"Firmware retained") && !strstr(du_get(&u,1801)->text,"APM"));
+    assert(strstr(du_get(&u,1802)->text,"Unknown / Unknown") && strstr(du_get(&u,1802)->text,"units unknown"));
+    a.host.power_status=apm_fixture; cp_tick(&a);
+    assert(strstr(du_get(&u,1800)->text,"AC: Backup power") && strstr(du_get(&u,1800)->text,"Lid: Unknown"));
+    assert(strstr(du_get(&u,1801)->text,"CiukiOS (APM 1.2)"));
+    assert(strstr(du_get(&u,1802)->text,"Discharging; capacity 40 / 100 %"));
+    assert(!strcmp(du_get(&u,1803)->text,"Remaining life: 1 h 02 min; critical"));
+    a.host.power_status=NULL; cp_open(&a,CP_POWER);
+    assert(!strcmp(du_get(&u,1800)->text,"Power status: Unknown"));
+    assert(!du_get(&u,1802)->text[0]); cp_detach(&a);
+    puts("PASS power Control Panel: firmware ownership, AC/lid/battery unknowns, APM percent/life refresh and stale-value clearing");
 }
 int main(int argc, char **argv)
 {
@@ -212,6 +245,7 @@ int main(int argc, char **argv)
 
     joystick_page();
     programs_page();
+    power_page();
     /* No desktop.cfg yet: the defaults, Ciuk2 filled. */
     attach(CP_DISPLAY);
     assert(!strcmp(a.cfg.theme, "Ciuki Blue") && !strcmp(desk_theme->name, "Ciuki Blue"));

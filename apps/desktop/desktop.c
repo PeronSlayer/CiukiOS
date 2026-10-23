@@ -944,6 +944,7 @@ static void wallpaper_load(struct desktop *d)
 static void wallpaper_update(struct desktop *d)
 {
     if (!d->shell) return;
+
     if (d->sh.gate) { desk_shell_wallpaper_update(d); return; }
     uint32_t colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     if (strcmp(wallpaper_request.path,d->sh.cfg.wallpaper) || wallpaper_request.width!=d->width ||
@@ -1459,6 +1460,7 @@ static int power_request(int action)
     if(ready<=0){errno=ready<0 ? -ready : EBUSY;return -1;}
     return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
 }
+static int power_state(void) { return ciuki_power(CIUKI_POWER_QUERY); }
 static int power_alive(struct desktop *d, uint32_t pid)
 {
     /* One syscall snapshot per loop, shared by all targets. Disconnecting
@@ -1501,6 +1503,11 @@ static void shell_service(struct desktop *d)
 {
     struct desk_shell *sh=&d->sh;
     if (!d->shell) return;
+    if (d->now_ns >= sh->power_poll_ns) {
+        sh->power_poll_ns = d->now_ns + 1000000000ull;
+        struct ciuki_power_status status;
+        if (!ciuki_power_status(&status)) (void)desk_shell_power_update(d,&status);
+    }
     desktop_wait("mixer-result");
     struct mixer_job job; size_t job_size; int job_error;
     if (settings_writer_started && cfg_writer_job_result(&settings_writer,&job,&job_size,&job_error)) {
@@ -1954,7 +1961,7 @@ static void shell_setup(struct desktop *d, int gate)
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     terminate_authority=d->authority_fd;
-    d->power_request=power_request; d->power_prepare=power_prepare; d->power_alive=power_alive;
+    d->power_request=power_request; d->power_state=power_state; d->power_prepare=power_prepare; d->power_alive=power_alive;
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;

@@ -15,7 +15,10 @@
  *   SLP_TYP 0 and does not test SCI_EN; hw/i386/acpi-build.c builds
  *   \_S5 = Package(4){0, 0, 0, 0}; SeaBIOS fw/paravirt.c moves the PM base
  *   to 0x600 (PM1a_CNT 0x604) when QEMU supplies etc/table-loader.
- * AML methods (_PTS, _GTS) are not executed: there is no interpreter.
+ * Runtime ownership and AML sleep preparation are supplied by acpi/events.c
+ * (or APM 1.2, core/apm_platform.c) through ciuki/power_source.h; this file
+ * owns the single orderly-shutdown path and retains the read-only parser for
+ * compatibility tests only.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/abi.h>
 #include <ciuki/power.h>
@@ -28,9 +31,9 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/storage.h>
 #include <ciuki/reboot.h>
-#include <ciuki/net.h>
 #include <ciuki/blackbox.h>
-#pragma weak net_shutdown
+#include <ciuki/uaddr.h>
+#include <ciuki/power_source.h>
 #pragma weak blackbox_checkpoint
 #endif
 
@@ -275,125 +278,58 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
 }
 
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
-#ifndef POWER_HOST
-static inline void outw(uint16_t port, uint16_t v) { __asm__ volatile("outw %0, %1" :: "a"(v), "Nd"(port)); }
-static inline uint16_t inw(uint16_t port) { uint16_t v; __asm__ volatile("inw %1, %0" : "=a"(v) : "Nd"(port)); return v; }
-#endif
-
-#define SCI_EN 0x0001u
-#define SLP_TYP_MASK 0x1C00u
-#define SLP_EN 0x2000u
-
-/* Tables are read once; each map takes a fresh cached window. */
-static const uint8_t *map_phys(void *ctx, uint32_t phys, uint32_t len)
-{
-    (void)ctx;
-    return vmm_map_mmio(phys, len, false);
-}
-
-static struct acpi_soft_off soft_off;
-static int soft_off_state;              /* 0 unknown, 1 available, -1 absent */
-
+extern int power_devices_quiesce(void) __attribute__((weak));
+static uint32_t power_progress;
 static void power_checkpoint(void)
+{ if (blackbox_checkpoint) (void)blackbox_checkpoint(); }
+void power_discover(void)
+{ klog("[power] ACPI/APM ownership and soft-off qualification belong to the power_source provider"); }
+#ifndef POWER_HOST
+int32_t power_status_query(uint32_t address, uint32_t bytes)
 {
-    /* storage_sync already uses this raw sink after FAT shutdown. Preserve
-     * final power failures for next-boot replay with no filesystem restart.
-     * Sink failure must not prevent an already requested hardware fallback. */
-    if (blackbox_checkpoint) (void)blackbox_checkpoint();
+    struct ciuki_power_status out;
+    if (bytes != sizeof(out)) return -EINVAL;
+    int e = copy_from_user(&out, address, __builtin_offsetof(struct ciuki_power_status, batteries));
+    if (e) return e;
+    if (out.version != CIUKI_POWER_VERSION || out.size != sizeof(out) || out.reserved) return -EINVAL;
+    power_source_status(&out);
+    return copy_to_user(address, &out, sizeof(out));
 }
-
-static bool soft_off_available(void)
-{
-    if (!soft_off_state) {
-        const char *why = "rsdp";
-        int e = acpi_soft_off_parse(map_phys, 0, g_boot.acpi_rsdp_phys, &soft_off, &why);
-        soft_off_state = e ? -1 : 1;
-        if (e)
-            klog("[power] acpi soft-off unavailable: step=%s rsdp=%08x", why, g_boot.acpi_rsdp_phys);
-        else
-            klog("[power] acpi soft-off fadt_rev=%u pm1a_cnt=%04x pm1b_cnt=%04x slp_typ=%u/%u smi_cmd=%04x enable=%02x",
-                 soft_off.fadt_revision, soft_off.pm1a_cnt, soft_off.pm1b_cnt,
-                 soft_off.slp_typa, soft_off.slp_typb, soft_off.smi_cmd, soft_off.acpi_enable);
-    }
-    return soft_off_state > 0;
-}
-
-void power_discover(void) { (void)soft_off_available(); }
-
-static int acpi_power_off(void)
-{
-    const struct acpi_soft_off *a = &soft_off;
-    bool owned = (inw(a->pm1a_cnt) & SCI_EN) && (!a->pm1b_cnt || (inw(a->pm1b_cnt) & SCI_EN));
-    if (!owned && a->smi_cmd && a->acpi_enable) {
-        /* Legacy mode: hand the PM registers to the OS first (ACPI enable
-         * handshake through SMI_CMD), bounded at three seconds. */
-        outb(a->smi_cmd, a->acpi_enable);
-        for (unsigned i = 0; i < 300 && !owned; i++) {
-            task_sleep_ms(10);
-            owned = (inw(a->pm1a_cnt) & SCI_EN) && (!a->pm1b_cnt || (inw(a->pm1b_cnt) & SCI_EN));
-        }
-    }
-    if (!owned) {
-        klog("[power] ACPI enable failed: SCI_EN not set; rebooting");
-        power_checkpoint();
-        kernel_reboot();
-    }
-    uint16_t cnta = (uint16_t)((inw(a->pm1a_cnt) & ~(SLP_TYP_MASK | SLP_EN)) | (uint16_t)(a->slp_typa << 10));
-    uint16_t cntb = a->pm1b_cnt ?
-        (uint16_t)((inw(a->pm1b_cnt) & ~(SLP_TYP_MASK | SLP_EN)) | (uint16_t)(a->slp_typb << 10)) : 0;
-    klog("[power] stage=acpi-off state=prepared");
-    power_checkpoint();
-    uint32_t flags = irq_save();
-    outw(a->pm1a_cnt, cnta);
-    if (a->pm1b_cnt) outw(a->pm1b_cnt, cntb);
-    outw(a->pm1a_cnt, (uint16_t)(cnta | SLP_EN));
-    if (a->pm1b_cnt) outw(a->pm1b_cnt, (uint16_t)(cntb | SLP_EN));
-    irq_restore(flags);
-    task_sleep_ms(2000);                 /* still running: the write had no effect */
-    klog("[power] acpi soft-off had no effect");
-    power_checkpoint();
-    return -EIO;
-}
-
-/* Storage first: a dirty FAT mounts read-only on the next boot. Open files
- * (EBUSY) refuse the request before any state changes. */
+#endif
 static int flush_storage(void)
 {
     struct storage *s = storage_get();
     if (!s || !s->ready) return 0;
     int e = storage_sync();
-    if (e) {
-        klog("[power] storage flush failed: %d", e);
-        power_checkpoint();
-    }
+    if (e) { klog("[power] storage flush failed: %d", e); power_checkpoint(); }
     return e;
 }
-
 int32_t power_syscall(uint32_t action)
 {
     struct process *caller = proc_current();
-    if (!caller || !supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid())
-        return -EPERM;
+    if (!caller || !supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid()) return -EPERM;
     if (action == CIUKI_POWER_QUERY)
-        return (int32_t)(CIUKI_POWER_CAN_REBOOT | (soft_off_available() ? CIUKI_POWER_CAN_OFF : 0));
-    if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF)
-        return -EINVAL;
+        return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0);
+    if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;
     bool off = action == CIUKI_POWER_OFF;
     klog("[power] %s requested by pid %u", off ? "power off" : "reboot", caller->pid);
-    if (off) soft_off_available();       /* parse before storage stops */
     int e = flush_storage();
-    if (e) return e;
-    if (net_shutdown) net_shutdown();
-    if (!off) {
-        klog("[power] stage=reset fallback=8042-triple-fault");
-        power_checkpoint();
-        kernel_reboot();
+    if (e) { if (e != -EBUSY) power_progress = CIUKI_POWER_UNCERTAIN; return e; }
+    power_progress = CIUKI_POWER_UNCERTAIN;
+    e = power_devices_quiesce ? power_devices_quiesce() : -ENOTSUP;
+    if (e) { klog("[power] native quiesce failed: %d", e); power_checkpoint(); return -EBUSY; }
+    power_progress = CIUKI_POWER_STOPPED;
+    /* The orderly-shutdown proof for every provider: ACPI S5 and APM Off. */
+    power_source_mark_stopped();
+    if (!off) { klog("[power] stage=reset fallback=8042-triple-fault"); power_checkpoint(); kernel_reboot(); }
+    struct power_source_snapshot provider; power_source_snapshot(&provider);
+    const char *name = provider.provider == POWER_SOURCE_ACPI ? "acpi" : provider.provider == POWER_SOURCE_APM ? "apm" : "none";
+    if (!power_source_can_off()) {
+        klog("[power] no qualified soft-off provider=%s; devices stopped, safe to turn off", name); power_checkpoint(); return -ENOTSUP;
     }
-    if (soft_off_state <= 0) {
-        klog("[power] no soft-off method; storage stopped, safe to turn off");
-        power_checkpoint();
-        return -ENOTSUP;
-    }
-    return acpi_power_off();
+    klog("[power] stage=%s-off state=quiescent", name); power_checkpoint();
+    e = power_source_soft_off();
+    klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
+    return e;
 }
 #endif

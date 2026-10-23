@@ -3,7 +3,8 @@
 #define CIUKI_DOSVM_LPT_H
 struct dosvm;
 struct v86_frame;
-struct dosvm_lpt_state { uint32_t index, generation; bool raw; };
+struct dosvm_lpt_state { uint32_t index, generation; bool raw, disabled; };
+int dosvm_lpt_bda(struct dosvm *);
 int dosvm_lpt_init(struct dosvm *);
 void dosvm_lpt_stop(struct dosvm *);
 int dosvm_lpt_bios(struct dosvm *, struct v86_frame *);

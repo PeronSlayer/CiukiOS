@@ -228,6 +228,9 @@ struct dosvm {
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;
     struct dosvm_lpt_state lpt[3];
+    uint32_t ports_changed;
+    int printer_fd;
+    bool printer_open;
     const char *probe;
     bool disable_file_bridge;
     struct d48_media conformance_media; /* controller configures before boot */
@@ -556,4 +559,7 @@ uint32_t dpmi_debug_status(const struct dosvm *, uint32_t dr6);
 uint32_t dpmi_fault_linear(struct dosvm *, const struct v86_frame *);
 int dpmi_rom_init(struct dosvm *);
 void dpmi_info_fill(struct dosvm *, struct dpmi_info *);
+int dosvm_game_ports_apply(struct dosvm *);
+int dosvm_game_ports_close(struct dosvm *);
+int dosvm_game_printer_bios(struct dosvm *, unsigned, uint8_t);
 #endif

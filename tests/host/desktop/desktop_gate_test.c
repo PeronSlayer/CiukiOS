@@ -64,6 +64,7 @@ void desk_sound_results(struct desktop *d) { (void)d; }
 /* Shell services the gate harness does not model: mixer control and power. */
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size) { (void)fd; (void)op; (void)record; (void)size; errno = ENOSYS; return -1; }
 int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
+int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
 { (void)event; (void)pid; (void)click_us; return 0; } /* quiet gate */
 int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd)

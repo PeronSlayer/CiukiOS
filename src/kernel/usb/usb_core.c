@@ -498,6 +498,38 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0) registry_quarantine(h->claims[i], h->claim_gen[i]);
     klog("[usb] quarantine controller=%s reason=%s irq_isolated=%u", h->owner, reason, isolated);
 }
+int usb_power_quiesce(void)
+{
+    /* Retain arenas/claims even after a proved stop. Each general transfer
+     * reservation excludes BOT/control and HID while local sources stop. */
+    for (unsigned i = 0; i < host_count; i++) {
+        struct usb_host *h = &hosts[i];
+        if (!h->owned) continue;
+        if (h->quarantined && h->reason && !strncmp(h->reason,"shutdown_stopped",17)) continue;
+        if (!usb_host_take_until(h, h->io.now(h->io.cookie) + 2000)) return -16;
+        h->ready = false;
+        bool stopped = false;
+        if (!h->quarantined && h->pci.prog_if == 0) stopped = uhci_isolate(h);
+        else if (!h->quarantined && h->pci.prog_if == 0x20) stopped = usb_ehci_stop(h);
+        else if (!h->quarantined && h->pci.prog_if == 0x10) {
+            usb_write(h, 0x14, UINT32_MAX, 4); usb_write(h, 4, 0, 4);
+            ohci_capture_done(h); usb_write(h, 0x0c, 0x7d, 4);
+            h->io.config_write(h->io.cookie, 4, (h->pci.command | 2) & ~4u, 2);
+            stopped = !(h->io.read(h->io.cookie, 4, 4) & 0xc0) &&
+                !(h->io.read(h->io.cookie, 0x10, 4) & 0x8000007f) &&
+                !(h->io.config_read(h->io.cookie, 4, 2) & 4);
+        }
+        if (stopped && h->irq_attached) {
+            stopped = !irq_chain_remove(h->pci.irq_line, usb_irq, h->owner);
+            if (stopped) h->irq_attached = false;
+        }
+        for (unsigned k = 0; k < 3; k++) if (h->claims[k] >= 0) registry_quarantine(h->claims[k], h->claim_gen[k]);
+        h->quarantined = true; h->reason = stopped ? "shutdown_stopped" : "shutdown_uncertain";
+        usb_host_drop(h);
+        if (!stopped) return -USB_EIO;
+    }
+    return 0;
+}
 static void ohci_root_rearm(struct usb_host *h)
 {
     if (h->pci.prog_if != 0x10 || !h->ohci_root_pending || !h->ready) return;

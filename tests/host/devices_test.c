@@ -121,8 +121,6 @@ static struct activation_entry ledger[] = {
     {.kind = ACTIVATION_DEVICE, .device = "ata", .seq = 4, .reason = "native_discovery"},
 };
 void drivers_snapshot(struct drivers_state *out) { *out = driver_state; }
-int ksnprintf(char *buf, size_t size, const char *fmt, ...)
-{ va_list ap; va_start(ap, fmt); int n = vsnprintf(buf, size, fmt, ap); va_end(ap); return n; }
 unsigned drivers_activation_count(void) { return 3; }
 const struct activation_entry *drivers_activation_get(unsigned i) { return i < 3 ? &ledger[i] : NULL; }
 void i8042_snapshot(struct i8042_stats *out) { *out = input_state; }
@@ -325,7 +323,7 @@ int main(void)
     assert(strstr(device(0x40100)->reason,"UDMA5; PIIX/ICH rev 02; PCI native"));
     disk.dma_enabled=false; disk.dma_quarantined=true; devices_snapshot(&snapshot);
     assert(strstr(device(0x40100)->reason,"PIO;")&&strstr(device(0x40100)->reason,"DMA quarantined"));
-    assert(!writes && snapshot.version==1 && snapshot.size==34696);
+    assert(!writes && snapshot.version==CIUKI_DEVICES_VERSION && snapshot.size==sizeof(snapshot));
     disk.dma_quarantined=false; disk.block.quarantined=true; res[2].state=RS_QUARANTINED;
     memset(&channel,0,sizeof(channel)); devices_snapshot(&snapshot);
     for (unsigned i = snapshot.count; i < 64; i++) assert(!snapshot.devices[i].id && !snapshot.devices[i].name[0]);

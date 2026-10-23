@@ -92,6 +92,11 @@ int main(void)
     struct joystick_route r={0};CHECK(!joystick_settings_game(1,&r) && !r.device);
     calibrate(1,1000);calibrate(1+USB_HID_MAX,-1000);save_game(1,1,1+USB_HID_MAX);
     status(1,0);joystick_settings_service();status(0,0);CHECK(files==3);
+    struct ciuki_joystick_control saved=request(CIUKI_JOY_GET_GAME,0,0);saved.axis=1;
+    CHECK(!joystick_control(&saved) && saved.attached==2 && saved.device==1 && saved.second_device==1+USB_HID_MAX);
+    unsigned before_query=writes;joystick_settings_service();CHECK(writes==before_query);
+    saved=request(CIUKI_JOY_GET_GAME,0,0);saved.axis=2;
+    CHECK(!joystick_control(&saved) && saved.attached==0 && !saved.device);
     uint8_t id[32], moved_id[32];CHECK(!joystick_identity(1,10,id));
     /* Full reboot: retain only disk bytes. All live generations, USB slots,
      * addresses and ports change. Serial identity still selects A and B. */
@@ -109,6 +114,8 @@ int main(void)
     /* Detach/replug in the same boot, with a new port/locator/generation. */
     reports.caps.attached=reports.state.attached=0;
     CHECK(joystick_settings_game(1,&r) && r.device==1 && !r.mode && !r.second_device);
+    saved=request(CIUKI_JOY_GET_GAME,0,0);saved.axis=1;
+    CHECK(!joystick_control(&saved) && saved.attached==3 && saved.device==1);
     connect_usb(3,6,112,"stick-A",&moved_reports);joystick_settings_service();
     CHECK(moved_reports.calibration[0][1]==1000);
     CHECK(!joystick_settings_game(1,&r) && r.device==1+3*USB_HID_MAX && r.generation==112);

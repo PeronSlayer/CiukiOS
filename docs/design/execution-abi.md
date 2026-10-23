@@ -1841,6 +1841,17 @@ come from its own FADT/DSDT at run time and are recorded by the log line
 above. Host test: `tests/host/power_test.c` (QEMU-shaped and ICH-shaped
 fixtures, refusals).
 
+**Amendment (f1-110 with f1-121, staging integration 2026-10-23).** OFF no
+longer parses tables or writes PM1 registers itself. After the storage flush
+and native device quiescence (QUERY then reports `CIUKI_POWER_STOPPED`, 4; a
+failed proof after irreversible progress reports `CIUKI_POWER_UNCERTAIN`, 8)
+it calls the one soft-off provider of the kernel's `ciuki/power_source.h`:
+ACPI S5 (`_PTS(5)`, evaluated `\_S5`) on the ACPICA power worker, or APM 1.2
+Set Power State Off on pre-ACPI machines. `CIUKI_POWER_CAN_OFF` reflects that
+provider. B=`CIUKI_POWER_STATUS` (4), C=record, D=756 copies the cached
+`ciuki_power_status` record without firmware calls; `provider` names ACPI (1),
+APM (2) or none (0). Details: [`acpi-events-power.md`](acpi-events-power.md).
+
 
 ### f1-23 display ABI amendment
 

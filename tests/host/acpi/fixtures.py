@@ -96,3 +96,68 @@ def generate(out):
             if case == 'pnp-bad': pnp[8] ^= 1
             image[0xf0000:0xf0000 + len(pnp)] = pnp
         (out / (case + '.bin')).write_bytes(image)
+
+    # Runtime fixtures use the same real AML decoder/interpreter and table
+    # validator. No iasl tool or hand-written parser is substituted.
+    runtime_cases = ('events', 'no-crt', 'passive', 'hot', 'unit', 'unknown', 'bix',
+                     'ec-events', 'ec-timeout', 'route', 'enable-timeout', 'rollback',
+                     'init-failure', 'pts-failure', 'storm', 'thermal-change', 'global-lock',
+                     'gpe-loop', 'shared-power', 'critical-battery', 'lid-open', 'battery-limit', 'eisa-button', 'cid-button', 'already-enabled',
+                     'provider-busy')
+    for case in runtime_cases:
+        battery_info = [integer(2 if case == 'unit' else 0), integer(6000), integer(5000), integer(1), integer(11000),
+                        integer(500), integer(100), integer(1), integer(1)] + [string('fixture')] * 4
+        bst = [integer(5 if case == 'critical-battery' else 1), integer(1000), integer(0xffffffff if case == 'unknown' else 2500), integer(11000)]
+        battery_body = name('_HID', string('PNP0C0A')) + name('_STA', integer(0x1f)) + name('_BST', package(bst))
+        if case == 'bix':
+            bix = [integer(1)] + battery_info[:7] + [integer(50),integer(99000)] + [integer(1000)]*4 + battery_info[7:] + [integer(0)]
+            battery_body += name('_BIX', package(bix))
+        else: battery_body += name('_BIF', package(battery_info))
+        hid = integer(0x0c0cd041) if case == 'eisa-button' else string('CIUK0001' if case == 'cid-button' else 'PNP0C0C')
+        sb = device('PWRB', name('_HID',hid) + (name('_CID',package([string('PNP0C0C')])) if case == 'cid-button' else b''))
+        sb += device('LID0', name('_HID', string('PNP0C0D')) + name('_LID', integer(7 if case == 'lid-open' else 1)))
+        sb += device('ACAD', name('_HID', string('ACPI0003')) + name('_PSR', integer(1)))
+        sb += device('BAT0', battery_body)
+        if case == 'battery-limit': sb += b''.join(device('BAT'+str(i),battery_body) for i in range(1,5))
+        # Fan power methods have observable AML state, including shared resources.
+        sb += pkg(b'\x5b\x84', b'FANR\x00\x00\x00' + name('STAT', integer(0)) +
+                  method('_ON_', b'\x70\x01STAT') + method('_OFF', b'\x70\x00STAT') + method('_STA', b'\xa4STAT'))
+        sb += device('FAN0', name('_PR0', package([b'FANR'])))
+        if case == 'shared-power': sb += device('OTH0',name('_PR0',package([b'FANR'])))
+        if case in ('ec-events','ec-timeout'):
+            crs = b'\x4b\x62\x00\x01\x4b\x66\x00\x01\x79\x00'
+            region = b'\x5b\x80ERAM\x03' + integer(0) + integer(256)
+            field = pkg(b'\x5b\x81', b'ERAM\x01REG0\x08')
+            sb += device('EC00', name('_HID',string('PNP0C09')) + name('_CRS',buffer(crs)) + name('_GPE',integer(1)) +
+                         region + field + method('_Q42', b'\x86\\\x2e_SB_PWRB\x0a\x80') + method('READ',b'\xa4REG0'))
+        if case == 'init-failure': sb += device('BAD0', method('_INI',pkg(b'\xa2',b'\x01\xa3')))
+        thermal = name('_TMP', integer(3200))
+        if case != 'no-crt': thermal += name('_CRT',integer(3700))
+        thermal += name('_AC0',integer(3100)) + name('_AL0',package([b'\\\x2e_SB_FAN0']))
+        thermal += method('HEAT', b'\x70' + integer(3800) + b'_TMP')
+        if case == 'hot': thermal += name('_HOT',integer(3600))
+        if case == 'passive': thermal += name('_PSV',integer(3400)) + name('_TC1',integer(1)) + name('_TC2',integer(2)) + name('_TSP',integer(10)) + name('_PSL',package([b'\\\x2e_SB_PWRB']))
+        if case == 'global-lock':
+            region = b'\x5b\x80LOCK\x01' + integer(0x604) + integer(2)
+            field = pkg(b'\x5b\x81', b'LOCK\x11REG0\x10')
+            thermal = region + field + method('_TMP', b'\xa4REG0') + name('_CRT',integer(3700))
+        aml = scope(b'\\_SB_',sb) + scope(b'\\_TZ_',pkg(b'\x5b\x85',b'THRM'+thermal))
+        aml += name('\\_S5_',package([integer(5),integer(5),integer(0),integer(0)]))
+        pts = pkg(b'\xa2',b'\x01\xa3') if case == 'pts-failure' else b'\x70\x68\\PTSV'
+        aml += name('\\PTSV',integer(0)) + pkg(b'\x14',b'_PTS\x01'+pts)
+        aml += scope(b'\\_GPE',method('_L00',pkg(b'\xa2',b'\x01\xa3') if case == 'gpe-loop' else b'\x86\\\x2e_SB_PWRB\x0a\x80'))
+        image = bytearray(0x100000)
+        dsdt = sdt('DSDT',aml); image[0x10000:0x10000+len(dsdt)] = dsdt
+        fadt = sdt('FACP',bytes(240))
+        struct.pack_into('<I',fadt,40,0x10000)
+        struct.pack_into('<H',fadt,46,9)
+        struct.pack_into('<I',fadt,48,0xb2); fadt[52]=0xf1; fadt[53]=0xf0
+        struct.pack_into('<I',fadt,56,0x600); struct.pack_into('<I',fadt,64,0x604)
+        struct.pack_into('<I',fadt,80,0x620); fadt[88]=4; fadt[89]=2; fadt[92]=4
+        fadt[9]=0; fadt[9]=-sum(fadt)&255
+        image[0x14000:0x14000+len(fadt)] = fadt
+        root=sdt('XSDT',struct.pack('<Q',0x14000)); image[0x16000:0x16000+len(root)] = root
+        rsdp=bytearray(b'RSD PTR '+bytes(1)+b'CIUKI '+bytes([2])+bytes(4)+struct.pack('<IQ',36,0x16000)+bytes(4))
+        rsdp[8]=-sum(rsdp[:20])&255; rsdp[32]=-sum(rsdp)&255
+        image[0xe0000:0xe0000+len(rsdp)] = rsdp
+        (out / ('power-'+case+'.bin')).write_bytes(image)

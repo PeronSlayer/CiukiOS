@@ -169,14 +169,24 @@ int main(int argc, char **argv)
     dosvm_launch_network_set(&c,network);
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
         failure = "Unable to start";
-        snprintf(detail, sizeof(detail), "%s", strerror(errno));
+        snprintf(detail, sizeof(detail), "%s", errno==EBUSY ? "A COM or LPT port is in use. Check Game properties." : strerror(errno));
         loading = 1; result = 1;
     } else {
         id = c.id; generation = c.generation;
-        if (c.changed==CIUKI_DOSVM_JOYSTICK_FALLBACK) {
+        if (c.changed&CIUKI_DOSVM_JOYSTICK_FALLBACK) {
             fullscreen_title="Game controller";
             snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Selected controller is absent. Using the first available joystick, or none if disconnected.");
             fullscreen_notice_until=now_ms()+5000;
+            fprintf(stderr,"dosbox: %s\n",fullscreen_notice);
+        }
+        if (c.changed&(CIUKI_DOSVM_PORT_FALLBACK|CIUKI_DOSVM_PORT_SETTINGS_INVALID)) {
+            fullscreen_title="Game peripherals";
+            snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s%s",
+                c.changed&CIUKI_DOSVM_PORT_FALLBACK ?
+                "Unavailable ports: COM uses null; LPT is off. Check Game properties." :
+                "Invalid port settings: using previous settings or defaults. Check Game properties.",
+                c.changed&CIUKI_DOSVM_JOYSTICK_FALLBACK ? " Joystick uses first available." : "");
+            fullscreen_notice_until=now_ms()+10000;
             fprintf(stderr,"dosbox: %s\n",fullscreen_notice);
         }
     }
@@ -322,7 +332,7 @@ int main(int argc, char **argv)
             if (!autorun_at) autorun_at = now_ms();
             if (autorun_step(id, generation, focused, !!(c.changed&CIUKI_DOSVM_SHELL_READY))) {
                 failure = "Unable to start";
-                snprintf(detail, sizeof(detail), "%s", strerror(errno));
+                snprintf(detail, sizeof(detail), "%s", errno==EBUSY ? "A COM or LPT port is in use. Check Game properties." : strerror(errno));
                 result = 1;
                 goto panel;
             }

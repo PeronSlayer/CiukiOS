@@ -4,6 +4,7 @@
 #include <ciuki/lpt.h>
 #include "dosvm_internal.h"
 
+#pragma weak dosvm_game_printer_bios
 static const uint16_t guest_lpt_bases[3]={0x378,0x278,0x3bc};
 static bool guest_lpt_cancelled(void *context)
 {
@@ -24,6 +25,7 @@ int dosvm_lpt_lease(struct dosvm *v, unsigned slot, unsigned physical, bool raw)
 }
 static int guest_lpt_acquire(struct dosvm *v, unsigned slot)
 {
+    if (v->lpt[slot].disabled) return -ENODEV;
     return v->lpt[slot].generation ? 0 : dosvm_lpt_lease(v,slot,v->lpt[slot].index,false);
 }
 static int guest_lpt_port(struct dosvm *v, uint16_t port, unsigned width, bool write, uint32_t *value, void *arg)
@@ -47,7 +49,9 @@ int dosvm_lpt_bios(struct dosvm *v, struct v86_frame *f)
 {
     unsigned slot=(uint16_t)f->tf.edx, fn=(uint8_t)(f->tf.eax>>8);
     uint8_t status=1;
-    if (slot<3 && fn<=2 && !guest_lpt_acquire(v,slot)) {
+    if (!slot && fn<=2 && v->printer_open && dosvm_game_printer_bios) {
+        status=dosvm_game_printer_bios(v,fn,(uint8_t)f->tf.eax) ? 1 : 0x90;
+    } else if (slot<3 && fn<=2 && !guest_lpt_acquire(v,slot)) {
         struct dosvm_lpt_state *s=&v->lpt[slot];
         int e=s->raw ? -EBUSY : 0;
         if (!e && fn==0) {
@@ -65,24 +69,34 @@ int dosvm_lpt_bios(struct dosvm *v, struct v86_frame *f)
     f->tf.eax=(f->tf.eax&~0xff00u)|((uint32_t)status<<8);
     return 0; /* AL, FLAGS and every other register are preserved */
 }
-int dosvm_lpt_init(struct dosvm *v)
+int dosvm_lpt_bda(struct dosvm *v)
 {
     unsigned count=0;
     for (unsigned i=0;i<3;i++) {
+        uint16_t base=0;
+        struct ciuki_lpt_status s;
+        if ((!i && v->printer_open) || (!v->lpt[i].disabled &&
+            lpt_snapshot(v->lpt[i].index,&s,0) && (s.flags&CIUKI_LPT_READY))) {
+            base=guest_lpt_bases[i];count++;
+        }
+        if (dosvm_write(v,0x408+2*i,&base,2)) return -EFAULT;
+    }
+    uint16_t equipment;
+    if (dosvm_read(v,0x410,&equipment,2)) return -EFAULT;
+    equipment=(equipment&~0xc000u)|(count<<14);
+    return dosvm_write(v,0x410,&equipment,2);
+}
+int dosvm_lpt_init(struct dosvm *v)
+{
+    for (unsigned i=0;i<3;i++) {
         v->lpt[i]=(struct dosvm_lpt_state){.index=i};
-        struct ciuki_lpt_status s; uint16_t base=0;
-        if (lpt_snapshot(i,&s,0) && (s.flags&CIUKI_LPT_READY)) { base=guest_lpt_bases[i]; count++; }
         uint8_t timeout=20;
-        if (dosvm_write(v,0x408+i*2,&base,2) || dosvm_write(v,0x478+i,&timeout,1)) return -EFAULT;
+        if (dosvm_write(v,0x478+i,&timeout,1)) return -EFAULT;
         int e=dosvm_port_register(v->info.key,guest_lpt_bases[i],
                                   guest_lpt_bases[i]+(i==2 ? 2 : 4),guest_lpt_port,v);
         if (e) return e;
     }
-    uint16_t equipment;
-    int e=dosvm_read(v,0x410,&equipment,2);
-    if (e) return e;
-    equipment=(equipment & ~0xc000u)|(count<<14);
-    return dosvm_write(v,0x410,&equipment,2);
+    return dosvm_lpt_bda(v);
 }
 void dosvm_lpt_stop(struct dosvm *v)
 {

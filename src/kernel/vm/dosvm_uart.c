@@ -87,11 +87,24 @@ void dosvm_uart_service(struct dosvm *v, uint64_t ms)
     }
     update_irq(v); irq_restore(flags);
 }
+static int uart_bda(struct dosvm *v)
+{
+    unsigned count=0;
+    for (unsigned i=0;i<4;i++) {
+        uint16_t base=v->uart[i].bound ? uart_base[i] : 0;
+        count+=v->uart[i].bound;
+        if (dosvm_write(v,0x400+2*i,&base,2)) return -EFAULT;
+    }
+    uint16_t equipment;
+    if (dosvm_read(v,0x410,&equipment,2)) return -EFAULT;
+    equipment=(equipment&~0x0e00u)|(count<<9);
+    return dosvm_write(v,0x410,&equipment,2);
+}
 int dosvm_uart_bind(struct dosvm_key key, unsigned slot, int native, const char **reason)
 {
     if (reason) *reason="VM COM binding requires an unstarted VM and a valid slot.";
     struct dosvm *v=dosvm_lookup(key);
-    if (!v || !dosvm_valid(key) || slot>=4 || native< -1 || native>=(int)CIUKI_COM_MAX) return -EINVAL;
+    if (!v || !dosvm_valid(key) || slot>=4 || native< -2 || native>=(int)CIUKI_COM_MAX) return -EINVAL;
     if (v->started || v->info.state>=DOSVM_STOPPING) return -EBUSY;
     if (native>=0 && peer_irq(v,uart_irq(slot))) {
         if (reason) *reason="Virtual COM IRQ is owned by another VM device.";
@@ -99,7 +112,7 @@ int dosvm_uart_bind(struct dosvm_key key, unsigned slot, int native, const char 
     }
     struct dosvm_uart *s=&v->uart[slot];
     if (s->bound && s->native==native) { if (reason) *reason="VM COM binding unchanged."; return 0; }
-    struct dosvm_uart candidate={.native=native,.bound=true}; uart16550_init(&candidate.model);
+    struct dosvm_uart candidate={.native=native,.bound=native!= -2}; uart16550_init(&candidate.model);
     if (native>=0) {
         int e=com_lease_open((unsigned)native,CIUKI_COM_OWNER_VM,key.id,&candidate.generation,reason);
         if (e) return e;
@@ -109,16 +122,21 @@ int dosvm_uart_bind(struct dosvm_key key, unsigned slot, int native, const char 
     if (s->bound && s->native>=0) com_close((unsigned)s->native,s->generation);
     *s=candidate; update_irq(v);
     if (reason) *reason=native<0 ? "VM COM bound to null device." : "VM owns physical COM lease.";
-    return 0;
+    return uart_bda(v);
 }
 int dosvm_uart_port(struct dosvm *v, uint16_t port, unsigned width, bool write, uint32_t *value, void *arg)
 {
     (void)arg;
-    if (width!=1 || !value) return -EINVAL;
+    if (!value || (width!=1 && width!=2 && width!=4)) return -EINVAL;
     if (v->info.state>=DOSVM_STOPPING) return -ENODEV;
     unsigned slot=0;
     while (slot<4 && !(port>=uart_base[slot] && port<uart_base[slot]+8)) slot++;
-    if (slot==4 || !v->uart[slot].bound) return -ENODEV;
+    if (slot==4) return -ENODEV;
+    if (!v->uart[slot].bound) {
+        if (!write) *value=width==4 ? UINT32_MAX : width==2 ? 0xffff : 0xff;
+        return 0;
+    }
+    if (width!=1) return -EINVAL;
     dosvm_uart_service(v,g_ticks);
     struct dosvm_uart *s=&v->uart[slot]; unsigned reg=port-uart_base[slot];
     uint32_t flags=irq_save();
@@ -143,7 +161,7 @@ int dosvm_uart_init(struct dosvm *v)
         uint8_t timeout=10; /* SeaBIOS rel-1.16.3 serial_setup: ten BIOS ticks */
         if (dosvm_write(v,0x400+2*i,&uart_base[i],2) || dosvm_write(v,0x47c+i,&timeout,1)) return -EFAULT;
     }
-    return 0;
+    return uart_bda(v);
 }
 void dosvm_uart_close(struct dosvm *v)
 {

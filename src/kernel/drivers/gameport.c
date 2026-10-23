@@ -16,6 +16,7 @@
 #pragma weak joystick_settings_mode
 #pragma weak joystick_settings_status
 #pragma weak joystick_settings_game
+#pragma weak joystick_settings_get_game
 #pragma weak joystick_settings_service
 #pragma weak joystick_storage_start
 #define GAMEPORTS 4u
@@ -297,9 +298,14 @@ int joystick_control(struct ciuki_joystick_control *c)
     } else if (c->operation==CIUKI_JOY_ROUTE || c->operation==CIUKI_JOY_SAVE_GAME) {
         valid.session=c->session; valid.mode=c->mode; valid.second_device=c->second_device; valid.second_generation=c->second_generation;
         if (c->operation==CIUKI_JOY_SAVE_GAME) valid.axis=c->axis;
-    } else if (c->operation==CIUKI_JOY_CONFIGURE) valid.mode=c->mode;
-    else if (c->operation>CIUKI_JOY_SAVE_STATUS) return -EINVAL;
+    } else if (c->operation==CIUKI_JOY_GET_GAME) valid.axis=c->axis;
+    else if (c->operation==CIUKI_JOY_CONFIGURE) valid.mode=c->mode;
+    else if (c->operation>CIUKI_JOY_GET_GAME) return -EINVAL;
     if (memcmp(&valid,c,sizeof(valid))) return -EINVAL;
+    if (c->operation==CIUKI_JOY_GET_GAME) {
+        if (c->device || c->generation) return -EINVAL;
+        return joystick_settings_get_game ? joystick_settings_get_game(c) : -ENODEV;
+    }
     if (c->operation==CIUKI_JOY_SAVE_STATUS) {
         if (c->device || c->generation) return -EINVAL;
         if (!joystick_settings_status) return -ENODEV;

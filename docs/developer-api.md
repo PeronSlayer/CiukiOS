@@ -46,6 +46,24 @@ f1-113: common USB/analog joystick controls on the input grant.
 axis=catalog game; route saved by hardware identity
 
 ```c
+#define CIUKI_JOY_GET_GAME 8u
+```
+
+axis=game; attached=0 default, 1 disabled, 2 identity, 3 missing; resolved tuple output
+
+```c
+#define CIUKI_DOSVM_PORT_FALLBACK 2u
+```
+
+CREATE.changed; missing port or printer file; safe null/none
+
+```c
+#define CIUKI_DOSVM_PORT_SETTINGS_INVALID 4u
+```
+
+CREATE.changed; corrupt settings used previous/default record
+
+```c
 #define CIUKI_JOY_SAVE_STATUS 7u
 ```
 
@@ -1639,7 +1657,8 @@ struct ciuki_mixer_master {
 Power control (call 73, execution-abi.md amendment 2026-10-12): B=action.
 Only the supervisor-spawned desktop may call it. REBOOT and OFF flush
 storage first; OFF returns ENOTSUP or EIO when the machine stays on, with
-storage already stopped. QUERY returns the CIUKI_POWER_CAN_* bits.
+storage already stopped. QUERY returns capability and irreversible
+shutdown progress bits; UNCERTAIN forbids resuming the session.
 
 ```c
 #define CIUKI_POWER_REBOOT 1u
@@ -1647,6 +1666,139 @@ storage already stopped. QUERY returns the CIUKI_POWER_CAN_* bits.
 #define CIUKI_POWER_QUERY 3u
 #define CIUKI_POWER_CAN_REBOOT 1u
 #define CIUKI_POWER_CAN_OFF 2u
+```
+
+QUERY progress: after either bit is set, the session cannot resume.
+
+```c
+#define CIUKI_POWER_STOPPED 4u
+#define CIUKI_POWER_UNCERTAIN 8u
+```
+
+Call 73 B=STATUS, C=record, D=sizeof(record). Cached read-only facts of
+the one active provider (ACPI or APM), available to native clients; never
+evaluates AML or calls firmware in the caller.
+
+```c
+#define CIUKI_POWER_STATUS 4u
+#define CIUKI_POWER_VERSION 1u
+#define CIUKI_POWER_UNKNOWN 0xffffffffu
+#define CIUKI_POWER_FIRMWARE 0u
+#define CIUKI_POWER_OWNED 1u
+#define CIUKI_POWER_QUARANTINED 2u
+#define CIUKI_POWER_PENDING 3u
+#define CIUKI_POWER_BATTERIES 4u
+#define CIUKI_POWER_ZONES 8u
+```
+
+provider: the one exclusive firmware power interface behind the record.
+NONE while firmware keeps power management (ACPI description only).
+
+```c
+#define CIUKI_POWER_PROVIDER_NONE 0u
+#define CIUKI_POWER_PROVIDER_ACPI 1u
+#define CIUKI_POWER_PROVIDER_APM 2u
+```
+
+ac_online: APM 1.2 "on backup power" (ACPI reports only 0/1).
+
+```c
+#define CIUKI_POWER_AC_BACKUP 2u
+```
+
+battery unit: APM 1.2 charge percentage; full is 100, remaining 0..100.
+
+```c
+#define CIUKI_POWER_UNIT_PERCENT 2u
+struct ciuki_power_battery {
+    uint32_t id;
+    uint32_t present;
+    uint32_t unit;
+```
+
+0: mWh/mW; 1: mAh/mA; 2: percent (APM)
+
+```c
+uint32_t state;
+```
+
+_BST bits (APM: derived); UNKNOWN when unavailable
+
+```c
+uint32_t design;
+    uint32_t full;
+    uint32_t remaining;
+    uint32_t rate;
+    uint32_t voltage;
+```
+
+mV
+
+```c
+uint32_t seconds;
+```
+
+firmware-reported remaining life (APM); else UNKNOWN
+
+```c
+};
+struct ciuki_power_zone {
+    uint32_t id;
+    uint32_t temperature;
+```
+
+absolute tenths Kelvin
+
+```c
+uint32_t critical;
+    uint32_t hot;
+    uint32_t passive;
+    uint32_t active[10];
+    uint32_t cooling;
+```
+
+active trip bitmask
+
+```c
+int32_t passive_delta;
+```
+
+thermal trend; UNKNOWN as INT32_MIN
+
+```c
+};
+struct ciuki_power_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t ownership;
+    uint32_t error;
+```
+
+ACPICA status (APM: positive errno), zero on success
+
+```c
+uint32_t sequence;
+    uint32_t shutdown_requests;
+```
+
+monotonic/coalesced; desktop handles changes
+
+```c
+uint32_t ac_online;
+    uint32_t lid_open;
+    uint32_t battery_count;
+    uint32_t zone_count;
+    uint32_t event_overflows;
+    uint32_t provider;
+```
+
+CIUKI_POWER_PROVIDER_*
+
+```c
+uint32_t reserved;
+    struct ciuki_power_battery batteries[CIUKI_POWER_BATTERIES];
+    struct ciuki_power_zone zones[CIUKI_POWER_ZONES];
+};
 ```
 
 f2-33: process enumeration (call 70) and termination request (call 71).
@@ -4905,14 +5057,27 @@ SPDX-License-Identifier: MIT
 ```
 
 action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
-QUERY returns the CIUKI_POWER_CAN_* bits. REBOOT does not return on
-success. OFF flushes storage and powers off through ACPI S5; it returns -1
+QUERY returns CIUKI_POWER_CAN_* and CIUKI_POWER_STOPPED/UNCERTAIN bits.
+Either progress bit means the session cannot resume. REBOOT does not return on
+success. OFF flushes storage and powers off through the active provider
+(ACPI S5 or APM Set Power State Off); it returns -1
 with errno ENOTSUP (no soft-off method) or EIO (the machine stayed on)
 after storage has stopped: show "It is now safe to turn off your
-computer". EBUSY means files are still open and nothing was changed.
+computer" only when QUERY also reports STOPPED. EBUSY with no progress
+bit means open files prevented flushing; UNCERTAIN means a stop proof
+failed after shutdown began: retain a terminal diagnostic and require reset.
 
 ```c
 int ciuki_power(uint32_t action);
+```
+
+Read-only cached firmware status of the one active power provider (ACPI,
+or APM 1.2 on pre-ACPI machines; see `provider`); initializes version/size
+for the caller. Unknown values use CIUKI_POWER_UNKNOWN. No AML or BIOS
+call runs during this query.
+
+```c
+int ciuki_power_status(struct ciuki_power_status *status);
 #endif
 ```
 

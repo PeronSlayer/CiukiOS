@@ -25,6 +25,7 @@ static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard",
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
+static unsigned power_read(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
 static void details(struct cp_app *a);
 static void firmware_show(struct cp_app *a, uint32_t index);
@@ -44,6 +45,7 @@ static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 
 #include "network.inc"
+#include "game_properties.inc"
 #include "joystick.inc"
 
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
@@ -128,6 +130,9 @@ int cp_display_leave(struct cp_app *a)
 }
 int cp_close(struct cp_app *a)
 {
+    if (a->game_save) {
+        game_note(a,"Waiting for game properties to finish saving...");return 0;
+    }
     a->close_pending = 1; a->display_accept = a->navigation_pending = 0;
     if (!cp_display_leave(a)) return 0;
     a->close_pending = 0; a->quit = 1; return 1;
@@ -383,11 +388,12 @@ void cp_audio_result(struct cp_app *a, int result)
 void cp_tick(struct cp_app *a)
 {
     network_poll(a);
+    game_poll(a);
     if (a->page==CP_JOYSTICK) {
         if (a->joystick_save_pending && !a->joystick_busy && !a->joystick_calibrating) {
             struct ciuki_joystick_control c={.version=CIUKI_JOYSTICK_VERSION,.size=sizeof(c),.operation=CIUKI_JOY_SAVE_STATUS};
             (void)joystick_send(a,&c);
-        } else joystick_query(a,CIUKI_JOY_QUERY);
+        } else if (!a->game_open) joystick_query(a,CIUKI_JOY_QUERY);
     }
     if (a->close_pending && !a->display_write && !a->mode_state) cp_close(a);
     if (a->navigation_pending && !a->display_write && !a->mode_state) {
@@ -399,6 +405,11 @@ void cp_tick(struct cp_app *a)
             (a->volume != volume || a->muted != mute)) {
             a->volume = volume; a->muted = mute; sync(a);
         }
+    }
+    if (a->page == CP_POWER) {
+        unsigned lines = power_read(a);
+        for (unsigned i = 0; i < lines; i++) text(a,1800+(int)i,a->power_lines[i]);
+        return;
     }
     if (a->page!=CP_DATETIME && a->page!=CP_SYSTEM) return;
     char previous[sizeof(a->clock_line)]; memcpy(previous,a->clock_line,sizeof(previous));
@@ -463,6 +474,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (a->display_write && e->id==C_BACK && e->type==DU_EV_ACTIVATE) { a->navigation_pending=1; a->next_page=CP_HOME; return; }
     if (a->display_write && e->type != DU_EV_TICK) return;
     if (network_event(a, e)) return;
+    if (game_event(a,e)) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
@@ -523,7 +535,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case C_BACK: if (e->type == DU_EV_ACTIVATE) cp_open(a, CP_HOME); break;
-    case J_NEXT: case J_CALIBRATE: case J_CAPTURE: case J_ROUTE: case J_OFF: case J_MODE: case J_GAME: case J_SAVE_GAME: case J_DEFAULT_GAME: case J_SECOND: case J_GAME_OFF:
+    case J_PROPERTIES: case J_NEXT: case J_CALIBRATE: case J_CAPTURE: case J_ROUTE: case J_OFF: case J_MODE: case J_GAME: case J_SAVE_GAME: case J_DEFAULT_GAME: case J_SECOND: case J_GAME_OFF:
         if (e->type==DU_EV_ACTIVATE) joystick_event(a,e->id);
         break;
     case CP_CATEGORY:
@@ -1087,14 +1099,54 @@ static void system_pages(struct cp_app *a)
     } else if (a->page == CP_NETWORK) {
         network_build(a);
     } else if (a->page == CP_POWER) {
-        add(a, DU_LABEL, C_SYS0, 24, 48, 452, 14, "Power and restart");
-        add(a, DU_LABEL, C_SYS1, 24, 82, 452, 14, "Restart or turn off this computer safely.");
-        add(a, DU_LABEL, C_SYS2, 24, 110, 452, 14, "CiukiOS closes programs and flushes disks before stopping.");
-        add(a, DU_LABEL, C_SYS3, 24, 148, 500, 14, "Standby and automatic power saving are not available yet.");
-        add(a, DU_BUTTON, CP_POWER_ACTION, 24, 190, 160, 24, "Shut Down...")->disabled=!a->host.power;
+        add(a, DU_LABEL, C_SYS0, 24, 40, 500, 14, "Firmware power status (standby is unavailable)");
+        unsigned lines = power_read(a);
+        for (unsigned i = 0; i < 20; i++) add(a,DU_LABEL,1800+(int)i,24,64+(int)i*14,CP_WIDTH-48,14,i<lines ? a->power_lines[i] : "");
+        add(a, DU_BUTTON, CP_POWER_ACTION, 24, 350, 160, 24, "Shut Down...")->disabled=!a->host.power;
     }
 }
 
+static const char *power_number(char out[16], uint32_t n)
+{ if (n == CIUKI_POWER_UNKNOWN) return "Unknown"; snprintf(out,16,"%u",n); return out; }
+static unsigned power_read(struct cp_app *a)
+{
+    struct ciuki_power_status p;
+    memset(a->power_lines,0,sizeof(a->power_lines));
+    if (!a->host.power_status || a->host.power_status(a->host.ctx,&p) || p.version != CIUKI_POWER_VERSION ||
+        p.size != sizeof(p) || p.battery_count > CIUKI_POWER_BATTERIES || p.zone_count > CIUKI_POWER_ZONES) {
+        snprintf(a->power_lines[0],128,"Power status: Unknown"); return 20;
+    }
+    unsigned n=0;
+    snprintf(a->power_lines[n++],128,"AC: %s     Lid: %s",p.ac_online==1 ? "Connected" : p.ac_online==0 ? "Disconnected" :
+             p.ac_online==CIUKI_POWER_AC_BACKUP ? "Backup power" : "Unknown",
+             p.lid_open==1 ? "Open" : p.lid_open==0 ? "Closed" : "Unknown");
+    /* One provider, ACPI or APM 1.2, owns these facts; the other is excluded. */
+    const char *via=p.provider==CIUKI_POWER_PROVIDER_ACPI ? " (ACPI)" : p.provider==CIUKI_POWER_PROVIDER_APM ? " (APM 1.2)" : "";
+    snprintf(a->power_lines[n++],128,"Control: %s%s; firmware status: 0x%08x",
+             p.ownership==CIUKI_POWER_OWNED ? "CiukiOS" : p.ownership==CIUKI_POWER_FIRMWARE ? "Firmware retained" :
+             p.ownership==CIUKI_POWER_QUARANTINED ? "Uncertain; claims retained" : "Pending",via,p.error);
+    if (!p.battery_count) snprintf(a->power_lines[n++],128,"Batteries: none reported");
+    for (unsigned i=0;i<p.battery_count;i++) {
+        const struct ciuki_power_battery *b=&p.batteries[i]; char x[16],y[16],z[16];
+        int percent=b->unit==CIUKI_POWER_UNIT_PERCENT;
+        snprintf(a->power_lines[n++],128,"Battery %u: %s; capacity %s / %s %s",b->id,
+            b->present==0 ? "Absent" : b->state==CIUKI_POWER_UNKNOWN ? "Unknown" : b->state&1 ? "Discharging" : b->state&2 ? "Charging" : "Idle",
+            power_number(x,b->remaining),power_number(y,b->full),b->unit==0 ? "mWh" : b->unit==1 ? "mAh" : percent ? "%" : "(units unknown)");
+        if (percent) {
+            if (b->seconds==CIUKI_POWER_UNKNOWN) snprintf(a->power_lines[n++],128,"Remaining life: Unknown%s",b->state!=CIUKI_POWER_UNKNOWN && b->state&4 ? "; critical" : "");
+            else snprintf(a->power_lines[n++],128,"Remaining life: %u h %02u min%s",b->seconds/3600,b->seconds/60%60,
+                          b->state!=CIUKI_POWER_UNKNOWN && b->state&4 ? "; critical" : "");
+        } else snprintf(a->power_lines[n++],128,"Design %s; rate %s %s; voltage %s mV",power_number(x,b->design),power_number(y,b->rate),
+            b->unit==0 ? "mW" : b->unit==1 ? "mA" : "(units unknown)",power_number(z,b->voltage));
+    }
+    for (unsigned i=0;i<p.zone_count;i++) {
+        const struct ciuki_power_zone *z=&p.zones[i]; char t[16],c[16],v[16];
+        snprintf(a->power_lines[n++],128,"Zone %u: %s; critical %s; passive %s (0.1 K)",z->id,
+            power_number(t,z->temperature),power_number(c,z->critical),power_number(v,z->passive));
+    }
+    /* Stable widget count lets a failed refresh clear previous values. */
+    return 20;
+}
 static void build(struct cp_app *a)
 {
     a->building=1;
@@ -1298,6 +1350,7 @@ static void build(struct cp_app *a)
 }
 void cp_open(struct cp_app *a, int page)
 {
+    if (a->game_save) { game_note(a,"Waiting for game properties to finish saving...");return; }
     if (a->mode_state==CP_MODE_SAVE) { text(a,C_STATUS,"Waiting for display settings to finish saving..."); return; }
     if (a->display_session && page != CP_DISPLAY && page != CP_ADAPTER && page != CP_FONTS && !cp_display_leave(a)) {
         a->next_page=page; a->navigation_pending=1; return;

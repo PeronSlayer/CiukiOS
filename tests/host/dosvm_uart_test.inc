@@ -8,6 +8,16 @@ static void test_serial_uart(void)
     uint16_t bda[4]; CHECK(!dosvm_read(v,0x400,bda,sizeof(bda)));
     CHECK(bda[0]==0x3f8 && bda[1]==0x2f8 && bda[2]==0x3e8 && bda[3]==0x2e8);
     uint16_t equipment=0; CHECK(!dosvm_read(v,0x410,&equipment,2) && (equipment&0xe00)==0x800);
+    /* INT11 and COM changes preserve a simultaneous LPT1 equipment count. */
+    equipment|=0x4000;CHECK(!dosvm_write(v,0x410,&equipment,2));
+    struct v86_frame eq={0};eq.tf.eax=0xaabb0000;eq.tf.eflags=0x247;
+    CHECK(!dosvm_bios(v,&eq,0x11) && eq.tf.eax==0xaabb4822 && eq.tf.eflags==0x247);
+    CHECK(!dosvm_uart_bind(key,3,-2,&why));
+    eq.tf.eax=0;CHECK(!dosvm_bios(v,&eq,0x11) && eq.tf.eax==0x4622);
+    uint16_t absent=1;CHECK(!dosvm_read(v,0x406,&absent,2) && !absent);
+    uint32_t unmapped=0;CHECK(!dosvm_uart_port(v,0x2e8,1,false,&unmapped,0) && unmapped==0xff);
+    CHECK(!dosvm_uart_bind(key,3,-1,&why));
+    eq.tf.eax=0;CHECK(!dosvm_bios(v,&eq,0x11) && eq.tf.eax==0x4822);
     uint32_t value=0xa5; CHECK(!dosvm_uart_port(v,0x3ff,1,true,&value,0));
     value=0; CHECK(!dosvm_uart_port(w,0x3ff,1,false,&value,0) && !value);
     CHECK(!dosvm_uart_bind(key,0,0,&why) && host_com_owner[0]==CIUKI_COM_OWNER_VM);

@@ -245,6 +245,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/sdk/sysroot-overlay/include" -I "$root/src/kernel/include" \
+    "$root/tests/host/power_sdk_test.c" -o "$out/power_sdk_test"
+"$out/power_sdk_test"
 
 # f1-121: real-mode APM BIOS model and exclusive production provider.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -330,6 +334,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/savage2d_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/savage2d_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/savage2d_test"
+
+# f2-125: per-game controller/COM/LPT panel, persistence and launch services.
+python3 -B "$root/tests/host/desktop/test_game_properties.py"
 
 # f1-113: RC jitter/calibration, real HID state and V86 polling loop/BIOS.
 bash "$root/tests/host/joystick/run.sh"

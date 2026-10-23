@@ -42,7 +42,9 @@ static ACPI_STATUS access(unsigned space, uint64_t a, unsigned width, UINT64 *v,
     if (!fw_region_check(space, a, width, pci)) return AE_ACCESS;
     accesses++; *v = 42; return AE_OK;
 }
-static const struct fw_ops ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, stall_us, thread, lock, unlock, access};
+/* Read-only inventory: no writes, routes or ACPI/APM power provider seam. */
+static const struct fw_ops ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, stall_us, thread, lock, unlock, access,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 static void callback(void *p) { (*(int *)p)++; }
 static void osl(void)
 {

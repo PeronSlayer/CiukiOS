@@ -18,6 +18,7 @@
 extern int32_t w32_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t display_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t power_syscall(uint32_t action) __attribute__((weak));
+extern int32_t power_status_query(uint32_t address, uint32_t bytes) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
@@ -169,7 +170,8 @@ void syscall_dispatch(struct trap_frame *tf)
         break;
     case CIUKI_SYS_POWER:
         /* Weak: host harnesses link syscall.c without core/power.c. */
-        r = power_syscall ? power_syscall(tf->ebx) : -ENOSYS;
+        r = tf->ebx == CIUKI_POWER_STATUS ? (power_status_query ? power_status_query(tf->ecx, tf->edx) : -ENOSYS) :
+            (power_syscall ? power_syscall(tf->ebx) : -ENOSYS);
         break;
     case CIUKI_SYS_UNAME:
         r = file_syscall(tf) ? (int32_t)tf->eax : -ENOSYS;

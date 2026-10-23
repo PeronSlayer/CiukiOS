@@ -409,6 +409,7 @@ static int media_wait_read(struct desktop *d)
 #define media_read media_wait_read
 static uint32_t last_power_action;
 int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
+int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
 {
     assert(bytes>=CIUKI_PROC_LIST_MIN+8*sizeof(struct ciuki_proc_record));
@@ -480,7 +481,8 @@ static int sound_settings(struct desktop *d, int client, unsigned request, unsig
 static unsigned install_requests;
 static int install_fixture(struct desktop *d,const char *path)
 {(void)d;assert(!strcmp(path,"/mnt/d/SETUP.EXE"));install_requests++;return 0;}
-static void test_display_settings(void)
+/* Each scenario owns a struct desktop (~600 KiB): keep frames out of main. */
+__attribute__((noinline)) static void test_display_settings(void)
 {
     struct desktop d; struct ciuki_message m; struct desk_packet reply[DESK_TX_MAX];
     fake_reset(); desk_init(&d, &fake_ops, 1024, 768); desk_shell_enable(&d);
@@ -573,7 +575,7 @@ static void test_task_protocol(void)
     assert(!parses(2,DESK_TASK_RESULT,16,0,odd,3,0,0) && !parses(2,DESK_TASK_RESULT,16,0,low,3,0,0));
 }
 /* f2-33: the Task Manager scenario through the production desktop paths. */
-static void test_tasks_scenario(void)
+__attribute__((noinline)) static void test_tasks_scenario(void)
 {
     struct desktop d;
     fake_reset(); next_pair=40; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
@@ -681,7 +683,7 @@ static int32_t launch_request(struct desktop *d,int index,uint32_t pid,const cha
     assert(queued(d,index,DESK_TASK_RESULT,r)==1 && r[0].serial==0x4321 && r[0].request==DESK_LAUNCH);
     return r[0].result;
 }
-static void test_note_scenario(void)
+__attribute__((noinline)) static void test_note_scenario(void)
 {
     struct desktop d;
     fake_reset(); next_pair=60; pid_source=400; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
@@ -786,7 +788,7 @@ static int launch_cd_player(struct desktop *d,const struct desk_launch_record *r
     cd_player_launches++;
     return cd_player_error ? -EIO : 123;
 }
-static void test_cd_player_menu(void)
+__attribute__((noinline)) static void test_cd_player_menu(void)
 {
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
@@ -808,7 +810,7 @@ static void test_cd_player_menu(void)
     cd_player_error=0; desk_render_release(&d); fake_reset();
     puts("PASS CD Player: Accessories catalogue, Tango icon, Windows target, Win32 launch and failure dialog; native inventory unchanged");
 }
-static void test_games_menu(void)
+__attribute__((noinline)) static void test_games_menu(void)
 {
     struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
@@ -862,6 +864,17 @@ static void test_games_menu(void)
     assert(strstr(d.sh.message_text,"error 5") && !d.launch_argv[0] && !d.launch_argv[1]);
     for (unsigned i=0;i<DESK_CLIENTS;i++) assert(!d.children[i].pid && d.clients[i].channel<0);
     fail_spawn=0;expect_dosbox[0]=expect_dosbox[1]=NULL;drop_all(&d);fake_reset();
+    /* Game shortcut Properties opens the shared per-game panel. */
+    desk_program_add(&d,"control",elf,sizeof(elf));
+    for (unsigned game=0;game<DESK_GAME_COUNT;game++) {
+        snprintf(d.sh.icons[0].program,sizeof(d.sh.icons[0].program),"dosbox");
+        snprintf(d.sh.icons[0].argument,sizeof(d.sh.icons[0].argument),"%s",desk_games[game].command);
+        char arg[24];snprintf(arg,sizeof(arg),"--game=%u",game+1);expect_control_arg=arg;
+        unsigned before=control_spawns;d.sh.menu_owner=0;
+        desk_menu_open(&d,SH_MENU_ICON,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"Properties");
+        assert(d.sh.menus[0].hot>=0);key(&d,DU_KEY_ENTER);assert(control_spawns==before+1);
+        expect_control_arg=NULL;drop_all(&d);
+    }
     puts("PASS F1-63 DOS launch failure: first operation/path/errno recorded before Games dialog, diagnostic failure preserves EIO, channels cleaned");
     puts("PASS games menu: Programs > Games with /Programs/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");
 }
@@ -869,7 +882,7 @@ static void test_games_menu(void)
  * the Tango 16 px artwork; inside one menu two rows never share an icon
  * (only the games, rows of one kind, share input-gaming); Run... and the
  * Ciuki Demo no longer borrow the icons of programs and games. */
-static void test_menu_icons(void)
+__attribute__((noinline)) static void test_menu_icons(void)
 {
     struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
@@ -967,7 +980,7 @@ static void test_hwreport_menu(void)
     desk_menu_close(&d); desk_render_release(&d); fake_reset();
     puts("PASS Hardware Report: Programs > System Tools, graphical grant, identity icon and file exclusion");
 }
-static void test_netsurf_record(void)
+__attribute__((noinline)) static void test_netsurf_record(void)
 {
     const struct desk_application_entry *app=desk_application_find("netsurf");
     assert(app && DESK_APPLICATION_COUNT==1 && !strcmp(app->label,"NetSurf") && !strcmp(app->description,"Web browser"));
@@ -1024,7 +1037,7 @@ static void test_netsurf_record(void)
 static unsigned music_mixer_calls;
 static int music_mixer_set(struct desktop *d,uint32_t l,uint32_t r,uint32_t mute)
 { (void)d; assert(l==30 && r==60 && !mute); music_mixer_calls++; return 0; }
-static void test_music_mixer(void)
+__attribute__((noinline)) static void test_music_mixer(void)
 {
     struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
     d.mixer_set=music_mixer_set; music_mixer_calls=0;
@@ -1044,7 +1057,7 @@ static void test_music_mixer(void)
     assert(queued(&d,1,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && music_mixer_calls==1);
     drop_all(&d); fake_reset(); pid_source=100; puts("PASS Music Player mixer: launch-owned permission, delegated callback, shutdown EBUSY, ordinary-client EPERM");
 }
-static void test_launch_timing(void)
+__attribute__((noinline)) static void test_launch_timing(void)
 {
     static const char *const names[]={"files","ciuknote","control"};
     static const unsigned bytes[]={512u*1024u,384u*1024u,448u*1024u};
@@ -1119,7 +1132,7 @@ static void wallpaper_test_stage(const char *name)
     while (!wallpaper_test_release) pthread_cond_wait(&wallpaper_test_changed,&wallpaper_test_lock);
     pthread_mutex_unlock(&wallpaper_test_lock);
 }
-static void test_wallpaper_startup(void)
+__attribute__((noinline)) static void test_wallpaper_startup(void)
 {
     /* Hold the loader after file I/O, before decoding; run production wallpaper
      * service, menu input and rendering while it is still held. */
@@ -1187,7 +1200,7 @@ static void test_media_removal_service(void)
     media_available=0;timing_model=0;desk_render_release(&d);fake_reset();
     puts("PASS media service: busy program names, refresh-before-success, ten-second eject starts a fresh eight-second notification, later detach preserves success");
 }
-static void test_network_service(void)
+__attribute__((noinline)) static void test_network_service(void)
 {
     struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
     network_fixture = (struct ciuki_net_state){ .version = 1, .size = sizeof(network_fixture),

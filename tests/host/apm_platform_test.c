@@ -15,7 +15,7 @@ static void irq_restore(uint32_t f) { (void)f; }
 #include <ciuki/storage.h>
 #include "../../src/kernel/core/apm.h"
 static unsigned failures, checks, probes, connects, disconnects, tasks, polls, acks, offs, stops;
-static int flush_error, stop_error, firmware_error, orderly_error, storage_init_error;
+static int flush_error, stop_error, firmware_error, storage_init_error;
 static bool fail_task, broker_dead;
 static uint16_t next_event;
 static uint64_t ticks;
@@ -66,7 +66,6 @@ uint64_t deadline_after_ms(uint32_t ms) { return ticks + ms; }
 bool deadline_passed(uint64_t end) { return ticks >= end; }
 static int quiesce(void *ctx, uint64_t end) { (void)ctx; (void)end; stops++; return stop_error; }
 static int recover(void *ctx, uint16_t event, uint16_t info) { (void)ctx; (void)event; (void)info; return 0; }
-static int shutdown(void *ctx, uint64_t end) { (void)ctx; CHECK(end > ticks); return orderly_error; }
 void klog(const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt); vsnprintf(log_line, sizeof(log_line), fmt, ap); va_end(ap);
@@ -92,7 +91,7 @@ int main(void)
     CHECK(tasks == 2 && strstr(log_line, "reason=worker")); fail_task = false;
 
     CHECK(power_source_set_platform(NULL) == -EINVAL);
-    const struct power_source_platform platform = {.quiesce_dma=quiesce, .resume=recover, .orderly_shutdown=shutdown};
+    const struct power_source_platform platform = {.quiesce_dma=quiesce, .resume=recover};
     CHECK(!power_source_set_platform(&platform));
     CHECK(power_source_set_platform(&platform) == -EBUSY);
     g_current = &fake_tasks[0]; apm_worker = &fake_tasks[1];
@@ -113,9 +112,19 @@ int main(void)
     unsigned calls = polls; power_source_snapshot(&snap); CHECK(polls == calls);
     next_event = 6; ticks = 1000; service_once();
     power_source_snapshot(&snap); CHECK(snap.events == 1 && snap.last_event == 6);
-    /* A failed orderly-shutdown proof must not reach firmware Off. */
-    orderly_error = -EBUSY; CHECK(power_source_soft_off() == -EBUSY && !offs);
-    orderly_error = 0; CHECK(power_source_soft_off() == -EIO && offs == 1 && disconnects == 1);
+    /* Without the call-73 stopped latch neither the arbiter nor the APM
+     * backend reaches firmware Off. */
+    CHECK(power_source_can_off());
+    CHECK(power_source_soft_off() == -EBUSY && !offs);
+    CHECK(apm_backend_off(&backend) == -EBUSY && !offs && backend.state == APM_CONNECTED);
+    struct ciuki_power_status record;
+    power_source_status(&record);
+    CHECK(record.provider == CIUKI_POWER_PROVIDER_APM && record.ownership == CIUKI_POWER_OWNED);
+    CHECK(record.ac_online == 1 && record.battery_count == 1 && record.lid_open == CIUKI_POWER_UNKNOWN);
+    CHECK(record.batteries[0].unit == CIUKI_POWER_UNIT_PERCENT && record.batteries[0].full == 100 &&
+          record.batteries[0].remaining == 75 && record.batteries[0].seconds == 120 && record.batteries[0].state == 0);
+    power_source_mark_stopped();
+    CHECK(power_source_soft_off() == -EIO && offs == 1 && disconnects == 1);
     power_source_snapshot(&snap); CHECK(!snap.active && snap.provider == POWER_SOURCE_NONE);
     CHECK(power_source_soft_off() == -ENOTSUP);
 
@@ -127,6 +136,9 @@ int main(void)
     ticks += 1000; firmware_error = -EFAULT; service_once();
     CHECK(backend.state == APM_FAILED && disconnects == 2);
     power_source_snapshot(&snap); CHECK(!snap.active && snap.provider == POWER_SOURCE_APM && snap.error == -EFAULT);
+    power_source_status(&record);
+    CHECK(record.provider == CIUKI_POWER_PROVIDER_APM && record.ownership == CIUKI_POWER_QUARANTINED &&
+          record.error == EFAULT && !record.battery_count && record.ac_online == CIUKI_POWER_UNKNOWN);
     CHECK(power_source_reserve(POWER_SOURCE_ACPI, &ops) == -EBUSY);
     CHECK(power_source_activate(POWER_SOURCE_APM) == -EBUSY);
     power_source_release(POWER_SOURCE_NONE, false, 0);

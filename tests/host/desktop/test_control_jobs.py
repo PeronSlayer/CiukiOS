@@ -33,6 +33,7 @@ class ControlJobsTests(unittest.TestCase):
             binary = work / "control-jobs"
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-ffunction-sections", "-fdata-sections", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                            f'-DDOSBOX_SETTINGS_DIR="{work / "settings"}"',
                             *icons.defines(), "-I", str(work / "include"), "-I", str(ROOT / "src/kernel/include"),
                             *ft.includes(), *(str(ROOT / s) for s in sources), str(library),
                             "-Wl,--gc-sections", "-pthread", "-lm", "-o", str(binary)], check=True)

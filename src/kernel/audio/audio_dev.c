@@ -16,6 +16,13 @@
 static struct vfs *settings_vfs;
 static struct kmutex control_lock;
 static struct kmutex service_lock; /* serialize write-side startup and worker */
+static bool power_stopped;
+void audio_ec_attach(void)
+{
+    if (!audio.initialized || !kmutex_lock_until(&control_lock,deadline_after_ms(2000))) return;
+    if (!power_stopped) { thinkpad_ec_init(); thinkpad_ec_start(); }
+    kmutex_unlock(&control_lock);
+}
 static struct vfs_table settings_table; /* bounded, never on a kernel stack */
 struct audio_cfg { uint32_t magic, sequence, checksum, reserved; struct ciuki_mixer_master master; };
 _Static_assert(sizeof(struct audio_cfg) == 48, "durable audio record");
@@ -235,6 +242,21 @@ void audio_fail(int error)
         audio_stream_lead(audio.streams[i]); /* f1-101: no producer boost on a failed device */
         kwait_wake_all(&audio.streams[i]->changed);
     }
+}
+int audio_power_quiesce(void)
+{
+    if (!audio.initialized || power_stopped) return 0;
+    uint64_t end = deadline_after_ms(2000);
+    if (!kmutex_lock_until(&service_lock, end)) return -EBUSY;
+    if (!kmutex_lock_until(&control_lock, end)) { kmutex_unlock(&service_lock); return -EBUSY; }
+    int stopped = thinkpad_ec_stop();
+    if (stopped) { kmutex_unlock(&control_lock); kmutex_unlock(&service_lock); return stopped; }
+    audio_fail(-ENODEV);
+    audio_backend_shutdown();
+    struct audio_transport b; audio_backend_snapshot(&b);
+    int e = audio.quarantined || b.quarantine || b.running ? -EIO : 0;
+    if (!e) power_stopped = true;
+    kmutex_unlock(&control_lock); kmutex_unlock(&service_lock); return e;
 }
 /* The service start moved later by the firmware time proven since `firmware`. */
 static uint64_t service_start(uint64_t start, uint64_t firmware)

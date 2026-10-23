@@ -56,11 +56,12 @@ static void test_joystick_broker(void)
     d.clients[i].program=DESK_APP_CONTROL;desk_receive(&d,i,&m);desk_flush(&d,i);
     assert(joystick_requests==1 && desk_parse(&fake_messages[fake_sent-1],0,NULL,&p));
     assert(p.opcode==DESK_JOYSTICK_RESULT && !p.result && p.joystick.device==257 && p.joystick.generation==42);
-    for (unsigned op=CIUKI_JOY_SAVE_GAME;op<=CIUKI_JOY_SAVE_STATUS;op++) {
+    /* f2-125: GET_GAME (8) reads a game's saved choice for Game properties. */
+    for (unsigned op=CIUKI_JOY_SAVE_GAME;op<=CIUKI_JOY_GET_GAME;op++) {
         c.operation=op;memcpy(m.data+8,&c,sizeof(c));
         assert(desk_parse(&m,1,NULL,&p));
     }
-    c.operation=CIUKI_JOY_SAVE_STATUS+1;memcpy(m.data+8,&c,sizeof(c));assert(!desk_parse(&m,1,NULL,&p));
+    c.operation=CIUKI_JOY_GET_GAME+1;memcpy(m.data+8,&c,sizeof(c));assert(!desk_parse(&m,1,NULL,&p));
     c.operation=CIUKI_JOY_NEXT;memcpy(m.data+8,&c,sizeof(c));
     d.power.state=1;desk_receive(&d,i,&m);desk_flush(&d,i);assert(joystick_requests==1);
     assert(desk_parse(&fake_messages[fake_sent-1],0,NULL,&p) && p.result==-EBUSY);
@@ -1035,6 +1036,34 @@ static void test_game_data_properties(void)
     cleanup();
     puts("PASS game data properties: async query, size/quota, reset confirmation/cancel, busy refusal, export folder");
 }
+static void test_power_status(void)
+{
+    setup(640,480); desk_shell_enable(&d);
+    int old=desk_shell_tray_box(&d).w;
+    struct ciuki_power_status p={.version=1,.size=sizeof(p),.ac_online=CIUKI_POWER_UNKNOWN,.lid_open=CIUKI_POWER_UNKNOWN};
+    assert(!desk_shell_power_update(&d,&p));
+    assert(desk_shell_tray_box(&d).w==old+SH_TRAY_ICON_SIZE+SH_TRAY_GAP);
+    struct desk_box b=desk_shell_tray_icon_box(&d,SH_TRAY_POWER);
+    assert(b.w==16 && b.x>=desk_shell_tray_box(&d).x);
+    p.shutdown_requests=1; assert(!desk_shell_power_update(&d,&p) && d.sh.want_power==2);
+    d.sh.want_power=0; assert(!desk_shell_power_update(&d,&p) && !d.sh.want_power);
+    d.sh.gate=1; p.shutdown_requests=2; assert(!desk_shell_power_update(&d,&p) && !d.sh.want_power);
+    d.sh.gate=0; d.power.state=DESK_POWER_CLOSING; p.shutdown_requests=3;
+    assert(!desk_shell_power_update(&d,&p) && !d.sh.want_power);
+    /* APM 1.2 provider record: one percent battery feeds the same tray. */
+    struct ciuki_power_status apm={.version=1,.size=sizeof(apm),.provider=CIUKI_POWER_PROVIDER_APM,.ownership=CIUKI_POWER_OWNED,
+        .shutdown_requests=3,.ac_online=CIUKI_POWER_AC_BACKUP,.lid_open=CIUKI_POWER_UNKNOWN,.battery_count=1};
+    apm.batteries[0]=(struct ciuki_power_battery){.id=1,.present=1,.unit=CIUKI_POWER_UNIT_PERCENT,.state=1,.design=CIUKI_POWER_UNKNOWN,
+        .full=100,.remaining=7,.rate=CIUKI_POWER_UNKNOWN,.voltage=CIUKI_POWER_UNKNOWN,.seconds=600};
+    d.power.state=0; assert(!desk_shell_power_update(&d,&apm) && !d.sh.want_power && d.sh.power_status.provider==CIUKI_POWER_PROVIDER_APM);
+    uint32_t *pixels=calloc((size_t)640*480,4); assert(pixels); d.pixels=pixels;
+    assert(!desk_redraw(&d)); /* tray: caution battery with the on-battery mark */
+    struct desk_box tray=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); unsigned painted=0;
+    for (int y=tray.y;y<tray.y+tray.h;y++) for (int x=tray.x;x<tray.x+tray.w;x++) painted+=pixels[y*640+x]!=pixels[tray.y*640+tray.x];
+    assert(painted); d.pixels=NULL; free(pixels);
+    p.battery_count=5; assert(desk_shell_power_update(&d,&p)==-1);
+    puts("PASS power desktop: tray geometry, unknown values, coalesced orderly request, gate and shutdown guards, APM percent record");
+}
 int main(void)
 {
     test_joystick_broker();
@@ -1044,5 +1073,6 @@ int main(void)
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     test_game_data_properties();
+    test_power_status();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

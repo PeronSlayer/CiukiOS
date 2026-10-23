@@ -10,6 +10,8 @@
 #include <ciuki/cpustat.h>
 #include <ciuki/work.h>
 #include "dosvm_internal.h"
+#pragma weak dosvm_game_ports_apply
+#pragma weak dosvm_game_ports_close
 #pragma weak dosvm_lpt_stop
 #include "dosvm_network.h"
 
@@ -1299,6 +1301,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
     dosvm_uart_close(v);
+    int printer_cleanup=dosvm_game_ports_close ? dosvm_game_ports_close(v) : 0;
     int network_error = dosvm_network_detach(v);
     if (network_error) { destroying[slot] = false; return network_error; }
     int video_error=dosvm_fullscreen_leave(key,false);
@@ -1319,11 +1322,12 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         file_cleanup=v->info.cleanup_error;
     }
     dosvm_perf_dump(v);
-    v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
+    v->info.data_loss = printer_cleanup || (v->info.dirty && (forced || v->info.reason != DOSVM_EXIT));
     int floppy_error=dosvm_floppy_close(v);
     if (floppy_error) { destroying[slot]=false; return floppy_error; }
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT || (v->persistent && file_cleanup));
     if (!e) e=file_cleanup;
+    if (!e) e=printer_cleanup;
     if (e && v->info.dirty) v->info.data_loss = true;
     if (audio_vm_detach) audio_vm_detach(key); /* f4-05: revoke the mixer source first */
     dosvm_audio_close(v);
@@ -1503,6 +1507,7 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     kpreempt_point();
     e = dosvm_disk_open(v, config ? config->base : 0);
     if (e) goto fail;
+    if (v->game && dosvm_game_ports_apply && (e=dosvm_game_ports_apply(v))) goto fail;
     if (v->game || v->kernel)
         rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u",
                       v->game,v->kernel==2 ? "unified" : "fixture",v->base_sha256,

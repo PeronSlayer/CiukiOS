@@ -2,6 +2,8 @@
 static struct desktop shutdown_desktop;
 static unsigned shutdown_calls, shutdown_prepares, shutdown_terms;
 static int shutdown_error, shutdown_busy_left, shutdown_vm_live;
+static int shutdown_progress;
+static int shutdown_state(void) { return shutdown_progress; }
 static uint64_t shutdown_call_times[32];
 static int shutdown_external_live=1;
 static int shutdown_alive(struct desktop *d, uint32_t pid)
@@ -40,11 +42,13 @@ static void shutdown_setup(void)
     shutdown_desktop.self_pid=99; shutdown_desktop.now_ns=1000000000ull;
     shutdown_desktop.terminate=shutdown_terminate; terminate_authority=66;
     shutdown_desktop.power_request=shutdown_request;
+    shutdown_desktop.power_state=shutdown_state;
     shutdown_desktop.power_prepare=shutdown_prepare;
     shutdown_desktop.power_alive=shutdown_alive;
     shutdown_desktop.pixels=calloc(640*480,4); assert(shutdown_desktop.pixels);
     shutdown_calls=shutdown_terms=shutdown_prepares=0;
     shutdown_error=shutdown_busy_left=shutdown_vm_live=0;
+    shutdown_progress=0;
     shutdown_external_live=1;
     shell_regular_fd=shell_directory_fd=-1;
 }
@@ -274,6 +278,17 @@ static void test_shutdown_sequence(void)
     shutdown_setup(); shutdown_error=EIO; desk_power_begin(d,2); shutdown_at(1000000000ull);
     assert(!d->power.state && strstr(d->sh.message_text,"Shut down failed") && strstr(d->sh.message_text,strerror(EIO)));
     shutdown_cleanup();
+    for (unsigned uncertain=0;uncertain<2;uncertain++) {
+        shutdown_setup(); shutdown_error=uncertain ? EBUSY : EIO;
+        shutdown_progress=uncertain ? CIUKI_POWER_UNCERTAIN : CIUKI_POWER_STOPPED;
+        desk_power_begin(d,2); shutdown_at(1000000000ull);
+        assert(d->power.state==DESK_POWER_DONE && shutdown_calls==1);
+        assert(strstr(d->power.text,uncertain ? "reset button" : "safe to turn off"));
+        if (uncertain) assert(!strstr(d->power.text,"safe to turn off"));
+        desk_power_cancel(d); assert(d->power.state==DESK_POWER_DONE);
+        shutdown_at(2000000000ull); assert(shutdown_calls==1);
+        shutdown_cleanup();
+    }
 
     /* Runtime gates (including the crash-isolation desktop) cannot begin. */
     shutdown_setup(); d->sh.gate=1;

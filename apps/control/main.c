@@ -20,6 +20,7 @@
 #include <ciuki/proc.h>
 #include <ciuki/devices.h>
 #include <ciuki/net.h>
+#include <ciuki/power.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -34,12 +35,15 @@
 #include <unistd.h>
 
 #include "network_io.inc"
+#include "../dosbox/port_settings.h"
 
 struct cp_main { struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     uint32_t joystick_serial;
+    struct cp_job game_job;
+    struct cp_game_result game_result;
     int saved_w, saved_h;
     const char *disp_state, *disp_decode, *disp_wait;
     unsigned disp_done;
@@ -298,6 +302,24 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
     if (!r && request == DESK_SETTINGS_AUDIO_TEST) m->audio_serial = m->serial;
     return r;
 }
+static void game_work(void *arg)
+{
+    struct cp_main *m=arg;struct cp_game_result *r=&m->game_result;
+    r->error=r->saved ? dosbox_ports_save(r->game,&r->ports) : dosbox_ports_load(r->game,&r->ports,&r->rejected);
+}
+static int game_begin(void *ctx,unsigned game,const struct game_ports_settings *p)
+{
+    struct cp_main *m=ctx;
+    if (m->game_job.started) return -EBUSY;
+    m->game_result=(struct cp_game_result){.game=game,.saved=p!=NULL};
+    if (p) m->game_result.ports=*p;
+    return cp_job_start(&m->game_job,game_work,m,notify_completion,m);
+}
+static int game_poll_result(void *ctx,struct cp_game_result *r)
+{
+    struct cp_main *m=ctx;if (!cp_job_ready(&m->game_job)) return 0;
+    cp_job_finish(&m->game_job);*r=m->game_result;return 1;
+}
 static int joystick_request(void *ctx, const struct ciuki_joystick_control *c)
 {
     struct cp_main *m=ctx; struct ciuki_message msg;
@@ -365,6 +387,8 @@ static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *leng
     return close(fd) ? -errno : 0;
 }
 static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
+static int read_power_status(void *ctx, struct ciuki_power_status *out)
+{ (void)ctx; return ciuki_power_status(out) ? -errno : 0; }
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -477,15 +501,18 @@ static void idle(void *arg)
         if (!du_window_queue(&m->window,&query)) m->engine_serial=m->serial;
         m->engine_next=mono+2000000000ull;
     }
+    if (cp_job_ready(&m->game_job)) cp_tick(&m->app);
     int error;
     if (settings_result(m,&error)) {
         if (m->reload_pending) {unsigned request=(unsigned)m->reload_pending;m->reload_pending=0; if (!error) apply(m,request,0,0); }
         cp_settings_saved(&m->app,error);
     }
-    /* Clocks, uptime and external mixer state have genuine one-second work.
+    /* Clocks, uptime, external mixer state and the cached power status
+     * (call 73 STATUS: no firmware call) have genuine one-second work.
      * Other pages have no heartbeat. Navigation/close also runs on input and
      * completion, even when the wall clock has not changed. */
-    int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS || m->app.page==CP_JOYSTICK;
+    int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS || m->app.page==CP_JOYSTICK ||
+        m->app.page==CP_POWER;
     if (ticking && (!m->tick_next || mono>=m->tick_next)) {
         cp_tick(&m->app); m->tick_next=mono+1000000000ull;
     } else if (!ticking) m->tick_next=0;
@@ -640,13 +667,18 @@ static int control_run(struct cp_main *m)
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
+    unsigned game=0;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
             char *end; long n = strtol(argv[i] + 13, &end, 10);
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
-        else return 2;
+        else if (!strncmp(argv[i],"--game=",7)) {
+            char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
+            if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
+            game=(unsigned)n;page=CP_JOYSTICK;
+        } else return 2;
     }
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
@@ -659,10 +691,11 @@ int main(int argc, char **argv)
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
-    h->engine=engine_query; h->engine_info=generic_engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
+    h->engine=engine_query; h->engine_info=generic_engine_query; h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;
+    h->game_begin=game_begin;h->game_poll=game_poll_result;
     h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
 
     const char *display = getenv("CIUKI_DISPLAY");
@@ -685,11 +718,13 @@ int main(int argc, char **argv)
         completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
-    if (cp_attach(&m->app, &m->ui, page)) {
+    if (cp_attach(&m->app, &m->ui, game ? CP_HOME : page)) {
         du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
+    if (game) cp_game_open(&m->app,game);
     int r = control_run(m);
     cp_decoder_stop();
+    cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);
     cp_job_finish(&m->assets);
     if (!m->assets_ready) { free(m->pci_cache); free(m->usb_cache); }

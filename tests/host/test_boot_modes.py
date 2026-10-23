@@ -584,7 +584,9 @@ int main(void)
         body = power.split('int32_t power_syscall(uint32_t action)', 1)[1]
         self.assertLess(body.index('caller->pid != supervisor_desktop_pid()'), body.index('CIUKI_POWER_QUERY'))
         self.assertLess(body.index('flush_storage()'), body.index('kernel_reboot()'))
-        self.assertLess(body.index('flush_storage()'), body.index('acpi_power_off()'))
+        # One soft-off path for both providers (ACPI S5, APM Off), after the stopped latch.
+        self.assertLess(body.index('flush_storage()'), body.index('power_source_mark_stopped()'))
+        self.assertLess(body.index('power_source_mark_stopped()'), body.index('power_source_soft_off()'))
         wrapper = (ROOT / 'sdk/libciuki/power.c').read_text()
         self.assertIn('CU_CALL(POWER, action, 0, 0, 0, 0, 0)', wrapper)
         header = (ROOT / 'sdk/sysroot-overlay/include/ciuki/power.h').read_text()

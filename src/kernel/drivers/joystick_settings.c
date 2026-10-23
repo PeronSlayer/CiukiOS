@@ -237,6 +237,22 @@ bool joystick_settings_game(unsigned game, struct joystick_route *r)
     if (game && !p->kind) p=&games[0].value;
     return route(p,r);
 }
+int joystick_settings_get_game(struct ciuki_joystick_control *c)
+{
+    if (!started) return -EAGAIN;
+    if (!c->axis || c->axis>JOY_SETTINGS_GAMES) return -EINVAL;
+    const struct preference *p=&games[c->axis].value;
+    struct joystick_route r={0};
+    c->attached=p->kind;
+    if (p->kind==1) c->device=CIUKI_JOY_DISABLED;
+    else if (p->kind==2) {
+        if (route(p,&r)) c->attached=3;
+        c->device=r.device; c->generation=r.generation;
+        c->second_device=r.second_device; c->second_generation=r.second_generation; c->mode=r.mode;
+        c->session=joystick_session();
+    }
+    return 0;
+}
 void joystick_settings_start(const struct joystick_settings_io *io)
 {
     /* Only initialization or the host's reboot model calls this function. */

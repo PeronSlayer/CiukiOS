@@ -630,7 +630,12 @@ static void test_client_boundary(void)
     c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.reserved[0]=0; c.launch.reserved[1]=1;
-    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENODEV); c.launch.reserved[1]=0;
+    /* f2-125: an incomplete explicit tuple (no generation or session) is
+     * malformed; a complete one without the live joystick session is ENODEV. */
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.reserved[2]=1; c.launch.reserved[6]=1;
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENODEV);
+    c.launch.reserved[1]=c.launch.reserved[2]=c.launch.reserved[6]=0;
     c.launch.reserved[7]=1; /* words 1..6 now carry the joystick selection */
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); c.launch.reserved[7]=0;
     c.launch.reserved[0]=0; workload_disk=true;

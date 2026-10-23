@@ -1,6 +1,6 @@
-/* ACPICA OSL: serialized, bounded, read-only firmware inventory.
+/* ACPICA OSL: serialized bounded inventory and the approved power owner.
  * SPDX-License-Identifier: GPL-2.0-only */
-#include "internal.h"
+#include "runtime.h"
 #include "acclib.h"
 #include <stdarg.h>
 
@@ -18,8 +18,8 @@ static struct allocation *allocations;
 struct mapping { void *ptr; uint32_t address, length, refs; };
 static struct mapping mappings[FW_MAX];
 struct semaphore { uint32_t units, max, waiters; };
-/* No IRQ/GPE/EC callbacks are admitted in read-only mode. A bounded queue
- * remains available for non-event notification work on the inventory thread. */
+/* IRQ/GPE callbacks are refused in read-only mode. Owned event methods run
+ * on this bounded queue; EC byte progress is independent of that worker. */
 static struct { ACPI_OSD_EXEC_CALLBACK fn; void *arg; } queue[16];
 static unsigned queued;
 
@@ -45,6 +45,7 @@ void fw_budget_end(void) { budgeting = false; }
 void fw_budget_cancel(void) { fw_fail(AE_TIME); }
 ACPI_STATUS AcpiCiukiBudgetStep(void)
 {
+    if (fw_interrupt) return AE_OK;
     if (failure) return failure;
     if (!budgeting) return AE_OK; /* ACPICA shutdown is always allowed to unwind. */
     if (!steps_left || fw_os->clock() >= deadline) { fw_fail(AE_TIME); return failure; }
@@ -56,24 +57,27 @@ void fw_alloc_stats(uint32_t *live, uint32_t *high) { *live = allocated; *high =
 void *AcpiOsAllocate(ACPI_SIZE n)
 {
     if (!fw_os || !n || n > FW_ALLOC_MAX - sizeof(struct allocation)) return NULL;
+    uint32_t flags = fw_os->lock();
     size_t charge = fw_os->charge(n + sizeof(struct allocation));
-    if (charge > FW_ALLOC_MAX - allocated) { fw_fail(AE_NO_MEMORY); return NULL; }
+    if (charge > FW_ALLOC_MAX - allocated) { fw_fail(AE_NO_MEMORY); fw_os->unlock(flags); return NULL; }
     struct allocation *a = fw_os->alloc(n + sizeof(*a));
-    if (!a) { fw_fail(AE_NO_MEMORY); return NULL; }
+    if (!a) { fw_fail(AE_NO_MEMORY); fw_os->unlock(flags); return NULL; }
     a->bytes = n; a->charge = charge; a->prev = NULL; a->next = allocations;
     if (allocations) allocations->prev = a;
     allocations = a; allocated += charge; if (allocated > peak) peak = allocated;
-    return a + 1;
+    fw_os->unlock(flags); return a + 1;
 }
 void *AcpiOsAllocateZeroed(ACPI_SIZE n)
 { void *p = AcpiOsAllocate(n); if (p) memset(p, 0, n); return p; }
 void AcpiOsFree(void *ptr)
 {
     if (!ptr) return;
+    uint32_t flags = fw_os->lock();
     struct allocation *a = (struct allocation *)ptr - 1;
     if (a->prev) a->prev->next = a->next; else allocations = a->next;
     if (a->next) a->next->prev = a->prev;
     allocated -= a->charge; fw_os->free(a);
+    fw_os->unlock(flags);
 }
 ACPI_STATUS AcpiOsInitialize(void) { return fw_os ? AE_OK : AE_NOT_CONFIGURED; }
 ACPI_STATUS AcpiOsTerminate(void) { return AE_OK; }
@@ -194,20 +198,23 @@ UINT64 AcpiOsGetTimer(void) { return fw_os->clock(); }
 ACPI_STATUS AcpiOsExecute(ACPI_EXECUTE_TYPE type, ACPI_OSD_EXEC_CALLBACK fn, void *arg)
 {
     if (!fn) return AE_BAD_PARAMETER;
-    if (type != OSL_NOTIFY_HANDLER) return AE_ACCESS;
-    if (queued == 16) return AE_LIMIT;
-    queue[queued].fn = fn; queue[queued++].arg = arg; return AE_OK;
+    if (type != OSL_NOTIFY_HANDLER && (!fw_runtime || type != OSL_GPE_HANDLER)) return AE_ACCESS;
+    uint32_t flags = fw_os->lock();
+    if (queued == 16) { fw_os->unlock(flags); fw_power.event_overflows++; return AE_LIMIT; }
+    queue[queued].fn = fn; queue[queued++].arg = arg; fw_os->unlock(flags); return AE_OK;
 }
-void AcpiOsWaitEventsComplete(void)
+void fw_queue_drain(unsigned limit)
 {
     /* Pop before dispatch: callbacks cannot extend this drain indefinitely. */
-    unsigned count = queued;
+    unsigned count = queued < limit ? queued : limit;
     while (count-- && queued && !AcpiCiukiBudgetStep()) {
+        uint32_t flags = fw_os->lock();
         ACPI_OSD_EXEC_CALLBACK fn = queue[0].fn; void *arg = queue[0].arg;
         for (unsigned i = 1; i < queued; i++) queue[i - 1] = queue[i];
-        queued--; fn(arg); fw_os->pause(0);
+        queued--; fw_os->unlock(flags); fn(arg); fw_os->pause(0);
     }
 }
+void AcpiOsWaitEventsComplete(void) { fw_queue_drain(16); }
 void AcpiOsSleep(UINT64 ms)
 {
     if (ms > 250) { fw_fail(AE_TIME); return; }
@@ -238,11 +245,21 @@ ACPI_STATUS AcpiOsReadPort(ACPI_IO_ADDRESS a, UINT32 *v, UINT32 w)
 { UINT64 n = 0; if (!v) return AE_BAD_PARAMETER; ACPI_STATUS s = access(0, a, w, &n, NULL); *v = (UINT32)n; return s; }
 ACPI_STATUS AcpiOsReadMemory(ACPI_PHYSICAL_ADDRESS a, UINT64 *v, UINT32 w) { return access(1, a, w, v, NULL); }
 ACPI_STATUS AcpiOsReadPciConfiguration(ACPI_PCI_ID *p, UINT32 a, UINT64 *v, UINT32 w) { return access(2, a, w, v, p); }
-ACPI_STATUS AcpiOsWritePort(ACPI_IO_ADDRESS a, UINT32 v, UINT32 w) { (void)a; (void)v; (void)w; fw_fail(AE_ACCESS); return AE_ACCESS; }
-ACPI_STATUS AcpiOsWriteMemory(ACPI_PHYSICAL_ADDRESS a, UINT64 v, UINT32 w) { (void)a; (void)v; (void)w; fw_fail(AE_ACCESS); return AE_ACCESS; }
-ACPI_STATUS AcpiOsWritePciConfiguration(ACPI_PCI_ID *p, UINT32 a, UINT64 v, UINT32 w) { (void)p; (void)a; (void)v; (void)w; fw_fail(AE_ACCESS); return AE_ACCESS; }
-ACPI_STATUS AcpiOsInstallInterruptHandler(UINT32 n, ACPI_OSD_HANDLER fn, void *ctx) { (void)n; (void)fn; (void)ctx; return AE_ACCESS; }
-ACPI_STATUS AcpiOsRemoveInterruptHandler(UINT32 n, ACPI_OSD_HANDLER fn) { (void)n; (void)fn; return AE_ACCESS; }
+static ACPI_STATUS write(unsigned space, uint64_t a, unsigned w, UINT64 v, const ACPI_PCI_ID *p)
+{
+    ACPI_STATUS s = AE_ACCESS;
+    if (fw_writes && fw_os->write && !AcpiCiukiBudgetStep() && fw_region_check(space, a, w, p))
+        s = fw_os->write(space, a, w, v, p);
+    if (s) fw_fail(s);
+    return s;
+}
+ACPI_STATUS AcpiOsWritePort(ACPI_IO_ADDRESS a, UINT32 v, UINT32 w) { return write(0, a, w, v, NULL); }
+ACPI_STATUS AcpiOsWriteMemory(ACPI_PHYSICAL_ADDRESS a, UINT64 v, UINT32 w) { return write(1, a, w, v, NULL); }
+ACPI_STATUS AcpiOsWritePciConfiguration(ACPI_PCI_ID *p, UINT32 a, UINT64 v, UINT32 w) { return write(2, a, w, v, p); }
+ACPI_STATUS AcpiOsInstallInterruptHandler(UINT32 n, ACPI_OSD_HANDLER fn, void *ctx)
+{ return fw_runtime && fw_os->sci ? fw_os->sci(n, fn, ctx) : AE_ACCESS; }
+ACPI_STATUS AcpiOsRemoveInterruptHandler(UINT32 n, ACPI_OSD_HANDLER fn)
+{ return fw_runtime && fw_os->unsci ? fw_os->unsci(n, fn) : AE_ACCESS; }
 ACPI_STATUS AcpiOsEnterSleep(UINT8 n, UINT32 a, UINT32 b) { (void)n; (void)a; (void)b; return AE_ACCESS; }
 ACPI_STATUS AcpiOsSignal(UINT32 n, void *info) { (void)n; (void)info; fw_fail(AE_ERROR); return AE_ERROR; }
 void AcpiOsPrintf(const char *format, ...) { (void)format; }

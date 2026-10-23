@@ -57,6 +57,7 @@ def inputs():
                  "assets/sounds/kenney-interface/upstream.zip"))
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "sdk/win32/include/w32/server.h")
+    files.append(ROOT / "src/kernel/include/ciuki/game_ports_settings.h")
     files.append(ROOT / "src/probes/desktop_v3/controller.h")
     files.append(ROOT / "src/probes/win32_installers/controller.h")
     files.append(ROOT / "src/probes/win32_restart/controller.h")

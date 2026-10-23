@@ -328,6 +328,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (route.device==CIUKI_JOY_DISABLED) {
             if (route.generation || route.second_device || route.second_generation || route.mode || c.launch.reserved[6]) return -EINVAL;
         } else if (route.device) {
+            if (route.device>CIUKI_JOYSTICK_LAST || !route.generation || !c.launch.reserved[6] ||
+                route.second_device>CIUKI_JOYSTICK_LAST ||
+                (route.second_device ? (!route.mode || !route.second_generation) : route.second_generation)) return -EINVAL;
             if (!joystick_session || !c.launch.reserved[6] || c.launch.reserved[6]!=joystick_session() || !joystick_route_validate) return -ENODEV;
             uint32_t jf=irq_save(); int je=joystick_route_validate(&route); irq_restore(jf);
             if (je) return je;
@@ -397,6 +400,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }
+        c.changed|=v->ports_changed;
         if (c.launch.reserved[1]) {
             v->joystick.route=(struct joystick_route){0};
             if (c.launch.reserved[1]!=CIUKI_JOY_DISABLED)
@@ -406,7 +410,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             bool fallback=joystick_settings_game(c.launch.game,&v->joystick.route);
             irq_restore(jf);
             if (fallback) {
-                c.changed=CIUKI_DOSVM_JOYSTICK_FALLBACK;
+                c.changed|=CIUKI_DOSVM_JOYSTICK_FALLBACK;
                 klog("[joystick-settings] selected controller absent game=%u; first available fallback",c.launch.game);
             }
         }

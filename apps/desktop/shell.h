@@ -23,7 +23,7 @@
 #define SH_TRAY_GAP 4
 #define SH_TRAY_MARGIN 6
 /* Tray identifiers; geometry places Notifications next to the clock. */
-enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA };
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
 struct sh_notification {
     char title[64], text[320];
@@ -72,6 +72,9 @@ struct desk_shell {
     int volume_open, volume, muted, mixer_state;   /* mixer_state: 0 unknown, 1 read-only, 2 controllable, -1 absent */
     int volume_drag;
     struct ciuki_net_state network;
+    struct ciuki_power_status power_status;
+    uint64_t power_poll_ns;
+    uint32_t power_seen;
     int network_open;
     struct ciuki_media_state media;
     char media_labels[26][33];
@@ -133,6 +136,7 @@ struct desk_box desk_shell_clock_box(const struct desktop *);
 void desk_shell_clock_text_at(const struct desktop *, uint64_t, char *, size_t);
 int desk_shell_clock_width_at(const struct desktop *, uint64_t);
 void desk_shell_tray_damage(struct desktop *, int previous_width);
+int desk_shell_power_update(struct desktop *, const struct ciuki_power_status *);
 void desk_shell_volume_damage(struct desktop *);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
