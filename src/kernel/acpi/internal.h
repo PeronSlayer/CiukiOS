@@ -38,6 +38,9 @@ struct fw_ops {
     int (*activate)(void);
     void (*retire)(bool uncertain);
     void (*publish)(const struct ciuki_power_status *);
+    /* fx-3: the calling task's own execution time (100 ns, monotonic, does
+     * not advance while the task waits to run). NULL: wall clock. */
+    uint64_t (*run_clock)(void);
 };
 extern const struct fw_ops fw_kernel_ops;
 extern const struct fw_ops *fw_os;
@@ -47,7 +50,25 @@ extern unsigned fw_table_count;
 extern uint32_t fw_rsdp;
 void fw_bind(const struct fw_ops *ops);
 ACPI_STATUS fw_tables_discover(uint32_t rsdp);
+/* fx-3: one budgeted firmware operation. `ms` is execution time of the
+ * calling task (fw_ops.run_clock), not wall time; a hard wall cap of
+ * max(ms, FW_WALL_CAP_MS) and the step count still bound it. Inside a scan
+ * (fw_scan_begin..fw_scan_end) the whole scan also has FW_SCAN_WALL_MS. */
+#define FW_WALL_CAP_MS 2000u   /* = ACPICA ACPI_MAX_SLEEP, the longest single AML wait upstream admits */
+#define FW_SCAN_WALL_MS 10000u /* whole namespace scan, five operation caps */
 void fw_budget_begin(uint32_t steps, uint32_t ms);
+void fw_budget_stage(const char *stage, ACPI_HANDLE node);
+void fw_scan_begin(void);
+void fw_scan_end(void);
+struct fw_budget_report {
+    const char *reason;        /* "none", "run", "wall", "scan_wall", "steps", "cancel" */
+    const char *stage, *first_stage;
+    char node[5], first_node[5];
+    uint32_t run_us, wall_us, steps, run_limit_ms, wall_cap_ms;
+    uint32_t scan_run_us, scan_wall_us, first_error, semaphore_timeouts;
+    bool expired, run_clock;
+};
+void fw_budget_snapshot(struct fw_budget_report *);
 void fw_budget_cancel(void);
 void fw_budget_end(void);
 ACPI_STATUS fw_error(void);

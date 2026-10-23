@@ -22,6 +22,7 @@ static bool ec_obf, ec_query;
 /* fx-3: T23-shaped EC: hold the RD_EC reply (late OBF), count QR_EC. */
 static bool ec_hold_reply, ec_late;
 static unsigned ec_query_commands, ec_reads_of_data;
+static bool nested_quirk; static int nested_result=1; static uint64_t nested_wait;
 /* ciuki/power_source.h seam: one ACPI/APM provider, reserved before writes. */
 static unsigned reserves, activations, retires, publishes;
 static bool retired_uncertain;
@@ -65,7 +66,16 @@ static ACPI_STATUS write_access(unsigned space, uint64_t a, unsigned width, UINT
         else { assert(value==0xf0); disables++; if (!strcmp(scenario,"rollback")) return AE_ERROR; io[0x604]&=~1u; }
     } else if (a==0x66) {
         ec_command=value; ec_step=0;
-        if (value==0x84) { ec_query_commands++; ec_reply=ec_query ? 0x42 : 0; ec_query=false; ec_obf=true; }
+        if (value==0x84) {
+            ec_query_commands++; ec_reply=ec_query ? 0x42 : 0; ec_query=false; ec_obf=true;
+            if (nested_quirk) {
+                /* fx-3, ACPI-owned: the volume quirk arrives while the event
+                 * worker's QR_EC holds the engine; it waits, bounded. */
+                nested_quirk=false; uint8_t v=0; unsigned cost=9; uint64_t start=now;
+                nested_result=acpi_ec_quirk_transfer_counted(false,0x30,&v,5,&cost);
+                nested_wait=now-start; assert(!cost);
+            }
+        }
         else assert(value==0x80 || value==0x81);
     } else if (a==0x62) {
         if (!ec_step++) {
@@ -126,7 +136,7 @@ static void retire(bool uncertain) { assert(reserves); retires++; retired_uncert
 static void publish(const struct ciuki_power_status *p)
 { assert(p->version==CIUKI_POWER_VERSION && p->size==sizeof(*p) && p->battery_count<=CIUKI_POWER_BATTERIES); publishes++; }
 static const struct fw_ops ops={allocate,release,charge,map,unmap,clock100ns,pause_ms,stall,thread,lock,unlock,access,
-    write_access,claim,sci,unsci,finish,reserve,activate,retire,publish};
+    write_access,claim,sci,unsci,finish,reserve,activate,retire,publish,NULL};
 static void fire(void)
 { assert(irq_fn); fw_interrupt=true; (void)irq_fn(irq_context); fw_interrupt=false; }
 static void repeat(void *arg)
@@ -218,8 +228,12 @@ int main(int argc, char **argv)
                 assert(!e && value==1 && !ec_address);
                 value=7; assert(!acpi_ec_quirk_transfer(true,0,&value));
                 uint32_t v=0; assert(!fw_integer(ACPI_ROOT_OBJECT,"\\_SB.EC00.READ",&v) && v==7);
-                ec_query=true; fw_power_poll(); fw_power_poll();
+                ec_query=true; nested_quirk=true; fw_power_poll(); fw_power_poll();
                 assert(!acpi_power_snapshot(&p) && p.shutdown_requests==1);
+                assert(nested_result==-16 && nested_wait>=5*10000 && nested_wait<=7*10000);
+                ec_value=0x09; assert(!acpi_ec_quirk_transfer(false,0x30,&value) && value==0x09 && ec_address==0x30);
+                value=0x49; assert(!acpi_ec_quirk_transfer(true,0x30,&value) && ec_value==0x49); /* owned: RD/WR 30h */
+                puts("PASS power ec-events: ACPI-owned EC serves the volume quirk; busy engine waited, bounded");
             }
         }
         if (!strcmp(scenario,"storm")) {

@@ -171,6 +171,43 @@ saved preference and mute gate, a desktop level change still makes no EC
 access and is not undone by the next poll, and a desktop mute change is
 written to the EC and proved by a read.
 
+Amendment fx-3 follow-up (lead decision 2026-10-23, supersedes "a desktop
+level change still makes no EC access" above and the f2-96 note that the
+codec level alone follows the desktop): the system master and the console
+amplifier are one volume.
+
+- System -> EC: level = (master × 14 + 50) / 100, rounded to nearest
+  (0→0, 5→1, 10→1, 20→3, 50→7, 65→9, 75→11, 95→13, 100→14). Only 0 maps to
+  0 and only 100 to 14, so a key press is visible in register 30h except at
+  the true bounds, where the master is already 0 or 100. Mute is bit 6 of
+  the same register. Following Linux v6.12 thinkpad_acpi.c
+  (`__volume_set_volume_ec`, `__volume_set_mute_ec`; IBM models are
+  whitelisted for level control, `TPACPI_VOL_Q_LEVEL`): read 30h, replace
+  bits 0–3 or bit 6, keep the other bits, write only when the byte
+  changes; CiukiOS also reads the byte back to prove it.
+- EC -> system: unchanged, five master points per level step (f4-29), all
+  steps between two polls applied.
+- A tray/Control Panel/mixer level change makes no EC access at once; the
+  EC worker writes the level once, 250 ms after the last change (a slider
+  drag is one write). A mute change is written at once (read, write, proof)
+  with the current level.
+- A key press is mirrored at the next poll; the EC is requantized to the
+  master's level only after the keys have been quiet for 250 ms and after
+  a fresh read, so the OS never writes over a press it has not seen. Because
+  a press is five points and an EC level about seven, roughly one press in
+  three lands between two levels: the amplifier then returns to the level
+  of the new master (at most one level) within the next turn. This is the
+  price of the owner's five-point step on a 15-level amplifier; the tray and
+  the sound always agree afterwards.
+- Boot: the saved master sets the EC level at the first worker turn.
+- Cost: one RD_EC per 2 s poll (f2-96) plus, per user change, one WR_EC and
+  one proving RD_EC (each EC transaction about two 2.1 ms SMIs on the T23).
+- `ecpoll=0` now disables EC access entirely (no probe, no writes, no
+  popup refresh): the system volume is the codec/software master only and
+  the keys drive the amplifier under firmware control, unmirrored.
+- No CMOS NVRAM checkpoint (Linux `tpacpi_volume_checkpoint_nvram`, byte
+  60h): the saved master re-applies the level at every boot instead.
+
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already
 qualified at boot, without bypassing quarantined resources.

@@ -28,12 +28,18 @@ struct thinkpad_ec {
      * boot; the largest single operation; operations cut by the bound. */
     uint32_t window_io, window_transactions, window_max_io, window_refused, window_requests;
     uint32_t total_io, total_transactions;
+    /* fx-3 follow-up: level_sync makes the EC level follow the system
+     * master (set by thinkpad_ec_start with the poll on); a pending sync is
+     * written once at sync_due, after the last change. */
+    bool level_sync, sync_pending;
+    uint64_t sync_due;
 };
 /* f1-100: on the T23 every EC transaction raises the EC event line (GPI12,
  * routed to SMI# while SCI_EN is clear) and costs about two 2.1 ms SMIs.
  * f2-96: without a poll the mixer no longer followed the volume keys, so the
  * default is one RD_EC every 2 s (one transaction, about 4 ms of SMI per
- * 2 s). BOOT.CFG ecpoll=0 turns the poll off, ecpoll=1 selects the 1 Hz
+ * 2 s). BOOT.CFG ecpoll=0 turns the poll off (fx-3 follow-up: and every
+ * EC access, the quirk does not attach), ecpoll=1 selects the 1 Hz
  * diagnosis rate; ecpoll=0 wins over ecpoll=1. Exact tokens over the
  * bounded boot options. A failure retries at the poll cadence (1 s when
  * the poll is off and an explicit action asks). */
@@ -41,6 +47,9 @@ struct thinkpad_ec {
 #define THINKPAD_EC_POLL_MS 1000u        /* ecpoll=1 cadence; retry without a poll */
 #define THINKPAD_EC_REFRESH_MS 1000u     /* minimum spacing of requested refreshes */
 #define THINKPAD_EC_OP_TRANSACTIONS 4u   /* probe with a write: read, stable read, write, proof */
+#define THINKPAD_EC_SYNC_MS 250u         /* fx-3: coalescing delay of a system-to-EC level write */
+/* fx-3: system master 0..100 -> EC level 0..14, rounded to nearest. */
+unsigned thinkpad_ec_level(unsigned master);
 /* Returns the poll interval (0 off); *source names the deciding token
  * ("default", "ecpoll=0" or "ecpoll=1"). */
 uint32_t thinkpad_ec_poll_option(const char *options, size_t size, const char **source);

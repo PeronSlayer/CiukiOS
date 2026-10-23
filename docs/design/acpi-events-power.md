@@ -192,3 +192,81 @@ Sources: [ACPI 6.5 chapter 12](https://uefi.org/specs/ACPI/6.5/12_ACPI_Embedded_
 `issue_volchange`). Host evidence: `tests/host/acpi/events_test.c` scenario
 `t23-legacy` (and `no-crt`, `rollback`), `tests/host/audio/thinkpad_ec_test.inc`
 `test_thinkpad_ec_t23_attach`.
+
+## Scan budget counts execution time (fx-3 follow-up, 2026-10-23)
+
+Lead decision after the T23 trial of 9a60215f (`[acpi] inventory status=17
+devices=1`, `[sched] device_overrun task=acpi-power count=49` while the
+desktop started). Every budgeted firmware operation (`fw_budget_begin(steps,
+ms)`) had `ms` of wall clock, so time the P_DEVICE scan task spent waiting
+for the CPU counted as firmware work.
+
+- `ms` is now the scan task's own execution time: `fw_ops.run_clock` reads
+  cpustat's `run_cycles` of the current task (`cpu_path_clock`, IRQ time
+  excluded, SMM time included) in 100 ns units. Without a calibrated TSC it
+  is the wall clock, the previous behaviour.
+- Hard wall caps stay: `max(ms, FW_WALL_CAP_MS = 2000)` per operation and
+  `FW_SCAN_WALL_MS = 10000` for the whole scan (tables, load, walk,
+  collection, takeover). 2 s is ACPICA's `ACPI_MAX_SLEEP` (acconfig.h), the
+  longest single AML wait upstream admits; ACPICA bounds a `While` loop by
+  30 s of timer (`ACPI_MAX_LOOP_TIMEOUT`, dscontrol.c), and Linux adds no
+  namespace-load timeout of its own. The 10 s scan cap (five operation
+  caps) bounds how long the EC quirk and the serial PnP owner wait for the
+  ownership decision. The step bound (100000 per operation) is unchanged.
+- One honest record per scan: `[acpi] scan run_us= wall_us= run_clock=task|wall
+  first_error= first_stage= first_node= semaphore_timeouts=` and, when a
+  budget expired, `[acpi] budget expired reason=run|wall|scan_wall|steps|cancel
+  stage= node= run_us= wall_us= steps= run_limit_ms= wall_cap_ms= scan_cap_ms=`.
+  Stages: tables, load, walk (with the device's name), the evaluated method
+  (`_HID`, `_CID`, `_STA`, `_CRS`), collect, takeover. A timed-out OSL
+  semaphore wait (it returns AE_TIME without a sticky failure) is counted.
+  On the T23 the whole scan lasted about 180 ms of wall time
+  (ticks 1786–1970), shorter than one 250 ms budget, so the AE_TIME there may
+  also come from a step bound or a semaphore wait; the new record names it.
+
+Windows 98 decides ACPI vs APM at Setup: ACPI is installed only on systems
+on the retail CD's good-ACPI list unless `HKLM\Software\Microsoft\Windows\
+CurrentVersion\Detect\ACPIOption` is 1 (any ACPI BIOS) or 2 (never)
+(Windows 98 Resource Kit, OnNow/ACPI section, "To install ACPI", owner's
+media in `build/rskt/` page wrkc30_4; also quoted on
+[Tek-Tips](https://www.tek-tips.com/threads/acpi-in-win-98.19799)).
+Secondary sources report that Windows 98 SE also accepts an ACPI BIOS by
+date, from late 1999 onwards
+([a 2006 linux-kernel post quoting a BIOS readme: 12/02/99](https://lkml.rescloud.iu.edu/0602.1/1559.html);
+[LKML 2003 on Microsoft's good-list/date logic](https://lkml.iu.edu/0310.1/0799.html));
+no Microsoft primary text for the date rule was found.
+The T23 (2001, BIOS 1AET52WW) is in that range, so the scan must be able
+to complete there; it now can unless its AML really exceeds the bounds.
+
+What changes on the T23 if the takeover succeeds (analysis, not measured):
+
+- SCI: ACPI_ENABLE through SMI_CMD (B2h), SCI_INT from the FADT on a
+  level-triggered PIC line (ELCR checked), GPEs dispatched by ACPICA.
+- EC events: f1-100 measured GPI[12] (EC event line, GPE 1Ch) routed to
+  SMI# (`gpi_rout=01000000`). ICH3-M GPI_ROUT 01b is SMI#, 10b SCI; whether
+  the firmware reroutes it on ACPI_ENABLE is unknown. The OS never rewrites
+  it. The EC engine polls EC_SC every 20 ms for SCI_EVT and issues QR_EC
+  itself, so `_Qxx` events (Fn keys, thermal, battery) are served either way.
+- Power button (fixed event), lid (`_LID`), AC (`_PSR`), batteries
+  (`_BIF`/`_BST`, every 10 s) and S5 through `_PTS`/SLP_TYP: f1-110 paths.
+- Thermal: f1-110 refuses takeover for passive (`_PSV`/`_TC1`/`_TC2`/`_TSP`)
+  and `_HOT` zones, which ThinkPad DSDTs usually have; the T23 may stay
+  firmware-owned for that reason alone (status AE_SUPPORT in the record).
+  If a zone is admitted, `_TMP` is evaluated every 100 ms; on ThinkPads
+  `_TMP` reads EC registers, i.e. one EC transaction (two 2.1 ms SMIs on the
+  T23, f1-100) every 100 ms. Not changed here; flagged to the lead.
+- Volume quirk: ACPI-owned uses the same engine (62h/66h); a busy engine
+  (QR_EC or an AML field access in flight) is waited for within the
+  quirk's deadline instead of failing (`acpi_ec_quirk_transfer_counted`).
+  Firmware-owned uses the legacy binding above. Both are tested
+  (`tests/host/acpi/events_test.c` ec-events and t23-legacy,
+  `tests/host/audio/thinkpad_ec_test.inc` one-volume legacy/acpi).
+- Shutdown: the quirk stops in `audio_power_quiesce` before S5 and does not
+  touch the EC afterwards; the generic engine stays available for `_PTS`.
+  The shutdown lock order itself is fx-5's.
+
+Evidence: `tests/host/acpi/test.c` scenarios `preempted` (1 ms of other
+tasks between two clock reads: the scan completes, wall about 1 s, run
+about 0.1 ms), `preempted-wall` (same without run_clock: AE_TIME, the T23
+shape) and `starved` (wall caps expire with an honest record).
+

@@ -31,8 +31,15 @@ static const void *map(uint32_t a, uint32_t n)
     maps++; return rom + a;
 }
 static void unmap(const void *p, uint32_t n) { assert(p >= (const void *)rom && n); maps--; assert(maps >= 0); }
-static uint64_t clock100ns(void) { return now; }
-static void pause_ms(uint32_t n) { pauses++; now += n ? (uint64_t)n * 10000 : 1; }
+/* fx-3: other tasks run between two clock reads of a starved scan task. */
+static uint64_t clock_jump;
+static uint64_t clock100ns(void) { now += clock_jump; return now; }
+/* fx-3: a yield (pause 0) can hand the CPU to other tasks for
+ * yield_jump_ms of wall time; run_clock advances 1 us per budget check only. */
+static uint32_t yield_jump_ms;
+static uint64_t run_ticks;
+static void pause_ms(uint32_t n) { pauses++; now += n ? (uint64_t)n * 10000 : 1 + (uint64_t)yield_jump_ms * 10000; }
+static uint64_t run_clock(void) { run_ticks += 10; return run_ticks; }
 static int stall_us(uint32_t n) { now += (uint64_t)n * 10; return 0; }
 static uint64_t thread(void) { return 1; }
 static uint32_t lock(void) { return 0x200; }
@@ -44,7 +51,9 @@ static ACPI_STATUS access(unsigned space, uint64_t a, unsigned width, UINT64 *v,
 }
 /* Read-only inventory: no writes, routes or ACPI/APM power provider seam. */
 static const struct fw_ops ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, stall_us, thread, lock, unlock, access,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static const struct fw_ops run_ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, stall_us, thread, lock, unlock, access,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, run_clock};
 static void callback(void *p) { (*(int *)p)++; }
 static void osl(void)
 {
@@ -140,8 +149,27 @@ int main(int argc, char **argv)
     else {
         if (!strcmp(scenario, "allocation")) { assert(argc == 4); fail_after = atoi(argv[3]); }
         ACPI_STATUS s;
+        /* fx-3: preempted = the T23 shape (scan task starved by the desktop
+         * start: 1 ms of other tasks between two clock reads); preempted-wall is the same
+         * with the pre-fx-3 wall-clock budget; starved hits the wall caps. */
+        bool timed = !strcmp(scenario, "preempted") || !strcmp(scenario, "preempted-wall") || !strcmp(scenario, "starved");
+        if (timed) clock_jump = !strcmp(scenario, "starved") ? 500000 : 10000; /* 50 ms or 1 ms per clock read */
         if (!strcmp(scenario, "start-failure")) { s = AE_NO_MEMORY; fw_inventory_unavailable(s); }
-        else s = fw_inventory_run(&ops, !strcmp(scenario, "no-acpi") ? 0 : 0xe0000);
+        else s = fw_inventory_run(timed && strcmp(scenario, "preempted-wall") ? &run_ops : &ops, !strcmp(scenario, "no-acpi") ? 0 : 0xe0000);
+        struct fw_budget_report b; fw_budget_snapshot(&b);
+        if (timed) {
+            printf("acpi %s: status=%u expired=%u reason=%s stage=%s node=%s run_us=%u wall_us=%u steps=%u scan_run_us=%u scan_wall_us=%u first_error=%u first_stage=%s\n",
+                   scenario, s, b.expired, b.reason, b.stage, b.node, b.run_us, b.wall_us, b.steps, b.scan_run_us, b.scan_wall_us, b.first_error, b.first_stage);
+            if (!strcmp(scenario, "preempted")) {
+                assert(!s && !b.expired && b.run_clock && b.scan_wall_us > 10 * b.scan_run_us && b.scan_wall_us > 250000);
+            } else if (!strcmp(scenario, "preempted-wall")) {
+                assert(s == AE_TIME || b.expired);
+                assert(b.expired && !strcmp(b.reason, "run") && b.first_error == AE_TIME && !b.run_clock);
+            } else {
+                assert(b.expired && (!strcmp(b.reason, "wall") || !strcmp(b.reason, "scan_wall")) && b.run_us < 250000 &&
+                       b.wall_us >= 2000000 && b.wall_cap_ms == FW_WALL_CAP_MS && b.scan_wall_us <= (FW_SCAN_WALL_MS + 3000) * 1000);
+            }
+        }
         struct ciuki_firmware_page p = {.version = 2, .size = sizeof(p)};
         assert(!firmware_inventory_page(&p));
         assert(!live && !maps && !accesses && !(p.flags & CIUKI_FIRMWARE_PENDING));
@@ -206,6 +234,8 @@ int main(int argc, char **argv)
         } else if (!strncmp(scenario,"serial",6) && strcmp(scenario,"serial-variable")) {
             assert(!s && !(p.flags&CIUKI_FIRMWARE_INCOMPLETE));
             printf("PASS acpi %s: assigned serial status and IRQ facts\n",scenario);
+        } else if (timed) {
+            printf("PASS acpi %s: scan budget counts the scan task's run time; wall caps %ums/op, %ums/scan\n", scenario, FW_WALL_CAP_MS, FW_SCAN_WALL_MS);
         } else if (!strcmp(scenario, "allocation")) {
             assert(s || p.flags & CIUKI_FIRMWARE_INCOMPLETE || fail_after >= alloc_calls);
         } else {

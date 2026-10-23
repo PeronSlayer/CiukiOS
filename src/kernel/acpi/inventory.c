@@ -33,6 +33,7 @@ static void unavailable(struct ciuki_firmware_record *r, ACPI_STATUS s)
 }
 static ACPI_STATUS evaluate(ACPI_HANDLE handle, char *name, ACPI_BUFFER *out)
 {
+    fw_budget_stage(name, handle);
     fw_budget_begin(100000, 250);
     ACPI_STATUS s = AcpiEvaluateObject(handle, name, NULL, out);
     if (fw_error()) s = fw_error();
@@ -148,8 +149,10 @@ static ACPI_STATUS device(ACPI_HANDLE handle, UINT32 level, void *ctx, void **re
         ACPI_HANDLE child;
         if (!AcpiGetNextObject(ACPI_TYPE_ANY, handle, NULL, &child)) flags |= CIUKI_FIRMWARE_TRUNCATED;
     }
+    fw_budget_stage("walk", NULL); /* fx-3: a walk failure names the walk, not the last method */
     ACPI_OBJECT_TYPE type; if (AcpiGetType(handle, &type)) return AE_OK;
     if (type != ACPI_TYPE_DEVICE && type != ACPI_TYPE_PROCESSOR && type != ACPI_TYPE_THERMAL && type != ACPI_TYPE_POWER) return AE_OK;
+    fw_budget_stage("walk", handle);
     struct ciuki_firmware_record *r = append(); if (!r) return AE_CTRL_TERMINATE;
     handles[count - 1] = handle; r->origin = CIUKI_FIRMWARE_ACPI;
     ACPI_BUFFER path = {ACPI_ALLOCATE_BUFFER, NULL};
@@ -183,6 +186,7 @@ static ACPI_STATUS device(ACPI_HANDLE handle, UINT32 level, void *ctx, void **re
     if (type == ACPI_TYPE_THERMAL || has(handle, "_TMP")) r->capabilities |= CIUKI_FW_CAP_THERMAL;
     if (type == ACPI_TYPE_POWER || has(handle, "_PS0")) r->capabilities |= CIUKI_FW_CAP_POWER;
     if (has(handle, "_PRW")) r->capabilities |= CIUKI_FW_CAP_WAKE;
+    fw_budget_stage("_CRS", handle);
     fw_budget_begin(100000, 250);
     ACPI_STATUS s = AcpiWalkResources(handle, "_CRS", resource, r);
     if (fw_error()) s = fw_error();
@@ -212,11 +216,14 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
 {
     complete = false; count = 0; flags = 0; status = 0; memset(handles, 0, sizeof(handles));
     fw_bind(ops); fw_runtime = power;
+    fw_scan_begin();
     fw_classes_reset();
+    fw_budget_stage("tables", NULL);
     fw_pnp_discover();
     status = fw_tables_discover(rsdp);
     bool initialized = false;
     if (!status) {
+        fw_budget_stage("load", NULL);
         fw_budget_begin(100000, 250);
         initialized = true; status = AcpiInitializeSubsystem();
         AcpiGbl_EnableInterpreterSlack = FALSE;
@@ -234,10 +241,12 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
                 if (!(AcpiGbl_FADT.Flags & ACPI_FADT_POWER_BUTTON) || !(AcpiGbl_FADT.Flags & ACPI_FADT_SLEEP_BUTTON)) root->capabilities |= CIUKI_FW_CAP_BUTTON;
                 if (has(ACPI_ROOT_OBJECT, "_S5")) root->capabilities |= CIUKI_FW_CAP_POWER;
             }
+            fw_budget_stage("walk", NULL);
             status = AcpiWalkNamespace(ACPI_TYPE_ANY, ACPI_ROOT_OBJECT, 64, device, NULL, NULL, NULL);
         }
         if (!status && power) {
             if (flags & CIUKI_FIRMWARE_TRUNCATED) status = AE_LIMIT;
+            fw_budget_stage("collect", NULL);
             /* Bind EC first, before dependent thermal/battery AML. */
             for (unsigned pass = 0; pass < 2 && !status; pass++)
                 for (unsigned i = 0; i < count && !status; i++) {
@@ -245,7 +254,7 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
                     if (!handles[i] || handles[i] == AcpiGbl_RootNode || !!(caps & CIUKI_FW_CAP_EC) != !pass) continue;
                     status = fw_power_collect(handles[i], caps, records[i].id,matches(&records[i],"PNP0C0C"));
                 }
-            if (!status) status = fw_power_takeover();
+            if (!status) { fw_budget_stage("takeover", NULL); status = fw_power_takeover(); }
             if (status) { fw_power.error = status; fw_power_stop(); }
         }
         uint32_t live; fw_alloc_stats(&live, &high_water);
@@ -259,6 +268,7 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
     }
     if (status) flags |= CIUKI_FIRMWARE_INCOMPLETE;
     fw_budget_end();
+    fw_scan_end();
     if (!fw_owned) { fw_os_cleanup(); fw_runtime = false; }
     if (!power) { fw_power.error = status; fw_power.ownership = CIUKI_POWER_FIRMWARE; fw_power_publish(); }
     complete = true;

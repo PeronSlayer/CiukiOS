@@ -132,7 +132,23 @@ int acpi_ec_quirk_transfer_counted(bool write, uint8_t address, uint8_t *value, 
     if (cost) *cost = 0;
     if (ports[0] != 0x62 || ports[1] != 0x66) return -19;
     if (!ms || !value) return -110;
-    ACPI_STATUS s = transaction(write ? 0x81 : 0x80, address, value, ms);
+    if (ms > 500) ms = 500;
+    /* fx-3: on an ACPI-owned platform the event worker (QR_EC, _Qxx field
+     * reads) shares this engine; a busy engine is waited for within the
+     * caller's deadline, never interleaved (ACPI 6.5 chapter 12: the EC_SC
+     * and EC_DATA handshake carries one command at a time). */
+    uint64_t end = fw_os->clock() + (uint64_t)ms * 10000;
+    ACPI_STATUS s;
+    for (;;) {
+        s = transaction(write ? 0x81 : 0x80, address, value, ms);
+        uint64_t now = fw_os->clock();
+        if (s != AE_ALREADY_ACQUIRED || now >= end) break;
+        fw_os->pause(1);
+        now = fw_os->clock();
+        if (now >= end) break;
+        unsigned left = (unsigned)((end - now + 9999) / 10000);
+        ms = left ? left : 1;
+    }
     if (cost && s != AE_ALREADY_ACQUIRED && s != AE_ACCESS) *cost = transaction_io;
     return !s ? 0 : s == AE_ALREADY_ACQUIRED ? -16 : s == AE_TIME ? -110 : -19;
 }

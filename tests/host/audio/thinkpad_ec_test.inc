@@ -645,6 +645,8 @@ static int t23_transfer_counted(bool write, uint8_t address, uint8_t *value, uns
 static int t23_transfer(bool write, uint8_t address, uint8_t *value)
 { return t23_transfer_counted(write,address,value,EC_TIMEOUT_MS,NULL); }
 static int t23_attach(void) { return t23_attach_result; }
+static int t23_failing_transfer(bool write, uint8_t address, uint8_t *value, unsigned ms, unsigned *cost)
+{ (void)write; (void)address; (void)value; (void)ms; if (cost) *cost=0; t23_transactions++; return -ETIMEDOUT; }
 static bool t23_legacy(void) { return true; }
 static void test_thinkpad_ec_t23_attach(void)
 {
@@ -696,6 +698,81 @@ static void test_thinkpad_ec_t23_attach(void)
     host_ec_transfer=0;host_ec_transfer_counted=0;host_ec_attach=0;host_ec_legacy=0;
     capture_ec_records=false;memset(&hec,0,sizeof(hec));audio=saved_audio;g_boot.flags=flags;g_ticks=ticks;
     puts("ThinkPad EC fx-3: T23 attach deferred until the inventory settles, legacy transport, one probe read, single worker; volume round trip: multi-press poll, tray level kept by the poll, hardware mute, tray unmute written PASS");
+}
+/* fx-3 follow-up (lead decision 2026-10-23): the system master and the EC
+ * level are one volume. A tray/mixer change is written once, 250 ms after
+ * the last change; a key press is mirrored first and the EC requantized
+ * only after the keys are quiet; 0 <-> 0 and 100 <-> 14 at the limits; mute
+ * in the same register write; ecpoll=0 disables EC access entirely. Run for
+ * both transports (firmware-owned legacy binding and ACPI-owned engine). */
+static bool t23_legacy_mode;
+static bool t23_mode(void) { return t23_legacy_mode; }
+static void t23_turn(uint64_t tick) { g_ticks=tick; audio_master_refresh(); }
+static void t23_tray(unsigned level, unsigned mute)
+{
+    struct ciuki_mixer_master m=audio.master;m.left=m.right=level;m.mute=mute;m.save_state=m.save_error=0;
+    CHECK(!audio_master_set(&m) && audio.master.left==level && audio.master.mute==mute);
+}
+static void test_thinkpad_ec_one_volume(bool legacy)
+{
+    struct audio_state saved_audio=audio;uint32_t flags=g_boot.flags;uint64_t ticks=g_ticks;
+    char saved_options[sizeof(g_boot.options)];memcpy(saved_options,g_boot.options,sizeof(saved_options));
+    size_t n=ec_test_table(ec_table_memory,"IBM","26473RG","Not Available");ec_test_entry(n);ec_table_mapped=true;
+    memset(&hec,0,sizeof(hec));g_boot.flags=0;g_ticks=1000;memset(g_boot.options,0,sizeof(g_boot.options));
+    host_ec_transfer=t23_transfer;host_ec_transfer_counted=t23_transfer_counted;host_ec_attach=t23_attach;
+    t23_legacy_mode=legacy;host_ec_legacy=t23_mode;
+    t23_reg=0x07;t23_transactions=t23_writes=0;t23_attach_result=0;
+    audio_settings_load(&vfs);hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;
+    audio.master=(struct ciuki_mixer_master){.version=1,.size=32,.left=20,.right=20};audio.master_in_hardware=false;
+    ec_capture_begin();thinkpad_ec_init();
+    CHECK(hec.active && audio.master_in_hardware && t23_transactions==1 && !t23_writes);
+    CHECK(ec_records_containing(legacy?"[ec] thinkpad transport=legacy":"[ec] thinkpad transport=acpi")==1);
+    ec_worker_running=false;alloc_fail=0;thinkpad_ec_start();alloc_fail=-1; /* no worker task in the host replay */
+    CHECK(hec.poll_ms==EC_DEFAULT_POLL_MS && hec.level_sync && hec.sync_pending);
+    CHECK(thinkpad_ec_level(0)==0 && thinkpad_ec_level(5)==1 && thinkpad_ec_level(20)==3 && thinkpad_ec_level(50)==7 &&
+          thinkpad_ec_level(95)==13 && thinkpad_ec_level(100)==14);
+    /* Boot: the saved master (20) sets the EC once (7 -> 3). */
+    t23_turn(g_ticks);CHECK(t23_reg==0x03 && t23_writes==1 && audio.master.left==20);
+    /* Tray drag 60, 65 within 100 ms: no EC access until 250 ms after the last, then one write. */
+    unsigned before=t23_transactions;uint64_t t=g_ticks+100;g_ticks=t;
+    t23_tray(60,0);g_ticks=t+100;t23_tray(65,0);CHECK(t23_transactions==before && hec.sync_pending);
+    t23_turn(t+300);CHECK(t23_transactions==before && t23_reg==0x03);           /* 200 ms after the last: not yet */
+    t23_turn(t+350);CHECK(t23_reg==0x09 && t23_writes==2 && audio.master.left==65 && !hec.sync_pending);
+    /* A key press after a tray change: the press wins, then one requantizing write. */
+    t=g_ticks+1000;g_ticks=t;t23_tray(70,0);                                      /* EC target 10 */
+    t23_reg=0x0a;                                                                 /* user presses up: 9 -> 10 */
+    t23_turn(t+250);CHECK(audio.master.left==75 && t23_writes==2 && t23_reg==0x0a); /* mirrored, no write yet */
+    t23_turn(t+400);CHECK(t23_writes==2);                                         /* keys not quiet for 250 ms */
+    t23_turn(t+500);CHECK(t23_reg==0x0b && t23_writes==3 && audio.master.left==75); /* 75 -> 11 */
+    /* Limits: 100 <-> 14 and 0 <-> 0; a press at a bound changes nothing. */
+    t=g_ticks+1000;g_ticks=t;t23_tray(100,0);t23_turn(t+250);CHECK(t23_reg==0x0e && audio.master.left==100);
+    unsigned writes=t23_writes;t23_turn(hec.next_poll);CHECK(audio.master.left==100 && t23_writes==writes); /* up at 14 */
+    t23_reg=0x0d;t23_turn(hec.next_poll);CHECK(audio.master.left==95);           /* one press down: 95 -> 13, no write */
+    t23_turn(hec.sync_due>hec.next_poll?hec.sync_due:hec.next_poll);CHECK(t23_writes==writes && t23_reg==0x0d);
+    t=g_ticks+1000;g_ticks=t;t23_tray(0,0);t23_turn(t+250);CHECK(t23_reg==0x00 && audio.master.left==0);
+    t23_reg=0x01;t23_turn(hec.next_poll);CHECK(audio.master.left==5);            /* one press up from 0: 5 -> 1 */
+    writes=t23_writes;t23_turn(hec.next_poll);CHECK(t23_writes==writes);
+    /* Mute: the tray writes bit 6 at once (level kept); a hardware unmute is mirrored, no write. */
+    writes=t23_writes;t23_tray(5,1);CHECK(t23_reg==0x41 && t23_writes==writes+1);
+    t23_reg=0x01;t23_turn(hec.next_poll);CHECK(!audio.master.mute && audio.master.left==5 && t23_writes==writes+1);
+    /* A failing sync write never spins the worker: it waits for the failure cadence. */
+    t23_attach_result=-5; /* the broker refuses: every transfer fails */
+    t=g_ticks+1000;g_ticks=t;t23_tray(60,0);CHECK(hec.sync_pending);
+    g_ticks=t+250;CHECK(ec_wait_ms()==0);
+    host_ec_transfer_counted=t23_failing_transfer;audio_master_refresh();
+    CHECK(!hec.available && hec.sync_pending && hec.sync_due==hec.next_poll && ec_wait_ms()==hec.poll_ms);
+    host_ec_transfer_counted=t23_transfer_counted;t23_attach_result=0;
+    capture_ec_records=false;memset(&hec,0,sizeof(hec));
+    /* ecpoll=0: no EC access at all; the tray stays the software/codec master. */
+    strcpy(g_boot.options,"ecpoll=0");audio.master_in_hardware=false;before=t23_transactions;ec_capture_begin();
+    thinkpad_ec_init();CHECK(!hec.active && !audio.master_in_hardware && t23_transactions==before);
+    CHECK(ec_records_containing("[ec] thinkpad gate=ecpoll_off")==1);
+    t23_tray(40,0);t23_turn(g_ticks+5000);CHECK(t23_transactions==before && hw.codec[2/2]!=0);
+    host_ec_transfer=0;host_ec_transfer_counted=0;host_ec_attach=0;host_ec_legacy=0;
+    capture_ec_records=false;memset(&hec,0,sizeof(hec));memcpy(g_boot.options,saved_options,sizeof(saved_options));
+    audio=saved_audio;g_boot.flags=flags;g_ticks=ticks;
+    printf("ThinkPad EC fx-3 one volume (%s): boot sync, coalesced tray write, press after tray change, limits 0/14, mute, ecpoll=0 without EC access PASS\n",
+           legacy?"legacy":"acpi");
 }
 static void test_thinkpad_ec(void)
 {
@@ -753,5 +830,7 @@ static void test_thinkpad_ec(void)
     test_thinkpad_ec_tolerance();
     test_thinkpad_ec_traffic();
     test_thinkpad_ec_t23_attach();
+    test_thinkpad_ec_one_volume(true);
+    test_thinkpad_ec_one_volume(false);
     puts("ThinkPad EC: IBM/DMI gates, timed IBF/OBF read/write/readback, levels/mute, preserved bits, amplifier unity and bounded faults PASS");
 }

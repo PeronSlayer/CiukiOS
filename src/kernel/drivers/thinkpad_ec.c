@@ -24,6 +24,7 @@
 #define EC_POLL_MS THINKPAD_EC_POLL_MS
 #define EC_DEFAULT_POLL_MS THINKPAD_EC_DEFAULT_POLL_MS
 #define EC_REFRESH_MS THINKPAD_EC_REFRESH_MS
+#define EC_SYNC_MS THINKPAD_EC_SYNC_MS
 #define EC_REPROBE_MS 10000u
 #define EC_FAILURE_LIMIT 8u
 #define EC_OP_TRANSACTIONS THINKPAD_EC_OP_TRANSACTIONS
@@ -296,15 +297,30 @@ static void ec_master(uint8_t status, uint8_t previous, struct ciuki_mixer_maste
 }
 static void ec_log(uint8_t status)
 { klog("[ec] thinkpad volume=%u mute=%u", status & 15u, !!(status & 0x40)); }
-static uint8_t ec_desired(uint8_t status, const struct ciuki_mixer_master *m)
-{ return (status & ~0x40u) | (m->mute ? 0x40 : 0); }
+/* fx-3 follow-up (lead decision 2026-10-23): the system master and the
+ * console amplifier are one volume. System 0..100 -> EC 0..14 rounds to
+ * the nearest level, (master * 14 + 50) / 100: 0->0, 5->1, 50->7, 95->13,
+ * 100->14; only 0 maps to 0 and only 100 to 14, so a key press is always
+ * visible in register 30h except at the true bounds. EC -> system stays
+ * five points per level step (f4-29). Linux v6.12 thinkpad_acpi.c
+ * __volume_set_volume_ec / __volume_set_mute_ec: read register 30h, replace
+ * bits 0-3 (level, maximum 14) or bit 6 (mute), keep the other bits, write
+ * only when the byte changes. */
+unsigned thinkpad_ec_level(unsigned master) { return ((master > 100 ? 100 : master) * 14u + 50u) / 100u; }
+static uint8_t ec_desired(const struct thinkpad_ec *e, uint8_t status, const struct ciuki_mixer_master *m)
+{
+    uint8_t want = (status & ~0x40u) | (m->mute ? 0x40 : 0);
+    if (e->level_sync) want = (want & ~15u) | (uint8_t)thinkpad_ec_level((m->left + m->right) / 2u);
+    return want;
+}
 static void ec_accept(struct thinkpad_ec *e, uint8_t status, struct ciuki_mixer_master *m)
 {
     if ((e->status & EC_MASK) != (status & EC_MASK)) ec_log(status);
     e->status = status;
     m->mute = !!(status & 0x40);
 }
-/* WR_EC of the mute preference, proved by a read-back; never invent state. */
+/* WR_EC of the shared preference (mute; with level_sync also the level),
+ * proved by a read-back; never invent state. */
 static int ec_write_mute(struct thinkpad_ec *e, uint8_t desired, struct ciuki_mixer_master *m, struct ec_budget *b)
 {
     uint8_t status = 0;
@@ -321,9 +337,11 @@ static int ec_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m, struct ec
     uint8_t status = 0;
     int err = ec_read(e, &status, b);
     if (err) return err;
-    uint8_t desired = ec_desired(status, m);
-    if (desired == status) { ec_accept(e, status, m); return 0; }
-    return ec_write_mute(e, desired, m, b);
+    uint8_t desired = ec_desired(e, status, m);
+    if (desired == status) { ec_accept(e, status, m); e->sync_pending = false; return 0; }
+    err = ec_write_mute(e, desired, m, b);
+    if (!err) e->sync_pending = false;
+    return err;
 }
 static void ec_result(struct thinkpad_ec *e, int err)
 {
@@ -347,7 +365,7 @@ static int ec_discover(struct thinkpad_ec *e, struct ciuki_mixer_master *m, stru
     uint8_t status = 0, again = 0;
     int err = ec_read(e, &status, b);
     if (err) return err;
-    uint8_t desired = ec_desired(status, m);
+    uint8_t desired = ec_desired(e, status, m);
     if (desired == status) { ec_accept(e, status, m); return 0; }
     err = ec_read(e, &again, b);
     if (!err && again != status) err = -EIO;
@@ -364,7 +382,13 @@ int thinkpad_ec_volume_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
          * the failure cadence (1 s, 10 s after eight failures). */
         if ((int64_t)(e->io.now(e->io.ctx) - e->next_poll) < 0) return -ENODEV;
     } else if (!!(e->status & 0x40) == !!m->mute) {
-        return 0; /* level only: the EC register holds no master level to write */
+        /* Level only: no EC access here (f1-100). fx-3 follow-up: with
+         * level_sync the worker writes the level once, EC_SYNC_MS after
+         * the last change (a slider drag is one write). */
+        if (e->level_sync && (e->status & 15u) != thinkpad_ec_level((m->left + m->right) / 2u)) {
+            e->sync_pending = true; e->sync_due = e->io.now(e->io.ctx) + EC_SYNC_MS;
+        }
+        return 0;
     }
     struct ec_budget b = ec_budget_begin(e);
     int err = disabled ? ec_discover(e, m, &b) : ec_set(e, m, &b);
@@ -399,21 +423,40 @@ static int ec_mirror(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
     uint8_t status = e->status;
     /* Restore the saved/current preference before delegating master again. */
     int err = disabled ? ec_discover(e, m, &b) : recovering ? ec_set(e, m, &b) : ec_read(e, &status, &b);
+    int changed = 0;
+    if (!err && !disabled && !recovering) {
+        uint64_t now = e->io.now(e->io.ctx);
+        if ((status & EC_MASK) != (e->status & EC_MASK)) {
+            /* Keys moved the EC: mirror every step now; requantize the EC
+             * only after the keys have been quiet for EC_SYNC_MS, re-read
+             * first, so a write never overtakes a press (no fighting). */
+            uint8_t previous = e->status;
+            e->status = status; ec_master(status, previous, m); ec_log(status); changed = 1;
+            if (e->level_sync) {
+                e->sync_pending = ec_desired(e, status, m) != status;
+                e->sync_due = now + EC_SYNC_MS;
+            }
+        } else if (e->sync_pending && (int64_t)(now - e->sync_due) >= 0) {
+            uint8_t desired = ec_desired(e, status, m);
+            if ((desired & EC_MASK) != (status & EC_MASK)) err = ec_write_mute(e, desired, m, &b);
+            if (!err) e->sync_pending = false;
+        }
+    }
     ec_result(e, err);
     ec_end(e, &b);
+    /* A failed sync retries at the failure cadence, never in a tight loop. */
+    if (err && e->sync_pending) e->sync_due = e->next_poll;
     if (err) return err;
     if (disabled) klog("[ec] thinkpad resumed");
-    if (recovering) return 0;
-    if ((status & EC_MASK) == (e->status & EC_MASK)) return 0;
-    uint8_t previous = e->status;
-    e->status = status; ec_master(status, previous, m); ec_log(status); return 1;
+    return changed;
 }
 int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
     if (!e->io.now) return -ENODEV;
     if (!e->poll_ms) return e->available ? 0 : -ENODEV; /* ecpoll=0: no periodic EC traffic */
     uint64_t now = e->io.now(e->io.ctx);
-    if ((int64_t)(now - e->next_poll) < 0) return e->available ? 0 : -ENODEV;
+    bool sync = e->sync_pending && e->available && (int64_t)(now - e->sync_due) >= 0;
+    if (!sync && (int64_t)(now - e->next_poll) < 0) return e->available ? 0 : -ENODEV;
     return ec_mirror(e, m);
 }
 int thinkpad_ec_volume_refresh(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
@@ -434,7 +477,7 @@ static struct kmutex ec_lock;
 /* The worker serves the poll (f2-96: every 2 s by default, 1 Hz with
  * ecpoll=1) and user-requested refreshes (f1-100). */
 static struct kwait ec_wake;
-static bool ec_refresh_wanted, ec_worker_running;
+static bool ec_refresh_wanted, ec_worker_running, ec_rearm;
 /* f1-94: every EC port access is a candidate SMI trigger in legacy mode. */
 static uint8_t native_read(void *ctx, uint16_t port)
 { (void)ctx; (void)port; return 0xff; } /* transport is the generic broker */
@@ -513,6 +556,14 @@ void thinkpad_ec_init(void)
         kmutex_init(&ec_lock);
     }
     if (!acpi_ec_quirk_transfer) { klog("[ec] thinkpad gate=generic_ec_unavailable"); return; }
+    /* fx-3 follow-up (lead decision): ecpoll=0 disables EC access entirely;
+     * the system volume is then the codec/software master only and the
+     * keys drive the console amplifier under firmware control, unmirrored. */
+    if (!thinkpad_ec_poll_option(g_boot.options, sizeof(g_boot.options), NULL)) {
+        klog("[ec] thinkpad gate=ecpoll_off");
+        ec_deferred = false;
+        return;
+    }
     int attached = acpi_ec_quirk_attach ? acpi_ec_quirk_attach() : 0;
     if (attached == -EAGAIN) {
         if (!ec_deferred) klog("[ec] thinkpad deferred until=acpi_inventory");
@@ -539,7 +590,14 @@ int thinkpad_ec_master_set(struct ciuki_mixer_master *m)
     if (!native_ec.io.now) return -ENODEV;
     kmutex_lock(&ec_lock); int err = thinkpad_ec_volume_set(&native_ec, m);
     audio.master_in_hardware = native_ec.available;
-    kmutex_unlock(&ec_lock); return err;
+    bool sync = native_ec.sync_pending;
+    kmutex_unlock(&ec_lock);
+    /* fx-3 follow-up: the worker re-arms its wait for the coalesced write. */
+    if (sync && __atomic_load_n(&ec_worker_running, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&ec_rearm, true, __ATOMIC_RELAXED);
+        kwait_wake_all(&ec_wake);
+    }
+    return err;
 }
 int thinkpad_ec_master_poll(struct ciuki_mixer_master *m)
 {
@@ -556,15 +614,30 @@ int thinkpad_ec_master_refresh(struct ciuki_mixer_master *m)
     kmutex_unlock(&ec_lock); return err;
 }
 static bool ec_wanted(void *arg)
-{ (void)arg; return __atomic_load_n(&ec_refresh_wanted, __ATOMIC_RELAXED); }
+{ (void)arg; return __atomic_load_n(&ec_refresh_wanted, __ATOMIC_RELAXED) || __atomic_load_n(&ec_rearm, __ATOMIC_RELAXED); }
+/* fx-3 follow-up: wait for the next poll or the pending level sync. */
+static uint32_t ec_wait_ms(void)
+{
+    uint32_t wait = native_ec.poll_ms ? native_ec.poll_ms : 60000u;
+    kmutex_lock(&ec_lock);
+    if (native_ec.sync_pending && native_ec.available) {
+        uint64_t now = native_now(0);
+        uint64_t left = native_ec.sync_due > now ? native_ec.sync_due - now : 0;
+        if (left < wait) wait = (uint32_t)left;
+    }
+    kmutex_unlock(&ec_lock);
+    return wait;
+}
 static void ec_worker(void *arg)
 {
     (void)arg;
     while (native_ec.io.now) {
         /* With the poll off (ecpoll=0) there is no EC traffic while idle:
          * only a request ends the wait; the 60 s timeout just re-checks it. */
-        kwait_wait_until(&ec_wake, ec_wanted, 0, deadline_after_ms(native_ec.poll_ms ? native_ec.poll_ms : 60000u));
+        uint32_t wait = ec_wait_ms();
+        if (wait) kwait_wait_until(&ec_wake, ec_wanted, 0, deadline_after_ms(wait));
         if (__atomic_exchange_n(&ec_refresh_wanted, false, __ATOMIC_RELAXED)) audio_master_refresh_requested();
+        else if (__atomic_exchange_n(&ec_rearm, false, __ATOMIC_RELAXED)) continue; /* new sync deadline */
         else if (native_ec.poll_ms) audio_master_refresh();
     }
     __atomic_store_n(&ec_worker_running, false, __ATOMIC_RELEASE);
@@ -607,6 +680,14 @@ void thinkpad_ec_start(void)
     const char *source = "default";
     native_ec.poll_ms = thinkpad_ec_poll_option(g_boot.options, sizeof(g_boot.options), &source);
     klog("[ec] thinkpad poll_ms=%u source=%s", native_ec.poll_ms, source);
+    /* fx-3 follow-up: one volume. The saved master sets the EC level once
+     * at the first worker turn; from then on every user change syncs. */
+    kmutex_lock(&ec_lock);
+    native_ec.level_sync = native_ec.poll_ms != 0;
+    native_ec.sync_pending = native_ec.level_sync &&
+        (native_ec.status & 15u) != thinkpad_ec_level((audio.master.left + audio.master.right) / 2u);
+    native_ec.sync_due = native_now(0);
+    kmutex_unlock(&ec_lock);
     kwait_init(&ec_wake);
     struct task *t = task_create_kernel("thinkpad-volume", ec_worker, 0, P_DEVICE);
     if (t) {
