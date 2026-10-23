@@ -75,7 +75,7 @@ static void test_vm_late_block(unsigned age_ms)
     unsigned logs=vm_audio_logs;
     v->audio.diag.cadence=v->audio.sb.cadence; v->audio.diag.cadence_pending=true;
     dosvm_audio_log(v);
-    CHECK(vm_audio_logs==logs+(age_ms==100 ? 4 : 3));
+    CHECK(vm_audio_logs==logs+(age_ms==100 ? 5 : 4)); /* fx-9: + cadence_clock */
     CHECK(strstr(last_vm_audio_log,age_ms==100 ? "cadence_drop runs=1 last=64 max=64 lag=331" : "cadence_source late=0 delay=240"));
     late_finish(v);
 }

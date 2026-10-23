@@ -1596,6 +1596,9 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out, st
                       v->info.key.generation,!v->disable_file_bridge,v->base_cached,
                       v->base_source ? v->base_source : "none");
     kpreempt_point();
+    trace->stage = "clock";
+    /* fx-9: the shared vm-clock task, created once with the first VM. */
+    if ((e = dosvm_clock_start())) goto fail;
     trace->stage = "worker";
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }
@@ -1675,49 +1678,58 @@ bool dosvm_keyboard(struct dosvm_key key, uint16_t bios_key)
     if (ok) { v->keyboard[tail] = bios_key; v->key_count++; dosvm_idle_wake(v); }
     irq_restore(flags); return ok;
 }
-/* The ring holds the generation value, never a pointer to a mutable key.
- * gen_alloc() does not reuse generations. Only permanent slot headers are
- * examined until the generation and live-state checks have passed. */
-static void dosvm_clock_work(void *arg)
+/* fx-9: one bounded turn of the VM clock, run by the vm-clock task
+ * (dosvm_clock.c), never by the shared device worker. The generation pins
+ * the VM across the service's preemption points: gen_alloc() never reuses
+ * a value, so a stopped or reused slot ends the service. Only permanent slot
+ * headers are examined until the generation and live-state checks pass. */
+bool dosvm_clock_turn(unsigned slot, uint32_t *generation)
 {
-    for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
-        struct dosvm *v = &slots[i];
-        if (v->info.key.generation != (uint32_t)(uintptr_t)arg) continue;
-        if (!v->started || !dosvm_valid(v->info.key)) return;
-        dosvm_uart_service(v,g_ticks); /* wakes a halted COM client, no hard-IRQ I/O */
-        v->monitor.ticks = g_ticks;
-        uint64_t elapsed = g_ticks - v->ticks;
-        v->perf.if_samples_ms += elapsed;
-        if (!v->monitor.vif) {
-            v->perf.if_clear_ms += elapsed;
-            if (!dosvm_in_irq(v)) v->perf.if_outside_ms += elapsed;
-        }
-        dosvm_pool_irq_sample(v, elapsed);
-        v->ticks = g_ticks;
-        v->clock_ms += elapsed;
-        uint64_t begin = dosvm_perf_clock();
-        if (elapsed) dosvm_pit_advance(v, elapsed);
-        uint64_t audio = dosvm_perf_clock();
-        bool pending = dosvm_audio_advance(v, elapsed);
-        uint64_t end = dosvm_perf_clock();
-        if (elapsed) v->perf.ticks++;
-        v->perf.audio_cycles += end - audio;
-        v->perf.timer_cycles += end - begin;
-        if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
-        dosvm_present_checkpoint(v);
-        if (pending) kwork_queue(dosvm_clock_work, arg);
-        return; /* One VM and one bounded DMA slice per worker turn. */
+    if (slot >= DOSVM_LIMIT) return false;
+    struct dosvm *v = &slots[slot];
+    if (*generation && v->info.key.generation != *generation) return false;
+    if (!v->started || !dosvm_valid(v->info.key)) return false;
+    *generation = v->info.key.generation;
+    dosvm_uart_service(v,g_ticks); /* wakes a halted COM client, no hard-IRQ I/O */
+    v->monitor.ticks = g_ticks;
+    uint64_t elapsed = g_ticks - v->ticks;
+    v->perf.if_samples_ms += elapsed;
+    if (!v->monitor.vif) {
+        v->perf.if_clear_ms += elapsed;
+        if (!dosvm_in_irq(v)) v->perf.if_outside_ms += elapsed;
     }
+    dosvm_pool_irq_sample(v, elapsed);
+    v->ticks = g_ticks;
+    v->clock_ms += elapsed;
+    uint64_t begin = dosvm_perf_clock();
+    if (elapsed) dosvm_pit_advance(v, elapsed);
+    uint64_t audio = dosvm_perf_clock();
+    bool pending = dosvm_audio_advance(v, elapsed);
+    uint64_t end = dosvm_perf_clock();
+    if (elapsed) v->perf.ticks++;
+    v->perf.audio_cycles += end - audio;
+    v->perf.timer_cycles += end - begin;
+    if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
+    dosvm_present_checkpoint(v);
+    return pending;
 }
+/* PIT top half (task.c sched_tick, IF clear). fx-9: no VM state advances
+ * here. Per started VM it samples which task the tick interrupted while the
+ * SB16 entry is pending (the cadence record's descheduled/if_clear/parked
+ * milliseconds; R1/D1: host-ready wait recorded apart from guest IF), then
+ * wakes the vm-clock task in O(1). From f0-46 to fx-9 this ran on the
+ * shared worker, where g_current was always the worker: every pending
+ * millisecond read as descheduled and if_clear could never count. */
 void dosvm_tick(void)
 {
+    bool started = false;
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         struct dosvm *v = &slots[i];
-        if (v->started && dosvm_valid(v->info.key)) {
-            v->audio.clock_descheduled = g_current != v->task;
-            kwork_queue(dosvm_clock_work, (void *)(uintptr_t)v->info.key.generation);
-        }
+        if (!v->started || !dosvm_valid(v->info.key)) continue;
+        dosvm_audio_sample(v, g_current == v->task);
+        started = true;
     }
+    if (started) dosvm_clock_signal();
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)
 {

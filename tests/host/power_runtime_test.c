@@ -41,11 +41,17 @@ int storage_sync(void)
 }
 void net_shutdown(void) { assert(disk.stopped); stage('N'); }
 int power_devices_quiesce(void) { assert(disk.stopped); net_shutdown(); stage('Q'); return quiesce_error; }
+/* fx-9b: the audio settings flush (a key-applied master to AUDIO.CFG) runs
+ * before the storage flush, only while a test enables the stage. */
+static bool audio_stage;
+static int audio_error;
+int audio_settings_flush(void) __attribute__((weak));
+int audio_settings_flush(void) { assert(!disk.stopped); if (audio_stage) stage('A'); return audio_stage ? audio_error : 0; }
 static bool provider_can_off(void *ctx) { (void)ctx; return qualified; }
 static int provider_off(void *ctx)
 {
     (void)ctx; /* every soft-off follows the latch, after S and the last N/Q */
-    assert(stages>=3 && order[0]=='S' && strstr(order,"NQ") && !power_source_orderly_shutdown(0));
+    assert(stages>=3 && (order[0]=='S' || !strncmp(order,"AS",2)) && strstr(order,"NQ") && !power_source_orderly_shutdown(0));
     stage('P'); return off_error;
 }
 void klog(const char *fmt, ...) { va_list ap; va_start(ap,fmt); vsnprintf(last,sizeof(last),fmt,ap); va_end(ap); }
@@ -61,7 +67,7 @@ static void provide(enum power_source_kind kind)
 }
 static void reset(void)
 {
-    disk=(struct storage){.ready=true}; desktop.pid=42; stages=checkpoints=0;
+    disk=(struct storage){.ready=true}; desktop.pid=42; stages=checkpoints=0; audio_stage=false; audio_error=0;
     desktop.setup_capability=false; setup_active=false;
     power_progress=0; stopped=false; power_running=storage_flushed=false; power_requests=0;
     during_sync=0; nested_result=0;
@@ -126,8 +132,25 @@ static void test_repeated_requests(void)
     assert(power_syscall(CIUKI_POWER_REBOOT)==-EBUSY && nested_result==-EBUSY && !strcmp(order,"S") && !power_running);
     puts("PASS power runtime fx-5: EBUSY flush retried by a second request completes once (SSNQP), stages latched, stopped repeat goes to the provider, concurrent request refused");
 }
+/* fx-9b: the pending audio preference is written before the storage flush
+ * makes it durable, never after it, and a failure never stops the shutdown. */
+static void test_audio_settings_flush(void)
+{
+    reset(); audio_stage=true;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"ASNQP"));
+    reset(); audio_stage=true; audio_error=-EROFS;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"ASNQP"));
+    reset(); audio_stage=true; sync_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !strcmp(order,"AS"));
+    sync_error=0; assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"ASASNQP"));
+    reset(); audio_stage=true; quiesce_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !strcmp(order,"ASNQ"));
+    quiesce_error=0; assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"ASNQNQP")); /* durable: not again */
+    puts("PASS power runtime fx-9b: audio settings flush before the storage flush, failure tolerated, repeated only while storage is not durable");
+}
 int main(void)
 {
+    test_audio_settings_flush();
     reset(); assert(power_source_soft_off()==-EBUSY && !stages); /* no orderly proof yet */
     reset(); desktop.pid=7; assert(power_syscall(CIUKI_POWER_OFF)==-EPERM && !stages);
     reset(); assert(power_syscall(99)==-EINVAL && !stages);

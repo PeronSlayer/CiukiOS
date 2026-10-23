@@ -735,6 +735,15 @@ no VTD/VPICD timing guarantee or PIT divisor. Keep divisor 1193/nominal
 naming and asynchronous input descriptions do not prove interrupt delivery
 latency.
 
+Amendment fx-9 (implementer proposal, accepted by the lead 2026-10-23 16:13; this closes the deferred f1-91): the DOS VM
+clock (virtual PIT, SB16 DSP/DMA timeline, OPL timers) is simulated
+hardware time, served like the refill: the PIT top half wakes the
+audio-class `vm-clock` task in O(1) with an immediate service deadline,
+never through `device-work`; its own 2 ms per 10 ms budget is separate from
+the shared 4 ms and the refill's 2 ms (steady cost about 0.3 ms per 10 ms;
+a service is bounded by `DOSVM_CLOCK_TURNS` turns per VM per tick)
+([fx-9](../validation/fx-9-vm-clock-task.md)).
+
 Retain 256-frame audio periods (5.333 ms at 48 kHz), P_DEVICE refill,
 ≤1 ms work before continuation and 2 ms maximum refill service. Refill wake
 to execution target ≤2 ms, measured separately from service CPU time. Keep

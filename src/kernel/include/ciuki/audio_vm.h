@@ -72,8 +72,8 @@ struct audio_vm_stats {
  * dosvm_audio_close. Thread context. */
 int audio_vm_attach(struct dosvm_key key);
 void audio_vm_detach(struct dosvm_key key);
-/* From dosvm_tick (IRQ context): wakes an idle refill worker once when a
- * VM has queued audio. */
+/* From the vm-clock task (fx-9; thread context): wakes an idle refill
+ * worker once when a VM has queued audio. */
 void audio_vm_kick(void);
 /* Per-source gain 0-100 and mute (default 100/100, unmuted). */
 int audio_vm_set_gain(struct dosvm_key key, unsigned left, unsigned right, bool mute);

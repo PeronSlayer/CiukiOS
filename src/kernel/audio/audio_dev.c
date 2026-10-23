@@ -49,6 +49,9 @@ _Static_assert(sizeof(struct audio_cfg) == 48, "durable audio record");
 static struct audio_cfg saved[2];
 static uint32_t saved_sequence;
 static unsigned saved_slot;
+/* fx-9b: a volume-key (EC) change applied to the master and not yet in
+ * AUDIO.CFG; the next tray save or audio_settings_flush writes it. */
+static bool master_pending;
 static struct audio_frame quantum[AUDIO_QUANTUM];
 /* f4-05: an active DOS VM source keeps the transport running (weak: the
  * native-only host harness does not link audio/vm_source.c). */
@@ -78,7 +81,7 @@ static bool cfg_valid(const struct audio_cfg *r)
 void audio_settings_load(struct vfs *v)
 {
     settings_vfs = v;
-    saved_sequence = 0; saved_slot = 0;
+    saved_sequence = 0; saved_slot = 0; master_pending = false;
     audio.master = (struct ciuki_mixer_master){ .version=1, .size=32,
         .left=CIUKI_MASTER_DEFAULT, .right=CIUKI_MASTER_DEFAULT };
     audio.settings_reason = "missing";
@@ -139,6 +142,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
     if (err) { audio_fail(-EIO); kmutex_unlock(&audio_lock.control); return -EIO; }
     audio.master = *m;
     err = save_master();
+    if (!err) master_pending = false;
     audio.master.save_state = err ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
     audio.master.save_error = err;
     *m = audio.master;
@@ -156,15 +160,45 @@ static void master_refresh(bool requested)
         if (err) audio_fail(-EIO);
         else {
             if (changed > 0) {
-                audio.master = m;
-                int saved_err = save_master();
-                m.save_state = saved_err ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
-                m.save_error = saved_err;
+                /* fx-9b: the key path only applies the change. f4-29 saved
+                 * AUDIO.CFG here, on the device-class EC worker under
+                 * audio.control, and its vfs_commit is a device-wide cache
+                 * barrier (every dirty block of the system disk, write
+                 * admission frozen, FLUSH CACHE): 13 s busy at device
+                 * priority after each key press in DOOM full screen (T23
+                 * 423b803a). SAVED also hid the change from the desktop,
+                 * whose normal-priority settings writer persists an
+                 * applied-unsaved master in the authoritative registry
+                 * preference (f4-18), so key changes were lost at the next
+                 * boot. Now applied-unsaved: the desktop writes the registry
+                 * once the keys are quiet; AUDIO.CFG follows at the next tray
+                 * save or at shutdown (audio_settings_flush). */
+                m.save_state = CIUKI_MIXER_UNSAVED; m.save_error = 0;
+                master_pending = true;
             }
             audio.master = m;
         }
     }
     kmutex_unlock(&audio_lock.control);
+}
+/* fx-9b: orderly shutdown (power.c, before the storage flush), in the
+ * caller's context (the desktop's call 73, normal priority): a key-applied
+ * master reaches AUDIO.CFG once. Never called on the device band. */
+int audio_settings_flush(void)
+{
+    if (!__atomic_load_n(&master_pending, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&audio.initialized, __ATOMIC_ACQUIRE)) return 0;
+    if (!kmutex_lock_until(&audio_lock.control, deadline_after_ms(2000))) return -EBUSY;
+    int err = 0;
+    if (master_pending) {
+        err = save_master();
+        if (!err) {
+            master_pending = false;
+            audio.master.save_state = CIUKI_MIXER_SAVED; audio.master.save_error = 0;
+        }
+    }
+    kmutex_unlock(&audio_lock.control);
+    return err;
 }
 void audio_master_refresh(void) { master_refresh(false); }
 void audio_master_refresh_requested(void) { master_refresh(true); }

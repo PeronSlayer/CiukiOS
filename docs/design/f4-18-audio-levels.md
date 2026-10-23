@@ -51,6 +51,17 @@ journal uses AUDIO.CFG for this boot; user-space libreg performs recovery.
 The existing delegated desktop mixer worker writes Master for Control Panel,
 tray and Volume Control changes. Hardware changes are applied without disk
 I/O in the EC driver and saved by the desktop worker on observation.
+Amendment fx-9b (2026-10-23): f4-29 had moved an AUDIO.CFG save (a
+device-wide `vfs_commit` barrier) onto the EC worker for every key change
+and reported it saved, so the desktop never wrote Master for key changes
+and the registry's older value won at the next boot; on the T23 each press
+in a DOS game kept the device-class worker busy for about 13 s. The rule
+above is restored: the key path only applies (applied-unsaved, error 0);
+the desktop's normal-priority settings writer saves Master once the value
+has been unchanged for 3 s, and before a shutdown; the kernel writes
+AUDIO.CFG for a key-applied master at the next tray save or in the shutdown
+sequence before the storage flush (`audio_settings_flush`)
+([fx-9](../validation/fx-9-vm-clock-task.md)).
 No default Master is seeded into an image: that would mask a legacy user's
 saved AUDIO.CFG on an updated image.
 

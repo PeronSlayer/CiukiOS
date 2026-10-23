@@ -552,6 +552,20 @@ static void test_audio_queue_limits(void)
 extern void irq_model_phase(unsigned) __attribute__((weak));
 static unsigned clock_peer_turns;
 static void clock_peer(void *arg) { (void)arg; clock_peer_turns++; }
+/* fx-9: every preemption point of the vm-clock service follows exactly one
+ * bounded turn; a ready device task runs there, not after the catch-up. */
+static struct dosvm *clock_turn_vm;
+static uint64_t clock_turn_pos;
+static unsigned clock_turn_points, clock_turn_peer_at;
+static void clock_turn_check(void)
+{
+    struct dosvm *v = clock_turn_vm;
+    CHECK(v->audio.sb.pos - clock_turn_pos <= DOSVM_AUDIO_TURN);
+    clock_turn_pos = v->audio.sb.pos;
+    if (++clock_turn_points == clock_turn_peer_at) g_need_resched = true;
+}
+static unsigned clock_turn_schedules;
+static void clock_turn_schedule(void) { clock_turn_schedules++; }
 static void test_audio_tiny_auto_init(void)
 {
     struct dosvm *v = audio_vm_create(); dsp_reset(v);
@@ -563,69 +577,76 @@ static void test_audio_tiny_auto_init(void)
     CHECK(v->audio.sb.pos == v->audio.clock && v->audio.sb.x.waiting);
     a_in(v, SB + 0xE); CHECK(v->audio.sb.causes == 2 && v->audio.sb.units == 90);
     a_in(v, SB + 0xF); CHECK(!v->audio.sb.causes && v->audio.sb.units == 90 && !v->audio.sb.x.waiting);
+    unsigned allocations = allocation_calls, signals = vm_clock_signals;
     struct kwork_stats before, after;
     kwork_snapshot(&before);
-    unsigned allocations = allocation_calls, yields = vm_clock_yields;
     uint64_t pos = v->audio.sb.pos;
     g_ticks += 40;
     for (unsigned n = 0; n < 1000; n++) dosvm_tick();
     kwork_snapshot(&after);
-    CHECK(after.pending == 1 && after.coalesced == before.coalesced + 999);
-    CHECK(v->audio.sb.pos == pos); /* capture cannot advance inline */
-    unsigned turns = 0;
+    /* fx-9: the PIT top half only signals the vm-clock task: nothing enters
+     * the shared device ring and no VM state advances in the capture. */
+    CHECK(vm_clock_signals == signals + 1000 && after.queued == before.queued && !after.pending);
+    CHECK(v->audio.sb.pos == pos);
+    clock_turn_vm = v; clock_turn_pos = pos; clock_turn_points = 0; clock_turn_peer_at = 0;
+    unsigned points = preempt_points;
+    preempt_hook = clock_turn_check;
     if (irq_model_phase) irq_model_phase(40);
-    while (vm_work_one()) {
-        CHECK(v->audio.sb.pos - pos <= DOSVM_AUDIO_TURN);
-        pos = v->audio.sb.pos;
-        CHECK(++turns <= 80);
-    }
+    dosvm_clock_service();
     if (irq_model_phase) irq_model_phase(0);
-    CHECK(turns == 80 && vm_clock_yields == yields + turns && allocation_calls == allocations);
+    preempt_hook = 0;
+    /* 40 ms of DSP time in 80 turns of DOSVM_AUDIO_TURN: 79 safe points. */
+    CHECK(clock_turn_points == 79 && preempt_points == points + 79 && allocation_calls == allocations);
+    CHECK(v->audio.sb.pos - clock_turn_pos <= DOSVM_AUDIO_TURN);
     CHECK(v->audio.sb.units == 3690 && v->audio.sb.boundaries == 1845 && v->audio.sb.irq_edges == 2);
     CHECK(v->audio.sb.irq_merged == 1843 && v->audio.sb.pos == v->audio.clock);
-    /* A peer queued while the catch-up is active gets its own turn before
-     * the continuation drains. The callback cannot chain itself inline. */
+    /* A higher-priority wake during the catch-up is served at the next
+     * safe point, one turn later, not after the 64 ms allowance. */
+    clock_turn_pos = v->audio.sb.pos; clock_turn_points = 0; clock_turn_peer_at = 3; clock_turn_schedules = 0;
+    preempt_hook = clock_turn_check; schedule_hook = clock_turn_schedule;
+    g_ticks += 10; dosvm_tick(); dosvm_clock_service();
+    preempt_hook = 0; schedule_hook = 0;
+    CHECK(clock_turn_points == 19 && clock_turn_schedules == 1 && v->audio.sb.pos == v->audio.clock);
+    /* The other deferred work keeps its own ring and turns. */
     unsigned peer = clock_peer_turns;
-    g_ticks += 2; dosvm_tick(); CHECK(vm_work_one());
-    CHECK(kwork_queue(clock_peer, 0));
-    CHECK(vm_work_one() && clock_peer_turns == peer);
-    CHECK(vm_work_one() && clock_peer_turns == peer + 1);
-    vm_work_drain();
+    CHECK(kwork_queue(clock_peer, 0)); vm_work_drain(); CHECK(clock_peer_turns == peer + 1);
     destroy(v, true); empty();
-    puts("f3-40 tiny auto-init: 45 blocks/tick and 1800-block timer catch-up, one edge while asserted, acknowledgements never clock DMA PASS");
+    puts("f3-40/fx-9 tiny auto-init: 45 blocks/tick and 1800-block timer catch-up in 80 turns with a safe point after each, top half signals only, one edge while asserted, acknowledgements never clock DMA PASS");
 }
 
 static void test_audio_clock_lifetime(void)
 {
     struct dosvm *v = audio_vm_create();
     CHECK(!kwork_init()); vm_work_drain();
+    CHECK(vm_clock_starts >= 1); /* dosvm_create starts the vm-clock task */
     struct dosvm_key old = dosvm_key(v);
     uint64_t tick = v->ticks;
+    /* fx-9: a full shared device ring (or a demoted device worker) cannot
+     * delay the VM clock: it no longer has an entry there. */
     struct kwork_stats before, after;
     kwork_snapshot(&before);
     for (unsigned n = 0; n < KWORK_CAPACITY; n++)
         CHECK(kwork_queue(clock_peer, (void *)(uintptr_t)n));
-    g_ticks += 40; dosvm_tick();
+    g_ticks += 40; dosvm_tick(); dosvm_clock_service();
     kwork_snapshot(&after);
-    CHECK(after.lost == before.lost + 1 && v->ticks == tick);
-    vm_work_drain(); dosvm_tick(); vm_work_drain();
-    CHECK(v->ticks == tick + 40 && v->clock_ms == 40);
-    /* Stop with a queued continuation; stale work cannot touch audio pages.
-     * Requeue the same immutable token after destroy to cover slot reuse
-     * even if the fake stop waiter happened to dispatch its first copy. */
-    g_ticks++; dosvm_tick(); CHECK(!dosvm_stop(old, DOSVM_TERMINATE));
-    vm_work_drain(); CHECK(v->ticks == tick + 40);
+    CHECK(after.lost == before.lost && v->ticks == tick + 40 && v->clock_ms == 40);
+    vm_work_drain();
+    /* Stop: the next service no longer touches the VM. A service pinned to
+     * the old generation stops at a reused slot. */
+    g_ticks++; CHECK(!dosvm_stop(old, DOSVM_TERMINATE));
+    dosvm_tick(); dosvm_clock_service(); CHECK(v->ticks == tick + 40);
     destroy(v, true); empty();
-    CHECK(kwork_queue(dosvm_clock_work, (void *)(uintptr_t)old.generation));
+    uint32_t generation = old.generation;
+    CHECK(!dosvm_clock_turn(old.id - 1, &generation));
     struct dosvm *next = audio_vm_create();
     CHECK(next == v && dosvm_key(next).generation != old.generation);
     tick = next->ticks; g_ticks += 3;
-    vm_work_drain();
+    CHECK(!dosvm_clock_turn(old.id - 1, &generation));
     CHECK(next->ticks == tick && !next->audio.clock && !next->clock_ms && !next->pit.clocks);
-    dosvm_tick(); vm_work_drain();
+    dosvm_tick(); dosvm_clock_service();
     CHECK(next->audio.clock == 3 * DOSVM_AUDIO_PER_MS && next->pit.clocks == 3 * 1193);
     destroy(next, true); empty();
-    puts("f0-46 VM clock: 80 bounded catch-up turns, counted coalescing, full-ring retry, stopped/reused generation rejection PASS");
+    puts("f0-46/fx-9 VM clock: full device ring cannot delay it, stopped/reused generation rejection, catch-up in bounded turns PASS");
 }
 
 #include "audio/vm_late_test.inc"

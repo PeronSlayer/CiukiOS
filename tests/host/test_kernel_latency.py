@@ -309,7 +309,7 @@ static void test_irq_restore(uint32_t f) {
             temp = Path(directory)
             source = (ROOT / 'src/kernel/core/task.c').read_text()
             block = source[source.index('static struct task *rq_head'):source.index('void task_stack_init')]
-            for name in ('schedule', 'sched_vm_tick_work', 'sched_tick',
+            for name in ('schedule', 'sched_tick',
                          'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
                 match = re.search(r'^(?:static )?[^\n]+\b' + name + r'\([^\n]*\)\s*\{', source, re.M)
                 self.assertIsNotNone(match, name)
@@ -383,6 +383,9 @@ static void test_irq_restore(uint32_t f) {
                 # (trial windows, 50 % interactive load, budget bound, unit
                 # checks; zero refill overruns in every scenario).
                 ('t23_audio_producer_test.c', []),
+                # fx-9: the DOS VM clock beside the device class on the T23
+                # 423b803a replay (f0-46 transport as the negative control).
+                ('t23_vm_clock_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
                 binary = temp / Path(unit).stem

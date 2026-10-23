@@ -281,6 +281,7 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
 
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
 extern int power_devices_quiesce(void) __attribute__((weak));
+extern int audio_settings_flush(void) __attribute__((weak));
 static uint32_t power_progress;
 static void power_checkpoint(void)
 { if (blackbox_checkpoint) (void)blackbox_checkpoint(); }
@@ -318,6 +319,13 @@ static int power_sequence(bool off)
 {
     int e;
     if (!(power_progress & CIUKI_POWER_STOPPED)) {
+        /* fx-9b: a preference applied but not yet saved (volume keys) is
+         * written before the storage flush makes it durable; a failure is
+         * recorded and never stops the shutdown. */
+        if (audio_settings_flush && !storage_flushed) {
+            int a = audio_settings_flush();
+            if (a) klog("[power] audio settings not saved: %d", a);
+        }
         e = flush_storage();
         /* EBUSY before any irreversible step: the session continues intact. */
         if (e) { if (e != -EBUSY) power_progress = CIUKI_POWER_UNCERTAIN; return e; }

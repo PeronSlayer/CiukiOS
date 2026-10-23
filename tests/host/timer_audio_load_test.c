@@ -81,7 +81,7 @@ static void pit_full_ring(void)
     CHECK(!kwork_init());
     for(unsigned i=0;i<1000;i++)ktimer_arm(&load_timers[i],0,9,0,&load_generation,deadline_work);
     for(unsigned i=0;i<KWORK_CAPACITY-2;i++)CHECK(kwork_queue(empty_work,(void *)(uintptr_t)i));
-    CHECK(kwork_queue(shared_tick_work,0));CHECK(kwork_queue(sched_vm_tick_work,0));
+    CHECK(kwork_queue(shared_tick_work,0));CHECK(kwork_queue(empty_work,(void *)(uintptr_t)KWORK_CAPACITY));
     struct trap_frame tf={.vector=0x20};flags=0;timer_irq(&tf);flags=0x200;
     CHECK(timer_stats.due==KTIMER_IRQ_BATCH && stats.pending==KWORK_CAPACITY && stats.lost==1);
     for(unsigned i=0;i<1000;i++)CHECK(ktimer_cancel(&load_timers[i]));

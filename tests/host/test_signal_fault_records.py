@@ -304,13 +304,12 @@ def controller_source(source):
     controller = 'static bool signal_result_read' + source.split('static bool signal_result_read', 1)[1].split('#endif', 1)[0]
     release = 'static struct signal_release' + source.split('static struct signal_release', 1)[1].split('static int signal_image_read', 1)[0]
     scheduler = (ROOT / 'src/kernel/core/task.c').read_text()
-    vm_work = scheduler[scheduler.index('static void sched_vm_tick_work('):scheduler.index('void sched_tick(void)')]
     timers = (ROOT / 'src/kernel/core/sync.c').read_text()
     timers = timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')]
     tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('struct task *sched_tasks(void)', 1)[0]
     # f3-00 added optional DOS VM hooks to the production scheduler as weak symbols.
     tick = ('extern void dosvm_tick(void) __attribute__((weak));\n'
-            'extern void serial_tick(void) __attribute__((weak));\n' + vm_work + tick)
+            'extern void serial_tick(void) __attribute__((weak));\n' + tick)
     return (HARNESS.replace('RESULT_LAYOUT', layout).replace('CONTROLLER', controller)
             .replace('RELEASE_INJECTION', release).replace('TIMERS', timers).replace('SCHED_TICK', tick))
 

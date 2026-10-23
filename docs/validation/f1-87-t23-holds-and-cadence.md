@@ -77,6 +77,13 @@ accumulated **pending IRQ-entry milliseconds**, not scheduling counts:
 - `if_clear`: an IRQ awaits entry while the guest virtual IF blocks it and
   neither of the preceding conditions applies.
 
+Amendment fx-9 (2026-10-23): from f0-46 to fx-9 the sample was taken on
+the shared device worker, where the "host producer context" was always the
+worker: every pending millisecond counted as `descheduled` and `if_clear`
+stayed 0 (T23 trials b51f034f and 423b803a included). Since fx-9 the PIT
+top half samples the task it interrupted, one millisecond per tick
+([fx-9](fx-9-vm-clock-task.md)).
+
 WAIT_PRESENT sleeps the client for at most 33 ms. A delayed presenter
 coalesces dirty state; it does not gate the emulation or SB16 clock. The
 window VM retains the client's normal base between waits and receives input

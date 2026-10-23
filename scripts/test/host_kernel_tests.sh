@@ -501,7 +501,7 @@ source = (root / "src/kernel/core/task.c").read_text()
 declarations = source[source.index("static struct task *rq_head"):
                       source.index("void task_stack_init")]
 functions = []
-for name in ("schedule", "sched_vm_tick_work", "sched_tick", "task_sleep_ms", "task_start"):
+for name in ("schedule", "sched_tick", "task_sleep_ms", "task_start"):
     match = re.search(r"^(?:static )?[^\n]+\b" + name + r"\([^\n]*\)\n\{", source, re.M)
     assert match, name
     depth = 1

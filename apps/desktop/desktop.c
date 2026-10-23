@@ -849,6 +849,15 @@ static int desktop_joystick_control(struct desktop *d, struct ciuki_joystick_con
 }
 static uint32_t mixer_serial;
 static int32_t last_ec_preference=-1;
+/* fx-9b: a volume-key (EC) master the kernel applied but did not save is
+ * persisted by this normal-priority writer once it has been unchanged for
+ * MASTER_QUIET_NS (a burst of presses spans several 2 s EC polls), and
+ * before a shutdown; one registry write per burst. */
+#define MASTER_QUIET_NS 3000000000ull
+static int32_t ec_candidate=-1;
+static uint64_t ec_candidate_ns;
+static struct ciuki_mixer_master ec_candidate_master;
+static int master_candidate_save(int fd);
 struct mixer_job { uint32_t serial; int fd; struct ciuki_mixer_master master; int save_only; };
 static int mixer_job_run(void *record, size_t n)
 {
@@ -950,8 +959,11 @@ static int settings_save(struct desktop *d)
 }
 static int media_busy(void);
 static void media_stop(void);
+static void master_candidate_latest(struct desktop *d);
 static int shutdown_wait(struct desktop *d)
 {
+    master_candidate_latest(d); /* fx-9b: a press after the last mixer poll too */
+    if (master_candidate_save(d->mixer_fd)) return 0; /* fx-9b: the last key change first */
     if (media_busy()) return 0;
     if (desk_autoplay_busy(d)) return 0;
     if (desk_folder_busy(d)) return 0;
@@ -1449,6 +1461,26 @@ static void media_remove(struct desktop *d)
     else if (e) desk_shell_notify_error(d,"Media removal failed",e);
     else desk_shell_notify(d,"Removable media",optical ? "The disc has been ejected." : "It is safe to unplug the USB device.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
 }
+/* Queue the pending key-applied master (fx-9b); 1 while it is not saved. */
+static int master_candidate_save(int fd)
+{
+    if (ec_candidate<0 || ec_candidate==last_ec_preference) return 0;
+    if (!settings_writer_started) return 0;
+    if (cfg_writer_busy(&settings_writer)) return 1;
+    struct mixer_job job={.serial=++mixer_serial,.fd=fd,.master=ec_candidate_master,.save_only=1};
+    if (!cfg_writer_job(&settings_writer,&job,sizeof(job))) last_ec_preference=ec_candidate;
+    return 1;
+}
+/* fx-9b: the kernel's current key-applied master becomes the candidate at
+ * once (shutdown: no quiet period is left to wait for). */
+static void master_candidate_latest(struct desktop *d)
+{
+    if (d->mixer_fd<0) return;
+    struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m)};
+    if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m)) || m.save_state!=CIUKI_MIXER_UNSAVED || m.save_error) return;
+    int32_t packed=ciuki_master_pack(m.left,m.right,m.mute);
+    if (packed!=ec_candidate && packed!=last_ec_preference) { ec_candidate=packed; ec_candidate_ns=d->now_ns; ec_candidate_master=m; }
+}
 static void mixer_read(struct desktop *d)
 {
     if (d->power.state && d->power.prepared) return;
@@ -1467,14 +1499,13 @@ static void mixer_read(struct desktop *d)
     }
     else {
         d->sh.mixer_state=d->mixer_fd>=0 ? 2 : 1;
-        if (m.save_state!=CIUKI_MIXER_UNSAVED || m.save_error) last_ec_preference=-1;
+        if (m.save_state!=CIUKI_MIXER_UNSAVED || m.save_error) last_ec_preference=ec_candidate=-1;
         if (!d->sh.volume_drag && !d->sh.want_mixer) {
             d->sh.volume=(int)((m.left+m.right)/2); d->sh.muted=m.mute!=0;
             int32_t packed=ciuki_master_pack(m.left,m.right,m.mute);
-            if (m.save_state==CIUKI_MIXER_UNSAVED && !m.save_error && packed!=last_ec_preference &&
-                settings_writer_started && !cfg_writer_busy(&settings_writer) && !d->power.state) {
-                struct mixer_job job={.serial=++mixer_serial,.fd=fd,.master=m,.save_only=1};
-                if (!cfg_writer_job(&settings_writer,&job,sizeof(job))) last_ec_preference=packed;
+            if (m.save_state==CIUKI_MIXER_UNSAVED && !m.save_error && packed!=last_ec_preference) {
+                if (packed!=ec_candidate) { ec_candidate=packed; ec_candidate_ns=d->now_ns; ec_candidate_master=m; }
+                else if (d->now_ns-ec_candidate_ns>=MASTER_QUIET_NS && !d->power.state) master_candidate_save(fd);
             }
         }
     }

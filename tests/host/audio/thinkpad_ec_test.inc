@@ -677,8 +677,10 @@ static void test_thinkpad_ec_t23_attach(void)
     hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;
     hec.poll_ms=EC_DEFAULT_POLL_MS;
     t23_reg=0x0a;g_ticks=hec.next_poll;unsigned seq=saved_sequence;audio_master_refresh();   /* 3 presses up in one 2 s poll */
-    CHECK(audio.master.left==35 && audio.master.right==35 && !audio.master.mute && saved_sequence==seq+1);
-    CHECK(audio.master.save_state==CIUKI_MIXER_SAVED && !hw.codec[2/2]); /* codec at unity under the EC amplifier */
+    CHECK(audio.master.left==35 && audio.master.right==35 && !audio.master.mute && saved_sequence==seq);
+    /* fx-9b: applied, not saved on the key path (the desktop and the
+     * shutdown flush persist it) */
+    CHECK(audio.master.save_state==CIUKI_MIXER_UNSAVED && !audio.master.save_error && !hw.codec[2/2]); /* codec at unity under the EC amplifier */
     unsigned before=t23_transactions;
     struct ciuki_mixer_master m=audio.master;m.left=m.right=60;m.save_state=m.save_error=0;
     CHECK(!audio_master_set(&m) && audio.master.left==60 && t23_transactions==before); /* level-only: no EC I/O */
@@ -774,6 +776,62 @@ static void test_thinkpad_ec_one_volume(bool legacy)
     printf("ThinkPad EC fx-3 one volume (%s): boot sync, coalesced tray write, press after tray change, limits 0/14, mute, ecpoll=0 without EC access PASS\n",
            legacy?"legacy":"acpi");
 }
+/* fx-9b: what a volume key cost before (f4-29: AUDIO.CFG saved on the EC
+ * worker, vfs_commit = a barrier over every dirty block of the system disk)
+ * and the key path now: applied only, no filesystem or disk access, one
+ * AUDIO.CFG write at the shutdown flush, none if a tray save came later. */
+static void test_thinkpad_ec_key_persistence(void)
+{
+    struct audio_state saved_audio=audio;uint32_t flags=g_boot.flags;uint64_t ticks=g_ticks;
+    char saved_options[sizeof(g_boot.options)];memcpy(saved_options,g_boot.options,sizeof(saved_options));
+    size_t n=ec_test_table(ec_table_memory,"IBM","26473RG","Not Available");ec_test_entry(n);ec_table_mapped=true;
+    memset(&hec,0,sizeof(hec));g_boot.flags=0;g_ticks=1000;memset(g_boot.options,0,sizeof(g_boot.options));
+    host_ec_transfer=t23_transfer;host_ec_transfer_counted=t23_transfer_counted;host_ec_attach=t23_attach;
+    t23_legacy_mode=true;host_ec_legacy=t23_mode;
+    t23_reg=0x07;t23_transactions=t23_writes=0;t23_attach_result=0;
+    audio_settings_load(&vfs);hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;audio.initialized=true;
+    audio.master=(struct ciuki_mixer_master){.version=1,.size=32,.left=35,.right=35};audio.master_in_hardware=false;
+    ec_capture_begin();thinkpad_ec_init();CHECK(hec.active && audio.master_in_hardware);
+    hec.poll_ms=EC_DEFAULT_POLL_MS;
+    /* Another writer's uncommitted file on C: (its FAT and directory
+     * sectors are dirty in the shared cache). */
+    static struct vfs_table table;CHECK(!vfs_table_init(&vfs,&table,2));
+    int fd=vfs_open(&table,"C:\\GAME.SAV",VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_NONE,0);CHECK(fd>=0);
+    static uint8_t block[4096];
+    for(unsigned i=0;i<16;i++){memset(block,i+1,sizeof(block));size_t done;CHECK(!vfs_write(&table,fd,block,sizeof(block),&done)&&done==sizeof(block));}
+    /* f4-29's save, as the EC worker ran it per key press: a 48-byte record
+     * and vfs_commit, a barrier over the whole device. */
+    unsigned writes=disk[0].writes,flushes=disk[0].flush_calls;uint32_t seq=saved_sequence;
+    kmutex_lock(&audio_lock.control);CHECK(!save_master());kmutex_unlock(&audio_lock.control);
+    unsigned old_writes=disk[0].writes-writes,old_flushes=disk[0].flush_calls-flushes;
+    CHECK(saved_sequence==seq+1 && old_writes>=2 && old_flushes>=1);
+    /* fx-9b key path: a burst of presses over six 2 s polls (7 -> 13). */
+    writes=disk[0].writes;flushes=disk[0].flush_calls;unsigned reads=disk[0].reads;seq=saved_sequence;
+    unsigned transactions=t23_transactions;
+    for(unsigned press=1;press<=6;press++) {
+        t23_reg=(uint8_t)(0x07+press);g_ticks=hec.next_poll;audio_master_refresh();
+        CHECK(audio.master.left==35u+press*5u && audio.master.save_state==CIUKI_MIXER_UNSAVED && !audio.master.save_error);
+    }
+    CHECK(disk[0].writes==writes && disk[0].flush_calls==flushes && disk[0].reads==reads && saved_sequence==seq);
+    unsigned key_transactions=t23_transactions-transactions;CHECK(key_transactions==6); /* one RD_EC per poll */
+    /* Shutdown: one AUDIO.CFG record, then nothing more to write. */
+    CHECK(!audio_settings_flush() && saved_sequence==seq+1 && audio.master.save_state==CIUKI_MIXER_SAVED);
+    CHECK(!audio_settings_flush() && saved_sequence==seq+1);
+    struct ciuki_mixer_master burst=audio.master;
+    audio_settings_load(&vfs);CHECK(audio.master.left==burst.left && audio.master.right==burst.right && !audio.master.mute);
+    audio.master=burst;audio.master_in_hardware=true;
+    /* A tray save after a key change already holds the newest master. */
+    t23_reg=0x0c;g_ticks=hec.next_poll;audio_master_refresh();CHECK(audio.master.save_state==CIUKI_MIXER_UNSAVED);
+    struct ciuki_mixer_master m=audio.master;m.left=m.right=40;m.save_state=m.save_error=0;
+    seq=saved_sequence;CHECK(!audio_master_set(&m) && saved_sequence==seq+1);
+    CHECK(!audio_settings_flush() && saved_sequence==seq+1);
+    CHECK(!vfs_close(&table,fd));vfs_table_destroy(&table);
+    host_ec_transfer=0;host_ec_transfer_counted=0;host_ec_attach=0;host_ec_legacy=0;
+    capture_ec_records=false;memset(&hec,0,sizeof(hec));memcpy(g_boot.options,saved_options,sizeof(saved_options));
+    audio=saved_audio;g_boot.flags=flags;g_ticks=ticks;
+    printf("ThinkPad EC fx-9b: f4-29 key save wrote %u sectors with %u FLUSH CACHE (device-wide barrier, other writers' metadata included); key path now 6 presses = %u RD_EC, 0 disk reads/writes/flushes, 0 AUDIO.CFG records; shutdown flush 1 record; tray save supersedes PASS\n",
+           old_writes,old_flushes,key_transactions);
+}
 static void test_thinkpad_ec(void)
 {
     test_thinkpad_ec_init();
@@ -832,5 +890,6 @@ static void test_thinkpad_ec(void)
     test_thinkpad_ec_t23_attach();
     test_thinkpad_ec_one_volume(true);
     test_thinkpad_ec_one_volume(false);
+    test_thinkpad_ec_key_persistence();
     puts("ThinkPad EC: IBM/DMI gates, timed IBF/OBF read/write/readback, levels/mute, preserved bits, amplifier unity and bounded faults PASS");
 }

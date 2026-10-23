@@ -1,4 +1,7 @@
-/* Production F0-46 ring, with only its task/CPU transport replaced. Included
+/* Production F0-46 ring, with only its task/CPU transport replaced, and the
+ * production fx-9 VM clock service (vm/dosvm_clock.c) with only its task
+ * transport replaced: the PIT top half's O(1) signal is counted and
+ * host_clock_tick runs the service the vm-clock task runs after it. Included
  * by both DOS VM host harnesses before the VM implementation. */
 #include <ciuki/work.h>
 static struct task vm_clock_worker;
@@ -43,9 +46,18 @@ static void vm_work_drain(void)
     unsigned guard = 0;
     while (vm_work_one()) CHECK(++guard < 20000);
 }
+/* fx-9 transport: the vm-clock task exists once (dosvm_clock_start) and the
+ * PIT top half signals it (dosvm_clock_signal); no ring entry is involved. */
+static unsigned vm_clock_signals, vm_clock_starts;
+int dosvm_clock_start(void) { vm_clock_starts++; return 0; }
+void dosvm_clock_signal(void) { vm_clock_signals++; }
+#define DOSVM_CLOCK_HOST_TRANSPORT
+#include "../../src/kernel/vm/dosvm_clock.c"
+#undef DOSVM_CLOCK_HOST_TRANSPORT
 static void host_clock_tick(void)
 {
     CHECK(!kwork_init());
-    dosvm_tick();
-    vm_work_drain();
+    dosvm_tick();          /* the PIT top half: samples, signals */
+    dosvm_clock_service(); /* the vm-clock task's service */
+    vm_work_drain();       /* other deferred work of the same tick */
 }
