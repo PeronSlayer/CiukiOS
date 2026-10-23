@@ -501,12 +501,18 @@ storage_sources=(
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"
     "$root/tests/host/fs/fake.c" "$root/tests/host/fs/scan.c"
 )
+save_sources=(
+    "$root/src/kernel/vm/dos_save.c" "$root/src/kernel/vm/dos_save_store.c"
+)
 for storage_test in test_storage_namespace test_storage test_log_recovery test_powercuts; do
+    extra_sources=()
+    # f3-64: the DOS disk service links the persistent save store.
+    case "$storage_test" in test_log_recovery|test_powercuts) extra_sources=("${save_sources[@]}");; esac
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
         -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
-        "${storage_sources[@]}" "$root/tests/host/fs/$storage_test.c" \
+        "${storage_sources[@]}" "${extra_sources[@]}" "$root/tests/host/fs/$storage_test.c" \
         -o "$out/fs/$storage_test"
     "$out/fs/$storage_test" "$out/fs/fat32.img" "$out/fs/fat12.img" "$out/fs/fat16.img"
     # The storage fixture's baseline SYSTEM directory is intentionally

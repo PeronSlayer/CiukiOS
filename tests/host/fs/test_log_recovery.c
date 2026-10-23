@@ -19,6 +19,7 @@ static void irq_restore(uint32_t flags) { (void)flags; }
 static uint8_t disk_ram[33u * 65536u];
 static unsigned disk_run_pages[32];
 #define P2V(p) ((void *)(disk_ram + (p)))
+#define V2P(p) ((uint32_t)((uint8_t *)(p) - disk_ram))
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
     CHECK(pages == 16);
@@ -79,7 +80,7 @@ static void ordinary_operations(struct storage *s)
     readable_tree(&s->volumes[2].fat,s->volumes[2].fat.root,0);
     int h=vfs_open(&table,"C:/SYSTEM/SETTINGS.CFG",VFS_WRITE|VFS_READ|VFS_CREATE,0,0);CHECK(h>=0);
     size_t done;OK(vfs_write(&table,h,"volume=17\n",10,&done));CHECK(done==10);OK(vfs_close(&table,h));
-    char path[24];OK(dosvm_window_base(path));CHECK(!strcmp(path,DOSVM_BUNDLED_BASE));
+    char path[32];OK(dosvm_window_base(path));CHECK(!strcmp(path,DOSVM_BUNDLED_BASE));
     memset(&vm,0,sizeof(vm));vm.info.key.generation=1;vm.info.commitment=DOSVM_LOW_CAP;
     OK(dosvm_disk_open(&vm,path));uint8_t sector[512];
     OK(dosvm_disk_read(&vm,128,sector));CHECK(!memcmp(sector,program,sizeof(program)));
