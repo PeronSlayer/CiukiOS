@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT
- * /Programs/hwreport [--channel-fd=N] [--rescue]. */
+ * /Programs/hwreport [--channel-fd=N] [--rescue]
+ * /Programs/hwreport --rescue --text-fd=N   (headless: no window, no file writes) */
 #include "native.h"
+#include "textframe.h"
+#include <ciuki/channel.h>
+#include <signal.h>
 #include "../accessories/acc.h"
 #include "../libdeskui/textarea.h"
 #include "../libdeskui/job.h"
@@ -163,12 +167,42 @@ static void labels(struct du_ui *ui,int id,int y,const char *text)
         text=end+1;
     }
 }
+/* Headless mode for Setup's rescue page: the report text goes to the parent
+ * over the channel on descriptor fd, framed (textframe.h), and nothing else
+ * happens: no window, no drive selection, no file written. */
+static int link_send(void *ctx,const void *data,size_t bytes)
+{
+    int fd=*(int *)ctx; struct ciuki_message m;
+    if (bytes>sizeof(m.data)) return -EMSGSIZE;
+    memset(&m,0,sizeof(m)); m.length=(uint32_t)bytes; memcpy(m.data,data,bytes);
+    while (ciuki_channel_send(fd,&m,0)) { if (errno!=EINTR) return -errno; }
+    return 0;
+}
+static int text_mode(int fd)
+{
+    if (signal(SIGPIPE,SIG_IGN)==SIG_ERR) return 1;
+    struct hr_native *n=calloc(1,sizeof(*n)); char *text=malloc(HR_TEXT_MAX);
+    if (!n || !text) { free(n); free(text); return 1; }
+    n->rescue=1;
+    hr_native_collect(n);
+    struct hr_link_io io={&fd,link_send}; int status=0;
+    int r=hr_link_report(&n->source,text,HR_TEXT_MAX,&io,&status);
+    hr_native_free(n); free(n); free(text);
+    return r ? 1 : 0;
+}
 int main(int argc,char **argv)
 {
-    int rescue=0;
+    int rescue=0,text_fd=-1;
+    for (int i=1;i<argc;i++) if (!strncmp(argv[i],"--text-fd=",10)) {
+        char *end; long v=strtol(argv[i]+10,&end,10);
+        if (!argv[i][10] || *end || v<3 || v>=64 || text_fd>=0) return 2;
+        text_fd=(int)v; memmove(argv+i,argv+i+1,(size_t)(argc-i)*sizeof(*argv)); argc--; i--;
+    }
     for (int i=1;i<argc;i++) if (!strcmp(argv[i],"--rescue")) {
         rescue=1; memmove(argv+i,argv+i+1,(size_t)(argc-i)*sizeof(*argv)); argc--; i--;
     }
+    /* Text mode is only for the rescue page and takes no other argument. */
+    if (text_fd>=0) return rescue && argc==1 ? text_mode(text_fd) : 2;
     int channel,test; const char *path;
     if (acc_args(argc,argv,"hwreport",&channel,&test,&path) || path || test) return 2;
     struct app *a=calloc(1,sizeof(*a)); if (!a) return 1;

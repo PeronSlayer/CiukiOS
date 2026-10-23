@@ -9,6 +9,7 @@
  * confirmation, F10 invokes the page primary action (directive item 1). setup_txn_execute is called only by st_install,
  * which only the "Ready to install" page reaches. */
 #include "setup.h"
+#include "../hwreport/textframe.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -225,6 +226,7 @@ void st_free(struct st_app *a)
 {
     if (a->text_ready) du_ta_free(&a->text);
     free(a->file); a->file = NULL; a->text_ready = 0;
+    free(a->link_text); a->link_text = NULL; a->link_length = 0;
 }
 
 void st_goto(struct st_app *a, enum st_page p)
@@ -600,6 +602,36 @@ static void restart_tick(struct st_app *a)
 }
 
 /* ---- rescue ---- */
+/* The rescue page's hardware report is the f9-07 program run headless
+ * (--rescue --text-fd=3, no window and no file writes): Setup receives the exact
+ * CIUKIREP.TXT text, shows it in its own viewer and keeps it for the USB save.
+ * Any failure shows Setup's own report instead. */
+static void text_open(struct st_app *a, const char *title, const char *path, const char *text, size_t length);
+_Static_assert(HR_LINK_MAX <= ST_TEXT_BYTES, "the received report must fit the text viewer");
+static void rescue_report(struct st_app *a)
+{
+    char reason[ST_LINK_REASON] = "unavailable";
+    size_t length = 0;
+    int r = -ENOSYS;
+    if (!a->h.report_app) r = -ENOSYS;
+    else if (!a->link_text && !(a->link_text = malloc(HR_LINK_MAX))) { r = -ENOMEM; snprintf(reason, sizeof(reason), "memory"); }
+    else {
+        r = a->h.report_app(a->h.ctx, a->link_text, HR_LINK_MAX, &length, reason);
+        if (!r && !length) { r = -EIO; snprintf(reason, sizeof(reason), "empty"); }
+        if (r && !reason[0]) snprintf(reason, sizeof(reason), "failed");
+    }
+    if (!r) {
+        a->link_length = length;
+        st_record(a, "[rescue] action=hardware_report result=app bytes=%u", (unsigned)length);
+        text_open(a, "Hardware report", NULL, a->link_text, length);
+        return;
+    }
+    a->link_length = 0;               /* never save a stale or partial report */
+    st_record(a, "[rescue] action=hardware_report result=fallback reason=%s", reason);
+    text_open(a, "Hardware report", NULL, a->report, a->report_length);
+}
+
+/* ---- rescue ---- */
 static void rescue_open(struct st_app *a)
 {
     a->rescue_return = a->page;
@@ -696,7 +728,9 @@ void st_action(struct st_app *a, int id)
     }
     case ST_ID_RESCUE: rescue_open(a); break;
     case ST_ID_COPY_LOGS: st_rescue_copy(a, a->status_line, sizeof(a->status_line)); a->ui->dirty = 1; break;
-    case ST_ID_REPORT: st_record(a,"[rescue] action=hardware_view result=ok"); text_open(a, "Hardware report", NULL, a->report, a->report_length); break;
+    case ST_ID_REPORT:
+        if (a->page == ST_PAGE_RESCUE) { rescue_report(a); break; }
+        st_record(a,"[rescue] action=hardware_view result=ok"); text_open(a, "Hardware report", NULL, a->report, a->report_length); break;
     case ST_ID_CLOSE:
         if (a->page == ST_PAGE_TEXT) st_goto(a, a->back_page);
         else if (a->page == ST_PAGE_RESCUE) st_goto(a, a->rescue_return);

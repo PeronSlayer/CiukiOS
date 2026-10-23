@@ -75,6 +75,7 @@ PAYLOAD = {
     "/system/BOOT.CFG": b"safe=0 serial=1\n",
     "/Programs/hello": bytes((i * 7 + 3) & 255 for i in range(70000)),
     "/Programs/netsurf": b"netsurf placeholder\n" * 100,
+    "/Programs/hwreport": b"\x7fELF placeholder hwreport program for the host fixture\n",
     "/System/Win32/kernel32.dll": bytes(range(256)) * 20,
     "/System/sdk/include/stdio.h": b"/* fixture */\n",
     "/system/licenses/WINE-LICENSE": b"Wine LGPL fixture notice\n",
@@ -228,6 +229,7 @@ class EligibilityTests(unittest.TestCase):
         self.config = json.loads(cd.COMPONENTS.read_text())
         self.games = ["wolf3d-shareware", "doom-shareware", "quake-shareware"]
         self.paths = sorted({*PAYLOAD, "/Programs/setup", "/system/RELEASE.JSON"})
+        self.assertIn("/Programs/hwreport", self.paths)
 
     def test_every_fixture_path_has_a_row(self):
         assignment, present, required = cd.eligibility(self.config, self.paths, self.games)
@@ -238,6 +240,30 @@ class EligibilityTests(unittest.TestCase):
         self.assertIn("WINE100.TXZ", required)
         self.assertIn("NETSURF.TGZ", required)
         self.assertIn("CIUKIOS.ZIP", required)
+
+    def test_setup_programs_payload_check(self):
+        """f9-07 amendment 1: the Setup CD carries /Programs/hwreport next to /Programs/setup."""
+        target = WORK / "setup-programs"
+        shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True)
+        elf = target / "elf"
+        elf.write_bytes(b"\x7fELF fixture\n")
+        text = target / "text"
+        text.write_bytes(b"not an elf\n")
+        both = {"/Programs/setup": elf, "/Programs/hwreport": elf, "/Programs/hello": text}
+        cd.check_setup_programs(both)
+        cd.check_setup_programs({"/PROGRAMS/SETUP": elf, "/programs/HWREPORT": elf})   # FAT case-insensitive
+        with self.assertRaisesRegex(ValueError, "Setup CD payload lacks /Programs/hwreport"):
+            cd.check_setup_programs({"/Programs/setup": elf})
+        with self.assertRaisesRegex(ValueError, "Setup CD payload lacks /Programs/setup"):
+            cd.check_setup_programs({"/Programs/hwreport": elf})
+        with self.assertRaisesRegex(ValueError, "/Programs/hwreport is not an ELF program"):
+            cd.check_setup_programs({"/Programs/setup": elf, "/Programs/hwreport": text})
+        # The program is a payload of the canonical disk image, so the CD takes it from there.
+        self.assertEqual(cd.assign("/Programs/hwreport", self.config["components"])["id"], "system")
+        self.assertIn("/Programs/hwreport", cd.SETUP_PROGRAMS)
+        self.assertRegex((ROOT / "scripts/build_image.py").read_text(), r'"/Programs/hwreport": DESKTOP / "hwreport"')
+        shutil.rmtree(target, ignore_errors=True)
 
     def test_path_without_component_fails(self):
         with self.assertRaisesRegex(ValueError, "payload path without a component: /Unlisted/file"):

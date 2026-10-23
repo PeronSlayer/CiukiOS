@@ -25,13 +25,25 @@ static int target(struct st_app *a, char *result, size_t cap)
     }
     return i;
 }
+/* Saves HARDWARE.TXT (Setup's own report: disks, partitions, verdict) and,
+ * when the rescue page received the f9-07 report, CIUKIREP.TXT next to it, the
+ * file name the f9-07 program and its documentation use. Both are kept
+ * because they answer different questions; neither replaces the other. */
 int st_save_report(struct st_app *a, char *result, size_t cap)
 {
     int i=target(a,result,cap); if(i<0)return -1;
     char path[32]; snprintf(path,sizeof(path),"%c:\\HARDWARE.TXT",a->volumes[i].letter);
     int r=a->h.write_file(a->h.ctx,path,a->report,a->report_length);
-    st_record(a,"[rescue] action=hardware_export result=%s",r?"failed":"ok");
-    snprintf(result,cap,r ? "Cannot save the hardware report (error %d)." : "Hardware report saved to %c:\\HARDWARE.TXT.",r ? -r : a->volumes[i].letter);
+    int second=0;
+    if(!r && a->link_text && a->link_length){
+        snprintf(path,sizeof(path),"%c:\\CIUKIREP.TXT",a->volumes[i].letter);
+        r=a->h.write_file(a->h.ctx,path,a->link_text,a->link_length);
+        second=1;
+    }
+    st_record(a,"[rescue] action=hardware_export result=%s files=%d",r?"failed":"ok",a->link_text&&a->link_length?2:1);
+    if(r) snprintf(result,cap,second?"HARDWARE.TXT was saved but CIUKIREP.TXT could not be (error %d).":"Cannot save the hardware report (error %d).",-r);
+    else if(a->link_text&&a->link_length) snprintf(result,cap,"Hardware report saved to %c:\\CIUKIREP.TXT and %c:\\HARDWARE.TXT.",a->volumes[i].letter,a->volumes[i].letter);
+    else snprintf(result,cap,"Hardware report saved to %c:\\HARDWARE.TXT.",a->volumes[i].letter);
     return r;
 }
 static int rescue_copy(struct st_app *a, char *result, size_t cap)

@@ -11,6 +11,9 @@
 #include "../../sdk/sysroot-overlay/include/ciuki/net.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/power.h"
 #include <ciuki/proc.h>
+#include <ciuki/channel.h>
+#include <ciuki/spawn.h>
+#include <poll.h>
 #include <ciuki/surface.h>
 #include <dirent.h>
 #include <errno.h>
@@ -118,6 +121,50 @@ static int list_dir(void *ctx,const char *dos,char (*names)[64],unsigned cap)
         if(count==cap||strlen(e->d_name)>=64){closedir(d);return -EOVERFLOW;}
         snprintf(names[count++],64,"%s",e->d_name);}
     closedir(d);return (int)count;
+}
+/* Headless hardware report (report_link.h): the same recipe as the desktop's
+ * spawn_demo for a child's channel on descriptor 3. The program sends its text
+ * over the channel; no window server is involved. */
+/* <sys/wait.h> and <signal.h> clash with abi.h under the host test; abi.h supplies WNOHANG and SIGKILL. */
+int waitpid(int,int *,int);
+static int link_pair(void *c,int fds[2]){(void)c;return ciuki_channel_pair(fds)?-errno:0;}
+static int link_spawn(void *c,const char *path,char *const argv[],int child_end,int child_fd)
+{
+    (void)c;
+    /* channel_pair creates CLOEXEC endpoints and the explicit spawn mapping
+     * rejects CLOEXEC sources: admit only the child's end (spawn_demo). */
+    if(fcntl(child_end,F_SETFD,0))return -errno;
+    char *env[]={"LC_ALL=C","TZ=UTC0",NULL};
+    struct ciuki_spawn_fd mapping={child_end,child_fd};
+    ciuki_pid_t pid=ciuki_spawn(path,argv,env,&mapping,1,0);
+    return pid<0?-errno:(int)pid;
+}
+static int link_wait(void *c,int fd,unsigned ms)
+{
+    (void)c;struct pollfd p={fd,POLLIN,0};
+    int r=poll(&p,1,(int)ms);
+    return r<0?-errno:r?1:0;
+}
+static int link_recv(void *c,int fd,uint8_t data[256],size_t *bytes)
+{
+    (void)c;struct ciuki_message m;
+    int r=ciuki_channel_recv(fd,&m,DONTWAIT);
+    if(r<0)return -errno;
+    if(!r)return 0;
+    for(unsigned i=0;i<m.fd_count&&i<4;i++)close(m.fds[i]);   /* the program never sends descriptors */
+    if(m.length>sizeof(m.data)||m.fd_count)return -EPROTO;
+    memcpy(data,m.data,m.length);*bytes=m.length;return 1;
+}
+static int link_reap(void *c,int pid,int *status)
+{(void)c;int r=waitpid(pid,status,WNOHANG);return r<0?-errno:r==pid?1:0;}
+static int link_kill(void *c,int pid){(void)c;return ciuki_proc_terminate((ciuki_pid_t)pid,SIGKILL,-1)?-errno:0;}
+static void link_sleep(void *c,unsigned ms){(void)c;struct timespec t={.tv_sec=ms/1000,.tv_nsec=(long)(ms%1000)*1000000L};nanosleep(&t,NULL);}
+static void link_close(void *c,int fd){(void)c;close(fd);}
+static uint64_t link_now(void *c){(void)c;struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000u+(uint64_t)t.tv_nsec/1000000u;}
+static int report_app(void *ctx,char *buffer,size_t cap,size_t *length,char reason[24])
+{
+    const struct st_link_io io={ctx,link_pair,link_spawn,link_wait,link_recv,link_reap,link_kill,link_sleep,link_close,link_now};
+    return st_link_report(&io,buffer,cap,length,reason);
 }
 static uint64_t monotonic(void *c){(void)c;struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000000000ull+(unsigned)t.tv_nsec;}
 static int64_t realtime(void *c){(void)c;return (int64_t)time(NULL);}
@@ -234,7 +281,7 @@ int st_native_open(struct st_host *h,int display_fd,int input_fd)
     if(r||length!=sizeof(N.portrait)){st_native_close();return r?r:-EINVAL;}
     *h=(struct st_host){.monotonic=monotonic,.realtime=realtime,.input=input,.present=present,.idle=idle,
         .devices=devices,.memory=memory,.display=display,.framebuffer=framebuffer,.network=network,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=catalogue,.release=release,
-        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=dest_letter,.portrait=N.portrait};
+        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.report_app=report_app,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=dest_letter,.portrait=N.portrait};
     return 0;
 }
 void st_native_close(void){if(N.pixels){munmap(N.pixels,N.mapped);N.pixels=NULL;}if(N.surface>=0){close(N.surface);N.surface=-1;}if(N.media>=0){close(N.media);N.media=-1;}}

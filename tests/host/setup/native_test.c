@@ -3,6 +3,10 @@
  * mutation entry point is supplied: linking one would defeat this boundary. */
 #include "../../../apps/setup/native.h"
 #include "../../../sdk/libdisk/include/libdisk.h"
+#include "../../../apps/hwreport/report.h"
+#include "../../../apps/hwreport/textframe.h"
+#include <ciuki/channel.h>
+#include <ciuki/spawn.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -18,6 +22,29 @@
 #undef _SC_THREAD_STACK_MIN
 #endif
 #include <unistd.h>
+/* Headless report: the production operations over a pipe and scripted frames. */
+static int link_mode, link_pair_fds[2], link_spawns;
+static uint8_t link_frames[64][HR_FRAME_MAX]; static size_t link_sizes[64]; static unsigned link_count, link_next;
+static int link_capture(void *c,const void *d,size_t n){(void)c;assert(link_count<64);memcpy(link_frames[link_count],d,n);link_sizes[link_count++]=n;return 0;}
+int ciuki_channel_pair(int fds[2]){if(pipe(fds))return -1;for(int i=0;i<2;i++)assert(!fcntl(fds[i],F_SETFD,FD_CLOEXEC));link_pair_fds[0]=fds[0];link_pair_fds[1]=fds[1];return 0;}
+ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *m,uint32_t n,uint32_t flags){
+    assert(!strcmp(path,"/Programs/hwreport")&&argv[0]&&!strcmp(argv[0],"hwreport")&&!strcmp(argv[1],"--rescue")&&!strcmp(argv[2],"--text-fd=3")&&!argv[3]);
+    assert(env&&n==1&&m[0].target==3&&m[0].source==link_pair_fds[1]&&!flags);
+    assert(fcntl(m->source,F_GETFD)==0);           /* only the child's end lost CLOEXEC */
+    assert(fcntl(link_pair_fds[0],F_GETFD)==FD_CLOEXEC);
+    link_spawns++;
+    if(link_mode==0){errno=ENOENT;return -1;}
+    if(link_mode==1){errno=EPERM;return -1;}
+    assert(write(m->source,"x",1)==1);return 77;   /* makes the parent end readable */
+}
+int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags){
+    assert(fd==link_pair_fds[0]&&flags==DONTWAIT);
+    if(link_next>=link_count)return 0;
+    memset(m,0,sizeof(*m));m->length=(uint32_t)link_sizes[link_next];memcpy(m->data,link_frames[link_next],m->length);link_next++;return 1;
+}
+int ciuki_proc_terminate(ciuki_pid_t pid,int sig,int fd){(void)pid;(void)sig;(void)fd;assert(!"a clean transfer must not kill the child");return -1;}
+int __real_waitpid(pid_t,int *,int);
+int __wrap_waitpid(pid_t pid,int *status,int options){assert(pid==77&&options==WNOHANG);*status=0;return pid;}
 static uint32_t removable;
 static unsigned power_calls, presents;
 int ciuki_display_info(int fd,struct ciuki_framebuffer_info *v){assert(fd==61);v->width=800;v->height=600;v->bpp=32;return 0;}
@@ -61,6 +88,18 @@ void native_tests(const uint32_t *portrait)
     char data[4096];size_t n=0;
     assert(h.read_file(NULL,"E:\\SYSTEM\\SETUP.STATE",data,sizeof(data),&n)==0&&n==strlen(state));
     assert(h.read_file(NULL,"E:\\SYSTEM\\SETUP.STATE",data,4,&n)==-EFBIG);
+    /* Headless hardware report through the production operations. */
+    {
+        static char text[HR_LINK_MAX]; size_t length=0; char reason[ST_LINK_REASON];
+        const struct hr_link_io sender={NULL,link_capture};
+        assert(h.report_app&&!hr_link_send(&sender,"native report\n",14,0));
+        link_mode=0;assert(h.report_app(NULL,text,sizeof(text),&length,reason)==-ENOENT&&!strcmp(reason,"missing")&&link_spawns==1);
+        assert(fcntl(link_pair_fds[0],F_GETFD)==-1&&fcntl(link_pair_fds[1],F_GETFD)==-1);   /* both ends closed */
+        link_mode=1;assert(h.report_app(NULL,text,sizeof(text),&length,reason)==-EPERM&&!strcmp(reason,"spawn")&&link_spawns==2);
+        assert(fcntl(link_pair_fds[0],F_GETFD)==-1&&fcntl(link_pair_fds[1],F_GETFD)==-1);
+        link_mode=2;assert(!h.report_app(NULL,text,sizeof(text),&length,reason)&&length==14&&!memcmp(text,"native report\n",14)&&link_spawns==3);
+        assert(fcntl(link_pair_fds[0],F_GETFD)==-1&&fcntl(link_pair_fds[1],F_GETFD)==-1&&link_next==link_count);
+    }
     assert(h.write_file(NULL,"E:\\SYSTEM\\SETUP.STATE","bad",3)==-EROFS);
     assert(h.write_file(NULL,"F:\\..\\e\\SYSTEM\\SETUP.STATE","bad",3)==-EROFS);
     assert(h.write_file(NULL,"F:\\..\\..\\SYSTEM\\SETUP.STATE","bad",3)==-EROFS);

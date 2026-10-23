@@ -86,6 +86,19 @@ int main(int argc,char **argv)
     char product[64]; assert(!device_name(n,1,0x8086,0x1237,product,sizeof(product)) && !strcmp(product,"PCI name"));
     assert(!device_name(n,3,0x1234,1,product,sizeof(product)) && !strcmp(product,"USB name"));
     assert(device_name(n,1,0,0,product,sizeof(product))==-ENOENT);
+    /* /System/BUILD.TXT: missing, present, exactly at the bound, and oversized. */
+    {
+        char build[HR_BUILD_MAX+1]; size_t length=99;
+        path(p,"/BUILD.TXT"); (void)unlink(p);
+        assert(read_build(build,&length)==-ENOENT && !length);
+        f=fopen(p,"wb"); assert(f && fputs("schema=1\nsource_commit=unknown\n",f)>=0 && !fclose(f));
+        assert(!read_build(build,&length) && length==31 && !memcmp(build,"schema=1\n",9) && !build[length]);
+        f=fopen(p,"wb"); assert(f); for (unsigned i=0;i<HR_BUILD_MAX;i++) assert(fputc('a',f)=='a'); assert(!fclose(f));
+        assert(!read_build(build,&length) && length==HR_BUILD_MAX);
+        f=fopen(p,"ab"); assert(f && fputc('a',f)=='a' && !fclose(f));
+        assert(read_build(build,&length)==-EFBIG && !length);
+        assert(!unlink(p));
+    }
     hr_native_free(n); free(n);
-    puts("PASS native report: complete sanitized log archive, absent rotated log, actual atomic files, USB generation/rescue checks, existing temp, hardware names");
+    puts("PASS native report: complete sanitized log archive, absent rotated log, actual atomic files, USB generation/rescue checks, existing temp, hardware names, bounded BUILD.TXT read");
 }
