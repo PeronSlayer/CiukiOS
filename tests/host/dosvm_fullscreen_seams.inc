@@ -16,6 +16,7 @@ static const char *fs_fail_checkpoint;
 static unsigned fs_checkpoints;
 static bool fs_test_checkpoint_pin;
 static unsigned fs_recovery_ms;
+static unsigned fs_end_sleeps; /* fx-22: safe points inside the native restore */
 static bool fs_vbe_available;
 static uint8_t fs_linear[DOS_VBE_BYTES];
 static unsigned fs_linear_writes;
@@ -64,5 +65,6 @@ int display_fullscreen_end(void) {
     CHECK(fs_display);
     if (fs_return_order) { CHECK(fs_exit_stage==2 && !fs_ports);fs_exit_stage=3; }
     g_ticks+=fs_recovery_ms;
+    for (unsigned i=0;i<fs_end_sleeps;i++) task_sleep_ms(1);
     fs_display=false; fs_ends++; return fs_end_result;
 }

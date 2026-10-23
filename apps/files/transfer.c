@@ -323,3 +323,50 @@ void fm_transfer_submit(struct files_transfer *w)
     pthread_mutex_lock(&w->lock); w->pending=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
 }
+
+/* G6 Folder Options: small, versioned shared settings, published with the
+ * same exclusive/sync/rename discipline as the file clipboard. */
+static const char view_header[]="CiukiFilesView1\n";
+int fm_view_load(struct fm_model *m,int *attributes)
+{
+    const struct fm_vfs *f=&m->fs; char text[64]; unsigned used=0; int r=0;
+    if (!f->open || !f->read || !f->close || !f->stat_path) return 0;
+    struct fm_meta meta;
+    int state=f->stat_path(f->ctx,"/system/settings/files.view",&meta);
+    if (state==-ENOENT || (!state && meta.type!=FM_FILE)) return 0;
+    if (state) return state;
+    int fd=f->open(f->ctx,"/system/settings/files.view",0);
+    if (fd==-ENOENT) return 0;
+    if (fd<0) return fd;
+    while (used<sizeof(text)) {
+        int n=f->read(f->ctx,fd,text+used,(unsigned)sizeof(text)-used);
+        if (n<0) { r=n; break; } if (!n) break;
+        if ((unsigned)n>sizeof(text)-used) { r=-EIO; break; }
+        used+=(unsigned)n;
+    }
+    int close_error=f->close(f->ctx,fd); if (!r) r=close_error;
+    unsigned at=(unsigned)sizeof(view_header)-1;
+    if (!r && (used!=at+5 || memcmp(text,view_header,at) || text[at+4]!='\n')) r=-EINVAL;
+    for (unsigned k=0;!r && k<4;k++) if (text[at+k]!='0' && text[at+k]!='1') r=-EINVAL;
+    if (!r) { m->show_hidden=text[at]-'0'; m->hide_system=text[at+1]-'0'; m->hide_extensions=text[at+2]-'0'; *attributes=text[at+3]-'0'; }
+    return r;
+}
+int fm_view_save(struct fm_model *m,int attributes)
+{
+    const struct fm_vfs *f=&m->fs;
+    if (!f->mkdir || !f->open || !f->write || !f->sync || !f->close || !f->rename || !f->unlink) return -ENOSYS;
+    int r=f->mkdir(f->ctx,"/system/settings"); if (r && r!=-EEXIST) return r;
+    char temporary[64],text[64]; int fd=-EEXIST;
+    for (unsigned k=0;k<1000 && fd==-EEXIST;k++) {
+        snprintf(temporary,sizeof(temporary),"/system/settings/view.%u.new",k);
+        fd=f->open(f->ctx,temporary,1);
+    }
+    if (fd<0) return fd;
+    int n=snprintf(text,sizeof(text),"%s%d%d%d%d\n",view_header,!!m->show_hidden,!!m->hide_system,!!m->hide_extensions,!!attributes);
+    r=write_all(f,fd,text,(unsigned)n);
+    if (!r) r=f->sync(f->ctx,fd);
+    int close_error=f->close(f->ctx,fd); if (!r) r=close_error;
+    if (!r) r=f->rename(f->ctx,temporary,"/system/settings/files.view");
+    if (r) f->unlink(f->ctx,temporary);
+    return r;
+}

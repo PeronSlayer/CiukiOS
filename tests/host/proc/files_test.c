@@ -126,9 +126,12 @@ bool fs_rtc_store(uint16_t d,uint16_t t,uint8_t tenths) { CHECK(tenths<200);setu
 void net_state_snapshot(struct ciuki_net_state *out)
 { *out = (struct ciuki_net_state){ .version = 1, .size = sizeof(*out), .reason = "no_adapter" }; }
 
-static struct fake disk[2];
+static struct fake disk[3];
 static struct block_cache cache;
-static struct fat_volume volumes[2];
+static struct fat_volume volumes[3];
+static unsigned mounted_volumes = 2;
+/* C: FAT32, D: FAT16; G6's FAT12 is G: (E: is the optical test drive). */
+static unsigned volume_drive(unsigned i) { return i < 2 ? i + 2 : 6; }
 static struct vfs vfs;
 static struct px_namespace *space;
 static struct process *client;
@@ -359,7 +362,8 @@ static void test_namespace(void)
         CHECK(n==(int)sizeof(struct ciuki_dirent) && entry.d_reclen==(int)sizeof(struct ciuki_dirent) && entry.d_off==(int64_t)++cookie);
         CHECK(entry.d_namlen==strlen(entry.d_name));
         for (unsigned i=entry.d_namlen;i<sizeof(entry.d_name);i++) CHECK(!entry.d_name[i]);
-        CHECK(!entry.reserved[0] && !entry.reserved[1] && !entry.reserved[2]);
+        CHECK(!entry.reserved[0] && !entry.reserved[1]);
+        CHECK(!!(entry.d_attributes&CIUKI_ATTR_DIRECTORY)==(entry.d_type==DT_DIR)); /* G6 */
         if (!strcmp(entry.d_name,"dev")) { CHECK(!dev); dev=true; }
         if (!strcmp(entry.d_name,"mnt")) { CHECK(!mnt); mnt=true; }
     }
@@ -1061,7 +1065,8 @@ static void test_media_node(void)
     /* f5-12B2: every MEDIA_CD_* op reaches media_cd.c through the same fd, nothing else does. */
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_STATE,USER,48,0) && media_cd_calls==1);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_POSITION,USER,48,0)==-ENOTTY && media_cd_calls==2);
-    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_POSITION+1,USER,48,0)==-ENOTTY && media_cd_calls==2);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_LABEL,USER,48,0)==-EINVAL && media_cd_calls==2);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SET_LABEL+1,USER,48,0)==-ENOTTY && media_cd_calls==2);
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,USER,sizeof(blockers),0));
     CHECK(!ua_read(client->memory,&blockers,USER,sizeof(blockers)));
     CHECK(blockers.count==1 && blockers.programs[0].pid==client->pid && !strcmp(blockers.programs[0].name,client->name));
@@ -1102,7 +1107,7 @@ static void test_media_node(void)
     CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,UINT32_MAX,sizeof(s),0)==-EFAULT);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s)-1,0)==-EINVAL);
-    s.reserved=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
+    s.usb_unrecognized=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
     struct ciuki_media_remove r={1,sizeof(r),4,123};CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));
     media_result=-FS_EBUSY;CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)==-EBUSY&&media_removals==1);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,UINT32_MAX,sizeof(r),0)==-EFAULT&&media_removals==1);
@@ -1436,15 +1441,179 @@ static void test_setup_metadata(void)
     setup_test_mode=false;
     puts("Setup native metadata: authority, attributes, alias, bounded chain, EOF, mount/chain invalidation, UTC/local RTC PASS");
 }
+/* G6: native file_info (call 98) on one mounted FAT volume: attribute and
+ * time round trips through the directory entry, the 8.3 alias, size on
+ * disk, dirent attributes, refusals and read-only media. */
+static int info_call(const char *path, struct ciuki_file_info *r)
+{
+    put_path(USER, path); CHECK(!ua_write(client->memory, USER2, r, sizeof(*r)));
+    int e = call(CIUKI_SYS_FILE_INFO, USER, USER2, sizeof(*r), 0, 0);
+    if (!e && r->operation == CIUKI_FILE_INFO_GET) CHECK(!ua_read(client->memory, r, USER2, sizeof(*r)));
+    return e;
+}
+static int info_get(const char *path, struct ciuki_file_info *r)
+{
+    *r = (struct ciuki_file_info){.version = CIUKI_FILE_INFO_VERSION, .size = sizeof(*r)};
+    return info_call(path, r);
+}
+static int info_set(const char *path, uint32_t mask, struct ciuki_file_info r)
+{
+    r.version = CIUKI_FILE_INFO_VERSION; r.size = sizeof(r); r.operation = CIUKI_FILE_INFO_SET; r.mask = mask;
+    return info_call(path, &r);
+}
+static uint8_t listed_attributes(const char *dir, const char *name)
+{
+    int fd = file_open(client, dir, O_RDONLY | O_DIRECTORY, 0); CHECK(fd >= 0);
+    struct ciuki_dirent entry; int n, found = -1;
+    while ((n = locked_dents(file_fd(client, fd), &entry)) > 0) if (!strcmp(entry.d_name, name)) found = entry.d_attributes;
+    CHECK(!n && !file_close(client, fd) && found >= 0);
+    return (uint8_t)found;
+}
+static void test_file_info_volume(const char *root, unsigned index)
+{
+    char file[64], folder[64], deep[80];
+    snprintf(file, sizeof(file), "%s/Attribute long name.txt", root);
+    snprintf(folder, sizeof(folder), "%s/Attr folder", root);
+    snprintf(deep, sizeof(deep), "%s/Attr folder/inner.txt", root);
+    int fd = file_open(client, file, O_CREAT | O_EXCL | O_RDWR, 0666); CHECK(fd >= 0);
+    CHECK(io(fd, "0123456789", 10, true, false, 0) == 10); CHECK(!file_close(client, fd));
+    struct ciuki_file_info r;
+    CHECK(!info_get(file, &r));
+    const uint32_t all = CIUKI_FILE_INFO_ATTRIBUTES | CIUKI_FILE_INFO_CREATED | CIUKI_FILE_INFO_ACCESSED |
+        CIUKI_FILE_INFO_MODIFIED | CIUKI_FILE_INFO_SHORT_NAME | CIUKI_FILE_INFO_ALLOCATED;
+    CHECK(r.version == CIUKI_FILE_INFO_VERSION && r.size == sizeof(r) && r.mask == all && !r.flags);
+    CHECK(r.file_size == 10 && r.allocated == (uint64_t)volumes[index].spc * 512);
+    CHECK(!strcmp(r.short_name, "ATTRIB~1.TXT") && (r.attributes & CIUKI_ATTR_ARCHIVE) && !(r.attributes & CIUKI_ATTR_DIRECTORY));
+    /* Every settable bit round trips through the directory entry. */
+    for (uint32_t bits = 0; bits <= CIUKI_ATTR_SETTABLE; bits++) {
+        if (bits & ~CIUKI_ATTR_SETTABLE) continue;
+        CHECK(!info_set(file, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = bits}));
+        CHECK(!info_get(file, &r) && r.attributes == bits);
+        CHECK(listed_attributes(root[0] ? root : "/", "Attribute long name.txt") == bits);
+        struct px_path path; CHECK(!resolve_path(file, &path)); struct ciuki_stat st; CHECK(!locked_stat(path.node, &st));
+        CHECK(st.st_mode == (S_IFREG | (bits & CIUKI_ATTR_READONLY ? 0444u : 0666u)));
+    }
+    /* Read-only is effective for native writers and removable by file_info. */
+    CHECK(!info_set(file, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = CIUKI_ATTR_READONLY | CIUKI_ATTR_HIDDEN}));
+    CHECK(file_open(client, file, O_WRONLY, 0) == -EACCES);
+    /* Times: created keeps 10 ms (odd second + 500 ms), modified 2 s, accessed the day. */
+    struct ciuki_file_info times = {.created = 981173107, .created_ms = 500, .modified = 1276070950, .accessed = 1577934000};
+    CHECK(!info_set(file, CIUKI_FILE_INFO_CREATED | CIUKI_FILE_INFO_MODIFIED | CIUKI_FILE_INFO_ACCESSED, times));
+    CHECK(!info_get(file, &r));
+    CHECK(r.created == 981173107 && r.created_ms == 500 && r.modified == 1276070950 && r.accessed == 1577923200);
+    CHECK(r.attributes == (CIUKI_ATTR_READONLY | CIUKI_ATTR_HIDDEN)); /* times leave attributes alone */
+    times.modified = 1276070951; CHECK(!info_set(file, CIUKI_FILE_INFO_MODIFIED, times));
+    CHECK(!info_get(file, &r) && r.modified == 1276070950 && r.created == 981173107);
+    struct px_path path; CHECK(!resolve_path(file, &path)); struct ciuki_stat st; CHECK(!locked_stat(path.node, &st));
+    CHECK(st.st_mtim.tv_sec == 1276070950 && st.st_atim.tv_sec == 1577923200);
+    /* Refusals leave the entry unchanged. */
+    unsigned writes = disk[index].writes;
+    CHECK(info_set(file, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = 0x08}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = CIUKI_ATTR_DIRECTORY}) == -EINVAL);
+    CHECK(info_set(file, 0, (struct ciuki_file_info){0}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_SHORT_NAME, (struct ciuki_file_info){0}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_MODIFIED, (struct ciuki_file_info){.modified = 0}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_MODIFIED, (struct ciuki_file_info){.modified = INT64_MIN}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_MODIFIED, (struct ciuki_file_info){.modified = INT64_MAX}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_MODIFIED, (struct ciuki_file_info){.modified = 4354819200LL}) == -EINVAL);
+    CHECK(info_set(file, CIUKI_FILE_INFO_CREATED, (struct ciuki_file_info){.created = 981173107, .created_ms = 1000}) == -EINVAL);
+    CHECK(info_set(root[0] ? root : "/", CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = CIUKI_ATTR_DIRECTORY}) == -EINVAL);
+    CHECK(disk[index].writes == writes);
+    r = (struct ciuki_file_info){.version = 2, .size = sizeof(r)}; CHECK(info_call(file, &r) == -EINVAL);
+    r = (struct ciuki_file_info){.version = 1, .size = sizeof(r), .operation = 7}; CHECK(info_call(file, &r) == -EINVAL);
+    r = (struct ciuki_file_info){.version = 1, .size = sizeof(r), .reserved = 1}; CHECK(info_call(file, &r) == -EINVAL);
+    put_path(USER, file);
+    CHECK(call(CIUKI_SYS_FILE_INFO, USER, USER2, sizeof(r) - 1, 0, 0) == -EINVAL);
+    CHECK(call(CIUKI_SYS_FILE_INFO, USER, USER2, sizeof(r), 1, 0) == -EINVAL);
+    CHECK(call(CIUKI_SYS_FILE_INFO, USER, UINT32_MAX - 8, sizeof(r), 0, 0) == -EFAULT);
+    char missing[80]; snprintf(missing, sizeof(missing), "%s/no such file", root);
+    CHECK(info_get(missing, &r) == -ENOENT);
+    /* A folder: hidden plus its own DIRECTORY bit; the root has no entry. */
+    CHECK(!make_dir(folder));
+    fd = file_open(client, deep, O_CREAT | O_EXCL | O_RDWR, 0666); CHECK(fd >= 0 && !file_close(client, fd));
+    CHECK(!info_set(folder, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = CIUKI_ATTR_DIRECTORY | CIUKI_ATTR_HIDDEN | CIUKI_ATTR_READONLY}));
+    CHECK(!info_get(folder, &r) && r.attributes == (CIUKI_ATTR_DIRECTORY | CIUKI_ATTR_HIDDEN | CIUKI_ATTR_READONLY));
+    CHECK(listed_attributes(root[0] ? root : "/", "Attr folder") == (CIUKI_ATTR_DIRECTORY | CIUKI_ATTR_HIDDEN | CIUKI_ATTR_READONLY));
+    /* A read-only folder still accepts new files (Windows ignores it, KB 326549). */
+    fd = file_open(client, deep, O_RDWR, 0); CHECK(fd >= 0 && !file_close(client, fd));
+    CHECK(!info_get(root[0] ? root : "/", &r) && r.attributes == CIUKI_ATTR_DIRECTORY && (r.flags & CIUKI_FILE_INFO_VOLUME_ROOT) &&
+          !(r.mask & (CIUKI_FILE_INFO_CREATED | CIUKI_FILE_INFO_SHORT_NAME)));
+    /* A read-only volume refuses honestly; reads still work and say so. */
+    volumes[index].readonly = true;
+    CHECK(info_set(file, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){0}) == -EROFS);
+    CHECK(!info_get(file, &r) && (r.flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM) && r.attributes == (CIUKI_ATTR_READONLY | CIUKI_ATTR_HIDDEN));
+    volumes[index].readonly = false;
+    CHECK(!info_set(file, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = CIUKI_ATTR_ARCHIVE}));
+    CHECK(!info_set(folder, CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){.attributes = 0}));
+    CHECK(!remove_path_native(deep, false) && !remove_path_native(folder, true) && !remove_path_native(file, false));
+    printf("files file_info FAT%u: %u attribute combinations, times 10 ms/2 s/day, alias, size on disk, dirent, refusals, read-only volume PASS\n",
+           volumes[index].type, CIUKI_ATTR_SETTABLE + 1 - 0x18);
+}
+static void test_file_info(void)
+{
+    test_file_info_volume("", 0);
+    test_file_info_volume("/mnt/d", 1);
+    if (mounted_volumes > 2) test_file_info_volume("/mnt/g", 2);
+    struct ciuki_file_info r;
+    CHECK(!info_get("/dev/null", &r) && r.mask == CIUKI_FILE_INFO_ATTRIBUTES && !r.attributes);
+    CHECK(!info_get("/mnt", &r) && r.attributes == CIUKI_ATTR_DIRECTORY);
+    CHECK(info_set("/dev/null", CIUKI_FILE_INFO_ATTRIBUTES, (struct ciuki_file_info){0}) == -EOPNOTSUPP);
+    /* G6 volume labels: FAT spec rules, both copies, removal, read-only. */
+    char padded[11];
+    CHECK(media_label_encode("ciuki os", padded) == 0 && !memcmp(padded, "CIUKI OS   ", 11));
+    CHECK(media_label_encode("TWELVE CHARS", padded) == -EINVAL && media_label_encode("A.B", padded) == -EINVAL);
+    CHECK(media_label_encode("\xc3\xa8", padded) == -EINVAL && media_label_encode("", padded) == 0 && !memcmp(padded, "           ", 11));
+    struct ciuki_media_label request={.version=CIUKI_MEDIA_VERSION,.size=sizeof(request),.drive=2};
+    CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
+    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request)-1)==-EINVAL);
+    CHECK(media_label(NULL,MEDIA_GET_LABEL,UINT32_MAX-8,sizeof(request))==-EFAULT);
+    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-ENOENT);
+    request.version=1; CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
+    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EOPNOTSUPP);
+    request.version=CIUKI_MEDIA_VERSION; request.drive=26; CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
+    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EINVAL);
+    request.drive=2; memset(request.label,'A',sizeof(request.label)); CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
+    CHECK(media_label(NULL,MEDIA_SET_LABEL,USER2,sizeof(request))==-EINVAL);
+    for (unsigned i = 0; i < mounted_volumes; i++) {
+        struct ciuki_media_label label = {.drive = volume_drive(i)};
+        int label_error=media_label_locked_apply(&vfs, &label, "DATA DISK  ");
+        if (label_error || strcmp(label.label,"DATA DISK") || label.flags) fprintf(stderr,"label drive=%u error=%d text=%.12s flags=%u source=%.12s\n",label.drive,label_error,label.label,label.flags,volumes[i].volume_label);
+        CHECK(!label_error && !strcmp(label.label,"DATA DISK") && !label.flags);
+        CHECK(!strcmp(volumes[i].volume_label, "DATA DISK"));
+        uint8_t boot[512]; CHECK(disk[i].dev.read(&disk[i].dev, 0, 1, boot) == 0);
+        CHECK(!memcmp(boot + (volumes[i].type == 32 ? 71 : 43), "DATA DISK  ", 11));
+        if (volumes[i].type==32 && volumes[i].backup && volumes[i].backup<volumes[i].reserved) {
+            CHECK(!disk[i].dev.read(&disk[i].dev,volumes[i].backup,1,boot));
+            CHECK(!memcmp(boot+71,"DATA DISK  ",11));
+        }
+        CHECK(!media_label_locked_apply(&vfs, &label, "RENAMED    ") && !strcmp(label.label, "RENAMED"));
+        struct fat_entry entry; uint32_t cursor = 0; bool found = false;
+        vfs_lock(&vfs, 0);
+        vfs_reserve_locked(&vfs, 1u<<volume_drive(i));
+        while (!VFS_IO(&vfs, fat_next_dos(&volumes[i], 0, &cursor, &entry))) if (!strcmp(entry.name, "RENAMED")) found = true;
+        vfs_unlock(&vfs);
+        CHECK(found);
+        CHECK(!media_label_locked_apply(&vfs, &label, "           ") && !label.label[0]);
+        CHECK(!disk[i].dev.read(&disk[i].dev, 0, 1, boot) && !memcmp(boot + (volumes[i].type == 32 ? 71 : 43), "NO NAME    ", 11));
+        volumes[i].readonly = true;
+        CHECK(media_label_locked_apply(&vfs, &label, "NOPE       ") == -EROFS);
+        label.flags = 0; CHECK(!media_label_locked_apply(&vfs, &label, 0) && label.flags == CIUKI_MEDIA_LABEL_READ_ONLY);
+        volumes[i].readonly = false;
+    }
+    struct ciuki_media_label none = {.drive = 9};
+    CHECK(media_label_locked_apply(&vfs, &none, 0) == -ENOENT);
+    puts("files G6 devices/synthetic nodes, volume labels (BS_VolLab + root entry, removal, rules, read-only) PASS");
+}
 int main(int argc, char **argv)
 {
-    CHECK(argc==3 || argc==4);
+    CHECK(argc==3 || argc==4 || argc==5);
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     controller.state=T_RUNNING; g_current=&controller; proc_init();
     CHECK(!fake_open(&disk[0],argv[1]) && !fake_open(&disk[1],argv[2]));
     disk[0].undo_enabled=disk[1].undo_enabled=true;
+    if (argc==5) { CHECK(!fake_open(&disk[2],argv[4])); disk[2].undo_enabled=true; mounted_volumes=3; } /* G6: FAT12 at G: */
     CHECK(!cache_init(&cache,0)); vfs_init(&vfs);
-    for (unsigned i=0;i<2;i++) { CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true)); CHECK(!vfs_attach(&vfs,i+2,&volumes[i])); }
+    for (unsigned i=0;i<mounted_volumes;i++) { CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true)); CHECK(!vfs_attach(&vfs,volume_drive(i),&volumes[i])); }
     CHECK(volumes[0].volume_serial==0x00c1a001 && volumes[1].volume_serial==0x00c1a001);
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
@@ -1452,12 +1621,12 @@ int main(int argc, char **argv)
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput(); test_launch_sparse();
-    test_registry_commit(); test_setup_metadata();
+    test_registry_commit(); test_setup_metadata(); test_file_info();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());
     CHECK(pages_used == prior_pages && heap_blocks == prior_heap);
     puts("files guest fault boundary: production sparse FAT32/cache/fd positive count, sticky fsync and teardown PASS");
-    if (argc == 4) {
+    if (argc >= 4) {
         FILE *file = fopen(argv[3], "rb"); CHECK(file);
         CHECK(!fseek(file, 0, SEEK_END)); long size = ftell(file); CHECK(size == 12292);
         rewind(file); uint8_t *payload = malloc((size_t)size); CHECK(payload);
@@ -1470,9 +1639,9 @@ int main(int argc, char **argv)
     }
     all_closed(); stop_collect(client);
     struct file_ledger ledger; files_snapshot(space,&ledger); CHECK(!ledger.descriptions && !ledger.pins);
-    for (unsigned i=0;i<2;i++) CHECK(!vfs_detach(&vfs,i+2));
+    for (unsigned i=0;i<mounted_volumes;i++) CHECK(!vfs_detach(&vfs,volume_drive(i)));
     vfs_destroy(&vfs); cache_destroy(&cache);
-    for (unsigned i=0;i<2;i++) { fake_reset(&disk[i]); fake_close(&disk[i]); }
+    for (unsigned i=0;i<mounted_volumes;i++) { fake_reset(&disk[i]); fake_close(&disk[i]); }
     CHECK(!pages_used && heap_blocks==1);
     test_write_failures(argv[1]);
     printf("files final: descriptors=0 pins=0 pages=0 checks=%u PASS\n",checks);

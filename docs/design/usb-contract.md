@@ -972,3 +972,254 @@ per frame). The QEMU and T23 confirmation is the lead's.
 READ(10)/WRITE(10) ending in CHECK CONDITION with valid sense no longer
 quarantine the device (see `vfs-storage-contract.md`, fx-17).
 
+
+## fx-21: UHCI root-port reset release and enable in one section (2026-10-23)
+
+T23 trial of `f441c5bd`: the stick (05dc:a81d), attached at boot to
+`usb-388` port 2, ACKed the SETUP of every `GET_DESCRIPTOR(8)` at address 0
+(`pid=2d … td=19000007`). It NAKed the data stage for the whole 500 ms
+(`pid=69 … td=198807ff`: active, NAK, C_ERR still 3), six times across two
+port resets. Then `[usb] quarantine device addr=0
+reason=enumeration_transfer`. The same stick enumerated in every earlier
+T23 boot that had it (35 boots, `e831e685` included). Its first descriptor
+read took 9 to 126 ms, at boot or on hot-plug.
+
+### Findings
+
+Excluded:
+
+- **The fx-17 schedule.**
+  - The NAK bit proves the controller executed the IN TD and the device
+    answered.
+  - The reclamation loop exists only inside `bulk()`. Control and bulk
+    transfers share the host reservation, so no control transfer ever
+    runs with the loop closed.
+  - The terminating QH's inactive element is never executed: no HC process
+    error, `command=00c1` throughout.
+  - The Logitech receiver on port 1 of the same controller enumerated at
+    address 0 with the fx-17 schedule 450 ms earlier.
+  - At enumeration, a device sees the same bus traffic with or without the
+    terminating QH.
+  - In the host model, the `e831e685` driver (`2cfed3a8`, no terminating
+    QH) fails the trial replay in the same way.
+- **APM SMIs.** The fx-18 APM BIOS VM ran during this reset, but it
+  accessed only PM1_CNT (`[apm] io port=1004`, read). It never accessed the
+  APM_CNT port B2h, so it raised no SMI. `biosvm.c` logs every first
+  access to a window port. The three SMIs of that window (2 to 4 ms) were
+  EC SMIs, as in every boot.
+
+The one anomaly in the driver's control:
+
+- The port-2 reset was released at tick 2387, and PE was written at tick
+  2396. The `usb_sleep(h, 1)` between them took 9 ms. In that window the
+  ACPI scan held the CPU (`stretch_max_ms=59 task=acpi-power`), and the
+  APM BIOS VM and an SMI also ran.
+- The other 79 UHCI root-port reset sequences in the 43 T23 logs had gaps
+  of 1–2 ms (74 sequences) or 34–74 ms (5 sequences). The long ones were
+  older polling-mode images; four were on the receiver.
+- During that gap the port forwards no SOF, so a device that sees more
+  than 3 ms of idle bus enters Suspend in the Default state.
+
+Not proven:
+
+- The logs do not prove that the gap wedged the stick. The same stick
+  survived a 34 ms gap when it was hot-plugged (never configured) in
+  `445e91c7`. The second-series reset (gap 1 ms) did not recover it.
+- A fault inside the stick that started in this boot cannot be excluded.
+- The hypothesis consistent with every T23 record: a BIOS-configured stick
+  that suspends in the Default state before its first SOF stops answering
+  until it is power-cycled.
+
+### Research
+
+- [UHCI 1.1 §2.1.7](https://ftp.netbsd.org/pub/NetBSD/misc/blymn/uhci11d.pdf)
+  and the
+  [ICH3-M datasheet §11.2.7](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf):
+  PORTSC PE is written by host software only, and a disabled port forwards
+  no traffic.
+- USB 2.0:
+  - §7.1.7.6: a device that sees more than 3.0 ms of idle bus enters
+    Suspend from any state.
+  - §7.1.7.5: a hub port is Enabled when its reset ends.
+- EHCI 1.0 §2.3.9: the controller enables the port within 2 ms of the Port
+  Reset write.
+- Linux
+  [uhci-hub.c `uhci_check_ports()`](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/uhci-hub.c):
+  clears PR, waits `udelay(10)`, clears CSC/PEC and sets PE, all under the
+  HCD spinlock.
+- FreeBSD
+  [uhci.c `uhci_portreset()`](https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/dev/usb/controller/uhci.c):
+  "This delay needs to be exactly 100us, else some USB devices fail to
+  attach!".
+- Reclamation:
+  - The [PIIX4 specification update](https://www.intel.com/Assets/PDF/specupdate/297738.pdf),
+    erratum 4: a loop made only of empty QHs never fetches the next frame
+    pointer. Its workaround is a pseudo QH whose element is an inactive
+    pseudo TD, corrected by item 23.
+  - Linux
+    [uhci-hcd.c `uhci_start()`](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/uhci-hcd.c)
+    fills `term_td` as a null IN to address 127.
+  - Linux 630aa3cfd5f0 ("UHCI: No FSBR until device is configured") keeps
+    enumeration out of the loop. The CiukiOS reservation already
+    guarantees this.
+
+### Decision
+
+- `reset()` keeps the 50 ms reset and the 10 ms TRSTRCY task sleeps.
+- `release_enable()` releases PR, waits 10 µs (`udelay`), clears the
+  reset's CSC/PEC and writes PE, all in one IRQ-off section that never
+  crosses a task sleep. PE is written only for a present port without
+  overcurrent, as before.
+- The frame counter measures that window:
+  `[usb] port_reset port=… assert_ms=… release_to_enable_frames=… connected=… result=…`.
+- The pseudo TD's token is Linux's (IN, address 127, null length), never
+  address 0.
+- The fx-17 reclamation is unchanged.
+
+### Host evidence
+
+`tests/host/usb/fx21_test.c` (in `storage_run.sh`) enumerates the stick
+through the full UHCI schedule. It covers PORTSC reset and PE, address 0,
+SET_ADDRESS, descriptors, configuration, the BOT bind, the E: mount and a
+64 KiB READ(10). Its stick model follows the hypothesis above.
+
+| Driver | Trial load (8 ms stretch after release) | Unloaded |
+| --- | --- | --- |
+| Before fx-21 | Trial records reproduced: 9 ms gap, `td=198807ff`, six `result=-110 elapsed_ms=505`, quarantine | Enumerates |
+| Pre-fx-17 (`2cfed3a8`) | Same failure | Enumerates |
+| fx-21 | Enumerates and mounts | Enumerates and mounts |
+
+- During enumeration the NAKed control TD is retried once per frame.
+- The 64 KiB read takes 132 frames without the loop and 76 frames with it
+  (fx-17's figures).
+
+### T23 check
+
+- `release_to_enable_frames` must be 0 or 1.
+- If a stick still fails with that window, the gap hypothesis is false.
+  The next suspects are the stick itself (replug test) and the 500 ms
+  per-stage budget: USB 2.0 §9.2.6.4 allows 500 ms, Linux
+  `USB_CTRL_GET_TIMEOUT` waits 5 s.
+
+## fx-21b: enumeration message bound, "USB Device Not Recognized", re-plug (2026-10-23)
+
+Lead decisions after fx-21: enumeration control transfers get Linux's
+bound; a device quarantined at enumeration is reported to the user; a
+re-plug retries the port.
+
+### Research
+
+- **Linux v6.12**
+  [`include/linux/usb.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/include/linux/usb.h?h=v6.12):
+  `USB_CTRL_GET_TIMEOUT` and `USB_CTRL_SET_TIMEOUT` are both 5000 ms ("USB
+  identifies 5 second timeouts").
+  - The bound applies to a whole `usb_control_msg()`: SETUP, data and
+    status.
+  - [`hub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/drivers/usb/core/hub.c?h=v6.12)
+    also uses it for the first descriptor read at address 0
+    (`initial_descriptor_timeout`, "default 5000 - 5.0 seconds").
+- **USB 2.0 §9.2.6.4** asks a device to return the first data packet
+  within 500 ms. The previous CiukiOS bound was this 500 ms, applied to
+  each stage separately.
+- **Microsoft**, ["USB Device not recognized" error](https://learn.microsoft.com/en-us/previous-versions/troubleshoot/windows-server/usb-device-not-recognized-error)
+  (KB 2654149, Windows 7/10):
+  - The text is "USB Device not recognized: One of the devices attached to
+    this computer has malfunctioned and windows does not recognize it".
+  - Its first resolution is to uninstall the device, unplug the cable,
+    wait and reconnect.
+  - The [Windows 7 support blog](https://learn.microsoft.com/en-us/archive/blogs/win7/error-message-one-of-the-usb-device-attached-to-this-computer-has-malfunctioned-and-windows-does-not-recognize-it)
+    describes the same pop-up and Device Manager code 43.
+- **Windows 98** itself has no notification-area balloon. A device that
+  fails enumeration appears in Device Manager, and no Microsoft document
+  of that wording was found. The balloon is the later Windows behaviour,
+  adopted here at the lead's request.
+
+### Decision
+
+**Enumeration message bound:**
+- `usb_control()` on a device that is not yet configured (every request up
+  to and including SET_CONFIGURATION) sets one 5000 ms deadline
+  (`USB_CTRL_TIMEOUT_MS`) for the whole message.
+- `usb_packet_budget()` gives each stage the time left.
+- Configured devices keep 500 ms per stage. The BOT class reset keeps its
+  f1-96b 5 s per stage.
+- The 2 series × 3 attempts structure of `usb_enumerate()` is unchanged.
+
+**Worst case to quarantine** for a device that ACKs SETUP and NAKs every
+data stage (the f441c5bd stick):
+- From the first attempt: 6 × (5000 + at most 20 ms two-frame retirement)
+  + 4 × 100 ms pauses + one 60 ms reset = **30 580 ms**. The host model
+  measures 30 472 ms.
+- Add the debounce before the first attempt (100 ms stable, at most 2 s)
+  and the 60 ms first reset.
+- A device that answers addr 0 and then stalls later can take up to five
+  more 5 s messages (SET_ADDRESS, three descriptors, SET_CONFIGURATION), so
+  at most about 56 s in all.
+- A device that does not answer at all (CRC/timeout) fails in a few frames
+  per attempt.
+
+**Where the wait runs:**
+- Enumeration runs only in `usb_step()` on the controller's usb-host
+  worker, never on a desktop, audio or input task.
+- While a message waits, the transfer mutex is released every millisecond.
+  HID interrupt pipes on the same controller keep being serviced, and
+  other controllers are independent.
+- Storage I/O on the same controller waits for the reservation, within the
+  bound above.
+
+**Power quiesce:**
+- `usb_power_quiesce()` first sets `quiescing` on every host.
+- A waiting enumeration message then ends at once (`usb_control_cancelled()`
+  in the UHCI/OHCI/EHCI packet loops), with no unrecognized count, so the
+  existing 2 s reservation bound still holds.
+- A refused quiesce clears the flag again.
+
+**Count and record:**
+- A device quarantined in `usb_enumerate()` is counted, and so is a failed
+  root-port reset.
+- It counts only while the port still reports a connection on a working,
+  not quiescing controller. An unplug during enumeration is not a
+  malfunction.
+- Record: `[usb] unrecognized controller=… port=… parent=… reason=… count=… notify=desktop tick=…`.
+
+**ABI and desktop:**
+- `/dev/media` `MEDIA_GET_STATE` v2 reports the count in
+  `ciuki_media_state.usb_unrecognized`, formerly `reserved`. The offset is
+  unchanged, the field must be zero on input, and v1 keeps its reserved
+  word zero.
+- The desktop shows one warning balloon in the notification area per
+  increase of that count, including a failure from before the desktop
+  started:
+  - Title: "USB Device Not Recognized".
+  - Text: "One of the USB devices attached to this computer has
+    malfunctioned, and CiukiOS does not recognize it. Unplug the device,
+    wait a few seconds and plug it in again. If the problem continues, try
+    another USB port."
+  - An unchanged count never raises it again.
+
+**Re-plug:**
+- A port blocked by a quarantine was already released when a scan
+  observed the disconnect (f1-96b).
+- fx-21b also releases it when a scan sees a new connect change with CCS
+  still set, after the quarantined connection was reported. That is a
+  re-plug faster than the 250 ms scan, recorded as `[usb] release … reason=reconnect`.
+- The next scan debounces, resets and enumerates the port as a new device.
+- Hub ports release on disconnect as before (`usb_hub.c`).
+
+### Host evidence
+
+`tests/host/usb/fx21_test.c`:
+
+| Device | Result |
+| --- | --- |
+| Slow stick: every enumeration request answers after 1.5 s | Enumerates and mounts, no count. With the previous 500 ms per stage: six `result=-110`, quarantine. |
+| Dead stick | Quarantined within the bound, exactly one count and record. Still none after 3 s more. |
+| Dead stick, unplug then a healthy stick | Released, enumerated and mounted. |
+| Dead stick, re-plug between two scans | Released, enumerated and mounted. |
+| Dead stick, quiesce during the wait | Ends within 500 ms, no count. |
+
+`tests/host/desktop/media_notification_test.c`:
+- One balloon per increase, including at desktop start.
+- None for an unchanged count.
+- The re-plugged stick gets the ordinary media notice.
+- The text fits the notification body at 640×480 and 1024×768.

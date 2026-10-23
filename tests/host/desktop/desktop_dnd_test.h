@@ -74,12 +74,12 @@ static void fx19_desktop_cases(void)
     key(DU_KEY_SPACE); desk_shell_key(&d,0x1d,0); assert(dnd_marked("dnd-c.txt") && dnd_count()==3);
     puts("PASS fx-19 desktop keyboard selection: Ctrl+A, arrows, Shift+arrows, Ctrl+arrows, Ctrl+Space");
 
-    /* Delete acts on the whole selection, with free Trash names. */
-    fake_file(DESK_TRASH "/dnd-a.txt",1,9);
-    dnd_click(ax,ay,0,1); dnd_click(bx,by,DU_CTRL,1); key(DU_KEY_DELETE); desk_folder_service(&d); settle();
+    /* Delete acts on the whole selection: one Recycle Bin job, one confirmation. */
+    dnd_click(ax,ay,0,1); dnd_click(bx,by,DU_CTRL,1); key(DU_KEY_DELETE); desk_folder_service(&d);
+    assert(!strcmp(d.sh.message_title,"Confirm Multiple File Delete") && strstr(d.sh.message_text,"send these 2 items to the Recycle Bin")); confirm(); settle();
     assert(fake_lookup(DESK_FOLDER "/dnd-a.txt")<0 && fake_lookup(DESK_FOLDER "/dnd-b.txt")<0);
-    assert(fake_lookup(DESK_TRASH "/dnd-a.txt (2)")>=0 && fake_lookup(DESK_TRASH "/dnd-b.txt")>=0);
-    puts("PASS fx-19 desktop multi-item Delete: one Trash job, a free name per item");
+    assert(in_bin("dnd-a.txt")==1 && in_bin("dnd-b.txt")==1);
+    puts("PASS fx-19 desktop multi-item Delete: one Recycle Bin job and one confirmation for the whole selection");
 
     /* Drag a multi-selection onto a folder icon: same drive moves; Ctrl copies; the image and cursor follow. */
     dnd_files(); dnd_at("dnd-a.txt",&ax,&ay); dnd_at("dnd-b.txt",&bx,&by); dnd_at("DndFolder",&fx,&fy);
@@ -103,8 +103,9 @@ static void fx19_desktop_cases(void)
     d.now_ns+=1000000000ull; d.mouse_x=cx; d.mouse_y=cy; desk_shell_button(&d,1,1); dnd_move(trash.x+48,trash.y+30);
     assert(d.sh.dnd.kind==SH_DROP_TRASH && d.sh.dnd.effect==FM_EFFECT_MOVE);
     desk_shell_key(&d,0x1d,1); assert(d.sh.dnd.effect==FM_EFFECT_NONE); desk_shell_key(&d,0x1d,0);
-    desk_shell_button(&d,1,0); settle(); assert(fake_lookup(DESK_FOLDER "/dnd-c.txt")<0 && fake_lookup(DESK_TRASH "/dnd-c.txt")>=0);
-    puts("PASS fx-19 desktop drag: SM_CXDRAG, multi-item move into a folder icon, Ctrl copy cursor, Alt/link refused, Trash target, data object");
+    desk_shell_button(&d,1,0); assert(fake_lookup(DESK_FOLDER "/dnd-c.txt")>=0 && d.sh.confirm); confirm(); settle();
+    assert(fake_lookup(DESK_FOLDER "/dnd-c.txt")<0 && in_bin("dnd-c.txt")==1);
+    puts("PASS fx-19 desktop drag: SM_CXDRAG, multi-item move into a folder icon, Ctrl copy cursor, Alt/link refused, Recycle Bin target, data object");
 
     /* Free space repositions the dragged icons by the pointer offset; Esc cancels. */
     dnd_files(); dnd_at("dnd-a.txt",&ax,&ay); dnd_at("dnd-b.txt",&bx,&by);

@@ -449,7 +449,7 @@ def application_payloads(stage=None):
     w32_spec.loader.exec_module(w32_build)
     w32_sources, w32_directories, w32_metadata = w32_build.image_payloads()
     sources.update(w32_sources)
-    directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/Documents/Trash", "/System", "/system/tests",
+    directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
     directories.update(desktop_directories)

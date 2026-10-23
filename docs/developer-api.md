@@ -824,10 +824,11 @@ enum ciuki_syscall {
     CIUKI_SYS_GETENTROPY = 91,
 ```
 
-G1: outside 78-95 (left to F6) and after the Win32 family's 96.
+G1 TIME=97 is preserved; G6 follows the highest allocated syscall.
 
 ```c
 CIUKI_SYS_TIME = 97,
+    CIUKI_SYS_FILE_INFO = 98,
 };
 ```
 
@@ -1284,12 +1285,18 @@ stable filesystem identity; empty if unavailable
 char label[33];
     uint8_t reserved[3];
 };
+```
 
+fx-21b: usb_unrecognized (formerly reserved; zero on input) counts the USB
+devices quarantined at enumeration since boot. The desktop shows "USB
+Device Not Recognized" once for every increase.
+
+```c
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;
     uint32_t removable_mask;
-    uint32_t reserved;
+    uint32_t usb_unrecognized;
     uint32_t generation[26];
     uint32_t type[26];
 };
@@ -1326,6 +1333,31 @@ struct ciuki_media_space {
     uint32_t cluster_bytes;
     uint32_t total_clusters;
     uint32_t free_clusters;
+    uint32_t reserved;
+};
+```
+
+G6: volume label of a mounted FAT drive (C: included). GET fills label
+(no padding, "" when none) and flags; SET writes the root-directory
+volume-ID entry and the boot sector BS_VolLab (FAT spec 1.03, pp. 9-12, 25;
+Win32 SetVolumeLabel). Label: at most 11 bytes of printable ASCII, stored
+upper case; * ? . , ; : / \ | + = < > [ ] " refused with EINVAL; "" removes
+the label. EROFS on a read-only, write-protected or optical medium;
+ENOENT without a mounted FAT volume. reserved must be zero.
+
+Appended after MEDIA_CD_POSITION=0x4d17; existing values stay fixed.
+
+```c
+#define MEDIA_GET_LABEL 0x4d18u
+#define MEDIA_SET_LABEL 0x4d19u
+#define CIUKI_MEDIA_LABEL_READ_ONLY 1u
+#define CIUKI_MEDIA_LABEL_MAX 11u
+struct ciuki_media_label {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    char label[12];
     uint32_t reserved;
 };
 ```
@@ -2458,10 +2490,16 @@ uint8_t d_type;
 20
 
 ```c
-uint8_t reserved[3];
+uint8_t d_attributes;
 ```
 
-21
+21: G6 CIUKI_ATTR_* of the entry, 0 when none
+
+```c
+uint8_t reserved[2];
+```
+
+22
 
 ```c
 char d_name[768];
@@ -2480,6 +2518,130 @@ int64_t d_mtime;
 ```
 
 800: Unix seconds, zero when unavailable
+
+```c
+};
+```
+
+G6: FAT attributes, times and MS-DOS name through the native file API,
+call 98 file_info(B=path, C=record, D=sizeof(record)); 0 or -errno.
+GET fills every field the object has and reports them in mask; SET
+changes only the mask fields (ATTRIBUTES, CREATED, ACCESSED, MODIFIED) in
+one directory-entry publication. Times are Unix seconds through the same
+FAT conversion as stat; FAT keeps created to 10 ms, modified to 2 s and
+accessed to the day (Microsoft "File Times"). attributes are the FAT
+byte (Microsoft FAT 1.03 p. 23): SET accepts READONLY|HIDDEN|SYSTEM|
+ARCHIVE plus the object's own DIRECTORY bit. Errors: EINVAL (version,
+size, operation, mask, attribute bits, a time outside 1980-2107, a
+volume root), ENOENT/ENOTDIR/ENAMETOOLONG (path), EFAULT, EROFS (CD,
+NTFS, write-protected or read-only FAT volume), EOPNOTSUPP (device and
+synthetic nodes), EIO (medium gone). Win32 GetFileAttributes/SetFile-
+Attributes/GetFileTime/SetFileTime and DOS INT 21h AX=4300h/4301h and
+AX=5700h/5701h read and write the same directory entry.
+
+```c
+#define CIUKI_FILE_INFO_VERSION 1u
+#define CIUKI_FILE_INFO_GET 0u
+#define CIUKI_FILE_INFO_SET 1u
+#define CIUKI_ATTR_READONLY 0x01u
+#define CIUKI_ATTR_HIDDEN 0x02u
+#define CIUKI_ATTR_SYSTEM 0x04u
+#define CIUKI_ATTR_DIRECTORY 0x10u
+#define CIUKI_ATTR_ARCHIVE 0x20u
+#define CIUKI_ATTR_SETTABLE 0x27u
+#define CIUKI_FILE_INFO_ATTRIBUTES 1u
+#define CIUKI_FILE_INFO_CREATED 2u
+#define CIUKI_FILE_INFO_ACCESSED 4u
+#define CIUKI_FILE_INFO_MODIFIED 8u
+#define CIUKI_FILE_INFO_SHORT_NAME 16u
+#define CIUKI_FILE_INFO_ALLOCATED 32u
+#define CIUKI_FILE_INFO_SETTABLE 15u
+#define CIUKI_FILE_INFO_READ_ONLY_MEDIUM 1u
+#define CIUKI_FILE_INFO_VOLUME_ROOT 2u
+#define CIUKI_SHORT_NAME_MAX 16u
+struct ciuki_file_info {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t operation;
+```
+
+8
+
+```c
+uint32_t mask;
+```
+
+12
+
+```c
+uint32_t attributes;
+```
+
+16
+
+```c
+uint32_t flags;
+```
+
+20: GET output
+
+```c
+uint64_t file_size;
+```
+
+24
+
+```c
+uint64_t allocated;
+```
+
+32: bytes in whole clusters ("size on disk")
+
+```c
+int64_t created;
+```
+
+40
+
+```c
+int64_t accessed;
+```
+
+48
+
+```c
+int64_t modified;
+```
+
+56
+
+```c
+uint32_t created_ms;
+```
+
+64: 0-999 past created
+
+```c
+uint32_t reserved;
+```
+
+68
+
+```c
+char short_name[16];
+```
+
+72: 8.3 alias, NUL terminated
 
 ```c
 };
@@ -5645,6 +5807,37 @@ uint32_t arc4random_uniform(uint32_t);
 #endif
 ```
 
+## `ciuki/fileinfo.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/fileinfo.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_FILEINFO_H
+#define CIUKI_SDK_FILEINFO_H
+#include <ciuki/abi.h>
+```
+
+G6: FAT attributes, created/accessed/modified times, size on disk and the
+MS-DOS (8.3) name of a path; call 98, record in ciuki/abi.h. Both return
+0, or -1 with errno (EROFS on read-only media, EOPNOTSUPP for devices).
+ciuki_file_info_get initializes version, size and operation itself.
+ciuki_file_info_set changes only the fields named in mask
+(CIUKI_FILE_INFO_ATTRIBUTES/CREATED/ACCESSED/MODIFIED).
+
+```c
+int ciuki_file_info_get(const char *path, struct ciuki_file_info *out);
+int ciuki_file_info_set(const char *path, uint32_t mask, const struct ciuki_file_info *in);
+```
+
+Convenience: replace the four settable FAT attribute bits.
+
+```c
+int ciuki_set_attributes(const char *path, uint32_t attributes);
+#endif
+```
+
 ## `ciuki/font.h`
 
 Source: `sdk/sysroot-overlay/include/ciuki/font.h`.
@@ -7122,6 +7315,15 @@ the dialog while it is running.
 ```c
 int (*accept)(struct du_ui *, int button, void *);
     void *accept_ctx;
+```
+
+Property-sheet pages reuse the modal controls and their keyboard route.
+
+```c
+int sheet;
+    void (*changed)(struct du_ui *, const struct du_event *, void *);
+    void (*paint)(struct du_ui *, void *);
+    void *sheet_ctx;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
@@ -7290,6 +7492,17 @@ void du_input_box(struct du_ui *, int id, const char *title, const char *prompt,
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
+```
+
+OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
+Control slots 4..9 are caller-owned, boxes relative to the sheet body.
+Page labels and callbacks remain valid until the sheet closes.
+
+```c
+void du_property_sheet(struct du_ui *, int id, const char *title, int width, int height,
+                       const struct du_item *pages, unsigned count);
+struct du_widget *du_property_control(struct du_ui *, unsigned slot, enum du_kind, int id,
+                                     struct du_rect, const char *text);
 void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);

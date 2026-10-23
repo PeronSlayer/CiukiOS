@@ -819,7 +819,9 @@ static void draw_check(struct du_canvas *c, struct du_widget *w, int focused)
             desk_paint_vgradient(&p, bx + 1, by + 1, size - 2, size - 2, down ? DU_SHADOW : DU_FACE, down ? DU_FACE : DU_HILITE);
             if (!down) { du_hline(c, bx + 1, by + 1, size - 2, desk_mix(DU_SHADOW, DU_FACE, 120)); du_vline(c, bx + 1, by + 1, size - 2, desk_mix(DU_SHADOW, DU_FACE, 120)); }
         } else { du_fill(c, box, down || w->disabled ? DU_FACE : DU_WINDOW); du_edge(c, box, DU_SUNKEN); }
-        if (w->value) {
+        if (w->value==2) {
+            du_fill(c,(struct du_rect){bx+3,by+5,size-6,3},ink);
+        } else if (w->value) {
             /* Tick: two strokes, two pixels thick. */
             static const int8_t tick[][2] = {{2,5},{3,6},{4,7},{5,6},{6,5},{7,4},{8,3},{9,2}};
             uint32_t mark = platinum && !w->disabled ? desk_theme->accent : ink;

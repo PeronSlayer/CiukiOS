@@ -42,6 +42,8 @@ int v86_begin(struct v86 *v, uint64_t now, uint32_t ticks)
     v->shadow = false;
     v->result = 0;
     memset(&v->fault, 0, sizeof(v->fault));
+    v->abort_state = V86_IDLE; v->abort_ss = v->abort_sp = 0;
+    v->denied = v->denied_write = false; v->denied_port = 0; v->denied_width = 0;
     v->stats.calls++;
     return 0;
 }
@@ -50,6 +52,7 @@ int v86_abort(struct v86 *v, const struct v86_frame *f, int error)
 {
     if (v->state == V86_DISABLED && (!f || v->fault.count))
         return v->result;
+    if (v->state != V86_DISABLED) v->abort_state = v->state;
     v->state = V86_DISABLED;
     v->result = error;
     memset(&v->fault, 0, sizeof(v->fault));
@@ -57,6 +60,7 @@ int v86_abort(struct v86 *v, const struct v86_frame *f, int error)
         v->fault.cs = f->tf.cs;
         v->fault.ip = f->tf.eip;
         v->fault.vector = f->tf.vector;
+        v->abort_ss = (uint16_t)f->tf.user_ss; v->abort_sp = (uint16_t)f->tf.user_esp;
         for (unsigned i = 0; i < sizeof(v->fault.bytes) && f->tf.eip + i <= 0xFFFF; i++) {
             uint8_t *p = v->ops.memory(v->ops.arg, (f->tf.cs << 4) + f->tf.eip + i, 1, false);
             if (!p)
@@ -174,6 +178,7 @@ int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *v
     }
 denied:
     v->stats.disallowed_io++;
+    v->denied = true; v->denied_port = port; v->denied_width = (uint8_t)width; v->denied_write = write;
     klog("[v86] step=io error=%d port=%04x width=%u write=%u value=%08x reason=policy",
          -V86_EPERM, port, width, write, *value);
     return -V86_EPERM;
@@ -500,6 +505,19 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         f->tf.eip = next;
         return 0;
     case 0xF4:
+        /* fx-25: a far return (RETF 2, or RETF leaving the saved FLAGS)
+         * to the firmware sentinel ends the call like the emulated IRET
+         * below. RETF is not IOPL-sensitive and never traps (Intel SDM
+         * Vol. 3B ch. 20); only the sentinel's HLT does. The live flags are
+         * the result, as RETF 2 intends. DOS VMs have no sentinel. */
+        if (v->sentinel_cs && len == 1 && f->tf.cs == v->sentinel_cs && f->tf.eip == v->sentinel_ip &&
+            f->tf.user_ss == v->sentinel_ss && (sp == v->sentinel_sp || sp == (uint16_t)(v->sentinel_sp - 2))) {
+            v->stats.insn[V86_HLT]++;
+            v->far_returns++;
+            v->shadow = false;
+            v->state = V86_DONE;
+            return 1;
+        }
         v->state = V86_HALTED;
         v->stats.insn[V86_HLT]++;
         rc = 2;

@@ -41,14 +41,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "058a4fbb4c4e04bf6ac01288c495745c83337b5aa7e915ac484e05598703a0bd",
-    "ciuki-blue-dialogs.ppm": "c00e28e8dabc55a2ac0088b8742dd842a9676ebd86cddf80cd69601d88edbbef",
-    "ciuki-blue-tray-disabled.ppm": "3b0a7e9cc1586ca34dce02ce0426e05f083634fefeff1f650f0d1384b34f7239",
-    "ciuki-blue-tray-media.ppm": "a4e67c10442f7ff18bff873fc947e5152fab95e58c7062eef36ffd360025d530",
-    "platinum-desktop.ppm": "3f03a4849901fe6227d7d39794d87b1a7e3fe633203ed3eccc4e3a1d16637246",
-    "platinum-dialogs.ppm": "36daf4f99be6dbb9173e469ca1897597fa04818f7fecd9aabd84f861aca07a24",
-    "platinum-tray-disabled.ppm": "44f8b04ddc8ac22ad50af2812015343a74528121d2bf15a0dcdf71ee302d5844",
-    "platinum-tray-media.ppm": "7709f3264ee868c51a1ad09c848b3d2fe8dd45f2baf33ed6b1f8a6f8f221c8fb"
+    "ciuki-blue-desktop.ppm": "b46e3cc28c49d9f171e433dc001d0af13c3392e6e76fa64411aecc264d89d5e5",
+    "ciuki-blue-dialogs.ppm": "33fb8b95d24597a632f58a4419617e05fb9bcd7ce8bd9bca6a3929ea296ea15b",
+    "ciuki-blue-tray-disabled.ppm": "e6448c5e6cff1af18be71510d8edc2898e309da6bf27daaf31e04f3de2551e3d",
+    "ciuki-blue-tray-media.ppm": "7908574c1328c6dc007c6915f686e58e245b020552f299dc6cbb0480e9a5cf83",
+    "platinum-desktop.ppm": "8748fdd63953ebd0ac92660d2d4770d26dd79ac7e2c5d05afc3d59d97564e8f6",
+    "platinum-dialogs.ppm": "e83f7300a43403fb837ccfb4d0bbf5deaa94fa06162760acec4bb1d27afb9476",
+    "platinum-tray-disabled.ppm": "5daa1a2a2ac41a643b565895372bdf6c541125397cec3cde3aecd0aa594a4fae",
+    "platinum-tray-media.ppm": "0f68811b59e9f824f299017d3895141bb6a927f4efd456f59d7f3db04aa397df"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).

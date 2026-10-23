@@ -79,6 +79,7 @@ struct apm_backend {
     uint16_t flags;
     uint16_t last_event;
     uint8_t bios_error;
+    uint16_t last_function; /* fx-25: function of the last firmware call */
     int transport_error;
     int error;
     int emergency_error;
