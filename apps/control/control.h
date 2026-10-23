@@ -17,6 +17,13 @@
 #include <ciuki/abi.h>
 #include <ciuki/font.h>
 #include <stdint.h>
+#include "driver_pack.h"
+#define CP_PACK_INSTALL 1400
+#define CP_PACK_REMOVE 1401
+#define CP_PACK_LOCATION 1402
+#define CP_PACK_PREVIEW 1403
+#define CP_PACK_CONFIRM_REMOVE 1404
+#define CP_PACK_FILES 1405
 #define CP_PROGRAM_MAX 96u
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
@@ -48,6 +55,10 @@ struct cp_preview_done {
     uint32_t *preview;              /* caller-supplied 192*144 buffer, filled when rendered */
 };
 struct cp_host {
+    int (*pack_scan)(void *, const char *, char names[][192], unsigned);
+    int (*pack_preview)(void *, struct dp_plan *, const char *, const char *, const struct ndp_device *, char reason[160]);
+    int (*pack_install)(void *, const struct dp_plan *, const char *, char reason[160]);
+    int (*pack_remove)(void *, const struct ndp_device *, char reason[160]);
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
     int save_async; /* save queued; main calls cp_settings_saved after durable completion */
@@ -94,6 +105,11 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct dp_plan *pack;
+    char pack_root[DP_PATH], pack_names[32][192], pack_reason[160];
+    int pack_count, pack_index, pack_valid;
+    unsigned pack_file_page;
+    struct ndp_device pack_device;
     struct desk_uninstall_entry uninstall[CP_PROGRAM_MAX];
     struct du_item uninstall_items[CP_PROGRAM_MAX];
     unsigned uninstall_count, uninstall_selected;
@@ -197,4 +213,6 @@ void cp_fonts_build(struct cp_app *);
 void cp_fonts_paint(struct cp_app *, struct du_canvas *);
 int cp_fonts_event(struct cp_app *, const struct du_event *);
 void cp_fonts_close(struct cp_app *);
+int cp_pack_event(struct cp_app *, const struct du_event *);
+void cp_pack_buttons(struct cp_app *);
 #endif

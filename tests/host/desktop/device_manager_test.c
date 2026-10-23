@@ -11,6 +11,23 @@ static struct ciuki_devices_info sample;
 static uint64_t monotonic_ns = 9000000000ull;
 static uint64_t monotonic(void *ctx) { (void)ctx; return monotonic_ns; }
 static int fail_query, fail_save, loads, queries, saves;
+static int pack_installs, pack_removes;
+static int pack_scan(void *ctx,const char *root,char names[][192],unsigned cap)
+{ (void)ctx; assert(!strcmp(root,"/media") && cap>=2); strcpy(names[0],"rejected.inf"); strcpy(names[1],"synthetic.inf"); return 2; }
+static int pack_preview(void *ctx,struct dp_plan *p,const char *root,const char *inf,const struct ndp_device *d,char reason[160])
+{
+    (void)ctx; (void)root; assert(d->vendor==0x10ec);
+    if(!strcmp(inf,"rejected.inf")) { strcpy(reason,"No exact NT x86 model match."); return -EINVAL; }
+    memset(p,0,sizeof(*p)); struct ndp_manifest *m=&p->manifest; m->device=*d;
+    strcpy(m->name,"Synthetic Adapter"); strcpy(m->provider,"Synthetic Provider"); strcpy(m->driver_version,"1.2.3.4");
+    strcpy(m->hardware_id,"PCI\\VEN_10EC&DEV_8139"); strcpy(m->service,"Synthetic"); strcpy(m->reason,NDP_DISABLED);
+    m->file_count=3; strcpy(m->files[0].name,"synthetic.inf"); strcpy(m->files[1].name,"mini.sys"); strcpy(m->files[2].name,"support.dat"); return 0;
+}
+static int pack_install(void *ctx,const struct dp_plan *p,const char *root,char reason[160])
+{ (void)ctx; assert(!p->manifest.enabled && !strcmp(root,"/media")); pack_installs++; strcpy(reason,NDP_DISABLED); return 0; }
+static int pack_remove(void *ctx,const struct ndp_device *d,char reason[160])
+{ (void)ctx; assert(d->vendor==0x10ec); pack_removes++; strcpy(reason,"Driver package removed. Native driver remains the default."); return 0; }
+
 static int hwid_queries;
 static int hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 { (void)ctx; hwid_queries++; return cp_hwid_lookup_json("{\"8086:2415\": \"Pack AC97 device\"}", vendor, device, out, size); }
@@ -86,7 +103,7 @@ int main(int argc, char **argv)
     char hwid[65];
     assert(!cp_hwid_lookup_json("{\"8086:2485\": \"INF Audio Name\"}", 0x8086, 0x2485, hwid, sizeof(hwid)) && !strcmp(hwid, "INF Audio Name"));
     assert(cp_hwid_lookup_json("{}", 0x8086, 0x2485, hwid, sizeof(hwid)));
-    app.host = (struct cp_host){.load = settings_load, .devices = devices, .display=display, .engine=engine, .network=network, .mixer=mixer, .power=action, .log_read=log_read, .autoplay_list=autoplay, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
+    app.host = (struct cp_host){.pack_scan=pack_scan, .pack_preview=pack_preview, .pack_install=pack_install, .pack_remove=pack_remove, .load = settings_load, .devices = devices, .display=display, .engine=engine, .network=network, .mixer=mixer, .power=action, .log_read=log_read, .autoplay_list=autoplay, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
         .portrait = portrait, .screen_w = 1024, .screen_h = 768, .mem_total_k = 512 * 1024, .mem_free_k = 480 * 1024,
         .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6, .fonts_path = argv[3]};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
@@ -127,6 +144,24 @@ int main(int argc, char **argv)
     sample.devices[0] = usb_sample; click("Refresh");
     assert(strstr(app.tree_items[tree_row(0)].text[0], "USB Pack Keyboard"));
     sample.devices[0] = original_usb_sample; click("Refresh");
+    /* Driver-pack dialogs use the production controls and keyboard path. */
+    assert(du_get(&ui,CP_PACK_INSTALL)->disabled);
+    du_post(&ui,DU_EV_SELECT,kind(DU_TREE)->id,(int)tree_row(7));
+    assert(!du_get(&ui,CP_PACK_INSTALL)->disabled);
+    click("Install driver from pack..."); assert(du_dialog_id(&ui)==CP_PACK_LOCATION);
+    render(renders,"driver-pack-location");
+    at_tap(&ui,DU_KEY_ENTER); assert(du_dialog_id(&ui)==CP_PACK_PREVIEW && strstr(ui.dialog.text,"Cannot install"));
+    render(renders,"driver-pack-rejected");
+    at_tap(&ui,DU_KEY_ENTER); assert(strstr(ui.dialog.text,"Synthetic Adapter") && strstr(ui.dialog.text,"support.dat"));
+    assert(strstr(ui.dialog.text,"No lead qualification record")); render(renders,"driver-pack-preview");
+    struct du_rect files_button=du_dialog_button(&ui,1); at_click(&ui,files_button.x+files_button.w/2,files_button.y+files_button.h/2);
+    assert(du_dialog_id(&ui)==CP_PACK_FILES && strstr(ui.dialog.text,"mini.sys")); render(renders,"driver-pack-files"); at_tap(&ui,DU_KEY_ESC);
+    struct du_rect install_button=du_dialog_button(&ui,0); at_click(&ui,install_button.x+install_button.w/2,install_button.y+install_button.h/2);
+    assert(pack_installs==1 && strstr(ui.dialog.text,"installed disabled")); render(renders,"driver-pack-installed"); at_tap(&ui,DU_KEY_ESC);
+    click("Remove driver package..."); render(renders,"driver-pack-remove");
+    struct du_rect remove_button=du_dialog_button(&ui,0); at_click(&ui,remove_button.x+remove_button.w/2,remove_button.y+remove_button.h/2);
+    assert(pack_removes==1 && strstr(ui.dialog.text,"removed")); render(renders,"driver-pack-removed"); at_tap(&ui,DU_KEY_ESC);
+    sample.devices[7].state=CIUKI_DEVICE_QUARANTINED; click("Refresh"); assert(du_get(&ui,CP_PACK_INSTALL)->disabled); sample.devices[7].state=CIUKI_DEVICE_FIRMWARE_FIRST; click("Refresh");
     unsigned audio_row = tree_row(6); assert(strstr(app.tree_items[audio_row].text[0], "Pack AC97 device") && hwid_queries > 0);
     assert(strstr(app.tree_items[audio_row].text[0], "quarantined"));
     sample.devices[6].device = 0x2485; click("Refresh");

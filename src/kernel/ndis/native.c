@@ -4,11 +4,22 @@
 #include "fence.h"
 #include "execution.h"
 #include "nt_runtime.h"
+#include "package.h"
+#include <ciuki/sha256.h>
 #include <stddef.h>
 #include <ciuki/clock.h>
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 static struct ndis_native *adapters[NDIS_HOST_MAX];
+bool ndis_package_busy(const struct pci_func *p)
+{
+    if(!p) return false;
+    for(unsigned i=0;i<NDIS_HOST_MAX;i++) {
+        const struct ndis_native *n=adapters[i];
+        if(n && n->pci.bus==p->bus && n->pci.dev==p->dev && n->pci.fn==p->fn) return true;
+    }
+    return false;
+}
 #define NT_POOL_BYTES 65536u
 static int nt_start(struct ndis_native *);
 static bool owned(void *ctx,uint32_t generation)
@@ -116,6 +127,7 @@ int ndis_native_bind(struct ndis_native *n,struct task *task,struct ntimage *ima
     const struct pci_func *p=pci_get(index);
     const struct ndis_qualification *q=ndis_qualified_profile(image,p);
     if(!n || !task || !q || !owner || !generation || !shared || !n->wake_worker || !n->complete_tx ||
+       !ndis_package_admit(image->file,image->hash,p,q->package_seal) ||
        !q->shared_mask || !p->irq_pin || !pci_irq_routed(p) ||
        !registry_valid(claim,claim_gen) || stack_bytes<4096 || (stack_bytes&4095) ||
        stack_top<stack_bytes*NDIS_HOST_DEPTH || stack_top>=0xc0000000u) return 0;
@@ -306,11 +318,13 @@ int ndis_native_prepare(struct ndis_native *n,struct ntimage *image,const void *
     const uint32_t metadata_bytes=PAGE_ALIGN_UP(sizeof(*n)+sizeof(struct ndis_flag_table)+sizeof(struct ndis_flag_workspace));
     /* No task or allocation before a reviewed profile exists. Reservation is
      * supplied by the common F6 owner; this function never increases it. */
-    if(!n || !image || !file || !bytes || !generation || !ndis_profiles_available() ||
+    if(!n || !image || !file || !bytes || bytes>NDIS_IMAGE_LIMIT || !generation || !ndis_profiles_available() ||
        n->task || n->runtime_physical || n->memory.physical || !mm_pin || !mm_unpin || !mm_pin_valid ||
        !reserved_bytes || reserved_bytes>NDIS_IMAGE_LIMIT || reserved_bytes<=runtime_bytes+metadata_bytes ||
        (runtime_base&4095) || runtime_base<0x10000 || runtime_base>=0xc0000000 ||
        runtime_bytes>0xc0000000-runtime_base || dispatch_bytes>256) return 0;
+    uint8_t source_hash[32]; sha256(file,bytes,source_hash);
+    if(!ndis_package_admit(name,source_hash,0,0)) return 0;
     struct task *t=task_create_user(name,P_DEVICE,runtime_base,runtime_base+8192+stacks,0,0,0);
     if(!t) return 0;
     n->task=t;n->host.image=image;

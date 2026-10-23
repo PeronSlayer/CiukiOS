@@ -11,6 +11,7 @@ struct ndis_native;
 struct ndis_qualification {
     const char *name,*evidence;
     uint8_t hash[32];
+    uint8_t package_seal[32]; /* exact INF selection, parameters, dependencies */
     uint16_t vendor,device,sub_vendor,sub_device;
     uint8_t revision;
     bool qualified,shared_mask,runtime_cpu,runtime_irq,runtime_fence;
@@ -22,6 +23,8 @@ struct ndis_qualification {
 };
 const struct ndis_qualification *ndis_qualified_profile(const struct ntimage *,const struct pci_func *);
 bool ndis_profiles_available(void);
+bool ndis_qualified_package(const uint8_t hash[32],const struct pci_func *,const uint8_t seal[32]);
+bool ndis_package_busy(const struct pci_func *);
 struct ndis_native {
     struct ndis_user_host host;
     struct ndis_user_memory memory;
