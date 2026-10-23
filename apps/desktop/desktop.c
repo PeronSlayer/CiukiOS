@@ -1050,10 +1050,19 @@ static struct {
     struct ciuki_media_cd_state cd_states[4];
     unsigned requested, completed;
     int started, failed, pending, busy, ready, stopping, observed, ok;
+    int blocking; /* completion wake installed: the UI takes the short mailbox lock, else trylock */
     unsigned commit;
     int confirm_pending, rescan, choice, always;
     struct ciuki_media_volume confirmation;
 } media_worker = {.lock=PTHREAD_MUTEX_INITIALIZER, .changed=PTHREAD_COND_INITIALIZER};
+/* With a completion wake the mailbox lock is short (device queries run outside it) and a
+ * failed trylock would strand a result nothing wakes the loop to collect; without one
+ * (host harnesses) a contended mailbox is deferred, never waited on. */
+static int media_lock(void)
+{
+    if (media_worker.blocking) { pthread_mutex_lock(&media_worker.lock); return 0; }
+    return pthread_mutex_trylock(&media_worker.lock);
+}
 static void observers_prepare(struct desktop *d)
 {
     if (!media_worker.started) observer_open(&d->media_fd,"/dev/media");
@@ -1134,14 +1143,14 @@ static int media_read(struct desktop *d)
     if (d->power.state) return 0;
     if (!media_worker.started && !media_worker.failed) {
         media_worker.stopping=media_worker.pending=media_worker.busy=media_worker.ready=0;
-        media_worker.commit=0; media_worker.confirm_pending=0;
+        media_worker.commit=0; media_worker.confirm_pending=0; media_worker.blocking=d->wake!=NULL;
         int error=pthread_create(&media_worker.thread,NULL,media_run,d);
         if (error) { media_worker.failed=1; desk_shell_notify_error(d,"Media worker unavailable",error); }
         else { media_worker.started=1; observer_close(&d->media_fd); }
     }
     if (!media_worker.started) return 0;
     /* Polling and submissions never wait for a busy mailbox. */
-    pthread_mutex_lock(&media_worker.lock);
+    if (media_lock()) return 0;
     if (media_worker.rescan || (!media_worker.pending && !media_worker.busy && !media_worker.ready)) {
         media_worker.rescan=0; media_worker.ready=0;
         media_worker.requested++; media_worker.pending=1;
@@ -1152,8 +1161,7 @@ static int media_read(struct desktop *d)
 }
 static void media_poll(struct desktop *d)
 {
-    if (d->power.state || !media_worker.started) return;
-    pthread_mutex_lock(&media_worker.lock);
+    if (d->power.state || !media_worker.started || media_lock()) return;
     int ready=media_worker.ready, observed=media_worker.observed, ok=media_worker.ok;
     unsigned serial=media_worker.completed;
     if (serial < media_worker.requested) ready=0;
@@ -1179,7 +1187,7 @@ static void media_poll(struct desktop *d)
 static int media_busy(void)
 {
     if (!media_worker.started) return 0;
-    pthread_mutex_lock(&media_worker.lock);
+    if (media_lock()) return 1;
     int busy=media_worker.busy || media_worker.pending;
     pthread_mutex_unlock(&media_worker.lock);
     return busy;

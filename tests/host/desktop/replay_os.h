@@ -14,6 +14,7 @@ int rp_close(int);
 int rp_munmap(void *, size_t);
 void *rp_mmap(void *, size_t, int, int, int, off_t);
 int rp_fcntl(int, int, ...);
+int rp_poll(struct pollfd *, nfds_t, int);
 pid_t rp_waitpid(pid_t, int *, int);
 int rp_kill(pid_t, int);
 pid_t rp_getpid(void);
@@ -32,6 +33,7 @@ _Noreturn void rp_exit(int);
 #define munmap(a, b) rp_munmap(a, b)
 #define mmap(...) rp_mmap(__VA_ARGS__)
 #define fcntl(...) rp_fcntl(__VA_ARGS__)
+#define poll(a, b, c) rp_poll(a, b, c)
 #define waitpid(a, b, c) rp_waitpid(a, b, c)
 #define kill(a, b) rp_kill(a, b)
 #define getpid() rp_getpid()

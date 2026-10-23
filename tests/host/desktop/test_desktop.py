@@ -658,7 +658,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "calc", "charmap", "clock", "help", "mixer", "music", "paint", "viewer"})  # legacy-recovery accessories
+                                           "calc", "charmap", "clock", "help", "hwreport", "mixer", "music", "paint", "viewer"})  # legacy-recovery accessories and the f9-07 Hardware Report
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))

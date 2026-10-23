@@ -58,6 +58,7 @@
  */
 #include "replay_base.h"
 #include <assert.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -121,6 +122,7 @@ struct proc {
 };
 static struct proc procs[MAX_PROCS];
 static struct proc *cur;
+static __thread int baton_thread;   /* set on threads that run under the replay's baton */
 static pthread_mutex_t big = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t sched_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t vnow = 1000 * MS;
@@ -218,6 +220,7 @@ static void yield_until(uint64_t wake)
 static void *proc_thread(void *arg)
 {
     struct proc *p = arg;
+    baton_thread = 1;
     pthread_mutex_lock(&big);
     while (!p->go) pthread_cond_wait(&p->cv, &big);
     p->go = 0;
@@ -267,6 +270,7 @@ static void run(struct proc *p)
 static void *files_worker_thread(void *arg)
 {
     struct files_worker_replay *w=arg;
+    baton_thread = 1;
     pthread_mutex_lock(&big);
     while (!w->go) pthread_cond_wait(&w->cv,&big);
     w->go=0; running_worker=w;
@@ -342,7 +346,47 @@ int ciuki_channel_pair(int pair[2])
     if (pair[0] < 0 || pair[1] < 0) fail("channel_pair: descriptor table full");
     return 0;
 }
+static int channel_send_locked(int fd, const struct ciuki_message *m, uint32_t flags);
+/* A real host thread outside the baton (the desktop's media worker publishes
+ * its completion token through desk_wake, holding its own mailbox lock) must
+ * never take the baton lock: the desktop takes that mailbox lock while it
+ * holds the baton. The send is recorded and delivered at the next virtual
+ * poll of any process (rp_poll). The thread's process is unknown, but a
+ * completion pair is the one channel whose two ends are both in one process's
+ * table, so the token goes to every process holding a loopback channel at
+ * that descriptor number; a spurious wake is harmless (tokens only wake and
+ * coalesce like a full queue). */
+static _Atomic uint64_t foreign_wake_mask;
 int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
+{
+    if (baton_thread) return channel_send_locked(fd, m, flags);
+    if (fd < 0 || fd >= 64) { errno = EBADF; return -1; }
+    atomic_fetch_or(&foreign_wake_mask, 1ull << fd);
+    return 0;
+}
+static int loopback_channel(struct proc *p, int fd)
+{
+    struct obj *o = fd_obj(p, fd);
+    if (!o || o->kind != K_CHANNEL) return 0;
+    for (int k = 0; k < MAX_FDS; k++) {
+        struct obj *q = p->fd[k].o;
+        if (q && q->kind == K_CHANNEL && q->chan == o->chan && q->side != o->side) return 1;
+    }
+    return 0;
+}
+static void deliver_foreign_wakes(void)
+{
+    if (!atomic_load(&foreign_wake_mask) || !cur) return;
+    uint64_t mask = atomic_exchange(&foreign_wake_mask, 0);
+    struct ciuki_message token = {0}; token.length = 1;
+    struct proc *saved = cur;
+    for (int fd = 0; fd < 64; fd++) if (mask & (1ull << fd))
+        for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used && procs[i].state == CIUKI_PROC_LIVE && loopback_channel(&procs[i], fd)) {
+            cur = &procs[i]; (void)channel_send_locked(fd, &token, DONTWAIT);
+        }
+    cur = saved;
+}
+static int channel_send_locked(int fd, const struct ciuki_message *m, uint32_t flags)
 {
     struct obj *o = fd_obj(cur, fd);
     if (!o || o->kind != K_CHANNEL) { errno = EBADF; return -1; }
@@ -603,6 +647,43 @@ int rp_nanosleep(const struct timespec *t, struct timespec *rest)
     uint64_t ns = (uint64_t)t->tv_sec * 1000000000ull + (uint64_t)t->tv_nsec;
     yield_until(vnow + ns + cur->cost);
     return 0;
+}
+/* f2-98c: native applications block in poll() on their window channel, the
+ * kernel input queue and completion channels. Descriptors are virtual, so the
+ * wait is modelled in virtual time: readiness is evaluated against the
+ * virtual objects and, while nothing is ready, the process yields in 1 ms
+ * steps (the step ciuki_channel_recv uses) until the timeout (negative: no
+ * deadline). A ready return charges the process cost once, as a nanosleep
+ * turn did, so a loop that always finds work still advances virtual time. */
+static int poll_ready(struct pollfd *fds, nfds_t n)
+{
+    int ready = 0;
+    deliver_foreign_wakes();
+    for (nfds_t i = 0; i < n; i++) {
+        struct obj *o = fd_obj(cur, fds[i].fd);
+        fds[i].revents = 0;
+        if (!o) { fds[i].revents = POLLNVAL; ready++; continue; }
+        if (o->kind == K_CHANNEL) {
+            struct chan *c = o->chan; int side = o->side;
+            if ((fds[i].events & POLLIN) && c->count[side]) fds[i].revents |= POLLIN;
+            if ((fds[i].events & POLLOUT) && c->open[1 - side] && c->count[1 - side] < CIUKI_CHANNEL_QUEUE_MAX)
+                fds[i].revents |= POLLOUT;
+            if (!c->open[1 - side]) fds[i].revents |= POLLHUP;
+        } else if (o->kind == K_INPUT && (fds[i].events & POLLIN) && kq_count) fds[i].revents |= POLLIN;
+        if (fds[i].revents) ready++;
+    }
+    return ready;
+}
+int rp_poll(struct pollfd *fds, nfds_t n, int timeout_ms)
+{
+    uint64_t deadline = timeout_ms < 0 ? UINT64_MAX : vnow + (uint64_t)timeout_ms * MS;
+    for (;;) {
+        int ready = poll_ready(fds, n);
+        if (ready) { if (cur->cost) yield_until(vnow + cur->cost); return ready; }
+        if (vnow >= deadline) { if (cur->cost) yield_until(vnow + cur->cost); return 0; }
+        uint64_t wake = vnow + 1 * MS;
+        yield_until(wake < deadline ? wake : deadline);
+    }
 }
 int rp_clock_gettime(clockid_t clock, struct timespec *out)
 {
