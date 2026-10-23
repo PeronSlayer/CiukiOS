@@ -224,7 +224,7 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
     bool initialized = false;
     if (!status) {
         fw_budget_stage("load", NULL);
-        fw_budget_begin(100000, 250);
+        fw_budget_begin(100000, FW_LOAD_RUN_MS);
         initialized = true; status = AcpiInitializeSubsystem();
         AcpiGbl_EnableInterpreterSlack = FALSE;
         AcpiGbl_EnableTableValidation = TRUE;
