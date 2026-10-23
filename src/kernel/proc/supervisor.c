@@ -9,6 +9,8 @@
 #include <ciuki/setup_mode.h>
 #include <ciuki/storage.h>
 #include <ciuki/splash.h>
+#include <ciuki/systime.h>
+#pragma weak timezone_env
 #pragma weak console_splash_phase
 extern void dosvm_client_poll(void) __attribute__((weak));
 extern void entropy_desktop_presented(void) __attribute__((weak)); /* f6-21 */
@@ -89,7 +91,10 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     if (!strings) { if (file.close) file.close(file.cookie); return -ENOMEM; }
     for (unsigned i = 0; argv[i] && !err; i++)
         err = proc_strings_add(strings, argv[i], (uint32_t)strlen(argv[i]) + 1, false);
-    const char *env[] = { "LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs" };
+    /* G1: the system time zone rule, UTC0 when none is configured. */
+    char tz[8 + CIUKI_TIME_RULE_MAX];
+    if (!timezone_env || !timezone_env(tz, sizeof(tz))) memcpy(tz, "TZ=UTC0", sizeof("TZ=UTC0"));
+    const char *env[] = { "LC_ALL=C", tz, "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs" };
     for (unsigned i = 0; i < ARRAY_SIZE(env) && !err; i++)
         err = proc_strings_add(strings, env[i], (uint32_t)strlen(env[i]) + 1, true);
     /* Prepare privately; stdio/cwd can block, so proc_spawn_file's immediate
@@ -175,6 +180,8 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
     child->network_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
     child->programs_capability = authorized &&
+        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
+    child->time_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
 }
 

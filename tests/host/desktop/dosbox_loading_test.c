@@ -44,6 +44,7 @@ static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
 static unsigned settings_phase, close_declined, f12_forwarded;
+static unsigned session_registered, session_queries, session_answers, session_ends; /* G3 scenario 22 */
 static unsigned save_full_notice;
 static unsigned bar_damage[256], bar_updates, full_damage, settings_damage, notice_seen, loading_seen, back_seen;
 static uint64_t last_bar_at;
@@ -88,7 +89,12 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
             else assert(h==1 && (y==1 || y==17 || y==265));
         } else { assert(screen[0] == replay_theme.face); full_damage++; }
     }
-    if (p.opcode==DESK_CLOSE_ACK) { assert(scenario==12 && !p.flags); close_declined++; }
+    /* G3: a running program cannot be closed automatically: the desktop's warning. */
+    if (p.opcode==DESK_CLOSE_ACK) { assert(scenario==12 && p.flags==DESK_CLOSE_DOS_ACTIVE); close_declined++; }
+    if (p.opcode==DESK_SESSION_ANSWER) {
+        if (!p.serial) { assert(p.flags==DESK_SESSION_AGREE && !session_registered); session_registered++; }
+        else { assert(scenario==22 && p.serial==5 && p.flags==DESK_SESSION_DOS_ACTIVE && session_registered); session_answers++; }
+    }
     if (p.opcode==DESK_PONG) { assert(scenario==20 && !vm_created && desk_get32(m->data+4)==77); pongs++; }
     return 0;
 }
@@ -114,7 +120,12 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
     } else if (scenario==11 && presents && !settings_phase++) {
         desk_message(m,DESK_KEY,44); desk_put32(m->data+16,CIUKI_INPUT_KEY);
         desk_put32(m->data+28,CIUKI_KEY_F12); desk_put32(m->data+32,1);
-    } else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : enter_ms+650)) || (error_seen && clock_ms > 5000)) {
+    } else if (scenario==22 && presents && clock_ms > enter_ms+650 && !session_queries) {
+        desk_message(m,DESK_QUERY_END_SESSION,12); desk_put32(m->data+4,5); session_queries++;
+    } else if (scenario==22 && session_answers==1 && !session_ends) {
+        desk_message(m,DESK_END_SESSION,16); desk_put32(m->data+4,5); desk_put32(m->data+8,1); session_ends++;
+    } else if (scenario==22) { errno = EAGAIN; return -1; }
+    else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : enter_ms+650)) || (error_seen && clock_ms > 5000)) {
         desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
     } else { errno = EAGAIN; return -1; }
     m->data[0] = DESK_SHELL_VERSION; m->sender_pid = 999;
@@ -254,7 +265,7 @@ int main(int argc, char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=21);
+    assert(scenario>=0 && scenario<=22);
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -268,6 +279,11 @@ int main(int argc, char **argv)
     int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
     if (scenario==11) assert(f12_forwarded==1 && !settings_damage);
     if (scenario==12) assert(close_declined==1);
+    assert(session_registered==1);
+    if (scenario==22) {
+        assert(session_queries==1 && session_answers==1 && session_ends==1 && closed==1);
+        puts("PASS G3 DOS session: registered, a running program answers DOS_ACTIVE (no Ctrl+C), END_SESSION closes the VM");
+    }
     if (scenario==20) {
         assert(image_polls==7 && image_paints==6 && checking_seen>=6 && pongs==1 && pre_create_waits==6 && last_permille==900);
         printf("PASS fx-4b verify wait: %u progress paints to %d/1000, PING answered during the check, focus forwarded, %u ms\n",

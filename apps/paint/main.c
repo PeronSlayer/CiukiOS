@@ -9,7 +9,11 @@
 struct paint_main { struct du_window window; struct du_ui ui; const char *path; };
 static void quit(void *arg) { du_window_close(&((struct paint_main *)arg)->window); }
 static void title(void *arg, const char *text) { du_window_set_title(&((struct paint_main *)arg)->window,text); }
-static int closing(struct du_window *w, void *arg) { (void)w; (void)arg; return paint_request_close(); }
+/* libdeskui: nonzero closes now. paint_request_close returns 1 when it
+ * showed the save prompt (G3: before, the window closed under the prompt
+ * and a clean picture never closed until the desktop's deadline). */
+static int closing(struct du_window *w, void *arg) { (void)w; (void)arg; return !paint_request_close(); }
+static void declined(void *arg) { du_window_close_reply(&((struct paint_main *)arg)->window,0); }
 static void idle(void *arg)
 {
     struct paint_main *m=arg;
@@ -30,7 +34,7 @@ int main(int argc, char **argv)
         fprintf(stderr,"paint: desktop connection failed: %s\n",strerror(errno)); free(m); return 1;
     }
     if (paint_attach(&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
-    paint_callbacks(quit,title,m); m->window.close_request=closing;
+    paint_callbacks(quit,title,m); paint_decline_callback(declined); m->window.close_request=closing;
     m->path=path;
     du_window_accept_files(&m->window,1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window,24,48);

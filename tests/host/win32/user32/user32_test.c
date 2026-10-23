@@ -438,12 +438,15 @@ static struct {
 static UINT traces;
 static int nesting;
 static int minmax_set;
+static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   CHECK(traces < 2048);
   trace[traces].h = h;
   trace[traces].m = m;
   trace[traces].wp = wp;
   trace[traces++].lp = lp;
+  if (m == WM_CLOSE && keep_on_close)
+    return 0;
   if (m == WM_USER + 1) {
     CHECK(InSendMessage());
     CHECK(SendMessageA(windows[0], WM_USER + 2, 0, 0) == 22);
@@ -514,6 +517,46 @@ static void discard(void) {
   for (UINT i = 0; i < 1000 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
     if (msg.message == WM_PAINT)
       DispatchMessageA(&msg);
+}
+static UINT close_acks(UINT from, UINT wire) {
+  UINT n = 0;
+  for (UINT i = from; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == 3 && outgoing[i].data[1] == DESK_CLOSE_ACK) {
+      CHECK(desk_get32(outgoing[i].data + 8) == wire &&
+            !desk_get32(outgoing[i].data + 16));
+      n++;
+    }
+  return n;
+}
+/* G3: the desktop's close request reaches WM_CLOSE; a window that survives
+ * (the program's prompt was cancelled) declines with CLOSE_ACK 0, so the
+ * desktop's "Closing..." ends; a destroyed window sends no decline. */
+static void test_desktop_close(void) {
+  MSG msg;
+  HWND h = CreateWindowExA(0, "USER fixture", "closing", WS_VISIBLE | WS_CAPTION,
+                           40, 40, 60, 60, 0, 0, 0, 0);
+  CHECK(h);
+  ValidateRect(h, 0);
+  struct u32_window *w = u32_window(h);
+  CHECK(w && w->wire);
+  UINT wire = w->wire, before = outgoing_count;
+  keep_on_close = 1;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  CHECK(IsWindow(h) && close_acks(before, wire) == 1 && !w->desktop_close);
+  before = outgoing_count; /* the program's own WM_CLOSE is not the desktop's */
+  CHECK(PostMessageA(h, WM_CLOSE, 0, 0));
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  CHECK(IsWindow(h) && !close_acks(before, wire));
+  keep_on_close = 0;
+  before = outgoing_count;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  CHECK(!IsWindow(h) && !close_acks(before, wire));
+  puts("PASS G3 desktop close: WM_CLOSE posted, a surviving window declines once, own WM_CLOSE silent, destroyed window silent");
 }
 static void test_send(void) {
   ui_kernel_schedule(schedule_peer);
@@ -1686,6 +1729,7 @@ static void run(void) {
     CHECK(DestroyWindow(windows[i]));
   }
   ui_kernel_switch(0);
+  test_desktop_close();
   test_lifecycle();
   CHECK(UnregisterClassA("USER fixture", 0));
   #ifndef U32_TEST_EXTERNAL_MODULES

@@ -27,6 +27,8 @@ BOOL W32API DosDateTimeToFileTime(uint16_t date, uint16_t time, FILETIME *out) {
   out->high = time;
   return 1;
 }
+/* G1: the current time-zone bias stand-in (UTC; time.c is not linked). */
+int64_t k32_current_bias(void) { return 0; }
 extern BOOL W32API GetFileAttributesExA(const char *, DWORD, void *);
 extern BOOL W32API GetFileInformationByHandle(HANDLE, BY_HANDLE_FILE_INFORMATION *);
 extern BOOL W32API GetFileSizeEx(HANDLE, int64_t *);

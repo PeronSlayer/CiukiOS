@@ -502,6 +502,12 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         break;
     case SH_MENU_ICON:
         item(m, "Open", NULL, SH_ACT_ICON_OPEN, d->sh.menu_owner, SH_ITEM_DEFAULT);
+        if (d->sh.menu_owner == 2) {   /* G2: the Recycle Bin */
+            item(m, "Empty Recycle Bin", "user-trash", SH_ACT_EMPTY_RECYCLE, 0, d->sh.folder && d->sh.folder->bin_full ? 0 : SH_ITEM_DISABLED);
+            separator(m);
+            item(m, "Properties", "document-properties", SH_ACT_ICON_PROPERTIES, 2, 0);
+            break;
+        }
         if (icon_is_entry(d, d->sh.menu_owner)) {
             if (d->sh.folder->model.entries[d->sh.menu_owner-3].meta.type != FM_DIR)
                 item(m,"Open With",NULL,SH_ACT_SUBMENU,SH_MENU_OPEN_WITH,0);
@@ -762,7 +768,7 @@ static void act(struct desktop *d, const struct sh_item *it)
     switch (it->action) {
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
-    case SH_ACT_EMPTY_RECYCLE: desk_sound(d,SOUND_EMPTY_RECYCLE); break;
+    case SH_ACT_EMPTY_RECYCLE: desk_folder_empty_request(d); break;
     case SH_ACT_RUN: desk_internal_open(d, DESK_INTERNAL_RUN); break;
     case SH_ACT_SHUTDOWN: desk_internal_open(d, DESK_INTERNAL_SHUTDOWN); break;
     case SH_ACT_DOCUMENT:
@@ -865,6 +871,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         if (d->sh.folder) {
             d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3;
             if (it->arg==DF_CUT || it->arg==DF_COPY || it->arg==DF_DELETE) d->sh.folder->multi=selection_sync(d)>1;
+            d->sh.folder->command_flags=0;
         }
         break;
     case SH_ACT_DRAG:
@@ -876,6 +883,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_ICON_OPEN: icon_open(d, it->arg); break;
     case SH_ACT_ICON_PROPERTIES:
+        if (it->arg==2 && d->sh.icon_count>2 && !strcmp(d->sh.icons[2].label,"Recycle Bin")) { launch_named(d,"files","recycle:properties"); break; }   /* G2 */
         if (it->arg>=0 && it->arg<d->sh.icon_count) {
             const struct sh_icon *ic=&d->sh.icons[it->arg];
             if (!strcmp(ic->program,"dosbox")) for (unsigned k=0;k<DESK_GAME_COUNT;k++)
@@ -884,14 +892,23 @@ static void act(struct desktop *d, const struct sh_item *it)
                     launch_named(d,"control",arg);return;
                 }
         }
-        if (icon_is_entry(d, it->arg)) { d->sh.folder->command=DF_PROPERTIES; d->sh.folder->index=it->arg-3; break; }
+        if (icon_is_entry(d, it->arg)) {
+            char argument[FM_PATH+16];
+            snprintf(argument,sizeof(argument),"--properties=%s",d->sh.icons[it->arg].argument);
+            launch_named(d,"files",argument); break;
+        }
+        if (it->arg>=0 && it->arg<d->sh.icon_count && !strcmp(d->sh.icons[it->arg].program,"files")) {
+            char argument[FM_PATH+16];
+            const char *path=d->sh.icons[it->arg].argument;
+            if (path[0]) { snprintf(argument,sizeof(argument),"--properties=%s",path); launch_named(d,"files",argument); break; }
+        }
         if (it->arg >= 0 && it->arg < d->sh.icon_count) {
             const struct sh_icon *ic = &d->sh.icons[it->arg];
             char text[200];
             if (ic->action == SH_ACT_LAUNCH)
                 snprintf(text, sizeof(text), "%.60s\n\nType: Shortcut\nTarget: /Programs/%.24s%s%.60s", ic->label, ic->program,
                          ic->argument[0] ? " " : "", ic->argument);
-            else snprintf(text, sizeof(text), "%.60s\n\nType: System folder\nDeleted desktop items are kept in C:\\Documents\\Trash.", ic->label);
+            else snprintf(text, sizeof(text), "%.60s\n\nType: System folder", ic->label);
             desk_shell_message(d, "Properties", text, 0);
         }
         break;
@@ -1035,7 +1052,8 @@ static void civil(uint64_t seconds, int *year, int *month, int *day, int *weekda
 static const char *const weekdays[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 static const char *const months[] = {"January", "February", "March", "April", "May", "June", "July",
                                      "August", "September", "October", "November", "December"};
-static uint64_t wall_seconds(const struct desktop *d) { return d->app_test ? 12 * 3600 : d->realtime_second; }
+/* G1: the tray shows local time (the system zone's current offset). */
+static uint64_t wall_seconds(const struct desktop *d) { return d->app_test ? 12 * 3600 : d->realtime_second + (uint64_t)(int64_t)d->local_offset; }
 static void clock_text(const struct desktop *d, char *out, size_t size)
 { desk_shell_clock_text_at(d, wall_seconds(d), out, size); }
 static void date_text(const struct desktop *d, char *out, size_t size, int long_form)
@@ -1080,7 +1098,8 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
 {
     if (!memcmp(&d->sh.media,state,sizeof(*state))) return;
     tooltip_hide(d);
-    int resized = !!d->sh.media.removable_mask != !!state->removable_mask;
+    /* fx-17b: floppy diskettes (A:/B:, bits 0-1) have no tray entry, as in Windows 98. */
+    int resized = !!(d->sh.media.removable_mask & ~7u) != !!(state->removable_mask & ~7u);
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
     if (d->sh.media.version == CIUKI_MEDIA_VERSION) {
         unsigned added = state->removable_mask & ~d->sh.media.removable_mask;
@@ -1104,10 +1123,19 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
             desk_shell_notify(d,"Removable media",text,unsafe ? DU_DLG_ICON_WARNING : DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
         }
     }
+    /* fx-21b: a USB device the kernel quarantined at enumeration. Windows
+     * shows this notification-area balloon ("USB Device not recognized: One
+     * of the devices attached to this computer has malfunctioned", Microsoft
+     * KB 2654149) and advises unplugging and reconnecting the device; a
+     * re-plug re-enumerates the port. One balloon per counted device,
+     * including a device that failed before the desktop started. */
+    unsigned seen=d->sh.media.version==CIUKI_MEDIA_VERSION ? d->sh.media.usb_unrecognized : 0;
+    if (state->version==CIUKI_MEDIA_VERSION && state->usb_unrecognized>seen)
+        desk_shell_notify(d,DESK_USB_UNRECOGNIZED_TITLE,DESK_USB_UNRECOGNIZED_TEXT,DU_DLG_ICON_WARNING,SH_NOTIFY_DETAILS);
     for (unsigned i=3;i<26;i++) if (!(state->removable_mask&(1u<<i)) ||
         state->generation[i]!=d->sh.media.generation[i]) d->sh.media_labels[i][0]=0;
     d->sh.media=*state; d->sh.media_scroll=0;
-    if (!state->removable_mask) d->sh.media_open=0;
+    if (!(state->removable_mask & ~7u)) d->sh.media_open=0;
     damage(d, resized ? (struct desk_box){0,0,(int)d->width,DESK_BAR} : tray_box(d));
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
 }
@@ -1325,7 +1353,7 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
     const uint32_t *speaker = desk_shell_icon(d->sh.muted ? "audio-volume-muted" : "audio-volume-high", 16);
     struct desk_box vi = volume_icon_box(d);
     du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);   /* muted: Tango's red cross */
-    if (d->sh.media.removable_mask) {
+    if (d->sh.media.removable_mask & ~7u) {
         struct desk_box mi=media_icon_box(d);
         du_icon_blit(&c,mi.x,mi.y,desk_shell_icon("drive-removable-media",16),16,DU_ICON_NORMAL);
     }
@@ -1585,8 +1613,9 @@ static void icons_build(struct desktop *d)
     if (d->sh.icon_count!=1) return;
     icon_add(d, "Documents", "files", "/Documents", "user-home", SH_ACT_LAUNCH, 0);
     if (d->sh.icon_count!=2) return;
-    icon_add(d, "Trash", "files", DESK_TRASH, "user-trash", SH_ACT_LAUNCH, 0);
+    icon_add(d, "Recycle Bin", "files", "Recycle Bin", "user-trash", SH_ACT_LAUNCH, 0);
     if (d->sh.icon_count!=3) return;
+    if (d->sh.folder && d->sh.folder->bin_full) d->sh.icons[2].icon = "user-trash-full";   /* G2: the bin holds something */
     if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
         const struct fm_entry *e=&d->sh.folder->model.entries[i];
         char path[FM_PATH]; if (fm_join(path,DESK_FOLDER,e->name)) return;
@@ -1608,7 +1637,6 @@ static void icon_open(struct desktop *d, int index)
         if (desk_link_launch(d,k)<0) desk_shell_message(d,"Desktop","This shortcut is unavailable or its target could not be started.",1);
     }
     else if (ic->action == SH_ACT_LAUNCH) launch_named(d, ic->program, ic->argument[0] ? ic->argument : NULL);
-    else desk_shell_message(d, "Trash", "The Trash is empty.\n\nCiukiOS does not keep deleted files yet:\nFiles deletes them permanently.", 0);
 }
 /* Double-click or Enter on a selected icon opens every selected icon. */
 static void open_selection(struct desktop *d, int index)
@@ -2021,7 +2049,7 @@ static void dnd_evaluate(struct desktop *d)
             const struct sh_icon *ic = &d->sh.icons[k];
             int entry_dir = icon_is_entry(d, k) && d->sh.folder->model.entries[k - 3].meta.type == FM_DIR;
             if (k == 2 && g->count) {
-                kind = SH_DROP_TRASH; target = k; allowed = FM_EFFECT_MOVE;
+                kind = SH_DROP_TRASH; target = k; allowed = volume_optical(d, g->source_volume) ? 0 : FM_EFFECT_MOVE;   /* a CD cannot be deleted from */
                 snprintf(destination, sizeof(destination), "%s", DESK_TRASH);
             } else if (g->count && (k == 1 || entry_dir || (ic->action == SH_ACT_LAUNCH && !strcmp(ic->program, "files") && ic->argument[0] == '/'))) {
                 kind = SH_DROP_ICON; target = k; allowed = g->source_allowed;
@@ -2035,7 +2063,12 @@ static void dnd_evaluate(struct desktop *d)
         }
         if (kind == SH_DROP_TRASH) {
             effect = g->keys & (FM_KEY_CTRL | FM_KEY_ALT) ? FM_EFFECT_NONE : FM_EFFECT_MOVE;
-            for (unsigned i = 0; i < g->count && effect; i++) if (fm_beneath(g->paths[i], DESK_TRASH)) effect = FM_EFFECT_NONE;
+            if (!allowed) effect = FM_EFFECT_NONE;
+            /* Items already in a Recycle Bin (or the legacy Trash) are not deleted again. */
+            for (unsigned i = 0; i < g->count && effect; i++) {
+                char dir[FM_PATH];
+                if (fm_beneath(g->paths[i], DESK_TRASH) || (!rb_dir(fm_drive_letter(g->paths[i]), dir) && fm_beneath(g->paths[i], dir))) effect = FM_EFFECT_NONE;
+            }
         } else if (kind == SH_DROP_DESKTOP && g->source < 0) {
             effect = (g->keys & FM_KEY_ALT) || (g->keys & (FM_KEY_CTRL | FM_KEY_SHIFT)) == (FM_KEY_CTRL | FM_KEY_SHIFT) ? FM_EFFECT_NONE :
                      g->keys & FM_KEY_CTRL ? allowed & FM_EFFECT_COPY : FM_EFFECT_MOVE;
@@ -2179,8 +2212,8 @@ static void dnd_commit(struct desktop *d, unsigned effect)
     case SH_DROP_DESKTOP: case SH_DROP_ICON: case SH_DROP_TRASH: {
         if (g->kind == SH_DROP_DESKTOP && g->source < 0 && effect == FM_EFFECT_MOVE) { dnd_reposition(d); performed = effect; break; }
         if (!g->count) break;
-        int r = desk_folder_transfer(d, g->paths, g->count, g->destination, effect, g->kind == SH_DROP_TRASH,
-                                     g->kind == SH_DROP_DESKTOP, x, y);
+        int r = g->kind == SH_DROP_TRASH ? desk_folder_delete_request(d, g->paths, g->count, 0) :
+                desk_folder_transfer(d, g->paths, g->count, g->destination, effect, 0, g->kind == SH_DROP_DESKTOP, x, y);
         if (r == -EBUSY) desk_shell_message(d, "Desktop", "Another file operation is in progress.\nTry again when it has finished.", 1);
         else if (r) desk_shell_notify_error(d, "Desktop", r);
         else performed = effect;
@@ -2666,9 +2699,26 @@ const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
 
 /* ---- built-in windows -------------------------------------------------- */
 static const char *const about_tabs[] = {"General", "System", "Credits"};
+/* G3: the Windows 98 texts, with CiukiOS for Windows. */
+static const char *end_task_text(const struct desktop *d)
+{
+    return d->end_task.kind==DESK_HANG_DOS ?
+        "Windows cannot shut down this program automatically. It is recommended that you quit this program with its quit or exit command.\n\n"
+        "If you close it now, you will lose any unsaved information in this program. Do you want to close it now?" :
+        "This program is not responding. It may be busy, waiting for a response from you, or it may have stopped running.\n\n"
+        "Click Cancel to return to CiukiOS and check the status of the program.\n\n"
+        "Click End Task to close the program immediately. You will lose any unsaved information in this program.";
+}
 static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32_t *h)
 {
     switch (kind) {
+    case DESK_INTERNAL_END_TASK: {
+        int width,height;
+        du_message_size(end_task_text(d),DU_DLG_ICON_WARNING,2,420,&width,&height);
+        if (width<400) width=400;
+        *w=(uint32_t)width; *h=(uint32_t)height;
+        break;
+    }
     case DESK_INTERNAL_GAME_DATA: *w=480; *h=230; break;
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
     case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
@@ -2685,7 +2735,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
     }
     default: {
         int width,height;
-        du_message_size(d->v3_dialog_kind==1&&d->v3_details_open?d->v3_details:d->sh.message_text,d->sh.message_kind,1,(int)d->width-20,&width,&height);
+        du_message_size(d->v3_dialog_kind==1&&d->v3_details_open?d->v3_details:d->sh.message_text,d->sh.message_kind,d->sh.confirm ? 2 : 1,(int)d->width-20,&width,&height);
         if(d->v3_dialog_kind==1){if(width<420)width=420;if(d->v3_details_open){width=610;height=320;}}
         *w=(uint32_t)width; *h=(uint32_t)height;
     }
@@ -2717,12 +2767,13 @@ int desk_internal_open(struct desktop *d, int kind)
     c->internal = kind; c->window = 1;
     c->owner_id=owner;
     if (kind != DESK_INTERNAL_MESSAGE && kind != DESK_INTERNAL_POWER)
-        desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : SOUND_WINDOW_OPEN);
+        desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : kind==DESK_INTERNAL_END_TASK ? du_message_sound(DU_DLG_ICON_WARNING) : SOUND_WINDOW_OPEN);
     if (!++d->next_window_id) ++d->next_window_id;
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
     snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
-             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" : d->sh.message_title);
+             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" :
+             kind==DESK_INTERNAL_END_TASK ? d->end_task.name : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
     if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.about_scroll = 0; d->sh.want_reload |= 2; }
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
@@ -2744,15 +2795,43 @@ int desk_internal_open(struct desktop *d, int kind)
 void desk_internal_closed(struct desktop *d, int index)
 {
     if (d->about == index) d->about = -1;
+    if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->sh.confirm) { d->sh.confirm=0; desk_folder_cancelled(d); }   /* closing the question answers No */
     if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->v3_dialog_kind) {
         if(d->v3_dialog_kind==1)(void)desk_v3_dialog_accept(d);
         d->v3_dialog_kind=0; d->v3_dialog_pid=0;
     }
     if (d->clients[index].internal == DESK_INTERNAL_AUTOPLAY) d->sh.autoplay.open=0;
+    /* G3: closing the dialog itself (title button, Esc) is Cancel / No. */
+    if (d->clients[index].internal == DESK_INTERNAL_END_TASK && d->end_task.kind && d->end_task.window==index) {
+        d->end_task.window=-1; desk_end_task_choice(d,0);
+    }
 }
 void desk_shell_message(struct desktop *d, const char *title, const char *text, int error)
 {
     desk_shell_message_class(d,title,text,error ? DU_DLG_ICON_ERROR : DU_DLG_ICON_INFO);
+}
+void desk_shell_confirm(struct desktop *d, const char *title, const char *text, int icon, int action)
+{
+    for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].internal==DESK_INTERNAL_MESSAGE) desk_drop_client(d,i);
+    snprintf(d->sh.message_title, sizeof(d->sh.message_title), "%s", title);
+    snprintf(d->sh.message_text, sizeof(d->sh.message_text), "%s", text);
+    d->sh.message_kind = icon; d->sh.confirm = action;
+    desk_sound(d,du_message_sound(icon));
+    if (!d->shell) { d->sh.confirm = 0; desk_folder_cancelled(d); return; }
+    desk_internal_open(d, DESK_INTERNAL_MESSAGE);
+}
+void desk_shell_bin_state(struct desktop *d, int full)
+{
+    if (d->sh.icon_count > 2 && !strcmp(d->sh.icons[2].label, "Recycle Bin")) {
+        d->sh.icons[2].icon = full ? "user-trash-full" : "user-trash";
+        icon_repaint(d, 2);
+    }
+}
+static void confirm_answer(struct desktop *d, int index, int yes)
+{
+    int action = d->sh.confirm; d->sh.confirm = 0;
+    if (yes) desk_folder_confirmed(d, action); else desk_folder_cancelled(d);
+    desk_request_close(d, index);
 }
 void desk_shell_message_class(struct desktop *d, const char *title, const char *text, int error)
 {
@@ -2964,7 +3043,7 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         du_text_fit(c, tx, y + 36 + 2 * step, right, line, SH_INK);
         snprintf(line, sizeof(line), "Build: %s", d->build_identity);
         du_text_fit(c, tx, y + 36 + 3 * step, right, line, SH_INK);
-        du_text(c, tx, y + 36 + 4 * step, d->realtime_source ? "Clock: RTC (UTC)" : "Clock: build seed (UTC)", SH_INK);
+        du_text(c, tx, y + 36 + 4 * step, !d->realtime_source ? "Clock: build seed (UTC)" : (d->time_flags & CIUKI_TIME_RTC_LOCAL) ? "Clock: RTC (local time)" : "Clock: RTC (UTC)", SH_INK);
         snprintf(line, sizeof(line), "Display: %u x %u, 32-bit colour", (unsigned)d->width, (unsigned)d->height);
         du_text(c, tx, y + 36 + 5 * step, line, SH_INK);
         du_hline(c, page.x + 10, page.y + page.h - 30, page.w - 20, DU_SHADOW);
@@ -3103,9 +3182,16 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         bold(&c, content.x + 64, content.y + 18, "What do you want CiukiOS to do?", SH_INK);
         multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Programs\nand virtual machines will be closed.", SH_INK);
         static const char *const labels[] = {"&Restart", "&Shut Down", "Cancel"};
-        for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == 1 + 0 * d->sh.shutdown_choice);
+        /* shutdown_choice 1: Restart is the default (Ctrl+Alt+Del pressed again in Task Manager). */
+        for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == (d->sh.shutdown_choice == 1 ? 0 : 1));
         break;
     }
+    case DESK_INTERNAL_END_TASK:
+        du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(du_message_icon_name(DU_DLG_ICON_WARNING), 32), 32, DU_ICON_NORMAL);
+        du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},end_task_text(d),SH_INK);
+        push_button(&c, button_box(content, 0, 2), d->end_task.kind==DESK_HANG_DOS ? "&Yes" : "&End Task", 0);
+        push_button(&c, button_box(content, 1, 2), d->end_task.kind==DESK_HANG_DOS ? "&No" : "Cancel", 1);
+        break;
     case DESK_INTERNAL_POWER:
         multiline(&c, content.x + 14, content.y + 18, d->power.text, SH_INK);
         if (d->power.state!=DESK_POWER_DONE)
@@ -3115,6 +3201,10 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     default:
         du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(du_message_icon_name(d->sh.message_kind), 32), 32, DU_ICON_NORMAL);
         du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},d->v3_dialog_kind==1&&d->v3_details_open?d->v3_details:d->sh.message_text,SH_INK);
+        if (d->sh.confirm) {   /* G2: Yes is the default button */
+            push_button(&c, button_box(content,0,2), "&Yes", 1); push_button(&c, button_box(content,1,2), "&No", 0);
+            break;
+        }
         push_button(&c, message_button_box(d,content,0),
                     d->v3_dialog_kind==1 ? "Close" : d->v3_dialog_kind==2 ? "Restart Windows" : "OK",1);
         if (d->v3_dialog_kind==1) push_button(&c,message_button_box(d,content,1),"Details",0);
@@ -3194,6 +3284,10 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         if (desk_contains(button_box(content, 0, 2), x, y)) run_commit(d, index);
         else if (desk_contains(button_box(content, 1, 2), x, y)) desk_request_close(d, index);
         return 1;
+    case DESK_INTERNAL_END_TASK:
+        if (desk_contains(button_box(content,0,2),x,y)) desk_end_task_choice(d,1);
+        else if (desk_contains(button_box(content,1,2),x,y)) desk_end_task_choice(d,0);
+        return 1;
     case DESK_INTERNAL_SHUTDOWN:
         for (int k = 0; k < 3; k++) if (desk_contains(button_box(content, k, 3), x, y)) {
             if (k < 2) d->sh.want_power = k == 0 ? 1 : 2;
@@ -3201,6 +3295,11 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         }
         return 1;
     default:
+        if (d->sh.confirm) {
+            if (desk_contains(button_box(content,0,2),x,y)) confirm_answer(d,index,1);
+            else if (desk_contains(button_box(content,1,2),x,y)) confirm_answer(d,index,0);
+            return 1;
+        }
         if (desk_contains(message_button_box(d,content,0),x,y)) {
             if (d->v3_dialog_kind) (void)desk_v3_dialog_accept(d);
             desk_request_close(d,index);
@@ -3285,6 +3384,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
         }
         desk_menu_close(d);
     }
+    /* G1: double-clicking the tray clock opens Date/Time Properties. */
+    if (button==CIUKI_BUTTON_LEFT && desk_contains(desk_shell_clock_box(d),x,y)) {
+        if (d->sh.clock_click_ns && d->now_ns-d->sh.clock_click_ns<=(uint64_t)d->sh.cfg.double_click_ms*1000000ull) {
+            d->sh.clock_click_ns=0;
+            if (program_index(d,"control")>=0) launch_named(d,"control","--panel=datetime");
+        } else d->sh.clock_click_ns=d->now_ns ? d->now_ns : 1;
+        return 1;
+    }
     if (button==CIUKI_BUTTON_RIGHT) {
         int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
             desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) ? CP_POWER :
@@ -3352,7 +3459,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
                 else { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
             }
             else if (n->action==SH_NOTIFY_VOLUME) { d->sh.volume_open=1; damage(d,outer(volume_popup(d))); }
-            else if (n->action==SH_NOTIFY_MEDIA && d->sh.media.removable_mask) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
+            else if (n->action==SH_NOTIFY_MEDIA && (d->sh.media.removable_mask & ~7u)) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
             else desk_shell_message_class(d,n->title,n->text,n->icon);
         }
         return 1;
@@ -3366,7 +3473,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
             if (program_index(d,"control")>=0) launch_named(d,"control","--panel=power");
             return 1;
         }
-        if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
+        if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
             d->sh.media_open=1; d->sh.want_reload|=32;
             damage(d,outer(media_popup(d))); return 1;
         }
@@ -3456,7 +3563,7 @@ static int hover_target(const struct desktop *d)
     if (desk_contains(clock_box(d),x,y)) return 1;
     if (desk_contains(network_icon_box(d),x,y)) return 2;
     if (desk_contains(volume_icon_box(d),x,y)) return 3;
-    if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y)) return 4;
+    if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y)) return 4;
     if (desk_contains(notification_icon_box(d),x,y)) return 5;
     for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && desk_contains(desk_task_button(d,i),x,y)) return 16+i;
     return 0;
@@ -3547,17 +3654,18 @@ void desk_shell_scale_motion(struct desktop *d, int32_t *dx, int32_t *dy)
 }
 void desk_shell_clock_damage(struct desktop *d, uint64_t previous)
 {
-    if (d->realtime_second/60!=previous/60) {
+    uint64_t now = d->realtime_second + (uint64_t)(int64_t)d->local_offset;   /* G1: local edges */
+    if (now/60!=previous/60) {
         /* Date text changes only at midnight; its right-aligned previous
          * width can differ, so clear the bounded date region at that edge. */
-        if (d->realtime_second/86400!=previous/86400)
+        if (now/86400!=previous/86400)
             damage(d,(struct desk_box){(int)d->width-300,0,300,DESK_BAR});
-        if (d->sh.tooltip==1 && d->realtime_second/86400!=previous/86400) {
+        if (d->sh.tooltip==1 && now/86400!=previous/86400) {
             if(d->sh.tooltip_painted)damage(d,d->sh.tooltip_last);
             damage(d,tooltip_box(d));
         }
     }
-    if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) {
+    if (d->sh.cfg.clock_seconds || now/60!=previous/60) {
         /* Proportional digits and 12-hour rollover can move every tray icon
          * in the top bar. Erase their previous positions as well. */
         uint64_t old = d->app_test ? 12 * 3600 : previous;
@@ -3726,12 +3834,24 @@ static int internal_key(struct desktop *d, int index, int code, int value)
             damage(d, desk_outer(c));
         }
         return 1;
+    case DESK_INTERNAL_END_TASK:
+        /* Cancel / No is the default button: Enter keeps the program. */
+        if (code == DU_KEY_ESC || code == DU_KEY_ENTER || code == 0x2e || code == 0x31) desk_end_task_choice(d, 0);
+        else if ((d->end_task.kind == DESK_HANG_DOS && code == 0x15) || (d->end_task.kind == DESK_HANG_NOT_RESPONDING && code == 0x12))
+            desk_end_task_choice(d, 1);   /* Y (Yes) / E (End Task) */
+        return 1;
     case DESK_INTERNAL_SHUTDOWN:
         if (code == DU_KEY_ESC) desk_request_close(d, index);
+        else if (code == DU_KEY_ENTER && d->sh.shutdown_choice == 1) { d->sh.want_power = 1; desk_request_close(d, index); }
         else if (code == DU_KEY_ENTER || code == 0x1f) { d->sh.want_power = 2; desk_request_close(d, index); }
         else if (code == 0x13) { d->sh.want_power = 1; desk_request_close(d, index); }
         return 1;
     default:
+        if (d->sh.confirm) {
+            if (code==DU_KEY_ENTER || code==DU_KEY_SPACE || code==0x15) confirm_answer(d,index,1);   /* Enter, Space, Y */
+            else if (code==DU_KEY_ESC || code==0x31) confirm_answer(d,index,0);                      /* Esc, N */
+            return 1;
+        }
         if(d->v3_dialog_kind==1&&(code==DU_KEY_TAB||code==0x20)){
             d->v3_details_open=!d->v3_details_open;
             uint32_t w,h;internal_size(d,DESK_INTERNAL_MESSAGE,&w,&h);
@@ -3985,9 +4105,24 @@ int desk_shell_key(struct desktop *d, int code, int value)
     if (value) d->sh.logo_down = 0;
     if (value == 1 && d->sh.logo_keys && logo_chord(d, code)) { swallow_press(d, code); return 1; }
     if (value==1 && code==0x153 && (d->sh.modifiers&(DU_CTRL|DU_ALT))==(DU_CTRL|DU_ALT)) {
-        desk_v3_revoke(d); desk_v3_pointer_release(d); launch_named(d,"tasks",NULL); d->sh.alt_used=1; return 1;
+        desk_v3_revoke(d); desk_v3_pointer_release(d);
+        /* Windows 98 (RK-apps "Closing Failed Applications"): one Close Program
+         * list; pressed again it restarts the computer. G3 offers the restart
+         * through the Shut Down dialog (Restart the default button), so every
+         * program is still asked and nothing unsaved is lost. */
+        int tasks=-1;
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].taskman) tasks=i;
+        if (tasks>=0 && d->focus==tasks && !d->session.state) {
+            if (desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)>=0) { d->sh.shutdown_choice=1; damage_all(d); }
+        } else if (tasks>=0) { if (d->clients[tasks].minimized) desk_minimize(d,tasks); else desk_focus(d,tasks); }
+        else launch_named(d,"tasks",NULL);
+        d->sh.alt_used=1; return 1;
     }
     if (d->sh.modifiers & DU_ALT) {
+        if (code==DU_KEY_ENTER && d->focus<0 && d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count) {
+            if (value==1) act(d,&(struct sh_item){.action=SH_ACT_ICON_PROPERTIES,.arg=d->sh.icon_selected});
+            d->sh.alt_used=1; return 1;
+        }
         if (code==DU_KEY_ENTER && d->focus>=0 && d->clients[d->focus].version==DESK_V3_VERSION) {
             if (value==1) {
                 struct desk_client *c=&d->clients[d->focus]; struct ciuki_message m;
@@ -4178,7 +4313,9 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (d->sh.folder) {
             if (code==DU_KEY_F2 && icon_is_entry(d, s)) { desk_folder_rename(d,s); return 1; }
             if (code==DU_KEY_DELETE && primary>=0) {
-                d->sh.folder->command=DF_DELETE; d->sh.folder->index=primary-3; d->sh.folder->multi=selection_sync(d)>1; return 1;
+                /* G2: Shift+Delete bypasses the Recycle Bin. */
+                d->sh.folder->command=DF_DELETE; d->sh.folder->index=primary-3; d->sh.folder->multi=selection_sync(d)>1;
+                d->sh.folder->command_flags=(d->sh.modifiers&(DU_CTRL|DU_ALT|DU_SHIFT))==DU_SHIFT ? RB_PERMANENT : 0; return 1;
             }
             if (code==DU_KEY_F5) { d->sh.folder->command=DF_REFRESH; return 1; }
             if (d->sh.modifiers&DU_CTRL) {
@@ -4203,7 +4340,7 @@ static void icons_prepare(void)
      * bounded shell/menu/window variants now, including the generic icon
      * used by crash victims whose title differs from the survivor's. */
     static const unsigned sizes[]={16,22,32,48};
-    static const char *const extra[]={"go-jump","drive-removable-media","media-optical"};
+    static const char *const extra[]={"go-jump","drive-removable-media","media-optical","user-trash-full"};
     for (unsigned s=0;s<sizeof(sizes)/sizeof(*sizes);s++) {
         for (unsigned i=0;i<sizeof(icon_table)/sizeof(*icon_table);i++)
             (void)store_icon(icon_table[i].name,sizes[s]);

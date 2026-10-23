@@ -34,7 +34,8 @@ int main(int argc,char **argv)
     if(kind==DESK_W32_PE)child[count++]=command;
     else if(kind==DESK_W32_DOS){result=-EOPNOTSUPP;goto reply;}
     child[count]=NULL;
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
+    /* G1: no TZ; the Win32 C runtime reads GetTimeZoneInformation. */
+    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
     result=ciuki_spawn(path,child,env,maps?&map:NULL,maps,0);if(result<0)result=-errno;
     if(waited && result>0){
         int status=0,pid=result,r;

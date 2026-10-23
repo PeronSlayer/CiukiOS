@@ -157,7 +157,15 @@ static void summary(void){
     int old_scroll=a.view.scroll;tap(DU_KEY_END);assert(a.view.scroll>old_scroll);frame("disk-warning-scrolled");tap(DU_KEY_HOME);
     assert(du_get(&ui,ST_ID_FREE)->disabled&&du_get(&ui,ST_ID_ADVANCED)->disabled);no_writes();
     tap(DU_KEY_F10);assert(a.page==ST_PAGE_COMPONENTS);tap(DU_KEY_F10);assert(a.page==ST_PAGE_USER);
+    /* G1: the Italian keyboard selects Europe/Rome until a zone is picked. */
+    assert(a.tz==st_zone_find("Etc/UTC")&&!a.tz_chosen);
+    focus(ST_ID_KBD);tap(DU_KEY_UP);assert(a.kbd==0&&a.tz==st_zone_find("Europe/Rome"));
+    tap(DU_KEY_DOWN);assert(a.kbd==1&&a.tz==st_zone_find("Etc/UTC"));tap(DU_KEY_UP);
+    focus(ST_ID_TZ);tap(DU_KEY_DOWN);assert(a.tz_chosen&&a.tz==st_zone_find("Europe/Rome")+1);tap(DU_KEY_UP);
+    focus(ST_ID_KBD);tap(DU_KEY_DOWN);assert(a.tz==st_zone_find("Europe/Rome"));tap(DU_KEY_UP);
+    focus(ST_ID_USER);
     type("ciuki");tap(DU_KEY_TAB);type("ciukipc");tap(DU_KEY_F10);assert(a.page==ST_PAGE_NETWORK);no_writes();
+    assert(!strcmp(a.answers.tz_zone,"Europe/Rome")&&a.answers.tz_minutes==60&&!strcmp(a.answers.keyboard,"it"));
     tap(DU_KEY_F10);assert(a.page==ST_PAGE_SUMMARY&&a.plan_ok);assert(setup_fake.prepare_calls==1);no_writes();frame("summary");
 }
 static void parser(void){
@@ -170,6 +178,7 @@ static void parser(void){
         {"[Setup]\nVersion=1\nComponents=games\n",SETUP_ST_DEPENDENCY,"Components"},
         {"[Setup]\nVersion=1\nRestart=maybe\n",SETUP_ST_VALUE,"Restart"},
         {"[Setup]\nVersion=1\nTimeZone=+15:00\n",SETUP_ST_VALUE,"TimeZone"},
+        {"[Setup]\nVersion=1\nTimeZone=Mars/Olympus\n",SETUP_ST_VALUE,"TimeZone"},
         {"[Setup]\nVersion=1\nNetwork=static:192.168.0.0/24,,\n",SETUP_ST_VALUE,"Network"},
         {"[Setup]\nVersion=1\nComputerName=1234\n",SETUP_ST_VALUE,"ComputerName"},
         {"[Setup]\nVersion=1\nUserName=\n",SETUP_ST_VALUE,"UserName"},
@@ -196,7 +205,16 @@ static void parser(void){
     }
     char oversized[SETUP_INF_MAX_BYTES+1];memset(oversized,'x',sizeof(oversized));assert(setup_inf_parse(oversized,sizeof(oversized),&ans,&st)<0&&!strcmp(st.reason,SETUP_ST_TOO_LARGE));
     assert(st_text_wrap(NULL,DESK_FONT_UI,(struct du_rect){0,0,30,0},15,"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",0)>15);
-    puts("PASS strict INF, disk rules, validation, log ring");
+    /* G1: TimeZone takes a bundled IANA zone (with its DST rule) or a fixed offset. */
+    assert(!setup_inf_parse("[Setup]\nVersion=1\nTimeZone=Europe/Rome\n",strlen("[Setup]\nVersion=1\nTimeZone=Europe/Rome\n"),&ans,&st));
+    assert(!strcmp(ans.tz_zone,"Europe/Rome")&&ans.tz_minutes==60);
+    assert(!setup_inf_parse("[Setup]\nVersion=1\nTimeZone=-05:00\n",strlen("[Setup]\nVersion=1\nTimeZone=-05:00\n"),&ans,&st));
+    assert(!ans.tz_zone[0]&&ans.tz_minutes==-300);
+    /* Rome in summer and winter, a fixed offset, and the wall-clock inverse. */
+    int rome=st_zone_find("Europe/Rome");assert(rome>=0&&st_zone_find("")<0&&st_zone_find("Mars/Olympus")<0);
+    assert(st_zone_offset(rome,60,1782900000)==7200&&st_zone_offset(rome,60,1768478400)==3600&&st_zone_offset(-1,-300,1782900000)==-18000);
+    assert(st_zone_local_to_utc(rome,60,1782907200)==1782900000&&st_zone_local_to_utc(-1,330,19800)==0);
+    puts("PASS strict INF, disk rules, validation, log ring, time zones");
 }
 static void renders(void){
     fixture();init();strcpy(a.answers.user_name,"Ciuki");strcpy(a.answers.computer_name,"CIUKI-PC");

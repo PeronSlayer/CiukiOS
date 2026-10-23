@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 #include <ciuki/clock.h>
+extern int32_t timezone_offset_at(int64_t) __attribute__((weak));
 #include <ciuki/fat_native.h>
 #include <ciuki/audio.h>
 #include <ciuki/com.h>
@@ -27,11 +28,13 @@ static struct px_namespace *spaces;
 static uint32_t path_drives(struct px_namespace *s,struct px_node *cwd,const char *path)
 {
     uint8_t kinds[CIUKI_PATH_MAX/2+2]; unsigned depth=0;
-    kinds[0]=2; /* 0=/mnt, 1=/dev, 2=C root, 3..25=mount letters */
+    /* 0=/mnt, 1=/dev (no drive), 2+d=drive d (C root is 4). fx-17b: A:/B:
+     * floppies (d 0/1) sit under /mnt like every other letter but C:. */
+    kinds[0]=2+2;
     if (path[0]!='/' && cwd) {
         struct px_node *n=cwd; unsigned count=0;
         while (n!=s->root && count<CIUKI_PATH_MAX/2) {
-            kinds[++count]=n==s->mnt ? 0 : n==s->dev || (!n->volume && !n->ro) ? 1 : n->drive;
+            kinds[++count]=n==s->mnt ? 0 : n==s->dev || (!n->volume && !n->ro) ? 1 : 2+n->drive;
             n=n->parent;
         }
         depth=count;
@@ -48,11 +51,11 @@ static uint32_t path_drives(struct px_namespace *s,struct px_node *cwd,const cha
         if (len==2 && start[0]=='.' && start[1]=='.') { if (depth) depth--; continue; }
         if (!depth && len==3 && path_upper(start[0])=='M' && path_upper(start[1])=='N' && path_upper(start[2])=='T') kind=0;
         else if (!depth && len==3 && path_upper(start[0])=='D' && path_upper(start[1])=='E' && path_upper(start[2])=='V') kind=1;
-        else if (kind==0) { kind=len==1 ? (unsigned)(path_upper(start[0])-'A') : 26; if (kind<3 || kind>=26) kind=1; else mask|=1u<<kind; }
-        else if (kind>=2) mask|=vfs_drive_mask(kind);
+        else if (kind==0) { unsigned d=len==1 ? (unsigned)(path_upper(start[0])-'A') : 26; if (d==2 || d>=26) kind=1; else { kind=2+d; mask|=1u<<d; } }
+        else if (kind>=2) mask|=vfs_drive_mask(kind-2);
         if (depth+1<sizeof(kinds)/sizeof(*kinds)) kinds[++depth]=kind;
     }
-    return mask | (kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]) : 0);
+    return mask | (kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]-2) : 0);
 }
 static void reserve_paths(struct px_namespace *s,struct px_node *cwd,const char *a,const char *b)
 {
@@ -419,7 +422,7 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
     }
     if (p == s->mnt) {
         unsigned d = (unsigned)(path_upper((uint8_t)name[0]) - 'A');
-        if (name[1] || d < 3 || d >= 26 || !vfs_drive_present(s->vfs,d)) return -ENOENT;
+        if (name[1] || d == 2 || d >= 26 || !vfs_drive_present(s->vfs,d)) return -ENOENT;
         *out = mount_root(s, d); return *out ? 0 : -ENOMEM;
     }
     if (p->ro) {
@@ -689,6 +692,113 @@ static int px_stat_fill(struct px_node *n, struct ciuki_stat *out, uint32_t chai
     clock_fat_utc(n->entry.times.write_date, n->entry.times.write_time, &out->st_mtim.tv_sec);
     out->st_ctim = n->ctime;
     return 0;
+}
+
+/* G6: FAT attributes, the three FAT times and the 8.3 alias of one node
+ * (Microsoft FAT 1.03 pp. 23-25; "File Times"). Size and size on disk come
+ * from stat (one bounded chain walk). Read-only media report their objects
+ * read-only, as Windows 98 shows a CD-ROM's files. */
+int px_file_info_get_locked(struct px_node *n, struct ciuki_file_info *out)
+{
+    struct ciuki_stat st;
+    int err = px_stat_locked(n, &st);
+    if (err) return err;
+    uint32_t version = out->version, size = out->size;
+    memset(out, 0, sizeof(*out));
+    out->version = version; out->size = size; out->operation = CIUKI_FILE_INFO_GET;
+    out->file_size = (uint64_t)st.st_size;
+    if (n->ro) {
+        out->mask = CIUKI_FILE_INFO_ATTRIBUTES | CIUKI_FILE_INFO_ALLOCATED;
+        out->attributes = CIUKI_ATTR_READONLY | (directory(n) ? CIUKI_ATTR_DIRECTORY : 0);
+        out->flags = CIUKI_FILE_INFO_READ_ONLY_MEDIUM | (n->mountpoint ? CIUKI_FILE_INFO_VOLUME_ROOT : 0);
+        out->allocated = (uint64_t)st.st_blocks * 512u;
+        return 0;
+    }
+    if (!n->volume) {
+        /* Synthetic directories and devices: a type, no FAT entry. */
+        out->attributes = directory(n) ? CIUKI_ATTR_DIRECTORY : 0;
+        out->mask = CIUKI_FILE_INFO_ATTRIBUTES;
+        return 0;
+    }
+    if (n->volume->readonly || px_write_denied(n)) out->flags |= CIUKI_FILE_INFO_READ_ONLY_MEDIUM;
+    out->mask = CIUKI_FILE_INFO_ATTRIBUTES | CIUKI_FILE_INFO_ALLOCATED;
+    out->allocated = (uint64_t)st.st_blocks * 512u;
+    if (n->mountpoint) {
+        /* A volume root has no directory entry: no times, no alias. */
+        out->attributes = CIUKI_ATTR_DIRECTORY; out->flags |= CIUKI_FILE_INFO_VOLUME_ROOT;
+        return 0;
+    }
+    const struct fat_times *t = &n->entry.times;
+    out->attributes = n->entry.attr & (CIUKI_ATTR_SETTABLE | CIUKI_ATTR_DIRECTORY);
+    if (clock_fat_utc(t->create_date, t->create_time, &out->created)) {
+        unsigned tenths = t->create_tenths < 200 ? t->create_tenths : 0;
+        out->created += tenths / 100; out->created_ms = (tenths % 100) * 10;
+        out->mask |= CIUKI_FILE_INFO_CREATED;
+    }
+    if (clock_fat_utc(t->access_date, 0, &out->accessed)) out->mask |= CIUKI_FILE_INFO_ACCESSED;
+    if (clock_fat_utc(t->write_date, t->write_time, &out->modified)) out->mask |= CIUKI_FILE_INFO_MODIFIED;
+    if (n->entry.alias[0]) {
+        size_t k = strlen(n->entry.alias);
+        if (k < sizeof(out->short_name)) { memcpy(out->short_name, n->entry.alias, k + 1); out->mask |= CIUKI_FILE_INFO_SHORT_NAME; }
+    }
+    return 0;
+}
+
+int px_file_info_check(const struct ciuki_file_info *in)
+{
+    if (in->version != CIUKI_FILE_INFO_VERSION) return -EINVAL;
+    if (in->size != sizeof(*in) || in->reserved) return -EINVAL;
+    if (in->operation == CIUKI_FILE_INFO_GET) return 0;
+    if (in->operation != CIUKI_FILE_INFO_SET) return -EINVAL;
+    if (!in->mask || (in->mask & ~CIUKI_FILE_INFO_SETTABLE)) return -EINVAL;
+    if ((in->mask & CIUKI_FILE_INFO_ATTRIBUTES) && (in->attributes & ~(CIUKI_ATTR_SETTABLE | CIUKI_ATTR_DIRECTORY))) return -EINVAL;
+    if ((in->mask & CIUKI_FILE_INFO_CREATED) && in->created_ms > 999) return -EINVAL;
+    return 0;
+}
+
+static int file_info_set_inner(struct px_node *n, const struct ciuki_file_info *in)
+{
+    if (n->ro) return -EROFS;
+    if (!n->volume) return -EOPNOTSUPP;
+    int err = px_ro_check_locked(n); if (err) return err;
+    if (n->volume->readonly || px_write_denied(n)) return -EROFS;
+    if (n->mountpoint) return -EINVAL;
+    bool dir = directory(n);
+    uint8_t attr = n->entry.attr;
+    if (in->mask & CIUKI_FILE_INFO_ATTRIBUTES) {
+        if ((in->attributes & CIUKI_ATTR_DIRECTORY) && !dir) return -EINVAL;
+        attr = (uint8_t)((attr & FAT_ATTR_DIR) | (in->attributes & CIUKI_ATTR_SETTABLE));
+    }
+    struct fat_times times = n->entry.times;
+    uint16_t unused;
+    if (in->mask & CIUKI_FILE_INFO_CREATED) {
+        if (!clock_utc_fat(in->created, &times.create_date, &times.create_time)) return -EINVAL;
+        int32_t offset=timezone_offset_at ? timezone_offset_at(in->created) : 0;
+        times.create_tenths = (uint8_t)(((in->created + offset) & 1) * 100 + in->created_ms / 10);
+    }
+    if ((in->mask & CIUKI_FILE_INFO_ACCESSED) && !clock_utc_fat(in->accessed, &times.access_date, &unused)) return -EINVAL;
+    if ((in->mask & CIUKI_FILE_INFO_MODIFIED) && !clock_utc_fat(in->modified, &times.write_date, &times.write_time)) return -EINVAL;
+    vfs_tag_locked(n->space->vfs, "attributes"); vfs_site_locked(n->space->vfs, "native");
+    err = px_error(px_fat_transaction_locked(n, n->parent, 0,
+        (struct fat_transaction_args){.op = FAT_TX_SET_METADATA, .entry = &n->entry, .attr = attr, .times = &times}));
+    if (!err) px_changed_locked(n);
+    return err == -FS_EROFS ? -EROFS : err;
+}
+
+/* The writer turn precedes resolution (f1-89 Amendment 1 item 2), as the
+ * Win32 W32_F_ATTR path takes it. */
+int px_file_info_set_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
+                            const struct ciuki_file_info *in)
+{
+    int err = px_file_info_check(in);
+    if (err) return err;
+    uint32_t turn = 0;
+    err = px_turn_take_path_locked(s, cwd, path, &turn);
+    struct px_path r;
+    if (!err) err = px_resolve_locked(s, cwd, path, false, &r);
+    if (!err) err = file_info_set_inner(r.node, in);
+    vfs_turn_drop_locked(s->vfs, turn);
+    return err;
 }
 
 /* f1-89: native FAT mutations take the drive's writer turn before they
@@ -1002,7 +1112,7 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
 {
     struct px_node *dir = d->node, *n = 0;
     vfs_tag_locked(dir->space->vfs,"readdir"); vfs_site_locked(dir->space->vfs,"native");
-    uint64_t listed_size = 0; int64_t listed_mtime = 0; uint8_t listed_type = 0;
+    uint64_t listed_size = 0; int64_t listed_mtime = 0; uint8_t listed_type = 0, listed_attr = 0;
     if (dir==dir->space->mnt) {
         uint32_t mask=0; for (unsigned i=3;i<26;i++) if (dir->space->vfs->ro_volumes[i]) mask|=1u<<i;
         vfs_reserve_locked(dir->space->vfs,mask);
@@ -1033,10 +1143,12 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
         if (!n) return 0;
         name = n->entry.name;
     } else if (dir == dir->space->mnt) {
-        if (!cursor) cursor = 3;
-        while (cursor < 26 && !vfs_drive_present(dir->space->vfs,cursor)) cursor++;
-        if (cursor == 26) return 0;
-        n = mount_root(dir->space, cursor++); if (!n) return -ENOMEM;
+        /* cursor: next drive index + 1 (fx-17b: A:/B: first, never C:). */
+        unsigned drive = cursor ? cursor - 1 : 0;
+        while (drive < 26 && (drive == 2 || !vfs_drive_present(dir->space->vfs,drive))) drive++;
+        if (drive >= 26) return 0;
+        n = mount_root(dir->space, drive); if (!n) return -ENOMEM;
+        cursor = drive + 2;
         name = n->entry.name;
     } else if (dir == dir->space->root && d->position < 4) {
         n = d->position == 2 ? dir->space->mnt : dir->space->dev; name = n->entry.name;
@@ -1061,6 +1173,7 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
         n = node_entry(dir->space, dir, &entry); if (!n) return -ENOMEM;
         name = n->entry.name;
         listed_type = entry.attr & FAT_ATTR_DIR ? DT_DIR : DT_REG;
+        listed_attr = entry.attr & (CIUKI_ATTR_SETTABLE | CIUKI_ATTR_DIRECTORY);
         listed_size = entry.attr & FAT_ATTR_DIR ? 0 : entry.size;
         clock_fat_utc(entry.times.write_date, entry.times.write_time, &listed_mtime);
     }
@@ -1071,11 +1184,16 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     out->d_type = directory(n) ? DT_DIR : n->kind == PX_FILE ? DT_REG : DT_CHR;
     if (listed_type) {
         out->d_type = listed_type; out->d_size = listed_size; out->d_mtime = listed_mtime;
-    } else if (n->ro) out->d_size = n->kind == PX_FILE ? n->ro_size : 0;
-    else if (n->volume) {
+        out->d_attributes = listed_attr;
+    } else if (n->ro) {
+        out->d_size = n->kind == PX_FILE ? n->ro_size : 0;
+        out->d_attributes = CIUKI_ATTR_READONLY | (directory(n) ? CIUKI_ATTR_DIRECTORY : 0);
+    } else if (n->volume) {
         out->d_size = n->kind == PX_FILE ? n->entry.size : 0;
+        out->d_attributes = n->mountpoint ? CIUKI_ATTR_DIRECTORY : n->entry.attr & (CIUKI_ATTR_SETTABLE | CIUKI_ATTR_DIRECTORY);
         clock_fat_utc(n->entry.times.write_date, n->entry.times.write_time, &out->d_mtime);
     }
+    if (!out->d_attributes && directory(n)) out->d_attributes = CIUKI_ATTR_DIRECTORY;
     memcpy(out->d_name, name, out->d_namlen); d->cursor = cursor;
     return sizeof(*out);
 }

@@ -133,8 +133,14 @@ int floppy_native_open(unsigned drive, struct blkdev **out)
 { return controller.ready ? fdc_native_open(&controller,drive,out) : -FS_ENOENT; }
 int floppy_native_close(unsigned drive)
 { return drive<2 && native_mounted[drive] ? -FS_EBUSY : fdc_native_close(&controller,drive); }
+bool floppy_drive_present(unsigned drive)
+{ return drive<2 && controller.ready && !controller.quarantined && controller.drive[drive].present; }
+bool floppy_native_mounted(unsigned drive) { return drive<2 && native_mounted[drive]; }
 int floppy_mount(unsigned drive)
 {
+    /* fx-17b: Retry from Files on a drive whose diskette is already
+     * mounted is a no-op; a DOS lease keeps the drive (EBUSY). */
+    if (drive<2 && native_mounted[drive]) return 0;
     struct blkdev *b; int e=floppy_native_open(drive,&b);
     if (e) return e;
     e=storage_add_floppy(storage_get(),b,drive);

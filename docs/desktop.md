@@ -245,7 +245,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
 - **Desktop icons** (desktop as a folder since f2-42,
   [design](design/desktop-folder.md)): the fixed icons Computer (Files at
   Computer; the icon carries the Ciuki portrait), Documents (Files at
-  `C:\Documents`) and Trash (Files at `C:\Documents\Trash`), then the
+  `C:\Documents`) and Recycle Bin (Files at the Recycle Bin, [design](design/recycle-bin.md)), then the
   entries of `C:\Documents\Desktop`. Click selects, a double click
   (desktop.cfg `double_click_ms`) or Enter opens; right click opens Open and
   Properties, plus Open With, Cut, Copy, Rename and Delete for folder
@@ -647,8 +647,11 @@ contents are treated as disposable and are initialized before use.
 
 - **Applications:** columns Task and Status (Running / Not Responding from
   the desktop's heartbeat), sorted by title, PID and window id. End Task
-  (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
-  after 2 s for its own children. Switch To (Alt+S, Enter, double-click) restores and
+  (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST
+  (the program may ask to save; no deadline while it answers PINGs); a window
+  already closing or not responding gets "This program is not responding",
+  whose End Task terminates it (G3, `docs/design/desktop-shell.md`). File >
+  Shut Down opens the desktop's Shut Down dialog. Switch To (Alt+S, Enter, double-click) restores and
   focuses. New Task (Alt+N) asks the desktop to launch an admitted `/Programs`
   program (name or `/Programs/name`), so graphical programs get their channel and
   appear here; the launched program's row is selected once it appears.

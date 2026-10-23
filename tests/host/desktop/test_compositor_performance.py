@@ -33,8 +33,8 @@ THEMES = ("Platinum", "Ciuki Blue")
 # fx-13: cursor set scaled to the classic 13x19 arrow.
 # G4: the shell menus underline their access keys (SM-9).
 GOLDENS = {
-    "Ciuki Blue": "99882235835f254c2999d2a721e02e894009b43dd6f5135082e6e94385e73118",
-    "Platinum": "2c4d274d89f1aea02832ff730cdc821b5d2c00bbcae1ba5e50493e3f664c07f3"
+    "Ciuki Blue": "e58f78953ff512de3b5673c582fd50dc022d63efc842fc2a84ab9955c20cd58e",
+    "Platinum": "e91633e9e4af420c1b4731cbcbfac1db3be921cd85759508ea1f00cffc20e482"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

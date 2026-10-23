@@ -2779,3 +2779,24 @@ scope (`probe=<alias>`, the f5-17A/B serial schema of
 name fields). The desktop reports `case=w32-title phase=<n> serial=<n>`
 through the existing probe-report hook; the kernel reads the checkpoint page
 in that call. No system call, record buffer or boot-info field changes.
+
+## G1 — system time zone and clock, call 97 (2026-10-23 21:33)
+
+Directive G1 (`docs/directives/g1-g6-os-gaps-batch-1.md`) adds one native
+call outside 78–95 (left to F6) and after the Win32 family's 96:
+`CIUKI_SYS_TIME = 97`, `EBX = struct ciuki_time_zone *`, `ECX = exact size`
+(208), other registers ignored; 0 or -errno. The record (`abi.h`, oracle rows
+in `tests/host/abi_layout_test.c`) carries `version`/`size`/`operation`, the
+flags `AUTO_DST`, `RTC_LOCAL`, `DAYLIGHT`, `ADJUSTED`, `AUTHORITY`, UTC and
+local seconds, milliseconds, the offset in force and the standard/daylight
+offsets (minutes east of UTC), the RTC bias, a change generation, the next
+daylight-saving change, the IANA zone, the POSIX rule and the two
+abbreviations. Operations: `GET` (any process; it also moves the RTC after a
+daylight-saving change), `SET_ZONE`, `SET_LOCAL`, `SET_UTC`, `ACKNOWLEDGE`
+(the process needs `time_capability`, granted with the same parent check as
+`network_capability` to `/Programs/desktop` and `/Programs/control` only;
+EPERM otherwise; EINVAL for a malformed record, rule, zone name or a local
+time outside 1980–2079; EBUSY while another change runs; EIO when clock.cfg
+or the RTC write fails, nothing changed). Win32 processes reach the same
+operation through `W32_SYSTEM`, action `W32_S_TIME_ZONE` (errors 1314, 87,
+170, 31). The behaviour is specified in [local-time.md](local-time.md).

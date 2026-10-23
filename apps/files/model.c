@@ -11,6 +11,9 @@
 #include <time.h>
 
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static int rb_job_begin(struct fm_job *);
+static void rb_job_finish(struct fm_job *);
+static void rb_job_free(struct fm_job *);
 static int compare(const char *a, const char *b)
 {
     while (*a && fold((unsigned char)*a) == fold((unsigned char)*b)) { a++; b++; }
@@ -19,18 +22,24 @@ static int compare(const char *a, const char *b)
 int fm_same_path(const char *a, const char *b) { return !compare(a, b); }
 const char *fm_basename(const char *path) { const char *p = strrchr(path, '/'); return p ? p + 1 : path; }
 
+/* fx-17b: /mnt/<letter> is a drive for A:, B: (floppies) and D:..Z:;
+ * C: is "/", and /mnt/c is never published by the kernel. */
+static int mnt_letter(const char *path)
+{
+    if (strncmp(path, "/mnt/", 5)) return 0;
+    unsigned c = fold((unsigned char)path[5]);
+    return c >= 'a' && c <= 'z' && c != 'c' && (!path[6] || path[6] == '/') ? (int)c : 0;
+}
 int fm_drive_root(const char *path)
 {
-    return !strcmp(path, "/") || (!strncmp(path, "/mnt/", 5) &&
-           fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' && !path[6]);
+    return !strcmp(path, "/") || (mnt_letter(path) && !path[6]);
 }
 
 int fm_volume(const char *path)
 {
     if (!path || path[0] != '/') return 0;
-    if (!strncmp(path, "/mnt/", 5) && fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' &&
-        (!path[6] || path[6] == '/')) return (int)(fold((unsigned char)path[5]) - 'a' + 'A');
-    return 'C';
+    int c = mnt_letter(path);
+    return c ? c - 'a' + 'A' : 'C';
 }
 
 unsigned fm_drop_effect(int source_volume, int target_volume, unsigned keys, unsigned allowed)
@@ -65,6 +74,8 @@ int fm_drop_check(char *const *sources, unsigned count, const char *destination,
 int fm_hidden(const char *parent, const char *name)
 {
     static const char *const hidden[] = {"dev", "mnt", "tmp"};
+    /* G2: the Recycle Bin's folder is a system folder at every volume root. */
+    if ((!strcmp(parent, "/") || fm_drive_root(parent)) && !compare(name, RB_DIR)) return 1;
     if (strcmp(parent, "/")) return 0;
     for (unsigned i = 0; i < sizeof(hidden) / sizeof(hidden[0]); i++)
         if (!compare(name, hidden[i])) return 1;
@@ -79,9 +90,10 @@ int fm_posix_path(char *out, const char *in)
     char path[FM_PATH]; size_t used = 0;
     const char *p = in;
     if (!*in || !compare(in, "Computer")) { out[0] = 0; return 0; }
+    if (!compare(in, "Recycle Bin") || !compare(in, FM_RECYCLE)) { strcpy(out, FM_RECYCLE); return 0; }
     if (in[0] != '/' && in[1] == ':') {
         unsigned drive = fold((unsigned char)in[0]);
-        if (drive < 'c' || drive > 'z' || (in[2] && in[2] != '/' && in[2] != '\\')) return -EINVAL;
+        if (drive < 'a' || drive > 'z' || (in[2] && in[2] != '/' && in[2] != '\\')) return -EINVAL;
         if (drive != 'c') { memcpy(path, "/mnt/", 5); path[5] = (char)drive; used = 6; }
         p += 2;
     } else if (in[0] != '/') return -EINVAL;
@@ -104,9 +116,9 @@ int fm_display_path(char *out, const char *in)
     int r = fm_posix_path(path, in);
     if (r) return r;
     if (!path[0]) { strcpy(out, "Computer"); return 0; }
+    if (!compare(path, FM_RECYCLE)) { strcpy(out, "Recycle Bin"); return 0; }
     const char *p = path + 1; char drive = 'C';
-    if (!strncmp(path, "/mnt/", 5) && fold((unsigned char)path[5]) >= 'd' &&
-        fold((unsigned char)path[5]) <= 'z' && (!path[6] || path[6] == '/')) {
+    if (mnt_letter(path)) {
         drive = (char)(fold((unsigned char)path[5]) - 'a' + 'A');
         p = path + 6; if (*p == '/') p++;
     }
@@ -122,44 +134,52 @@ int fm_display_path(char *out, const char *in)
 char fm_drive_letter(const char *path)
 {
     if (!path || path[0] != '/') return 0;
-    if (!strncmp(path, "/mnt/", 5)) {
-        unsigned c = fold((unsigned char)path[5]);
-        if (c >= 'a' && c <= 'z' && (!path[6] || path[6] == '/')) return (char)(c - 'a' + 'A');
-    }
-    return 'C';
+    return (char)fm_volume(path);
 }
-struct volumes { struct fm_meta meta[23]; uint32_t seen; };
+struct volumes { struct fm_meta meta[26]; uint32_t seen; };
 static int collect_volume(const char *name, const struct fm_meta *meta, void *ctx)
 {
     struct volumes *v = ctx;
     unsigned letter = fold((unsigned char)name[0]);
-    if (meta->type != FM_DIR || !name[0] || name[1] || letter < 'd' || letter > 'z') return 0;
+    if (meta->type != FM_DIR || !name[0] || name[1] || letter < 'a' || letter > 'z' || letter == 'c') return 0;
     uint32_t bit = 1u << (letter - 'a');
     if (v->seen & bit) return 0;
     v->seen |= bit;
-    v->meta[letter - 'd'] = *meta;
+    v->meta[letter - 'a'] = *meta;
     return 0;
 }
 
-int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx)
+/* fx-17b: slots lists drives that exist without a mounted medium (a floppy
+ * drive with no diskette: Windows 98 My Computer always shows A:). Such an
+ * entry has dev 0. Order: A:, B:, C:, then D:..Z:. */
+int fm_volumes_slots(const struct fm_vfs *fs, uint32_t slots, fm_emit emit, void *ctx)
 {
     struct fm_meta meta;
     int r = fs->stat_path(fs->ctx, "/", &meta);
     if (r) return r;
-    if ((r = emit("C:", &meta, ctx))) return r;
     struct volumes v = {0};
     r = fs->list(fs->ctx, "/mnt", FM_LIST_NAMES_ONLY, collect_volume, &v);
     if (r && r != -ENOENT) return r;
-    for (unsigned letter = 'd'; letter <= 'z'; letter++) if (v.seen & (1u << (letter - 'a'))) {
+    for (unsigned letter = 'a'; letter <= 'z'; letter++) {
         char drive[] = {(char)(letter - 'a' + 'A'), ':', 0};
-        if ((r = emit(drive, &v.meta[letter - 'd'], ctx))) return r;
+        if (letter == 'c') { if ((r = emit("C:", &meta, ctx))) return r; continue; }
+        uint32_t bit = 1u << (letter - 'a');
+        if (v.seen & bit) { if ((r = emit(drive, &v.meta[letter - 'a'], ctx))) return r; }
+        else if (slots & bit) { struct fm_meta absent = {.type = FM_DIR}; if ((r = emit(drive, &absent, ctx))) return r; }
     }
     return 0;
 }
+int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx) { return fm_volumes_slots(fs, 0, emit, ctx); }
 
 int fm_entry_path(const struct fm_model *m, unsigned index, char *out)
 {
     if (index >= m->count) return -ENOENT;
+    if (m->entries[index].bin) {   /* G2: a Recycle Bin item is addressed by its stored path */
+        const struct rb_item *item = rb_entry_item(m, &m->entries[index]);
+        char dir[FM_PATH];
+        if (!item || rb_dir(item->drive, dir)) return -ENOENT;
+        return fm_join(out, dir, item->stored);
+    }
     return m->path[0] ? fm_join(out, m->path, m->entries[index].name) : fm_posix_path(out, m->entries[index].name);
 }
 
@@ -251,7 +271,8 @@ const char *fm_type_name(const struct fm_entry *e, char *buffer, size_t size)
     return buffer;
 }
 
-struct listing { struct fm_entry *entries; unsigned count, capacity; };
+struct listing { struct fm_entry *entries; unsigned count, capacity; struct rb_item *bin; unsigned bin_count; };
+static int rb_list_into(const struct fm_vfs *fs, uint32_t fixed, struct listing *l);
 static int collect(const char *name, const struct fm_meta *meta, void *ctx)
 {
     struct listing *l = ctx;
@@ -278,12 +299,16 @@ static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
 
 /* Jobs use raw listing(): hiding belongs only to the browser, not to copies
  * or recursive deletion/properties. */
-static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *l)
+static int browser_listing(struct fm_vfs *fs, const char *path, uint32_t fixed, struct listing *l, uint32_t slots, int show_hidden, int hide_system)
 {
     int r;
+    if (fm_is_recycle(path)) {
+        memset(l, 0, sizeof(*l));
+        return rb_list_into(fs, fixed, l);   /* its entries are never hidden */
+    }
     if (!path[0]) {
         memset(l, 0, sizeof(*l));
-        r = fm_volumes(fs, collect, l);
+        r = fm_volumes_slots(fs, slots, collect, l);
         if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
     } else {
         memset(l, 0, sizeof(*l));
@@ -293,7 +318,9 @@ static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *
     if (!r) {
         unsigned count = 0;
         for (unsigned i = 0; i < l->count; i++)
-            if (!fm_hidden(path, l->entries[i].name)) l->entries[count++] = l->entries[i];
+            if (!fm_hidden(path, l->entries[i].name) &&
+                (show_hidden || !(l->entries[i].meta.attributes & 2u)) &&
+                (!hide_system || !(l->entries[i].meta.attributes & 4u))) l->entries[count++] = l->entries[i];
         l->count = count;
     }
     return r;
@@ -310,6 +337,7 @@ static int match(const char *name, const struct fm_meta *meta, void *ctx)
 /* Lexical normalisation, then each component takes its stored spelling. */
 int fm_canonical(const struct fm_vfs *fs, const char *in, char *out)
 {
+    if (in && fm_is_recycle(in)) { strcpy(out, FM_RECYCLE); return 0; }
     if (!in || in[0] != '/' || strlen(in) >= FM_PATH) return in && in[0] && in[0] != '/' ? -ENOENT : -EINVAL;
     char result[FM_PATH] = "/";
     for (const char *p = in; *p;) {
@@ -344,15 +372,30 @@ void fm_clipboard_clear(struct fm_model *m)
     for (unsigned i = 0; i < m->clipboard_count; i++) free(m->clipboard[i]);
     free(m->clipboard); m->clipboard = NULL; m->clipboard_count = 0; m->cut = 0;
 }
-void fm_destroy(struct fm_model *m) { free(m->entries); fm_clipboard_clear(m); memset(m, 0, sizeof(*m)); }
+void fm_destroy(struct fm_model *m) { free(m->entries); free(m->bin); fm_clipboard_clear(m); memset(m, 0, sizeof(*m)); }
 
-static int order(const struct fm_entry *a, const struct fm_entry *b, unsigned column, int descending)
+/* G2: in the Recycle Bin the name is the original one and two more keys exist:
+ * 4 the original location, 5 the deletion time. */
+static int order(const struct fm_model *m, const struct fm_entry *a, const struct fm_entry *b, unsigned column, int descending)
 {
     if (a->meta.type == FM_DIR && b->meta.type != FM_DIR) return -1;
     if (a->meta.type != FM_DIR && b->meta.type == FM_DIR) return 1;
     int result = 0;
+    if (a->bin && b->bin) {
+        const struct rb_item *ia = rb_entry_item(m, a), *ib = rb_entry_item(m, b);
+        if (!ia || !ib) return compare(a->name, b->name);
+        if (column == 4) result = rb_item_compare_location(ia, ib);
+        else if (column == 5) result = ia->deleted < ib->deleted ? -1 : ia->deleted > ib->deleted;
+        else if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
+        else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
+        else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
+        if (!result) result = compare(rb_item_leaf(ia), rb_item_leaf(ib));
+        if (!result) result = (int)a->bin - (int)b->bin;
+        return descending ? -result : result;
+    }
     if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
     else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
+    else if (column == 4) result = a->meta.attributes < b->meta.attributes ? -1 : a->meta.attributes > b->meta.attributes;
     else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
     if (!result) result = compare(a->name, b->name);
     if (!result) result = strcmp(a->name, b->name);
@@ -361,7 +404,8 @@ static int order(const struct fm_entry *a, const struct fm_entry *b, unsigned co
 
 void fm_sort(struct fm_model *m, unsigned column, int descending)
 {
-    if (column > 3) return;
+    if (column > 5) return;
+    if (column == 5 && !fm_is_recycle(m->path)) column = 0;
     m->sort = column; m->descending = descending;
     if (m->count < 2) return;
     /* Stable bottom-up merge sort; focus/anchor follow entries, not indices. */
@@ -376,7 +420,7 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
         if (end > m->count) end = m->count;
         unsigned left = start, right = middle;
         for (unsigned i = start; i < end; i++)
-            tmp[i] = left < middle && (right == end || order(&m->entries[left], &m->entries[right], column, descending) <= 0)
+            tmp[i] = left < middle && (right == end || order(m, &m->entries[left], &m->entries[right], column, descending) <= 0)
                      ? m->entries[left++] : m->entries[right++];
         memcpy(m->entries + start, tmp + start, (end - start) * sizeof(*tmp));
     }
@@ -390,11 +434,13 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
 static int load(struct fm_model *m, const char *path)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, path, &l);
+    int r = browser_listing(&m->fs, path, m->fixed, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
-    free(m->entries);
-    m->entries = l.entries; m->count = l.count; m->capacity = l.capacity;
+    free(m->entries); free(m->bin);
+    m->entries = l.entries; m->count = l.count; m->capacity = l.capacity; m->bin = l.bin; m->bin_count = l.bin_count;
     m->active = m->anchor = 0; m->find_length = 0; m->find[0] = 0;
+    /* Key 4 changes meaning across the bin boundary; do not carry it over. */
+    if (m->sort > 3 && fm_is_recycle(m->path) != fm_is_recycle(path)) m->sort = 0;
     if (path != m->path) snprintf(m->path, sizeof(m->path), "%s", path);
     fm_sort(m, m->sort, m->descending);
     return 0;
@@ -406,6 +452,7 @@ int fm_navigate(struct fm_model *m, const char *path)
     int r = fm_posix_path(canonical, path);
     if (r) return r;
     if (!canonical[0] || fm_same_path(canonical, "/mnt")) canonical[0] = 0;
+    else if (fm_is_recycle(canonical)) strcpy(canonical, FM_RECYCLE);
     else r = fm_canonical(&m->fs, canonical, canonical);
     if (r) return r;
     if (fm_same_path(canonical, "/mnt")) canonical[0] = 0;
@@ -431,14 +478,14 @@ int fm_navigate(struct fm_model *m, const char *path)
 int fm_refresh(struct fm_model *m)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, m->path, &l);
+    int r = browser_listing(&m->fs, m->path, m->fixed, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
     char active[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);
     for (unsigned i = 0; i < l.count; i++) for (unsigned j = 0; j < m->count; j++)
         if (!strcmp(l.entries[i].name, m->entries[j].name)) l.entries[i].selected = m->entries[j].selected;
-    free(m->entries);
-    m->entries = l.entries; m->count = l.count; m->capacity = l.capacity; m->active = m->anchor = 0;
+    free(m->entries); free(m->bin);
+    m->entries = l.entries; m->count = l.count; m->capacity = l.capacity; m->bin = l.bin; m->bin_count = l.bin_count; m->active = m->anchor = 0;
     for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->entries[i].name)) m->active = m->anchor = i;
     fm_sort(m, m->sort, m->descending);
     return 0;
@@ -466,7 +513,7 @@ int fm_history(struct fm_model *m, int delta)
 int fm_up(struct fm_model *m)
 {
     if (!m->path[0]) return 0;
-    if (fm_drive_root(m->path)) return fm_navigate(m, FM_COMPUTER);
+    if (fm_drive_root(m->path) || fm_is_recycle(m->path)) return fm_navigate(m, FM_COMPUTER);
     char path[FM_PATH];
     fm_parent(path, m->path);
     return fm_navigate(m, path);
@@ -532,7 +579,7 @@ int fm_find(struct fm_model *m, unsigned ch, uint64_t now)
 
 int fm_clipboard(struct fm_model *m, int cut)
 {
-    if (!m->path[0]) return -EPERM;
+    if (!m->path[0] || fm_is_recycle(m->path)) return -EPERM;
     unsigned count = fm_selected(m, NULL);
     if (!count) return -ENOENT;
     char **paths = calloc(count, sizeof(*paths));
@@ -551,7 +598,7 @@ int fm_clipboard(struct fm_model *m, int cut)
 
 int fm_unique(struct fm_model *m, const char *base, const char *ext, char *out)
 {
-    if (!m->path[0]) return -EPERM;
+    if (!m->path[0] || fm_is_recycle(m->path)) return -EPERM;
     for (unsigned n = 1; n < 1000; n++) {
         char name[FM_NAME], path[FM_PATH]; struct fm_meta meta;
         if (n == 1) snprintf(name, sizeof(name), "%s%s", base, ext);
@@ -567,7 +614,7 @@ int fm_unique(struct fm_model *m, const char *base, const char *ext, char *out)
 
 int fm_create(struct fm_model *m, const char *name, int directory)
 {
-    if (!m->path[0]) return -EPERM;
+    if (!m->path[0] || fm_is_recycle(m->path)) return -EPERM;
     char path[FM_PATH];
     int r = fm_valid_name(name);
     if (!r) r = fm_join(path, m->path, name);
@@ -587,7 +634,7 @@ int fm_create(struct fm_model *m, const char *name, int directory)
 
 int fm_rename(struct fm_model *m, unsigned index, const char *name)
 {
-    if (!m->path[0]) return -EPERM;
+    if (!m->path[0] || fm_is_recycle(m->path)) return -EPERM;
     if (index >= m->count) return -ENOENT;
     char source[FM_PATH], target[FM_PATH];
     int r = fm_valid_name(name);
@@ -639,7 +686,10 @@ static int root_gone(struct fm_job *j, const char *path)
 }
 static void classify(struct fm_job *j, int r)
 {
-    if (r != -EIO && r != -ENOENT && r != -ENODEV && r != -ENXIO && r != -ESTALE
+    if (r != -EIO && r != -ENOENT && r != -ENODEV && r != -ENXIO
+#ifdef ESTALE
+        && r != -ESTALE
+#endif
 #ifdef ENOMEDIUM
         && r != -ENOMEDIUM
 #endif
@@ -670,7 +720,11 @@ static void pop(struct fm_job *j)
         snprintf(j->created[j->created_count++], FM_NAME, "%s", fm_basename(f->target));
     free_frame(&j->frames[--j->depth]);
     j->items_done++;
-    if (!j->depth) j->completed++;
+    if (!j->depth) {
+        j->completed++;
+        /* G2: an item that finished without anything skipped inside it. */
+        if (j->bin && j->bin->done && j->next && j->skipped == j->bin->start_skips) j->bin->done[j->next - 1] = 1;
+    }
 }
 static int push(struct fm_job *j, const char *source, const char *target)
 {
@@ -777,7 +831,11 @@ static int trash_target(struct fm_job *j, const char *source, char *target)
 static int count_step(struct fm_job *j)
 {
     if (!j->depth) {
-        if (j->next == j->count) { j->next = 0; j->counting = 0; return 1; }
+        if (j->next == j->count) {
+            j->next = 0;
+            if (j->bin) { int r = rb_job_begin(j); if (r) return fail(j, r); }   /* G2: sizes known, reserve names */
+            j->counting = 0; return 1;
+        }
         int r = push(j, j->sources[j->next++], NULL);
         if (r) return fail(j, r);
     }
@@ -817,7 +875,15 @@ static int interrupted(void)
     return 1;
 }
 
+static int job_step(struct fm_job *j);
 int fm_job_step(struct fm_job *j)
+{
+    int r = job_step(j);
+    /* G2: the Recycle Bin's records follow the items that really moved. */
+    if (j->bin && j->state != FM_RUNNING && j->state != FM_REPLACE && j->state != FM_IDLE) rb_job_finish(j);
+    return r;
+}
+static int job_step(struct fm_job *j)
 {
     if (j->state != FM_RUNNING) return 0;
     if (j->cancel) {
@@ -831,13 +897,21 @@ int fm_job_step(struct fm_job *j)
         if (j->next == j->count) { j->state = FM_DONE; return 0; }
         const char *source = j->sources[j->next++];
         char target[FM_PATH] = ""; int r = 0;
+        if (j->bin) {
+            j->bin->start_skips = j->skipped;
+            if (j->bin->refused && j->bin->refused[j->next - 1]) {   /* not for the bin, not deleted either */
+                j->skipped++; j->completed++; j->bytes += j->totals[j->next - 1].bytes; j->items_done += j->totals[j->next - 1].items;
+                return 1;
+            }
+        }
         if ((j->kind == FM_COPY || j->kind == FM_MOVE) && !j->destination_known) {
             struct fm_meta where;
             j->destination_known = j->fs.stat_path(j->fs.ctx, j->destination, &where) ? -1 : 1;
             if (j->destination_known > 0) j->destination_dev = where.dev;
         }
         if (j->kind == FM_COPY || j->kind == FM_MOVE) {
-            r = j->trash == 2 ? trash_target(j, source, target) : fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
+            if (j->bin && j->bin->target && j->bin->target[j->next - 1]) { snprintf(target, sizeof(target), "%s", j->bin->target[j->next - 1]); r = 0; }
+            else r = j->trash == 2 ? trash_target(j, source, target) : fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
             if (!r && fm_same_path(target, source)) {
                 if (j->kind == FM_MOVE) { j->completed++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items; return 1; }
                 r = copy_name(j, source, target);
@@ -852,7 +926,20 @@ int fm_job_step(struct fm_job *j)
         r = j->fs.stat_path(j->fs.ctx, f->source, &f->meta);
         if (r) return fail(j, r);
         if (f->meta.type == FM_OTHER) return fail(j, -ENOTSUP);
+        if (j->kind == FM_DELETE && j->bin && j->depth == 1 && j->bin->target && j->bin->target[j->next - 1]) {
+            /* G2: into the Recycle Bin: a rename inside the volume, never a copy. */
+            r = j->fs.rename(j->fs.ctx, f->source, j->bin->target[j->next - 1]);
+            if (r) return fail(j, r);
+            if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; }
+            else { j->folders++; j->bytes += j->totals[j->next - 1].bytes; j->items_done += j->totals[j->next - 1].items - 1; }
+            j->bin->recycled++;
+            pop(j); return 1;
+        }
         if (j->kind == FM_PROPERTIES) {
+            if (f->meta.type == FM_FILE) {
+                j->allocated += f->meta.allocated;
+                if (!f->meta.allocated_known) j->allocated_unknown = 1;
+            }
             if (j->depth == 1 && j->next == 1) j->property_meta = f->meta;
             if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; pop(j); return 1; }
             if (j->depth > 1) j->folders++;
@@ -983,5 +1070,8 @@ void fm_job_destroy(struct fm_job *j)
     free(j->sources);
     free(j->totals);
     free(j->buffer);
+    rb_job_free(j);
     memset(j, 0, sizeof(*j)); j->input = j->output = -1;
 }
+
+#include "recycle.inc"

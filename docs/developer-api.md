@@ -822,6 +822,13 @@ enum ciuki_syscall {
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
     CIUKI_SYS_GETENTROPY = 91,
+```
+
+G1 TIME=97 is preserved; G6 follows the highest allocated syscall.
+
+```c
+CIUKI_SYS_TIME = 97,
+    CIUKI_SYS_FILE_INFO = 98,
 };
 ```
 
@@ -1167,6 +1174,51 @@ struct ciuki_setup_net {
 };
 ```
 
+G1: system time zone and clock, syscall 97 (CIUKI_SYS_TIME): EBX=record,
+ECX=exact size; 0 or -errno. GET is open to every process and returns the
+live state. SET_ZONE, SET_LOCAL, SET_UTC and ACKNOWLEDGE need the time
+authority (desktop and Control Panel, delegated like the network one):
+EPERM otherwise. The kernel keeps UTC; the RTC holds local time when
+RTC_LOCAL (the Windows convention) and is rewritten at every change of
+zone, clock or daylight-saving period. offset_minutes are east of UTC.
+rule is a POSIX TZ string (ciuki/tzrule.h); zone an IANA identifier.
+
+```c
+#define CIUKI_TIME_VERSION 1u
+#define CIUKI_TIME_GET 0u
+#define CIUKI_TIME_SET_ZONE 1u
+#define CIUKI_TIME_SET_LOCAL 2u
+#define CIUKI_TIME_SET_UTC 3u
+#define CIUKI_TIME_ACKNOWLEDGE 4u
+#define CIUKI_TIME_AUTO_DST 1u
+#define CIUKI_TIME_RTC_LOCAL 2u
+#define CIUKI_TIME_DAYLIGHT 4u
+#define CIUKI_TIME_ADJUSTED 8u
+#define CIUKI_TIME_AUTHORITY 16u
+#define CIUKI_TIME_ZONE_MAX 48u
+#define CIUKI_TIME_RULE_MAX 64u
+#define CIUKI_TIME_NAME_MAX 16u
+struct ciuki_time_zone {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t flags;
+    int64_t utc_seconds;
+    int64_t local_seconds;
+    uint32_t milliseconds;
+    int32_t offset_minutes;
+    int32_t standard_minutes;
+    int32_t daylight_minutes;
+    int32_t rtc_bias_minutes;
+    uint32_t generation;
+    int64_t next_change;
+    char zone[48];
+    char rule[64];
+    char standard_name[16];
+    char daylight_name[16];
+};
+```
+
 /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
 removable_mask includes ejectable USB and optical media; type[] distinguishes them.
 A removal names a generation and ejects the physical USB device or CD.
@@ -1233,12 +1285,18 @@ stable filesystem identity; empty if unavailable
 char label[33];
     uint8_t reserved[3];
 };
+```
 
+fx-21b: usb_unrecognized (formerly reserved; zero on input) counts the USB
+devices quarantined at enumeration since boot. The desktop shows "USB
+Device Not Recognized" once for every increase.
+
+```c
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;
     uint32_t removable_mask;
-    uint32_t reserved;
+    uint32_t usb_unrecognized;
     uint32_t generation[26];
     uint32_t type[26];
 };
@@ -1247,6 +1305,60 @@ struct ciuki_media_remove {
     uint32_t size;
     uint32_t drive;
     uint32_t generation;
+};
+```
+
+fx-17b: floppy drives A:/B: report type CIUKI_MEDIA_FLOPPY whenever the
+controller found the drive; removable_mask has the bit only while a
+diskette is mounted. MEDIA_FLOPPY_LOAD (request: ciuki_media_remove with
+generation 0) reads the diskette in the drive (Retry); ENXIO: no disk.
+
+```c
+#define CIUKI_MEDIA_FLOPPY 4u
+#define MEDIA_FLOPPY_LOAD 0x4d05u
+```
+
+fx-17b: volume space for Properties. free_clusters is exact unless
+CIUKI_MEDIA_SPACE_COUNTING: the free count is still being computed in the
+background (FAT32 FSInfo unknown) and free_clusters is its upper bound.
+
+```c
+#define MEDIA_GET_SPACE 0x4d06u
+#define CIUKI_MEDIA_SPACE_COUNTING 1u
+struct ciuki_media_space {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    uint32_t cluster_bytes;
+    uint32_t total_clusters;
+    uint32_t free_clusters;
+    uint32_t reserved;
+};
+```
+
+G6: volume label of a mounted FAT drive (C: included). GET fills label
+(no padding, "" when none) and flags; SET writes the root-directory
+volume-ID entry and the boot sector BS_VolLab (FAT spec 1.03, pp. 9-12, 25;
+Win32 SetVolumeLabel). Label: at most 11 bytes of printable ASCII, stored
+upper case; * ? . , ; : / \ | + = < > [ ] " refused with EINVAL; "" removes
+the label. EROFS on a read-only, write-protected or optical medium;
+ENOENT without a mounted FAT volume. reserved must be zero.
+
+Appended after MEDIA_CD_POSITION=0x4d17; existing values stay fixed.
+
+```c
+#define MEDIA_GET_LABEL 0x4d18u
+#define MEDIA_SET_LABEL 0x4d19u
+#define CIUKI_MEDIA_LABEL_READ_ONLY 1u
+#define CIUKI_MEDIA_LABEL_MAX 11u
+struct ciuki_media_label {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    char label[12];
+    uint32_t reserved;
 };
 ```
 
@@ -2378,10 +2490,16 @@ uint8_t d_type;
 20
 
 ```c
-uint8_t reserved[3];
+uint8_t d_attributes;
 ```
 
-21
+21: G6 CIUKI_ATTR_* of the entry, 0 when none
+
+```c
+uint8_t reserved[2];
+```
+
+22
 
 ```c
 char d_name[768];
@@ -2400,6 +2518,130 @@ int64_t d_mtime;
 ```
 
 800: Unix seconds, zero when unavailable
+
+```c
+};
+```
+
+G6: FAT attributes, times and MS-DOS name through the native file API,
+call 98 file_info(B=path, C=record, D=sizeof(record)); 0 or -errno.
+GET fills every field the object has and reports them in mask; SET
+changes only the mask fields (ATTRIBUTES, CREATED, ACCESSED, MODIFIED) in
+one directory-entry publication. Times are Unix seconds through the same
+FAT conversion as stat; FAT keeps created to 10 ms, modified to 2 s and
+accessed to the day (Microsoft "File Times"). attributes are the FAT
+byte (Microsoft FAT 1.03 p. 23): SET accepts READONLY|HIDDEN|SYSTEM|
+ARCHIVE plus the object's own DIRECTORY bit. Errors: EINVAL (version,
+size, operation, mask, attribute bits, a time outside 1980-2107, a
+volume root), ENOENT/ENOTDIR/ENAMETOOLONG (path), EFAULT, EROFS (CD,
+NTFS, write-protected or read-only FAT volume), EOPNOTSUPP (device and
+synthetic nodes), EIO (medium gone). Win32 GetFileAttributes/SetFile-
+Attributes/GetFileTime/SetFileTime and DOS INT 21h AX=4300h/4301h and
+AX=5700h/5701h read and write the same directory entry.
+
+```c
+#define CIUKI_FILE_INFO_VERSION 1u
+#define CIUKI_FILE_INFO_GET 0u
+#define CIUKI_FILE_INFO_SET 1u
+#define CIUKI_ATTR_READONLY 0x01u
+#define CIUKI_ATTR_HIDDEN 0x02u
+#define CIUKI_ATTR_SYSTEM 0x04u
+#define CIUKI_ATTR_DIRECTORY 0x10u
+#define CIUKI_ATTR_ARCHIVE 0x20u
+#define CIUKI_ATTR_SETTABLE 0x27u
+#define CIUKI_FILE_INFO_ATTRIBUTES 1u
+#define CIUKI_FILE_INFO_CREATED 2u
+#define CIUKI_FILE_INFO_ACCESSED 4u
+#define CIUKI_FILE_INFO_MODIFIED 8u
+#define CIUKI_FILE_INFO_SHORT_NAME 16u
+#define CIUKI_FILE_INFO_ALLOCATED 32u
+#define CIUKI_FILE_INFO_SETTABLE 15u
+#define CIUKI_FILE_INFO_READ_ONLY_MEDIUM 1u
+#define CIUKI_FILE_INFO_VOLUME_ROOT 2u
+#define CIUKI_SHORT_NAME_MAX 16u
+struct ciuki_file_info {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t operation;
+```
+
+8
+
+```c
+uint32_t mask;
+```
+
+12
+
+```c
+uint32_t attributes;
+```
+
+16
+
+```c
+uint32_t flags;
+```
+
+20: GET output
+
+```c
+uint64_t file_size;
+```
+
+24
+
+```c
+uint64_t allocated;
+```
+
+32: bytes in whole clusters ("size on disk")
+
+```c
+int64_t created;
+```
+
+40
+
+```c
+int64_t accessed;
+```
+
+48
+
+```c
+int64_t modified;
+```
+
+56
+
+```c
+uint32_t created_ms;
+```
+
+64: 0-999 past created
+
+```c
+uint32_t reserved;
+```
+
+68
+
+```c
+char short_name[16];
+```
+
+72: 8.3 alias, NUL terminated
 
 ```c
 };
@@ -4869,7 +5111,9 @@ Legacy 20-byte events remain readable; v1/v2.1 are unchanged.
 KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
 CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
 POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
-CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+CLOSE_ACK: disposition (0 declined, 1 deferred), per window. A deferred
+close has no deadline while the window answers PINGs; an unresponsive one
+gets the desktop's "This program is not responding" dialog (G3).
 WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
 owner id,owner-generation. Unselected fields are zero; no descriptors.
 CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
@@ -5022,8 +5266,11 @@ desktop to DOS client, no payload
 
 v2 client to desktop: uint32 shape, own client area only
 
-v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
-1 closing later). One later reply within 2 s grants 30 s total.
+v2 client to desktop, 8 bytes, no fds: uint32 disposition
+(DESK_CLOSE_DECLINED, DESK_CLOSE_LATER, DESK_CLOSE_DOS_ACTIVE). G3:
+no close deadline while the program answers PINGs (Windows 9x
+WM_CLOSE); a program unresponsive for DESK_HUNG_NS gets the desktop's
+"This program is not responding" dialog with End Task and Cancel.
 
 ```c
 DESK_CLOSE_ACK,
@@ -5059,8 +5306,75 @@ DROP_FILES (desktop to an accepting client): serial, client x, y;
 
 ```c
 DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
-    DESK_ACCEPT_FILES, DESK_DROP_FILES
+    DESK_ACCEPT_FILES, DESK_DROP_FILES,
+```
+
+G3 end of session (WM_QUERYENDSESSION / WM_ENDSESSION), version 2,
+no fds, all u32 after the 4-byte header:
+QUERY_END_SESSION (desktop to client, 12 bytes): serial (nonzero),
+  flags (DESK_ENDSESSION_*, the WM_QUERYENDSESSION lParam). The client
+  answers once with SESSION_ANSWER; it may show its own save prompt
+  first (answer ASKING, then AGREE or VETO when the user decides).
+  A registered client that answers a PING sent after the query
+  without answering it agrees, as DefWindowProc returns TRUE.
+END_SESSION (desktop to client, 16 bytes): serial, ending (1: every
+  program agreed, exit now without prompting; 0: the session goes
+  on), flags. Sent only to clients that answered the query.
+SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
+  answer (DESK_SESSION_*). Serial 0 with AGREE, sent once after
+  CREATE_WINDOW, registers the window for queries; the desktop never
+  sends QUERY_END_SESSION or END_SESSION to an unregistered client
+  (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end).
+
+```c
+DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
 };
+#define DESK_ENDSESSION_CLOSEAPP 0x00000001u
+```
+
+lParam bits, as WinUser.h
+
+```c
+#define DESK_ENDSESSION_CRITICAL 0x40000000u
+#define DESK_ENDSESSION_LOGOFF 0x80000000u
+#define DESK_ENDSESSION_FLAGS 0xc0000001u
+#define DESK_SESSION_VETO 0u
+```
+
+WM_QUERYENDSESSION returned FALSE (the user cancelled)
+
+```c
+#define DESK_SESSION_AGREE 1u
+```
+
+TRUE: data saved or discarded by the user
+
+```c
+#define DESK_SESSION_ASKING 2u
+```
+
+the program shows its own prompt; the session waits
+
+```c
+#define DESK_SESSION_DOS_ACTIVE 3u
+```
+
+a DOS window whose program is running: "cannot shut down automatically"
+
+```c
+#define DESK_SESSION_ANSWERS 4u
+```
+
+CLOSE_ACK dispositions (v2): 0 declined (the user cancelled the program's
+own prompt), 1 the program asks the user and closes later (no deadline
+while it keeps answering PINGs), 2 a DOS window whose program is running
+(the desktop shows the Windows 98 "cannot shut down this program
+automatically" warning). V3 accepts 0 and 1 only.
+
+```c
+#define DESK_CLOSE_DECLINED 0u
+#define DESK_CLOSE_LATER 1u
+#define DESK_CLOSE_DOS_ACTIVE 2u
 #define DESK_DRAG_FILE "/system/settings/files.drag"
 #define DESK_DRAG_ITEMS 4096u
 #define DESK_SETTINGS_RELOAD 1u
@@ -5306,6 +5620,37 @@ errors; the deadline spans the entire call, including chunks/draws.
 uint32_t arc4random(void);
 void arc4random_buf(void *, size_t);
 uint32_t arc4random_uniform(uint32_t);
+#endif
+```
+
+## `ciuki/fileinfo.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/fileinfo.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_FILEINFO_H
+#define CIUKI_SDK_FILEINFO_H
+#include <ciuki/abi.h>
+```
+
+G6: FAT attributes, created/accessed/modified times, size on disk and the
+MS-DOS (8.3) name of a path; call 98, record in ciuki/abi.h. Both return
+0, or -1 with errno (EROFS on read-only media, EOPNOTSUPP for devices).
+ciuki_file_info_get initializes version, size and operation itself.
+ciuki_file_info_set changes only the fields named in mask
+(CIUKI_FILE_INFO_ATTRIBUTES/CREATED/ACCESSED/MODIFIED).
+
+```c
+int ciuki_file_info_get(const char *path, struct ciuki_file_info *out);
+int ciuki_file_info_set(const char *path, uint32_t mask, const struct ciuki_file_info *in);
+```
+
+Convenience: replace the four settable FAT attribute bits.
+
+```c
+int ciuki_set_attributes(const char *path, uint32_t attributes);
 #endif
 ```
 
@@ -5824,6 +6169,339 @@ int ciuki_display_fence(int,uint64_t,uint16_t,uint32_t,struct ciuki_batch_reply 
 int ciuki_batch_surface_info(int display,int surface,struct ciuki_batch_surface_info *);
 int ciuki_display_info(int,struct ciuki_framebuffer_info *);
 int ciuki_input_read(int,struct ciuki_input_event *,uint32_t);
+#endif
+```
+
+## `ciuki/timezone.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/timezone.h`.
+
+G1: the system time zone and clock (call 97, CIUKI_SYS_TIME; record and
+flags in ciuki/abi.h, docs/design/local-time.md).
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_USER_TIMEZONE_H
+#define CIUKI_USER_TIMEZONE_H
+#include <ciuki/abi.h>
+#include <stddef.h>
+```
+
+One operation (CIUKI_TIME_GET, _SET_ZONE, _SET_LOCAL, _SET_UTC,
+_ACKNOWLEDGE); version, size and operation are filled in. The record
+holds the state after the call. 0, or -1 with errno (EPERM without the
+time authority, EINVAL for a malformed rule or time, EBUSY, EIO).
+
+```c
+int ciuki_time_zone(struct ciuki_time_zone *zone, uint32_t operation);
+```
+
+"TZ=<rule>" of the system zone for a program about to be spawned (the
+standard-time part when automatic daylight saving is off); "TZ=UTC0"
+when the service is unavailable. Returns out.
+
+```c
+char *ciuki_tz_env(char *out, size_t capacity);
+#endif
+```
+
+## `ciuki/tzdata.h`
+
+Source: `src/kernel/include/ciuki/tzdata.h`.
+
+G1: the bundled time-zone list of Setup, Date/Time Properties and
+kernel32 GetTimeZoneInformation. The tz column is the POSIX footer line of
+the IANA tz database zone named in id (release 2026e,
+https://www.iana.org/time-zones; each footer is the last line of the
+compiled TZif file, RFC 9636 section 3.3), which states the rule in force
+today. Labels follow the Windows 98 "(GMT+hh:mm) cities" style; the
+standard/daylight names are the Windows time-zone key names returned by
+GetTimeZoneInformation. Ordered by standard offset, as the Windows list.
+Header-only data: every consumer gets its own read-only copy.
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_TZDATA_H
+#define CIUKI_TZDATA_H
+#include <stddef.h>
+#include <stdint.h>
+struct ciuki_tz_zone {
+    int16_t minutes;
+```
+
+standard offset east of UTC
+
+```c
+const char *id, *label, *tz, *standard, *daylight;
+};
+#define CIUKI_TZ_DEFAULT_ITALY "Europe/Rome"
+#define CIUKI_TZ_UTC "Etc/UTC"
+static const struct ciuki_tz_zone ciuki_tz_zones[] __attribute__((unused)) = {
+    {-720, "Etc/GMT+12", "(GMT-12:00) International Date Line West", "<-12>12", "Dateline Standard Time", ""},
+    {-660, "Pacific/Pago_Pago", "(GMT-11:00) Midway Island, Samoa", "SST11", "UTC-11", ""},
+    {-600, "Pacific/Honolulu", "(GMT-10:00) Hawaii", "HST10", "Hawaiian Standard Time", ""},
+    {-570, "Pacific/Marquesas", "(GMT-09:30) Marquesas Islands", "<-0930>9:30", "Marquesas Standard Time", ""},
+    {-540, "America/Anchorage", "(GMT-09:00) Alaska", "AKST9AKDT,M3.2.0,M11.1.0", "Alaskan Standard Time", "Alaskan Daylight Time"},
+    {-480, "America/Los_Angeles", "(GMT-08:00) Pacific Time (US & Canada)", "PST8PDT,M3.2.0,M11.1.0", "Pacific Standard Time", "Pacific Daylight Time"},
+    {-420, "America/Phoenix", "(GMT-07:00) Arizona", "MST7", "US Mountain Standard Time", ""},
+    {-420, "America/Denver", "(GMT-07:00) Mountain Time (US & Canada)", "MST7MDT,M3.2.0,M11.1.0", "Mountain Standard Time", "Mountain Daylight Time"},
+    {-360, "America/Chicago", "(GMT-06:00) Central Time (US & Canada)", "CST6CDT,M3.2.0,M11.1.0", "Central Standard Time", "Central Daylight Time"},
+    {-360, "America/Mexico_City", "(GMT-06:00) Mexico City", "CST6", "Central Standard Time (Mexico)", ""},
+    {-360, "America/Regina", "(GMT-06:00) Saskatchewan", "CST6", "Canada Central Standard Time", ""},
+    {-300, "America/New_York", "(GMT-05:00) Eastern Time (US & Canada)", "EST5EDT,M3.2.0,M11.1.0", "Eastern Standard Time", "Eastern Daylight Time"},
+    {-300, "America/Bogota", "(GMT-05:00) Bogota, Lima, Quito", "<-05>5", "SA Pacific Standard Time", ""},
+    {-240, "America/Halifax", "(GMT-04:00) Atlantic Time (Canada)", "AST4ADT,M3.2.0,M11.1.0", "Atlantic Standard Time", "Atlantic Daylight Time"},
+    {-240, "America/Caracas", "(GMT-04:00) Caracas, La Paz", "<-04>4", "SA Western Standard Time", ""},
+    {-210, "America/St_Johns", "(GMT-03:30) Newfoundland", "NST3:30NDT,M3.2.0,M11.1.0", "Newfoundland Standard Time", "Newfoundland Daylight Time"},
+    {-180, "America/Sao_Paulo", "(GMT-03:00) Brasilia", "<-03>3", "E. South America Standard Time", ""},
+    {-180, "America/Argentina/Buenos_Aires", "(GMT-03:00) Buenos Aires", "<-03>3", "Argentina Standard Time", ""},
+    {-120, "Atlantic/South_Georgia", "(GMT-02:00) Mid-Atlantic", "<-02>2", "UTC-02", ""},
+    {-60, "Atlantic/Azores", "(GMT-01:00) Azores", "<-01>1<+00>,M3.5.0/0,M10.5.0/1", "Azores Standard Time", "Azores Daylight Time"},
+    {-60, "Atlantic/Cape_Verde", "(GMT-01:00) Cape Verde Islands", "<-01>1", "Cape Verde Standard Time", ""},
+    {0, "Etc/UTC", "(GMT) Coordinated Universal Time", "UTC0", "Coordinated Universal Time", ""},
+    {0, "Europe/London", "(GMT) Dublin, Edinburgh, Lisbon, London", "GMT0BST,M3.5.0/1,M10.5.0", "GMT Standard Time", "GMT Daylight Time"},
+    {60, "Europe/Rome", "(GMT+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna", "CET-1CEST,M3.5.0,M10.5.0/3", "W. Europe Standard Time", "W. Europe Daylight Time"},
+    {60, "Europe/Paris", "(GMT+01:00) Brussels, Copenhagen, Madrid, Paris", "CET-1CEST,M3.5.0,M10.5.0/3", "Romance Standard Time", "Romance Daylight Time"},
+    {60, "Africa/Lagos", "(GMT+01:00) West Central Africa", "WAT-1", "W. Central Africa Standard Time", ""},
+    {120, "Europe/Athens", "(GMT+02:00) Athens, Bucharest", "EET-2EEST,M3.5.0/3,M10.5.0/4", "GTB Standard Time", "GTB Daylight Time"},
+    {120, "Europe/Helsinki", "(GMT+02:00) Helsinki, Kyiv, Riga, Sofia, Tallinn, Vilnius", "EET-2EEST,M3.5.0/3,M10.5.0/4", "FLE Standard Time", "FLE Daylight Time"},
+    {120, "Africa/Cairo", "(GMT+02:00) Cairo", "EET-2EEST,M4.5.5/0,M10.5.4/24", "Egypt Standard Time", "Egypt Daylight Time"},
+    {120, "Asia/Jerusalem", "(GMT+02:00) Jerusalem", "IST-2IDT,M3.4.4/26,M10.5.0", "Israel Standard Time", "Israel Daylight Time"},
+    {120, "Africa/Johannesburg", "(GMT+02:00) Harare, Pretoria", "SAST-2", "South Africa Standard Time", ""},
+    {180, "Europe/Moscow", "(GMT+03:00) Moscow, St. Petersburg", "MSK-3", "Russian Standard Time", ""},
+    {180, "Europe/Istanbul", "(GMT+03:00) Istanbul", "<+03>-3", "Turkey Standard Time", ""},
+    {180, "Africa/Nairobi", "(GMT+03:00) Nairobi", "EAT-3", "E. Africa Standard Time", ""},
+    {210, "Asia/Tehran", "(GMT+03:30) Tehran", "<+0330>-3:30", "Iran Standard Time", ""},
+    {240, "Asia/Dubai", "(GMT+04:00) Abu Dhabi, Muscat", "<+04>-4", "Arabian Standard Time", ""},
+    {240, "Asia/Baku", "(GMT+04:00) Baku", "<+04>-4", "Azerbaijan Standard Time", ""},
+    {270, "Asia/Kabul", "(GMT+04:30) Kabul", "<+0430>-4:30", "Afghanistan Standard Time", ""},
+    {300, "Asia/Karachi", "(GMT+05:00) Islamabad, Karachi", "PKT-5", "Pakistan Standard Time", ""},
+    {300, "Asia/Tashkent", "(GMT+05:00) Tashkent", "<+05>-5", "West Asia Standard Time", ""},
+    {330, "Asia/Kolkata", "(GMT+05:30) Chennai, Kolkata, Mumbai, New Delhi", "IST-5:30", "India Standard Time", ""},
+    {345, "Asia/Kathmandu", "(GMT+05:45) Kathmandu", "<+0545>-5:45", "Nepal Standard Time", ""},
+    {360, "Asia/Dhaka", "(GMT+06:00) Dhaka", "<+06>-6", "Bangladesh Standard Time", ""},
+    {390, "Asia/Yangon", "(GMT+06:30) Yangon (Rangoon)", "<+0630>-6:30", "Myanmar Standard Time", ""},
+    {420, "Asia/Bangkok", "(GMT+07:00) Bangkok, Hanoi, Jakarta", "<+07>-7", "SE Asia Standard Time", ""},
+    {480, "Asia/Shanghai", "(GMT+08:00) Beijing, Chongqing, Hong Kong, Urumqi", "CST-8", "China Standard Time", ""},
+    {480, "Asia/Singapore", "(GMT+08:00) Kuala Lumpur, Singapore", "<+08>-8", "Singapore Standard Time", ""},
+    {480, "Australia/Perth", "(GMT+08:00) Perth", "AWST-8", "W. Australia Standard Time", ""},
+    {540, "Asia/Tokyo", "(GMT+09:00) Osaka, Sapporo, Tokyo", "JST-9", "Tokyo Standard Time", ""},
+    {540, "Asia/Seoul", "(GMT+09:00) Seoul", "KST-9", "Korea Standard Time", ""},
+    {570, "Australia/Adelaide", "(GMT+09:30) Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3", "Cen. Australia Standard Time", "Cen. Australia Daylight Time"},
+    {570, "Australia/Darwin", "(GMT+09:30) Darwin", "ACST-9:30", "AUS Central Standard Time", ""},
+    {600, "Australia/Brisbane", "(GMT+10:00) Brisbane", "AEST-10", "E. Australia Standard Time", ""},
+    {600, "Australia/Sydney", "(GMT+10:00) Canberra, Melbourne, Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3", "AUS Eastern Standard Time", "AUS Eastern Daylight Time"},
+    {600, "Pacific/Guam", "(GMT+10:00) Guam, Port Moresby", "ChST-10", "West Pacific Standard Time", ""},
+    {660, "Pacific/Noumea", "(GMT+11:00) Solomon Is., New Caledonia", "<+11>-11", "Central Pacific Standard Time", ""},
+    {720, "Pacific/Auckland", "(GMT+12:00) Auckland, Wellington", "NZST-12NZDT,M9.5.0,M4.1.0/3", "New Zealand Standard Time", "New Zealand Daylight Time"},
+    {720, "Pacific/Fiji", "(GMT+12:00) Fiji", "<+12>-12", "Fiji Standard Time", ""},
+    {780, "Pacific/Tongatapu", "(GMT+13:00) Nuku'alofa", "<+13>-13", "Tonga Standard Time", ""},
+    {840, "Pacific/Kiritimati", "(GMT+14:00) Kiritimati Island", "<+14>-14", "Line Islands Standard Time", ""},
+};
+#define CIUKI_TZ_ZONE_COUNT (sizeof(ciuki_tz_zones) / sizeof(ciuki_tz_zones[0]))
+static inline int ciuki_tz_same(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+```
+
+Index of an IANA id, -1 when not bundled.
+
+```c
+static inline int ciuki_tz_find(const char *id)
+{
+    for (unsigned i = 0; id && i < CIUKI_TZ_ZONE_COUNT; i++) if (ciuki_tz_same(ciuki_tz_zones[i].id, id)) return (int)i;
+    return -1;
+}
+```
+
+First zone with this standard offset (the SETUP.INF "+hh:mm" form).
+
+```c
+static inline int ciuki_tz_find_minutes(int minutes)
+{
+    for (unsigned i = 0; i < CIUKI_TZ_ZONE_COUNT; i++) if (ciuki_tz_zones[i].minutes == minutes) return (int)i;
+    return -1;
+}
+#endif
+```
+
+## `ciuki/tzrule.h`
+
+Source: `src/kernel/include/ciuki/tzrule.h`.
+
+G1: POSIX TZ rules, civil calendar and the clock.cfg codec. Pure code with
+no library calls, shared by the kernel (src/kernel/lib/tzrule.c), libciuki
+(localtime/mktime), kernel32 and the host tests. All offsets are seconds
+EAST of UTC (the negation of the POSIX TZ offset).
+Sources: POSIX.1-2024 XBD 8.3 "TZ" (std offset dst [offset],start[/time],end[/time];
+Mm.w.d, Jn and n dates; time default 02:00:00; RFC 9636 3.3.1 extends the
+rule hours to -167..167) and the IANA tz database
+(https://www.iana.org/time-zones, release 2026e: the POSIX footer lines of
+the zones listed in ciuki/tzdata.h).
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_TZRULE_H
+#define CIUKI_TZRULE_H
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#define TZR_NAME 16u
+```
+
+abbreviation incl. NUL ("CEST", "+0530")
+
+```c
+#define TZR_TEXT 64u
+```
+
+longest accepted TZ string incl. NUL
+
+```c
+#define TZR_ZONE 48u
+```
+
+IANA identifier incl. NUL
+
+```c
+enum { TZR_DATE_NONE, TZR_DATE_M, TZR_DATE_J, TZR_DATE_N };
+struct tzr_when {
+    uint8_t kind, month, week, wday;
+```
+
+M: month 1..12, week 1..5 (5 = last), wday 0 = Sunday
+
+```c
+uint16_t day;
+```
+
+J: 1..365 (no leap day); N: 0..365
+
+```c
+int32_t seconds;
+```
+
+local wall time of the change, -167h..167h
+
+```c
+};
+struct tzr {
+    char std[TZR_NAME], dst[TZR_NAME];
+    int32_t std_offset, dst_offset;
+```
+
+seconds east of UTC
+
+```c
+bool has_dst;
+    struct tzr_when start, end;
+```
+
+start: std->dst, in standard time; end: dst->std, in daylight time
+
+```c
+};
+```
+
+Civil (proleptic Gregorian) helpers; days are counted from 1970-01-01.
+
+```c
+int64_t tzr_days_from_civil(int64_t year, unsigned month, unsigned day);
+void tzr_civil_from_days(int64_t days, int64_t *year, unsigned *month, unsigned *day);
+unsigned tzr_weekday(int64_t days);
+```
+
+0 = Sunday
+
+```c
+bool tzr_leap(int64_t year);
+unsigned tzr_month_days(int64_t year, unsigned month);
+int64_t tzr_floor_div(int64_t a, int64_t b);
+```
+
+Parses a complete POSIX TZ string. False leaves *out unspecified.
+
+```c
+bool tzr_parse(const char *text, struct tzr *out);
+```
+
+The "UTC0" rule: the historical convention when no zone is configured.
+
+```c
+void tzr_utc(struct tzr *out);
+```
+
+Offset in force at a UTC instant; *dst (optional) tells which side.
+
+```c
+int32_t tzr_offset(const struct tzr *, int64_t utc, bool *dst);
+```
+
+Local wall time to UTC. isdst: 1 prefer daylight, 0 prefer standard,
+-1 automatic (an ambiguous hour resolves to its first occurrence, the
+daylight one; a skipped hour is read with the standard offset, so 02:30 on
+the spring day becomes 03:30 daylight). *dst (optional) is the side used.
+
+```c
+int64_t tzr_local_to_utc(const struct tzr *, int64_t local, int isdst, bool *dst);
+```
+
+First change strictly after utc, false when the zone has no daylight time.
+
+```c
+bool tzr_next_change(const struct tzr *, int64_t utc, int64_t *at);
+```
+
+UTC instants of the year's two changes (start = std->dst).
+
+```c
+void tzr_changes(const struct tzr *, int64_t year, int64_t *start, int64_t *end);
+```
+
+The standard-time part of a rule ("CET-1" of "CET-1CEST,..."), used when
+automatic daylight-saving adjustment is off. Returns the length, 0 on
+a malformed rule or a short buffer.
+
+```c
+size_t tzr_standard_only(const char *text, char *out, size_t cap);
+```
+
+system/settings/clock.cfg, LF lines key=value. Version 1 (f9-04b):
+rtc_local and a fixed offset_minutes. Version 2 (G1) adds zone (IANA id),
+tz (POSIX rule), auto_dst and rtc_bias_minutes, the offset of the local
+time the RTC currently holds (it changes when the RTC is moved for a
+daylight-saving change). offset_minutes stays: the standard offset.
+
+```c
+struct tzr_config {
+    uint32_t version;
+    bool rtc_local, auto_dst;
+    int32_t offset_minutes, rtc_bias_minutes;
+    char zone[TZR_ZONE], tz[TZR_TEXT];
+};
+void tzr_config_default(struct tzr_config *);
+```
+
+version 2, UTC0, RTC in UTC
+
+```c
+bool tzr_config_parse(const char *text, size_t length, struct tzr_config *out);
+size_t tzr_config_format(const struct tzr_config *, char *out, size_t cap);
+```
+
+The rule a configuration selects (tz, its standard part without auto_dst).
+
+```c
+bool tzr_config_rule(const struct tzr_config *, struct tzr *out);
+```
+
+"<+0130>-1:30" style fixed rule for a minute offset; returns the length.
+
+```c
+size_t tzr_fixed_text(int32_t minutes, char *out, size_t cap);
 #endif
 ```
 
@@ -6453,6 +7131,15 @@ the dialog while it is running.
 ```c
 int (*accept)(struct du_ui *, int button, void *);
     void *accept_ctx;
+```
+
+Property-sheet pages reuse the modal controls and their keyboard route.
+
+```c
+int sheet;
+    void (*changed)(struct du_ui *, const struct du_event *, void *);
+    void (*paint)(struct du_ui *, void *);
+    void *sheet_ctx;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
@@ -6621,6 +7308,17 @@ void du_input_box(struct du_ui *, int id, const char *title, const char *prompt,
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
+```
+
+OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
+Control slots 4..9 are caller-owned, boxes relative to the sheet body.
+Page labels and callbacks remain valid until the sheet closes.
+
+```c
+void du_property_sheet(struct du_ui *, int id, const char *title, int width, int height,
+                       const struct du_item *pages, unsigned count);
+struct du_widget *du_property_control(struct du_ui *, unsigned slot, enum du_kind, int id,
+                                     struct du_rect, const char *text);
 void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
@@ -6710,7 +7408,34 @@ f2-33: v2 messages the glue does not consume (WINDOW_INFO, TASK_RESULT).
 
 ```c
 void (*message)(struct du_window *, const struct desk_packet *, void *);
+```
+
+G3 end of session (WM_QUERYENDSESSION, protocol.h QUERY_END_SESSION).
+query_end_session, when set, answers the query: DU_SESSION_AGREE,
+DU_SESSION_VETO, or DU_SESSION_ASKING after showing a prompt (then
+du_window_session_reply). When NULL, the glue asks close_request: a
+nonzero result agrees; zero means the program shows its save prompt,
+and the program's later du_window_close() agrees (the window stays
+open until END_SESSION) while du_window_close_reply(w, 0) vetoes.
+END_SESSION(1) closes the window without asking again.
+
+```c
+int (*query_end_session)(struct du_window *, uint32_t flags, void *);
+    int session;
+```
+
+DU_SESSION_* state, internal
+
+```c
+uint32_t session_serial, session_flags;
+    int session_reply_pending;
+```
+
+answer+1, retried if the queue is full
+
+```c
 };
+enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
 int du_window_open_resizable(struct du_window *, struct du_ui *, int channel, int width, int height,
                              const char *title, int min_width, int min_height);
@@ -6728,11 +7453,19 @@ int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
 ```
 
-Reply to CLOSE_REQUEST: later=1 defers once to 30 s, later=0 declines it.
-A close_request callback returning zero automatically queues later=1.
+Reply to CLOSE_REQUEST: later=1 (the program asks the user; no deadline
+while it answers PINGs), later=0 declines it (the user cancelled). A
+close_request callback returning zero automatically queues later=1. While
+an end-of-session query waits for the user, later=0 vetoes the session.
 
 ```c
 void du_window_close_reply(struct du_window *, int later);
+```
+
+G3: the answer to a query that returned DU_SESSION_ASKING (1 agree, 0 veto).
+
+```c
+void du_window_session_reply(struct du_window *, int agree);
 ```
 
 fx-19 DragAcceptFiles: on=1 makes the window a WM_DROPFILES-style drop
@@ -7178,7 +7911,14 @@ layout id of the Control Panel page: "us", "it"
 int16_t tz_minutes;
 ```
 
-offset east of UTC
+standard offset east of UTC
+
+```c
+char tz_zone[48];
+```
+
+G1: bundled IANA zone (ciuki/tzdata.h) with its
+                                              daylight-saving rule; empty = fixed tz_minutes
 
 ```c
 enum setup_clock clock;

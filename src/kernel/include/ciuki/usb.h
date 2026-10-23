@@ -13,6 +13,12 @@
 #define USB_DMA_BYTES 24576u /* f1-104b: six pinned pages, 64-byte HID payloads */
 #define USB_PACKET_MAX 64u
 #define USB_TIMEOUT_MS 500u
+/* fx-21b: a control message to a device that is not yet configured (the
+ * enumeration requests up to SET_CONFIGURATION) is bounded as a whole by
+ * Linux's USB_CTRL_GET_TIMEOUT/USB_CTRL_SET_TIMEOUT, 5000 ms
+ * (include/linux/usb.h; hub.c initial_descriptor_timeout), instead of
+ * USB_TIMEOUT_MS per stage. Configured devices keep USB_TIMEOUT_MS. */
+#define USB_CTRL_TIMEOUT_MS 5000u
 #define USB_PERIODIC_WATCHDOG_MS 20u
 #define USB_HID_FALLBACK_MS 4u /* only unrouteable/revoked or proven lost IRQ */
 #define USB_IRQ_GRACE_MS 2u /* exceeds EHCI's configured 1 ms ITC */
@@ -193,6 +199,7 @@ struct usb_storage {
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
     unsigned command_errors; /* fx-17: CHECK CONDITION READ/WRITE failures kept online */
+    bool write_through; /* fx-17b: no SYNCHRONIZE CACHE; every WRITE(10) completes on the medium */
     bool binding, bind_reserved, bind_stage_active;
     uint32_t bind_read_requests, bind_read_sectors, bind_read_max;
     uint32_t bind_packets, bind_poll_frames, bind_retire_frames;
@@ -228,6 +235,7 @@ struct usb_device {
     bool tt_multi, tt_pending, tt_recovering;
     uint8_t tt_think; /* 8, 16, 24 or 32 full-speed bit times */
     uint16_t control_timeout_ms; /* f1-96b: nonzero only around a BOT class reset */
+    uint64_t control_deadline; /* fx-21b: end of an enumeration control message, 0 otherwise */
     struct usb_hid hid[USB_HID_MAX];
     struct usb_storage storage;
     struct usb_packet_trace packet_trace;
@@ -291,6 +299,8 @@ struct usb_host {
     uint64_t interrupts;
     struct kwait changed;
     bool scanned, schedule_dumped;
+    /* fx-21b: usb_power_quiesce() asks enumeration control waits to end. */
+    volatile bool quiescing;
     unsigned scan_count;
     uint64_t next_scan, scan_window;
     fs_lock transfer_lock; /* short DMA/state mutex; always free across sleeps */
@@ -305,6 +315,9 @@ static inline void usb_barrier(void) { __asm__ volatile("" ::: "memory"); }
 /* Bulk NAK never renews a deadline. Binding ACK progress may renew the bulk
  * wait, always capped by the aggregate bind limit. Published I/O retains its
  * whole-stage bound. Poll counts still bound a frozen software clock. */
+/* fx-21b: a power quiesce ends an enumeration message's wait at once. */
+static inline bool usb_control_cancelled(const struct usb_device *d)
+{ return d->control_deadline && d->host->quiescing; }
 static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool periodic,
                                          uint64_t now)
 {
@@ -313,6 +326,12 @@ static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool
      * this is only the fail-closed watchdog, including a frozen clock. */
     if (periodic) return USB_PERIODIC_WATCHDOG_MS;
     unsigned budget = !ep && d->control_timeout_ms ? d->control_timeout_ms : USB_TIMEOUT_MS;
+    if (!ep && d->control_deadline) {
+        /* fx-21b: the stages of one enumeration message share its 5 s. */
+        int64_t left = (int64_t)(d->control_deadline - now);
+        if (left <= 0 || d->host->quiescing) return 0;
+        budget = (uint64_t)left < USB_CTRL_TIMEOUT_MS ? (unsigned)left : USB_CTRL_TIMEOUT_MS;
+    }
     if (ep && d->storage.bulk_deadline) {
         int64_t left = (int64_t)(d->storage.bulk_deadline - now);
         if (left <= 0) return 0;
@@ -346,6 +365,9 @@ void usb_ohci_service_done(struct usb_host *); /* transfer mutex held; before TD
 int usb_control(struct usb_device *, uint8_t type, uint8_t request, uint16_t value,
                 uint16_t index, void *, unsigned length);
 int usb_enumerate(struct usb_host *, unsigned root, unsigned parent, unsigned port, bool low);
+/* fx-21b: devices quarantined at enumeration since boot ("USB Device Not
+ * Recognized"); /dev/media reports it to the desktop notification area. */
+uint32_t usb_unrecognized_devices(void);
 int usb_parse_config(struct usb_device *, const uint8_t *, unsigned);
 void usb_step(struct usb_host *);
 void usb_host_take(struct usb_host *); /* reserves serialized general/BOT slot */

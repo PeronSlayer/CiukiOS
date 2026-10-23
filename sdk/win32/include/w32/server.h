@@ -62,13 +62,23 @@ enum w32r_op {
  * the broker validates ownership and appends unranked hidden windows.
  * USER POLL(2,index is action, type=TID), REPLY(3,key=HWND,type=TID,
  * flags=query answer). reply POLL: key=HWND,type=message,count=wParam,
- * disposition=lParam. STATUS: key=0 pending,1 accepted,2 vetoed.
+ * disposition=lParam. STATUS: key=0 pending,1 accepted,2 vetoed,3 held.
  * Notifications are serialized, delivered on the owning UI thread. */
 #define W32R_SESSION_BEGIN 1u
 #define W32R_SESSION_POLL 2u
 #define W32R_SESSION_REPLY 3u
 #define W32R_SESSION_STATUS 4u
 #define W32R_SESSION_RESET 5u
+/* G3 (the desktop's Shut Down, Restart, Log Off): BEGIN with flags |
+ * HOLD has no 10 s deadline and, once every window agreed, holds (STATUS
+ * key 3) until COMMIT (WM_ENDSESSION TRUE to the queried windows, then key
+ * 1) or CANCEL (FALSE to those that agreed, then key 2; CANCEL also stops a
+ * running query). While a query runs, STATUS also returns the window in
+ * turn: count = its PID, type = HWND, disposition = 1 once its USER thread
+ * fetched the message (POLL). Both are desktop-only (compat_writer_pid). */
+#define W32R_SESSION_CANCEL 6u
+#define W32R_SESSION_COMMIT 7u
+#define W32R_SESSION_HOLD 0x100u
 #define W32R_FONT_BATCH 64u
 /* f5-07B end-session and virtual restart (W32R_SHUTDOWN; index selects the
  * action; key and data_bytes are zero, access is ignored).

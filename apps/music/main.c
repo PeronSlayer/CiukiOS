@@ -89,6 +89,8 @@ static int close_request(struct du_window *w, void *ctx)
     (void)w; struct music_main *m=ctx; m->closing=1; music_runtime_close(m->runtime); return 0;
 }
 static void quit(void *ctx) { struct music_main *m=ctx; close_request(&m->window,m); }
+/* G3: nothing to save; stopping playback waits for END_SESSION(1). */
+static int query_end_session(struct du_window *w, uint32_t flags, void *ctx) { (void)w; (void)flags; (void)ctx; return DU_SESSION_AGREE; }
 static void message(struct du_window *w, const struct desk_packet *p, void *ctx)
 {
     (void)w; struct music_main *m=ctx;
@@ -155,6 +157,7 @@ int main(int argc, char **argv)
     }
     music_runtime_notify(m->runtime,m->ui.wake,m->ui.wake_ctx);
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
+    m->window.query_end_session=query_end_session;
     m->window.present_rendered=1; /* f4-37: everything is drawn in du_render */
     music_attach(&m->app,&m->ui,&m->backend);
     du_window_accept_files(&m->window,1);   /* fx-19: DragAcceptFiles */

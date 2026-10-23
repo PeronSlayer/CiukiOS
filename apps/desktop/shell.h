@@ -25,6 +25,11 @@
 /* Tray identifiers; geometry places Notifications next to the clock. */
 enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
+/* fx-21b: wording of the Windows notification (Microsoft KB 2654149, KB 314634). */
+#define DESK_USB_UNRECOGNIZED_TITLE "USB Device Not Recognized"
+#define DESK_USB_UNRECOGNIZED_TEXT "One of the USB devices attached to this computer has malfunctioned, " \
+    "and CiukiOS does not recognize it. Unplug the device, wait a few seconds and plug it in again. " \
+    "If the problem continues, try another USB port."
 struct sh_notification {
     char title[64], text[320];
     uint64_t started, expires;
@@ -37,7 +42,8 @@ struct sh_notification {
 #include "start-orb.h"         /* shared orb / approved portrait geometry */
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
-       DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA, DESK_INTERNAL_KINDS };
+       DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA,
+       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
@@ -88,6 +94,7 @@ struct desk_shell {
     unsigned save_game, save_op, save_bytes, save_quota, save_confirm, save_focus, save_busy;
     char save_status[160];
     uint64_t programs_click_ns;
+    uint64_t clock_click_ns;        /* G1: first click of a tray-clock double-click */
     int gate;                       /* runtime gate scenarios: defaults only, no settings I/O */
     struct sh_menu menus[SH_LEVELS];
     int levels, menu_owner;         /* menu_owner: client for SH_MENU_TASK, icon for SH_MENU_ICON */
@@ -125,6 +132,7 @@ struct desk_shell {
     struct sh_notification notification;
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, about_scroll, shutdown_choice, message_kind;
+    int confirm;                    /* G2: SH_CONFIRM_*, the message window asks Yes or No */
     char run_text[160]; unsigned run_length;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
@@ -183,6 +191,10 @@ void desk_internal_paint(struct desktop *, int index, struct desk_box content, s
 void desk_internal_closed(struct desktop *, int index);
 int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
+/* G2: a Yes/No question in the message window; Yes runs desk_folder_confirmed(action), No or closing it desk_folder_cancelled. */
+enum { SH_CONFIRM_NONE, SH_CONFIRM_DELETE, SH_CONFIRM_EMPTY };
+void desk_shell_confirm(struct desktop *, const char *title, const char *text, int icon, int action);
+void desk_shell_bin_state(struct desktop *, int full);   /* the Recycle Bin icon's full or empty picture */
 void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);
 void desk_shell_notify(struct desktop *, const char *title, const char *text, int icon, int action);
 struct desk_box desk_shell_notification_bounds(const struct desktop *);

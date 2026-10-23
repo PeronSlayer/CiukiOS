@@ -301,8 +301,21 @@ int desk_parse(const struct ciuki_message *m, int client,
     switch (p->opcode) {
     case DESK_CLOSE_ACK:
         if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
-        p->flags=desk_get32(m->data+4); if (p->flags>1) return 0;
+        p->flags=desk_get32(m->data+4); if (p->flags>DESK_CLOSE_DOS_ACTIVE) return 0;
         n=8; break;
+    case DESK_QUERY_END_SESSION: case DESK_SESSION_ANSWER:
+        /* G3: the query carries the WM_QUERYENDSESSION lParam, the answer one DESK_SESSION_* value. */
+        if (client!=(p->opcode==DESK_SESSION_ANSWER) || m->data[0]!=DESK_SHELL_VERSION || m->length!=12) return 0;
+        p->serial=desk_get32(m->data+4); p->flags=desk_get32(m->data+8);
+        /* Serial 0 with AGREE is the registration (the window handles queries). */
+        if ((!p->serial && (p->opcode==DESK_QUERY_END_SESSION || p->flags!=DESK_SESSION_AGREE)) ||
+            (p->opcode==DESK_QUERY_END_SESSION ? (p->flags&~DESK_ENDSESSION_FLAGS)!=0 : p->flags>=DESK_SESSION_ANSWERS)) return 0;
+        n=12; break;
+    case DESK_END_SESSION:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=16) return 0;
+        p->serial=desk_get32(m->data+4); p->focused=desk_get32(m->data+8); p->flags=desk_get32(m->data+12);
+        if (!p->serial || p->focused>1 || (p->flags&~DESK_ENDSESSION_FLAGS)) return 0;
+        n=16; break;
     case DESK_GFX_FRAME:
         if (!client || !resize || (m->length!=64 && m->length!=68 && m->length!=84) || !desk_surface_valid(s)) return 0;
         if (m->length>=68) { p->resize_serial=desk_get32(m->data+64);if (m->length==68 && !p->resize_serial) return 0; }

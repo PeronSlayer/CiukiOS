@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../desktop/tz_env.h"
 
 enum { K_N = 0x31, K_O = 0x18, K_S = 0x1f, K_Z = 0x2c, K_X = 0x2d, K_C = 0x2e, K_V = 0x2f, K_A = 0x1e,
        K_F = 0x21, K_H = 0x23, K_G = 0x22, K_F3 = 0x3d };
@@ -193,7 +194,7 @@ int cn_open_bytes(struct cn_app *a, const char *path, const char *raw, size_t n)
         if (a->recent) a->recent(a->path);
         if (cn_is_log(a->ta.text, a->ta.len)) {  /* a first line .LOG appends the time and date on each opening */
             struct tm tm; time_t t = a->now(a->host); char stamp[48], add[64]; size_t k = 0;
-            if (gmtime_r(&t, &tm)) {
+            if (desk_localtime(&t, &tm)) {
                 cn_timestamp(stamp, sizeof(stamp), &tm);
                 if (a->ta.len && a->ta.text[a->ta.len - 1] != '\n') add[k++] = '\n';
                 k += (size_t)snprintf(add + k, sizeof(add) - k, "%s\n", stamp);
@@ -233,6 +234,14 @@ static int save_file(struct cn_app *a, const char *path)
 }
 
 static void file_dialog(struct cn_app *a, int save, const char *name);
+/* The pending command is dropped (Cancel, or a failure). G3: an exit the
+ * user abandoned declines the desktop's close request or vetoes the end of
+ * the session (WM_QUERYENDSESSION FALSE), so nothing closes behind it. */
+static void abandon(struct cn_app *a)
+{
+    enum cn_after after = a->after; a->after = CN_AFTER_NONE;
+    if (after == CN_AFTER_EXIT && a->declined) a->declined(a->host);
+}
 static void proceed(struct cn_app *a)
 {
     enum cn_after after = a->after; a->after = CN_AFTER_NONE;
@@ -278,7 +287,7 @@ static void paste(struct cn_app *a)
 static void insert_time(struct cn_app *a)
 {
     struct tm tm; time_t t = a->now(a->host); char stamp[48];
-    if (!gmtime_r(&t, &tm)) return;
+    if (!desk_localtime(&t, &tm)) return;
     cn_timestamp(stamp, sizeof(stamp), &tm);
     du_ta_insert(&a->ta, stamp, strlen(stamp), DU_TA_EDIT_OTHER);
 }
@@ -371,7 +380,7 @@ static void file_dialog(struct cn_app *a, int save, const char *name)
         if (save && !name[0]) name = cn_basename(a->path);
     }
     int r = du_file_dialog(a->ui, save ? D_SAVE : D_OPEN, save, save ? "Save As" : "Open", folder, name, lister, a);
-    if (r) { failure(a, "The folder could not be opened:", folder, r); a->after = CN_AFTER_NONE; }
+    if (r) { failure(a, "The folder could not be opened:", folder, r); abandon(a); }
 }
 static const char *folder_of(char *out, size_t size, const char *path)
 {
@@ -383,7 +392,7 @@ static const char *folder_of(char *out, size_t size, const char *path)
 static void save_as(struct cn_app *a, const char *target)
 {
     int r = save_file(a, target);
-    if (r) { failure(a, "The file could not be saved:", cn_basename(target), r); return; }
+    if (r) { failure(a, "The file could not be saved:", cn_basename(target), r); abandon(a); return; }
     char folder[CN_PATH]; folder_of(folder, sizeof(folder), target);
     snprintf(a->dir, sizeof(a->dir), "%s", folder);
     proceed(a);
@@ -392,7 +401,7 @@ static void save_as(struct cn_app *a, const char *target)
 static void file_chosen(struct cn_app *a, int save, const char *chosen)
 {
     char target[CN_PATH], folder[CN_PATH], with[CN_PATH + 8]; struct cn_stat st;
-    if (cn_resolve(target, "/", chosen)) { failure(a, "That file name is not valid:", cn_basename(chosen), EINVAL); a->after = CN_AFTER_NONE; return; }
+    if (cn_resolve(target, "/", chosen)) { failure(a, "That file name is not valid:", cn_basename(chosen), EINVAL); abandon(a); return; }
     folder_of(folder, sizeof(folder), target);
     snprintf(a->dir, sizeof(a->dir), "%s", folder);
     const char *base = cn_basename(target);
@@ -410,9 +419,9 @@ static void file_chosen(struct cn_app *a, int save, const char *chosen)
             if (!cn_resolve(target, "/", with)) r = a->fs->stat(a->fs->ctx, target, &st);
         }
         if (!r && st.dir) r = -EISDIR;
-        if (r) { failure(a, r == -ENOENT ? "The file was not found:" : "The file could not be opened:", cn_basename(target), r); a->after = CN_AFTER_NONE; return; }
+        if (r) { failure(a, r == -ENOENT ? "The file was not found:" : "The file could not be opened:", cn_basename(target), r); abandon(a); return; }
         r = load_file(a, target);
-        if (r) { failure(a, "The file could not be opened:", cn_basename(target), r); a->after = CN_AFTER_NONE; return; }
+        if (r) { failure(a, "The file could not be opened:", cn_basename(target), r); abandon(a); return; }
         checkpoint(a, CN_CP_OPENED);
         a->after = CN_AFTER_NONE;
         return;
@@ -421,7 +430,7 @@ static void file_chosen(struct cn_app *a, int save, const char *chosen)
         snprintf(with, sizeof(with), "%s.txt", target);
         if (!cn_resolve(target, "/", with)) r = a->fs->stat(a->fs->ctx, target, &st);
     }
-    if (!r && st.dir) { failure(a, "That name is a folder:", cn_basename(target), EISDIR); a->after = CN_AFTER_NONE; return; }
+    if (!r && st.dir) { failure(a, "That name is a folder:", cn_basename(target), EISDIR); abandon(a); return; }
     if (!r) { /* the target exists: ask before replacing it */
         char shown[40]; shorten(shown, sizeof(shown), cn_basename(target), 36);
         snprintf(a->pending, sizeof(a->pending), "%s", target);
@@ -510,14 +519,14 @@ static void dialog_result(struct cn_app *a, int id, int index, const char *text)
         if (index == 0) {
             if (!a->named) { file_dialog(a, 1, ""); return; }
             int r = save_file(a, a->path);
-            if (r) { a->after = CN_AFTER_NONE; failure(a, "The file could not be saved:", document_name(a), r); }
+            if (r) { abandon(a); failure(a, "The file could not be saved:", document_name(a), r); }
             else proceed(a);
         } else if (index == 1) proceed(a);
-        else a->after = CN_AFTER_NONE;
+        else abandon(a);
         break;
     case D_OPEN: case D_SAVE:
         if (index == 0) file_chosen(a, id == D_SAVE, text);
-        else { strcpy(a->filter, TEXT_FILTER); a->after = CN_AFTER_NONE; }
+        else { strcpy(a->filter, TEXT_FILTER); abandon(a); }
         break;
     case D_REPLACE:
         if (index == 0) save_as(a, a->pending);

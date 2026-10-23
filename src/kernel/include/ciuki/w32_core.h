@@ -61,7 +61,11 @@ enum w32_system_action {
   W32_S_PROCESS_PRIORITY,
   W32_S_QUERY_PRIORITY,
   W32_S_READ_MEMORY,
-  W32_S_WRITE_MEMORY
+  W32_S_WRITE_MEMORY,
+  /* G1: low = struct ciuki_time_zone *, extra = its size; the record is
+   * the syscall-97 record (abi.h). error: 1314 without the time
+   * authority, 87 for a malformed record. */
+  W32_S_TIME_ZONE
 };
 struct ciuki_w32_system_args {
   struct ciuki_w32_header header;
