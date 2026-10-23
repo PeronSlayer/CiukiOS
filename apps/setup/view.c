@@ -102,7 +102,7 @@ void st_view_paint(struct du_canvas *c, const struct st_view *v, int focused)
     c->clip = old;
     if (bar) {
         struct du_sb sb = {{inner.x + inner.w - BAR, inner.y, BAR, inner.h}, 1, v->scroll, v->content, visible_height(v)};
-        du_sb_draw(c, &sb, 0);
+        du_sb_draw(c, &sb, v->dragging ? 3 : 0);
     }
     if (focused && v->selected < 0) du_focus_ring(c, (struct du_rect){b.x + 2, b.y + 2, b.w - 4 - (bar ? BAR : 0), b.h - 4});
 }
@@ -140,4 +140,28 @@ int st_view_click(struct st_view *v, int x, int y)
     for (unsigned i = 0; i < v->count; i++)
         if (v->lines[i].entry && at >= v->lines[i].y && at < v->lines[i].y + v->lines[i].h) { v->selected = (int)i; return (int)i; }
     return -1;
+}
+
+/* Reuse the desktop scrollbar's arrow, page and thumb geometry. */
+int st_view_pointer(struct st_view *v, const struct du_event *e)
+{
+    struct du_sb sb={{v->box.x+v->box.w-2-BAR,v->box.y+2,BAR,v->box.h-4},1,v->scroll,v->content,visible_height(v)};
+    if(e->index==DU_POINTER_CANCEL){v->dragging=0;return -1;}
+    if(e->index==DU_POINTER_MOVE && v->dragging){v->scroll=du_sb_drag(&sb,e->x,e->y,v->grab);return -1;}
+    if(e->index==DU_POINTER_DOWN && v->content>visible_height(v) && du_contains(sb.box,e->x,e->y)){
+        int part=du_sb_part(&sb,e->x,e->y);
+        if(part==3){v->dragging=1;v->grab=du_sb_grab(&sb,e->x,e->y);}
+        else v->scroll=du_sb_apply(&sb,part);
+        return -1;
+    }
+    if(e->index==DU_POINTER_UP){
+        int was=v->dragging;v->dragging=0;
+        if(!was && !du_contains(sb.box,e->x,e->y))return st_view_click(v,e->x,e->y);
+    }
+    return -1;
+}
+void st_view_wheel(struct st_view *v, int ticks)
+{
+    int64_t at=(int64_t)v->scroll-(int64_t)ticks*45;
+    v->scroll=at<0?0:at>max_scroll(v)?max_scroll(v):(int)at;
 }

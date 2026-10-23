@@ -6,8 +6,7 @@
  * mockup's reading order, Enter presses the focused button or else the
  * page's default button, Esc goes back (Welcome: exit, Copy: cancel,
  * Rescue/Text: close), F1 shows the page's help, F3 exits Setup after a
- * confirmation, F10 opens the read-only rescue console (the mockup's footer
- * copy; see the report). setup_txn_execute is called only by st_install,
+ * confirmation, F10 invokes the page primary action (directive item 1). setup_txn_execute is called only by st_install,
  * which only the "Ready to install" page reaches. */
 #include "setup.h"
 #include <errno.h>
@@ -91,12 +90,12 @@ int st_licences_load(struct st_app *a)
     a->licence_count = 0;
     if (!a->h.list_dir) return -ENOSYS;
     int n = a->h.list_dir(a->h.ctx, "C:\\system\\licenses", a->licence_names, ST_LICENCES_MAX);
-    if (n <= 0) return n;
+    if (n < 0) return n;
     a->licence_count = (unsigned)n;
     qsort(a->licence_names, a->licence_count, sizeof(a->licence_names[0]), compare_names);
     size_t length = 0;
     int index = a->h.read_file(a->h.ctx, "D:\\LICENSES\\INDEX.TXT", a->file, ST_FILE_BYTES - 1, &length);
-    if (index) length = 0;
+    if (index) return index;
     a->file[length] = 0;
     for (unsigned i = 0; i < a->licence_count; i++) {
         snprintf(a->licence_labels[i], sizeof(a->licence_labels[i]), "%s", a->licence_names[i]);
@@ -116,6 +115,31 @@ int st_licences_load(struct st_app *a)
             line = end ? end + 1 : NULL;
         }
     }
+    for (char *line = a->file; line && *line;) {
+        char *end = strchr(line, '\n');
+        char short_name[16], hash[65], origin[128]; unsigned long bytes;
+        if (sscanf(line, "%15s %64s %lu %127s", short_name, hash, &bytes, origin) == 4 &&
+            short_name[0] == 'L' && strlen(hash) == 64) {
+            unsigned i=0;
+            const char *base=strrchr(origin, '/');
+            for (;i<a->licence_count;i++)
+                if (!strncmp(origin,"payload:",8) && base && !compare_names(base+1,a->licence_names[i])) break;
+            if (i==a->licence_count) {
+                if (a->licence_count==ST_LICENCES_MAX) return -EOVERFLOW;
+                a->licence_count++;
+                snprintf(a->licence_names[i], sizeof(a->licence_names[i]), "D:\\LICENSES\\%s", short_name);
+            }
+            snprintf(a->licence_labels[i], sizeof(a->licence_labels[i]), "%s  %.76s", short_name, origin);
+        }
+        line = end ? end + 1 : NULL;
+    }
+    if (a->licence_count + 2 > ST_LICENCES_MAX) return -EOVERFLOW;
+    unsigned i=a->licence_count++;
+    snprintf(a->licence_names[i], sizeof(a->licence_names[i]), "D:\\LICENSES\\INDEX.TXT");
+    snprintf(a->licence_labels[i], sizeof(a->licence_labels[i]), "Licence files and origin mapping (INDEX.TXT)");
+    i=a->licence_count++;
+    snprintf(a->licence_names[i], sizeof(a->licence_names[i]), "D:\\LICENSES\\SOURCES.TXT");
+    snprintf(a->licence_labels[i], sizeof(a->licence_labels[i]), "Corresponding source archives and origins (SOURCES.TXT)");
     return 0;
 }
 
@@ -125,7 +149,7 @@ int st_text_load(struct st_app *a, const char *title, const char *path, const ch
     char *buffer = a->text.text;
     if (path) {
         int r = a->h.read_file(a->h.ctx, path, buffer, a->text.cap, &length);
-        if (r == -EFBIG) { length = a->text.cap; r = 0; }
+        if (r == -EFBIG) return r;
         if (r) return r;
     } else {
         if (length > a->text.cap) length = a->text.cap;
@@ -134,11 +158,9 @@ int st_text_load(struct st_app *a, const char *title, const char *path, const ch
     /* The viewer shows Latin-1 text; drop CR and the NULs of binary files. */
     size_t k = 0;
     for (size_t i = 0; i < length; i++) if (buffer[i] != '\r' && buffer[i]) buffer[k++] = buffer[i];
-    char *copy = malloc(k + 1);
-    if (!copy) return -ENOMEM;
-    memcpy(copy, buffer, k); copy[k] = 0;
-    int r = du_ta_set_text(&a->text, copy, k);
-    free(copy);
+    buffer[k] = 0;
+    memcpy(a->text.undo, buffer, k);
+    int r = du_ta_set_text(&a->text, a->text.undo, k);
     a->text.readonly = 1; du_ta_set_wrap(&a->text, 1);
     snprintf(a->text_title, sizeof(a->text_title), "%s", title);
     return r;
@@ -167,7 +189,7 @@ int st_init(struct st_app *a, struct du_ui *u, const struct st_host *h)
     }
     st_inventory(a);
     st_hw_evaluate(a);
-    st_licences_load(a);
+    int licences = st_licences_load(a);
     int answers = st_answers_load(a);
     for (unsigned i = 0; i < st_keyboard_count; i++) if (!strcmp(st_keyboards[i].id, a->answers.keyboard)) a->kbd = (int)i;
     int zone = st_zone_index(a->answers.tz_minutes);
@@ -176,6 +198,12 @@ int st_init(struct st_app *a, struct du_ui *u, const struct st_host *h)
     a->net_manual = a->answers.network == SETUP_NET_STATIC;
     st_record(a, "[setup] mode=%s answers=%s hardware=%s", a->unattended ? "unattended" : "interactive",
               a->answers.source[0] ? a->answers.source : "none", a->stop ? st_stop_code(a->stop) : "supported");
+    if (licences || !a->release[0] || !a->sizes_ok) {
+        a->failed_class = SETUP_ERR_SOURCE_READ;
+        stopped(a, "source_read", licences ? "LICENSES" : !a->release[0] ? "RELEASE.JSON" : "CDMANIFE.JSN");
+        st_goto(a, ST_PAGE_FAILED);
+        return 0;
+    }
     if (a->stop) {
         static const char *const keys[] = {"none", "video", "disk0", "cd", "disk"};
         if (a->unattended) stopped(a, "hardware", keys[a->stop]);
@@ -203,6 +231,7 @@ void st_goto(struct st_app *a, enum st_page p)
 {
     if (a->page != p || !a->ui->count) st_log(a, "page %s -> %s", st_page_name(a->page), st_page_name(p));
     a->page = p;
+    if (p < ST_PAGE_SUMMARY) a->plan_ok = 0;
     if (p == ST_PAGE_RESTART) {
         a->restart_state = 0;
         a->countdown_deadline = now_ns(a) + (uint64_t)ST_COUNTDOWN_S * 1000000000ull;
@@ -247,7 +276,9 @@ static int validate(struct st_app *a)
 {
     struct setup_answers *s = &a->answers;
     if (a->page == ST_PAGE_USER) {
-        if (!setup_valid_user(s->user_name)) return invalid(a, ST_ID_USER, "Type your name: 1 to 32 characters.");
+        if (strlen(du_get(a->ui, ST_ID_COMPUTER)->text) > SETUP_COMPUTER_MAX)
+            return invalid(a, ST_ID_COMPUTER, "Type a computer name of at most 15 characters.");
+        if (strlen(du_get(a->ui, ST_ID_USER)->text) >= sizeof(s->user_name) || !setup_valid_user(s->user_name)) return invalid(a, ST_ID_USER, "Type your name: 1 to 32 characters.");
         if (!setup_valid_computer(s->computer_name))
             return invalid(a, ST_ID_COMPUTER, "Type a computer name of 1 to 15 letters, digits or hyphens. It cannot be only digits or start or end with a hyphen.");
         int64_t local;
@@ -295,6 +326,11 @@ static int validate(struct st_app *a)
 static void prepare(struct st_app *a)
 {
     struct setup_answers *s = &a->answers;
+    for (int i=0;i<a->disk_count;i++) if (!a->disks[i].slot && !a->disks[i].unit && a->disks[i].part_count>16) {
+        a->failed_class=SETUP_ERR_INTERNAL;
+        stopped(a,"partition_preview_limit","Disk");
+        st_goto(a,ST_PAGE_FAILED); return;
+    }
     if (!s->unattended) { s->erase_disk = 1; s->disk = SETUP_DISK_ATA0; }   /* consent: Install on the summary */
     s->hardware_report = a->report; s->hardware_report_length = a->report_length;
     s->log = &a->log;
@@ -306,7 +342,7 @@ static void prepare(struct st_app *a)
     if (r == 0) { st_goto(a, ST_PAGE_SUMMARY); return; }
     enum setup_error_class cls = (enum setup_error_class)(r < 0 ? -r : SETUP_ERR_INTERNAL);
     a->error_valid = !setup_txn_last_error(&a->error);
-    if (a->unattended) {
+    if (a->unattended || cls == SETUP_ERR_MEMORY) {
         a->failed_class = cls;
         stopped(a, st_error_id(cls), "prepare");
         st_goto(a, ST_PAGE_FAILED);
@@ -339,6 +375,11 @@ static int pump(struct st_app *a, int wait)
     int n = a->h.input ? a->h.input(a->h.ctx, events, CIUKI_INPUT_READ_MAX) : -1;
     for (int i = 0; i < n; i++) st_input_event(a, &events[i]);
     a->now = now_ns(a);
+    if (a->page == ST_PAGE_COPY && a->now >= a->tip_deadline) {
+        a->tip = (a->tip + 1) % st_tip_count;
+        a->tip_deadline = a->now + (uint64_t)ST_TIP_S * 1000000000ull;
+        a->ui->dirty = 1;
+    }
     if (a->ui->dirty && a->h.present) { st_render(a); a->h.present(a->h.ctx, a->ui->canvas.pixels, a->ui->canvas.width, a->ui->canvas.height); }
     if (n == 0 && wait && a->h.idle) a->h.idle(a->h.ctx, 10000000u);
     return n;
@@ -403,7 +444,7 @@ static void cb_log(void *ctx, const char *line) { setup_log_append(&((struct st_
 
 static void install(struct st_app *a)
 {
-    if (a->page != ST_PAGE_SUMMARY || !a->plan_ok || a->executing) return;
+    if (a->page != ST_PAGE_SUMMARY || !a->plan_ok || a->executing || a->execute_calls) return;
     a->plan.answers.log = &a->log;
     a->plan.answers.hardware_report = a->report; a->plan.answers.hardware_report_length = a->report_length;
     a->execute_calls++;
@@ -430,22 +471,23 @@ static void install(struct st_app *a)
         return;
     }
     enum setup_error_class cls = (enum setup_error_class)(r < 0 && -r <= SETUP_ERR_INTERNAL ? -r : SETUP_ERR_INTERNAL);
+    int dialog_shown = a->error_valid;
     struct setup_error last;
     if (!setup_txn_last_error(&last) && last.cls != SETUP_ERR_NONE) { a->error = last; a->error_valid = 1; }
     a->failed_class = cls;
-    if (cls != SETUP_ERR_CANCELLED && !a->unattended) {
+    if (cls != SETUP_ERR_CANCELLED && !a->unattended && !dialog_shown) {
         /* D8: one dialog; Retry only for retryable errors, which libsetup
          * already offered through on_error. */
         char text[700], where[300] = "";
         if (a->error_valid && a->error.path[0]) snprintf(where, sizeof(where), "\n\nFile: %s", a->error.path);
         else if (a->error_valid && a->error.count) snprintf(where, sizeof(where), "\n\nSectors: LBA %" PRIu64 ", %" PRIu64 " sectors", a->error.lba, a->error.count);
-        snprintf(text, sizeof(text), "%s%s", st_error_text(cls), where);
+        snprintf(text, sizeof(text), "%s%s\n\nAttempt %u of %u.", st_error_text(cls), where, a->error_valid && a->error.attempt ? a->error.attempt : 1, SETUP_RETRY_MAX);
         static const char *const cancel[] = {"Cancel"};
         du_message(a->ui, ST_DLG_ERROR, st_error_title(cls), text, DU_DLG_ICON_ERROR, cancel, 1, 0, 0);
         modal(a, ST_DLG_ERROR);
     }
     static const char *const phases[] = {"plan", "partition", "format", "copy", "configure", "publish", "complete"};
-    stopped(a, st_error_id(cls), phases[a->error_valid && a->error.phase <= SETUP_PHASE_COMPLETE ? a->error.phase : a->progress.phase]);
+    stopped(a, st_error_id(cls), phases[a->error_valid && (unsigned)a->error.phase <= SETUP_PHASE_COMPLETE ? a->error.phase : a->progress.phase]);
     st_goto(a, ST_PAGE_FAILED);
 }
 
@@ -456,7 +498,12 @@ static void reboot(struct st_app *a)
     st_record(a, "[setup] restart policy=%s", a->answers.restart == SETUP_RESTART_WAIT ? "wait" :
               a->answers.restart == SETUP_RESTART_FORCE ? "force" : "eject");
     a->restart_requested = 1;
-    if (a->h.reboot) a->h.reboot(a->h.ctx);
+    int r = a->h.reboot ? a->h.reboot(a->h.ctx) : -ENOSYS;
+    if (r) {
+        a->restart_state = 0; a->countdown_deadline = UINT64_MAX;
+        st_message(a, "Restart", "Remove the CD and restart the computer manually.", DU_DLG_ICON_WARNING);
+        return;
+    }
     a->quit = 1;
 }
 
@@ -493,8 +540,10 @@ static void restart_tick(struct st_app *a)
 static void rescue_open(struct st_app *a)
 {
     a->rescue_return = a->page;
+    int disks = a->h.disks ? a->h.disks(a->h.ctx, a->disks, 4) : -1;
+    a->disk_count = disks > 0 && disks <= 4 ? disks : 0;
     int n = a->h.volumes ? a->h.volumes(a->h.ctx, a->volumes, 26) : -1;   /* a USB drive may be new */
-    a->volume_count = n > 0 ? n : 0;
+    a->volume_count = n > 0 && n <= 26 ? n : 0;
     a->status_line[0] = 0;
     st_goto(a, ST_PAGE_RESCUE);
 }
@@ -515,17 +564,16 @@ void st_licence_open(struct st_app *a, unsigned index)
 {
     if (index >= a->licence_count) return;
     char path[128];
-    snprintf(path, sizeof(path), "C:\\system\\licenses\\%s", a->licence_names[index]);
+    if (a->licence_names[index][1] == ':') snprintf(path, sizeof(path), "%s", a->licence_names[index]);
+    else snprintf(path, sizeof(path), "C:\\system\\licenses\\%s", a->licence_names[index]);
     text_open(a, a->licence_names[index], path, NULL, 0);
 }
 
 /* ---- navigation ---- */
-static int pre_install(enum st_page p) { return p <= ST_PAGE_SUMMARY; }
 
 static void next(struct st_app *a)
 {
-    st_page_collect(a);
-    if (validate(a)) return;
+    if (!a->unattended) { st_page_collect(a); if (validate(a)) return; }
     switch (a->page) {
     case ST_PAGE_WELCOME: st_goto(a, ST_PAGE_LICENCE); break;
     case ST_PAGE_LICENCE: st_goto(a, a->stop ? ST_PAGE_STOP : ST_PAGE_HARDWARE); break;
@@ -543,20 +591,15 @@ static void back(struct st_app *a)
 {
     if (a->page <= ST_PAGE_WELCOME || a->page > ST_PAGE_SUMMARY) return;
     st_page_collect(a);
-    if (a->page == ST_PAGE_USER) {   /* keep what was typed even when it is not valid yet */
-        snprintf(a->answers.user_name, sizeof(a->answers.user_name), "%s", a->answers.user_name);
-    }
     st_goto(a, (enum st_page)(a->page - 1));
 }
 
 static void exit_request(struct st_app *a)
 {
-    if (!pre_install(a->page)) {
-        if (a->page == ST_PAGE_COPY) st_action(a, ST_ID_CANCEL);
-        return;
-    }
+    if (a->page == ST_PAGE_COPY) { st_action(a, ST_ID_CANCEL); return; }
     static const char *const buttons[] = {"Exit Setup", "Resume"};
     du_message(a->ui, ST_DLG_EXIT, "Exit Setup",
+               a->execute_calls ? "Exit Setup and restart the computer? If Setup did not complete, restart from the CD to install again." :
                "CiukiOS is not installed. Nothing has been written to the disk.\n\nExit Setup and restart the computer?",
                DU_DLG_ICON_QUESTION, buttons, 2, 1, 1);
 }
@@ -565,7 +608,7 @@ void st_action(struct st_app *a, int id)
 {
     if (a->executing && id != ST_ID_CANCEL) return;
     switch (id) {
-    case ST_ID_NEXT: next(a); break;
+    case ST_ID_NEXT: { struct du_widget *w = du_get(a->ui, ST_ID_NEXT); if (w && !w->disabled) next(a); break; }
     case ST_ID_BACK: back(a); break;
     case ST_ID_EXIT: exit_request(a); break;
     case ST_ID_CANCEL:
@@ -583,8 +626,9 @@ void st_action(struct st_app *a, int id)
     case ST_ID_SHUTDOWN:
         st_record(a, "[setup] power off");
         a->power_requested = 1;
-        if (a->h.power_off) a->h.power_off(a->h.ctx);
-        a->quit = 1;
+        if (!a->h.power_off || a->h.power_off(a->h.ctx)) {
+            st_message(a, "Shut down", "Shut down is unavailable. Remove the CD and turn off the computer after Setup has stopped.", DU_DLG_ICON_INFO);
+        } else a->quit = 1;
         break;
     case ST_ID_SAVE_REPORT: case ST_ID_LINK_SAVE: {
         char result[200];
@@ -657,6 +701,9 @@ void st_input_event(struct st_app *a, const struct ciuki_input_event *ev)
 {
     struct du_ui *u = a->ui;
     u->event = on_event; u->user = a;
+    if (ev->type == CIUKI_INPUT_WHEEL && !u->dialog.kind && du_get(u, ST_ID_VIEW) && du_contains(a->view.box, u->mouse_x, u->mouse_y)) {
+        st_view_wheel(&a->view, ev->value); u->dirty=1; return;
+    }
     if (ev->type == CIUKI_INPUT_KEY && ev->value && ev->code >= 0 && ev->code <= 0x200) {
         unsigned code = (unsigned)ev->code;
         if (code == DU_KEY_LSHIFT || code == DU_KEY_RSHIFT || code == DU_KEY_LCTRL || code == DU_KEY_RCTRL ||
@@ -676,8 +723,8 @@ void st_input_event(struct st_app *a, const struct ciuki_input_event *ev)
             return;
         case 0x3d: /* F3 */ exit_request(a); return;
         case DU_KEY_F10:
-            if ((pre_install(a->page) || a->page == ST_PAGE_STOP || a->page == ST_PAGE_FAILED || a->page == ST_PAGE_STATUS) && !a->executing)
-                rescue_open(a);
+            if (a->page == ST_PAGE_COPY) st_action(a, ST_ID_CANCEL);
+            else if (!a->executing) default_action(a);
             return;
         case DU_KEY_ESC: escape(a); return;
         case DU_KEY_ENTER:

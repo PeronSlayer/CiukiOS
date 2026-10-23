@@ -82,9 +82,9 @@ void st_inventory(struct st_app *a)
     a->net.version = CIUKI_NET_VERSION; a->net.size = sizeof(a->net);
     a->net_ok = h->network && !h->network(h->ctx, &a->net);
     int n = h->disks ? h->disks(h->ctx, a->disks, 4) : -1;
-    a->disk_count = n > 0 ? n : 0;
+    a->disk_count = n > 0 && n <= 4 ? n : 0;
     n = h->volumes ? h->volumes(h->ctx, a->volumes, 26) : -1;
-    a->volume_count = n > 0 ? n : 0;
+    a->volume_count = n > 0 && n <= 26 ? n : 0;
     a->cd_ok = h->cd && !h->cd(h->ctx, &a->cd);
     a->sizes_ok = h->catalogue && !h->catalogue(h->ctx, a->sizes);
     if (!h->release || h->release(h->ctx, a->release, sizeof(a->release))) a->release[0] = 0;
