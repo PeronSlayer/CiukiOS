@@ -1010,6 +1010,15 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
             desk_shell_notify(d,"Removable media",text,unsafe ? DU_DLG_ICON_WARNING : DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
         }
     }
+    /* fx-21b: a USB device the kernel quarantined at enumeration. Windows
+     * shows this notification-area balloon ("USB Device not recognized: One
+     * of the devices attached to this computer has malfunctioned", Microsoft
+     * KB 2654149) and advises unplugging and reconnecting the device; a
+     * re-plug re-enumerates the port. One balloon per counted device,
+     * including a device that failed before the desktop started. */
+    unsigned seen=d->sh.media.version==CIUKI_MEDIA_VERSION ? d->sh.media.usb_unrecognized : 0;
+    if (state->version==CIUKI_MEDIA_VERSION && state->usb_unrecognized>seen)
+        desk_shell_notify(d,DESK_USB_UNRECOGNIZED_TITLE,DESK_USB_UNRECOGNIZED_TEXT,DU_DLG_ICON_WARNING,SH_NOTIFY_DETAILS);
     for (unsigned i=3;i<26;i++) if (!(state->removable_mask&(1u<<i)) ||
         state->generation[i]!=d->sh.media.generation[i]) d->sh.media_labels[i][0]=0;
     d->sh.media=*state; d->sh.media_scroll=0;

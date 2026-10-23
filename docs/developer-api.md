@@ -1284,12 +1284,18 @@ stable filesystem identity; empty if unavailable
 char label[33];
     uint8_t reserved[3];
 };
+```
 
+fx-21b: usb_unrecognized (formerly reserved; zero on input) counts the USB
+devices quarantined at enumeration since boot. The desktop shows "USB
+Device Not Recognized" once for every increase.
+
+```c
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;
     uint32_t removable_mask;
-    uint32_t reserved;
+    uint32_t usb_unrecognized;
     uint32_t generation[26];
     uint32_t type[26];
 };

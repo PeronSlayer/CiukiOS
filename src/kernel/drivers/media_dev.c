@@ -7,6 +7,8 @@
 /* fx-17b: the floppy platform is optional (no FDC, host tests). */
 bool floppy_drive_present(unsigned drive) __attribute__((weak));
 int floppy_mount(unsigned drive) __attribute__((weak));
+/* fx-21b: absent from storage-only host builds without the USB core. */
+uint32_t usb_unrecognized_devices(void) __attribute__((weak));
 static bool floppy_drive(unsigned d) { return d<2 && floppy_drive_present && floppy_drive_present(d); }
 /* f5-12B2: CD audio devctls (MEDIA_CD_*) live in media_cd.c. */
 int media_cd_devctl(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes);
@@ -130,9 +132,11 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         int e=copy_from_user(&state,address,bytes); if (e) return e;
         uint32_t version=state.version;
         if (version!=CIUKI_MEDIA_VERSION && version!=CIUKI_MEDIA_VERSION_1) return -EOPNOTSUPP;
-        if (state.size!=bytes || state.reserved ||
+        if (state.size!=bytes || state.usb_unrecognized ||
             bytes!=(version==CIUKI_MEDIA_VERSION ? sizeof(state) : sizeof(struct ciuki_media_state_v1))) return -EINVAL;
         memset(&state,0,sizeof(state)); state.version=version; state.size=bytes;
+        /* fx-21b: v1 keeps its reserved word zero. */
+        if (version==CIUKI_MEDIA_VERSION && usb_unrecognized_devices) state.usb_unrecognized=usb_unrecognized_devices();
         if (s && s->ready) {
             vfs_lock(&s->vfs,0);
             for (unsigned d=4;d<26;d++) {

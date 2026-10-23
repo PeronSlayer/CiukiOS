@@ -1254,7 +1254,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_media_state.version", __builtin_offsetof(struct ciuki_media_state, version), 0u},
     {"offsetof.ciuki_media_state.size", __builtin_offsetof(struct ciuki_media_state, size), 4u},
     {"offsetof.ciuki_media_state.removable_mask", __builtin_offsetof(struct ciuki_media_state, removable_mask), 8u},
-    {"offsetof.ciuki_media_state.reserved", __builtin_offsetof(struct ciuki_media_state, reserved), 12u},
+    {"offsetof.ciuki_media_state.usb_unrecognized", __builtin_offsetof(struct ciuki_media_state, usb_unrecognized), 12u},
     {"offsetof.ciuki_media_state.generation", __builtin_offsetof(struct ciuki_media_state, generation), 16u},
     {"offsetof.ciuki_media_state.type", __builtin_offsetof(struct ciuki_media_state, type), 120u},
     {"sizeof.ciuki_media_remove", sizeof(struct ciuki_media_remove), 16u},
