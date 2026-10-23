@@ -105,6 +105,8 @@ static void v3_set_busy(struct desktop *d, int pi, int busy)
         else if (!busy && w->v3_busy_mark) { w->unresponsive=0; w->v3_busy_mark=0; }
         else continue;
         desk_damage_add(&d->damage,desk_outer(w),d->width,d->height);
+        /* fx-2: the task button shows the state too ("Not responding"). */
+        if (d->shell) desk_damage_add(&d->damage,desk_task_button(d,j),d->width,d->height);
     }
 }
 static void v3_check_silent(struct desktop *d, int pi)
@@ -453,6 +455,14 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
     struct desk_box old = desk_outer(c), frame = c->frame;
     int continuing=d->copy_pending && d->copy_client==i &&
         d->copy_rect.width==(uint32_t)frame.w && d->copy_rect.height==(uint32_t)(frame.h-desk_theme->radius);
+    /* fx-2: damage recorded at the intermediate position (a client update,
+     * a caption) changed what the planned copy would carry from the
+     * original source, and the redraw can only exclude it at the source or
+     * the final destination. Recompose this move instead of copying. */
+    for (unsigned k=0;continuing && k<d->damage.count;k++) {
+        struct desk_box touched;
+        if (desk_intersect(d->damage.boxes[k],old,&touched)) continuing=0;
+    }
     int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->power.state && !d->animation.active &&
         !c->internal && !c->collapsed && !c->minimized && c->order>0;
 
@@ -897,6 +907,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             if (c->unresponsive) {
                 c->unresponsive = 0;
                 desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+                if (d->shell) desk_damage_add(&d->damage, desk_task_button(d, i), d->width, d->height);
             }
         }
         break;
@@ -951,6 +962,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
             (!d->drain_ns || d->drain_ns >= c->ping_sent_ns + 5000000000ull)) {
             c->unresponsive = 1;
             if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+            if (c->window && d->shell) desk_damage_add(&d->damage, desk_task_button(d, i), d->width, d->height);
         }
     }
     if (d->shell) desk_close_timeouts(d);
@@ -1647,7 +1659,10 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
                     c->owner_id=owner>=0 ? d->clients[owner].window_id : 0;
                     if (owner>=0 && (d->clients[owner].v3_style&DESK_V3_TOPMOST)) p.style|=DESK_V3_TOPMOST;
                     memcpy(c->title,p.title,sizeof(c->title)); anchor->v3_last[id-1]=generation;
-                    v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_focus(d,i); return 0;
+                    v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_focus(d,i);
+                    /* fx-2: its task button, as for a native window. */
+                    if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+                    return 0;
                 }
             }
         }
@@ -1793,7 +1808,10 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     }
     case DESK_PONG:
         if (c->ping_pending && p.serial==c->serial) {
-            if (c->unresponsive) desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+            if (c->unresponsive) {
+                desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+                if (d->shell) desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height);
+            }
             c->ping_pending=0; c->unresponsive=0; c->next_ping_ns=d->now_ns+1000000000ull;
         }
         return 0;

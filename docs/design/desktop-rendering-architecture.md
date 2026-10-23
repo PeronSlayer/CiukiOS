@@ -309,3 +309,54 @@ switching to the current kernel poll loop alone still wakes every millisecond.
 The budget charges a service-loop baseline instead of claiming literal zero
 CPU. Small Tango icon conversions retain their existing lazy process cache
 on the UI thread; startup workers never mutate that cache.
+
+## fx-2: stacking changes repaint what they uncover (2026-10-23)
+
+T23 trial of image `9a60215f` (software engine, `accel caps=0 pointer=sw`):
+windows repainted over windows that were on top of them. Every screen write
+of the desktop is a present of the composed RAM scene, and the scene painter
+clips each window to the spans left by the windows above it, so a window can
+only appear over a higher one when the screen still shows an older stacking
+than `order` describes. `desk_v3_restack` (run by every focus change, v3
+placement and v3 window order while any v3 window exists, NetSurf included)
+renumbers the whole stack: internal shell windows (Run, Programs, AutoPlay,
+messages) above all others, the topmost band above normal windows, owned
+windows above their owners. Only the window being raised was repainted. The
+windows that moved up kept their old screen appearance while compositing
+treated them as higher: their next update was painted over the windows that
+still looked on top, and the others' updates were cut out beneath them.
+
+Rule (Windows USER: SetWindowPos repaints, unless SWP_NOREDRAW, what a
+position or z-order change uncovers; owned windows stay above their owner;
+the topmost band stays above normal windows): before each frame,
+`desk_stack_damage` compares the stacking of the last composed frame with
+the current one and damages the overlap of every pair of visible windows
+whose relative order changed, whatever path changed it. The same audit
+cancels a coalesced window-move copy once damage has been recorded at an
+intermediate position of the moving window (the copy can exclude damage only
+at its source or final destination), and repaints task buttons when a v3
+window appears or a window's responsiveness changes.
+
+`tests/host/desktop/test_occlusion.py` drives the production desktop with
+the software upload, the 2D engine and the f2-101d command batches (MONO,
+INVERT, KEYED, WRITE through production preflight and swdib) at 32 and
+16 bpp: a covering window's screen pixels stay unchanged while the window
+under it animates, scrolls, moves, retitles and draws with client-side
+MONO/INVERT/KEYED; owned/topmost/internal restacks and v3 window order are
+repainted; randomized sequences compare every frame with a full composite
+and, in 32 bpp, every unoccluded client pixel with its surface.
+
+Open lead decision: internal shell windows form a band above every other
+window only while a v3 window exists; without one they are ordinary
+windows. Windows 9x bands only topmost windows (and owned above owners).
+
+Sources:
+
+* Microsoft SDK, [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos):
+  SWP_NOREDRAW is the exception that leaves invalidation to the application;
+  owned windows of a topmost window are topmost.
+* Microsoft SDK, [Window Features, Z-Order](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#z-order):
+  an owned window is always above its owner; topmost windows overlap all
+  non-topmost windows.
+* Microsoft SDK, [Redrawing in the Update Region](https://learn.microsoft.com/en-us/windows/win32/gdi/redrawing-in-the-update-region):
+  painting is clipped to the update region within the visible region.

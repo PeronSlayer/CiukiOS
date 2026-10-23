@@ -885,6 +885,31 @@ int desk_client_damage(struct desktop *d,int index,struct desk_box box)
     }
     return window_damage(d,index,box);
 }
+/* fx-2, the Windows 9x SetWindowPos rule: a change of stacking order
+ * invalidates what the change uncovers. Every path that reorders windows
+ * (focus raise, v3 restack of owned/topmost/internal bands, Alt+Tab, v3
+ * window order) is reconciled here against the order the screen shows, so
+ * a window that became higher is repainted above its new lower neighbours
+ * before any of its own updates can reach those pixels. */
+void desk_stack_damage(struct desktop *d)
+{
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        const struct desk_client *a=&d->clients[i];
+        if (!a->window || a->minimized || !a->window_id || d->stack_window[i]!=a->window_id) continue;
+        for (int j=i+1;j<DESK_CLIENTS;j++) {
+            const struct desk_client *b=&d->clients[j]; struct desk_box overlap;
+            if (!b->window || b->minimized || !b->window_id || d->stack_window[j]!=b->window_id) continue;
+            if ((d->stack_order[i]<d->stack_order[j])==(a->order<b->order)) continue;
+            if (desk_intersect(desk_outer(a),desk_outer(b),&overlap))
+                desk_damage_add(&d->damage,overlap,d->width,d->height);
+        }
+    }
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        const struct desk_client *c=&d->clients[i];
+        d->stack_window[i]=c->window && !c->minimized ? c->window_id : 0;
+        d->stack_order[i]=c->order;
+    }
+}
 void desk_caption_damage(struct desktop *d,int index)
 {
     struct desk_box b=d->clients[index].frame;b.h=DESK_TITLE;
@@ -1908,6 +1933,7 @@ int desk_redraw(struct desktop *d)
      * only once the hardware cursor is known hidden (f2-96). */
     if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) { d->hw_cursor=0; d->cursor_dirty=1; }
     if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
+    desk_stack_damage(d);
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
     /* A RESYNC/damage can precede the mode-counter service turn. Refresh
      * the existing grant query before any generation-tagged engine request;
