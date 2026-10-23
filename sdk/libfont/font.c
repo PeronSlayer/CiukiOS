@@ -1,11 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 #include <ciuki/font.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -151,23 +154,42 @@ static int initialise(struct ciuki_font_face *f)
     font_name(f, 1, f->metrics.family); font_name(f, 2, f->metrics.style);
     return 0;
 }
+/* fx-11: the face is read with one read(2) per FONT_READ_MAX bytes (the
+ * kernel's CIUKI_IO_MAX), never through stdio. Ciuki's newlib is built with
+ * HAVE_BLKSIZE, so a buffered fread refills st_blksize bytes per read(2), and
+ * a FAT32 file reports its cluster (4 KiB on the system volume): a 410 KB
+ * Liberation face took about 101 storage requests. On the T23 NetSurf's first
+ * layout spent 2,117,000 of 2,175,000 us opening Sans Regular and Bold. One
+ * large read lets FAT read contiguous clusters in 64 KiB runs. */
+#define FONT_READ_MAX (1024u * 1024u)
 int ciuki_font_open(const char *path, struct ciuki_font_face **out)
 {
     if (!out) return fail(EINVAL);
     *out = NULL;
     if (!path) return fail(EINVAL);
-    FILE *stream = fopen(path, "rb");
-    if (!stream) return -1;
-    if (fseek(stream, 0, SEEK_END)) { int e = errno; fclose(stream); return fail(e); }
-    long n = ftell(stream);
-    if (n < 12 || (unsigned long)n > FONT_FILE_MAX) { fclose(stream); return fail(EINVAL); }
-    rewind(stream);
+    int flags = O_RDONLY;
+#ifdef O_CLOEXEC /* the SDK defines it; strict-C host harnesses may not */
+    flags |= O_CLOEXEC;
+#endif
+    int fd = open(path, flags);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st)) { int e = errno; close(fd); return fail(e); }
+    if (!S_ISREG(st.st_mode) || st.st_size < 12 || (uint64_t)st.st_size > FONT_FILE_MAX) { close(fd); return fail(EINVAL); }
+    size_t n = (size_t)st.st_size;
     struct ciuki_font_face *f = calloc(1, sizeof(*f));
-    if (!f) { fclose(stream); return fail(ENOMEM); }
-    f->data = malloc((size_t)n); f->length = (size_t)n;
-    if (!f->data) { fclose(stream); free(f); return fail(ENOMEM); }
-    if (fread(f->data, 1, f->length, stream) != f->length) { int e = ferror(stream) ? EIO : EINVAL; fclose(stream); free(f->data); free(f); return fail(e); }
-    fclose(stream);
+    if (!f) { close(fd); return fail(ENOMEM); }
+    f->data = malloc(n); f->length = n;
+    if (!f->data) { close(fd); free(f); return fail(ENOMEM); }
+    for (size_t done = 0; done < n;) {
+        size_t want = n - done < FONT_READ_MAX ? n - done : FONT_READ_MAX;
+        ssize_t r = read(fd, f->data + done, want);
+        if (r < 0 && errno == EINTR) continue;
+        /* As before: an I/O error is EIO, a file shorter than its size EINVAL. */
+        if (r <= 0) { int e = r < 0 ? EIO : EINVAL; close(fd); free(f->data); free(f); return fail(e); }
+        done += (size_t)r;
+    }
+    close(fd);
     if (initialise(f)) { int e = errno; if (f->ft) FT_Done_Face(f->ft); if (f->library) FT_Done_Library(f->library); free(f->data); free(f); return fail(e); }
     int e = pthread_mutex_init(&f->mutex, NULL);
     if (e) { FT_Done_Face(f->ft); FT_Done_Library(f->library); free(f->data); free(f); return fail(e); }

@@ -161,14 +161,39 @@ static void resize_request(struct ciuki_browser_surface *s)
 }
 static bool pointer_motion(const struct desk_packet *p)
 { return p->opcode==DESK_MOTION && p->event.type==CIUKI_INPUT_MOTION; }
+static bool input_packet(const struct desk_packet *p)
+{ return p->opcode==DESK_KEY || p->opcode==DESK_BUTTON || p->opcode==DESK_MOTION; }
+static struct desk_packet *held_at(struct ciuki_browser_surface *s,unsigned i)
+{ return &s->held[(s->held_head+i)%CIUKI_BROWSER_HELD]; }
+bool ciuki_browser_held_room(const struct ciuki_browser_surface *s)
+{
+    if(s->held_count<CIUKI_BROWSER_HELD)return true;
+    for(unsigned i=0;i<s->held_count;i++)
+        if(input_packet(&s->held[(s->held_head+i)%CIUKI_BROWSER_HELD]))return true;
+    return false;
+}
+/* fx-11: the top-level document may lay out for 10 s (lead decision
+ * 2026-10-23). The pump must keep reading for that long, or the desktop's
+ * queue for this client fills and a client that reads nothing for 5 s with
+ * a full queue is dropped (apps/desktop/client.c, f2-91). So a full ring
+ * loses input, never the browser or a control packet: input is dropped and
+ * counted (keys and buttons are released after the layout, like a focus
+ * loss); a PING, CONFIGURE, CLOSE or RESULT replaces the newest held input. */
 bool ciuki_browser_hold(struct ciuki_browser_surface *s,const struct desk_packet *p)
 {
     if(s->held_count && pointer_motion(p)) {
-        struct desk_packet *last=&s->held[(s->held_head+s->held_count-1)%CIUKI_BROWSER_HELD];
+        struct desk_packet *last=held_at(s,s->held_count-1);
         if(pointer_motion(last)) { *last=*p; return true; }
     }
-    if(s->held_count==CIUKI_BROWSER_HELD)return false;
-    s->held[(s->held_head+s->held_count++)%CIUKI_BROWSER_HELD]=*p;
+    if(s->held_count==CIUKI_BROWSER_HELD) {
+        if(input_packet(p)) { s->overflows++; s->held_resync=true; return true; }
+        unsigned i=s->held_count;
+        while(i && !input_packet(held_at(s,i-1)))i--;
+        if(!i)return false;
+        for(unsigned j=i;j<s->held_count;j++)*held_at(s,j-1)=*held_at(s,j);
+        s->held_count--; s->overflows++; s->held_resync=true;
+    }
+    *held_at(s,s->held_count++)=*p;
     return true;
 }
 bool ciuki_browser_unhold(struct ciuki_browser_surface *s,struct desk_packet *out)

@@ -113,6 +113,11 @@ static void response(struct peer *p)
             CHECK(count==200);printf("fixture_cookie_retention=%u\n",count);
         }
         p->response_bytes=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s",strlen(page),page);
+    } else if(!strcmp(path,"/framed")){
+        /* fx-11: a top-level document (10 s layout limit) whose iframe is a
+         * sub-resource window that keeps the 75 ms limit. */
+        const char *page="<!doctype html><title>Framed</title><h1>Ciuki</h1><iframe src=\"/page\" width=\"200\" height=\"100\"></iframe>";
+        p->response_bytes=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s",strlen(page),page);
     } else if(!strcmp(path,"/large-header")){
         strcpy((char *)p->response,"HTTP/1.1 200 OK\r\nX: ");size_t n=strlen((char *)p->response);
         memset(p->response+n,'x',8193);memcpy(p->response+n+8193,"\r\n\r\n",4);p->response_bytes=n+8197;
@@ -283,11 +288,24 @@ int __wrap_close(int fd)
     if(fd==injected_fd){CHECK(injected_transmitted && !*injected_transmitted);injected_transmitted=NULL;injected_closed=true;injected_fd=-1;}
     if(fd==10000)return 0;if(fd>=32 && fd<CIUKI_OPEN_MAX && client.fds[fd].object)return result(file_close(&client,fd));return __real_close(fd);
 }
+/* fx-11: the guest's file_fcntl rule for a socket description (production
+ * file_setfl_bits from ciuki/files.h; sockets refuse O_APPEND). Until fx-11
+ * this wrapper stored any value, so the host never saw the T23's EINVAL for
+ * fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)|O_NONBLOCK) with F_GETFL=O_RDWR. */
+int __real_fcntl(int,int,...);
 int __wrap_fcntl(int fd,int cmd,...)
 {
-    uint32_t *flags=net_socket_flags(file_fd_object(&client,fd));CHECK(flags);
+    unsigned arg=0;
+    if(cmd!=F_GETFL && cmd!=F_GETFD){va_list args;va_start(args,cmd);arg=(unsigned)va_arg(args,int);va_end(args);}
+    uint32_t *flags=net_socket_flags(file_fd_object(&client,fd));
+    /* Host descriptors (libdeskui completion.h's channel pair sets FD_CLOEXEC
+     * since f2-98c) keep the real call, as in __wrap_close. */
+    if(!flags)return __real_fcntl(fd,cmd,(int)arg);
     if(cmd==F_GETFL)return (int)*flags;
-    CHECK(cmd==F_SETFL);va_list args;va_start(args,cmd);*flags=(unsigned)va_arg(args,int);va_end(args);return 0;
+    CHECK(cmd==F_SETFL);
+    int bits=file_setfl_bits(arg);
+    if(bits<0 || (bits&O_APPEND)){errno=EINVAL;return -1;}
+    *flags=(*flags&O_ACCMODE)|(unsigned)bits;return 0;
 }
 int __wrap_getsockopt(int fd,int level,int option,void *value,socklen_t *bytes)
 { unsigned n=*bytes;int r=net_socket_option(&client,fd,0,level,option,value,&n,NULL);*bytes=n;return result(r); }

@@ -112,11 +112,14 @@ class BrowserQemuArgumentTests(unittest.TestCase):
 
     def test_browser_cases_use_guestfwd_to_the_fixture_ports(self):
         self.assertEqual([c['id'] for c in self.cases],
-                         ['https-trusted', 'https-untrusted', 'http-redirect-https', 'https-cookies', 'https-gzip-64k', 'https-not-ready'])
+                         ['https-trusted', 'https-untrusted', 'http-redirect-https', 'https-cookies', 'https-gzip-64k', 'https-not-ready',
+                          'e100-http-page', 'e100-https-page'])
         for case in self.cases:
             with self.subTest(case=case['id']):
+                # fx-11: the two e100 cases run on the T23's NIC model.
+                nic = 'i82559er' if case['id'].startswith('e100-') else 'e1000'
                 self.assertEqual(case['profile'], 'qemu-t23')
-                self.assertEqual(case['device_exceptions'], {'network': 'e1000'})
+                self.assertEqual(case['device_exceptions'], {'network': nic})
                 self.assertTrue(runner.browser_case(case))
                 staged = {**case, '_browser_ports': (40080, 40443)}
                 args, request = runner.qemu_args('qemu-fixture', self.profile, staged, '12345678', Path('overlay.qcow2'), Path('bios'))
@@ -127,7 +130,7 @@ class BrowserQemuArgumentTests(unittest.TestCase):
                 self.assertIn(' relay 127.0.0.1 40080', netdev)
                 self.assertIn(' relay 127.0.0.1 40443', netdev)
                 self.assertEqual(netdev.count(','), 4, 'the relay command must not contain commas')
-                self.assertIn('e1000,netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=', args)
+                self.assertIn(nic + ',netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=', args)
                 self.assertIn('-fw_cfg', args)
                 self.assertIn('name=opt/it.alcybercloud.ciukios/test,string=' + request, args)
 
@@ -171,13 +174,19 @@ class BrowserQemuArgumentTests(unittest.TestCase):
         parse(by_id['https-cookies'], 'status=200 bytes=90 tls=ok url=https://fixture.test/cookie-end')
         parse(by_id['https-gzip-64k'], 'status=200 bytes=65536 tls=ok url=https://fixture.test/gzip64')
         parse(by_id['https-not-ready'], 'status=0 bytes=0 tls=not_ready url=about:query/fetcherror', waited=0, ready=0, now=1)
+        parse(by_id['e100-http-page'], 'status=200 bytes=150 tls=none url=http://fixture.test/page')
+        parse(by_id['e100-https-page'], 'status=200 bytes=150 tls=ok url=https://fixture.test/page')
         wrong = [('https-trusted', 'status=200 bytes=150 tls=cert url=https://fixture.test/page'),
                  ('https-trusted', 'status=200 bytes=150 tls=ok url=http://fixture.test/page'),
                  ('https-untrusted', 'status=200 bytes=150 tls=ok url=https://untrusted.test/page'),
                  ('http-redirect-https', 'status=403 bytes=20 tls=ok url=https://fixture.test/cookie-end'),
                  ('https-cookies', 'status=200 bytes=90 tls=ok url=https://fixture.test/cookie'),
                  ('https-gzip-64k', 'status=200 bytes=65535 tls=ok url=https://fixture.test/gzip64'),
-                 ('https-not-ready', 'status=200 bytes=150 tls=ok url=https://fixture.test/page')]
+                 ('https-not-ready', 'status=200 bytes=150 tls=ok url=https://fixture.test/page'),
+                 # fx-11: the T23 trial 423b803a outcome (EINVAL at connect, error page).
+                 ('e100-http-page', 'status=0 bytes=0 tls=none url=about:query/fetcherror'),
+                 ('e100-https-page', 'status=0 bytes=0 tls=error url=about:query/fetcherror'),
+                 ('e100-https-page', 'status=200 bytes=150 tls=none url=http://fixture.test/page')]
         for case_id, page in wrong:
             with self.subTest(case=case_id, page=page), self.assertRaises(EvidenceError):
                 parse(by_id[case_id], page, **({'waited': 0, 'ready': 0, 'now': 1} if case_id == 'https-not-ready' else {}))

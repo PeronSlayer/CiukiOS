@@ -584,8 +584,10 @@ Invalid fd returns EBADF; an open non-socket passed to socket-specific calls
 returns ENOTSOCK. Validation order MUST be fixed record/scalars, fd type,
 copied address/ranges, reservation, then commit. `close/dup/dup2/fcntl` keep
 their existing error sets. F_SETFL on sockets MUST accept NONBLOCK, reject
-APPEND with EINVAL and preserve O_RDWR. Fstat on a socket MUST return
-EOPNOTSUPP; lseek/pread/pwrite ESPIPE; fsync/ftruncate EINVAL.
+APPEND with EINVAL and preserve O_RDWR; the O_RDWR that F_GETFL reports is
+ignored when passed back (fx-11, execution-abi.md; accepted by the lead
+2026-10-23). Fstat on a socket MUST return EOPNOTSUPP; lseek/pread/pwrite
+ESPIPE; fsync/ftruncate EINVAL.
 
 ### Readiness and name resolution
 

@@ -30,6 +30,8 @@ int __wrap_clock_gettime(clockid_t clock,struct timespec *t)
         !strcmp(mode,"missing-intermediate")||!strcmp(mode,"malformed-chain")||!strncmp(mode,"cert-",5)||!strcmp(mode,"fallback-clock")))t->tv_sec=1790000000;
     return r;
 }
+/* fx-11: chrome.c's NETSURF.LOG hook in the browser; here on stdout. */
+void ciuki_netsurf_log_record(const char *line) { printf("netsurf_log: %s",line); }
 int __real_getentropy(void *,size_t);
 int __wrap_getentropy(void *p,size_t n)
 { if(!strcmp(mode,"entropy")){errno=ENOSYS;return -1;}return __real_getentropy(p,n); }
@@ -270,6 +272,7 @@ int main(int argc,char **argv)
         if(!strcmp(mode,"entropy"))assert(job->tls_error==CIUKI_TLS_ENTROPY);
     }
     ciuki_net_job_free(job);ciuki_net_destroy(net);
+    char summary[128];assert(ciuki_net_fetch_summary(summary,sizeof(summary))>0);printf("fetch_summary: %s\n",summary);
     /* Allow the detached resolver to drop its final owned state before LSan. */
     usleep(20000);
     fixture_end();

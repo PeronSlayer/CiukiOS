@@ -108,6 +108,18 @@ int file_mapping_identity(struct file_description *, uint64_t page_index, struct
 int file_close(struct process *, int32_t fd);
 int file_dup(struct process *, int32_t fd, int32_t target, bool exact, uint32_t flags);
 int file_fcntl(struct process *, int32_t fd, uint32_t cmd, uint32_t arg);
+/* fx-11: the F_SETFL argument as POSIX.1-2017 fcntl() and Linux fcntl(2)
+ * define it. Access-mode and open-only (creation) bits in the argument are
+ * ignored, so the portable fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)|O_NONBLOCK)
+ * works on every description: F_GETFL reports the access mode (O_RDWR for
+ * sockets and channels). O_APPEND and O_NONBLOCK are the settable status
+ * flags; any other bit fails EINVAL. Returns the bits to store, or -EINVAL. */
+#define FILE_SETFL_IGNORED (O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC | O_DIRECTORY | O_CLOEXEC)
+static inline int file_setfl_bits(uint32_t arg)
+{
+    arg &= ~(uint32_t)FILE_SETFL_IGNORED;
+    return (arg & ~(uint32_t)(O_APPEND | O_NONBLOCK)) ? -EINVAL : (int)arg;
+}
 int file_open(struct process *, const char *, uint32_t flags, uint32_t mode);
 int file_seek_locked(struct file_description *, int64_t off, uint32_t whence, int64_t *out);
 int file_io_locked(struct file_description *, void *, size_t, bool write,

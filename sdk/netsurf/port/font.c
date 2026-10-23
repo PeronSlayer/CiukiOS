@@ -51,9 +51,17 @@ static struct {
     char text[WIDTH_BYTES];
 } widths[WIDTH_SLOTS];
 
-/* Four live faces cap caches at 1 MiB. Reopen on style changes; no web fonts. */
-static struct { struct ciuki_font_face *face; unsigned key; } faces[4];
-static unsigned next_face;
+/* Live faces, each with a glyph cache capped at CIUKI_FONT_CACHE_BYTES; no web
+ * fonts. fx-11: six faces, the least recently used replaced. Four slots with
+ * round-robin replacement evicted faces still in use: a 23 KB manual page
+ * using six faces opened 13 (LRU with four: 9; six or eight: 6), each a whole
+ * TTF read from disk on the T23. Worst case 6 x (416 KB face + 256 KiB glyph
+ * cache), about 4 MB, against about 2.7 MB for four. */
+#ifndef CIUKI_FONT_FACES
+#define CIUKI_FONT_FACES 6
+#endif
+static struct { struct ciuki_font_face *face; unsigned key; uint64_t used; } faces[CIUKI_FONT_FACES];
+static uint64_t face_clock;
 static unsigned face_key(const plot_font_style_t *style)
 {
     unsigned family=style->family==PLOT_FONT_FAMILY_SERIF?1:style->family==PLOT_FONT_FAMILY_MONOSPACE?2:0;
@@ -61,11 +69,14 @@ static unsigned face_key(const plot_font_style_t *style)
 }
 static struct ciuki_font_face *face_for(const plot_font_style_t *style)
 {
-    unsigned key=face_key(style),family=key/4;
+    unsigned key=face_key(style),family=key/4,i=CIUKI_FONT_FACES;
     static const char *family_names[]={"Sans","Serif","Mono"};
     static const char *style_names[]={"Regular","Bold","Italic","BoldItalic"};
-    for (unsigned i=0;i<4;i++) if (faces[i].face && faces[i].key==key) return faces[i].face;
-    unsigned i=next_face++%4;
+    for (unsigned n=0;n<CIUKI_FONT_FACES;n++) {
+        if (faces[n].face && faces[n].key==key) { faces[n].used=++face_clock; return faces[n].face; }
+        /* An empty slot first, otherwise the least recently used face. */
+        if (i==CIUKI_FONT_FACES || (faces[i].face && (!faces[n].face || faces[n].used<faces[i].used))) i=n;
+    }
     ciuki_font_close(faces[i].face); faces[i].face=NULL;
     char path[512];
 #ifdef CIUKI_HOST
@@ -78,7 +89,7 @@ static struct ciuki_font_face *face_for(const plot_font_style_t *style)
     uint64_t end=clock_ns();
     work.opens++;if(end>=start)work.open_ns+=end-start;
     if(error)return NULL;
-    faces[i].key=key;
+    faces[i].key=key;faces[i].used=++face_clock;
     return faces[i].face;
 }
 static unsigned em(const plot_font_style_t *s)
@@ -89,8 +100,8 @@ static unsigned em(const plot_font_style_t *s)
 bool fb_font_init(void) { return true; }
 bool fb_font_finalise(void)
 {
-    for(unsigned i=0;i<4;i++) { ciuki_font_close(faces[i].face); faces[i].face=NULL; }
-    memset(widths,0,sizeof(widths));next_face=0;
+    for(unsigned i=0;i<CIUKI_FONT_FACES;i++) { ciuki_font_close(faces[i].face); faces[i].face=NULL; faces[i].used=0; }
+    memset(widths,0,sizeof(widths));face_clock=0;
     return true;
 }
 nserror fb_font_width(const plot_font_style_t *style,const char *s,size_t n,int *width)

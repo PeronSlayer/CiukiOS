@@ -47,7 +47,8 @@ static void pump(void)
     if(!s || s->in_input || s->closed)return;
     struct desk_packet p;
     s->pumps++;
-    while(s->held_count<CIUKI_BROWSER_HELD && receive(s,&p))
+    /* fx-11: drain the whole channel; with room, a hold never refuses. */
+    while(ciuki_browser_held_room(s) && receive(s,&p))
         if(!ciuki_browser_hold(s,&p))break;
 }
 static int defaults(nsfb_t *fb)
@@ -110,6 +111,9 @@ static bool input(nsfb_t *fb,nsfb_event_t *event,int timeout)
         } else if((p.opcode==DESK_V3_ACTIVATE && !p.focused) || p.opcode==DESK_V3_POINTER_STATE)ciuki_chrome_release();
     }
     s->in_input=false;
+    /* fx-11: input dropped by a full hold ring during a long layout may have
+     * contained key or button releases: resynchronise like a focus loss. */
+    if(s->held_resync && !s->held_count) { s->held_resync=false; ciuki_browser_release(s); }
     if(s->resized) {
         bind(fb,s);s->resized=false;ciuki_chrome_resize();
         event->type=NSFB_EVENT_RESIZE;event->value.resize.w=fb->width;event->value.resize.h=fb->height;return true;

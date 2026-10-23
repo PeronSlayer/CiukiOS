@@ -7,6 +7,8 @@
 #include "budget.h"
 #include "logline.h"
 static uint64_t deadline;            /* 0: no timed layout is active */
+static uint64_t active_limit;        /* the limit of the active deadline */
+bool ciuki_layout_top_level;
 static enum ciuki_layout_cause last_cause;
 static uint64_t last_ns;
 uint64_t ciuki_layout_max_ns, ciuki_layout_local_max_ns, ciuki_layout_remote_max_ns;
@@ -35,15 +37,18 @@ bool ciuki_layout_local_url(const char *url)
     }
     return false;
 }
-struct ciuki_layout_span ciuki_layout_begin(bool timed)
+struct ciuki_layout_span ciuki_layout_begin_limit(bool timed,uint64_t limit_ns)
 {
-    struct ciuki_layout_span span={.start=now(),.outer_deadline=deadline,.timed=timed || deadline};
+    struct ciuki_layout_span span={.start=now(),.outer_deadline=deadline,.outer_limit=active_limit,
+        .limit=deadline?active_limit:limit_ns,.timed=timed || deadline};
     if(timed && !deadline) {
-        uint64_t limit=(CIUKI_LAYOUT_LIMIT_NS+scale()-1)/scale();
+        uint64_t limit=(limit_ns+scale()-1)/scale();
         deadline=span.start>UINT64_MAX-limit?UINT64_MAX:span.start+limit;
+        active_limit=limit_ns;
     }
     return span;
 }
+struct ciuki_layout_span ciuki_layout_begin(bool timed) { return ciuki_layout_begin_limit(timed,CIUKI_LAYOUT_LIMIT_NS); }
 void (*ciuki_ui_pump)(void);
 static unsigned keepalive_calls;
 static uint64_t keepalive_last;
@@ -61,8 +66,8 @@ bool ciuki_layout_end(struct ciuki_layout_span span,bool accepted)
     if(elapsed>ciuki_layout_max_ns)ciuki_layout_max_ns=elapsed;
     uint64_t *bucket=span.timed?&ciuki_layout_remote_max_ns:&ciuki_layout_local_max_ns;
     if(elapsed>*bucket)*bucket=elapsed;
-    bool late=span.timed && (elapsed>CIUKI_LAYOUT_LIMIT_NS || (deadline && finish>=deadline));
-    deadline=span.outer_deadline;
+    bool late=span.timed && (elapsed>span.limit || (deadline && finish>=deadline));
+    deadline=span.outer_deadline;active_limit=span.outer_limit;
     last_ns=elapsed;
     last_cause=accepted && !late?CIUKI_LAYOUT_ACCEPTED:late?CIUKI_LAYOUT_TIME:CIUKI_LAYOUT_ADMISSION;
     if(last_cause!=CIUKI_LAYOUT_ACCEPTED)ciuki_layout_rejections++;

@@ -30,6 +30,22 @@ static uint64_t now_ms(void)
 { struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000+(unsigned long)t.tv_nsec/1000000; }
 static unsigned record_id;
 static const char *const stages[]={"dns","connect","tls","request","response","redirect","done","error"};
+/* fx-11: each failed fetch's error record also goes to C:\SYSTEM\LOGS\
+ * NETSURF.LOG (chrome.c, bounded per session), and the exit line carries a
+ * fetch summary: a trial's serial capture is not always available, and
+ * 423b803a's NETSURF.LOG could not name the failing stage. */
+void ciuki_netsurf_log_record(const char *line) __attribute__((weak));
+static unsigned fetches_done,fetches_ok,fetch_errors;
+static char last_error[48]="none";
+size_t ciuki_net_fetch_summary(char *out,size_t bytes)
+{
+    int n=bytes?snprintf(out,bytes,"fetches=%u fetch_ok=%u fetch_errors=%u last_error=%s",fetches_done,fetches_ok,fetch_errors,last_error):-1;
+    if(n<0){if(bytes)out[0]=0;return 0;}
+    return (size_t)n<bytes?(size_t)n:bytes-1;
+}
+__attribute__((format(printf,3,4)))
+static int record_line(char *line,size_t size,const char *format,...)
+{ va_list ap;va_start(ap,format);int n=ciuki_line_vformat(line,size,format,ap);va_end(ap);return n; }
 void ciuki_net_record(struct ciuki_job *j,enum ciuki_fetch_stage stage)
 {
     int saved=errno;
@@ -39,11 +55,22 @@ void ciuki_net_record(struct ciuki_job *j,enum ciuki_fetch_stage stage)
     uint64_t now=now_ms();struct timespec utc={0};uint32_t days,seconds;
     bool rtc=ciuki_tls_clock(&days,&seconds);
     clock_gettime(CLOCK_REALTIME,&utc);
-    ciuki_log_line("[netsurf] fetch url=%s://%s%s stage=%s code=%u errno=%d tls_err=%d bytes=%zu ms=%llu id=%u at=%s tls_code=%u rtc=%u utc=%lld",
+    char line[CIUKI_LOG_LINE_MAX];
+    int n=record_line(line,sizeof(line),"[netsurf] fetch url=%s://%s%s stage=%s code=%u errno=%d tls_err=%d bytes=%zu ms=%llu id=%u at=%s tls_code=%u rtc=%u utc=%lld",
         j->secure?"https":"http",j->host,j->path_prefix,stages[stage],j->http?j->http->status:0,
         j->io_errno,j->tls_engine_error,j->http?j->http->body_bytes:0,
         (unsigned long long)(now>=j->record_ms?now-j->record_ms:0),j->record_id,stages[j->stage],
         (unsigned)j->tls_error,rtc,(long long)utc.tv_sec);
+    if(n>0){fflush(stderr);ciuki_write_all(2,line,(size_t)n);}
+    if(stage==CIUKI_FETCH_ERROR){
+        if(fetch_errors!=UINT_MAX)fetch_errors++;
+        snprintf(last_error,sizeof(last_error),"%s:%d:%u",stages[j->stage],j->io_errno,(unsigned)j->tls_error);
+        if(n>0 && ciuki_netsurf_log_record)ciuki_netsurf_log_record(line);
+    }
+    if(stage==CIUKI_FETCH_DONE){
+        if(fetches_done!=UINT_MAX)fetches_done++;
+        if(!(j->record_mask&(1u<<CIUKI_FETCH_ERROR)) && j->http && j->http->status>=200 && j->http->status<400 && fetches_ok!=UINT_MAX)fetches_ok++;
+    }
     errno=saved;
 }
 void ciuki_net_failure(struct ciuki_job *j,const char *message)

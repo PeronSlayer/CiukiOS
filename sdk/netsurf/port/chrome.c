@@ -458,16 +458,19 @@ void ciuki_chrome_exit_reason(const char *reason)
 }
 /* Builds without the native fetcher (unit harnesses) report "unknown". */
 __attribute__((weak)) const char *ciuki_net_state_word(void);
+__attribute__((weak)) size_t ciuki_net_fetch_summary(char *,size_t);
 __attribute__((format(printf,3,4)))
 static int format_line(char *line,size_t size,const char *format,...)
 { va_list ap;va_start(ap,format);int n=ciuki_line_vformat(line,size,format,ap);va_end(ap);return n; }
 static int exit_line(char *line,size_t size,bool surface)
 {
     struct ciuki_browser_surface *s=surface?ciuki_browser_active:NULL;
-    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u network=%s",
+    char fetches[128]=" ";
+    if(!ciuki_net_fetch_summary || !ciuki_net_fetch_summary(fetches+1,sizeof(fetches)-1))fetches[0]=0;
+    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u%s network=%s",
             exit_reason?exit_reason:"unknown",exit_detail,ciuki_layout_rejections,
             (unsigned long long)(ciuki_layout_max_ns/1000u),(unsigned long long)(ciuki_layout_local_max_ns/1000u),
-            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,
+            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,fetches,
             ciuki_net_state_word?ciuki_net_state_word():"unknown");
 }
 /* Appends "<UTC time> <line>"; past 64 KiB the file starts over. */
@@ -481,6 +484,14 @@ static void netsurf_log(const char *line)
     if(!clock_gettime(CLOCK_REALTIME,&now) && gmtime_r(&now.tv_sec,&utc))
         snprintf(stamp,sizeof(stamp),"%04d-%02d-%02dT%02d:%02d:%02dZ ",utc.tm_year+1900,utc.tm_mon+1,utc.tm_mday,utc.tm_hour,utc.tm_min,utc.tm_sec);
     ciuki_write_all(fd,stamp,strlen(stamp));ciuki_write_all(fd,line,strlen(line));close(fd);
+}
+/* fx-11: net.c's fetch error records (stage, errno, TLS codes, RTC state),
+ * at most 16 per browser session so a failing page cannot fill the file. */
+void ciuki_netsurf_log_record(const char *line)
+{
+    static unsigned records;
+    if(records>=16)return;
+    records++;netsurf_log(line);
 }
 void ciuki_chrome_exit_report(void)
 {

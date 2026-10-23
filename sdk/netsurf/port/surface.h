@@ -55,6 +55,7 @@ struct ciuki_browser_surface {
     struct desk_packet held[CIUKI_BROWSER_HELD];
     unsigned held_head, held_count, pumps;
     bool in_input;
+    bool held_resync; /* fx-11: held input was dropped; release keys after the layout */
 };
 int ciuki_browser_open(struct ciuki_browser_surface *,const struct ciuki_browser_ops *,int,int,int);
 void ciuki_browser_close(struct ciuki_browser_surface *);
@@ -66,7 +67,11 @@ bool ciuki_browser_event(struct ciuki_browser_surface *,nsfb_event_t *);
 void ciuki_browser_input(struct ciuki_browser_surface *,const struct ciuki_input_event *);
 void ciuki_browser_release(struct ciuki_browser_surface *);
 void ciuki_browser_mark_closed(struct ciuki_browser_surface *,const char *reason,int detail);
-/* Hold a packet for the next UI turn (false: ring full); take it back in order. */
+/* Hold a packet for the next UI turn; take it back in order. fx-11: with
+ * room (ciuki_browser_held_room) a hold always succeeds: input beyond a full
+ * ring is dropped (counted in overflows, held_resync set) and a control packet
+ * replaces the newest held input packet. False only without room. */
+bool ciuki_browser_held_room(const struct ciuki_browser_surface *);
 bool ciuki_browser_hold(struct ciuki_browser_surface *,const struct desk_packet *);
 bool ciuki_browser_unhold(struct ciuki_browser_surface *,struct desk_packet *);
 /* Bound to the framebuffer frontend's sole UI thread. */

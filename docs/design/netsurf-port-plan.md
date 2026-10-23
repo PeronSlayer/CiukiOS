@@ -578,6 +578,34 @@ yielding or document limits. Nonblocking networking alone proves no UI bound.
 Proposed fixture acceptance is <=100 ms input/Stop response; accept or revise
 with measured T23 evidence, never suppress genuine unresponsive-window state.
 
+### Layout time limits (f6-14 budget; lead decision 2026-10-23)
+
+f6-14 accepted a 75 ms monotonic layout deadline provisionally ("revised by
+directive if exceeded"); f6-20 exempted local content (`about:`, `resource:`,
+`file:`) from it. **Lead decision 2026-10-23 (fx-11):** the document of a
+top-level browser window gets a **10 s** layout limit
+(`CIUKI_LAYOUT_DOCUMENT_LIMIT_NS`, `sdk/netsurf/port/budget.h`); frames,
+iframes, embedded objects and every other remote span keep 75 ms, and a
+nested span inherits its outer deadline. A page over its limit still shows
+the existing error page ("needs more layout time than the browser allows for
+web content"), with Try Again. Measured basis (T23, trial 423b803a): 58 ms of
+layout work for the welcome page alone; real documents with 5–13 ms of host
+layout correspond to about 0.6–1.7 s on the T23
+(`docs/validation/fx-11-netsurf-fetch-layout.md`).
+
+NetSurf runs in its own process, so a long layout freezes only its window.
+While a layout runs the browser neither repaints nor handles input: the
+desktop keeps showing the last presented frame and can still move the window,
+and marks it "Not responding" after an unanswered 5 s PING
+(`apps/desktop/client.c`), which is genuine and not suppressed. The keepalive
+pump (`ciuki_ui_keepalive`, at most every 20 ms while layout code runs) reads
+the desktop channel throughout, so the desktop never drops the client (it
+drops only a client that read nothing for 5 s with a full queue); input past
+64 held packets is dropped and counted (`input_overflows`), and held keys and
+buttons are released afterwards like a focus loss. Held input is processed
+when the layout ends: the bound on input latency is the layout time, at most
+10 s for a top-level document and 75 ms for anything else.
+
 ## Milestones and acceptance
 
 Private site names/URLs and expected pages will be supplied by the lead at
