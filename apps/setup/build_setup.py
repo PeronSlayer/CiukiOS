@@ -15,9 +15,9 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build/apps/setup"
 SDK = ROOT / "build/tools/ciuki-sdk"
 SOURCES = tuple(f"apps/setup/{name}.c" for name in
-                ("setup", "setup_info", "app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media")) + (
+                ("setup", "setup_info", "app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media", "report_link")) + (
                     "apps/desktop/settings.c", "apps/desktop/sounds.c")
-HEADERS = ("apps/setup/setup.h", "apps/setup/setup_info.h", "apps/setup/native.h",
+HEADERS = ("apps/setup/setup.h", "apps/setup/setup_info.h", "apps/setup/native.h", "apps/setup/report_link.h", "apps/hwreport/textframe.h",
            "sdk/libsetup/include/setup_txn.h", "sdk/libsetup/include/setup_inf.h")
 LIBRARIES = (ROOT / "build/apps/desktop/libdeskui.a", SDK / "sysroot/lib/libsetup.a", SDK / "sysroot/lib/libdisk.a", SDK / "sysroot/lib/libreg.a")
 CFLAGS = ["-O2", "-Wall", "-Wextra", "-Werror"]

@@ -35,7 +35,7 @@ class HardwareReportTests(unittest.TestCase):
                 "-fsanitize=" + os.environ.get("CIUKI_HWREPORT_SANITIZERS", "address,undefined"), "-fno-sanitize-recover=undefined",
                 "-I", str(includes), "-I", str(ROOT / "src/kernel/include"),
                 str(ROOT / "tests/host/hwreport_native_test.c"), str(ROOT / "apps/hwreport/report.c"),
-                str(ROOT / "apps/hwreport/archive.c"), "-o", str(binary)], check=True, env={**os.environ, "TMPDIR": temp})
+                str(ROOT / "apps/hwreport/archive.c"), str(ROOT / "apps/hwreport/textlink.c"), "-o", str(binary)], check=True, env={**os.environ, "TMPDIR": temp})
             subprocess.run([binary, temp], check=True, env={**os.environ, "TMPDIR": temp})
             logs = gzip.decompress((Path(temp) / "CIUKILOG.GZ").read_bytes())
             self.assertEqual(logs.count(b"[ata] count=2 error=-5"), 28000)
@@ -50,7 +50,7 @@ class HardwareReportTests(unittest.TestCase):
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                 "-fsanitize=" + os.environ.get("CIUKI_HWREPORT_SANITIZERS", "address,undefined"), "-fno-sanitize-recover=undefined",
                 "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/hwreport_test.c"),
-                str(ROOT / "apps/hwreport/report.c"), str(ROOT / "apps/hwreport/archive.c"), "-o", str(binary)], check=True, env={**os.environ, "TMPDIR": temp})
+                str(ROOT / "apps/hwreport/report.c"), str(ROOT / "apps/hwreport/archive.c"), str(ROOT / "apps/hwreport/textlink.c"), "-o", str(binary)], check=True, env={**os.environ, "TMPDIR": temp})
             archive = Path(temp) / "logs.gz"
             subprocess.run([binary, archive], check=True, env={**os.environ, "TMPDIR": temp})
             self.assertEqual(gzip.decompress(archive.read_bytes()), Path(str(archive) + ".txt").read_bytes())
@@ -62,7 +62,7 @@ class HardwareReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="hwreport-app-", dir=parent) as temp:
             includes = Path(temp) / "include"
             shutil.copytree(ROOT / "sdk/sysroot-overlay/include/ciuki", includes / "ciuki")
-            for source in ("main.c", "native.c", "archive.c"):
+            for source in ("main.c", "native.c", "archive.c", "textlink.c"):
                 subprocess.run(["clang", "-std=c17", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                     "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                     "-I", str(includes), "-I", str(ROOT / "src/kernel/include"), "-fsyntax-only",

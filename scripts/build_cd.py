@@ -46,6 +46,11 @@ HEADROOM_PERCENT = 5                 # directive f9-01 item 1 [O1-A]
 CD_LIMIT_SECTORS = 333000            # 74-minute CD-R: 681,984,000 bytes (plan 1)
 SETUP_SIGNATURE = 0x4B554943         # reserved Setup CD disk signature (lead decision O4)
 SETUP_TOKEN = b"setup=1"
+# Programs of the Setup runtime. /Programs/hwreport is the rescue page's
+# Hardware Report (f9-07 amendment 1); it comes from the disk image's payload
+# list, next to /Programs/setup. Without it the rescue page can only fall back
+# to Setup's own report, so the build refuses a CD that lacks it.
+SETUP_PROGRAMS = ("/Programs/setup", "/Programs/hwreport")
 VOLUME_ID = "CIUKIOS_SETUP"
 VOLUME_LABEL = "CIUKISETUP"
 BOOT_IMAGE = "CIUKBOOT.IMG"
@@ -677,6 +682,17 @@ def content_digest(boot_files, iso_files):
     return sha256_bytes("".join(lines).encode()), len(lines)
 
 
+def check_setup_programs(files):
+    """files: staged CD boot-image path -> source file. Every Setup runtime
+    program must be present (FAT names are case-insensitive) and an ELF."""
+    by_lower = {path.lower(): source for path, source in files.items()}
+    for program in SETUP_PROGRAMS:
+        source = by_lower.get(program.lower())
+        require(source is not None, f"Setup CD payload lacks {program}")
+        with Path(source).open("rb") as stream:
+            require(stream.read(4) == b"\x7fELF", f"Setup CD payload {program} is not an ELF program")
+
+
 def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LIMIT_SECTORS,
           allow_source_mismatch=False, keep_work=False):
     for tool in TOOLS:
@@ -730,6 +746,7 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
             target.write_bytes(data)
             os.utime(target, (epoch, epoch))
             files[path] = target
+        check_setup_programs(files)
         cd_paths = sorted({*files, "/system/RELEASE.JSON"})
         games = [p["name"] for p in manifest.get("games", {}).get("packages", [])]
         assignment, present, required = eligibility(config, cd_paths, games)

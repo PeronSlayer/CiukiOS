@@ -13,6 +13,7 @@
 #include "../libdeskui/deskui.h"
 #include "../libdeskui/textarea.h"
 #include "setup_txn.h"
+#include "report_link.h"
 #include <ciuki/abi.h>
 #include <stdint.h>
 
@@ -83,6 +84,11 @@ struct st_host {
     int (*copy_file)(void *, const char *from, const char *to, char *buffer, size_t cap); /* bounded streaming, USB destination */
     int (*make_dir)(void *, const char *path);                                        /* USB only */
     int (*list_dir)(void *, const char *path, char (*names)[64], unsigned cap);
+    /* Runs /Programs/hwreport headless (--rescue --text-fd=3) and returns the
+     * report text it produced (report_link.h). 0 with the text in buffer and
+     * its length, or a negative errno with reason set (missing, spawn, timeout,
+     * closed, frame, size, checksum, status, exit, ...). */
+    int (*report_app)(void *, char *buffer, size_t cap, size_t *length, char reason[24]);
     void (*record)(void *, const char *line);                             /* kernel log, serial */
     int (*eject)(void *);
     int (*media_present)(void *);                                         /* 1 in, 0 removed, <0 unknown */
@@ -125,6 +131,7 @@ struct st_app {
     char release[65];
     struct st_hw_row rows[12]; unsigned row_count;
     char report[ST_REPORT_BYTES]; size_t report_length;
+    char *link_text; size_t link_length;    /* CIUKIREP.TXT text received from the f9-07 program */
     /* pages */
     int kbd, tz, clock_utc, net_manual;
     char clock_text[24]; int clock_edited; int64_t clock_shown;

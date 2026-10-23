@@ -91,6 +91,75 @@ static void log_text(struct text *t, const char *log, size_t size, int error)
     }
     if (hidden) add(t,"%u other log records redacted\n",hidden);
 }
+/* /System/BUILD.TXT (scripts/build_identity.py): "key=value" lines. Every
+ * quoted value is validated against its exact shape first, so nothing
+ * arbitrary or invented reaches the report; any violation quotes nothing. */
+static int hex_only(const char *s, size_t n)
+{
+    for (size_t i=0;i<n;i++) if (!((s[i]>='0' && s[i]<='9') || (s[i]>='a' && s[i]<='f'))) return 0;
+    return 1;
+}
+static int digits(const char *s, unsigned from, unsigned to)
+{
+    for (unsigned i=from;i<to;i++) if (s[i]<'0' || s[i]>'9') return 0;
+    return 1;
+}
+static int date_ok(const char *s, size_t n)
+{
+    /* YYYY-MM-DDTHH:MM:SSZ */
+    if (n!=20 || !digits(s,0,4) || s[4]!='-' || !digits(s,5,7) || s[7]!='-' || !digits(s,8,10) || s[10]!='T' ||
+        !digits(s,11,13) || s[13]!=':' || !digits(s,14,16) || s[16]!=':' || !digits(s,17,19) || s[19]!='Z') return 0;
+    unsigned month=(unsigned)((s[5]-'0')*10+(s[6]-'0')), day=(unsigned)((s[8]-'0')*10+(s[9]-'0'));
+    unsigned hour=(unsigned)((s[11]-'0')*10+(s[12]-'0')), minute=(unsigned)((s[14]-'0')*10+(s[15]-'0')), second=(unsigned)((s[17]-'0')*10+(s[18]-'0'));
+    return month>=1 && month<=12 && day>=1 && day<=31 && hour<=23 && minute<=59 && second<=60;
+}
+enum { BK_SCHEMA, BK_COMMIT, BK_DIRTY, BK_KERNEL, BK_MANIFEST, BK_DATE, BK_COUNT };
+static void build_identity(struct text *t, const struct hr_source *s)
+{
+    static const char *const keys[BK_COUNT]={"schema","source_commit","source_dirty","kernel_elf_sha256","build_manifest_id","build_date"};
+    static const char path[]="/System/BUILD.TXT";
+    if (s->build_error==-ENOENT) { add(t,"Build file: %s not present on this system\n",path); return; }
+    if (s->build_error==-EFBIG) { add(t,"Build file: %s oversized (more than %u bytes); not quoted\n",path,HR_BUILD_MAX); return; }
+    if (s->build_error) { add(t,"Build file: %s unreadable (error %d); not quoted\n",path,s->build_error); return; }
+    if (!s->build_txt) { add(t,"Build file: %s unavailable (not read)\n",path); return; }
+    if (s->build_length>HR_BUILD_MAX) { add(t,"Build file: %s oversized (more than %u bytes); not quoted\n",path,HR_BUILD_MAX); return; }
+    char val[BK_COUNT][96]; unsigned seen=0; const char *bad=NULL; char why[64];
+    why[0]=0;
+    for (size_t at=0; at<s->build_length && !bad;) {
+        size_t end=at; while (end<s->build_length && s->build_txt[end]!='\n') end++;
+        size_t stop=end; if (stop>at && s->build_txt[stop-1]=='\r') stop--;
+        const char *line=s->build_txt+at; size_t n=stop-at; at=end+1;
+        if (!n) continue;
+        for (size_t i=0;i<n;i++) if ((unsigned char)line[i]<32 || (unsigned char)line[i]>126) { bad="invalid character"; break; }
+        if (bad) break;
+        const char *eq=memchr(line,'=',n);
+        if (!eq || eq==line) { bad="line without key=value"; break; }
+        size_t kn=(size_t)(eq-line), vn=n-kn-1;
+        for (unsigned k=0;k<BK_COUNT;k++) {
+            if (strlen(keys[k])!=kn || memcmp(keys[k],line,kn)) continue;
+            if (seen&(1u<<k)) { snprintf(why,sizeof(why),"duplicate key %s",keys[k]); bad=why; }
+            else if (vn>=sizeof(val[k])) { snprintf(why,sizeof(why),"value too long for %s",keys[k]); bad=why; }
+            else { memcpy(val[k],eq+1,vn); val[k][vn]=0; seen|=1u<<k; }
+            break;
+        }
+    }
+    if (!bad) for (unsigned k=0;k<BK_COUNT;k++) {
+        if (k==BK_DIRTY || (seen&(1u<<k))) continue;
+        snprintf(why,sizeof(why),"missing key %s",keys[k]); bad=why; break;
+    }
+    if (!bad && strcmp(val[BK_SCHEMA],"1")) bad="unsupported schema";
+    if (!bad && strcmp(val[BK_COMMIT],"unknown") && !(strlen(val[BK_COMMIT])==40 && hex_only(val[BK_COMMIT],40))) bad="invalid source_commit";
+    if (!bad && (seen&(1u<<BK_DIRTY)) && strcmp(val[BK_DIRTY],"0") && strcmp(val[BK_DIRTY],"1") && strcmp(val[BK_DIRTY],"unknown")) bad="invalid source_dirty";
+    if (!bad && !(strlen(val[BK_KERNEL])==64 && hex_only(val[BK_KERNEL],64))) bad="invalid kernel_elf_sha256";
+    if (!bad && !(strlen(val[BK_MANIFEST])==64 && hex_only(val[BK_MANIFEST],64))) bad="invalid build_manifest_id";
+    if (!bad && !date_ok(val[BK_DATE],strlen(val[BK_DATE]))) bad="invalid build_date";
+    if (bad) { add(t,"Build file: %s present but malformed (%s); not quoted\n",path,bad); return; }
+    add(t,"Build file: %s (read-only, %u bytes)\n",path,(unsigned)s->build_length);
+    add(t,"Source commit: %s%s\n",val[BK_COMMIT],strcmp(val[BK_COMMIT],"unknown") ? "" : " (source tree without git)");
+    if (seen&(1u<<BK_DIRTY))
+        add(t,"Source tree: %s\n",!strcmp(val[BK_DIRTY],"0") ? "clean" : !strcmp(val[BK_DIRTY],"1") ? "modified" : "unknown");
+    add(t,"Kernel ELF SHA-256: %s\nBuild manifest id: %s\nBuild date (UTC): %s\n",val[BK_KERNEL],val[BK_MANIFEST],val[BK_DATE]);
+}
 int hr_filter_log(const char *log,size_t size,char *out,size_t cap,size_t *length)
 {
     if (!log || !out || !cap || !length) return -EINVAL;
@@ -210,7 +279,8 @@ int hr_format(const struct hr_source *s, char *out, size_t cap, size_t *length)
     } else add(&t,"Network link state unavailable\n");
     add(&t,"\n[Build identity]\n");
     if (h) value(&t,"Kernel build: ",h->build_id,sizeof(h->build_id));
-    add(&t,"Image SHA-256: unavailable (release provenance not supplied)\nBuild manifest: unavailable (host-side only)\n");
+    build_identity(&t,s);
+    add(&t,"Image SHA-256: not stored in the image (an image cannot contain its own hash); quote it from the release page\n");
     add(&t,"\n[Boot log - privacy filtered, first 64 KiB maximum]\n"); log_text(&t,s->boot_log,s->boot_length>HR_LOG_MAX ? HR_LOG_MAX : s->boot_length,s->boot_error);
     add(&t,"\n[Latest kernel records - privacy filtered disk ring, 64 KiB maximum]\n"); log_text(&t,s->latest_log,s->latest_length>HR_LOG_MAX ? HR_LOG_MAX : s->latest_length,s->latest_error);
     add(&t,"\n[Pending kernel records - privacy filtered RAM snapshot, 4 KiB maximum]\n");

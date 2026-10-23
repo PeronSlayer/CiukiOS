@@ -12,6 +12,8 @@ struct hr_native {
     struct ciuki_media_state media;
     char *pci_names, *usb_names;
     char boot[HR_LOG_MAX], latest[HR_LOG_MAX];
+    char build[HR_BUILD_MAX + 1];
+    size_t build_length;
     uint32_t writable, usb;
     unsigned selected;
     int rescue;

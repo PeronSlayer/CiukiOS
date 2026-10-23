@@ -10,8 +10,8 @@ import sys
 import tempfile
 ROOT = Path(__file__).resolve().parents[3]
 sys.dont_write_bytecode = True
-SOURCES = [*(f"apps/setup/{n}.c" for n in ("app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media", "setup_info")),
-           "sdk/libsetup/fake/fake.c", "tests/host/setup/setup_test.c", "tests/host/setup/native_test.c",
+SOURCES = [*(f"apps/setup/{n}.c" for n in ("app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media", "setup_info", "report_link")),
+           "sdk/libsetup/fake/fake.c", "apps/hwreport/report.c", "apps/hwreport/textlink.c", "tests/host/setup/setup_test.c", "tests/host/setup/native_test.c", "tests/host/setup/link_test.c",
            *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")),
            *(f"apps/desktop/{n}.c" for n in ("theme", "settings", "compositor", "sounds"))]
 def main():
@@ -22,7 +22,7 @@ def main():
         portrait=folder/"portrait.xrgb";portrait.write_bytes(module.convert(ROOT/"assets/brand/ciuki-logo.png"))
         binary=folder/"setup-test"
         subprocess.run(["clang","-std=c17","-O1","-g","-Wall","-Wextra","-Werror","-D_POSIX_C_SOURCE=200809L",
-                        ("-fsanitize=undefined" if "--ubsan" in sys.argv else "-fsanitize=address,undefined"),"-fno-sanitize-recover=undefined","-ffunction-sections","-fdata-sections","-Wl,--gc-sections", "-Wl,--wrap=malloc,--wrap=calloc",
+                        ("-fsanitize=undefined" if "--ubsan" in sys.argv else "-fsanitize=address,undefined"),"-fno-sanitize-recover=undefined","-ffunction-sections","-fdata-sections","-Wl,--gc-sections", "-Wl,--wrap=malloc,--wrap=calloc,--wrap=waitpid",
                         f'-DST_NATIVE_ROOT="{temp}"', "-idirafter",str(ROOT/"sdk/sysroot-overlay/include"),
                         "-I",str(ROOT/"src/kernel/include"),"-I",str(ROOT/"sdk/libsetup/include"),
                         *(str(ROOT/s) for s in SOURCES),"-o",str(binary)],check=True)

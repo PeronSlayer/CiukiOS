@@ -90,6 +90,25 @@ static int read_log(char *out,size_t *length,int tail,const struct ciuki_hardwar
     if (close(fd) && !e) e=-errno;
     return e;
 }
+/* Read-only, bounded read of the guest build identity. A file larger than
+ * HR_BUILD_MAX is -EFBIG (one extra byte is read to prove it), never truncated. */
+static int read_build(char *out,size_t *length)
+{
+    *length=0;
+    int fd=open("/system/BUILD.TXT",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=0; size_t used=0;
+    while (used<HR_BUILD_MAX+1u) {
+        ssize_t got=read(fd,out+used,HR_BUILD_MAX+1u-used);
+        if (got<0 && errno==EINTR) continue;
+        if (got<0) { e=-errno; break; }
+        if (!got) break;
+        used+=(size_t)got;
+    }
+    if (!e && used>HR_BUILD_MAX) e=-EFBIG;
+    if (close(fd) && !e) e=-errno;
+    if (!e) { out[used]=0; *length=used; }
+    return e;
+}
 static void drives(struct hr_native *n)
 {
     n->media=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(n->media)};
@@ -128,6 +147,7 @@ void hr_native_collect(struct hr_native *n)
     n->pci_names=names("/system/hwids/pci-ids.json"); n->usb_names=names("/system/hwids/usb-ids.json");
     s->boot_error=read_log(n->boot,&s->boot_length,0,s->hardware); if (!s->boot_error) s->boot_log=n->boot;
     s->latest_error=read_log(n->latest,&s->latest_length,1,s->hardware); if (!s->latest_error) s->latest_log=n->latest;
+    s->build_error=read_build(n->build,&n->build_length); if (!s->build_error) { s->build_txt=n->build; s->build_length=n->build_length; }
     drives(n);
 }
 void hr_native_free(struct hr_native *n)

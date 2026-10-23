@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 #include "../../../apps/setup/setup.h"
 #include "../../../sdk/libsetup/fake/fake.h"
+#include "../../../apps/hwreport/textframe.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 void native_tests(const uint32_t *portrait);
+void link_tests(void);
 void *__real_malloc(size_t);
 void *__real_calloc(size_t,size_t);
 static unsigned fail_allocation, allocation;
@@ -28,7 +30,9 @@ struct fixture {
     uint32_t power_requests; int power_off, power_fail, power_on_copy, power_confirm, power_moved, hold_power, hold_dialogs;
     unsigned power_dialogs, copy_power_dialogs, power_kept; int no_error_frame;
     uint64_t now;
-    char records[8192], written[1024], last_path[128];
+    /* report_app fake: result and reason to return, the text it produces, calls. */
+    int report_result, no_report_hook; unsigned report_calls; const char *report_reason, *report_text;
+    char records[8192], written[1024], last_path[128], first_path[128];
 } f;
 static void tap(unsigned code){st_key(&a,code,1);st_key(&a,code,0);}
 static uint64_t mono(void *c){return ((struct fixture *)c)->now;}
@@ -55,11 +59,16 @@ static int read_file(void *c,const char *path,char *out,size_t cap,size_t *lengt
 }
 static int write_file(void *c,const char *path,const char *text,size_t length){
     (void)c;assert(path[0]=='F' && path[1]==':');f.writes++;
-    snprintf(f.last_path,sizeof(f.last_path),"%s",path);
+    snprintf(f.last_path,sizeof(f.last_path),"%s",path);if(f.writes==1)snprintf(f.first_path,sizeof(f.first_path),"%s",path);
     if(length>=sizeof(f.written))length=sizeof(f.written)-1;memcpy(f.written,text,length);f.written[length]=0;return 0;
 }
 static int make_dir(void *c,const char *path){(void)c;assert(!strncmp(path,"F:\\CIUKIOS-RESCUE-",18));return 0;}
 static int list(void *c,const char *path,char (*out)[64],unsigned cap){(void)c;(void)path;assert(cap);strcpy(out[0],"GPL.TXT");return 1;}
+static int report_app(void *c,char *buffer,size_t cap,size_t *length,char reason[24]){
+    (void)c;f.report_calls++;assert(cap>=HR_LINK_MAX);
+    if(f.report_result){snprintf(reason,24,"%s",f.report_reason);return f.report_result;}
+    size_t n=strlen(f.report_text);memcpy(buffer,f.report_text,n);*length=n;return 0;
+}
 static void record(void *c,const char *line){(void)c;size_t k=strlen(f.records);snprintf(f.records+k,sizeof(f.records)-k,"%s\n",line);}
 static int eject(void *c){(void)c;f.eject++;return 0;}
 static int media(void *c){(void)c;return f.media;}
@@ -126,7 +135,7 @@ static void fixture(void){
     setup_fake.entered=entered;
 }
 static void init(void){
-    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=letter,.portrait=portrait};
+    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.report_app=f.no_report_hook?NULL:report_app,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=letter,.portrait=portrait};
     du_init(&ui,pixels,ST_W,ST_H);ui.focused_window=1;assert(!st_init(&a,&ui,&h));
 }
 static void no_writes(void){assert(!setup_fake.execute_calls&&!setup_fake.mutations&&!f.writes);}
@@ -304,6 +313,46 @@ static void power_button(void){
     st_turn(&a);assert(ui.dialog.id==ST_DLG_POWER);tap(DU_KEY_ESC);assert(!ui.dialog.kind&&!f.power_off);st_free(&a);
     puts("PASS power button: Setup dialog, call-73 power off before the copy, incomplete-copy warning with explicit confirmation, no dialog replacement (a copy error keeps the request), restart countdown pause");
 }
+/* f9-07 amendment 1: the rescue page runs the f9-07 program headless, shows
+ * the text it returns, and saves it as CIUKIREP.TXT next to HARDWARE.TXT; any
+ * failure falls back to Setup's own report; the other pages keep the own report. */
+static void rescue_report(void){
+    static const char text[]="CiukiOS Hardware Report\nCIUKIREP.TXT\n\n[CPU]\nVendor: GenuineIntel\n";
+    fixture();f.report_text=text;init();st_action(&a,ST_ID_RESCUE);assert(a.page==ST_PAGE_RESCUE);
+    st_action(&a,ST_ID_REPORT);
+    assert(f.report_calls==1&&a.page==ST_PAGE_TEXT&&a.back_page==ST_PAGE_RESCUE&&a.link_length==sizeof(text)-1);
+    char want[96];snprintf(want,sizeof(want),"[rescue] action=hardware_report result=app bytes=%u",(unsigned)sizeof(text)-1);
+    assert(strstr(f.records,want)&&!strstr(f.records,"fallback")&&!strstr(f.records,"hardware_view"));
+    assert(strstr(a.text.text,"Vendor: GenuineIntel")&&!strstr(a.text.text,"hardware report\r"));
+    no_writes();
+    /* Save to USB: Setup's HARDWARE.TXT, then the received text as CIUKIREP.TXT. */
+    char result[200];assert(!st_save_report(&a,result,sizeof(result)));
+    assert(f.writes==2&&!strcmp(f.first_path,"F:\\HARDWARE.TXT")&&!strcmp(f.last_path,"F:\\CIUKIREP.TXT")&&!strcmp(f.written,text));
+    assert(strstr(result,"CIUKIREP.TXT")&&strstr(result,"HARDWARE.TXT")&&strstr(f.records,"hardware_export result=ok files=2"));
+    tap(DU_KEY_ESC);assert(a.page==ST_PAGE_RESCUE);
+    /* A later failure drops the received text: a stale report is never saved. */
+    f.report_result=-ETIMEDOUT;f.report_reason="timeout";f.writes=0;
+    st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT&&!a.link_length&&strstr(f.records,"result=fallback reason=timeout"));
+    assert(!st_save_report(&a,result,sizeof(result))&&f.writes==1&&!strcmp(f.last_path,"F:\\HARDWARE.TXT"));
+    st_free(&a);
+    static const struct{int result,hook;const char *text,*reason,*logged;}failures[]={
+        {-ENOENT,1,"","missing","missing"},{-ECHILD,1,"","exit","exit"},{-EPROTO,1,"","frame","frame"},{-EPIPE,1,"","closed","closed"},
+        {-EIO,1,"","","failed"},{0,1,"","","empty"},{0,0,"","","unavailable"}};
+    for(unsigned i=0;i<sizeof(failures)/sizeof(*failures);i++){
+        fixture();f.report_result=failures[i].result;f.report_reason=failures[i].reason;f.report_text=failures[i].text;f.no_report_hook=!failures[i].hook;init();
+        st_action(&a,ST_ID_RESCUE);st_action(&a,ST_ID_REPORT);
+        snprintf(want,sizeof(want),"[rescue] action=hardware_report result=fallback reason=%s",failures[i].logged);
+        assert(strstr(f.records,want)&&!strstr(f.records,"result=app")&&f.report_calls==(failures[i].hook?1u:0u));
+        assert(a.page==ST_PAGE_TEXT&&a.back_page==ST_PAGE_RESCUE&&!a.link_length&&strstr(a.text.text,"CiukiOS 1.0 Beta Setup"));
+        no_writes();
+        /* The fallback page can still save to the USB drive (one file), then returns to the rescue page. */
+        assert(!st_save_report(&a,result,sizeof(result))&&f.writes==1&&strstr(f.records,"files=1"));
+        tap(DU_KEY_ESC);assert(a.page==ST_PAGE_RESCUE);st_free(&a);
+    }
+    /* Welcome and stop pages never run the program: they show Setup's own report. */
+    fixture();init();st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT&&!f.report_calls&&!strstr(f.records,"hardware_report")&&strstr(f.records,"hardware_view"));st_free(&a);
+    puts("PASS rescue hardware report: received text shown and saved as CIUKIREP.TXT next to HARDWARE.TXT, stale text dropped, fallback reasons, own report on the other pages");
+}
 static void memory_failures(void){
     for(unsigned failure=1;failure<=4;failure++) {
         fixture();fail_allocation=failure;allocation=0;init();fail_allocation=0;
@@ -326,4 +375,4 @@ static void unattended(void){
     f.usb_inf=without_erase;f.disks[0].part_count=0;f.disks[0].occupied=1;init();assert(a.page==ST_PAGE_STATUS&&!strcmp(a.status.reason,SETUP_ST_CONSENT));assert(!setup_fake.execute_calls);st_free(&a);
     puts("PASS CD precedence, unattended completion/status, USB-only rescue");
 }
-int main(int argc,char **argv){setvbuf(stdout,NULL,_IOLBF,0);assert(argc==3);folder=argv[2];FILE *fp=fopen(argv[1],"rb");assert(fp);assert(fread(portrait,4,256*256,fp)==256*256);fclose(fp);parser();renders();interactive();errors();power_button();memory_failures();unattended();native_tests(portrait);return 0;}
+int main(int argc,char **argv){setvbuf(stdout,NULL,_IOLBF,0);assert(argc==3);folder=argv[2];FILE *fp=fopen(argv[1],"rb");assert(fp);assert(fread(portrait,4,256*256,fp)==256*256);fclose(fp);parser();renders();interactive();errors();power_button();rescue_report();memory_failures();unattended();native_tests(portrait);link_tests();return 0;}

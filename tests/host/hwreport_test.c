@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "../../apps/hwreport/report.h"
+#include "../../apps/hwreport/textframe.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -19,6 +20,26 @@ static int firmware(void *ctx,struct ciuki_firmware_page *p)
     p->next=p->cursor ? 0 : 1;
     if (fw_bad) p->count=5;
     return 0;
+}
+/* Many firmware pages, to push the report over the text-mode bound. */
+static int firmware_many(void *ctx,struct ciuki_firmware_page *p)
+{
+    (void)ctx; p->generation=9; p->total=1024; p->count=4;
+    for (unsigned i=0;i<4;i++) {
+        p->records[i]=(struct ciuki_firmware_record){.id=p->cursor*4+i+1,.parent=1,.origin=1,.state=1,.resource_count=1,.cid_count=1};
+        strcpy(p->records[i].hid,"PNP0C0A"); strcpy(p->records[i].path,"\\_SB_.PCI0.ISA_.BAT0.EXTRA.LONGER.PATH.NAME");
+        strcpy(p->records[i].cid[0],"PNP0303"); strcpy(p->records[i].reason,"Firmware description only, no driver bound to this record");
+        p->records[i].resources[0]=(struct ciuki_firmware_resource){.type=1,.start=9,.end=10};
+    }
+    p->next=p->cursor<255 ? p->cursor+1 : 0;
+    return 0;
+}
+/* Text-mode sink: the receiver of textframe.h, counting frames. */
+struct sink { struct hr_frame_rx rx; unsigned frames; int done; };
+static int sink_send(void *ctx,const void *data,size_t bytes)
+{
+    struct sink *k=ctx; assert(bytes<=HR_FRAME_MAX && !k->done);
+    int r=hr_frame_rx_feed(&k->rx,data,bytes); assert(r>=0); k->frames++; k->done=r; return 0;
 }
 static int names(void *ctx,unsigned bus,unsigned vendor,unsigned device,char *out,size_t n)
 { (void)ctx; (void)vendor; (void)device; snprintf(out,n,"Fixture %s product",bus==1 ? "PCI" : "USB"); return 0; }
@@ -70,7 +91,7 @@ int main(int argc,char **argv)
         "[SMBIOS]","BIOS date: 10/22/1999","[PCI devices]","Fixture PCI product","[USB devices]","Fixture USB product",
         "end-exclusive=0x1f8","primary=native secondary=native bus-master-capable=1","[ACPI/PnP inventory]","PNP0C0A","CID: PNP0303",
         "Device 2 parent=1","[Display]","Mode 0111 640x480x16","2D engine driver=1","[Audio, network and storage bindings]",
-        "Network present=1 link=2 state=1","fixture-build","Image SHA-256: unavailable","Build manifest: unavailable","[Boot log","[Latest kernel records",
+        "Network present=1 link=2 state=1","fixture-build","Build file: /System/BUILD.TXT unavailable (not read)","Image SHA-256: not stored in the image","[Boot log","[Latest kernel records",
         "error=-5","count=3","count=9","[Pending kernel records","pages=42","other log records redacted"};
     for (unsigned i=0;i<sizeof(required)/sizeof(*required);i++) { if (!strstr(text,required[i])) fprintf(stderr,"missing: %s\n",required[i]); assert(strstr(text,required[i])); }
     const char *excluded[]={"DO-NOT-EXPORT","secret-host","secret-user","secret.txt","de:ad:be:ef:12:34","203.0.113.78","123.456","3:4","9999999999999999999","/private"};
@@ -82,6 +103,68 @@ int main(int argc,char **argv)
     h.version=2; assert(hr_format(&s,text,HR_TEXT_MAX,&n)==-EINVAL); h.version=3;
     memset(d.devices[0].name,'X',sizeof(d.devices[0].name)); s.device_name=NULL;
     assert(!hr_format(&s,text,HR_TEXT_MAX,&n));
+    /* /System/BUILD.TXT: present, missing, oversized, malformed (f9-07 amendment 1). */
+    {
+        static const char commit[]="0123456789abcdef0123456789abcdef01234567";
+        static const char kernel[]="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        static const char manifest[]="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        char file[HR_BUILD_MAX+64];
+        snprintf(file,sizeof(file),"schema=1\nsource_commit=%s\nsource_dirty=0\nkernel_elf_sha256=%s\nbuild_manifest_id=%s\n"
+            "build_date=2026-10-23T00:00:00Z\nimage_sha256=see release page\n",commit,kernel,manifest);
+        struct hr_source b=s; b.build_txt=file; b.build_length=strlen(file);
+        assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+        assert(strstr(text,"Build file: /System/BUILD.TXT (read-only, "));
+        assert(strstr(text,"Source commit: 0123456789abcdef0123456789abcdef01234567\n"));
+        assert(strstr(text,"Source tree: clean\n"));
+        assert(strstr(text,"Kernel ELF SHA-256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"));
+        assert(strstr(text,"Build manifest id: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"));
+        assert(strstr(text,"Build date (UTC): 2026-10-23T00:00:00Z\n"));
+        assert(strstr(text,"Image SHA-256: not stored in the image") && !strstr(text,"see release page\nBuild"));
+        /* CRLF endings and the no-git form quote what the file says, no more. */
+        snprintf(file,sizeof(file),"schema=1\r\nsource_commit=unknown\r\nsource_dirty=unknown\r\nkernel_elf_sha256=%s\r\nbuild_manifest_id=%s\r\nbuild_date=1970-01-01T00:00:00Z\r\n",kernel,manifest);
+        b.build_length=strlen(file); assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+        assert(strstr(text,"Source commit: unknown (source tree without git)") && strstr(text,"Source tree: unknown"));
+        /* Missing and oversized files, and any other read error. */
+        b=s; b.build_error=-ENOENT; assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+        assert(strstr(text,"Build file: /System/BUILD.TXT not present on this system") && !strstr(text,"Source commit:"));
+        b.build_error=-EFBIG; assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+        assert(strstr(text,"oversized (more than 1024 bytes); not quoted") && !strstr(text,"Source commit:"));
+        b.build_error=-EIO; assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+        assert(strstr(text,"unreadable (error -5); not quoted"));
+        b=s; b.build_txt=file; b.build_length=HR_BUILD_MAX+1; assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+        assert(strstr(text,"oversized") && !strstr(text,"Source commit:"));
+        /* Malformed: nothing is quoted and nothing is invented. */
+        static const char *const bad[][2]={
+            {"","missing key schema"},
+            {"schema=2\nsource_commit=unknown\n","missing key kernel_elf_sha256"},
+            {"not a key value line\n","line without key=value"},
+            {"schema=1\nschema=1\n","duplicate key schema"},
+            {"schema=2\nsource_commit=unknown\nkernel_elf_sha256=%K\nbuild_manifest_id=%M\nbuild_date=2026-10-23T00:00:00Z\n","unsupported schema"},
+            {"schema=1\nsource_commit=ABCDEF\nkernel_elf_sha256=%K\nbuild_manifest_id=%M\nbuild_date=2026-10-23T00:00:00Z\n","invalid source_commit"},
+            {"schema=1\nsource_commit=unknown\nsource_dirty=maybe\nkernel_elf_sha256=%K\nbuild_manifest_id=%M\nbuild_date=2026-10-23T00:00:00Z\n","invalid source_dirty"},
+            {"schema=1\nsource_commit=unknown\nkernel_elf_sha256=1234\nbuild_manifest_id=%M\nbuild_date=2026-10-23T00:00:00Z\n","invalid kernel_elf_sha256"},
+            {"schema=1\nsource_commit=unknown\nkernel_elf_sha256=%K\nbuild_manifest_id=%K!\nbuild_date=2026-10-23T00:00:00Z\n","invalid build_manifest_id"},
+            {"schema=1\nsource_commit=unknown\nkernel_elf_sha256=%K\nbuild_manifest_id=%M\nbuild_date=yesterday\n","invalid build_date"},
+            {"schema=1\nsource_commit=unknown\nkernel_elf_sha256=%K\nbuild_manifest_id=%M\nbuild_date=2026-13-23T00:00:00Z\n","invalid build_date"},
+            {"schema=1\nsource_commit=unk\001nown\n","invalid character"},
+        };
+        for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) {
+            char expanded[HR_BUILD_MAX]; size_t at=0;
+            for (const char *p=bad[i][0];*p;p++) {
+                if (p[0]=='%' && (p[1]=='K' || p[1]=='M')) { const char *v=p[1]=='K' ? kernel : manifest; size_t k=strlen(v); memcpy(expanded+at,v,k); at+=k; p++; }
+                else expanded[at++]=*p;
+            }
+            b=s; b.build_txt=expanded; b.build_length=at;
+            assert(!hr_format(&b,text,HR_TEXT_MAX,&n));
+            if (!strstr(text,bad[i][1])) fprintf(stderr,"build case %u: missing %s\n",i,bad[i][1]);
+            assert(strstr(text,"present but malformed (") && strstr(text,bad[i][1]) && strstr(text,"; not quoted"));
+            assert(!strstr(text,"Source commit:") && !strstr(text,"Kernel ELF SHA-256:") && !strstr(text,"Build date (UTC):"));
+        }
+        /* A NUL inside the bytes is an invalid character, and a missing trailing newline is accepted. */
+        char nul[]="schema=1\0xx"; b=s; b.build_txt=nul; b.build_length=12; assert(!hr_format(&b,text,HR_TEXT_MAX,&n) && strstr(text,"invalid character"));
+        snprintf(file,sizeof(file),"schema=1\nsource_commit=%s\nkernel_elf_sha256=%s\nbuild_manifest_id=%s\nbuild_date=2026-10-23T00:00:00Z",commit,kernel,manifest);
+        b=s; b.build_txt=file; b.build_length=strlen(file); assert(!hr_format(&b,text,HR_TEXT_MAX,&n) && strstr(text,"Source commit: 0123") && !strstr(text,"Source tree:"));
+    }
     struct hr_source empty={.boot_error=-ENOENT,.latest_error=-EIO};
     assert(!hr_format(&empty,text,HR_TEXT_MAX,&n) && strstr(text,"Unavailable (error"));
     assert(!hr_format(&s,text,HR_TEXT_MAX,&n));
@@ -91,6 +174,32 @@ int main(int argc,char **argv)
         int result=hr_save(&io,"/mnt/d",text,n);
         if (!fail || fail==10) assert(!result && disk->n==n && !memcmp(disk->final,text,n) && disk->closed==1 && disk->published==1);
         else { assert(result<0 && !strcmp(disk->final,"previous report") && !disk->published); if (fail!=1 && fail!=8) assert(disk->closed==1 && disk->removed); }
+    }
+    /* Text mode: the exact bytes of the file export (disk->final from the last
+     * successful export above), framed and received by textframe.h. */
+    {
+        char *copy=malloc(HR_TEXT_MAX),*received=malloc(HR_LINK_MAX); assert(copy && received);
+        struct sink k={0}; hr_frame_rx_init(&k.rx,received,HR_LINK_MAX);
+        struct hr_link_io link={&k,sink_send}; int status=99;
+        assert(!hr_link_report(&s,copy,HR_TEXT_MAX,&link,&status) && !status && k.done==1 && k.rx.status==0);
+        assert(k.rx.received==n && !memcmp(received,disk->final,n) && !memcmp(received,text,n));
+        assert(k.frames==2+(n+HR_FRAME_CHUNK-1)/HR_FRAME_CHUNK && n<HR_LINK_MAX);
+        assert(strstr(received,"[Build identity]") && strstr(received,"CIUKIREP.TXT"));
+        /* A collection error sends no text and the error as the status. */
+        struct sink e={0}; hr_frame_rx_init(&e.rx,received,HR_LINK_MAX); link.ctx=&e;
+        d.count=65; assert(!hr_link_report(&s,copy,HR_TEXT_MAX,&link,&status) && status==-EINVAL && e.done==1 && e.rx.status==-EINVAL && !e.rx.received && e.frames==2);
+        d.count=4;
+        struct sink small={0}; hr_frame_rx_init(&small.rx,received,HR_LINK_MAX); link.ctx=&small;
+        assert(!hr_link_report(&s,copy,32,&link,&status) && status==-ENOSPC && small.rx.status==-ENOSPC && !small.rx.received);
+        /* Over the bound: cut at a line boundary, a prefix of the full report, status -EFBIG. */
+        struct hr_source big=s; big.firmware=firmware_many;
+        size_t full=0; assert(!hr_format(&big,text,HR_TEXT_MAX,&full) && full>HR_LINK_MAX);
+        struct sink o={0}; hr_frame_rx_init(&o.rx,received,HR_LINK_MAX); link.ctx=&o;
+        assert(!hr_link_report(&big,copy,HR_TEXT_MAX,&link,&status) && status==-EFBIG && o.done==1 && o.rx.status==-EFBIG);
+        assert(o.rx.received>HR_LINK_MAX-4096 && o.rx.received<=HR_LINK_MAX && received[o.rx.received-1]=='\n' && !memcmp(received,text,o.rx.received));
+        /* A failing sink stops the transfer with its error. */
+        assert(hr_link_send(&(struct hr_link_io){NULL,NULL},"x",1,0)==-EINVAL);
+        free(copy); free(received);
     }
     assert(hr_default_drive(0x1d,0x18,0)==3);
     assert(hr_default_drive(0x5,0,0)==0);
