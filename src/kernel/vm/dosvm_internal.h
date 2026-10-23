@@ -3,7 +3,6 @@
 #ifndef CIUKI_DOSVM_INTERNAL_H
 #define CIUKI_DOSVM_INTERNAL_H
 #include <ciuki/dosvm.h>
-#include <ciuki/abi.h>
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
@@ -15,6 +14,7 @@
 int dosvm_game_remove_reserve(unsigned game);
 void dosvm_game_remove_release(unsigned game);
 int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
+struct ciuki_dosvm_command;
 int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
