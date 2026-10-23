@@ -382,9 +382,9 @@ void desk_folder_service(struct desktop *d)
                 m->active=m->anchor=0; f->result.entries=NULL; f->result.count=f->result.capacity=0;
                 desk_folder_changed(d);
             }
-            if (v.state==FM_FAILED) error(d,-f->job.error);
+            if (v->state==FM_FAILED) error(d,-f->job.error);
             else if (f->result_error) error(d,f->result_error);
-        } else if (!f->progress_ns || d->now_ns-f->progress_ns>=100000000ull || (v.state==FM_REPLACE && du_dialog_id(f->dialog)!=F_REPLACE)) {
+        } else if (!f->progress_ns || d->now_ns-f->progress_ns>=100000000ull || (v->state==FM_REPLACE && du_dialog_id(f->dialog)!=F_REPLACE)) {
             dialog_update(d,v); f->progress_ns=d->now_ns;
         }
     }
