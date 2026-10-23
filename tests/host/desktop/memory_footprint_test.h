@@ -145,13 +145,32 @@ static void test_memory_footprint(const char *directory)
     assert(network_queries && d.sh.network.present && d.sh.network.link==CIUKI_NET_LINK_UP);
     d.sh.volume_open=1; mixer_fixture.left=60; mixer_fixture.right=80; mixer_fixture.mute=1;
     mixer_fixture.save_state=CIUKI_MIXER_UNSAVED;
+    uint64_t key_ns=d.now_ns;
     mixer_read(&d); assert(d.sh.volume==70 && d.sh.muted && d.damage.count);
     footprint_wait_writer(); shell_service(&d);
-    assert(footprint_master_saves==1 && !mixer_sets);
+    /* fx-9b: a volume-key value is saved once the keys have been quiet for
+     * MASTER_QUIET_NS; a further press inside the burst restarts the wait. */
+    assert(!footprint_master_saves && !mixer_sets);
+    mixer_fixture.left=mixer_fixture.right=75; d.now_ns=key_ns+MASTER_QUIET_NS-1;
+    mixer_read(&d); footprint_wait_writer(); shell_service(&d); assert(!footprint_master_saves);
+    d.now_ns=key_ns+2*MASTER_QUIET_NS-2;
+    mixer_read(&d); footprint_wait_writer(); shell_service(&d); assert(!footprint_master_saves);
+    d.now_ns=key_ns+2*MASTER_QUIET_NS-1;
+    mixer_read(&d); footprint_wait_writer(); shell_service(&d);
+    assert(footprint_master_saves==1 && !mixer_sets && d.sh.volume==75);
+    d.now_ns+=MASTER_QUIET_NS;
     mixer_read(&d); footprint_wait_writer(); shell_service(&d);
     assert(footprint_master_saves==1); /* unchanged EC observation never saves twice */
+    /* A press shortly before a shutdown is saved by the shutdown wait, also
+     * one the 250 ms mixer poll never observed. */
+    mixer_fixture.left=mixer_fixture.right=80; d.now_ns+=1000000;
+    mixer_read(&d); footprint_wait_writer(); shell_service(&d); assert(footprint_master_saves==1);
+    mixer_fixture.left=mixer_fixture.right=85;
+    assert(!shutdown_wait(&d)); footprint_wait_writer(); shell_service(&d);
+    assert(footprint_master_saves==2 && !master_candidate_save(d.mixer_fd)); /* nothing left to save */
+    assert(last_ec_preference==ciuki_master_pack(85,85,1));
     assert(!mixer_apply(&d,25,75,0)); footprint_wait_writer(); shell_service(&d);
-    assert(footprint_master_saves==2 && mixer_sets==1 && d.sh.volume==50 && !d.sh.muted);
+    assert(footprint_master_saves==3 && mixer_sets==1 && d.sh.volume==50 && !d.sh.muted);
     char missing_registry[512]; snprintf(missing_registry,sizeof(missing_registry),"%s/missing/registry",directory);
     footprint_registry_directory=missing_registry;
     assert(!mixer_apply(&d,40,40,0)); footprint_wait_writer(); shell_service(&d);
@@ -159,7 +178,7 @@ static void test_memory_footprint(const char *directory)
     assert(strstr(d.sh.notification.text,"No such file or directory (2)"));
     footprint_registry_directory=directory;
     assert(!mixer_apply(&d,25,75,0)); footprint_wait_writer(); shell_service(&d);
-    assert(footprint_master_saves==4 && mixer_sets==3);
+    assert(footprint_master_saves==5 && mixer_sets==3);
     assert(!settings_save(&d)); footprint_wait_writer(); shell_service(&d);
     assert(footprint_settings_saves==1);
     (void)theme_poll_async(d.now_ns); footprint_wait_writer(); (void)theme_poll_async(d.now_ns);

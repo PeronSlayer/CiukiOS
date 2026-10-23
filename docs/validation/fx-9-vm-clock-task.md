@@ -144,3 +144,50 @@ transports at 999.9 ms).
 - Physical qualification: the next T23 trial must show `cadence_clock
   gap_max_ms` <= 2 and `dsp_lag_max_ms` <= 2, `if_clear` separated from
   `descheduled`, and no `audio_refill_overrun task=vm-clock`.
+
+## fx-9b: the trigger (volume-key persistence)
+
+Lead decision 2026-10-23: move the key-press persistence off the device
+band, coalesced, keeping fx-3's coalesced EC write.
+
+What a key press did (f4-29, `1614e79f`): the EC worker (`thinkpad-volume`,
+P_DEVICE) polls every 2 s; when the EC level moved, `master_refresh`
+(`audio_dev.c`) applied the master and called `save_master()` under
+`audio.control`: `vfs_open(C:\SYSTEM\AUDIO.CFG, DENY_ALL)` (a C:
+reservation), a 48-byte record, and `vfs_commit`, which is
+`fat_commit` -> `cache_barrier_record`: every dirty block of the whole
+system disk written with write admission frozen, then FLUSH CACHE (host
+fixture: 2 sectors and 3 cache flushes on an otherwise clean cache). In the
+trial each press (L5158, L5723, L5994) was followed by `thinkpad#34` at
+97-148 permille with no EC traffic, `storage-writer` at 65-100 permille and
+a stalled boot log (`bootlog writes=116`, L5285-L5637) for up to about 13 s.
+SAVED also hid the change from the desktop, whose settings writer saves an
+applied-unsaved master in the authoritative registry value (F4-18 rule
+above); the registry's older value then won at the next boot.
+
+Change: `master_refresh` only applies (applied-unsaved, error 0) and marks
+the master pending; the desktop writer (`apps/desktop/desktop.c`,
+normal priority, existing `cfg_writer`) saves the registry value once it
+has been unchanged for 3 s (`MASTER_QUIET_NS`, longer than the 2 s EC poll)
+and before a shutdown (first step of its shutdown wait); `power.c`
+`power_sequence` calls `audio_settings_flush()` before the storage flush,
+which writes AUDIO.CFG once if a key-applied master is pending; a tray save
+clears it. fx-3's coalesced EC write is unchanged.
+
+Host evidence: `tests/host/audio/thinkpad_ec_test.inc`
+`test_thinkpad_ec_key_persistence` (six presses over six polls: six RD_EC,
+0 disk reads/writes/flushes, 0 AUDIO.CFG records; shutdown flush one record;
+the reloaded settings hold the burst's value; a later tray save
+supersedes), `tests/host/power_runtime_test.c` (`ASNQP`: flush before the
+storage flush, tolerated failure, repeated only while storage is not
+durable), `tests/host/desktop/memory_footprint_test.h` (no save inside the
+burst, one save 3 s after the last value, a press before shutdown saved by
+the shutdown wait), `t23_vm_clock_test.c` fx-9 + fx-9b cases (key phase VM
+share 65.6 % full screen and 56.6 % window, equal to the no-key runs; no
+device demotion; one writer save within 148-276 ms of the quiet period).
+Residual: the shutdown wait reads the master again before saving, so a
+press applied after the desktop's last mixer poll is saved too. A press the
+EC worker applies after that wait (between the wait and the power request)
+reaches AUDIO.CFG through the kernel flush but not the registry, which wins
+at boot; a press within the last 2 s EC poll before shutdown is never
+applied, as before f4-29.

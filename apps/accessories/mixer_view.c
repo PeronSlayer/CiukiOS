@@ -49,6 +49,9 @@ static void describe(struct mixer_app *a)
     if (!a->available) snprintf(a->status, sizeof(a->status), "No mixer: /dev/mixer is unavailable (error %d)", a->error);
     else if (a->waiting || a->pending) snprintf(a->status, sizeof(a->status), "Applying...");
     else if (a->master.save_state == CIUKI_MIXER_SAVED) snprintf(a->status, sizeof(a->status), "Saved in C:\\SYSTEM\\AUDIO.CFG");
+    /* fx-9b: a volume-key change is applied at once and saved by the desktop
+     * once the keys are quiet (error 0). */
+    else if (a->master.save_state == CIUKI_MIXER_UNSAVED && !a->master.save_error) snprintf(a->status, sizeof(a->status), "Applied by the volume keys; saved shortly");
     else if (a->master.save_state == CIUKI_MIXER_UNSAVED) snprintf(a->status, sizeof(a->status), "Applied, not saved (error %d)", (int)a->master.save_error);
     else snprintf(a->status, sizeof(a->status), "Default setting (nothing saved yet)");
 }

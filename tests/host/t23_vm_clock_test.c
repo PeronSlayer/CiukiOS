@@ -127,7 +127,7 @@ static void replay_switch(void)
 }
 
 /* ---- tasks ---- */
-static struct task vclock, vm, desktop, net, storage, refill, thinkpad;
+static struct task vclock, vm, desktop, net, storage, refill, thinkpad, writer;
 static struct task *add_task(struct task *t, const char *name, uint32_t id, enum task_prio prio, bool user)
 {
     *t=(struct task){.id=id,.generation=1,.prio=prio,.state=T_BLOCKED,.user=user};
@@ -154,6 +154,7 @@ struct scenario {
     unsigned desktop_us;    /* per 20 ms */
     unsigned switch_us;     /* dispatch cost of one device-work turn */
     unsigned throttle_us;   /* its extra while the shared device budget is exhausted */
+    bool fx9b;              /* fx-9b: key persistence off the device band */
 };
 struct result {
     unsigned ticks, services, gap_max_ms, gaps_over_1, gaps_over_20;
@@ -161,6 +162,8 @@ struct result {
     unsigned steady_age_max_us;
     unsigned dwork_overruns, thinkpad_overruns, vclock_overruns, vclock_own_overruns, refill_own_overruns;
     unsigned refill_wake_max_us, coalesced_key;
+    uint64_t writer_ms;     /* fx-9b: due to completion of the one save (wall) */
+    unsigned writer_saves;
     double vm_pct, device_pct, dwork_pct, thinkpad_pct;
     double key_vm_pct, key_device_pct, key_dwork_pct, key_thinkpad_pct;
 };
@@ -168,7 +171,7 @@ static struct scenario sc;
 static struct result res;
 #define SETTLE_MS 2000u      /* the VM's audio starts; nothing is measured */
 #define STEADY_MS 4000u      /* the session before the key (L4974-L5213) */
-#define RUN_MS(s) (SETTLE_MS+STEADY_MS+(s).key_ms+2000u)
+#define RUN_MS(s) (SETTLE_MS+STEADY_MS+(s).key_ms+4000u)
 static uint64_t run_end;
 static uint64_t task_us[8], key_us[8];
 static unsigned task_slot(const struct task *t)
@@ -311,7 +314,7 @@ static void desktop_main(void *arg)
 static void net_main(void *arg) { (void)arg; for (;;) { cpu(90); task_sleep_ms(1); } }
 /* The writer doubles during the key phase (trial: storage-writer#15 at
  * 65-100 permille only in the volume-key windows, beside the save). */
-static void storage_main(void *arg) { (void)arg; for (;;) { cpu(key_phase() ? 1000 : 500); task_sleep_ms(10); } }
+static void storage_main(void *arg) { (void)arg; for (;;) { cpu(key_phase() && !sc.fx9b ? 1000 : 500); task_sleep_ms(10); } }
 static bool refill_cond(void *arg) { (void)arg; return refill_due; }
 static void refill_main(void *arg)
 {
@@ -329,10 +332,25 @@ static void thinkpad_main(void *arg)
 {
     (void)arg;
     for (;;) {
-        if (key_phase()) { cpu(100); task_yield(); continue; }
+        /* f4-29: the save on the device band; fx-9b: the key phase is
+         * only the 2 s EC poll (apply, no storage I/O). */
+        if (key_phase() && !sc.fx9b) { cpu(100); task_yield(); continue; }
         uint64_t start=SETTLE_MS+STEADY_MS;
         cpu(10); task_sleep_ms(sc.key_ms && g_ticks<start ? (uint32_t)(start-g_ticks) : 2000u);
     }
+}
+
+/* fx-9b: the desktop's normal-priority settings writer saves the key
+ * master once, MASTER_QUIET (3 s) after the last press; its CPU is an
+ * assumed upper bound for one registry rewrite (WRITER_US). */
+#define WRITER_US 30000u
+static void writer_main(void *arg)
+{
+    (void)arg;
+    uint64_t due=SETTLE_MS+STEADY_MS+sc.key_ms+3000u;
+    if (g_ticks<due) task_sleep_ms((uint32_t)(due-g_ticks));
+    cpu(WRITER_US); res.writer_saves++; res.writer_ms=g_ticks-due;
+    for (;;) task_sleep_ms(1000000u);
 }
 
 /* ---- one scenario per process: production statics start clean ---- */
@@ -374,15 +392,17 @@ static void child(void)
     add_task(&storage,"storage-writer",15,P_DEVICE,false); coro_add(&storage,storage_main,false);
     add_task(&refill,"audio-refill",18,P_DEVICE,false); coro_add(&refill,refill_main,false);
     add_task(&thinkpad,"thinkpad-volume",34,P_DEVICE,false); coro_add(&thinkpad,thinkpad_main,false);
+    add_task(&writer,"desktop",36,P_NORMAL,true); coro_add(&writer,writer_main,true);
     kwait_init(&refill_wait);
     task_set_audio_class(&refill);
-    task_set_share_group(&desktop,true);
+    task_set_share_group(&desktop,true); task_set_share_group(&writer,true);
     CHECK(!kwork_init());
     CHECK(!dosvm_clock_start() && vclock.audio_class && vclock.state==T_READY);
     audio_focus=&vm; task_focus(&desktop);
     if (sc.fullscreen) task_set_inherited(&vm,SCHED_FOREGROUND);
     task_start(&vm); task_start(&desktop); task_start(&net); task_start(&storage);
     task_start(&refill); task_start(&thinkpad);
+    if (sc.fx9b && sc.key_ms) task_start(&writer);
     vm_started=true; vm_ticks=g_ticks; switch_us=sc.switch_us; throttle_us=sc.throttle_us;
     run_end=RUN_MS(sc);
     CHECK(!swapcontext(&main_ctx,&coro_of(&idle)->ctx));
@@ -413,6 +433,8 @@ static void row(const struct scenario *s, const struct result *r)
         (unsigned long long)r->dropped_frames,r->dwork_overruns,r->thinkpad_overruns,r->vclock_overruns,r->vclock_own_overruns,
         r->refill_wake_max_us,r->vm_pct,r->device_pct,r->dwork_pct,r->thinkpad_pct,
         r->key_vm_pct,r->key_device_pct,r->key_dwork_pct,r->key_thinkpad_pct);
+    if (s->fx9b) printf("  %-40s fx-9b: settings writer saves=%u (CPU %u us) done %llu ms after the quiet period\n","",
+        r->writer_saves,WRITER_US,(unsigned long long)r->writer_ms);
     if (s->key_ms) printf("  %-40s key phase: coalesced work per ms=%.2f device-work demotions per 2 s=%.0f\n","",
         (double)r->coalesced_key/s->key_ms,(double)r->dwork_overruns*2000.0/s->key_ms);
 }
@@ -426,12 +448,16 @@ int main(void)
      * the [cpu] deferred coalesced counter) and device-work demotions
      * (1264-1338 per 2 s). */
     static const struct scenario cases[]={
-        {"full screen, volume key, f0-46 (control)",true,true,12000,1200,24,28},
-        {"full screen, volume key, fx-9",false,true,12000,1200,24,28},
-        {"window, volume key, f0-46 (control)",true,false,12000,3000,24,28},
-        {"window, volume key, fx-9",false,false,12000,3000,24,28},
-        {"full screen, no key, f0-46 (control)",true,true,0,1200,24,28},
-        {"full screen, no key, fx-9",false,true,0,1200,24,28},
+        {"full screen, volume key, f0-46 (control)",true,true,12000,1200,24,28,false},
+        {"full screen, volume key, fx-9",false,true,12000,1200,24,28,false},
+        {"window, volume key, f0-46 (control)",true,false,12000,3000,24,28,false},
+        {"window, volume key, fx-9",false,false,12000,3000,24,28,false},
+        {"full screen, no key, f0-46 (control)",true,true,0,1200,24,28,false},
+        {"full screen, no key, fx-9",false,true,0,1200,24,28,false},
+        /* fx-9b: the key path applies only; one save by the desktop writer */
+        {"window, no key, fx-9",false,false,0,3000,24,28,false},
+        {"full screen, volume key, fx-9 + fx-9b",false,true,12000,1200,24,28,true},
+        {"window, volume key, fx-9 + fx-9b",false,false,12000,3000,24,28,true},
     };
     struct result r[sizeof(cases)/sizeof(*cases)];
     printf("FX-9 replay T23 423b803a: VM clock beside the device class (%u ms settle, %u ms steady, 12 s volume-key phase):\n",
@@ -467,19 +493,31 @@ int main(void)
      * work back to the game (fewer worker turns per tick). */
     CHECK(r[4].age_max_us<=20000u && r[5].age_max_us<=2000u && r[5].vm_pct>=r[4].vm_pct);
     CHECK(r[4].dwork_pct>=12.0 && r[4].dwork_pct<=16.0); /* the calibration itself */
+    /* fx-9b: with the key press only applied on the device band and saved
+     * once by the normal-priority desktop writer after the quiet period,
+     * the game keeps its no-key share through the key phase (within 2
+     * points), nothing in the device band is demoted, and the writer's one
+     * save is its whole cost. */
+    for (unsigned i=7;i<=8;i++) {
+        const struct result *x=&r[i], *base=&r[i==7 ? 5 : 6];
+        CHECK(x->key_vm_pct+2.0>=base->vm_pct && !x->dwork_overruns && !x->thinkpad_overruns);
+        CHECK(x->key_device_pct<=base->device_pct+2.0 && x->writer_saves==1 && x->writer_ms<1000u);
+        CHECK(x->key_vm_pct>r[i==7 ? 1 : 3].key_vm_pct+5.0); /* against fx-9 alone */
+    }
     /* Sensitivity: a constant per-turn cost from 20 to 56 us. fx-9 holds
      * its gates at every cost; f0-46 diverges to the backlog from 36 us. */
     printf("FX-9 sensitivity, full screen with the volume key, constant device-work turn cost:\n");
     for (unsigned us=20;us<=56;us+=4) for (unsigned f=0;f<2;f++) {
         char name[64];
         snprintf(name,sizeof(name),"turn %u us, %s",us,f ? "fx-9" : "f0-46 (control)");
-        struct scenario x={name,!f,true,12000,1200,us,0};
+        struct scenario x={name,!f,true,12000,1200,us,0,false};
         struct result y=run(&x); row(&x,&y);
         CHECK(!y.refill_own_overruns && y.refill_wake_max_us<=2000u);
         if (f) CHECK(y.gap_max_ms<=2u && y.age_max_us<=2000u && !y.dropped_frames && !y.vclock_overruns && !y.vclock_own_overruns);
         else if (us>=40) CHECK(y.age_max_us>=900000u && y.dropped_frames);
         if (!f && us>=48) CHECK(y.dwork_overruns*2000u/x.key_ms>=1000u); /* the trial's count */
     }
+    puts("FX-9b gates: key path applied only, one save by the desktop writer, the game keeps its no-key share through the key phase, no device demotion PASS");
     puts("FX-9 gates: the f0-46 controls reproduce the trial (device-work demoted >1000 per 2 s, ~2 coalesced works per ms, DSP backlog to 1 s, frames dropped); fx-9 serves the VM clock every tick (gap <= 2 ms, IRQ age <= 2 ms, vm-clock never demoted) in full screen and window and at every turn cost 20-56 us; refill unaffected PASS");
     return 0;
 }
