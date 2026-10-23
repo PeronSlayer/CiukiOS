@@ -91,7 +91,7 @@ static int write_file(void *ctx,const char *dos,const char *buf,size_t n)
     (void)ctx;if(!usb(dos))return -EROFS;
     char name[512];int r=path(name,sizeof(name),dos);if(r)return r;
     int fd=open(name,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd<0)return -errno;
-    r=write_all(fd,buf,n);if(!r&&!usb(dos))r=-ESTALE;if(!r&&fsync(fd))r=-errno;if(close(fd)&&!r)r=-errno;return r;
+    r=write_all(fd,buf,n);if(!r&&!usb(dos))r=-ENXIO;if(!r&&fsync(fd))r=-errno;if(close(fd)&&!r)r=-errno;return r;
 }
 static int make_dir(void *ctx,const char *dos)
 {
@@ -107,9 +107,9 @@ static int copy_file(void *ctx,const char *from,const char *to,char *buffer,size
     int in=open(source,O_RDONLY);if(in<0)return -errno;
     int out=open(dest,O_WRONLY|O_CREAT|O_TRUNC,0600);if(out<0){r=-errno;close(in);return r;}
     for(;;){ssize_t n=read(in,buffer,cap);if(n<0&&errno==EINTR)continue;if(n<=0){if(n<0)r=-errno;break;}
-        if(!usb(to)){r=-ESTALE;break;}
+        if(!usb(to)){r=-ENXIO;break;}
         r=write_all(out,buffer,(size_t)n);if(r)break;}
-    if(!r&&!usb(to))r=-ESTALE;
+    if(!r&&!usb(to))r=-ENXIO;
     if(!r&&fsync(out))r=-errno;
     if(close(out)&&!r)r=-errno;if(close(in)&&!r)r=-errno;return r;
 }
