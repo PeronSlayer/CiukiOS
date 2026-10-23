@@ -462,7 +462,15 @@ for name in ("schedule", "sched_vm_tick_work", "sched_tick", "task_sleep_ms", "t
     functions.append(source[match.start():end] + "\n")
 timers = (root / "src/kernel/core/sync.c").read_text()
 (out / "deadline_timers.inc").write_text(timers[timers.index("/* F0-46 timers:"):timers.index("/* End F0-46 timers. */")])
-(out / "signal_scheduler.inc").write_text("void task_start(struct task *);\n" + declarations + "\n".join(functions))
+# f6-05/f6-06: task.c's scheduler calls the weak NDIS user-host hooks and the
+# TSS I/O-bitmap installer, defined outside this slice.
+ndis_hooks = ("extern void ndis_user_switch(const struct task *) __attribute__((weak));\n"
+              "extern void ndis_user_task_stopping(struct task *,int) __attribute__((weak));\n"
+              "extern void ndis_user_reaped(struct task *) __attribute__((weak));\n"
+              "struct arch_io_range;\n"
+              "__attribute__((weak)) void arch_io_install(const struct arch_io_range *r, unsigned n)"
+              " { (void)r; (void)n; }\n")
+(out / "signal_scheduler.inc").write_text("void task_start(struct task *);\n" + ndis_hooks + declarations + "\n".join(functions))
 PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" -I "$out" \

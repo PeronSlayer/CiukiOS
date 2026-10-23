@@ -54,13 +54,18 @@ static void handler(int signal,siginfo_t *info,void *context)
             .eip=(uint32_t)uc->uc_mcontext.gregs[REG_EIP],
             .cs=(uint32_t)uc->uc_mcontext.gregs[REG_CS],
             .eflags=(uint32_t)uc->uc_mcontext.gregs[REG_EFL],
-            .user_esp=(uint32_t)uc->uc_mcontext.gregs[REG_UESP]};
+            /* Linux i386 restores the user ESP from sigcontext.esp (REG_ESP,
+             * index 7), not esp_at_signal (REG_UESP, index 17). Read and write
+             * REG_ESP so an emulated PUSHF/POPF stack adjustment actually
+             * takes effect on sigreturn; mirror REG_UESP for completeness. */
+            .user_esp=(uint32_t)uc->uc_mcontext.gregs[REG_ESP]};
         int result;
         if(signal==SIGTRAP) {
             struct ndis_flag_access access={0,flag_read,flag_write};
             result=tf.vector==1?ndis_host_debug(&h,&tf):ndis_flags_breakpoint(&h,&tf,&access);
         } else result=ndis_host_gp(&h,&tf,*(const uint8_t *)(uintptr_t)tf.eip);
         if(!result || !(tf.eflags&0x200)) _exit(91);
+        uc->uc_mcontext.gregs[REG_ESP]=(greg_t)tf.user_esp;
         uc->uc_mcontext.gregs[REG_UESP]=(greg_t)tf.user_esp;
         steps++;uc->uc_mcontext.gregs[REG_EIP]=(greg_t)tf.eip;
         uc->uc_mcontext.gregs[REG_EFL]=(greg_t)tf.eflags;return;

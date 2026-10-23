@@ -64,6 +64,12 @@ void task_yield(void) { CHECK(host_flags & 0x200); yields++;stack_service_needs_
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
 { (void)n; (void)fn; (void)arg; (void)p; return 0; }
 void task_start(struct task *t) { (void)t; }
+/* f6-06: the external-publication case installs a sentinel worker, so the
+ * compiler can no longer fold net_shutdown's worker teardown away. Provide
+ * the host stubs it references (the model never creates a live worker). */
+struct task *g_current;
+bool task_alive(const struct task *t) { (void)t; return false; }
+void task_reap(struct task *t) { (void)t; }
 __attribute__((noreturn)) void task_exit(int status) { exit(status); }
 uint32_t pmm_alloc_contig(uint32_t pages)
 {

@@ -312,7 +312,18 @@ static void test_irq_restore(uint32_t f) {
                     depth += (source[end] == '{') - (source[end] == '}')
                     end += 1
                 block += source[match.start():end] + '\n'
-            (temp / 'latency_scheduler.inc').write_text('#include <ciuki/sync.h>\n' + block)
+            # f6-05/f6-06: task.c's scheduler calls these weak NDIS user-host
+            # hooks and the TSS I/O-bitmap installer, whose declarations and
+            # definition sit outside the sliced region. Declare the hooks (null
+            # in the host model) and give arch_io_install a no-op body so the
+            # standalone scheduler model still compiles and links.
+            ndis_hooks = ('extern void ndis_user_switch(const struct task *) __attribute__((weak));\n'
+                          'extern void ndis_user_task_stopping(struct task *,int) __attribute__((weak));\n'
+                          'extern void ndis_user_reaped(struct task *) __attribute__((weak));\n'
+                          'struct arch_io_range;\n'
+                          '__attribute__((weak)) void arch_io_install(const struct arch_io_range *r, unsigned n)'
+                          ' { (void)r; (void)n; }\n')
+            (temp / 'latency_scheduler.inc').write_text('#include <ciuki/sync.h>\n' + ndis_hooks + block)
             timing = (ROOT / 'src/kernel/core/timing.c').read_text()
             begin = timing.index('static inline uint64_t rdtsc(void)')
             end = timing.index('\nvoid crit_begin(void)', begin)

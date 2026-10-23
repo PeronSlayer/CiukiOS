@@ -70,7 +70,15 @@ def main():
                 depth += (task_source[end] == '{') - (task_source[end] == '}')
                 end += 1
             scheduler += task_source[match.start():end] + '\n'
-        (folder / 'latency_scheduler.inc').write_text(scheduler)
+        # f6-05/f6-06: task.c's scheduler calls the weak NDIS user-host hooks
+        # and the TSS I/O-bitmap installer, defined outside this slice.
+        ndis_hooks = ('extern void ndis_user_switch(const struct task *) __attribute__((weak));\n'
+                      'extern void ndis_user_task_stopping(struct task *,int) __attribute__((weak));\n'
+                      'extern void ndis_user_reaped(struct task *) __attribute__((weak));\n'
+                      'struct arch_io_range;\n'
+                      '__attribute__((weak)) void arch_io_install(const struct arch_io_range *r, unsigned n)'
+                      ' { (void)r; (void)n; }\n')
+        (folder / 'latency_scheduler.inc').write_text(ndis_hooks + scheduler)
         timers = (ROOT / 'src/kernel/core/sync.c').read_text()
         (folder / 'deadline_timers.inc').write_text(timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')])
         write_model(folder / 'vm_creation_model.inc')
