@@ -589,10 +589,33 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_DETAILS: if (e->type == DU_EV_ACTIVATE) details(a); break;
     case C_SYSTEM_TABS:
-        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 4) {
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 5) {
             a->system_tab = e->index;
             cp_open(a,e->index==1 ? CP_DEVICES : e->index==3 ? CP_DRIVERS : CP_SYSTEM);
         }
+        break;
+    case CP_STARTUP_LIST:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<a->startup_count) {
+            a->startup_selected=e->index;
+            du_get(u,CP_STARTUP_ENABLED)->value=a->startup[e->index].enabled;
+            du_invalidate_widget(u,CP_STARTUP_ENABLED);
+        }
+        break;
+    case CP_STARTUP_ENABLED:
+        if (e->type==DU_EV_CHANGE && a->startup_selected>=0 && a->startup_selected<a->startup_count) {
+            struct desk_startup_entry *item=&a->startup[a->startup_selected];
+            int enabled=!!du_get(u,CP_STARTUP_ENABLED)->value;
+            int error=a->host.startup_enable ? a->host.startup_enable(a->host.ctx,item,enabled) : -ENOSYS;
+            if (!error) item->enabled=enabled;
+            du_get(u,CP_STARTUP_ENABLED)->value=item->enabled;
+            du_invalidate_widget(u,CP_STARTUP_ENABLED);
+            a->startup_items[a->startup_selected].text[2]=item->enabled ? (item->error ? "Invalid" : "Enabled") : "Disabled";
+            du_invalidate(u,du_get(u,CP_STARTUP_LIST)->box);
+            text(a,CP_STARTUP_NOTE,error ? "Startup setting could not be saved." : "Saved. Changes take effect at the next desktop start.");
+        }
+        break;
+    case CP_STARTUP_REFRESH:
+        if (e->type==DU_EV_ACTIVATE) build(a);
         break;
     case C_REFRESH: if (e->type == DU_EV_ACTIVATE) { refresh(a); build(a); } break;
     case C_TREE:
@@ -1018,9 +1041,9 @@ static void system_pages(struct cp_app *a)
 {
     struct du_widget *w; struct du_ui *u = a->ui; char line[512];
     if (a->page == CP_SYSTEM || a->page == CP_DEVICES || a->page == CP_DRIVERS) {
-        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers"};
-        for (int k=0;k<4;k++) a->system_tabs[k].text[0]=tabs[k];
-        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=4;
+        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers", "Startup"};
+        for (int k=0;k<5;k++) a->system_tabs[k].text[0]=tabs[k];
+        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=5;
         w->active=(unsigned)a->system_tab;
     }
     if (a->page == CP_DEVICES) {
@@ -1061,7 +1084,30 @@ static void system_pages(struct cp_app *a)
         add(a, DU_BUTTON, C_DETAILS, 24, 320, 110, 24, "Details...")->anchors = DU_ANCHOR_BOTTOM;
         add(a, DU_BUTTON, C_REFRESH, 366, 320, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
     } else if (a->page == CP_SYSTEM) {
-        if (a->system_tab == 0) {
+        if (a->system_tab == 4) {
+            text(a,C_STATUS,"");
+            if (!a->startup) a->startup=calloc(DESK_STARTUP_MAX,sizeof(*a->startup));
+            a->startup_count=a->startup && a->host.startup_list ? a->host.startup_list(a->host.ctx,a->startup,DESK_STARTUP_MAX) : -ENOSYS;
+            if (a->startup_count>(int)DESK_STARTUP_MAX) a->startup_count=-EOVERFLOW;
+            a->startup_selected=0;
+            for (int k=0;k<a->startup_count;k++) {
+                struct desk_startup_entry *item=&a->startup[k];
+                /* Source IDs come from the shared snapshot model. */
+                static const char *const sources[]={"HKLM RunServicesOnce","HKLM RunServices","HKLM RunOnce","HKCU RunOnce","HKLM Run","HKCU Run","StartUp folder"};
+                a->startup_items[k]=(struct du_item){.text={item->name,item->source<7 ? sources[item->source] : "Unknown",item->enabled ? (item->error ? "Invalid" : "Enabled") : "Disabled"},.selected=k==0};
+            }
+            add(a,DU_LABEL,C_SYS0,24,44,500,28,"Programs run when the desktop starts. Hold Shift to skip once.");
+            w=add(a,DU_LISTVIEW,CP_STARTUP_LIST,24,78,CP_WIDTH-48,220,"");
+            w->items=a->startup_items; w->count=a->startup_count>0 ? (unsigned)a->startup_count : 0;
+            w->view=DU_DETAILS; w->inactive_selection=1; w->column_count=3;
+            w->columns[0]=(struct du_column){"Item",210,0}; w->columns[1]=(struct du_column){"Location",180,0}; w->columns[2]=(struct du_column){"State",90,0};
+            w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
+            w=add(a,DU_CHECKBOX,CP_STARTUP_ENABLED,24,306,300,24,"Enable selected startup item");
+            w->value=a->startup_count>0 ? a->startup[0].enabled : 0;
+            w->disabled=a->startup_count<=0 || !a->host.startup_enable; w->anchors=DU_ANCHOR_BOTTOM;
+            add(a,DU_BUTTON,CP_STARTUP_REFRESH,390,306,140,24,"Refresh")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
+            add(a,DU_LABEL,CP_STARTUP_NOTE,24,338,CP_WIDTH-48,18,a->startup_count<0 ? "Startup list unavailable. Check registry and shortcuts." : a->startup_count ? "Changes take effect at the next desktop start." : "No startup programs.")->anchors=DU_ANCHOR_BOTTOM;
+        } else if (a->system_tab == 0) {
             snprintf(line, sizeof(line), "Version %s", a->host.version[0] ? a->host.version : "unknown"); add(a, DU_LABEL, C_SYS0, 140, 74, 336, 14, line);
             snprintf(line, sizeof(line), "Build %s", a->host.build[0] ? a->host.build : "unknown"); add(a, DU_LABEL, C_SYS1, 140, 92, 336, 14, line);
             add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "Classic computing, one woof at a time.");
@@ -1348,7 +1394,7 @@ static void build(struct cp_app *a)
     } else {
         system_pages(a);
     }
-    if (a->page == CP_SYSTEM) cp_display_refresh(a);
+    if (a->page == CP_SYSTEM && a->system_tab!=4) cp_display_refresh(a);
     cp_tick(a); sync(a);
     /* Honor the current surface when returning from an applet after a resize. */
     int dx = u->canvas.width - CP_WIDTH, dy = u->canvas.height - CP_HEIGHT;
@@ -1375,7 +1421,7 @@ void cp_open(struct cp_app *a, int page)
     if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_preview_cancel(a);
     if (page==CP_DEVICES) a->system_tab=1;
     if (page==CP_DRIVERS) a->system_tab=3;
-    if (page==CP_SYSTEM && a->system_tab!=2) a->system_tab=0;
+    if (page==CP_SYSTEM && a->system_tab!=2 && a->system_tab!=4) a->system_tab=0;
     if (page==CP_DISPLAY && !a->display_session) {
         load(a,&a->cfg); a->display_original=a->cfg; a->display_session=1; a->display_original_mode=0;
         cp_display_refresh(a);
@@ -1411,4 +1457,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { free(a->startup); a->startup=NULL; cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

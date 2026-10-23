@@ -5,6 +5,7 @@
 #include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
 #include "firstboot.h"
+#include "startup.h"
 #include "sound_storage.h"
 #include "media_notice.h"
 #include "settings_io.h"
@@ -1949,6 +1950,7 @@ static void shell_service(struct desktop *d)
     }
     desktop_wait("shell-done");
 }
+__attribute__((weak)) int desk_startup_begin(int skip) { (void)skip; return -ENOSYS; }
 /* Optional f5-07A/f5-08 adapters. Until integrated, operations fail explicitly. */
 __attribute__((weak)) int ciuki_win32_shell_launch(const struct desk_launch_record *record)
 { (void)record; return -ENOSYS; }
@@ -2421,6 +2423,10 @@ int main(int argc, char **argv)
     uint64_t report_deadline=0, next_input_report=0;
     unsigned reported_progress=0;
     int holding=0, shifted=0, startup_sound=0, accel_noticed=0;
+    d->startup.done=gate || test || fullscreen_test;
+#ifdef __i386__
+    if (devices.boot_flags & ((1u<<0)|(1u<<6))) d->startup.skip=1; /* safe/test boot */
+#endif
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
@@ -2595,6 +2601,10 @@ int main(int argc, char **argv)
         }
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
         desktop_stage(STALL_LAUNCH);
+        if (desk_startup_due(&d->startup,d->presents!=0,!fifo_count,now)) {
+            int error=desk_startup_begin(d->startup.skip);
+            if (error) desk_shell_notify_error(d,"Startup programs unavailable",-error);
+        }
         launch_pending(d);
         launch_service(d);   /* fx-8: bind or report spawns the launcher worker completed */
         desktop_stage(STALL_SHELL);
@@ -2751,6 +2761,8 @@ int main(int argc, char **argv)
          * work, never the normal desktop's idle policy. */
         if (gate && wait>10000000ull) wait=10000000ull;
         if (cache_more && wait>1000000ull) { wait=1000000ull; pause_reason=PAUSE_CACHE; }
+        if (!d->startup.done && d->startup.deadline && d->startup.deadline>sleep_now &&
+            d->startup.deadline-sleep_now<wait) wait=d->startup.deadline-sleep_now;
         loop_turn(wait);
         if (d->shell && !gate && !d->power.state) {
             /* Shell clock/directory snapshots have a genuine one-second deadline. */

@@ -1025,9 +1025,18 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void row_startup(unsigned m)
+{
+    row_name="startup programs"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,180,80,100); step("startup program shows a window");
+    struct fake_app *b=app_open("ciuknote",350,240,210,160); step("next startup program activates");
+    app_close(b); step("startup program closes and exposes previous window");
+    app_close(a); step("startup batch windows closed");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_startup};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */
