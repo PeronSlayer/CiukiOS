@@ -1123,6 +1123,12 @@ stop_return:
 static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
+    /* fx-10: MSCDEX (AH=15h) before the guest's INT 2Fh chain, whose
+     * FreeDOS handler leaves BX=0 ("MSCDEX not loaded"). */
+    if (vector == 0x2f && dosvm_cdaudio_interrupt) {
+        int cd = dosvm_cdaudio_interrupt(v, f);
+        if (cd != -ENOSYS) return cd;
+    }
     if (vector == 0x2f || vector == 0x7a || vector == 0xfc) {
         int network = dosvm_network_interrupt(v, f, vector);
         if (network != -ENOSYS) return network;
@@ -1308,6 +1314,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     int printer_cleanup=dosvm_game_ports_close ? dosvm_game_ports_close(v) : 0;
     int network_error = dosvm_network_detach(v);
     if (network_error) { destroying[slot] = false; return network_error; }
+    if (dosvm_cdaudio_close) dosvm_cdaudio_close(v); /* fx-10: stop its CD stream */
     int video_error=dosvm_fullscreen_leave(key,false);
     if (video_error) {
         klog("[dosvm] failure stage=destroy-display vm=%u generation=%u result=%d fallback=retain",

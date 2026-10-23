@@ -448,6 +448,13 @@ struct dosvm_unified_info {
     struct { uint16_t fn, error; char name[13]; } failure[8];   /* f3-61c: first min(failed, 8) */
 };
 bool dosvm_file_unified_info(const struct dosvm *,struct dosvm_unified_info *) __attribute__((weak));
+/* fx-10 MSCDEX (dosvm_cdaudio.c): INT 2Fh AH=15h from V86 code and from
+ * DPMI 0300h. -ENOSYS for other calls or a VM without a CD slot. Weak for
+ * the standalone monitor fixtures that do not link the CD audio task. */
+int dosvm_cdaudio_interrupt(struct dosvm *,struct v86_frame *) __attribute__((weak));
+int dosvm_cdaudio_reflect(struct dosvm *,struct v86_frame *,uint16_t image) __attribute__((weak));
+int dosvm_cdaudio_open(struct dosvm *) __attribute__((weak));
+void dosvm_cdaudio_close(struct dosvm *) __attribute__((weak));
 void dosvm_disk_provider_init(struct dosvm *,struct blkdev *);
 int dosvm_disk_gate_enter(struct dosvm *);
 void dosvm_disk_gate_leave(struct dosvm *);
