@@ -7,13 +7,35 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 extern uint32_t net_socket_count(void) __attribute__((weak));
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
+#include <ciuki/swdib.h>
 
 struct surface {
     struct ciuki_surface_info info;
     uint32_t references;
+    uint8_t *managed;
+    uint32_t generation;
+    bool reserved;
     uint32_t page_lists[CIUKI_SURFACE_MAX / PAGE_SIZE / (PAGE_SIZE / sizeof(uint32_t))];
 };
 struct desktop_ledger desktop_objects;
+/* Large immutable command/surface storage cannot use the 2040-byte heap.
+ * Ordinary resident direct-map pages; allocation failure is pre-admission. */
+void *desktop_buffer_alloc(uint32_t bytes, enum mm_owner owner)
+{
+    if (!bytes || bytes>CIUKI_BATCH_MAX_EXTENT) return 0;
+    unsigned pages=(bytes+PAGE_SIZE-1)/PAGE_SIZE;
+    uint32_t phys=pmm_alloc_contig(pages);
+    if (!phys) return 0;
+    mm_claim(phys,pages,owner);
+    memset(P2V(phys),0,pages*PAGE_SIZE);
+    return P2V(phys);
+}
+void desktop_buffer_free(void *p, uint32_t bytes, enum mm_owner owner)
+{
+    if (!p) return;
+    unsigned pages=(bytes+PAGE_SIZE-1)/PAGE_SIZE;
+    for (unsigned i=0;i<pages;i++) mm_free(V2P(p)+i*PAGE_SIZE,owner);
+}
 
 void desktop_snapshot(struct desktop_ledger *out) { *out = desktop_objects; }
 
@@ -140,6 +162,12 @@ void surface_release(struct surface *s)
 {
     if (!s || --s->references)
         return;
+    if (s->managed) {
+        desktop_buffer_free(s->managed,s->info.allocation_bytes,MM_USER_SHARED);
+        if (ledger_promise) ledger_promise(MM_USER_SHARED,0,-(int32_t)(s->info.allocation_bytes/PAGE_SIZE));
+        desktop_objects.pages-=s->info.allocation_bytes/PAGE_SIZE;
+        desktop_objects.surfaces--; kfree(s); return;
+    }
     for (unsigned i = 0; i < s->info.allocation_bytes / PAGE_SIZE; i++)
         if (surface_page(s, i)) { mm_free(surface_page(s, i),MM_USER_SHARED); if (ledger_promise) ledger_promise(MM_USER_SHARED,0,-1); desktop_objects.pages--; }
     for (unsigned i = 0; i < ARRAY_SIZE(s->page_lists); i++)
@@ -151,10 +179,12 @@ const struct ciuki_surface_info *surface_geometry(const struct surface *s) { ret
 
 int surface_create(struct process *p, uint32_t width, uint32_t height, uint32_t format)
 {
+    bool managed=format>=CIUKI_SURFACE_BATCH_RGB565 && format<=CIUKI_SURFACE_BATCH_XRGB8888;
     if (!width || !height || width > CIUKI_SURFACE_DIMENSION_MAX ||
-        height > CIUKI_SURFACE_DIMENSION_MAX || format != CIUKI_SURFACE_XRGB8888)
+        height > CIUKI_SURFACE_DIMENSION_MAX || (format != CIUKI_SURFACE_XRGB8888 && !managed))
         return -EINVAL;
-    uint64_t bytes = (uint64_t)width * CIUKI_SURFACE_PIXEL_BYTES * height;
+    unsigned pixel_bytes=managed ? format : CIUKI_SURFACE_PIXEL_BYTES;
+    uint64_t bytes = (uint64_t)width * pixel_bytes * height;
     if (bytes > CIUKI_SURFACE_MAX || bytes > UINT32_MAX - (PAGE_SIZE - 1))
         return -EOVERFLOW;
     int fd = desktop_fd_slot(p, 0);
@@ -163,10 +193,19 @@ int surface_create(struct process *p, uint32_t width, uint32_t height, uint32_t 
     struct surface *s = kzalloc(sizeof(*s));
     if (!s) return -ENOMEM;
     s->info = (struct ciuki_surface_info){ sizeof(s->info), width, height,
-        width * CIUKI_SURFACE_PIXEL_BYTES, format, PAGE_ALIGN_UP((uint32_t)bytes) };
+        width * pixel_bytes, format, PAGE_ALIGN_UP((uint32_t)bytes) };
     s->references = 1;
     desktop_objects.surfaces++;
-    for (unsigned i = 0; i < s->info.allocation_bytes / PAGE_SIZE; i++) {
+    if (managed) {
+        static uint32_t sequence;
+        if (sequence==UINT32_MAX) { surface_release(s); return -ENOSPC; }
+        s->generation=++sequence;
+        s->managed=desktop_buffer_alloc(s->info.allocation_bytes,MM_USER_SHARED);
+        if (!s->managed) { surface_release(s); return -ENOMEM; }
+        if (ledger_promise) ledger_promise(MM_USER_SHARED,0,(int32_t)(s->info.allocation_bytes/PAGE_SIZE));
+        desktop_objects.pages+=s->info.allocation_bytes/PAGE_SIZE;
+    }
+    for (unsigned i = 0; !managed && i < s->info.allocation_bytes / PAGE_SIZE; i++) {
         unsigned table = i / (PAGE_SIZE / sizeof(uint32_t)), slot = i % (PAGE_SIZE / sizeof(uint32_t));
         if (!slot) {
             s->page_lists[table] = pmm_alloc();
@@ -216,8 +255,10 @@ int surface_attachment(struct process *p, int32_t fd, struct desktop_description
 
 int surface_read(struct surface *s, uint32_t offset, void *out, uint32_t bytes)
 {
+    if (s->reserved) return -EBUSY;
     if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset)
         return -EINVAL;
+    if (s->managed) { memcpy(out,s->managed+offset,bytes); return 0; }
     uint8_t *dst = out;
     while (bytes) {
         uint32_t n = PAGE_SIZE - offset % PAGE_SIZE;
@@ -230,7 +271,9 @@ int surface_read(struct surface *s, uint32_t offset, void *out, uint32_t bytes)
 
 int surface_write(struct surface *s, uint32_t offset, const void *data, uint32_t bytes)
 {
+    if (s->reserved) return -EBUSY;
     if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
+    if (s->managed) { memcpy(s->managed+offset,data,bytes); return 0; }
     const uint8_t *src = data;
     while (bytes) {
         unsigned n = PAGE_SIZE - offset % PAGE_SIZE;
@@ -252,6 +295,27 @@ int32_t surface_map(struct process *p, int32_t fd, uint32_t prot)
     if (prot & ~d->maximum) return -EACCES;
     if (!ua_map_shared) return -ENOMEM; /* no private copy/unsafe lifetime fallback */
     struct surface *s = d->u.surface;
+    if (s->managed) return -EACCES;
     const struct ua_shared shared = { s, surface_mapping_retain, surface_mapping_release, surface_page };
     return ua_map_shared(p->memory, s->info.allocation_bytes, prot, d->maximum, &shared);
 }
+
+int surface_batch_target(struct desktop_description *d, uint32_t generation, struct swdib_target *out)
+{
+    if (!d || d->kind!=DESKTOP_SURFACE) return -EBADF;
+    struct surface *s=d->u.surface;
+    if (!s->managed) return -EACCES; /* Existing mapped writers cannot be excluded. */
+    /* Internal metadata queries pass zero. Batch descriptors require the
+     * explicit immutable generation returned by QUERY_SURFACE. */
+    if (generation && generation!=s->generation) return -EAGAIN;
+    unsigned bpp=s->info.format*8;
+    *out=(struct swdib_target){.identity=s,.rights=d->maximum,.kind=CIUKI_TARGET_SYSTEM,
+        .device={.width=s->info.width,.height=s->info.height,.pitch=s->info.stride,.size=s->info.allocation_bytes,
+        .mapped=s->managed,.bpp=bpp,.red_size=bpp==16 ? 5 : 8,.red_pos=bpp==16 ? 11 : 16,
+        .green_size=bpp==16 ? 6 : 8,.green_pos=bpp==16 ? 5 : 8,.blue_size=bpp==16 ? 5 : 8,
+        .generation=s->generation,.present=true}};
+    return 0;
+}
+int surface_batch_reserve(struct surface *s)
+{ if (s->reserved) return -EBUSY; s->reserved=true; return 0; }
+void surface_batch_unreserve(struct surface *s) { s->reserved=false; }

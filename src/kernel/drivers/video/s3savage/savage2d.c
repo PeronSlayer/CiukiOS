@@ -695,7 +695,7 @@ static int start_chip_config(struct savage2d *s, const struct savage_io *io, con
     s->descriptor = cfg.descriptor;
     s->ops = (struct accel_ops){s, sync_engine, copy_rect, fill_rect, pattern_rect,
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready,
-        write_rect, offscreen_rows, set_pause, verify_write};
+        write_rect, offscreen_rows, set_pause, .verify_write=verify_write};
     s->rows = d->height; s->offscreen_first = d->height; s->pause = 0; s->pause_arg = 0;
     s->fb = d; s->write_state = 0; s->offscreen_ok = false;
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;

@@ -68,13 +68,13 @@ def emit_header(theme: str, out: pathlib.Path):
     for name in DESKTOP:
         im,pt=raster(theme,name); rows.append((name,pack(im,pt)))
     license_id="CC-BY-SA-3.0" if theme.startswith("dmz") else "MIT"
-    lines=[f"/* SPDX-License-Identifier: {license_id} */", f"/* Generated from {theme}; source attribution and licence are in assets/cursors/{theme}/. */", "#ifndef CIUKI_CURSOR_RASTERS_H", "#define CIUKI_CURSOR_RASTERS_H", "#include <stdint.h>", "struct desk_cursor_raster { unsigned hot_x, hot_y, width, height; uint32_t mask[32], image[32]; };", "static const struct desk_cursor_raster desk_cursors[] = {"]
+    lines=[f"/* SPDX-License-Identifier: {license_id} */", f"/* Generated from {theme}; source attribution and licence are in assets/cursors/{theme}/. */", "#ifndef CIUKI_CURSOR_RASTERS_H", "#define CIUKI_CURSOR_RASTERS_H", "#include <stdint.h>", "struct desk_cursor_raster { unsigned hot_x, hot_y, width, height; uint32_t mask[32], image[32]; const uint8_t *shadow; };", "static const struct desk_cursor_raster desk_cursors[] = {"]
     for name,(pt,w,h,mask,image) in rows:
         lines += [f"    /* {name} */", f"    {{{pt[0]}, {pt[1]}, {w}, {h}, {{"]
         lines += ["        "+", ".join(f"0x{x:08x}u" for x in mask[i:i+4])+"," for i in range(0,32,4)]
         lines += ["    }, {"]
         lines += ["        "+", ".join(f"0x{x:08x}u" for x in image[i:i+4])+"," for i in range(0,32,4)]
-        lines += ["    }},"]
+        lines += ["    }, 0},"]
     if theme == "hackneyed":
         lines += ["};", "/* Animated busy artwork retained as sixteen ordered frames. */", "#define DESK_BUSY_FRAME_COUNT 16u", "#define DESK_BUSY_HOT_X 16u", "#define DESK_BUSY_HOT_Y 16u", "static const uint32_t desk_busy_frames[DESK_BUSY_FRAME_COUNT][32] = {"]
         frame_images=[]

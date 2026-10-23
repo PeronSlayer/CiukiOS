@@ -69,6 +69,11 @@ enum {
 struct du_ui;
 struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
+/* Local XRGB command batches for client-owned canvases. These never submit
+ * arbitrary user pointers to the display service. MONO, INVERT and KEYED
+ * share its pixel conventions; inaccessible native targets use this path. */
+int du_commands(struct du_canvas *, const struct ciuki_batch_record *, unsigned,
+                const void *payload, const uint32_t *source, unsigned source_width, unsigned source_height);
 struct du_selection {
     uint64_t ns;
     int x, y;

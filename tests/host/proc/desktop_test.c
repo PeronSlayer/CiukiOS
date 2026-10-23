@@ -12,6 +12,25 @@
 #include <ciuki/storage.h>
 #include <ciuki/files.h>
 #include <ciuki/pager.h>
+uint32_t pmm_alloc_contig(uint32_t count)
+{
+    if (fail_alloc()) return 0;
+    for (unsigned i=1;i+count<=HOST_PAGES;i++) {
+        unsigned n=0; while (n<count && !allocated[i+n]) n++;
+        if (n!=count) continue;
+        for (n=0;n<count;n++) { allocated[i+n]=true; pages_used++; memset(P2V((i+n)*PAGE_SIZE),0xa5,PAGE_SIZE); }
+        return i*PAGE_SIZE;
+    }
+    return 0;
+}
+/* Direct-map reply publication uses the same fake page tables as uaddr. */
+uint32_t as_lookup(const struct aspace *as, uint32_t va, uint32_t *raw)
+{
+    uint32_t *entry=pte((struct uaddr *)(void *)as,va,false);
+    uint32_t value=entry ? *entry : 0;
+    if (raw) *raw=value;
+    return value&PTE_P ? (value&~4095u)|(va&4095u) : 0;
+}
 
 /* Device-node transport for the desktop poll interleaving test. The process
  * ledger, slot comparison and record formatter remain production code. */
@@ -158,11 +177,13 @@ bool input_read(struct input_event *out)
 int supervisor_spawn_standin(struct process *parent, struct process **out) { (void)parent; (void)out; return -ENOENT; }
 
 #include "../../../src/kernel/drivers/video/swdib.c"
+#include "../../../src/kernel/drivers/video/batch.c"
 #include "../../../src/kernel/drivers/fbdev.c"
 #include "../display_driver_software_fixture.h"
 #include "../../../src/kernel/proc/surface.c"
 #include "../../../src/kernel/proc/channel.c"
 #include "../../../src/kernel/proc/grants.c"
+#include "../../../src/kernel/proc/display_batch.c"
 #include "../../../src/kernel/proc/supervisor.c"
 #include "../../../src/kernel/proc/syscalls_desktop.c"
 static struct storage libc_storage;
@@ -676,6 +697,126 @@ static void present_mapping_change(void)
     CHECK(!presenter.owner && !g_current->preempt_holds);
     device.generation++;
 }
+static void test_command_transport(struct process *p, int grant)
+{
+    struct {
+        struct ciuki_batch_header h;
+        struct ciuki_batch_record r[2];
+        struct ciuki_batch_target target;
+    } blob={.h={CIUKI_BATCH_MAGIC,1,64,352,2,64,320,1,352,0,0,1,{0}},
+        .r={{.opcode=1,.record_bytes=128,.dst=1,.dw=1,.dh=1,.foreground=0x123456},
+            {.opcode=10,.record_bytes=128}},.target={.kind=1,.generation=1}};
+    struct ciuki_batch_submit envelope={32,1,0,BUFFER+512,sizeof(blob),BUFFER+PAGE_SIZE-32,64,{0}};
+    CHECK(!ua_write(p->memory,BUFFER+512,&blob,sizeof(blob)));
+    CHECK(!ua_write(p->memory,BUFFER,&envelope,sizeof(envelope)));
+    struct ciuki_accel_request request={.size=308,.operation=CIUKI_ACCEL_BATCH};
+    CHECK(!ua_write(p->memory,BUFFER+128,&request,sizeof(request)));
+    struct trap_frame tf={.eax=CIUKI_SYS_DISPLAY_ACCEL,.ebx=(uint32_t)grant,.ecx=BUFFER+128,.edx=BUFFER};
+    CHECK(!desktop_syscall(&tf));
+    struct ciuki_batch_reply reply;
+    CHECK(!ua_read(p->memory,&reply,envelope.reply_address,64));
+    CHECK(reply.fence && reply.completed==2 && reply.first_uncompleted==UINT32_MAX && reply.state==2 && (reply.flags&2));
+    uint64_t first=reply.fence;
+    struct ciuki_fence_control control={32,1,CIUKI_FENCE_STATUS,first,0,BUFFER+PAGE_SIZE-32,64,0};
+    CHECK(!ua_write(p->memory,BUFFER,&control,sizeof(control)));
+    CHECK(!grant_batch_request(p,grant,BUFFER,true));
+    CHECK(!ua_read(p->memory,&reply,control.reply_address,64) && reply.fence==first);
+    /* Malformed suffix rejects the entire snapshot before the first pixel. */
+    blob.r[1].reserved[2]=1;
+    CHECK(!ua_write(p->memory,BUFFER+512,&blob,sizeof(blob)));
+    CHECK(!ua_write(p->memory,BUFFER,&envelope,32));
+    CHECK(grant_batch_request(p,grant,BUFFER,false)==-EINVAL);
+    CHECK(!ua_read(p->memory,&reply,envelope.reply_address,64) && !reply.fence && !reply.completed);
+    blob.r[1].reserved[2]=0;
+    CHECK(!ua_write(p->memory,BUFFER+512,&blob,sizeof(blob)));
+    for (unsigned i=1;i<64;i++) CHECK(!grant_batch_request(p,grant,BUFFER,false));
+    CHECK(grant_batch_request(p,grant,BUFFER,false)==-ENOSPC);
+    for (uint64_t id=first;id<first+64;id++) {
+        control.fence=id; control.action=CIUKI_FENCE_CANCEL;
+        CHECK(!ua_write(p->memory,BUFFER,&control,32)); CHECK(!grant_batch_request(p,grant,BUFFER,true));
+        control.action=CIUKI_FENCE_RELEASE;
+        CHECK(!ua_write(p->memory,BUFFER,&control,32)); CHECK(!grant_batch_request(p,grant,BUFFER,true));
+        CHECK(grant_batch_request(p,grant,BUFFER,true)==-ENOENT);
+    }
+    CHECK(!desktop_fd(p,grant)->display_fences);
+    /* B6: cached controls do not turn an unsafe fence into completion. */
+    struct batch_fence *pending=desktop_buffer_alloc(sizeof(*pending),MM_IO_REQUEST); CHECK(pending);
+    pending->batch.reply=(struct ciuki_batch_reply){.size=64,.version=1,.state=CIUKI_FENCE_RECOVERING,
+        .fence=++desktop_fd(p,grant)->display_sequence,.error=-EIO,.flags=CIUKI_FENCE_PARTIAL_DIRTY,.admitted=1};
+    desktop_fd(p,grant)->display_fences=pending;
+    control.fence=pending->batch.reply.fence; control.action=CIUKI_FENCE_WAIT; control.timeout_ms=0;
+    CHECK(!ua_write(p->memory,BUFFER,&control,32)); CHECK(grant_batch_request(p,grant,BUFFER,true)==-ETIMEDOUT);
+    control.action=CIUKI_FENCE_CANCEL;
+    CHECK(!ua_write(p->memory,BUFFER,&control,32)); CHECK(!grant_batch_request(p,grant,BUFFER,true));
+    CHECK(pending->batch.cancel && (pending->batch.reply.flags&CIUKI_FENCE_CANCEL_REQUESTED));
+    control.action=CIUKI_FENCE_RELEASE;
+    CHECK(!ua_write(p->memory,BUFFER,&control,32)); CHECK(grant_batch_request(p,grant,BUFFER,true)==-EBUSY);
+    CHECK(desktop_fd(p,grant)->display_fences==pending && !(pending->batch.reply.flags&CIUKI_FENCE_CPU_SAFE));
+    bool was_blocked=accel_blocked;
+    batch_owner=&pending->batch; drawing=PRESENT_BUSY; accel_inflight=true;
+    pending->busy=true; grant_batch_busy(true); enqueue_recovery(pending);
+    CHECK(recovery_queue==pending && pending->users==1 && grants_display_busy());
+    reap_once();
+    CHECK(!recovery_queue && !grants_display_busy() && !drawing && !accel_inflight);
+    CHECK(pending->batch.reply.state==CIUKI_FENCE_STOPPED && (pending->batch.reply.flags&CIUKI_FENCE_CPU_SAFE));
+    CHECK(!grant_batch_request(p,grant,BUFFER,true)); CHECK(!desktop_fd(p,grant)->display_fences);
+    /* Grant closure transfers the still-pinned source and upload to recovery. */
+    unsigned before_pages=pages_used, before_surfaces=desktop_objects.surfaces;
+    pending=desktop_buffer_alloc(sizeof(*pending),MM_IO_REQUEST); CHECK(pending);
+    pending->batch.reply=(struct ciuki_batch_reply){.size=64,.version=1,.state=CIUKI_FENCE_RECOVERING,
+        .fence=++desktop_fd(p,grant)->display_sequence,.error=-EIO,.flags=1,.admitted=1};
+    pending->blob_bytes=64; pending->batch.blob=desktop_buffer_alloc(64,MM_IO_REQUEST); CHECK(pending->batch.blob);
+    int source_fd=surface_create(p,1,1,CIUKI_SURFACE_BATCH_XRGB8888); CHECK(source_fd>=0);
+    struct desktop_description *source=desktop_fd(p,source_fd);
+    source->object.retain(&source->object); pending->refs[pending->ref_count++]=source;
+    CHECK(!surface_batch_reserve(source->u.surface)); pending->reserved[pending->reserved_count++]=source->u.surface;
+    CHECK(!desktop_close(p,source_fd));
+    desktop_fd(p,grant)->display_fences=pending;
+    batch_owner=&pending->batch; drawing=PRESENT_BUSY; accel_inflight=true;
+    pending->busy=true; grant_batch_busy(true); enqueue_recovery(pending);
+    grant_batch_close(desktop_fd(p,grant));
+    CHECK(!desktop_fd(p,grant)->display_fences && recovery_queue==pending && pending->released);
+    CHECK(source->u.surface->reserved && desktop_objects.surfaces==before_surfaces+1 && pages_used>before_pages);
+    reap_once();
+    CHECK(!recovery_queue && !grants_display_busy() && !drawing && !accel_inflight);
+    CHECK(desktop_objects.surfaces==before_surfaces && pages_used==before_pages);
+    accel_blocked=was_blocked;
+    /* Managed surfaces cannot be mapped or bypassed through a read-only fd. */
+    for (unsigned format=2;format<=4;format++) {
+        int fd=surface_create(p,3,2,format); CHECK(fd>=0);
+        struct desktop_description *d=desktop_fd(p,fd); struct swdib_target target;
+        CHECK(surface_map(p,fd,PROT_READ|PROT_WRITE)==-EACCES);
+        CHECK(!surface_batch_target(d,0,&target) && target.device.bpp==format*8);
+        uint8_t canary[48]; memset(canary,0xa5,sizeof(canary));
+        CHECK(!ua_write(p->memory,BUFFER+1024,canary,sizeof(canary)));
+        struct trap_frame legacy={.eax=CIUKI_SYS_SURFACE_INFO,.ebx=(uint32_t)fd,.ecx=BUFFER+1024,.edx=1,.esi=36};
+        CHECK(!desktop_syscall(&legacy)); CHECK(!ua_read(p->memory,canary,BUFFER+1024,sizeof(canary)));
+        for (unsigned i=24;i<sizeof(canary);i++) CHECK(canary[i]==0xa5);
+        struct ciuki_accel_request query={.size=308,.operation=CIUKI_ACCEL_QUERY_SURFACE,.colour=1,.background=36,.rect={.src_x=fd}};
+        CHECK(!ua_write(p->memory,BUFFER+128,&query,sizeof(query)));
+        struct trap_frame versioned={.eax=CIUKI_SYS_DISPLAY_ACCEL,.ebx=(uint32_t)grant,.ecx=BUFFER+128,.edx=BUFFER+1024};
+        CHECK(!desktop_syscall(&versioned)); struct ciuki_batch_surface_info negotiated;
+        CHECK(!ua_read(p->memory,&negotiated,BUFFER+1024,sizeof(negotiated)) && negotiated.size==36 && negotiated.generation==target.device.generation);
+        CHECK(surface_batch_target(d,target.device.generation+1,&target)==-EAGAIN);
+        CHECK(!surface_batch_target(d,0,&target));
+        blob.target=(struct ciuki_batch_target){.kind=3,.handle=(uint32_t)fd,.generation=target.device.generation};
+        CHECK(!ua_write(p->memory,BUFFER+512,&blob,sizeof(blob))); CHECK(!ua_write(p->memory,BUFFER,&envelope,32));
+        CHECK(!grant_batch_request(p,grant,BUFFER,false));
+        CHECK(!ua_read(p->memory,&reply,envelope.reply_address,64) && reply.completed==2);
+        uint8_t pixel[4]={0}; CHECK(!surface_read(d->u.surface,0,pixel,format));
+        CHECK(pixel[0]==(format==2 ? 0xaa : 0x56) && pixel[1]==(format==2 ? 0x11 : 0x34));
+        CHECK(!surface_batch_reserve(d->u.surface));
+        CHECK(surface_read(d->u.surface,0,pixel,format)==-EBUSY && surface_write(d->u.surface,0,pixel,format)==-EBUSY);
+        surface_batch_unreserve(d->u.surface);
+        struct desktop_description *ro; CHECK(!surface_attachment(p,fd,&ro));
+        CHECK(!surface_batch_target(ro,0,&target) && target.rights==PROT_READ);
+        ro->object.release(&ro->object);
+        CHECK(!desktop_close(p,fd));
+    }
+    if (reaper) { reaper->state=T_ZOMBIE; task_reap(reaper); reaper=NULL; }
+    puts("display batch transport: production syscall, pinned cross-page replies, all-or-nothing preflight, 64 fences, status/cancel/release, managed RGB565/BGR888/XRGB surfaces and reservation protection PASS");
+}
+
 static void test_desktop_present(void)
 {
     struct process *p;
@@ -720,6 +861,7 @@ static void test_desktop_present(void)
         CHECK(grant_present(p, grants[0], fd, &invalid) == -EIO);
         desktop_resource.state = RS_ACTIVE;
     }
+    test_command_transport(p,grants[0]);
     int wide_fd = surface_create(p, 2048, 2, 1); CHECK(wide_fd >= 0);
     /* f1-26: real syscall marshalling, grant ownership and software backend. */
     struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_QUERY,.generation=1};

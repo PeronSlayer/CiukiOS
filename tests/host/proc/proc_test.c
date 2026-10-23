@@ -33,6 +33,7 @@ void trap_dispatch(struct trap_frame *tf) { (void)tf; trap_calls++; }
 struct task *g_current;
 uint32_t g_task_count, g_user_mappings;
 volatile uint64_t g_ticks;
+static inline __attribute__((unused)) uint64_t read_tsc_unserialized(void) { return g_ticks*1000000; }
 volatile bool g_need_resched;
 
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); } } while (0)

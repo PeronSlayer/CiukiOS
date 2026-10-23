@@ -236,7 +236,7 @@ def main() -> int:
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
                     list((SRC / "drivers").glob("*.c")) +
-                    [SRC / "drivers/video" / name for name in ("registry.c", "attempt.c", "swdib.c", "native.c",
+                    [SRC / "drivers/video" / name for name in ("registry.c", "attempt.c", "swdib.c", "native.c", "batch.c",
                         "native_hw.c", "intel2d/engine.c", "intel2d/driver.c", "unichrome/engine.c",
                         "unichrome/driver.c", "sis/engine.c", "sis/cursor.c", "sis/register.c",
                         "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "mach64/engine.c",

@@ -37,6 +37,7 @@ void desktop_activity_snapshot(struct desktop_activity *out) { *out = activity; 
 
 void grant_release(struct desktop_description *d)
 {
+    grant_batch_close(d);
     if (!d->owner) return;
     desktop_objects.grants--;
     /* The last grant description closes: the screen console draws again. */
@@ -82,6 +83,14 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
     if (kind == DESKTOP_DISPLAY && display_suspended) return -EBUSY;
     return d->owner == p->pid && grant_owner == p->pid && (d->maximum & right) ? 0 : -EACCES;
 }
+int grant_batch_authorized(struct process *p, struct desktop_description *d)
+{
+    if (!d || d->kind!=DESKTOP_DISPLAY) return -EBADF;
+    if (d->owner!=p->pid || grant_owner!=p->pid || !(d->maximum&PROT_WRITE)) return -EACCES;
+    if (display_suspended) return -EBUSY;
+    return p->state==PROC_LIVE ? 0 : -ECANCELED;
+}
+void grant_batch_busy(bool busy) { if (busy) presenting++; else presenting--; }
 
 struct accel_operation { struct desktop_description *grant; bool presenting; uint32_t page; };
 int grant_accel_info(struct process *p, int32_t fd, const struct ciuki_accel_request *q,
@@ -242,6 +251,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
     if ((err = display_live())) return err;
     struct ciuki_rect clipped;
     const struct ciuki_surface_info *s = surface_geometry(d->u.surface);
+    if (s->format!=CIUKI_SURFACE_XRGB8888 && s->format!=CIUKI_SURFACE_BATCH_XRGB8888) return -EOPNOTSUPP;
     err = desktop_clip(s, fbdev_get(), rect, &clipped);
     if (err || !clipped.width || !clipped.height) return err;
     struct proc_thread *t = proc_thread_for(g_current);
@@ -270,8 +280,9 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
             if (width > PAGE_SIZE / 4) width = PAGE_SIZE / 4;
             struct fb_surface src = { P2V(op.row_page), width, 1, width * 4, width * 4 };
             struct fb_rect dst = { clipped.dst_x + (int32_t)x, clipped.dst_y + (int32_t)y, (int32_t)width, 1 };
-            surface_read(op.surface, ((uint32_t)clipped.src_y + y) * s->stride + ((uint32_t)clipped.src_x + x) * 4,
+            err=surface_read(op.surface, ((uint32_t)clipped.src_y + y) * s->stride + ((uint32_t)clipped.src_x + x) * 4,
                          P2V(op.row_page), width * 4);
+            if (err) break;
             err = fbdev_present(&src, &dst);
             if (err) { if (err == -ENODEV) err = -EIO; break; }
             /* Conversion/copy is at most one 4 KiB tile. The F1 mutex and

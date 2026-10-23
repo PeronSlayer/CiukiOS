@@ -9,6 +9,8 @@ void display_driver_software(const char *reason) { (void)reason; }
 void display_driver_record(void) { }
 bool display_driver_refresh(void) { return false; }
 void display_driver_count(unsigned operation,bool native) { (void)operation; (void)native; }
+void display_driver_command_count(unsigned opcode,bool native) { (void)opcode; (void)native; }
+void display_driver_command_counters(struct ciuki_command_info *out) { (void)out; }
 void display_driver_info(struct ciuki_display_engine_info *out)
 {
     memset(out,0,sizeof(*out)); out->version=1; out->size=sizeof(*out);

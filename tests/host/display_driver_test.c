@@ -42,7 +42,12 @@ static bool fake_probe(const struct pci_func *p) { CHECK(!locks && p==&gpu); pro
 static bool fake_eligible(const struct fb_device *d) { CHECK(!locks && d==&device); eligible_calls++; return true; }
 static unsigned fake_caps(void *ctx) { (void)ctx; return quarantined ? 0 : native_cursor ? 3 : 1; }
 static bool fake_ready(void *ctx) { (void)ctx; return !unsafe; }
-static int fake_sync(void *ctx) { (void)ctx; CHECK(locks==1); syncs++; return unsafe ? -EIO : 0; }
+static int fake_sync(void *ctx)
+{
+    (void)ctx; CHECK(locks==1); syncs++;
+    if (sliced && batch_recovery_active && pause_fn) CHECK(!pause_fn(pause_ctx));
+    return unsafe ? -EIO : 0;
+}
 static int fake_fill(void *ctx,const struct fb_rect *r,uint32_t c)
 {
     (void)ctx; CHECK(locks==1); submissions++;
@@ -119,7 +124,18 @@ const struct display_driver s3savage_driver={
 void grants_display_yield(void)
 {
     CHECK(!locks && drawing==PRESENT_BUSY && accel_inflight); yields++;
-    CHECK(!fbdev_console_begin() && fbdev_change_begin()==-EBUSY);
+    CHECK(!fbdev_console_begin());
+    if (sliced) CHECK(fbdev_change_begin()==-EBUSY);
+    if (batch_owner) {
+        if (batch_recovery_active && batch_owner->reply.state==CIUKI_FENCE_RECOVERING)
+            CHECK(!fbdev_batch_recover(batch_owner)); /* concurrent WAIT cannot re-enter proof */
+        static struct display_batch contender;
+        memset(&contender,0,sizeof(contender)); contender.header.generation=device.generation;
+        CHECK(fbdev_batch_execute(&contender)==-EBUSY && !contender.reply.admitted);
+        struct fb_rect rect={0,0,1,1};
+        CHECK(fbdev_fill(&rect,0x123456)==-EBUSY);
+        CHECK(batch_owner && drawing==PRESENT_BUSY && accel_inflight);
+    }
     struct ciuki_accel_request q={.size=sizeof(q),.generation=42,.operation=CIUKI_ACCEL_CURSOR_SHOW};
     CHECK(fbdev_accel_request(&q)==-EBUSY);
     fbdev_cursor_hide();
@@ -142,6 +158,7 @@ static void setup(void)
     initialized=true; changing=accel_queued=accel_initializing=accel_inflight=accel_blocked=false;
     drawing=console_rows=0; locks=0; accel_marker_task=NULL; accel_marker_request=ACCEL_MARKER_IDLE;
     memset(native_count,0,sizeof(native_count)); memset(software_count,0,sizeof(software_count));
+    memset(command_native_count,0,sizeof(command_native_count)); memset(command_software_count,0,sizeof(command_software_count));
     for (unsigned i=0;i<sizeof(pixels);i++) pixels[i]=(uint8_t)(i*71+13);
     memcpy(before,pixels,sizeof(pixels));
 }
@@ -246,6 +263,9 @@ static void native_comparison(void)
     setup(); activate(); refuse=-EOPNOTSUPP;
     CHECK(fbdev_accel_validate(g_ticks+100,NULL,NULL,&tested)==-EOPNOTSUPP && !tested && !software_count[0]);
 }
+#ifdef DISPLAY_DRIVER_NO_MAIN
+#define main display_driver_regression_main
+#endif
 int main(void)
 {
     selection(); lifecycle(); punting(); native_comparison();

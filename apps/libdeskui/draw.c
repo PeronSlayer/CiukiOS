@@ -4,6 +4,7 @@
 #include "deskui.h"
 #include "../desktop/sounds.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #ifndef DESK_PROFILE
 #define DESK_PROFILE(name, ...) do { __VA_ARGS__; } while (0)
@@ -110,6 +111,41 @@ struct du_rect du_intersection(struct du_rect a, struct du_rect b)
 static struct du_rect visible(const struct du_canvas *c, struct du_rect r)
 {
     return du_intersection(du_intersection(r, c->clip), (struct du_rect){0, 0, c->width, c->height});
+}
+
+int du_commands(struct du_canvas *c, const struct ciuki_batch_record *commands, unsigned count,
+                const void *payload, const uint32_t *source, unsigned sw, unsigned sh)
+{
+    if (!c || !c->pixels || (!commands && count) || count>64) return -EINVAL;
+    /* Validate the whole local batch before touching its private canvas. */
+    for (unsigned n=0;n<count;n++) {
+        const struct ciuki_batch_record *r=&commands[n];
+        if (r->dw>16384 || r->dh>16384 || r->clip_count || r->record_bytes!=128) return -EINVAL;
+        if (r->opcode!=CIUKI_CMD_MONO && r->opcode!=CIUKI_CMD_INVERT && r->opcode!=CIUKI_CMD_KEYED) return -EOPNOTSUPP;
+        if (r->opcode==CIUKI_CMD_MONO && (!payload || r->sx<0 || r->sy<0 || r->stride<(r->sw+7)/8 ||
+            !r->sw || !r->sh || (uint64_t)(r->sh-1)*r->stride+(r->sw+7)/8>r->data_bytes)) return -EINVAL;
+        if (r->opcode==CIUKI_CMD_KEYED && (!source || source==c->pixels)) return -EINVAL;
+    }
+    for (unsigned n=0;n<count;n++) {
+        const struct ciuki_batch_record *r=&commands[n];
+        struct du_rect v=visible(c,(struct du_rect){r->dx,r->dy,(int)r->dw,(int)r->dh});
+        for (int y=v.y;y<v.y+v.h;y++) for (int x=v.x;x<v.x+v.w;x++) {
+            uint32_t *p=c->pixels+(size_t)y*c->width+x;
+            int64_t u=(int64_t)r->sx+x-r->dx, t=(int64_t)r->sy+y-r->dy;
+            if (r->opcode==CIUKI_CMD_INVERT) *p^=0xffffffu;
+            else if (r->opcode==CIUKI_CMD_KEYED) {
+                if (u<0 || t<0 || u>=sw || t>=sh) continue;
+                uint32_t value=source[(size_t)t*sw+u]&0xffffffu;
+                if (value!=(r->key&0xffffffu)) *p=value;
+            } else {
+                if (u<0 || t<0 || u>=r->sw || t>=r->sh) continue;
+                const uint8_t *data=(const uint8_t *)payload+r->data_offset;
+                int bit=data[t*r->stride+u/8]&(128u>>(u%8));
+                if (bit || !(r->flags&CIUKI_CMD_TRANSPARENT_BG)) *p=(bit ? r->foreground : r->background)&0xffffffu;
+            }
+        }
+    }
+    return 0;
 }
 
 static uint32_t mix(uint32_t a, uint32_t b, unsigned alpha)
@@ -221,13 +257,17 @@ void du_dotted(struct du_canvas *c, struct du_rect r)
 {
     /* Invert the pixels of the dotted focus frame. */
     struct du_rect v = visible(c, r);
+    struct ciuki_batch_record batch[8]; unsigned count=0;
     for (int y = v.y; y < v.y + v.h; y++) for (int x = v.x; x < v.x + v.w; x++) {
         int edge = y == r.y || y == r.y + r.h - 1 || x == r.x || x == r.x + r.w - 1;
         if (edge && !((x + y) & 1)) {
             uint32_t *p = c->pixels + (size_t)y * (size_t)c->width + (size_t)x;
-            *p = ~*p & 0xffffffu;
+            if (*p&0xff000000u) { *p=~*p&0xffffffu; continue; }
+            batch[count++]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_INVERT,.record_bytes=128,.dx=x,.dy=y,.dw=1,.dh=1};
+            if (count==8) { (void)du_commands(c,batch,count,NULL,NULL,0,0); count=0; }
         }
     }
+    if (count) (void)du_commands(c,batch,count,NULL,NULL,0,0);
 }
 
 void du_checker(struct du_canvas *c, struct du_rect r, uint32_t a, uint32_t b)
@@ -294,6 +334,17 @@ static void text_font_rows(struct du_canvas *c, int font, int x, int y, const ch
         int gx=x+g->left, gy=baseline+g->top;
         struct du_rect v=visible(c,(struct du_rect){gx,gy,g->w,g->h});
         if (v.w>0 && v.h>0 && x<p.cx+p.cw) {
+            /* Binary text can use MSB-left expansion exactly. Antialiased
+             * glyphs keep their established coverage/mixing path. */
+            if (!aa && g->w<=64 && g->h<=64) {
+                uint8_t bits[512]={0}; unsigned stride=(g->w+7)/8;
+                for (unsigned yy=0;yy<g->h;yy++) for (unsigned xx=0;xx<g->w;xx++)
+                    if (f->alpha[g->offset+yy*g->w+xx]>=104) bits[yy*stride+xx/8]|=128u>>(xx%8);
+                struct ciuki_batch_record mono={.opcode=CIUKI_CMD_MONO,.record_bytes=128,.flags=CIUKI_CMD_TRANSPARENT_BG,
+                    .dx=gx,.dy=gy,.dw=g->w,.dh=g->h,.sw=g->w,.sh=g->h,.foreground=colour,.stride=stride,
+                    .data_bytes=g->h ? (g->h-1)*stride+(g->w+7)/8 : 0};
+                if (!du_commands(c,&mono,1,bits,NULL,0,0)) { x+=g->advance; if (x>p.cx+p.cw+64) break; continue; }
+            }
             const uint8_t *first_src=f->alpha+g->offset+(size_t)(v.y-gy)*g->w+v.x-gx;
             uint32_t *first_dst=c->pixels+(size_t)v.y*c->width+v.x;
             int stride=c->width;
@@ -374,6 +425,25 @@ void du_icon_blit(struct du_canvas *c, int x, int y, const uint32_t *argb, int s
     if (!argb || size <= 0 || size > 64) return;
     struct du_rect v = visible(c, (struct du_rect){x, y, size, size});
     if (v.w <= 0 || v.h <= 0) return;
+    if (mode==DU_ICON_NORMAL) {
+        int binary=1; uint32_t key=0;
+        for (int i=0;i<size*size;i++) if ((argb[i]>>24)!=0 && (argb[i]>>24)!=255) { binary=0; break; }
+        if (binary) {
+            /* At most 4096 opaque colours: a missing RGB key exists among
+             * 4097 candidates. Preserve original approved icon pixels. */
+            for (;key<=4096;key++) {
+                int found=0; for (int i=0;i<size*size;i++) if ((argb[i]>>24)==255 && (argb[i]&0xffffffu)==key) { found=1; break; }
+                if (!found) break;
+            }
+            uint32_t *keyed=malloc((size_t)size*size*4);
+            if (keyed) {
+            for (int i=0;i<size*size;i++) keyed[i]=(argb[i]>>24) ? argb[i]&0xffffffu : key;
+            struct ciuki_batch_record record={.opcode=CIUKI_CMD_KEYED,.record_bytes=128,.dx=x,.dy=y,.dw=size,.dh=size,.key=key};
+            int error=du_commands(c,&record,1,NULL,keyed,size,size); free(keyed);
+            if (!error) return;
+            }
+        }
+    }
     uint32_t *first_dst = c->pixels + (size_t)v.y * (size_t)c->width + (size_t)v.x;
     const uint32_t *first_src = argb + (v.y - y) * size + v.x - x;
     int stride=c->width;

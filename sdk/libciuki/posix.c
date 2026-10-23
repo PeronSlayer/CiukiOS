@@ -119,6 +119,35 @@ int ciuki_display_engine_info(int d,uint32_t generation,struct ciuki_display_eng
     return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(&q),CU_PTR(out),0,0,0);
 }
 int ciuki_display_info(int d,struct ciuki_framebuffer_info *i) { return RET(CU_CALL(DISPLAY_INFO,d,CU_PTR(i),0,0,0,0)); }
+int ciuki_display_commands(int d,uint32_t generation,struct ciuki_command_info *out)
+{
+    struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_QUERY_COMMANDS,
+        .generation=generation,.colour=1,.background=sizeof(*out)};
+    return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(&q),CU_PTR(out),0,0,0);
+}
+int ciuki_display_batch(int d,const void *blob,uint32_t bytes,struct ciuki_batch_reply *out)
+{
+    if (!out) return -EINVAL;
+    *out=(struct ciuki_batch_reply){.size=sizeof(*out),.version=1};
+    struct ciuki_batch_submit envelope={.size=sizeof(envelope),.version=1,.input_address=CU_PTR(blob),
+        .input_bytes=bytes,.reply_address=CU_PTR(out),.reply_bytes=sizeof(*out)};
+    struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_BATCH};
+    return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(&q),CU_PTR(&envelope),0,0,0);
+}
+int ciuki_display_fence(int d,uint64_t fence,uint16_t action,uint32_t timeout,struct ciuki_batch_reply *out)
+{
+    if (!out) return -EINVAL;
+    struct ciuki_fence_control envelope={.size=sizeof(envelope),.version=1,.action=action,.fence=fence,
+        .timeout_ms=timeout,.reply_address=CU_PTR(out),.reply_bytes=sizeof(*out)};
+    struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_FENCE};
+    return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(&q),CU_PTR(&envelope),0,0,0);
+}
+int ciuki_batch_surface_info(int display,int surface,struct ciuki_batch_surface_info *out)
+{
+    struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_QUERY_SURFACE,
+        .colour=1,.background=sizeof(*out),.rect={.src_x=surface}};
+    return (int32_t)CU_CALL(DISPLAY_ACCEL,display,CU_PTR(&q),CU_PTR(out),0,0,0);
+}
 int ciuki_input_read(int d,struct ciuki_input_event *e,uint32_t n) { return RET(CU_CALL(INPUT_READ,d,CU_PTR(e),n,0,0,0)); }
 int ciuki_channel_pair(int fds[2]) { return RET(CU_CALL(CHANNEL_PAIR,CU_PTR(fds),0,0,0,0,0)); }
 int ciuki_channel_send(int f,const struct ciuki_message *m,uint32_t flags) { return RET(CU_CALL(CHANNEL_SEND,f,CU_PTR(m),flags,0,0,0)); }

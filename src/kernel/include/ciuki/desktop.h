@@ -14,6 +14,8 @@ struct desktop_description {
     struct proc_object object;
     enum desktop_kind kind;
     uint32_t references, flags, maximum, owner;
+    void *display_fences;
+    uint64_t display_sequence;
     union { struct surface *surface; struct { struct channel *channel; unsigned side; } endpoint; } u;
 };
 struct desktop_ledger { uint32_t descriptions, surfaces, pages, channels, messages, grants; };
@@ -41,6 +43,17 @@ void surface_release(struct surface *s);
 int surface_write(struct surface *, uint32_t offset, const void *, uint32_t bytes);
 int surface_read(struct surface *s, uint32_t offset, void *out, uint32_t bytes);
 const struct ciuki_surface_info *surface_geometry(const struct surface *s);
+struct swdib_target;
+int surface_batch_target(struct desktop_description *, uint32_t, struct swdib_target *);
+int surface_batch_reserve(struct surface *);
+void surface_batch_unreserve(struct surface *);
+int grant_batch_request(struct process *, int32_t, uint32_t, bool);
+void grant_batch_close(struct desktop_description *);
+int grant_batch_authorized(struct process *, struct desktop_description *);
+void grant_batch_busy(bool);
+bool grant_batch_ram(const struct process *, uint32_t, uint32_t);
+void *desktop_buffer_alloc(uint32_t bytes, enum mm_owner);
+void desktop_buffer_free(void *, uint32_t bytes, enum mm_owner);
 
 int channel_pair(struct process *p, int32_t fds[2]);
 int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags);

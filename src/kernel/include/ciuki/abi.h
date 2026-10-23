@@ -1500,6 +1500,191 @@ enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
         * Version 1 requires at least sizeof(ciuki_display_engine_info).
         * Copies exactly that size, even when the caller offers more. */
        CIUKI_ACCEL_QUERY_ENGINE };
+/* Synchronous command service. DISPLAY_ACCEL keeps its legacy request;
+ * operations BATCH/FENCE use EDX for the negotiated envelope, QUERY_COMMANDS
+ * uses EDX for ciuki_command_info (colour=version, background=capacity).
+ * See docs/design/display-command-semantics.md. Managed batch surfaces are
+ * created with the BATCH_* formats; they cannot be mapped into user space. */
+#define CIUKI_ACCEL_BATCH 10u
+#define CIUKI_ACCEL_FENCE 11u
+#define CIUKI_ACCEL_QUERY_COMMANDS 12u
+#define CIUKI_ACCEL_QUERY_SURFACE 13u
+#define CIUKI_BATCH_VERSION 1u
+#define CIUKI_BATCH_MAGIC 826426435u
+#define CIUKI_BATCH_MAX_BYTES 1048576u
+#define CIUKI_BATCH_MAX_RECORDS 64u
+#define CIUKI_BATCH_MAX_TARGETS 128u
+#define CIUKI_BATCH_MAX_CLIPS 16u
+#define CIUKI_BATCH_MAX_FENCES 64u
+#define CIUKI_BATCH_MAX_DIMENSION 16384u
+#define CIUKI_BATCH_MAX_COORDINATE 1048576u
+#define CIUKI_BATCH_MAX_SAMPLES 4194304u
+#define CIUKI_BATCH_MAX_EXTENT 67108864u
+#define CIUKI_TARGET_SCANOUT 1u
+#define CIUKI_TARGET_VIDEO 2u
+#define CIUKI_TARGET_SYSTEM 3u
+#define CIUKI_CMD_TRANSPARENT_BG 1u
+#define CIUKI_CMD_SHOW 2u
+#define CIUKI_FILTER_NEAREST 0u
+#define CIUKI_FILTER_BILINEAR 1u
+#define CIUKI_FENCE_REFUSED 0u
+#define CIUKI_FENCE_RUNNING 1u
+#define CIUKI_FENCE_SUCCEEDED 2u
+#define CIUKI_FENCE_STOPPED 3u
+#define CIUKI_FENCE_RECOVERING 4u
+#define CIUKI_FENCE_PARTIAL_DIRTY 1u
+#define CIUKI_FENCE_CPU_SAFE 2u
+#define CIUKI_FENCE_CANCEL_REQUESTED 4u
+#define CIUKI_FENCE_STATUS 1u
+#define CIUKI_FENCE_WAIT 2u
+#define CIUKI_FENCE_CANCEL 3u
+#define CIUKI_FENCE_RELEASE 4u
+#define CIUKI_CAP_BATCH 4u
+#define CIUKI_CAP_MONO 8u
+#define CIUKI_CAP_INVERT 16u
+#define CIUKI_CAP_KEYED 32u
+#define CIUKI_CAP_SCALED 64u
+#define CIUKI_CAP_BILINEAR 128u
+#define CIUKI_CAP_LINE 256u
+#define CIUKI_CAP_CURSOR_ARGB 512u
+#define CIUKI_SURFACE_BATCH_RGB565 2u
+#define CIUKI_SURFACE_BATCH_BGR888 3u
+#define CIUKI_SURFACE_BATCH_XRGB8888 4u
+#define CIUKI_CMD_FILL 1u
+#define CIUKI_CMD_COPY 2u
+#define CIUKI_CMD_PATTERN 3u
+#define CIUKI_CMD_WRITE 4u
+#define CIUKI_CMD_MONO 5u
+#define CIUKI_CMD_INVERT 6u
+#define CIUKI_CMD_KEYED 7u
+#define CIUKI_CMD_SCALED 8u
+#define CIUKI_CMD_LINE 9u
+#define CIUKI_CMD_SYNC 10u
+#define CIUKI_CMD_CURSOR_MONO_SET 11u
+#define CIUKI_CMD_CURSOR_ARGB_SET 12u
+#define CIUKI_CMD_CURSOR_MOVE 13u
+#define CIUKI_CMD_CURSOR_SHOW 14u
+struct ciuki_batch_submit {
+    uint32_t size; /* 0 */
+    uint16_t version; /* 4 */
+    uint16_t flags; /* 6 */
+    uint32_t input_address; /* 8 */
+    uint32_t input_bytes; /* 12 */
+    uint32_t reply_address; /* 16 */
+    uint32_t reply_bytes; /* 20 */
+    uint32_t reserved[2]; /* 24 */
+};
+_Static_assert(sizeof(struct ciuki_batch_submit) == 32, "ciuki_batch_submit size");
+struct ciuki_batch_header {
+    uint32_t magic; /* 0 */
+    uint16_t version; /* 4 */
+    uint16_t header_bytes; /* 6 */
+    uint32_t total_bytes; /* 8 */
+    uint32_t record_count; /* 12 */
+    uint32_t records_offset; /* 16 */
+    uint32_t targets_offset; /* 20 */
+    uint32_t target_count; /* 24 */
+    uint32_t payload_offset; /* 28 */
+    uint32_t payload_bytes; /* 32 */
+    uint32_t flags; /* 36 */
+    uint32_t generation; /* 40 */
+    uint32_t reserved[5]; /* 44 */
+};
+_Static_assert(sizeof(struct ciuki_batch_header) == 64, "ciuki_batch_header size");
+struct ciuki_batch_target {
+    uint32_t kind; /* 0 */
+    uint32_t handle; /* 4 */
+    uint32_t generation; /* 8 */
+    uint32_t flags; /* 12 */
+    uint32_t reserved[4]; /* 16 */
+};
+_Static_assert(sizeof(struct ciuki_batch_target) == 32, "ciuki_batch_target size");
+struct ciuki_batch_clip {
+    int32_t x; /* 0 */
+    int32_t y; /* 4 */
+    uint32_t width; /* 8 */
+    uint32_t height; /* 12 */
+};
+_Static_assert(sizeof(struct ciuki_batch_clip) == 16, "ciuki_batch_clip size");
+struct ciuki_batch_record {
+    uint16_t opcode; /* 0 */
+    uint16_t flags; /* 2 */
+    uint32_t record_bytes; /* 4 */
+    uint32_t dst; /* 8 */
+    uint32_t src; /* 12 */
+    int32_t dx; /* 16 */
+    int32_t dy; /* 20 */
+    uint32_t dw; /* 24 */
+    uint32_t dh; /* 28 */
+    int32_t sx; /* 32 */
+    int32_t sy; /* 36 */
+    uint32_t sw; /* 40 */
+    uint32_t sh; /* 44 */
+    uint32_t foreground; /* 48 */
+    uint32_t background; /* 52 */
+    uint32_t key; /* 56 */
+    uint32_t filter; /* 60 */
+    uint32_t clip_offset; /* 64 */
+    uint32_t clip_count; /* 68 */
+    uint32_t data_offset; /* 72 */
+    uint32_t data_bytes; /* 76 */
+    uint32_t stride; /* 80 */
+    int32_t origin_x; /* 84 */
+    int32_t origin_y; /* 88 */
+    uint32_t reserved0; /* 92 */
+    uint8_t pattern[8]; /* 96 */
+    uint32_t reserved[6]; /* 104 */
+};
+_Static_assert(sizeof(struct ciuki_batch_record) == 128, "ciuki_batch_record size");
+struct ciuki_batch_reply {
+    uint32_t size; /* 0 */
+    uint16_t version; /* 4 */
+    uint16_t state; /* 6 */
+    uint64_t fence; /* 8 */
+    uint32_t completed; /* 16 */
+    uint32_t first_uncompleted; /* 20 */
+    int32_t error; /* 24 */
+    uint32_t flags; /* 28 */
+    uint32_t admitted; /* 32 */
+    uint32_t generation; /* 36 */
+    uint32_t reserved[6]; /* 40 */
+};
+_Static_assert(sizeof(struct ciuki_batch_reply) == 64, "ciuki_batch_reply size");
+struct ciuki_fence_control {
+    uint32_t size; /* 0 */
+    uint16_t version; /* 4 */
+    uint16_t action; /* 6 */
+    uint64_t fence; /* 8 */
+    uint32_t timeout_ms; /* 16 */
+    uint32_t reply_address; /* 20 */
+    uint32_t reply_bytes; /* 24 */
+    uint32_t reserved; /* 28 */
+};
+_Static_assert(sizeof(struct ciuki_fence_control) == 32, "ciuki_fence_control size");
+/* DISPLAY_ACCEL/QUERY_SURFACE: colour=version, background=capacity,
+ * rect.src_x=managed surface fd, EDX=output. SURFACE_INFO stays unchanged. */
+struct ciuki_batch_surface_info {
+    uint32_t size;
+    uint32_t version;
+    uint32_t generation;
+    struct ciuki_surface_info surface;
+};
+_Static_assert(sizeof(struct ciuki_batch_surface_info) == 36, "batch surface info size");
+#define CIUKI_COMMAND_OPERATIONS 14u
+struct ciuki_command_info {
+    uint32_t size; /* 0 */
+    uint32_t version; /* 4 */
+    uint32_t software_commands; /* 8 */
+    uint32_t native_commands; /* 12 */
+    uint32_t capabilities; /* 16 */
+    uint32_t cursor_width; /* 20 */
+    uint32_t cursor_height; /* 24 */
+    uint32_t reserved; /* 28 */
+    uint64_t native[CIUKI_COMMAND_OPERATIONS];
+    uint64_t software[CIUKI_COMMAND_OPERATIONS];
+};
+_Static_assert(sizeof(struct ciuki_command_info) == 256, "ciuki_command_info size");
+
 /* f2-92 WRITE source: 32-bit 0xXXRRGGBB rows in the caller's memory. The
  * address is split so the request keeps 4-byte alignment on 64-bit hosts. */
 struct ciuki_accel_write {
