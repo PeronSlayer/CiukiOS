@@ -19,6 +19,7 @@ PRIVATE_DRIVERS=(
     'src/kernel/drivers/video/nv2d/',
     'src/kernel/drivers/video/radeon2d/',
     'src/kernel/drivers/video/rage128/',
+    'src/kernel/drivers/video/riva128/',
     'src/kernel/drivers/video/s3legacy/',
     'src/kernel/drivers/video/s3savage/',
     'src/kernel/drivers/video/s3trio64/',
@@ -44,6 +45,7 @@ EXACT={
         'extern const struct display_driver chipshiqv_driver; /* declarative registration */',
         'extern const struct display_driver matrox_driver; /* declarative registration */',
         'extern const struct display_driver nv2d_driver; /* declarative registration */',
+        'extern const struct display_driver riva128_driver; /* declarative registration */',
         'extern const struct display_driver neomagic_driver; /* declarative registration */',
         'extern const struct display_driver unichrome_driver; /* declarative registration */',
         'extern const struct display_driver tdfx_driver; /* declarative registration */',
@@ -65,6 +67,7 @@ EXACT={
         '&chipshiqv_driver,',
         '&matrox_driver,',
         '&nv2d_driver,',
+        '&riva128_driver,',
         '&neomagic_driver,',
         '&unichrome_driver,',
         '&tdfx_driver,',
@@ -109,6 +112,8 @@ class NamesTests(unittest.TestCase):
         self.assertTrue(violations('example.c','if (!strcmp(id,"radeon")) activate();'))
         self.assertFalse(violations('example.c','static int private_data; /* via a private map */'))
         self.assertTrue(violations('example.c','void nvidia_fill(void);'))
+        self.assertTrue(violations('example.c','riva128_start(fb,0);'))
+        self.assertTrue(violations('example.c','nv3_engine_init(engine,io,fb,ram);'))
         self.assertTrue(violations('src/kernel/include/ciuki/savage2d.h','void savage2d_init(void);'))
         self.assertTrue(violations('src/kernel/drivers/video/another/adapter.c','void savage2d_init(void);'))
         self.assertFalse(violations(PRIVATE_DRIVER+'savage2d.h','void savage2d_init(void);'))

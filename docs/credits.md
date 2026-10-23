@@ -35,6 +35,7 @@ Status: **image** is installed in the image, **build only** is used to build or 
 | NeoMagic 2D engine and cursor | v6.12 / X 6661bdd | GPL-2.0 and X11 | `docs/licenses/neomagic-NOTICES.txt` | image |
 | X.Org Chips HiQV engine and cursor | 9187d76bd4f8 | X11/MIT; header unspecified | `docs/licenses/chipshiqv-NOTICES.txt` | image |
 | pixman, X11 regions (integrating) | f2-95 | MIT | `third_party/pixman` | integrating |
+| X.Org Riva 128 driver fragments | 0b6619fec39f | MIT | `docs/licenses/riva128-NOTICES.txt` | image |
 
 ## DOS
 

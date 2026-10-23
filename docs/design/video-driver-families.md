@@ -255,6 +255,7 @@ and L `riva/fbdev.c`; verify which IDs each donor actually accepts.
 | **[X](#3-snapshot-catalogue-and-notation) nv `riva_xaa.c`, `riva_cursor.c`, `riva_hw.h`** | MIT-style | F C Y M I L P U | Native UMS; no verified scaler path in this subset | **2–3.5 kLOC**, X; distinct object setup and cursor, not NV4 commands. | `12d2:0018`; hardware only |
 | [L](#3-snapshot-catalogue-and-notation) `riva/fbdev.c`, `riva_hw.c` | GPL wrapper; NVIDIA legacy permissive notice plus explicit GPL-compatibility explanation in hardware file | F C Y M I U | Native; no fbdev overlay | 2–4 kLOC, L; prefer explicit MIT X source over the older notice form. | `12d2:0018`; hardware only |
 | [H](#3-snapshot-catalogue-and-notation) `nvidia` | Be Sample wrappers; engine files lack an explicit grant: **hold** | No verified NV3 path; do not extrapolate NV4+ hooks | Not established for NV3 | No port estimate until matching/coverage exists. | `12d2:0018`; hardware only |
+| **Ciuki f2-120 result** | X donor MIT notices and pin retained | F C Y P U behind unchanged part A hooks; M/I/L await part C interfaces | VBE; no overlay/provider | Independent NV3 PIO/object/instance backend, bounded waits, keyed marker, saved-pixel activation comparison and idle-proof quarantine; host fake registers/goldens | `12d2:0018` only; physical evidence pending; [transport and limits](riva128-2d.md) |
 
 Test: **hardware only**. No pack models. Later Mesa nouveau backends in
 section 7 start at TNT/NV4, not Riva128.
@@ -1296,6 +1297,7 @@ The owner first allowed GPL-3.0 sources ("includi anche GPL-3") and then all lic
 | S3 Savage family | relocated in f2-101b; f2-112 adds family transports with host validation, physical qualification pending |
 | ATI Radeon R100/RV100 (discrete R100/RV100/RV200 primary functions) | f2-103: MMIO FILL/COPY/SYNC and monochrome cursor; VBE modes; host fixtures, runtime pending; [source decisions](../validation/f2-103-radeon-r100.md) |
 | ATI Radeon R200/RV250/RV280, R300/R350/RV350/RV380, R420/R423 (X800) | f2-106: explicit discrete primary IDs; separate subgroup cache/feature gates; MMIO FILL/COPY/SYNC, PATTERN/WRITE and monochrome cursor; saved-pixel native comparisons, VBE modes; host fixtures pass, physical qualification pending; [source decisions](../validation/f2-106-radeon-r200-r400.md) |
+| NVIDIA Riva 128 (NV3, `12d2:0018`) | f2-120: independent PIO FILL/COPY/SYNC/PATTERN and monochrome cursor; lead-approved transport behind DM9, VBE modes; host evidence, physical qualification pending; [transport and limits](riva128-2d.md) |
 | NVIDIA TNT/TNT2, GeForce256/2/3/4, FX/GeForce6 | `nv2d`, NVIDIA TNT-GeForce6: f2-104 PIO approved behind DM9; f2-105 VRAM ring approved by amendment 1, activation behind DM9; VBE modes |
 | Matrox G200/G400/G450/G550 | f2-110: Linux v6.12 native FILL/COPY/SYNC, DAC cursor and private mono preparation; host evidence, physical qualification pending; [port record](matrox-2d.md) |
 | VMware SVGA II (`15ad:0405`) | f2-111: native FIFO FILL/COPY/SYNC and legacy cursor, host verified; runtime qualification pending. VMSVGA without native FILL and earlier `0710` use software; see [implementation record](vmware-svga.md). |
@@ -1314,7 +1316,7 @@ The owner first allowed GPL-3.0 sources ("includi anche GPL-3") and then all lic
 | ATI Mach64 / Rage Mobility | f2-114: native FILL/COPY/SYNC and optional legacy cursor; VBE modes; [transport](mach64-2d.md); physical qualification pending. |
 | 3dfx Voodoo3 / single-chip VSA-100 | f2-117: native FILL/COPY/SYNC and optional legacy cursor; VBE modes; [transport](tdfx-2d.md); physical qualification pending. |
 
-The registry contains 21 exact-match native descriptors. Candidate registration
+The registry contains 22 exact-match native descriptors. Candidate registration
 is not physical qualification. All native operations remain subject to their
 family ownership, format, idle and saved-pixel activation proofs.
 

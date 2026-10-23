@@ -13,6 +13,7 @@ extern const struct display_driver trident_blade_driver; /* declarative registra
 extern const struct display_driver chipshiqv_driver; /* declarative registration */
 extern const struct display_driver matrox_driver; /* declarative registration */
 extern const struct display_driver nv2d_driver; /* declarative registration */
+extern const struct display_driver riva128_driver; /* declarative registration */
 extern const struct display_driver neomagic_driver; /* declarative registration */
 extern const struct display_driver unichrome_driver; /* declarative registration */
 extern const struct display_driver tdfx_driver; /* declarative registration */
@@ -39,6 +40,7 @@ static const struct display_driver *const drivers[] = {
     &nv2d_driver,
     &unichrome_driver,
     &tdfx_driver,
+    &riva128_driver,
     &vmwaresvga_driver,
     &s3savage_driver,
     &s3trio64_driver,

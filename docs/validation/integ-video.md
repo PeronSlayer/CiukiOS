@@ -53,3 +53,31 @@ chip-specific gates and NVIDIA transport approvals are preserved.
 
 Verification commands, branch pins, PCI coverage and unresolved qualification
 items are recorded in `build/codex/integ-video-report.md`.
+
+## Amendment 1: Riva 128 integration
+
+The lead approved the independent NV3 PIO transport behind DM9 in Amendment 1
+of `docs/directives/integ-video-family-integration.md`. Integrate the pinned
+`wt/f2-120` implementation without changing its runtime files or weakening
+its ownership, marker, idle or saved-pixel activation proofs.
+
+Before import, the implementation was compared with X.Org xf86-video-nv commit
+`0b6619fec39fada995646fb95bb25e72d3c9a491`:
+
+- [`src/riva_setup.c`](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-nv/blob/0b6619fec39fada995646fb95bb25e72d3c9a491/src/riva_setup.c),
+  `Riva3Setup`, maps FIFO at register BAR0+8 MiB and NV3 instance memory at
+  framebuffer BAR1+12 MiB. The imported adapter keeps these separate windows
+  and claims; it must not share the NV4/NV40 backend or use its PRAMIN map.
+- [`src/riva_driver.c`](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-nv/blob/0b6619fec39fada995646fb95bb25e72d3c9a491/src/riva_driver.c),
+  its vendor/device guard selects SGS NVIDIA Riva128; `FbUsableSize` setup
+  excludes the final 32 KiB of VRAM. The adapter's exact `12d2:0018`
+  match and separate 32 KiB reservation retain that boundary.
+
+Both pinned files were retrieved through the connected GitHub reader after
+web opens returned cache misses. The import's existing source hashes,
+notices and detailed transport decisions remain in `riva128/import.json`
+and [riva128-2d.md](../design/riva128-2d.md). Add the exact PCI candidate in
+vendor order, retain the existing single generic DM9 comparison path and
+family self-test hooks, and extend only the shared build/test/documentation
+registrations. No public ABI allocation is needed. Host evidence cannot
+qualify physical NV3 hardware.

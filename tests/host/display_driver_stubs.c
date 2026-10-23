@@ -12,6 +12,7 @@ const struct display_driver trident_blade_driver __attribute__((weak)) = {0};
 const struct display_driver chipshiqv_driver __attribute__((weak)) = {0};
 const struct display_driver matrox_driver __attribute__((weak)) = {0};
 const struct display_driver nv2d_driver __attribute__((weak)) = {0};
+const struct display_driver riva128_driver __attribute__((weak)) = {0};
 const struct display_driver neomagic_driver __attribute__((weak)) = {0};
 const struct display_driver unichrome_driver __attribute__((weak)) = {0};
 const struct display_driver tdfx_driver __attribute__((weak)) = {0};

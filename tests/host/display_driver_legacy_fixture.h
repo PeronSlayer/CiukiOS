@@ -33,6 +33,7 @@ const struct display_driver trident_blade_driver = {0};
 const struct display_driver chipshiqv_driver = {0};
 const struct display_driver matrox_driver = {0};
 const struct display_driver nv2d_driver = {0};
+const struct display_driver riva128_driver = {0};
 const struct display_driver neomagic_driver = {0};
 const struct display_driver unichrome_driver = {0};
 const struct display_driver tdfx_driver = {0};

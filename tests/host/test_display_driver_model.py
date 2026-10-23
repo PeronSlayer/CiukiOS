@@ -130,6 +130,8 @@ class DisplayDriverTests(unittest.TestCase):
             'drivers/video/rage128/driver.c',
             'drivers/video/rage128/engine.c',
             'drivers/video/registry.c',
+            'drivers/video/riva128/driver.c',
+            'drivers/video/riva128/engine.c',
             'drivers/video/s3legacy/driver.c',
             'drivers/video/s3legacy/engine.c',
             'drivers/video/s3legacy/platform.c',

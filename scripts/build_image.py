@@ -121,6 +121,7 @@ def desktop_license_payloads():
     sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
     sources["/system/licenses/radeon2d-NOTICES.txt"] = ROOT / "docs/licenses/radeon2d-NOTICES.txt"
     sources["/system/licenses/nv2d-NOTICES.txt"] = ROOT / "docs/licenses/nv2d-NOTICES.txt"
+    sources["/system/licenses/riva128-NOTICES.txt"] = ROOT / "docs/licenses/riva128-NOTICES.txt"
     sources["/system/licenses/intel2d-NOTICES.txt"] = ROOT / "docs/licenses/intel2d-NOTICES.txt"
     sources["/system/licenses/unichrome-NOTICES.txt"] = ROOT / "docs/licenses/unichrome-NOTICES.txt"
     sources["/system/licenses/sis-2d-NOTICES.txt"] = ROOT / "docs/licenses/sis-2d-NOTICES.txt"
