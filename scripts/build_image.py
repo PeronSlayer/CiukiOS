@@ -328,7 +328,8 @@ def games_payloads(dos_image, out=None):
 
 
 def payload_records(sources):
-    return [{"path": name, "sha256": sha256(source), "size": source.stat().st_size}
+    return [{"path": name, "sha256": sha256(source), "size": source.stat().st_size,
+             "attributes": 32 | (1 if name.startswith("/WINDOWS/FONTS/") and source.parent == ROOT / "assets/fonts/liberation" else 0)}
             for name, source in sorted(sources.items())]
 
 
@@ -714,7 +715,7 @@ def build(kernel, out, boot_cfg):
     # image carries the same bytes (scripts/build_cd.py checks all three).
     (out.parent / "ciukldr.bin").write_bytes(loader)
     image_sha = sha256(out)
-    write_manifest(out, kernel, image_sha, payloads, metadata)
+    write_manifest(out, kernel, image_sha, payloads, metadata, directories=directories, boot_cfg=options)
     if "/system/dos/FREEDOS.IMG" in sources:
         import sys
         sys.path.insert(0,str(ROOT/"tests/host/dos"))
@@ -738,7 +739,7 @@ def git_identity():
         return "unknown", "unknown"
 
 
-def write_manifest(image, kernel, image_sha, payloads, metadata):
+def write_manifest(image, kernel, image_sha, payloads, metadata, *, directories=(), boot_cfg=DEFAULT_CONFIG):
     """build-manifest.json beside the image: read by scripts/test/run.py."""
     rev, dirty = git_identity()
     clock_record = json.loads((kernel.parent / "build-clock.json").read_text())
@@ -757,6 +758,9 @@ def write_manifest(image, kernel, image_sha, payloads, metadata):
         "kernel_sha256": sha256(kernel),
         "build_epoch": clock_record["utc_epoch"],
         "payloads": payloads,
+        "directories": [{"path": p, "attributes": 16} for p in sorted(directories)],
+        "boot_cfg_template": boot_cfg.decode("ascii"),
+        "boot_cfg_sha256": hashlib.sha256(boot_cfg).hexdigest(),
         **metadata,
     }
     (image.parent / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

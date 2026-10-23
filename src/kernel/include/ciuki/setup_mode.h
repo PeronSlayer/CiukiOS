@@ -58,10 +58,10 @@ static inline uint64_t setup_usable_kib(const struct ciuki_e820 *map, uint32_t c
     return kib;
 }
 
+bool setup_mode(void);
 #ifndef FS_HOST
 /* Kernel flag, set once from g_boot before storage_init. */
 void setup_mode_init(void);
-bool setup_mode(void);
 /* In Setup mode with too little memory: console text, serial record, and
  * true (the caller stops before any driver or process). False otherwise. */
 bool setup_memory_refused(void);

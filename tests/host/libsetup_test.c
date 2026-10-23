@@ -4,6 +4,11 @@
 #include "../../sdk/libsetup/internal.h"
 #include "libsetup_model.inc"
 #include <strings.h>
+#include <errno.h>
+#include <ciuki/devices.h>
+#include "../../sdk/libreg/internal.h"
+#include "../../apps/desktop/settings.h"
+#include <ciuki/net_config.h>
 #include "../../sdk/libsetup/internal.h"
 int st_hopen(const char *);
 int st_hread(int,void *,unsigned);
@@ -26,7 +31,7 @@ static struct {
     enum setup_phase phase,cancel_phase,cut_phase;
     unsigned errors,retries,fail_reads,change_generation,fail_manifest_reads,fail_identity_reads,fail_info_reads;
     int write_error,sync_error,preflight_error;
-    bool corrupt,corrupted,missing,different_disc,hash_mismatch;
+    bool corrupt,corrupted,missing,different_disc,hash_mismatch,nics,bad_template,alias_mismatch;
     uint32_t generation;
     uint64_t time_ms,removed_at;
     unsigned tray_opens,restarts,configure_calls;
@@ -35,7 +40,10 @@ static struct {
     enum setup_phase fail_flush_phase;
     struct fs_ro_volume reserved;
 } S;
-static void source_path(char out[1024],char d,const char *p) { snprintf(out,1024,"%s/%c/%s",work,d,p); }
+static void source_path(char out[1024],char d,const char *p) {
+    if(d=='C' && !strncasecmp(p,"system",6) && (!p[6] || p[6]=='/')) snprintf(out,1024,"%s/C/system%s",work,p+6);
+    else snprintf(out,1024,"%s/%c/%s",work,d,p);
+}
 static int s_preflight(void *ctx,const struct setup_answers *a) { (void)ctx; (void)a; return S.preflight_error; }
 static int s_open(void *ctx,char d,const char *p,bool writing)
 {
@@ -50,6 +58,7 @@ static int s_open(void *ctx,char d,const char *p,bool writing)
     char path[272]; path_of(path,sizeof(path),d,p);
     int h=vfs_open(&H.table,path,writing ? VFS_READ|VFS_WRITE|VFS_CREATE|VFS_TRUNCATE : VFS_READ,VFS_DENY_NONE,FAT_ATTR_ARCHIVE);
     if(h>=0)S.opens++;
+    if(h>=0)snprintf(S.paths[h],260,"%s",p);
     return h;
 }
 static int s_read(void *ctx,int h,void *buf,unsigned n)
@@ -63,6 +72,12 @@ static int s_read(void *ctx,int h,void *buf,unsigned n)
         if(strstr(p,"Long filename number 003") && S.fail_reads) { S.fail_reads--; return -EIO; }
         if(strstr(p,"Long filename number 003") && S.change_generation) { S.change_generation--; S.generation++; return -EAGAIN; }
         int r=st_hread(h-1000,buf,n);
+        if(r>0 && S.bad_template && !strcmp(p,ST_MANIFEST)) {
+            const char key[]="boot_cfg_sha256\": \"";
+            for(unsigned i=0;i+sizeof(key)<=(unsigned)r;i++)if(!memcmp((char *)buf+i,key,sizeof(key)-1)) {
+                char *hex=(char *)buf+i+sizeof(key)-1;*hex=*hex=='a' ? 'b' : 'a';break;
+            }
+        }
         if(r>0 && ((S.different_disc && S.generation>1 && !strcasecmp(p,ST_RELEASE)) || (S.hash_mismatch && strstr(p,"Long filename number 003")))) ((uint8_t *)buf)[0]^=1;
         return r;
     }
@@ -122,12 +137,7 @@ static int s_cluster(void *ctx,char d,const char *p,uint32_t index,uint64_t *lba
 static int s_configure(void *ctx,char d,const struct setup_answers *a)
 {
     (void)ctx; S.configure_calls++;
-    CHECK(!strcmp(a->user_name,"Tester") && !strcmp(a->computer_name,"CIUKI-PC"));
-    /* A stand-in ONLY for interfaces not provided by the current native SDK.
-     * The report explicitly excludes RTC/network/registry qualification. */
-    int e=b_mkdir(NULL,d,"system/settings"); if(e && e!=-EEXIST)return e;
-    const char text[]="keyboard=it\n";
-    return b_write_file(NULL,d,"system/settings/desktop.cfg",text,sizeof(text)-1);
+    return st_native_platform()->configure(NULL,d,a);
 }
 static int s_media(void *ctx,bool tray,bool *removed,uint32_t *generation)
 {
@@ -139,6 +149,84 @@ static uint64_t s_ms(void *ctx) { (void)ctx; return S.time_ms; }
 static void s_sleep(void *ctx,unsigned ms) { (void)ctx; S.time_ms+=ms; }
 static int s_restart(void *ctx) { (void)ctx; S.restarts++; return 0; }
 static const struct st_platform platform={NULL,s_preflight,s_open,s_read,s_write,s_seek,s_sync,s_close,s_info,s_mkdir,s_attrib,s_cluster,s_configure,s_media,s_ms,s_sleep,s_restart};
+/* Production native.c is compiled with only its POSIX entry points renamed.
+ * These translate native names/descriptors to the production file-backed VFS
+ * fixture. The transaction uses st_native_platform unchanged. */
+static unsigned rtc_writes;
+static char native_drive[128];
+static struct { char drive,path[260]; bool live; } native_dirs[8];
+static struct ciuki_setup_clock last_clock;
+static int native_path(const char *full,char *drive,const char **relative)
+{
+    if (!strncmp(full,"/mnt/",5) && full[5]>='a' && full[5]<='z' && full[6]=='/') {
+        *drive=(char)(full[5]-'a'+'A'); *relative=full+7;
+    } else if (*full=='/') { *drive='C'; *relative=full+1; }
+    else return -EINVAL;
+    return 0;
+}
+int st_native_open(const char *full,int flags,...)
+{
+    if (!strcmp(full,"/dev/net")) return 2000;
+    if (!strcmp(full,"/dev/media")) return 2001;
+    char drive; const char *rel; int e=native_path(full,&drive,&rel);
+    int h=e ? e : s_open(NULL,drive,rel,(flags&O_ACCMODE)!=O_RDONLY);
+    if(h==-EISDIR && drive>='E' && (flags&O_ACCMODE)==O_RDONLY) {
+        for(unsigned i=0;i<8;i++)if(!native_dirs[i].live) {
+            native_dirs[i].live=true; native_dirs[i].drive=drive; snprintf(native_dirs[i].path,260,"%s",rel); S.opens++; return 3000+(int)i;
+        }
+        h=-EMFILE;
+    }
+    if(h<0){errno=-h;return -1;}
+    if(h<128)native_drive[h]=drive;
+    return h;
+}
+long st_native_read(int h,void *p,unsigned long n) { int e=s_read(NULL,h,p,(unsigned)n); if(e<0){errno=-e;return -1;}return e; }
+long st_native_write(int h,const void *p,unsigned long n) { int e=s_write(NULL,h,p,(unsigned)n); if(e<0){errno=-e;return -1;}return e; }
+long st_native_seek(int h,long off,int whence) { CHECK(whence==0); int e=s_seek(NULL,h,(uint64_t)off); if(e){errno=-e;return -1;}return off; }
+int st_native_sync(int h) { int e=s_sync(NULL,h);if(e){errno=-e;return -1;}return 0; }
+int st_native_close(int h) { if(h>=3000 && h<3008){CHECK(native_dirs[h-3000].live);native_dirs[h-3000].live=false;S.opens--;return 0;} if(h==2000 || h==2001)return 0; int e=s_close(NULL,h);if(e){errno=-e;return -1;}return 0; }
+int st_native_mkdir(const char *full,unsigned mode) {
+    (void)mode; char drive;const char *rel;int e=native_path(full,&drive,&rel);if(!e)e=s_mkdir(NULL,drive,rel);
+    if(e){errno=-e;return -1;}return 0;
+}
+int st_native_rename(const char *from,const char *to) {
+    char a,b;const char *first,*second;int e=native_path(from,&a,&first);if(!e)e=native_path(to,&b,&second);
+    char source[272],dest[272];if(!e)path_of(source,sizeof(source),a,first);if(!e)path_of(dest,sizeof(dest),b,second);
+    if(!e)e=vfs_rename(&H.table,source,dest);if(e){errno=-e;return -1;}return 0;
+}
+int st_native_unlink(const char *full) {
+    char d;const char *rel;int e=native_path(full,&d,&rel);char path[272];if(!e)path_of(path,sizeof(path),d,rel);
+    if(!e)e=vfs_delete(&H.table,path);if(e){errno=-e;return -1;}return 0;
+}
+long st_native_time(long *out) { if(out)*out=1792700000;return 1792700000; }
+int ciuki_devices(struct ciuki_devices_info *d) { d->count=0;return 0; }
+int st_test_devctl(int h,uint32_t op,void *data,uint32_t bytes)
+{
+    if(h==2001 && op==MEDIA_CD_STATE) {
+        struct ciuki_media_cd_state *m=data; m->present=m->mounted=m->slot==1; m->drive=3;
+        m->generation=S.generation; m->state=S.removed ? CIUKI_CD_NO_MEDIUM : CIUKI_CD_READY; return 0;
+    }
+    if(h==2000 && op==CIUKI_SETUP_NET_QUERY) {
+        struct ciuki_setup_net *q=data;q->count=S.nics ? 2 : 0;
+        for(unsigned i=0;i<q->count;i++) { q->identity[i].vendor=0x8086;q->identity[i].device=0x1229;q->identity[i].mac[0]=2;q->identity[i].mac[5]=(uint8_t)(i+1); }
+        return 0;
+    }
+    if(h==2000 && op==NET_GET_STATE) { CHECK(bytes==sizeof(struct ciuki_net_state));struct ciuki_net_state *n=data;n->present=0;return 0; }
+    if(op==CIUKI_SETUP_CLOCK_SET) { CHECK(bytes==sizeof(last_clock));last_clock=*(struct ciuki_setup_clock *)data;rtc_writes++;return 0; }
+    if(op!=CIUKI_SETUP_FAT_QUERY && op!=CIUKI_SETUP_FAT_ATTRIB)return -ENOTSUP;
+    CHECK(bytes==sizeof(struct ciuki_setup_fat));struct ciuki_setup_fat *q=data;
+    char drive;const char *rel; char path[272];
+    if(h>=3000) { CHECK(h<3008 && native_dirs[h-3000].live);drive=native_dirs[h-3000].drive;rel=native_dirs[h-3000].path; }
+    else if(h>=1000) { drive='C';rel=S.paths[h-1000]; if(!strcmp(rel,ST_MANIFEST) || !strncmp(rel,"SOURCES/",8))drive='D'; }
+    else { CHECK(h>=0 && h<128);drive=native_drive[h];rel=S.paths[h]; }
+    if(op==CIUKI_SETUP_FAT_ATTRIB)return s_attrib(NULL,drive,rel,(uint8_t)q->attributes);
+    struct st_info info; int e=s_info(NULL,drive,rel,&info);if(e)return e;
+    q->attributes=info.attr;q->file_size=info.size;memcpy(q->name,info.name,sizeof(q->name));
+    if(q->cluster_index!=CIUKI_SETUP_INDEX_NONE) { if(q->mount_generation!=1 || q->chain_generation!=1)return -EAGAIN;
+        e=s_cluster(NULL,drive,rel,q->cluster_index,&q->lba);if(e)return e; }
+    q->mount_generation=1;q->chain_generation=1;q->cluster_sectors=8;snprintf(q->alias,sizeof(q->alias),S.alias_mismatch && drive=='E' && strstr(rel,"number 003") ? "ALIAS~2.BIN" : drive=='C' ? "alias~1.bin" : "ALIAS~1.BIN");
+    (void)path;return 0;
+}
 static int setup_pwrite(void *ctx,int h,const void *buf,uint32_t n,uint64_t offset)
 {
     bool final=offset==0 && n==512 && !memcmp(buf,disk_canonical_mbr_code,440);
@@ -222,11 +310,11 @@ static void test_prepare(void)
         CHECK(p.partition_start==2048 && p.partition_count==volume/512);
         CHECK(p.required_bytes+p.free_after_bytes==volume);
         /* Hand-counted fixture: 222 immutable files, five generated budgets,
-         * 295728 bytes, 281 clusters, 447 conservative directory entries.
+         * 295728 bytes, 281 clusters, 448 conservative directory entries.
          * mkfs.fat geometry: 261357 / 1046256 data clusters at 1 / 4 GiB. */
-        CHECK(p.overhead_bytes==(size==1 ? 4930768ull : 11209936ull));
-        CHECK(p.required_bytes==(size==1 ? 92415590ull : 259756032ull));
-        CHECK(p.free_after_bytes==(size==1 ? 980277658ull : 4034162688ull));
+        CHECK(p.overhead_bytes==(size==1 ? 4934864ull : 11214032ull));
+        CHECK(p.required_bytes==(size==1 ? 92419686ull : 259760128ull));
+        CHECK(p.free_after_bytes==(size==1 ? 980273562ull : 4034158592ull));
         end();
     }
     begin(2097152); S.missing=true;
@@ -243,9 +331,13 @@ static void test_prepare(void)
     CHECK(!S.m.head.writes && !S.m.vol.writes);
     end();
     begin(2097152); a=answers(); st_set_platform(NULL);
-    expect_error(setup_txn_prepare(&a,&p),SETUP_ERR_INTERNAL,SETUP_PHASE_PLAN);
-    struct setup_error error; OK(setup_txn_last_error(&error)); CHECK(error.err==ENOTSUP);
-    CHECK(!S.m.head.writes && !S.m.vol.writes); end();
+    OK(setup_txn_prepare(&a,&p));
+    CHECK(!S.m.head.writes && !S.m.vol.writes && !rtc_writes);
+    int native_result=setup_txn_execute(&p,&callbacks,NULL);
+    if(native_result) { struct setup_error err;setup_txn_last_error(&err);fprintf(stderr,"native error cls=%u errno=%d phase=%u path=%s\n",err.cls,err.err,err.phase,err.path); }
+    OK(native_result);
+    CHECK(rtc_writes==1 && last_clock.offset_minutes==a.tz_minutes && last_clock.rtc_local==(a.clock==SETUP_CLOCK_LOCAL));
+    end();
 }
 static void test_complete(void)
 {
@@ -402,6 +494,63 @@ static void test_final_mbr_cuts(void)
         st_set_platform(&platform); OK(setup_txn_prepare(&a,&p)); OK(setup_txn_execute(&p,&callbacks,NULL)); end();
     }
 }
+static void test_large_preview(void)
+{
+    begin(2097152);struct setup_answers a=answers();struct setup_plan p;
+    uint8_t sector[512]={0};sector[510]=0x55;sector[511]=0xaa;sector[450]=0x0f;
+    disk_wr32(sector+454,2048);disk_wr32(sector+458,2097152-2048);
+    OK(fake_raw_write(&S.m.head,0,sector));
+    for(unsigned i=0;i<19;i++) {
+        memset(sector,0,sizeof(sector));sector[510]=0x55;sector[511]=0xaa;sector[450]=0x83;
+        disk_wr32(sector+454,1);disk_wr32(sector+458,1024);
+        if(i<18){sector[466]=0x0f;disk_wr32(sector+470,(i+1)*4096);disk_wr32(sector+474,2097152-2048-(i+1)*4096);}
+        OK(fake_raw_write(&S.m.vol,(uint64_t)i*4096,sector));
+    }
+    unsigned before=S.m.head.writes+S.m.vol.writes;
+    OK(setup_txn_prepare(&a,&p));CHECK(p.erased_partitions==16 && p.erased_total==20 && p.erased[0].type==0x0f);
+    CHECK(S.m.head.writes+S.m.vol.writes==before);end();
+    begin(2097152);S.bad_template=true;
+    expect_error(setup_txn_prepare(&a,&p),SETUP_ERR_SOURCE_MISMATCH,SETUP_PHASE_PLAN);
+    CHECK(!S.m.head.writes && !S.m.vol.writes);end();
+    begin(2097152);S.alias_mismatch=true;st_set_platform(NULL);
+    OK(setup_txn_prepare(&a,&p));expect_error(setup_txn_execute(&p,&callbacks,NULL),SETUP_ERR_CONSISTENCY,SETUP_PHASE_COPY);end();
+}
+static void test_native_configuration(void)
+{
+    for(unsigned mode=SETUP_NET_DHCP;mode<=SETUP_NET_NONE;mode++) {
+        begin(2097152);S.nics=true;struct setup_answers a=answers();struct setup_plan p;
+        a.network=(enum setup_net_mode)mode;a.tz_minutes=120;a.clock=mode==SETUP_NET_STATIC ? SETUP_CLOCK_UTC : SETUP_CLOCK_LOCAL;a.clock_adjust_s=3600;
+        if(mode==SETUP_NET_STATIC) {
+            const uint8_t ip[]={192,0,2,2},gw[]={192,0,2,1},dns[]={1,1,1,1};
+            memcpy(a.ip,ip,4);memcpy(a.gateway,gw,4);memcpy(a.dns,dns,4);a.prefix=24;
+            a.components|=SETUP_COMP_DOS|SETUP_COMP_GAMES;
+        }
+        st_set_platform(NULL);unsigned rtc_before=rtc_writes;
+        OK(setup_txn_prepare(&a,&p));CHECK(!S.m.head.writes && !S.m.vol.writes && rtc_writes==rtc_before);
+        CHECK(p.version==2 && p.payload_bytes+p.overhead_bytes+p.reserve_bytes==p.required_bytes);
+        OK(setup_txn_execute(&p,&callbacks,NULL));
+        CHECK(rtc_writes==rtc_before+1 && last_clock.seconds==1792703600 && last_clock.offset_minutes==120 && last_clock.rtc_local==(a.clock==SETUP_CLOCK_LOCAL));
+        char text[4096]={0};int n=b_read_file(NULL,'E',"SYSTEM/NETWORK.INI",text,sizeof(text));CHECK(n>0);
+        struct ciuki_net_config config[2];struct net_config_identity ids[2];
+        OK(net_config_parse(text,(unsigned)n,config,ids));CHECK(ids[0].vendor==0x8086 && ids[1].mac[5]==2);
+        CHECK(config[0].enabled==(mode!=SETUP_NET_NONE) && config[0].dhcp==(mode!=SETUP_NET_STATIC));
+        CHECK(config[1].dhcp && !strcmp(config[0].hostname,"CIUKI-PC"));
+        if(mode==SETUP_NET_STATIC)CHECK(!memcmp(&config[0].address,a.ip,4) && !memcmp(&config[0].gateway,a.gateway,4) && !memcmp(&config[0].dns[0],a.dns,4));
+        n=b_read_file(NULL,'E',"System/Registry/System.reg",text,sizeof(text));CHECK(n>0);
+        struct rt *tree=reg_parse("System",text,(unsigned)n);CHECK(tree);
+        struct rk *key=reg_key(tree,"System\\Identity");CHECK(key);bool user=false,computer=false;
+        for(struct rv *v=key->values;v;v=v->next) { if(!strcmp(v->name,"UserName"))user=!strcmp(v->data,"Tester");if(!strcmp(v->name,"ComputerName"))computer=!strcmp(v->data,"CIUKI-PC"); }
+        CHECK(user && computer);reg_tree_free(tree);
+        n=b_read_file(NULL,'E',"System/Registry/Programs.reg",text,sizeof(text));CHECK(n>0);text[n]=0;
+        CHECK(strstr(text,"wolf3d-shareware") && strstr(text,"doom-shareware") && strstr(text,"quake-shareware"));
+        tree=reg_parse("Programs",text,(unsigned)n);CHECK(tree);key=reg_key(tree,"Programs\\BundledGames\\doom-shareware");CHECK(key);
+        bool installed=false;for(struct rv *v=key->values;v;v=v->next)if(!strcmp(v->name,"Installed")) { int32_t value;memcpy(&value,v->data,4);installed=value==(mode==SETUP_NET_STATIC); }
+        CHECK(installed);reg_tree_free(tree);
+        n=b_read_file(NULL,'E',"system/settings/desktop.cfg",text,sizeof(text));CHECK(n>0);
+        struct ciuki_settings cfg;cfg_defaults(&cfg);CHECK(!cfg_parse(&cfg,text,(unsigned)n) && cfg.keyboard==CFG_KEYS_IT);
+        end();
+    }
+}
 static void test_restart(void)
 {
     memset(&S,0,sizeof(S)); st_set_platform(&platform);
@@ -414,7 +563,7 @@ int main(int argc,char **argv)
 {
     if(argc!=2)return 2;
     work=argv[1];
-    test_prepare(); test_complete(); test_errors(); test_cancel_and_cuts(); test_final_mbr_cuts(); test_restart();
+    test_prepare(); test_complete(); test_errors(); test_cancel_and_cuts(); test_final_mbr_cuts(); test_native_configuration(); test_large_preview(); test_restart();
     free(H.log_data);
     printf("PASS libsetup: %u checks; transaction heap peak=%zu bytes; fixed transfer buffers=196608 bytes (libdisk included)\n",checks,heap_peak);
     return 0;

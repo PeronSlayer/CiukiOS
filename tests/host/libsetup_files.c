@@ -14,5 +14,6 @@ int st_hinfo(const char *p,uint64_t *size,int *directory)
 { struct stat s; if(stat(p,&s))return -errno; *size=(uint64_t)s.st_size; *directory=S_ISDIR(s.st_mode); return 0; }
 
 /* Native media calls are linked, but never performed on the Linux host. */
-int ciuki_devctl(int h,uint32_t op,void *p,uint32_t n) { (void)h; (void)op; (void)p; (void)n; errno=ENOTSUP; return -1; }
+int st_test_devctl(int,uint32_t,void *,uint32_t);
+int ciuki_devctl(int h,uint32_t op,void *p,uint32_t n) { int e=st_test_devctl(h,op,p,n); if(e<0){errno=-e;return -1;} return e; }
 int ciuki_power(uint32_t action) { (void)action; errno=EPERM; return -1; }

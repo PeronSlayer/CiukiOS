@@ -198,7 +198,7 @@ static int cd(void *c,struct st_cd *v)
     return -ENODEV;
 }
 static int catalogue(void *c,struct st_size *out){(void)c;FILE *f=fopen(ST_NATIVE_ROOT "/mnt/d/CDMANIFE.JSN","rb");if(!f)return -errno;int r=st_manifest_sizes(f,out);fclose(f);return r;}
-static int release(void *c,char *out,size_t cap){(void)c;char data[4096];size_t n=0;struct setup_release r;int e=read_file(NULL,"C:\\SYSTEM\\RELEASE.JSON",data,sizeof(data),&n);if(e)return e;if(setup_release_parse(data,n,&r))return -EINVAL;snprintf(out,cap,"%s",r.content_digest);return 0;}
+static int release(void *c,char *out,size_t cap){(void)c;static char data[4096];size_t n=0;struct setup_release r;int e=read_file(NULL,"C:\\SYSTEM\\RELEASE.JSON",data,sizeof(data),&n);if(e)return e;if(setup_release_parse(data,n,&r))return -EINVAL;snprintf(out,cap,"%s",r.content_digest);return 0;}
 static int eject(void *c){(void)c;struct ciuki_media_cd_tray t={.version=CIUKI_MEDIA_CD_VERSION,.size=sizeof(t),.slot=N.cd_slot,.generation=N.cd_generation,.action=CIUKI_CD_TRAY_OPEN};return ciuki_devctl(N.media,MEDIA_CD_TRAY,&t,sizeof(t));}
 static int media_present(void *c){(void)c;struct ciuki_media_cd_state s={.version=CIUKI_MEDIA_CD_VERSION,.size=sizeof(s),.slot=N.cd_slot};if(N.media<0||ciuki_devctl(N.media,MEDIA_CD_STATE,&s,sizeof(s)))return -1;N.cd_generation=s.generation;return s.state==CIUKI_CD_NO_MEDIUM?0:1;}
 static int reboot(void *c){(void)c;return ciuki_power(CIUKI_POWER_REBOOT);}

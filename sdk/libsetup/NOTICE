@@ -1,0 +1,13 @@
+libsetup origins and notices
+
+sdk/libsetup/*.c and the public headers: MIT (sdk/LICENSE).
+apps/control/configuration.c: MIT, shared configuration serializers using
+libreg and the desktop settings format.
+apps/desktop/settings_io.c: MIT, the destination-aware durable file writer
+used by both Control Panel and offline Setup; its worker is not started by Setup.
+src/kernel/net/config.c: CiukiOS GPL-2.0-only; the f2-100 NETWORK.INI codec,
+compiled unchanged in behavior for the native library and the kernel.
+The archive therefore contains project GPL-2.0-only code as well as MIT code.
+No third-party code was vendored for this integration.
+
+The dependency libdisk has its own mixed-license notice (licenses/libdisk.txt).

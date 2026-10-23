@@ -3,12 +3,33 @@
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 #include <ciuki/net.h>
+#include <ciuki/setup_mode.h>
+#pragma weak setup_mode
+#pragma weak net_count
+#pragma weak net_get
 
 int net_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes)
 {
     if (!file_fd_object(p, fd)) return -EBADF;
     struct file_description *d = file_fd(p, fd);
     if (!d || d->node->kind != PX_NET) return -ENOTTY;
+    if (op==CIUKI_SETUP_NET_QUERY) {
+        if (!p->setup_capability || !setup_mode || !setup_mode()) return -EPERM;
+        if (bytes!=sizeof(struct ciuki_setup_net)) return -EINVAL;
+        struct ciuki_setup_net q;
+        int e=copy_from_user(&q,address,sizeof(q)); if(e)return e;
+        if(q.version!=CIUKI_SETUP_FAT_VERSION || q.size!=sizeof(q) || q.reserved) return -EINVAL;
+        q=(struct ciuki_setup_net){.version=CIUKI_SETUP_FAT_VERSION,.size=sizeof(q)};
+        q.count=net_count ? net_count() : 0;
+        if(q.count>2 || (q.count && !net_get))return -EOVERFLOW;
+        for(unsigned i=0;i<q.count;i++) {
+            struct netif *n=net_get(i); if(!n)return -EIO;
+            /* PCI identity and station MAC are immutable after discovery. */
+            q.identity[i].vendor=n->pci.vendor; q.identity[i].device=n->pci.device;
+            memcpy(q.identity[i].mac,n->address,6);
+        }
+        return copy_to_user(address,&q,sizeof(q));
+    }
     if (op != NET_GET_STATE) return -ENOTTY;
     if (bytes != sizeof(struct ciuki_net_state)) return -EINVAL;
     struct ciuki_net_state state;

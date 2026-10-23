@@ -21,10 +21,31 @@ enum setup_error_class { SETUP_ERR_NONE, SETUP_ERR_SOURCE_READ /* retryable */,
     SETUP_ERR_DEST_WRITE, SETUP_ERR_DEST_FLUSH, SETUP_ERR_DEST_FULL, SETUP_ERR_DEST_CHANGED,
     SETUP_ERR_LEASE, SETUP_ERR_CONSISTENCY, SETUP_ERR_CANCELLED, SETUP_ERR_MEMORY, SETUP_ERR_INTERNAL };
 struct setup_disk_identity { char model[41], serial[21]; uint64_t sectors; uint8_t table_fingerprint[32]; };
-struct setup_plan {            /* produced by setup_txn_prepare(), shown on the summary page */
-    struct setup_disk_identity disk; unsigned erased_partitions; struct { uint8_t type; uint64_t start, count; char label[12]; } erased[16];
-    uint64_t partition_start, partition_count; uint64_t required_bytes, overhead_bytes, reserve_bytes, free_after_bytes;
-    uint32_t components; /* bitmask over the catalogue */ struct setup_answers answers; char source_image_sha[65], source_iso_sha[65];
+#define SETUP_TXN_VERSION 2u
+#define SETUP_ERASED_MAX 16u
+struct setup_erased_partition {
+    uint8_t type;
+    uint64_t start;
+    uint64_t count;
+    char label[12];
+};
+struct setup_plan { /* version 2; produced by prepare, shown before confirmation */
+    uint32_t version;
+    struct setup_disk_identity disk;
+    unsigned erased_partitions; /* represented prefix */
+    unsigned erased_total; /* every partition erased, including the omitted suffix */
+    struct setup_erased_partition erased[SETUP_ERASED_MAX];
+    uint64_t partition_start;
+    uint64_t partition_count;
+    uint64_t required_bytes; /* inclusive libdisk total */
+    uint64_t payload_bytes;
+    uint64_t overhead_bytes;
+    uint64_t reserve_bytes;
+    uint64_t free_after_bytes;
+    uint32_t components;
+    struct setup_answers answers;
+    char source_image_sha[65];
+    char source_iso_sha[65]; /* embedded CDMANIFE.JSN SHA-256 (media identity) */
 };
 struct setup_progress { enum setup_phase phase; const char *step; uint64_t bytes_done, bytes_total; uint32_t files_done, files_total; uint32_t elapsed_ms, eta_ms, throughput_kbps; };
 struct setup_error { enum setup_error_class cls; int err; enum setup_phase phase; char path[260]; uint64_t lba, count; unsigned attempt; bool retryable; };

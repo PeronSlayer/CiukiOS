@@ -219,6 +219,8 @@ static int object(struct reader *r, unsigned kind)
         else if (kind==2 && !strcmp(key,"iso_path")) { bit=1; e=string(r,r->m->boot_image,260); }
         else if (kind==2 && !strcmp(key,"bytes")) { bit=2; e=number(r,&r->m->boot_image_bytes); }
         else if (kind==2 && !strcmp(key,"boot_options")) { bit=4; e=string(r,r->m->boot_cfg,128); }
+        else if (kind==2 && !strcmp(key,"boot_cfg_template")) { bit=32; e=string(r,r->m->boot_template,128); }
+        else if (kind==2 && !strcmp(key,"boot_cfg_sha256")) { bit=64; e=string(r,r->m->boot_template_sha,65); }
         else if (kind==2 && !strcmp(key,"files")) { bit=8; r->lists++; e=records(r,'C',false); }
         else if (kind==2 && !strcmp(key,"directories")) { bit=16; e=records(r,'C',true); }
         else e=skip(r,1);
@@ -236,7 +238,7 @@ int st_manifest_read(const struct st_platform *p, struct st_manifest *m, st_reco
     next(&r); int e=object(&r,0); space(&r);
     uint8_t hash[32];
     if (!e && (r.ch!=-1 || r.schema!=1 || r.builds!=1 || r.boots!=1 || r.lists!=1 ||
-        st_hex_decode(m->image_sha,hash) || st_hex_decode(m->loader_sha,hash) || !st_path_valid(m->boot_image) || !m->boot_cfg[0])) e=-EINVAL;
+        st_hex_decode(m->image_sha,hash) || st_hex_decode(m->loader_sha,hash) || !st_path_valid(m->boot_image) || !m->boot_cfg[0] || !m->boot_template[0] || st_hex_decode(m->boot_template_sha,hash))) e=-EINVAL;
     if (r.error) e=r.error;
     return e;
 }

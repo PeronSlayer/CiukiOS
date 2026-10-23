@@ -581,7 +581,7 @@ int disk_execute_p2(const struct disk_plan *p, const struct disk_callbacks *cb, 
     session.published = true;
     session.letter = (char)('A' + l.drive);
     if ((e = bad_reasons(l.reasons, BAD_REASONS, p->disk, "publication mount"))) return e;
-    r = b->mkdir(b->ctx, session.letter, "SYSTEM");
+    r = b->mkdir(b->ctx, session.letter, "System");
     if (r && r != -EEXIST) return fail(DISK_EIO, r, p->disk, 0, 0, "mkdir SYSTEM");
     static const char state[] = "phase=format\n";
     r = b->write_file(b->ctx, session.letter, "SYSTEM/SETUP.STATE", state, sizeof(state) - 1);

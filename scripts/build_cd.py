@@ -381,7 +381,24 @@ def plan_geometry(files, directories):
     return image - PART_LBA, {"payload_clusters": data, "directory_clusters": folders, "planned_clusters": clusters}
 
 
-def populate(volume, files, directories, readonly, epoch):
+def fat_attributes(flags, directory=False):
+    return (16 if directory else 0) | sum(bit for flag, bit in (("R", 1), ("H", 2), ("S", 4), ("A", 32)) if flag in flags)
+
+
+def boot_manifest_records(files, directories, tree, assignment):
+    folded = {p.lower(): flags for p, flags in tree.items()}
+    records = [{"path": p, "sha256": sha256_file(source), "size": Path(source).stat().st_size,
+                "component": assignment[p], "attributes": fat_attributes(folded.get(p.lower(), {"A"}))}
+               for p, source in sorted(files.items())]
+    folders = []
+    for path in directories:
+        components = {assignment[p] for p in files if p.lower().startswith(path.lower() + "/")}
+        folders.append({"path": path, "attributes": fat_attributes(folded.get(path.lower(), set()), True),
+                        "component": next(iter(components)) if len(components) == 1 else "system"})
+    return records, folders
+
+
+def populate(volume, files, directories, readonly, epoch, attributes=None):
     for directory in sorted(directories, key=lambda p: (p.count("/"), p)):
         run(["mmd", "-i", volume, "::" + directory], epoch)
     groups = {}
@@ -392,11 +409,14 @@ def populate(volume, files, directories, readonly, epoch):
         for path in names:
             require(Path(files[path]).name == path.rsplit("/", 1)[1], f"staged name differs: {path}")
         run(["mcopy", "-m", "-i", volume, *(files[p] for p in names), "::" + parent + ("" if parent.endswith("/") else "/")], epoch)
-    for path in sorted(readonly):
-        run(["mattrib", "-i", volume, "+r", "::" + path], epoch)
+    if attributes is None:
+        attributes = {p: 33 for p in readonly}
+    for path, attr in sorted(attributes.items(), key=lambda row: (-row[0].count("/"), row[0])):
+        options = [("+" if attr & bit else "-") + flag for flag, bit in (("r",1),("h",2),("s",4),("a",32))]
+        run(["mattrib", "-i", volume, *options, "::" + path], epoch)
 
 
-def build_boot_image(work, files, directories, readonly, mbr_code, loader, epoch, initialize_blackbox):
+def build_boot_image(work, files, directories, readonly, mbr_code, loader, epoch, initialize_blackbox, attributes=None):
     part_count, plan = plan_geometry(files, directories)
     volume = work / "setup.fat"
     with volume.open("wb") as stream:
@@ -405,7 +425,7 @@ def build_boot_image(work, files, directories, readonly, mbr_code, loader, epoch
          "-R", str(FAT_RESERVED), "-b", "6", "-h", str(PART_LBA), "-n", VOLUME_LABEL, volume], epoch,
         stdout=subprocess.DEVNULL)
     initialize_blackbox(volume)
-    populate(volume, files, directories, readonly, epoch)
+    populate(volume, files, directories, readonly, epoch, attributes)
     with volume.open("r+b") as stream:   # mtools updates the primary FSInfo only
         stream.seek(SECTOR)
         fsinfo = stream.read(SECTOR)
@@ -747,17 +767,17 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
                 parent = parent.rsplit("/", 1)[0]
         readonly = sorted(file_names[p.lower()] for p, flags in tree.items()
                           if "R" in flags and p.lower() in file_names and file_names[p.lower()] in files)
+        boot_records, directory_records = boot_manifest_records(files, directories, tree, assignment)
+        attributes = {r["path"]: r["attributes"] for r in (*boot_records, *directory_records)}
         boot_image, part_count, plan = build_boot_image(work, files, directories, readonly, mbr_code, loader, epoch,
-                                                        bi.initialize_blackbox)
+                                                        bi.initialize_blackbox, attributes)
         facts, fsck = check_boot_image(boot_image, part_count, mbr_code, loader, files, epoch)
         boot_sha = sha256_file(boot_image)
         shutil.move(boot_image, iso_tree_dir / BOOT_IMAGE)
         for p in [iso_tree_dir, *iso_tree_dir.rglob("*")]:
             os.utime(p, (epoch, epoch))
         # Manifest copy on the ISO: everything except the ISO's own identity.
-        boot_records = [{"path": p, "sha256": sha256_file(s), "size": Path(s).stat().st_size, "component": assignment[p]}
-                        for p, s in sorted(files.items())]
-        iso_records = [{"path": p, "sha256": sha256_file(s), "size": s.stat().st_size} for p, s in sorted(iso_files.items())]
+        iso_records = [{"path": p, "sha256": sha256_file(s), "size": s.stat().st_size, "attributes": 32} for p, s in sorted(iso_files.items())]
         cd = {
             "schema_version": 1,
             "build": {"version": manifest["version"], "git_revision": manifest["git_revision"], "git_dirty": manifest["git_dirty"],
@@ -777,7 +797,9 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
                            "clusters": facts["clusters"], "data_start_sector": facts["data_start"],
                            "data_region_cd_aligned": (PART_LBA + facts["data_start"]) % 4 == 0, "plan": plan,
                            "blackbox": {"descriptor_sector": 8, "first_sector": 32, "sectors": 128, "ring_empty": facts["blackbox_ring_empty"]},
-                           "fsck": fsck, "boot_options": setup_options.decode(), "files": boot_records},
+                           "fsck": fsck, "boot_options": setup_options.decode(),
+                           "boot_cfg_template": options.decode("ascii"), "boot_cfg_sha256": sha256_bytes(options),
+                           "files": boot_records, "directories": directory_records},
             "iso_tree": iso_records,
             "archives": archives,
             "components": {"present": present, "rows": [c for c in config["components"] if c["id"] in present],

@@ -94,9 +94,9 @@ static void fixture(void){
     f.volumes_n=2;f.volumes[0]=(struct st_volume){.letter='G',.usb=0,.writable=0};strcpy(f.volumes[0].fs,"NTFS");
     f.volumes[1]=(struct st_volume){.letter='F',.usb=1,.writable=1};strcpy(f.volumes[1].fs,"FAT32");
     setup_fake.plan.disk.sectors=f.disks[0].sectors;strcpy(setup_fake.plan.disk.model,f.disks[0].model);strcpy(setup_fake.plan.disk.serial,f.disks[0].serial);
-    memset(setup_fake.plan.disk.table_fingerprint,0xab,32);setup_fake.plan.erased_partitions=2;
+    memset(setup_fake.plan.disk.table_fingerprint,0xab,32);setup_fake.plan.erased_partitions=2;setup_fake.plan.erased_total=2;
     for(unsigned i=0;i<2;i++){setup_fake.plan.erased[i].type=f.disks[0].parts[i].type;setup_fake.plan.erased[i].start=f.disks[0].parts[i].start;setup_fake.plan.erased[i].count=f.disks[0].parts[i].count;strcpy(setup_fake.plan.erased[i].label,f.disks[0].parts[i].label);}
-    setup_fake.plan.partition_start=2048;setup_fake.plan.partition_count=f.disks[0].sectors-2048;setup_fake.plan.required_bytes=36*1024*1024;
+    setup_fake.plan.partition_start=2048;setup_fake.plan.partition_count=f.disks[0].sectors-2048;setup_fake.plan.required_bytes=101*1024*1024;setup_fake.plan.payload_bytes=36*1024*1024;
     setup_fake.plan.overhead_bytes=1024*1024;setup_fake.plan.reserve_bytes=64*1024*1024;setup_fake.plan.free_after_bytes=7ull*1024*1024*1024;
     memset(setup_fake.plan.source_image_sha,'1',64);memset(setup_fake.plan.source_iso_sha,'2',64);
     setup_fake.entered=entered;
@@ -206,6 +206,10 @@ static void interactive(void){
     fixture();init();st_action(&a,ST_ID_RESCUE);assert(a.page==ST_PAGE_RESCUE);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();
     st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();st_free(&a);
     fixture();init();summary();tap(DU_KEY_ESC);assert(a.page==ST_PAGE_NETWORK&&!a.plan_ok);no_writes();st_free(&a);
+    fixture();init();summary();a.disks[0].part_count=24;setup_fake.plan.erased_partitions=16;setup_fake.plan.erased_total=24;
+    st_goto(&a,ST_PAGE_NETWORK);tap(DU_KEY_F10);assert(a.page==ST_PAGE_SUMMARY&&a.plan_ok);
+    int omitted=0;for(unsigned i=0;i<a.view.count;i++)if(strstr(a.view.lines[i].text,"and 8 more"))omitted=1;
+    assert(omitted);no_writes();st_free(&a);
     for(unsigned policy=SETUP_RESTART_EJECT;policy<=SETUP_RESTART_FORCE;policy++) {
         fixture();init();a.answers.restart=(enum setup_restart)policy;st_goto(&a,ST_PAGE_RESTART);tap(DU_KEY_F10);
         f.now+=61000000000ull;st_turn(&a);

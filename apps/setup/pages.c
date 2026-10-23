@@ -282,7 +282,7 @@ static void build_disk(struct st_app *a)
             st_view_add(&a->view,st_pool(a,"Partition %u: %c%s %s, %s (type %02Xh), %s, LBA %" PRIu64 ", %" PRIu64 " sectors",
                 i+1,p->letter?p->letter:'-',p->letter?":":"",p->label,fs?fs:"unknown filesystem",p->type,size,p->start,p->count),0,F_UI,WARN_RED,0);
         }
-        if(d->part_count>ST_PARTS)st_view_add(&a->view,"The partition inventory exceeds the frozen transaction preview. Setup will stop before installation.",0,F_UI,WARN_RED,0);
+        if(d->part_count>ST_PARTS)st_view_add(&a->view,st_pool(a,"And %u more partitions will be erased.",d->part_count-ST_PARTS),0,F_UI,WARN_RED,0);
         if(d->sectors>((uint64_t)1<<28))st_view_add(&a->view,"The disk is larger than 128 GB: CiukiOS uses the first 128 GB and the rest stays unallocated.",0,F_UI,DU_INK,0);
     }
     for(int i=0;i<a->disk_count;i++)if(&a->disks[i]!=d){
@@ -458,12 +458,13 @@ static void build_summary(struct st_app *a)
                     i + 1, p->erased[i].type, fs ? " (" : "", fs ? fs : "", fs ? ")" : "", size2, p->erased[i].start,
                     p->erased[i].label[0] ? ", label " : "", p->erased[i].label), 0, F_UI, WARN_RED, 0);
     }
+    if (p->erased_total>p->erased_partitions) st_view_add(&a->view,st_pool(a,ST_B "Erased:" ST_B " and %u more",p->erased_total-p->erased_partitions),0,F_UI,WARN_RED,0);
     st_disk_size(size, sizeof(size), p->partition_count * 512);
     st_view_add(&a->view, st_pool(a, ST_B "New layout:" ST_B " one FAT32 partition of %s at LBA %" PRIu64 ", volume CIUKIOS, Ciuki loader in LBA 1" EN "1023",
                 size, p->partition_start), 0, F_UI, DU_INK, 0);
-    st_disk_size(size, sizeof(size), p->required_bytes); st_disk_size(size2, sizeof(size2), p->overhead_bytes);
+    st_disk_size(size, sizeof(size), p->payload_bytes); st_disk_size(size2, sizeof(size2), p->overhead_bytes);
     st_disk_size(size3, sizeof(size3), p->reserve_bytes); st_disk_size(size4, sizeof(size4), p->free_after_bytes);
-    st_disk_size(size5, sizeof(size5), p->required_bytes + p->overhead_bytes + p->reserve_bytes);
+    st_disk_size(size5, sizeof(size5), p->required_bytes);
     st_view_add(&a->view, st_pool(a, ST_B "Space:" ST_B " %s of files + %s FAT allocation + %s pagefile reserve = %s; %s free after installation",
                 size, size2, size3, size5, size4), 0, F_UI, DU_INK, 0);
     char list[200]; size_t k = 0; list[0] = 0;

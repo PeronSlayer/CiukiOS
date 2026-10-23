@@ -326,16 +326,13 @@ static int validate(struct st_app *a)
 static void prepare(struct st_app *a)
 {
     struct setup_answers *s = &a->answers;
-    for (int i=0;i<a->disk_count;i++) if (!a->disks[i].slot && !a->disks[i].unit && a->disks[i].part_count>16) {
-        a->failed_class=SETUP_ERR_INTERNAL;
-        stopped(a,"partition_preview_limit","Disk");
-        st_goto(a,ST_PAGE_FAILED); return;
-    }
     if (!s->unattended) { s->erase_disk = 1; s->disk = SETUP_DISK_ATA0; }   /* consent: Install on the summary */
     s->hardware_report = a->report; s->hardware_report_length = a->report_length;
     s->log = &a->log;
     memset(&a->plan, 0, sizeof(a->plan));
     int r = setup_txn_prepare(s, &a->plan);
+    if (!r && (a->plan.version!=SETUP_TXN_VERSION || a->plan.erased_partitions>SETUP_ERASED_MAX ||
+        a->plan.erased_total<a->plan.erased_partitions)) r=-SETUP_ERR_INTERNAL;
     a->plan_ok = r == 0;
     st_log(a, "prepare result=%d required=%" PRIu64 " overhead=%" PRIu64 " reserve=%" PRIu64 " free_after=%" PRIu64,
            r, a->plan.required_bytes, a->plan.overhead_bytes, a->plan.reserve_bytes, a->plan.free_after_bytes);

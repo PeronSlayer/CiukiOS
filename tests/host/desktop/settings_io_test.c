@@ -5,7 +5,26 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <time.h>
+int __real_rename(const char *,const char *);
+static int rename_error;
+int __wrap_rename(const char *from,const char *to)
+{ if(rename_error){errno=rename_error;return -1;}return __real_rename(from,to); }
+static void durable_destination(void)
+{
+    char directory[]="build/host/settings-target-XXXXXX";assert(mkdtemp(directory));
+    char path[512],temporary[512],text[32]={0};
+    snprintf(path,sizeof(path),"%s/desktop.cfg",directory);snprintf(temporary,sizeof(temporary),"%s/desktop.new",directory);
+    assert(!cfg_write_at(path,temporary,"first\n",6));
+    rename_error=EIO;assert(cfg_write_at(path,temporary,"second\n",7)==EIO);rename_error=0;
+    FILE *f=fopen(path,"rb");assert(f&&fread(text,1,sizeof(text),f)==6&&!memcmp(text,"first\n",6));assert(!fclose(f));
+    assert(!cfg_write_at(path,temporary,"second\n",7));
+    memset(text,0,sizeof(text));f=fopen(path,"rb");assert(f&&fread(text,1,sizeof(text),f)==7&&!memcmp(text,"second\n",7));assert(!fclose(f));
+    assert(!unlink(path)&&!rmdir(directory));
+    puts("PASS shared destination writer: prefixed path, durable replacement, EIO preserves the prior file, staging cleanup");
+}
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed=PTHREAD_COND_INITIALIZER;
 static int entered, released, count, error;
@@ -86,6 +105,7 @@ int main(void)
     assert(ready && !length && read_error==ENOENT);
     assert(!cfg_writer_result(&w,&read_error)); /* read errors are independent of write completion */
     cfg_writer_stop(&w);
+    durable_destination();
     puts("PASS settings worker: blocked I/O leaves mailbox/UI available, bounded latest snapshot/device job, copied records, independent read/write/device results, final durable/error result, idle stop");
     return 0;
 }

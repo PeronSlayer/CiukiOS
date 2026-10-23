@@ -142,11 +142,53 @@ bool fs_rtc_read(const struct fs_rtc_ops *ops, void *ctx, uint16_t *date, uint16
     return false;
 }
 
+static uint8_t rtc_encode(unsigned v, bool binary) { return binary ? (uint8_t)v : (uint8_t)((v/10)*16+v%10); }
+bool fs_rtc_write(const struct fs_rtc_writer *w,void *ctx,uint16_t date,uint16_t time,uint8_t tenths)
+{
+    if (!w || !w->write || !w->sample.begin || !w->sample.end || !w->sample.read ||
+        !w->sample.now_ms || !w->sample.pause || tenths>=200) return false;
+    unsigned year=1980+(date>>9),month=(date>>5)&15,day=date&31;
+    unsigned hour=time>>11,minute=(time>>5)&63,second=(time&31)*2+tenths/100;
+    struct fs_rtc_sample valid={.second=(uint8_t)second,.minute=(uint8_t)minute,.hour=(uint8_t)hour,
+        .day=(uint8_t)day,.month=(uint8_t)month,.year=(uint8_t)(year%100),.control=6,.valid=128};
+    uint16_t vd,vt; uint8_t vf;
+    if (year>2079 || !fs_rtc_decode(&valid,&vd,&vt,&vf) || vd!=date || vt!=time || vf!=tenths) return false;
+    const struct fs_rtc_ops *r=&w->sample;
+    uint32_t start=r->now_ms(ctx);
+    for (unsigned attempt=0;attempt<1024 && (uint32_t)(r->now_ms(ctx)-start)<100;attempt++) {
+        r->begin(ctx);
+        uint8_t b=r->read(ctx,0x0b);
+        if (!(r->read(ctx,0x0a)&128) && !(b&128) && (r->read(ctx,0x0d)&128)) {
+            bool binary=!!(b&4),mode24=!!(b&2);
+            w->write(ctx,0x0b,b|128);
+            w->write(ctx,0,rtc_encode(second,binary)); w->write(ctx,2,rtc_encode(minute,binary));
+            w->write(ctx,4,mode24 ? rtc_encode(hour,binary) : (uint8_t)(rtc_encode(hour%12 ? hour%12 : 12,binary)|(hour>=12 ? 128 : 0)));
+            unsigned days=0;
+            for(unsigned y=1970;y<year;y++)days+=365+(!(y%4) && (y%100 || !(y%400)));
+            static const uint8_t md[]={31,28,31,30,31,30,31,31,30,31,30,31};
+            for(unsigned m=1;m<month;m++)days+=md[m-1]+(m==2 && !(year%4) && (year%100 || !(year%400)));
+            days+=day-1;
+            w->write(ctx,6,rtc_encode((days+4)%7+1,binary));
+            w->write(ctx,7,rtc_encode(day,binary)); w->write(ctx,8,rtc_encode(month,binary)); w->write(ctx,9,rtc_encode(year%100,binary));
+            /* Verify with SET held: no update may race the read-back. */
+            struct fs_rtc_sample s={.second=r->read(ctx,0),.minute=r->read(ctx,2),.hour=r->read(ctx,4),
+                .day=r->read(ctx,7),.month=r->read(ctx,8),.year=r->read(ctx,9),.control=b,.valid=r->read(ctx,0x0d)};
+            bool ok=fs_rtc_decode(&s,&vd,&vt,&vf) && vd==date && vt==time && vf==tenths;
+            w->write(ctx,0x0b,b); /* always restore SET and all interrupt bits */
+            ok=ok && r->read(ctx,0x0b)==b;
+            r->end(ctx); return ok;
+        }
+        r->end(ctx);
+        if (!r->pause(ctx)) break;
+    }
+    return false;
+}
+
 #ifndef FS_HOST
 /* UP platform service, sole native CMOS accessor. Software policy leaves NMI
  * enabled (shadow bit 7 = 0); never read port 70h to infer this write-only
  * policy. IRQ8 remains masked, register C is never read, port 71h never
- * written. NMI diagnostics do not access CMOS. Each complete sample is one
+ * written except by the checked SET transaction. NMI diagnostics do not access CMOS. Each complete sample is one
  * short irq-save section, not the UIP wait. */
 static uint32_t rtc_flags;
 static const uint8_t rtc_nmi_shadow = 0;
@@ -156,12 +198,19 @@ static uint8_t rtc_read(void *ctx, uint8_t reg)
 {
     (void)ctx; outb(0x70, rtc_nmi_shadow | reg); return inb(0x71);
 }
+static void rtc_write(void *ctx,uint8_t reg,uint8_t value)
+{ (void)ctx; outb(0x70,rtc_nmi_shadow|reg); outb(0x71,value); }
 static uint32_t rtc_now(void *ctx) { (void)ctx; return fs_now_ms(); }
 static bool rtc_pause(void *ctx) { (void)ctx; return !udelay(100); }
 static bool rtc_calendar(uint16_t *date, uint16_t *time, uint8_t *tenths)
 {
     static const struct fs_rtc_ops ops = { rtc_begin, rtc_end, rtc_read, rtc_now, rtc_pause };
     return fs_rtc_read(&ops, 0, date, time, tenths);
+}
+bool fs_rtc_store(uint16_t date,uint16_t time,uint8_t tenths)
+{
+    static const struct fs_rtc_writer w={{rtc_begin,rtc_end,rtc_read,rtc_now,rtc_pause},rtc_write};
+    return fs_rtc_write(&w,0,date,time,tenths);
 }
 static struct task *fs_worker;
 static uint32_t service_tick;

@@ -17,6 +17,8 @@ bool net_socket_object(struct proc_object *) __attribute__((weak));
 int32_t net_socket_rw(struct process *, int, uint32_t, uint32_t, bool) __attribute__((weak));
 int media_devctl(struct process *, int32_t, uint32_t, uint32_t, uint32_t);
 #pragma weak media_devctl
+int file_setup_fat(struct process *, struct file_description *, uint32_t, struct ciuki_setup_fat *) __attribute__((weak));
+int file_setup_clock(struct process *, const struct ciuki_setup_clock *) __attribute__((weak));
 
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
@@ -331,6 +333,24 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     uint32_t nr = tf->eax;
     if (nr == CIUKI_SYS_DEVCTL) {
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);
+        if (tf->ecx==CIUKI_SETUP_FAT_QUERY || tf->ecx==CIUKI_SETUP_FAT_ATTRIB) {
+            if (!d) return -EBADF;
+            if (tf->esi!=sizeof(struct ciuki_setup_fat)) return -EINVAL;
+            struct ciuki_setup_fat q;
+            int e=copy_from_user(&q,tf->edx,sizeof(q));
+            if (e) return e;
+            d->object.retain(&d->object);
+            e=file_setup_fat ? file_setup_fat(p,d,tf->ecx,&q) : -ENOSYS;
+            d->object.release(&d->object);
+            return e ? e : copy_to_user(tf->edx,&q,sizeof(q));
+        }
+        if (tf->ecx==CIUKI_SETUP_CLOCK_SET) {
+            if (!d) return -EBADF;
+            if (tf->esi!=sizeof(struct ciuki_setup_clock)) return -EINVAL;
+            struct ciuki_setup_clock q;
+            int e=copy_from_user(&q,tf->edx,sizeof(q));
+            return e ? e : file_setup_clock ? file_setup_clock(p,&q) : -ENOSYS;
+        }
         if (d && d->node->kind == PX_MEDIA)
             return media_devctl ? media_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
         if (d && d->node->kind == PX_NET)

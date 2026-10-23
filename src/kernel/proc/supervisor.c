@@ -111,7 +111,7 @@ static int spawn_process(const char *path, const char *const argv[], const char 
         err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
     }
     if (!err && cwd) err = supervisor_io && supervisor_io->cwd ? supervisor_io->cwd(p, cwd) : -ENODEV;
-    if (!err && desktop) { int32_t grants[2]; err = grants_install(p, grants); }
+    if (!err && (desktop || setup)) { int32_t grants[2]; err = grants_install(p, grants); }
     if (!err && desktop && audio_mixer_delegate) {
         int fd = audio_mixer_delegate(proc_supervisor(), p);
         if (fd < 0) err = fd;
@@ -138,7 +138,7 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
     if (!err) {
         task_native_frame(thread->task, esp);
-        if (desktop) {
+        if (desktop || setup) {
             task_set_class(thread->task, P_INTERACTIVE);
             task_focus(thread->task);
         }

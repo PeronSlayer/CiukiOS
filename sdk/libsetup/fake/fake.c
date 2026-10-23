@@ -22,7 +22,7 @@ void setup_fake_error(enum setup_error_class c, unsigned attempt, bool retryable
 int setup_txn_prepare(const struct setup_answers *a, struct setup_plan *p)
 {
     setup_fake.prepare_calls++;
-    *p=setup_fake.plan; p->answers=*a; p->components=a->components;
+    *p=setup_fake.plan; p->version=SETUP_TXN_VERSION; p->answers=*a; p->components=a->components;
     return setup_fake.prepare_result;
 }
 int setup_txn_execute(const struct setup_plan *p, const struct setup_callbacks *cb, void *ctx)

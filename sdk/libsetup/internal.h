@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
- * Private platform boundary; NOT a public SDK or kernel ABI. The frozen
+ * Private platform boundary; NOT a public SDK or kernel ABI. The versioned
  * setup_txn.h remains the sole application interface. Negative errno results.
- * Native gaps must fail preflight, before the destination lease or any write.
+ * Preflight is read-only and precedes the destination lease and every write.
  */
 #ifndef LIBSETUP_INTERNAL_H
 #define LIBSETUP_INTERNAL_H
@@ -12,7 +12,7 @@
 #define ST_PATH_BYTES 260u
 #define ST_MANIFEST "CDMANIFE.JSN"
 #define ST_RELEASE "system/RELEASE.JSON"
-struct st_info { uint64_t size; uint8_t attr; char name[260]; };
+struct st_info { uint64_t size; uint8_t attr; char name[260], alias[40]; };
 struct st_platform {
     void *ctx;
     int (*preflight)(void *, const struct setup_answers *);
@@ -40,6 +40,7 @@ struct st_platform {
 };
 void st_set_platform(const struct st_platform *); /* host injection; NULL native */
 const struct st_platform *st_native_platform(void);
+void st_native_cleanup(void);
 int setup_restart(enum setup_restart);
 struct st_record {
     char path[260]; uint64_t size; uint8_t sha[32], attr;
@@ -47,6 +48,7 @@ struct st_record {
 };
 struct st_manifest {
     char image_sha[65], loader_sha[65], boot_image[260], boot_cfg[128];
+    char boot_template[128], boot_template_sha[65];
     uint64_t boot_image_bytes;
     unsigned files, directories;
 };

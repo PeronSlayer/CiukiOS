@@ -1,6 +1,6 @@
 /* Native boot-CD control uses the existing public media ABI. No guessed
  * device slot: bind the mounted Setup ISO (D:) before retaining its slot.
- * POWER currently refuses Setup; preserve that error for the lead to fix.
+ * POWER authority is supplied to Setup by the supervisor capability.
  * SPDX-License-Identifier: MIT */
 #include "internal.h"
 #include <ciuki/abi.h>

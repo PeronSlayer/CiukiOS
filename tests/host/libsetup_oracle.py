@@ -7,7 +7,7 @@ import subprocess
 import sys
 root, volume = Path(sys.argv[1]), sys.argv[2]
 m = json.loads((root / 'D/CDMANIFE.JSN').read_text())
-generated = {'system/boot.cfg', 'system/setup.state', 'system/setup.log', 'system/hardware.txt', 'system/pagefile.swp'}
+generated = {'system/boot.cfg', 'system/setup.state', 'system/setup.log', 'system/hardware.txt', 'system/pagefile.swp', 'system/network.ini', 'system/registry/system.reg', 'system/registry/programs.reg'}
 expected = {}
 for f in m['boot_image']['files']:
     p = f['path'].lstrip('/')

@@ -228,6 +228,7 @@ static bool generated(const char *path)
     return !strcasecmp(p,"SYSTEM/BOOT.CFG") || !strcasecmp(p,"SYSTEM/SETUP.STATE") ||
         !strcasecmp(p,"SYSTEM/SETUP.LOG") || !strcasecmp(p,"SYSTEM/HARDWARE.TXT") || !strcasecmp(p,"SYSTEM/PAGEFILE.SWP");
 }
+static int boot_options(char out[128]);
 static int prepare_record(void *ctx,const struct st_record *f)
 {
     struct disk_payload *payload=ctx;
@@ -297,6 +298,8 @@ int setup_txn_prepare(const struct setup_answers *a,struct setup_plan *out)
             } else if(n<0)return fail(SETUP_ERR_DEST_WRITE,n,"SETUP.STATE",0,0,0);
         } else if(h!=-ENOENT)return fail(SETUP_ERR_DEST_WRITE,h,"SETUP.STATE",0,0,0);
     }
+    char boot_template[128];
+    e=boot_options(boot_template); if(e)return e;
     struct disk_payload payload={0};
     struct st_manifest check;
     e=st_manifest_read(T.io,&check,prepare_record,&payload,NULL);
@@ -312,11 +315,12 @@ int setup_txn_prepare(const struct setup_answers *a,struct setup_plan *out)
     memcpy(p->disk.model,T.disk.id.model,sizeof(p->disk.model)); memcpy(p->disk.serial,T.disk.id.serial,sizeof(p->disk.serial));
     p->disk.sectors=T.disk.id.sectors; memcpy(p->disk.table_fingerprint,T.disk.id.table_fingerprint,32);
     p->partition_start=T.disk.geo.part_start; p->partition_count=T.disk.geo.part_sectors;
+    p->version=SETUP_TXN_VERSION; p->payload_bytes=payload.bytes;
     p->required_bytes=T.disk.required_bytes; p->overhead_bytes=T.disk.overhead_bytes;
     p->reserve_bytes=T.disk.reserve_bytes; p->free_after_bytes=T.disk.free_after_bytes;
-    p->erased_partitions=T.disk.erased;
-    if(T.disk.erased>16)return fail(SETUP_ERR_INTERNAL,EOVERFLOW,"erased partition summary",0,0,0);
-    for(unsigned i=0;i<T.disk.erased;i++) { p->erased[i].type=T.disk.erased_list[i].type; p->erased[i].start=T.disk.erased_list[i].start; p->erased[i].count=T.disk.erased_list[i].count; }
+    p->erased_total=T.disk.erased;
+    p->erased_partitions=T.disk.erased<SETUP_ERASED_MAX ? T.disk.erased : SETUP_ERASED_MAX;
+    for(unsigned i=0;i<p->erased_partitions;i++) { p->erased[i].type=T.disk.erased_list[i].type; p->erased[i].start=T.disk.erased_list[i].start; p->erased[i].count=T.disk.erased_list[i].count; }
     memcpy(p->source_image_sha,T.manifest.image_sha,65); memcpy(p->source_iso_sha,T.manifest_hash,65);
     *out=*p;
     if(e)return disk_result(e);
@@ -416,7 +420,8 @@ static int verify_record(void *ctx,const struct st_record *f)
     int r=source_info(f->drive,p,&src); if(r)return r;
     r=T.io->info(T.io->ctx,T.dest,p,&dst); if(r)return destination(r,p,false);
     const char *base=strrchr(p,'/'); base=base ? base+1 : p;
-    if((!f->directory && dst.size!=f->size) || dst.attr!=(f->has_attr ? f->attr : src.attr) || strcmp(dst.name,base))
+    if((!f->directory && dst.size!=f->size) || dst.attr!=(f->has_attr ? f->attr : src.attr) || strcmp(dst.name,base) ||
+        (src.alias[0] && strcasecmp(src.alias,dst.alias)))
         return fail(SETUP_ERR_CONSISTENCY,0,p,0,0,0);
     if(f->directory)return 0;
     struct disk_sha256 s; disk_sha256_init(&s);
@@ -467,17 +472,17 @@ static int write_log(void)
 }
 static int boot_options(char out[128])
 {
-    /* The embedded f9-01 manifest only records the Setup version, after
-     * rstrip + ' setup=1\n'. Remove precisely that suffix. Recovering the
-     * original trailing whitespace requires a canonical template field. */
-    const char *s=T.manifest.boot_cfg;
-    size_t n=strlen(s);
-    const char suffix[]=" setup=1\n";
-    size_t k=sizeof(suffix)-1;
-    if(n<k || strcmp(s+n-k,suffix))return fail(SETUP_ERR_SOURCE_MISMATCH,EINVAL,"BOOT.CFG template",0,0,0);
-    memcpy(out,s,n-k); out[n-k]='\n'; out[n-k+1]=0;
-    for(char *p=out;*p;p++)if((unsigned char)*p<32 && *p!='\n' && *p!='\r')return fail(SETUP_ERR_SOURCE_MISMATCH,EINVAL,"BOOT.CFG",0,0,0);
-    return strstr(out,"setup=1") ? fail(SETUP_ERR_SOURCE_MISMATCH,EINVAL,"BOOT.CFG",0,0,0) : 0;
+    size_t n=strlen(T.manifest.boot_template);
+    struct disk_sha256 digest; uint8_t hash[32],expected[32];
+    disk_sha256_init(&digest); disk_sha256_update(&digest,T.manifest.boot_template,n);
+    disk_sha256_final(&digest,hash);
+    if (!n || n>127 || st_hex_decode(T.manifest.boot_template_sha,expected) || memcmp(hash,expected,32) ||
+        strstr(T.manifest.boot_template,"setup=1"))
+        return fail(SETUP_ERR_SOURCE_MISMATCH,EINVAL,"BOOT.CFG template",0,0,0);
+    for(size_t i=0;i<n;i++)if((unsigned char)T.manifest.boot_template[i]<32 && T.manifest.boot_template[i]!='\n' && T.manifest.boot_template[i]!='\r')
+        return fail(SETUP_ERR_SOURCE_MISMATCH,EINVAL,"BOOT.CFG template",0,0,0);
+    memcpy(out,T.manifest.boot_template,n+1);
+    return 0;
 }
 static int read_loader(uint8_t **out,unsigned *bytes)
 {
@@ -554,6 +559,7 @@ int setup_txn_execute(const struct setup_plan *plan,const struct setup_callbacks
      * already sealed the volume. Retain the previous durable phase marker. */
     int release=disk_release(0);
     if(!e && release)e=disk_result(release);
+    if(T.io==st_native_platform())st_native_cleanup();
     T.executing=false;
     if(!e)T.error=(struct setup_error){0};
     return e;

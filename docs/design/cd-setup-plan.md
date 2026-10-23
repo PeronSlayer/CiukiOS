@@ -456,10 +456,31 @@ enum setup_error_class { SETUP_ERR_NONE, SETUP_ERR_SOURCE_READ /* retryable */,
     SETUP_ERR_DEST_WRITE, SETUP_ERR_DEST_FLUSH, SETUP_ERR_DEST_FULL, SETUP_ERR_DEST_CHANGED,
     SETUP_ERR_LEASE, SETUP_ERR_CONSISTENCY, SETUP_ERR_CANCELLED, SETUP_ERR_MEMORY, SETUP_ERR_INTERNAL };
 struct setup_disk_identity { char model[41], serial[21]; uint64_t sectors; uint8_t table_fingerprint[32]; };
-struct setup_plan {            /* produced by setup_txn_prepare(), shown on the summary page */
-    struct setup_disk_identity disk; unsigned erased_partitions; struct { uint8_t type; uint64_t start, count; char label[12]; } erased[16];
-    uint64_t partition_start, partition_count; uint64_t required_bytes, overhead_bytes, reserve_bytes, free_after_bytes;
-    uint32_t components; /* bitmask over the catalogue */ struct setup_answers answers; char source_image_sha[65], source_iso_sha[65];
+#define SETUP_TXN_VERSION 2u
+#define SETUP_ERASED_MAX 16u
+struct setup_erased_partition {
+    uint8_t type;
+    uint64_t start;
+    uint64_t count;
+    char label[12];
+};
+struct setup_plan { /* version 2; produced by prepare, shown before confirmation */
+    uint32_t version;
+    struct setup_disk_identity disk;
+    unsigned erased_partitions; /* represented prefix */
+    unsigned erased_total; /* every partition erased, including the omitted suffix */
+    struct setup_erased_partition erased[SETUP_ERASED_MAX];
+    uint64_t partition_start;
+    uint64_t partition_count;
+    uint64_t required_bytes; /* inclusive libdisk total */
+    uint64_t payload_bytes;
+    uint64_t overhead_bytes;
+    uint64_t reserve_bytes;
+    uint64_t free_after_bytes;
+    uint32_t components;
+    struct setup_answers answers;
+    char source_image_sha[65];
+    char source_iso_sha[65]; /* embedded CDMANIFE.JSN SHA-256 (media identity) */
 };
 struct setup_progress { enum setup_phase phase; const char *step; uint64_t bytes_done, bytes_total; uint32_t files_done, files_total; uint32_t elapsed_ms, eta_ms, throughput_kbps; };
 struct setup_error { enum setup_error_class cls; int err; enum setup_phase phase; char path[260]; uint64_t lba, count; unsigned attempt; bool retryable; };
@@ -734,3 +755,23 @@ Before the CD is called distributable, on the recorded ISO SHA-256:
 - O2: the `setup=1` token is parsed by the loader with the ~24-byte addition inside f9-01, after f0-54 frees the budget (f9-01 may stage it last).
 - O3: the Wine 10.0 source archive ships on the ISO under `\SOURCES` with the other copyleft sources (`CIUKIOS.ZIP` plus `SOURCE-OFFER.txt` remain as the written offer for anything the ISO cannot carry).
 - O4: owners are Claude agents while Codex is unavailable; ioctl numbers `0x4401`–`0x440F` reserved for the disk lease group; the reserved CD signature `0x4B554943` and the 1 GiB minimum destination are accepted; Setup-mode drive letters as the plan states; the frozen `setup_txn.h` is reviewed by the lead at the f9-03/f9-04 launch.
+
+## f9-04b binding integration amendment
+
+The Setup transaction interface is version 2 (`SETUP_TXN_VERSION`).
+`erased_partitions` is the represented prefix (at most 16), `erased_total`
+is the complete libdisk count; Summary prints the prefix and "and N more".
+`required_bytes` is libdisk's inclusive total, with `payload_bytes`,
+`overhead_bytes` and `reserve_bytes` as breakdowns. `source_iso_sha` is the
+embedded `CDMANIFE.JSN` SHA-256, the media identity; the final ISO hash is
+external. Native FAT metadata queries and attribute changes require both
+Setup mode and the supervisor's non-inherited Setup capability. Setup gets
+display/input grants and POWER authority for its own lifetime.
+
+The boot manifest records directories, numeric attributes, and
+`boot_cfg_template`/`boot_cfg_sha256` with the exact canonical disk BOOT.CFG
+bytes (ASCII). Setup validates and copies the template; it does not reverse
+the Setup token transformation. Loader bytes come from offset 512 of
+`D:/CIUKBOOT.IMG`. Shared configuration writers accept a destination prefix;
+IPX/lobby persistence remains deferred. The durable log ends at `seal`;
+post-publication completion stays in memory to preserve clean-bit ordering.

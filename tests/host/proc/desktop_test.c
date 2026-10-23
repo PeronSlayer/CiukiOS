@@ -849,7 +849,7 @@ static void test_setup_bootstrap(void)
     CHECK(!bootstrap_attempted && !setup_opens); /* diagnostics keep their path */
     g_boot.flags = 0;
     CHECK(setup_bootstrap(&p, &result) && result > 0 && p && p->published);
-    CHECK(p->setup_capability && !p->share_group && !desktop_objects.grants);
+    CHECK(p->setup_capability && !p->share_group && desktop_objects.grants==2);
     CHECK(setup_opens == 1 && standin_attempts == fallback);
     struct process *child = 0;
     CHECK(!proc_prepare(p, &child) && !child->setup_capability);
