@@ -189,7 +189,9 @@ void desk_cursor_update(struct desktop *d)
         if (shape==DESK_CURSOR_ARROW && !edges && d->shell) shape=desk_shell_cursor(d);
         if (shape==DESK_CURSOR_ARROW && !edges) for (int k=0;k<DESK_CLIENTS;k++) {
             const struct desk_client *c=&d->clients[k];
-            if (c->awaiting_frame && d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull) {
+            /* AppStarting: from the click while the process is created (fx-8), then
+             * until its first frame or 5 s after the process exists. */
+            if (c->spawn_pending || (c->awaiting_frame && d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull)) {
                 shape=DESK_CURSOR_ARROW_BUSY; break;
             }
         }

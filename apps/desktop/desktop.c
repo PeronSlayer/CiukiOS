@@ -342,63 +342,213 @@ static int launch_failed(const struct desk_program *program, int error, const ch
     }
     errno=error; return -1;
 }
+/* fx-8: the desktop never waits for a process to be created.
+ *
+ * ciuki_spawn() returns only after the kernel has read the executable and
+ * built the child (proc_spawn -> image_open -> elf_load). On the T23 trial of
+ * image 423b803a that took 3.9 s for NetSurf (13.5 MB file) and 0.5-1.1 s for
+ * the 1.5-3.8 MB built-in programs, all of it inside the desktop's frame and
+ * input loop (`[desktop] stall stage=launch ... wait=launch no_frame_ms=3891`).
+ * Windows 9x's shell returns from ShellExecute at once, shows the AppStarting
+ * cursor and lets the window appear when the program creates it; a failed
+ * start is reported afterwards. The desktop now does the same: the input
+ * thread prepares the channel and the client slot (cheap, no file I/O), a
+ * launcher worker performs the spawn, and the next service turn binds the PID
+ * or reports the failure to the launch's origin (desk_launch_completed).
+ * Gate scenarios keep the synchronous call: their controller sequences
+ * expect the PID at the click. */
+enum { LAUNCH_FREE, LAUNCH_QUEUED, LAUNCH_RUNNING, LAUNCH_DONE };
+#define LAUNCH_ARGV 13
+#define LAUNCH_STRINGS 2048
+#define LAUNCH_EXITS 8
+struct launch_job {
+    unsigned state, sequence;
+    int client, child, channel, child_fd;
+    uint64_t click_ns, begin_ns, end_ns;
+    struct desk_program program;
+    char *argv[LAUNCH_ARGV], *env[8];
+    char strings[LAUNCH_STRINGS], display[40], keymap[24];
+    struct ciuki_spawn_fd mapping[2];
+    uint32_t mappings;
+    int (*mark)(uint32_t, ciuki_pid_t, uint64_t);
+    struct desk_launch_request request;
+    ciuki_pid_t pid;
+    int error;
+};
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    pthread_t thread;
+    int started;
+    unsigned sequence;
+    void (*wake)(void *);
+    void *wake_ctx;
+    struct launch_job jobs[DESK_CLIENTS];
+    /* Input-thread only: exits reaped while a spawn was still unbound. */
+    uint32_t exited[LAUNCH_EXITS];
+    unsigned exited_next;
+} launcher={.lock=PTHREAD_MUTEX_INITIALIZER,.changed=PTHREAD_COND_INITIALIZER};
+static struct launch_job launch_sync_job;
+static void *launcher_run(void *unused)
+{
+    (void)unused;
+    pthread_mutex_lock(&launcher.lock);
+    for (;;) {
+        struct launch_job *job=NULL;
+        for (unsigned i=0;i<DESK_CLIENTS;i++) {
+            struct launch_job *j=&launcher.jobs[i];
+            if (j->state==LAUNCH_QUEUED && (!job || (int)(j->sequence-job->sequence)<0)) job=j;
+        }
+        if (!job) { pthread_cond_wait(&launcher.changed,&launcher.lock); continue; }
+        job->state=LAUNCH_RUNNING;
+        pthread_mutex_unlock(&launcher.lock);
+        /* The job's strings and descriptors stay owned by the input thread,
+         * which does not touch a RUNNING job; only the spawn runs here. */
+        uint64_t begin=monotonic();
+        if (job->mark) job->mark(CIUKI_LAUNCH_BEGIN,0,job->click_ns/1000);
+        errno=0;
+        ciuki_pid_t pid=ciuki_spawn(job->program.path,job->argv,job->env,job->mapping,job->mappings,0);
+        int error=errno;
+        uint64_t end=monotonic();
+        pthread_mutex_lock(&launcher.lock);
+        job->begin_ns=begin; job->end_ns=end; job->pid=pid; job->error=pid<0 ? (error ? error : EIO) : 0; job->state=LAUNCH_DONE;
+        if (launcher.wake) launcher.wake(launcher.wake_ctx);
+    }
+    return NULL;
+}
+/* Started once by the ordinary (non-gate) desktop; a failure keeps the
+ * synchronous launch, which is correct, only slower to the eye. */
+static int launcher_start(struct desktop *d)
+{
+    if (launcher.started) { d->launch_async=1; return 0; }
+    launcher.wake=d->wake; launcher.wake_ctx=d->wake_ctx;
+    int error=pthread_create(&launcher.thread,NULL,launcher_run,NULL);
+    if (error) return error;
+    launcher.started=1; d->launch_async=1;
+    return 0;
+}
+static int launcher_inflight(void)
+{
+    int busy=0;
+    pthread_mutex_lock(&launcher.lock);
+    for (unsigned i=0;i<DESK_CLIENTS;i++) busy|=launcher.jobs[i].state!=LAUNCH_FREE;
+    pthread_mutex_unlock(&launcher.lock);
+    return busy;
+}
+static int launch_strings(struct launch_job *job, unsigned *used, const char *text, char **out)
+{
+    size_t n=strlen(text)+1;
+    if (n>LAUNCH_STRINGS-*used) return -1;
+    memcpy(job->strings+*used,text,n); *out=job->strings+*used; *used+=(unsigned)n;
+    return 0;
+}
+/* The complete spawn request, copied: the caller's argument pointers
+ * (a LAUNCH message, the Run dialog's words) do not outlive this call. */
+static int launch_prepare(struct desktop *d, const struct desk_program *program, struct launch_job *job)
+{
+    memset(job,0,sizeof(*job));
+    job->program=*program;
+    int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
+    int tasks=!strcmp(program->name,"tasks");
+    int takes_file=kind==DESK_APP_NOTE || desk_catalog_takes_file(program->name);
+    const char *argv[LAUNCH_ARGV]={program->name};
+    unsigned at=1;
+    /* The program record grants the window channel (catalog.h; f6-19: also NetSurf). */
+    if (graphical) argv[at++]="--channel-fd=3";
+    /* The scenario's program gets --test=<its name> (apps/desktop/gate.h scenarios). */
+    if (graphical && d->app_test && kind==d->app_test) argv[at++]=kind==DESK_APP_NOTE ? "--test=ciuknote" : "--test=files";
+    /* f2-33: only the Task Manager receives the delegated termination
+     * authority, explicitly mapped to fd 4; it also may send task requests. */
+    if (tasks && d->authority_fd>=0) argv[at++]="--authority-fd=4";
+    if (tasks && d->tasks_test) argv[at++]="--test=tasks";
+    /* LAUNCH from Files: the path of the text file CiukNote opens (the client validated it).
+     * The shell also opens Files on a folder and the Control Panel on a page.
+     * Accessories that open a file (Image Viewer, Help) take it as CiukNote does. */
+    if (graphical && (kind || takes_file) && d->launch_arg) argv[at++]=d->launch_arg;
+    /* Run dialog: the typed arguments after the desktop's own. */
+    if (d->launch_argv[0]) for (unsigned k=0; k<6 && d->launch_argv[k] && at<LAUNCH_ARGV-1; k++) argv[at++]=d->launch_argv[k];
+    unsigned used=0;
+    for (unsigned k=0;k<at;k++) if (launch_strings(job,&used,argv[k],&job->argv[k])) return E2BIG;
+    job->argv[at]=NULL;
+    /* Window size hint for graphical clients; the protocol has no query. */
+    snprintf(job->display,sizeof(job->display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
+    /* The Control Panel's keyboard layout, for libdeskui programs. */
+    snprintf(job->keymap,sizeof(job->keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
+    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
+    memcpy(job->env,env,sizeof(env));
+    job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
+    job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};
+    job->request=d->launch_request;
+    return 0;
+}
+static void launch_bind(struct desktop *d, int index, const struct desk_program *program, uint64_t click_ns)
+{
+    struct desk_client *c=&d->clients[index];
+    int kind=desk_program_kind(program->name);
+    snprintf(c->application,sizeof(c->application),"%s",program->name);
+    c->program=kind;
+    c->taskman=!strcmp(program->name,"tasks");
+    c->gfxdemo=!strcmp(program->name,"gfxdemo");
+    c->dosbox=!strcmp(program->name,"dosbox");
+    c->mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
+    c->awaiting_frame=desk_program_graphical(program->name);
+    c->launched_ns=monotonic();
+    c->launch_input_ns=click_ns;
+}
 static int launch_program(struct desktop *d, const struct desk_program *program)
 {
+    d->launch_deferred=0;
     if (d->power.state) return launch_failed(program,EBUSY,"power");
     /* Recheck each launch: the operator can change console verbosity at run time. */
     d->launch_mark = ciuki_launch_mark(CIUKI_LAUNCH_STATUS,0,0) > 0 ? ciuki_launch_mark : NULL;
     uint64_t click_ns = d->launch_click_ns ? d->launch_click_ns : monotonic();
     d->launch_click_ns = 0;
     int child=-1;
-    for (int j=0; j<DESK_CLIENTS; j++) if (!d->children[j].pid) { child=j; break; }
+    for (int j=0; j<DESK_CLIENTS; j++) if (!d->children[j].pid && !d->children[j].pending) { child=j; break; }
     if (child<0) return launch_failed(program,EAGAIN,"child-slot");
+    struct launch_job *job=&launch_sync_job;
+    if (d->launch_async) {
+        job=NULL;
+        pthread_mutex_lock(&launcher.lock);
+        for (unsigned i=0;i<DESK_CLIENTS && !job;i++) if (launcher.jobs[i].state==LAUNCH_FREE) job=&launcher.jobs[i];
+        pthread_mutex_unlock(&launcher.lock);
+        if (!job) return launch_failed(program,EAGAIN,"launch-queue");
+    }
+    /* A FREE job belongs to the input thread until it is queued. */
+    int error=launch_prepare(d,program,job);
+    if (error) return launch_failed(program,error,"arguments");
     int pair[2];
     if (ciuki_channel_pair(pair)) return launch_failed(program,errno,"channel-pair");
+    job->mapping[0]=(struct ciuki_spawn_fd){pair[1],3};
+    job->click_ns=click_ns; job->mark=d->launch_mark;
     int index=-1;
     ciuki_pid_t pid=-1;
-    /* The program record grants the window channel (catalog.h; f6-19: also NetSurf). */
-    int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
-    /* f2-33: only the Task Manager receives the delegated termination
-     * authority, explicitly mapped to fd 4; it also may send task requests. */
-    int tasks=!strcmp(program->name,"tasks");
-    /* Accessories that open a file (Image Viewer, Help) take the LAUNCH argument as CiukNote does. */
-    int takes_file=kind==DESK_APP_NOTE || desk_catalog_takes_file(program->name);
-    char *argv[]={(char *)program->name,NULL,NULL,NULL,NULL,NULL};
-    unsigned at=1;
-    if (graphical) argv[at++]="--channel-fd=3";
-    /* The scenario's program gets --test=<its name> (apps/desktop/gate.h scenarios). */
-    if (graphical && d->app_test && kind==d->app_test) argv[at++]=kind==DESK_APP_NOTE ? "--test=ciuknote" : "--test=files";
-    if (tasks && d->authority_fd>=0) argv[at++]="--authority-fd=4";
-    if (tasks && d->tasks_test) argv[at++]="--test=tasks";
-    /* LAUNCH from Files: the path of the text file CiukNote opens (the client validated it).
-     * The shell also opens Files on a folder and the Control Panel on a page. */
-    if (graphical && (kind || takes_file) && d->launch_arg) argv[at++]=(char *)d->launch_arg;
-    char *full[12];
-    if (d->launch_argv[0]) {   /* Run dialog: the typed arguments after the desktop's own */
-        unsigned n=0;
-        for (unsigned k=0; k<at; k++) full[n++]=argv[k];
-        for (unsigned k=0; k<6 && d->launch_argv[k] && n<11; k++) full[n++]=(char *)d->launch_argv[k];
-        full[n]=NULL;
-    }
-    /* Window size hint for graphical clients; the protocol has no query. */
-    char display[40];
-    snprintf(display,sizeof(display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
-    char keymap[24];   /* the Control Panel's keyboard layout, for libdeskui programs */
-    snprintf(keymap,sizeof(keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
-    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",display,keymap,NULL};
-    struct ciuki_spawn_fd mapping[2]={{pair[1],3},{d->authority_fd,4}};
-    uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     const char *operation="channel-inherit";
     if (!fcntl(pair[1],F_SETFD,0)) {
         index=desk_add_client(d,pair[0]);
-        if (index>=0) {
-            if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_BEGIN,0,click_ns/1000);
-            operation="spawn";
-            pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
-        }
+        if (index>=0) operation="spawn";
         else { errno=ENOSPC; operation="client-slot"; }
     }
-    int error=errno;
+    if (index>=0 && d->launch_async) {
+        /* The slot shows the AppStarting cursor at once; its channel is
+         * neither read nor polled until the PID is bound (launch_service). */
+        launch_bind(d,index,program,click_ns);
+        d->clients[index].spawn_pending=1;
+        d->children[child].pending=1;
+        job->client=index; job->child=child; job->channel=pair[0]; job->child_fd=pair[1];
+        pthread_mutex_lock(&launcher.lock);
+        job->sequence=++launcher.sequence; job->state=LAUNCH_QUEUED;
+        pthread_cond_signal(&launcher.changed);
+        pthread_mutex_unlock(&launcher.lock);
+        d->launch_deferred=1;
+        desk_cursor_update(d);
+        return 0;
+    }
+    if (index>=0) {
+        if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_BEGIN,0,click_ns/1000);
+        pid=ciuki_spawn(job->program.path,job->argv,job->env,job->mapping,job->mappings,0);
+    }
+    error=errno;
     close(pair[1]);
     if (pid<0) {
         if (index>=0) desk_drop_client(d,index); else close(pair[0]);
@@ -407,17 +557,83 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     /* Bind launch ownership before accepting the first kernel-stamped message.
      * This also permits cleanup if a child exits without ever sending HELLO. */
     d->clients[index].pid=(uint32_t)pid;
-    snprintf(d->clients[index].application,sizeof(d->clients[index].application),"%s",program->name);
-    d->clients[index].program=kind;
-    d->clients[index].taskman=tasks;
-    d->clients[index].gfxdemo=!strcmp(program->name,"gfxdemo");
-    d->clients[index].dosbox=!strcmp(program->name,"dosbox");
-    d->clients[index].mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
-    d->clients[index].awaiting_frame=graphical;
-    d->clients[index].launched_ns=monotonic();
-    d->clients[index].launch_input_ns=click_ns;
+    launch_bind(d,index,program,click_ns);
     d->children[child].pid=(uint32_t)pid;
     return pid;
+}
+/* One line per worker launch, also in quiet boots (the trial had none):
+ * the queue wait from the click and the kernel's spawn time. */
+static void launch_timing_record(const struct launch_job *job)
+{
+    char line[200];
+    uint64_t queued=job->begin_ns>job->click_ns ? job->begin_ns-job->click_ns : 0;
+    uint64_t spawn=job->end_ns>job->begin_ns ? job->end_ns-job->begin_ns : 0;
+    int n=snprintf(line,sizeof(line),"[desktop] launch name=%.40s pid=%d error=%d queue_ms=%llu spawn_ms=%llu",
+                   job->program.name,job->pid<0 ? 0 : (int)job->pid,job->pid<0 ? job->error : 0,
+                   (unsigned long long)(queued/1000000u),(unsigned long long)(spawn/1000000u));
+    if (n<=0 || (size_t)n>=sizeof(line)) return;
+#ifdef __i386__
+    (void)ciuki_raw_debug_write(CU_PTR(line),(uint32_t)n,0,0,0,0);
+#else
+    (void)write(STDERR_FILENO,line,(size_t)n);
+    (void)write(STDERR_FILENO,"\n",1);
+#endif
+}
+/* Input thread: an exit reaped while a spawn may still be unbound. */
+static void launch_note_exit(struct desktop *d, uint32_t pid)
+{
+    for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid==pid || d->clients[i].pid==pid) return;
+    if (!launcher.started || !launcher_inflight()) return;
+    launcher.exited[launcher.exited_next++%LAUNCH_EXITS]=pid;
+}
+static int launch_exited(uint32_t pid)
+{
+    for (unsigned i=0;i<LAUNCH_EXITS;i++) if (launcher.exited[i]==pid) { launcher.exited[i]=0; return 1; }
+    return 0;
+}
+/* Input thread, every turn: bind the PIDs of completed spawns or report
+ * their failure. Returns the number of completions. */
+static unsigned launch_service(struct desktop *d)
+{
+    if (!launcher.started) return 0;
+    struct launch_job done[DESK_CLIENTS];
+    unsigned count=0;
+    pthread_mutex_lock(&launcher.lock);
+    for (;;) {
+        struct launch_job *next=NULL;
+        for (unsigned i=0;i<DESK_CLIENTS;i++) {
+            struct launch_job *j=&launcher.jobs[i];
+            if (j->state==LAUNCH_DONE && (!next || (int)(j->sequence-next->sequence)<0)) next=j;
+        }
+        if (!next) break;
+        done[count++]=*next; next->state=LAUNCH_FREE;
+    }
+    pthread_mutex_unlock(&launcher.lock);
+    for (unsigned k=0;k<count;k++) {
+        struct launch_job *job=&done[k];
+        launch_timing_record(job);
+        close(job->child_fd);
+        d->children[job->child].pending=0;
+        struct desk_client *c=job->client>=0 ? &d->clients[job->client] : NULL;
+        int live=c && c->channel==job->channel && c->spawn_pending;
+        if (job->pid<0) {
+            if (live) desk_drop_client(d,job->client); /* a dropped slot already closed its channel */
+            (void)launch_failed(&job->program,job->error,"spawn");
+            desk_launch_completed(d,&job->request,job->program.name,-job->error);
+            continue;
+        }
+        uint32_t pid=(uint32_t)job->pid;
+        int gone=launch_exited(pid);
+        if (live) {
+            c->spawn_pending=0; c->pid=pid;
+            c->launched_ns=monotonic(); /* AppStarting runs from the process's creation */
+        }
+        if (!gone) d->children[job->child].pid=pid;
+        desk_launch_completed(d,&job->request,job->program.name,(int)pid);
+        if (gone && live) desk_drop_client(d,job->client);
+    }
+    if (count) desk_cursor_update(d);
+    return count;
 }
 void desk_v3_fixture_report(const char *line);
 /* f6-18 GATE_BROWSER: start /Programs/netsurf --channel-fd=3 --test=browser <url>
@@ -1397,12 +1613,14 @@ static int run_command(struct desktop *d, char *line)
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         const char *args[6]; unsigned arguments=count-1<6 ? count-1 : 6;
         for (unsigned a=0;a<arguments;a++) args[a]=words[a+1];
+        desk_launch_origin(d,DESK_LAUNCH_RUN,name);
         int pid=arguments ? desk_task_launch_args(d,name,args,arguments) : desk_task_launch(d,name,NULL);
         int error=pid<0 ? -pid : 0;
         if (pid<0) {
             char text[160]; snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(error),error);
             desk_shell_message(d,"Run",text,1);
-        } else snprintf(d->notice,sizeof(d->notice),"Started %.32s (PID %d)",name,pid);
+        } else if (!pid) snprintf(d->notice,sizeof(d->notice),"Starting %.32s",name); /* fx-8: completes later */
+        else snprintf(d->notice,sizeof(d->notice),"Started %.32s (PID %d)",name,pid);
         return pid;
     }
     char text[200];
@@ -2009,6 +2227,8 @@ static void shell_setup(struct desktop *d, int gate)
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
     if (!gate) desktop_watchdog_start(d);
+    /* fx-8: ordinary desktops spawn on the launcher worker. */
+    if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
 int main(int argc, char **argv)
 {
@@ -2263,13 +2483,14 @@ int main(int argc, char **argv)
         desktop_stage(STALL_IPC);
         for (int i=0; i<DESK_CLIENTS; i++) {
             struct desk_client *c=&d->clients[i];
-            for (unsigned n=0; n<16 && c->channel>=0 && !c->v3_peer; n++) {
+            for (unsigned n=0; n<16 && c->channel>=0 && !c->v3_peer && !c->spawn_pending; n++) {
                 struct ciuki_message m;
+                desktop_wait("ipc-recv");
                 int r=ciuki_channel_recv(c->channel,&m,DONTWAIT);
-                if (r==1) desk_receive(d,i,&m);
+                if (r==1) { desktop_wait("ipc-message"); desk_receive(d,i,&m); }
                 else { if (!r || (errno!=EAGAIN && errno!=EINTR)) desk_drop_client(d,i); break; }
             }
-            desk_flush(d,i);
+            desktop_wait("ipc-flush"); desk_flush(d,i);
         }
         d->drain_ns=monotonic();
         if (!gate && fifo_count==0) {
@@ -2285,6 +2506,7 @@ int main(int argc, char **argv)
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
         desktop_stage(STALL_LAUNCH);
         launch_pending(d);
+        launch_service(d);   /* fx-8: bind or report spawns the launcher worker completed */
         desktop_stage(STALL_SHELL);
         if (d->sh.want_reload&1) desktop_input_pending();
         shell_service(d);
@@ -2388,7 +2610,11 @@ int main(int argc, char **argv)
          * owns evidence/ticks/ledgers; these lines are application output only. */
         if (!gate && victim_pid<0) {
             int status, pid;
-            while ((pid=waitpid(-1,&status,WNOHANG))>0) { desk_w32_child_exited(d,(uint32_t)pid,status); desk_child_exited(d,(uint32_t)pid,status); }
+            launch_service(d);
+            while ((pid=waitpid(-1,&status,WNOHANG))>0) {
+                launch_note_exit(d,(uint32_t)pid);
+                desk_w32_child_exited(d,(uint32_t)pid,status); desk_child_exited(d,(uint32_t)pid,status);
+            }
         }
         if (gate && d->shell) for (int i=0; i<DESK_CLIENTS; i++) if (d->children[i].pid) {
             int status, pid=(int)d->children[i].pid;
@@ -2440,7 +2666,7 @@ int main(int argc, char **argv)
         struct pollfd fds[DESK_CLIENTS+2]; unsigned nfds=0;
         fds[nfds++]=(struct pollfd){d->input,POLLIN,0};
         fds[nfds++]=(struct pollfd){desktop_completion.fd[0],POLLIN,0};
-        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0)
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0 && !d->clients[i].spawn_pending)
             fds[nfds++]=(struct pollfd){d->clients[i].channel,POLLIN | (d->clients[i].tx_count ? POLLOUT : 0),0};
         int ready=poll(fds,nfds,du_wait_ms(sleep_now,wait==UINT64_MAX ? UINT64_MAX : sleep_now+wait));
         if (ready<0 && errno!=EINTR) return 1;

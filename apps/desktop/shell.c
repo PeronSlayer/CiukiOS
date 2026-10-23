@@ -608,6 +608,7 @@ int desk_launch_game(struct desktop *d, int index, const char *kernel)
     snprintf(name, sizeof(name), "--name=%s", desk_games[index].title);
     snprintf(choice, sizeof(choice), "--dos-kernel=%s", kernel ? kernel : "");
     const char *args[] = {name, choice, desk_games[index].command};
+    desk_launch_origin(d, DESK_LAUNCH_GAME, desk_games[index].title);
     int r = kernel ? desk_task_launch_args(d, "dosbox", args, 3) :
                      desk_task_launch_args(d, "dosbox", (const char *const[]){name, desk_games[index].command}, 2);
     if (r < 0) {

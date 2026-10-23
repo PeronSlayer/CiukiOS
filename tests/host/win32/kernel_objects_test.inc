@@ -4,7 +4,7 @@ static struct proc_thread *object_process(struct process *parent, struct process
     make_pe(pe_data, false);
     make_pe(loader_data, true);
     loader_missing = false;
-    static const struct ciuki_file_ops ops = { loader_open };
+    static const struct ciuki_file_ops ops = { .open = loader_open };
     proc_set_file_ops(&ops);
     struct proc_strings *s = proc_strings_new();
     CHECK(s);

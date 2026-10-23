@@ -836,6 +836,91 @@ static void test_launch_reads(void)
     files_launch_verbose=false;
     puts("PASS native launch read accounting: short read, EOF, batched immutable snapshot once, stop at first frame");
 }
+/* fx-8: an executable's snapshot holds the bytes the loader reads, not its
+ * debug sections. Layout of the built-in programs (readelf): headers, R+X
+ * text, R rodata, RW data, then DWARF and the section table at the end.
+ * The pre-fx-8 snapshot read the whole file (NetSurf 13.5 MB for 2.6 MB of
+ * PT_LOAD bytes; 3.9 s on the T23 trial 423b803a). */
+static void test_launch_sparse(void)
+{
+    const uint32_t text=3*PAGE_SIZE+100, rodata=2*PAGE_SIZE+7, data=PAGE_SIZE+9, debug=1536*1024;
+    const uint32_t text_off=PAGE_SIZE, rodata_off=5*PAGE_SIZE, data_off=8*PAGE_SIZE, debug_off=10*PAGE_SIZE;
+    const uint32_t shoff=debug_off+debug, bytes=shoff+5*sizeof(struct elf_shdr);
+    uint8_t *file=calloc(1,bytes), *readback=malloc(bytes); CHECK(file && readback);
+    for (uint32_t i=PAGE_SIZE;i<shoff;i++) file[i]=(uint8_t)(i*13+(i>>9));
+    struct elf_header h={.ident={0x7f,'E','L','F',1,1,1},.type=2,.machine=3,.version=1,
+        .entry=CIUKI_IMAGE_BASE,.phoff=sizeof(h),.shoff=shoff,.ehsize=sizeof(h),
+        .phentsize=sizeof(struct elf_phdr),.phnum=4,.shentsize=sizeof(struct elf_shdr),.shnum=5};
+    struct elf_phdr ph[4]={
+        {1,text_off,CIUKI_IMAGE_BASE,CIUKI_IMAGE_BASE,text,text,5,PAGE_SIZE},
+        {1,rodata_off,CIUKI_IMAGE_BASE+4*PAGE_SIZE,0,rodata,rodata,4,PAGE_SIZE},
+        {1,data_off,CIUKI_IMAGE_BASE+8*PAGE_SIZE,0,data,data+3*PAGE_SIZE,6,PAGE_SIZE},
+        {0x6474e551,0,0,0,0,0,6,0}};
+    struct elf_shdr sh[5]={{0},{.type=1,.offset=text_off,.size=text},{.type=1,.offset=rodata_off,.size=rodata},
+        {.type=8,.offset=data_off+data,.size=3*PAGE_SIZE},{.type=1,.offset=debug_off,.size=debug}};
+    memcpy(file,&h,sizeof(h)); memcpy(file+sizeof(h),ph,sizeof(ph)); memcpy(file+shoff,sh,sizeof(sh));
+    int fd=file_open(client,"/launch-sparse.elf",O_CREAT|O_RDWR,0666); CHECK(fd>=0);
+    for (uint32_t at=0;at<bytes;at+=BLKDEV_READ_BYTES) {
+        uint32_t n=bytes-at<BLKDEV_READ_BYTES ? bytes-at : BLKDEV_READ_BYTES;
+        CHECK(io(fd,file+at,n,true,true,at)==(int)n);
+    }
+    cache_invalidate(&cache,&disk[0].dev,false);
+    files_launch_verbose=true; client->launch=(struct proc_launch){.active=true};
+    unsigned pages=pages_used;
+    struct ciuki_file snapshot; CHECK(!image_open(client->cwd,"/launch-sparse.elf",&snapshot));
+    /* First 64 KiB run (headers, text, rodata, data) plus the section table's page. */
+    uint64_t read=client->launch.volume_bytes;
+    printf("fx-8 snapshot: file=%u read_bytes=%llu read_requests=%llu pages=%u (loadable %u)\n",bytes,
+           (unsigned long long)read,(unsigned long long)client->launch.volume_reads,pages_used-pages,text+rodata+data);
+    CHECK(snapshot.bytes==bytes && read==BLKDEV_READ_BYTES+(bytes-shoff) && client->launch.volume_reads==2);
+    CHECK(read*10<bytes);   /* the whole-file snapshot read 1.6 MB here */
+    CHECK(!snapshot.read(snapshot.cookie,text_off,readback,text) && !memcmp(readback,file+text_off,text));
+    CHECK(!snapshot.read(snapshot.cookie,shoff,readback,sizeof(sh)) && !memcmp(readback,file+shoff,sizeof(sh)));
+    CHECK(snapshot.read(snapshot.cookie,debug_off+32*PAGE_SIZE,readback,16)==-ENOEXEC);   /* past the first run */
+    /* The loader's own reads are satisfied: validation and the mapped bytes. */
+    struct elf_image im; CHECK(!elf_validate(&snapshot,&im) && im.count==3);
+    struct uaddr u; CHECK(!ua_init(&u,&u)); CHECK(!elf_load(&snapshot,&im,&u));
+    CHECK(!ua_read(&u,readback,CIUKI_IMAGE_BASE,text) && !memcmp(readback,file+text_off,text));
+    CHECK(!ua_read(&u,readback,CIUKI_IMAGE_BASE+4*PAGE_SIZE,rodata) && !memcmp(readback,file+rodata_off,rodata));
+    CHECK(!ua_read(&u,readback,CIUKI_IMAGE_BASE+8*PAGE_SIZE,data+3*PAGE_SIZE) && !memcmp(readback,file+data_off,data));
+    for (uint32_t i=data;i<data+3*PAGE_SIZE;i++) CHECK(!readback[i]);
+    ua_destroy(&u); snapshot.close(snapshot.cookie);
+    CHECK(pages_used==pages);
+    /* Segments past the first run and a section table inside a segment. */
+    struct elf_phdr far=ph[2]; far.offset=debug_off+64*PAGE_SIZE; far.filesz=PAGE_SIZE; far.memsz=PAGE_SIZE;
+    memcpy(file+sizeof(h)+2*sizeof(struct elf_phdr),&far,sizeof(far));
+    CHECK(io(fd,file,PAGE_SIZE,true,true,0)==PAGE_SIZE);
+    cache_invalidate(&cache,&disk[0].dev,false); client->launch=(struct proc_launch){.active=true};
+    CHECK(!image_open(client->cwd,"/launch-sparse.elf",&snapshot));
+    CHECK(client->launch.volume_bytes==BLKDEV_READ_BYTES+PAGE_SIZE+(bytes-shoff) && client->launch.volume_reads==3);
+    CHECK(!elf_validate(&snapshot,&im) && !ua_init(&u,&u) && !elf_load(&snapshot,&im,&u));
+    CHECK(!ua_read(&u,readback,CIUKI_IMAGE_BASE+8*PAGE_SIZE,PAGE_SIZE) && !memcmp(readback,file+far.offset,PAGE_SIZE));
+    ua_destroy(&u); snapshot.close(snapshot.cookie);
+    /* Digests (the F2 app gate's provenance) open every byte. */
+    client->launch=(struct proc_launch){.active=true};
+    CHECK(!image_open_whole(client->cwd,"/launch-sparse.elf",&snapshot) && client->launch.volume_bytes==bytes);
+    CHECK(!snapshot.read(snapshot.cookie,0,readback,bytes) && !memcmp(readback,file,bytes));
+    snapshot.close(snapshot.cookie);
+    /* Not an ELF header the loader accepts: the whole file, as before. */
+    file[0]='M'; file[1]='Z'; CHECK(io(fd,file,2,true,true,0)==2);
+    client->launch=(struct proc_launch){.active=true};
+    CHECK(!image_open(client->cwd,"/launch-sparse.elf",&snapshot));
+    CHECK(client->launch.volume_bytes==bytes);
+    CHECK(!snapshot.read(snapshot.cookie,0,readback,bytes) && !memcmp(readback,file,bytes));
+    snapshot.close(snapshot.cookie);
+    /* A section table that leaves the file keeps elf_validate's refusal. */
+    file[0]=0x7f; file[1]='E'; ((struct elf_header *)file)->shoff=bytes-8; CHECK(io(fd,file,sizeof(h),true,true,0)==sizeof(h));
+    client->launch=(struct proc_launch){.active=true};
+    CHECK(!image_open(client->cwd,"/launch-sparse.elf",&snapshot));
+    CHECK(client->launch.volume_bytes==bytes && elf_validate(&snapshot,&im)==-ENOEXEC);
+    snapshot.close(snapshot.cookie);
+    CHECK(pages_used==pages);
+    memset(&client->launch,0,sizeof(client->launch)); files_launch_verbose=false;
+    CHECK(!file_close(client,fd)); CHECK(!remove_path_native("/launch-sparse.elf",false));
+    free(file); free(readback);
+    puts("PASS fx-8 executable snapshot: loader byte set only (headers, PT_LOAD, section table), forward runs, "
+         "unchanged ELF validation/load, whole file for non-ELF and malformed headers, no page leak");
+}
 static void test_launch_throughput(void)
 {
     const unsigned bytes=1024*1024;
@@ -1350,7 +1435,7 @@ int main(int argc, char **argv)
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
-    test_launch_reads(); test_launch_throughput();
+    test_launch_reads(); test_launch_throughput(); test_launch_sparse();
     test_registry_commit(); test_setup_metadata();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());

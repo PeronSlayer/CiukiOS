@@ -87,7 +87,7 @@ static int run_core(const char *name, const char *mode)
     rec_emit(name,"DATA","case=fixture sha256=%s bytes=%u",hash,exe_image.bytes);
     struct process *parent=0,*p=0;bool pass=core_spawn(proc_supervisor(),&native_image,"p",&parent)>0;
     if (pass) {
-        const struct ciuki_file_ops ops={core_open}, *old=proc_get_file_ops();
+        const struct ciuki_file_ops ops={.open=core_open}, *old=proc_get_file_ops();
         proc_set_file_ops(&ops);
         pass=core_spawn(parent,&exe_image,mode,&p)>0;
         proc_set_file_ops(old);

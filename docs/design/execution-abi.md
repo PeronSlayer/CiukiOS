@@ -951,6 +951,17 @@ PIE and unresolved dynamic relocation requirements MUST be rejected. Loading
 MUST hold a consistent file snapshot against concurrent writes/truncation;
 failure MUST free all provisional resources without publishing a child.
 
+**[F2, fx-8]** The snapshot MAY hold only the bytes the loader reads: the ELF
+header, the program-header table, the section-header table and each PT_LOAD's
+`p_offset..p_offset+p_filesz`; a file whose header is not a plausible ELF32
+header (PE images, malformed headers) is snapshotted whole, so every
+validation result is unchanged. Callers that read the whole file (digests)
+use the whole-file open. Sections such as DWARF are never needed for
+execution: Linux `load_elf_binary` reads only the ELF and program headers and
+maps PT_LOAD segments ([fs/binfmt_elf.c](https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c)).
+Measured on the T23 trial of image 423b803a: the whole-file snapshot read
+13.5 MB for NetSurf's 2.6 MB of PT_LOAD bytes (3.9 s at about 3.2 MB/s).
+
 **[F2]** Main stack reservation MUST remain `0xbfc00000..0xbfffffff`. Its
 usable default range MUST be `0xbff00000..0xbfffffff` (1 MiB); the guard at
 `0xbfeff000..0xbfefffff` and remaining reservation MUST stay unmapped. Backing

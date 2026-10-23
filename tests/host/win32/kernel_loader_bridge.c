@@ -159,7 +159,7 @@ void w32_kernel_model_init(const char *root, uint32_t *pid, uint32_t *tid) {
                              .protect = W32_PAGE_READWRITE};
     CHECK(!w32_vm_alloc(model_process->memory, &a));
     record_va = a.address;
-    static const struct ciuki_file_ops ops = {disk_open};
+    static const struct ciuki_file_ops ops = {.open = disk_open};
     proc_set_file_ops(&ops);
     CHECK(strlen(root) < sizeof(model_root));
     strcpy(model_root, root);

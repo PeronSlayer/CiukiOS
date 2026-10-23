@@ -223,6 +223,7 @@ int desk_autoplay_launch(struct desktop *d)
     a->phase=AP_IDLE;
     if (!current_media(a) || !desk_autoplay_enabled(d,action)) return 0;
     int pid=0;
+    desk_launch_origin(d,DESK_LAUNCH_AUTOPLAY,NULL);
     if (action==AP_FOLDER) pid=desk_task_launch(d,"files",a->content.root);
     if (action==AP_MUSIC && a->content.cd_audio) {
         struct desk_launch_record *r=calloc(1,sizeof(*r));
@@ -236,6 +237,7 @@ int desk_autoplay_launch(struct desktop *d)
     } else if (action==AP_MUSIC) pid=desk_task_launch(d,"music",a->content.music);
     if (action==AP_PICTURES) pid=desk_task_launch(d,"viewer",a->content.picture);
     if (action==AP_RUN) { const char *args[]={a->content.command}; pid=desk_task_launch_args(d,"dosbox",args,1); }
+    memset(&d->launch_request,0,sizeof(d->launch_request)); /* the CD Player route does not consume it */
     if (pid<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
     else remember(d);
     return pid;

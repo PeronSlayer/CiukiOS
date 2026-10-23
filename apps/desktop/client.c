@@ -816,11 +816,22 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
         int terminal_end = terminal && p.opcode == DESK_END_TASK && !p.window_id && p.pid;
+        /* fx-8: a queued launch owes this TASK_RESULT; it is sent when the
+         * launcher worker completes, to this requester only. */
+        d->launch_deferred = 0;
+        if (p.opcode == DESK_LAUNCH) {
+            desk_launch_origin(d, DESK_LAUNCH_CLIENT, NULL);
+            struct desk_launch_request *r = &d->launch_request;
+            r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
+            r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
+        }
         int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :
             c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
+        int deferred = p.opcode == DESK_LAUNCH && !result && d->launch_deferred;
+        memset(&d->launch_request, 0, sizeof(d->launch_request)); d->launch_deferred = 0;
         /* Outside the desktop's child group use its existing kernel authority.
          * Protect PID 1 and the desktop even if a provider is misconfigured. */
         if (terminal_end && result == -EPERM && p.pid != 1 && p.pid != d->self_pid && !d->power.state)
@@ -835,6 +846,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             if (p.opcode == DESK_END_TASK && !result && d->tasks_stage == 4 &&
                 p.window_id == d->tasks_demo_window) d->tasks_stage = 5;
         }
+        if (deferred) break;
         /* The launcher may have reused this slot's neighbours; c stays valid. */
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, p.opcode); desk_put32(reply.data + 12, (uint32_t)result);
@@ -1170,67 +1182,122 @@ static void launch_clear(struct desktop *d)
     d->launch_arg=NULL;
     memset(d->launch_argv,0,sizeof(d->launch_argv));
 }
+/* fx-8: the origin applies to the one launch that follows; every return of
+ * the public launchers forgets it, including refusals before d->launch. */
+static int launch_done(struct desktop *d, int result)
+{
+    memset(&d->launch_request,0,sizeof(d->launch_request));
+    return result;
+}
+void desk_launch_origin(struct desktop *d, unsigned origin, const char *label)
+{
+    memset(&d->launch_request,0,sizeof(d->launch_request));
+    d->launch_request.origin=origin;
+    if (label) snprintf(d->launch_request.label,sizeof(d->launch_request.label),"%s",label);
+}
 /* All launch routes replace the entire one-shot payload, including on failure.
  * A previous single-file/page argument and a vector must never be combined. */
 static int task_launch(struct desktop *d,const struct desk_program *program,
                        const char *argument,const char *const *args,unsigned count)
 {
     launch_clear(d);
+    d->launch_deferred=0;
     if (d->power.state) return -EBUSY;
     if (!d->launch) return -ENOSYS;
     d->launch_arg=argument && argument[0] ? argument : NULL;
     for (unsigned a=0;a<count;a++) d->launch_argv[a]=args[a];
+    errno=0;
     int pid=d->launch(d,program), error=errno;
     launch_clear(d);
+    if (!pid && !d->launch_deferred) return -EIO;   /* a launcher must not return 0 unless it queued */
     return pid<0 ? -(error ? error : EIO) : pid;
 }
 int desk_task_launch_args(struct desktop *d, const char *name, const char *const *args, unsigned count)
 {
     if (!args || !count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) {
-        launch_clear(d); return -EINVAL;
+        launch_clear(d); return launch_done(d,-EINVAL);
     }
     const char *copy[6];
     for (unsigned a=0;a<count;a++) copy[a]=args[a];
     launch_clear(d);
-    if (d->power.state) return -EBUSY;
+    if (d->power.state) return launch_done(d,-EBUSY);
     if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name))
-        return task_launch(d,&d->programs[k],NULL,copy,count);
-    return -ENOENT;
+        return launch_done(d,task_launch(d,&d->programs[k],NULL,copy,count));
+    return launch_done(d,-ENOENT);
 }
 int desk_task_launch(struct desktop *d, const char *name, const char *argument)
 {
     launch_clear(d);
-    if (d->power.state) return -EBUSY;
+    if (d->power.state) return launch_done(d,-EBUSY);
     if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name))
-        return task_launch(d,&d->programs[k],argument,NULL,0);
-    return -ENOENT;
+        return launch_done(d,task_launch(d,&d->programs[k],argument,NULL,0));
+    return launch_done(d,-ENOENT);
 }
 
 int desk_ide_launch(struct desktop *d,const char *path)
 {
     launch_clear(d);
-    if (d->power.state) return -EBUSY;
+    if (d->power.state) return launch_done(d,-EBUSY);
     size_t n=strlen(path);
-    if (n<=11 || n>DESK_ARG_MAX || strncmp(path,"/Documents/",11)) return -EPERM;
+    if (n<=11 || n>DESK_ARG_MAX || strncmp(path,"/Documents/",11)) return launch_done(d,-EPERM);
     const char *start=path+11;
     for (const char *p=start;;++p) {
         unsigned char ch=(unsigned char)*p;
         if (!ch || ch=='/') {
             size_t len=(size_t)(p-start);
-            if (!len || (len==1 && *start=='.') || (len==2 && start[0]=='.' && start[1]=='.')) return -EINVAL;
+            if (!len || (len==1 && *start=='.') || (len==2 && start[0]=='.' && start[1]=='.')) return launch_done(d,-EINVAL);
             if (!ch) break;
             start=p+1;
-        } else if (ch<32 || ch>126 || ch=='\\' || ch==':') return -EINVAL;
+        } else if (ch<32 || ch>126 || ch=='\\' || ch==':') return launch_done(d,-EINVAL);
     }
-    if (!d->launch) return -ENOSYS;
+    if (!d->launch) return launch_done(d,-ENOSYS);
     /* The ordinary launcher owns channel creation, child tracking and reap.
        Kernel ELF validation still admits/rejects the actual file. A generic
        project app gets no Task Manager, mixer, Files or IDE privileges. */
     struct desk_program program={0};
     strcpy(program.name,"ciukide-app"); memcpy(program.path,path,n+1);
-    return task_launch(d,&program,NULL,NULL,0);
+    return launch_done(d,task_launch(d,&program,NULL,NULL,0));
+}
+/* fx-8: a launch that completed on the launcher worker. The synchronous
+ * routes reported their own failures; this reports the late result the
+ * same way: the client's TASK_RESULT (sent only to the same requester),
+ * the Run and Games messages, AutoPlay's message, else a notification. */
+void desk_launch_completed(struct desktop *d, const struct desk_launch_request *r, const char *name, int result)
+{
+    char text[200];
+    switch (r->origin) {
+    case DESK_LAUNCH_CLIENT: {
+        if (r->client<0 || r->client>=DESK_CLIENTS) return;
+        struct desk_client *c=&d->clients[r->client];
+        if (c->channel!=r->channel || c->channel<0 || c->pid!=r->pid || c->spawn_pending) return;
+        if (r->recent && result>0 && d->shell && !d->sh.gate) { cfg_recent_add(&d->sh.cfg, r->argument); d->sh.want_save = 1; }
+        struct ciuki_message reply;
+        desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, r->serial);
+        desk_put32(reply.data + 8, r->opcode); desk_put32(reply.data + 12, (uint32_t)result);
+        desk_queue(d, r->client, &reply);
+        return;
+    }
+    case DESK_LAUNCH_RUN:
+        if (result<0) {
+            snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(-result),-result);
+            desk_shell_message(d,"Run",text,1);
+        }
+        return;
+    case DESK_LAUNCH_GAME:
+        if (result<0) {
+            snprintf(text,sizeof(text),"'%s' could not be started (error %d).",r->label[0] ? r->label : name,-result);
+            desk_shell_message(d,"Games",text,1);
+        }
+        return;
+    case DESK_LAUNCH_AUTOPLAY:
+        if (result<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
+        return;
+    default:
+        if (result<0) desk_shell_notify_error(d,"Program did not start",-result);
+        return;
+    }
 }
 
 /* Shutdown is driven by the ordinary IPC/reap/paint loop, never by sleeps.
