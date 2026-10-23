@@ -215,6 +215,9 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
         errno=blocked_sends++%2 ? EAGAIN : EINTR; return -1;
     }
     if (flush_timeout && m->data[1]==DESK_CONFIGURE) { errno=EAGAIN; return -1; }
+    /* f2-98c: a one-byte completion token (libdeskui/completion.h) is a wake on the
+     * desktop's own pair, not a protocol message for the peer. */
+    if (m->length==1 && !m->fd_count) return 0;
     if (handshake) {
         struct ciuki_message delivered=*m; delivered.sender_pid=41;
         assert(fwrite(&delivered,sizeof(delivered),1,server_messages)==1);

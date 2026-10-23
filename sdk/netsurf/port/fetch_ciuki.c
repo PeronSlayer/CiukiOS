@@ -34,6 +34,26 @@ static void observe(struct ciuki_fetch *f)
     int tls=f->job && f->job->secure ? (int)f->job->tls_error : -1;
     ciuki_test_fetch_observe(status,f->delivered,tls,f->error?f->error:f->job?f->job->error:NULL);
 }
+#ifdef CIUKI_HOST
+/* Host harness equivalents of the native channel syscalls and the browser
+ * wait hook (target: kernel syscalls and nsfb_surface.c). A channel pair is a
+ * socketpair; only the one-byte wake tokens of completion.h cross it. */
+#include <sys/socket.h>
+__attribute__((weak)) int (*ciuki_browser_wait)(int,int);
+__attribute__((weak)) int ciuki_channel_pair(int *fds)
+{ int s[2];if(socketpair(AF_UNIX,SOCK_STREAM,0,s))return -1;fds[0]=s[0];fds[1]=s[1];return 0; }
+__attribute__((weak)) int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
+{
+    (void)m;ssize_t n=send(fd,"x",1,MSG_NOSIGNAL|((flags&DONTWAIT)?MSG_DONTWAIT:0));
+    return n==1?0:-1;
+}
+__attribute__((weak)) int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
+{
+    char c;ssize_t n=recv(fd,&c,1,(flags&DONTWAIT)?MSG_DONTWAIT:0);
+    if(n==1){memset(m,0,sizeof(*m));m->length=1;m->data[0]=(unsigned char)c;return 1;}
+    return n==0?0:-1;
+}
+#endif
 static struct ciuki_net *network;
 static struct du_completion completion;
 static int completion_live;

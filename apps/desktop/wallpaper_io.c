@@ -364,14 +364,18 @@ int desk_wall_worker_start(struct desk_wall_worker *w, const char *dir, void (*s
 }
 unsigned desk_wall_worker_submit(struct desk_wall_worker *w, const struct desk_wall_request *r)
 {
-    pthread_mutex_lock(&w->lock);
+    /* With a completion notification the mailbox lock is short and blocking (a failed
+     * trylock would strand the request: nothing wakes the event-driven loop to retry). */
+    if (w->notify) pthread_mutex_lock(&w->lock);
+    else if (pthread_mutex_trylock(&w->lock)) return 0;
     w->request=*r; if (!++w->serial) ++w->serial;
     unsigned serial=w->serial; w->pending=1; w->ready=0;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock); return serial;
 }
 int desk_wall_worker_take(struct desk_wall_worker *w, unsigned serial, uint32_t **pixels, int *error, int *hit)
 {
-    pthread_mutex_lock(&w->lock);
+    if (w->notify) pthread_mutex_lock(&w->lock);
+    else if (pthread_mutex_trylock(&w->lock)) return 0;
     int ready=w->ready && w->completed_serial==serial;
     if (ready) { *pixels=w->pixels; w->pixels=NULL; *error=w->error; *hit=w->cache_hit; w->ready=0; }
     pthread_mutex_unlock(&w->lock); return ready;
