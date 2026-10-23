@@ -43,6 +43,7 @@ struct u32_window {
   RECT rect;
   UINT z;
   uint32_t wire, generation, serial, ping;
+  uint32_t limits[4]; /* G4: WM_GETMINMAXINFO track sizes the desktop was told (client pixels) */
   struct u32_surface surface;
   struct u32_region update, damage;
   struct u32_prop *props;

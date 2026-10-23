@@ -127,8 +127,14 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4);
         p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->scale=desk_get32(b+16);
         p->flags=desk_get32(b+20); p->style=desk_get32(b+24);
-        if (p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
+        if (p->flags>3 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
         expected=28; break;
+    case DESK_V3_LIMITS:
+        if (!client || n!=16) return 0;
+        p->min_width=desk_get32(b); p->min_height=desk_get32(b+4); p->max_width=desk_get32(b+8); p->max_height=desk_get32(b+12);
+        if (p->min_width>2048 || p->min_height>2048 || p->max_width>2048 || p->max_height>2048 ||
+            (p->max_width && p->min_width>p->max_width) || (p->max_height && p->min_height>p->max_height)) return 0;
+        expected=16; break;
     case DESK_V3_WIN32_HWND:
         if(!client || n!=4 || !(p->flags=desk_get32(b)))return 0;
         expected=4;break;
@@ -218,7 +224,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->width=desk_get32(b); p->height=desk_get32(b+4); p->scale=desk_get32(b+8); p->serial=desk_get32(b+12);
         p->x=(int32_t)desk_get32(b+16); p->y=(int32_t)desk_get32(b+20);
         p->flags=desk_get32(b+24); p->style=desk_get32(b+28);
-        if (!p->serial || p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
+        if (!p->serial || p->flags>3 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
         expected=32; break;
     case DESK_V3_RESULT:
         if (client || n!=8) return 0;

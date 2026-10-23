@@ -40,13 +40,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-82: intentional orb geometry, well and sphere changes in shell frames.
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
+# G4: the menus underline their access keys (the dialogs frames show menus).
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "058a4fbb4c4e04bf6ac01288c495745c83337b5aa7e915ac484e05598703a0bd",
-    "ciuki-blue-dialogs.ppm": "c00e28e8dabc55a2ac0088b8742dd842a9676ebd86cddf80cd69601d88edbbef",
+    "ciuki-blue-dialogs.ppm": "ff70fe2ba10899bcadc493588d97ca93070690dd2b70db6d47ce51eff0a0bfc5",
     "ciuki-blue-tray-disabled.ppm": "3b0a7e9cc1586ca34dce02ce0426e05f083634fefeff1f650f0d1384b34f7239",
     "ciuki-blue-tray-media.ppm": "a4e67c10442f7ff18bff873fc947e5152fab95e58c7062eef36ffd360025d530",
     "platinum-desktop.ppm": "3f03a4849901fe6227d7d39794d87b1a7e3fe633203ed3eccc4e3a1d16637246",
-    "platinum-dialogs.ppm": "36daf4f99be6dbb9173e469ca1897597fa04818f7fecd9aabd84f861aca07a24",
+    "platinum-dialogs.ppm": "81f3177ef03ab6b0521ace9d268d596933080e19558fabfea8f4c3bd53445b1e",
     "platinum-tray-disabled.ppm": "44f8b04ddc8ac22ad50af2812015343a74528121d2bf15a0dcdf71ee302d5844",
     "platinum-tray-media.ppm": "7709f3264ee868c51a1ad09c848b3d2fe8dd45f2baf33ed6b1f8a6f8f221c8fb"
 }

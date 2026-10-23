@@ -4882,12 +4882,19 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT
+    DESK_V3_PRESENT,
 ```
 
 16-byte damage; RESULT after frame, immediate if covered/identical
 
+G4 (WM_GETMINMAXINFO): client to desktop, 16 bytes: minimum and maximum
+track size of the client area, min-w, min-h, max-w, max-h in unscaled
+pixels, each 0 (default) or 1..2048, max >= min when both are given.
+PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
+3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED).
+
 ```c
+DESK_V3_LIMITS
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
