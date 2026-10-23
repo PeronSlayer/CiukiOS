@@ -62,6 +62,9 @@ struct fat_volume {
      * dirty or flagged an I/O error at insertion, so a clean unmount keeps
      * that indication for a later check instead of hiding it. */
     bool free_unknown, removable_trusted, dirty_preserved;
+    /* fx-17b: background count of the active FAT while free_unknown (see
+     * fat_census_step). Owned by the mounted volume; freed at removal. */
+    struct fat_census *census;
     uint32_t scan_extent, scan_passes, scan_needed_bytes, scan_available_bytes;
     uint32_t mount_ms, repair_ms, scan_ms;
     uint32_t repaired_lost, repaired_logs, repaired_copies, log_directory;
@@ -224,6 +227,15 @@ int fat_prepare_removable(struct fat_volume *, struct block_cache *, struct blkd
  * retain their write gate. */
 int fat_enable_write(struct fat_volume *);
 int fat_enable_write_removable(struct fat_volume *v);
+/* fx-17b: one bounded step (at most `budget` FAT sectors) of the background
+ * free-cluster count. Caller holds the drive reservation. Returns 1 when
+ * the count is known (or no count runs), 0 after progress, <0 on error. */
+int fat_census_step(struct fat_volume *v, unsigned budget);
+void fat_census_end(struct fat_volume *v);
+int fat_census_start(struct fat_volume *v); /* read-only volumes: count free space anyway */
+/* Free clusters for display: exact, or while counting the clusters counted
+ * free so far plus every cluster not yet counted (*known=false). */
+uint32_t fat_free_estimate(const struct fat_volume *v, bool *known);
 int fat_unmount(struct fat_volume *);
 int fat_commit(struct fat_volume *);
 int fat_scan(struct fat_volume *); /* bounded read-only ownership scan */

@@ -19,18 +19,24 @@ static int compare(const char *a, const char *b)
 int fm_same_path(const char *a, const char *b) { return !compare(a, b); }
 const char *fm_basename(const char *path) { const char *p = strrchr(path, '/'); return p ? p + 1 : path; }
 
+/* fx-17b: /mnt/<letter> is a drive for A:, B: (floppies) and D:..Z:;
+ * C: is "/", and /mnt/c is never published by the kernel. */
+static int mnt_letter(const char *path)
+{
+    if (strncmp(path, "/mnt/", 5)) return 0;
+    unsigned c = fold((unsigned char)path[5]);
+    return c >= 'a' && c <= 'z' && c != 'c' && (!path[6] || path[6] == '/') ? (int)c : 0;
+}
 int fm_drive_root(const char *path)
 {
-    return !strcmp(path, "/") || (!strncmp(path, "/mnt/", 5) &&
-           fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' && !path[6]);
+    return !strcmp(path, "/") || (mnt_letter(path) && !path[6]);
 }
 
 int fm_volume(const char *path)
 {
     if (!path || path[0] != '/') return 0;
-    if (!strncmp(path, "/mnt/", 5) && fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' &&
-        (!path[6] || path[6] == '/')) return (int)(fold((unsigned char)path[5]) - 'a' + 'A');
-    return 'C';
+    int c = mnt_letter(path);
+    return c ? c - 'a' + 'A' : 'C';
 }
 
 unsigned fm_drop_effect(int source_volume, int target_volume, unsigned keys, unsigned allowed)
@@ -81,7 +87,7 @@ int fm_posix_path(char *out, const char *in)
     if (!*in || !compare(in, "Computer")) { out[0] = 0; return 0; }
     if (in[0] != '/' && in[1] == ':') {
         unsigned drive = fold((unsigned char)in[0]);
-        if (drive < 'c' || drive > 'z' || (in[2] && in[2] != '/' && in[2] != '\\')) return -EINVAL;
+        if (drive < 'a' || drive > 'z' || (in[2] && in[2] != '/' && in[2] != '\\')) return -EINVAL;
         if (drive != 'c') { memcpy(path, "/mnt/", 5); path[5] = (char)drive; used = 6; }
         p += 2;
     } else if (in[0] != '/') return -EINVAL;
@@ -105,8 +111,7 @@ int fm_display_path(char *out, const char *in)
     if (r) return r;
     if (!path[0]) { strcpy(out, "Computer"); return 0; }
     const char *p = path + 1; char drive = 'C';
-    if (!strncmp(path, "/mnt/", 5) && fold((unsigned char)path[5]) >= 'd' &&
-        fold((unsigned char)path[5]) <= 'z' && (!path[6] || path[6] == '/')) {
+    if (mnt_letter(path)) {
         drive = (char)(fold((unsigned char)path[5]) - 'a' + 'A');
         p = path + 6; if (*p == '/') p++;
     }
@@ -122,40 +127,42 @@ int fm_display_path(char *out, const char *in)
 char fm_drive_letter(const char *path)
 {
     if (!path || path[0] != '/') return 0;
-    if (!strncmp(path, "/mnt/", 5)) {
-        unsigned c = fold((unsigned char)path[5]);
-        if (c >= 'a' && c <= 'z' && (!path[6] || path[6] == '/')) return (char)(c - 'a' + 'A');
-    }
-    return 'C';
+    return (char)fm_volume(path);
 }
-struct volumes { struct fm_meta meta[23]; uint32_t seen; };
+struct volumes { struct fm_meta meta[26]; uint32_t seen; };
 static int collect_volume(const char *name, const struct fm_meta *meta, void *ctx)
 {
     struct volumes *v = ctx;
     unsigned letter = fold((unsigned char)name[0]);
-    if (meta->type != FM_DIR || !name[0] || name[1] || letter < 'd' || letter > 'z') return 0;
+    if (meta->type != FM_DIR || !name[0] || name[1] || letter < 'a' || letter > 'z' || letter == 'c') return 0;
     uint32_t bit = 1u << (letter - 'a');
     if (v->seen & bit) return 0;
     v->seen |= bit;
-    v->meta[letter - 'd'] = *meta;
+    v->meta[letter - 'a'] = *meta;
     return 0;
 }
 
-int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx)
+/* fx-17b: slots lists drives that exist without a mounted medium (a floppy
+ * drive with no diskette: Windows 98 My Computer always shows A:). Such an
+ * entry has dev 0. Order: A:, B:, C:, then D:..Z:. */
+int fm_volumes_slots(const struct fm_vfs *fs, uint32_t slots, fm_emit emit, void *ctx)
 {
     struct fm_meta meta;
     int r = fs->stat_path(fs->ctx, "/", &meta);
     if (r) return r;
-    if ((r = emit("C:", &meta, ctx))) return r;
     struct volumes v = {0};
     r = fs->list(fs->ctx, "/mnt", FM_LIST_NAMES_ONLY, collect_volume, &v);
     if (r && r != -ENOENT) return r;
-    for (unsigned letter = 'd'; letter <= 'z'; letter++) if (v.seen & (1u << (letter - 'a'))) {
+    for (unsigned letter = 'a'; letter <= 'z'; letter++) {
         char drive[] = {(char)(letter - 'a' + 'A'), ':', 0};
-        if ((r = emit(drive, &v.meta[letter - 'd'], ctx))) return r;
+        if (letter == 'c') { if ((r = emit("C:", &meta, ctx))) return r; continue; }
+        uint32_t bit = 1u << (letter - 'a');
+        if (v.seen & bit) { if ((r = emit(drive, &v.meta[letter - 'a'], ctx))) return r; }
+        else if (slots & bit) { struct fm_meta absent = {.type = FM_DIR}; if ((r = emit(drive, &absent, ctx))) return r; }
     }
     return 0;
 }
+int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx) { return fm_volumes_slots(fs, 0, emit, ctx); }
 
 int fm_entry_path(const struct fm_model *m, unsigned index, char *out)
 {
@@ -278,12 +285,12 @@ static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
 
 /* Jobs use raw listing(): hiding belongs only to the browser, not to copies
  * or recursive deletion/properties. */
-static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *l)
+static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *l, uint32_t slots)
 {
     int r;
     if (!path[0]) {
         memset(l, 0, sizeof(*l));
-        r = fm_volumes(fs, collect, l);
+        r = fm_volumes_slots(fs, slots, collect, l);
         if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
     } else {
         memset(l, 0, sizeof(*l));
@@ -390,7 +397,7 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
 static int load(struct fm_model *m, const char *path)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, path, &l);
+    int r = browser_listing(&m->fs, path, &l, m->drive_slots);
     if (r) return r;
     free(m->entries);
     m->entries = l.entries; m->count = l.count; m->capacity = l.capacity;
@@ -431,7 +438,7 @@ int fm_navigate(struct fm_model *m, const char *path)
 int fm_refresh(struct fm_model *m)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, m->path, &l);
+    int r = browser_listing(&m->fs, m->path, &l, m->drive_slots);
     if (r) return r;
     char active[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);

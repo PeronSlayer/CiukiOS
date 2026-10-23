@@ -19,7 +19,7 @@ enum {
     C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE,
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
-    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB,
+    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_INSERT,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
@@ -132,6 +132,21 @@ static void error_box(struct files_app *a, const char *title, const char *what, 
     du_message(a->ui, D_ERROR, title, text, DU_DLG_ICON_ERROR, NULL, 0, 0, 0);
 }
 
+/* fx-17b: Windows 98 asks for the diskette instead of failing the open. */
+static void insert_disk_prompt(struct files_app *a, int drive, const char *path)
+{
+    static const char *const buttons[] = {"&Retry", "Cancel"};
+    char text[160];
+    snprintf(a->insert_path, sizeof(a->insert_path), "%s", path); a->insert_drive = drive;
+    snprintf(text, sizeof(text), "Please insert a disk into drive %c:", 'A' + drive);
+    du_message(a->ui, D_INSERT, "Files", text, DU_DLG_ICON_WARNING, buttons, 2, 0, 1);
+}
+
+/* fx-17b: A:/B: drives the controller found, listed with or without a disk. */
+static int floppy_drive(const struct files_app *a, int d)
+{ return d>=0 && d<2 && a->media.type[d]==CIUKI_MEDIA_FLOPPY; }
+static uint32_t floppy_slots(const struct files_app *a)
+{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u); }
 static void checkpoint(struct files_app *a, int stage)
 {
     if (!a->test || stage != a->stage + 1) return;
@@ -352,7 +367,7 @@ static void tree_build(struct files_app *a)
     snprintf(root->name, sizeof(root->name), "Computer");
     strcpy(root->path, FM_COMPUTER); root->depth = 0;
     root->expanded = (uint8_t)!in_set(a->collapsed, a->collapsed_count, FM_COMPUTER); root->children = 1;
-    if (root->expanded) fm_volumes(&a->model.fs, tree_drive, a);
+    if (root->expanded) fm_volumes_slots(&a->model.fs, a->model.drive_slots, tree_drive, a);
     a->tree_dirty = 0;
 }
 
@@ -368,7 +383,8 @@ static void tree_items(struct files_app *a)
         if (here) current = (int)i;
         it->text[0] = n->name;
         it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) :
-                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && a->media.type[n->name[0]-'A']==CIUKI_MEDIA_OPTICAL ? "place:optical" : "place:volume") : here ? "type:folder-open" : "type:folder", 16);
+                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && a->media.type[n->name[0]-'A']==CIUKI_MEDIA_OPTICAL ? "place:optical" :
+                                            floppy_drive(a,n->name[0]-'A') ? "place:floppy" : "place:volume") : here ? "type:folder-open" : "type:folder", 16);
         it->selected = (uint8_t)here; it->depth = (uint8_t)(n->depth > 255 ? 255 : n->depth);
         it->expanded = n->expanded; it->children = n->children;
     }
@@ -392,7 +408,7 @@ static void set_flag(struct du_menu_item *items, unsigned n, int id, unsigned fl
 
 static int media_drive(const char *path)
 {
-    if (!path || strncmp(path,"/mnt/",5) || path[5]<'d' || path[5]>'z' || (path[6] && path[6]!='/')) return -1;
+    if (!path || strncmp(path,"/mnt/",5) || path[5]<'a' || path[5]>'z' || path[5]=='c' || (path[6] && path[6]!='/')) return -1;
     return path[5]-'a';
 }
 /* Content reads are restricted to arrival/generation or label-source changes.
@@ -467,11 +483,12 @@ void files_update(struct files_app *a)
         struct fm_entry *e = &m->entries[i];
         struct files_row *t = &a->texts[i];
         if (e->meta.type == FM_DIR) t->size[0] = 0; else { kb_text(t->size, sizeof(t->size), e->meta.size); folder_bytes += e->meta.size; }
-        int drive=computer && e->name[0]>='D' && e->name[0]<='Z' ? e->name[0]-'A' : -1;
+        int drive=computer && e->name[0]>='A' && e->name[0]<='Z' && e->name[0]!='C' ? e->name[0]-'A' : -1;
+        int floppy=floppy_drive(a,drive);
         int removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
         int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
-        const char *drive_icon=optical ? "place:optical" : removable ? "place:removable" : "place:volume";
-        char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
+        const char *drive_icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
+        char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (floppy ? "3.5-Inch Floppy Disk" : optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
         const char *volume_label=drive_label(a,drive);
         if (volume_label[0]) snprintf(t->label,sizeof(t->label),"%s (%s)",volume_label,e->name);
@@ -496,6 +513,20 @@ void files_update(struct files_app *a)
     (void)folder_bytes;
     if (a->loading) snprintf(left, sizeof(left), "Loading...");
     else if (a->note[0]) snprintf(left, sizeof(left), "%s", a->note);
+    else if (selected == 1 && computer && m->active < count && m->entries[m->active].selected && a->media_space) {
+        /* fx-17b: Windows 98 My Computer shows the selected drive's free
+         * space and capacity; "calculating..." during a background count. */
+        const char *name = m->entries[m->active].name; struct ciuki_media_space space;
+        int d = name[0] >= 'A' && name[0] <= 'Z' && name[1] == ':' ? name[0] - 'A' : -1;
+        if (d >= 0 && !a->media_space((unsigned)d, &space)) {
+            char cap[48], free_text[48];
+            uint64_t cluster = space.cluster_bytes;
+            files_size_text(cap, sizeof(cap), (uint64_t)space.total_clusters * cluster);
+            if (space.flags & CIUKI_MEDIA_SPACE_COUNTING) snprintf(free_text, sizeof(free_text), "calculating...");
+            else files_size_text(free_text, sizeof(free_text), (uint64_t)space.free_clusters * cluster);
+            snprintf(left, sizeof(left), "Free Space: %s, Capacity: %s", free_text, cap);
+        } else snprintf(left, sizeof(left), "%u object(s) selected", selected);
+    }
     else if (selected) snprintf(left, sizeof(left), "%u object(s) selected", selected);
     else snprintf(left, sizeof(left), "%u object(s)", count);
     snprintf(W(a, W_STATUS)->text, DU_TEXT_MAX, "%s\t%s\t%.*s", left, size, DU_TEXT_MAX - 252, display);
@@ -758,7 +789,7 @@ static void *scan_run(void *arg)
                 struct ciuki_media_state state = a->media;
                 if (a->media_read && !scan_cancelled(s) && !a->media_read(&state)) {
                     int d = media_drive(a->model.path);
-                    int expired = d >= 3 && (a->media.removable_mask & (1u << d)) &&
+                    int expired = d >= 0 && (a->media.removable_mask & (1u << d)) &&
                         (!(state.removable_mask & (1u << d)) || a->media.generation[d] != state.generation[d]);
                     s->changed = memcmp(&state, &a->media, sizeof(state)) != 0;
                     a->media = state;
@@ -768,7 +799,18 @@ static void *scan_run(void *arg)
                 }
                 if (!scan_cancelled(s)) s->labels_changed = labels_refresh(a, s);
             }
-            if (s->kind == SCAN_NAVIGATE) s->error = fm_navigate(&a->model, s->target);
+            a->model.drive_slots = floppy_slots(a);
+            if (s->kind == SCAN_NAVIGATE) {
+                s->error = fm_navigate(&a->model, s->target);
+                /* fx-17b: Windows 98 reads a diskette when its drive is opened;
+                 * there is no insertion event. Read it once, then retry. */
+                int d = media_drive(s->target);
+                if (s->error && floppy_drive(a, d) && a->media_load && !scan_cancelled(s) && !a->media_load((unsigned)d)) {
+                    struct ciuki_media_state state = a->media;
+                    if (a->media_read && !a->media_read(&state)) { s->changed = 1; a->media = state; }
+                    s->error = fm_navigate(&a->model, s->target);
+                }
+            }
             else if (s->kind == SCAN_HISTORY) s->error = fm_history(&a->model, s->delta);
             else if (s->kind==SCAN_MEDIA && a->model.path[0]) {
                 int topology=s->changed || s->labels_changed;
@@ -829,6 +871,7 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
     b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
     b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    b->media_load = a->media_load; b->model.drive_slots = a->model.drive_slots;
     if (kind==SCAN_MEDIA && a->model.count) {
         b->model.entries=malloc(a->model.count*sizeof(*b->model.entries));
         if (!b->model.entries) { scan_free(s); return -ENOMEM; }
@@ -899,7 +942,10 @@ static void scan_poll(struct files_app *a)
     }
     a->loading = 0;
     if (s->error) {
-        if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", "Cannot open the folder.", s->error);
+        int floppy = (s->kind == SCAN_NAVIGATE || s->kind == SCAN_HISTORY) ? media_drive(s->target) : -1;
+        a->media = b->media; a->model.drive_slots = floppy_slots(a);
+        if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
+        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", "Cannot open the folder.", s->error);
     } else {
         if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || (s->changed && !s->metadata_only))) {
             struct fm_model *m = &a->model, *n = &b->model;
@@ -922,6 +968,7 @@ static void scan_poll(struct files_app *a)
             }
         }
         a->media = b->media; memcpy(a->drive_labels, b->drive_labels, sizeof(a->drive_labels));
+        a->model.drive_slots = floppy_slots(a);
         a->games_available = b->games_available;
         memcpy(a->tree, b->tree, FILES_TREE * sizeof(*a->tree)); a->tree_count = b->tree_count;
         memcpy(a->leaf, b->leaf, sizeof(a->leaf)); a->leaf_count = b->leaf_count;
@@ -1068,6 +1115,7 @@ static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *pa
     return 0;
 }
 
+static int fold_drive(char c) { return (c >= 'A' && c <= 'Z' ? c - 'A' : c - 'a'); }
 static void properties_dialog(struct files_app *a)
 {
     struct fm_job *j = &a->job;
@@ -1093,6 +1141,21 @@ static void properties_dialog(struct files_app *a)
     snprintf(text, sizeof(text), "%.200s\n---\nType:\t%s\nLocation:\t%.200s\nSize:\t%s (%s bytes)%s\n---\nModified:\t%s\nAttributes:\t%s",
              name, type, parent, size, g, contains,
              when[0] ? when : "-", meta.mode & 0200 ? "(none)" : "Read-only");
+    /* fx-17b: a drive's Properties show its capacity and free space, and
+     * "calculating" while a removable FAT32 volume's free count (FSInfo
+     * unknown) is still being computed in the background. */
+    struct ciuki_media_space space;
+    int drive = fm_drive_root(path) ? (strcmp(path, "/") ? fold_drive(path[5]) : 2) : -1;
+    if (j->count == 1 && drive >= 0 && a->media_space && !a->media_space((unsigned)drive, &space)) {
+        char cap[48], freebuf[48], used[48], line[200];
+        uint64_t cluster = space.cluster_bytes, total = (uint64_t)space.total_clusters * cluster;
+        uint64_t free_bytes = (uint64_t)space.free_clusters * cluster;
+        files_size_text(cap, sizeof(cap), total);
+        if (space.flags & CIUKI_MEDIA_SPACE_COUNTING) { snprintf(freebuf, sizeof(freebuf), "calculating..."); snprintf(used, sizeof(used), "calculating..."); }
+        else { files_size_text(freebuf, sizeof(freebuf), free_bytes); files_size_text(used, sizeof(used), total > free_bytes ? total - free_bytes : 0); }
+        snprintf(line, sizeof(line), "\n---\nUsed space:\t%s\nFree space:\t%s\nCapacity:\t%s", used, freebuf, cap);
+        size_t n = strlen(text); snprintf(text + n, sizeof(text) - n, "%s", line);
+    }
     char title[FM_NAME + 32];
     snprintf(title, sizeof(title), "%.60s Properties", j->count == 1 ? (fm_drive_root(path) ? parent : fm_basename(path)) : "Selection");
     du_message(a->ui, D_PROPERTIES, title, text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
@@ -1443,6 +1506,7 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
         if (a->job_active) progress(a);
         break;
     case D_PROGRESS: transfer_command(a, 1, -1); if (a->job_active) progress(a); break;
+    case D_INSERT: if (e->index == 0) { char p[FM_PATH]; snprintf(p, sizeof(p), "%s", a->insert_path); files_navigate(a, p); } break;
     case D_CANCEL_JOB:
         if (e->index==0) { a->close_pending=1; transfer_command(a,1,-1); }
         else if (a->close_declined) a->close_declined(a);

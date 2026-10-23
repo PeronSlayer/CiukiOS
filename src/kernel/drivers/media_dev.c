@@ -4,6 +4,10 @@
 #include <ciuki/storage.h>
 #include <ciuki/usb.h>
 
+/* fx-17b: the floppy platform is optional (no FDC, host tests). */
+bool floppy_drive_present(unsigned drive) __attribute__((weak));
+int floppy_mount(unsigned drive) __attribute__((weak));
+static bool floppy_drive(unsigned d) { return d<2 && floppy_drive_present && floppy_drive_present(d); }
 /* f5-12B2: CD audio devctls (MEDIA_CD_*) live in media_cd.c. */
 int media_cd_devctl(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes);
 int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
@@ -61,12 +65,44 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         vfs_unlock(&s->vfs);
         return copied;
     }
+    if (op==MEDIA_FLOPPY_LOAD) {
+        /* fx-17b: Retry on "Please insert a disk into drive A:". Windows 98
+         * reads a diskette on access; there is no insertion notification. */
+        struct ciuki_media_remove r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (r.size!=sizeof(r) || r.drive>=2 || r.generation) return -EINVAL;
+        if (!floppy_drive(r.drive) || !floppy_mount) return -ENODEV;
+        e=floppy_mount(r.drive);
+        return !e ? 0 : e==-FS_EBUSY ? -EBUSY : -ENXIO;
+    }
+    if (op==MEDIA_GET_SPACE) {
+        struct ciuki_media_space sp;
+        if (bytes!=sizeof(sp)) return -EINVAL;
+        int e=copy_from_user(&sp,address,bytes); if (e) return e;
+        if (sp.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (sp.size!=sizeof(sp) || sp.drive>=26 || sp.flags || sp.cluster_bytes || sp.total_clusters ||
+            sp.free_clusters || sp.reserved) return -EINVAL;
+        unsigned d=sp.drive; e=-ENOENT;
+        if (s && s->ready) {
+            vfs_lock(&s->vfs,0);
+            struct fat_volume *v=s->vfs.volumes[d];
+            if (v && v->mounted) {
+                bool known; sp.free_clusters=fat_free_estimate(v,&known);
+                sp.flags=known ? 0 : CIUKI_MEDIA_SPACE_COUNTING;
+                sp.cluster_bytes=(uint32_t)v->spc*512; sp.total_clusters=v->clusters; e=0;
+            }
+            vfs_unlock(&s->vfs);
+        }
+        return e ? e : copy_to_user(address,&sp,bytes);
+    }
     if (op==MEDIA_GET_VOLUME) {
         struct ciuki_media_volume v;
         if (bytes!=sizeof(v)) return -EINVAL;
         int e=copy_from_user(&v,address,bytes); if (e) return e;
         if (v.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
-        if (v.size!=sizeof(v) || v.drive<3 || v.drive>=26 || v.flags || v.generation ||
+        if (v.size!=sizeof(v) || v.drive==2 || v.drive>=26 || (v.drive<2 && !floppy_drive(v.drive)) || v.flags || v.generation ||
             v.reserved[0] || v.reserved[1] || v.reserved[2]) return -EINVAL;
         unsigned d=v.drive;
         memset(&v,0,sizeof(v)); v.version=CIUKI_MEDIA_VERSION; v.size=sizeof(v); v.drive=d;
@@ -107,6 +143,14 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
                 } else if (v->safely_removed && v->part.parent) {
                     state.generation[d]=v->part.parent->media_generation;
                     state.type[d]=CIUKI_MEDIA_SAFE_REMOVED;
+                }
+            }
+            for (unsigned d=0;d<2;d++) if (floppy_drive(d)) {
+                /* fx-17b: A:/B: always listed; the bit only with a diskette. */
+                struct storage_volume *v=&s->volumes[d];
+                state.type[d]=CIUKI_MEDIA_FLOPPY;
+                if (v->present && s->vfs.volumes[d] && v->part.parent && !v->part.parent->quarantined) {
+                    state.removable_mask|=1u<<d; state.generation[d]=v->part.parent->media_generation;
                 }
             }
             for (unsigned d=3;d<26;d++) {

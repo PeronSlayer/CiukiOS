@@ -1126,6 +1126,28 @@ struct ciuki_media_remove {
     uint32_t generation;
 };
 
+/* fx-17b: floppy drives A:/B: report type CIUKI_MEDIA_FLOPPY whenever the
+ * controller found the drive; removable_mask has the bit only while a
+ * diskette is mounted. MEDIA_FLOPPY_LOAD (request: ciuki_media_remove with
+ * generation 0) reads the diskette in the drive (Retry); ENXIO: no disk. */
+#define CIUKI_MEDIA_FLOPPY 4u
+#define MEDIA_FLOPPY_LOAD 0x4d05u
+/* fx-17b: volume space for Properties. free_clusters is exact unless
+ * CIUKI_MEDIA_SPACE_COUNTING: the free count is still being computed in the
+ * background (FAT32 FSInfo unknown) and free_clusters is its upper bound. */
+#define MEDIA_GET_SPACE 0x4d06u
+#define CIUKI_MEDIA_SPACE_COUNTING 1u
+struct ciuki_media_space {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    uint32_t cluster_bytes;
+    uint32_t total_clusters;
+    uint32_t free_clusters;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_media_space) == 32, "media space ABI");
 _Static_assert(sizeof(struct ciuki_media_state_v1) == 120, "media state v1 ABI");
 _Static_assert(sizeof(struct ciuki_media_state) == 224, "media state ABI");
 _Static_assert(sizeof(struct ciuki_media_remove) == 16, "media removal ABI");

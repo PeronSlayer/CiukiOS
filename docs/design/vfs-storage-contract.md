@@ -527,6 +527,87 @@ failures still quarantine and unpublish. A FAT metadata write failure
 keeps the existing rule: the volume becomes read-only for the session
 with the failing file named, and stays mounted and readable.
 
+### fx-17b unknown free count, write-through sticks, floppy drives (2026-10-23)
+
+Lead decisions after fx-17. They supersede fx-17's "large FAT32 with an
+unknown hint stays read-only" and "sticks without SYNCHRONIZE CACHE stay
+read-only".
+
+**Unknown FSInfo free count.** [FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+§5: `FSI_Free_Count` 0xFFFFFFFF means unknown and "must be computed";
+`FSI_Nxt_Free` is only a hint for where to start looking for a free
+cluster. FreeBSD treats an unknown next-free hint the same way
+([msdosfs commit, 2004](https://lists.freebsd.org/pipermail/cvs-src/2004-March/019652.html)),
+and Linux counts lazily ([Linux v6.12 `fat_statfs`](https://github.com/torvalds/linux/blob/v6.12/fs/fat/inode.c)).
+No primary Microsoft document on Windows 98's own recalculation was
+found. The rule above is the specification's.
+
+Decision:
+- A FAT32 removable volume whose hint is unknown and whose FAT is larger
+  than 512 KiB is writable at once (`fat_enable_write_removable`).
+- `storage_census_service()` on the storage writer task counts the active
+  FAT in steps of one 128-sector read-ahead window under the drive
+  reservation, then sleeps three times the step's duration. The count
+  therefore uses at most a quarter of the medium's time, does not run on
+  the display or audio tasks, and the CPU work per step is one pass over
+  64 KiB.
+- One byte per FAT sector holds its free entries, plus a dirty bit:
+  - every published active-FAT sector (transaction publication or direct
+    write) sets the bit after the cache holds the new bytes;
+  - a step clears the bit before it reads;
+  - the count is final only when a step finds no dirty sector while
+    holding the reservation.
+  Allocations during the count are therefore never double-counted or lost.
+- Until then:
+  - allocation scans from the next-free hint, with the free count only an
+    upper bound (ENOSPC comes from the scan);
+  - FSInfo keeps 0xFFFFFFFF;
+  - `fat_free_estimate()` reports counted-free plus not-yet-counted
+    clusters to DOS INT 21h/36h, Win32 and `MEDIA_GET_SPACE` with
+    `CIUKI_MEDIA_SPACE_COUNTING`, which Files shows as "Free Space:
+    calculating...".
+- Removal (safe or surprise) cancels the count and frees its arrays.
+- A volume left read-only (write-protected and similar) still gets its free
+  space counted (`fat_census_start`).
+- Record: `[storage] free_count clusters=… free=… elapsed_ms=…
+  source=background`.
+
+**Sticks without SYNCHRONIZE CACHE.** SBC-3: SYNCHRONIZE CACHE is
+optional. Linux sd treats an unsupported cache and an unreadable caching
+page as "Assuming drive cache: write through" and never flushes such a
+device. Windows 98 never flushes removable media and keeps write-behind
+off for them by default (Resource Kit ch. 26).
+
+Decision: an ILLEGAL REQUEST answer to the bind's SYNCHRONIZE CACHE makes
+the device `BLKDEV_CACHE_DISABLED` (`write_through`). Every WRITE(10) then
+counts as durable when its CSW reports success, the host cache is already
+write-through for removable FAT, and no flush is ever sent.
+
+Records: `[usb-storage] flush … result=unsupported … cache=write_through`
+and `ready … mode=rw_write_through`.
+
+Trade-off: a stick that buffers internally and reports success early can
+lose the last writes on power loss or on removal without Safely Remove.
+That is the same exposure as on Windows 98 and Linux. Safely Remove still
+commits FAT metadata and the clean flag through ordinary writes. Any other
+flush failure keeps the volume read-only.
+
+**Floppy drives A:/B: in the native namespace.**
+- `/mnt/a` and `/mnt/b` exist while a diskette is mounted. `/mnt` lists A:,
+  B:, then D: to Z:; `/mnt/c` never exists. The posixpath reservation
+  encoding stores drive d as kind d+2, so 0 and 1 no longer collide with
+  the /mnt and /dev kinds.
+- `MEDIA_GET_STATE` reports `CIUKI_MEDIA_FLOPPY` for every drive the FDC
+  found, setting the removable bit only while a diskette is mounted.
+  `MEDIA_FLOPPY_LOAD` reads the diskette (Files' Retry); ENXIO means no
+  disk.
+- Windows 98 has no floppy insertion event and reads the diskette when the
+  drive is opened. The existing 1 s DIR poll still detects a changed or
+  removed diskette while one is mounted.
+- Native floppies get the same writable activation as USB media; FAT12 has
+  no clean flag, so no write happens at insertion. Write protection
+  surfaces on the first write as EROFS (`write_protected`).
+
 ## Filesystem driver rules
 
 - FAT12/16/32 share one driver. FAT12/16 keep a fixed root directory; FAT32

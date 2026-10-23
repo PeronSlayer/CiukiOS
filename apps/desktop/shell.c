@@ -976,7 +976,8 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
 {
     if (!memcmp(&d->sh.media,state,sizeof(*state))) return;
     tooltip_hide(d);
-    int resized = !!d->sh.media.removable_mask != !!state->removable_mask;
+    /* fx-17b: floppy diskettes (A:/B:, bits 0-1) have no tray entry, as in Windows 98. */
+    int resized = !!(d->sh.media.removable_mask & ~7u) != !!(state->removable_mask & ~7u);
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
     if (d->sh.media.version == CIUKI_MEDIA_VERSION) {
         unsigned added = state->removable_mask & ~d->sh.media.removable_mask;
@@ -1003,7 +1004,7 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
     for (unsigned i=3;i<26;i++) if (!(state->removable_mask&(1u<<i)) ||
         state->generation[i]!=d->sh.media.generation[i]) d->sh.media_labels[i][0]=0;
     d->sh.media=*state; d->sh.media_scroll=0;
-    if (!state->removable_mask) d->sh.media_open=0;
+    if (!(state->removable_mask & ~7u)) d->sh.media_open=0;
     damage(d, resized ? (struct desk_box){0,0,(int)d->width,DESK_BAR} : tray_box(d));
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
 }
@@ -1218,7 +1219,7 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
     const uint32_t *speaker = desk_shell_icon(d->sh.muted ? "audio-volume-muted" : "audio-volume-high", 16);
     struct desk_box vi = volume_icon_box(d);
     du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);   /* muted: Tango's red cross */
-    if (d->sh.media.removable_mask) {
+    if (d->sh.media.removable_mask & ~7u) {
         struct desk_box mi=media_icon_box(d);
         du_icon_blit(&c,mi.x,mi.y,desk_shell_icon("drive-removable-media",16),16,DU_ICON_NORMAL);
     }
@@ -3152,7 +3153,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
                 else { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
             }
             else if (n->action==SH_NOTIFY_VOLUME) { d->sh.volume_open=1; damage(d,outer(volume_popup(d))); }
-            else if (n->action==SH_NOTIFY_MEDIA && d->sh.media.removable_mask) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
+            else if (n->action==SH_NOTIFY_MEDIA && (d->sh.media.removable_mask & ~7u)) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
             else desk_shell_message_class(d,n->title,n->text,n->icon);
         }
         return 1;
@@ -3166,7 +3167,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
             if (program_index(d,"control")>=0) launch_named(d,"control","--panel=power");
             return 1;
         }
-        if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
+        if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
             d->sh.media_open=1; d->sh.want_reload|=32;
             damage(d,outer(media_popup(d))); return 1;
         }
@@ -3250,7 +3251,7 @@ static int hover_target(const struct desktop *d)
     if (desk_contains(clock_box(d),x,y)) return 1;
     if (desk_contains(network_icon_box(d),x,y)) return 2;
     if (desk_contains(volume_icon_box(d),x,y)) return 3;
-    if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y)) return 4;
+    if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y)) return 4;
     if (desk_contains(notification_icon_box(d),x,y)) return 5;
     for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && desk_contains(desk_task_button(d,i),x,y)) return 16+i;
     return 0;
