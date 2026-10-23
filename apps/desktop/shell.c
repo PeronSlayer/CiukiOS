@@ -341,10 +341,14 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Programs", "applications-other", SH_ACT_SUBMENU, SH_MENU_PROGRAMS, 0);
         item(m, "Documents", "document-open", SH_ACT_SUBMENU, SH_MENU_DOCUMENTS, 0);
         item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
+        item(m, "Find", "system-search", SH_ACT_SUBMENU, SH_MENU_FIND, 0);
         item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
         separator(m);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
+        break;
+    case SH_MENU_FIND:
+        item(m, "Files or Folders...", "system-search", SH_ACT_FIND, 0, 0);
         break;
     case SH_MENU_PROGRAMS: {
         /* f2-95: opening the menu asks for a fresh scan; the menu shows the
@@ -623,6 +627,9 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
         desk_shell_message(d, "Programs", text, 1);
     }
 }
+void desk_shell_find(struct desktop *d)
+{ desk_menu_close(d); launch_named(d, "files", "find:"); }
+
 /* Programs > Games: a DOS Box window titled after the game, typing its command.
  * f3-61: kernel, when given (the vm-game probe only), is the DOS Box's own
  * unified-only runtime assertion; no configuration is written. */
@@ -699,6 +706,7 @@ static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
     switch (it->action) {
+    case SH_ACT_FIND: desk_shell_find(d); break;
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
     case SH_ACT_EMPTY_RECYCLE: desk_folder_empty_request(d); break;
@@ -3740,11 +3748,24 @@ int desk_shell_key(struct desktop *d, int code, int value)
         return 1;
     }
     if (logo) {
-        if (value == 1) d->sh.logo_down = 1;
-        else if (value == 0 && d->sh.logo_down) { d->sh.logo_down = 0; toggle_start(d); }
+        if (value == 1) { d->sh.logo_down = 1; d->sh.find_logo_held = 1; d->sh.find_logo_used = 0; }
+        else if (value == 0) {
+            int start = d->sh.logo_down && !d->sh.find_logo_used;
+            d->sh.logo_down = d->sh.find_logo_held = d->sh.find_logo_used = 0;
+            if (start) toggle_start(d);
+        }
         return 1;
     }
+    if (code == 0x21 && (d->sh.find_logo_held || d->sh.find_chord)) {
+        if (value == 1 && !(d->sh.modifiers & (DU_CTRL | DU_ALT | DU_SHIFT))) { desk_shell_find(d); d->sh.find_chord = 1; }
+        if (!value) d->sh.find_chord = 0;
+        d->sh.find_logo_used = 1; d->sh.logo_down = 0; return 1;
+    }
     if (value) d->sh.logo_down = 0;
+    if (code == FM_FIND_KEY && d->focus < 0 && !d->sh.levels && !d->sh.modifiers) {
+        if (value == 1) desk_shell_find(d);
+        return 1;
+    }
     if (value==1 && code==0x153 && (d->sh.modifiers&(DU_CTRL|DU_ALT))==(DU_CTRL|DU_ALT)) {
         desk_v3_revoke(d); desk_v3_pointer_release(d);
         /* Windows 98 (RK-apps "Closing Failed Applications"): one Close Program

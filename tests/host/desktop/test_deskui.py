@@ -46,36 +46,38 @@ TOOLKIT_FRAMES = {
     'deskui-view1.xrgb': '26cc77326b0cc117215cd2389e275852a86b5a4a34109881bb8bb99e5e05758b',
     'deskui-view2.xrgb': 'dc03906560ba1b1543e63a6d5959f7541d75651eecde32496f6c21eb0d2fc8d0',
 }
+# G7: baseline/current pixel comparison confines changes to menu rows 0..21
+# (Tools and shifted Help); Computer and transfer frames visually reviewed.
 FILES_FRAMES = {
-    'files-drop-target.xrgb': 'fa3e0f26a2db9c30dd775cd57bdf5925669e1d72872289e5c9e0dff9a778a977',
-    'files-band-details.xrgb': '4080b44e53eef99b7c25e4662588fe20350324862aa8a6900b9a72860ce94ece',
-    'files-band-list.xrgb': '3e462501fda2ce487945b057fa78a88e85ac92ad40650dde027e23fba3c6368e',
-    'files-band-icons.xrgb': 'aa131944918d592a600592c10d13d5fa0c05aaf9e4972c3d8dbc99400d621276',
-    'files-about.xrgb': '1a93a771a447517d1872b950e12418dac641d4f1f0c7c21841a1e5115bdc68f6',
-    'files-programs-icons.xrgb': 'ba85b84b556aeaeba0165ed54fcbc5762f2dc8af5a911922e6652400fbbbad1c',
-    'files-confirm-delete.xrgb': '68240aed5186a408d746eeb88692d3bf5121b5444a40d4d0b4fbcc02641adf37',
-    'files-context-background.xrgb': '36025408efb1545e3d5e9b4349f821430f5a1f999d8c39458f6bc1456bd7bdac',
-    'files-context-item.xrgb': '80ccd71c58c45eeea0471a01335970bc2ffc05f9b43ca2dfb971f5654572307f',
-    'files-copy-progress.xrgb': '2542fade6958be2ef613a5567c27b6b21358541a6c98c741bdbb8d0e738ffa3e',
-    'files-cp1-system.xrgb': '6bf866276d2d492a36c76dd37952f7cdf8eafc69a9daba60f6ee749c15fdf379',
-    'files-cp2-new-folder.xrgb': 'a0206dad2edeaf99be51337eb51186e3ce8b20fcf6c22ec8fbc59996b92ed6d6',
-    'files-cp3-renamed.xrgb': 'db328fb767d988aab0783feb17115dd24b45c82fb230d4a68b88321b96d77f9c',
-    'files-cp4-copied.xrgb': 'eac0df61e307c53e214aa7e34c1c33726ae7570d2c19653ab0c74f2e8909147a',
-    'files-cp5-deleted.xrgb': '75122973988f67620bd112bc3b89efbd39e16acf1cc8e7e6013dd49156d1beb6',
-    'files-help.xrgb': '4268a86667b2c80bddb6305cbc95e97a62b49d3d6295f83142cbf5301cf669b7',
-    'files-menu-file.xrgb': 'fa3bbac3d311703fbbc92762a3fe6a5171b7ae731e99c8c7176a1131a170fe89',
-    'files-menu-view.xrgb': '7013f8ce64dbb1d862723dc904841a2faaef2891420f91215c977ab19e0a5b66',
-    'files-multi-select.xrgb': 'ddbec86351caf942f8658ea586bc859121e5c2cdd34af1eaa250920f2f9f211d',
-    'files-properties.xrgb': 'e0162e8f809fb79da89eaddd5f3e9ebfda4721ef28d5d05d85ced33134142c5e',
-    'files-rename-error.xrgb': '2a28adc4ea67265026e8fb2c779dfecc04204e9a167e9811754f50188bb3c52f',
-    'files-replace-prompt.xrgb': '8e66a2b9a7c423e2678dfffd1f12e86083f59df196243b3dfde95cb466dac85e',
-    'files-computer.xrgb': 'bc470809de26754b7e4dc84d4388f06e7d77eeaf85fa629ffd293fc459220c88',
-    'files-c-drive.xrgb': 'f7f83a31eb52f51ae109a81a4e50dc60a27c238521451adc77e5e038c2dc2b8d',
-    'files-root-details.xrgb': '113608285b83719291c9f25f492f077bdb9567e3a379424927c51105a9ed4eb7',
-    'files-sort-size-desc.xrgb': '98a9556f0422749d1e8aa9a483df84ef328b86db81cb1e137c2d85c5aa31eb48',
-    'files-system-details.xrgb': '3505f30e9aa8ad5859330877045665d135f2a7c8fd15725e3b9ed7daf3082121',
-    'files-system-icons.xrgb': '70cfa16a5528554805141a9d71d2658ebdbad4cb2ee9545a2fd1e3f70489a64f',
-    'files-tree.xrgb': '625a8187d886448fe7ab0356df520e6449805b1d65526f9b546182e84e618c5c',
+    'files-drop-target.xrgb': 'a7d38c3d24a14a9239c5bc41ead1a3e986f4e236d69676343574808fe689cdf5',
+    'files-band-details.xrgb': 'b3381c753edeb2606ddd8c56194f54d0883418073a0ba96cfbed6d0fffc726bd',
+    'files-band-list.xrgb': 'aa56db61a2335e894fc082b3aed6959b70b0587ee103e207108a11afec810674',
+    'files-band-icons.xrgb': '3b6a79757c6c2b9bf144eddaddd64755aa14ea87405ac2ea7d24f4536fe60ba6',
+    'files-about.xrgb': '7919bbabc53c41facdc45e040098a451905b11ce6d96774fe6cb09cbec161294',
+    'files-programs-icons.xrgb': 'ed6c39b2d7cac1194eb318f74fe5854957f5bf84dd8c2664d4c280c8aa091431',
+    'files-confirm-delete.xrgb': 'ec7bae5c28c2be4bc1687032d852a67a988a7608943918d57727a566d474275a',
+    'files-context-background.xrgb': 'e9950374afdb9c00ad17687921b0fd715ae23d8a974aa7da404d25adc97d167e',
+    'files-context-item.xrgb': '7a2131f1a793078cd3ec7d9ae1123eda203ab3e01bab4b49a15188131d0b8da9',
+    'files-copy-progress.xrgb': 'c12141f698e7383fa905955f930f586aa2f0303f5a136c3b4073e51228384a5a',
+    'files-cp1-system.xrgb': 'a6f44a5cb0ab43b3588c3fc950dacda1674e639eb0265fabd95195d94b5e0752',
+    'files-cp2-new-folder.xrgb': '951c57be3937ec3a271d6bb5247201ef31cb651b9bc62e5e6589a6d4f5c2abc5',
+    'files-cp3-renamed.xrgb': '4e166c757661aa57efbbd84188688fdf7a13a87db08564ab166b8bf3abb0ea76',
+    'files-cp4-copied.xrgb': '62d9185bb769b21eca79bed9462b62f542f4e919da295936590655da90266a2b',
+    'files-cp5-deleted.xrgb': 'ed659d7058677f71b0aa8a44463fc60ea6f2889f6afdf21ada6978894ec2a27a',
+    'files-help.xrgb': '47b03017520501f4da307630ab107ff1e25634e324686fd1c459db5d3896aafe',
+    'files-menu-file.xrgb': '12b98a7539389a9623f7a4a84fcff184790ab9977b8f71d3858b9dd98e0bd26b',
+    'files-menu-view.xrgb': 'e9e490afa2382da569a4d41bea2caecd3de27a89ac6a86f881b28c339ebdecfc',
+    'files-multi-select.xrgb': '2ea91b736404a69c10a1e1afb2ec447cd80fb2df22fbcf4bbf0d7a5ad9f71099',
+    'files-properties.xrgb': 'b0839edf5ef4fc396742e07c6622de4b28aa5c9eb96da2d65735ed51c996b02b',
+    'files-rename-error.xrgb': '6cdd24b8827fa7ca852ed8262d17a52a6c0241ebfa84673518d34e3d9bc6311e',
+    'files-replace-prompt.xrgb': '88b8607ff074335d0ac07debfc56fbce46e93fd1209ae60881b625ffd7ee06ec',
+    'files-computer.xrgb': 'b9d0a700cd185eb710c61c52848f78f21852ca285a74d9bf0601159403c87529',
+    'files-c-drive.xrgb': '12e4bff88d436c0bac238b294a403436f407601404b9b2bc98b6fc30422b78fb',
+    'files-root-details.xrgb': '0dc36aae9c2b51d2114e41f8e841495887a2c94abda069c358591f10e0c5a9e8',
+    'files-sort-size-desc.xrgb': '412914fa5cdff431f858269d460ab694dc06e15d6431a1292bcd6530a59b7640',
+    'files-system-details.xrgb': 'aaad7e93c59bb4ba3d95245ccb35f97adff40f938635a3e615d17158d9dd53ea',
+    'files-system-icons.xrgb': '07650519226969dc8248f7f647b8315d9e941297039cf231ee025e77adc7dc22',
+    'files-tree.xrgb': '9b15462e628320282b7d416c6ef7b8d46e751c580d1e1895cfb76be75c13c898',
 }
 
 # ui-look (2026-10-12): the new theme engine, fonts and controls changed every
@@ -199,6 +201,13 @@ class DeskuiTests(unittest.TestCase):
             "apps/files/model.c", "apps/files/transfer.c", "apps/files/vfs.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"], directory)
         self.assertIn("PASS Files idle", stdout)
+
+    def test_find_files(self):
+        stdout, _ = self.run_harness("files-search", ["tests/host/desktop/files_search_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"])
+        self.assertIn("PASS G7 model", stdout)
+        self.assertIn("PASS G7 UI", stdout)
 
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",

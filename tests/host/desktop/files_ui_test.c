@@ -733,7 +733,7 @@ int main(int argc, char **argv)
     key(DU_KEY_ENTER); assert(!ui.dialog.kind);
     /* Help and About dialogs. */
     key(DU_KEY_F1); dump("help"); key(DU_KEY_ESC);
-    struct du_rect help = du_menu_title(&ui, 4); click(help.x + 5, help.y + 5);
+    struct du_rect help = du_menu_title(&ui, ui.menu_count - 1); click(help.x + 5, help.y + 5);
     struct du_rect hbox = du_menu_box(&ui, app.help_items, 3, help.x, help.y + help.h);
     click(hbox.x + 20, hbox.y + 3 + 17 + 9 + 8);
     dump("about"); key(DU_KEY_ENTER);

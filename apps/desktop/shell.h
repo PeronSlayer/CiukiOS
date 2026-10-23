@@ -43,13 +43,13 @@ enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVEL
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG };
+                    SH_MENU_DRAG, SH_MENU_FIND };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
                  SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
-                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */ };
+                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */, SH_ACT_FIND };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -127,6 +127,7 @@ struct desk_shell {
     char run_text[160]; unsigned run_length;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
+    int find_logo_held, find_logo_used, find_chord;
     int logo_down, alt_routed, alt_used, alt_code;
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
@@ -154,6 +155,7 @@ void desk_shell_overlay(struct desktop *, struct desk_box clip);
 int desk_shell_button(struct desktop *, int button, int down);
 void desk_shell_motion(struct desktop *);
 unsigned desk_shell_cursor(const struct desktop *);
+void desk_shell_find(struct desktop *);
 int desk_shell_key(struct desktop *, int code, int value);
 int desk_shell_consumer(struct desktop *, unsigned action, int value);
 int desk_shell_wheel(struct desktop *, int detents);   /* wheel over the focused built-in window; 1 when consumed */
