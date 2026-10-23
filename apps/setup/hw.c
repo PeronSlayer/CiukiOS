@@ -230,6 +230,21 @@ void st_hw_evaluate(struct st_app *a)
         ascii(line, sizeof(line), a->rows[i].text);
         report(a, "[%s] %-10s %s\r\n", marks[a->rows[i].mark], a->rows[i].name, line);
     }
+    /* Build identity of the running CD image (written by scripts/build_image.py).
+     * It never holds the image hash: testers quote that from the release page. */
+    {
+        char build[768]; size_t length = 0;
+        if (a->h.read_file && !a->h.read_file(a->h.ctx, "C:\\SYSTEM\\BUILD.TXT", build, sizeof(build) - 1, &length) && length) {
+            report(a, "\r\nBuild identity (C:\\SYSTEM\\BUILD.TXT):\r\n");
+            for (size_t i = 0, start = 0; i <= length; i++) {
+                if (i == length || build[i] == '\n') {
+                    size_t end = i; if (end > start && build[end - 1] == '\r') end--;
+                    if (end > start) report(a, "  %.*s\r\n", (int)(end - start), build + start);
+                    start = i + 1;
+                }
+            }
+        } else report(a, "\r\nBuild identity: not available on this medium.\r\n");
+    }
     if (a->display_ok) report(a, "\r\nDisplay: %ux%ux%u VBE %04x vram=%u KiB oem=\"%.40s\" vendor=\"%.40s\" product=\"%.40s\" pci=%04x:%04x\r\n",
                               a->display.width, a->display.height, a->display.bpp, a->display.vbe_version, a->display.vram_bytes / 1024,
                               a->display.oem, a->display.vendor, a->display.product, a->display.pci_vendor, a->display.pci_device);

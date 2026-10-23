@@ -21,7 +21,10 @@ def stage_identity(kernel, directory, sources, metadata, revision, dirty, versio
     kernel_sha = digest(kernel)
     if clock["kernel_sha256"] != kernel_sha:
         raise ValueError("kernel build-clock hash")
-    if (not isinstance(revision, str) or len(revision) != 40 or
+    # A source tree without git reports "unknown" for both; anything else
+    # must be a full commit id and a boolean.
+    unknown = revision == "unknown" and dirty == "unknown"
+    if not unknown and (not isinstance(revision, str) or len(revision) != 40 or
             any(c not in "0123456789abcdef" for c in revision) or type(dirty) is not bool):
         raise ValueError("source identity unavailable")
     # Identity of the source/payload manifest before BUILD.TXT is added. The
@@ -33,7 +36,7 @@ def stage_identity(kernel, directory, sources, metadata, revision, dirty, versio
                            for key, path in sorted(sources.items()) if key.casefold() != "/system/build.txt"]}
     manifest_id = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     date = datetime.fromtimestamp(clock["utc_epoch"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    text = (f"schema=1\nsource_commit={revision}\nsource_dirty={int(dirty)}\n"
+    text = (f"schema=1\nsource_commit={revision}\nsource_dirty={dirty if unknown else int(dirty)}\n"
             f"kernel_elf_sha256={kernel_sha}\nbuild_manifest_id={manifest_id}\nbuild_date={date}\n"
             "image_sha256=see release page\n")
     directory = Path(directory)

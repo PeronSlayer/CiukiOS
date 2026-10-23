@@ -661,6 +661,14 @@ def build(kernel, out, boot_cfg):
             "-n", "CIUKIOS", volume)
         initialize_blackbox(volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
+        # /System/BUILD.TXT: provenance quoted by the Hardware Report. It
+        # carries no image hash (an image cannot contain its own SHA-256).
+        revision, source_dirty = git_identity()
+        identity_spec = importlib.util.spec_from_file_location("build_identity", ROOT / "scripts/build_identity.py")
+        identity_module = importlib.util.module_from_spec(identity_spec)
+        identity_spec.loader.exec_module(identity_module)
+        identity_module.stage_identity(kernel, scratch / "identity", sources, metadata,
+                       revision, source_dirty, wanted)
         payloads = payload_records(sources)
         # f3-06: owner-local game files never enter the canonical image; only
         # files pinned in the vendored shareware packages may equal one.

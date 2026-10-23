@@ -30,3 +30,16 @@ class BuildIdentityTests(unittest.TestCase):
             kernel.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'kernel build-clock hash'):
                 identity.stage_identity(kernel,d/'out',sources,metadata,'a'*40,False,'fixture')
+
+class BuildIdentityUnknownTests(unittest.TestCase):
+    def test_source_tree_without_git(self):
+        with tempfile.TemporaryDirectory() as temp:
+            d=Path(temp); kernel=d/'VMM.ELF'; kernel.write_bytes(b'k')
+            sha=hashlib.sha256(b'k').hexdigest()
+            (d/'build-clock.json').write_text(json.dumps({'kernel_sha256':sha,'utc_epoch':0}))
+            sources={}; metadata={}
+            identity.stage_identity(kernel,d/'o',sources,metadata,'unknown','unknown','v')
+            text=sources['/System/BUILD.TXT'].read_text()
+            self.assertIn('source_commit=unknown',text); self.assertIn('source_dirty=unknown',text)
+            with self.assertRaises(ValueError):
+                identity.stage_identity(kernel,d/'o',sources,metadata,'unknown',False,'v')

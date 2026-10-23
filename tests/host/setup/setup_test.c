@@ -44,6 +44,7 @@ static int read_file(void *c,const char *path,char *out,size_t cap,size_t *lengt
     if(!strcmp(path,"F:\\SETUP.INF"))text=f.usb_inf;
     if(!strcmp(path,"C:\\system\\licenses\\GPL.TXT"))text="GNU General Public License version 2\nOrigin: Free Software Foundation\n";
     if(!strcmp(path,"D:\\LICENSES\\INDEX.TXT"))text="L0001.TXT  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  123  payload:/system/licenses/GPL.TXT\n";
+    if(!strcmp(path,"C:\\SYSTEM\\BUILD.TXT"))text="schema=1\nsource_commit=aaaa\nbuild_date=2026-10-23T00:00:00Z\n";
     if(!strcmp(path,"D:\\LICENSES\\SOURCES.TXT"))text="Corresponding source archives: \\SOURCES\\CIUKIOS.ZIP\n";
     if(!text)return -ENOENT;
     *length=strlen(text);if(*length>cap)return -EFBIG;memcpy(out,text,*length);return 0;
@@ -205,7 +206,7 @@ static void interactive(void){
     tap(0x3d);assert(ui.dialog.id==ST_DLG_EXIT);tap(DU_KEY_ESC);assert(!ui.dialog.kind);no_writes();st_free(&a);
     for(int refusal=ST_STOP_VIDEO;refusal<=ST_STOP_DISK;refusal++){fixture();f.refusal=refusal;if(refusal==ST_STOP_NO_DISK)f.disks_n=0;if(refusal==ST_STOP_DISK)f.disks[0].installable=0;init();assert(a.page==ST_PAGE_STOP&&(int)a.stop==refusal);char name[64];snprintf(name,sizeof(name),"hardware-refusal-%d",refusal);frame(name);no_writes();tap(DU_KEY_F10);assert(f.reboot==1);no_writes();st_free(&a);}
     fixture();init();st_action(&a,ST_ID_RESCUE);assert(a.page==ST_PAGE_RESCUE);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();
-    st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();st_free(&a);
+    assert(strstr(a.report,"source_commit=aaaa"));st_action(&a,ST_ID_REPORT);assert(a.page==ST_PAGE_TEXT);tap(DU_KEY_ESC);assert(a.page==ST_PAGE_WELCOME);no_writes();st_free(&a);
     fixture();init();summary();tap(DU_KEY_ESC);assert(a.page==ST_PAGE_NETWORK&&!a.plan_ok);no_writes();st_free(&a);
     for(unsigned policy=SETUP_RESTART_EJECT;policy<=SETUP_RESTART_FORCE;policy++) {
         fixture();init();a.answers.restart=(enum setup_restart)policy;st_goto(&a,ST_PAGE_RESTART);tap(DU_KEY_F10);
