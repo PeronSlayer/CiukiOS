@@ -102,6 +102,12 @@ its own hash, so the report says to quote it from the release page. Host tests:
 present (with CRLF, no-git and no-trailing-newline forms), missing, oversized,
 read error, twelve malformed shapes, and the bounded native read.
 
+Since fx-6 `kernel_elf_sha256` is the SHA-256 of the installed
+`/system/VMM.ELF` (the kernel without debug sections, the file on the disk);
+BUILD.TXT also carries `kernel_full_elf_sha256`, the complete
+`build/f0/VMM.ELF` that `addr2line` needs. The report ignores keys it does not
+know, so it quotes the installed kernel only; both lines fit `HR_BUILD_MAX`.
+
 ## Setup rescue page (f9-07 amendment 1, revised by the lead on 2026-10-23)
 
 In Setup mode there is no desktop: the supervisor starts `/Programs/setup`

@@ -8,6 +8,7 @@ import errno
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -131,6 +132,72 @@ def sha256(path):
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+# The loader (src/boot/ciukldr/elf.inc) refuses a kernel file above this size
+# and reads the whole file at boot; the limit is read from the loader source so
+# the two cannot drift apart. The installed kernel may use at most
+# KERNEL_BUDGET_PERCENT of it (lead decision fx-6, 2026-10-23).
+LOADER_ELF_INC = ROOT / "src/boot/ciukldr/elf.inc"
+KERNEL_BUDGET_PERCENT = 75
+
+
+def loader_kernel_limit(source=None):
+    """The loader's kernel file size limit in bytes, parsed from elf.inc."""
+    text = Path(source or LOADER_ELF_INC).read_text()
+    found = re.search(r"cmp\s+dword\s+\[found_size\]\s*,\s*(0x[0-9A-Fa-f]+|\d+)\s*(?:;[^\n]*)?\n\s*ja\s+elf_error", text)
+    require(found is not None, "loader kernel size limit not found in elf.inc")
+    return int(found.group(1), 0)
+
+
+def check_kernel_budget(installed, limit=None):
+    """Fail the build when the installed kernel uses more than 75 % of the loader limit."""
+    limit = loader_kernel_limit() if limit is None else limit
+    size = Path(installed).stat().st_size
+    require(size * 100 <= limit * KERNEL_BUDGET_PERCENT,
+            f"installed kernel is {size} bytes, above {KERNEL_BUDGET_PERCENT} % of the loader limit "
+            f"({limit} bytes, src/boot/ciukldr/elf.inc)")
+    return size, limit
+
+
+def elf32_layout(data):
+    """(entry, program headers, section names) of a little-endian ELF32 file."""
+    require(data[:7] == b"\x7fELF\x01\x01\x01", "kernel is not a little-endian ELF32 file")
+    entry, phoff, shoff = struct.unpack_from("<III", data, 24)
+    phentsize, phnum, shentsize, shnum, shstrndx = struct.unpack_from("<HHHHH", data, 42)
+    require(phentsize == 32 and phnum >= 1 and (not shnum or shentsize == 40), "kernel ELF header")
+    phdrs = [struct.unpack_from("<8I", data, phoff + i * 32) for i in range(phnum)]
+    names = []
+    if shnum:
+        sections = [struct.unpack_from("<10I", data, shoff + i * 40) for i in range(shnum)]
+        strings = sections[shstrndx]
+        table = data[strings[4]:strings[4] + strings[5]]
+        names = [table[sec[0]:table.index(b"\0", sec[0])].decode("ascii") for sec in sections]
+    return entry, phdrs, names
+
+
+def strip_kernel(full, installed):
+    """Write the image's kernel: `full` without its DWARF sections.
+
+    llvm-objcopy --strip-debug drops only the debug sections; the loaded
+    segments, the program headers and .symtab/.strtab stay. The same input
+    gives the same bytes. The result is checked against `full`: same entry,
+    same program headers, byte-identical file-backed segments, no debug
+    section left."""
+    tool = shutil.which("llvm-objcopy")
+    require(tool is not None, "missing host tool: llvm-objcopy")
+    full, installed = Path(full), Path(installed)
+    installed.unlink(missing_ok=True)
+    run(tool, "--strip-debug", full, installed)
+    original, stripped = full.read_bytes(), installed.read_bytes()
+    a, b = elf32_layout(original), elf32_layout(stripped)
+    require(a[0] == b[0] and a[1] == b[1], "stripped kernel changed its entry or program headers")
+    for kind, offset, _vaddr, _paddr, filesz, _memsz, _flags, _align in a[1]:
+        if kind == 1:
+            require(original[offset:offset + filesz] == stripped[offset:offset + filesz],
+                    "stripped kernel changed a loaded segment")
+    require(not [n for n in b[2] if n.startswith((".debug", ".zdebug"))], "stripped kernel still has debug sections")
+    return installed
 
 
 def read_version():
@@ -689,7 +756,7 @@ def registry_payloads(directory):
 
 
 def build(kernel, out, boot_cfg):
-    for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "mattrib", "fsck.fat"):
+    for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "mattrib", "fsck.fat", "llvm-objcopy"):
         if not shutil.which(tool):
             raise SystemExit(f"missing host tool: {tool}")
     if not kernel.is_file():
@@ -723,6 +790,14 @@ def build(kernel, out, boot_cfg):
         volume = scratch / "system.fat"
         cfg = scratch / "BOOT.CFG"
         cfg.write_bytes(options)
+        # fx-6: the disk carries the kernel without DWARF (build/f0/VMM.ELF
+        # stays complete for addr2line); the loader reads the whole file.
+        installed_kernel = strip_kernel(kernel, scratch / "VMM.ELF")
+        kernel_size, kernel_limit = check_kernel_budget(installed_kernel)
+        installed_record = {"installed_kernel_sha256": sha256(installed_kernel), "installed_kernel_bytes": kernel_size,
+                            "kernel_limit": kernel_limit}
+        print(f"kernel: full {kernel.stat().st_size} bytes, installed {kernel_size} bytes "
+              f"({kernel_size * 100 // kernel_limit} % of the {kernel_limit}-byte loader limit)")
         run("nasm", "-f", "bin", ROOT / "src/boot/mbr.asm", "-o", mbr_path)
         # The menu title carries the version; tests assemble the loader
         # without the define and get 'unknown'.
@@ -744,7 +819,7 @@ def build(kernel, out, boot_cfg):
             "-f", "2", "-R", str(FAT_RESERVED), "-b", "6", "-h", str(PART_LBA),
             "-n", "CIUKIOS", volume)
         initialize_blackbox(volume)
-        sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
+        sources.update({"/system/VMM.ELF": installed_kernel, "/system/BOOT.CFG": cfg})
         # /System/BUILD.TXT: provenance quoted by the Hardware Report. It
         # carries no image hash (an image cannot contain its own SHA-256).
         revision, source_dirty = git_identity()
@@ -752,7 +827,7 @@ def build(kernel, out, boot_cfg):
         identity_module = importlib.util.module_from_spec(identity_spec)
         identity_spec.loader.exec_module(identity_module)
         identity_module.stage_identity(kernel, scratch / "identity", sources, metadata,
-                       revision, source_dirty, wanted)
+                       revision, source_dirty, wanted, installed_kernel=installed_kernel)
         payloads = payload_records(sources)
         # f3-06: owner-local game files never enter the canonical image; only
         # files pinned in the vendored shareware packages may equal one.
@@ -799,7 +874,8 @@ def build(kernel, out, boot_cfg):
     # image carries the same bytes (scripts/build_cd.py checks all three).
     (out.parent / "ciukldr.bin").write_bytes(loader)
     image_sha = sha256(out)
-    write_manifest(out, kernel, image_sha, payloads, metadata, directories=directories, boot_cfg=options)
+    write_manifest(out, kernel, image_sha, payloads, metadata, directories=directories, boot_cfg=options,
+                   **installed_record)
     (out.parent/"dos-conformance.json").unlink(missing_ok=True)
     print(f"SHA256 {image_sha}  {out}")
 
@@ -817,11 +893,25 @@ def git_identity():
         return "unknown", "unknown"
 
 
-def write_manifest(image, kernel, image_sha, payloads, metadata, *, directories=(), boot_cfg=DEFAULT_CONFIG):
-    """build-manifest.json beside the image: read by scripts/test/run.py."""
+def write_manifest(image, kernel, image_sha, payloads, metadata, *, directories=(), boot_cfg=DEFAULT_CONFIG,
+                   installed_kernel_sha256=None, installed_kernel_bytes=None, kernel_limit=None):
+    """build-manifest.json beside the image: read by scripts/test/run.py.
+
+    `kernel` is the complete build/f0/VMM.ELF (DWARF included); the installed
+    /system/VMM.ELF is its --strip-debug copy, described by the installed_*
+    arguments (default: the complete kernel is the installed one)."""
     rev, dirty = git_identity()
     clock_record = json.loads((kernel.parent / "build-clock.json").read_text())
-    require(clock_record["kernel_sha256"] == sha256(kernel), "kernel build-clock hash")
+    full_sha = sha256(kernel)
+    require(clock_record["kernel_sha256"] == full_sha, "kernel build-clock hash")
+    if installed_kernel_sha256 is None:
+        installed_kernel_sha256, installed_kernel_bytes = full_sha, kernel.stat().st_size
+    if kernel_limit is None:
+        kernel_limit = loader_kernel_limit()
+    for record in payloads:
+        if record["path"].casefold() == "/system/vmm.elf":
+            require(record["sha256"] == installed_kernel_sha256 and record["size"] == installed_kernel_bytes,
+                    "installed kernel differs from its payload record")
     manifest = {
         "schema_version": 1,
         # The version the kernel was compiled with (build() has checked it
@@ -832,8 +922,15 @@ def write_manifest(image, kernel, image_sha, payloads, metadata, *, directories=
         "image": image.name,
         "image_sha256": image_sha,
         "blackbox": {"descriptor_sector": BLACKBOX_DESCRIPTOR, "first_sector": BLACKBOX_FIRST, "sectors": BLACKBOX_SECTORS, "reserved_sectors": FAT_RESERVED},
+        # kernel / kernel_full_*: the complete ELF (addr2line, build-clock.json).
+        # kernel_sha256 / kernel_installed_bytes: /system/VMM.ELF on the disk
+        # (debug sections removed), the file BUILD.TXT and the CD quote.
         "kernel": str(kernel),
-        "kernel_sha256": sha256(kernel),
+        "kernel_sha256": installed_kernel_sha256,
+        "kernel_installed_bytes": installed_kernel_bytes,
+        "kernel_full_sha256": full_sha,
+        "kernel_full_bytes": kernel.stat().st_size,
+        "kernel_loader_limit": kernel_limit,
         "build_epoch": clock_record["utc_epoch"],
         "payloads": payloads,
         "directories": [{"path": p, "attributes": 16} for p in sorted(directories)],

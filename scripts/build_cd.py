@@ -702,7 +702,7 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
     manifest = json.loads(manifest_path.read_text())
     clock = json.loads((image.parent / "build-clock.json").read_text())
     epoch = int(manifest["build_epoch"])
-    clock_state = "consistent" if clock["utc_epoch"] == epoch and clock["kernel_sha256"] == manifest["kernel_sha256"] \
+    clock_state = "consistent" if clock["utc_epoch"] == epoch and clock["kernel_sha256"] == manifest.get("kernel_full_sha256", manifest["kernel_sha256"]) \
         else "kernel-rebuilt-after-image"
     require(clock_state == "consistent" or (allow_source_mismatch and out_dir != image.parent),
             "build-clock.json describes another kernel than build-manifest.json; run the image build first")
@@ -800,7 +800,9 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
             "build": {"version": manifest["version"], "git_revision": manifest["git_revision"], "git_dirty": manifest["git_dirty"],
                       "source_revision": head, "source_matches_build": source_matches, "build_epoch": epoch,
                       "disk_image": manifest["image"], "disk_image_sha256": manifest["image_sha256"],
-                      "kernel_sha256": manifest["kernel_sha256"], "loader_sha256": sha256_bytes(loader),
+                      "kernel_sha256": manifest["kernel_sha256"],
+                      "kernel_full_sha256": manifest.get("kernel_full_sha256", manifest["kernel_sha256"]),
+                      "loader_sha256": sha256_bytes(loader),
                       "sibling_ciukldr_bin": sibling_state, "build_clock": clock_state, "setup_program_sha256": sha256_file(setup_elf),
                       "tools": {"xorriso": subprocess.run(["xorriso", "-version"], capture_output=True, text=True).stdout.splitlines()[0],
                                 "mtools": subprocess.run(["mtools", "--version"], capture_output=True, text=True).stdout.splitlines()[0]}},
