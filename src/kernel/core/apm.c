@@ -26,6 +26,7 @@ static int call(struct apm_backend *b, uint16_t function,
 {
     *r = (struct biosvm_regs){.interrupt = 0x15,
                              .eax = function, .ebx = device, .ecx = value};
+    b->last_function = function;
     uint64_t start = b->ops.now_us ? b->ops.now_us(b->ops.ctx) : 0;
     int e = b->ops.real_call(b->ops.ctx, r, ms);
     if (e == -EAGAIN) b->cost.skipped++; /* fx-18: EC hold busy, nothing ran */

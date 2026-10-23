@@ -76,6 +76,13 @@ struct v86 {
     bool qemu_pmtimer; /* validated QEMU: virtual read-only INL 0608h */
     int result;
     struct { uint32_t cs, ip, vector, address; uint8_t bytes[15], count; } fault;
+    /* fx-25 diagnostics of the last call: the state when it was aborted
+     * (RUNNING or HALTED), its final SS:SP, and the denied port if any. */
+    enum v86_state abort_state;
+    uint16_t abort_ss, abort_sp, denied_port;
+    uint8_t denied_width;
+    bool denied, denied_write;
+    uint32_t far_returns; /* calls completed by RETF/RETF 2 to the sentinel */
 };
 void v86_init(struct v86 *v, const struct v86_ops *ops);
 int v86_begin(struct v86 *v, uint64_t now, uint32_t ticks);
