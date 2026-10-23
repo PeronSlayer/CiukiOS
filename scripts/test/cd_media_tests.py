@@ -135,12 +135,15 @@ def make_disk_image(work):
     head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     version = module("cd_media_version", ROOT / "scripts/ciuki_version.py").load()["display"]
     kernel = sha(PAYLOAD["/system/VMM.ELF"])
+    # fx-6: the disk kernel has no debug sections; build-clock.json binds the complete ELF.
+    full_kernel = sha(b"complete kernel with debug sections, not installed")
     manifest = {"schema_version": 1, "version": version, "git_revision": head, "git_dirty": True,
                 "image": "ciukios.img", "image_sha256": sha(image.read_bytes()), "kernel_sha256": kernel,
+                "kernel_full_sha256": full_kernel,
                 "build_epoch": EPOCH, "payloads": [{"path": p, "sha256": sha(d), "size": len(d)} for p, d in sorted(PAYLOAD.items())],
                 "games": {"packages": [{"name": n} for n in ("wolf3d-shareware", "doom-shareware", "quake-shareware")]}}
     (directory / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    (directory / "build-clock.json").write_text(json.dumps({"utc_epoch": EPOCH, "kernel_sha256": kernel, "version": version}) + "\n")
+    (directory / "build-clock.json").write_text(json.dumps({"utc_epoch": EPOCH, "kernel_sha256": full_kernel, "version": version}) + "\n")
     volume.unlink()
     return image, mbr_code, loader
 

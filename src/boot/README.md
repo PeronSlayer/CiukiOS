@@ -63,6 +63,14 @@ fit normalized RAM in [1 MiB,16 MiB), with no physical overlap.
 Dynamic/interpreter images are rejected. Virtual e_entry is translated
 through the containing executable PT_LOAD.
 
+The loader reads the whole kernel file, so the image installs `SYSTEM/VMM.ELF`
+without its `.debug_*` sections (`llvm-objcopy --strip-debug`, fx-6): the
+complete `build/f0/VMM.ELF` is about 15.7 MB, of which about 11.6 MB is DWARF,
+against the 16 MiB (`0x1000000`, `src/boot/ciukldr/elf.inc`) limit; the
+installed file is about 4.0 MB. Program headers, loaded segments and
+`.symtab`/`.strtab` are unchanged. `scripts/build_image.py` reads the limit
+from `elf.inc` and fails when the installed kernel exceeds 75 % of it.
+
 BOOT.CFG is optional, <=127 ASCII bytes, without NUL. Default:
 safe=0 serial=1. Recognized options: safe=1, serial=0, mode=0xNNNN.
 Complete option bytes are copied into the NUL-terminated handoff.

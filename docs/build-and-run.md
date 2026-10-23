@@ -442,6 +442,36 @@ a physical run is evidence only for the SHA-256 recorded there, which goes in
 the validation record of that test
 (`docs/validation/2026-10-11-integrated-image-f0-regression.md`).
 
+### Installed kernel and the complete ELF (fx-6)
+
+`build/f0/VMM.ELF` is the complete kernel (DWARF included, about 15.7 MB) and
+stays the file for `addr2line`/`llvm-symbolizer` and the probe-table readers of
+the runner tests. The image installs a different file as `/system/VMM.ELF`:
+the same ELF through `llvm-objcopy --strip-debug` (about 4.0 MB), made in the
+build scratch directory, byte-identical for the same input. Entry point,
+program headers, loaded segments and `.symtab`/`.strtab` are unchanged;
+nothing at run time reads the debug sections (the kernel does not symbolise
+itself; `cdview_verify_volume` compares build-identity bytes through the
+PT_LOAD headers, which are the same in both files). `build_image.py` checks
+the result against the complete kernel and fails the build when the installed
+file is above 75 % of the loader's limit
+(`loader_kernel_limit()` reads `0x1000000` from `src/boot/ciukldr/elf.inc`).
+
+`build-manifest.json` fields (schema_version stays 1):
+
+| Field | Value |
+| --- | --- |
+| `kernel` | path of the complete ELF |
+| `kernel_sha256`, `kernel_installed_bytes` | SHA-256 and size of the installed `/system/VMM.ELF` (equal to its `payloads` record; the file the CD and the Hardware Report quote) |
+| `kernel_full_sha256`, `kernel_full_bytes` | SHA-256 and size of the complete ELF (the value `build-clock.json:kernel_sha256` binds) |
+| `kernel_loader_limit` | the loader's kernel file limit in bytes |
+
+`/System/BUILD.TXT` carries `kernel_elf_sha256=` (installed kernel, the one on
+the disk) and `kernel_full_elf_sha256=` (complete ELF; the Hardware Report
+ignores keys it does not know). `build_cd.py` compares `build-clock.json`
+with `kernel_full_sha256` and copies both hashes into its build record.
+Host tests: `tests/host/test_image_kernel.py`.
+
 
 ### Unattended hardware sweep
 
