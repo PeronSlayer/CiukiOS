@@ -10,7 +10,7 @@
 static pthread_t frame;
 static int synchronous;
 static struct {
-    unsigned size, offset, output, reads, max_read, syncs, closes, retries, short_io;
+    unsigned size, offset, output, reads, max_read, syncs, closes, retries, short_io, writes, max_write;
     uint64_t retry_at;
     int source, target, temporary, fail_write, block_read, entered, release, cross_device;
     pthread_mutex_t lock;
@@ -28,7 +28,7 @@ static void delay(uint64_t ns)
 static void io(void) { assert(synchronous || !pthread_equal(frame,pthread_self())); }
 static void reset(unsigned size)
 {
-    disk.size=size; disk.offset=disk.output=disk.reads=disk.max_read=disk.syncs=disk.closes=disk.retries=disk.short_io=0;
+    disk.size=size; disk.offset=disk.output=disk.reads=disk.max_read=disk.syncs=disk.closes=disk.retries=disk.short_io=disk.writes=disk.max_write=0;
     disk.retry_at=0;
     disk.source=1; disk.target=disk.temporary=disk.fail_write=disk.block_read=disk.entered=disk.release=disk.cross_device=0;
 }
@@ -85,6 +85,7 @@ static int write_file(void *ctx,int fd,const void *in,unsigned n)
     if(disk.fail_write)return -ENOSPC;
     if(disk.short_io && n>3001)n=3001;
     for(unsigned i=0;i<n;i++)assert(((const unsigned char *)in)[i]==(unsigned char)((disk.output+i)%251));
+    disk.writes++; if(n>disk.max_write)disk.max_write=n;
     disk.output+=n; return (int)n;
 }
 static int sync_file(void *ctx,int fd) { (void)ctx;io();assert(fd==8);disk.syncs++;return 0; }
@@ -242,6 +243,8 @@ int main(int argc,char **argv)
     measuring=0;uint64_t elapsed=mono()-started;wait_job();
     assert(app.job.state==FM_DONE && app.job.bytes==SIZE && app.job.total_bytes==SIZE && app.job.items_done==1 && app.job.total_items==1);
     assert(disk.syncs==1 && disk.closes==2 && disk.target && !disk.temporary && disk.max_read==FM_CHUNK);
+    /* fx-17: 64 KiB reads, 1 MiB writes: one FAT growth group per MiB. */
+    assert(disk.max_write==FM_WRITE_BATCH && disk.writes==SIZE/FM_WRITE_BATCH);
     assert(latency<50000000 && frame_max<50000000 && ui_cpu*100/elapsed<=5 && desktop_cpu*100/elapsed<=10);
     assert(damages<=elapsed/100000000ull+2 && damages>=60 && turns>500 && desktop.inputs>=turns);
     printf("AFTER bytes=%u wall_ms=%.3f ui_cpu_pct=%.3f desktop_cpu_pct=%.3f input_max_ms=%.3f frame_max_ms=%.3f progress_damage=%u input_turns=%u\n",SIZE,elapsed/1e6,ui_cpu*100.0/elapsed,desktop_cpu*100.0/elapsed,latency/1e6,frame_max/1e6,damages,turns);

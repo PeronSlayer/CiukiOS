@@ -1868,6 +1868,7 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
         if (fs_rd32(other)!=0x41615252 || fs_rd32(other+484)!=0x61417272 || fs_rd32(other+508)!=0xaa550000) return reject(v,"FSInfo signatures");
         uint32_t free=fs_rd32(other+488), next=fs_rd32(other+492);
         v->free_clusters=free<=v->clusters ? free : 0;
+        v->free_unknown=free>v->clusters; /* 0xFFFFFFFF: unknown (FAT spec FSI_Free_Count) */
         v->next_free=valid(v,next) ? next : 2;
         if (v->backup && v->backup!=0xffff) {
             if ((e=readsec(v,v->backup,other))) return e;
@@ -1892,6 +1893,7 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     /* Only the removable header path has no windows. No full FAT read or
      * ownership proof is needed to publish a deliberately read-only drive. */
     v->scan_deferred=preparing && !private;
+    if (v->scan_deferred && v->type!=32) v->free_unknown=true; /* FAT12/16 keep no free-count hint */
     uint32_t scan_begin=fs_now_ms();
     e=v->scan_deferred ? 0 : scan_volume(v,false,false);
     if (!v->scan_deferred) v->scan_ms=fs_now_ms()-scan_begin;
@@ -1979,6 +1981,62 @@ int fat_enable_write(struct fat_volume *v) {
         v->repaired_logs,v->repaired_lost,v->repaired_copies,e ? "retained" : "cleared",v->repair_ms,v->mount_ms,e);
     return e;
 }
+/* fx-17: active-FAT free count for a removable volume without a trusted
+ * FSInfo hint (FAT12/16 always; FAT32 with FSI_Free_Count 0xFFFFFFFF or out
+ * of range). The FAT spec: the count "must be computed" when unknown. */
+#define FAT_REMOVABLE_CENSUS_BYTES (512u*1024u)
+static int census_free(struct fat_volume *v) {
+    uint32_t free=0, first=0;
+    for (uint32_t c=2;c<v->clusters+2;c++) {
+        if (!(c&127)) fs_service();
+        uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
+        if (!n) { free++; if (!first) first=c; }
+    }
+    v->free_clusters=free; v->next_free=first ? first : 2; v->free_unknown=false;
+    return 0;
+}
+/* fx-17: removable FAT is made writable the way Windows 98 VFAT and Linux
+ * vfat mount it: no ownership scan at insertion (F1-74's deferred proof is
+ * superseded for removable media, see vfs-storage-contract.md "fx-17").
+ * The allocator only takes clusters whose active-FAT entry is zero, so a
+ * medium left dirty (lost clusters at worst under this driver's publication
+ * order) stays safe to write; its dirty/error indication is preserved for an
+ * explicit check. Write protection, unqualified durability, divergent or
+ * corrupt metadata and DMF disks keep the volume read-only. */
+int fat_enable_write_removable(struct fat_volume *v) {
+    if (!v || !v->mounted) return -FS_EINVAL;
+    if (!v->readonly && v->writable_session) return 0;
+    if (!v->scan_deferred) return fat_enable_write(v);
+    context(v,0);
+    int e=v->dev->logical ? 0 : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
+    if (!v->dev->write) {
+        v->ro_reasons|=FAT_RO_WRITE_PROTECTED; fat_revoke_write(v,"write_protected",0); return -FS_EROFS;
+    }
+    if (!blkdev_durable(v->dev)) {
+        v->ro_reasons|=FAT_RO_DURABILITY; fat_revoke_write(v,"durability",0); return -FS_EROFS;
+    }
+    if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DIRTY|FAT_RO_IO_FLAG)) return -FS_EROFS;
+    /* Without a trusted free count, count the active FAT now when that is
+     * cheap (FAT12/16 and small FAT32: at most FAT_REMOVABLE_CENSUS_BYTES).
+     * A large FAT32 whose FSInfo says "unknown" (not written by Windows or
+     * mkfs.fat) stays read-only until the explicit full upgrade: counting
+     * megabytes of FAT under the drive reservation would stall its readers. */
+    if (v->free_unknown && (uint64_t)(v->clusters+2)*v->type/8>FAT_REMOVABLE_CENSUS_BYTES) {
+        fat_revoke_write(v,"free_count_unknown",0); return -FS_EROFS;
+    }
+    uint32_t began=fs_now_ms();
+    if (v->free_unknown && (e=census_free(v))) { v->repair_ms=fs_now_ms()-began; return e; }
+    bool dirty=(v->ro_reasons&(FAT_RO_DIRTY|FAT_RO_IO_FLAG))!=0;
+    v->readonly_reason=0;v->readonly_file[0]=0;v->readonly_cluster=0;
+    v->ro_reasons=0; v->readonly=false; v->writable_session=true;
+    v->removable_trusted=true; v->dirty_preserved=dirty;
+    /* A clean medium is marked in use, so removal without Safely Remove is
+     * detectable at the next insertion (FAT spec ClnShutBitMask). */
+    if (!dirty && (e=set_clean(v,false))) { v->repair_ms=fs_now_ms()-began; return e; }
+    v->repair_ms=fs_now_ms()-began;
+    v->diagnostic=dirty ? "removable writable; dirty indication kept" : "removable writable";
+    return 0;
+}
 int fat_commit(struct fat_volume *v) {
     if (!v->mounted) return -FS_EINVAL;
     int e=v->dev->logical ? 0 : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
@@ -1987,7 +2045,7 @@ int fat_commit(struct fat_volume *v) {
 }
 int fat_unmount(struct fat_volume *v) {
     int e=fat_commit(v); if (e) return e;
-    if (v->writable_session && !v->readonly && cleanbit(v)) {
+    if (v->writable_session && !v->readonly && cleanbit(v) && !v->dirty_preserved) {
         if ((e=set_clean(v,true))) return e;
     }
     v->mounted=false; return 0;

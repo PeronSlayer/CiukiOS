@@ -13,6 +13,9 @@ int main(int argc,char **argv)
     int e=storage_add_floppy(s,b,0);
     if(e){fprintf(stderr,"FAT12 mount returned %d (requires f1-115b FAT source)\n",e);return 1;}
     assert(s->volumes[0].fat.type==12 && s->volumes[0].present && !s->volumes[2].present);
+    /* fx-17: floppy_mount's activation makes a writable diskette read-write
+     * at once (FAT12 keeps no clean flag: no insertion write). */
+    assert(s->volumes[0].fat.readonly && storage_activate_removable(s,b)==1 && !s->volumes[0].fat.readonly && s->volumes[0].fat.removable_trusted);
     assert(!storage_enable_write(s,0));
     struct vfs_table *t=calloc(1,sizeof(*t));assert(t);assert(!vfs_table_init(&s->vfs,t,0));
     int h=vfs_open(t,"A:/ROUNDTRIP.TXT",VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0);assert(h>=0);
@@ -46,6 +49,6 @@ int main(int argc,char **argv)
     rewind(image);assert(fwrite(m->disk,1,m->bytes,image)==m->bytes);assert(!fclose(image));
     fixture_close(m);free(m);
     assert(!blk_request_pool_host_cleanup());
-    puts("floppy FAT12: PASS (FDC/DMA round trip, A:/B:, rename/delete, remount, stale handle)");
+    puts("floppy FAT12: PASS (FDC/DMA round trip, A:/B:, writable activation, rename/delete, remount, stale handle)");
     fflush(stdout);return 0;
 }

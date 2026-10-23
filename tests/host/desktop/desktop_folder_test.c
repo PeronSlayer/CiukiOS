@@ -203,7 +203,8 @@ int main(int argc,char **argv)
     assert(snapshot->clipboard_count==1 && !strcmp(snapshot->clipboard[0],"/Documents/Latest copy.txt"));
     fake_nodes[fake_lookup("/Documents/Latest copy.txt")].live=0;
     command(DF_PASTE,-1); settle();
-    assert(strstr(d.sh.message_text,"No such file or directory (2)") && !strstr(d.sh.message_text,"(-2)")); close_message();
+    /* fx-17: the failure names the item with Explorer's reason text. */
+    assert(strstr(d.sh.message_text,"Cannot copy 'Latest copy.txt':\nThe file or folder cannot be found.") && !strstr(d.sh.message_text,"(-2)")); close_message();
     /* Shutdown cancels the job before the shell stops serving filesystem work. */
     fake_file("/Documents/Cancel.txt",30000,10); assert(!fm_refresh(other));
     assert(fm_select_name(other,"Cancel.txt",0)>=0 && !fm_clipboard(other,0) && !fm_clipboard_save(other));
@@ -284,6 +285,26 @@ int main(int argc,char **argv)
     poll_folder(&d);
     assert(d.sh.folder->model.entries==original && named("Stale.txt")>=3);
     puts("PASS F2-79 folder: unchanged buffer retained, async add/resize/remove, failed poll/retry and stale command result rejection");
+    /* fx-17 (T23 trial of e831e685): a move from the read-only stick
+     * (E:) into the desktop folder copied the song, failed to delete the
+     * source and reported a failed operation. A move whose original cannot
+     * be deleted keeps both copies and says so (cut + paste: a move). */
+    close_message();
+    if (fake_lookup("/mnt")<0) fake_create("/mnt",FM_DIR);
+    fake_create("/mnt/e",FM_DIR); fake_file("/mnt/e/song.mp3",30000,5);
+    snprintf(fake_readonly,sizeof(fake_readonly),"/mnt/e");
+    struct fm_model *stick=calloc(1,sizeof(*stick)); assert(stick); fm_init(stick,&fake_vfs); assert(!fm_navigate(stick,"/mnt/e"));
+    assert(fm_select_name(stick,"song.mp3",0)>=0 && !fm_clipboard(stick,1) && !fm_clipboard_save(stick));
+    command(DF_PASTE,-1); settle();
+    assert(d.sh.folder->job.kind==FM_MOVE && d.sh.folder->job.state==FM_DONE && d.sh.folder->job.kept==1);
+    assert(fake_lookup(DESK_FOLDER "/song.mp3")>=0 && fake_lookup("/mnt/e/song.mp3")>=0 && named("song.mp3")>=3);
+    assert(d.sh.message_kind==DU_DLG_ICON_WARNING && !strcmp(d.sh.message_title,"Moving Files"));
+    assert(strstr(d.sh.message_text,"'song.mp3' was copied to C:\\Documents\\Desktop, but the original on E: could not be deleted")
+           && strstr(d.sh.message_text,"Both copies are kept") && !strstr(d.sh.message_text,"Cannot"));
+    /* The cut stays on the clipboard: the original was not moved. */
+    assert(!fm_clipboard_load(stick) && stick->cut && stick->clipboard_count==1);
+    close_message(); fake_readonly[0]=0; fm_destroy(stick); free(stick);
+    puts("PASS fx-17 desktop move from a read-only stick: both copies kept, warning names the file and the drive, cut retained");
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");

@@ -34,6 +34,11 @@
 #define USB_UHCI_BULK_QH (USB_ED + 16u)
 #define USB_TD 4128u
 #define USB_TAIL 4160u
+/* fx-17: UHCI terminating QH (Linux uhci-hcd skel_term_qh). Its element is
+ * the inactive USB_TAIL TD (Intel PIIX errata workaround, as in Linux); its
+ * horizontal link closes the full-speed bandwidth-reclamation loop back to
+ * the control QH while a bulk stage runs, and terminates otherwise. */
+#define USB_UHCI_TERM_QH (USB_TAIL + 16u)
 #define USB_BUFFER 4352u
 /* Private interrupt slots fit all device/interface records in the same
  * pinned controller allocation: 16-byte QH/ED, 16-byte TD, 64-byte payload. */
@@ -187,6 +192,7 @@ struct usb_storage {
     uint16_t in_packet, out_packet;
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
+    unsigned command_errors; /* fx-17: CHECK CONDITION READ/WRITE failures kept online */
     bool binding, bind_reserved, bind_stage_active;
     uint32_t bind_read_requests, bind_read_sectors, bind_read_max;
     uint32_t bind_packets, bind_poll_frames, bind_retire_frames;

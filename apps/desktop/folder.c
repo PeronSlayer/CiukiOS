@@ -113,7 +113,7 @@ static int transfer_prepare(void *arg)
 static void transfer_complete(void *arg)
 {
     struct desk_folder *f=arg;
-    if (f->job.state==FM_DONE && f->job.kind==FM_MOVE && !f->job.skipped && f->clipboard_job && f->model.cut)
+    if (f->job.state==FM_DONE && f->job.kind==FM_MOVE && !f->job.skipped && !f->job.kept && !f->job.kept_folders && f->clipboard_job && f->model.cut)
         fm_clipboard_consume(&f->model);
     snprintf(f->result.path,sizeof(f->result.path),"%s",DESK_FOLDER);
     f->result.sort=f->model.sort; f->result.descending=f->model.descending;
@@ -424,7 +424,9 @@ void desk_folder_service(struct desktop *d)
                 m->active=m->anchor=0; f->result.entries=NULL; f->result.count=f->result.capacity=0;
                 desk_folder_changed(d);
             }
-            if (v->state==FM_FAILED) error(d,-f->job.error);
+            char title[64], text[320]; int icon=0;
+            if (fm_job_report(&f->job,title,sizeof(title),text,sizeof(text),&icon)) desk_shell_message_class(d,title,text,icon);
+            else if (v->state==FM_FAILED) error(d,-f->job.error);
             else if (f->result_error) error(d,f->result_error);
         } else if (!f->progress_ns || d->now_ns-f->progress_ns>=100000000ull || (v->state==FM_REPLACE && du_dialog_id(f->dialog)!=F_REPLACE)) {
             dialog_update(d,v); f->progress_ns=d->now_ns;

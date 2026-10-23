@@ -56,6 +56,12 @@ struct fat_volume {
     bool mounted, readonly, writable_session, dirty_recovered;
     bool preparing; /* unpublished mount: complete direct I/O, no cache mutex */
     bool scan_complete, scan_fast, scan_deferred;
+    /* fx-17: removable media made writable without an ownership scan
+     * (Windows 98 VFAT / Linux vfat model). free_unknown: no trusted free
+     * count yet (FAT12/16, invalid FSInfo); dirty_preserved: the medium was
+     * dirty or flagged an I/O error at insertion, so a clean unmount keeps
+     * that indication for a later check instead of hiding it. */
+    bool free_unknown, removable_trusted, dirty_preserved;
     uint32_t scan_extent, scan_passes, scan_needed_bytes, scan_available_bytes;
     uint32_t mount_ms, repair_ms, scan_ms;
     uint32_t repaired_lost, repaired_logs, repaired_copies, log_directory;
@@ -217,6 +223,7 @@ int fat_prepare_removable(struct fat_volume *, struct block_cache *, struct blkd
  * advisory flags durably; live ownership conflicts and issued I/O errors
  * retain their write gate. */
 int fat_enable_write(struct fat_volume *);
+int fat_enable_write_removable(struct fat_volume *v);
 int fat_unmount(struct fat_volume *);
 int fat_commit(struct fat_volume *);
 int fat_scan(struct fat_volume *); /* bounded read-only ownership scan */

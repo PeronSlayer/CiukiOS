@@ -13,6 +13,7 @@ static void transport_latency(const char *path, unsigned mode, bool baseline)
     mount_device();
     uint64_t mount_ms=m.now-begin;
     unsigned mount_commands=m.read_commands;
+    unsigned mount_writes=m.writes; /* fx-17: activation clears the clean flag of a writable stick */
     uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
     unsigned before=m.read_commands;
     uint64_t interrupts=m.h.interrupts;
@@ -26,14 +27,19 @@ static void transport_latency(const char *path, unsigned mode, bool baseline)
     uint64_t sequential_ms=m.now-begin;
     assert(m.read_commands==before+2);
     assert(block()->read(block(),0,129,buf)==-FS_EINVAL && m.read_commands==before+2);
-    assert(!m.resets && !m.clear_in && !m.clear_out && !m.writes);
+    assert(!m.resets && !m.clear_in && !m.clear_out && m.writes==mount_writes);
     assert(irq ? m.h.interrupts>0 : m.h.interrupts==0);
     printf("F1-81 %s: mount READs=%u ms=%llu; single READs=1 ms=%llu block_ms=%llu; 128-sector READs=1 ms=%llu KB/s=%llu\n",
            mode==2 ? "lost IRQ" : irq ? "IRQ" : "poll",mount_commands,(unsigned long long)mount_ms,
            (unsigned long long)single_ms,(unsigned long long)block_ms,(unsigned long long)sequential_ms,
            (unsigned long long)(BLKDEV_READ_BYTES*1000ull/sequential_ms/1024));
     if (!baseline) {
-        assert(single_ms<=3);assert(mount_ms<=60);
+        /* fx-17: mount_device now includes the writable activation that
+         * follows publication (FAT16 census of 64 FAT sectors, clean-flag
+         * writes in both copies with their SYNCHRONIZE CACHE barriers):
+         * measured 143 model ms against the former 60 ms publication. */
+        fprintf(stderr,"F1-81 mount_ms=%llu (publication + writable activation)\n",(unsigned long long)mount_ms);
+        assert(single_ms<=3);assert(mount_ms<=200);
         assert(BLKDEV_READ_BYTES*1000ull/sequential_ms>=700u*1024);
     }
     free(buf);cleanup();

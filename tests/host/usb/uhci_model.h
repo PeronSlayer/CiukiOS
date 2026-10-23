@@ -12,6 +12,9 @@ struct uhci_model_io {
      * f1-96b: returns whether the element advanced; a queue whose element
      * did not advance (early-Intel erratum) is left for the horizontal link. */
     bool (*advance)(void *, uint32_t, volatile uint32_t *, uint32_t);
+    /* fx-17 negative control: the QH whose horizontal link the walker treats
+     * as terminate (the driver's reclamation loop removed), or 0. */
+    uint32_t no_reclamation_qh;
 };
 static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
 {
@@ -19,7 +22,14 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
     uint32_t qh_address = 0, horizontal = 1;
     unsigned reserved = 12;
     unsigned transactions = 16; /* conservative full-speed frame bandwidth */
-    /* This fixture has no bandwidth-reclamation loop. Bound malformed cycles. */
+    /* fx-17: the driver closes a bandwidth-reclamation loop (terminating QH
+     * back to the control QH) while a bulk stage runs. The HC keeps cycling
+     * until the frame's bandwidth is spent; a NAK costs one transaction
+     * slot. A full pass that executes nothing (every TD inactive or the
+     * queues empty) idles to the end of the frame. Malformed cycles stay
+     * bounded by the step limit. */
+    enum { SEEN_MAX = 96 }; /* every interrupt QH plus control, bulk and terminating QHs */
+    uint32_t seen[SEEN_MAX] = {0}; unsigned seen_tx[SEEN_MAX] = {0}, seen_count = 0;
     for (unsigned steps = 0; steps < 1024; steps++) {
         if (link & 1) {
             if (!qh) return 0;
@@ -31,8 +41,13 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
         if (link & reserved) return -USB_EPROTO;
         uint32_t address = link & ~15u;
         if (link & 2) {
+            unsigned i = 0;
+            while (i < seen_count && seen[i] != address) i++;
+            if (i < seen_count && seen_tx[i] == transactions) return 0; /* idle reclamation pass */
+            if (i == seen_count && seen_count < SEEN_MAX) seen[seen_count++] = address;
+            if (i < SEEN_MAX) seen_tx[i] = transactions;
             qh = io->dma(io->cookie, address, 8); qh_address = address;
-            horizontal = qh[0]; link = qh[1]; reserved = 8;
+            horizontal = io->no_reclamation_qh && address == io->no_reclamation_qh ? 1 : qh[0]; link = qh[1]; reserved = 8;
             continue; /* entering a QH replaces, never stacks, the Q context */
         }
         volatile uint32_t *td = io->dma(io->cookie, address, 16);

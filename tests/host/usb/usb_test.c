@@ -22,6 +22,7 @@ int storage_add_removable_bounded(struct storage *s,struct blkdev *b,
 { (void)cancel;(void)pause;(void)ctx;return storage_add_removable(s,b); }
 int storage_remove_removable(struct storage *s,struct blkdev *b,bool surprise) { (void)s;(void)b;(void)surprise;assert(0);return -FS_EIO; }
 int storage_remove_removable_locked(struct storage *s,struct blkdev *b,bool surprise) { return storage_remove_removable(s,b,surprise); }
+int storage_activate_removable(struct storage *s,struct blkdev *b) { (void)s;(void)b;assert(0);return 0; }
 struct ciuki_boot_info g_boot;
 /* Controller models supply the effective boot decision at this boundary. */
 bool drivers_input_firmware(void)
@@ -566,7 +567,7 @@ static bool uhci_transaction(void *arg,uint32_t td_address,uint32_t qh_address,v
 static void execute_uhci(struct model *m,uint32_t link)
 {
     uint32_t status=m->regs[0]>>16;
-    struct uhci_model_io io={m,uhci_dma,uhci_transaction,&status,NULL};
+    struct uhci_model_io io={m,uhci_dma,uhci_transaction,&status,NULL,0};
     assert(!uhci_model_frame(&io,link));
     m->regs[0]|=status<<16;
     if(m->bulk_record && m->bulk_recorded) {
@@ -613,7 +614,7 @@ static void rules_setup(unsigned depth)
 }
 static void uhci_schedule_rules(void)
 {
-    struct uhci_model_io io={&rules,rules_dma,rules_transaction,&rules.status,NULL};
+    struct uhci_model_io io={&rules,rules_dma,rules_transaction,&rules.status,NULL,0};
     for(unsigned depth=0;depth<2;depth++) {
         rules_setup(depth);assert(!uhci_model_frame(&io,0x100002));
         assert(rules.order[0]==64 && rules.order[rules.count-1]==96);
@@ -835,11 +836,14 @@ static void uhci_schedule_regression(void)
     assert(link==(m.host.dma_phys+USB_UHCI_CONTROL_QH+2));
     volatile uint32_t *control=uhci_dma(&m,link&~15u,8);
     assert(control[1]==1 && control[0]==(m.host.dma_phys+USB_UHCI_BULK_QH+2));
-    volatile uint32_t *bulk=uhci_dma(&m,control[0]&~15u,8);assert(bulk[0]==m.host.dma_phys+USB_TAIL && bulk[1]==1);
+    volatile uint32_t *bulk=uhci_dma(&m,control[0]&~15u,8);assert(bulk[0]==(m.host.dma_phys+USB_UHCI_TERM_QH+2) && bulk[1]==1);
+    /* fx-17: terminating QH (Linux skel_term_qh): inactive tail TD element,
+     * reclamation loop open (terminate) while no bulk stage runs. */
+    volatile uint32_t *term=uhci_dma(&m,bulk[0]&~15u,8);assert(term[0]==1 && term[1]==m.host.dma_phys+USB_TAIL);
     model_step();assert(m.host.device_count==2 && !schedule_entries && !schedule_qhs);
     g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;m.host.next_scan=m.now;model_step();
-    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==3 && !schedule_invalid);
-    assert(m.host.schedule_dumped);model_step();assert(schedule_entries==4 && schedule_qhs==66);
+    assert(schedule_entries==4 && schedule_qhs==67 && schedule_tds==3 && !schedule_invalid);
+    assert(m.host.schedule_dumped);model_step();assert(schedule_entries==4 && schedule_qhs==67);
     /* Inject a missing interrupt-tail -> control edge. This reproduces the
      * observable EAGAIN/addr0 timeout combination, but is NOT the F1-52
      * baseline: its original control QH was reachable (see validation). */
@@ -874,7 +878,7 @@ static void uhci_schedule_regression(void)
     usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
     setup(true,false);g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();assert(!schedule_entries && !schedule_qhs);
     setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();
-    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==3);
+    assert(schedule_entries==4 && schedule_qhs==67 && schedule_tds==3);
     usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
     puts("PASS USB UHCI periodic/control/bulk reachability, missing-tail fault reproduces NAK EAGAIN/addr0 timeout, restored ACK/input, once-only bounded verbose/test dump");
 }
