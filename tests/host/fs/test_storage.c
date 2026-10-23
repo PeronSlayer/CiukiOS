@@ -38,8 +38,10 @@ static char readonly_record[256];
 static char log_repair_record[256];
 static char writeback_record[256];
 static char writeback_progress_record[512];
+static char shutdown_record[256];
 void klog(const char *fmt, ...) {
     char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
+    if (!strncmp(line,"[storage] shutdown ",19)) memcpy(shutdown_record,line,sizeof(shutdown_record));
     if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(readonly_record)); }
     if (!strncmp(line,"[storage] log_repair ",21)) memcpy(log_repair_record,line,sizeof(log_repair_record));
     if (strstr(line,"failure stage=writeback")) memcpy(writeback_record,line,sizeof(writeback_record));
@@ -634,6 +636,49 @@ static void shutdown_recorder(void) {
     storage_destroy(s);reset();
     puts("PASS f0-40 final power record: real raw checkpoint after storage_sync, FAT stays stopped with zero further filesystem writes");
 }
+/* fx-5: the call-73 storage flush in the T23 trial shape (image 9a60215f):
+ * C: writable with a live boot log and dirty data, E: a read-only removable
+ * FAT volume. A refusal (drain owner beyond the bound, open file) changes
+ * nothing and leaves the writer serving; the retry is durable. */
+static void shutdown_busy_tests(void) {
+    struct storage *s=start(); OK(storage_enable_write(s,2));
+    OK(bootlog_activate(&s->vfs,true,s->sequence));
+    OK(storage_add_removable(s,&media[2].dev));
+    CHECK(s->vfs.volumes[4] && s->volumes[4].removable && s->volumes[4].fat.readonly);
+    unsigned removable_writes=media[2].writes;
+    int h=vfs_open(&table,"C:/SYSTEM/FX5.TXT",VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0); CHECK(h>=0);
+    size_t n; OK(vfs_write(&table,h,"durable\n",8,&n)); CHECK(n==8);
+    bootlog_capture("[power] power off requested by pid 2\n",37);
+    struct bootlog_stats st;
+    /* A drain owner outliving BOOTLOG_SYNC_TIMEOUT_MS: bounded refusal. */
+    OK(bootlog_pause_drain(10000));
+    CHECK(storage_sync()==-FS_EBUSY && !s->stopped && strstr(shutdown_record,"refused stage=bootlog result=-16"));
+    bootlog_snapshot(&st); CHECK(st.active && !s->writer_quiescing);
+    OK(storage_writeback(s,fs_now_ms()+5001)); /* the writer still serves after the refusal */
+    bootlog_resume_drain();
+    /* A short drain turn (the T23 case) is waited for; the open file is the busy volume. */
+    OK(bootlog_pause_drain(30));
+    CHECK(storage_sync()==-FS_EBUSY && !s->stopped && strstr(shutdown_record,"refused stage=volumes result=-16"));
+    CHECK(s->vfs.volumes[2] && s->vfs.volumes[4] && s->volumes[2].fat.mounted && !s->writer_quiescing);
+    OK(vfs_write(&table,h,"resumed\n",8,&n)); CHECK(n==8); /* writes still admitted */
+    OK(storage_writeback(s,fs_now_ms()+5001));
+    OK(vfs_close(&table,h)); vfs_table_destroy(&table);
+    /* The retry: durable, every volume detached, nothing written to E:. */
+    OK(storage_sync()); CHECK(s->stopped && !s->vfs.volumes[2] && !s->vfs.volumes[4]);
+    CHECK(media[2].writes==removable_writes);
+    /* A repeated request on stopped storage is harmless and writes nothing. */
+    unsigned writes=media[0].writes; OK(storage_sync()); CHECK(media[0].writes==writes);
+    storage_destroy(s); bootlog_reset();
+    s=start(); h=vfs_open(&table,"C:/SYSTEM/FX5.TXT",VFS_READ,VFS_DENY_NONE,0); CHECK(h>=0);
+    char text[32]; OK(vfs_read(&table,h,text,sizeof(text),&n)); CHECK(n==16 && !memcmp(text,"durable\nresumed\n",16));
+    OK(vfs_close(&table,h)); stop(s,true);
+    for(unsigned i=0;i<2;i++) {
+        struct scan_result scan=independent_scan(media[0].fd,i);
+        CHECK(!scan.dirty && !scan.divergent && !scan.lost && !scan.crosslinks && !scan.corrupt);
+    }
+    reset();
+    puts("PASS fx-5 shutdown: bounded drain-owner and open-file refusals keep storage serving, read-only removable untouched, retry durable and clean, repeat harmless");
+}
 static void unsupported_flush_views(void) {
     for (unsigned writable=0;writable<2;writable++) {
         struct storage *s=start();
@@ -702,7 +747,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); shutdown_busy_tests(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

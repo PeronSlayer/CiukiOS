@@ -53,6 +53,38 @@ Research and implementation decisions:
   retirement, then stops the ThinkPad quirk, audio DMA and USB schedules.
   A failed device proof returns EBUSY to keep S5 and the desktop's safe-off
   result unreachable. The underlying failure is logged and claims stay pinned.
+- **fx-5, from the T23 trial of image `9a60215f` (2026-10-23).** The first
+  call-73 flush met the storage task's boot-log drain turn.
+  `bootlog_shutdown` refused it with EBUSY at once, and `storage_sync` then
+  latched `stopped` and ended the writer. The desktop retried after 250 ms,
+  hence the second `power off requested by pid 2`. That retry flushed C: and
+  the read-only removable E:, then panicked `mutex: lock order` in the audio
+  quiesce (see `execution-abi.md`). The decisions are below.
+  - Transient internal holders are waited for, each within a finite bound:
+    the drain turn (≤ `BOOTLOG_SYNC_TIMEOUT_MS`, like `blackbox_checkpoint`),
+    the writer's writeback turn and in-flight page I/O.
+  - EBUSY is returned only before any irreversible step, for a holder that
+    outlives its bound: an open file of a live program, a published POSIX
+    or identity reference, or a concurrent request. Such a refusal changes
+    nothing: no `stopped` latch, the writer keeps serving, and the pager
+    resumes. `[storage] shutdown refused stage=…` and `[storage] shutdown
+    busy drive=… holder=…` record the cause.
+  - Call 73 is one serialized sequence. A request arriving while one runs is
+    refused with EBUSY and touches no stage. A repeated request resumes after
+    the latched stages: durable storage is not flushed again, and a stopped
+    machine goes straight to reset or soft-off.
+  - The order remains that of
+    [ACPI 6.5 §7.4.2 and §16.1](https://uefi.org/specs/ACPI/6.5/16_Waking_and_Sleeping.html):
+    native drivers are prepared before `_PTS(5)`, then SLP_TYP|SLP_EN.
+    Durability precedes power removal, which [reboot(2)](https://man7.org/linux/man-pages/man2/reboot.2.html)
+    states for `LINUX_REBOOT_CMD_POWER_OFF`: "If not preceded by a sync(2),
+    data will be lost."
+  - The other paths named by the directive were traced and contain no
+    kmutex on this path. They are the w32srv shutdown flush (desktop, before
+    call 73), the f3-64 persistent DOS overlays (sealed at VM session end; a
+    live VM is an open-file holder), the APM platform quiesce worker (same
+    `power_devices_quiesce`), and ACPI soft-off (worker handoff,
+    `fw_os` IRQ lock and kwait semaphores).
 - ACPICA **20260930**, already vendored: reference paths
   `source/components/utilities/utxfinit.c`, `events/evsci.c`, `evgpe.c`,
   `evgpeutil.c`, `evxfevnt.c`, `hardware/hwacpi.c`, `hwxfsleep.c`, `hwsleep.c`

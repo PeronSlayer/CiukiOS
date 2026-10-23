@@ -700,14 +700,19 @@ static int shutdown_volumes(struct storage *s)
     s->writer_quiescing=true;
     while (s->writer_running) fs_event_wait(&s->vfs.volume_changed,&s->vfs.lock);
     vfs_reserve_locked(&s->vfs,VFS_ALL_DRIVES); vfs_tag_locked(&s->vfs,"commit"); vfs_site_locked(&s->vfs,"mount");
-    bool busy = false;
-    for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive])) busy = true;
-    for (unsigned d=0;d<26;d++) if (s->vfs.volumes[d] && vfs_identity_busy(&s->vfs,s->vfs.volumes[d])) busy=true;
-    for (unsigned d = 0; d < 26; d++)
-        if (s->vfs.volumes[d] && px_volume_busy && px_volume_busy(&s->vfs, s->vfs.volumes[d])) busy = true;
-    for (unsigned d=3; d<26; d++)
-        if (s->vfs.ro_volumes[d] && px_ro_busy && px_ro_busy(&s->vfs,s->vfs.ro_volumes[d])) busy=true;
-    if (busy) { s->writer_quiescing=false; vfs_unlock(&s->vfs); return -FS_EBUSY; }
+    /* fx-5: the first holder is recorded; the refusal changes nothing. */
+    const char *busy = 0; unsigned busy_drive = 0;
+    for (unsigned i = 0; i < VFS_NODES && !busy; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive]))
+        { busy = "open"; busy_drive = s->vfs.nodes[i].drive; }
+    for (unsigned d=0;d<26 && !busy;d++) if (s->vfs.volumes[d] && vfs_identity_busy(&s->vfs,s->vfs.volumes[d])) { busy="identity"; busy_drive=d; }
+    for (unsigned d = 0; d < 26 && !busy; d++)
+        if (s->vfs.volumes[d] && px_volume_busy && px_volume_busy(&s->vfs, s->vfs.volumes[d])) { busy = "posix"; busy_drive = d; }
+    for (unsigned d=3; d<26 && !busy; d++)
+        if (s->vfs.ro_volumes[d] && px_ro_busy && px_ro_busy(&s->vfs,s->vfs.ro_volumes[d])) { busy="posix_ro"; busy_drive=d; }
+    if (busy) {
+        klog("[storage] shutdown busy drive=%c holder=%s result=%d", 'A'+(busy_drive<26 ? busy_drive : 25), busy, -FS_EBUSY);
+        s->writer_quiescing=false; vfs_unlock(&s->vfs); return -FS_EBUSY;
+    }
     s->stopped = true;
     s->writer_quiescing=false;
     int result = s->writer_error;
@@ -944,10 +949,20 @@ int storage_sync(void)
     static const char marker[]="[storage] shutdown requested\n";
     if (blackbox_capture) blackbox_capture(marker,sizeof(marker)-1);
     int e=blackbox_checkpoint ? blackbox_checkpoint() : 0;
-    if (e) return e;
+    if (e) { klog("[storage] shutdown refused stage=blackbox result=%d",e); return e; }
     e = bootlog_shutdown();
-    if (e) { system_storage.stopped = true; return e; }
+    /* fx-5: EBUSY is a refusal before any change (bootlog_shutdown waited
+     * for the drain owner first): the writer, cache and mounts continue and
+     * call 73 may retry. Latching `stopped` here ended the storage writer
+     * after the first, refused, T23 power-off (image 9a60215f). A real log
+     * failure still stops storage without a clean mark. */
+    if (e) {
+        klog("[storage] shutdown refused stage=bootlog result=%d",e);
+        if (e != -FS_EBUSY) system_storage.stopped = true;
+        return e;
+    }
     e=storage_shutdown(&system_storage);
+    if (e) klog("[storage] shutdown refused stage=volumes result=%d",e);
     if (!e) {
         static const char complete[]="[storage] shutdown complete\n";
         if (blackbox_capture) blackbox_capture(complete,sizeof(complete)-1);

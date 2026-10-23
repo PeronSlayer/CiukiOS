@@ -65,8 +65,35 @@ bool deadline_passed(uint64_t deadline) { return (int64_t)(g_ticks - deadline) >
 gen_t gen_alloc(void) { static gen_t next; return ++next; }
 uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_DMA); return pmm_alloc(); }
 void task_yield(void) { task_sleep_ms(0); }
-void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
-void kmutex_lock(struct kmutex *m) { CHECK(!m->owner); m->owner=g_current; }
+/* fx-5: the production order rule of kmutex_lock_until (sync.h
+ * kmutex_order_conflict over the task's held mutexes) and its unlock-order
+ * rule. A violation is recorded with both lock names instead of exiting, so
+ * the shutdown tests can require zero and a negative control can prove the
+ * model is live. Host statics are laid out by clang, not the kernel linker:
+ * a nesting across objects passes here only through its level. */
+static struct kmutex *held_mutexes;
+static unsigned lock_order_violations, lock_acquisitions;
+static bool lock_order_expected; /* negative control only; otherwise fatal */
+static char lock_order_record[192];
+static const char *lock_name(const struct kmutex *m) { return m->name ? m->name : "unnamed"; }
+static void held_unlink(struct kmutex *m)
+{
+    for (struct kmutex **p=&held_mutexes;*p;p=&(*p)->held_next)
+        if (*p==m) { *p=m->held_next; m->held_next=0; return; }
+}
+void kmutex_init(struct kmutex *m) { held_unlink(m); memset(m,0,sizeof(*m)); }
+void kmutex_lock(struct kmutex *m)
+{
+    for (struct kmutex *p=held_mutexes;p;p=p->held_next)
+        if (p->owner==g_current && kmutex_order_conflict(p,m)) {
+            lock_order_violations++;
+            snprintf(lock_order_record,sizeof(lock_order_record),"mutex: %s want=%s/%p held=%s/%p",
+                     p==m ? "recursive acquisition" : "lock order",lock_name(m),(void *)m,lock_name(p),(void *)p);
+            puts(lock_order_record);
+            CHECK(lock_order_expected);
+        }
+    CHECK(!m->owner); m->owner=g_current; m->held_next=held_mutexes; held_mutexes=m; lock_acquisitions++;
+}
 static int power_lock_fault = -1;
 bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
 {
@@ -75,7 +102,13 @@ bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
     if (power_lock_fault > 0) power_lock_fault--;
     kmutex_lock(m); return true;
 }
-void kmutex_unlock(struct kmutex *m) { CHECK(m->owner==g_current); m->owner=0; }
+void kmutex_unlock(struct kmutex *m)
+{
+    CHECK(m->owner==g_current);
+    struct kmutex **p=&held_mutexes;
+    while (*p!=m) { CHECK(*p && (*p)->owner!=g_current); p=&(*p)->held_next; } /* unlock order */
+    *p=m->held_next; m->held_next=0; m->owner=0;
+}
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn condition, void *arg, uint64_t deadline)
 {
     (void)q;
@@ -1047,10 +1080,10 @@ static void test_shutdown(void)
         }
         uint32_t canary=ac97.bdl[0].address;
         audio.initialized=true; power_stopped=false;
-        kmutex_init(&control_lock); kmutex_init(&service_lock);
+        audio_locks_init();
         for (int lock=0;lock<2;lock++) {
             power_lock_fault=lock;
-            CHECK(audio_power_quiesce()==-EBUSY && !control_lock.owner && !service_lock.owner && !resource_releases);
+            CHECK(audio_power_quiesce()==-EBUSY && !audio_lock.control.owner && !audio_lock.service.owner && !resource_releases);
         }
         power_lock_fault=-1;
         CHECK(audio_power_quiesce()==(fault ? -EIO : 0));
@@ -1400,7 +1433,7 @@ static void test_stream_syscalls(void)
 static void test_persistence(void)
 {
     CHECK(!make_dir("/system"));
-    kmutex_init(&control_lock);saved_sequence=0;audio_settings_load(&vfs);
+    audio_locks_init();saved_sequence=0;audio_settings_load(&vfs);
     CHECK(audio.master.left==20&&audio.master.right==20&&!audio.master.mute);
     int mixer=file_open(client,"/dev/mixer",O_RDONLY,0);CHECK(mixer>=0);
     struct ciuki_audio_diagnostics info={.version=1,.size=64};
@@ -1481,6 +1514,7 @@ int mm_unpin(struct mm_pin *pin,uint32_t generation)
 #include "vm_creation_test.inc"
 #include "vm_paging_test.inc"
 #include "thinkpad_ec_test.inc"
+#include "shutdown_order_test.inc"
 #include "deadline_test.inc"
 #include "pipeline_test.inc"
 #include "transient_test.inc"
@@ -1536,7 +1570,7 @@ int main(int argc,char **argv)
     test_voice_engines();
     test_vm_creation_lead();
     test_vm_paging_replay();
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_shutdown_lock_order();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
     test_maestro();
     test_refill_demand();
     test_producer_lead();

@@ -566,28 +566,114 @@ void kwait_wake_all(struct kwait *q) { wait_wake(q, false, false); }
 void kwait_wake_ready(struct kwait *q) { wait_wake(q, false, true); }
 void kwait_wake_io(struct kwait *q) { wait_wake(q, true, true); }
 
-void kmutex_init(struct kmutex *m)
+/* fx-5: noinline keeps __builtin_return_address(0) the caller's site, also
+ * where this unit is included by a host harness. */
+__attribute__((noinline)) void kmutex_init(struct kmutex *m)
 {
     m->owner = 0;
     m->held_next = 0;
+    /* fx-5: the init call site is the class of an unnamed mutex. */
+    m->name = 0;
+    m->init_site = (uintptr_t)__builtin_return_address(0);
+    m->site = 0;
+    m->level = 0;
     kwait_init(&m->wait);
 }
 
 static bool mutex_free(void *arg) { return !((struct kmutex *)arg)->owner; }
 
-bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
+/* fx-5 lock-order records name both locks: CLASS/ADDRESS@SITE, where CLASS is
+ * the kmutex_init_named name or init@ADDRESS of the kmutex_init call. Fixed
+ * 24-byte class text, no formatter dependency; panic() bounds the line. */
+struct mutex_label { char text[24]; };
+static const char *mutex_class(const struct kmutex *m, struct mutex_label *l)
+{
+    if (m->name) return m->name;
+    static const char digits[] = "0123456789abcdef";
+    memcpy(l->text, "init@", 5);
+    uint32_t v = (uint32_t)m->init_site;
+    for (unsigned i = 0; i < 8; i++) l->text[5 + i] = digits[(v >> (28 - 4 * i)) & 15];
+    l->text[13] = 0;
+    return l->text;
+}
+static __attribute__((noreturn)) void mutex_panic(const char *what, const struct kmutex *want, uintptr_t site,
+                                                  const struct kmutex *held)
+{
+    struct mutex_label a, b;
+    panic("mutex: %s want=%s/%08lx@%08lx held=%s/%08lx@%08lx task=%s", what,
+          mutex_class(want, &a), (unsigned long)(uint32_t)(uintptr_t)want, (unsigned long)(uint32_t)site,
+          mutex_class(held, &b), (unsigned long)(uint32_t)(uintptr_t)held, (unsigned long)(uint32_t)held->site,
+          g_current ? g_current->name : "boot");
+}
+/* fx-5 follow-up, lead decision 2026-10-23: an acquisition-order report
+ * (want/held) is fatal only where a test can act on it: a boot carrying a
+ * test request (CBI_F_TEST_REQUEST, the fw_cfg selector) and hosted host
+ * harnesses (__STDC_HOSTED__, or set ksync_order_fatal). A normal boot logs
+ * the named record once per (want class, held class) pair, counts every
+ * report and continues, as production kernels treat lockdep. Recursion,
+ * unlock order, non-owner unlock and the cyclic-wait timeout stay fatal. */
+#ifndef KSYNC_ORDER_FATAL_DEFAULT
+#define KSYNC_ORDER_FATAL_DEFAULT (__STDC_HOSTED__ != 0)
+#endif
+bool ksync_order_fatal = KSYNC_ORDER_FATAL_DEFAULT;
+struct order_class { const char *name; uintptr_t init_site; };
+static struct { struct order_class want, held; } order_pairs[KSYNC_ORDER_PAIRS];
+static struct ksync_order_stats order_stats;
+static bool order_reporting;
+static bool class_is(const struct order_class *c, const struct kmutex *m)
+{
+    if (c->name || m->name) return c->name && m->name && !strncmp(c->name, m->name, 64);
+    return c->init_site == m->init_site;
+}
+/* True when this (want, held) class pair is new and gets its one record. */
+static bool order_note(const struct kmutex *want, const struct kmutex *held_lock)
+{
+    uint32_t f = irq_save();
+    bool fresh = true;
+    for (unsigned i = 0; fresh && i < order_stats.pairs; i++)
+        if (class_is(&order_pairs[i].want, want) && class_is(&order_pairs[i].held, held_lock)) fresh = false;
+    if (fresh && order_stats.pairs == KSYNC_ORDER_PAIRS) { order_stats.dropped++; fresh = false; }
+    else if (fresh) {
+        order_pairs[order_stats.pairs].want = (struct order_class){ want->name, want->init_site };
+        order_pairs[order_stats.pairs].held = (struct order_class){ held_lock->name, held_lock->init_site };
+        order_stats.pairs++;
+    }
+    irq_restore(f);
+    return fresh;
+}
+static void order_report(const struct kmutex *want, uintptr_t site, const struct kmutex *held_lock)
+{
+    if (!order_note(want, held_lock) || order_reporting) return;
+    order_reporting = true; /* klog takes no kmutex; never recurse regardless */
+    struct mutex_label a, b;
+    klog("[kernel] lock_order want=%s/%08lx@%08lx held=%s/%08lx@%08lx task=%s pairs=%u action=continue",
+         mutex_class(want, &a), (unsigned long)(uint32_t)(uintptr_t)want, (unsigned long)(uint32_t)site,
+         mutex_class(held_lock, &b), (unsigned long)(uint32_t)(uintptr_t)held_lock, (unsigned long)(uint32_t)held_lock->site,
+         g_current ? g_current->name : "boot", order_stats.pairs);
+    order_reporting = false;
+}
+void ksync_order_snapshot(struct ksync_order_stats *out)
+{
+    uint32_t f = irq_save(); *out = order_stats; irq_restore(f);
+}
+static bool mutex_acquire(struct kmutex *m, uint64_t deadline, uintptr_t site)
 {
     thread_context();
+    bool reported = false;
     for (struct kmutex *p = held; p; p = p->held_next)
-        if (p->owner == g_current && (uintptr_t)p >= (uintptr_t)m) {
-            if (p == m) panic("mutex: recursive acquisition");
+        if (p->owner == g_current && kmutex_order_conflict(p, m)) {
+            if (p == m) mutex_panic("recursive acquisition", m, site, p);
             /* Cyclic waits remain bounded by the caller's timeout. Never
              * recurse around the donation graph, or change lock ordering. */
-            if (!lock_cycle(g_current, m->owner)) panic("mutex: lock order");
+            if (lock_cycle(g_current, m->owner)) continue;
+            if (ksync_order_fatal || (g_boot.flags & CBI_F_TEST_REQUEST)) mutex_panic("lock order", m, site, p);
+            if (!reported) { uint32_t f = irq_save(); order_stats.violations++; irq_restore(f); reported = true; }
+            order_report(m, site, p);
         }
     if (m->owner && !kwait_wait_until(&m->wait, mutex_free, m, deadline)) return false;
     uint32_t f = irq_save();
     m->owner = g_current;
+    m->site = site;
     kwait_set_owner(&m->wait, g_current);
     kpreempt_hold();
     m->held_next = held;
@@ -595,31 +681,37 @@ bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
     irq_restore(f);
     return true;
 }
-void kmutex_lock(struct kmutex *m)
+__attribute__((noinline)) bool kmutex_lock_until(struct kmutex *m, uint64_t deadline)
 {
-    while (!kmutex_lock_until(m, deadline_after_ms(1000))) {
+    return mutex_acquire(m, deadline, (uintptr_t)__builtin_return_address(0));
+}
+__attribute__((noinline)) void kmutex_lock(struct kmutex *m)
+{
+    uintptr_t site = (uintptr_t)__builtin_return_address(0);
+    while (!mutex_acquire(m, deadline_after_ms(1000), site)) {
         /* The void API cannot return an acquisition failure. After the
          * protected cycle record and one real bounded wait, fail closed
          * rather than retrying an impossible cyclic dependency forever. */
-        if (lock_cycle(g_current, m->owner)) panic("mutex: cyclic wait timeout");
+        if (lock_cycle(g_current, m->owner)) mutex_panic("cyclic wait timeout", m, site, m);
     }
 }
 
-void kmutex_unlock(struct kmutex *m)
+__attribute__((noinline)) void kmutex_unlock(struct kmutex *m)
 {
     thread_context();
     if (m->owner != g_current)
-        panic("mutex: unlock by non-owner");
+        mutex_panic("unlock by non-owner", m, (uintptr_t)__builtin_return_address(0), m);
     uint32_t f = irq_save();
     struct kmutex **p = &held;
     while (*p != m) {
         if ((*p)->owner == g_current)
-            panic("mutex: unlock order");
+            mutex_panic("unlock order", m, (uintptr_t)__builtin_return_address(0), *p);
         p = &(*p)->held_next;
     }
     *p = m->held_next;
     m->held_next = 0;
     m->owner = 0;
+    m->site = 0;
     kwait_set_owner(&m->wait, 0);
     kpreempt_release();
     irq_restore(f);
@@ -637,7 +729,7 @@ void ksync_task_exit(struct task *t)
     while (*link) {
         struct kmutex *m = *link;
         if (m->owner != t) { link = &m->held_next; continue; }
-        *link = m->held_next; m->held_next = 0; m->owner = 0;
+        *link = m->held_next; m->held_next = 0; m->owner = 0; m->site = 0;
         kwait_set_owner(&m->wait, 0);
         if (t->preempt_holds) t->preempt_holds--;
         kwait_wake_all(&m->wait);

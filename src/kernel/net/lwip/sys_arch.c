@@ -228,6 +228,14 @@ void sys_mutex_unlock(sys_mutex_t *m)
     kmutex_unlock(&(*m)->lock);
 #endif
 }
+void ciuki_lwip_mutex_class(sys_mutex_t *m, const char *name, signed char level)
+{
+#ifdef LWIP_HOST
+    (void)m; (void)name; (void)level;
+#else
+    if (m && *m) { (*m)->lock.name = name; (*m)->lock.level = level; }
+#endif
+}
 void sys_mutex_free(sys_mutex_t *m)
 {
     sys_prot_t f = sys_arch_protect();

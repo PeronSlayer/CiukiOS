@@ -14,15 +14,34 @@
 #include <ciuki/task.h>
 #pragma weak sched_audio_producer_stats /* f1-101: task.c, absent in audio-only hosts */
 static struct vfs *settings_vfs;
-static struct kmutex control_lock;
-static struct kmutex service_lock; /* serialize write-side startup and worker */
+/* fx-5: service nests control (power quiesce, worker error path, refill
+ * failure). sync.h orders mutexes by increasing (level, address), so both
+ * live in one struct declared in acquisition order. As two statics, the T23
+ * trial kernel 9e6e8721 placed control (c06a89b0) below service (c06adb20)
+ * and the S5 quiesce panicked `mutex: lock order`. Both are an outer level:
+ * they nest the backend's register lock (audio_dma, another object) and the
+ * ThinkPad EC lock, whose addresses only the link order put above them. */
+static struct {
+    struct kmutex service; /* serialize write-side startup and worker */
+    struct kmutex control;
+} audio_lock = {
+    .service = KMUTEX_CLASS("audio.service", KMUTEX_LEVEL_OUTER),
+    .control = KMUTEX_CLASS("audio.control", KMUTEX_LEVEL_OUTER),
+};
+_Static_assert(__builtin_offsetof(__typeof__(audio_lock), service) <
+               __builtin_offsetof(__typeof__(audio_lock), control), "audio lock order: service, then control");
+static void audio_locks_init(void)
+{
+    kmutex_init_level(&audio_lock.service, "audio.service", KMUTEX_LEVEL_OUTER);
+    kmutex_init_level(&audio_lock.control, "audio.control", KMUTEX_LEVEL_OUTER);
+}
 static bool power_stopped;
 void audio_ec_attach(void)
 {
     if (!__atomic_load_n(&audio.initialized, __ATOMIC_ACQUIRE) ||
-        !kmutex_lock_until(&control_lock,deadline_after_ms(2000))) return;
+        !kmutex_lock_until(&audio_lock.control,deadline_after_ms(2000))) return;
     if (!power_stopped) { thinkpad_ec_init(); thinkpad_ec_start(); }
-    kmutex_unlock(&control_lock);
+    kmutex_unlock(&audio_lock.control);
 }
 static struct vfs_table settings_table; /* bounded, never on a kernel stack */
 struct audio_cfg { uint32_t magic, sequence, checksum, reserved; struct ciuki_mixer_master master; };
@@ -112,23 +131,23 @@ static int save_master(void)
 int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
-    kmutex_lock(&control_lock);
+    kmutex_lock(&audio_lock.control);
     /* The EC wrapper also clears delegation on failure. Offline changes
      * still apply and persist; the poller resynchronises from audio.master. */
     (void)thinkpad_ec_master_set(m);
     int err = audio.ready ? audio_backend_master(m) : 0;
-    if (err) { audio_fail(-EIO); kmutex_unlock(&control_lock); return -EIO; }
+    if (err) { audio_fail(-EIO); kmutex_unlock(&audio_lock.control); return -EIO; }
     audio.master = *m;
     err = save_master();
     audio.master.save_state = err ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
     audio.master.save_error = err;
     *m = audio.master;
-    kmutex_unlock(&control_lock);
+    kmutex_unlock(&audio_lock.control);
     return 0;
 }
 static void master_refresh(bool requested)
 {
-    kmutex_lock(&control_lock);
+    kmutex_lock(&audio_lock.control);
     struct ciuki_mixer_master m = audio.master;
     bool hardware = audio.master_in_hardware;
     int changed = requested ? thinkpad_ec_master_refresh(&m) : thinkpad_ec_master_poll(&m);
@@ -145,7 +164,7 @@ static void master_refresh(bool requested)
             audio.master = m;
         }
     }
-    kmutex_unlock(&control_lock);
+    kmutex_unlock(&audio_lock.control);
 }
 void audio_master_refresh(void) { master_refresh(false); }
 void audio_master_refresh_requested(void) { master_refresh(true); }
@@ -248,16 +267,16 @@ int audio_power_quiesce(void)
 {
     if (!audio.initialized || power_stopped) return 0;
     uint64_t end = deadline_after_ms(2000);
-    if (!kmutex_lock_until(&service_lock, end)) return -EBUSY;
-    if (!kmutex_lock_until(&control_lock, end)) { kmutex_unlock(&service_lock); return -EBUSY; }
+    if (!kmutex_lock_until(&audio_lock.service, end)) return -EBUSY;
+    if (!kmutex_lock_until(&audio_lock.control, end)) { kmutex_unlock(&audio_lock.service); return -EBUSY; }
     int stopped = thinkpad_ec_stop();
-    if (stopped) { kmutex_unlock(&control_lock); kmutex_unlock(&service_lock); return stopped; }
+    if (stopped) { kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service); return stopped; }
     audio_fail(-ENODEV);
     audio_backend_shutdown();
     struct audio_transport b; audio_backend_snapshot(&b);
     int e = audio.quarantined || b.quarantine || b.running ? -EIO : 0;
     if (!e) power_stopped = true;
-    kmutex_unlock(&control_lock); kmutex_unlock(&service_lock); return e;
+    kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service); return e;
 }
 /* The service start moved later by the firmware time proven since `firmware`. */
 static uint64_t service_start(uint64_t start, uint64_t firmware)
@@ -511,26 +530,26 @@ static void audio_service_locked(void)
              audio.max_service_gap_us,
              (unsigned long long)(first_playback ? g_ticks - playback_start : 0));
         playback_logged = first_playback;
-        audio_fail(-EIO); kmutex_lock(&control_lock); audio_backend_shutdown(); kmutex_unlock(&control_lock);
+        audio_fail(-EIO); kmutex_lock(&audio_lock.control); audio_backend_shutdown(); kmutex_unlock(&audio_lock.control);
     }
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
 void audio_service(void)
 {
-    kmutex_lock(&service_lock);
+    kmutex_lock(&audio_lock.service);
     if (ledger_critical) ledger_critical(true);
     audio_service_locked();
     if (ledger_critical) ledger_critical(false);
     if (ledger_audio_active) ledger_audio_active(audio.running);
-    kmutex_unlock(&service_lock);
+    kmutex_unlock(&audio_lock.service);
 }
 static void audio_write_service(void)
 {
-    kmutex_lock(&service_lock);
+    kmutex_lock(&audio_lock.service);
     /* Observe real DMA, including a halt/inhibit which preceded the worker's
      * next turn. The logical RUN flag alone cannot establish hardware RUN. */
     if (audio.ready && !audio.error && (!audio.running || idle_since || audio_backend_progress())) audio_service_locked();
-    kmutex_unlock(&service_lock);
+    kmutex_unlock(&audio_lock.service);
 }
 static bool refill_pending(void *arg) { (void)arg; return audio.pending || audio.error; }
 static void audio_worker_wait(void)
@@ -555,12 +574,12 @@ static void audio_worker(void *arg)
     (void)arg;
     for (;;) {
         if (audio.error) {
-            kmutex_lock(&service_lock);
-            kmutex_lock(&control_lock);
+            kmutex_lock(&audio_lock.service);
+            kmutex_lock(&audio_lock.control);
             struct audio_transport b; audio_backend_snapshot(&b);
             if (b.ready) audio_backend_shutdown();
-            kmutex_unlock(&control_lock);
-            kmutex_unlock(&service_lock);
+            kmutex_unlock(&audio_lock.control);
+            kmutex_unlock(&audio_lock.service);
             task_sleep_ms(1000); continue;
         }
         audio.pending = false;
@@ -667,13 +686,13 @@ static void audio_init_log(int err)
 void audio_init(struct vfs *v)
 {
     if (audio.initialized) return;
-    kwait_init(&audio.changed); kmutex_init(&control_lock); kmutex_init(&service_lock);
+    kwait_init(&audio.changed); audio_locks_init();
     /* fx-3: audio_ec_attach (acpi-power task) runs once the inventory has
-     * settled and may race this init; both serialize on control_lock, and
-     * the locks exist before initialized is published. */
+     * settled and may race this init; both serialize on audio_lock.control,
+     * and the locks exist before initialized is published. */
     __atomic_store_n(&audio.initialized, true, __ATOMIC_RELEASE);
     audio_settings_load(v);
-    kmutex_lock(&control_lock); thinkpad_ec_init(); kmutex_unlock(&control_lock);
+    kmutex_lock(&audio_lock.control); thinkpad_ec_init(); kmutex_unlock(&audio_lock.control);
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
     int err = audio_backend_init();
     audio.init_error = err;
@@ -689,7 +708,7 @@ void audio_init(struct vfs *v)
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
-    kmutex_lock(&control_lock); thinkpad_ec_start(); kmutex_unlock(&control_lock);
+    kmutex_lock(&audio_lock.control); thinkpad_ec_start(); kmutex_unlock(&audio_lock.control);
     audio_boot_tone();
 }
 int audio_device_open(struct file_description *d, uint32_t flags)
