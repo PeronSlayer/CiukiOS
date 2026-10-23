@@ -99,6 +99,10 @@ class KernelLatencyTests(unittest.TestCase):
             ('core/registry.c', 'irq_chain_add'): ['pic_unmask(irq)'],
             ('core/serial.c', 'serial_writer_init'): ['pic_unmask(uart_irq)'],
             ('drivers/com.c', 'attach_route'): ['pic_unmask(irq)'],
+            # f1-115: IRQ6 handler attach/detach/quarantine only, never per request.
+            ('drivers/floppy_platform.c', 'real_irq'): ['pic_unmask(6)', 'pic_mask(6)'],
+            # f1-114: an exclusively claimed ECP ISA route is masked once at admission.
+            ('drivers/lpt.c', 'lpt_admit'): ['pic_mask(r->irq)'],
             ('drivers/ata.c', 'failure'): ['pic_mask(c->irq)'],
             ('drivers/ata.c', 'ata_channel_idle'): ['pic_mask(c->irq)'],
             ('drivers/ata.c', 'ata_init'): ['pic_unmask(c->irq)'],

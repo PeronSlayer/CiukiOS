@@ -46,3 +46,35 @@ The Control Panel render fixture now enumerates the added Game controllers
 page. Only `control-category-2` (the additional Input applet) and the new
 `control-joystick` golden change; both rendered PNGs were visually inspected.
 All other existing frame hashes are retained.
+
+Boot ordering after USB keeps each branch's position: joystick settings and
+game port (f1-113b), the firmware inventory, then floppy (f1-115) and APM
+(f1-121). These optional starts are grouped in `platform_devices_start()` in
+`init.c`, so the splash DEVICES report still directly follows `usb_init`
+(`test_splash_progress.py`, under 400 characters) without reordering them.
+
+The PIC mask-site inventory (`test_kernel_latency.py`) gains two owners, both
+outside request paths: f1-115's IRQ6 handler attach/detach/quarantine
+(`floppy_platform.c` `real_irq`) and f1-114's one-time mask of an exclusively
+claimed ECP ISA route at admission (`lpt.c` `lpt_admit`).
+
+When both audio branches defined a stop on a quarantined engine, f1-119's
+rule is kept: `audio_dma_stop()` returns `-EIO` without register access
+(the DS-XG test requires zero writes after quarantine). f1-120's extra
+inhibit on that path is not needed because `audio_backend_shutdown()` still
+inhibits every quarantined engine.
+
+Host harness lists follow the integrated units: the suite's `devices_test`
+links `ac97_codec.c` (f1-107), as `test_devices.py` already did; the VGA
+stale-hint case unregisters the 3BFh..3DFh range that f1-114's split leaves
+holding 3C4h; `irq_work_replay.py` passes `argc` to the f1-108 ATA harness,
+defines `_POSIX_C_SOURCE` for f1-121's `v86_test.c` timing, links
+`sha256.c` for the f1-119 microcode check, and links the same USB units as
+`tests/host/usb/run.sh` (EHCI, HID parser and input).
+
+Desktop fixtures follow the added Game controllers applet (f1-113): the
+applet table has 11 entries, the Control Panel idle-wait case expects the
+page's one-second tick (live axes and save status), and the native update
+budget names the page. The four About credits goldens change only by the
+added credits rows (touchpad, serial mouse, ATA chipset and audio drivers);
+the rendered frames were inspected before recording them.

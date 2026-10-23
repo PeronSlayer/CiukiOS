@@ -223,7 +223,7 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),10)  # f5-09 Add/Remove Programs
+        self.assertEqual(len(applets),11)  # f5-09 Add/Remove Programs, f1-113 Game controllers
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",

@@ -119,8 +119,10 @@ static void test_vga_fast_io(void)
               !memcmp(&v->monitor,&expected_monitor,sizeof(monitor)));
     }
     /* Stale hint must not bypass unregister or a replacement owner. */
-    unsigned hint=v->port_hint[2]; CHECK(v->ports[hint].handler==dosvm_vga_port);
-    CHECK(!dosvm_port_unregister(v->info.key,0x3B0));
+    /* f1-114 leaves 3BCh..3BEh to LPT3: VGA owns 3B0h..3BBh and 3BFh..3DFh,
+     * and the hinted 3C4h range is the second one. */
+    unsigned hint=v->port_hint[2]; CHECK(v->ports[hint].handler==dosvm_vga_port && v->ports[hint].first==0x3BF);
+    CHECK(!dosvm_port_unregister(v->info.key,0x3BF));
     uint32_t value=0x0702; saved=v->vga;
     CHECK(!dosvm_io(v,0x3C4,2,true,&value) && !memcmp(&saved,&v->vga,sizeof(saved)));
     CHECK(!dosvm_port_register(v->info.key,0x3C4,0x3C5,vga_replacement_port,0));

@@ -108,6 +108,16 @@ const struct activation_entry *drivers_mount_get(unsigned drive)
     return 0;
 }
 
+/* After USB: joystick settings and game port (f1-113b), the firmware
+ * inventory, then floppy (f1-115) and APM (f1-121), in that order. */
+static void platform_devices_start(bool safe)
+{
+    if (joystick_storage_init && !safe) joystick_storage_init(&storage_get()->vfs);
+    if (gameport_init && !safe) gameport_init();
+    if (firmware_inventory_start) firmware_inventory_start();
+    if (floppy_init && !safe) floppy_init();
+    if (apm_start && !safe) apm_start();
+}
 void drivers_init(void)
 {
     if (state.initialized) return;
@@ -201,11 +211,7 @@ void drivers_init(void)
     if (net_settings_load) net_settings_load(&storage_get()->vfs);
     if (net_init) net_init();
     if (usb_init) usb_init();
-    if (joystick_storage_init && !state.safe) joystick_storage_init(&storage_get()->vfs);
-    if (gameport_init && !state.safe) gameport_init();
-    if (firmware_inventory_start) firmware_inventory_start();
-    if (floppy_init && !state.safe) floppy_init();
-    if (apm_start && !state.safe) apm_start();
+    platform_devices_start(state.safe);
     /* f1-94: after every UHCI handoff; SMI sampling and LEGACY_USB_EN. */
     if (smi_attribution_init) smi_attribution_init();
     splash_report(SPLASH_PHASE_DEVICES);

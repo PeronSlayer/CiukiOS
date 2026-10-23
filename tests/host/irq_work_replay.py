@@ -103,7 +103,10 @@ def main():
                 *(OUT / f'dosvm_audio_{n}.o' for n in ('vm_source', 'opl3', 'mixer')), pool],
                ['-D_POSIX_C_SOURCE=200809L', '-Wno-pointer-to-int-cast',
                 '-pthread', '-Wl,-u,pool_fixture_start'], text=vm_source)
-        replay(folder, 'firmware-input', 'v86_test.c', [('irq_input', 'BIOS-input-capture', 100)], [])
+        # f1-121's APM cases time with clock_gettime; the model header is
+        # included before v86_test.c's own feature macro.
+        replay(folder, 'firmware-input', 'v86_test.c', [('irq_input', 'BIOS-input-capture', 100)], [],
+               flags=['-D_POSIX_C_SOURCE=200809L'])
         source = (HOST / 'i8042_test.c').read_text()
         source = source.replace('!arg && prio == P_DEVICE', '!arg && prio == P_INTERACTIVE')
         source = re.sub(r'(#include ")([^"]+)(")',
@@ -134,11 +137,14 @@ void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
                ['fake_in8', 'fake_out8'],
                [*(f'src/kernel/fs/{n}.c' for n in ata_fs), 'src/kernel/core/bootlog.c', 'src/kernel/probes/fat_probes.c', 'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c',
                 'tests/host/entropy/unavailable_stub.c'],
-               ['-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread'])
-        usb_sources = ['usb_core', 'uhci', 'usb_interrupt', 'ohci', 'usb_hub', 'usb_hid', 'usb_storage']
+               ['-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread'], argc=True)  # f1-108: main(argc,argv); no argument runs every case
+        # Same production units as tests/host/usb/run.sh (EHCI, HID parser/input).
+        usb_sources = ['usb_core', 'ehci', 'uhci', 'usb_interrupt', 'ohci', 'usb_hub', 'usb_hid', 'hid_report',
+                       'hid_input', 'usb_storage']
         replay(folder, 'usb', 'usb/usb_test.c', [('usb_host_irq', 'UHCI-OHCI', 100)],
                ['read_reg', 'write_reg', 'config_read', 'config_write'],
-               [*(f'src/kernel/usb/{n}.c' for n in usb_sources), 'src/kernel/fs/blkreq.c', 'src/kernel/lib/fmt.c'],
+               [*(f'src/kernel/usb/{n}.c' for n in usb_sources), 'src/kernel/lib/sha256.c', 'tests/host/usb/hid_support.c',
+                'src/kernel/fs/blkreq.c', 'src/kernel/lib/fmt.c'],
                ['-DCIUKI_USB_HOST', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread'])
         subprocess.run(['python3', str(HOST / 'fs/fixtures.py')], check=True, env=ENV, stdout=subprocess.DEVNULL)
         fs_sources = ['fs_port', 'blkreq', 'cache', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660']
@@ -148,7 +154,8 @@ void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
                [('ac97_irq', 'AC97-period', 100), ('backend_irq', 'ES137x-SB16-period', 100)],
                ['mock_read', 'mock_write'],
                ['tests/host/proc/signal_legacy.c', 'tests/host/proc/desktop_legacy.c',
-                'src/kernel/audio/registry_master.c', *(f'src/kernel/fs/{n}.c' for n in fs_sources),
+                'src/kernel/audio/registry_master.c', 'src/kernel/lib/sha256.c',  # f1-119 DS-1 microcode check
+                *(f'src/kernel/fs/{n}.c' for n in fs_sources),
                 'tests/host/fs/fake.c', 'src/kernel/probes/f2_probes_files.c'],
                # audio_test.c observes source-read admission through the wrap
                # that tests/host/audio/run.sh also links (f1-87 amendment 2).

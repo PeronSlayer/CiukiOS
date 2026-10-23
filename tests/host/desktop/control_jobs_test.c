@@ -119,7 +119,9 @@ static void idle_pages(void)
     static struct cp_main m;
     for (int page=CP_HOME;page<CP_PAGES;page++) {
         virtual_ns=10000000000ull; init_panel(&m,page);
-        expected_timeout=m.app.page==CP_DATETIME || m.app.page==CP_SYSTEM || m.app.page==CP_SOUNDS ? 1000 : -1;
+        /* f1-113: the Game controllers page samples live axes and save status once per second. */
+        expected_timeout=m.app.page==CP_DATETIME || m.app.page==CP_SYSTEM || m.app.page==CP_SOUNDS ||
+            m.app.page==CP_JOYSTICK ? 1000 : -1;
         assert(!control_run(&m) && waits==1);
         finish_panel(&m);
     }
@@ -130,7 +132,7 @@ static void idle_pages(void)
     expected_timeout=-1; assert(!control_run(&m) && waits==1); finish_panel(&m);
     init_panel(&m,CP_HOME); m.app.close_pending=1;
     assert(!control_run(&m) && !waits && m.window.closing==1); finish_panel(&m);
-    puts("PASS every Control Panel page: one event/deadline wait, no service polling; clocks/mixer 1s, graphics query 2s only");
+    puts("PASS every Control Panel page: one event/deadline wait, no service polling; clocks/mixer/joystick 1s, graphics query 2s only");
 }
 static int gate, result;
 static pthread_mutex_t gate_lock=PTHREAD_MUTEX_INITIALIZER;

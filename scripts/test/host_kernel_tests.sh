@@ -107,7 +107,8 @@ python3 "$root/tests/host/test_lpt.py"
 # f2-41: exact production snapshot and read-only user marshalling.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
     -fsanitize=address,undefined -fno-sanitize-recover=undefined -I "$root/src/kernel/include" \
-    "$root/tests/host/devices_test.c" -Wl,--gc-sections -o "$out/devices_test"
+    "$root/tests/host/devices_test.c" "$root/src/kernel/drivers/ac97_codec.c" \
+    -Wl,--gc-sections -o "$out/devices_test"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_hwreport.py
 "$out/devices_test"
 
