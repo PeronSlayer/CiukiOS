@@ -344,7 +344,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         info.type = v->drive_flags[d] & VFS_DRIVE_REMOVABLE ? 2 : 3;
         info.serial = vol->volume_serial;
         info.cluster_bytes = vol->spc * 512;
-        free = (uint64_t)vol->free_clusters * info.cluster_bytes;
+        free = (uint64_t)fat_free_estimate(vol, 0) * info.cluster_bytes; /* fx-17b */
         total = (uint64_t)vol->clusters * info.cluster_bytes;
         memcpy(info.label, vol->volume_label, 12);
         memcpy(info.filesystem, vol->type == 32 ? "FAT32" : "FAT",

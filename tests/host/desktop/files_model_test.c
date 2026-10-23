@@ -47,7 +47,10 @@ static void computer_tests(void)
     assert(!fm_display_path(out, "/mnt/D/Games///") && !strcmp(out, "D:\\Games"));
     assert(!fm_posix_path(out, "C:") && !strcmp(out, "/"));
     assert(!fm_posix_path(out, "D:") && !strcmp(out, "/mnt/d"));
-    assert(fm_posix_path(out, "C:Programs") == -EINVAL && fm_posix_path(out, "A:\\") == -EINVAL);
+    assert(fm_posix_path(out, "C:Programs") == -EINVAL);
+    /* fx-17b: floppies A:/B: live under /mnt like D:..Z:; C: is "/". */
+    assert(!fm_posix_path(out, "A:\\") && !strcmp(out, "/mnt/a") && !fm_display_path(out, "/mnt/b/DOC.TXT") && !strcmp(out, "B:\\DOC.TXT"));
+    assert(fm_drive_root("/mnt/a") && !fm_drive_root("/mnt/c") && fm_volume("/mnt/a/x") == 'A' && fm_volume("/mnt/c") == 'C');
     assert(fm_posix_path(out, "relative") == -EINVAL && fm_posix_path(out, NULL) == -EINVAL);
     char long_path[FM_PATH + 4]; memset(long_path, 'x', sizeof(long_path));
     long_path[0] = '/'; long_path[sizeof(long_path) - 1] = 0;
@@ -84,8 +87,19 @@ static void computer_tests(void)
     assert(!fm_refresh(&m) && m.count == 3 && !strcmp(m.entries[1].name, "D:") && !strcmp(m.entries[2].name, "Z:"));
     assert(!fm_navigate(&m, "D:\\") && !strcmp(m.path, "/mnt/D"));
     assert(!fm_up(&m) && !m.path[0]);
+    /* fx-17b: an empty floppy drive is listed from its slot (dev 0, no
+     * medium); with a diskette it is the /mnt/a volume, browsable. */
+    m.drive_slots = 1;
+    assert(!fm_refresh(&m) && m.count == 4 && !strcmp(m.entries[0].name, "A:") && !m.entries[0].meta.dev && m.entries[0].meta.type == FM_DIR);
+    assert(fm_navigate(&m, "A:\\") == -ENOENT && !m.path[0]);
+    fake_create("/mnt/a", FM_DIR); fake_file("/mnt/a/README.TXT", 10, 1);
+    assert(!fm_refresh(&m) && m.count == 4 && m.entries[0].meta.dev);
+    assert(!fm_navigate(&m, "A:\\") && !strcmp(m.path, "/mnt/a") && m.count == 1);
+    assert(!fm_up(&m) && !m.path[0] && !strcmp(m.entries[m.active].name, "A:"));
+    fake_nodes[fake_lookup("/mnt/a/README.TXT")].live = 0; fake_nodes[fake_lookup("/mnt/a")].live = 0; m.drive_slots = 0;
+    assert(!fm_refresh(&m) && m.count == 3);
     fm_destroy(&m); fake_assert_clean();
-    puts("PASS Files Computer model: one/two volumes, drive paths both ways, case/separators/limits, hidden nodes, drive Up/history, protected drives");
+    puts("PASS Files Computer model: one/two volumes, drive paths both ways, case/separators/limits, hidden nodes, drive Up/history, protected drives, floppy A: with and without a diskette");
 }
 
 static void read_accounting(void)

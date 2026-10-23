@@ -86,5 +86,9 @@ const struct fdc *floppy_inventory(void); /* retained facts only, no I/O */
 int floppy_native_open(unsigned drive, struct blkdev **);
 int floppy_native_close(unsigned drive);
 int floppy_mount(unsigned drive);
+/* fx-17b: a drive the controller found (A:/B: listed even without a disk),
+ * and whether the native FAT volume of its diskette is mounted. */
+bool floppy_drive_present(unsigned drive);
+bool floppy_native_mounted(unsigned drive);
 int floppy_unmount(unsigned drive, bool surprise);
 #endif

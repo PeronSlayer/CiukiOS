@@ -373,6 +373,24 @@ static int publication_begin(struct fat_volume *v) {
     if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'G',0);
     return 0;
 }
+/* fx-17b: background free count. One byte per active-FAT sector holds the
+ * free entries counted in it; a dirty bit per sector says that sector must
+ * be (re)counted. Every publication of an active-FAT sector sets its bit
+ * after the new bytes are in the cache; a step clears the bit before it
+ * reads, so a count is never older than the last publication it saw. */
+struct fat_census {
+    uint32_t sectors, cursor, started_ms;
+    uint8_t *free;     /* entries free per sector, valid once counted */
+    uint32_t *dirty;   /* sectors still to count */
+};
+static void census_mark(struct fat_volume *v, uint64_t s) {
+    struct fat_census *c=v->census;
+    if (!c) return;
+    uint64_t base=v->reserved+(uint64_t)v->active_fat*v->fat_sectors;
+    if (s<base || s-base>=c->sectors) return;
+    uint32_t i=(uint32_t)(s-base);
+    __atomic_or_fetch(&c->dirty[i/32],1u<<(i%32),__ATOMIC_RELEASE);
+}
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     int interrupted=fs_request_check(); if (interrupted) return write_error(v,interrupted);
     if (v->transaction) {
@@ -411,7 +429,7 @@ static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     e=v->preparing ? blkdev_request(v->dev,BLK_WRITE,v->start+s,1,(void *)b,BLK_BACKGROUND,v->publication_frontier) :
         v->dev->logical ? logical_device(v,BLK_WRITE,v->start+s,1,(void *)b) :
         cache_write(v->cache,v->dev,v->start+s,b);
-    if (!e) v->mutation_sequence++;
+    if (!e) { v->mutation_sequence++; census_mark(v,s); }
     if (e && v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'E',e);
     return write_error(v,e);
 }
@@ -813,7 +831,10 @@ static int hints(struct fat_volume *v) {
     if (v->type!=32) return 0;
     int stage_error=publication_stage(v,FAT_P_FSINFO); if (stage_error) return stage_error;
     uint8_t b[512]; int e=readsec(v,v->fsinfo,b); if (e) return write_error(v,e);
-    fs_wr32(b+488,v->free_clusters); fs_wr32(b+492,v->next_free);
+    /* fx-17b: while the count is unknown FSInfo keeps saying so
+     * (FSI_Free_Count 0xFFFFFFFF), never the provisional bound. */
+    bool unknown=v->free_unknown || (v->transaction && v->transaction->source->free_unknown);
+    fs_wr32(b+488,unknown ? 0xffffffffu : v->free_clusters); fs_wr32(b+492,v->next_free);
     if ((e=writesec(v,v->fsinfo,b))) return e;
     return barrier(v);
 }
@@ -2027,6 +2048,78 @@ int fat_enable_write(struct fat_volume *v) {
  * FSInfo hint (FAT12/16 always; FAT32 with FSI_Free_Count 0xFFFFFFFF or out
  * of range). The FAT spec: the count "must be computed" when unknown. */
 #define FAT_REMOVABLE_CENSUS_BYTES (512u*1024u)
+static int census_begin(struct fat_volume *v) {
+    struct fat_census *c=fs_contig_alloc(sizeof(*c));
+    if (!c) return -FS_ENOMEM;
+    memset(c,0,sizeof(*c)); c->sectors=(uint32_t)(((uint64_t)(v->clusters+2)*4+511)/512);
+    if (c->sectors>v->fat_sectors) c->sectors=v->fat_sectors;
+    c->free=fs_contig_alloc(c->sectors); c->dirty=fs_contig_alloc(((size_t)c->sectors+31)/32*4);
+    if (!c->free || !c->dirty) {
+        if (c->free) fs_contig_free(c->free,c->sectors);
+        if (c->dirty) fs_contig_free(c->dirty,((size_t)c->sectors+31)/32*4);
+        fs_contig_free(c,sizeof(*c)); return -FS_ENOMEM;
+    }
+    memset(c->free,0,c->sectors); memset(c->dirty,0xff,((size_t)c->sectors+31)/32*4);
+    if (c->sectors%32) c->dirty[c->sectors/32]=(1u<<(c->sectors%32))-1u; /* no padding bits */
+    c->started_ms=fs_now_ms(); v->census=c;
+    return 0;
+}
+void fat_census_end(struct fat_volume *v) {
+    struct fat_census *c=v ? v->census : 0;
+    if (!c) return;
+    v->census=0;
+    fs_contig_free(c->free,c->sectors); fs_contig_free(c->dirty,((size_t)c->sectors+31)/32*4);
+    fs_contig_free(c,sizeof(*c));
+}
+static bool census_take(struct fat_census *c, uint32_t i) {
+    uint32_t bit=1u<<(i%32);
+    if (!(__atomic_load_n(&c->dirty[i/32],__ATOMIC_ACQUIRE)&bit)) return false;
+    __atomic_and_fetch(&c->dirty[i/32],~bit,__ATOMIC_ACQ_REL);
+    return true;
+}
+int fat_census_step(struct fat_volume *v, unsigned budget) {
+    struct fat_census *c=v ? v->census : 0;
+    if (!c || !v->mounted) return 1;
+    if (v->dev->quarantined) return -FS_EIO;
+    context(v,0);
+    uint64_t base=v->reserved+(uint64_t)v->active_fat*v->fat_sectors;
+    uint8_t b[512]; unsigned done=0, scanned=0;
+    while (done<budget && scanned<c->sectors) {
+        uint32_t i=c->cursor; c->cursor=(c->cursor+1)%c->sectors; scanned++;
+        if (!census_take(c,i)) continue;
+        int e=readsec(v,base+i,b);
+        if (e) { census_mark(v,base+i); return e; }
+        unsigned n=0;
+        for (unsigned k=0;k<128;k++) {
+            uint32_t cl=i*128u+k;
+            if (cl>=2 && cl<v->clusters+2 && !(fs_rd32(b+k*4)&0x0fffffffu)) n++;
+        }
+        c->free[i]=(uint8_t)n; done++;
+    }
+    for (uint32_t w=0;w<(c->sectors+31)/32;w++) if (__atomic_load_n(&c->dirty[w],__ATOMIC_ACQUIRE)) return 0;
+    /* Nothing dirty: every count is at least as new as every publication,
+     * and the caller's drive reservation keeps it that way while we sum. */
+    uint64_t free=0;
+    for (uint32_t i=0;i<c->sectors;i++) free+=c->free[i];
+    uint32_t ms=fs_now_ms()-c->started_ms;
+    v->free_clusters=(uint32_t)free; v->free_unknown=false;
+    if (klog) klog("[storage] free_count clusters=%u free=%u elapsed_ms=%u source=background",v->clusters,(uint32_t)free,ms);
+    fat_census_end(v);
+    return 1;
+}
+uint32_t fat_free_estimate(const struct fat_volume *v, bool *known) {
+    const struct fat_census *c=v->census;
+    if (known) *known=!v->free_unknown;
+    if (!v->free_unknown) return v->free_clusters;
+    if (!c) return 0;
+    uint64_t free=0;
+    for (uint32_t i=0;i<c->sectors;i++) {
+        bool pending=(__atomic_load_n(&c->dirty[i/32],__ATOMIC_ACQUIRE)>>(i%32))&1u;
+        free+=pending ? 128u : c->free[i];
+    }
+    return free>v->clusters ? v->clusters : (uint32_t)free;
+}
+
 static int census_free(struct fat_volume *v) {
     uint32_t free=0, first=0;
     for (uint32_t c=2;c<v->clusters+2;c++) {
@@ -2036,6 +2129,18 @@ static int census_free(struct fat_volume *v) {
     }
     v->free_clusters=free; v->next_free=first ? first : 2; v->free_unknown=false;
     return 0;
+}
+/* fx-17b: a volume left read-only (write-protected, durability, metadata
+ * reasons) still reports its free space: small FATs are counted now, a
+ * large FAT32 in the background like a writable one. */
+int fat_census_start(struct fat_volume *v) {
+    if (!v || !v->mounted || !v->free_unknown || v->census) return 0;
+    context(v,0);
+    if (v->type==32 && (uint64_t)(v->clusters+2)*4>FAT_REMOVABLE_CENSUS_BYTES) {
+        int e=census_begin(v); if (e) return e;
+        v->free_clusters=v->clusters; return 0;
+    }
+    return census_free(v);
 }
 /* fx-17: removable FAT is made writable the way Windows 98 VFAT and Linux
  * vfat mount it: no ownership scan at insertion (F1-74's deferred proof is
@@ -2063,11 +2168,16 @@ int fat_enable_write_removable(struct fat_volume *v) {
      * A large FAT32 whose FSInfo says "unknown" (not written by Windows or
      * mkfs.fat) stays read-only until the explicit full upgrade: counting
      * megabytes of FAT under the drive reservation would stall its readers. */
-    if (v->free_unknown && (uint64_t)(v->clusters+2)*v->type/8>FAT_REMOVABLE_CENSUS_BYTES) {
-        fat_revoke_write(v,"free_count_unknown",0); return -FS_EROFS;
-    }
     uint32_t began=fs_now_ms();
-    if (v->free_unknown && (e=census_free(v))) { v->repair_ms=fs_now_ms()-began; return e; }
+    if (v->free_unknown && v->type==32 && (uint64_t)(v->clusters+2)*4>FAT_REMOVABLE_CENSUS_BYTES) {
+        /* fx-17b: a large FAT32 whose FSInfo says "unknown" is writable at
+         * once; the storage writer counts its FAT in the background. Until
+         * then allocation scans from the FSInfo next-free hint and the free
+         * count is only a bound (Windows 98 keeps FSI_Free_Count unknown
+         * until it recomputes it; FAT spec: 0xFFFFFFFF "must be computed"). */
+        if ((e=census_begin(v))) { fat_revoke_write(v,"free_count_unknown",0); return e; }
+        v->free_clusters=v->clusters;
+    } else if (v->free_unknown && (e=census_free(v))) { v->repair_ms=fs_now_ms()-began; return e; }
     bool dirty=(v->ro_reasons&(FAT_RO_DIRTY|FAT_RO_IO_FLAG))!=0;
     v->readonly_reason=0;v->readonly_file[0]=0;v->readonly_cluster=0;
     v->ro_reasons=0; v->readonly=false; v->writable_session=true;
@@ -2087,6 +2197,7 @@ int fat_commit(struct fat_volume *v) {
 }
 int fat_unmount(struct fat_volume *v) {
     int e=fat_commit(v); if (e) return e;
+    fat_census_end(v);
     if (v->writable_session && !v->readonly && cleanbit(v) && !v->dirty_preserved) {
         if ((e=set_clean(v,true))) return e;
     }
@@ -2142,7 +2253,7 @@ static void transaction_merge(struct fat_volume *v) {
             img[k]=(uint8_t)((img[k]&ours)|(cur[k]&(uint8_t)~ours));
         }
         memcpy(base,cur,512);
-        if (v->type==32 && t->sectors[i]==v->fsinfo) { fs_wr32(img+488,v->free_clusters); fs_wr32(img+492,v->next_free); }
+        if (v->type==32 && t->sectors[i]==v->fsinfo) { fs_wr32(img+488,t->source->free_unknown ? 0xffffffffu : v->free_clusters); fs_wr32(img+492,v->next_free); }
     }
 }
 static int transaction_durable(struct fat_volume *v) {
@@ -2250,6 +2361,7 @@ retry:
             if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'G',0);
         } else if (!e) {
             t->sequence=++t->source->mutation_sequence;
+            for (unsigned k=0;k<t->count;k++) census_mark(t->source,t->sectors[k]);
             /* Publish only this transaction's own change of the free count. */
             int64_t delta=(int64_t)v->free_clusters-(int64_t)t->free_synced;
             t->source->free_clusters=(uint32_t)((int64_t)t->source->free_clusters+delta);

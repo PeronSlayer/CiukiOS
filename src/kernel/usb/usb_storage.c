@@ -584,6 +584,21 @@ static int probe_storage(struct usb_device *d)
     e=flush_locked(d);
     if (!e) { s->block.write_cache_state=BLKDEV_CACHE_ENABLED; s->block.request_flush=block_flush; s->block.flush=blkdev_flush; }
     else if (s->block.quarantined) return e;
+    else if (s->sense_key==5) {
+        /* fx-17b: ILLEGAL REQUEST (5/20 invalid opcode, 5/24 invalid field):
+         * the stick has no SYNCHRONIZE CACHE. Like Linux sd ("Assuming
+         * drive cache: write through"), treat it as write-through: each
+         * WRITE(10) is complete when its CSW reports success, nothing is
+         * held in a host write cache (removable FAT is write_through) and
+         * no flush is ever sent. A device that buffers writes anyway loses
+         * them only on power loss or removal mid-write, as on Windows 98,
+         * which never flushes removable media. */
+        s->block.write_cache_state=BLKDEV_CACHE_DISABLED; s->block.flush=0; s->block.request_flush=0;
+        s->write_through=true;
+        klog("[usb-storage] flush addr=%u result=unsupported sense=%02x/%02x/%02x cache=write_through",
+             d->address,s->sense_key,s->asc,s->ascq);
+        e=0;
+    }
     bind_stage_finish(d,e);
     /* MODE SENSE(6) header reports write protection for transparent SCSI.
      * Its absence does not invent a cache policy; failed writes fail closed. */
@@ -599,7 +614,8 @@ static int probe_storage(struct usb_device *d)
     s->online=true; d->reason="storage_ready";
     klog("[usb-storage] ready addr=%u sectors=%llu generation=%u mode=%s elapsed_ms=%llu",
          d->address,(unsigned long long)s->block.capacity,s->block.media_generation,
-         blkdev_durable(&s->block) ? "rw_capable" : "ro_no_flush",
+         !blkdev_durable(&s->block) ? (s->write_protected ? "ro_write_protected" : "ro_no_flush") :
+         s->write_through ? "rw_write_through" : "rw_capable",
          d->host->io.now(d->host->io.cookie)-s->bind_started_ms);
     return 0;
 }

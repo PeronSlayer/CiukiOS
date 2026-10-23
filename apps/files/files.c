@@ -165,6 +165,18 @@ static int media_remove(unsigned d,uint32_t generation)
     struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),d,generation};
     int e=ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
 }
+static int media_load(unsigned d)
+{
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),d,0};
+    int e=ciuki_devctl(fd,MEDIA_FLOPPY_LOAD,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
+}
+static int media_space(unsigned d,struct ciuki_media_space *sp)
+{
+    *sp=(struct ciuki_media_space){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*sp),.drive=d};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_SPACE,sp,sizeof(*sp)) ? -errno : 0; close(fd); return e;
+}
 static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_blockers *b)
 {
     *b=(struct ciuki_media_blockers){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*b),.drive=drive,.generation=generation};
@@ -202,6 +214,7 @@ int main(int argc, char **argv)
     struct files_app *a = &m->app;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
+    a->media_load=media_load; a->media_space=media_space;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }

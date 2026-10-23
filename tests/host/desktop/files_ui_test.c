@@ -157,6 +157,64 @@ static void removable_ui_tests(void)
     puts("PASS Files removable Computer view: E: Tango icon/type, context action, busy error, generation, safe detach and refresh");
     puts("PASS Files optical Computer view: runtime insertion/removal, D: CD-ROM icon/type, expired folder returns to Computer, reinsertion and eject text");
 }
+/* fx-17b: floppy drives. A: is listed whenever the controller found the
+ * drive; opening it reads the diskette (MEDIA_FLOPPY_LOAD) and without one
+ * asks "Please insert a disk into drive A:" with Retry/Cancel (Windows 98).
+ * Drive Properties show capacity and free space, "calculating..." while a
+ * background free count runs. */
+static int floppy_loads, floppy_disk;
+static int load_floppy(unsigned d)
+{
+    assert(d==0); floppy_loads++;
+    if (!floppy_disk) return -ENXIO;
+    if (fake_lookup("/mnt/a")<0) { fake_create("/mnt/a",FM_DIR); fake_file("/mnt/a/GAME.TXT",12,1); }
+    media_state.removable_mask|=1u; media_state.generation[0]=5; return 0;
+}
+static struct ciuki_media_space space_reply;
+static int space_drive=-1;
+static int read_space(unsigned d, struct ciuki_media_space *sp) { space_drive=(int)d; *sp=space_reply; return 0; }
+static void dialog_answer(int index)
+{
+    int id=du_dialog_id(&ui); assert(id); du_dialog_close(&ui);
+    struct du_event r={.type=DU_EV_DIALOG,.id=id,.index=index}; files_event(&ui,&r,&app); files_test_wait(&app);
+}
+static void floppy_ui_tests(void)
+{
+    fake_image_tree(); memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    app.media_read=read_media; app.media_load=load_floppy; app.media_space=read_space;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state)};
+    media_state.type[0]=CIUKI_MEDIA_FLOPPY; floppy_loads=floppy_disk=0;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    int row=list_find("A:"); assert(row==0 && !strcmp(app.rows[row].text[2],"3.5-Inch Floppy Disk") && app.rows[row].icon16 && app.rows[row].icon32);
+    int tree_a=0; for (unsigned i=0;i<app.tree_count;i++) tree_a|=!strcmp(app.tree[i].path,"/mnt/a"); assert(tree_a);
+    /* No diskette: one read attempt, then the Windows 98 prompt. */
+    assert(!files_navigate(&app,"A:\\"));
+    assert(floppy_loads==1 && !app.model.path[0] && strstr(ui.dialog.text,"Please insert a disk into drive A:"));
+    assert(ui.dialog.buttons==2 && ui.dialog.cancel==1); /* Retry, Cancel */
+    dialog_answer(0); assert(floppy_loads==2 && strstr(ui.dialog.text,"Please insert a disk into drive A:"));
+    dialog_answer(1); assert(floppy_loads==2 && !du_dialog_id(&ui) && !app.model.path[0]);
+    /* Insert the diskette, open A: again: it is read and browsed. */
+    floppy_disk=1; assert(!files_navigate(&app,"A:\\"));
+    assert(floppy_loads==3 && !du_dialog_id(&ui) && !strcmp(app.model.path,"/mnt/a") && list_find("GAME.TXT")>=0);
+    /* The selected drive's free space and capacity in the status bar, as in
+     * Windows 98 My Computer; "calculating..." during a background count. */
+    assert(!files_navigate(&app,FM_COMPUTER)); row=list_find("A:"); assert(row>=0);
+    space_reply=(struct ciuki_media_space){.version=CIUKI_MEDIA_VERSION,.size=sizeof(space_reply),.drive=0,.flags=CIUKI_MEDIA_SPACE_COUNTING,
+        .cluster_bytes=512,.total_clusters=2847,.free_clusters=2847};
+    fm_select(&app.model,(unsigned)row,0); files_update(&app);
+    assert(space_drive==0 && strstr(du_get(&ui,108)->text,"Free Space: calculating..., Capacity: "));
+    space_reply.flags=0; space_reply.free_clusters=2000; files_update(&app);
+    assert(strstr(du_get(&ui,108)->text,"Free Space: ") && !strstr(du_get(&ui,108)->text,"calculating"));
+    fprintf(stderr,"fx-17b status: %s\n",du_get(&ui,108)->text);
+    /* Remove the diskette while browsing it: back to Computer, A: stays. */
+    assert(!files_navigate(&app,"/mnt/a"));
+    fake_nodes[fake_lookup("/mnt/a/GAME.TXT")].live=0; fake_nodes[fake_lookup("/mnt/a")].live=0;
+    media_state.removable_mask&=~1u; media_state.generation[0]=0;
+    struct du_event poll={.type=DU_EV_TICK,.id=2}; files_event(&ui,&poll,&app); files_test_wait(&app);
+    assert(!app.model.path[0] && list_find("A:")==0);
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS Files floppy A:: listed without a diskette, read on open, Insert-disk prompt with Retry/Cancel, browse after insertion, status-bar free space and calculating, removal returns to Computer");
+}
 static void external_removal_tests(void)
 {
     /* Same generation after safe removal: a tray action and a separate Files
@@ -694,6 +752,7 @@ int main(int argc, char **argv)
     fake_assert_clean();
     computer_ui_tests();
     removable_ui_tests();
+    floppy_ui_tests();
     external_removal_tests();
     label_cache_tests();
     blocker_dialog_tests();
