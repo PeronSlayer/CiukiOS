@@ -249,8 +249,10 @@ static bool native_report(struct process *p, const char *line, unsigned length)
          * coalesces input reports at 100 ms; unchanged command reports need
          * no serial traffic. The first summary supplies the zero baseline. */
         if (publish_input) {
-            rec_emit("crash-isolation","DATA","case=gate server=desktop keys=%u motion=%u buttons=%u",
-                keys,motion,buttons);
+            /* The f6:browser probe shares this controller: its records carry
+             * the active probe's name, or the runner refuses the run. */
+            rec_emit(native_reports.browser ? "browser" : "crash-isolation","DATA",
+                "case=gate server=desktop keys=%u motion=%u buttons=%u",keys,motion,buttons);
             native_reports.input_recorded=true;
         }
     } else if (server && !strncmp(line,"case=desktop-v3 ",16)) {
