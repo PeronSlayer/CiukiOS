@@ -89,9 +89,37 @@ void vga_hardware_capture_planes(cvga_state *v, const struct vga_hardware_bus *b
 }
 void vga_hardware_capture(cvga_state *v, const struct vga_hardware_bus *b)
 {
+    (void)vga_hardware_capture_pages(v,b,VGA_HARDWARE_ALL_PAGES,0,0);
+}
+/* fx-22: the registers, then only the 4 KiB plane pages in `pages` (bit n:
+ * offsets n*4096..n*4096+4095 of all four planes), page by page so that an
+ * expiry leaves whole pages. The final read of offset FFFFh loads the
+ * latches as the full capture does; the model keeps that byte's value. */
+uint16_t vga_hardware_capture_pages(cvga_state *v, const struct vga_hardware_bus *b, uint16_t pages,
+                                    bool (*expired)(void *), void *ctx)
+{
     vga_hardware_read_registers(v,b,false);
-    vga_hardware_capture_planes(v,b);
+    planar(b);
+    uint16_t done=0;
+    for (unsigned page=0;page<CVGA_PLANE_SIZE/4096u;page++) {
+        if (!(pages&(1u<<page))) continue;
+        if (expired && expired(ctx)) break;
+        for (unsigned p=0;p<4;p++) {
+            indexed(b,0x3CE,4,p);
+            for (unsigned a=page*4096u;a<(page+1)*4096u;a++) {
+                v->plane[p][a]=b->read(b->arg,a);
+                if ((a&255)==255) kpreempt_point();
+            }
+            for (unsigned i=page*4096u/(CVGA_DIRTY_GRANULE*8u);i<(page+1)*4096u/(CVGA_DIRTY_GRANULE*8u);i++)
+                v->dirty[p][i]=0xFF;
+        }
+        done|=(uint16_t)(1u<<page);
+    }
+    indexed(b,0x3CE,4,3); (void)b->read(b->arg,CVGA_PLANE_SIZE-1);
+    for (unsigned p=0;p<4;p++) v->latch[p]=v->plane[p][CVGA_PLANE_SIZE-1];
+    v->changes++; v->display_changes++; /* the registers may differ even without pages */
     registers(v,b,0); indexes(v,b);
+    return done;
 }
 static void load(const cvga_state *v, const struct vga_hardware_bus *b, int blank)
 {
