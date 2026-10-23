@@ -9,6 +9,13 @@ static struct clock_seed clock_source;
 /* Provider extension required because fs_timestamp hides invalid samples. */
 extern bool fs_calendar_sample(uint16_t *, uint16_t *, uint8_t *) __attribute__((weak));
 extern int file_clock_rtc_offset(void) __attribute__((weak));
+/* G1: the system time zone (proc/timezone.c); absent in host harnesses
+ * that link no zone, where local time is UTC as before. */
+extern int32_t timezone_offset_at(int64_t utc) __attribute__((weak));
+extern int64_t timezone_local_utc(int64_t local) __attribute__((weak));
+typedef bool (*fs_stamp_clock)(uint16_t *, uint16_t *, uint8_t *);
+extern void fs_set_timestamp_clock(fs_stamp_clock) __attribute__((weak));
+static bool clock_fat_now(uint16_t *date, uint16_t *time, uint8_t *tenths);
 
 void file_clock_start(int64_t build_epoch, bool rtc_qualified)
 {
@@ -22,6 +29,8 @@ void file_clock_start(int64_t build_epoch, bool rtc_qualified)
         clock_source.utc-=file_clock_rtc_offset();
         proc_clock_seed(clock_source.utc,clock_source.tick);
     }
+    /* G1: FAT stamps local time from the running clock, not the RTC. */
+    if (clock_source.source && fs_set_timestamp_clock) fs_set_timestamp_clock(clock_fat_now);
 }
 
 void file_clock_set_utc(int64_t seconds)
@@ -40,7 +49,7 @@ bool file_clock_resync(void)
     uint16_t date = 0, time = 0; uint8_t tenths = 0;
     int64_t seconds;
     if (!clock_source.source || !clock_source.qualified || !fs_calendar_sample ||
-        !fs_calendar_sample(&date, &time, &tenths) || tenths >= 200 || !clock_fat_utc(date, time, &seconds))
+        !fs_calendar_sample(&date, &time, &tenths) || tenths >= 200 || !clock_fat_civil(date, time, &seconds))
         return false;
     seconds += tenths / 100;
     if (file_clock_rtc_offset) seconds -= file_clock_rtc_offset();
@@ -54,7 +63,8 @@ bool file_clock_resync(void)
 
 static bool leap(unsigned y) { return !(y % 4) && (y % 100 || !(y % 400)); }
 
-bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)
+/* FAT/RTC calendar fields as seconds of the same calendar since 1970. */
+bool clock_fat_civil(uint16_t date, uint16_t time, int64_t *seconds)
 {
     unsigned y = 1980 + (date >> 9), m = (date >> 5) & 15, d = date & 31;
     unsigned h = time >> 11, min = (time >> 5) & 63, s = (time & 31) * 2;
@@ -69,11 +79,39 @@ bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)
     return true;
 }
 
+/* G1: FAT stores local time (Microsoft, "File Times"): the stamp is read
+ * back through the zone rule of its own instant, so a summer stamp keeps
+ * its wall-clock value in winter. */
+bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)
+{
+    int64_t local;
+    if (!clock_fat_civil(date, time, &local)) return false;
+    *seconds = timezone_local_utc ? timezone_local_utc(local) : local;
+    return true;
+}
+
+static bool clock_fat_now(uint16_t *date, uint16_t *time, uint8_t *tenths)
+{
+    struct ciuki_timespec now;
+    if (file_clock_now(CLOCK_REALTIME, 0, &now)) return false;
+    int64_t local = now.tv_sec + (timezone_offset_at ? timezone_offset_at(now.tv_sec) : 0);
+    if (local < 315532800LL || local > 4354819199LL) return false;      /* FAT: 1980..2107 */
+    int64_t days = local / 86400, rem = local % 86400;
+    unsigned y = 1970, m = 1;
+    static const uint8_t md[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    while (days >= 365 + leap(y)) { days -= 365 + leap(y); y++; }
+    while (days >= md[m - 1] + (m == 2 && leap(y))) { days -= md[m - 1] + (m == 2 && leap(y)); m++; }
+    *date = (uint16_t)((y - 1980) << 9 | m << 5 | (unsigned)(days + 1));
+    *time = (uint16_t)((rem / 3600) << 11 | ((rem / 60) % 60) << 5 | (rem % 60) / 2);
+    *tenths = (uint8_t)((rem % 2) * 100 + now.tv_nsec / 10000000);
+    return true;
+}
+
 void file_clock_init(int64_t build_epoch, bool qualified, bool valid,
                      uint16_t date, uint16_t time, uint8_t tenths, uint64_t tick)
 {
     int64_t seconds;
-    valid = valid && tenths < 200 && clock_fat_utc(date, time, &seconds);
+    valid = valid && tenths < 200 && clock_fat_civil(date, time, &seconds);
     clock_source = (struct clock_seed){ .utc = build_epoch, .qualified = qualified, .valid = valid };
     if (qualified && valid) {
         clock_source.utc = seconds + tenths / 100;

@@ -28,6 +28,9 @@
 #include <ciuki/net.h>
 #include <ciuki/media.h>
 #include <ciuki/power.h>
+#ifdef __i386__
+#include <ciuki/timezone.h>
+#endif
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -273,6 +276,31 @@ static int gate_send(struct desktop *d, int pid, unsigned command, unsigned gene
     errno=ESRCH;
     return -1;
 }
+/* G1: once a second, the system zone: the tray clock's offset, the TZ of
+ * launched programs and of the desktop itself, and the one-time notice
+ * after the kernel moved the RTC for a daylight-saving change (Windows
+ * tells the user the same). Host harnesses keep UTC. */
+static void desktop_time_refresh(struct desktop *d)
+{
+#ifdef __i386__
+    struct ciuki_time_zone z;
+    memset(&z,0,sizeof(z));
+    if (ciuki_time_zone(&z,CIUKI_TIME_GET)) return;
+    d->local_offset=z.offset_minutes*60;
+    d->time_flags=z.flags;
+    if (z.generation!=d->time_generation) {
+        d->time_generation=z.generation;
+        ciuki_tz_env(d->tz_env,sizeof(d->tz_env));
+        setenv("TZ",d->tz_env+3,1); tzset();
+    }
+    if ((z.flags&CIUKI_TIME_ADJUSTED) && (z.flags&CIUKI_TIME_AUTHORITY)) {
+        desk_shell_notify(d,"Date/Time","CiukiOS has adjusted your clock for daylight saving changes.",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
+        ciuki_time_zone(&z,CIUKI_TIME_ACKNOWLEDGE);
+    }
+#else
+    (void)d;
+#endif
+}
 static int spawn_demo(struct desktop *d, const char *kind, int gate)
 {
     int pair[2];
@@ -280,7 +308,7 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
     char fault[48];
     snprintf(fault,sizeof(fault),"--fault=%s",kind);
     char *argv[] = {"demo","--channel-fd=3",fault,gate ? "--test=crash-isolation" : NULL,NULL};
-    char *env[] = {"LC_ALL=C","TZ=UTC0",NULL};
+    char *env[] = {"LC_ALL=C",d->tz_env[0] ? d->tz_env : "TZ=UTC0",NULL};
     struct ciuki_spawn_fd mapping = {pair[1],3};
     int i = -1;
     ciuki_pid_t pid = -1;
@@ -367,7 +395,7 @@ struct launch_job {
     uint64_t click_ns, begin_ns, end_ns;
     struct desk_program program;
     char *argv[LAUNCH_ARGV], *env[8];
-    char strings[LAUNCH_STRINGS], display[40], keymap[24];
+    char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX];
     struct ciuki_spawn_fd mapping[2];
     uint32_t mappings;
     int (*mark)(uint32_t, ciuki_pid_t, uint64_t);
@@ -474,7 +502,8 @@ static int launch_prepare(struct desktop *d, const struct desk_program *program,
     snprintf(job->display,sizeof(job->display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
     /* The Control Panel's keyboard layout, for libdeskui programs. */
     snprintf(job->keymap,sizeof(job->keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
-    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
+    snprintf(job->tz,sizeof(job->tz),"%s",d->tz_env[0] ? d->tz_env : "TZ=UTC0");
+    char *env[]={"LC_ALL=C",job->tz,"HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
     memcpy(job->env,env,sizeof(env));
     job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};
@@ -2253,6 +2282,7 @@ static void shell_setup(struct desktop *d, int gate)
     d->joystick_control=desktop_joystick_control;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
+    strcpy(d->tz_env,"TZ=UTC0"); d->time_generation=UINT32_MAX; /* G1: until the first refresh */
     d->version[0]=0;
     if (!uname(&u)) {
         snprintf(d->build_identity,sizeof(d->build_identity),"%.64s",u.release);
@@ -2402,8 +2432,9 @@ int main(int argc, char **argv)
         if (d->shell) {
             struct timespec rtc;
             if (!fullscreen_test && !clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {
-                uint64_t previous=d->realtime_second;
+                uint64_t previous=d->realtime_second+(uint64_t)(int64_t)d->local_offset;
                 d->realtime_second=(uint64_t)rtc.tv_sec;
+                desktop_time_refresh(d);
                 desk_shell_clock_damage(d,previous);
             }
             if (!d->power.state) { desktop_wait("shell-tick"); desk_shell_tick(d); desk_links_refresh(d); links_service(d); }

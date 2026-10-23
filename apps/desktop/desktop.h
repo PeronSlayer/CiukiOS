@@ -295,6 +295,11 @@ struct desktop {
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
     int realtime_source;
+    /* G1: the system time zone (syscall 97): local = realtime_second +
+     * local_offset; tz_env is the TZ handed to launched programs. */
+    int32_t local_offset;
+    uint32_t time_flags, time_generation;
+    char tz_env[8 + CIUKI_TIME_RULE_MAX];
     char build_identity[65], version[65], notice[64];
     struct desk_link_entry *v3_links;
     unsigned v3_link_count;

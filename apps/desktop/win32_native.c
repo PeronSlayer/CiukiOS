@@ -124,7 +124,7 @@ static struct desk_w32_supervisor supervisor;
 static int spawn_service(void *ctx)
 {
     (void)ctx;char *argv[]={"/System/Win32/w32srv",__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)?NULL:"--fresh-clients",NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
+    char *env[]={"LC_ALL=C","PATH=/Programs",NULL};
     int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);return pid<0 ? -errno : pid;
 }
 static void record_service(void *ctx,const char *event,int pid,uint64_t elapsed)
@@ -173,7 +173,7 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     maps[count++]=(struct ciuki_spawn_fd){report[1],4};
     char type[8];snprintf(type,sizeof(type),"%u",(unsigned)kind);
     char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,wait ? "--wait" : NULL,NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
+    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
     helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
     if(helper<0){result=-errno;goto done;}
     uint64_t deadline=clock_ns()+(wait ? UINT64_C(300000000000) : UINT64_C(1500000000));
@@ -354,7 +354,7 @@ static void *restart_launch_worker(void *unused)
     else{
         struct ciuki_spawn_fd map={report[1],4};
         char *argv[]={"/System/Win32/runonce.exe",restart_command,NULL};
-        char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
+        char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
         int helper=ciuki_spawn(argv[0],argv,env,&map,1,0);
         if(helper<0)result=-errno;
         else{

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include "../desktop/tz_env.h"
 
 enum {
     C_BACK = 1, C_FORWARD, C_UP, C_CUT, C_COPY, C_PASTE, C_DELETE, C_PROPERTIES, C_VIEWS,
@@ -119,7 +120,7 @@ static void kb_text(char *out, size_t n, uint64_t bytes)
 static void time_text(char *out, size_t n, int64_t when)
 {
     time_t t = (time_t)when; struct tm tm;
-    if (when <= 0 || !gmtime_r(&t, &tm)) { snprintf(out, n, "%s", ""); return; }
+    if (when <= 0 || !desk_localtime(&t, &tm)) { snprintf(out, n, "%s", ""); return; }   /* G1: local */
     snprintf(out, n, "%04d-%02d-%02d %02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
 }
 

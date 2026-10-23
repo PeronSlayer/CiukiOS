@@ -758,6 +758,8 @@ enum ciuki_syscall {
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
     CIUKI_SYS_GETENTROPY = 91,
+    /* G1: outside 78-95 (left to F6) and after the Win32 family's 96. */
+    CIUKI_SYS_TIME = 97,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
@@ -1062,6 +1064,49 @@ struct ciuki_setup_net {
     uint32_t reserved;
     struct ciuki_setup_net_identity identity[2];
 };
+
+/* G1: system time zone and clock, syscall 97 (CIUKI_SYS_TIME): EBX=record,
+ * ECX=exact size; 0 or -errno. GET is open to every process and returns the
+ * live state. SET_ZONE, SET_LOCAL, SET_UTC and ACKNOWLEDGE need the time
+ * authority (desktop and Control Panel, delegated like the network one):
+ * EPERM otherwise. The kernel keeps UTC; the RTC holds local time when
+ * RTC_LOCAL (the Windows convention) and is rewritten at every change of
+ * zone, clock or daylight-saving period. offset_minutes are east of UTC.
+ * rule is a POSIX TZ string (ciuki/tzrule.h); zone an IANA identifier. */
+#define CIUKI_TIME_VERSION 1u
+#define CIUKI_TIME_GET 0u
+#define CIUKI_TIME_SET_ZONE 1u
+#define CIUKI_TIME_SET_LOCAL 2u
+#define CIUKI_TIME_SET_UTC 3u
+#define CIUKI_TIME_ACKNOWLEDGE 4u
+#define CIUKI_TIME_AUTO_DST 1u
+#define CIUKI_TIME_RTC_LOCAL 2u
+#define CIUKI_TIME_DAYLIGHT 4u
+#define CIUKI_TIME_ADJUSTED 8u
+#define CIUKI_TIME_AUTHORITY 16u
+#define CIUKI_TIME_ZONE_MAX 48u
+#define CIUKI_TIME_RULE_MAX 64u
+#define CIUKI_TIME_NAME_MAX 16u
+struct ciuki_time_zone {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t flags;
+    int64_t utc_seconds;
+    int64_t local_seconds;
+    uint32_t milliseconds;
+    int32_t offset_minutes;
+    int32_t standard_minutes;
+    int32_t daylight_minutes;
+    int32_t rtc_bias_minutes;
+    uint32_t generation;
+    int64_t next_change;
+    char zone[48];
+    char rule[64];
+    char standard_name[16];
+    char daylight_name[16];
+};
+_Static_assert(sizeof(struct ciuki_time_zone) == 208, "time zone ABI");
 
 
 /* /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.

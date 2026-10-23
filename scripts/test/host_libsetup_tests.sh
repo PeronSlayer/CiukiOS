@@ -40,6 +40,7 @@ clang "${flags[@]}" \
     src/kernel/core/bootlog.c src/kernel/drivers/blkpart.c src/kernel/lib/sha256.c src/kernel/lib/fmt.c \
     sdk/libdisk/disk.c sdk/libdisk/format.c sdk/libdisk/sha256.c "$out/libdisk_boot.c" \
     apps/setup/inf.c apps/setup/catalog.c apps/desktop/settings.c apps/desktop/theme.c apps/control/configuration.c src/kernel/net/config.c \
+    src/kernel/lib/tzrule.c \
     sdk/libreg/registry.c \
     tests/host/fs/fake.c tests/host/libdisk_files.c tests/host/libsetup_files.c tests/host/libsetup_test.c \
     -L"$out" -lsetup -Wl,--wrap=storage_writer_start,--gc-sections -o "$out/test"

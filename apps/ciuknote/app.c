@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../desktop/tz_env.h"
 
 enum { K_N = 0x31, K_O = 0x18, K_S = 0x1f, K_Z = 0x2c, K_X = 0x2d, K_C = 0x2e, K_V = 0x2f, K_A = 0x1e,
        K_F = 0x21, K_H = 0x23, K_G = 0x22, K_F3 = 0x3d };
@@ -193,7 +194,7 @@ int cn_open_bytes(struct cn_app *a, const char *path, const char *raw, size_t n)
         if (a->recent) a->recent(a->path);
         if (cn_is_log(a->ta.text, a->ta.len)) {  /* a first line .LOG appends the time and date on each opening */
             struct tm tm; time_t t = a->now(a->host); char stamp[48], add[64]; size_t k = 0;
-            if (gmtime_r(&t, &tm)) {
+            if (desk_localtime(&t, &tm)) {
                 cn_timestamp(stamp, sizeof(stamp), &tm);
                 if (a->ta.len && a->ta.text[a->ta.len - 1] != '\n') add[k++] = '\n';
                 k += (size_t)snprintf(add + k, sizeof(add) - k, "%s\n", stamp);
@@ -278,7 +279,7 @@ static void paste(struct cn_app *a)
 static void insert_time(struct cn_app *a)
 {
     struct tm tm; time_t t = a->now(a->host); char stamp[48];
-    if (!gmtime_r(&t, &tm)) return;
+    if (!desk_localtime(&t, &tm)) return;
     cn_timestamp(stamp, sizeof(stamp), &tm);
     du_ta_insert(&a->ta, stamp, strlen(stamp), DU_TA_EDIT_OTHER);
 }

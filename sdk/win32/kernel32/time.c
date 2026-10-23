@@ -1,7 +1,13 @@
-/* Gregorian conversion in the Windows FILETIME epoch. UTC fallback.
+/* Gregorian conversion in the Windows FILETIME epoch; G1 local time and
+ * time zone from the system time-zone service (syscall-97 record over the
+ * Win32 transport), UTC when the service is unavailable.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
 #include <w32/shims.h>
+#include <ciuki/abi.h>
+#include <ciuki/tzdata.h>
+/* The one rule evaluator of the kernel, libciuki and the tests (MIT). */
+#include "../../../src/kernel/lib/tzrule.c"
 static int leap(unsigned y) { return !(y % 4) && (y % 100 || !(y % 400)); }
 static unsigned days(unsigned y, unsigned m) {
   static const uint8_t d[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -115,30 +121,163 @@ void W32API GetSystemTime(SYSTEMTIME *s) {
   GetSystemTimeAsFileTime(&f);
   FileTimeToSystemTime(&f, s);
 }
-void W32API GetLocalTime(SYSTEMTIME *s) { GetSystemTime(s); }
+#define K32_UNIX_EPOCH 11644473600ll /* seconds from 1601-01-01 to 1970-01-01 */
+static uint64_t ft64(const FILETIME *f) { return ((uint64_t)f->high << 32) | f->low; }
+static FILETIME ftmk(uint64_t n) { return (FILETIME){(DWORD)n, (DWORD)(n >> 32)}; }
+#ifdef W32_HOST_MODEL
+/* Host harnesses (64-bit) answer the record directly: the wire carries a
+ * 32-bit address. Absent: the service is unavailable. */
+int32_t k32_zone_host(struct ciuki_w32_system_args *, struct ciuki_time_zone *) __attribute__((weak));
+#endif
+/* One operation on the system time-zone record; 0 with SetLastError. */
+static int k32_zone(struct ciuki_time_zone *z, uint32_t op) {
+  struct ciuki_w32_system_args a = {.action = W32_S_TIME_ZONE};
+  a.header = K32_HEADER(W32_SYSTEM, a);
+  z->version = CIUKI_TIME_VERSION;
+  z->size = sizeof(*z);
+  z->operation = op;
+  a.low = K32_PTR(z);
+  a.extra = sizeof(*z);
+#ifdef W32_HOST_MODEL
+  if (!k32_zone_host || !k32_status(k32_zone_host(&a, z)))
+    return 0;
+#else
+  if (!k32_status(w32_ciuki_call(&a, sizeof(a))))
+    return 0;
+#endif
+  if (a.error) {
+    SetLastError(a.error);
+    return 0;
+  }
+  return 1;
+}
+static int k32_rule(const struct ciuki_time_zone *z, struct tzr *r) {
+  if (!tzr_parse(z->rule, r))
+    return 0;
+  if (!(z->flags & CIUKI_TIME_AUTO_DST))
+    r->has_dst = 0;
+  return 1;
+}
+/* Current bias in seconds east of UTC, 0 without the service. Microsoft
+ * "File Times": FileTimeToLocalFileTime and FAT conversions use the
+ * CURRENT time-zone and daylight-saving settings. */
+int64_t k32_current_bias(void) {
+  struct ciuki_time_zone z;
+  DWORD last = GetLastError();
+  if (!k32_zone(&z, CIUKI_TIME_GET)) {
+    SetLastError(last);
+    return 0;
+  }
+  return (int64_t)z.offset_minutes * 60;
+}
+void W32API GetLocalTime(SYSTEMTIME *s) {
+  FILETIME f;
+  GetSystemTimeAsFileTime(&f);
+  struct ciuki_time_zone z;
+  struct tzr r;
+  DWORD last = GetLastError();
+  if (k32_zone(&z, CIUKI_TIME_GET) && k32_rule(&z, &r)) {
+    uint64_t n = ft64(&f);
+    int64_t unix_seconds = (int64_t)(n / 10000000u) - K32_UNIX_EPOCH;
+    f = ftmk((uint64_t)((int64_t)n + (int64_t)tzr_offset(&r, unix_seconds, 0) * 10000000));
+  } else
+    SetLastError(last);
+  FileTimeToSystemTime(&f, s);
+}
+static void k32_wide(WCHAR *out, const char *in) {
+  unsigned i = 0;
+  for (; in && in[i] && i < 31; i++)
+    out[i] = (uint8_t)in[i];
+  out[i] = 0;
+}
+/* TIME_ZONE_INFORMATION transition: wDay is the week (5 = last), wDayOfWeek
+ * the weekday, local wall time of the change (Microsoft,
+ * TIME_ZONE_INFORMATION). POSIX Mm.w.d maps one to one; a time past 24:00
+ * (Egypt's "M10.5.4/24") is written as 23:59:59.999, as Windows does. */
+static SYSTEMTIME k32_when(const struct tzr_when *w) {
+  SYSTEMTIME s = {0, 0, 0, 0, 0, 0, 0, 0};
+  if (w->kind != TZR_DATE_M)
+    return s;
+  int32_t sec = w->seconds;
+  s.month = w->month;
+  s.weekday = w->wday;
+  s.day = w->week;
+  if (sec < 0)
+    sec = 0;
+  if (sec >= 86400) {
+    s.hour = 23; s.minute = 59; s.second = 59; s.milliseconds = 999;
+  } else {
+    s.hour = (uint16_t)(sec / 3600);
+    s.minute = (uint16_t)(sec / 60 % 60);
+    s.second = (uint16_t)(sec % 60);
+  }
+  return s;
+}
 DWORD W32API GetTimeZoneInformation(TIME_ZONE_INFORMATION *t) {
-  static volatile ULONG once;
-  if (!__atomic_exchange_n(&once,1,__ATOMIC_RELAXED)) w32_diag("load","kernel32.dll","timezone=UTC");
   if (!t) {
     SetLastError(87);
     return ~0u;
   }
   w32_fill(t, 0, sizeof(*t));
-  t->standard_name[0] = 'U';
-  t->standard_name[1] = 'T';
-  t->standard_name[2] = 'C';
-  return 0;
+  struct ciuki_time_zone z;
+  struct tzr r;
+  DWORD last = GetLastError();
+  if (!k32_zone(&z, CIUKI_TIME_GET) || !tzr_parse(z.rule, &r)) {
+    SetLastError(last);
+    k32_wide(t->standard_name, "Coordinated Universal Time");
+    return 0;
+  }
+  static volatile ULONG once;
+  if (!__atomic_exchange_n(&once, 1, __ATOMIC_RELAXED))
+    w32_diag("load", "kernel32.dll", z.zone[0] ? z.zone : z.rule);
+  int index = ciuki_tz_find(z.zone);
+  const struct ciuki_tz_zone *row = index >= 0 ? &ciuki_tz_zones[index] : 0;
+  t->bias = -z.standard_minutes;
+  k32_wide(t->standard_name, row ? row->standard : z.standard_name);
+  k32_wide(t->daylight_name, row && row->daylight[0] ? row->daylight : z.daylight_name[0] ? z.daylight_name : (row ? row->standard : z.standard_name));
+  if (!r.has_dst || !(z.flags & CIUKI_TIME_AUTO_DST))
+    return 0; /* TIME_ZONE_ID_UNKNOWN: no daylight time is applied */
+  t->daylight_bias = -(r.dst_offset - r.std_offset) / 60;
+  t->daylight_date = k32_when(&r.start);
+  t->standard_date = k32_when(&r.end);
+  return (z.flags & CIUKI_TIME_DAYLIGHT) ? 2 : 1;
 }
+static int k32_set(const SYSTEMTIME *s, uint32_t op) {
+  FILETIME f;
+  if (!s || !SystemTimeToFileTime(s, &f)) {
+    SetLastError(87);
+    return 0;
+  }
+  struct ciuki_time_zone z;
+  w32_fill(&z, 0, sizeof(z));
+  int64_t seconds = (int64_t)(ft64(&f) / 10000000u) - K32_UNIX_EPOCH;
+  if (op == CIUKI_TIME_SET_LOCAL)
+    z.local_seconds = seconds;
+  else
+    z.utc_seconds = seconds;
+  return k32_zone(&z, op);
+}
+/* SetLocalTime/SetSystemTime: the caller needs the time authority (the
+ * SE_SYSTEMTIME_NAME equivalent); otherwise ERROR_PRIVILEGE_NOT_HELD.
+ * wDayOfWeek is ignored. The kernel converts local time with the rule of
+ * the new date, so the documented second SetLocalTime call is harmless. */
+BOOL W32API SetLocalTime(const SYSTEMTIME *s) { return k32_set(s, CIUKI_TIME_SET_LOCAL); }
+BOOL W32API SetSystemTime(const SYSTEMTIME *s) { return k32_set(s, CIUKI_TIME_SET_UTC); }
 BOOL W32API FileTimeToLocalFileTime(const FILETIME *s, FILETIME *d) {
   if (!s || !d) {
     SetLastError(87);
     return 0;
   }
-  *d = *s;
+  *d = ftmk((uint64_t)((int64_t)ft64(s) + k32_current_bias() * 10000000));
   return 1;
 }
 BOOL W32API LocalFileTimeToFileTime(const FILETIME *s, FILETIME *d) {
-  return FileTimeToLocalFileTime(s, d);
+  if (!s || !d) {
+    SetLastError(87);
+    return 0;
+  }
+  *d = ftmk((uint64_t)((int64_t)ft64(s) - k32_current_bias() * 10000000));
+  return 1;
 }
 BOOL W32API DosDateTimeToFileTime(uint16_t date, uint16_t time, FILETIME *out) {
   SYSTEMTIME s = {.year = (uint16_t)(1980 + (date >> 9)),

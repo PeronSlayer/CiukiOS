@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT
  * Clock and Calendar: an analog and digital clock with a month calendar, in
- * the manner of the 0.8 Date and Time applet and the Windows 98 clock. The
- * system clock is UTC (the RTC holds UTC; TZ=UTC0). */
+ * the manner of the 0.8 Date and Time applet and the Windows 98 clock. It
+ * shows the local time of the system zone (G1); the host supplies the wall
+ * seconds. */
 #ifndef CIUKI_ACC_CLOCK_H
 #define CIUKI_ACC_CLOCK_H
 #include "acc.h"
@@ -25,7 +26,7 @@ int clock_cell_of(int year, int month, struct clock_date);   /* -1 when outside 
 #define CLOCK_H 262
 struct clock_app {
     struct du_ui *ui;
-    int64_t now;                       /* UTC seconds */
+    int64_t now;                       /* local wall seconds since 1970 */
     int64_t (*clock)(void *); void *host;
     struct clock_date today, selected; int shown_year, shown_month;
     int seconds_hand, h24;

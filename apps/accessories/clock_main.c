@@ -9,7 +9,21 @@
 #include <time.h>
 #define TEST_TIME 1791711660   /* 2026-10-11 09:41:00 UTC, as CiukNote's test clock */
 static int test_mode;
-static int64_t now_utc(void *host) { (void)host; return test_mode ? TEST_TIME : (int64_t)time(NULL); }
+/* G1: the wall clock of the system zone (libc localtime follows it), as
+ * seconds of the same calendar since 1970 for the model's arithmetic. */
+static int64_t now_local(void *host)
+{
+    (void)host;
+    if (test_mode) return TEST_TIME;
+    time_t t = time(NULL);
+    struct tm l;
+    if (!localtime_r(&t, &l)) return (int64_t)t;
+    int64_t y = (int64_t)l.tm_year + 1900 - (l.tm_mon < 2);
+    int64_t era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400;
+    int64_t doy = (153 * (l.tm_mon < 2 ? l.tm_mon + 10 : l.tm_mon - 2) + 2) / 5 + l.tm_mday - 1;
+    int64_t days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    return days * 86400 + l.tm_hour * 3600 + l.tm_min * 60 + l.tm_sec;
+}
 int main(int argc, char **argv)
 {
     int channel; const char *path;
@@ -19,7 +33,7 @@ int main(int argc, char **argv)
     if (du_window_open(&m->window, &m->ui, channel, CLOCK_W, CLOCK_H, "Clock and Calendar")) {
         fprintf(stderr, "clock: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
-    clock_attach(&m->app, &m->ui, now_utc, NULL);
+    clock_attach(&m->app, &m->ui, now_local, NULL);
     du_timer_start(&m->ui, 1, 250000000ull, 1);   /* four checks a second keep the seconds hand on time */
     if (test_mode) du_window_move(&m->window, 24, 48);
     int r = du_run(&m->window, NULL, NULL);

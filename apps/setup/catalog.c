@@ -4,6 +4,7 @@
  * apps/desktop/settings.h), time zones, "Did you know?" tips, the texts of
  * the error classes of plan §7, and the size arithmetic of screen 6. */
 #include "setup.h"
+#include <ciuki/tzrule.h>
 #include <stdio.h>
 
 const struct st_component st_components[SETUP_COMP_COUNT] = {
@@ -24,28 +25,25 @@ const struct st_keyboard st_keyboards[] = {
 };
 const unsigned st_keyboard_count = sizeof(st_keyboards) / sizeof(st_keyboards[0]);
 
-/* Standard-time offsets (TimeZone= has no daylight-saving rule). */
-const struct st_zone st_zones[] = {
-    {-720, "UTC-12:00 Baker Island"}, {-660, "UTC-11:00 Pago Pago"}, {-600, "UTC-10:00 Honolulu"},
-    {-570, "UTC-09:30 Marquesas Islands"}, {-540, "UTC-09:00 Anchorage"}, {-480, "UTC-08:00 Los Angeles, Vancouver"},
-    {-420, "UTC-07:00 Denver, Phoenix"}, {-360, "UTC-06:00 Chicago, Mexico City"},
-    {-300, "UTC-05:00 New York, Toronto, Bogota"}, {-240, "UTC-04:00 Halifax, Caracas"},
-    {-210, "UTC-03:30 St. John's"}, {-180, "UTC-03:00 Buenos Aires, Sao Paulo"}, {-120, "UTC-02:00 South Georgia"},
-    {-60, "UTC-01:00 Azores, Cape Verde"}, {0, "UTC+00:00 London, Lisbon"}, {60, "UTC+01:00 Rome, Berlin, Paris"},
-    {120, "UTC+02:00 Athens, Helsinki, Cairo"}, {180, "UTC+03:00 Moscow, Istanbul, Nairobi"},
-    {210, "UTC+03:30 Tehran"}, {240, "UTC+04:00 Dubai, Baku"}, {270, "UTC+04:30 Kabul"},
-    {300, "UTC+05:00 Karachi, Tashkent"}, {330, "UTC+05:30 Mumbai, New Delhi"}, {345, "UTC+05:45 Kathmandu"},
-    {360, "UTC+06:00 Dhaka"}, {390, "UTC+06:30 Yangon"}, {420, "UTC+07:00 Bangkok, Jakarta"},
-    {480, "UTC+08:00 Beijing, Singapore, Perth"}, {540, "UTC+09:00 Tokyo, Seoul"},
-    {570, "UTC+09:30 Adelaide, Darwin"}, {600, "UTC+10:00 Sydney, Brisbane"}, {660, "UTC+11:00 Noumea"},
-    {720, "UTC+12:00 Auckland, Fiji"}, {780, "UTC+13:00 Nuku'alofa"}, {840, "UTC+14:00 Kiritimati"},
-};
-const unsigned st_zone_count = sizeof(st_zones) / sizeof(st_zones[0]);
-
-int st_zone_index(int minutes)
+/* G1: zones come from ciuki/tzdata.h (IANA rules); the "+hh:mm" form of
+ * SETUP.INF TimeZone= stays a fixed offset (zone < 0 below). */
+int st_zone_index(int minutes) { return ciuki_tz_find_minutes(minutes); }
+int st_zone_find(const char *id) { return id && id[0] ? ciuki_tz_find(id) : -1; }
+static int zone_rule(int zone, int minutes, struct tzr *r)
 {
-    for (unsigned i = 0; i < st_zone_count; i++) if (st_zones[i].minutes == minutes) return (int)i;
-    return -1;
+    if (zone >= 0 && zone < (int)st_zone_count && tzr_parse(st_zones[zone].tz, r)) return 1;
+    char text[TZR_TEXT];
+    return tzr_fixed_text(minutes, text, sizeof(text)) && tzr_parse(text, r);
+}
+int32_t st_zone_offset(int zone, int minutes, int64_t utc)
+{
+    struct tzr r;
+    return zone_rule(zone, minutes, &r) ? tzr_offset(&r, utc, 0) : minutes * 60;
+}
+int64_t st_zone_local_to_utc(int zone, int minutes, int64_t local)
+{
+    struct tzr r;
+    return zone_rule(zone, minutes, &r) ? tzr_local_to_utc(&r, local, -1, 0) : local - (int64_t)minutes * 60;
 }
 
 /* The first tip is the approved mockup text. */

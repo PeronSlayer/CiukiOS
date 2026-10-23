@@ -6,6 +6,19 @@
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
 #include "dosvm_internal.h"
+#include "dosvm_rtc.h"
+#include <ciuki/clock.h>
+/* G1: the system clock and zone; absent in the VM host harnesses, which
+ * keep the synthetic VM calendar below. */
+extern int file_clock_now(uint32_t, const struct process *, struct ciuki_timespec *) __attribute__((weak));
+extern int32_t timezone_offset_at(int64_t utc) __attribute__((weak));
+static bool vm_local(const struct dosvm *v, int64_t *local)
+{
+    struct ciuki_timespec t;
+    if (!file_clock_now || file_clock_now(CLOCK_REALTIME, 0, &t)) return false;
+    *local = t.tv_sec + (timezone_offset_at ? timezone_offset_at(t.tv_sec) : 0) + v->time_offset;
+    return true;
+}
 #pragma weak dosvm_lpt_init
 #pragma weak dosvm_lpt_bios
 
@@ -306,6 +319,23 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
             v->bios_ticks = (((uint32_t)(uint16_t)f->tf.ecx << 16) | (uint16_t)f->tf.edx) % 0x1800B0;
             dosvm_write(v, 0x46C, &v->bios_ticks, 4); carry(f, false); return 0;
         }
+        int64_t local, changed;
+        bool real = vm_local(v, &local);
+        if (fn == 2 && real) {
+            uint16_t cx, dx; dosvm_rtc_time(local, &cx, &dx);
+            low(&f->tf.ecx, cx); low(&f->tf.edx, dx); carry(f, false); return 0;
+        }
+        if (fn == 4 && real) {
+            uint16_t cx, dx; dosvm_rtc_date(local, &cx, &dx);
+            low(&f->tf.ecx, cx); low(&f->tf.edx, dx); carry(f, false); return 0;
+        }
+        /* G1: DOS TIME/DATE move this VM's clock only (time_offset). */
+        if ((fn == 3 || fn == 5) && real) {
+            bool ok = fn == 3 ? dosvm_rtc_set_time(local, (uint16_t)f->tf.ecx, (uint16_t)f->tf.edx, &changed)
+                              : dosvm_rtc_set_date(local, (uint16_t)f->tf.ecx, (uint16_t)f->tf.edx, &changed);
+            if (ok) v->time_offset += changed - local;
+            carry(f, !ok); return 0;
+        }
         if (fn == 2) {
             uint32_t seconds = (v->clock_ms / 1000) % 86400;
             low(&f->tf.ecx, ((uint16_t)bcd(seconds / 3600) << 8) | bcd(seconds / 60 % 60));
@@ -351,6 +381,9 @@ int dosvm_bios_init(struct dosvm *v)
     dosvm_write(v, 0x449, &mode, 1); bda16(v, 0x44A, 80); bda16(v, 0x44C, 4000);
     dosvm_write(v, 0x484, &rows, 1); dosvm_write(v, 0x475, &disks, 1);
     bda16(v, 0x485, 16);
+    /* G1: the tick count starts at the local time of day, as after POST. */
+    int64_t local;
+    if (vm_local(v, &local)) { v->bios_ticks = dosvm_rtc_ticks(local); dosvm_write(v, 0x46C, &v->bios_ticks, 4); }
     for (unsigned i = 0; i < 2000; i++) v->text[i] = 0x0720;
     /* Text output belongs to the VGA model (dosvm_vga_init); no text buffer flush. */
     static const uint8_t keyboard_irq[] = {0xCD,0xFE,0x50,0xB0,0x20,0xE6,0x20,0x58,0xCF};
@@ -588,6 +621,13 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
         if (!write) { *value = v->a20 ? 2 : 0; return 0; }
         if (*value & 1) return dosvm_stop(v->info.key, DOSVM_RESET);
         return dosvm_set_a20(v, *value & 2);
+    }
+    /* G1: the clock registers of the CMOS RTC, read-only, from the VM's
+     * local clock; other CMOS bytes stay absent below. */
+    if ((port == 0x70 || port == 0x71) && width == 1) {
+        int64_t local; uint8_t b;
+        if (port == 0x70) { if (write) { v->cmos_index = (uint8_t)*value; return 0; } }
+        else if (!write && vm_local(v, &local) && dosvm_rtc_cmos(local, v->cmos_index, &b)) { *value = b; return 0; }
     }
     /* Absent devices: all-one reads, discarded writes, at the CPU width.
      * This includes UART, ATA, DMA, PCI, VGA and CMOS, never real access. */
