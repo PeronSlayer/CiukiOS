@@ -17,6 +17,13 @@ ACPI_STATUS fw_sources_add(ACPI_HANDLE, uint32_t, uint32_t);
 void fw_sources_refresh(void);
 ACPI_STATUS fw_thermal_add(ACPI_HANDLE, uint32_t);
 ACPI_STATUS fw_thermal_refresh(bool);
+/* fx-3 follow-up 2: _TZP-driven polling and Notify(0x80) per zone. */
+ACPI_STATUS fw_thermal_service(uint64_t now);
+bool fw_thermal_pending(uint64_t now);
+bool fw_thermal_notify(ACPI_HANDLE);
+uint32_t fw_thermal_period_ms(unsigned zone);
+bool fw_thermal_ec_backed(unsigned zone);
+uint32_t fw_ec_transactions(void);
 void fw_classes_reset(void);
 void fw_thermal_reset(void);
 ACPI_STATUS fw_ec_add(ACPI_HANDLE);

@@ -31,6 +31,8 @@ static bool ec_preflight;
  * transaction timed out and the next one first recovers the interface. */
 static bool ec_settled, ec_legacy, ec_stale;
 static unsigned transaction_io;
+static uint32_t transactions_total;
+uint32_t fw_ec_transactions(void) { return transactions_total; }
 /* f1-94: every EC port access is a candidate SMI trigger in legacy mode
  * (smi_coincide ec_io); the marks were lost when f1-110 moved the quirk. */
 static void ec_mark(void) { if (smi_mark) smi_mark(SMI_EC_IO); }
@@ -87,6 +89,7 @@ static ACPI_STATUS transaction(uint8_t command, uint8_t address, uint8_t *v, uns
      * transaction recovers first. */
     if (s && ec_legacy) ec_stale = true;
     else if (s) ec_failed = true;
+    transactions_total++; /* fx-3 follow-up 2: EC-backed thermal zones */
     flags = fw_os->lock(); ec_busy = false; fw_os->unlock(flags); return s;
 }
 bool fw_ec_ready(void) { return ec_bound && fw_owned && !ec_failed; }

@@ -23,6 +23,7 @@ static bool ec_obf, ec_query;
 static bool ec_hold_reply, ec_late;
 static unsigned ec_query_commands, ec_reads_of_data;
 static bool nested_quirk; static int nested_result=1; static uint64_t nested_wait;
+static unsigned ec_read_commands; /* fx-3 follow-up 2: RD_EC count */
 /* ciuki/power_source.h seam: one ACPI/APM provider, reserved before writes. */
 static unsigned reserves, activations, retires, publishes;
 static bool retired_uncertain;
@@ -60,7 +61,7 @@ static ACPI_STATUS access(unsigned space, uint64_t a, unsigned width, UINT64 *va
 static ACPI_STATUS write_access(unsigned space, uint64_t a, unsigned width, UINT64 value, const ACPI_PCI_ID *pci)
 {
     if (!fw_region_check(space,a,width,pci)) return AE_ACCESS;
-    writes++;
+    if (a!=0x62 && a!=0x66) writes++; /* EC data transactions are not ownership writes (fx-3: EC-backed _TMP) */
     if (a==0xb2) {
         if (value==0xf1) { enables++; if (strcmp(scenario,"enable-timeout")) io[0x604]|=1; }
         else { assert(value==0xf0); disables++; if (!strcmp(scenario,"rollback")) return AE_ERROR; io[0x604]&=~1u; }
@@ -76,7 +77,7 @@ static ACPI_STATUS write_access(unsigned space, uint64_t a, unsigned width, UINT
                 nested_wait=now-start; assert(!cost);
             }
         }
-        else assert(value==0x80 || value==0x81);
+        else { assert(value==0x80 || value==0x81); if (value==0x80) ec_read_commands++; }
     } else if (a==0x62) {
         if (!ec_step++) {
             ec_address=value;
@@ -184,6 +185,7 @@ int main(int argc, char **argv)
     uint8_t early=0;
     assert(acpi_ec_quirk_attach()==-11 && acpi_ec_quirk_transfer(false,0x30,&early)==-19); /* fx-3: before the inventory settles */
     if (!strcmp(scenario,"already-enabled")) io[0x604]=1;
+    if (!strcmp(scenario,"tzp-ec")) ec_value=40; /* _TMP = 40*10+2732 = 3132 K, above _AC0 (fan on) */
     ACPI_STATUS s=fw_inventory_power_run(&ops,0xe0000);
     struct ciuki_power_status p;
     assert(!acpi_power_snapshot(&p));
@@ -247,9 +249,38 @@ int main(int argc, char **argv)
             assert(fw_power.shutdown_requests==1 && !(io[0x601]&1));
             puts("PASS power storm: bounded 16 callbacks and explicit queue overflow");
         }
-        if (!strcmp(scenario,"thermal-change")) {
-            assert(!fw_eval(ACPI_ROOT_OBJECT,"\\_TZ.THRM.HEAT",NULL,NULL)); fw_power_poll();
+        if (!strcmp(scenario,"thermal-change") || !strcmp(scenario,"tzp-zero")) {
+            /* fx-3 follow-up 2: _TZP absent or 0 = Notify only (ACPI 6.5
+             * 11.1.3.2, 11.4.26): a silent change is not polled, the
+             * zone's Notify(0x80) is served at the next worker turn. */
+            assert(fw_thermal_period_ms(0)==0 && !fw_thermal_ec_backed(0));
+            assert(!fw_eval(ACPI_ROOT_OBJECT,"\\_TZ.THRM.HEAT",NULL,NULL));
+            for (unsigned i=0;i<60;i++) { now+=10000000; fw_power_poll(); }
+            assert(!acpi_power_snapshot(&p) && p.shutdown_requests==0);
+            assert(!fw_eval(ACPI_ROOT_OBJECT,"\\_TZ.THRM.NOTE",NULL,NULL)); fw_power_poll();
             assert(!acpi_power_snapshot(&p) && p.shutdown_requests==1);
+            printf("PASS power %s: no thermal polling, Notify(0x80) re-reads the zone\n",scenario);
+        }
+        if (!strcmp(scenario,"tzp-poll")) {
+            assert(fw_thermal_period_ms(0)==5000 && !fw_thermal_ec_backed(0));
+            assert(!fw_eval(ACPI_ROOT_OBJECT,"\\_TZ.THRM.HEAT",NULL,NULL));
+            now+=10000000; fw_power_poll(); assert(!acpi_power_snapshot(&p) && p.shutdown_requests==0);
+            now+=40000000; fw_power_poll(); assert(!acpi_power_snapshot(&p) && p.shutdown_requests==1);
+            puts("PASS power tzp-poll: _TZP=50 polls every 5 s, not before");
+        }
+        if (!strcmp(scenario,"tzp-ec")) {
+            /* _TZP=10 asks for 1 s; the zone's _TMP reads the EC, so it is
+             * polled every 10 s at most (f1-100/f2-96 EC budget). */
+            assert(fw_thermal_ec_backed(0) && fw_thermal_period_ms(0)==10000);
+            unsigned reads=ec_read_commands;
+            for (unsigned i=0;i<30;i++) { now+=10000000; fw_power_poll(); }
+            unsigned polled=ec_read_commands-reads;
+            assert(polled>=2 && polled<=3);
+            reads=ec_read_commands; ec_value=110; /* 110*10+2732 = 3832 > _CRT 3700 */
+            assert(!fw_eval(ACPI_ROOT_OBJECT,"\\_TZ.THRM.NOTE",NULL,NULL)); fw_power_poll();
+            assert(ec_read_commands==reads+1 && !acpi_power_snapshot(&p) && p.shutdown_requests==1);
+            ec_value=40;
+            printf("PASS power tzp-ec: EC-backed zone polled at 10 s (%u RD_EC in 30 s), Notify read at once\n",polled);
         }
         if (!strcmp(scenario,"eisa-button") || !strcmp(scenario,"cid-button")) {
             io[0x620]|=1; fire(); fw_power_poll(); fw_power_poll();

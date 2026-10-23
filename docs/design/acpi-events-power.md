@@ -252,9 +252,10 @@ What changes on the T23 if the takeover succeeds (analysis, not measured):
 - Thermal: f1-110 refuses takeover for passive (`_PSV`/`_TC1`/`_TC2`/`_TSP`)
   and `_HOT` zones, which ThinkPad DSDTs usually have; the T23 may stay
   firmware-owned for that reason alone (status AE_SUPPORT in the record).
-  If a zone is admitted, `_TMP` is evaluated every 100 ms; on ThinkPads
+  If a zone is admitted, `_TMP` was evaluated every 100 ms; on ThinkPads
   `_TMP` reads EC registers, i.e. one EC transaction (two 2.1 ms SMIs on the
-  T23, f1-100) every 100 ms. Not changed here; flagged to the lead.
+  T23, f1-100) every 100 ms. Superseded by "Thermal reads follow _TZP and
+  Notify" below.
 - Volume quirk: ACPI-owned uses the same engine (62h/66h); a busy engine
   (QR_EC or an AML field access in flight) is waited for within the
   quirk's deadline instead of failing (`acpi_ec_quirk_transfer_counted`).
@@ -269,4 +270,56 @@ Evidence: `tests/host/acpi/test.c` scenarios `preempted` (1 ms of other
 tasks between two clock reads: the scan completes, wall about 1 s, run
 about 0.1 ms), `preempted-wall` (same without run_clock: AE_TIME, the T23
 shape) and `starved` (wall caps expire with an honest record).
+
+## Lead decision 2026-10-23: passive-cooling zones keep firmware ownership
+
+The f1-110 refusal stays: a thermal zone with passive cooling (`_PSV`,
+`_TC1`, `_TC2`, `_TSP`, `_PSL`) or `_HOT` makes `fw_power_takeover` fail
+(AE_SUPPORT) and the platform stays firmware-owned, as before f1-110.
+ThinkPad DSDTs, the T23's included, usually describe such zones, so the T23
+keeps legacy ACPI ownership: SMM handles thermal, battery and button events,
+the volume quirk uses the legacy EC binding, soft-off uses the
+power_source provider path. No passive cooling or processor throttling is
+implemented now. Condition to lift it: an OSPM passive-cooling
+implementation that samples `_TMP` every `_TSP`, applies ACPI 6.5 section
+11.1.5.1 Equation #1 (ΔP[%] = _TC1 × (Tn − Tn−1) + _TC2 × (Tn − Tt), Tt =
+`_PSV`, clamped by `_MTL`) to the processors of `_PSL` through a qualified
+processor clock-throttling provider (FADT `P_BLK`/`P_CNT` or `_PTC`), with
+host tests and a hardware qualification on the T23.
+
+## Thermal reads follow _TZP and Notify (fx-3 follow-up 2, lead decision 2026-10-23)
+
+On a platform the OS owns, the fixed 100 ms `_TMP` read is gone.
+
+- ACPI 6.5 section 11.1.3 (Detecting Temperature Changes) and 11.1.3.1:
+  the platform reports a meaningful change with `Notify(zone, 0x80)`;
+  11.1.3.2 (Polling): "A thermal zone advertises the need to be polled by
+  OSPM via the _TZP object"; 11.4.26 (`_TZP`): recommended polling period
+  in tenths of seconds, 1 s granularity, zero = polling not needed, polling
+  "allowed but strongly discouraged". The specification defines no default
+  period for an absent `_TZP`.
+- Policy (`src/kernel/acpi/thermal.c`): `_TZP` > 0 → poll that zone every
+  `_TZP` (at least 1 s, at most 1 h); `_TZP` = 0 or absent → no polling,
+  the zone is read only on `Notify(zone, 0x80/0x81/0x82)`, at the next
+  20 ms event-worker turn (several notifications coalesce into one read).
+  Linux v6.12 `drivers/acpi/thermal.c` behaves the same: `polling_frequency`
+  is `_TZP`, 0 when absent, and only a DMI quirk forces 30 s on one board
+  (https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/acpi/thermal.c?h=v6.12).
+- EC bound: a zone whose `_TMP` issued EC transactions (counted by the EC
+  engine) is never polled faster than every 10 s (`THERMAL_EC_MIN_MS`).
+  The f1-100/f2-96 EC budget is one RD_EC per 2 s for the volume keys
+  (about two 2.1 ms SMIs each on the T23); a thermal poll adds at most one
+  `_TMP` per 10 s, a fifth of it. Notifications are not limited: they are
+  firmware events, not polls.
+- Zones that are not due keep their last temperature, trip facts and
+  cooling demand; the takeover admission still evaluates every zone once.
+- A notification on any other object refreshes the power sources (AC,
+  batteries) at once instead of the thermal zones; the 10 s source refresh
+  is unchanged.
+
+Evidence: `tests/host/acpi/events_test.c` scenarios `tzp-poll` (`_TZP`=50:
+no read at 1 s, read at 5 s), `tzp-zero` and `thermal-change` (`_TZP` 0 and
+absent: 60 s without a read, the zone's Notify reads it at once),
+`tzp-ec` (`_TMP` reads the EC, `_TZP`=10 asks 1 s: 3 RD_EC in 30 s, a
+Notify reads at once).
 

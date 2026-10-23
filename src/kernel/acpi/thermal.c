@@ -1,8 +1,30 @@
 /* ACPI 6.5 chapter 11 thermal admission and evaluation.
+ * fx-3 follow-up 2 (lead decision 2026-10-23): no fixed read period. ACPI
+ * 6.5 section 11.1.3 (Detecting Temperature Changes): the platform signals
+ * a meaningful change with Notify(zone, 0x80); 11.1.3.2 (Polling): "A
+ * thermal zone advertises the need to be polled by OSPM via the _TZP
+ * object"; 11.4.26 (_TZP): tenths of seconds with 1 s granularity, zero =
+ * no polling needed, polling "allowed but strongly discouraged". So:
+ *  - _TZP > 0: poll at that period, at least 1 s;
+ *  - _TZP == 0 or absent (the spec defines no default period): Notify only.
+ * Linux v6.12 drivers/acpi/thermal.c does the same (polling_frequency =
+ * _TZP, 0 when absent; a DMI quirk forces 30 s on one board).
+ * An EC-backed zone (its _TMP issued EC transactions) is never polled more
+ * often than THERMAL_EC_MIN_MS: f1-100 measured two 2.1 ms SMIs per EC
+ * transaction on the T23 and f2-96 budgets one RD_EC per 2 s for the volume
+ * keys; a thermal poll adds at most one _TMP every 10 s, a fifth of that.
+ * Notifications are not polls: they are served at the next event-worker
+ * turn (20 ms), several notifications to one zone coalesce into one read.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "runtime.h"
 #include "acclib.h"
-static struct zone { ACPI_HANDLE handle; uint32_t previous; } zones[CIUKI_POWER_ZONES];
+#define THERMAL_MIN_POLL_MS 1000u    /* 11.4.26: 1 s granularity */
+#define THERMAL_EC_MIN_MS 10000u     /* EC-backed zone: f1-100/f2-96 EC budget */
+static struct zone {
+    ACPI_HANDLE handle; uint32_t previous, period_ms;
+    uint64_t due;                    /* 100 ns clock of the next poll (period_ms > 0) */
+    bool notified, ec_backed, evaluated;
+} zones[CIUKI_POWER_ZONES];
 static struct cooling { ACPI_HANDLE handle; bool resource, wanted, on; } cooling[FW_MAX];
 static unsigned targets;
 static ACPI_HANDLE fans[FW_MAX];
@@ -56,8 +78,15 @@ static ACPI_STATUS fan(ACPI_HANDLE h, uint64_t *mask)
 ACPI_STATUS fw_thermal_add(ACPI_HANDLE h, uint32_t id)
 {
     if (fw_power.zone_count == CIUKI_POWER_ZONES) return AE_LIMIT;
+    /* _TZP is read once at collection: absent or failing = Notify only. */
+    uint32_t tzp = 0; ACPI_STATUS s = fw_integer(h, "_TZP", &tzp);
+    if (s && s != AE_NOT_FOUND) return s;
+    if (s) tzp = 0;
+    uint64_t period = (uint64_t)tzp * 100u;             /* dS -> ms */
+    if (period && period < THERMAL_MIN_POLL_MS) period = THERMAL_MIN_POLL_MS;
+    if (period > 3600000u) period = 3600000u;           /* one hour: bounded arithmetic */
     unsigned i = fw_power.zone_count++;
-    zones[i] = (struct zone){h, CIUKI_POWER_UNKNOWN};
+    zones[i] = (struct zone){h, CIUKI_POWER_UNKNOWN, (uint32_t)period, 0, false, false, false};
     memset(&fw_power.zones[i], 0xff, sizeof(fw_power.zones[i]));
     fw_power.zones[i].id = id; fw_power.zones[i].cooling = 0;
     fw_power.zones[i].passive_delta = INT32_MIN;
@@ -80,14 +109,53 @@ static ACPI_STATUS shared_power(ACPI_HANDLE h, UINT32 level, void *ctx, void **r
     }
     AcpiOsFree(b.Pointer); return s;
 }
-ACPI_STATUS fw_thermal_refresh(bool apply)
+static uint32_t zone_period(const struct zone *z)
+{
+    if (!z->period_ms) return 0;
+    return z->ec_backed && z->period_ms < THERMAL_EC_MIN_MS ? THERMAL_EC_MIN_MS : z->period_ms;
+}
+uint32_t fw_thermal_period_ms(unsigned i)
+{ return i < fw_power.zone_count && i < CIUKI_POWER_ZONES ? zone_period(&zones[i]) : 0; }
+bool fw_thermal_ec_backed(unsigned i)
+{ return i < fw_power.zone_count && i < CIUKI_POWER_ZONES && zones[i].ec_backed; }
+bool fw_thermal_notify(ACPI_HANDLE h)
+{
+    for (unsigned i = 0; i < fw_power.zone_count && i < CIUKI_POWER_ZONES; i++)
+        if (zones[i].handle == h) { zones[i].notified = true; return true; }
+    return false;
+}
+bool fw_thermal_pending(uint64_t now)
+{
+    for (unsigned i = 0; i < fw_power.zone_count && i < CIUKI_POWER_ZONES; i++) {
+        const struct zone *z = &zones[i];
+        if (z->notified || (zone_period(z) && now >= z->due)) return true;
+    }
+    return false;
+}
+static ACPI_STATUS refresh(bool apply, bool all, uint64_t now);
+ACPI_STATUS fw_thermal_refresh(bool apply) { return refresh(apply, true, fw_os->clock()); }
+ACPI_STATUS fw_thermal_service(uint64_t now) { return refresh(true, false, now); }
+static ACPI_STATUS refresh(bool apply, bool all, uint64_t now)
 {
     for (unsigned i = 0; i < targets; i++) cooling[i].wanted = false;
     for (unsigned i = 0; i < fw_power.zone_count && i < CIUKI_POWER_ZONES; i++) {
         struct ciuki_power_zone *z = &fw_power.zones[i]; ACPI_HANDLE h = zones[i].handle;
+        uint32_t period = zone_period(&zones[i]);
+        bool due = all || zones[i].notified || (period && now >= zones[i].due) || !zones[i].evaluated;
+        if (!due) {
+            /* Not due: keep its last facts and its cooling demand. */
+            for (unsigned k = 0; k < 10; k++) if (z->cooling & (1u << k))
+                for (unsigned j = 0; j < targets; j++) if (demand[i][k] & ((uint64_t)1 << j)) cooling[j].wanted = true;
+            continue;
+        }
+        zones[i].notified = false; zones[i].evaluated = true;
         uint32_t id = z->id;
         memset(z,0xff,sizeof(*z)); z->id = id; z->cooling = 0; z->passive_delta = INT32_MIN;
+        uint32_t ec_before = fw_ec_transactions();
         uint32_t t; ACPI_STATUS s = fw_integer(h, "_TMP", &t);
+        if (fw_ec_transactions() != ec_before) zones[i].ec_backed = true;
+        period = zone_period(&zones[i]);
+        zones[i].due = period ? now + (uint64_t)period * 10000 : 0;
         z->temperature = CIUKI_POWER_UNKNOWN;
         if (s || !temperature(t)) return s ? s : AE_BAD_DATA;
         z->temperature = t;
