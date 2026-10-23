@@ -512,9 +512,24 @@ static int replace_client_surface(struct desktop *d,int i,const struct ciuki_mes
     c->gfx_box=(struct desk_box){0};c->gfx_width=c->gfx_height=0;
     configure(d,i,1);return 0;
 }
+/* fx-15: surface coordinates to screen coordinates. A pending resize
+ * stretches the retained backing across the whole well (compositor.c
+ * client_rows, nearest sampling): damage is mapped through that ratio and
+ * rounded outwards, so every texel's stretched copy is repainted. */
+static struct desk_box surface_damage(const struct desk_client *c, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    struct desk_box b=desk_content(c);
+    if (!c->info.width || !c->info.height || b.w<=0 || b.h<=0) return (struct desk_box){0,0,0,0};
+    uint64_t sw=c->info.width, sh=c->info.height, dw=(uint64_t)b.w, dh=(uint64_t)b.h;
+    uint64_t left=(uint64_t)x*dw/sw, top=(uint64_t)y*dh/sh;
+    uint64_t right=(((uint64_t)x+w)*dw+sw-1)/sw, bottom=(((uint64_t)y+h)*dh+sh-1)/sh;
+    return (struct desk_box){b.x+(int32_t)left,b.y+(int32_t)top,(int32_t)(right-left),(int32_t)(bottom-top)};
+}
+static uint64_t client_clock(struct desktop *d) { return d->time_ns ? d->time_ns() : d->now_ns; }
 static void client_frame_ready(struct desktop *d,struct desk_client *c)
 {
     if (c->awaiting_frame) {
+        c->damage_ns=client_clock(d);
         c->launch_frame_pending=1;
         if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_DAMAGE,c->pid,0);
     }
@@ -608,12 +623,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             .view_w=p.width,.view_h=p.height,
             .slot_ns=d->next_frame_ns>received ? d->next_frame_ns-received : 0};
         if (c->minimized || c->collapsed) { desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS); break; }
-        if (p.ui_w && p.ui_h) desk_client_damage(d,i,
-            (struct desk_box){content.x+(int)p.ui_x,content.y+(int)p.ui_y,(int)p.ui_w,(int)p.ui_h});
-        if (changed && old.w && old.h) {
-            old.x+=content.x; old.y+=content.y;
-            desk_client_damage(d,i,old);
-        }
+        (void)content;
+        if (p.ui_w && p.ui_h) desk_client_damage(d,i,surface_damage(c,p.ui_x,p.ui_y,p.ui_w,p.ui_h));
+        if (changed && old.w && old.h)
+            desk_client_damage(d,i,surface_damage(c,(uint32_t)old.x,(uint32_t)old.y,(uint32_t)old.w,(uint32_t)old.h));
         struct desk_box dirty=region;
         if (!changed && p.source_w && p.damage_w && p.damage_h) {
             unsigned left=p.damage_x*p.width/p.source_w, top=p.damage_y*p.height/p.source_h;
@@ -622,10 +635,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             dirty=(struct desk_box){p.x+(int)left,p.y+(int)top,(int)(right-left),(int)(bottom-top)};
         }
         /* No changed texels still needs a completion, but no upload. */
-        if (changed || (p.damage_w && p.damage_h)) {
-            dirty.x+=content.x; dirty.y+=content.y;
-            desk_client_damage(d,i,dirty);
-        }
+        if (changed || (p.damage_w && p.damage_h))
+            desk_client_damage(d,i,surface_damage(c,(uint32_t)dirty.x,(uint32_t)dirty.y,(uint32_t)dirty.w,(uint32_t)dirty.h));
         if (!d->damage.count) desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS);
         break;
     }
@@ -710,6 +721,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_move(d, i, 20 + (int)slot * 18, DESK_BAR + 20 + (int)slot * 18);
         desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         configure(d, i, 1);
+        if (c->awaiting_frame) c->window_ns=client_clock(d);
         if (c->awaiting_frame && d->launch_mark) d->launch_mark(CIUKI_LAUNCH_CONFIGURE,c->pid,0);
         if (d->shell && d->menu_open) {
             c->order=++d->order; d->menu_focus=i;
@@ -733,9 +745,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             /* A superseded request already in flight may commit; keep the
              * newest frame geometry and clip this surface until its swap. */
         } else {
-            struct desk_box b = desk_content(c);
-            b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
-            int visible=desk_client_damage(d,i,b);
+            int visible=desk_client_damage(d,i,surface_damage(c,(uint32_t)p.x,(uint32_t)p.y,p.width,p.height));
             /* The DOS producer has already waited for its VM's real VGA
              * deadline. Do not quantize 35/70 Hz to the shell's 30/60 Hz. */
             if (visible && c->dosbox && d->next_frame_ns>d->now_ns) d->next_frame_ns=d->now_ns;
@@ -1726,6 +1736,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
                     c->owner_id=owner>=0 ? d->clients[owner].window_id : 0;
                     if (owner>=0 && (d->clients[owner].v3_style&DESK_V3_TOPMOST)) p.style|=DESK_V3_TOPMOST;
                     memcpy(c->title,p.title,sizeof(c->title)); anchor->v3_last[id-1]=generation;
+                    if (anchor->awaiting_frame && !anchor->window_ns) anchor->window_ns=client_clock(d);
                     v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_focus(d,i);
                     /* fx-2: its task button, as for a native window. */
                     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
@@ -1739,16 +1750,16 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     switch (p.opcode) {
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
-        struct desk_box b=desk_content(c);
         if (!p.width || !p.height) break;
-        /* A pending resize stretches the old backing. Map source damage
-         * through that same ratio, rounding outwards to cover every texel. */
-        unsigned left=(unsigned)p.x*(unsigned)b.w/c->info.width;
-        unsigned top=(unsigned)p.y*(unsigned)b.h/c->info.height;
-        unsigned right=(((unsigned)p.x+p.width)*(unsigned)b.w+c->info.width-1)/c->info.width;
-        unsigned bottom=(((unsigned)p.y+p.height)*(unsigned)b.h+c->info.height-1)/c->info.height;
-        b.x+=(int)left; b.y+=(int)top; b.w=(int)(right-left); b.h=(int)(bottom-top);
-        int visible=desk_client_damage(d,i,b);
+        /* fx-15: a v3 program (NetSurf, a Win32 program) was launched on its
+         * transport slot; its first window's first frame ends AppStarting
+         * and completes the launch there (the STARTUPINFO feedback rule). */
+        if (anchor->awaiting_frame && c->window) {
+            c->awaiting_frame=1; c->launch_input_ns=anchor->launch_input_ns; c->launched_ns=anchor->launched_ns;
+            c->window_ns=anchor->window_ns; anchor->awaiting_frame=0; client_frame_ready(d,c);
+        }
+        /* A pending resize stretches the old backing (surface_damage). */
+        int visible=desk_client_damage(d,i,surface_damage(c,(uint32_t)p.x,(uint32_t)p.y,p.width,p.height));
         if(p.opcode==DESK_V3_PRESENT && visible){c->gl_present_request=p.request;return 0;}
         break;
     }

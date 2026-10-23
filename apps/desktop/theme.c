@@ -283,7 +283,11 @@ int desk_paint_text_n_aa(struct desk_paint *p, int font, int x, int baseline, co
         const struct desk_glyph *g = &f->glyphs[glyph_index(c)];
         int gx = x + g->left, gy = baseline + g->top, w = g->w, h = g->h;
         int vx = gx, vy = gy, vw = w, vh = h;
-        if (w && h && x < p->cx + p->cw && clip(p, &vx, &vy, &vw, &vh)) {
+        /* fx-15: the glyph's own box decides, not the pen: a negative left
+         * bearing ('j', 'p') reaches left of the pen, and a clip ending
+         * between the box and the pen must still receive those pixels, or
+         * a repainted strip differs from a full repaint. */
+        if (w && h && gx < p->cx + p->cw && clip(p, &vx, &vy, &vw, &vh)) {
             for (int r = vy; r < vy + vh; r++) {
                 const uint8_t *src = f->alpha + g->offset + (size_t)(r - gy) * (size_t)w + (size_t)(vx - gx);
                 uint32_t *dst = p->pixels + (size_t)r * (size_t)p->width + (size_t)vx;

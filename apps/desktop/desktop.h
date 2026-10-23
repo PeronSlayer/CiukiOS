@@ -114,6 +114,7 @@ struct desk_client {
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
     uint64_t launch_input_ns;     /* original click, retained through first-frame presentation */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
+    uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
     int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
@@ -244,6 +245,20 @@ struct desktop {
      * when hidden, and its order). desk_stack_damage reconciles it: a
      * changed relative order invalidates the pair's overlap. */
     uint32_t stack_window[DESK_CLIENTS]; uint64_t stack_order[DESK_CLIENTS];
+    /* fx-15: what the last composed frame showed of every window, task
+     * button and shell popup (desk_scene_reconcile): a change of any of
+     * them, through whatever path, invalidates the old and the new pixels
+     * before the next frame (Windows 9x: ShowWindow/SetWindowPos/
+     * SetWindowText/activation invalidate what they change). */
+    struct desk_shown {
+        uint32_t window_id; int shown; struct desk_box outer;
+        const uint32_t *icon; unsigned buttons, hot, pressed; int active, alert, collapsed, maximized;
+        char title[DESK_TITLE_MAX + 1];
+    } shown[DESK_CLIENTS];
+    struct desk_task_shown { struct desk_box box; const char *icon; unsigned flags; char title[DESK_TITLE_MAX + 1]; } task_shown[DESK_CLIENTS];
+    struct desk_box popup_shown[SH_LEVELS + 6];
+    struct desk_box tip_shown; uint32_t tip_shown_hash;
+    struct desk_box outline_shown; int outline_icon, about_windows;
     uint32_t cursor_under[32*32]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
     unsigned cursor_shape, cursor_loaded;
@@ -272,6 +287,9 @@ struct desktop {
     int launch_async, launch_deferred;
     struct desk_launch_request launch_request;
     int (*launch_mark)(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
+    /* fx-15: a launched program's first frame reached the screen (quiet
+     * boots too): click, process, window, first frame and present times. */
+    void (*first_frame)(struct desktop *, const struct desk_client *, uint64_t presented_ns);
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
     int realtime_source;
@@ -438,6 +456,7 @@ void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
 int desk_client_damage(struct desktop *, int, struct desk_box);
 void desk_stack_damage(struct desktop *);
+void desk_scene_reconcile(struct desktop *); /* fx-15: before every frame decision and in desk_redraw */
 void desk_caption_damage(struct desktop *, int);
 unsigned desk_shell_occluders(const struct desktop *, struct desk_box *); /* SH_LEVELS+6 slots */
 static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }

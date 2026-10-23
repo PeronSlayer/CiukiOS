@@ -360,3 +360,153 @@ Sources:
   non-topmost windows.
 * Microsoft SDK, [Redrawing in the Update Region](https://learn.microsoft.com/en-us/windows/win32/gdi/redrawing-in-the-update-region):
   painting is clipped to the update region within the visible region.
+
+## fx-15: the Windows 9x window-manager model, every row (2026-10-23)
+
+T23 trial of preview image `e831e685` (Savage 2D engine: `[desktop] accel
+... caps=3 vram_rows=1280 pointer=hw`): windows stayed drawn when another
+window opened, and windows still opened slowly. fx-2 fixed one path (the
+restack). This section is the whole model: every event that changes the
+screen, what Windows 9x repaints for it, the CiukiOS path, and the defect
+the audit found there.
+
+### The model
+
+Windows 9x keeps no retained screen: USER invalidates, applications paint.
+Every operation that changes what is visible adds the changed area to the
+update region of the windows concerned (`InvalidateRect`); `WM_PAINT` and
+`WM_NCPAINT` repaint exactly that region, clipped to the visible region
+(`BeginPaint`); `WM_ERASEBKGND` first erases it with the class brush.
+`SetWindowPos`/`ShowWindow` invalidate what a move, size, z-order or
+visibility change uncovers or covers (`SWP_NOREDRAW` is the only opt-out);
+`EndDeferWindowPos` applies several such changes "in a single
+screen-refreshing cycle". CiukiOS retains a surface per window and composes
+the screen from them, so its rule is the same postcondition: **the damage
+of a frame contains every pixel whose correct rendering changed since the
+last frame shown, and an exposure repaint of any part equals a full
+repaint of it.** The table is the inventory; every row is a host test
+(`tests/host/desktop/test_window_model.py`, rows named in the last column)
+that compares each frame on screen with a full redraw on five presenters:
+the software upload, the 2D engine (COPY/FILL, hardware pointer), the 2D
+engine with the f2-92 offscreen caches in the T23 configuration
+(offscreen rows two thirds of the screen: windows cached, the background
+not), and the f2-101d command batches at 32 and 16 bpp.
+
+| # | Event (Windows 9x) | Repainted | CiukiOS path | Defect found (fixed) | Test row |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Window created and shown: `CreateWindow`, `ShowWindow`, `WM_NCPAINT`, `WM_ERASEBKGND` with the class brush, then `WM_PAINT` | the new window's outer box (frame, shadow, client) over everything it covers; its task button; captions and focus indicators of the activation it takes | `client.c` `DESK_CREATE_WINDOW` (native, v3); libdeskui `window_open` | the client area was the zeroed (black) surface until the program's first frame; the desktop icon outline did not follow the activation | create |
+| 2 | Client update: `InvalidateRect` + `WM_PAINT` clipped to the visible region | the reported rectangle, visible part only; with a pending resize the stretched image of that rectangle | `client.c` `DESK_DAMAGE`, `DESK_GFX_FRAME`, v3 `DESK_DAMAGE`/`PRESENT`; `compositor.c` `window_damage` | native and graphics-presenter updates during a pending resize (maximise, restore, size) were not mapped through the stretch: parts stayed stale until the program re-laid out; updates of a window over the top bar were dropped there | stretched, gfx, topbar |
+| 3 | `ScrollWindowEx`: retained pixels moved by BitBlt, exposed strip invalidated | moved pixels by an engine screen copy only where they equal the program's pixels and nothing is painted above them | `compositor.c` `scroll_plan`, `copy_region` | the copy ignored what `scene()` paints above windows: the minimise/restore outline and the taskbar; a plain page under the outline lost (or carried) outline pixels on the engine presenters | scroll overlays |
+| 4 | Window moved: `SetWindowPos` move ("show window contents while dragging", `SPI_SETDRAGFULLWINDOWS`) | old and new outer boxes; the window's visible pixels by BitBlt | `client.c` `desk_move`, `compositor.c` move copy | a window reaching under the taskbar moved taskbar pixels with it (RAM and screen copy) | move |
+| 5 | Window sized, maximised, restored, shaded (`WM_SIZE`, `CS_HREDRAW`/`CS_VREDRAW`) | old and new outer boxes; the stretched backing until the program presents its new surface | `desk_resize`, `desk_zoom`, `desk_collapse`, `replace_client_surface` | (row 2's stretch defect) | minimise/restore, stretched |
+| 6 | Z-order change: activation raise, `SetWindowPos` z, owned and topmost bands | the overlap of every pair whose relative order changed | `desk_stack_damage` (fx-2) | none new | activation, show/hide |
+| 7 | Hidden and shown: `ShowWindow(SW_HIDE)`, `SW_SHOW`, activation of a hidden window | the old outer box exposed; the new outer box painted; the task button removed or added | `v3_place`, v3 `DESK_V3_ACTIVATE` | a Win32 window hidden by `SW_HIDE` left its task button drawn; a hidden window shown by activation while already the highest window was never painted | show/hide |
+| 8 | Minimised and restored, with the caption animation (`DrawAnimatedRects`, `IDANI_CAPTION`) | outer box exposed or painted; task button state; the outline at each step | `desk_minimize`, `desk_animate`, `desk_animation_tick` | none new | minimise/restore |
+| 9 | Close requested (`WM_CLOSE`: "Closing..."), declined, destroyed (`DestroyWindow`, owned windows destroyed with it) | caption and task button while closing and after a refusal; the outer box exposed at destruction | `desk_request_close`, `DESK_CLOSE_ACK`, `DESK_CLOSE`, `desk_drop_client` | the task button kept its title while the caption said "Closing..."; a refused close (native `DESK_CLOSE_ACK`) restored the caption state without any repaint | close |
+| 10 | Process death, broken channel, lost Win32 server (`IsHungAppWindow` aside) | every window of the process exposed, task buttons | `desk_child_exited`, `desk_drop_client` (EPIPE, v3 peer) | none new | death |
+| 11 | Activation: `WM_NCACTIVATE` caption tint, `WM_SETFOCUS`/`WM_KILLFOCUS` (caret destroyed and created, focus rectangle), the desktop list view's focus | captions and frame edges of both windows; focus indicators inside built-in windows; the selected desktop icon's focus outline | `desk_focus`, `focus_damage`, `desk_internal_paint`, `draw_icons` | the Run dialog's caret and focus ring stayed drawn after another window took the focus; the selected icon's outline appeared or stayed without a repaint | activation, create |
+| 12 | Caption text and state: `WM_SETTEXT`, "Not responding" after 5 s (`IsHungAppWindow`), title buttons hot and pressed | caption and task button; the hot or pressed button only | `DESK_SET_TITLE`, ping timeout, `title_track`, `title_press` | (row 9: the close button acts on press) | caption |
+| 13 | Menus: Start menu, submenus, context and window menus (`TrackPopupMenu`; popup classes with `CS_SAVEBITS` restore the saved image or the exposure repaints) | the menu's outer box when it opens, moves or closes; the old and new hot rows | `desk_menu_open`, `desk_menu_close`, `submenu`, `menu_highlight` | none new | menus |
+| 14 | Tooltips | the tooltip box when it appears, disappears or follows its anchor | `desk_shell_tick`, `draw_tooltip` | a task-button tooltip kept its old box for one frame when the task buttons were re-laid out (window opened or closed) | tooltip |
+| 15 | Tray popups, notification balloons (entry slide, expiry) | the popup's outer box per state | shell volume/network/media popups, `desk_shell_notify`, `desk_shell_tick` | none new | tray popups |
+| 16 | Alt+Tab switcher | its box per step | `switcher_start`, `switcher_step`, `switcher_finish` | none new | switcher |
+| 17 | Built-in dialogs (Run, About, messages, Shut Down, Programs) | their content when their state changes | `desk_internal_*` | About > System lists the number of desktop windows: it stayed stale when windows opened or closed | built-in windows |
+| 18 | Application start feedback (`STARTUPINFO` `STARTF_FORCEONFEEDBACK`: ends when the process shows a window) | pointer shape only; a launched slot without a window paints nothing | `input.c` `desk_cursor_update`, `client_frame_ready` | a v3 program (NetSurf, Win32) was launched on its transport slot, whose first frame never came: AppStarting stayed 5 s and the launch never completed | create (and the latency record) |
+| 19 | Desktop icons: list view insert, delete, selection | old and new icon boxes | `desk_links_refresh`, `icon_select`, `desk_shell_apply` | a shortcut refresh rebuilt and re-laid out the icons without repainting them, and dropped the selection | desktop icons |
+| 20 | DOS full screen entered and left (the display returns, `RESYNC`) | the whole screen; scanout untrusted | `display_poll` (`desk_accel_reset`), `input.c` `RESYNC` | none new | full-screen return |
+| 21 | DirectDraw exclusive mode (f5-08 display lease) granted and revoked | the whole screen after the revoke | `desk_v3_revoke`, `ciuki_win32_presenter_lease` | none new | display lease (software presenter) |
+| 22 | Theme or display mode change | the whole screen | `desk_theme_changed`, `desk_display_relayout` | none new | theme |
+| 23 | Any exposure repaint | a repainted strip equals a whole repaint | every painter's clip | text glyphs were culled by the pen position and the capital line, not by the glyph box: a strip ending inside a negative left bearing ('j', 'p') or above an ascender lost those pixels (`theme.c`, libdeskui `draw.c`) | exposure strips |
+| 24 | Pointer motion and shape | none (hardware cursor) or the save-under footprint (software) | `desk_cursor_motion`, `pointer_rows` | none new (f2-96, f2-99 tests) | every row (pointer moves); `test_accel` |
+
+The drag of a desktop icon has no drag image (fx-19 owns drag and drop),
+and a window drag shows the window contents, as Windows 98 does by
+default; the caption animation of row 8 is the only outline.
+
+### One rule instead of one fix per path: the frame reconcile
+
+Rows 1, 7, 9, 11, 12, 14 and 17 were paths that changed state without
+adding the damage the model requires. `desk_scene_reconcile`
+(`compositor.c`, with `desk_shell_reconcile` in `shell.c`) compares, before
+every frame decision of the service loop and in `desk_redraw`, what the
+last composed frame showed with the current state, the way
+`EndDeferWindowPos` applies a batch of position changes: a window that
+appeared, disappeared (closed, crashed, minimised, hidden) or changed its
+outer box invalidates its old and new outer boxes (a move the compositor is
+copying is described by its move damage); a caption whose text, icon,
+activation, alert, shade, zoom or buttons changed is repainted with the
+frame edges (and the client area of a built-in window, whose focus
+indicators follow the activation); a hovered or pressed title button
+repaints only itself; a task button whose box, title, icon, activation,
+hover or minimised state changed is repainted (the shell hook's
+`HSHELL_WINDOWCREATED`/`DESTROYED`/`ACTIVATED`/`REDRAW`); a popup (menu,
+tray popup, notification, switcher, tooltip) that opened, closed or moved
+exposes its old box and paints its new one; the selected icon's focus
+outline follows the desktop's activation. Explicit damage at each path
+stays (content changes are only known there); the reconcile guarantees that
+a path which forgets it can no longer leave anything drawn. Its cost is a
+comparison of sixteen window records and sixteen task buttons per service
+turn, without pixel work.
+
+### The presenter paths (software and Savage)
+
+Every screen write is still a present of the composed RAM scene or an
+engine operation proven against it; the test harness asserts at every
+engine COPY and FILL that the RAM scene equals a full composite (the T23
+configuration included: offscreen window caches, hardware pointer). The
+engine-only defects were rows 3 and 4: a screen copy is now cut by
+everything `scene()` paints above windows (taskbar, the caption-animation
+outline, shell popups with their shadows, the Start orb, notifications), at
+both its source and its destination.
+
+### First frame and launch latency
+
+libdeskui erases a new window's surface with the theme's face colour before
+`CREATE_WINDOW` (rule 1: `WM_ERASEBKGND` with the class brush), so the
+window appears at once with its frame and an erased client area, never
+black, while the program initialises. NetSurf opens its two body faces on a
+worker from the first moment of start-up (the trial's first layout spent
+617 ms in two font opens). A quiet-boot record `[desktop] first-frame
+name=... process_ms window_ms paint_ms present_ms total_ms` gives, for every
+launched program, click to process, process to window, window to first
+frame and first frame to screen; the trial records had only the spawn.
+
+Sources:
+
+* Microsoft SDK, [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos):
+  `SWP_NOREDRAW` "If this flag is set, no repainting of any kind occurs ...
+  any part of the parent window uncovered as a result of the window being
+  moved"; `SWP_NOCOPYBITS` discards the client area instead of copying the
+  valid contents back; topmost and owned window rules.
+* Microsoft SDK, [EndDeferWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enddeferwindowpos):
+  "Simultaneously updates the position and size of one or more windows in a
+  single screen-refreshing cycle."
+* Microsoft SDK, [WM_ERASEBKGND](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd):
+  sent "to prepare an invalidated portion of a window for painting";
+  `DefWindowProc` erases with the class background brush.
+* Microsoft SDK, [WM_PAINT](https://learn.microsoft.com/en-us/windows/win32/gdi/wm-paint),
+  [Invalidating and Validating the Update Region](https://learn.microsoft.com/en-us/windows/win32/gdi/invalidating-and-validating-the-update-region),
+  [Redrawing in the Update Region](https://learn.microsoft.com/en-us/windows/win32/gdi/redrawing-in-the-update-region),
+  [ScrollWindowEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-scrollwindowex).
+* Microsoft SDK, [Window Class Styles](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-class-styles):
+  `CS_SAVEBITS` saves the screen image under small, short-lived windows
+  (menus, dialog boxes) and restores it when they are removed, unless other
+  screen actions invalidated the stored image; `CS_HREDRAW`/`CS_VREDRAW`.
+* Microsoft SDK, [DrawAnimatedRects](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-drawanimatedrects):
+  `IDANI_CAPTION`, the caption animation of minimise and maximise.
+* Microsoft SDK, [About Carets](https://learn.microsoft.com/en-us/windows/win32/menurc/about-carets):
+  "A window should create a caret only when it has the keyboard focus or is
+  active. The window should destroy the caret before losing the keyboard
+  focus or becoming inactive."
+* Microsoft SDK, [RegisterShellHookWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registershellhookwindow):
+  `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWDESTROYED`,
+  `HSHELL_WINDOWACTIVATED`, `HSHELL_REDRAW`: the notifications on which the
+  taskbar repaints its buttons.
+* Microsoft SDK, [IsHungAppWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-ishungappwindow):
+  not responding after the internal timeout of 5 seconds.
+* Microsoft SDK, [STARTUPINFO](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfoa):
+  start-up feedback ends when the process shows a window.
+* Windows 98 Resource Kit, main checkout read-only `build/rskt/wrkc28_8.htm`
+  (Core System Components): User manages output to the user interface
+  (windows, icons, menus) and keeps the window management code 16-bit; GDI's
+  DIB engine draws, display minidrivers accelerate.

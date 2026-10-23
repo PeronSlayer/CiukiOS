@@ -30,6 +30,7 @@
 #include "apps/libdeskui/internal.h"
 #include "apps/libdeskui/keymap.h"
 #include "surface.h"
+void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "profile.h"
 #include "chrome.h"
 #include "budget.h"
@@ -423,6 +424,8 @@ int ciuki_chrome_arguments(int *argc,char **argv)
     /* Before netsurf_init registers the fetchers, which create the network
      * with the trust anchors the profile selects. */
     ciuki_test_arm();
+    /* fx-15: the body faces load while the rest of start-up runs. */
+    if(!ciuki_capture_path)ciuki_font_prefetch();
     return 0;
 }
 int ciuki_chrome_start(void)

@@ -1872,6 +1872,61 @@ unsigned desk_shell_occluders(const struct desktop *d,struct desk_box *boxes)
     if(d->sh.switcher)boxes[n++]=switcher_box(d);
     return n;
 }
+/* fx-15: the shell's part of desk_scene_reconcile (compositor.c). The
+ * taskbar repaints a task button whose window appeared, vanished, was
+ * renamed, activated, minimised, hovered or changed its icon (the
+ * Windows 9x shell hook: HSHELL_WINDOWCREATED/DESTROYED/ACTIVATED/REDRAW);
+ * a popup (menu, tray popup, notification, switcher, tooltip) that opens,
+ * closes or moves exposes its old box and paints its new one; the focus
+ * outline of the selected desktop icon follows the desktop's activation
+ * (the list view's WM_SETFOCUS/WM_KILLFOCUS repaint). */
+static int tooltip_visible(const struct desktop *d)
+{ return d->sh.tooltip && !d->sh.notification.active && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels; }
+void desk_shell_reconcile(struct desktop *d)
+{
+    bind(d);
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_task_shown now={.box=desk_task_button(d,i)}, *was=&d->task_shown[i];
+        const struct desk_client *c=&d->clients[i];
+        if (now.box.w>0) {
+            now.icon=client_icon(d,i);
+            now.flags=(d->focus==i && !c->minimized ? 1u : 0u)|(d->sh.hover_target==16+i ? 2u : 0u)|(c->minimized ? 4u : 0u);
+            snprintf(now.title,sizeof(now.title),"%s",c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title);
+        }
+        if (memcmp(&was->box,&now.box,sizeof(now.box)) || was->icon!=now.icon || was->flags!=now.flags || strcmp(was->title,now.title)) {
+            damage(d,was->box); damage(d,now.box);
+        }
+        *was=now;
+    }
+    struct desk_box popups[SH_LEVELS+6]={{0}};
+    for (int l=0;l<d->sh.levels && l<SH_LEVELS;l++) popups[l]=outer(d->sh.menus[l].box);
+    if (d->sh.volume_open) popups[SH_LEVELS]=outer(volume_popup(d));
+    if (d->sh.network_open) popups[SH_LEVELS+1]=outer(network_popup(d));
+    if (d->sh.media_open) popups[SH_LEVELS+2]=outer(media_popup(d));
+    if (d->sh.notification.active) popups[SH_LEVELS+3]=notification_outer(d);
+    if (d->sh.switcher) popups[SH_LEVELS+4]=outer(switcher_box(d));
+    for (unsigned k=0;k<SH_LEVELS+6;k++) {
+        if (memcmp(&popups[k],&d->popup_shown[k],sizeof(popups[k]))) { damage(d,d->popup_shown[k]); damage(d,popups[k]); }
+        d->popup_shown[k]=popups[k];
+    }
+    struct desk_box tip={0,0,0,0}; uint32_t hash=0;
+    if (tooltip_visible(d)) {
+        char text[1024]; tooltip_text(d,text,sizeof(text));
+        hash=2166136261u;
+        for (const unsigned char *t=(const unsigned char *)text;*t;t++) hash=(hash^*t)*16777619u;
+        tip=tooltip_box(d);
+    }
+    if (memcmp(&tip,&d->tip_shown,sizeof(tip)) || hash!=d->tip_shown_hash) { damage(d,d->tip_shown); damage(d,tip); }
+    d->tip_shown=tip; d->tip_shown_hash=hash;
+    int icon=d->sh.cfg.desktop_icons && d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count ? d->sh.icon_selected : -1;
+    struct desk_box outline=icon>=0 && d->focus<0 && !d->sh.levels ? d->sh.icons[icon].box : (struct desk_box){0,0,0,0};
+    if (icon!=d->outline_icon || memcmp(&outline,&d->outline_shown,sizeof(outline))) { damage(d,d->outline_shown); damage(d,outline); }
+    d->outline_icon=icon; d->outline_shown=outline;
+    /* About > System lists the number of desktop windows. */
+    int windows=d->about>=0 && d->clients[d->about].window && d->sh.about_tab==1 ? desk_task_count(d) : -1;
+    if (windows!=d->about_windows && windows>=0) damage(d,desk_content(&d->clients[d->about]));
+    d->about_windows=windows;
+}
 /* The window icon in a gradient title bar (compositor.c, weak hook). */
 const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
 {
@@ -3197,6 +3252,12 @@ void desk_links_refresh(struct desktop *d)
     int n=d->v3_links_list(d,d->v3_links,DESK_LINKS);
     if (n==-EAGAIN) return;
     d->v3_link_count=n>0 && n<=(int)DESK_LINKS ? (unsigned)n : 0;
+    /* fx-15: the icons that leave or move are exposed, the new ones painted
+     * (the list view's LVN_DELETEITEM/LVN_INSERTITEM repaint); the selection
+     * a rebuild drops is repainted with them. */
+    for (int k=0;k<d->sh.icon_count;k++) damage(d,d->sh.icons[k].box);
+    struct sh_icon selected={0}; int had=d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count;
+    if (had) selected=d->sh.icons[d->sh.icon_selected];
     /* Rebuild the native folder icons first, then append validated link icons. */
     icons_build(d);
     for (unsigned k=0;k<d->v3_link_count;k++) if (d->v3_links[k].desktop && desk_launch_valid(&d->v3_links[k].launch)) {
@@ -3204,6 +3265,11 @@ void desk_links_refresh(struct desktop *d)
         icon_add(d,d->v3_links[k].launch.label,"",index,"application-x-executable",SH_ACT_WIN32_LINK,0);
     }
     icons_layout(d);
+    /* An unrelated shortcut change keeps the selection (Windows 98's
+     * desktop refresh does), matched by label, program and argument. */
+    for (int k=0;had && k<d->sh.icon_count;k++) if (!strcmp(d->sh.icons[k].label,selected.label) &&
+        !strcmp(d->sh.icons[k].program,selected.program) && !strcmp(d->sh.icons[k].argument,selected.argument)) { d->sh.icon_selected=k; break; }
+    for (int k=0;k<d->sh.icon_count;k++) damage(d,d->sh.icons[k].box);
 }
 int desk_link_launch(struct desktop *d, unsigned index)
 {

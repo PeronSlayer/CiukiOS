@@ -579,6 +579,30 @@ static void launch_timing_record(const struct launch_job *job)
     (void)write(STDERR_FILENO,"\n",1);
 #endif
 }
+/* fx-15: click -> first frame on screen, one line per launched program, also
+ * in quiet boots: process_ms (queue and spawn, from the click), window_ms
+ * (process start to CREATE_WINDOW), paint_ms (CREATE_WINDOW to the first
+ * frame: program initialisation and first render), present_ms (first frame
+ * to the completed present), total_ms (click to the frame on screen). */
+static unsigned long long span_ms(uint64_t from, uint64_t to)
+{ return from && to && to>=from ? (unsigned long long)((to-from)/1000000u) : 0ull; }
+static void first_frame_record(struct desktop *d, const struct desk_client *c, uint64_t presented)
+{
+    (void)d;
+    char line[240];
+    uint64_t click=c->launch_input_ns ? c->launch_input_ns : c->launched_ns;
+    int n=snprintf(line,sizeof(line),"[desktop] first-frame name=%.40s pid=%u process_ms=%llu window_ms=%llu paint_ms=%llu present_ms=%llu total_ms=%llu",
+                   c->application[0] ? c->application : c->title,(unsigned)c->pid,span_ms(click,c->launched_ns),
+                   span_ms(c->launched_ns,c->window_ns),span_ms(c->window_ns,c->damage_ns),span_ms(c->damage_ns,presented),
+                   span_ms(click,presented));
+    if (n<=0 || (size_t)n>=sizeof(line)) return;
+#ifdef __i386__
+    (void)ciuki_raw_debug_write(CU_PTR(line),(uint32_t)n,0,0,0,0);
+#else
+    (void)write(STDERR_FILENO,line,(size_t)n);
+    (void)write(STDERR_FILENO,"\n",1);
+#endif
+}
 /* Input thread: an exit reaped while a spawn may still be unbound. */
 static void launch_note_exit(struct desktop *d, uint32_t pid)
 {
@@ -2213,7 +2237,7 @@ static void shell_setup(struct desktop *d, int gate)
         desk_w32_start(d); links_start(d); d->v3_lease=win32_lease; d->v3_lease_poll=desk_w32_presenter_poll;
         d->v3_restart=win32_restart;
     }
-    d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
+    d->launch=launch_program; d->first_frame=first_frame_record; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
     d->autoplay_fs=fm_native_vfs(); d->autoplay_preference=autoplay_preference; d->media_sound=media_sound;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
@@ -2564,6 +2588,10 @@ int main(int argc, char **argv)
          * DESK_CLOSE_NS, was terminated, and the F12 shell case stayed at stage 5 (keys=0, f2-65). */
         if (interaction && (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty))
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        /* fx-15: state changes of this turn that no path invalidated
+         * (window shown or hidden, caption, task button, popup) become
+         * damage before the frame decision, not only once a frame runs. */
+        desk_scene_reconcile(d);
         int render_ready=gate || desk_frame_due(d,monotonic());
         uint64_t presents_before=d->presents; desktop_stage(STALL_RENDER);
         if (!render_ready) errno=0; /* the watchdog reads errno only from a frame */

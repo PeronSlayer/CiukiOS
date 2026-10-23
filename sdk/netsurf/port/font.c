@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * SDK font metrics and paint share the exact same whole-string advances. */
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -62,6 +63,49 @@ static struct {
 #endif
 static struct { struct ciuki_font_face *face; unsigned key; uint64_t used; } faces[CIUKI_FONT_FACES];
 static uint64_t face_clock;
+static void face_path(char *path,size_t size,unsigned key)
+{
+    static const char *family_names[]={"Sans","Serif","Mono"};
+    static const char *style_names[]={"Regular","Bold","Italic","BoldItalic"};
+#ifdef CIUKI_HOST
+    snprintf(path,size,"%s/assets/fonts/liberation/Liberation%s-%s.ttf",CIUKI_ROOT,family_names[key/4],style_names[key%4]);
+#else
+    snprintf(path,size,"/System/fonts/Liberation%s-%s.ttf",family_names[key/4],style_names[key%4]);
+#endif
+}
+/* fx-15: the T23 trial of image e831e685 spent 617 ms of NetSurf's first
+ * layout opening its two body faces (each a whole TTF read and a FreeType
+ * face). They are opened on a worker from the first moment of start-up, in
+ * parallel with option/message loading, network start, window creation
+ * and the start page fetch; the UI thread adopts them at its first font
+ * use (joining the worker if it is still reading). Same faces, same paths,
+ * so layout and paint results are unchanged. */
+#define PREFETCH_FACES 2
+static struct { pthread_t thread; int started; struct ciuki_font_face *face[PREFETCH_FACES]; } prefetch;
+static void *prefetch_run(void *unused)
+{
+    (void)unused;
+    for(unsigned key=0;key<PREFETCH_FACES;key++) {
+        char path[512]; face_path(path,sizeof(path),key);
+        if(ciuki_font_open(path,&prefetch.face[key]))prefetch.face[key]=NULL;
+    }
+    return NULL;
+}
+void ciuki_font_prefetch(void)
+{
+    if(prefetch.started || faces[0].face)return;
+    prefetch.started=!pthread_create(&prefetch.thread,NULL,prefetch_run,NULL);
+}
+static void prefetch_adopt(void)
+{
+    if(!prefetch.started)return;
+    pthread_join(prefetch.thread,NULL);prefetch.started=0;
+    for(unsigned key=0;key<PREFETCH_FACES;key++) if(prefetch.face[key]) {
+        unsigned slot=0; while(slot<CIUKI_FONT_FACES && faces[slot].face)slot++;
+        if(slot==CIUKI_FONT_FACES) { ciuki_font_close(prefetch.face[key]); prefetch.face[key]=NULL; continue; }
+        faces[slot].face=prefetch.face[key];faces[slot].key=key;faces[slot].used=++face_clock;prefetch.face[key]=NULL;
+    }
+}
 static unsigned face_key(const plot_font_style_t *style)
 {
     unsigned family=style->family==PLOT_FONT_FAMILY_SERIF?1:style->family==PLOT_FONT_FAMILY_MONOSPACE?2:0;
@@ -69,21 +113,15 @@ static unsigned face_key(const plot_font_style_t *style)
 }
 static struct ciuki_font_face *face_for(const plot_font_style_t *style)
 {
-    unsigned key=face_key(style),family=key/4,i=CIUKI_FONT_FACES;
-    static const char *family_names[]={"Sans","Serif","Mono"};
-    static const char *style_names[]={"Regular","Bold","Italic","BoldItalic"};
+    prefetch_adopt();
+    unsigned key=face_key(style),i=CIUKI_FONT_FACES;
     for (unsigned n=0;n<CIUKI_FONT_FACES;n++) {
         if (faces[n].face && faces[n].key==key) { faces[n].used=++face_clock; return faces[n].face; }
         /* An empty slot first, otherwise the least recently used face. */
         if (i==CIUKI_FONT_FACES || (faces[i].face && (!faces[n].face || faces[n].used<faces[i].used))) i=n;
     }
     ciuki_font_close(faces[i].face); faces[i].face=NULL;
-    char path[512];
-#ifdef CIUKI_HOST
-    snprintf(path,sizeof(path),"%s/assets/fonts/liberation/Liberation%s-%s.ttf",CIUKI_ROOT,family_names[family],style_names[key%4]);
-#else
-    snprintf(path,sizeof(path),"/System/fonts/Liberation%s-%s.ttf",family_names[family],style_names[key%4]);
-#endif
+    char path[512]; face_path(path,sizeof(path),key);
     uint64_t start=clock_ns();
     int error=ciuki_font_open(path,&faces[i].face);
     uint64_t end=clock_ns();
@@ -100,6 +138,7 @@ static unsigned em(const plot_font_style_t *s)
 bool fb_font_init(void) { return true; }
 bool fb_font_finalise(void)
 {
+    prefetch_adopt();
     for(unsigned i=0;i<CIUKI_FONT_FACES;i++) { ciuki_font_close(faces[i].face); faces[i].face=NULL; faces[i].used=0; }
     memset(widths,0,sizeof(widths));face_clock=0;
     return true;
