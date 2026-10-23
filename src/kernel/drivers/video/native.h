@@ -34,7 +34,7 @@ struct video_native {
     int (*pause)(void *);
     void *pause_arg;
     uint8_t palette_saved[6], dac_mask, dac_index;
-    struct video_access access[6];
+    struct video_access access[8];
     unsigned access_count;
 };
 #define VIDEO_WAIT_US 20000u
@@ -59,6 +59,7 @@ bool video_reserved(uint32_t, uint32_t);
 bool video_disjoint(uint32_t, uint32_t, uint32_t, uint32_t);
 void *video_map(struct video_native *, enum res_type, uint32_t, uint32_t);
 bool video_claim(struct video_native *, uint32_t, uint32_t);
+bool video_claim_vga_ports(struct video_native *);
 void video_release(struct video_native *);
 void video_hardware_io(struct video_native *, void *);
 int video_marker_begin(struct video_native *, struct vfs *);

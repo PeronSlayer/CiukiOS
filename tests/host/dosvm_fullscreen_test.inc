@@ -137,7 +137,8 @@ static void test_fullscreen_service(void)
         CHECK((pte&(PTE_U|PTE_W|PTE_PCD|PTE_PWT))==(PTE_U|PTE_W|PTE_PCD|PTE_PWT));
     }
     dosvm_fullscreen_switch(v->task); CHECK(fs_ports);
-    for (unsigned p=0;p<65536;p++) CHECK(!!(fs_bitmap[p/8]&(1u<<(p%8)))==!(p>=0x3B0 && p<0x3E0));
+    for (unsigned p=0;p<65536;p++) CHECK(!!(fs_bitmap[p/8]&(1u<<(p%8)))==!((p>=0x3B0 && p<0x3BC) || (p>=0x3C0 && p<0x3E0)));
+    CHECK((fs_bitmap[0x3BC/8]&0xF0)==0xF0); /* 3BCh-3BFh: parallel port, denied */
     CHECK(fs_bitmap[8192]==0xFF);
     dosvm_fullscreen_switch(&caller); CHECK(!fs_ports);
     CHECK(!dosvm_fullscreen_input(INPUT_KEY,0x1D,1));

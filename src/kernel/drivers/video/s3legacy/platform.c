@@ -3,6 +3,7 @@
  * 64 KiB. Firmware owns PCI decoding, VRAM size and the VBE scanout. */
 #include "private.h"
 #include <ciuki/cpu.h>
+#include <ciuki/vga_ports.h>
 #include <ciuki/mm.h>
 #include <ciuki/mtrr.h>
 #include <ciuki/timing.h>
@@ -81,7 +82,7 @@ int s3_access_begin(struct s3_device *s)
         !vram || vram>0x1000000 || f->size>vram ||
         !extent(f->phys+0x1000000,0x10000)) return -ENODEV;
     if (s->port_claim>=0 || s->reg_claim>=0) return -EBUSY;
-    s->port_claim=claim(RES_PORT,0x3b0,0x30,s->id,&s->port_generation);
+    s->port_claim=claim(RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END-CIUKI_VGA_COLOR_FIRST,s->id,&s->port_generation);
     if (s->port_claim<0) return s->port_claim;
     s->io=(struct s3_io){s,read_reg,write_reg,cr_read,cr_write,now,delay,drain};
     if (!(inb(0x3cc)&1)) { (void)s3_access_end(s); return -EOPNOTSUPP; }

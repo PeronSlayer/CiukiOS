@@ -11,6 +11,7 @@
 #include <ciuki/task.h>
 #include <ciuki/mm.h>
 #include <ciuki/firmware.h>
+#include <ciuki/vga_ports.h>
 static uint8_t ram[2*1024*1024];
 #define P2V(p) ((void *)(ram+(p)))
 #define V2P(p) ((uint32_t)((uint8_t *)(p)-ram))
@@ -458,10 +459,67 @@ static void test_int17(void)
     dosvm_lpt_stop(&guests[1]); g=acquire(0); lpt_close(0,g);
     puts("PASS INT17 write/init/status, FLAGS/AL, virtual BDA, two-VM/native exclusion, raw IRQ/width filtering and stop");
 }
+/* fx-1: the T23's LPT1 is at 3BCh (BDA). Display drivers claim VGA I/O as the
+ * Windows pair 3B0h-3BBh + 3C0h-3DFh, so both coexist; a true overlap and the
+ * former single 3B0h-3DFh span are still refused. */
+static bool claimed(unsigned first, unsigned end)
+{
+    for (unsigned i=0;i<nclaims;i++) if (claims[i].type==RES_PORT && claims[i].state!=RS_RELEASED &&
+        claims[i].start==first && claims[i].end==end) return true;
+    return false;
+}
+static void test_vga_coexistence(void)
+{
+    reset();
+    hw[0]=(struct model){.base=0x3bc,.data=0x7a,.control=0x0c,.caps=1,.external=0x33};
+    uint16_t t23[]={0x3bc,0,0}; lpt_bda_discover(t23);
+    assert(lpts[0].present && lpts[0].claims[0]>=0);
+    /* The LPT driver claims exactly base..base+2, nothing wider. */
+    assert(claimed(0x3bc,0x3bf));
+    for (unsigned i=0;i<nclaims;i++) if (claims[i].type==RES_PORT) assert(claims[i].end-claims[i].start==3);
+    /* Honest refusal: the pre-fx-1 single span and any real overlap. */
+    assert(registry_claim(RES_PORT,0x3b0,0x3e0,"savage-vga",false)<0);
+    assert(registry_claim(RES_PORT,0x3ba,0x3bd,"intruder",false)<0);
+    assert(registry_claim(RES_PORT,0x3be,0x3c1,"intruder",false)<0);
+    assert(registry_claim(RES_PORT,0x3bc,0x3bd,"intruder",false)<0);
+    /* Every accelerated display driver's claim: colour only (trident, savage2d,
+     * s3legacy) or mono + colour (intel i740/i810, supersavage, firmware video). */
+    int color=registry_claim(RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END,"savage-vga",false);
+    assert(color>=0);
+    int mono=registry_claim(RES_PORT,CIUKI_VGA_MONO_FIRST,CIUKI_VGA_MONO_END,"i810",false);
+    assert(mono>=0);
+    /* A third party colliding with an active VGA range is still refused. */
+    assert(registry_claim(RES_PORT,0x3c8,0x3cc,"intruder",false)<0);
+    assert(registry_claim(RES_PORT,0x3b4,0x3b6,"intruder",false)<0);
+    assert(registry_claim(RES_PORT,CIUKI_VGA_MONO_END,CIUKI_VGA_COLOR_FIRST,"intruder",false)<0); /* 3BCh-3BFh is LPT */
+    assert(ciuki_vga_port(0x3b0) && ciuki_vga_port(0x3bb) && !ciuki_vga_port(0x3bc) &&
+           !ciuki_vga_port(0x3be) && !ciuki_vga_port(0x3bf) && ciuki_vga_port(0x3c0) &&
+           ciuki_vga_port(0x3df) && !ciuki_vga_port(0x3e0) && !ciuki_vga_port(0x3af));
+    assert(ciuki_vga_port_span(0x3bb,1) && !ciuki_vga_port_span(0x3bb,2) && ciuki_vga_port_span(0x3d4,2) &&
+           !ciuki_vga_port_span(0x3df,2));
+    /* LPT at 378h and 278h are unaffected, with or without VGA claims held. */
+    reset();
+    int c2=registry_claim(RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END,"savage-vga",false);
+    int m2=registry_claim(RES_PORT,CIUKI_VGA_MONO_FIRST,CIUKI_VGA_MONO_END,"i810",false);
+    assert(c2>=0 && m2>=0);
+    hw[0]=(struct model){.base=0x378,.data=0x7a,.control=0x0c,.caps=1,.external=0x33};
+    hw[1]=(struct model){.base=0x278,.data=0x7a,.control=0x0c,.caps=1,.external=0x33};
+    uint16_t classic[]={0x378,0x278,0}; lpt_bda_discover(classic);
+    assert(lpts[0].present && lpts[1].present && claimed(0x378,0x37b) && claimed(0x278,0x27b));
+    /* LPT at 3BCh after the display took its two ranges: still admitted. */
+    reset();
+    c2=registry_claim(RES_PORT,CIUKI_VGA_COLOR_FIRST,CIUKI_VGA_COLOR_END,"savage-vga",false);
+    m2=registry_claim(RES_PORT,CIUKI_VGA_MONO_FIRST,CIUKI_VGA_MONO_END,"i810",false);
+    assert(c2>=0 && m2>=0);
+    hw[0]=(struct model){.base=0x3bc,.data=0x7a,.control=0x0c,.caps=1,.external=0x33};
+    uint16_t after[]={0x3bc,0,0}; lpt_bda_discover(after);
+    assert(lpts[0].present && claimed(0x3bc,0x3bf));
+    puts("PASS LPT1 at 3BCh coexists with the Windows VGA ranges 3B0-3BB/3C0-3DF; 378h/278h unchanged; overlaps refused");
+}
 int main(void)
 {
     setvbuf(stdout,0,_IONBF,0);
-    test_spp(); test_modes(); test_dma(); test_discovery(); test_native(); test_int17();
+    test_spp(); test_modes(); test_dma(); test_discovery(); test_vga_coexistence(); test_native(); test_int17();
     printf("PASS LPT metadata=%zu VM_state=%zu native_operation=%zu bytes; no global limit increase\n",
            sizeof(lpts),sizeof(((struct dosvm *)0)->lpt),sizeof(struct lpt_operation));
     return 0;

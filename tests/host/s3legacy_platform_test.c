@@ -78,7 +78,7 @@ int main(void)
 {
     setup(); CHECK(!s3_access_begin(&s));
     CHECK(claims==3 && activates==3 && maps==2 && s.registers==regs && s.cursor==cursor);
-    CHECK(resources[0].type==RES_PORT && resources[0].start==0x3b0 && resources[0].end==0x3e0);
+    CHECK(resources[0].type==RES_PORT && resources[0].start==0x3c0 && resources[0].end==0x3e0);
     CHECK(resources[1].type==RES_MMIO && resources[1].start==0xe1000000 && resources[1].end==0xe1010000);
     CHECK(resources[2].start==0xe03ff000 && s.cursor_offset==0x3ff000);
     cr[0x38]=0x12; cr[0x39]=0x34;

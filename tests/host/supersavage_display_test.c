@@ -72,8 +72,8 @@ static uint8_t port_in(uint16_t p) { return input(&card,p); }
 static void port_out(uint16_t p,uint8_t v) { output(&card,p,v); }
 static int mode_save(struct supersavage_mode *s,const struct supersavage_mode_io *real)
 {
-    assert(real && mapped>=2 && nleases>=3);
-    for (unsigned i=nleases-3;i<nleases;i++) assert(leases[i].state==RS_ACTIVE);
+    assert(real && mapped>=2 && nleases>=4);
+    for (unsigned i=nleases-4;i<nleases;i++) assert(leases[i].state==RS_ACTIVE);
     return supersavage_mode_save(s,&bus);
 }
 static int mode_enter(struct supersavage_mode *s,const struct supersavage_mode_io *real,uint16_t mode)
@@ -97,7 +97,7 @@ static void runtime_fixture(void)
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);nwindows=0;
     register_window=aperture_window=linear_window=0;register_mapping=aperture_mapping=linear_mapping=0;
     memset(&saved_mode,0,sizeof(saved_mode));native_strikes=0;session_struck=restore_failed=recovery_confirmed=false;strike_count=0;adapter=0;
-    for (unsigned i=0;i<3;i++) claims[i]=-1;
+    for (unsigned i=0;i<NCLAIMS;i++) claims[i]=-1;
     memset(leases,0,sizeof(leases));memset(offered,0,sizeof(offered));nleases=claims_attempted=mapped=revoked=0;
     fail_claim=fail_map=fail_activate=0;extra_gpu=false;runtime_fail_step=0;
     fixture();gpu.command=3;gpu.bar[0]=0xF0000000;gpu.bar[1]=0xE0000000;
@@ -115,12 +115,13 @@ static void ownership(void)
     gpu.bar[0]=0xF0000000;
     assert(!supersavage_display_prepare(&desktop,0x13) && !claims_attempted && !card.reads);
     assert(!supersavage_display_begin(0x13));
-    assert(leases[0].start==0x3B0 && leases[0].end==0x3E0 && leases[1].start==0xF0000000 &&
-           leases[1].end==0xF0080000 && leases[2].start==0xA0000 && leases[2].end==0xC0000);
+    assert(leases[0].start==0x3C0 && leases[0].end==0x3E0 && leases[1].start==0xF0000000 &&
+           leases[1].end==0xF0080000 && leases[2].start==0xA0000 && leases[2].end==0xC0000 &&
+           leases[3].type==RES_PORT && leases[3].start==0x3B0 && leases[3].end==0x3BC); /* never 3BC-3BF */
     /* Exercise the real halfword MMIO transport on the reserved window. */
     native_write32(NULL,0x81C8,0x12345678);assert(native_read32(NULL,0x81C8)==0x12345678);
     assert(!supersavage_display_end() && revoked==2 && !native_strikes);
-    for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_RELEASED);
+    for (unsigned i=0;i<4;i++) assert(leases[i].state==RS_RELEASED);
     assert(!memcmp(card.vga.plane,original.vga.plane,sizeof(card.vga.plane)));
     puts("PASS SuperSavage provider ownership: side-effect-free PCI/BAR/decode preflight, exclusive VGA/MMIO/A000 leases, halfword stream readback, revoked aliases before release");
 }
@@ -128,7 +129,7 @@ static void accelerator_quarantine(void)
 {
     for (unsigned offer=0;offer<2;offer++) {
         runtime_fixture();
-        leases[0]=(struct resource){RES_PORT,0x3B0,0x3E0,"savage-vga",71,RS_QUARANTINED,false};
+        leases[0]=(struct resource){RES_PORT,0x3C0,0x3E0,"savage-vga",71,RS_QUARANTINED,false};
         leases[1]=(struct resource){RES_MMIO,0xF0000000,0xF0080000,"savage2d",72,RS_QUARANTINED,false};
         nleases=2;offered[0]=offered[1]=offer;
         assert(!supersavage_display_prepare(&desktop,0x13));
@@ -204,7 +205,7 @@ static void refusal_and_recovery(void)
     assert(!supersavage_display_prepare(&desktop,0x13) && !supersavage_display_begin(0x13));
     card.sr[0x58]=8;
     assert(!supersavage_display_end() && !native_strikes && !saved_mode.saved && revoked==2);
-    for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_RELEASED);
+    for (unsigned i=0;i<4;i++) assert(leases[i].state==RS_RELEASED);
     puts("PASS f3-36 provider retained SR58 bit 3: successful restore and complete lease return");
 }
 static void strikes_and_retry(void)

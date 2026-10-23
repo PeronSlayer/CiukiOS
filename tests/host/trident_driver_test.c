@@ -132,6 +132,8 @@ static void activate(void)
     assert(!trident_blade_driver.attempt_begin(&volume_vfs) && authorized && commits==1 && closes==1);
     assert(trident_blade_driver.start(&f.fb,NULL)==&engine.ops);
     assert(engine.active && engine.cpu_safe && !engine.quarantined);
+    /* fx-1: colour VGA range only, so an LPT1 at 3BCh cannot conflict. */
+    assert(leases[1].type==RES_PORT && leases[1].start==0x3c0 && leases[1].end==0x3e0);
     assert(cr_index==0xab && seq_index==0x77 && seq_regs[0x0e]==0xc0 && seq_regs[0x11]==0x90 && pixel_probes==1 && marker_bytes);
     assert(!trident_blade_driver.attempt_end(&volume_vfs) && !marker_bytes && commits==2);
 }

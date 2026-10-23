@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include <ciuki/registry.h>
+#include <ciuki/vga_ports.h>
 #include <ciuki/timing.h>
 #include "supersavage_display.h"
 #include "supersavage_mode.h"
@@ -15,8 +16,9 @@ static struct supersavage_mode saved_mode;
 static const struct pci_func *adapter;
 static void *register_window,*aperture_window;
 static volatile uint8_t *register_mapping,*aperture_mapping;
-static int claims[3]={-1,-1,-1};
-static gen_t generations[3];
+#define NCLAIMS 4u /* colour VGA, mode MMIO, A0000h aperture, mono VGA aliases */
+static int claims[NCLAIMS]={-1,-1,-1,-1};
+static gen_t generations[NCLAIMS];
 #define NATIVE_STRIKE_LIMIT 3u
 static unsigned native_strikes;
 static bool session_struck, restore_failed, recovery_confirmed;
@@ -65,7 +67,7 @@ static bool extent(uint32_t start,uint32_t bytes)
 static bool claims_retained(void)
 {
     bool retained=false;
-    for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
+    for (unsigned i=0;i<NCLAIMS;i++) if (claims[i]>=0) {
         const struct resource *r=registry_get(claims[i]);
         /* Released handles may already belong to a new registry generation.
          * Never release or quarantine that new owner's lease. */
@@ -131,7 +133,7 @@ static int release_claims(void)
     register_mapping=aperture_mapping=0;
     linear_mapping=0;
     int e=0;
-    for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
+    for (unsigned i=0;i<NCLAIMS;i++) if (claims[i]>=0) {
         const struct resource *rsc=registry_get(claims[i]);
         if (rsc && (rsc->generation!=generations[i] || rsc->state==RS_RELEASED)) {
             claims[i]=-1; continue;
@@ -171,10 +173,13 @@ int supersavage_display_begin(uint16_t mode)
     session_struck=restore_failed=recovery_confirmed=false;
     int e=display_fullscreen_checkpoint("native-claim",0);
     if (e) return e;
-    const enum res_type types[]={RES_PORT,RES_MMIO,RES_MMIO};
-    const uint32_t starts[]={0x3B0,adapter->bar[0]&~15u,0xA0000};
-    const uint32_t lengths[]={0x30,MODE_MMIO_BYTES,0x20000};
-    for (unsigned i=0;i<3;i++) {
+    /* VGA I/O as two ranges (Windows assignment): 3BCh-3BFh is a parallel port.
+     * The mode code reaches the monochrome CRTC aliases when MISC bit 0 is 0. */
+    const enum res_type types[]={RES_PORT,RES_MMIO,RES_MMIO,RES_PORT};
+    const uint32_t starts[]={CIUKI_VGA_COLOR_FIRST,adapter->bar[0]&~15u,0xA0000,CIUKI_VGA_MONO_FIRST};
+    const uint32_t lengths[]={CIUKI_VGA_COLOR_END-CIUKI_VGA_COLOR_FIRST,MODE_MMIO_BYTES,0x20000,
+        CIUKI_VGA_MONO_END-CIUKI_VGA_MONO_FIRST};
+    for (unsigned i=0;i<NCLAIMS;i++) {
         /* The registry can consume an exact-range offer from a stopped
          * accelerator. Unoffered/unsafe quarantines still conflict. */
         claims[i]=registry_claim(types[i],starts[i],starts[i]+lengths[i],"supersavage-mode",false);

@@ -10,6 +10,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/registry.h>
+#include <ciuki/vga_ports.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/abi.h>
 #include <ciuki/display.h>
@@ -29,7 +30,7 @@ static struct kwait wake, completion;
 static volatile uint16_t pending_irqs;
 static bool initialized, quarantined, synthetic, input_enabled, video_active, video_claimed;
 static bool fullscreen_video;
-static struct { int handle; gen_t generation; } video_leases[3];
+static struct { int handle; gen_t generation; } video_leases[4];
 static unsigned video_lease_count;
 static bool video_dispi;
 static bool request_pending, request_done;
@@ -973,9 +974,11 @@ static int claim_video(void)
         if (p && p->class_code == 3 && p->vendor == 0x1234 && p->device == 0x1111 &&
             (g_boot.flags & CBI_F_SMBIOS_QEMU)) video_dispi = true;
     }
-    const enum res_type types[] = {RES_PORT, RES_MMIO, RES_PORT};
-    const uint32_t start[] = {0x3B0, 0xA0000, 0x1CE}, end[] = {0x3E0, 0xC0000, 0x1D2};
-    for (unsigned i = 0; i < (video_dispi ? 3u : 2u); i++) {
+    /* VGA I/O as two ranges (Windows assignment): 3BCh-3BFh is a parallel port. */
+    const enum res_type types[] = {RES_PORT, RES_PORT, RES_MMIO, RES_PORT};
+    const uint32_t start[] = {CIUKI_VGA_MONO_FIRST, CIUKI_VGA_COLOR_FIRST, 0xA0000, 0x1CE};
+    const uint32_t end[] = {CIUKI_VGA_MONO_END, CIUKI_VGA_COLOR_END, 0xC0000, 0x1D2};
+    for (unsigned i = 0; i < (video_dispi ? 4u : 3u); i++) {
         int h = registry_claim(types[i], start[i], end[i], "firmware-video", false);
         if (h < 0) { quarantine(); return h; }
         gen_t gen = registry_get((unsigned)h)->generation;
@@ -1026,7 +1029,7 @@ static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32
     (void)arg;
     if (!video_active) return -ENOSYS;
     if (port == 0x500 && width == 1 && write) return 0; /* VGA ROM diagnostic sink */
-    bool vga = port >= 0x3B0 && (uint32_t)port + width <= 0x3E0 && width <= 2;
+    bool vga = width <= 2 && ciuki_vga_port_span(port, width);
     bool dispi = video_dispi && (port == 0x1CE || port == 0x1CF || port == 0x1D0) && width == 2;
     if (vga || dispi) {
         if (write) {

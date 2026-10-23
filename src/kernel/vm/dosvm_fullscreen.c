@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include <ciuki/input.h>
+#include <ciuki/vga_ports.h>
 #include "dosvm_internal.h"
 #include "vga_hardware.h"
 static struct dosvm *fullscreen_owner;
@@ -46,7 +47,7 @@ int dosvm_fullscreen_port(uint16_t port, unsigned width, bool write, uint32_t *v
     uint32_t result=0;
     for (unsigned i=0;i<width;i++) {
         unsigned p=(unsigned)port+i; uint8_t byte=0xFF;
-        if (p>=0x3B0 && p<0x3E0) {
+        if (ciuki_vga_port(p)) {
             if (write) outb(p,(uint8_t)(*value>>(8*i)));
             else byte=inb(p);
         }

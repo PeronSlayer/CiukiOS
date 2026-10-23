@@ -21,7 +21,7 @@ static const char *binding_successor[4];
 static int binding_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,bool share)
 {
     CHECK(!share && !strcmp(o,t==RES_PORT ? "savage-vga" : "savage2d"));
-    if (t==RES_PORT) CHECK(s==0x3b0 && e==0x3e0);
+    if (t==RES_PORT) CHECK(s==0x3c0 && e==0x3e0); /* colour VGA range only; never 3bc-3bf (LPT) */
     else CHECK(t==RES_MMIO && s==(binding_gpu.bar[0]&~15u) && e==s+SAVAGE_MMIO_BYTES);
     binding_claims++;
     if (!binding_allowed || binding_claims==binding_fail_claim || (t==RES_PORT && binding_port_conflict)) return -EBUSY;
@@ -595,7 +595,7 @@ static bool alias_live(struct model *p) { return (p->cr[0x40]&1u) && !p->alias_d
 static uint8_t model_port_read(void *ctx,uint16_t port)
 {
     struct model *p=ctx; marker_before_register(); p->port_reads++;
-    CHECK(port>=0x3b0 && port<0x3e0);
+    CHECK(port>=0x3c0 && port<0x3e0);
     uint8_t value=0xff;
     if (port==0x3c3) value=p->vga_enable;
     else if (port==0x3cc) value=p->misc;
@@ -609,7 +609,7 @@ static uint8_t model_port_read(void *ctx,uint16_t port)
 static void model_port_write(void *ctx,uint16_t port,uint8_t value)
 {
     struct model *p=ctx; marker_before_register(); p->port_writes++;
-    CHECK(port>=0x3b0 && port<0x3e0);
+    CHECK(port>=0x3c0 && port<0x3e0);
     if (port==0x3c3) p->vga_enable=value;
     else if (port==0x3c2) p->misc=value;
     else if (port==0x3c4) p->seq_index=value;
@@ -1164,7 +1164,9 @@ static void port_bootstrap(void)
     /* Exercise production port bounds without executing privileged host I/O. */
     unsigned reads=m.port_reads,writes=m.port_writes;
     CHECK(hw_port_read(NULL,0x3af)==0xff && hw_port_read(NULL,0x3e0)==0xff);
+    CHECK(hw_port_read(NULL,0x3bc)==0xff && hw_port_read(NULL,0x3bd)==0xff && hw_port_read(NULL,0x3bf)==0xff);
     hw_port_write(NULL,0x3af,0); hw_port_write(NULL,0x3e0,0);
+    hw_port_write(NULL,0x3bc,0); hw_port_write(NULL,0x3bf,0); /* LPT1 at 3BCh is not ours */
     CHECK(m.port_reads==reads && m.port_writes==writes);
     CHECK(hw_port_read(NULL,0x3c3)==m.vga_enable);
     hw_port_write(NULL,0x3c3,0x25); CHECK(m.vga_enable==0x25);
