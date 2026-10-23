@@ -31,8 +31,8 @@ Status: **image** is installed in the image, **build only** is used to build or 
 | Linux pata_hpt366.c algorithms | v6.12 | GPL-2.0-only | `docs/licenses/ata-addin-NOTICES.txt` | image |
 | Linux pata_hpt37x.c algorithms | v6.12 | GPL-2.0-only | `docs/licenses/ata-addin-NOTICES.txt` | image |
 | Linux pata_hpt3x2n.c algorithms | v6.12 | GPL-2.0-only | `docs/licenses/ata-addin-NOTICES.txt` | image |
-| dmraid pdc/hpt37x/hpt45x metadata constants | pinned blobs in notice | GPL-2.0-or-later / BSD-3-Clause | `docs/licenses/ata-addin-NOTICES.txt` | image |
-| FreeBSD md_promise.c signature | releng/14.2, pinned blob | BSD-2-Clause | `docs/licenses/ata-addin-NOTICES.txt` | image |
+| dmraid pdc/hpt metadata constants | pinned blobs in notice | GPL-2.0+ / BSD-3-Clause | `docs/licenses/ata-addin-NOTICES.txt` | image |
+| FreeBSD md_promise.c signature | releng/14.2, blob | BSD-2-Clause | `docs/licenses/ata-addin-NOTICES.txt` | image |
 | PCI ID Repository | 2026.10.01 | GPL-2.0-or-later | `docs/licenses/hwids-NOTICES.txt` | image |
 | USB ID Repository (hwdata) | 2026.06.26 | GPL-2.0-or-later | `docs/licenses/hwids-NOTICES.txt` | image |
 | Radeon MMIO 2D register port | Linux 6.12, ATI 6.14.6 | GPL-2.0 and MIT | `docs/licenses/radeon2d-NOTICES.txt` | image |

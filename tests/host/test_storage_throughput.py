@@ -15,7 +15,7 @@ class StorageTaskTests(unittest.TestCase):
             self.skipTest('clang unavailable')
         source = (ROOT / 'src/kernel/fs/mount.c').read_text()
         begin = source.index('static void storage_timer(void *arg)\n')
-        end = source.index('\nvoid storage_init(void)\n', begin)
+        end = source.index('\n/* f9-02: a published destination needs the writer', begin)
         # Compile the exact function. All substitutions are outside it at
         # the scheduler/clock/log/cache boundary; no modeled work loop.
         function = source[begin:end]

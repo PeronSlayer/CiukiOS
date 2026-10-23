@@ -498,7 +498,7 @@ def expand_cases(suite):
     """An F1 all/core runner alias is always individual selectors across boots."""
     expanded=[]
     for case in suite['cases']:
-        if case['probe'] not in ('all','core'):
+        if case.get('probe') not in ('all','core'):
             expanded.append(case);continue
         templates=case.get('probe_cases')
         if not templates or [c['probe'] for c in templates]!=list(F1_PROBES):

@@ -105,7 +105,7 @@ struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, en
 void task_start(struct task *t) { (void)t; CHECK(false); }
 int ata_init(void) { ata_calls++; return 0; }
 struct ata_device *ata_device_get(unsigned c, unsigned u)
-{ CHECK(c < 2 && u < 2); ata_lookups++; CHECK(!ata_calls); return 0; }
+{ CHECK(c < ATA_CHANNELS && u < 2); ata_lookups++; CHECK(!ata_calls); return 0; }
 int atapi_ready(struct ata_device *device) { (void)device; CHECK(false); return -FS_EIO; }
 int optical_bind(struct storage *s,unsigned slot,struct ata_device *d)
 { (void)s; (void)slot; (void)d; CHECK(false); return -FS_EIO; }

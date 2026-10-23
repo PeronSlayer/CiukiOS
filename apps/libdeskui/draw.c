@@ -435,13 +435,19 @@ void du_icon_blit(struct du_canvas *c, int x, int y, const uint32_t *argb, int s
                 int found=0; for (int i=0;i<size*size;i++) if ((argb[i]>>24)==255 && (argb[i]&0xffffffu)==key) { found=1; break; }
                 if (!found) break;
             }
-            uint32_t *keyed=malloc((size_t)size*size*4);
-            if (keyed) {
-            for (int i=0;i<size*size;i++) keyed[i]=(argb[i]>>24) ? argb[i]&0xffffffu : key;
-            struct ciuki_batch_record record={.opcode=CIUKI_CMD_KEYED,.record_bytes=128,.dx=x,.dy=y,.dw=size,.dh=size,.key=key};
-            int error=du_commands(c,&record,1,NULL,keyed,size,size); free(keyed);
-            if (!error) return;
+            /* One keyed row at a time from a stack row: no heap allocation on the
+             * paint path (the footprint gate counts every allocation after the
+             * first frame). Rows are independent, so a validation refusal can
+             * only happen on the first row and leaves the canvas untouched. */
+            uint32_t keyed[64]; int first=1, refused=0;
+            for (int row=v.y-y; row<v.y-y+v.h; row++) {
+                for (int i=0;i<size;i++) { uint32_t px=argb[row*size+i]; keyed[i]=(px>>24) ? px&0xffffffu : key; }
+                struct ciuki_batch_record record={.opcode=CIUKI_CMD_KEYED,.record_bytes=128,.dx=x,.dy=y+row,.dw=size,.dh=1,.key=key};
+                int error=du_commands(c,&record,1,NULL,keyed,size,1);
+                if (error) { if (first) refused=1; break; }
+                first=0;
             }
+            if (!refused) return;
         }
     }
     uint32_t *first_dst = c->pixels + (size_t)v.y * (size_t)c->width + (size_t)v.x;

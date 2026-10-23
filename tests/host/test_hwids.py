@@ -203,7 +203,9 @@ usb="USB Widget"
         self.assertIn('sources["/System/hwids/pci-ids.json"]', builder)
         self.assertIn('sources["/System/hwids/usb-ids.json"]', builder)
         self.assertIn('"/System/hwids"', builder)
-        self.assertIn('("hwids-NOTICES.txt", "hwids-GPL-2.0.txt")', builder)
+        # integ-periph (4d5472d8) merged the hwids pair and the cmipci pair into one notice loop.
+        self.assertIn('for name in ("hwids-NOTICES.txt", "hwids-GPL-2.0.txt",', builder)
+        self.assertIn('sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name', builder)
 
     def test_native_nic_labels_and_inf_precedence(self):
         result = hwids.native_names({'1011:0019': 'Owner INF label'})

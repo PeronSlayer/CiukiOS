@@ -256,9 +256,7 @@ int shell_fstat(int fd, struct stat *st)
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
 static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg, *expect_netsurf[2];
 static unsigned dosbox_spawns, netsurf_spawns;
-#ifndef DESK_FOOTPRINT_TEST
 static unsigned control_spawns;
-#endif
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
@@ -306,9 +304,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         assert(!strcmp(argv[0],"control") && !strcmp(argv[1],"--channel-fd=3") && count==1);
         if (expect_control_arg) assert(argv[2] && !strcmp(argv[2],expect_control_arg) && !argv[3]);
         else assert(!argv[2]);
-#ifndef DESK_FOOTPRINT_TEST
         control_spawns++;
-#endif
     }
     else assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     if (fail_spawn) { errno=fail_spawn==1 ? ENOEXEC : fail_spawn; return -1; }
