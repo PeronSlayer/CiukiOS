@@ -596,21 +596,22 @@ static int launch_exited(uint32_t pid)
 static unsigned launch_service(struct desktop *d)
 {
     if (!launcher.started) return 0;
-    struct launch_job done[DESK_CLIENTS];
+    /* One completed job at a time, oldest sequence first: a single copy on
+     * the stack (an array of DESK_CLIENTS jobs exceeded the 4 KiB frame
+     * limit of the i686 build). */
+    struct launch_job one, *job=&one;
     unsigned count=0;
-    pthread_mutex_lock(&launcher.lock);
     for (;;) {
+        pthread_mutex_lock(&launcher.lock);
         struct launch_job *next=NULL;
         for (unsigned i=0;i<DESK_CLIENTS;i++) {
             struct launch_job *j=&launcher.jobs[i];
             if (j->state==LAUNCH_DONE && (!next || (int)(j->sequence-next->sequence)<0)) next=j;
         }
+        if (next) { one=*next; next->state=LAUNCH_FREE; }
+        pthread_mutex_unlock(&launcher.lock);
         if (!next) break;
-        done[count++]=*next; next->state=LAUNCH_FREE;
-    }
-    pthread_mutex_unlock(&launcher.lock);
-    for (unsigned k=0;k<count;k++) {
-        struct launch_job *job=&done[k];
+        count++;
         launch_timing_record(job);
         close(job->child_fd);
         d->children[job->child].pending=0;
