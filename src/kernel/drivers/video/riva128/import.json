@@ -1,0 +1,51 @@
+{
+  "repository": "https://gitlab.freedesktop.org/xorg/driver/xf86-video-nv",
+  "mirror": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-nv",
+  "commit": "0b6619fec39fada995646fb95bb25e72d3c9a491",
+  "files": {
+    "src/riva_hw.c": {
+      "sha256": "d69e0ae8d1e5af30db8a98b2e0195cbaa330552e92d3e578e82c05562e3a5f5e",
+      "git_blob": "c178eacfef8bf935b94dc815632ba82746804c79"
+    },
+    "src/riva_hw.h": {
+      "sha256": "bae8e136a01905d66602d30fd01b21be092b8d18710c034e67bf6d4ddca4f4d2",
+      "git_blob": "61692cf066ed874856cf40c82e299eafeecfb595"
+    },
+    "src/riva_xaa.c": {
+      "sha256": "d032f354057303ec15cdf8ee0c4e8f5d3970143229a0844ac02cc7d8a4b349a4",
+      "git_blob": "3139d078e96d1996b7546b9a68e9533977b57f3e"
+    },
+    "src/riva_cursor.c": {
+      "sha256": "ade01eebc538c969bbd88bc96ce64d081782e8d4ba38b6e8562b230f88cfd566",
+      "git_blob": "f8dcae14a2a4e355abef68d42a5155cf20d7f798"
+    },
+    "src/riva_tbl.h": {
+      "sha256": "523c0527b399b783f851563494130b6cc46dcfa4ba0b22fe23828ce6828b8b28",
+      "git_blob": "19f5f3b872001942e55fdb773d0988b5b83ba005"
+    },
+    "src/riva_setup.c": {
+      "sha256": "0483550b72cfc6cf30579f518e0003668efdbcb0852dbc772994f9fd741f1246",
+      "git_blob": "533f6e892e1a9699171a3034c7580bf06abe912f"
+    },
+    "src/riva_driver.c": {
+      "sha256": "dbe003817ea1a76be46b40bae441c11953f621f0db95964271298bf9b79a28b2",
+      "git_blob": "759501e13f86b148fb4fb2d80c8136bcc25a89c0"
+    }
+  },
+  "supplemental_references": {
+    "nv1_pfifo.xml": {
+      "repository": "https://github.com/envytools/envytools",
+      "path": "rnndb/fifo/nv1_pfifo.xml",
+      "sha256": "dd1a28c0b63e59ca606cd5b1b6fde33f3dd8f3fd68dfabb0238d5f8f8997ec05",
+      "git_blob": "7ebdbce386178aa9f754b346c93f2cb6bc7d13df",
+      "use": "register reference only, no source import"
+    },
+    "pmc.xml": {
+      "repository": "https://github.com/envytools/envytools",
+      "path": "rnndb/bus/pmc.xml",
+      "sha256": "ec7b11a579fdd4c5ee4e2c4f4ef8273fee771fc658ce3c3060ef71116f98dd31",
+      "git_blob": "cae62f15433c29b324387e6e6b68a7a1dccabd94",
+      "use": "register reference only, no source import"
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "directive": "f2-109",
+  "kind": "native adaptation of audited register and packing fragments",
+  "snapshot_note": "Research text fetched via GitHub connector; trailing blank lines normalized. Hashes identify reviewed local snapshots; Git pins identify upstream revisions.",
+  "donors": [
+    {
+      "project": "linux",
+      "revision": "v6.12",
+      "license": "GPL-2.0-or-later",
+      "files": [
+        {
+          "name": "sis.h",
+          "url": "https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/sis/sis.h",
+          "review_snapshot_sha256": "16145a8d346c2d6ebf807a8cff1d7e6278d9a2f09da06cc9dcba8dcde92ca1e5"
+        },
+        {
+          "name": "sis_accel.c",
+          "url": "https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/sis/sis_accel.c",
+          "review_snapshot_sha256": "8de47917e7dd52dbed7aa203aebb48a47ab67bf82e5ccc3120aa34226e5db237"
+        },
+        {
+          "name": "sis_accel.h",
+          "url": "https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/sis/sis_accel.h",
+          "review_snapshot_sha256": "a4f9b1da886991ef675415ac7d0647bece5a3445aef2e375300267d99b12dd2d"
+        },
+        {
+          "name": "sis_main.c",
+          "url": "https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/sis/sis_main.c",
+          "review_snapshot_sha256": "2969bb8f5071eec2aef8b345fdfe8a15f67c4f52ce2beb89c4566a1bf008f951"
+        },
+        {
+          "name": "sis_main.h",
+          "url": "https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/sis/sis_main.h",
+          "review_snapshot_sha256": "ea18a15607c3a443462c5eb2d0ae7b0718991a2704fb91069cd3883256a70806"
+        }
+      ]
+    },
+    {
+      "project": "xorg",
+      "revision": "0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92",
+      "license": "BSD-3-Clause-style",
+      "files": [
+        {
+          "name": "sis300_accel.c",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis300_accel.c",
+          "review_snapshot_sha256": "f5930a45c9e65c7f0bdb20414d6a3237f825285992804cc0ac71563e9214fc58"
+        },
+        {
+          "name": "sis300_accel.h",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis300_accel.h",
+          "review_snapshot_sha256": "b65dde308f99214273dbb4f9091cb8f0110b25e13cc7e002b32555a67f775d08"
+        },
+        {
+          "name": "sis310_accel.c",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis310_accel.c",
+          "review_snapshot_sha256": "a075a8fd5215fb2db056a9b49bb8ec76140c84937936fef47e926dddf510703a"
+        },
+        {
+          "name": "sis310_accel.h",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis310_accel.h",
+          "review_snapshot_sha256": "a9ed913dfb53eac5ac2d0b3dea1d52597898d73ef098b2ec659381a7f07034c9"
+        },
+        {
+          "name": "sis_cursor.c",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis_cursor.c",
+          "review_snapshot_sha256": "d7ba012ccca60c62f882be3e079ec30c5ebbd82cb2c250165622c63d462bb41b"
+        },
+        {
+          "name": "sis_cursor.h",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis_cursor.h",
+          "review_snapshot_sha256": "1547cbf59ecdb61457890868ba155449bd41b75fb985b989d747e66bfadffd5c"
+        },
+        {
+          "name": "sis_driver.c",
+          "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/blob/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src/sis_driver.c",
+          "review_snapshot_sha256": "877938c380d3bb572277be957053a833a052c652bb99c22c9bed60603019b1ce"
+        }
+      ]
+    }
+  ],
+  "adaptations": {
+    "engine.c": "Linux core/ROP/MMIO plus audited pattern packing",
+    "cursor.c": "X.Org CRT1 monochrome cursor registers and packing",
+    "register.c": "Linux PCI generation table; original CiukiOS resource, marker and registry glue"
+  },
+  "notice": "docs/licenses/sis-2d-NOTICES.txt",
+  "upstream_c_includes": false
+}

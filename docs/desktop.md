@@ -376,8 +376,8 @@ modes. It does not invent refresh rates or EDID information.
 [Upstream Linux PCI IDs](https://kernel.googlesource.com/pub/scm/linux/kernel/git/ralf/linux/+/linux-2.5.53/drivers/pci/pci.ids)
 identifies the SuperSavage IX/C (`5333:8c2e/8c2f`), Rage Mobility M/P
 (`1002:4c4d/4c52`) and contemporary Intel, NVIDIA, S3/VIA and 3dfx entries.
-The adapter table is descriptive; a match does not imply an accelerated
-driver. Unknown device pairs remain numeric. Repository comparison: the
+Adapter names come from `/System/hwids/pci-ids.json` through the existing
+`hwid_name` callback; a database match does not imply a native driver. Unknown device pairs remain numeric. Repository comparison: the
 existing panel exposed wallpaper/theme only, with immediate settings reload;
 f1-23 owns the actual mode switch and compositor relayout.
 [The PCI ID project's upstream database](https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids)
@@ -607,11 +607,12 @@ the event.
 
 ## Compositor, 2D engine and open defects (status of 2026-10-22)
 
-- **2D engine (f2-92, f1-97).** On the S3 Savage the desktop copies, fills and writes through
-  the 2D engine (`CIUKI_ACCEL_WRITE`, `CIUKI_ACCEL_OFFSCREEN`, self-test at the first use,
+- **2D engine (f2-92, f1-97).** A universal registry selects native drivers for copies, fills and writes
+  through the 2D engine (`CIUKI_ACCEL_WRITE`, `CIUKI_ACCEL_OFFSCREEN`, self-test at the first use,
   off-screen cache of unchanged surfaces). The indicator reads `2D engine: OK (drawing:
   software)` until the engine has drawn, then `2D acceleration: YES`; `accel=0` in `BOOT.CFG`
-  disables it. The record is `[desktop] accel fills= copies= writes= fallback= frames=
+  disables native 2D drivers. The synchronized software reference engine handles visible
+  targets; family status is in [the display model](design/display-driver-model.md). The record is `[desktop] accel fills= copies= writes= fallback= frames=
   lfb_bytes=`.
 - **What the T23 measured (image `a4d9454e`, dev diary 2026-10-22-07).** The engine is used
   (`copies=88` in 2 s) but the compositor still composes about 40 full frames per second with

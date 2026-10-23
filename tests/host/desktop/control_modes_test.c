@@ -49,10 +49,16 @@ static void changed_mode(uint16_t id)
 }
 static void select(int id, int index)
 { struct du_event e = {.type = DU_EV_SELECT, .id = id, .index = index}; u.event(&u, &e, u.user); }
+static unsigned hwid_calls;
+static int hwid_lookup(void *ctx,unsigned vendor,unsigned device,char *out,size_t size)
+{
+    (void)ctx; hwid_calls++;
+    return cp_hwid_lookup_json("{\"5333:8c2e\":\"S3 SuperSavage IX/C SDR\",\"1002:4c52\":\"ATI Rage Mobility M/P\"}",vendor,device,out,size);
+}
 static void attach(int page)
 {
     memset(&a, 0, sizeof(a));
-    a.host = (struct cp_host){.load = load, .save = save, .apply = apply, .display = query, .portrait = portrait,
+    a.host = (struct cp_host){.load = load, .save = save, .apply = apply, .display = query, .portrait = portrait, .hwid_name=hwid_lookup,
                              .screen_w = 1024, .screen_h = 768, .machine = "i686"};
     du_init(&u, pixels, CP_WIDTH, CP_HEIGHT); u.focused_window = 1;
     assert(!cp_attach(&a, &u, page) && u.count < DU_WIDGETS);
@@ -179,14 +185,7 @@ int main(int argc, char **argv)
     assert(system_tabs >= 0); select(system_tabs, 1); assert(!du_get(&u, CP_SUMMARY));
     select(system_tabs, 0); assert(strstr(du_get(&u, CP_SUMMARY)->text, "32-bit"));
     char name[64];
-    assert(strstr(cp_adapter_name(0x5333, 0x8c2f, name, sizeof(name)), "IX/C"));
-    assert(strstr(cp_adapter_name(0x8086, 0x1132, name, sizeof(name)), "815"));
-    assert(strstr(cp_adapter_name(0x10de, 0x0110, name, sizeof(name)), "GeForce2"));
-    assert(strstr(cp_adapter_name(0x5333, 0x8d04, name, sizeof(name)), "VIA"));
-    assert(strstr(cp_adapter_name(0x1106, 0x3122, name, sizeof(name)), "CLE266"));
-    assert(strstr(cp_adapter_name(0x1106, 0x7205, name, sizeof(name)), "UniChrome"));
-    assert(strstr(cp_adapter_name(0x8086, 0x2572, name, sizeof(name)), "865G"));
-    assert(strstr(cp_adapter_name(0x121a, 0x0005, name, sizeof(name)), "Voodoo3"));
+    assert(hwid_calls && !strcmp(cp_adapter_name(0x5333,0x8c2e,name,sizeof(name)),"Unknown adapter (5333:8c2e)"));
     assert(!strcmp(cp_adapter_name(0xdead, 0xbeef, name, sizeof(name)), "Unknown adapter (dead:beef)"));
     info.pci_vendor = 0xdead; info.pci_device = 0xbeef; cp_open(&a, CP_ADAPTER); du_render(&u); at_save(argv[1], "control-adapter-unknown", &u);
     query_error = 1; at_click_widget(&u, CP_REFRESH); du_render(&u); at_save(argv[1], "control-adapter-unavailable", &u); cp_detach(&a);

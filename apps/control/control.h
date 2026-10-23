@@ -84,6 +84,7 @@ struct cp_host {
     int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*engine)(void *, struct ciuki_accel_info *);
+    int (*engine_info)(void *, struct ciuki_display_engine_info *);
     int (*network)(void *, struct ciuki_net_state *);
     int (*network_begin)(void *, unsigned, const struct ciuki_net_control *, const char *);
     int (*network_poll)(void *, struct cp_network_result *);

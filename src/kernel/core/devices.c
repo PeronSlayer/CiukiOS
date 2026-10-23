@@ -8,6 +8,7 @@
 #include <ciuki/ata.h>
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
+#include <ciuki/display_driver.h>
 #include <ciuki/ac97.h>
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
@@ -32,7 +33,6 @@ static struct ciuki_devices_info query_buffer;
 static struct ciuki_firmware_page firmware_buffer;
 static struct ciuki_hardware_info hardware_buffer;
 extern bool storage_readonly_info(unsigned, char *, unsigned) __attribute__((weak));
-extern bool savage2d_summary(bool *, bool *, const char **) __attribute__((weak));
 
 static void string(char *out, unsigned size, const char *in)
 {
@@ -377,13 +377,18 @@ void devices_snapshot(struct ciuki_devices_info *out)
     struct ciuki_device_record *d = append(out, 0x30000, CIUKI_DEVICE_DISPLAY, CIUKI_BUS_LOADER,
         "VBE framebuffer", "fbdev", fbdev_get()->present ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, "No framebuffer.");
     activation(d, "framebuffer"); owner_resources(d, "fbdev"); owner_resources(d, "boot-framebuffer");
-    bool accelerated = false, accel_used = false; const char *accel_reason = 0;
-    /* f1-97; f2-92: READY reads "accelerated" only once the engine has drawn
-     * a presenter's request, "engine_ok_drawing_software" before. */
-    if (savage2d_summary && savage2d_summary(&accelerated, &accel_used, &accel_reason))
-        append(out, 0x30010, CIUKI_DEVICE_DISPLAY, CIUKI_BUS_LOADER, "2D accelerator", "savage2d",
-               accelerated ? CIUKI_DEVICE_READY : CIUKI_DEVICE_QUARANTINED,
-               !accelerated ? accel_reason : accel_used ? "accelerated" : "engine_ok_drawing_software");
+    struct ciuki_display_engine_info engine;
+    display_driver_info(&engine);
+    d = append(out, CIUKI_DEVICE_ACCELERATOR_ID, CIUKI_DEVICE_DISPLAY, CIUKI_BUS_LOADER,
+               "2D accelerator", engine.driver_id,
+               engine.quarantined ? CIUKI_DEVICE_QUARANTINED : engine.kind==CIUKI_ENGINE_NONE ? CIUKI_DEVICE_ABSENT : CIUKI_DEVICE_READY,
+               engine.ready && engine.native_used ? "accelerated" : engine.reason);
+    if (d) {
+        string(d->driver_display_name,sizeof(d->driver_display_name),engine.display_name);
+        d->generation=engine.generation;
+        d->accel_ready = engine.ready; d->native_used = engine.native_used;
+        d->cpu_ready = engine.cpu_ready; d->vendor = engine.pci_vendor; d->device = engine.pci_device;
+    }
     unsigned input_state = input.quarantined ? CIUKI_DEVICE_QUARANTINED :
                            !state.initialized || state.input_error || (!state.firmware && !input.active) ? CIUKI_DEVICE_ABSENT :
                            state.firmware ? CIUKI_DEVICE_FIRMWARE_FIRST : CIUKI_DEVICE_READY;

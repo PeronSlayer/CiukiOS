@@ -191,7 +191,7 @@ int hr_format(const struct hr_source *s, char *out, size_t cap, size_t *length)
             s->engine->driver,s->engine->capabilities,s->engine->quarantined,s->engine->generation);
         add(&t,"Engine: %s; operations=%llu fallbacks=%llu (active presenter path in display binding)\n",
             s->engine->driver==CIUKI_ACCEL_DRIVER_NONE || s->engine->quarantined || !s->engine->capabilities ? "software" :
-            s->engine->driver==CIUKI_ACCEL_DRIVER_SAVAGE ? "savage2d hardware available" : "unknown hardware",
+            "hardware engine available",
             (unsigned long long)s->engine->operations,(unsigned long long)s->engine->fallbacks);
     }
     else add(&t,"2D engine query unavailable; see bindings\n");

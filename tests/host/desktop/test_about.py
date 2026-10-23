@@ -12,12 +12,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
-# F2-99 cursor; F1-109 ACPICA and F2-123 hardware-ID credits rows, reviewed in integ-fix1.
+# F2-99 cursor; F1-109/F2-123 and integ-video credits rows, re-recorded in stage-video.
 GOLDENS = {
-    "about-credits": "d26937e8434da92823cd0af9cd3fc3ee9d3c41c6722d79c39a364d5e74157eca",
-    "about-credits-end": "c1df8fce6885f62e57597c530673e1967f31b17c7863193e9280e3ecb05e68b4",
-    "about-credits-pgdn": "580065ed64fe195aa78df8e83f4a94a3cbd00688f91387fff5eb7a392f0533ad",
-    "about-credits-wheel": "cffd86d7a8f0f910296ba578432bac3417532bee427fb0fa9aa9291845e68416"
+    "about-credits": "0b59b2036e6b22941764eaa418f79e640678004c3a1071cfe2b2f275a98895c4",
+    "about-credits-end": "76a5776cf032273b9dbe64d6155366835653d4c91874bfa3e373d2a1bcd3ed44",
+    "about-credits-pgdn": "e1587657752e065a28e45343c8a3cf2a09302b2296195635ba7364c74b5e8003",
+    "about-credits-wheel": "62451ff89e997c469ed62be7ba67010e4d772e0d66d72dc465a11445a0dde90d",
 }
 
 

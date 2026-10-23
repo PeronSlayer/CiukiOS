@@ -11,27 +11,6 @@
 
 const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size)
 {
-    static const struct { uint16_t vendor, device; const char *name; } adapters[] = {
-        {0x5333, 0x8c2e, "S3 SuperSavage IX/C SDR"}, {0x5333, 0x8c2f, "S3 SuperSavage IX/C DDR"},
-        {0x5333, 0x8a22, "S3 Savage4"}, {0x5333, 0x8a20, "S3 Savage3D"},
-        {0x5333, 0x8a25, "VIA/S3 ProSavage PM133"}, {0x5333, 0x8a26, "VIA/S3 ProSavage KM133"},
-        {0x5333, 0x8d01, "VIA/S3 ProSavage PN133"}, {0x5333, 0x8d02, "VIA/S3 ProSavage KN133"},
-        {0x5333, 0x8d04, "VIA/S3 ProSavageDDR P4M266"},
-        {0x1106, 0x3122, "VIA CLE266 CastleRock Graphics"},
-        {0x1106, 0x7205, "VIA KM400/KN400/P4M800 UniChrome"},
-        {0x1002, 0x4c4d, "ATI Rage Mobility M/P AGP"}, {0x1002, 0x4c52, "ATI Rage Mobility M/P"},
-        {0x1002, 0x4c45, "ATI Rage Mobility M3"}, {0x1002, 0x4742, "ATI 3D Rage Pro"},
-        {0x8086, 0x7121, "Intel 810 Graphics"}, {0x8086, 0x7123, "Intel 810 DC-100 Graphics"},
-        {0x8086, 0x7125, "Intel 810E Graphics"}, {0x8086, 0x1132, "Intel 815 Graphics"},
-        {0x8086, 0x3577, "Intel 830M Graphics"}, {0x8086, 0x2562, "Intel 845G Graphics"},
-        {0x8086, 0x2572, "Intel 865G Graphics"}, {0x8086, 0x2582, "Intel 915G Graphics"},
-        {0x10de, 0x0020, "NVIDIA RIVA TNT"}, {0x10de, 0x0028, "NVIDIA RIVA TNT2"},
-        {0x10de, 0x0110, "NVIDIA GeForce2 MX"}, {0x10de, 0x0150, "NVIDIA GeForce2 GTS"},
-        {0x10de, 0x0171, "NVIDIA GeForce4 MX440"}, {0x121a, 0x0003, "3dfx Voodoo Banshee"},
-        {0x121a, 0x0005, "3dfx Voodoo3"}, {0x121a, 0x0009, "3dfx Voodoo4 / Voodoo5"}
-    };
-    for (unsigned i = 0; i < sizeof(adapters) / sizeof(adapters[0]); i++)
-        if (adapters[i].vendor == vendor && adapters[i].device == device) return adapters[i].name;
     snprintf(out, size, "Unknown adapter (%04x:%04x)", (unsigned)vendor, (unsigned)device);
     return out;
 }
@@ -95,7 +74,7 @@ static void depths_build(struct cp_app *a, unsigned preferred)
 }
 static void info_lines(struct cp_app *a)
 {
-    char fallback[64];
+    char fallback[64], adapter[128], resolved[128];
     memset(a->adapter_lines, 0, sizeof(a->adapter_lines));
     if (!a->display_ok) {
         strcpy(a->adapter_lines[0], "Display information is unavailable.");
@@ -106,7 +85,9 @@ static void info_lines(struct cp_app *a)
         snprintf(a->adapter_lines[1], 160, "Pitch: %u bytes per scanline", d->pitch);
         snprintf(a->adapter_lines[2], 160, "VBE: %x.%02x   Video memory: %u KiB", (unsigned)(d->vbe_version >> 8),
                  (unsigned)(d->vbe_version & 255), (unsigned)(d->vram_bytes / 1024));
-        snprintf(a->adapter_lines[4], 160, "Adapter: %s", cp_adapter_name(d->pci_vendor, d->pci_device, fallback, sizeof(fallback)));
+        const char *name=cp_adapter_name(d->pci_vendor,d->pci_device,adapter,sizeof(adapter));
+        if (a->host.hwid_name && !a->host.hwid_name(a->host.ctx,d->pci_vendor,d->pci_device,resolved,sizeof(resolved)) && resolved[0]) name=resolved;
+        snprintf(a->adapter_lines[4],160,"Adapter: %s",name);
         snprintf(a->adapter_lines[5], 160, "PCI: %04x:%04x", d->pci_vendor, d->pci_device);
         snprintf(a->adapter_lines[6], 160, "VBE OEM: %s", d->oem[0] ? d->oem : "Unavailable");
         snprintf(a->adapter_lines[7], 160, "VBE vendor: %s", d->vendor[0] ? d->vendor : "Unavailable");
@@ -118,12 +99,35 @@ static void info_lines(struct cp_app *a)
 }
 void cp_engine_refresh(struct cp_app *a)
 {
-    struct ciuki_accel_info engine={0};
-    if (!a->host.engine || a->host.engine(a->host.ctx,&engine))
-        snprintf(a->engine_line,sizeof(a->engine_line),"Savage engine: status unavailable");
-    else snprintf(a->engine_line,sizeof(a->engine_line),"Savage engine: %s; capabilities 0x%X",
-        engine.driver != CIUKI_ACCEL_DRIVER_SAVAGE ? "not present" : engine.quarantined ? "quarantined" :
-        engine.capabilities ? "available" : "software rendering",engine.capabilities);
+    struct ciuki_display_engine_info engine={0};
+    int available=a->host.engine_info && !a->host.engine_info(a->host.ctx,&engine);
+    /* Identity/readiness come from the stable accelerator device record.
+     * The negotiated query adds per-operation counters. */
+    a->devices.version=CIUKI_DEVICES_VERSION; a->devices.size=sizeof(a->devices);
+    if (a->host.devices && !a->host.devices(a->host.ctx,&a->devices) && cp_snapshot_valid(&a->devices)) {
+        for (unsigned i=0;i<a->devices.count;i++) {
+            const struct ciuki_device_record *record=&a->devices.devices[i];
+            if (record->id!=CIUKI_DEVICE_ACCELERATOR_ID) continue;
+            snprintf(engine.display_name,sizeof(engine.display_name),"%s",record->driver_display_name);
+            snprintf(engine.reason,sizeof(engine.reason),"%s",record->reason);
+            engine.ready=record->accel_ready; engine.native_used=record->native_used;
+            engine.quarantined=record->state==CIUKI_DEVICE_QUARANTINED;
+            available=1; break;
+        }
+    }
+    if (available) {
+        uint64_t native=0, software=0;
+        for (unsigned k=0;k<CIUKI_ENGINE_OPERATIONS;k++) { native+=engine.native[k]; software+=engine.software[k]; }
+        snprintf(a->engine_line,sizeof(a->engine_line),"%s: %s (%s); engine %llu, software %llu",
+            engine.display_name,engine.quarantined ? "quarantined" : engine.ready ? "active" : "software",
+            engine.reason,(unsigned long long)native,(unsigned long long)software);
+    } else {
+        struct ciuki_accel_info legacy={0};
+        if (!a->host.engine || a->host.engine(a->host.ctx,&legacy))
+            snprintf(a->engine_line,sizeof(a->engine_line),"2D engine: status unavailable");
+        else snprintf(a->engine_line,sizeof(a->engine_line),"2D engine: %s; capabilities 0x%X",
+            legacy.quarantined ? "quarantined" : legacy.capabilities ? "available" : "software rendering",legacy.capabilities);
+    }
     label(a,974,a->engine_line);
 }
 int cp_display_refresh(struct cp_app *a)

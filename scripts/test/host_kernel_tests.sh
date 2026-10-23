@@ -22,17 +22,37 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_splash_progress.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
+python3 -B "$root/tests/host/test_display_driver_model.py"
+python3 -B "$root/tests/host/test_radeon2d.py"
+python3 -B "$root/tests/host/test_nv2d.py"
+python3 -B "$root/tests/host/test_riva128.py"
+python3 -B "$root/tests/host/test_intel2d.py"
+python3 -B "$root/tests/host/test_unichrome.py"
+python3 -B "$root/tests/host/test_sis_display.py"
+python3 -B "$root/tests/host/test_matrox.py"
+python3 -B "$root/tests/host/test_vmwaresvga.py"
+python3 -B "$root/tests/host/test_trident_blade.py"
+python3 -B "$root/tests/host/test_mach64.py"
+python3 -B "$root/tests/host/test_rage128.py"
+python3 -B "$root/tests/host/test_cirrus.py"
+python3 -B "$root/tests/host/test_tdfx.py"
+python3 -B "$root/tests/host/test_s3legacy.py"
+python3 -B "$root/tests/host/test_intel_legacy_video.py"
+python3 -B "$root/tests/host/test_neomagic.py"
+python3 -B "$root/tests/host/test_chipshiqv.py"
+python3 -B "$root/tests/host/test_display_driver_names.py"
+python3 -B "$root/tests/host/test_savage_family.py"
 python3 -B "$root/tests/host/test_presenter_display.py"
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_kernel_switch
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_checkpoint_queue
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/supersavage_mode_test.c" \
-    "$root/src/kernel/drivers/supersavage_mode.c" "$root/src/kernel/vm/vga_hardware.c" \
+    "$root/src/kernel/drivers/video/s3savage/supersavage_mode.c" "$root/src/kernel/vm/vga_hardware.c" \
     "$root/src/kernel/vm/virtual_vga.c" -o "$out/supersavage_mode_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/supersavage_mode_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/supersavage_display_test.c" \
-    "$root/src/kernel/drivers/supersavage_mode.c" "$root/src/kernel/vm/vga_hardware.c" \
+    "$root/src/kernel/drivers/video/s3savage/supersavage_mode.c" "$root/src/kernel/vm/vga_hardware.c" \
     "$root/src/kernel/vm/virtual_vga.c" -o "$out/supersavage_display_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/supersavage_display_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \

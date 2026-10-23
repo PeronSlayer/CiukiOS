@@ -2,8 +2,9 @@
 
 Research date: **2026-10-22** (workstation `date` checked before writing).
 Directive: [f2-102](../directives/f2-102-video-driver-families-census.md).
-Status: **proposed for lead review; research only**. No production driver,
-new capability, hardware qualification or image result is delivered here.
+Status: census accepted by the lead decisions below; implementation evidence
+is recorded per family. f2-104 PIO is approved behind DM9; f2-105 adds
+a host-validated NV30/NV40 VRAM transport approved behind DM9 by f2-105 amendment 1. No hardware qualification or image result is claimed.
 The complete directive in this checkout has 41 lines and no separate amendment
 or lead-note section. This contract targets [DM1–DM13](display-driver-model.md)
 and the [1998–2004 hardware baseline](hardware-baseline.md).
@@ -202,6 +203,10 @@ Test: **E500 hardware only**. QEMU `ati-vga` is not Mach64. Initial H F/C/Y/I/U,
 with all other commands punted; native modes and video overlay remain later
 provider work. A zero pack count does not justify dropping this laptop.
 
+| CiukiOS result | Commands | Evidence | Remaining |
+| --- | --- | --- | --- |
+| f2-114, `mach64`, ATI Mach64 / Rage Mobility, [port details](mach64-2d.md) | F/C/Y at RGB565/XRGB8888; legacy 32x32 cursor when a separate page is available; I awaits part C | Host fake-register traces and swdib goldens; generic DM9 wired, current firmware mode preserved | Lead integration and E500 physical qualification; no hardware claim |
+
 ### ATI Rage 128 / Rage 128 Pro — choose H
 
 Vendor `1002`: examples `5245 5246 524b 524c`, Pro `5046`; Mobility M3
@@ -212,6 +217,7 @@ Vendor `1002`: examples `5245 5246 524b 524c`, Pro `5046`; Mobility M3
 | **[H](#3-snapshot-catalogue-and-notation) `ati/rage128_draw.cpp`, `rage128_init.cpp`, `rage128.h`, `rage128_cursor.cpp`; kernel `ati/driver.cpp`** | MIT | F C Y I U | Native; video scaler in `rage128_overlay.cpp` | **1.6–3 kLOC**, H; use with VBE first. FIFO/cache/reset sequencing needs bounded errors. | `1002:5245/5046`; QEMU Pro subset + hardware |
 | [L](#3-snapshot-catalogue-and-notation) `aty/aty128fb.c` | GPL-2.0-only | Y; F/C/M/W use generic software helpers | Native; no exposed overlay | 2–4 kLOC mode port; **not an accelerated F/C donor** at v6.12 (`aty128fb_ops:505–515`). | `1002:5245/5046`; QEMU Pro subset + hardware |
 | [X](#3-snapshot-catalogue-and-notation) `r128/r128_accel.c`, `r128_cursor.c` | MIT-style, compatible | F C Y M W I K* L P U | Native UMS; XVideo overlay | 2.5–4.5 kLOC, X; CPU transfer alignment and engine reset. | `1002:5245/5046`; QEMU Pro subset + hardware |
+| **Ciuki f2-115 implementation** `src/kernel/drivers/video/rage128/` | MIT fragments; native glue | F C Y U; private I pending f2-101d | VBE; no overlay/PLL/DMA path | Part A registry, bounded waits and quarantine guard; RGB555/565 and XRGB8888, padded pitch. Cursor needs a separate claimed VRAM page; odd negative cursor origins refuse cleanly. | Host fake-register/pixel/lifecycle evidence: [validation](../validation/f2-115-rage128.md). Lead QEMU Pro and physical qualification remain. |
 
 Test: lead may use **`-device ati-vga,model=rage128p`** for the QEMU subset;
 physical Rage128/M3/Pro variants remain hardware only. No pack models.
@@ -249,6 +255,7 @@ and L `riva/fbdev.c`; verify which IDs each donor actually accepts.
 | **[X](#3-snapshot-catalogue-and-notation) nv `riva_xaa.c`, `riva_cursor.c`, `riva_hw.h`** | MIT-style | F C Y M I L P U | Native UMS; no verified scaler path in this subset | **2–3.5 kLOC**, X; distinct object setup and cursor, not NV4 commands. | `12d2:0018`; hardware only |
 | [L](#3-snapshot-catalogue-and-notation) `riva/fbdev.c`, `riva_hw.c` | GPL wrapper; NVIDIA legacy permissive notice plus explicit GPL-compatibility explanation in hardware file | F C Y M I U | Native; no fbdev overlay | 2–4 kLOC, L; prefer explicit MIT X source over the older notice form. | `12d2:0018`; hardware only |
 | [H](#3-snapshot-catalogue-and-notation) `nvidia` | Be Sample wrappers; engine files lack an explicit grant: **hold** | No verified NV3 path; do not extrapolate NV4+ hooks | Not established for NV3 | No port estimate until matching/coverage exists. | `12d2:0018`; hardware only |
+| **Ciuki f2-120 result** | X donor MIT notices and pin retained | F C Y P U behind unchanged part A hooks; M/I/L await part C interfaces | VBE; no overlay/provider | Independent NV3 PIO/object/instance backend, bounded waits, keyed marker, saved-pixel activation comparison and idle-proof quarantine; host fake registers/goldens | `12d2:0018` only; physical evidence pending; [transport and limits](riva128-2d.md) |
 
 Test: **hardware only**. No pack models. Later Mesa nouveau backends in
 section 7 start at TNT/NV4, not Riva128.
@@ -272,6 +279,162 @@ NVIDIA 2D silicon model. A VRAM command pushbuffer is not permission to expose
 arbitrary packets, addresses or bus mastering. The lead must explicitly
 accept its reserved extent, validation, reset and bounded completion design
 before that transport is enabled. VBE first; FX/6 do not inherit a GF2 pass.
+
+#### f2-104 transport contract (2026-10-23; approved by amendment 1)
+
+The implementation uses **PIO FIFO channel 0**, not the donor's DMA
+pushbuffer. X nv's object classes, methods and generation-specific PGRAPH
+initialization remain the donor. The supporting primary reference for PIO is
+[Linux v6.12 riva_tbl.h](https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/riva/riva_tbl.h),
+`nv4TablePFIFO` / `nv10TablePFIFO`, and
+[riva_hw.c](https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/riva/riva_hw.c),
+`nv4Busy` / `nv10Busy`. This avoids TNT's PCI-addressed command-fetch
+exception in X `nv_hw.c:1144–1149`. No PCI command bit, bus mastering,
+AGP/GART mapping, host DMA address, interrupt handler or user packet is used.
+The lead approved this PIO adaptation in f2-104 amendment 1; production
+eligibility is enabled behind the mandatory native-only DM9 comparison.
+The separate f2-105 ring is approved by its own amendment 1.
+
+- **Ownership and format:** the part A registry proves the sole display
+  function owns the complete active VBE BAR1 lease. The port rechecks it at
+  activation, claims a disjoint BAR0 UC register window and a reserved VRAM
+  tail, and checks all physical extents against E820 RAM and kernel ranges.
+  Exact X chipset-table IDs only; NV3, NV30/FX, NV40+ and bridge aliases are
+  excluded. nForce UMA devices are nominated but refused until shared-memory
+  ownership can be proved without stealing system RAM. VBE stays the mode
+  provider. Linear RGB565, RGB555-in-16 and XRGB8888 are representable;
+  packed 24 bpp, different masks, pitch >65535, pitch not aligned to 64 bytes,
+  and unsupported geometry punt. The alignment retains X `nv_driver.c`'s
+  512-bit pitch increment rather than generalizing its padded layouts.
+  NV4 retains the donor's 2032/2048-pixel (32/16 bpp), 2048-line maximum;
+  later chips retain 4080/4096 pixels and 4096 lines. Cursor access selects
+  the firmware graphics head only when PCRTC head bit 12 and CR44 agree;
+  a nonzero scanout start, ambiguous head or dead register refuses before
+  engine setup. Both proved head 0 and head 1 use their own register bank.
+- **Objects and FIFO:** PRAMIN holds the donor's local-VRAM DMA context and
+  eight RAMHT/object records (surface, ROP, pattern, clip, line, blit,
+  rectangle and scaler). The context limit is the validated VRAM extent;
+  no PCI/GART context and no DMA pushbuffer object are installed. Channel 0
+  stays in PIO mode (`CACHE1_PUSH1=0`, DMA instance 0, no DMA_PUSH enable).
+  Methods go to BAR0+0x800000+subchannel*0x2000+method. Each group first
+  reserves its complete word count against the 16-bit `FifoFree` byte count;
+  setup binds handles 0x80000010–17 exactly as X `NVResetGraphics`.
+- **Placement and wrap:** reserve the final 128 KiB of the smaller of
+  firmware VRAM and read-only chip VRAM size. The first 16 KiB is upload
+  scratch, and offset +32 KiB is the cursor (16 KiB maximum). The visible
+  framebuffer lease must end before the tail. NV4 uses its fixed PRAMIN
+  cursor region instead. No off-screen rows are exported. PIO has no
+  producer/consumer ring, wrap, jump, prefetch padding, or writable DMA GET/
+  PUT; therefore X's eight-SKIPS workaround is deliberately inapplicable.
+- **Completion:** every hook is synchronous. Drain CPU/WC stores before
+  submission; wait for the recorded empty FIFO capacity and PGRAPH busy=0,
+  with posted-read ordering, before CPU access or success. There is no
+  notifier or public fence; part A completion is the fence. Each poll has a
+  20 ms monotonic deadline, a frozen-clock iteration cap, and a presenter
+  pause callback at 1 ms. Cancellation and stale generation fail closed.
+  A callback error after submission is a fault, never clean refusal.
+- **Failure:** validation/refusal precedes all writes. Quarantine latches
+  submission exclusion, hides the cursor, invalidates capabilities and keeps
+  `cpu_ready=false` until a separate bounded drain plus cursor-disable
+  readback proves safety. Stop disables and reads back FIFO push/pull/cache
+  after idle; a busy/dead engine retains the rejecting guard and resource
+  claims. No blind replay of submitted overlapping COPY; the caller retains
+  part A reconstruction. No reset is treated as an idle proof. The attempt
+  marker has a driver-specific file and PCI key; nonempty, unreadable or
+  uncommitted markers block activation and are not silently cleared.
+- **Commands:** FILL/COPY/SYNC, screen-origin MSB-left PATTERN, scratch-row
+  native-format WRITE, and legacy opaque-mask cursor hooks use part A.
+  COPY is split into non-overlapping strips in global memmove order so the
+  port does not infer overlap direction from an undocumented blit bit.
+  New MONO/INVERT/KEYED/SCALED/LINE/ARGB ABI hooks wait for part C; the donor's
+  overlay scaler is not advertised as DM2 SCALED. Legacy cursor SET hides;
+  NV4/GeForce256 use 32x32 A1R5G5B5, later chips binary-alpha 64x64 ARGB with
+  a transparent border and a 32x32 legacy payload. No new cursor ABI is added.
+
+Primary donor: X nv commit `0b6619fec39fada995646fb95bb25e72d3c9a491`,
+`src/nv_hw.c` (objects/PGRAPH), `nv_xaa.c` (methods and upload), `nv_dma.h`
+(method packing), `nv_cursor.c` / `nv_dac.c` (cursor), `nv_driver.c` (IDs),
+`nv_setup.c` (read-only VRAM size). Each adapted register file retains its
+original notice. The Linux PIO table retains its separate NVIDIA notice and
+GPL-compatibility note. No unlicensed `nv_type.h` is imported.
+
+| f2-104 family result | Status |
+| --- | --- |
+| NVIDIA TNT/TNT2, GeForce256/2/3/4 (`nv2d`, NVIDIA TNT–GeForce4) | PIO native port and host model; transport approved in f2-104 amendment 1, activation behind DM9; physical qualification remains with the lead. FX/NV40+ use the separate f2-105 transport. |
+
+#### f2-105 VRAM transport contract (2026-10-23)
+
+This extends `nv2d` with a separate NV30/NV40 DMA-fetch transport. It never
+uses NV40 PIO credits. The f2-104 amendment 1 approves only NV4–NV2x PIO;
+that approval enables the inherited PIO path. f2-105 amendment 1 explicitly
+approves the reserved VRAM transport described below and enables ring eligibility.
+DM9 runs before either transport publishes operations and cannot pass through
+software replay. Host tests exercise the new transport independently.
+
+- **Source boundary:** X nv commit `0b6619fec39fada995646fb95bb25e72d3c9a491`,
+  [`src/nv_hw.c`](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-nv/blob/0b6619fec39fada995646fb95bb25e72d3c9a491/src/nv_hw.c)
+  `NVLoadStateExt` (NV30/NV40 PRAMIN, PGRAPH and PFIFO),
+  [`nv_xaa.c`](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-nv/blob/0b6619fec39fada995646fb95bb25e72d3c9a491/src/nv_xaa.c)
+  `NVDmaWait`, `NVResetGraphics`, `NVSync`, and
+  [`nv_local.h`](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-nv/blob/0b6619fec39fada995646fb95bb25e72d3c9a491/src/nv_local.h)
+  packet/GET/PUT definitions. The eight-word padding and 32-byte fetch race
+  are independently documented in upstream
+  [Linux v6.12 nouveau_dma.h](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/nouveau/nouveau_dma.h).
+  The donor's unbounded loops become deadline/poll-capped waits. No X types,
+  unlicensed headers, host DMA, GART, PCI command changes or user packets.
+- **Matching:** exact x86 `NVKnownChipsets` FX and GeForce6 entries, excluding
+  Mac-only 0329 and GeForce7 016a. The census's explicit 00f1–f4/f6/f8–ff
+  bridge IDs nominate candidates; read-only BAR0+1800 resolves their actual
+  NVIDIA ID, including the donor's endian normalization, and must name an
+  exact FX/6 entry. No alias determines architecture by its PCI prefix.
+  Integrated 024x remains refused for unproved UMA ownership. No GF7 IDs.
+- **Ownership/reservation:** retain the sole-display BAR1/VBE ownership and
+  UC BAR0 claims. NV30 reserves the final 128 KiB: scratch at +0, the 32 KiB
+  ring at +16 KiB, cursor at +64 KiB. NV40 reserves the final 1 MiB; it keeps
+  X's ring at VRAM minus 560 KiB, cursor at ring+32 KiB, and scratch at
+  ring-16 KiB. The top 512 KiB remains reserved for instance state. The
+  visible lease ends before the complete reservation. Read-only chip VRAM
+  sizing is capped at X's 256 MiB; NV40 refuses larger physical VRAM and
+  any firmware/chip extent disagreement, since instance placement follows
+  physical chip VRAM.
+  Claims stay pinned, with exact-size reuse only after stop. Scratch, ring,
+  cursor and instance state are disjoint; no offscreen rows are exported.
+- **Objects/setup:** reject active firmware DMA/PGRAPH before writes. Reset
+  only the private graphics/FIFO engines after this refusal gate. NV30 uses
+  X's four-word objects and blit class 009f; NV40 uses eight-word contexts,
+  RAMHT instance strides of two, and its own PGRAPH/tile bank setup. Preserve
+  scanout, routing and PLLs. Install one local-VRAM command-fetch context
+  with a 0x7fff limit and reserved ring base, PFIFO DMA instance 1209/1213,
+  channel 0 DMA mode 100/10000, fetch 000f0078 (32-byte fetch). No notifier,
+  IRQ or system-memory context is installed.
+- **Submission/wrap:** only internal validated method groups, at most 32
+  data words, are encoded as `(count<<18)|method`. GET/PUT are aligned byte
+  offsets within 32 KiB, never host addresses. Reserve header plus data and
+  one consumer gap before writing. Keep eight NOPs at offset zero; reserve
+  word 8191 for the jump `20000000`. At exhaustion, write the jump, ensure
+  GET has advanced beyond the padding (bounded corner-case PUT=9), then
+  publish PUT=8 before reusing the beginning. Never overwrite unread words.
+  CPU store drain plus a VRAM read precedes each PUT; posted read follows.
+- **Completion/fault:** synchronous completion requires GET=last published
+  PUT, PGRAPH idle and no PFIFO/PGRAPH error. Every GET/idle/wrap wait uses
+  the existing 20 ms deadline, 4000-poll cap and presenter slices, including
+  frozen clocks, cancellation and generation changes. Malformed GET, lost
+  PUT, timeout or fault quarantines permanently. Quarantine stops all
+  submission and hides the cursor; CPU safety requires a separate drain
+  proof, including the submitted wrap state, and cursor-disable readback.
+  Stop additionally disables/readbacks DMA push, channel push/pull and
+  caches. A reset or GET-only observation is never CPU-safety evidence.
+- **Commands/cursor:** retain FILL/COPY/SYNC, PATTERN and scratch-row WRITE
+  with the same software goldens and refusal-before-submission rules. COPY
+  retains disjoint strips in memmove order. The legacy 32x32 cursor uses the
+  64x64 binary-alpha donor format; NV40 show/hide rewrites cursor position
+  as required by `NVShowHideCursor`'s hardware workaround. New part C
+  commands wait for the part C hook/ABI integration; the semantic contract
+  was read from the lead checkout because it is absent on this branch.
+
+| f2-105 family result | Status |
+| --- | --- |
+| NVIDIA GeForce FX / GeForce6 (`nv2d`, NVIDIA TNT-GeForce6) | Separate NV30/NV40 VRAM pushbuffer port; host register/pixel/wrap tests pass (3,743 full-allocation comparisons across both transports). Transport approved by f2-105 amendment 1; activation enabled behind native-only DM9, with pass/mismatch quarantine and independent refusal host tests. VBE modes, UMA refusals and physical qualification remain. |
 
 ### Matrox G200 / G400 / G450 / G550 — choose L
 
@@ -349,6 +512,10 @@ is an optional related extension. Voodoo1/2 (`0001/0002`) are separate
 Test: **hardware only**, separately Voodoo3 and VSA100. No pack models.
 No inference that a generic VGA QEMU model implements this engine.
 
+| CiukiOS result | Commands / interface | Evidence / remaining gate |
+| --- | --- | --- |
+| f2-117, `tdfx`, 121a:0005/0009 single-chip | Part A FILL/COPY/SYNC and 32x32 mono cursor; VBE modes; native name from registry; INVERT awaits part C hook | [Port and safety decisions](tdfx-2d.md); host fake-register and swdib goldens. Physical Voodoo3 and single-chip VSA-100 qualification remain separate. SLI/multifunction configurations refuse. |
+
 ### S3 Trio64 / ViRGE — choose H, separate native backends
 
 Vendor `5333`: Trio `8811 8814 8901`; ViRGE `5631 883d 8a01 8a10` and
@@ -375,6 +542,7 @@ and siblings; source table H `s3/driver.cpp`. The actual T23 target is
 | Candidate | Licence verdict | DM2 donor paths | Modes; overlay | Port size / risks | PCI examples / validation path |
 | --- | --- | --- | --- | --- | --- |
 | **Existing Ciuki `savage2d` and SuperSavage mode provider, moved by f2-101** | existing GPL-2.0-only kernel code and retained provenance | Current F C Y P W U; later DM2 commands need explicit additions | Existing native SuperSavage provider; no universal family mode claim | **0.5–1.5 kLOC** registry adaptation estimate, no new source transplant; preserve fault/attempt-marker and measured T23 behavior. | `5333:8a22/8a25/8d03/8c2e`; T23 + other hardware |
+| **f2-112 implementation result** | Ciuki native owner, GPL-2.0-only; primary references and provenance retained, no source transplant | F C Y P W U; 22 explicit PCI IDs, separate early COB/status/BAR and later descriptor recipes | VBE; existing native provider only for `5333:8c2e` | [Host validation](../validation/f2-112-savage-family.md): register goldens, resource bounds, refusal and quarantine; physical qualification remains with the lead. No new part C capability numbers. | Savage3D/MV, MX/IX, Savage4, ProSavage, Twister, DDR, SuperSavage; no Savage2000 claim |
 | [H](#3-snapshot-catalogue-and-notation) `s3/savage_draw.cpp`, `savage.h`, paired `s3/driver.cpp` | MIT | F C Y I U | Native; separate streams/video work | 1.5–3 kLOC alternative, H; upstream unbounded waits must not replace current policy. | `5333:8a22/8a25/8d03/8c2e`; T23 + other hardware |
 | [L](#3-snapshot-catalogue-and-notation) `savage/savagefb_accel.c`, `savagefb_driver.c` | GPL tree notices | F C Y M I; generic fbdev software branch also exists | Native; no fbdev overlay API | 2–4 kLOC alternative, L. | `5333:8a22/8a25/8d03/8c2e`; T23 + other hardware |
 | [X](#3-snapshot-catalogue-and-notation) savage `savage_xaa.c`, `savage_cursor.c` | cursor MIT; XAA file has no licence grant: **hold** | F C Y M W I K* L P U | Native UMS/VBE choices; streams scaler separate | 3–5 kLOC alternative, X; COB/DMA and device-specific errata need separate review. | `5333:8a22/8a25/8d03/8c2e`; T23 + other hardware |
@@ -445,6 +613,10 @@ still requires an eligible VBE LFB, which older banked cards may lack.
 Test: lead **`-device cirrus-vga`**, emulating GD5446 only, followed by real
 hardware. QEMU model is not evidence for every 54xx revision or video BIOS.
 
+| Port result | Native commands | Modes and optional hooks | Evidence |
+| --- | --- | --- | --- |
+| f2-116 `cirrus`, Cirrus Logic GD54xx; PCI `1013:00a0/00a4/00ac/00b8` | FILL, overlap-safe COPY, SYNC; synchronous bounded waits and idle-proved quarantine recovery | VBE; no donor-verified cursor/WRITE, no part C hooks | Host fake-register sequences and software goldens at 16/24/32 bpp; GD543x conservative 16/24 bpp subset. GD5446 runtime and physical-family qualification remain with the lead. See [port decisions](cirrus-2d.md). |
+
 ### NeoMagic — choose L core, X cursor optional
 
 Vendor `10c8`: NM2070 `0001`, NM2090 `0002`, NM2093 `0003`, NM2097 `0083`,
@@ -468,9 +640,9 @@ older `00d8` (65545); preserve exact driver table and panel rules.
 
 | Candidate | Licence verdict | DM2 donor paths | Modes; overlay | Port size / risks | PCI examples / validation path |
 | --- | --- | --- | --- | --- | --- |
-| **[X](#3-snapshot-catalogue-and-notation) chips `ct_accel.c`, `ct_cursor.c`** | permissive X11/MIT in c files; required `ct_BlitMM.h`/`ct_BltHiQV.h` lack a licence header: **hold import closure** | F C Y M W I L P U, HiQV-dependent | Native UMS; separate XVideo | **2–4 kLOC**, X; resolve header provenance before copying a buildable port, or obtain primary register documentation for a new native definition set. | `102c:00c0/00c4/00c5`; hardware only |
-| [L](#3-snapshot-catalogue-and-notation) `chipsfb.c` | GPL tree notice | Generic software drawing only | Native, restricted to 800×600 and 8/16bpp in inspected code; no overlay | 1–2 kLOC mode-only; cannot satisfy accelerated F/C. | `102c:00c0/00c4/00c5`; hardware only |
-| H | No C&T family in r1beta5 | None established | VBE | No host port. | `102c:00c0/00c4/00c5`; hardware only |
+| **[X](#3-snapshot-catalogue-and-notation) chips `ct_accel.c`, `ct_cursor.c`** | permissive X11/MIT in c files; required `ct_BlitMM.h`/`ct_BltHiQV.h` lack a licence header: **hold import closure** | F C Y M W I L P U, HiQV-dependent | Native UMS; separate XVideo | **2–4 kLOC**, X; resolve header provenance before copying a buildable port, or obtain primary register documentation for a new native definition set. | `102c:00e0/00e4/00e5`; hardware only |
+| [L](#3-snapshot-catalogue-and-notation) `chipsfb.c` | GPL tree notice | Generic software drawing only | Native, restricted to 800×600 and 8/16bpp in inspected code; no overlay | 1–2 kLOC mode-only; cannot satisfy accelerated F/C. | `102c:00e0/00e4/00e5`; hardware only |
+| H | No C&T family in r1beta5 | None established | VBE | No host port. | `102c:00e0/00e4/00e5`; hardware only |
 
 Test: **hardware only**. This is a documented source-licence gate, not a
 claim that acceleration is implemented. Baseline VBE software remains usable
@@ -1117,3 +1289,37 @@ The owner first allowed GPL-3.0 sources ("includi anche GPL-3") and then all lic
 - **Licence gating removed.** Any donor file may be used: GPL of any version, LGPL, MIT, BSD, and files whose notices are unresolved. That includes the 28 files with unresolved notices, the Chips & Technologies headers and VirtualBox `DevVGA-SVGA.cpp`, which is an emulator reference for f2-111.
 - **Notices still kept.** Every imported file keeps its original notice and an origin line, and the credits and the notices directory list it.
 - **Redistribution.** The owner redistributes regardless of licence differences (2026-10-22 23:55); no release-time licence list is kept.
+
+
+## Integrated native family status
+
+| Software engine (any VBE 2.0+ card with a linear frame buffer) | f2-101 |
+| S3 Savage family | relocated in f2-101b; f2-112 adds family transports with host validation, physical qualification pending |
+| ATI Radeon R100/RV100 (discrete R100/RV100/RV200 primary functions) | f2-103: MMIO FILL/COPY/SYNC and monochrome cursor; VBE modes; host fixtures, runtime pending; [source decisions](../validation/f2-103-radeon-r100.md) |
+| ATI Radeon R200/RV250/RV280, R300/R350/RV350/RV380, R420/R423 (X800) | f2-106: explicit discrete primary IDs; separate subgroup cache/feature gates; MMIO FILL/COPY/SYNC, PATTERN/WRITE and monochrome cursor; saved-pixel native comparisons, VBE modes; host fixtures pass, physical qualification pending; [source decisions](../validation/f2-106-radeon-r200-r400.md) |
+| NVIDIA Riva 128 (NV3, `12d2:0018`) | f2-120: independent PIO FILL/COPY/SYNC/PATTERN and monochrome cursor; lead-approved transport behind DM9, VBE modes; host evidence, physical qualification pending; [transport and limits](riva128-2d.md) |
+| NVIDIA TNT/TNT2, GeForce256/2/3/4, FX/GeForce6 | `nv2d`, NVIDIA TNT-GeForce6: f2-104 PIO approved behind DM9; f2-105 VRAM ring approved by amendment 1, activation behind DM9; VBE modes |
+| Matrox G200/G400/G450/G550 | f2-110: Linux v6.12 native FILL/COPY/SYNC, DAC cursor and private mono preparation; host evidence, physical qualification pending; [port record](matrox-2d.md) |
+| VMware SVGA II (`15ad:0405`) | f2-111: native FIFO FILL/COPY/SYNC and legacy cursor, host verified; runtime qualification pending. VMSVGA without native FILL and earlier `0710` use software; see [implementation record](vmware-svga.md). |
+| Trident Blade / CyberBlade (f2-113) | Native Blade/XP FILL/COPY/SYNC, activation read-back guard; host evidence, hardware pending. Shared 1023:8400/8500 owned here. See [port contract](trident-blade-2d.md). |
+| ATI Rage 128 / Rage 128 Pro (including donor-listed Mobility) | f2-115: native FILL/COPY/SYNC and optional monochrome cursor behind part A; host verified, lead runtime/physical qualification pending; [evidence](../validation/f2-115-rage128.md) |
+| Cirrus Logic GD5430/GD5434/GD5436/GD5446 | f2-116 native FILL/COPY/SYNC; host qualification, runtime pending; VBE modes |
+| Intel i810/i815 (`8086:7121/7123/7125/1132`) | f2-119 native FILL/COPY/SYNC and optional legacy cursor; kernel-owned DMA-pinned ring/cursor pages in proved-free GTT entries; saved PTEs restored on stop; host evidence, physical DM9 pending; [transport](intel-legacy-2d.md) |
+| Intel i740 (`8086:7800/00d1`) | f2-119 separate native LP_FIFO FILL/COPY/SYNC and optional legacy cursor; MONO disabled; host evidence, physical DM9 pending; [transport](intel-legacy-2d.md) |
+| Chips & Technologies HiQV 65550/54/55 | f2-122: native F/C/SYNC, optional pattern/staged write/mono cursor at 16/24 bpp; DM9 activation, host evidence, physical qualification pending; [port record](chips-hiqv.md) |
+| Intel i830/i845G/i855GM/i865G/i915G | f2-107: registered FILL/COPY/SYNC, owned GTT ring/HWS/scratch, breadcrumb and bounded stop; host models pass. i845G/i855GM/i915G candidates with qualified firmware ownership/cache publication; i830M/i865G remain refused for unproved chipset flush. Cursor/INVERT gated; silicon/DM9 validation pending. See [reservation contract](intel-ring-gtt-reservation.md). |
+| VIA UniChrome / UniChrome Pro | f2-108: native FILL/COPY/SYNC, staged WRITE when UMA scratch is proved; VBE modes, software cursor; shared `1023:8400/8500` belong exclusively to Trident f2-113. Host evidence only; see [port record](via-unichrome.md). |
+| SiS 300/540/630; separate SiS 315/330 and 550/650/660 derivatives | f2-109 native MMIO FILL/COPY/SYNC, PATTERN and legacy monochrome cursor; private INVERT; host model and hardware gates in [validation](../validation/f2-109-sis.md) |
+| S3 Trio64 / Trio64V+ / UV+ / V2 (`s3trio64`) | f2-118: separate Haiku r1beta5 RGB565 backend; host evidence in `s3-trio64-virge.md`; hardware qualification pending |
+| S3 ViRGE / VX / DX/GX / GX2 / MX / MX+ (`s3virge`) | f2-118: separate Haiku r1beta5 RGB565 backend, optional mono cursor; host evidence in `s3-trio64-virge.md`; hardware qualification pending |
+| NeoMagic MagicGraph | [f2-121](neomagic-2d.md): NM2200/2230/2360/2380, Linux v6.12 F/C/Y/W, X.Org monochrome cursor, native-only activation check; older chips and 32 bpp use software; physical qualification pending |
+| ATI Mach64 / Rage Mobility | f2-114: native FILL/COPY/SYNC and optional legacy cursor; VBE modes; [transport](mach64-2d.md); physical qualification pending. |
+| 3dfx Voodoo3 / single-chip VSA-100 | f2-117: native FILL/COPY/SYNC and optional legacy cursor; VBE modes; [transport](tdfx-2d.md); physical qualification pending. |
+
+The registry contains 22 exact-match native descriptors. Candidate registration
+is not physical qualification. All native operations remain subject to their
+family ownership, format, idle and saved-pixel activation proofs.
+
+The HiQV PCI examples above are corrected to `00e0/00e4/00e5` from the
+original 65555 manual and pinned X.Org table, as established in
+[chips-hiqv.md](chips-hiqv.md). The rejected `00c*` values are not aliases.

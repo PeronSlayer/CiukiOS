@@ -1,0 +1,35 @@
+VMware SVGA protocol header
+Origin: X.Org xf86-video-vmware src/svga_reg.h
+Commit: 8f0cf7c03597532feb1a8ccf3bb1cafcd6170f89
+Git blob: 0e1aa17b9bf7b5c3f890582dacf7fa39c537bba6
+https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-vmware/blob/8f0cf7c03597532feb1a8ccf3bb1cafcd6170f89/src/svga_reg.h
+Licence: MIT
+Imported at src/kernel/drivers/video/vmwaresvga/svga_reg.h.
+Only an origin comment was prepended; the upstream header is unchanged.
+The CiukiOS engine and adaptation are original GPL-2.0-only code.
+QEMU and VirtualBox sources were read as references, not imported.
+
+/**********************************************************
+ * Copyright 1998-2009 VMware, Inc.  All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use, copy,
+ * modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ **********************************************************/

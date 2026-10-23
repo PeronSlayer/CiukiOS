@@ -73,12 +73,13 @@ static void benchmark_tick(struct runtime *r,uint64_t now)
 static int request(void *ctx,unsigned op,unsigned index)
 {
     struct runtime *r=ctx; struct ciuki_message m;
-    desk_message(&m,op,op==DESK_GFX_BENCH ? 12 : 8);
+    desk_message(&m,op,(op==DESK_GFX_BENCH || op==DESK_GFX_QUERY_ENGINE) ? 12 : 8);
     uint32_t serial=++r->serial; desk_put32(m.data+4,serial);
     if (op==DESK_GFX_BENCH) desk_put32(m.data+8,index);
+    if (op==DESK_GFX_QUERY_ENGINE) desk_put32(m.data+8,CIUKI_DISPLAY_ENGINE_VERSION);
     if (du_window_queue(&r->window,&m)) return -1;
     if (op==DESK_GFX_BENCH) { r->bench_serial=serial;r->bench_pending=1;r->next_bench=du_now()+150000000ull; }
-    else if (op==DESK_GFX_QUERY) r->info_serial=serial;
+    else if ((op==DESK_GFX_QUERY || op==DESK_GFX_QUERY_ENGINE)) r->info_serial=serial;
     else r->system_serial=serial;
     return 0;
 }
@@ -106,7 +107,7 @@ static void message(struct du_window *w,const struct desk_packet *p,void *ctx)
         r->bench_pending=0;
         if (p->opcode==DESK_GFX_RESULT && p->result==-EBUSY) return; /* wait for focus/rate limit */
         gfx_receive(&r->app,p);
-    } else if ((p->opcode==DESK_GFX_INFO || (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_QUERY)) && p->serial==r->info_serial)
+    } else if ((p->opcode==DESK_GFX_INFO || p->opcode==DESK_GFX_INFO_ENGINE || (p->opcode==DESK_TASK_RESULT && (p->request==DESK_GFX_QUERY || p->request==DESK_GFX_QUERY_ENGINE))) && p->serial==r->info_serial)
         gfx_receive(&r->app,p);
     else if ((p->opcode==DESK_SYSTEM_INFO || (p->opcode==DESK_TASK_RESULT && p->request==DESK_SYSTEM_QUERY)) && p->serial==r->system_serial)
         gfx_receive(&r->app,p);
@@ -190,7 +191,7 @@ static void idle(void *ctx)
         }
     }
     if (now>=r->next_info) {
-        request(r,DESK_GFX_QUERY,0); request(r,DESK_SYSTEM_QUERY,0); r->next_info=now+1000000000ull;
+        request(r,DESK_GFX_QUERY_ENGINE,0); request(r,DESK_SYSTEM_QUERY,0); r->next_info=now+1000000000ull;
     }
     if (r->app.bench_running && !r->bench_pending && now>=r->next_bench)
         request(r,DESK_GFX_BENCH,r->app.bench_index);

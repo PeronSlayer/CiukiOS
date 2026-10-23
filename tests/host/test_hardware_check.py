@@ -45,7 +45,7 @@ class HardwareCheckTests(unittest.TestCase):
             temp = Path(directory)
             source = (ROOT / 'src/kernel/core/hardware_check.c').read_text()
             begin = source.index('static void serial_check(')
-            end = source.index('\nstatic void savage_check(', begin)
+            end = source.index('\n/* One DM9 dispatch', begin)
             (temp / 'serial_page.inc').write_text(source[begin:end])
             binary = temp / 'serial-page'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
@@ -116,7 +116,7 @@ class SavageSweepTests(unittest.TestCase):
                 '-Wno-unused-parameter','-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread',
                 '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-fsanitize=address,undefined',
                 '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/savage_sweep_test.c'),
-                str(ROOT/'src/kernel/drivers/savage2d.c'),str(ROOT/'src/kernel/lib/fmt.c'),'-o',str(binary)],check=True)
+                str(ROOT/'src/kernel/drivers/video/s3savage/savage2d.c'),str(ROOT/'src/kernel/lib/fmt.c'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True,env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
 
 if __name__=='__main__': unittest.main()

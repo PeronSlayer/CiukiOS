@@ -5,7 +5,7 @@
 #undef main
 #include <ciuki/cpu.h>
 #include <ciuki/registry.h>
-#include <ciuki/supersavage_display.h>
+#include "../../src/kernel/drivers/video/s3savage/supersavage_display.h"
 #include <ciuki/fbdev.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -85,7 +85,7 @@ static int mode_restore(struct supersavage_mode *s,const struct supersavage_mode
 #define supersavage_mode_save mode_save
 #define supersavage_mode_enter mode_enter
 #define supersavage_mode_restore mode_restore
-#include "../../src/kernel/drivers/supersavage_display.c"
+#include "../../src/kernel/drivers/video/s3savage/supersavage_display.c"
 #undef supersavage_mode_save
 #undef supersavage_mode_enter
 #undef supersavage_mode_restore

@@ -29,6 +29,10 @@ static struct usb_host host;
 static bool has_host, live_prompt, event_sent, retained, swept, winner;
 static unsigned scan_ms, attach_ms, prompt_ms, sweep_calls, mode_calls, restores, clears;
 static int scenario;
+static unsigned diagnostic_calls;
+static int diagnostic_error;
+static uint32_t diagnostic_mask;
+static bool diagnostic_safe,diagnostic_quarantined;
 static struct fb_device fb;
 static struct storage disk;
 static const struct pci_func gpu={.vendor=0x5333,.device=0x8c2e,.class_code=3};
@@ -106,13 +110,17 @@ unsigned pci_count(void) { return 1; }
 const struct pci_func *pci_get(unsigned i) { return i ? 0 : &gpu; }
 bool savage2d_supported(const struct pci_func *p) { return p==&gpu; }
 int savage2d_check_begin(struct vfs *v,bool *prior) { assert(v==&disk.vfs); *prior=retained; return 0; }
-int savage2d_attempt_end(struct vfs *v) { assert(v==&disk.vfs); clears++; return 0; }
-int savage2d_hardware_sweep(uint64_t end,savage_sweep_line line,void *ctx,struct savage_sweep_result *out)
+int savage2d_attempt_end(struct vfs *v) { assert(v==&disk.vfs); clears++; return scenario==12 ? -EIO : 0; }
+int savage2d_hardware_sweep(uint64_t end,void (*line)(void *,const char *),void *ctx,struct display_selftest_result *out)
 {
     assert(end==g_ticks+5000);
     sweep_calls++;
+    if (scenario>=7) {
+        *out=(struct display_selftest_result){.first=-1,.restored=scenario!=10,.tried=scenario==9};
+        return -EOPNOTSUPP;
+    }
     assert(sweep_calls<3 && (sweep_calls==1 || winner && swept && fb.bpp==16));
-    *out=(struct savage_sweep_result){.tried=12,.passed=2,.skipped=84,.completed=96,.first=1,.restored=true};
+    *out=(struct display_selftest_result){.tried=12,.passed=2,.skipped=84,.completed=96,.first=1,.restored=true};
     if (scenario==2 && sweep_calls==1) out->passed=0,out->first=-1;
     if (scenario==3 && sweep_calls==1) out->error=-ETIMEDOUT;
     if (scenario==4 && sweep_calls==2) out->restored=false,out->error=-EIO;
@@ -120,6 +128,15 @@ int savage2d_hardware_sweep(uint64_t end,savage_sweep_line line,void *ctx,struct
     winner=out->first>=0;
     return out->error;
 }
+static struct display_driver diagnostic_driver={.name="Recording adapter",.check_begin=savage2d_check_begin,
+    .attempt_end=savage2d_attempt_end,.selftest=savage2d_hardware_sweep};
+bool display_accel_disabled(const char **reason) { (void)reason; return false; }
+const struct display_driver *display_driver_bind(const struct fb_device *fb) { (void)fb; return &diagnostic_driver; }
+int fbdev_accel_diagnostic(struct vfs *v,uint64_t until,bool (*cancel)(void *),void *ctx,uint32_t *tested)
+{ (void)v;(void)until;(void)cancel;(void)ctx;diagnostic_calls++;
+  *tested=scenario==13 ? 1 : diagnostic_mask;return scenario==11 ? -EIO : diagnostic_error; }
+void display_driver_info(struct ciuki_display_engine_info *out)
+{ *out=(struct ciuki_display_engine_info){.cpu_ready=diagnostic_safe,.quarantined=diagnostic_quarantined}; }
 int display_check_begin(uint16_t id)
 {
     assert(id==0x117 && winner && sweep_calls==1 && !swept);
@@ -144,7 +161,10 @@ static void fixture(void)
     has_host=live_prompt=event_sent=retained=swept=winner=false;
     scan_ms=attach_ms=prompt_ms=sweep_calls=mode_calls=restores=clears=line_count=0; scenario=0;
     complete=tone_checked=false; summary_bytes=0; collecting_summary=false;
-    timer_calls=0;
+    timer_calls=0; diagnostic_calls=0; diagnostic_error=0; diagnostic_mask=15;
+    diagnostic_safe=true; diagnostic_quarantined=false;
+    diagnostic_driver.selftest=savage2d_hardware_sweep;
+    diagnostic_driver.check_begin=savage2d_check_begin;
     fb=(struct fb_device){.present=true,.mode_id=0x118,.width=1024,.height=768,.bpp=32,.pitch=4096,.phys=0xe8000000};
     g_boot.display.mode_count=1;
     g_boot.display.modes[0]=(struct ciuki_boot_display_mode){.id=0x117,.width=1024,.height=768,.bpp=16,.pitch=2048,.linear=1};
@@ -191,14 +211,32 @@ int main(void)
     puts("PASS f1-100 H keyboard/EC keys: one EC refresh request per second during the 5 s window, none without the EC");
     for (int s=0;s<=6;s++) {
         fixture(); scenario=s; retained=s==1;
-        savage_check(15000,&out);
-        if (s<=1) assert(out.status==HW_PASS && sweep_calls==2 && restores==1 && fb.bpp==32 && clears==!retained);
+        accelerator_check(15000,&out);
+        if (s<=1) assert(out.status==(retained ? HW_SKIP : HW_PASS) && sweep_calls==2 && restores==1 && fb.bpp==32 && clears==!retained);
         else if (s<=3) assert(out.status==HW_FAIL && sweep_calls==1 && !mode_calls);
         else if (s==4) assert(out.status==HW_FAIL && sweep_calls==2 && !restores && !clears);
         else if (s==5) assert(out.status==HW_FAIL && sweep_calls==1 && mode_calls==1 && !restores);
         else assert(out.status==HW_FAIL && sweep_calls==1 && restores==1);
     }
     puts("PASS f1-69 H sweep: winner recorded before 16 bpp, no winner/timeout gate, restored desktop, retained marker, unsafe writer/late watchdog refusal");
+    for (int s=7;s<=13;s++) {
+        fixture(); scenario=s; retained=s==8; diagnostic_calls=0;
+        accelerator_check(15000,&out);
+        assert(out.status==(s==7 ? HW_PASS : s==8 ? HW_SKIP : HW_FAIL));
+        assert(diagnostic_calls==(s==7 || s==11 || s==13));
+        assert(!mode_calls && clears==(s==7 || s==9 || s==11 || s==12 || s==13));
+    }
+    puts("PASS optional display sweep: clean refusal runs DM9; retained marker, touched/unsafe sweep, clear failure, native failure/missing COPY fail closed");
+    for (unsigned c=0;c<8;c++) {
+        fixture(); diagnostic_driver.selftest=0; diagnostic_driver.check_begin=0;
+        diagnostic_error=c==1 || c==4 || c==5 ? -EOPNOTSUPP : c==2 ? -EIO : c==7 ? -ETIMEDOUT : 0;
+        diagnostic_mask=c==3 ? 1 : 15;
+        diagnostic_safe=c!=4 && c!=6; diagnostic_quarantined=c==5;
+        accelerator_check(15000,&out);
+        assert(out.status==(c==0 ? HW_PASS : c==1 ? HW_SKIP : HW_FAIL));
+        assert(diagnostic_calls==1 && !sweep_calls && !clears && !mode_calls);
+    }
+    puts("PASS generic DM9 without sweep: native coverage, refusal, error, timeout, CPU safety and quarantine");
     fixture(); hardware_check_run();
     assert(tone_checked && complete && sweep_calls==2 && restores==1 && fb.bpp==32 && timer_calls==2);
     fixture(); scenario=4; hardware_check_run();

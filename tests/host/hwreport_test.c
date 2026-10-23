@@ -57,7 +57,7 @@ int main(int argc,char **argv)
     strcpy(h.log_pending,"[ata] count=9 user=secret-user ip=203.0.113.78\n"); h.log_pending_bytes=(uint32_t)strlen(h.log_pending);
     struct ciuki_display_info v={.mode_count=1,.width=640,.height=480,.bpp=16};
     strcpy(v.product,"Synthetic VGA"); v.modes[0]=(struct ciuki_display_mode){.id=0x111,.width=640,.height=480,.bpp=16,.current=1};
-    struct ciuki_accel_info e={.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=3};
+    struct ciuki_accel_info e={.driver=CIUKI_ACCEL_DRIVER_LEGACY_NATIVE,.capabilities=3};
     struct ciuki_net_state net={.present=1,.link=2,.state=1,.mac={0xde,0xad,0xbe,0xef,0x12,0x34},.ipv4={203,0,113,78}};
     strcpy(net.driver,"e100"); strcpy(net.reason,"DO-NOT-EXPORT");
     const char log[]="[ata] count=3 error=-5 path=/private/secret.txt\n[net] hostname=secret-host mac=de:ad:be:ef:12:34 ipv4=203.0.113.78\n"

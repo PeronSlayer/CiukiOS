@@ -1,0 +1,93 @@
+Matrox native 2D port: Linux v6.12 fbdev
+Upstream: https://github.com/torvalds/linux/tree/v6.12/drivers/video/fbdev/matrox
+Imported/adapted register recipes: matroxfb_accel.c (GPL-2.0-only).
+Imported/adapted register definitions: matroxfb_base.h, matroxfb_DAC1064.h (SPDX GPL-2.0).
+Sources checked for PCI/revision/pitch/BAR policy: matroxfb_base.c (GPL-2.0-only).
+DAC reference: matroxfb_DAC1064.c (GPL-2.0-only), (c) 1998-2002 Petr Vandrovec;
+Portions Copyright (c) 2001 Matrox Graphics Inc.
+Only native fragments are imported; Linux OS glue, modes, PLLs and DMA are not.
+Ciuki adaptation is GPL-2.0-only. Complete GPL version 2 text: LICENSE in
+the repository; /system/licenses/matrox-GPL-2.0.txt in the system image.
+
+Original matroxfb_accel.c origin, author and contributor notice:
+
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ *
+ * Hardware accelerated Matrox Millennium I, II, Mystique, G100, G200 and G400
+ *
+ * (c) 1998-2002 Petr Vandrovec <vandrove@vc.cvut.cz>
+ *
+ * Version: 1.65 2002/08/14
+ *
+ * MTRR stuff: 1998 Tom Rini <trini@kernel.crashing.org>
+ *
+ * Contributors: "menion?" <menion@mindless.com>
+ *                     Betatesting, fixes, ideas
+ *
+ *               "Kurt Garloff" <garloff@suse.de>
+ *                     Betatesting, fixes, ideas, videomodes, videomodes timmings
+ *
+ *               "Tom Rini" <trini@kernel.crashing.org>
+ *                     MTRR stuff, PPC cleanups, betatesting, fixes, ideas
+ *
+ *               "Bibek Sahu" <scorpio@dodds.net>
+ *                     Access device through readb|w|l and write b|w|l
+ *                     Extensive debugging stuff
+ *
+ *               "Daniel Haun" <haund@usa.net>
+ *                     Testing, hardware cursor fixes
+ *
+ *               "Scott Wood" <sawst46+@pitt.edu>
+ *                     Fixes
+ *
+ *               "Gerd Knorr" <kraxel@goldbach.isdn.cs.tu-berlin.de>
+ *                     Betatesting
+ *
+ *               "Kelly French" <targon@hazmat.com>
+ *               "Fernando Herrera" <fherrera@eurielec.etsit.upm.es>
+ *                     Betatesting, bug reporting
+ *
+ *               "Pablo Bianucci" <pbian@pccp.com.ar>
+ *                     Fixes, ideas, betatesting
+ *
+ *               "Inaky Perez Gonzalez" <inaky@peloncho.fis.ucm.es>
+ *                     Fixes, enhandcements, ideas, betatesting
+ *
+ *               "Ryuichi Oikawa" <roikawa@rr.iiij4u.or.jp>
+ *                     PPC betatesting, PPC support, backward compatibility
+ *
+ *               "Paul Womar" <Paul@pwomar.demon.co.uk>
+ *               "Owen Waller" <O.Waller@ee.qub.ac.uk>
+ *                     PPC betatesting
+ *
+ *               "Thomas Pornin" <pornin@bolet.ens.fr>
+ *                     Alpha betatesting
+ *
+ *               "Pieter van Leuven" <pvl@iae.nl>
+ *               "Ulf Jaenicke-Roessler" <ujr@physik.phy.tu-dresden.de>
+ *                     G100 testing
+ *
+ *               "H. Peter Arvin" <hpa@transmeta.com>
+ *                     Ideas
+ *
+ *               "Cort Dougan" <cort@cs.nmt.edu>
+ *                     CHRP fixes and PReP cleanup
+ *
+ *               "Mark Vojkovich" <mvojkovi@ucsd.edu>
+ *                     G400 support
+ *
+ * (following author is not in any relation with this code, but his code
+ *  is included in this driver)
+ *
+ * Based on framebuffer driver for VBE 2.0 compliant graphic boards
+ *     (c) 1998 Gerd Knorr <kraxel@cs.tu-berlin.de>
+ *
+ * (following author is not in any relation with this code, but his ideas
+ *  were used when writing this driver)
+ *
+ *		 FreeVBE/AF (Matrox), "Shawn Hargreaves" <shawn@talula.demon.co.uk>
+ *
+ */
+
+

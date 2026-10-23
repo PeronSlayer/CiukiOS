@@ -19,6 +19,7 @@ static void irq_restore(uint32_t flags) { (void)flags; }
 static uint8_t disk_ram[33u * 65536u];
 static unsigned disk_run_pages[32];
 #define P2V(p) ((void *)(disk_ram + (p)))
+#define V2P(v) ((uint32_t)((const uint8_t *)(v) - disk_ram))
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
     CHECK(pages == 16);
@@ -45,6 +46,15 @@ static unsigned disk_trackers;
 void *kmalloc(size_t bytes) { void *p = malloc(bytes); if (p) disk_trackers++; return p; }
 void kfree(void *p) { if (p) { CHECK(disk_trackers); disk_trackers--; free(p); } }
 #include "../../../src/kernel/vm/dosvm_disk.c"
+/* Transient overlays only; persistent title storage has its own harness (dos/persistent_saves_test.c). */
+int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
+                        char path[128],unsigned *archived)
+{
+    (void)s; *archived=0; f->fd=-1; f->absent=true;
+    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    return -FS_EROFS;
+}
+#include "../../../src/kernel/vm/dos_save.c"
 static struct dosvm vm;
 void kpreempt_point(void) { CHECK(!vm.disk_busy); }
 static const uint8_t program[]={0xb8,0x00,0x4c,0xcd,0x21};
@@ -79,7 +89,7 @@ static void ordinary_operations(struct storage *s)
     readable_tree(&s->volumes[2].fat,s->volumes[2].fat.root,0);
     int h=vfs_open(&table,"C:/SYSTEM/SETTINGS.CFG",VFS_WRITE|VFS_READ|VFS_CREATE,0,0);CHECK(h>=0);
     size_t done;OK(vfs_write(&table,h,"volume=17\n",10,&done));CHECK(done==10);OK(vfs_close(&table,h));
-    char path[24];OK(dosvm_window_base(path));CHECK(!strcmp(path,DOSVM_BUNDLED_BASE));
+    char path[32];OK(dosvm_window_base(path));CHECK(!strcmp(path,DOSVM_BUNDLED_BASE));
     memset(&vm,0,sizeof(vm));vm.info.key.generation=1;vm.info.commitment=DOSVM_LOW_CAP;
     OK(dosvm_disk_open(&vm,path));uint8_t sector[512];
     OK(dosvm_disk_read(&vm,128,sector));CHECK(!memcmp(sector,program,sizeof(program)));

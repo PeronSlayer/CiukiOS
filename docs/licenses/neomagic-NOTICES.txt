@@ -1,0 +1,63 @@
+CiukiOS NeoMagic native port (f2-121)
+
+Linux v6.12 drivers/video/fbdev/neofb.c and include/video/neomagic.h:
+https://github.com/torvalds/linux/tree/v6.12/drivers/video/fbdev
+Engine fragments: Denis Oliver Kropp, 2001-2002; card-specific code based
+on XFree86's NeoMagic driver. The CiukiOS port replaces Linux glue and
+unbounded waits, preserves the upstream GPL notice, and uses GPL version 2
+(the Linux tree COPYING and this repository LICENSE contain the terms).
+
+/*
+ * linux/include/video/neo_reg.h -- NeoMagic Framebuffer Driver
+ *
+ * Copyright (c) 2001  Denis Oliver Kropp <dok@convergence.de>
+ *
+ * This file is subject to the terms and conditions of the GNU General
+ * Public License.  See the file COPYING in the main directory of this
+ * archive for more details.
+ */
+
+
+X.Org xf86-video-neomagic src/neo_cursor.c:
+6661bdd4551e4e63e983685464a277845aed3012
+https://gitlab.freedesktop.org/xorg/driver/xf86-video-neomagic
+https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-neomagic/blob/6661bdd4551e4e63e983685464a277845aed3012/src/neo_cursor.c
+Cursor packing, colour and address fragments adapted for the CiukiOS masks
+and bounded signed positions. The original notice and author credits follow.
+
+/**********************************************************************
+Copyright 1998, 1999 by Precision Insight, Inc., Cedar Park, Texas.
+
+                        All Rights Reserved
+
+Permission to use, copy, modify, distribute, and sell this software and
+its documentation for any purpose is hereby granted without fee,
+provided that the above copyright notice appear in all copies and that
+both that copyright notice and this permission notice appear in
+supporting documentation, and that the name of Precision Insight not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.  Precision Insight
+and its suppliers make no representations about the suitability of this
+software for any purpose.  It is provided "as is" without express or
+implied warranty.
+
+PRECISION INSIGHT DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO
+EVENT SHALL PRECISION INSIGHT AND/OR ITS SUPPLIERS BE LIABLE FOR ANY
+SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER
+RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+**********************************************************************/
+
+/*
+ * The original Precision Insight driver for
+ * XFree86 v.3.3 has been sponsored by Red Hat.
+ *
+ * Authors:
+ *   Jens Owen (jens@tungstengraphics.com)
+ *   Kevin E. Martin (kevin@precisioninsight.com)
+ *
+ * Port to Xfree86 v.4.0
+ *   1998, 1999 by Egbert Eich (Egbert.Eich@Physik.TU-Darmstadt.DE)
+ */

@@ -1195,3 +1195,4 @@ int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS;
 int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }
 int ciuki_display_accel(int fd,const struct ciuki_accel_request *q) { (void)fd;(void)q;return -ENOSYS; }
 int ciuki_display_accel_info(int fd,uint32_t generation,struct ciuki_accel_info *out) { (void)fd;(void)generation;(void)out;return -ENOSYS; }
+int ciuki_display_engine_info(int fd,uint32_t generation,struct ciuki_display_engine_info *out) { (void)fd;(void)generation;(void)out;return -ENOSYS; }

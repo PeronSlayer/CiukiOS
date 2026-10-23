@@ -1,6 +1,6 @@
-/* Guest VBE modes implemented by the native SuperSavage provider.
+/* Guest VBE modes implemented by native display providers.
  * Timings: VESA DMT 640x480@60 and 800x600@60; programming follows
- * SavageModeInit/savagefb_decode_var (see supersavage-fullscreen.md).
+ * The mode-driver implementation documents its upstream timing sources.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_DOS_VIDEO_MODES_H
 #define CIUKI_DOS_VIDEO_MODES_H

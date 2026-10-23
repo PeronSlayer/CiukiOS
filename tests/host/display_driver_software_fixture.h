@@ -1,0 +1,17 @@
+/* Software-only adapter boundary for the independent mode-service fixture. */
+bool display_accel_disabled(const char **reason)
+{
+    if (reason) *reason="software";
+    return !!(g_boot.flags & CBI_F_SAFE_MODE);
+}
+const struct display_driver *display_driver_bind(const struct fb_device *fb) { (void)fb; return NULL; }
+void display_driver_software(const char *reason) { (void)reason; }
+void display_driver_record(void) { }
+bool display_driver_refresh(void) { return false; }
+void display_driver_count(unsigned operation,bool native) { (void)operation; (void)native; }
+void display_driver_info(struct ciuki_display_engine_info *out)
+{
+    memset(out,0,sizeof(*out)); out->version=1; out->size=sizeof(*out);
+    strcpy(out->driver_id,"swdib"); strcpy(out->display_name,"Software renderer");
+    out->kind=CIUKI_ENGINE_SOFTWARE; out->software_operations=15; out->cpu_ready=1;
+}

@@ -82,7 +82,7 @@ void kwait_wake_all(struct kwait *q) { (void)q; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
 {
-    CHECK(!strcmp(name, "savage-marker") && fn && !arg && prio == P_NORMAL && !locks);
+    CHECK(!strcmp(name, "display-marker") && fn && !arg && prio == P_NORMAL && !locks);
     marker_worker_creates++;
     marker_worker.prio = prio;
     return fail_marker_worker ? NULL : &marker_worker;
@@ -165,7 +165,11 @@ int registry_release(int h, uint32_t g) { (void)h; (void)g; return -EINVAL; }
 int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool share)
 { (void)t; (void)s; (void)e; (void)o; (void)share; return -EINVAL; }
 
+#include "../../src/kernel/drivers/video/swdib.c"
 #include "../../src/kernel/drivers/fbdev.c"
+#ifndef DISPLAY_DRIVER_FIXTURE_REAL
+#include "display_driver_legacy_fixture.h"
+#endif
 #include "../../src/kernel/drivers/fbdev_probe.c"
 
 /* The included kernel uses Ciuki's ABI constants. These test-only headers
@@ -410,10 +414,12 @@ static int copy_hardware(void *ctx, const struct fb_rect *r, int32_t x, int32_t 
     copy_calls++; return copy_result;
 }
 
+static bool copy_cpu_ready(void *ctx) { (void)ctx; return true; }
+
 static void copy_fallback_tests(void)
 {
     long page = sysconf(_SC_PAGESIZE); CHECK(page > 0);
-    uint8_t *unreadable = mmap(0, (size_t)page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *unreadable = mmap(0, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     CHECK(unreadable != MAP_FAILED);
     if (unreadable == MAP_FAILED) exit(2);
     struct fb_device d = {
@@ -423,7 +429,7 @@ static void copy_fallback_tests(void)
     };
     struct fb_rect r = {1,1,8,6};
     for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-        CHECK(fbdev_copy_to(&d, &r, r.x + dx, r.y + dy) == -EAGAIN);
+        CHECK(fbdev_copy_to(&d, &r, r.x + dx, r.y + dy) == 0);
     CHECK(fbdev_copy_to(&d, 0, 0, 0) == -EINVAL);
     CHECK(fbdev_copy_to(&d, &r, -1, 0) == -EINVAL);
     CHECK(fbdev_copy_to(&d, &r, 16, 0) == -EINVAL);
@@ -435,12 +441,12 @@ static void copy_fallback_tests(void)
         .size = sizeof(q), .operation = CIUKI_ACCEL_COPY, .generation = 7,
         .rect = {1,1,2,2,8,6},
     };
-    CHECK(fbdev_accel_request(&q) == -EAGAIN && !locks);
-    struct accel_ops ops = {.sync = copy_sync, .copy_rect = copy_hardware, .capabilities = copy_capabilities};
+    CHECK(fbdev_accel_request(&q) == 0 && !locks);
+    struct accel_ops ops = {.sync = copy_sync, .copy_rect = copy_hardware, .capabilities = copy_capabilities, .cpu_ready = copy_cpu_ready};
     acceleration = &ops;
     for (copy_caps = 0; copy_caps <= 3; copy_caps++) {
         copy_calls = copy_syncs = 0;
-        CHECK(fbdev_accel_request(&q) == ((copy_caps & 1u) ? 0 : -EAGAIN));
+        CHECK(fbdev_accel_request(&q) == 0);
         CHECK(copy_calls == ((copy_caps & 1u) ? 1u : 0u) && copy_syncs == ((copy_caps & 1u) ? 0u : 1u));
         CHECK(!locks && !drawing);
     }
@@ -460,7 +466,7 @@ static void boot_fixture(bool vbe3)
 {
     memset(&g_boot, 0, sizeof(g_boot));
     memset(&device, 0, sizeof(device));
-    initialized = false;
+    initialized = false; accel_blocked = false;
     fail_map = fail_activate = fail_alloc = false;
     map_calls = ends = passes = data_records = 0;
     g_cpu_tsc = false; g_tsc_per_ms = 0;

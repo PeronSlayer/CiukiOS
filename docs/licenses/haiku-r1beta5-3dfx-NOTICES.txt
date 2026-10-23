@@ -1,0 +1,85 @@
+Haiku r1beta5 3dfx fragments used by the CiukiOS native 2D port.
+Commit: a1f00118db8b858feb73f64ac4dc3d038b82bf9b
+Upstream: https://github.com/haiku/haiku/tree/r1beta5
+
+Copyright 2010 Haiku, Inc. All rights reserved.
+Authors: Gerald Zajac (drawing, cursor, register and memory fragments).
+Copyright 2007-2010 Haiku, Inc. All rights reserved.
+Authors: Gerald Zajac (kernel PCI identity/BAR assignments).
+
+Imported/ported closure:
+- src/add-ons/accelerants/3dfx/3dfx.h -> registers.h
+- src/add-ons/accelerants/3dfx/3dfx_draw.cpp -> engine.c
+- src/add-ons/accelerants/3dfx/3dfx_cursor.cpp -> engine.c
+- src/add-ons/accelerants/3dfx/3dfx_init.cpp -> engine.c (read-only sizing)
+- src/add-ons/accelerants/3dfx/3dfx_mode.cpp -> engine.c (FIFO/idle fence only)
+- src/add-ons/kernel/drivers/graphics/3dfx/driver.cpp -> driver.c (PCI/BAR)
+All runtime files are under src/kernel/drivers/video/tdfx/.
+Haiku engine.cpp and its Be Sample code are not imported.
+Linux v6.12 include/video/tdfx.h and drivers/video/fbdev/tdfxfb.c, and
+X.Org tdfxdefs.h at 278042ff4c469f24ab7bc28e517e8a78e2821ddc,
+were read as corroborating register references, not imported implementations.
+New OS glue, bounded waits, quarantine, leases and host fixtures: CiukiOS.
+
+The vast majority of code in this repository was written by the Haiku Project,
+and is licensed under the MIT license, which appears below. There are some
+notable exceptions to this, such as the GNU C library (which is under the GPL)
+as well as many other files in this repository which are under other licenses.
+Every piece of source code should have its license specified at the top, but
+there is also a (probably) comprehensive set of known licenses in the
+`data/system/data/licenses` directory.
+
+
+The MIT License
+-----------------------------------------------------------
+
+Copyright (c) <year> <copyright holders>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+3dfx_mode.cpp additionally carries the following notice:
+
+/*
+	Some of the code in this source file was adapted from the X.org tdfx
+	video driver, and was covered by the following copyright and license.
+	--------------------------------------------------------------------------
+
+	Copyright 1998-1999 Precision Insight, Inc., Cedar Park, Texas.
+	All Rights Reserved.
+
+	Permission is hereby granted, free of charge, to any person obtaining a
+	copy of this software and associated documentation files (the
+	"Software"), to deal in the Software without restriction, including
+	without limitation the rights to use, copy, modify, merge, publish,
+	distribute, sub license, and/or sell copies of the Software, and to
+	permit persons to whom the Software is furnished to do so, subject to
+	the following conditions:
+
+	The above copyright notice and this permission notice (including the
+	next paragraph) shall be included in all copies or substantial portions
+	of the Software.
+
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+	OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+	MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+	IN NO EVENT SHALL PRECISION INSIGHT AND/OR ITS SUPPLIERS BE LIABLE FOR
+	ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+	TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+	SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/

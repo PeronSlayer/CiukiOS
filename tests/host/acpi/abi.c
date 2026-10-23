@@ -2,8 +2,8 @@
 #include <ciuki/abi.h>
 #include <ciuki/firmware_abi.h>
 _Static_assert(CIUKI_SYS_DEVICES == 76, "v1 syscall preserved");
-_Static_assert(CIUKI_DEVICES_VERSION == 1, "v1 version preserved");
-_Static_assert(sizeof(struct ciuki_devices_info) == 34696, "v1 bytes preserved");
+_Static_assert(CIUKI_DEVICES_VERSION == 2, "v2 version (display driver model)");
+_Static_assert(sizeof(struct ciuki_devices_info) == 38536, "v2 bytes");
 _Static_assert(CIUKI_FIRMWARE_VERSION == 2, "separate version");
 _Static_assert(sizeof(struct ciuki_firmware_page) == 2328, "page size");
 _Static_assert(_Alignof(struct ciuki_firmware_page) == 4, "page alignment");

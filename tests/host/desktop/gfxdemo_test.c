@@ -7,7 +7,7 @@
 static struct gfx_app app;
 static struct du_ui ui;
 static uint32_t portrait[256*256],pixels[760*640],scratch[640*480],screen[640*480];
-static struct ciuki_accel_info status={.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=1,.generation=9};
+static struct ciuki_accel_info status={.driver=CIUKI_ACCEL_DRIVER_LEGACY_NATIVE,.capabilities=1,.generation=9};
 static uint64_t clock_ns;
 static int failure,upload_failure,stopped,coarse;
 static unsigned hardware,uploads;
@@ -81,8 +81,9 @@ int main(int argc,char **argv)
     assert(!app.frames); /* timer ticks cannot claim presented frames */
     for (unsigned i=1;i<=75;i++) { gfx_advance(&app,1000000000ull+i*GFX_FRAME_NS);gfx_presented(&app,1000000000ull+i*GFX_FRAME_NS); }
     assert(!app.fps10); /* benchmark page does not publish scene FPS */
-    struct desk_packet p={.opcode=DESK_GFX_INFO,.width=1024,.height=768,.bpp=32,
-        .accelerator={.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=3,.operations=123,.generation=9}};
+    struct desk_packet p={.opcode=DESK_GFX_INFO_ENGINE,.width=1024,.height=768,.bpp=32,
+        .accelerator={.driver=CIUKI_ACCEL_DRIVER_LEGACY_NATIVE,.capabilities=3,.operations=123,.generation=9}};
+    strcpy(p.engine.driver_id,"fake");
     gfx_receive(&app,&p);p.opcode=DESK_SYSTEM_INFO;p.performance[0]=120;p.performance[4]=60000000;p.performance[5]=120000000;gfx_receive(&app,&p);
     for(unsigned i=0;i<6;i++) app.results[i]=(struct gfx_result){.bytes=640ull*480*4*4,.ns=8000000+i*1000000,.samples=4,.operations=i<3 ? 4 : 0};
     du_render(&ui);assert(!app.scene.error);at_save(argv[2],"benchmark",&ui);
@@ -97,7 +98,7 @@ int main(int argc,char **argv)
     p=(struct desk_packet){.opcode=DESK_GFX_RESULT,.index=0,.benchmark={1000000,2000000,1}};
     for(unsigned i=0;i<4;i++) gfx_receive(&app,&p);assert(app.bench_index==1 && app.results[0].samples==4 && requests==1);
     p.index=1;p.result=-ENODEV;gfx_receive(&app,&p);assert(app.bench_index==2 && app.results[1].error==-ENODEV);
-    app.bench_running=0;app.accelerator=(struct ciuki_accel_info){0};app.results[0].error=-ENODEV;
+    app.bench_running=0;app.accelerator=(struct ciuki_accel_info){0};strcpy(app.engine.driver_id,"swdib");app.results[0].error=-ENODEV;
     du_render(&ui);assert(!app.scene.error);at_save(argv[2],"software-only",&ui);
     du_resize(&ui,pixels,560,360);du_render(&ui);select_page(1);du_render(&ui);
     assert(app.scene.width==261 && app.scene.height==196);

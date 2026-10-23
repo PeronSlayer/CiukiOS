@@ -1,0 +1,39 @@
+{
+  "project": "X.Org xf86-video-chips",
+  "upstream": "https://gitlab.freedesktop.org/xorg/driver/xf86-video-chips",
+  "mirror": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-chips",
+  "revision": "9187d76bd4f8d500fc3403b6d4a7bef55508bf2b",
+  "kind": "adapted fragments; no X server host",
+  "files": [
+    {
+      "path": "src/ct_accel.c",
+      "downloaded_utf8_sha256": "b7a4c8cf84604718c4ce0df13265d08f97d62b320f37169db819dc2c2f5bfe0f",
+      "use": "Solid fill, directional screen copy and 8x8 monochrome pattern sequences; DEC host-transfer helpers excluded.",
+      "notice": "original file notice preserved"
+    },
+    {
+      "path": "src/ct_cursor.c",
+      "downloaded_utf8_sha256": "cf00de9cbfe5b31c23f993ab2ab4e06d7d9932f5d137c7516a39a2bb94913fb9",
+      "use": "HiQV cursor base, signed position, enable/disable and extended palette sequence; packing translated to the legacy Ciuki opaque mask.",
+      "notice": "original file notice preserved"
+    },
+    {
+      "path": "src/ct_driver.c",
+      "downloaded_utf8_sha256": "7e52d019d2b62037400b704661b51b6f264072acd4969f6e884a361e2c639917",
+      "use": "65550/54/55 PCI IDs, BR offsets, MMIO location and panel/scratch constraints; native modes excluded.",
+      "notice": "original file notice preserved"
+    },
+    {
+      "path": "src/ct_BltHiQV.h",
+      "downloaded_utf8_sha256": "c74c61c25af680012b087a953b5d788643abef76b360ce270880ef9d49e6b133",
+      "use": "Register values, address limits and warning against BR reads; unbounded waits not imported.",
+      "notice": "unspecified in header"
+    }
+  ],
+  "notice": "docs/licenses/chipshiqv-NOTICES.txt",
+  "local_files": [
+    "hiqv.h",
+    "hiqv_engine.c",
+    "chipshiqv.c"
+  ]
+}

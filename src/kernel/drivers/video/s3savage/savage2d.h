@@ -3,11 +3,27 @@
 #ifndef CIUKI_SAVAGE2D_H
 #define CIUKI_SAVAGE2D_H
 #include <ciuki/accel.h>
+/* Private source compatibility for the frozen legacy snapshot. */
+#define CIUKI_ACCEL_DRIVER_SAVAGE CIUKI_ACCEL_DRIVER_LEGACY_NATIVE
+const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *);
+void savage2d_record(void);
+struct ciuki_accel_info;
+void savage2d_snapshot(struct ciuki_accel_info *);
 struct pci_func;
 #define SAVAGE_MMIO_BYTES 0x80000u
 #define SAVAGE_BCI 0x10000u
 #define SAVAGE_STATUS 0x48c60u
 #define SAVAGE_EVENT_STATUS 0x48c64u
+#define SAVAGE_EARLY_STATUS 0x48c00u
+#define SAVAGE_EARLY_MMIO 0x1000000u
+#define SAVAGE_COB_BYTES 0x20000u
+#define SAVAGE_COB_LIMIT 0x800000u /* MM48C14 offset bits 22:11 */
+enum savage_chip {
+    SAVAGE_UNKNOWN, SAVAGE_3D, SAVAGE_MX, SAVAGE_4, SAVAGE_PRO,
+    SAVAGE_TWISTER, SAVAGE_DDR, SAVAGE_SUPER
+};
+enum savage_chip savage2d_chip(uint16_t device);
+unsigned savage2d_framebuffer_bar(const struct pci_func *);
 struct savage_io {
     void *ctx;
     uint32_t (*read32)(void *, uint32_t);
@@ -55,6 +71,8 @@ struct savage2d {
     /* submitted includes BCI register setup, before drawing is enabled. */
     bool mmio_saved, status_ready, submitted, final_idle_checked;
     bool event_pending;
+    enum savage_chip chip;
+    uint32_t status_reg, fifo_mask, cob_offset, saved_cob;
 };
 bool savage2d_supported(const struct pci_func *);
 /* f2-92: engine-only rows [first, end) for a mode, VRAM size and cursor
@@ -63,7 +81,11 @@ bool savage2d_offscreen_span(const struct fb_device *, uint32_t vram, uint32_t c
                              uint32_t *first, uint32_t *end);
 /* No register/file access: decide before scheduling marker persistence. */
 bool savage2d_eligible(const struct fb_device *);
-/* Attempt marker file I/O for kernel callers, outside presenter locks. */
+/* Part-B marker export boundary: BEGIN preserves eligibility/EngineConfig
+ * and grants one durable activation only after keyed commit + close. END
+ * clears that pinned key only after fresh BEGIN; failure annotates it without
+ * truncation. Retained diagnostic markers grant neither permission. All three
+ * run in worker context outside presenter/device-work locks. */
 struct vfs;
 int savage2d_attempt_begin(struct vfs *);
 int savage2d_attempt_end(struct vfs *);
@@ -79,6 +101,11 @@ void savage2d_summary_safe_mode(void);
 const struct accel_ops *savage2d_fallback_ops(void);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset);
+/* Early chips require a disjoint driver-owned 128 KiB VRAM COB. Zero means
+ * unavailable. No register access on invalid family/geometry/reservation. */
+int savage2d_start_chip(struct savage2d *, const struct savage_io *, const struct fb_device *,
+    enum savage_chip, uint8_t *cursor, uint32_t cursor_offset, uint32_t cob_offset);
+bool savage2d_cob_span(const struct fb_device *, uint32_t vram, uint32_t *offset);
 #define SAVAGE_CONFIGS 96u
 #define SAVAGE_SWEEP_BYTES (256u * 1024u)
 struct savage_config { uint32_t descriptor; uint8_t depth; };

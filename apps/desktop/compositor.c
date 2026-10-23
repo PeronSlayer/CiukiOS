@@ -1080,7 +1080,7 @@ static uint32_t accel_query(struct desktop *d)
     return caps>0 ? (uint32_t)caps : 0;
 }
 /* f2-96: one pointer on screen. CURSOR_SET hides the hardware cursor before
- * loading the shape (savage2d cursor_set), so a loaded cursor is hidden
+ * loading the shape (native cursor_set), so a loaded cursor is hidden
  * until the frame's MOVE and SHOW. */
 static int pointer_load(struct desktop *d)
 {
@@ -1093,7 +1093,7 @@ static int pointer_load(struct desktop *d)
 }
 /* Hide a hardware cursor that no longer owns the pointer. A refusal other
  * than busy/stale means the engine is gone, and the kernel hides the cursor
- * whenever it stops or quarantines the engine (savage2d stop_engine/fault). */
+ * whenever it stops or quarantines the engine (native stop/fault). */
 static void pointer_hide(struct desktop *d)
 {
     if (d->hw_cursor || !d->hw_cursor_shown) return;

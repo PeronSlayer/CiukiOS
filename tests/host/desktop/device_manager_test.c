@@ -13,12 +13,12 @@ static uint64_t monotonic(void *ctx) { (void)ctx; return monotonic_ns; }
 static int fail_query, fail_save, loads, queries, saves;
 static int hwid_queries;
 static int hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
-{ (void)ctx; hwid_queries++; return cp_hwid_lookup_json("{\"8086:2415\": \"Pack AC97 device\"}", vendor, device, out, size); }
+{ (void)ctx; hwid_queries++; return cp_hwid_lookup_json("{\"8086:2415\": \"Pack AC97 device\", \"8086:2485\": \"Intel ICH3 AC97 audio\", \"5333:8c2e\": \"S3 SuperSavage IX/C SDR\"}", vendor, device, out, size); }
 static int usb_hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 { (void)ctx; return cp_hwid_lookup_json("{\"1234:0001\": \"USB Pack Keyboard\"}", vendor, device, out, size); }
 static int display(void *ctx,struct ciuki_display_info *out) { (void)ctx; display_fixture(out); return 0; }
 static int engine(void *ctx,struct ciuki_accel_info *out)
-{ (void)ctx; *out=(struct ciuki_accel_info){.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=3}; return 0; }
+{ (void)ctx; *out=(struct ciuki_accel_info){.driver=CIUKI_ACCEL_DRIVER_LEGACY_NATIVE,.capabilities=3}; return 0; }
 static int network(void *ctx,struct ciuki_net_state *out)
 { (void)ctx; *out=(struct ciuki_net_state){.version=CIUKI_NET_VERSION,.size=sizeof(*out),.present=1,.link=CIUKI_NET_LINK_UP}; return 0; }
 static int mixer(void *ctx,int *volume,int *muted) { (void)ctx; *volume=70; *muted=0; return 0; }
@@ -38,7 +38,7 @@ static char boot[128] = "safe=0 serial=1 video=1024x768 input=firmware\n";
 static int settings_load(void *c, char *s, size_t cap, size_t *n)
 { (void)c; const char text[] = "version=1\nwallpaper=none\n"; assert(cap >= sizeof(text)); memcpy(s, text, sizeof(text)); *n = sizeof(text) - 1; return 0; }
 static int devices(void *ctx, struct ciuki_devices_info *out)
-{ (void)ctx; queries++; assert(out->version == 1 && out->size == sizeof(*out)); *out = sample; return fail_query; }
+{ (void)ctx; queries++; assert(out->version == CIUKI_DEVICES_VERSION && out->size == sizeof(*out)); *out = sample; return fail_query; }
 static int firmware_error, firmware_queries;
 static int firmware(void *ctx, struct ciuki_firmware_page *p)
 {
@@ -164,6 +164,10 @@ int main(int argc, char **argv)
     struct du_widget *tree = kind(DU_TREE); tree->active = audio_row; du_post(&ui, DU_EV_SELECT, tree->id, (int)audio_row);
     click("Properties..."); assert(du_dialog_id(&ui) && strstr(ui.dialog.text, "Quarantined") && strstr(ui.dialog.text, "8086:2415"));
     assert(strstr(ui.dialog.text, "ac97") && strstr(ui.dialog.text, "Generation: 16")); render(renders, "device-properties-general");
+    at_tap(&ui, DU_KEY_ESC);
+    strcpy(sample.devices[6].driver_display_name,"Recording adapter driver"); click("Refresh");
+    click("Properties..."); assert(strstr(ui.dialog.text,"Driver: Recording adapter driver"));
+    sample.devices[6].driver_display_name[0]=0; /* keep the existing render fixtures */
     struct du_rect b = du_dialog_button(&ui, 1); at_click(&ui, b.x + b.w / 2, b.y + b.h / 2);
     assert(strstr(ui.dialog.text, "I/O: 0xC000 - 0xC0FF") && strstr(ui.dialog.text, "IRQ: 11") && strstr(ui.dialog.text, "size unknown"));
     render(renders, "device-properties-resources"); at_tap(&ui, DU_KEY_ESC); assert(!du_dialog_id(&ui));
@@ -210,6 +214,16 @@ int main(int argc, char **argv)
     log_error=1; at_click_widget(&ui,CP_OPEN_LOG); assert(!app.log.len && strstr(app.log_status,"No such file"));
     log_error=0; at_click_widget(&ui,CP_OPEN_LOG); assert(app.log.len==CP_LOG_BYTES);
     assert(loads >= 3); cp_detach(&app);
+    /* Driver names and readiness are metadata, including software-only boots. */
+    device_fixture(&sample);
+    sample.devices[0].id=CIUKI_DEVICE_ACCELERATOR_ID;
+    strcpy(sample.devices[0].driver_display_name,"Recording display driver");
+    strcpy(sample.devices[0].reason,"none"); sample.devices[0].accel_ready=1;
+    cp_engine_refresh(&app); assert(strstr(app.engine_line,"Recording display driver: active"));
+    sample.devices[0].state=CIUKI_DEVICE_QUARANTINED; strcpy(sample.devices[0].reason,"engine_timeout");
+    cp_engine_refresh(&app); assert(strstr(app.engine_line,"quarantined (engine_timeout)"));
+    sample.devices[0].state=CIUKI_DEVICE_READY; sample.devices[0].accel_ready=0;
+    cp_engine_refresh(&app); assert(strstr(app.engine_line,"Recording display driver: software"));
     puts("PASS device manager: nine categorized applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
     return 0;
 }

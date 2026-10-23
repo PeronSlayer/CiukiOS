@@ -4,7 +4,7 @@
 #define CIUKI_DEVICE_FIXTURE_H
 static void device_fixture(struct ciuki_devices_info *s)
 {
-    memset(s, 0, sizeof(*s)); s->version = 1; s->size = sizeof(*s); s->generation = 42;
+    memset(s, 0, sizeof(*s)); s->version = CIUKI_DEVICES_VERSION; s->size = sizeof(*s); s->generation = 42;
     s->boot_flags = 2; s->input_policy = 1; s->uptime_ms = 7323000;
     s->cpu_family = 6; s->cpu_model = 11; s->cpu_stepping = 1;
     strcpy(s->cpu_vendor, "GenuineIntel"); strcpy(s->cpu_brand, "Intel Pentium III");

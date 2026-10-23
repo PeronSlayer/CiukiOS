@@ -178,7 +178,7 @@ kernel (default `safe=0 serial=1`). The ones a hardware trial uses
 | `safe=1` | safe mode (no optional drivers) |
 | `usbscan=0` | keeps the first USB enumeration, stops the periodic rescans (f1-87 diagnostic) |
 | `ecpoll=1` / `ecpoll=0` | ThinkPad EC volume poll: off by default since f1-100 (each EC transaction costs the T23 two 2.1 ms SMIs); `ecpoll=1` restores the 1 Hz poll for diagnosis, `ecpoll=0` keeps it off and wins. The disk log counts the transactions (`[ec] thinkpad io= transactions=`) and `[kernel] smi` shows the blackouts. A planned change (f2-96) polls the EC every 2 s so the hardware volume keys reach the mixer |
-| `accel=0` | disables the Savage 2D engine (`reason=boot_disabled`) |
+| `accel=0` | disables native 2D drivers (`reason=boot_disabled`) |
 
 The splash screen shows the original Ciuki photograph with a progress bar
 under it. Since f0-55b the bar starts with the sweeping segment centred on the

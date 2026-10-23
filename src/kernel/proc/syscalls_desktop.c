@@ -15,6 +15,23 @@ int32_t desktop_syscall(struct trap_frame *tf)
         if (!d || d->kind != DESKTOP_DISPLAY) return -EBADF;
         if (d->owner != p->pid || !(d->maximum & PROT_WRITE)) return -EACCES;
         int err = copy_from_user(&q,tf->ecx,sizeof(q));
+        if (!err && q.operation == CIUKI_ACCEL_QUERY_ENGINE) {
+            if (q.size != sizeof(q) || q.colour != CIUKI_DISPLAY_ENGINE_VERSION ||
+                q.background < sizeof(struct ciuki_display_engine_info) || !tf->edx) return -EINVAL;
+            /* Same descriptor/generation authorization as the legacy query. */
+            struct ciuki_accel_request legacy = q; legacy.operation = CIUKI_ACCEL_QUERY;
+            struct ciuki_accel_info ignored;
+            err = grant_accel_info(p,(int32_t)tf->ebx,&legacy,&ignored);
+            if (err) return err;
+            struct ua_pin pin;
+            err = ua_pin(p->memory,&pin,tf->edx,sizeof(struct ciuki_display_engine_info),true);
+            if (err) return err;
+            struct ciuki_display_engine_info out;
+            err = fbdev_engine_info(q.generation,&out);
+            if (!err) err = copy_to_user(tf->edx,&out,sizeof(out));
+            ua_unpin(p->memory,&pin);
+            return err;
+        }
         if (!err && q.operation == CIUKI_ACCEL_QUERY && tf->edx) {
             struct ua_pin pin;
             err = ua_pin(p->memory, &pin, tf->edx, sizeof(struct ciuki_accel_info), true);

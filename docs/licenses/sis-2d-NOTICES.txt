@@ -1,0 +1,55 @@
+SiS native 2D port, directive f2-109
+
+Core engine and PCI generation mapping:
+Linux v6.12, drivers/video/fbdev/sis/{sis_accel.c,sis_accel.h,
+sis_main.c,sis_main.h,sis.h}.
+https://github.com/torvalds/linux/tree/v6.12/drivers/video/fbdev/sis
+SPDX-License-Identifier: GPL-2.0-or-later
+Copyright (C) 2001-2005 Thomas Winischhofer, Vienna, Austria.
+Full GPL version 2 text: repository LICENSE.
+
+The core is a native adaptation of register encodings and engine fragments,
+not an imported Linux fbdev subsystem. Author and origin headers are retained.
+
+Optional pattern/cursor reference and cursor register adaptation:
+X.Org xf86-video-sis, commit 0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92,
+src/sis300_accel.c, src/sis310_accel.c, src/sis_cursor.c, src/sis_cursor.h,
+src/sis_driver.c. Canonical project:
+https://gitlab.freedesktop.org/xorg/driver/xf86-video-sis
+Readable pinned history:
+https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-sis/tree/0f50f8c3db2b9f1c9d4ecab8ad278e9db6418a92/src
+
+/*
+ * SiS hardware cursor handling
+ * Definitions
+ *
+ * Copyright (C) 2001-2005 by Thomas Winischhofer, Vienna, Austria.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1) Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2) Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3) The name of the author may not be used to endorse or promote products
+ *    derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Author:   Thomas Winischhofer <thomas@winischhofer.net>
+ *
+ * Idea based on code by Can-Ru Yeou, SiS Inc.
+ *
+ */
+

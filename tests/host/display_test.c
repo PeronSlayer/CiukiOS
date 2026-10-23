@@ -13,7 +13,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/cpu.h>
-#include <ciuki/supersavage_display.h>
+#include "../../src/kernel/drivers/video/s3savage/supersavage_display.h"
+#include <ciuki/display_driver.h>
 #include <ciuki/dos_video_modes.h>
 #undef irq_save
 #undef irq_restore
@@ -82,6 +83,14 @@ int supersavage_display_end(void)
 { assert(suspended && !fbdev_get()->present); native_ends++; event(12); return native_end_error; }
 void supersavage_display_complete(bool recovered)
 { native_completes++;native_recovered=recovered; }
+static const struct display_mode_provider fixture_modes = {
+    supersavage_display_supported,supersavage_display_prepare,supersavage_display_begin,
+    supersavage_display_write,supersavage_display_end,supersavage_display_complete
+};
+const struct display_mode_provider *display_driver_modes(const struct fb_device *fb)
+{ (void)fb; return is_supersavage ? &fixture_modes : NULL; }
+int display_driver_mode_bind(const struct fb_device *fb,const struct display_mode_provider **out)
+{ *out=display_driver_modes(fb); return 0; }
 static void wr16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static void wr32(uint8_t *p, uint32_t v) { for (unsigned i = 0; i < 4; i++) p[i] = v >> (8 * i); }
 static void mode_info(uint16_t id, uint8_t m[256])
@@ -180,7 +189,9 @@ const struct pci_func *pci_get(unsigned i) { return i ? 0 : is_supersavage ? &gp
 int copy_from_user(void *dst, uint32_t src, uint32_t n) { copies++; if (src > sizeof(user) || n > sizeof(user) - src) return -EFAULT; memcpy(dst, user + src, n); return 0; }
 int copy_to_user(uint32_t dst, const void *src, uint32_t n) { copies++; if (dst > sizeof(user) || n > sizeof(user) - dst) return -EFAULT; memcpy(user + dst, src, n); return 0; }
 
+#include "../../src/kernel/drivers/video/swdib.c"
 #include "../../src/kernel/drivers/fbdev.c"
+#include "display_driver_software_fixture.h"
 #include "../../src/kernel/core/display.c"
 
 static int stop_accel(void *ctx)
@@ -465,6 +476,7 @@ static void return_logging_tests(void)
     }
 }
 static int native_sync(void *p) { return *(bool *)p ? -EIO : 0; }
+static bool native_ready(void *ctx) { return !*(bool *)ctx; }
 static void delegated_takeover_tests(void)
 {
     fixture();delegated_test=delegated_dos_request=true;
@@ -491,7 +503,7 @@ static void native_upload_tests(void)
     assert(!drain_calls||drain_calls==drains);
     assert(!fbdev_present_native(device.generation,0,0,pixels,2));
     assert(!memcmp(device.mapped,pixels,8)&&device.mapped[8]==0&&drain_calls==drains+1);
-    bool fail=true;const struct accel_ops ops={.ctx=&fail,.sync=native_sync};acceleration=&ops;
+    bool fail=true;const struct accel_ops ops={.ctx=&fail,.sync=native_sync,.cpu_ready=native_ready};acceleration=&ops;
     memset(device.mapped,0,8);
     assert(fbdev_present_native(device.generation,0,0,pixels,2)==-EIO&&!device.mapped[0]);
     fail=false;assert(!fbdev_present_native(device.generation,0,0,pixels,2));

@@ -495,7 +495,7 @@ static void splash_accel_update(bool yield)
     irq_restore(f);
 }
 
-/* f1-97/f2-92: the accelerator state (savage2d.c, thread context): the text
+/* f1-97/f2-92: the accelerator state (thread context): the text
  * is `2D engine: NO (<reason>)`, `2D engine: OK (drawing: software)` until
  * the engine has drawn a presenter's request, then `2D acceleration: YES`;
  * drawn by the console worker (or at the handover), never from the caller. */

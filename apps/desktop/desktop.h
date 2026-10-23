@@ -306,6 +306,7 @@ struct desktop {
     /* Optional privileged presenter; NULL retains ordinary surface presents. */
     int (*accel)(int, const struct ciuki_accel_request *);
     int (*accel_info)(int, uint32_t, struct ciuki_accel_info *);
+    int (*engine_info)(int, uint32_t, struct ciuki_display_engine_info *);
     int (*display_info)(int, struct ciuki_framebuffer_info *);
     int (*gfx_benchmark)(struct desktop *, unsigned, uint64_t result[3]);
     uint64_t gfx_next_bench_ns;

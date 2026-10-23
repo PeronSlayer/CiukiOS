@@ -635,7 +635,8 @@ enum ciuki_w32_syscall { CIUKI_SYS_W32 = 96 };
 #pragma pack(push, 4)
 
 /* F2-41: read-only, fixed copied device inventory (device-manager.md). */
-#define CIUKI_DEVICES_VERSION 1u
+#define CIUKI_DEVICES_VERSION 2u
+#define CIUKI_DEVICE_ACCELERATOR_ID 0x30010u
 #define CIUKI_DEVICES_MAX 64u
 #define CIUKI_DEVICE_RESOURCES 8u
 #define CIUKI_DRIVERS_MAX 16u
@@ -694,6 +695,10 @@ struct ciuki_device_record {
     char driver[32];
     char reason[80];
     struct ciuki_device_resource resources[8];
+    char driver_display_name[48];
+    uint32_t accel_ready;
+    uint32_t native_used;
+    uint32_t cpu_ready;
 };
 struct ciuki_driver_record {
     char name[32];
@@ -1489,7 +1494,12 @@ enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
         * (end << 16) | first: rows [first, end) at the screen's width are
         * valid COPY sources/destinations and WRITE destinations; 0 when
         * there are none (no engine, no lease, quarantined). */
-       CIUKI_ACCEL_OFFSCREEN };
+       CIUKI_ACCEL_OFFSCREEN,
+       /* EDX is the output buffer; background is its byte capacity,
+        * and colour selects the requested version.
+        * Version 1 requires at least sizeof(ciuki_display_engine_info).
+        * Copies exactly that size, even when the caller offers more. */
+       CIUKI_ACCEL_QUERY_ENGINE };
 /* f2-92 WRITE source: 32-bit 0xXXRRGGBB rows in the caller's memory. The
  * address is split so the request keeps 4-byte alignment on 64-bit hosts. */
 struct ciuki_accel_write {
@@ -1519,6 +1529,7 @@ struct ciuki_accel_request {
         struct ciuki_accel_write write; /* CIUKI_ACCEL_WRITE only */
     };
 };
+_Static_assert(CIUKI_ACCEL_QUERY == 0 && CIUKI_ACCEL_OFFSCREEN == 8 && CIUKI_ACCEL_QUERY_ENGINE == 9, "display operations");
 _Static_assert(sizeof(struct ciuki_accel_request) == 308, "ciuki_accel_request size");
 _Static_assert(_Alignof(struct ciuki_accel_request) == 4, "ciuki_accel_request alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_accel_request, rect) == 20, "ciuki_accel_request rect");
@@ -1529,7 +1540,9 @@ _Static_assert(sizeof(struct ciuki_accel_write) == 36, "ciuki_accel_write size")
 
 /* DISPLAY_ACCEL/QUERY optionally writes this snapshot to EDX (zero keeps
  * the original capability-only query). No register reads or activation. */
-enum { CIUKI_ACCEL_DRIVER_NONE, CIUKI_ACCEL_DRIVER_SAVAGE };
+enum { CIUKI_ACCEL_DRIVER_NONE, CIUKI_ACCEL_DRIVER_LEGACY_NATIVE };
+/* Legacy value 1 retains its binary meaning; source compatibility for the
+ * frozen driver lives in its private header. */
 struct ciuki_accel_info {
     uint32_t driver;
     uint32_t capabilities;
@@ -1542,6 +1555,33 @@ struct ciuki_accel_info {
 _Static_assert(sizeof(struct ciuki_accel_info) == 40, "ciuki_accel_info size");
 _Static_assert(_Alignof(struct ciuki_accel_info) == 4, "ciuki_accel_info alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_accel_info, operations) == 16, "ciuki_accel_info operations");
+
+#define CIUKI_DISPLAY_ENGINE_VERSION 1u
+enum { CIUKI_ENGINE_NONE, CIUKI_ENGINE_SOFTWARE, CIUKI_ENGINE_NATIVE };
+enum { CIUKI_ENGINE_FILL, CIUKI_ENGINE_COPY, CIUKI_ENGINE_PATTERN, CIUKI_ENGINE_WRITE, CIUKI_ENGINE_OPERATIONS };
+#define CIUKI_ENGINE_SOFTWARE_OPERATIONS 15u
+struct ciuki_display_engine_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t kind;
+    uint32_t capabilities;
+    uint32_t software_operations;
+    uint32_t quarantined;
+    uint32_t generation;
+    uint32_t ready;
+    uint32_t native_used;
+    uint32_t cpu_ready;
+    uint16_t pci_vendor;
+    uint16_t pci_device;
+    char driver_id[16];
+    char display_name[48];
+    char reason[60];
+    uint64_t native[CIUKI_ENGINE_OPERATIONS];
+    uint64_t software[CIUKI_ENGINE_OPERATIONS];
+};
+_Static_assert(sizeof(struct ciuki_display_engine_info) == 232, "display engine size");
+_Static_assert(_Alignof(struct ciuki_display_engine_info) == 4, "display engine alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_display_engine_info, native) == 168, "display engine counters");
 
 struct ciuki_input_event {
     uint32_t sequence; /* 0 */
@@ -1965,7 +2005,7 @@ _Static_assert(__builtin_offsetof(struct ciuki_device_resource, type) == 0, "ciu
 _Static_assert(__builtin_offsetof(struct ciuki_device_resource, flags) == 4, "ciuki_device_resource.flags offset");
 _Static_assert(__builtin_offsetof(struct ciuki_device_resource, start) == 8, "ciuki_device_resource.start offset");
 _Static_assert(__builtin_offsetof(struct ciuki_device_resource, end) == 16, "ciuki_device_resource.end offset");
-_Static_assert(sizeof(struct ciuki_device_record) == 444, "ciuki_device_record size");
+_Static_assert(sizeof(struct ciuki_device_record) == 504, "ciuki_device_record size");
 _Static_assert(_Alignof(struct ciuki_device_record) == 4, "ciuki_device_record alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_device_record, id) == 0, "ciuki_device_record.id offset");
 _Static_assert(__builtin_offsetof(struct ciuki_device_record, class_id) == 4, "ciuki_device_record.class_id offset");
@@ -2005,7 +2045,7 @@ _Static_assert(__builtin_offsetof(struct ciuki_device_lease, state) == 36, "ciuk
 _Static_assert(__builtin_offsetof(struct ciuki_device_lease, generation) == 40, "ciuki_device_lease.generation offset");
 _Static_assert(__builtin_offsetof(struct ciuki_device_lease, start) == 44, "ciuki_device_lease.start offset");
 _Static_assert(__builtin_offsetof(struct ciuki_device_lease, end) == 52, "ciuki_device_lease.end offset");
-_Static_assert(sizeof(struct ciuki_devices_info) == 34696, "ciuki_devices_info size");
+_Static_assert(sizeof(struct ciuki_devices_info) == 38536, "ciuki_devices_info size");
 _Static_assert(_Alignof(struct ciuki_devices_info) == 4, "ciuki_devices_info alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_devices_info, version) == 0, "ciuki_devices_info.version offset");
 _Static_assert(__builtin_offsetof(struct ciuki_devices_info, size) == 4, "ciuki_devices_info.size offset");
@@ -2024,8 +2064,8 @@ _Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_vendor) == 56, 
 _Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_brand) == 72, "ciuki_devices_info.cpu_brand offset");
 _Static_assert(__builtin_offsetof(struct ciuki_devices_info, boot_options) == 136, "ciuki_devices_info.boot_options offset");
 _Static_assert(__builtin_offsetof(struct ciuki_devices_info, devices) == 264, "ciuki_devices_info.devices offset");
-_Static_assert(__builtin_offsetof(struct ciuki_devices_info, drivers) == 28680, "ciuki_devices_info.drivers offset");
-_Static_assert(__builtin_offsetof(struct ciuki_devices_info, leases) == 30856, "ciuki_devices_info.leases offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, drivers) == 32520, "ciuki_devices_info.drivers offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, leases) == 34696, "ciuki_devices_info.leases offset");
 
 /* f5-03a: frozen i386 Win32 records (2026-10-14). */
 #define CIUKI_W32_VERSION 0x1u

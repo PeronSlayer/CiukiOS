@@ -1,0 +1,24 @@
+Linux v6.12 Cirrus framebuffer engine fragments
+
+Origin: https://github.com/torvalds/linux/tree/v6.12
+drivers/video/fbdev/cirrusfb.c -> src/kernel/drivers/video/cirrus/engine.c
+include/video/cirrus.h -> src/kernel/drivers/video/cirrus/registers.h
+
+The engine ports cirrusfb_set_blitter, cirrusfb_BitBLT and cirrusfb_RectFill.
+CiukiOS replaces Linux glue and unbounded polling with its synchronous
+display adapter, bounded completion proof and same-boot quarantine.
+Register definitions and original notices are retained in the source files.
+
+Copyright 1999-2001 Jeff Garzik <jgarzik@pobox.com>
+Original cirrusfb/clgenfb author: Frank Neumann
+Based on retz3fb.c and cirrusfb.c/clgen.c:
+    Copyright (C) 1997 Jes Sorensen
+    Copyright (C) 1996 Frank Neumann
+Contributors: David Eger, Jeff Rugen, Geert Uytterhoeven, Lars Hecking.
+
+This file is subject to the terms and conditions of the GNU General Public
+License. See Linux COPYING and LICENSES/preferred/GPL-2.0. CiukiOS's LICENSE
+contains the GNU General Public License version 2.
+
+QEMU v9.2.0 hw/display/cirrus_vga.c (Fabrice Bellard, Makoto Suzuki, MIT)
+is a test-model reference only. No emulator implementation was imported.

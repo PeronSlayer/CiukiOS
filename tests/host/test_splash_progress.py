@@ -160,7 +160,7 @@ class SplashProgressTests(unittest.TestCase):
     def test_accelerator_summary_record_and_indicator_sources(self):
         # f1-97: one protected record, the splash line drawn by the console
         # worker (never by the decision's caller), the desktop notice.
-        savage = (ROOT / 'src/kernel/drivers/savage2d.c').read_text()
+        savage = (ROOT / 'src/kernel/drivers/video/s3savage/savage2d.c').read_text()
         self.assertEqual(savage.count('klog("[accel] summary accelerated=%u driver=savage reason=%s used=%u"'), 1)
         decline = savage.split('static const struct accel_ops *decline(const char *reason)\n{', 1)[1]
         self.assertTrue(decline.lstrip().startswith('summary(false, reason);'))
@@ -173,7 +173,10 @@ class SplashProgressTests(unittest.TestCase):
         service = console.split('static uint32_t splash_service(void)', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('splash_accel_update(true);', service)
         fbdev = (ROOT / 'src/kernel/drivers/fbdev.c').read_text()
-        self.assertIn('savage2d_summary_safe_mode();', fbdev)
+        # Part A moved disabled-mode policy/summary into the generic registry.
+        self.assertIn('if (display_accel_disabled(&reason)) { display_driver_software(reason); return; }', fbdev)
+        registry = (ROOT / 'src/kernel/drivers/video/registry.c').read_text()
+        self.assertIn('if (g_boot.flags & CBI_F_SAFE_MODE) { if (reason) *reason = "safe_mode"; return true; }', registry)
         desktop = (ROOT / 'apps/desktop/desktop.c').read_text()
         self.assertIn('(accel_noticed=accel_notice(d))', desktop)
         self.assertIn('d->sh.notification.expires=d->now_ns+10000000000ull;', desktop)

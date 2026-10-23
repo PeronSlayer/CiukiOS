@@ -2,6 +2,7 @@
  * hardware/registry state. Never device I/O or guest evidence.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <assert.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #define CIUKI_CPU_H
@@ -18,6 +19,7 @@ static void irq_restore(uint32_t);
 #include <ciuki/ata.h>
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
+#include <ciuki/display_driver.h>
 #include <ciuki/ac97.h>
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
@@ -87,10 +89,17 @@ static struct activation_entry ledger[] = {
     {.kind = ACTIVATION_DEVICE, .device = "ata", .seq = 4, .reason = "native_discovery"},
 };
 void drivers_snapshot(struct drivers_state *out) { *out = driver_state; }
+int ksnprintf(char *buf, size_t size, const char *fmt, ...)
+{ va_list ap; va_start(ap, fmt); int n = vsnprintf(buf, size, fmt, ap); va_end(ap); return n; }
 unsigned drivers_activation_count(void) { return 3; }
 const struct activation_entry *drivers_activation_get(unsigned i) { return i < 3 ? &ledger[i] : NULL; }
 void i8042_snapshot(struct i8042_stats *out) { *out = input_state; }
 const struct fb_device *fbdev_get(void) { return &framebuffer; }
+void display_driver_info(struct ciuki_display_engine_info *out)
+{
+    memset(out,0,sizeof(*out)); out->version=CIUKI_DISPLAY_ENGINE_VERSION; out->size=sizeof(*out);
+    out->kind=CIUKI_ENGINE_SOFTWARE; strcpy(out->driver_id,"swdib"); strcpy(out->display_name,"Software renderer"); strcpy(out->reason,"no_driver"); out->cpu_ready=1;
+}
 const struct ata_device *ata_inventory_get(unsigned c, unsigned u) { return c == 0 && u == 0 && disk.identified ? &disk : NULL; }
 static struct process process;
 struct process *proc_current(void) { return &process; }
@@ -249,7 +258,7 @@ int main(void)
     pci[0] = (struct pci_func){.vendor = 0x10ec, .device = 0x8139, .class_code = 2, .dev = 3, .irq_line = 11, .irq_pin = 1, .bar = {0xc001}};
     pci[1] = (struct pci_func){.vendor = 0xabcd, .device = 1, .class_code = 3, .dev = 4, .bar = {0x12345004, 1}};
     memset(&snapshot, 0xa5, sizeof(snapshot)); devices_snapshot(&snapshot);
-    assert(snapshot.version == 1 && snapshot.size == 34696 && snapshot.generation == 5 && snapshot.lease_count == 3);
+    assert(snapshot.version == CIUKI_DEVICES_VERSION && snapshot.size == sizeof(snapshot) && snapshot.generation == 5 && snapshot.lease_count == 3);
     assert(snapshot.boot_flags == CBI_F_SERIAL_LOG && snapshot.uptime_ms == 123456);
     assert(!strcmp(snapshot.cpu_vendor, "GenuineIntel") && !snapshot.cpu_brand[0]);
     assert(snapshot.cpu_family == 6 && snapshot.cpu_model == 11 && snapshot.cpu_stepping == 1 && cpu_calls == 3);
@@ -347,12 +356,12 @@ int main(void)
     devices_snapshot(&snapshot); assert(snapshot.count == 64 && snapshot.lease_count == 64 && snapshot.flags & CIUKI_DEVICES_TRUNCATED);
     assert(!registry_activate(0, 1)); devices_snapshot(&snapshot); assert(snapshot.generation == 6);
     /* Validate arguments/full writable extent before changing any user byte. */
-    user.version = 1; user.size = sizeof(user); unsigned c0 = copies, r0 = ranges;
+    user.version = CIUKI_DEVICES_VERSION; user.size = sizeof(user); unsigned c0 = copies, r0 = ranges;
     assert(devices_query(0x1000, sizeof(user) - 1) == -EINVAL && copies == c0 && ranges == r0);
     assert(devices_query(UINT32_MAX - 10, sizeof(user)) == -EFAULT && copies == c0);
     accessible = 0; assert(devices_query(0x1000, sizeof(user)) == -EFAULT && copies == c0); accessible = 1;
-    user.version = 2; assert(devices_query(0x1000, sizeof(user)) == -EINVAL && copies == c0);
-    user.version = 1; user.size = 8; assert(devices_query(0x1000, sizeof(user)) == -EINVAL && copies == c0);
+    user.version = CIUKI_DEVICES_VERSION+1; assert(devices_query(0x1000, sizeof(user)) == -EINVAL && copies == c0);
+    user.version = CIUKI_DEVICES_VERSION; user.size = 8; assert(devices_query(0x1000, sizeof(user)) == -EINVAL && copies == c0);
     user.size = sizeof(user); assert(!devices_query(0x1000, sizeof(user)) && copies == c0 + 1 && user.count == 64);
     copy_error = -EFAULT; assert(devices_query(0x1000, sizeof(user)) == -EFAULT);
     copy_error = 0; cpu_hook = change_generation; changes = 1;
