@@ -1,0 +1,136 @@
+/* Production APM provider/worker with only firmware, time and device seams
+ * replaced. The real power-source arbiter is included below.
+ * SPDX-License-Identifier: GPL-2.0-only */
+#define CIUKI_CPU_H
+#include <stdio.h>
+#include <string.h>
+#include <ciuki/kernel.h>
+#include <ciuki/abi.h>
+#include <ciuki/task.h>
+#include <ciuki/power_source.h>
+static uint32_t irq_save(void) { return 0x200; }
+static void irq_restore(uint32_t f) { (void)f; }
+#define P2V(p) ((void *)(uintptr_t)(p))
+#define V2P(p) ((uint32_t)(uintptr_t)(p))
+#include <ciuki/storage.h>
+#include "../../src/kernel/core/apm.h"
+static unsigned failures, checks, probes, connects, disconnects, tasks, polls, acks, offs, stops;
+static int flush_error, stop_error, firmware_error, orderly_error, storage_init_error;
+static bool fail_task, broker_dead;
+static uint16_t next_event;
+static uint64_t ticks;
+static char log_line[256];
+static struct task fake_tasks[8];
+struct task *g_current;
+struct ciuki_boot_info g_boot;
+#define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); failures++; } } while (0)
+int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
+{
+    CHECK(r->interrupt == 0x15 && ms && ms <= 2000);
+    uint32_t fn = r->eax;
+    if (fn == 0x5304) disconnects++;
+    if (broker_dead) return -EIO;
+    if (firmware_error) { broker_dead = true; return firmware_error; }
+    r->flags = 0;
+    switch (fn) {
+    case 0x5300: probes++; r->eax = 0x0102; r->ebx = 0x504d; r->ecx = 0; break;
+    case 0x5301: connects++; break;
+    case 0x5304: break;
+    case 0x530e: r->eax = 0x0102; break;
+    case 0x530a: r->ebx = 0x0100; r->ecx = 75; r->edx = 120; break;
+    case 0x530b:
+        polls++;
+        if (next_event) { r->ebx = next_event; next_event = 0; }
+        else { r->flags = 1; r->eax = 0x8000; }
+        break;
+    case 0x5307:
+        CHECK(r->ebx == 1);
+        if (r->ecx == 2) { acks++; CHECK(stops); }
+        else if (r->ecx == 3) offs++;
+        else CHECK(r->ecx == 5);
+        break;
+    default: CHECK(false);
+    }
+    return 0;
+}
+struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
+{
+    (void)fn; (void)arg;
+    CHECK(!strcmp(name, "apm") && prio == P_DEVICE); tasks++;
+    return fail_task ? NULL : &fake_tasks[tasks % 8];
+}
+void task_start(struct task *t) { CHECK(t != NULL); }
+int storage_power_init(void) { return storage_init_error; }
+int storage_sync_bounded(uint64_t end) { CHECK(end >= ticks || flush_error); return flush_error; }
+uint64_t deadline_after_ms(uint32_t ms) { return ticks + ms; }
+bool deadline_passed(uint64_t end) { return ticks >= end; }
+static int quiesce(void *ctx, uint64_t end) { (void)ctx; (void)end; stops++; return stop_error; }
+static int recover(void *ctx, uint16_t event, uint16_t info) { (void)ctx; (void)event; (void)info; return 0; }
+static int shutdown(void *ctx, uint64_t end) { (void)ctx; CHECK(end > ticks); return orderly_error; }
+void klog(const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt); vsnprintf(log_line, sizeof(log_line), fmt, ap); va_end(ap);
+}
+#include "../../src/kernel/core/power_source.c"
+#include "../../src/kernel/core/apm_platform.c"
+void task_sleep_ms(uint32_t ms) { ticks += ms; service_once(); }
+int main(void)
+{
+    for (unsigned i = 0; i < 2; i++) {
+        attempted = false; g_boot.flags = i ? CBI_F_HW_CHECK : CBI_F_SAFE_MODE;
+        apm_start(); CHECK(!tasks && !probes);
+    }
+    g_boot.flags = 0; apm_start();
+    CHECK(tasks == 1); CHECK(discover() == -ENOTSUP && connects == 0);
+    CHECK(strstr(log_line, "platform_quiesce_owner"));
+    apm_start(); CHECK(tasks == 1);
+    g_boot.acpi_rsdp_phys = 0xe0000;
+    CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && !connects);
+    CHECK(strstr(log_line, "acpi_present"));
+    g_boot.acpi_rsdp_phys = 0;
+    attempted = false; fail_task = true; apm_start();
+    CHECK(tasks == 2 && strstr(log_line, "reason=worker")); fail_task = false;
+
+    CHECK(power_source_set_platform(NULL) == -EINVAL);
+    const struct power_source_platform platform = {.quiesce_dma=quiesce, .resume=recover, .orderly_shutdown=shutdown};
+    CHECK(!power_source_set_platform(&platform));
+    CHECK(power_source_set_platform(&platform) == -EBUSY);
+    g_current = &fake_tasks[0]; apm_worker = &fake_tasks[1];
+    storage_init_error = -ENOMEM;
+    CHECK(discover() == -ENOMEM && !connects);
+    struct power_source_snapshot unreserved;
+    power_source_snapshot(&unreserved);
+    CHECK(unreserved.provider == POWER_SOURCE_NONE && !unreserved.active);
+    storage_init_error = 0;
+    CHECK(!discover() && connects == 1);
+    struct power_source_snapshot snap;
+    power_source_snapshot(&snap);
+    CHECK(snap.provider == POWER_SOURCE_APM && snap.active && snap.status.ac == POWER_SOURCE_UNKNOWN);
+    struct power_source_ops ops = {.soft_off=request_off};
+    CHECK(power_source_reserve(POWER_SOURCE_ACPI, &ops) == -EBUSY);
+    service_once();
+    power_source_snapshot(&snap); CHECK(snap.status.ac == 1 && snap.status.percent == 75 && snap.status.seconds == 120);
+    unsigned calls = polls; power_source_snapshot(&snap); CHECK(polls == calls);
+    next_event = 6; ticks = 1000; service_once();
+    power_source_snapshot(&snap); CHECK(snap.events == 1 && snap.last_event == 6);
+    /* A failed orderly-shutdown proof must not reach firmware Off. */
+    orderly_error = -EBUSY; CHECK(power_source_soft_off() == -EBUSY && !offs);
+    orderly_error = 0; CHECK(power_source_soft_off() == -EIO && offs == 1 && disconnects == 1);
+    power_source_snapshot(&snap); CHECK(!snap.active && snap.provider == POWER_SOURCE_NONE);
+    CHECK(power_source_soft_off() == -ENOTSUP);
+
+    CHECK(!discover()); next_event = 8; ticks += 1000; flush_error = -EAGAIN;
+    service_once(); CHECK(backend.emergency && !acks);
+    ticks = backend.emergency_start + APM_FLUSH_MS; flush_error = -VFS_ETIMEOUT;
+    service_once(); stop_error = -EIO; service_once();
+    CHECK(acks == 1 && !backend.emergency && backend.emergency_error == -VFS_ETIMEOUT);
+    ticks += 1000; firmware_error = -EFAULT; service_once();
+    CHECK(backend.state == APM_FAILED && disconnects == 2);
+    power_source_snapshot(&snap); CHECK(!snap.active && snap.provider == POWER_SOURCE_APM && snap.error == -EFAULT);
+    CHECK(power_source_reserve(POWER_SOURCE_ACPI, &ops) == -EBUSY);
+    CHECK(power_source_activate(POWER_SOURCE_APM) == -EBUSY);
+    power_source_release(POWER_SOURCE_NONE, false, 0);
+    power_source_snapshot(&snap); CHECK(snap.provider == POWER_SOURCE_APM);
+    printf("APM production provider: %u checks, %u failures\n", checks, failures);
+    return failures != 0;
+}

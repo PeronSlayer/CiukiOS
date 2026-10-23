@@ -59,7 +59,9 @@ int es137x_codec_write(struct audio_dma_device *d, uint16_t reg, uint16_t value)
     int e = es_codec_access(d,reg,&value,false);
     uint16_t got;
     if (!e) e = es137x_codec_read(d,reg,&got);
-    unsigned mask = reg == 0x26 ? 0xff00 : reg == 2 ? 0x9f1f : reg == 0x18 ? 0x9f1f : 0xffff;
+    const struct ac97_codec_profile *p=ac97_codec_lookup(d->state.codec_id);
+    unsigned mask = reg == 0x26 ? 0xff00 : reg==0x2a ? 0x000f : reg == 2 ? p->master_mask : reg == 0x18 ? p->pcm_mask : reg==4 ? p->headphone_mask : 0xffff;
+    if (!mask) mask=0x8000;
     return e ? e : ((got ^ value) & mask) ? -EIO : 0;
 }
 static int es_ak_write(struct audio_dma_device *d, unsigned reg, unsigned v)

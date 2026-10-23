@@ -10,14 +10,14 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_
     "$root/src/kernel/usb/usb_core.c" "$root/src/kernel/usb/ehci.c" "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" \
     "$root/src/kernel/usb/ohci.c" "$root/src/kernel/usb/usb_hub.c" \
     "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/hid_report.c" \
-    "$root/src/kernel/usb/hid_input.c" "$root/tests/host/usb/hid_support.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/usb_test"
+    "$root/src/kernel/usb/hid_input.c" "$root/src/kernel/lib/sha256.c" "$root/tests/host/usb/hid_support.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/usb_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/usb_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
     -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$root/src/kernel/include" "$root/tests/host/usb/service_test.c" "$root/src/kernel/usb/ehci.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" "$root/src/kernel/usb/ohci.c" \
     "$root/src/kernel/usb/usb_hub.c" "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/hid_report.c" \
-    "$root/src/kernel/usb/hid_input.c" "$root/tests/host/usb/hid_support.c" \
+    "$root/src/kernel/usb/hid_input.c" "$root/src/kernel/lib/sha256.c" "$root/tests/host/usb/hid_support.c" \
     "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/service_test"
 for mode in ready diagnostic csc-cleared empty create-failed input-create-failed hid-worker safe forced firmware none \
     phased-delays done-head-interleave fatal-relatched fatal-persistent fatal-reasserted fatal-gate-stuck \
@@ -31,9 +31,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections 
     -Wl,--gc-sections -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$root/src/kernel/include" "$root/tests/host/usb/input_grant_test.c" \
     "$root/tests/host/usb/input_queue.c" "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/hid_report.c" \
-    "$root/src/kernel/usb/hid_input.c" "$root/tests/host/usb/hid_support.c" \
+    "$root/src/kernel/usb/hid_input.c" "$root/src/kernel/lib/sha256.c" "$root/tests/host/usb/hid_support.c" \
     "$root/tests/host/proc/signal_legacy.c" "$root/src/kernel/lib/fmt.c" \
-    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/probes/selector.c" \
+    "$root/src/kernel/probes/selector.c" \
     -o "$out/input_grant_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/input_grant_test"
 
@@ -45,7 +45,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-unused-function \
     -I "$root/src/kernel/include" "$root/tests/host/usb/latency_test.c" \
     "$root/tests/host/usb/input_queue.c" "$root/src/kernel/usb/usb_core.c" "$root/src/kernel/usb/ehci.c" \
     "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/hid_report.c" \
-    "$root/src/kernel/usb/hid_input.c" "$root/tests/host/usb/hid_support.c" "$root/src/kernel/usb/usb_hub.c" \
+    "$root/src/kernel/usb/hid_input.c" "$root/src/kernel/lib/sha256.c" "$root/tests/host/usb/hid_support.c" "$root/src/kernel/usb/usb_hub.c" \
     "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/usb/usb_interrupt.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/ohci.c" "$root/src/kernel/lib/fmt.c" \
     -o "$out/latency_test"
@@ -58,8 +58,8 @@ import re, sys
 root, out = map(Path, sys.argv[1:])
 s = (root / "src/kernel/usb/usb_core.c").read_text()
 body = ""
-for name in ("periodic_scan", "native_now", "service", "input_service", "start_services"):
-    m = re.search(r"^static [^\n]+\b" + name + r"\([^\n]*\)\s*\{", s, re.M)
+for name in ("periodic_scan", "usb_hid_deadline", "native_now", "service", "input_service", "start_services"):
+    m = re.search(r"^(?:static )?[^\n]+\b" + name + r"\([^\n]*\)\s*\{", s, re.M)
     assert m, name
     depth, end = 1, m.end()
     while depth:

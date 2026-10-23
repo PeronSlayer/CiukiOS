@@ -4,6 +4,11 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+int ksnprintf(char *buf, size_t size, const char *fmt, ...)
+{
+    va_list args; va_start(args,fmt); int n=vsnprintf(buf,size,fmt,args); va_end(args); return n;
+}
 #define CIUKI_CPU_H
 #include <stdint.h>
 static uint32_t irq_save(void);
@@ -19,16 +24,42 @@ static void irq_restore(uint32_t);
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/ac97.h>
+#include <ciuki/audio_backend.h>
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
 #include <ciuki/com.h>
 #include <ciuki/thinkpad_ec.h>
+#include "../../src/kernel/drivers/floppy.h"
+static struct fdc floppy_state;
+static bool floppy_visible;
+const struct fdc *floppy_inventory(void) { return floppy_visible ? &floppy_state : 0; }
+#include <ciuki/joystick.h>
+static bool gameport_visible;
+bool gameport_inventory(unsigned i,uint16_t *base,const struct pci_func **pci,bool *ready,const char **reason)
+{
+    if (!gameport_visible || i) return false;
+    *base=0x201;*pci=NULL;*ready=true;*reason="Native analog joystick; DOS uses a logical subscription.";return true;
+}
+#include <ciuki/lpt.h>
+static struct ciuki_lpt_status lpt_record;
+static bool lpt_visible;
+bool lpt_snapshot(unsigned i, struct ciuki_lpt_status *out, const char **reason)
+{
+    if (!lpt_visible || i) return false;
+    *out=lpt_record; if (reason) *reason="Retained LPT state."; return true;
+}
 static struct ciuki_com_status com_records[CIUKI_COM_MAX];
+static unsigned com_owners[CIUKI_COM_MAX];
 static bool com_visible;
 bool com_snapshot(unsigned i, struct ciuki_com_status *out, const char **reason)
 {
     if (!com_visible || i>2) return false;
     *out=com_records[i]; if (reason) *reason="Retained COM resource state."; return true;
+}
+bool com_owner_snapshot(unsigned i, struct ciuki_com_owner *out)
+{
+    if (!com_visible || i>2) return false;
+    *out=(struct ciuki_com_owner){1,sizeof(*out),com_owners[i],7,com_records[i].generation,0}; return true;
 }
 static struct usb_host usb_context;
 static unsigned usb_hosts;
@@ -63,6 +94,7 @@ struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
 struct ac97_device ac97;
 struct audio_state audio;
+struct audio_dma_device audio_dma;
 static struct netif nic_contexts[NETIF_MAX];
 #define nic_context nic_contexts[0]
 static unsigned nic_count;
@@ -210,6 +242,14 @@ static void com_inventory(void)
     assert(d->state==CIUKI_DEVICE_READY && strstr(d->name,"kernel log") && strstr(d->name,"unprobed"));
     d=device(0x70001);
     assert(d->state==CIUKI_DEVICE_READY && d->generation==77 && strstr(d->name,"16650") && strstr(d->reason,"Exclusive native"));
+    const unsigned owners[]={CIUKI_COM_OWNER_NATIVE,CIUKI_COM_OWNER_VM,CIUKI_COM_OWNER_MOUSE,CIUKI_COM_OWNER_ENUMERATOR};
+    const char *labels[]={"Native application","DOS VM","Serial mouse","Serial PnP enumerator"};
+    for (unsigned i=0;i<4;i++) {
+        com_owners[1]=owners[i]; devices_snapshot(&snapshot); d=device(0x70001);
+        assert(strstr(d->reason,labels[i]) && strstr(d->reason,"id=7") && strstr(d->reason,"lease=77"));
+    }
+    com_owners[0]=CIUKI_COM_OWNER_LOGGER; devices_snapshot(&snapshot);
+    assert(strstr(device(0x70000)->reason,"Kernel logger"));
     assert(d->resource_count==2 && d->resources[0].start==0x2f8 && d->resources[0].end==0x300);
     assert(device(0x70002)->state==CIUKI_DEVICE_QUARANTINED && writes==before);
     com_visible=false;
@@ -263,6 +303,18 @@ int main(void)
     assert(device(0x40100)->state == CIUKI_DEVICE_QUARANTINED && !strcmp(device(0x40100)->name, "Retained_disk"));
     assert(snapshot.drivers[9].bound_devices == 3 && snapshot.drivers[10].state == CIUKI_DEVICE_QUARANTINED);
     assert(!writes && flags == 0x200);
+    /* f1-108 uses the existing v1 reason field; inventory cannot program
+     * timings, recover DMA or change resource ownership. */
+    res[2].state = RS_ACTIVE; disk.block.quarantined = false; disk.dma_enabled = true; disk.udma_mode = 5;
+    struct pci_func ata_pci = {.revision=2}; channel.pci=&ata_pci;
+    channel.chipset.family=ATA_CHIP_PIIX; channel.native_irq=true;
+    devices_snapshot(&snapshot);
+    assert(strstr(device(0x40100)->reason,"UDMA5; PIIX/ICH rev 02; PCI native"));
+    disk.dma_enabled=false; disk.dma_quarantined=true; devices_snapshot(&snapshot);
+    assert(strstr(device(0x40100)->reason,"PIO;")&&strstr(device(0x40100)->reason,"DMA quarantined"));
+    assert(!writes && snapshot.version==1 && snapshot.size==34696);
+    disk.dma_quarantined=false; disk.block.quarantined=true; res[2].state=RS_QUARANTINED;
+    memset(&channel,0,sizeof(channel)); devices_snapshot(&snapshot);
     for (unsigned i = snapshot.count; i < 64; i++) assert(!snapshot.devices[i].id && !snapshot.devices[i].name[0]);
     static const struct netif_driver nic_driver = {.name = "rtl8139"};
     nic_context = (struct netif){.pci = pci[0], .driver = &nic_driver, .ready = true,
@@ -283,6 +335,10 @@ int main(void)
     nic_context.pci.fn = 1;
     devices_snapshot(&snapshot); assert(!device(0x10018)->driver[0]);
     nic_count = 0;
+    gameport_visible=true;unsigned no_io=writes;devices_snapshot(&snapshot);
+    assert(device(0x72000)->class_id==CIUKI_DEVICE_PORT && device(0x72000)->state==CIUKI_DEVICE_READY &&
+        !strcmp(device(0x72000)->driver,"gameport") && device(0x72000)->resources[0].start==0x201 && writes==no_io);
+    gameport_visible=false;
     usb_hosts = 1;
     usb_context.pci = pci[0]; usb_context.ready = true; usb_context.generation = 41;
     usb_context.reason = "ready_polling"; strcpy(usb_context.owner, "usb-41");
@@ -295,6 +351,13 @@ int main(void)
     devices_snapshot(&snapshot);
     assert(!strcmp(device(0x10018)->driver, "usb-host") && device(0x10018)->state == CIUKI_DEVICE_READY);
     assert(device(0x60000)->bus_type == CIUKI_BUS_USB && device(0x60000)->vendor == 0x1234 && device(0x60000)->generation == 42);
+    static struct usb_hid_reports joystick_reports;
+    joystick_reports.caps.classes=CIUKI_HID_JOYSTICK;
+    usb_context.devices[0].hid[0].reports=&joystick_reports;
+    devices_snapshot(&snapshot);assert(device(0x60000)->class_id==CIUKI_DEVICE_PORT &&
+        !strcmp(device(0x60000)->name,"USB HID game controller") && writes==no_io);
+    usb_context.devices[0].hid[0].reports=NULL;
+    puts("PASS devices: native game port and USB joystick identity/resources, no probe on refresh");
     usb_context.devices[0].quarantined = true; usb_context.devices[0].reason = "hid_stall";
     devices_snapshot(&snapshot); assert(device(0x60000)->state == CIUKI_DEVICE_QUARANTINED && !strcmp(device(0x60000)->reason, "hid_stall"));
     usb_context.devices[0].quarantined=false;
@@ -324,13 +387,75 @@ int main(void)
     devices_snapshot(&snapshot);
     assert(device(0x10028)->class_id==CIUKI_DEVICE_SOUND && !strcmp(device(0x10028)->driver,"es137x"));
     assert(device(0x10028)->generation==41 && device(0x10028)->state==CIUKI_DEVICE_READY && device(0x10028)->resources[0].end==0xd040);
+    audio_dma.kind=AUDIO_ES1371; audio_dma.state.codec_id=0x414c4761; audio_dma.state.rate=48000;
+    ac97_codec_policy_init(&audio_dma.codec,&pci[2],audio_dma.state.codec_id,0,1);
+    unsigned io_before=writes; devices_snapshot(&snapshot);
+    assert(strstr(device(0x10028)->name,"ALC655 (414c4761)") && strstr(device(0x10028)->reason,"fixed48") && writes==io_before);
+    assert(strstr(device(0x10028)->reason,"mix=9f1f/9f1f") && strstr(device(0x10028)->reason,"EAPD=0"));
     assert(snapshot.driver_count==16 && !strcmp(snapshot.drivers[11].name,"es137x") && snapshot.drivers[11].bound_devices==1);
     for (unsigned i=0;i<snapshot.count;i++) assert(strcmp(snapshot.devices[i].name,"es137x"));
     audio.ready=false; audio.quarantined=true; audio.reason="stop_unproved";
     devices_snapshot(&snapshot); assert(device(0x10028)->state==CIUKI_DEVICE_QUARANTINED && snapshot.drivers[11].state==CIUKI_DEVICE_QUARANTINED);
+    pci[2].vendor=0x125d; pci[2].device=0x1978; pci[2].sub_vendor=0x0e11; pci[2].sub_device=0xb112;
+    audio.backend_pci=pci[2]; audio.backend_name="ess1978"; res[nres-1].owner="ess1978";
+    audio_dma.kind=AUDIO_MAESTRO2E;
+    devices_snapshot(&snapshot);
+    assert(!strcmp(device(0x10028)->driver,"ess1978") && device(0x10028)->state==CIUKI_DEVICE_QUARANTINED);
+    assert(snapshot.driver_count==16 && !strcmp(snapshot.drivers[11].name,"ess1978") && snapshot.drivers[11].bound_devices==1);
+    for (unsigned i=0;i<snapshot.count;i++) assert(strcmp(snapshot.devices[i].name,"ess1978"));
+    pci[2].vendor=0x1102; pci[2].device=2;
+    audio.backend_pci=pci[2]; audio.backend_name="emu10k1"; audio.quarantined=false;
+    audio_dma.kind=AUDIO_EMU10K1;
+    res[nres-1].owner="emu10k1"; res[nres-1].end=0xd020;
+    audio.ready=true; audio.reason="ready";
+    devices_snapshot(&snapshot);
+    assert(device(0x10028)->state==CIUKI_DEVICE_READY && !strcmp(device(0x10028)->driver,"emu10k1"));
+    assert(device(0x10028)->resources[0].end==0xd020 && snapshot.drivers[11].bound_devices==1);
+    for (unsigned i=0;i<snapshot.count;i++) assert(strcmp(snapshot.devices[i].name,"emu10k1"));
+    audio.ready=false; audio.backend_touched=false; audio.reason="routing_unqualified";
+    devices_snapshot(&snapshot);
+    assert(device(0x10028)->state==CIUKI_DEVICE_ABSENT && !strcmp(device(0x10028)->driver,"emu10k1"));
+    assert(!strcmp(device(0x10028)->reason,"routing_unqualified"));
+    audio.backend_touched=true; audio.quarantined=true; audio.reason="stop_unproved";
+    devices_snapshot(&snapshot);
+    assert(device(0x10028)->state==CIUKI_DEVICE_QUARANTINED && !strcmp(device(0x10028)->reason,"stop_unproved"));
+    puts("PASS devices: EMU sound binding, exact lease, pre-activation refusal and retained quarantine without extra device rows");
+    pci[2].vendor=0x13f6; pci[2].device=0x111; audio.backend_pci=pci[2];
+    audio.backend_name="cmipci"; audio.ready=true; audio.quarantined=false; audio.reason="ready";
+    audio_dma.kind=AUDIO_CMIPCI;
+    res[nres-1].owner="cmipci"; res[nres-1].end=0xd100;
+    devices_snapshot(&snapshot);
+    assert(device(0x10028)->class_id==CIUKI_DEVICE_SOUND && !strcmp(device(0x10028)->driver,"cmipci"));
+    assert(snapshot.driver_count==16 && !strcmp(snapshot.drivers[11].name,"cmipci") && snapshot.drivers[11].bound_devices==1);
+    assert(device(0x10028)->resources[0].end==0xd100);
+    for (unsigned i=0;i<snapshot.count;i++) assert(strcmp(snapshot.devices[i].name,"cmipci"));
+    audio.ready=false; audio.quarantined=true; audio.reason="stop_unproved";
+    devices_snapshot(&snapshot); assert(device(0x10028)->state==CIUKI_DEVICE_QUARANTINED && snapshot.drivers[11].state==CIUKI_DEVICE_QUARANTINED);
+    pci[2]=(struct pci_func){.vendor=0x1073,.device=0x0012,.class_code=4,.subclass=1,.dev=5,.irq_line=11,.irq_pin=1,.bar={0xe1000000}};
+    audio.backend_pci=pci[2]; audio.backend_name="ymfpci"; audio.ready=true; audio.quarantined=false;
+    audio_dma.kind=AUDIO_YMFPCI;
+    res[nres-1]=(struct resource){RES_MMIO,0xe1000000,0xe1008000,"ymfpci",41,RS_ACTIVE,false};
+    devices_snapshot(&snapshot);
+    assert(!strcmp(device(0x10028)->driver,"ymfpci") && device(0x10028)->state==CIUKI_DEVICE_READY);
+    assert(device(0x10028)->resources[0].start==0xe1000000 && device(0x10028)->resources[0].end==0xe1008000);
+    assert(snapshot.driver_count==16 && !strcmp(snapshot.drivers[11].name,"ymfpci") && snapshot.drivers[11].bound_devices==1);
+    for (unsigned i=0;i<snapshot.count;i++) assert(strcmp(snapshot.devices[i].name,"ymfpci"));
+    audio.ready=false; audio.quarantined=true;
+    devices_snapshot(&snapshot); assert(device(0x10028)->state==CIUKI_DEVICE_QUARANTINED);
+    audio.quarantined=false; audio.backend_touched=false; audio.reason="routing_unqualified";
+    devices_snapshot(&snapshot);
+    assert(device(0x10028)->state==CIUKI_DEVICE_ABSENT && !strcmp(device(0x10028)->reason,"routing_unqualified"));
+    assert(!strcmp(device(0x10028)->driver,"ymfpci"));
+    audio.backend_touched=true;
     audio.backend_pci=(struct pci_func){0}; audio.backend_name="sb16"; audio.ready=true; audio.quarantined=false;
     devices_snapshot(&snapshot); assert(device(0x50001)->bus_type==CIUKI_BUS_LEGACY && !strcmp(device(0x50001)->name,"Creative Sound Blaster 16"));
     assert(!strcmp(snapshot.drivers[11].name,"sb16") && snapshot.drivers[11].bound_devices==1);
+    audio.backend_pci=pci[2]; audio.backend_name="ac97"; audio.backend_touched=false; audio.ready=false;
+    ac97.pci=pci[2]; ac97.codec_id=0x574d4c13; ac97.failure.access="codec_route_unsupported";
+    audio.reason="codec_quirks"; devices_snapshot(&snapshot);
+    assert(strstr(device(0x10028)->name,"WM9713/14") && strstr(device(0x10028)->reason,"codec_route_unsupported") && strstr(device(0x10028)->reason,"unverified"));
+    assert(device(0x10028)->state==CIUKI_DEVICE_ABSENT && writes==io_before);
+    memset(&ac97,0,sizeof(ac97)); memset(&audio_dma,0,sizeof(audio_dma));
     memset(&audio,0,sizeof(audio)); npci=2; nres--;
     com_inventory();
     second_nic_catalogue();
@@ -340,6 +465,17 @@ int main(void)
     assert(!strcmp(device(0x41002)->reason,"chain_bounds; cluster=8192; file=BOOT.LOG"));
     volume_locked=false;
     puts("PASS devices: live read-only volume reason/file/cluster reaches the unchanged inventory ABI");
+    floppy_visible=true;floppy_state.ready=true;floppy_state.reason="fdc_ready";
+    floppy_state.drive[0].present=true;floppy_state.drive[0].owner=FDC_NATIVE;
+    floppy_state.drive[0].block.media_generation=7;
+    devices_snapshot(&snapshot);assert(device(0x40200)->state==CIUKI_DEVICE_READY);
+    assert(device(0x40201)->class_id==CIUKI_DEVICE_DISK && device(0x40201)->generation==7);
+    assert(!strcmp(device(0x40201)->reason,"Native media lease."));
+    floppy_state.quarantined=true;floppy_state.drive[0].block.quarantined=true;
+    floppy_state.reason="fdc_stop_unproved";devices_snapshot(&snapshot);
+    assert(device(0x40200)->state==CIUKI_DEVICE_QUARANTINED && device(0x40201)->state==CIUKI_DEVICE_QUARANTINED);
+    floppy_visible=false;
+    puts("PASS devices: FDC/drive/media lease and quarantine are retained facts; no refresh probe");
     /* Count cap and zeroed tail: more unique owners/PCI than device slots. */
     static char owners[64][16]; nres = 64; npci = 32;
     for (unsigned i = 0; i < 64; i++) { snprintf(owners[i], sizeof(owners[i]), "owner-%u", i); res[i] = (struct resource){RES_PORT, i * 2, i * 2 + 1, owners[i], i + 1, RS_CLAIMED, false}; }
@@ -371,7 +507,31 @@ int main(void)
     assert(!strcmp(user_firmware.records[0].hid, "PNP0303") && user_firmware.generation == 7 && !user_firmware.records[3].hid[0]);
     copy_error = -EFAULT; assert(devices_query(0x1000, sizeof(user_firmware)) == -EFAULT);
     copy_error = 0;
+    nres=0; npci=0; inventory_truncated=false; lpt_visible=true; gameport_visible=true;
+    res[nres++]=(struct resource){RES_PORT,0x378,0x380,"lpt1",90,RS_ACTIVE,false};
+    res[nres++]=(struct resource){RES_PORT,0x920,0x923,"lpt1",91,RS_ACTIVE,false};
+    res[nres++]=(struct resource){RES_DMA,1,2,"lpt1",92,RS_ACTIVE,false};
+    res[nres++]=(struct resource){RES_IRQ,7,8,"lpt1",94,RS_ACTIVE,false};
+    lpt_record=(struct ciuki_lpt_status){.number=1,.base=0x378,.base_hi=0x920,.origin=CIUKI_LPT_PNP,
+        .flags=CIUKI_LPT_READY|CIUKI_LPT_OPEN|CIUKI_LPT_VM|CIUKI_LPT_RAW,.generation=93,
+        .capabilities=31,.owner_id=2,.owner_generation=9,.dma_channel=1};
+    devices_snapshot(&snapshot);
+    const struct ciuki_device_record *lpt=device(0x71000);
+    assert(device(0x72000) && !strcmp(device(0x72000)->driver,"gameport"));
+    assert(lpt!=device(0x72000)); /* both classes retain distinct inventory IDs */
+    assert(lpt && lpt->class_id==CIUKI_DEVICE_PORT && lpt->state==CIUKI_DEVICE_READY);
+    assert(lpt->resource_count==4 && lpt->resources[0].end==0x380 && lpt->resources[1].start==0x920);
+    assert(lpt->resources[3].type==RES_IRQ && lpt->resources[3].start==7);
+    assert(lpt->generation==93 && strstr(lpt->reason,"VM raw") && strstr(lpt->reason,"2:9"));
+    bool driver=false;
+    for (unsigned i=0;i<snapshot.driver_count;i++) if (!strcmp(snapshot.drivers[i].name,"lpt"))
+        { assert(snapshot.drivers[i].bound_devices==1); driver=true; }
+    assert(driver);
+    lpt_record.flags=CIUKI_LPT_QUARANTINED;
+    devices_snapshot(&snapshot); assert(device(0x71000)->state==CIUKI_DEVICE_QUARANTINED);
+    puts("PASS devices LPT: separate extents, DMA, raw VM owner/generation, driver catalogue and quarantine");
     assert(!writes);
     puts("PASS devices: retained registry, PCI/64-bit BARs, NIC binding/readiness/quarantine/failure, quarantine, firmware leases, CPUID, zeroed marshalling and bounds");
+    fflush(stdout);
     return 0;
 }

@@ -1,0 +1,25 @@
+{
+  "firmware_ref": "v1.2.4",
+  "firmware_source": "https://github.com/alsa-project/alsa-firmware/blob/v1.2.4/ymfpci/hwmcode.c",
+  "upstream_git_blob": "499a6669748fedbcf8c3995a7017424381eb6d9b",
+  "imported_file": "ds1_microcode.h",
+  "imported_sha256": "0899f43c2aad54862664749b24cda24daf1f52d154268c3e67177bc3f7e78fae",
+  "encoding": "little-endian 32-bit words",
+  "images": {
+    "ds1_dsp.fw": {
+      "symbol": "DspInst",
+      "bytes": 128,
+      "sha256": "79ed987978fc99ba999c537f401584ca952af9e4d77367f7b1da8b034f06162b"
+    },
+    "ds1_ctrl.fw": {
+      "symbol": "CntrlInst",
+      "bytes": 12288,
+      "sha256": "cd6dcf547cd70882e42b901dbc9940c5db9edcf078124092e2aec4d9320bf526"
+    },
+    "ds1e_ctrl.fw": {
+      "symbol": "CntrlInst1E",
+      "bytes": 12288,
+      "sha256": "399f62b9539ff4aba84e934752c80b57826ad16b9b606424f1aa986f42afe9e2"
+    }
+  }
+}

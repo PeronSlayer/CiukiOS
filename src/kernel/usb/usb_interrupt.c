@@ -5,6 +5,9 @@
 _Static_assert(USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE <= USB_DMA_BYTES,
                "interrupt slots exceed pinned DMA");
 _Static_assert(32 + HID_PACKET_MAX <= USB_HID_STRIDE, "HID payload exceeds slot");
+_Static_assert(USB_HID_STRIDE % 16 == 0, "HID descriptors must stay aligned");
+_Static_assert(USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE <= USB_BULK_TD,
+               "interrupt slots overlap bulk TDs");
 static unsigned slot(struct usb_device *d, struct usb_hid *p)
 {
     return USB_HID_BASE + ((unsigned)(d - d->host->devices) * USB_HID_MAX +

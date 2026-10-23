@@ -551,6 +551,16 @@ int desk_parse(const struct ciuki_message *m, int client,
             p->flags != SOUND_ERROR && p->flags != SOUND_INFORMATION && p->flags != SOUND_QUESTION &&
             p->flags != SOUND_AUTOPLAY) return 0;
         n = 8; break;
+    case DESK_JOYSTICK: case DESK_JOYSTICK_RESULT: {
+        int response=p->opcode==DESK_JOYSTICK_RESULT;
+        if (client==response || m->data[0]!=DESK_SHELL_VERSION || m->length!=(response ? 112u : 108u)) return 0;
+        p->serial=desk_get32(m->data+4);
+        memcpy(&p->joystick,m->data+8,sizeof(p->joystick));
+        if (!p->serial || p->joystick.version!=CIUKI_JOYSTICK_VERSION || p->joystick.size!=sizeof(p->joystick) ||
+            p->joystick.operation>CIUKI_JOY_SAVE_STATUS || p->joystick.reserved) return 0;
+        if (response) { p->result=(int32_t)desk_get32(m->data+108); if (p->result>0 || p->result < -4095) return 0; }
+        n=m->length; break;
+    }
     case DESK_SETTINGS:
         if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 24) return 0;
         p->serial = desk_get32(m->data + 4);

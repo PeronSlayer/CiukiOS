@@ -145,11 +145,12 @@ static void completion_config_write(void *arg,unsigned off,uint32_t value,unsign
 static bool completion_wait(struct kwait *q,kwait_cond_fn condition,void *arg,uint64_t deadline)
 {
     struct usb_host *h=&hosts[0];
-    assert(q==&input_changed && condition==hid_pending && !arg && deadline==g_ticks+1);
+    assert(q==&input_changed && condition==hid_pending && !arg && deadline>=g_ticks);
     for(unsigned i=0;i<2;i++) if(ack_us[i] && !serviced_us[i] && h->devices[i].hid[0].pipe_state==2)
         serviced_us[i]=completion_us;
     if(completion_us>=completion_end)longjmp(service_done,1);
     while(!condition(arg) && g_ticks<deadline) {
+        if(completion_us>=completion_end)longjmp(service_done,1);
         uint64_t pit=(g_ticks+1)*1000, frame=completion_us/1000*1000+500;
         if(frame<=completion_us)frame+=1000;
         if(frame<pit) {
@@ -193,12 +194,17 @@ static void completion_workers(const char *mode)
         assert(!!(*(uint32_t *)(m.dma+at+4)&(1u<<24))==!poll);
     }
     write_reg(&m,ohci ? 0x0c:2,ohci ? 0x7f:0x1f,ohci ? 4:2);
+    /* Enumeration here deliberately used the polling I/O fixture. Now the
+     * scheduler replays actual interrupts; its prior lost-IRQ evidence must
+     * not describe the new transport. Lost mode retains that evidence. */
+    if(deliver_irq) { h->irq_fallback=false; h->completion_irq=true; }
+    if(!deliver_irq && !poll) assert(h->irq_fallback);
     g_ticks=m.now;completion_us=g_ticks*1000;completion_end=completion_us+1000000;
     h->irq_pending=input_pending=false;wake_hook=completion_wake;completion_replay=true;
     unsigned interrupts=h->interrupts;
     if(!setjmp(service_done))input_service(NULL);
     idle_wakes=timer_wakes+notification_wakes;
-    assert(idle_wakes==1000 && !notification_wakes && h->interrupts==interrupts);
+    assert(idle_wakes==(deliver_irq ? 0u : 1000u/USB_HID_FALLBACK_MS) && !notification_wakes && h->interrupts==interrupts);
     unsigned idle_interrupts=h->interrupts-interrupts;
     timer_wakes=notification_wakes=0;
     inject_us=completion_us+500;completion_end=completion_us+20000;report_ack_hook=completion_ack;
@@ -207,7 +213,7 @@ static void completion_workers(const char *mode)
     for(unsigned i=0;i<2;i++) {
         assert(ack_us[i] && serviced_us[i]>=ack_us[i]);
         unsigned latency=(unsigned)(serviced_us[i]-ack_us[i]);
-        assert(latency<=1000 && (!deliver_irq || !latency));
+        assert(latency<=USB_HID_FALLBACK_MS*1000 && (!deliver_irq || !latency));
         if(latency>max_latency)max_latency=latency;
     }
     assert(held[0x58] && last_x==3 && last_y==5); /* real queue delivery after retirement */
@@ -330,6 +336,13 @@ static void done_head_interleave(void)
     *(uint32_t *)(m.dma+USB_HID_BASE+24)=0;
     *(uint32_t *)(m.dma+0x84)=m.host.dma_phys+USB_TD;
     m.regs[0x0c/4]|=2;
+    /* This path polls a controller with established lost-WDH evidence.
+     * Qualification now waits out the IRQ grace period before a task may
+     * consume WDH; the interlock below itself remains nonblocking. */
+    usb_irq_completion_check(&m.host);
+    m.now+=USB_IRQ_GRACE_MS;
+    usb_irq_completion_check(&m.host);
+    assert(m.host.irq_fallback);
     uint64_t tick=m.now;
     wdh_ack_hook=schedule_done_irq;
     fs_lock_take(&m.host.transfer_lock);

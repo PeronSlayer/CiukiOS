@@ -6,7 +6,7 @@
 #include <ciuki/process.h>
 #include "../../fs/vfs.h"
 
-enum px_kind { PX_FILE, PX_DIRECTORY, PX_NULL, PX_CONSOLE, PX_MNT, PX_DEV, PX_AUDIO, PX_MIXER, PX_NET, PX_MEDIA, PX_COM };
+enum px_kind { PX_FILE, PX_DIRECTORY, PX_NULL, PX_CONSOLE, PX_MNT, PX_DEV, PX_AUDIO, PX_MIXER, PX_NET, PX_MEDIA, PX_COM, PX_LPT };
 struct px_namespace;
 struct px_node {
     struct px_namespace *space;
@@ -37,7 +37,7 @@ struct file_description {
     bool mixer_control;
     uint64_t position;
     uint32_t references, flags, deny, cursor, stream;
-    uint32_t com_generation;
+    uint32_t com_generation, lpt_generation;
     struct fat_cursor fat_cursor; /* f3-51c FAT cluster cursor; namespace + volume reservation */
     struct fat_dir_hint dir_hint; /* f1-93b readdir position of cursor; namespace + volume reservation */
 };
@@ -46,6 +46,7 @@ struct px_namespace {
     struct px_namespace *next;
     struct px_node *nodes, *root, *mnt, *dev, *null, *console, *audio, *mixer, *net, *media;
     struct px_node *com[CIUKI_COM_MAX];
+    struct px_node *lpt[CIUKI_LPT_MAX];
     struct file_description *descriptions;
     uint64_t next_ino;
 };

@@ -327,27 +327,39 @@ struct input_operation {
     struct ua_pin *pin;
 };
 extern int usb_hid_query(uint32_t, void *) __attribute__((weak));
+extern int joystick_hid_query(uint32_t, void *) __attribute__((weak));
+extern int joystick_control(struct ciuki_joystick_control *) __attribute__((weak));
+extern int joystick_settings_calibrate(const struct ciuki_joystick_control *) __attribute__((weak));
 int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t address, uint32_t bytes)
 {
     int err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
     if (err) return err;
     unsigned expected=command==INPUT_HID_GET_CAPS ? sizeof(struct ciuki_hid_caps) :
         command==INPUT_HID_GET_STATE ? sizeof(struct ciuki_hid_state) :
-        command==INPUT_HID_CALIBRATE ? sizeof(struct ciuki_hid_calibration) : 0;
+        command==INPUT_HID_CALIBRATE ? sizeof(struct ciuki_hid_calibration) :
+        command==INPUT_JOY_CONTROL ? sizeof(struct ciuki_joystick_control) : 0;
     if (!expected) return -ENOTTY;
     if (bytes!=expected) return -EINVAL;
     union { struct ciuki_hid_caps caps; struct ciuki_hid_state state;
-        struct ciuki_hid_calibration calibration; uint32_t header[4]; } record;
+        struct ciuki_hid_calibration calibration; struct ciuki_joystick_control joystick; uint32_t header[4]; } record;
     struct ua_pin pin;
     err=ua_pin(p->memory,&pin,address,bytes,true);
     if (err) return err;
     err=copy_from_user(&record,address,bytes);
-    if (!err && (record.header[0]!=CIUKI_HID_VERSION || record.header[1]!=bytes ||
+    if (!err && (record.header[0]!=(command==INPUT_JOY_CONTROL ? CIUKI_JOYSTICK_VERSION : CIUKI_HID_VERSION) || record.header[1]!=bytes ||
         (command==INPUT_HID_GET_CAPS && record.caps.reserved) ||
         (command==INPUT_HID_GET_STATE && record.state.reserved))) err=-EINVAL;
     if (!err) {
         uint32_t flags=irq_save();
-        err=usb_hid_query ? usb_hid_query(command,&record) : -ENODEV;
+        if (command==INPUT_HID_CALIBRATE && joystick_settings_calibrate) {
+            const struct ciuki_hid_calibration *cal=&record.calibration;
+            struct ciuki_joystick_control c={.version=1,.size=sizeof(c),.operation=CIUKI_JOY_CALIBRATE,
+                .device=cal->device,.generation=cal->generation,.axis=cal->axis,
+                .minimum=cal->minimum,.centre=cal->centre,.maximum=cal->maximum};
+            err=joystick_settings_calibrate(&c);
+        } else err=command==INPUT_JOY_CONTROL ? (joystick_control ? joystick_control(&record.joystick) : -ENODEV) :
+            joystick_hid_query ? joystick_hid_query(command,&record) :
+            usb_hid_query ? usb_hid_query(command,&record) : -ENODEV;
         irq_restore(flags);
     }
     if (!err) err=copy_to_user(address,&record,bytes);
@@ -390,6 +402,7 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
         struct input_event in;
         bool have = input_read(&in);
         if (have) {
+            if (in.type == INPUT_ABS) continue; /* internal pad sample; REL/BTN is the public projection */
             struct ciuki_input_event out;
             desktop_input_event(&in, (uint32_t)in.lost_count, (uint32_t)in.value, &out);
             err = copy_to_user(events + count * sizeof(out), &out, sizeof(out));

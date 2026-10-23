@@ -10,10 +10,12 @@
 #define USB_PORT_MAX 8u
 #define USB_HID_MAX 4u
 #define USB_CONFIG_MAX 512u
-#define USB_DMA_BYTES 20480u /* f1-96: 128-TD bulk ring and its 8 KiB of packet buffers */
+#define USB_DMA_BYTES 24576u /* f1-104b: six pinned pages, 64-byte HID payloads */
 #define USB_PACKET_MAX 64u
 #define USB_TIMEOUT_MS 500u
 #define USB_PERIODIC_WATCHDOG_MS 20u
+#define USB_HID_FALLBACK_MS 4u /* only unrouteable/revoked or proven lost IRQ */
+#define USB_IRQ_GRACE_MS 2u /* exceeds EHCI's configured 1 ms ITC */
 #define USB_HID_TRACE_LIMIT 16u
 #define USB_PORT_ACTION_TRACE_LIMIT 32u
 #define USB_BULK_TIMEOUT_MS 10000u
@@ -34,17 +36,17 @@
 #define USB_TAIL 4160u
 #define USB_BUFFER 4352u
 /* Private interrupt slots fit all device/interface records in the same
- * pinned controller allocation. Boot reports need at most eight bytes. */
+ * pinned controller allocation: 16-byte QH/ED, 16-byte TD, 64-byte payload. */
 #define USB_HID_BASE 4608u
-#define USB_HID_STRIDE 48u
+#define USB_HID_STRIDE 96u
 #define USB_OHCI_DONE_HEADS (USB_DEVICE_MAX * USB_HID_MAX + 1u)
 #define USB_HID_LATENCY_LIMIT 20u
 /* f1-96: UHCI bulk data stages stream through a ring of USB_BULK_BATCH TDs
  * (about seven full-speed frames of 64-byte packets); completed slots are
  * re-armed while the controller executes the rest. One 64-byte buffer per
  * slot. A phase of at most USB_BULK_BATCH packets is a single chain. */
-#define USB_BULK_TD 7680u
-#define USB_BULK_BUFFER 12288u
+#define USB_BULK_TD (USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE)
+#define USB_BULK_BUFFER (USB_BULK_TD + USB_BULK_BATCH * 16u)
 #define USB_BULK_BATCH 128u
 /* f1-96: BOT READ(10)/WRITE(10) transfer limit. Windows limits USB mass
  * storage to 128 sectors and Linux to 240 by default; our block requests
@@ -211,8 +213,14 @@ struct usb_device {
     const char *reason;
     const char *hid_fault; /* general owner performs hub control/quarantine */
     uint16_t vendor, product;
+    uint8_t serial_identity[32]; /* SHA-256 of full UTF-16LE serial descriptor */
+    bool serial_advertised, serial_valid;
     uint8_t address, ep0, class_code, root_port, parent, port, hub_ports, config;
     bool present, configured, quarantined, low_speed, high_speed;
+    /* Selected hub interface (alternate zero); multi-TT is never inferred
+     * from the device's capability protocol alone. One external hub level. */
+    bool tt_multi, tt_pending, tt_recovering;
+    uint8_t tt_think; /* 8, 16, 24 or 32 full-speed bit times */
     uint16_t control_timeout_ms; /* f1-96b: nonzero only around a BOT class reset */
     struct usb_hid hid[USB_HID_MAX];
     struct usb_storage storage;
@@ -264,6 +272,10 @@ struct usb_host {
     struct usb_port_log root_log[USB_PORT_MAX];
     bool attempted, ready, quarantined, touched, owned, busy;
     bool irq_attached, irq_pending;
+    bool completion_irq, irq_fallback;
+    uint64_t completion_interrupts;
+    bool irq_probe_pending;
+    uint64_t irq_probe_at, irq_probe_count;
     uint32_t irq_status; /* fatal causes retained after device-local W1C */
     bool ohci_root_pending; /* RHSC stays disabled until the next root scan */
     uint32_t ohci_done_heads[USB_OHCI_DONE_HEADS];
@@ -336,12 +348,19 @@ void usb_host_drop(struct usb_host *);
 void usb_sleep(struct usb_host *, unsigned); /* caller's reservation survives */
 void usb_poll_pause(struct usb_host *, unsigned); /* bounded retry backoff; may finish early */
 void usb_hid_service(struct usb_host *); /* mutex held, no general transfers */
+uint64_t usb_hid_deadline(struct usb_host *); /* absolute; UINT64_MAX = IRQ only */
+void usb_irq_completion_check(struct usb_host *); /* mutex held, lost IOC evidence */
+void usb_ehci_tt_service(struct usb_device *); /* general reservation held */
 void usb_uhci_dump_schedule(struct usb_host *); /* once, after enumeration; mutex held */
 int usb_hub_attach(struct usb_device *);
 void usb_hub_scan(struct usb_device *);
 int usb_hid_attach(struct usb_device *, struct usb_hid *, unsigned report_length);
 int usb_hid_query(uint32_t command, void *record);
+/* Cache only, no physical USB transaction; common joystick calibration. */
+int usb_hid_raw(uint32_t device, uint32_t generation, int32_t raw[4]);
 int usb_hid_describe(struct usb_device *, struct usb_hid *);
+int usb_joystick_identity(uint32_t, uint32_t, uint8_t[32]);
+void usb_identity_serial(struct usb_device *, unsigned index);
 void usb_hid_publish(struct usb_device *, struct usb_hid *, const struct hid_values *, unsigned report);
 void usb_hid_lifecycle(struct usb_device *, struct usb_hid *, bool attached);
 int usb_hid_report(struct usb_device *, struct usb_hid *, const uint8_t *, unsigned);

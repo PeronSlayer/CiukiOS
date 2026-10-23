@@ -1,4 +1,4 @@
-/* Legacy ATA PIO/DMA, one sleepable transaction per channel, never BIOS/retry.
+/* SFF ATA PIO/DMA, one sleepable transaction per channel, never BIOS/retry.
  * Research: T13 ATA/ATAPI-6 d1410r3a, sections 6.20, 7, 8.12-8.15,
  * 8.34-8.35, 8.62-8.63, 9.2, 9.5-9.6, 9.12 and 10.2.2 (table 67):
  * https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf
@@ -70,6 +70,7 @@ static uint8_t reg_read(struct ata_channel *c, unsigned r)
 }
 static void reg_write(struct ata_channel *c, unsigned r, uint8_t v)
 {
+    if (r == 6) c->selected_shadow = v;
     c->ops->out8(c->port_ctx, (uint16_t)(c->base + r), v);
 }
 static uint8_t alternate(struct ata_channel *c)
@@ -78,8 +79,14 @@ static uint8_t alternate(struct ata_channel *c)
 }
 static void device_control(struct ata_channel *c, uint8_t v)
 {
+    bool changed = c->control_shadow != v;
+    bool reset = (c->control_shadow | v) & ATA_SRST;
     c->control_shadow = v;
     c->ops->out8(c->port_ctx, c->control, v);
+    /* pata_via.c via_tf_load: changing IEN may reset Device/Head.
+     * SRST has its own selection protocol; don't restore across reset. */
+    if (changed && c->chipset.family == ATA_CHIP_VIA && !reset && !c->stopped && !c->quiescing)
+        c->ops->out8(c->port_ctx, (uint16_t)(c->base + 6), c->selected_shadow);
 }
 static uint64_t now(struct ata_channel *c) { return c->ops->now_ms(c->port_ctx); }
 /* f1-92: why a command boundary expired, for the fault/quarantine records. */
@@ -135,6 +142,8 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
         return -FS_EQUARANTINED;    /* exported fake setup cannot rearm a real controller */
     memset(c, 0, sizeof(*c));
     c->ops = ops;
+    c->index = index;
+    c->selected_shadow = 0xa0;
     c->port_ctx = ctx;
     c->base = index ? 0x170 : 0x1f0;
     c->control = index ? 0x376 : 0x3f6;
@@ -177,6 +186,21 @@ void ata_channel_irq(struct ata_channel *c)
 static void primary_irq(struct trap_frame *tf) { (void)tf; ata_channel_irq(&channels[0]); }
 static void secondary_irq(struct trap_frame *tf) { (void)tf; ata_channel_irq(&channels[1]); }
 
+static bool ata_pci_interrupt(unsigned irq, const char *owner)
+{
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->native_irq || c->irq != irq || strncmp(owner, owners[i], 5) || !c->dma.ops) continue;
+        uint8_t s = c->dma.ops->in8(c->dma.ctx, (uint16_t)(c->dma.base + 2));
+        if (!(s & ATA_BM_IRQ)) return false;
+        bool armed = c->dma.armed;
+        ata_channel_irq(c);
+        if (!armed) c->dma.ops->out8(c->dma.ctx, (uint16_t)(c->dma.base + 2), (s & 0x60) | ATA_BM_IRQ);
+        return true;
+    }
+    return false;
+}
+
 static int failure(struct ata_device *d, uint64_t start, uint8_t status);
 static int dma_failure(struct ata_device *d, uint64_t start, uint8_t status)
 {
@@ -194,10 +218,10 @@ static int dma_failure(struct ata_device *d, uint64_t start, uint8_t status)
     bool fallback = idle && !unstarted && !c->quiescing && (ending & ATA_DRDY) && ending != 0xff &&
                     !(ending & (ATA_BSY | ATA_DRQ | ATA_DF));
     klog("[ata%u] dma quarantine unit=%u mode=udma%u generation=%u command=%02x issued=%u bm=%02x status=%02x error=%02x elapsed_ms=%llu fallback=%s cause=%s",
-         c->irq - 14, d->unit, d->udma_mode, d->generation, d->command, d->issued, bm,
+         c->index, d->unit, d->udma_mode, d->generation, d->command, d->issued, bm,
          status, d->error, d->elapsed_ms, fallback ? "pio" : "blocked", cause);
     if (fallback) klog("[ata%u] dma fallback unit=%u generation=%u command=%02x bm=%02x status=%02x mode=pio",
-         c->irq - 14, d->unit, d->generation, d->command, bm, ending);
+         c->index, d->unit, d->generation, d->command, bm, ending);
     /* The failed DMA command itself is never resumed. With both engines
      * proven idle, ata_transfer repeats the same request once through PIO
      * (f1-92) before any error reaches the volume. Busy/DRQ/DF or missing
@@ -222,13 +246,13 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
         c->devices[i].block.quarantined = true;
     device_control(c, c->control_shadow | ATA_NIEN);
     if (c->native) {
-        pic_mask(c->irq);
+        if (!c->native_irq) pic_mask(c->irq);
         for (unsigned i = 0; i < 3; i++)
             if (c->claims[i] >= 0)
                 registry_quarantine(c->claims[i], c->generations[i]);
         if (c->dma.claim >= 0) registry_quarantine(c->dma.claim, c->dma.generation);
         klog("[ata%u] fault unit=%u command=%02x issued=%u status=%02x error=%02x elapsed_ms=%llu cause=%s",
-             c->irq - 14, d->unit, d->command, d->issued, d->status, d->error, d->elapsed_ms, cause);
+             c->index, d->unit, d->command, d->issued, d->status, d->error, d->elapsed_ms, cause);
     }
     return -FS_EIO;
 }
@@ -248,7 +272,7 @@ static bool packet_signature(uint32_t value)
 static void log_signature(struct ata_device *d, uint8_t status, uint32_t value)
 {
     klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x",
-         d->channel->irq - 14, d->unit, status, value & 255,
+         d->channel->index, d->unit, status, value & 255,
          (value >> 8) & 255, (value >> 16) & 255, value >> 24);
 }
 
@@ -349,7 +373,7 @@ static void early_irq(struct ata_device *d, const char *phase, uint8_t status, u
     if (d->early_irqs != UINT32_MAX) d->early_irqs++;
     if (record_due(d->early_irqs))
         klog("[ata%u] early_irq unit=%u phase=%s command=%02x generation=%u status=%02x bm=%02x count=%u",
-             c->irq - 14, d->unit, phase, d->command, d->generation, status, bm, d->early_irqs);
+             c->index, d->unit, phase, d->command, d->generation, status, bm, d->early_irqs);
 }
 
 static int select_device(struct ata_device *d, uint64_t start, uint64_t deadline, uint8_t head)
@@ -383,6 +407,10 @@ static int issue(struct ata_device *d, uint8_t command, uint64_t start, uint32_t
     /* Drain any old source before publishing a fresh generation. The IRQ
      * condition remains latched even if the edge precedes wait enqueue. */
     reg_read(c, 7);
+    if (c->native_irq && !c->dma.armed && c->dma.ops) {
+        uint8_t bm = c->dma.ops->in8(c->dma.ctx, (uint16_t)(c->dma.base + 2));
+        c->dma.ops->out8(c->dma.ctx, (uint16_t)(c->dma.base + 2), (bm & 0x60) | ATA_BM_IRQ);
+    }
     gen_t generation = gen_alloc();
     if (!generation)
         return failure(d, start, alternate(c));
@@ -560,7 +588,7 @@ static int packet_checked(struct ata_device *d, const uint8_t *p, unsigned lengt
     }
     if (new_sense || d->sense_key == 6)
         klog("[optical] media channel=%u unit=%u stage=sense opcode=%02x key=%02x asc=%02x ascq=%02x generation=%u result=%d",
-             d->channel->irq - 14, d->unit, p[0], d->sense_key, d->asc, d->ascq,
+             d->channel->index, d->unit, p[0], d->sense_key, d->asc, d->ascq,
              d->block.media_generation, -FS_EIO);
     d->elapsed_ms=now(d->channel)-start;
     if (d->elapsed_ms>d->max_packet_ms) d->max_packet_ms=d->elapsed_ms;
@@ -617,7 +645,7 @@ static int ready_result(struct ata_device *d, const char *stage, int e, uint32_t
     if (!d) return e;
     if (d->ready_stage != stage || d->ready_error != e)
         klog("[optical] media channel=%u unit=%u stage=%s result=%d bytes=%u status=%02x error=%02x key=%02x asc=%02x ascq=%02x generation=%u sectors=%llu session=%u quarantined=%u",
-             d->channel->irq - 14, d->unit, stage, e, bytes, d->status, d->error,
+             d->channel->index, d->unit, stage, e, bytes, d->status, d->error,
              d->sense_key, d->asc, d->ascq, d->block.media_generation,
              d->block.capacity, d->session_lba, d->block.quarantined);
     d->ready_stage = stage; d->ready_error = e;
@@ -664,7 +692,7 @@ int atapi_ready(struct ata_device *d)
             uint8_t spin[12] = { 0x1b, 1, 0, 0, 1 };
             int spin_error = atapi_packet(d, spin, sizeof(spin), 0, 0, &n);
             klog("[optical] media channel=%u unit=%u stage=spinup generation=%u result=%d",
-                 d->channel->irq - 14, d->unit, d->block.media_generation, spin_error);
+                 d->channel->index, d->unit, d->block.media_generation, spin_error);
             if (spin_error) return ready_result(d, "spinup", spin_error, n);
         }
         return e;
@@ -748,7 +776,7 @@ static int identify_packet(struct ata_device *d)
     disarm(c);
     if (e) {
         /* Lead diagnostics (QEMU evidence of 2026-10-11): which stage failed. */
-        klog("[ata%u] atapi identify unit=%u stage=%u error=%d status=%02x error_reg=%02x", c->irq - 14, d->unit, stage, e, alternate(c), reg_read(c, 1));
+        klog("[ata%u] atapi identify unit=%u stage=%u error=%d status=%02x error_reg=%02x", c->index, d->unit, stage, e, alternate(c), reg_read(c, 1));
         return e;
     }
     uint16_t config = fs_rd16(data);
@@ -762,7 +790,33 @@ static int identify_packet(struct ata_device *d)
     d->model[40] = 0;
     d->identified = true; d->block.request_read = atapi_read; d->block.read = blkdev_read; d->block.write = 0; d->block.flush = 0;
     d->block.sector_size = 2048; d->block.media_generation = 1; d->block.media_check = atapi_check_block;
-    klog("[ata%u] unit=%u kind=atapi type=%u packet_bytes=%u", c->irq - 14, d->unit, d->packet_type, d->packet_bytes);
+    klog("[ata%u] unit=%u kind=atapi type=%u packet_bytes=%u mode=pio reason=atapi_pio",
+         c->index, d->unit, d->packet_type, d->packet_bytes);
+    return 0;
+}
+
+/* A separate frame keeps the IDENTIFY buffer out of its caller's frame.
+ * Verify both the selected transfer mode and the disk that accepted it. */
+__attribute__((noinline)) static int verify_udma(struct ata_device *d, int mode, const uint8_t before[512])
+{
+    struct ata_channel *c = d->channel;
+    uint8_t data[512]; uint32_t sequence;
+    uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
+    int e = select_device(d, start, deadline, 0);
+    if (!e) device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+    if (!e) e = issue(d, ATA_IDENTIFY, start, &sequence);
+    if (!e) e = wait_irq(d, &sequence, start, deadline);
+    if (!e) e = poll_status(d, start, deadline, ATA_DRQ, 0);
+    if (!e) e = data_block(d, data, false, start, deadline);
+    if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
+    disarm(c);
+    if (e) return e;
+    if (ata_dma_mode(data) != mode || memcmp(data + 20, before + 20, 20) ||
+        memcmp(data + 46, before + 46, 48) || memcmp(data + 120, before + 120, 4) ||
+        memcmp(data + 200, before + 200, 8)) {
+        c->fault_cause = "mode_verify";
+        return failure(d, start, alternate(c));
+    }
     return 0;
 }
 
@@ -785,7 +839,7 @@ static int identify(struct ata_device *d)
          * All reset signatures have already been captured by pass 1. */
         disarm(c);
         d->atapi = true;
-        klog("[ata%u] unit=%u identify=packet_signature", c->irq - 14, d->unit);
+        klog("[ata%u] unit=%u identify=packet_signature", c->index, d->unit);
         return identify_packet(d);
     }
     if (!e)
@@ -862,13 +916,29 @@ static int identify(struct ata_device *d)
         d->multiple_sectors = (uint8_t)maximum;
     }
     d->identified = true;
-    int mode = c->dma.ops ? ata_dma_restore_mode(d->firmware_udma, data) : -1;
+    struct ata_timing_plan plan;
+    bool negotiated = c->chipset.pci != 0;
+    int mode = -1;
+    if (c->dma.ops) mode = negotiated ? ata_chipset_plan(&c->chipset, d->unit, data, &plan) :
+                                       ata_dma_restore_mode(d->firmware_udma, data);
+    if (mode >= 0 && d->lba48 && c->chipset.no_lba48_dma) {
+        /* This transport always uses EXT commands on LBA48 disks. ALi C2-C4
+         * cannot DMA those commands, even for low addresses. */
+        mode = -1; c->chipset.reason = "ali_lba48_pio";
+    }
+    if (mode >= 0 && negotiated) {
+        e = ata_chipset_program(c, &plan);
+        if (e) {
+            c->fault_cause = "chipset_program";
+            return failure(d, now(c), alternate(c));
+        }
+    }
     if (mode >= 0) {
         d->udma_mode = (uint8_t)mode;
         start = now(c); deadline = start + ATA_COMMAND_MS;
         e = select_device(d, start, deadline, 0);
         if (!e) {
-            d->dma_configuring = true;
+            d->dma_configuring = !negotiated;
             d->issued = false;
             device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
             reg_write(c, 1, 3); reg_write(c, 2, (uint8_t)(0x40 | mode));
@@ -879,11 +949,18 @@ static int identify(struct ata_device *d)
         d->dma_configuring = false;
         disarm(c);
         if (c->stopped) return e;
+        if (!e && negotiated) e = verify_udma(d, mode, data);
+        if (c->stopped) return e;
         d->dma_enabled = !e;
         if (!e) klog("[ata%u] dma mode=udma%u unit=%u bm=%04x cable80=%u buffer_bytes=%u",
-                      c->irq - 14, d->udma_mode, d->unit, c->dma.base,
-                      (fs_rd16(data + 93 * 2) & 0xe000) == 0x6000, ATA_DMA_BYTES);
+                      c->index, d->udma_mode, d->unit, c->dma.base,
+                      (!negotiated || c->chipset.cable80) && (fs_rd16(data + 93 * 2) & 0xe000) == 0x6000, ATA_DMA_BYTES);
     }
+    klog("[ata%u] chipset family=%u pci=%04x:%04x revision=%02x native=%u unit=%u mode=%s reason=%s",
+         c->index, c->chipset.family, c->pci ? c->pci->vendor : 0, c->pci ? c->pci->device : 0,
+         c->pci ? c->pci->revision : 0, c->native_irq, d->unit,
+         d->dma_enabled ? "udma" : "pio", d->dma_enabled ? (negotiated ? "negotiated" : "firmware_restore") :
+         !c->dma.ops ? "bm_unavailable" : negotiated ? c->chipset.reason : "firmware_mode_unavailable");
     d->elapsed_ms = now(c) - start;
     return 0;
 }
@@ -1154,7 +1231,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     int e = select_device(d, start, deadline, head);
     if (e)
         return e;
-    bool dma = d->dma_enabled;
+    bool dma = d->dma_enabled && !(d->lba48 && c->chipset.no_lba48_dma);
     if (dma) {
         e = ata_dma_prepare(c, buf, n * 512, write);
         if (e) return dma_failure(d, start, alternate(c));
@@ -1204,7 +1281,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
                 c->dma_completion_logged = true;
                 uint64_t us = first_start ? (ktime_cycles()-first_start)*1000/g_tsc_per_ms : d->elapsed_ms*1000;
                 klog("[ata%u] dma first-completion unit=%u elapsed_us=%u",
-                    c->irq - 14, d->unit, us>UINT32_MAX ? UINT32_MAX : (uint32_t)us);
+                    c->index, d->unit, us>UINT32_MAX ? UINT32_MAX : (uint32_t)us);
             }
             d->dma_requests++; d->dma_bytes += n * 512;
             if (c->dma.bounced) d->dma_bounces++;
@@ -1281,13 +1358,13 @@ static int ata_transfer(struct blkdev *b, uint64_t lba, uint32_t n, void *buf, b
             gen_t failed = d->generation;
             e = command_data(d, lba, chunk, p, write);
             klog("[ata%u] dma retry unit=%u generation=%u command=%02x mode=pio result=%d count=%u",
-                 c->irq - 14, d->unit, failed, d->command, e, d->dma_retries);
+                 c->index, d->unit, failed, d->command, e, d->dma_retries);
         }
         if (d->issued && request_interrupted()) {
             if (d->interrupted_inflight != UINT32_MAX) d->interrupted_inflight++;
             if (record_due(d->interrupted_inflight))
                 klog("[ata%u] interrupted_inflight unit=%u command=%02x result=%d elapsed_ms=%llu count=%u",
-                     c->irq - 14, d->unit, d->command, e, now(c) - started, d->interrupted_inflight);
+                     c->index, d->unit, d->command, e, now(c) - started, d->interrupted_inflight);
         }
         if (e)
             break;
@@ -1406,8 +1483,15 @@ bool ata_channel_idle(struct ata_channel *c)
     bool idle = !c->active && !c->mutex.owner && master_idle && !c->stopped &&
                 !(alternate(c) & (ATA_BSY | ATA_DRQ));
     if (c->native) {
-        if (idle) irq_set_handler(c->irq, 0); /* no callback outlives a released claim */
-        else pic_mask(c->irq);      /* failed idle proof: quarantine containment */
+        if (c->native_irq) {
+            if (idle && c->native_irq_attached) {
+                if (irq_chain_remove(c->irq, ata_pci_interrupt, owners[c->index])) idle = false;
+                else c->native_irq_attached = false;
+            }
+        } else {
+            if (idle) irq_set_handler(c->irq, 0); /* no callback outlives a released claim */
+            else pic_mask(c->irq);  /* failed idle proof: quarantine containment */
+        }
     }
     return idle;
 }
@@ -1430,8 +1514,9 @@ static int claim_channel(struct ata_channel *c, unsigned index)
     const enum res_type types[3] = { RES_PORT, RES_PORT, RES_IRQ };
     uint32_t starts[3] = { c->base, c->control, c->irq };
     uint32_t ends[3] = { c->base + 8u, c->control + 1u, c->irq + 1u };
+    if (c->native_irq) { starts[1] -= 2; ends[1] = starts[1] + 4; }
     for (unsigned i = 0; i < 3; i++) {
-        int h = registry_claim(types[i], starts[i], ends[i], owners[index], false);
+        int h = registry_claim(types[i], starts[i], ends[i], owners[index], i == 2 && c->native_irq);
         if (h < 0) {
             /* Registry has no CLAIMED -> RELEASED rollback interface.
              * Retain/quarantine partial claims; conflict causes no I/O. */
@@ -1445,6 +1530,25 @@ static int claim_channel(struct ata_channel *c, unsigned index)
     return 0;
 }
 
+static int ata_bind_resources(struct ata_channel *c, unsigned index)
+{
+    const struct pci_func *selected = 0;
+    for (unsigned j = 0; j < pci_count(); j++) {
+        const struct pci_func *p = pci_get(j);
+        if (p->class_code != 1 || p->subclass != 1 || (p->header_type & 0x7f)) continue;
+        if (selected) return -FS_EBUSY; /* never probe an ambiguous legacy alias */
+        selected = p;
+    }
+    if (!selected) return 0; /* actual ISA compatibility controller */
+    struct ata_resources r;
+    bool native_irq = !!(selected->prog_if & (1u << (2 * index)));
+    int e = ata_pci_resources(selected, index, native_irq && pci_irq_routed(selected), &r);
+    if (e) return e;
+    c->pci = selected; c->native_irq = r.native_irq;
+    c->base = r.base; c->control = r.control; c->irq = r.irq;
+    return 0;
+}
+
 int ata_init(void)
 {
     if (initialized)
@@ -1455,31 +1559,55 @@ int ata_init(void)
     if (e)
         return e;
     initialized = true;
+    int found[ATA_CHANNELS] = {0};
     for (unsigned i = 0; i < ATA_CHANNELS; i++) {
         struct ata_channel *c = &channels[i];
         ata_channel_setup(c, i, &native_ops, 0);
-        if (claim_channel(c, i)) {
+        e = ata_bind_resources(c, i);
+        if (!e) e = claim_channel(c, i);
+        if (e) {
+            klog("[ata%u] mode=pio unavailable=1 reason=resources error=%d", i, e);
             c->stopped = true;
             continue;
         }
         ata_dma_attach(c, i);
+        if (c->pci) ata_chipset_init(&c->chipset, c->pci, i, &ata_native_config, 0);
         c->native = true;
+        if (c->native_irq && !c->dma.ops) {
+            failure(&c->devices[0], now(c), 0);
+            continue;
+        }
         /* Suppress inherited device INTRQ before opening the registered
          * line once. Requests thereafter gate only ATA-6 nIEN (7.8.6). */
         if (!c->stopped) {
             device_control(c, c->control_shadow | ATA_NIEN);
-            irq_set_handler(c->irq, i ? secondary_irq : primary_irq);
-            pic_unmask(c->irq);
+            if (c->native_irq) {
+                if (registry_activate(c->claims[2], c->generations[2]) ||
+                    irq_chain_add(c->irq, ata_pci_interrupt, owners[i])) {
+                    failure(&c->devices[0], now(c), 0);
+                    continue;
+                }
+                c->native_irq_attached = true;
+            } else {
+                irq_set_handler(c->irq, i ? secondary_irq : primary_irq);
+                pic_unmask(c->irq);
+            }
         }
-        int found = ata_channel_discover(c);
-        if (found > 0) {
+        found[i] = ata_channel_discover(c);
+    }
+    /* No request worker or block device is published until ALL boot-only
+     * timing transactions are finished, including shared PCI fields. */
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) channels[i].modes_published = true;
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (found[i] > 0 && !c->stopped) {
             if (blk_queue_start(&c->requests)) {
                 klog("[storage] queue name=%s worker=unavailable",i ? "ata1" : "ata0");
                 c->stopped=true;
                 for (unsigned unit=0;unit<ATA_DEVICES;unit++) c->devices[unit].block.quarantined=true;
                 continue;
             }
-            for (unsigned j = 0; j < 3; j++)
+            for (unsigned j = 0; j < (c->native_irq ? 2u : 3u); j++)
                 if (registry_activate(c->claims[j], c->generations[j])) {
                     failure(&c->devices[0], now(c), alternate(c));
                     break;
@@ -1489,7 +1617,7 @@ int ata_init(void)
         }
         /* IDENTIFY completed before activation. IRQ source is off while
          * idle; each request enables it only after serialized selection. */
-        klog("[ata%u] identified=%d quarantined=%u", i, found > 0 ? found : 0, c->stopped);
+        klog("[ata%u] identified=%d quarantined=%u", i, found[i] > 0 ? found[i] : 0, c->stopped);
     }
     return 0;
 }

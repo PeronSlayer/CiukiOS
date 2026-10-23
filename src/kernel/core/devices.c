@@ -9,18 +9,26 @@
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/ac97.h>
+#include <ciuki/audio_backend.h>
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
 #include <ciuki/process.h>
 #include <ciuki/uaddr.h>
 #include <ciuki/com.h>
+#include <ciuki/joystick.h>
+#pragma weak gameport_inventory
 #pragma weak com_snapshot
+#pragma weak com_owner_snapshot
+#include <ciuki/lpt.h>
+#pragma weak lpt_snapshot
 #include <ciuki/firmware.h>
 #include <ciuki/thinkpad_ec.h>
 #pragma weak thinkpad_ec_smbios_snapshot
 #include <ciuki/bootlog.h>
 #pragma weak bootlog_report_snapshot
 #pragma weak firmware_inventory_page
+#include "../drivers/floppy.h"
+#pragma weak floppy_inventory
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
 #endif
@@ -80,6 +88,21 @@ static void owner_resources(struct ciuki_device_record *d, const char *owner)
         }
     }
 }
+static void joystick_devices(struct ciuki_devices_info *out)
+{
+    if (!gameport_inventory) return;
+    for (unsigned i=0;i<4;i++) {
+        uint16_t base; const struct pci_func *pci; bool ready; const char *reason;
+        if (!gameport_inventory(i,&base,&pci,&ready,&reason)) continue;
+        char name[64]; ksnprintf(name,sizeof(name),"Analog game port %04X (joystick)",base);
+        struct ciuki_device_record *d=append(out,0x72000+i,CIUKI_DEVICE_PORT,
+            pci ? CIUKI_BUS_PCI : CIUKI_BUS_LEGACY,name,"gameport",
+            ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT,reason);
+        resource(d,CIUKI_RESOURCE_IO,base,base+1,0);
+        if (d && pci) { d->vendor=pci->vendor; d->device=pci->device;
+            d->bus=pci->bus; d->slot=pci->dev; d->function=pci->fn; }
+    }
+}
 static bool com_devices(struct ciuki_devices_info *out)
 {
     if (!com_snapshot) return false;
@@ -101,10 +124,41 @@ static bool com_devices(struct ciuki_devices_info *out)
         if (s.irq && s.irq<16) resource(d,RES_IRQ,s.irq,s.irq+1,0);
         if (d) {
             d->generation=s.generation;
-            if (s.flags&CIUKI_COM_OPEN) string(d->reason,sizeof(d->reason),"Exclusive native COM file description owns this port.");
+            struct ciuki_com_owner owner;
+            if (com_owner_snapshot && com_owner_snapshot(i,&owner) && owner.kind) {
+                const char *label=owner.kind==CIUKI_COM_OWNER_VM ? "DOS VM" :
+                    owner.kind==CIUKI_COM_OWNER_MOUSE ? "Serial mouse" :
+                    owner.kind==CIUKI_COM_OWNER_ENUMERATOR ? "Serial PnP enumerator" :
+                    owner.kind==CIUKI_COM_OWNER_LOGGER ? "Kernel logger" : "Native application";
+                ksnprintf(d->reason,sizeof(d->reason),"Owner: %s id=%u lease=%u%s",label,owner.id,owner.generation,
+                    s.flags&CIUKI_COM_QUARANTINED ? "; quarantined" : "");
+            } else if (s.flags&CIUKI_COM_OPEN) string(d->reason,sizeof(d->reason),"Exclusive native COM file description owns this port.");
         }
     }
     return logger;
+}
+static void lpt_devices(struct ciuki_devices_info *out)
+{
+    if (!lpt_snapshot) return;
+    for (unsigned i=0;i<CIUKI_LPT_MAX;i++) {
+        struct ciuki_lpt_status s; const char *reason;
+        if (!lpt_snapshot(i,&s,&reason)) continue;
+        char name[24]; ksnprintf(name,sizeof(name),"LPT%u",i+1);
+        struct ciuki_device_record *d=append(out,0x71000+i,CIUKI_DEVICE_PORT,
+            s.origin==CIUKI_LPT_PCI ? CIUKI_BUS_PCI : CIUKI_BUS_LEGACY,name,"lpt",
+            s.flags&CIUKI_LPT_QUARANTINED ? CIUKI_DEVICE_QUARANTINED :
+            s.flags&CIUKI_LPT_READY ? CIUKI_DEVICE_READY : CIUKI_DEVICE_FIRMWARE_FIRST,reason);
+        resource(d,RES_PORT,s.base,s.base+3,CIUKI_RESOURCE_UNKNOWN_SIZE);
+        if (s.base_hi) resource(d,RES_PORT,s.base_hi,s.base_hi+3,0);
+        char owner[8]; ksnprintf(owner,sizeof(owner),"lpt%u",i+1);
+        owner_resources(d,owner);
+        if (d) {
+            d->generation=s.generation;
+            if ((s.flags&CIUKI_LPT_OPEN) && !(s.flags&CIUKI_LPT_QUARANTINED)) ksnprintf(d->reason,sizeof(d->reason),
+                "Exclusive %s lease; modes=%x owner=%u:%u.",s.flags&CIUKI_LPT_RAW ? "VM raw" :
+                s.flags&CIUKI_LPT_VM ? "VM printer" : "native",s.capabilities,s.owner_id,s.owner_generation);
+        }
+    }
 }
 static void activation(struct ciuki_device_record *d, const char *name)
 {
@@ -157,6 +211,7 @@ static const char *driver_for(const char *owner)
     if (equal(owner, "pic") || equal(owner, "pic-cascade")) return "pic";
     if (equal(owner, "pci")) return "pci-inventory";
     if (equal(owner, "uart")) return "uart";
+    if (equal(owner, "fdc")) return "fdc";
     if (equal(owner, "dma") || equal(owner, "dma-page") || equal(owner, "dma-cascade")) return "isa-dma-guard";
     return "loader";
 }
@@ -219,6 +274,10 @@ static void usb_devices(struct ciuki_devices_info *out)
                 if (u->hid[j].protocol == 1) { class_id = CIUKI_DEVICE_KEYBOARD; name = "USB HID keyboard"; break; }
                 class_id = CIUKI_DEVICE_MOUSE; name = "USB HID mouse";
             }
+            for (unsigned j=0;j<USB_HID_MAX;j++) if (u->hid[j].reports &&
+                (u->hid[j].reports->caps.classes&CIUKI_HID_JOYSTICK)) {
+                class_id=CIUKI_DEVICE_PORT; name="USB HID game controller"; break;
+            }
             if (u->storage.bound) { class_id=CIUKI_DEVICE_DISK; name="USB mass storage"; }
             struct ciuki_device_record *d = append(out, 0x60000 + i * USB_DEVICE_MAX + k,
                 class_id, CIUKI_BUS_USB, name, u->storage.bound ? "usb-storage" : "usb-host",
@@ -242,17 +301,20 @@ static void drivers(struct ciuki_devices_info *out)
         {"fbdev", "Loader-selected VBE framebuffer"},
         {"i8042", "Native PS/2 only when selected at boot"},
         {"firmware-input", "Sole firmware-first PS/2 controller lease"},
-        {"ata-pio", "Legacy ATA/ATAPI; disabled in safe mode"},
+        {"ata-pio", "SFF ATA/ATAPI PIO/UDMA; disabled in safe mode"},
         {"ac97", "Intel ICH, SiS 7012 and nForce AC97; safe mode disables activation"},
         {"e100", "Retained PCI binding; safe mode disables NIC activation"},
         {"rtl8139", "Retained PCI binding; safe mode disables NIC activation"},
         {"ne2000", "Retained PCI binding; safe mode disables NIC activation"},
-        {"usb-host", "UHCI/OHCI/EHCI; HS hubs: TT unsupported; firmware-first"},
+        {"usb-host", "UHCI/OHCI/EHCI; HS hubs: split transactions; firmware-first"},
         {"e1000", "Retained PCI binding; safe mode disables NIC activation"},
         {"pcnet", "Retained PCI binding; safe mode disables NIC activation"},
         {"tulip", "Retained PCI binding; safe mode disables NIC activation"},
         {"3c905", "Retained PCI binding; safe mode disables NIC activation"},
         {"rhine", "Retained PCI binding; safe mode disables NIC activation"},
+        {"fdc", "82077-compatible floppy; exclusive removable media"},
+        {"lpt", "Exclusive polled SPP/PS2/EPP/ECP; assigned resources only"},
+        {"gameport", "Claimed analog game port; bounded RC sampling"},
     };
     for (unsigned i = 0; i < ARRAY_SIZE(builtins); i++) {
         bool detected = false;
@@ -296,7 +358,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
     cpu_info(out);
     /* Preserve the fixed ABI: read-only volumes use ordinary inventory rows.
      * Reasons come from the live retained cause, not the boot ledger. */
-    if (storage_readonly_info) for (unsigned drive=2;drive<26;drive++) {
+    if (storage_readonly_info) for (unsigned drive=0;drive<26;drive++) {
         char reason[80], name[]="C: read-only volume";
         if (!storage_readonly_info(drive,reason,sizeof(reason))) continue;
         name[0]=(char)('A'+drive);
@@ -319,13 +381,13 @@ void devices_snapshot(struct ciuki_devices_info *out)
         unsigned id = 0x10000u | ((unsigned)p->bus << 8) | ((unsigned)p->dev << 3) | p->fn;
         const struct pci_func *sound_pci=audio.backend_pci.vendor ? &audio.backend_pci : &ac97.pci;
         const char *sound_driver=audio.backend_name ? audio.backend_name : "ac97";
-        bool bound = sound_pci->vendor && p->bus == sound_pci->bus && p->dev == sound_pci->dev && p->fn == sound_pci->fn &&
-                     p->vendor == sound_pci->vendor && p->device == sound_pci->device &&
-                     (audio.backend_touched || ac97.touched || audio.ready || audio.quarantined || ac97.quarantine);
+        bool selected = sound_pci->vendor && p->bus == sound_pci->bus && p->dev == sound_pci->dev && p->fn == sound_pci->fn &&
+                        p->vendor == sound_pci->vendor && p->device == sound_pci->device;
+        bool bound = selected && (audio.backend_touched || ac97.touched || audio.ready || audio.quarantined || ac97.quarantine);
         struct ciuki_device_record *d = append(out, id, pci_class(p), CIUKI_BUS_PCI,
-            "PCI function", bound ? sound_driver : "", bound ? (audio.quarantined ? CIUKI_DEVICE_QUARANTINED :
+            "PCI function", selected ? sound_driver : "", selected ? (audio.quarantined ? CIUKI_DEVICE_QUARANTINED :
             audio.ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT) : CIUKI_DEVICE_FIRMWARE_FIRST,
-            bound ? audio.reason : "No native driver bound; firmware configuration retained.");
+            selected && audio.reason ? audio.reason : "No native driver bound; firmware configuration retained.");
         if (!d) continue;
         d->bus = p->bus; d->slot = p->dev; d->function = p->fn;
         d->vendor = p->vendor; d->device = p->device; d->sub_vendor = p->sub_vendor; d->sub_device = p->sub_device;
@@ -344,17 +406,57 @@ void devices_snapshot(struct ciuki_devices_info *out)
         if (p->irq_pin && p->irq_line < 16) resource(d, RES_IRQ, p->irq_line, p->irq_line + 1, 0);
         if (p->class_code == 2) network_binding(d, p);
         if (p->class_code == 0x0c && p->subclass == 3) usb_binding(d, p);
-        if (bound) { owner_resources(d, sound_driver); d->generation = audio.caps.generation ? audio.caps.generation : ac97.generation; }
+        if (bound) {
+            owner_resources(d, sound_driver); d->generation = audio.caps.generation ? audio.caps.generation : ac97.generation;
+        }
+        /* Cached identity only, even for a refused activation. No codec I/O
+         * or activation during a Device Manager query, and no ABI changes. */
+        if (selected && p->class_code==4) {
+            bool ich=equal(sound_driver,"ac97");
+            uint32_t codec_id=ich ? ac97.codec_id : audio_dma.state.codec_id;
+            const struct ac97_codec_policy *codec=ich ? &ac97.codec : &audio_dma.codec;
+            const char *reason=audio.reason ? audio.reason : "discovered";
+            const char *access=ich ? (ac97.failure.access ? ac97.failure.access : ac97.codec_error) : NULL;
+            if (!bound) string(d->reason,sizeof(d->reason),reason);
+            if (codec_id && (ich || audio_dma.kind==AUDIO_ES1371 || audio_dma.kind==AUDIO_VIA686 || audio_dma.kind==AUDIO_VIA8233)) {
+                const struct ac97_codec_profile *profile=ac97_codec_lookup(codec_id);
+                unsigned rate=ich ? ac97.rate : audio_dma.state.rate;
+                ksnprintf(d->name,sizeof(d->name),"AC'97 %s (%08x)",profile->name,codec_id);
+                ksnprintf(d->reason,sizeof(d->reason),"%s%s%s; %s; %s; mix=%04x/%04x; EAPD=%u%s",reason,
+                    access ? "/" : "",access ? access : "",
+                    profile->name,!rate ? "unverified" : codec->variable_rate ? "VRA" : "fixed48",
+                    profile->master_mask,profile->pcm_mask,codec->eapd ? 1 : 0,
+                    profile->quirks & AC97_Q_VENDOR_JACK ? "; vendor jacks" : "");
+            }
+        }
     }
+    joystick_devices(out);
     bool com_logger=com_devices(out);
+    const struct fdc *fdc=floppy_inventory ? floppy_inventory() : 0;
+    if (fdc && (fdc->claim_count || fdc->evidence.cmos || fdc->reason)) {
+        struct ciuki_device_record *d=append(out,0x40200,CIUKI_DEVICE_SYSTEM,CIUKI_BUS_LEGACY,
+            "Floppy disk controller","fdc",fdc->quarantined ? CIUKI_DEVICE_QUARANTINED :
+            fdc->ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT,fdc->reason);
+        owner_resources(d,"fdc");
+        for (unsigned i=0;i<2;i++) if (fdc->drive[i].present) {
+            const struct fdc_drive *drive=&fdc->drive[i];
+            d=append(out,0x40201+i,CIUKI_DEVICE_DISK,CIUKI_BUS_LEGACY,
+                i ? "Floppy drive B:" : "Floppy drive A:","fdc",
+                drive->block.quarantined ? CIUKI_DEVICE_QUARANTINED :
+                fdc->ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT,
+                drive->owner==FDC_NATIVE ? "Native media lease." : drive->owner ? "DOS VM media lease." : "No media owner.");
+            if (d) { d->slot=i; d->generation=drive->block.media_generation; }
+        }
+    }
+    lpt_devices(out);
     /* Registry owners become legacy logical devices. Special owners below
      * are represented once by their actual backend rather than inferred PCI bindings. */
     for (unsigned k = 0; k < inventory.resource_count; k++) {
         const struct resource *r = &inventory.resources[k];
-        if (r->state == RS_RELEASED || (com_logger && equal(r->owner,"uart")) ||
-            (com_snapshot && !strncmp(r->owner,"com",3)) || equal(r->owner, "input") || equal(r->owner, "i8042") ||
+        if (r->state == RS_RELEASED || (fdc && equal(r->owner,"fdc")) || (com_logger && equal(r->owner,"uart")) ||
+            (com_snapshot && !strncmp(r->owner,"com",3)) || (lpt_snapshot && !strncmp(r->owner,"lpt",3)) || equal(r->owner, "input") || equal(r->owner, "i8042") ||
             equal(r->owner, "firmware-input") || equal(r->owner, "boot-framebuffer") || equal(r->owner, "fbdev") ||
-            !strncmp(r->owner, "usb-", 4) || !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma") || equal(r->owner, "es137x") || equal(r->owner, "via82xx") || equal(r->owner, "sb16")) continue;
+            !strncmp(r->owner, "usb-", 4) || !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma") || equal(r->owner, "es137x") || equal(r->owner, "via82xx") || equal(r->owner, "ess1978") || equal(r->owner, "emu10k1") || equal(r->owner, "cmipci") || equal(r->owner, "ymfpci") || equal(r->owner, "trident") || equal(r->owner, "ali5451") || equal(r->owner, "sb16")) continue;
         bool seen = false;
         for (unsigned j = 0; j < k; j++) if (inventory.resources[j].state != RS_RELEASED && equal(inventory.resources[j].owner, r->owner)) seen = true;
         if (seen) continue;
@@ -410,6 +512,18 @@ void devices_snapshot(struct ciuki_devices_info *out)
                 disk->media==ATAPI_NO_MEDIUM ? "no_medium_or_ejected" : disk->media==ATAPI_READY ? "media_ready" : "media_unavailable" : "Identified ATA/ATAPI unit.");
             if (d) { d->slot = c; d->function = unit; d->generation = disk->generation; }
             activation(d, "ata"); owner_resources(d, owner);
+            if (d && d->state == CIUKI_DEVICE_READY && !disk->atapi) {
+                static const char *const chips[] = {"firmware", "PIIX/ICH", "VIA", "SiS", "ALi", "NVIDIA"};
+                unsigned family = disk->channel->chipset.family;
+                const char *chip = family < ARRAY_SIZE(chips) ? chips[family] : "unknown";
+                unsigned revision = disk->channel->pci ? disk->channel->pci->revision : 0;
+                if (disk->dma_enabled)
+                    ksnprintf(d->reason, sizeof(d->reason), "UDMA%u; %s rev %02x; %s",
+                        disk->udma_mode, chip, revision, disk->channel->native_irq ? "PCI native" : "compatibility ports");
+                else ksnprintf(d->reason, sizeof(d->reason), "PIO; %s rev %02x: %s", chip, revision,
+                    disk->dma_quarantined ? "DMA quarantined" : !disk->channel->dma.ops ? "bus master unavailable" :
+                    disk->channel->chipset.reason ? disk->channel->chipset.reason : "firmware PIO");
+            }
         }
     }
     if (audio.backend_name && equal(audio.backend_name,"sb16") && audio.backend_touched) {

@@ -1,0 +1,48 @@
+ESS Maestro native PCM driver: origin and retained notices
+
+Adapted file: src/kernel/drivers/maestro.c
+Ciuki modifications: private transport adapter, bounded register readbacks,
+clock measurement, constrained pinned arena, firmware refusal, copied capture,
+generation checks, stop proof, retained quarantine and E500 reporting.
+
+Donor 1: Linux v6.12, sound/pci/es1968.c
+https://github.com/torvalds/linux/blob/v6.12/sound/pci/es1968.c
+Git blob SHA-1: c6c018b40c69f9bd1af9c4d361cb6258ae01b077
+SPDX-License-Identifier: GPL-2.0-or-later
+Driver for ESS Maestro 1/2/2E Sound Card (started 21.8.99)
+Copyright (c) by Matze Braun <MatzeBraun@gmx.de>.
+                  Takashi Iwai <tiwai@suse.de>
+Most of the driver code comes from Zach Brown(zab@redhat.com)
+Alan Cox OSS Driver
+Rewritted from card-es1938.c source.
+
+Donor 2: Linux v2.6.18, sound/oss/maestro.c
+https://github.com/torvalds/linux/blob/v2.6.18/sound/oss/maestro.c
+Git blob SHA-1: 1d98d100d739f484fbe1a48730e535e70fd81444
+ESS Maestro/Maestro-2/Maestro-2E driver for Linux 2.[23].x
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+(c) Copyright 1999 Alan Cox <alan.cox@linux.org>
+Based heavily on SonicVibes.c:
+Copyright (C) 1998-1999 Thomas Sailer (sailer@ife.ee.ethz.ch)
+Heavily modified by Zach Brown <zab@zabbo.net> based on lunch
+with ESS engineers. Many thanks to Howard Kim for providing
+contacts and hardware. Honorable mention goes to Eric
+Brombaugh for all sorts of things. Best regards to the
+proprietors of Hack Central for fine lodging.
+
+The GPL version 2 text is in LICENSE. Research-only donor downloads remain
+under ignored build/research/f1-116/ and are not compiled or installed wholesale.

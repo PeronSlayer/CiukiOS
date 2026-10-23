@@ -1,0 +1,67 @@
+Linux v6.12 touchpad algorithm adaptation
+
+SPDX-License-Identifier: GPL-2.0-only
+The GPL version 2 text is retained in the repository LICENSE.
+
+Modified for CiukiOS in src/kernel/drivers/i8042_touchpad.inc:
+fixed storage and i8042 transactions, internal samples, gestures, relative
+pointer projection, compatibility proof, generation/firmware ownership.
+No Linux framework code or donor source files are compiled verbatim.
+Each adapted donor file and its original notice follows.
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/synaptics.c
+Git blob SHA-1: 380aa1614442f42bd1c01c7f9bdf5de256088b33
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Synaptics TouchPad PS/2 mouse driver
+ *
+ *   2003 Dmitry Torokhov <dtor@mail.ru>
+ *     Added support for pass-through port. Special thanks to Peter Berg Larsen
+ *     for explaining various Synaptics quirks.
+ *
+ *   2003 Peter Osterlund <petero2@telia.com>
+ *     Ported to 2.5 input device infrastructure.
+ *
+ *   Copyright (C) 2001 Stefan Gmeiner <riddlebox@freesurf.ch>
+ *     start merging tpconfig and gpm code to a xfree-input module
+ *     adding some changes and extensions (ex. 3rd and 4th button)
+ *
+ *   Copyright (c) 1997 C. Scott Ananian <cananian@alumni.priceton.edu>
+ *   Copyright (c) 1998-2000 Bruce Kalk <kall@compass.com>
+ *     code for the special synaptics commands (from the tpconfig-source)
+ *
+ * Trademarks are the property of their respective owners.
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/synaptics.h
+Git blob SHA-1: 08533d1b1b16fc2c924fca4cc2759e18b67a2fd6
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Synaptics TouchPad PS/2 mouse driver
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/alps.c
+Git blob SHA-1: 4e37fc3f1a9e97e0cc5cf298ca3778ca25841055
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * ALPS touchpad PS/2 mouse driver
+ *
+ * Copyright (c) 2003 Neil Brown <neilb@cse.unsw.edu.au>
+ * Copyright (c) 2003-2005 Peter Osterlund <petero2@telia.com>
+ * Copyright (c) 2004 Dmitry Torokhov <dtor@mail.ru>
+ * Copyright (c) 2005 Vojtech Pavlik <vojtech@suse.cz>
+ * Copyright (c) 2009 Sebastian Kapfer <sebastian_kapfer@gmx.net>
+ *
+ * ALPS detection, tap switching and status querying info is taken from
+ * tpconfig utility (by C. Scott Ananian and Bruce Kall).
+ */
+
+Origin: https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/alps.h
+Git blob SHA-1: 0a1048cf23f6abeaaf554224f0c30cce7abbf2d3
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * ALPS touchpad PS/2 mouse driver
+ *
+ * Copyright (c) 2003 Peter Osterlund <petero2@telia.com>
+ * Copyright (c) 2005 Vojtech Pavlik <vojtech@suse.cz>
+ */

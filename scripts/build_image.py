@@ -146,9 +146,17 @@ def desktop_license_payloads():
     """Desktop dependencies' licence/notice/provenance inventory."""
     sources = {f"/system/licenses/{name}": ROOT / "third_party/stb/LICENSE"
                for name in ("stb_image.txt", "stb_image_write.txt", "stb_vorbis.txt")}
+    sources["/system/licenses/Yamaha-DS1-NOTICE.txt"] = ROOT / "third_party/yamaha/NOTICE.txt"
+    sources["/system/licenses/Yamaha-DS1-UPSTREAM.json"] = ROOT / "third_party/yamaha/UPSTREAM.json"
     sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
-    for name in ("hwids-NOTICES.txt", "hwids-GPL-2.0.txt"):
+    for name in ("hwids-NOTICES.txt", "hwids-GPL-2.0.txt",
+                 "linux-cmipci-v6.12-NOTICES.txt", "linux-cmipci-v6.12-GPL-2.0.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/linux-ac97-NOTICES.txt"] = ROOT / "docs/licenses/linux-ac97-NOTICES.txt"
+    sources["/system/licenses/maestro-NOTICES.txt"] = ROOT / "docs/licenses/maestro-NOTICES.txt"
+    sources["/system/licenses/emu10k1-NOTICES.txt"] = ROOT / "docs/licenses/emu10k1-NOTICES.txt"
+    sources["/system/licenses/f1-120-alsa-NOTICES.txt"] = ROOT / "docs/licenses/f1-120-alsa-NOTICES.txt"
+    sources["/system/licenses/f1-120-GPL-2.0.txt"] = ROOT / "LICENSE"
     for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt",
                  "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
         sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
@@ -159,8 +167,11 @@ def desktop_license_payloads():
                  "jitterentropy-3.7.0-NOTICES.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
     sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
+    sources["/system/licenses/ata-chipset-NOTICES.txt"] = ROOT / "docs/licenses/ata-chipset-NOTICES.txt"
     sources["/system/licenses/acpica-20260930-NOTICE.txt"] = ROOT / "docs/licenses/acpica-20260930-NOTICE.txt"
+    sources["/system/licenses/serial-mouse-NOTICE.txt"] = ROOT / "docs/licenses/serial-mouse-NOTICE.txt"
     sources["/system/licenses/acpica-GPL-2.0.txt"] = ROOT / "LICENSE"
+    sources["/system/licenses/linux-v6.12-touchpad-NOTICES.txt"] = ROOT / "docs/licenses/linux-v6.12-touchpad-NOTICES.txt"
     return sources
 
 

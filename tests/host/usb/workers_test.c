@@ -38,7 +38,12 @@ void task_start(struct task *t) { assert(t->state==T_BLOCKED);t->state=T_READY;s
 void task_sleep_ms(uint32_t ms) { workers[current_worker].due=g_ticks+ms;longjmp(turn_done[current_worker],1); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
 bool kwait_wait_until(struct kwait *q,kwait_cond_fn condition,void *arg,uint64_t deadline)
-{ waiting[current_worker]=q;if(!condition(arg))task_sleep_ms((uint32_t)(deadline-g_ticks));return true; }
+{
+    waiting[current_worker]=q;
+    if(!condition(arg)) { workers[current_worker].due=deadline;longjmp(turn_done[current_worker],1); }
+    return true;
+}
+static uint64_t worker_now(void *arg) { (void)arg;return g_ticks; }
 static bool host_pending(void *arg) { return ((struct usb_host *)arg)->irq_pending; }
 static bool input_pending;
 static struct kwait input_changed;
@@ -82,17 +87,22 @@ void usb_step(struct usb_host *h)
 #include "usb_worker_replay.inc"
 int main(void)
 {
-    for(unsigned i=0;i<host_count;i++) { hosts[i].ready=true; fs_lock_init(&hosts[i].transfer_lock); }
+    for(unsigned i=0;i<host_count;i++) {
+        hosts[i].ready=true;hosts[i].io.now=worker_now;fs_lock_init(&hosts[i].transfer_lock);
+    }
+    hosts[0].device_count=1;
+    hosts[0].devices[0].present=hosts[0].devices[0].configured=true;
+    hosts[0].devices[0].hid[0].active=true;hosts[0].devices[0].hid[0].pipe_state=1;
     for(unsigned mode=0;mode<3;mode++) {
         memset(workers,0,sizeof(workers));memset(waiting,0,sizeof(waiting));
         created=started=scans=polls=gap_max=host_turns=0;g_ticks=last_poll=0;
         hosts[0].next_scan=hosts[1].next_scan=0;hosts[0].irq_attached=mode!=0;
         quiet_irq=mode==2;
         start_services();assert(created==3 && started==3);dispatch(1);
-        assert(scans==2 && polls==500 && gap_max==1 && g_ticks==500);
+        assert(scans==2 && polls==(mode==0 ? 125u:mode==1 ? 3u:1u) && g_ticks==500);
         assert(host_turns==(mode==1 ? 4u:2u));
     }
     for(unsigned i=0;i<host_count;i++) fs_lock_destroy(&hosts[i].transfer_lock);
-    puts("USB workers: real tasks, 500 ms bind on host 1; host 0 has 2 scan turns + 2 completion turns, no heartbeat; 4/s root scans, 1 ms HID fallback PASS");
-    puts("USB workers idle IRQ host: 4 scan + 1000 HID turns/s = 1004 wakes/s, 0 interrupts PASS");
+    puts("USB workers: real tasks, 500 ms bind on host 1; host 0 has 2 scan turns + 2 completion turns; bounded 4 ms fallback only without IRQ PASS");
+    puts("USB workers idle IRQ host: 4 topology scan deadlines/s, zero periodic HID wakes, zero interrupts PASS");
 }

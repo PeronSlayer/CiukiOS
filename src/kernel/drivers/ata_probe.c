@@ -83,7 +83,7 @@ static bool read_fault(struct ata_device *d, uint8_t data[512])
     rec_emit("ata", "DATA", "group=ata-fault-blkdebug next_result=%d subsequent_commands=%llu quarantine_retained=%u bios_calls=0",
              next, further, retained);
     rec_emit("ata", "DATA", "case=retained owner=ata%u generation=%u claims=%u",
-             d->channel->irq - 14, d->generation, claims);
+             d->channel->index, d->generation, claims);
     rec_emit("ata", "DATA", "group=ata-fault-blkdebug survivor_ticks=%u survivor_progress=%u survivor_alive=%u eio=%u deadline_met=%u",
              ticks, progress, alive, result == -FS_EIO, elapsed <= ATA_COMMAND_MS);
     return result == -FS_EIO && issued && next == -FS_EQUARANTINED && !further && retained &&
@@ -97,7 +97,7 @@ int probe_ata(void)
     if (!d)
         return verdict("ata", false, "no_identified_disk");
     rec_emit("ata", "DATA", "owner=ata%u generation=%u unit=%u model=%s identified=%u",
-             d->channel->irq - 14, d->channel->generations[2], d->unit, d->model, d->identified);
+             d->channel->index, d->channel->generations[2], d->unit, d->model, d->identified);
     rec_emit("ata", "DATA", "capacity=%llu sector_size=%u lba48=%u cache_state=%u flush=%u bios_calls=0 clock=pit",
              d->block.capacity, d->block.sector_size, d->lba48, d->block.write_cache_state, !!d->block.flush);
     static const uint64_t lbas[] = { 0, 2048 };
@@ -375,7 +375,7 @@ int probe_partition(void)
     bool ok = !e && fixture_table.count && fixture_table.entries[0].start == 2048 &&
         (fixture_table.entries[0].type == 0x0b || fixture_table.entries[0].type == 0x0c);
     rec_emit("partition", "DATA", "source=real owner=ata%u generation=%u result=%d count=%u walk_count=%u clock=pit",
-             d->channel->irq - 14, d->channel->generations[2], e, fixture_table.count, fixture_table.ebr_reads);
+             d->channel->index, d->channel->generations[2], e, fixture_table.count, fixture_table.ebr_reads);
     for (unsigned i = 0; i < fixture_table.count; i++) {
         const struct partition *p = &fixture_table.entries[i];
         rec_emit("partition", "DATA", "source=real partition=%u type=%02x start=%llu length=%llu logical=%u",

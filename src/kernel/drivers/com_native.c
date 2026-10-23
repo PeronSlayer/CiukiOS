@@ -9,7 +9,8 @@
 int com_device_open(struct file_description *d, uint32_t flags)
 {
     if (flags&(O_CREAT|O_EXCL|O_TRUNC|O_DIRECTORY|O_APPEND)) return -EINVAL;
-    return com_open(d->node->drive,&d->com_generation);
+    struct process *owner=proc_current();
+    return com_lease_open(d->node->drive,CIUKI_COM_OWNER_NATIVE,owner ? owner->pid : 0,&d->com_generation,0);
 }
 void com_device_close(struct file_description *d)
 {
@@ -68,13 +69,15 @@ int com_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
 {
     struct file_description *d=file_fd(p,fd);
     if (!d || d->node->kind!=PX_COM) return -EBADF;
-    union { struct ciuki_com_status status; struct ciuki_com_line line; struct ciuki_com_modem modem; } record;
+    union { struct ciuki_com_status status; struct ciuki_com_line line; struct ciuki_com_modem modem;
+        struct ciuki_com_owner owner; struct ciuki_com_mouse mouse; } record;
     unsigned size=op==COM_GET_LINE || op==COM_SET_LINE ? sizeof(record.line) :
-        op==COM_GET_STATUS ? sizeof(record.status) : op==COM_SET_MODEM ? sizeof(record.modem) : 0;
+        op==COM_GET_STATUS ? sizeof(record.status) : op==COM_SET_MODEM ? sizeof(record.modem) :
+        op==COM_GET_OWNER ? sizeof(record.owner) : op==COM_SET_MOUSE ? sizeof(record.mouse) : 0;
     if (!size) return -ENOTTY;
     if (bytes!=size) return -EINVAL;
     int e=copy_from_user(&record,address,bytes); if (e) return e;
     e=com_control(d->node->drive,d->com_generation,op,&record,bytes,(d->flags&O_ACCMODE)!=O_RDONLY);
-    if (!e && (op==COM_GET_LINE || op==COM_GET_STATUS)) e=copy_to_user(address,&record,bytes);
+    if (!e && (op==COM_GET_LINE || op==COM_GET_STATUS || op==COM_GET_OWNER)) e=copy_to_user(address,&record,bytes);
     return e;
 }

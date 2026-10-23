@@ -192,8 +192,9 @@ limits; calibration changes normalized state, not those discovery facts.
 
 Parser limits are explicit: 512 descriptor bytes, eight report IDs, 32 data
 main items, 64 usage spans, four global pushes, eight nested collections,
-and 16-byte input/output/feature reports (including the ID). Oversize or
-unsupported layouts fail transactionally without modifying the destination.
+and 64-byte input/output/feature reports (including the ID, extended by
+f1-104b). Oversize or unsupported layouts fail transactionally without
+modifying the destination.
 Long items and alternative usage delimiters are refused. Input, Output and
 Feature offsets are independent. Unknown application/vendor collections are
 ignored while their offsets and global state are retained. Only one joystick
@@ -217,11 +218,17 @@ Linux v6.12 [hid-core.c](https://github.com/torvalds/linux/blob/v6.12/drivers/hi
 and [hid-input.c](https://github.com/torvalds/linux/blob/v6.12/drivers/hid/hid-input.c)
 were consulted for range validation and usage/hat mapping, not copied.
 The old mouse parser's signed relative fields and first-three-button
-projection remain the compatibility policy. The existing 48-byte DMA slot
-already has 16 payload bytes at offset 32; using those bytes changes no DMA,
-queue, host/device or physical resource limit. Implementation measurements
-and host evidence are recorded in `build/codex/f1-104-report.md`; the lead
-reviews this ABI at integration. Hardware qualification remains separate.
+projection remain the compatibility policy. F1-104 used the existing 48-byte
+DMA slot's 16 payload bytes at offset 32. F1-104b expands UHCI/OHCI slots
+to 96 bytes (64 payload bytes), moves the bulk ring, and rounds the shared
+controller arena from five to six pages: +4096 bytes per controller, +16384
+at the four-controller bound. EHCI retains its existing 224-byte slots and
+64-byte payloads. Allocation, registry claims and storage pins retain their
+existing accounting; no global memory limit changes. The current DMA map
+and primary-source decisions are in [usb-contract.md](usb-contract.md#f1-104b-64-byte-hid-reports).
+Implementation measurements and host evidence are recorded in
+`build/codex/f1-104-report.md` and `build/codex/f1-104b-report.md`; the lead
+reviews the ABI at integration. Hardware qualification remains separate.
 
 [Microsoft's PS/2 wheel and five-button specification](https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/keyboard-and-mouse-hid-client-drivers#activating-buttons-4-5-and-wheel-on-ps2-mice)
 and Linux `psmouse-base.c:intellimouse_detect/im_explorer_detect` agree:
@@ -242,6 +249,59 @@ and palm/tap policy, plus pass-through stick separation. Do not enable
 absolute mode on E500's firmware-owned controller. Packet fixtures must
 exercise relative/absolute interleaving and return to compatibility mode.
 
+#### f1-122 implementation contract (2026-10-23)
+
+Primary references checked before implementing the protocol logic:
+[Synaptics Interfacing Guide 510-000080-A, second edition](https://ccdw.org/~cjj/l/docs/ACF126.pdf),
+sections 2.3–2.5 and 3.4–3.6;
+[Linux v6.12 synaptics.c](https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/synaptics.c),
+[synaptics.h](https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/synaptics.h),
+[alps.c](https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/alps.c),
+[alps.h](https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/alps.h),
+and the [versioned ALPS protocol description](https://www.kernel.org/doc/html/v6.12/input/devices/alps.html).
+The existing i8042 engine has one-byte command replies and only relative
+three/four-byte decoders. Extend its existing transport rather than claiming
+new ports or IRQs. Collect ACK and all query bytes in one armed transaction.
+
+Start with identified Synaptics firmware 3.2–6.x old/new absolute packets and
+ALPS table-identified v1/v2. Other signatures remain compatibility devices.
+No branding selects a protocol. E500 firmware ownership returns before probes.
+Use the donor's sliced Synaptics queries/mode command and ALPS E6/E7 reports,
+tap-disable sequence, absolute knock and pass-through selection. Host gestures
+handle taps and right-edge scrolling; Synaptics capability-proven multifinger
+reports also permit two-finger scrolling. Pressure hysteresis and palm rejection
+are explicit policy, with movement/timing thresholds documented in the adapter.
+
+Internal input event values 1–5 and all public ABI layouts remain unchanged.
+Append kernel-only INPUT_ABS=6 with X, downward Y, pressure, fingers and width
+codes 0–4. Each pad packet emits one such ordered sample; the existing native
+REL/BTN events carry its pointer projection to desktop/DOS. Stick packets never
+enter the pad stream or change its coordinate baseline. A read-only internal
+snapshot exposes identity, protocol, ranges, capabilities and optional error.
+No new syscall, heap allocation, registry slot or memory limit is introduced.
+
+Optional probe work must leave recovery time inside the existing 500 ms setup
+budget. On failure restore compatibility before negotiating ID 0/3/4. Synaptics
+uses explicit mode zero (F6 alone preserves other mode bits); ALPS leaves its
+pass-through path before defaults. A three-byte remote poll must prove the
+relative framing before enabling a fallback. Missing ACKs or an unproven
+rollback retain the existing quarantine and original setup stage; they cannot
+justify parsing an unknown stream as PS/2. Hardware timing, ALPS rollback and
+pass-through qualification remain lead validation; host fixtures are no claim
+of physical support. Per-file donor notices are retained in the adapter and
+the credits notice manifest.
+
+Host measurement with the production i686 flags: controller storage grows from
+12,532 to 12,628 bytes, or 192 static bytes across native and private fixture
+storage. The input ring capacity, registry capacities, heap and memory limits
+are unchanged. Supported-hardware usable/reserved/free memory has not been
+measured in this host-only worktree. Firmware-first, ID 0/3/4, all 21 selected
+ALPS signatures, both Synaptics formats, optional-command refusals, query
+timeouts, rollback, interleaving, gestures, corruption and bounded fuzz fixtures
+pass the focused UBSan host harness. Sanitizer leak checking requires a host
+outside the current sandbox's ptrace restriction; physical qualification and
+canonical image evidence belong to the lead.
+
 [USB HID 1.11](https://www.usb.org/sites/default/files/documents/hid1_11.pdf),
 §§6.2.2, 7.2.5 and Appendix B, separates report and boot protocols. The
 [USB-IF HUT 1.12](https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf)
@@ -257,6 +317,91 @@ projecting them onto DOS controls. Generic HID does not cover XInput-only,
 vendor-specific or force-feedback devices automatically.
 
 ### Serial, parallel and game port
+
+#### f1-114 LPT v1 implementation interface (2026-10-23)
+
+Discovered ports create exclusive `/dev/lpt1` through `/dev/lpt8` character
+devices. Missing paths return ENOENT; unavailable retained ports return ENODEV. Existing syscalls and Device Manager v1 bytes stay
+unchanged. `CIUKI_SYS_DEVCTL` accepts LPT_GET_CONFIG=0x4c500101,
+LPT_SET_CONFIG=0x4c500102, LPT_GET_STATUS=0x4c500103 and
+LPT_INIT=0x4c500104. Records in abi.h use uint32_t fields, alignment four,
+version=1, exact size, reserved=0; no pointers. Config (32 bytes): version,
+size, mode, reverse, timeout_ms, dma, address, reserved. Modes are SPP=0,
+PS2=1, EPP=2, ECP=3; reverse/dma/address are booleans. Address cycles are
+EPP-only, DMA is ECP forward-only. Timeout is 0..60000 ms for the whole
+operation, zero means try once. Init (12 bytes): version, size, reserved.
+Status (64 bytes): version, size, generation, number, base, base_hi,
+origin, capabilities, flags, status, transferred, fifo_depth, dma_channel,
+owner_id, owner_generation, reserved. Origins BDA/PNP/PCI=1/2/3;
+capabilities SPP/PS2/EPP/ECP/DMA=1/2/4/8/16, flags READY/OPEN/VM/RAW/
+QUARANTINED=1/2/4/8/16. dma_channel=0xffffffff means none. Status contains
+the unmodified status-register byte. Generation changes at every acquisition;
+owner_id/generation identify the DOS VM, zero for native or unowned.
+
+Read/write pin checked user buffers before touching hardware, retain the file
+description across waits, return partial completed bytes, and honor signals,
+O_NONBLOCK and the generation. Config/init require a writable description;
+config changes are serialized with transfers. Close cancels an in-flight
+operation, stops DMA, checks FIFO idle, restores saved data/control/mode, and
+invalidates the logical owner. Unproved stop retains bounce memory and claims
+in quarantine. Limits and registry capacities do not grow.
+
+Late PnP discovery upgrades an idle BDA port through registry quiesce/reclaim,
+preserving its number. An open port stores the assigned facts and applies
+them at its next open, after restoring the old lease. A bounded discovery
+worker waits up to 30 seconds for the read-only inventory; namespace refresh
+only copies cached facts and creates newly discovered nodes. It never probes.
+
+Firmware-assigned PNP0400/PNP0401 resources are consumed without ISA isolation
+or configuration. BDA consumes exactly three words at 408h (never 40Eh).
+PCI admission uses exact card layouts, separate low/high claims and no BAR
+sizing writes. Polling masks local IRQ sources; no guessed IRQ claim is made.
+An assigned 8237 channel is claimed independently, uses a one-page below-16-MiB
+bounce, single mode without auto-init, and never reads shared terminal status.
+DMA also requires an exclusive assigned ISA IRQ5/7 claim, kept PIC-masked:
+ECR serviceIntr must be cleared to enable DMA, which also enables its terminal
+interrupt independently of DCR's ACK mask (PC87338 §4.4.12). A conflicting or
+unqualified DMA IRQ leaves ECP PIO available without DMA capability. PCI cards
+use PIO; no shared PCI interrupt line is masked for this service.
+
+DOS INT17 AH=00/01/02 provides write/init/status through the same exclusive
+owner; AH is `(status ^ 0x48) & 0xf8` plus bit0 on timeout/unavailable,
+AL and FLAGS preserved. Three virtual BDA entries and equipment count reflect
+the logical map. Trusted VMM policy may explicitly replace a printer lease
+with a raw lease; guest code receives no acquisition syscall or I/O bitmap
+permission. Raw accesses are trapped byte cycles for data/status/control/EPP;
+physical IRQ enable and ECR DMA/service requests are blocked. ECP FIFO/DMA
+remain mediated native operations, not guest 8237 passthrough. VM stop revokes
+the lease; pending transfers keep resources until stop proof. Timing-sensitive
+dongles and IRQ-driven raw devices require device-specific qualification.
+
+Research/decision: National Semiconductor PC87338/PC97338, November 1998,
+[parallel-port chapter](https://pccomponents.com/datasheets/NATI-PC87338.pdf),
+defines direction, EPP timeout and ECR/FIFO/DMA behavior. Linux v6.12
+[parport_pc.c](https://github.com/torvalds/linux/blob/v6.12/drivers/parport/parport_pc.c)
+corroborates separate base_hi, exact PCI BAR layouts, bounded FIFO drain and
+masked DMA residue accounting. Its companion
+[ieee1284_ops.c](https://github.com/torvalds/linux/blob/v6.12/drivers/parport/ieee1284_ops.c)
+is the contract's protocol reference; retrieval availability is recorded in
+the implementation report. SeaBIOS rel-1.16.3
+[serial.c](https://github.com/coreboot/seabios/blob/rel-1.16.3/src/serial.c)
+provides the INT17 status inversion and BDA conventions. Resource Kit local
+`wrkc24_1.htm:205–208`, `wrkc24_3.htm:706–713` corroborate negotiated
+parallel modes and protected-mode port arbitration. These are behavioral
+references; no donor implementation or Microsoft text is imported.
+
+Intel [8237A 231466-005](https://www.pcjs.org/documents/datasheets/intel/INTEL_8237A_DMA.pdf),
+Figure 6, makes the mask registers write-only. Stop issues the channel mask,
+reads ECR DMA-disable back and compares counts across a bounded 5-us delay;
+it reads neither the mask nor shared terminal-count status. DMA pages carry
+MM_DMA ownership and a generation-qualified pin until proven stopped.
+
+Virtual VGA registration is split into 3B0h–3BBh and 3BFh–3DFh so LPT3
+owns 3BCh–3BEh. VGA batching excludes that printer range. The default
+PIT/keyboard/audio registrations use nine entries; three LPT, two VGA and
+one optional network handler use fifteen of the existing sixteen slots.
+Broad physical VGA claims may still conflict with a physical 3BCh LPT;
+that controller is reported unavailable, without stealing the display lease.
 
 [TI's UART register documentation](https://www.ti.com/product/TL16C550D)
 and Linux `8250_port.c:autoconfig_8250/autoconfig_16550a/autoconfig_has_efr`
@@ -397,10 +542,10 @@ flush/quiesce and evaluated S5 preparation/entry; a failed shutdown retains
 safe diagnostics and uncertain leases. No S3/S4 promise is made here.
 
 [Intel/Microsoft APM 1.2](https://intel-vintage-developer.eu5.org/IAL/POWERMGM/APMV12.PDF),
-§§4.3/4.6, is an exclusive alternative for some early machines. Probe version,
-entry points and capabilities without connecting. A later reviewed firmware
-broker may negotiate the protected-mode interface and poll events once per
-second; notify processing at least every five seconds and reject ordinary
+§§4.3/4.6, is an exclusive alternative for some early machines. Probe version
+and capabilities without connecting. Under f1-121 Amendment 1, connect the
+real-mode interface through the contained V86 broker and poll events once
+per second; protected-mode firmware far calls are excluded. Reject ordinary
 suspend while unsupported. Critical suspend cannot be rejected; connecting
 requires an emergency quiescence policy first. APM offers less detailed
 device/thermal/lid information than ACPI; unsupported status stays unknown.
@@ -431,6 +576,13 @@ upstream platform services with the existing Ciuki adapters.
 | Trident 4DWave DX/NX; SiS7018 | Linux `sound/pci/trident/trident_main.c` and `trident.h` | 30-bit DMA, voice engine; SiS7018 differs from SiS7012. No hardware proof from ES137x or AC'97 emulation. |
 | AC'97 codec identification and quirks | Linux `sound/pci/ac97/{ac97_codec,ac97_patch}.c`, local/patch headers and `include/sound/ac97_codec.h` | Read 7Ch/7Eh IDs under the proper engine lease; apply masked codec/revision/subsystem quirks, with bounded ready/power/rate/mute restoration. |
 
+F1-116 supplies the [Maestro engine and host-model contract](f4-maestro.md):
+native stereo PCM, copied private capture, common native/DOS mixer transport,
+E500 firmware routing and standard EAPD readback. This adds host protocol
+coverage; E500 analog, actual rate/latency and physical memory qualification
+remain required. It neither qualifies every AC'97 codec nor changes the
+playback-only public and virtual DOS recording capabilities.
+
 The initial codec census from `ac97_codec.c` includes Analog Devices
 AD1819/1881/1881A/1885/1886/1887/1888/1980/1981/1985; Cirrus
 CS4297/4297A/4298/4299/4201/4205; Realtek ALC100/200/202/650/655/658;
@@ -450,6 +602,80 @@ cable, shared-channel timing, clock and errata must agree. Quiesce channel
 and outstanding requests before a mode change; verify programmed state and
 disk selection. Preserve safe PIO only when the DMA engine is proven stopped;
 uncertain DMA stays quarantined, without BIOS retry.
+
+#### f1-108 ATA mode/resource contract v1 (2026-10-23)
+
+The private kernel boundary is `ciuki/ata_chipset.h`, ABI version 1. It
+does not change the Device Manager v1 layout or the two-channel capacity.
+The five separately tested modules select exact PCI/bridge IDs and revisions;
+an unrecognized or concealed bridge is a recorded PIO fallback. Names never
+authorize timing writes. Resources are decoded before claims: compatibility
+ports/IRQ14–15, or native I/O BAR0–3 (control at BAR+2), BAR4 BMIDE,
+and a firmware-qualified shared level PCI IRQ. Reject MMIO, overflow,
+misalignment, overlapping apertures, ambiguity, disabled decode, ICH3
+native mode and unqualified routing without probing legacy aliases.
+The driver never switches PCI programming-interface mode or sizes BARs live.
+
+Negotiation is boot-only, under the channel mutex, before publishing either
+channel's request worker. No exported runtime mode-setting service exists.
+Refuse changes with an active command, armed/started DMA, stopped/quiescing
+channel, or either PCI master active/START. Read-modify-write plans preserve
+PIO/command timings, peer fields, cable evidence and reserved bits. Thus the
+shared PIO timings and firmware PCI clock remain unchanged; only independent
+UDMA timing fields are negotiated. No MWDMA/SWDMA or ATAPI DMA is introduced.
+The VIA/NVIDIA encodings use the donor's 33.333 MHz PCI assumption; physical
+qualification must confirm a standard, non-overclocked clock. Unsupported
+clock/firmware setup retains PIO rather than inventing timing values.
+
+The selected UDMA is the intersection of valid IDENTIFY words 49/53/88,
+controller/revision ceiling, host cable evidence and valid drive word 93.
+Unknown/40-wire cable is capped at UDMA2. NVIDIA additionally limits high
+modes to the saved BIOS timing per drive (no ACPI optimism). PIIX3 stays
+PIO; PIIX4 caps at UDMA2; ICH0/ICH/ICH2+ cap at 2/4/5. Intel 450NX
+errata disable DMA, and ICH3 native mode is refused. VIA uses the ISA bridge
+revision, rejects unsafe FIFO/clock setup and the 586/TS64GSSD25-M pair;
+bad-AST parts preserve address timing. SiS uses the visible host bridge's
+old/66/100/133 layout, checks compatibility setup, and refuses concealed
+IDs requiring a separate remapping transaction. ALi pre-C2 stays PIO
+(WDC/ATAPI/LBA48 errata); C2–C4 require the firmware bridge fixup and use
+PIO for LBA48 disks (this transport always uses EXT commands for them);
+C5+ supports LBA48 DMA. ALi cable detection must
+already be enabled. No short-cable/DMI override raises a cable limit.
+
+Every plan is checked by masked PCI readback before SET FEATURES 03h/40h+n.
+Then IDENTIFY must confirm exactly the selected mode, support/cable and disk
+identity before DMA is enabled. A programming/readback mismatch or uncertain
+issued command quarantines the channel. Cleanly unsupported negotiation
+records `mode=pio reason=...`; it leaves the safe firmware PIO timing intact.
+Existing stop/revoke/pin/quarantine rules remain binding; no BIOS retry and
+no new panic path. Record family, PCI revision, resource mode, cable/mode
+and fallback reason through existing DISK diagnostics.
+
+Sources checked against the existing firmware-only `ata_dma.c` / `identify`
+path: Linux **v6.12**
+[`ata_piix.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/ata_piix.c),
+[`pata_via.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_via.c),
+[`pata_sis.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_sis.c),
+[`pata_ali.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_ali.c),
+[`pata_amd.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/pata_amd.c),
+and [`libata-pata-timings.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/libata-pata-timings.c)
+(UDMA period table only).
+[`libata-sff.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/libata-sff.c)
+`ata_pci_sff_init_host` and `ata_pci_sff_activate_host` were checked for
+BAR pairing, control offset and shared native IRQ semantics (research only).
+[Intel ICH2 datasheet 290687-002](https://www.intel.com/content/dam/doc/datasheet/82801ba-i-o-controller-hub-2-82801bam-i-o-controller-hub-2-mobile-datasheet.pdf)
+§5.15 and chapter 10 separate PIO timing from UDMA clock/dividers.
+[Intel ICH3-S specification update 290739-014](https://www.intel.com/content/dam/doc/specification-update/82801ca-io-controller-hub-3-specification-update.pdf)
+erratum 18 requires refusing the whole function if either channel is native.
+Erratum 15 remains a BIOS workaround prerequisite, as in the donor; its
+platform qualification is not established by the host register model.
+[T13 ATA-6 d1410r3a](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf)
+§8.15 (words 88/93), §8.46 and §9.4 define the drive half of the transaction.
+The owner's Resource Kit `wrkc10_6.htm` and `wrkc26_11.htm` confirm that
+bus-master capability alone is insufficient: drive IDENTIFY and controller
+compatibility must agree. Those private texts are not copied or redistributed.
+Host register/IDENTIFY/failure fixtures are engineering evidence only;
+per-family lead review and physical timing/cable qualification remain required.
 
 Promise splits into `pata_pdc202xx_old.c` and `pata_pdc2027x.c`; HighPoint into
 `pata_hpt366.c` and `pata_hpt37x.c`. Their PCI task-file layouts, timing/PLL
@@ -481,7 +707,7 @@ changing current limits.
 | FDC read/write and DOS media | 4–8 kLOC; 40–96 KiB plus ≤64 KiB per in-flight ISA bounce proposal | DMA2 allocator/pins, IRQ6, deadlines/workers, block request queue, media generation/exclusive provider, virtual FDC/DMA/INT13 | Command/result/DMA boundary/motor/media-change/error/write-protect models; QEMU `isa-fdc` with disposable data media; physical read/write/CRC/no-media. |
 | EHCI and chipset quirks | 6–12 kLOC; 64–160 KiB plus 128–512 KiB/controller working estimate | Existing USB host ops extended for HS, periodic/split scheduling, constrained DMA, IRQ/workers, ownership and companion topology | Fake RAM/register schedule walker, W1C and unlink/stop fault injection; QEMU `usb-ehci` and explicit companions; physical SMM/port mapping/TT/errata. |
 | ACPICA + generic ACPI services | 164 upstream C units + Ciuki OSL/classes about 5–10 kLOC; roughly 300–700 KiB runtime code, dynamic AML/namespace memory measured separately | Full `acpiosxf.h` OSL, region arbitration, EC transport, SCI/GPE workers, resource/PCI routing, power event API and ordered shutdown | Fake OSL and AML fixtures for tables/regions/EC/GPE/battery/lid/thermal/S5, allocation and timeout faults; QEMU tables/button/S5 subset; real firmware/thermal/battery required. |
-| APM 1.2 fallback | 1.5–3 kLOC; 16–40 KiB plus firmware workspace | Exclusive bounded firmware-call broker, entry descriptors, event worker, emergency quiesce | Negotiation/event/critical-suspend model; actual APM BIOS hardware; do not count QEMU ACPI off as APM conformance. |
+| APM 1.2 fallback | 1.5–3 kLOC; 16–40 KiB plus firmware workspace | Exclusive bounded real-mode V86 broker, event worker, emergency quiesce | Negotiation/event/critical-suspend model; actual APM BIOS hardware; do not count QEMU ACPI off as APM conformance. |
 | Existing AC'97 variants + codecs | 1–4 kLOC incremental; 16–48 KiB plus existing stream buffers | Existing `audio_backend`, codec leases, constrained DMA, qualified IRQ routes | Mock codec/register/BDL/stop tests; QEMU `AC97` baseline only; actual SiS/nForce/ALi/codec/analog paths. |
 | ESS Maestro | 3–6 kLOC; 32–64 KiB, 64–256 KiB constrained buffers estimate | PCM adapter, APU/wavecache indexed register lock, 28-bit/window-constrained DMA | Register/voice/window/stop model; E500 and other identified boards, hardware only. |
 | EMU10K1/10K2 | 6–12 kLOC; 64–160 KiB, page tables + 128–512 KiB buffers estimate | PCM, generated DSP program, per-chip address mask, page-map pinning, IRQ stop proof | DSP routing/page-map/interrupt model; SB Live!/real Audigy hardware only. |
@@ -517,8 +743,8 @@ generation and discards queued bytes. Close flushes the hardware holding
 FIFO, then gives the shift register at most 20 one-millisecond pauses with
 interrupts enabled. Idle failure retains the port in quarantine; another
 open cannot enter during that stop. Process exit follows the same close.
-No raw I/O privilege or guest lease is granted. Native/VM/mouse handoff is
-reserved for f1-112. `O_APPEND`, create/truncate/directory flags are rejected.
+Native opens grant no raw I/O privilege. Native/VM/mouse handoff follows
+the additive f1-112 rules below. `O_APPEND`, create/truncate/directory flags are rejected.
 Access mode controls read/write rights; configuration needs write access.
 
 All v1 records contain only 32-bit fields, with leading `version=1` and
@@ -572,13 +798,79 @@ number and can qualify its previously unknown IRQ without probing a live port.
 Before an open, assigned routing supersedes the BDA IRQ convention; the logger
 keeps its original reservation. Registry invalidation prevents further native
 access and is reflected in the read-only COM inventory.
-The f1-109 provider is not present in the f1-111 base: connecting its assigned
-inventory remains an explicit integration dependency, not an implemented ISA
-isolation scan. PCI activation currently admits Oxford 1415:9501 (four packed
+The f1-109 provider was absent from the f1-111 base; f1-112 now imports its
+assigned inventory after read-only discovery, without an ISA isolation scan.
+PCI activation currently admits Oxford 1415:9501 (four packed
 ports at 1.8432 MHz; SIIG subsystem excluded) and QEMU 1b36:0002/0003/0004
 (one/two/four packed ports, same clock), from exact layouts. QEMU's
 [PCI serial device specification](https://www.qemu.org/docs/master/specs/pci-serial.html)
 documents the offsets and IRQ pin. No QEMU run is evidence for this change.
+
+## Serial peripheral and DOS lease interface (f1-112)
+
+The additive COM controls are `COM_GET_OWNER` (v1, 24-byte
+`ciuki_com_owner`: version, size, kind, id, generation, reserved) and
+`COM_SET_MOUSE` (v1, 16-byte `ciuki_com_mouse`: version, size, protocol,
+reserved). Existing COM records and syscall numbers keep their bytes.
+Owners are NONE=0, NATIVE=1, VM=2, MOUSE=3, ENUMERATOR=4, LOGGER=5.
+Owner IDs identify the native description's opener PID or the VM ID; zero
+denotes a kernel-held mouse/enumerator/logger. The generation is the
+physical COM open generation, never a guest pointer.
+Mouse protocols are OFF=0, MICROSOFT=1, LOGITECH=2, MOUSE_SYSTEMS=3,
+WHEEL=4. A writable exclusive native description can select a non-PnP
+mouse explicitly; final close releases its buttons and its lease. Raw reads
+are refused while that description is driving the input decoder. Automatic
+enumeration only binds a mouse after a validated known PnP ID, never from
+an arbitrary byte stream. The trusted kernel attach/detach interface also
+supports retained mouse ownership without a native description.
+
+`dosvm_uart_bind(key, slot, native_index, reason)` is a trusted monitor
+interface, not a guest syscall. Slots are zero-based COM1–COM4; -1 selects
+the null sink. Trusted `dosvm_config.serial[4]` selects 0=null or 1..8=native
+COM1..8 at creation, before boot; refusal unwinds the whole creation.
+Rebinding requires an unstarted VM. No physical I/O
+bitmap is granted. Native COM generations and the full VM key prevent stale
+release. Default VM UARTs use null sinks at 3F8/2F8/3E8/2E8 with IRQ4/3/4/3.
+IRQ lines aggregate the two virtual UARTs sharing each edge. Each VM has
+independent 16-byte FIFOs, modem/line state, timeout and interrupt latches.
+INT14 functions 00–03 use these same registers and bounded BDA timeouts.
+BDA 47C–47F hold BIOS tick counts (65536/1193182 seconds per tick), with
+ten ticks by default and zero selecting immediate I/O in this virtual BIOS.
+Null output drains at the programmed character rate; null input has no
+fabricated carrier or incoming bytes. Physical bindings use the native
+queues, configuration and stop/quarantine path; unsupported divisors return
+line-error status rather than reconfigure a peer. Stop revokes guest work;
+destroy closes leases only after the worker is quiescent.
+
+Firmware `_CRS` COM resources are consumed after inventory completes.
+IRQ resource flags retain EDGE=1, EXCLUSIVE=2 and ACTIVE_HIGH=4; only a single 8-byte I/O
+extent and a single high/edge/exclusive IRQ3/4 qualify. `_STA` must permit
+decoding (or be absent, as specified by ACPI). Partial/unsupported,
+ambiguous, wide or conflicting records do not trigger hardware probes.
+BDA logical numbers and the pinned logger remain authoritative at their bases.
+
+Research decisions: Microsoft/Hayes [External COM 1.00, §§2–3](https://citeseerx.ist.psu.edu/document?doi=f48af868c7395b5a8357780c5663011f5ec572fc&repid=rep1&type=pdf)
+defines exclusive acquisition, 1200/7N1, DTR/RTS/DSR stages, two response
+phases and bounded ID collection. Validate both encodings, delimiters,
+field lengths and wire-byte checksum before selecting a decoder.
+[TI TL16C550D, register descriptions](https://www.ti.com/lit/ds/symlink/tl16c550d.pdf)
+defines DLAB, FIFO triggers, four-character timeout, error/modem read-clear
+and interrupt priority. Virtual IRQ assertion honors OUT2 and loopback.
+[Linux v6.12 `drivers/input/mouse/sermouse.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/input/mouse/sermouse.c)
+(blob 218c8432a13bc9addfe54a8818ee3701f7dd6795) supplies the mouse wire
+equations; the adaptation emits complete packets without prediction.
+[SeaBIOS rel-1.16.3 `src/serial.c`](https://github.com/coreboot/seabios/blob/rel-1.16.3/src/serial.c)
+and [`src/clock.c`](https://github.com/coreboot/seabios/blob/rel-1.16.3/src/clock.c)
+corroborate INT14 register results and BDA timeout units. These firmware facts
+do not introduce a foreign BIOS implementation.
+The local Windows 98 Resource Kit `wrkc24_3.htm:704–742` establishes VCOMM
+as the protected-mode communications owner. The Microsoft NT serenum sample
+is a protocol reference only, never a V86 architecture donor.
+ACPI [device configuration](https://uefi.org/specs/ACPI/6.5/06_Device_Configuration.html)
+defines `_STA` decoding permission, current resources and IRQ electrical
+properties. Variable or disabled resource descriptions grant no COM activation.
+FreeBSD [release/14.2.0 `usr.sbin/moused/moused.c`](https://github.com/freebsd/freebsd-src/blob/release/14.2.0/usr.sbin/moused/moused.c)
+confirms the PnP serial mouse protocol IDs, including `MSH0001` wheel mice.
 
 ## Device model, claims and guest boundaries
 
@@ -752,6 +1044,7 @@ even when tracked by an F1 census follow-up number.
 | f1-104 | Bounded common HID report parser, report keyboard/consumer keys and joystick capabilities; versioned input API | More USB keyboards and gamepads work; media keys have explicit supported actions. |
 | f1-105 | Controller/companion inventory, chipset-specific ownership/quirk census and truthful route-only status | Device Manager explains which USB ports/controllers can serve a device and why activation is refused. |
 | f1-106 | EHCI control/bulk/interrupt engine, unlink/stop, companion and TT support; depends on 105 | High-speed storage and mixed-speed input work on qualified USB 2.0 ports. Unsupported TT topology is reported until implemented. |
+| f1-106b | EHCI FS/LS TT splits, shared periodic admission and completion-driven HID workers | Host models cover LS keyboards, FS mice and FS storage behind HS hubs; zero periodic HID wakes with working IRQs. Hardware qualification remains required; topology scans retain their separate deadline. |
 | f1-107 | Existing AC'97 SiS/nForce/VIA/ICH routing/codec qualification; codec-name/mask data; additional M5455 only after layout tests | Onboard sound works on more desktops; codec identity and failure reason are visible. |
 | f1-108 | PIIX/ICH then VIA/SiS/ALi/NVIDIA ATA timing/cable/native-mode resource contracts, in separately reviewed substeps | Qualified controllers get a safe negotiated transfer mode; PIO fallback remains explicit. |
 | f1-109 | ACPI/PnP read-only inventory, device hierarchy/paged ABI, ACPICA OSL and region/SCI/EC tests | Device Manager shows firmware-described devices and power capabilities before takeover. |
@@ -841,12 +1134,94 @@ The lead reviewed this contract and the source audit; both are accepted as bindi
 5. **Native FAT12 mounting** is approved as a separate follow-up, f1-115b, so floppies open in the file manager.
 6. **QEMU.** Peripheral probes in QEMU wait for the owner's approval under the current suspension. Until then the evidence is host models plus the hardware trials.
 
+### f1-121 implementation boundary (Amendment 1)
+
+Amendment 1 supersedes the protected-mode connection described above.
+[Intel/Microsoft APM 1.2](https://intel-vintage-developer.eu5.org/IAL/POWERMGM/APMV12.PDF),
+sections 4.1, 4.2, 4.3, 4.6.2, 4.6.5, 4.6.8, 4.6.11, 4.6.12 and
+4.6.15 define the real-mode cooperative interface, disconnect, status and
+notification protocol. Ciuki connects with INT15/5301 and negotiates 1.2
+with 530E. Every operation uses the serialized V86 BIOS worker. No BIOS
+GDT descriptors or ring-0 firmware calls are installed. The kernel-only
+broker permits 5300–530F and 5380; protected-mode connect 5302/5303 is
+explicitly refused by this real-mode owner. The generic input and DOS
+allowlists remain unchanged. Section 4.7.1 defines 5380/BH=7F as the OEM
+installation query. Only that query is admitted; section 4.7.2's other BH
+values select vendor operations and are refused. The backend itself issues
+no OEM calls.
+
+A fault/timeout makes the backend unavailable. Disconnect is attempted once
+through the same contained broker, never by resurrecting a quarantined VM.
+A failed disconnect retains the exclusive reservation. A BIOS refusal of
+connection never authorizes disconnecting another owner's connection. Any
+ACPI RSDP excludes APM, including failed or partial ACPI takeover.
+
+The common kernel-only `ciuki/power_source.h` interface reserves exactly one
+of ACPI/APM before connection and exposes cached AC, battery percentage,
+remaining seconds, notifications and orderly off. UI consumers never call
+firmware. The lead reconciles this interface with parallel f1-110; no public
+ABI or SDK record changes here. Global DMA stop/resume is an explicit
+platform service: an absent service cannot be represented as successful
+quiescence, and APM connection requires that owner to be installed.
+
+`storage_sync_until` flushes mounted volumes without unmounting or setting
+clean bits, using a task-scoped microsecond VFS request deadline. A retained
+worker (`storage_sync_bounded`) bounds its caller even when cancellation
+must wait for transport retirement/bookkeeping cleanup. It never abandons
+caller-stack pointers or frees in-flight buffers. Pending flushes leave the
+APM event worker runnable. Ordinary shutdown uses existing `storage_sync`;
+APM Off is issued only after the platform's orderly-shutdown proof.
+Emergency allocation remains 2 seconds for flush, 2.5 seconds total for DMA
+quiescence, followed by a 2-second firmware acknowledgement. Repeated events
+do not extend it. Expiry/error is recorded and critical suspend is still
+acknowledged, never Processing or Rejected. Ordinary suspend is rejected.
+A stopped DMA owner must recover devices/time before admitting workloads.
+
+[Linux v6.12 `arch/x86/kernel/apm_32.c`](https://github.com/torvalds/linux/blob/v6.12/arch/x86/kernel/apm_32.c)
+is reference only; no donor code, notices or library objects are imported.
+The host model measures per-call overhead in microseconds; that is not
+physical BIOS latency or evidence of hardware suspend/power removal.
+Runtime qualification and f1-110 UI/syscall integration remain lead work.
+
 ## Owner decision on licences (2026-10-22 23:55)
 
 The owner removed licence-compatibility gating: "integra tutte le licenze GPL varie versioni, MIT ecc non mi interessa che siano diverse tu metti tutto e basta".
 - **Yamaha DS-XG (f1-119)** is no longer deferred. Its microcode is included from the best available source, with its notice.
 - **Notices.** Every imported file keeps its notice and origin line in the credits.
 - **Redistribution.** The owner redistributes regardless (2026-10-22 23:55); no release-time licence list is kept.
+
+## f1-115 kernel-private floppy interface (2026-10-23)
+
+This implementation adds no syscall, SDK header or exported record layout.
+The private service in `src/kernel/drivers/floppy.h` uses the existing
+`blkdev` callbacks, 512-byte sectors, monotonically advancing media generations
+and cache-disabled durability. Standard geometry/rate selection covers 720 KB,
+1.2 MB, 1.44 MB and 2.88 MB (perpendicular mode); 360 KB in its own drive is
+also represented. Non-primary or unqualified FDC routing is refused.
+
+The private lease identity is controller + drive + owner + owner generation +
+monotonic lease serial. A native mount holds it from before FAT preparation
+until cache/namespace detach. A DOS owner is its immutable VM ID/generation.
+Acquisition refuses an existing owner; stale lease copies cannot transfer or
+release a replacement lease. Controller requests serialize behind one bounded
+gate. No physical guest DMA address or physical I/O bitmap permission is used.
+Stop masks DMA2, gates the controller and proves readback; failed proof retains
+the buffer and all resource claims in quarantine and masks/detaches IRQ6.
+
+`storage_add_floppy` publishes whole media at A:/B: through the existing FAT
+driver; the FAT12 implementation remains f1-115b. Surprise removal expires the
+cache, identities and drive generation before releasing native ownership.
+`floppy_mount`/`floppy_unmount` are trusted kernel mount/eject entrypoints.
+
+`dosvm_floppy_assign` and `dosvm_floppy_image` assign media only to a created,
+not-yet-started VM. Image files use the VM's existing VFS table and deny-all
+sharing. Virtual DOR/MSR/FIFO/DIR/CCR and INT13 00/01/02/03/04/05/08/15/16
+share that provider. Reset remains virtual; seek/recalibrate can acknowledge a
+changed physical medium through the VMM. IRQ6 and the existing virtual 8237
+state are per VM. Diskette parameter tables use spare bytes following the
+existing INT1E/1F synthetic BIOS stubs; their code bytes and the entire DFVM
+and DPMI ROM page stay unchanged. Unsupported command families return errors.
+Research and verification are in [f1-115 validation](../validation/f1-115-floppy-controller.md).
 
 ## f1-105/f1-106 implementation interface (2026-10-22)
 
@@ -901,3 +1276,138 @@ The implementation is written against the EHCI specification, without
 transplanting Linux code. The Windows 98 Resource Kit, chapter 30, “Using
 USB”/“USB Topology” (`wrkc30_2.htm`, local research media), supplies the
 host/hub/device enumeration model, not USB 2.0 register semantics.
+
+## f1-113 analog and virtual joystick interface
+
+Research before implementation checked the upstream Linux game-port files
+[`ns558.c`](https://github.com/torvalds/linux/blob/master/drivers/input/gameport/ns558.c),
+[`analog.c`](https://github.com/torvalds/linux/blob/master/drivers/input/joystick/analog.c),
+[`gameport.c`](https://github.com/torvalds/linux/blob/master/drivers/input/gameport/gameport.c)
+and [`emu10k1-gp.c`](https://github.com/torvalds/linux/blob/master/drivers/input/gameport/emu10k1-gp.c).
+The audit above pins the first three to v6.12; fetching those tag URLs failed
+in this sandbox, so the browsable upstream master was a corroborating reference,
+not a claimed v6.12 source download. No donor code is imported. RC bits 0–3
+fall after a trigger, buttons 4–7 are active-low, and a 3 ms deadline bounds
+sampling. Probe only assigned PCI analog game-port functions and ISA 201h,
+claiming before writes. PCI names alone never authorize audio/MIDI configuration.
+Creative 1102:7002–7005 uses BAR0; other PCI class 09:04, programming interface
+10h analog functions use their first assigned I/O BAR (PCI-SIG class 09h, note 1). Disabled or unknown layouts
+remain unsupported. Do not enable an audio device's legacy decode here.
+The PIT-derived monotonic counter supplies actual elapsed clocks; reject
+falling edges across a sampling gap above 100 us rather than invent timings.
+A normal-priority dedicated worker samples with interrupts enabled (20 ms when
+connected, 1 s when disconnected; full-axis rediscovery once per second).
+Three consecutive uncertain samples neutralize the source; disconnected
+axes expire and publish neutral/release state. No memory limits grow.
+
+The Win98 Resource Kit wrkc28_3.htm:97 and wrkc30_3.htm:19–75 describe HID
+mapping into trapped legacy joystick interfaces. This is the selected V86
+model. IBM's [PC/AT Technical Reference BIOS listing](https://www.bitsavers.org/pdf/ibm/pc/at/1502494_PC_AT_Technical_Reference_Mar84.pdf)
+(JOYSTICK_SUPPORT, INT15/AH=84) is the original register-contract reference;
+its PDF fetch was blocked. The upstream [DOSBox-X BIOS implementation,
+lines 5713–5748](https://dosbox-x.com/doxygen/html/bios_8cpp_source.html)
+corroborates the two subfunctions, register ordering and CF on absent input.
+No BIOS/emulator code is copied. Each VM has private RC deadlines, reads cached normalized native
+state only, and never changes the physical PIT. Absent axes stay high after
+trigger (disconnected resistance); BIOS positions are zero for missing axes.
+No connected axes sets CF (positions zero, switches open); unsupported DX
+returns CF/AH=86h. Virtual resistances map -32767..32767 to
+24..1432 PIT clocks (about 20..1200 us); BIOS positions map to 0..416.
+
+Analog locators 257–264 extend the logical namespace after the unchanged 256
+USB locators: at most four retained physical game ports with two logical sticks
+each. No USB host/device, registry or VM memory ceiling changes. A port defaults
+to one four-axis/four-button stick (X/Y/Z/Rx); two-stick configuration exposes
+X/Y and two buttons per child. Mode change invalidates both logical generations.
+Existing f1-104 capabilities/state/calibration sizes and commands are unchanged.
+Analog capabilities use host=FFFFFFFFh, address=the I/O base and interface=the
+logical child (0/1); applications distinguish this transport by its locator
+namespace rather than treating these fields as a USB address.
+`INPUT_JOY_CONTROL` (4904h) on the input grant takes the 100-byte pack(4)
+`ciuki_joystick_control` version 1. QUERY=0 returns axes/buttons/attached plus
+first four normalized/raw axes; CALIBRATE=1 forwards minimum/centre/maximum
+for axis to the existing calibration API; ROUTE=2 selects the default DOS
+source(s); CONFIGURE=3 selects four-axis=0/two-stick=1 wiring; GET_ROUTE=4
+returns the current route; NEXT=5 finds the next attached joystick after device.
+QUERY/NEXT never probe. All unused request outputs and reserved words must be
+zero. State/calibration/configuration require exact generations; discovery can
+use generation zero. ROUTE validates both live identities transactionally.
+Device zero disables DOS joystick input. In two-stick mode, second_device and
+second_generation optionally select stick B. Disconnect/stale identity yields
+no input, never an automatic substitution. VMs snapshot the default route at
+creation; these are read-only logical subscriptions, not additional physical
+leases. Multiple VMs may subscribe without owning or configuring the hardware.
+
+The target layout adds 4,360 bytes of static port/route storage and 64 bytes
+of private state per VM; the latter fits the existing page-rounded VM record.
+The worker uses the existing task stack and admission limits. These are compiled
+layout measurements, not physical-machine free-memory evidence.
+
+Control Panel uses authenticated desktop channel requests, brokered by the
+existing input-grant owner, for discovery, live test and three-point calibration.
+Device Manager links to this same panel. Per-game file writes run in a bounded
+Control Panel job, leaving its input/event thread responsive. Calibration stays
+per session; no physical device is configured by UI refresh.
+Per-game joystick properties persist
+separately from DOS memory/network settings. CREATE's formerly reserved words
+1–6 (offsets 88–108) carry device/generation/second-device/second-generation/mode/session;
+all zero selects the desktop default and device FFFFFFFFh explicitly disables.
+Unused fields in other operations retain their zero requirement. Older callers stay compatible.
+
+Saved explicit selections include a nonzero 32-bit boot-session discriminator,
+returned at offset 96 of the common control record. The existing entropy service
+supplies it in the sampling worker, outside IRQ exclusions and RC loops. It is
+an accidental-rebinding guard, not an authorization credential. An unavailable
+entropy service leaves it zero and explicit per-game persistence returns EAGAIN;
+the native API and global DOS default still work. CREATE rejects a mismatching
+session with ENODEV. Default/off preferences contain zero session and survive
+reboot; explicit controller preferences require reselection after reboot rather
+than automatically trusting a boot-local locator. The six-word settings grammar
+also rejects incoherent tuples and integer overflow. No entropy policy changes.
+
+### f1-113b persistent identity amendment
+
+This supersedes the session-only persistence policy above. Research checked the
+[USB-IF USB 2.0 specification entry](https://www.usb.org/document-library/usb-20-specification)
+and Microsoft's [USB serial-number explanation](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/usb-faq--introductory-level)
+and [string descriptor request documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/usb-string-descriptors)
+(USB 2.0 sections 9.6.1/9.6.7). VID/PID alone does not distinguish identical
+controllers. Retain the full serial descriptor as a SHA-256 fingerprint; no
+truncation or display-name matching. With no serial, use PCI bus/device/function,
+the root/hub port chain and HID interface. Serial identities include VID/PID and
+interface but exclude the port. Unreadable advertised serials cannot persist.
+Game-port identities use I/O base and logical child, since analog hardware has
+no serial. Identical serial-less controllers remain tied to their sockets.
+The owner's Resource Kit wrkc28_3.htm:97 and wrkc30_3.htm:19–75 continue to
+define the V86 cached-input mapping; no physical VM I/O or NTVDM is introduced.
+
+Use the existing `/system/settings` configuration directory and INI pattern.
+Private fixed-width calibration and route records have a version, sequence and
+checksum, encoded as hex INI values. Alternate two committed files so a torn
+write preserves the previous valid record. A worker owns all storage operations.
+The storage worker is separate from the RC sampler (250 ms service cadence), so
+disk admission/completion cannot stall analog sampling. Control requests only
+update bounded pending state under the existing UP input
+boundary. Log rejected/corrupt records and use defaults (or the previous valid
+slot). Old boot-local explicit preferences cannot be migrated to identities:
+log their rejection; default/off records can migrate without guessing hardware.
+Saved calibration is reapplied to each new generation of the matching controller.
+Store wiring and the global DOS route as well as catalog games 1–3.
+The bounded calibration cache covers the full existing 264-locator namespace;
+there is no smaller controller admission limit. Wiring has one authoritative
+record per I/O base, in logical child 0, to avoid conflicting child settings
+after an interrupted save. File handles and VFS table reservations are released
+after each record operation. Existing task/stack and registry limits remain.
+
+The 100-byte v1 control layout and existing operation numbers remain unchanged.
+SAVE_GAME=6 takes axis=catalog game, plus the existing route tuple. Device zero
+means use global default; FFFFFFFFh disables. SAVE_STATUS=7 takes zero inputs and
+returns buttons=pending writes and minimum=last negative storage error. Changes
+are acknowledged as queued; the Control Panel polls until storage completion.
+CREATE with an all-zero explicit tuple uses the saved catalog route, resolved
+against live identities at creation. Missing saved A/B falls back to the first
+attached controller; CREATE's `changed` output is JOYSTICK_FALLBACK=1 and the
+launcher shows a note. Running VMs retain their generation-qualified snapshot.
+No implicit rebinding takes place inside VM reads. Direct explicit session
+tuples keep their original validation. Limits, IRQ/timing and physical-port
+ownership are unchanged. Newly authored code only; no donor implementation.

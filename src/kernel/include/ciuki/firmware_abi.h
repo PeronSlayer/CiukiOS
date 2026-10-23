@@ -22,7 +22,7 @@
 #define CIUKI_FW_CAP_EC 128u
 #pragma pack(push, 4)
 struct ciuki_firmware_resource {
-    uint32_t type, flags; /* v1 resource types; flags retain incomplete facts */
+    uint32_t type, flags; /* v1 types; IRQ flags: edge=1, exclusive=2, active-high=4 */
     uint64_t start, end;
 };
 struct ciuki_firmware_record {

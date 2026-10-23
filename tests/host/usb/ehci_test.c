@@ -26,9 +26,25 @@ static int peripheral_packet(struct ehci_model *model, unsigned addr, unsigned e
         for (unsigned i = 0; i < n; i++) assert(buf[i] == 0xa7);
         return (int)n;
     }
+    if (!ep && pid == USB_PID_SETUP && buf[0] == 0x23 && (buf[1] == 8 || buf[1] == 9)) {
+        model->clear_value = buf[2] | (unsigned)buf[3] << 8; model->clear_port = buf[4];
+        if (buf[1] == 8) { model->tt_clear++; if (model->clear_fail) return -USB_EPIPE; }
+        else {
+            model->tt_reset++; if (model->tt_reset_fail) return -USB_EPIPE;
+            assert(!(model->regs[0x24/4] & 0x4000));
+            memset(model->split_pending, 0, sizeof(model->split_pending));
+        }
+        model->tt_busy = model->split_wait = false;
+        memcpy(m.setup, (unsigned[8]){buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]}, sizeof(m.setup));
+        return 8;
+    }
+    if (!ep && !n && m.setup[0] == 0x23 && (m.setup[1] == 8 || m.setup[1] == 9)) return 0;
     unsigned before = m.data_at;
     int got = transaction(&m, addr, ep, pid, toggle, buf, n);
-    if (!ep && pid == USB_PID_IN && m.setup[1] == 6 && m.setup[3] == 1 && !before && got >= 8) buf[7] = 64;
+    if (!ep && pid == USB_PID_IN && m.setup[1] == 6 && m.setup[3] == 1 && !before && got >= 8 &&
+        (m.selected < 2 || (m.hub_status[m.selected - 2] & 0x400))) buf[7] = 64;
+    if (!ep && pid == USB_PID_IN && m.setup[1] == 6 && m.setup[3] == 2 && model->hid_interval &&
+        before<=33 && got>0 && before+(unsigned)got>33) buf[33-before]=(uint8_t)model->hid_interval;
     return got;
 }
 static struct pci_func controller(void)
@@ -41,7 +57,7 @@ static void prepare_model(bool hub)
     ehci_model_init(&e, hc()); e.transaction = peripheral_packet;
     m.regs[0x10/4] = 5 | 5u << 16; /* peripheral corpus's root attachment view */
     if (hub) e.regs[0x68/4] = 0;
-    if (hub) m.hub_status[1] |= 0x200;
+    if (hub) m.hub_status[0] |= 0x200;
 }
 static int attach_ehci(void)
 {
@@ -236,17 +252,178 @@ static void hub_tt(void)
     assert(hc()->device_count == 3 && hc()->devices[0].hub_ports);
     for (unsigned i=1;i<3;i++) {
         struct usb_device *d=&hc()->devices[i];
-        assert(d->present && !d->configured && !d->quarantined && !d->high_speed);
-        assert(!strcmp(d->reason,"unsupported_transaction_translator"));
+        assert(d->present && d->configured && !d->quarantined && !d->high_speed);
+        assert(d->hid[0].active && !strcmp(d->reason,"hid_ready"));
     }
     unsigned packets=e.packets; hc()->next_scan=0; usb_step(hc());
-    assert(e.packets-packets < 100 && hc()->device_count==3); /* no enumeration retry loop */
+    assert(e.packets-packets < 100 && hc()->device_count==3);
+    assert(e.starts && e.completes);
     usb_host_quarantine(hc(), "hub_end");
-    prepare_model(true); m.hub_status[0]|=0x400; start_ehci(false); usb_step(hc());
+    prepare_model(true); m.hub_status[0]=(m.hub_status[0]&~0x200u)|0x400; start_ehci(false); usb_step(hc());
     assert(hc()->device_count==3 && hc()->devices[1].configured && hc()->devices[1].high_speed);
-    assert(!hc()->devices[2].configured && !strcmp(hc()->devices[2].reason,"unsupported_transaction_translator"));
+    assert(hc()->devices[2].configured && !hc()->devices[2].high_speed && !hc()->devices[2].low_speed);
     usb_host_quarantine(hc(), "mixed_hub_end");
-    puts("PASS EHCI high-speed hub with full/low-speed children: explicit unsupported TT, no split DMA or false enumeration");
+    puts("PASS EHCI high-speed hub with full/low-speed children: split control enumeration and mixed HS/LS");
+}
+static void split_budgets_recovery(void)
+{
+    prepare_model(true); start_ehci(true); usb_step(hc()); step_ehci(20);
+    struct usb_device *hub=&hc()->devices[0], *mouse=&hc()->devices[2], *kbd=&hc()->devices[1];
+    assert(hub->tt_think==8 && !hub->tt_multi && mouse->configured && kbd->configured);
+    assert(!mouse->high_speed && !mouse->low_speed && kbd->low_speed);
+    uint8_t b[64];
+    /* Existing FS/LS endpoints share one TT. New requests cannot reserve
+     * overlapping downstream microframes even with abundant HS bandwidth. */
+    struct usb_hid *extra=&mouse->hid[1];
+    hub->tt_think=32;
+    *extra=(struct usb_hid){.endpoint=2,.packet=4,.interval=10};
+    assert(hc()->ops->interrupt(mouse,extra,b,4)==-USB_EAGAIN);
+    unsigned extra_at=USB_EHCI_HID_BASE+(2*USB_HID_MAX+1)*USB_EHCI_HID_STRIDE;
+    assert(*(uint32_t *)(m.dma+extra_at+84)==((4u*8+160)*7/6+1)*84+32*84);
+    struct usb_hid *overflow=&mouse->hid[2];
+    *overflow=(struct usb_hid){.endpoint=3,.packet=4,.interval=10};
+    assert(hc()->ops->interrupt(mouse,overflow,b,4)==-ENOSPC && !overflow->pipe_state);
+    unsigned at=USB_EHCI_HID_BASE+2*USB_HID_MAX*USB_EHCI_HID_STRIDE;
+    assert((*(uint32_t *)(m.dma+at+8)&255) && (*(uint32_t *)(m.dma+at+8)&0xff00));
+    hc()->ops->interrupt_stop(mouse,extra);
+    assert(hc()->ops->interrupt(mouse,overflow,b,4)==-ENOSPC);
+    ehci_sleep(&e,2); /* cancel retains its TT budget until HC retirement */
+    /* A multi-TT interface may reserve the same time on a distinct port. */
+    hub->tt_multi=true;
+    assert(hc()->ops->interrupt(mouse,overflow,b,4)==-USB_EAGAIN);
+    hc()->ops->interrupt_stop(mouse,overflow);
+    hub->tt_multi=false;
+    for(unsigned mode=0;mode<4;mode++) {
+        e.bulk_fault=true;
+        mouse->storage=(struct usb_storage){.bound=true,.in=2,.out=3,.in_packet=64,.out_packet=64};
+        e.bulk_toggles[0]=e.bulk_toggles[1]=0;
+        unsigned cleared=e.tt_clear, reset=e.tt_reset, got=0;
+        e.inject=mode==0 ? 0x48:mode==1 ? 0x40:0;
+        e.nak=mode==2; e.clear_fail=mode==3;
+        if(mode==3)e.inject=0x48;
+        usb_host_take(hc());
+        int err=usb_bulk(mouse,true,b,sizeof(b),&got);
+        usb_host_drop(hc());
+        assert(err<0 && e.tt_clear==cleared+1 && !e.tt_busy);
+        assert(e.tt_reset==reset+(mode==3));
+        assert(hc()->ready && !hub->quarantined && !mouse->quarantined);
+        assert(e.clear_port==1);
+        if(mode!=3)assert(e.clear_value==(0x8000u|(2u<<11)|(unsigned)mouse->address<<4|2));
+        e.nak=e.clear_fail=false;
+        usb_host_take(hc());assert(!usb_bulk(mouse,true,b,sizeof(b),&got) && got==sizeof(b));usb_host_drop(hc());
+    }
+    /* Control cleanup covers both directions. Multi-TT class requests use
+     * port+1, while QHs always carry the physical downstream port. */
+    hub->tt_multi=true;
+    e.bulk_fault=false;e.control_fault=true;
+    unsigned cleared=e.tt_clear; e.inject=0x48;
+    usb_host_take(hc());assert(usb_control(kbd,0x80,6,0x100,0,b,8)<0);usb_host_drop(hc());
+    assert(e.tt_clear==cleared+2 && e.clear_port==kbd->port+1u);
+    /* Periodic failures reset the TT, never ClearTTBuffer. */
+    cleared=e.tt_clear; unsigned reset=e.tt_reset;
+    e.control_fault=false;e.periodic_fault=true;
+    e.inject=0x48;
+    for(unsigned n=0;n<40 && e.tt_reset==reset;n++)step_ehci(1);
+    assert(e.tt_reset==reset+1 && e.tt_clear==cleared && hc()->ready);
+    usb_host_quarantine(hc(),"tt_recovery_end");
+    puts("PASS EHCI TT shared/multi-port budgets, SS/CS masks, STALL/error/timeout ClearTTBuffer, control directions, ResetTT fallback and periodic recovery");
+}
+static void admission_and_failed_tt(void)
+{
+    prepare_model(false);start_ehci(false);
+    unsigned admitted=0;uint8_t b[64];
+    for(unsigned i=0;i<USB_DEVICE_MAX;i++) {
+        struct usb_device *d=&hc()->devices[i];
+        *d=(struct usb_device){.host=hc(),.address=(uint8_t)(i+1),.high_speed=true};
+        hc()->device_count=i+1;
+        for(unsigned j=0;j<USB_HID_MAX;j++) {
+            struct usb_hid *p=&d->hid[j];
+            *p=(struct usb_hid){.endpoint=(uint8_t)(j+1),.packet=64,.interval=1};
+            int err=hc()->ops->interrupt(d,p,b,8);
+            if(err==-ENOSPC)assert(!p->pipe_state);
+            else {assert(err==-USB_EAGAIN);admitted++;}
+        }
+    }
+    assert(admitted==80000u/(64u*20+2000));
+    usb_host_quarantine(hc(),"budget_end");
+    prepare_model(true);start_ehci(false);usb_step(hc());step_ehci(20);
+    struct usb_device *d=&hc()->devices[2];
+    d->storage=(struct usb_storage){.bound=true,.in=2,.out=3,.in_packet=64,.out_packet=64};
+    e.bulk_fault=e.clear_fail=e.tt_reset_fail=true;e.inject=0x48;
+    unsigned got;usb_host_take(hc());assert(usb_bulk(d,true,b,sizeof(b),&got)<0);usb_host_drop(hc());
+    assert(hc()->devices[0].quarantined && d->quarantined && hc()->ready);
+    assert(e.tt_clear==1 && e.tt_reset==1 && (e.regs[0x24/4]&0x4000));
+    usb_host_quarantine(hc(),"tt_failed_end");
+    puts("PASS EHCI 80 us microframe budget exhausted without publication; failed TT reset isolates hub and restarts periodic service for healthy peers");
+}
+static void mixed_tree(void)
+{
+    prepare_model(true); start_ehci(true); usb_step(hc()); step_ehci(20);
+    struct usb_device *stick=&hc()->devices[hc()->device_count++];
+    *stick=(struct usb_device){.host=hc(),.address=4,.ep0=8,.parent=1,.port=2,
+        .present=true,.configured=true};
+    stick->storage=(struct usb_storage){.bound=true,.in=2,.out=3,.in_packet=64,.out_packet=64};
+    assert(hc()->devices[1].low_speed && !hc()->devices[2].low_speed && !hc()->devices[2].high_speed);
+    m.dev[2].report[2]=4;m.dev[2].report_len=8;
+    m.dev[3].report[1]=3;m.dev[3].report[2]=5;m.dev[3].report_len=4;
+    uint8_t b[192];unsigned got;
+    e.bulk_ready_at=e.now+100;
+    usb_host_take(hc());assert(!usb_bulk(stick,true,b,sizeof(b),&got) && got==sizeof(b));usb_host_drop(hc());
+    assert(held[INPUT_KEY_A] && last_x==3 && last_y==5);
+    for(unsigned i=0;i<sizeof(b);i++)assert(b[i]==0x5a);
+    memset(b,0xa7,sizeof(b));usb_host_take(hc());
+    assert(!usb_bulk(stick,false,b,sizeof(b),&got) && got==sizeof(b));usb_host_drop(hc());
+    assert(e.starts && e.completes && hc()->ready && hc()->device_count==4);
+    usb_host_quarantine(hc(),"mixed_tree_end");
+    puts("PASS EHCI mixed TT tree: HS hub, LS keyboard, FS mouse and FS stick; input progresses during NAK'd split bulk IN/OUT");
+}
+static void idle_interrupts(void)
+{
+    prepare_model(false); e.regs[0x68/4]=0; m.dev[1].present=false;
+    e.hid_interval=4; /* 1 ms hardware service period for the latency fixture */
+    start_ehci(true); usb_step(hc());
+    struct usb_host *h=hc();
+    fs_lock_take(&h->transfer_lock);usb_hid_service(h);fs_lock_drop(&h->transfer_lock);
+    assert(usb_hid_deadline(h)==UINT64_MAX && !h->irq_fallback);
+    unsigned wakes=0; uint64_t irqs=h->interrupts, due=usb_hid_deadline(h);
+    for(unsigned n=0;n<1000;n++) {
+        ehci_sleep(&e,1);
+        if(h->interrupts!=irqs || due<=e.now) {
+            wakes++;irqs=h->interrupts;usb_hid_service(h);
+            due=usb_hid_deadline(h);
+        }
+    }
+    assert(!wakes && usb_hid_deadline(h)==UINT64_MAX);
+    unsigned completed=e.completions;
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;
+    for(unsigned n=0;n<USB_HID_LATENCY_LIMIT && !held[INPUT_KEY_A];n++) {
+        ehci_sleep(&e,1);
+        if(h->interrupts!=irqs || due<=e.now) {
+            wakes++;irqs=h->interrupts;usb_hid_service(h);
+            due=usb_hid_deadline(h);
+        }
+    }
+    assert(held[INPUT_KEY_A] && e.completions==completed+1 && wakes<=3);
+    usb_host_quarantine(h,"idle_end");
+    puts("PASS EHCI HID idle: zero periodic worker wakes/1000 ms; one IOC plus retirement deadline delivers key within input budget");
+}
+static void irq_grace(void)
+{
+    prepare_model(false);start_ehci(true);
+    struct usb_host *h=hc();
+    assert(usb_hid_deadline(h)==UINT64_MAX);
+    e.regs[0x24/4]|=1;
+    usb_irq_completion_check(h);
+    assert(h->irq_probe_pending && !h->irq_fallback);
+    e.now++;usb_irq_completion_check(h);
+    assert(!h->irq_fallback);
+    assert(usb_host_irq(h) && !h->irq_probe_pending && h->completion_irq);
+    usb_irq_completion_check(h);assert(!h->irq_fallback);
+    e.regs[0x24/4]|=1;usb_irq_completion_check(h);
+    e.now+=USB_IRQ_GRACE_MS;usb_irq_completion_check(h);
+    assert(h->irq_fallback && !h->irq_probe_pending);
+    usb_host_quarantine(h,"irq_grace_end");
+    puts("PASS EHCI IOC qualification: ITC grace avoids false fallback; persistent unacknowledged completion proves lost IRQ");
 }
 static void stop_and_faults(void)
 {
@@ -298,10 +475,48 @@ static void concurrent_hid_bulk(void)
     assert(usb_parse_config(&descriptor_device,config,sizeof(config))==-USB_EPROTO);
     puts("PASS EHCI concurrent HID while bulk NAKs, private DMA/mutex progress, speed-specific BOT endpoint negotiation");
 }
+static void long_interrupt_reports(void)
+{
+    prepare_model(false); start_ehci(false);
+    struct usb_device *d=bulk_device(); m.dev[0].addr=1;
+    for (unsigned index=0;index<USB_DEVICE_MAX*USB_HID_MAX;index++) {
+        d=&hc()->devices[index/USB_HID_MAX];
+        d->host=hc(); d->address=1; d->high_speed=true;
+        struct usb_hid *p=&d->hid[index%USB_HID_MAX];
+        *p=(struct usb_hid){.endpoint=1,.packet=64,.interval=1,.toggle=m.dev[0].in_toggle};
+        unsigned at=USB_EHCI_HID_BASE+index*USB_EHCI_HID_STRIDE;
+        uint8_t before[USB_EHCI_HID_STRIDE], after[USB_EHCI_HID_STRIDE];
+        memcpy(before,m.dma+at-USB_EHCI_HID_STRIDE,sizeof(before));
+        memcpy(after,m.dma+at+USB_EHCI_HID_STRIDE,sizeof(after));
+        for (unsigned bytes=32;bytes<=64;bytes+=32) {
+            uint8_t got[64]; memset(got,0xa5,sizeof(got));
+            for (unsigned i=0;i<bytes;i++) m.dev[0].report[i]=(uint8_t)(i+index+1);
+            m.dev[0].report_len=bytes;
+            int n=-USB_EAGAIN;
+            for (unsigned turns=0;turns<20 && n==-USB_EAGAIN;turns++) {
+                n=hc()->ops->interrupt(d,p,got,bytes); ehci_sleep(&e,1);
+            }
+            assert(n==(int)bytes && !memcmp(got,m.dev[0].report,bytes));
+            assert(!p->pipe_state && p->trace.retired==0 && p->trace.actual==(int)bytes);
+            p->toggle^=1;
+            for (unsigned i=bytes;i<64;i++) assert(got[i]==0xa5);
+            assert(!memcmp(before,m.dma+at-USB_EHCI_HID_STRIDE,sizeof(before)));
+            assert(!memcmp(after,m.dma+at+USB_EHCI_HID_STRIDE,sizeof(after)));
+        }
+        uint8_t got[65];
+        assert(hc()->ops->interrupt(d,p,got,sizeof(got))==-USB_EPROTO);
+        p->packet=32; assert(hc()->ops->interrupt(d,p,got,64)==-USB_EPROTO);
+    }
+    usb_host_quarantine(hc(),"long_reports_end");
+    puts("PASS F1-104b EHCI: 32/64-byte reports in all 64 slots, previous/next guards, retirement, oversize/MPS refusal");
+}
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    ownership_and_admission(); enumeration_hid(); bulk_and_unlink(); periodic_and_faults(); hub_tt(); stop_and_faults(); irq_lease_loss(); concurrent_hid_bulk();
+    ownership_and_admission(); enumeration_hid(); bulk_and_unlink(); periodic_and_faults(); hub_tt();
+    split_budgets_recovery(); admission_and_failed_tt(); mixed_tree(); idle_interrupts(); irq_grace();
+    stop_and_faults(); irq_lease_loss(); concurrent_hid_bulk();
+    long_interrupt_reports();
     printf("PASS EHCI model suite (ASan+UBSan), host=%zu device=%zu storage=%zu arena=%u, inventory=%zu\n",
            sizeof(struct usb_host),sizeof(struct usb_device),sizeof(struct usb_storage),USB_DMA_BYTES,sizeof(struct usb_controller_inventory));
     return 0;

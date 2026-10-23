@@ -113,7 +113,8 @@ enum desk_opcode {
     DESK_SET_CURSOR, /* v2 client to desktop: uint32 shape, own client area only */
     /* v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
      * 1 closing later). One later reply within 2 s grants 30 s total. */
-    DESK_CLOSE_ACK
+    DESK_CLOSE_ACK,
+    DESK_JOYSTICK, DESK_JOYSTICK_RESULT /* v2 Control Panel broker, serial + 100-byte record (+ result on reply) */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
@@ -133,6 +134,7 @@ struct desk_lease_tuple {
     uint32_t native_width, native_height, native_bpp;
 };
 struct desk_packet {
+    struct ciuki_joystick_control joystick;
     struct desk_lease_tuple lease;
     unsigned opcode;
     uint32_t generation, owner, owner_generation, style, scale;

@@ -60,6 +60,7 @@
  * No upstream code copied; keep command deadlines and retained quarantine.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/abi.h>
 #include <ciuki/cpu.h>
 #include <ciuki/arch.h>
 #include <ciuki/task.h>
@@ -71,6 +72,7 @@
 #include <ciuki/init.h>
 #include <ciuki/timing.h>
 #include <ciuki/work.h>
+#include <ciuki/touchpad.h>
 
 extern void net_input_changed(void) __attribute__((weak));
 
@@ -93,11 +95,19 @@ struct input_queue {
     unsigned head, tail;
     bool down[513], native_down[513], extended, breaking;
     uint8_t usb_keys[513], usb_buttons[3], native_buttons;
-    uint8_t pause_pos, mouse_pos, packet[4];
+    uint8_t pause_pos, mouse_pos, packet[9];
     uint64_t mouse_tick;
 };
 struct controller {
     struct input_queue queue;
+    struct {
+        struct touchpad_info info;
+        uint64_t started;
+        int x, y, start_x, start_y, scroll, rem_x, rem_y;
+        uint8_t pad_buttons, stick_buttons, byte0, mask0;
+        uint16_t flags;
+        bool contact, tap, scrolling, synced, tap_blocked;
+    } touchpad;
     struct kmutex mutex;
     const struct i8042_test_io *io;
     void *io_arg;
@@ -108,6 +118,8 @@ struct controller {
     uint16_t event_source;
     gen_t event_generation;
     uint8_t reply;
+    uint8_t reply_data[3], reply_count, reply_wanted;
+    bool reply_data_phase;
     int reply_error;
     struct i8042_init_record init_records[I8042_INIT_STEPS];
     uint64_t init_started;
@@ -193,7 +205,7 @@ char input_unshifted(uint16_t code) { return code < sizeof(us) ? us[code] : 0; }
 
 /* Decoder producers never yield. Native IRQs only append raw bytes, so the
  * thread consumer may decode with IF enabled; USB/firmware producers retain
- * their short queue exclusion. One byte produces at most eight events plus
+ * their short queue exclusion. One byte produces at most twelve events plus
  * RESYNC, without allocation, logging, polling or sleeping. */
 static void queue_event(struct controller *c, uint16_t type, uint16_t code, int32_t value,
                         uint64_t tick, uint64_t lost)
@@ -214,6 +226,7 @@ static void queue_resync(struct controller *c, uint64_t tick)
     q->stats.resync++;
     q->stats.state_lost = true;
     q->head = q->tail = q->stats.pending = 0;
+    c->touchpad.tap = false;
     if (c==&native && dosvm_fullscreen_input) dosvm_fullscreen_input(INPUT_RESYNC,0,0);
     queue_event(c, INPUT_RESYNC, 0, (int32_t)q->stats.buttons, tick, q->stats.overflow);
 }
@@ -264,10 +277,10 @@ static void usb_event_drop(const char *reason, uint16_t type, uint16_t code,
 void input_hid_event(uint16_t type, uint16_t code, int32_t value, uint32_t device,
                      gen_t generation, uint64_t tick)
 {
-    if (!generation || !device || device>CIUKI_HID_DEVICES ||
+    if (!generation || !device || device>CIUKI_JOYSTICK_LAST ||
         type<INPUT_USAGE || type>INPUT_DEVICE || drivers_input_firmware()) return;
     uint32_t f=irq_save();
-    native.event_source=INPUT_USB; native.event_generation=generation;
+    native.event_source=device>=CIUKI_GAMEPORT_FIRST ? INPUT_NATIVE : INPUT_USB; native.event_generation=generation;
     /* HID extension has its own logical identity; DOS projection is separate. */
     if (native.queue.stats.pending==INPUT_CAPACITY) queue_resync(&native,tick);
     queue_event(&native,type,code,value,tick,0);
@@ -276,14 +289,14 @@ void input_hid_event(uint16_t type, uint16_t code, int32_t value, uint32_t devic
     native.event_source=0; native.event_generation=0;
     irq_restore(f);
 }
-void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
+static void input_external_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick, bool serial)
 {
     const char *drop = !generation ? "generation" :
-        drivers_input_firmware() ? "firmware_policy" : 0;
+        !serial && drivers_input_firmware() ? "firmware_policy" : 0;
     if (drop) { usb_event_drop(drop,type,code,value,generation); return; }
     uint32_t f = irq_save();
     struct input_queue *q = &native.queue;
-    native.event_source = INPUT_USB; native.event_generation = generation;
+    native.event_source = serial ? INPUT_NATIVE : INPUT_USB; native.event_generation = generation;
     if (type == INPUT_KEY && code < ARRAY_SIZE(q->down) && code) {
         uint8_t *refs = &q->usb_keys[code];
         if (value == 1 && *refs < 255) {
@@ -312,6 +325,10 @@ void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generati
     /* Diagnostics must not hold the queue's IRQ exclusion across serial I/O. */
     if (drop) usb_event_drop(drop,type,code,value,generation);
 }
+void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
+{ input_external_event(type,code,value,generation,tick,false); }
+void input_serial_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
+{ input_external_event(type,code,value,generation,tick,true); }
 
 static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)
 {
@@ -346,8 +363,13 @@ static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)
     q->extended = q->breaking = false;
 }
 
+static void touchpad_byte(struct controller *c, uint8_t b, uint64_t tick);
+static void touchpad_loss(struct controller *c);
+static void touchpad_flush(struct controller *c, uint64_t tick);
+
 static void mouse_byte(struct controller *c, uint8_t b, uint64_t tick)
 {
+    if (c->touchpad.info.protocol) { touchpad_byte(c, b, tick); return; }
     struct input_queue *q = &c->queue;
     if (q->mouse_pos && tick - q->mouse_tick > MOUSE_PACKET_GAP_MS) {
         q->mouse_pos = 0;
@@ -418,6 +440,9 @@ static void input_retry(void);
 bool input_read(struct input_event *out)
 {
     input_retry();
+    uint32_t f = irq_save();
+    touchpad_flush(&native, g_ticks);
+    irq_restore(f);
     return dequeue(&native, out);
 }
 void input_snapshot(struct input_stats *out)
@@ -552,7 +577,7 @@ static void capture_at(struct controller *c, uint8_t status, uint8_t b, uint64_t
     if (status & BAD_STATUS) {
         q->stats.errors++;
         q->stats.state_lost = true;
-        if (aux) q->mouse_pos = 0;
+        if (aux) { q->mouse_pos = 0; touchpad_loss(c); }
         else { q->extended = q->breaking = false; q->pause_pos = 0; }
         if (c->stats.pending_command && aux == c->reply_aux) {
             c->reply_error = -I8042_EIO;
@@ -562,8 +587,15 @@ static void capture_at(struct controller *c, uint8_t status, uint8_t b, uint64_t
     }
     if (c->stats.pending_command && !c->reply_ready && aux == c->reply_aux &&
         (c->reply_any || b == 0xFA || b == 0xFE || b == 0xFC || b == 0xFD)) {
-        c->reply = b;
-        c->reply_ready = true;
+        if (c->reply_data_phase) {
+            c->reply_data[c->reply_count++] = b;
+            c->reply_ready = c->reply_count == c->reply_wanted;
+        } else {
+            c->reply = b;
+            if (!c->reply_any && b == 0xFA && c->reply_wanted) {
+                c->reply_any = c->reply_data_phase = true;
+            } else c->reply_ready = true;
+        }
         return;
     }
     if (c->init_recording) { c->stats.drained++; return; }
@@ -625,6 +657,8 @@ static void expect_reply(struct controller *c, bool aux, bool any)
     c->reply_any = any;
     c->reply_ready = false;
     c->reply_error = 0;
+    c->reply_count = c->reply_wanted = 0;
+    c->reply_data_phase = false;
     c->stats.pending_command = true;
     irq_restore(f);
 }
@@ -684,8 +718,10 @@ static int controller_ack_drain(struct controller *c, struct poll_deadline *d)
     }
 }
 
-static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t outer, uint8_t *data)
+static int device_exchange_data(struct controller *c, bool aux, uint8_t b,
+                                uint64_t outer, uint8_t *data, unsigned count)
 {
+    if (count > sizeof(c->reply_data) || (count && !data)) return -EINVAL;
     if (c->stats.quarantined) return -I8042_EIO;
     /* Reset is not qualified, even for a selected fault fixture. */
     if (b == 0xFF) return -EINVAL;
@@ -700,16 +736,14 @@ static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t o
         }
         if (err) break;
         expect_reply(c, aux, false);
+        c->reply_wanted = (uint8_t)count;
         err = write_when_ready(c, &d, DATA_PORT, b);
         if (err) break;
         uint8_t reply = 0;
         err = wait_reply(c, &d, &reply);
         if (err) break;
         if (reply == 0xFA) {
-            if (data) {
-                expect_reply(c, aux, true);
-                err = wait_reply(c, &d, data);
-            }
+            if (count) memcpy(data, c->reply_data, count);
             break;
         }
         if (reply != 0xFE || attempt == I8042_RESENDS) {
@@ -724,6 +758,11 @@ static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t o
     c->stats.last_error = err;
     irq_restore(f);
     return err;
+}
+
+static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t outer, uint8_t *data)
+{
+    return device_exchange_data(c, aux, b, outer, data, data ? 1 : 0);
 }
 
 static int device_command(struct controller *c, bool aux, uint8_t b, uint64_t outer)
@@ -847,7 +886,7 @@ static bool mouse_id_supported(uint8_t id)
 
 /* Reporting is disabled by F5. Only a fresh ID proves the stream format;
  * a failed transaction cannot prove any fallback and follows quarantine. */
-static int init_mouse_protocol(struct controller *c, uint64_t end)
+static int init_mouse_relative(struct controller *c, uint64_t end)
 {
     uint8_t id = 0;
     int err = init_device(c, true, 0xF2, end, &id);
@@ -869,6 +908,8 @@ static int init_mouse_protocol(struct controller *c, uint64_t end)
     c->queue.mouse_pos = 0;
     return 0;
 }
+
+#include "i8042_touchpad.inc"
 
 /* A write is not complete while IBF remains asserted. OBF alone is input to
  * drain, not proof that the controller is unusable (Linux controller_check). */
@@ -995,6 +1036,8 @@ static void input_work(void *arg)
     uint32_t f = irq_save();
     if (raw_lost) {
         if (native.accepting && raw_generation == native.stats.generation) {
+            native.queue.mouse_pos = 0;
+            touchpad_loss(&native);
             native.queue.stats.overflow += raw_lost;
             native.queue.stats.bytes += raw_lost;
             native.queue.stats.state_lost = true;
@@ -1214,7 +1257,8 @@ int i8042_init(void)
         if (!err) err = init_device(&native, true, 0xF6, end, 0);
         if (!err) err = init_mouse_protocol(&native, end);
         if (!err) err = init_device(&native, true, 0xEA, end, 0); /* stream */
-        if (!err) err = init_device(&native, true, 0xE6, end, 0); /* 1:1 */
+        if (!err && !native.touchpad.info.protocol)
+            err = init_device(&native, true, 0xE6, end, 0); /* 1:1 */
         init_finish(&native, err);
     }
     if (!err) {
@@ -1277,7 +1321,11 @@ int i8042_init(void)
         i8042_init_format(line, i, &native.init_records[i]);
         klog("[i8042] %s", line);
     }
+    if (!err && native.touchpad.info.fallback_error)
+        klog("[i8042] touchpad fallback=%d identity=%x", native.touchpad.info.fallback_error,
+             native.touchpad.info.identity);
     if (!err) klog("[i8042] aux id=%u protocol=%s", native.stats.aux_id,
+                   touchpad_name(&native) ? touchpad_name(&native) :
                    native.stats.aux_id == 4 ? "explorer" :
                    native.stats.aux_id == 3 ? "intellimouse" : "ps2");
     kmutex_unlock(&native.mutex);

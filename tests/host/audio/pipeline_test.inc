@@ -122,28 +122,62 @@ static void test_cubic_cost(void)
 }
 static void test_pipeline_backends(void)
 {
-    const enum audio_backend_kind kinds[]={AUDIO_ES1370,AUDIO_ES1371,AUDIO_SB16,AUDIO_VIA686,AUDIO_VIA8233};
+    const enum audio_backend_kind kinds[]={AUDIO_ES1370,AUDIO_ES1371,AUDIO_SB16,AUDIO_VIA686,AUDIO_VIA8233,AUDIO_CMIPCI,
+        AUDIO_TRIDENT_DX,AUDIO_TRIDENT_NX,AUDIO_ALI5451};
     unsigned baseline=pages_used;
     for(unsigned i=0;i<ARRAY_SIZE(kinds);i++) {
-        memset(&audio,0,sizeof(audio)); second_setup(kinds[i],0x30);
+        memset(&audio,0,sizeof(audio));
+        if (kinds[i]==AUDIO_CMIPCI) cmi_setup(0x111,0x04000000);
+        else if(kinds[i]>=AUDIO_TRIDENT_DX) voice_setup(kinds[i],2);
+        else second_setup(kinds[i],0x30);
         CHECK(!backend_dma_init(&audio_dma)); audio.ready=true;
-        vm_attached_hook=vm_active_hook=true; audio_service();
+        vm_attached_hook=vm_active_hook=vm_nonzero_hook=true; audio_service();
         CHECK(audio.running && audio_dma.state.published==AUDIO_VM_LEAD);
+        if (kinds[i]==AUDIO_CMIPCI) {
+            struct audio_stream *s; CHECK(!audio_stream_open(&s));
+            struct audio_frame pcm[256];
+            for (unsigned j=0;j<256;j++) pcm[j]=(struct audio_frame){1234,-2345};
+            CHECK(audio_stream_enqueue(s,pcm,sizeof(pcm))==sizeof(pcm));
+            cmi_hw.frame[0]=256; cmi_hw.tick+=6; g_ticks+=6;
+            cmi_model_store(&cmi_hw,0x10,1,4);
+            CHECK(backend_irq(11,"cmipci")); audio_service();
+            unsigned at=((audio_dma.state.published-1)%32)*256;
+            CHECK(audio_dma.pcm[at].left==2646 && audio_dma.pcm[at].right==1931);
+            audio_stream_close(s);
+        }
+        if(kinds[i]>=AUDIO_TRIDENT_DX) {
+            voice_sleep(&vh,6); g_ticks+=6; audio_service();
+            CHECK(!audio.error && audio_dma.pcm[AUDIO_VM_LEAD*AUDIO_QUANTUM].left==2400);
+        }
         /* Cyclic IRQ inhibits immediately; worker recovers without killing
          * native fd state, and without any PIC mutation. */
         unsigned pic=second_pic_masks+second_pic_unmasks;
-        second.frame=(AUDIO_VM_LEAD+1)*AUDIO_QUANTUM;
-        second.tick+=(AUDIO_VM_LEAD+1)*6; g_ticks+=(AUDIO_VM_LEAD+1)*6;
+        g_ticks+=(AUDIO_VM_LEAD+1)*6;
+        if(kinds[i]>=AUDIO_TRIDENT_DX) {
+            unsigned voice=kinds[i]==AUDIO_ALI5451 ? 0 : 32;
+            unsigned frame=(AUDIO_VM_LEAD+1)*AUDIO_QUANTUM;
+            vh.voices[voice][0]=kinds[i]==AUDIO_TRIDENT_NX ? frame : frame<<16;
+            vh.tick+=(AUDIO_VM_LEAD+1)*6;
+            vh.pending[kinds[i]==AUDIO_ALI5451 ? 0 : 1]=2;
+            bool nonzero=false;
+            for(unsigned k=0;k<AUDIO_HW_SLOTS*AUDIO_QUANTUM;k++)
+                if(audio_dma.pcm[k].left || audio_dma.pcm[k].right) nonzero=true;
+            CHECK(nonzero); /* virtual SB/OPL mix reaches the physical ring */
+        } else if (kinds[i]==AUDIO_CMIPCI) {
+            cmi_hw.frame[0]=(AUDIO_VM_LEAD+2)*AUDIO_QUANTUM;
+            cmi_hw.tick+=(AUDIO_VM_LEAD+1)*6; cmi_model_store(&cmi_hw,0x10,1,4);
+        } else { second.frame=(AUDIO_VM_LEAD+1)*AUDIO_QUANTUM; second.tick+=(AUDIO_VM_LEAD+1)*6; }
         if(kinds[i]==AUDIO_SB16) second.mixer[0x82]=2;
+        else if(kinds[i]==AUDIO_CMIPCI || kinds[i]>=AUDIO_TRIDENT_DX) { /* source set above */ }
         else second.regs[(kinds[i]>=AUDIO_VIA686 ? audio_dma.channel : 4)/4]|=2;
         CHECK(backend_irq(audio_dma.state.irq,audio_dma.name) && audio_dma.inhibited && !audio.error);
         audio_service(); CHECK(audio.running && !audio.error && audio.underruns==1);
         CHECK(!audio_dma.inhibited && second_pic_masks+second_pic_unmasks==pic);
         audio_backend_shutdown(); CHECK(pages_used==baseline && !audio.commitment_pages);
-        vm_active_hook=vm_attached_hook=false; idle_since=non_silent_end=0;
+        vm_active_hook=vm_attached_hook=vm_nonzero_hook=false; idle_since=non_silent_end=0;
     }
     dma_selected=false; memset(&audio,0,sizeof(audio)); memset(&audio_dma,0,sizeof(audio_dma));
-    puts("audio lifecycle recovery: ES1370/1371, physical SB16, VIA686/8233 no PIC writes PASS");
+    puts("audio lifecycle recovery: ES1370/1371, SB16, VIA686/8233, CMI8338/8738, DX/NX/M5451 virtual mixer and no PIC writes PASS");
 }
 static void test_pipeline_budget(void)
 {

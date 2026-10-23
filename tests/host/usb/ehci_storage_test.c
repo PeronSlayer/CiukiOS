@@ -12,7 +12,7 @@ static int disk_packet(struct ehci_model *model, unsigned address, unsigned ep,
     assert(address == device()->address); m.now = model->now;
     return packet(device(), ep, pid, toggle, buf, n, false);
 }
-static void use_ehci(void)
+static void use_ehci(bool tt)
 {
     ehci_model_init(&e, &m.h); e.transaction=disk_packet;
     m.h.dma=m.dma; m.h.dma_phys=0x100000; m.h.ehci_caplen=0x20;
@@ -20,18 +20,26 @@ static void use_ehci(void)
     m.h.ops=&usb_ehci_ops; m.h.io=ehci_io(&e); m.h.ports=2;
     e.config[0x40/4]=1|(1u<<24); /* ownership itself is tested in ehci_test */
     assert(!m.h.ops->start(&m.h)); m.h.ready=true; e.regs[0x64/4]=5;
-    device()->high_speed=true;
-    device()->storage.in_packet=device()->storage.out_packet=512;
+    device()->high_speed=!tt;
+    device()->storage.in_packet=device()->storage.out_packet=tt ? 64:512;
+    if(tt) {
+        /* A pre-enumerated single-TT hub on the same real EHCI schedule.
+         * Enumeration/HID mixed trees are covered by ehci_test.c. */
+        m.h.device_count=2;device()->parent=2;device()->port=2;
+        m.h.devices[1]=(struct usb_device){.host=&m.h,.address=2,.ep0=64,.high_speed=true,
+            .present=true,.configured=true,.hub_ports=4,.tt_think=32};
+    }
 }
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     assert(argc==2);
-    for (unsigned short_in=0;short_in<2;short_in++) {
-        setup(argv[1],false); use_ehci();
+    for (unsigned mode=0;mode<4;mode++) {
+        unsigned short_in=mode&1;bool tt=mode>=2;
+        setup(argv[1],false); use_ehci(tt);
         if(short_in) m.inquiry_bytes=5;
         attach(); assert(device()->storage.online && m.inquiries);
-        assert(block()->capacity==m.bytes/512 && device()->storage.in_packet==512);
+        assert(block()->capacity==m.bytes/512 && device()->storage.in_packet==(tt ? 64:512));
         usb_storage_service(&m.h); assert(storage_get()->vfs.volumes[4]);
         uint8_t data[512], before[512];
         assert(!block()->read(block(),1,1,before));
@@ -40,9 +48,10 @@ int main(int argc, char **argv)
         for(unsigned i=0;i<sizeof(data);i++) assert(data[i]==0xa7);
         assert(!block()->write(block(),1,1,before)); assert(!block()->flush(block()));
         assert(e.packets && e.completions && e.doorbells && !m.h.quarantined);
+        if(tt)assert(e.starts && e.completes);
         usb_storage_detach(device());
         assert(usb_ehci_stop(&m.h)); cleanup();
     }
-    puts("PASS EHCI real BOT bind, short INQUIRY, 512-byte bulk, FAT mount, block read/write/flush and DMA stop (ASan+UBSan)");
+    puts("PASS EHCI HS and FS-through-TT real BOT bind, short INQUIRY, FAT mount, block read/write/flush and DMA stop (ASan+UBSan)");
     return 0;
 }

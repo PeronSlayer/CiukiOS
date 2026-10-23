@@ -193,6 +193,12 @@ static void test_physical_rate(void)
     CHECK(pages_used==baseline);
     puts("effective 44.1 kHz: native 8/44.1/48 kHz rational conversion, split batches, source-frame accounting and short-batch debt PASS");
 }
+static void route_identity(uint8_t *table, unsigned size)
+{
+    table[12]=second_pci[0].vendor; table[13]=second_pci[0].vendor>>8;
+    table[14]=second_pci[0].device; table[15]=second_pci[0].device>>8;
+    table[31]=0; unsigned sum=0; for(unsigned i=0;i<size;i++)sum+=table[i]; table[31]=(uint8_t)-sum;
+}
 static void test_audio_routes(void)
 {
     second_setup(AUDIO_ES1370,0);
@@ -202,16 +208,19 @@ static void test_audio_routes(void)
     second_pci_count=1; second_pci[0]=(struct pci_func){.bus=0,.dev=1,.class_code=6,.subclass=1,.vendor=0x1106,.device=0x0686};
     table[32]=0; table[33]=5*8; table[34]=1; table[36]=8;
     unsigned checksum=0; for (unsigned i=0;i<64;i++) checksum+=table[i]; table[31]=(uint8_t)-checksum;
+    route_identity(table,sizeof(table));
     second.cfg[0x54/4]=11u<<12; /* VIA link1: 55h upper nibble */
     CHECK(audio_pir_route(&audio_dma.io,&card,table,sizeof(table)));
     table[31]++; CHECK(!audio_pir_route(&audio_dma.io,&card,table,sizeof(table))); table[31]--;
     CHECK(!audio_pir_route(&audio_dma.io,&card,table,48));
     second.cfg[0x54/4]=10u<<12; CHECK(!audio_pir_route(&audio_dma.io,&card,table,sizeof(table)));
     second_pci[0].vendor=0x1039; second_pci[0].device=8;
+    route_identity(table,sizeof(table));
     second.cfg[0x40/4]=11u<<8;
     CHECK(audio_pir_route(&audio_dma.io,&card,table,sizeof(table)));
     second.cfg[0x40/4]|=0x80u<<8; CHECK(!audio_pir_route(&audio_dma.io,&card,table,sizeof(table)));
     second_pci[0].vendor=0x10de; card.vendor=0x10de; card.device=0x006a;
+    route_identity(table,sizeof(table));
     CHECK(audio_pir_route(&audio_dma.io,&card,table,sizeof(table)));
     card.device=0xdead; CHECK(!audio_pir_route(&audio_dma.io,&card,table,sizeof(table)));
     second_pci[0].vendor=0x8086; second_pci[0].device=0x7110;

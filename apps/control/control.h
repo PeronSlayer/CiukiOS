@@ -74,6 +74,8 @@ struct cp_host {
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
+    int (*joystick)(void *, const struct ciuki_joystick_control *);
+    int (*joystick_save_game)(void *, unsigned, const struct ciuki_joystick_control *);
     int (*devices)(void *, struct ciuki_devices_info *);
     int (*firmware)(void *, struct ciuki_firmware_page *);
     int (*hwid_name)(void *, unsigned vendor, unsigned device, char *out, size_t size);
@@ -109,6 +111,13 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct ciuki_joystick_control joystick, joystick_dos;
+    int joystick_busy, joystick_calibrating, joystick_capture_pending;
+    int joystick_save_pending;
+    unsigned joystick_axis, joystick_step, joystick_game;
+    int32_t joystick_points[4][3];
+    char joystick_line[128];
+
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
     struct du_item network_items[2], network_tabs[3];
@@ -190,6 +199,7 @@ struct cp_app {
     struct ciuki_font_face *font_face;
     char font_status[96];
 };
+void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);
 void cp_assets_ready(struct cp_app *);
 int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);

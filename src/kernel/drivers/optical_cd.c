@@ -107,7 +107,7 @@ int atapi_cd_caps(struct ata_device *d)
     memcpy(d->cd_caps, raw + at, page_bytes < sizeof(d->cd_caps) ? page_bytes : sizeof(d->cd_caps));
     d->cd_caps_valid = true;
     klog("[optical] cd channel=%u unit=%u stage=caps audio_play=%u cdda_read=%u cdda_accurate=%u eject=%u volume_levels=%u",
-         d->channel->irq - 14, d->unit, d->cd_caps[4] & 1, d->cd_caps[5] & 1, (d->cd_caps[5] >> 1) & 1,
+         d->channel->index, d->unit, d->cd_caps[4] & 1, d->cd_caps[5] & 1, (d->cd_caps[5] >> 1) & 1,
          (d->cd_caps[6] >> 3) & 1, (unsigned)d->cd_caps[10] << 8 | d->cd_caps[11]);
     return 0;
 }
@@ -227,6 +227,6 @@ int atapi_cd_load(struct ata_device *d)
 {
     if (!d || !d->identified || !d->atapi) return -FS_EINVAL;
     int e = atapi_start(d);
-    klog("[optical] cd channel=%u unit=%u stage=load result=%d", d->channel->irq - 14, d->unit, e);
+    klog("[optical] cd channel=%u unit=%u stage=load result=%d", d->channel->index, d->unit, e);
     return e;
 }

@@ -33,6 +33,39 @@ static void setup(unsigned w, unsigned h)
 { fake_reset(); assert(!desk_ignore_sigpipe()); desk_init(&d,&fake_ops,w,h); }
 static void cleanup(void)
 { for (int i=0; i<DESK_CLIENTS; i++) desk_drop_client(&d,i); desk_render_release(&d); assert(!fake_live()); }
+static unsigned joystick_requests;
+static int joystick_service(struct desktop *desktop, struct ciuki_joystick_control *c)
+{
+    (void)desktop; joystick_requests++;
+    c->device=257; c->generation=42; c->attached=1; c->axes=3; return 0;
+}
+static void test_joystick_broker(void)
+{
+    setup(640,480); int ch=70, i=client(ch,71,100,100,0);
+    d.shell=1;d.clients[i].version=2;d.joystick_control=joystick_service;
+    struct ciuki_message m;struct desk_packet p;
+    request(&m,DESK_JOYSTICK,108);m.data[0]=2;desk_put32(m.data+4,900);
+    struct ciuki_joystick_control c={.version=1,.size=100,.operation=CIUKI_JOY_NEXT};
+    memcpy(m.data+8,&c,sizeof(c));
+    assert(desk_parse(&m,1,NULL,&p) && !desk_parse(&m,0,NULL,&p));
+    m.length--;assert(!desk_parse(&m,1,NULL,&p));m.length++;
+    m.fd_count=1;m.fds[0]=1;assert(!desk_parse(&m,1,NULL,&p));m.fd_count=0;m.fds[0]=0;
+    d.clients[i].program=0;unsigned old=fake_sent;desk_receive(&d,i,&m);desk_flush(&d,i);
+    assert(!joystick_requests && fake_sent>old);
+    assert(desk_parse(&fake_messages[fake_sent-1],0,NULL,&p) && p.result==-EPERM);
+    d.clients[i].program=DESK_APP_CONTROL;desk_receive(&d,i,&m);desk_flush(&d,i);
+    assert(joystick_requests==1 && desk_parse(&fake_messages[fake_sent-1],0,NULL,&p));
+    assert(p.opcode==DESK_JOYSTICK_RESULT && !p.result && p.joystick.device==257 && p.joystick.generation==42);
+    for (unsigned op=CIUKI_JOY_SAVE_GAME;op<=CIUKI_JOY_SAVE_STATUS;op++) {
+        c.operation=op;memcpy(m.data+8,&c,sizeof(c));
+        assert(desk_parse(&m,1,NULL,&p));
+    }
+    c.operation=CIUKI_JOY_SAVE_STATUS+1;memcpy(m.data+8,&c,sizeof(c));assert(!desk_parse(&m,1,NULL,&p));
+    c.operation=CIUKI_JOY_NEXT;memcpy(m.data+8,&c,sizeof(c));
+    d.power.state=1;desk_receive(&d,i,&m);desk_flush(&d,i);assert(joystick_requests==1);
+    assert(desk_parse(&fake_messages[fake_sent-1],0,NULL,&p) && p.result==-EBUSY);
+    d.power.state=0;cleanup();puts("PASS joystick broker: strict wire, fd refusal, Control Panel authority, shutdown guard and reply");
+}
 static void test_protocol(void)
 {
     struct ciuki_message m; struct desk_packet p;
@@ -1004,6 +1037,7 @@ static void test_game_data_properties(void)
 }
 int main(void)
 {
+    test_joystick_broker();
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();

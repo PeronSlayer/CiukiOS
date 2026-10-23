@@ -2279,13 +2279,20 @@ int vfs_completion(struct vfs_table *t, int h, struct cache_completion *out) {
     else e=cache_completion(d->node->volume->cache,d->node->volume->dev,out);
     vfs_unlock(t->vfs); return e;
 }
-int vfs_flush_drive(struct vfs_table *t,unsigned drive) {
+int vfs_flush_volume_until(struct vfs *vfs, unsigned drive, const struct vfs_request *request) {
     if (drive>=26) return -FS_EINVAL;
-    int e=vfs_admit(t->vfs,vfs_drive_mask(drive),t->request); if (e) return e; operation_tag(t->vfs,"commit");
-    struct fat_volume *v=t->vfs->volumes[drive];
-    if (v && !v->readonly) e=vfs_fat_transaction_locked(t->vfs,v,(struct fat_transaction_args){.op=FAT_TX_COMMIT});
-    else if (!v && !t->vfs->ro_volumes[drive]) e=-FS_ENOENT;
-    vfs_unlock(t->vfs); return e;
+    struct fs_request_scope scope;
+    fs_request_enter(&scope,request ? request : fs_request_current());
+    int e=vfs_admit(vfs,vfs_drive_mask(drive),request);
+    if (e) { fs_request_leave(&scope); return e; }
+    operation_tag(vfs,"commit");
+    struct fat_volume *v=vfs->volumes[drive];
+    if (v && !v->readonly) e=vfs_fat_transaction_locked(vfs,v,(struct fat_transaction_args){.op=FAT_TX_COMMIT});
+    else if (!v && !vfs->ro_volumes[drive]) e=-FS_ENOENT;
+    vfs_unlock(vfs); fs_request_leave(&scope); return e;
+}
+int vfs_flush_drive(struct vfs_table *t,unsigned drive) {
+    return vfs_flush_volume_until(t->vfs,drive,t->request);
 }
 static int log_handle(struct vfs_table *t, int h, struct vfs_description **out) {
     struct vfs_description *d=get(t,h); *out=d;

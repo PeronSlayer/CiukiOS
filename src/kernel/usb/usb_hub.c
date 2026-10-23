@@ -1,4 +1,4 @@
-/* One external USB 1.x hub level. SPDX-License-Identifier: GPL-2.0-only */
+/* One external hub level, including USB 2.0 TTs. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 static int feature(struct usb_device *d, unsigned port, unsigned value, bool set)
@@ -28,6 +28,7 @@ int usb_hub_attach(struct usb_device *d)
     uint8_t b[16]; int err = usb_control(d, 0xa0, 6, 0x2900, 0, b, sizeof(b));
     if (err < 9 || b[1] != 0x29 || b[0] < 9 || b[0] > err || !b[2] || b[2] > USB_PORT_MAX || (b[3] & 3) == 3) return -USB_EPROTO;
     d->hub_ports = b[2];
+    d->tt_think = (uint8_t)(8 * (1 + ((b[3] >> 5) & 3)));
     for (unsigned p = 0; p < d->hub_ports; p++) {
         err = feature(d, p, 8, true); if (err) return err;
     }
@@ -115,8 +116,6 @@ void usb_hub_scan(struct usb_device *d)
             continue;
         }
         if (d->hub_child[p]) {
-            if (child && child->reason && !strncmp(child->reason, "unsupported_transaction_translator",
-                                                  sizeof("unsupported_transaction_translator"))) continue;
             if (!(s & 2)) { err = feature(d, p, 1, true); if (err) goto failed; }
             if (c & 2) { err = feature(d, p, 17, false); if (err) goto failed; }
             continue;
@@ -125,21 +124,9 @@ void usb_hub_scan(struct usb_device *d)
         err = status(d, p, &s, &c); if (err) goto failed;
         if (!(s & 1)) { record(d, p, s, c, "disconnect", 0); d->hub_status[p] = (uint16_t)s; continue; }
         err = usb_hub_reset(d, p); if (err) goto failed;
-        /* Speed is meaningful after reset. Unsupported splits never enter DMA. */
+        /* Speed is meaningful after reset, including FS versus HS on EHCI. */
         err = status(d, p, &s, &c); if (err) goto failed;
-        if (d->high_speed && !(s & 0x400)) {
-            if (h->device_count == USB_DEVICE_MAX) { err = -ENOSPC; goto failed; }
-            unsigned slot = h->device_count++;
-            struct usb_device *unsupported = &h->devices[slot];
-            *unsupported = (struct usb_device){.host=h,.generation=gen_alloc(),.present=true,
-                .parent=(uint8_t)(d-h->devices+1),.root_port=d->root_port,.port=(uint8_t)p,
-                .low_speed=!!(s & 0x200),.reason="unsupported_transaction_translator"};
-            d->hub_child[p] = (uint8_t)(slot + 1);
-            err = feature(d, p, 1, false); if (err) goto failed;
-            klog("[usb] unsupported_tt hub=%u port=%u status=%04x change=%04x event=unsupported reason=unsupported_transaction_translator speed=%s tick=%llu result=%d",
-                 d->address, p+1, s, c, unsupported->low_speed ? "low" : "full", h->io.now(h->io.cookie), -ENOSYS);
-            continue;
-        }
+        d->hub_status[p] = (uint16_t)s;
         err = usb_enumerate(h, d->root_port, (unsigned)(d - h->devices) + 1, p, !!(s & 0x200));
         if (err < 0) goto failed;
         d->hub_child[p] = (uint8_t)err;

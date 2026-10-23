@@ -275,6 +275,7 @@ static void test_optical_lifecycle(void)
         /* Repeat discovery on a secondary master as well as the fixture's
          * secondary slave. The other unit remains a real ATA peer. */
         c->irq=15;
+        c->index=1;
         if (!unit) {
             struct ata_device peer=c->devices[0];
             memset(&c->devices[0],0,sizeof(c->devices[0]));

@@ -16,7 +16,7 @@ static void fixture_attach(struct usb_host *host, const uint8_t *descriptor, uns
 {
     struct usb_device *d=&host->devices[0];
     *d=(struct usb_device){.host=host,.generation=77,.address=1,
-        .hid={{.protocol=protocol,.endpoint=1,.packet=16,.interval=1}}};
+        .hid={{.protocol=protocol,.endpoint=1,.packet=64,.interval=1}}};
     hid_fixture=descriptor; hid_fixture_length=length;
     protocol_writes=output_writes=0; protocol_stall=false;
     CHECK(!usb_hid_attach(d,&d->hid[0],length));
@@ -154,6 +154,25 @@ static void hid_extension_test(struct process *p, int fd)
     usb_hid_release(d,h); drain_hid(p,fd,e);
     CHECK(!hid_ioctl(p,fd,INPUT_HID_GET_STATE,&state,sizeof(state)) && !state.attached && state.hats[0]==-1 && !state.buttons);
     kfree(h->reports->layout); kfree(h->reports); h->reports=NULL;
+    /* The normal poll path must request long reports and retain composite state. */
+    uint8_t long_composite[sizeof(hid_nkro_32)+sizeof(hid_gamepad_64)];
+    memcpy(long_composite,hid_nkro_32,sizeof(hid_nkro_32));
+    memcpy(long_composite+sizeof(hid_nkro_32),hid_gamepad_64,sizeof(hid_gamepad_64));
+    fixture_attach(&host,long_composite,sizeof(long_composite),0); drain_hid(p,fd,e);
+    host.ops=&input_async_ops;
+    CHECK(h->report_protocol && h->reports && !protocol_writes);
+    uint8_t long_keys[32]={3,1}; long_keys[31]=0x80;
+    pending_report=long_keys; pending_length=sizeof(long_keys); input_tick+=2; usb_hid_poll(d,h);
+    CHECK(!pending_report && h->reports->state.keyboard[0]==16 && h->reports->state.keyboard[31]==8);
+    CHECK(drain_hid(p,fd,e)>=3);
+    uint8_t long_pad[64]={5}; long_pad[58]=1; long_pad[59]=0x80;
+    long_pad[60]=0xff; long_pad[61]=0x7f; long_pad[62]=0x83;
+    pending_report=long_pad; pending_length=sizeof(long_pad); input_tick+=2; usb_hid_poll(d,h);
+    CHECK(!pending_report && h->reports->state.axes[0]==-32767 && h->reports->state.axes[1]==32767);
+    CHECK(h->reports->state.hats[0]==3 && h->reports->state.buttons==8 && h->reports->state.keyboard[31]==8);
+    CHECK(drain_hid(p,fd,e)==4);
+    fixture_detach(&host); CHECK(drain_hid(p,fd,e)>=6);
+    puts("PASS F1-104b native poll/grant: 32-byte NKRO and 64-byte gamepad on composite report pipe, late fields/state/detach");
     CHECK(heap_blocks==blocks); query_host=NULL; hid_fixture=NULL;
     printf("PASS F1-104 native ABI, boot/report fallback, NKRO, repeat, LEDs, consumer edges, calibration, hats, detach and overflow recovery; input_event_bytes=%zu hid_bytes=%zu runtime_bytes=%zu\n",
            sizeof(struct input_event),sizeof(struct usb_hid),sizeof(struct usb_hid_reports));

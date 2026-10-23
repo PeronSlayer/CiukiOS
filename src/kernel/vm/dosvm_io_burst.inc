@@ -120,7 +120,8 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
             if (op == 0xF3 || op == 0xF2) { rep = true; continue; }
             break;
         }
-        if (rep && (op == 0x6E || op == 0x6F) && (uint16_t)n.tf.edx >= 0x3B0 && (uint16_t)n.tf.edx <= 0x3DF) {
+        if (rep && (op == 0x6E || op == 0x6F) && (uint16_t)n.tf.edx >= 0x3B0 && (uint16_t)n.tf.edx <= 0x3DF &&
+            ((uint16_t)n.tf.edx<0x3BC || (uint16_t)n.tf.edx>0x3BE)) {
             /* The first element already completed in the scalar emulator.
              * Reuse its complete per-element segment, DF and fault checks. */
             int e = v->frame_pm ? dpmi_io_repeat(v, f) : v86_emulate(&v->monitor, f);
@@ -171,7 +172,8 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
         } else if (op < 0xEC || op > 0xEF) return 0;
         if (!(op & 1)) width = 1;
         bool write = op & 2;
-        if (!((write && port >= 0x3B0 && port <= 0x3DF) || (width == 1 && io_hot_port(port)))) return 0;
+        if (!((write && port >= 0x3B0 && port <= 0x3DF && (port<0x3BC || port>0x3BE)) ||
+              (width == 1 && io_hot_port(port)))) return 0;
         if (!big && (n.tf.eip > 0xFFFF || len > 0x10000u - n.tf.eip)) return 0;
         uint32_t value = n.tf.eax;
         *f = n; /* setup instructions retired even if the I/O fails */

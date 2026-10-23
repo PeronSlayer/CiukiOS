@@ -28,6 +28,12 @@ lua = load("lua_payload_build", ROOT / "apps/lua/build_lua.py")
 
 
 class ImagePayloadTests(unittest.TestCase):
+    def test_cmipci_notices_are_in_the_payload(self):
+        sources = image.desktop_license_payloads()
+        for name in ("linux-cmipci-v6.12-NOTICES.txt", "linux-cmipci-v6.12-GPL-2.0.txt"):
+            self.assertEqual(sources[f"/system/licenses/{name}"], ROOT / "docs/licenses" / name)
+            self.assertTrue(sources[f"/system/licenses/{name}"].is_file())
+
     def setUp(self):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)

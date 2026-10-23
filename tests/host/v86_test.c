@@ -1,6 +1,7 @@
 /* T0: production V86 monitor, firmware adapter and worker with fake CPU,
  * scheduler, physical pages and ports. No second decoder/state machine.
  * SPDX-License-Identifier: GPL-2.0-only */
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +11,13 @@
 #include <ciuki/registry.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/fwinput.h>
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
 #include <ciuki/process.h>
+#undef CLOCKS_PER_SEC
+#include <time.h>
 
 static unsigned checks, failures;
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); failures++; } } while (0)
@@ -23,6 +30,7 @@ static unsigned proc_switches, vm_preemptions;
 static bool native_tls;
 static irq_handler_t irq_fake[16];
 static unsigned execution_fault;
+static uint32_t apm_queue_delay;
 static jmp_buf leave_env;
 static char diagnostic[128][240];
 static unsigned diagnostic_count, diagnostic_max;
@@ -118,6 +126,11 @@ void kwait_init(struct kwait *q) { q->head = 0; }
 void kwait_wake_all(struct kwait *q) { (void)q; }
 void kmutex_init(struct kmutex *m) { m->owner = 0; }
 void kmutex_lock(struct kmutex *m) { CHECK(flags & V86_IF); CHECK(!m->owner); m->owner = g_current; }
+bool kmutex_lock_until(struct kmutex *m, uint64_t end)
+{
+    if (deadline_passed(end)) return false;
+    kmutex_lock(m); return true;
+}
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner == g_current); m->owner = 0; }
 /* The real process/TLS hook is exercised by proc_test. This scheduler fake
  * checks its composition with the real BIOS VM hooks across both directions
@@ -338,8 +351,9 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             live.tf.eax = (live.tf.eax & ~0xFFu) | code[1];
             live.tf.eip += 2;
             continue;
-        } else if (code[0] == 0xB8 || code[0] == 0xBA) {
-            uint32_t *reg = code[0] == 0xB8 ? &live.tf.eax : &live.tf.edx;
+        } else if (code[0] >= 0xB8 && code[0] <= 0xBB) {
+            uint32_t *regs[] = {&live.tf.eax, &live.tf.ecx, &live.tf.edx, &live.tf.ebx};
+            uint32_t *reg = regs[code[0] - 0xB8];
             *reg = (*reg & ~0xFFFFu) | getword(code + 1, 2);
             live.tf.eip += 3;
             continue;
@@ -394,6 +408,7 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
     if (q == &completion && request_pending) {
         struct task *old = g_current;
         switch_fake(vm_thread);
+        if (apm_deadline_active) { g_ticks += apm_queue_delay; apm_queue_delay = 0; }
         request_result = run_vm(&request_regs, request_ms, request_test);
         request_pending = false;
         request_done = true;
@@ -1506,6 +1521,92 @@ static void test_fullscreen_calls(void)
     CHECK(biosvm_video_fullscreen_end(0x118,info)==-V86_EIO && !video_claimed && !fullscreen_video);
     puts("PASS biosvm full-screen: bounded 4F04(000F) save/restore, standard VGA-only, persistent leases, serialized VBE refusal, restore errors");
 }
+static void test_apm_probe(void)
+{
+    for (unsigned native = 0; native < 2; native++) {
+        boot_fixture(false);
+        g_boot.flags = native ? 0 : CBI_F_INPUT_FORCED;
+        static const uint8_t apm[] = {0xb8,0x02,0x01,0xbb,0x4d,0x50,0xb9,0x03,0,0xcf};
+        ivt(0x15, 0xf000, 0x400); memcpy(ram + 0xf0400, apm, sizeof(apm));
+        struct biosvm_regs r;
+        CHECK(!biosvm_apm_probe(&r));
+        CHECK(r.eax == 0x0102 && r.ebx == 0x504d && r.ecx == 3 && !(r.flags & 1));
+        CHECK(input_enabled == !native && !hw_reads && !hw_writes && request_ms == 100);
+        CHECK(!firmware.io && !request_mutex.owner && !continuation && !cr3);
+        unsigned before = enters;
+        for (unsigned fn = 0x5300; fn <= 0x5313; fn++) {
+            r = (struct biosvm_regs){.interrupt=0x15, .eax=fn};
+            CHECK(biosvm_call(&r, 100) == -V86_EPERM && enters == before);
+        }
+        /* Dedicated kernel real-mode allowlist; input/DOS stay unchanged. */
+        for (unsigned fn = 0x5300; fn <= 0x530f; fn++) {
+            r = (struct biosvm_regs){.interrupt=0x15, .eax=fn};
+            int e = biosvm_apm_call(&r, 25);
+            if (fn == 0x5302 || fn == 0x5303) CHECK(e == -V86_EPERM);
+            else CHECK(!e && request_ms == 25);
+        }
+        r = (struct biosvm_regs){.interrupt=0x15, .eax=0x5380, .ebx=0x7f00};
+        CHECK(!biosvm_apm_call(&r, 100));
+        before = enters;
+        r = (struct biosvm_regs){.interrupt=0x15, .eax=0x5380};
+        CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);
+        r.ebx = 0x8000;
+        CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);
+        const unsigned denied[] = {0x52ff,0x5310,0x537f,0x5381,0x15300};
+        for (unsigned i=0; i<sizeof(denied)/sizeof(denied[0]); i++) {
+            r = (struct biosvm_regs){.interrupt=0x15, .eax=denied[i]};
+            CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);
+        }
+        r = (struct biosvm_regs){.interrupt=0x16, .eax=0x5301};
+        CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);
+        r.interrupt = 0x15;
+        CHECK(biosvm_apm_call(&r,0) == -EINVAL && enters == before);
+        CHECK(biosvm_apm_call(&r,2001) == -EINVAL && enters == before);
+        /* Queue latency is charged to the same deadline; an expired call
+         * never enters firmware or poisons an otherwise healthy VM. */
+        r = (struct biosvm_regs){.interrupt=0x15, .eax=0x530b};
+        apm_queue_delay = 101;
+        CHECK(biosvm_apm_call(&r,100) == -V86_ETIMEDOUT && enters == before && !quarantined);
+        CHECK(!apm_deadline_active && !request_mutex.owner && !request_pending);
+        r = (struct biosvm_regs){.interrupt=0x15, .eax=0x530b};
+        apm_queue_delay = 25; uint64_t end_tick = g_ticks + 100;
+        CHECK(!biosvm_apm_call(&r,100) && firmware.deadline == end_tick);
+        before = enters;
+        if (!native) {
+            struct timespec start, end;
+            const unsigned samples = 1000;
+            CHECK(!clock_gettime(CLOCK_MONOTONIC,&start));
+            for (unsigned i=0; i<samples; i++) {
+                g_ticks += 1000;
+                r = (struct biosvm_regs){.interrupt=0x15, .eax=0x530b};
+                CHECK(!biosvm_apm_call(&r,100));
+            }
+            CHECK(!clock_gettime(CLOCK_MONOTONIC,&end));
+            double us=(double)(end.tv_sec-start.tv_sec)*1000000.0 +
+                      (double)(end.tv_nsec-start.tv_nsec)/1000.0;
+            printf("APM V86 host model: %u one-second event polls, %.3f us/call (broker + monitor)\n",samples,us/samples);
+            before = enters;
+        }
+        CHECK(biosvm_apm_probe(NULL) == -EINVAL && enters == before);
+        flags = 0; CHECK(biosvm_apm_probe(&r) == -V86_EPERM && enters == before); flags = V86_IF;
+        video_claimed = true;
+        CHECK(biosvm_apm_probe(&r) == -EBUSY && enters == before); video_claimed = false;
+        if (native) {
+            /* An installation routine cannot steal the native controller. */
+            static const uint8_t bad[] = {0xe4,0x60,0xcf};
+            memcpy(ram + 0xf0400, bad, sizeof(bad));
+            CHECK(biosvm_apm_probe(&r) == -V86_EPERM && !hw_reads && !hw_writes);
+            CHECK(quarantined && !firmware.io);
+            before = enters;
+            CHECK(biosvm_apm_probe(&r) == -V86_EIO && enters == before);
+        }
+    }
+    boot_fixture(false); g_boot.flags = 0;
+    execution_fault = 2;
+    struct biosvm_regs r;
+    CHECK(biosvm_apm_probe(&r) == -V86_ETIMEDOUT && quarantined && !firmware.io);
+    puts("PASS APM BIOS VM: fixed 5300, native/firmware input, unchanged allowlist, native I/O denial, timeout quarantine");
+}
 int main(void)
 {
     test_flags_interrupts();
@@ -1524,6 +1625,7 @@ int main(void)
     test_pm_timer();
     test_video_calls();
     test_fullscreen_calls();
+    test_apm_probe();
     printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
     printf("v86/firmware host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

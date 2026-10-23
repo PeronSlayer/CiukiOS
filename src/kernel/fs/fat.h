@@ -12,7 +12,7 @@
 #define FAT_ATTR_ARCHIVE 32u
 enum fat_ro_reason { FAT_RO_REQUEST=1, FAT_RO_DURABILITY=2, FAT_RO_DIRTY=4,
     FAT_RO_IO_FLAG=8, FAT_RO_COPIES=16, FAT_RO_CORRUPT=32, FAT_RO_LOST=64, FAT_RO_WRITE_ERROR=128,
-    FAT_RO_ACTIVE_ONLY=256 };
+    FAT_RO_ACTIVE_ONLY=256, FAT_RO_DMF=512, FAT_RO_WRITE_PROTECTED=1024 };
 struct fat_times { uint16_t create_date, create_time, access_date, write_date, write_time; uint8_t create_tenths; };
 enum fat_publication_stage { FAT_P_DATA, FAT_P_CHAIN, FAT_P_LINK, FAT_P_DIRECTORY,
     FAT_P_FSINFO, FAT_P_DELETE, FAT_P_RENAME, FAT_P_RECLAIM, FAT_P_FLAGS, FAT_P_STAGES };

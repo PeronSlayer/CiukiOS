@@ -6,9 +6,14 @@ out="$root/build/host"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
+# f1-112: real COM arbitration, serial PnP/mouse codecs and virtual UART.
+python3 -B "$root/tests/host/test_com.py"
+python3 -B "$root/tests/host/test_serial_peripheral.py"
+
 # f1-109: real ACPICA runtime and OSL, synthetic DSDT/SSDT, no guest/image.
 python3 -B "$root/tests/host/acpi/run.py"
 python3 -B "$root/tests/host/acpi/compile_target.py"
+bash "$root/scripts/test/host_floppy_tests.sh"
 
 # f3-49: standalone production DOS bridge/FAT/VFS harness, no guest image.
 bash "$root/tests/host/dos/run_file_api.sh"
@@ -95,6 +100,9 @@ fi
 clang "${abi_flags[@]}" -I "$root/src/kernel/include" \
     "$root/tests/host/abi_layout_test.c" -o "$out/abi_layout_test"
 "$out/abi_layout_test" "$out/abi-layout.json"
+
+# f1-114: physical LPT register/8237, native and INT17 models.
+python3 "$root/tests/host/test_lpt.py"
 
 # f2-41: exact production snapshot and read-only user marshalling.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
@@ -199,6 +207,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"
 "$out/pmm_contig_test"
 "$out/ata_test"
+for family in piix via sis ali nv resources transaction; do
+    "$out/ata_test" "$family"
+done
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/sha256_test.c" \
@@ -212,6 +223,19 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
+
+# f1-121: real-mode APM BIOS model and exclusive production provider.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" -D_POSIX_C_SOURCE=200809L "$root/tests/host/apm_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/apm_test"
+"$out/apm_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/apm_platform_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/apm_platform_test"
+"$out/apm_platform_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/storage_power_test.c" -o "$out/storage_power_test"
+"$out/storage_power_test"
 
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
@@ -284,6 +308,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/savage2d_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/savage2d_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/savage2d_test"
+
+# f1-113: RC jitter/calibration, real HID state and V86 polling loop/BIOS.
+bash "$root/tests/host/joystick/run.sh"
 
 # F1 V86 decoder, device models, worker aborts and firmware event adapter.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -501,6 +528,19 @@ storage_sources=(
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"
     "$root/tests/host/fs/fake.c" "$root/tests/host/fs/scan.c"
 )
+# Bounded suspend flush uses the sparse FAT model, no disk-image fixture.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
+    -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
+    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" \
+    "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" \
+    "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c" "$root/src/kernel/fs/mount.c" \
+    "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/lib/fmt.c" \
+    "$root/tests/host/fs/test_storage_power_flush.c" \
+    -o "$out/fs/test_storage_power_flush"
+"$out/fs/test_storage_power_flush"
 for storage_test in test_storage_namespace test_storage test_log_recovery test_powercuts; do
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \

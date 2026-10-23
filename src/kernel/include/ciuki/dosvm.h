@@ -37,6 +37,7 @@ struct dosvm_config {
     bool memory_locked;
     void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
     void *record_arg; /* selected controller only, lifetime through destroy */
+    uint8_t serial[4]; /* trusted launch: 0=null, 1..8=native COM1..8 */
 };
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
@@ -135,6 +136,9 @@ typedef int (*dosvm_port_handler)(struct dosvm *, uint16_t, unsigned, bool, uint
 int dosvm_port_register(struct dosvm_key, uint16_t first, uint16_t last,
                         dosvm_port_handler, void *arg);
 int dosvm_port_unregister(struct dosvm_key, uint16_t first);
+/* Trusted launcher only. slot=0..3, native_index=-1 for the null sink.
+ * Bind before boot; running VMs cannot change physical ownership. */
+int dosvm_uart_bind(struct dosvm_key, unsigned slot, int native_index, const char **reason);
 bool dosvm_irq_raise(struct dosvm_key, unsigned irq);
 bool dosvm_keyboard(struct dosvm_key, uint16_t bios_key);
 void dosvm_tick(void); /* host timer hook; bounded, no allocations or I/O */

@@ -358,6 +358,14 @@ Verdicts in the following complete manifest:
 
 ## Alternative implementations considered
 
+F1-116 additional donor: Linux `v2.6.18`,
+[`sound/oss/maestro.c`](https://github.com/torvalds/linux/blob/v2.6.18/sound/oss/maestro.c),
+legacy GPL version 2 or later grant, Alan Cox/Thomas Sailer/Zach Brown notices.
+Adaptation and per-file origin are recorded in
+[`maestro-NOTICES.txt`](../licenses/maestro-NOTICES.txt) and
+[the Maestro transport decisions](f4-maestro.md). Linux v6.12 `ac97_patch.c`
+was inspected as comparison only; no code from it is imported here.
+
 These file headers were inspected individually. Their verdicts apply to the
 listed file only; taking other framework/header code requires a new audit.
 None is selected for transplantation in f1-102.
@@ -381,7 +389,40 @@ microcode redistribution rights. A later directive must obtain and record the
 specific applicable grant or leave DS-XG disabled with a clear missing-firmware
 reason. Firmware bytes downloaded here are research-only, never image payloads.
 
+## f1-108 additional ATA timing source
+
+Linux v6.12 `drivers/ata/libata-pata-timings.c`, blob
+`af341226cc64f672a41bd36b061f657cbee19373`, is GPL-2.0-or-later.
+Only the UDMA 0–6 period table is adapted into `ata_via.c`; its Red Hat /
+Jeff Garzik copyright, Vojtech Pavlik origin and SPDX notice are preserved
+in `docs/licenses/ata-chipset-NOTICES.txt` and the credits. The five ATA
+driver donors above retain their original headers alongside Ciuki changes.
+Linux v6.12 `drivers/ata/libata-sff.c`, blob
+`67f277e1c3bf317e5c5030cfabdb7f7d344429fe`, was additionally read for
+native BAR/control and shared IRQ semantics; it is not an imported runtime
+file. The research copies and byte-verified manifest stay in ignored
+`build/research/f1-108/`.
+
 ## Behavioral and test references, not port sources
+
+### f1-112 implementation use
+
+`src/kernel/drivers/serial_protocol.c` adapts only the mouse wire equations
+from Linux v6.12 `drivers/input/mouse/sermouse.c` (GPL-2.0-or-later,
+Copyright (c) 1999-2001 Vojtech Pavlik), blob
+`218c8432a13bc9addfe54a8818ee3701f7dd6795`. Its original notice and the
+adaptation origin are retained in that file and
+`docs/licenses/serial-mouse-NOTICE.txt`; the credits and image notices include
+the adaptation. No imported `.c` file includes another `.c` file.
+FreeBSD `release/14.2.0` `usr.sbin/moused/moused.c`, blob
+`dcfd72099cb9a77711067df87eeb8fc52bd21cbe`, was checked for PnP ID/protocol
+facts only. Microsoft `serial/serenum/enum.c` was fetched through the GitHub
+read connector at the existing audited blob below; it remains research-only.
+Donor research downloads are confined to `build/research/f1-112/`.
+The new UART state model is original Ciuki code against TI TL16C550D;
+SeaBIOS `rel-1.16.3` `src/serial.c` is an INT14 behavior reference only.
+The firmware adapter additionally follows ACPI `_STA`/`_CRS` and IRQ
+polarity/trigger/sharing descriptors; it never invokes `_SRS`.
 
 ### f1-111 implementation use
 
@@ -401,6 +442,17 @@ communications-resource/VCOMM discussion is behavioral research only; no
 Microsoft code or media is copied to tracked files.
 
 ### Existing census references
+
+f1-114 adds original GPL-2.0-only `drivers/lpt.c`, `lpt_native.c` and
+`vm/dosvm_lpt.c`, with original MIT public ABI/SDK declarations. No donor
+source/header or notice-bearing fragment is imported. The National
+Semiconductor PC87338/PC97338 (November 1998) register chapter, Intel 8237A
+231466-005 Figure 6, Linux v6.12 `drivers/parport/parport_pc.c` and SeaBIOS
+rel-1.16.3 `src/serial.c` are behavioral references. The attempted
+`ieee1284_ops.c` and `src/std/bda.h` fetch failures are recorded in the
+implementation report; their earlier census audit remains unchanged.
+The local Windows 98 Resource Kit is read-only research. No vendor source
+is compiled, so no new third-party credit or C-include symbol audit is due.
 
 Microsoft's
 [serial enumerator](https://github.com/microsoft/Windows-driver-samples/blob/main/serial/serenum/enum.c)
@@ -435,3 +487,22 @@ Synthetic descriptor fixtures are project-owned GPL-2.0-only test data.
 No Resource Kit text, media, vendor firmware or foreign driver binary is
 included. Unsupported descriptor constructs are bounded failures, not a
 claim of complete HID, XInput, vendor protocol or force-feedback support.
+
+## f1-113 implementation boundary
+
+The analog sampler, common joystick controls and virtual RC/BIOS implementation
+are newly authored Ciuki code. No Linux or BIOS source is vendored, adapted
+verbatim, compiled, or included as a C implementation file. Therefore there are
+no new imported-file notices or credits entries. The v6.12 game-port paths in
+the audit remain the intended pinned behavioral references; this sandbox could
+not fetch those tags. Browsable upstream master versions of
+[`ns558.c`](https://github.com/torvalds/linux/blob/master/drivers/input/gameport/ns558.c),
+[`analog.c`](https://github.com/torvalds/linux/blob/master/drivers/input/joystick/analog.c),
+[`gameport.c`](https://github.com/torvalds/linux/blob/master/drivers/input/gameport/gameport.c)
+and [`emu10k1-gp.c`](https://github.com/torvalds/linux/blob/master/drivers/input/gameport/emu10k1-gp.c)
+corroborated trigger/decay, timeout, measured timing and Creative BAR0 behavior.
+The extra PCI ID table is not a donor import. The
+[PCI-SIG Code and ID Assignment specification, revision 1.11, class 09h note 1](https://pcisig.com/sites/default/files/files/PCI_Code-ID_r_1_11__v24_Jan_2019.pdf)
+defines programming interface 10h I/O BARs as standard legacy game ports;
+interface 00h alone proves no register layout. Integrated audio legacy decode
+requires its parent driver and is not enabled by a name match here.

@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
+#include <ciuki/com.h>
 
 struct large { uint32_t pages, physical; uint64_t reserved; };
 static size_t charge(size_t n)
@@ -103,6 +104,16 @@ static void inventory_thread(void *unused)
     struct ciuki_firmware_page p = {.version = CIUKI_FIRMWARE_VERSION, .size = sizeof(p)};
     (void)firmware_inventory_page(&p);
     klog("[acpi] inventory status=%u devices=%u tables=%u peak=%u flags=%u read_only=1", s, p.total, p.table_count, p.peak_bytes, p.flags);
+    /* Discovery itself stays read-only. Import assigned routes only after
+     * the interpreter is terminated; the COM owner claims before probing. */
+    if (!(p.flags&(CIUKI_FIRMWARE_PENDING|CIUKI_FIRMWARE_INCOMPLETE|CIUKI_FIRMWARE_TRUNCATED))) {
+        do {
+            for (unsigned i=0;i<p.count;i++) (void)com_firmware_assigned(&p.records[i]);
+            p.cursor=p.next;
+            if (!p.cursor) break;
+        } while (!firmware_inventory_page(&p));
+    }
+    com_peripherals_start();
 }
 void firmware_inventory_start(void)
 {

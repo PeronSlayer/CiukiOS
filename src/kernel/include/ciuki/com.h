@@ -4,6 +4,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/registry.h>
 #include <ciuki/arch.h>
+#include <ciuki/firmware_abi.h>
 struct file_description;
 struct process;
 struct com_io {
@@ -27,8 +28,19 @@ void com_pci_discover(const struct pci_func *);
 bool com_snapshot(unsigned index, struct ciuki_com_status *, const char **reason);
 bool com_legacy_attach(unsigned irq, irq_handler_t logger) __attribute__((weak));
 int com_open(unsigned index, uint32_t *generation);
+int com_lease_open(unsigned index, unsigned owner, uint32_t id,
+                   uint32_t *generation, const char **reason);
+bool com_owner_snapshot(unsigned index, struct ciuki_com_owner *);
+/* Consume immutable, assigned f1-109 facts. No firmware evaluation here. */
+int com_firmware_assigned(const struct ciuki_firmware_record *);
+void com_peripherals_start(void);
+int com_mouse_attach(unsigned index, unsigned protocol, const char **reason);
+void com_mouse_detach(unsigned index);
 void com_close(unsigned index, uint32_t generation);
 int com_transfer(unsigned index, uint32_t generation, void *, unsigned bytes, bool write);
+bool com_transmitter_idle(unsigned index, uint32_t generation);
+/* Exclusive VM consumer acknowledges the native sticky line-error summary. */
+int com_vm_line_errors(unsigned index, uint32_t generation);
 int com_wait(unsigned index, uint32_t generation, bool write, unsigned timeout_ms,
              bool (*cancelled)(void));
 int com_control(unsigned index, uint32_t generation, uint32_t op, void *record, unsigned size, bool writable);

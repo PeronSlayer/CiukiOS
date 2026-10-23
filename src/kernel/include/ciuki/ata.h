@@ -1,10 +1,11 @@
-/* F1 legacy ATA PIO/DMA and its register/time test boundary.
+/* F1 SFF ATA PIO/DMA and its register/time test boundary.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_ATA_H
 #define CIUKI_ATA_H
 
 #include "sync.h"
 #include "ata_dma.h"
+#include "ata_chipset.h"
 #include "../../fs/blkdev.h"
 
 #define ATA_CHANNELS 2u
@@ -86,6 +87,11 @@ struct ata_device {
  * Synthetic channels have native=false: no PIC, registry or physical I/O.
  * Setup/rearming is exclusively for a fresh synthetic device or boot. */
 struct ata_channel {
+    struct ata_chipset chipset;
+    const struct pci_func *pci;
+    unsigned index;
+    bool native_irq, native_irq_attached, modes_published;
+    uint8_t selected_shadow;
     bool dma_completion_logged; /* first successful DMA on this channel/boot */
     const struct ata_port_ops *ops;
     void *port_ctx;

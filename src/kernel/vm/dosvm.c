@@ -10,6 +10,7 @@
 #include <ciuki/cpustat.h>
 #include <ciuki/work.h>
 #include "dosvm_internal.h"
+#pragma weak dosvm_lpt_stop
 #include "dosvm_network.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
@@ -653,6 +654,7 @@ int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
     v->info.state = DOSVM_STOPPING;
+    if (dosvm_lpt_stop) dosvm_lpt_stop(v);
     dosvm_present_notify(v);
     dosvm_fullscreen_stopping(v);
     dosvm_vga_sync(v, true);
@@ -851,6 +853,7 @@ static void stack_prefault(struct dosvm *v, const struct v86_frame *f)
  * return after scheduling/reporting. Physical PIC programming is unchanged. */
 static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
 {
+    dosvm_uart_service(v,g_ticks);
     if (read_eflags() & 0x200) dosvm_network_service(v, g_ticks);
     stack_prefault(v, f);
     uint64_t delivered = v->monitor.stats.reflected_irqs;
@@ -1295,6 +1298,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         task_sleep_ms(1);
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
+    dosvm_uart_close(v);
     int network_error = dosvm_network_detach(v);
     if (network_error) { destroying[slot] = false; return network_error; }
     int video_error=dosvm_fullscreen_leave(key,false);
@@ -1316,6 +1320,8 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     }
     dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
+    int floppy_error=dosvm_floppy_close(v);
+    if (floppy_error) { destroying[slot]=false; return floppy_error; }
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT || (v->persistent && file_cleanup));
     if (!e) e=file_cleanup;
     if (e && v->info.dirty) v->info.data_loss = true;
@@ -1373,6 +1379,7 @@ int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
 {
     if(out)*out=0;
     if (config && config->kernel && config->kernel!=CIUKI_DOSVM_UNIFIED) return -EINVAL;
+    if (config) for (unsigned i=0;i<4;i++) if (config->serial[i]>8) return -EINVAL;
     unsigned game=config ? config->game : 0;
     if(game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
     uint32_t flags=irq_save();
@@ -1387,6 +1394,7 @@ int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
     return e;
 }
 
+extern void joystick_default_route(struct joystick_route *) __attribute__((weak));
 static int game_create(const struct dosvm_config *config, struct dosvm **out)
 {
     if (!out) return -EINVAL;
@@ -1466,15 +1474,23 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     v->monitor.pic[0].imr = 0xF8; /* timer and cascade, no physical input IRQ */
     v->monitor.pic[1].imr = 0xFF;
     dosvm_pit_init(v); dosvm_kbd_init(v); dosvm_mouse_init(v);
+    if (joystick_default_route) joystick_default_route(&v->joystick.route);
     kpreempt_point();
     if ((e = dosvm_port_register(v->info.key, 0x40, 0x43, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x61, 0x61, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x60, 0x60, dosvm_kbd_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0)) ||
-        (e = dosvm_audio_init(v))) goto fail; /* f3-05 SB16, OPL3 and 8237 */
+        (dosvm_joystick_port && (e = dosvm_port_register(v->info.key,0x201,0x201,dosvm_joystick_port,0))) ||
+        (e = dosvm_audio_init(v)) || (e = dosvm_floppy_init(v))) goto fail; /* virtual devices only */
     kpreempt_point();
     e = dosvm_bios_init(v);
     if (e) goto fail;
+    if ((e=dosvm_uart_init(v))) goto fail;
+    if (config) for (unsigned i=0;i<4;i++) if (config->serial[i]) {
+        const char *reason=0;
+        e=dosvm_uart_bind(v->info.key,i,config->serial[i]-1,&reason);
+        if (e) { klog("[dosvm] COM%u lease refused: %s (%d)",i+1,reason,e); goto fail; }
+    }
     kpreempt_point();
     e = dosvm_memory_init(v, config);
     if (e) goto fail;
@@ -1578,6 +1594,7 @@ static void dosvm_clock_work(void *arg)
         struct dosvm *v = &slots[i];
         if (v->info.key.generation != (uint32_t)(uintptr_t)arg) continue;
         if (!v->started || !dosvm_valid(v->info.key)) return;
+        dosvm_uart_service(v,g_ticks); /* wakes a halted COM client, no hard-IRQ I/O */
         v->monitor.ticks = g_ticks;
         uint64_t elapsed = g_ticks - v->ticks;
         v->perf.if_samples_ms += elapsed;

@@ -5,6 +5,36 @@
 #undef main
 #include <ciuki/files.h>
 #include <ciuki/com.h>
+#include <ciuki/lpt.h>
+static bool mock_lpt_visible;
+static uint32_t mock_lpt_generation;
+static unsigned mock_lpt_closes,mock_lpt_reads,mock_lpt_writes,mock_lpt_controls;
+bool lpt_snapshot(unsigned i,struct ciuki_lpt_status *out,const char **reason)
+{
+    if (!mock_lpt_visible || i!=1) return false;
+    *out=(struct ciuki_lpt_status){.number=2,.base=0x278,.flags=CIUKI_LPT_READY};
+    if (reason) *reason="LPT namespace fixture"; return true;
+}
+int lpt_device_open(struct file_description *d,uint32_t flags)
+{
+    if (flags&(O_APPEND|O_CREAT|O_EXCL|O_TRUNC|O_DIRECTORY)) return -EINVAL;
+    if (mock_lpt_generation) return -EBUSY;
+    d->lpt_generation=mock_lpt_generation=88; return 0;
+}
+void lpt_device_close(struct file_description *d)
+{
+    if (d->lpt_generation) { CHECK(d->lpt_generation==mock_lpt_generation); mock_lpt_generation=0; mock_lpt_closes++; }
+}
+int lpt_rw_user(struct file_description *d,uint32_t address,uint32_t bytes,bool write)
+{
+    CHECK(d->lpt_generation==88 && address==0x1234 && bytes==17);
+    if (write) mock_lpt_writes++; else mock_lpt_reads++; return 7;
+}
+int lpt_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
+{
+    CHECK(file_fd(p,fd)->lpt_generation==88 && op==LPT_GET_STATUS && address==0x1234 && bytes==64);
+    mock_lpt_controls++; return 0;
+}
 static uint32_t mock_com_generation;
 static unsigned mock_com_closes, mock_com_reads, mock_com_writes, mock_com_controls;
 bool com_snapshot(unsigned i,struct ciuki_com_status *out,const char **reason)
@@ -983,6 +1013,33 @@ static void test_com_nodes(void)
     CHECK(seen==2 && !file_close(client,dir));
     puts("PASS COM namespace/fd/syscall: lookup/stat/readdir, logger refusal, exclusive/dup/final-close and stream dispatch");
 }
+static void test_lpt_nodes(void)
+{
+    struct px_path path;
+    CHECK(resolve_path("/dev/lpt2",&path)==-ENOENT); mock_lpt_visible=true;
+    CHECK(!resolve_path("/dev/lpt2",&path) && path.node->kind==PX_LPT);
+    struct ciuki_stat st; CHECK(!locked_stat(path.node,&st) && st.st_mode==(S_IFCHR|0666) && st.st_rdev==33);
+    CHECK(file_open(client,"/dev/lpt2",O_RDWR|O_APPEND,0)==-EINVAL);
+    int fd=file_open(client,"/dev/lpt2",O_RDWR,0); CHECK(fd>=0);
+    CHECK(file_open(client,"/dev/lpt2",O_RDONLY,0)==-EBUSY);
+    CHECK(file_fcntl(client,fd,F_SETFL,O_APPEND)==-EINVAL);
+    CHECK(call(CIUKI_SYS_READ,fd,0x1234,17,0,0)==7 && mock_lpt_reads==1);
+    CHECK(call(CIUKI_SYS_WRITE,fd,0x1234,17,0,0)==7 && mock_lpt_writes==1);
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,LPT_GET_STATUS,0x1234,64,0) && mock_lpt_controls==1);
+    CHECK(call(CIUKI_SYS_LSEEK64,fd,0,0,SEEK_SET,USER)==-ESPIPE);
+    CHECK(call(CIUKI_SYS_PREAD,fd,USER,1,0,0)==-ESPIPE);
+    CHECK(call(CIUKI_SYS_PWRITE,fd,USER,1,0,0)==-ESPIPE);
+    CHECK(call(CIUKI_SYS_FSYNC,fd,0,0,0,0)==-EINVAL);
+    int dup=file_dup(client,fd,0,false,0); CHECK(dup>=0);
+    CHECK(!file_close(client,fd) && !mock_lpt_closes && mock_lpt_generation==88);
+    CHECK(!file_close(client,dup) && mock_lpt_closes==1 && !mock_lpt_generation);
+    int dir=file_open(client,"/dev",O_RDONLY|O_DIRECTORY,0); CHECK(dir>=0);
+    struct ciuki_dirent entry; unsigned seen=0;
+    while (locked_dents(file_fd(client,dir),&entry)>0)
+        if (!strcmp(entry.d_name,"lpt2")) { CHECK(entry.d_type==DT_CHR); seen++; }
+    CHECK(seen==1 && !file_close(client,dir));
+    puts("PASS LPT namespace/fd/syscall: late discovery, stat/readdir, exclusive/dup/final-close and stream dispatch");
+}
 static void test_net_node(void)
 {
     struct px_path path; CHECK(!resolve_path("/dev/net", &path) && path.node == space->net);
@@ -1126,7 +1183,7 @@ int main(int argc, char **argv)
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
-    test_com_nodes(); test_uname(); test_optical_native();
+    test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput();
     test_registry_commit();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;

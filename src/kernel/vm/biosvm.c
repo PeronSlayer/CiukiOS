@@ -36,6 +36,8 @@ static bool request_pending, request_done;
 static unsigned request_test;
 static struct biosvm_regs request_regs;
 static uint32_t request_ms;
+static uint64_t apm_deadline;
+static bool apm_deadline_active;
 static int request_result;
 static void (*input_service)(void);
 static void (*input_observer)(uint8_t status, uint8_t byte, bool keyboard_irq);
@@ -48,6 +50,7 @@ static uint16_t mouse_lost;
 static struct kwait *input_wait;
 static uint64_t input_reflections;
 static struct biosvm_input_diag delivery;
+static int submit(struct biosvm_regs *regs, uint32_t ms, unsigned test);
 
 static void notify_input(void)
 {
@@ -389,7 +392,7 @@ static void save_regs(struct biosvm_regs *r)
     r->flags = (uint16_t)((frame.tf.eflags & ~V86_IF) | (firmware.vif ? V86_IF : 0));
 }
 
-static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
+static int run_vm_body(struct biosvm_regs *regs, uint32_t ms, unsigned test)
 {
     int entry_irq = -1;
     struct biosvm_regs input = *regs;
@@ -465,6 +468,33 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
     if (firmware.state == V86_DISABLED && !synthetic)
         quarantine();
     return rc;
+}
+
+static int apm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
+{
+    (void)arg; (void)width; (void)write; (void)value;
+    /* APM has no physical resource claim of its own.
+     * Native i8042 ownership must not be bypassed by the firmware monitor's
+     * input port rules. PIC/PIT/RTC remain virtual; other ports stay denied. */
+    if (!input_enabled && (port == 0x60 || port == 0x64)) return -V86_EPERM;
+    return -ENOSYS;
+}
+
+static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
+{
+    bool apm = regs->interrupt == 0x15 &&
+               ((regs->eax >= 0x5300 && regs->eax <= 0x530f) || regs->eax == 0x5380);
+    if (apm && firmware.io) return -EBUSY;
+    if (apm && apm_deadline_active) {
+        uint64_t now = deadline_after_ms(0);
+        if (deadline_passed(apm_deadline)) return -V86_ETIMEDOUT;
+        uint64_t left = apm_deadline - now;
+        if (left < ms) ms = (uint32_t)left;
+    }
+    if (apm) firmware.io = apm_io;
+    int e = run_vm_body(regs, ms, test);
+    if (apm) firmware.io = 0;
+    return e;
 }
 
 static bool input_irq_pending(void)
@@ -578,6 +608,42 @@ failed:
 }
 
 int biosvm_init(void) { return biosvm_init_for(true); }
+
+int biosvm_apm_call(struct biosvm_regs *regs, uint32_t ms)
+{
+    if (!regs || !ms || ms > 2000) return -EINVAL;
+    uint32_t fn = regs->eax;
+    if (regs->interrupt != 0x15 ||
+        !((fn >= 0x5300 && fn <= 0x530f) || fn == 0x5380) ||
+        fn == 0x5302 || fn == 0x5303 ||
+        (fn == 0x5380 && ((regs->ebx >> 8) & 0xff) != 0x7f)) return -V86_EPERM;
+    if (!g_current || !(read_eflags() & V86_IF)) return -V86_EPERM;
+    uint64_t end = deadline_after_ms(ms);
+    int e = biosvm_init_for(drivers_input_firmware());
+    if (e) return e;
+    if (g_current == vm_thread) return -EBUSY;
+    if (!kmutex_lock_until(&request_mutex, end)) return -V86_ETIMEDOUT;
+    if (quarantined || firmware.state == V86_DISABLED) e = -V86_EIO;
+    else if (video_claimed || fullscreen_video || firmware.io) e = -EBUSY;
+    else if (deadline_passed(end)) e = -V86_ETIMEDOUT;
+    else {
+        /* The worker subtracts queue time before entering V86. Expired
+         * requests never execute; live faults/timeouts retain quarantine. */
+        apm_deadline = end;
+        apm_deadline_active = true;
+        e = submit(regs, ms, 0);
+        apm_deadline_active = false;
+    }
+    kmutex_unlock(&request_mutex);
+    return e;
+}
+
+int biosvm_apm_probe(struct biosvm_regs *out)
+{
+    if (!out) return -EINVAL;
+    *out = (struct biosvm_regs){.interrupt = 0x15, .eax = 0x5300};
+    return biosvm_apm_call(out, 100);
+}
 
 static bool input_fallback_idle(int handle, gen_t generation)
 {

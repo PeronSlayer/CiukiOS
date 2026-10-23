@@ -380,6 +380,7 @@ int vfs_write(struct vfs_table *, int, const void *, size_t, size_t *done);
 int vfs_seek(struct vfs_table *, int, int64_t offset, enum vfs_whence, uint64_t *position);
 int vfs_truncate(struct vfs_table *, int, uint64_t size);
 int vfs_commit(struct vfs_table *, int);
+int vfs_flush_volume_until(struct vfs *, unsigned, const struct vfs_request *);
 int vfs_completion(struct vfs_table *, int, struct cache_completion *);
 /* Identity calls serialize internally and retain no data pages. A mapping must
  * own a file/page reference independently of its descriptor. */

@@ -1,0 +1,40 @@
+Yamaha DS-1 / DS-1E microcode
+
+Copyright (c) 1997-1999 Yamaha Corporation. All Rights Reserved.
+
+Origin: alsa-project/alsa-firmware, tag v1.2.4, ymfpci/hwmcode.c
+https://github.com/alsa-project/alsa-firmware/blob/v1.2.4/ymfpci/hwmcode.c
+Upstream Git blob: 499a6669748fedbcf8c3995a7017424381eb6d9b
+
+Imported file: third_party/yamaha/ds1_microcode.h. The original notice is
+retained verbatim in that file. CiukiOS changed unsigned long arrays to
+const uint32_t arrays; no instruction value changed. UPSTREAM.json records
+the imported file hash and the size/SHA-256 of each little-endian firmware
+image. The header is compiled into the kernel; no external firmware loader
+or separate disk payload is required.
+
+The Yamaha file supplies no explicit redistribution grant. Its notice is
+not the donor driver's GPL licence. Import is directed by the owner's
+2026-10-22 23:55 licence decision, recorded in
+docs/design/peripheral-driver-coverage.md; that decision does not change
+Yamaha's copyright or create a new licence grant.
+
+Yamaha DS-XG PCM driver adaptation
+
+Copyright (c) by Jaroslav Kysela <perex@perex.cz>
+SPDX-License-Identifier: GPL-2.0-or-later
+
+Origins (Linux v6.12):
+sound/pci/ymfpci/ymfpci.c (ID table)
+  Git blob 48444dda44defdad3ee3b30bd3ba40d3555111c1
+sound/pci/ymfpci/ymfpci.h (registers, bank layout)
+  Git blob a408785cfa1ba451df5d806fb3dcd478bf5f5fe4
+sound/pci/ymfpci/ymfpci_main.c (firmware, bank, codec and PCM algorithms)
+  Git blob 6b8d8690b6b204eee0cad44e74c7c5afd380d230
+https://github.com/torvalds/linux/tree/v6.12/sound/pci/ymfpci
+
+Adapted file: src/kernel/drivers/ymfpci.c. CiukiOS replaces Linux/ALSA
+services with its existing ownership, MMIO, pinned DMA, clock, mixer and
+IRQ interfaces; adds firmware hashes/readback, elapsed deadlines, coherent
+bank observations, stop proof and permanent quarantine. No ALSA framework
+is imported. The GPL version 2 text is retained at the repository LICENSE.

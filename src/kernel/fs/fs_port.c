@@ -156,6 +156,8 @@ static uint8_t rtc_read(void *ctx, uint8_t reg)
 {
     (void)ctx; outb(0x70, rtc_nmi_shadow | reg); return inb(0x71);
 }
+uint8_t fs_floppy_cmos_types(void)
+{ rtc_begin(0); uint8_t types=rtc_read(0,0x10); rtc_end(0); return types; }
 static uint32_t rtc_now(void *ctx) { (void)ctx; return fs_now_ms(); }
 static bool rtc_pause(void *ctx) { (void)ctx; return !udelay(100); }
 static bool rtc_calendar(uint16_t *date, uint16_t *time, uint8_t *tenths)
@@ -179,6 +181,7 @@ void fs_service(void)
 }
 #else
 void fs_calendar_init(void) { }
+uint8_t fs_floppy_cmos_types(void) { return 0; }
 void fs_worker_enter(void) { }
 void fs_worker_leave(void) { }
 /* f1-98: host models observe the reservation dependencies the kernel would

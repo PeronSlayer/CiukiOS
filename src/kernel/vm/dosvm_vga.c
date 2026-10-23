@@ -510,7 +510,10 @@ int dosvm_vga_init(struct dosvm *v)
     dosvm_vbe_init(v);
     struct v86_frame f = {0}; f.tf.eax = 3;
     int e = dosvm_vga_bios(v, &f);
-    return e ? e : dosvm_port_register(v->info.key, 0x3B0, 0x3DF, dosvm_vga_port, 0);
+    /* 3BCh..3BEh are the monochrome adapter's printer port, not VGA.
+     * Keep them available to the separately registered virtual LPT3. */
+    if (!e) e=dosvm_port_register(v->info.key,0x3B0,0x3BB,dosvm_vga_port,0);
+    return e ? e : dosvm_port_register(v->info.key,0x3BF,0x3DF,dosvm_vga_port,0);
 }
 
 /* Guest #PF on a supervisor-only A0000-BFFFF page: emulate the faulting
@@ -651,7 +654,8 @@ static int burst_port(void *arg, uint16_t port, unsigned size, int write, uint32
     /* Restrict to the VGA register file. Unknown/other devices stay native.
      * Preflight reads peek a copied register file (DAC/status side effects
      * cannot escape). The status clock is advanced only when committed. */
-    if (port < 0x3B0 || port + size - 1 > 0x3DF) return -EFAULT;
+    if (port < 0x3B0 || port + size - 1 > 0x3DF ||
+        (port<=0x3BE && port+size>0x3BC)) return -EFAULT;
     if (b->preflight) {
         if (!write) *value = 0; /* IN has no access-dependent side effects in this instruction. */
         return 0;

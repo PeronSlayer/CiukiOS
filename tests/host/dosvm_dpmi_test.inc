@@ -885,8 +885,10 @@ static void test_dpmi_io_watch(void)
     CHECK(v->info.guest_records == lines + 1 && in_pm());
     cur.tf.eax = 0xFF00; uint8_t in21[2] = {0xE4, 0x21}; exec(v, in21, 2, 13, 0);
     CHECK((uint8_t)cur.tf.eax == v->monitor.pic[0].imr && (cur.tf.eax & 0xFF00) == 0xFF00);
-    cur.tf.edx = 0x3F8; cur.tf.eax = 0; op1(v, 0xEC); CHECK((uint8_t)cur.tf.eax == 0xFF);   /* absent UART */
-    cur.tf.edx = 0x3F8; cur.tf.eax = 0; uint8_t inw[2] = {0x66, 0xED}; exec(v, inw, 2, 13, 0); CHECK(cur.tf.eax == 0xFFFFFFFFu);
+    cur.tf.edx = 0x3F8; cur.tf.eax = 0; op1(v, 0xEC); CHECK((uint8_t)cur.tf.eax == 0); /* empty virtual RBR */
+    cur.tf.edx = 0x3FD; cur.tf.eax = 0; op1(v, 0xEC); CHECK((uint8_t)cur.tf.eax == 0x60); /* virtual idle LSR */
+    cur.tf.edx = 0x5F8; cur.tf.eax = 0; op1(v, 0xEC); CHECK((uint8_t)cur.tf.eax == 0xFF); /* still absent */
+    cur.tf.edx = 0x5F8; cur.tf.eax = 0; uint8_t inw[2] = {0x66, 0xED}; exec(v, inw, 2, 13, 0); CHECK(cur.tf.eax == 0xFFFFFFFFu);
     /* rep outsb: one element per trap, restartable. */
     uint32_t src = (DATA_SEG << 4) + 0x40; CHECK(!dosvm_write(v, src, "ok\n", 3));
     cur.tf.esi = 0x40; cur.tf.ecx = 3; cur.tf.edx = 0xE9; uint8_t rep[2] = {0xF3, 0x6E};

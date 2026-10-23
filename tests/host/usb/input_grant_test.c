@@ -39,6 +39,12 @@ static int input_packet(struct usb_device *d, unsigned ep, unsigned pid, unsigne
     return (int)pending_length;
 }
 static const struct usb_hc_ops input_ops = { .packet = input_packet };
+static int input_interrupt(struct usb_device *d, struct usb_hid *h, void *buffer, unsigned length)
+{
+    CHECK(length==64);
+    return input_packet(d,h->endpoint,USB_PID_IN,h->toggle,buffer,length,true);
+}
+static const struct usb_hc_ops input_async_ops = { .interrupt = input_interrupt };
 int usb_control(struct usb_device *d, uint8_t type, uint8_t request, uint16_t value,
                 uint16_t index, void *data, unsigned length)
 {
@@ -199,6 +205,42 @@ static void mouse_regression(struct process *p, int fd, struct usb_device *mouse
     g_boot.flags=CBI_F_VERBOSE;
 }
 #include "hid_integration.h"
+/* The common core has its own real-provider fixture. Here a tiny provider
+ * isolates grant authorization, header checking and copyout from hardware. */
+static unsigned joystick_controls;
+static unsigned persistent_calibrations;
+int joystick_settings_calibrate(const struct ciuki_joystick_control *c)
+{
+    persistent_calibrations++;
+    CHECK(c->version==1 && c->size==100 && c->operation==CIUKI_JOY_CALIBRATE && !c->session);
+    struct ciuki_hid_calibration cal={.version=1,.size=sizeof(cal),.device=c->device,.generation=c->generation,
+        .axis=c->axis,.minimum=c->minimum,.centre=c->centre,.maximum=c->maximum};
+    return usb_hid_query(INPUT_HID_CALIBRATE,&cal);
+}
+int joystick_control(struct ciuki_joystick_control *c)
+{
+    joystick_controls++;
+    if (c->reserved) return -EINVAL;
+    if (c->generation!=42) return -ENODEV;
+    c->attached=1;c->axes=3;c->raw[0]=123;return 0;
+}
+static void joystick_grant_test(struct process *p,int fd)
+{
+    struct ciuki_joystick_control c={.version=1,.size=100,.device=257,.generation=42};
+    CHECK(!hid_ioctl(p,fd,INPUT_JOY_CONTROL,&c,sizeof(c)) && c.attached && c.raw[0]==123);
+    unsigned before=joystick_controls;
+    c.version=2;CHECK(hid_ioctl(p,fd,INPUT_JOY_CONTROL,&c,sizeof(c))==-EINVAL && joystick_controls==before);
+    c.version=1;c.size=99;CHECK(hid_ioctl(p,fd,INPUT_JOY_CONTROL,&c,sizeof(c))==-EINVAL && joystick_controls==before);
+    CHECK(grant_input_devctl(p,fd,INPUT_JOY_CONTROL,BUFFER,99)==-EINVAL && joystick_controls==before);
+    CHECK(grant_input_devctl(p,fd,INPUT_JOY_CONTROL,0,100)==-EFAULT && joystick_controls==before);
+    CHECK(grant_input_devctl(p,-1,INPUT_JOY_CONTROL,BUFFER,100)<0 && joystick_controls==before);
+    c.size=100;c.generation=43;CHECK(hid_ioctl(p,fd,INPUT_JOY_CONTROL,&c,sizeof(c))==-ENODEV);
+    struct ciuki_input_event event[64];
+    input_hid_event(INPUT_JOY_AXIS,0,16384,257,42,input_tick);
+    CHECK(drain_hid(p,fd,event)==1 && event[0].type==CIUKI_INPUT_JOY_AXIS && event[0].value2==257 &&
+        event[0].generation==42 && event[0].source==INPUT_NATIVE && event[0].value==16384);
+    puts("PASS F1-113 input-grant headers/extent/user ranges/authority, common controls, stale provider and native analog event locator");
+}
 int main(int argc, char **argv)
 {
     bool exact_only = argc == 2 && !strcmp(argv[1], "--exact");
@@ -327,6 +369,8 @@ int main(int argc, char **argv)
     input_devices_snapshot(&devices); CHECK(!devices.usb);
     CHECK(grant_input_read(p, grants[1], BUFFER, 8) == -EAGAIN);
     hid_extension_test(p,grants[1]);
+    CHECK(persistent_calibrations==2); /* Valid + invalid requests use the durable path. */
+    joystick_grant_test(p,grants[1]);
     desktop_clean(p); free(ram);
     return 0;
 }

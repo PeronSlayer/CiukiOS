@@ -3,6 +3,7 @@
 #include <ciuki/blkpart.h>
 
 static int part_flush(struct blkdev *d);
+static int part_write(struct blkdev *, uint64_t, uint32_t, const void *);
 
 struct blkdev *blkpart_device(struct blkpart *v)
 {
@@ -11,6 +12,7 @@ struct blkdev *blkpart_device(struct blkpart *v)
     v->block.media_generation = v->parent->media_generation;
     v->block.quarantined = v->parent->quarantined;
     v->block.write_cache_state = v->parent->write_cache_state;
+    v->block.write = v->parent->write ? part_write : 0;
     v->block.flush = v->parent->flush ? part_flush : 0;
     return &v->block;
 }

@@ -14,12 +14,13 @@ class SerialTests(unittest.TestCase):
         folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='serial-', dir=folder) as temp:
             binary = Path(temp) / name
+            sources = [str(ROOT / 'src/kernel/drivers/serial_protocol.c')] if name in ('com_test', 'com_logger_test') else []
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-pthread', '-ffunction-sections',
                             '-fdata-sections', '-Wl,--gc-sections',
                             '-I', str(ROOT / 'src/kernel/include'),
                             str(ROOT / 'tests/host' / (name + '.c')),
-                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+                            str(ROOT / 'src/kernel/lib/fmt.c'), *sources, '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True,
                            env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 

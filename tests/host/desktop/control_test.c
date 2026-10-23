@@ -146,6 +146,63 @@ static void programs_page(void)
     program_overflow=0;
     cp_detach(&a);du_release(&u);
 }
+static struct ciuki_joystick_control joystick_pending;
+static unsigned joystick_sent, joystick_game_saved;
+static struct ciuki_joystick_control joystick_game_record;
+static int joystick_save(void *ctx,unsigned game,const struct ciuki_joystick_control *c)
+{ (void)ctx;joystick_game_saved=game;joystick_game_record=*c;return 0; }
+static int joystick_submit(void *ctx,const struct ciuki_joystick_control *c)
+{ (void)ctx;joystick_pending=*c;joystick_sent++;return 0; }
+static void joystick_page(void)
+{
+    attach(CP_HOME);a.host.joystick=joystick_submit;a.host.joystick_save_game=joystick_save;cp_open(&a,CP_DEVICES);
+    a.devices_ok=1;a.devices.count=1;a.properties_device=0;
+    a.devices.devices[0]=(struct ciuki_device_record){.class_id=CIUKI_DEVICE_PORT,.state=CIUKI_DEVICE_READY};
+    strcpy(a.devices.devices[0].driver,"gameport");
+    struct du_event open={.type=DU_EV_DIALOG,.id=200,.index=0};u.event(&u,&open,u.user);
+    assert(a.page==CP_JOYSTICK);
+    assert(joystick_pending.operation==CIUKI_JOY_NEXT && a.joystick_busy);
+    struct ciuki_joystick_control reply=joystick_pending;
+    reply.device=257;reply.generation=42;reply.session=123456;reply.axes=3;reply.attached=1;
+    cp_joystick_result(&a,&reply,0);assert(!a.joystick_busy && strstr(du_get(&u,1108)->text,"Analog"));
+    at_click_widget(&u,1101);assert(a.joystick_calibrating==1);
+    for (unsigned phase=0;phase<3;phase++) {
+        unsigned before=joystick_sent;at_click_widget(&u,1102);
+        assert(joystick_sent==before+1 && joystick_pending.operation==CIUKI_JOY_QUERY && a.joystick_capture_pending);
+        reply=joystick_pending;reply.axes=3;reply.attached=1;reply.session=123456;
+        reply.raw[0]=10+90*(int)phase;reply.raw[1]=20+180*(int)phase;
+        cp_joystick_result(&a,&reply,0);
+    }
+    assert(joystick_pending.operation==CIUKI_JOY_CALIBRATE && joystick_pending.axis==0 &&
+        joystick_pending.minimum==10 && joystick_pending.centre==100 && joystick_pending.maximum==190);
+    reply=joystick_pending;cp_joystick_result(&a,&reply,0);
+    assert(joystick_pending.axis==1 && joystick_pending.minimum==20 && joystick_pending.maximum==380);
+    reply=joystick_pending;cp_joystick_result(&a,&reply,0);assert(!a.joystick_calibrating);
+    at_click_widget(&u,1103);assert(joystick_pending.operation==CIUKI_JOY_ROUTE && joystick_pending.device==257);
+    reply=joystick_pending;cp_joystick_result(&a,&reply,0);
+    at_click_widget(&u,1100);reply=joystick_pending;reply.device=258;reply.generation=43;reply.session=123456;reply.axes=3;reply.attached=1;
+    cp_joystick_result(&a,&reply,0);at_click_widget(&u,1111);
+    assert(joystick_pending.mode==1 && joystick_pending.device==257 && joystick_pending.second_device==258);
+    reply=joystick_pending;cp_joystick_result(&a,&reply,-ENODEV);assert(!a.joystick_busy);
+    at_click_widget(&u,1104);assert(!joystick_pending.device && !joystick_pending.generation);
+    reply=joystick_pending;cp_joystick_result(&a,&reply,0);
+    at_click_widget(&u,1106);at_click_widget(&u,1107);
+    assert(joystick_game_saved==1 && joystick_game_record.device==258 && joystick_game_record.session==123456);
+    reply=(struct ciuki_joystick_control){.version=1,.size=100,.operation=CIUKI_JOY_SAVE_GAME};
+    cp_joystick_result(&a,&reply,0);assert(a.joystick_save_pending && !a.joystick_busy);
+    cp_tick(&a);assert(joystick_pending.operation==CIUKI_JOY_SAVE_STATUS && a.joystick_busy);
+    reply=joystick_pending;reply.buttons=1;cp_joystick_result(&a,&reply,0);assert(a.joystick_save_pending);
+    cp_tick(&a);reply=joystick_pending;cp_joystick_result(&a,&reply,0);
+    assert(!a.joystick_save_pending && strstr(du_get(&u,3)->text,"saved for future sessions"));
+    at_click_widget(&u,1113);assert(!joystick_game_record.device);
+    reply.operation=CIUKI_JOY_SAVE_GAME;cp_joystick_result(&a,&reply,0);
+    cp_tick(&a);reply=joystick_pending;reply.minimum=-EIO;cp_joystick_result(&a,&reply,0);
+    assert(!a.joystick_save_pending && strstr(du_get(&u,3)->text,"could not be saved"));
+    at_click_widget(&u,1114);assert(joystick_game_record.device==CIUKI_JOY_DISABLED);
+    assert(cp_page_index("joystick")==CP_JOYSTICK);
+    cp_detach(&a);du_release(&u);
+    puts("PASS joystick Control Panel: discovery, fresh three-point capture, per-axis calibration, A/B/default/off and stale refusal");
+}
 int main(int argc, char **argv)
 {
     assert(argc == 3 || argc == 4);
@@ -153,6 +210,7 @@ int main(int argc, char **argv)
     folder = argv[2];
     const char *renders = argc == 4 ? argv[3] : NULL;
 
+    joystick_page();
     programs_page();
     /* No desktop.cfg yet: the defaults, Ciuk2 filled. */
     attach(CP_DISPLAY);

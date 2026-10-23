@@ -11,6 +11,9 @@
 #include <ciuki/signal.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
+extern uint32_t joystick_session(void) __attribute__((weak));
+extern int joystick_route_validate(const struct joystick_route *) __attribute__((weak));
+extern bool joystick_settings_game(unsigned, struct joystick_route *) __attribute__((weak));
 #include "dosvm_network.h"
 #include <ciuki/dosvm_network_abi.h>
 extern int display_worker_start(void) __attribute__((weak));
@@ -316,10 +319,19 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         allowed.surface_fd = c.surface_fd;
         if (c.launch.kernel>CIUKI_DOSVM_UNIFIED || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
             c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED ||
-            dosvm_launch_network(&c)>CIUKI_DOSVM_NETWORK_IPX) return -EINVAL;
+            dosvm_launch_network(&c)>CIUKI_DOSVM_NETWORK_IPX || c.launch.reserved[5]>1) return -EINVAL;
         allowed.launch.kernel=c.launch.kernel; allowed.launch.game=c.launch.game;
         allowed.launch.memory=c.launch.memory;
         dosvm_launch_network_set(&allowed,dosvm_launch_network(&c));
+        for (unsigned j=1;j<=6;j++) allowed.launch.reserved[j]=c.launch.reserved[j];
+        struct joystick_route route={c.launch.reserved[1],c.launch.reserved[2],c.launch.reserved[3],c.launch.reserved[4],c.launch.reserved[5]};
+        if (route.device==CIUKI_JOY_DISABLED) {
+            if (route.generation || route.second_device || route.second_generation || route.mode || c.launch.reserved[6]) return -EINVAL;
+        } else if (route.device) {
+            if (!joystick_session || !c.launch.reserved[6] || c.launch.reserved[6]!=joystick_session() || !joystick_route_validate) return -ENODEV;
+            uint32_t jf=irq_save(); int je=joystick_route_validate(&route); irq_restore(jf);
+            if (je) return je;
+        } else if (route.generation || route.second_device || route.second_generation || route.mode || c.launch.reserved[6]) return -EINVAL;
         unsigned n = 0;
         while (n < sizeof(c.name) && c.name[n]) {
             if (c.name[n] < 32 || c.name[n] > 126) return -EINVAL;
@@ -385,6 +397,19 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }
+        if (c.launch.reserved[1]) {
+            v->joystick.route=(struct joystick_route){0};
+            if (c.launch.reserved[1]!=CIUKI_JOY_DISABLED)
+                v->joystick.route=(struct joystick_route){c.launch.reserved[1],c.launch.reserved[2],c.launch.reserved[3],c.launch.reserved[4],c.launch.reserved[5]};
+        } else if (joystick_settings_game) {
+            uint32_t jf=irq_save();
+            bool fallback=joystick_settings_game(c.launch.game,&v->joystick.route);
+            irq_restore(jf);
+            if (fallback) {
+                c.changed=CIUKI_DOSVM_JOYSTICK_FALLBACK;
+                klog("[joystick-settings] selected controller absent game=%u; first available fallback",c.launch.game);
+            }
+        }
         struct dosvm_key key = dosvm_key(v);
         b = &bindings[key.id - 1];
         *b = (struct binding){.key=key, .pid=p->pid, .surface=surface, .busy=true};

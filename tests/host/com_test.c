@@ -9,6 +9,7 @@
 #include <ciuki/com.h>
 #include <ciuki/task.h>
 #include <ciuki/work.h>
+#include <ciuki/input.h>
 #define P2V(p) ((void *)(uintptr_t)(p))
 #define V2P(p) ((uint32_t)(uintptr_t)(p))
 static uint32_t flags=0x200;
@@ -17,6 +18,14 @@ static void irq_restore(uint32_t f) { flags=f; }
 struct ciuki_boot_info g_boot;
 static bool logger_present, fail_work, fail_alloc, cancel_wait;
 static unsigned logger_calls, reads, writes, allocations;
+volatile uint64_t g_ticks;
+static unsigned serial_buttons, serial_packets;
+void input_serial_event(uint16_t t,uint16_t c,int32_t value,gen_t g,uint64_t tick)
+{
+    (void)tick; assert(g);
+    if (t==INPUT_BTN) { if (value) serial_buttons|=1u<<c; else serial_buttons&=~(1u<<c); }
+    if (t==INPUT_REL) serial_packets++;
+}
 static irq_handler_t handlers[16];
 struct model {
     unsigned base, chip, head, used, tx_used, depth_override;
@@ -403,7 +412,7 @@ static void native(void)
     reset(); make_model(0,0x2f8,CIUKI_COM_16550A); assert(admit(0,2,3,CIUKI_COM_BDA)==1);
     struct px_node node={.kind=PX_COM,.drive=1};
     struct file_description d={.node=&node,.flags=O_RDWR,.references=1,.object={user_retain,user_release,false}};
-    user_description=&d; user_process.memory=&user_memory; user_thread.process=&user_process;
+    user_description=&d; user_process.memory=&user_memory; user_process.pid=42; user_thread.process=&user_process;
     assert(com_device_open(&d,O_RDWR|O_APPEND)==-EINVAL && !d.com_generation);
     assert(!com_device_open(&d,O_RDWR));
     assert(com_rw_user(&d,0x1000,1,false)==-EAGAIN);
@@ -426,6 +435,13 @@ static void native(void)
     struct ciuki_com_status s={.version=1,.size=sizeof(s)}; memcpy(user_bytes,&s,sizeof(s));
     assert(!com_devctl(&user_process,5,COM_GET_STATUS,0x1000,sizeof(s)));
     memcpy(&s,user_bytes,sizeof(s)); assert(s.transmitted==1024 && s.generation==d.com_generation);
+    struct ciuki_com_owner owner={1,sizeof(owner),0,0,0,0}; memcpy(user_bytes,&owner,sizeof(owner));
+    assert(!com_devctl(&user_process,5,COM_GET_OWNER,0x1000,sizeof(owner)));
+    memcpy(&owner,user_bytes,sizeof(owner)); assert(owner.kind==CIUKI_COM_OWNER_NATIVE && owner.id==42 && owner.generation==d.com_generation);
+    struct ciuki_com_mouse mouse={1,sizeof(mouse),CIUKI_SERIAL_MOUSE_LOGITECH,0};
+    memcpy(user_bytes,&mouse,sizeof(mouse)); assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
+    mouse.protocol=0; memcpy(user_bytes,&mouse,sizeof(mouse));
+    assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
     assert(com_devctl(&user_process,6,COM_GET_STATUS,0x1000,sizeof(s))==-EBADF);
     assert(!user_pins && d.references==1 && !user_thread.cleanup && allocations==1);
     struct ciuki_com_modem outputs={1,sizeof(outputs),CIUKI_COM_BREAK,0};
@@ -434,4 +450,41 @@ static void native(void)
     assert(!com_device_open(&d,O_RDWR) && models[0].regs[3]==3); com_device_close(&d);
     puts("PASS COM native checked buffers/pins, short I/O, rights, devctl, finite waits, signal cancellation and cleanup");
 }
-int main(void) { setvbuf(stdout,0,_IONBF,0); generations(); arbitration(); faults_and_abi(); aggregate_budget(); discovery(); native(); reset(); return 0; }
+static void peripheral_leases(void)
+{
+    reset(); make_model(0,0x3f8,CIUKI_COM_16550A); assert(admit(0,1,4,CIUKI_COM_BDA)==0);
+    uint32_t g=0, other=0; const char *why=0; struct ciuki_com_owner owner;
+    assert(!com_lease_open(0,CIUKI_COM_OWNER_VM,7,&g,&why));
+    ports[0].status.errors=0x1e;
+    assert(com_vm_line_errors(0,g)==0x1e && com_vm_line_errors(0,g)==0);
+    assert(com_owner_snapshot(0,&owner) && owner.kind==CIUKI_COM_OWNER_VM && owner.id==7);
+    assert(com_open(0,&other)==-EBUSY);
+    assert(com_lease_open(0,CIUKI_COM_OWNER_VM,8,&other,&why)==-EBUSY && strstr(why,"DOS VM"));
+    assert(com_mouse_attach(0,CIUKI_SERIAL_MOUSE_MICROSOFT,&why)==-EBUSY);
+    com_close(0,g); assert(!com_open(0,&other)); com_close(0,g);
+    assert(com_owner_snapshot(0,&owner) && owner.generation==other); com_close(0,other);
+    assert(!com_mouse_attach(0,CIUKI_SERIAL_MOUSE_MICROSOFT,&why));
+    assert(com_owner_snapshot(0,&owner) && owner.kind==CIUKI_COM_OWNER_MOUSE);
+    assert(com_open(0,&other)==-EBUSY);
+    receive(&models[0],0x60); receive(&models[0],1); receive(&models[0],2); interrupt(4);
+    assert(serial_buttons==1 && serial_packets==2);
+    com_mouse_detach(0); assert(!serial_buttons);
+    assert(!com_open(0,&g));
+    struct ciuki_com_mouse m={1,sizeof(m),CIUKI_SERIAL_MOUSE_SYSTEMS,0};
+    assert(com_control(0,g,COM_SET_MOUSE,&m,sizeof(m),false)==-EACCES);
+    assert(!com_control(0,g,COM_SET_MOUSE,&m,sizeof(m),true));
+    uint8_t c; assert(com_transfer(0,g,&c,1,false)==-EBUSY);
+    com_close(0,g);
+    struct ciuki_firmware_record r={.origin=CIUKI_FIRMWARE_ACPI,.state=CIUKI_FIRMWARE_ROUTING_UNQUALIFIED,
+        .hid="PNP0501",.resource_count=2,.resources={{RES_PORT,0,0x3f8,0x400},{RES_IRQ,7,4,5}}};
+    initialized=false; assert(com_firmware_assigned(&r)==-ENODEV); initialized=true;
+    unsigned before=reads+writes; assert(com_firmware_assigned(&r)==0); assert(reads+writes==before);
+    r.resources[1].flags=0; assert(com_firmware_assigned(&r)==-EINVAL);
+    r.resources[1].flags=7; r.resources[0].start=0x100003f8ull; r.resources[0].end=r.resources[0].start+8;
+    assert(com_firmware_assigned(&r)==-EINVAL && reads+writes==before);
+    r.resources[0].start=0x3f8; r.resources[0].end=0x400; r.flags=CIUKI_FIRMWARE_TRUNCATED;
+    assert(com_firmware_assigned(&r)==-EINVAL);
+    r.flags=0; assert(!com_open(0,&g)); assert(com_firmware_assigned(&r)==-EBUSY); com_close(0,g);
+    printf("COM peripheral leases, firmware routes and input: PASS\n");
+}
+int main(void) { setvbuf(stdout,0,_IONBF,0); generations(); arbitration(); faults_and_abi(); aggregate_budget(); discovery(); native(); peripheral_leases(); reset(); return 0; }

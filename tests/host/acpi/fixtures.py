@@ -42,9 +42,17 @@ def generate(out):
     base += scope(b'\\_TZ_', pkg(b'\x5b\x85', b'THRM' + name('_TMP', integer(3000))))
     ssdt = sdt('SSDT', scope(b'\\_SB_', device('ACAD', name('_HID', string('ACPI0003')) + name('_PSR', integer(1)))))
     cases = ('inventory', 'ssdt', 'checksum', 'root64', 'dsdt64', 'length', 'aml', 'loop', 'sleep', 'write', 'region', 'osl', 'broker', 'pnp', 'page', 'allocation',
-             'crs-bad', 'mem64', 'large', 'module-loop', 'rsdt', 'rsdp-checksum', 'pnp-bad', 'no-acpi', 'eisa', 'ec', 'module-write', 'start-failure')
+             'crs-bad', 'mem64', 'large', 'module-loop', 'rsdt', 'rsdp-checksum', 'pnp-bad', 'no-acpi', 'eisa', 'ec', 'module-write', 'start-failure',
+             'serial', 'serial-disabled', 'serial-cid', 'serial-level', 'serial-low', 'serial-variable')
     for case in cases:
         aml = base
+        if case.startswith('serial'):
+            resources=b'\x4b\xf8\x03\x08\x23\x10\x00' + bytes([0 if case=='serial-level' else 9 if case=='serial-low' else 1]) + b'\x79\x00'
+            if case=='serial-variable': resources=b'\x47\x01\xf8\x03\xf8\x04\x08\x08\x23\x10\x00\x01\x79\x00'
+            hid=name('_HID',string('ACME0001' if case=='serial-cid' else 'PNP0501'))
+            if case=='serial-cid': hid+=name('_CID',package([string('PNP0500'),string('PNP0501')]))
+            sta=name('_STA',integer(0 if case=='serial-disabled' else 15))
+            aml=scope(b'\\_SB_',device('COM0',hid+sta+name('_CRS',buffer(resources))))
         if case in ('crs-bad', 'mem64', 'eisa'):
             resources = b'\x86\xff\xff' if case == 'crs-bad' else b'\x8a\x2b\x00' + bytes([0, 0x0d, 0]) + struct.pack('<QQQQQ', 0, 0x100000000, 0x100000fff, 0, 0x1000) + b'\x79\x00'
             hid = integer(0x0303d041) if case == 'eisa' else string('ACME0001')

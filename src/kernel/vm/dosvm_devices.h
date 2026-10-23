@@ -37,6 +37,8 @@ struct dosvm_mouse {
     bool active, saved_vif;
     struct v86_frame saved;
 };
+int dosvm_joystick_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *) __attribute__((weak));
+int dosvm_joystick_bios(struct dosvm *, struct v86_frame *) __attribute__((weak));
 void dosvm_pit_init(struct dosvm *);
 int dosvm_pit_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
 void dosvm_pit_advance(struct dosvm *, uint64_t host_ticks);

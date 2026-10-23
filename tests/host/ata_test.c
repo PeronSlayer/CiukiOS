@@ -224,6 +224,14 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
 static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
 #include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/registry.c"
+static bool ata_test_route;
+bool pci_irq_routed(const struct pci_func *p) { (void)p; return ata_test_route; }
+#include "../../src/kernel/drivers/ata_chipset.c"
+#include "../../src/kernel/drivers/ata_piix.c"
+#include "../../src/kernel/drivers/ata_via.c"
+#include "../../src/kernel/drivers/ata_sis.c"
+#include "../../src/kernel/drivers/ata_ali.c"
+#include "../../src/kernel/drivers/ata_nv.c"
 #include "../../src/kernel/drivers/ata_dma.c"
 static unsigned ata_stamp_reads;
 static uint64_t ata_command_clock(void) { return (uint64_t)++ata_stamp_reads*1000; }
@@ -333,6 +341,7 @@ static void native_attach(struct fake *f, unsigned index)
     f->channel.base = index ? 0x170 : 0x1f0;
     f->channel.control = index ? 0x376 : 0x3f6;
     f->channel.irq = index ? 15 : 14;
+    f->channel.index = index;
     CHECK(!claim_channel(&f->channel, index));
     f->channel.native = true;
     device_control(&f->channel, ATA_NIEN);
@@ -453,6 +462,10 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     }
     unsigned r = port - f->channel.base;
     if (port == f->channel.control) {
+        /* VIA's documented IEN quirk loses Device/Head selection. */
+        if (f->channel.chipset.family==ATA_CHIP_VIA && ((f->control^value)&ATA_NIEN)) {
+            f->selected=0; f->head=0xa0;
+        }
         f->control = value;
         if (value & 4) {
             f->command = 0; f->status = 0x40; f->pending = false; memset(f->multiple,0,sizeof(f->multiple));
@@ -531,6 +544,11 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     if (value == 0xef) {
         CHECK(f->registers[1][0] == 3 && f->registers[2][0] == (0x40 | f->channel.devices[f->selected].udma_mode));
         if (f->fault == DMA_MODE_ERROR) f->status = 0x41;
+        else if (f->channel.chipset.pci) {
+            f->identify[f->selected][88] = (uint16_t)((f->identify[f->selected][88] & 255) |
+                1u << (8 + f->channel.devices[f->selected].udma_mode));
+            f->identify[f->selected][63] &= 255;
+        }
     }
     if (value==0xc6) {
         CHECK(f->registers[2][0]==(f->identify[f->selected][47]&255));
@@ -1378,8 +1396,10 @@ static void test_emergency_recorder(void)
     }
     puts("PASS ATA emergency recorder: LBA28/LBA48 PIO + FLUSH, no scheduler/locks, busy/owned/quarantined refusal, finite stalled-command polls/no replay");
 }
-int main(void)
+#include "ata_chipset_test.inc"
+int main(int argc, char **argv)
 {
+    if (argc == 2) { test_ata_chipset(argv[1]); return failures ? 1 : 0; }
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
     test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder();

@@ -1,4 +1,4 @@
-/* Backend selection and cyclic DMA ownership. No imported source.
+/* Backend selection and cyclic DMA ownership.
  * References: docs/design/f4-audio-second-set.md. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -7,7 +7,9 @@
 #include <ciuki/arch.h>
 #include <ciuki/timing.h>
 #include <ciuki/audio_backend.h>
-static struct mm_pin backend_pins[2];
+#include <ciuki/maestro.h>
+#include <ciuki/emu10k1.h>
+static struct mm_pin backend_pins[3];
 struct audio_dma_device audio_dma;
 static bool dma_selected;
 /* One selected cyclic engine; IRQ and worker serialize these with irq_save. */
@@ -26,9 +28,26 @@ static void backend_write_io(void *c, uint16_t p, uint32_t v, unsigned w)
 static uint64_t backend_now(void *c) { (void)c; return g_ticks; }
 static void backend_sleep(void *c, uint32_t ms) { (void)c; task_sleep_ms(ms); }
 uint32_t audio_hw_read(struct audio_dma_device *d, unsigned off, unsigned width)
-{ return d->io.read(d->io.cookie, d->base + off, width); }
+{
+    if (d->mmio) {
+        if (d->mmio_read) return d->mmio_read(d->io.cookie, off, width);
+        if (width == 1) return *(volatile uint8_t *)(d->mmio + off);
+        if (width == 2) return *(volatile uint16_t *)(d->mmio + off);
+        return *(volatile uint32_t *)(d->mmio + off);
+    }
+    return d->io.read(d->io.cookie, d->base + off, width);
+}
 void audio_hw_write(struct audio_dma_device *d, unsigned off, uint32_t v, unsigned width)
-{ d->io.write(d->io.cookie, d->base + off, v, width); }
+{
+    if (d->mmio) {
+        if (d->mmio_write) { d->mmio_write(d->io.cookie, off, v, width); return; }
+        if (width == 1) *(volatile uint8_t *)(d->mmio + off) = v;
+        else if (width == 2) *(volatile uint16_t *)(d->mmio + off) = v;
+        else *(volatile uint32_t *)(d->mmio + off) = v;
+        return;
+    }
+    d->io.write(d->io.cookie, d->base + off, v, width);
+}
 uint64_t audio_hw_deadline(struct audio_dma_device *d, uint32_t ms)
 {
     uint64_t end=d->io.now(d->io.cookie)+ms;
@@ -49,26 +68,50 @@ int audio_hw_wait(struct audio_dma_device *d, unsigned off, uint32_t mask, uint3
  * posted write is followed by the transport's completion/readback protocol. */
 int audio_dma_codec_mute(struct audio_dma_device *d, bool mute, int (*write)(struct audio_dma_device *,uint16_t,uint16_t))
 {
-    int e = write(d, 2, mute ? 0x8000 : 0);
-    if (!e) e = write(d, 0x18, (mute ? 0x8000 : 0) | 0x0808);
+    const struct ac97_codec_profile *p=d->codec.profile ? d->codec.profile : ac97_codec_lookup(d->state.codec_id);
+    uint16_t bits=mute ? (p->master_mask & 0x8080) : 0;
+    int e = p->master_mask ? write(d, 2, bits) : 0;
+    if (!e && p->pcm_mask) e = write(d, 0x18, bits | 0x0808);
+    if (!e && (d->codec.caps & 0x10) && p->headphone_mask) e=write(d,4,bits+p->headphone_unity);
     if (!e) { d->state.master = mute ? 0x8000 : 0; d->state.pcm_volume = (mute ? 0x8000 : 0) | 0x0808; }
     return e;
 }
+static int dma_policy_read(void *cookie, uint16_t reg, uint16_t *value)
+{
+    struct audio_dma_device *d=cookie;
+    return d->codec_read(d,reg,value);
+}
+static int dma_policy_update(void *cookie, uint16_t reg, uint16_t value, uint16_t mask)
+{
+    struct audio_dma_device *d=cookie;
+    (void)mask; /* value already preserves the non-quirk fields */
+    return d->codec_write(d,reg,value);
+}
+static struct ac97_codec_ops dma_policy_ops(struct audio_dma_device *d)
+{ return (struct ac97_codec_ops){d,dma_policy_read,dma_policy_update}; }
 int audio_dma_codec_prepare(struct audio_dma_device *d, int (*read)(struct audio_dma_device *,uint16_t,uint16_t *),
                             int (*write)(struct audio_dma_device *,uint16_t,uint16_t))
 {
     static const uint16_t regs[] = {2,0x18,0x26,0x2a};
-    uint16_t hi, lo;
+    d->codec_read=read; d->codec_write=write;
+    uint16_t hi, lo, caps, ext;
     int e = read(d, 0x7c, &hi); if (!e) e = read(d, 0x7e, &lo);
     if (e || !hi || hi == 0xffff || lo == 0xffff) return e ? e : -EIO;
     d->state.codec_id = (uint32_t)hi << 16 | lo;
+    e=read(d,0,&caps); if (!e) e=read(d,0x28,&ext);
+    if (e) { d->reason="codec_capabilities"; return e; }
+    ac97_codec_policy_init(&d->codec,&d->pci,d->state.codec_id,caps,ext);
     for (unsigned i = 0; !e && i < 4; i++) {
         e = read(d, regs[i], &d->codec_saved[i]);
         if (!e) d->codec_saved_count++;
     }
     if (e) return e;
+    if ((caps & 0x10) && d->codec.profile->headphone_mask) {
+        e=read(d,4,&d->codec_saved[4]); if (e) return e;
+        d->codec_saved_count++;
+    }
     d->codec_changed = true;
-    e = write(d, 0x26, 0); /* AC-link and DAC powered */
+    e = write(d, 0x26, d->codec.eapd); /* AC-link/DAC powered; qualified amp polarity */
     uint64_t limit = audio_hw_deadline(d,1000);
     while (!e) {
         e = read(d, 0x26, &d->state.power);
@@ -76,8 +119,13 @@ int audio_dma_codec_prepare(struct audio_dma_device *d, int (*read)(struct audio
         if ((int64_t)(d->io.now(d->io.cookie) - limit) >= 0) return -ETIMEDOUT;
         d->io.sleep(d->io.cookie, 1);
     }
-    if (!e) e = write(d, 2, 0x8101); /* reject stale zero / mute */
-    if (!e) e = write(d, 2, 0x8000);
+    struct ac97_codec_ops io=dma_policy_ops(d);
+    if (!e) e=ac97_codec_quirks(&d->codec,&d->pci,&io);
+    if (e) { d->reason=e==-EOPNOTSUPP ? "codec_route_unsupported" : "codec_quirks"; return e; }
+    if (d->codec.profile->master_mask) {
+        if (!e) e = write(d, 2, 0x8101); /* reject stale zero / mute */
+        if (!e) e = write(d, 2, d->codec.profile->master_mask & 0x8080);
+    }
     if (!e) e = write(d, 0x2a, d->codec_saved[3] & ~0xfu); /* fixed 48 kHz, analog */
     if (!e) e = audio_dma_codec_mute(d, audio.master.mute, write);
     return e;
@@ -86,7 +134,7 @@ static int backend_dma_progress_locked(struct audio_dma_device *d)
 {
     struct audio_transport *s = &d->state;
     s->tail_drained = false;
-    if (d->inhibited) return -EIO; /* thread must prove halt/reset before reuse */
+    if (s->quarantine || d->inhibited) return -EIO; /* thread must prove halt/reset before reuse */
     if (!s->running) return d->inhibited ? -EIO : 0;
     uint64_t now = d->io.now(d->io.cookie);
     /* Modulo cursors cannot distinguish a whole missed revolution. Fail
@@ -169,6 +217,9 @@ int audio_dma_start(struct audio_dma_device *d)
 int audio_dma_stop(struct audio_dma_device *d)
 {
     kmutex_lock(&d->register_lock);
+    if (d->state.quarantine) {
+        kmutex_unlock(&d->register_lock); return -EIO;
+    }
     int e = d->ops->halt(d);
     if (e || d->state.quarantine) { d->state.quarantine = true; kmutex_unlock(&d->register_lock); return -EIO; }
     d->state.running = false; d->inhibited = false;
@@ -180,6 +231,7 @@ int audio_dma_stop(struct audio_dma_device *d)
 }
 int audio_dma_prove(struct audio_dma_device *d)
 {
+    if (d->state.quarantine) return -EIO;
     memset(d->pcm, 0, AUDIO_HW_BYTES);
     d->proving = d->state.running = true;
     int e = d->ops->start(d, true);
@@ -204,7 +256,11 @@ static bool backend_irq(unsigned irq, const char *owner)
     (void)irq; (void)owner;
     struct audio_dma_device *d = &audio_dma;
     uint64_t begin = ktime_cycles();
-    if ((!d->state.ready && !d->proving) || !d->ops->ack(d)) return false;
+    /* DS-XG may finish its last bank while shutdown sleeps for busy-clear.
+     * Its callback owns the mapped device until detach and must acknowledge
+     * that source even after READY is revoked, without rearming MODE. */
+    bool stopping_ymf = d->kind == AUDIO_YMFPCI && d->irq_attached;
+    if ((!d->state.ready && !d->proving && !stopping_ymf) || !d->ops->ack(d)) return false;
     d->state.irqs++;
     /* IRQ cannot sleep. An exhausted cyclic buffer is inhibited using only
      * the immediate register operations in ack(); service then proves stop. */
@@ -229,14 +285,22 @@ static bool backend_idle_proof(int h, gen_t g)
 { (void)h; (void)g; return !audio_dma.state.running && !audio_dma.irq_attached && !audio_dma.state.quarantine; }
 static int backend_codec_restore(struct audio_dma_device *d)
 {
+    if (maestro_kind(d->kind)) return maestro_restore(d);
+    if (emu10k1_kind(d->kind)) return emu10k1_restore(d);
     if (!d->codec_changed) return 0;
+    if (d->kind == AUDIO_CMIPCI) return cmipci_restore(d);
     if (d->kind == AUDIO_SB16) return sb16_restore(d);
     if (d->kind == AUDIO_ES1370) return d->ops->mute(d, true); /* write-only AK4531: safe mute */
     static const uint16_t regs[] = {2,0x18,0x26,0x2a};
-    int (*write)(struct audio_dma_device *,uint16_t,uint16_t) = d->kind == AUDIO_ES1371 ? es137x_codec_write : via82xx_codec_write;
+    int (*write)(struct audio_dma_device *,uint16_t,uint16_t) = d->voice_codec_write ? d->voice_codec_write :
+        d->kind == AUDIO_ES1371 ? es137x_codec_write :
+        d->kind == AUDIO_YMFPCI ? ymfpci_codec_write : via82xx_codec_write;
     /* Restore rate mode while still powered, power last. */
     static const unsigned order[] = {3,1,0,2};
-    for (unsigned i = 0; i < 4; i++) { unsigned at = order[i]; int e = write(d, regs[at], d->codec_saved[at]); if (e) return e; }
+    struct ac97_codec_ops io=dma_policy_ops(d);
+    int e=ac97_codec_unpatch(&d->codec,&io); if (e) return e;
+    if (d->codec_saved_count==5) { e=write(d,4,d->codec_saved[4]); if (e) return e; }
+    for (unsigned i = 0; i < 4; i++) { unsigned at = order[i]; e = write(d, regs[at], d->codec_saved[at]); if (e) return e; }
     d->codec_changed = false; return 0;
 }
 void audio_backend_shutdown(void)
@@ -249,10 +313,15 @@ void audio_backend_shutdown(void)
     }
     struct audio_dma_device *d = &audio_dma; d->state.ready = false;
     bool unsafe = d->state.quarantine;
+    uint64_t previous_deadline=d->activation_deadline;
+    if (d->kind==AUDIO_CMIPCI) d->activation_deadline=audio_hw_deadline(d,500);
+    if (!unsafe && d->capture.phys && audio_capture_shutdown(d)) unsafe = true;
     if (d->touched) {
         if (d->state.quarantine) d->ops->inhibit(d); /* no reset after permanent quarantine */
         else if (audio_dma_stop(d)) unsafe = true;
+        if (d->kind == AUDIO_CMIPCI && cmipci_capture_stop(d)) unsafe = true;
     }
+    d->activation_deadline=previous_deadline;
     if (d->irq_attached) {
         /* sb_halt gates DMA5, cancels DSP auto-init and acknowledges the
          * 16-bit source. Clean detach needs no 8259 mask transaction. */
@@ -261,14 +330,22 @@ void audio_backend_shutdown(void)
         else d->irq_attached = false;
     }
     if (!unsafe && backend_codec_restore(d)) unsafe = true;
+    if (!unsafe && d->kind == AUDIO_YMFPCI && ymfpci_release(d)) unsafe = true;
+    if (!unsafe && d->touched && d->voice_restore && d->voice_restore(d)) unsafe = true;
     if (!unsafe && d->touched && d->kind != AUDIO_SB16) {
-        if (d->link_changed) audio_pci_write(&d->io, &d->pci, 0x41, d->saved_link, 1);
-        if (d->legacy_changed) audio_pci_write(&d->io, &d->pci, 0x42, d->saved_legacy, 1);
+        if (d->kind != AUDIO_YMFPCI && d->link_changed) audio_pci_write(&d->io, &d->pci, 0x41, d->saved_link, 1);
+        if (d->kind != AUDIO_YMFPCI && d->legacy_changed) audio_pci_write(&d->io, &d->pci, 0x42, d->saved_legacy, 1);
         uint32_t config=audio_pci_read(&d->io,&d->pci,0x40);
-        if ((d->link_changed && ((config>>8)&255)!=d->saved_link) ||
-            (d->legacy_changed && ((config>>16)&255)!=d->saved_legacy)) unsafe=true;
+        if (d->kind != AUDIO_YMFPCI && ((d->link_changed && ((config>>8)&255)!=d->saved_link) ||
+            (d->legacy_changed && ((config>>16)&255)!=d->saved_legacy))) unsafe=true;
         audio_pci_write(&d->io, &d->pci, 4, d->command & ~4u, 2);
         if ((audio_pci_read(&d->io, &d->pci, 4) & 0xffff) != (d->command & ~4u)) unsafe = true;
+    }
+    /* Retire pins before releasing their physical leases. A rejected unpin
+     * retains the buffer and claims; never free a still-accounted DMA page. */
+    if (!unsafe && mm_unpin) for (unsigned i=0;i<ARRAY_SIZE(backend_pins);i++) if (backend_pins[i].ticket) {
+        if (mm_unpin(&backend_pins[i],backend_pins[i].generation)) { unsafe=true; break; }
+        backend_pins[i].ticket=0;
     }
     d->state.quarantine = unsafe;
     for (unsigned i = 0; i < 8; i++) if (d->claims[i] >= 0) {
@@ -283,19 +360,35 @@ void audio_backend_shutdown(void)
              d->name,d->state.irq);
         audio.quarantined = true; audio.reason = "stop_unproved"; return;
     }
-    if (mm_unpin) for (unsigned i=0;i<2;i++) if (backend_pins[i].ticket) {
-        (void)mm_unpin(&backend_pins[i],backend_pins[i].generation); backend_pins[i].ticket=0;
-    }
+    if (d->mmio) { vmm_revoke_mmio((void *)d->mmio, d->bytes); d->mmio = 0; }
     if (d->phys) {
-        for (unsigned i = 0; i < AUDIO_HW_BYTES / PAGE_SIZE; i++) { mm_free(d->phys + i * PAGE_SIZE, MM_DMA); audio.commitment_pages--; }
+        unsigned pages=d->dma_pages ? d->dma_pages : AUDIO_HW_BYTES/PAGE_SIZE;
+        for (unsigned i = 0; i < pages; i++) { mm_free(d->phys + i * PAGE_SIZE, MM_DMA); audio.commitment_pages--; }
         d->phys = 0; d->pcm = 0;
     }
-    if (d->desc_phys) { mm_free(d->desc_phys, MM_DMA); audio.commitment_pages--; d->desc_phys = 0; d->desc = 0; }
+    if (d->desc_phys) {
+        for (unsigned i=0;i<(d->desc_pages ? d->desc_pages : 1);i++) {
+            mm_free(d->desc_phys+i*PAGE_SIZE, MM_DMA); audio.commitment_pages--;
+        }
+        d->desc_phys = 0; d->desc = 0; d->desc_pages = 0;
+    }
+    if (d->cmi.phys) {
+        for (unsigned i=0;i<AUDIO_HW_BYTES/PAGE_SIZE;i++) { mm_free(d->cmi.phys+i*PAGE_SIZE,MM_DMA); audio.commitment_pages--; }
+        d->cmi.phys=0; d->cmi.pcm=0;
+    }
+    if (d->kind == AUDIO_YMFPCI) d->touched = false; /* MMIO is revoked; clean teardown is idempotent. */
 }
 static int backend_dma_init(struct audio_dma_device *d)
 {
+    if (d->state.quarantine) return -EIO;
     kmutex_init(&d->register_lock);
-    int e = backend_claim(d, 0, RES_PORT, d->base, d->base + d->bytes, false);
+    int e = d->kind == AUDIO_YMFPCI ?
+        backend_claim(d, 0, RES_MMIO, d->mmio_phys, d->mmio_phys + d->bytes, false) :
+        backend_claim(d, 0, RES_PORT, d->base, d->base + d->bytes, false);
+    if (!e && d->kind == AUDIO_YMFPCI) {
+        d->mmio = vmm_map_mmio(d->mmio_phys, d->bytes, true);
+        if (!d->mmio) { d->reason = "mmio_mapping_failed"; e = -ENOMEM; }
+    }
     if (!e && d->kind == AUDIO_SB16) {
         /* Assignment registers are read before reset or DMA writes. */
         audio_hw_write(d, 4, 0x80, 1); unsigned irq = audio_hw_read(d, 5, 1);
@@ -308,29 +401,60 @@ static int backend_dma_init(struct audio_dma_device *d)
     }
     if (!e) e = backend_claim(d, 1, RES_IRQ, d->state.irq, d->state.irq + 1u, d->kind != AUDIO_SB16);
     if (!e) {
-        d->phys = d->kind == AUDIO_SB16 ? pmm_alloc_dma_run(AUDIO_HW_BYTES / PAGE_SIZE, AUDIO_HW_BYTES / PAGE_SIZE) : pmm_alloc_contig(AUDIO_HW_BYTES / PAGE_SIZE);
+        d->dma_pages=(maestro_kind(d->kind) ? MAESTRO_ARENA_BYTES : AUDIO_HW_BYTES)/PAGE_SIZE;
+        d->phys = d->kind == AUDIO_SB16 || maestro_kind(d->kind) || d->kind >= AUDIO_TRIDENT_DX ? pmm_alloc_dma_run(d->dma_pages,d->kind >= AUDIO_TRIDENT_DX ? 1 : d->dma_pages) : pmm_alloc_contig(d->dma_pages);
         if (!d->phys) e = -ENOMEM;
-        else { mm_claim(d->phys,AUDIO_HW_BYTES/PAGE_SIZE,MM_DMA); d->pcm = P2V(d->phys); memset(d->pcm, 0, AUDIO_HW_BYTES); audio.commitment_pages += AUDIO_HW_BYTES / PAGE_SIZE; }
+        else {
+            mm_claim(d->phys,d->dma_pages,MM_DMA); memset(P2V(d->phys),0,d->dma_pages*PAGE_SIZE);
+            d->pcm = P2V(d->phys+(maestro_kind(d->kind) ? MAESTRO_PLAY_OFFSET : 0));
+            audio.commitment_pages += d->dma_pages;
+        }
     }
-    if (!e) e = backend_claim(d, 4, RES_MMIO, d->phys, d->phys + AUDIO_HW_BYTES, false);
-    if (!e && (d->kind == AUDIO_VIA686 || d->kind == AUDIO_VIA8233)) {
-        d->desc_phys = pmm_alloc();
+    if (!e && d->kind >= AUDIO_TRIDENT_DX && d->phys > audio_voice_mask(d) - (AUDIO_HW_BYTES - 1))
+        e = -ENOMEM;
+    if (!e) e = backend_claim(d, 4, RES_MMIO, d->phys, d->phys + d->dma_pages*PAGE_SIZE, false);
+    if (!e && (d->kind == AUDIO_VIA686 || d->kind == AUDIO_VIA8233 || emu10k1_kind(d->kind) || d->kind == AUDIO_YMFPCI)) {
+        d->desc_pages = emu10k1_kind(d->kind) ? emu10k1_aux_pages(d->kind) : 1;
+        d->desc_phys = d->desc_pages == 1 ? pmm_alloc() : pmm_alloc_contig(d->desc_pages);
         if (!d->desc_phys) e = -ENOMEM;
-        else { mm_claim(d->desc_phys,1,MM_DMA); d->desc = P2V(d->desc_phys); memset(d->desc, 0, PAGE_SIZE); audio.commitment_pages++;
-               e = backend_claim(d, 5, RES_MMIO, d->desc_phys, d->desc_phys + PAGE_SIZE, false); }
+        else { mm_claim(d->desc_phys,d->desc_pages,MM_DMA); d->desc = P2V(d->desc_phys);
+               memset(d->desc, 0, d->desc_pages*PAGE_SIZE); audio.commitment_pages+=d->desc_pages;
+               e = backend_claim(d, 5, RES_MMIO, d->desc_phys, d->desc_phys + d->desc_pages*PAGE_SIZE, false); }
+    }
+    uint32_t dma_mask = d->kind==AUDIO_SB16 ? 0xffffffu :
+                        emu10k1_kind(d->kind) ? emu10k1_dma_mask(d->kind) :
+                        d->kind >= AUDIO_TRIDENT_DX ? audio_voice_mask(d) : UINT32_MAX;
+    if (!e && (d->phys>dma_mask-(AUDIO_HW_BYTES-1) ||
+        (d->desc_phys && d->desc_phys>dma_mask-(d->desc_pages*PAGE_SIZE-1)))) e=-ENOMEM;
+    if (!e && d->kind == AUDIO_CMIPCI) {
+        d->cmi.phys=pmm_alloc_contig(AUDIO_HW_BYTES/PAGE_SIZE);
+        if (!d->cmi.phys) e=-ENOMEM;
+        else {
+            mm_claim(d->cmi.phys,AUDIO_HW_BYTES/PAGE_SIZE,MM_DMA);
+            d->cmi.pcm=P2V(d->cmi.phys); memset(d->cmi.pcm,0,AUDIO_HW_BYTES);
+            audio.commitment_pages+=AUDIO_HW_BYTES/PAGE_SIZE;
+            e=backend_claim(d,5,RES_MMIO,d->cmi.phys,d->cmi.phys+AUDIO_HW_BYTES,false);
+        }
     }
     if (!e && mm_pin) {
         memset(backend_pins,0,sizeof(backend_pins));
         uint32_t generation=d->generations[1];
         backend_pins[0]=(struct mm_pin){.generation=generation,.first_pfn=d->phys/PAGE_SIZE,
-            .pages=AUDIO_HW_BYTES/PAGE_SIZE,.address_mask=d->kind==AUDIO_SB16 ? 0xffffffu : UINT32_MAX,
-            .alignment=d->kind==AUDIO_SB16 ? AUDIO_HW_BYTES : 4,
-            .boundary=d->kind==AUDIO_SB16 ? 131072u : 0,.direction=MM_PIN_TO_DEVICE};
+            .pages=d->dma_pages,.address_mask=maestro_kind(d->kind) ? 0x0fffffffu : dma_mask,
+            .alignment=maestro_kind(d->kind) ? MAESTRO_ARENA_BYTES : d->kind==AUDIO_SB16 ? AUDIO_HW_BYTES : 4,
+            .boundary=maestro_kind(d->kind) ? 0x400000u : d->kind==AUDIO_SB16 ? 131072u : 0,
+            .direction=maestro_kind(d->kind) ? MM_PIN_BIDIRECTIONAL : MM_PIN_TO_DEVICE};
         e=mm_pin(&backend_pins[0]);
         if (!e && d->desc_phys) {
             backend_pins[1]=(struct mm_pin){.generation=generation,.first_pfn=d->desc_phys/PAGE_SIZE,
-                .pages=1,.address_mask=UINT32_MAX,.alignment=8,.direction=MM_PIN_TO_DEVICE};
+                .pages=d->desc_pages,.address_mask=dma_mask,.alignment=emu10k1_kind(d->kind) ? PAGE_SIZE : d->kind==AUDIO_YMFPCI ? 256 : 8,
+                .direction=(emu10k1_kind(d->kind) || d->kind==AUDIO_YMFPCI) ? MM_PIN_BIDIRECTIONAL : MM_PIN_TO_DEVICE};
             e=mm_pin(&backend_pins[1]);
+        }
+        if (!e && d->cmi.phys) {
+            backend_pins[2]=(struct mm_pin){.generation=generation,.first_pfn=d->cmi.phys/PAGE_SIZE,
+                .pages=AUDIO_HW_BYTES/PAGE_SIZE,.address_mask=UINT32_MAX,.alignment=4,.direction=MM_PIN_FROM_DEVICE};
+            e=mm_pin(&backend_pins[2]);
         }
     }
     if (!e) {
@@ -338,6 +462,9 @@ static int backend_dma_init(struct audio_dma_device *d)
         e = d->ops->prepare(d); audio.backend_touched = d->touched;
     }
     if (!e) e = audio_dma_prove(d);
+    if (!e && d->kind == AUDIO_CMIPCI) e=cmipci_capture_prove(d);
+    if (!e && d->kind == AUDIO_CMIPCI)
+        klog("[audio] cmipci model=%u playback=stereo48k capture=private legacy=disabled",d->cmi.model);
     if (!e) {
         d->state.ready = true;
         if (d->kind == AUDIO_SB16) { irq_set_handler(5, backend_isa_irq); d->irq_attached = true; pic_unmask(5); }
@@ -362,6 +489,8 @@ static int backend_dma_init(struct audio_dma_device *d)
 }
 int audio_backend_init(void)
 {
+    /* Quarantined DMA retains its original owner; never select a fallback. */
+    if (audio.quarantined || audio_dma.state.quarantine) { audio.reason = "stop_unproved"; return -EIO; }
     dma_selected = false;
     int e = ac97_init();
     if (e != -ENODEV || ac97.pci.vendor) {
@@ -376,17 +505,28 @@ int audio_backend_init(void)
         const struct pci_func *p = pci_get(i);
         if (es137x_match(p, &d->kind)) { d->ops = &es137x_ops; d->name = "es137x"; d->bytes = 64; }
         else if (via82xx_match(p, &d->kind)) { d->ops = &via82xx_ops; d->name = "via82xx"; d->bytes = 256; }
+        else if (maestro_match(p, &d->kind)) { d->ops = &maestro_ops; d->name = "ess1978"; d->bytes = 256; }
+        else if (emu10k1_match(p, &d->kind)) { d->ops = &emu10k1_ops; d->name = "emu10k1"; d->bytes = 32; }
+        else if (cmipci_match(p, &d->kind)) { d->ops = &cmipci_ops; d->name = "cmipci"; d->bytes = 256; }
+        else if (ymfpci_match(p, &d->kind)) { d->ops = &ymfpci_ops; d->name = "ymfpci"; d->bytes = 0x8000; }
+        else if (trident_match(p, &d->kind)) { d->ops = &trident_ops; d->name = "trident"; d->bytes = 256; }
+        else if (ali5451_match(p, &d->kind)) { d->ops = &ali5451_ops; d->name = "ali5451"; d->bytes = 256; }
         else continue;
-        d->pci = *p; d->command = p->command; d->state.irq = p->irq_line; break;
+        d->pci = *p; d->command = p->command; d->state.irq = p->irq_line;
+        audio.backend_name=d->name; audio.backend_pci=d->pci; break;
     }
     if (!d->ops) { d->kind = AUDIO_SB16; d->ops = &sb16_ops; d->name = "sb16"; d->base = 0x220; d->bytes = 16; d->state.irq = 5; }
-    else {
+    else if (d->kind == AUDIO_YMFPCI) {
+        audio.backend_name = d->name; audio.backend_pci = d->pci;
+        e = ymfpci_resources(d);
+        if (e) { audio.reason = d->reason; return e; }
+    } else {
         uint32_t base = d->pci.bar[0] & ~(uint32_t)(d->bytes - 1);
         if ((d->pci.header_type & 0x7f) || !(d->pci.bar[0] & 1) || (d->pci.bar[0] & (d->bytes - 2)) || !base || base > 0x10000u - d->bytes) {
             audio.reason = "invalid_bars"; return -ENODEV;
         }
         d->base = base;
-        if (!(d->command&1) && ((d->command&4) || d->kind>=AUDIO_VIA686)) {
+        if (!(d->command&1) && ((d->command&4) || d->kind==AUDIO_VIA686 || d->kind==AUDIO_VIA8233 || emu10k1_kind(d->kind) || d->kind==AUDIO_CMIPCI)) {
             audio.reason="firmware_state_unreadable"; return -ENODEV;
         }
         if (!audio_pci_routed(&d->io, &d->pci)) { audio.reason = "routing_unqualified"; return -ENODEV; }
@@ -418,6 +558,7 @@ int audio_backend_master(const struct ciuki_mixer_master *m)
 {
     if (!dma_selected) return ac97_set_master(&ac97,m);
     kmutex_lock(&audio_dma.register_lock);
+    if (audio_dma.state.quarantine) { kmutex_unlock(&audio_dma.register_lock); return -EIO; }
     int e=audio_dma.ops->mute(&audio_dma,m->mute);
     kmutex_unlock(&audio_dma.register_lock); return e;
 }
