@@ -581,7 +581,49 @@ static int file_cluster(struct fat_volume *v, const struct fat_entry *file,
     return chain_at(v,from,index-at,out);
 }
 static void cursor_set(struct fat_cursor *cursor, const struct fat_entry *file, uint32_t index, uint32_t cluster) {
-    if (cursor) *cursor=(struct fat_cursor){.generation=file->chain_generation,.first=file->first,.index=index,.cluster=cluster};
+    if (!cursor) return;
+    /* fx-16: the leading run belongs to the chain generation, not to the position. */
+    uint32_t run0=cursor->generation==file->chain_generation && cursor->first==file->first ? cursor->run0 : 0;
+    *cursor=(struct fat_cursor){.generation=file->chain_generation,.first=file->first,.index=index,.cluster=cluster,.run0=run0};
+}
+/* fx-16: a read seek resolves its cluster in O(1) inside the file's leading
+ * contiguous run and learns that run from the walks it already makes.
+ * file_cluster follows MS-DOS FNDCLUS: from the open file's cursor when the
+ * target is not before it, otherwise from the first cluster. DOOM reads its
+ * lumps with lseek+read in WAD order, not file order, so about half of the
+ * reads walked the chain from the start: an 11-12 MB DOOM.WAD on a 4 KiB
+ * cluster FAT32 is ~3000 links, 1 us each on the T23 (get_copy's own cost
+ * note), synchronously inside the guest's INT 21h/IFS call. T23 trial
+ * e831e685 BOOT.LOG vm_perf_vector n=6: INT FEh 619 calls, 736 ms in 5 s,
+ * while the SB16 IRQ waited up to 69-178 ms (no virtual interrupt is served
+ * during a monitor service). Linux keeps per-inode contiguous runs for the
+ * same reason (fs/fat/cache.c: fat_cache_lookup, nr_contig). Every chain
+ * mutation stamps a new chain_generation (f3-51c), which retires run0. */
+static int read_cluster(struct fat_volume *v, const struct fat_entry *file,
+                        struct fat_cursor *cursor, uint32_t index, uint32_t *out) {
+    if (!cursor || !valid(v,file->first) || index>=v->clusters) return file_cluster(v,file,cursor,index,out);
+    if (cursor->generation!=file->chain_generation || cursor->first!=file->first)
+        *cursor=(struct fat_cursor){.generation=file->chain_generation,.first=file->first,.index=0,.cluster=file->first};
+    uint32_t run=cursor->run0 ? cursor->run0 : 1;
+    if (index<run) { *out=file->first+index; return 0; }
+    /* Nearest valid pair at or before the target, the run's end included. */
+    uint32_t from=file->first+run-1, at=run-1;
+    const struct fat_cursor *hints[2]={cursor,&file->write_cursor};
+    for (unsigned i=0;i<2;i++)
+        if (cursor_valid(v,file,hints[i]) && hints[i]->index<=index && hints[i]->index>at) {
+            from=hints[i]->cluster; at=hints[i]->index;
+        }
+    bool extending=at==run-1;
+    uint32_t c=from;
+    for (uint32_t i=at;i<index;i++) {
+        uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
+        if (eoc(v,n)) return -FS_ENOENT;
+        if (!valid(v,n)) return corrupt(v,"chain_link",n);
+        if (extending && n==c+1) run=i+2; else extending=false;
+        c=n;
+    }
+    cursor->run0=run;
+    *out=c; return 0;
 }
 static int dir_sector(struct fat_volume *v, uint32_t dir, uint32_t index, uint32_t *sec) {
     if (!dir && v->type!=32) {
@@ -992,7 +1034,7 @@ static int read_span(struct fat_volume *v, const struct fat_entry *file, struct 
     if (size>file->size-pos) size=(size_t)(file->size-pos);
     uint32_t c; uint32_t cluster_bytes=(uint32_t)v->spc*512;
     uint32_t index=(uint32_t)pos/cluster_bytes;
-    int e=file_cluster(v,file,cursor,index,&c); if (e) return e;
+    int e=read_cluster(v,file,cursor,index,&c); if (e) return e;
     unsigned off=(uint32_t)pos%cluster_bytes; uint32_t walked=0;
     while (size) {
         if (off%512 || size<512) {

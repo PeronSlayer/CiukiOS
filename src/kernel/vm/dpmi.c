@@ -244,6 +244,7 @@ int dpmi_entry_complete(struct dosvm *v, struct v86_frame *f, uint16_t psp)
     memcpy(cl->saved_exc, d->exc, sizeof(d->exc));
     if (c) d->client[c - 1].suspended_if_armed = d->if_armed;
     d->clients++;
+    dpmi_cli_sites_reset(v); /* fx-16: proofs belong to one client's code */
     struct v86_frame p;
     memset(&p, 0, sizeof(p));
     p.tf.eax = n.tf.eax; p.tf.ebx = n.tf.ebx; p.tf.ecx = n.tf.ecx; p.tf.edx = n.tf.edx;
@@ -275,6 +276,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     (void)from_pm;
     if (!d->clients) return 0;
     d->decode_valid = false;
+    dpmi_cli_sites_reset(v);
     unsigned c = d->clients - 1;
     v->vbe_mapped[c]=false;
     uint8_t id = (uint8_t)(c + 1);

@@ -9,6 +9,10 @@ static void isr_stats(const char *phase)
            gv->perf.isr_retired, gv->perf.isr_expired);
     for (unsigned i = 0; i < DOSVM_IF_PATHS; i++)
         printf("isr_enable phase=%s path=%s count=%u\n", phase, paths[i], gv->perf.if_enable[i]);
+    const struct dpmi_cli_stats *c = &gv->dpmi.cli;
+    printf("isr_cli phase=%s candidates=%u hits=%u proved=%u control=%u pattern=%u missed=%u seeds=%u seeds_skipped=%u irq_proofs=%u irq_proofs_skipped=%u\n",
+           phase, c->candidates, c->hits, c->proved, c->control, c->pattern, c->missed, c->seeds, c->seeds_skipped,
+           c->irq_proofs, c->irq_proofs_skipped);
     for (unsigned irq = 0; irq < 16; irq++) {
         const struct dosvm_isr_cost *s = &gv->perf.isr[irq];
         if (!s->count && irq != 0 && irq != 7) continue;
@@ -26,6 +30,10 @@ static bool isr_replay(void)
     isr_stats("startup");
     memset(gv->perf.isr, 0, sizeof(gv->perf.isr));
     memset(gv->perf.if_enable, 0, sizeof(gv->perf.if_enable));
+    memset(&gv->dpmi.cli, 0, sizeof(gv->dpmi.cli));
+    memset(t23_charged_ns, 0, sizeof(t23_charged_ns)); memset(t23_exits, 0, sizeof(t23_exits));
+    uint64_t pit_edges = gv->pit.edges, pit_lost = gv->pit.lost_edges, pit_reinjected = gv->pit.reinjected;
+    uint32_t sb_late = gv->audio.cadence_late_acks;
     gv->perf.if_samples_ms = gv->perf.if_clear_ms = gv->perf.if_outside_ms = 0;
     gv->perf.isr_max_depth = 0;
     gv->perf.isr_retired = gv->perf.isr_expired = 0;
@@ -62,6 +70,24 @@ static bool isr_replay(void)
            c->blocks, c->merged, c->irq_entries, (unsigned long long)avg, c->irq_latency_max_us,
            c->if_clear, c->descheduled, c->parked,
            target);
+    if (t23_model) {
+        static const char *const names[DOSVM_COST_COUNT] = {"rm_int", "rm_iret", "rm_flags", "pm_int", "pm_flags", "switch",
+            "vga_io", "vga_pf", "pit_pic", "kbd", "io", "db", "timer", "other",
+            "rm_pushf", "rm_popf", "rm_cli", "rm_sti", "rm_hlt", "pm_hlt", "dpmi", "host_irq"};
+        uint64_t total = 0;
+        for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) {
+            total += t23_charged_ns[i];
+            if (t23_exits[i]) printf("t23_cost cause=%s exits=%llu ms=%.1f us_per_exit=%.1f\n", names[i],
+                (unsigned long long)t23_exits[i], t23_charged_ns[i] / 1e6, t23_charged_ns[i] / 1e3 / t23_exits[i]);
+        }
+        uint64_t edges = gv->pit.edges - pit_edges, irq0 = gv->monitor.stats.delivered[0] - timer;
+        printf("t23_model ms=%llu monitor_ms=%.1f monitor_pm=%.0f pit_edges=%llu irq0=%llu irq0_lost_pm=%.1f reinjected=%llu lost=%llu sb_late_acks=%u merged=%u if_clear=%u descheduled=%u irq_latency_avg_us=%llu irq_latency_max_us=%u\n",
+            (unsigned long long)ms, total / 1e6, ms ? total / 1e3 / ms : 0.0,
+            (unsigned long long)edges, (unsigned long long)irq0, edges ? 1000.0 * (double)(edges > irq0 ? edges - irq0 : 0) / edges : 0.0,
+            (unsigned long long)(gv->pit.reinjected - pit_reinjected), (unsigned long long)(gv->pit.lost_edges - pit_lost),
+            gv->audio.cadence_late_acks - sb_late, c->merged, c->if_clear, c->descheduled, (unsigned long long)avg,
+            c->irq_latency_max_us);
+    }
     isr_stats("shooting");
     return progress && audio && (!sound || target) && !unexpected && !stopped();
 }

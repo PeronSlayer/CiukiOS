@@ -170,8 +170,14 @@ static void test_timer_call_flags_boundary(void)
         v->monitor.vif = true; v->dpmi.if_armed = false;
         v->dpmi.decode_valid = false; cur.tf.eip = 0x500; step(v, 0x20, 0);
         cur.tf.user_esp = sp - w; cur.tf.eip = 0x202; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+        struct dpmi_cli_stats was = v->dpmi.cli;
         step(v, 13, 0);
-        CHECK(!left && !v->dpmi.if_armed && cur.tf.eax == (V86_IF | 2));
+        /* fx-16: the control proof still refuses the cached target; the
+         * Windows 95 rule arms on the genuine PUSHF; POP EAX before the CLI
+         * (no decode reached it, so nothing disproves the pattern). */
+        CHECK(!left && v->dpmi.cli.control == was.control && v->dpmi.cli.pattern == was.pattern + 1 &&
+              v->dpmi.if_armed && (cur.tf.eax & V86_TF));
+        v->dpmi.if_armed = false; dpmi_cli_sites_reset(v);
         /* An absolute DS store is provably outside the snapshotted stack. */
         uint8_t absolute[9] = {0x89, bits ? 0x05 : 0x06};
         uint32_t off = 0x10; memcpy(absolute + 2, &off, w);
@@ -191,8 +197,11 @@ static void test_timer_call_flags_boundary(void)
         cur.tf.user_esp = sp; v->monitor.vif = true; v->dpmi.if_armed = false; v->dpmi.decode_valid = false;
         cur.tf.eip = 0x600; step(v, 0x20, 0);
         cur.tf.eip = 0x600 + 1 + w + 2; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+        was = v->dpmi.cli;
         step(v, 13, 0);
-        CHECK(!left && !v->dpmi.if_armed && cur.tf.eax == (V86_IF | 2));
+        CHECK(!left && v->dpmi.cli.control == was.control && v->dpmi.cli.pattern == was.pattern + 1 &&
+              v->dpmi.if_armed && (cur.tf.eax & V86_TF));   /* fx-16, as above */
+        v->dpmi.if_armed = false; dpmi_cli_sites_reset(v);
         if (bits) {
             /* rel16 CALL from a high 32-bit PC pushes only a 16-bit return
              * offset. RET16 cannot prove a save at the high fall-through. */
@@ -203,8 +212,10 @@ static void test_timer_call_flags_boundary(void)
                   !dosvm_write(v, base + 0x200, ret16, sizeof(ret16)));
             cur.tf.user_esp = sp; v->monitor.vif = true; v->dpmi.if_armed = false; v->dpmi.decode_valid = false;
             cur.tf.eip = 0x10500; step(v, 0x20, 0);
-            cur.tf.eip = 0x10506; cur.tf.eax = cur.tf.eflags = V86_IF | 2; step(v, 13, 0);
-            CHECK(!left && !v->dpmi.if_armed && cur.tf.eax == (V86_IF | 2));
+            cur.tf.eip = 0x10506; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+            was = v->dpmi.cli; step(v, 13, 0);
+            CHECK(!left && v->dpmi.cli.control == was.control && v->dpmi.cli.proved == was.proved &&
+                  v->dpmi.cli.pattern == was.pattern + 1 && v->dpmi.if_armed && (cur.tf.eax & V86_TF));
         }
         destroy(v, true); empty();
     }

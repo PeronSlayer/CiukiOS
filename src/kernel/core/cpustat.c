@@ -228,7 +228,13 @@ static void stretch_end(struct task *t, uint64_t now, uint32_t eip)
 {
     if (!t || t->prio == P_IDLE || !t->stretch_start) return;
     uint64_t d = now - t->stretch_start;
-    if (d > 20 * per_ms() && !t->stretch_sampled) {
+    /* fx-16: name the site of shorter stretches too. T23 trial e831e685
+     * reported stretch_max_ms=7-8 for desktop#40 and dosvm#59 with
+     * eip=00000000 (unsampled below 20 ms) while the VM clock service was
+     * held off for the same 8-9 ms (cadence_clock gap_max_ms). The first
+     * kernel PIT tick beyond 4 ms records its EIP; the 20 ms threshold of
+     * the diagnostic dump is unchanged. */
+    if (d > 4 * per_ms() && !t->stretch_sampled) {
         t->active_stretch_eip = eip; t->stretch_sampled = true;
     }
     if (d > t->max_stretch) {

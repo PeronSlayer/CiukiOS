@@ -932,11 +932,17 @@ static void test_sb_cadence_record(void)
     g_current = &caller; v->fullscreen_parked = false;
     CHECK(vm_audio_logs == logs && v->audio.diag.cadence_pending);
     struct dosvm_sb_cadence c = v->audio.diag.cadence;
-    CHECK(c.blocks == 430 && c.merged == 428 && c.late_acks == 1 && c.ack_max_frames > 90000);
-    CHECK(c.descheduled && c.parked && c.if_clear);
+    /* fx-16: parked from t=3300 (1701 clock turns): the VM's devices stop,
+     * as a suspended Windows 9x VM gets no simulated interrupt. The DSP ran
+     * 3299 ms (284 blocks of 128 stereo frames at 11025 Hz), its position
+     * equals the VM clock and no auto-init block replayed during the park
+     * (before: 430 blocks, 146 of them stale replays while parked). */
+    CHECK(c.blocks == 284 && c.merged == 282 && c.late_acks == 1 && c.ack_max_frames > 90000);
+    CHECK(c.descheduled && c.parked == 1701 && c.if_clear && v->parked_ms == 1701);
+    CHECK(v->audio.clock == 3299ull * DOSVM_AUDIO_PER_MS && v->audio.sb.pos == v->audio.clock);
     dosvm_audio_log(v); /* fx-9: cadence_clock, then the cadence line */
     CHECK(vm_audio_logs == logs + 2 && !v->audio.diag.cadence_pending);
-    CHECK(strstr(last_vm_audio_log, "cadence blocks=430 late_acks=1 merged=428 ack_max_ms=") &&
+    CHECK(strstr(last_vm_audio_log, "cadence blocks=284 late_acks=1 merged=282 ack_max_ms=") &&
           strstr(last_vm_audio_log, "irq_latency_max_us=0 underruns=0 irq_latency_avg_us=0") &&
           strstr(last_vm_audio_log, "descheduled=") && strstr(last_vm_audio_log, "parked=") &&
           strstr(last_vm_audio_log, "if_clear="));
@@ -947,7 +953,8 @@ static void test_sb_cadence_record(void)
     dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 2 && v->audio.diag.cadence_pending);
     v->dpmi.depth = 0;
     dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 4 && !v->audio.diag.cadence_pending);
-    CHECK(v->audio.diag.cadence.blocks == 431 && !v->audio.diag.cadence.late_acks);
+    /* fx-16: the 1701 ms park shifted the DSP phase by 146.5 blocks. */
+    CHECK(v->audio.diag.cadence.blocks == 430 && !v->audio.diag.cadence.late_acks);
     dsp_reset(v); destroy(v, true); empty();
     puts("f3-40 protected cadence: five-second snapshots, real late ack age, merged IRQs, parked/descheduled/IF-clear counters, deferred outside ISR, no timer logging PASS");
 }

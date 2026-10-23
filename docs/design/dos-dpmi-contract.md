@@ -428,6 +428,29 @@ The retained serial history uses the same fields. These are observations,
 not predictions counted as proof. Host replay separates return TF and
 private breakpoint #DB causes.
 
+### fx-16 amendment: boundary seeds on demand (2026-10-23)
+
+Accepted by the lead at the fx-16 merge (2026-10-23): the Windows 95
+backward-byte pattern rule is admitted as the last resort for CLI sites no
+forward decode can reach; the f3-08 refusals and the f3-06/f3-34 forward
+proofs remain the first choice.
+
+Seeds (the return tracker's breakpoints and fallback steps, the forward
+boundary proof at every physical IRQ in PM, the 32-byte stack snapshot at
+every PM trap) serve only CLI proofs. With proven CLI sites kept per VM and
+the Windows 95 pattern rule as the last resort (`execution-abi.md`, fx-16
+amendment to F3-44), they are acquired only while a CLI needed a proof in
+the last `DPMI_SEED_IDLE_MS` (1 s) or before any site was proven since the
+client started; an acquisition already in flight completes. A CLI that
+misses the cache re-enables seeding at once, so a new site is proven at its
+next execution at latest. T23 trial e831e685 (BOOT.LOG, DOOM full screen,
+5 s banks n=7/n=8): 6,536-6,719 checkpoint #DB exits at 37 us and 7,236-7,568
+CLI/STI exits at 57 us cost 0.68 s of every 5 s. In the host T23-time model
+of the same game (`validation/fx-16-doom-stutter-crackle.md`) the monitor's
+share falls from 43.5 % to 30.4 %. The `vm_perf_tracker` and checkpoint rows
+remain; the `[vm-audio] cadence_clock` record now also reports
+`cli_hits`, `cli_learned`, `cli_missed` and `seeds_skipped`.
+
 ## DOS personality and VFS bridge
 
 **[F4]** Shared-drive routing MUST live inside CIUKIDOS before FAT/LFN

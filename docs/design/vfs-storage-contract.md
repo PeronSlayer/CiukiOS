@@ -964,6 +964,41 @@ versus 6,619), with the same SHA-256. A negative control that ignores the
 generation reads another cluster's bytes after a truncate reallocates the same
 first cluster with a shifted chain.
 
+### fx-16 amendment: the leading contiguous run (2026-10-23)
+
+`FNDCLUS` keeps one position, so a seek before it walks from the first
+cluster. DOOM reads its WAD with `lseek` + `read` per lump in the order the
+game asks for them (id Software
+[linuxdoom-1.10 `w_wad.c`](https://github.com/id-Software/DOOM/blob/master/linuxdoom-1.10/w_wad.c)
+`W_ReadLump`), so about half of its reads walked an 11-12 MB chain
+(~3,000 links at 4 KiB clusters, about 1 us each on the T23 per the decode
+note in `get_copy`), synchronously inside the DOS VM's file service. In
+T23 trial e831e685 the unified-DOS IFS calls (INT FEh) took 736 ms of one
+5 s full-screen window while the SB16 IRQ waited up to 69 ms
+(`validation/fx-16-doom-stutter-crackle.md`). Linux caches contiguous runs
+per inode for the same reason
+([`fs/fat/cache.c`](https://github.com/torvalds/linux/blob/master/fs/fat/cache.c),
+`fat_cache_lookup`, `nr_contig`).
+
+`struct fat_cursor` gains `run0`: chain indices `0..run0-1` are clusters
+`first..first+run0-1`. The read path (`read_cluster`, used by
+`read_span`) resolves an index inside that run in O(1); otherwise it walks
+from the nearest valid pair at or before the target, the run's last pair
+included, and extends `run0` while a walk that starts at the run's end
+finds `next == c + 1`. Learning costs no more lookups than the walks the
+reads already make (at most one pass over the chain in total). `run0`
+belongs to the chain generation, not to the position: `cursor_set` keeps
+it while the entry's first cluster and chain generation are unchanged, and
+every chain mutation's restamp retires it with the cursor. Writes and
+`fat_read` without a cursor are unchanged.
+
+Evidence (`test_cluster_cursor.c`, `doom_lump_reads`): 400 lump reads of
+1-48 KiB at scattered offsets of the 6,674-cluster file cost 895,017 FAT
+lookups before (2,204 per backward seek, about 2.2 ms on the T23) and 9,579
+after (6.2 per backward seek, 18 at most once the run is known); the
+earlier sequential, invalidation, write-generation and error cases are
+unchanged.
+
 ## Cache sizing and read-ahead
 
 F1-85 research (2026-10-19), before implementation: Microsoft's

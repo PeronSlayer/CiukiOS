@@ -414,6 +414,57 @@ consumption never demotes it (Win95 DDK: VPICD simulates hardware
 interrupts with `Time_Critical_Boost`). The generation pin, the 64 ms
 allowance, the one-second backlog drop and the 64-tick PIT cap are
 unchanged.
+
+Amendment fx-16 (2026-10-23, `docs/validation/fx-16-doom-stutter-crackle.md`):
+
+- **Suspended VMs keep no device time.** A VM parked at its full-screen
+  checkpoint (`fullscreen_parked`: the switch, or a background full-screen VM
+  its settings suspend) advances neither its PIT nor its SB16/OPL timeline;
+  the clock turn discards the parked milliseconds (`dosvm.parked_ms`).
+  Win95 DDK `VPICD_Set_Int_Request`: no interrupt is simulated into a VM that
+  "is suspended, or not able to run". Before, the DSP replayed the unrefilled
+  auto-init buffer for the whole switch (trial: `parked=808`, ack age 809 ms)
+  and the PIT edges of the switch merged away.
+- **IRQ0 reinjection, paced.** An 8259A latches one request per line, so a
+  PIT edge that finds IRQ0 still requested, or a second edge of one late
+  clock turn, was lost. The edge is now owed (at most
+  `DOSVM_PIT_OWED_MAX` = 4) and re-raised at a later clock turn when IRQ0 is
+  neither requested nor in service and half a timer period has passed since
+  the last IRQ0, as Linux KVM's i8254 keeps pending ticks in its default
+  reinject mode (`arch/x86/kvm/i8254.c`). The pacing keeps a handler slower
+  than its own timer from being re-entered back to back. A new edge still
+  raises at once; a masked IRQ0 latches as before and owes nothing; a
+  control word to channel 0 clears the debt; edges beyond the cap are
+  counted (`lost_edges`). DOSBox needs none of this: its PIT events are
+  placed in emulated time (`hardware/timer.cpp`, `PIT0_Event`).
+
+### fx-16 amendment to F3-44: proven CLI sites and the Windows 95 pattern
+
+- **Proof cache.** A CLI whose PUSHF[; POP r] adjacency was proven by the
+  forward decode keeps that proof per site (`dpmi_cli_site`, 32 per VM,
+  cleared at client entry and exit) with the 16 bytes before the CLI; every
+  reuse compares those bytes and still requires the live image (stack top
+  or register) to equal the flags image before setting TF.
+- **Windows 95 rule.** When no forward decode reaches the CLI (no seed, a
+  seed after it, or a path through a stack switch), the code immediately
+  before it must be `[66] 9C` or `[66] 9C [66] 5r` with matching operand
+  sizes, plus the same image check. This is the rule Windows 95 used for DOS
+  extender games: "inspects the code before the cli for the pushf pattern or
+  a known variant. It also checks that the value on top of the stack matches
+  the VM's current flags" (R. Chen, The Old New Thing, 2016-04-11). A decode
+  that does reach the CLI and finds other instructions is a disproof (the
+  f3-08 immediate-operand cases); pattern sites stay provisional and are
+  decoded again whenever a boundary before them is known.
+- **No recovery steps for an armed image.** Pending-IRQ recovery does not
+  single-step towards a restore while an armed image is in flight; that
+  image's TF trap reports the restore one instruction after its POPF/IRET.
+  The 2 ms time bound and the unarmed 4096-step budget are unchanged.
+
+Evidence: DOOM/DMX's timer service at 01df:00244264 (`push ebx; push edx;
+pushfd; pop eax; cli`) is reached through `sti; ... lss esp` and missed the
+proof 1,134 times in the host DOOM replay, leaving virtual IF clear after
+DMX's POPFD for the rest of the timer handler (where recovery is excluded),
+so the SB16 IRQ DMX had re-enabled waited for the handler's return.
 - Starvation guard: at 100 ms READY age, an ordinary thread receives one
   bounded dispatch at 15, without changing class. Actual device deadlines
   retain precedence; overdue dispatches precede nonurgent device work.

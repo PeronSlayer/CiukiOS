@@ -639,7 +639,7 @@ static void test_dpmi_memory_misc(void)
         struct dpmi snap = *d; struct v86_frame regs = cur;
         int31(v, refused[i]);
         CHECK(cf() && r16(cur.tf.eax) == refused[i] && cur.tf.ebx == regs.tf.ebx && cur.tf.ecx == regs.tf.ecx && cur.tf.edx == regs.tf.edx);
-        snap.stats = d->stats;
+        snap.stats = d->stats; snap.cli = d->cli; /* fx-16 per-trap seed counters */
         /* Trap-boundary cache advances independently of INT 31h state. */
         snap.decode_valid = d->decode_valid; snap.decode_cs = d->decode_cs; snap.decode_eip = d->decode_eip;
         CHECK(!memcmp(&snap, d, sizeof(snap)));
@@ -1186,14 +1186,16 @@ static void test_dpmi_if_cpu(void)
         uint16_t code = (uint16_t)cur.tf.cs;
         if (bits) v->dpmi.ldt[code >> 3][1] |= 0x400000u;
         uint32_t base = seg_base(v, code);
-        /* PUSHF; POP AX/EAX; CLI; PUSH AX/EAX; POPF. Unknown boundary
-         * deliberately prevents saved-image arming: recovery must work. */
-        const uint8_t save[] = {0x9C, 0x58, 0xFA, 0x50, 0x9D, 0x90};
+        /* PUSHF; POP AX/EAX; NOP; CLI; PUSH AX/EAX; POPF. Unknown boundary
+         * deliberately prevents saved-image arming: recovery must work.
+         * fx-16: the NOP keeps the save outside the Windows 95 pattern rule
+         * (PUSHF[; POP r] immediately before the CLI), which would arm it. */
+        const uint8_t save[] = {0x9C, 0x58, 0x90, 0xFA, 0x50, 0x9D, 0x90};
         CHECK(!dosvm_write(v, base + 0x300, save, sizeof(save)));
         cur.tf.eip = 0x300; cur.tf.eflags = V86_IF | 2;
         v->dpmi.decode_valid = false;
         struct gcpu_event ev;
-        CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x302);
+        CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x303);
         step(v, ev.vector, ev.err);
         CHECK(!v->monitor.vif && !v->dpmi.if_armed);
         if (form == 1 || form == 2) {
@@ -1201,8 +1203,8 @@ static void test_dpmi_if_cpu(void)
              * and ignored high selector bits in a 32-bit IRET image. */
             uint16_t target = code;
             if (form == 2) { client_desc(v, 900, base, 0xFFFF, 0xFA, bits ? 0x40 : 0); target=DPMI_SEL(900); }
-            uint8_t iret = 0xCF; CHECK(!dosvm_write(v, base + 0x303, &iret, 1));
-            pm_push(v, V86_IF | 2); pm_push(v, bits ? 0xA5A50000u | target : target); pm_push(v, 0x305);
+            uint8_t iret = 0xCF; CHECK(!dosvm_write(v, base + 0x304, &iret, 1));
+            pm_push(v, V86_IF | 2); pm_push(v, bits ? 0xA5A50000u | target : target); pm_push(v, 0x306);
         }
         if (form == 3) cur.tf.eax = 2; /* IF-clear POPF must not restore */
         v->dpmi.vec[8] = (struct dpmi_vec){.sel=code, .off=0x700};

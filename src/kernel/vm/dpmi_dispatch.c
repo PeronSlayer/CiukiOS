@@ -478,10 +478,21 @@ static const uint8_t *flags_read(struct dosvm *v, const struct dpmi_seg *cs,
     }
     return c->bytes + (at - c->at);
 }
+/* fx-16: *reached (optional) reports a decode that landed exactly on the
+ * CLI. flags_instruction refuses every transfer, so such a decode is a
+ * straight line from an observed boundary: the bytes before the CLI are
+ * known instructions, a failed proof is a disproof, and the Windows 95
+ * pattern rule (flags_pattern) must not arm. */
+static bool flags_preceding_reach(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
+                                  uint8_t *pop, unsigned *width, bool boundary_only, bool *reached);
 static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
                             uint8_t *pop, unsigned *width, bool boundary_only)
+{ return flags_preceding_reach(v, f, cs, pop, width, boundary_only, 0); }
+static bool flags_preceding_reach(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
+                                  uint8_t *pop, unsigned *width, bool boundary_only, bool *reached)
 {
     struct dpmi *d = &v->dpmi;
+    if (reached) *reached = false;
     uint32_t at = d->decode_eip, end = f->tf.eip;
     if (!d->decode_valid || d->decode_cs != (uint16_t)f->tf.cs || at > end ||
         end > cs->limit || end - at > 4096) return false;
@@ -498,6 +509,7 @@ static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct d
         previous = last; previous_w = last_w; last = op; last_w = w;
         at += len;
     }
+    if (reached) *reached = at == end;
     if (boundary_only) return true;
     if (last == 0x9C) { *pop = 0; *width = last_w; return true; }
     if (previous != 0x9C || previous_w != last_w || !pop_register(f, last)) return false;
@@ -693,6 +705,101 @@ static bool flags_control_preceding(struct dosvm *v, struct v86_frame *f, const 
     }
     return false;
 }
+/* ---- fx-16: proven CLI sites and seed demand ----
+ * T23 trial e831e685 (BOOT.LOG vm_perf banks n=7/n=8, DOOM full screen):
+ * the monitor took 1.62-1.63 s of every 5 s, as much as DOOM itself.
+ * 6536-6719 return-tracker checkpoints (#DB, 37 us each), 7236-7568 PM
+ * CLI/STI traps at 57 us each (the forward proofs below) and, on every PM
+ * trap, a boundary seed (up to 16 decoded instructions plus a stack
+ * snapshot). All of that only keeps a fresh boundary for the next CLI's
+ * proof, although DOOM/DMX execute the same few flags-saving CLI sites
+ * thousands of times per second. Windows 95 inspected the code before the
+ * CLI on every trap (R. Chen, The Old New Thing, 2016-04-11); here the
+ * adjacency is proven once by the unchanged forward decode, the proven
+ * bytes are kept, and every later CLI at that address compares them before
+ * the live image check that already guards every arm. */
+#define DPMI_SEED_IDLE_MS 1000u
+static bool dpmi_seed_wanted(const struct dosvm *v)
+{
+    const struct dpmi *d = &v->dpmi;
+    return !d->cli_settled || g_ticks - d->cli_miss_tick < DPMI_SEED_IDLE_MS;
+}
+static struct dpmi_cli_site *cli_site_find(struct dosvm *v, const struct dpmi_seg *cs, uint32_t linear)
+{
+    struct dpmi *d = &v->dpmi;
+    for (unsigned i = 0; i < DPMI_CLI_SITES; i++) {
+        struct dpmi_cli_site *s = &d->cli_site[i];
+        if (!s->used || s->linear != linear || s->big != cs->big || s->client != d->clients) continue;
+        uint8_t code[DPMI_CLI_BYTES];
+        if (dosvm_read(v, linear - s->len, code, s->len) || memcmp(code, s->code, s->len)) {
+            s->used = 0;                 /* rewritten code: prove it again */
+            return 0;
+        }
+        s->used = ++d->cli_clock ? d->cli_clock : 1;
+        return s;
+    }
+    return 0;
+}
+/* distance: bytes before the CLI the proof covered (from its observed
+ * boundary, or the inspected pattern). The kept window is always the
+ * DPMI_CLI_BYTES before the CLI (a 15-byte instruction plus one), so a
+ * rewritten instruction just before a short proof is noticed as well. */
+static void cli_site_store(struct dosvm *v, const struct v86_frame *f, const struct dpmi_seg *cs,
+                           uint8_t pop, unsigned width, uint32_t distance, bool provisional)
+{
+    struct dpmi *d = &v->dpmi;
+    (void)distance;
+    unsigned len = f->tf.eip < DPMI_CLI_BYTES ? f->tf.eip : DPMI_CLI_BYTES;
+    uint32_t linear = cs->base + f->tf.eip;
+    if (!len || f->tf.eip < len) return;
+    struct dpmi_cli_site *slot = &d->cli_site[0];
+    for (unsigned i = 0; i < DPMI_CLI_SITES; i++)
+        if (!d->cli_site[i].used || d->cli_site[i].used < slot->used) slot = &d->cli_site[i];
+    struct dpmi_cli_site s = {.linear = linear, .pop = pop, .width = (uint8_t)width,
+        .len = (uint8_t)len, .big = cs->big, .client = (uint8_t)d->clients, .provisional = provisional};
+    for (unsigned i = 0; i < DPMI_CLI_SITES; i++)   /* an upgrade replaces its own entry */
+        if (d->cli_site[i].used && d->cli_site[i].linear == linear) { slot = &d->cli_site[i]; break; }
+    if (dosvm_read(v, linear - len, s.code, len)) return;
+    s.used = ++d->cli_clock ? d->cli_clock : 1;
+    *slot = s;
+    d->cli_settled = true;
+}
+/* fx-16, the Windows 95 rule (Chen, above): when no forward proof reaches
+ * the CLI, the code immediately before it must be PUSHF, or PUSHF; POP r
+ * with matching operand sizes (Watcom's `pushfd; pop eax; cli`, DMX). The
+ * caller then still requires the saved image (stack top or register) to
+ * equal the live flags image before it sets TF, the check Windows 95 also
+ * made. T23/host evidence: DMX's timer service at 01df:00244264 is reached
+ * through `sti; ... lss esp` from its dispatcher; no forward decode can
+ * cross the stack switch, so the old monitor left virtual IF clear after
+ * DMX's POPFD for the rest of the timer handler, blocking the SB16 IRQ DMX
+ * had re-enabled with STI (1134 misses in the host DOOM replay). */
+static bool flags_pattern(struct dosvm *v, const struct v86_frame *f, const struct dpmi_seg *cs,
+                          uint8_t *pop, unsigned *width)
+{
+    uint8_t b[5];
+    if (f->tf.eip < sizeof(b) || f->tf.eip - sizeof(b) > cs->limit ||
+        dosvm_read(v, cs->base + f->tf.eip - sizeof(b), b, sizeof(b))) return false;
+    unsigned normal = cs->big ? 4 : 2, other = cs->big ? 2 : 4;
+    if (b[4] == 0x9C) {                                    /* [66] 9C | FA */
+        *pop = 0; *width = b[3] == 0x66 ? other : normal;
+        return true;
+    }
+    if (b[4] < 0x58 || b[4] > 0x5F || b[4] == 0x5C) return false;
+    unsigned at = 3, pop_w = normal;                       /* [66] 9C [66] 5r | FA */
+    if (b[at] == 0x66) { pop_w = other; at--; }
+    if (b[at] != 0x9C) return false;
+    unsigned push_w = at && b[at - 1] == 0x66 ? other : normal;
+    if (push_w != pop_w) return false;
+    *pop = b[4]; *width = pop_w;
+    return true;
+}
+void dpmi_cli_sites_reset(struct dosvm *v)
+{
+    struct dpmi *d = &v->dpmi;
+    memset(d->cli_site, 0, sizeof(d->cli_site));
+    d->cli_settled = false;
+}
 static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs)
 {
     /* Neither forward proof changes the candidate image. If no possible
@@ -715,8 +822,36 @@ static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct d
     }
     uint8_t pop;
     unsigned width;
-    if (!flags_preceding(v, f, cs, &pop, &width, false) &&
-        !flags_control_preceding(v, f, cs, &pop, &width)) return false;
+    struct dpmi *d = &v->dpmi;
+    d->cli.candidates++;
+    struct dpmi_cli_site *site = cli_site_find(v, cs, cs->base + f->tf.eip);
+    bool reached = false;
+    if (site && site->provisional && d->decode_valid && d->decode_cs == (uint16_t)f->tf.cs &&
+        d->decode_eip < f->tf.eip && f->tf.eip - d->decode_eip <= 256) {
+        /* A pattern site meets a nearby boundary before it: decode once
+         * more (bounded, so an undecodable gap is not paid on every CLI). */
+        if (flags_preceding_reach(v, f, cs, &pop, &width, false, &reached)) {
+            cli_site_store(v, f, cs, pop, width, f->tf.eip - d->decode_eip, false);
+            site = 0; d->cli.proved++;
+            goto proven;
+        }
+        if (reached) { site->used = 0; d->cli.missed++; return false; }   /* disproved */
+    }
+    if (site) { pop = site->pop; width = site->width; d->cli.hits++; }
+    else {
+        /* Every CLI that needed a proof keeps the seeds coming for a
+         * while: a new site is learned on its next execution at latest. */
+        d->cli_miss_tick = g_ticks;
+        if (flags_preceding_reach(v, f, cs, &pop, &width, false, &reached)) {
+            d->cli.proved++;
+            cli_site_store(v, f, cs, pop, width, f->tf.eip - d->decode_eip, false);
+        } else if (flags_control_preceding(v, f, cs, &pop, &width)) d->cli.control++;
+        else if (!reached && flags_pattern(v, f, cs, &pop, &width)) {
+            d->cli.pattern++;
+            cli_site_store(v, f, cs, pop, width, 5, true);
+        } else { d->cli.missed++; return false; }
+    }
+proven:;
     /* PUSHF's image of the real flags: IF set (the host never runs a client
      * disabled), IOPL 0, NT and TF clear, status flags as now (POP and the
      * trapped CLI change none). */
@@ -910,6 +1045,10 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
         return;
     }
     if (d->if_step || d->if_steps >= DPMI_IF_STEPS) return;
+    /* fx-16: an armed saved image reports its own restore one instruction
+     * after its POPF/IRET; stepping toward it only adds #DB exits (37 us
+     * each on the T23). The time bound above still applies. */
+    if (d->if_armed) return;
     /* Return acquisition is inactive when virtual IF is clear. Retire
      * its checkpoint before recovery; never clear a client's TF here. */
     if (d->return_steps && return_context(d, f)) dpmi_return_cancel(v);
@@ -1021,6 +1160,10 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
         if (d->return_steps || d->return_step) return;
     }
     if (!v->monitor.vif || d->if_armed || (f->tf.eflags & (V86_TF | (1u << 14)))) return;
+    /* fx-16: no CLI needs a fresh boundary while every flags-saving CLI is
+     * a proven site; an in-flight acquisition above still completes. */
+    if (!dpmi_seed_wanted(v)) { d->cli.seeds_skipped++; return; }
+    d->cli.seeds++;
     struct dpmi_seg cs, ss;
     if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || !dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss)) return;
     uint32_t at = f->tf.eip, consumed = 0;
@@ -1277,7 +1420,12 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
      * otherwise the IRQ PC becomes the new seed as before. */
     struct dpmi_seg cs;
     bool irq = f->tf.vector >= 0x20 && f->tf.vector < 0x30;
-    bool keep = irq && dpmi_seg(v, (uint16_t)f->tf.cs, &cs) &&
+    /* fx-16: the boundary proof (a forward decode of up to 4096 bytes on
+     * every physical IRQ in PM, i.e. most of the T23's 61 us timer exits)
+     * only preserves a seed for a CLI proof; skip it while none is wanted. */
+    bool seeding = dpmi_seed_wanted(v);
+    if (irq) { if (seeding) v->dpmi.cli.irq_proofs++; else v->dpmi.cli.irq_proofs_skipped++; }
+    bool keep = irq && seeding && dpmi_seg(v, (uint16_t)f->tf.cs, &cs) &&
                 flags_preceding(v, f, &cs, 0, 0, true);
     /* The host IRQ-return stub restores an unchanged interrupted context,
      * including its forward-decode seed. Do not replace it with the CLI PC. */
@@ -1301,7 +1449,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         v->dpmi.depth == v->dpmi.return_depth && v->dpmi.clients == v->dpmi.return_client;
     /* Preserve a flags save already reached before the IRQ; otherwise the
      * resumed CPU boundary supplies a fresh stack snapshot for its proof. */
-    bool keep_resumed = replanning && dpmi_seg(v, (uint16_t)f->tf.cs, &cs) &&
+    bool keep_resumed = replanning && seeding && dpmi_seg(v, (uint16_t)f->tf.cs, &cs) &&
         flags_preceding(v, f, &cs, 0, 0, true);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */
@@ -1316,7 +1464,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         v->dpmi.decode_eip = f->tf.eip;
         struct dpmi_seg ss, code, ds;
         uint32_t lin;
-        v->dpmi.decode_stack_valid = !e && v->frame_pm &&
+        v->dpmi.decode_stack_valid = !e && v->frame_pm && dpmi_seed_wanted(v) &&
             dpmi_seg(v, (uint16_t)f->tf.cs, &code) && dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss) &&
             code.big == ss.big && dpmi_ptr(v, (uint16_t)f->tf.user_ss,
                 ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp, sizeof(v->dpmi.decode_stack), false, &lin) &&
