@@ -34,6 +34,8 @@ void fake_surface(int fd, uint32_t w, uint32_t h, uint32_t colour)
     assert(fds[fd].pixels);
     for (unsigned i=0; i<w*h; i++) fds[fd].pixels[i]=colour;
 }
+/* fx-15b: a descriptor neither open nor mapped, which a long scenario may reuse. */
+int fake_fd_free(int fd) { return fd>=0 && fd<128 && !fds[fd].live && !fds[fd].mapped; }
 unsigned fake_live(void)
 {
     unsigned n=0; for (int i=0; i<128; i++) n+=(unsigned)fds[i].live+(unsigned)fds[i].mapped;

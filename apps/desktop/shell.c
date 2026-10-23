@@ -2507,6 +2507,20 @@ void desk_shell_reconcile(struct desktop *d)
     struct desk_box outline=icon>=0 && d->focus<0 && !d->sh.levels ? d->sh.icons[icon].box : (struct desk_box){0,0,0,0};
     if (icon!=d->outline_icon || memcmp(&outline,&d->outline_shown,sizeof(outline))) { damage(d,d->outline_shown); damage(d,outline); }
     d->outline_icon=icon; d->outline_shown=outline;
+    /* fx-15b (fx-19 state): the desktop marquee and the drag image are
+     * screen objects of their own. A band that ends or changes by any path
+     * (a rebuilt icon list ends it, icons_build) repaints its old and new
+     * outline; the drag image follows the pointer wherever the pointer
+     * moved (input, a v3 warp or clip), its "as painted" record included. */
+    struct desk_box band={0,0,0,0};
+    if (d->sh.band) { band=band_box(d); if (band.w<2 && band.h<2) band=(struct desk_box){0,0,0,0}; }
+    if (memcmp(&band,&d->band_shown,sizeof(band))) {
+        if (d->band_shown.w) band_damage(d,d->band_shown);
+        if (band.w) band_damage(d,band);
+    }
+    d->band_shown=band;
+    struct desk_box image=dnd_image_box(d);
+    if (memcmp(&image,&d->sh.dnd.image,sizeof(image))) dnd_image_damage(d);
     /* About > System lists the number of desktop windows. */
     int windows=d->about>=0 && d->clients[d->about].window && d->sh.about_tab==1 ? desk_task_count(d) : -1;
     if (windows!=d->about_windows && windows>=0) damage(d,desk_content(&d->clients[d->about]));

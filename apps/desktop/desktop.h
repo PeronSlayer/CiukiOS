@@ -260,6 +260,7 @@ struct desktop {
     struct desk_box popup_shown[SH_LEVELS + 6];
     struct desk_box tip_shown; uint32_t tip_shown_hash;
     struct desk_box outline_shown; int outline_icon, about_windows;
+    struct desk_box band_shown;  /* fx-15b: the rubber band as last composed (zero: none) */
     uint32_t cursor_under[32*32]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
     unsigned cursor_shape, cursor_loaded;

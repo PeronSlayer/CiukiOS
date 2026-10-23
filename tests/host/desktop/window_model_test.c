@@ -27,7 +27,14 @@ struct fake_app { int slot, channel, surface, stage, hung, v3, w, h; uint32_t pi
 static struct fake_app apps[DESK_CLIENTS];
 static int next_fd;
 static uint32_t next_pid;
-static int take_fd(void) { assert(next_fd<127); return next_fd++; }
+/* Descriptors 10..126, reused once the desktop has closed and unmapped them,
+ * so long sequences keep launching programs. */
+static int take_fd(void)
+{
+    for (unsigned n=0;n<117;n++) { int fd=10+(next_fd++-10)%117; if (fake_fd_free(fd)) return fd; }
+    assert(0); return -1;
+}
+static int fds_left(void) { int n=0; for (int fd=10;fd<127;fd++) n+=fake_fd_free(fd); return n; }
 static void apps_forget_dropped(void)
 {
     /* The desktop dropped a client (close, crash, EPIPE): its process ends. */
@@ -112,7 +119,7 @@ static int next_size_w, next_size_h;
 static int fake_launch(struct desktop *dd, const struct desk_program *program)
 {
     int k=0; while (k<DESK_CLIENTS && apps[k].stage!=APP_FREE) k++;
-    if (k==DESK_CLIENTS || next_fd>110) { errno=EAGAIN; return -1; }
+    if (k==DESK_CLIENTS || fds_left()<8) { errno=EAGAIN; return -1; }
     struct fake_app *a=&apps[k]; memset(a,0,sizeof(*a));
     a->channel=take_fd(); fake_channel(a->channel);
     a->slot=desk_add_client(dd,a->channel);
@@ -208,7 +215,7 @@ static int wm_v3_window(unsigned style, int owner, int x, int y, unsigned w, uns
     if (!v3_live()) { v3_peer(take_fd()); memset(v3_generations,0,sizeof(v3_generations)); }
     unsigned id=1; while (id<=DESK_CLIENTS && v3_slot(id)>=0) id++;
     int used=0; for (int k=0;k<DESK_CLIENTS;k++) used+=d.clients[k].channel>=0 || d.clients[k].internal;
-    if (id>DESK_CLIENTS || used>=DESK_CLIENTS-2 || next_fd>110) return -1;
+    if (id>DESK_CLIENTS || used>=DESK_CLIENTS-2 || fds_left()<8) return -1;
     unsigned gen=++v3_generations[id];
     int fd=take_fd(); fake_surface(fd,w,h,0);
     struct ciuki_message m; v3msg(&m,DESK_CREATE_WINDOW,40,id,gen); m.fd_count=1; m.fds[0]=fd;
@@ -277,6 +284,41 @@ static int fake_links(struct desktop *dd, struct desk_link_entry *out, unsigned 
     }
     return (int)n;
 }
+/* ---- the desktop folder and the Files drag data object (fx-19) ----
+ * A read-only folder: /Documents/Desktop empty, and the data object a Files
+ * window writes before DESK_DRAG_BEGIN (two items). Drops are never made
+ * where they would start a transfer; the drag image, targets, highlight,
+ * taskbar hover and cancel are what this harness compares. */
+static const char drag_object[]="X\nF/Documents/report.txt\nD/Documents/Games\n";
+static unsigned drag_offset;
+static int vfs_list(void *ctx, const char *path, unsigned flags, fm_emit emit, void *arg)
+{
+    (void)ctx; (void)flags;
+    struct fm_meta dir={.type=FM_DIR};
+    if (!strcmp(path,"/")) return emit("Documents",&dir,arg);
+    if (!strcmp(path,"/Documents")) return emit("Desktop",&dir,arg);
+    return 0;
+}
+static int vfs_stat(void *ctx, const char *path, struct fm_meta *meta)
+{
+    (void)ctx;
+    if (!strcmp(path,"/") || !strcmp(path,"/Documents") || !strcmp(path,"/Documents/Desktop")) { *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+    return -ENOENT;
+}
+static int vfs_refuse_path(void *ctx, const char *path) { (void)ctx; (void)path; return -EROFS; }
+static int vfs_refuse_rename(void *ctx, const char *a, const char *b) { (void)ctx; (void)a; (void)b; return -EROFS; }
+static int vfs_open(void *ctx, const char *path, int create)
+{ (void)ctx; if (create || strcmp(path,DESK_DRAG_FILE)) return create ? -EROFS : -ENOENT; drag_offset=0; return 5; }
+static int vfs_read(void *ctx, int fd, void *out, unsigned n)
+{
+    (void)ctx; (void)fd; unsigned left=(unsigned)sizeof(drag_object)-1-drag_offset; if (n>left) n=left;
+    memcpy(out,drag_object+drag_offset,n); drag_offset+=n; return (int)n;
+}
+static int vfs_write(void *ctx, int fd, const void *in, unsigned n) { (void)ctx; (void)fd; (void)in; (void)n; return -EROFS; }
+static int vfs_fd(void *ctx, int fd) { (void)ctx; (void)fd; return 0; }
+static int vfs_metadata(void *ctx, const char *path, const struct fm_meta *meta) { (void)ctx; (void)path; (void)meta; return -EROFS; }
+static const struct fm_vfs wm_vfs={NULL,vfs_list,vfs_stat,vfs_refuse_path,vfs_refuse_rename,vfs_refuse_path,vfs_refuse_path,
+    vfs_open,vfs_read,vfs_write,vfs_fd,vfs_fd,vfs_metadata};
 /* ---- input as the hardware delivers it (desk_input) ---- */
 static void pointer_to(int x, int y)
 {
@@ -299,6 +341,37 @@ static void key(int code, int value)
     desk_input(&d,&e);
 }
 static void tap(int code) { key(code,1); key(code,0); }
+/* ---- fx-19: selection, rubber band, drag and drop as the user does them ---- */
+static int on_icon(int x, int y)
+{
+    for (int k=0;k<d.sh.icon_count;k++) if (desk_contains(d.sh.icons[k].box,x,y)) return 1;
+    return 0;
+}
+static int empty_point(int *x, int *y)
+{
+    for (unsigned n=0;n<40;n++) {
+        int px=(int)rnd(d.width), py=DESK_BAR+(int)rnd(d.height-2*DESK_BAR);
+        if (desk_hit(&d,px,py)<0 && !on_icon(px,py) && !desk_start_contains(&d,px,py)) { *x=px; *y=py; return 1; }
+    }
+    return 0;
+}
+static void icon_point(int k, int *x, int *y) { struct desk_box b=d.sh.icons[k].box; *x=b.x+b.w/2; *y=b.y+20; }
+static void app_accept_files(struct fake_app *a, unsigned on)
+{ struct ciuki_message m; shell_message(&m,DESK_ACCEPT_FILES,8); desk_put32(m.data+4,on); wm_send(a,&m); }
+/* A Files window starts a shell drag: the press reaches it (routed
+ * button), it writes the data object and sends DESK_DRAG_BEGIN. */
+static int files_drag_begin(struct fake_app *a, unsigned button)
+{
+    struct desk_client *c=&d.clients[a->slot];
+    if (!c->window || c->minimized || c->program!=DESK_APP_FILES || d.sh.dnd.active) return 0;
+    struct desk_box b=desk_content(c);
+    if (b.w<20 || b.h<20) return 0;
+    pointer_to(b.x+b.w/2,b.y+b.h/2);
+    if (desk_hit(&d,d.mouse_x,d.mouse_y)!=a->slot) return 0;
+    press(button==2 ? CIUKI_BUTTON_RIGHT : CIUKI_BUTTON_LEFT,1);
+    struct ciuki_message m; shell_message(&m,DESK_DRAG_BEGIN,12); desk_put32(m.data+4,button); desk_put32(m.data+8,2); wm_send(a,&m);
+    return d.sh.dnd.active;
+}
 static void serve_launches(void)
 {
     /* desktop.c launch_pending: a Programs menu item runs at the next turn. */
@@ -324,8 +397,14 @@ static void turn(uint64_t ns)
 }
 
 /* ---- frames ---- */
+static unsigned seen_band, seen_drag, seen_drag_menu, seen_drop_lit, seen_multi, seen_files_drag;
 static void wm_frame(const char *what)
 {
+    if (d.shell) {
+        unsigned marked=0; for (int k=0;k<d.sh.icon_count;k++) marked+=desk_shell_icon_marked(&d,k)!=0;
+        seen_band+=d.sh.band!=0; seen_drag+=d.sh.dnd.active && !d.sh.dnd.menu; seen_drag_menu+=d.sh.dnd.active && d.sh.dnd.menu;
+        seen_drop_lit+=d.sh.dnd.active && d.sh.dnd.drop_index>=0; seen_multi+=marked>1; seen_files_drag+=d.sh.dnd.active && d.sh.dnd.source>=0;
+    }
     snprintf(step_name,sizeof(step_name),"%s",what);
     if (wm_mode>=WM_BATCH32) batch_frame(); else redraw();
     if (!d.animation.active) visible_oracle();
@@ -371,12 +450,15 @@ static void wm_begin(unsigned m, int shell)
         snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"builtin:%s",desk_builtin_wallpapers[0].id);
         desk_shell_apply(&d); assert(!desk_shell_wallpaper_update(&d));
         d.sh.mixer_state=2;
+        assert(!desk_folder_init(&d,&wm_vfs));
     }
     wm_frame("begin");
 }
 static void wm_end(void)
 {
+    desk_shell_drag_cancel(&d);
     for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
+    desk_folder_destroy(&d); free(d.sh.band_original); d.sh.band_original=NULL; d.sh.band_capacity=0;
     desk_render_release(&d); free(d.pixels); free(scanout);
     free(d.sh.icons); free(d.sh.wall); free(d.sh.background); free(d.v3_links); free(d.sh.autoplay.workspace);
     d.sh.icons=NULL; d.sh.wall=NULL; d.sh.background=NULL; d.v3_links=NULL; d.sh.autoplay.workspace=NULL;
@@ -405,7 +487,7 @@ static void wm_fuzz(unsigned m, unsigned run)
     wm_begin(m,1);
     char what[96];
     for (unsigned step=0;step<240;step++) {
-        unsigned op=rnd(36);
+        unsigned op=rnd(42);
         snprintf(what,sizeof(what),"fuzz run=%u step=%u op=%u",run,step,op);
         snprintf(step_name,sizeof(step_name),"%s",what);
         if (getenv("WM_TRACE")) fprintf(stderr,"%s %s focus=%d levels=%d\n",wm_names[m],what,d.focus,d.sh.levels);
@@ -489,6 +571,58 @@ static void wm_fuzz(unsigned m, unsigned run)
         case 35: if (!rnd(3)) { /* launch a program from Programs > the menu's action */
                      d.action=(int)rnd(d.program_count);
                  } break;
+        case 36: /* fx-19: drag desktop icons (left or right button), over windows, taskbar, desktop */
+            if (d.sh.icon_count && !d.sh.dnd.active) {
+                icon_point((int)rnd((unsigned)d.sh.icon_count),&x,&y);
+                if (desk_hit(&d,x,y)>=0) break;
+                unsigned button=rnd(4) ? CIUKI_BUTTON_LEFT : CIUKI_BUTTON_RIGHT;
+                pointer_to(x,y); press((int)button,1);
+                for (unsigned k=0;k<2+rnd(5);k++) { pointer_to((int)rnd(d.width),(int)rnd(d.height)); turn(16666667ull); wm_frame(what); }
+                if (!rnd(4)) tap(DU_KEY_ESC);
+                if (rnd(5)) press((int)button,0);
+            } break;
+        case 37: /* fx-19: rubber band, plain, Ctrl or Shift; sometimes left open */
+            if (!d.sh.dnd.active && empty_point(&x,&y)) {
+                int mod=rnd(3)==0 ? 0x1d : rnd(2) ? 0x2a : 0;
+                if (mod) key(mod,1);
+                pointer_to(x,y); press(CIUKI_BUTTON_LEFT,1);
+                for (unsigned k=0;k<1+rnd(4);k++) { pointer_to(d.mouse_x+(int)rnd(181)-90,d.mouse_y+(int)rnd(141)-70); turn(16666667ull); wm_frame(what); }
+                if (rnd(5)) press(CIUKI_BUTTON_LEFT,0);
+                if (mod) key(mod,0);
+            } break;
+        case 38: /* fx-19: keyboard selection on the desktop */
+            if (!d.sh.dnd.active && empty_point(&x,&y)) {
+                click(x,y,CIUKI_BUTTON_LEFT);
+                switch (rnd(5)) {
+                case 0: key(0x1d,1); tap(0x1e); key(0x1d,0); break;
+                case 1: tap(rnd(2) ? DU_KEY_DOWN : DU_KEY_RIGHT); break;
+                case 2: key(0x2a,1); tap(DU_KEY_DOWN); key(0x2a,0); break;
+                case 3: key(0x1d,1); tap(DU_KEY_UP); tap(DU_KEY_SPACE); key(0x1d,0); break;
+                default: tap(DU_KEY_ESC); break;
+                }
+            } break;
+        case 39: /* fx-19: a Files window drags two items: image, targets, highlight */
+            a=NULL;
+            for (int k=0;k<DESK_CLIENTS && !a;k++) if (apps[k].stage!=APP_FREE && !strcmp(d.clients[apps[k].slot].application,"files")) a=&apps[k];
+            if (!a) { (void)desk_task_launch(&d,"files",NULL); break; }
+            /* the Files window finishes starting first */
+            for (unsigned k=0;k<3 && a->stage!=APP_FREE && a->stage<APP_PAINTED;k++) app_step(a);
+            if (a->stage!=APP_PAINTED) break;
+            if (a) {
+                unsigned button=rnd(4) ? 1 : 2;
+                if (!files_drag_begin(a,button)) { press(button==2 ? CIUKI_BUTTON_RIGHT : CIUKI_BUTTON_LEFT,0); break; }
+                for (unsigned k=0;k<2+rnd(5);k++) {
+                    if (rnd(3)==0 && d.sh.icon_count>2) { icon_point(2,&x,&y); pointer_to(x,y); }   /* over the Trash */
+                    else pointer_to((int)rnd(d.width),(int)rnd(d.height));
+                    turn(16666667ull); wm_frame(what);
+                }
+                if (rnd(3)) tap(DU_KEY_ESC);
+                else { pointer_to((int)rnd(d.width),(int)rnd(DESK_BAR)); press(button==2 ? CIUKI_BUTTON_RIGHT : CIUKI_BUTTON_LEFT,0); }
+                if (d.sh.dnd.active) tap(DU_KEY_ESC);
+            } break;
+        case 40: if ((a=random_app(APP_PAINTED))) app_accept_files(a,rnd(2)); break;
+        case 41: if (d.sh.dnd.active || d.sh.band) turn(1100000000ull); break; /* taskbar hover during a drag */
+        
         default: break;
         }
         app_answer_pings();
@@ -836,9 +970,64 @@ static void row_lease(unsigned m)
     assert(!desk_v3_receive(&d,v3_root,&msg) && !d.v3_lease_state); step("lease released: desktop repainted");
     wm_end();
 }
+static void row_selection(unsigned m)
+{
+    /* fx-19 selection: click, Ctrl and Shift clicks, the rubber band (and a
+     * band ended by an icon rebuild: the merge failure of fx-15b), keyboard
+     * selection; each changes icon looks and the focus outline. */
+    row_name="selection"; wm_begin(m,1);
+    (void)app_open("files",280,180,330,60);
+    link_variant=2; d.v3_links_next=0; turn(16666667ull); step("two shortcuts on the desktop");
+    int x,y; icon_point(0,&x,&y); click(x,y,CIUKI_BUTTON_LEFT); step("click selects");
+    turn(600000000ull); icon_point(1,&x,&y); key(0x1d,1); click(x,y,CIUKI_BUTTON_LEFT); key(0x1d,0); step("Ctrl+click adds");
+    turn(600000000ull); icon_point(3,&x,&y); key(0x2a,1); click(x,y,CIUKI_BUTTON_LEFT); key(0x2a,0); step("Shift+click selects the range");
+    pointer_to(150,300); press(CIUKI_BUTTON_LEFT,1); step("band starts");
+    pointer_to(60,200); step("band grows"); pointer_to(20,90); step("band covers icons");
+    press(CIUKI_BUTTON_LEFT,0); step("band ends");
+    pointer_to(160,320); press(CIUKI_BUTTON_LEFT,1); pointer_to(40,150); step("second band");
+    link_variant=3; d.v3_links_next=0; turn(16666667ull); step("icons rebuilt during the band: the band ends");
+    press(CIUKI_BUTTON_LEFT,0); step("release");
+    click(200,400,CIUKI_BUTTON_LEFT); key(0x1d,1); tap(0x1e); key(0x1d,0); step("Ctrl+A");
+    tap(DU_KEY_DOWN); step("arrow"); key(0x2a,1); tap(DU_KEY_DOWN); key(0x2a,0); step("Shift+arrow");
+    key(0x1d,1); tap(DU_KEY_UP); tap(DU_KEY_SPACE); key(0x1d,0); step("Ctrl+arrow, Ctrl+Space");
+    wm_end();
+}
+static void row_drag(unsigned m)
+{
+    /* fx-19 drag and drop: the drag image follows the pointer over windows,
+     * the taskbar and the desktop; the drop target is highlighted; hovering a
+     * task button restores its window; Esc and the right-drag menu end it. */
+    row_name="drag and drop"; wm_begin(m,1);
+    struct fake_app *files=app_open("files",280,180,330,50);
+    struct fake_app *note=app_open("ciuknote",240,150,330,270); app_accept_files(note,1);
+    struct fake_app *calc=app_open("calc",200,120,150,200);
+    struct desk_box min=desk_min_box(&d.clients[calc->slot]); click(min.x+2,min.y+2,CIUKI_BUTTON_LEFT);
+    for (unsigned k=0;k<8;k++) turn(25000000ull);
+    step("three windows, one minimised");
+    int x,y; icon_point(0,&x,&y); pointer_to(x,y); press(CIUKI_BUTTON_LEFT,1);
+    pointer_to(x+12,y+9); step("icon drag starts: drag image");
+    pointer_to(400,120); step("image over a window");
+    struct desk_box t=desk_task_button(&d,calc->slot); pointer_to(t.x+6,t.y+6); step("image over a task button");
+    turn(1100000000ull); step("hover restores the minimised window");
+    pointer_to(220,330); step("image over the desktop");
+    tap(DU_KEY_ESC); step("Esc cancels");
+    press(CIUKI_BUTTON_LEFT,0); step("release after cancel");
+    icon_point(1,&x,&y); pointer_to(x,y); press(CIUKI_BUTTON_RIGHT,1); pointer_to(x+40,y+60); pointer_to(600,430); step("right drag");
+    press(CIUKI_BUTTON_RIGHT,0); assert(d.sh.dnd.menu); step("right-drag menu"); tap(DU_KEY_ESC); step("menu cancelled");
+    icon_point(1,&x,&y); pointer_to(x,y); press(CIUKI_BUTTON_LEFT,1); pointer_to(x+50,y+30); pointer_to(200,300); step("reposition drag");
+    press(CIUKI_BUTTON_LEFT,0); step("icon dropped at a new place");
+    assert(files_drag_begin(files,1)); step("Files drags two items");
+    icon_point(2,&x,&y); pointer_to(x,y); step("over the Trash: target highlighted");
+    pointer_to(200,300); step("over the desktop: highlight removed");
+    struct desk_box nb=desk_content(&d.clients[note->slot]); pointer_to(nb.x+30,nb.y+30); step("over a WM_DROPFILES window");
+    press(CIUKI_BUTTON_LEFT,0); step("dropped on the window (DROPFILES, no transfer)");
+    assert(files_drag_begin(files,2)); pointer_to(200,10); step("right drag from Files over the top bar");
+    tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */
@@ -850,6 +1039,10 @@ static void wm_dump(void)
     fprintf(stderr,"focus=%d levels=%d tooltip=%d switcher=%d notification=%d volume=%d anim=%d drag=%d copy=%d mouse=%d,%d icon_sel=%d\n",
         d.focus,d.sh.levels,d.sh.tooltip,d.sh.switcher,d.sh.notification.active,d.sh.volume_open,d.animation.active,d.drag,d.copy_pending,
         d.mouse_x,d.mouse_y,d.sh.icon_selected);
+    fprintf(stderr,"fx-19 band=%d %d,%d-%d,%d dnd=%d menu=%d image=%d,%d,%dx%d kind=%d target=%d buttons=%u icon_drag=%d dragged=%d icons=%d:",d.sh.band,d.sh.band_x0,d.sh.band_y0,
+        d.sh.band_x1,d.sh.band_y1,d.sh.dnd.active,d.sh.dnd.menu,d.sh.dnd.image.x,d.sh.dnd.image.y,d.sh.dnd.image.w,d.sh.dnd.image.h,d.sh.dnd.kind,d.sh.dnd.target,d.buttons,d.sh.icon_drag,d.sh.icon_dragged,d.sh.icon_count);
+    for (int k=0;k<d.sh.icon_count;k++) fprintf(stderr," [%d %d,%d sel=%d]",k,d.sh.icons[k].box.x,d.sh.icons[k].box.y,d.sh.icons[k].selected);
+    fprintf(stderr,"\n");
     fprintf(stderr,"cursor shape=%u loaded=%u hw=%d hw_shown=%d dirty=%d shown=%d at=%d,%d v3=%u hidden=%u retry=%u fallbacks=%u\n",d.cursor_shape,d.cursor_loaded,
         d.hw_cursor,d.hw_cursor_shown,d.cursor_dirty,shown,cursor_x,cursor_y,d.v3_cursor_id,d.v3_cursor_hidden,d.hw_cursor_retries,d.hw_cursor_fallbacks);
     for (int l=0;l<d.sh.levels;l++) fprintf(stderr," menu %d kind=%d box=%d,%d,%dx%d\n",l,d.sh.menus[l].kind,
@@ -879,6 +1072,8 @@ int main(int argc, char **argv)
         for (unsigned run=0;run<runs;run++) if (only<0 || (unsigned)only==run) wm_fuzz(m,run);
         printf("fx-15 %s: %u randomized sequences identical to a full redraw\n",wm_names[m],runs);
     }
+    printf("fx-15b fx-19 states compared: band=%u drag=%u files_drag=%u drag_menu=%u drop_highlight=%u multi_selection=%u frames\n",
+           seen_band,seen_drag,seen_files_drag,seen_drag_menu,seen_drop_lit,seen_multi);
     printf("PASS fx-15 window model: %u frames identical to a full redraw\n",wm_frames);
     return 0;
 }

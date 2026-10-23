@@ -418,10 +418,18 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 22 | Theme or display mode change | the whole screen | `desk_theme_changed`, `desk_display_relayout` | none new | theme |
 | 23 | Any exposure repaint | a repainted strip equals a whole repaint | every painter's clip | text glyphs were culled by the pen position and the capital line, not by the glyph box: a strip ending inside a negative left bearing ('j', 'p') or above an ascender lost those pixels (`theme.c`, libdeskui `draw.c`) | exposure strips |
 | 24 | Pointer motion and shape | none (hardware cursor) or the save-under footprint (software) | `desk_cursor_motion`, `pointer_rows` | none new (f2-96, f2-99 tests) | every row (pointer moves); `test_accel` |
+| 25 | Desktop icon selection (fx-19): click, Ctrl and Shift clicks, keyboard (Ctrl+A, arrows, Shift+arrows, Ctrl+Space); the list view repaints each item whose selection or focus state changes (`LVN_ITEMCHANGED`) | the icon's box (selection tint, label halo, focus rectangle) | `shell.c` `mark`, `icon_focus`, `icon_repaint` | none (fx-15b audit) | selection |
+| 26 | Rubber band (marquee): an XOR focus rectangle (`DrawFocusRect`) drawn and erased as the pointer moves | the band's old and new outline | `band_begin`, `band_update`, `band_end`, `draw_band` | fx-15b: a band ended by an icon-list rebuild (`icons_build`, run by a shortcut or folder refresh) vanished from the state without any repaint: its outline stayed on screen (the merge failure: `engine+cache ... fuzz run=0 step=49`) | selection |
+| 27 | Drag image (`ImageList_DragMove`/`DragShowNolock` in the Windows 98 shell): the image follows the pointer above every window | the image's old and new box; screen copies are cut by it | `dnd_image_box`, `dnd_image_damage`, `draw_drag_image`, `copy_region`, `desk_shell_chrome_intersects` | none reachable found; the "as painted" record that the copy cut and the direct client path use is updated by the input path only, so fx-15b's reconcile now keeps it equal to the painter's box whatever moves the pointer | drag and drop |
+| 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
+| 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
+| 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
 
-The drag of a desktop icon has no drag image (fx-19 owns drag and drop),
-and a window drag shows the window contents, as Windows 98 does by
-default; the caption animation of row 8 is the only outline.
+A window drag shows the window contents, as Windows 98 does by default; the
+caption animation of row 8 is the only window outline. Rows 25-30 came with
+fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
+fx-15b after the merge, with the reconcile extended to the band and the
+drag image.
 
 ### One rule instead of one fix per path: the frame reconcile
 
@@ -442,7 +450,9 @@ hover or minimised state changed is repainted (the shell hook's
 `HSHELL_WINDOWCREATED`/`DESTROYED`/`ACTIVATED`/`REDRAW`); a popup (menu,
 tray popup, notification, switcher, tooltip) that opened, closed or moved
 exposes its old box and paints its new one; the selected icon's focus
-outline follows the desktop's activation. Explicit damage at each path
+outline follows the desktop's activation; the rubber band repaints its old
+and new outline, and the drag image its old and new box, whatever path
+changed them (fx-15b). Explicit damage at each path
 stays (content changes are only known there); the reconcile guarantees that
 a path which forgets it can no longer leave anything drawn. Its cost is a
 comparison of sixteen window records and sixteen task buttons per service
