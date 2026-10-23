@@ -1,0 +1,30 @@
+# f2-105 — Native 2D driver: NVIDIA GeForce FX and GeForce 6 (NV3x/NV4x) on the nv2d driver
+
+- **Phase/model:** F2, Codex gpt-6.1-sol, reasoning xhigh, `--search`. **Worktree:** `wt/f2-105` from `wt/f2-104`.
+- **Owner (2026-10-22):** universal acceleration on the common cards of 1998–2004. Every licence is allowed; keep notices, origin lines and credits.
+- **Contracts:**
+  - `docs/design/video-driver-families.md`, the section "NVIDIA TNT/TNT2, GeForce256/2/3/4, FX and GeForce6 — choose X nv" and sections 5, 6 and 10 (lead decisions and the owner's licence decision);
+  - `docs/design/display-driver-model.md` (registry DM1, required commands DM2, punting DM4, hardware check DM9, Amendment 1);
+  - `docs/design/display-command-semantics.md` for the optional commands.
+
+## Required
+
+1. **Driver.** Port the chosen donor into `src/kernel/drivers/video/<id>/`, registered through the part A registry with the PCI match table of the contract section.
+   - Keep the donor's origin and licence header in every imported file.
+   - The driver provides FILL, COPY and SYNC.
+   - Optional commands and the hardware cursor follow when the donor supports them; until f2-101d merges, implement them behind the part A hook signatures and capability bits.
+   - Mode setting stays VBE unless the contract section names a native mode provider.
+2. **Safety.** Probe without engine commands, verify ownership of the active frame buffer, use bounded waits, and never let the engine hold the bus.
+   - A fault quarantines the driver, and the software engine takes over after the idle proof of Amendment 1.
+   - The DM9 hardware check at activation is the runtime guard. A transport the lead must review is described in the report, but activation is enabled behind DM9 unless the contract section forbids it.
+3. **Tests.** Host fake-register tests cover the register sequences of every command (fill, copy in both overlap directions, sync and timeout, cursor), the probe and refusal paths, and quarantine. Add golden comparisons against the software engine where the model allows. Extend nv2d (on your branch) to NV3x and NV4x with the transport differences the contract names: the explicitly reviewed VRAM pushbuffer and wrap logic, because PIO is not sufficient on NV40+. Write that transport into the contract first, then implement it.
+4. **Records.** Device Manager shows the driver's display name, and the Control Panel shows it as the 2D driver. Add a row to the contract's family table with the result.
+
+Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited (datasheets, register references, donor files with path and tag). Host tests one at a time with `nice -n 19`. Write `build/codex/f2-105-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 01:38): transport approved
+
+The lead reviewed the NV3x/NV4x transport in the f2-105 report and the family contract and approves it as written.
+- **Transport:** VRAM pushbuffer with PFIFO fetch setup, wrap and jump, and completion via `NVDmaWait`/`NVSync` semantics, pinned to xf86-video-nv `0b6619fe`.
+- **Enable activation** behind the DM9 hardware check, as f2-104 amendment 1 did: a mismatch quarantines the driver and keeps software rendering after the idle proof.
+- **Tests:** activation, DM9 pass and mismatch quarantine; the refusal predicates stay tested independently.

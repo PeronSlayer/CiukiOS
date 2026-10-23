@@ -178,8 +178,26 @@ table in this file.
 | Family | Status |
 | --- | --- |
 | Software engine (any VBE 2.0+ card with a linear frame buffer) | f2-101 |
-| S3 Savage family | native, moves behind the registry in f2-101 |
-| Others (ATI, NVIDIA, Matrox, Intel, 3dfx, S3 Trio/ViRGE, SiS, Trident, VIA, NeoMagic) | chosen by f2-102 |
+| S3 Savage family | relocated in f2-101b; f2-112 adds family transports with host validation, physical qualification pending |
+| ATI Radeon R100/RV100 (discrete R100/RV100/RV200 primary functions) | f2-103: MMIO FILL/COPY/SYNC and monochrome cursor; VBE modes; host fixtures, runtime pending; [source decisions](../validation/f2-103-radeon-r100.md) |
+| ATI Radeon R200/RV250/RV280, R300/R350/RV350/RV380, R420/R423 (X800) | f2-106: explicit discrete primary IDs; separate subgroup cache/feature gates; MMIO FILL/COPY/SYNC, PATTERN/WRITE and monochrome cursor; saved-pixel native comparisons, VBE modes; host fixtures pass, physical qualification pending; [source decisions](../validation/f2-106-radeon-r200-r400.md) |
+| NVIDIA TNT/TNT2, GeForce256/2/3/4, FX/GeForce6 | `nv2d`, NVIDIA TNT-GeForce6: f2-104 PIO approved behind DM9; f2-105 VRAM ring approved by amendment 1, activation behind DM9; VBE modes |
+| Matrox G200/G400/G450/G550 | f2-110: Linux v6.12 native FILL/COPY/SYNC, DAC cursor and private mono preparation; host evidence, physical qualification pending; [port record](matrox-2d.md) |
+| VMware SVGA II (`15ad:0405`) | f2-111: native FIFO FILL/COPY/SYNC and legacy cursor, host verified; runtime qualification pending. VMSVGA without native FILL and earlier `0710` use software; see [implementation record](vmware-svga.md). |
+| Trident Blade / CyberBlade (f2-113) | Native Blade/XP FILL/COPY/SYNC, activation read-back guard; host evidence, hardware pending. Shared 1023:8400/8500 owned here. See [port contract](trident-blade-2d.md). |
+| ATI Rage 128 / Rage 128 Pro (including donor-listed Mobility) | f2-115: native FILL/COPY/SYNC and optional monochrome cursor behind part A; host verified, lead runtime/physical qualification pending; [evidence](../validation/f2-115-rage128.md) |
+| Cirrus Logic GD5430/GD5434/GD5436/GD5446 | f2-116 native FILL/COPY/SYNC; host qualification, runtime pending; VBE modes |
+| Intel i810/i815 (`8086:7121/7123/7125/1132`) | f2-119 native FILL/COPY/SYNC and optional legacy cursor; kernel-owned DMA-pinned ring/cursor pages in proved-free GTT entries; saved PTEs restored on stop; host evidence, physical DM9 pending; [transport](intel-legacy-2d.md) |
+| Intel i740 (`8086:7800/00d1`) | f2-119 separate native LP_FIFO FILL/COPY/SYNC and optional legacy cursor; MONO disabled; host evidence, physical DM9 pending; [transport](intel-legacy-2d.md) |
+| Chips & Technologies HiQV 65550/54/55 | f2-122: native F/C/SYNC, optional pattern/staged write/mono cursor at 16/24 bpp; DM9 activation, host evidence, physical qualification pending; [port record](chips-hiqv.md) |
+| Intel i830/i845G/i855GM/i865G/i915G | f2-107: registered FILL/COPY/SYNC, owned GTT ring/HWS/scratch, breadcrumb and bounded stop; host models pass. i845G/i855GM/i915G candidates with qualified firmware ownership/cache publication; i830M/i865G remain refused for unproved chipset flush. Cursor/INVERT gated; silicon/DM9 validation pending. See [reservation contract](intel-ring-gtt-reservation.md). |
+| VIA UniChrome / UniChrome Pro | f2-108: native FILL/COPY/SYNC, staged WRITE when UMA scratch is proved; VBE modes, software cursor; shared `1023:8400/8500` belong exclusively to Trident f2-113. Host evidence only; see [port record](via-unichrome.md). |
+| SiS 300/540/630; separate SiS 315/330 and 550/650/660 derivatives | f2-109 native MMIO FILL/COPY/SYNC, PATTERN and legacy monochrome cursor; private INVERT; host model and hardware gates in [validation](../validation/f2-109-sis.md) |
+| S3 Trio64 / Trio64V+ / UV+ / V2 (`s3trio64`) | f2-118: separate Haiku r1beta5 RGB565 backend; host evidence in `s3-trio64-virge.md`; hardware qualification pending |
+| S3 ViRGE / VX / DX/GX / GX2 / MX / MX+ (`s3virge`) | f2-118: separate Haiku r1beta5 RGB565 backend, optional mono cursor; host evidence in `s3-trio64-virge.md`; hardware qualification pending |
+| NeoMagic MagicGraph | [f2-121](neomagic-2d.md): NM2200/2230/2360/2380, Linux v6.12 F/C/Y/W, X.Org monochrome cursor, native-only activation check; older chips and 32 bpp use software; physical qualification pending |
+| ATI Mach64 / Rage Mobility | f2-114: native FILL/COPY/SYNC and optional legacy cursor; VBE modes; [transport](mach64-2d.md); physical qualification pending. |
+| 3dfx Voodoo3 / single-chip VSA-100 | f2-117: native FILL/COPY/SYNC and optional legacy cursor; VBE modes; [transport](tdfx-2d.md); physical qualification pending. |
 
 ## Acceptance for f2-101
 
@@ -327,9 +345,10 @@ activation hooks, so `accel=0` does not change full-screen recovery.
 The host suite is `nice -n 19 python3 -B tests/host/test_display_driver_model.py`
 (UBSan); `CIUKI_DISPLAY_ASAN=1` additionally enables ASan with default leak
 checking. `tests/host/test_display_driver_names.py` enforces DM12 using C token
-boundaries and explicit declarative/private/vendored/audio exceptions. Neither
-suite builds an image or executes a guest. Part B retains keyed markers and
-file moves; part C retains all newly proposed command/batch semantics.
+boundaries and explicit declarative/driver-tree/vendored/audio exceptions.
+Neither suite builds an image or executes a guest. Part B supplies keyed
+markers and file moves below; part C retains all newly proposed command/batch
+semantics.
 
 Presenter unlock refreshes the driver's cached legacy snapshot while the lock
 is held (never during deferred initialization), then releases the lock.
@@ -345,3 +364,86 @@ hides it again, under exclusive drawing ownership and deadline/cancellation
 checks. Existing driver callbacks verify the cursor base and enable register;
 MOVE supplies submission evidence, not coordinate-register readback. The
 cursor-evidence bit is separate from the four framebuffer command bits.
+
+## Part B implementation: private driver tree and durable keys
+
+The native sources, private headers and registration adapter now live in
+`src/kernel/drivers/video/s3savage/`. The canonical builder explicitly lists
+the four native translation units with `s3savage_*` object names, alongside
+`video_registry`, `video_attempt` and `video_swdib`. The move changes includes
+and build/test paths, without changing register programming, drawing, mode
+transitions or resource qualification. The name test also scans the video
+tree; former private-header exemptions outside the driver directory are gone.
+Only the exact declarative registration lines in the generic registry remain
+an exception for this family.
+
+`display_attempt_marker` is the registry's worker-only persistence interface.
+The driver exports `savage2d_attempt_begin/end/failed` and
+`savage2d_check_begin` remain the adapter boundary. BEGIN still runs the same
+eligibility and production EngineConfig checks; successful write, commit and
+close still grant only one activation. The adapter pins the PCI vendor/device
+before yielding to storage and uses that key for END and failure annotations.
+END and annotation reject retained attempts and failed BEGINs. No VFS I/O
+moves under the presenter, no lock context changes, and no new panic path is
+introduced.
+
+Storage is `C:/system/settings/accel-<id>-<vendor>-<device>.cfg` with four
+lowercase hex digits for each PCI component. Driver ids are bounded to 1–15
+lowercase ASCII letters, digits, `_` and `-`; filenames encode the full key
+without hashing, truncation or case aliases. Any nonempty keyed record blocks
+activation, even on a read-only volume. A missing, unreadable or uncommittable
+settings store cannot authorize hardware. A busy flag protects the single
+static VFS table against re-entry while filesystem calls yield. Successful
+completion truncates only the pinned key; failure annotation never truncates.
+
+The legacy `accel.cfg` path is private adapter data associated with this
+driver's current, uniquely identified supported PCI function. Other drivers
+do not receive that mapping. A nonempty legacy record is always reported as
+a retained attempt. When writable and at most 240 bytes, migration reads its
+exact bytes, adds `migrated=legacy\n`, writes the keyed replacement and requires
+both commit and close before truncating/committing/closing the old file. A
+`[accel] marker migration` log includes driver id, PCI id and the legacy path.
+The migrated record still blocks this boot and subsequent boots. Any failure
+leaves at least the old or the new guard; read-only, oversized and unreadable
+legacy records remain untouched. If a keyed guard already exists, both records
+are retained. A retained diagnostic attempt cannot clear either guard.
+
+Primary-source comparison for this change:
+
+- The read-only Windows 98 Resource Kit, chapter 24, `wrkc24_3.htm`,
+  “Display Driver Overview”, describes fallback when a display minidriver
+  fails to initialize. Keep that fallback behind durable attempt authorization;
+  the keyed on-disk protocol is CiukiOS policy, not a claimed Windows format.
+- [S3 RE046-B, sections 1 and 4](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf)
+  and [X.Org `src/savage_driver.c`, `SavageMapMem` (NetBSD xsrc ref `trunk`)](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c)
+  retain the existing family-specific BAR and transport decisions. This change
+  neither programs new registers nor changes those sequences.
+- [Haiku `headers/os/add-ons/graphics/Accelerant.h`, ref `master`](https://raw.githubusercontent.com/haiku/haiku/master/headers/os/add-ons/graphics/Accelerant.h),
+  [X.org `exa/exa.h`, ref `master`](https://raw.githubusercontent.com/XQuartz/xorg-server/master/exa/exa.h)
+  and [Linux `include/linux/fb.h`, tag `v6.1`](https://raw.githubusercontent.com/torvalds/linux/v6.1/include/linux/fb.h)
+  separate driver lifecycle and drawing/synchronization hooks. Persistence
+  remains outside drawing and mode transactions. No upstream code is copied
+  or vendored; the independently implemented driver origins and GPL notices
+  are preserved.
+
+The host display-model suite includes committed-versus-cache storage tests
+for driver/vendor/device isolation, interruption, status annotation, migration,
+every migration I/O cut, read-only media, oversized/unknown legacy contents,
+short reads/writes, invalid ids and yielding re-entry. The production register
+suite also checks that retained diagnostic END/annotation cannot clear a
+marker. These are host models, not evidence of hardware or guest execution.
+
+## f2-112 family transport interfaces
+
+The registry appends the optional, read-only `framebuffer_bar_for(pci)` hook.
+Its result selects the BAR to check with the existing extent, active-lease,
+generation, RAM exclusion and ambiguity rules. It cannot establish ownership
+by itself. Legacy adapters retain `framebuffer_bar` and need no changes.
+
+DM9 runs its native-only software-reference comparison when an optional driver
+configuration sweep cleanly returns `-EOPNOTSUPP`, with no trials and restored
+state. A retained attempt still skips activation; unsafe or partially attempted
+sweeps still fail. The established configuration sweeps and their two-depth
+qualification remain unchanged. A missing optional sweep follows the same clean
+path. The keyed guard must be cleared successfully before the comparison's
+fresh durable activation. See [f2-112 host validation](../validation/f2-112-savage-family.md).

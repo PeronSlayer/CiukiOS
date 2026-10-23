@@ -7,7 +7,7 @@
 #include <ciuki/display.h>
 #include <ciuki/registry.h>
 #include <ciuki/timing.h>
-#include <ciuki/supersavage_display.h>
+#include "supersavage_display.h"
 #include "supersavage_mode.h"
 #include <ciuki/dos_video_modes.h>
 #define MODE_MMIO_BYTES 0x80000u

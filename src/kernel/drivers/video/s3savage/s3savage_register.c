@@ -1,13 +1,13 @@
-/* Adapter for the unchanged in-tree driver. No upstream fragments copied.
+/* Adapter for the in-tree family driver. No upstream fragments copied.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/display_driver.h>
-#include <ciuki/savage2d.h>
-#include <ciuki/supersavage_display.h>
+#include "savage2d.h"
+#include "supersavage_display.h"
 static const struct display_match matches[] = {
-    {0x5333,0x8a22,3,255}, {0x5333,0x8c22,3,255}, {0x5333,0x8c24,3,255},
-    {0x5333,0x8c26,3,255}, {0x5333,0x8c2a,3,255}, {0x5333,0x8c2b,3,255},
-    {0x5333,0x8c2c,3,255}, {0x5333,0x8c2d,3,255}, {0x5333,0x8c2e,3,255}, {0x5333,0x8c2f,3,255}
+#define SAVAGE_DEVICE(id, chip) {0x5333,id,3,255},
+#include "savage_ids.h"
+#undef SAVAGE_DEVICE
 };
 static bool mode_adapter(const struct pci_func *p)
 { return p && p->vendor == 0x5333 && p->device == 0x8c2e; }
@@ -51,5 +51,6 @@ const struct display_driver s3savage_driver = {
     .attempt_failed=savage2d_attempt_failed, .record=savage2d_record,
     .quarantine=savage2d_quarantine, .summary=savage2d_summary,
     .snapshot=savage2d_snapshot, .modes=&modes, .mode_adapter=mode_adapter,
-    .check_begin=savage2d_check_begin, .selftest=selftest, .cursor_test=cursor_test
+    .check_begin=savage2d_check_begin, .selftest=selftest, .cursor_test=cursor_test,
+    .framebuffer_bar_for=savage2d_framebuffer_bar
 };

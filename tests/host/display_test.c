@@ -13,7 +13,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/cpu.h>
-#include <ciuki/supersavage_display.h>
+#include "../../src/kernel/drivers/video/s3savage/supersavage_display.h"
 #include <ciuki/display_driver.h>
 #include <ciuki/dos_video_modes.h>
 #undef irq_save

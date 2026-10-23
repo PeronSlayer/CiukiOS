@@ -12,15 +12,16 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
+# integ-video: all four renders reviewed after combining family donor credits.
 GOLDENS = {
     "about-credits":
-        "18da39e3b0d37185f496e748c74ea73479b826f684704963527ddb35f8876895",
+        "162529fa17bcbf6b3f87a28d1a72808e75cd3ff91e6d69b8ce8fc1aeb63f81da",
     "about-credits-end":
-        "8b97b494eb520716bb1adb6edb4fe093e2d6c999dd8ccacf1e6ebf42ce4ac268",
+        "4532d7016e5893ae2968e2c7af72eacb557bd28122a36651bb132cfdda5b4143",
     "about-credits-pgdn":
-        "f4bb9f4d4e6027509b63d48020a5bfaf5bf1443c2676ff90b16fa84f242dc92f",
+        "07c2c5aece6f18ae23d369643aacb104fd25e21cc5386b459665f8927d4ff5ae",
     "about-credits-wheel":
-        "a9e0529737a7d45249fd041ef4f2c74f173804a5677a1dfb53e6833c672786ea",
+        "30b2979c2137572b5c763375970811133a0332f549f73e6b6f62e1dd003f5e91",
 }
 
 

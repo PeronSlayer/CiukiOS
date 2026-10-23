@@ -1,0 +1,33 @@
+{
+  "component": "Linux Trident Blade/XP engine",
+  "upstream": "https://github.com/torvalds/linux",
+  "revision": "v6.12",
+  "destination": "src/kernel/drivers/video/trident/engine.c",
+  "sources": [
+    {
+      "path": "drivers/video/fbdev/tridentfb.c",
+      "blob": "516cf2a187575da096f233591fb35bb6f7c23d7b",
+      "license": "GPL-2.0-only",
+      "scope": "Blade and XP initialization, fill and copy register sequences; PCI engine dispatch"
+    },
+    {
+      "path": "include/video/trident.h",
+      "blob": "5ccc0d6a070c7c9c53fd131817c0bcaddb80a925",
+      "license": "GPL-2.0",
+      "scope": "Register offsets, ROP values and PCI constants"
+    }
+  ],
+  "adaptation": [
+    "Native Ciuki lifecycle, resource ownership and UC MMIO glue",
+    "Bounded sliced waits, no timeout reset and idle-proved CPU safety",
+    "Checked RGB565/XRGB8888 geometry and explicit XP byte-pitch encoding",
+    "Native-only activation comparison with swdib and durable attempt file"
+  ],
+  "reference_only": {
+    "upstream": "https://gitlab.freedesktop.org/xorg/driver/xf86-video-trident",
+    "mirror": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-trident",
+    "revision": "64c02f307d7146641adf65e31bcaa2d1238479e7",
+    "paths": ["src/xp_accel.c", "src/blade_accel.c", "src/trident_driver.c", "src/trident_dac.c", "src/trident_accel.c"]
+  },
+  "notice": "docs/licenses/trident-blade-NOTICES.txt"
+}

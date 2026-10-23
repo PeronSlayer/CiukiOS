@@ -1,0 +1,39 @@
+{
+  "sources": [
+    {
+      "file": "neofb.c",
+      "url": "https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/neofb.c",
+      "sha256": "d206e733cf430aae4441a90557d333ffd98a07ab4bafb9ac43030238d31bf64a",
+      "use": "engine fragments; OS glue rewritten"
+    },
+    {
+      "file": "neomagic.h",
+      "url": "https://github.com/torvalds/linux/blob/v6.12/include/video/neomagic.h",
+      "sha256": "bf36d6cc9a99c3521db76ceb5746b477d99ad529846f34ce660a206b21c9c9f7",
+      "use": "register constants"
+    },
+    {
+      "file": "neo_cursor.c",
+      "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-neomagic/blob/6661bdd4551e4e63e983685464a277845aed3012/src/neo_cursor.c",
+      "sha256": "6f6ecd1ae091fa90393cee57b8824ccbc22dc9013375f7c9f1083565916cf275",
+      "use": "cursor packing, address and colour fragments"
+    },
+    {
+      "file": "neo_reg.h",
+      "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-neomagic/blob/6661bdd4551e4e63e983685464a277845aed3012/src/neo_reg.h",
+      "sha256": "19329fb45cb92f3f65529a38db6ae30a168d54cd438a6d5bc6207fbd8a8fa69c",
+      "use": "reference only; no code copied"
+    },
+    {
+      "file": "neo_2200.c",
+      "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-neomagic/blob/6661bdd4551e4e63e983685464a277845aed3012/src/neo_2200.c",
+      "sha256": "422248134f3074bfecd8d48633838506a2e04f66d2a09c6f5389e9ab597dd929",
+      "use": "reference only; no code copied"
+    }
+  ],
+  "licences": [
+    "GPL-2.0",
+    "X11"
+  ],
+  "notice": "docs/licenses/neomagic-NOTICES.txt"
+}

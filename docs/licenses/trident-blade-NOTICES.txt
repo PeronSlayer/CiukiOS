@@ -1,0 +1,38 @@
+CiukiOS Trident Blade / CyberBlade 2D engine port (f2-113)
+
+Imported/adapted source:
+Linux v6.12 drivers/video/fbdev/tridentfb.c
+https://github.com/torvalds/linux/blob/v6.12/drivers/video/fbdev/tridentfb.c
+Git blob: 516cf2a187575da096f233591fb35bb6f7c23d7b
+SPDX-License-Identifier: GPL-2.0-only
+
+Frame buffer driver for Trident TGUI, Blade and Image series
+
+Copyright 2001, 2002 - Jani Monoses   <jani@iv.ro>
+Copyright 2009 Krzysztof Helt <krzysztof.h1@wp.pl>
+
+CREDITS:(in order of appearance)
+    skeletonfb.c by Geert Uytterhoeven and other fb code in drivers/video
+    Special thanks ;) to Mattia Crivellini <tia@mclink.it>
+    much inspired by the XFree86 4.x Trident driver sources
+    by Alan Hourihane the FreeVGA project
+    Francesco Salvestrini <salvestrini@users.sf.net> XP support,
+    code, suggestions
+
+Register constants/reference:
+Linux v6.12 include/video/trident.h
+https://github.com/torvalds/linux/blob/v6.12/include/video/trident.h
+Git blob: 5ccc0d6a070c7c9c53fd131817c0bcaddb80a925
+SPDX-License-Identifier: GPL-2.0
+
+Adaptation is in src/kernel/drivers/video/trident/engine.c. Only Blade and
+XP local-framebuffer initialization, fill and copy sequences are ported.
+Ciuki lifecycle, ownership, transport, deadlines, quarantine, pixel checks,
+tests and byte-pitch correction are new glue. No donor .c file is included.
+Linux mode setting, Image/TGUI, host expansion and silent reset are excluded.
+The original source notice and origin remain in engine.c.
+
+GPL version 2 text: CiukiOS repository LICENSE; installed alongside this
+notice as trident-blade-GPL-2.0.txt. Source is supplied in the CiukiOS source
+tree. X.Org files cited in docs/design/trident-blade-2d.md are register
+cross-check references; their implementation is not imported.

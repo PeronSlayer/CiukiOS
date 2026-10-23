@@ -1,0 +1,106 @@
+{
+  "linux_tag": "v6.12",
+  "xorg_tag": "xf86-video-ati-6.14.6",
+  "qemu_reference_tag": "v9.2.0",
+  "research_files": [
+    {
+      "file": "linux-ati_ids.h",
+      "sha256": "2929a3609807cf2876c491fdbd014d099eca3fe769a7bd1451c40c979d18fd5a"
+    },
+    {
+      "file": "linux-radeon.h",
+      "sha256": "ceec8579a21eab5001c9d554a3ca91b0e3d5862e6fb17d5085394e1e4437375a"
+    },
+    {
+      "file": "linux-radeon_accel.c",
+      "sha256": "bb2133e20cae8c48a8d01d78526f43eb8421340d9e11216afecca0b3139e3c83"
+    },
+    {
+      "file": "linux-radeon_base.c",
+      "sha256": "a92a2d0b788193b4b2915ae8069327b3248a084a1b4168c10d5158a4e8cf538c"
+    },
+    {
+      "file": "linux-radeonfb.h",
+      "sha256": "b5c8dd63f9a4c74d0b4dd78a78bc16073fd098618b9e7abe18bc811b34bd0b1d"
+    },
+    {
+      "file": "qemu-ati.c",
+      "sha256": "af3a6edaf3077a205be02a52cf3c8c96be3760abf6fedaf15da743a05e729c57"
+    },
+    {
+      "file": "qemu-ati_2d.c",
+      "sha256": "bc810de24150da5bb4f64a9940b262c09f134e1dde68a83599b75376b062db04"
+    },
+    {
+      "file": "qemu-ati_regs.h",
+      "sha256": "a24f9d92dfc83ee019a155624c1899ce9b80d0d8f235648b51635a7eb115394e"
+    },
+    {
+      "file": "xorg-radeon_accelfuncs.c",
+      "sha256": "d4d7e1e5649ca25d4e45e81ba31a4c11b175fa6bb691628b94c034f9b8e647d1"
+    },
+    {
+      "file": "xorg-radeon_cursor.c",
+      "sha256": "60e372dd84fda4b7257799c648987399503574f5c2fabed4a3f4a082a4975941"
+    },
+    {
+      "file": "xorg-radeon_reg.h",
+      "sha256": "d5d2c15da18fcfbcc1a7878015b9fc2a23982b4207dce0fbcf10da464db33778"
+    }
+  ],
+  "compiled_sources": [
+    "engine.c",
+    "cursor.c",
+    "driver.c"
+  ],
+  "imported_definitions": "registers.h",
+  "f2_106": {
+    "transport": "MMIO only; VBE modes; no CP/DMA/GART/PLL/reset/WAIT_UNTIL",
+    "groups": {
+      "R100": {
+        "pci_ids": 12,
+        "cache_mode": "zero",
+        "optional_hooks": [],
+        "activation": "saved block compared to swdib; overlap in both directions; optional hooks compared separately"
+      },
+      "R200": {
+        "pci_ids": 17,
+        "cache_mode": "zero",
+        "optional_hooks": [
+          "pattern_rect",
+          "write_rect"
+        ],
+        "activation": "saved block compared to swdib; overlap in both directions; optional hooks compared separately"
+      },
+      "R300": {
+        "pci_ids": 39,
+        "cache_mode": "preserve + AUTOFLUSH + DISABLE_IGNORE_PE",
+        "optional_hooks": [
+          "pattern_rect",
+          "write_rect"
+        ],
+        "activation": "saved block compared to swdib; overlap in both directions; optional hooks compared separately"
+      },
+      "R4XX": {
+        "pci_ids": 16,
+        "cache_mode": "preserve + AUTOFLUSH + DISABLE_IGNORE_PE",
+        "optional_hooks": [
+          "pattern_rect",
+          "write_rect"
+        ],
+        "activation": "saved block compared to swdib; overlap in both directions; optional hooks compared separately"
+      }
+    },
+    "upload_limit_dwords_per_row": 48,
+    "additional_donor_functions": [
+      "X.Org ATI 6.14.6 radeon_accelfuncs.c: RADEONSetupForMono8x8PatternFill / RADEONSubsequentMono8x8PatternFillRect",
+      "X.Org ATI 6.14.6 radeon_accelfuncs.c ACCEL_MMIO: RADEONSetupForScanlineImageWrite / RADEONSubsequentScanlineImageWriteRect / RADEONSubsequentScanline"
+    ],
+    "excluded": [
+      "RS/UMA/Xpress",
+      "secondary functions",
+      "R500 and unmatched refreshes",
+      "RN50 (outside this extension)"
+    ]
+  }
+}

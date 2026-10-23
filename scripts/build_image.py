@@ -119,6 +119,27 @@ def desktop_license_payloads():
                  "jitterentropy-3.7.0-NOTICES.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
     sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
+    sources["/system/licenses/radeon2d-NOTICES.txt"] = ROOT / "docs/licenses/radeon2d-NOTICES.txt"
+    sources["/system/licenses/nv2d-NOTICES.txt"] = ROOT / "docs/licenses/nv2d-NOTICES.txt"
+    sources["/system/licenses/intel2d-NOTICES.txt"] = ROOT / "docs/licenses/intel2d-NOTICES.txt"
+    sources["/system/licenses/unichrome-NOTICES.txt"] = ROOT / "docs/licenses/unichrome-NOTICES.txt"
+    sources["/system/licenses/sis-2d-NOTICES.txt"] = ROOT / "docs/licenses/sis-2d-NOTICES.txt"
+    sources["/system/licenses/matrox-linux-v6.12-NOTICES.txt"] = ROOT / "docs/licenses/matrox-linux-v6.12-NOTICES.txt"
+    sources["/system/licenses/matrox-GPL-2.0.txt"] = ROOT / "LICENSE"
+    sources["/system/licenses/vmware-svga-NOTICES.txt"] = ROOT / "docs/licenses/vmware-svga-NOTICES.txt"
+    sources["/system/licenses/trident-blade-NOTICES.txt"] = ROOT / "docs/licenses/trident-blade-NOTICES.txt"
+    sources["/system/licenses/trident-blade-GPL-2.0.txt"] = ROOT / "LICENSE"
+    sources["/system/licenses/trident-blade-import.json"] = ROOT / "src/kernel/drivers/video/trident/import.json"
+    sources["/system/licenses/haiku-mach64-NOTICES.txt"] = ROOT / "docs/licenses/haiku-mach64-NOTICES.txt"
+    sources["/system/licenses/haiku-rage128-NOTICES.txt"] = ROOT / "docs/licenses/haiku-rage128-NOTICES.txt"
+    sources["/system/licenses/cirrusfb-v6.12-NOTICES.txt"] = ROOT / "docs/licenses/cirrusfb-v6.12-NOTICES.txt"
+    sources["/system/licenses/haiku-r1beta5-3dfx-NOTICES.txt"] = ROOT / "docs/licenses/haiku-r1beta5-3dfx-NOTICES.txt"
+    sources["/system/licenses/haiku-s3-r1beta5-NOTICES.txt"] = ROOT / "docs/licenses/haiku-s3-r1beta5-NOTICES.txt"
+    sources["/system/licenses/intel-legacy-2d-NOTICES.txt"] = ROOT / "docs/licenses/intel-legacy-2d-NOTICES.txt"
+    sources["/system/licenses/intel-legacy-2d-GPL-2.0.txt"] = ROOT / "LICENSE"
+    sources["/system/licenses/neomagic-NOTICES.txt"] = ROOT / "docs/licenses/neomagic-NOTICES.txt"
+    sources["/system/licenses/chipshiqv-NOTICES.txt"] = ROOT / "docs/licenses/chipshiqv-NOTICES.txt"
+    sources["/system/licenses/chipshiqv-import.json"] = ROOT / "src/kernel/drivers/video/chipshiqv/import.json"
     return sources
 
 

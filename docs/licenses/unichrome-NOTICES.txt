@@ -1,0 +1,58 @@
+CiukiOS VIA UniChrome native 2D port
+
+Linux v6.12: drivers/video/fbdev/via/{accel.c,accel.h,via-core.c,chip.h,hw.h}.
+https://github.com/torvalds/linux/tree/v6.12/drivers/video/fbdev/via
+The original-engine register packing, match IDs and UMA decoding are adapted.
+accel.c, accel.h, chip.h, hw.h, via_modesetting.c: GPL-2.0-or-later.
+via-core.c: GPL-2.0-only; kernel GPLv2 licence text is in LICENSE.
+The runtime adapter retains this original via-core.c notice:
+
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright 1998-2009 VIA Technologies, Inc. All Rights Reserved.
+ * Copyright 2001-2008 S3 Graphics, Inc. All Rights Reserved.
+ * Copyright 2009 Jonathan Corbet <corbet@lwn.net>
+ */
+
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright 1998-2008 VIA Technologies, Inc. All Rights Reserved.
+ * Copyright 2001-2008 S3 Graphics, Inc. All Rights Reserved.
+
+ */
+
+The scanout decoding is adapted from via_modesetting.c (same tag/licence):
+Copyright 2010 Florian Tobias Schandinat <FlorianSchandinat@gmx.de>
+
+OpenChrome via_ums.c: viaMapMMIO extended-register unlock, viaMMIOEnable
+primary original-engine access and viaDisableVQ original-engine sequence.
+NetBSD/xsrc 947c2727683984b334ebe249fd981dad3e7a2f44
+external/mit/xf86-video-openchrome/dist/src/via_ums.c
+https://github.com/NetBSD/xsrc/blob/947c2727683984b334ebe249fd981dad3e7a2f44/external/mit/xf86-video-openchrome/dist/src/via_ums.c
+
+/*
+ * Copyright 2011-2016 The OpenChrome Project
+ *                     [https://www.freedesktop.org/wiki/Openchrome]
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sub license,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial portions
+ * of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+
+
+Native CiukiOS glue is GPL-2.0-only. No donor .c file is included by a production translation unit.

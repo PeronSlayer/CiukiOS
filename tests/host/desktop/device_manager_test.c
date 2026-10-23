@@ -136,6 +136,10 @@ int main(int argc, char **argv)
     struct du_widget *tree = kind(DU_TREE); tree->active = audio_row; du_post(&ui, DU_EV_SELECT, tree->id, (int)audio_row);
     click("Properties..."); assert(du_dialog_id(&ui) && strstr(ui.dialog.text, "Quarantined") && strstr(ui.dialog.text, "8086:2415"));
     assert(strstr(ui.dialog.text, "ac97") && strstr(ui.dialog.text, "Generation: 16")); render(renders, "device-properties-general");
+    at_tap(&ui, DU_KEY_ESC);
+    strcpy(sample.devices[6].driver_display_name,"Recording adapter driver"); click("Refresh");
+    click("Properties..."); assert(strstr(ui.dialog.text,"Driver: Recording adapter driver"));
+    sample.devices[6].driver_display_name[0]=0; /* keep the existing render fixtures */
     struct du_rect b = du_dialog_button(&ui, 1); at_click(&ui, b.x + b.w / 2, b.y + b.h / 2);
     assert(strstr(ui.dialog.text, "I/O: 0xC000 - 0xC0FF") && strstr(ui.dialog.text, "IRQ: 11") && strstr(ui.dialog.text, "size unknown"));
     render(renders, "device-properties-resources"); at_tap(&ui, DU_KEY_ESC); assert(!du_dialog_id(&ui));

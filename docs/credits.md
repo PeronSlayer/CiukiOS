@@ -16,6 +16,24 @@ Status: **image** is installed in the image, **build only** is used to build or 
 | FreeType | 2.13.3 | FTL | `config/sdk-pins.json` | image |
 | Liberation, Noto, Inter fonts | see fonts | SIL OFL 1.1 | `assets/fonts/LICENSES.TXT` | image |
 | jitterentropy-library | 3.7.0 | BSD-3 or GPL-2.0 | `docs/licenses/jitterentropy-3.7.0-NOTICES.txt` | image |
+| Radeon MMIO 2D register port | Linux 6.12, ATI 6.14.6 | GPL-2.0 and MIT | `docs/licenses/radeon2d-NOTICES.txt` | image |
+| X.Org nv 2D engine (integrating) | 0b6619fe | MIT-style | `docs/licenses/nv2d-NOTICES.txt` | integrating |
+| NVIDIA PIO FIFO table (integrating) | Linux v6.12 | NVIDIA permissive | `docs/licenses/nv2d-NOTICES.txt` | integrating |
+| Intel 2D: Haiku and Intel | r1beta5 / Linux v6.7 | MIT | `docs/licenses/intel2d-NOTICES.txt` | image |
+| VIA UniChrome native 2D port | v6.12 / 947c2727 | GPL-2.0 + MIT | `docs/licenses/unichrome-NOTICES.txt` | image |
+| SiS 2D (Thomas Winischhofer) | Linux v6.12 / X.Org | GPL-2.0-or-later / BSD-3 | `docs/licenses/sis-2d-NOTICES.txt` | image |
+| Matrox native 2D donor (Linux fbdev) | Linux v6.12 | GPL-2.0-only / GPL-2.0 | `docs/licenses/matrox-linux-v6.12-NOTICES.txt` | image |
+| VMware SVGA protocol header | 8f0cf7c03597 | MIT | `docs/licenses/vmware-svga-NOTICES.txt` | image |
+| Linux Trident Blade/XP engine | v6.12 | GPL-2.0-only | `docs/licenses/trident-blade-NOTICES.txt` | image |
+| Haiku ATI Mach64 driver fragments | r1beta5 (a1f00118db8b) | MIT | `docs/licenses/haiku-mach64-NOTICES.txt` | image |
+| Haiku ATI 2D driver fragments | r1beta5 | MIT | `docs/licenses/haiku-rage128-NOTICES.txt` | image |
+| Linux cirrusfb engine | v6.12 | GPL-2.0 | `docs/licenses/cirrusfb-v6.12-NOTICES.txt` | image |
+| Haiku 3dfx driver fragments | r1beta5 | MIT | `docs/licenses/haiku-r1beta5-3dfx-NOTICES.txt` | image |
+| Haiku S3 Trio64 and ViRGE fragments | r1beta5 | MIT | `docs/licenses/haiku-s3-r1beta5-NOTICES.txt` | image |
+| Linux i810 framebuffer driver | 6.12 | GPL-2.0 | `docs/licenses/intel-legacy-2d-NOTICES.txt` | image |
+| X.Org i740 display driver | 1f13c18a1791 | MIT-style | `docs/licenses/intel-legacy-2d-NOTICES.txt` | image |
+| NeoMagic 2D engine and cursor | v6.12 / X 6661bdd | GPL-2.0 and X11 | `docs/licenses/neomagic-NOTICES.txt` | image |
+| X.Org Chips HiQV engine and cursor | 9187d76bd4f8 | X11/MIT; header unspecified | `docs/licenses/chipshiqv-NOTICES.txt` | image |
 | pixman, X11 regions (integrating) | f2-95 | MIT | `third_party/pixman` | integrating |
 
 ## DOS

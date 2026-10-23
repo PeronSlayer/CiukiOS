@@ -4,7 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <ciuki/kernel.h>
-#include "../../src/kernel/drivers/video/s3savage_register.c"
+#include "../../src/kernel/drivers/video/s3savage/s3savage_register.c"
 volatile uint64_t g_ticks;
 static unsigned sets,moves,shows,hides;
 static bool fail_set;

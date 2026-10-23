@@ -3,8 +3,51 @@
 #include <ciuki/kernel.h>
 #include <ciuki/display_driver.h>
 extern void console_splash_accel(bool,bool,const char *) __attribute__((weak));
+extern const struct display_driver mach64_driver; /* declarative registration */
+extern const struct display_driver rage128_driver; /* declarative registration */
+extern const struct display_driver radeon2d_driver; /* declarative registration */
+extern const struct display_driver sis300_driver; /* declarative registration */
+extern const struct display_driver sis315_driver; /* declarative registration */
+extern const struct display_driver cirrus_driver; /* declarative registration */
+extern const struct display_driver trident_blade_driver; /* declarative registration */
+extern const struct display_driver chipshiqv_driver; /* declarative registration */
+extern const struct display_driver matrox_driver; /* declarative registration */
+extern const struct display_driver nv2d_driver; /* declarative registration */
+extern const struct display_driver neomagic_driver; /* declarative registration */
+extern const struct display_driver unichrome_driver; /* declarative registration */
+extern const struct display_driver tdfx_driver; /* declarative registration */
+extern const struct display_driver vmwaresvga_driver; /* declarative registration */
 extern const struct display_driver s3savage_driver; /* declarative registration */
-static const struct display_driver *const drivers[] = { &s3savage_driver };
+extern const struct display_driver s3trio64_driver; /* declarative registration */
+extern const struct display_driver s3virge_driver; /* declarative registration */
+extern const struct display_driver i740_driver; /* declarative registration */
+extern const struct display_driver i810_driver; /* declarative registration */
+extern const struct display_driver intel2d_gen2_driver; /* declarative registration */
+extern const struct display_driver intel2d_gen3_driver; /* declarative registration */
+/* Exact native matches have equal specificity; ties use PCI vendor/family order. */
+static const struct display_driver *const drivers[] = {
+    &mach64_driver,
+    &rage128_driver,
+    &radeon2d_driver,
+    &cirrus_driver,
+    &trident_blade_driver,
+    &matrox_driver,
+    &chipshiqv_driver,
+    &sis300_driver,
+    &sis315_driver,
+    &neomagic_driver,
+    &nv2d_driver,
+    &unichrome_driver,
+    &tdfx_driver,
+    &vmwaresvga_driver,
+    &s3savage_driver,
+    &s3trio64_driver,
+    &s3virge_driver,
+    &i740_driver,
+    &i810_driver,
+    &intel2d_gen2_driver,
+    &intel2d_gen3_driver,
+};
 static const struct display_driver *bound;
 static const struct pci_func *owner;
 static const char *software_reason = "pending";
@@ -43,14 +86,15 @@ static bool match(const struct display_driver *d, const struct pci_func *p)
 }
 static bool owns(const struct display_driver *d, const struct pci_func *p, const struct fb_device *fb)
 {
+    unsigned bar = d->framebuffer_bar_for ? d->framebuffer_bar_for(p) : d->framebuffer_bar;
     /* Firmware-configured 32-bit memory BAR plus the validated VBE extent.
      * No destructive PCI BAR sizing, decode changes or resource claims.
      * A BAR base alone is insufficient: reject RAM aliases, overflow,
      * truncated firmware VRAM and any second display function. */
     if (!fb || !fb->present || !fb->size || !fb->pitch ||
         (p->header_type & 0x7f) || p->class_code != 3 || !(p->command & 2u) ||
-        d->framebuffer_bar >= 6 || (p->bar[d->framebuffer_bar] & 7u) ||
-        (p->bar[d->framebuffer_bar] & ~15u) != fb->phys || fb->phys < 0x100000 ||
+        bar >= 6 || (p->bar[bar] & 7u) ||
+        (p->bar[bar] & ~15u) != fb->phys || fb->phys < 0x100000 ||
         fb->size > UINT32_MAX-fb->phys || (uint64_t)fb->pitch*fb->height > fb->size ||
         !g_boot.display.vram_bytes || fb->size > g_boot.display.vram_bytes) return false;
     /* Tie the PCI BAR to the complete active framebuffer access lease,

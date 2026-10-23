@@ -1,6 +1,6 @@
 /* Link the existing register model through the production registry.
  * Only the hardware boundary and frozen driver's entry point are substituted. */
-#include <ciuki/savage2d.h>
+#include "../../src/kernel/drivers/video/s3savage/savage2d.h"
 #pragma weak savage2d_init
 #pragma weak savage2d_supported
 #pragma weak savage2d_eligible
@@ -23,4 +23,24 @@ const struct display_driver s3savage_driver = {
     .attempt_begin=savage2d_attempt_begin,.attempt_end=savage2d_attempt_end,.attempt_failed=savage2d_attempt_failed,
     .quarantine=savage2d_quarantine,.record=savage2d_record,.summary=savage2d_summary,.snapshot=savage2d_snapshot
 };
+const struct display_driver mach64_driver = {0};
+const struct display_driver rage128_driver = {0};
+const struct display_driver radeon2d_driver = {0};
+const struct display_driver sis300_driver = {0};
+const struct display_driver sis315_driver = {0};
+const struct display_driver cirrus_driver = {0};
+const struct display_driver trident_blade_driver = {0};
+const struct display_driver chipshiqv_driver = {0};
+const struct display_driver matrox_driver = {0};
+const struct display_driver nv2d_driver = {0};
+const struct display_driver neomagic_driver = {0};
+const struct display_driver unichrome_driver = {0};
+const struct display_driver tdfx_driver = {0};
+const struct display_driver vmwaresvga_driver = {0};
+const struct display_driver s3trio64_driver = {0};
+const struct display_driver s3virge_driver = {0};
+const struct display_driver i740_driver = {0};
+const struct display_driver i810_driver = {0};
+const struct display_driver intel2d_gen2_driver = {0};
+const struct display_driver intel2d_gen3_driver = {0};
 #include "../../src/kernel/drivers/video/registry.c"

@@ -6,7 +6,7 @@
 #include "fbdev_test.c"
 #undef savage2d_init
 #undef main
-#include <ciuki/savage2d.h>
+#include "../../src/kernel/drivers/video/s3savage/savage2d.h"
 #include <ciuki/cpu.h>
 #include <time.h>
 #include <ciuki/work.h>
@@ -67,11 +67,12 @@ static void *binding_reserve(uint32_t capacity)
 #define outb test_outb
 #define vmm_reserve_mmio binding_reserve
 #include "../../src/kernel/fs/vfs.h"
+#include "../../src/kernel/drivers/video/attempt.c"
 static void *sweep_alloc(size_t n) { return calloc(1,n); }
 static void sweep_free(void *p,size_t n) { (void)n; free(p); }
 #define fs_contig_alloc sweep_alloc
 #define fs_contig_free sweep_free
-#include "../../src/kernel/drivers/savage2d.c"
+#include "../../src/kernel/drivers/video/s3savage/savage2d.c"
 #undef fs_contig_alloc
 #undef fs_contig_free
 #undef registry_claim
@@ -154,6 +155,7 @@ static char disk_marker[64], cache_marker[64];
 static unsigned disk_size, cache_size, marker_commits;
 static bool marker_exists, table_open, marker_open, marker_error, clear_error;
 static unsigned marker_fault;
+static char last_marker_path[80];
 static bool registry_setting_present;
 static int32_t registry_setting;
 bool kernel_registry_int(struct vfs *v,const char *key,const char *name,int32_t *out)
@@ -169,13 +171,16 @@ int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned drive)
 void vfs_table_destroy(struct vfs_table *t)
 { CHECK(t==&attempt_table && table_open && !marker_open); table_open=false; }
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *e)
-{ CHECK(t==&attempt_table && !strcmp(path,ATTEMPT_PATH)); if (marker_fault==2) return -FS_EIO; e->size=disk_size; return marker_exists ? 0 : -FS_ENOENT; }
+{ CHECK(t==&attempt_table); if (!strcmp(path,LEGACY_ATTEMPT_PATH)) return -FS_ENOENT; CHECK(strstr(path,"accel-s3savage-5333-")); if (marker_fault==2) return -FS_EIO; e->size=disk_size; return marker_exists ? 0 : -FS_ENOENT; }
 int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share deny,uint8_t attr)
 {
-    CHECK(t==&attempt_table && !strcmp(path,ATTEMPT_PATH) && flags==(VFS_WRITE|VFS_CREATE) && deny==VFS_DENY_ALL && !attr);
+    CHECK(t==&attempt_table && (!strcmp(path,"C:/system/settings/accel-s3savage-5333-8c2e.cfg") || !strcmp(path,"C:/system/settings/accel-s3savage-5333-8a22.cfg")) && (flags==(VFS_WRITE|VFS_CREATE) || flags==VFS_WRITE) && deny==VFS_DENY_ALL && !attr);
     if (marker_error) return -FS_EIO;
+    snprintf(last_marker_path,sizeof(last_marker_path),"%s",path);
     marker_open=true; memcpy(cache_marker,disk_marker,sizeof(cache_marker)); cache_size=disk_size; return 0;
 }
+int vfs_read(struct vfs_table *t,int fd,void *buf,size_t n,size_t *done)
+{ (void)t;(void)fd;(void)buf;(void)n;(void)done; CHECK(false); return -FS_EIO; }
 int vfs_write(struct vfs_table *t,int fd,const void *buf,size_t n,size_t *done)
 {
     CHECK(t==&attempt_table && fd==0 && marker_open && !locks && !initializing);
@@ -878,7 +883,7 @@ static void boot_fixture_mode(bool retain_marker, unsigned bpp)
     if (!retain_marker) { disk_size=0; marker_exists=false; memset(disk_marker,0,sizeof(disk_marker)); }
     CHECK(!table_open && !marker_open);
     normal_yields=device_work_requests=0; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
-    attempt_in_progress=false; init_interleave=NULL;
+    attempt_in_progress=false; marker_key_valid=marker_retained=false; init_interleave=NULL;
     accel_marker_task=NULL; accel_marker_request=ACCEL_MARKER_IDLE;
     fail_marker_worker=false; marker_worker_creates=marker_worker_starts=0;
 }
@@ -2563,11 +2568,28 @@ int main(void)
     registry_setting_present=false; load_config(&settings_vfs); CHECK(selected_config==1);
     binding_gpu.device=0x8a22; load_config(&settings_vfs); CHECK(selected_config==0);
     finish();
+    /* The completion/failure exports use the BEGIN key, never a new census.
+     * A failed close cannot authorize END even if the bytes reached disk. */
+    boot_fixture_accel(false);
+    CHECK(!savage2d_attempt_begin(&settings_vfs) && disk_size==14);
+    binding_gpu.device=0x8a22;
+    CHECK(!savage2d_attempt_end(&settings_vfs) && !disk_size && marker_commits==2);
+    CHECK(!strcmp(last_marker_path,"C:/system/settings/accel-s3savage-5333-8c2e.cfg"));
+    CHECK(savage2d_attempt_end(&settings_vfs)==-EPERM && marker_commits==2);
+    finish();
+    boot_fixture_accel(false); marker_fault=6;
+    CHECK(savage2d_attempt_begin(&settings_vfs)<0 && disk_size==14);
+    marker_fault=0;
+    CHECK(savage2d_attempt_end(&settings_vfs)==-EPERM && disk_size==14 && marker_commits==1);
+    finish();
     boot_fixture_accel(false); g_boot.flags|=CBI_F_HW_CHECK;
     bool retained=false;
     CHECK(!savage2d_check_begin(&settings_vfs,&retained) && !retained && disk_size==14);
     unsigned commits=marker_commits;
     CHECK(!savage2d_check_begin(&settings_vfs,&retained) && retained && marker_commits==commits && disk_size==14);
+    CHECK(savage2d_attempt_end(&settings_vfs)==-EPERM && marker_commits==commits && disk_size==14);
+    engine.quarantined=engine.status_logged=true;
+    CHECK(savage2d_attempt_failed(&settings_vfs)==-EPERM && marker_commits==commits && disk_size==14);
     engine.quarantined=true; CHECK(savage2d_check_begin(&settings_vfs,&retained)==-EIO);
     finish();
     puts("Savage hardware selection: all registry IDs/defaults, durable retained marker, no in-session quarantine bypass PASS");

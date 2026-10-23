@@ -6,7 +6,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <ciuki/kernel.h>
-#include <ciuki/savage2d.h>
+#include "../../src/kernel/drivers/video/s3savage/savage2d.h"
 #include <ciuki/registry.h>
 unsigned fs_host_contig_fail,fs_host_contig_live;
 struct ciuki_boot_info g_boot;

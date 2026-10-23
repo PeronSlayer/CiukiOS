@@ -1,0 +1,48 @@
+{
+  "donor": "Haiku",
+  "tag": "r1beta5",
+  "commit": "a1f00118db8b858feb73f64ac4dc3d038b82bf9b",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "src/add-ons/accelerants/ati/rage128_draw.cpp",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/src/add-ons/accelerants/ati/rage128_draw.cpp",
+      "sha256": "658dabdfaa8e963a478de22cf53afd3a93110dfd610763cad0ec5ad4313f4df6"
+    },
+    {
+      "path": "src/add-ons/accelerants/ati/rage128_init.cpp",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/src/add-ons/accelerants/ati/rage128_init.cpp",
+      "sha256": "8d39442f4d10b1839b0c8019cc533f7570348da9f1ee86ec9a1c02c0e05305f2"
+    },
+    {
+      "path": "src/add-ons/accelerants/ati/rage128_cursor.cpp",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/src/add-ons/accelerants/ati/rage128_cursor.cpp",
+      "sha256": "a0d7bc9cf44f154bfb7198b57bfc8405bbff21d72f8674fca6316d9db573125e"
+    },
+    {
+      "path": "src/add-ons/accelerants/ati/rage128.h",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/src/add-ons/accelerants/ati/rage128.h",
+      "sha256": "694576ab8e7a950a744b665e1adb17afb11593abc02a71f0729ddbf8e372a4e9"
+    },
+    {
+      "path": "src/add-ons/accelerants/ati/rage128_mode.cpp",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/src/add-ons/accelerants/ati/rage128_mode.cpp",
+      "sha256": "706f976eb12526e4fb38346dafd7c540d2ccff2ca71cd0b541c51714d16790c7"
+    },
+    {
+      "path": "src/add-ons/kernel/drivers/graphics/ati/driver.cpp",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/src/add-ons/kernel/drivers/graphics/ati/driver.cpp",
+      "sha256": "5aced656b4e2d8285f6c2a0ff3de1c9bf987e7ac2b1bdb7fee486c717af7d1e3"
+    },
+    {
+      "path": "License.md",
+      "url": "https://github.com/haiku/haiku/blob/r1beta5/License.md",
+      "sha256": "1ac9f677baecd4ce95406b08d31fe95533a492ff044a80b398c2cbed1f64abe3"
+    },
+    {
+      "path": "src/r128_reg.h",
+      "url": "https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-r128/blob/d05022a1c398787d3f21d023a8251cb128ba9f9f/src/r128_reg.h",
+      "sha256": "a9b63eb156f4a99596bc73618c96842672a1922fa5f4080949bf661a99f60594"
+    }
+  ]
+}

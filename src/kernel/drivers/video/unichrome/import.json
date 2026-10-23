@@ -1,0 +1,65 @@
+{
+  "directive": "f2-108",
+  "strategy": "audited register fragments with native glue; no hosted donor libraries",
+  "sources": [
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "revision": "v6.12",
+      "path": "drivers/video/fbdev/via/accel.c",
+      "license": "GPL-2.0-or-later",
+      "research_sha256": "42c4a06502104ddc6a6bd907c5d955c6d21e83dfa1b80e8064c66b5f48f44acc"
+    },
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "revision": "v6.12",
+      "path": "drivers/video/fbdev/via/accel.h",
+      "license": "GPL-2.0-or-later",
+      "research_sha256": "1311dc4b6e65e5ab47f2ac7a5a8ac0dc8907a655b04dfbf7eb9ecd7aa65366a3"
+    },
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "revision": "v6.12",
+      "path": "drivers/video/fbdev/via/via-core.c",
+      "license": "GPL-2.0-only",
+      "research_sha256": "f220e745dac63c6752f29a6972e649cbb9d759bd9a4defde01d39a2c3f79bc43"
+    },
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "revision": "v6.12",
+      "path": "drivers/video/fbdev/via/chip.h",
+      "license": "GPL-2.0-or-later",
+      "research_sha256": "880966f3fa843482b7a021c99378c0502049fad53bc26ffb5e9bc7f814b598d3"
+    },
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "revision": "v6.12",
+      "path": "drivers/video/fbdev/via/hw.h",
+      "license": "GPL-2.0-or-later",
+      "research_sha256": "dc96eb374e8fe6fafc9d43254430d1e021cb9d90e1e76e51f64d1fe6c7e2d942"
+    },
+    {
+      "repository": "https://github.com/torvalds/linux",
+      "revision": "v6.12",
+      "path": "drivers/video/fbdev/via/via_modesetting.c",
+      "license": "GPL-2.0-or-later",
+      "research_sha256": "51966734547e141965ad66226d32651a792b135c2b3fad36309e78017f53896f"
+    },
+    {
+      "repository": "https://github.com/NetBSD/xsrc",
+      "revision": "947c2727683984b334ebe249fd981dad3e7a2f44",
+      "path": "external/mit/xf86-video-openchrome/dist/src/via_ums.c",
+      "fragment": "viaMapMMIO extended-register unlock; viaMMIOEnable primary original-engine access; viaDisableVQ original engine only",
+      "license": "MIT-style",
+      "research_sha256": "083a3f2584dab3d17ba3c1442e479f08330b12c7dfdb0aca73cda1c778ef7bce"
+    }
+  ],
+  "runtime_files": [
+    "engine.c",
+    "regs.h",
+    "driver.c"
+  ],
+  "references_only": [
+    "Linux v6.12 viafbdev.c cursor callback, tridentfb.c, include/video/trident.h",
+    "Windows 98 Resource Kit wrkc28_8.htm and wrkc26_5.htm (private read-only reference)"
+  ]
+}

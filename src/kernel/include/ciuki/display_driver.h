@@ -63,6 +63,9 @@ struct display_driver {
      * Evidence comes from driver register checks, not LFB comparisons.
      * Leaves the cursor hidden, including failure/cancellation cleanup. */
     int (*cursor_test)(const struct accel_ops *, uint64_t, bool (*)(void *), void *);
+    /* Optional read-only per-device BAR selection. The registry still proves
+     * the full active framebuffer lease and extent; this hook grants nothing. */
+    unsigned (*framebuffer_bar_for)(const struct pci_func *);
 };
 #define DISPLAY_CHECK_CURSOR (1u << 4)
 /* Selection is read-only, before any activation. Ambiguous PCI ownership
@@ -85,4 +88,15 @@ bool display_driver_refresh(void);
 void display_driver_info(struct ciuki_display_engine_info *);
 void display_driver_count(unsigned operation, bool native);
 bool display_driver_summary(bool *, bool *, const char **);
+/* Durable keyed storage, worker context only (no presenter/device-work lock).
+ * id is 1..15 lowercase ASCII letters/digits/underscore/hyphen; PCI identity
+ * is copied by the adapter at BEGIN and pinned through END/failure. BEGIN
+ * sets previous for any nonempty record, including a migrated legacy one.
+ * legacy_path is private adapter data, NULL for new drivers. Migration copies
+ * and commits the old bytes before truncating the legacy file. Errors never
+ * authorize hardware. clear/diagnostic require a successful fresh BEGIN;
+ * adapters must never clear or annotate a retained diagnostic attempt. */
+int display_attempt_marker(struct vfs *, const char *id, uint16_t vendor,
+    uint16_t device, const char *legacy_path, bool clear, bool *previous,
+    const char *diagnostic);
 #endif

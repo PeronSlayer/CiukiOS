@@ -1,0 +1,62 @@
+Intel native 2D packet and breadcrumb adaptations (f2-107)
+
+Haiku r1beta5, commit a1f00118db8b858feb73f64ac4dc3d038b82bf9b
+https://github.com/haiku/haiku/tree/r1beta5
+src/add-ons/accelerants/intel_extreme/engine.cpp
+Copyright 2006-2007, Haiku, Inc. All Rights Reserved.
+src/add-ons/accelerants/intel_extreme/commands.h
+Copyright 2006-2008, Haiku, Inc. All Rights Reserved.
+Author: Axel Dörfler, axeld@pinc-software.de
+headers/private/graphics/intel_extreme/intel_extreme.h
+Copyright 2006-2016, Haiku, Inc. All Rights Reserved.
+Authors: Axel Dörfler, axeld@pinc-software.de
+         Alexander von Gluck, kallisti5@unixzen.com
+Distributed under the terms of the MIT License.
+
+Ciuki adapts the XY FILL/COPY packet fields, format/ROP constants and ordered
+ring publication into src/kernel/drivers/video/intel2d/engine.c. It does not
+import Haiku's GART allocator, PCI activation, timeout continuation or debugger.
+The register reference in driver.c is independently expressed; its origin is
+the above private header and Intel's original chipset documentation.
+
+Linux v6.7
+https://github.com/torvalds/linux/blob/v6.7/drivers/gpu/drm/i915/gt/gen2_engine_cs.c
+Copyright © 2020 Intel Corporation. SPDX-License-Identifier: MIT
+The gen3_emit_breadcrumb / __gen2_emit_breadcrumb sequence (also selected by
+Linux for gen2) and gen2_emit_flush are adapted in engine.c, retaining MI_FLUSH,
+16 scratch and 8 sequence stores, plus gen2's twelve scratch-store/flush pairs.
+Polling replaces the final user interrupt. Linux intel_engine_cs.c, intel_engine_regs.h,
+intel_engine.h, intel_gpu_commands.h, intel_ring_submission.c and intel-gtt.c
+are primary reference sources; their complete implementations are not copied.
+The bounded HIC-flush protocol is independently expressed from intel-gtt.c's
+i830_chipset_flush, with error propagation, an absolute deadline and yielding.
+Intel GPU Tools tag intel-gpu-tools-1.5, lib/instdone.c, lib/intel_reg.h and
+lib/intel_chipset.h supply the gen2 bit and device definitions, not an imported
+implementation. lib/instdone.c credits Intel Corporation (2007, 2009) and
+Eric Anholt; lib/intel_reg.h credits Precision Insight, Inc. (1998-1999) and
+Keith Whitwell. Their MIT-style reference notices remain with the research
+copies under build/research/f2-107/amendment1/. See the reservation design
+record for exact paths, lines, links and the per-chip evidence gate.
+
+MIT License (Haiku License.md; Intel code uses the MIT identifier)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+Ciuki's new transport ownership, validation and bounded lifecycle code is
+GPL-2.0-only; the adapted fragments retain the permissions above.

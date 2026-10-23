@@ -4,6 +4,26 @@
 #define main fbdev_regression_main
 #include "fbdev_test.c"
 #undef main
+const struct display_driver mach64_driver = {0};
+const struct display_driver rage128_driver = {0};
+const struct display_driver radeon2d_driver = {0};
+const struct display_driver sis300_driver = {0};
+const struct display_driver sis315_driver = {0};
+const struct display_driver cirrus_driver = {0};
+const struct display_driver trident_blade_driver = {0};
+const struct display_driver chipshiqv_driver = {0};
+const struct display_driver matrox_driver = {0};
+const struct display_driver nv2d_driver = {0};
+const struct display_driver neomagic_driver = {0};
+const struct display_driver unichrome_driver = {0};
+const struct display_driver tdfx_driver = {0};
+const struct display_driver vmwaresvga_driver = {0};
+const struct display_driver s3trio64_driver = {0};
+const struct display_driver s3virge_driver = {0};
+const struct display_driver i740_driver = {0};
+const struct display_driver i810_driver = {0};
+const struct display_driver intel2d_gen2_driver = {0};
+const struct display_driver intel2d_gen3_driver = {0};
 #include "../../src/kernel/drivers/video/registry.c"
 
 static uint8_t pixels[32*32*4], before[sizeof(pixels)];

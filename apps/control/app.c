@@ -892,7 +892,8 @@ static void properties(struct cp_app *a, int resources)
     if (!resources) {
         char resolved[65]; const char *name = product(a, d, resolved, sizeof(resolved));
         at = (size_t)snprintf(body, sizeof(body), "General\n\n%s\nClass: %s\nDriver: %s\nStatus: %s\n",
-            name, cp_device_class(d->class_id), d->driver[0] ? d->driver : "None bound", cp_device_state(d->state));
+            name, cp_device_class(d->class_id), d->driver_display_name[0] ? d->driver_display_name :
+                d->driver[0] ? d->driver : "None bound", cp_device_state(d->state));
         const char *reason = d->reason;
         while (*reason) {
             size_t n = strlen(reason), cut = n > 52 ? 52 : n;

@@ -286,7 +286,7 @@ static void test_irq_restore(uint32_t f) {
         screen = menu.split('.log:', 1)[1].split('.probe:', 1)[0]
         self.assertIn('or byte [B(flags)+1], CBI_F_DIAG_VERBOSE >> 8', screen)
         self.assertEqual(menu.count('CBI_F_DIAG_VERBOSE'), 1)
-        for path in ('usb/uhci.c', 'usb/usb_hid.c', 'vm/dosvm_perf.inc', 'drivers/savage2d.c'):
+        for path in ('usb/uhci.c', 'usb/usb_hid.c', 'vm/dosvm_perf.inc', 'drivers/video/s3savage/savage2d.c'):
             self.assertIn('CBI_F_DIAG_VERBOSE', (ROOT / 'src/kernel' / path).read_text(), path)
         for suite in ('f0-smoke', 'f1-usb', 'f4-audio', 'f3-vm'):
             cases = json.loads((ROOT / 'tests/suites' / (suite + '.json')).read_text())['cases']

@@ -195,21 +195,63 @@ static void serial_check(uint64_t until,struct hw_check_result *out)
         accepted,sent,b.resent-a.resent,b.dropped-a.dropped,
         b.periodic_dropped-a.periodic_dropped,b.evidence_dropped-a.evidence_dropped,b.queued);
 }
+/* One DM9 dispatch for both ordinary native drivers and completed sweeps.
+ * Diagnostic submission never uses software replay; CPU safety and native
+ * FILL/COPY evidence are independent conditions for a passing result. */
+static void accelerator_compare(struct vfs *vfs,uint64_t until,struct hw_check_result *out)
+{
+    uint32_t tested=0;
+    int e=fbdev_accel_diagnostic(vfs,until,0,0,&tested);
+    struct ciuki_display_engine_info info;
+    display_driver_info(&info);
+    out->status=!e && (tested&3u)==3u && info.cpu_ready && !info.quarantined ? HW_PASS :
+        e==-EOPNOTSUPP && info.cpu_ready && !info.quarantined ? HW_SKIP : HW_FAIL;
+    ksnprintf(out->detail,sizeof(out->detail),"Native-only software-reference comparison: draw_mask=%x cursor_evidence=%u error=%d",
+        tested&15u,!!(tested&DISPLAY_CHECK_CURSOR),e);
+    page_line(0,out->detail);
+}
 static void accelerator_check(uint64_t until,struct hw_check_result *out)
 {
     const struct fb_device original=*fbdev_get();
     const char *reason;
     if (display_accel_disabled(&reason)) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"2D disabled: %s",reason); return; }
     const struct display_driver *driver=display_driver_bind(&original);
-    if (!driver || !driver->selftest || !driver->check_begin) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"No native display self-test"); return; }
+    if (!driver) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"No native display driver"); return; }
     page_line(0,driver->name);
     struct storage *storage=storage_get();
+    if (!driver->selftest) {
+        accelerator_compare(&storage->vfs,until,out);
+        return;
+    }
+    if (!driver->check_begin || !driver->attempt_end) {
+        out->status=HW_FAIL;
+        ksnprintf(out->detail,sizeof(out->detail),"Missing native display sweep authorization");
+        return;
+    }
     bool retained_marker=false;
     if (driver->check_begin(&storage->vfs,&retained_marker)) {
         out->status=HW_FAIL; ksnprintf(out->detail,sizeof(out->detail),"durable attempt unavailable/session quarantined"); return;
     }
-    struct display_selftest_result a,b={.first=-1};
-    int e=driver->selftest(deadline_after_ms(5000),page_line,0,&a);
+    struct display_selftest_result a={.first=-1,.restored=true},b={.first=-1};
+    int e=driver->selftest ? driver->selftest(deadline_after_ms(5000),page_line,0,&a) : -EOPNOTSUPP;
+    /* A driver-specific configuration sweep is optional. Clean refusal
+     * before any trial still permits the generic native-only comparison.
+     * A failed/touched sweep or retained marker never authorizes activation. */
+    if (e==-EOPNOTSUPP && !a.tried && a.restored) {
+        if (retained_marker) {
+            out->status=HW_SKIP;
+            ksnprintf(out->detail,sizeof(out->detail),"Native comparison skipped: retained diagnostic marker preserved");
+            return;
+        }
+        e=driver->attempt_end ? driver->attempt_end(&storage->vfs) : -EIO;
+        if (!e) accelerator_compare(&storage->vfs,until,out);
+        else {
+            out->status=HW_FAIL;
+            ksnprintf(out->detail,sizeof(out->detail),"Native comparison marker clear failed: error=%d",e);
+            page_line(0,out->detail);
+        }
+        return;
+    }
     char stage[176];
     ksnprintf(stage,sizeof(stage),"Native 2D original-depth result: bpp=%u first=%d passed=%u/%u done=%u skip=%u timeout=%u restored=%u error=%d",
         original.bpp,a.first,a.passed,a.tried,a.completed,a.skipped,a.timeouts,a.restored,e);
@@ -262,11 +304,9 @@ static void accelerator_check(uint64_t until,struct hw_check_result *out)
     if (a.first<0) page_line(0,"Native 2D first exact configuration: none (original depth)");
     if (b.first<0) page_line(0,"Native 2D first exact configuration: none (16 bpp)");
     if (out->status==HW_PASS && !retained_marker) {
-        uint32_t tested=0;
-        int comparison=fbdev_accel_diagnostic(&storage->vfs,until,0,0,&tested);
-        ksnprintf(stage,sizeof(stage),"Native-only software-reference comparison: draw_mask=%x cursor_evidence=%u error=%d",tested&15u,!!(tested&DISPLAY_CHECK_CURSOR),comparison);
-        page_line(0,stage);
-        if (comparison || (tested&3u)!=3u) out->status=HW_FAIL;
+        struct hw_check_result comparison;
+        accelerator_compare(&storage->vfs,until,&comparison);
+        if (comparison.status!=HW_PASS) out->status=HW_FAIL;
     } else if (retained_marker) {
         page_line(0,"Native comparison skipped: retained diagnostic marker preserved");
         if (out->status==HW_PASS) out->status=HW_SKIP;

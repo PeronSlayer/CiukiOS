@@ -7,13 +7,14 @@
 #include <ciuki/mm.h>
 #include <ciuki/mtrr.h>
 #include <ciuki/registry.h>
-#include <ciuki/savage2d.h>
+#include "savage2d.h"
+#include <ciuki/display_driver.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/registry_value.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
-#include "../fs/vfs.h"
+#include "../../../fs/vfs.h"
 #define RECT 0x48000000u
 #define XP 0x01000000u
 #define YP 0x02000000u
@@ -124,6 +125,13 @@ static void restore_mmio(struct savage2d *s)
 static uint32_t xy(uint32_t x, uint32_t y) { return (y << 16) | x; }
 static bool idle_status(struct savage2d *s, uint32_t value)
 {
+    if (s->chip == SAVAGE_3D || s->chip == SAVAGE_MX) {
+        if (value == UINT32_MAX) { s->reason = "dead_mmio"; return false; }
+        /* Linux v6.12 savage3D_waitidle / X.Org WaitIdleEmpty3D:
+         * engine idle AND every queued entry consumed, not just bit 19. */
+        s->idle_mask = 0x0008ffffu; s->idle_value = 0x00080000u;
+        return (value & s->idle_mask) == s->idle_value;
+    }
     /* X.Org uses this same empty/idle mask for SuperSavage and Savage4.
      * RE046-B assigns PF/idle differently (p. 231); accept only a complete
      * signature. No reference supports discarding SuperSavage FIFO bits. */
@@ -173,7 +181,7 @@ static int wait_idle(struct savage2d *s)
             if (delay > WAIT_US - elapsed) delay = (uint32_t)(WAIT_US - elapsed);
             if (s->io.delay_us(s->io.ctx, delay)) { s->reason = "delay_failed"; break; }
         }
-        uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
+        uint32_t status = s->io.read32(s->io.ctx, s->status_reg);
         uint64_t elapsed = s->io.now_us(s->io.ctx) - start;
         if (first && count < STATUS_SAMPLES) {
             samples[count].us = elapsed; samples[count].value = status; count++;
@@ -202,7 +210,7 @@ static int wait_idle(struct savage2d *s)
     }
     s->poll_us += s->io.now_us(s->io.ctx) - start;
     if (first && count) {
-        klog("[accel] savage status reg=48c60 raw=%08x", samples[0].value);
+        klog("[accel] savage status reg=%05x raw=%08x", s->status_reg, samples[0].value);
         for (unsigned i = 0; i < count; i++)
             klog("[accel] savage status sample=%u us=%llu raw=%08x", i, samples[i].us, samples[i].value);
     }
@@ -361,9 +369,9 @@ static int fifo_space(struct savage2d *s, unsigned need)
         }
         /* Busy reads keep the completion wait's pacing. */
         if ((i || fifo_busy) && s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; return -EIO; }
-        uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
+        uint32_t status = s->io.read32(s->io.ctx, s->status_reg);
         if (status == UINT32_MAX) { s->reason = "dead_mmio"; return -EIO; }
-        uint32_t used = status & FIFO_USED_MASK;
+        uint32_t used = status & s->fifo_mask;
         fifo_busy = used != 0;
         fifo_free = used < BCI_FIFO_WORDS ? BCI_FIFO_WORDS - used : 0;
         if (fifo_free >= need) return 0;
@@ -578,6 +586,7 @@ static int stop_engine(void *ctx)
     if (s->quarantined) return 0;
     port_cr_write(s, 0x45, s->saved45 & ~1u);
     if (disable_bci(s, s->saved_bci)) return -EIO;
+    if (s->cob_offset) s->io.write32(s->io.ctx, 0x48c14, s->saved_cob & 0xe0000fffu);
     s->io.write32(s->io.ctx, 0x8168, s->saved_gbd[0]);
     s->io.write32(s->io.ctx, 0x816c, s->saved_gbd[1]);
     port_cr_write(s, 0x31, s->saved31);
@@ -593,14 +602,36 @@ static unsigned capabilities(void *ctx)
     return s->active && !s->quarantined ? 1u | (s->cursor ? 2u : 0u) : 0u;
 }
 static bool cpu_ready(void *ctx) { return ((struct savage2d *)ctx)->cpu_safe; }
+enum savage_chip savage2d_chip(uint16_t device)
+{
+    switch (device) {
+#define SAVAGE_DEVICE(id, chip) case id: return chip;
+#include "savage_ids.h"
+#undef SAVAGE_DEVICE
+    default: return SAVAGE_UNKNOWN;
+    }
+}
+static bool early_chip(enum savage_chip chip)
+{ return chip == SAVAGE_3D || chip == SAVAGE_MX; }
+unsigned savage2d_framebuffer_bar(const struct pci_func *p)
+{ return p && early_chip(savage2d_chip(p->device)) ? 0u : 1u; }
+static unsigned chip_config(enum savage_chip chip)
+{ return chip >= SAVAGE_PRO ? 1u : 0u; }
 bool savage2d_supported(const struct pci_func *p)
 {
-    if (!p || p->class_code != 3 || p->vendor != 0x5333) return false;
-    switch (p->device) {
-    case 0x8a22: case 0x8c22: case 0x8c24: case 0x8c26:
-    case 0x8c2a: case 0x8c2b: case 0x8c2c: case 0x8c2d: case 0x8c2e: case 0x8c2f: return true;
-    default: return false;
-    }
+    return p && p->class_code == 3 && p->vendor == 0x5333 &&
+        savage2d_chip(p->device) != SAVAGE_UNKNOWN;
+}
+/* Upstream COB ends at a 4 MiB boundary. Never round firmware VRAM up;
+ * the scanout, COB and (later) cursor/offscreen leases must be disjoint. */
+bool savage2d_cob_span(const struct fb_device *d, uint32_t vram, uint32_t *offset)
+{
+    if (!d || !offset || vram > SAVAGE_EARLY_MMIO) return false;
+    uint32_t end = (vram < SAVAGE_COB_LIMIT ? vram : SAVAGE_COB_LIMIT) & ~0x3fffffu;
+    if (end < SAVAGE_COB_BYTES || end - SAVAGE_COB_BYTES < d->size ||
+        d->phys > UINT32_MAX - end) return false;
+    *offset = end - SAVAGE_COB_BYTES;
+    return true;
 }
 static bool mode_supported(const struct fb_device *d)
 {
@@ -619,16 +650,26 @@ bool savage2d_config(unsigned id, const struct fb_device *d, struct savage_confi
         (id & 1 ? 0 : 8u) | (id & 2 ? 0 : 0x10000000u) | ((id / 24) << 24);
     return true;
 }
-static int start_config(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
-                   bool supersavage, uint8_t *cursor, uint32_t cursor_offset, unsigned config)
+static int start_chip_config(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
+    enum savage_chip chip, uint8_t *cursor, uint32_t cursor_offset, unsigned config, uint32_t cob_offset)
 {
     if (s->quarantined) return -EIO;
+    if (chip <= SAVAGE_UNKNOWN || chip > SAVAGE_SUPER) return -EINVAL;
+    bool supersavage = chip == SAVAGE_SUPER;
+    if (early_chip(chip) && (!d || !cob_offset || (cob_offset & (SAVAGE_COB_BYTES-1u)) ||
+        (cob_offset + SAVAGE_COB_BYTES) % 0x400000u ||
+        cob_offset > SAVAGE_COB_LIMIT - SAVAGE_COB_BYTES || cob_offset < d->size ||
+        (cursor && (cursor_offset < d->size || cursor_offset > cob_offset ||
+                    PAGE_SIZE > cob_offset - cursor_offset)))) return -EINVAL;
     if (!io || !io->read32 || !io->write32 || !io->read16 || !io->write16 ||
         !io->now_us || !io->delay_us || !io->drain ||
         !io->read_port || !io->write_port || !mode_supported(d) ||
         (cursor && (cursor_offset & 4095u))) return -EINVAL;
     s->io = *io; s->width = d->width; s->height = d->height; s->offset = 0;
     s->supersavage = supersavage; s->cursor = cursor; s->cursor_offset = cursor_offset;
+    s->chip = chip; s->cob_offset = cob_offset;
+    s->status_reg = early_chip(chip) ? SAVAGE_EARLY_STATUS : SAVAGE_STATUS;
+    s->fifo_mask = early_chip(chip) ? 0xffffu : FIFO_USED_MASK;
     struct savage_config cfg;
     if (!savage2d_config(config, d, &cfg)) return -EINVAL;
     s->descriptor = cfg.descriptor;
@@ -701,10 +742,22 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     s->touched = true;
     init_write(s, 0x8128, UINT32_MAX, true); init_write(s, 0x812c, UINT32_MAX, true);
     init_mix(s, 0x8134, 0x27); init_mix(s, 0x8136, 0x07);
-    init_write(s, 0x48c10, 0x00700040u, false); init_write(s, 0x48c0c, 0, false);
-    uint32_t enabled = (s->saved_bci & 0x3ff0u) | 8u;
+    if (early_chip(chip)) {
+        /* Haiku r1beta5 Savage_Initialize2DEngine / Linux v6.12:
+         * private VRAM COB, 128 KiB, no host/shadow DMA. Its lease exists
+         * before any engine register is touched. Count bits are read-only. */
+        s->saved_cob = io->read32(io->ctx, 0x48c14);
+        uint32_t cob = (cob_offset >> 11) | (7u << 29);
+        uint32_t read = init_write(s, 0x48c14, cob, false);
+        if (read == UINT32_MAX || (read & 0xe0000fffu) != cob)
+            return fail(s, "cob_readback_failed");
+    }
+    init_write(s, 0x48c10, early_chip(chip) ? 0x78207220u : 0x00700040u, false);
+    init_write(s, 0x48c0c, 0, false);
+    uint32_t enable_bits = early_chip(chip) ? 12u : 8u;
+    uint32_t enabled = (s->saved_bci & 0x3ff0u) | enable_bits;
     uint32_t control = init_write(s, BCI_CONTROL, enabled, false);
-    if (control == UINT32_MAX || (control & 0x0fu) != 8u) return fail(s, "bci_enable_failed");
+    if (control == UINT32_MAX || (control & 0x0fu) != enable_bits) return fail(s, "bci_enable_failed");
     /* Establish mode depth BEFORE the PM descriptor preamble, as X.Org's
      * mode setup and savagefb_set_par do before their 2D initializers.
      * A final GBD mirror of 32 bpp did not prevent the T23's byte-lane
@@ -724,7 +777,7 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     klog("[accel] savage descriptor wrote=%08x read=%08x mask=%08x cr40=%02x", gbd, check, GBD_READ_MASK, cr40);
     if (check == UINT32_MAX || (check & GBD_READ_MASK) != gbd || !(cr40 & 1u))
         return fail(s, "descriptor_readback_failed");
-    if (supersavage) {
+    if (chip != SAVAGE_4) {
         /* MMIO readback does not establish the BCI's active colour depth.
          * Send the descriptor through its own register commands, twice as
          * in the upstream fbdev setup. Eight words fit the empty FIFO;
@@ -745,6 +798,18 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     s->active = true;
     return 0;
 }
+/* Frozen model/sweep entry point: preserve the qualified legacy recipes. */
+static int start_config(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
+    bool supersavage, uint8_t *cursor, uint32_t cursor_offset, unsigned config)
+{
+    return start_chip_config(s,io,d,supersavage ? SAVAGE_SUPER : SAVAGE_4,
+        cursor,cursor_offset,config,0);
+}
+int savage2d_start_chip(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
+    enum savage_chip chip, uint8_t *cursor, uint32_t cursor_offset, uint32_t cob_offset)
+{
+    return start_chip_config(s,io,d,chip,cursor,cursor_offset,chip_config(chip),cob_offset);
+}
 int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset)
 { return start_config(s, io, d, supersavage, cursor, cursor_offset, supersavage ? 1 : 0); }
@@ -756,6 +821,8 @@ static gen_t reg_generation, cursor_generation, port_generation;
  * never CPU-mapped (only BCI writes/copies reach it). */
 static int offscreen_claim = -1;
 static gen_t offscreen_generation;
+static int cob_claim = -1;
+static gen_t cob_generation;
 static uint32_t offscreen_first_row, offscreen_end_row;
 static uint32_t cursor_phys;
 static uint8_t *cursor_mapping;
@@ -1134,6 +1201,7 @@ static void relinquish_access(void)
 {
     release_access(&port_claim, port_generation, port_idle);
     release_access(&offscreen_claim, offscreen_generation, offscreen_idle);
+    release_access(&cob_claim, cob_generation, offscreen_idle);
     engine.rows = engine.height;
     release_access(&cursor_claim, cursor_generation, cursor_idle);
     release_access(&reg_claim, reg_generation, register_idle);
@@ -1142,6 +1210,12 @@ static int runtime_stop(void *ctx)
 {
     int err = stop_engine(ctx);
     if (err || engine.quarantined) { hw_fault(0); return err; }
+    if (cob_claim >= 0) {
+        err = registry_quiesce(cob_claim, cob_generation, offscreen_idle);
+        if (!err) err = registry_release(cob_claim, cob_generation);
+        if (err) { hw_fault(0); engine.quarantined = true; return -EIO; }
+        cob_claim = -1;
+    }
     if (offscreen_claim >= 0) {
         err = registry_quiesce(offscreen_claim, offscreen_generation, offscreen_idle);
         if (!err) err = registry_release(offscreen_claim, offscreen_generation);
@@ -1168,39 +1242,35 @@ static int runtime_stop(void *ctx)
     }
     return 0;
 }
-/* One bounded file, on the same settings volume as desktop.cfg. A nonempty
- * or unreadable record never authorizes engine access. Commit includes the
- * directory/FAT/data barrier; close failures also prevent an attempt. */
-#define ATTEMPT_PATH "C:/system/settings/accel.cfg"
-static struct vfs_table attempt_table;
-static bool attempt_blocked;
+/* Private migration mapping; generic storage and filename policy live in the
+ * registry. The exact PCI key is pinned before yielding to marker I/O. */
+#define LEGACY_ATTEMPT_PATH "C:/system/settings/accel.cfg"
+static bool attempt_blocked, marker_key_valid, marker_retained;
+static uint16_t marker_vendor, marker_device;
 static int attempt_marker_io(struct vfs *vfs, bool clear, bool *previous, const char *diagnostic)
 {
-    if (!vfs || !vfs->volumes[2] || !vfs->volumes[2]->mounted) return -FS_ENOENT;
-    int err = vfs_table_init(vfs, &attempt_table, 2);
-    if (err) return err;
     if (!clear && !diagnostic) {
-        struct fat_entry entry;
-        err = vfs_stat(&attempt_table, ATTEMPT_PATH, &entry);
-        if (!err && entry.size) { *previous = true; goto out; }
-        if (err != -FS_ENOENT && err) goto out;
+        const struct pci_func *gpu=0;
+        unsigned displays=0;
+        for (unsigned i=0;i<pci_count();i++) {
+            const struct pci_func *p=pci_get(i);
+            if (p && p->class_code==3) { gpu=p; displays++; }
+        }
+        marker_key_valid=false; marker_retained=false;
+        if (displays!=1 || !savage2d_supported(gpu)) return -ENODEV;
+        marker_vendor=gpu->vendor; marker_device=gpu->device;
+        int err=display_attempt_marker(vfs,"s3savage",marker_vendor,marker_device,
+            LEGACY_ATTEMPT_PATH,false,previous,0);
+        marker_retained=*previous;
+        marker_key_valid=!err && !*previous;
+        return err;
     }
-    if (vfs->volumes[2]->readonly) { err = -FS_EROFS; goto out; }
-    int fd = vfs_open(&attempt_table, ATTEMPT_PATH, VFS_WRITE | VFS_CREATE, VFS_DENY_ALL, 0);
-    if (fd < 0) { err = fd; goto out; }
-    if (clear) err = vfs_truncate(&attempt_table, fd, 0);
-    else {
-        const char *marker = diagnostic ? diagnostic : "accel=attempt\n";
-        size_t bytes = strlen(marker);
-        size_t done = 0;
-        err = vfs_write(&attempt_table, fd, marker, bytes, &done);
-        if (!err && done != bytes) err = -FS_EIO;
-    }
-    if (!err) err = vfs_commit(&attempt_table, fd);
-    int closed = vfs_close(&attempt_table, fd);
-    if (!err) err = closed;
-out:
-    vfs_table_destroy(&attempt_table);
+    /* Retained diagnostic markers cannot authorize END or annotation, and a
+     * failed BEGIN (including close failure) never authorizes a clear. */
+    if (!marker_key_valid || marker_retained) return -EPERM;
+    int err=display_attempt_marker(vfs,"s3savage",marker_vendor,marker_device,
+        0,clear,previous,diagnostic);
+    if (clear && !err) marker_key_valid=false;
     return err;
 }
 static int attempt_marker(struct vfs *vfs, bool clear, bool *previous)
@@ -1400,10 +1470,24 @@ static const char *eligibility(const struct fb_device *d, const struct pci_func 
     if (!d || !d->present) return "framebuffer_absent";
     if (!(gpu->command & 1u)) return "io_decode_disabled";
     if (!(gpu->command & 2u)) return "memory_decode_disabled";
-    if ((gpu->bar[0] & 7u) || (gpu->bar[1] & 7u) || !gpu->bar[0] ||
-        ((gpu->bar[0]&~15u)&(SAVAGE_MMIO_BYTES-1u)) ||
-        (gpu->bar[1] & ~15u) != d->phys || !safe_extent(gpu->bar[0] & ~15u, SAVAGE_MMIO_BYTES))
-        return "invalid_aperture";
+    enum savage_chip chip = savage2d_chip(gpu->device);
+    unsigned fb_bar = savage2d_framebuffer_bar(gpu);
+    uint32_t base = gpu->bar[0] & ~15u;
+    uint32_t delta = early_chip(chip) ? SAVAGE_EARLY_MMIO : 0;
+    if ((gpu->header_type & 0x7fu) || (gpu->bar[0] & 7u) || (gpu->bar[fb_bar] & 7u) || !base ||
+        (base & (SAVAGE_MMIO_BYTES-1u)) || base > UINT32_MAX-delta ||
+        (gpu->bar[fb_bar] & ~15u) != d->phys ||
+        !safe_extent(base+delta,SAVAGE_MMIO_BYTES) ||
+        !safe_extent(d->phys,d->size) || !g_boot.display.vram_bytes ||
+        d->size > g_boot.display.vram_bytes || d->size > UINT32_MAX-d->phys ||
+        (d->phys < (uint64_t)base+delta+SAVAGE_MMIO_BYTES &&
+         (uint64_t)d->phys+d->size > base+delta)) return "invalid_aperture";
+    if (early_chip(chip)) {
+        uint32_t cob;
+        if (g_boot.display.tag != CBI_DISPLAY_TAG ||
+            !savage2d_cob_span(d,g_boot.display.vram_bytes,&cob) ||
+            !safe_extent(d->phys+cob,SAVAGE_COB_BYTES)) return "cob_unavailable";
+    }
     /* No side effects for unsupported geometry. */
     if (!mode_supported(d)) return "unsupported_mode";
     *found = gpu;
@@ -1422,7 +1506,7 @@ static void load_config(struct vfs *vfs)
     selected_config=0;
     for (unsigned i=0;i<pci_count();i++) {
         const struct pci_func *gpu=pci_get(i);
-        if (savage2d_supported(gpu) && gpu->device!=0x8a22) selected_config=1;
+        if (savage2d_supported(gpu)) selected_config=chip_config(savage2d_chip(gpu->device));
     }
     if (kernel_registry_int && kernel_registry_int(vfs,"System\\Display\\Savage","EngineConfig",&setting) &&
         setting>=0 && setting<(int32_t)SAVAGE_CONFIGS) selected_config=(unsigned)setting;
@@ -1432,7 +1516,7 @@ static bool production_config(const struct pci_func *gpu)
 {
     /* Hardware-check evidence qualifies the established linear production
      * recipe, not every diagnostic EngineConfig override. */
-    return selected_config == (gpu->device == 0x8a22 ? 0u : 1u);
+    return selected_config == chip_config(savage2d_chip(gpu->device));
 }
 static const struct accel_ops *init_with_io(const struct fb_device *d, struct vfs *vfs,
                                           const struct savage_io *io)
@@ -1478,7 +1562,8 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         }
     }
     if (reg_claim < 0) {
-        uint32_t base = gpu->bar[0] & ~15u;
+        uint32_t base = (gpu->bar[0] & ~15u) +
+            (early_chip(savage2d_chip(gpu->device)) ? SAVAGE_EARLY_MMIO : 0);
         reg_claim = registry_claim(RES_MMIO, base, base + SAVAGE_MMIO_BYTES, "savage2d", false);
         if (reg_claim < 0) {
             hw_fault(0); engine.quarantined = true; return decline("register_claim_failed");
@@ -1491,7 +1576,23 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         }
     }
     uint32_t vram = g_boot.display.tag == CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0;
-    uint32_t off = vram >= PAGE_SIZE && vram <= 32 * 1024 * 1024u ? (vram - PAGE_SIZE) & ~(PAGE_SIZE - 1u) : 0;
+    enum savage_chip chip = savage2d_chip(gpu->device);
+    uint32_t cob = 0;
+    if (early_chip(chip)) {
+        if (!savage2d_cob_span(d,vram,&cob)) {
+            hw_fault(0); attempt_blocked=true; return decline("cob_unavailable");
+        }
+        if (cob_claim < 0) {
+            cob_claim = registry_claim(RES_MMIO,d->phys+cob,d->phys+cob+SAVAGE_COB_BYTES,"savage-cob",false);
+            if (cob_claim < 0) { hw_fault(0); engine.quarantined=true; return decline("cob_claim_failed"); }
+            cob_generation = registry_get(cob_claim)->generation;
+            if (registry_activate(cob_claim,cob_generation)) {
+                hw_fault(0); engine.quarantined=true; return decline("cob_activate_failed");
+            }
+        }
+    }
+    uint32_t usable = cob ? cob : vram;
+    uint32_t off = usable >= PAGE_SIZE && usable <= 32 * 1024 * 1024u ? (usable - PAGE_SIZE) & ~(PAGE_SIZE - 1u) : 0;
     if (off >= d->size && off && d->phys <= UINT32_MAX - off - PAGE_SIZE) {
         uint32_t phys = d->phys + off;
         if (cursor_claim < 0 && safe_extent(phys, PAGE_SIZE)) {
@@ -1512,7 +1613,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
      * X.Org's 2048-line limit, for the display service's offscreen copies. */
     offscreen_first_row = offscreen_end_row = 0;
     uint32_t first_row, end_row;
-    if (offscreen_claim < 0 && savage2d_offscreen_span(d, vram, cursor ? off : 0, &first_row, &end_row)) {
+    if (offscreen_claim < 0 && savage2d_offscreen_span(d, usable, cursor ? off : 0, &first_row, &end_row)) {
         uint32_t base = d->phys + first_row * d->pitch, end = d->phys + end_row * d->pitch;
         if (safe_extent(base, end - base)) {
             offscreen_claim = registry_claim(RES_MMIO, base, end, "savage-offscreen", false);
@@ -1525,7 +1626,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         }
     }
     initializing = true;
-    int err = start_config(&engine, io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys, selected_config);
+    int err = start_chip_config(&engine, io, d, chip, cursor, cursor_phys - d->phys, selected_config, cob);
     if (!err) err = bci_test(&engine, d);
     else klog("[accel] savage bci_test result=skipped reason=%s", engine.reason ? engine.reason : "init_failed");
     initializing = false;
@@ -1632,7 +1733,7 @@ static int sweep_wait(struct savage2d *s, uint64_t until)
     s->cpu_safe=false; s->idle_waits++;
     for (unsigned poll=0;poll<=WAIT_US/100u;poll++) {
         if (s->io.now_us(s->io.ctx)>=until) return -ETIMEDOUT;
-        uint32_t status=s->io.read32(s->io.ctx,SAVAGE_STATUS);
+        uint32_t status=s->io.read32(s->io.ctx,s->status_reg);
         s->status=status; s->status_logged=true;
         if (idle_status(s,status)) { s->cpu_safe=true; return 0; }
         if (status==UINT32_MAX || (s->reason && !strncmp(s->reason,"status_contradiction",sizeof("status_contradiction")))) return -EIO;
@@ -1723,7 +1824,7 @@ int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
     uint8_t *saved = fs_contig_alloc(SAVAGE_SWEEP_BYTES);
     if (!saved) return out->error = -ENOMEM;
     out->restored=false;
-    struct savage2d access = {.io = *io};
+    struct savage2d access = {.io = *io, .status_reg = SAVAGE_STATUS};
     uint8_t cr_index = io->read_port(io->ctx, 0x3d4), sr_index = io->read_port(io->ctx, 0x3c4);
     uint8_t vga = io->read_port(io->ctx, 0x3c3), misc = io->read_port(io->ctx, 0x3cc);
     uint8_t cr38 = port_cr_read(&access, 0x38), cr39 = port_cr_read(&access, 0x39);
@@ -1909,6 +2010,10 @@ int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line line, void *
     if (!(g_boot.flags&CBI_F_HW_CHECK)) return out->error=-EPERM;
     const struct fb_device *d=fbdev_get(); const struct pci_func *gpu=0;
     if (eligibility(d,&gpu)) return out->error=-ENODEV;
+    enum savage_chip chip=savage2d_chip(gpu->device);
+    /* This configuration sweep diagnoses the qualified T23/Savage4 recipes.
+     * Other families use DM9's generic native-versus-software check. */
+    if (chip != SAVAGE_4 && chip != SAVAGE_SUPER) return out->error=-EOPNOTSUPP;
     uint32_t vram=g_boot.display.tag==CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0;
     if (d->size>UINT32_MAX-(PAGE_SIZE-1u)) return out->error=-ENOSPC;
     uint32_t offset=PAGE_ALIGN_UP(d->size); /* tile and mapping alignment */
