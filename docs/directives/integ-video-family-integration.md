@@ -27,3 +27,7 @@
 6. **Report** the final driver list with the PCI families each covers, and any branch content you could not integrate, with the reason.
 
 Rules (Codex): no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English. Host tests one at a time with `nice -n 19`. Write `build/codex/integ-video-report.md`.
+
+## Amendment 1 (lead, 2026-10-23 02:15): add Riva 128
+
+The first run integrated every listed branch. Now integrate `wt/f2-120` (NVIDIA Riva 128, NV3 independent backend; the lead approved its PIO transport behind DM9) into the same tree, using its diff from `wt/f2-101`, under the same rules. Rerun the display, names, hardware-check and nv tests.
