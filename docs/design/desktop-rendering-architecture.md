@@ -424,6 +424,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | Disk tools (G29): Cleanup scan, category selection, permanent-delete confirmation, progress, cancellation/completion, Format options and confirmation, busy/error report, low-space warning and its Cleanup action | the Files client's damaged region; exposed client content when its modal dialog closes | `apps/files/disk_ui.inc`, libdeskui dialog invalidation and native `DESK_DAMAGE` | none | disk tools (`disk_ui_scenario.h`, production controller on all five presenters) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

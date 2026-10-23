@@ -86,8 +86,8 @@ PIN = "PIN-FROM-FIRST-RUN"
 # G6: reviewed property sheets, drive pie/counting, Version and Attributes.
 G6_FRAMES = {
     "g6-attributes.xrgb": "4ec32dfe992e81b6410a27d69633378555a5ba2ace43694a2f3b01d43df7c3a5",
-    "g6-counting.xrgb": "42b3305b9c527cd7f17357243d80e9a0b41881ddcf48236cdd018197e02054e4",
-    "g6-drive.xrgb": "498d8688f28d739299d4b71bc2567cc7ff1e98784a8172e9c07e3cd5417e2648",
+    "g6-counting.xrgb": "0658832773adc5460617a7cbb731262c3ad2b4b0f8736f2219bde2dd29c193c3",
+    "g6-drive.xrgb": "a6efa2fcb0c11dbf4acbb79d059f1eea25f96466bd806717113ce82e29e46148",
     "g6-file.xrgb": "5bfaba21d7f7629d31aa78b3edfbc71d472e207f632032aca0596d060cd2c165",
     "g6-folder.xrgb": "c7cde320492cac790ffb8e74c6ece5f449c6e88659de20cf4e58f3173d3e58d1",
     "g6-tools.xrgb": "eee7fead585b45aa113857a8f7f27184b2e9b50a1759813e99be6fa420159b2f",
@@ -222,10 +222,21 @@ class DeskuiTests(unittest.TestCase):
         self.assertIn("PASS G6 Properties", stdout)
         self.check_frames(digests, G6_FRAMES, "G6")
 
+    def test_files_cleanup(self):
+        stdout, _ = self.run_harness("files-cleanup", ["tests/host/desktop/files_cleanup_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/model.c", "apps/files/vfs.c"])
+        self.assertIn("PASS G29 Disk Cleanup model", stdout)
+
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",
                                                      "apps/files/model.c"])
         self.assertIn("PASS Files model", stdout)
+
+    def test_files_disk_ui(self):
+        stdout, _ = self.run_harness("files-disk-ui", ["tests/host/desktop/files_disk_ui_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/app.c", "apps/files/model.c",
+            "apps/files/transfer.c", *TOOLKIT], frames=True)
+        self.assertIn("PASS G29 disk dialogs", stdout)
 
     def files_ui(self):
         if DeskuiTests.portrait is None:

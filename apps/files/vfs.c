@@ -3,6 +3,7 @@
  * stat, mkdir, rename, unlink, rmdir, open/read/write/fsync/close). */
 #define _DEFAULT_SOURCE 1
 #include "model.h"
+#include "cleanup.h"
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -98,6 +99,30 @@ static int close_file(void *ctx, int fd) { (void)ctx; return close(fd) ? -errno 
 const struct fm_vfs *fm_native_vfs(void)
 {
     static const struct fm_vfs fs = {NULL, list, metadata_stat, make_dir, move, remove_file, remove_dir,
+                                     open_file, read_file, write_file, sync_file, close_file, NULL};
+    return &fs;
+}
+
+static int cleanup_metadata_stat(void *ctx, const char *path, struct fm_meta *m)
+{
+#if defined(__ciuki__) || defined(__i386__)
+    /* Current native filesystems have no symbolic links and SDK has no lstat. */
+    return metadata_stat(ctx, path, m);
+#else
+    (void)ctx;
+    struct stat s;
+    if (lstat(path, &s)) return -errno;
+    *m = (struct fm_meta){S_ISDIR(s.st_mode) ? FM_DIR : S_ISREG(s.st_mode) ? FM_FILE : FM_OTHER,
+                          (uint64_t)s.st_size, (uint64_t)s.st_ino, (uint32_t)s.st_dev,
+                          (uint32_t)s.st_mode, (int64_t)s.st_mtime, 0,
+                          (s.st_mode & 0200 ? 0u : 1u) | (S_ISDIR(s.st_mode) ? 16u : 0u),
+                          (uint64_t)s.st_blocks * 512u, 1};
+    return 0;
+#endif
+}
+const struct fm_vfs *fm_native_cleanup_vfs(void)
+{
+    static const struct fm_vfs fs = {NULL, list, cleanup_metadata_stat, make_dir, move, remove_file, remove_dir,
                                      open_file, read_file, write_file, sync_file, close_file, NULL};
     return &fs;
 }

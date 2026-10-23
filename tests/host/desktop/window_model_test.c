@@ -13,6 +13,9 @@
  * presenters, the full-composite comparison and the per-pixel oracle. */
 #define DESKTOP_OCCLUSION_NO_MAIN
 #include "occlusion_test.c"
+#define fake_reset disk_ui_vfs_reset
+#include "disk_ui_scenario.h"
+#undef fake_reset
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
@@ -1025,9 +1028,26 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void disk_ui_present(struct du_ui *u,const char *label,void *ctx)
+{
+    struct fake_app *a=ctx; struct desk_client *c=&d.clients[a->slot];
+    assert(c->info.width==(unsigned)u->canvas.width && c->info.height==(unsigned)u->canvas.height);
+    memcpy((void *)c->pixels,u->canvas.pixels,(size_t)u->canvas.width*u->canvas.height*4);
+    struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+    desk_put32(message.data+4,0); desk_put32(message.data+8,0);
+    desk_put32(message.data+12,(unsigned)u->canvas.width); desk_put32(message.data+16,(unsigned)u->canvas.height);
+    wm_send(a,&message); step(label);
+}
+static void row_disk_tools(unsigned m)
+{
+    row_name="disk tools"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    disk_ui_scenario(disk_ui_present,a);
+    app_close(a); step("disk tools close exposes desktop"); wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_disk_tools};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

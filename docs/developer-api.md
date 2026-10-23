@@ -1362,6 +1362,36 @@ struct ciuki_media_label {
 };
 ```
 
+G29: mounted removable FAT only; generation is the physical medium's
+MEDIA_GET_STATE generation. GET fills filesystem (12/16/32), sectors,
+cluster_bytes, supported_filesystems and label. FORMAT accepts family,
+flags and label; the other output fields are ignored and recomputed.
+Full (flags=0) scans sectors, Quick recreates metadata without a scan.
+Both destroy files. reserved must be zero; fixed/busy/stale media refuse.
+Partitioned volumes retain their FAT family; no system files are copied.
+
+```c
+#define MEDIA_GET_FORMAT 0x4d1au
+#define MEDIA_FORMAT 0x4d1bu
+#define CIUKI_FORMAT_QUICK 1u
+#define CIUKI_FORMAT_FAT12 1u
+#define CIUKI_FORMAT_FAT16 2u
+#define CIUKI_FORMAT_FAT32 4u
+struct ciuki_media_format {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t filesystem;
+    uint32_t flags;
+    uint32_t sectors;
+    uint32_t cluster_bytes;
+    uint32_t supported_filesystems;
+    char label[12];
+    uint32_t reserved;
+};
+```
+
 f5-12B2: CD audio on /dev/media, addressed by optical slot (an audio-only
 disc has no drive letter). Every request carries version 1 and its own
 size; a request that names a generation is refused with EAGAIN when the

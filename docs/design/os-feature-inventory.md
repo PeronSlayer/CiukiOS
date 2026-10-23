@@ -257,11 +257,11 @@ application are in that application's section.
 | FM-26 | Open With dialog, with "Always use this program" | MS-shell | partial | Files offers only "Open with CiukNote" and "Play in Music Player" (`app.c:60,1291-1292`); the desktop has an Open With submenu (`shell.c:426-433`). No dialog |
 | FM-27 | Double-click opens the document in its program, or runs a program (Win32, DOS, batch) | MS-shell | partial | Native ELF programs and catalogued documents (`app.c:994-1045`). Missing: `.exe`, `.com`, `.bat` and `.pif` (no PE or MZ route; they end in the "No program is registered" box) |
 | FM-28 | Properties sheet: General tab (type, location, size, size on disk, MS-DOS name, created/modified/accessed, attribute check boxes); folder contents; program Version tab | MS-shell | done | G6: shared toolkit sheet, General metadata/size on disk/alias/local dates, worker-counted folder contents, editable attributes with Apply/OK/Cancel and read-only refusals. Version page reads bounded PE32 fixed and string resources. Host tests: `files_properties_test.c`, `files_version_test.c`, native `files_test.c`, G1 `localtime_test.c`. Version pages for NE/Win16 resources are not provided (Win16 is after the beta). |
-| FM-29 | Drive properties: used/free pie, capacity, label edit; Tools tab (Check Now = ScanDisk, Backup Now, Defragment Now); Sharing tab | RK-disk | partial | G6: drive General with used/free/capacity, integer pie (suppressed while counting) and FAT label editing; Tools page explains unavailable utilities. Check Now/Backup Now/Defragment Now need G29 engines; Sharing needs file sharing. Free-space service currently covers FAT12/16/32, not ISO/NTFS. |
+| FM-29 | Drive properties: used/free pie, capacity, label edit; Tools tab (Check Now = ScanDisk, Backup Now, Defragment Now); Sharing tab | RK-disk | partial | G6: drive General with used/free/capacity, integer pie (suppressed while counting) and FAT label editing. G29 adds Disk Cleanup on General, including keyboard activation. Tools still explains unavailable utilities: Check Now belongs to G14; Backup Now/Defragment Now await their engines; Sharing needs file sharing. Free-space service covers FAT12/16/32, not ISO/NTFS. |
 | FM-30 | Find: Files or Folders (named, containing text, look in with subfolders, date, type, size), Find Computer; F3 | RK-keys | absent | Only type-ahead selection (`model.c:465`) |
 | FM-31 | Send To ▸ Floppy, Desktop (as shortcut), My Documents, Mail Recipient, Briefcase; user-extensible SendTo folder | RK-mobile | absent | — |
 | FM-32 | Quick View (preview a file without opening its program) | RK-comp | absent | — |
-| FM-33 | Format a floppy or removable disk (capacity, Quick/Full/Copy system files, label, summary) | RK-disk | absent | `sdk/libdisk/format.c` (FAT32) is used only by Setup; `fdc_format` is reached only from the DOS VM (`src/kernel/vm/dosvm_floppy.c:50`) |
+| FM-33 | Format a floppy or removable disk (capacity, Quick/Full/Copy system files, label, summary) | RK-disk | partial | G29: Files drive context Format dialog, capacity, supported FAT12/16/32 choices, label validation, Quick/Full, separate destructive confirmation and summary/error; generation-checked exclusive removable formatter in `mount.c` and `/dev/media` (ABI 0x4d1a/0x4d1b). Host tests: `test_format.c`, `files_disk_ui_test.c`, fx-15 disk-tools row. Gaps: unformatted media have no assigned letter, Full aborts on bad sectors (no bad-cluster map/low-level floppy format), Copy system files is disabled, partitioned USB keeps its current FAT family, no sector-level progress/cancel after format starts. |
 | FM-34 | Copy Disk (floppy to floppy) | RK-disk | absent | — |
 | FM-35 | Eject or safely remove removable media | RK-dev | done | `app.c:447-467,1374-1388` with a list of blocking programs; `tests/host/desktop/files_ui_test.c` |
 | FM-36 | Map Network Drive / Disconnect; Sharing tab | RK-net | absent | No file sharing (NW-12) |
@@ -426,7 +426,7 @@ application are in that application's section.
 | ST-8 | Fdisk: create and delete partitions and logical drives, set the active partition, large-disk support | RK-disk ("Disk Management") | partial | MBR/EBR read (`src/kernel/fs/partition.c`); Setup writes one whole-disk MBR (`sdk/libdisk`). Missing: a partition tool; partitions end at 2^28 sectors (`partition.c:13`) |
 | ST-9 | ScanDisk: Standard and Thorough (surface scan), automatic fix, lost clusters saved as `FILEnnnn.CHK`, cross-linked files, report; Check Now on the drive Tools tab | RK-disk, RK-tools | partial | Automatic scan and repair on a dirty mount (`fat.c:1784-1815,1948-1967`). Missing: the program, any report, surface scan, `.CHK` salvage (lost clusters are freed), cross-link repair (the volume goes read-only) |
 | ST-10 | Disk Defragmenter (with application-start optimisation) | RK-disk | absent | — |
-| ST-11 | Disk Cleanup and the low-disk-space warning | RK-disk | absent | Only an ENOSPC message (`apps/files/app.c:133`) |
+| ST-11 | Disk Cleanup and the low-disk-space warning | RK-disk | partial | G29: per-drive Cleanup from Files drive Properties/context menu; estimated category totals, immutable candidate snapshot, old temporary files and G2 Recycle Bin deletion/INFO2, explicit confirmation, cancel/progress/report on a worker. Files copy/move allocation completion checks free space, warns once per Files session below a capacity-scaled 25–65 MiB threshold and repeatedly when full, offers Cleanup; unknown/counting space is suppressed. `files_cleanup_test.c`, `files_disk_ui_test.c`, fx-15 disk-tools row. Gaps: desktop-wide allocation/warning broker (including other applications), Start/System Tools entry and scheduled invocation; NetSurf disk cache is disabled; no atomic conditional-unlink/open-file query in the current VFS (see `disk-cleanup-model.md`). |
 | ST-12 | Drive Converter (FAT16 to FAT32) | RK-disk | absent | — |
 | ST-13 | DriveSpace 3 compression | RK-disk | absent (scope) | Unsupported by decision (`docs/design/cd-setup-plan.md:331`) |
 | ST-14 | Microsoft Backup and System Recovery | RK-tools | absent | — |
@@ -586,7 +586,7 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 | ER-3 | Desktop (shell) crash recovers by restarting the shell | RK-vmm ("User Interface") | absent | `src/kernel/proc/supervisor.c:246-265` falls back to the console and does not restart the desktop |
 | ER-4 | Startup and setup logs (`BOOTLOG.TXT`, `SETUPLOG.TXT`, `DETLOG.TXT`) | RK-start | done | BT-6, BT-13 (`SYSTEM/SETUP.LOG`) |
 | ER-5 | Log viewer for the user | RK-tools | partial | The Control Panel Logs tab shows the boot log read-only (`apps/control/app.c:440-460,1020`); no viewer for `NETSURF.LOG` or the crash files |
-| ER-6 | Low-resource and low-disk warnings | RK-disk | absent | ST-11 |
+| ER-6 | Low-resource and low-disk warnings | RK-disk | partial | G29 supplies Files copy/move low/full-disk warnings with a Cleanup action (ST-11). Low-resource warnings and a session-wide broker for allocations by all programs remain gaps. |
 
 ## Summary of the inventory
 
@@ -719,6 +719,12 @@ below assume they land first.
 | G30 | System tools | SY-1, SY-2, SY-3, SY-7, CP-2, CP-19. A browsable System Information; selectable System Monitor counters; Resource Meter; Device Manager disable, enable, remove and update; an Add New Hardware wizard; Scheduled Tasks and a Maintenance wizard | G29 for maintenance tasks | L | For advanced users; lower first-hour impact |
 | G31 | Printing | PR-1 to PR-6, CD-3, AX-1/AX-3 print. Printers folder and Add Printer; a spooler with a queue window; native generic text, PostScript and PCL drivers over LPT and print-to-file; Print and Page Setup in CiukNote, Paint, Viewer and NetSurf; Win32 printer DCs and winspool; DOS LPT capture to the spooler | G16 | XL | Few period users print in the first hour, but every application expects it |
 | G32 | Users, logon and passwords | SS-1, SS-2, SS-3, SS-4, SD-6. An optional logon dialog, per-user profiles (Desktop, Start Menu, Documents, settings), Passwords and Users applets, Log Off, screen-saver password | G10, G20 | XL | Needed for shared machines; single-user use works without it |
+
+G29 implementation is partial: FM-33, ST-11 and ER-6 now have the
+host-tested behavior described in their evidence cells; FM-29 gains Cleanup.
+Unformatted-media discovery, Copy Disk (FM-34), partition editing (ST-8),
+Defragmenter (ST-10), Drive Converter (ST-12) and Backup/System Recovery
+(ST-14) remain open. `docs/design/disk-tools.md` records these boundaries.
 
 Two areas are not new directives. They stay inside the existing programmes:
 

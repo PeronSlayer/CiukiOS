@@ -87,6 +87,15 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
     struct storage *s=storage_get();
     if (op>=MEDIA_CD_STATE && op<=MEDIA_CD_POSITION) return media_cd_devctl(p,s,op,address,bytes);
     if (op==MEDIA_GET_LABEL || op==MEDIA_SET_LABEL) return media_label(s,op,address,bytes);
+    if (op==MEDIA_GET_FORMAT || op==MEDIA_FORMAT) {
+        struct ciuki_media_format r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (r.size!=sizeof(r) || r.drive>=26 || !r.generation || r.reserved) return -EINVAL;
+        e=px_error(storage_format_removable(s,&r,op==MEDIA_FORMAT));
+        return e ? e : copy_to_user(address,&r,sizeof(r));
+    }
     /* Namespace publication selects immutable mount identity/label fields.
      * Queries never invoke filesystem/transport callbacks or reserve a drive. */
     if (op==MEDIA_GET_BLOCKERS) {
