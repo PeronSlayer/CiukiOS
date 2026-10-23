@@ -257,9 +257,30 @@ static int expect_files_test, expect_note_test, expect_authority=-1, expect_test
 static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg, *expect_netsurf[2];
 static unsigned dosbox_spawns, netsurf_spawns;
 static unsigned control_spawns;
+/* fx-8: a slow spawn. With spawn_hold_ms set the call blocks until the test
+ * releases it or the hold expires (the T23 trial's NetSurf: 3891 ms). */
+static pthread_mutex_t spawn_hold_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t spawn_hold_changed=PTHREAD_COND_INITIALIZER;
+static unsigned spawn_hold_ms, spawn_released;
+static unsigned spawn_entered __attribute__((unused)); /* read only by launch_async_test.h */
+static pthread_t spawn_thread __attribute__((unused));
+static void spawn_hold(void)
+{
+    pthread_mutex_lock(&spawn_hold_lock);
+    spawn_thread=pthread_self(); spawn_entered++;
+    pthread_cond_broadcast(&spawn_hold_changed);
+    if (spawn_hold_ms) {
+        struct timespec until; clock_gettime(CLOCK_REALTIME,&until);
+        until.tv_sec+=spawn_hold_ms/1000; until.tv_nsec+=(long)(spawn_hold_ms%1000)*1000000L;
+        if (until.tv_nsec>=1000000000L) { until.tv_sec++; until.tv_nsec-=1000000000L; }
+        while (!spawn_released && pthread_cond_timedwait(&spawn_hold_changed,&spawn_hold_lock,&until)!=ETIMEDOUT) {}
+    }
+    pthread_mutex_unlock(&spawn_hold_lock);
+}
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
+    spawn_hold();
     assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !env[7]);
     assert(!strcmp(env[2],"HOME=/Documents") && !strcmp(env[3],"TMPDIR=/tmp") && !strcmp(env[4],"PATH=/Programs"));
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
@@ -772,6 +793,7 @@ static void key(struct desktop *d,int code) { desk_shell_key(d,code,1); desk_she
 #ifndef DESK_FOOTPRINT_TEST
 #include "../../../apps/dosbox/autorun.h"
 #include "launch_input_test.h"
+#include "launch_async_test.h"
 #endif
 static unsigned cd_player_launches;
 static int cd_player_error;
@@ -1250,6 +1272,7 @@ int main(int argc,char **argv)
     if (argc==2 && !strcmp(argv[1],"--autoplay-startup")) { test_autoplay_startup(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--slow-stick-folder")) { test_slow_stick_folder(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--launch-input")) { test_launch_input(); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--launch-async")) { test_launch_async(); return 0; }
 #endif
     test_network_service();
     test_media_removal_service();

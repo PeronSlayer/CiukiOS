@@ -254,7 +254,7 @@ static int lookup(void *cwd, const char *path, struct ciuki_file *out) {
     return 0;
 }
 const struct ciuki_file_ops *proc_get_file_ops(void) {
-    static const struct ciuki_file_ops ops = { lookup }; return &ops;
+    static const struct ciuki_file_ops ops = { .open = lookup }; return &ops;
 }
 struct proc_strings *proc_strings_new(void) { return &strings; }
 int proc_strings_add(struct proc_strings *s, const char *text, uint32_t bytes, bool env) {

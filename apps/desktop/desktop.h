@@ -114,6 +114,7 @@ struct desk_client {
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
     uint64_t launch_input_ns;     /* original click, retained through first-frame presentation */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
+    int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
@@ -148,7 +149,20 @@ struct desk_ops {
     int (*present)(int, int, const struct ciuki_rect *);
 };
 struct desk_program { char name[64], path[DESK_ARG_MAX + 1]; };
-struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent, close_deferred; };
+/* fx-8: who asked for a launch, so that a launch completing on the launcher
+ * worker reports its result the way the synchronous call did (Windows 9x
+ * shell: ShellExecute returns at once, a failure is reported later). */
+enum { DESK_LAUNCH_SHELL, DESK_LAUNCH_RUN, DESK_LAUNCH_GAME, DESK_LAUNCH_AUTOPLAY, DESK_LAUNCH_CLIENT };
+struct desk_launch_request {
+    unsigned origin;
+    char label[48];
+    /* DESK_LAUNCH_CLIENT: the TASK_RESULT owed to this requester, which is
+     * matched again by slot, channel and PID before the late reply. */
+    int client, channel, recent;
+    uint32_t pid, serial, opcode;
+    char argument[DESK_ARG_MAX + 1];
+};
+struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent, close_deferred, pending; };
 #define DESK_POWER_CLOSE_NS 3000000000ull
 #define DESK_POWER_RETRY_NS 250000000ull
 #define DESK_POWER_BUSY_NS 5000000000ull
@@ -252,6 +266,11 @@ struct desktop {
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
     uint64_t launch_click_ns;
+    /* fx-8: launch_async: spawns run on the launcher worker (never in gate
+     * scenarios); launch_request: the next launch's origin, reset after it;
+     * launch_deferred: the last launch returned 0 and completes later. */
+    int launch_async, launch_deferred;
+    struct desk_launch_request launch_request;
     int (*launch_mark)(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
@@ -402,7 +421,11 @@ void desk_about(struct desktop *);
 void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
+/* Launch results: a PID, -errno, or 0 when d->launch_async queued the spawn
+ * (fx-8); desk_launch_completed reports the late result to its origin. */
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
+void desk_launch_origin(struct desktop *, unsigned origin, const char *label);
+void desk_launch_completed(struct desktop *, const struct desk_launch_request *, const char *name, int result);
 /* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */
 int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
 /* Programs > Games entry index; kernel NULL keeps the game's saved setting. */

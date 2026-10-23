@@ -330,7 +330,7 @@ static void test_spawn_exceptions(void)
     CHECK(w32_is_pe(&f)&&!w32_pe_validate(&f,im));
     put32(pe_data+60,UINT32_MAX);CHECK(w32_is_pe(&f)&&w32_pe_validate(&f,im)==-ENOEXEC);make_pe(pe_data,false);
     put32(pe_data+0x98+96+4*8,0x2300);put32(pe_data+0x98+100+4*8,8);CHECK(!w32_pe_validate(&f,im));make_pe(pe_data,false);
-    const struct ciuki_file_ops ops={loader_open};proc_set_file_ops(&ops);
+    const struct ciuki_file_ops ops={.open=loader_open};proc_set_file_ops(&ops);
     struct proc_strings *s=proc_strings_new();CHECK(s);CHECK(!proc_strings_add(s,"/fixture.exe",13,false));CHECK(!proc_strings_add(s,"\"quoted  argument\"",19,false));
     struct process *p;loader_missing=true;unsigned baseline=pages_used;
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT&&pages_used==baseline);

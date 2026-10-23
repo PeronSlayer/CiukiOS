@@ -552,6 +552,12 @@ class DesktopTests(unittest.TestCase):
                            check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
+            # fx-8: a 3891 ms spawn (T23 423b803a NetSurf) runs on the launcher
+            # worker while the input thread keeps presenting frames and taking input.
+            result = subprocess.run([str(binary), "--launch-async"], check=True, env=env, timeout=30, capture_output=True, text=True)
+            self.assertIn("PASS fx-8 launch: input thread returned", result.stdout)
+            self.assertIn("PASS fx-8 client LAUNCH", result.stdout)
+            print(result.stdout, end="")
             subprocess.run([str(binary), "--autoplay-startup"], check=True, env=env, timeout=20)
             subprocess.run([str(binary), "--slow-stick-folder"], check=True, env=env, timeout=20)
             subprocess.run([str(binary), "--slow-media-panel"], check=True, env=env, timeout=15)

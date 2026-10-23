@@ -75,7 +75,8 @@ static int gate_digest(const char *path, char hex[65])
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     struct ciuki_file file = {0};
     if (!ops || !ops->open) return -ENOENT;
-    int err = ops->open(proc_supervisor()->cwd,path,&file);
+    /* fx-8: a digest reads every byte, not only an executable's loaded ones. */
+    int err = (ops->open_whole ? ops->open_whole : ops->open)(proc_supervisor()->cwd,path,&file);
     if (err) return err;
     struct sha256_ctx ctx; sha256_init(&ctx);
     static uint8_t bytes[512];

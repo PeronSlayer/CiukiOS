@@ -15,6 +15,10 @@ struct ciuki_file {
  * It may block; copied path and retained cwd remain valid throughout. */
 struct ciuki_file_ops {
     int (*open)(void *cwd, const char *path, struct ciuki_file *out);
+    /* fx-8: open's ELF snapshot may hold only the bytes elf_validate and
+     * elf_load read; open_whole (optional) freezes every byte, for callers
+     * that read the whole file (digests). NULL: open is already whole. */
+    int (*open_whole)(void *cwd, const char *path, struct ciuki_file *out);
 };
 struct elf_segment { uint32_t address, offset, filesz, bytes, prot; };
 struct elf_image {

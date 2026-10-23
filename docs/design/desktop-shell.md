@@ -434,5 +434,14 @@ failure. The listing returns a count up to capacity, or negative errno;
 keys identify HKLM/HKCU entries, not an executable string supplied by the UI.
 The service must re-resolve and authorize the key before starting its command.
 Shell launches run on the sleeping worker; the UI sees only queued acceptance
-and a later failure dialog. Restart confirmation is UI-only; its adapter owns
+and a later failure dialog. Native `/Programs` launches follow the same rule
+(fx-8): the input thread creates the window channel and client slot, a
+launcher worker calls `ciuki_spawn`, and the next service turn binds the PID
+or reports the failure to the launch's origin (Run, Games, AutoPlay, a
+client's deferred `TASK_RESULT`, else a notification). The AppStarting cursor
+shows from the click while the process is created and until its first frame
+or 5 s after creation, as Windows' startup feedback does
+([STARTUPINFO, STARTF_FORCEONFEEDBACK](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfoa)).
+Gate scenarios keep the synchronous spawn. A spawn's channel is neither read
+nor polled before its PID is bound. Restart confirmation is UI-only; its adapter owns
 the separate service transaction and must not perform a machine reboot.
