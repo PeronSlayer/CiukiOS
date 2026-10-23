@@ -5,7 +5,7 @@
 #include "../files/transfer.h"
 #include "../libdeskui/deskui.h"
 #define DESK_FOLDER "/Documents/Desktop"
-#define DESK_TRASH "/Documents/Trash"
+#define DESK_TRASH "/Documents/Trash"   /* the pre-G2 Trash folder: its items are migrated into C:\RECYCLED (RB_LEGACY_TRASH) */
 #define DESK_FOLDER_POLL_SLOTS (2u * FM_ENTRIES)
 enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY };
 struct desk_folder {
@@ -13,7 +13,11 @@ struct desk_folder {
     struct fm_job job;
     struct files_transfer *transfer;
     struct fm_model result;
-    int result_error, clipboard_job, trash_job, dialog_window;
+    int result_error, clipboard_job, dialog_window;
+    /* G2 Recycle Bin: the delete awaiting its confirmation, the policy read for it,
+     * the running bin job (RB op) and the full/empty state of the icon. */
+    struct rb_policy policy; char **pending; unsigned pending_count, delete_flags;
+    int bin_op, bin_full, bin_full_job; unsigned command_flags;
     enum fm_job_kind display_kind;
     char destination[FM_PATH];
     struct du_ui *dialog;
@@ -35,6 +39,12 @@ void desk_folder_destroy(struct desktop *);
 void desk_folder_service(struct desktop *);
 void desk_folder_rename(struct desktop *, int);
 void desk_folder_drop(struct desktop *, int source, int copy);
+/* G2: Delete, Shift+Delete (flags RB_PERMANENT) and drops on the Recycle Bin icon. Asks first unless the
+ * policy turned the confirmation off; desk_folder_confirmed starts the job. Empty Recycle Bin likewise. */
+int desk_folder_delete_request(struct desktop *, char *const *paths, unsigned count, unsigned flags);
+void desk_folder_empty_request(struct desktop *);
+void desk_folder_confirmed(struct desktop *, int action);
+void desk_folder_cancelled(struct desktop *);
 /* fx-19: copy or move dragged items into destination (FM_EFFECT_COPY or
  * FM_EFFECT_MOVE), or move them to the Trash with free names (trash=1);
  * place records the desktop drop point for the new icons. */

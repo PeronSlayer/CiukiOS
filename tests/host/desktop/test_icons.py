@@ -237,11 +237,11 @@ class IconStoreTests(unittest.TestCase):
         icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", (?:"[^"]*"|[A-Z_]+), "([a-z-]+)"', shell))
         # f2-42: three fixed icons precede the real Desktop folder entries.
         # f4-07: Pictures is an optional shortcut after those entries.
-        self.assertEqual(set(icons) - {"Pictures"}, {"Computer", "Documents", "Trash"})
+        self.assertEqual(set(icons) - {"Pictures"}, {"Computer", "Documents", "Recycle Bin"})
         if "Pictures" in icons:
             self.assertEqual(icons["Pictures"], table["place:folder"])
             self.assertRegex(shell, r'if \(d->pictures_exists\) icon_add\(d, "Pictures", "files", "/Documents/Pictures"')
-        for label, obj in {"Documents": "place:home", "Trash": "place:trash"}.items():
+        for label, obj in {"Documents": "place:home", "Recycle Bin": "place:trash"}.items():
             self.assertEqual(icons[label], table[obj], label)
         self.assertIn('e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic"', shell)
         self.assertEqual(icons["Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait

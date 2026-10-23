@@ -69,7 +69,7 @@ Sources:
 | Rubber band | dotted XOR outline; items touched by the band are selected; Ctrl toggles them against the selection at the press, Shift adds | dotted band, scroll-independent anchor, auto-scroll outside the body (50 ms toolkit timer) |
 | Ctrl+A / arrows / Shift+arrows / Ctrl+arrows / Ctrl+Space | all icons / nearest icon in that direction / extend from the anchor / move the focus only / toggle the focus | existing list keys |
 | Enter, double-click | opens every selected item | opens the item |
-| Delete, Ctrl+X/C | the whole selection (one Trash job, a free name per item) | existing commands |
+| Delete, Ctrl+X/C | the whole selection (G2: one Recycle Bin job and one confirmation; Shift+Delete deletes at once) | existing commands |
 
 ### Drag session (desktop compositor owns it)
 
@@ -84,8 +84,8 @@ Sources:
    repeat:
    - desktop background: the Desktop folder (desktop source: reposition by
      the pointer offset, Ctrl copies beside the originals as "Copy of");
-   - a folder icon, Documents or Pictures: that folder; the Trash: move
-     only (Ctrl refused); Computer, documents and Win32 links: no drop;
+   - a folder icon, Documents or Pictures: that folder; the Recycle Bin icon (G2): a
+     delete after the Windows 98 confirmation, move only (Ctrl refused); Computer, documents and Win32 links: no drop;
    - a Files window: `DESK_DRAG_OVER` (client x/y, keys); the window answers
      `DESK_DRAG_STATUS` (effect, allowed set) after hit-testing its list,
      folder tree or Places; it highlights that item, auto-scrolls in the

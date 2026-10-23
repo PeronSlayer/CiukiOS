@@ -5,6 +5,7 @@
 #include "transfer.h"
 #include "transfer_ui.h"
 #include "../desktop/catalog.h"
+#include "../desktop/sounds.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,8 +21,8 @@ enum {
     C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE,
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
-    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_INSERT,
-    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
+    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT,
+    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -54,6 +55,9 @@ static int scan_submit(struct files_app *, enum scan_kind, const char *, int);
 static void scan_poll(struct files_app *);
 static void scan_stop(struct files_app *);
 static void open_item(struct files_app *, unsigned, int);
+static void bin_item_properties(struct files_app *, unsigned);
+static void drop_free(struct files_app *);
+static void bin_properties(struct files_app *);
 static void command(struct files_app *, int);
 static int scan_cancelled(const struct files_scan *);
 
@@ -80,7 +84,16 @@ static const struct du_menu_item go_template[] = {
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Address Bar", C_ADDRESS, 0x20, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Computer", C_GO_ROOT, 0, 0, 0}, {"&Programs", C_GO_BIN, 0, 0, 0},
-    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"Des&ktop", C_GO_DESKTOP, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}, {"Control &Panel", C_GO_CONTROL, 0, 0, 0}};
+    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"Des&ktop", C_GO_DESKTOP, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}, {"Control &Panel", C_GO_CONTROL, 0, 0, 0},
+    {"&Recycle Bin", C_GO_RECYCLE, 0, 0, 0}};
+/* G2: the File menu while the Recycle Bin is shown. */
+static const struct du_menu_item bin_template[] = {
+    {"R&estore", C_RESTORE, 0, 0, DU_ITEM_DEFAULT}, {"&Empty Recycle Bin", C_EMPTY_BIN, 0, 0, 0},
+    {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
+    {"&Delete", C_DELETE, DU_KEY_DELETE, 0, 0}, {"P&roperties", C_PROPERTIES, DU_KEY_ENTER, DU_ALT, 0},
+    {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
+    {"&Close", C_CLOSE, DU_KEY_F4, DU_ALT, 0}};
+#define BIN_ITEMS 7
 static const struct du_menu_item help_template[] = {
     {"&Help Topics", C_HELP, DU_KEY_F1, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&About Files", C_ABOUT, 0, 0, 0}};
 
@@ -227,13 +240,26 @@ void files_layout(struct files_app *a)
     list->file_drag=1; list->marquee=1;
     W(a, W_TREE)->file_drag=1;
     list->box = (struct du_rect){a->split + 4, PANE_TOP, w - a->split - 4, bottom - PANE_TOP};
-    int name = list->box.w - 4 - 16 - 70 - 132 - 108;
-    if (name < 120) name = 120;
-    list->columns[0] = (struct du_column){"Name", name, 0};
-    list->columns[1] = (struct du_column){"Size", 70, 1};
-    list->columns[2] = (struct du_column){"Type", 132, 0};
-    list->columns[3] = (struct du_column){"Modified", 108, 0};
-    list->column_count = 4;
+    if (fm_is_recycle(a->model.path)) {
+        /* G2: Windows 98's Recycle Bin columns. */
+        int bin_name = list->box.w - 4 - 16 - 120 - 98 - 84 - 58 - 98;
+        if (bin_name < 120) bin_name = 120;
+        list->columns[0] = (struct du_column){"Name", bin_name, 0};
+        list->columns[1] = (struct du_column){"Original Location", 120, 0};
+        list->columns[2] = (struct du_column){"Date Deleted", 98, 0};
+        list->columns[3] = (struct du_column){"Type", 84, 0};
+        list->columns[4] = (struct du_column){"Size", 58, 1};
+        list->columns[5] = (struct du_column){"Modified", 98, 0};
+        list->column_count = 6;
+    } else {
+        int name = list->box.w - 4 - 16 - 70 - 132 - 108;
+        if (name < 120) name = 120;
+        list->columns[0] = (struct du_column){"Name", name, 0};
+        list->columns[1] = (struct du_column){"Size", 70, 1};
+        list->columns[2] = (struct du_column){"Type", 132, 0};
+        list->columns[3] = (struct du_column){"Modified", 108, 0};
+        list->column_count = 4;
+    }
     struct du_widget *status = W(a, W_STATUS);
     status->box = (struct du_rect){0, h - STATUS_H, w, STATUS_H};
     status->panels[0] = w - 250; status->panels[1] = 100; status->panels[2] = 0;
@@ -464,10 +490,18 @@ static int removal_target(struct files_app *a)
     int d=media_drive(p);
     return d>=3 && a->media_remove && (a->media.removable_mask & (1u<<d)) ? d : -1;
 }
+/* G2: the drives whose volumes are fixed disks (they keep a Recycle Bin);
+ * only known once the media state has been read. */
+static uint32_t files_fixed(const struct files_app *a)
+{ return a->media.version ? ~a->media.removable_mask & 0x03fffff8u : 0; }
+static const int bin_header_of_key[6] = {0, 4, 3, 5, 1, 2};   /* sort key -> Details column */
+static const unsigned bin_key_of_header[6] = {0, 4, 5, 2, 1, 3};
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
     int computer = !(a->loading ? a->loading_path : m->path)[0];
+    m->fixed = files_fixed(a);
+    int bin = !a->loading && fm_is_recycle(m->path);
     char display[FM_PATH];
     if (fm_display_path(display, a->loading ? a->loading_path : m->path)) strcpy(display, "(path too long)");
     if (m->count > a->capacity) {
@@ -478,6 +512,12 @@ void files_update(struct files_app *a)
         if (texts) a->texts = texts;
         if (rows && texts) a->capacity = cap;
     }
+    if (bin && m->count > a->bin_row_capacity) {
+        unsigned cap = m->count + 32;
+        struct files_bin_row *bins = realloc(a->bin_rows, cap * sizeof(*bins));
+        if (bins) { a->bin_rows = bins; a->bin_row_capacity = cap; }
+    }
+    if (bin && !a->bin_rows) bin = 0;
     unsigned count = a->loading ? 0 : m->count < a->capacity ? m->count : a->capacity;
     uint64_t folder_bytes = 0;
     for (unsigned i = 0; i < count; i++) {
@@ -493,6 +533,17 @@ void files_update(struct files_app *a)
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
         const char *volume_label=drive_label(a,drive);
         if (volume_label[0]) snprintf(t->label,sizeof(t->label),"%s (%s)",volume_label,e->name);
+        if (bin && e->bin && i < a->bin_row_capacity) {
+            /* G2: the original name, location and deletion time; sizes also for folders. */
+            struct files_bin_row *br = &a->bin_rows[i]; const struct rb_item *item = rb_entry_item(m, e);
+            rb_item_name(item, br->name); rb_item_location(item, br->where);
+            if (!br->where[0]) snprintf(br->where, sizeof(br->where), "(unknown)");
+            time_text(br->deleted, sizeof(br->deleted), item->deleted);
+            kb_text(t->size, sizeof(t->size), e->meta.size);
+            a->rows[i] = (struct du_item){{br->name, br->where, br->deleted, t->type, t->size, t->modified},
+                                          icon16(e), icon32(e), (uint8_t)e->selected, 0, 0, 0, 0};
+            continue;
+        }
         a->rows[i] = (struct du_item){{volume_label[0] ? t->label : e->name, t->size, t->type, t->modified},
                                       computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
                                       (uint8_t)e->selected, (uint8_t)in_clipboard(a, e->name), 0, 0, 0};
@@ -500,11 +551,11 @@ void files_update(struct files_app *a)
     struct du_widget *list = W(a, W_LIST);
     list->items = a->rows; list->count = count;
     list->active = m->active < count ? m->active : 0;
-    list->sort = (int)m->sort; list->descending = m->descending;
-    du_set_text(list, a->loading ? "Loading..." : "This folder is empty.");
+    list->sort = bin ? bin_header_of_key[m->sort < 6 ? m->sort : 0] : (int)m->sort; list->descending = m->descending;
+    du_set_text(list, a->loading ? "Loading..." : bin ? "The Recycle Bin is empty." : "This folder is empty.");
     struct du_widget *address = W(a, W_ADDRESS);
     if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, display);
-    address->icon = computer ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) : named("type:folder", 16);
+    address->icon = computer ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) : bin ? named(count ? "place:trash-full" : "place:trash", 16) : named("type:folder", 16);
     uint64_t bytes = 0; unsigned selected = a->loading ? 0 : fm_selected(m, &bytes), selected_files = 0;
     for (unsigned i = 0; i < count; i++) selected_files += m->entries[i].selected && m->entries[i].meta.type == FM_FILE;
     char size[48] = "", left[200];
@@ -535,9 +586,20 @@ void files_update(struct files_app *a)
     W(a, C_BACK)->disabled = !m->history_at;
     W(a, C_FORWARD)->disabled = m->history_at + 1 >= m->history_count;
     W(a, C_UP)->disabled = (uint8_t)root;
-    W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = W(a, C_DELETE)->disabled = computer || !selected;
-    W(a, C_PASTE)->disabled = computer || !m->clipboard_count;
+    W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = computer || bin || !selected;
+    W(a, C_DELETE)->disabled = computer || !selected;
+    W(a, C_PASTE)->disabled = computer || bin || !m->clipboard_count;
     W(a, C_PROPERTIES)->disabled = (uint8_t)(a->loading || computer);
+    /* G2: the File menu is the Recycle Bin's while it is shown. */
+    if (bin != a->bin_menu) {
+        a->bin_menu = bin;
+        a->menus[0].items = bin ? a->bin_items : a->file_items; a->menus[0].count = bin ? BIN_ITEMS : 11;
+    }
+    if (bin) {
+        set_flag(a->bin_items, BIN_ITEMS, C_RESTORE, DU_ITEM_DISABLED, !selected);
+        set_flag(a->bin_items, BIN_ITEMS, C_EMPTY_BIN, DU_ITEM_DISABLED, !count);
+        set_flag(a->bin_items, BIN_ITEMS, C_DELETE, DU_ITEM_DISABLED, !selected);
+    }
     int target=removal_target(a);
     set_flag(a->file_items, 11, C_SAFE_REMOVE, DU_ITEM_DISABLED, target<3);
     for (unsigned i=0;i<11;i++) if (a->file_items[i].id==C_SAFE_REMOVE)
@@ -549,13 +611,13 @@ void files_update(struct files_app *a)
     set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer);
     set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer);
     set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || computer);
-    set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || !selected);
-    set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || !selected);
-    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || !m->clipboard_count);
-    set_flag(a->go_items, 13, C_BACK, DU_ITEM_DISABLED, !m->history_at);
-    set_flag(a->go_items, 13, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
-    set_flag(a->go_items, 13, C_UP, DU_ITEM_DISABLED, root);
-    set_flag(a->go_items, 13, C_GO_GAMES, DU_ITEM_DISABLED, !a->games_available);
+    set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || bin || !selected);
+    set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || bin || !selected);
+    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || bin || !m->clipboard_count);
+    set_flag(a->go_items, 14, C_BACK, DU_ITEM_DISABLED, !m->history_at);
+    set_flag(a->go_items, 14, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
+    set_flag(a->go_items, 14, C_UP, DU_ITEM_DISABLED, root);
+    set_flag(a->go_items, 14, C_GO_GAMES, DU_ITEM_DISABLED, !a->games_available);
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
@@ -641,6 +703,20 @@ static int scan_stat(void *ctx, const char *path, struct fm_meta *meta)
     int r = s->source.stat_path(s->source.ctx, path, meta);
     return scan_cancelled(s) ? -ECANCELED : r;
 }
+/* G2: the Recycle Bin reads INFO2 and may take the legacy Trash in, so the
+ * worker's VFS also forwards file I/O; only reads observe cancellation. */
+static int scan_open(void *ctx, const char *path, int make)
+{ struct files_scan *s = ctx; if (!make && scan_cancelled(s)) return -ECANCELED; return s->source.open(s->source.ctx, path, make); }
+static int scan_read(void *ctx, int fd, void *buffer, unsigned n)
+{ struct files_scan *s = ctx; return s->source.read(s->source.ctx, fd, buffer, n); }
+static int scan_write(void *ctx, int fd, const void *buffer, unsigned n)
+{ struct files_scan *s = ctx; return s->source.write(s->source.ctx, fd, buffer, n); }
+static int scan_sync(void *ctx, int fd) { struct files_scan *s = ctx; return s->source.sync(s->source.ctx, fd); }
+static int scan_close(void *ctx, int fd) { struct files_scan *s = ctx; return s->source.close(s->source.ctx, fd); }
+static int scan_mkdir(void *ctx, const char *path) { struct files_scan *s = ctx; return s->source.mkdir(s->source.ctx, path); }
+static int scan_rename(void *ctx, const char *from, const char *to) { struct files_scan *s = ctx; return s->source.rename(s->source.ctx, from, to); }
+static int scan_unlink(void *ctx, const char *path) { struct files_scan *s = ctx; return s->source.unlink(s->source.ctx, path); }
+static int scan_rmdir(void *ctx, const char *path) { struct files_scan *s = ctx; return s->source.rmdir(s->source.ctx, path); }
 static void scan_free(struct files_scan *s)
 {
     if (!s) return;
@@ -813,7 +889,7 @@ static void *scan_run(void *arg)
                 }
             }
             else if (s->kind == SCAN_HISTORY) s->error = fm_history(&a->model, s->delta);
-            else if (s->kind==SCAN_MEDIA && a->model.path[0]) {
+            else if (s->kind==SCAN_MEDIA && a->model.path[0] && !fm_is_recycle(a->model.path)) {
                 int topology=s->changed || s->labels_changed;
                 s->error=scan_listing(s);
                 if (topology) s->metadata_only=0;
@@ -882,7 +958,9 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     b->poll_clipboard=a->poll_clipboard; s->clipboard_key=clipboard_key(&a->model);
     s->kind = kind; s->delta = delta; s->worker = w; s->source = a->model.fs;
     /* Only read callbacks are used through this cancellation adapter. */
-    b->model.fs = (struct fm_vfs){.ctx=s, .list=scan_list, .stat_path=scan_stat};
+    b->model.fs = (struct fm_vfs){.ctx=s, .list=scan_list, .stat_path=scan_stat, .open=scan_open, .read=scan_read, .write=scan_write,
+        .sync=scan_sync, .close=scan_close, .mkdir=scan_mkdir, .rename=scan_rename, .unlink=scan_unlink, .rmdir=scan_rmdir};
+    b->model.fixed = a->model.fixed;
     if (path) snprintf(s->target, sizeof(s->target), "%s", path);
     pthread_mutex_lock(&w->lock);
     s->revision = __atomic_add_fetch(&w->revision, 1, __ATOMIC_RELEASE);
@@ -956,6 +1034,7 @@ static void scan_poll(struct files_app *a)
             if (refresh) for (unsigned i = 0; i < n->count; i++) for (unsigned j = 0; j < m->count; j++)
                 if (!strcmp(n->entries[i].name, m->entries[j].name)) n->entries[i].selected = m->entries[j].selected;
             free(m->entries); m->entries = n->entries; n->entries = NULL;
+            free(m->bin); m->bin = n->bin; n->bin = NULL; m->bin_count = n->bin_count; m->fixed = n->fixed;
             m->count = n->count; m->capacity = n->capacity; m->active = n->active; m->anchor = n->anchor;
             memcpy(m->path, n->path, FM_PATH); memcpy(m->history, n->history, sizeof(m->history));
             m->history_count = n->history_count; m->history_at = n->history_at;
@@ -981,6 +1060,7 @@ static void scan_poll(struct files_app *a)
     int stage = a->refresh_checkpoint; a->refresh_checkpoint = 0;
     if (!s->error && fm_same_path(a->model.path, "/system")) checkpoint(a, 1);
     if (!s->error && stage) checkpoint(a, stage);
+    if (!s->error && a->show_bin_properties && fm_is_recycle(a->model.path)) { a->show_bin_properties = 0; bin_properties(a); }
     int pending = s->error ? 0 : a->pending_command;
     a->pending_command = 0;
     scan_free(s);
@@ -1029,6 +1109,7 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
     struct fm_entry *e = &a->model.entries[index];
     char path[FM_PATH];
     if (!a->model.path[0] && with_note) return;
+    if (e->bin) { bin_item_properties(a, index); return; }   /* G2: an item in the bin opens its properties */
     if (fm_entry_path(&a->model, index, path)) return;
     if (e->meta.type == FM_DIR && !with_note) { files_navigate(a, path); return; }
     if (!with_note && !classified && e->meta.type == FM_FILE && !e->meta.exec && !strchr(e->name, '.')) {
@@ -1098,14 +1179,16 @@ static void progress(struct files_app *a)
     w->ui_view=w->view; pthread_mutex_unlock(&w->lock);
     fm_progress_dialog(a->ui,D_PROGRESS,a->job.kind,a->job.destination,&w->ui_view,w->started_at);
 }
-static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
+static int job_begin(struct files_app *a)
 {
     if (a->job_active || a->loading) return -EBUSY;
     int r=transfer_start(a);
     if (r) { error_box(a,"Files","Cannot start the file worker:",r); return r; }
     fm_job_destroy(&a->job);
-    r=fm_job_start(&a->job,&a->model.fs,kind,paths,n,destination);
-    if (r) { error_box(a,"Files","Cannot start the selected operation:",r); return r; }
+    return 0;
+}
+static void job_launch(struct files_app *a)
+{
     a->job.chunk=FM_CHUNK;
     a->job_active=1;
     fm_transfer_reset(a->transfer);
@@ -1113,6 +1196,35 @@ static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *pa
     du_timer_start(a->ui,T_JOB,1000000000ull,0); /* visible elapsed time, not result polling */
     progress(a);
     fm_transfer_submit(a->transfer);
+}
+static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
+{
+    int r=job_begin(a);
+    if (r) return r;
+    r=fm_job_start(&a->job,&a->model.fs,kind,paths,n,destination);
+    if (r) { error_box(a,"Files","Cannot start the selected operation:",r); return r; }
+    job_launch(a);
+    return 0;
+}
+/* G2: the Recycle Bin's jobs run on the same worker as every other transfer. */
+enum { BIN_DELETE = 1, BIN_PURGE, BIN_RESTORE, BIN_EMPTY };
+static int start_bin_job(struct files_app *a, int op, char *const *paths, unsigned n, unsigned flags)
+{
+    int r=job_begin(a);
+    if (r) return r;
+    switch (op) {
+    case BIN_DELETE: r=rb_delete_job(&a->job,&a->model.fs,paths,n,&a->policy,a->model.fixed,flags); break;
+    case BIN_PURGE: r=rb_purge_job(&a->job,&a->model.fs,paths,n); break;
+    case BIN_RESTORE: r=rb_restore_job(&a->job,&a->model.fs,paths,n); break;
+    default: r=rb_empty_job(&a->job,&a->model.fs,a->model.fixed); break;
+    }
+    if (r==-ENOENT && op==BIN_EMPTY) {
+        du_message(a->ui,D_INFO,"Recycle Bin","The Recycle Bin is already empty.",DU_DLG_ICON_INFO,NULL,0,0,0);
+        return r;
+    }
+    if (r) { error_box(a,"Files",op==BIN_RESTORE ? "Cannot restore the selected items:" : "Cannot start the selected operation:",r); return r; }
+    a->bin_op=op;
+    job_launch(a);
     return 0;
 }
 
@@ -1195,8 +1307,14 @@ __attribute__((noinline)) static void job_finished(struct files_app *a)
     }
     a->select_created = (kind == FM_COPY || kind == FM_MOVE) && j->created_count && fm_same_path(j->destination, a->model.path);
     scan_submit(a, SCAN_REFRESH, NULL, 0);
-    if (kind == FM_MOVE && j->state == FM_DONE && !j->skipped && !j->kept && !j->kept_folders && a->model.cut) fm_clipboard_consume(&a->model);
+    if (kind == FM_MOVE && !j->bin && j->state == FM_DONE && !j->skipped && !j->kept && !j->kept_folders && a->model.cut) fm_clipboard_consume(&a->model);
+    if (j->bin && j->state == FM_DONE && j->bin->mode == RB_PURGE && a->bin_op == BIN_EMPTY && a->ui->sound) a->ui->sound(a->ui->sound_ctx, SOUND_EMPTY_RECYCLE);
     if (j->state == FM_CANCELLED) snprintf(a->note, sizeof(a->note), "Cancelled; %u item(s) completed", j->completed);
+    else if (j->state == FM_DONE && j->bin)
+        snprintf(a->note, sizeof(a->note), "%u item(s) %s%s", j->completed - j->skipped,
+                 j->bin->mode == RB_RECYCLE ? (j->bin->recycled == j->completed - j->skipped ? "sent to the Recycle Bin" : j->bin->recycled ? "deleted, some sent to the Recycle Bin" : "deleted") :
+                 j->bin->mode == RB_RESTORE ? "restored" : a->bin_op == BIN_EMPTY ? "deleted, the Recycle Bin is empty" : "deleted",
+                 j->skipped ? ", some skipped" : "");
     else if (j->state == FM_DONE)
         snprintf(a->note, sizeof(a->note), "%u item(s) %s%s%s", j->completed - j->skipped,
                  kind == FM_COPY ? "copied" : kind == FM_MOVE ? (j->kept || j->kept_folders ? "copied; originals kept" : "moved") : "deleted",
@@ -1260,7 +1378,7 @@ static int selection_paths(struct files_app *a, char ***out, unsigned *count)
     if (!paths) return -ENOMEM;
     for (unsigned i = 0; i < a->model.count; i++) if (a->model.entries[i].selected) {
         paths[k] = malloc(FM_PATH);
-        if (!paths[k] || fm_join(paths[k], a->model.path, a->model.entries[i].name)) {
+        if (!paths[k] || fm_entry_path(&a->model, i, paths[k])) {
             for (unsigned x = 0; x <= k && x < n; x++) free(paths[x]);
             free(paths); return -ENOMEM;
         }
@@ -1279,23 +1397,198 @@ static void run_selection_job(struct files_app *a, enum fm_job_kind kind)
     free(paths);
 }
 
-static void confirm_delete(struct files_app *a)
+/* G2: Delete sends the selection to the Recycle Bin; Shift+Delete, drives
+ * set to "do not move files" and removable media delete for good. */
+static void run_delete(struct files_app *a)
+{
+    char **paths; unsigned n;
+    if (selection_paths(a, &paths, &n)) return;
+    start_bin_job(a, BIN_DELETE, paths, n, (unsigned)a->delete_flags);
+    for (unsigned i = 0; i < n; i++) free(paths[i]);
+    free(paths);
+}
+static void selected_label(struct files_app *a, char name[FM_NAME], int *folder)
+{
+    const struct fm_model *m = &a->model;
+    const struct fm_entry *e = NULL;
+    for (unsigned i = 0; i < m->count && !e; i++) if (m->entries[i].selected) e = &m->entries[i];
+    name[0] = 0; *folder = 0;
+    if (!e) return;
+    const struct rb_item *item = rb_entry_item(m, e);
+    if (item) rb_item_name(item, name); else snprintf(name, FM_NAME, "%s", e->name);
+    *folder = e->meta.type == FM_DIR;
+}
+static void confirm_delete(struct files_app *a, unsigned flags)
 {
     unsigned n = fm_selected(&a->model, NULL);
     if (!n) return;
-    char text[FM_NAME + 160];
-    const struct fm_entry *e = &a->model.entries[a->model.active < a->model.count && a->model.entries[a->model.active].selected ? a->model.active : 0];
-    if (n == 1) for (unsigned i = 0; i < a->model.count; i++) if (a->model.entries[i].selected) e = &a->model.entries[i];
-    if (n == 1 && e->meta.type == FM_DIR)
-        snprintf(text, sizeof(text), "Are you sure you want to permanently remove the folder\n'%.120s' and all its contents?", e->name);
-    else if (n == 1) snprintf(text, sizeof(text), "Are you sure you want to permanently delete '%.120s'?", e->name);
-    else snprintf(text, sizeof(text), "Are you sure you want to permanently delete these %u items?", n);
-    du_message(a->ui, D_DELETE, n > 1 ? "Confirm Multiple File Delete" : e->meta.type == FM_DIR ? "Confirm Folder Delete" : "Confirm File Delete",
-               text, DU_DLG_ICON_WARNING, yes_no, 2, 0, 1);
+    if (rb_policy_load(&a->model.fs, &a->policy)) rb_policy_default(&a->policy);
+    a->model.fixed = files_fixed(a);
+    char **paths; unsigned count;
+    if (selection_paths(a, &paths, &count)) return;
+    int recycle = rb_classify(&a->policy, a->model.fixed, flags, paths, count) != 0;
+    for (unsigned i = 0; i < count; i++) free(paths[i]);
+    free(paths);
+    a->delete_flags = (int)flags;
+    if (!a->policy.confirm) { run_delete(a); return; }
+    char title[64], text[FM_NAME + 200], name[FM_NAME]; int folder;
+    selected_label(a, name, &folder);
+    rb_delete_prompt(n, n == 1 && folder, name, recycle, title, sizeof(title), text, sizeof(text));
+    du_message(a->ui, D_DELETE, title, text, recycle ? DU_DLG_ICON_QUESTION : DU_DLG_ICON_WARNING, yes_no, 2, 0, 1);
+}
+static void run_bin_selection(struct files_app *a, int op)
+{
+    char **paths; unsigned n;
+    if (selection_paths(a, &paths, &n)) return;
+    start_bin_job(a, op, paths, n, 0);
+    for (unsigned i = 0; i < n; i++) free(paths[i]);
+    free(paths);
+}
+/* Delete inside the bin removes the items for good. */
+static void confirm_purge(struct files_app *a)
+{
+    unsigned n = fm_selected(&a->model, NULL);
+    if (!n) return;
+    if (rb_policy_load(&a->model.fs, &a->policy)) rb_policy_default(&a->policy);
+    if (!a->policy.confirm) { run_bin_selection(a, BIN_PURGE); return; }
+    char title[64], text[FM_NAME + 200], name[FM_NAME]; int folder;
+    selected_label(a, name, &folder);
+    rb_delete_prompt(n, n == 1 && folder, name, 0, title, sizeof(title), text, sizeof(text));
+    du_message(a->ui, D_BIN_PURGE, title, text, DU_DLG_ICON_WARNING, yes_no, 2, 0, 1);
+}
+static void confirm_empty(struct files_app *a)
+{
+    if (!a->model.count) {
+        du_message(a->ui, D_INFO, "Recycle Bin", "The Recycle Bin is already empty.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+        return;
+    }
+    if (rb_policy_load(&a->model.fs, &a->policy)) rb_policy_default(&a->policy);
+    if (!a->policy.confirm) { start_bin_job(a, BIN_EMPTY, NULL, 0, 0); return; }
+    char title[64], text[FM_NAME + 200]; unsigned n = a->model.count;
+    const struct rb_item *only = n == 1 ? rb_entry_item(&a->model, &a->model.entries[0]) : NULL;
+    char name[FM_NAME] = "";
+    if (only) rb_item_name(only, name);
+    rb_delete_prompt(n, only && only->directory, name, 0, title, sizeof(title), text, sizeof(text));
+    du_message(a->ui, D_BIN_EMPTY, title, text, DU_DLG_ICON_WARNING, yes_no, 2, 0, 1);
+}
+
+/* ---- G2: Recycle Bin properties ---- */
+/* Item properties: where it came from, when it was deleted. */
+static void bin_item_properties(struct files_app *a, unsigned index)
+{
+    struct fm_model *m = &a->model;
+    if (index >= m->count) return;
+    const struct fm_entry *e = &m->entries[index]; const struct rb_item *item = rb_entry_item(m, e);
+    if (!item) return;
+    char name[FM_NAME], where[FM_PATH], size[48], g[32], kind_buffer[48], deleted[24], modified[24], text[DU_DIALOG_TEXT];
+    rb_item_name(item, name); rb_item_location(item, where);
+    files_size_text(size, sizeof(size), item->size); group(g, sizeof(g), item->size);
+    const char *type = fm_type_name(e, kind_buffer, sizeof(kind_buffer));
+    time_text(deleted, sizeof(deleted), item->deleted); time_text(modified, sizeof(modified), e->meta.modified);
+    snprintf(text, sizeof(text), "%.200s\n---\nType:\t%s\nOriginal location:\t%.200s\nDeleted:\t%s\nSize:\t%s (%s bytes)\nModified:\t%s",
+             name, type, where[0] ? where : "(unknown)", deleted[0] ? deleted : "-", size, g, modified[0] ? modified : "-");
+    char title[FM_NAME + 32]; snprintf(title, sizeof(title), "%.60s Properties", name);
+    du_message(a->ui, D_BIN_ITEM, title, text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+    du_dialog_icon(a->ui, icon32(e));
+}
+/* Recycle Bin Properties: one setting for all drives or one per drive (the
+ * Drive button walks Global, C:, D:, ...), "do not move files", the maximum
+ * size as a percentage, and the delete confirmation. */
+enum { BP_OK, BP_CANCEL, BP_DRIVE, BP_SCOPE, BP_ONE, BP_EACH, BP_NUKE, BP_SIZE, BP_PERCENT, BP_CONFIRM };
+static char bin_scope_drive(struct files_app *a)
+{
+    char drives[26]; unsigned n = rb_drives(&a->model.fs, a->model.fixed, drives);
+    return a->bin_scope > 0 && (unsigned)a->bin_scope <= n ? drives[a->bin_scope - 1] : 0;
+}
+static void bin_scope_show(struct files_app *a)
+{
+    struct du_dialog *d = &a->ui->dialog; struct rb_policy *p = &a->bin_edit;
+    char drive = bin_scope_drive(a); int i = drive ? drive - 'C' + 2 : -1;
+    char text[200], size[48];
+    d->items[BP_ONE].hidden = d->items[BP_EACH].hidden = drive != 0;
+    d->items[BP_ONE].value = !p->independent; d->items[BP_EACH].value = p->independent;
+    snprintf(text, sizeof(text), drive ? "Settings for drive %c:" : "Global settings (used for every drive unless configured independently)", drive);
+    du_set_text(&d->items[BP_SCOPE], text);
+    d->items[BP_NUKE].value = drive ? p->drive_nuke[i] : p->nuke;
+    unsigned percent = drive ? p->drive_percent[i] : p->percent;
+    snprintf(text, sizeof(text), "%u", percent); du_set_text(&d->items[BP_PERCENT], text);
+    struct rb_policy shown = *p; shown.independent = 1; shown.drive_percent[drive ? i : 2] = percent;
+    files_size_text(size, sizeof(size), rb_limit(&shown, drive ? drive : 'C'));
+    snprintf(text, sizeof(text), "&Maximum size of the Recycle Bin, percent of %s (%s):", drive ? "the drive" : "each drive", size);
+    du_set_text(&d->items[BP_SIZE], text);
+    d->items[BP_CONFIRM].value = p->confirm;
+    d->items[BP_DRIVE].disabled = 0;
+}
+/* Reads the controls into bin_edit; returns 0, or 1 when the size is not 1-100. */
+static int bin_scope_store(struct files_app *a)
+{
+    struct du_dialog *d = &a->ui->dialog; struct rb_policy *p = &a->bin_edit;
+    char drive = bin_scope_drive(a); int i = drive ? drive - 'C' + 2 : -1;
+    if (!drive) p->independent = d->items[BP_EACH].value != 0;
+    char *end; long percent = strtol(d->items[BP_PERCENT].text, &end, 10);
+    int bad = !d->items[BP_PERCENT].text[0] || *end || percent < 1 || percent > 100;
+    if (!bad) { if (drive) p->drive_percent[i] = (unsigned)percent; else p->percent = (unsigned)percent; }
+    if (drive) p->drive_nuke[i] = d->items[BP_NUKE].value != 0; else p->nuke = d->items[BP_NUKE].value != 0;
+    p->confirm = d->items[BP_CONFIRM].value != 0;
+    return bad;
+}
+static int bin_accept(struct du_ui *u, int button, void *arg)
+{
+    struct files_app *a = arg; struct du_dialog *d = &u->dialog;
+    if (button == BP_CANCEL) return 0;
+    int bad = bin_scope_store(a);
+    if (bad) { du_set_text(&d->items[BP_SIZE], "The maximum size must be a percentage from 1 to 100:"); d->focus = BP_PERCENT; return 1; }
+    if (button == BP_DRIVE) {
+        char drives[26]; unsigned n = rb_drives(&a->model.fs, a->model.fixed, drives);
+        if (!a->bin_scope && !a->bin_edit.independent) {
+            du_set_text(&d->items[BP_SCOPE], "Select \"Configure drives independently\" to set each drive separately.");
+            return 1;
+        }
+        a->bin_scope = (int)((unsigned)(a->bin_scope + 1) % (n + 1));
+        bin_scope_show(a); return 1;
+    }
+    return 0;
+}
+static struct du_widget *bin_control(struct files_app *a, unsigned index, enum du_kind kind, const char *label, int x, int y, int w, int h)
+{
+    struct du_dialog *d = &a->ui->dialog; struct du_widget *it = &d->items[index];
+    memset(it, 0, sizeof(*it)); it->kind = kind; it->id = -8000 - (int)index; it->total = 1; it->vertical = 1; it->sort = -1; it->focus_rect = 1;
+    it->box = (struct du_rect){d->box.x + x, d->box.y + y, w, h}; du_set_text(it, label);
+    if (index >= d->count) d->count = index + 1;
+    return it;
+}
+static void bin_properties(struct files_app *a)
+{
+    if (rb_policy_load(&a->model.fs, &a->bin_edit)) rb_policy_default(&a->bin_edit);
+    a->model.fixed = files_fixed(a); a->bin_scope = 0;
+    static const char *const buttons[] = {"OK", "Cancel", "&Drive"};
+    du_message(a->ui, D_BIN_PROPS, "Recycle Bin Properties", "", 0, buttons, 3, 0, 1);
+    struct du_dialog *d = &a->ui->dialog;
+    int w = a->width - 8 < 520 ? a->width - 8 : 520, h = 270;
+    if (h > a->height - 8) h = a->height - 8;
+    d->box = (struct du_rect){(a->width - w) / 2, (a->height - h) / 2, w, h};
+    int by = d->box.y + h - 34;
+    d->items[BP_OK].box = (struct du_rect){d->box.x + w - 262, by, 75, 23};
+    d->items[BP_CANCEL].box = (struct du_rect){d->box.x + w - 181, by, 75, 23};
+    d->items[BP_DRIVE].box = (struct du_rect){d->box.x + w - 100, by, 84, 23};
+    bin_control(a, BP_SCOPE, DU_LABEL, "", 14, 38, w - 28, 34);
+    bin_control(a, BP_ONE, DU_RADIO, "Use &one setting for all drives", 20, 78, w - 40, 20);
+    bin_control(a, BP_EACH, DU_RADIO, "Configure drives &independently", 20, 100, w - 40, 20);
+    bin_control(a, BP_NUKE, DU_CHECKBOX, "Do not &move files to the Recycle Bin. Remove files immediately when deleted.", 20, 130, w - 40, 36);
+    bin_control(a, BP_SIZE, DU_LABEL, "", 14, 172, w - 28, 34);
+    bin_control(a, BP_PERCENT, DU_EDIT, "10", 20, 206, 70, 22);
+    bin_control(a, BP_CONFIRM, DU_CHECKBOX, "Display &delete confirmation dialog", 110, 207, w - 130, 20);
+    d->focus = BP_NUKE; d->accept = bin_accept; d->accept_ctx = a;
+    bin_scope_show(a);
 }
 
 static void properties(struct files_app *a)
 {
+    if (fm_is_recycle(a->model.path)) {
+        if (fm_selected(&a->model, NULL)) bin_item_properties(a, a->model.active < a->model.count && a->model.entries[a->model.active].selected ? a->model.active : 0);
+        else bin_properties(a);
+        return;
+    }
     if (fm_selected(&a->model, NULL)) { run_selection_job(a, FM_PROPERTIES); return; }
     char *paths[] = {a->model.path};
     start_job(a, FM_PROPERTIES, paths, 1, NULL);
@@ -1340,6 +1633,16 @@ static void context(struct files_app *a, const struct du_event *e)
         const struct fm_entry *it = &m->entries[e->index];
         unsigned n = fm_selected(m, NULL);
         enum fm_kind kind = fm_kind(it);
+        if (it->bin) {   /* G2: Restore, Delete, Properties on an item of the Recycle Bin */
+            popup_add(a, "R&estore", C_RESTORE, DU_ITEM_DEFAULT);
+            popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
+            popup_add(a, "&Delete", C_DELETE, 0);
+            popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
+            popup_add(a, "P&roperties", C_PROPERTIES, 0);
+            files_update(a);
+            du_popup(a->ui, a->popup, a->popup_count, e->x, e->y, e->id);
+            return;
+        }
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
@@ -1353,6 +1656,19 @@ static void context(struct files_app *a, const struct du_event *e)
         popup_add(a, "&Delete", C_DELETE, 0); popup_add(a, "Rena&me", C_RENAME, n == 1 ? 0 : DU_ITEM_DISABLED);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "P&roperties", C_PROPERTIES, 0);
+        files_update(a);
+    } else if (e->id == W_LIST && fm_is_recycle(m->path)) {
+        if (!(e->modifiers & (DU_CTRL | DU_SHIFT))) fm_select_none(m);
+        struct du_widget *list = W(a, W_LIST);
+        popup_add(a, "&Empty Recycle Bin", C_EMPTY_BIN, m->count ? 0 : DU_ITEM_DISABLED);
+        popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
+        popup_add(a, "Lar&ge Icons", C_ICONS, DU_ITEM_RADIO | (list->view == DU_ICONS ? DU_ITEM_CHECKED : 0));
+        popup_add(a, "&List", C_LIST, DU_ITEM_RADIO | (list->view == DU_LIST ? DU_ITEM_CHECKED : 0));
+        popup_add(a, "&Details", C_DETAILS, DU_ITEM_RADIO | (list->view == DU_DETAILS ? DU_ITEM_CHECKED : 0));
+        popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
+        popup_add(a, "Refres&h", C_REFRESH, 0);
+        popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
+        popup_add(a, "P&roperties", C_BIN_PROPS, 0);
         files_update(a);
     } else if (e->id == W_LIST) {
         if (!(e->modifiers & (DU_CTRL | DU_SHIFT))) fm_select_none(m);
@@ -1424,7 +1740,13 @@ static void command(struct files_app *a, int id)
     if (a->loading && (id == C_OPEN || id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
         id == C_PASTE_INTO || id == C_DELETE || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT || id == C_SAFE_REMOVE || id == C_MUSIC)) return;
     if (!m->path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
-        id == C_PASTE_INTO || id == C_DELETE || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT)) return;
+        id == C_PASTE_INTO || id == C_DELETE || id == C_DELETE_NOW || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT ||
+        id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
+    int in_bin = fm_is_recycle(m->path);
+    /* G2: the bin keeps its items as stored; nothing is created, renamed, cut or pasted there. */
+    if (in_bin && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE || id == C_PASTE_INTO || id == C_RENAME ||
+                   id == C_NEW_FOLDER || id == C_NEW_TEXT || id == C_MUSIC || id == C_SAFE_REMOVE)) return;
+    if (!in_bin && (id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
     switch (id) {
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
@@ -1453,6 +1775,10 @@ static void command(struct files_app *a, int id)
     }
     case C_GO_CONTROL: open_control(a); break;
     case C_GO_ROOT: files_navigate(a, FM_COMPUTER); break;
+    case C_GO_RECYCLE: files_navigate(a, FM_RECYCLE); break;
+    case C_RESTORE: if (fm_selected(m, NULL)) run_bin_selection(a, BIN_RESTORE); break;
+    case C_EMPTY_BIN: confirm_empty(a); break;
+    case C_BIN_PROPS: bin_properties(a); break;
     case C_GO_BIN: files_navigate(a, "/Programs"); break;
     case C_GO_DESKTOP: files_navigate(a,"/Documents/Desktop"); break;
     case C_GO_DOCUMENTS: files_navigate(a, "/Documents"); break;
@@ -1467,7 +1793,8 @@ static void command(struct files_app *a, int id)
         if (m->active < m->count && m->entries[m->active].meta.type == FM_DIR && !fm_join(p, m->path, m->entries[m->active].name)) paste(a, p);
         break;
     }
-    case C_DELETE: confirm_delete(a); break;
+    case C_DELETE: if (in_bin) confirm_purge(a); else confirm_delete(a, 0); break;
+    case C_DELETE_NOW: if (in_bin) confirm_purge(a); else confirm_delete(a, RB_PERMANENT); break;   /* Shift+Delete */
     case C_PROPERTIES: properties(a); break;
     case C_VIEWS: { struct du_widget *l = W(a, W_LIST); set_view(a, l->view == DU_ICONS ? DU_LIST : l->view == DU_LIST ? DU_DETAILS : DU_ICONS); break; }
     case C_ICONS: set_view(a, DU_ICONS); break;
@@ -1509,7 +1836,19 @@ static void command(struct files_app *a, int id)
 static void dialog_result(struct files_app *a, const struct du_event *e)
 {
     switch (e->id) {
-    case D_DELETE: if (e->index == 0) run_selection_job(a, FM_DELETE); break;
+    case D_DELETE:
+        if (a->drop_count) { if (e->index == 0) start_bin_job(a, BIN_DELETE, a->drop_paths, a->drop_count, 0); drop_free(a); }
+        else if (e->index == 0) run_delete(a);
+        break;
+    case D_BIN_PURGE: if (e->index == 0) run_bin_selection(a, BIN_PURGE); break;
+    case D_BIN_PROPS:
+        if (e->index == 0) {
+            int r = rb_policy_save(&a->model.fs, &a->bin_edit);
+            if (r) error_box(a, "Recycle Bin", "The Recycle Bin settings could not be saved:", r);
+            else { snprintf(a->note, sizeof(a->note), "Recycle Bin settings saved"); files_update(a); }
+        }
+        break;
+    case D_BIN_EMPTY: if (e->index == 0) start_bin_job(a, BIN_EMPTY, NULL, 0, 0); break;
     case D_REPLACE:
         transfer_command(a, 0, e->index == 0 ? FM_YES : e->index == 1 ? FM_YES_ALL : e->index == 2 ? FM_NO : FM_CANCEL);
         if (a->job_active) progress(a);
@@ -1561,6 +1900,10 @@ static void key(struct files_app *a, const struct du_event *e)
 {
     int focus = du_focused(a->ui);
     if (e->key == DU_KEY_F4 && !(e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT))) { command(a, C_ADDRESS); return; }
+    /* G2: Shift+Delete bypasses the Recycle Bin (the plain Delete is a menu accelerator). */
+    if (e->key == DU_KEY_DELETE && (e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT)) == DU_SHIFT && (focus == W_LIST || focus == W_TREE || focus == W_PLACES)) {
+        command(a, C_DELETE_NOW); return;
+    }
     if (focus != W_LIST && focus != W_TREE && focus != W_PLACES) return;
     if (e->key == DU_KEY_BACKSPACE && !(e->modifiers & (DU_CTRL | DU_ALT))) { command(a, C_UP); return; }
     if (focus == W_LIST && e->ch > 32 && e->ch < 127) {
@@ -1639,6 +1982,7 @@ static int drag_source_paths(struct files_app *a, const struct du_event *e, char
 static void drag_start(struct files_app *a, const struct du_event *e)
 {
     if ((e->id != W_LIST && e->id != W_TREE) || !a->drag_begin || a->loading || a->rename_index >= 0) return;
+    if (e->id == W_LIST && fm_is_recycle(a->model.path)) return;   /* G2: items leave the bin through Restore */
     char **paths; char *types; unsigned count;
     if (drag_source_paths(a, e, &paths, &types, &count)) return;
     int r = fm_drag_save(&a->model.fs, paths, types, count);
@@ -1676,6 +2020,7 @@ static int drag_destination(struct files_app *a, int x, int y, char destination[
     struct du_widget *list = W(a, W_LIST), *tree = W(a, W_TREE), *places = W(a, W_PLACES);
     if (du_contains(du_list_body(list), x, y)) {
         int i = du_list_hit(list, x, y);
+        if (fm_is_recycle(a->model.path)) { *widget = W_LIST; snprintf(destination, FM_PATH, "%s", FM_RECYCLE); return 0; }   /* G2: dropping on the bin deletes */
         if (i >= 0 && (unsigned)i < a->model.count && (a->model.entries[i].meta.type == FM_DIR || !a->model.path[0])) {
             *widget = W_LIST; *index = i;
             return fm_entry_path(&a->model, (unsigned)i, destination);
@@ -1703,6 +2048,17 @@ static unsigned drag_evaluate(struct files_app *a, int x, int y, unsigned keys, 
     int widget, index; *allowed = 0;
     if (!a->drag_count || drag_destination(a, x, y, destination, &widget, &index)) { drag_highlight(a, 0, -1); return FM_EFFECT_NONE; }
     int source = fm_volume(a->drag_paths[0]), target = fm_volume(destination);
+    if (fm_is_recycle(destination)) {
+        /* G2: the Recycle Bin window takes a move, never a copy; a CD cannot be deleted from; the bin's own items are in it already. */
+        *allowed = read_only_volume(a, source) ? 0 : FM_EFFECT_MOVE;
+        for (unsigned i = 0; i < a->drag_count && *allowed; i++) {
+            char dir[FM_PATH];
+            if (!rb_dir(fm_drive_letter(a->drag_paths[i]), dir) && fm_beneath(a->drag_paths[i], dir)) *allowed = 0;
+        }
+        unsigned effect = *allowed && !(keys & (FM_KEY_CTRL | FM_KEY_ALT)) ? FM_EFFECT_MOVE : FM_EFFECT_NONE;
+        drag_highlight(a, 0, -1);
+        return effect;
+    }
     /* Copy and move only: CiukiOS has no native file shortcuts (link). A CD
      * source cannot be moved; a CD target accepts nothing. */
     *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY : FM_EFFECT_COPY | FM_EFFECT_MOVE;
@@ -1712,6 +2068,32 @@ static unsigned drag_evaluate(struct files_app *a, int x, int y, unsigned keys, 
     /* Only a folder that will receive the items is highlighted. */
     drag_highlight(a, effect ? widget : 0, effect ? index : -1);
     return effect;
+}
+/* G2: items dropped on the Recycle Bin window are deleted like Delete would. */
+static void drop_free(struct files_app *a)
+{
+    for (unsigned i = 0; a->drop_paths && i < a->drop_count; i++) free(a->drop_paths[i]);
+    free(a->drop_paths); a->drop_paths = NULL; a->drop_count = 0;
+}
+static void drop_delete(struct files_app *a)
+{
+    drop_free(a);
+    a->drop_paths = calloc(a->drag_count, sizeof(*a->drop_paths));
+    if (!a->drop_paths) return;
+    for (unsigned i = 0; i < a->drag_count; i++) {
+        a->drop_paths[i] = strdup(a->drag_paths[i]);
+        if (!a->drop_paths[i]) { a->drop_count = i; drop_free(a); return; }
+    }
+    a->drop_count = a->drag_count;
+    if (rb_policy_load(&a->model.fs, &a->policy)) rb_policy_default(&a->policy);
+    a->model.fixed = files_fixed(a); a->delete_flags = 0;
+    if (!a->policy.confirm) {
+        start_bin_job(a, BIN_DELETE, a->drop_paths, a->drop_count, 0); drop_free(a); return;
+    }
+    char title[64], text[FM_NAME + 200];
+    int recycle = rb_classify(&a->policy, a->model.fixed, 0, a->drop_paths, a->drop_count) != 0;
+    rb_delete_prompt(a->drop_count, a->drop_count == 1 && a->drag_types[0] == 'D', fm_basename(a->drop_paths[0]), recycle, title, sizeof(title), text, sizeof(text));
+    du_message(a->ui, D_DELETE, title, text, recycle ? DU_DLG_ICON_QUESTION : DU_DLG_ICON_WARNING, yes_no, 2, 0, 1);
 }
 void files_drag_over(struct files_app *a, uint32_t serial, int phase, int x, int y, unsigned keys)
 {
@@ -1748,6 +2130,7 @@ void files_drag_drop(struct files_app *a, uint32_t serial, int x, int y, unsigne
     drag_highlight(a, 0, -1);
     if (r) { error_box(a, "Files", "Cannot read the dragged items:", r); return; }
     if (chosen != effect || (effect != FM_EFFECT_COPY && effect != FM_EFFECT_MOVE)) return;
+    if (fm_is_recycle(destination)) { drop_delete(a); return; }
     job_record("[files] drop effect=%s items=%u", effect == FM_EFFECT_MOVE ? "move" : "copy", a->drag_count);
     start_job(a, effect == FM_EFFECT_MOVE ? FM_MOVE : FM_COPY, a->drag_paths, a->drag_count, destination);
 }
@@ -1833,6 +2216,7 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         break;
     case DU_EV_SORT: {
         unsigned column = (unsigned)e->index;
+        if (fm_is_recycle(a->model.path)) column = column < 6 ? bin_key_of_header[column] : 0;   /* G2: the bin's Details order differs */
         fm_sort(&a->model, column, a->model.sort == column ? !a->model.descending : 0);
         files_update(a);
         break;
@@ -1855,12 +2239,12 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->tree = calloc(FILES_TREE, sizeof(*a->tree));
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
-    copy_menu(a->file_items, file_template, 11); copy_menu(a->edit_items, edit_template, 6);
-    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 13); copy_menu(a->help_items, help_template, 3);
+    copy_menu(a->file_items, file_template, 11); copy_menu(a->bin_items, bin_template, BIN_ITEMS); copy_menu(a->edit_items, edit_template, 6);
+    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 14); copy_menu(a->help_items, help_template, 3);
     a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
     a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 6};
     a->menus[2] = (struct du_menu){"&View", a->view_items, 10};
-    a->menus[3] = (struct du_menu){"&Go", a->go_items, 13};
+    a->menus[3] = (struct du_menu){"&Go", a->go_items, 14};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
     u->menus = a->menus; u->menu_count = 5;
     struct du_rect zero = {0, 0, 0, 0};
@@ -1912,6 +2296,8 @@ void files_destroy(struct files_app *a)
     a->ui->service=NULL;
     du_timer_stop(a->ui,T_DRAG_REFRESH);
     fm_drag_free(a->drag_paths,a->drag_types,a->drag_count); a->drag_paths=NULL; a->drag_types=NULL; a->drag_count=0;
+    for (unsigned i=0;a->drop_paths && i<a->drop_count;i++) free(a->drop_paths[i]);
+    free(a->drop_paths); a->drop_paths=NULL; a->drop_count=0; free(a->bin_rows); a->bin_rows=NULL;
     free(a->band_original); free(a->band_hits); a->band_original=a->band_hits=NULL; a->band_capacity=0;
     du_timer_stop(a->ui,T_MEDIA);
     du_timer_stop(a->ui,T_BROWSER);

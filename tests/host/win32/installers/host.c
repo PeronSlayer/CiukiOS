@@ -73,6 +73,11 @@ BOOL W32API CloseHandle(HANDLE h){
 BOOL W32API ReadFile(HANDLE h,void *p,DWORD n,DWORD *done,OVERLAPPED *ov){(void)ov;ssize_t r=read((int)(intptr_t)h-16,p,n);*done=r<0?0:(DWORD)r;return r>=0?1:fail();}
 BOOL W32API WriteFile(HANDLE h,const void *p,DWORD n,DWORD *done,OVERLAPPED *ov){(void)ov;if(host_full){*done=0;error=112;return 0;}ssize_t r=write((int)(intptr_t)h-16,p,n);*done=r<0?0:(DWORD)r;return r>=0?1:fail();}
 BOOL W32API FlushFileBuffers(HANDLE h){return !fsync((int)(intptr_t)h-16);}
+/* G2: drives C: and E: are fixed disks, D: is a CD-ROM, everything else removable; the clock is fixed. */
+DWORD W32API GetDriveTypeA(const char *w){return w && (w[0]=='C' || w[0]=='E')?3:w && w[0]=='D'?5:2;}
+void W32API Sleep(DWORD ms){(void)ms;}
+void W32API GetSystemTime(SYSTEMTIME *t){*t=(SYSTEMTIME){2026,10,3,14,17,46,40,0};}
+BOOL W32API SystemTimeToFileTime(const SYSTEMTIME *t,FILETIME *f){(void)t;uint64_t v=(1792000000ull+11644473600ull)*10000000ull;f->low=(DWORD)v;f->high=(DWORD)(v>>32);return 1;}   /* the fixed clock above */
 DWORD W32API GetFileSize(HANDLE h,DWORD *high){struct stat st;assert(!fstat((int)(intptr_t)h-16,&st));if(high)*high=0;return (DWORD)st.st_size;}
 int w32v_open(const void *name,int wide,struct w32v_file *f){char a[260];if(wide){if(!shell_ansi(name,a,260))return 0;name=a;}HANDLE h=CreateFileA(name,0x80000000u,7,0,3,0,0);if(h==K32_INVALID)return 0;f->handle=(uintptr_t)h;f->size=GetFileSize(h,0);return 1;}
 int w32v_read(struct w32v_file *f,uint32_t off,void *out,uint32_t n){if(off>f->size || n>f->size-off)return 0;if(lseek((int)f->handle-16,off,SEEK_SET)!=(off_t)off)return 0;DWORD done;return ReadFile((HANDLE)f->handle,out,n,&done,0) && done==n;}
@@ -91,7 +96,7 @@ static BOOL next(struct find *f,WIN32_FIND_DATAA *d){
   struct dirent *e;
   while((e=readdir(f->dir))){if(!strcmp(e->d_name,".") || !strcmp(e->d_name,".."))continue;
     memset(d,0,sizeof(*d));assert(strlen(e->d_name)<sizeof(d->name));strcpy(d->name,e->d_name);
-    char p[1700];snprintf(p,sizeof(p),"%s/%s",f->path,e->d_name);struct stat st;assert(!stat(p,&st));d->attributes=S_ISDIR(st.st_mode)?16:128;return 1;}
+    char p[1700];snprintf(p,sizeof(p),"%s/%s",f->path,e->d_name);struct stat st;assert(!stat(p,&st));d->attributes=S_ISDIR(st.st_mode)?16:128;d->size_low=(DWORD)st.st_size;return 1;}
   error=18;return 0;
 }
 HANDLE W32API FindFirstFileA(const char *w,WIN32_FIND_DATAA *d){
@@ -128,7 +133,7 @@ extern LONG RegSetValueExA(DWORD,const char *,DWORD,DWORD,const void *,DWORD);
 extern LONG RegCloseKey(DWORD);
 void host_registry(const char *key,const char *name,const char *value){DWORD h;assert(!RegCreateKeyA(W32R_HKLM,key,&h));assert(!RegSetValueExA(h,name,0,1,value,(DWORD)strlen(value)+1));assert(!RegCloseKey(h));}
 void host_init(const char *root){
-  assert(strlen(root)<sizeof(host_root));strcpy(host_root,root);char p[1400];snprintf(p,sizeof(p),"%s/C",root);assert(!mkdir(p,0700));snprintf(p,sizeof(p),"%s/D",root);assert(!mkdir(p,0700));
+  assert(strlen(root)<sizeof(host_root));strcpy(host_root,root);char p[1400];snprintf(p,sizeof(p),"%s/C",root);assert(!mkdir(p,0700));snprintf(p,sizeof(p),"%s/D",root);assert(!mkdir(p,0700));snprintf(p,sizeof(p),"%s/E",root);assert(!mkdir(p,0700));snprintf(p,sizeof(p),"%s/F",root);assert(!mkdir(p,0700));
   snprintf(hive_directory,sizeof(hive_directory),"%s/hives",root);assert(!mkdir(hive_directory,0700));static struct wr_io io;wr_posix_io(&io,hive_directory);assert(wr_init(&registry,&io,0));registry_live=1;
   snprintf(hive_path,sizeof(hive_path),"%s/spawn.txt",root);
 }

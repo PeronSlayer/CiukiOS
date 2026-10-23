@@ -245,7 +245,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
 - **Desktop icons** (desktop as a folder since f2-42,
   [design](design/desktop-folder.md)): the fixed icons Computer (Files at
   Computer; the icon carries the Ciuki portrait), Documents (Files at
-  `C:\Documents`) and Trash (Files at `C:\Documents\Trash`), then the
+  `C:\Documents`) and Recycle Bin (Files at the Recycle Bin, [design](design/recycle-bin.md)), then the
   entries of `C:\Documents\Desktop`. Click selects, a double click
   (desktop.cfg `double_click_ms`) or Enter opens; right click opens Open and
   Properties, plus Open With, Cut, Copy, Rename and Delete for folder

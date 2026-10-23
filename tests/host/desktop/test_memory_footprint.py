@@ -17,15 +17,15 @@ import hashlib
 # F2-99: new software arrow/shadow; old raster reproduces all former pins (integ-fix1).
 # fx-13: cursor set scaled to the classic 13x19 arrow.
 BOOT_GOLDENS = {
-    "absent-ro": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
-    "absent-rw": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
-    "identical-unpresented": "aa5f22e44c13cb6ae825dde4176fad7ad7df04a4f9c6749d9686b9bfa3933887",
-    "present-ro": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
-    "present-ro-seeded": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
-    "present-rw": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
-    "present-rw-seeded": "7067e3b297a0ba2992bef6c55308c6a44da5e3a70709f65632bb83a1d580d2db",
-    "theme": "3aa32a85ada1353687f0b1955423e53ec5bd75c6b1905d209371a63d1e700530",
-    "wallpaper-change": "aa5f22e44c13cb6ae825dde4176fad7ad7df04a4f9c6749d9686b9bfa3933887"
+    "absent-ro": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
+    "absent-rw": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
+    "identical-unpresented": "b0d613e4f31f67833293a797ba9bed741e822edc9417e741d34663a667f08bfd",
+    "present-ro": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
+    "present-ro-seeded": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
+    "present-rw": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
+    "present-rw-seeded": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
+    "theme": "6a9c77250f0b517802dfd5e27821fe7d365d1996e6bacca1d8601b719728919e",
+    "wallpaper-change": "b0d613e4f31f67833293a797ba9bed741e822edc9417e741d34663a667f08bfd"
 }
 
 class MemoryFootprintTests(unittest.TestCase):

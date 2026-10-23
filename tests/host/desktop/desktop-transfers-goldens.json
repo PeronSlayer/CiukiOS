@@ -1,13 +1,14 @@
 {
-  "desktop-fx19-drag-menu.xrgb": "fe76e903b9da815fd311750818bf50ae8227f39788b9cdc10d4d8501d3152f95",
-  "desktop-fx19-drag.xrgb": "46470baaffd9f5fd089ee3d0361cb0ac79d7a483e42f6614ca8cbc064728cda2",
-  "desktop-fx19-marquee.xrgb": "b6aa088b0a19f8e3cc9397f5f7b6a402c1152908e176b877f0839d76bb617457",
-  "desktop-replace-0.xrgb": "5155a15aab51367d044cbdba558e994c814b261aba292073e5e0a6bd1143bd34",
-  "desktop-replace-1.xrgb": "a3f0bd0568e539a7e217741c8e5d548b25cfe2b51105b42854304a97ecbbb909",
-  "desktop-transfer-0-0.xrgb": "9905da3aa159524ab74d7d22ff9163a4f2f5b823f7589c69059b7dd0045b5e9e",
-  "desktop-transfer-0-1.xrgb": "a983aef5550a6b4ab359f6095ca785ae2c80ef75843473886a62e0d6416c69f8",
-  "desktop-transfer-0-2.xrgb": "9b44321101547ca9057a35510efccbb5b527a0d4f2fdb50a22c7bd7eb33ee681",
-  "desktop-transfer-1-0.xrgb": "cad136bfe26cfd8b03210eadec4c374bd113bd8172071787365590858477448b",
-  "desktop-transfer-1-1.xrgb": "6ecd64b550fa11f5e6731a0d7df161961425a0b37dadc00f6713b52075c87f67",
-  "desktop-transfer-1-2.xrgb": "69fe0bdbdf126b03749b3a8f6aa0b2d5ab07df771b8746932b5e180e321ea545"
+  "desktop-bin-full.xrgb": "b1c9b41646d2043d8e1bcc74757a22e73f249d038e292db374353193b4e4e4c3",
+  "desktop-fx19-drag-menu.xrgb": "169f06a9da22c63bcc36991ac2230488066a62b99ea1c3a8dd6784f20f6d93af",
+  "desktop-fx19-drag.xrgb": "47dcc5b99c39009a2f1d46db6a394fd8c20be6800dea695bd59e9eb0c2d9394e",
+  "desktop-fx19-marquee.xrgb": "573a5aba3260d1e17a76e2f38a68ec1e4de6fd89927efc51a30c21966d920f24",
+  "desktop-replace-0.xrgb": "60a4ef50b95ad3a78aec06f1c0601215c7a7a026636a31a4c42aee79cbe7fe5e",
+  "desktop-replace-1.xrgb": "8dd7b802aa753fca82d99bbb688f2d66ac0207019bd7c94ed4de7dba7c479ff2",
+  "desktop-transfer-0-0.xrgb": "b4e358952763ef185d38c5a06c2f2b0e2acd06153b9d819f0dbfab7b1c2a6a7c",
+  "desktop-transfer-0-1.xrgb": "2f3436bb93167c5b21634baaeb9ba95e82f272bfe3e5818530e80de23ce51afc",
+  "desktop-transfer-0-2.xrgb": "cdd58e9a209c30bdb18b93530c9d04dd5e985d79168394082ba13112b136d089",
+  "desktop-transfer-1-0.xrgb": "c944aa916db6139a923f4a19fc575366ecdebab192c842437329b8be5ab51a3f",
+  "desktop-transfer-1-1.xrgb": "517be10d0be956e7acc745536ad02a9365ddb6b8b5b64c602b3eac43d5f14034",
+  "desktop-transfer-1-2.xrgb": "6ea2c4334b7859b447326e476bbb7d6f4c2c0c31811dc6584e6ca6910dad6163"
 }
