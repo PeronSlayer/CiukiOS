@@ -69,6 +69,14 @@ void task_sleep_ms(uint32_t ms)
 }
 static bool stack_service_needs_yield;
 void task_yield(void) { CHECK(host_flags & 0x200); yields++;stack_service_needs_yield=false; }
+/* fx-11: the worker's wait queue. worker_main is not run here; the tests
+ * drive net_worker_step and its returned sleep the way worker_main does. */
+static unsigned wake_irqs, wake_alls;
+void kwait_init(struct kwait *q) { memset(q, 0, sizeof(*q)); }
+void kwait_wake_irq(struct kwait *q, bool io) { CHECK(q && io && !(host_flags & 0x200)); wake_irqs++; }
+void kwait_wake_all(struct kwait *q) { CHECK(q && (host_flags & 0x200)); wake_alls++; }
+bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t deadline)
+{ (void)q; if (cond(arg)) return true; g_ticks = deadline; return cond(arg); }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
 { (void)n; (void)fn; (void)arg; (void)p; return 0; }
 void task_start(struct task *t) { (void)t; }
@@ -139,7 +147,8 @@ const struct pci_func *pci_get(unsigned n) { return n < 2 ? &functions[n] : 0; }
 
 #include "../../../src/kernel/core/irq_budget.c"
 #include "../../../src/kernel/drivers/net.c"
-void net_stack_driver_service(void) { stack_service_needs_yield=true; }
+static bool service_pending;
+bool net_stack_driver_service(void) { stack_service_needs_yield=true; return service_pending; }
 #include "../../../src/kernel/core/pci_irq.c"
 #include "../../../src/kernel/drivers/net_rtl8139.c"
 #include "../../../src/kernel/drivers/net_e100.c"
@@ -610,6 +619,89 @@ static void probe_step(void)
     }
     net_worker_step();
 }
+/* fx-11: the net-input worker is event-driven. The T23 trial 423b803a showed
+ * net-input at about 9.5 % of the CPU at an idle desktop: a pass every 1 ms
+ * with three yields, IRQ or not. */
+static unsigned worker_frames;
+static void worker_ingress(struct netif *d, const uint8_t *frame, unsigned len, void *cookie)
+{ (void)d; (void)frame; (void)len; (void)cookie; worker_frames++; }
+static unsigned idle_passes(unsigned ms, unsigned expected_wait, unsigned *yielded)
+{
+    unsigned passes = 0, before = yields; uint64_t end = g_ticks + ms;
+    while (g_ticks < end) {
+        unsigned wait = net_worker_step(); CHECK(wait == expected_wait && !worker_wanted(0));
+        CHECK(kwait_wait_until(&worker_wait, worker_wanted, 0, g_ticks + wait) == false);
+        passes++;
+    }
+    *yielded = yields - before; return passes;
+}
+static void test_worker_events(void)
+{
+    uint8_t frame[60] = {0xff,0xff,0xff,0xff,0xff,0xff,0x52,0x55,10,0,2,2,8,6};
+    struct netif *d = &devices[0]; struct model h; unsigned yielded;
+    /* 1. Working IRQ, idle desktop: one pass per NET_WORKER_IDLE_MS. */
+    model_setup(&h, d, M_E100); CHECK(!model_attach(&h, d) && d->irq_attached); device_count = 1;
+    worker_wait_init(); net_set_input(worker_ingress, NULL); worker_frames = 0; wake_irqs = wake_alls = 0;
+    struct net_worker_stats start; net_worker_snapshot(&start);
+    unsigned passes = idle_passes(10000, NET_WORKER_IDLE_MS, &yielded);
+    CHECK(passes == 40 && yielded == 80 && !worker_frames);
+    printf("net worker idle with a working IRQ: %u passes and %u yields in 10 s (1 ms polling: 10000 and 30000)\n", passes, yielded);
+    /* 2. A frame is processed in the pass its interrupt wakes, not at the
+     * next deadline: nothing wakes the worker before the IRQ. */
+    model_receive(&h, frame, 60, false); CHECK(!worker_wanted(0));
+    uint32_t flags = irq_save(); CHECK(netif_irq(d)); irq_restore(flags);
+    CHECK(wake_irqs == 1 && worker_wanted(0));
+    uint64_t woke = g_ticks; CHECK(kwait_wait_until(&worker_wait, worker_wanted, 0, g_ticks + NET_WORKER_IDLE_MS) && g_ticks == woke);
+    CHECK(net_worker_step() == 0 && worker_frames == 1 && !d->irq_pending && !worker_wanted(0));
+    CHECK(net_worker_step() == NET_WORKER_IDLE_MS && worker_frames == 1);
+    /* A full e100 receive ring (8 frames, one interrupt): back-to-back passes
+     * until it is empty, none of them counted as a missed interrupt. */
+    for (unsigned i = 0; i < 8; i++) { frame[14] = (uint8_t)i; model_receive(&h, frame, 60, false); }
+    flags = irq_save(); CHECK(netif_irq(d)); irq_restore(flags);
+    for (unsigned i = 0; i < 8; i++) CHECK(net_worker_step() == 0);
+    CHECK(net_worker_step() == NET_WORKER_IDLE_MS && worker_frames == 9 && !d->irq_fallback && !d->irq_missed);
+    /* 3. A transmit wakes the worker; a ring that refuses frames retries
+     * after 1 ms instead of spinning; shutdown wakes it too. */
+    net_worker_kick(); CHECK(wake_alls == 1 && worker_wanted(0));
+    service_pending = true; CHECK(net_worker_step() == 1 && !worker_wanted(0)); service_pending = false;
+    /* 4. Interrupts that never arrive: frames found by deadline passes three
+     * times in a row switch the device to the bounded fallback poll. */
+    for (unsigned i = 0; i < 3; i++) {
+        model_receive(&h, frame, 60, false); g_ticks += NET_WORKER_IDLE_MS;
+        CHECK(net_worker_step() == 0 && d->irq_fallback == (i == 2));
+        CHECK(net_worker_step() == (i < 2 ? NET_WORKER_IDLE_MS : NET_FALLBACK_ACTIVE_MS));
+    }
+    CHECK(d->irq_fallback && worker_frames == 12);
+    struct net_worker_stats stats; net_worker_snapshot(&stats);
+    CHECK(stats.fallbacks == start.fallbacks + 1 && stats.frames == start.frames + 12 && stats.kicks == start.kicks + 1);
+    g_ticks += NET_FALLBACK_WINDOW_MS;
+    passes = idle_passes(10000, NET_FALLBACK_IDLE_MS, &yielded);
+    CHECK(passes == 500);
+    printf("net worker fallback poll (no working IRQ): %u passes in 10 s idle, %u ms after traffic\n", passes, NET_FALLBACK_ACTIVE_MS);
+    CHECK(!netif_stop(d)); device_count = 0; net_set_input(0, 0);
+    /* 5. No IRQ at all (chain refused): fallback poll from the start. */
+    model_setup(&h, d, M_E100); irq_add_fail = 1; CHECK(!model_attach(&h, d) && !d->irq_attached); irq_add_fail = 0;
+    device_count = 1; net_set_input(worker_ingress, NULL); worker_frames = 0;
+    CHECK(net_worker_step() == NET_FALLBACK_IDLE_MS);
+    model_receive(&h, frame, 60, false); g_ticks += NET_FALLBACK_IDLE_MS;
+    CHECK(net_worker_step() == 0 && worker_frames == 1);
+    CHECK(net_worker_step() == NET_FALLBACK_ACTIVE_MS);
+    g_ticks += NET_FALLBACK_WINDOW_MS; CHECK(net_worker_step() == NET_FALLBACK_IDLE_MS);
+    CHECK(!netif_stop(d)); device_count = 0; net_set_input(0, 0);
+    /* 6. A 20-frame burst (RTL8139) after one interrupt: worker_main runs the
+     * passes back to back, with a 1 ms sleep after every NET_WORKER_BATCH. */
+    model_setup(&h, d, M_RTL); CHECK(!model_attach(&h, d) && d->irq_attached); device_count = 1;
+    net_set_input(worker_ingress, NULL); worker_frames = 0;
+    for (unsigned i = 0; i < 20; i++) { frame[14] = (uint8_t)i; model_receive(&h, frame, 60, false); }
+    flags = irq_save(); CHECK(netif_irq(d)); irq_restore(flags);
+    unsigned burst = 0, slept = 0, back_to_back = 0, wait;
+    while ((wait = worker_sleep(net_worker_step(), &burst)) != NET_WORKER_IDLE_MS) {
+        CHECK(wait <= 1); if (wait) { slept++; g_ticks += wait; } else back_to_back++;
+    }
+    CHECK(worker_frames == 20 && slept == 1 && back_to_back == 19 && !d->irq_fallback && !d->irq_missed);
+    CHECK(!netif_stop(d)); device_count = 0; net_set_input(0, 0);
+    puts("PASS fx-11 net-input worker: IRQ wakes, idle 4 passes/s, back-to-back drain with a 1 ms flood bound, transmit kick, bounded fallback poll, missed-IRQ detection");
+}
 static void test_probe(enum model_kind kind)
 {
     for (unsigned scenario = 0; scenario < 3; scenario++) {
@@ -868,6 +960,7 @@ int main(void)
     test_second_set();
     test_power_barrier();
     test_external_power_barrier();
+    test_worker_events();
     printf("net: %u checks PASS (production framework, eight NIC register/DMA models, ARP)\n", checks);
     return 0;
 }

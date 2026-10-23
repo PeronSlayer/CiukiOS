@@ -36,6 +36,18 @@ int main(void)
     CHECK(file_fcntl(client,fd,F_GETFL,0)==(O_RDWR|O_NONBLOCK));
     CHECK(file_fcntl(client,fd,F_SETFL,O_APPEND)==-EINVAL);
     CHECK(file_fcntl(client,fd,F_GETFL,0)==(O_RDWR|O_NONBLOCK));
+    /* fx-11, T23 trial 423b803a: NetSurf's open_connection (sdk/netsurf/port/
+     * net.c) sets O_NONBLOCK with the POSIX idiom. F_GETFL reports O_RDWR for
+     * a socket, and file_fcntl rejected that bit: "[netsurf] fetch ...
+     * stage=error errno=22 at=connect" 1 ms after stage=connect, no SYN. */
+    CHECK(!file_fcntl(client,fd,F_SETFL,0));
+    CHECK(file_fcntl(client,fd,F_GETFL,0)==O_RDWR);
+    int status=file_fcntl(client,fd,F_GETFL,0);
+    CHECK(file_fcntl(client,fd,F_SETFL,(uint32_t)status|O_NONBLOCK)==0);
+    CHECK(file_fcntl(client,fd,F_GETFL,0)==(O_RDWR|O_NONBLOCK));
+    CHECK(file_fcntl(client,fd,F_SETFL,O_RDWR|O_APPEND)==-EINVAL);
+    CHECK(file_fcntl(client,fd,F_SETFL,O_RDWR|O_NONBLOCK|0x1000000u)==-EINVAL);
+    CHECK(file_fcntl(client,fd,F_GETFL,0)==(O_RDWR|O_NONBLOCK));
     struct trap_frame tf={.eax=CIUKI_SYS_READ,.ebx=(unsigned)copy,.ecx=USER,.edx=2};
     CHECK(file_syscall(&tf) && (int32_t)tf.eax==2 && socket_fixture.reads==1);
     tf.eax=CIUKI_SYS_WRITE;CHECK(file_syscall(&tf) && (int32_t)tf.eax==2 && socket_fixture.writes==1);

@@ -20,10 +20,15 @@ static bool input_active;
 static struct kmutex registration_mutex;
 int net_stack_init(void) __attribute__((weak));
 void net_stack_driver_start(void) __attribute__((weak));
-void net_stack_driver_service(void) __attribute__((weak));
+bool net_stack_driver_service(void) __attribute__((weak)); /* true: frames still queued */
 void net_stack_address(unsigned, uint32_t *) __attribute__((weak));
 static net_input_fn input;
 static void *input_cookie;
+/* fx-11: the worker sleeps on this queue. The IRQ handler, a transmit, a
+ * new device and shutdown wake it; a deadline bounds every sleep. */
+static struct kwait worker_wait;
+static bool worker_wait_ready, worker_kicked;
+static struct net_worker_stats worker_stats;
 /* f6-11 BEGIN: exclusive Ethernet type tap, independent of native ingress.
  * Serialized registration, revocation before waiting, no device mutex held
  * across the callback. The bridge callback must not unregister itself. */
@@ -145,7 +150,7 @@ static void record(struct netif *d)
     char mac[18]; net_mac_text(d->address, mac);
     klog("[net] driver=%s mac=%s link=%s irq=%u mode=%s state=%s reason=%s",
          d->driver->name, mac, net_link_text(d->link), d->pci.irq_line,
-         d->irq_attached ? "irq" : "poll", d->quarantined ? "quarantined" :
+         d->irq_attached && !d->irq_fallback ? "irq" : "poll", d->quarantined ? "quarantined" :
          d->running ? "running" : "stopped", d->reason);
 }
 static uint32_t pci_read_config(struct netif *d, const struct pci_func *p, unsigned reg)
@@ -200,6 +205,8 @@ bool netif_irq(struct netif *d)
     struct irq_stamp start = irq_budget_stamp();
     bool handled = d->driver->interrupt(d);
     if (handled) { d->irq_pending = true; d->stats.interrupts++; }
+    /* fx-11: the driver masked the NIC; only the worker's pass unmasks it. */
+    if (handled && worker_wait_ready) kwait_wake_irq(&worker_wait, true);
     struct irq_elapsed elapsed = irq_budget_elapsed(start);
     uint64_t us = elapsed.us;
     if (us > d->stats.max_irq_us) d->stats.max_irq_us = us;
@@ -423,23 +430,24 @@ int netif_promiscuous(struct netif *d, gen_t generation, bool on)
     }
     kmutex_unlock(&d->mutex); return err;
 }
-void netif_poll(struct netif *d)
+bool netif_poll(struct netif *d)
 {
-    if (!d || !d->driver) return;
+    if (!d || !d->driver) return false;
     kmutex_lock(&d->mutex);
-    if (!d->running || d->stopping || d->quarantined) { kmutex_unlock(&d->mutex); return; }
+    if (!d->running || d->stopping || d->quarantined) { kmutex_unlock(&d->mutex); return false; }
     if (d->smi_reported != d->stats.smi_attributed) {
         d->smi_reported = d->stats.smi_attributed;
         klog("[net] smi_attributed owner=%s count=%llu", d->owner, d->smi_reported);
     }
     for (unsigned i = 0; i < 3; i++) if (d->claims[i] >= 0 && !registry_valid(d->claims[i], d->claim_generation[i])) d->fault_pending = true;
-    if (d->fault_pending) { quarantine_locked(d, "irq_or_registry_fault"); kmutex_unlock(&d->mutex); return; }
+    if (d->fault_pending) { quarantine_locked(d, "irq_or_registry_fault"); kmutex_unlock(&d->mutex); return false; }
     d->servicing = true;
     int len = d->driver->receive_poll(d, d->scratch.data);
+    bool received = len > 0 && len <= (int)NET_FRAME_MAX;
     d->servicing = false;
     if (len < 0 || len > (int)NET_FRAME_MAX) quarantine_locked(d, "receive_fault");
     else if (len) {
-        d->stats.rx_packets++; d->stats.rx_bytes += len;
+        d->stats.rx_packets++; d->stats.rx_bytes += len; d->rx_activity = d->io.now(d->io.cookie);
         if (d->administratively_down || d->queue_count == NET_QUEUE_MAX) d->stats.rx_dropped++;
         else {
             unsigned at = (d->queue_head + d->queue_count) % NET_QUEUE_MAX;
@@ -464,6 +472,7 @@ void netif_poll(struct netif *d)
         }
     }
     kmutex_unlock(&d->mutex);
+    return received;
 }
 bool netif_pop(struct netif *d, struct net_packet *out)
 {
@@ -519,29 +528,110 @@ void net_set_input(net_input_fn fn, void *cookie)
     input_cookie = cookie; input = fn;
     kmutex_unlock(&registration_mutex);
 }
-void net_worker_step(void)
+/* fx-11, T23 trial 423b803a (fx-9 analysis): this worker polled every 1 ms
+ * with three yields per pass even with a working IRQ, about 9.5 % of the
+ * T23's CPU at an idle desktop, and took one frame per pass and millisecond.
+ * A pass still makes one receive_poll per device (netif_poll unmasks the NIC
+ * afterwards; the register sequence is unchanged) and returns how long to
+ * sleep: 0 after a received frame (the next pass follows at once, see
+ * worker_sleep), 1 ms while transmit frames wait for ring space,
+ * NET_WORKER_IDLE_MS (the stack watch cadence; link checks are every 1 s)
+ * when every device has a working IRQ, and the bounded fallback poll
+ * (NET_FALLBACK_ACTIVE_MS for NET_FALLBACK_WINDOW_MS after a frame, else
+ * NET_FALLBACK_IDLE_MS) for a device without one: not attached, external, or
+ * found missing interrupts (frames waiting without a signal, three passes in
+ * a row). */
+static void missed_irq(struct netif *d, unsigned frames, bool signalled)
+{
+    if (!frames || !d->irq_attached || d->irq_fallback) return;
+    if (signalled) { d->irq_missed = 0; return; }
+    if (++d->irq_missed < 3) return;
+    d->irq_fallback = true; worker_stats.fallbacks++;
+    klog("[net] irq_fallback owner=%s irq=%u reason=missed frames=%u interrupts=%llu",
+         d->owner, d->pci.irq_line, frames, (unsigned long long)d->stats.interrupts);
+    record(d);
+}
+unsigned net_worker_step(void)
 {
     struct net_packet packet;
-    if (net_stack_driver_service) { net_stack_driver_service(); task_yield(); }
-    for (unsigned i = 0; i < device_count; i++) {
-        if (shutting_down) break;
-        netif_poll(&devices[i]);
-        bridge_tap_work(&devices[i]); /* no VM scheduling or incoming frame needed */
-        task_yield();
-        if ((input || bridge_tap.fn) && netif_pop(&devices[i], &packet) &&
-            !bridge_tap_frame(&devices[i], &packet)) { /* f6-11 type tap before native ingress */
-            net_input_fn fn = input; void *cookie = input_cookie;
-            if (fn && native_destination(&devices[i], &packet)) {
-                input_active = true; fn(&devices[i], packet.data, packet.length, cookie); input_active = false;
-            }
-        }
+    uint32_t flags = irq_save(); worker_kicked = false; worker_stats.passes++; irq_restore(flags);
+    unsigned wait = NET_WORKER_IDLE_MS; bool more = false;
+    if (net_stack_driver_service) {
+        if (net_stack_driver_service()) wait = 1; /* transmit frames wait for ring space */
         task_yield();
     }
+    for (unsigned i = 0; i < device_count; i++) {
+        if (shutting_down) break;
+        struct netif *d = &devices[i];
+        /* The rest of a burst whose first frame was signalled was signalled too. */
+        flags = irq_save(); bool signalled = d->irq_pending || d->rx_more; uint64_t interrupts = d->stats.interrupts; irq_restore(flags);
+        bool received = netif_poll(d); unsigned frames = received;
+        bridge_tap_work(d); /* no VM scheduling or incoming frame needed */
+        task_yield();
+        if ((input || bridge_tap.fn) && netif_pop(d, &packet) &&
+            !bridge_tap_frame(d, &packet)) { /* f6-11 type tap before native ingress */
+            net_input_fn fn = input; void *cookie = input_cookie;
+            if (fn && native_destination(d, &packet)) {
+                input_active = true; fn(d, packet.data, packet.length, cookie); input_active = false;
+            }
+        }
+        flags = irq_save(); worker_stats.frames += frames;
+        signalled = signalled || d->stats.interrupts != interrupts; irq_restore(flags);
+        missed_irq(d, frames, signalled);
+        d->rx_more = received;
+        if (received) more = true;
+        if (d->running && !d->quarantined && (!d->irq_attached || d->irq_fallback)) {
+            uint64_t now = d->io.now ? d->io.now(d->io.cookie) : g_ticks;
+            bool recent = d->rx_activity && now - d->rx_activity < NET_FALLBACK_WINDOW_MS;
+            unsigned poll = recent ? NET_FALLBACK_ACTIVE_MS : NET_FALLBACK_IDLE_MS;
+            if (poll < wait) wait = poll;
+        }
+    }
+    return more ? 0 : wait;
+}
+static bool worker_wanted(void *arg)
+{
+    (void)arg;
+    if (worker_kicked || shutting_down) return true;
+    for (unsigned i = 0; i < device_count; i++) if (devices[i].irq_pending) return true;
+    return false;
+}
+static void worker_wait_init(void)
+{
+    if (!worker_wait_ready) { kwait_init(&worker_wait); worker_wait_ready = true; }
+}
+void net_worker_kick(void)
+{
+    uint32_t flags = irq_save(); worker_kicked = true; worker_stats.kicks++; irq_restore(flags);
+    if (worker_wait_ready) kwait_wake_all(&worker_wait);
+}
+void net_worker_snapshot(struct net_worker_stats *out)
+{
+    uint32_t flags = irq_save(); *out = worker_stats; irq_restore(flags);
+}
+/* The sleep after a pass: back-to-back passes while frames arrive, but after
+ * NET_WORKER_BATCH of them 1 ms, so a flood cannot hold the CPU at device
+ * priority (16 frames per ms, above 100 Mbit/s of full frames). */
+static unsigned worker_sleep(unsigned wait, unsigned *burst)
+{
+    if (wait) { *burst = 0; return wait; }
+    if (++*burst < NET_WORKER_BATCH) return 0;
+    *burst = 0; return 1;
 }
 static void worker_main(void *arg)
 {
-    (void)arg;
-    while (!shutting_down) { net_worker_step(); task_sleep_ms(1); }
+    (void)arg; unsigned burst = 0;
+    while (!shutting_down) {
+        unsigned wait = worker_sleep(net_worker_step(), &burst);
+        if (shutting_down) break;
+        if (!wait) { task_yield(); continue; }
+        if (kwait_wait_until(&worker_wait, worker_wanted, 0, deadline_after_ms(wait))) {
+            uint32_t flags = irq_save(); bool irq = false;
+            for (unsigned i = 0; i < device_count; i++) if (devices[i].irq_pending) irq = true;
+            if (irq) worker_stats.irq_wakes++;
+            irq_restore(flags);
+        }
+    }
     task_exit(0);
 }
 static uint32_t port_read(void *cookie, uint16_t port, unsigned width)
@@ -588,13 +678,14 @@ int net_init(void)
     }
     if (net_stack_driver_start) net_stack_driver_start();
     if (!active) return 0;
+    worker_wait_init();
     worker = task_create_kernel("net-input", worker_main, 0, P_DEVICE);
     if (!worker) { net_shutdown(); return -ENOMEM; }
     task_start(worker); return 0;
 }
 void net_shutdown(void)
 {
-    shutting_down = true; net_set_input(0, 0);
+    shutting_down = true; net_worker_kick(); net_set_input(0, 0);
     net_bridge_tap_unregister(bridge_tap.fn, bridge_tap.cookie); /* f6-11 tap revocation */
     for (unsigned i = 0; i < device_count; i++) (void)netif_stop(&devices[i]);
     if (worker && worker != g_current) {
@@ -607,7 +698,7 @@ int net_power_quiesce(void)
     /* The general shutdown API is also used at initialization failure. S5
      * needs a bounded barrier and must observe every driver's stop result. */
     uint64_t end = deadline_after_ms(2000);
-    shutting_down = true;
+    shutting_down = true; net_worker_kick();
     if (!kmutex_lock_until(&registration_mutex,end)) return -NET_EBUSY;
     uint32_t flags = irq_save();
     input = 0; bridge_tap.fn = 0; bridge_tap.work = 0;
@@ -694,6 +785,7 @@ struct netif *netif_publish_external(const struct pci_func *p,const struct netif
     }
     bool start_worker=false;
     if(d && !worker) {
+        worker_wait_init();
         worker=task_create_kernel("net-input",worker_main,0,P_DEVICE);
         if(worker) start_worker=true;else d=0;
     }
@@ -708,5 +800,7 @@ struct netif *netif_publish_external(const struct pci_func *p,const struct netif
         if(start_worker) task_start(worker);
         if(d) record(d);
     }
-    kmutex_unlock(&registration_mutex);return d;
+    kmutex_unlock(&registration_mutex);
+    if(d) net_worker_kick(); /* fx-11: an external device without an IRQ needs the fallback poll */
+    return d;
 }

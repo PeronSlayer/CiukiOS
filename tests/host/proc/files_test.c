@@ -246,7 +246,23 @@ static void test_fds(void)
     CHECK(!file_fcntl(client, copy, F_GETFD, 0));
     CHECK(!file_fcntl(client, copy, F_SETFL, O_APPEND | O_NONBLOCK));
     CHECK(file_fcntl(client, fd, F_GETFL, 0) == (O_RDWR | O_APPEND | O_NONBLOCK));
-    CHECK(file_fcntl(client, fd, F_SETFL, O_RDWR) == -EINVAL);
+    /* fx-11: POSIX fcntl() ignores access-mode and file-creation bits in the
+     * F_SETFL argument; fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)|O_NONBLOCK) must
+     * work, and the access mode never changes through F_SETFL. */
+    CHECK(!file_fcntl(client, fd, F_SETFL, O_RDWR));
+    CHECK(file_fcntl(client, fd, F_GETFL, 0) == O_RDWR);
+    CHECK(!file_fcntl(client, fd, F_SETFL, (uint32_t)file_fcntl(client, fd, F_GETFL, 0) | O_APPEND | O_NONBLOCK));
+    CHECK(file_fcntl(client, fd, F_GETFL, 0) == (O_RDWR | O_APPEND | O_NONBLOCK));
+    CHECK(!file_fcntl(client, fd, F_SETFL, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC | O_APPEND));
+    CHECK(file_fcntl(client, fd, F_GETFL, 0) == (O_RDWR | O_APPEND));
+    CHECK(file_fcntl(client, fd, F_SETFL, O_NONBLOCK | 0x1000000u) == -EINVAL);
+    CHECK(file_fcntl(client, fd, F_GETFL, 0) == (O_RDWR | O_APPEND));
+    CHECK(!file_fcntl(client, fd, F_SETFL, O_APPEND | O_NONBLOCK));
+    int read_only = file_open(client, "/fd.bin", O_RDONLY, 0); CHECK(read_only >= 0);
+    CHECK(!file_fcntl(client, read_only, F_SETFL, O_RDWR | O_NONBLOCK));
+    CHECK(file_fcntl(client, read_only, F_GETFL, 0) == (O_RDONLY | O_NONBLOCK));
+    CHECK(io(read_only, "x", 1, true, false, 0) == -EBADF);
+    CHECK(!file_close(client, read_only));
     CHECK(file_fcntl(client, fd, F_SETFD, 2) == -EINVAL);
     CHECK(file_dup(client, fd, fd, true, 0) == fd && client->fds[fd].flags == FD_CLOEXEC);
     CHECK(file_fcntl(client, copy, F_DUPFD_CLOEXEC, 7) == 7 && client->fds[7].flags == FD_CLOEXEC);

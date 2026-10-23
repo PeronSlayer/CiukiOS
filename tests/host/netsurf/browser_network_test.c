@@ -206,6 +206,9 @@ int __wrap_main(int argc,char **argv)
     /* Every remote layout exceeds 75 ms of budget time; local pages, such as
      * the error page, are never time-limited. */
     if(budget)ciuki_layout_clock_scale=1000000;
+    /* fx-11: a small page's layout is charged roughly 0.1-2 s here: over the
+     * 75 ms sub-resource limit, under the 10 s top-level document limit. */
+    if(!strcmp(mode,"browser-document"))ciuki_layout_clock_scale=20000;
     const char *cert=getenv("CIUKI_FIXTURE_CERT"),*key=getenv("CIUKI_FIXTURE_KEY");
     blocked=!strcmp(mode,"browser-blocked");fixture_begin(mode,cert?cert:"-",key?key:"-");
     int result=__real_main(argc,argv);

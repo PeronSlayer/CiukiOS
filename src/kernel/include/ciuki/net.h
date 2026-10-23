@@ -84,6 +84,11 @@ struct netif {
     uint64_t tx_deadline[4], link_deadline;
     bool ready, running, stopping, quarantined, touched, irq_attached, administratively_down;
     bool irq_pending, fault_pending, servicing, promiscuous;
+    /* fx-11: frames found by a deadline pass with no interrupt signalled;
+     * three passes in a row switch the device to the bounded fallback poll. */
+    bool irq_fallback, rx_more; /* rx_more: the last pass received a frame */
+    unsigned irq_missed;
+    uint64_t rx_activity; /* ticks of the last received frame (fallback pacing) */
     const char *reason;
     /* A foreign host owns its own registry/fence lifecycle. The common
      * network worker still owns copied queues and public state records. */
@@ -110,7 +115,7 @@ int netif_promiscuous(struct netif *, gen_t, bool);
 int netif_stop(struct netif *);
 void netif_quarantine(struct netif *, const char *reason);
 bool netif_irq(struct netif *);
-void netif_poll(struct netif *);
+bool netif_poll(struct netif *); /* true: one frame was received */
 bool netif_pop(struct netif *, struct net_packet *);
 void netif_snapshot(struct netif *, struct net_stats *);
 /* First running adapter, otherwise first detected adapter; no hardware I/O. */
@@ -134,7 +139,20 @@ struct netif *net_get(unsigned);
 struct netif *netif_publish_external(const struct pci_func *,const struct netif_driver *,
                                       void *context,const uint8_t mac[6],gen_t,bool carrier,
                                       void (*fault)(struct netif *,const char *));
-void net_worker_step(void);
+/* fx-11: the net-input worker sleeps until an interrupt, a transmit, a
+ * shutdown or a deadline. One pass returns the milliseconds to wait before
+ * the next one: 0 = a frame was received; NET_WORKER_IDLE_MS when every
+ * device has a working IRQ; a bounded fallback poll otherwise. At most
+ * NET_WORKER_BATCH passes run back to back before a 1 ms sleep. */
+#define NET_WORKER_BATCH 16u
+#define NET_WORKER_IDLE_MS 250u
+#define NET_FALLBACK_ACTIVE_MS 2u
+#define NET_FALLBACK_IDLE_MS 20u
+#define NET_FALLBACK_WINDOW_MS 100u
+unsigned net_worker_step(void);
+void net_worker_kick(void); /* thread context: a transmit or a state change needs a pass */
+struct net_worker_stats { uint64_t passes, irq_wakes, kicks, frames, fallbacks; };
+void net_worker_snapshot(struct net_worker_stats *);
 unsigned net_arp_request(uint8_t frame[60], const uint8_t mac[6]);
 bool net_arp_reply(const uint8_t *, unsigned, const uint8_t local[6], uint8_t peer[6]);
 #endif

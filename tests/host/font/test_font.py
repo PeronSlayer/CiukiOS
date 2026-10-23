@@ -402,6 +402,35 @@ class FontTests(unittest.TestCase):
         (ROOT / "build/codex/f2-63-benchmark.json").write_text(json.dumps(data, indent=2) + "\n")
         print("FONT_BENCHMARK", json.dumps(data, sort_keys=True))
 
+    def test_open_reads_face_in_one_request(self):
+        """fx-11, T23 trial 423b803a: NetSurf's first layout spent 2,117,000 of
+        2,175,000 us in two ciuki_font_open calls (Sans Regular and Bold).
+        Through the guest's newlib stdio (st_blksize = 4 KiB FAT32 cluster) the
+        old open made one read(2) per cluster: 101 + 102 = 203 storage
+        requests, about 10.4 ms each on the T23. The face must arrive in one
+        request per 1 MiB (CIUKI_IO_MAX), without stdio."""
+        binary = self.folder / "open-io"
+        subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
+                        "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                        "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"), *self.ft.includes(),
+                        str(ROOT / "tests/host/font/open_io.c"), str(ROOT / "sdk/libfont/font.c"), str(self.ft_library),
+                        "-Wl,--wrap=read,--wrap=fread", "-lm", "-o", str(binary)], check=True, env=self.env)
+        faces = [FONTS / "LiberationSans-Regular.ttf", FONTS / "LiberationSans-Bold.ttf"]
+        result = subprocess.run([binary, *faces], text=True, capture_output=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        guest_requests = sum(-(-path.stat().st_size // data["guest_blksize"]) for path in faces)
+        self.assertEqual(guest_requests, 203)  # the old stdio pattern on the guest
+        for face, path in zip(data["faces"], faces):
+            size = path.stat().st_size
+            with self.subTest(face=path.name):
+                self.assertEqual(face["stdio_freads"], 0, face)
+                self.assertEqual(face["bytes_read"], size, face)
+                self.assertLessEqual(face["reads"], -(-size // (1024 * 1024)), face)
+                self.assertGreaterEqual(face["largest_read"], size, face)
+        print("FONT_OPEN_IO", json.dumps(dict(data, old_guest_requests=guest_requests,
+              t23_us_per_old_request=round(2117000 / guest_requests))))
+
     def test_heap_budget_allocation_failures_and_warm_paint(self):
         binary = self.folder / "memory"
         subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",

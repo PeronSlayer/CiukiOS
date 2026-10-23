@@ -56,5 +56,33 @@ int main(void)
     assert(!ciuki_layout_local_url("http://example.com/") && !ciuki_layout_local_url("https://example.com/"));
     assert(!ciuki_layout_local_url("data:text/html,x") && !ciuki_layout_local_url("filex:y") && !ciuki_layout_local_url(NULL));
     assert(!ciuki_layout_local_url("about") && !ciuki_layout_local_url(""));
-    puts("NetSurf layout budget: remote deadline/reset, local never time-limited, nesting, T23 clock scale and classification passed");fflush(stdout);
+    /* fx-11, lead decision 2026-10-23: a top-level remote document has 10 s.
+     * The T23 trial's welcome-page layout work (58 ms) and an ordinary page
+     * (1.7 s) pass; 10 s plus 1 ns is a time rejection. */
+    unsigned rejections=ciuki_layout_rejections;
+    span=ciuki_layout_begin_limit(true,CIUKI_LAYOUT_DOCUMENT_LIMIT_NS);clock_ns+=1700000000u;
+    assert(!ciuki_layout_expired() && ciuki_layout_end(span,true) && ciuki_layout_last_cause()==CIUKI_LAYOUT_ACCEPTED);
+    span=ciuki_layout_begin_limit(true,CIUKI_LAYOUT_DOCUMENT_LIMIT_NS);clock_ns+=9999999999ull;
+    assert(!ciuki_layout_expired() && ciuki_layout_end(span,true));
+    span=ciuki_layout_begin_limit(true,CIUKI_LAYOUT_DOCUMENT_LIMIT_NS);clock_ns+=10000000001ull;
+    assert(ciuki_layout_expired() && !ciuki_layout_end(span,true) && ciuki_layout_last_cause()==CIUKI_LAYOUT_TIME);
+    assert(ciuki_layout_rejections==rejections+1 && !ciuki_layout_expired());
+    /* An object laid out inside the document inherits its deadline and limit
+     * (not 75 ms); afterwards every other span is back to 75 ms. */
+    outer=ciuki_layout_begin_limit(true,CIUKI_LAYOUT_DOCUMENT_LIMIT_NS);clock_ns+=1000000000u;
+    inner=ciuki_layout_begin(true);clock_ns+=200000000u;
+    assert(!ciuki_layout_expired() && ciuki_layout_end(inner,true));
+    assert(ciuki_layout_end(outer,true));
+    span=ciuki_layout_begin(true);clock_ns+=75000001;
+    assert(!ciuki_layout_end(span,true) && ciuki_layout_last_cause()==CIUKI_LAYOUT_TIME);
+    /* The T23 model scale charges both kinds alike: 0.2 s of host time at
+     * x32 is 6.4 s, a document acceptance and a sub-resource rejection. */
+    ciuki_layout_clock_scale=32;
+    span=ciuki_layout_begin_limit(true,CIUKI_LAYOUT_DOCUMENT_LIMIT_NS);clock_ns+=200000000u;
+    assert(ciuki_layout_end(span,true) && ciuki_layout_last_ns()==6400000000ull);
+    span=ciuki_layout_begin(true);clock_ns+=200000000u;
+    assert(!ciuki_layout_end(span,true));
+    ciuki_layout_clock_scale=1;
+    puts("NetSurf layout budget: remote deadline/reset, local never time-limited, nesting, T23 clock scale and classification passed");
+    puts("NetSurf layout budget fx-11: top-level document 10 s, nested objects inherit it, other spans 75 ms");fflush(stdout);
 }

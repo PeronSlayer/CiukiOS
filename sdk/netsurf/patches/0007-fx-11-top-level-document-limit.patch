@@ -1,0 +1,99 @@
+CiukiOS fx-11 (lead decision 2026-10-23): the document of a top-level browser
+window gets a 10 s layout limit (CIUKI_LAYOUT_DOCUMENT_LIMIT_NS, budget.h);
+frames, iframes, embedded objects and every other remote span keep 75 ms. The
+first layout runs from browser_window_content_ready before content_open gives
+the content its window, so browser_window.c flags top-level reformats
+(ciuki_layout_top_level); later reflows (objects arriving) match the root
+window's current content. Evidence: docs/validation/fx-11-netsurf-fetch-layout.md.
+
+--- a/netsurf/content/handlers/html/layout.c
++++ b/netsurf/content/handlers/html/layout.c
+@@ -5510,15 +5510,27 @@
+ }
+ 
+ #include "framebuffer/ciuki/font_work.h"
++#include "content/hlcache.h"
++#include "desktop/browser_private.h"
++
++/* fx-11 (lead decision 2026-10-23): the current document of a top-level
++ * browser window. browser_window.c flags the first layout, which runs before
++ * content_open sets htmlc->bw; frames, iframes and objects never match. */
++static bool ciuki_layout_document_window(struct content *c, struct browser_window *bw)
++{
++    return ciuki_layout_top_level || (bw && !bw->parent && bw->current_content &&
++                                      hlcache_handle_get_content(bw->current_content) == c);
++}
+ 
+ /* Always stop the clock, including structural, allocation and timeout exits.
+  * f6-20: the time limit applies to remote documents only; local ones keep
+- * the structural admission above. */
++ * the structural admission above. fx-11: a top-level document gets 10 s. */
+ bool layout_document(html_content *content, int width, int height)
+ {
+     nsurl *url=content_get_url(&content->base);
+     struct ciuki_font_work work=ciuki_font_work_read();
+-    struct ciuki_layout_span span=ciuki_layout_begin(!ciuki_layout_local_url(url?nsurl_access(url):NULL));
++    struct ciuki_layout_span span=ciuki_layout_begin_limit(!ciuki_layout_local_url(url?nsurl_access(url):NULL),
++        ciuki_layout_document_window(&content->base,content->page?NULL:content->bw)?CIUKI_LAYOUT_DOCUMENT_LIMIT_NS:CIUKI_LAYOUT_LIMIT_NS);
+     bool accepted=ciuki_layout_document(content,width,height);
+     bool result=ciuki_layout_end(span,accepted);
+     ciuki_font_work_report(work,ciuki_layout_last_ns(),!span.timed);
+--- a/netsurf/content/handlers/text/textplain.c
++++ b/netsurf/content/handlers/text/textplain.c
+@@ -403,6 +403,7 @@
+  */
+ #include "netsurf/misc.h"
+ #include "framebuffer/ciuki/budget.h"
++#include "desktop/browser_private.h"
+ static void ciuki_text_error(void *context)
+ {
+     struct content *c=context;
+@@ -540,10 +541,14 @@
+ {
+     textplain_content *text=(textplain_content *)c;
+     if (text->ciuki_layout_failed) return;
+-    /* f6-20: the time limit applies to remote text only. */
++    /* f6-20: the time limit applies to remote text only. fx-11 (lead
++     * decision 2026-10-23): a top-level window's text document gets 10 s. */
+     nsurl *url=content_get_url(c);
+     bool local=ciuki_layout_local_url(url?nsurl_access(url):NULL);
+-    struct ciuki_layout_span span=ciuki_layout_begin(!local);
++    struct browser_window *bw=text->bw;
++    bool document=ciuki_layout_top_level || (bw && !bw->parent && bw->current_content &&
++                                             hlcache_handle_get_content(bw->current_content) == c);
++    struct ciuki_layout_span span=ciuki_layout_begin_limit(!local,document?CIUKI_LAYOUT_DOCUMENT_LIMIT_NS:CIUKI_LAYOUT_LIMIT_NS);
+     bool accepted=ciuki_text_reformat(c,width,height);
+     if (!ciuki_layout_end(span,accepted)) {
+         text->ciuki_layout_failed=true;c->ciuki_layout_rejected=true;text->physical_line_count=0;
+--- a/netsurf/desktop/browser_window.c
++++ b/netsurf/desktop/browser_window.c
+@@ -63,6 +63,7 @@
+ #include "desktop/knockout.h"
+ #include "desktop/browser_history.h"
+ #include "desktop/theme.h"
++#include "framebuffer/ciuki/budget.h"
+ 
+ #ifdef WITH_THEME_INSTALL
+ #include "desktop/theme.h"
+@@ -848,7 +849,11 @@
+ 	browser_window_get_dimensions(bw, &width, &height);
+ 	width /= bw->scale;
+ 	height /= bw->scale;
++	/* Ciuki fx-11: a top-level window's document gets the 10 s layout limit
++	 * (lead decision 2026-10-23); it is not open yet, so say so here. */
++	ciuki_layout_top_level = bw->parent == NULL;
+ 	content_reformat(bw->current_content, false, width, height);
++	ciuki_layout_top_level = false;
+ 
+ 	/* history */
+ 	if (bw->history_add && bw->history && !bw->internal_nav) {
+@@ -4300,7 +4305,9 @@
+ 		height = height > 0 ? height : 0;
+ 	}
+ 
++	ciuki_layout_top_level = bw->parent == NULL;
+ 	content_reformat(c, background, width, height);
++	ciuki_layout_top_level = false;
+ }
+ 
+ 

@@ -2829,6 +2829,242 @@
         ]
       },
       "note": "f6-17 'Not ready': now=1 starts the browser before the entropy pool is seeded; the readiness page replaces the fetch (no connection). The tls verdict name arrives with f6-17's CIUKI_TLS_NOT_READY mapping (sdk/netsurf/port/testmode.inc)"
+    },
+    {
+      "id": "e100-http-page",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=http://fixture.test/page",
+      "device_exceptions": {
+        "network": "i82559er"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 200
+              },
+              "tls": "none",
+              "bytes": {
+                "ge": 100
+              },
+              "url": "http://fixture.test/page"
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "fx-11, T23 trial 423b803a: NetSurf on the T23's NIC model (i82559er = e100) fetches the fixture page over plain HTTP. Before fx-11 every connect failed: fcntl(F_SETFL, F_GETFL|O_NONBLOCK) returned EINVAL for a socket (page status=0 tls=none, '[netsurf] fetch ... stage=error errno=22 ... at=connect' on the serial line, no SYN)."
+    },
+    {
+      "id": "e100-https-page",
+      "probe": "browser",
+      "profile": "qemu-t23",
+      "selector": "f6:browser run={run_id} url=https://fixture.test/page",
+      "device_exceptions": {
+        "network": "i82559er"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "observed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "network"
+            },
+            "fields": {
+              "address": "10.0.2.15",
+              "dhcp_error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "resolver"
+            },
+            "fields": {
+              "names": "fixture.test,untrusted.test",
+              "address": "10.0.2.100",
+              "armed": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "entropy"
+            },
+            "fields": {
+              "waited": {
+                "eq": 1
+              },
+              "ready": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/Programs/netsurf",
+              "now": {
+                "eq": 0
+              },
+              "pid": {
+                "ge": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "page"
+            },
+            "fields": {
+              "status": {
+                "eq": 200
+              },
+              "tls": "ok",
+              "bytes": {
+                "ge": 100
+              },
+              "url": "https://fixture.test/page"
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "note": "fx-11, T23 trial 423b803a: the same over TLS 1.2 with the fixture CA on the e100 model; before fx-11 status=0 tls=error (errno=22 at connect). Serial must show '[net] tcp connect ... established=1' and no fetch stage=error record."
     }
   ]
 }

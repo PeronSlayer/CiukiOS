@@ -170,8 +170,10 @@ int file_dup(struct process *p, int32_t fd, int32_t target, bool exact, uint32_t
 }
 int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)
 {
-    if ((cmd == F_SETFD && (arg & ~FD_CLOEXEC)) ||
-        (cmd == F_SETFL && (arg & ~(O_APPEND | O_NONBLOCK)))) return -EINVAL;
+    /* fx-11: rejecting the access mode here made every socket's
+     * F_GETFL|O_NONBLOCK fail EINVAL (NetSurf: no connect on the T23). */
+    if (cmd == F_SETFL) { int bits = file_setfl_bits(arg); if (bits < 0) return bits; arg = (uint32_t)bits; }
+    if (cmd == F_SETFD && (arg & ~FD_CLOEXEC)) return -EINVAL;
     struct proc_object *o = file_fd_object(p, fd);
     if (!o) return -EBADF;
     if (cmd == F_GETFD) return (int)p->fds[fd].flags;

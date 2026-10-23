@@ -742,7 +742,12 @@ O_DIRECTORY with creation/truncation or non-read-only access MUST fail EINVAL.
 O_NONBLOCK MUST affect streams/channels/input, not turn regular disk I/O into
 asynchronous I/O. F_SETFL MUST accept only O_APPEND and O_NONBLOCK, preserving
 access mode; F_GETFL MUST return access mode and these status flags, without
-open-only flags. F_SETFD MUST accept only FD_CLOEXEC. Other fcntl commands MUST
+open-only flags. As POSIX.1-2017 fcntl() and Linux F_SETFL(2const) require,
+F_SETFL MUST ignore the access-mode bits and the open-only flags (O_CREAT,
+O_EXCL, O_TRUNC, O_DIRECTORY, O_CLOEXEC) set in its argument, so that
+`fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)` works on every
+description; any other bit fails EINVAL (fx-11, accepted by the lead
+2026-10-23). F_SETFD MUST accept only FD_CLOEXEC. Other fcntl commands MUST
 return EINVAL. Mode arguments MUST accept only octal 0777, ignore their access
 meaning, and reject other bits with EINVAL.
 

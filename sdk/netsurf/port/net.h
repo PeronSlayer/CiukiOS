@@ -66,4 +66,9 @@ void ciuki_net_failure(struct ciuki_job *,const char *);
  * for error and readiness pages, empty when /dev/net is unavailable. */
 const char *ciuki_net_state_word(void);
 size_t ciuki_net_state_text(char *,size_t);
+/* fx-11: "fetches=N fetch_ok=N fetch_errors=N last_error=<stage>:<errno>:<tls>"
+ * for the exit line; error records also reach ciuki_netsurf_log_record
+ * (chrome.c: NETSURF.LOG, 16 per session) when that hook is linked. */
+size_t ciuki_net_fetch_summary(char *,size_t);
+void ciuki_netsurf_log_record(const char *);
 #endif

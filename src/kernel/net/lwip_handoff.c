@@ -17,6 +17,9 @@ static void ingress(struct netif *device, const uint8_t *frame, unsigned bytes, 
     (void)cookie;
     for (unsigned i = 0; i < net_count() && i < 2; i++) if (net_get(i) == device) net_stack_input(i, frame, bytes);
 }
+/* fx-11: the net-input worker sleeps until woken (drivers/net.c); a queued
+ * frame wakes it. Weak: host harnesses link this file without the worker. */
+void net_worker_kick(void) __attribute__((weak));
 int net_stack_transmit(unsigned index, const void *frame, unsigned bytes)
 {
     if (index >= 2 || bytes < 14 || bytes > NET_FRAME_MAX) return -EINVAL;
@@ -32,7 +35,9 @@ int net_stack_transmit(unsigned index, const void *frame, unsigned bytes)
         outgoing[index].config_epoch[at] = d->config_epoch;
         memcpy(p->data, frame, bytes); p->length = (uint16_t)bytes; outgoing[index].count++;
     }
-    kmutex_unlock(&outgoing[index].lock); return e;
+    kmutex_unlock(&outgoing[index].lock);
+    if (!e && net_worker_kick) net_worker_kick();
+    return e;
 }
 void net_stack_driver_entropy(void)
 {
@@ -64,9 +69,10 @@ void net_stack_driver_counters(unsigned index, struct net_stack_counters *out)
     out->rx_errors = stats.rx_errors; out->tx_errors = stats.tx_errors;
     out->dropped = stats.rx_dropped;
 }
-void net_stack_driver_service(void)
+/* True when transmit frames remain queued (ring full or the 1 ms slice). */
+bool net_stack_driver_service(void)
 {
-    uint64_t start = g_ticks; struct net_packet packet;
+    uint64_t start = g_ticks; struct net_packet packet; bool pending = false;
     net_stack_watch();
     for (unsigned i = 0; i < net_count() && i < 2; i++) {
         struct netif *d = net_get(i);
@@ -88,5 +94,7 @@ void net_stack_driver_service(void)
             outgoing[i].head = (outgoing[i].head + 1) % NET_QUEUE_MAX; outgoing[i].count--;
             kmutex_unlock(&outgoing[i].lock);
         }
+        kmutex_lock(&outgoing[i].lock); if (outgoing[i].count) pending = true; kmutex_unlock(&outgoing[i].lock);
     }
+    return pending;
 }

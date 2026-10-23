@@ -168,7 +168,10 @@ class NetworkTests(unittest.TestCase):
         build=runpy.run_path(str(port / "build.py"));source=build["source"]()
         flags=[*cls.flags,"-DLWIP_HOST","-pthread","-Wno-macro-redefined","-Wno-unused-function","-Wno-unused-parameter",
             "-ffunction-sections","-fdata-sections",*build["includes"](source),"-I"+str(ROOT / "src/kernel/include")]
-        files=[source / "src" / name for name in build["SOURCES"]]+[port / name for name in ("sys_arch.c","stack.c","sockets.c","syscalls.c")]
+        # The host file list of tests/host/lwip/run.py (f2-100 added control.c
+        # and the settings/bridge units the stack links against).
+        files=[source / "src" / name for name in build["SOURCES"]]+[port / name for name in ("sys_arch.c","stack.c","sockets.c","syscalls.c","control.c")]
+        files += [ROOT / "src/kernel/net" / name for name in ("bridge.c","packet_pool.c","config.c")]+[ROOT / "src/kernel/lib/fmt.c"]
         files += [HERE / "stack_fixture.c",ROOT / "tests/host/lwip/channel_fixture.c"]
         objects=[]
         for i,path in enumerate(files):
@@ -203,6 +206,24 @@ class NetworkTests(unittest.TestCase):
         for mode in ("web-http","tls-web"):
             with self.subTest(mode=mode):self.engine(mode,"/wan")
 
+    def test_trial_423b803a_guest_fcntl_connect(self):
+        """fx-11, T23 trial 423b803a: 'fetch url=https://www.w3.org/ stage=connect
+        ... ms=225', then 'stage=error ... errno=22 ... ms=226 ... at=connect'
+        and no SYN on the wire. open_connection sets O_NONBLOCK with
+        fcntl(F_SETFL,fcntl(F_GETFL)|O_NONBLOCK); F_GETFL reports O_RDWR for a
+        socket and the guest's file_fcntl refused that bit (EINVAL). The
+        fixture's fcntl now applies the production rule (ciuki/files.h
+        file_setfl_bits): with the old rule both fetches end at connect with
+        errno=22; with the fix they complete through the gateway."""
+        for mode,stages in (("web-http",["dns","connect","request","response","done"]),
+                            ("tls-web",["dns","connect","tls","request","response","done"])):
+            def inspect(result,stages=stages):
+                lines=self.fetch_records(result)
+                self.assertFalse([line for line in lines if " stage=error " in line],"\n".join(lines))
+                self.assertEqual([line.split(" stage=")[1].split()[0] for line in lines],stages,"\n".join(lines))
+                self.assertIn(" code=200 ",lines[-1]);self.assertIn(" errno=0 ",lines[-1])
+            with self.subTest(mode=mode):self.engine(mode,"/wan",inspect=inspect)
+
     def test_idle_clock_step(self):
         for mode in ("idle-expiry","idle-reuse-expiry"):
             with self.subTest(mode=mode):self.engine(mode)
@@ -226,6 +247,9 @@ class NetworkTests(unittest.TestCase):
             self.assertEqual([line.split(" stage=")[1].split()[0] for line in lines],
                              ["dns","connect","request","response","done"])
             self.assertIn("code=200",lines[-1]);self.assertIn("bytes=5",lines[-1])
+            # fx-11: only failures reach NETSURF.LOG; the exit summary counts.
+            self.assertNotIn("netsurf_log:",result.stdout)
+            self.assertIn("fetch_summary: fetches=1 fetch_ok=1 fetch_errors=0 last_error=none\n",result.stdout)
         with self.subTest(mode="ok"):self.engine("ok","/?TOPSECRET=value",inspect=success)
         for mode,stage in (("dns","dns"),("refused","connect"),("timeout","response"),("wrong","tls"),("fallback-clock","tls"),("entropy","tls")):
             with self.subTest(mode=mode):
@@ -234,6 +258,10 @@ class NetworkTests(unittest.TestCase):
                     self.assertEqual(sum(" stage=error " in line for line in lines),1)
                     self.assertTrue(any(" stage=error " in line and " at="+stage+" " in line for line in lines))
                     self.assertIn("Fetch failed during "+stage+":",result.stdout)
+                    logged=[line for line in result.stdout.splitlines() if line.startswith("netsurf_log: ")]
+                    self.assertEqual(len(logged),1,result.stdout)
+                    self.assertIn(logged[0][len("netsurf_log: "):],[line for line in lines if " stage=error " in line])
+                    self.assertRegex(result.stdout,r"fetch_summary: fetches=1 fetch_ok=0 fetch_errors=1 last_error="+stage+r":\d+:\d+\n")
                 self.engine(mode,"/slow" if mode=="timeout" else "/",inspect=failure)
 
     def test_parser(self):subprocess.run([str(OUT / "http")],check=True,env=SAN,timeout=20)
@@ -268,10 +296,12 @@ class NetworkTests(unittest.TestCase):
     def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None,port=None,inspect=None):
         with tempfile.TemporaryDirectory(dir=OUT) as folder:
             capture=Path(folder) / "page.xrgb"
+            log=Path(folder) / "NETSURF.LOG"
             result=subprocess.run([str(OUT / "browser"),"-w","640","-h","480",
-                "--ciuki-resources="+str(BASE / "stage/system/netsurf"),"--ciuki-profile="+folder,
+                "--ciuki-resources="+str(BASE / "stage/system/netsurf"),"--ciuki-profile="+folder,"--ciuki-log="+str(log),
                 "--ciuki-capture="+str(capture),f"{scheme}://{host}:{port or (8443 if scheme=='https' else 8080)}{path}"],capture_output=True,text=True,timeout=25,
                 env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der")))
+            result.netsurf_log=log.read_text() if log.exists() else ""
             self.assertTrue(capture.exists(),result.stdout+result.stderr)
             self.assertEqual(capture.stat().st_size,640*480*4)
             if error:self.assert_page_error(result,error)
@@ -288,7 +318,17 @@ class NetworkTests(unittest.TestCase):
             {"scheme":"https","mode":"browser-untrusted","error":"Fetch failed during tls: TLS certificate validation failed"},
             {"scheme":"https","mode":"fallback-clock","error":"Fetch failed during tls: HTTPS requires a qualified RTC clock"},
             {"scheme":"https","mode":"browser-entropy","error":"Fetch failed during tls: Secure connections are not ready yet."}):
-            with self.subTest(options=options):self.browser("/page",inspect=self.fetch_records,**options)
+            stage=options["error"].split("Fetch failed during ")[1].split(":")[0]
+            def inspect(result,stage=stage):
+                import re
+                errors=[line for line in self.fetch_records(result) if " stage=error " in line]
+                # fx-11: the error record and the exit summary reach NETSURF.LOG.
+                logged=[line.split(" ",1)[1] for line in result.netsurf_log.splitlines() if " [netsurf] fetch " in " "+line]
+                self.assertTrue(logged and set(logged)<=set(errors) and all(" at="+stage+" " in line for line in logged),result.netsurf_log)
+                exits=[line for line in result.netsurf_log.splitlines() if "[netsurf] exit reason=" in line]
+                self.assertEqual(len(exits),1,result.netsurf_log)
+                self.assertRegex(exits[0],r" fetch_errors=[1-9]\d* last_error="+stage+r":\d+:\d+ network=")
+            with self.subTest(options=options):self.browser("/page",inspect=inspect,**options)
         self.browser("/slow",mode="browser-timeout",error="Fetch failed during response: The network request timed out",inspect=self.fetch_records)
 
     def test_redirect_fetch_records(self):
@@ -331,6 +371,18 @@ class NetworkTests(unittest.TestCase):
         page_requests=[int(n) for n in __import__("re").findall(r"fixture_budget_(?:rejected|retry=1) requests=(\d+)",result.stdout)]
         self.assertEqual(len(page_requests),2)
         self.assertGreater(page_requests[1],page_requests[0])
+
+    def test_top_level_document_layout_limit(self):
+        """fx-11, lead decision 2026-10-23: the top-level remote document gets a
+        10 s layout limit; an iframe's document (a sub-resource window) keeps
+        75 ms. The budget clock is charged x20000, so both small documents
+        cost far more than 75 ms and far less than 10 s."""
+        result=self.browser("/framed",mode="browser-document",expected="<h1>Ciuki</h1>")
+        page=result.stdout.split("fixture_page_begin\n",1)[1].split("\nfixture_page_end",1)[0]
+        self.assertIn("<iframe src=\"/page\"",page)
+        self.assertNotIn("needs more layout time",page)
+        self.assertRegex(result.stderr,r"\[netsurf\] layout slow elapsed_us=\d+ class=remote accepted=1")
+        self.assertIn("NetSurf layout rejected: remote page, time limit",result.stderr)
 
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")

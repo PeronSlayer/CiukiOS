@@ -139,8 +139,31 @@ int main(void)
     assert(!fifo_count && s->held_count==2 && s->pumps==1 && !s->ping && pongs==before_pongs && !s->count);
     assert(nsfb_event(fb,&e,0) && e.type==NSFB_EVENT_MOVE_ABSOLUTE && e.value.vector.x==199);
     assert(!s->held_count && pongs==before_pongs+1 && !s->closed);
+    /* fx-11: a top-level layout may run 10 s, so the pump never stops reading
+     * (the desktop drops a client silent for 5 s with a full queue). Input
+     * past a full ring is dropped and counted, a later PING replaces the
+     * newest held input, and the dropped key release is resynchronised. */
+    unsigned overflows=s->overflows;
+    enqueue(DESK_KEY,CIUKI_INPUT_KEY,0x2a,1,0);   /* Left Shift: its release is lost */
+    for(int i=0;i<100;i++)enqueue(DESK_BUTTON,CIUKI_INPUT_BUTTON,1,!(i&1),0);
+    enqueue(DESK_KEY,CIUKI_INPUT_KEY,0x2a,0,0);
+    desk_v3_message(&fifo[(fifo_head+fifo_count++)%128],DESK_PING,4,0,1,1);
+    desk_put32(fifo[(fifo_head+fifo_count-1)%128].data+16,78);
+    before_pongs=pongs;
+    ciuki_ui_pump();
+    assert(!fifo_count && s->held_count==CIUKI_BROWSER_HELD && s->held_resync && s->overflows==overflows+39);
+    assert(s->held[(s->held_head+CIUKI_BROWSER_HELD-1)%CIUKI_BROWSER_HELD].opcode==DESK_PING && pongs==before_pongs);
+    unsigned turns=0,down=0;bool released=false;
+    while(nsfb_event(fb,&e,0)) {
+        assert(++turns<1000);
+        if(e.type==NSFB_EVENT_KEY_DOWN && e.value.keycode!=NSFB_KEY_MOUSE_1)down=e.value.keycode;
+        if(e.type==NSFB_EVENT_KEY_UP && down && (unsigned)e.value.keycode==down)released=true;
+    }
+    assert(down==NSFB_KEY_LSHIFT && released && !s->keys[0x2a] && !s->buttons && !s->held_count && !s->held_resync);
+    assert(pongs==before_pongs+1 && !s->closed);
     nsfb_free(fb);assert(!ciuki_browser_active && !live && !ciuki_ui_pump);
     puts("PASS f6-20 channel drain: whole channel per UI turn, motion coalesced, keepalive pump holds packets");
+    puts("PASS fx-11 keepalive: full hold ring drops input (counted, keys released after), never control packets or the channel");
     /* f6-20: every QUIT carries the surface's reason; EAGAIN never quits. */
     static const struct { int fault; unsigned op; const char *reason; int detail; } quits[]={
         {1,0,"channel-eof",0},{2,0,"channel-error",EIO},
