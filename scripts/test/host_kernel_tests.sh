@@ -159,6 +159,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" \
     "$root/tests/host/entropy/unavailable_stub.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
+# fx-5 follow-up: cross-object kmutex nestings keep their explicit levels.
+python3 -B -m unittest discover -s "$root/tests/host" -p test_lock_levels.py
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pci_irq_test.c" -o "$out/pci_irq_test"
 "$out/pci_irq_test"

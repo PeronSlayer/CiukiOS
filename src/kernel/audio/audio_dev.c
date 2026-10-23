@@ -25,8 +25,8 @@ static struct {
     struct kmutex service; /* serialize write-side startup and worker */
     struct kmutex control;
 } audio_lock = {
-    .service = { .name = "audio.service", .level = KMUTEX_LEVEL_OUTER },
-    .control = { .name = "audio.control", .level = KMUTEX_LEVEL_OUTER },
+    .service = KMUTEX_CLASS("audio.service", KMUTEX_LEVEL_OUTER),
+    .control = KMUTEX_CLASS("audio.control", KMUTEX_LEVEL_OUTER),
 };
 _Static_assert(__builtin_offsetof(__typeof__(audio_lock), service) <
                __builtin_offsetof(__typeof__(audio_lock), control), "audio lock order: service, then control");

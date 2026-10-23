@@ -15,6 +15,8 @@
 
 /* f1-100: the ThinkPad EC traffic record of the window (drivers/thinkpad_ec.c). */
 extern void thinkpad_ec_window_emit(void) __attribute__((weak));
+/* fx-5 follow-up: lock-order reports of a normal boot (core/sync.c). */
+#pragma weak ksync_order_snapshot
 
 static struct task *stat_task;
 static uint64_t window_start, irq_cycles, exited_cycles, classes[P_COUNT];
@@ -544,6 +546,17 @@ static void cpu_emit(void)
     if (firmware_n)
         klog_periodic("[sched] firmware_credit count=%u us=%llu max_us=%llu", firmware_n,
             (unsigned long long)firmware_us, (unsigned long long)firmware_max_us);
+    /* fx-5 follow-up: continued lock-order reports (sync.h), in every window
+     * that added some and in every published window afterwards. */
+    if (ksync_order_snapshot) {
+        static uint32_t order_published;
+        struct ksync_order_stats order; ksync_order_snapshot(&order);
+        if (order.violations && (emit || order.violations != order_published)) {
+            order_published = order.violations;
+            klog_periodic("[kernel] lock_order violations=%u pairs=%u dropped=%u",
+                order.violations, order.pairs, order.dropped);
+        }
+    }
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);

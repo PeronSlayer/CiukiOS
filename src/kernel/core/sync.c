@@ -605,15 +605,70 @@ static __attribute__((noreturn)) void mutex_panic(const char *what, const struct
           mutex_class(held, &b), (unsigned long)(uint32_t)(uintptr_t)held, (unsigned long)(uint32_t)held->site,
           g_current ? g_current->name : "boot");
 }
+/* fx-5 follow-up, lead decision 2026-10-23: an acquisition-order report
+ * (want/held) is fatal only where a test can act on it: a boot carrying a
+ * test request (CBI_F_TEST_REQUEST, the fw_cfg selector) and hosted host
+ * harnesses (__STDC_HOSTED__, or set ksync_order_fatal). A normal boot logs
+ * the named record once per (want class, held class) pair, counts every
+ * report and continues, as production kernels treat lockdep. Recursion,
+ * unlock order, non-owner unlock and the cyclic-wait timeout stay fatal. */
+#ifndef KSYNC_ORDER_FATAL_DEFAULT
+#define KSYNC_ORDER_FATAL_DEFAULT (__STDC_HOSTED__ != 0)
+#endif
+bool ksync_order_fatal = KSYNC_ORDER_FATAL_DEFAULT;
+struct order_class { const char *name; uintptr_t init_site; };
+static struct { struct order_class want, held; } order_pairs[KSYNC_ORDER_PAIRS];
+static struct ksync_order_stats order_stats;
+static bool order_reporting;
+static bool class_is(const struct order_class *c, const struct kmutex *m)
+{
+    if (c->name || m->name) return c->name && m->name && !strncmp(c->name, m->name, 64);
+    return c->init_site == m->init_site;
+}
+/* True when this (want, held) class pair is new and gets its one record. */
+static bool order_note(const struct kmutex *want, const struct kmutex *held_lock)
+{
+    uint32_t f = irq_save();
+    bool fresh = true;
+    for (unsigned i = 0; fresh && i < order_stats.pairs; i++)
+        if (class_is(&order_pairs[i].want, want) && class_is(&order_pairs[i].held, held_lock)) fresh = false;
+    if (fresh && order_stats.pairs == KSYNC_ORDER_PAIRS) { order_stats.dropped++; fresh = false; }
+    else if (fresh) {
+        order_pairs[order_stats.pairs].want = (struct order_class){ want->name, want->init_site };
+        order_pairs[order_stats.pairs].held = (struct order_class){ held_lock->name, held_lock->init_site };
+        order_stats.pairs++;
+    }
+    irq_restore(f);
+    return fresh;
+}
+static void order_report(const struct kmutex *want, uintptr_t site, const struct kmutex *held_lock)
+{
+    if (!order_note(want, held_lock) || order_reporting) return;
+    order_reporting = true; /* klog takes no kmutex; never recurse regardless */
+    struct mutex_label a, b;
+    klog("[kernel] lock_order want=%s/%08lx@%08lx held=%s/%08lx@%08lx task=%s pairs=%u action=continue",
+         mutex_class(want, &a), (unsigned long)(uint32_t)(uintptr_t)want, (unsigned long)(uint32_t)site,
+         mutex_class(held_lock, &b), (unsigned long)(uint32_t)(uintptr_t)held_lock, (unsigned long)(uint32_t)held_lock->site,
+         g_current ? g_current->name : "boot", order_stats.pairs);
+    order_reporting = false;
+}
+void ksync_order_snapshot(struct ksync_order_stats *out)
+{
+    uint32_t f = irq_save(); *out = order_stats; irq_restore(f);
+}
 static bool mutex_acquire(struct kmutex *m, uint64_t deadline, uintptr_t site)
 {
     thread_context();
+    bool reported = false;
     for (struct kmutex *p = held; p; p = p->held_next)
         if (p->owner == g_current && kmutex_order_conflict(p, m)) {
             if (p == m) mutex_panic("recursive acquisition", m, site, p);
             /* Cyclic waits remain bounded by the caller's timeout. Never
              * recurse around the donation graph, or change lock ordering. */
-            if (!lock_cycle(g_current, m->owner)) mutex_panic("lock order", m, site, p);
+            if (lock_cycle(g_current, m->owner)) continue;
+            if (ksync_order_fatal || (g_boot.flags & CBI_F_TEST_REQUEST)) mutex_panic("lock order", m, site, p);
+            if (!reported) { uint32_t f = irq_save(); order_stats.violations++; irq_restore(f); reported = true; }
+            order_report(m, site, p);
         }
     if (m->owner && !kwait_wait_until(&m->wait, mutex_free, m, deadline)) return false;
     uint32_t f = irq_save();

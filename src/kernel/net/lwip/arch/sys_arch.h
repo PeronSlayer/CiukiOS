@@ -28,6 +28,9 @@ unsigned cu_change_snapshot(void);
 void cu_changed(void);
 void cu_changed_irq(void);
 void cu_wait_change(unsigned, uint64_t);
+/* fx-5 follow-up: a stack mutex that nests kernel mutexes names its lock
+ * class and level (ciuki/sync.h). No effect in the pthread host build. */
+void ciuki_lwip_mutex_class(sys_mutex_t *, const char *name, signed char level);
 #ifdef LWIP_HOST
 void cu_host_join(sys_thread_t);
 void cu_host_shutdown(void);

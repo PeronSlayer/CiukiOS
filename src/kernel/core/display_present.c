@@ -10,8 +10,10 @@
 extern bool w32_service_desktop_client(struct process *, uint32_t);
 
 /* Lock order: lease -> framebuffer presenter. Mode transactions NEVER hold
- * either mutex across firmware. transfer excludes all new operations there. */
-static struct kmutex lease_lock;
+ * either mutex across firmware. transfer excludes all new operations there.
+ * fx-5 follow-up: the presenter lives in drivers/fbdev.c, so the lease is an
+ * outer level rather than an address that only the link order puts below it. */
+static struct kmutex lease_lock = KMUTEX_CLASS("display.lease", KMUTEX_LEVEL_OUTER);
 static bool active, transfer;
 static uint32_t holder, desktop_pid, token, fb_generation, scale;
 static uint16_t saved_mode;

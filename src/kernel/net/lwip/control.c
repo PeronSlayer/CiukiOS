@@ -1,6 +1,7 @@
 /* Serialized settings transactions outside the TCP/IP core.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/sync.h>
 #include <ciuki/net_control.h>
 #include "lwip/sys.h"
 extern int net_control_driver(unsigned, struct ciuki_net_control *, bool) __attribute__((weak));
@@ -14,7 +15,14 @@ static const char *config_ip(uint32_t address, char out[16])
     ksnprintf(out, 16, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]); return out;
 }
 int net_control_init(void)
-{ control_ready = sys_mutex_new(&control_mutex) == ERR_OK; return control_ready ? 0 : -ENOMEM; }
+{
+    control_ready = sys_mutex_new(&control_mutex) == ERR_OK;
+    /* fx-5 follow-up: held across net_settings_get (settings lock) and
+     * net_control_driver (netif mutex), objects in other files: an outer
+     * level, never their link addresses (sync.h). */
+    if (control_ready) ciuki_lwip_mutex_class(&control_mutex, "net.control", KMUTEX_LEVEL_OUTER);
+    return control_ready ? 0 : -ENOMEM;
+}
 int net_control(unsigned operation, struct ciuki_net_control *record)
 {
     if (operation > CIUKI_NETCTL_RELEASE || record->index >= 2) return -EINVAL;

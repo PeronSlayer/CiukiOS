@@ -539,6 +539,64 @@ static void test_lock_order_records(void)
     printf("kernel services lock order: PASS (record names both locks with class/address@site and task, init-site class, recursion, (level,address) key, unlock order)\n");
 }
 
+/* fx-5 follow-up, lead decision 2026-10-23: a normal boot logs an order
+ * report once per class pair, counts it and continues; a test request and
+ * hosted builds keep it fatal; recursion and unlock order stay fatal. */
+static void test_lock_order_policy(void)
+{
+    current(0);
+    strcpy(tasks[0].name, "desktop");
+    CHECK(ksync_order_fatal); /* hosted default */
+    ksync_order_fatal = false; g_boot.flags = 0;
+    static struct { struct kmutex inner, outer; } pair;
+    kmutex_init_named(&pair.inner, "audio.control");
+    kmutex_init_named(&pair.outer, "audio.service");
+    struct ksync_order_stats base, now;
+    ksync_order_snapshot(&base);
+    kmutex_lock(&pair.outer); kmutex_lock(&pair.inner); /* reported, then acquired */
+    CHECK(pair.inner.owner == g_current && held == &pair.inner);
+    CHECK(!strncmp(last_log, "[kernel] lock_order want=audio.control/", 39) && strstr(last_log, "held=audio.service/") &&
+          strstr(last_log, " task=desktop") && strstr(last_log, "action=continue"));
+    kmutex_unlock(&pair.inner); kmutex_unlock(&pair.outer);
+    last_log[0] = 0;
+    kmutex_lock(&pair.outer); kmutex_lock(&pair.inner); /* same pair: counted, no second record */
+    CHECK(!last_log[0]);
+    kmutex_unlock(&pair.inner); kmutex_unlock(&pair.outer);
+    ksync_order_snapshot(&now);
+    CHECK(now.violations == base.violations + 2 && now.pairs == base.pairs + 1 && now.dropped == base.dropped);
+    /* Recursion and unlock order remain fatal in a normal boot. */
+    kmutex_lock(&pair.outer);
+    PANICS(kmutex_lock(&pair.outer));
+    CHECK(strstr(last_log, "mutex: recursive acquisition"));
+    kmutex_unlock(&pair.outer);
+    kmutex_lock(&pair.inner); kmutex_lock(&pair.outer);
+    PANICS(kmutex_unlock(&pair.inner));
+    CHECK(strstr(last_log, "mutex: unlock order"));
+    kmutex_unlock(&pair.outer); kmutex_unlock(&pair.inner);
+    /* A boot carrying a test request keeps the order report fatal. */
+    g_boot.flags = CBI_F_TEST_REQUEST;
+    kmutex_lock(&pair.outer);
+    PANICS(kmutex_lock(&pair.inner));
+    CHECK(!strncmp(last_log, "mutex: lock order want=audio.control/", 37) && !pair.inner.owner);
+    kmutex_unlock(&pair.outer);
+    g_boot.flags = 0;
+    /* The pair table is bounded: later new pairs are counted as dropped. */
+    static struct kmutex classes[KSYNC_ORDER_PAIRS + 4];
+    static char names[KSYNC_ORDER_PAIRS + 4][8];
+    for (unsigned i = 0; i < KSYNC_ORDER_PAIRS + 4; i++) {
+        snprintf(names[i], sizeof(names[i]), "c%02u", i);
+        kmutex_init_level(&classes[i], names[i], KMUTEX_LEVEL_OUTER);
+        kmutex_lock(&pair.outer); kmutex_lock(&classes[i]); /* outer level under level 0 */
+        kmutex_unlock(&classes[i]); kmutex_unlock(&pair.outer);
+    }
+    ksync_order_snapshot(&now);
+    CHECK(now.pairs == KSYNC_ORDER_PAIRS && now.dropped == base.dropped + (base.pairs + 1 + KSYNC_ORDER_PAIRS + 4 - KSYNC_ORDER_PAIRS));
+    CHECK(now.violations == base.violations + 2 + KSYNC_ORDER_PAIRS + 4 && !held && !waiters);
+    ksync_order_fatal = true;
+    tasks[0].name[0] = 0;
+    printf("kernel services lock order policy: PASS (normal boot logs once per class pair and continues, counters and bounded table, test request and hosted builds fatal, recursion and unlock order fatal)\n");
+}
+
 static unsigned work_seen, work_expected;
 static void count_work(void *arg)
 {
@@ -1237,6 +1295,7 @@ int main(void)
     test_deadlines();
     test_sync();
     test_lock_order_records();
+    test_lock_order_policy();
     test_work();
     test_timer_queue();
     test_coalesced_work();

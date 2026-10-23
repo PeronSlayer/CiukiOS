@@ -90,6 +90,11 @@ struct task *task_create_kernel(const char *n,void (*fn)(void *),void *arg,enum 
 __attribute__((noreturn)) void panic(const char *fmt,...)
 { fprintf(stderr,"panic: %s\n",fmt); exit(1); }
 #include "../../src/kernel/core/cpustat.c"
+#ifndef HOST_SYNC_TIMERS /* harnesses with the real sync.c report its counters */
+/* fx-5 follow-up: the sync.c counters of continued lock-order reports. */
+static struct ksync_order_stats order_fixture;
+void ksync_order_snapshot(struct ksync_order_stats *s) { *s=order_fixture; }
+#endif
 #include "vm_creation_model.inc"
 static void reset(void)
 {
@@ -416,11 +421,35 @@ static void attribution_test(void)
     CHECK(!audio_over && device_cpu_refresh); schedule(); CHECK(!refill.device_demoted);
     puts("f1-90 device budget: consumer alone demoted and named consumed_us, max-min share, refill own budget/record/recovery, aggregate negative control PASS");
 }
+#ifndef HOST_SYNC_TIMERS
+/* fx-5 follow-up: a normal boot continues after a lock-order report; the
+ * kernel statistics publish its counters in the window that added some,
+ * even when quiet, and in every published window afterwards. */
+static void lock_order_record_test(void)
+{
+    reset();
+    record_bytes=0;records[0]=0;cycles+=2000000;cpu_emit();CHECK(!record_bytes);
+    order_fixture=(struct ksync_order_stats){.violations=3,.pairs=2};
+    record_bytes=0;records[0]=0;cycles+=2000000;cpu_emit();
+    CHECK(!strcmp(records,"[kernel] lock_order violations=3 pairs=2 dropped=0\n"));
+    record_bytes=0;records[0]=0;cycles+=2000000;cpu_emit();CHECK(!record_bytes); /* unchanged, quiet */
+    g_boot.flags=CBI_F_VERBOSE;record_bytes=0;records[0]=0;cycles+=2000000;cpu_emit();
+    CHECK(strstr(records,"[kernel] lock_order violations=3 pairs=2 dropped=0\n") && strstr(records,"[cpu] window_ms="));
+    g_boot.flags=0;order_fixture=(struct ksync_order_stats){.violations=40,.pairs=16,.dropped=5};
+    record_bytes=0;records[0]=0;cycles+=2000000;cpu_emit();
+    CHECK(!strcmp(records,"[kernel] lock_order violations=40 pairs=16 dropped=5\n"));
+    order_fixture=(struct ksync_order_stats){0};
+    puts("fx-5 lock-order counters: published in the window that added reports (also quiet), then in every published window PASS");
+}
+#endif
 int main(void)
 {
     attribution_test();
     irqoff_phase_test();
     wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();maximum_tasks_test();
+#ifndef HOST_SYNC_TIMERS
+    lock_order_record_test();
+#endif
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
     return 0;
 }

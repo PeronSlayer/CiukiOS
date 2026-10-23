@@ -430,7 +430,36 @@ and yields between continuations. Physical qualification remains separate.
   class by its `mutex_init` site
   ([mutex.h](https://github.com/torvalds/linux/blob/v6.12/include/linux/mutex.h)).
   The address is resolved with `build/f0/VMM.map`. Recursion, unlock-order,
-  non-owner and cyclic-timeout panics use the same record. The void lock API waits without donation for its 1000 ms
+  non-owner and cyclic-timeout panics use the same record.
+  **Lead decision 2026-10-23 (fx-5 follow-up): an order report is not a
+  panic in a normal boot.** Every image placed objects anew, so a nesting
+  that rested on link addresses made each build a lottery. The T23 trial
+  lost that lottery.
+  - **Normal boot.** A want/held report is logged once per (want class,
+    held class) pair as `[kernel] lock_order want=… held=… task=…
+    pairs=N action=continue`. A table of 16 pairs bounds this, and
+    `dropped` counts later new pairs. Every report increments `violations`,
+    published in the cpustat window as `[kernel] lock_order violations=N
+    pairs=P dropped=D`. The acquisition then continues.
+  - **Where it stays fatal.** The report remains the `mutex: lock order`
+    panic when the boot carries a test request (`CBI_F_TEST_REQUEST`, the
+    fw_cfg selector), so QEMU suites still catch it. It also remains fatal
+    in hosted host harnesses (`ksync_order_fatal`, default
+    `__STDC_HOSTED__`).
+  - **What stays fatal everywhere:** recursive acquisition, unlock order,
+    unlock by a non-owner and the cyclic-wait timeout.
+  - **Rationale.** Linux lockdep is a debug facility
+    ([lockdep design](https://docs.kernel.org/locking/lockdep-design.html),
+    `CONFIG_PROVE_LOCKING`): production kernels do not panic on its order
+    reports. A real deadlock here still ends in the cyclic-timeout panic,
+    or in the timed API's failure.
+  - **Cross-object inventory.** A static scan of every kmutex acquisition
+    site found three cross-object nestings that rested only on addresses:
+    display lease → fbdev presenter; lwIP `net.control` → network settings
+    lock; `net.control` → netif mutex. Their outer classes now carry
+    `KMUTEX_LEVEL_OUTER`, beside the audio pair. `tests/host/test_lock_levels.py`
+    fails if a listed pair loses its level (report:
+    `build/codex/fx-5-report.md`, Follow-up). The void lock API waits without donation for its 1000 ms
   safety interval, then panics on a persistent cycle instead of deadlocking
   indefinitely; callers needing recovery use the timed API. Owner death retires kmutex ownership
   and wakes waiters before the owner's stack is freed. FIFO filesystem
