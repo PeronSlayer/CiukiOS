@@ -224,6 +224,7 @@ struct du_widget {
     struct du_selection selection;
     const uint32_t *icon; int icon_size;    /* buttons, edit prefix icon */
     int accepts_tab;                        /* DU_CANVAS: deliver Tab as DU_EV_KEY */
+    int wheel_events;                       /* DU_CANVAS: deliver the wheel as DU_POINTER_WHEEL (G28; off keeps the old behaviour) */
     int dropdown;                           /* toolbutton split arrow width */
     const struct du_item *items;            /* list/tree */
     unsigned count, active;
@@ -273,8 +274,11 @@ enum du_event_type {
 #define DU_SELECT_RELEASE 0x2000u
 /* DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
  * zero on hover), x/y are client coordinates. CANCEL follows focus loss,
- * input resynchronization or resize. The application paints DU_CANVAS. */
-enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+ * input resynchronization or resize. The application paints DU_CANVAS.
+ * G28: DU_POINTER_WHEEL (only for canvases with wheel_events set) reports the
+ * wheel: x is the signed number of detents (positive scrolls up), y the pointer's
+ * client y. */
+enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL, DU_POINTER_WHEEL };
 struct du_event {
     enum du_event_type type;
     int id, index, x, y;

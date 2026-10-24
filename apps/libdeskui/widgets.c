@@ -1071,6 +1071,10 @@ int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
             if (changed) ta_changed(u,w,before,caret);
         }
         return changed;
+    case DU_CANVAS:
+        if (!w->wheel_events) return 0;
+        du_emit(u, (struct du_event){.type = DU_EV_POINTER, .id = w->id, .index = DU_POINTER_WHEEL, .x = detents, .y = u->mouse_y ? u->mouse_y : 1});
+        return 1;
     case DU_SCROLLBAR: {
         int next=du_wheel_value(w->value,detents,w->total,w->page);
         changed=next!=w->value; w->value=next;

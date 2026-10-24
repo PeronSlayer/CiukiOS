@@ -233,6 +233,14 @@ static int save_file(struct cn_app *a, const char *path)
     return r;
 }
 
+void cn_offer_wordpad(struct cn_app *a, const char *path)
+{
+    char shown[40]; shorten(shown, sizeof(shown), cn_basename(path), 36);
+    if (!a->wordpad) { failure(a, "The file could not be opened:", cn_basename(path), EFBIG); return; }
+    snprintf(a->pending, sizeof(a->pending), "%s", path);
+    box(a, D_BIG, "CiukNote", DU_DLG_ICON_QUESTION, yes_no, 2, 0, 1,
+        "%s is too large for CiukNote (limit " CN_LIMIT_TEXT " bytes).\n\nDo you want to open it in WordPad?", shown);
+}
 static void file_dialog(struct cn_app *a, int save, const char *name);
 /* The pending command is dropped (Cancel, or a failure). G3: an exit the
  * user abandoned declines the desktop's close request or vetoes the end of
@@ -421,6 +429,7 @@ static void file_chosen(struct cn_app *a, int save, const char *chosen)
         if (!r && st.dir) r = -EISDIR;
         if (r) { failure(a, r == -ENOENT ? "The file was not found:" : "The file could not be opened:", cn_basename(target), r); abandon(a); return; }
         r = load_file(a, target);
+        if (r == -EFBIG) { cn_offer_wordpad(a, target); abandon(a); return; }
         if (r) { failure(a, "The file could not be opened:", cn_basename(target), r); abandon(a); return; }
         checkpoint(a, CN_CP_OPENED);
         a->after = CN_AFTER_NONE;
@@ -533,6 +542,12 @@ static void dialog_result(struct cn_app *a, int id, int index, const char *text)
         else file_dialog(a, 1, cn_basename(a->pending));
         break;
     case D_GOTO: if (index == 0) goto_line(a, text); break;
+    case D_BIG:
+        if (index == 0) {
+            int r = a->wordpad(a->host, a->pending);
+            if (r) failure(a, "WordPad could not be started for:", cn_basename(a->pending), r);
+        }
+        break;
     case D_FONT: if (index < 2) a->ta.bold = index; break;
     case D_CREATE:
         if (index == 0) {
@@ -643,7 +658,8 @@ int cn_open_argument(struct cn_app *a, const char *path)
     }
     if (!r && st.dir) r = -EISDIR;
     if (!r) r = load_file(a, target);
-    if (r) failure(a, "The file could not be opened:", cn_basename(target), r);
+    if (r == -EFBIG) cn_offer_wordpad(a, target);
+    else if (r) failure(a, "The file could not be opened:", cn_basename(target), r);
     else checkpoint(a, CN_CP_OPENED);
     cn_refresh(a);
     return r;

@@ -769,6 +769,30 @@ static int replay(const char *script, const char *result_path)
     return 0;
 }
 
+/* G28: a file above the 60 KiB limit is offered to WordPad when the host can start it. */
+static int wordpad_calls, wordpad_result; static char wordpad_path[CN_PATH];
+static int host_wordpad(void *p, const char *path) { (void)p; wordpad_calls++; snprintf(wordpad_path, sizeof(wordpad_path), "%s", path); return wordpad_result; }
+static void test_wordpad_handoff(void)
+{
+    static char big[CN_LIMIT + 100]; memset(big, 'a', sizeof(big));
+    reset(0); app.wordpad = host_wordpad; wordpad_calls = 0; wordpad_result = 0;
+    add_file("/system/tests/big.txt", big, sizeof(big), 1);
+    assert(cn_open_argument(&app, "/system/tests/big.txt") == -EFBIG && dialog_is(D_BIG) && ui.dialog.buttons == 2);
+    assert(strstr(ui.dialog.text, "too large for CiukNote") && strstr(ui.dialog.text, "61,440") && strstr(ui.dialog.text, "WordPad") && !wordpad_calls);
+    screen("wordpad-offer");
+    press(0x31); assert(!ui.dialog.kind && !wordpad_calls && !app.named && app.ta.len == 0);     /* "&No" is key N */
+    cn_open_argument(&app, "/system/tests/big.txt"); ENTER;                                      /* Yes is the default */
+    assert(!ui.dialog.kind && wordpad_calls == 1 && !strcmp(wordpad_path, "/system/tests/big.txt") && !app.named);
+    /* through the Open dialog: the answer to the unsaved-changes question does not matter, the document stays */
+    CTRL(0x18); type("/system/tests/big.txt"); ENTER; assert(dialog_is(D_BIG)); ENTER; assert(wordpad_calls == 2);
+    /* a launch that fails is reported */
+    wordpad_result = -EPERM; cn_open_argument(&app, "/system/tests/big.txt"); ENTER;
+    assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "WordPad could not be started") && wordpad_calls == 3); ENTER;
+    /* without a launcher (scripted runs) the old message stays */
+    app.wordpad = NULL; cn_open_argument(&app, "/system/tests/big.txt");
+    assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "could not be opened") && strstr(ui.dialog.text, "File too large") && wordpad_calls == 3); ENTER;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 4 && !strcmp(argv[1], "replay")) return replay(argv[2], argv[3]);
@@ -776,7 +800,7 @@ int main(int argc, char **argv)
     test_startup(); test_typing(); test_clipboard_and_undo(); test_save_and_open(); test_unsaved_prompt();
     test_save_errors_and_replace(); test_find_replace(); test_goto_wrap_status(); test_time_log_encoding();
     test_limits(); test_open_argument(); test_file_dialogs(); test_menus_and_context(); test_mouse_text();
-    test_wrap_navigation(); test_screens(); test_resize(); test_random_input();
+    test_wrap_navigation(); test_screens(); test_resize(); test_random_input(); test_wordpad_handoff();
     puts("PASS ciuknote: typing, shift/caps, clipboard, undo, prompts, save/open, replace prompt, find/replace, go to, wrap, status bar, "
          "time/date, .LOG, line endings, limits, argument, file dialogs, menus, context menu, mouse, scroll bars, screens");
     return 0;

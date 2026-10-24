@@ -45,6 +45,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
     {"program:paint", "applications-graphics"},
+    {"program:wordpad", "x-office-document"},                  /* G28 */
 
     /* Start menu */
     {"menu:*", "application-x-executable"},
