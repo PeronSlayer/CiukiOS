@@ -205,8 +205,8 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 27)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
-        self.assertEqual(len(accessories), 12)  # f2-52 Graphics Demo
+        self.assertEqual(len(programs), 30)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf; G28 WordPad; integration adds G13/G31 system tools
+        self.assertEqual(len(accessories), 16)  # f2-52 Graphics Demo; G28 WordPad; integration accessories retained
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         # f6-19: native application records (name, label, Tango icon, description) agree
@@ -223,7 +223,7 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),11)  # f5-09 Add/Remove Programs, f1-113 Game controllers
+        self.assertEqual(len(applets),16)  # integration applets retained alongside f5-09 and f1-113 additions
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
@@ -234,7 +234,7 @@ class IconStoreTests(unittest.TestCase):
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
         for label, obj in objects.items():
             self.assertEqual(rows[label], table[obj], label)
-        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", (?:"[^"]*"|[A-Z_]+), "([a-z-]+)"', shell))
+        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", [^,]+, [^,]+, "([a-z-]+)"', shell))
         # f2-42: three fixed icons precede the real Desktop folder entries.
         # f4-07: Pictures is an optional shortcut after those entries.
         self.assertEqual(set(icons) - {"Pictures"}, {"Computer", "Documents", "Recycle Bin"})
@@ -243,7 +243,7 @@ class IconStoreTests(unittest.TestCase):
             self.assertRegex(shell, r'if \(d->pictures_exists\) icon_add\(d, "Pictures", "files", "/Documents/Pictures"')
         for label, obj in {"Documents": "place:home", "Recycle Bin": "place:trash"}.items():
             self.assertEqual(icons[label], table[obj], label)
-        self.assertIn('e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic"', shell)
+        self.assertIn('e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : cat ? cat->tango : "text-x-generic"', shell)
         self.assertEqual(icons["Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
         # The shell draws only store sizes: menus and the taskbar 16, dialogs and Alt+Tab 32, desktop icons 48.
         self.assertIn("#define SH_DESKTOP_ICON 48", shell)

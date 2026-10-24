@@ -833,6 +833,30 @@ static int terminal_result(int client_index)
         return (int32_t)desk_get32(fake_messages[k].data + 12);
     assert(0); return -999;
 }
+static int wordpad_launches;
+static int wordpad_launch_test(struct desktop *desktop, const struct desk_program *p)
+{ (void)desktop; assert(!strcmp(p->name,"wordpad") || !strcmp(p->name,"paint")); if (!strcmp(p->name,"wordpad")) wordpad_launches++; return 321; }
+/* G28: CiukNote may hand a document above its limit to WordPad, and only that. */
+static void test_note_wordpad(void)
+{
+    setup(640,480); int i=client(5,12,64,48,0x123456);
+    d.clients[i].version=DESK_SHELL_VERSION; desk_flush(&d,i);
+    assert(desk_program_graphical("wordpad") && desk_catalog_takes_file("wordpad") && !strcmp(desk_program_label("wordpad"),"WordPad"));
+    strcpy(d.programs[0].name,"wordpad"); strcpy(d.programs[0].path,"/Programs/wordpad");
+    strcpy(d.programs[1].name,"paint"); strcpy(d.programs[1].path,"/Programs/paint"); d.program_count=2;
+    d.launch=wordpad_launch_test; wordpad_launches=0;
+    struct ciuki_message m; const char *path="/Documents/big.txt";
+    #define WP_LAUNCH(NAME,ARG) do { unsigned n_=(unsigned)strlen(NAME),p_=(unsigned)strlen(ARG); request(&m,DESK_LAUNCH,16+n_+p_); m.data[0]=DESK_SHELL_VERSION; \
+        desk_put32(m.data+4,60); desk_put32(m.data+8,n_); memcpy(m.data+12,NAME,n_); desk_put32(m.data+12+n_,p_); memcpy(m.data+16+n_,ARG,p_); } while (0)
+    WP_LAUNCH("wordpad",path);
+    d.clients[i].program=0; desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && !wordpad_launches);
+    d.clients[i].program=DESK_APP_NOTE; desk_receive(&d,i,&m); assert(terminal_result(i)==321 && wordpad_launches==1);
+    WP_LAUNCH("wordpad","big.txt"); desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && wordpad_launches==1);   /* absolute paths only */
+    WP_LAUNCH("paint",path); desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && wordpad_launches==1);          /* nothing else */
+    d.clients[i].program=DESK_APP_FILES; WP_LAUNCH("wordpad",path); desk_receive(&d,i,&m); assert(terminal_result(i)==321 && wordpad_launches==2);
+    #undef WP_LAUNCH
+    cleanup(); puts("PASS WordPad launch: CiukNote and Files hand over a document, nothing else");
+}
 static void test_terminal(void)
 {
     setup(640,480); int i=client(5,12,64,48,0x123456);
@@ -1082,7 +1106,7 @@ int main(void)
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
-    test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
+    test_graphics_service(); test_menu(); test_ide_launch(); test_note_wordpad(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     test_game_data_properties();
     test_power_status();

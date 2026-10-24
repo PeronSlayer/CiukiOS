@@ -268,6 +268,7 @@ static const struct program_info programs[] = {
     {"calc", "Calculator", "accessories-calculator", "accessories", NULL},
     {"gfxdemo", "Graphics Demo", "applications-graphics", "accessories", NULL},
     {"charmap", "Character Map", "accessories-character-map", "accessories", NULL},
+    {"wordpad", "WordPad", "x-office-document", "accessories", NULL},
     {"clock", "Clock", "appointment-new", "accessories", NULL},
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},

@@ -31,6 +31,9 @@ ACCESSORIES = {
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
+    # G28: WordPad (RTF editor); links libfont for the Liberation faces and shares CiukNote's file helpers.
+    "wordpad": ["../wordpad/main.c", "../wordpad/app.c", "../wordpad/rich.c", "../wordpad/rtf.c", "../wordpad/layout.c",
+                "../wordpad/fonts.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"],
 }
 PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
@@ -52,7 +55,7 @@ def digest(path):
 def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
-                                 ROOT / "apps/ciukide", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/accessories", ROOT / "apps/paint",
+                                 ROOT / "apps/ciukide", ROOT / "apps/wordpad", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/accessories", ROOT / "apps/paint",
                                  ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
@@ -198,7 +201,7 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", "printers", "printspool", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
+                          *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name in ("control", "wordpad") else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Toolkit/compositor remain integer-only; TinyGL's scene uses the SDK x87 ABI.

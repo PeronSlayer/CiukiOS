@@ -38,6 +38,8 @@ const struct du_icon_map du_icon_map[] = {
     {"program:netsurf", "internet-web-browser"},       /* NetSurf, the browser application (apps/desktop/catalog.h) */
     /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
     {"program:cdplayer", "media-optical"},
+    {"program:clipbrd", "edit-paste"},
+    {"program:recorder", "audio-input-microphone"},
     {"program:calc", "accessories-calculator"},
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
@@ -47,6 +49,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
     {"program:paint", "applications-graphics"},
+    {"program:wordpad", "x-office-document"},                  /* G28 */
 
     /* Start menu */
     {"menu:*", "application-x-executable"},

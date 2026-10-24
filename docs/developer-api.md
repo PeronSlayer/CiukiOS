@@ -7382,6 +7382,12 @@ int accepts_tab;
 DU_CANVAS: deliver Tab as DU_EV_KEY
 
 ```c
+int wheel_events;
+```
+
+DU_CANVAS: deliver the wheel as DU_POINTER_WHEEL (G28; off keeps the old behaviour)
+
+```c
 int dropdown;
 ```
 
@@ -7497,9 +7503,12 @@ dragged), RELEASE when that press ends without a drag (apply it now).
 DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
 zero on hover), x/y are client coordinates. CANCEL follows focus loss,
 input resynchronization or resize. The application paints DU_CANVAS.
+G28: DU_POINTER_WHEEL (only for canvases with wheel_events set) reports the
+wheel: x is the signed number of detents (positive scrolls up), y the pointer's
+client y.
 
 ```c
-enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL, DU_POINTER_WHEEL };
 struct du_event {
     enum du_event_type type;
     int id, index, x, y;

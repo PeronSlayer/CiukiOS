@@ -329,7 +329,7 @@ def desktop_payloads():
                "/Programs/printers": DESKTOP / "printers", "/System/printspool": DESKTOP / "printspool",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/clipbrd": DESKTOP / "clipbrd", "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
-               "/Programs/help": DESKTOP / "help", "/Programs/logview": DESKTOP / "logview", "/Programs/mixer": DESKTOP / "mixer", "/Programs/recorder": DESKTOP / "recorder", "/Programs/viewer": DESKTOP / "viewer",
+               "/Programs/wordpad": DESKTOP / "wordpad", "/Programs/help": DESKTOP / "help", "/Programs/logview": DESKTOP / "logview", "/Programs/mixer": DESKTOP / "mixer", "/Programs/recorder": DESKTOP / "recorder", "/Programs/viewer": DESKTOP / "viewer",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}

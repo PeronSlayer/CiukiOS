@@ -121,7 +121,7 @@ class AccessoriesTests(unittest.TestCase):
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
         # Catalogue order selects defaults: Viewer precedes its Paint alternative.
-        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "recorder", "regedit", "viewer"])
+        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "recorder", "regedit", "viewer", "wordpad"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
         self.assertEqual(set(build.ACCESSORIES) | {"regedit", "gfxdemo", "hwreport", "printers"}, set(names))
         self.assertIn("regedit", build.PROGRAMS)
@@ -135,7 +135,7 @@ class AccessoriesTests(unittest.TestCase):
         for _, _, icon, _ in entries:
             self.assertRegex(listing, rf"/32x32/[a-z]+/{re.escape(icon)}\.png")
         # File-taking accessories are exactly the ones the desktop passes LAUNCH arguments to.
-        self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"clipbrd", "help", "music", "paint", "viewer"})
+        self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"clipbrd", "help", "music", "paint", "viewer", "wordpad"})
 
     def test_stb_provenance(self):
         data = (ROOT / "third_party/stb/stb_image.h").read_bytes()

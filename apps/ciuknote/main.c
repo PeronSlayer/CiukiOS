@@ -15,7 +15,7 @@
 #define TEST_TIME 1791711660   /* 2026-10-11 09:41:00 UTC: the fixed clock of --test runs */
 #define CHECKPOINT_SERIAL 0xf2320000u
 
-struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; struct cp_ui printing; int checkpoint, sent; struct du_job opening; const char *path; char *raw; size_t length; int open_error; char resolved[CN_PATH]; uint64_t open_revision; };
+struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; struct cp_ui printing; int checkpoint, sent; struct du_job opening; const char *path; char *raw; size_t length; int open_error; char resolved[CN_PATH]; uint64_t open_revision; uint32_t launch_serial; };
 static void print_request(void *arg,int setup)
 {
     struct note_main *m=arg;
@@ -32,6 +32,29 @@ static time_t host_now(void *p) { struct note_main *m = p; return m->app.test ? 
 static void host_recent(const char *path) { (void)du_recent_add(path); }
 static void host_quit(void *p) { du_window_close(&((struct note_main *)p)->window); }
 static int close_request(struct du_window *w, void *p) { (void)w; return cn_close_request(p); }
+/* G28: a document above CiukNote's limit opens in WordPad. Only the desktop can give a window its channel, so
+ * the request is a protocol v2 LAUNCH of /Programs/wordpad with the absolute path as its single argument
+ * (the desktop honours it for CiukNote, as for Files). The answer arrives later as TASK_RESULT. */
+static int host_wordpad(void *p, const char *path)
+{
+    struct note_main *m = p; static const char name[] = "wordpad";
+    size_t length = sizeof(name) - 1, n = strlen(path);
+    if (!n || n > DESK_ARG_MAX) return -ENAMETOOLONG;
+    for (size_t i = 0; i < n; i++) if ((unsigned char)path[i] < 32 || path[i] == 127) return -EINVAL;
+    struct ciuki_message msg;
+    desk_message(&msg, DESK_LAUNCH, (unsigned)(12 + length + 4 + n));
+    if (!++m->launch_serial) ++m->launch_serial;
+    desk_put32(msg.data + 4, m->launch_serial); desk_put32(msg.data + 8, (uint32_t)length);
+    memcpy(msg.data + 12, name, length);
+    desk_put32(msg.data + 12 + length, (uint32_t)n); memcpy(msg.data + 16 + length, path, n);
+    return du_window_queue(&m->window, &msg) ? -errno : 0;
+}
+static void on_message(struct du_window *w, const struct desk_packet *pk, void *p)
+{
+    struct note_main *m = ((struct cn_app *)p)->host; (void)w;
+    if (pk->opcode == DESK_TASK_RESULT && pk->request == DESK_LAUNCH && pk->serial == m->launch_serial && pk->result < 0)
+        du_message(&m->ui, 998, "CiukNote", "WordPad could not be started.", DU_DLG_ICON_ERROR, NULL, 0, 0, 0);
+}
 static void host_declined(void *p) { du_window_close_reply(&((struct note_main *)p)->window, 0); }
 
 /* Test-only milestones, as Files: a PING whose serial names the completed stage is queued after
@@ -56,7 +79,8 @@ static void idle(void *arg)
         if ((r==0 || r==-ENOENT) && m->open_revision!=m->app.ta.revision) r=-EBUSY;
         if (!r) r=cn_open_bytes(&m->app,m->resolved,m->raw,m->length);
         else if (r==-ENOENT) cn_open_argument(&m->app,m->resolved);
-        if (r && r!=-ENOENT) du_message(&m->ui,999,"CiukNote",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0);
+        if (r==-EFBIG) cn_offer_wordpad(&m->app,m->resolved);
+        else if (r && r!=-ENOENT) du_message(&m->ui,999,"CiukNote",strerror(-r),DU_DLG_ICON_ERROR,NULL,0,0,0);
         free(m->raw); m->raw=NULL; m->path=NULL;
     } else if (m->path && !m->opening.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         m->open_revision=m->app.ta.revision;
@@ -119,7 +143,7 @@ int main(int argc, char **argv)
     }
     struct cn_app *a = &m->app;
     m->window.close_request = close_request; m->window.user = a;
-    a->fs = cn_native_fs(); a->now = host_now; a->quit = host_quit; a->declined = host_declined; a->portrait = portrait;
+    a->fs = cn_native_fs(); a->now = host_now; a->quit = host_quit; a->declined = host_declined; a->wordpad = test ? NULL : host_wordpad; m->window.message = on_message; a->portrait = portrait;
     if (!test) a->recent = host_recent;   /* scripted runs keep the disk unchanged */
     a->host = m; a->test = test;
     if (test) a->checkpoint = on_checkpoint;

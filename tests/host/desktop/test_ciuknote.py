@@ -53,6 +53,7 @@ APP_SCREENS = {
     'cn-scrolled-bars.xrgb': '06804b6ef253b27c12cf0f48b6ab0ff63faa3d073d9b13cde8a9e938be7ab366',
     'cn-status-hidden.xrgb': '7b12865ddbc38c28518557e9b58151831dc6a27b5dd376c1443217dd7b2380ff',
     'cn-typed.xrgb': '0c9bfefa5c1cf6a2e6fd6c0f2016b8d8431f2fbf87d5f2ec0cb5cfb11ea03992',
+    'cn-wordpad-offer.xrgb': 'a4839957925d14584d1ab79d7ec79983fa85aa5753d3c42314c4a473457d05a6',   # G28: the offer to open a large file in WordPad
     'cn-wrapped.xrgb': '945e6aed942540b9910e104d1a0888b9bc2effe444d7f18c0812e017ae3142cf',
 }
 # Digests the guest prints for the QEMU case (FNV-1a 32 of the 640x440 surface), derived on the
@@ -207,7 +208,7 @@ class CiuknoteTests(unittest.TestCase):
         Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /Programs program can move a
         submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["calc", "charmap", "ciukide", "ciuknote", "clipbrd", "clock", "control", "demo", "dosbox", "files", "gfxdemo", "hello", "help", "hwreport", "libc_smoke", "logview", "lua", "mixer", "music", "paint", "printers", "regedit", "tasks", "tcc", "terminal", "viewer"],
+        self.assertEqual(programs, ["calc", "charmap", "ciukide", "ciuknote", "clipbrd", "clock", "control", "demo", "dosbox", "files", "gfxdemo", "hello", "help", "hwreport", "libc_smoke", "logview", "lua", "mixer", "music", "paint", "printers", "recorder", "regedit", "tasks", "tcc", "terminal", "viewer", "wordpad"],
                          "the image's /Programs changed: check the Programs submenu rows of the desktop cases")
         menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()
