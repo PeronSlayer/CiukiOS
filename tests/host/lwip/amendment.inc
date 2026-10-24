@@ -140,6 +140,7 @@ static void make_pair(int *sender,int *receiver)
     CHECK(!file_close(&client,listener));
     uint64_t end=cu_now()+1000;
     while(net_socket_count()!=before+2){CHECK(cu_now()<end);cu_sleep(1);}
+    g26b_stream_available(*sender,*receiver);
 }
 static void *held_segments[MEMP_NUM_TCP_SEG];
 static void exhaust_segments(void *unused)

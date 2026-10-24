@@ -8,6 +8,7 @@
 #include "lwip/dns.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/stats.h"
+#include "lwip/priv/tcp_priv.h"
 #include "netif/ethernet.h"
 #include <ciuki/net_stack.h>
 #include <ciuki/net_control.h>
@@ -549,4 +550,55 @@ int net_stack_init(void)
     /* Records only: without the message the stack runs, unobserved. */
     watch_message = tcpip_callbackmsg_new(watch, NULL); stack_started = cu_now();
     started = true; return 0;
+}
+
+/* Snapshot only on the TCP/IP core: lwIP updates these counters there. */
+static void protocol_statistics_core(void *arg)
+{
+    struct ciuki_net_statistics *out=arg;
+    out->size=sizeof(*out);out->version=1;
+#define COPY_STATS(which) do { \
+    const struct stats_proto *s=&lwip_stats.which; \
+    out->which=(struct ciuki_net_protocol_stats){s->recv,s->xmit,s->drop,s->err, \
+        s->chkerr,s->lenerr,s->memerr,s->proterr}; \
+} while(0)
+    COPY_STATS(ip);COPY_STATS(icmp);COPY_STATS(tcp);COPY_STATS(udp);
+    out->tcp_active_opens=lwip_stats.mib2.tcpactiveopens;
+    out->tcp_passive_opens=lwip_stats.mib2.tcppassiveopens;
+    out->tcp_failed_connects=lwip_stats.mib2.tcpattemptfails;
+    out->tcp_resets=lwip_stats.mib2.tcpestabresets;
+    out->tcp_retransmitted=lwip_stats.mib2.tcpretranssegs;
+    out->tcp_received=lwip_stats.mib2.tcpinsegs;
+    out->tcp_sent=lwip_stats.mib2.tcpoutsegs;
+    out->tcp_receive_errors=lwip_stats.mib2.tcpinerrs;
+    out->tcp_reset_segments=lwip_stats.mib2.tcpoutrsts;
+    out->udp_no_ports=lwip_stats.mib2.udpnoports;
+    out->udp_receive_errors=lwip_stats.mib2.udpinerrors;
+    for(const struct tcp_pcb *p=tcp_active_pcbs;p;p=p->next)
+        if(p->state==ESTABLISHED || p->state==CLOSE_WAIT)out->tcp_connections++;
+#undef COPY_STATS
+}
+int net_protocol_statistics(struct ciuki_net_statistics *out)
+{
+    if(!started)return -ENETDOWN;
+    memset(out,0,sizeof(*out));
+    return tcpip_callback_wait(protocol_statistics_core,out)==ERR_OK?0:-ENOMEM;
+}
+
+static void route_snapshot_core(void *arg)
+{
+    struct ciuki_net_routes *out=arg;out->size=sizeof(*out);out->version=1;
+    for(struct netif *n=netif_list;n && out->count<CIUKI_NET_ROUTES_MAX;n=n->next) {
+        uint32_t address=ip4_addr_get_u32(netif_ip4_addr(n)),mask=ip4_addr_get_u32(netif_ip4_netmask(n));
+        if(!netif_is_up(n) || !address)continue;
+        out->routes[out->count++]=(struct ciuki_net_route){address&mask,mask,address,address};
+    }
+    struct netif *n=netif_default;
+    if(n && netif_is_up(n) && ip4_addr_get_u32(netif_ip4_gw(n)) && out->count<CIUKI_NET_ROUTES_MAX)
+        out->routes[out->count++]=(struct ciuki_net_route){0,0,ip4_addr_get_u32(netif_ip4_gw(n)),ip4_addr_get_u32(netif_ip4_addr(n))};
+}
+int net_route_snapshot(struct ciuki_net_routes *out)
+{
+    if(!started)return -ENETDOWN;memset(out,0,sizeof(*out));
+    return tcpip_callback_wait(route_snapshot_core,out)==ERR_OK?0:-ENOMEM;
 }

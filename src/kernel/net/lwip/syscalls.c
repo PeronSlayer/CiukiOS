@@ -64,7 +64,8 @@ static int address_copy(uint32_t address, uint32_t length, unsigned cap, const s
 }
 static int io_call(struct user_operation *o, const struct ciuki_socket_io *io, bool send)
 {
-    if (io->size != sizeof(*io) || io->version != 1 || io->reserved[0] || io->reserved[1] ||
+    if (io->size != sizeof(*io) || (io->version != 1 && io->version != CIUKI_SOCKET_IO_V2) ||
+        (io->reserved[0] && (io->version == 1 || send)) || io->reserved[1] ||
         io->bytes > CIUKI_SOCKET_IO_MAX || io->flags & ~(MSG_DONTWAIT | (send ? MSG_NOSIGNAL : MSG_PEEK)) ||
         (!io->address && io->address_length)) return -EINVAL;
     int e = net_socket_capture(o->process, io->fd, &o->socket); if (e) return e;
@@ -75,12 +76,16 @@ static int io_call(struct user_operation *o, const struct ciuki_socket_io *io, b
     } else {
         e = address_output(o, io->address, io->address_length, &cap);
         if (!e) e = pin(o, io->buffer, io->bytes);
+        if (!e && io->version == CIUKI_SOCKET_IO_V2 && io->reserved[0]) e = pin(o, io->reserved[0], 4);
     }
     if (e) return e;
-    e = net_socket_io(o->process, io->fd, o->buffer, io->bytes, io->flags, io->address ? &address : NULL, send, &o->socket);
+    unsigned output_flags=0;
+    e = send ? net_socket_io(o->process, io->fd, o->buffer, io->bytes, io->flags, io->address ? &address : NULL, true, &o->socket) :
+        net_socket_receive(o->process, io->fd, o->buffer, io->bytes, io->flags, io->address ? &address : NULL, &o->socket, &output_flags);
     if (!send && e >= 0) {
         int copy = e ? copy_to_user(io->buffer, o->buffer, (unsigned)e) : 0;
         if (!copy) copy = address_copy(io->address, io->address_length, cap, &address);
+        if (!copy && io->version == CIUKI_SOCKET_IO_V2 && io->reserved[0]) copy=copy_to_user(io->reserved[0], &output_flags, 4);
         if (copy) return copy;
     }
     return e;
@@ -102,8 +107,10 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
     if (tf->edi || tf->ebp) return -EINVAL;
     if (nr != CIUKI_SYS_SOCKNAME && tf->esi) return -EINVAL;
     if(nr==CIUKI_SYS_NET_INFO) {
-        unsigned bytes=tf->ebx==CIUKI_NET_INFO_CONFIG?sizeof(struct ciuki_net_control):sizeof(struct ciuki_net_socket_list);
-        if(tf->ebx>CIUKI_NET_INFO_SOCKETS || tf->edx!=bytes)return -EINVAL;
+        unsigned bytes=tf->ebx==CIUKI_NET_INFO_CONFIG?sizeof(struct ciuki_net_control):
+            tf->ebx==CIUKI_NET_INFO_STATS?sizeof(struct ciuki_net_statistics):
+            tf->ebx==CIUKI_NET_INFO_ROUTES?sizeof(struct ciuki_net_routes):sizeof(struct ciuki_net_socket_list);
+        if(tf->ebx>CIUKI_NET_INFO_ROUTES || tf->edx!=bytes)return -EINVAL;
         int e=pin(o,tf->ecx,bytes);if(e)return e;
         if(tf->ebx==CIUKI_NET_INFO_CONFIG) {
             struct ciuki_net_control r;e=copy_from_user(&r,tf->ecx,sizeof(r));if(e)return e;
@@ -111,6 +118,13 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
             unsigned index=r.index;memset(&r,0,sizeof(r));r.version=1;r.size=sizeof(r);r.index=index;
             e=net_control(CIUKI_NETCTL_GET,&r);
             return e?e:copy_to_user(tf->ecx,&r,sizeof(r));
+        }
+        if(tf->ebx==CIUKI_NET_INFO_STATS) {
+            e=net_protocol_statistics((void *)o->buffer);
+            return e?e:copy_to_user(tf->ecx,o->buffer,bytes);
+        }
+        if(tf->ebx==CIUKI_NET_INFO_ROUTES) {
+            e=net_route_snapshot((void *)o->buffer);return e?e:copy_to_user(tf->ecx,o->buffer,bytes);
         }
         net_socket_snapshot((void *)o->buffer);
         return copy_to_user(tf->ecx,o->buffer,bytes);
@@ -134,7 +148,24 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
     }
     if (nr == CIUKI_SYS_RESOLVE4) {
         if (tf->ecx || tf->edx) return -EINVAL;
-        struct ciuki_resolve4 r; int e = copy_from_user(&r, tf->ebx, sizeof(r));
+        uint32_t header[2];int e=copy_from_user(header,tf->ebx,sizeof(header));if(e)return e;
+        if(header[1]==2) {
+            struct ciuki_resolve_query q;
+            if(header[0]!=sizeof(q))return -EINVAL;
+            e=copy_from_user(&q,tf->ebx,sizeof(q));if(e)return e;
+            if(q.size!=sizeof(q) || q.version!=2)return -EINVAL;
+            char name[254];const char *input=NULL;
+            if(q.action==CIUKI_RESOLVE_START) {
+                if(q.token || q.name_bytes<2 || q.name_bytes>sizeof(name))return -EINVAL;
+                e=copy_from_user(name,q.name,q.name_bytes);if(e)return e;
+                if(name[q.name_bytes-1] || strlen(name)+1!=q.name_bytes)return -EINVAL;
+                input=name;
+            } else if(q.name || q.name_bytes)return -EINVAL;
+            e=pin(o,tf->ebx,sizeof(q));if(e)return e;
+            e=net_resolve_query(p,&q,input);
+            return e?e:copy_to_user(tf->ebx,&q,sizeof(q));
+        }
+        struct ciuki_resolve4 r; e = copy_from_user(&r, tf->ebx, sizeof(r));
         if (e) return e;
         if (r.size != sizeof(r) || r.version != 1 || r.reserved[0] || r.reserved[1] || r.name_bytes < 2 || r.name_bytes > 254) return -EINVAL;
         char name[254]; e = copy_from_user(name, r.name, r.name_bytes);
@@ -195,7 +226,8 @@ int32_t net_socket_call(struct trap_frame *tf)
 {
     if (tf->eax == CIUKI_SYS_NETCTL) {
         struct process *p = proc_current();
-        if (!p || !p->network_capability) return -EPERM;
+        if (!p || (!p->network_capability && !(p->dhcp_capability &&
+            (tf->ebx==CIUKI_NETCTL_RELEASE || tf->ebx==CIUKI_NETCTL_RENEW)))) return -EPERM;
         if (tf->esi || tf->edi || tf->ebp || tf->edx != sizeof(struct ciuki_net_control)) return -EINVAL;
         struct ciuki_net_control record;
         int e = copy_from_user(&record, tf->ecx, sizeof(record));

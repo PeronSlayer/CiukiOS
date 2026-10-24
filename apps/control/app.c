@@ -1670,6 +1670,7 @@ void cp_open(struct cp_app *a, int page)
         cp_display_refresh(a);
         for (unsigned i=0;i<a->display.mode_count;i++) if (a->display.modes[i].current) a->display_original_mode=a->display.modes[i].id;
     }
+    if(page==CP_INTERNET) { a->internet_loaded=0;a->internet_tab=0; }
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;
     a->dm_updating = 0;

@@ -1,3 +1,5 @@
+#include "apps/control/internet_storage.h"
+#include "frontends/framebuffer/ciuki/proxy.h"
 /* NetSurf 3.11 fetcher binding. SPDX-License-Identifier: GPL-2.0-only */
 #include <stdbool.h>
 #include "apps/libdeskui/completion.h"
@@ -164,7 +166,12 @@ static void *setup(struct fetch *parent,nsurl *url,bool only_2xx,bool downgrade,
     lwc_string *host=nsurl_get_component(url,NSURL_HOST),*port=nsurl_get_component(url,NSURL_PORT);
     char *target=NULL,*cookie=NULL;size_t length=0;
     struct ciuki_request r={.tls=nsurl_get_scheme_type(url)==NSURL_SCHEME_HTTPS,.post=post,.headers=headers};
-    if(nsoption_bool(http_proxy) && !r.tls) { r.proxy_host=nsoption_charp(http_proxy_host);r.proxy_port=nsoption_int(http_proxy_port); }
+    extern const struct cp_internet_options *ciuki_chrome_internet(void);
+    const struct cp_internet_options *options=ciuki_chrome_internet();char proxy_auth[264];
+    if(nsoption_bool(http_proxy) && !(options->bypass_local && internet_zone(options,host?lwc_string_data(host):"")==1)) {
+        r.proxy_host=nsoption_charp(http_proxy_host);r.proxy_port=nsoption_int(http_proxy_port);
+        if(!ciuki_proxy_basic(proxy_auth,sizeof(proxy_auth),options->proxy_user,options->proxy_password))r.proxy_auth=proxy_auth;
+    }
     r.port=r.tls?443:80;r.host=host?lwc_string_data(host):"";
     if(port){
         r.port=0;for(const char *s=lwc_string_data(port);*s;s++){

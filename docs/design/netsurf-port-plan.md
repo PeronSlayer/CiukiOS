@@ -869,10 +869,12 @@ extension: streamed downloads with exclusive staging and Save/cancel; explicit
 New Window/Ctrl+N through the existing desktop launcher; pinned libpng and
 static stb JPEG content handlers sharing the image ledger; Internet Properties
 (home, HTTP proxy and memory cache). Each process still owns one framebuffer
-surface. Automatic `_blank` routing, concurrent profile-model merging, HTTPS
-proxy CONNECT/authentication, full-document printing and JavaScript remain gaps.
-Integration retains G31 visible-page Ctrl+P printing and Ctrl+Shift+P setup;
-download and printer workers both poll and clean up. The G26 PNG/JPEG
-handlers register after upstream handlers while fx-24 GIF/BMP/ICO/WebP/SVG
-remain enabled (see `network-user-tools.md`, integration section). Host evidence
-and sandbox sanitizer failures are recorded in `build/codex/g26-report.md`.
+surface. G26B adds URL-only `_blank` routing, concurrent profile transactions, HTTPS
+CONNECT with Basic proxy authentication, active download progress/cancel and
+upstream Duktape/nsgenbind with memory admission. Script text is retained and
+charged against the fx-14 DOM budget. Integration retains G31 visible-page
+Ctrl+P printing and Ctrl+Shift+P setup; browser printing through G31 and
+default-program association integration remain open. G26 PNG/JPEG handlers
+register after upstream image handlers while fx-24 GIF/BMP/ICO/WebP/SVG remain
+enabled. Host evidence and limits are in `build/codex/g26-report.md` and
+`build/codex/g26b-report.md`.

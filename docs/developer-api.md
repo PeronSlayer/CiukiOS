@@ -5372,6 +5372,8 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define SHUT_RD 0
 #define SHUT_WR 1
 #define SHUT_RDWR 2
+#define MSG_TRUNC 32
+#define CIUKI_SOCKET_IO_V2 2u
 #define MSG_PEEK 2
 #define MSG_DONTWAIT 64
 #define MSG_NOSIGNAL 16384
@@ -5382,6 +5384,7 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define SO_BROADCAST 6
 #define SO_RCVTIMEO 20
 #define SO_SNDTIMEO 21
+#define SO_RX_BYTES 22
 #define TCP_NODELAY 1
 #define POLLIN 1
 #define POLLOUT 4
@@ -5396,12 +5399,72 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define CIUKI_DNS_MAX 4
 #define CIUKI_NET_INFO_CONFIG 0u
 #define CIUKI_NET_INFO_SOCKETS 1u
+#define CIUKI_NET_INFO_STATS 2u
+#define CIUKI_NET_INFO_ROUTES 3u
+#define CIUKI_NET_ROUTES_MAX 4u
+#define CIUKI_RESOLVE_START 1u
+#define CIUKI_RESOLVE_POLL 2u
+#define CIUKI_RESOLVE_CANCEL 3u
+#define CIUKI_RESOLVE_PENDING 4u
 #define CIUKI_NET_SOCKET_CLOSED 0u
 #define CIUKI_NET_SOCKET_LISTEN 1u
 #define CIUKI_NET_SOCKET_CONNECTING 2u
 #define CIUKI_NET_SOCKET_CONNECTED 3u
 #define CIUKI_NET_SOCKET_CLOSE_WAIT 4u
 #pragma pack(push, 4)
+struct ciuki_net_protocol_stats {
+    uint32_t received;
+    uint32_t sent;
+    uint32_t dropped;
+    uint32_t errors;
+    uint32_t checksum_errors;
+    uint32_t length_errors;
+    uint32_t memory_errors;
+    uint32_t protocol_errors;
+};
+struct ciuki_net_statistics {
+    uint32_t size;
+    uint32_t version;
+    struct ciuki_net_protocol_stats ip;
+    struct ciuki_net_protocol_stats icmp;
+    struct ciuki_net_protocol_stats tcp;
+    struct ciuki_net_protocol_stats udp;
+    uint32_t tcp_active_opens;
+    uint32_t tcp_passive_opens;
+    uint32_t tcp_failed_connects;
+    uint32_t tcp_resets;
+    uint32_t tcp_retransmitted;
+    uint32_t tcp_received;
+    uint32_t tcp_sent;
+    uint32_t tcp_receive_errors;
+    uint32_t tcp_reset_segments;
+    uint32_t udp_no_ports;
+    uint32_t udp_receive_errors;
+    uint32_t tcp_connections;
+};
+struct ciuki_net_route {
+    uint32_t destination;
+    uint32_t mask;
+    uint32_t gateway;
+    uint32_t interface_address;
+};
+struct ciuki_net_routes {
+    uint32_t size;
+    uint32_t version;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_net_route routes[CIUKI_NET_ROUTES_MAX];
+};
+struct ciuki_resolve_query {
+    uint32_t size;
+    uint32_t version;
+    uint32_t action;
+    uint32_t token;
+    uint32_t name;
+    uint32_t name_bytes;
+    uint32_t address;
+    int32_t status;
+};
 struct ciuki_net_socket_info {
     uint32_t pid;
     uint32_t type;
@@ -5433,7 +5496,13 @@ struct ciuki_socket_io {
     uint32_t flags;
     uint32_t address;
     uint32_t address_length;
-    uint32_t reserved[2];
+```
+
+v1: both zero. v2 receive: [0] optional output u32 flags pointer
+(MSG_TRUNC for a discarded datagram tail), [1] zero. v2 send: zero.
+
+```c
+uint32_t reserved[2];
 };
 struct ciuki_socket_option {
     uint32_t size;
@@ -6538,6 +6607,7 @@ SPDX-License-Identifier: MIT
 #ifndef CIUKI_SDK_NET_H
 #define CIUKI_SDK_NET_H
 #include <ciuki/abi.h>
+#include <stddef.h>
 ```
 
 Public read-only /dev/net: open(O_RDONLY), NET_GET_STATE, close.
@@ -6555,14 +6625,37 @@ describe local availability.
 int ciuki_net_status(struct ciuki_net_state *);
 ```
 
+DNS v2: start fills a process-owned token; poll returns status 4 while pending.
+Cancel invalidates that token immediately; late upstream results are discarded.
+
+LMHOSTS then local-subnet NBNS; suffix is the NetBIOS service byte.
+
+```c
+int ciuki_netbios_resolve(const char *, unsigned, uint32_t *);
+```
+
+HOSTS then PTR DNS, no numeric fallback.
+
+```c
+int ciuki_hosts_reverse4(uint32_t, char *, size_t);
+int ciuki_reverse4(uint32_t, char *, size_t);
+int ciuki_resolve4_query(struct ciuki_resolve_query *);
+```
+
+Numeric/HOSTS/localhost first; otherwise starts a cancellable DNS query.
+
+```c
+int ciuki_resolve4_begin(const char *, struct ciuki_resolve_query *);
+```
+
 Privileged configuration; returns 0 or -1 with errno.
 
 ```c
 int ciuki_net_control(unsigned operation, struct ciuki_net_control *);
 ```
 
-Read-only adapter CONFIG or bounded native SOCKETS snapshot; no capability.
-operation is CIUKI_NET_INFO_CONFIG/SOCKETS; bytes must match the record.
+Read-only CONFIG, SOCKETS, STATS or ROUTES snapshot; no capability.
+operation is CIUKI_NET_INFO_*; bytes must match the corresponding record.
 
 ```c
 int ciuki_net_info(unsigned operation, void *record, uint32_t bytes);
@@ -7934,6 +8027,7 @@ input resynchronization or resize. The application paints DU_CANVAS.
 
 ```c
 enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+enum { DU_HELP_F1 = 1, DU_HELP_CONTEXT = 2 };
 struct du_event {
     enum du_event_type type;
     int id, index, x, y;

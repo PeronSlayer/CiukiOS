@@ -500,6 +500,12 @@ after each of these transients (`equivalent()`).
 | 84 | G9 Run: MRU arrival, dropdown open/scroll/select/cancel, selection replacement and keyboard button focus | Run content and old/new outer bounds on dropdown resize | `desk_run_history_ready`, `run_select`, `run_resize`, `internal_key`, `desk_internal_click` | none | `row_run` in `test_window_model`, all five presenters |
 | 85 | G9 Browse: opens, receives directory snapshot, navigates/selects or cancels; Run launch/error/accepted completion | old/new Run/Browse outer bounds, picker content, owned error message and exposed windows | `run_browse`, `desk_run_browse_ready`, `run_browser_input`, `desk_run_result` | worker results never paint directly | `row_run` in `test_window_model`, all five presenters |
 
+| 42 | G26B link target `_blank` opens a separate browser process | new frame, client and task button | existing URL-only launcher and v3 create/present | no alternate drawing path | `row_g26b_network_ui`: blank target create/first content |
+| 43 | G26B download progress opens, advances, cancels or gives way to Save | dialog bounds and progress widget, exposed page on close | chrome `downloads_poll`/`event` and ordinary client damage | no alternate drawing path | `row_g26b_network_ui`: progress open/update/cancel |
+| 44 | G26B Internet General/History/Security/Connections/Programs page switch and history-clear/apply status | changed property-page client bounds and status | Control Panel `internet_event`/`internet_build` | no alternate drawing path | `row_g26b_network_ui`: each property page and clear status |
+| 45 | G26B history/bookmark page refresh after another browser process saves or clears | browser content viewport | normal document repaint after profile transaction | no alternate drawing path | `row_g26b_network_ui`: cross-process refresh |
+| 46 | G26B JavaScript changes document contents | changed content rectangles | upstream DOM/layout through framebuffer damage | no alternate drawing path | `row_g26b_network_ui`: script mutation present |
+
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by

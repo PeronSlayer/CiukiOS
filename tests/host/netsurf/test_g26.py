@@ -17,6 +17,22 @@ class BrowserUserTools(unittest.TestCase):
         cls.base=ROOT/'build/external/netsurf-host'
         cls.out=ROOT/'build/host/g26-browser';cls.out.mkdir(parents=True,exist_ok=True)
 
+    def test_javascript_in_real_browser(self):
+        page=self.out/'g26b-script.html'
+        page.write_text('<!doctype html><html><head></head><body><div id="result">before</div><script>'
+                        'document.getElementById("result").textContent="after";'
+                        'document.write("<title>G26B JavaScript "+'
+                        'document.getElementById("result").textContent+"</title>");'
+                        '</script></body></html>')
+        capture=self.out/'g26b-script.xrgb'
+        result=subprocess.run([self.base/'stage/Programs/netsurf','-w','640','-h','480','-f','ram',
+            '--ciuki-resources='+str(self.base/'stage/system/netsurf'),'--ciuki-capture='+str(capture),page.as_uri()],
+            capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('NetSurf local title: G26B JavaScript after',result.stderr)
+        self.assertEqual(capture.stat().st_size,640*480*4)
+        print('PASS G26B real NetSurf Duktape executes authored DOM/title mutation')
+
     def test_png_jpeg(self):
         binary=self.out/'raster'
         subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-O1','-g','-Wall','-Wextra','-Werror',
@@ -53,7 +69,7 @@ class BrowserUserTools(unittest.TestCase):
             '-include',str(ROOT/'sdk/netsurf/port/host_network.h'),'-I'+str(ROOT),
             '-I'+str(self.base/'native-headers'),'-I'+str(self.base/'prefix/include'),'-I'+str(source),'-I'+str(source/'include'),
             str(ROOT/'tests/host/netsurf/proxy_test.c'),str(ROOT/'sdk/netsurf/port/http.c'),str(self.base/'prefix/lib/libz.a'),
-            '-Wl,--gc-sections,--wrap=socket,--wrap=connect,--wrap=fcntl','-o',str(binary)],check=True)
+            '-Wl,--gc-sections,--wrap=socket,--wrap=connect,--wrap=fcntl,--wrap=send,--wrap=recv','-o',str(binary)],check=True)
         result=subprocess.run([binary],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=1'))
         print(result.stdout,end='')
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)

@@ -120,10 +120,13 @@ def build_offline(out,base,flags):
     resource=out/'winsock.rc'
     resource.write_text((out/'generated/wsock32.rc').read_text().replace('CiukiOS placeholder wsock32.dll','CiukiOS native Winsock'))
     subprocess.run(['llvm-rc','/fo',str(out/'winsock.res'),str(resource)],check=True)
+    imports=out/'winsock-ntdll.def'
+    imports.write_text('LIBRARY ntdll.dll\nEXPORTS\n LdrGetDllHandle@16\n LdrGetProcedureAddress@16\n')
+    subprocess.run(['llvm-dlltool','-m','i386','-k','-d',str(imports),'-l',str(out/'winsock-ntdll.lib')],check=True)
     image=out/'wsock32.dll'
     subprocess.run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/safeseh:no','/timestamp:0',
         '/incremental:no','/fixed','/base:'+hex(base),'/def:'+str(definition),'/out:'+str(image),
-        str(obj),str(out/'winsock.res'),str(out/'ntdll.lib')],check=True)
+        str(obj),str(out/'winsock.res'),str(out/'ntdll.lib'),str(out/'winsock-ntdll.lib')],check=True)
     raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0]
     return {'name':'wsock32.dll','path':'wsock32.dll','base':base,'size':struct.unpack_from('<I',raw,pe+80)[0],
         'sha256':hashlib.sha256(raw).hexdigest(),'version':stubs.image_version(raw)}

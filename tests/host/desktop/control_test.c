@@ -121,8 +121,9 @@ static unsigned program_removes,program_changes,program_installs,program_overflo
 static int installed_programs(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 {
     (void)ctx;assert(cap>=2);
-    out[0]=(struct desk_uninstall_entry){.name="DOOM (shareware)",.kind=DESK_PROGRAM_GAME,.game=2,.version="1.9",.publisher="id Software",.disk_bytes=8192,.inventory_more=program_overflow};
-    out[1]=(struct desk_uninstall_entry){.name="Desktop",.no_remove=1,.system_component=1};return 2;
+    memset(out,0,2*sizeof(*out));strcpy(out[0].name,"DOOM (shareware)");out[0].kind=DESK_PROGRAM_GAME;out[0].game=2;
+    strcpy(out[0].version,"1.9");strcpy(out[0].publisher,"id Software");out[0].disk_bytes=8192;out[0].inventory_more=program_overflow;
+    strcpy(out[1].name,"Desktop");out[1].no_remove=1;out[1].system_component=1;return 2;
 }
 static int remove_program(void *ctx,const struct desk_uninstall_entry *r)
 {(void)ctx;assert(r->game==2);program_removes++;return 0;}
@@ -472,7 +473,7 @@ int main(int argc, char **argv)
         assert(preview_band() == (modes[k] == CFG_WALL_FIT));
         if (modes[k] == CFG_WALL_FIT) at_save(renders, "control-display-fit", &u);
     }
-    struct ciuki_settings parsed;
+    static struct ciuki_settings parsed;
     cfg_defaults(&parsed); parsed.wallpaper_mode = CFG_WALL_CENTER;
     assert(!cfg_parse(&parsed, saved, saved_n) && parsed.wallpaper_mode == CFG_WALL_FILL);
 
@@ -571,6 +572,16 @@ int main(int argc, char **argv)
     assert(internet_saves==1 && internet_saved.port==3128 && internet_saved.cache_mb==4 && !strcmp(internet_saved.home,"https://example.test/home"));
     du_set_text(du_get(&u,1703),"17");at_click_widget(&u,1704);assert(internet_saves==1);
     du_set_text(du_get(&u,1703),"2");du_set_text(du_get(&u,1700),"javascript:bad");at_click_widget(&u,1704);assert(internet_saves==1);
+    du_set_text(du_get(&u,1700),"https://example.test/home");
+    at_click_widget(&u,1721);assert(a.internet_tab==1 && du_get(&u,1705));
+    du_set_text(du_get(&u,1705),"30");at_click_widget(&u,1704);assert(internet_saves==2 && internet_saved.history_days==30);
+    at_click_widget(&u,1722);assert(a.internet_tab==2 && du_get(&u,1707));
+    du_set_text(du_get(&u,1707),"trusted.example");du_set_text(du_get(&u,1708),"blocked.example");
+    at_click_widget(&u,1704);assert(internet_saves==3 && !strcmp(internet_saved.restricted,"blocked.example"));
+    at_click_widget(&u,1723);assert(a.internet_tab==3 && du_get(&u,1713));
+    du_set_text(du_get(&u,1713),"user");du_set_text(du_get(&u,1714),"password");
+    at_click_widget(&u,1704);assert(internet_saves==4 && !strcmp(internet_saved.proxy_password,"password"));
+    at_click_widget(&u,1724);assert(a.internet_tab==4 && du_get(&u,1716)->disabled);
     cp_detach(&a);puts("PASS G26 Internet Properties: page/catalog, home/proxy/cache Apply, invalid values preserve saved settings");
     puts("PASS Display Properties: staged edits, preview/Cancel merge, durable OK, pending-close rollback and failed save");
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");

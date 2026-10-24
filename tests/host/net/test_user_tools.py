@@ -8,6 +8,16 @@ import unittest
 ROOT=Path(__file__).resolve().parents[3]
 
 class UserTools(unittest.TestCase):
+    def test_name_wire(self):
+        out=ROOT/'build/host/g26';out.mkdir(parents=True,exist_ok=True)
+        binary=out/'name-wire'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            str(ROOT/'tests/host/net/name_wire_test.c'),'-o',str(binary)],check=True)
+        result=subprocess.run([binary],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=1'))
+        print(result.stdout,end='')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_terminal_commands(self):
         out=ROOT/'build/host/g26';out.mkdir(parents=True,exist_ok=True)
         binary=out/'terminal-commands'

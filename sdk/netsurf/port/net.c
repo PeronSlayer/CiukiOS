@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #include "net.h"
 #include "dns.h"
+#include "proxy.h"
 #include <limits.h>
 #include "logline.h"
 #include <ciuki/net.h>
@@ -18,12 +19,13 @@ int ciuki_devctl(int,uint32_t,void *,uint32_t) __attribute__((weak));
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
-enum { EMPTY,RESOLVING,CONNECTING,TRANSFER,IDLE };
+enum { EMPTY,RESOLVING,CONNECTING,TRANSFER,IDLE,TUNNEL };
 struct ciuki_connection {
     int fd;unsigned state,port;char host[254];bool secure;
     uint64_t idle_ms;
     struct ciuki_job *job;
-    char proxy_host[254];
+    char proxy_host[254],proxy_auth[264];
+    char tunnel[4096];size_t tunnel_bytes,tunnel_sent,tunnel_request;
     struct ciuki_tls *tls;
 };
 struct ciuki_net { struct ciuki_dns *dns;struct ciuki_connection connections[8];const br_x509_trust_anchor *anchors;size_t anchor_count;bool polling;unsigned char input[CIUKI_HTTP_SLICE]; };
@@ -113,18 +115,20 @@ static bool request(struct ciuki_job *j,const struct ciuki_request *r)
         j->host[i]=(char)(c>='A'&&c<='Z'?c+32:c);
     }
     j->proxy_port=0;
-    if(!r->proxy_host || !*r->proxy_host || r->tls)j->proxy_host[0]=0;
-    if(r->proxy_host && *r->proxy_host && !r->tls) {
+    if(!r->proxy_host || !*r->proxy_host)j->proxy_host[0]=0;
+    if(r->proxy_host && *r->proxy_host) {
         size_t bytes=strlen(r->proxy_host);if(bytes>253 || !r->proxy_port || r->proxy_port>65535)return false;
         for(size_t i=0;i<bytes;i++) { unsigned c=(unsigned char)r->proxy_host[i];if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='-'||c=='.'))return false; }
         memmove(j->proxy_host,r->proxy_host,bytes+1);j->proxy_port=r->proxy_port;
     }
+    if(!ciuki_proxy_auth_valid(r->proxy_auth))return false;
+    if(r->proxy_auth)memmove(j->proxy_auth,r->proxy_auth,strlen(r->proxy_auth)+1);else j->proxy_auth[0]=0;
     j->port=r->port;j->secure=r->tls;j->post=r->post!=NULL;
     if(r->post && (!text(r->post,CIUKI_HTTP_POST,false)))return false;
     if(r->cookie && (strlen(r->cookie)>CIUKI_HTTP_LINE || strchr(r->cookie,'\r')||strchr(r->cookie,'\n')))return false;
     char prefix[128];const char *method=r->post?"POST ":r->head?"HEAD ":"GET ";
     if(!append(j,method,strlen(method)))return false;
-    if(j->proxy_port) {
+    if(j->proxy_port && !r->tls) {
         char authority[280];int n=snprintf(authority,sizeof(authority),"http://%s:%u",j->host,j->port);
         if(n<0 || (size_t)n>=sizeof(authority) || !append(j,authority,(size_t)n))return false;
     }
@@ -136,11 +140,14 @@ static bool request(struct ciuki_job *j,const struct ciuki_request *r)
     }
     const char *fixed="\r\nConnection: keep-alive\r\nAccept-Encoding: gzip, deflate\r\nUser-Agent: NetSurf/3.11 (CiukiOS)\r\n";
     if(!append(j,fixed,strlen(fixed)))return false;
+    if(j->proxy_port && !r->tls && j->proxy_auth[0]) {
+        if(!append(j,"Proxy-Authorization: ",21) || !append(j,j->proxy_auth,strlen(j->proxy_auth)) || !append(j,"\r\n",2))return false;
+    }
     unsigned fields=4;
     if(r->cookie && *r->cookie){if(!append(j,"Cookie: ",8)||!append(j,r->cookie,strlen(r->cookie))||!append(j,"\r\n",2))return false;fields++;}
     if(r->headers)for(unsigned i=0;r->headers[i];i++){
         size_t len=strnlen(r->headers[i],CIUKI_HTTP_LINE+1);
-        if(++fields>CIUKI_HTTP_FIELDS || len>CIUKI_HTTP_LINE || !ciuki_http_field(r->headers[i],len,true) ||
+        if(++fields>CIUKI_HTTP_FIELDS || len>CIUKI_HTTP_LINE || !strncasecmp(r->headers[i],"Proxy-Authorization:",20) || !ciuki_http_field(r->headers[i],len,true) ||
             !append(j,r->headers[i],len)||!append(j,"\r\n",2))return false;
     }
     if(r->post){
@@ -184,7 +191,7 @@ struct ciuki_job *ciuki_net_job(const struct ciuki_request *r,ciuki_http_callbac
     if(r->post)bytes+=strlen(r->post)+1;
     if(r->cookie)bytes+=strlen(r->cookie)+1;
     if(bytes>CIUKI_NET_PENDING_BUDGET-pending_bytes || !(j->snapshot=malloc(bytes))){ciuki_net_job_free(j);return NULL;}
-    j->pending_charge+=bytes;pending_bytes+=bytes;j->pending=*r;j->pending.host=j->host;j->pending.proxy_host=j->proxy_host;
+    j->pending_charge+=bytes;pending_bytes+=bytes;j->pending=*r;j->pending.host=j->host;j->pending.proxy_host=j->proxy_host;j->pending.proxy_auth=j->proxy_auth;
     const char **headers=j->snapshot;char *out=(char *)(headers+fields+1);
     for(size_t i=0;i<fields;i++)headers[i]=copy_text(&out,r->headers[i]);headers[fields]=NULL;
     j->pending.headers=headers;j->pending.target=copy_text(&out,r->target);
@@ -328,7 +335,7 @@ static void tls_failure(struct ciuki_job *j)
 static bool loopback_name(const char *host)
 { return !strcasecmp(host,"localhost") || !strcasecmp(host,"localhost."); }
 static bool origin(const struct ciuki_connection *c,const struct ciuki_job *j)
-{ return c->state && c->port==(j->proxy_port?j->proxy_port:j->port) && c->secure==j->secure && !strcmp(c->host,j->host) && !strcmp(c->proxy_host,j->proxy_host); }
+{ return c->state && c->port==(j->proxy_port?j->proxy_port:j->port) && c->secure==j->secure && !strcmp(c->host,j->host) && !strcmp(c->proxy_host,j->proxy_host) && !strcmp(c->proxy_auth,j->proxy_auth); }
 static void io_error(struct ciuki_job *j,int error)
 {
     j->io_errno=error;
@@ -346,6 +353,7 @@ static bool open_connection(struct ciuki_connection *c,uint32_t address)
     struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons((uint16_t)c->port);a.sin_addr.s_addr=address;
     int r=connect(c->fd,(struct sockaddr *)&a,sizeof(a));
     if(r<0 && errno!=EINPROGRESS && errno!=EALREADY && errno!=EINTR){io_error(j,errno);return false;}
+    c->tunnel_bytes=c->tunnel_sent=c->tunnel_request=0;
     c->state=CONNECTING;return true;
 }
 static bool resolve(struct ciuki_net *n,struct ciuki_connection *c)
@@ -386,7 +394,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     if(!idle)slot->state=RESOLVING;
     if(!j->started_ms){j->error="Monotonic system clock is unavailable.";return true;}
     if(idle){j->pooled=true;slot->state=TRANSFER;return true;}
-    slot->port=j->proxy_port?j->proxy_port:j->port;memcpy(slot->proxy_host,j->proxy_host,sizeof(slot->proxy_host));slot->secure=j->secure;memcpy(slot->host,j->host,sizeof(slot->host));
+    slot->port=j->proxy_port?j->proxy_port:j->port;memcpy(slot->proxy_host,j->proxy_host,sizeof(slot->proxy_host));memcpy(slot->proxy_auth,j->proxy_auth,sizeof(slot->proxy_auth));slot->secure=j->secure;memcpy(slot->host,j->host,sizeof(slot->host));
     /* Refuse invalid clock/entropy before DNS or any TLS network traffic. */
     if(j->secure){
         slot->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);
@@ -403,6 +411,25 @@ static void finish(struct ciuki_net *n,struct ciuki_connection *c)
     unsigned idle=0;for(unsigned i=0;i<8;i++)if(n->connections[i].state==IDLE)idle++;
     if(keep && idle<2){j->finished=true;j->connection=NULL;c->job=NULL;c->state=IDLE;c->idle_ms=now_ms();}
     else close_connection(n,c);
+}
+static void tunnel(struct ciuki_connection *c)
+{
+    struct ciuki_job *j=c->job;
+    if(!c->tunnel_request) {
+        int n=ciuki_proxy_connect_request(c->tunnel,sizeof(c->tunnel),j->host,j->port,j->proxy_auth);
+        if(n<0) { j->error="Invalid proxy CONNECT request.";return; }c->tunnel_request=(size_t)n;
+    }
+    if(c->tunnel_sent<c->tunnel_request) {
+        ssize_t n=send(c->fd,c->tunnel+c->tunnel_sent,c->tunnel_request-c->tunnel_sent,MSG_NOSIGNAL);
+        if(n<0) { if(errno!=EAGAIN && errno!=EINTR)io_error(j,errno);return; }
+        if(!n) { io_error(j,ECONNRESET);return; }c->tunnel_sent+=(size_t)n;return;
+    }
+    ssize_t n=recv(c->fd,c->tunnel+c->tunnel_bytes,sizeof(c->tunnel)-c->tunnel_bytes,MSG_DONTWAIT);
+    if(n<0) { if(errno!=EAGAIN && errno!=EINTR)io_error(j,errno);return; }
+    if(!n) { io_error(j,ECONNRESET);return; }c->tunnel_bytes+=(size_t)n;
+    int result=ciuki_proxy_connect_response(c->tunnel,c->tunnel_bytes);
+    if(result<0)j->error=result==-407?"Proxy authentication failed or credentials are required.":"The proxy refused or malformed the CONNECT tunnel.";
+    else if(result>0) { memset(c->tunnel,0,sizeof(c->tunnel));c->state=TRANSFER;ciuki_net_record(j,CIUKI_FETCH_TLS); }
 }
 static void transfer(struct ciuki_connection *c,unsigned char *buffer)
 {
@@ -485,9 +512,10 @@ void ciuki_net_poll(struct ciuki_net *n)
             else if(r>0){int error=0;socklen_t bytes=sizeof(error);
                 if(getsockopt(c->fd,SOL_SOCKET,SO_ERROR,&error,&bytes))io_error(j,errno);
                 else if(error)io_error(j,error);
-                else {c->state=TRANSFER;if(c->tls)ciuki_net_record(j,CIUKI_FETCH_TLS);}
+                else {c->state=j->secure && j->proxy_port?TUNNEL:TRANSFER;if(c->tls && c->state==TRANSFER)ciuki_net_record(j,CIUKI_FETCH_TLS);}
             }
         }
+        if(!j->error && !j->cancelled && c->state==TUNNEL)tunnel(c);
         if(!j->error && !j->cancelled && c->state==TRANSFER)transfer(c,n->input);
         /* A stale idle socket can be retried once, only for idempotent methods
          * before receiving any response byte. Never replay a POST. */
@@ -529,6 +557,7 @@ unsigned ciuki_net_fds(struct ciuki_net *n,struct pollfd fds[8])
         struct ciuki_connection *c=&n->connections[i];if(c->fd<0)continue;
         short events=POLLIN;
         if(c->state==CONNECTING)events=POLLOUT;
+        else if(c->state==TUNNEL) { if(!c->tunnel_request || c->tunnel_sent<c->tunnel_request)events|=POLLOUT; }
         else if(c->tls){if(ciuki_tls_state(c->tls)&BR_SSL_SENDREC)events|=POLLOUT;}
         else if(c->job && c->job->sent<c->job->request_bytes)events|=POLLOUT;
         fds[count++]=(struct pollfd){c->fd,events,0};

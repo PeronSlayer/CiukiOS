@@ -3,6 +3,10 @@
 #include "dns.h"
 #include <arpa/inet.h>
 #include <netdb.h>
+#ifndef CIUKI_HOST
+#include <ciuki/net.h>
+#include <time.h>
+#endif
 #include <pthread.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -23,12 +27,26 @@ static void *worker(void *arg)
         if(!s){pthread_cond_wait(&d->wake,&d->lock);continue;}
         s->running=true;char name[254];memcpy(name,s->name,sizeof(name));
         pthread_mutex_unlock(&d->lock);
+#ifdef CIUKI_HOST
         struct addrinfo hints={0},*answer=NULL;hints.ai_family=AF_INET;hints.ai_socktype=SOCK_STREAM;
         int r=getaddrinfo(name,NULL,&hints,&answer);
         int error=r==EAI_SYSTEM?errno:r==EAI_MEMORY?ENOMEM:r==EAI_AGAIN?ETIMEDOUT:r?EHOSTUNREACH:0;
         uint32_t address=answer?((struct sockaddr_in *)answer->ai_addr)->sin_addr.s_addr:0;
         if(!r && !answer)error=EHOSTUNREACH;
         freeaddrinfo(answer);
+#else
+        struct ciuki_resolve_query q;
+        int error=0;uint32_t address=0;
+        if(ciuki_resolve4_begin(name,&q))error=errno;
+        while(!error && q.status==4) {
+            pthread_mutex_lock(&d->lock);bool cancel=s->cancelled || d->stop;pthread_mutex_unlock(&d->lock);
+            if(cancel) { q.action=CIUKI_RESOLVE_CANCEL;(void)ciuki_resolve4_query(&q);error=ECANCELED;break; }
+            q.action=CIUKI_RESOLVE_POLL;
+            if(ciuki_resolve4_query(&q)) { error=errno;break; }
+            if(q.status==4) { struct timespec delay={.tv_nsec=10000000};nanosleep(&delay,NULL); }
+        }
+        if(!error) { error=q.status?EHOSTUNREACH:0;address=q.address; }
+#endif
         pthread_mutex_lock(&d->lock);
         if(s->cancelled)memset(s,0,sizeof(*s));
         else{s->address=address;s->error=error;s->done=true;if(d->notify)d->notify(d->notify_ctx);}

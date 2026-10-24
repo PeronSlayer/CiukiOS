@@ -12,13 +12,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "sdk/netsurf/port/docmem.h"
-#ifdef __CIUKIOS__
+#if defined(__CIUKIOS__) && !defined(CIUKI_HOST)
 #include <ciuki/proc.h>
 #endif
 static size_t ciuki_docmem_query(void)
 {
     uint64_t bytes=CIUKI_DOC_MODEL_FREE_BYTES;
-#ifdef __CIUKIOS__
+#if defined(__CIUKIOS__) && !defined(CIUKI_HOST)
     struct ciuki_proc_system sys;
     _Static_assert(sizeof(sys)>=CIUKI_PROC_LIST_MIN,"call 70 minimum buffer");
     if (ciuki_proc_list(&sys,sizeof(sys))>=0 && sys.version==CIUKI_PROC_VERSION &&
