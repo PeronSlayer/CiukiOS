@@ -779,6 +779,33 @@ static void row_move(unsigned m)
     for (unsigned k=0;k<5;k++) { desk_move(&d,v,d.clients[v].frame.x+23,d.clients[v].frame.y); step("tall window moved across the taskbar"); }
     wm_end();
 }
+/* fx-26: a drag while other things repaint (a DOS window playing, the
+ * dragged program's own update, the clock, a notification sliding in): the
+ * window moves by BitBlt with the damaged parts cut out and repainted
+ * (Windows 98 SetWindowPos without SWP_NOCOPYBITS), never a software
+ * recomposition of both outer boxes per frame; every frame still equals a
+ * full redraw. */
+static void row_move_damaged(unsigned m)
+{
+    row_name="move with other damage"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,60,60), *b=app_open("ciuknote",240,160,420,300); step("two windows");
+    struct desk_box f=d.clients[a->slot].frame; pointer_to(f.x+60,f.y+8); press(CIUKI_BUTTON_LEFT,1);
+    uint64_t copies=d.stats.accel_copies, copied=d.stats.copy_bytes;
+    for (unsigned k=0;k<12;k++) {
+        app_paint(b,10,10,60,20,k);                       /* another window repaints every frame */
+        if (k%4==1) app_paint(a,5,30,40,10,k);             /* the dragged program updates itself */
+        if (k==5) { uint64_t previous=d.realtime_second; d.realtime_second++; desk_shell_clock_damage(&d,previous); }
+        if (k==7) desk_shell_notify(&d,"Volume","Volume: 40%",DU_DLG_ICON_INFO,SH_NOTIFY_VOLUME);
+        pointer_to(d.mouse_x+(k<6 ? 13 : -9),d.mouse_y+7);
+        if (k==3) pointer_to(d.mouse_x+5,d.mouse_y+2);    /* two motions in one frame */
+        step("dragged while other windows paint");
+    }
+    press(CIUKI_BUTTON_LEFT,0); step("drop");
+    /* The move was copied (RAM; engine presenters also in scanout). */
+    assert(d.stats.copy_bytes>copied);
+    if (m==WM_ENGINE || m==WM_CACHE) assert(d.stats.accel_copies>copies);
+    wm_end();
+}
 static void row_show_hide(unsigned m)
 {
     /* ShowWindow: SW_HIDE exposes, SW_SHOW/activation paints, also when the
@@ -1204,10 +1231,12 @@ static void row_caption_icon(unsigned m)
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
-    row_taskbar_menu,row_arrange,row_minimize_all,row_win_keys,row_caption_icon,row_startup};
+    row_taskbar_menu,row_arrange,row_minimize_all,row_win_keys,row_caption_icon,row_startup,
+    row_move_damaged};
 static void wm_rows(unsigned m)
 {
-    /* WM_ROW=<index> runs one row (the per-row evidence against older code). */
+    /* WM_ROW=<index> runs one row (the per-row evidence against older code).
+     * Main keeps indexes 0..28; fx-26 move-with-other-damage is index 29. */
     const char *one=getenv("WM_ROW");
     for (unsigned k=0;k<sizeof(rows)/sizeof(*rows);k++) if (!one || (unsigned)atoi(one)==k) rows[k](m);
 }

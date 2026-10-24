@@ -1,4 +1,5 @@
-"""f2-95 T23 CPU model of the desktop (music player idle, window drag).
+"""f2-95 T23 CPU model of the desktop (music player idle, window drag);
+fx-26 timed drags and window operations (frame cost on the virtual clock).
 
 The production compositor runs over a fake display/2D engine in virtual
 time; operations are counted from the production code and charged at the
@@ -35,6 +36,11 @@ class T23CpuModelTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS F2-95 T23 CPU model", result.stdout)
         self.assertIn("PASS F2-98b T23 budgets", result.stdout)
+        # fx-26: drags keep the frame rate while other windows draw; no lost
+        # slots after a late frame start; window operations measured.
+        self.assertIn("PASS fx-26 T23 window drag keeps the frame rate", result.stdout)
+        self.assertIn("PASS fx-26 T23 timed drags", result.stdout)
+        self.assertIn("PASS fx-26 T23 window operations", result.stdout)
         print(result.stdout, end="")
 
 

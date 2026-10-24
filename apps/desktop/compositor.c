@@ -2226,7 +2226,17 @@ int desk_redraw(struct desktop *d)
      * slots and wake-up lateness still preserve the absolute next-slot phase. */
     uint64_t budget=frame_begin+DESK_FRAME_NS;
     if (end>budget) { s->overruns=1;s->dropped=(end-budget)/DESK_FRAME_NS+1; }
-    if (end>=deadline) deadline+=((end-deadline)/DESK_FRAME_NS+1)*DESK_FRAME_NS;
+    /* fx-26: a frame that ends after the next boundary lets the next frame
+     * start at once instead of waiting for the boundary after (there is no
+     * vertical retrace to lock to: VBE reports no refresh, DESK_FRAME_NS).
+     * The lost slot turned every frame that started late in its slot
+     * (scheduler wake-up lateness, the first motion after an idle slot) and
+     * ran past the boundary into a 33 ms gap, halving a drag on the T23
+     * (f441c5bd: 25-47 frames a second with the CPU 40-50 % idle). Windows
+     * 98 draws as soon as the window moved. The next frame still starts at
+     * least one slot after this one started (the rate cap), never later than
+     * the old rule; the phase then follows that start. */
+    if (end>deadline) deadline=end>budget ? end : budget;
     d->stats.overruns+=s->overruns; d->stats.dropped+=s->dropped;
     s->frame_p95_ns=d->stats.frame_p95_ns; s->frame_max_ns=d->stats.frame_max_ns;
     d->next_frame_ns=deadline;
