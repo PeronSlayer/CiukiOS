@@ -34,7 +34,9 @@ ACCESSORIES = {
     "scandisk": ["scandisk_main.c", "scandisk_view.c", "../sysrecovery/scanreport.c"],
     "msconfig": ["msconfig_main.c", "msconfig_view.c", "msconfig_model.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/bootcfg.c", "../../src/kernel/lib/sha256.c"],
     # G28: WordPad (RTF editor); links libfont for the Liberation faces and shares CiukNote's file helpers.
+    # G28b adds the Word and Write importers, the picture codec (stb) and the shared printing code.
     "wordpad": ["../wordpad/main.c", "../wordpad/app.c", "../wordpad/rich.c", "../wordpad/rtf.c", "../wordpad/layout.c",
+                "../wordpad/ole.c", "../wordpad/msword.c", "../wordpad/write.c", "../wordpad/image.c",
                 "../wordpad/fonts.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c", "../paint/xform.c", "wallpaper.c", "../desktop/settings.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c", "wallpaper.c", "../desktop/settings.c"],
@@ -216,7 +218,7 @@ def build():
     sources["printspool"] = ["../printers/spool.c", "../libprint/print.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
-    for name in ("ciuknote", "paint", "viewer"):
+    for name in ("ciuknote", "paint", "viewer", "wordpad"):
         sources[name] += ["../libprint/print.c", "../libprint/render.c", "../libprint/dialog.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, *(["-DDP_NATIVE_VFS"] if name == "control" else []), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "sdk/win32/include"),

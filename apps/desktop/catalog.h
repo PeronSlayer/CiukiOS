@@ -38,8 +38,8 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"serial", "Serial Terminal", "network-wired", 0, ""},   /* G27: Accessories > Serial Terminal */
     /* Viewer is the default; keep Paint available in the shell's Open With. */
     {"paint", "CiukPaint", "applications-graphics", 1, "bmp|png"},
-    /* G28: WordPad opens Rich Text Format (text files stay with CiukNote). */
-    {"wordpad", "WordPad", "x-office-document", 1, "rtf"},
+    /* G28: WordPad opens Rich Text Format, and since G28b Word 6/95/97 (.doc) and Write (.wri) documents (text files stay with CiukNote). */
+    {"wordpad", "WordPad", "x-office-document", 1, "rtf|doc|wri"},
 };
 #define DESK_CATALOG_COUNT (sizeof(desk_catalog) / sizeof(desk_catalog[0]))
 /* Native applications with their own desktop window (f6-19). The program

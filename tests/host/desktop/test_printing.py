@@ -20,5 +20,19 @@ class PrintingDialogs(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=out) as scratch:
             subprocess.run([str(binary), str(Path(scratch) / "spool")], check=True)
 
+    def test_formatted_documents(self):
+        """G28b: cp_submit_doc with PostScript, PCL and text-only printers."""
+        out = ROOT / "build/host/printing-doc"
+        out.mkdir(parents=True, exist_ok=True)
+        binary = out / "doc"
+        sources = ["apps/libprint/print.c", "apps/libprint/render.c", "tests/host/desktop/printing_doc_test.c"]
+        subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-macro-redefined",
+                        "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-pthread",
+                        "-I", str(ROOT / "src/kernel/include"), *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True)
+        with tempfile.TemporaryDirectory(dir=out) as scratch:
+            result = subprocess.run([str(binary), str(Path(scratch) / "spool")], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS printing doc", result.stdout)
+
 if __name__ == "__main__":
     unittest.main()

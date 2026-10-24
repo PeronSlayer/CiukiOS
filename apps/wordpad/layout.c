@@ -25,7 +25,7 @@ void wp_layout_free(struct wp_layout *l) { free(l->lines); free(l->pfirst); free
 /* ---- atoms: words, runs of spaces, tabs and soft breaks within one run ----- */
 
 struct cursor { const struct wp_doc *d; size_t pos; unsigned ri; size_t roff; };
-enum { A_WORD, A_SPACE, A_TAB, A_BREAK };
+enum { A_WORD, A_SPACE, A_TAB, A_BREAK, A_PIC };
 struct atom { size_t start, end; int kind; struct wp_cattr a; };
 
 static void seek(struct cursor *c, size_t pos)
@@ -53,10 +53,12 @@ static int next_atom(struct cursor *c, size_t limit, struct atom *a)
     size_t max = limit - c->pos < run_left ? limit - c->pos : run_left, n = 1;
     char ch = t[c->pos];
     a->start = c->pos; a->a = cur_attr(c);
-    if (ch == '\t') a->kind = A_TAB;
+    if (a->a.pic && max >= WP_PIC_MARK_LEN && !memcmp(t + c->pos, WP_PIC_MARK, WP_PIC_MARK_LEN)) { a->kind = A_PIC; n = WP_PIC_MARK_LEN; }
+    else if (ch == '\t') a->kind = A_TAB;
     else if (ch == WP_SOFT_BREAK) a->kind = A_BREAK;
     else if (ch == ' ') { a->kind = A_SPACE; while (n < max && t[c->pos + n] == ' ') n++; }
-    else { a->kind = A_WORD; while (n < max && t[c->pos + n] != ' ' && t[c->pos + n] != '\t' && t[c->pos + n] != WP_SOFT_BREAK) n++; }
+    else { a->kind = A_WORD; while (n < max && t[c->pos + n] != ' ' && t[c->pos + n] != '\t' && t[c->pos + n] != WP_SOFT_BREAK &&
+                                   !(c->d->runs[c->ri].a.pic && !memcmp(t + c->pos + n, WP_PIC_MARK, WP_PIC_MARK_LEN))) n++; }
     a->end = c->pos + n;
     advance(c, n);
     return 1;
@@ -78,6 +80,15 @@ static void vmet(const struct wp_text_ops *o, const struct wp_doc *d, const stru
 {
     unsigned fam = a->font < d->nfonts ? d->fonts[a->font].family : WP_SANS;
     o->vmetrics(o->ctx, fam, a->flags, a->size, as, ds);
+}
+void wp_layout_pic_size(const struct wp_doc *d, const struct wp_cattr *a, int *w, int *h)
+{
+    int tw, th;
+    if (!a->pic || a->pic > d->npics) { *w = *h = 16; return; }
+    wp_pic_size(d->pics[a->pic - 1], &tw, &th);
+    *w = wp_twips_px(tw); *h = wp_twips_px(th);
+    if (*w < 1) *w = 1;
+    if (*h < 1) *h = 1;
 }
 /* Next tab stop after x (1/64 px) for the paragraph: custom stops first, then every half inch. */
 static int64_t tab_stop(const struct wp_pattr *p, int64_t x)
@@ -108,12 +119,15 @@ struct para_state {
     unsigned para; int64_t limit, indent_first, indent_rest;
     size_t ls; int line_no; int64_t x, last, origin; int content, la, ld;
     int y;
+    int64_t align_w;           /* width the alignment refers to (the window, or the page in no-wrap mode) */
+    unsigned nsp, gaps;        /* space characters so far in the line, and those before the last content */
 };
 static int64_t line_origin(const struct para_state *s)
 { return s->line_no == 0 ? s->indent_first : s->indent_rest; }
 static void start_line(struct para_state *s, size_t at)
 {
     s->ls = at; s->origin = line_origin(s); s->x = s->origin; s->last = s->origin; s->content = 0; s->la = s->ld = 0;
+    s->nsp = s->gaps = 0;
 }
 static int flush_line(struct para_state *s, size_t end, unsigned flags, const struct wp_cattr *mark_attr)
 {
@@ -121,13 +135,17 @@ static int flush_line(struct para_state *s, size_t end, unsigned flags, const st
     int la = s->la, ld = s->ld;
     if (!la && !ld) vmet(s->o, s->d, mark_attr, &la, &ld);
     if (la + ld < 1) { la = 1; ld = 0; }
-    int64_t width = s->last - s->origin, avail = s->limit - s->origin;
+    int64_t width = s->last - s->origin, avail = s->align_w - s->origin;
     if (width < 0) width = 0;
     if (avail < 0) avail = 0;
     int shift = 0;
-    if (width < avail) shift = s->pa->align == WP_CENTER ? px_of((avail - width) / 2) : s->pa->align == WP_RIGHT ? px_of(avail - width) : 0;
+    int64_t extra = 0; unsigned gaps = 0;
+    if (width < avail) {
+        shift = s->pa->align == WP_CENTER ? px_of((avail - width) / 2) : s->pa->align == WP_RIGHT ? px_of(avail - width) : 0;
+        if (s->pa->align == WP_JUSTIFY && (flags & WP_LINE_WRAPPED) && s->gaps) { extra = avail - width; gaps = s->gaps; width = avail; }
+    }
     ln = (struct wp_line){s->ls, end, s->y, la + ld, la, px_of(s->origin), shift, px_of(width), s->para,
-                          flags | (s->line_no == 0 ? WP_LINE_FIRST : 0) | (s->line_no == 0 && s->pa->bullet ? WP_LINE_BULLET : 0)};
+                          flags | (s->line_no == 0 ? WP_LINE_FIRST : 0) | (s->line_no == 0 && s->pa->bullet ? WP_LINE_BULLET : 0), extra, gaps};
     int e = add_line(s->l, &ln);
     s->y += la + ld; s->line_no++;
     return e;
@@ -165,12 +183,27 @@ static int layout_para(struct para_state *s, struct cursor *c, size_t ps, size_t
         if (a.kind == A_TAB) {
             int64_t stop = tab_stop(pa, s->x);
             note(s, &a.a);
-            s->x = stop; s->last = stop; s->content = 1;
+            s->x = stop; s->last = stop; s->content = 1; s->gaps = s->nsp;
             continue;
         }
         if (a.kind == A_SPACE) {
             s->x += measure(s->o, s->d, &a.a, a.start, a.end);
+            s->nsp += (unsigned)(a.end - a.start);
             note(s, &a.a);
+            continue;
+        }
+        if (a.kind == A_PIC) {   /* a picture sits on the baseline and wraps like a word */
+            int pw, ph; wp_layout_pic_size(s->d, &a.a, &pw, &ph);
+            int64_t w64 = (int64_t)pw * 64;
+            if (s->x + w64 > s->limit && s->content) {
+                err = flush_line(s, a.start, WP_LINE_WRAPPED, &a.a);
+                if (err) break;
+                start_line(s, a.start);
+            }
+            int as, ds; vmet(s->o, s->d, &a.a, &as, &ds);
+            s->x += w64; s->last = s->x; s->content = 1; s->gaps = s->nsp;
+            if ((ph > as ? ph : as) > s->la) s->la = ph > as ? ph : as;
+            if (ds > s->ld) s->ld = ds;
             continue;
         }
         /* a word: every adjacent word atom (run changes inside it) */
@@ -193,7 +226,7 @@ static int layout_para(struct para_state *s, struct cursor *c, size_t ps, size_t
             start_line(s, grp[0].start);
         }
         if (s->x + gw <= s->limit || !gn) {
-            s->x += gw; s->last = s->x; s->content = 1;
+            s->x += gw; s->last = s->x; s->content = 1; s->gaps = s->nsp;
             for (unsigned i = 0; i < gn; i++) note(s, &grp[i].a);
             continue;
         }
@@ -209,7 +242,7 @@ static int layout_para(struct para_state *s, struct cursor *c, size_t ps, size_t
                     if (err) break;
                     start_line(s, at);
                 }
-                s->x += cw; s->last = s->x; s->content = 1; note(s, &grp[i].a);
+                s->x += cw; s->last = s->x; s->content = 1; s->gaps = s->nsp; note(s, &grp[i].a);
                 at = nx;
             }
         }
@@ -222,7 +255,8 @@ static int layout_para(struct para_state *s, struct cursor *c, size_t ps, size_t
 int wp_layout_build(struct wp_layout *l, const struct wp_doc *d, const struct wp_text_ops *o, int width, unsigned first_para)
 {
     if (width < 8) width = 8;
-    if (width != l->width || first_para > l->pcount) first_para = 0;
+    if (width != l->width || first_para > l->pcount || l->nowrap != l->built_nowrap) first_para = 0;
+    l->built_nowrap = l->nowrap;
     if (first_para >= d->npara) first_para = d->npara ? d->npara - 1 : 0;
     if (l->pcap < d->npara + 1) {
         unsigned nc = l->pcap ? l->pcap : 64;
@@ -250,6 +284,8 @@ int wp_layout_build(struct wp_layout *l, const struct wp_doc *d, const struct wp
         s.pa = &d->paras[p].a; s.para = p;
         s.limit = (int64_t)width * 64 - px64(s.pa->right);
         if (s.limit < 64) s.limit = 64;
+        s.align_w = s.limit;
+        if (l->nowrap) s.limit = (int64_t)1 << 40;   /* lines end only at paragraph ends and soft breaks */
         int e = layout_para(&s, &c, ps, pe);
         if (e) { l->pcount = p; return e; }
         if (p + 1 < d->npara) advance(&c, 1);
@@ -257,6 +293,11 @@ int wp_layout_build(struct wp_layout *l, const struct wp_doc *d, const struct wp
     }
     l->pcount = d->npara;
     l->height = s.y;
+    l->content_w = 0;
+    for (unsigned i = 0; i < l->n; i++) {
+        int w = l->lines[i].shift + l->lines[i].indent + l->lines[i].width;
+        if (w > l->content_w) l->content_w = w;
+    }
     return 0;
 }
 
@@ -299,6 +340,7 @@ void wp_layout_pieces(const struct wp_layout *l, const struct wp_doc *d, const s
     int64_t left = px64(pa->left), first = pa->bullet ? left : left + px64(pa->first);
     if (first < 0) first = 0;
     int64_t x = (ln->flags & WP_LINE_FIRST) ? first : left;
+    unsigned spaces = 0;   /* space characters before this atom, for a justified line */
     struct atom a;
     while (next_atom(&c, ln->end, &a)) {
         struct wp_piece p = {a.start, a.end, 0, 0, a.a, WP_PIECE_TEXT};
@@ -307,8 +349,22 @@ void wp_layout_pieces(const struct wp_layout *l, const struct wp_doc *d, const s
             int64_t stop = tab_stop(pa, x);
             p.kind = WP_PIECE_TAB; p.x = ln->shift + px_of(x); p.w = px_of(stop) - px_of(x);
             x = stop;
+        } else if (a.kind == A_PIC) {
+            int pw, ph; wp_layout_pic_size(d, &a.a, &pw, &ph);
+            p.kind = WP_PIECE_PIC; p.x = ln->shift + px_of(x); p.w = pw;
+            x += (int64_t)pw * 64;
         } else {
             int64_t w = measure(o, d, &a.a, a.start, a.end);
+            if (a.kind == A_SPACE) {
+                unsigned cnt = (unsigned)(a.end - a.start);
+                if (ln->gaps && spaces < ln->gaps) {   /* the first `gaps` spaces share the extra width, remainders to the earliest */
+                    unsigned in = ln->gaps - spaces < cnt ? ln->gaps - spaces : cnt;
+                    int64_t base = ln->extra / ln->gaps, rem = ln->extra % ln->gaps, got = base * in;
+                    if (rem > (int64_t)spaces) got += rem - spaces < in ? rem - spaces : in;
+                    w += got;
+                }
+                spaces += cnt;
+            }
             p.x = ln->shift + px_of(x); p.w = px_of(x + w) - px_of(x);
             x += w;
         }
@@ -322,7 +378,7 @@ static int caret_piece(void *ctx, const struct wp_piece *p)
     struct caret_walk *w = ctx;
     if (p->start > w->pos) return 1;
     w->end_x = p->x + p->w;
-    if (p->kind == WP_PIECE_TAB) {
+    if (p->kind != WP_PIECE_TEXT) {   /* a tab or a picture: the caret is at either edge */
         if (w->pos == p->start) { w->x = p->x; w->found = 1; return 1; }
         w->x = p->x + p->w; w->found = 1;
         return 0;
@@ -351,7 +407,7 @@ static int hit_piece(void *ctx, const struct wp_piece *p)
     struct hit_walk *w = ctx;
     if (w->x < p->x) { w->pos = p->start; w->done = 1; return 1; }
     if (w->x >= p->x + p->w) { w->pos = p->end; return 0; }
-    if (p->kind == WP_PIECE_TAB) { w->pos = w->x - p->x < p->w / 2 ? p->start : p->end; w->done = 1; return 1; }
+    if (p->kind != WP_PIECE_TEXT) { w->pos = w->x - p->x < p->w / 2 ? p->start : p->end; w->done = 1; return 1; }
     size_t at = p->start, best = p->start;
     int prev = 0;
     while (at < p->end) {
@@ -388,6 +444,7 @@ int wp_paginate(struct wp_pages *pages, struct wp_layout *l, const struct wp_doc
     int width = wp_twips_px(pw - s->left - s->right), height = wp_twips_px(ph - s->top - s->bottom);
     if (width < 8) width = 8;
     if (height < 16) height = 16;
+    l->nowrap = 0;
     int r = wp_layout_build(l, d, o, width, 0);
     if (r) return r;
     unsigned cap = 8, count = 1;

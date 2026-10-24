@@ -9,6 +9,7 @@ int setenv(const char *, const char *, int);
 static const char *const program_topics[] = {
     "files", "ciuknote", "ciukide", "paint", "tasks", "control", "calc", "clock", "viewer", "mixer", "charmap", "music",
     "regedit", "hwreport", "terminal", "gfxdemo", "dosbox", "lua", "netsurf", "demo",
+    "wordpad", "wordpad-formatting", "wordpad-ruler", "wordpad-pictures", "wordpad-files", "wordpad-printing",
     "welcome", "start", "desktop", "keys", "help", "disk", "dos", "sound", "troubleshooting", "about", "credits" };
 static void topics(void)
 {
