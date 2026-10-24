@@ -608,6 +608,23 @@ static int setup_row(const cvga_state *v, unsigned y, row_setup *r)
     return 1;
 }
 
+unsigned cvga_text_chunk(const cvga_state *v, unsigned row, unsigned column,
+                         uint8_t *characters, unsigned capacity, unsigned *rows)
+{
+    cvga_geometry g;
+    if (!cvga_get_geometry(v,&g) || !g.text || !g.char_height || !g.char_width || g.blank) return 0;
+    unsigned height=g.height*g.scan_repeat;
+    unsigned cell_height=g.char_height*(1u<<((v->crtc[9]>>7)&1));
+    unsigned count=height/cell_height, columns=g.width/g.char_width;
+    if (rows) *rows=count;
+    if (row>=count || column>=columns) return 0;
+    row_setup r;
+    if (!setup_row(v,row*cell_height/g.scan_repeat,&r)) return 0;
+    for (unsigned i=0;i<capacity;i++) characters[i]=column+i<columns ?
+        v->plane[0][scan_address(v,(r.base+column+i)&65535u)] : 0;
+    return columns;
+}
+
 unsigned cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *dest,
                           unsigned capacity, unsigned frame_flags)
 {

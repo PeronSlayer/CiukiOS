@@ -2427,6 +2427,22 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_TEXT 18u /* owner-only snapshot of visible BIOS text cells */
 #define CIUKI_DOSVM_MARK 19u /* focused=1 pause for Mark, 0 resume */
 #define CIUKI_DOSVM_TEXT_MAX 16000u
+/* G17 owner-bound visible OEM text and window execution policy. No pointers. */
+#define CIUKI_DOSVM_TEXT_CHUNK 20u
+#define CIUKI_DOSVM_POLICY 21u
+#define CIUKI_DOSVM_TEXT_BYTES 48u
+struct ciuki_dosvm_text_chunk {
+    uint32_t row;
+    uint32_t column;
+    uint32_t columns;
+    uint32_t rows;
+    uint8_t characters[CIUKI_DOSVM_TEXT_BYTES];
+};
+struct ciuki_dosvm_policy {
+    uint32_t marking; /* 0/1: pause at the existing guest checkpoint */
+    uint32_t idle_sensitivity; /* 0..100: empty BIOS keyboard poll detection */
+    uint32_t reserved[8];
+};
 #define CIUKI_DOSVM_IMAGE_UNCHECKED 0u /* not verified yet: CREATE verifies */
 #define CIUKI_DOSVM_IMAGE_VERIFYING 1u
 #define CIUKI_DOSVM_IMAGE_VERIFIED 2u
@@ -2456,6 +2472,7 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_SHELL_READY 32u /* STATUS: shell blocked for input, guest key queues empty */
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
 #define CIUKI_DOSVM_SAVE_FULL 64u /* STATUS.changed: game data quota/disk space exhausted */
+#define CIUKI_DOSVM_PROGRAM_RETURNED 128u /* armed EXEC returned to its shell */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
@@ -2484,6 +2501,7 @@ struct ciuki_dosvm_command {
        union {
         struct ciuki_input_event event; /* 72: INPUT */
         struct ciuki_dosvm_text text; /* TEXT input buffer/capacity; output OEM cells */
+        struct ciuki_dosvm_policy policy;
         struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
         struct { uint32_t bands[2], redraw, flags, reserved[6]; } presentation; /* bands output; redraw input 0/1 */
         struct { uint32_t timeout_ms, frame_ms, events, reserved[7]; } wait; /* WAIT_PRESENT */
@@ -2495,6 +2513,7 @@ struct ciuki_dosvm_command {
        * Legacy callers (flags=0) retain the original damage rectangle.
        * An older kernel rejects flags with EINVAL; retry with flags=0. */
       struct { uint32_t bits[15], reserved; } scanlines;
+      struct ciuki_dosvm_text_chunk text_chunk;
     };
 };
 

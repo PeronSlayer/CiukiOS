@@ -34,6 +34,17 @@ void dosvm_mouse_event(struct dosvm *v, int32_t dx, int32_t dy, unsigned buttons
     m->buttons = buttons & 7;
     m->pending_mask |= event & m->mask;
 }
+/* CuteMouse Wheel API 1.0: polling and callback counters are independent. */
+void dosvm_mouse_wheel(struct dosvm *v, int32_t delta)
+{
+    struct dosvm_mouse *m=&v->mouse;
+    m->wheel=(int16_t)mouse_clamp((int64_t)m->wheel+delta,-32768,32767);
+    m->callback_wheel=(int16_t)mouse_clamp((int64_t)m->callback_wheel+delta,-128,127);
+    m->wheel_x=m->x&~7u; m->wheel_y=m->y&~7u;
+    if (delta) m->pending_mask|=m->mask&0x80;
+}
+static uint16_t wheel_byte(int value)
+{ return (uint16_t)((uint16_t)(uint8_t)mouse_clamp(value,-128,127)<<8); }
 int dosvm_mouse_bios(struct dosvm *v, struct v86_frame *f)
 {
     struct dosvm_mouse *m = &v->mouse;
@@ -46,13 +57,18 @@ int dosvm_mouse_bios(struct dosvm *v, struct v86_frame *f)
     case 1: if (m->visible < 0) m->visible++; return 0;
     case 2: if (m->visible > -32768) m->visible--; return 0;
     case 3:
-        mouse_low(&f->tf.ebx, m->buttons); mouse_low(&f->tf.ecx, m->x & ~7u); mouse_low(&f->tf.edx, m->y & ~7u); return 0;
+        mouse_low(&f->tf.ebx, m->buttons|wheel_byte(m->wheel)); m->wheel=0;
+        mouse_low(&f->tf.ecx, m->x & ~7u); mouse_low(&f->tf.edx, m->y & ~7u); return 0;
     case 4:
         m->x = mouse_clamp((uint16_t)f->tf.ecx & ~7u, m->min_x, m->max_x);
         m->y = mouse_clamp((uint16_t)f->tf.edx & ~7u, m->min_y, m->max_y); return 0;
     case 5: case 6: {
         unsigned button = (uint16_t)f->tf.ebx;
-        mouse_low(&f->tf.eax, m->buttons);
+        mouse_low(&f->tf.eax, m->buttons|wheel_byte(m->wheel));
+        if (button==0xFFFF) {
+            mouse_low(&f->tf.ebx,(uint16_t)m->wheel); m->wheel=0;
+            mouse_low(&f->tf.ecx,m->wheel_x); mouse_low(&f->tf.edx,m->wheel_y); return 0;
+        }
         if (button >= 3) { mouse_low(&f->tf.ebx, 0); return 0; }
         uint16_t *count = fn == 5 ? m->pressed : m->released;
         mouse_low(&f->tf.ebx, count[button]); count[button] = 0;
@@ -75,13 +91,15 @@ int dosvm_mouse_bios(struct dosvm *v, struct v86_frame *f)
         m->motion_x = m->motion_y = 0; return 0;
     case 0xC: case 0x14: {
         uint16_t mask = f->tf.ecx, cs = f->es, ip = f->tf.edx;
-        if ((mask & ~0x7Fu) || (mask && (f->es > 0xFFFF || !dosvm_range(v, ((uint32_t)cs << 4) + ip, 1, false)))) return -V86_EPERM;
+        if ((mask & ~0xFFu) || (mask && (f->es > 0xFFFF || !dosvm_range(v, ((uint32_t)cs << 4) + ip, 1, false)))) return -V86_EPERM;
         if (fn == 0x14) { mouse_low(&f->tf.ecx, m->mask); mouse_low(&f->tf.edx, m->callback_ip); f->es = m->callback_cs; }
-        m->mask = mask; m->callback_cs = cs; m->callback_ip = ip; m->pending_mask = 0; return 0;
+        m->mask = mask; m->callback_cs = cs; m->callback_ip = ip; m->pending_mask = 0; m->callback_wheel=0; return 0;
     }
     case 0xF:
         if (!(uint16_t)f->tf.ecx || !(uint16_t)f->tf.edx) return -V86_EPERM;
         m->ratio_x = f->tf.ecx; m->ratio_y = f->tf.edx; m->fraction_x = m->fraction_y = 0; return 0;
+    case 0x11:
+        mouse_low(&f->tf.eax,0x574D); mouse_low(&f->tf.ebx,0); mouse_low(&f->tf.ecx,1); return 0;
     default:
         /* No version/capability claim for the later Microsoft extensions. */
         f->tf.eflags |= V86_CF; return 0;
@@ -98,7 +116,8 @@ int dosvm_mouse_dispatch(struct dosvm *v, struct v86_frame *f)
     if (dosvm_write(v, (f->tf.user_ss << 4) + sp, ret, 4)) return -EFAULT;
     m->saved = *f; m->saved_vif = v->monitor.vif; m->active = true;
     mouse_low(&f->tf.user_esp, sp); f->tf.cs = m->callback_cs; f->tf.eip = m->callback_ip;
-    mouse_low(&f->tf.eax, m->pending_mask); mouse_low(&f->tf.ebx, m->buttons);
+    mouse_low(&f->tf.eax, m->pending_mask); mouse_low(&f->tf.ebx, m->buttons|wheel_byte(m->callback_wheel));
+    m->callback_wheel=0;
     mouse_low(&f->tf.ecx, m->x & ~7u); mouse_low(&f->tf.edx, m->y & ~7u);
     mouse_low(&f->tf.esi, m->motion_x); mouse_low(&f->tf.edi, m->motion_y);
     m->pending_mask = 0;

@@ -194,6 +194,8 @@ struct dosvm {
     bool pointer_known;
     bool fullscreen, fullscreen_hold, fullscreen_parked, fullscreen_pause, fullscreen_model;
     bool fullscreen_suspended;
+    bool window_marking;
+    uint8_t window_idle; /* zero: default; otherwise sensitivity + 1 */
     uint32_t fullscreen_ip, fullscreen_cs;
     uint64_t fullscreen_progress;
     int fullscreen_error;

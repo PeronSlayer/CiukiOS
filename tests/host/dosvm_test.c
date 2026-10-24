@@ -1013,9 +1013,11 @@ static void test_memory_services(bool locked)
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
+#include "dosvm_properties_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_SAVE_TEST")) {
         test_persistent_provider(); test_client_boundary();
         free(ram); fflush(stdout); return 0;
@@ -1084,6 +1086,7 @@ int main(void)
     test_quake_start();
     CHECK(guest_enters==4 && deletes>1); /* includes f3-40 worker IRQ reentry */
     test_startup_boot();
+    test_dos_properties();
     test_pool_paging(); /* f3-46: last, it attaches the production pager */
     free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record);

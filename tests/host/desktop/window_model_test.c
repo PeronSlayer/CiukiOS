@@ -14,6 +14,7 @@
 #define DESKTOP_OCCLUSION_NO_MAIN
 #include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
+#include "../../../apps/dosbox/window.h"
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
@@ -1474,12 +1475,55 @@ static void row_input_preferences(unsigned m)
     desk_put32(request.data+20,102);assert(desk_v3_receive(&d,peer,&request)==-EINVAL && d.sh.cfg.wheel_lines==7);step("Win32 invalid value refused");
     wm_end();
 }
+static void dos_controls_frame(struct fake_app *a,struct dosbox_window *w,const uint32_t *guest,const char *what)
+{
+    struct desk_client *c=&d.clients[a->slot]; assert(c->info.width==640 && c->info.height==480);
+    struct du_canvas canvas={(uint32_t *)c->pixels,640,480,{0,0,640,480}};
+    db_paint(w,&canvas,guest);
+    struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+    desk_put32(message.data+12,640); desk_put32(message.data+16,480); wm_send(a,&message);
+    step(what);
+}
+static void row_dos_controls(unsigned m)
+{
+    row_name="DOS toolbar/properties/selection"; wm_begin(m,1);
+    struct fake_app *a=app_open("dosbox",640,480,0,0);
+    uint32_t *guest=calloc(640u*480u,sizeof(*guest)); assert(guest);
+    for (unsigned i=0;i<640*480;i++) guest[i]=(i*173u)&0xffffff;
+    struct dosbox_window w={0}; dosbox_profile_default(&w.profile,"CUSTOM.EXE");
+    dos_controls_frame(a,&w,guest,"DOS toolbar and intact scaled guest");
+    w.pressed=1; dos_controls_frame(a,&w,guest,"toolbar button pressed");
+    w.pressed=0; w.marking=w.selected=1; w.columns=80; w.rows=25;
+    w.x0=2; w.y0=1; w.x1=16; w.y1=3; dos_controls_frame(a,&w,guest,"Mark selection");
+    w.x1=22; w.y1=5; dos_controls_frame(a,&w,guest,"selection grows");
+    w.marking=w.selected=0; db_notice(&w,"Text copied to the clipboard."); dos_controls_frame(a,&w,guest,"copy/cancel clears selection; notice");
+    db_properties(&w); dos_controls_frame(a,&w,guest,"DOS Properties opened");
+    for (int page=0;page<5;page++) { db_page(&w,page); dos_controls_frame(a,&w,guest,"property page selected"); }
+    w.draft.idle=100; dos_controls_frame(a,&w,guest,"property value edited");
+    w.properties=0; w.profile.zoom=2; w.profile.background=0; dos_controls_frame(a,&w,guest,"Apply/Cancel closes; font and background labels");
+    w.scroll_y=64; w.scroll_x=64; dos_controls_frame(a,&w,guest,"font viewport scroll");
+    w.profile.zoom=0; w.scroll_y=w.scroll_x=0; w.notice[0]=0; dos_controls_frame(a,&w,guest,"return to Fit");
+    w.font_menu=1; w.font_choice=2; dos_controls_frame(a,&w,guest,"font size list opens and highlights a choice");
+    w.font_menu=0; dos_controls_frame(a,&w,guest,"font size list closes");
+    /* Real incremental mapping: only destination rows sampling source 17. */
+    struct desk_client *c=&d.clients[a->slot];
+    struct du_canvas canvas={(uint32_t *)c->pixels,640,480,{0,0,640,480}};
+    uint32_t source[15]={0},damage[15]={0}; source[0]=1u<<17;
+    for (unsigned x=0;x<640;x++) guest[17*640+x]^=0xffffff;
+    db_paint_rows(&w,&canvas,guest,source,damage);
+    for (unsigned y=0;y<480;y++) if (damage[y/32]&(1u<<(y%32))) {
+        struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+        desk_put32(message.data+8,y); desk_put32(message.data+12,640); desk_put32(message.data+16,1); wm_send(a,&message);
+    }
+    step("scaled incremental VGA damage");
+    free(guest); wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
-    row_input_text};
+    row_input_text, row_dos_controls};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

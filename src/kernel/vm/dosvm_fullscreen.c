@@ -186,11 +186,11 @@ static void unhold(struct dosvm *v)
 static bool park_released(void *arg)
 {
     const struct dosvm *v=arg;
-    return (!v->fullscreen_hold && !v->fullscreen_suspended && !v->clipboard_mark) || v->info.state>=DOSVM_STOPPING;
+    return (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) || v->info.state>=DOSVM_STOPPING;
 }
 void dosvm_fullscreen_checkpoint(struct dosvm *v)
 {
-    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->clipboard_mark) return;
+    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) return;
     v->fullscreen_parked=true;
     /* fx-22: a suspended VM is not scheduled (VMM Suspend_VM; VPICD
      * simulates no interrupt into it). The former 1 ms sleep loop kept the
@@ -572,6 +572,8 @@ bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value)
     if (!v) return false;
     if (v->fullscreen_hold || fullscreen_return || !dosvm_valid(v->info.key)) return true;
     if (type==INPUT_KEY) dosvm_kbd_event(v,code,value);
+    else if (type==INPUT_REL && code==INPUT_WHEEL)
+        dosvm_mouse_wheel(v,value<-32767 ? 32767 : value>32767 ? -32767 : -value);
     else if (type==INPUT_REL && code!=INPUT_WHEEL)
         dosvm_mouse_event(v,code==INPUT_X ? value : 0,code==INPUT_Y ? value : 0,v->mouse.buttons);
     else if (type==INPUT_BTN && code<=INPUT_MIDDLE)

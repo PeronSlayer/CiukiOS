@@ -175,6 +175,7 @@ int dos_clip_input(const struct desk_packet *p)
     return p->opcode==DESK_BUTTON;
 }
 int dos_clip_marking(void) { return state.marking; }
+int dos_clip_pasting(void) { return state.paste!=NULL; }
 int dos_clip_dirty(void)
 {
     if (!state.dirty) return 0;

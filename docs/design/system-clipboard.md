@@ -155,8 +155,9 @@ retaining a surface descriptor after a send attempt.
 - Registered names are bounded to 127 UTF-8 bytes and ASCII case folding;
   other ANSI/OEM code-page families and RLE DIB decoding are not covered.
 - DOS selection uses BIOS text geometry, not arbitrary custom CRTC text
-  layouts. The full DOS toolbar and persisted properties remain G17 work;
-  menu commands and an in-session QuickEdit toggle are delivered here.
+  layouts. G17 now supplies the DOS toolbar and persisted properties alongside these
+  menu commands and the in-session QuickEdit toggle; see
+  `dos-program-properties.md` for the combined viewport and input contract.
 - Native delayed producers have the wire operations but no toolkit render
   callback. The implemented delayed-render client is USER32.
 - OLE IDataObject clipboard operations are not added by this batch.

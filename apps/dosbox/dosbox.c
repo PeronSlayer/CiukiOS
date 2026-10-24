@@ -13,7 +13,6 @@
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
 #include "../desktop/protocol.h"
-#include "clipboard.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -25,6 +24,12 @@
 #include "loading.h"
 #include "settings.h"
 #include "network_settings.h"
+#include "clipboard.h"
+
+static struct dosbox_window window;
+static struct dosbox_key paste_keys[DOSBOX_PASTE_KEYS];
+static unsigned paste_count, paste_next;
+static uint64_t paste_at;
 
 static void command(struct ciuki_dosvm_command *c, uint32_t id, uint32_t generation)
 {
@@ -66,7 +71,7 @@ static uint64_t now_ms(void)
 /* Each line waits for the actual empty shell input loop, rather than fixed
  * 400/800 ms sleeps. Keep the existing bounded key-event pace. */
 #define AUTORUN_EVENTS_PER_TICK 1u
-static struct dosbox_key autorun[DOSBOX_KEYS_MAX];
+static struct dosbox_key autorun[DOSBOX_PROFILE_KEYS];
 static unsigned autorun_count, autorun_next;
 static uint64_t autorun_at;   /* 0: not yet armed (VM still booting) */
 static int autorun_launch_armed, autorun_launch_sent;
@@ -146,9 +151,61 @@ static int name_valid(const char *name)
     for (size_t i = 0; i < n; i++) if (name[i] < 32 || name[i] > 126) return 0;
     return 1;
 }
+static int window_action(int action, uint32_t id, uint32_t generation, int fullscreen)
+{
+    struct ciuki_dosvm_command c;
+    if (action==DB_MARK) {
+        (void)dos_clip_action(0);
+        paste_next=dosbox_resume(paste_keys,paste_count,paste_next);
+        autorun_next=dosbox_resume(autorun,autorun_count,autorun_next);
+        if (window.marking) db_end_mark(&window,id,generation);
+        else (void)db_mark(&window,id,generation);
+    } else if (action==DB_COPY) {
+        if (dos_clip_marking()) (void)dos_clip_action(2);
+        else (void)db_copy(&window,id,generation);
+    }
+    else if (action==DB_CANCEL_MARK) db_end_mark(&window,id,generation);
+    else if (action==DB_PASTE) {
+        if (paste_next<paste_count || autorun_next<autorun_count || dos_clip_pasting()) { db_notice(&window,"Wait for the current input to finish."); return 0; }
+        (void)dos_clip_action(0);
+        int count=db_paste_keys(du_clipboard_get(),paste_keys,DOSBOX_PASTE_KEYS);
+        if (count<0) { db_notice(&window,"Paste accepts up to 1023 ASCII characters, tabs and newlines."); return 0; }
+        if (window.marking) db_end_mark(&window,id,generation);
+        paste_count=(unsigned)count; paste_next=0; paste_at=0;
+        db_notice(&window,"Pasting text...");
+    } else if (action==DB_FULLSCREEN) {
+        (void)dos_clip_action(0);
+        if (window.marking) db_end_mark(&window,id,generation);
+        command(&c,id,generation); c.focused=!fullscreen;
+        if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) db_notice(&window,"Full screen is unavailable on this display.");
+    } else if (action==DB_APPLY) {
+        if (dosbox_profile_save(&window.profile)) db_notice(&window,"Cannot save properties.");
+        command(&c,id,generation); c.focused=window.profile.screen==2 || !window.profile.background;
+        if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c) || db_policy(&window,id,generation)) return -1;
+    }
+    return 0;
+}
+static int paste_step(uint32_t id, uint32_t generation, int focused)
+{
+    if (!focused || window.properties || window.font_menu || window.marking || dos_clip_marking() || dos_clip_pasting() || paste_next>=paste_count || now_ms()<paste_at) return 0;
+    unsigned budget=window.profile.fast_paste ? 16u : 1u;
+    while (budget-- && paste_next<paste_count) {
+        struct ciuki_dosvm_command c; command(&c,id,generation);
+        c.event.type=CIUKI_INPUT_KEY; c.event.code=paste_keys[paste_next].code; c.event.value=paste_keys[paste_next].down;
+        if (ciuki_dosvm(CIUKI_DOSVM_INPUT,&c)) {
+            if (errno==EAGAIN) return 0;
+            if (errno==EACCES) { paste_next=dosbox_resume(paste_keys,paste_count,paste_next); return 0; }
+            return -1;
+        }
+        paste_next++;
+    }
+    paste_at=now_ms()+(window.profile.fast_paste ? 1u : 10u);
+    if (paste_next==paste_count) db_notice(&window,"Paste completed.");
+    return 0;
+}
 int main(int argc, char **argv)
 {
-    int channel = 3, result = 1, pause_background = 0;
+    int channel = 3, result = 1, pause_background = 0, properties_requested=0;
     const char *name = "CiukiDOS";
     const char *kernel_override=NULL;
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
@@ -161,6 +218,7 @@ int main(int argc, char **argv)
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
         else if (!strncmp(argv[i],"--dos-kernel=",13)) kernel_override=argv[i]+13;
         else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
+        else if (!strcmp(argv[i], "--properties")) properties_requested=1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
         else {                                                    /* COMMAND words */
             size_t n = strlen(argv[i]);
@@ -170,31 +228,41 @@ int main(int argc, char **argv)
         }
     }
     if (!name_valid(name)) return 2;
-    if (typed_length) {
-        int n = dosbox_launch_keys(typed, autorun, DOSBOX_KEYS_MAX);
+    unsigned game=dosbox_game(typed);
+    memset(&window,0,sizeof(window));
+    dosbox_profile_default(&window.profile,typed);
+    window.profile.memory=game ? dosbox_memory_load(game) : 0;
+    if (dosbox_profile_load(&window.profile)<0) db_notice(&window,"Invalid program properties. Using defaults.");
+    if (pause_background) window.profile.background=0;
+    if (properties_requested) db_properties(&window);
+    snprintf(typed,sizeof(typed),"%s",window.profile.command); typed_length=strlen(typed);
+    if (typed_length || window.profile.batch[0] || window.profile.directory[0]) {
+        int n = dosbox_profile_keys(&window.profile, autorun, DOSBOX_PROFILE_KEYS);
         if (n <= 0) { fprintf(stderr, "dosbox: cannot type '%s' at the DOS prompt\n", typed); return 2; }
         autorun_count = (unsigned)n;
     }
-    unsigned game=dosbox_game(typed);
     unsigned kernel=CIUKI_DOSVM_UNIFIED;
-    unsigned memory=game ? dosbox_memory_load(game) : 0;
+    unsigned memory=window.profile.memory;
     unsigned network=game ? dosbox_network_load(game) : CIUKI_DOSVM_NETWORK_OFF;
     /* Runtime selector retained for existing test callers; it never writes. */
     if (kernel_override && strcmp(kernel_override,"unified")) return 2;
     size_t len = strlen(name);
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
+    int vm_surface=ciuki_surface_create(CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT, CIUKI_SURFACE_XRGB8888);
+    if (vm_surface<0) { perror("dosbox: guest surface"); return 1; }
     int surface = ciuki_surface_create(CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT, CIUKI_SURFACE_XRGB8888);
-    if (surface < 0) { perror("dosbox: surface"); return 1; }
+    if (surface < 0) { close(vm_surface); perror("dosbox: surface"); return 1; }
     struct ciuki_dosvm_command c;
     uint32_t id = 0, generation = 0, server = 0;
     uint32_t *pixels = ciuki_surface_map(surface, PROT_READ | PROT_WRITE);
-    if (pixels == (void *)-1 || !pixels) { close(surface); return 1; }
-    dos_clip_init(channel,pixels);
+    uint32_t *guest=ciuki_surface_map(vm_surface,PROT_READ|PROT_WRITE);
+    if (pixels == (void *)-1 || !pixels || guest==(void *)-1 || !guest) { close(surface); close(vm_surface); return 1; }
+    dos_clip_init(channel,guest);
     struct du_canvas canvas = {pixels, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
                               {0, 0, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT}};
     const char *icon = dosbox_launch_icon(typed);
     uint64_t started = now_ms(), panel_at = 0, launch_at = 0;
-    int loading = !!typed_length, shown = !loading;
+    int loading = !!typed_length && !properties_requested, shown = !loading;
     int failure_painted = 0;
     int panel_sent = 0, panel_redraw = 0, notice_painted = 0, redraw = 1, save_full_seen=0;
     unsigned precise_rows = 1;
@@ -242,7 +310,7 @@ int main(int argc, char **argv)
         if (poll(&wait, 1, 200) < 0 && errno != EINTR) goto done;
     }
     snprintf(detail, sizeof(detail), "Preparing...");
-    command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
+    command(&c, 0, 0); c.surface_fd = vm_surface; memcpy(c.name, name, len);
     c.launch.kernel=kernel; c.launch.game=game; c.launch.memory=memory;
     dosvm_launch_network_set(&c,network);
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
@@ -278,15 +346,17 @@ int main(int argc, char **argv)
             fprintf(stderr,"dosbox: %s\n",fullscreen_notice);
         }
     }
-    if (id && pause_background) {
-        command(&c,id,generation); c.focused=1;
+    if (id) {
+        command(&c,id,generation); c.focused=window.profile.screen==2 || !window.profile.background;
         if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c)) goto done;
+        if (db_policy(&window,id,generation)) goto done;
     }
     int running = 1, fullscreen = 0, fullscreen_painted = 0;
+    int startup_fullscreen=window.profile.screen!=0, returned_seen=0;
     while (running) {
         dos_clip_vm(id,generation,server);
         for (unsigned budget = 0; budget < 32; budget++) {
-            int n = ciuki_channel_recv(channel, &m, DONTWAIT);
+            int n = dos_clip_recv(&m);
             if (n < 0 && (errno == EAGAIN || errno == EINTR)) break;
             if (n <= 0) { running = 0; break; }               /* desktop gone */
             struct desk_packet packet;
@@ -299,7 +369,7 @@ int main(int argc, char **argv)
             if (packet.opcode == DESK_QUERY_END_SESSION) {
                 /* G3: an idle prompt agrees; a running program gets the
                  * desktop's "cannot shut down this program automatically". */
-                if (session_answer(channel, packet.serial, dos_program_active(id, generation) ?
+                if (session_answer(channel, packet.serial, window.profile.warn && dos_program_active(id, generation) ?
                                    DESK_SESSION_DOS_ACTIVE : DESK_SESSION_AGREE)) goto done;
                 continue;
             }
@@ -311,6 +381,7 @@ int main(int argc, char **argv)
                 command(&c,id,generation);
                 if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE,&c)) {
                     if (errno!=EBUSY) goto done;
+                    if (!window.profile.warn) { running=0; break; }
                     /* G3: the program is still running (it was asked to quit
                      * through Ctrl+C and may decline): the desktop shows the
                      * Windows 98 warning; Yes ends this process, No keeps the
@@ -322,12 +393,14 @@ int main(int argc, char **argv)
                 id=0; running=0; break;
             }
             if (packet.opcode==DESK_DOS_CLIPBOARD) {
-                int error=dos_clip_action(packet.flags);
+                if (window.marking) db_end_mark(&window,id,generation);
+                int error=(packet.flags==3 && (paste_next<paste_count || autorun_next<autorun_count)) ? -EBUSY : dos_clip_action(packet.flags);
                 if (error) { snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Clipboard: %s",strerror(-error)); fullscreen_notice_until=now_ms()+3000; notice_painted=0; }
                 continue;
             }
-            if (dos_clip_input(&packet)) continue;
             if (packet.opcode == DESK_DOS_FULLSCREEN && id) {
+                if (window.marking) db_end_mark(&window,id,generation);
+                window.properties=window.font_menu=0; window.dirty=1;
                 (void)dos_clip_action(0);
                 command(&c,id,generation); c.focused=!fullscreen;
                 if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
@@ -343,12 +416,57 @@ int main(int argc, char **argv)
                 if (send_packet(channel, &m)) goto done;
             } else if (packet.opcode == DESK_FOCUS || packet.opcode == DESK_KEY ||
                        packet.opcode == DESK_MOTION || packet.opcode == DESK_BUTTON) {
-                if (packet.opcode == DESK_MOTION && packet.event.type == CIUKI_INPUT_WHEEL) continue;
                 if (!id || failure) continue;
+                if (packet.opcode!=DESK_FOCUS && !loading) {
+                    if (packet.event.type==CIUKI_INPUT_MOTION) {
+                        window.mouse_x=packet.event.value; window.mouse_y=packet.event.value2;
+                    }
+                    if (dos_clip_marking() && !window.properties && !window.font_menu &&
+                        (packet.opcode==DESK_KEY || window.mouse_y>=DOSBOX_TOOLBAR)) {
+                        struct desk_packet selection=packet;
+                        if (selection.event.type==CIUKI_INPUT_MOTION) {
+                            selection.event.value=db_source_x(&window,selection.event.value);
+                            selection.event.value2=db_source_y(&window,selection.event.value2);
+                        }
+                        if (dos_clip_input(&selection)) continue;
+                    }
+                    int action=DB_NONE;
+                    int was_modal=window.properties || window.font_menu || window.marking;
+                    if (db_input(&window,&packet.event,&action)) {
+                        if (!was_modal && (window.properties || window.font_menu || action==DB_MARK)) {
+                            (void)dos_clip_action(0);
+                            struct ciuki_dosvm_command release; command(&release,id,generation);
+                            release.event.type=CIUKI_INPUT_RESYNC;
+                            if (ciuki_dosvm(CIUKI_DOSVM_INPUT,&release) && errno!=EACCES && errno!=EAGAIN) goto done;
+                            paste_next=dosbox_resume(paste_keys,paste_count,paste_next);
+                            autorun_next=dosbox_resume(autorun,autorun_count,autorun_next);
+                        }
+                        if (window_action(action,id,generation,fullscreen)) goto done;
+                        continue;
+                    }
+                    if (packet.event.type==CIUKI_INPUT_MOTION) {
+                        packet.event.value=db_source_x(&window,packet.event.value);
+                        packet.event.value2=db_source_y(&window,packet.event.value2);
+                    }
+                    if (dos_clip_input(&packet)) continue;
+                }
                 command(&c, id, generation);
                 unsigned op = packet.opcode == DESK_FOCUS ? CIUKI_DOSVM_FOCUS : CIUKI_DOSVM_INPUT;
-                if (op == CIUKI_DOSVM_FOCUS) { focused=packet.focused ? 1 : 0; c.focused=focused; }
-                else c.event = packet.event;
+                if (op == CIUKI_DOSVM_FOCUS) {
+                    focused=packet.focused ? 1 : 0; c.focused=focused;
+                    if (!focused) {
+                        autorun_next=dosbox_resume(autorun,autorun_count,autorun_next);
+                        paste_next=dosbox_resume(paste_keys,paste_count,paste_next);
+                        window.shift=0; window.selecting=0;
+                    }
+                }
+                else {
+                    c.event = packet.event;
+                    if (c.event.type==CIUKI_INPUT_WHEEL) {
+                        if (c.event.value>127) c.event.value=127;
+                        if (c.event.value<-127) c.event.value=-127;
+                    }
+                }
                 /* A full guest key queue drops the key, as a full BIOS buffer does. */
                 if (ciuki_dosvm(op, &c) && errno != EAGAIN && errno != EACCES) {
                     if (errno == ESRCH) { running = 0; break; }
@@ -357,12 +475,11 @@ int main(int argc, char **argv)
             }
         }
         if (!running) break;
-        dos_clip_tick(focused);
-        if (configured && dos_clip_dirty()) {
-            desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+12,640); desk_put32(m.data+16,480);
-            if (send_packet(channel,&m)) goto done;
-            redraw=1;
-        }
+        dos_clip_tick(focused && !window.properties && !window.font_menu && !window.marking &&
+                      paste_next>=paste_count && autorun_next>=autorun_count);
+        /* G5 draws selection into the intact guest surface. G17 maps those
+         * changed pixels through the same viewport as ordinary VGA damage. */
+        if (dos_clip_dirty()) window.dirty=1;
         if (failure) goto panel;
         /* Producer events and the VM's fractional VGA deadline determine
          * the frame rate. This timeout bounds input/lifecycle service only. */
@@ -377,6 +494,13 @@ int main(int argc, char **argv)
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
         fullscreen=!!(c.changed&CIUKI_DOSVM_FULL_SCREEN);
+        if (autorun_launch_sent && (c.changed&CIUKI_DOSVM_PROGRAM_RETURNED) && (c.changed&CIUKI_DOSVM_SHELL_READY)) {
+            if (window.profile.close_on_exit) break;
+            if (!returned_seen) {
+                returned_seen=1; loading=0; shown=1; redraw=1;
+                db_notice(&window,"The program has finished. This DOS window will remain open.");
+            }
+        }
         if ((c.changed&CIUKI_DOSVM_SAVE_FULL) && !save_full_seen) {
             save_full_seen=1; fullscreen_title="Game data is full";
             snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Game data is full (64 MiB limit or disk space). Further writes are disabled. Export or reset data in Properties.");
@@ -413,7 +537,12 @@ int main(int argc, char **argv)
             if (loading) { panel_redraw=1; panel_sent=0; }
         }
         if (c.state == CIUKI_DOSVM_STOPPED) {
-            if (shown && !dosbox_stop_reported(c.reason)) break;
+            if (shown && !dosbox_stop_reported(c.reason) && window.profile.close_on_exit) break;
+            if (shown && !dosbox_stop_reported(c.reason)) {
+                failure="The DOS session has ended";
+                snprintf(detail,sizeof(detail),"Close this window when you have finished reading it.");
+                result=0; goto panel;
+            }
             failure = shown ? "The DOS session stopped" : c.reason == 4 ? "Startup timed out" : "Unable to start";
             snprintf(detail, sizeof(detail), "%s", c.name[0] ? c.name : shown ?
                      "The program stopped with an error. Close this window." : "Close this window and try again.");
@@ -440,7 +569,7 @@ int main(int argc, char **argv)
             result = 1;
             goto panel;
         }
-        if (c.state == CIUKI_DOSVM_RUNNING && autorun_next < autorun_count) {
+        if (c.state == CIUKI_DOSVM_RUNNING && autorun_next < autorun_count && !window.properties && !window.font_menu && !window.marking && !dos_clip_marking() && !dos_clip_pasting()) {
             if (!autorun_at) autorun_at = now_ms();
             if (autorun_step(id, generation, focused, !!(c.changed&CIUKI_DOSVM_SHELL_READY))) {
                 failure = "Unable to start";
@@ -459,11 +588,16 @@ int main(int argc, char **argv)
             result = 1;
         }
         if (loading) goto panel;
-        if (configured && !dos_clip_marking() && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
+        if (startup_fullscreen && focused && !window.properties && !window.marking && !dos_clip_marking()) {
+            startup_fullscreen=0;
+            if (window_action(DB_FULLSCREEN,id,generation,fullscreen)) goto done;
+        }
+        if (paste_step(id,generation,focused)) goto done;
+        if (configured && (redraw || window.dirty || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
             command(&c, id, generation);
             c.presentation.redraw=redraw;
             c.presentation.flags=precise_rows ? CIUKI_DOSVM_PRESENT_SCANLINES : 0;
-            int error=ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS, &c);
+            int error=dos_clip_marking() ? 0 : ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS, &c);
             if (error && errno==EINVAL && precise_rows) {
                 /* Older kernels retain the original eight-line protocol. */
                 precise_rows=0;command(&c,id,generation);c.presentation.redraw=redraw;
@@ -473,22 +607,23 @@ int main(int argc, char **argv)
                 if (errno == ESRCH) break;
                 goto done;
             }
-            if (c.changed) {
-                uint32_t rows[15]={0};
-                if (precise_rows) memcpy(rows,c.scanlines.bits,sizeof(rows));
+            if (c.changed || window.dirty || redraw) {
+                uint32_t source_rows[15]={0}, damage_rows[15]={0};
+                int full=redraw || window.dirty;
+                if (precise_rows) memcpy(source_rows,c.scanlines.bits,sizeof(source_rows));
                 else {
                     uint64_t bands=c.presentation.bands[0]|((uint64_t)c.presentation.bands[1]<<32);
-                    for (unsigned y=0;y<CIUKI_DOSVM_HEIGHT;y++)
-                        if (bands&(1ull<<(y/8))) rows[y/32]|=1u<<(y%32);
+                    for (unsigned y=0;y<480;y++) if (bands&(1ull<<(y/8))) source_rows[y/32]|=1u<<(y%32);
                 }
-                for (unsigned y = 0; y < CIUKI_DOSVM_HEIGHT;) {
-                    if (!(rows[y/32] & (1u<<(y%32)))) { y++; continue; }
-                    unsigned first = y++;
-                    while (y < CIUKI_DOSVM_HEIGHT && (rows[y/32] & (1u<<(y%32)))) y++;
-                    desk_message(&m, DESK_DAMAGE, 20);
-                    desk_put32(m.data + 4, 0); desk_put32(m.data + 8, first);
-                    desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, y - first);
-                    if (send_packet(channel, &m)) goto done;
+                db_paint_rows(&window,&canvas,guest,full ? NULL : source_rows,damage_rows);
+                if (full) for (unsigned y=0;y<480;y++) damage_rows[y/32]|=1u<<(y%32);
+                for (unsigned y=0;y<480;) {
+                    if (!(damage_rows[y/32]&(1u<<(y%32)))) { y++; continue; }
+                    unsigned first=y++;
+                    while (y<480 && (damage_rows[y/32]&(1u<<(y%32)))) y++;
+                    desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+8,first);
+                    desk_put32(m.data+12,640); desk_put32(m.data+16,y-first);
+                    if (send_packet(channel,&m)) goto done;
                 }
             }
             redraw=0;
@@ -520,8 +655,8 @@ panel:
 done:
     dos_clip_destroy();
     command(&c, id, generation);
-    if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
+    if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c) && (window.profile.warn || errno!=EBUSY)) result = 1;
     desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);
-    close(surface); close(channel);
+    close(vm_surface); close(surface); close(channel);
     return result;
 }

@@ -42,6 +42,8 @@ struct dosvm_mouse {
     uint16_t min_x, max_x, min_y, max_y, ratio_x, ratio_y;
     uint16_t mask, callback_cs, callback_ip, pending_mask, screen_mask, cursor_mask;
     uint8_t buttons, text_type;
+    int16_t wheel, callback_wheel;
+    uint16_t wheel_x, wheel_y;
     uint16_t pressed[3], released[3], press_x[3], press_y[3], release_x[3], release_y[3];
     bool active, saved_vif;
     struct v86_frame saved;
@@ -59,6 +61,7 @@ int dosvm_kbd_bios(struct dosvm *);
 bool dosvm_kbd_irq_ready(const struct dosvm *);
 void dosvm_mouse_init(struct dosvm *);
 void dosvm_mouse_event(struct dosvm *, int32_t dx, int32_t dy, unsigned buttons);
+void dosvm_mouse_wheel(struct dosvm *, int32_t delta);
 int dosvm_mouse_bios(struct dosvm *, struct v86_frame *);
 int dosvm_mouse_dispatch(struct dosvm *, struct v86_frame *);
 int dosvm_mouse_return(struct dosvm *, struct v86_frame *);

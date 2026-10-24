@@ -179,6 +179,8 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
 _Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
 _Static_assert(DESK_SETTINGS_SAVER_PREVIEW==10u,"G10 settings request");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,text_chunk)==72,"DOSVM text tail ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,policy)==72,"DOSVM policy ABI");
 static const struct expectation expectations[] = {
     {"constant.CIUKI_DISPLAY_SCREEN",CIUKI_DISPLAY_SCREEN,2u},
     {"constant.CIUKI_DISPLAY_DPMS",CIUKI_DISPLAY_DPMS,3u},
@@ -1762,6 +1764,22 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_SAVE_RESET", CIUKI_DOSVM_SAVE_RESET, 15u},
     {"constant.CIUKI_DOSVM_SAVE_EXPORT", CIUKI_DOSVM_SAVE_EXPORT, 16u},
     {"constant.CIUKI_DOSVM_IMAGE_QUERY", CIUKI_DOSVM_IMAGE_QUERY, 17u},
+    {"constant.CIUKI_DOSVM_TEXT_CHUNK", CIUKI_DOSVM_TEXT_CHUNK, 20u},
+    {"constant.CIUKI_DOSVM_POLICY", CIUKI_DOSVM_POLICY, 21u},
+    {"constant.CIUKI_DOSVM_TEXT_BYTES", CIUKI_DOSVM_TEXT_BYTES, 48u},
+    {"constant.CIUKI_DOSVM_PROGRAM_RETURNED", CIUKI_DOSVM_PROGRAM_RETURNED, 128u},
+    {"sizeof.ciuki_dosvm_text_chunk", sizeof(struct ciuki_dosvm_text_chunk), 64u},
+    {"alignof.ciuki_dosvm_text_chunk", _Alignof(struct ciuki_dosvm_text_chunk), 4u},
+    {"offsetof.ciuki_dosvm_text_chunk.row", __builtin_offsetof(struct ciuki_dosvm_text_chunk,row), 0u},
+    {"offsetof.ciuki_dosvm_text_chunk.column", __builtin_offsetof(struct ciuki_dosvm_text_chunk,column), 4u},
+    {"offsetof.ciuki_dosvm_text_chunk.columns", __builtin_offsetof(struct ciuki_dosvm_text_chunk,columns), 8u},
+    {"offsetof.ciuki_dosvm_text_chunk.rows", __builtin_offsetof(struct ciuki_dosvm_text_chunk,rows), 12u},
+    {"offsetof.ciuki_dosvm_text_chunk.characters", __builtin_offsetof(struct ciuki_dosvm_text_chunk,characters), 16u},
+    {"sizeof.ciuki_dosvm_policy", sizeof(struct ciuki_dosvm_policy), 40u},
+    {"alignof.ciuki_dosvm_policy", _Alignof(struct ciuki_dosvm_policy), 4u},
+    {"offsetof.ciuki_dosvm_policy.marking", __builtin_offsetof(struct ciuki_dosvm_policy,marking), 0u},
+    {"offsetof.ciuki_dosvm_policy.idle_sensitivity", __builtin_offsetof(struct ciuki_dosvm_policy,idle_sensitivity), 4u},
+    {"offsetof.ciuki_dosvm_policy.reserved", __builtin_offsetof(struct ciuki_dosvm_policy,reserved), 8u},
     {"constant.CIUKI_DOSVM_IMAGE_UNCHECKED", CIUKI_DOSVM_IMAGE_UNCHECKED, 0u},
     {"constant.CIUKI_DOSVM_IMAGE_VERIFYING", CIUKI_DOSVM_IMAGE_VERIFYING, 1u},
     {"constant.CIUKI_DOSVM_IMAGE_VERIFIED", CIUKI_DOSVM_IMAGE_VERIFIED, 2u},
@@ -1805,6 +1823,8 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_dosvm_command.video_mode", __builtin_offsetof(struct ciuki_dosvm_command, video_mode), 36u},
     {"offsetof.ciuki_dosvm_command.name", __builtin_offsetof(struct ciuki_dosvm_command, name), 40u},
     {"offsetof.ciuki_dosvm_command.event", __builtin_offsetof(struct ciuki_dosvm_command, event), 72u},
+    {"offsetof.ciuki_dosvm_command.policy", __builtin_offsetof(struct ciuki_dosvm_command, policy), 72u},
+    {"offsetof.ciuki_dosvm_command.text_chunk", __builtin_offsetof(struct ciuki_dosvm_command, text_chunk), 72u},
     {"offsetof.ciuki_dosvm_command.damage", __builtin_offsetof(struct ciuki_dosvm_command, damage), 112u},
     {"constant.CIUKI_AUDIO_VERSION", (uint32_t)(CIUKI_AUDIO_VERSION), 1u},
     {"constant.CIUKI_AUDIO_U8", (uint32_t)(CIUKI_AUDIO_U8), 1u},

@@ -4403,6 +4403,36 @@ focused=1 pause for Mark, 0 resume
 
 ```c
 #define CIUKI_DOSVM_TEXT_MAX 16000u
+```
+
+G17 owner-bound visible OEM text and window execution policy. No pointers.
+
+```c
+#define CIUKI_DOSVM_TEXT_CHUNK 20u
+#define CIUKI_DOSVM_POLICY 21u
+#define CIUKI_DOSVM_TEXT_BYTES 48u
+struct ciuki_dosvm_text_chunk {
+    uint32_t row;
+    uint32_t column;
+    uint32_t columns;
+    uint32_t rows;
+    uint8_t characters[CIUKI_DOSVM_TEXT_BYTES];
+};
+struct ciuki_dosvm_policy {
+    uint32_t marking;
+```
+
+0/1: pause at the existing guest checkpoint
+
+```c
+uint32_t idle_sensitivity;
+```
+
+0..100: empty BIOS keyboard poll detection
+
+```c
+uint32_t reserved[8];
+};
 #define CIUKI_DOSVM_IMAGE_UNCHECKED 0u
 ```
 
@@ -4478,6 +4508,12 @@ STATUS.reason is positive errno
 ```
 
 STATUS.changed: game data quota/disk space exhausted
+
+```c
+#define CIUKI_DOSVM_PROGRAM_RETURNED 128u
+```
+
+armed EXEC returned to its shell
 
 ```c
 #define CIUKI_DOSVM_BOOTING 0u
@@ -4573,7 +4609,8 @@ struct ciuki_dosvm_text text;
 TEXT input buffer/capacity; output OEM cells
 
 ```c
-struct { uint32_t kernel, game, memory, reserved[7]; } launch;
+struct ciuki_dosvm_policy policy;
+        struct { uint32_t kernel, game, memory, reserved[7]; } launch;
 ```
 
 CREATE input
@@ -4608,6 +4645,7 @@ An older kernel rejects flags with EINVAL; retry with flags=0.
 
 ```c
 struct { uint32_t bits[15], reserved; } scanlines;
+      struct ciuki_dosvm_text_chunk text_chunk;
     };
 };
 

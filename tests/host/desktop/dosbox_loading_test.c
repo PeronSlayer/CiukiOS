@@ -21,6 +21,7 @@
 #undef _SC_THREAD_KEYS_MAX
 #undef _SC_THREAD_STACK_MIN
 #include <unistd.h>
+#include "../../../apps/dosbox/program.h"
 static int replay_close(int);
 static int replay_clock(clockid_t, struct timespec *);
 static int replay_poll(struct pollfd *,nfds_t,int);
@@ -35,6 +36,21 @@ static int replay_poll(struct pollfd *,nfds_t,int);
 #undef poll
 
 static uint32_t screen[640 * 480];
+static uint32_t guest_screen[640 * 480];
+/* Clipboard transport/selection has its own G5 production fixture. This
+ * lifecycle replay keeps it idle while checking G17 and G3 launch/close. */
+void dos_clip_init(int channel,uint32_t *pixels) { assert(channel==3 && pixels==guest_screen); }
+void dos_clip_vm(uint32_t id,uint32_t generation,uint32_t server) { (void)id; (void)generation; (void)server; }
+int dos_clip_recv(struct ciuki_message *m) { return ciuki_channel_recv(3,m,DONTWAIT); }
+int dos_clip_action(unsigned action) { assert(!action); return 0; }
+int dos_clip_input(const struct desk_packet *p) { (void)p; return 0; }
+void dos_clip_tick(int focused) { (void)focused; }
+int dos_clip_marking(void) { return 0; }
+int dos_clip_pasting(void) { return 0; }
+int dos_clip_dirty(void) { return 0; }
+void dos_clip_destroy(void) {}
+
+static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
 static unsigned error_idle_waits;
@@ -55,7 +71,7 @@ static int last_permille = -1, vm_created;
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
 const struct desk_theme *desk_theme = &replay_theme;
-static int replay_close(int fd) { assert(fd == 7 || fd == 3); return 0; }
+static int replay_close(int fd) { assert(fd == 7 || fd == 8 || fd == 3); return 0; }
 static int replay_clock(clockid_t id, struct timespec *t)
 { assert(id == CLOCK_MONOTONIC); t->tv_sec = (time_t)(clock_ms / 1000); t->tv_nsec = (long)(clock_ms % 1000) * 1000000; return 0; }
 static int replay_poll(struct pollfd *fds,nfds_t n,int timeout)
@@ -65,17 +81,9 @@ static int replay_poll(struct pollfd *fds,nfds_t n,int timeout)
     assert(timeout==-1);error_idle_waits++;clock_ms+=10000;fds[0].revents=POLLIN;return 1;
 }
 int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t f)
-{ assert(w == 640 && h == 480 && f == CIUKI_SURFACE_XRGB8888); return 7; }
+{ assert(w == 640 && h == 480 && f == CIUKI_SURFACE_XRGB8888); return 7+(int)surfaces++; }
 void *ciuki_surface_map(int fd, int prot)
-{ assert(fd == 7 && prot == (PROT_READ | PROT_WRITE)); return screen; }
-/* Clipboard transport uses the same known window surface. */
-int ciuki_surface_info(int fd, struct ciuki_surface_info *out)
-{
-    assert(fd == 7);
-    *out = (struct ciuki_surface_info){sizeof(*out), 640, 480, 2560,
-                                     CIUKI_SURFACE_XRGB8888, sizeof(screen)};
-    return 0;
-}
+{ assert((fd == 7 || fd==8) && prot == (PROT_READ | PROT_WRITE)); return fd==7 ? guest_screen : screen; }
 int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
 {
     assert(fd == 3 && !flags);
@@ -92,16 +100,22 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
         } else if (w==480 && h==280) {
             assert(x==80 && y==120); settings_damage++;
         } else if (fs_panel_seen && h==480) { assert(!y); full_damage++; }
-        else if (presents && !(scenario>=11 && desk_get32(m->data+16)==480)) {
-            if(scenario==0)assert(h==8 && (y==0 || y==16 || y==264));
-            else assert(h==1 && (y==1 || y==17 || y==265));
+        else if (presents && h!=480) {
+            /* G17 scales the intact guest into the area below the toolbar.
+             * Every incremental row must sample a changed guest row. */
+            assert(y>=DOSBOX_TOOLBAR && y+h<=480);
+            for (unsigned row=y;row<y+h;row++) {
+                unsigned source=row==480 ? 479u : (row-DOSBOX_TOOLBAR)*480u/DOSBOX_VIEW_HEIGHT;
+                if (scenario==0) assert(source<8 || (source>=16 && source<24) || (source>=264 && source<272));
+                else assert(source==1 || source==17 || source==265);
+            }
         } else { assert(screen[0] == replay_theme.face); full_damage++; }
     }
     /* G3: a running program cannot be closed automatically: the desktop's warning. */
     if (p.opcode==DESK_CLOSE_ACK) { assert(scenario==12 && p.flags==DESK_CLOSE_DOS_ACTIVE); close_declined++; }
     if (p.opcode==DESK_SESSION_ANSWER) {
         if (!p.serial) { assert(p.flags==DESK_SESSION_AGREE && !session_registered); session_registered++; }
-        else { assert(scenario==22 && p.serial==5 && p.flags==DESK_SESSION_DOS_ACTIVE && session_registered); session_answers++; }
+        else { assert((scenario==22 || scenario==26) && p.serial==5 && p.flags==(scenario==26 ? DESK_SESSION_AGREE : DESK_SESSION_DOS_ACTIVE) && session_registered); session_answers++; }
     }
     if (p.opcode==DESK_PONG) { assert(scenario==20 && !vm_created && desk_get32(m->data+4)==77); pongs++; }
     return 0;
@@ -128,11 +142,11 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
     } else if (scenario==11 && presents && !settings_phase++) {
         desk_message(m,DESK_KEY,44); desk_put32(m->data+16,CIUKI_INPUT_KEY);
         desk_put32(m->data+28,CIUKI_KEY_F12); desk_put32(m->data+32,1);
-    } else if (scenario==22 && presents && clock_ms > enter_ms+650 && !session_queries) {
+    } else if ((scenario==22 || scenario==26) && presents && clock_ms > enter_ms+650 && !session_queries) {
         desk_message(m,DESK_QUERY_END_SESSION,12); desk_put32(m->data+4,5); session_queries++;
-    } else if (scenario==22 && session_answers==1 && !session_ends) {
+    } else if ((scenario==22 || scenario==26) && session_answers==1 && !session_ends) {
         desk_message(m,DESK_END_SESSION,16); desk_put32(m->data+4,5); desk_put32(m->data+8,1); session_ends++;
-    } else if (scenario==22) { errno = EAGAIN; return -1; }
+    } else if (scenario==22 || scenario==26) { errno = EAGAIN; return -1; }
     else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : enter_ms+650)) || (error_seen && clock_ms > 5000)) {
         desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
     } else { errno = EAGAIN; return -1; }
@@ -165,6 +179,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     }
     assert(c->id == 1 && c->generation == 9);
     switch (op) {
+    case CIUKI_DOSVM_BACKGROUND: assert(c->focused==0); return 0;
+    case CIUKI_DOSVM_POLICY: assert(!c->policy.marking && c->policy.idle_sensitivity==50); return 0;
     case CIUKI_DOSVM_WAIT_PRESENT:
         assert(c->wait.timeout_ms==CIUKI_DOSVM_WAIT_MAX_MS);
         /* timeout_ms is a maximum, not the producer period. VIDEO/STATE
@@ -195,6 +211,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         else if (scenario==8 && fs_command) { c->changed|=CIUKI_DOSVM_FULLSCREEN_REFUSED; c->reason=EIO; }
         if (clock_ms>=(scenario==17 ? 700u : 300u) && !entered) c->changed|=CIUKI_DOSVM_SHELL_READY;
         if ((scenario==18 || scenario==19) && presents) c->changed|=CIUKI_DOSVM_SAVE_FULL;
+        if ((scenario==23 || scenario==24) && entered && clock_ms>enter_ms+20)
+            c->changed=CIUKI_DOSVM_PROGRAM_RETURNED|CIUKI_DOSVM_SHELL_READY;
         if (scenario==19 && presents && !fs_command) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
         return 0;
     case CIUKI_DOSVM_LAUNCH: assert(!armed); armed = 1; return 0;
@@ -211,7 +229,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     case CIUKI_DOSVM_PRESENT_BANDS:
         if (scenario==0 && c->presentation.flags) { errno=EINVAL;return -1; } /* legacy kernel */
         if (!(last_events&CIUKI_DOSVM_EVENT_VIDEO)) { assert(c->presentation.redraw); nonvideo_presents++; }
-        if (scenario != 6) assert(entered && clock_ms > enter_ms + 500 && !error_seen);
+        if (scenario != 6) assert(entered && clock_ms > enter_ms + (scenario==24 ? 20u : 500u) && !error_seen);
         if (!presents) first_frame_ms=clock_ms;
         presents++;
         c->changed = 1;
@@ -221,6 +239,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         } else { c->presentation.bands[0] = 5; c->presentation.bands[1] = 2; }
         return 0;
     case CIUKI_DOSVM_CLOSE:
+        if (scenario==25) { errno=EBUSY; return -1; }
         if (scenario==12 && !close_declined) { errno=EBUSY; return -1; }
         closed++; return 0;
     default: assert(0); return -1;
@@ -268,12 +287,14 @@ void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,
     assert(!value); assert(!phase || phase==clock_ms);
 }
 void du_well(struct du_canvas *c,struct du_rect b,uint32_t ink) { du_fill(c,b,ink); }
+int du_clipboard_set_n(const char *s,size_t n) { (void)s;(void)n; assert(0); return -1; }
+const char *du_clipboard_get(void) { assert(0); return ""; }
 int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=22);
+    assert(scenario>=0 && scenario<=26);
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -283,8 +304,27 @@ int main(int argc, char **argv)
     }
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
     char *reference[]={"dosbox","--name=DOOM","--dos-kernel=unified","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    struct dosbox_profile profile;
+    if (scenario>=24) {
+        dosbox_profile_default(&profile,"\\DOOM\\DOOM.EXE -config CIUKI.CFG");
+        if (scenario==24) profile.close_on_exit=0; else profile.warn=0;
+        assert(!dosbox_profile_save(&profile));
+    }
     int selected=scenario==9 || scenario==10;
     int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    if (scenario>=24) {
+        char path[192]; assert(!dosbox_profile_path(profile.key,path,sizeof(path)) && !unlink(path));
+        assert(!rmdir(DOSBOX_SETTINGS_DIR));
+    }
+    if (scenario==23 || scenario==24 || scenario==25 || scenario==26) {
+        assert(!result && session_registered==1 && !error_seen && !close_declined);
+        if (scenario==23) assert(!presents && closed==1);
+        if (scenario==24) assert(presents && closed==1);
+        if (scenario==25) assert(presents && !closed);
+        if (scenario==26) assert(session_queries==1 && session_answers==1 && session_ends==1 && closed==1);
+        printf("PASS G17 DOS program lifecycle: scenario=%d short-EXEC close/retain and per-program termination warning\n",scenario);
+        return 0;
+    }
     if (scenario==11) assert(f12_forwarded==1 && !settings_damage);
     if (scenario==12) assert(close_declined==1);
     assert(session_registered==1);
