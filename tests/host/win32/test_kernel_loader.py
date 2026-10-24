@@ -247,8 +247,11 @@ class KernelLoaderTests(unittest.TestCase):
             staged={n for n,r in upper['dlls'].items() if r['qualified']}
             core=json.loads((folder/'builtin-store.json').read_text())['dlls']
             replaced={d['name'] for d in core if d['name'] in staged}
-            self.assertEqual(len(core),44)  # + ciukishell and f7-07 opengl32.dll
-            self.assertEqual(len(meta['builtins']),44-len(replaced)+len(staged))
+            # Includes ciukishell, OpenGL, G26 Winsock 2 and G15B HTML Help.
+            self.assertEqual(len(core),46)
+            self.assertEqual(len(meta['builtins']),len(core)-len(replaced)+len(staged))
+            self.assertIn('/System/Win32/ws2_32.dll',sources)
+            self.assertIn('/System/Win32/hhctrl.ocx',sources)
             self.assertIn('/System/Win32/opengl32.dll',sources)
             self.assertIn('/System/Win32/Fixtures/gl-exercise.exe',sources)
             self.assertEqual({d['name'] for d in meta['builtins'] if d.get('wine_reused') is True},staged)
