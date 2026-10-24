@@ -1,6 +1,6 @@
 # Integration repair (2026-10-24)
 
-- **Written:** 2026-10-24 09:05 by the lead. Implementer: Claude Code CLI (Sonnet, high), worktree `../CiukiOS-wt-repair` (branch `wt/repair`, from `main` at `3f934154`).
+- **Written:** 2026-10-24 08:55 by the lead. Implementer: Claude Code CLI (Sonnet, high), worktree `../CiukiOS-wt-repair` (branch `wt/repair`, from `main` at `3f934154`).
 - **Problem:** several conflict resolutions on `wt/integ` (merged into `main` as `3f934154`) dropped one side: the build fails (`CIUKI_BOOT_*` of G14 missing from `abi.h`) and `build/lead-scratch/lost-lines.py` finds lines each branch added that no longer exist on `main`. The list is `build/codex/lost-lines.txt` in the worktree (branch, file, missing/added lines, an example). The worst are G19 (most of its code), G14, G15 (toolkit tooltips/help), G18 (tray icon messages), G26 (Internet settings, proxy), G30, G11, G12 (input settings in widgets.c); smaller losses elsewhere.
 - **Procedure, one branch at a time, in the order of the list:**
   1. `bash /home/peronslayer/Desktop/CiukiOS/build/lead-scratch/reapply.sh wt/<item> <files of that item in the list>` re-applies the branch's own changes to those files with a 3-way merge; it leaves conflict markers where the branch and later work both changed the same lines. It touches only the working tree and index of this worktree; it is the only git command that writes that you may run.
