@@ -30,6 +30,16 @@ static struct icon *find(HANDLE h) {
       return &icons[i];
   return 0;
 }
+BOOL u32_tray_pixels(HICON handle,struct u32_surface *s) {
+  struct icon *i=find(handle);
+  if (handle && (!i || i->cursor)) return u32_fail(1402);
+  if (!u32_backend.surface(16,16,s)) return 0;
+  for (unsigned y=0;y<16;y++) for (unsigned x=0;x<16;x++) {
+    unsigned at=y*64+x*2;
+    w32_put32((uint8_t *)s->pixels+y*s->pitch+x*4,i && !i->mask[at] ? i->pixels[at] : 0);
+  }
+  return 1;
+}
 static struct icon *allocate(BOOL cursor) {
   for (UINT i = 0; i < 64; i++)
     if (!icons[i].id) {
@@ -425,12 +435,13 @@ HICON u32_icon_copy(HICON h) {
   struct icon *src = find(h);
   if (!src)
     return (HICON)(uintptr_t)u32_fail(1402);
-  struct icon copy = *src;
-  struct icon *i = allocate(copy.cursor);
+  /* allocate selects an unused slot; src has a live ID, so cannot alias it.
+   * Copy directly instead of putting a 5 KiB icon on the UI thread stack. */
+  struct icon *i = allocate(src->cursor);
   if (!i)
     return 0;
   DWORD id = i->id;
-  *i = copy;
+  *i = *src;
   i->id = id;
   i->shared = 0;
   return (HICON)(uintptr_t)i->id;

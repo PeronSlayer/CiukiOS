@@ -27,6 +27,8 @@ _Static_assert(DESK_DRAG_BEGIN==42 && DESK_DRAG_OVER==43 && DESK_DRAG_STATUS==44
 _Static_assert(DESK_CURSOR_HELP==21 && DESK_CURSOR_DRAG_MOVE==22 && DESK_CURSOR_DRAG_COPY==23 && DESK_CURSOR_DRAG_LINK==24 &&
                DESK_CURSOR_COUNT==25,"drag-and-drop cursor IDs");
 _Static_assert(DESK_DRAG_ITEMS==4096u,"drag data object item bound");
+_Static_assert(DESK_V3_TRAY_ICON==85 && DESK_V3_TRAY_BALLOON==86 && DESK_V3_TRAY_EVENT==87 && DESK_V3_FLASH==88,"G18 desktop opcodes");
+_Static_assert(sizeof(((struct desk_packet *)0)->tooltip)==128,"G18 UTF-8 tray tooltip bound");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[1])==88,"launch joystick device");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[2])==92,"launch joystick generation");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[3])==96,"launch second joystick device");

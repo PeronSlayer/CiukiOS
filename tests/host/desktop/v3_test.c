@@ -392,7 +392,11 @@ static void links(void)
 {
     struct desk_launch_record r={.label="Game",.target="C:\\Games\\A game.exe",.arguments="-data \"A B\"",.directory="C:\\Games",.icon="C:\\Games\\icon.ico",.show=3,.icon_index=-2}, out;
     uint8_t bytes[DESK_LINK_BYTES]; unsigned n=desk_link_encode(&r,bytes,sizeof(bytes)); assert(n && desk_link_decode(bytes,n,&out)); assert(!memcmp(&r,&out,sizeof(r)));
-    assert(!desk_link_decode(bytes,n-1,&out)); bytes[36]=1; assert(!desk_link_decode(bytes,n,&out)); bytes[36]=0; desk_put32(bytes+16,0xffffffff); assert(!desk_link_decode(bytes,n,&out));
+    assert(!desk_link_decode(bytes,n-1,&out));
+    desk_put32(bytes+36,0x0641); assert(desk_link_decode(bytes,n,&out) && out.hotkey==0x0641);
+    desk_put32(bytes+36,0x0600); assert(!desk_link_decode(bytes,n,&out)); /* modifier without key */
+    desk_put32(bytes+36,0x10041); assert(!desk_link_decode(bytes,n,&out)); /* reserved upper word */
+    desk_put32(bytes+36,0); desk_put32(bytes+16,0xffffffff); assert(!desk_link_decode(bytes,n,&out));
     assert(desk_uninstall_command("\"C:\\Program Files\\Game\\uninstall.exe\" /remove \"A B\"",&out));
     assert(!strcmp(out.target,"C:\\Program Files\\Game\\uninstall.exe") && !strcmp(out.arguments,"/remove \"A B\""));
     assert(!desk_uninstall_command("\"C:\\bad.exe /remove",&out)); assert(!desk_uninstall_command("uninstall.exe",&out)); assert(!desk_uninstall_command("C:\\Program Files\\uninstall.exe",&out));

@@ -102,6 +102,11 @@ BOOL W32API DeleteFileA(const char *name) {
   (void)name;
   return 0;
 }
+/* Printing cleanup uses the same refused host file service as DeleteFileA. */
+BOOL W32API RemoveDirectoryA(const char *name) {
+  (void)name;
+  return 0;
+}
 #define EXPORT(name) {#name, (void *)name}
 static const struct {
   const char *name;

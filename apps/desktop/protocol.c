@@ -237,6 +237,39 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if(strncmp(p->argument,"http://",7) && strncmp(p->argument,"https://",8) &&
            strncmp(p->argument,"file:///",8) && strncmp(p->argument,"about:",6))return 0;
         expected=n;break;
+    case DESK_V3_TRAY_ICON:
+        if (!client || n<20) return 0;
+        p->flags=desk_get32(b); p->index=desk_get32(b+4);
+        p->style=desk_get32(b+8); p->serial=desk_get32(b+12); p->count=desk_get32(b+16);
+        if (p->flags>2 || (p->style&~7u) || p->count>127 || n!=20+p->count ||
+            !desk_utf8_valid(b+20,p->count) || (!(p->style&4u) && p->count) ||
+            (!(p->style&1u) && p->serial) || (p->flags==2 && (p->style || p->serial || p->count))) return 0;
+        memcpy(p->tooltip,b+20,p->count);
+        fd=!!(p->style&2u);
+        if (fd && (!desk_surface_valid(s) || s->width!=16 || s->height!=16)) return 0;
+        expected=n; break;
+    case DESK_V3_TRAY_BALLOON:
+        if (!client || n<16) return 0;
+        p->index=desk_get32(b); p->count=desk_get32(b+4); p->flags=desk_get32(b+8);
+        p->serial=desk_get32(b+12)&0xffffu; p->style=desk_get32(b+12)>>16;
+        if (p->count>63 || p->flags>159 || n!=16+p->count+p->flags ||
+            !desk_utf8_valid(b+16,p->count) || !desk_utf8_valid(b+16+p->count,p->flags) ||
+            p->serial<10000 || p->serial>30000 || p->style>3) return 0;
+        memcpy(p->title,b+16,p->count); memcpy(p->argument,b+16+p->count,p->flags);
+        expected=n; break;
+    case DESK_V3_TRAY_EVENT:
+        if (client || n!=20) return 0;
+        p->index=desk_get32(b); p->serial=desk_get32(b+4); p->flags=desk_get32(b+8);
+        p->x=(int32_t)desk_get32(b+12); p->y=(int32_t)desk_get32(b+16);
+        if (!p->serial) return 0;
+        expected=20; break;
+    case DESK_V3_FLASH: case DESK_ACCEPT_FILES:
+        if (!client || n!=4 || (p->flags=desk_get32(b))>1) return 0;
+        expected=4; break;
+    case DESK_DROP_FILES:
+        if (client || n!=12 || !(p->serial=desk_get32(b))) return 0;
+        p->x=(int32_t)desk_get32(b+4); p->y=(int32_t)desk_get32(b+8);
+        expected=12; fd=1; break;
     case DESK_CREATE_WINDOW:
         if (!client || n<36) return 0;
         p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);

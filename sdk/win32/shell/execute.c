@@ -101,6 +101,7 @@ HANDLE W32API FindExecutableA(const char *file,const char *directory,char *out){
   return (HANDLE)(uintptr_t)33;
 }
 DWORD W32API SHAppBarMessage(DWORD message,void *data){(void)message;(void)data;return 0;}
-BOOL W32API Shell_NotifyIconA(DWORD message,void *data){(void)data;w32_diag("shell","notify-icon",message==2?"delete":"recorded-no-tray");return 1;}
-BOOL W32API Shell_NotifyIconW(DWORD message,void *data){return Shell_NotifyIconA(message,data);}
+extern BOOL W32API CiukiShellNotify(DWORD,void *,BOOL);
+BOOL W32API Shell_NotifyIconA(DWORD message,void *data){return CiukiShellNotify(message,data,0);}
+BOOL W32API Shell_NotifyIconW(DWORD message,void *data){return CiukiShellNotify(message,data,1);}
 void W32API SHChangeNotify(LONG event,ULONG flags,const void *a,const void *b){(void)event;(void)flags;(void)a;(void)b;}

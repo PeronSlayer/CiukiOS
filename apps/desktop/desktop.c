@@ -11,6 +11,7 @@
 #include "media_notice.h"
 #include "settings_io.h"
 #include "users_worker.h"
+#include "shortcut_io.h"
 #include "wallpaper_io.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
@@ -183,7 +184,7 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
     reason=PAUSE_TIMER;
     if(d->shell && d->shell_caret_next)loop_deadline(now,d->shell_caret_next,&wait);
     loop_deadline(now,timer,&wait);
-    if (d->shell && !d->sh.gate) {
+    if (d->shell && !d->sh.gate && !d->power.state) {
         loop_deadline(now,d->saver_poll ? d->saver_poll : now+1000000000ull,&wait);
         if (d->saver_active && !d->monitor_off && d->saver_frame!=UINT64_MAX) loop_deadline(now,d->saver_frame,&wait);
     }
@@ -545,6 +546,7 @@ static void launch_bind(struct desktop *d, int index, const struct desk_program 
     c->dosbox=!strcmp(program->name,"dosbox");
     c->mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
     c->awaiting_frame=desk_program_graphical(program->name);
+    c->initial_show=d->launch_show;
     c->launched_ns=monotonic();
     c->launch_input_ns=click_ns;
 }
@@ -2282,6 +2284,11 @@ struct links_worker {
     unsigned scans, game_scans, stats, reads;  /* f2-95: totals for tests and diagnostics */
     char source[260];
     char profile_programs[USERS_PATH];
+    int edit_requested, edit_busy, edit_done, edit_result;
+    char edit_source[260];
+    struct desk_launch_record edit_record;
+    unsigned char icon_valid[DESK_LINKS], scratch_icon_valid[DESK_LINKS];
+    uint32_t icons[DESK_LINKS][DESK_SHORTCUT_PIXELS], scratch_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
@@ -2291,13 +2298,16 @@ static int links_profile_update(struct desktop *d)
     struct links_worker *w=links_worker;
     if (!w) return 1;
     pthread_mutex_lock(&w->mutex);
-    if (w->scanning || w->launch_busy || w->save_busy) { pthread_mutex_unlock(&w->mutex); return 0; }
+    if (w->scanning || w->launch_requested || w->launch_busy || w->save_requested || w->save_busy || w->edit_requested || w->edit_busy || w->edit_done) { pthread_mutex_unlock(&w->mutex); return 0; }
     snprintf(w->profile_programs,sizeof(w->profile_programs),"%s",d->sh.profile.programs);
     w->count=0; w->scanned_ns=0; w->scan_requested=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex);
     d->v3_link_count=0;
     return 1;
 }
+/* Render-owned snapshot: worker writes never race a paint using these pixels. */
+static unsigned char links_icon_valid[DESK_LINKS];
+static uint32_t links_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
 static void links_scan_once(struct links_worker *w, int games)
 {
     struct links_scan s={.out=w->scratch,.stamps=w->scratch_stamps,.cap=DESK_LINKS,
@@ -2306,6 +2316,9 @@ static void links_scan_once(struct links_worker *w, int games)
     snprintf(s.programs,sizeof(s.programs),"%s",w->profile_programs);
     pthread_mutex_unlock(&w->mutex);
     int count=links_list(&s);
+    memset(w->scratch_icon_valid,0,sizeof(w->scratch_icon_valid));
+    for(unsigned k=0;k<s.count;k++)
+        w->scratch_icon_valid[k]=(unsigned char)desk_shortcut_icon_load(&w->scratch[k].launch,w->scratch_icons[k]);
     unsigned removed=w->games_removed;
     for(unsigned g=1;games && g<=CIUKI_DOSVM_GAME_COUNT;g++){
         struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
@@ -2318,6 +2331,8 @@ static void links_scan_once(struct links_worker *w, int games)
     w->count=count>0 && count<=(int)DESK_LINKS ? (unsigned)count : 0;
     memcpy(w->published,w->scratch,w->count*sizeof(*w->published));
     memcpy(w->published_stamps,w->scratch_stamps,w->count*sizeof(*w->published_stamps));
+    memcpy(w->icon_valid,w->scratch_icon_valid,sizeof(w->icon_valid));
+    memcpy(w->icons,w->scratch_icons,w->count*sizeof(*w->icons));
     w->scanned_ns=monotonic(); w->scanning=0;
     w->scans++; w->game_scans+=!!games; w->stats+=s.stats; w->reads+=s.reads;
     desk_wake(w->desktop);
@@ -2336,14 +2351,26 @@ static void *links_thread(void *arg)
     struct links_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->mutex);
-        while (!w->scan_requested && !w->launch_requested && !w->save_requested) pthread_cond_wait(&w->changed,&w->mutex);
+        while (!w->scan_requested && !w->launch_requested && !w->save_requested && !w->edit_requested) pthread_cond_wait(&w->changed,&w->mutex);
         int launch=w->launch_requested, games=0; char path[260];
         unsigned save=w->save_requested,game=w->save_game;
-        if (save) { w->save_requested=0; w->save_busy=1; }
+        int edit=w->edit_requested;
+        if(edit){w->edit_requested=0;w->edit_busy=1;}
+        else if (save) { w->save_requested=0; w->save_busy=1; }
         else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
         else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
-        if (save) {
+        if(edit){
+            /* Re-read the source before replacement: stale or deleted links
+             * fail explicitly and are never silently recreated. */
+            struct desk_launch_record *old=malloc(sizeof(*old));
+            int result=old ? link_read(NULL,w->edit_source,old) : -ENOMEM;
+            free(old);
+            if(!result)result=desk_shortcut_write(w->edit_source,&w->edit_record);
+            pthread_mutex_lock(&w->mutex);
+            w->edit_result=result;w->edit_done=1;w->edit_busy=0;w->scan_requested=1;
+            desk_wake(w->desktop);pthread_mutex_unlock(&w->mutex);
+        }else if (save) {
             struct ciuki_dosvm_command command={.version=CIUKI_DOSVM_VERSION,.size=sizeof(command)};
             command.launch.game=game;
             int result=ciuki_dosvm(save,&command) ? -errno : 0;
@@ -2398,7 +2425,11 @@ static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsign
     pthread_mutex_lock(&w->mutex);
     unsigned n=w->count<cap ? w->count : cap;
     int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
+    same=same && !memcmp(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid)) &&
+        !memcmp(links_icons,w->icons,n*sizeof(*links_icons));
     if (!same) memcpy(out,w->published,n*sizeof(*out));
+    memcpy(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid));
+    memcpy(links_icons,w->icons,n*sizeof(*links_icons));
     links_request(w,d,monotonic());
     pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
 }
@@ -2406,6 +2437,63 @@ static int link_cached(struct desktop *d,const char *source,struct desk_launch_r
 {
     for (unsigned k=0;k<d->v3_link_count;k++) if (!strcmp(source,d->v3_links[k].source)) { *out=d->v3_links[k].launch; return 0; }
     return -ENOENT;
+}
+static int drop_snapshot(struct desktop *d)
+{
+    /* Channel attachments are read-only surface grants, never file fds.
+     * Serialize the shell-owned list and release the writable mapping
+     * before publication so a queued drop has independent immutable bytes. */
+    const struct sh_dnd *g=&d->sh.dnd;
+    if (!g->count || g->count>DESK_DRAG_ITEMS) return -1;
+    unsigned bytes=2;
+    for (unsigned k=0;k<g->count;k++) {
+        size_t n=strlen(g->paths[k]);
+        if (!n || n>=FM_PATH || g->paths[k][0]!='/' || !desk_utf8_valid((const uint8_t *)g->paths[k],(unsigned)n)) return -1;
+        if (strchr(g->paths[k],'\\') || strchr(g->paths[k],':')) return -1;
+        const char *part=g->paths[k]+1;
+        while (*part) {
+            const char *end=strchr(part,'/'); size_t len=end ? (size_t)(end-part) : strlen(part);
+            if (!len || (len==1 && part[0]=='.') || (len==2 && part[0]=='.' && part[1]=='.')) return -1;
+            if (!end) break;
+            part=end+1;
+        }
+        bytes+=(unsigned)n+2;
+    }
+    unsigned rows=(bytes+4+4095)/4096;
+    int fd=ciuki_surface_create(1024,rows,CIUKI_SURFACE_XRGB8888);
+    if (fd<0) return -1;
+    uint8_t *out=ciuki_surface_map(fd,PROT_READ|PROT_WRITE);
+    if (!out || out==MAP_FAILED) { close(fd); return -1; }
+    desk_put32(out,bytes); memcpy(out+4,"X\n",2); unsigned at=6;
+    for (unsigned k=0;k<g->count;k++) {
+        size_t n=strlen(g->paths[k]);
+        out[at++]=g->types && g->types[k]=='D' ? 'D' : 'F';
+        memcpy(out+at,g->paths[k],n); at+=(unsigned)n; out[at++]='\n';
+    }
+    if (munmap(out,rows*4096)) { close(fd); return -1; }
+    return fd;
+}
+static const uint32_t *link_icon_cached(struct desktop *d,const char *source,unsigned size)
+{
+    if(size!=16 && size!=32)return NULL;
+    for(unsigned k=0;k<d->v3_link_count;k++)if(!strcmp(source,d->v3_links[k].source))
+        return links_icon_valid[k] ? links_icons[k]+(size==32 ? 16*16 : 0) : NULL;
+    return NULL;
+}
+static int link_save_async(struct desktop *d,const char *source,const struct desk_launch_record *record)
+{
+    if(!source || !record || !desk_launch_valid(record))return -EINVAL;
+    unsigned k=0;for(;k<d->v3_link_count;k++)if(!strcmp(source,d->v3_links[k].source))break;
+    if(k==d->v3_link_count)return -ENOENT;
+    struct links_worker *w=links_worker;
+    if(!w || pthread_mutex_trylock(&w->mutex))return -EBUSY;
+    int result=0;
+    if(w->edit_requested || w->edit_busy || w->edit_done)result=-EBUSY;
+    else {
+        snprintf(w->edit_source,sizeof(w->edit_source),"%s",source);w->edit_record=*record;w->edit_requested=1;
+        pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->mutex);return result;
 }
 static int link_launch_async(struct desktop *d,const struct desk_launch_record *record)
 {
@@ -2462,6 +2550,7 @@ static void links_start(struct desktop *d)
     d->install_program=install_program; d->open_path=shell_open_path;
     fm_registry_exchange=desk_w32_exchange;
     d->v3_links_list=links_snapshot; d->v3_link_read=link_cached; d->v3_launch=link_launch_async;
+    d->v3_link_save=link_save_async;d->v3_link_icon=link_icon_cached;
 }
 static void links_service(struct desktop *d)
 {
@@ -2485,7 +2574,12 @@ static void links_service(struct desktop *d)
         w->save_game=d->sh.save_game; w->save_requested=d->sh.save_op; d->sh.save_op=0;
         pthread_cond_signal(&w->changed);
     }
+    int edit_done=w->edit_done,edit_result=w->edit_result;w->edit_done=0;
     int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
+    if(edit_done){
+        d->v3_links_force|=DESK_LINKS_SCAN;d->v3_links_next=0;
+        if(edit_result<0)desk_shell_message(d,"Shortcut Properties","The shortcut could not be saved. Check that the file is still available and writable.",1);
+    }
     if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
 }
@@ -2605,7 +2699,9 @@ int main(int argc, char **argv)
     uint32_t *portrait = malloc(DESK_PORTRAIT_SIZE*DESK_PORTRAIT_SIZE*4);
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
-    desk_init(d,&ops,info.width,info.height); du_clip_bind(desk_clip_local,d); d->display=display; d->input=input;
+    desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->drop_snapshot=drop_snapshot;
+    du_clip_bind(desk_clip_local,d);
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
     d->time_ns=monotonic;
     d->screen_control=screen_control; d->monitor_power=monitor_power; d->lfb_bytes_per_pixel=(info.bpp+7)/8;

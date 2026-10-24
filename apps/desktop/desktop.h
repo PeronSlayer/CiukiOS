@@ -119,6 +119,8 @@ struct desk_client {
     uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
     int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
     int accept_files;             /* fx-19: DragAcceptFiles (DESK_ACCEPT_FILES) */
+    int flash;                    /* G18: visual inversion, never activation */
+    int initial_show;             /* shortcut Run state, consumed on CREATE */
     /* G3: session_aware: the window registered for QUERY_END_SESSION;
      * session_end: 1 send END_SESSION(1) at the end of the session, 2 the
      * Win32 broker delivered WM_ENDSESSION (no close message); close_sent_ns:
@@ -395,6 +397,8 @@ struct desktop {
     char build_identity[65], version[65], notice[64];
     struct desk_link_entry *v3_links;
     unsigned v3_link_count;
+    int launch_show;              /* scoped by the shortcut launcher */
+    int (*drop_snapshot)(struct desktop *); /* private read-only drag surface */
     uint64_t v3_links_next;
     /* f2-95: DESK_LINKS_SCAN asks the shortcut worker for a scan at the next
      * snapshot, DESK_LINKS_GAMES also for the bundled-games query. Without a
@@ -403,6 +407,8 @@ struct desktop {
     /* Enumerate a fresh bounded snapshot; read source again before launch. */
     int (*v3_links_list)(struct desktop *, struct desk_link_entry *, unsigned);
     int (*v3_link_read)(struct desktop *, const char *, struct desk_launch_record *);
+    int (*v3_link_save)(struct desktop *, const char *, const struct desk_launch_record *);
+    const uint32_t *(*v3_link_icon)(struct desktop *, const char *, unsigned);
     int (*v3_launch)(struct desktop *, const struct desk_launch_record *);
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;

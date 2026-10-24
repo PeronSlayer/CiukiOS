@@ -1127,6 +1127,8 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+#include "g18_shortcut_test.h"
+#include "g18_tray_test.h"
 static void row_startup(unsigned m)
 {
     row_name="startup programs"; wm_begin(m,1);
@@ -1640,7 +1642,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
     row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
-    row_network_tools};
+    row_network_tools, row_g18_shortcuts, row_g18_tray};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
@@ -1670,6 +1672,7 @@ static void wm_dump(void)
 }
 static void report(int sig)
 { (void)sig; fprintf(stderr,"aborted in mode %s at %s\n",wm_names[wm_mode],step_name); wm_dump(); signal(SIGABRT,SIG_DFL); }
+#ifndef WM_NO_MAIN
 int main(int argc, char **argv)
 {
     signal(SIGABRT,report);
@@ -1691,3 +1694,5 @@ int main(int argc, char **argv)
     printf("PASS fx-15 window model: %u frames identical to a full redraw\n",wm_frames);
     return 0;
 }
+
+#endif

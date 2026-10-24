@@ -16,6 +16,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+
+static int shortcut_hotkey(struct desktop *,int,int);
+static void shortcut_programs_menu(struct desktop *,struct sh_menu *,int);
 
 /* ---- theme hooks ------------------------------------------------------- */
 /* Every shell colour is a theme colour (desk_theme; DU_* are the same
@@ -28,6 +32,7 @@
 #define SH_TIP       0xffffe1u      /* tooltip paper */
 static void tooltip_hide(struct desktop *d);
 static void logon_paint(struct desktop *,struct desk_box);
+static struct desk_box program_tray_box(const struct desktop *,unsigned);
 /* G4: the taskbar's keyboard focus (KB-13) and the access keys of menus (SM-9). */
 static void taskbar_set(struct desktop *d, int pick);
 static void taskbar_blur(struct desktop *d, int refocus);
@@ -386,6 +391,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     m->kind = kind; m->hot = -1;
     m->row_h = kind == SH_MENU_START ? SH_START_ROW : SH_SUB_ROW;
     m->icon = 16;   /* every menu: the Tango 16 px artwork (the Start menu too) */
+    if (kind>=128) { shortcut_programs_menu(d,m,kind); return; }
     switch (kind) {
     case SH_MENU_START:
         item(m, "Programs", "applications-other", SH_ACT_SUBMENU, SH_MENU_PROGRAMS, 0);
@@ -411,10 +417,6 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         d->v3_links_force|=DESK_LINKS_SCAN;
         desk_links_refresh(d);
         if (d->v3_link_count) item(m,"Programs folder","folder",SH_ACT_PROGRAMS_FOLDER,0,0);
-        unsigned preview=0;
-        for (unsigned k=0;k<d->v3_link_count && preview<8;k++) if (!d->v3_links[k].desktop) {
-            item(m,d->v3_links[k].launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0); preview++;
-        }
         int developer = 0, accessories = 0, system_tools = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
@@ -431,6 +433,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         /* The bundled shareware games run in a DOS Box window (catalog.h desk_games). */
         if (program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
         if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
+        shortcut_programs_menu(d,m,kind);
         break;
     }
     case SH_MENU_SYSTEM_TOOLS:
@@ -439,6 +442,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             if (at >= 0 && !strcmp(programs[k].category, "system-tools"))
                 item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
+        shortcut_programs_menu(d,m,kind);
         break;
     case SH_MENU_ACCESSORIES:
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
@@ -449,9 +453,11 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             else if (at >= 0)
                 item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
+        shortcut_programs_menu(d,m,kind);
         break;
     case SH_MENU_GAMES:
         for (unsigned k = 0; k < DESK_GAME_COUNT; k++) if(!(d->games_removed&(1u<<k))) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
+        shortcut_programs_menu(d,m,kind);
         break;
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
@@ -839,7 +845,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     }
     case SH_ACT_WIN32_LINK:
-        if (desk_link_launch(d,(unsigned)it->arg)<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+        if (desk_link_launch(d,(unsigned)it->arg)<0) desk_shortcut_properties(d,(unsigned)it->arg,1);
         break;
     case SH_ACT_PROGRAMS_FOLDER: desk_internal_open(d,DESK_INTERNAL_PROGRAMS); break;
     case SH_ACT_TASKMAN: launch_named(d, "tasks", NULL); break;
@@ -948,6 +954,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         if (it->arg==2 && d->sh.icon_count>2 && !strcmp(d->sh.icons[2].label,"Recycle Bin")) { launch_named(d,"files","recycle:properties"); break; }   /* G2 */
         if (it->arg>=0 && it->arg<d->sh.icon_count) {
             const struct sh_icon *ic=&d->sh.icons[it->arg];
+            if (ic->action==SH_ACT_WIN32_LINK) { desk_shortcut_properties(d,(unsigned)strtoul(ic->argument,NULL,10),0); break; }
             if (!strcmp(ic->program,"dosbox")) for (unsigned k=0;k<DESK_GAME_COUNT;k++)
                 if (strstr(ic->argument,desk_games[k].command)) {
                     char arg[24];snprintf(arg,sizeof(arg),"--game=%u",k+1);
@@ -1089,7 +1096,9 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
         }
         int hot = k == m->hot && !(it->flags & SH_ITEM_DISABLED);
         if (hot) hot_row(&c, (struct du_rect){platinum ? x0 - 1 : x0, y, platinum ? w + 2 : w, h});
-        const uint32_t *ic = desk_shell_icon(it->icon, m->icon);
+        const uint32_t *ic = it->action==SH_ACT_WIN32_LINK && d->v3_link_icon && it->arg>=0 && (unsigned)it->arg<d->v3_link_count ?
+            d->v3_link_icon(d,d->v3_links[it->arg].source,(unsigned)m->icon) : NULL;
+        if (!ic) ic=desk_shell_icon(it->icon,m->icon);
         if (ic) du_icon_blit(&c, x0 + 6, y + (h - m->icon) / 2, ic, m->icon, it->flags & SH_ITEM_DISABLED ? DU_ICON_DISABLED : DU_ICON_NORMAL);
         int32_t tx = x0 + 6 + m->icon + 10, ty = y + (h - text_h()) / 2;
         if (it->flags & SH_ITEM_DISABLED) {
@@ -1248,6 +1257,9 @@ static void network_mac(const struct ciuki_net_state *n, char text[18])
 { snprintf(text, 18, "%02x:%02x:%02x:%02x:%02x:%02x", n->mac[0], n->mac[1], n->mac[2], n->mac[3], n->mac[4], n->mac[5]); }
 static void tooltip_text(const struct desktop *d, char *text, size_t size)
 {
+    if (d->sh.tooltip>=256 && d->sh.tooltip<256+SH_PROGRAM_TRAY) {
+        snprintf(text,size,"%s",d->sh.program_tray[d->sh.tooltip-256].tip); return;
+    }
     if (d->sh.tooltip>=16 && d->sh.tooltip<16+DESK_CLIENTS) {
         snprintf(text,size,"%s",d->clients[d->sh.tooltip-16].title); return;
     }
@@ -1303,7 +1315,7 @@ static struct desk_box tooltip_box(const struct desktop *d)
     if (w>(int)d->width-8) w=(int)d->width-8;
     int h=du_text_wrap(NULL,(struct du_rect){0,0,w-16,0},text,0)*line_h()+10;
     if (h>(int)d->height-2*DESK_BAR-12) h=(int)d->height-2*DESK_BAR-12;
-    struct desk_box anchor=d->sh.tooltip>=16 ? desk_task_button(d,d->sh.tooltip-16) :
+    struct desk_box anchor=d->sh.tooltip>=256 ? program_tray_box(d,(unsigned)d->sh.tooltip-256) : d->sh.tooltip>=16 ? desk_task_button(d,d->sh.tooltip-16) :
         d->sh.tooltip==2 ? network_icon_box(d) : d->sh.tooltip==3 ? volume_icon_box(d) :
         d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) : clock_box(d);
     return tray_popup(d,anchor,w,h);
@@ -1369,7 +1381,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
         if (!desk_intersect(button, b, &part)) continue;
         struct du_canvas bc = canvas(d, part);
         struct du_rect r = {button.x + 1, button.y, button.w - 2, button.h};
-        int active = d->focus == i && !d->clients[i].minimized;
+        int active = (d->focus == i && !d->clients[i].minimized) != !!d->clients[i].flash;
         int hot=d->sh.hover_target==16+i;
         struct desk_paint p=painter(&bc);
         desk_paint_task(&p,r.x,r.y,r.w,r.h,
@@ -1411,12 +1423,18 @@ int desk_shell_power_update(struct desktop *d, const struct ciuki_power_status *
     }
     return 0;
 }
+#include "shell_tray.h"
+
 static void draw_tray(struct desktop *d, struct du_canvas *canvas)
 {
     struct du_canvas c = *canvas;
     if(d->sh.cfg.layout_switch) {
         struct desk_box li=desk_shell_tray_icon_box(d,SH_TRAY_LANGUAGE);
         du_text(&c,li.x,li.y+12,d->sh.cfg.keyboard==CFG_KEYS_IT ? "IT" : "EN",SH_INK);
+    }
+    for (unsigned k=0;k<SH_PROGRAM_TRAY;k++) if (d->sh.program_tray[k].window) {
+        struct desk_box b=program_tray_box(d,k);
+        du_icon_blit(&c,b.x,b.y,d->sh.program_tray[k].pixels,16,DU_ICON_NORMAL);
     }
     int net_disabled=d->sh.network.state==CIUKI_NET_STOPPED && !strncmp(d->sh.network.reason,"disabled",9);
     const char *net_icon = !d->sh.network.present ? "network-error" :
@@ -1574,6 +1592,7 @@ void desk_shell_notify(struct desktop *d,const char *title,const char *text,int 
     if (n->active && n->balloon && !attention && action!=SH_NOTIFY_MEDIA && d->now_ns<n->expires) return;
     int repeat=n->active && n->action==SH_NOTIFY_VOLUME && action==SH_NOTIFY_VOLUME;
     if (n->active) damage(d,notification_outer(d));
+    program_balloon_dismiss(d,0x403);
     n->slide=repeat ? n->slide : 20;
     if (!repeat) n->started=d->now_ns;
     n->expires=d->now_ns+8000000000ull;
@@ -1717,7 +1736,7 @@ static void icon_open(struct desktop *d, int index)
     }
     if (ic->action==SH_ACT_WIN32_LINK) {
         unsigned k=(unsigned)strtoul(ic->argument,NULL,10);
-        if (desk_link_launch(d,k)<0) desk_shell_message(d,"Desktop","This shortcut is unavailable or its target could not be started.",1);
+        if (desk_link_launch(d,k)<0) desk_shortcut_properties(d,k,1);
     }
     else if (ic->action == SH_ACT_LAUNCH) launch_named(d, ic->program, ic->argument[0] ? ic->argument : NULL);
 }
@@ -1814,7 +1833,13 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         struct desk_paint p = painter(&c);
         int selected = desk_shell_icon_marked(d, k) || drop_lit(d, k);
         int32_t ix = ic->box.x + (ic->box.w - SH_DESKTOP_ICON) / 2, iy = ic->box.y + 4;
-        du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        const uint32_t *custom=NULL;
+        if (ic->action==SH_ACT_WIN32_LINK && d->v3_link_icon) {
+            unsigned link=(unsigned)strtoul(ic->argument,NULL,10);
+            if (link<d->v3_link_count) custom=d->v3_link_icon(d,d->v3_links[link].source,32);
+        }
+        if (custom) du_icon_blit(&c,ix+8,iy+8,custom,32,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        else du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
         char lines[2][32];
         int count = label_lines(ic->label, lines), widest = 0;
         for (int l = 0; l < count; l++) { int w = desk_text_measure(DESK_FONT_LABEL, lines[l]); if (w > widest) widest = w; }
@@ -2046,15 +2071,24 @@ static int files_target(const struct desktop *d, int i)
 static int app_target(const struct desktop *d, int i)
 {
     const struct desk_client *c = &d->clients[i];
-    return c->window && !c->closing && c->accept_files && c->version == DESK_SHELL_VERSION;
+    return c->window && !c->closing && c->accept_files && (c->version == DESK_SHELL_VERSION || c->version == DESK_V3_VERSION);
 }
-static void dnd_send(struct desktop *d, int i, unsigned op, unsigned length, const uint32_t *words, unsigned n)
+static int dnd_send(struct desktop *d, int i, unsigned op, unsigned length, const uint32_t *words, unsigned n)
 {
-    if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
+    if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return 0;
     struct ciuki_message m; desk_message(&m, op, length);
-    m.data[0] = (uint8_t)d->clients[i].version; m.data[2] = (uint8_t)d->clients[i].minor;
-    for (unsigned k = 0; k < n; k++) desk_put32(m.data + 4 + 4 * k, words[k]);
+    unsigned offset=4;
+    if (d->clients[i].version==DESK_V3_VERSION) {
+        desk_v3_message(&m,op,length-4,0,d->clients[i].v3_id,d->clients[i].v3_generation); offset=16;
+        if (op==DESK_DROP_FILES) {
+            int fd=d->drop_snapshot ? d->drop_snapshot(d) : -1;
+            if (fd<0) return 0;
+            m.fd_count=1; m.fds[0]=fd;
+        }
+    } else { m.data[0]=(uint8_t)d->clients[i].version; m.data[2]=(uint8_t)d->clients[i].minor; }
+    for (unsigned k = 0; k < n; k++) desk_put32(m.data + offset + 4 * k, words[k]);
     desk_queue(d, i, &m);
+    return 1;
 }
 static void dnd_over(struct desktop *d, int phase)
 {
@@ -2287,8 +2321,9 @@ static void dnd_commit(struct desktop *d, unsigned effect)
         if (g->target >= 0 && app_target(d, g->target)) {
             struct desk_box b = desk_content(&d->clients[g->target]);
             uint32_t w[3] = {g->serial, (uint32_t)(x - b.x), (uint32_t)(y - b.y)};
-            dnd_send(d, g->target, DESK_DROP_FILES, 16, w, 3); performed = FM_EFFECT_COPY;
-            desk_focus(d, g->target);
+            if (dnd_send(d, g->target, DESK_DROP_FILES, 16, w, 3)) {
+                performed = FM_EFFECT_COPY; desk_focus(d, g->target);
+            }
         }
         break;
     case SH_DROP_DESKTOP: case SH_DROP_ICON: case SH_DROP_TRASH: {
@@ -2699,7 +2734,7 @@ void desk_shell_reconcile(struct desktop *d)
         const struct desk_client *c=&d->clients[i];
         if (now.box.w>0) {
             now.icon=client_icon(d,i);
-            now.flags=(d->focus==i && !c->minimized ? 1u : 0u)|(d->sh.hover_target==16+i ? 2u : 0u)|(c->minimized ? 4u : 0u)|
+            now.flags=((d->focus==i && !c->minimized) != !!c->flash ? 1u : 0u)|(d->sh.hover_target==16+i ? 2u : 0u)|(c->minimized ? 4u : 0u)|
                 (d->sh.taskbar_key && d->sh.task_pick==i ? 8u : 0u);
             snprintf(now.title,sizeof(now.title),"%s",c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title);
         }
@@ -2805,6 +2840,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
     }
     case DESK_INTERNAL_GAME_DATA: *w=480; *h=230; break;
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
+    case DESK_INTERNAL_SHORTCUT: *w=548; *h=430; break;
     case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
     case DESK_INTERNAL_ABOUT: *w = 540; *h = 420; break;
     case DESK_INTERNAL_AUTOPLAY: *w = 430; *h = 252; break;
@@ -3164,6 +3200,8 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         credits_page(d, c, content, page);
     }
 }
+#include "shell_g18.h"
+
 static int programs_entry(const struct desktop *d, int row)
 {
     for (unsigned k=0;k<d->v3_link_count;k++) if (!d->v3_links[k].desktop && row--==0) return (int)k;
@@ -3172,7 +3210,7 @@ static int programs_entry(const struct desktop *d, int row)
 static void programs_open_selected(struct desktop *d)
 {
     int k=programs_entry(d,d->sh.programs_selected);
-    if (k>=0 && desk_link_launch(d,(unsigned)k)<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+    if (k>=0 && desk_link_launch(d,(unsigned)k)<0) desk_shortcut_properties(d,(unsigned)k,1);
 }
 void desk_internal_paint(struct desktop *d, int index, struct desk_box content, struct desk_box clip)
 {
@@ -3183,6 +3221,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     struct du_canvas c = canvas(d, b);
     du_fill(&c, R(content), SH_FACE);
     switch (cl->internal) {
+    case DESK_INTERNAL_SHORTCUT: shortcut_paint(d,index,&c,content); break;
     case DESK_INTERNAL_GAME_DATA: {
         char size[96];
         du_icon_blit(&c,content.x+14,content.y+16,desk_shell_icon("input-gaming",32),32,DU_ICON_NORMAL);
@@ -3325,6 +3364,7 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
     struct desk_client *cl = &d->clients[index];
     struct desk_box content = desk_content(cl);
     switch (cl->internal) {
+    case DESK_INTERNAL_SHORTCUT: return shortcut_click(d,index,x,y);
     case DESK_INTERNAL_GAME_DATA:
         for (unsigned b=0;b<(d->sh.save_confirm ? 2u : 3u);b++)
             if (desk_contains((struct desk_box){content.x+12+(int)b*154,content.y+content.h-36,146,26},x,y))
@@ -3425,6 +3465,17 @@ int desk_shell_button(struct desktop *d, int button, int down)
      * a release still reaches the source window that holds the button. */
     if (d->sh.dnd.active && !d->sh.dnd.menu) return desk_shell_drag_button(d, button, down) && down;
     int32_t x = d->mouse_x, y = d->mouse_y;
+    for (unsigned k=0;k<SH_PROGRAM_TRAY;k++) if (desk_contains(program_tray_box(d,k),x,y)) {
+        uint32_t message=button==CIUKI_BUTTON_LEFT ? (down ? 0x201u : 0x202u) :
+            button==CIUKI_BUTTON_RIGHT ? (down ? 0x204u : 0x205u) : (down ? 0x207u : 0x208u);
+        struct sh_program_tray *t=&d->sh.program_tray[k];
+        if (down && button==CIUKI_BUTTON_LEFT) {
+            if (t->click_ns && d->now_ns-t->click_ns<=(uint64_t)d->sh.cfg.double_click_ms*1000000ull) {
+                message=0x203; t->click_ns=0;
+            } else t->click_ns=d->now_ns ? d->now_ns : 1;
+        }
+        program_tray_event(d,k,message); return 1;
+    }
     if (down && d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
         struct desk_box b=d->sh.icons[f->editing+3].box;
@@ -3463,6 +3514,8 @@ int desk_shell_button(struct desktop *d, int button, int down)
             if (k == -1) continue;
             if (k>=0 && button==CIUKI_BUTTON_RIGHT && d->sh.menus[l].items[k].action==SH_ACT_GAME)
                 desk_game_properties(d,(unsigned)d->sh.menus[l].items[k].arg+1);
+            else if (k>=0 && button==CIUKI_BUTTON_RIGHT && d->sh.menus[l].items[k].action==SH_ACT_WIN32_LINK)
+                desk_shortcut_properties(d,(unsigned)d->sh.menus[l].items[k].arg,0);
             else if (k >= 0 && button != CIUKI_BUTTON_MIDDLE) activate(d, l, k);
             return 1;
         }
@@ -3541,7 +3594,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
     /* The visible orb wins input over notifications underneath its circle. */
     if (desk_start_contains(d, x, y)) {
         if (d->sh.notification.active) {
-            damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
+            program_balloon_dismiss(d,0x403); damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
         }
         if (button == CIUKI_BUTTON_LEFT) desk_menu_open(d, SH_MENU_START, 0, 0);
         return 1;
@@ -3552,6 +3605,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
             struct desk_box b=notification_box(d);
             int close=desk_contains((struct desk_box){b.x+b.w-26,b.y+12,18,18},x,y);
             damage(d,notification_outer(d)); n->active=0; damage(d,notification_icon_box(d));
+            if (d->sh.balloon_window) { program_balloon_dismiss(d,close ? 0x403u : 0x405u); return 1; }
             if (close) return 1;
             if (n->action==SH_NOTIFY_NETWORK) {
                 if (program_index(d,"control")>=0) launch_named(d,"control","--panel=network");
@@ -3564,7 +3618,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
         return 1;
     }
     if (d->sh.notification.active) {
-        damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
+        program_balloon_dismiss(d,0x403); damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
     }
     struct desk_box bar = desk_taskbar(d);
     if (y >= 0 && y < DESK_BAR) {
@@ -3659,6 +3713,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
 static int hover_target(const struct desktop *d)
 {
     int x=d->mouse_x,y=d->mouse_y;
+    for (unsigned k=0;k<SH_PROGRAM_TRAY;k++) if (desk_contains(program_tray_box(d,k),x,y)) return 256+(int)k;
     if (desk_contains(clock_box(d),x,y)) return 1;
     if (desk_contains(network_icon_box(d),x,y)) return 2;
     if (desk_contains(volume_icon_box(d),x,y)) return 3;
@@ -3694,9 +3749,10 @@ void desk_shell_motion(struct desktop *d)
     int over_start = desk_start_contains(d, x, y);
     if (over_start != d->sh.start_hot) { d->sh.start_hot = over_start; damage(d, desk_start_bounds(d)); }
     int target=hover_target(d);
+    if (target>=256) program_tray_event(d,(unsigned)target-256,0x200);
     if (target!=d->sh.hover_target) {
-        if (d->sh.hover_target>=16) damage(d,desk_task_button(d,d->sh.hover_target-16));
-        if (target>=16) damage(d,desk_task_button(d,target-16));
+        if (d->sh.hover_target>=16 && d->sh.hover_target<16+DESK_CLIENTS) damage(d,desk_task_button(d,d->sh.hover_target-16));
+        if (target>=16 && target<16+DESK_CLIENTS) damage(d,desk_task_button(d,target-16));
         tooltip_hide(d); d->sh.hover_target=target;
         d->sh.hover_since=target ? (d->now_ns ? d->now_ns : 1) : 0;
     } else if (target && !d->sh.hover_since) d->sh.hover_since=d->now_ns ? d->now_ns : 1;
@@ -3729,19 +3785,20 @@ void desk_shell_tick(struct desktop *d)
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;
         d->sh.want_reload |= 16|32;
     }
+    program_balloon_tick(d);
     struct sh_notification *n=&d->sh.notification;
     if (n->active) {
         uint64_t age=d->now_ns>=n->started ? d->now_ns-n->started : 0;
         int slide=age>=160000000ull ? 0 : 20-(int)(age/8000000ull);
-        if (d->now_ns>=n->expires) { damage(d,notification_outer(d)); n->active=0; damage(d,notification_icon_box(d)); }
+        if (d->now_ns>=n->expires) { program_balloon_dismiss(d,0x404); damage(d,notification_outer(d)); n->active=0; damage(d,notification_icon_box(d)); }
         else if (slide!=n->slide) {
             damage(d,notification_outer(d)); n->slide=slide; damage(d,notification_outer(d));
         }
     }
     int target=hover_target(d);
     if (target!=d->sh.hover_target) {
-        if (d->sh.hover_target>=16) damage(d,desk_task_button(d,d->sh.hover_target-16));
-        if (target>=16) damage(d,desk_task_button(d,target-16));
+        if (d->sh.hover_target>=16 && d->sh.hover_target<16+DESK_CLIENTS) damage(d,desk_task_button(d,d->sh.hover_target-16));
+        if (target>=16 && target<16+DESK_CLIENTS) damage(d,desk_task_button(d,target-16));
         tooltip_hide(d); d->sh.hover_target=target;
         d->sh.hover_since=target ? (d->now_ns ? d->now_ns : 1) : 0;
     }
@@ -3904,6 +3961,7 @@ static unsigned shell_text(struct desktop *d, unsigned code, char text[9])
 static int internal_key(struct desktop *d, int index, int code, int value)
 {
     struct desk_client *c = &d->clients[index];
+    if (c->internal==DESK_INTERNAL_SHORTCUT) return shortcut_key(d,index,code,value);
     if (c->internal==DESK_INTERNAL_TRANSFER) { desk_folder_dialog_key(d,code,value); return 1; }
     if (value == 0) return 1;
     switch (c->internal) {
@@ -3917,6 +3975,7 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         return 1;
     case DESK_INTERNAL_PROGRAMS:
         if (code==DU_KEY_ESC) desk_request_close(d,index);
+        else if (code==DU_KEY_ENTER && (d->sh.modifiers&DU_ALT)) { int link=programs_entry(d,d->sh.programs_selected); if(link>=0)desk_shortcut_properties(d,(unsigned)link,0); }
         else if (code==DU_KEY_ENTER) programs_open_selected(d);
         else if (code==DU_KEY_UP && d->sh.programs_selected>0) d->sh.programs_selected--;
         else if (code==DU_KEY_DOWN && programs_entry(d,d->sh.programs_selected+1)>=0) d->sh.programs_selected++;
@@ -4228,6 +4287,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
         }
         return 1;
     }
+    if (shortcut_hotkey(d,code,value)) return 1;
     if (logo) {
         /* Either Windows key; the Start menu opens when the last one is
          * released without another key between (a chord is not a tap). */
@@ -4410,7 +4470,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (d->sh.volume_open && code == DU_KEY_ESC) { if (value) { d->sh.volume_open = 0; damage(d, outer(volume_popup(d))); } return 1; }
     if (d->sh.notification.active && code==DU_KEY_ESC) {
-        if (value) { damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d)); }
+        if (value) { program_balloon_dismiss(d,0x403); damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d)); }
         return 1;
     }
     if (d->focus >= 0 && d->clients[d->focus].internal) {
@@ -4545,6 +4605,10 @@ int desk_shell_wallpaper_update(struct desktop *d)
 
 void desk_links_refresh(struct desktop *d)
 {
+    /* Menu item arguments and dynamic folder IDs index this snapshot.
+     * Keep it stable while displayed so an installer cannot reorder a
+     * visible item's target underneath the next click. */
+    if (d->sh.levels) return;
     if (!d->v3_links_list || d->now_ns<d->v3_links_next) return;
     d->v3_links_next=d->now_ns+2000000000ull;
     if (!d->v3_links) d->v3_links=calloc(DESK_LINKS,sizeof(*d->v3_links));

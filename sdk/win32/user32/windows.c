@@ -632,6 +632,7 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   struct u32_window *w = u32_window(h);
   if (!w)
     return u32_fail(1400);
+  if (!w->parent) cmd=u32_startup_show(cmd);
   BOOL old = !!(w->style & WS_VISIBLE);
   DWORD prev = w->style;
   if (!cmd)
@@ -779,6 +780,10 @@ LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
       u32_place(w);
     break;
   case GWL_EXSTYLE:
+    if (!w->parent && ((w->exstyle^(DWORD)value)&0x10u)) {
+      uint8_t b[4]; desk_put32(b,!!((DWORD)value&0x10u));
+      if (!u32_wire(w,DESK_ACCEPT_FILES,b,4,-1)) return 0;
+    }
     w->exstyle = value;
     if (!w->parent)
       u32_place(w);

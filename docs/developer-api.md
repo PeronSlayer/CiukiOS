@@ -5351,7 +5351,17 @@ PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
 3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED).
 
 ```c
-DESK_V3_LIMITS
+DESK_V3_LIMITS,
+```
+
+G18: TRAY_ICON: action,id,NIF flags,callback,tip-length,UTF-8 tip;
+optional 16x16 ARGB surface iff NIF_ICON. BALLOON: id,title-length,
+text-length,timeout-ms(low16)|NIIF-kind(high16),title,text.
+EVENT: id,callback,mouse-message,screen-x,screen-y.
+FLASH: invert (0/1). All use the authenticated window tuple.
+
+```c
+DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH
 };
 ```
 
@@ -5529,7 +5539,11 @@ DRAG_DROP (desktop to the Files target): serial, client x, y, effect.
 DRAG_END (desktop to the Files source): effect performed (0 none).
 ACCEPT_FILES (any v2 client to desktop): 0/1, DragAcceptFiles.
 DROP_FILES (desktop to an accepting client): serial, client x, y;
-  WM_DROPFILES, the client reads the data object (du_drop_file).
+  WM_DROPFILES, the v2 client reads the data object (du_drop_file).
+G18 v3: ACCEPT_FILES has one 0/1 word; DROP_FILES has the three
+words above plus one read-only 1024-wide XRGB surface grant containing
+a u32 byte count and an independent X\n<type>/path\n snapshot. The
+receiver owns the transferred descriptor until it copies the data.
 
 ```c
 DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
@@ -5793,6 +5807,12 @@ char argument[DESK_ARG_MAX + 1];
 LAUNCH: optional single program argument (empty when absent)
 
 ```c
+char tooltip[128];
+```
+
+G18 tray tooltip (UTF-8 bytes)
+
+```c
 struct ciuki_input_event event;
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
@@ -5839,6 +5859,12 @@ uint32_t input_settings[DESK_INPUT_VALUES];
 ```
 
 optional 64-byte PRESENTED
+
+```c
+int attachment_fd;
+```
+
+owned immutable DROP_FILES snapshot, -1 when absent
 
 ```c
 struct desk_clip_wire clip;
