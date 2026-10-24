@@ -1198,6 +1198,36 @@ done:
     return e;
 }
 
+/* G10: caller has stopped acceleration and suspended scanout ownership.
+ * Query and set are bounded by the existing firmware VM call budget. */
+int biosvm_video_dpms(unsigned state)
+{
+    if (state!=0 && state!=1 && state!=4) return -EINVAL;
+    int e=biosvm_video_prepare();
+    if (e) return e;
+    kmutex_lock(&request_mutex);
+    if (fullscreen_video) { e=-EBUSY; goto done; }
+    if ((e=claim_video())) goto done;
+    uint32_t *pt=P2V(low_pt);
+    for (uint32_t p=0xA0000;p<0xC0000;p+=PAGE_SIZE)
+        pt[p>>12]=p|PTE_P|PTE_U|PTE_W|PTE_PCD|PTE_PWT;
+    video_active=true; firmware.io=video_io; firmware.max_call_ms=1000;
+    struct biosvm_regs r={.interrupt=0x10,.eax=0x4f10};
+    e=submit(&r,1000,0);
+    if (e || (uint16_t)r.eax!=0x004f) e=-EOPNOTSUPP;
+    else if (state && !((r.ebx>>8)&state)) e=-EOPNOTSUPP;
+    if (!e) {
+        r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4f10,.ebx=(state<<8)|1};
+        e=submit(&r,1000,0);
+        if (!e && (uint16_t)r.eax!=0x004f) e=-EIO;
+    }
+    video_active=false; firmware.io=0; firmware.max_call_ms=0;
+    for (uint32_t p=0xA0000;p<0xC0000;p+=PAGE_SIZE) pt[p>>12]=0;
+    if (!quarantined && release_video()) e=-EIO;
+done:
+    kmutex_unlock(&request_mutex); return e;
+}
+
 /* f3-20: persistent display ownership, not generic guest firmware forwarding.
  * The existing 2 KiB private scratch tail bounds the firmware state buffer. */
 static uint8_t fullscreen_saved[2048];

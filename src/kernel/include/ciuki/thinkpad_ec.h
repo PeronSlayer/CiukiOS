@@ -10,6 +10,8 @@ struct thinkpad_ec_io {
     void (*write)(void *, uint16_t, uint8_t);
     uint64_t (*now)(void *);
     void (*pause)(void *);
+    /* fx-26: CMOS NVRAM byte 60h (the firmware's mixer copy), or NULL. */
+    uint8_t (*nvram)(void *);
 };
 struct thinkpad_ec {
     struct thinkpad_ec_io io;
@@ -33,6 +35,15 @@ struct thinkpad_ec {
      * written once at sync_due, after the last change. */
     bool level_sync, sync_pending;
     uint64_t sync_due;
+    /* fx-26: key watch. The NVRAM mixer byte is read every
+     * THINKPAD_EC_WATCH_MS (no EC traffic); a change asks for one RD_EC at
+     * once. After any mirrored key change the EC is read every
+     * THINKPAD_EC_ACTIVE_MS for THINKPAD_EC_ACTIVE_HOLD_MS. Key-driven reads
+     * are spaced by THINKPAD_EC_TRIGGER_MS. */
+    bool nvram_valid, trigger_pending, nvram_since;
+    uint8_t nvram_byte;
+    uint64_t next_watch, next_fast, next_active, active_until;
+    uint32_t window_nvram_polls, window_nvram_changes, window_triggered, window_active_reads, window_missed;
 };
 /* f1-100: on the T23 every EC transaction raises the EC event line (GPI12,
  * routed to SMI# while SCI_EN is clear) and costs about two 2.1 ms SMIs.
@@ -48,6 +59,22 @@ struct thinkpad_ec {
 #define THINKPAD_EC_REFRESH_MS 1000u     /* minimum spacing of requested refreshes */
 #define THINKPAD_EC_OP_TRANSACTIONS 4u   /* probe with a write: read, stable read, write, proof */
 #define THINKPAD_EC_SYNC_MS 250u         /* fx-3: coalescing delay of a system-to-EC level write */
+/* fx-26: the volume keys reach the tray on the next frame. IBM ThinkPad
+ * firmware keeps its mixer state in CMOS NVRAM byte 60h (level bits 0-3,
+ * mute bit 6, bit 7 toggles on every volume key; Linux v6.12
+ * thinkpad_acpi.c TP_NVRAM_ADDR_MIXER, polled at 10 Hz on models whose
+ * keys raise no event; the T23 is an IBM "\CMOS" model there). It is only
+ * a trigger: register 30h stays the truth, and the 2 s poll and the active
+ * cadence below still find a press the NVRAM does not show ("missed" in
+ * the keys record). Reading it is two CMOS port accesses and no EC
+ * transaction, so it raises no EC event SMI; a change triggers one RD_EC
+ * (one 2.1 ms SMI on the T23) at once. Key-driven reads: at most one per THINKPAD_EC_TRIGGER_MS (10/s,
+ * at most 21 ms of SMI per second, only while keys are pressed). */
+#define THINKPAD_EC_WATCH_MS 100u        /* NVRAM watch cadence (10 Hz) */
+#define THINKPAD_EC_TRIGGER_MS 100u      /* minimum spacing of key-driven RD_EC */
+#define THINKPAD_EC_ACTIVE_MS 250u       /* EC cadence after a mirrored key change */
+#define THINKPAD_EC_ACTIVE_HOLD_MS 3000u /* ... for this long after the last change */
+#define THINKPAD_EC_NVRAM_MIXER 0x60u
 /* fx-3: system master 0..100 -> EC level 0..14, rounded to nearest. */
 unsigned thinkpad_ec_level(unsigned master);
 /* Returns the poll interval (0 off); *source names the deciding token
@@ -91,6 +118,9 @@ int thinkpad_ec_master_refresh(struct ciuki_mixer_master *);
 /* Task context: ask the EC worker for one refresh (rate bounded); no-op
  * without a qualified EC. */
 void thinkpad_ec_refresh_request(void);
+/* fx-26: the key-watch record "[ec] thinkpad keys ..." and a counter
+ * reset; false for a window without NVRAM changes or key-driven reads. */
+bool thinkpad_ec_keys_window(struct thinkpad_ec *, char *out, size_t size);
 /* cpustat window (task context): prints the traffic record, if any. */
 void thinkpad_ec_window_emit(void);
 #endif

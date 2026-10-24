@@ -43,6 +43,7 @@ struct ec_model {
     unsigned reads, writes, pauses, register_reads, volume_writes, busy_every, write_delay;
     uint8_t unstable_bits;
     bool absent, stuck_ibf, stuck_obf, reject_write, frozen_clock;
+    uint8_t nvram; unsigned nvram_reads; /* fx-26: CMOS byte 60h */
 };
 static struct ec_model ehw;
 static uint8_t ec_bios_memory[0x10000], ec_table_memory[65536];
@@ -77,9 +78,10 @@ static void ec_mock_write(void *ctx,uint16_t port,uint8_t value)
         h->busy_every && h->writes%h->busy_every==0 ? 100 : 1);
 }
 static uint64_t ec_mock_now(void *ctx) { return ((struct ec_model *)ctx)->tick; }
+static uint8_t ec_mock_nvram(void *ctx) { struct ec_model *h=ctx; h->nvram_reads++; return h->nvram; }
 static void ec_mock_pause(void *ctx) { struct ec_model *h=ctx;h->pauses++;if(!h->frozen_clock)h->tick++; }
 static struct thinkpad_ec_io ec_mock_io(void)
-{ return (struct thinkpad_ec_io){&ehw,ec_mock_read,ec_mock_write,ec_mock_now,ec_mock_pause}; }
+{ return (struct thinkpad_ec_io){&ehw,ec_mock_read,ec_mock_write,ec_mock_now,ec_mock_pause,NULL}; }
 static void ec_native_sleep(uint32_t ms) { CHECK(ms==1 || ms==EC_POLL_MS); while(ms--)ec_mock_pause(&ehw);g_ticks=ehw.tick; }
 static uint32_t ec_native_pte(uint32_t va)
 {
@@ -832,6 +834,114 @@ static void test_thinkpad_ec_key_persistence(void)
     printf("ThinkPad EC fx-9b: f4-29 key save wrote %u sectors with %u FLUSH CACHE (device-wide barrier, other writers' metadata included); key path now 6 presses = %u RD_EC, 0 disk reads/writes/flushes, 0 AUDIO.CFG records; shutdown flush 1 record; tray save supersedes PASS\n",
            old_writes,old_flushes,key_transactions);
 }
+/* fx-26: a volume key reaches the master within one NVRAM watch period
+ * (100 ms) instead of the 2 s poll, with no EC traffic while idle beyond
+ * the f2-96 poll; repeated presses follow at the active cadence even when
+ * the NVRAM byte does not move; key-driven reads are bounded. The worker
+ * model wakes exactly when ec_next_ms says, as ec_worker does. */
+struct ec_keys_run { uint64_t first_change, transactions, reads; unsigned changes; };
+static struct ec_keys_run ec_keys_until(struct ciuki_mixer_master *m, uint64_t until, uint64_t press_at, unsigned presses,
+                                        unsigned spacing, bool nvram_tracks)
+{
+    struct ec_keys_run r={UINT64_MAX,hec.total_transactions,ehw.register_reads,0};
+    uint64_t wake=ehw.tick; unsigned pressed=0;
+    while (ehw.tick<until) {
+        if (pressed<presses && ehw.tick>=press_at+(uint64_t)pressed*spacing) {
+            static int direction=1;
+            uint8_t level=(uint8_t)(ehw.reg&15u);
+            if (level>=14) direction=-1;
+            if (level==0) direction=1;
+            level=(uint8_t)(level+direction);
+            ehw.reg=(uint8_t)((ehw.reg&~15u)|level);
+            if (nvram_tracks) ehw.nvram=(uint8_t)(((ehw.nvram&0x80u)^0x80u)|(ehw.reg&0x4fu));
+            pressed++;
+        }
+        if (ehw.tick>=wake) {
+            int changed=thinkpad_ec_volume_poll(&hec,m); CHECK(changed>=0);
+            if (changed==1) { r.changes++; if (r.first_change==UINT64_MAX) r.first_change=ehw.tick; }
+            wake=ehw.tick+ec_next_ms(&hec,ehw.tick,hec.poll_ms);
+            if (wake==ehw.tick) wake++;
+        }
+        ehw.tick++;
+    }
+    r.transactions=hec.total_transactions-r.transactions; r.reads=ehw.register_reads-r.reads;
+    return r;
+}
+static void test_thinkpad_ec_keys(void)
+{
+    CHECK(EC_WATCH_MS==100u && EC_TRIGGER_MS==100u && EC_ACTIVE_MS==250u && EC_ACTIVE_HOLD_MS==3000u);
+    struct ciuki_mixer_master m={.version=1,.size=32,.left=50,.right=50};
+    char line[192];
+    /* Before (f2-96, no key watch): the press waits for the 2 s poll. */
+    memset(&ehw,0,sizeof(ehw));ehw.reg=0x07;struct thinkpad_ec_io io=ec_mock_io();
+    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m));hec.poll_ms=EC_DEFAULT_POLL_MS;hec.next_poll=ehw.tick+EC_DEFAULT_POLL_MS;
+    uint64_t start=ehw.tick;
+    struct ec_keys_run before=ec_keys_until(&m,start+2100,start+10,1,0,false);
+    uint64_t before_ms=before.first_change-(start+10);
+    CHECK(before.changes==1 && before_ms>1900);
+    /* fx-26: NVRAM tracks the keys. Idle: one RD_EC per 2 s, ten NVRAM reads per second, no other EC I/O. */
+    memset(&ehw,0,sizeof(ehw));ehw.reg=0x07;ehw.nvram=0x07;io=ec_mock_io();io.nvram=ec_mock_nvram;
+    m=(struct ciuki_mixer_master){.version=1,.size=32,.left=50,.right=50};
+    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m));hec.poll_ms=EC_DEFAULT_POLL_MS;hec.next_poll=ehw.tick+EC_DEFAULT_POLL_MS;
+    (void)thinkpad_ec_window(&hec,line,sizeof(line));(void)thinkpad_ec_keys_window(&hec,line,sizeof(line));
+    start=ehw.tick;
+    struct ec_keys_run idle=ec_keys_until(&m,start+60000,0,0,0,true);
+    unsigned idle_nvram=ehw.nvram_reads;
+    CHECK(!idle.changes && idle.transactions>=29 && idle.transactions<=31 && idle_nvram>=590 && idle_nvram<=610);
+    CHECK(!thinkpad_ec_keys_window(&hec,line,sizeof(line))); /* nothing to report while idle */
+    /* One press, at any phase of the 2 s poll: mirrored within one watch period. */
+    uint64_t worst=0;
+    for (unsigned phase=0;phase<2000;phase+=37) {
+        start=ehw.tick;
+        struct ec_keys_run one=ec_keys_until(&m,start+4000,start+phase,1,0,true);
+        CHECK(one.changes==1 && one.first_change>=start+phase);
+        uint64_t ms=one.first_change-(start+phase); if (ms>worst) worst=ms;
+        CHECK(one.transactions<=1+2+12); /* the trigger, the 2 s polls, the active cadence */
+        (void)ec_keys_until(&m,ehw.tick+4000,0,0,0,true); /* quiet again */
+    }
+    CHECK(worst<=EC_WATCH_MS);
+    CHECK(!thinkpad_ec_window(&hec,line,sizeof(line)) || ec_window_field(line,"refused=")==0);
+    /* A held key (a press every 100 ms for 2 s): every step mirrored, at most
+     * one key-driven RD_EC per 100 ms (2.1 ms SMI each on the T23: <= 2.1 %). */
+    (void)thinkpad_ec_keys_window(&hec,line,sizeof(line));
+    ehw.reg=0x00;ehw.nvram=hec.nvram_byte=0x00;hec.status=0x00;m.left=m.right=0;
+    start=ehw.tick;
+    struct ec_keys_run held=ec_keys_until(&m,start+2500,start+5,14,100,true);
+    CHECK(held.changes>=10 && m.left==70 && held.transactions<=26);
+    CHECK(thinkpad_ec_keys_window(&hec,line,sizeof(line)));
+    CHECK(ec_window_field(line,"nvram_changes=")==14 && ec_window_field(line,"missed=")==0);
+    CHECK(ec_window_field(line,"triggered=")>=10 && ec_window_field(line,"triggered=")<=14);
+    (void)ec_keys_until(&m,ehw.tick+4000,0,0,0,true);
+    /* NVRAM does not track: the first press waits for the 2 s poll (counted
+     * as missed), the next presses follow at the 250 ms active cadence, and
+     * 3 s after the last one the cadence is 2 s again. */
+    (void)thinkpad_ec_keys_window(&hec,line,sizeof(line));
+    ehw.reg=0x05;hec.status=0x05;m.left=m.right=25;
+    start=ehw.tick;uint64_t first_press=hec.next_poll-1500; if (first_press<start) first_press=start;
+    struct ec_keys_run blind=ec_keys_until(&m,hec.next_poll+10,first_press,1,0,false);
+    CHECK(blind.changes==1);
+    start=ehw.tick;
+    struct ec_keys_run follow=ec_keys_until(&m,start+400,start+100,1,0,false);
+    uint64_t follow_ms=follow.first_change-(start+100);
+    CHECK(follow.changes==1 && follow_ms<=EC_ACTIVE_MS);
+    CHECK(thinkpad_ec_keys_window(&hec,line,sizeof(line)) && ec_window_field(line,"missed=")==2 &&
+          ec_window_field(line,"active_reads=")>=1);
+    start=ehw.tick;
+    struct ec_keys_run settle=ec_keys_until(&m,start+10000,0,0,0,false);
+    CHECK(!settle.changes && settle.transactions<=12+5);
+    start=ehw.tick;
+    struct ec_keys_run later=ec_keys_until(&m,start+10000,0,0,0,false);
+    CHECK(later.transactions>=4 && later.transactions<=6); /* back to one RD_EC per 2 s */
+    /* ecpoll=0 (poll off): no NVRAM watch, no EC traffic. */
+    hec.poll_ms=0;unsigned nv=ehw.nvram_reads;start=ehw.tick;
+    for (unsigned i=0;i<100;i++) { ehw.tick+=100;CHECK(!thinkpad_ec_volume_poll(&hec,&m)); }
+    CHECK(ehw.nvram_reads==nv && ec_next_ms(&hec,ehw.tick,60000u)==60000u);
+    memset(&hec,0,sizeof(hec));
+    printf("ThinkPad EC fx-26: volume key to master before (2 s poll) %llu ms, with the NVRAM watch at most %llu ms at every poll phase; "
+           "idle 60 s = %llu RD_EC and %u NVRAM reads; held key 14 steps in %llu RD_EC; blind NVRAM: next press within %llu ms (active cadence) PASS\n",
+           (unsigned long long)before_ms,(unsigned long long)worst,(unsigned long long)idle.transactions,
+           idle_nvram,(unsigned long long)held.transactions,(unsigned long long)follow_ms);
+}
 static void test_thinkpad_ec(void)
 {
     test_thinkpad_ec_init();
@@ -891,5 +1001,6 @@ static void test_thinkpad_ec(void)
     test_thinkpad_ec_one_volume(true);
     test_thinkpad_ec_one_volume(false);
     test_thinkpad_ec_key_persistence();
+    test_thinkpad_ec_keys();
     puts("ThinkPad EC: IBM/DMI gates, timed IBF/OBF read/write/readback, levels/mute, preserved bits, amplifier unity and bounded faults PASS");
 }

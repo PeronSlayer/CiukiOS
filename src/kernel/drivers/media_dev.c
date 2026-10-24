@@ -12,6 +12,22 @@ uint32_t usb_unrecognized_devices(void) __attribute__((weak));
 static bool floppy_drive(unsigned d) { return d<2 && floppy_drive_present && floppy_drive_present(d); }
 /* f5-12B2: CD audio devctls (MEDIA_CD_*) live in media_cd.c. */
 int media_cd_devctl(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes);
+/* fx-26: Windows 98 broadcasts WM_DEVICECHANGE (DBT_DEVICEARRIVAL,
+ * DBT_DEVICEREMOVECOMPLETE) when a volume arrives or leaves; here every
+ * change of the drive namespace (vfs.c/mount.c: a volume published or
+ * withdrawn) bumps one serial and wakes poll(), and /dev/media is readable
+ * until its description has read the state again. */
+extern void net_input_changed(void) __attribute__((weak));
+static uint32_t media_serial = 1;
+void vfs_namespace_changed(void)
+{
+    __atomic_fetch_add(&media_serial, 1u, __ATOMIC_RELEASE);
+    if (net_input_changed) net_input_changed();
+}
+int media_poll_events(struct file_description *f)
+{
+    return !f->observed_valid || f->observed != __atomic_load_n(&media_serial, __ATOMIC_ACQUIRE) ? POLLIN : 0;
+}
 /* G6: Win32 SetVolumeLabel / FAT 1.03 label rules: printable ASCII, upper
  * case, no * ? . , ; : / \ | + = < > [ ] ", at most 11 bytes, space padded. */
 static int media_label_encode(const char *in, char out[11])
@@ -212,6 +228,9 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         if (state.size!=bytes || state.usb_unrecognized ||
             bytes!=(version==CIUKI_MEDIA_VERSION ? sizeof(state) : sizeof(struct ciuki_media_state_v1))) return -EINVAL;
         memset(&state,0,sizeof(state)); state.version=version; state.size=bytes;
+        /* fx-26: the serial is taken before the state, so a change made
+         * while this snapshot runs leaves the description readable. */
+        f->observed=__atomic_load_n(&media_serial,__ATOMIC_ACQUIRE); f->observed_valid=true;
         /* fx-21b: v1 keeps its reserved word zero. */
         if (version==CIUKI_MEDIA_VERSION && usb_unrecognized_devices) state.usb_unrecognized=usb_unrecognized_devices();
         if (s && s->ready) {

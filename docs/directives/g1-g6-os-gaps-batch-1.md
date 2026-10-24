@@ -21,3 +21,14 @@ Rows CB-1, CB-3…CB-8, KB-10. One desktop-owned clipboard shared by native, Win
 
 ## G6 Property sheets, file attributes, disk space
 Rows FM-2, FM-7, FM-8, FM-22, FM-24, FM-28, FM-29, KB-6, DT-5. File/folder/drive Properties sheets (General: type, location, size, size on disk, contains, created/modified/accessed, attributes Read-only/Hidden/Archive/System; drive: used/free with the pie chart, label), Alt+Enter, the Attributes column; kernel/ABI fields for attributes, created/accessed times and volume free space. Implementer: Opus, high.
+
+## Amendment 1 — G5b, rest of the system clipboard (2026-10-24 03:48, lead)
+
+G5 (merged into main) left these obligations open; G5b implements them in its own worktree from `main` (Codex gpt-6.1-sol xhigh: V86/DPMI work), with the batch rules, updating rows CB-1, CB-4, CB-5, CB-7, KB-10:
+
+- DOS programmatic clipboard, INT 2Fh AX=1700h–1705h and 1708h–1709h as WINOLDAP provides it in Windows 9x DOS sessions (identify, open, empty, set data, get data size, get data, close, compact), on the one desktop store through a bounded request/completion upcall from the VM to the DOS window client; no second store and no polling mirror. Text formats CF_TEXT and CF_OEMTEXT with the code-page conversion the store already does; a DOS program that sets data publishes it to every program.
+- Delayed CF_BITMAP; CF_PALETTE, CF_METAFILEPICT and CF_ENHMETAFILE carried as handles across processes with their lifetime rules (owner exit, EmptyClipboard), CF_OWNERDISPLAY with the viewer messages; Unicode-aware registered-name comparison.
+- Native toolkit producer callbacks for delayed rendering (the libdeskui equivalent of WM_RENDERFORMAT).
+- Print Screen in a full-screen DOS session copies the text screen (text modes) as Windows 98 does; full-screen graphics modes copy nothing, as in Windows 98.
+- The DOS window's persisted clipboard settings (QuickEdit, Exclusive mode) shared with G17's property pages.
+Primary sources: Microsoft "Windows 95/98 WINOLDAP clipboard functions" (INT 2Fh 17xxh, Ralf Brown's Interrupt List as the register reference), Microsoft Standard Clipboard Formats and Clipboard Operations documentation.
