@@ -26,6 +26,15 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_splash_progress.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
+# G14: Startup menu, Step-by-step, ScanDisk message and boot-status sector
+# (assembled loader), the kernel's boot-status/ASD module, and Registry
+# Checker, System File Checker and the ScanDisk report text.
+python3 -B -m unittest discover -s "$root/tests/host" -p test_startup_menu.py
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
+    "$root/tests/host/bootstat_test.c" "$root/src/kernel/core/bootstat.c" -o "$out/bootstat_test"
+"$out/bootstat_test"
+python3 -B -m unittest discover -s "$root/tests/host" -p test_sysrecovery.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
 python3 -B "$root/tests/host/test_display_driver_model.py"
 python3 -B "$root/tests/host/test_radeon2d.py"

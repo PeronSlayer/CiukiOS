@@ -1319,19 +1319,29 @@ static int property_prepare(void *ctx)
     return 0;
 }
 
+#define PROPERTY_CHECK_NOW 410 /* G14: the drive sheet's Tools page */
 static void property_page(struct files_app *a)
 {
     struct du_dialog *d=&a->ui->dialog;
     int tools=a->property_drive>=0 && d->items[3].active==1;
     int version=a->property_drive<0 && d->items[3].active==1;
-    for (unsigned i=4;i<d->count;i++) d->items[i].hidden=(uint8_t)(tools || version);
+    /* G14: slot 5 of a drive sheet is Check Now, shown on Tools only. */
+    for (unsigned i=4;i<d->count;i++)
+        d->items[i].hidden=(uint8_t)(a->property_drive>=0 && d->items[i].id==PROPERTY_CHECK_NOW ? !tools : tools || version);
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nDefragment Now: Disk Defragmenter is not installed." : version ? a->property_version : a->property_text);
+        "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nDefragment Now: Disk Defragmenter is not installed." : version ? a->property_version : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
     struct files_app *a=ctx;
     if (e->type==DU_EV_SELECT && !a->property_options) property_page(a);
+    if (e->type==DU_EV_ACTIVATE && e->id==PROPERTY_CHECK_NOW && a->property_drive>=0) {
+        /* Windows 98: Check Now starts ScanDisk for the drive. */
+        char root[8]; if (a->property_drive==2) snprintf(root,sizeof(root),"/"); else snprintf(root,sizeof(root),"/mnt/%c",'a'+a->property_drive);
+        char *argv[]={"scandisk",root,NULL};
+        int r=spawn(a,"/Programs/scandisk",argv);
+        if (r<0) files_launch_failed(a,r);
+    }
     if (e->type==DU_EV_CHANGE) { u->dialog.items[2].disabled=0; du_invalidate(u,u->dialog.box); }
 }
 /* Integer polar sectors. Start the blue used-space sector at noon;
@@ -1448,6 +1458,8 @@ static void properties_dialog(struct files_app *a)
         snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\nUsed space:\t%s (blue)\nFree space:\t%s (purple)\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
         struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){24,178,220,23},a->property_label);
         w->disabled=!a->set_label || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
+        w=du_property_control(a->ui,5,DU_BUTTON,PROPERTY_CHECK_NOW,(struct du_rect){360,30,110,23},"Check &Now...");
+        w->disabled=!a->spawn;
     } else {
         static const char *const names[]={"&Read-only","&Hidden","&Archive","&System"};
         for (unsigned i=0;i<4;i++) {

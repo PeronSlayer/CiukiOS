@@ -549,8 +549,23 @@ config_read:
     or dword [B(flags)], CBI_F_SAFE_MODE
 .serial:
     cmp bx, serial_option
-    jne .next
+    jne .startup
     and dword [B(flags)], ~CBI_F_SERIAL_LOG
+.startup:
+    ; G14: menu=1 shows the Startup menu at every start (System
+    ; Configuration's "Enable Startup menu"); autoscan=0/2 follow Msdos.sys
+    ; AutoScan (no ScanDisk message / ScanDisk without it).
+    cmp bx, menu_option
+    jne .autoscan
+    mov byte [startup_auto], 1
+.autoscan:
+    cmp bx, autoscan0_token
+    jne .autoscan_quiet
+    mov byte [autoscan_mode], 0
+.autoscan_quiet:
+    cmp bx, autoscan2_token
+    jne .next
+    mov byte [autoscan_mode], 2
 .next:
     mov si, di
     jmp .token
@@ -580,7 +595,10 @@ config_read:
 ; Exact BOOT.CFG options; an empty name ends the list.
 option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0,'ecpoll=0',0,'ecpoll=1',0,'setup=1',0
 safe_option db 'safe=1',0
-serial_option db 'serial=0',0,0
+serial_option db 'serial=0',0
+menu_option db 'menu=1',0
+autoscan0_token db 'autoscan=0',0
+autoscan2_token db 'autoscan=2',0,0
 mode_prefix db 'mode=0x',0
 preferred_mode dw 0xffff
 cfg_seen db 0
@@ -616,14 +634,24 @@ boot_menu:
 .announce:
     mov si, menu_text
     call print
+    ; G14: a failed start, menu=1 or a Diagnostic startup request opens the
+    ; Startup menu without a key; a BOOT.CFG test request keeps its sweep.
+    test dword [B(flags)], CBI_F_TEST_REQUEST
+    jnz .restart
+    cmp byte [startup_auto], 0
+    jne .startup
 .restart:
     mov bp, 55 ; At least three seconds at the BIOS 18.2 Hz rate.
     call deadline_start
 .poll:
     call progress_check
     jc .done
+    call startup_hotkey ; CF: Ctrl held (Windows 98 Startup menu key)
+    jc .startup
     call menu_getc
     jc .deadline
+    test al, al
+    jz .extended
     cmp al, 'n'
     je .normal
     cmp al, 'N'
@@ -661,6 +689,21 @@ boot_menu:
     mov si, source_cfg
 .print_source:
     jmp print
+.extended:
+    ; AH=scan code: F8 opens the Startup menu; F5, Shift+F5 and Shift+F8
+    ; choose Safe mode, Safe mode command prompt only and Step-by-step.
+    call startup_scan
+    jc .deadline
+    call .cancel_cfg
+    test al, al
+    jz .startup_menu
+    call startup_apply
+    jmp .done
+.startup:
+    call .cancel_cfg
+.startup_menu:
+    call startup_menu
+    jmp .done
 .normal:
     ; Normal declines to add safe mode; positive config/fw_cfg sources persist.
     call .cancel_cfg
@@ -757,7 +800,7 @@ safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
 probe_prompt db 'fN:<probe> run=<8hex>: ',0
-menu_hint db 'S for safe mode, L for log, H for Hardware check'
+menu_hint db 'Ctrl or F8: Startup menu, S for safe mode, L for log, H for Hardware check'
 menu_hint_end:
 
 ; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).
@@ -793,6 +836,7 @@ menu_getc:
     jz .empty
     mov dx, 0x3f8
     in al, dx
+    mov ah, 0xff ; no scan code: serial bytes never read as F-keys
     clc
     ret
 .empty:

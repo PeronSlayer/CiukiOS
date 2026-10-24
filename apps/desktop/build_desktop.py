@@ -28,8 +28,14 @@ ACCESSORIES = {
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
+    # G14 System Tools (docs/design/startup-recovery.md 2.4 and 2.7).
+    "scandisk": ["scandisk_main.c", "scandisk_view.c", "../sysrecovery/scanreport.c"],
+    "msconfig": ["msconfig_main.c", "msconfig_view.c", "msconfig_model.c", "../sysrecovery/regcheck.c",
+                 "../sysrecovery/sfc.c", "../sysrecovery/bootcfg.c", "../../src/kernel/lib/sha256.c"],
 }
 PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", *ACCESSORIES)
+# G14 Registry Checker, System File Checker and ScanDisk report (apps/sysrecovery).
+SYSRECOVERY = ["../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -50,7 +56,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/sysrecovery", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
@@ -156,7 +162,7 @@ def build():
     start = time.monotonic()
     sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
                "desktop": ["v3_fixture.c", "w32_fixture_gate.c", "installer_fixture.c", "installer_registry.c", "installer_title.c", "win32_presenter.c", "win32_crash.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "desktop.c", "client.c", "gl_present.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
-                           "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
+                           "../libdeskui/icons.c", "../libdeskui/icon_map.c", "recovery.c", "recovery_view.c", "../sysrecovery/regcheck.c", "../sysrecovery/scanreport.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
     evidence, commands = {}, {}
@@ -179,7 +185,8 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c",
+                           "../terminal/recovery.c", *SYSRECOVERY]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
     sources["control"] = ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
@@ -191,7 +198,7 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
+                          *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control", "terminal", "msconfig") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Toolkit/compositor remain integer-only; TinyGL's scene uses the SDK x87 ABI.

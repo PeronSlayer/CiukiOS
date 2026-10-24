@@ -125,7 +125,7 @@ static void test_bootinfo(void)
     CHECK(bootinfo_validate(&bi, &why) != 0 && !strcmp(why, "display_mode"));
     NEG(bi.version = 3, "version");
     NEG(bi.size = 0x1000, "size");
-    NEG(bi.flags |= 1u << 20, "undefined_flag_bits");
+    NEG(bi.flags |= 1u << 23, "undefined_flag_bits"); /* G14 defines 15-22 and 24-31 */
     NEG(bi.flags &= ~CBI_F_A20_MASK, "a20_method");
     NEG(bi.reserved1[3] = 1, "reserved_nonzero");
     NEG(bi.uart_state = CBI_UART_BUDGET + 1, "uart_state");

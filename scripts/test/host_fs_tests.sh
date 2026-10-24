@@ -365,6 +365,8 @@ for bits in 12 16 32; do
     python3 tests/host/fs/verify.py build/host/fs/work.img
     rm build/host/fs/work.img
 done
+# G14 ScanDisk engine: damaged mkfs.fat volumes repaired, then fsck.fat -n.
+python3 -B tests/host/fs/test_scandisk.py
 python3 tests/host/fs/test_crash_classifier.py
 python3 tests/host/fs/classify_crashes.py
 python3 - <<'PY'

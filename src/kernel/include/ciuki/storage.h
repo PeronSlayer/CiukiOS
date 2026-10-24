@@ -133,6 +133,11 @@ int storage_ntfs_mount(struct storage *, unsigned slot);
 int storage_ntfs_unmount(struct storage *, unsigned slot);
 struct storage_volume *storage_volume(struct storage *, unsigned drive);
 int storage_enable_write(struct storage *, unsigned drive);
+/* G14 ScanDisk (fs/mount.c, kernel only): the check that ran at this start,
+ * and an on-demand read-only check (*schedule: the fix needs the next start). */
+struct ciuki_scandisk;
+int storage_scandisk_report(unsigned drive, struct ciuki_scandisk *);
+int storage_scandisk(unsigned drive, struct ciuki_scandisk *, bool *schedule);
 /* fx-17: after a removable device's volumes are published read-only, make
  * each writable one read-write (Windows 98 model, no ownership scan).
  * Returns the number of volumes made writable; records each outcome. */

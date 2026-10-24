@@ -677,6 +677,7 @@ class DesktopTests(unittest.TestCase):
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
         expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/hwreport",
+                                        "/Programs/scandisk", "/Programs/msconfig",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],

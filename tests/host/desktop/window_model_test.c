@@ -1025,9 +1025,25 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void row_recovery(unsigned m)
+{
+    /* G14: Safe mode labels the background's four corners; a Command prompt
+     * only start shows no desktop icons until the Terminal's WIN. Both are
+     * background content: windows over them and their removal repaint it. */
+    row_name="safe mode and command prompt"; wm_begin(m,1);
+    struct desk_box all={0,0,(int)d.width,(int)d.height};
+    d.safe_mode=1; d.sh.background_valid=0; desk_damage_add(&d.damage,all,d.width,d.height);
+    step("Safe mode labels in the four corners");
+    struct fake_app *a=app_open("files",300,200,0,DESK_BAR); step("a window over a corner label");
+    desk_move(&d,a->slot,200,200); step("the corner label exposed again");
+    d.terminal_shell=1; d.sh.background_valid=0; desk_damage_add(&d.damage,all,d.width,d.height);
+    step("command prompt only: no desktop icons");
+    assert(!desk_recovery_win(&d) && !d.terminal_shell); step("WIN: the icons return");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_recovery};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

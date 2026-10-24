@@ -259,6 +259,8 @@ static const struct program_info programs[] = {
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
     {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
+    {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},            /* G14 */
+    {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
     {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
     {"hello", "Hello", "face-smile", "developer", NULL},
@@ -1613,9 +1615,13 @@ static const uint8_t *label_halo_of(int k, const char *label, char lines[2][32],
     label_halo[k]->aa = aa; label_halo[k]->valid = 1;
     return label_halo[k]->alpha;
 }
+extern void desk_recovery_paint(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_recovery_tick(struct desktop *) __attribute__((weak));
 static void draw_icons(struct desktop *d, struct desk_box clip)
 {
-    if (!d->sh.cfg.desktop_icons) return;
+    /* G14: Safe mode's corner labels under the icons; no icons at a command prompt. */
+    if (desk_recovery_paint) desk_recovery_paint(d, clip);
+    if (!d->sh.cfg.desktop_icons || d->terminal_shell) return;
     for (int k = 0; k < d->sh.icon_count; k++) {
         const struct sh_icon *ic = &d->sh.icons[k];
         struct desk_box b;
@@ -3469,6 +3475,7 @@ void desk_shell_tick(struct desktop *d)
 {
     if (!d->shell) return;
     dnd_tick(d);
+    if (desk_recovery_tick && !d->sh.gate) desk_recovery_tick(d);
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
         d->now_ns - d->sh.network_poll_ns >= 2000000000ull)) {
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;

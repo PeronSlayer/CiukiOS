@@ -156,7 +156,7 @@ class BootMenu:
     ENTRY_TICKS = 548
     POLL_LIMIT = 0x2000000
     SAFE_CONFIRMATION = 'Safe mode; P for a probe, or wait'
-    MENU_HINT = 'S for safe mode, L for log, H for Hardware check'
+    MENU_HINT = 'Ctrl or F8: Startup menu, S for safe mode, L for log, H for Hardware check'
 
     def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
         self.safe = safe
@@ -266,6 +266,8 @@ def boot_options(options, safe=False, serial=True):
             pass  # Kernel diagnostic policy; raw BOOT.CFG options are retained.
         elif token in ('accel=0','setup=1'):
             pass  # Preserved boot-info options; consumed by the kernel.
+        elif token in ('menu=1','autoscan=0','autoscan=2'):
+            pass  # G14: Startup menu and AutoScan; also left for the kernel.
         elif re.fullmatch(r'mode=0x[0-9a-fA-F]{4}',token) and int(token[7:],16)<=0x3fff:
             mode=int(token[7:],16)
         else:raise ValueError('SELECT_ERROR: malformed BOOT.CFG token')
@@ -447,3 +449,107 @@ def pack_display_inventory(inventory):
     data += b''.join(struct.pack('<HHHHHBB', *(m[k] for k in
                       ('id', 'width', 'height', 'bpp', 'pitch', 'linear', 'reserved'))) for m in d['modes'])
     return data + bytes((32 - len(d['modes'])) * 12)
+
+
+# G14 Startup menu (docs/design/startup-recovery.md 2.2), the model the
+# assembled startup.inc is checked against.
+CBI_F_SAFE_MODE = 1 << 0
+CBI_F_VERBOSE = 1 << 11
+CBI_F_DIAG_VERBOSE = 1 << 12
+CBI_F_HW_CHECK = 1 << 13
+CBI_F_BOOT_FAILED = 1 << 15
+CBI_F_STEP = 1 << 16
+CBI_F_CMD_ONLY = 1 << 17
+CBI_F_SAFE_STORAGE = 1 << 18
+CBI_F_SCANDISK = 1 << 19
+CBI_F_SCANDISK_SKIP = 1 << 20
+CBI_F_SCANDISK_THOROUGH = 1 << 21
+CBI_F_MENU_SHOWN = 1 << 22
+CBI_F_SKIP_SHIFT = 24
+STARTUP_CHOICES = {
+    1: ('Normal', 0),
+    2: ('Logged (boot log on screen)', CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE),
+    3: ('Safe mode', CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE),
+    4: ('Step-by-step confirmation', CBI_F_STEP),
+    5: ('Command prompt only', CBI_F_CMD_ONLY),
+    6: ('Safe mode command prompt only', CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE | CBI_F_CMD_ONLY),
+    7: ('Safe mode without disks', CBI_F_SAFE_MODE),
+    8: ('Hardware check', CBI_F_HW_CHECK | CBI_F_VERBOSE),
+}
+# (action, question): a class bit (No skips it), 'log' (Yes logs) or 'desktop'.
+STEP_PROMPTS = (
+    ('log', 'Create a startup log on screen?'),
+    (0x01, 'Load the accelerated display driver?'),
+    (0x02, 'Load the sound drivers?'),
+    (0x04, 'Load the network drivers?'),
+    (0x08, 'Load the USB drivers?'),
+    (0x10, 'Load the serial, parallel, floppy and game ports?'),
+    (0x20, 'Load the power management drivers?'),
+    (0x40, 'Run the startup programs?'),
+    ('desktop', 'Start the desktop?'),
+)
+# BIOS INT 16h scan codes (AL=0) of the menu's function keys.
+SCAN_F5, SCAN_F8, SCAN_SHIFT_F5, SCAN_SHIFT_F8, SCAN_UP, SCAN_DOWN = 0x3f, 0x42, 0x58, 0x5b, 0x48, 0x50
+STARTUP_SECONDS = 30
+
+
+def step_flags(answers):
+    """Flags added by Step-by-step answers (True = Enter/Yes, False = Esc/No)."""
+    flags = 0
+    for (action, _), yes in zip(STEP_PROMPTS, answers):
+        if action == 'log':
+            flags |= (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE) if yes else 0
+        elif action == 'desktop':
+            flags |= 0 if yes else CBI_F_CMD_ONLY
+        elif not yes:
+            flags |= action << CBI_F_SKIP_SHIFT
+    return flags
+
+
+class StartupMenu:
+    """The menu's keys and 30-second countdown; any key restarts it."""
+
+    def __init__(self, failed=False):
+        self.choice = 3 if failed else 1
+        self.seconds = STARTUP_SECONDS
+        self.done = False
+
+    def key(self, ascii=0, scan=0):
+        if self.done:
+            return
+        if ascii == 13:
+            self.done = True
+            return
+        if ascii:
+            if ord('1') <= ascii <= ord('8'):
+                self.choice = ascii - ord('0')
+        else:
+            now = {SCAN_F5: 3, SCAN_SHIFT_F5: 6, SCAN_SHIFT_F8: 4, SCAN_F8: 4}.get(scan)
+            if now:
+                self.choice, self.done = now, True
+                return
+            moved = self.choice + (-1 if scan == SCAN_UP else 1 if scan == SCAN_DOWN else 0)
+            if 1 <= moved <= 8:
+                self.choice = moved
+        self.seconds = STARTUP_SECONDS
+
+    def second(self):
+        if not self.done:
+            self.seconds -= 1
+            self.done = self.seconds == 0
+
+    def flags(self):
+        return CBI_F_MENU_SHOWN | STARTUP_CHOICES[self.choice][1]
+
+
+def bootstat_loader_flags(sector, test_request=False):
+    """What bootstat_read takes from partition sector 9: (flags, auto_menu, valid)."""
+    if test_request or sector[:4] != b'CBS1' or sector[5] != 1:
+        return 0, False, False
+    flags = ((sector[6] | sector[7]) & 0x7f) << CBI_F_SKIP_SHIFT
+    auto = bool(sector[4]) or bool(sector[9] & 4)
+    flags |= CBI_F_BOOT_FAILED if sector[4] else 0
+    flags |= CBI_F_SCANDISK if sector[9] & 1 else 0
+    flags |= CBI_F_SCANDISK_THOROUGH if sector[9] & 2 else 0
+    return flags, auto, True
+

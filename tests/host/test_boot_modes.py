@@ -322,7 +322,9 @@ class LoaderParserTests(unittest.TestCase):
                    'accel=1', 'xaccel=0', 'accel=00', 'safe=10', 'serial=00',
                    'safe=0\tserial=1', 'safe=1\x00', 'A'*127, ' '*127, ' '*128,
                    'ecpoll=0', 'safe=1 ecpoll=0\r\nusbscan=0', 'ecpoll=1', 'ecpoll=00',
-                   'serial=0 ecpoll=1\r\necpoll=0', 'ecpoll=2', 'ecpoll=11')
+                   'serial=0 ecpoll=1\r\necpoll=0', 'ecpoll=2', 'ecpoll=11',
+                   # G14 Startup menu and AutoScan tokens.
+                   'menu=1', 'autoscan=0', 'autoscan=2', 'safe=0 serial=1 menu=1 autoscan=2\n', 'menu=0', 'autoscan=1', 'menu=11')
         for flags in (0, 1, 2, 3):
             for text in options:
                 with self.subTest(flags=flags, text=text):
@@ -343,7 +345,7 @@ class LoaderParserTests(unittest.TestCase):
     def test_elf_fills_shared_scratch_before_first_header_validation(self):
         m = self.machine
         self.assertEqual(m.symbols['ph_table'], m.symbols['raw_map'])
-        self.assertEqual(m.symbols['loader_bss_end'], 0x6841)
+        self.assertEqual(m.symbols['loader_bss_end'], 0x7841)  # G14: + the 4 KiB cluster buffer
         for count in (1, 32):
             m.reset()
             header = bytearray(52)
@@ -412,7 +414,9 @@ int main(void)
     bad += !!cbi_quiet_console(CBI_F_TEXT_MODE);
     bad += !!cbi_quiet_console(CBI_F_HW_CHECK);
     bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u;
-    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0x7FFFu;
+    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0xFF7FFFFFu;
+    bad += CBI_F_BOOT_FAILED != 0x8000u || CBI_F_MENU_SHOWN != 0x400000u || CBI_F_SKIP_SHIFT != 24u;
+    bad += !cbi_quiet_console(CBI_F_CMD_ONLY | CBI_F_BOOT_FAILED | CBI_F_SKIP_MASK);
     printf("quiet predicate: %u failures\n", bad);
     return bad != 0;
 }
@@ -574,7 +578,7 @@ int main(void)
 
     def test_power_call_wiring_and_sdk_wrapper(self):
         abi = (ROOT / 'src/kernel/include/ciuki/abi.h').read_text()
-        self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n    CIUKI_SYS_DISPLAY = 74,\n    CIUKI_SYS_LAUNCH_MARK = 75,\n    CIUKI_SYS_DEVICES = 76,\n    CIUKI_SYS_DISPLAY_ACCEL = 77,\n    CIUKI_SYS_SOCKET = 78,\n    CIUKI_SYS_BIND = 79,\n    CIUKI_SYS_CONNECT = 80,\n    CIUKI_SYS_LISTEN = 81,\n    CIUKI_SYS_ACCEPT = 82,\n    CIUKI_SYS_SENDTO = 83,\n    CIUKI_SYS_RECVFROM = 84,\n    CIUKI_SYS_SHUTDOWN = 85,\n    CIUKI_SYS_SOCKNAME = 86,\n    CIUKI_SYS_SOCKOPT = 87,\n    CIUKI_SYS_POLL = 88,\n    CIUKI_SYS_RESOLVE4 = 89,\n    CIUKI_SYS_NETCTL = 90,\n    CIUKI_SYS_GETENTROPY = 91,\n};')
+        self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n    CIUKI_SYS_DISPLAY = 74,\n    CIUKI_SYS_LAUNCH_MARK = 75,\n    CIUKI_SYS_DEVICES = 76,\n    CIUKI_SYS_DISPLAY_ACCEL = 77,\n    CIUKI_SYS_SOCKET = 78,\n    CIUKI_SYS_BIND = 79,\n    CIUKI_SYS_CONNECT = 80,\n    CIUKI_SYS_LISTEN = 81,\n    CIUKI_SYS_ACCEPT = 82,\n    CIUKI_SYS_SENDTO = 83,\n    CIUKI_SYS_RECVFROM = 84,\n    CIUKI_SYS_SHUTDOWN = 85,\n    CIUKI_SYS_SOCKNAME = 86,\n    CIUKI_SYS_SOCKOPT = 87,\n    CIUKI_SYS_POLL = 88,\n    CIUKI_SYS_RESOLVE4 = 89,\n    CIUKI_SYS_NETCTL = 90,\n    CIUKI_SYS_GETENTROPY = 91,\n    /\* G1 TIME=97 is preserved; G6 follows the highest allocated syscall. \*/\n    CIUKI_SYS_TIME = 97,\n    CIUKI_SYS_FILE_INFO = 98,\n    /\* G14: startup recovery, after the highest allocated syscall \(98\). \*/\n    CIUKI_SYS_RECOVERY = 99,\n};')
         for name, value in (('REBOOT', 1), ('OFF', 2), ('QUERY', 3), ('CAN_REBOOT', 1), ('CAN_OFF', 2)):
             self.assertIn(f'#define CIUKI_POWER_{name} {value}u', abi)
         syscall = (ROOT / 'src/kernel/core/syscall.c').read_text()

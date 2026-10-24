@@ -351,9 +351,12 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     }
     io_until=0;
 }
+extern void bootstat_presented(void) __attribute__((weak));
 void hardware_check_run(void)
 {
     static struct hw_check_result results[HW_CHECK_ITEMS];
+    /* G14: the start reached its chosen page; it is not a failed start. */
+    if (bootstat_presented) bootstat_presented();
     summary_bytes=0; collecting_summary=false;
     check_task=g_current; console_wake();
     if (!blackbox_capture) page_line(0,"Black box unavailable: f0-25 capture hook not linked");

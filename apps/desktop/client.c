@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+extern int desk_recovery_win(struct desktop *) __attribute__((weak)); /* G14 */
 static void power_target(struct desktop *, uint32_t, const char *, int);
 static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
@@ -854,6 +855,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
         int terminal_end = terminal && p.opcode == DESK_END_TASK && !p.window_id && p.pid;
+        /* G14: WIN at a Command prompt only start opens the normal desktop. */
+        int terminal_win = terminal && p.opcode == DESK_LAUNCH && !strcmp(p.title, "win") && !p.argument[0];
         /* fx-8: a queued launch owes this TASK_RESULT; it is sent when the
          * launcher worker completes, to this requester only. */
         d->launch_deferred = 0;
@@ -863,7 +866,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
-        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
+        int32_t result = terminal_win ? (desk_recovery_win ? desk_recovery_win(d) : -ENOSYS) :
+            !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :

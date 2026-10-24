@@ -183,6 +183,11 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
     child->time_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
+    static const char *const recovery[] = { "/Programs/desktop", "/Programs/control", "/Programs/terminal",
+                                            "/Programs/scandisk", "/Programs/msconfig" };
+    child->recovery_capability = false;
+    for (unsigned i = 0; authorized && i < ARRAY_SIZE(recovery); i++)
+        if (!strncmp(path, recovery[i], strlen(recovery[i]) + 1)) child->recovery_capability = true;
 }
 
 int supervisor_spawn_gate(bool supplement, struct process **out)
@@ -234,9 +239,16 @@ void supervisor_bootstrap(void)
         if (pager_bootstrap_complete) pager_bootstrap_complete();
         return;
     }
-    const char *argv[] = { "desktop", 0 };
+    /* G14 (docs/design/startup-recovery.md 2.3): Safe mode's corner labels
+     * and notice; Command prompt only runs one Terminal and no shell. */
+    const char *argv[4] = { "desktop", 0, 0, 0 };
+    unsigned argc = 1;
+    if (g_boot.flags & CBI_F_SAFE_MODE) argv[argc++] = "--safe";
+    if (g_boot.flags & CBI_F_CMD_ONLY) argv[argc++] = "--shell=terminal";
     struct process *p = 0;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");
+    if (argc > 1) klog("[supervisor] desktop mode safe=%u shell=%s", !!(g_boot.flags & CBI_F_SAFE_MODE),
+                       (g_boot.flags & CBI_F_CMD_ONLY) ? "terminal" : "explorer");
     if (console_splash_phase) console_splash_phase(SPLASH_PHASE_SUPERVISOR);
     int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
     if (result == -ENOENT) {

@@ -90,7 +90,7 @@ G6_FRAMES = {
     "g6-drive.xrgb": "498d8688f28d739299d4b71bc2567cc7ff1e98784a8172e9c07e3cd5417e2648",
     "g6-file.xrgb": "5bfaba21d7f7629d31aa78b3edfbc71d472e207f632032aca0596d060cd2c165",
     "g6-folder.xrgb": "c7cde320492cac790ffb8e74c6ece5f449c6e88659de20cf4e58f3173d3e58d1",
-    "g6-tools.xrgb": "eee7fead585b45aa113857a8f7f27184b2e9b50a1759813e99be6fa420159b2f",
+    "g6-tools.xrgb": "56bd974b5241215bb30f2e3e523f5229f43cf3fa9414a34f88d488ba456a3424",
     "g6-version.xrgb": "96976f0bb3f2a2100d69c50ed0f6819ce2a3cc7043ac7d28d58327e1751c6526"
 }
 

@@ -186,7 +186,7 @@ class LoaderProgressTests(unittest.TestCase):
         return m
 
     def test_every_stage_has_visible_token_deadline_and_handoff_mask(self):
-        for stage, name, limit in ((0, 'menu', 1092), (1, 'video', 364),
+        for stage, name, limit in ((0, 'menu', 5461), (1, 'video', 364),
                                    (2, 'elf', 2184), (3, 'handoff', 55)):
             m = self.machine(stage)
             self.assertEqual(m.var('progress_limit', bits=16), limit)

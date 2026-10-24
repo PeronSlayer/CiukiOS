@@ -2800,3 +2800,30 @@ time outside 1980–2079; EBUSY while another change runs; EIO when clock.cfg
 or the RTC write fails, nothing changed). Win32 processes reach the same
 operation through `W32_SYSTEM`, action `W32_S_TIME_ZONE` (errors 1314, 87,
 170, 31). The behaviour is specified in [local-time.md](local-time.md).
+
+## G14 — startup recovery, call 99 (2026-10-24)
+
+Directive G14 (`docs/directives/g13-g16-os-gaps-batch-3.md`) adds
+`CIUKI_SYS_RECOVERY = 99`, the next number after main's highest (98,
+`CIUKI_SYS_FILE_INFO`): `EBX = operation`, `ECX = record *`, `EDX = exact
+record size`, other registers ignored; 0 or -errno. `STATUS` (any process)
+fills `struct ciuki_recovery_status` (72 bytes): this start's boot flags
+mirrored as `CIUKI_BOOT_*`, and the boot-status record's disabled, skipped,
+newly skipped, active and blamed driver classes, requests, failure counts,
+boots and completed starts (`VALID` clear: the system volume has no
+record). `SET` stores `disabled` and `request` for the next start, `ENABLE`
+clears the classes in `skipped` (Automatic Skip Driver); both need
+`recovery_capability` (EPERM), granted with the time authority's parent
+check to `/Programs/desktop`, `control`, `terminal`, `scandisk` and
+`msconfig`; ENODEV without a record; EINVAL for undefined bits. `SCANDISK`
+(same authority) and `REPORT` (any process) use `struct ciuki_scandisk`
+(200 bytes): `drive` (0 = A:) and the input flags `FIX`, `THOROUGH`,
+`FREE_LOST`, `NO_COPY`; the output flags `RAN`, `AT_START`, `ERRORS`,
+`FIXED`, `SCHEDULED`, `DIRTY`, `HARD_ERROR`, `TRUNCATED`, the check's own
+`result`, the geometry and the counts of every finding. `SCANDISK` returns
+ENODEV for a drive that is not a mounted FAT volume, EBUSY while another
+check runs; with `FIX` and errors on a fixed volume the repair is scheduled
+for the next start. Behaviour: [startup-recovery.md](startup-recovery.md).
+The SDK wrappers are in `ciuki/recovery.h` (`ciuki_recovery_status`,
+`ciuki_recovery_configure`, `ciuki_recovery_enable`, `ciuki_scandisk`,
+`ciuki_scandisk_report`).

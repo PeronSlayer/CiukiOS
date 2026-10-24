@@ -424,6 +424,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | G14 Safe mode and Command prompt only: Windows 98 writes "Safe mode" in the four corners of the desktop; the command-prompt start shows no desktop icons until the Terminal's WIN | the whole background once (labels drawn with the icons into the background cache); afterwards a window over a label exposes it like any background | `recovery_view.c` `desk_recovery_paint` (from `draw_icons`), `desk_recovery_win`; `shell.c` `draw_icons` skips icons while `terminal_shell` | none | safe mode and command prompt |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
