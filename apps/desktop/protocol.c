@@ -255,6 +255,16 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if (p->min_width>2048 || p->min_height>2048 || p->max_width>2048 || p->max_height>2048 ||
             (p->max_width && p->min_width>p->max_width) || (p->max_height && p->min_height>p->max_height)) return 0;
         expected=16; break;
+    case DESK_V3_LAUNCH: {
+        if (!client || n<8) return 0;
+        p->count=desk_get32(b);
+        if (!p->count || p->count>DESK_TITLE_MAX || n<8+p->count || !desk_utf8_valid(b+4,p->count)) return 0;
+        memcpy(p->title,b+4,p->count);
+        unsigned arg_n=desk_get32(b+4+p->count);
+        if (arg_n>DESK_ARG_MAX || n!=8+p->count+arg_n || !desk_utf8_valid(b+8+p->count,arg_n)) return 0;
+        memcpy(p->argument,b+8+p->count,arg_n);
+        expected=n; break;
+    }
     case DESK_V3_WIN32_HWND:
         if(!client || n!=4 || !(p->flags=desk_get32(b)))return 0;
         expected=4;break;

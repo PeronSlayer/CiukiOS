@@ -23,8 +23,8 @@ static void recycle_desktop_cases(void)
     /* The icon follows the bin: empty it first, through the icon's menu. */
     bin_poll(); assert(bin_icon_full() && !strcmp(d.sh.icons[2].label,"Recycle Bin"));
     bin_menu();
-    assert(d.sh.menus[0].count==4 && !strcmp(d.sh.menus[0].items[0].label,"Open") && menu_flags("Empty Recycle Bin")==0 &&
-           menu_flags("Properties")==0 && (d.sh.menus[0].items[2].flags&SH_ITEM_SEPARATOR));
+    assert(d.sh.menus[0].count==5 && !strcmp(d.sh.menus[0].items[0].label,"Open") && menu_flags("Empty Recycle Bin")==0 &&
+           menu_flags("Properties")==0 && (d.sh.menus[0].items[3].flags&SH_ITEM_SEPARATOR));
     capture("bin-menu");
     key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_ENTER);                     /* Empty Recycle Bin */
     assert(d.sh.confirm==SH_CONFIRM_EMPTY && !strcmp(d.sh.message_title,"Confirm Multiple File Delete") &&
@@ -43,7 +43,7 @@ static void recycle_desktop_cases(void)
     /* Open and Properties launch Files at the bin. */
     d.sh.icon_selected=2; d.sh.icons[2].selected=1; program[0]=0; launched[0]=0; key(DU_KEY_ENTER);
     assert(!strcmp(program,"files") && !strcmp(launched,"Recycle Bin"));
-    bin_menu(); key(DU_KEY_DOWN); key(DU_KEY_DOWN); program[0]=0; key(DU_KEY_ENTER);   /* Empty is disabled: Down skips it */
+    bin_menu(); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_DOWN); program[0]=0; key(DU_KEY_ENTER);   /* Empty is disabled: Down skips it */
     assert(!strcmp(program,"files") && !strcmp(launched,"recycle:properties"));
     d.sh.icons[2].selected=0;
 

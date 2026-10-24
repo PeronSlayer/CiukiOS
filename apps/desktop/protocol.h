@@ -86,7 +86,9 @@ enum desk_v3_opcode {
      * event (apps/desktop/sounds.h, below SOUND_EVENTS) the desktop plays through
      * its system-sound scheme (mute, volume and DOS-window rules apply). There is
      * no reply: like DAMAGE it only needs the window tuple of an open window. */
-    DESK_V3_SOUND = 92
+    DESK_V3_SOUND = 92,
+    /* G19: desktop-owned Control Panel action request from a v3 client. */
+    DESK_V3_LAUNCH = 93
 };
 /* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
  * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.

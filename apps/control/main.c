@@ -853,6 +853,7 @@ static int internet_write(void *ctx,const struct cp_internet_options *o)
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
+    const char *set_wallpaper=NULL;
     unsigned game=0;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
@@ -860,6 +861,7 @@ int main(int argc, char **argv)
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
+        else if (!strncmp(argv[i],"--set-wallpaper=",16)) { set_wallpaper=argv[i]+16; page=CP_DISPLAY; }
         else if (!strncmp(argv[i],"--game=",7)) {
             char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
             if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
@@ -918,6 +920,7 @@ int main(int argc, char **argv)
         du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     if (game) cp_game_open(&m->app,game);
+    if (set_wallpaper && cp_wallpaper_set(&m->app,set_wallpaper)) fprintf(stderr,"control: wallpaper path is not a supported image\n");
     int r = control_run(m);
     cp_decoder_stop();
     cp_job_finish(&m->users_worker.job);

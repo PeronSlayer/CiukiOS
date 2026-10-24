@@ -249,8 +249,13 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   entries of `C:\Documents\Desktop`. Click selects, a double click
   (desktop.cfg `double_click_ms`) or Enter opens; right click opens Open and
   Properties, plus Open With, Cut, Copy, Rename and Delete for folder
-  entries; the background menu has Arrange icons, Line up, Refresh, New
-  (Folder, Text file), Paste and Properties.
+  entries; system icon labels can be changed in place with F2. The background
+  menu has Arrange icons by Name, Type, Size or Date, Auto Arrange, Line up,
+  Refresh, New (Folder, Text file, Bitmap image, Shortcut), Paste and
+  Properties. Desktop keyboard navigation supports arrows, Home, End,
+  type-ahead and Ctrl+A. New Shortcut currently writes a CiukiOS `.lnk` record
+  targeting Files; a target picker and opening arbitrary desktop link records
+  remain unimplemented.
 - **Built-in windows** (internal clients, framed by the compositor): About
   CiukiOS (540 x 420; tabs General, System from call 70's system record and `uname`,
   Credits, see [About credits](#about-ciukios-credits-f2-97)), Run (a `/Programs` program and up to six arguments, double quotes
@@ -316,6 +321,8 @@ file before writing it and then asks the desktop to apply it.
 | `clock_24h` | 0/1 | 1 |
 | `clock_seconds` | 0/1 | 0 |
 | `desktop_icons` | 0/1 | 1 |
+| `icon_auto_arrange` | 0/1 | 0 |
+| `icon_sort` | 0 (Name), 1 (Type), 2 (Size), 3 (Date) | 0 |
 | `mouse_speed` | 1..10 (5 = one pixel per count; 2/8 .. 20/8) | 5 |
 | `double_click_ms` | 200..900 | 500 |
 | `keyboard` | `us`, `it` | `us` |
@@ -392,6 +399,11 @@ tabs, and System has General, Hardware check, Logs and Drivers
 ([interaction audit](design/desktop-interaction-audit.md)). The tab layout
 below is the f2-37 record of 2026-10-12; `--panel=` keeps accepting its
 names as aliases.
+
+Display Properties Background includes Browse for an absolute PNG, JPEG or
+BMP path. Paint, Image Viewer and NetSurf also offer Set as Wallpaper; these
+requests go through Control Panel's settings writer and the desktop settings
+reload path.
 
 The f2-37 layout: a libdeskui program (560 x 420) with tabs Display (theme list with preview,
 wallpaper list with preview, Center/Tile/Stretch/Fit/Fill, six desktop colours,

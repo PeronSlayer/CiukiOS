@@ -338,14 +338,14 @@ void cp_preview_request(struct cp_app *a, struct cp_preview_req *r, int have_ima
     const struct desk_theme *t = chosen(a);
     memset(r, 0, sizeof(*r));
     snprintf(r->path, sizeof(r->path), "%s", a->cfg.wallpaper);
-    r->mode = a->cfg.wallpaper_mode; r->colour = desktop_colour(a, t); r->bar = bar;
+    r->mode = a->cfg.wallpaper_mode; r->pattern=a->cfg.wallpaper_pattern; r->colour = desktop_colour(a, t); r->bar = bar;
     r->font = t->font_large; r->label = t->desktop_label; r->aa = t->text_aa; r->portrait = a->host.portrait;
     if (have_image) r->image = a->image;
 }
 static int preview_request_same(const struct cp_app *a, const struct cp_preview_req *r)
 {
     struct cp_preview_req now; cp_preview_request((struct cp_app *)a, &now, 0);
-    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.colour == r->colour &&
+    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.pattern==r->pattern && now.colour == r->colour &&
            now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa &&
            now.portrait == r->portrait;
 }

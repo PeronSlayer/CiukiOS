@@ -57,5 +57,5 @@ class DesktopFolderTests(unittest.TestCase):
                     (transfer_review / (raw.stem+'.png')).write_bytes(png(raw.read_bytes(),1024,768))
                     transfer_pins[raw.name]=hashlib.sha256(raw.read_bytes()).hexdigest()
             (ROOT / 'build/codex/f2-85-frame-hashes.json').write_text(json.dumps(transfer_pins,indent=2,sort_keys=True)+'\n')
-            self.assertEqual(len(list(frames.glob('*.xrgb'))),22)
+            self.assertEqual(len(list(frames.glob('*.xrgb'))),25)
             self.assertEqual(transfer_pins,json.loads((ROOT/'tests/host/desktop/desktop-transfers-goldens.json').read_text()))

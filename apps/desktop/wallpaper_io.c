@@ -71,7 +71,7 @@ static int render_file(struct desk_wall_memory *m,const struct desk_wall_request
         m->layout=*r;
         if (stage) stage("wallpaper_scaled");
     } else if (stage) stage("wallpaper_layer_reused");
-    for (size_t i=0;i<bytes/4;i++) pixels[i]=desk_wallpaper_over(m->layer[i],r->colour&0xffffffu);
+    for (size_t i=0;i<bytes/4;i++) pixels[i]=desk_wallpaper_over(m->layer[i],desk_wallpaper_pattern_pixel(r->pattern,(uint32_t)(i%r->width),(uint32_t)(i/r->width),r->colour));
     return 1;
 }
 
@@ -122,6 +122,7 @@ void desk_wall_cache_name(char out[DESK_WALL_NAME_MAX], const struct desk_wall_r
     if (r->path[0]!='/') snprintf(identity,sizeof(identity),"wallpaper-builtin-v1\n%s\n%ux%u\n%d\n%06x\n%u,%u\n%d,%06x,%d\n",
         r->path,r->width,r->height,r->mode,r->colour&0xffffffu,r->top,r->bottom,
         r->caption_font,r->caption_colour&0xffffffu,!!r->caption_aa);
+    if (r->pattern) { size_t used=strlen(identity); snprintf(identity+used,sizeof(identity)-used,"pattern=%d\n",r->pattern); }
     snprintf(out,DESK_WALL_NAME_MAX,"%08x-%ux%u-%s.raw",sha8(identity),r->width,r->height,cfg_mode_names[r->mode]);
 }
 static int join_path(char *out, size_t n, const char *dir, const char *name)
@@ -215,7 +216,7 @@ static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint
                         void (*stage)(const char *),struct desk_wall_memory *memory,struct desk_wall_worker *w)
 {
     *out=NULL; *hit=0;
-    if (!r->width || !r->height || r->width>2048 || r->height>2048 || r->mode<0 || r->mode>=CFG_WALL_MODES) return EINVAL;
+    if (!r->width || !r->height || r->width>2048 || r->height>2048 || r->mode<0 || r->mode>=CFG_WALL_MODES || r->pattern<0 || r->pattern>=DESK_WALL_PATTERNS) return EINVAL;
     int file=r->path[0]=='/';
     if (!file && strcmp(r->path,"none") && strcmp(r->path,"ciuki") && strncmp(r->path,"builtin:",8)) return EINVAL;
     struct stat s={0};
@@ -266,8 +267,8 @@ static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint
     if (!error && stage && file) stage(reuse ? "wallpaper_source_reused" : "wallpaper_decoded");
     wall_activity(w,"scale-blend");
     int layered=!error && file && render_file(memory,r,&image,pixels,reuse,stage);
-    if (!error && !layered && desk_wallpaper_render_styled(pixels,r->width,r->height,r->top,r->bottom,r->path,r->mode,
-            r->colour,&image,r->portrait,r->caption_font,r->caption_colour,r->caption_aa)) error=ENOMEM;
+    if (!error && !layered && desk_wallpaper_render_pattern_styled(pixels,r->width,r->height,r->top,r->bottom,r->path,r->mode,
+            r->colour,&image,r->portrait,r->caption_font,r->caption_colour,r->caption_aa,r->pattern)) error=ENOMEM;
     if (!error && !layered && stage) stage("wallpaper_scaled");
     /* Do not commit a frame under a key whose source changed during I/O. */
     struct stat after;
@@ -295,7 +296,7 @@ static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint
 int desk_wall_preload(const struct desk_wall_request *r, const char *dir, uint32_t **out, void (*stage)(const char *))
 {
     *out=NULL;
-    if (!dir || !r->width || !r->height || r->width>2048 || r->height>2048 || r->mode<0 || r->mode>=CFG_WALL_MODES) return EINVAL;
+    if (!dir || !r->width || !r->height || r->width>2048 || r->height>2048 || r->mode<0 || r->mode>=CFG_WALL_MODES || r->pattern<0 || r->pattern>=DESK_WALL_PATTERNS) return EINVAL;
     int file=r->path[0]=='/';
     if (!file && strcmp(r->path,"none") && strcmp(r->path,"ciuki") && strncmp(r->path,"builtin:",8)) return EINVAL;
     struct stat s={0};
