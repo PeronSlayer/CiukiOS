@@ -319,6 +319,27 @@ int main(int argc,char **argv)
     assert(!fm_clipboard_load(stick) && stick->cut && stick->clipboard_count==1);
     close_message(); fake_readonly[0]=0; fm_destroy(stick); free(stick);
     puts("PASS fx-17 desktop move from a read-only stick: both copies kept, warning names the file and the drive, cut retained");
+    /* G8 uses the same persistent inverse as Files, through the folder worker. */
+    fake_file(DESK_FOLDER "/g8.txt",2,1); command(DF_REFRESH,-1);
+    int g8=named("g8.txt"); assert(g8>=3);
+    strcpy(d.sh.folder->edit,"g8-renamed.txt"); command(DF_RENAME,g8-3);
+    assert(fake_lookup(DESK_FOLDER "/g8-renamed.txt")>=0);
+    command(DF_UNDO,-1); settle(); assert(fake_lookup(DESK_FOLDER "/g8.txt")>=0);
+    command(DF_SHORTCUT,named("g8.txt")-3);
+    assert(fake_lookup(DESK_FOLDER "/Shortcut to g8.txt.lnk")>=0);
+    char *g8_paths[]={DESK_FOLDER "/g8.txt"};
+    assert(!desk_folder_transfer(&d,g8_paths,1,DESK_FOLDER,FM_EFFECT_LINK,0,0,0,0));
+    assert(fake_lookup(DESK_FOLDER "/Shortcut to g8.txt (2).lnk")>=0);
+    for (int i=0;i<d.sh.icon_count;i++) d.sh.icons[i].selected=0;
+    d.sh.icons[named("g8.txt")].selected=1; d.sh.icons[named("Scene.BMP")].selected=1;
+    d.sh.menu_owner=named("g8.txt"); desk_menu_open(&d,SH_MENU_ICON,450,200);
+    int copy_to=-1; for (int i=0;i<d.sh.menus[0].count;i++) if (d.sh.menus[0].items[i].action==SH_ACT_FILES_ACTION && d.sh.menus[0].items[i].arg==FILES_COPY_TO) copy_to=i;
+    assert(copy_to>=0); d.sh.menus[0].hot=copy_to; key(DU_KEY_ENTER);
+    const char *selection_manifest=strchr(launched,'@'); assert(selection_manifest && !strcmp(program,"files"));
+    char **g8_selected=NULL; unsigned g8_count=0;
+    assert(!fm_shell_selection_read(&fake_vfs,selection_manifest+1,&g8_selected,&g8_count) && g8_count==2);
+    fm_drag_free(g8_selected,NULL,g8_count); assert(!fake_vfs.unlink(NULL,selection_manifest+1));
+    puts("PASS G8 desktop: rename Undo, Create Shortcut, link drops and multi-selection hand-off without changing clipboard");
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");

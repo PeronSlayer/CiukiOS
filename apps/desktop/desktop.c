@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "../files/operations.h"
 #include "desktop.h"
 #include <ciuki/present_abi.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
@@ -1999,7 +2000,7 @@ static int link_read(struct desktop *d, const char *path, struct desk_launch_rec
     uint8_t *bytes=malloc(DESK_LINK_BYTES+1); if (!bytes) { fclose(f); return -ENOMEM; }
     size_t n=fread(bytes,1,DESK_LINK_BYTES+1,f); int bad=ferror(f);
     if (fclose(f)) bad=1;
-    int result=bad || n>DESK_LINK_BYTES || !desk_link_decode(bytes,(unsigned)n,record) ? -EINVAL : 0;
+    int result=bad || n>DESK_LINK_BYTES || fm_link_decode(bytes,(unsigned)n,path,record) ? -EINVAL : 0;
     free(bytes); return result;
 }
 /* f2-95: the shortcut scan walks the Start Menu, the Windows desktop, /Games
@@ -2130,6 +2131,14 @@ static void links_scan_once(struct links_worker *w, int games)
     desk_wake(w->desktop);
     pthread_mutex_unlock(&w->mutex);
 }
+static int open_with_record(const char *path,struct desk_launch_record *record)
+{
+    if (!path || path[0]!='/' || strchr(path,'"')) return -EINVAL;
+    memset(record,0,sizeof(*record)); strcpy(record->label,"Open With");
+    strcpy(record->target,"/Programs/files"); record->show=1;
+    int n=snprintf(record->arguments,sizeof(record->arguments),"\"--file-action=%u:%s\"",FILES_OPEN_WITH,path);
+    return n<0 || (unsigned)n>=sizeof(record->arguments) ? -E2BIG : 0;
+}
 static void *links_thread(void *arg)
 {
     struct links_worker *w=arg;
@@ -2158,7 +2167,18 @@ static void *links_thread(void *arg)
                 snprintf(r->directory,sizeof(r->directory),"%s",path);
                 char *slash=strrchr(r->directory,'/');if(slash)*slash=0;
                 result=0;
-            }else if(r)result=link_read(NULL,path,r);
+            }else if(r && launch==3) {
+                result=fm_launch_resolve(fm_native_vfs(),path,NULL,r);
+                if (result==1) result=0; /* folder is a Files launch record */
+                if (!strncmp(path,"/system/settings/open-",22)) (void)unlink(path);
+            }else if(r) {
+                result=fm_launch_resolve(fm_native_vfs(),path,NULL,r);
+                if (result==1) result=0;
+            }
+            if (r && result==-ENOEXEC && launch!=2) {
+                char unresolved[260]; snprintf(unresolved,sizeof(unresolved),"%s",r->target[0]?r->target:path);
+                result=open_with_record(unresolved,r);
+            }
             if (!result) result=ciuki_win32_shell_launch(r);
             free(r);
             pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
@@ -2206,6 +2226,19 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
+static int shell_open_path(struct desktop *d,const char *path)
+{
+    (void)d;
+    if (!path || strlen(path)>=260 || (path[0]!='/' && !(path[0] && path[1]==':') &&
+        strncmp(path,"http://",7) && strncmp(path,"https://",8))) return -EINVAL;
+    struct links_worker *w=links_worker;
+    if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
+    int e=0;
+    if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
+    else { strcpy(w->source,path); w->launch_requested=3; pthread_cond_signal(&w->changed); }
+    pthread_mutex_unlock(&w->mutex); return e;
+}
+extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
 static int install_program(struct desktop *d,const char *path)
 {
     (void)d;
@@ -2234,7 +2267,8 @@ static void links_start(struct desktop *d)
     w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
     links_worker=w;
-    d->install_program=install_program;
+    d->install_program=install_program; d->open_path=shell_open_path;
+    fm_registry_exchange=desk_w32_exchange;
     d->v3_links_list=links_snapshot; d->v3_link_read=link_cached; d->v3_launch=link_launch_async;
 }
 static void links_service(struct desktop *d)

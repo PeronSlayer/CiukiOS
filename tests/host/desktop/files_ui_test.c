@@ -387,7 +387,7 @@ static void script_coordinates(void)
 {
     struct du_rect view = du_menu_title(&ui, 2), file = du_menu_title(&ui, 0);
     struct du_rect vbox = du_menu_box(&ui, app.view_items, 10, view.x, view.y + view.h);
-    struct du_rect fbox = du_menu_box(&ui, app.file_items, 11, file.x, file.y + file.h);
+    struct du_rect fbox = du_menu_box(&ui, app.file_items, app.menus[0].count, file.x, file.y + file.h);
     struct du_widget *places = du_get(&ui, 103);
     struct du_rect system = du_list_label(places, 3);
     printf("SCRIPT view_title=%d,%d list_item=%d,%d places_system=%d,%d file_title=%d,%d new_folder=%d,%d\n",
@@ -468,15 +468,15 @@ static void file_drag_tests(void)
     clock_ns+=600000000ull; motion(x2,y2); press(2); assert(!ui.popup); release(2); assert(ui.popup); key(DU_KEY_ESC);
     puts("PASS fx-19 Files drag source: SM_CXDRAG threshold, multi-selection kept on press, deferred click/Ctrl toggle, right-drag and release-time context menu, data object separate from the clipboard");
 
-    /* Drop target: same drive moves, Ctrl copies, Shift moves, Ctrl+Shift/Alt link is refused (no shortcuts). */
+    /* Drop target: same drive moves, Ctrl copies, Shift moves, Ctrl+Shift/Alt creates shortcuts. */
     assert(!files_navigate(&app,"/Documents"));
     save_drag("/Documents/Desktop/Source.txt",'F');
     int tx,ty; label_point("Target",&tx,&ty);
-    assert(over(7,tx,ty,0)==FM_EFFECT_MOVE && status_allowed==(FM_EFFECT_COPY|FM_EFFECT_MOVE));
+    assert(over(7,tx,ty,0)==FM_EFFECT_MOVE && status_allowed==FM_EFFECTS);
     assert(LIST()->drop_hot==list_find("Target")+1);
     dump("drop-target");
     assert(over(7,tx,ty,FM_KEY_CTRL)==FM_EFFECT_COPY && over(7,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_MOVE);
-    assert(over(7,tx,ty,FM_KEY_CTRL|FM_KEY_SHIFT)==FM_EFFECT_NONE && over(7,tx,ty,FM_KEY_ALT)==FM_EFFECT_NONE && !LIST()->drop_hot);
+    assert(over(7,tx,ty,FM_KEY_CTRL|FM_KEY_SHIFT)==FM_EFFECT_LINK && over(7,tx,ty,FM_KEY_ALT)==FM_EFFECT_LINK && LIST()->drop_hot);
     struct du_rect body=du_list_body(LIST());
     assert(over(7,body.x+body.w-30,body.y+body.h-30,0)==FM_EFFECT_MOVE && !LIST()->drop_hot);   /* background: this folder */
     files_drag_over(&app,7,1,0,0,0); assert(status_effect==FM_EFFECT_NONE && !LIST()->drop_hot);
@@ -487,10 +487,10 @@ static void file_drag_tests(void)
     assert(over(8,tx,ty,0)==FM_EFFECT_COPY && over(8,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_MOVE);
     files_drag_drop(&app,8,tx,ty,FM_EFFECT_MOVE); tick();
     assert(fake_lookup("/Documents/Target/Stick.txt")>=0 && fake_lookup("/mnt/e/Stick.txt")<0);
-    /* A CD source is copy-only; a folder never enters itself; its own folder is a no-op move. */
+    /* A CD source permits copy and link; a folder never enters itself; its own folder is a no-op move. */
     app.media.removable_mask=1u<<4; app.media.type[4]=CIUKI_MEDIA_OPTICAL;
     save_drag("/mnt/e/Other.txt",'F');
-    assert(over(9,tx,ty,0)==FM_EFFECT_COPY && status_allowed==FM_EFFECT_COPY && over(9,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_NONE);
+    assert(over(9,tx,ty,0)==FM_EFFECT_COPY && status_allowed==(FM_EFFECT_COPY|FM_EFFECT_LINK) && over(9,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_NONE);
     app.media.removable_mask=0; app.media.type[4]=0;
     save_drag("/Documents/Target",'D');
     assert(over(10,tx,ty,0)==FM_EFFECT_NONE && status_allowed==0);
@@ -504,9 +504,10 @@ static void file_drag_tests(void)
     assert(over(11,nl.x+4,nl.y+nl.h/2,0)==FM_EFFECT_MOVE && TREE()->drop_hot==node+1);
     files_drag_drop(&app,11,nl.x+4,nl.y+nl.h/2,FM_EFFECT_MOVE); tick();
     assert(fake_lookup("/Documents/Target/Move.txt")>=0 && fake_lookup("/Documents/Desktop/Move.txt")<0 && !TREE()->drop_hot);
-    /* A stale or mismatched effect does nothing. */
+    /* G8: a link drop publishes a shortcut, keeps the source, and refreshes. */
     save_drag("/Documents/Desktop/Third.txt",'F');
-    files_drag_drop(&app,12,tx,ty,FM_EFFECT_LINK); tick(); assert(fake_lookup("/Documents/Target/Third.txt")<0);
+    files_drag_drop(&app,12,tx,ty,FM_EFFECT_LINK); files_test_wait(&app);
+    assert(fake_lookup("/Documents/Target/Third.txt")<0 && fake_lookup("/Documents/Target/Shortcut to Third.txt.lnk")>=0 && fake_lookup("/Documents/Desktop/Third.txt")>=0);
     /* Hovering a collapsed tree folder expands it after one second (Explorer). */
     node=-1; for (unsigned i=0;i<app.tree_count;i++) if (!strcmp(app.tree[i].path,"/Documents/Target")) node=(int)i;
     assert(node>=0 && app.tree[node].children && !app.tree[node].expanded);
@@ -605,7 +606,7 @@ int main(int argc, char **argv)
     /* File > New Folder: checkpoint 2, inline rename open. */
     struct du_rect file = du_menu_title(&ui, 0);
     click(file.x + file.w / 2, file.y + file.h / 2);
-    struct du_rect fbox = du_menu_box(&ui, app.file_items, 11, file.x, file.y + file.h);
+    struct du_rect fbox = du_menu_box(&ui, app.file_items, app.menus[0].count, file.x, file.y + file.h);
     dump("menu-file");
     click(fbox.x + 40, fbox.y + 3 + 17 + 17 + 9 + 8);
     assert(checkpoint_count == 2 && app.rename_index >= 0 && fake_lookup("/system/New Folder") >= 0);
@@ -693,7 +694,7 @@ int main(int argc, char **argv)
     /* "Paste" in the folder's context menu pastes into it. */
     unsigned paste = 0; for (unsigned i = 0; i < ui.popup_count; i++) if (ui.popup[i].label && !strcmp(ui.popup[i].label, "&Paste")) paste = i;
     struct du_rect pbox = du_menu_box(&ui, ui.popup, ui.popup_count, ui.popup_x, ui.popup_y);
-    int y = pbox.y + 3; for (unsigned i = 0; i < paste; i++) y += ui.popup[i].flags & DU_ITEM_SEPARATOR ? 9 : 17;
+    int y = pbox.y + 3; for (unsigned i = 0; i < paste; i++) y += ui.popup[i].flags & DU_ITEM_SEPARATOR ? DU_MENU_SEP_H : DU_MENU_ITEM_H;
     click(pbox.x + 30, y + 8);
     tick();
     assert(du_dialog_id(&ui) && app.job.state == FM_REPLACE);

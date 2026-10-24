@@ -13,6 +13,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 
 class WindowModelTests(unittest.TestCase):
+    def test_g8_file_operation_dialogs_redraw(self):
+        from .test_file_operations import run_ui_replay
+        run_ui_replay(self)
+
     def test_every_row_equals_a_full_redraw(self):
         sources = [ROOT / "apps/desktop" / name for name in
                    ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c",

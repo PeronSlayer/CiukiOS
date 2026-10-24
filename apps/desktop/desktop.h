@@ -244,6 +244,7 @@ struct desktop {
     uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
     unsigned games_removed;
     int (*install_program)(struct desktop *,const char *);
+    int (*open_path)(struct desktop *,const char *); /* G8, shared with Files and G9 */
     struct desk_ops ops;
     int display, input, output, focus, drag;
     int v3_pointer_window; /* slot + 1, zero means no capture/clip */

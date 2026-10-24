@@ -26,7 +26,7 @@ struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int6
 /* bin: 0, or index + 1 of the entry's record in fm_model.bin (G2: the Recycle
  * Bin view lists stored items under their stored names; the record has the
  * original name, location and deletion date). */
-struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; };
+struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; char registered_type[80]; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
 /* Cheap enumeration metadata (type/size/mtime/ino); METADATA fills missing
  * portable-host metadata without opening contents. SNIFF also classifies ELF.
@@ -50,6 +50,7 @@ struct fm_vfs {
 };
 struct rb_item;
 struct rb_job;
+struct fm_undo_log;
 struct fm_model {
     struct fm_vfs fs; char path[FM_PATH], history[FM_HISTORY][FM_PATH]; unsigned history_count, history_at;
     struct fm_entry *entries; unsigned count, capacity, active, anchor, sort; int descending;
@@ -95,6 +96,10 @@ struct fm_job {
     char gone;
     /* G2 Recycle Bin bookkeeping (recycle.inc), or NULL for an ordinary job. */
     struct rb_job *bin;
+    /* G8: private transfer bookkeeping; never part of the SDK ABI. */
+    struct fm_undo_log *undo;
+    char **targets;
+    int record_undo, undoing, undo_saved, undo_unsafe, undo_error;
 };
 int fm_join(char *, const char *, const char *);
 int fm_beneath(const char *, const char *);

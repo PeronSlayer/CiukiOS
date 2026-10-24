@@ -496,6 +496,16 @@ static int sound_settings(struct desktop *d, int client, unsigned request, unsig
     sound_calls++; sound_request = request; sound_event = event; return 0;
 }
 static unsigned install_requests;
+static void test_g8_open_with_record(void)
+{
+    struct desk_launch_record r;
+    assert(!open_with_record("/Documents/unknown item.zzz",&r) && desk_launch_valid(&r));
+    assert(!strcmp(r.target,"/Programs/files") && !strcmp(r.arguments,"\"--file-action=348:/Documents/unknown item.zzz\""));
+    assert(open_with_record("relative.zzz",&r)==-EINVAL);
+}
+static unsigned shell_open_requests;
+static int shell_open_fixture(struct desktop *d,const char *path)
+{ (void)d; assert(!strcmp(path,"/Documents/a.exe")); shell_open_requests++; return 0; }
 static int install_fixture(struct desktop *d,const char *path)
 {(void)d;assert(!strcmp(path,"/mnt/d/SETUP.EXE"));install_requests++;return 0;}
 /* Each scenario owns a struct desktop (~600 KiB): keep frames out of main. */
@@ -551,6 +561,18 @@ __attribute__((noinline)) static void test_display_settings(void)
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && install_requests==1);
     d.power.state=DESK_POWER_CLOSING;drain(&d,0);v2(&d,0,500,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && install_requests==1);
+    d.power.state=0; d.open_path=shell_open_fixture; shell_open_requests=0;
+    const char *opened="/Documents/a.exe"; unsigned opened_len=(unsigned)strlen(opened);
+    desk_message(&m,DESK_LAUNCH,26+opened_len); desk_put32(m.data+4,44); desk_put32(m.data+8,10);
+    memcpy(m.data+12,"shell-open",10); desk_put32(m.data+22,opened_len); memcpy(m.data+26,opened,opened_len);
+    d.clients[0].program=0; drain(&d,0); v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && !shell_open_requests);
+    d.clients[0].program=DESK_APP_FILES; drain(&d,0); v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && shell_open_requests==1);
+    d.power.state=DESK_POWER_CLOSING; drain(&d,0); v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && shell_open_requests==1);
+    d.open_path=NULL;
+    puts("PASS G8 shared launch request: Files identity, normal result, unrelated-client refusal and shutdown refusal");
     assert(install_program(&d,"/Programs/SETUP.EXE")==-EINVAL);
     assert(install_program(&d,"/mnt/d/GAME.EXE")==-EINVAL);
     assert(install_program(&d,"/mnt/d/../SETUP.EXE")==-EINVAL);
@@ -972,11 +994,11 @@ __attribute__((noinline)) static void test_menu_icons(void)
             !strcmp(d.sh.menus[0].items[2].label,cp_applets[a].label));
     }
     desk_menu_open(&d,SH_MENU_DESKTOP,0,0);
-    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","","Properties"};
-    assert(d.sh.menus[0].count==7);
-    for (unsigned k=0;k<7;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
-    assert(d.sh.menus[0].items[6].action==SH_ACT_CONTROL && d.sh.menus[0].items[6].arg==CP_DISPLAY+1);
-    desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==2);
+    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","Paste Shortcut","Undo    Ctrl+Z","","Properties"};
+    assert(d.sh.menus[0].count==9);
+    for (unsigned k=0;k<9;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
+    assert(d.sh.menus[0].items[8].action==SH_ACT_CONTROL && d.sh.menus[0].items[8].arg==CP_DISPLAY+1);
+    desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==5);
     /* Start > Settings > Input > Keyboard keeps keyboard submenu traversal. */
     desk_menu_open(&d,SH_MENU_START,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"Settings");key(&d,DU_KEY_RIGHT);
     assert(d.sh.levels==2);d.sh.menus[1].hot=item_at(&d.sh.menus[1],"Input");key(&d,DU_KEY_RIGHT);
@@ -1418,7 +1440,7 @@ int main(int argc,char **argv)
     test_note_scenario();
     test_cd_player_menu();
     test_games_menu();
-    test_menu_icons();
+    test_menu_icons(); test_g8_open_with_record();
     test_hwreport_menu();
     test_netsurf_record();
     test_launch_timing();

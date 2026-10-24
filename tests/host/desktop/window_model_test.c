@@ -1025,9 +1025,22 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void row_g8_menus(unsigned m)
+{
+    row_name="G8 file operations"; wm_begin(m,1);
+    desk_menu_open(&d,SH_MENU_DESKTOP,600,450); step("Undo and Paste Shortcut desktop menu");
+    desk_menu_close(&d); step("desktop menu dismissed");
+    desk_menu_open(&d,SH_MENU_NEW,580,430); step("New Bitmap, Shortcut and registered document menu");
+    desk_menu_close(&d); step("New menu dismissed");
+    d.sh.dnd.allowed=FM_EFFECTS; d.sh.dnd.effect=FM_EFFECT_LINK;
+    desk_menu_open(&d,SH_MENU_DRAG,600,430);
+    assert(d.sh.menus[0].items[2].arg==FM_EFFECT_LINK && !(d.sh.menus[0].items[2].flags&SH_ITEM_DISABLED));
+    step("Create Shortcut Here enabled and default"); desk_menu_close(&d); step("link menu dismissed");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_g8_menus};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

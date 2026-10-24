@@ -429,6 +429,9 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     case SH_MENU_NEW:
         item(m,"Folder","folder-new",SH_ACT_FILE,DF_FOLDER,0);
         item(m,"Text file","text-x-generic",SH_ACT_FILE,DF_TEXT,0);
+        item(m,"Bitmap Image","image-x-generic",SH_ACT_FILE,DF_BITMAP,0);
+        item(m,"Shortcut...","emblem-symbolic-link",SH_ACT_FILES_ACTION,FILES_NEW_SHORTCUT,0);
+        item(m,"Document...","document-new",SH_ACT_FILES_ACTION,FILES_NEW_REGISTERED,0);
         break;
     case SH_MENU_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner)) {
@@ -436,6 +439,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             for (unsigned i=0;i<DESK_CATALOG_COUNT;i++) if (desk_catalog_supports(&desk_catalog[i],path))
                 item(m,desk_catalog[i].label,desk_catalog[i].tango,SH_ACT_OPEN_WITH,(int)i,0);
             item(m,"CiukNote","accessories-text-editor",SH_ACT_OPEN_WITH,-1,0);
+            item(m,"Choose Program...",NULL,SH_ACT_FILES_ACTION,FILES_OPEN_WITH,0);
         }
         break;
     case SH_MENU_DESKTOP:
@@ -444,6 +448,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"Refresh","view-refresh",SH_ACT_REFRESH,0,0);
         item(m,"New","document-new",SH_ACT_SUBMENU,SH_MENU_NEW,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Paste","edit-paste",SH_ACT_FILE,DF_PASTE,d->sh.folder ? 0 : SH_ITEM_DISABLED);
+        item(m,"Paste Shortcut",NULL,SH_ACT_FILE,DF_PASTE_SHORTCUT,d->sh.folder ? 0 : SH_ITEM_DISABLED);
+        item(m,"Undo    Ctrl+Z","edit-undo",SH_ACT_FILE,DF_UNDO,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         separator(m);
         item(m,"Properties","document-properties",SH_ACT_CONTROL,CP_DISPLAY+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
         break;
@@ -468,6 +474,14 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
                 item(m,"Open With",NULL,SH_ACT_SUBMENU,SH_MENU_OPEN_WITH,0);
             item(m,"Cut", "edit-cut", SH_ACT_FILE, DF_CUT,0);
             item(m,"Copy", "edit-copy", SH_ACT_FILE, DF_COPY,0);
+            if (d->sh.folder->model.entries[d->sh.menu_owner-3].meta.type==FM_DIR)
+                item(m,"Explore",NULL,SH_ACT_FILES_ACTION,0,0);
+            item(m,"Send To...",NULL,SH_ACT_FILES_ACTION,FILES_SEND_TO,0);
+            item(m,"Copy To Folder...",NULL,SH_ACT_FILES_ACTION,FILES_COPY_TO,0);
+            item(m,"Move To Folder...",NULL,SH_ACT_FILES_ACTION,FILES_MOVE_TO,0);
+            item(m,"Create Shortcut",NULL,SH_ACT_FILE,DF_SHORTCUT,0);
+            if (d->sh.folder->model.entries[d->sh.menu_owner-3].meta.type==FM_DIR)
+                item(m,"Paste",NULL,SH_ACT_FILE,DF_PASTE_INTO,0);
             item(m,"Rename    F2", NULL, SH_ACT_RENAME,d->sh.menu_owner,marked_count(d,0)>1 ? SH_ITEM_DISABLED : 0);
             item(m,"Delete", "edit-delete", SH_ACT_FILE, DF_DELETE,0);
         }
@@ -782,13 +796,36 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_FILE:
         if (d->sh.folder) {
             d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3;
-            if (it->arg==DF_CUT || it->arg==DF_COPY || it->arg==DF_DELETE) d->sh.folder->multi=selection_sync(d)>1;
+            if (it->arg==DF_CUT || it->arg==DF_COPY || it->arg==DF_DELETE || it->arg==DF_SHORTCUT) d->sh.folder->multi=selection_sync(d)>1;
             d->sh.folder->command_flags=0;
         }
         break;
     case SH_ACT_DRAG:
         if (d->sh.dnd.active && d->sh.dnd.menu) dnd_commit(d,(unsigned)it->arg);
         break;
+    case SH_ACT_FILES_ACTION: {
+        const char *path=icon_is_entry(d,d->sh.menu_owner)?d->sh.icons[d->sh.menu_owner].argument:"";
+        char argument[DESK_ARG_MAX+1];
+        if (!it->arg) { launch_named(d,"files",path); break; }
+        if (it->arg==FILES_NEW_SHORTCUT || it->arg==FILES_NEW_REGISTERED) path="";
+        char manifest[FM_PATH]=""; int selected=selection_sync(d);
+        if (selected>1 && (it->arg==FILES_COPY_TO || it->arg==FILES_MOVE_TO || it->arg==FILES_SEND_TO)) {
+            struct fm_model *model=&d->sh.folder->model;
+            char **paths=calloc((unsigned)selected,sizeof(*paths)); unsigned used=0; int e=paths?0:-ENOMEM;
+            for (unsigned i=0;!e && i<model->count;i++) if (model->entries[i].selected) {
+                paths[used]=malloc(FM_PATH); if (!paths[used]) e=-ENOMEM;
+                else e=fm_entry_path(model,i,paths[used]); used++;
+            }
+            if (!e) e=fm_shell_selection_write(&model->fs,paths,used,manifest);
+            fm_drag_free(paths,NULL,used);
+            if (e) { desk_shell_message(d,"Files","The selected items could not be passed to Files.",1); break; }
+            path=manifest;
+        }
+        int n=snprintf(argument,sizeof(argument),"--file-action=%d:%s%s",it->arg,manifest[0]?"@":"",path);
+        if (n<0 || (unsigned)n>=sizeof(argument)) desk_shell_message(d,"Files","This path is too long for the desktop launch channel.",1);
+        else launch_named(d,"files",argument);
+        break;
+    }
     case SH_ACT_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner))
             launch_named(d,it->arg<0 ? "ciuknote" : desk_catalog[it->arg].name,d->sh.icons[d->sh.menu_owner].argument);
@@ -1496,7 +1533,7 @@ static void icons_build(struct desktop *d)
         char path[FM_PATH]; if (fm_join(path,DESK_FOLDER,e->name)) return;
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
-            e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic", SH_ACT_LAUNCH,0);
+            e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : cat ? cat->tango : "text-x-generic", SH_ACT_LAUNCH,0);
         if (d->sh.icon_count!=(int)i+4) return;
     }
     /* Keep folder entries at index 3 + model index; Pictures is a shortcut. */
@@ -1507,6 +1544,11 @@ static void icon_open(struct desktop *d, int index)
 {
     if (index < 0 || index >= d->sh.icon_count) return;
     const struct sh_icon *ic = &d->sh.icons[index];
+    if (icon_is_entry(d,index) && d->open_path) {
+        int e=d->open_path(d,ic->argument);
+        if (e<0) desk_shell_message(d,"Desktop","The item could not be opened.",1);
+        return;
+    }
     if (ic->action==SH_ACT_WIN32_LINK) {
         unsigned k=(unsigned)strtoul(ic->argument,NULL,10);
         if (desk_link_launch(d,k)<0) desk_shell_message(d,"Desktop","This shortcut is unavailable or its target could not be started.",1);
@@ -1933,7 +1975,7 @@ static void dnd_evaluate(struct desktop *d)
         } else {
             kind = SH_DROP_DESKTOP;
             snprintf(destination, sizeof(destination), "%s", DESK_FOLDER);
-            if (g->source < 0) allowed = FM_EFFECT_MOVE | (g->count ? FM_EFFECT_COPY : 0);   /* reposition, or Ctrl: copy beside */
+            if (g->source < 0) allowed = FM_EFFECT_MOVE | (g->count ? FM_EFFECT_COPY | FM_EFFECT_LINK : 0);   /* reposition, or Ctrl: copy beside */
             else allowed = g->source_allowed;
         }
         if (kind == SH_DROP_TRASH) {
@@ -1945,8 +1987,7 @@ static void dnd_evaluate(struct desktop *d)
                 if (fm_beneath(g->paths[i], DESK_TRASH) || (!rb_dir(fm_drive_letter(g->paths[i]), dir) && fm_beneath(g->paths[i], dir))) effect = FM_EFFECT_NONE;
             }
         } else if (kind == SH_DROP_DESKTOP && g->source < 0) {
-            effect = (g->keys & FM_KEY_ALT) || (g->keys & (FM_KEY_CTRL | FM_KEY_SHIFT)) == (FM_KEY_CTRL | FM_KEY_SHIFT) ? FM_EFFECT_NONE :
-                     g->keys & FM_KEY_CTRL ? allowed & FM_EFFECT_COPY : FM_EFFECT_MOVE;
+            effect = fm_drop_effect(g->source_volume,fm_volume(destination),g->keys,allowed);
         } else if (kind == SH_DROP_ICON || kind == SH_DROP_DESKTOP) {
             if (volume_optical(d, fm_volume(destination))) allowed = 0;
             for (unsigned i = 0; i < g->count && allowed; i++) if (g->types[i] == 'D' && fm_beneath(destination, g->paths[i])) allowed = 0;
@@ -1974,7 +2015,7 @@ static void dnd_start(struct desktop *d)
     g->kind = SH_DROP_NONE; g->target = -1; g->status_target = -1; g->hover_task = -1; g->drop_index = -1;
     g->start_x = d->mouse_x; g->start_y = d->mouse_y; g->image = (struct desk_box){0, 0, 0, 0};
     g->source_volume = g->count ? fm_volume(g->paths[0]) : 0;
-    g->source_allowed = volume_optical(d, g->source_volume) ? FM_EFFECT_COPY : FM_EFFECT_COPY | FM_EFFECT_MOVE;
+    g->source_allowed = volume_optical(d, g->source_volume) ? FM_EFFECT_COPY | FM_EFFECT_LINK : FM_EFFECTS;
     tooltip_hide(d);
     dnd_evaluate(d); dnd_image_damage(d); desk_cursor_update(d);
 }
@@ -3920,8 +3961,8 @@ int desk_shell_key(struct desktop *d, int code, int value)
             }
             if (code==DU_KEY_F5) { d->sh.folder->command=DF_REFRESH; return 1; }
             if (d->sh.modifiers&DU_CTRL) {
-                int command=code==0x2f ? DF_PASTE : code==0x2e ? DF_COPY : code==0x2d ? DF_CUT : 0;
-                if (command && (command==DF_PASTE || primary>=0)) {
+                int command=code==0x2c ? DF_UNDO : code==0x2f ? DF_PASTE : code==0x2e ? DF_COPY : code==0x2d ? DF_CUT : 0;
+                if (command && (command==DF_PASTE || command==DF_UNDO || primary>=0)) {
                     d->sh.folder->command=command; d->sh.folder->index=primary-3;
                     if (command!=DF_PASTE) d->sh.folder->multi=selection_sync(d)>1;
                     return 1;
@@ -4017,6 +4058,12 @@ void desk_links_refresh(struct desktop *d)
     /* Rebuild the native folder icons first, then append validated link icons. */
     icons_build(d);
     for (unsigned k=0;k<d->v3_link_count;k++) if (d->v3_links[k].desktop && desk_launch_valid(&d->v3_links[k].launch)) {
+        int native_entry=0;
+        if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
+            char path[FM_PATH];
+            if (!fm_entry_path(&d->sh.folder->model,i,path) && fm_same_path(path,d->v3_links[k].source)) { native_entry=1; break; }
+        }
+        if (native_entry) continue;
         char index[12]; snprintf(index,sizeof(index),"%u",k);
         icon_add(d,d->v3_links[k].launch.label,"",index,"application-x-executable",SH_ACT_WIN32_LINK,0);
     }

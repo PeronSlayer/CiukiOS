@@ -45,6 +45,13 @@ int desk_w32_dos_command(const struct desk_launch_record *r,char *out,size_t cap
 {
     char path[260];int e=desk_w32_native_path(r->target,path,sizeof(path));if(e)return e;
     if(strpbrk(path," \t"))return -EOPNOTSUPP;
+    if(r->directory[0]) {
+        char requested[260],parent[260];
+        e=desk_w32_native_path(r->directory,requested,sizeof(requested));if(e)return e;
+        strcpy(parent,path);char *slash=strrchr(parent,'/');if(!slash)return -EINVAL;
+        if(slash==parent)slash[1]=0;else *slash=0;
+        if(strcasecmp(requested,parent))return -EOPNOTSUPP;
+    }
     int n=snprintf(out,cap,"C:%s%s%s",path,r->arguments[0]?" ":"",r->arguments);
     if(!strncmp(path,"/mnt/",5) && path[5]>='a' && path[5]<='z' && path[6]=='/')
         n=snprintf(out,cap,"%c:%s%s%s",path[5]-'a'+'A',path+6,r->arguments[0]?" ":"",r->arguments);

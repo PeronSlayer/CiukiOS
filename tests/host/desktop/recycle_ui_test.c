@@ -109,7 +109,7 @@ static void delete_tests(void)
     setup("/Documents/Desktop");
     fake_file("/Documents/Desktop/n1.txt", 100, 1); fake_file("/Documents/Desktop/n2.dat", 50, 2); fake_create("/Documents/Desktop/Folder", FM_DIR);
     fake_file("/Documents/Desktop/Folder/in.txt", 5, 3);
-    activate(K_PASTE); activate(K_GO_RECYCLE + 100);                              /* unknown ids do nothing */
+    activate(K_PASTE); activate(9001);                              /* unknown ids do nothing */
     assert(!files_navigate(&app, "/Documents/Desktop"));
     select_row(list_find("n1.txt"));
     key(DU_KEY_DELETE);
@@ -265,7 +265,7 @@ static void bin_view_tests(void)
     activate(K_EMPTY_BIN);
     assert(du_dialog_id(&ui) != D_BIN_EMPTY); key(DU_KEY_ENTER);
     /* The normal File menu returns outside the bin. */
-    assert(!files_navigate(&app, "/Documents")); assert(ui.menus[0].items == app.file_items && ui.menus[0].count == 11);
+    assert(!files_navigate(&app, "/Documents")); assert(ui.menus[0].items == app.file_items && ui.menus[0].count == 16);
     assert(!strcmp(LIST()->columns[1].title, "Size") && LIST()->column_count == 4);
     files_destroy(&app); fake_assert_clean();
     puts("PASS Files Recycle Bin view: columns, original name/location/date, menus, sorting, read-only items, item properties, Restore, Delete, Empty with the sound event");

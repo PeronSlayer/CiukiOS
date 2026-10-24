@@ -55,6 +55,11 @@ static int scan_submit(struct files_app *, enum scan_kind, const char *, int);
 static void scan_poll(struct files_app *);
 static void scan_stop(struct files_app *);
 static void open_item(struct files_app *, unsigned, int);
+static int operation_open(struct files_app *,const char *);
+static void open_with(struct files_app *,const char *);
+static int operations_command(struct files_app *,int);
+static int operations_result(struct files_app *,const struct du_event *);
+static int operations_undo_prepare(void *);
 static void bin_item_properties(struct files_app *, unsigned);
 static void drop_free(struct files_app *);
 static void bin_properties(struct files_app *);
@@ -62,23 +67,28 @@ static void command(struct files_app *, int);
 static int scan_cancelled(const struct files_scan *);
 
 static const struct du_menu_item file_template[] = {
-    {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open with &CiukNote", C_OPEN_NOTE, 0, 0, 0},
+    {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open &With...", FILES_OPEN_WITH, 0, 0, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"New &Folder", C_NEW_FOLDER, 0, 0, 0}, {"New &Text Document", C_NEW_TEXT, 0, 0, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Delete", C_DELETE, DU_KEY_DELETE, 0, 0}, {"Rena&me", C_RENAME, DU_KEY_F2, 0, 0},
     {"P&roperties", C_PROPERTIES, DU_KEY_ENTER, DU_ALT, 0},
-    {"Safely &remove", C_SAFE_REMOVE, 0, 0, DU_ITEM_DISABLED}, {"&Close", C_CLOSE, DU_KEY_F4, DU_ALT, 0}};
+    {"Safely &remove", C_SAFE_REMOVE, 0, 0, DU_ITEM_DISABLED}, {"&Close", C_CLOSE, DU_KEY_F4, DU_ALT, 0},
+    {"Create &Shortcut",FILES_SHORTCUT,0,0,0},{"Send &To...",FILES_SEND_TO,0,0,0},
+    {"New &Shortcut...",FILES_NEW_SHORTCUT,0,0,0},{"New &Bitmap Image",FILES_NEW_BITMAP,0,0,0},
+    {"New &Document...",FILES_NEW_REGISTERED,0,0,0}};
 static const struct du_menu_item edit_template[] = {
     {"Cu&t", C_CUT, 0x2d, DU_CTRL, 0}, {"&Copy", C_COPY, 0x2e, DU_CTRL, 0}, {"&Paste", C_PASTE, 0x2f, DU_CTRL, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"Select &All", C_SELECT_ALL, 0x1e, DU_CTRL, 0}, {"&Invert Selection", C_INVERT, 0, 0, 0}};
+    {"Select &All", C_SELECT_ALL, 0x1e, DU_CTRL, 0}, {"&Invert Selection", C_INVERT, 0, 0, 0},
+    {"&Undo",FILES_UNDO,0x2c,DU_CTRL,0},{"Paste &Shortcut",FILES_PASTE_SHORTCUT,0,0,0},
+    {"Copy To &Folder...",FILES_COPY_TO,0,0,0},{"Move To F&older...",FILES_MOVE_TO,0,0,0}};
 static const struct du_menu_item view_template[] = {
     {"Lar&ge Icons", C_ICONS, 0, 0, DU_ITEM_RADIO}, {"&List", C_LIST, 0, 0, DU_ITEM_RADIO},
     {"&Details", C_DETAILS, 0, 0, DU_ITEM_RADIO}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"Sort by &Name", C_SORT_NAME, 0, 0, DU_ITEM_RADIO}, {"Sort by &Size", C_SORT_SIZE, 0, 0, DU_ITEM_RADIO},
     {"Sort by &Type", C_SORT_TYPE, 0, 0, DU_ITEM_RADIO}, {"Sort by &Modified", C_SORT_MODIFIED, 0, 0, DU_ITEM_RADIO},
-    {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&Refresh", C_REFRESH, DU_KEY_F5, 0, 0}};
+    {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&Refresh", C_REFRESH, DU_KEY_F5, 0, 0},{"Folder &Options / File Types...",FILES_TYPES,0,0,0}};
 static const struct du_menu_item go_template[] = {
     {"&Back", C_BACK, DU_KEY_LEFT, DU_ALT, 0}, {"&Forward", C_FORWARD, DU_KEY_RIGHT, DU_ALT, 0},
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
@@ -593,7 +603,7 @@ void files_update(struct files_app *a)
     /* G2: the File menu is the Recycle Bin's while it is shown. */
     if (bin != a->bin_menu) {
         a->bin_menu = bin;
-        a->menus[0].items = bin ? a->bin_items : a->file_items; a->menus[0].count = bin ? BIN_ITEMS : 11;
+        a->menus[0].items = bin ? a->bin_items : a->file_items; a->menus[0].count = bin ? BIN_ITEMS : sizeof(file_template)/sizeof(*file_template);
     }
     if (bin) {
         set_flag(a->bin_items, BIN_ITEMS, C_RESTORE, DU_ITEM_DISABLED, !selected);
@@ -605,12 +615,20 @@ void files_update(struct files_app *a)
     for (unsigned i=0;i<11;i++) if (a->file_items[i].id==C_SAFE_REMOVE)
         a->file_items[i].label=removal_label(a,target);
     set_flag(a->file_items, 11, C_OPEN, DU_ITEM_DISABLED, !selected);
-    set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
+    set_flag(a->file_items, sizeof(file_template)/sizeof(*file_template), FILES_OPEN_WITH, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_RENAME, DU_ITEM_DISABLED, computer || selected != 1);
     set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer);
     set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer);
     set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || computer);
+    unsigned file_count=sizeof(file_template)/sizeof(*file_template), edit_count=sizeof(edit_template)/sizeof(*edit_template);
+    const int selection_actions[]={FILES_SHORTCUT,FILES_SEND_TO};
+    for (unsigned i=0;i<2;i++) set_flag(a->file_items,file_count,selection_actions[i],DU_ITEM_DISABLED,computer || bin || !selected);
+    const int new_actions[]={FILES_NEW_SHORTCUT,FILES_NEW_BITMAP,FILES_NEW_REGISTERED};
+    for (unsigned i=0;i<3;i++) set_flag(a->file_items,file_count,new_actions[i],DU_ITEM_DISABLED,a->loading || computer || bin);
+    set_flag(a->edit_items,edit_count,FILES_COPY_TO,DU_ITEM_DISABLED,computer || bin || !selected);
+    set_flag(a->edit_items,edit_count,FILES_MOVE_TO,DU_ITEM_DISABLED,computer || bin || !selected);
+    set_flag(a->edit_items,edit_count,FILES_PASTE_SHORTCUT,DU_ITEM_DISABLED,a->loading || computer || bin || !m->clipboard_count);
     set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || bin || !selected);
     set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || bin || !selected);
     set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || bin || !m->clipboard_count);
@@ -666,7 +684,7 @@ static void rename_commit(struct files_app *a)
     rename_hide(a);
     if (index >= a->model.count || strcmp(a->model.entries[index].name, original)) { files_update(a); return; }
     if (strcmp(name, original)) {
-        int r = fm_rename(&a->model, index, name);
+        int r = fm_rename_undo(&a->model, index, name);
         if (r) {
             char what[FM_NAME + 40]; snprintf(what, sizeof(what), "Cannot rename %s:", original);
             error_box(a, "Error Renaming File or Folder", what, r);
@@ -794,7 +812,8 @@ static int scan_listing(struct files_scan *s)
     unsigned count=0;
     for (unsigned i=0;i<m->count;i++) if (s->seen[i]) m->entries[count++]=m->entries[i];
     if (count!=m->count) { s->metadata_only=0; s->changed=1; m->count=count; }
-    if (!s->metadata_only) fm_sort(m,m->sort,m->descending);
+    if (s->kind!=SCAN_MEDIA || s->changed) fm_registered_types(m->entries,m->count);
+    if (!s->metadata_only || (s->kind==SCAN_REFRESH && m->sort==2)) fm_sort(m,m->sort,m->descending);
     return 0;
 }
 static int metadata_apply(struct files_app *a, struct files_scan *s)
@@ -1064,7 +1083,18 @@ static void scan_poll(struct files_app *a)
     int pending = s->error ? 0 : a->pending_command;
     a->pending_command = 0;
     scan_free(s);
-    if (pending) command(a, pending);
+    if (a->shell_action) {
+        int action=a->shell_action; a->shell_action=0;
+        if (a->shell_paths) {
+            fm_select_none(&a->model);
+            for (unsigned i=0;i<a->shell_count;i++) {
+                char parent[FM_PATH];
+                if (!fm_parent(parent,a->shell_paths[i]) && fm_same_path(parent,a->model.path)) fm_select_name(&a->model,fm_basename(a->shell_paths[i]),1);
+            }
+            fm_drag_free(a->shell_paths,NULL,a->shell_count); a->shell_paths=NULL; a->shell_count=0;
+        } else fm_select_name(&a->model,fm_basename(a->shell_action_path),0);
+        command(a,action);
+    } else if (pending) command(a, pending);
 }
 static void scan_stop(struct files_app *a)
 {
@@ -1112,47 +1142,17 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
     if (e->bin) { bin_item_properties(a, index); return; }   /* G2: an item in the bin opens its properties */
     if (fm_entry_path(&a->model, index, path)) return;
     if (e->meta.type == FM_DIR && !with_note) { files_navigate(a, path); return; }
-    if (!with_note && !classified && e->meta.type == FM_FILE && !e->meta.exec && !strchr(e->name, '.')) {
-        int r = scan_submit(a, SCAN_OPEN, path, (int)index);
-        if (r) error_box(a, "Files", "Cannot open the file.", r);
+    if (!with_note && a->shell_open) { int r=a->shell_open(a,path); if (r<0) files_launch_failed(a,r); return; }
+    if (!with_note && !classified && e->meta.type==FM_FILE && !e->meta.exec && !strchr(e->name,'.')) {
+        int r=scan_submit(a,SCAN_OPEN,path,(int)index);
+        if (r) error_box(a,"Files","Cannot open the file.",r);
         return;
     }
-    enum fm_kind kind = fm_kind(e);
-    if (e->meta.exec && !with_note) {
-        char *argv[] = {(char *)e->name, NULL};
-        int r = spawn(a, path, argv);
-        if (r < 0) { char what[FM_NAME + 40]; snprintf(what, sizeof(what), "Cannot run %s:", e->name); error_box(a, "Files", what, r); }
-        else { snprintf(a->note, sizeof(a->note), "Started %.120s", e->name); files_update(a); }
-        return;
-    }
-    if (with_note || kind == FM_KIND_TEXT || kind == FM_KIND_SCRIPT) {
-        struct fm_meta meta;
-        if (a->model.fs.stat_path(a->model.fs.ctx, "/Programs/ciuknote", &meta) || meta.type != FM_FILE) {
-            du_message(a->ui, D_INFO, "Files", "CiukNote is not installed.\nText files open in /Programs/ciuknote once it is available.",
-                       DU_DLG_ICON_INFO, NULL, 0, 0, 0);
-            return;
-        }
-        char *argv[] = {"ciuknote", path, NULL};
-        int r = spawn(a, "/Programs/ciuknote", argv);
-        if (r < 0) error_box(a, "Files", "Cannot start CiukNote:", r);
-        return;
-    }
-    const struct desk_catalog_entry *program = desk_catalog_file(path);
-    if (kind == FM_KIND_IMAGE || program) {
-        struct fm_meta meta;
-        char executable[80];
-        if (program) snprintf(executable, sizeof(executable), "/Programs/%s", program->name);
-        if (program && !a->model.fs.stat_path(a->model.fs.ctx, executable, &meta) && meta.type == FM_FILE) {
-            char *argv[] = {(char *)program->name, path, NULL};
-            int r = spawn(a, executable, argv);
-            if (r < 0) error_box(a, "Files", "Cannot start the application:", r);
-            return;
-        }
-    }
-    char text[FM_NAME + 160], type[40];
-    snprintf(text, sizeof(text), "Files cannot open '%s'.\nNo program is registered for files of type\n'%s'.",
-             e->name, fm_type_name(e, type, sizeof(type)));
-    du_message(a->ui, D_INFO, "Open With", text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+    if (!with_note && e->meta.exec) { char *argv[]={e->name,NULL}; int r=spawn(a,path,argv); if (r<0) files_launch_failed(a,r); return; }
+    if (with_note) { char *argv[]={"ciuknote",path,NULL}; int r=spawn(a,"/Programs/ciuknote",argv); if (r<0) files_launch_failed(a,r); return; }
+    int r=operation_open(a,path);
+    if (r==-ENOEXEC) open_with(a,path);
+    else if (r<0) files_launch_failed(a,r);
 }
 
 /* ---- jobs ---- */
@@ -1184,11 +1184,13 @@ static int job_begin(struct files_app *a)
     if (a->job_active || a->loading) return -EBUSY;
     int r=transfer_start(a);
     if (r) { error_box(a,"Files","Cannot start the file worker:",r); return r; }
+    a->transfer->prepare=NULL; a->transfer->ctx=NULL;
     fm_job_destroy(&a->job);
     return 0;
 }
 static void job_launch(struct files_app *a)
 {
+    a->job.record_undo=!a->job.undoing && a->job.kind!=FM_PROPERTIES && fm_undo_supported(&a->job.fs);
     a->job.chunk=FM_CHUNK;
     a->job_active=1;
     fm_transfer_reset(a->transfer);
@@ -1292,10 +1294,12 @@ __attribute__((noinline)) static void job_finished(struct files_app *a)
      * copies the text; on the stack it pushed job_tick over the 4 KiB frame limit. */
     static char report[DU_DIALOG_TEXT];
     char report_title[64]; int report_icon = 0;
-    if (kind != FM_PROPERTIES && fm_job_report(j, report_title, sizeof(report_title), report, sizeof(report), &report_icon))
+    if (a->transfer->prepare==operations_undo_prepare && j->state==FM_FAILED)
+        error_box(a,"Undo","Cannot undo the last file operation:",-j->error);
+    else if (kind != FM_PROPERTIES && fm_job_report(j, report_title, sizeof(report_title), report, sizeof(report), &report_icon))
         du_message(a->ui, D_ERROR, report_title, report, report_icon, NULL, 0, 0, 0);
     else if (j->state == FM_FAILED) {
-        const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->sources[0];
+        const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->count ? j->sources[0] : "";
         char what[FM_NAME + 40];
         snprintf(what, sizeof(what), "Cannot %s %.200s:", verb(kind), fm_basename(source));
         error_box(a, "Error Reading File or Folder", what, -j->error);
@@ -1624,6 +1628,8 @@ static void popup_add(struct files_app *a, const char *label, int id, unsigned f
         a->popup[a->popup_count++] = (struct du_menu_item){label, id, 0, 0, flags};
 }
 
+#include "operations_ui.inc"
+
 static void context(struct files_app *a, const struct du_event *e)
 {
     a->popup_count = 0;
@@ -1646,11 +1652,13 @@ static void context(struct files_app *a, const struct du_event *e)
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
-        if (kind != FM_KIND_FOLDER) popup_add(a, "Open with &CiukNote", C_OPEN_NOTE, 0);
+        if (kind != FM_KIND_FOLDER) popup_add(a, "Open &With...", FILES_OPEN_WITH, 0);
         if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
             popup_add(a, "Play in &Music Player", C_MUSIC, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Cu&t", C_CUT, 0); popup_add(a, "&Copy", C_COPY, 0);
+        popup_add(a,"Create &Shortcut",FILES_SHORTCUT,0); popup_add(a,"Send &To...",FILES_SEND_TO,0);
+        popup_add(a,"Copy To Folder...",FILES_COPY_TO,0); popup_add(a,"Move To Folder...",FILES_MOVE_TO,0);
         if (kind == FM_KIND_FOLDER && n == 1) popup_add(a, "&Paste", C_PASTE_INTO, m->clipboard_count ? 0 : DU_ITEM_DISABLED);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "&Delete", C_DELETE, 0); popup_add(a, "Rena&me", C_RENAME, n == 1 ? 0 : DU_ITEM_DISABLED);
@@ -1685,8 +1693,10 @@ static void context(struct files_app *a, const struct du_event *e)
         popup_add(a, "Refres&h", C_REFRESH, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "&Paste", C_PASTE, m->clipboard_count ? 0 : DU_ITEM_DISABLED);
+        popup_add(a,"Paste &Shortcut",FILES_PASTE_SHORTCUT,m->clipboard_count?0:DU_ITEM_DISABLED); popup_add(a,"&Undo",FILES_UNDO,0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "New &Folder", C_NEW_FOLDER, 0); popup_add(a, "New &Text Document", C_NEW_TEXT, 0);
+        popup_add(a,"New &Shortcut...",FILES_NEW_SHORTCUT,0); popup_add(a,"New &Bitmap Image",FILES_NEW_BITMAP,0); popup_add(a,"New &Document...",FILES_NEW_REGISTERED,0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "P&roperties", C_PROPERTIES, 0);
         files_update(a);
@@ -1707,8 +1717,8 @@ static void help(struct files_app *a)
 {
     du_message(a->ui, D_INFO, "Files Help",
                "Enter\tOpen the selection\nBackspace\tUp one level\nAlt+Left/Right\tBack and Forward\n"
-               "Alt+D, F4\tAddress bar\nF2\tRename\nF5\tRefresh\nDel\tDelete permanently\nAlt+Enter\tProperties\n"
-               "Ctrl+C/X/V\tCopy, Cut, Paste\nCtrl+A\tSelect all\n---\nType the first letters of a name to select it.\n"
+               "Alt+D, F4\tAddress bar\nF2\tRename\nF5\tRefresh\nDel\tMove to the Recycle Bin\nShift+Del\tDelete permanently\nAlt+Enter\tProperties\n"
+               "Ctrl+C/X/V\tCopy, Cut, Paste\nCtrl+Z\tUndo the last file operation\nCtrl+A\tSelect all\n---\nType the first letters of a name to select it.\n"
                "Copies cannot keep dates and attributes in this release.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
 }
 
@@ -1742,6 +1752,7 @@ static void command(struct files_app *a, int id)
     if (!m->path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
         id == C_PASTE_INTO || id == C_DELETE || id == C_DELETE_NOW || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT ||
         id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
+    if (operations_command(a,id)) return;
     int in_bin = fm_is_recycle(m->path);
     /* G2: the bin keeps its items as stored; nothing is created, renamed, cut or pasted there. */
     if (in_bin && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE || id == C_PASTE_INTO || id == C_RENAME ||
@@ -1835,6 +1846,7 @@ static void command(struct files_app *a, int id)
 
 static void dialog_result(struct files_app *a, const struct du_event *e)
 {
+    if (operations_result(a,e)) return;
     switch (e->id) {
     case D_DELETE:
         if (a->drop_count) { if (e->index == 0) start_bin_job(a, BIN_DELETE, a->drop_paths, a->drop_count, 0); drop_free(a); }
@@ -2061,7 +2073,7 @@ static unsigned drag_evaluate(struct files_app *a, int x, int y, unsigned keys, 
     }
     /* Copy and move only: CiukiOS has no native file shortcuts (link). A CD
      * source cannot be moved; a CD target accepts nothing. */
-    *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY : FM_EFFECT_COPY | FM_EFFECT_MOVE;
+    *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY | FM_EFFECT_LINK : FM_EFFECTS;
     for (unsigned i = 0; i < a->drag_count && *allowed; i++) if (a->drag_types[i] == 'D' && fm_beneath(destination, a->drag_paths[i])) *allowed = 0;
     unsigned effect = fm_drop_effect(source, target, keys, *allowed);
     if (effect && fm_drop_check(a->drag_paths, a->drag_count, destination, effect)) effect = FM_EFFECT_NONE;
@@ -2129,7 +2141,12 @@ void files_drag_drop(struct files_app *a, uint32_t serial, int x, int y, unsigne
     unsigned chosen = r ? FM_EFFECT_NONE : drag_evaluate(a, x, y, keys, destination, &allowed);
     drag_highlight(a, 0, -1);
     if (r) { error_box(a, "Files", "Cannot read the dragged items:", r); return; }
-    if (chosen != effect || (effect != FM_EFFECT_COPY && effect != FM_EFFECT_MOVE)) return;
+    if (chosen != effect || !(effect & FM_EFFECTS)) return;
+    if (effect==FM_EFFECT_LINK) {
+        struct fm_model *target=calloc(1,sizeof(*target)); int r=-ENOMEM;
+        if (target) { fm_init(target,&a->model.fs); strcpy(target->path,destination); r=fm_link_selection(target,a->drag_paths,a->drag_count); fm_destroy(target); free(target); }
+        operations_refreshed(a,r); return;
+    }
     if (fm_is_recycle(destination)) { drop_delete(a); return; }
     job_record("[files] drop effect=%s items=%u", effect == FM_EFFECT_MOVE ? "move" : "copy", a->drag_count);
     start_job(a, effect == FM_EFFECT_MOVE ? FM_MOVE : FM_COPY, a->drag_paths, a->drag_count, destination);
@@ -2239,11 +2256,11 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->tree = calloc(FILES_TREE, sizeof(*a->tree));
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
-    copy_menu(a->file_items, file_template, 11); copy_menu(a->bin_items, bin_template, BIN_ITEMS); copy_menu(a->edit_items, edit_template, 6);
-    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 14); copy_menu(a->help_items, help_template, 3);
-    a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
-    a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 6};
-    a->menus[2] = (struct du_menu){"&View", a->view_items, 10};
+    copy_menu(a->file_items, file_template, sizeof(file_template)/sizeof(*file_template)); copy_menu(a->bin_items, bin_template, BIN_ITEMS); copy_menu(a->edit_items, edit_template, sizeof(edit_template)/sizeof(*edit_template));
+    copy_menu(a->view_items, view_template, sizeof(view_template)/sizeof(*view_template)); copy_menu(a->go_items, go_template, 14); copy_menu(a->help_items, help_template, 3);
+    a->menus[0] = (struct du_menu){"&File", a->file_items, sizeof(file_template)/sizeof(*file_template)};
+    a->menus[1] = (struct du_menu){"&Edit", a->edit_items, sizeof(edit_template)/sizeof(*edit_template)};
+    a->menus[2] = (struct du_menu){"&View", a->view_items, sizeof(view_template)/sizeof(*view_template)};
     a->menus[3] = (struct du_menu){"&Go", a->go_items, 14};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
     u->menus = a->menus; u->menu_count = 5;
@@ -2293,6 +2310,8 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
 
 void files_destroy(struct files_app *a)
 {
+    operations_destroy(a);
+    fm_drag_free(a->shell_paths,NULL,a->shell_count); a->shell_paths=NULL; a->shell_count=0;
     a->ui->service=NULL;
     du_timer_stop(a->ui,T_DRAG_REFRESH);
     fm_drag_free(a->drag_paths,a->drag_types,a->drag_count); a->drag_paths=NULL; a->drag_types=NULL; a->drag_count=0;
