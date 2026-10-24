@@ -223,3 +223,87 @@ and rejected submissions. No worker buffer or stack limit was enlarged.
 ICH startup waits for DCH to clear before the first public READ; a stuck start
 has a bounded timeout and proved cleanup. Codec profiles with independent
 stereo mutes update both mute bits and restore the original source registers.
+
+## G22C continuation
+
+Primary sources checked before implementation: the Resource Kit's
+`wrkc12_1.htm` (MCI and the system mixer), `wrkc12_2.htm` (MIDI streams),
+`wrkc12_3.htm` (video), and `wrkc23_2.htm` (preferred devices);
+[the MIDI Association message table](https://midi.org/summary-of-midi-1-0-messages),
+[the DOSBox-X MPU-401 implementation](https://dosbox-x.com/doxygen/html/mpu401_8cpp_source.html),
+and [upstream CMI register/mixer definitions](https://code.googlesource.com/linux/torvalds/linux/+/4df22ca85d3d73f9822b1a354bb56dd1872180cd/sound/pci/cmipci.c).
+The existing [MCI PLAY](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-play)
+contract supplies FROM/TO selection boundaries. Copy Object must preserve the
+media identity and selection; copying a filename alone is not embedded media.
+
+Repository decisions: reuse the copied capture lifetime, including separate
+pins, generation checks, bounded reads, cursor revalidation and quarantine.
+CMI input uses channel 1 with input interrupts disabled; stopping input must
+preserve channel 0. Its SB-compatible recording route is not an AC97 codec:
+read/save/restore the raw left/right selector bytes, and use a separate source
+callback. Expose only inputs the hardware supplies. Public and private input
+engines must exclude one another. Do not advertise unavailable driver layouts.
+
+Native MIDI accepts bounded copied MIDI byte batches on an audio descriptor,
+with per-descriptor parsing/synthesis and close/reset cleanup. DOS UART is
+330h/331h, FFh reset, 3Fh UART, FEh acknowledgement and active-low input/output
+status. Intelligent mode and physical MIDI input are outside UART support.
+Running status persists across batches; realtime bytes do not disturb it;
+System Common/SysEx cancel it. Reuse the integer OPL renderer, identify the
+output as FM synthesis, and do not claim the Win32 SoundFont's sound set.
+MIDI, Wave and CD retain separate gains before the master sum. Memory and
+voice bounds must remain explicit and host checked.
+
+### G22C implementation boundary
+
+`AUDIO_MIDI_WRITE=0x4110` follows `AUDIO_CAPTURE_RELEASE=0x410f` in this
+worktree. `ciuki_midi_data` is 152 bytes, every field and both new constants
+have oracle rows. The SDK wrapper accepts a byte span and returns its accepted
+prefix. Each native description owns a 512-byte queue and one 18-voice FM
+instance; the refill worker drains bytes and renders, with MIDI attenuation
+before the master. A short batch retains its suffix in the caller. PCM/MIDI
+mode changes require Reset; Reset and last close release the synthesizer.
+Drain is unsupported for a sustained MIDI port. Native synthesis requires a
+48-kHz physical output rate; it does not silently pitch-shift other backends.
+
+The shared byte parser preserves running status across batches, ignores realtime
+clock bytes without disturbing a partial message, and cancels running status
+at System Common/SysEx. It implements Note On/Off, zero-velocity Note On,
+program families, bend (+/- two semitones), sustain, volume, expression, pan,
+controller reset, All Notes Off and All Sound Off. System Reset clears all
+voices. SysEx payloads and aftertouch are not synthesized. Sixteen original FM
+colours are a bounded fallback, not 128 General MIDI instrument timbres.
+The per-VM controller is 356 bytes; the existing OPL chip is 3276 bytes. No
+memory limit or DMA quota changed. A native instance adds about 4.1 KiB of heap
+state, within the existing eight-stream limit, plus one shared quantum scratch.
+DOS gives MIDI a separate register snapshot and renderer, so MPU probes and
+resets leave AdLib mode, registers and sounding voices intact. Internal event
+kind 4 follows GAP=3; it retains the common clock/generation/event queue and
+recovers each register snapshot at its own clock after overflow. MIDI is S16
+before the VM's FM gain; the enlarged conservative arithmetic bound still
+fits signed 32-bit percentage calculations. Four renderer slots add 13,104
+bytes of chip state plus flags/cursors, with one shared 2,048-byte scratch
+quantum. Each VM adds a 512-byte MIDI register snapshot as well as its controller.
+MPU UART is polled output only, with no invented incoming MIDI or intelligent
+commands. FFh resets and flushes ACK state; 3Fh enters UART; FEh acknowledges.
+
+CMI exposes Mic/Line/CD, not a fictitious PCM Stereo Mix recording route.
+EMU10K1/10K2 use ADCBS 1bh for a separate 32768-byte input ring, corroborated
+by the [upstream EMU register definitions](https://codebrowser.dev/linux/linux/include/sound/emu10k1.h.html).
+Input stop disables ADCBS/ADCCR, masks only ADC interrupts and proves a stable
+input cursor across three observations; playback pitches, timer, BME and HCFG
+remain intact. Both adapters restore the previous record routing/gain and
+exclude their older diagnostic engines. A failed stop retains pinned memory
+through the existing quarantine. Only already supported EMU board variants
+are eligible. The existing public APIs feed both Recorder and waveIn.
+
+Not implemented in this continuation: native MIDI/AVI Media Player with MCI
+selection and embedded Copy Object; preferred playback/recording/MIDI device
+selection; capture adapters for ES137x, VIA, Maestro, Yamaha, ISA SB16 and the
+SiS/ALi ICH extensions. The global AC97/DMA backend presently selects one
+controller. Independent recording/playback device choices require multiple
+live backend instances and lifetime/power arbitration. MCI still owns Win32
+handles, workers and USER/GDI rendering; a native front end needs a bounded
+broker plus clipboard object lifetime, rather than a second media parser or
+an assertion that copying a filename is Copy Object. These obligations remain
+open in the inventory; no unsupported device is advertised.

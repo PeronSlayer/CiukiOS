@@ -470,7 +470,7 @@ static int backend_dma_init(struct audio_dma_device *d)
     if (!e) e = audio_dma_prove(d);
     if (!e && d->kind == AUDIO_CMIPCI) e=cmipci_capture_prove(d);
     if (!e && d->kind == AUDIO_CMIPCI)
-        klog("[audio] cmipci model=%u playback=stereo48k capture=private legacy=disabled",d->cmi.model);
+        klog("[audio] cmipci model=%u playback=stereo48k capture=copied legacy=disabled",d->cmi.model);
     if (!e) {
         d->state.ready = true;
         if (d->kind == AUDIO_SB16) { irq_set_handler(5, backend_isa_irq); d->irq_attached = true; pic_unmask(5); }

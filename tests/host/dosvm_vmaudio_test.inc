@@ -959,8 +959,40 @@ static void test_sb_cadence_record(void)
     puts("f3-40 protected cadence: five-second snapshots, real late ack age, merged IRQs, parked/descheduled/IF-clear counters, deferred outside ISR, no timer logging PASS");
 }
 
+static void test_vm_midi(void)
+{
+    vq_begin(); struct dosvm *v=audio_vm_create(); unity(v);
+    vq_time(1200); vq_run(2);
+    a_out(v,0x331,0xff); CHECK(a_in(v,0x330)==0xfe);
+    a_out(v,0x331,0x3f); CHECK(a_in(v,0x330)==0xfe);
+    a_out(v,0x330,0x90); a_out(v,0x330,60); a_out(v,0x330,100);
+    unsigned start=vq_n; vq_run(16); CHECK(first_sound(start)<vq_n);
+    CHECK(!v->audio.opl.regs[0x105] && v->audio.midi_regs[0x105]==1);
+    static struct opl3_chip ref; opl3_init(&ref); opl_note(v,&ref);
+    uint8_t adlib[512]; memcpy(adlib,v->audio.opl.regs,sizeof(adlib));
+    a_out(v,0x331,0xff); CHECK(a_in(v,0x330)==0xfe);
+    CHECK(!memcmp(adlib,v->audio.opl.regs,sizeof(adlib)));
+    start=vq_n; vq_run(16); CHECK(first_sound(start)<vq_n);
+    CHECK(first_sound(vq_n-AUDIO_QUANTUM)<vq_n); /* AdLib outlasts the queued MIDI/reset tail */
+    a_out(v,0x331,0x3f); CHECK(a_in(v,0x330)==0xfe);
+    a_out(v,0x330,0x91); a_out(v,0x330,67); a_out(v,0x330,127);
+    for (unsigned i=0;i<DOSVM_EVENTS+8;i++) {
+        a_out(v,0x330,0xb1); a_out(v,0x330,7); a_out(v,0x330,(uint8_t)(i%128));
+    }
+    CHECK(ainfo(v).lost_events>0); vq_run(8);
+    a_out(v,0x330,0xb1); a_out(v,0x330,7); a_out(v,0x330,100);
+    vq_run(8); CHECK(vstats(v).opl_resyncs==1 && !vstats(v).foreign_events);
+    CHECK(v->audio.midi_regs[0xb0]&32 || v->audio.midi_regs[0xb1]&32);
+    CHECK(!memcmp(adlib,v->audio.opl.regs,sizeof(adlib)));
+    opl_w(v,0x388,0,0xb0,0x12); vq_run(20); /* leave only the recovered MIDI voice */
+    CHECK(first_sound(vq_n-AUDIO_QUANTUM)<vq_n);
+    destroy(v,true); vq_end(); empty();
+    puts("DOS MIDI renderer: audible UART output, independent AdLib mode/voices/reset and overflow snapshot recovery PASS");
+}
+
 static void test_vm_audio(void)
 {
+    test_vm_midi();
     test_doom_late_ack_cadence();
     test_sb_irq_entry_latency(); test_sb_cadence_record();
     test_fullscreen_audio_cadence(); test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate(); test_vm_source_budget();

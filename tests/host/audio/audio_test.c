@@ -9,6 +9,14 @@
 #include <ciuki/audio_backend.h>
 #include <ciuki/registry_value.h>
 #include <ciuki/timing.h>
+/* Storage maintenance is outside this audio fixture. media_dev.c now links
+ * these paths through its devctl dispatch; refuse them at the fake boundary. */
+int storage_convert(struct storage *s,struct ciuki_media_convert *r,bool apply)
+{ (void)s; (void)r; (void)apply; return -FS_EOPNOTSUPP; }
+int storage_format_removable(struct storage *s,struct ciuki_media_format *r,bool apply)
+{ (void)s; (void)r; (void)apply; return -FS_EOPNOTSUPP; }
+int storage_floppy_copy(struct storage *s,struct ciuki_floppy_image *r,storage_floppy_copy_fn fn,void *ctx,bool write)
+{ (void)s; (void)r; (void)fn; (void)ctx; (void)write; return -FS_EOPNOTSUPP; }
 static uint32_t read_eflags(void) { return host_flags; }
 static bool vm_active_hook;
 static bool fullscreen_hook;
@@ -1419,6 +1427,49 @@ static void test_producer_lead(void)
     audio.running=false;
     puts("F1-101 producer lead: writer and refill-reader registration, mixer-reported lead 1536/1792 with rate conversion, AUDIO_GET_PRODUCER, reset/failure/close end the source PASS");
 }
+static void test_midi_syscalls(void)
+{
+    audio.ready=true; audio.error=0; audio.running=true; audio.caps.output_rate=48000;
+    unsigned pages=pages_used;
+    int input=file_open(client,"/dev/audio",O_RDONLY,0);
+    int fd=file_open(client,"/dev/audio",O_WRONLY|O_NONBLOCK,0); CHECK(input>=0 && fd>=0);
+    struct ciuki_midi_data r={.version=1,.size=sizeof(r),.bytes=3,.data={0x90,60,100}};
+    CHECK(ctl(input,AUDIO_MIDI_WRITE,&r,sizeof(r))==-EACCES);
+    r.reserved[0]=1; CHECK(ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r))==-EINVAL);
+    r.reserved[0]=0; r.version=2; CHECK(ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r))==-EOPNOTSUPP);
+    r.version=1; r.bytes=129; CHECK(ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r))==-EINVAL);
+    r.bytes=3; CHECK(!ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r)) && r.accepted==3);
+    struct audio_stream *stream=file_fd(client,fd)->audio;
+    CHECK(stream->midi && native_source_count()==1 && stream->source==CIUKI_MIXER_MIDI);
+    CHECK(call(CIUKI_SYS_WRITE,fd,USER,4,0,0)==-EBUSY);
+    struct ciuki_audio_route route={.version=1,.size=sizeof(route),.source=CIUKI_MIXER_WAVE};
+    CHECK(ctl(fd,AUDIO_SET_SOURCE,&route,sizeof(route))==-EBUSY);
+    struct ciuki_audio_command cmd={.version=1,.size=sizeof(cmd)};
+    CHECK(ctl(fd,AUDIO_DRAIN,&cmd,sizeof(cmd))==-EOPNOTSUPP);
+    r.accepted=0; r.bytes=128; memset(r.data,0xf8,sizeof(r.data));
+    for (unsigned i=0;i<4;i++) { r.accepted=0; CHECK(!ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r))); CHECK(r.accepted==(i==3 ? 125u : 128u)); }
+    r.accepted=0; CHECK(ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r))==-EAGAIN);
+    static struct audio_frame rendered[AUDIO_QUANTUM];
+    struct ciuki_mixer_master old_master=audio.master;
+    struct ciuki_mixer_line old_midi=audio.lines[CIUKI_MIXER_MIDI];
+    bool old_lines=audio.lines_initialized;
+    audio.master=(struct ciuki_mixer_master){.left=100,.right=100}; audio.lines_initialized=false;
+    audio_mix(rendered,AUDIO_QUANTUM);
+    bool audible=false;
+    for (unsigned i=0;i<AUDIO_QUANTUM;i++) if (rendered[i].left || rendered[i].right) audible=true;
+    CHECK(audible && native_source_count()==1); /* held note survives an empty byte queue */
+    audio.lines_initialized=true; audio.lines[CIUKI_MIXER_MIDI].mute=1;
+    audio_mix(rendered,AUDIO_QUANTUM);
+    for (unsigned i=0;i<AUDIO_QUANTUM;i++) CHECK(!rendered[i].left && !rendered[i].right);
+    audio.master=old_master; audio.lines_initialized=old_lines; audio.lines[CIUKI_MIXER_MIDI]=old_midi;
+    CHECK(!ctl(fd,AUDIO_RESET,&cmd,sizeof(cmd)) && !stream->midi && !stream->configured && stream->source==CIUKI_MIXER_WAVE);
+    r.accepted=0; r.bytes=3; CHECK(!ctl(fd,AUDIO_MIDI_WRITE,&r,sizeof(r)) && stream->midi);
+    int duplicate=file_dup(client,fd,0,false,0); CHECK(duplicate>=0);
+    CHECK(!file_close(client,fd) && file_fd(client,duplicate)->audio->midi);
+    CHECK(!file_close(client,duplicate) && !file_close(client,input) && pages_used==pages);
+    puts("Native MIDI public devctl: copied validation/access/mode/source/partial queue/reset/last-close PASS");
+}
+
 static void test_stream_syscalls(void)
 {
     audio.ready=false;CHECK(file_open(client,"/dev/audio",O_WRONLY,0)==-ENODEV);
@@ -1738,15 +1789,17 @@ int main(int argc,char **argv)
     test_ich_input();
     test_transient_transport();
     test_cmipci();
+    test_cmipci_public();
     test_voice_engines();
     test_vm_creation_lead();
     test_vm_paging_replay();
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_shutdown_lock_order();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_shutdown_lock_order();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_midi_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
     test_maestro();
     test_refill_demand();
     test_producer_lead();
     test_ac97_qualification();
     test_emu10k1();
+    test_emu10k1_public();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

@@ -87,6 +87,9 @@ struct audio_dma_device {
     struct cmipci_state cmi;
     /* Optional voice engines; audio_dev.c exposes copies, never DMA mappings. */
     const struct audio_capture_ops *capture_ops;
+    int (*capture_source)(struct audio_dma_device *, unsigned);
+    uint32_t capture_sources; /* zero uses the AC97 four-input set */
+    bool capture_reserved; /* public fd reservation excludes diagnostic starts */
     int (*voice_codec_read)(struct audio_dma_device *, uint16_t, uint16_t *);
     int (*voice_codec_write)(struct audio_dma_device *, uint16_t, uint16_t);
     int (*voice_restore)(struct audio_dma_device *);
@@ -149,6 +152,9 @@ int audio_capture_read(struct audio_dma_device *, uint32_t generation,
 int audio_capture_close(struct audio_dma_device *, uint32_t generation);
 int audio_capture_source(struct audio_dma_device *, uint32_t generation, unsigned source);
 int audio_capture_shutdown(struct audio_dma_device *);
+static inline bool audio_capture_has_source(const struct audio_dma_device *d, unsigned source)
+{ return d->capture_ops && source <= CIUKI_CAPTURE_MIX &&
+    (!d->capture_sources || (d->capture_sources & (1u << source))); }
 void ac97_capture_attach(void);
 uint32_t audio_voice_mask(const struct audio_dma_device *);
 int audio_voice_cursor(struct audio_dma_device *, unsigned voice, unsigned *frame);

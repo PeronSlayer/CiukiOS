@@ -4,6 +4,7 @@
 #ifndef CIUKI_DOSVM_AUDIO_STATE_H
 #define CIUKI_DOSVM_AUDIO_STATE_H
 #include <ciuki/dosvm_audio.h>
+#include <ciuki/midi_fm.h>
 
 #define DOSVM_AUDIO_PER_MS (DOSVM_AUDIO_HZ / 1000u)
 /* DSP work per tick call; the remainder stays as backlog for later ticks. */
@@ -24,6 +25,7 @@
 #define DOSVM_SB_DMA8 1u
 #define DOSVM_SB_DMA16 5u
 #define DOSVM_OPL_BASE 0x388u
+#define DOSVM_MPU_BASE 0x330u
 #define DOSVM_SB_RATE_MIN 5000u  /* Creative guide, command 41h: 5000-45000 Hz */
 #define DOSVM_SB_RATE_MAX 45000u
 
@@ -125,6 +127,9 @@ struct dosvm_audio {
     struct dosvm_dma dma;
     struct dosvm_sb16 sb;
     struct dosvm_opl opl;
+    struct midi_fm midi;
+    uint8_t midi_regs[512];
+    bool mpu_uart, mpu_ack;
     struct dosvm_audio_queue q;
     /* Bounded first discovery/programming records; produced without I/O,
      * emitted by the VM worker outside guest interrupt chains. */

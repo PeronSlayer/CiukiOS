@@ -59,6 +59,7 @@ static inline bool audio_producer_behind(bool behind, unsigned lead, unsigned ma
     return behind ? lead < AUDIO_PRODUCER_TARGET : lead < mark;
 }
 struct audio_stream {
+    struct audio_midi *midi;
     struct audio_frame *ring[2];
     uint32_t pages[2], head, queued, phase, rate, format, channels;
     uint32_t gain[2], generation, source;
@@ -99,6 +100,10 @@ int audio_stream_open(struct audio_stream **out);
 void audio_stream_close(struct audio_stream *s);
 int audio_stream_format(struct audio_stream *, struct ciuki_audio_format *);
 int audio_stream_enqueue(struct audio_stream *, const void *, uint32_t bytes);
+int audio_midi_write(struct audio_stream *, struct ciuki_midi_data *);
+void audio_midi_close(struct audio_stream *);
+bool audio_midi_active(struct audio_stream *);
+void audio_midi_mix(struct audio_stream *, int64_t (*)[2], unsigned);
 void audio_stream_reset(struct audio_stream *);
 /* f1-101: report the stream's lead to the scheduler (on a state change) and
  * register the calling thread as one of its producers (task.h roles). */

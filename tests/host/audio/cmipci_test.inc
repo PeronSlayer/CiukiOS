@@ -17,6 +17,11 @@ int mm_pin(struct mm_pin *pin)
 {
     if (audio_dma.kind!=AUDIO_CMIPCI) return 0;
     CHECK(pin->pages==8 && pin->alignment==4 && !pin->boundary && pin->address_mask==UINT32_MAX);
+    if (pin==&audio_dma.capture.pin) {
+        CHECK(audio_dma.state.ready && pin->generation==audio_dma.capture.generation);
+        CHECK(pin->direction==MM_PIN_FROM_DEVICE && pin->first_pfn==audio_dma.capture.phys/PAGE_SIZE);
+        pin->ticket=++cmi_pins; return 0;
+    }
     CHECK(pin->generation==audio_dma.generations[1] && !audio_dma.touched);
     CHECK(pin->first_pfn==(pin->direction==MM_PIN_FROM_DEVICE ? audio_dma.cmi.phys : audio_dma.phys)/PAGE_SIZE);
     if ((int)cmi_pins==cmi_pin_failure) return -ENOMEM;
@@ -24,6 +29,10 @@ int mm_pin(struct mm_pin *pin)
 }
 int mm_unpin(struct mm_pin *pin,uint32_t generation)
 {
+    if (pin==&audio_dma.capture.pin) {
+        CHECK(pin->ticket && generation==pin->generation && !audio_dma.capture.running && !audio_dma.state.quarantine);
+        cmi_unpins++; return 0;
+    }
     CHECK(pin->ticket && generation==pin->generation && !audio_dma.state.quarantine &&
           !audio_dma.state.running && !audio_dma.cmi.running && !audio_dma.irq_attached);
     CHECK(audio_dma.phys && audio_dma.cmi.phys); cmi_unpins++; return 0;
@@ -81,7 +90,8 @@ static void cmi_model_write(void *cookie,uint16_t port,uint32_t value,unsigned w
             if ((value&enable) && !(old&enable)) {
                 CHECK(audio_dma.claims[0]>=0 && audio_dma.claims[1]>=0 && audio_dma.claims[4]>=0 && audio_dma.claims[5]>=0);
                 CHECK((h->cfg[1]&5)==5 && (cmi_model_reg(h,4,4)&0x1e)==0x10);
-                CHECK(cmi_model_reg(h,0x80+ch*8,4)==(ch ? audio_dma.cmi.phys : audio_dma.phys));
+                CHECK(cmi_model_reg(h,0x80+ch*8,4)==(ch ?
+                    (audio_dma.capture.generation ? audio_dma.capture.phys : audio_dma.cmi.phys) : audio_dma.phys));
                 CHECK(cmi_model_reg(h,0x84+ch*8,2)==8191 && cmi_model_reg(h,0x86+ch*8,2)==255);
                 CHECK(!audio_dma.state.quarantine); h->starts[ch]++;
             }
@@ -116,7 +126,9 @@ static void cmi_model_sleep(void *cookie,uint32_t ms)
         unsigned frames=ms*rate[code]/1000;
         for (unsigned i=0;ch && i<frames;i++) {
             unsigned at=(h->frame[ch]+i)%8192;
-            audio_dma.cmi.pcm[at]=(struct audio_frame){(int16_t)at,(int16_t)-(int)at};
+            unsigned phys=cmi_model_reg(h,0x88,4);
+            CHECK(phys && phys+AUDIO_HW_BYTES<=HOST_PAGES*PAGE_SIZE);
+            ((struct audio_frame *)P2V(phys))[at]=(struct audio_frame){(int16_t)at,(int16_t)-(int)at};
         }
         h->frame[ch]=(h->frame[ch]+frames)%8192;
     }
@@ -298,4 +310,63 @@ static void test_cmipci(void)
     audio.error=0; audio.ready=audio.running=audio.quarantined=false; memset(&audio.caps,0,sizeof(audio.caps));
     CHECK(pages_used==baseline);
     puts("CMI8338/8738: native PCM/mixer, 8 capture rates, duplex, wrap, decoder isolation, stop and permanent quarantine PASS");
+}
+
+static void test_cmipci_public(void)
+{
+    unsigned baseline=pages_used;
+    cmi_setup(0x111,0x05000000);
+    struct audio_dma_device *d=&audio_dma;
+    CHECK(!backend_dma_init(d)); audio.ready=true;
+    uint16_t selectors=(uint16_t)cmi_hw.mixer[0x3d] | (uint16_t)cmi_hw.mixer[0x3e]<<8;
+    uint32_t token=0;
+    int fd=file_open(client,"/dev/audio",O_RDONLY,0); CHECK(fd>=0);
+    struct ciuki_audio_capture cap={.version=1,.size=sizeof(cap)};
+    CHECK(!cmipci_capture_start(d,48000));
+    CHECK(ctl(fd,AUDIO_CAPTURE_ACQUIRE,&cap,sizeof(cap))==-EBUSY && !d->capture_reserved);
+    CHECK(audio_capture_open(d,&token)==-EBUSY && !token && d->cmi.running);
+    CHECK(!cmipci_capture_stop(d));
+    CHECK(!ctl(fd,AUDIO_CAPTURE_ACQUIRE,&cap,sizeof(cap)) && d->capture_reserved);
+    CHECK(cmipci_capture_start(d,48000)==-EBUSY);
+    CHECK(!ctl(fd,AUDIO_CAPTURE_RELEASE,&cap,sizeof(cap)) && !d->capture_reserved);
+    CHECK(!ctl(fd,AUDIO_CAPTURE_ACQUIRE,&cap,sizeof(cap)) && d->capture_reserved);
+    CHECK(!file_close(client,fd) && !d->capture_reserved);
+    CHECK(!audio_capture_open(d,&token) && token);
+    CHECK(cmipci_capture_start(d,48000)==-EBUSY);
+    CHECK(cmipci_capture_stop(d)==-EBUSY && d->capture.running);
+    CHECK(audio_capture_open(d,&token)==-EBUSY);
+    CHECK(audio_capture_source(d,token,CIUKI_CAPTURE_MIX)==-EOPNOTSUPP);
+    CHECK(!audio_capture_source(d,token,CIUKI_CAPTURE_MIC));
+    CHECK(cmi_hw.mixer[0x3d]==1 && cmi_hw.mixer[0x3e]==1);
+    CHECK(!audio_capture_source(d,token,CIUKI_CAPTURE_CD));
+    CHECK(cmi_hw.mixer[0x3d]==4 && cmi_hw.mixer[0x3e]==2);
+    CHECK(!audio_capture_source(d,token,CIUKI_CAPTURE_LINE));
+    static struct audio_frame frames[AUDIO_QUANTUM], marker[AUDIO_QUANTUM];
+    CHECK(audio_capture_read(d,token,frames,128)==-EAGAIN);
+    for (unsigned i=0;i<8;i++) CHECK(!audio_dma_publish(d,marker));
+    CHECK(!audio_dma_start(d));
+    unsigned output_starts=cmi_hw.starts[0], output_resets=cmi_hw.resets[0];
+    cmi_model_sleep(&cmi_hw,12);
+    CHECK(audio_capture_read(d,token,frames,128)==128);
+    for (unsigned i=0;i<128;i++) CHECK(frames[i].left==(int)i && frames[i].right==-(int)i);
+    CHECK(!audio_capture_close(d,token));
+    CHECK(d->state.running && (cmi_model_reg(&cmi_hw,0,4)&0x10000));
+    CHECK(cmi_hw.starts[0]==output_starts && cmi_hw.resets[0]==output_resets);
+    CHECK(((uint16_t)cmi_hw.mixer[0x3d]|(uint16_t)cmi_hw.mixer[0x3e]<<8)==selectors);
+    CHECK(audio_capture_read(d,token,frames,1)==-EINVAL);
+    CHECK(!audio_capture_open(d,&token));
+    cmi_model_sleep(&cmi_hw,200);
+    CHECK(audio_capture_read(d,token,frames,128)==-EIO && d->capture.failed && !d->capture.running);
+    CHECK(!audio_capture_close(d,token));
+    audio_backend_shutdown(); CHECK(pages_used==baseline && cmi_pins==cmi_unpins);
+    cmi_setup(0x111,0x05000000); CHECK(!backend_dma_init(d)); audio.ready=true;
+    CHECK(!audio_capture_open(d,&token)); unsigned retained=pages_used;
+    cmi_hw.stuck=2;
+    CHECK(audio_capture_close(d,token)==-EIO && d->state.quarantine && audio.quarantined);
+    CHECK(pages_used==retained && d->capture.pin.ticket && d->capture.phys && !cmi_unpins);
+    audio_backend_shutdown(); CHECK(pages_used==retained);
+    /* Discard only the fixture's fake device, never a production stop bypass. */
+    for (unsigned i=0;i<d->capture.pages;i++) pmm_free(d->capture.phys+i*PAGE_SIZE);
+    cmi_dispose_quarantine(); CHECK(pages_used==baseline);
+    puts("CMI public capture: sources/copies/private exclusion/generations/overrun/independent playback/restore/stop-quarantine PASS");
 }

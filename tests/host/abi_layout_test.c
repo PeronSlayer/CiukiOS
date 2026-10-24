@@ -33,10 +33,11 @@ _Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 #include "../../apps/libdeskui/deskui.h"
 #if defined(__i386__)
-_Static_assert(sizeof(struct du_window)==5360,"G11B toolkit window extent");
-_Static_assert(__builtin_offsetof(struct du_window,power_event)==5348,"G11B toolkit power callback");
-_Static_assert(__builtin_offsetof(struct du_window,power_serial)==5352,"G11B toolkit power serial");
-_Static_assert(__builtin_offsetof(struct du_window,power_reply_pending)==5356,"G11B toolkit power reply");
+/* Extent/offsets of the integrated toolkit; the older oracle was stale. */
+_Static_assert(sizeof(struct du_window)==5372,"G11B toolkit window extent");
+_Static_assert(__builtin_offsetof(struct du_window,power_event)==5360,"G11B toolkit power callback");
+_Static_assert(__builtin_offsetof(struct du_window,power_serial)==5364,"G11B toolkit power serial");
+_Static_assert(__builtin_offsetof(struct du_window,power_reply_pending)==5368,"G11B toolkit power reply");
 #endif
 _Static_assert(DESK_POWER_EVENT == 87, "G11B desktop power event");
 _Static_assert(DESK_POWER_REPLY == 88, "G11B desktop power reply");
@@ -2310,6 +2311,16 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_audio_status.max_irq_us", __builtin_offsetof(struct ciuki_audio_status, max_irq_us), 100u},
     {"offsetof.ciuki_audio_status.transport_frames", __builtin_offsetof(struct ciuki_audio_status, transport_frames), 104u},
     {"offsetof.ciuki_audio_status.latency_frames", __builtin_offsetof(struct ciuki_audio_status, latency_frames), 108u},
+    {"constant.AUDIO_MIDI_WRITE", AUDIO_MIDI_WRITE, 16656u},
+    {"constant.CIUKI_MIDI_BYTES", CIUKI_MIDI_BYTES, 128u},
+    {"sizeof.ciuki_midi_data", sizeof(struct ciuki_midi_data), 152u},
+    {"alignof.ciuki_midi_data", _Alignof(struct ciuki_midi_data), 4u},
+    {"offsetof.ciuki_midi_data.version", __builtin_offsetof(struct ciuki_midi_data, version), 0u},
+    {"offsetof.ciuki_midi_data.size", __builtin_offsetof(struct ciuki_midi_data, size), 4u},
+    {"offsetof.ciuki_midi_data.bytes", __builtin_offsetof(struct ciuki_midi_data, bytes), 8u},
+    {"offsetof.ciuki_midi_data.accepted", __builtin_offsetof(struct ciuki_midi_data, accepted), 12u},
+    {"offsetof.ciuki_midi_data.data", __builtin_offsetof(struct ciuki_midi_data, data), 16u},
+    {"offsetof.ciuki_midi_data.reserved", __builtin_offsetof(struct ciuki_midi_data, reserved), 144u},
     {"constant.AUDIO_CAPTURE_CAPS", AUDIO_CAPTURE_CAPS, 16649u},
     {"constant.AUDIO_CAPTURE_START", AUDIO_CAPTURE_START, 16650u},
     {"constant.AUDIO_CAPTURE_READ", AUDIO_CAPTURE_READ, 16651u},

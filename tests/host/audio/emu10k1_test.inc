@@ -11,14 +11,14 @@ static struct {
     unsigned writes, data_writes, stops, generated;
     int stop_fault;
     bool codec_timeout, codec_reject, no_progress, dead_window, dead_irq;
-    struct mm_pin pins[2];
+    struct mm_pin pins[3];
     unsigned pin_count, unpins;
     int32_t last_left, last_right;
 } emodel;
 int mm_pin(struct mm_pin *p)
 {
     if (!emu10k1_kind(audio_dma.kind)) return 0;
-    CHECK(emodel.pin_count<2 && p->address_mask==emu10k1_dma_mask(audio_dma.kind));
+    CHECK(emodel.pin_count<3 && p->address_mask==emu10k1_dma_mask(audio_dma.kind));
     CHECK(p->generation && p->pages && p->first_pfn+p->pages<=HOST_PAGES);
     for (unsigned i=0;i<p->pages;i++) CHECK(allocated[p->first_pfn+i]);
     p->ticket=emodel.pin_count+1;
@@ -26,6 +26,11 @@ int mm_pin(struct mm_pin *p)
 }
 int mm_unpin(struct mm_pin *p,uint32_t generation)
 {
+    if (p==&audio_dma.capture.pin) {
+        CHECK(p->ticket==3 && generation==p->generation && !audio_dma.capture.running);
+        CHECK(!audio_dma.state.quarantine && !emodel.regs[0x4a][0] && !emodel.regs[0x42][0]);
+        emodel.unpins++; return 0;
+    }
     CHECK(emu10k1_kind(audio_dma.kind) && p->ticket>=1 && p->ticket<=2);
     CHECK(generation==p->generation && !audio_dma.state.running && !audio_dma.irq_attached);
     CHECK(!audio_dma.state.quarantine && !(emodel.command&4));
@@ -140,16 +145,17 @@ static void emodel_advance(unsigned frames)
 static void emodel_capture_advance(unsigned frames)
 {
     unsigned idx=emodel.d->kind==AUDIO_EMU10K1 ? 0x64 : 0x63;
-    CHECK((emodel.command&4) && emodel.regs[0x4a][0]==0x13);
+    unsigned bytes=emodel.regs[0x4a][0]==0x1b ? 32768 : 8192;
+    CHECK((emodel.command&4) && (emodel.regs[0x4a][0]==0x13 || emodel.regs[0x4a][0]==0x1b));
     CHECK(!emodel.regs[emodel.d->kind==AUDIO_EMU10K1 ? 0x52 : 0x53][0]);
     uint32_t phys=emodel.regs[0x46][0];
     for (unsigned i=0;i<frames;i++) {
         unsigned at=emodel.regs[idx][0]/4;
         CHECK(phys/PAGE_SIZE<HOST_PAGES && allocated[(phys+at*4)/PAGE_SIZE]);
         ((struct audio_frame *)P2V(phys))[at]=(struct audio_frame){901+(int)(emodel.capture_frames%100),-1703};
-        emodel.regs[idx][0]=(emodel.regs[idx][0]+4)%8192; emodel.capture_frames++;
+        emodel.regs[idx][0]=(emodel.regs[idx][0]+4)%bytes; emodel.capture_frames++;
     }
-    emodel.ipr|=emodel.regs[idx][0]<4096 ? 0x8000 : 0x4000;
+    emodel.ipr|=emodel.regs[idx][0]<bytes/2 ? 0x8000 : 0x4000;
 }
 static uint64_t emodel_now(void *cookie) { (void)cookie; return emodel.tick; }
 static void emodel_sleep(void *cookie,uint32_t ms)
@@ -369,4 +375,39 @@ static void test_emu10k1(void)
     CHECK(pages_used==baseline && !audio.commitment_pages);
     printf("EMU private state bytes: device=%zu, capture=%zu; no quota changes\n",sizeof(audio_dma),sizeof(audio_dma.emu));
     puts("EMU10K1/10K2: PTE walker, stereo DSP output, 3 wraps, native+virtual SB16 mix, ADC rates/copies/overrun, own IRQs, rollback and four stop-quarantine faults PASS");
+}
+
+static void test_emu10k1_public(void)
+{
+    unsigned baseline=pages_used;
+    for (unsigned chip=0;chip<2;chip++) {
+        emodel_setup(chip ? AUDIO_EMU10K2 : AUDIO_EMU10K1);
+        struct audio_dma_device *d=&audio_dma;
+        CHECK(!backend_dma_init(d)); audio.ready=true;
+        uint32_t token=0;
+        CHECK(!emu10k1_capture_start(d,48000));
+        CHECK(audio_capture_open(d,&token)==-EBUSY && d->emu.capture_running);
+        CHECK(!emu10k1_capture_stop(d));
+        uint16_t select=emodel.codec[0x1a/2],gain=emodel.codec[0x1c/2];
+        CHECK(!audio_capture_open(d,&token) && token && emodel.regs[0x4a][0]==0x1b);
+        CHECK(emu10k1_capture_start(d,48000)==-EBUSY);
+        CHECK(emu10k1_capture_stop(d)==-EBUSY && d->capture.running);
+        CHECK(!audio_capture_source(d,token,CIUKI_CAPTURE_MIC) && !emodel.codec[0x1a/2]);
+        CHECK(!audio_capture_source(d,token,CIUKI_CAPTURE_CD) && emodel.codec[0x1a/2]==0x0101);
+        CHECK(!audio_capture_source(d,token,CIUKI_CAPTURE_LINE));
+        static struct audio_frame frames[128],marker[AUDIO_QUANTUM];
+        for (unsigned i=0;i<8;i++) CHECK(!audio_dma_publish(d,marker));
+        CHECK(!audio_dma_start(d));
+        CHECK(audio_capture_read(d,token,frames,128)==-EAGAIN);
+        emodel_capture_advance(600); emodel.tick+=12;
+        CHECK(audio_capture_read(d,token,frames,128)==128);
+        for (unsigned i=0;i<128;i++) CHECK(frames[i].left==901+(int)(i%100) && frames[i].right==-1703);
+        uint32_t pitch=emodel.regs[0][0],timer=emodel.inte,hcfg=emodel.hcfg,command=emodel.command;
+        CHECK(!audio_capture_close(d,token));
+        CHECK(d->state.running && emodel.regs[0][0]==pitch && emodel.inte==timer && emodel.hcfg==hcfg && emodel.command==command);
+        CHECK(emodel.codec[0x1a/2]==select && emodel.codec[0x1c/2]==gain);
+        CHECK(emodel.unpins==1 && emodel.pin_count==3);
+        audio_backend_shutdown(); CHECK(pages_used==baseline && emodel.unpins==3);
+    }
+    puts("EMU10K1/10K2 public capture: independent ADC start/stop/copy/source/restore/pins/playback preservation PASS");
 }

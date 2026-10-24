@@ -2155,6 +2155,24 @@ retains its ownership across START/STOP until RELEASE or last close.
 ```c
 #define AUDIO_CAPTURE_ACQUIRE 0x410eu
 #define AUDIO_CAPTURE_RELEASE 0x410fu
+#define AUDIO_MIDI_WRITE 0x4110u
+#define CIUKI_MIDI_BYTES 128u
+```
+
+Open /dev/audio O_WRONLY. The first MIDI batch selects the per-fd FM
+output port; PCM writes then fail with EBUSY until AUDIO_RESET. Partial
+batches report accepted bytes; EAGAIN accepts none. Close ends all notes.
+This is a software output port, not an external physical UART.
+
+```c
+struct ciuki_midi_data {
+    uint32_t version;
+    uint32_t size;
+    uint32_t bytes;
+    uint32_t accepted;
+    uint8_t data[128];
+    uint32_t reserved[2];
+};
 #define MIXER_GET_LINE 0x4205u
 #define MIXER_SET_LINE 0x4206u
 #define CIUKI_MIXER_WAVE 1u
@@ -5999,6 +6017,13 @@ SPDX-License-Identifier: MIT
 #include <ciuki/abi.h>
 #define __CIUKI_AUDIO_VERSION__ 1
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
+```
+
+MIDI software output on an O_WRONLY /dev/audio description. Returns the
+number of accepted bytes, or -1 and errno. Retain a short batch's suffix.
+
+```c
+int ciuki_midi_write(int fd, const uint8_t *bytes, uint32_t size);
 #endif
 ```
 
