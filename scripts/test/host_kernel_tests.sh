@@ -667,6 +667,7 @@ python3 "$root/tests/host/lwip/fd_run.py" --frame
 python3 "$root/tests/host/lwip/run.py"
 python3 "$root/tests/host/lwip/fd_run.py"
 python3 "$root/tests/host/lwip/run.py" --kernel
+python3 "$root/tests/host/net/test_user_tools.py"
 
 
 # f4-05: the kernel's integer OPL3 port sample for sample against the pinned
@@ -703,6 +704,7 @@ python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loade
 
 # f5-06 kernel32 production VFS endpoints and direct-file INI parity.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel32.py
+python3 -B "$root/tests/host/win32/test_winsock.py"
 # f3-63: the classic-kernel H50 CPU boot is retired. Native DOS file API
 # tests above and unified H56/H57 below retain the supported coverage.
 

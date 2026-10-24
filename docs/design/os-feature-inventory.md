@@ -447,10 +447,10 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | NW-2 | TCP/IP with DHCP or a static address, mask, gateway, DNS | RK-net | done | lwIP (`src/kernel/net/lwip/stack.c`), `net/settings.c`; `tests/host/lwip/stack_test.c`, `net/settings_test.c` |
 | NW-3 | Network applet (adapters, protocols, clients, services, bindings, identification) | RK-net | partial | Adapter, TCP/IP and Status tabs (`apps/control/network.inc:67-140`). Missing: clients, services, bindings, WINS |
 | NW-4 | WinIPCfg (address, lease, Release, Renew) | RK-net | done | The Status tab of the Network page |
-| NW-5 | `ping`, `tracert`, `netstat`, `ipconfig` commands | RK-net | absent | `LWIP_RAW 0`; Terminal `NET` prints only the driver state (`apps/terminal/commands.c:216`) |
-| NW-6 | HOSTS and LMHOSTS files | RK-net (App. F) | absent | `sdk/libciuki/netdb.c:34` only knows `localhost` |
-| NW-7 | Winsock for Windows programs (`wsock32.dll`, `ws2_32.dll`) | RK-net | absent | `wsock32` is generated stubs that fail with error 10050 (`sdk/win32/offline/wsock.c`, `scripts/win32/stubs.py:25`) |
-| NW-8 | Web browser with history, favourites, downloads, new windows, printing, Internet Options | RK-net (`wrkc20_3`) | partial | NetSurf 3.11 with back, forward, reload, stop, home, bookmarks and history (`sdk/netsurf/port/chrome.c:39-105,280-281`). Missing: downloads (`chrome.c:372-383`), more than one window, PNG/JPEG decoding (off in `sdk/netsurf/build.py:23`), JavaScript, printing, an Internet applet; real pages are rejected by parser admission limits (directive fx-14) |
+| NW-5 | `ping`, `tracert`, `netstat`, `ipconfig` commands | RK-net | partial | G26: Terminal `PING`, `TRACERT`, `IPCONFIG` and `NETSTAT`; raw ICMP/TTL, read-only adapter/socket snapshots, interface counters (`apps/terminal/network.c`, `tests/host/net/test_user_tools.py`, `tests/host/lwip/raw.inc`). Remaining: per-protocol netstat counters, privileged release/renew delegation and cancellation during synchronous DNS lookup. Sanitizer exits need a rerun outside the restricted sandbox; see `build/codex/g26-report.md`. |
+| NW-6 | HOSTS and LMHOSTS files | RK-net (App. F) | partial | G26: `/system/settings/HOSTS` before DNS for native libc and Winsock, IPv4 aliases/case/comments/CRLF, bounded parsing (`sdk/libciuki/hosts.h`, `netdb.c`, `tests/host/net/user_tools_test.c`). LMHOSTS/NetBIOS resolution is still absent. |
+| NW-7 | Winsock for Windows programs (`wsock32.dll`, `ws2_32.dll`) | RK-net | partial | G26: 45 synchronous IPv4 facade exports over native sockets; `ws2_32` forwards to the same `wsock32` state. Actual PE/ordinal/reproducibility tests pass (`tests/host/win32/test_winsock.py`); runtime mock assertions pass but LeakSanitizer cannot exit in the sandbox. Remaining: async/event/overlapped APIs, FIONREAD, full reverse DNS, cancellation of retained calls at cleanup, datagram truncation error semantics; no full Winsock conformance claim. |
+| NW-8 | Web browser with history, favourites, downloads, new windows, printing, Internet Options | RK-net (`wrkc20_3`) | partial | NetSurf 3.11 back/forward/reload/stop/home/bookmarks/history, plus G26 streamed downloads and Save/cancel, explicit New Window/Ctrl+N, PNG and baseline/progressive JPEG, home/HTTP proxy/memory cache settings. Integration retains G31 Ctrl+P visible-page printing and Ctrl+Shift+P printer setup (`sdk/netsurf/port/chrome.c`, `tests/host/netsurf/test_printing.py`), and fx-24 GIF/BMP/WebP/SVG image support. Real browser authored image renders and existing page goldens pass; `tests/host/netsurf/test_g26.py` exercises allocation failures/proxy/profile storage (sanitizer exit restricted). Remaining: automatic `_blank` routing, merging history/bookmark edits across windows, HTTPS proxy CONNECT/authentication, JavaScript, full-document browser printing and the rest of Internet Options. fx-14 memory-based parser admission remains in place. |
 | NW-9 | E-mail and news client (Outlook Express) and address book | RK-comp | absent | — |
 | NW-10 | FTP and Telnet clients | RK-net (`wrkc20_4`) | absent (scope) | Out of scope in `docs/design/network-contract.md:805` |
 | NW-11 | Dial-Up Networking (modem, PPP), Dial-Up Server, Direct Cable Connection, VPN | RK-net (ch. 19), RK-comp | absent (scope) | PPP excluded (`network-contract.md:32`) |
@@ -507,7 +507,7 @@ row's detail is in the area section it points to.
 | CP-5 | Display | RK-cpl | partial | DS-* |
 | CP-6 | Fonts | RK-cpl | partial | FT-3 (a tab inside Display, `app.c:1357-1358`) |
 | CP-7 | Game Controllers | RK-cpl | done | IN-7 |
-| CP-8 | Internet (home page, history, security, connections, programs) | RK-cpl | absent | NW-8 |
+| CP-8 | Internet (home page, history, security, connections, programs) | RK-cpl | partial | G26: Internet Properties applet, home page, HTTP proxy/port and memory cache; durable settings consumed by new browser processes (`apps/control/internet.inc`, `internet_storage.h`, `tests/host/desktop/control_test.c`). Missing: history-management UI, security zones, connections/program defaults and full proxy handling; NW-8. |
 | CP-9 | Keyboard (speed, language, type) | RK-cpl | partial | Layout only (`app.c:1258-1264`); IN-2, IN-3 |
 | CP-10 | Modems | RK-cpl | absent (scope) | NW-11 |
 | CP-11 | Mouse (buttons, pointers, motion, general) | RK-cpl | partial | IN-6 |
@@ -601,9 +601,9 @@ rows in the area sections, so the counts are given with and without it.
 
 | Status | All rows | Without the Control Panel table |
 | --- | ---: | ---: |
-| done | 64 | 63 |
-| partial | 148 | 138 |
-| absent | 132 (15 of them out of scope by an existing decision) | 121 (12 out of scope) |
+| done | 76 | 75 |
+| partial | 143 | 132 |
+| absent | 125 (15 of them out of scope by an existing decision) | 115 (12 out of scope) |
 | **total** | **344** | **322** |
 
 The pattern across areas:
@@ -718,7 +718,7 @@ below assume they land first.
 | G23 | Display appearance and DPI | DS-2, DS-5, DS-6, DS-9, DS-10, FT-4, FT-5. A scheme editor (per-item colours, sizes, fonts), saved schemes; Effects (full-window drag, smoothing, large icons); refresh rate and EDID monitor; Large Fonts / DPI; a desktop colour picker and patterns | none | L | The desktop cannot be personalised beyond two themes |
 | G24 | Regional Settings | TM-4, CP-17. Locale with number, currency, date and time formats; `LC_*` for native programs and NLS for Win32 (`GetLocaleInfo`, `GetDateFormat`); Italian and English defaults. **Implemented by G24** (`docs/design/regional-settings.md`, `build/codex/g24-report.md`); remaining limits and sanitizer/guest qualification are recorded at TM-4. | G1 | M | Regional formats now feed native and Win32 programs; see TM-4 for remaining qualification. |
 | G25 | Accessibility | AC-1 to AC-8, KB-17, WM-21. Accessibility Options applet: StickyKeys, FilterKeys, ToggleKeys, MouseKeys, SoundSentry, ShowSounds, High Contrast schemes and hotkeys, idle reset, tray indicator; large and inverted pointers; a Magnifier | G12, G23 | L | Required for users with disabilities; nothing exists |
-| G26 | Network user tools | NW-5, NW-6, NW-7, NW-8 (downloads, windows, PNG/JPEG), CP-8. Raw ICMP and `ping`/`tracert`/`ipconfig`; a HOSTS file; Winsock 1.1/2 over the native sockets for Win32 programs; NetSurf downloads, new windows and PNG/JPEG decoding; an Internet page (home page, proxy, cache) | fx-14 | L | Win32 programs cannot reach the network, and a downloaded file cannot be saved |
+| G26 | Network user tools | NW-5, NW-6, NW-7, NW-8 (downloads, windows, PNG/JPEG), CP-8. Raw ICMP and `ping`/`tracert`/`ipconfig`; a HOSTS file; Winsock 1.1/2 over the native sockets for Win32 programs; NetSurf downloads, new windows and PNG/JPEG decoding; an Internet page (home page, proxy, cache) | fx-14 | L | G26 adds synchronous IPv4 access and streamed download saving; completion gaps and verification limits are recorded in `build/codex/g26-report.md` |
 | G27 | Accessories completion | AX-3, AX-4, AX-5, AX-6, AX-8, AX-11, AX-17, FT-7. Paint Stretch/Skew, Edit Colors, GIF/JPEG save, Set As Wallpaper; Calculator Scientific; Character Map fonts and Latin-1/Unicode ranges; Viewer rotate and wallpaper; a serial terminal; Solitaire, Minesweeper, FreeCell and Hearts equivalents; Terminal pipes, redirection, batch files and the missing commands | G5 for the clipboard parts | L (split per accessory) | Each accessory is reachable from the menu and shows its gap immediately |
 | G28 | WordPad-class editor | AX-1 (large files), AX-2. A rich-text editor (RTF and text, later `.wri`/`.doc` import) with fonts, paragraphs, bullets, print preview; CiukNote offers it above its 60 KiB limit | G16 (Font dialog), G31 for printing | L | Documents larger than 60 KiB cannot be opened |
 | G29 | Disk tools | FM-33, FM-34, ST-8, ST-10, ST-11, ST-12, ST-14, ER-6. A Format dialog (floppy, USB, FAT12/16/32, quick or full, label); Disk Cleanup and the low-disk warning; later a defragmenter, Drive Converter, a partition tool and Backup | fx-17 (removable rw), G6 | L | A new USB stick or floppy cannot be formatted |

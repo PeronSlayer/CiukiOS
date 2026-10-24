@@ -52,6 +52,8 @@ def build(out=None):
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='kernel32.dll':store['dlls'][i]=kernel32.build(out,kernel_base,flags)
         if dll['name']=='wsock32.dll':store['dlls'][i]=kernel32.build_offline(out,dll['base'],flags)
+    winsock_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls']=[d for d in store['dlls'] if d['name']!='ws2_32.dll']+[kernel32.build_winsock2(out,winsock_base,flags)]
     from scripts.win32 import audio
     audio_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     audio_dlls=audio.build(out,audio_base,flags)

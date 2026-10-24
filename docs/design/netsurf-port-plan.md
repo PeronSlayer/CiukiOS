@@ -816,3 +816,18 @@ Rendering one local file is not that closure.
 No implementation, image build, runtime qualification, commit or diary change
 is part of f6-13. The next action is lead review/decisions and a written coding
 directive with the above prerequisites resolved.
+
+## G26 user tools extension
+
+[Network user tools](network-user-tools.md) records the later implemented
+extension: streamed downloads with exclusive staging and Save/cancel; explicit
+New Window/Ctrl+N through the existing desktop launcher; pinned libpng and
+static stb JPEG content handlers sharing the image ledger; Internet Properties
+(home, HTTP proxy and memory cache). Each process still owns one framebuffer
+surface. Automatic `_blank` routing, concurrent profile-model merging, HTTPS
+proxy CONNECT/authentication, full-document printing and JavaScript remain gaps.
+Integration retains G31 visible-page Ctrl+P printing and Ctrl+Shift+P setup;
+download and printer workers both poll and clean up. The G26 PNG/JPEG
+handlers register after upstream handlers while fx-24 GIF/BMP/ICO/WebP/SVG
+remain enabled (see `network-user-tools.md`, integration section). Host evidence
+and sandbox sanitizer failures are recorded in `build/codex/g26-report.md`.

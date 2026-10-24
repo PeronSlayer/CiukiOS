@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <poll.h>
 #include "control.h"
+#include "internet_storage.h"
 #include "programs.h"
 #include "decoder.h"
 #include "job.h"
@@ -774,6 +775,10 @@ static int control_run(struct cp_main *m)
     }
 }
 
+static int internet_read(void *ctx,struct cp_internet_options *o)
+{ (void)ctx;return internet_load(INTERNET_OPTIONS_PATH,o); }
+static int internet_write(void *ctx,const struct cp_internet_options *o)
+{ (void)ctx;return internet_save(INTERNET_OPTIONS_PATH,o); }
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
@@ -806,6 +811,7 @@ int main(int argc, char **argv)
     h->sound_validate=sound_validate; h->sound_schemes=sound_schemes; h->sound_scheme=sound_scheme;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;
     h->display = display_query;
+    h->internet_load=internet_read;h->internet_save=internet_write;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;
     h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;

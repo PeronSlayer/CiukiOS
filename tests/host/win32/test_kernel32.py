@@ -69,14 +69,17 @@ class Kernel32Files(unittest.TestCase):
         self.assertIn('PASS file wrappers',result.stdout)
 
     def test_offline_facade(self):
-        out=ROOT/'build/host/win32/offline';out.mkdir(parents=True,exist_ok=True)
-        program=out/'offline'
+        # G26 replaces the former offline facade with a native socket bridge.
+        out=ROOT/'build/host/win32/winsock';out.mkdir(parents=True,exist_ok=True)
+        program=out/'winsock'
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL',
-            '-fsanitize=address,undefined','-fno-sanitize-recover=all','-I'+str(ROOT/'sdk/win32/include'),
-            str(ROOT/'tests/host/win32/offline_test.c'),str(ROOT/'sdk/win32/offline/wsock.c'),'-o',str(program)],check=True)
-        result=subprocess.run([program],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
+            '-fno-pie','-no-pie','-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            str(ROOT/'tests/host/win32/offline_test.c'),'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,
+            env=dict(os.environ,ASAN_OPTIONS='detect_stack_use_after_return=0'))
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertIn('PASS offline Winsock',result.stdout)
+        self.assertIn('PASS G26 Winsock',result.stdout)
 
     def test_profile_two_process_serialization(self):
         out=ROOT/'build/host/win32/profile-processes';out.mkdir(parents=True,exist_ok=True)

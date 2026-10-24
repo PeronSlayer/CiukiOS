@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include "driver_pack.h"
 #include "../desktop/users.h"
+#include "internet_options.h"
 #define CP_PACK_INSTALL 1450
 #define CP_PACK_REMOVE 1451
 #define CP_PACK_LOCATION 1452
@@ -80,6 +81,8 @@ struct cp_game_result {
 struct cp_host {
     int (*user_begin)(void *,const struct users_request *);
     int (*user_poll)(void *,struct users_view *,int *);
+    int (*internet_load)(void *,struct cp_internet_options *);
+    int (*internet_save)(void *,const struct cp_internet_options *);
     int (*pack_scan)(void *, const char *, char names[][192], unsigned);
     int (*pack_preview)(void *, struct dp_plan *, const char *, const char *, const struct ndp_device *, char reason[160]);
     int (*pack_install)(void *, const struct dp_plan *, const char *, char reason[160]);
@@ -162,6 +165,7 @@ struct cp_app {
     struct du_item regional_tabs[5], regional_presets[2];
     unsigned regional_tab;
     int regional_saving, regional_accept;
+    struct cp_internet_options internet;
     struct game_ports_settings game_ports;
     struct ciuki_joystick_control game_joystick;
     int game_open, game_busy, game_loaded, game_joy_ready, game_joy_dirty, game_save;

@@ -101,6 +101,20 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
     struct process *p = o->process; unsigned nr = tf->eax;
     if (tf->edi || tf->ebp) return -EINVAL;
     if (nr != CIUKI_SYS_SOCKNAME && tf->esi) return -EINVAL;
+    if(nr==CIUKI_SYS_NET_INFO) {
+        unsigned bytes=tf->ebx==CIUKI_NET_INFO_CONFIG?sizeof(struct ciuki_net_control):sizeof(struct ciuki_net_socket_list);
+        if(tf->ebx>CIUKI_NET_INFO_SOCKETS || tf->edx!=bytes)return -EINVAL;
+        int e=pin(o,tf->ecx,bytes);if(e)return e;
+        if(tf->ebx==CIUKI_NET_INFO_CONFIG) {
+            struct ciuki_net_control r;e=copy_from_user(&r,tf->ecx,sizeof(r));if(e)return e;
+            if(r.version!=1 || r.size!=sizeof(r))return -EINVAL;
+            unsigned index=r.index;memset(&r,0,sizeof(r));r.version=1;r.size=sizeof(r);r.index=index;
+            e=net_control(CIUKI_NETCTL_GET,&r);
+            return e?e:copy_to_user(tf->ecx,&r,sizeof(r));
+        }
+        net_socket_snapshot((void *)o->buffer);
+        return copy_to_user(tf->ecx,o->buffer,bytes);
+    }
     if (nr == CIUKI_SYS_SOCKET) return net_socket_create(p, (int)tf->ebx, (int)tf->ecx, (int)tf->edx);
     if (nr == CIUKI_SYS_SENDTO || nr == CIUKI_SYS_RECVFROM) {
         if (tf->ecx || tf->edx) return -EINVAL;
@@ -204,7 +218,7 @@ int32_t net_socket_call(struct trap_frame *tf)
     }
     struct process *p = proc_current(); if (!p) return -ENOSYS;
     struct user_operation local = { .process = p };
-    bool data = tf->eax == CIUKI_SYS_SENDTO || tf->eax == CIUKI_SYS_RECVFROM || tf->eax == CIUKI_SYS_POLL;
+    bool data = tf->eax == CIUKI_SYS_SENDTO || tf->eax == CIUKI_SYS_RECVFROM || tf->eax == CIUKI_SYS_POLL || tf->eax==CIUKI_SYS_NET_INFO;
     struct user_operation *o = data ? user_new(p) : &local;
     if (!o) return -ENOMEM;
     struct proc_thread *t = proc_thread_for(g_current);

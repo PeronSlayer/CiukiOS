@@ -25,7 +25,7 @@ ORDINALS={
  'wsock32.dll':dict(zip(('accept','bind','closesocket','connect','getpeername','getsockname','getsockopt','htonl','htons','inet_addr','inet_ntoa','ioctlsocket','listen','ntohl','ntohs','recv','recvfrom','select','send','sendto','setsockopt','shutdown','socket'),range(1,24))) | {
      'gethostbyaddr':51,'gethostbyname':52,'getprotobyname':53,'getprotobynumber':54,
      'getservbyname':55,'getservbyport':56,'gethostname':57,'WSAGetLastError':111,
-     'WSASetLastError':112,'WSAStartup':115,'WSACleanup':116},
+     'WSASetLastError':112,'WSAStartup':115,'WSACleanup':116,'__WSAFDIsSet':151},
  'comctl32.dll':{'InitCommonControls':17},
  'dplayx.dll':{'DirectPlayCreate':1,'DirectPlayEnumerateA':2,'DirectPlayLobbyCreateA':4},
 }

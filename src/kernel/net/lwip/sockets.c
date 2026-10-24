@@ -103,6 +103,21 @@ uint32_t net_socket_count(void)
     for (unsigned i = 0; i < CIUKI_SOCKET_MAX; i++) n += sockets[i].used;
     sys_arch_unprotect(f); return n;
 }
+void net_socket_snapshot(struct ciuki_net_socket_list *list)
+{
+    memset(list,0,sizeof(*list));list->size=sizeof(*list);list->version=1;
+    sys_prot_t f=sys_arch_protect();
+    for(unsigned i=0;i<CIUKI_SOCKET_MAX;i++) {
+        struct socket_object *s=&sockets[i];if(!s->used || s->pending || s->closing)continue;
+        struct ciuki_net_socket_info *out=&list->sockets[list->count++];
+        out->pid=s->origin_pid;out->type=s->type;
+        out->state=s->listening?CIUKI_NET_SOCKET_LISTEN:s->connecting?CIUKI_NET_SOCKET_CONNECTING:
+            s->connected?(s->eof?CIUKI_NET_SOCKET_CLOSE_WAIT:CIUKI_NET_SOCKET_CONNECTED):CIUKI_NET_SOCKET_CLOSED;
+        out->local_address=s->local.address;out->local_port=s->local.port;
+        out->peer_address=s->peer.address;out->peer_port=s->peer.port;
+    }
+    sys_arch_unprotect(f);
+}
 static void retain(struct proc_object *o)
 {
     sys_prot_t f = sys_arch_protect(); ((struct socket_object *)o)->references++; sys_arch_unprotect(f);
@@ -313,6 +328,9 @@ static void option_core(void *arg)
         if (s->listening) { r->result = -ENOPROTOOPT; return; }
         if (r->which) { if (value) tcp_nagle_disable(s->conn->pcb.tcp); else tcp_nagle_enable(s->conn->pcb.tcp); }
         value = tcp_nagle_disabled(s->conn->pcb.tcp) ? 1 : 0;
+    } else if (r->level == IPPROTO_IP) {
+        if (r->which) pcb->ttl = (u8_t)value;
+        value = pcb->ttl;
     } else {
         unsigned bit = r->option == SO_REUSEADDR ? SOF_REUSEADDR : SOF_BROADCAST;
         if (r->which) { if (value) ip_set_option(pcb, bit); else ip_reset_option(pcb, bit); }
@@ -345,10 +363,11 @@ static int option(struct request *r)
         r->length = sizeof(t); return 0;
     }
     if (!((r->level == SOL_SOCKET && (r->option == SO_REUSEADDR || r->option == SO_BROADCAST)) ||
-          (r->level == IPPROTO_TCP && r->option == TCP_NODELAY && s->type == SOCK_STREAM))) return -ENOPROTOOPT;
+          (r->level == IPPROTO_TCP && r->option == TCP_NODELAY && s->type == SOCK_STREAM) ||
+          (r->level == IPPROTO_IP && r->option == IP_TTL))) return -ENOPROTOOPT;
     if (r->which) {
         if (r->length != 4) return -EINVAL;
-        memcpy(&value, r->buffer, 4); if (value != 0 && value != 1) return -EINVAL;
+        memcpy(&value, r->buffer, 4); if (r->level == IPPROTO_IP ? value < 1 || value > 255 : value != 0 && value != 1) return -EINVAL;
     }
     r->result = 0;
     err_t e = tcpip_callback_wait(option_core, r);
@@ -384,9 +403,10 @@ static int attempt(struct request *r)
     switch (r->operation) {
     case OP_NEW:
         if ((cancelled = commit(r))) return cancelled;
-        s->conn = netconn_new_with_callback(s->type == SOCK_STREAM ? NETCONN_TCP : NETCONN_UDP, notify);
+        s->conn = netconn_new_with_proto_and_callback(s->type == SOCK_STREAM ? NETCONN_TCP :
+            s->type == SOCK_RAW ? NETCONN_RAW : NETCONN_UDP, s->type == SOCK_RAW ? IPPROTO_ICMP : 0, notify);
         if (!s->conn) return -ENOBUFS;
-        netconn_set_nonblocking(s->conn, 1); s->send_events = s->type == SOCK_DGRAM;
+        netconn_set_nonblocking(s->conn, 1); s->send_events = s->type != SOCK_STREAM;
         return 0;
     case OP_BIND:
         r->result = 0;
@@ -663,8 +683,9 @@ int net_socket_create(struct process *p, int family, int type, int protocol)
     if (family != AF_INET) return -EAFNOSUPPORT;
     if (type & ~(SOCK_NONBLOCK | SOCK_CLOEXEC | 0xf)) return -EINVAL;
     unsigned base = type & 0xf;
-    if (base != SOCK_STREAM && base != SOCK_DGRAM) return -ESOCKTNOSUPPORT;
-    if (protocol && protocol != (base == SOCK_STREAM ? IPPROTO_TCP : IPPROTO_UDP)) return -EPROTONOSUPPORT;
+    if (base != SOCK_STREAM && base != SOCK_DGRAM && base != SOCK_RAW) return -ESOCKTNOSUPPORT;
+    if (protocol && protocol != (base == SOCK_STREAM ? IPPROTO_TCP : base == SOCK_RAW ? IPPROTO_ICMP : IPPROTO_UDP)) return -EPROTONOSUPPORT;
+    if (base == SOCK_RAW && protocol != IPPROTO_ICMP) return -EPROTONOSUPPORT;
     if (!workers_ready) return -ENOBUFS;
     int fd = file_fd_reserve(p); if (fd < 0) return fd;
     int e; struct socket_object *s = reserve_socket(p, base, &e); if (!s) { file_fd_cancel(p, fd); return e; }
@@ -768,7 +789,8 @@ int net_socket_io(struct process *p, int fd, void *buffer, unsigned bytes, unsig
     if (bytes > CIUKI_SOCKET_IO_MAX || flags & ~(MSG_DONTWAIT | (send ? MSG_NOSIGNAL : MSG_PEEK))) return -EINVAL;
     int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     struct socket_object *s = r->socket;
-    if (send && s->type == SOCK_DGRAM && bytes > CIUKI_UDP_MAX) { request_free(r); return -EMSGSIZE; }
+    if (send && s->type != SOCK_STREAM && bytes > CIUKI_UDP_MAX) { request_free(r); return -EMSGSIZE; }
+    if (send && s->type == SOCK_RAW && a && a->port) { request_free(r); return -EINVAL; }
     r->operation = send ? OP_SEND : OP_RECV; r->bytes = bytes; r->flags = flags;
     r->has_address = send && a;
     if (send && a) { e = address_check(a, false); if (e) { request_free(r); return e; } r->address = *a; }

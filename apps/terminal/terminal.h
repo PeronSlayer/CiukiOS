@@ -14,12 +14,14 @@
 #define TERM_WIDTH (80 * TERM_CELL_W + 24)
 #define TERM_HEIGHT (25 * TERM_CELL_H + 8)
 struct lua_State;
+struct terminal;
 /* Providers return 0 or -errno, except processes (record count). Requests
  * return queue acceptance; desktop results are delivered separately. */
 struct term_host {
     struct fm_vfs fs;
     void *ctx;
     int (*net)(void *, struct ciuki_net_state *);
+    int (*network_command)(struct terminal *, int, char **);
     int (*mixer)(void *, struct ciuki_mixer_master *);
     int (*volume)(void *, uint32_t, uint32_t, uint32_t);
     int (*processes)(void *, void *, unsigned);
@@ -52,6 +54,7 @@ struct terminal {
     unsigned pending_power;
     struct du_menu_item menu_items[3]; struct du_menu menu;
 };
+int term_network_command(struct terminal *, int, char **);
 int term_attach(struct terminal *, struct du_ui *, const struct term_host *);
 void term_detach(struct terminal *);
 void term_write(struct terminal *, const char *);

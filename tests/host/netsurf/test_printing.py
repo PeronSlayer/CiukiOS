@@ -23,6 +23,7 @@ class BrowserPrinting(unittest.TestCase):
                         "-I"+str(source / "frontends/framebuffer/ciuki"),
                         "-include",str(ROOT / "tests/host/desktop/replay_base.h"),
                         str(ROOT / "tests/host/netsurf/printing_test.c"),
+                        str(ROOT / "sdk/netsurf/port/download_store.c"),
                         str(ROOT / "apps/libdeskui/widgets.c"),str(ROOT / "apps/libdeskui/draw.c"),"-o",str(binary)],check=True)
         subprocess.run([str(binary)],check=True)
 

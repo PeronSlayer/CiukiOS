@@ -2,6 +2,12 @@
  * Production browser shortcut/crop boundary; unrelated frontend is discarded. */
 #include "../../../sdk/netsurf/port/chrome.c"
 #include <assert.h>
+/* ASan retains the exported download table when chrome.c is included.
+ * This printing-only fixture must never enter the browser download core. */
+const char *download_context_get_filename(const download_context *context)
+{ (void)context;abort(); }
+void download_context_destroy(download_context *context)
+{ (void)context;abort(); }
 static unsigned prints,setups;
 void cp_ui_setup(struct cp_ui *p,struct du_ui *u)
 { assert(p==&printing && u==&ui);setups++; }
@@ -14,7 +20,7 @@ void cp_ui_image(struct cp_ui *p,struct du_ui *u,const char *title,const uint32_
 int main(void)
 {
     setvbuf(stdout,NULL,_IONBF,0);static uint32_t pixels[640*480];
-    struct ciuki_browser_surface browser_surface={0};surface=&browser_surface;
+    static struct ciuki_browser_surface browser_surface;surface=&browser_surface;
     surface->ready=true;surface->current.back=pixels;surface->current.info.width=640;surface->current.info.height=480;
     assert(!print_key(0x19) && !prints && !setups);
     ui.modifiers=DU_CTRL;assert(!print_key(0x18));assert(print_key(0x19) && prints==1);

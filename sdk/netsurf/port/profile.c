@@ -38,11 +38,11 @@ int ciuki_profile_init(const char *path)
         return -1;
     }
     FILE *f=fopen(paths[2],"r"); if(!f)return -1;
-    char line[65536];
-    while(fgets(line,sizeof(line),f)) {
+    char *line=malloc(65536);if(!line) { fclose(f);return -1; }
+    while(fgets(line,65536,f)) {
         if(strncmp(line,"<p><a href=\"",12))continue;
         char *start=line+12,*end=strchr(start,'"');
-        if(!end || (size_t)(end-start)>6*4096) { fclose(f);ciuki_profile_fini();errno=EINVAL;return -1; }
+        if(!end || (size_t)(end-start)>6*4096) { free(line);fclose(f);ciuki_profile_fini();errno=EINVAL;return -1; }
         *end=0;
         /* Decode exactly the attribute escapes this writer emits. */
         char *read=start,*write=start;
@@ -54,9 +54,9 @@ int ciuki_profile_init(const char *path)
             else *write++=*read++;
         }
         *write=0;
-        if(ciuki_profile_visit(start)) { fclose(f);return -1; }
+        if(ciuki_profile_visit(start)) { free(line);fclose(f);ciuki_profile_fini();return -1; }
     }
-    int failed=ferror(f);fclose(f);return failed?-1:0;
+    int failed=ferror(f);free(line);if(fclose(f))failed=1;return failed?-1:0;
 }
 int ciuki_profile_admit(const char *path,size_t max,unsigned max_entries)
 {
@@ -64,19 +64,21 @@ int ciuki_profile_admit(const char *path,size_t max,unsigned max_entries)
     if(stat(path,&st))return -1;
     if(st.st_size<0 || (size_t)st.st_size>max) { errno=EFBIG;return -1; }
     FILE *f=fopen(path,"r");if(!f)return -1;
-    unsigned entries=0;char line[65536];
-    if(!fgets(line,sizeof(line),f) || strncmp(line,"<!DOCTYPE html",14)) { fclose(f);errno=EINVAL;return -1; }
-    while(fgets(line,sizeof(line),f)) {
-        if(!strchr(line,'\n') && !feof(f)) { fclose(f);errno=EINVAL;return -1; }
-        for(char *p=line;(p=strstr(p,"href="));p+=5)if(++entries>max_entries) { fclose(f);errno=EFBIG;return -1; }
+    unsigned entries=0;char *line=malloc(65536);if(!line) { fclose(f);return -1; }
+    if(!fgets(line,65536,f) || strncmp(line,"<!DOCTYPE html",14)) { free(line);fclose(f);errno=EINVAL;return -1; }
+    while(fgets(line,65536,f)) {
+        if(!strchr(line,'\n') && !feof(f)) { free(line);fclose(f);errno=EINVAL;return -1; }
+        for(char *p=line;(p=strstr(p,"href="));p+=5)if(++entries>max_entries) { free(line);fclose(f);errno=EFBIG;return -1; }
     }
-    int failed=ferror(f);fclose(f);return failed?-1:0;
+    int failed=ferror(f);free(line);if(fclose(f))failed=1;return failed?-1:0;
 }
 int ciuki_profile_replace(const char *name,int (*write_file)(const char *,void *),void *context)
 {
     const char *path=ciuki_profile_path(name);char temp[600];
     if(!path) { errno=EINVAL;return -1; }
-    snprintf(temp,sizeof(temp),"%s.new",path);
+    snprintf(temp,sizeof(temp),"%s.XXXXXX",path);
+    int reservation=mkstemp(temp);if(reservation<0)return -1;
+    if(close(reservation)) { int e=errno;unlink(temp);errno=e;return -1; }
     if(write_file(temp,context)) { unlink(temp);return -1; }
     if((!strcmp(name,"Bookmarks.html") && ciuki_profile_admit(temp,512*1024,500)) ||
        (!strcmp(name,"History.html") && ciuki_profile_admit(temp,1024*1024,HISTORY_MAX))) { unlink(temp);return -1; }

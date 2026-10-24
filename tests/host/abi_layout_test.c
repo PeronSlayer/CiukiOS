@@ -156,6 +156,10 @@ _Static_assert(__builtin_offsetof(struct setup_erased_partition,label)==20,"eras
 #undef SETUP_OFFSET
 #endif
 
+_Static_assert(CP_MULTIMEDIA==15 && CP_USERS==16 && CP_PASSWORDS==17 && CP_REGIONAL==18,
+               "integration Control Panel page IDs");
+_Static_assert(CP_INTERNET==19 && CP_PAGES==20,"G26 appended Internet page");
+
 _Static_assert(DESK_INPUT_SETTINGS==83 && DESK_INPUT_STATE==84 && DESK_INPUT_VALUES==11,"G12 input protocol");
 _Static_assert(DESK_INPUT_LAYOUT==1 && DESK_INPUT_DELAY==2 && DESK_INPUT_SPEED==3 &&
     DESK_INPUT_BLINK==4 && DESK_INPUT_SWAP==5 && DESK_INPUT_TRAILS==6 &&
@@ -834,6 +838,33 @@ static const struct expectation expectations[] = {
     {"constant.AF_INET", AF_INET, 2u},
     {"constant.SOCK_STREAM", SOCK_STREAM, 1u},
     {"constant.SOCK_DGRAM", SOCK_DGRAM, 2u},
+    {"constant.SOCK_RAW", SOCK_RAW, 3u},
+    {"constant.CIUKI_SYS_NET_INFO", CIUKI_SYS_NET_INFO, 99u},
+    {"constant.CIUKI_NET_INFO_CONFIG", CIUKI_NET_INFO_CONFIG, 0u},
+    {"constant.CIUKI_NET_INFO_SOCKETS", CIUKI_NET_INFO_SOCKETS, 1u},
+    {"constant.CIUKI_NET_SOCKET_CLOSED", CIUKI_NET_SOCKET_CLOSED, 0u},
+    {"constant.CIUKI_NET_SOCKET_LISTEN", CIUKI_NET_SOCKET_LISTEN, 1u},
+    {"constant.CIUKI_NET_SOCKET_CONNECTING", CIUKI_NET_SOCKET_CONNECTING, 2u},
+    {"constant.CIUKI_NET_SOCKET_CONNECTED", CIUKI_NET_SOCKET_CONNECTED, 3u},
+    {"constant.CIUKI_NET_SOCKET_CLOSE_WAIT", CIUKI_NET_SOCKET_CLOSE_WAIT, 4u},
+    {"sizeof.ciuki_net_socket_info", sizeof(struct ciuki_net_socket_info), 24u},
+    {"alignof.ciuki_net_socket_info", _Alignof(struct ciuki_net_socket_info), 4u},
+    {"offsetof.ciuki_net_socket_info.pid", __builtin_offsetof(struct ciuki_net_socket_info, pid), 0u},
+    {"offsetof.ciuki_net_socket_info.type", __builtin_offsetof(struct ciuki_net_socket_info, type), 4u},
+    {"offsetof.ciuki_net_socket_info.state", __builtin_offsetof(struct ciuki_net_socket_info, state), 8u},
+    {"offsetof.ciuki_net_socket_info.local_address", __builtin_offsetof(struct ciuki_net_socket_info, local_address), 12u},
+    {"offsetof.ciuki_net_socket_info.local_port", __builtin_offsetof(struct ciuki_net_socket_info, local_port), 16u},
+    {"offsetof.ciuki_net_socket_info.peer_port", __builtin_offsetof(struct ciuki_net_socket_info, peer_port), 18u},
+    {"offsetof.ciuki_net_socket_info.peer_address", __builtin_offsetof(struct ciuki_net_socket_info, peer_address), 20u},
+    {"sizeof.ciuki_net_socket_list", sizeof(struct ciuki_net_socket_list), 1168u},
+    {"alignof.ciuki_net_socket_list", _Alignof(struct ciuki_net_socket_list), 4u},
+    {"offsetof.ciuki_net_socket_list.version", __builtin_offsetof(struct ciuki_net_socket_list, version), 0u},
+    {"offsetof.ciuki_net_socket_list.size", __builtin_offsetof(struct ciuki_net_socket_list, size), 4u},
+    {"offsetof.ciuki_net_socket_list.count", __builtin_offsetof(struct ciuki_net_socket_list, count), 8u},
+    {"offsetof.ciuki_net_socket_list.reserved", __builtin_offsetof(struct ciuki_net_socket_list, reserved), 12u},
+    {"offsetof.ciuki_net_socket_list.sockets", __builtin_offsetof(struct ciuki_net_socket_list, sockets), 16u},
+    {"constant.IPPROTO_ICMP", IPPROTO_ICMP, 1u},
+    {"constant.IP_TTL", IP_TTL, 2u},
     {"constant.SOCK_NONBLOCK", SOCK_NONBLOCK, 2048u},
     {"constant.SOCK_CLOEXEC", SOCK_CLOEXEC, 524288u},
     {"constant.IPPROTO_IP", IPPROTO_IP, 0u},
