@@ -33,7 +33,7 @@ RENDERS = {
     "resmeter-ok.xrgb": "afab56d2bffce0aa510e2601fb0e23416abf1e7a02d875efae86533374abb730",
     "resmeter-unknown.xrgb": "42c91e7fff065eec5ef6fc20f887a21aced56a034f309f90eb8c8774a10fa48d",
     "sysinfo-conflicts.xrgb": "a2aa9d9c7a1637de24d012c8cb21369a03f3132611d3f64a551c4a2e4eb409a4",
-    "sysinfo-launch-error.xrgb": "d524fe7379ed44a09c2a9359e77e69eb234ea20c15143ed0cbd3aaed417583cf",
+    "sysinfo-launch-error.xrgb": "4bccf027f134925a9ede916d1d0797195f7b4009fa2d5773c9e73cbfdac50ffd",
     "sysinfo-summary.xrgb": "21c2a91573fb4e845812eeaea8b9e32d09f4d698fa1298606d04304027c2a397",
     "sysmon-add.xrgb": "9c4094f40dd16fdaf1d462e359369d171267f6a207fe5f4c9ef29b3807273069",
     "sysmon-bar.xrgb": "f7c8528bc2c58978ea3d88aff59b228c9726918f729e9c83c09962ae3ffdc050",

@@ -55,6 +55,8 @@ class ScreenshotReviewTests(unittest.TestCase):
                     points.add(cp)
                     # G28 WordPad's decoder writes U+FFFD for an invalid byte sequence into the document buffer; it is data, not UI ink.
                     if cp==0xfffd and path.name=='rich.c': continue
+                    # Unicode U+FFFC anchors WordPad pictures; the renderer draws the object.
+                    if cp==0xfffc and path.name=='rich.h': continue
                     if cp not in coverage: missing.append((str(path.relative_to(ROOT)),f'U+{cp:04X}'))
         self.assertFalse(missing,missing[:40])
         self.assertTrue({0x2013,0x2014,0x2026,0x203a}<=points)

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #define _POSIX_C_SOURCE 200809L
 #include "replay_base.h"
+#include "host_socket_undef.h"
 #undef IPPROTO_IP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP

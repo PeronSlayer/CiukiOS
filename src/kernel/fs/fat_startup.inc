@@ -33,6 +33,20 @@ static bool startup_match(const struct fat_volume *v,const struct startup_record
         r->first==f->first && r->size==f->size && r->date==f->times.write_date &&
         r->time==f->times.write_time && !strncmp(r->alias,f->alias,sizeof(r->alias));
 }
+static void startup_validate(struct fat_volume *v,struct startup_log *log,size_t bytes)
+{
+    if (bytes!=sizeof(*log) || log->magic!=0x314c5343 || log->serial!=v->volume_serial ||
+        log->crc!=startup_crc(log)) memset(log,0,sizeof(*log));
+    for (unsigned i=0;i<START_FILES;i++) {
+        struct startup_record *r=&log->files[i];
+        if (r->count>START_READS || r->alias[sizeof(r->alias)-1]) { r->uses=0; continue; }
+        uint32_t clusters=r->size/((uint32_t)v->spc*512)+(r->size%((uint32_t)v->spc*512)!=0);
+        for (unsigned j=0;j<r->count;j++) {
+            if (r->order[j]>=clusters) r->uses=0;
+            for (unsigned k=0;k<j;k++) if (r->order[k]==r->order[j]) r->uses=0;
+        }
+    }
+}
 static int startup_load(struct fat_volume *v,struct startup_log *log,struct fat_entry *file)
 {
     memset(log,0,sizeof(*log));
@@ -42,22 +56,47 @@ static int startup_load(struct fat_volume *v,struct startup_log *log,struct fat_
     if (file->size==sizeof(*log) && !(file->attr&FAT_ATTR_DIR)) {
         size_t done=0; e=fat_read(v,file,0,log,sizeof(*log),&done);
         if (e) return e;
-        if (done==sizeof(*log) && log->magic==0x314c5343 &&
-            log->serial==v->volume_serial && log->crc==startup_crc(log)) {
-            for (unsigned i=0;i<START_FILES;i++) {
-                struct startup_record *r=&log->files[i];
-                if (r->count>START_READS || r->alias[sizeof(r->alias)-1]) r->uses=0;
-                uint32_t clusters=r->size/((uint32_t)v->spc*512)+(r->size%((uint32_t)v->spc*512)!=0);
-                for (unsigned j=0;j<r->count;j++) {
-                    if (r->order[j]>=clusters) r->uses=0;
-                    for (unsigned k=0;k<j;k++) if (r->order[k]==r->order[j]) r->uses=0;
-                }
-            }
-            return 0;
-        }
+        if (done==sizeof(*log)) { startup_validate(v,log,done); return 0; }
     }
     memset(log,0,sizeof(*log)); return 0;
 }
+/* Also used by the VFS path: serialization performs no device I/O. */
+size_t fat_startup_size(void) { return sizeof(struct startup_log); }
+int fat_startup_prepare(struct fat_volume *v,const struct fat_entry *file,const uint32_t *order,
+                        unsigned count,void *buffer,size_t bytes)
+{
+    if (!v || !v->mounted || !v->spc || !file || !order || !count || count>START_READS || !file->size ||
+        (file->attr&FAT_ATTR_DIR) || path_equal(file->alias,START_LOG) || !buffer) return -FS_EINVAL;
+    struct startup_log *log=buffer;
+    startup_validate(v,log,bytes);
+    unsigned slot=0;
+    for (unsigned i=0;i<START_FILES;i++) {
+        if (startup_match(v,&log->files[i],file)) { slot=i; break; }
+        if (log->files[i].recent<log->files[slot].recent) slot=i;
+    }
+    {
+        struct startup_record *r=&log->files[slot];
+        uint32_t uses=startup_match(v,r,file) ? r->uses : 0;
+        memset(r,0,sizeof(*r)); r->parent=file->parent ? file->parent : v->type==32 ? v->root : 0; r->index=file->index;
+        r->first=file->first; r->size=file->size; r->uses=uses==UINT32_MAX ? uses : uses+1;
+        if (log->clock==UINT32_MAX) { /* age without reversing the LRU order */
+            for (unsigned i=0;i<START_FILES;i++) log->files[i].recent/=2;
+            log->clock/=2;
+        }
+        r->recent=++log->clock; r->date=file->times.write_date; r->time=file->times.write_time;
+        memcpy(r->alias,file->alias,sizeof(r->alias)-1);
+        uint32_t clusters=file->size/((uint32_t)v->spc*512)+(file->size%((uint32_t)v->spc*512)!=0);
+        for (unsigned i=0;i<count;i++) {
+            if (order[i]>=clusters) return -FS_EINVAL;
+            bool duplicate=false;
+            for (unsigned j=0;j<r->count;j++) if (r->order[j]==order[i]) duplicate=true;
+            if (!duplicate) r->order[r->count++]=order[i];
+        }
+        log->magic=0x314c5343; log->serial=v->volume_serial; log->crc=startup_crc(log);
+    }
+    return 0;
+}
+
 static int startup_save(struct fat_volume *v,struct startup_log *log,struct fat_entry *file)
 {
     int e=0;
@@ -80,31 +119,8 @@ int fat_startup_record(struct fat_volume *v,const struct fat_entry *file,const u
     int e=writable(v); if (e) return e;
     struct startup_log *log=fs_page_alloc(); if (!log) return -FS_ENOMEM;
     struct fat_entry saved={0}; e=startup_load(v,log,&saved);
-    unsigned slot=0;
-    for (unsigned i=0;i<START_FILES;i++) {
-        if (startup_match(v,&log->files[i],file)) { slot=i; break; }
-        if (log->files[i].recent<log->files[slot].recent) slot=i;
-    }
-    if (!e) {
-        struct startup_record *r=&log->files[slot];
-        uint32_t uses=startup_match(v,r,file) ? r->uses : 0;
-        memset(r,0,sizeof(*r)); r->parent=file->parent ? file->parent : v->type==32 ? v->root : 0; r->index=file->index;
-        r->first=file->first; r->size=file->size; r->uses=uses==UINT32_MAX ? uses : uses+1;
-        if (log->clock==UINT32_MAX) { /* age without reversing the LRU order */
-            for (unsigned i=0;i<START_FILES;i++) log->files[i].recent/=2;
-            log->clock/=2;
-        }
-        r->recent=++log->clock; r->date=file->times.write_date; r->time=file->times.write_time;
-        memcpy(r->alias,file->alias,sizeof(r->alias)-1);
-        uint32_t clusters=file->size/((uint32_t)v->spc*512)+(file->size%((uint32_t)v->spc*512)!=0);
-        for (unsigned i=0;i<count;i++) {
-            if (order[i]>=clusters) { e=-FS_EINVAL; break; }
-            bool duplicate=false;
-            for (unsigned j=0;j<r->count;j++) if (r->order[j]==order[i]) duplicate=true;
-            if (!duplicate) r->order[r->count++]=order[i];
-        }
-        if (!e) e=startup_save(v,log,&saved);
-    }
+    if (!e) e=fat_startup_prepare(v,file,order,count,log,sizeof(*log));
+    if (!e) e=startup_save(v,log,&saved);
     fs_page_free(log); return e;
 }
 /* Physical offset for logical cluster i. Observed clusters precede the rest. */

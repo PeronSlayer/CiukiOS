@@ -51,6 +51,7 @@ class DeviceTests(unittest.TestCase):
                             '-D_POSIX_C_SOURCE=200809L','-ffunction-sections','-fdata-sections',
                             '-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
                             '-I',str(folder / 'include'),'-I',str(ROOT / 'src/kernel/include'),
+                            '-I',str(ROOT / 'sdk/win32/include'),
                             '-idirafter',str(ROOT / 'sdk/sysroot-overlay/include'),
                             str(ROOT / 'tests/host/desktop/control_log_io_test.c'),
                             '-Wl,--gc-sections','-o',str(binary)],check=True)
@@ -82,7 +83,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/host/f2-75'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 45)  # integrated applets, firmware dialog, game controllers and driver-pack frames
+            self.assertEqual(len(captures), 46)  # integrated applets, firmware dialog, game controllers and driver-pack frames
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.control_frame(self,path.stem,path.read_bytes(),width,height)

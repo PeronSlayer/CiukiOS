@@ -35,6 +35,8 @@ class ControlJobsTests(unittest.TestCase):
                             "-ffunction-sections", "-fdata-sections", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             f'-DDOSBOX_SETTINGS_DIR="{work / "settings"}"',
                             *icons.defines(), "-I", str(work / "include"), "-I", str(ROOT / "src/kernel/include"),
+                            "-I", str(ROOT / "sdk/win32/include"),
+                            "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
                             *ft.includes(), *(str(ROOT / s) for s in sources), str(library),
                             "-Wl,--gc-sections", "-pthread", "-lm", "-o", str(binary)], check=True)
             # Keep leak detection and all caller sanitizer settings unchanged.

@@ -63,6 +63,16 @@ static void attach(int page)
         .mem_total_k = 512 * 1024, .mem_free_k = 400 * 1024, .version = "0.9.0", .build = "host", .machine = "i686"};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
     assert(!cp_attach(&app, &ui, page));
+    struct du_widget *tabs=kind(DU_TABS);
+    if (tabs && tabs->count==7) {
+        unsigned seen=0;
+        for (int x=tabs->box.x;x<tabs->box.x+tabs->box.w;x++) {
+            int tab=du_tabs_hit(tabs,x,tabs->box.y+10);
+            if (tab>=0) seen|=1u<<(unsigned)tab;
+        }
+        assert(seen==127); /* every merged System page is reachable */
+        assert(du_tabs_hit(tabs,tabs->box.x+tabs->box.w-1,tabs->box.y+10)==-1);
+    }
 }
 static void reset_file(void) { power_calls = 0; file[0] = 0; file_exists = 0; file_saves = 0; fail_save = 0; }
 static void type_dialog(const char *text) { du_set_text(&ui.dialog.items[2], text); at_tap(&ui, DU_KEY_ENTER); }

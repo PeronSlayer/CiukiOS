@@ -260,6 +260,9 @@ int fat_defrag_analyze(struct fat_volume *, struct fat_defrag_info *);
  * 0 after a file (moved=false when contiguous or no free run is available).
  * expected_sequence is checked before any writes. */
 int fat_defrag_step(struct fat_volume *, uint32_t ordinal, uint64_t expected_sequence, bool *moved);
+/* Caller provides a page; prepare validates/updates the serialized advisory log without I/O. */
+size_t fat_startup_size(void);
+int fat_startup_prepare(struct fat_volume *, const struct fat_entry *, const uint32_t *, unsigned, void *, size_t);
 int fat_startup_record(struct fat_volume *, const struct fat_entry *, const uint32_t *, unsigned);
 int fat_defrag_startup_step(struct fat_volume *, uint32_t, uint64_t, uint32_t *, bool *);
 /* Converter runs on an exclusively detached, clean FAT16 volume. parent

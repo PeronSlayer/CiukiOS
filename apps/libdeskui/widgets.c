@@ -786,15 +786,24 @@ int du_sb_drag(const struct du_sb *s, int x, int y, int grab)
 }
 
 /* ---- f2-33: tab control, history graph, group frame ---- */
-static int tab_width(const struct du_widget *w, unsigned i)
-{ return du_text_width_font(desk_theme->font_bold, w->items[i].text[0] ? w->items[i].text[0] : "") + 18; }
+static int tab_padding(const struct du_widget *w)
+{
+    if (!w->count) return 18;
+    int labels=0;
+    for (unsigned i=0;i<w->count;i++)
+        labels+=du_text_width_font(desk_theme->font_bold,w->items[i].text[0] ? w->items[i].text[0] : "");
+    int padding=(w->box.w-6-labels)/(int)w->count;
+    return padding<6 ? 6 : padding>18 ? 18 : padding;
+}
+static int tab_width(const struct du_widget *w, unsigned i, int padding)
+{ return du_text_width_font(desk_theme->font_bold, w->items[i].text[0] ? w->items[i].text[0] : "") + padding; }
 
 int du_tabs_hit(const struct du_widget *w, int x, int y)
 {
     if (w->kind != DU_TABS || y < w->box.y || y >= w->box.y + DU_TAB_H || x < w->box.x) return -1;
-    int at = w->box.x + 2;
+    int at = w->box.x + 2, padding=tab_padding(w);
     for (unsigned i = 0; i < w->count; i++) {
-        int width = tab_width(w, i);
+        int width = tab_width(w, i, padding);
         if (x >= at && x < at + width) return (int)i;
         at += width;
     }
@@ -815,9 +824,9 @@ static void draw_tabs(struct du_canvas *c, const struct du_widget *w, int focuse
         du_vline(c, page.x + page.w - 1, page.y, page.h, DU_DARK); du_vline(c, page.x + page.w - 2, page.y + 1, page.h - 2, DU_SHADOW);
         du_hline(c, page.x, page.y + page.h - 1, page.w, DU_DARK); du_hline(c, page.x + 1, page.y + page.h - 2, page.w - 2, DU_SHADOW);
     }
-    int at = b.x + 2;
+    int at = b.x + 2, padding=tab_padding(w);
     for (unsigned i = 0; i < w->count; i++) {
-        int width = tab_width(w, i), sel = i == w->active;
+        int width = tab_width(w, i, padding), sel = i == w->active;
         struct du_rect r = {at - (sel ? 2 : 0), b.y + (sel ? 0 : 2), width + (sel ? 4 : 0), DU_TAB_H - (sel ? 0 : 2)};
         if (platinum) {
             struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};

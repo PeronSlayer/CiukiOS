@@ -494,6 +494,21 @@ static void alt_keys(void)
 static void context_keys(void)
 {
     setup(); left(600,300); assert(d.focus<0);
+    /* Check state is separate from the label and painted without an atlas glyph. */
+    for (int state=0;state<2;state++) {
+        d.sh.cfg.desktop_icons=state; d.sh.cfg.icon_auto_arrange=state; desk_shell_apply(&d);
+        for (unsigned kind=0;kind<2;kind++) {
+            desk_menu_open(&d,kind ? SH_MENU_ARRANGE : SH_MENU_DESKTOP,300,150);
+            unsigned found=0;
+            for (int i=0;i<d.sh.menus[0].count;i++) {
+                const struct sh_item *it=&d.sh.menus[0].items[i];
+                if (it->action!=(kind ? SH_ACT_ICON_AUTO : SH_ACT_ICONS_SHOW)) continue;
+                assert(!strcmp(it->label,kind ? "Auto Arrange" : "Show Desktop Icons"));
+                assert(!!(it->flags&SH_ITEM_CHECKED)==state); found++;
+            }
+            assert(found==1); frame_matches("desktop menu check state"); desk_menu_close(&d);
+        }
+    }
     tap(KEY_MENU); assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_DESKTOP); tap(DU_KEY_ESC);
     key(DU_KEY_LSHIFT,1); tap(DU_KEY_F10); key(DU_KEY_LSHIFT,0); assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_DESKTOP); tap(DU_KEY_ESC);
     struct desk_box icon=d.sh.icons[0].box; left(icon.x+icon.w/2,icon.y+20); assert(d.sh.icon_selected==0);
