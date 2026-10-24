@@ -83,12 +83,12 @@ static int startup_save(void *ctx,const struct desk_startup_entry *entry,int ena
 static void startup_panel(const char *frames)
 {
     app.host.startup_list=startup_items; app.host.startup_enable=startup_save;
-    app.system_tab=4; startup_setting=1; cp_open(&app,CP_SYSTEM);
-    assert(app.system_tab==4 && app.startup_count==2);
+    app.system_tab=6; startup_setting=1;   /* G30 put Performance and Hardware Profiles before Startup */ cp_open(&app,CP_SYSTEM);
+    assert(app.system_tab==6 && app.startup_count==2);
     assert(du_get(&ui,CP_STARTUP_LIST)->count==2 && du_get(&ui,CP_STARTUP_ENABLED)->value);
     frame(frames,"startup-enabled");
     click(CP_STARTUP_ENABLED); assert(!startup_setting && !app.startup[0].enabled);
-    cp_open(&app,CP_HOME); app.system_tab=4; cp_open(&app,CP_SYSTEM);
+    cp_open(&app,CP_HOME); app.system_tab=6; cp_open(&app,CP_SYSTEM);
     assert(!du_get(&ui,CP_STARTUP_ENABLED)->value);
     du_render(&ui); du_post(&ui,DU_EV_SELECT,CP_STARTUP_LIST,1);
     assert(du_get(&ui,CP_STARTUP_ENABLED)->value && app.startup_selected==1);
@@ -118,29 +118,29 @@ int main(int argc,char **argv)
     du_init(&ui,pixels,CP_WIDTH,CP_HEIGHT);ui.focused_window=1;
     app.host=(struct cp_host){.game_begin=begin,.game_poll=poll_io,.joystick=joystick,.joystick_save_game=save_joystick,.devices=devices};
     assert(!cp_attach(&app,&ui,CP_HOME));io_hold=1;cp_game_open(&app,1);deliver();frame(argv[1],"game-loading");
-    assert(du_get(&ui,1509)->disabled);io_hold=0;cp_tick(&app);frame(argv[1],"game-defaults");
+    assert(du_get(&ui,2209)->disabled);io_hold=0;cp_tick(&app);frame(argv[1],"game-defaults");
     assert(app.game_ports.com[0]==1 && !app.game_ports.lpt_mode && !joy_writes);
-    click(1502);assert(app.game_ports.com[0]==0x2f8 && strstr(app.game_note,"Native application"));frame(argv[1],"game-conflict");
-    click(1502);assert(app.game_ports.com[0]==0x3f8);click(1503);assert(app.game_ports.com[1]==0x2f8);click(1503);assert(app.game_ports.com[1]==0x3f8 && strstr(app.game_note,"two guest"));
-    click(1503);assert(!app.game_ports.com[1]);
-    click(1501);assert(app.game_joystick.device==CIUKI_JOY_DISABLED);click(1501);deliver();assert(app.game_joystick.device==257);
-    click(1506);assert(app.game_ports.lpt_mode==1);
-    assert(strstr(du_get(&ui,1506)->text,"Native print spooler") && du_get(&ui,1507)->disabled);
-    click(1506);assert(app.game_ports.lpt_mode==2 && !du_get(&ui,1507)->disabled);frame(argv[1],"game-raw");
-    click(1506);assert(app.game_ports.lpt_mode==3);du_set_text(du_get(&ui,1508),"/Documents/output.prn");frame(argv[1],"game-file");
-    click(1509);assert(io_pending && app.game_busy && !joy_writes);
+    click(2202);assert(app.game_ports.com[0]==0x2f8 && strstr(app.game_note,"Native application"));frame(argv[1],"game-conflict");
+    click(2202);assert(app.game_ports.com[0]==0x3f8);click(2203);assert(app.game_ports.com[1]==0x2f8);click(2203);assert(app.game_ports.com[1]==0x3f8 && strstr(app.game_note,"two guest"));
+    click(2203);assert(!app.game_ports.com[1]);
+    click(2201);assert(app.game_joystick.device==CIUKI_JOY_DISABLED);click(2201);deliver();assert(app.game_joystick.device==257);
+    click(2206);assert(app.game_ports.lpt_mode==1);
+    assert(strstr(du_get(&ui,2206)->text,"Native print spooler") && du_get(&ui,2207)->disabled);
+    click(2206);assert(app.game_ports.lpt_mode==2 && !du_get(&ui,2207)->disabled);frame(argv[1],"game-raw");
+    click(2206);assert(app.game_ports.lpt_mode==3);du_set_text(du_get(&ui,2208),"/Documents/output.prn");frame(argv[1],"game-file");
+    click(2209);assert(io_pending && app.game_busy && !joy_writes);
     assert(!cp_close(&app) && !app.quit);cp_open(&app,CP_HOME);assert(app.page==CP_JOYSTICK);cp_tick(&app);assert(joy_writes==1 && joy_pending);deliver();
     cp_tick(&app);assert(joy_pending);deliver();assert(app.joystick_save_pending);joy_storage_pending=0;cp_tick(&app);deliver();
     assert(!app.joystick_save_pending && strstr(app.game_note,"next start"));frame(argv[1],"game-saved");
     struct game_ports_settings stored;int rejected;assert(!dosbox_ports_load(1,&stored,&rejected) && stored.com[0]==0x3f8 && stored.com[1]==0 && stored.lpt_mode==3 && !strcmp(stored.path,"/Documents/output.prn"));
     /* Reopen reads stored values, absent devices stay visibly bound to their identity. */
     inventory.count=0;saved_joy[1].attached=3;open_game(1);
-    assert(app.game_joystick.attached==3 && strstr(du_get(&ui,1502)->text,"missing"));frame(argv[1],"game-missing");
-    click(1509);cp_tick(&app);assert(joy_writes==1); /* never persist the fallback as a new joystick choice */
+    assert(app.game_joystick.attached==3 && strstr(du_get(&ui,2202)->text,"missing"));frame(argv[1],"game-missing");
+    click(2209);cp_tick(&app);assert(joy_writes==1); /* never persist the fallback as a new joystick choice */
     open_game(2);assert(app.game_ports.com[0]==1 && !app.game_ports.lpt_mode && !app.game_joystick.attached);frame(argv[1],"game-second");
-    click(1502);click(1510);assert(!app.game_open);open_game(2);assert(app.game_ports.com[0]==1); /* staged edit discarded */
-    io_error=1;click(1509);cp_tick(&app);assert(!app.game_busy && strstr(app.game_note,"could not"));frame(argv[1],"game-save-error");io_error=0;
-    click(1510);startup_panel(argv[1]);cp_detach(&app);
+    click(2202);click(2210);assert(!app.game_open);open_game(2);assert(app.game_ports.com[0]==1); /* staged edit discarded */
+    io_error=1;click(2209);cp_tick(&app);assert(!app.game_busy && strstr(app.game_note,"could not"));frame(argv[1],"game-save-error");io_error=0;
+    click(2210);startup_panel(argv[1]);cp_detach(&app);
     /* Byte-level persistence rejects checksum/version/oversize/path corruption. */
     stored.lpt_mode=3;strcpy(stored.path,"/Documents/../system/BOOT.CFG");assert(dosbox_ports_save(2,&stored)==-EINVAL);
     game_ports_defaults(&stored);assert(!dosbox_ports_save(3,&stored));stored.com[0]=0;assert(!dosbox_ports_save(3,&stored));

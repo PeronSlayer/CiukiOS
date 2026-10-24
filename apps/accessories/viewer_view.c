@@ -79,7 +79,7 @@ static void status(struct viewer_app *a)
     }
     a->file_items[1].flags = a->file_items[2].flags = many ? 0 : DU_ITEM_DISABLED;
     unsigned wall = a->wallpaper && a->loaded ? 0 : DU_ITEM_DISABLED;
-    a->file_items[4].flags = a->file_items[5].flags = a->file_items[6].flags = wall;
+    a->file_items[6].flags = a->file_items[7].flags = a->file_items[8].flags = wall;   /* the three Set As Wallpaper rows, after Page Setup and Print */
     a->view_items[6].flags = a->view_items[7].flags = a->view_items[8].flags = a->loaded ? 0 : DU_ITEM_DISABLED;
 }
 void viewer_layout(struct viewer_app *a)

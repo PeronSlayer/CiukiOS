@@ -37,12 +37,9 @@ class NativeUpdateModelTests(unittest.TestCase):
             "demo": [],
             "calc": ["apps/accessories/calc_view.c", "apps/accessories/calc_model.c"],
             "clock": ["apps/accessories/clock_view.c", "apps/accessories/clock_model.c"],
-            "charmap": ["apps/accessories/charmap_view.c"],
             "help": ["apps/accessories/"+n for n in ("help_view.c","help_topics.c","help_navigation.c","help_wizard.c","helpfile.c","help_hlp.c","help_chm.c","help_markup.c")]
                     + ["sdk/win32/lz32/mspack/chmd.c","sdk/win32/lz32/mspack/lzxd.c"],
-            "viewer": ["apps/accessories/viewer_view.c", "apps/accessories/viewer_model.c", "apps/accessories/viewer_stb.c"],
             "charmap": ["apps/accessories/charmap_view.c", "apps/accessories/charmap_model.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c"],
-            "help": ["apps/accessories/help_view.c", "apps/accessories/help_topics.c"],
             "viewer": ["apps/accessories/viewer_view.c", "apps/accessories/viewer_model.c", "apps/accessories/viewer_stb.c", "apps/accessories/wallpaper.c", "apps/desktop/settings.c", "apps/desktop/protocol.c"],
             "mixer": ["apps/accessories/mixer_view.c"],
             "music": ["apps/music/view.c"],

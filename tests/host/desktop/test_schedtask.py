@@ -21,7 +21,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/libdeskui/keymap.c", "apps/desktop/compositor.c",
+           "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/libdeskui/keymap.c", "apps/desktop/compositor.c",
            "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 SOURCES = ["apps/systools/schedtask_ui.c", "apps/systools/sched.c", "apps/systools/service.c", "tests/host/desktop/schedtask_test.c"]
 PIN = "PIN-FROM-FIRST-RUN"

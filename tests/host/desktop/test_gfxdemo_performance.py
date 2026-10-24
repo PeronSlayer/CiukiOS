@@ -47,6 +47,7 @@ def run(sanitize=False, reference=None, runtime=False, pipeline_reference=False)
         sources = [s for s in bench.SOURCES if not s.endswith("compositor_benchmark.c")]
         sources += [s for s in acc.TOOLKIT if s not in sources]
         sources += ["apps/gfxdemo/app.c", "apps/gfxdemo/scene.c", "apps/accessories/acc.c",
+                    "apps/libdeskui/clipboard.c", "apps/libdeskui/clipfile.c", "apps/libdeskui/clipstore.c",   # G5: the shared clipboard behind libdeskui/client.c
                     "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c",
                     "tests/host/desktop/gfxdemo_performance.c"]
         if runtime:

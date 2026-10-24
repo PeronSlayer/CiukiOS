@@ -952,7 +952,11 @@ static void file_dialog(struct wp_app *a, int save, const char *name)
         folder_of(folder, sizeof(folder), a->path);
         if (save && !name[0]) name = cn_basename(a->path);
     }
-    int r = du_file_dialog(a->ui, save ? D_SAVE : D_OPEN, save, save ? "Save As" : "Open", folder, name, lister, a);
+    /* G28: WordPad appends .rtf and asks about replacing the resulting name itself (D_REPLACE), so the picker does
+     * not prompt on the typed name (G16's du_file_dialog would). */
+    struct du_file_options o = {.flags = save ? DU_FILE_SAVE : 0, .title = save ? "Save As" : "Open", .folder = folder,
+                                .name = name, .lister = lister, .lister_ctx = a};
+    int r = du_file_open(a->ui, save ? D_SAVE : D_OPEN, &o);
     if (r) { failure(a, "The folder could not be opened:", folder, r); abandon(a); }
 }
 static int ends_with_text_ext(const char *name)

@@ -54,6 +54,7 @@ static void rt_power_tests(void)
         assert(replies==2);
     }
     assert(power_seen==5);du_window_destroy(&w);rt_reset();
+}
 static unsigned dpi_activations;
 static void dpi_event(struct du_ui *ui,const struct du_event *event,void *arg)
 { (void)ui;(void)arg; if(event->type==DU_EV_ACTIVATE && event->id==77) dpi_activations++; }

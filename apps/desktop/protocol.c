@@ -228,10 +228,71 @@ static int v3_parse(const struct ciuki_message *m, int client,
     if ((!p->window_id || !p->generation) && !((p->opcode==DESK_INPUT_SETTINGS || p->opcode==DESK_INPUT_STATE || p->opcode==DESK_V3_RESULT) && !p->window_id && !p->generation)) return 0;
     switch (p->opcode) {
     case DESK_LAUNCH:
-        /* G15B: Win32's existing v3 transport requests the native Help
-         * viewer. Payload: byte count followed by the Help argument. */
+        /* v3 launch: byte count followed by one argument. G15B: Win32's
+         * existing v3 transport requests the native Help viewer with a Help
+         * argument. G26: a URL (http://, https://, file:/// or about:) asks the
+         * desktop to open NetSurf; the desktop fixes the program, the sender
+         * must be NetSurf. */
         if (!client || n<4 || n>4+DESK_ARG_MAX || desk_get32(b)!=n-4 || !desk_utf8_valid(b+4,n-4)) return 0;
-        memcpy(p->title,"help",5); memcpy(p->argument,b+4,n-4); expected=n; break;
+        memcpy(p->argument,b+4,n-4);
+        if (n>4 && (!strncmp(p->argument,"http://",7) || !strncmp(p->argument,"https://",8) ||
+                    !strncmp(p->argument,"file:///",8) || !strncmp(p->argument,"about:",6))) {
+            p->count=n-4; memcpy(p->title,"netsurf",8);
+        } else memcpy(p->title,"help",5);
+        expected=n; break;
+    case DESK_INPUT_SETTINGS:
+        if (!client || n!=12 || m->fd_count) return 0;
+        p->index=desk_get32(b);p->values[0]=desk_get32(b+4);p->flags=desk_get32(b+8);
+        if(p->index>DESK_INPUT_VALUES || p->flags>3) return 0;
+        expected=12;break;
+    case DESK_INPUT_STATE:
+        if (client || n!=DESK_INPUT_VALUES*4+8 || m->fd_count) return 0;
+        for(unsigned k=0;k<DESK_INPUT_VALUES;k++) p->input_settings[k]=desk_get32(b+k*4);
+        p->index=desk_get32(b+DESK_INPUT_VALUES*4);p->flags=desk_get32(b+DESK_INPUT_VALUES*4+4);
+        expected=DESK_INPUT_VALUES*4+8;break;
+    case DESK_V3_TRAY_ICON:
+        if (!client || n<20) return 0;
+        p->flags=desk_get32(b); p->index=desk_get32(b+4);
+        p->style=desk_get32(b+8); p->serial=desk_get32(b+12); p->count=desk_get32(b+16);
+        if (p->flags>2 || (p->style&~7u) || p->count>127 || n!=20+p->count ||
+            !desk_utf8_valid(b+20,p->count) || (!(p->style&4u) && p->count) ||
+            (!(p->style&1u) && p->serial) || (p->flags==2 && (p->style || p->serial || p->count))) return 0;
+        memcpy(p->tooltip,b+20,p->count);
+        fd=!!(p->style&2u);
+        if (fd && (!desk_surface_valid(s) || s->width!=16 || s->height!=16)) return 0;
+        expected=n; break;
+    case DESK_V3_TRAY_BALLOON:
+        if (!client || n<16) return 0;
+        p->index=desk_get32(b); p->count=desk_get32(b+4); p->flags=desk_get32(b+8);
+        p->serial=desk_get32(b+12)&0xffffu; p->style=desk_get32(b+12)>>16;
+        if (p->count>63 || p->flags>159 || n!=16+p->count+p->flags ||
+            !desk_utf8_valid(b+16,p->count) || !desk_utf8_valid(b+16+p->count,p->flags) ||
+            p->serial<10000 || p->serial>30000 || p->style>3) return 0;
+        memcpy(p->title,b+16,p->count); memcpy(p->argument,b+16+p->count,p->flags);
+        expected=n; break;
+    case DESK_V3_TRAY_EVENT:
+        if (client || n!=20) return 0;
+        p->index=desk_get32(b); p->serial=desk_get32(b+4); p->flags=desk_get32(b+8);
+        p->x=(int32_t)desk_get32(b+12); p->y=(int32_t)desk_get32(b+16);
+        if (!p->serial) return 0;
+        expected=20; break;
+    case DESK_V3_FLASH: case DESK_ACCEPT_FILES:
+        if (!client || n!=4 || (p->flags=desk_get32(b))>1) return 0;
+        expected=4; break;
+    case DESK_DROP_FILES:
+        if (client || n!=12 || !(p->serial=desk_get32(b))) return 0;
+        p->x=(int32_t)desk_get32(b+4); p->y=(int32_t)desk_get32(b+8);
+        expected=12; fd=1; break;
+    case DESK_POWER_EVENT:
+        if (client || n!=12) return 0;
+        p->serial=desk_get32(b);p->index=desk_get32(b+4);p->flags=desk_get32(b+8);
+        if (!p->serial || p->index>18 || p->flags>1) return 0;
+        expected=12;break;
+    case DESK_POWER_REPLY:
+        if (!client || n!=8) return 0;
+        p->serial=desk_get32(b);p->flags=desk_get32(b+4);
+        if (p->flags>2 || (!p->serial && p->flags!=1)) return 0;
+        expected=8;break;
     case DESK_CREATE_WINDOW:
         if (!client || n<36) return 0;
         p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);

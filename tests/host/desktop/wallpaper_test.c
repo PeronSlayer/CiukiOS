@@ -156,7 +156,7 @@ static void settings(void)
     printf("settings: wallpaper modes, G19 sort/auto-arrange, icon Appearance, per-resolution positions and system icon label round trips\n");
 }
 
-static void check_patterns(void)
+static void check_mask_patterns(void)
 {
     uint32_t out[32*24];
     struct desk_image image=card(4,4);
@@ -224,7 +224,7 @@ int main(int argc, char **argv)
 {
     assert(argc == 1 || argc == 2);
     settings();
-    check_patterns();
+    check_mask_patterns();
     check_layer();
     check_patterns();
     /* The Ciuki scenes' 4:3 size in the 1024x704 work area of 1024x768:

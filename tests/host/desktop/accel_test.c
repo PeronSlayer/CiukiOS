@@ -114,13 +114,9 @@ static void identical_frame(void)
     /* Derive expected pixels from the pinned source artwork, independently
      * of the mask submitted to the presenter. Mono hardware has no shadow. */
     if (shown) {
+        /* G25's accessibility pointer (large/inverted) selects the artwork; G12's Mouse > Pointers scheme
+         * (0 Ciuki, 1 large, 2 inverted) is applied to it the way compositor.c cursor_raster() does. */
         struct desk_tool_cursor art=desk_tool_cursor_scheme(d.cursor_shape,d.sh.cfg.access.pointer);
-        for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
-            int px=d.mouse_x-art.hot_x+x, py=d.mouse_y-art.hot_y+y;
-            uint32_t bit=0x80000000u>>x;
-            if (px>=0 && py>=0 && (unsigned)px<d.width && (unsigned)py<d.height && (art.mask[y]&bit))
-                expected[(unsigned)py*d.width+(unsigned)px]=art.image[y]&bit ? 0xffffffu : 0;
-        struct desk_tool_cursor art=desk_tool_cursor(d.cursor_shape);
         const struct desk_cursor_raster *source=desk_generic_cursor(d.cursor_shape);
         unsigned width=32,height=32; int hx=art.hot_x,hy=art.hot_y;
         if(d.shell && d.sh.cfg.pointer_scheme==1 && source) {
@@ -499,13 +495,13 @@ static void foreign_regions(void)
         desk_client_damage(&d,low,content);redraw();assert(window_copies>before);
     }
     desk_shell_enable(&d);desk_menu_open(&d,SH_MENU_START,0,0);redraw();
-    struct sh_menu *menu=&d.sh.menus[0];menu->hot=3;
+    struct sh_menu *menu=&d.sh.menus[0];menu->hot=5;   /* Help to Run...: neither row opens a submenu (Settings and Find do) */
     desk_damage_add(&d.damage,menu->box,d.width,d.height);redraw();
-    d.mouse_x=menu->box.x+40;d.mouse_y=menu->box.y+3+4*menu->row_h+2;
+    d.mouse_x=menu->box.x+40;d.mouse_y=menu->box.y+3+(menu->scroll_max ? 12 : 0)+6*menu->row_h+2;
     desk_cursor_motion(&d);
     desk_shell_motion(&d);area=0;
     for(unsigned k=0;k<d.damage.count;k++)area+=(uint64_t)d.damage.boxes[k].w*d.damage.boxes[k].h;
-    assert(menu->hot==4 && area<=2u*(unsigned)(menu->box.w-4)*(unsigned)menu->row_h);redraw();
+    assert(menu->hot==6 && area<=2u*(unsigned)(menu->box.w-4)*(unsigned)menu->row_h);redraw();
     struct desk_box under_menu={menu->box.x+60,menu->box.y+100,8,4};
     assert(!desk_client_damage(&d,low,under_menu) && !d.damage.count);
     desk_menu_close(&d);redraw();

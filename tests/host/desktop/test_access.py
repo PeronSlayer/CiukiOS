@@ -58,11 +58,11 @@ class AccessTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "access_control"
             icons = load("access_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/access_control_test.c", "apps/control/app.c", "apps/control/driver_pack_ui.c",
+            sources = ["tests/host/desktop/access_control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c",
                        "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
             ft = load("access_freetype", ROOT / "sdk/freetype/build.py")
             library = ft.host()
             subprocess.run(["clang", *CFLAGS, *icons.defines(), "-I", str(ROOT / "src/kernel/include"),

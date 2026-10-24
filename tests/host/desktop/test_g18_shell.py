@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parents[3]
 class G18ShellTests(unittest.TestCase):
     def test_shortcut_sheet_and_installed_menu_tree(self):
         sources = [ROOT / "apps/desktop" / name for name in
-                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c",
-                    "autoplay_content.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
-        sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "textarea.c", "icons.c", "icon_map.c")),
+                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "access.c", "access_desktop.c", "autoplay.c",
+                    "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
+        sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c")),
                     ROOT / "tests/host/desktop/fake.c", ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
                     ROOT / "tests/host/desktop/g18_shell_test.c"]
         parent = ROOT / "build/host"

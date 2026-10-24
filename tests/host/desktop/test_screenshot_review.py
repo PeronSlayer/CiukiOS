@@ -18,7 +18,7 @@ class ScreenshotReviewTests(unittest.TestCase):
             work=Path(tmp); (work/'include').mkdir()
             (work/'include/ciuki').symlink_to(ROOT/'sdk/sysroot-overlay/include/ciuki',target_is_directory=True)
             sources=[*TOOLKIT,*(f'apps/desktop/{n}.c' for n in
-                ('client','protocol','input','shell','autoplay','autoplay_content','folder','settings','wallpaper','keymap','clipboard')),
+                ('client','protocol','input','shell','access','access_desktop','autoplay','autoplay_content','folder','settings','power_policy','wallpaper','keymap','clipboard')),
                 'apps/files/model.c','apps/files/transfer.c',
                 'apps/libdeskui/clipboard.c','apps/libdeskui/clipstore.c',
                 'apps/control/display.c','apps/accessories/logview_model.c','apps/accessories/logview_view.c',
@@ -53,6 +53,8 @@ class ScreenshotReviewTests(unittest.TestCase):
                     cp=ord(c)
                     if cp<32 or cp in (127,0xfeff): continue  # encoding signature, never UI ink
                     points.add(cp)
+                    # G28 WordPad's decoder writes U+FFFD for an invalid byte sequence into the document buffer; it is data, not UI ink.
+                    if cp==0xfffd and path.name=='rich.c': continue
                     if cp not in coverage: missing.append((str(path.relative_to(ROOT)),f'U+{cp:04X}'))
         self.assertFalse(missing,missing[:40])
         self.assertTrue({0x2013,0x2014,0x2026,0x203a}<=points)

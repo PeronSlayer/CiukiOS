@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
-#include <ciuki/recovery.h>
 #include <ciuki/bootstat.h>
 #include "../../sdk/win32/include/w32/screen_saver.h"
 _Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
@@ -183,7 +182,9 @@ _Static_assert(__builtin_offsetof(struct setup_erased_partition,label)==20,"eras
 
 _Static_assert(CP_MULTIMEDIA==15 && CP_USERS==16 && CP_PASSWORDS==17 && CP_REGIONAL==18,
                "integration Control Panel page IDs");
-_Static_assert(CP_INTERNET==19 && CP_PAGES==21,"G26 appended Internet page");
+_Static_assert(CP_INTERNET==19,"G26 appended Internet page");
+_Static_assert(CP_ADDHW==20 && CP_ACCESS==21 && CP_TASKBAR==22 && CP_PAGES==23,
+               "G30 Add New Hardware, G25 Accessibility and G20 Taskbar pages appended after Internet");
 
 _Static_assert(DESK_INPUT_SETTINGS==83 && DESK_INPUT_STATE==84 && DESK_INPUT_VALUES==11,"G12 input protocol");
 _Static_assert(DESK_INPUT_LAYOUT==1 && DESK_INPUT_DELAY==2 && DESK_INPUT_SPEED==3 &&
@@ -1160,7 +1161,7 @@ static const struct expectation expectations[] = {
     {"constant.SOCK_STREAM", SOCK_STREAM, 1u},
     {"constant.SOCK_DGRAM", SOCK_DGRAM, 2u},
     {"constant.SOCK_RAW", SOCK_RAW, 3u},
-    {"constant.CIUKI_SYS_NET_INFO", CIUKI_SYS_NET_INFO, 99u},
+    {"constant.CIUKI_SYS_NET_INFO", CIUKI_SYS_NET_INFO, 100u},
     {"constant.CIUKI_NET_INFO_CONFIG", CIUKI_NET_INFO_CONFIG, 0u},
     {"constant.CIUKI_NET_INFO_SOCKETS", CIUKI_NET_INFO_SOCKETS, 1u},
     {"constant.CIUKI_NET_SOCKET_CLOSED", CIUKI_NET_SOCKET_CLOSED, 0u},

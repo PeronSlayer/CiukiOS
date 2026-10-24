@@ -288,11 +288,10 @@ int main(void)
     assert(fake_create("/mnt",FM_DIR)>=0); assert(fake_create("/mnt/d",FM_DIR)>=0); file("/Documents/one.txt","first\n"); file("/Documents/space name.txt","spaces\n"); file("/Documents/plain","plain"); file("/Documents/sub/child","child");
     struct term_host host={.fs=fake_vfs,.attributes=attributes,.label_get=label_get,.label_set=label_set,.space=space,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,.launch=launch,.kill=kill,.power=power,.now=now,.pump=pump,.quit=quit};
     du_init(&ui,pixels,TERM_WIDTH,TERM_HEIGHT); assert(!term_attach(&app,&ui,&host)); assert(app.columns==80 && app.rows==25);
-    builtins(); system_commands(); lua_and_ui();
+    builtins(); system_commands(); scripting(); lua_and_ui();
     app.host.disktool=disktool;
     command("BACKUP FULL set.cbk one.txt",0,NULL); command("RESTORE set.cbk ORIGINAL OLDER",0,NULL); command("FDISK 1",0,NULL);
     assert(disktool_calls==3);
-    builtins(); system_commands(); scripting(); lua_and_ui();
     /* Deterministic review scene: the production fixed-cell painter, accents,
      * descenders, cursor and selection. Independent of previous command output. */
     term_execute(&app,"CLS"); term_write(&app,"CiukiOS Terminal\nClassic computing, one woof at a time.\nAVATAR To Wa 0123456789 gjpqy\n");

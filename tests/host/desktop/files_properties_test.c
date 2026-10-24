@@ -104,9 +104,9 @@ int main(int argc,char **argv)
     du_set_text(&ui.dialog.items[4],"DATA"); apply(); assert(label_sets==1 && !strcmp(label,"DATA"));
     struct ciuki_input_event ctrl={.type=CIUKI_INPUT_KEY,.code=DU_KEY_LCTRL,.value=1};
     du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
-    /* G14: Check Now (slot 5) is on the Tools page only. */
+    /* G14: Check Now (slot 7, id 410: slot 5 is G8's Disk Cleanup) is on the Tools page only. */
     assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"Check Now checks this drive") && ui.dialog.items[4].hidden &&
-           !ui.dialog.items[5].hidden && !strcmp(ui.dialog.items[5].text,"Check &Now...")); dump(argv[1],"g6-tools"); cancel();
+           !ui.dialog.items[7].hidden && ui.dialog.items[7].id==410 && !strcmp(ui.dialog.items[7].text,"Check &Now...")); dump(argv[1],"g6-tools"); cancel();
     counting=1; sheet("/"); assert(strstr(ui.dialog.text,"calculating...")); dump(argv[1],"g6-counting"); cancel();
     counting=0;volume_total=76544;volume_free=0;sheet("/");
     assert(strstr(ui.dialog.text,"313,524,224 bytes 299 MB") && strstr(ui.dialog.text,"0 bytes 0 MB"));

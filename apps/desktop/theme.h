@@ -74,11 +74,6 @@ void desk_paint_title_button(struct desk_paint *, int x, int y, int w, int h, in
  * About, Run, Shut Down and message windows, the DOS window) and libdeskui's
  * modal dialogs. Frame geometry and title-button hit boxes are the same in
  * every theme; only colours and ornaments change. */
-#define DESK_FRAME_BORDER 3
-#define DESK_FRAME_TITLE 24
-#define DESK_FRAME_BUTTON 18                          /* square hit box of a title button */
-/* DESK_TB_HELP (G15) takes the minimise slot: a window with the "?" button has no minimise or zoom. */
-enum { DESK_TB_CLOSE = 1, DESK_TB_MINIMIZE = 2, DESK_TB_COLLAPSE = 4, DESK_TB_HELP = 8 };
 #define DESK_FRAME_BORDER desk_metric(AP_ACTIVE_BORDER,3)
 #define DESK_FRAME_TITLE desk_metric(AP_ACTIVE_TITLE,24)
 #define DESK_FRAME_BUTTON (DESK_FRAME_TITLE-desk_scale(6))                          /* square hit box of a title button */

@@ -185,7 +185,7 @@ static void test_memory_footprint(const char *directory)
     assert(footprint_master_saves==5 && mixer_sets==3);
     assert(!settings_save(&d)); footprint_wait_writer(); shell_service(&d);
     assert(footprint_settings_saves==1);
-    (void)theme_poll_async(d.now_ns); footprint_wait_writer(); (void)theme_poll_async(d.now_ns);
+    (void)theme_poll_async(&d,d.now_ns); footprint_wait_writer(); (void)theme_poll_async(&d,d.now_ns);
     for (unsigned stage=0;stage<CFG_STARTUP_STAGES;stage++) cfg_writer_stage(&settings_writer,stage,stage,0);
     footprint_wait_writer();
     char log[CFG_LOG_MAX+200]; memset(log,'L',sizeof(log)-1); log[sizeof(log)-1]=0;

@@ -300,13 +300,13 @@ static void test_sysmon(void)
         free(text);
     }
     /* A full log buffer stops logging, says so, and the charts keep running. */
-    menu(&sm_ui, K_F, K_L); tap(&sm_ui, DU_KEY_ENTER); assert(sm.mon.logging);
+    menu(&sm_ui, K_F, K_L); tap(&sm_ui, DU_KEY_ENTER); if (sm_ui.dialog.sub) tap(&sm_ui, 0x15); assert(sm.mon.logging);   /* G16: the picker asks before replacing the first session's log; Y answers Yes */
     sm.log_capacity = 20; unsigned s0 = samples;
     tick();
     assert(!sm.mon.logging && samples == s0 + 1 && sm_ui.dialog.kind == DU_DLG_MESSAGE && strstr(sm_ui.dialog.text, "log buffer")); dismiss();
     tick(); assert(samples == s0 + 2);
     /* A failing log write stops logging too. */
-    sm.log_capacity = sizeof(sm.log_row); menu(&sm_ui, K_F, K_L); tap(&sm_ui, DU_KEY_ENTER); assert(sm.mon.logging);
+    sm.log_capacity = sizeof(sm.log_row); menu(&sm_ui, K_F, K_L); tap(&sm_ui, DU_KEY_ENTER); if (sm_ui.dialog.sub) tap(&sm_ui, 0x15); assert(sm.mon.logging);   /* G16: the picker asks before replacing the first session's log; Y answers Yes */
     log_fail_write = 1; tick();
     assert(!sm.mon.logging && sm_ui.dialog.kind == DU_DLG_MESSAGE && strstr(sm_ui.dialog.text, "could not be written")); dismiss(); log_fail_write = 0;
     /* A failing sample is reported, not faked. */

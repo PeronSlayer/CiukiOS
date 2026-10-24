@@ -1298,6 +1298,7 @@ static void wallpaper_load(struct desktop *d)
     wallpaper_request.width=d->width; wallpaper_request.height=d->height;
     wallpaper_request.top=wallpaper_request.bottom=DESK_BAR;
     wallpaper_request.mode=d->sh.cfg.wallpaper_mode;
+    wallpaper_request.pattern=d->sh.cfg.wallpaper_pattern;
     wallpaper_request.colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     wallpaper_request.portrait=d->portrait;
     wallpaper_request.caption_font=desk_theme->font_large;
@@ -1326,7 +1327,7 @@ static void wallpaper_update(struct desktop *d)
     if (d->sh.gate) { desk_shell_wallpaper_update(d); return; }
     uint32_t colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     if (strcmp(wallpaper_request.path,d->sh.cfg.wallpaper) || wallpaper_request.width!=d->width ||
-        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.colour!=colour ||
+        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.pattern!=d->sh.cfg.wallpaper_pattern || wallpaper_request.colour!=colour ||
         (!strcmp(wallpaper_request.path,"ciuki") && (wallpaper_request.caption_font!=desk_theme->font_large ||
             wallpaper_request.caption_colour!=desk_theme->desktop_label || wallpaper_request.caption_aa!=desk_theme->text_aa))) {
         wallpaper_load(d); return;
@@ -2107,14 +2108,13 @@ static void shell_service(struct desktop *d)
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=sh->want_power_force=sh->want_standby=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) {
         links_service(d);
+        custom_service(d);
+        if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
         if (run_history_idle()) desk_power_tick(d);
         return;
     }
     user_service(d);
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
-        custom_service(d);
-        if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
-        desk_power_tick(d);return;
     desktop_wait("folder-service"); desk_folder_service(d);
     custom_service(d);
     if (sh->want_power) {
@@ -2155,7 +2155,8 @@ static void shell_service(struct desktop *d)
             int old_bar_top=sh->cfg.taskbar_top,old_bar_hide=sh->cfg.taskbar_autohide,old_start_small=sh->cfg.start_small;
             char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
             memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); snprintf(old_theme,sizeof(old_theme),"%s",cfg_effective_theme(&sh->cfg));   /* G25: high contrast changes the theme in force */
-            int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
+            int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons, old_pattern=sh->cfg.wallpaper_pattern;
+            int old_spacing_x=sh->cfg.icon_spacing_x, old_spacing_y=sh->cfg.icon_spacing_y, old_icon_font=sh->cfg.icon_font;
             uint32_t old_colour=sh->cfg.desktop_color;
             struct appearance old_appearance=sh->cfg.appearance; int old_appearance_set=sh->cfg.appearance_set, old_pointer=sh->cfg.pointer_scheme, old_document=sh->cfg.document_icon, old_recycle=sh->cfg.recycle_icon;
             uint16_t confirmed = sh->cfg.display_mode;
@@ -2171,15 +2172,15 @@ static void shell_service(struct desktop *d)
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
             int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || settings_reload_wallpaper;
-            int visual=image_changed || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_mode!=sh->cfg.wallpaper_mode ||
             int appearance_changed=old_document!=sh->cfg.document_icon || old_recycle!=sh->cfg.recycle_icon || old_pointer!=sh->cfg.pointer_scheme || old_appearance_set!=sh->cfg.appearance_set || memcmp(&old_appearance,&sh->cfg.appearance,sizeof(old_appearance));
-            int visual=appearance_changed || image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
-                       old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
+            int icons_changed=old_icons!=sh->cfg.desktop_icons || old_spacing_x!=sh->cfg.icon_spacing_x ||
+                              old_spacing_y!=sh->cfg.icon_spacing_y || old_icon_font!=sh->cfg.icon_font;
+            int visual=appearance_changed || image_changed || old_pattern!=sh->cfg.wallpaper_pattern || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_mode!=sh->cfg.wallpaper_mode ||
+                       icons_changed || old_colour!=sh->cfg.desktop_color;
             if (visual) {
                 /* A wallpaper-only request leaves the retained desktop
                  * untouched until its complete replacement is ready. */
-                if (strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
-                if (appearance_changed || strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                if (appearance_changed || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || icons_changed || settings_reload_wallpaper) {
                     desktop_wait("theme-apply"); sh->icon_count=0; desk_shell_apply(d);
                 }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
@@ -2418,6 +2419,7 @@ struct links_worker {
     char browse_path[260];
     struct du_file_entry browse_entries[DU_FILE_ENTRIES];
     unsigned browse_count;
+    struct desk_launch_record requested_record; /* G19: explicit target/argument launch */
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
@@ -2542,7 +2544,8 @@ static void *links_thread(void *arg)
         } else if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
             int result=-ENOMEM;
-            if(r && launch==2){
+            if (r && launch==3) { *r=w->requested_record; result=0; }
+            else if(r && launch==2){
                 memset(r,0,sizeof(*r));snprintf(r->label,sizeof(r->label),"Install");
                 snprintf(r->target,sizeof(r->target),"%s",path);r->show=1;
                 snprintf(r->directory,sizeof(r->directory),"%s",path);
@@ -2664,8 +2667,9 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     if (w->launch_requested || w->launch_busy || w->completed) { pthread_mutex_unlock(&w->mutex); return -EBUSY; }
     const char *source=NULL;
     for (unsigned k=0;k<d->v3_link_count;k++) if (!memcmp(record,&d->v3_links[k].launch,sizeof(*record))) source=d->v3_links[k].source;
-    if (!source) { pthread_mutex_unlock(&w->mutex); return -ENOENT; }
-    snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
+    if (!desk_launch_valid(record)) { pthread_mutex_unlock(&w->mutex); return -EINVAL; }
+    if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; }
+    else { w->requested_record=*record; w->launch_requested=3; }
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
 static int run_submit(struct desktop *d,const char *command)

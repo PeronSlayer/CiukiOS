@@ -82,6 +82,9 @@ static int shutdown_client(uint32_t pid, const char *name, int owned, int versio
 }
 static void shutdown_at(uint64_t ns)
 {
+    /* A PING's 5 s HungAppTimeout starts when it is sent, not when it is queued (fx-28). The tests inspect the
+     * queued messages, so the transport "sends" each PING at the turn it was queued without draining the ring. */
+    for (int i=0;i<DESK_CLIENTS;i++) if (shutdown_desktop.clients[i].ping_pending) shutdown_desktop.clients[i].ping_queued=0;
     desk_heartbeat(&shutdown_desktop,ns);
     if (shutdown_desktop.power.state) shell_service(&shutdown_desktop);
     else desk_power_tick(&shutdown_desktop);

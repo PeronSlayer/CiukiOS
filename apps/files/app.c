@@ -1389,19 +1389,22 @@ static int property_prepare(void *ctx)
     return 0;
 }
 
+#define PROPERTY_CHECK_NOW 410 /* G14: the drive sheet's Tools page */
 static void property_page(struct files_app *a)
 {
     struct du_dialog *d=&a->ui->dialog;
     int tools=a->property_drive>=0 && d->items[3].active==1;
     int version=a->property_drive<0 && d->items[3].active==1;
-    for (unsigned i=4;i<d->count;i++) d->items[i].hidden=(uint8_t)(tools || version);
+    /* G14: Check Now lives on a drive sheet's Tools page only; every other control hides there. */
+    for (unsigned i=4;i<d->count;i++)
+        d->items[i].hidden=(uint8_t)(a->property_drive>=0 && d->items[i].id==PROPERTY_CHECK_NOW ? !tools : tools || version);
     if (a->property_drive>=0) {
         struct du_widget *button=du_property_control(a->ui,9,DU_BUTTON,C_DEFRAG,(struct du_rect){24,252,190,25},"&Defragment Now...");
         button->hidden=!tools; button->disabled=!a->media_defrag;
     }
     if (a->property_drive>=0 && a->backup_call && d->count>6) d->items[6].hidden=(uint8_t)!tools;
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        (a->backup_call ? "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_text);
+        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -1417,6 +1420,13 @@ static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
         du_dialog_close(u); (void)files_backup_open(a,source,NULL,0); return;
     }
     if (e->type==DU_EV_SELECT && !a->property_options) property_page(a);
+    if (e->type==DU_EV_ACTIVATE && e->id==PROPERTY_CHECK_NOW && a->property_drive>=0) {
+        /* Windows 98: Check Now starts ScanDisk for the drive. */
+        char root[8]; if (a->property_drive==2) snprintf(root,sizeof(root),"/"); else snprintf(root,sizeof(root),"/mnt/%c",'a'+a->property_drive);
+        char *argv[]={"scandisk",root,NULL};
+        int r=spawn(a,"/Programs/scandisk",argv);
+        if (r<0) files_launch_failed(a,r);
+    }
     if (e->type==DU_EV_CHANGE) { u->dialog.items[2].disabled=0; du_invalidate(u,u->dialog.box); }
 }
 /* Group bytes without locale state; Windows 98 drive properties show
@@ -1558,6 +1568,8 @@ static void properties_dialog(struct files_app *a)
         if (a->backup_call) du_property_control(a->ui,6,DU_BUTTON,C_BACKUP,(struct du_rect){24,157,150,25},"&Backup Now...");
         w=du_property_control(a->ui,5,DU_BUTTON,C_CLEANUP,(struct du_rect){24,220,150,25},"Disk &Cleanup...");
         w->disabled=a->property_drive<2 || !a->property_have_space || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
+        w=du_property_control(a->ui,7,DU_BUTTON,PROPERTY_CHECK_NOW,(struct du_rect){360,30,110,23},"Check &Now...");
+        w->disabled=!a->spawn;
     } else {
         static const char *const names[]={"&Read-only","&Hidden","&Archive","&System"};
         for (unsigned i=0;i<4;i++) {

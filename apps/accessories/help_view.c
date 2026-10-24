@@ -371,7 +371,7 @@ int help_attach(struct help_app *a, struct du_ui *u)
     du_help_topic(u, "help");
     struct du_rect zero = {0, 0, 0, 0};
     struct du_widget *w = du_add(u, DU_BUTTON, H_BACK, zero, "&Back");
-    w->tip = "Back to the previous topic"; w->help = "Returns to the topic you read before this one."; w->disabled = 1;
+    du_set_tip(w, "Back to the previous topic"); w->help = "Returns to the topic you read before this one."; w->disabled = 1;
     w = du_add(u, DU_TABS, H_TABS, zero, "");
     a->tabs[0].text[0] = "Contents"; a->tabs[1].text[0] = "Index"; a->tabs[2].text[0] = "Search";
     w->items = a->tabs; w->count = 3;
@@ -385,7 +385,7 @@ int help_attach(struct help_app *a, struct du_ui *u)
     w = du_add(u, DU_EDIT, H_SEARCH_EDIT, zero, "");
     w->help = "Type the words to look for. A topic is listed when it contains every word.";
     w = du_add(u, DU_BUTTON, H_SEARCH_GO, zero, "List &Topics");
-    w->tip = "Search all topics"; w->help = "Lists the topics that contain every word you typed.";
+    du_set_tip(w, "Search all topics"); w->help = "Lists the topics that contain every word you typed.";
     w = du_add(u, DU_LISTVIEW, H_SEARCH_LIST, zero, "");
     w->view = DU_DETAILS; w->inactive_selection = 1; w->columns[0] = (struct du_column){"Topics found", LIST_W - 28, 0}; w->column_count = 1;
     w->help = "Click a topic to read it.";
@@ -394,7 +394,7 @@ int help_attach(struct help_app *a, struct du_ui *u)
     du_add(u, DU_STATUS, H_STATUS, zero, "");
     du_add(u,DU_LABEL,H_LINK_LABEL,zero,"Related topics");
     w=du_add(u,DU_LISTVIEW,H_LINKS,zero,""); w->view=DU_DETAILS; w->columns[0]=(struct du_column){"Links",380,0}; w->column_count=1;
-    w->tip="Open a related topic"; w->help="Select a link and press Enter or double-click to open it. Back returns to the previous topic.";
+    du_set_tip(w, "Open a related topic"); w->help="Select a link and press Enter or double-click to open it. Back returns to the previous topic.";
     const int ids[]={H_WIZ_BACK,H_WIZ_NEXT,H_WIZ_CANCEL,H_WIZ_YES,H_WIZ_NO};
     const char *labels[]={"< &Back","&Next >","Cancel","&Yes","&No"};
     for (unsigned i=0;i<5;i++) { w=du_add(u,i>=3 ? DU_RADIO : DU_BUTTON,ids[i],zero,labels[i]); w->hidden=1; if (i>=3) w->total=1; }

@@ -39,7 +39,7 @@
 /* The footprint fixture supplies CU_CALL in its generated raw.h. */
 #ifndef DESK_FOOTPRINT_TEST
 /* G10's raw DISPLAY controls share this fixture's absent display device. */
-static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uint32_t c,uint32_t d,uint32_t e)
+__attribute__((unused)) static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uint32_t c,uint32_t d,uint32_t e)
 { (void)op; (void)argument; (void)b; (void)c; (void)d; (void)e; return (uint32_t)-ENOSYS; }
 #define CU_CALL(name,...) shell_display_call(__VA_ARGS__)
 #endif
@@ -1091,10 +1091,10 @@ __attribute__((noinline)) static void test_menu_icons(void)
             !strcmp(d.sh.menus[0].items[2].label,cp_applets[a].label));
     }
     desk_menu_open(&d,SH_MENU_DESKTOP,0,0);
-    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","Paste Shortcut","Undo    Ctrl+Z","","Properties"};
-    assert(d.sh.menus[0].count==9);
-    for (unsigned k=0;k<9;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
-    assert(d.sh.menus[0].items[8].action==SH_ACT_CONTROL && d.sh.menus[0].items[8].arg==CP_DISPLAY+1);
+    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","Paste Shortcut","Undo    Ctrl+Z","Show Desktop Icons  \xe2\x9c\x93","","Properties"};
+    assert(d.sh.menus[0].count==10);
+    for (unsigned k=0;k<10;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
+    assert(d.sh.menus[0].items[9].action==SH_ACT_CONTROL && d.sh.menus[0].items[9].arg==CP_DISPLAY+1);
     desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==5);
     /* Start > Settings > Input > Keyboard keeps keyboard submenu traversal. */
     desk_menu_open(&d,SH_MENU_START,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"Settings");key(&d,DU_KEY_RIGHT);

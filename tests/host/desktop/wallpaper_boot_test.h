@@ -144,7 +144,7 @@ static void test_wallpaper_boot(const char *directory)
             uint32_t *seed=NULL; int hit=0;
             assert(!desk_wall_prepare(&wallpaper_request,NULL,&seed,&hit,NULL));
             if (seeded) assert(!memcmp(seed,d.sh.wall,1024u*768u*4));
-            else for (unsigned y=DESK_BAR;y<768-DESK_BAR;y+=37) for (unsigned x=0;x<1024;x+=41)
+            else for (unsigned y=(unsigned)DESK_BAR;y<(unsigned)(768-DESK_BAR);y+=37) for (unsigned x=0;x<1024;x+=41)
                 assert((d.sh.wall[(size_t)y*1024+x]&0xffffffu)==(wallpaper_request.colour&0xffffffu));
             free(seed);
         }
@@ -154,7 +154,7 @@ static void test_wallpaper_boot(const char *directory)
             uint32_t *seed=NULL; int hit=0;
             assert(!desk_wall_prepare(&wallpaper_request,NULL,&seed,&hit,NULL));
             unsigned equal=0,total=0;
-            for (unsigned y=DESK_BAR+8;y<768-DESK_BAR-8;y+=3) for (unsigned x=700;x<1000;x+=3) { total++; equal+=perf_scanout[(size_t)y*1024+x]==seed[(size_t)y*1024+x]; }
+            for (unsigned y=(unsigned)DESK_BAR+8;y<(unsigned)(768-DESK_BAR-8);y+=3) for (unsigned x=700;x<1000;x+=3) { total++; equal+=perf_scanout[(size_t)y*1024+x]==seed[(size_t)y*1024+x]; }
             free(seed); assert(equal*100>=total*95);
             assert(startup_us[3] && startup_us[7] && startup_us[7]<=startup_us[3]);
         }

@@ -355,8 +355,6 @@ int strncmp(const char *a, const char *b, size_t n) {
 }
 #endif
 
-/* G12: the desktop owns session settings and requested durable writes. */
-void u32_settings(void) { u32_input_refresh(); }
 /* The desktop owns this existing plain configuration file. Only its keyboard
  * and double-click keys cross this boundary; the desktop theme never does. */
 static int compare_prefix(const char *a, const char *b, UINT n) {
@@ -413,7 +411,10 @@ BOOL u32_appearance_commit(const struct appearance *a) {
   u32_resume(saved); u32_free(data); u32_free(output);
   return error ? u32_fail(error) : 1;
 }
+/* G12: the desktop owns session settings (keyboard repeat, double-click, wheel) and requested durable writes;
+ * G23: the appearance record and the layout still come from the plain configuration file. */
 void u32_settings(void) {
+  u32_input_refresh();
   static BOOL read_once;
   static DWORD last;
   DWORD now = u32_ticks();

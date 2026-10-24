@@ -643,6 +643,45 @@ void du_tip_tick(struct du_ui *u)
 uint64_t du_tip_deadline(const struct du_ui *u)
 { return u->tip.w ? u->tip.due : UINT64_MAX; }
 
+/* G15 What's This? popup: the help text of the control clicked in help mode,
+ * kept until the next click or key (struct du_tip help_tip, context = 1). */
+#define HELP_TIP_PAPER 0xffffe1u
+#define HELP_TIP_MAX_W 210
+void du_help_tip_hide(struct du_ui *u)
+{
+    if (u->help_tip.visible) du_invalidate(u, u->help_tip.box);
+    u->help_tip.visible = u->help_tip.context = 0; u->help_tip.widget = -1; u->help_tip.text = NULL;
+}
+
+void du_help_tip_show(struct du_ui *u, const char *text)
+{
+    if (!text || !*text) return;
+    int lines = du_text_wrap(NULL, (struct du_rect){0, 0, HELP_TIP_MAX_W - 12, 4096}, text, 0);
+    int w = HELP_TIP_MAX_W, h = lines * (desk_font_line(desk_theme->font_ui) + 1) + 10;
+    if (w > u->canvas.width) w = u->canvas.width;
+    int x = u->mouse_x, y = u->mouse_y + 20;
+    if (x + w > u->canvas.width) x = u->canvas.width - w;
+    if (x < 0) x = 0;
+    if (y + h > u->canvas.height) y = u->mouse_y - h - 2;
+    if (y < 0) y = 0;
+    u->help_tip.box = (struct du_rect){x, y, w, h}; u->help_tip.text = text;
+    u->help_tip.visible = u->help_tip.context = 1; u->help_tip.widget = -1; u->help_tip.hide_ns = 0;
+    du_invalidate(u, u->help_tip.box);
+}
+
+static void draw_help_tip(struct du_ui *u)
+{
+    struct du_canvas *c = &u->canvas; struct du_rect b = u->help_tip.box;
+    if (!u->help_tip.visible || !u->help_tip.text) return;
+    struct du_rect clip = du_intersection(c->clip, (struct du_rect){b.x, b.y, b.w + 3, b.h + 3});
+    if (clip.w <= 0 || clip.h <= 0) return;
+    struct du_rect saved = c->clip;
+    c->clip = du_intersection(saved, b);
+    du_fill(c, b, HELP_TIP_PAPER); du_outline(c, b, 0x000000u);
+    du_text_wrap(c, (struct du_rect){b.x + 6, b.y + 5, b.w - 12, b.h - 8}, u->help_tip.text, 0x000000u);
+    c->clip = saved;
+}
+
 static void draw_tip(struct du_ui *u)
 {
     if (!u->tip.visible) return;
@@ -660,6 +699,7 @@ void du_draw_overlays(struct du_ui *u)
     struct du_rect clip = u->canvas.clip;
     draw_combo_list(u); u->canvas.clip = clip;
     draw_tip(u); u->canvas.clip = clip;
+    draw_help_tip(u); u->canvas.clip = clip;
 }
 
 /* Clear every pointer into a widget array that is about to disappear. */

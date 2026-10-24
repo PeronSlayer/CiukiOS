@@ -2,7 +2,8 @@
  * Storage is a copied worker request; edits never touch a running VM.
  * SPDX-License-Identifier: MIT */
 #include "../desktop/catalog.h"
-enum { G_GAME=1500,G_JOY,G_COM1,G_COM2,G_COM3,G_COM4,G_LPT,G_PORT,G_PATH,G_APPLY,G_BACK,G_NOTE,G_JOY_NOTE,G_REFRESH,G_DOS };
+enum { G_GAME=2200,   /* 1500..1508 belong to the Mouse and Keyboard page (G12); both pages share refresh() */
+       G_JOY,G_COM1,G_COM2,G_COM3,G_COM4,G_LPT,G_PORT,G_PATH,G_APPLY,G_BACK,G_NOTE,G_JOY_NOTE,G_REFRESH,G_DOS };
 static void game_build(struct cp_app *a);
 static int game_ready(struct cp_app *a)
 { return a->game_loaded && a->game_joy_ready && !a->game_busy && !a->joystick_busy && !a->joystick_save_pending; }

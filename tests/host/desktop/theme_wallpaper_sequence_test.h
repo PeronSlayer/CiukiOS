@@ -41,7 +41,7 @@ static void sequence_turn(struct desktop *d)
     d->now_ns=monotonic(); desk_heartbeat(d,d->now_ns);
     struct ciuki_input_event event={.type=CIUKI_INPUT_MOTION,.value=1,.monotonic_ns=d->now_ns};
     desk_input(d,&event); desk_sound_results(d); desktop_stage(STALL_THEME);
-    if (!(d->sh.want_reload&1) && theme_poll_async(d->now_ns)) {
+    if (!(d->sh.want_reload&1) && theme_poll_async(d,d->now_ns)) {
         snprintf(d->sh.cfg.theme,sizeof(d->sh.cfg.theme),"%s",desk_theme->name);
         desk_theme_changed(d); d->sh.wall_valid=0; wallpaper_update(d);
     }

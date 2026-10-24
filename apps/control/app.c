@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 
 #define CP_T_SAVER 701
@@ -28,6 +29,13 @@ enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet", "addhw", "access", "taskbar"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties", "Add New Hardware", "Accessibility Options", "Taskbar & Start Menu"};
+static int wallpaper_path(const char *path)
+{
+    if (!path || path[0]!='/' || strstr(path,"/../") || strstr(path,"/./")) return 0;
+    size_t n=strlen(path); if (n<2 || (n>=3 && !strcmp(path+n-3,"/..")) || (n>=2 && !strcmp(path+n-2,"/."))) return 0;
+    const char *dot=strrchr(path,'.'); if (!dot) return 0;
+    return !strcasecmp(dot,".png") || !strcasecmp(dot,".jpg") || !strcasecmp(dot,".jpeg") || !strcasecmp(dot,".bmp");
+}
 static void build(struct cp_app *a);
 static void list_style(struct du_widget *,const char *);
 static void refresh(struct cp_app *a);
@@ -96,6 +104,10 @@ static void changed(struct cp_app *a)
     else if (a->page==CP_KEYBOARD) { now.keyboard=a->cfg.keyboard;
         now.repeat_delay=a->cfg.repeat_delay; now.repeat_speed=a->cfg.repeat_speed;
         now.cursor_blink_ms=a->cfg.cursor_blink_ms; now.layout_switch=a->cfg.layout_switch; }
+    else if (a->page==CP_DISPLAY) {
+        snprintf(now.wallpaper,sizeof(now.wallpaper),"%s",a->cfg.wallpaper);
+        now.wallpaper_mode=a->cfg.wallpaper_mode; now.wallpaper_pattern=a->cfg.wallpaper_pattern; now.desktop_color=a->cfg.desktop_color;
+    }
     else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
     else if (a->page==CP_ACCESS) ac_merge(a,&now);   /* G25: only the fields this panel changed */
@@ -128,10 +140,12 @@ static void display_copy(struct ciuki_settings *to, const struct ciuki_settings 
     memcpy(to->schemes,from->schemes,sizeof(to->schemes));
     memcpy(to->theme, from->theme, sizeof(to->theme));
     memcpy(to->wallpaper, from->wallpaper, sizeof(to->wallpaper));
-    to->wallpaper_mode = from->wallpaper_mode; to->desktop_color = from->desktop_color;
+    to->wallpaper_mode = from->wallpaper_mode; to->wallpaper_pattern=from->wallpaper_pattern; to->desktop_color = from->desktop_color;
     to->saver_enabled=from->saver_enabled; to->saver_seconds=from->saver_seconds;
     to->saver_kind=from->saver_kind;
     to->desktop_icons = from->desktop_icons; to->display_mode = from->display_mode;
+    to->icon_spacing_x=from->icon_spacing_x; to->icon_spacing_y=from->icon_spacing_y;
+    to->icon_font=from->icon_font;
 }
 int cp_display_store(struct cp_app *a)
 {
@@ -281,14 +295,14 @@ static void preview_build(struct cp_app *a)
             snprintf(a->image_path, sizeof(a->image_path), "%s", a->cfg.wallpaper);
         }
         uint32_t bar = sh ? (32u * 144u) / sh : 6;
-        desk_wallpaper_render(a->preview, 192, 144, bar, bar, a->cfg.wallpaper, a->cfg.wallpaper_mode,
-                              desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
+        desk_wallpaper_render_pattern(a->preview, 192, 144, bar, bar, a->cfg.wallpaper, a->cfg.wallpaper_mode,
+                              desktop_colour(a, chosen(a)), &a->image, a->host.portrait,a->cfg.wallpaper_pattern);
         a->preview_valid = 1;   /* no alpha: the scaled path never carried one either */
         return;
     }
     uint32_t *full = malloc((size_t)sw * sh * 4u);
     if (full) {
-        desk_wallpaper_render(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
+        desk_wallpaper_render_pattern(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, desktop_colour(a, chosen(a)), &a->image, a->host.portrait,a->cfg.wallpaper_pattern);
         struct desk_image src = {full, sw, sh};
         for (size_t i = 0; i < (size_t)sw * sh; i++) full[i] |= 0xff000000u;
         desk_image_scale(&src, a->preview, 192, 144, CFG_WALL_STRETCH, desktop_colour(a, chosen(a)));
@@ -362,6 +376,7 @@ static void paint(struct du_ui *u, void *user)
 {
     struct cp_app *a = user;
     struct du_canvas *c = &u->canvas;
+    user_paint(a);
     if (a->page==CP_DISPLAY && a->display_tab==CP_SCREEN_SAVER) saver_monitor(a,c);
     else if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) {
         if (!a->preview_valid) {
@@ -450,6 +465,7 @@ static void sync(struct cp_app *a)
     static const int rgb_ids[3]={C_RGB_R,C_RGB_G,C_RGB_B};
     for (unsigned k=0;k<3;k++) if ((w=du_get(u,rgb_ids[k]))) w->value=(int)((a->cfg.desktop_color>>(16-k*8))&255u);
     toggle_label(a, C_ICONS, "Desktop icons", a->cfg.desktop_icons);
+    if ((w=du_get(u,CP_WALL_PATTERN))) du_combo_set(w,a->pattern_items,DESK_WALL_PATTERNS,a->cfg.wallpaper_pattern);
     char s[64];
     if ((w = du_get(u, C_SPEED))) w->value = a->cfg.mouse_speed - CFG_MOUSE_MIN;
     snprintf(s, sizeof(s), "%d of %d%s", a->cfg.mouse_speed, CFG_MOUSE_MAX, a->cfg.mouse_speed == CFG_MOUSE_NORMAL ? " (normal)" : ""); text(a, C_SPEED_V, s);
@@ -693,6 +709,7 @@ static int taskbar_event(struct cp_app *a,const struct du_event *e)
         return 1;
     default:return 0;
     }
+}
 enum { A_SCHEME=4100,A_SAVE,A_DELETE,A_NAME,A_ITEMS,A_COLOUR,A_GRADIENT,A_TEXT,A_SIZE,A_FONT,A_POINTS,A_BOLD,A_ITALIC,
        A_EFFECT0,A_EFFECT1,A_EFFECT2,A_EFFECT3,A_SMALL,A_LARGE,A_DPI,A_SAVE_NAME,A_DOC_ICON,A_BIN_ICON };
 static void appearance_build(struct cp_app *a)
@@ -1158,6 +1175,11 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
                 snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"pattern:%u",k-2-DESK_BUILTIN_WALLPAPERS-a->wall_count);
             } else break;
             save = 1; a->preview_valid = 0;
+        }
+        break;
+    case CP_WALL_PATTERN:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<DESK_WALL_PATTERNS) {
+            a->cfg.wallpaper_pattern=e->index; save=1; a->preview_valid=0;
         }
         break;
     case C_POS0: case C_POS1: case C_POS2: case C_POS3: case C_POS4:
@@ -1836,8 +1858,6 @@ static void build(struct cp_app *a)
     if (user_page(a)) {
         user_build(a);
     } else if (a->page == CP_DISPLAY) {
-        static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver"};
-    if (a->page == CP_DISPLAY) {
         static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver","Effects","Themes"};
         for (int k=0;k<CP_DISPLAY_TABS;k++) a->display_tabs[k].text[0]=tabs[k];
         w=du_get(u,C_TABS); w->id=CP_DISPLAY_TABS_ID; w->items=a->display_tabs;
@@ -1854,8 +1874,12 @@ static void build(struct cp_app *a)
             for (int k=0;k<CP_POSITIONS;k++) add(a,DU_BUTTON,C_POS0+k,24+k%3*70,240+k/3*24,68,22,pos[k]);
             add(a,DU_LABEL,C_COL_L,24,296,180,14,"Desktop colour:");
             for (int k=0;k<6;k++) add(a,DU_BUTTON,C_COL0+k,24+k*34,312,30,24,"");
-            add(a,DU_BUTTON,C_ICONS,248,224,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
-            add(a,DU_BUTTON,4130,248,342,CP_WIDTH-272,24,"Browse...");
+            add(a,DU_BUTTON,4130,248,206,100,22,"Browse...");
+            add(a,DU_LABEL,2002,356,209,48,16,"Pattern:");   /* G19: a mask drawn behind the picture */
+            for (int k=0;k<DESK_WALL_PATTERNS;k++) a->pattern_items[k]=(struct du_item){.text={desk_wallpaper_pattern_labels[k]}};
+            w=add(a,DU_COMBO,CP_WALL_PATTERN,404,206,CP_WIDTH-404-24,22,"");
+            du_combo_set(w,a->pattern_items,DESK_WALL_PATTERNS,a->cfg.wallpaper_pattern); w->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_BUTTON,C_ICONS,248,232,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
             static const int rgb_ids[3]={C_RGB_R,C_RGB_G,C_RGB_B};
             static const char *const rgb_names[]={"Red", "Green", "Blue"};
             uint32_t colour=a->cfg.desktop_color;
@@ -1899,9 +1923,6 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,1974,40,336,338,16,"Configure monitor power saving.");
             add(a,DU_BUTTON,CP_SAVER_POWER,400,330,104,24,"Settings...")->disabled=!a->host.open_applet;
             if (choice>1) du_timer_start(u,CP_T_SAVER,100000000ull,1);
-            char monitor[80]; snprintf(monitor,sizeof(monitor),"Turn off monitor after %d minutes (0 = Never)",a->cfg.monitor_seconds/60);
-            add(a,DU_LABEL,CP_SAVER_NOTE,40,356,350,16,monitor);
-            w=add(a,DU_SCROLLBAR,CP_MONITOR_WAIT,40,378,350,18,""); w->vertical=0; w->total=1441; w->page=1; w->value=a->cfg.monitor_seconds/60;
         } else {
             add(a,DU_LABEL,CP_AREA_LABEL,24,44,232,16,"Resolution:");
             w=add(a,DU_LISTVIEW,CP_AREA,24,64,232,100,""); w->items=a->area_items; list_style(w,"Screen area");
@@ -2163,6 +2184,14 @@ void cp_open(struct cp_app *a, int page)
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY || a->page == CP_ADDHW) refresh(a);
     if (a->page == CP_ADDHW) aw_start(a);
     build(a);
+}
+int cp_wallpaper_set(struct cp_app *a, const char *path)
+{
+    if (!a || !path || !wallpaper_path(path) || strlen(path)>=sizeof(a->cfg.wallpaper)) return -EINVAL;
+    snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"%s",path);
+    a->preview_valid=0; changed(a);
+    text(a,C_STATUS,"Wallpaper saved and sent to the desktop.");
+    return 0;
 }
 void cp_assets_ready(struct cp_app *a)
 {

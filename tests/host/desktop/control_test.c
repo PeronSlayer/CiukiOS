@@ -415,7 +415,7 @@ int main(int argc, char **argv)
     for (int k = 0; k < CFG_THEMES; k++) assert(a.theme_items[k].selected == (k == cfg_theme_index("Ciuki Blue")));
     assert(a.cfg.wallpaper_mode == CFG_WALL_FILL && !strcmp(a.cfg.wallpaper, "/system/wallpapers/Ciuk2.png"));
     struct du_widget *list = NULL;
-    for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_LISTVIEW && u.widgets[i].count == 2 + DESK_BUILTIN_WALLPAPERS + 3) list = &u.widgets[i];
+    for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_LISTVIEW && u.widgets[i].count == 2 + DESK_BUILTIN_WALLPAPERS + 3 + 8) list = &u.widgets[i];
     assert(list && !strcmp(list->items[list->active].text[0], "Ciuk2.png") && list->items[list->active].selected);
     check_marked(CFG_WALL_FILL);
 
@@ -583,6 +583,27 @@ int main(int argc, char **argv)
     at_click_widget(&u,1704);assert(internet_saves==4 && !strcmp(internet_saved.proxy_password,"password"));
     at_click_widget(&u,1724);assert(a.internet_tab==4 && du_get(&u,1716)->disabled);
     cp_detach(&a);puts("PASS G26 Internet Properties: page/catalog, home/proxy/cache Apply, invalid values preserve saved settings");
+    attach(CP_DISPLAY);
+    struct du_widget *browse=find(DU_BUTTON,"Browse..."); assert(browse);
+    struct du_event choose={.type=DU_EV_ACTIVATE,.id=browse->id}; u.event(&u,&choose,u.user);
+    struct du_event selected_wall={.type=DU_EV_DIALOG,.id=browse->id+1,.index=0,.text="/Documents/Desktop/Scene.png"};
+    u.event(&u,&selected_wall,u.user);
+    assert(!strcmp(a.cfg.wallpaper,"/Documents/Desktop/Scene.png") && a.display_dirty);
+    assert(!cp_wallpaper_set(&a,"/Documents/Desktop/Paint.bmp") && !strcmp(a.cfg.wallpaper,"/Documents/Desktop/Paint.bmp"));
+    assert(cp_wallpaper_set(&a,"/Documents/Desktop/not-an-image.txt")==-EINVAL);
+    cp_close(&a); cp_detach(&a);
+    cfg_defaults(&parsed); strcpy(parsed.wallpaper,"none"); saved_n=cfg_format(&parsed,saved,sizeof(saved));
+    attach(CP_DISPLAY); assert(du_get(&u,CP_WALL_PATTERN)->count==DESK_WALL_PATTERNS);
+    render_settled(&u); static uint32_t plain_preview[192*144]; memcpy(plain_preview,a.preview,sizeof(plain_preview));
+    struct du_event pattern={.type=DU_EV_SELECT,.id=CP_WALL_PATTERN,.index=3}; u.event(&u,&pattern,u.user);
+    assert(a.display_dirty && a.cfg.wallpaper_pattern==3); render_settled(&u);
+    assert(a.preview_valid && memcmp(plain_preview,a.preview,sizeof(plain_preview))); at_click_widget(&u,CP_APPLY);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && parsed.wallpaper_pattern==3);
+    assert(cp_close(&a)); cp_detach(&a);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && !parsed.wallpaper_pattern);
+    attach(CP_DISPLAY); u.event(&u,&pattern,u.user); at_click_widget(&u,CP_OK); assert(a.quit); cp_detach(&a);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && parsed.wallpaper_pattern==3);
+    puts("PASS Background Pattern: chooser, preview, Apply, Cancel restore and OK persistence");
     puts("PASS Display Properties: staged edits, preview/Cancel merge, durable OK, pending-close rollback and failed save");
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");

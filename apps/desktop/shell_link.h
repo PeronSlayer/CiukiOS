@@ -48,6 +48,16 @@ struct desk_uninstall_entry {
     uint64_t disk_bytes;
     char licence[260];
 };
+static inline int desk_target_url(const char *s)
+{
+    if (!s || !((*s>='A' && *s<='Z') || (*s>='a' && *s<='z'))) return 0;
+    for (unsigned i=1;s[i] && i<32;i++) {
+        unsigned c=(unsigned char)s[i];
+        if (c==':') return i>1 && s[i+1]; /* a drive letter is a path */
+        if (!((c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='+' || c=='-' || c=='.')) return 0;
+    }
+    return 0;
+}
 static inline int desk_link_hotkey_valid(uint32_t hotkey)
 {
     return !hotkey || (!(hotkey&0xfffff000u) && (hotkey&255u));
@@ -60,8 +70,8 @@ static inline int desk_launch_valid(const struct desk_launch_record *r)
         unsigned n=0; while (n<caps[k] && fields[k][n]) n++;
         if (n==caps[k] || !desk_link_utf8((const uint8_t *)fields[k],n) || (k<2 && !n)) return 0;
     }
-    if (r->target[0]!='/' && !((r->target[0]>='A' && r->target[0]<='Z') || (r->target[0]>='a' && r->target[0]<='z'))) return 0;
-    if (r->target[0]!='/' && (r->target[1]!=':' || (r->target[2]!='\\' && r->target[2]!='/'))) return 0;
+    if (!desk_target_url(r->target) && r->target[0]!='/' && !((r->target[0]>='A' && r->target[0]<='Z') || (r->target[0]>='a' && r->target[0]<='z'))) return 0;
+    if (!desk_target_url(r->target) && r->target[0]!='/' && (r->target[1]!=':' || (r->target[2]!='\\' && r->target[2]!='/'))) return 0;
     return desk_link_hotkey_valid(r->hotkey) && (r->show==1 || r->show==3 || r->show==7);
 }
 static inline int desk_link_decode(const uint8_t *bytes, unsigned count, struct desk_launch_record *out)

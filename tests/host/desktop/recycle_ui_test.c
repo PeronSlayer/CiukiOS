@@ -194,7 +194,7 @@ static void bin_view_tests(void)
            !strcmp(LIST()->columns[3].title, "Type") && !strcmp(LIST()->columns[4].title, "Size") && !strcmp(LIST()->columns[5].title, "Modified"));
     int d = row_of("Dir One"), z = row_of("zeta.txt"), pic = row_of("pic.bmp");
     assert(d >= 0 && z >= 0 && pic >= 0);
-    assert(!strcmp(app.rows[d].text[1], "C:\\Documents\\Desktop") && !strcmp(app.rows[d].text[2], "2026-10-14 17:46") &&
+    assert(!strcmp(app.rows[d].text[1], "C:\\Documents\\Desktop") && !strcmp(app.rows[d].text[2], "10/14/26 17:46:40")   /* G24: %x %X in the C locale */ &&
            !strcmp(app.rows[d].text[3], "File Folder") && !strcmp(app.rows[d].text[4], "2 KB"));
     assert(!strcmp(app.rows[pic].text[3], "Bitmap Image") && !strcmp(app.rows[z].text[4], "4 KB") && strcmp(app.rows[z].text[2], app.rows[d].text[2]));
     assert(app.rows[d].icon16 && app.rows[d].icon32 && app.rows[pic].icon16);
@@ -218,7 +218,8 @@ static void bin_view_tests(void)
     /* Item properties (double click / Enter): original location and deletion time. */
     select_row(row_of("zeta.txt")); key(DU_KEY_ENTER);
     assert(du_dialog_id(&ui) == D_BIN_ITEM && strstr(ui.dialog.text, "zeta.txt") && strstr(ui.dialog.text, "Original location:\tC:\\Documents\\Desktop") &&
-           strstr(ui.dialog.text, "Deleted:\t2026-10-14 18:46") && strstr(ui.dialog.text, "4,000 bytes"));
+           strstr(ui.dialog.text, "Deleted:\t10/14/26 18:46:40") &&
+           (strstr(ui.dialog.text, "(4000 bytes)") || strstr(ui.dialog.text, "(4,000 bytes)")));   /* G24: grouping follows the locale */
     dump("bin-item-properties");
     key(DU_KEY_ENTER);
     /* Restore through the File menu: selected items return, folders keep their contents. */
