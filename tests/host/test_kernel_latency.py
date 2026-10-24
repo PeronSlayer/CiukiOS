@@ -259,7 +259,8 @@ static void test_irq_restore(uint32_t f) {
             temp = Path(directory)
             source = (ROOT / 'apps/desktop/desktop.c').read_text()
             begin = source.index('static void storage_poll(')
-            end = source.index('static int run_command(', begin)
+            # G9 declares the Run helpers right after storage_poll.
+            end = source.index('static int run_submit(struct desktop *', begin)
             (temp / 'latency_storage_notice.inc').write_text(source[begin:end])
             binary = temp / 'notice'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
