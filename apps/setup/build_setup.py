@@ -63,6 +63,9 @@ def build(validate_sdk=True):
     command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections",
                "-I", str(ROOT / "apps/setup"), "-I", str(ROOT / "sdk/libsetup/include"),
                *(str(ROOT / name) for name in SOURCES), "-Wl,--gc-sections",
+               # G5: libdeskui widgets reference the system clipboard weakly; -u pulls
+               # clipboard.o out of the archive (no weak undefined symbol, check_sdk).
+               "-Wl,-u,du_system_clipboard_text_set", "-Wl,-u,du_system_clipboard_text_get",
                *(str(p) for p in LIBRARIES), "-o", str(elf)]
     subprocess.run(["nice", "-n", "19", *command], check=True, cwd=ROOT, env=env)
     record = {"schema_version": 1, "program": "/Programs/setup", "kind": "libdeskui Setup wizard (f9-03)",
