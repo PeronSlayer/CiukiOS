@@ -60,6 +60,15 @@ struct cp_main { struct users_worker users_worker; char settings_temp[160]; stru
     uint64_t tick_next;
 };
 
+/* Optional in host-only panel harnesses; production links startup.c. */
+__attribute__((weak)) int desk_startup_list_at(const char *folder,const char *registry,struct desk_startup_entry *out,unsigned cap)
+{ (void)folder; (void)registry; (void)out; (void)cap; return -ENOSYS; }
+__attribute__((weak)) int desk_startup_enable_at(const char *registry,const struct desk_startup_entry *entry,int enabled)
+{ (void)registry; (void)entry; (void)enabled; return -ENOSYS; }
+static int startup_list(void *ctx,struct desk_startup_entry *out,unsigned cap)
+{ (void)ctx; return desk_startup_list_at(DESK_STARTUP_FOLDER,"/System/Registry",out,cap); }
+static int startup_enable(void *ctx,const struct desk_startup_entry *entry,int enabled)
+{ (void)ctx; return desk_startup_enable_at("/System/Registry",entry,enabled); }
 static void programs_poll(struct cp_main *);
 static void notify_completion(void *);
 static int user_begin(void *ctx,const struct users_request *q)
@@ -766,6 +775,7 @@ int main(int argc, char **argv)
     h->user_begin=user_begin; h->user_poll=user_poll;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
+    h->startup_list=startup_list; h->startup_enable=startup_enable;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;

@@ -525,4 +525,8 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
     }
 }
 void desk_input(struct desktop *d, const struct ciuki_input_event *in)
-{ input(d,in); desk_cursor_update(d); }
+{
+    desk_startup_key(&d->startup,in);
+    if (desk_saver_input(d,in)) return;
+    input(d,in); desk_cursor_update(d);
+}

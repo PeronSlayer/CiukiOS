@@ -62,6 +62,7 @@ static void changed(struct cp_app *a)
     static struct ciuki_settings now;
     load(a, &now);            /* keep what the desktop wrote meanwhile: recent documents, unknown keys */
     if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.double_click_ms=a->cfg.double_click_ms; }
+    else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
     static char out[CFG_TEXT_MAX];
@@ -77,6 +78,8 @@ static void display_copy(struct ciuki_settings *to, const struct ciuki_settings 
     memcpy(to->theme, from->theme, sizeof(to->theme));
     memcpy(to->wallpaper, from->wallpaper, sizeof(to->wallpaper));
     to->wallpaper_mode = from->wallpaper_mode; to->desktop_color = from->desktop_color;
+    to->saver_enabled=from->saver_enabled; to->saver_seconds=from->saver_seconds;
+    to->saver_kind=from->saver_kind;
     to->desktop_icons = from->desktop_icons; to->display_mode = from->display_mode;
 }
 int cp_display_store(struct cp_app *a)
@@ -581,6 +584,29 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             log_refresh(a);
         }
         break;
+    case CP_SAVER_KIND:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<3) { a->cfg.saver_kind=e->index; save=1; }
+        break;
+    case CP_SAVER_ENABLE:
+        if (e->type==DU_EV_ACTIVATE) { a->cfg.saver_enabled=!a->cfg.saver_enabled; save=1; build(a); }
+        break;
+    case CP_SAVER_WAIT:
+    case CP_MONITOR_WAIT:
+        if (e->type==DU_EV_CHANGE && e->index>=0 && e->index<=1440) {
+            if (e->id==CP_SAVER_WAIT) a->cfg.saver_seconds=e->index*60;
+            else a->cfg.monitor_seconds=e->index*60;
+            save=1; build(a);
+        }
+        break;
+    case CP_SAVER_SETTINGS:
+        if (e->type==DU_EV_ACTIVATE)
+            du_message(u,CP_SAVER_SETTINGS,"Screen Saver Settings","This screen saver has no additional settings.",DU_DLG_ICON_INFO,NULL,0,0,0);
+        break;
+    case CP_SAVER_PREVIEW:
+        if (e->type==DU_EV_ACTIVATE && a->host.apply &&
+            a->host.apply(a->host.ctx,DESK_SETTINGS_SAVER_PREVIEW,a->cfg.saver_kind,0))
+            text(a,C_STATUS,"Screen saver preview could not be started.");
+        break;
     case CP_POWER_ACTION:
         if (e->type == DU_EV_ACTIVATE && a->host.power && a->host.power(a->host.ctx))
             text(a,C_STATUS,"The shutdown dialog could not be opened.");
@@ -593,10 +619,33 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_DETAILS: if (e->type == DU_EV_ACTIVATE) details(a); break;
     case C_SYSTEM_TABS:
-        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 4) {
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 5) {
             a->system_tab = e->index;
             cp_open(a,e->index==1 ? CP_DEVICES : e->index==3 ? CP_DRIVERS : CP_SYSTEM);
         }
+        break;
+    case CP_STARTUP_LIST:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<a->startup_count) {
+            a->startup_selected=e->index;
+            du_get(u,CP_STARTUP_ENABLED)->value=a->startup[e->index].enabled;
+            du_invalidate_widget(u,CP_STARTUP_ENABLED);
+        }
+        break;
+    case CP_STARTUP_ENABLED:
+        if (e->type==DU_EV_CHANGE && a->startup_selected>=0 && a->startup_selected<a->startup_count) {
+            struct desk_startup_entry *item=&a->startup[a->startup_selected];
+            int enabled=!!du_get(u,CP_STARTUP_ENABLED)->value;
+            int error=a->host.startup_enable ? a->host.startup_enable(a->host.ctx,item,enabled) : -ENOSYS;
+            if (!error) item->enabled=enabled;
+            du_get(u,CP_STARTUP_ENABLED)->value=item->enabled;
+            du_invalidate_widget(u,CP_STARTUP_ENABLED);
+            a->startup_items[a->startup_selected].text[2]=item->enabled ? (item->error ? "Invalid" : "Enabled") : "Disabled";
+            du_invalidate(u,du_get(u,CP_STARTUP_LIST)->box);
+            text(a,CP_STARTUP_NOTE,error ? "Startup setting could not be saved." : "Saved. Changes take effect at the next desktop start.");
+        }
+        break;
+    case CP_STARTUP_REFRESH:
+        if (e->type==DU_EV_ACTIVATE) build(a);
         break;
     case C_REFRESH: if (e->type == DU_EV_ACTIVATE) { refresh(a); build(a); } break;
     case C_TREE:
@@ -1022,9 +1071,9 @@ static void system_pages(struct cp_app *a)
 {
     struct du_widget *w; struct du_ui *u = a->ui; char line[512];
     if (a->page == CP_SYSTEM || a->page == CP_DEVICES || a->page == CP_DRIVERS) {
-        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers"};
-        for (int k=0;k<4;k++) a->system_tabs[k].text[0]=tabs[k];
-        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=4;
+        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers", "Startup"};
+        for (int k=0;k<5;k++) a->system_tabs[k].text[0]=tabs[k];
+        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=5;
         w->active=(unsigned)a->system_tab;
     }
     if (a->page == CP_DEVICES) {
@@ -1065,7 +1114,30 @@ static void system_pages(struct cp_app *a)
         add(a, DU_BUTTON, C_DETAILS, 24, 320, 110, 24, "Details...")->anchors = DU_ANCHOR_BOTTOM;
         add(a, DU_BUTTON, C_REFRESH, 366, 320, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
     } else if (a->page == CP_SYSTEM) {
-        if (a->system_tab == 0) {
+        if (a->system_tab == 4) {
+            text(a,C_STATUS,"");
+            if (!a->startup) a->startup=calloc(DESK_STARTUP_MAX,sizeof(*a->startup));
+            a->startup_count=a->startup && a->host.startup_list ? a->host.startup_list(a->host.ctx,a->startup,DESK_STARTUP_MAX) : -ENOSYS;
+            if (a->startup_count>(int)DESK_STARTUP_MAX) a->startup_count=-EOVERFLOW;
+            a->startup_selected=0;
+            for (int k=0;k<a->startup_count;k++) {
+                struct desk_startup_entry *item=&a->startup[k];
+                /* Source IDs come from the shared snapshot model. */
+                static const char *const sources[]={"HKLM RunServicesOnce","HKLM RunServices","HKLM RunOnce","HKCU RunOnce","HKLM Run","HKCU Run","StartUp folder"};
+                a->startup_items[k]=(struct du_item){.text={item->name,item->source<7 ? sources[item->source] : "Unknown",item->enabled ? (item->error ? "Invalid" : "Enabled") : "Disabled"},.selected=k==0};
+            }
+            add(a,DU_LABEL,C_SYS0,24,44,500,28,"Programs run when the desktop starts. Hold Shift to skip once.");
+            w=add(a,DU_LISTVIEW,CP_STARTUP_LIST,24,78,CP_WIDTH-48,220,"");
+            w->items=a->startup_items; w->count=a->startup_count>0 ? (unsigned)a->startup_count : 0;
+            w->view=DU_DETAILS; w->inactive_selection=1; w->column_count=3;
+            w->columns[0]=(struct du_column){"Item",210,0}; w->columns[1]=(struct du_column){"Location",180,0}; w->columns[2]=(struct du_column){"State",90,0};
+            w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
+            w=add(a,DU_CHECKBOX,CP_STARTUP_ENABLED,24,306,300,24,"Enable selected startup item");
+            w->value=a->startup_count>0 ? a->startup[0].enabled : 0;
+            w->disabled=a->startup_count<=0 || !a->host.startup_enable; w->anchors=DU_ANCHOR_BOTTOM;
+            add(a,DU_BUTTON,CP_STARTUP_REFRESH,390,306,140,24,"Refresh")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
+            add(a,DU_LABEL,CP_STARTUP_NOTE,24,338,CP_WIDTH-48,18,a->startup_count<0 ? "Startup list unavailable. Check registry and shortcuts." : a->startup_count ? "Changes take effect at the next desktop start." : "No startup programs.")->anchors=DU_ANCHOR_BOTTOM;
+        } else if (a->system_tab == 0) {
             snprintf(line, sizeof(line), "Version %s", a->host.version[0] ? a->host.version : "unknown"); add(a, DU_LABEL, C_SYS0, 140, 74, 336, 14, line);
             snprintf(line, sizeof(line), "Build %s", a->host.build[0] ? a->host.build : "unknown"); add(a, DU_LABEL, C_SYS1, 140, 92, 336, 14, line);
             add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "Classic computing, one woof at a time.");
@@ -1116,7 +1188,10 @@ static void system_pages(struct cp_app *a)
     } else if (a->page == CP_NETWORK) {
         network_build(a);
     } else if (a->page == CP_POWER) {
-        add(a, DU_LABEL, C_SYS0, 24, 40, 500, 14, "Firmware power status (standby is unavailable)");
+        char monitor[80]; snprintf(monitor,sizeof(monitor),"Monitor off: %d min (0 = Never)",a->cfg.monitor_seconds/60);
+        add(a,DU_LABEL,CP_SAVER_NOTE,24,40,300,16,monitor);
+        struct du_widget *mw=add(a,DU_SCROLLBAR,CP_MONITOR_WAIT,340,40,192,16,"");
+        mw->vertical=0; mw->total=1441; mw->page=1; mw->value=a->cfg.monitor_seconds/60;
         unsigned lines = power_read(a);
         for (unsigned i = 0; i < 20; i++) add(a,DU_LABEL,1800+(int)i,24,64+(int)i*14,CP_WIDTH-48,14,i<lines ? a->power_lines[i] : "");
         add(a, DU_BUTTON, CP_POWER_ACTION, 24, 350, 160, 24, "Shut Down...")->disabled=!a->host.power;
@@ -1210,7 +1285,7 @@ static void build(struct cp_app *a)
     if (user_page(a)) {
         user_build(a);
     } else if (a->page == CP_DISPLAY) {
-        static const char *const tabs[]={"Background","Appearance","Settings"};
+        static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver"};
         for (int k=0;k<CP_DISPLAY_TABS;k++) a->display_tabs[k].text[0]=tabs[k];
         w=du_get(u,C_TABS); w->id=CP_DISPLAY_TABS_ID; w->items=a->display_tabs;
         w->count=CP_DISPLAY_TABS; w->active=(unsigned)a->display_tab; w->disabled=a->mode_state!=0;
@@ -1235,6 +1310,22 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,970,240,64,292,16,"Colours and UI fonts follow the theme.");
             add(a,DU_LABEL,971,240,88,292,16,"Installed fonts can be previewed below.");
             cp_fonts_build(a);
+        } else if (a->display_tab==CP_SCREEN_SAVER) {
+            static const char *const names[]={"Blank","Ciuki logo","Starfield"};
+            add(a,DU_LABEL,1979,24,44,200,16,"Screen saver:");
+            for (int k=0;k<3;k++) a->saver_items[k]=(struct du_item){.text={names[k]},.selected=k==a->cfg.saver_kind};
+            w=add(a,DU_LISTVIEW,CP_SAVER_KIND,24,66,230,84,"");
+            w->items=a->saver_items; w->count=3; w->active=(unsigned)a->cfg.saver_kind; list_style(w,"Saver");
+            add(a,DU_BUTTON,CP_SAVER_ENABLE,24,166,230,24,a->cfg.saver_enabled ? "Enabled: Yes" : "Enabled: No");
+            char wait[80]; snprintf(wait,sizeof(wait),"Wait: %d minutes (0 = Never)",a->cfg.saver_seconds/60);
+            add(a,DU_LABEL,1978,24,208,350,16,wait);
+            w=add(a,DU_SCROLLBAR,CP_SAVER_WAIT,24,232,350,18,"");
+            w->vertical=0; w->total=1441; w->page=1; w->value=a->cfg.saver_seconds/60;
+            add(a,DU_BUTTON,CP_SAVER_PREVIEW,280,66,120,24,"Preview");
+            add(a,DU_BUTTON,CP_SAVER_SETTINGS,280,100,120,24,"Settings...");
+            add(a,DU_LABEL,1977,24,278,480,16,"Preview ends when you move the mouse or press a key.");
+            add(a,DU_LABEL,1976,24,302,480,16,"These savers have no additional settings.");
+            add(a,DU_LABEL,1975,24,326,480,16,"Monitor power: Power applet. Password protection: unavailable.");
         } else {
             add(a,DU_LABEL,CP_AREA_LABEL,24,44,232,16,"Resolution:");
             w=add(a,DU_LISTVIEW,CP_AREA,24,64,232,100,""); w->items=a->area_items; list_style(w,"Screen area");
@@ -1354,7 +1445,7 @@ static void build(struct cp_app *a)
     } else {
         system_pages(a);
     }
-    if (a->page == CP_SYSTEM) cp_display_refresh(a);
+    if (a->page == CP_SYSTEM && a->system_tab!=4) cp_display_refresh(a);
     cp_tick(a); sync(a);
     /* Honor the current surface when returning from an applet after a resize. */
     int dx = u->canvas.width - CP_WIDTH, dy = u->canvas.height - CP_HEIGHT;
@@ -1383,7 +1474,7 @@ void cp_open(struct cp_app *a, int page)
     if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_preview_cancel(a);
     if (page==CP_DEVICES) a->system_tab=1;
     if (page==CP_DRIVERS) a->system_tab=3;
-    if (page==CP_SYSTEM && a->system_tab!=2) a->system_tab=0;
+    if (page==CP_SYSTEM && a->system_tab!=2 && a->system_tab!=4) a->system_tab=0;
     if (page==CP_DISPLAY && !a->display_session) {
         load(a,&a->cfg); a->display_original=a->cfg; a->display_session=1; a->display_original_mode=0;
         cp_display_refresh(a);
@@ -1419,4 +1510,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { user_wipe(a); cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { free(a->startup); a->startup=NULL; cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

@@ -619,15 +619,22 @@ static void floppy_namespace_tests(void)
     floppy_store=s; floppy_disk=0;
     int control=file_open(&supervisor,"/dev/media",O_RDONLY,0);CHECK(control>=0);
     struct ciuki_media_state st={.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};media_user=&st;
+    CHECK(media_poll_events(file_fd(&supervisor,control))==POLLIN); /* fx-26: unread */
     OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));
+    CHECK(!media_poll_events(file_fd(&supervisor,control)));
     CHECK(st.type[0]==CIUKI_MEDIA_FLOPPY && !(st.removable_mask&1u) && st.type[1]==CIUKI_MEDIA_NONE);
     struct ciuki_media_remove load={CIUKI_MEDIA_VERSION,sizeof(load),0,0};media_user=&load;
     CHECK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load))==-ENXIO && !s->vfs.volumes[0]);
     load.drive=1;CHECK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load))==-ENODEV);load.drive=0;
+    CHECK(!media_poll_events(file_fd(&supervisor,control))); /* a failed load published nothing */
     floppy_disk=&media[1].dev;OK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load)));
+    /* fx-26: the published volume (WM_DEVICECHANGE arrival) makes the media
+     * description readable until it reads the state again. */
+    CHECK(media_poll_events(file_fd(&supervisor,control))==POLLIN);
     CHECK(s->vfs.volumes[0] && s->volumes[0].fat.type==12 && floppy_reads==2 && !s->volumes[0].fat.readonly && !s->volumes[0].fat.free_unknown);
     st=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};media_user=&st;
     OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));CHECK((st.removable_mask&1u) && st.type[0]==CIUKI_MEDIA_FLOPPY && st.generation[0]==media[1].dev.media_generation);
+    CHECK(!media_poll_events(file_fd(&supervisor,control)));
     struct ciuki_media_space sp={.version=CIUKI_MEDIA_VERSION,.size=sizeof(sp),.drive=0};media_user=&sp;
     OK(media_devctl(&supervisor,control,MEDIA_GET_SPACE,1,sizeof(sp)));
     CHECK(!sp.flags && sp.total_clusters==s->volumes[0].fat.clusters && sp.free_clusters==s->volumes[0].fat.free_clusters && sp.cluster_bytes);

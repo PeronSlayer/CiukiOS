@@ -25,6 +25,10 @@
 #define EC_DEFAULT_POLL_MS THINKPAD_EC_DEFAULT_POLL_MS
 #define EC_REFRESH_MS THINKPAD_EC_REFRESH_MS
 #define EC_SYNC_MS THINKPAD_EC_SYNC_MS
+#define EC_WATCH_MS THINKPAD_EC_WATCH_MS
+#define EC_TRIGGER_MS THINKPAD_EC_TRIGGER_MS
+#define EC_ACTIVE_MS THINKPAD_EC_ACTIVE_MS
+#define EC_ACTIVE_HOLD_MS THINKPAD_EC_ACTIVE_HOLD_MS
 #define EC_REPROBE_MS 10000u
 #define EC_FAILURE_LIMIT 8u
 #define EC_OP_TRANSACTIONS THINKPAD_EC_OP_TRANSACTIONS
@@ -450,14 +454,75 @@ static int ec_mirror(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
     if (disabled) klog("[ec] thinkpad resumed");
     return changed;
 }
+/* fx-26: one NVRAM watch step (no EC access); true when the byte changed. */
+static bool ec_watch(struct thinkpad_ec *e, uint64_t now)
+{
+    if (!e->io.nvram || (int64_t)(now - e->next_watch) < 0) return false;
+    e->next_watch = now + EC_WATCH_MS;
+    uint8_t byte = e->io.nvram(e->io.ctx);
+    __atomic_fetch_add(&e->window_nvram_polls, 1u, __ATOMIC_RELAXED);
+    bool changed = e->nvram_valid && byte != e->nvram_byte;
+    e->nvram_byte = byte; e->nvram_valid = true;
+    if (changed) {
+        __atomic_fetch_add(&e->window_nvram_changes, 1u, __ATOMIC_RELAXED);
+        e->trigger_pending = e->nvram_since = true;
+    }
+    return changed;
+}
 int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
     if (!e->io.now) return -ENODEV;
     if (!e->poll_ms) return e->available ? 0 : -ENODEV; /* ecpoll=0: no periodic EC traffic */
     uint64_t now = e->io.now(e->io.ctx);
+    (void)ec_watch(e, now);
     bool sync = e->sync_pending && e->available && (int64_t)(now - e->sync_due) >= 0;
-    if (!sync && (int64_t)(now - e->next_poll) < 0) return e->available ? 0 : -ENODEV;
-    return ec_mirror(e, m);
+    bool due = (int64_t)(now - e->next_poll) >= 0;
+    /* fx-26: a key seen in NVRAM, or the active cadence after a mirrored
+     * change, reads at once; key-driven reads are spaced by EC_TRIGGER_MS. */
+    bool active = e->available && (int64_t)(now - e->active_until) < 0 && (int64_t)(now - e->next_active) >= 0;
+    bool fast = e->available && (e->trigger_pending || active) && (int64_t)(now - e->next_fast) >= 0;
+    if (!sync && !due && !fast) return e->available ? 0 : -ENODEV;
+    if (fast) {
+        __atomic_fetch_add(e->trigger_pending ? &e->window_triggered : &e->window_active_reads, 1u, __ATOMIC_RELAXED);
+        e->trigger_pending = false; e->next_fast = now + EC_TRIGGER_MS; e->next_active = now + EC_ACTIVE_MS;
+    }
+    bool hinted = e->nvram_since;
+    int changed = ec_mirror(e, m);
+    if (changed > 0) {
+        /* Keys are active: follow the next presses at EC_ACTIVE_MS. A change
+         * the NVRAM did not show first is counted (the trigger missed it). */
+        e->active_until = now + EC_ACTIVE_HOLD_MS; e->next_active = now + EC_ACTIVE_MS;
+        if (e->io.nvram && !hinted) __atomic_fetch_add(&e->window_missed, 1u, __ATOMIC_RELAXED);
+    }
+    if (changed >= 0) e->nvram_since = false;
+    return changed;
+}
+/* fx-26: ms until the next poll step is due (watch, active read, trigger,
+ * 2 s poll); the worker's wait. Task context, under the caller's lock. */
+static uint32_t ec_next_ms(const struct thinkpad_ec *e, uint64_t now, uint32_t wait)
+{
+    if (!e->poll_ms || !e->available) return wait;
+    uint64_t next = e->next_poll;
+    if (e->io.nvram && (int64_t)(e->next_watch - next) < 0) next = e->next_watch;
+    if ((int64_t)(now - e->active_until) < 0) {
+        uint64_t active = (int64_t)(e->next_active - e->next_fast) > 0 ? e->next_active : e->next_fast;
+        if ((int64_t)(active - next) < 0) next = active;
+    }
+    if (e->trigger_pending && (int64_t)(e->next_fast - next) < 0) next = e->next_fast;
+    uint64_t left = (int64_t)(next - now) > 0 ? next - now : 0;
+    return left < wait ? (uint32_t)left : wait;
+}
+bool thinkpad_ec_keys_window(struct thinkpad_ec *e, char *out, size_t size)
+{
+    uint32_t polls = __atomic_exchange_n(&e->window_nvram_polls, 0u, __ATOMIC_RELAXED);
+    uint32_t changes = __atomic_exchange_n(&e->window_nvram_changes, 0u, __ATOMIC_RELAXED);
+    uint32_t triggered = __atomic_exchange_n(&e->window_triggered, 0u, __ATOMIC_RELAXED);
+    uint32_t active = __atomic_exchange_n(&e->window_active_reads, 0u, __ATOMIC_RELAXED);
+    uint32_t missed = __atomic_exchange_n(&e->window_missed, 0u, __ATOMIC_RELAXED);
+    if (!changes && !triggered && !active && !missed) return false;
+    ksnprintf(out, size, "[ec] thinkpad keys nvram_polls=%u nvram_changes=%u triggered=%u active_reads=%u missed=%u nvram=%02x ec=%02x",
+              polls, changes, triggered, active, missed, e->nvram_byte, e->status);
+    return true;
 }
 int thinkpad_ec_volume_refresh(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
@@ -485,6 +550,9 @@ static void native_write(void *ctx, uint16_t port, uint8_t v)
 { (void)ctx; (void)port; (void)v; }
 static uint64_t native_now(void *ctx) { (void)ctx; return g_ticks; }
 static void native_pause(void *ctx) { (void)ctx; task_sleep_ms(1); }
+/* fx-26: CMOS NVRAM through the platform's sole CMOS accessor (fs_port.c). */
+extern uint8_t fs_cmos_read(uint8_t reg) __attribute__((weak));
+static uint8_t native_nvram(void *ctx) { (void)ctx; return fs_cmos_read(THINKPAD_EC_NVRAM_MIXER); }
 static bool native_table_reserved(uint32_t address, uint16_t length)
 {
     /* The boot map is validated, sorted and non-overlapping. Require every
@@ -576,7 +644,7 @@ void thinkpad_ec_init(void)
         return;
     }
     klog("[ec] thinkpad transport=%s", acpi_ec_quirk_legacy && acpi_ec_quirk_legacy() ? "legacy" : "acpi");
-    struct thinkpad_ec_io io = {0, native_read, native_write, native_now, native_pause};
+    struct thinkpad_ec_io io = {0, native_read, native_write, native_now, native_pause, fs_cmos_read ? native_nvram : 0};
     int err = thinkpad_ec_probe(&native_ec, &io, true, &audio.master);
     if (err) {
         native_ec.active = native_ec.available = false;
@@ -620,11 +688,13 @@ static uint32_t ec_wait_ms(void)
 {
     uint32_t wait = native_ec.poll_ms ? native_ec.poll_ms : 60000u;
     kmutex_lock(&ec_lock);
+    uint64_t now = native_now(0);
     if (native_ec.sync_pending && native_ec.available) {
-        uint64_t now = native_now(0);
         uint64_t left = native_ec.sync_due > now ? native_ec.sync_due - now : 0;
         if (left < wait) wait = (uint32_t)left;
     }
+    /* fx-26: the NVRAM watch (100 ms) and the key-driven reads. */
+    wait = ec_next_ms(&native_ec, now, wait);
     kmutex_unlock(&ec_lock);
     return wait;
 }
@@ -665,6 +735,7 @@ void thinkpad_ec_window_emit(void)
 {
     char line[192];
     if (native_ec.io.now && thinkpad_ec_window(&native_ec, line, sizeof(line))) klog_periodic("%s", line);
+    if (native_ec.io.now && thinkpad_ec_keys_window(&native_ec, line, sizeof(line))) klog_periodic("%s", line);
 }
 int thinkpad_ec_poll_state(void)
 { return native_ec.io.now ? (int)native_ec.poll_ms : -1; }
@@ -693,6 +764,10 @@ void thinkpad_ec_start(void)
     if (t) {
         __atomic_store_n(&ec_worker_running, true, __ATOMIC_RELEASE);
         task_start(t); audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
+        /* fx-26: the key watch (NVRAM 60h every 100 ms, no EC traffic). */
+        if (native_ec.poll_ms)
+            klog("[ec] thinkpad keys watch_ms=%u source=%s active_ms=%u hold_ms=%u trigger_ms=%u",
+                 EC_WATCH_MS, native_ec.io.nvram ? "nvram" : "none", EC_ACTIVE_MS, EC_ACTIVE_HOLD_MS, EC_TRIGGER_MS);
     }
     else klog("[ec] thinkpad worker unavailable error=%d", -ENOMEM);
 }
