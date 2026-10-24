@@ -32,7 +32,9 @@ ACCESSORIES = {
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
     # G28: WordPad (RTF editor); links libfont for the Liberation faces and shares CiukNote's file helpers.
+    # G28b adds the Word and Write importers, the picture codec (stb) and the shared printing code.
     "wordpad": ["../wordpad/main.c", "../wordpad/app.c", "../wordpad/rich.c", "../wordpad/rtf.c", "../wordpad/layout.c",
+                "../wordpad/ole.c", "../wordpad/msword.c", "../wordpad/write.c", "../wordpad/image.c",
                 "../wordpad/fonts.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"],
 }
 PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *ACCESSORIES)
@@ -196,7 +198,7 @@ def build():
     sources["printspool"] = ["../printers/spool.c", "../libprint/print.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
-    for name in ("ciuknote", "paint", "viewer"):
+    for name in ("ciuknote", "paint", "viewer", "wordpad"):
         sources[name] += ["../libprint/print.c", "../libprint/render.c", "../libprint/dialog.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, *(["-DDP_NATIVE_VFS"] if name == "control" else []), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "sdk/win32/include"),

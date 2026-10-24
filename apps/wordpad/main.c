@@ -2,9 +2,12 @@
  * /Programs/wordpad: a WordPad-class rich text editor on libdeskui (G28).
  * Usage: wordpad [--channel-fd=N] [path] */
 #include "fonts.h"
+#include "image.h"
 #include "../libdeskui/job.h"
 #include "../libdeskui/recent.h"
+#include "../libprint/dialog.h"
 #include <errno.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +15,7 @@
 #include <unistd.h>
 
 struct pad_main {
-    struct wp_app app; struct du_ui ui; struct du_window window;
+    struct wp_app app; struct du_ui ui; struct du_window window; struct cp_ui printing;
     struct du_job opening; const char *path; char *raw; size_t length; int open_error; char resolved[CN_PATH]; uint64_t open_revision;
 };
 
@@ -21,6 +24,18 @@ static void host_recent(const char *path) { (void)du_recent_add(path); }
 static void host_quit(void *p) { du_window_close(&((struct pad_main *)p)->window); }
 static int close_request(struct du_window *w, void *p) { (void)w; return wp_close_request(p); }
 static void host_declined(void *p) { du_window_close_reply(&((struct pad_main *)p)->window, 0); }
+/* G31: Print opens the shared print dialog; the document is laid out for the chosen printer when OK is pressed. */
+static void host_print(void *p, const struct cp_page *initial)
+{
+    struct pad_main *m = p;
+    cp_ui_doc(&m->printing, &m->ui, m->app.named ? cn_basename(m->app.path) : "Untitled - WordPad", initial, wp_print_prepare, &m->app);
+}
+static void print_event(struct du_ui *u, const struct du_event *e, void *arg)
+{
+    struct wp_app *a = arg; struct pad_main *m = a->host;
+    if (!cp_ui_event(&m->printing, u, e)) wp_event(u, e, a);
+}
+static const struct wp_image_ops image_ops = {wp_image_decode, wp_image_png};
 
 /* The file named on the command line is read by a worker, so a large document never stalls the window. */
 static void load_argument(void *arg)
@@ -34,13 +49,14 @@ static void load_argument(void *arg)
 static void idle(void *arg)
 {
     struct pad_main *m = arg;
+    cp_ui_poll(&m->printing, &m->ui);
     if (du_job_ready(&m->opening)) {
         du_job_finish(&m->opening);
         int r = m->open_error;
         if (!r && m->open_revision != m->app.doc.revision) r = -EBUSY;   /* the user typed meanwhile */
         if (!r && m->length > WP_FILE_MAX) r = -EFBIG;
         if (!r) r = wp_open_bytes(&m->app, m->resolved, m->raw, m->length);
-        if (r) du_message(&m->ui, 999, "WordPad", r == -ENOTSUP ? "Word (.doc) and Write (.wri) documents cannot be opened yet." :
+        if (r) du_message(&m->ui, 999, "WordPad", (r == -ENOTSUP || r == -EINVAL) && m->app.reason ? m->app.reason :
                           r == -EFBIG ? "The file is larger than 16 MiB." : strerror(-r), DU_DLG_ICON_ERROR, NULL, 0, 0, 0);
         free(m->raw); m->raw = NULL; m->path = NULL;
         wp_refresh(&m->app);
@@ -79,15 +95,20 @@ int main(int argc, char **argv)
     }
     struct wp_app *a = &m->app;
     m->window.close_request = close_request; m->window.user = a;
-    a->fs = cn_native_fs(); a->draw = wp_fonts(); a->now = host_now; a->quit = host_quit; a->declined = host_declined;
+    (void)setlocale(LC_ALL, "");   /* G24: dates and times follow the user's regional settings */
+    du_help_topic(&m->ui, "wordpad");   /* G15: F1 opens this program's Help topic */
+    a->fs = cn_native_fs(); a->draw = wp_fonts(); a->images = &image_ops; a->format_time = strftime; a->print = host_print;
+    a->now = host_now; a->quit = host_quit; a->declined = host_declined;
     a->recent = host_recent; a->host = m;
     const char *tz = getenv("LANG");
-    a->a4 = !tz || strncmp(tz, "en_US", 5) != 0;   /* A4 unless the locale says US (G24 Regional Settings later chooses the paper) */
+    a->a4 = !tz || strncmp(tz, "en_US", 5) != 0;   /* A4 unless the region says US: the desktop passes the Regional Settings region as LANG (G24) */
     if (wp_attach(a, &m->ui)) { fprintf(stderr, "WordPad: out of memory\n"); wp_detach(a); du_window_destroy(&m->window); free(m); return 1; }
+    m->ui.event = print_event;
     m->path = path;
     du_window_accept_files(&m->window, 1);
     int r = du_run(&m->window, idle, m);
     du_job_finish(&m->opening); free(m->raw);
+    cp_ui_destroy(&m->printing);
     wp_detach(a); du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

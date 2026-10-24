@@ -16,6 +16,16 @@ void du_message(struct du_ui *u,int id,const char *title,const char *text,int ic
     u->dialog.id=id;u->dialog.count=2;u->dialog.cancel=cancel;
     snprintf(u->dialog.title,sizeof(u->dialog.title),"%s",title);
 }
+struct prepare_seen { int calls, fail; unsigned last_driver; struct cp_page last_page; };
+static int prepare(void *ctx,const struct cp_page *page,unsigned driver,struct cp_doc *out)
+{
+    struct prepare_seen *s=ctx;s->calls++;s->last_driver=driver;s->last_page=*page;
+    if (s->fail) return s->fail;
+    memset(out,0,sizeof(*out));out->pages=1;out->nops=1;out->ops=calloc(1,sizeof(*out->ops));
+    out->text=strdup("x");out->text_bytes=1;out->plain=strdup("x");out->plain_bytes=1;
+    out->ops[0]=(struct cp_op){.kind=CP_OP_TEXT,.size=20,.page=1,.x=100,.y=200,.length=1};
+    return 0;
+}
 static void complete(struct cp_ui *p,int button)
 {
     int id=ui.dialog.id;
@@ -64,6 +74,29 @@ int main(int argc,char **argv)
     p.config->printers[0].driver=CP_PCL;p.page.width=600;
     assert(ui.dialog.accept(&ui,0,ui.dialog.accept_ctx) && strstr(ui.dialog.items[9].text,"Letter, Legal or A4"));
     complete(&p,1);
+    /* G28b: a formatted document is laid out for the chosen printer when OK is pressed, then written by the worker */
+    {
+        struct prepare_seen seen = {0};
+        struct cp_page start = {595, 842, 1, 36, 54, 36, 54, 1, 0, 0};   /* A4 landscape, margins in points */
+        cp_ui_doc(&p, &ui, "Formatted", &start, prepare, &seen);
+        assert(ui.dialog.kind && p.document && p.page.width == 595 && p.page.landscape == 1 && p.page.left == 36 && !seen.calls);
+        complete(&p, 1); assert(!p.document && !seen.calls && !p.job.started);   /* cancel: nothing is prepared */
+        seen.fail = -ENOMEM;   /* the layout fails: the user is told and no job starts */
+        cp_ui_doc(&p, &ui, "Formatted", &start, prepare, &seen);
+        cp_ui_doc(&p, &ui, "Ignored", NULL, prepare, &seen);   /* a dialog is open: this request is ignored */
+        assert(!ui.dialog.accept(&ui, 0, ui.dialog.accept_ctx));
+        complete(&p, 0);
+        assert(seen.calls == 1 && seen.last_driver == CP_POSTSCRIPT && seen.last_page.width == 595 && seen.last_page.landscape == 1 && !p.job.started && !p.document);
+        seen.fail = 0;
+        cp_ui_doc(&p, &ui, "Formatted", &start, prepare, &seen);
+        du_set_text(&ui.dialog.items[5], "1 0 0");
+        complete(&p, 0);
+        assert(seen.calls == 2 && p.job.started);
+        while (!du_job_ready(&p.job)) sched_yield();
+        ui.dialog.kind = 0; cp_ui_poll(&p, &ui);
+        assert(!p.job.started && p.result > 0 && !p.doc.ops && !p.document);
+        struct cp_job job; assert(!cp_job_read(p.root, (unsigned)p.result, &job) && !strcmp(job.title, "Formatted") && job.page.landscape == 1 && job.page.left == 36);
+    }
     cp_ui_destroy(&p);
     puts("PASS G31 Print/Page Setup: validation, cancel, immutable text/image, async publication, save-prompt preservation");
     return 0;

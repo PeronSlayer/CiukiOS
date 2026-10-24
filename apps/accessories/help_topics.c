@@ -206,6 +206,103 @@ const struct help_topic help_topics[] = {
 "\n"
 "Double-click selects a word. Right-click for a menu of editing\n"
 "commands.\n"},
+{"wordpad", "WordPad", "Programs",
+ "WordPad;word processor;rich text;RTF;document;write;doc;wri;editor;print;insert;object;picture",
+"WordPad\n"
+"\n"
+"WordPad writes and edits documents with fonts, colours, bullets,\n"
+"tabs and pictures. It opens Rich Text Format (.rtf), Word 6, 95\n"
+"and 97 (.doc), Write (.wri) and text (.txt) files up to 16 MB and\n"
+"saves Rich Text Format or text. A document opened from Word or\n"
+"Write is saved under a new .rtf name.\n"
+"\n"
+"File      New, Open, Save, Save As, Print (Ctrl+P), Print Preview,\n"
+"          Page Setup and Exit.\n"
+"Edit      Undo and Redo (Ctrl+Z, Ctrl+Y) go back and forward over\n"
+"          many changes. Cut, Copy and Paste keep the formatting\n"
+"          between WordPad windows and other programs. Find,\n"
+"          Find Next (F3) and Replace (Ctrl+H).\n"
+"View      Toolbar, Format Bar, Ruler, Status Bar and Options.\n"
+"Insert    Date and Time, Picture and Object.\n"
+"Format    Font, Bullet Style, Paragraph and Tabs.\n"
+"\n"
+"Press F1 for this Help and Shift+F1, then click a button, to see\n"
+"what it does.\n"
+},
+{"wordpad-formatting", "Formatting text in WordPad", "Programs",
+ "format;font;bold;italic;underline;colour;paragraph;alignment;justify;bullets;indent;WordPad",
+"Formatting text in WordPad\n"
+"\n"
+"Select the text, then choose Format > Font or use the format bar:\n"
+"font, size, colour, Bold (Ctrl+B), Italic (Ctrl+I) and Underline\n"
+"(Ctrl+U). With nothing selected the choice applies to the text\n"
+"you type next.\n"
+"\n"
+"Format > Paragraph sets the left, right and first-line indents and\n"
+"the alignment: Left (Ctrl+L), Center (Ctrl+E), Right (Ctrl+R) or\n"
+"Justify (Ctrl+J, which spreads the words of every full line to\n"
+"both margins). Format > Bullet Style starts a bulleted list;\n"
+"press Enter on an empty bullet to end it.\n"
+"\n"
+"Format > Tabs sets the tab stops of the selected paragraphs.\n"
+},
+{"wordpad-ruler", "WordPad ruler, tabs and units", "Programs",
+ "ruler;indent;tab stop;units;inches;centimeters;points;picas;word wrap;no wrap;wrap to ruler;options;WordPad",
+"WordPad ruler, tabs and units\n"
+"\n"
+"The ruler shows the margins of the paragraph at the caret. Drag\n"
+"the top marker to change the first-line indent, the lower left\n"
+"marker to move the left indent and the right marker to change\n"
+"the right indent. Click an empty place on the ruler to add a tab\n"
+"stop, drag a tab stop to move it, or drag it off the ruler to\n"
+"remove it. The change applies to the selected paragraphs.\n"
+"\n"
+"View > Options chooses the measurement units (inches,\n"
+"centimeters, points or picas) for the ruler and the dialogs, and\n"
+"the word wrap of each kind of document: to the window, no wrap\n"
+"(lines run on, use the scroll bar) or to the ruler (the width of\n"
+"the printed page).\n"
+},
+{"wordpad-pictures", "Pictures and objects in WordPad", "Programs",
+ "picture;image;object;bitmap;BMP;PNG;JPEG;GIF;insert object;embedded;WordPad",
+"Pictures and objects in WordPad\n"
+"\n"
+"Insert > Picture puts a BMP, PNG, JPEG or GIF file at the caret.\n"
+"Insert > Object offers a new blank Bitmap Image or a picture\n"
+"from a file. A picture is part of the document: it is kept when\n"
+"you save as Rich Text Format, copied with the text, and printed.\n"
+"A picture wider than the page is reduced to fit.\n"
+"\n"
+"Pictures and objects in documents from other programs are shown\n"
+"when they are PNG, JPEG or bitmaps; other kinds are kept and\n"
+"shown as a frame.\n"
+},
+{"wordpad-files", "Word and Write files in WordPad", "Programs",
+ "Word;doc;wri;Write;import;convert;Windows 3.1;Word 6;Word 97;WordPad",
+"Word and Write files in WordPad\n"
+"\n"
+"WordPad opens Word for Windows 6.0, Word 95 and Word 97 and\n"
+"later documents (.doc) and Write documents (.wri) with their\n"
+"fonts, sizes, bold, italic, underline, colours, alignment,\n"
+"indents, tab stops, bullets and pictures. Tables become\n"
+"tab-separated lines. Headers, footers, footnotes and text boxes\n"
+"are not shown; WordPad says so when it opens such a file.\n"
+"\n"
+"Documents with a password, and files from versions of Word\n"
+"before 6.0, cannot be opened. Save the document as Rich Text\n"
+"Format or text in the program that made it.\n"
+},
+{"wordpad-printing", "Printing from WordPad", "Programs",
+ "print;printer;preview;page setup;paper;margins;pages;WordPad",
+"Printing from WordPad\n"
+"\n"
+"File > Print Preview shows the pages with the margins of File >\n"
+"Page Setup. File > Print (Ctrl+P) or the Print button of the\n"
+"preview opens the Print dialog: choose the printer, the pages and\n"
+"the number of copies, or print to a file. PostScript and PCL\n"
+"printers print the fonts, colours and pictures; a text printer\n"
+"prints the characters. The job appears in Printers.\n"
+},
 {"ciukide", "CiukIDE", "Programs",
  "CiukIDE;IDE;compiler;build;run;project;C;program;developer",
 "CiukIDE\n"
