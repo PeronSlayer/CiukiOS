@@ -397,6 +397,12 @@ void du_timer_stop(struct du_ui *u, int id)
 void du_tick(struct du_ui *u, uint64_t now)
 {
     if (now > u->now) u->now = now;
+    if(u->menu_opened && (u->menu>=0 || u->popup) && u->now>=u->menu_opened) {
+        unsigned step=(unsigned)((u->now-u->menu_opened)/20000000ull+1);
+        if(step>6) step=6;
+        if(step!=u->menu_animation_step) { du_invalidate(u,(struct du_rect){0,0,u->canvas.width,u->canvas.height}); u->menu_animation_step=step; }
+        if(step==6) u->menu_opened=0;
+    }
     if (u->service) u->service(u,u->user);
     du_dialog_tick(u);
     du_tip_tick(u);

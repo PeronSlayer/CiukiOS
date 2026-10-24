@@ -530,12 +530,23 @@ after each of these transients (`equivalent()`).
 | 89 | G20 folder-backed Quick Launch, Address, Links, Desktop and New Toolbar; toolbar removal and content menus; shortcut drops | old/new toolbar/task bounds and popup bounds; drag image | `desk_toolbar_slots`, `toolbar_activate`, `draw_toolbars`, `dnd_evaluate` | dedicated Quick Launch folder; source preserved on shortcut creation | taskbar toolbars |
 | 90 | G20 external-drag hover opening Start/folder submenus; Start/Programs folder snapshots, item drag reorder, context menu, small icons, long-menu scrolling and recent list refresh/clear | menu outer bounds and old/new rows | `custom_folder_items`, `custom_reorder`, `desk_shell_custom_updated`, `menu_scroll` | snapshots keep item identity through gestures | Start customization |
 | 91 | G20 inline Address editing, New Toolbar and Rename prompts; Settings Folder Options and Taskbar Programs property sheet | ordinary internal/client dialog and task-button damage; menus close | `custom_prompt`, `run_commit`, Control Panel `taskbar_event`, Files Folder Options request | existing client repaint protocol; no ABI additions | customization prompts |
+| 42 | Display appearance settings: desktop colour or pattern and theme are applied | the full screen, including wallpaper, desktop icons, bars, windows, menus and tooltips | Control Panel saves `desktop.cfg`; desktop settings reload → `desk_theme_changed`, wallpaper redraw | G23: background settings use the durable preview; the continuation adds Appearance, Effects, DPI, themes and additive monitor queries in rows 43–48 | display appearance |
 
-A window drag shows the window contents, as Windows 98 does by default; the
-caption animation of row 8 is the only window outline. Rows 25-30 came with
+| 43 | Appearance item colours, gradients, sizes, fonts and named schemes | complete desktop, frame caches, menus, icons and tooltips | `desk_shell_apply`, `desk_theme_changed`, `desk_appearance_apply` | G23: invalidate cached chrome even when the scheme name is unchanged | appearance items (`WM_ROW=34`) |
+| 44 | Effects: large icons, smoothing, outline drag and menu reveal animation | old/new outline, exposed desktop, each menu reveal, icon cells | `input.c`, `compositor.c`, `shell.c`, `libdeskui/menu.c` | G23: copies exclude outline bounds; every animation step invalidates menu | display effects (`WM_ROW=35`) |
+| 45 | Advanced small, large and custom font DPI | complete desktop; newly opened toolkit surfaces scale as a unit | `theme.c`, `shell.c`, `libdeskui/client.c` | G23: invalidate chrome and wallpaper; scale pointer input into logical coordinates | display dpi (`WM_ROW=36`) |
+| 46 | Desktop Theme package preview, Apply and rollback | complete desktop, icon and pointer state, menus and windows | `settings.c` package snapshots, Control Panel display transaction | G23: sound scheme accompanies the package and is restored on Cancel | desktop themes (`WM_ROW=37`) |
+| 47 | Background Browse result | wallpaper cache and complete desktop | existing background worker and display transaction | G23: Browse uses the same decode and repaint path as the picture list | background browse (`WM_ROW=38`) |
+
+| 48 | Settings > Advanced > General font-size sheet: small/large/custom, Apply and Cancel | client-owned modal contents; normal toolkit dialog and client damage | `control/app.c` Advanced property sheet; real controls in `control_modes_test.c` | G23: modal Cancel restores its entry snapshot, outer Display Cancel retains complete rollback | advanced font sheet (`WM_ROW=39`) |
+
+A window drag shows the window contents by default; the Effects preference selects a deferred outline drag; the
+caption animation of row 8 remains independent of that drag preference. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
-drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
+drag image. Row 42 records G23's settings reload: changes to the desktop
+colour, pattern, palette or visual metrics invalidate the full scene. Rows
+31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
 row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
 and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`).
 Rows 42–46 cover G7 and G8; G12 occupies executable rows 35–36, G17 row 37,

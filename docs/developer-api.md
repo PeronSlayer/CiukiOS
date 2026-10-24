@@ -3502,6 +3502,67 @@ G10: shared screen policy and serialized monitor power, syscall 74.
 ```c
 #define CIUKI_DISPLAY_SCREEN 2u
 #define CIUKI_DISPLAY_DPMS 3u
+```
+
+G23: additive queries. Existing display records remain unchanged.
+DEVCTL numbers follow main's highest allocated request, 0x53540004.
+Display authority may query via syscall 74 operations 4/5 as well.
+
+```c
+#define CIUKI_DISPLAY_MONITOR 4u
+#define CIUKI_DISPLAY_REFRESH 5u
+#define DISPLAY_GET_MONITOR 0x53540005u
+#define DISPLAY_GET_REFRESH 0x53540006u
+#define CIUKI_MONITOR_VERSION 1u
+#define CIUKI_MONITOR_EDID_VALID 1u
+#define CIUKI_MONITOR_DDC 2u
+#define CIUKI_TIMING_PREFERRED 1u
+#define CIUKI_TIMING_INTERLACED 2u
+struct ciuki_monitor_timing {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixel_clock_khz;
+    uint32_t horizontal_total;
+    uint32_t vertical_total;
+    uint32_t refresh_millihz;
+    uint32_t flags;
+};
+struct ciuki_monitor_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    char manufacturer[4];
+    uint32_t product;
+    uint32_t serial;
+    char name[32];
+    uint32_t manufacture_week;
+    uint32_t manufacture_year;
+    uint32_t minimum_hz;
+    uint32_t maximum_hz;
+    uint32_t timing_count;
+    struct ciuki_monitor_timing timings[4];
+    uint8_t edid[128];
+};
+struct ciuki_display_refresh {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mode_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t current_millihz;
+```
+
+0: firmware default, actual rate unknown
+
+```c
+uint32_t supported_count;
+    uint32_t rates_millihz[16];
+```
+
+monitor timings, not a mode-setting promise
+
+```c
+};
 #define CIUKI_SCREEN_VERSION 1u
 #define CIUKI_SCREEN_CONFIG 1u
 #define CIUKI_SCREEN_STATUS 2u
@@ -5753,7 +5814,13 @@ its system-sound scheme (mute, volume and DOS-window rules apply). There is
 no reply: like DAMAGE it only needs the window tuple of an open window.
 
 ```c
-DESK_V3_SOUND = 92
+DESK_V3_SOUND = 92,
+```
+
+G19: desktop-owned Control Panel action request from a v3 client.
+
+```c
+DESK_V3_LAUNCH = 93
 };
 ```
 
@@ -6374,6 +6441,8 @@ Query requires version=CIUKI_DISPLAY_VERSION and size=sizeof(*info).
 ```c
 int ciuki_display_query(struct ciuki_display_info *);
 int ciuki_display_set(uint16_t mode_id);
+int ciuki_display_monitor(struct ciuki_monitor_info *);
+int ciuki_display_refresh(struct ciuki_display_refresh *);
 #endif
 ```
 
@@ -7535,14 +7604,14 @@ DU_CHAR_W is only an average advance for rough sizing.
 
 ```c
 #define DU_CHAR_W  7
-#define DU_GLYPH_H 9
-#define DU_ROW     17
+#define DU_GLYPH_H (desk_appearance_active ? desk_font_cap(desk_theme->font_ui) : 9)
+#define DU_ROW     (desk_appearance_active ? desk_font_line(desk_theme->font_ui)+4 : 17)
 ```
 
 list, tree and menu-bar rows
 
 ```c
-#define DU_MENU_ITEM_H 19
+#define DU_MENU_ITEM_H (desk_appearance_active ? desk_metric(AP_MENU,19) : 19)
 #define DU_MENU_SEP_H  9
 ```
 
@@ -8142,6 +8211,7 @@ struct du_ui {
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;
     int focus, capture, hover;
+    uint64_t menu_opened; unsigned menu_animation_step;
     struct du_menu *menus; unsigned menu_count;
     int menu, menu_item, menu_keyboard, menu_armed, menu_track;
     const struct du_menu_item *popup; unsigned popup_count; int popup_x, popup_y, popup_owner;
@@ -8582,7 +8652,14 @@ du_window_turn path always presents those regions.
 
 ```c
 int present_rendered;
-    uint32_t server_pid, ping_serial;
+    int old_logical_width, old_logical_height;
+    unsigned dpi;
+```
+
+G23: physical surface pixels per 96 logical units; fixed until reopen.
+
+```c
+uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
 ```
@@ -8751,7 +8828,7 @@ monospace advance (Inconsolata 12, theme.h DESK_FONT_MONO)
 line height
 
 ```c
-#define DU_TA_BAR 16
+#define DU_TA_BAR (desk_appearance_active ? desk_metric(AP_SCROLLBAR,16) : 16)
 ```
 
 scrollbar thickness

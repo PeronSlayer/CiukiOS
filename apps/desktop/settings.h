@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include "../../sdk/libciuki/regional_model.h"
 #include "access.h"
+#include "appearance.h"
+#include "sounds.h"
 #define CFG_DIR "/system/settings"
 #define CFG_FILE "/system/settings/desktop.cfg"
 #define CFG_WALLPAPER_DIR "/system/wallpapers"
@@ -31,8 +33,25 @@ enum { CFG_KEYS_US, CFG_KEYS_IT, CFG_KEYS_COUNT };
 #define CFG_MOUSE_MIN 1
 #define CFG_MOUSE_MAX 10
 #define CFG_MOUSE_NORMAL 5
+#define CFG_DESKTOP_THEMES 4
+struct cfg_desktop_theme {
+    char name[32], wallpaper[CFG_PATH_MAX], skin[32];
+    int wallpaper_mode, saver_enabled, saver_seconds, saver_kind, pointer_scheme;
+    int document_icon, recycle_icon;
+    uint32_t desktop_color;
+    struct appearance appearance;
+    struct sound_scheme sounds;
+};
 struct ciuki_settings {
     struct regional regional;
+    char desktop_theme_name[32];
+    int document_icon, recycle_icon;
+    int pointer_scheme;
+    struct cfg_desktop_theme desktop_themes[CFG_DESKTOP_THEMES];
+    struct appearance appearance;
+    int appearance_set;
+    char scheme[32];
+    struct ap_scheme schemes[AP_SCHEMES];
     char theme[32];                 /* "Platinum", "Ciuki Blue" */
     char wallpaper[CFG_PATH_MAX];   /* "ciuki", "none", "builtin:<name>" or an absolute file path */
     int wallpaper_mode;             /* CFG_WALL_* */
@@ -76,6 +95,12 @@ int cfg_icon_position(const struct ciuki_settings *, const char *, int *, int *)
 int cfg_icon_move(struct ciuki_settings *, const char *, int, int);
 void cfg_icon_forget(struct ciuki_settings *, const char *);
 void cfg_icons_arrange(struct ciuki_settings *);
+int cfg_desktop_theme_save(struct ciuki_settings *,const char *,const struct sound_scheme *);
+int cfg_desktop_theme_use(struct ciuki_settings *,const char *,struct sound_scheme *);
+int cfg_desktop_theme_delete(struct ciuki_settings *,const char *);
+int cfg_scheme_save(struct ciuki_settings *, const char *);
+int cfg_scheme_delete(struct ciuki_settings *, const char *);
+int cfg_scheme_use(struct ciuki_settings *, const char *);
 int cfg_theme_index(const char *name);   /* -1 when unknown */
 /* G25: the theme in force: the high-contrast scheme while that mode is on, otherwise `theme`. */
 const char *cfg_effective_theme(const struct ciuki_settings *);

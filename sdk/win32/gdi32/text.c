@@ -154,6 +154,7 @@ static void compose(struct dc *d, const struct w32_gdi_glyph *g, int x,
   if (bounds.bottom > (LONG)s->height)
     bounds.bottom = (LONG)s->height;
   DWORD text = gdi_resolve_color(d, d->s.text);
+  int smoothing=gdi_smoothing();
   for (int yy = bounds.top; yy < bounds.bottom; yy++)
     for (int xx = bounds.left; xx < bounds.right; xx++) {
       if (!in_rect(clip, xx, yy) || !gdi_visible(d, xx, yy))
@@ -165,6 +166,7 @@ static void compose(struct dc *d, const struct w32_gdi_glyph *g, int x,
       if (d->s.viewport_ext.cy * d->s.window_ext.cy < 0)
         gy = g->height - 1 - gy;
       unsigned a = g->coverage[gy * g->pitch + gx];
+      if(!smoothing) a=a>=104 ? 255 : 0;
       if (!a)
         continue;
       if (a == 255) {

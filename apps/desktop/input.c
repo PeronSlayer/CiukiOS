@@ -116,7 +116,7 @@ void desk_focus(struct desktop *d, int i)
     desk_v3_pointer_release(d);
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
     release(d, &e);
-    if (d->keyboard_geometry) desk_geometry_end(d,1);
+    if (d->keyboard_geometry || d->geometry_outline) desk_geometry_end(d,1);
     d->drag=-1; d->resize_edges=0;
     struct ciuki_message m;
     desk_message(&m, DESK_FOCUS, 8);
@@ -253,6 +253,11 @@ void desk_geometry_begin(struct desktop *d, int i, int size)
 void desk_geometry_end(struct desktop *d, int cancel)
 {
     int i=d->drag;
+    if(d->geometry_outline) {
+        desk_damage_add(&d->damage,d->geometry_preview,d->width,d->height);
+        d->geometry_outline=0;
+        if(i>=0 && !cancel) desk_move(d,i,d->geometry_preview.x,d->geometry_preview.y);
+    }
     if (i>=0 && cancel && d->clients[i].window) {
         int size=d->keyboard_geometry==2 || d->resize_edges;
         d->resize_edges=0;
@@ -359,6 +364,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
             d->sh.bar_drag=d->sh.bar_resize=0;desk_shell_geometry(d);
         }
         d->sh.custom_drag=-1;d->sh.custom_dragging=0;d->sh.address_focus=0;
+        if (d->keyboard_geometry || d->geometry_outline) desk_geometry_end(d,1);
         if (d->shell && d->sh.dnd.active) desk_shell_drag_cancel(d);   /* fx-19: a cut input stream ends a drag */
         release(d, &e); d->drag = -1; d->resize_edges=0;
         if (d->shell) {
@@ -482,6 +488,12 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
                 if (d->resize_edges & DESK_EDGE_TOP) { f.y += dy; f.h -= dy; }
                 if (d->resize_edges & DESK_EDGE_BOTTOM) f.h += dy;
                 desk_resize(d, d->drag, f);
+            } else if(desk_appearance_active && !(desk_appearance.effects&AP_FULL_DRAG)) {
+                if(d->geometry_outline) desk_damage_add(&d->damage,d->geometry_preview,d->width,d->height);
+                d->geometry_preview=d->clients[d->drag].frame;
+                d->geometry_preview.x=d->mouse_x-d->drag_x; d->geometry_preview.y=d->mouse_y-d->drag_y;
+                d->geometry_outline=1;
+                desk_damage_add(&d->damage,d->geometry_preview,d->width,d->height);
             } else desk_move(d, d->drag, d->mouse_x - d->drag_x, d->mouse_y - d->drag_y);
         } else title_track(d);
         int target=d->v3_pointer_window && (d->clients[d->v3_pointer_window-1].v3_pointer&DESK_V3_CAPTURE) ?

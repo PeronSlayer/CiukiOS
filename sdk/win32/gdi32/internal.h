@@ -128,6 +128,7 @@ int gdi_info(HDC, const BITMAPINFO *, unsigned, void *, struct w32_dib *);
 void gdi_system_palette(DWORD *);
 void gdi_palette_targets(void);
 void gdi_palette_reset(void);
+int gdi_smoothing(void);
 int gdi_text(HDC, int, int, unsigned, const RECT *, const void *, unsigned,
              const int *, int);
 /* f5-10C selection layer (font.c). */

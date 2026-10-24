@@ -10,6 +10,7 @@
 #include "settings.h"
 #include "users.h"
 #include "customize.h"
+#include "theme.h"
 #include "shell_link.h"
 #include "settings_catalog.h"
 #include "folder.h"
@@ -41,6 +42,9 @@ struct desktop;
 int desk_shell_program_icon(struct desktop *, int, const struct desk_packet *, const struct ciuki_surface_info *, int);
 int desk_shell_program_balloon(struct desktop *, int, const struct desk_packet *);
 void desk_shell_program_remove(struct desktop *, uint32_t);
+#define SH_TRAY_ICON_SIZE desk_scale(16)
+#define SH_TRAY_GAP desk_scale(4)
+#define SH_TRAY_MARGIN desk_scale(6)
 /* Tray identifiers; geometry places Notifications next to the clock. */
 
 /* G30 Resource Meter: shown while a resmeter client has a window; levels as apps/systools rm_state (0 ok, 1 low, 2 critical). */
@@ -107,6 +111,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
 struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
 struct sh_menu { int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };
+struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
 struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };

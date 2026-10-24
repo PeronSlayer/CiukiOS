@@ -7,7 +7,10 @@
 #define ITEM_H DU_MENU_ITEM_H
 #define SEP_H DU_MENU_SEP_H
 
-static int label_width(const char *s) { return du_label_width(s); }
+static int label_width(const char *s) {
+    struct desk_theme role; const struct desk_theme *saved=desk_theme_role(&role,AP_MENU);
+    int width=du_label_width(s); desk_theme=saved; return width;
+}
 
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 
@@ -89,6 +92,7 @@ static void draw_dropdown(struct du_ui *u, const struct du_menu_item *items, uns
         du_fill(c, box, desk_mix(DU_HILITE, DU_FACE, 110));
         du_outline(c, box, desk_mix(desk_theme->outline, DU_SHADOW, 120));
     } else { du_fill(c, box, DU_FACE); du_edge(c, box, DU_RAISED); }
+    if(desk_appearance_active) du_fill(c,(struct du_rect){box.x+1,box.y+1,box.w-2,box.h-2},desk_appearance.item[AP_MENU].colour);
     int y = box.y + 3;
     for (unsigned i = 0; i < n; i++) {
         const struct du_menu_item *it = &items[i];
@@ -98,7 +102,7 @@ static void draw_dropdown(struct du_ui *u, const struct du_menu_item *items, uns
             y += h; continue;
         }
         int sel = (int)i == u->menu_item, disabled = (it->flags & DU_ITEM_DISABLED) != 0;
-        uint32_t ink = sel ? DU_SELECT_INK : DU_INK;
+        uint32_t ink = sel ? DU_SELECT_INK : desk_appearance_active ? desk_appearance.item[AP_MENU].text : DU_INK;
         if (sel) {
             struct du_rect hl = {box.x + (platinum ? 1 : 3), y, box.w - (platinum ? 2 : 6), h};
             if (platinum) {
@@ -139,6 +143,7 @@ static const struct du_menu_item *open_items(const struct du_ui *u, unsigned *n,
 
 void du_draw_menus(struct du_ui *u)
 {
+    struct desk_theme role; const struct desk_theme *saved=desk_theme_role(&role,AP_MENU);
     struct du_canvas *c = &u->canvas;
     int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     if (u->menu_count && platinum) {
@@ -156,7 +161,15 @@ void du_draw_menus(struct du_ui *u)
     }
     unsigned n; struct du_rect box;
     const struct du_menu_item *items = open_items(u, &n, &box);
-    if (items) draw_dropdown(u, items, n, box);
+    if (items) {
+        struct du_rect saved=c->clip;
+        if(u->menu_opened && u->now>=u->menu_opened && u->now-u->menu_opened<120000000ull) {
+            int shown=(int)((u->now-u->menu_opened)/20000000ull+1)*box.h/6;
+            c->clip=du_intersection(c->clip,(struct du_rect){box.x,box.y,box.w,shown});
+        }
+        draw_dropdown(u, items, n, box); c->clip=saved;
+    }
+    desk_theme=saved;
 }
 
 static void menu_damage(struct du_ui *u)
@@ -171,6 +184,8 @@ void du_menu_open(struct du_ui *u, int menu, int keyboard)
     if (menu < 0 || (unsigned)menu >= u->menu_count) return;
     if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_OPEN);
     menu_damage(u);
+    u->menu_opened=desk_appearance_active && (desk_appearance.effects&AP_MENU_ANIMATION) ? u->now : 0;
+    u->menu_animation_step=0;
     u->popup = NULL; u->menu = menu; u->menu_keyboard = keyboard; u->menu_track = 0; u->menu_item = -1;
     if (keyboard)
         for (unsigned i = 0; i < u->menus[menu].count; i++)
@@ -188,6 +203,8 @@ void du_popup(struct du_ui *u, const struct du_menu_item *items, unsigned n, int
 {
     if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_OPEN);
     menu_damage(u);
+    u->menu_opened=desk_appearance_active && (desk_appearance.effects&AP_MENU_ANIMATION) ? u->now : 0;
+    u->menu_animation_step=0;
     u->menu = -1; u->popup = items; u->popup_count = n; u->popup_x = x; u->popup_y = y;
     u->popup_owner = owner; u->menu_item = -1; u->menu_track = 0; menu_damage(u);
 }

@@ -104,12 +104,12 @@ void cp_fonts_poll(struct cp_app *a)
     for (unsigned i=0;i<a->font_count;i++) a->font_items[i]=(struct du_item){.text={a->fonts[i].family,a->fonts[i].style,a->fonts[i].file}};
     struct du_widget *w=du_get(a->ui,CP_FONT_LIST);
     if (w) { w->items=a->font_items; w->count=a->font_count; du_invalidate(a->ui,w->box); }
-    if (a->page==CP_DISPLAY && a->display_tab==CP_APPEARANCE) du_invalidate(a->ui,(struct du_rect){24,236,a->ui->canvas.width-48,114});
+    if (a->page==CP_FONTS) du_invalidate(a->ui,(struct du_rect){24,236,a->ui->canvas.width-48,114});
     free(j->result); free(j); a->font_job=NULL;
 }
 int cp_fonts_event(struct cp_app *a, const struct du_event *e)
 {
-    if ((a->page != CP_DISPLAY || a->display_tab != CP_APPEARANCE) || e->id != CP_FONT_LIST) return 0;
+    if ((a->page != CP_FONTS) || e->id != CP_FONT_LIST) return 0;
     if ((e->type == DU_EV_SELECT || e->type == DU_EV_OPEN) && e->index >= 0 && (unsigned)e->index < a->font_count) {
         select_face(a,(unsigned)e->index); du_invalidate_widget(a->ui,CP_FONT_LIST); du_invalidate(a->ui,(struct du_rect){24,236,a->ui->canvas.width-48,114});
     }

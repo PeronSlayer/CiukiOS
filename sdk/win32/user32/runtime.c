@@ -357,6 +357,115 @@ int strncmp(const char *a, const char *b, size_t n) {
 
 /* G12: the desktop owns session settings and requested durable writes. */
 void u32_settings(void) { u32_input_refresh(); }
+/* The desktop owns this existing plain configuration file. Only its keyboard
+ * and double-click keys cross this boundary; the desktop theme never does. */
+static int compare_prefix(const char *a, const char *b, UINT n) {
+  for (UINT i = 0; i < n; i++)
+    if (a[i] != b[i])
+      return 1;
+  return 0;
+}
+/* Merge only the shared appearance keys. CREATE_NEW serializes writers;
+ * flush and replace publish a complete file, preserving unrelated settings. */
+BOOL u32_appearance_commit(const struct appearance *a) {
+  if(!ap_valid(a)) return u32_fail(87);
+  char *data=u32_alloc(32769), *output=u32_alloc(32769+AP_HEX_BYTES+64);
+  if(!data || !output) { u32_free(data); u32_free(output); return u32_fail(8); }
+  char hex[AP_HEX_BYTES+1]; ap_encode(a,hex);
+  UINT saved=u32_suspend(); DWORD count=0, used=0, error=0;
+  const char *path="C:\\system\\settings\\desktop.cfg";
+  const char *temporary="C:\\system\\settings\\desktop.cfg.appearance.tmp";
+  HANDLE in=CreateFileA(path,0x80000000u,7,0,3,0,0);
+  if(in!=K32_INVALID) {
+    if(!ReadFile(in,data,32768,&count,0) || count==32768) error=13;
+    CloseHandle(in);
+  } else if(GetLastError()!=2 && GetLastError()!=3) error=GetLastError();
+  data[count]=0;
+  for(DWORD at=0; !error && at<count;) {
+    DWORD start=at; while(at<count && data[at]!='\n') at++;
+    if(at<count) at++;
+    DWORD n=at-start;
+    if((n>=11 && !compare_prefix(data+start,"appearance=",11)) ||
+       (n>=14 && !compare_prefix(data+start,"desktop_color=",14))) continue;
+    w32_copy(output+used,data+start,n); used+=n;
+  }
+  if(used && output[used-1]!='\n') output[used++]='\n';
+  w32_copy(output+used,"appearance=",11); used+=11;
+  w32_copy(output+used,hex,AP_HEX_BYTES); used+=AP_HEX_BYTES; output[used++]='\n';
+  w32_copy(output+used,"desktop_color=",14); used+=14;
+  ap_hexword(output+used,a->item[AP_DESKTOP].colour,6); used+=6; output[used++]='\n';
+  HANDLE out=K32_INVALID;
+  if(!error) {
+    out=CreateFileA(temporary,0x40000000u,0,0,1,0,0);
+    if(out==K32_INVALID) error=GetLastError();
+  }
+  if(out!=K32_INVALID) {
+    DWORD written=0;
+    if(!WriteFile(out,output,used,&written,0) || written!=used || !FlushFileBuffers(out)) error=GetLastError() ? GetLastError() : 29;
+    CloseHandle(out);
+    if(!error) {
+      int32_t status=(int32_t)u32_backend.gate(CIUKI_SYS_RENAME,
+        U32_PTR("/system/settings/desktop.cfg.appearance.tmp"),U32_PTR("/system/settings/desktop.cfg"),0);
+      if(status<0) error=status==-13 ? 5 : 29;
+    }
+    if(error) DeleteFileA(temporary);
+  }
+  u32_resume(saved); u32_free(data); u32_free(output);
+  return error ? u32_fail(error) : 1;
+}
+void u32_settings(void) {
+  static BOOL read_once;
+  static DWORD last;
+  DWORD now = u32_ticks();
+  if (read_once && (DWORD)(now - last) < 1000)
+    return;
+  read_once = 1;
+  last = now;
+  DWORD saved_error = GetLastError();
+  char *data = u32_alloc(32769);
+  if (!data)
+    return;
+  UINT saved = u32_suspend();
+  HANDLE file = CreateFileA("C:\\system\\settings\\desktop.cfg", 0x80000000, 7,
+                            0, 3, 0, 0);
+  DWORD count = 0;
+  BOOL ok = file != K32_INVALID && ReadFile(file, data, 32768, &count, 0);
+  if (file != K32_INVALID)
+    CloseHandle(file);
+  u32_resume(saved);
+  if (ok && count <= 32768) {
+    data[count] = 0;
+    struct appearance appearance;
+    if(ap_settings_decode(&appearance,data,count)) {
+      char encoded[AP_HEX_BYTES+1]; ap_encode(&appearance,encoded); u32_appearance_load(encoded);
+    } else u32_appearance_load("");
+    for (char *line = data; *line;) {
+      char *end = line;
+      while (*end && *end != '\n')
+        end++;
+      char finish = *end;
+      *end = 0;
+      if (w32_strlen(line) >= 11 && !compare_prefix(line, "keyboard=it", 11))
+        u32_layout = 1;
+      else if (w32_strlen(line) >= 11 &&
+               !compare_prefix(line, "keyboard=us", 11))
+        u32_layout = 0;
+      else if (w32_strlen(line) >= 16 &&
+               !compare_prefix(line, "double_click_ms=", 16)) {
+        UINT n = 0;
+        for (char *v = line + 16; *v >= '0' && *v <= '9' && n <= 5000; v++)
+          n = n * 10 + (*v - '0');
+        if (n >= 200 && n <= 900)
+          SetDoubleClickTime(n);
+      }
+      if (!finish)
+        break;
+      line = end + 1;
+    }
+  }
+  u32_free(data);
+  SetLastError(saved_error);
+}
 
 void u32_clear_thread_input(void) {
   for (UINT i=0;i<U32_THREADS;i++) if (threads[i].id) {

@@ -7,7 +7,7 @@
 #define HEADER_H 18
 #define CELL_W 76
 #define CELL_H 68
-#define SB 16
+#define SB (desk_appearance_active ? desk_metric(AP_SCROLLBAR,16) : 16)
 
 struct layout {
     struct du_rect body, area, header;

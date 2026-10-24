@@ -41,7 +41,7 @@
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_DISPLAY_TABS };
+enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_EFFECTS, CP_THEMES, CP_DISPLAY_TABS };
 enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
 enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS };
 enum { CP_WALL_PATTERN=2001 };
@@ -134,6 +134,10 @@ struct cp_host {
     int (*sound_validate)(void *, const char *);
     int (*sound_schemes)(void *, char names[][SOUND_SCHEME_NAME], unsigned);
     int (*sound_scheme)(void *, unsigned, const char *, struct sound_scheme *);
+    int (*monitor)(void *,struct ciuki_monitor_info *);
+    int (*refresh_rates)(void *,struct ciuki_display_refresh *);
+    struct ciuki_monitor_info monitor_info;
+    struct ciuki_display_refresh refresh_info;
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*engine)(void *, struct ciuki_accel_info *);
     int (*engine_info)(void *, struct ciuki_display_engine_info *);
@@ -271,6 +275,18 @@ struct cp_app {
     struct du_item pattern_items[DESK_WALL_PATTERNS];
     struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
     char wall_labels[CP_WALLPAPERS + 8][48];
+    struct appearance advanced_original;
+    int advanced_original_set, advanced_dirty;
+    uint32_t advanced_colour;
+    struct sound_scheme display_original_sounds;
+    int display_sounds_dirty;
+    char monitor_line[160];
+    int appearance_item, appearance_scheme;
+    struct du_item appearance_items[AP_ITEMS], appearance_schemes[AP_BUILTINS+AP_SCHEMES];
+    char appearance_names[AP_BUILTINS+AP_SCHEMES][32];
+    unsigned appearance_count;
+    struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 16], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
+    char wall_labels[CP_WALLPAPERS + 16][48];
     uint32_t preview[192 * 144];
     int preview_valid;
     struct desk_image image;

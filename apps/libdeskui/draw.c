@@ -320,6 +320,11 @@ int du_text_width_font(int font, const char *s) { return desk_text_measure(font,
 
 static void text_font_rows(struct du_canvas *c, int font, int x, int y, const char *s, size_t chars, uint32_t colour)
 {
+    if(desk_appearance_active) {
+        struct desk_paint target=painter(c);
+        desk_paint_text_n_aa(&target,font,x,y+desk_font_cap(font),s,chars,colour,desk_theme->text_aa);
+        return;
+    }
     const struct desk_font *f=desk_font(font);
     int baseline=y+desk_font_cap(font), aa=desk_theme->text_aa;
     /* fx-15: cull by the glyph boxes, not by the pen or the capital line.

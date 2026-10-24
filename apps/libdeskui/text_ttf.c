@@ -4,6 +4,8 @@
 #include <ciuki/font.h>
 #include <errno.h>
 #include <string.h>
+/* Standalone font-store probes may use this painter without a window theme. */
+#pragma weak desk_theme
 struct text_painter { struct du_canvas *canvas; uint32_t colour; };
 static int glyph(void *ctx, int x, int y, const struct ciuki_font_bitmap *b)
 {
@@ -25,6 +27,7 @@ static int glyph(void *ctx, int x, int y, const struct ciuki_font_bitmap *b)
         const uint8_t *src = b->coverage + (size_t)(row - y) * b->stride;
         for (int64_t col = x0; col < x1; col++) {
             unsigned a = src[col - x];
+            if(&desk_theme && desk_theme && !desk_theme->text_aa) a=a>=104 ? 255 : 0;
             if (!a) continue;
             uint32_t old = dst[col], colour = 0;
             for (unsigned shift = 0; shift < 24; shift += 8)

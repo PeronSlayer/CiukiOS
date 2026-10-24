@@ -128,7 +128,7 @@ void cp_engine_refresh(struct cp_app *a)
         else snprintf(a->engine_line,sizeof(a->engine_line),"2D engine: %s; capabilities 0x%X",
             legacy.quarantined ? "quarantined" : legacy.capabilities ? "available" : "software rendering",legacy.capabilities);
     }
-    label(a,974,a->engine_line);
+    label(a,974,a->monitor_line);
 }
 int cp_display_refresh(struct cp_app *a)
 {
@@ -156,6 +156,18 @@ int cp_display_refresh(struct cp_app *a)
         }
         depths_build(a, d.bpp); a->preview_valid = 0;
     } else memset(&a->display, 0, sizeof(a->display));
+    a->host.monitor_info=(struct ciuki_monitor_info){.version=CIUKI_MONITOR_VERSION,.size=sizeof(a->host.monitor_info)};
+    if(a->host.monitor) (void)a->host.monitor(a->host.ctx,&a->host.monitor_info);
+    a->host.refresh_info=(struct ciuki_display_refresh){.version=CIUKI_MONITOR_VERSION,.size=sizeof(a->host.refresh_info)};
+    for(unsigned i=0;i<d.mode_count && i<32;i++) if(d.modes[i].current) a->host.refresh_info.mode_id=d.modes[i].id;
+    if(a->host.refresh_rates) (void)a->host.refresh_rates(a->host.ctx,&a->host.refresh_info);
+    const struct ciuki_monitor_info *m=&a->host.monitor_info;
+    if(m->flags&CIUKI_MONITOR_EDID_VALID) {
+        if(a->host.refresh_info.supported_count) {
+            uint32_t hz=a->host.refresh_info.rates_millihz[0];
+            snprintf(a->monitor_line,sizeof(a->monitor_line),"Monitor: %.24s; EDID %u.%03u Hz; refresh: default",m->name[0] ? m->name : m->manufacturer,hz/1000,hz%1000);
+        } else snprintf(a->monitor_line,sizeof(a->monitor_line),"Monitor: %.31s; refresh: firmware default",m->name[0] ? m->name : m->manufacturer);
+    } else snprintf(a->monitor_line,sizeof(a->monitor_line),"Monitor: not detected; refresh: firmware default");
     cp_engine_refresh(a);
     info_lines(a);
     label(a,972,a->adapter_lines[4]); label(a,973,a->adapter_lines[2]);

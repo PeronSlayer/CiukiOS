@@ -5,7 +5,7 @@
 #include "deskui.h"
 void du_control_help(struct du_widget *);
 
-#define DU_MENUBAR 20
+#define DU_MENUBAR (desk_appearance_active ? desk_metric(AP_MENU,20) : 20)
 #define DU_DOUBLE_CLICK_NS 500000000ull
 
 void du_region_add(struct du_rect *, unsigned *, struct du_rect);

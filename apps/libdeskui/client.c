@@ -106,8 +106,12 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     if (!len || len > DESK_TITLE_MAX || width <= 0 || height <= 0 ||
         min_width < 0 || min_height < 0 || (min_width == 0) != (min_height == 0) ||
         min_width > width || min_height > height) { errno = EINVAL; return -1; }
+    (void)desk_theme_poll(DESK_SETTINGS_PATH,du_now());
+    w->dpi=desk_appearance_active ? desk_appearance.dpi : 96;
+    desk_theme_logical(1);
+    int physical_w=(width*(int)w->dpi+48)/96, physical_h=(height*(int)w->dpi+48)/96;
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return -1;
-    w->surface = ciuki_surface_create((uint32_t)width, (uint32_t)height, CIUKI_SURFACE_XRGB8888);
+    w->surface = ciuki_surface_create((uint32_t)physical_w, (uint32_t)physical_h, CIUKI_SURFACE_XRGB8888);
     if (w->surface < 0) return -1;
     if (ciuki_surface_info(w->surface, &w->info) || !desk_surface_valid(&w->info)) goto fail;
     w->pixels = ciuki_surface_map(w->surface, PROT_READ | PROT_WRITE);
@@ -132,12 +136,12 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4); queue(w, &m);
     desk_message(&m, DESK_CREATE_WINDOW, 44 + (unsigned)len);
-    desk_put32(m.data + 4, (uint32_t)width); desk_put32(m.data + 8, (uint32_t)height); desk_put32(m.data + 12, (uint32_t)len);
+    desk_put32(m.data + 4, (uint32_t)physical_w); desk_put32(m.data + 8, (uint32_t)physical_h); desk_put32(m.data + 12, (uint32_t)len);
     memcpy(m.data + 16, title, len); m.fd_count = 1; m.fds[0] = w->surface;
     if (w->resizable) {
         unsigned n = 16 + (unsigned)len;
         desk_put32(m.data + n, DESK_RESIZABLE);
-        desk_put32(m.data + n + 4, (uint32_t)min_width); desk_put32(m.data + n + 8, (uint32_t)min_height);
+        desk_put32(m.data + n + 4, (uint32_t)(min_width*(int)w->dpi+48)/96); desk_put32(m.data + n + 8, (uint32_t)(min_height*(int)w->dpi+48)/96);
         desk_put32(m.data + n + 12, CIUKI_SURFACE_DIMENSION_MAX); desk_put32(m.data + n + 16, CIUKI_SURFACE_DIMENSION_MAX);
         desk_put32(m.data + n + 20, 1); desk_put32(m.data + n + 24, 1);
     }
@@ -168,7 +172,7 @@ static void discard_replacement(struct du_window *w)
     munmap(w->pixels,w->info.allocation_bytes); close(w->surface); free(w->back);
     w->surface = w->old_surface; w->info = w->old_info; w->pixels = w->old_pixels; w->back = w->old_back;
     w->old_surface = -1; w->old_pixels = w->old_back = NULL; w->replacement = w->swap_sent = 0;
-    du_resize(w->ui,w->back,(int)w->info.width,(int)w->info.height);
+    du_resize(w->ui,w->back,w->old_logical_width,w->old_logical_height);
 }
 static int replacement(struct du_window *w)
 {
@@ -181,13 +185,16 @@ static int replacement(struct du_window *w)
     if (ciuki_surface_info(fd,&info) || !desk_surface_valid(&info)) goto fail;
     pixels = ciuki_surface_map(fd,PROT_READ|PROT_WRITE);
     if (pixels == MAP_FAILED) { pixels = NULL; goto fail; }
-    back = malloc((size_t)info.width*info.height*4);
+    int logical_w=((int)info.width*96+(int)w->dpi/2)/(int)w->dpi;
+    int logical_h=((int)info.height*96+(int)w->dpi/2)/(int)w->dpi;
+    back = malloc((size_t)logical_w*logical_h*4);
     if (!back) { errno = ENOMEM; goto fail; }
+    w->old_logical_width=w->ui->canvas.width; w->old_logical_height=w->ui->canvas.height;
     w->old_surface = w->surface; w->old_info = w->info; w->old_pixels = w->pixels; w->old_back = w->back;
     w->surface = fd; w->info = info; w->pixels = pixels; w->back = back;
     w->damage_count=0;
     w->replacement = 1; w->configure_serial = w->request_serial; w->request_serial = 0; w->damaged = 0;
-    du_resize(w->ui,back,(int)info.width,(int)info.height);
+    du_resize(w->ui,back,logical_w,logical_h);
     return 0;
 fail: {
     int error = errno ? errno : EINVAL;
@@ -212,6 +219,22 @@ void du_window_present(struct du_window *w)
 {
     if (w->closed || w->swap_sent || w->present_pending) return;
     int width = (int)w->info.width, height = (int)w->info.height;
+    if(w->dpi && w->dpi!=96) {
+        int lw=w->ui->canvas.width, lh=w->ui->canvas.height;
+        int x0=width,y0=height,x1=-1,y1=-1;
+        for(int y=0;y<height;y++) for(int x=0;x<width;x++) {
+            uint32_t value=w->back[(size_t)(((2*y+1)*lh)/(2*height))*lw+((2*x+1)*lw)/(2*width)];
+            uint32_t *dst=w->pixels+(size_t)y*(w->info.stride/4)+x;
+            if(*dst==value && !w->replacement) continue;
+            *dst=value;
+            if(x<x0) x0=x;
+            if(y<y0) y0=y;
+            if(x>x1) x1=x;
+            if(y>y1) y1=y;
+        }
+        if(x1>=0) add_damage(w,(struct du_rect){x0,y0,x1-x0+1,y1-y0+1});
+        return;
+    }
     unsigned regions=w->present_rendered && !w->replacement ? w->ui->frame_count : 1;
     for (unsigned n=0;n<regions;n++) {
         struct du_rect r=w->present_rendered && !w->replacement ? w->ui->frames[n] : (struct du_rect){0,0,width,height};
@@ -383,11 +406,15 @@ int du_window_turn(struct du_window *w, uint64_t now)
             break;
         case DESK_FOCUS: du_window_focus(w->ui, p.focused != 0); break;
         case DESK_DROP_FILES:
-            if (w->accept_files) du_emit(w->ui, (struct du_event){.type = DU_EV_DROPFILES, .x = p.x, .y = p.y, .index = (int)p.serial});
+            if (w->accept_files) du_emit(w->ui, (struct du_event){.type = DU_EV_DROPFILES, .x = (int)(((int64_t)p.x*2+1)*w->ui->canvas.width/(2*w->info.width)), .y = (int)(((int64_t)p.y*2+1)*w->ui->canvas.height/(2*w->info.height)), .index = (int)p.serial});
             if (w->message) w->message(w, &p, w->user);
             break;
         case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
             /* Repair remembered input on the desktop's backlog RESYNC too. */
+            if(p.event.type==CIUKI_INPUT_MOTION && w->dpi && w->dpi!=96) {
+                p.event.value=(int)(((int64_t)p.event.value*2+1)*w->ui->canvas.width/(2*w->info.width));
+                p.event.value2=(int)(((int64_t)p.event.value2*2+1)*w->ui->canvas.height/(2*w->info.height));
+            }
             du_input(w->ui, &p.event); break;
         default: if (w->message) w->message(w, &p, w->user); break;
         }

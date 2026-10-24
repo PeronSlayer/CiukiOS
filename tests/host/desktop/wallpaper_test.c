@@ -92,6 +92,14 @@ static void settings(void)
     static const char bad[] = "wallpaper_mode=cover\nwallpaper_mode=Fill\nwallpaper_mode=\n";
     cfg_defaults(&s);
     assert(cfg_parse(&s, bad, sizeof(bad) - 1) == 3 && s.wallpaper_mode == CFG_WALL_FILL);
+    for (unsigned k=0;k<8;k++) {
+        char pattern[24]; snprintf(pattern,sizeof(pattern),"wallpaper=pattern:%u\n",k);
+        cfg_defaults(&s); assert(cfg_parse(&s,pattern,strlen(pattern))==0);
+        char value[16]; snprintf(value,sizeof(value),"pattern:%u",k); assert(!strcmp(s.wallpaper,value));
+    }
+    cfg_defaults(&s);
+    static const char bad_pattern[]="wallpaper=pattern:8\nwallpaper=pattern:x\n";
+    assert(cfg_parse(&s,bad_pattern,sizeof(bad_pattern)-1)==2);
     /* An out-of-range value in memory is written as the first mode. */
     s.wallpaper_mode = CFG_WALL_MODES;
     assert(cfg_format(&s, text, sizeof(text)) && strstr(text, "\nwallpaper_mode=center\n"));
@@ -178,6 +186,20 @@ static void check_patterns(void)
     puts("PASS wallpaper patterns: original 8x8 masks, None, period, centered/Fit margins, transparent image layering in all modes");
 }
 
+static void check_patterns(void)
+{
+    uint32_t out[16*16];
+    for (unsigned k=0;k<8;k++) {
+        char spec[16]; snprintf(spec,sizeof(spec),"pattern:%u",k);
+        assert(!desk_wallpaper_render(out,16,16,2,2,spec,CFG_WALL_FILL,COLOUR,NULL,NULL));
+        for (unsigned x=0;x<16;x++) assert(out[x]==COLOUR && out[15*16+x]==COLOUR);
+        assert((out[8*16] != COLOUR) == (k == 0 || k == 3 || k == 5 || k == 7));
+        uint32_t copy[16*16];
+        assert(!desk_wallpaper_render(copy,16,16,2,2,spec,CFG_WALL_FILL,COLOUR,NULL,NULL));
+        assert(!memcmp(out,copy,sizeof(out)));
+    }
+}
+
 static void check_layer(void)
 {
     struct desk_image src=card(17,11);
@@ -202,6 +224,7 @@ int main(int argc, char **argv)
 {
     assert(argc == 1 || argc == 2);
     settings();
+    check_patterns();
     check_layer();
     check_patterns();
     /* The Ciuki scenes' 4:3 size in the 1024x704 work area of 1024x768:

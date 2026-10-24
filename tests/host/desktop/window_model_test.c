@@ -1375,6 +1375,92 @@ static void row_disk_terminal(unsigned m)
         disk_ui_present(u,states[k],a);
     }
     free(u); free(pixels); app_close(a); step("disk terminal closes"); wm_end();
+static void row_appearance(unsigned m)
+{
+    row_name="display appearance"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,50);
+    desk_theme_changed(&d); step("custom desktop colour applied");
+    assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("appearance scheme applied");
+    wm_end();
+}
+/* G23 rows appended after the existing row 42; do not renumber old scenarios. */
+static void row_item_appearance(unsigned m)
+{
+    row_name="appearance items"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,50);
+    for(int scheme=0;scheme<AP_BUILTINS;scheme++) {
+        assert(!cfg_scheme_use(&d.sh.cfg,ap_builtin_name(scheme)));
+        desk_shell_apply(&d); step("named scheme palette and caption gradients");
+    }
+    d.sh.cfg.appearance.item[AP_ACTIVE_TITLE].points=18;
+    d.sh.cfg.appearance.item[AP_MENU].font=DESK_FONT_MONO;
+    desk_shell_apply(&d); step("per item fonts applied");
+    wm_end();
+}
+static void row_effects(unsigned m)
+{
+    row_name="display effects"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",260,180,40,50);
+    assert(!cfg_scheme_use(&d.sh.cfg,"Windows Standard"));
+    d.sh.cfg.document_icon=d.sh.cfg.recycle_icon=1;
+    d.sh.cfg.appearance.effects=AP_LARGE_ICONS|AP_MENU_ANIMATION;
+    desk_shell_apply(&d); step("large icons and binary fonts");
+    struct desk_box f=d.clients[a->slot].frame;
+    pointer_to(f.x+60,f.y+8); press(CIUKI_BUTTON_LEFT,1);
+    pointer_to(d.mouse_x+30,d.mouse_y+20); assert(d.geometry_outline); step("outline drag");
+    assert(d.clients[a->slot].frame.x==f.x);
+    press(CIUKI_BUTTON_LEFT,0); assert(!d.geometry_outline); step("outline drag committed");
+    desk_menu_open(&d,SH_MENU_START,0,0);
+    for(unsigned i=0;i<8;i++) step("animated menu reveal");
+    desk_menu_close(&d); step("animated menu dismissed");
+    wm_end();
+}
+static void row_dpi(unsigned m)
+{
+    row_name="display dpi"; wm_begin(m,1);
+    (void)app_open("files",260,180,40,50);
+    assert(!cfg_scheme_use(&d.sh.cfg,"Windows Standard"));
+    static const unsigned values[]={96,120,144,192,96};
+    for(unsigned i=0;i<sizeof(values)/sizeof(*values);i++) {
+        d.sh.cfg.appearance.dpi=(uint16_t)values[i]; desk_shell_apply(&d);
+        assert(desk_shell_icon("folder",desk_scale(48))); step("desktop DPI changed");
+    }
+    wm_end();
+}
+static void row_desktop_themes(unsigned m)
+{
+    row_name="desktop themes"; wm_begin(m,1);
+    (void)app_open("files",260,180,40,50);
+    struct sound_scheme sounds={0};
+    assert(!cfg_scheme_use(&d.sh.cfg,"Windows Standard"));
+    assert(!cfg_desktop_theme_save(&d.sh.cfg,"Captured theme",&sounds));
+    for(int pointer=0;pointer<3;pointer++) {
+        d.sh.cfg.pointer_scheme=pointer;
+        d.sh.cfg.appearance.effects^=AP_LARGE_ICONS;
+        desk_shell_apply(&d); step("package pointer and icon effects");
+    }
+    assert(!cfg_desktop_theme_use(&d.sh.cfg,"Captured theme",&sounds));
+    desk_shell_apply(&d); step("package restored");
+    assert(!cfg_desktop_theme_delete(&d.sh.cfg,"Captured theme"));
+    wm_end();
+}
+static void row_background_browse(unsigned m)
+{
+    row_name="background browse"; wm_begin(m,1);
+    (void)app_open("files",260,180,40,50);
+    strcpy(d.sh.cfg.wallpaper,"pattern:3"); desk_shell_apply(&d); step("browsed background committed");
+    wm_end();
+}
+static void row_advanced_fonts(unsigned m)
+{
+    row_name="advanced font sheet"; wm_begin(m,1);
+    struct fake_app *a=app_open("control",420,320,40,50);
+    /* The property sheet belongs to the client; real dialog controls are
+     * exercised by control_modes_test.c. The WM sees ordinary client damage. */
+    app_fill(a,0xc0c0c0); step("Advanced General sheet opened");
+    app_fill(a,0xc0c0c1); step("custom font sample changed");
+    app_fill(a,0xc0c0c0); step("Advanced Cancel restored");
+    wm_end();
 }
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
@@ -2087,6 +2173,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_disk_terminal, row_multimedia, row_run, row_help, row_g26b_network_ui, row_access,
     row_taskbar_customization, row_taskbar_dock, row_taskbar_autohide, row_taskbar_toolbars,
     row_start_custom, row_shell_custom_prompts};
+    row_move_damaged, row_fault, row_saver, row_appearance, row_item_appearance, row_effects, row_dpi, row_desktop_themes, row_background_browse, row_advanced_fonts};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

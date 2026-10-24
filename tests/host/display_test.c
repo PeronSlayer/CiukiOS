@@ -263,6 +263,51 @@ static void query_tests(void)
     t.ecx = 0x111; assert(display_syscall(&t) == -EPERM);
     current = &desktop; t.edx = 1; assert(display_syscall(&t) == -EINVAL);
     g_boot.version = 1; q.version = 1; q.size = sizeof(q); assert(!display_query(&q) && !q.mode_count && !q.oem[0]);
+    /* G23: real copied boot EDID, independently decoded, no invented scanout rate. */
+    fixture();
+    struct ciuki_monitor_info monitor={.version=1,.size=sizeof(monitor)};
+    assert(!display_monitor_query(&monitor) && !monitor.flags && !monitor.timing_count);
+    uint8_t *edid=g_boot.edid;
+    memset(edid,0,128); edid[1]=edid[2]=edid[3]=edid[4]=edid[5]=edid[6]=255;
+    edid[8]=0x4c; edid[9]=0x2d; edid[10]=0x34; edid[11]=0x12; edid[12]=0x78;
+    edid[17]=10; edid[18]=1; edid[19]=3; edid[24]=2;
+    uint8_t *dt=edid+54;
+    /* 65 MHz, 1024+320 by 768+38: 60.004 Hz. */
+    dt[0]=0x64;dt[1]=0x19;dt[2]=0;dt[3]=0x40;dt[4]=0x41;dt[5]=0;dt[6]=38;dt[7]=0x30;
+    edid[75]=0xfc; memcpy(edid+77,"Test Monitor\n",13);
+    edid[93]=0xfd; edid[95]=50; edid[96]=85;
+    unsigned sum=0; for(unsigned i=0;i<127;i++) sum+=edid[i]; edid[127]=(uint8_t)-sum;
+    g_boot.flags|=CBI_F_EDID_VALID;
+    assert(!display_monitor_query(&monitor) && monitor.flags==3 && !strcmp(monitor.manufacturer,"SAM"));
+    assert(!strcmp(monitor.name,"Test Monitor") && monitor.product==0x1234 && monitor.serial==0x78);
+    assert(monitor.minimum_hz==50 && monitor.maximum_hz==85 && monitor.manufacture_year==2000);
+    assert(monitor.timing_count==1 && monitor.timings[0].width==1024 && monitor.timings[0].height==768);
+    assert(monitor.timings[0].refresh_millihz==60004 && monitor.timings[0].flags==CIUKI_TIMING_PREFERRED);
+    struct ciuki_display_refresh refresh={.version=1,.size=sizeof(refresh),.mode_id=0x118};
+    assert(!display_refresh_query(&refresh) && !refresh.current_millihz && refresh.supported_count==1 && refresh.rates_millihz[0]==60004);
+    refresh.mode_id=0x777; assert(display_refresh_query(&refresh)==-EINVAL);
+    monitor.version=2; assert(display_monitor_query(&monitor)==-EINVAL); monitor.version=1;
+    edid[127]^=1; assert(!display_monitor_query(&monitor) && !monitor.flags && !monitor.timing_count);
+    edid[127]^=1;
+    edid[0]=1; edid[127]--; /* Wrong header with a valid checksum. */
+    assert(!display_monitor_query(&monitor) && !monitor.flags);
+    edid[0]=0; edid[127]++;
+    edid[19]=5; edid[127]-=2; /* Unsupported EDID revision. */
+    assert(!display_monitor_query(&monitor) && !monitor.flags);
+    edid[19]=3; edid[127]+=2;
+    memcpy(edid+72,edid+54,18); /* A duplicate DTD is not a duplicate rate. */
+    sum=0; for(unsigned i=0;i<127;i++) sum+=edid[i]; edid[127]=(uint8_t)-sum;
+    refresh.mode_id=0x118;
+    assert(!display_refresh_query(&refresh) && refresh.supported_count==1);
+    edid[71]|=128; edid[89]|=128;
+    sum=0; for(unsigned i=0;i<127;i++) sum+=edid[i]; edid[127]=(uint8_t)-sum;
+    assert(!display_monitor_query(&monitor) && monitor.timing_count==2);
+    assert(monitor.timings[0].height==1536 && monitor.timings[0].vertical_total==1613);
+    assert(monitor.timings[0].flags==(CIUKI_TIMING_PREFERRED|CIUKI_TIMING_INTERLACED));
+    t=(struct trap_frame){.ebx=CIUKI_DISPLAY_MONITOR,.ecx=16};
+    memcpy(user+16,&monitor,8); assert(!display_syscall(&t));
+    t.ecx=sizeof(user)-8; memcpy(user+t.ecx,&monitor,8); assert(display_syscall(&t)==-EFAULT);
+    puts("PASS G23 EDID: absent/bad checksum/header, copied monitor identity/ranges/DTD, exact rate, unknown scanout, invalid mode/version and syscall bounds");
     puts("PASS display query/syscall: v1/v2 bootinfo, PCI, exact wire layout, header/pointers/operation/rights");
 }
 static void switch_tests(void)

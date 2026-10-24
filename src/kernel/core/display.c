@@ -10,6 +10,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
 #include <ciuki/display_driver.h>
+#include <ciuki/edid.h>
 static const struct display_mode_provider *fullscreen_provider;
 
 static bool switching, awaiting_frame;
@@ -104,6 +105,36 @@ void display_present_returned(void)
     frame_deadline=deadline_after_ms(10000);
 }
 
+int display_monitor_query(struct ciuki_monitor_info *out)
+{
+    if(out->version!=CIUKI_MONITOR_VERSION || out->size!=sizeof(*out)) return -EINVAL;
+    memset(out,0,sizeof(*out)); out->version=CIUKI_MONITOR_VERSION; out->size=sizeof(*out);
+    if(g_boot.flags&CBI_F_EDID_VALID) {
+        struct ciuki_monitor_info valid=*out;
+        if(ciuki_edid_decode(g_boot.edid,&valid)) *out=valid;
+    }
+    return 0;
+}
+int display_refresh_query(struct ciuki_display_refresh *out)
+{
+    if(out->version!=CIUKI_MONITOR_VERSION || out->size!=sizeof(*out) || out->mode_id>UINT16_MAX) return -EINVAL;
+    struct ciuki_display_info d={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(d)};
+    int e=display_query(&d); if(e) return e;
+    uint32_t mode=out->mode_id;
+    memset(out,0,sizeof(*out)); out->version=CIUKI_MONITOR_VERSION; out->size=sizeof(*out); out->mode_id=mode;
+    for(unsigned i=0;i<d.mode_count;i++) if(d.modes[i].id==mode) {
+        out->width=d.modes[i].width; out->height=d.modes[i].height; break;
+    }
+    if(!out->width) return -EINVAL;
+    struct ciuki_monitor_info m={.version=CIUKI_MONITOR_VERSION,.size=sizeof(m)};
+    e=display_monitor_query(&m); if(e) return e;
+    for(unsigned i=0;i<m.timing_count;i++) if(m.timings[i].width==out->width && m.timings[i].height==out->height) {
+        uint32_t rate=m.timings[i].refresh_millihz; unsigned j=0;
+        while(j<out->supported_count && out->rates_millihz[j]!=rate) j++;
+        if(j==out->supported_count) out->rates_millihz[out->supported_count++]=rate;
+    }
+    return 0;
+}
 int display_query(struct ciuki_display_info *out)
 {
     if (out->version != CIUKI_DISPLAY_VERSION || out->size != sizeof(*out)) return -EINVAL;
@@ -498,6 +529,18 @@ static int monitor_power(struct process *p, int state)
 int32_t display_syscall(struct trap_frame *tf)
 {
     if (tf->edx || tf->esi || tf->edi || tf->ebp) return -EINVAL;
+    if(tf->ebx==CIUKI_DISPLAY_MONITOR) {
+        struct ciuki_monitor_info q;
+        int e=copy_from_user(&q,tf->ecx,8);
+        if(!e) e=display_monitor_query(&q);
+        return e ? e : copy_to_user(tf->ecx,&q,sizeof(q));
+    }
+    if(tf->ebx==CIUKI_DISPLAY_REFRESH) {
+        struct ciuki_display_refresh q;
+        int e=copy_from_user(&q,tf->ecx,12);
+        if(!e) e=display_refresh_query(&q);
+        return e ? e : copy_to_user(tf->ecx,&q,sizeof(q));
+    }
     if (tf->ebx == CIUKI_DISPLAY_SCREEN) {
         struct ciuki_screen_control q;
         int e=copy_from_user(&q,tf->ecx,sizeof(q));
