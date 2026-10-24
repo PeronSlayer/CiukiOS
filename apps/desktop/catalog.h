@@ -17,6 +17,7 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */
     {"help", "CiukiOS Help", "help-browser", 1, ""},
     {"mixer", "Volume Control", "audio-volume-high", 0, ""},
+    {"recorder", "Sound Recorder", "audio-input-microphone", 0, ""},
     {"music", "Music Player", "audio-x-generic", 1, "wav|mp3|ogg|m3u"},
     {"viewer", "Image Viewer", "image-x-generic", 1, "bmp|png|jpg|jpeg|jpe|gif|xrgb"},
     /* Viewer is the default; keep Paint available in the shell's Open With. */

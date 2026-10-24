@@ -28,6 +28,7 @@ struct file_description {
     struct file_description *next;
     struct px_node *node;
     struct audio_stream *audio;
+    uint32_t capture_generation, capture_source, capture_gain;
     struct vfs_file_identity *identity; /* common FAT identity retained through final close */
     struct vfs_node lock_node;
     struct vfs_description lock_description;

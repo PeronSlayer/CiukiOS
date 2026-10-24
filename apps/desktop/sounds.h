@@ -10,6 +10,10 @@
 #define SOUND_DIR "/system/sounds"
 #define SOUND_CFG SOUND_DIR "/scheme.cfg"
 #define SOUND_LEGACY_CFG "/system/settings/sounds.cfg"
+#define SOUND_SCHEMES_DIR "/system/settings/sound-schemes"
+#define SOUND_SCHEMES_MAX 16u
+#define SOUND_SCHEME_NAME 32u
+enum { SOUND_SCHEME_LOAD, SOUND_SCHEME_SAVE, SOUND_SCHEME_DELETE };
 #define SOUND_VOLUME_INTERVAL_NS 60000000ull
 enum sound_event {
     SOUND_STARTUP, SOUND_SHUTDOWN, SOUND_MENU_OPEN, SOUND_MENU_SELECT,
@@ -34,6 +38,7 @@ void sound_defaults(struct sound_scheme *);
 int sound_parse(struct sound_scheme *, const char *, size_t);
 size_t sound_format(const struct sound_scheme *, char *, size_t);
 int sound_path(const struct sound_scheme *, unsigned event, char *, size_t);
+int sound_assign(struct sound_scheme *, unsigned event, const char *path);
 int sound_wav(const void *, size_t, struct sound_clip *);
 void sound_reset(struct sound_player *);
 int sound_play(struct sound_player *, struct sound_clip);

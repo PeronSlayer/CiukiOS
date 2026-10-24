@@ -22,10 +22,22 @@ static int name_ok(const char *s)
 {
     size_t n = strlen(s);
     if (!n) return 1; /* empty assignment disables one event */
-    if (n >= SOUND_NAME_MAX || n < 5 || strcmp(s + n - 4, ".wav") || strstr(s, "..")) return 0;
-    for (size_t i = 0; i < n; i++) if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') ||
-        (s[i] >= '0' && s[i] <= '9') || s[i] == '_' || s[i] == '-' || s[i] == '.')) return 0;
+    if (n >= SOUND_NAME_MAX || n < 5 || s[n-4]!='.' ||
+        (s[n-3]!='w' && s[n-3]!='W') || (s[n-2]!='a' && s[n-2]!='A') ||
+        (s[n-1]!='v' && s[n-1]!='V') || strstr(s, "..")) return 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[0]=='/') {
+            if ((unsigned char)s[i]<32 || (unsigned char)s[i]>126 || s[i]=='"' || s[i]=='\\') return 0;
+        } else if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') ||
+            (s[i] >= '0' && s[i] <= '9') || s[i] == '_' || s[i] == '-' || s[i] == '.')) return 0;
+    }
     return 1;
+}
+int sound_assign(struct sound_scheme *s, unsigned e, const char *path)
+{
+    if (e >= SOUND_EVENTS || !path || !name_ok(path)) return -EINVAL;
+    snprintf(s->file[e], SOUND_NAME_MAX, "%s", path);
+    return 0;
 }
 int sound_parse(struct sound_scheme *s, const char *text, size_t n)
 {
@@ -83,7 +95,8 @@ int sound_path(const struct sound_scheme *s, unsigned e, char *out, size_t cap)
 {
     if (e >= SOUND_EVENTS || !name_ok(s->file[e])) return -EINVAL;
     if (!s->file[e][0]) return -ENOENT;
-    int n = snprintf(out, cap, SOUND_DIR "/%s", s->file[e]);
+    int n = s->file[e][0] == '/' ? snprintf(out, cap, "%s", s->file[e]) :
+        snprintf(out, cap, SOUND_DIR "/%s", s->file[e]);
     return n < 0 || (size_t)n >= cap ? -ENAMETOOLONG : 0;
 }
 static unsigned u16(const uint8_t *p) { return p[0] | (unsigned)p[1] << 8; }

@@ -104,6 +104,9 @@ struct cp_host {
     int (*boot_save)(void *, const char *, size_t);
     int (*load_sounds)(void *, char *, size_t, size_t *);
     int (*save_sounds)(void *, const char *, size_t);
+    int (*sound_validate)(void *, const char *);
+    int (*sound_schemes)(void *, char names[][SOUND_SCHEME_NAME], unsigned);
+    int (*sound_scheme)(void *, unsigned, const char *, struct sound_scheme *);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*engine)(void *, struct ciuki_accel_info *);
     int (*engine_info)(void *, struct ciuki_display_engine_info *);
@@ -115,6 +118,8 @@ struct cp_host {
     int (*power)(void *); /* opens the shell's safe shutdown dialog */
     int (*power_status)(void *, struct ciuki_power_status *);
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
+    int (*capture_caps)(void *, struct ciuki_audio_capture *);
+    int (*multimedia_open)(void *, unsigned); /* 0 Volume Control, 1 Recorder, 2 Music */
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
     /* f5-07A RPC adapter; enumerate HKLM and HKCU Uninstall, never open hives.
@@ -185,7 +190,9 @@ struct cp_app {
     int audio_before_ok;
     char sound_text[SOUND_TEXT_MAX+1];
     struct sound_scheme sounds; unsigned sound_selected;
-    struct du_item sound_items[SOUND_EVENTS], scheme_items[3];
+    struct du_item sound_items[SOUND_EVENTS], scheme_items[3+SOUND_SCHEMES_MAX];
+    char sound_names[SOUND_SCHEMES_MAX][SOUND_SCHEME_NAME], sound_named[SOUND_SCHEME_NAME];
+    unsigned sound_name_count;
     char sound_volume_label[24];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
     struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];

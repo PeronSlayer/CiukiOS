@@ -3253,6 +3253,18 @@ int desk_shell_button(struct desktop *d, int button, int down)
         }
         desk_menu_close(d);
     }
+    /* G22: handle the second click before the popup's outside-click path. */
+    if (button==CIUKI_BUTTON_LEFT && desk_contains(volume_icon_box(d),x,y)) {
+        if (d->sh.volume_click_ns && d->now_ns-d->sh.volume_click_ns <=
+            (uint64_t)d->sh.cfg.double_click_ms*1000000ull) {
+            d->sh.volume_click_ns=0;
+            if (d->sh.volume_open) damage(d,outer(volume_popup(d)));
+            d->sh.volume_open=0;
+            launch_named(d,"mixer",NULL);
+            return 1;
+        }
+        d->sh.volume_click_ns=d->now_ns ? d->now_ns : 1;
+    } else d->sh.volume_click_ns=0;
     /* G1: double-clicking the tray clock opens Date/Time Properties. */
     if (button==CIUKI_BUTTON_LEFT && desk_contains(desk_shell_clock_box(d),x,y)) {
         if (d->sh.clock_click_ns && d->now_ns-d->sh.clock_click_ns<=(uint64_t)d->sh.cfg.double_click_ms*1000000ull) {

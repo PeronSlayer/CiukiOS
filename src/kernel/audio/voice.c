@@ -216,6 +216,16 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
     return e;
 }
 
+int audio_capture_source(struct audio_dma_device *d, uint32_t generation, unsigned source)
+{
+    if (!generation || source>CIUKI_CAPTURE_LINE) return -EINVAL;
+    kmutex_lock(&d->register_lock);
+    int e=generation!=d->capture.generation || !d->capture.running ? -EINVAL :
+        d->state.quarantine ? -EIO :
+        d->voice_codec_write(d,0x1a,source==CIUKI_CAPTURE_MIC ? 0x0000 : 0x0404);
+    kmutex_unlock(&d->register_lock);
+    return e;
+}
 int audio_capture_read(struct audio_dma_device *d, uint32_t generation,
                        struct audio_frame *out, unsigned frames)
 {

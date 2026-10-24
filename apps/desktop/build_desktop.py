@@ -25,6 +25,7 @@ ACCESSORIES = {
     "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
     "help": ["help_main.c", "help_view.c", "help_topics.c"],
     "mixer": ["mixer_main.c", "mixer_view.c"],
+    "recorder": ["recorder_main.c", "recorder.c"],
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
