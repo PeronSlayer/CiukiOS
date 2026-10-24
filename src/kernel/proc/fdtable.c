@@ -645,6 +645,7 @@ static int image_fat(struct px_namespace *s, struct px_node *n, struct file_imag
         if (n->linked && n->entry.first == entry.first && n->entry.size == entry.size &&
             n->entry.chain_generation == entry.chain_generation && vfs_identity_live(v, id) &&
             vfs_change_generation(v, n->volume, entry.parent, entry.index) == generation) {
+            /* G29d: queued only; the storage start-log task writes it. */
             vfs_startup_record_locked(v,n->volume,&entry,src.startup_order,src.startup_count);
             break;
         }

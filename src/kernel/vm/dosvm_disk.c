@@ -227,6 +227,8 @@ static int base_hash(struct dosvm *v, uint32_t size)
  * watch prevents unrelated 64-slot change-ledger eviction from invalidating
  * a cached digest; it pins no handle, page, volume or write-deny claim. */
 #define DOSVM_DIGESTS 16u
+/* Every digest pin plus the boot-time image check's own (dosvm_image.c). */
+_Static_assert(VFS_VERSION_PINS >= DOSVM_DIGESTS + 1u, "version watches: digests plus the image check");
 static struct {
     struct vfs_file_version version;
     struct vfs_version_pin pin;

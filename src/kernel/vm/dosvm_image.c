@@ -20,7 +20,14 @@
  *   only kernel writer of the image (game removal) deletes it first;
  * - a later boot with an unchanged identity and sidecar reuses the stamp;
  *   any change hashes again; a mismatch is published, never stamped, and
- *   the launch refuses at the sidecar check with an honest record.
+ *   the launch refuses at the sidecar check with an honest record;
+ * - the check pins the image's content version (vfs_version_pin) from its
+ *   start and keeps the pin with a finished result: an image with no change
+ *   record of its own reports the volume's change floor as its write
+ *   generation, and the floor rises whenever more than VFS_CHANGES other
+ *   files change on C: (QEMU 56e58374: "failed step=version" on every boot,
+ *   so the first DOS Box hashed 27.7 MB inside CREATE). Changes of the image
+ *   itself still advance the pinned version and void the result.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -54,6 +61,7 @@ static struct {
     uint32_t state, error, size, at, blocks, pauses;
     uint64_t started, block_started;
     struct vfs_file_version version;
+    struct vfs_version_pin pin; /* the checked version; kept with a finished result */
     char expected[65], sha[65];
     const char *source;
     struct sha256_ctx hash;
@@ -152,6 +160,40 @@ static int stamp_write(struct vfs_table *t, const struct vfs_file_version *v, co
 }
 
 /* ---- background verification ---- */
+/* The pin is taken out under irq_save, together with the state it belongs
+ * to, and released outside it (identity_lock may sleep). */
+static struct vfs_version_pin pin_take_locked(void)
+{
+    struct vfs_version_pin old = iv.pin;
+    iv.pin = (struct vfs_version_pin){0};
+    return old;
+}
+static void pin_set(struct vfs_version_pin pin)
+{
+    uint32_t f = irq_save();
+    struct vfs_version_pin old = pin_take_locked();
+    iv.pin = pin;
+    irq_restore(f);
+    vfs_version_unpin(&old);
+}
+static void pin_drop(void) { pin_set((struct vfs_version_pin){0}); }
+/* Pin the version the check starts from, so changes of other files on the
+ * volume cannot make the untouched image look changed. A version that moved
+ * between reading and pinning is read again; without a free watch the check
+ * runs unpinned, as before (the end-of-check comparison stays). */
+static void version_pin(struct vfs_file_version *version)
+{
+    for (unsigned attempt = 0; attempt < 3; attempt++) {
+        struct vfs_version_pin pin = {0};
+        int e = vfs_version_pin(&iv.table, iv.fd, version, &pin);
+        if (!e) { pin_set(pin); return; }
+        if (e != -FS_EAGAIN || vfs_handle_version(&iv.table, iv.fd, version)) {
+            klog("[dosvm] image verify pin error=%d", e);
+            return;
+        }
+    }
+    klog("[dosvm] image verify pin error=%d attempts=3 unpinned", -FS_EAGAIN);
+}
 static void finish(uint32_t state, int error, const char *source)
 {
     if (iv.fd >= 0) (void)vfs_close(&iv.table, iv.fd);
@@ -160,10 +202,15 @@ static void finish(uint32_t state, int error, const char *source)
     iv.table_ready = false;
     if (iv.buffer) for (unsigned i = 0; i < IV_BLOCK_PAGES; i++) pmm_free(iv.buffer + i * PAGE_SIZE);
     iv.buffer = 0;
+    /* A result (verified or mismatch) keeps its version pinned for the
+     * launch (finished_result); anything else releases it. */
+    struct vfs_version_pin old = {0};
     uint32_t f = irq_save();
     iv.state = state; iv.error = error < 0 ? (uint32_t)-error : (uint32_t)error; iv.source = source;
     iv.busy = iv.starting = false;
+    if (state != CIUKI_DOSVM_IMAGE_VERIFIED && state != CIUKI_DOSVM_IMAGE_MISMATCH) old = pin_take_locked();
     irq_restore(f);
+    vfs_version_unpin(&old);
     kwait_set_owner(&iv.done, 0);
     kwait_wake_all(&iv.done);
 }
@@ -190,12 +237,14 @@ static bool begin(void)
     iv.at = iv.blocks = iv.pauses = iv.error = 0; iv.size = 0; iv.sha[0] = 0; iv.source = "background";
     irq_restore(f);
     iv.started = g_ticks;
+    pin_drop(); /* the previous result's version */
     struct vfs_file_version version;
     int e = !s || !s->ready || s->stopped ? -FS_EIO : vfs_table_init(&s->vfs, &iv.table, 2);
     const char *step = "storage";
     if (!e) { iv.table_ready = true; step = "base-open"; iv.fd = vfs_open(&iv.table, IMAGE_BASE, VFS_READ, VFS_DENY_WRITE, 0); }
     if (!e && iv.fd < 0) e = iv.fd;
     if (!e) { step = "base-version"; e = vfs_handle_version(&iv.table, iv.fd, &version); }
+    if (!e) version_pin(&version);
     if (!e) { step = "base-sidecar"; e = sidecar_read(&iv.table, iv.expected); }
     if (e) {
         klog("[dosvm] image verify result=failed step=%s error=%d", step, e);
@@ -390,14 +439,17 @@ void dosvm_image_hold(void)
         if (iv.test) { (void)dosvm_image_step(); continue; }
         kwait_wait_until(&iv.done, not_busy, 0, deadline_after_ms(1000));
     }
+    pin_drop();
 }
 /* The image may have changed: forget the result and verify again. */
 void dosvm_image_release(void)
 {
     uint32_t f = irq_save();
     iv.held = false; iv.cancel = false; iv.state = CIUKI_DOSVM_IMAGE_UNCHECKED; iv.sha[0] = 0;
+    struct vfs_version_pin old = pin_take_locked();
     if (iv.desktop && (iv.task || iv.test)) iv.armed = true;
     irq_restore(f);
+    vfs_version_unpin(&old);
     if (iv.task) kwait_wake_all(&iv.wake);
 }
 
@@ -472,12 +524,16 @@ void dosvm_image_publish(struct vfs_table *t, const struct vfs_file_version *ver
 {
     int e = stamp_write(t, version, sha);
     if (e) klog("[dosvm] image stamp write error=%d", e);
+    /* The launch's digest store pins this version; an older pin is stale. */
+    struct vfs_version_pin old = {0};
     uint32_t f = irq_save();
     if (!iv.busy && !iv.starting) {
         iv.version = *version; memcpy(iv.sha, sha, 65); iv.size = iv.at = version->size;
         iv.state = CIUKI_DOSVM_IMAGE_VERIFIED; iv.source = "launch"; iv.error = 0;
+        old = pin_take_locked();
     }
     irq_restore(f);
+    vfs_version_unpin(&old);
 }
 /* CIUKI_DOSVM_IMAGE_QUERY: state, per-mille progress, positive errno. A
  * launcher watching an armed or running check makes it urgent. */

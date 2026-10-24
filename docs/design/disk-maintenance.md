@@ -234,3 +234,52 @@ The startup-image harness also passes persistent logging, native open-log
 sharing, launch success and descriptor/identity cleanup. The standalone
 filesystem run and its complete results are recorded in
 `build/codex/fixd-fs-final.log`.
+
+## Start logging leaves the launch path (2026-10-24)
+
+QEMU runs of image 56e58374: each native program start still wrote and
+committed `CIUKIST.LOG` inside exec (`fdtable.c` `image_fat`), so while C:
+publication was stuck after a DOS Box close every Run launch waited there.
+Research: the Resource Kit, “Disk Management” (`wrkc10_5.htm`), describes
+the source of Disk Defragmenter's start order as a separate process: “To
+record the disk access patterns of programs during their startup, Windows 98
+uses a process called Task Monitor”, which writes its logs to
+`\Windows\Applog` and counts program uses. Logging is the monitor's work,
+not the launched program's.
+
+- Exec only appends the start (identity, actual read order, the volume's
+  attachment generation) to a bounded in-memory queue in the VFS
+  (`VFS_STARTUP_QUEUE`, 16 starts, `identity_lock`); it performs no I/O and
+  keeps its locks. A full queue drops the oldest start (`startup_dropped`).
+- The `startup-log` kernel task (normal priority, created with the storage
+  writer) wakes on a queued start, lets a burst settle for up to one second
+  (at once when the queue is 3/4 full, `VFS_STARTUP_URGENT`, so a boot burst
+  does not drop its first starts) and calls `vfs_startup_flush`: per volume
+  one exclusive open of the log, the existing serialization
+  (`fat_startup_prepare`) for each start, one write and one commit; no
+  reservation spans device I/O. A start whose volume was detached or
+  remounted, a refused hint or a log held open by a reader is dropped
+  (`startup_failed`): the log stays advisory and never fails a launch.
+  Without memory for the flush the whole queue is dropped once and counted,
+  so nothing is retried; the task logs an error when it first appears.
+- The Disk Defragmenter's analysis for “rearrange program files” flushes the
+  queue first, and Shut Down flushes it after the `shutdown requested`
+  marker and before the boot log. Neither waits for a flush in progress: that
+  flush holds the log open and may be stalled in a C: commit, so both refuse
+  with EBUSY at once (Shut Down before any change, as for the boot log; the
+  desktop retries it every 250 ms for up to 5 s). The Files defragmenter
+  reports an analysis EBUSY as an error and does not retry it. The
+  defragmenter keeps reading the same log format.
+
+Host evidence (`--startup-image`): a launch leaves the device write and flush
+counters and the volume's mutation sequence unchanged and creates no log;
+the log appears with the next flush (use clock +1); a flush while a native
+reader holds the log is refused and counted; 19 starts in a burst keep the
+newest 16, written by one flush; a flush without memory empties the queue
+once; 12 queued starts end the settle delay at once. `--maintenance-mount`:
+with a start-log flush stalled in progress, `storage_startup_log_shutdown`
+(Shut Down's step), the defragmenter's analysis and a no-wait flush return
+EBUSY within 1 s, and succeed once it finished. On 56e58374 the launch check
+fails (the start was written inside exec); on the first version of this
+change (a64d5839) the stalled-flush case blocks the analysis until the
+test's alarm.

@@ -119,6 +119,14 @@ static struct vfs_file_version launch_version(int *fd)
 static unsigned run_to_end(void) { unsigned steps = 0; while (dosvm_image_step()) steps++; return steps; }
 static unsigned expected_blocks(void) { return (image_size + 65535u) / 65536u; }
 static bool stamp_present(void) { struct fat_entry e; return !vfs_stat(&table, DOSVM_IMAGE_STAMP, &e) && e.size == 128; }
+/* dec1: version watches in use (the verifier's pin; this harness's digest
+ * contract pins nothing). */
+static unsigned watch_refs(void)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < VFS_VERSION_PINS; i++) n += storage.vfs.version_watches[i].refs;
+    return n;
+}
 static int cancel_calls, cancel_at;
 static bool cancel_after(void *arg) { (void)arg; return ++cancel_calls >= cancel_at; }
 
@@ -147,6 +155,7 @@ int main(int argc, char **argv)
     assert(iv.blocks == expected_blocks() && steps == expected_blocks() - 1);
     assert(!strcmp(iv.sha, good_sha) && !strcmp(digest_sha, good_sha) && stamp_present());
     assert(strstr(last_record, "result=verified source=hash") && block_allocs == block_frees);
+    assert(watch_refs() == 1);                         /* the verified version stays pinned */
     unsigned hash_reads = disk.reads - reads;
     printf("fx-4b first boot: hashed %u bytes in %u blocks (%u disk reads), stamp written, mid progress %u/1000\n",
            image_size, iv.blocks, hash_reads, mid);
@@ -243,16 +252,24 @@ int main(int argc, char **argv)
     file_sha("C:\\SYSTEM\\DOS\\UNIFIED.IMG", bad_sha, 0); set_sidecar(bad_sha);
     reboot(); dosvm_image_desktop_presented();
     assert(dosvm_image_step()); assert(dosvm_image_step());
+    assert(watch_refs() == 1);                         /* the running check's pin */
     dosvm_image_hold();
     dosvm_image_query(&state, &progress, &error);
     assert(state == CIUKI_DOSVM_IMAGE_UNCHECKED && !iv.busy && iv.fd < 0 && !iv.table_ready);
+    assert(!watch_refs());                             /* hold releases it */
     int writer = vfs_open(&table, "C:\\SYSTEM\\DOS\\UNIFIED.IMG", VFS_READ | VFS_WRITE, VFS_DENY_ALL, 0);
     assert(writer >= 0); OK(vfs_close(&table, writer));
     assert(!dosvm_image_step());                       /* held: nothing starts */
     dosvm_image_release();
+    assert(!watch_refs());
     dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFYING);
     assert(dosvm_image_step()); run_to_end();
     dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED);
+    assert(watch_refs() == 1);
+    dosvm_image_hold(); assert(!watch_refs());         /* a held verified result releases it too */
+    dosvm_image_release(); assert(!watch_refs());
+    assert(!dosvm_image_step());                       /* finished from the stamp, pinned again */
+    dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED && watch_refs() == 1);
 
     /* 7. fx-23 (T23 trial f441c5bd): a DOS launch right after the check
      * must not hash 27.7 MB again on the launching thread inside CREATE.
@@ -284,9 +301,60 @@ int main(int argc, char **argv)
            iv.blocks, source);
     storage.volumes[2].fat.dirty_recovered = false;
 
-    assert(block_allocs == block_frees && !stamp_errors && records && digest_publishes);
+    /* 8. dec1 (QEMU 56e58374: "failed step=version" on every boot): more
+     * than VFS_CHANGES other files change on C: while the check runs. They
+     * evict change records and raise the volume's change floor, which an
+     * image without a record of its own reports as its write generation.
+     * The check pins the image's version: it stays verified and stamped, and
+     * a launch reuses its result (fx-23) without the session digest, also
+     * after more unrelated changes. A change of the image itself still voids
+     * the check. */
+    reboot(); set_mtime(0x5b5b, 0x6a20);                /* the stamp no longer matches: hash */
+    dosvm_image_desktop_presented();
+    assert(dosvm_image_step()); assert(dosvm_image_step());
+    uint64_t floor = storage.vfs.change_floor;
+    unsigned churn = 0;
+    for (; churn < VFS_CHANGES + 16; churn++) {
+        char path[32]; snprintf(path, sizeof(path), "C:\\CHURN%03u.TXT", churn);
+        write_at(path, 0, path, strlen(path), true);
+        write_at(path, 0, "x", 1, false);
+    }
+    assert(storage.vfs.change_floor > floor);           /* the ledger evicted: the old floor rose */
+    run_to_end();
+    dosvm_image_query(&state, &progress, &error);
+    assert(state == CIUKI_DOSVM_IMAGE_VERIFIED && !error && iv.blocks == expected_blocks());
+    assert(strstr(last_record, "result=verified source=hash") && stamp_present());
+    memcpy(current_sha, iv.sha, 65);
+    for (unsigned i = 0; i < VFS_CHANGES + 16; i++) {    /* more churn after the check */
+        char path[32]; snprintf(path, sizeof(path), "C:\\CHURN%03u.TXT", i);
+        write_at(path, 0, "y", 1, false);
+    }
+    digest_sha[0] = 0;                                  /* the launch's session cache missed */
+    v = launch_version(&fd); reads = disk.reads; hashed = iv.blocks;
+    assert(vfs_file_version_equal(&v, &iv.version));
+    OK(dosvm_image_lookup(&table, &v, sha, &source, 0, 0));
+    assert(!strcmp(source, "background") && !strcmp(sha, current_sha) && iv.blocks == hashed);
+    assert(disk.reads - reads < 8);
+    OK(vfs_close(&table, fd));
+    printf("fx-23/dec1 %u unrelated changes during and after the check (floor %llu -> %llu): verified, launch source=%s, no hash\n",
+           2 * churn, (unsigned long long)floor, (unsigned long long)storage.vfs.change_floor, source);
+    /* The image itself changes during a check: the result is void. */
+    reboot(); set_mtime(0x5b5c, 0x6a20);
+    dosvm_image_desktop_presented();
+    assert(dosvm_image_step()); assert(dosvm_image_step());
+    set_mtime(0x5b5d, 0x6a20);
+    run_to_end();
+    dosvm_image_query(&state, &progress, &error);
+    assert(state == CIUKI_DOSVM_IMAGE_UNCHECKED && strstr(last_record, "failed step=version"));
+    assert(!watch_refs());                             /* a void check keeps no pin */
+    for (unsigned i = 0; i < churn; i++) {
+        char path[32]; snprintf(path, sizeof(path), "C:\\CHURN%03u.TXT", i);
+        OK(vfs_delete(&table, path));
+    }
+
+    assert(block_allocs == block_frees && !stamp_errors && records && digest_publishes && !watch_refs());
     vfs_table_destroy(&table); OK(vfs_detach(&storage.vfs, 2)); vfs_destroy(&storage.vfs);
     cache_destroy(&storage.cache); fake_close(&disk); assert(!fs_host_contig_live);
-    puts("PASS fx-4b image verify: background hash with progress, stamp reuse, 4 identity changes re-hash, launch joins in-flight check (EINTR on owner exit), mismatch reported and never stamped, removal hold/release; fx-23: finished result reused, re-armed check instead of a launch hash");
+    puts("PASS fx-4b image verify: background hash with progress, stamp reuse, 4 identity changes re-hash, launch joins in-flight check (EINTR on owner exit), mismatch reported and never stamped, removal hold/release; fx-23: finished result reused, re-armed check instead of a launch hash; dec1: pinned version across unrelated changes, own change voids, no watch left after hold/release or a void check");
     return 0;
 }
