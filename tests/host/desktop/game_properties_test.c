@@ -64,6 +64,46 @@ static void port(unsigned i,const char *name,const char *driver,uint32_t base,co
     snprintf(d->name,sizeof(d->name),"%s",name);snprintf(d->driver,sizeof(d->driver),"%s",driver);snprintf(d->reason,sizeof(d->reason),"%s",why);
     d->resources[0]=(struct ciuki_device_resource){.type=CIUKI_RESOURCE_IO,.start=base,.end=base+3};
 }
+static int startup_setting, startup_failure, startup_empty, startup_invalid;
+static int startup_items(void *ctx,struct desk_startup_entry *out,unsigned cap)
+{
+    (void)ctx; assert(cap>=2);
+    if (startup_empty) return startup_empty<0 ? -EIO : 0;
+    memset(out,0,2*sizeof(*out));
+    strcpy(out[0].name,"Tray tool"); out[0].source=4; out[0].enabled=startup_setting;
+    strcpy(out[1].name,"Player"); out[1].source=6; out[1].enabled=1; out[1].error=startup_invalid ? -EINVAL : 0;
+    return 2;
+}
+static int startup_save(void *ctx,const struct desk_startup_entry *entry,int enabled)
+{
+    (void)ctx; assert(entry->source==4);
+    if (startup_failure) return -EIO;
+    startup_setting=enabled; return 0;
+}
+static void startup_panel(const char *frames)
+{
+    app.host.startup_list=startup_items; app.host.startup_enable=startup_save;
+    app.system_tab=4; startup_setting=1; cp_open(&app,CP_SYSTEM);
+    assert(app.system_tab==4 && app.startup_count==2);
+    assert(du_get(&ui,CP_STARTUP_LIST)->count==2 && du_get(&ui,CP_STARTUP_ENABLED)->value);
+    frame(frames,"startup-enabled");
+    click(CP_STARTUP_ENABLED); assert(!startup_setting && !app.startup[0].enabled);
+    cp_open(&app,CP_HOME); app.system_tab=4; cp_open(&app,CP_SYSTEM);
+    assert(!du_get(&ui,CP_STARTUP_ENABLED)->value);
+    du_render(&ui); du_post(&ui,DU_EV_SELECT,CP_STARTUP_LIST,1);
+    assert(du_get(&ui,CP_STARTUP_ENABLED)->value && app.startup_selected==1);
+    du_post(&ui,DU_EV_SELECT,CP_STARTUP_LIST,0);
+    assert(!du_get(&ui,CP_STARTUP_ENABLED)->value && app.startup_selected==0);
+    startup_failure=1; click(CP_STARTUP_ENABLED);
+    assert(!startup_setting && !du_get(&ui,CP_STARTUP_ENABLED)->value);
+    assert(strstr(du_get(&ui,CP_STARTUP_NOTE)->text,"could not"));
+    startup_failure=0; click(CP_STARTUP_ENABLED); assert(startup_setting);
+    startup_invalid=1; click(CP_STARTUP_REFRESH); assert(!strcmp(app.startup_items[1].text[2],"Invalid"));
+    startup_empty=1; click(CP_STARTUP_REFRESH); assert(!app.startup_count && du_get(&ui,CP_STARTUP_ENABLED)->disabled);
+    startup_empty=-1; click(CP_STARTUP_REFRESH); assert(app.startup_count==-EIO && du_get(&ui,CP_STARTUP_ENABLED)->disabled);
+    frame(frames,"startup-unavailable");
+    puts("PASS G21 System Startup: enable, disable, reopen, failed save, empty, unavailable");
+}
 int main(int argc,char **argv)
 {
     assert(argc==2);assert(!mkdir(DOSBOX_SETTINGS_DIR,0700));
@@ -98,7 +138,7 @@ int main(int argc,char **argv)
     open_game(2);assert(app.game_ports.com[0]==1 && !app.game_ports.lpt_mode && !app.game_joystick.attached);frame(argv[1],"game-second");
     click(1502);click(1510);assert(!app.game_open);open_game(2);assert(app.game_ports.com[0]==1); /* staged edit discarded */
     io_error=1;click(1509);cp_tick(&app);assert(!app.game_busy && strstr(app.game_note,"could not"));frame(argv[1],"game-save-error");io_error=0;
-    click(1510);cp_detach(&app);
+    click(1510);startup_panel(argv[1]);cp_detach(&app);
     /* Byte-level persistence rejects checksum/version/oversize/path corruption. */
     stored.lpt_mode=3;strcpy(stored.path,"/Documents/../system/BOOT.CFG");assert(dosbox_ports_save(2,&stored)==-EINVAL);
     game_ports_defaults(&stored);assert(!dosbox_ports_save(3,&stored));stored.com[0]=0;assert(!dosbox_ports_save(3,&stored));

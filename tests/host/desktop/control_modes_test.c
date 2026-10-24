@@ -98,6 +98,26 @@ int main(int argc, char **argv)
 {
     assert(argc == 3);
     FILE *f = fopen(argv[2], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
+    init(); cp_open(&a,CP_DISPLAY); select(CP_DISPLAY_TABS_ID,CP_SCREEN_SAVER);
+    assert(du_get(&u,CP_SAVER_KIND) && du_get(&u,CP_SAVER_WAIT)); check_layout();
+    select(CP_SAVER_KIND,2); assert(a.cfg.saver_kind==2 && a.display_dirty);
+    at_click_widget(&u,CP_SAVER_ENABLE); assert(a.cfg.saver_enabled);
+    struct du_event wait={.type=DU_EV_CHANGE,.id=CP_SAVER_WAIT,.index=3};
+    u.event(&u,&wait,u.user); assert(a.cfg.saver_seconds==180);
+    du_render(&u); at_save(argv[1],"control-screen-saver",&u);
+    at_click_widget(&u,CP_SAVER_SETTINGS); assert(du_dialog_id(&u)==CP_SAVER_SETTINGS); du_dialog_close(&u);
+    at_click_widget(&u,CP_SAVER_PREVIEW);
+    struct desk_packet preview; assert(desk_parse(&wire,1,NULL,&preview));
+    assert(preview.request==DESK_SETTINGS_SAVER_PREVIEW && preview.values[0]==2);
+    at_click_widget(&u,CP_APPLY);
+    assert(strstr(saved,"saver_kind=2\n") && strstr(saved,"saver_seconds=180\n"));
+    assert(cp_close(&a) && a.cfg.saver_kind==1 && !a.cfg.saver_enabled);
+    cp_detach(&a);
+    init(); cp_open(&a,CP_POWER);
+    wait.id=CP_MONITOR_WAIT; wait.index=5; u.event(&u,&wait,u.user);
+    assert(strstr(saved,"monitor_seconds=300\n"));
+    du_render(&u); at_save(argv[1],"control-monitor-power",&u); cp_detach(&a);
+    puts("PASS G10 Control Panel: saver choice, enable, minutes, preview wire, Apply/Cancel rollback, Power monitor timeout");
     init(); check_layout();
     assert(a.area_count == 4 && !strcmp(a.area_items[2].text[0], "1024 x 768") && a.area == 2);
     assert(a.depth_count == 2 && a.depths[0] == 16 && a.depths[1] == 32 && a.depth == 1);

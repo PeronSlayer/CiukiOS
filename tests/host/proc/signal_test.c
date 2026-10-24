@@ -41,6 +41,15 @@ void fpu_reset_state(int sse)
 }
 #include "../../../src/kernel/proc/sigframe.c"
 #include "../../../src/kernel/core/fpu.c"
+/* G13: the user-visible fault report; recorded here, queued by diagnostics.c. */
+static unsigned native_reports;
+static uint32_t native_report_vector, native_report_address;
+extern void native_fault_report(struct proc_thread *, const struct trap_frame *, uint32_t) __attribute__((weak));
+void native_fault_report(struct proc_thread *t, const struct trap_frame *tf, uint32_t address)
+{
+    CHECK(t && tf && t->process->state == PROC_LIVE);
+    native_reports++; native_report_vector = tf->vector; native_report_address = address;
+}
 #include "../../../src/kernel/proc/signal.c"
 #include "../../../src/kernel/proc/syscalls_signal.c"
 #include "../../../src/kernel/proc/clock.c"
@@ -664,6 +673,7 @@ static void test_syscalls(void)
 }
 static void test_fatal(void)
 {
+    native_reports = 0;
     for (unsigned variant = 0; variant < 8; variant++) {
         struct process *p;
         struct proc_thread *t = signal_process(proc_supervisor(), &p);
@@ -689,6 +699,20 @@ static void test_fatal(void)
         expect_exit = false;
         CHECK(p->state == PROC_STOPPING && p->status == (variant == 6 ? SIGTERM : variant == 7 ? SIGKILL : SIGSEGV));
         t->in_syscall = false;
+        destroy_signal_process(p);
+    }
+    /* Variants 0-3 died of the fault itself and were reported; a caught
+     * fault, a bad stack frame and signals sent with kill are not reports. */
+    CHECK(native_reports == 4 && native_report_vector == 14 && native_report_address == CIUKI_MMAP_BASE);
+    {
+        struct process *p;
+        struct proc_thread *t = signal_process(proc_supervisor(), &p);
+        select_task(t); catch_signal(p, SIGSEGV);
+        struct trap_frame tf = user_frame(t);
+        tf.vector = 14; tf.err = 4;
+        unsigned before = native_reports;
+        proc_signal_fault(&tf, CIUKI_MMAP_BASE);
+        CHECK(native_reports == before && p->state == PROC_LIVE && t->in_handler);   /* delivered, not dead */
         destroy_signal_process(p);
     }
     puts("signal fatal: default/blocked/ignored/handler fault, bad stack, forged return, handler TERM/KILL PASS");

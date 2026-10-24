@@ -38,6 +38,11 @@ struct file_description {
     uint64_t position;
     uint32_t references, flags, deny, cursor, stream;
     uint32_t com_generation, lpt_generation;
+    /* fx-26: /dev/mixer and /dev/media poll readiness: the state this
+     * description last read (master fingerprint, media serial). POLLIN
+     * while the current state differs or nothing was read yet. */
+    uint32_t observed;
+    bool observed_valid;
     struct fat_cursor fat_cursor; /* f3-51c FAT cluster cursor; namespace + volume reservation */
     struct fat_dir_hint dir_hint; /* f1-93b readdir position of cursor; namespace + volume reservation */
 };

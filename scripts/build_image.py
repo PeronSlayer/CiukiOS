@@ -327,8 +327,9 @@ def desktop_payloads():
                "/Programs/regedit": DESKTOP / "regedit",
                "/Programs/hwreport": DESKTOP / "hwreport",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
-               "/Programs/clipbrd": DESKTOP / "clipbrd", "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
-               "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
+               "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
+               "/Programs/help": DESKTOP / "help", "/Programs/logview": DESKTOP / "logview", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
+               "/Programs/clipbrd": DESKTOP / "clipbrd",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
