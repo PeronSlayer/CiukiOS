@@ -30,6 +30,9 @@ struct term_host {
     int (*volume)(void *, uint32_t, uint32_t, uint32_t);
     int (*processes)(void *, void *, unsigned);
     int (*display)(void *, struct ciuki_display_info *);
+    int (*run)(struct terminal *, int, char **);
+    int (*registry)(struct terminal *, int, char **);
+    int (*format)(void *, int write, struct ciuki_media_format *);
     int (*launch)(void *, const char *, const char *);
     int (*kill)(void *, uint32_t);
     int (*power)(void *, unsigned);
@@ -70,6 +73,10 @@ struct terminal {
     int errorlevel, echo_off;
     void *batch; unsigned batch_depth;       /* the running batch file frame, NULL at the prompt */
 };
+int term_run_command(struct terminal *, int, char **);
+int term_registry_command(struct terminal *, int, char **);
+int term_registry_at(struct terminal *, int, char **, const char *directory);
+int term_format_command(struct terminal *, int, char **);
 int term_network_command(struct terminal *, int, char **);
 int term_disktool(struct terminal *, int, char **);
 int term_attach(struct terminal *, struct du_ui *, const struct term_host *);

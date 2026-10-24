@@ -156,6 +156,19 @@ int main(int argc, char **argv)
         assert(!(app.view_items[6].flags & DU_ITEM_DISABLED));
         du_render(&ui);
         at_save(folder, "viewer-rotated", &ui);
+        char saved[1024];snprintf(saved,sizeof(saved),"%s/rotation.bmp",scratch);
+        assert(!viewer_save_bmp(&app.image,saved));
+        uint8_t *encoded=NULL;size_t length=0;
+        assert(!viewer_native_fs()->read(NULL,saved,&encoded,&length,VIEWER_MAX_FILE));
+        struct viewer_image back;assert(!viewer_decode(encoded,length,saved,&back));free(encoded);
+        assert(back.width==app.image.width && back.height==app.image.height && !memcmp(back.pixels,app.image.pixels,(size_t)back.width*back.height*4));
+        viewer_free(&back);
+        assert(viewer_save_bmp(&app.image,"/no-such-g27b-folder/picture.bmp")<0);
+        assert(viewer_save_bmp(NULL,saved)==-EINVAL);
+        struct viewer_image over_limit={.pixels=raw,.width=8192,.height=2048};
+        assert(viewer_save_bmp(&over_limit,saved)==-EFBIG);
+        viewer_event(&ui,&(struct du_event){.type=DU_EV_ACTIVATE,.id=V_M_SAVE_AS},&app);
+        assert(du_dialog_id(&ui)==V_D_SAVE);du_dialog_close(&ui);
         snprintf(path, sizeof(path), "%s/b-photo.jpg", scratch); viewer_open(&app, path); assert(app.rotation == 0);   /* a new picture starts upright */
     }
     /* Set As Wallpaper: the file as stored, for the formats the desktop decodes. */

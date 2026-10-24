@@ -434,7 +434,7 @@ static void wm_frame(const char *what)
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
 }
-static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer","resmeter"};
+static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer","resmeter","viewer","serial"};
 static void wm_begin(unsigned m, int shell)
 {
     wm_mode=m; wm_shell=shell; g19_drop_fixture=0;
@@ -2338,6 +2338,50 @@ static void row_recovery(unsigned m)
     assert(!desk_recovery_win(&d) && !d.terminal_shell); step("WIN: the icons return");
     wm_end();
 }
+static void row_g27b_statistics(unsigned m)
+{
+    row_name="G27B Statistics Box";wm_begin(m,1);
+    struct fake_app *a=app_open("calc",440,300,60,60);step("scientific calculator");
+    app_paint(a,40,30,320,230,0x224466);step("Sta opens Statistics Box with retained data");
+    app_paint(a,48,60,224,160,0x557799);step("select data and CD/CAD update rows");
+    struct fake_app *cover=app_open("files",200,170,160,120);step("cover statistics list");
+    app_paint(a,48,60,224,160,0x335577);step("statistics update while covered");
+    app_close(cover);step("expose statistics list");
+    app_paint(a,0,0,440,300,0x667788);step("RET/LOAD dismiss box and refresh display");
+    app_close(a);step("close calculator");wm_end();
+}
+static void row_g27b_viewer_save(unsigned m)
+{
+    row_name="G27B rotated picture Save As";wm_begin(m,1);
+    struct fake_app *a=app_open("viewer",400,300,60,60);step("rotated image");
+    app_paint(a,20,30,360,240,0x227744);step("Save As opens");
+    app_paint(a,60,80,280,100,0x446688);step("overwrite confirmation");
+    app_paint(a,0,0,400,300,0x884466);step("cancel or successful save exposes rotated image");
+    app_paint(a,80,80,240,100,0x778899);step("save failure message");
+    app_paint(a,0,0,400,300,0x884466);step("dismiss failure without losing image");
+    app_close(a);step("viewer closes");wm_end();
+}
+static void row_g27b_terminal(unsigned m)
+{
+    row_name="G27B terminal command output";wm_begin(m,1);
+    struct fake_app *a=app_open("terminal",400,300,60,60);step("terminal prompt");
+    app_paint(a,4,4,392,292,0x224466);step("FORMAT warning or refusal and summary");
+    struct fake_app *cover=app_open("files",200,170,160,120);step("cover command output");
+    app_paint(a,4,4,392,292,0x335577);step("RUN output or PING result while covered");
+    app_close(cover);step("expose output");
+    app_paint(a,4,4,392,292,0x446688);step("REG result and prompt");
+    app_close(a);step("terminal closes");wm_end();
+}
+static void row_g27b_serial(unsigned m)
+{
+    row_name="G27B serial protocol selection and result";wm_begin(m,1);
+    struct fake_app *a=app_open("serial",400,300,60,60);step("serial connection");
+    app_paint(a,4,4,340,270,0x224466);step("YMODEM ZMODEM Kermit menu");
+    app_paint(a,20,30,360,240,0x335577);step("send or receive file chooser");
+    app_paint(a,0,280,400,20,0x446688);step("transfer progress status");
+    app_paint(a,0,280,400,20,0x557799);step("complete cancel or error status");
+    app_close(a);step("serial closes");wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2354,7 +2398,8 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content,
     row_icon_sort, row_icon_auto_arrange,
     row_icon_keyboard, row_system_icon_rename, row_wallpaper_change, row_shortcut_wizard, row_icon_metrics,
-    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery};
+    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery,
+    row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal, row_g27b_serial};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

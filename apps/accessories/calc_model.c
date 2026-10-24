@@ -447,6 +447,20 @@ void calc_dms(struct calc *c)
 void calc_int(struct calc *c) { if (!c->error) { double v = calc_current(c); unary_done(c, c->inv ? v - trunc(v) : trunc(v)); } }
 void calc_not(struct calc *c) { if (!c->error) unary_done(c, (double)~(int64_t)calc_current(c)); }
 void calc_stat_clear(struct calc *c) { c->nstat = 0; }
+int calc_stat_load(struct calc *c, unsigned index)
+{
+    if (index >= (unsigned)c->nstat) return 0;
+    c->error = 0;
+    unary_done(c, c->stat[index]);
+    return 1;
+}
+int calc_stat_delete(struct calc *c, unsigned index)
+{
+    if (index >= (unsigned)c->nstat) return 0;
+    memmove(c->stat + index, c->stat + index + 1, ((unsigned)c->nstat - index - 1) * sizeof(c->stat[0]));
+    c->nstat--;
+    return 1;
+}
 void calc_stat_data(struct calc *c)
 {
     if (c->error) return;

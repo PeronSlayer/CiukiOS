@@ -1,6 +1,15 @@
 /* SPDX-License-Identifier: MIT
  * Serial Terminal model: connection, keyboard, capture, text and XMODEM transfers. */
 #include "serial.h"
+#if !defined(__linux__) && !defined(__APPLE__)
+#include <unistd.h>
+#else
+/* Only these POSIX calls are needed; avoid host sysconf enums colliding with
+ * the deliberately freestanding CiukiOS ABI used by the model harness. */
+int close(int);
+int fsync(int);
+#endif
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +43,8 @@ void serial_init(struct serial_term *t, const struct serial_ops *ops)
 }
 void serial_close_files(struct serial_term *t)
 {
+    if (t->transfer_temp[0]) { remove(t->transfer_temp);t->transfer_temp[0]=0; }
+    free(t->transfer);t->transfer=NULL;
     serial_capture_stop(t);
     if (t->xm_file) { fclose(t->xm_file); t->xm_file = NULL; }
     free(t->text); t->text = NULL; t->text_length = t->text_at = 0;
@@ -56,9 +67,11 @@ void serial_disconnect(struct serial_term *t)
     if (t->xm_active) {      /* a transfer cannot outlive the connection */
         serial_xmodem_cancel(t); xmodem_cancel(&t->xm);
         if (t->xm_file) { fclose(t->xm_file); t->xm_file = NULL; }
-        if (!t->xm_sending) remove(t->xm_path);
+        if (!t->xm_sending && !t->transfer) remove(t->xm_path);
         snprintf(t->message, sizeof(t->message), "Transfer cancelled: the port was closed");
         t->xm_active = 0;
+        if (t->transfer_temp[0]) { remove(t->transfer_temp);t->transfer_temp[0]=0; }
+        free(t->transfer);t->transfer=NULL;
     }
     free(t->text); t->text = NULL; t->text_length = t->text_at = 0;
     t->ops.close(t->ops.ctx); t->connected = 0; t->tx_count = 0;
@@ -179,9 +192,63 @@ static int xm_begin(struct serial_term *t, const char *path, int sending, int on
 }
 int serial_xmodem_send(struct serial_term *t, const char *path, int one_k) { return xm_begin(t, path, 1, one_k); }
 int serial_xmodem_receive(struct serial_term *t, const char *path, int crc) { return xm_begin(t, path, 0, crc); }
+static int transfer_seek(void *ctx, uint32_t offset)
+{ struct serial_term *t=ctx;return fseek(t->xm_file,(long)offset,SEEK_SET) ? -EIO : 0; }
+int serial_transfer_start(struct serial_term *t,const char *path,int protocol,int sending)
+{
+    if (!t->connected) return -ENOTCONN;
+    if (t->xm_active || t->text) return -EBUSY;
+    if (!path || strlen(path)+8>=sizeof(t->xm_path)) return -ENAMETOOLONG;
+    struct transfer *engine=calloc(1,sizeof(*engine));if(!engine)return -ENOMEM;
+    FILE *f=NULL;int e=0;long size=0;
+    if (sending) {
+        f=fopen(path,"rb");
+        if (f) { if(fseek(f,0,SEEK_END) || (size=ftell(f))<0 || fseek(f,0,SEEK_SET))e=-EIO; }
+    } else {
+        snprintf(t->transfer_temp,sizeof(t->transfer_temp),"%s.XXXXXX",path);
+        int fd=mkstemp(t->transfer_temp);
+        if(fd>=0) { f=fdopen(fd,"wb");if(!f)close(fd); }
+    }
+    if(!f && !e)e=-errno;
+    if(!e) {
+        struct transfer_io io={xm_read,xm_write,transfer_seek,t};
+        const char *base=strrchr(path,'/');base=base ? base+1 : path;
+        e=transfer_init(engine,protocol,sending,&io,base,(uint32_t)size);
+    }
+    if(e) {
+        if(f)fclose(f);
+        if(t->transfer_temp[0]) { remove(t->transfer_temp);t->transfer_temp[0]=0; }
+        free(engine);return e;
+    }
+    t->xm_file=f;t->transfer=engine;t->xm_active=1;t->xm_sending=sending;t->xm_linger_ms=0;
+    snprintf(t->xm_path,sizeof(t->xm_path),"%s",path);return 0;
+}
+static void transfer_drain(struct serial_term *t)
+{
+    uint8_t out[256];size_t n;
+    while(t->tx_count<SERIAL_TX && (n=transfer_take(t->transfer,out,SERIAL_TX-t->tx_count<sizeof(out) ? SERIAL_TX-t->tx_count : sizeof(out))))queue_bytes(t,out,n);
+}
+static void transfer_finish(struct serial_term *t,unsigned elapsed_ms)
+{
+    struct transfer *x=t->transfer;
+    if(!x->state || x->out_length)return;
+    if(t->xm_file) {
+        int bad=0;
+        if(!t->xm_sending && x->state==1 && (fflush(t->xm_file) || fsync(fileno(t->xm_file))))bad=1;
+        if(fclose(t->xm_file))bad=1;
+        t->xm_file=NULL;
+        if(!t->xm_sending && x->state==1 && !bad && rename(t->transfer_temp,t->xm_path))bad=1;
+        if(bad)x->state=-1;
+        if(t->transfer_temp[0]) { remove(t->transfer_temp);t->transfer_temp[0]=0; }
+        snprintf(t->message,sizeof(t->message),"Transfer %s: %u bytes",x->state==1 ? "complete" : x->state==-2 ? "cancelled" : "failed",x->position);
+    }
+    if(!t->xm_sending && x->state==1 && (t->xm_linger_ms+=elapsed_ms)<3000)return;
+    free(t->transfer);t->transfer=NULL;t->xm_active=0;
+}
 void serial_xmodem_cancel(struct serial_term *t)
 {
     if (!t->xm_active) return;
+    if (t->transfer) { transfer_cancel(t->transfer);transfer_drain(t);return; }
     xmodem_cancel(&t->xm);
     uint8_t out[8]; size_t n = xmodem_take(&t->xm, out, sizeof(out));
     queue_bytes(t, out, n);
@@ -228,12 +295,19 @@ static void deliver(struct serial_term *t, const uint8_t *data, size_t length)
 void serial_pump(struct serial_term *t, unsigned elapsed_ms)
 {
     if (!t->connected) return;
-    uint8_t buffer[512]; int n, rounds = 0;
-    while (rounds++ < 8 && (n = t->ops.read(t->ops.ctx, buffer, sizeof(buffer))) > 0) {
+    uint8_t buffer[512]; int n=0, rounds = 0;
+    if(t->transfer)transfer_drain(t);
+    while ((!t->transfer || t->transfer->out_length<2000) && rounds++ < 8 && (n = t->ops.read(t->ops.ctx, buffer, sizeof(buffer))) > 0) {
         t->received += (uint64_t)n;
         if (t->xm_active) {
             size_t used = 0;
             while (used < (size_t)n) {
+                if(t->transfer) {
+                    size_t took=transfer_input(t->transfer,buffer+used,(size_t)n-used);
+                    transfer_drain(t);
+                    if(!took)break;
+                    used+=took;continue;
+                }
                 size_t took = xmodem_input(&t->xm, buffer + used, (size_t)n - used);
                 uint8_t out[XMODEM_OUT]; size_t m;
                 while ((m = xmodem_take(&t->xm, out, sizeof(out))) > 0) { if (queue_bytes(t, out, m) < m) break; }
@@ -244,7 +318,12 @@ void serial_pump(struct serial_term *t, unsigned elapsed_ms)
         if (n < (int)sizeof(buffer)) break;
     }
     if (n < 0) { snprintf(t->message, sizeof(t->message), "The port reported a read error"); }
-    if (t->xm_active) {
+    if(t->transfer) {
+        transfer_tick(t->transfer,elapsed_ms);transfer_drain(t);
+        if(!t->transfer->state)snprintf(t->transfer->message,sizeof(t->transfer->message),"%s %u bytes",t->xm_sending ? "Sending" : "Receiving",t->transfer->position);
+        transfer_finish(t,elapsed_ms);
+    }
+    else if (t->xm_active) {
         xmodem_tick(&t->xm, elapsed_ms);
         uint8_t out[XMODEM_OUT]; size_t m;
         while (t->tx_count + 256 < SERIAL_TX && (m = xmodem_take(&t->xm, out, 256)) > 0) queue_bytes(t, out, m);
@@ -274,5 +353,5 @@ void serial_status_line(const struct serial_term *t, char *out, size_t size)
     snprintf(out, size, "Connected   COM%u %u %s   %s %s %s %s   RX %llu  TX %llu%s%s%s", t->port, t->line.baud, fmt,
              t->outputs & SERIAL_DTR ? "DTR" : "dtr", t->outputs & SERIAL_RTS ? "RTS" : "rts", t->status.modem & 0x10 ? "CTS" : "cts", t->status.modem & 0x20 ? "DSR" : "dsr",
              (unsigned long long)t->received, (unsigned long long)t->transmitted, t->capture ? "   CAPTURE" : "",
-             t->xm_active ? "   " : t->message[0] ? "   " : "", t->xm_active ? t->xm.message : t->message);
+             t->xm_active ? "   " : t->message[0] ? "   " : "", t->xm_active ? (t->transfer ? t->transfer->message : t->xm.message) : t->message);
 }

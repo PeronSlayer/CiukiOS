@@ -463,7 +463,7 @@ int term_batch(struct terminal *t, const char *path, int argc, char **argv)
             term_printf(t, "%s>%s\n", cwd, line);
         }
         int e = exec_line(t, &pc, line);
-        t->errorlevel = e ? -e : 0;
+        t->errorlevel = e < 0 ? -e : e;
         r = e;   /* the batch file ends with the status of its last command */
         if (b.finished) break;
     }
@@ -505,7 +505,7 @@ int term_execute(struct terminal *t, const char *line)
     unsigned pc = 0;
     r = exec_line(t, &pc, expanded);
     free(expanded);
-    t->errorlevel = r ? -r : 0;
+    t->errorlevel = r < 0 ? -r : r;
     return r;
 }
 
@@ -792,9 +792,7 @@ int term_extra(struct terminal *t, int n, char **a, int *result)
     else if (same(a[0], "FIND")) r = cmd_find(t, n, a);
     else if (same(a[0], "SORT")) r = cmd_sort(t, n, a);
     else if (same(a[0], "MORE")) r = cmd_more(t, n, a);
-    else if (same(a[0], "IPCONFIG")) r = cmd_ipconfig(t, n, a);
-    else if (same(a[0], "PING")) { term_write(t, "PING needs raw ICMP sockets, which the network stack does not offer yet.\n"); r = -ENOSYS; }
-    else if (same(a[0], "FORMAT")) { term_write(t, "FORMAT needs the kernel's disk-format service, which is not available yet.\n"); r = -ENOSYS; }
+    else if (same(a[0], "IPCONFIG")) r = t->host.network_command ? t->host.network_command(t,n,a) : cmd_ipconfig(t, n, a);
     else {
         /* NAME, NAME.BAT or NAME.CMD in the current folder (or a path) runs the batch file. */
         char path[FM_PATH], with_ext[FM_PATH]; struct fm_meta meta;

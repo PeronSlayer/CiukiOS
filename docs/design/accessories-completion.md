@@ -37,8 +37,8 @@ steps of the Control Panel (`apps/accessories/wallpaper.c`). The desktop decodes
 
 ## Image Viewer (AX-6)
 
-Rotation is a view transform of the decoded picture (right, left, 180, `viewer_rotate`); the file
-is not rewritten, and Set As Wallpaper uses the file as stored (the confirmation says so when
+Rotation transforms the decoded picture (right, left, 180, `viewer_rotate`); G27B Save As
+writes those transformed pixels into a new lossless BMP, and Set As Wallpaper uses the file as stored (the confirmation says so when
 the picture is rotated). GIF cannot be a wallpaper (the desktop has no GIF decoder).
 
 ## Serial Terminal (AX-8)
@@ -83,5 +83,79 @@ batch interpreter follows the MS-DOS 7 COMMAND.COM semantics listed there.
 ## Limits common to the accessories
 
 Windows are fixed-size (no client resize in protocol v2). No ABI or public SDK header changed.
-Screen-changing events: Set As Wallpaper sends the existing `DESK_SETTINGS_RELOAD`; the other
-accessories are ordinary client windows (fx-15 window-model rows unchanged).
+Screen-changing events use ordinary client damage; G27B appends fx-15 rows 92–95.
+Set As Wallpaper sends the existing `DESK_SETTINGS_RELOAD`.
+
+## G27B continuation: expected behaviour and implementation decisions
+
+Research checked 2026-10-24. The Windows 98 Resource Kit Appendix D
+`wrkappd_3.htm` names Calculator, Paint, Imaging and HyperTerminal;
+chapter 11 `wrkc11_1.htm` and `wrkc11_2.htm` describe the shared printing
+and image output services. The local extracted book is research material only.
+
+* Sta opens a Statistics Box with the stored data in insertion order, a selected
+  row, RET (return), LOAD (copy the selected value to the display), CD (delete
+  selected data) and CAD (clear all data). Opening/returning never clears data.
+  The existing Dat/Ave/Sum/deviation engine remains the owner of the data.
+* Paint already routes File Print/Page Setup to G31, snapshotting the entire
+  unsaved picture, independent of zoom. Reuse and verify this integration.
+* Viewer Save As writes the currently decoded and rotated pixels as a lossless
+  24-bit BMP, with a shared Save dialog and overwrite confirmation. A failed
+  save leaves the source intact; use a sibling temporary file then rename.
+  BMP rows and padding follow Microsoft's [BITMAPINFOHEADER specification](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader).
+* FORMAT uses G29's generation-checked MEDIA_QUERY_FORMAT/MEDIA_FORMAT service,
+  accepts a drive, Quick/Full, FAT family and label, prints capacity and a warning,
+  and requires an explicit YES argument before any destructive call. Fixed and
+  boot volumes remain refused by the service. Unsupported DOS switches fail.
+* PING already uses G26 raw ICMP echo, identifier/sequence matching and timeouts,
+  per [RFC 792](https://www.rfc-editor.org/rfc/rfc792). Keep one implementation.
+* RUN executes a native child with arguments and redirected standard streams,
+  waits while pumping UI input, reports the exit code and supports interruption.
+  GUI/DOS/Win32 launches continue through START and the desktop launcher.
+* REG exposes the existing native libreg transactional service: query, add,
+  delete, import and export, with typed literals and explicit deletion force.
+  It does not translate native registry files into Windows REGEDIT4 syntax.
+* Serial transfers use bounded incremental engines, with output backpressure,
+  retransmission, cancellation and binary integrity. YMODEM uses block zero,
+  declared size, CRC16, ACK/NAK/EOT and empty end-of-batch header per Forsberg's
+  [XMODEM/YMODEM reference](https://wiki.zubax.com/public/development/XMODEMYMODEM-protocol-reference).
+  ZMODEM uses CRC16 headers/data, ZRINIT/ZFILE/ZRPOS/ZDATA/ZEOF/ZFIN and ZDLE quoting,
+  per [Forsberg's original specification](https://www.tuhs.org/Usenet/comp.sources.unix/1986-May/004372.html).
+  Kermit uses negotiated short packets, type-1 checksum, control quoting and
+  stop-and-wait sequence numbers per Columbia's [Kermit Protocol Manual](https://www.kermitproject.org/kproto.pdf).
+  Receiver output is the explicitly chosen local filename; remote names cannot
+  select arbitrary local paths. One selected file per transfer invocation.
+
+
+G27B implementation limits: Statistics Box uses the existing modal toolkit sheet;
+RET/LOAD return to the calculator with the data retained, and Sta reopens the list.
+It is not an independently movable modeless desktop window. This is a deliberate
+reuse of the native one-window-per-channel toolkit, rather than a new multiwindow
+protocol in this accessory item. The data count remains bounded at 256.
+The action definitions were checked against Microsoft's [Windows 3.0 User's Guide,
+Additional Accessories](https://www.bitsavers.org/pdf/microsoft/windows_3.0/Windows_3.0_Users_Guide_198909.pdf),
+which documents the original Statistics Box workflow; independent modeless
+window activation remains a difference from that reference.
+
+Transfers select one file and an explicit local destination, preserving an existing
+destination on cancellation/error through a sibling temporary file. YMODEM receives
+SOH/STX blocks and exact declared sizes, and terminates the batch with an empty
+block zero. A second nonempty batch header is refused. ZMODEM deliberately
+advertises no CRC32/full-duplex/overlapped-I/O capabilities, receives CRC16 streaming
+subpackets and sends bounded ZCRCW blocks with position recovery. Kermit negotiates
+short packets and type-1 checksums, without long packets, sliding windows or repeat
+compression. Automatic ZMODEM detection, multi-file batches and qualification
+against independent period peers remain outside the host round-trip evidence.
+RUN connects EOF when no redirected input exists; interactive child console input
+is not implemented. REG uses native libreg roots and typed literals; `STRING text`
+avoids ambiguity with shell quote removal. No public ABI or SDK headers change.
+
+Paint G27B integration repair: the G31 Print/Page Setup entries shifted the
+wallpaper commands, but `update_menus` still disabled file-menu indexes 5/6
+when no wallpaper callback existed. Those are now Page Setup/Print, so Ctrl+P
+was unreachable in the host fixture. Enablement now matches command IDs and
+separately tests the print and wallpaper providers. Registering a print provider
+refreshes menu state immediately; a missing provider disables its commands.
+
+BMP output is refused above the existing 32 MiB Viewer file limit, so every
+successfully saved picture remains readable within the same file budget.

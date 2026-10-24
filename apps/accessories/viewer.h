@@ -18,6 +18,7 @@ void viewer_free(struct viewer_image *);
 /* Rotates the picture clockwise by quarter_turns (1 = 90 degrees right, 2 = 180, 3 = 90 degrees left; any integer, modulo 4).
  * 0, or -ENOMEM with the picture unchanged. */
 int viewer_rotate(struct viewer_image *, int quarter_turns);
+int viewer_save_bmp(const struct viewer_image *, const char *path);
 int viewer_is_image_name(const char *name);
 /* Zoom in percent; 0 means best fit. */
 int viewer_zoom_step(int zoom, int direction);
@@ -47,9 +48,10 @@ struct viewer_app {
     int (*wallpaper)(void *host, const char *path, int mode);
     int scroll_x, scroll_y;   /* image pixels at the top-left of the view */
     struct du_file_entry *entries;
-    struct du_menu menus[3]; struct du_menu_item file_items[11], view_items[9], help_items[1];
+    struct du_menu menus[3]; struct du_menu_item file_items[12], view_items[9], help_items[1];
 };
 enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, V_M_FIT, V_M_ABOUT, V_M_PAGESETUP, V_M_PRINT, V_M_RIGHT, V_M_LEFT, V_M_TURN, V_M_WALL_CENTER, V_M_WALL_TILE, V_M_WALL_STRETCH,
+       V_M_SAVE_AS = 30, V_D_SAVE,
        V_STATUS = 100, V_PREV, V_NEXT, V_IN, V_OUT, V_FIT, V_ACTUAL, V_D_OPEN = 200, V_D_INFO };
 int viewer_attach(struct viewer_app *, struct du_ui *, const struct viewer_fs *);
 void viewer_detach(struct viewer_app *);

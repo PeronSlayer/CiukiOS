@@ -20,7 +20,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/libdeskui/recent.c", "apps/libdeskui/keymap.c",
+           "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/libdeskui/recent.c", "apps/libdeskui/keymap.c",
            "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 INCLUDES = ["-I", str(ROOT / "apps/accessories"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
@@ -29,7 +29,7 @@ GAMES = "apps/games/"
 TESTS = {
     "mines": [GAMES + "mines_model.c", GAMES + "mines_view.c", GAMES + "cards.c"],
     "freecell": [GAMES + "freecell_model.c", GAMES + "freecell_view.c", GAMES + "cards.c"],
-    "serial": ["apps/serial/screen.c", "apps/serial/xmodem.c", "apps/serial/serial_model.c", "apps/serial/serial_view.c"],
+    "serial": ["apps/serial/screen.c", "apps/serial/xmodem.c", "apps/serial/transfer.c", "apps/serial/serial_model.c", "apps/serial/serial_view.c"],
     "hearts": [GAMES + "hearts_model.c", GAMES + "hearts_view.c", GAMES + "cards.c"],
     "solitaire": [GAMES + "solitaire_model.c", GAMES + "solitaire_view.c", GAMES + "cards.c"],
 }
