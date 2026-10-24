@@ -51,40 +51,40 @@ TOOLKIT_FRAMES = {
 HELP_TOOLKIT_FRAMES = {
     'help-dialog-button.xrgb': 'a6cd36f668060afff27e9250c7a4e377218f18e36ecf56d63ce149afa6b18aab',
     'help-dialog-whats-this.xrgb': '8dcf17399af218f5a5a0aca0d848b3326aff9fce0539db6eb8dea032523a56a2',
-    'help-tooltip.xrgb': 'a6f99be097cb9321c34b2849424e09fdfaea0d556e67522f72f0cd3485405003',
+    'help-tooltip.xrgb': '08b3246e79f06ba9f6dbcc6e8b27624291927698ce530a64e62c85d95b6f8b42',
     'help-whats-this.xrgb': 'aec0b87a3abead1bf4a49be6f8b4a5e08138d1386dfd1b151db65d96994c04ea',
 }
-# Merge G7: retain main's reviewed frame hashes; the lead re-pins combined UI changes.
+# Fix A (2026-10-24): reviewed combined G8 menus, G24 regional text and integrated Files frames.
 FILES_FRAMES = {
-    'files-drop-target.xrgb': 'fa3e0f26a2db9c30dd775cd57bdf5925669e1d72872289e5c9e0dff9a778a977',
-    'files-band-details.xrgb': '4080b44e53eef99b7c25e4662588fe20350324862aa8a6900b9a72860ce94ece',
-    'files-band-list.xrgb': '3e462501fda2ce487945b057fa78a88e85ac92ad40650dde027e23fba3c6368e',
-    'files-band-icons.xrgb': 'aa131944918d592a600592c10d13d5fa0c05aaf9e4972c3d8dbc99400d621276',
-    'files-about.xrgb': '1a93a771a447517d1872b950e12418dac641d4f1f0c7c21841a1e5115bdc68f6',
-    'files-programs-icons.xrgb': 'ba85b84b556aeaeba0165ed54fcbc5762f2dc8af5a911922e6652400fbbbad1c',
-    'files-confirm-delete.xrgb': '68240aed5186a408d746eeb88692d3bf5121b5444a40d4d0b4fbcc02641adf37',
-    'files-context-background.xrgb': '36025408efb1545e3d5e9b4349f821430f5a1f999d8c39458f6bc1456bd7bdac',
-    'files-context-item.xrgb': '80ccd71c58c45eeea0471a01335970bc2ffc05f9b43ca2dfb971f5654572307f',
-    'files-copy-progress.xrgb': '2542fade6958be2ef613a5567c27b6b21358541a6c98c741bdbb8d0e738ffa3e',
-    'files-cp1-system.xrgb': '6bf866276d2d492a36c76dd37952f7cdf8eafc69a9daba60f6ee749c15fdf379',
-    'files-cp2-new-folder.xrgb': 'a0206dad2edeaf99be51337eb51186e3ce8b20fcf6c22ec8fbc59996b92ed6d6',
-    'files-cp3-renamed.xrgb': 'db328fb767d988aab0783feb17115dd24b45c82fb230d4a68b88321b96d77f9c',
-    'files-cp4-copied.xrgb': 'eac0df61e307c53e214aa7e34c1c33726ae7570d2c19653ab0c74f2e8909147a',
-    'files-cp5-deleted.xrgb': '75122973988f67620bd112bc3b89efbd39e16acf1cc8e7e6013dd49156d1beb6',
-    'files-help.xrgb': '4268a86667b2c80bddb6305cbc95e97a62b49d3d6295f83142cbf5301cf669b7',
-    'files-menu-file.xrgb': 'fa3bbac3d311703fbbc92762a3fe6a5171b7ae731e99c8c7176a1131a170fe89',
-    'files-menu-view.xrgb': '18cb22210b89067d6a9195eddcc261b5c8336a1ea5878482261a433663f5d078',
-    'files-multi-select.xrgb': 'ddbec86351caf942f8658ea586bc859121e5c2cdd34af1eaa250920f2f9f211d',
-    'files-properties.xrgb': '8308013ed6c5cf7372d0d415e9f32ac9de578f9d8970c65ed75f4c24de7f7798',
-    'files-rename-error.xrgb': '2a28adc4ea67265026e8fb2c779dfecc04204e9a167e9811754f50188bb3c52f',
-    'files-replace-prompt.xrgb': '8e66a2b9a7c423e2678dfffd1f12e86083f59df196243b3dfde95cb466dac85e',
-    'files-computer.xrgb': '506bb594021dc02a639b7551b5d076d67610323859d387e55a583a2d1e2f8e14',
-    'files-c-drive.xrgb': 'f7f83a31eb52f51ae109a81a4e50dc60a27c238521451adc77e5e038c2dc2b8d',
-    'files-root-details.xrgb': '113608285b83719291c9f25f492f077bdb9567e3a379424927c51105a9ed4eb7',
-    'files-sort-size-desc.xrgb': '98a9556f0422749d1e8aa9a483df84ef328b86db81cb1e137c2d85c5aa31eb48',
-    'files-system-details.xrgb': '3505f30e9aa8ad5859330877045665d135f2a7c8fd15725e3b9ed7daf3082121',
-    'files-system-icons.xrgb': '70cfa16a5528554805141a9d71d2658ebdbad4cb2ee9545a2fd1e3f70489a64f',
-    'files-tree.xrgb': '625a8187d886448fe7ab0356df520e6449805b1d65526f9b546182e84e618c5c',
+    'files-drop-target.xrgb': '9e7f4e9ed7defb992f5d31e75b99eafff69700b134240f9044411bb66f0ac6fe',
+    'files-band-details.xrgb': '29250bb717a0dbcd69c59c8a5dd093478d7b579fad0e408e25d684b547004d95',
+    'files-band-list.xrgb': 'aa56db61a2335e894fc082b3aed6959b70b0587ee103e207108a11afec810674',
+    'files-band-icons.xrgb': '3b6a79757c6c2b9bf144eddaddd64755aa14ea87405ac2ea7d24f4536fe60ba6',
+    'files-about.xrgb': '599a2fcb1f168a318149bea26a0435321fd82dcbb8d1e8c7b5dfba15f52dbb09',
+    'files-programs-icons.xrgb': 'ed6c39b2d7cac1194eb318f74fe5854957f5bf84dd8c2664d4c280c8aa091431',
+    'files-confirm-delete.xrgb': 'ec7bae5c28c2be4bc1687032d852a67a988a7608943918d57727a566d474275a',
+    'files-context-background.xrgb': 'c15ed6b4941a646eb0d72442c800dfc7cd9047c5d30267b213d048d7619d29bd',
+    'files-context-item.xrgb': 'f735bb8f96bca642495ed7398118748fe4e0d530d586158895f8a22fe0c226f9',
+    'files-copy-progress.xrgb': 'c12141f698e7383fa905955f930f586aa2f0303f5a136c3b4073e51228384a5a',
+    'files-cp1-system.xrgb': 'a6f44a5cb0ab43b3588c3fc950dacda1674e639eb0265fabd95195d94b5e0752',
+    'files-cp2-new-folder.xrgb': '951c57be3937ec3a271d6bb5247201ef31cb651b9bc62e5e6589a6d4f5c2abc5',
+    'files-cp3-renamed.xrgb': '5998d04289e24d052c0a60a0f45ac7330412c7b32d93f9d5b0b716c2539548a9',
+    'files-cp4-copied.xrgb': '62d9185bb769b21eca79bed9462b62f542f4e919da295936590655da90266a2b',
+    'files-cp5-deleted.xrgb': 'ed659d7058677f71b0aa8a44463fc60ea6f2889f6afdf21ada6978894ec2a27a',
+    'files-help.xrgb': '385397f26414d25bd198e94fc42466e97d278adec2ea196a98e7f5abd9dbc65f',
+    'files-menu-file.xrgb': '84ab26d3e014f4d1968408913b675c6882731f82fb030740e052384227c74794',
+    'files-menu-view.xrgb': '70f8fde96b769013f7a86198d108508c4c5eec10e0ff7469208a0954ad0c072d',
+    'files-multi-select.xrgb': '69ed87d4a59a5fa07a32e6dbd9d91722f41a2a6a59f6cf38686d77a19aa3ff5d',
+    'files-properties.xrgb': '3a164995eef139ff1967477c2b9f5aaed698a85ad2dc9317bb7ae8bfbb2e15f8',
+    'files-rename-error.xrgb': '6cdd24b8827fa7ca852ed8262d17a52a6c0241ebfa84673518d34e3d9bc6311e',
+    'files-replace-prompt.xrgb': 'cec02d03e9d335d0a30d388a723b1dd96bca646d4a1c9cfb425c5653eea76819',
+    'files-computer.xrgb': 'b1ae97064dec9bc510c53263f622d91e22239a4fc6c0f031744611ddd8c7a916',
+    'files-c-drive.xrgb': '4d1cea3e20a476875979d6a6f5bd3bb1e1b8cbac70dc12ab57cb67e357fff174',
+    'files-root-details.xrgb': 'a805bd6fd7b4574c2b87c4cb46cd2bb4f4e59616f81e043127b3cd68d413be25',
+    'files-sort-size-desc.xrgb': 'f1099a836f08f9d8ac97b566077a1a4cce53f46ae1e07a4c9ba3e83895c6c09e',
+    'files-system-details.xrgb': '0e5c7f15200e8ad92bf69a53531890d4a64b528138f477e29a94feb84a63050b',
+    'files-system-icons.xrgb': '07650519226969dc8248f7f647b8315d9e941297039cf231ee025e77adc7dc22',
+    'files-tree.xrgb': '9b15462e628320282b7d416c6ef7b8d46e751c580d1e1895cfb76be75c13c898',
 }
 
 # ui-look (2026-10-12): the new theme engine, fonts and controls changed every
@@ -92,16 +92,16 @@ FILES_FRAMES = {
 # are re-pinned by the lead after a visual review; pinned entries still compare.
 PIN = "PIN-FROM-FIRST-RUN"
 
-# G24 merge: retain integration frame hashes; lead reviews and re-pins regional text.
+# Fix A (2026-10-24): reviewed regional text and combined property-sheet frames.
 # G6: reviewed property sheets, drive pie/counting, Version and Attributes.
 G6_FRAMES = {
-    "g6-attributes.xrgb": "4ec32dfe992e81b6410a27d69633378555a5ba2ace43694a2f3b01d43df7c3a5",
-    "g6-counting.xrgb": "645bf87f431823b02050418cbbb3c60ac64207833db3e5a32f530ba33ac519f9",
-    "g6-drive.xrgb": "f0b68a2ce8bb6e4f3f9e18c962898c6c234c612ef9de85bb1334f5e77155e638",
-    "g6-file.xrgb": "5bfaba21d7f7629d31aa78b3edfbc71d472e207f632032aca0596d060cd2c165",
-    "g6-folder.xrgb": "c7cde320492cac790ffb8e74c6ece5f449c6e88659de20cf4e58f3173d3e58d1",
-    "g6-tools.xrgb": "56bd974b5241215bb30f2e3e523f5229f43cf3fa9414a34f88d488ba456a3424",
-    "g6-version.xrgb": "96976f0bb3f2a2100d69c50ed0f6819ce2a3cc7043ac7d28d58327e1751c6526"
+    "g6-attributes.xrgb": "36c4b31cf29863de56400ecf085ed32903fd69f2cfc9eb64683fbdf24568fd40",
+    "g6-counting.xrgb": "314c76655d44debb66e227c9842fd19547e279876106e98b34660abbf922ef08",
+    "g6-drive.xrgb": "9137e28a12bbf353e84e493e10f88daf5628e79507bd0c59dd174f7657ffb4cd",
+    "g6-file.xrgb": "78f6614dd348b74028bed3ae0c3d247d27d6dc762a2a61b41683dd302538e2f7",
+    "g6-folder.xrgb": "bfb0324a30b2e80c88d939ea5455cda68e60b14c71adffbd06223f9c9198b9f5",
+    "g6-tools.xrgb": "9015ae71bb47c53f390ba462a3717303d3c1ee9895ec7b72f7d9308402419539",
+    "g6-version.xrgb": "4310c84be5d30c6671ff51bf763a98306408c7eb928fc3918e288334ff83bdcd"
 }
 
 

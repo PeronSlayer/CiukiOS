@@ -616,8 +616,16 @@ void du_tip_hide(struct du_ui *u)
 /* The widget under the pointer (or NULL). A stationary pointer shows the tip
  * after the initial delay; moving to another tool while one is shown waits only
  * the reshow delay. */
+static int tip_allowed(const struct du_ui *u)
+{
+    return u->focused_window && !u->whats_this && !u->help_tip.visible &&
+        u->menu < 0 && !u->popup && !u->combo_open && u->capture < 0 &&
+        (!u->dialog.kind || (!u->dialog.dragging && u->dialog.capture < 0));
+}
+
 void du_tip_motion(struct du_ui *u, struct du_widget *under)
 {
+    if (!tip_allowed(u)) { du_tip_hide(u); return; }
     if (under && (!under->tip[0] || under->hidden)) under = NULL;
     if (under != u->tip.w) {
         int was = u->tip.visible;
@@ -631,6 +639,8 @@ void du_tip_motion(struct du_ui *u, struct du_widget *under)
 
 void du_tip_tick(struct du_ui *u)
 {
+    /* G15/G15B guards also apply to tooltips armed before the UI changes. */
+    if (!tip_allowed(u) || (u->tip.w && u->tip.w->hidden)) { du_tip_hide(u); return; }
     if (!u->tip.w || u->tip.due == UINT64_MAX || u->now < u->tip.due) return;
     if (u->tip.visible) {            /* autopop: gone until the pointer leaves the tool */
         du_invalidate(u, u->tip.box); u->tip.visible = 0; u->tip.due = UINT64_MAX; return;

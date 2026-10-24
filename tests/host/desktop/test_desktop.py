@@ -901,7 +901,9 @@ class AppCaseReplayTests(unittest.TestCase):
         result = subprocess.run([str(self.binary), "--script", str(script), "--case", kind, "--bin", ",".join(self.programs),
                                  "--limit-s", "200", *(["--trace"] if kind == "files" else []),
                                  *(args if args is not None else SHELL_MODELS[model])],
-                                capture_output=True, text=True, env=self.env, timeout=300)
+                                # The app threads share the harness locale. Files opts into
+                                # it with setlocale(), so keep machine-readable timings in C.
+                                capture_output=True, text=True, env={**self.env, "LC_ALL": "C"}, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-4000:])
         out = {"checkpoints": [], "system": [], "text": result.stdout}
         for line in result.stdout.splitlines():

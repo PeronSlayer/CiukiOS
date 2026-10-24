@@ -68,7 +68,8 @@ static void fresh(void)
     du_init(&u, pixels, W, H);
     u.event = handler; u.help_open = fake_launch;
     reset_events(); launches = 0; launched[0] = 0; launch_result = 0; consume_help = 0;
-    u.now = now;
+    /* Start the caret clock too: G12 adds its deadline alongside tooltips. */
+    du_tick(&u, now);
 }
 
 enum { B_OK = 1, B_PLAIN, E_NAME, B_TIPPED };
@@ -153,6 +154,19 @@ static void test_tooltips(void)
     du_dialog_close(&u); reset_events();
     move(300, 200); move(40, 50); pending = u.tip.due; du_window_focus(&u, 0); at(pending); assert(!u.tip.visible);
     du_window_focus(&u, 1);
+    /* G15 guards survive the G16 timer rewrite: motion in an inactive window
+     * cannot rearm a tip, and hiding a tool cancels an already armed one. */
+    du_window_focus(&u, 0); move(300, 200); move(40, 50);
+    at(u.now + DU_TIP_DELAY_NS); assert(!u.tip.visible && !u.tip.w);
+    du_window_focus(&u, 1);
+    move(300, 200); move(40, 50); pending = u.tip.due;
+    du_get(&u, B_OK)->hidden = 1; at(pending); assert(!u.tip.visible && !u.tip.w);
+    du_get(&u, B_OK)->hidden = 0;
+    /* Programmatic menus also suppress a pending tip without further input. */
+    static const struct du_menu_item popup[] = {{"Action", 20, 0, 0, 0}};
+    move(300, 200); move(40, 50); pending = u.tip.due;
+    du_popup(&u, popup, 1, 200, 100, 0); at(pending); assert(!u.tip.visible && !u.tip.w);
+    du_menu_close(&u);
     /* A resize or a focus loss drops a shown tip. */
     move(300, 200); move(40, 50); at(u.tip.due); assert(u.tip.visible);
     du_window_focus(&u, 0); assert(!u.tip.visible); du_window_focus(&u, 1);
@@ -248,6 +262,17 @@ static void test_whats_this(void)
     reset_events(); chord(DU_KEY_LSHIFT, DU_KEY_F1); move(40, 50); press(2); release(2);
     assert(count_of(DU_EV_HELP) == 1 && !u.whats_this && u.help_tip.visible);
     press(1); release(1);
+    /* The split G16 hover state must not cover a G15B dialog help popup. */
+    du_message(&u, 10, "Help", "Choose an option.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+    du_context_help(&u, 1);
+    struct du_widget *button = &u.dialog.items[0];
+    move(button->box.x + 5, button->box.y + 5); press(1); release(1);
+    assert(u.help_tip.visible);
+    move(button->box.x + 6, button->box.y + 5);
+    at(u.now + DU_TIP_DELAY_NS);
+    assert(u.help_tip.visible && !u.tip.visible && !u.tip.w);
+    du_resize(&u, pixels, W, H); assert(!u.help_tip.visible);
+    du_dialog_close(&u);
 }
 
 static void test_dialog_button(void)
@@ -291,7 +316,9 @@ static void test_dialog_button(void)
 /* The production client glue: F1 asks the desktop to LAUNCH "help" with "topic:<id>". */
 static void test_launch_wire(void)
 {
-    struct du_window win; struct du_ui client; struct ciuki_message m; struct desk_packet p;
+    static struct du_window win;
+    static struct du_ui client;
+    struct ciuki_message m; struct desk_packet p;
     rt_reset();
     assert(!du_window_open_resizable(&win, &client, 3, 400, 300, "Wire", 200, 160));
     while (rt_pop(&m)) for (unsigned i = 0; i < m.fd_count; i++) rt_close(m.fds[i]);

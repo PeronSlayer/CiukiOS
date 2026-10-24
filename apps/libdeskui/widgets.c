@@ -155,7 +155,7 @@ void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
         du_post(u, DU_EV_POINTER, u->widgets[u->capture].id, DU_POINTER_CANCEL);
     du_menu_close(u);
     if (u->combo_open) du_combo_drop(u,u->combo_open,0);
-    du_tip_hide(u);
+    du_tip_hide(u); du_help_tip_hide(u);
     u->capture = u->hover = -1;
     for (unsigned i = 0; i < u->count; i++) {
         struct du_widget *w = &u->widgets[i];
