@@ -20,6 +20,8 @@
 #include <ciuki/raw.h>
 #include <ciuki/runtime.h>
 #include <ciuki/channel.h>
+#include "clipboard.h"
+#include "../libdeskui/clipboard.h"
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
 #include <ciuki/display.h>
@@ -2371,7 +2373,7 @@ int main(int argc, char **argv)
     uint32_t *portrait = malloc(DESK_PORTRAIT_SIZE*DESK_PORTRAIT_SIZE*4);
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
-    desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    desk_init(d,&ops,info.width,info.height); du_clip_bind(desk_clip_local,d); d->display=display; d->input=input;
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
     d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
@@ -2766,6 +2768,7 @@ int main(int argc, char **argv)
         struct pollfd fds[DESK_CLIENTS+2]; unsigned nfds=0;
         fds[nfds++]=(struct pollfd){d->input,POLLIN,0};
         fds[nfds++]=(struct pollfd){desktop_completion.fd[0],POLLIN,0};
+        desk_clip_tick(d);
         for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0 && !d->clients[i].spawn_pending)
             fds[nfds++]=(struct pollfd){d->clients[i].channel,POLLIN | (d->clients[i].tx_count ? POLLOUT : 0),0};
         int ready=poll(fds,nfds,du_wait_ms(sleep_now,wait==UINT64_MAX ? UINT64_MAX : sleep_now+wait));

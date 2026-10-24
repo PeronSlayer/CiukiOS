@@ -13,6 +13,7 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"hwreport", "Hardware Report", "preferences-system", 0, ""},
     {"printers", "Printers", "printer", 0, ""},
     {"regedit", "Registry Editor", "preferences-system", 0, ""},
+    {"clipbrd", "Clipboard Viewer", "edit-paste", 1, "clp"},
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},
     {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */

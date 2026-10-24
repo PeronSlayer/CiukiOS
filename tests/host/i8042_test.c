@@ -1489,6 +1489,15 @@ static void test_keyboard_and_mouse(void)
     for (unsigned i = 0; i < ARRAY_SIZE(pause_bytes); i++) feed(false, pause_bytes[i]);
     CHECK(i8042_fault_read(&e) && e.code == INPUT_KEY_PAUSE && e.value == 1);
     CHECK(i8042_fault_read(&e) && e.code == INPUT_KEY_PAUSE && e.value == 0);
+    /* G4 (KB-12): the Windows keys and the Application key, set 2 E0 1F, E0 27, E0 2F. */
+    const uint8_t win_bytes[] = { 0xE0, 0x1F, 0xE0, 0xF0, 0x1F, 0xE0, 0x27, 0xE0, 0xF0, 0x27,
+                                  0xE0, 0x2F, 0xE0, 0xF0, 0x2F };
+    for (unsigned i = 0; i < ARRAY_SIZE(win_bytes); i++) feed(false, win_bytes[i]);
+    const unsigned win_codes[] = { 0x15b, 0x15c, 0x15d };
+    for (unsigned i = 0; i < ARRAY_SIZE(win_codes); i++) {
+        CHECK(i8042_fault_read(&e) && e.type == INPUT_KEY && e.code == win_codes[i] && e.value == 1);
+        CHECK(i8042_fault_read(&e) && e.type == INPUT_KEY && e.code == win_codes[i] && e.value == 0);
+    }
     const uint8_t print_bytes[] = { 0xE0, 0x12, 0xE0, 0x7C, 0xE0, 0xF0, 0x7C, 0xE0, 0xF0, 0x12 };
     for (unsigned i = 0; i < ARRAY_SIZE(print_bytes); i++) feed(false, print_bytes[i]);
     d = fixture_digest();

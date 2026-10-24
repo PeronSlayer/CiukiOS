@@ -1,0 +1,290 @@
+CiukiOS fx-24: images and SVG as upstream framebuffer NetSurf shows them.
+framebuffer.c: path plotter hook (upstream leaves paths unimplemented) and
+clip rectangles outside the surface as empty clips (the error reached the
+next knockout flush and drew broken objects); Makefile: port files path.c,
+heap.c; jpeg.c: DCT-scaled decode above the bitmap admission; libsvgtiny:
+missing width/height from the viewBox aspect ratio; redraw.c: sizeof of a
+pointer; netsurf.c: bitmap cache from the image ledger; browser_history.c:
+no unused local-history thumbnails. Evidence: build/codex/fx-24-report.md,
+docs/design/netsurf-port-plan.md (fx-24 section).
+
+--- a/libsvgtiny/src/svgtiny.c
++++ b/libsvgtiny/src/svgtiny.c
+@@ -706,6 +706,44 @@
+ #undef SVGTINY_STRING_ACTION2
+ 
+ 	svgtiny_parse_position_attributes(svg, state, &x, &y, &width, &height);
++	{
++		/* CiukiOS fx-24: an outermost <svg> without width and/or height
++		 * attributes takes the missing size from its viewBox aspect
++		 * ratio (SVG 1.1, 7.7 'viewBox'). NetSurf reformats an image with
++		 * a 0x0 viewport before layout and a block-level one with
++		 * width x 1 (layout_block_object): the viewport alone made such
++		 * an SVG 0 or 1 pixel high, then stretched it at redraw. With no
++		 * usable viewport either, the viewBox size is the intrinsic size. */
++		dom_string *w_attr = NULL, *h_attr = NULL, *vb_attr = NULL;
++		float min_x, min_y, vb_width = 0, vb_height = 0;
++		if (dom_element_get_attribute(svg, state.interned_width, &w_attr) != DOM_NO_ERR) w_attr = NULL;
++		if (dom_element_get_attribute(svg, state.interned_height, &h_attr) != DOM_NO_ERR) h_attr = NULL;
++		if (dom_element_get_attribute(svg, state.interned_viewBox, &vb_attr) != DOM_NO_ERR) vb_attr = NULL;
++		if (vb_attr != NULL && (w_attr == NULL || h_attr == NULL)) {
++			char *s = strndup(dom_string_data(vb_attr), dom_string_byte_length(vb_attr));
++			if (s != NULL && (sscanf(s, "%f,%f,%f,%f", &min_x, &min_y, &vb_width, &vb_height) == 4 ||
++					sscanf(s, "%f %f %f %f", &min_x, &min_y, &vb_width, &vb_height) == 4) &&
++					vb_width > 0 && vb_height > 0) {
++				if (w_attr == NULL && h_attr == NULL) {
++					if (viewport_width > 1) {
++						width = viewport_width;
++						height = viewport_height > 1 ? viewport_height : width * vb_height / vb_width;
++					} else {
++						width = vb_width;
++						height = vb_height;
++					}
++				} else if (h_attr == NULL) {
++					height = width * vb_height / vb_width;
++				} else {
++					width = height * vb_width / vb_height;
++				}
++			}
++			free(s);
++		}
++		if (w_attr != NULL) dom_string_unref(w_attr);
++		if (h_attr != NULL) dom_string_unref(h_attr);
++		if (vb_attr != NULL) dom_string_unref(vb_attr);
++	}
+ 	diagram->width = width;
+ 	diagram->height = height;
+ 
+--- a/netsurf/content/handlers/html/redraw.c
++++ b/netsurf/content/handlers/html/redraw.c
+@@ -1794,7 +1794,7 @@
+ 
+ 			res = guit->layout->width(plot_fstyle_broken_object,
+ 						  obj,
+-						  sizeof(obj) - 1,
++						  strlen(obj), /* fx-24: obj is a pointer; sizeof gave 7 bytes on 64-bit hosts */
+ 						  &obj_width);
+ 			if (res != NSERROR_OK) {
+ 				obj_x += 1;
+@@ -1805,7 +1805,7 @@
+ 			if (ctx->plot->text(ctx,
+ 					    plot_fstyle_broken_object,
+ 					    obj_x, y + padding_top + (int)(height * 0.75),
+-					    obj, sizeof(obj) - 1) != NSERROR_OK)
++					    obj, strlen(obj)) != NSERROR_OK)
+ 				return false;
+ 		}
+ 	} else if (tag_type == DOM_HTML_ELEMENT_TYPE_CANVAS &&
+--- a/netsurf/content/handlers/image/jpeg.c
++++ b/netsurf/content/handlers/image/jpeg.c
+@@ -332,6 +332,23 @@
+ 	}
+ 	cinfo.dct_method = JDCT_ISLOW;
+ 
++#ifdef CIUKI_NETSURF
++	/* fx-24: a photograph larger than the framebuffer bitmap admission
++	 * (1024x1024 pixels, 4096 per side; framebuffer/bitmap.c) is decoded in
++	 * the DCT domain at 1/2, 1/4 or 1/8 (libjpeg scale_denom) instead of
++	 * being refused; the plotter scales the bitmap to the box as for any
++	 * image, and the content keeps its intrinsic size for layout. */
++	cinfo.scale_num = 1;
++	cinfo.scale_denom = 1;
++	for (;;) {
++		size_t w = (cinfo.image_width + cinfo.scale_denom - 1) / cinfo.scale_denom;
++		size_t h = (cinfo.image_height + cinfo.scale_denom - 1) / cinfo.scale_denom;
++		if (cinfo.scale_denom >= 8 || (w <= 4096 && h <= 4096 && w * h <= 1024u * 1024u))
++			break;
++		cinfo.scale_denom *= 2;
++	}
++#endif
++
+ 	/* commence the decompression, output parameters now valid */
+ 	jpeg_start_decompress(&cinfo);
+ 
+--- a/netsurf/desktop/browser_history.c
++++ b/netsurf/desktop/browser_history.c
+@@ -386,9 +386,18 @@
+ 	NSLOG(netsurf, DEBUG,
+ 	      "Creating thumbnail for %s", nsurl_access(entry->page.url));
+ 
++#ifdef CIUKI_NETSURF
++	/* fx-24: the CiukiOS chrome has no local-history view (toolbar layout
++	 * "q", chrome.c), so the thumbnail was never shown; making it cost a
++	 * scaled redraw of the page at every history add and update (text at
++	 * unusual sizes, so glyph cache misses) and kept 46 KB of the image
++	 * ledger per entry. Every user of page.bitmap accepts NULL. */
++	entry->page.bitmap = NULL;
++#else
+ 	entry->page.bitmap = guit->bitmap->create(
+ 			LOCAL_HISTORY_WIDTH, LOCAL_HISTORY_HEIGHT,
+ 			BITMAP_CLEAR | BITMAP_OPAQUE);
++#endif
+ 	if (entry->page.bitmap != NULL) {
+ 		ret = guit->bitmap->render(entry->page.bitmap, content);
+ 		if (ret != NSERROR_OK) {
+--- a/netsurf/desktop/netsurf.c
++++ b/netsurf/desktop/netsurf.c
+@@ -56,6 +56,9 @@
+ #include "netsurf/misc.h"
+ #include "desktop/gui_internal.h"
+ #include "netsurf/netsurf.h"
++#ifdef CIUKI_NETSURF
++#include "sdk/netsurf/port/image_memory.h"
++#endif
+ 
+ 
+ /** \todo QUERY - Remove this import later */
+@@ -154,6 +157,17 @@
+ 	/* Set up the max attempts made to fetch a timing out resource */
+ 	hlcache_parameters.llcache.fetch_attempts = nsoption_uint(max_retried_fetches);
+ 
++#ifdef CIUKI_NETSURF
++	/* fx-24: decoded bitmaps are charged to the browser's image ledger
++	 * (sdk/netsurf/port/image_memory.h: an eighth of free memory, 2-16 MiB).
++	 * Size the bitmap cache from that ledger, three quarters of it, rather
++	 * than a quarter of the 2 MiB source cache: with 512 KiB the cleaner
++	 * dropped every off-screen bitmap of a page with a few photographs and
++	 * scrolling back decoded them again. The llcache keeps the whole
++	 * memory_cache_size for source data. */
++	image_cache_parameters.limit = ciuki_image_limit() / 4 * 3;
++	image_cache_parameters.hysteresis = image_cache_parameters.limit / 5;
++#else
+ 	/* image cache is 25% of total memory cache size */
+ 	image_cache_parameters.limit = hlcache_parameters.llcache.limit / 4;
+ 
+@@ -162,6 +176,7 @@
+ 
+ 	/* account for image cache use from total */
+ 	hlcache_parameters.llcache.limit -= image_cache_parameters.limit;
++#endif
+ 
+ 	/* set backing store target limit */
+ 	hlcache_parameters.llcache.store.limit = nsoption_uint(disc_cache_size);
+--- a/netsurf/frontends/framebuffer/framebuffer.c
++++ b/netsurf/frontends/framebuffer/framebuffer.c
+@@ -38,11 +38,20 @@
+ #include "framebuffer/gui.h"
+ #include "framebuffer/fbtk.h"
+ #include "framebuffer/framebuffer.h"
++#ifdef CIUKI_NETSURF
++#include "framebuffer/ciuki/path.h"
++#endif
+ #include "framebuffer/font.h"
+ #include "framebuffer/bitmap.h"
+ 
+ /* netsurf framebuffer library handle */
+ static nsfb_t *nsfb;
++#ifdef CIUKI_NETSURF
++static bool ciuki_clip_empty;
++#define CIUKI_CLIPPED_OUT() do { if (ciuki_clip_empty) return NSERROR_OK; } while (0)
++#else
++#define CIUKI_CLIPPED_OUT() do { } while (0)
++#endif
+ 
+ 
+ /**
+@@ -62,10 +71,21 @@
+ 	nsfb_clip.x1 = clip->x1;
+ 	nsfb_clip.y1 = clip->y1;
+ 
++#ifdef CIUKI_NETSURF
++	/* fx-24: a clip rectangle wholly outside the surface (an overflow box
++	 * below the visible area) is an empty clip, as in the other front
++	 * ends (cairo, GDI): nothing plots until the next clip. libnsfb refuses
++	 * such a rectangle, and the NSERROR_INVALID returned here was carried by
++	 * the knockout plotter to the next flushing operation, so an unrelated
++	 * SVG or bitmap redraw "failed" and was drawn as a broken object. */
++	ciuki_clip_empty = !nsfb_plot_set_clip(nsfb, &nsfb_clip);
++	return NSERROR_OK;
++#else
+ 	if (!nsfb_plot_set_clip(nsfb, &nsfb_clip)) {
+ 		return NSERROR_INVALID;
+ 	}
+ 	return NSERROR_OK;
++#endif
+ }
+ 
+ 
+@@ -90,6 +110,7 @@
+ 	       const plot_style_t *style,
+ 	       int x, int y, int radius, int angle1, int angle2)
+ {
++	CIUKI_CLIPPED_OUT();
+ 	if (!nsfb_plot_arc(nsfb, x, y, radius, angle1, angle2, style->fill_colour)) {
+ 		return NSERROR_INVALID;
+ 	}
+@@ -114,6 +135,7 @@
+ 		const plot_style_t *style,
+ 		int x, int y, int radius)
+ {
++	CIUKI_CLIPPED_OUT();
+ 	nsfb_bbox_t ellipse;
+ 	ellipse.x0 = x - radius;
+ 	ellipse.y0 = y - radius;
+@@ -147,6 +169,7 @@
+ 		const plot_style_t *style,
+ 		const struct rect *line)
+ {
++	CIUKI_CLIPPED_OUT();
+ 	nsfb_bbox_t rect;
+ 	nsfb_plot_pen_t pen;
+ 
+@@ -194,6 +217,7 @@
+ 		     const plot_style_t *style,
+ 		     const struct rect *nsrect)
+ {
++	CIUKI_CLIPPED_OUT();
+ 	nsfb_bbox_t rect;
+ 	bool dotted = false;
+ 	bool dashed = false;
+@@ -244,6 +268,7 @@
+ 		   const int *p,
+ 		   unsigned int n)
+ {
++	CIUKI_CLIPPED_OUT();
+ 	if (!nsfb_plot_polygon(nsfb, p, n, style->fill_colour)) {
+ 		return NSERROR_INVALID;
+ 	}
+@@ -271,8 +296,15 @@
+ 		unsigned int n,
+ 		const float transform[6])
+ {
++	CIUKI_CLIPPED_OUT();
++#ifdef CIUKI_NETSURF
++	/* fx-24: SVG shapes (ciuki/path.c); upstream draws nothing here. */
++	(void)ctx;
++	return ciuki_plot_path(nsfb, pstyle, p, n, transform);
++#else
+ 	NSLOG(netsurf, INFO, "path unimplemented");
+ 	return NSERROR_OK;
++#endif
+ }
+ 
+ 
+@@ -309,6 +341,7 @@
+ 		  colour bg,
+ 		  bitmap_flags_t flags)
+ {
++	CIUKI_CLIPPED_OUT();
+ 	nsfb_bbox_t loc;
+ 	nsfb_bbox_t clipbox;
+ 	bool repeat_x = (flags & BITMAPF_REPEAT_X);
+@@ -400,7 +433,7 @@
+ #ifdef CIUKI_NETSURF
+ static nserror framebuffer_plot_text(const struct redraw_context *ctx,
+  const struct plot_font_style *style,int x,int y,const char *text,size_t length)
+-{ (void)ctx; return ciuki_font_plot(nsfb,style,x,y,text,length); }
++{ (void)ctx; CIUKI_CLIPPED_OUT(); return ciuki_font_plot(nsfb,style,x,y,text,length); }
+ #elif defined(FB_USE_FREETYPE)
+ /**
+  * Text plotting.
+--- a/netsurf/frontends/framebuffer/Makefile
++++ b/netsurf/frontends/framebuffer/Makefile
+@@ -181,6 +181,7 @@
+ 
+ S_FRONTEND += ciuki/net.c ciuki/http.c ciuki/tls.c ciuki/dns.c
+ S_FRONTEND += ciuki/file.c ciuki/images.c ciuki/font.c ciuki/charset.c ciuki/chrome.c ciuki/profile.c ciuki/budget.c
++S_FRONTEND += ciuki/path.c ciuki/heap.c
+ 
+ S_FRONTEND += $(addprefix fbtk/,$(S_FRAMEBUFFER_FBTK))
+ 

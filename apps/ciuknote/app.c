@@ -105,7 +105,13 @@ static void shrink32(const uint32_t *src, uint32_t *dst)
 
 /* ---- menus and status ---------------------------------------------------- */
 
-static int paste_available(const struct cn_app *a) { (void)a; return du_clipboard_get()[0]; }
+extern int du_clip_available(unsigned) __attribute__((weak));
+static int paste_available(const struct cn_app *a)
+{
+    (void)a;
+    if (du_clip_available) { int available=du_clip_available(13); if (available>=0) return available; }
+    return du_clipboard_get()[0];
+}
 static void set_flag(struct du_menu_item *item, unsigned flag, int on) { if (on) item->flags |= flag; else item->flags &= ~flag; }
 
 void cn_refresh(struct cn_app *a)
