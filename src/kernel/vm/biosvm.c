@@ -590,9 +590,16 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
         uint64_t left = apm_deadline - now;
         if (left < ms) ms = (uint32_t)left;
     }
-    if (apm) { apm_function = (uint16_t)regs->eax; firmware.io = apm_io; }
+    uint32_t saved_limit = firmware.max_call_ms;
+    if (apm) {
+        apm_function = (uint16_t)regs->eax; firmware.io = apm_io;
+        /* The dedicated broker admits <=2000 ms, including connect/off.
+         * Scope that ceiling here; generic input keeps its 500 ms bound.
+         * ms above already excludes time spent in the request queue. */
+        firmware.max_call_ms = 2000;
+    }
     int e = run_vm_body(regs, ms, test);
-    if (apm) firmware.io = 0;
+    if (apm) { firmware.io = 0; firmware.max_call_ms = saved_limit; }
     return e;
 }
 

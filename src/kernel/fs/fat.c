@@ -2325,6 +2325,22 @@ static int transaction_durable(struct fat_volume *v) {
     if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,e ? 'E' : 'B',e);
     return e;
 }
+/* Runs only after leaving the publication guard. Unlike writer_busy and
+ * vfs_hold_long, this names a retry loop inside one writer pass with no
+ * long-lived drive reservation (T23 56e58374). One record per 2 s. */
+static void transaction_retry_record(struct fat_transaction *t,const char *phase,
+                                     uint32_t start,uint32_t *reported,unsigned *attempts) {
+    (*attempts)++;
+    uint32_t now=fs_now_ms();
+    if ((uint32_t)(now-*reported)<2000) return;
+    *reported=now;
+    struct fs_task_identity task=fs_request_identity(fs_request_current());
+    static const char *const names[]={"create","write","log_write","commit","remove","rename",
+        "lookup","publish","extend","replace","truncate","reserve","next","metadata","label"};
+    const char *op=(unsigned)t->op<sizeof(names)/sizeof(*names) ? names[t->op] : "unknown";
+    if (klog) klog("[storage] publication_retry task=%s#%u op=%s phase=%s attempts=%u elapsed_ms=%u generation=%u",
+        task.name,task.id,op,phase,*attempts,now-start,t->generation);
+}
 /* durable: a real barrier() (a C2 boundary) publishes what is buffered,
  * then waits for durability outside the guard. !durable: the 16-sector
  * overflow inside one C2 group publishes only, in the group's open cache
@@ -2351,6 +2367,7 @@ static int transaction_publish(struct fat_volume *v, bool durable) {
     bool merging=(uint16_t)(t->based|t->fill)==all;
     bool suspending=merging && t->suspendable && t->guard.suspend && t->guard.resume && t->guard.try_resume;
     unsigned contended=0; /* resume attempts lost to another writer */
+    uint32_t retry_start=fs_now_ms(),retry_reported=retry_start; unsigned retry_attempts=0;
     for (unsigned i=0;i<t->count;i++) {
         bool fill=(t->fill&(1u<<i))!=0;
         set[i]=(struct cache_reserve_sector){v->start+t->sectors[i],merging && !fill ? tx_snap(t,i) : 0,fill ? tx_image(t,i) : 0};
@@ -2380,6 +2397,7 @@ retry:
         e=transaction_enter(t);
         if (e==-FS_EBUSY) {
             cache_release(&reservation);
+            transaction_retry_record(t,"guard",retry_start,&retry_reported,&retry_attempts);
             if ((e=fs_request_check())) return e;
             if (suspending) transaction_suspend(t);
             if (t->guard.wait) e=t->guard.wait(t->guard.ctx);
@@ -2444,6 +2462,7 @@ retry:
         }
         t->guard.leave(t->guard.ctx);
         if (e!=-FS_EAGAIN) break;
+        transaction_retry_record(t,"cache",retry_start,&retry_reported,&retry_attempts);
         /* Our slots are pinned: their bytes cannot change while we wait. */
         if (suspending) transaction_suspend(t);
         e=cache_reservation_wait(&reservation);

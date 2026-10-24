@@ -1693,6 +1693,17 @@ static void test_apm_probe(void)
         /* G11b: 5310h (Get Capabilities) is allowed for the standby qualification. */
         r = (struct biosvm_regs){.interrupt=0x15, .eax=0x5310};
         CHECK(!biosvm_apm_call(&r, 25) && request_ms == 25);
+        /* T23 56e58374: probe succeeded, but the real backend's 2000 ms
+         * connect was rejected by v86_begin's ordinary 500 ms ceiling.
+         * Use the production broker/monitor, not the backend-only mock. */
+        const unsigned power_functions[] = {0x5301, 0x5307};
+        for (unsigned i=0;i<ARRAY_SIZE(power_functions);i++) {
+            r=(struct biosvm_regs){.interrupt=0x15,.eax=power_functions[i]};
+            unsigned entered=enters;
+            uint64_t deadline=g_ticks+2000;
+            CHECK(!biosvm_apm_call(&r,2000) && enters==entered+1);
+            CHECK(firmware.deadline==deadline && !firmware.max_call_ms && !firmware.io);
+        }
         before = enters;
         const unsigned denied[] = {0x52ff,0x5311,0x537f,0x5381,0x15300};
         for (unsigned i=0; i<sizeof(denied)/sizeof(denied[0]); i++) {

@@ -205,6 +205,8 @@ static void test_probe_connection(void)
         m.bios_error = 7; m.transport_error = i == 1 ? -EFAULT : i == 2 ? -110 : 0;
         CHECK(apm_backend_connect(&b) < 0 && b.state == APM_FAILED);
         CHECK(m.disconnects == (i ? 1u : 0u) && (i ? m.quarantines == 1 : m.releases == 1));
+        CHECK(b.last_function==m.fault_function && b.transport_error==m.transport_error);
+        CHECK(b.bios_error==(m.transport_error ? 0 : m.bios_error));
     }
     puts("APM: installation, ACPI exclusion, admission, negotiation, no foreign disconnect, fault quarantine PASS");
 }

@@ -254,6 +254,8 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     tests/host/fs/test_cache_reservation.c -o build/host/fs/test_cache_reservation
 build/host/fs/test_cache_reservation
 rm build/host/fs/test_cache_reservation
+# T23 boot: late FAT32 arrival beside display-marker/boot-log publication.
+python3 -B tests/host/test_t23_boot_hang.py
 # F1-82: deterministic dirty-budget/reservation/error cases, then the timed
 # 10 MiB production FAT/VFS copy versus a 16 KiB / 20 ms reader.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \

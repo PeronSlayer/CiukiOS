@@ -53,11 +53,17 @@ static int failed(struct apm_backend *b, int error)
     /* Disconnect once, even after transport failure; a quarantined broker
      * refuses safely. Never disconnect a BIOS-refused foreign connection. */
     bool uncertain = b->reserved;
+    uint16_t function = b->last_function;
+    int transport = b->transport_error;
+    uint8_t bios = b->bios_error;
     if (b->connected) {
         struct biosvm_regs r;
         uncertain = call(b, 0x5304, 0, 0, APM_STATUS_MS, &r) != 0;
         b->connected = false;
     }
+    /* Disconnect is cleanup, not the cause. In the T23 connect failure its
+     * AH=03 (not connected) hid the monitor's rejection of 5301h. */
+    b->last_function = function; b->transport_error = transport; b->bios_error = bios;
     b->state = APM_FAILED;
     b->error = error;
     unknown(&b->status);
