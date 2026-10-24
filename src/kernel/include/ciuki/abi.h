@@ -1603,6 +1603,8 @@ _Static_assert(sizeof(struct ciuki_disk_recheck) == 64, "disk recheck ABI");
 #define AUDIO_CAPTURE_STOP 0x410cu
 #define CIUKI_CAPTURE_MIC 0u
 #define CIUKI_CAPTURE_LINE 1u
+#define CIUKI_CAPTURE_CD 2u
+#define CIUKI_CAPTURE_MIX 3u
 #define CIUKI_CAPTURE_FRAMES 128u
 /* Open /dev/audio O_RDONLY. START is explicit and exclusive; close stops it.
  * Fixed S16LE stereo 48000 Hz, copied buffers only. Unsupported hardware
@@ -1633,6 +1635,42 @@ _Static_assert(sizeof(struct ciuki_audio_capture_data)==536,"audio capture data"
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
 #define MIXER_REFRESH_MASTER 0x4204u /* f1-100: control handle; master record, one requested hardware read */
+/* G22B: appended after the highest audio/mixer operations in visible refs. */
+#define AUDIO_SET_SOURCE 0x410du
+/* Exclusive input reservation without starting DMA. A reserved description
+ * retains its ownership across START/STOP until RELEASE or last close. */
+#define AUDIO_CAPTURE_ACQUIRE 0x410eu
+#define AUDIO_CAPTURE_RELEASE 0x410fu
+#define MIXER_GET_LINE 0x4205u
+#define MIXER_SET_LINE 0x4206u
+#define CIUKI_MIXER_WAVE 1u
+#define CIUKI_MIXER_MIDI 2u
+#define CIUKI_MIXER_CD 3u
+#define CIUKI_MIXER_LINE 4u
+#define CIUKI_MIXER_MIC 5u
+#define CIUKI_AUDIO_MIXED 6u
+/* source is Wave/MIDI/CD or MIXED (the caller applies the line gains). */
+struct ciuki_audio_route {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t reserved;
+};
+/* recording=0 playback, 1 recording; selected is the recording input mux.
+ * Get reports unavailable lines, Set rejects them. Only the delegated mixer
+ * descriptor may Set. Analog controls preserve unrelated codec bits. */
+struct ciuki_mixer_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t line;
+    uint32_t recording;
+    uint32_t left;
+    uint32_t right;
+    uint32_t mute;
+    uint32_t selected;
+    uint32_t available;
+    uint32_t reserved;
+};
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u

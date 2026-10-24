@@ -31,6 +31,13 @@ static int scheme(void *c,unsigned op,const char *name,struct sound_scheme *s)
     return 0;
 }
 static unsigned mm_open;
+static unsigned cd_volume=75;
+static int cd_line(void *ctx,struct ciuki_mixer_line *line,int set) {
+    (void)ctx; assert(line->line==CIUKI_MIXER_CD);
+    if (set) cd_volume=line->left;
+    else { line->available=1; line->left=line->right=cd_volume; }
+    return 0;
+}
 static int multimedia(void *c,unsigned which) { (void)c; mm_open=which+1; return 0; }
 static int capture_caps(void *c,struct ciuki_audio_capture *out)
 { (void)c; out->available=1; return 0; }
@@ -38,7 +45,7 @@ int main(int argc,char **argv)
 {
     assert(argc==2); static struct cp_app a; static struct du_ui u; static uint32_t pixels[CP_WIDTH*CP_HEIGHT];
     strcpy(saved,"enabled=1\nerror=custom.wav\n");saved_n=strlen(saved);
-    a.host=(struct cp_host){.mixer=mixer,.apply=apply,.load_sounds=load,.save_sounds=save,.audio_diagnostics=diagnostics,.sound_validate=validate,.sound_schemes=schemes,.sound_scheme=scheme,.multimedia_open=multimedia,.capture_caps=capture_caps};
+    a.host=(struct cp_host){.mixer=mixer,.apply=apply,.load_sounds=load,.save_sounds=save,.audio_diagnostics=diagnostics,.sound_validate=validate,.sound_schemes=schemes,.sound_scheme=scheme,.multimedia_open=multimedia,.capture_caps=capture_caps,.audio_line=cd_line};
     diag=(struct ciuki_audio_diagnostics){.version=1,.size=64,.codec_id=0x43525931,.controller=0x80862485,
         .flags=CIUKI_AUDIO_DIAG_READY,.irq_line=11,.fetched_frames=10,.irqs=1,.power=15,.master=0x0404,.pcm=0x0808,.rate=48000};
     du_init(&u,pixels,CP_WIDTH,CP_HEIGHT);u.focused_window=1;assert(!cp_attach(&a,&u,CP_SOUNDS));
@@ -112,5 +119,9 @@ int main(int argc,char **argv)
     cp_open(&a,CP_MULTIMEDIA); assert(cp_page_index("multimedia")==CP_MULTIMEDIA);
     assert(find(&u,"Preferred recording: system capture device (microphone / line in)"));
     ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Sound Recorder")->id};u.event(&u,&ev,u.user);assert(mm_open==2);
+    struct du_widget *cd_slider=NULL;
+    for (unsigned i=0;i<u.count;i++) if (u.widgets[i].kind==DU_SCROLLBAR) cd_slider=&u.widgets[i];
+    assert(cd_slider && !cd_slider->disabled && cd_slider->value==75);
+    cd_slider->value=40; ev=(struct du_event){.type=DU_EV_CHANGE,.id=cd_slider->id};u.event(&u,&ev,u.user);assert(cd_volume==40);
     cp_detach(&a);puts("PASS Sounds page: events/assignments, preview, hardware request, enable persistence/failure, render");
 }

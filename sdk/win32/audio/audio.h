@@ -68,7 +68,7 @@ struct wa_samples {
 struct wa_source {
   struct wa_samples *samples;
   struct wa_format format;
-  uint32_t flags, playing, looping, paused, frame, fraction, frequency;
+  uint32_t flags, playing, looping, paused, frame, fraction, frequency, route;
   uint32_t heard, heard_fraction, epoch, slot, active, wave;
   int32_t volume, pan;
   uint32_t gain[2];
@@ -100,6 +100,7 @@ struct wa_stamp {
 struct wa_engine {
   struct wa_transport transport;
   uint32_t rate, opened, generation, focused, started;
+  uint32_t line_gain[3][2];
   uint32_t volume[2], source_count, callback_count, callback_head, header_count;
   uint64_t accepted, consumed, base_consumed, rendered;
   uint32_t slot_epoch[WA_SOURCES];
@@ -144,4 +145,7 @@ void W32API CiukiAudioFocus(uint32_t);
 void *wa_alloc(uint32_t);
 void wa_free(void *);
 uint32_t wa_private_bytes(void);
+void wa_wave_route(uintptr_t, unsigned);
+void wa_input_tick(void);
+int wa_capture_native(uint32_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 #endif

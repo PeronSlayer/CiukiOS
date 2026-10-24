@@ -1011,7 +1011,12 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     case DESK_MIXER_SET: {
         /* Desktop-launched Volume Control, Music Player and Terminal use the master control handle. */
-        int32_t result = !c->mixer ? -EPERM : d->power.state ? -EBUSY : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
+        int32_t result = !c->mixer ? -EPERM : d->power.state ? -EBUSY : p.values[0] ? 0 : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
+        if (p.values[0] && c->mixer && !d->power.state) {
+            struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=p.values[0],.recording=p.values[1],
+                .left=p.width,.right=p.height,.mute=p.values[1] ? 0 : p.flags,.selected=p.values[1] ? p.flags : 0};
+            result=d->mixer_line ? d->mixer_line(d,&line) : -ENODEV;
+        }
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, DESK_MIXER_SET); desk_put32(reply.data + 12, (uint32_t)result);
         desk_queue(d, i, &reply);

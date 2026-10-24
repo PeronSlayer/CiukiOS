@@ -4,6 +4,8 @@
 #include "sounds.h"
 #include <ciuki/registry.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
+struct ciuki_mixer_line;
+int line_preference_save(const char *,const struct ciuki_mixer_line *);
 int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute);
 /* Paths are explicit for host fixtures; production uses SOUND_CFG,
  * SOUND_LEGACY_CFG and REG_DIRECTORY. Loads never create registry keys. */

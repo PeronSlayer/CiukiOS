@@ -487,6 +487,7 @@ struct desktop {
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*joystick_control)(struct desktop *, struct ciuki_joystick_control *);
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
+    int (*mixer_line)(struct desktop *, const struct ciuki_mixer_line *);
     /* Title-bar double-click (maximize and restore). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* G4: the caption icon's double click closes (WM-11); the taskbar's Undo record. */

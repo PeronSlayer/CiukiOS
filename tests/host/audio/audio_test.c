@@ -155,6 +155,11 @@ _Static_assert(AUDIO_ICH==1 && AUDIO_ES1370==2 && AUDIO_ES1371==3 && AUDIO_SB16=
 static int voice_model_pin(struct mm_pin *pin)
 {
     /* Other fixture engines keep their previous no-ledger boundary. */
+    if (audio_dma.kind == AUDIO_ICH) {
+        CHECK((pin->pages==8 && pin->direction==MM_PIN_FROM_DEVICE && pin->alignment==4) ||
+              (pin->pages==1 && pin->direction==MM_PIN_TO_DEVICE && pin->alignment==8));
+        pin->ticket=++voice_pins; return 0;
+    }
     if (audio_dma.kind < AUDIO_TRIDENT_DX) return 0;
     CHECK(pin->pages==8 && pin->alignment==4 && !pin->boundary);
     CHECK(pin->address_mask==(audio_dma.kind==AUDIO_ALI5451 ? 0x7fffffffu : 0x3fffffffu));
@@ -223,6 +228,7 @@ uint32_t pmm_alloc_dma_run(uint32_t pages,uint32_t alignment)
 #include "../../../src/kernel/drivers/ali5451.c"
 #include "../../../src/kernel/audio/voice.c"
 #include "../../../src/kernel/audio/backend.c"
+#include "../../../src/kernel/audio/lines.c"
 #include "../../../src/kernel/audio/audio_dev.c"
 bool display_fullscreen_active(void) { return fullscreen_hook; }
 void serial_buffered(bool enabled) { serial_is_buffered=enabled; }
@@ -259,6 +265,10 @@ struct mock_hw {
     uint64_t reset_at, start_at;
     uint32_t bdbar, pci_address;
     uint16_t pci_command, input_sr, mic_sr, sis_gate;
+    uint32_t input_bdbar;
+    unsigned input_civ, input_remaining, input_lvi, input_cr;
+    bool input_model, input_stop_stuck, input_start_stuck;
+    uint64_t input_start_at;
     uint8_t sibling_cr[8];
     uint16_t sibling_sr[8];
     uint8_t modem_cr[2];
@@ -303,6 +313,17 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         unsigned lane=off & 15;
         if (lane==8) off-=2;
         if (lane==6) off+=2;
+    }
+    if (h->input_model && off<12) {
+        if (off==0) return h->input_bdbar;
+        if (off==4) return h->input_civ;
+        if (off==5) return h->input_lvi;
+        if (off==6) {
+            if (h->input_cr==1 && !h->input_start_stuck && h->tick>=h->input_start_at) h->input_sr &= ~AC97_DCH;
+            return h->input_sr;
+        }
+        if (off==8) return h->input_remaining;
+        if (off==11) return h->input_cr;
     }
     if(off==0x4c) return h->sis_gate;
     if(off>=0x40 && off<0x80 && (off & 15)==6) return h->sibling_sr[off/16];
@@ -394,6 +415,19 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
         if (lane==8) off-=2;
         if (lane==6) off+=2;
     }
+    if (h->input_model && off<12) {
+        if (off==0) { CHECK(width==4); h->input_bdbar=value; }
+        if (off==5) { CHECK(width==1 && value<32); h->input_lvi=value; }
+        if (off==6) { CHECK(width==2); h->input_sr &= ~value; }
+        if (off==11 && !(h->input_stop_stuck && value==0)) {
+            CHECK(width==1);
+            h->input_cr=value;
+            if (value==2) { h->input_cr=0; h->input_civ=0; h->input_remaining=512; h->input_sr=AC97_DCH; }
+            if (value==1) { h->input_start_at=h->tick+h->start_delay; if (!h->start_delay && !h->input_start_stuck) h->input_sr &= ~AC97_DCH; }
+            if (value==0) h->input_sr |= AC97_DCH;
+        }
+        return;
+    }
     if(off==0x4c) { CHECK(width==2); h->sis_gate=value; return; }
     if(off>=0x40 && off<0x80 && (off & 15)==6) { h->sibling_sr[off/16]&=~value; return; }
     if(off>=0x40 && off<0x80 && (off & 15)==11) { h->sibling_cr[off/16]=value; return; }
@@ -442,7 +476,22 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     }
 }
 static uint64_t mock_now(void *cookie) { return ((struct mock_hw *)cookie)->tick; }
-static void mock_sleep(void *cookie,uint32_t ms) { ((struct mock_hw *)cookie)->tick+=ms; }
+static void mock_sleep(void *cookie,uint32_t ms) {
+    struct mock_hw *h=cookie; h->tick+=ms;
+    if (!h->input_model || h->input_cr!=1 || (h->input_sr & AC97_DCH)) return;
+    struct ac97_bd *bd=P2V(h->input_bdbar);
+    for (unsigned i=0;i<ms*48;i++) {
+        CHECK(bd[h->input_civ].length==512);
+        struct audio_frame *pcm=P2V(bd[h->input_civ].address);
+        unsigned frame=(512-h->input_remaining)/2;
+        pcm[frame]=(struct audio_frame){(int16_t)(h->input_civ*256+frame),-123};
+        h->input_remaining-=2;
+        if (!h->input_remaining) {
+            if (h->input_civ==h->input_lvi) { h->input_sr |= AC97_DCH; break; }
+            h->input_civ=(h->input_civ+1)%32; h->input_remaining=512;
+        }
+    }
+}
 static struct mock_hw hw;
 /* ICH/QEMU word-count boundary: CIV stays on LVI at exhaustion, and BUP=0
  * outputs silence while RUN remains set. IRQ acknowledgement never clears
@@ -1564,6 +1613,14 @@ static void test_registry_master(void)
 {
     CHECK(!make_dir("/System/Registry"));
     unsigned before=heap_blocks;
+    bool was_ready=audio.ready; int was_error=audio.error;
+    audio.ready=true; audio.error=0;
+    registry_fixture("[System\\Audio]\nSource1=19250\n");
+    audio_lines_load(&vfs);
+    CHECK(audio_source_gain(CIUKI_MIXER_WAVE,0)==50 && audio_source_gain(CIUKI_MIXER_WAVE,1)==75 && heap_blocks==before);
+    registry_fixture("[System\\Audio]\nSource1=101\n");
+    audio_lines_load(&vfs); CHECK(audio_source_gain(CIUKI_MIXER_WAVE,0)==50);
+    audio.lines_initialized=false; audio.ready=was_ready; audio.error=was_error;
     registry_fixture("; ciuki-registry generation=2\n[System\\Identity]\nName=\"CiukiOS\"\n[system\\audio]\n\"mASTer\"=65561\n");
     audio_settings_load(&vfs);CHECK(audio.master.left==25&&audio.master.right==0&&audio.master.mute==1);
     CHECK(!strcmp(audio.settings_reason,"registry")&&heap_blocks==before);
@@ -1588,6 +1645,84 @@ static void test_registry_master(void)
     audio_settings_load(0);CHECK(audio.master.left==20&&audio.master.right==20&&!audio.master.mute);
     puts("audio registry: whole production grammar, case-folded packed master, precedence, malformed root/value and pending journal fallback PASS");
 }
+static void test_ich_input(void) {
+    unsigned before=pages_used;
+    hardware_setup(&ac97); ac97.ready=true; hw.input_model=true;
+    audio.quarantined=false; audio.error=0; audio.ready=true;
+    ac97.codec.variable_rate=true; hw.codec[0x32/2]=44100;
+    hw.codec[0x1a/2]=0x0303; hw.codec[0x1c/2]=0x8000;
+    second_claim_next=12; second_claim_failure=-1;
+    ac97_capture_attach();
+    int capture_fd=file_open(client,"/dev/audio",O_RDONLY,0), contender=file_open(client,"/dev/audio",O_RDONLY,0);
+    CHECK(capture_fd>=0 && contender>=0);
+    struct ciuki_audio_capture reserve={.version=1,.size=sizeof(reserve)};
+    CHECK(!ctl(capture_fd,AUDIO_CAPTURE_ACQUIRE,&reserve,sizeof(reserve)) && pages_used==before);
+    reserve=(struct ciuki_audio_capture){.version=1,.size=sizeof(reserve)};
+    CHECK(ctl(contender,AUDIO_CAPTURE_ACQUIRE,&reserve,sizeof(reserve))==-EBUSY);
+    reserve=(struct ciuki_audio_capture){.version=1,.size=sizeof(reserve),.gain=100,.rate=48000,.channels=2,.format=CIUKI_AUDIO_S16LE};
+    CHECK(ctl(contender,AUDIO_CAPTURE_START,&reserve,sizeof(reserve))==-EBUSY);
+    CHECK(!file_close(client,capture_fd));
+    reserve=(struct ciuki_audio_capture){.version=1,.size=sizeof(reserve)};
+    CHECK(!ctl(contender,AUDIO_CAPTURE_ACQUIRE,&reserve,sizeof(reserve)));
+    reserve=(struct ciuki_audio_capture){.version=1,.size=sizeof(reserve)};
+    CHECK(!ctl(contender,AUDIO_CAPTURE_RELEASE,&reserve,sizeof(reserve)));
+    CHECK(!file_close(client,contender) && !capture_reserved_owner);
+    uint32_t generation,other;
+    struct ciuki_mixer_line wave={.version=1,.size=sizeof(wave),.line=CIUKI_MIXER_WAVE,.left=50,.right=25};
+    CHECK(!audio_line_control(&wave,true) && wave.available);
+    struct audio_stream *stream; CHECK(!audio_stream_open(&stream));
+    struct audio_frame sample={10000,20000},out;
+    audio.master=(struct ciuki_mixer_master){.left=100,.right=100}; audio.master_in_codec=audio.master_in_hardware=false;
+    CHECK(audio_stream_enqueue(stream,&sample,4)==4); audio_mix(&out,1);
+    CHECK(out.left==5000 && out.right==5000);
+    stream->source=CIUKI_AUDIO_MIXED;
+    CHECK(audio_stream_enqueue(stream,&sample,4)==4); audio_mix(&out,1);
+    CHECK(out.left==10000 && out.right==20000); audio_stream_close(stream);
+    hw.codec[0x0e/2]=0x8040;
+    struct ciuki_mixer_line mic={.version=1,.size=sizeof(mic),.line=CIUKI_MIXER_MIC,.left=50,.right=50};
+    CHECK(!audio_line_control(&mic,true) && hw.codec[0x0e/2]==0x004f);
+    CHECK(!audio_lines_restore() && hw.codec[0x0e/2]==0x8040 && !audio_dma.mixer_line_mask);
+    audio_dma.codec.profile=ac97_codec_lookup(0x41445372); hw.codec[0x10/2]=0x0909;
+    struct ciuki_mixer_line stereo={.version=1,.size=sizeof(stereo),.line=CIUKI_MIXER_LINE,.left=100,.right=100,.mute=1};
+    CHECK(!audio_line_control(&stereo,true) && hw.codec[0x10/2]==0x8080);
+    CHECK(!audio_lines_restore() && hw.codec[0x10/2]==0x0909);
+    audio_dma.codec.profile=NULL;
+    mic.left=101; mic.available=0; CHECK(audio_line_control(&mic,true)==-EINVAL);
+    struct ciuki_mixer_line recording={.version=1,.size=sizeof(recording),.line=CIUKI_MIXER_LINE,.recording=1,.left=75,.right=75,.selected=1};
+    CHECK(!audio_line_control(&recording,true) && recording.selected && audio.record_gain==75);
+    hw.input_start_stuck=true;
+    CHECK(audio_capture_open(&audio_dma,&generation)==-ETIMEDOUT && !voice_pins && pages_used==before && !ac97.quarantine);
+    hw.input_start_stuck=false; hw.start_delay=3;
+    CHECK(!audio_capture_open(&audio_dma,&generation));
+    CHECK(voice_pins==2 && pages_used==before+9 && hw.input_cr==1 && hw.codec[0x32/2]==48000);
+    CHECK(audio_capture_open(&audio_dma,&other)==-EBUSY);
+    CHECK(!audio_capture_source(&audio_dma,generation,CIUKI_CAPTURE_MIC) && !hw.codec[0x1a/2]);
+    CHECK(!audio_capture_source(&audio_dma,generation,CIUKI_CAPTURE_LINE) && hw.codec[0x1a/2]==0x0404);
+    CHECK(!audio_capture_source(&audio_dma,generation,CIUKI_CAPTURE_CD) && hw.codec[0x1a/2]==0x0101);
+    CHECK(!audio_capture_source(&audio_dma,generation,CIUKI_CAPTURE_MIX) && hw.codec[0x1a/2]==0x0505);
+    struct audio_frame frames[128];
+    CHECK(audio_capture_read(&audio_dma,generation,frames,128)==-EAGAIN);
+    mock_sleep(&hw,15);
+    CHECK(audio_capture_read(&audio_dma,generation,frames,128)==128);
+    CHECK(!frames[0].left && frames[127].left==127 && frames[0].right==-123);
+    CHECK(!audio_capture_close(&audio_dma,generation));
+    CHECK(!voice_pins && pages_used==before && hw.codec[0x32/2]==44100 && hw.codec[0x1a/2]==0x0303 && hw.codec[0x1c/2]==0x8000);
+    CHECK(audio_capture_read(&audio_dma,generation,frames,1)==-EINVAL);
+    CHECK(!audio_capture_open(&audio_dma,&generation));
+    mock_sleep(&hw,170);
+    CHECK(audio_capture_read(&audio_dma,generation,frames,1)==-EIO);
+    CHECK(!audio_capture_close(&audio_dma,generation) && pages_used==before);
+    CHECK(!audio_capture_open(&audio_dma,&generation));
+    hw.input_stop_stuck=true;
+    CHECK(audio_capture_close(&audio_dma,generation)==-EIO && ac97.quarantine && audio.quarantined);
+    CHECK(pages_used==before+9 && audio_dma.capture.phys);
+    /* Fixture alone releases permanently quarantined pages. */
+    for (unsigned i=0;i<9;i++) pmm_free(audio_dma.capture.phys+i*PAGE_SIZE);
+    voice_pins=0; audio.commitment_pages-=9; memset(&audio_dma,0,sizeof(audio_dma));
+    memset(&ac97,0,sizeof(ac97)); audio.quarantined=false; audio.ready=false;
+    CHECK(pages_used==before); audio.lines_initialized=false;
+    puts("ICH capture: descriptors/PCM/mux/exclusive/rate/overrun/restore/stop-quarantine PASS");
+}
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
@@ -1600,6 +1735,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
+    test_ich_input();
     test_transient_transport();
     test_cmipci();
     test_voice_engines();

@@ -855,6 +855,7 @@ class AppCaseReplayTests(unittest.TestCase):
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
                                                                                   "clipboard", "shell", "autoplay", "autoplay_content", "sounds", "settings", "power_policy", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
+                 ("desktop_master_storage", ["-Dmaster_preference_save=desktop_master_preference_save"], ROOT / "apps/desktop/master_storage.c"),
 
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
@@ -863,6 +864,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("deskui_clipstore", posix, ROOT / "apps/libdeskui/clipstore.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
+                 ("files_backup", posix, ROOT / "apps/files/backup.c"),
                  ("files_vfs", posix + ["-Dfm_native_vfs=fm_native_vfs_production", "-Dfm_native_version=fm_native_version_production"], ROOT / "apps/files/vfs.c"),
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
                  ("files_clipboard", posix, ROOT / "apps/files/clipboard.c"),

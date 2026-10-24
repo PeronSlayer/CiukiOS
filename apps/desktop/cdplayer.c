@@ -9,8 +9,17 @@ extern void W32API ExitProcess(uint32_t);
 extern uint32_t W32API mciSendStringA(const char *, char *, uint32_t, uintptr_t);
 extern BOOL W32API mciGetErrorStringA(uint32_t, char *, uint32_t);
 extern int W32API MessageBoxA(HWND, const char *, const char *, UINT);
-static HWND display,track_list,repeat_button,random_button;
+extern DWORD W32API GetPrivateProfileStringA(const char *,const char *,const char *,char *,DWORD,const char *);
+extern BOOL W32API WritePrivateProfileSectionA(const char *,const char *,const char *);
+extern int W32API GetWindowTextA(HWND,char *,int);
+static HWND display,track_list,repeat_button,random_button,artist_edit,title_edit,name_edit;
+static char database_section[8192];
 static struct cdp_player cd;
+static void db_get(void *ctx,const char *section,const char *key,char *out,unsigned cap)
+{ (void)ctx; GetPrivateProfileStringA(section,key,"",out,cap,"C:\\System\\cdplayer.ini"); }
+static int db_put(void *ctx,const char *section,const char *text)
+{ (void)ctx; return WritePrivateProfileSectionA(section,text,"C:\\System\\cdplayer.ini"); }
+static const struct cdp_database database={0,db_get,db_put};
 static uint32_t send(void *ctx,const char *s,char *out,uint32_t cap)
 { return mciSendStringA(s,out,cap,(uintptr_t)ctx); }
 static void error(HWND h,uint32_t e)
@@ -18,16 +27,25 @@ static void error(HWND h,uint32_t e)
     if (e) { char text[160]; if (!mciGetErrorStringA(e,text,sizeof(text))) cdp_text(text,"The CD operation failed."); MessageBoxA(h,text,"CD Player",0x10); }
 }
 static void command(HWND h,const char *s) { error(h,send(h,s,0,0)); }
-static void selection(void) { SendMessageA(track_list,0x186,cd.track ? cd.track-1 : (WPARAM)-1,0); }
+static void selection(void) {
+    SendMessageA(track_list,0x186,cd.track ? cd.track-1 : (WPARAM)-1,0);
+    SetWindowTextA(name_edit,cd.names[cd.track]);
+}
 static void play(HWND h) { error(h,cdp_play(&cd)); selection(); }
-static void refresh(HWND h)
+static void show_tracks(void)
 {
-    uint32_t e=cdp_load(&cd);
     SendMessageA(track_list,0x184,0,0); /* LB_RESETCONTENT */
     for (unsigned i=1;i<=cd.tracks;i++) {
         char text[64]; cdp_label(&cd,i,text); SendMessageA(track_list,0x180,0,(LPARAM)text);
     }
-    selection(); error(h,e);
+    selection();
+}
+static void refresh(HWND h)
+{
+    uint32_t e=cdp_load(&cd);
+    if (!e) cdp_database_load(&cd,&database);
+    SetWindowTextA(artist_edit,cd.artist); SetWindowTextA(title_edit,cd.title);
+    show_tracks(); error(h,e);
 }
 static LRESULT W32API window_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp)
 {
@@ -50,6 +68,14 @@ static LRESULT W32API window_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp)
         case 9: cd.repeat^=1; SetWindowTextA(repeat_button,cd.repeat ? "Repeat: On" : "Repeat: Off"); break;
         case 10: cd.random^=1; SetWindowTextA(random_button,cd.random ? "Random: On" : "Random: Off"); break;
         case 11: refresh(h); break;
+        case 15:
+            if (!cd.track) break;
+            GetWindowTextA(artist_edit,cd.artist,sizeof(cd.artist));
+            GetWindowTextA(title_edit,cd.title,sizeof(cd.title));
+            GetWindowTextA(name_edit,cd.names[cd.track],sizeof(cd.names[cd.track]));
+            if (!cdp_database_save(&cd,&database,database_section,sizeof(database_section)))
+                MessageBoxA(h,"The disc names could not be saved. Your edits are still in this window.","CD Player",0x10);
+            show_tracks(); break;
         }
         return 0;
     }
@@ -76,7 +102,7 @@ void W32API entry(void)
     WNDCLASSA wc={0}; wc.lpfnWndProc=window_proc; wc.hInstance=instance;
     wc.hbrBackground=(HBRUSH)(uintptr_t)16; wc.lpszClassName="CiukiCDPlayer";
     if (!RegisterClassA(&wc)) ExitProcess(1);
-    HWND h=CreateWindowExA(0,wc.lpszClassName,"CD Player",0x00ca0000u,100,100,480,350,0,0,instance,0);
+    HWND h=CreateWindowExA(0,wc.lpszClassName,"CD Player",0x00ca0000u,100,100,480,470,0,0,instance,0);
     if (!h) ExitProcess(1);
     char open[]="open cdaudio!@0 alias cd";
     const char *s=GetCommandLineA();
@@ -92,6 +118,14 @@ void W32API entry(void)
     repeat_button=CreateWindowExA(0,"BUTTON","Repeat: Off",0x50010000u,12,240,132,26,h,(HANDLE)(uintptr_t)9,instance,0);
     random_button=CreateWindowExA(0,"BUTTON","Random: Off",0x50010000u,160,240,132,26,h,(HANDLE)(uintptr_t)10,instance,0);
     CreateWindowExA(0,"BUTTON","Refresh disc",0x50010000u,308,240,144,26,h,(HANDLE)(uintptr_t)11,instance,0);
+    const char *fields[]={"Artist:","Title:","Track name:"};
+    HWND *edits[]={&artist_edit,&title_edit,&name_edit};
+    for (unsigned i=0;i<3;i++) {
+        CreateWindowExA(0,"STATIC",fields[i],0x50000000u,12,282+(int)i*30,84,22,h,0,instance,0);
+        *edits[i]=CreateWindowExA(0x200,"EDIT","",0x50010080u,100,280+(int)i*30,350,24,h,(HANDLE)(uintptr_t)(12+i),instance,0);
+        SendMessageA(*edits[i],0xc5,i==2 ? 31 : 63,0); /* EM_SETLIMITTEXT */
+    }
+    CreateWindowExA(0,"BUTTON","Save disc names",0x50010000u,272,376,178,26,h,(HANDLE)(uintptr_t)15,instance,0);
     refresh(h); ShowWindow(h,1); SetTimer(h,1,250,0); if (cd.track) play(h);
     MSG m; while (GetMessageA(&m,0,0,0)>0) { TranslateMessage(&m); DispatchMessageA(&m); }
     ExitProcess(0);

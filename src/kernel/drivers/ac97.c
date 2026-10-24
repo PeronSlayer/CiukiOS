@@ -1008,3 +1008,132 @@ int ac97_init(void)
     stage_log(d, "ready", d->analog_warning ? "analog_warning" : "ok");
     return 0;
 }
+
+/* G22B: PCM-input is independent of PCM-output. The copied capture owner
+ * supplies eight PCM pages plus a ninth, separately pinned descriptor page.
+ * Register semantics: Linux v6.12 intel8x0.c DEFINE_REGSET(PI, 0x00).
+ * Polling keeps input interrupts disabled; no changes to output IRQ ownership. */
+static int ich_input_codec_read(struct audio_dma_device *unused, uint16_t reg, uint16_t *value)
+{ (void)unused; return ac97_codec_read(&ac97, reg, value, operation_deadline(&ac97)); }
+static int ich_input_codec_write(struct audio_dma_device *unused, uint16_t reg, uint16_t value)
+{
+    (void)unused;
+    uint64_t end = operation_deadline(&ac97);
+    int e = ac97_codec_write(&ac97, reg, value, end);
+    uint16_t got;
+    if (!e) e = ac97_codec_read(&ac97, reg, &got, end);
+    return e ? e : got != value ? -EIO : 0;
+}
+static int ich_input_position(unsigned *frame, bool halted)
+{
+    for (unsigned i = 0; i < 8; i++) {
+        unsigned civ = rd(&ac97, 4, 1), remaining = rd(&ac97, 8, 2);
+        unsigned status = rd(&ac97, 6, 2);
+        if (civ != rd(&ac97, 4, 1)) continue;
+        if (civ >= AC97_SLOTS || remaining > 512 || status == 0xffff ||
+            (!halted && (status & (AC97_FIFOE | AC97_DCH)))) return -EIO;
+        *frame = (civ * AUDIO_QUANTUM + (512 - remaining) / 2) %
+            (AUDIO_HW_SLOTS * AUDIO_QUANTUM);
+        return 0;
+    }
+    return -EIO;
+}
+static int ich_input_cursor(struct audio_dma_device *unused, unsigned *frame)
+{
+    (void)unused;
+    int e = ich_input_position(frame, false);
+    if (!e) {
+        /* Leave one complete descriptor behind the current DMA slot. */
+        wr(&ac97, 5, ((*frame / AUDIO_QUANTUM) + 30) % AC97_SLOTS, 1);
+        wr(&ac97, 6, rd(&ac97, 6, 2) & 0x0c, 2);
+    }
+    return e;
+}
+static int ich_input_halt(struct audio_dma_device *d)
+{
+    wr(&ac97, 11, 0, 1);
+    uint64_t end = operation_deadline(&ac97);
+    do {
+        unsigned a, b;
+        if (rd(&ac97, 11, 1) == 0 && (rd(&ac97, 6, 2) & AC97_DCH) &&
+            !ich_input_position(&a, true)) {
+            ac97.io.sleep(ac97.io.cookie, 2);
+            if (rd(&ac97, 11, 1) == 0 && (rd(&ac97, 6, 2) & AC97_DCH) &&
+                !ich_input_position(&b, true) && a == b) {
+                wr(&ac97, 6, 0x1c, 2);
+                if (d->voice_saved_count) {
+                    int e = ich_input_codec_write(d, 0x32, (uint16_t)d->voice_saved[0]);
+                    if (e) return e;
+                    d->voice_saved_count = 0;
+                }
+                return 0;
+            }
+        }
+        ac97.io.sleep(ac97.io.cookie, 1);
+    } while (!expired(&ac97, end));
+    return -EIO;
+}
+static void ich_input_inhibit(struct audio_dma_device *unused)
+{
+    (void)unused;
+    wr(&ac97, 11, 0, 1);
+    wr(&ac97, 0x1b, 0, 1);
+    ac97.quarantine = true; ac97.ready = false;
+}
+static int ich_input_start(struct audio_dma_device *d)
+{
+    if (!ac97.ready || ac97.quarantine || ac97.sis || ac97.ali) return -ENODEV;
+    unsigned cr = rd(&ac97, 11, 1), sr = rd(&ac97, 6, 2);
+    if (cr == 255 || sr == 65535 || cr & 1 || !(sr & AC97_DCH)) { d->capture.running=false; return -EBUSY; }
+    wr(&ac97, 11, 2, 1);
+    uint64_t end = operation_deadline(&ac97);
+    while (rd(&ac97, 11, 1) & 2) {
+        if (expired(&ac97, end)) return -ETIMEDOUT;
+        ac97.io.sleep(ac97.io.cookie, 1);
+    }
+    if (ac97.codec.variable_rate) {
+        uint16_t rate;
+        int e = ich_input_codec_read(d, 0x32, &rate);
+        if (e) return e;
+        d->voice_saved[0] = rate; d->voice_saved_count = 1;
+        e = ich_input_codec_write(d, 0x32, AUDIO_RATE);
+        if (e) return e;
+    }
+    uint32_t phys = d->capture.phys + AUDIO_HW_BYTES;
+    struct ac97_bd *bd = P2V(phys);
+    for (unsigned i = 0; i < AC97_SLOTS; i++) {
+        bd[i].address = d->capture.phys + i * AUDIO_QUANTUM * sizeof(struct audio_frame);
+        bd[i].length = 512; /* stereo 16-bit samples; no IOC */
+    }
+    __asm__ volatile("" ::: "memory");
+    wr(&ac97, 0, phys, 4);
+    if (rd(&ac97, 0, 4) != phys) return -EIO;
+    wr(&ac97, 6, 0x1c, 2); wr(&ac97, 5, 31, 1);
+    wr(&ac97, 11, 1, 1);
+    if (rd(&ac97, 11, 1) != 1) return -EIO;
+    /* RUN publication precedes the first AC-link transfer. Do not expose a
+     * transient startup DCH as an input error on the first copied READ. */
+    end=bounded_deadline(&ac97,100);
+    for (;;) {
+        unsigned status=rd(&ac97,6,2);
+        if (status==0xffff || (status & AC97_FIFOE)) return -EIO;
+        if (!(status & AC97_DCH)) return 0;
+        if (expired(&ac97,end)) return -ETIMEDOUT;
+        ac97.io.sleep(ac97.io.cookie,1);
+    }
+}
+void ac97_capture_attach(void)
+{
+    if (!ac97.ready || ac97.sis || ac97.ali) return;
+    struct audio_dma_device *d = &audio_dma;
+    memset(d, 0, sizeof(*d));
+    for (unsigned i = 0; i < 8; i++) d->claims[i] = -1;
+    kmutex_init(&d->register_lock);
+    static const struct audio_capture_ops input = {ich_input_start, ich_input_halt, ich_input_cursor};
+    static const struct audio_dma_ops safety = {.inhibit = ich_input_inhibit};
+    d->kind = AUDIO_ICH; d->name = "ac97-input"; d->io = ac97.io; d->pci = ac97.pci;
+    d->state.ready = true; d->state.codec_id=ac97.codec_id; d->codec=ac97.codec;
+    d->capture_ops = &input; d->ops = &safety;
+    d->voice_codec_read = ich_input_codec_read; d->voice_codec_write = ich_input_codec_write;
+    d->codec_read = ich_input_codec_read; d->codec_write = ich_input_codec_write;
+}

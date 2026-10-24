@@ -134,6 +134,7 @@ struct cp_host {
     int (*power_events)(void *, struct ciuki_power_events *);   /* G11: call-73 EVENTS; NULL: unavailable */
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     int (*capture_caps)(void *, struct ciuki_audio_capture *);
+    int (*audio_line)(void *,struct ciuki_mixer_line *,int set);
     int (*multimedia_open)(void *, unsigned); /* 0 Volume Control, 1 Recorder, 2 Music */
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);

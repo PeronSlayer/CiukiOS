@@ -306,6 +306,10 @@ static int backend_codec_restore(struct audio_dma_device *d)
 void audio_backend_shutdown(void)
 {
     if (!dma_selected) {
+        if (audio_dma.kind == AUDIO_ICH) audio_dma.state.ready=false;
+        if (audio_dma.kind == AUDIO_ICH && audio_dma.capture.phys && audio_capture_shutdown(&audio_dma))
+            ac97.quarantine = true;
+        if (audio_dma.kind == AUDIO_ICH && !ac97.quarantine && audio_lines_restore()) ac97.quarantine=true;
         ac97_shutdown();
         if (audio.quarantined)
             klog("[audio] failure stage=shutdown backend=ac97 reason=stop_unproved fallback=quarantine");
@@ -329,6 +333,7 @@ void audio_backend_shutdown(void)
         else if (irq_chain_remove(d->state.irq, backend_irq, d->name)) unsafe = true;
         else d->irq_attached = false;
     }
+    if (!unsafe && audio_lines_restore()) unsafe = true;
     if (!unsafe && backend_codec_restore(d)) unsafe = true;
     if (!unsafe && d->kind == AUDIO_YMFPCI && ymfpci_release(d)) unsafe = true;
     if (!unsafe && d->touched && d->voice_restore && d->voice_restore(d)) unsafe = true;
@@ -494,6 +499,7 @@ int audio_backend_init(void)
     dma_selected = false;
     int e = ac97_init();
     if (e != -ENODEV || ac97.pci.vendor) {
+        if (!e) ac97_capture_attach();
         audio.backend_name = "ac97"; audio.backend_pci = ac97.pci; audio.backend_touched = ac97.touched;
         audio.master_in_codec = !ac97.software_master;
         return e;

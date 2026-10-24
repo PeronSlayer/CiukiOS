@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include "sound_storage.h"
 #include <ciuki/devices.h>
+#include <ciuki/abi.h>
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -62,6 +63,13 @@ int main(int argc,char **argv)
     generation=reg_generation(r);assert(master_preference_save(argv[1],101,20,0)==-1&&errno==EINVAL&&reg_generation(r)==generation);
     assert(master_preference_save(argv[1],20,20,2)==-1&&errno==EINVAL);
     assert(!ciuki_master_unpack(-1,&left,&right,&mute)&&!ciuki_master_unpack(131072,&left,&right,&mute));
+    struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=CIUKI_MIXER_CD,.left=40,.right=65,.mute=1};
+    assert(!line_preference_save(argv[1],&line));
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,"Source3",&packed) && packed==ciuki_master_pack(40,65,1));
+    line.line=CIUKI_MIXER_LINE; line.recording=1; line.selected=1;
+    assert(!line_preference_save(argv[1],&line));
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,"Recording",&packed) && packed==(ciuki_master_pack(40,65,1)|(4<<24)));
+    line.left=101; generation=reg_generation(r); assert(line_preference_save(argv[1],&line)==-1 && errno==EINVAL && reg_generation(r)==generation);
     reg_close_root(r);
     char schemes[256]; snprintf(schemes,sizeof(schemes),"%s/schemes",argv[1]);
     char names[SOUND_SCHEMES_MAX][SOUND_SCHEME_NAME];

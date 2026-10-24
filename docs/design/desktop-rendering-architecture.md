@@ -474,6 +474,10 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 77 | G29c Backup full/differential/verify/restore job options, overwrite choices, confirmation, progress, completion and checksum/I/O error | dialog boxes and client content | Files `disk_ui.inc`, worker progress and completion invalidation | none new | backup (`WM_ROW=53`) |
 | 78 | G29c unformatted removable media appear in Computer; opening offers Format | drive list, Format dialog and exposed client area | retained media slots, navigation failure and format query worker | none new | blank media (`WM_ROW=54`) |
 | 79 | G29c Terminal FDISK large-disk/destructive prompts, partition information/result/refusal; BACKUP/RESTORE command output | existing Terminal content invalidation and client DAMAGE | `term_execute` grid invalidation, desktop client damage; command semantics tested separately | no Terminal layout or protocol change | disk terminal (`WM_ROW=55`) |
+| 80 | G22B playback source volume, balance and mute | changed Volume Control client controls; occluded bits remain in the backing store | `mixer_view.c`, toolkit damage → `DESK_DAMAGE` | none new; source columns now report their changed controls | multimedia controls (`WM_ROW=33`) |
+| 81 | G22B playback/recording view and recording source selection | swapped control captions, availability, sliders and Select states | `mixer_event`, `lines_show` | mode button sits below the menu; master disabled in Recording | multimedia controls |
+| 82 | G22B CD database load/save/refresh and track selection | CD client list, artist/title and track edit fields | `cdplayer.c` USER/GDI client damage | none new; CD model tests cover identity and persistence | multimedia controls |
+| 83 | G22B Multimedia CD-volume slider | changed native Control Panel client slider/status | `control/app.c`, toolkit damage | none new | multimedia controls |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

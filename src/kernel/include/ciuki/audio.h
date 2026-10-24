@@ -61,7 +61,7 @@ static inline bool audio_producer_behind(bool behind, unsigned lead, unsigned ma
 struct audio_stream {
     struct audio_frame *ring[2];
     uint32_t pages[2], head, queued, phase, rate, format, channels;
-    uint32_t gain[2], generation;
+    uint32_t gain[2], generation, source;
     uint64_t accepted, consumed, discarded, starvation, last_output, drain_goal, drain_output;
     bool started, configured, draining, drain_latched;
     bool producer_behind; /* f1-101: last lead state reported to the scheduler */
@@ -73,6 +73,9 @@ struct audio_state {
     struct audio_stream *streams[AUDIO_STREAMS];
     struct ciuki_mixer_master master;
     struct ciuki_audio_caps caps;
+    struct ciuki_mixer_line lines[6];
+    bool lines_initialized;
+    unsigned record_source, record_gain;
     struct kwait changed;
     uint64_t output, fetched, played_output, fifo, halts, deadlines, underruns, restarts;
     uint64_t last_service_cycles;
@@ -114,6 +117,17 @@ bool audio_refill_reader(struct process *, uint32_t bytes);
 int audio_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes);
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted);
 int audio_master_set(struct ciuki_mixer_master *);
+void audio_lines_load(struct vfs *);
+int audio_lines_restore(void);
+int audio_line_control(struct ciuki_mixer_line *, bool set);
+static inline unsigned audio_source_gain(unsigned source, unsigned channel)
+{
+    if (!audio.lines_initialized || source == CIUKI_AUDIO_MIXED) return 100;
+    if (!source) source = CIUKI_MIXER_WAVE;
+    if (source > CIUKI_MIXER_CD) return 100;
+    const struct ciuki_mixer_line *l = &audio.lines[source];
+    return l->mute ? 0 : channel ? l->right : l->left;
+}
 void audio_master_refresh(void); /* EC worker: apply without storage I/O (fx-9b) */
 int audio_settings_flush(void);   /* fx-9b: shutdown, before the storage flush */
 void audio_master_refresh_requested(void); /* f1-100: EC worker, user-requested read */

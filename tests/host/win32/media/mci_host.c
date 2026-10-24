@@ -350,3 +350,9 @@ DWORD GetFullPathNameA(const char *name, DWORD size, char *out, char **part) {
   if (part) *part = 0;
   return (DWORD)used;
 }
+
+/* This MCI model has playback only; waveform-input behaviour is exercised by
+ * the independent runtime capture model. No fabricated recording device. */
+#include <ciuki/abi.h>
+int wa_capture_native(uint32_t call,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d)
+{ (void)call; (void)a; (void)b; (void)c; (void)d; return -CIUKI_ENODEV; }

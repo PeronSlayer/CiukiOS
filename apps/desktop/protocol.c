@@ -868,13 +868,18 @@ int desk_parse(const struct ciuki_message *m, int client,
         n = 24;
         break;
     case DESK_MIXER_SET:
-        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 20) return 0;
+        if (!client || m->data[0] != DESK_SHELL_VERSION || (m->length != 20 && m->length != 28)) return 0;
         p->serial = desk_get32(m->data + 4);
         p->width = desk_get32(m->data + 8);    /* left */
         p->height = desk_get32(m->data + 12);  /* right */
         p->flags = desk_get32(m->data + 16);   /* mute */
         if (p->width > 100 || p->height > 100 || p->flags > 1) return 0;
-        n = 20;
+        if (m->length==28) {
+            p->values[0]=desk_get32(m->data+20); p->values[1]=desk_get32(m->data+24);
+            if (p->values[0]<CIUKI_MIXER_WAVE || p->values[0]>CIUKI_MIXER_MIC || p->values[1]>1 ||
+                (p->values[1] && p->values[0]==CIUKI_MIXER_MIDI)) return 0;
+        }
+        n = m->length;
         break;
     case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
         if (client || m->length != 44) return 0;
