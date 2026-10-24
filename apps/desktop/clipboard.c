@@ -25,13 +25,16 @@ static int enter(void)
 { int e=pthread_once(&lock_once,init_lock); return e ? e : lock_error ? lock_error : pthread_mutex_lock(&lock); }
 struct clip_pending {
     struct desk_clip_wire reply, get;
-    void *data;
+    void *data, *display_data;
+    struct desk_clip_wire display;
+    unsigned display_owner;
+    uint32_t display_token, display_serial;
     uint64_t deadline;
     int ready, watch;
-    unsigned events, render;
+    unsigned events, render, get_render;
     uint32_t destroy_token;
 };
-struct desk_clipboard { struct clip_store store; struct clip_pending clients[DESK_CLIENTS]; };
+struct desk_clipboard { struct clip_store store; struct clip_pending clients[DESK_CLIENTS]; uint32_t display_serial; };
 static struct desk_clipboard *state(struct desktop *d)
 {
     if (!d->clipboard) { d->clipboard=calloc(1,sizeof(*d->clipboard)); if (d->clipboard) clip_init(&d->clipboard->store); }
@@ -70,7 +73,10 @@ static void clip_receive_locked(struct desktop *d, int i, const struct ciuki_mes
     if (!s) { for (unsigned k=0;k<m->fd_count;k++) d->ops.close(m->fds[k]); desk_drop_client(d,i); return; }
     s->store.locale=d->sh.cfg.keyboard==CFG_KEYS_IT ? 0x410 : 0x409;
     struct clip_pending *pending=&s->clients[i];
-    if (pending->ready || pending->deadline) { for (unsigned k=0;k<m->fd_count;k++) d->ops.close(m->fds[k]); desk_drop_client(d,i); return; }
+    int render_call=pending->deadline && pending->get.op==DESK_CLIP_GET && s->store.owner==(unsigned)i+1 &&
+        ((p->clip.op==DESK_CLIP_PUT && (p->clip.flags&DESK_CLIP_RENDERED)) || p->clip.op==DESK_CLIP_REGISTER ||
+         p->clip.op==DESK_CLIP_NAME || p->clip.op==DESK_CLIP_QUERY);
+    if ((pending->ready || pending->deadline) && !render_call) { for (unsigned k=0;k<m->fd_count;k++) d->ops.close(m->fds[k]); desk_drop_client(d,i); return; }
     void *data=NULL; int error=0;
     if (m->fd_count) {
         struct ciuki_surface_info info={0};
@@ -83,12 +89,53 @@ static void clip_receive_locked(struct desktop *d, int i, const struct ciuki_mes
         d->ops.close(m->fds[0]);
     }
     struct desk_clip_wire w=p->clip;
+    if (render_call) {
+        struct desk_clip_wire r={.serial=w.serial,.op=w.op,.kind=DESK_CLIP_REPLY,.result=error}; void *out=NULL;
+        if (!error) (void)request(d,i+1,&w,data,&r,&out);
+        struct ciuki_message reply;
+        if (!desk_clip_message(&reply,d->clients[i].version,0,&r,-1)) desk_queue(d,i,&reply);
+        free(out); free(data); return;
+    }
+    if (!error && w.op==DESK_CLIP_DISPLAY) {
+        int available=0;
+        for (unsigned k=0;k<s->store.count;k++) if (s->store.items[k].format==0x80) available=1;
+        unsigned owner=s->store.owner;
+        if (!available || !owner || owner>DESK_CLIENTS || owner==(unsigned)i+1 || (w.token && w.token!=s->store.token)) error=-ENOENT;
+        else if (s->clients[owner-1].display.serial) error=-EBUSY;
+        else {
+            struct clip_pending *to=&s->clients[owner-1];
+            if (!++s->display_serial) ++s->display_serial;
+            pending->display_serial=s->display_serial;
+            to->display=(struct desk_clip_wire){.kind=DESK_CLIP_DISPLAY_EVENT,.op=w.op,.serial=s->display_serial,
+                .token=(unsigned)i+1,.format=w.format,.bytes=w.bytes,.sequence=s->store.sequence};
+            to->display_data=data;
+            pending->get=w; pending->deadline=d->now_ns+DESK_CLIP_RENDER_NS;
+            pending->display_owner=owner; pending->display_token=s->store.token;
+            return;
+        }
+    }
+    if (!error && w.op==DESK_CLIP_DISPLAY_REPLY) {
+        if (w.token>DESK_CLIENTS) error=-EINVAL;
+        else {
+            struct clip_pending *to=&s->clients[w.token-1];
+            if (!to->deadline || to->get.op!=DESK_CLIP_DISPLAY || to->display_serial!=w.flags ||
+                to->display_owner!=(unsigned)i+1 || s->store.owner!=(unsigned)i+1 ||
+                to->display_token!=s->store.token || to->get.format!=w.format) error=-ESRCH;
+            else {
+                to->reply=(struct desk_clip_wire){.kind=DESK_CLIP_REPLY,.op=DESK_CLIP_DISPLAY,
+                    .serial=to->get.serial,.format=w.format,.bytes=w.bytes,.sequence=s->store.sequence};
+                to->data=data; data=NULL; to->deadline=0; to->ready=1;
+            }
+        }
+        pending->reply=(struct desk_clip_wire){.kind=DESK_CLIP_REPLY,.op=w.op,.serial=w.serial,.result=error};
+        pending->ready=1; free(data); return;
+    }
     if (!error) error=request(d,i+1,&w,data,&pending->reply,&pending->data);
     else pending->reply=(struct desk_clip_wire){.serial=w.serial,.kind=DESK_CLIP_REPLY,.op=w.op,.result=error,.sequence=s->store.sequence};
     free(data);
     if (error==-EAGAIN && w.op==DESK_CLIP_GET && s->store.owner && s->store.owner<=DESK_CLIENTS) {
         pending->get=w; pending->deadline=d->now_ns+DESK_CLIP_RENDER_NS;
-        struct clip_pending *owner=&s->clients[s->store.owner-1]; owner->render=pending->reply.format;
+        struct clip_pending *owner=&s->clients[s->store.owner-1]; owner->render=pending->get_render=pending->reply.format;
     } else pending->ready=1;
     if (!error && w.op==DESK_CLIP_WATCH) { pending->watch=w.flags; pending->reply.bytes=!!w.flags; }
 }
@@ -97,7 +144,7 @@ static int send_event(struct desktop *d, int i, struct desk_clip_wire *w, const 
     struct desk_client *c=&d->clients[i];
     if (c->tx_count || c->v3_over_count) return 0;
     struct ciuki_message m; int fd=-1;
-    if (w->bytes && w->op==DESK_CLIP_GET && !w->result) {
+    if (w->bytes && (w->op==DESK_CLIP_GET || w->op==DESK_CLIP_DISPLAY || w->kind==DESK_CLIP_DISPLAY_EVENT) && !w->result) {
         uint32_t width,height; desk_clip_dims(w->bytes,&width,&height);
         fd=ciuki_surface_create(width,height,CIUKI_SURFACE_XRGB8888);
         if (fd<0) return 0;
@@ -120,8 +167,17 @@ static void clip_tick_locked(struct desktop *d)
     for (int i=0;i<DESK_CLIENTS;i++) {
         struct clip_pending *p=&s->clients[i];
         if (d->clients[i].channel<0 || d->clients[i].v3_peer) continue;
-        if (p->deadline) {
+        if (p->deadline && p->get.op==DESK_CLIP_DISPLAY) {
+            if (d->now_ns>=p->deadline || s->store.owner!=p->display_owner || s->store.token!=p->display_token) {
+                p->reply=(struct desk_clip_wire){.kind=DESK_CLIP_REPLY,.op=DESK_CLIP_DISPLAY,.serial=p->get.serial,.result=-ETIMEDOUT};
+                p->deadline=0; p->ready=1;
+            }
+        }
+        if (p->deadline && p->get.op!=DESK_CLIP_DISPLAY) {
             int e=clip_request(&s->store,i+1,&p->get,NULL,&p->reply,&p->data);
+            if (e==-EAGAIN && p->reply.format!=p->get_render && s->store.owner && s->store.owner<=DESK_CLIENTS) {
+                p->get_render=p->reply.format; s->clients[s->store.owner-1].render=p->reply.format;
+            }
             if (e!=-EAGAIN || d->now_ns>=p->deadline) { if (e==-EAGAIN) p->reply.result=-ETIMEDOUT; p->deadline=0; p->ready=1; }
         }
         if (p->events&(1u<<DESK_CLIP_DESTROY)) {
@@ -130,6 +186,9 @@ static void clip_tick_locked(struct desktop *d)
             else continue;
         }
         if (p->ready && send_event(d,i,&p->reply,p->data)) { free(p->data); p->data=NULL; p->ready=0; }
+        if (p->display.serial && send_event(d,i,&p->display,p->display_data)) {
+            free(p->display_data); p->display_data=NULL; p->display=(struct desk_clip_wire){0};
+        }
         if (p->render) {
             struct desk_clip_wire event={.kind=DESK_CLIP_RENDER,.format=p->render,.token=s->store.token,.sequence=s->store.sequence};
             if (send_event(d,i,&event,NULL)) p->render=0;
@@ -143,13 +202,13 @@ static void clip_tick_locked(struct desktop *d)
 static void clip_drop_locked(struct desktop *d, int i)
 {
     if (!d->clipboard || d->clients[i].v3_peer) return;
-    free(d->clipboard->clients[i].data); memset(&d->clipboard->clients[i],0,sizeof(d->clipboard->clients[i]));
+    free(d->clipboard->clients[i].data); free(d->clipboard->clients[i].display_data); memset(&d->clipboard->clients[i],0,sizeof(d->clipboard->clients[i]));
     clip_disconnect(&d->clipboard->store,i+1); notify(d->clipboard);
 }
 static void clip_destroy_locked(struct desktop *d)
 {
     if (!d->clipboard) return;
-    for (int i=0;i<DESK_CLIENTS;i++) free(d->clipboard->clients[i].data);
+    for (int i=0;i<DESK_CLIENTS;i++) { free(d->clipboard->clients[i].data); free(d->clipboard->clients[i].display_data); }
     clip_destroy(&d->clipboard->store); free(d->clipboard); d->clipboard=NULL;
 }
 static int clip_capture_locked(struct desktop *d, int active)

@@ -435,6 +435,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
+| 42 | DOS clipboard settings (G5b): QuickEdit and Exclusive mode commands in the DOS window menu | menu outer box on open, hot row and dismissal; normal client damage when a selection starts/ends | `shell.c` DOS menu, `dos_clip_action`, shared `clipboard_settings.h` | none new; settings are persisted before applying them | DOS clipboard settings (appended after saver) |
+| 43 | CF_OWNERDISPLAY viewer size/paint/scroll and owner replacement (G5b) | viewer client damage through the ordinary native/Win32 backing surface; old viewer box when closed | `clipbrd_main.c` preview, USER `clipboard_display.c`, normal DAMAGE/PRESENT | handles/HDC never cross processes; owner paints a bounded local surface whose DIB is returned to the viewer | clipboard owner display (appended after DOS clipboard settings) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -442,7 +444,9 @@ fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
 drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
 row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
-and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`);
+and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`).
+Rows 42-43 are G5b's DOS clipboard settings and owner-display viewer
+(`WM_ROW=33` and `34`, appended after the saver);
 the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
 Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.

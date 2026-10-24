@@ -1,9 +1,9 @@
-# One system clipboard (G5)
+# One system clipboard (G5, G5b)
 
 Implementation review, 2026-10-23 22:43 CEST. Scope: G5 of
 `docs/directives/g1-g6-os-gaps-batch-1.md`, inventory CB-1, CB-3–CB-8 and
-KB-10. The remaining obligations below are still G5 gaps, not exclusions
-from the directive. This document replaces the incomplete implementer's draft.
+KB-10. The G5b contract below completes Amendment 1; qualification limits and
+remaining G17 work are recorded at the end.
 
 ## Research and expected behaviour
 
@@ -56,6 +56,59 @@ Primary sources checked against the former implementation:
 
 ## Runtime contract
 
+### G5b completion contract (2026-10-24)
+
+Research: Microsoft's [Q67675, Access to the Windows Clipboard by
+MS-DOS-Based App](https://jeffpar.github.io/kbarchive/kb/067/Q67675/)
+documents the enhanced-mode WINOLDAP interface, also indexed in
+[RBIL, Windows multiplex functions](https://fd.lod.bz/rbil/interrup/windows/index.html)
+and the [mirrored original WINOLDAP register tables](https://wiki.nox-rhea.org/back2root/ibm-pc-ms-dos/interrupts/old/ms_interrupt_list-22-30).
+This is the Windows 9x V86 session interface, independent of NTVDM.
+AX=1700h identifies support (AL major, AH minor); 1701h opens, 1702h
+empties, 1703h copies SI:CX bytes from ES:BX in format DX, 1704h returns
+the size in DX:AX, 1705h copies into ES:BX, 1708h closes, and 1709h
+returns available bounded transfer space in DX:AX. Boolean calls return
+AX=0 on failure and nonzero on success. Only CF_TEXT/CF_OEMTEXT are
+required here; all other formats fail without altering the store.
+
+The VM has one transient request slot, not a clipboard. A VM interrupt
+publishes a serialised request, wakes WAIT_PRESENT with EVENT_CLIPBOARD,
+and waits on a completion gate for at most two seconds. The owner-only
+CLIP_REQUEST/CLIP_COMPLETE operations copy a bounded 64 KiB transfer;
+serial and VM generation reject late completions. No guest pointer reaches
+the desktop. Failure, timeout and owner death release transfer memory.
+DPMI 0300h and default INT 2Fh reflection use the same real-mode buffer
+semantics and the existing host return stub. The DOS client executes each
+operation against the existing desktop RPC store, retaining its exclusive
+open across guest calls; no polling copy or file mirror is introduced.
+
+Microsoft [Standard Clipboard Formats](https://learn.microsoft.com/en-us/windows/win32/dataxchg/standard-clipboard-formats),
+[Clipboard Operations](https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-operations)
+and [Using the Clipboard](https://learn.microsoft.com/en-us/windows/win32/dataxchg/using-the-clipboard)
+require format-specific handle destruction and owner-display messages.
+GDI handles are serialized as DIB, LOGPALETTE, metafile bits with the
+METAFILEPICT mapping/extents, or enhanced-metafile bits. The receiving
+process creates its own handles; rendered bytes survive owner exit.
+EmptyClipboard destroys system-owned local handles and the stored bytes;
+unrendered promises and owner-display state disappear on owner exit.
+Delayed CF_BITMAP retains its advertised format while rendering a DIB.
+Native producers receive RENDER/RENDERALL/DESTROY callbacks; normal window
+close renders promises before sending CLOSE while its channel remains live,
+with rendered
+PUT allowed while the requester owns the open lock. Registered names use
+the repository's Unicode case-fold table, shared with the registry.
+
+Full-screen DOS Print Screen publishes the visible BIOS text page as
+CF_OEMTEXT; graphics modes leave the clipboard unchanged (Amendment 1's
+Windows 98 rule). The input path only queues the request: the VM worker
+captures text after synchronising the VGA aperture, and its DOS client
+publishes through the ordinary store. QuickEdit and Exclusive mode are
+saved per program (interactive shell has its own key) through a shared
+settings API for G17. Exclusive mode gives mouse input to the DOS program and suppresses automatic
+QuickEdit selection; it does not disable the programmatic clipboard.
+The Resource Kit Chapter 25, table 25.2 (`wrkc25_3.htm`), distinguishes
+Exclusive mode, fast paste and the Alt+Print Screen application shortcut.
+
 `apps/libdeskui/clipstore.c` implements the one RAM store, instantiated by
 `apps/desktop/clipboard.c` in the desktop. The desktop's own folder worker
 uses the same store; a recursive mutex serializes worker and UI access.
@@ -82,13 +135,19 @@ The sequence is global, including synthesized locale placement.
 Protocol IDs preserve main's fx-19 messages 42–48 and G3 messages 49–51.
 G5 uses native 52/53 (request/event), DOS-window command 54, and v3 80/81
 with window and generation zero. Operations are QUERY, EMPTY, PUT, CLOSE,
-GET, WATCH, REGISTER, NAME, OPEN and RELEASE. Payloads are explicitly
+GET, WATCH, REGISTER, NAME, OPEN and RELEASE. G5b appends DISPLAY and
+DISPLAY_REPLY plus DISPLAY_EVENT for bounded owner-display viewer messages. Payloads are explicitly
 encoded bytes, not C-structure layouts. Data use bounded XRGB8888
 surfaces; `desk_clip_dims` computes their geometry.
 
 A delayed GET sends RENDER to the owner and has a two-second deadline.
+Text conversion can request the promised source first, then a promised
+CF_LOCALE, within that same deadline; conversion never reads an unrendered
+locale block. Native self-reads render their promised text/bitmap source
+and locale before entering the synchronous GET.
 Replies remain in a per-client slot when the outgoing channel is full;
-a client may have one outstanding clipboard request. Clients wait for
+a client may have one outstanding clipboard request, with owner rendering
+PUT/QUERY/NAME/REGISTER allowed while that owner waits on its own delayed GET. Clients wait for
 matching serials and retain unrelated UI packets. Native RPC waits retain up to 1024 deferred UI messages and do not
 re-enter application callbacks. Menu availability uses change-notification
 caching; an actual Paste queries the current sequence before using cached
@@ -119,9 +178,12 @@ retaining a surface descriptor after a send attempt.
   viewer chain and atom namespace for this path; its retired data operations
   return ERROR_CALL_NOT_IMPLEMENTED, so they cannot create a second store.
   Registered formats map by
-  name between the atom and desktop tables. Global data blocks do not
-  consume USER's unchanged 4 MiB metadata allowance. CF_BITMAP crosses
-  the channel as CF_DIB and is recreated through the existing GDI bridge.
+  name between the Unicode-aware atom and desktop tables. Global data blocks
+  do not consume USER's unchanged 4 MiB metadata allowance. CF_BITMAP
+  retains its format ID, carries DIB bytes, and is recreated through GDI.
+  Palette, metafile-picture and enhanced-metafile objects (including display
+  variants) are serialized and reconstructed per process. Returned handles
+  remain valid after CloseClipboard until replacement or process exit.
   WM_RENDERFORMAT, WM_RENDERALLFORMATS and WM_DESTROYCLIPBOARD use the
   owner window. Private-format allocation remains the owner's responsibility.
 - DOS windows expose Mark, Copy, Paste and a QuickEdit toggle in their
@@ -131,7 +193,8 @@ retaining a surface descriptor after a send attempt.
   DIB. Enter copies; Esc resumes. Paste converts Unicode into CP437 and
   sends paced set-1 key events, retries queue pressure, folds CRLF into one
   Enter, and uses Alt+numpad for characters without a US key. This is a
-  window bridge, not the DOS programmatic clipboard multiplex interface.
+  window bridge. The G5b programmatic multiplex path is the request/completion
+  interface above, using the same store and text conversions.
 - Print Screen and Alt+Print Screen/SysRq capture the composed desktop or
   clipped active window frame as DIB, without a separate display grant.
 - `/Programs/clipbrd`, under Accessories > System Tools, shows text, DIBs
@@ -142,27 +205,36 @@ retaining a surface descriptor after a send attempt.
   terminators before replacing data. CLP names must fit 78 ASCII bytes;
   other registered names are refused rather than truncated.
 
-## Remaining G5 obligations and qualification
+## Qualification and remaining work
 
-- DOS INT 2Fh AX=1700h–1705h/1709h is not implemented. A request/completion
-  upcall between the V86/DPMI VM and its window needs a reviewed contract;
-  a second kernel clipboard or a stale polling mirror would break CB-1.
-- CF_PALETTE, CF_METAFILEPICT, CF_ENHMETAFILE, CF_OWNERDISPLAY and display
-  metafile/bitmap handle variants lack a cross-process GDI representation.
-  They are refused rather than treating process-local handles as bytes.
-  Delayed CF_BITMAP is also not advertised; delayed byte formats, including
-  DIB, are supported.
-- Registered names are bounded to 127 UTF-8 bytes and ASCII case folding;
-  other ANSI/OEM code-page families and RLE DIB decoding are not covered.
-- DOS selection uses BIOS text geometry, not arbitrary custom CRTC text
-  layouts. The full DOS toolbar and persisted properties remain G17 work;
-  menu commands and an in-session QuickEdit toggle are delivered here.
-- Native delayed producers have the wire operations but no toolkit render
-  callback. The implemented delayed-render client is USER32.
-- OLE IDataObject clipboard operations are not added by this batch.
-- Screenshot capture uses the retained desktop composition. Capturing an
-  exclusive DOS/Win32 framebuffer lease is not implemented by this path.
-- Host evidence is not guest/hardware evidence. The lead must review the
-  whole change, reconcile the existing Setup ABI oracle drift, run the
-  leak-enabled suites outside this sandbox, and perform permitted
-  integration validation. No QEMU, systemd scope or image build was run.
+- G5b adds host coverage for register results, V86 guest buffers, DPMI return
+  frames, owner isolation, request serials/deadlines, text-mode full-screen
+  capture, graphics no-op, native producer callbacks, Unicode registration,
+  GDI object reconstruction/lifetimes and owner-display viewer messages.
+- Kernel transfers use two temporary 64 KiB PMM allocations at peak (VM
+  request and native marshalling); kheap's 2040-byte limit forbids using
+  kmalloc for them. Allocation failure returns API failure, not a VM fault.
+  The existing DOS memory/admission limits are unchanged.
+- Owner-display messages marshal viewer parameters, rectangles and names.
+  WM_PAINTCLIPBOARD gives the owner a local HGLOBAL PAINTSTRUCT and local
+  GDI DC backed by a bounded bitmap, then returns a DIB for the viewer's DC.
+  Neither an HGLOBAL nor an HDC from one process is used by another.
+  The desktop authenticates the answering owner and assigns a distinct request
+  nonce, preventing late replies from matching a reused client slot. Win32
+  requests also bind to the owner HWND observed by the caller.
+- Registered names remain bounded to 127 UTF-8 bytes. Case comparison uses
+  the existing Unicode full-fold table, without normalization. ANSI/OEM
+  families beyond 1252/437/850 and RLE DIB decoding remain outside G5b.
+- DOS selection and full-screen text capture use BIOS geometry, rather than
+  arbitrary custom CRTC text layouts. The complete DOS toolbar and property
+  pages remain G17 work; `apps/dosbox/clipboard_settings.h` provides the
+  shared per-program load/save API for QuickEdit and Exclusive mouse mode.
+  The G5b runtime preference suppresses automatic QuickEdit in Exclusive
+  mode; G17 owns the complete exclusive pointer-capture UX.
+- CLP export still retains supported byte formats and DIB; exporting GDI
+  metafile/palette handles or owner-display callbacks is not added here.
+- OLE IDataObject operations and exclusive Win32 framebuffer screenshots
+  remain outside Amendment 1. Full-screen DOS text publication and graphics
+  no-op are covered here.
+- Host evidence and sandbox limitations are in `build/codex/g5b-report.md`.
+  Guest/hardware integration and the lead's cross-review remain required.

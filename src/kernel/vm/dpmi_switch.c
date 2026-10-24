@@ -121,6 +121,10 @@ int dpmi_real_int(struct dosvm *v, struct v86_frame *n, uint8_t vector, uint16_t
     n->tf.eip = ivt[0];
     n->tf.eflags = (image & 0x0CD5u & ~V86_TF) | V86_VM | V86_IF | 2u;
     v->monitor.vif = false;
+    if (vector==0x2f) {
+        int clip=dosvm_clipboard_reflect(v,n,image);
+        if (clip!=-ENOSYS) return clip;
+    }
     if (dosvm_file_reflect && (vector==0x21 || vector==0x2f)) {
         unsigned origin=v->dpmi.depth && v->dpmi.rec[v->dpmi.depth-1].kind==DPMI_REC_HOSTCALL ? 3 : 2;
         int file=dosvm_file_reflect(v,n,vector,origin,image);
@@ -267,7 +271,11 @@ int dpmi_translation(struct dosvm *v, struct v86_frame *f, unsigned ax)
     n.tf.eflags = (image & 0x0CD5u & ~V86_TF) | V86_VM | V86_IF | 2u;
     /* fx-10: MSCDEX answers INT 2Fh AH=15h on the translated frame. */
     int cd=-ENOSYS;
-    if (ax==0x0300 && vector==0x2f && dosvm_cdaudio_reflect) {
+    if (ax==0x0300 && vector==0x2f) {
+        cd=dosvm_clipboard_reflect(v,&n,image);
+        if (cd!=-ENOSYS && cd) { pop_record(v); return cd; }
+    }
+    if (cd==-ENOSYS && ax==0x0300 && vector==0x2f && dosvm_cdaudio_reflect) {
         cd=dosvm_cdaudio_reflect(v,&n,image);
         if (cd!=-ENOSYS && cd) { pop_record(v); return cd; }
     }

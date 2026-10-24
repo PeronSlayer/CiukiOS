@@ -997,6 +997,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_exit_test.inc"
 #include "dosvm_idle_test.inc"
 #include "dosvm_fullscreen_test.inc"
+#include "dosvm_clipboard_test.inc"
 #include "dosvm_quake_start_test.inc"
 #include "dosvm_startup_test.inc"
 #include "dosvm_creation_test.inc"
@@ -1016,6 +1017,7 @@ static void test_memory_services(bool locked)
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_CLIPBOARD")) { test_programmatic_clipboard(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_SAVE_TEST")) {
         test_persistent_provider(); test_client_boundary();
         free(ram); fflush(stdout); return 0;
@@ -1055,6 +1057,7 @@ int main(void)
     test_vga_transaction_bound();
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
     test_video();
+    test_programmatic_clipboard();
     test_wait_present();
     test_vm_audio();
     test_game_audio();

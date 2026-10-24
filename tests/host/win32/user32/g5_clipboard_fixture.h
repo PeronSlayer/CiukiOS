@@ -4,6 +4,7 @@ static struct clip_store fixture_clip_store;
 static int clip_temp[64];
 static struct desk_clip_wire delayed_get;
 static uint32_t delayed_client;
+static void *display_output; static unsigned display_bytes;
 static void fixture_clip_reply(struct desk_clip_wire *r, void *data)
 {
     int fd=-1;
@@ -22,6 +23,12 @@ static void fixture_clipboard(struct ciuki_message *sent)
     void *data=NULL,*out=NULL;
     if (sent->fd_count) for (unsigned i=0;i<64;i++) if (surfaces[i].fd==sent->fds[0]) data=surfaces[i].s.pixels;
     struct desk_clip_wire r;
+    if (p.clip.op==DESK_CLIP_DISPLAY_REPLY) {
+        free(display_output); display_output=malloc(p.clip.bytes); CHECK(display_output);
+        memcpy(display_output,data,p.clip.bytes); display_bytes=p.clip.bytes;
+        r=(struct desk_clip_wire){.kind=DESK_CLIP_REPLY,.op=p.clip.op,.serial=p.clip.serial};
+        fixture_clip_reply(&r,NULL); return;
+    }
     unsigned old=fixture_clip_store.owner,token=fixture_clip_store.token;
     int e=clip_request(&fixture_clip_store,ui_kernel_pid(),&p.clip,data,&r,&out);
     if (!e && p.clip.op==DESK_CLIP_EMPTY && old) {
@@ -34,8 +41,12 @@ static void fixture_clipboard(struct ciuki_message *sent)
     }
     fixture_clip_reply(&r,out); free(out);
     if (delayed_client && p.clip.op==DESK_CLIP_PUT && (p.clip.flags&DESK_CLIP_RENDERED)) {
-        clip_request(&fixture_clip_store,delayed_client,&delayed_get,NULL,&r,&out);
-        fixture_clip_reply(&r,out); free(out); delayed_client=0;
+        int e=clip_request(&fixture_clip_store,delayed_client,&delayed_get,NULL,&r,&out);
+        if (e==-11) {
+            struct desk_clip_wire event={.kind=DESK_CLIP_RENDER,.format=r.format,.token=fixture_clip_store.token};
+            fixture_clip_reply(&event,NULL);
+        } else { fixture_clip_reply(&r,out); delayed_client=0; }
+        free(out);
     }
     if (p.clip.op==DESK_CLIP_CLOSE) {
         struct desk_clip_wire event={.kind=DESK_CLIP_CHANGED,.sequence=fixture_clip_store.sequence}; fixture_clip_reply(&event,NULL);

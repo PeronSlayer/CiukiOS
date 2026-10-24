@@ -179,11 +179,11 @@ enum desk_opcode {
      *   items: count u32 formats, or count name bytes for a NAME reply.
      *   A successful GET reply with bytes carries one read-only surface. */
     DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
-    DESK_DOS_CLIPBOARD /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit */
+    DESK_DOS_CLIPBOARD /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
-                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
-enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY, DESK_CLIP_DISPLAY_EVENT };
 #define DESK_CLIP_DELAYED 1u   /* PUT: SetClipboardData(format, NULL); owner only, no bytes */
 #define DESK_CLIP_RENDERED 2u  /* PUT: the owner's answer to RENDER; zero bytes declines */
 #define DESK_CLIP_OWNER 1u     /* QUERY reply flags in byte count: the clipboard has an owner */

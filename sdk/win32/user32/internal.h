@@ -6,8 +6,16 @@
 #include <w32/user_surface.h>
 BOOL u32_clip_call(UINT, HWND, UINT, DWORD, const void *, DWORD, struct w32r_reply *, void *, DWORD);
 void u32_clip_event(const struct desk_packet *);
+BOOL u32_clip_rpc(struct desk_clip_wire *,const void *,struct desk_clip_wire *,void **);
+void u32_clip_display_event(const struct desk_packet *);
+int u32_clip_display_send(HWND,UINT,WPARAM,LPARAM,LRESULT *);
+BOOL u32_clip_display_blit(HDC,const void *,DWORD,const RECT *);
 BOOL u32_clip_rendering(void);
 BOOL u32_clip_has_delayed(void);
+BOOL u32_clip_handle_format(UINT);
+void u32_clip_handle_free(UINT,HANDLE);
+void *u32_clip_handle_pack(UINT,HANDLE,DWORD *);
+HANDLE u32_clip_handle_unpack(UINT,const uint8_t *,DWORD);
 void u32_clip_abandon(DWORD);
 void u32_clip_render_all(HWND, BOOL);
 #define U32_WINDOWS 128
@@ -156,6 +164,8 @@ struct u32_window *u32_root(struct u32_window *);
 struct u32_class *u32_class(const char *, HINSTANCE);
 BOOL u32_directory(UINT, HWND, DWORD, DWORD, DWORD, const char *, const void *,
                    DWORD, struct w32r_reply *, void *, DWORD);
+BOOL u32_directory_utf8(UINT, HWND, DWORD, DWORD, DWORD, const char *, const void *,
+                   DWORD, struct w32r_reply *, void *, DWORD);
 BOOL u32_directory_window(HWND, struct w32r_window *, char *);
 BOOL u32_sync_window(struct u32_window *);
 LRESULT u32_invoke(HWND, UINT, WPARAM, LPARAM);
@@ -186,6 +196,7 @@ void u32_display_event(struct u32_window *, const struct desk_packet *);
 void u32_display_cache(void);
 BOOL u32_resize(struct u32_window *);
 void u32_clipboard_owned_clear(void);
+void u32_clipboard_changed(DWORD);
 void u32_event(const struct desk_packet *);
 void u32_input(struct u32_window *, const struct ciuki_input_event *);
 void u32_clear_input(void);

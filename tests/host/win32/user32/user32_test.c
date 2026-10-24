@@ -460,7 +460,27 @@ static int minmax_set;
 static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
 static unsigned g5_render_count,g5_all_count;
 static HWND g5_all_window;
+static HANDLE g5b_bitmap;
+static unsigned g5b_bitmap_renders,g5b_display_paints,g5b_display_sizes,g5b_display_scrolls,g5b_locale_renders;
+static BOOL g5b_display;
+
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m==WM_RENDERFORMAT && wp==CF_LOCALE) {
+    HANDLE locale=GlobalAlloc(2,4); CHECK(locale); w32_put32(GlobalLock(locale),0x409);
+    CHECK(SetClipboardData(CF_LOCALE,locale)==locale); g5b_locale_renders++; return 0;
+  }
+  if (m==WM_RENDERFORMAT && wp==CF_BITMAP && g5b_bitmap) {
+    CHECK(SetClipboardData(CF_BITMAP,g5b_bitmap)==g5b_bitmap); g5b_bitmap_renders++; return 0;
+  }
+  if (g5b_display) {
+    if (m==WM_ASKCBFORMATNAME) { CHECK(wp>=10); memcpy((void *)lp,"G5b owner",10); return 0; }
+    if (m==WM_SIZECLIPBOARD) { CHECK(GlobalSize((HANDLE)lp)==sizeof(RECT)); g5b_display_sizes++; return 0; }
+    if (m==WM_VSCROLLCLIPBOARD || m==WM_HSCROLLCLIPBOARD) { g5b_display_scrolls++; return 0; }
+    if (m==WM_PAINTCLIPBOARD) {
+      PAINTSTRUCT *p=GlobalLock((HANDLE)lp); CHECK(p && p->hdc);
+      CHECK(FillRect(p->hdc,&p->rcPaint,(HBRUSH)6)); GlobalUnlock((HANDLE)lp); g5b_display_paints++; return 0;
+    }
+  }
   if (m==WM_RENDERALLFORMATS && h==g5_all_window) {
     CHECK(OpenClipboard(h));
     CHECK(GetClipboardOwner()==h);
@@ -1680,6 +1700,7 @@ static void test_palette(void) {
 extern int host_pixel_format(DWORD,int);
 extern BOOL W32API w32_user_gl_target(DWORD,DWORD *);
 extern BOOL W32API w32_user_gl_damage(DWORD);
+#include "g5b_clipboard_test.h"
 static void test_production_gdi(void) {
   CHECK(host_gdi_proc && host_ddraw_seam);
   /* An old v1 table ends before the v2 tail. ASan guards its exact size. */
@@ -1721,6 +1742,7 @@ static void test_production_gdi(void) {
   CHECK(ReleaseDC(windows[0],first_dc));
   puts("TRACE window pixel format survives simultaneous and reacquired DCs");
   test_cf_bitmap();
+  test_g5b_handles();
   test_draw_icon();
   test_palette();
   dd_window = CreateWindowExA(0, "USER fixture", "dd", WS_VISIBLE | WS_POPUP,

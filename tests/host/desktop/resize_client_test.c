@@ -3,10 +3,23 @@
 #include "resize_transport.h"
 #include "../../../apps/libdeskui/deskui.h"
 #include <ciuki/surface.h>
+#include "../../../apps/libdeskui/clipboard.h"
+#include "../../../apps/libdeskui/clipstore.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+static struct clip_store closing_clipboard;
+static unsigned closing_rendered;
+static int closing_transport(void *ctx,struct desk_clip_wire *w,const void *data,struct desk_clip_wire *r,void **out)
+{ return clip_request(ctx,55,w,data,r,out); }
+static void closing_producer(void *ctx,unsigned event,unsigned format)
+{
+    (void)format; struct du_window *w=ctx;
+    assert(event==DESK_CLIP_RELEASE && w->closing==1 && !w->closed);
+    static const unsigned char text[]={'o',0,'k',0,0,0};
+    assert(!du_clip_open() && !du_clip_put(13,text,sizeof(text)) && !du_clip_close()); closing_rendered++;
+}
 static void configured(unsigned w,unsigned h,unsigned serial,int committed)
 {
     struct ciuki_message m; desk_message(&m,DESK_CONFIGURE,20);
@@ -25,7 +38,7 @@ static void open_window(struct du_window *w,struct du_ui *u)
 }
 void rt_client_tests(void)
 {
-    struct du_window w; struct du_ui u;
+    static struct du_window w; static struct du_ui u;
     open_window(&w,&u);
     u.mouse_x=15; u.mouse_y=40;
     assert(du_window_turn(&w,2)==1);
@@ -78,6 +91,15 @@ void rt_client_tests(void)
         assert(rt_surfaces()==1 && rt_handles()==1 && w.info.width==400);
         du_window_destroy(&w);assert(!rt_surfaces());
     }
+    /* A normal close must render promised data before CLOSE drops the
+     * transport; destructor-only rendering runs after w->closed is set. */
+    open_window(&w,&u); clip_init(&closing_clipboard);
+    du_clip_bind(closing_transport,&closing_clipboard); du_clip_producer_bind(closing_producer,&w);
+    assert(!du_clip_open() && !du_clip_empty() && !du_clip_delay(13) && !du_clip_close());
+    du_window_close(&w); assert(!du_window_turn(&w,100) && w.closed && closing_rendered==1);
+    assert(!closing_clipboard.owner && closing_clipboard.items[0].format==13 && closing_clipboard.items[0].bytes==6);
+    du_window_destroy(&w); assert(!rt_surfaces()); clip_destroy(&closing_clipboard);
+    puts("PASS G5b native window close renders delayed data before closing its channel");
     rt_reset();
     puts("PASS deskui resize transport: supersession, backpressure, in-flight serials, read-only transfers, EOF/failure cleanup, bounded surfaces, cursor FIFO and unchanged-shape suppression");
 }

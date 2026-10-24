@@ -1322,11 +1322,43 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+/* G5b rows are appended after G10's saver rows; existing indexes stay stable. */
+static void row_dos_clipboard_settings(unsigned m)
+{
+    row_name="DOS clipboard settings"; wm_begin(m,1);
+    struct fake_app *a=app_open("dosbox",320,240,60,60);
+    key(0x38,1); tap(DU_KEY_SPACE); key(0x38,0); step("DOS window system menu");
+    assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_TASK);
+    struct sh_menu *menu=&d.sh.menus[0]; int quick=-1,exclusive=-1;
+    for (int i=0;i<menu->count;i++) {
+        if (menu->items[i].action==SH_ACT_DOS_QUICKEDIT) quick=i;
+        if (menu->items[i].action==SH_ACT_DOS_EXCLUSIVE) exclusive=i;
+    }
+    assert(quick>=0 && exclusive>quick); menu_item_click(exclusive); step("Exclusive mode command dismisses menu");
+    key(0x38,1); tap(DU_KEY_SPACE); key(0x38,0); step("reopen DOS menu");
+    menu_item_click(quick); step("QuickEdit command dismisses menu");
+    app_close(a); step("DOS settings window closed"); wm_end();
+}
+static void row_clipboard_owner_display(unsigned m)
+{
+    row_name="clipboard owner display"; wm_begin(m,1);
+    /* Register the accessory only in this row, preserving the existing fuzz
+     * catalogue and seeds. The application still uses the production launch. */
+    snprintf(d.programs[d.program_count].name,sizeof(d.programs[0].name),"clipbrd");
+    snprintf(d.programs[d.program_count].path,sizeof(d.programs[0].path),"/Programs/clipbrd"); d.program_count++;
+    struct fake_app *viewer=app_open("clipbrd",320,240,60,60);
+    (void)app_open("calc",160,120,240,180); step("viewer partially occluded");
+    for (unsigned k=0;k<4;k++) { app_paint(viewer,10,60,280,160,0x192837u+k*0x112233u); step("owner-display bitmap changes in viewer"); }
+    desk_focus(&d,viewer->slot); step("owner-display viewer activated");
+    desk_move(&d,viewer->slot,100,110); step("viewer moves after owner paint");
+    app_paint(viewer,10,60,280,160,0x8a4210); step("owner scroll repaints viewer");
+    app_close(viewer); step("owner-display viewer closed"); wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_dos_clipboard_settings, row_clipboard_owner_display};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

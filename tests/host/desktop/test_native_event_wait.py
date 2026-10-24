@@ -22,10 +22,13 @@ class NativeEventWaitTests(unittest.TestCase):
                 (include / name).write_bytes((ROOT / "sdk/sysroot-overlay/include/ciuki" / name).read_bytes())
             (include / "desktop.h").write_bytes((ROOT / "apps/desktop/protocol.h").read_bytes())
             binary = work / "dos-error"
-            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                            "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                             '-DDOSBOX_SETTINGS_DIR="' + str(work / "prefs") + '"', "-I", str(work / "include"),
                             "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/desktop/dosbox_loading_test.c"),
-                            str(ROOT / "apps/desktop/protocol.c"), "-o", str(binary)], check=True)
+                            str(ROOT / "apps/desktop/protocol.c"), str(ROOT / "apps/dosbox/clipboard.c"),
+                            str(ROOT / "apps/libdeskui/clipboard.c"), str(ROOT / "apps/libdeskui/clipstore.c"),
+                            "-o", str(binary)], check=True)
             for scenario in (1, 2, 3, 5, 9, 21):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run([binary, str(scenario)], capture_output=True, text=True, timeout=10,
@@ -51,7 +54,13 @@ class NativeEventWaitTests(unittest.TestCase):
                     depth += (source[end] == "{") - (source[end] == "}")
                     end += 1
                 functions.append(source[match.start():end])
-            (work / "native_run.inc").write_text("\n".join(functions))
+            saved = re.search(r"^struct clip_saved[^\n]+", source, re.M)
+            self.assertIsNotNone(saved)
+            # G5's queued clipboard/UI packets are part of the production wait
+            # predicate; keep its actual record in the extracted loop fixture.
+            prefix = '#include "' + str(ROOT / "apps/desktop/protocol.h") + '"\n'
+            prefix += saved.group(0) + "\nstatic struct clip_saved *clip_saved_head;\n"
+            (work / "native_run.inc").write_text(prefix + "\n".join(functions))
             binary = work / "wait"
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-pthread",

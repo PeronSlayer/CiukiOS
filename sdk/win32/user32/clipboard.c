@@ -10,6 +10,7 @@ static uint8_t promised[48];
 BOOL u32_clip_has_delayed(void) { for (UINT i=0;i<48;i++) if (promised[i]) return 1; return 0; }
 static UINT formats[48]={CF_TEXT,CF_OEMTEXT,CF_UNICODETEXT,CF_DIB,CF_BITMAP};
 static UINT format_count=5;
+static DWORD returned_sequence;
 static BOOL opened;
 static DWORD open_tid;
 static void trim_formats(void) {
@@ -18,16 +19,17 @@ static void trim_formats(void) {
 }
 static void clear_returned(void) {
   for (UINT i=0;i<48;i++) if (returned[i]) {
-    if (i==4) { if (u32_gdi && u32_gdi->bitmap) u32_gdi->bitmap(returned[i],0,1); }
-    else GlobalFree(returned[i]);
+    u32_clip_handle_free(formats[i],returned[i]);
     returned[i]=0;
   }
   trim_formats();
 }
+void u32_clipboard_changed(DWORD sequence) {
+  if (returned_sequence!=sequence) { clear_returned(); returned_sequence=sequence; }
+}
 void u32_clipboard_owned_clear(void) {
   for (UINT i=0;i<48;i++) if (owned[i]) {
-    if (i==4) { if (u32_gdi && u32_gdi->bitmap) u32_gdi->bitmap(owned[i],0,1); }
-    else if (formats[i]<0x200 || formats[i]>0x2ff) GlobalFree(owned[i]);
+    if (formats[i]<0x200 || formats[i]>0x2ff) u32_clip_handle_free(formats[i],owned[i]);
     owned[i]=0;
   }
   for (UINT i=0;i<48;i++) promised[i]=0;
@@ -59,7 +61,6 @@ BOOL W32API CloseClipboard(void) {
     return 0;
   opened = 0;
   open_tid = 0;
-  clear_returned();
   return 1;
 }
 BOOL W32API EmptyClipboard(void) {
@@ -119,7 +120,7 @@ HANDLE W32API SetClipboardData(UINT f, HANDLE block) {
   if (!block) {
     struct w32r_reply r;
     if (!opened || open_tid!=u32_tid()) { u32_fail(1418); return 0; }
-    if (call(W32R_CLIP_SET,0,f,0,0,0,&r,0,0)) { UINT i=slot(f); if (i<48) promised[i]=1; }
+    if (call(W32R_CLIP_SET,0,f,0,0,0,&r,0,0)) { UINT i=slot(f); if (i<48 && f!=0x80) promised[i]=1; }
     return 0;
   }
   if (!f || slot(f)==48) {
@@ -131,7 +132,7 @@ HANDLE W32API SetClipboardData(UINT f, HANDLE block) {
   DWORD n = 0;
   struct u32_surface bitmap = {0};
   uint8_t *dib = 0;
-  if (f == CF_BITMAP) {
+  if (f == CF_BITMAP || f==0x82) {
     u32_gdi_ensure();
     if (!u32_gdi || !u32_gdi->bitmap || !u32_gdi->bitmap(block, &bitmap, 0)) {
       u32_fail(120);
@@ -158,7 +159,9 @@ HANDLE W32API SetClipboardData(UINT f, HANDLE block) {
       w32_copy(dib + 40 + y * bitmap.width * 4,
                (uint8_t *)bitmap.pixels + y * bitmap.pitch, bitmap.width * 4);
     p = dib;
-    f = CF_DIB;
+  } else if (u32_clip_handle_format(f)) {
+    dib=u32_clip_handle_pack(f,block,&n); if (!dib) return 0;
+    p=dib;
   } else {
     n = GlobalSize(block);
     p = GlobalLock(block);
@@ -178,15 +181,14 @@ HANDLE W32API SetClipboardData(UINT f, HANDLE block) {
   BOOL ok = call(W32R_CLIP_SET, 0, f, 0, p, n, &r, 0, 0);
   if (dib) {
     HeapFree(GetProcessHeap(),0,dib);
-    u32_gdi->bitmap(block, &bitmap, 1);
+    if (original_format==2 || original_format==0x82) u32_gdi->bitmap(block, &bitmap, 1);
   } else
     GlobalUnlock(block);
   if (!ok)
     return 0;
   UINT index=slot(original_format);
   if (owned[index] && owned[index]!=block) {
-    if (index==4) { if (u32_gdi && u32_gdi->bitmap) u32_gdi->bitmap(owned[index],0,1); }
-    else if (original_format<0x200 || original_format>0x2ff) GlobalFree(owned[index]);
+    if (original_format<0x200 || original_format>0x2ff) u32_clip_handle_free(original_format,owned[index]);
   }
   for (UINT i=0;i<48;i++) if (returned[i]==block) returned[i]=0;
   owned[index] = block; promised[index]=0;
@@ -201,6 +203,8 @@ HANDLE W32API GetClipboardData(UINT f) {
     return 0;
   }
   if (slot(f)==48) { u32_fail(8); return 0; }
+  u32_clipboard_changed(GetClipboardSequenceNumber());
+  if (returned[slot(f)]) return returned[slot(f)];
   UINT source = f;
   if (!available(source)) {
     if (f == CF_TEXT || f == CF_OEMTEXT || f == CF_UNICODETEXT)
@@ -214,15 +218,19 @@ HANDLE W32API GetClipboardData(UINT f) {
   DWORD bytes=0;
   uint8_t *data=u32_clip_fetch(source,&bytes);
   if (!data) return 0;
+  returned_sequence=GetClipboardSequenceNumber();
   HANDLE h = 0;
-  if (f == CF_BITMAP) {
+  if (u32_clip_handle_format(f)) {
+    h=u32_clip_handle_unpack(f,data,bytes); HeapFree(GetProcessHeap(),0,data);
+    UINT i=slot(f); if (returned[i]) u32_clip_handle_free(f,returned[i]); returned[i]=h;
+    if (!h) u32_fail(87); return h;
+  }
+  if (f == CF_BITMAP || f==0x82) {
     h = u32_dib_bitmap(data, bytes);
     HeapFree(GetProcessHeap(),0,data);
     if (!h)
       u32_fail(120);
-    if (returned[4] && u32_gdi && u32_gdi->bitmap)
-      u32_gdi->bitmap(returned[4], 0, 1);
-    returned[4] = h;
+    UINT i=slot(f); if (returned[i]) u32_clip_handle_free(f,returned[i]); returned[i]=h;
     return h;
   }
   if (f != source) {
@@ -288,13 +296,11 @@ void u32_clipboard_cleanup(DWORD tid) {
     u32_clip_abandon(open_tid);
     opened = 0; open_tid = 0;
     for (UINT i = 0; i < 48; i++) if (returned[i]) {
-      if (i == 4) {
-        if (u32_gdi && u32_gdi->bitmap) u32_gdi->bitmap(returned[i], 0, 1);
-      } else GlobalFree(returned[i]);
+      u32_clip_handle_free(formats[i],returned[i]);
       returned[i] = 0;
     }
   }
-  if (!tid) u32_clipboard_owned_clear();
+  if (!tid) { clear_returned(); u32_clipboard_owned_clear(); }
 }
 /* f5-20B: the formats the clipboard holds, in ascending order, with the
  * ones GetClipboardData synthesises (text forms from each other, CF_BITMAP

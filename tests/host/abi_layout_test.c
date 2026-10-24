@@ -16,8 +16,20 @@ _Static_assert(SPI_GETSCREENSAVERRUNNING==0x72u,"G10 SPI_GETSCREENSAVERRUNNING")
 _Static_assert(SPI_GETSCREENSAVESECURE==0x76u,"G10 SPI_GETSCREENSAVESECURE");
 _Static_assert(SPI_SETSCREENSAVESECURE==0x77u,"G10 SPI_SETSCREENSAVESECURE");
 
+#include "../../sdk/win32/include/w32/clipboard_formats.h"
+_Static_assert(CF_OWNERDISPLAY==0x80u,"G5b CF_OWNERDISPLAY");
+_Static_assert(CF_DSPTEXT==0x81u,"G5b CF_DSPTEXT");
+_Static_assert(CF_DSPBITMAP==0x82u,"G5b CF_DSPBITMAP");
+_Static_assert(CF_DSPMETAFILEPICT==0x83u,"G5b CF_DSPMETAFILEPICT");
+_Static_assert(CF_DSPENHMETAFILE==0x8eu,"G5b CF_DSPENHMETAFILE");
+_Static_assert(WM_PAINTCLIPBOARD==0x309u,"G5b WM_PAINTCLIPBOARD");
+_Static_assert(WM_VSCROLLCLIPBOARD==0x30au,"G5b WM_VSCROLLCLIPBOARD");
+_Static_assert(WM_SIZECLIPBOARD==0x30bu,"G5b WM_SIZECLIPBOARD");
+_Static_assert(WM_ASKCBFORMATNAME==0x30cu,"G5b WM_ASKCBFORMATNAME");
+_Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 #include "../../apps/desktop/protocol.h"
 #include "../../apps/desktop/settings_catalog.h"
+_Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
@@ -1768,6 +1780,22 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_BOOTING", (uint32_t)(CIUKI_DOSVM_BOOTING), 0u},
     {"constant.CIUKI_DOSVM_RUNNING", (uint32_t)(CIUKI_DOSVM_RUNNING), 1u},
     {"constant.CIUKI_DOSVM_STOPPED", (uint32_t)(CIUKI_DOSVM_STOPPED), 2u},
+    {"constant.CIUKI_DOSVM_CLIP_REQUEST", CIUKI_DOSVM_CLIP_REQUEST, 20u},
+    {"constant.CIUKI_DOSVM_CLIP_COMPLETE", CIUKI_DOSVM_CLIP_COMPLETE, 21u},
+    {"constant.CIUKI_DOSVM_CLIP_MAX", CIUKI_DOSVM_CLIP_MAX, 65536u},
+    {"constant.CIUKI_DOSVM_CLIP_SCREEN", CIUKI_DOSVM_CLIP_SCREEN, 256u},
+    {"constant.CIUKI_DOSVM_EVENT_CLIPBOARD", CIUKI_DOSVM_EVENT_CLIPBOARD, 16u},
+    {"sizeof.ciuki_dosvm_clip", sizeof(struct ciuki_dosvm_clip), 40u},
+    {"alignof.ciuki_dosvm_clip", _Alignof(struct ciuki_dosvm_clip), 4u},
+    {"offsetof.ciuki_dosvm_clip.serial", __builtin_offsetof(struct ciuki_dosvm_clip,serial), 0u},
+    {"offsetof.ciuki_dosvm_clip.op", __builtin_offsetof(struct ciuki_dosvm_clip,op), 4u},
+    {"offsetof.ciuki_dosvm_clip.format", __builtin_offsetof(struct ciuki_dosvm_clip,format), 8u},
+    {"offsetof.ciuki_dosvm_clip.bytes", __builtin_offsetof(struct ciuki_dosvm_clip,bytes), 12u},
+    {"offsetof.ciuki_dosvm_clip.buffer", __builtin_offsetof(struct ciuki_dosvm_clip,buffer), 16u},
+    {"offsetof.ciuki_dosvm_clip.capacity", __builtin_offsetof(struct ciuki_dosvm_clip,capacity), 20u},
+    {"offsetof.ciuki_dosvm_clip.result", __builtin_offsetof(struct ciuki_dosvm_clip,result), 24u},
+    {"offsetof.ciuki_dosvm_clip.reserved", __builtin_offsetof(struct ciuki_dosvm_clip,reserved), 28u},
+    {"offsetof.ciuki_dosvm_command.clip", __builtin_offsetof(struct ciuki_dosvm_command,clip), 72u},
     {"sizeof.ciuki_dosvm_text", sizeof(struct ciuki_dosvm_text), 40u},
     {"alignof.ciuki_dosvm_text", _Alignof(struct ciuki_dosvm_text), 4u},
     {"offsetof.ciuki_dosvm_text.buffer", __builtin_offsetof(struct ciuki_dosvm_text,buffer), 0u},

@@ -9,6 +9,8 @@
 #include <ciuki/timing.h>
 #include <ciuki/cpustat.h>
 #include <ciuki/work.h>
+#include <ciuki/process.h>
+#include <ciuki/uaddr.h>
 #include "dosvm_internal.h"
 #pragma weak dosvm_game_ports_apply
 #pragma weak dosvm_game_ports_close
@@ -79,6 +81,7 @@ static bool dosvm_in_irq(const struct dosvm *v)
 
 #include "dosvm_perf.inc"
 #include "dosvm_io_burst.inc"
+#include "dosvm_clipboard.inc"
 
 void dosvm_launch_video(struct dosvm *v)
 {
@@ -672,6 +675,7 @@ int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
     if (input_focus.id == key.id && input_focus.generation == key.generation) input_focus = (struct dosvm_key){0};
     /* No new callback/port/input work can now validate this key. */
     kwait_wake_all(&v->wake);
+    kwait_wake_all(&v->clipboard.wait);
     if (v->task && !v->started) task_kill(v->task, reason);
     return 0;
 }
@@ -754,6 +758,7 @@ static void idle_wait(struct dosvm *v, enum dosvm_idle_reason reason)
     if (v->info.state == DOSVM_BLOCKED)
         v->info.state = v->info.dos_ready ? DOSVM_RUNNABLE : DOSVM_BOOTING;
     irq_restore(flags);
+    dosvm_clipboard_checkpoint(v);
 }
 static bool idle_safe(const struct dosvm *v)
 {
@@ -1034,6 +1039,7 @@ bool dosvm_trap(struct trap_frame *tf)
     if (v->info.state < DOSVM_STOPPING) dosvm_pool_settle(v);
     dosvm_pool_hold(v, false);
     dosvm_present_checkpoint(v);
+    dosvm_clipboard_checkpoint(v);
     kpreempt_point(); /* complete emulation transaction, before diagnostics */
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
@@ -1128,6 +1134,10 @@ static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
     struct dosvm *v = arg;
     /* fx-10: MSCDEX (AH=15h) before the guest's INT 2Fh chain, whose
      * FreeDOS handler leaves BX=0 ("MSCDEX not loaded"). */
+    if (vector==0x2f) {
+        int clip=dosvm_clipboard_interrupt(v,f);
+        if (clip!=-ENOSYS) return clip;
+    }
     if (vector == 0x2f && dosvm_cdaudio_interrupt) {
         int cd = dosvm_cdaudio_interrupt(v, f);
         if (cd != -ENOSYS) return cd;
@@ -1550,6 +1560,7 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out, st
     v->return_tracker_tf = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
     kwait_init(&v->wake);
     kwait_init(&v->present_wait);
+    kwait_init(&v->clipboard.wait);
     v->present_wait.owner_preemptible = true;
     v->present_due_us = v->present_sample_due_us = g_ticks * 1000u;
     kwait_init(&v->disk_wait); v->disk_busy = false;
