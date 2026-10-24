@@ -200,6 +200,7 @@ static bool setup_requested;
 static unsigned writer_creates, writer_starts, write_enables, log_starts, pagefile_binds, optical_starts;
 static unsigned setup_media_calls, setup_record_calls;
 static void storage_timer(void *arg) { (void)arg; CHECK(false); }
+static void startup_log_main(void *arg) { (void)arg; CHECK(false); }   /* dec1: the start-log flusher task */
 void fs_calendar_init(void) { called('S'); }
 void ledger_snapshot(struct mm_ledger *out) {
     memset(out,0,sizeof(*out)); out->zone[ZONE_NORMAL].usable=28672;
