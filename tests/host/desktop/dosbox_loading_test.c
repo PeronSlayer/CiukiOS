@@ -54,6 +54,7 @@ int dos_clip_service(void) { return 0; }
 
 static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
+static unsigned title_set, finished_panel;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
 static unsigned error_idle_waits;
 static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
@@ -144,6 +145,7 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
         if (!p.serial) { assert(p.flags==DESK_SESSION_AGREE && !session_registered); session_registered++; }
         else { assert((scenario==22 || scenario==26) && p.serial==5 && p.flags==(scenario==26 ? DESK_SESSION_AGREE : DESK_SESSION_DOS_ACTIVE) && session_registered); session_answers++; }
     }
+    if (p.opcode==DESK_SET_TITLE) { assert(scenario==30 && !strcmp(p.title,"Finished - DOOM")); title_set++; }
     if (p.opcode==DESK_PONG && (scenario==27 || scenario==28)) { assert(creating() && desk_get32(m->data+4)==78); create_pongs++; }
     else if (p.opcode==DESK_PONG) { assert(scenario==20 && !vm_created && desk_get32(m->data+4)==77); pongs++; }
     if (p.opcode==DESK_DAMAGE && creating() && desk_get32(m->data+12)==400 && desk_get32(m->data+16)==18) create_pulses++;
@@ -264,6 +266,9 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if ((scenario==23 || scenario==24) && entered && clock_ms>enter_ms+20)
             c->changed=CIUKI_DOSVM_PROGRAM_RETURNED|CIUKI_DOSVM_SHELL_READY;
         if (scenario==19 && presents && !fs_command) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
+        /* Decision 2026-10-24: EXIT at the prompt ends COMMAND, the wrapper writes
+         * the control port and the VM stops with reason EXIT (0). */
+        if ((scenario==29 || scenario==30) && presents && clock_ms>enter_ms+100) { c->state=CIUKI_DOSVM_STOPPED; c->reason=0; }
         return 0;
     case CIUKI_DOSVM_LAUNCH: assert(!armed); armed = 1; return 0;
     case CIUKI_DOSVM_INPUT:
@@ -319,7 +324,7 @@ const struct du_icon *du_icon(const char *name, unsigned size)
 void du_icon_draw(struct du_canvas *c, int x, int y, const struct du_icon *icon, enum du_icon_mode mode)
 { (void)c; (void)x; (void)y; (void)icon; (void)mode; }
 void desk_paint_frame(struct desk_paint *p,int x,int y,int w,int h,const struct desk_frame_style *s)
-{ (void)p; (void)x; (void)y; (void)w; (void)h; (void)s; }
+{ (void)p; (void)x; (void)y; (void)w; (void)h; if (s->title && !strcmp(s->title,"Finished - DOOM")) finished_panel++; }
 struct du_rect du_intersection(struct du_rect a,struct du_rect b) { (void)b; return a; }
 void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_t ink)
 { (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel, memory and network")) c->pixels[y*640+x]=0x123456; }
@@ -348,7 +353,7 @@ int main(int argc, char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=28);
+    assert(scenario>=0 && scenario<=30);
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -359,14 +364,14 @@ int main(int argc, char **argv)
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
     char *reference[]={"dosbox","--name=DOOM","--dos-kernel=unified","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
     struct dosbox_profile profile;
-    if (scenario>=24 && scenario<=26) {
+    if ((scenario>=24 && scenario<=26) || scenario==30) {
         dosbox_profile_default(&profile,"\\DOOM\\DOOM.EXE -config CIUKI.CFG");
-        if (scenario==24) profile.close_on_exit=0; else profile.warn=0;
+        if (scenario==24 || scenario==30) profile.close_on_exit=0; else profile.warn=0;
         assert(!dosbox_profile_save(&profile));
     }
     int selected=scenario==9 || scenario==10;
     int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
-    if (scenario>=24 && scenario<=26) {
+    if ((scenario>=24 && scenario<=26) || scenario==30) {
         char path[192]; assert(!dosbox_profile_path(profile.key,path,sizeof(path)) && !unlink(path));
         assert(!rmdir(DOSBOX_SETTINGS_DIR));
     }
@@ -378,6 +383,14 @@ int main(int argc, char **argv)
         if (scenario==26) assert(session_queries==1 && session_answers==1 && session_ends==1 && closed==1);
         printf("PASS G17 DOS program lifecycle: scenario=%d short-EXEC close/retain and per-program termination warning\n",scenario);
         return 0;
+    }
+    if (scenario==29 || scenario==30) {
+        assert(!result && session_registered==1 && !error_seen && !close_declined && presents && closed==1);
+        if (scenario==29) assert(!title_set && !finished_panel);
+        else assert(title_set==1 && finished_panel>=1);
+        printf("PASS EXIT at the DOS prompt: scenario=%d %s\n",scenario,
+               scenario==29 ? "Close on exit on closes the window" : "Close on exit off keeps the Finished - DOOM window");
+        puts("PASS dosbox loading replay scenario"); return 0;
     }
     if (scenario==28) {
         assert(!result && creating() && create_pongs==1 && !closed && !presents);
