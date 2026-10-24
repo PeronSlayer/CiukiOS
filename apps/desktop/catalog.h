@@ -12,6 +12,11 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"gfxdemo", "Graphics Demo", "applications-graphics", 0, ""},
     {"hwreport", "Hardware Report", "preferences-system", 0, ""},
     {"printers", "Printers", "printer", 0, ""},
+    /* G30 system tools (apps/systools). */
+    {"resmeter", "Resource Meter", "applications-system", 0, ""},
+    {"schedtask", "Scheduled Tasks", "x-office-calendar", 0, ""},
+    {"sysinfo", "System Information", "document-properties", 0, ""},
+    {"sysmon", "System Monitor", "utilities-system-monitor", 0, ""},
     {"regedit", "Registry Editor", "preferences-system", 0, ""},
     {"logview", "Log Viewer", "text-x-generic", 0, ""},   /* G13: boot, NetSurf, Setup and crash logs */
     {"clipbrd", "Clipboard Viewer", "edit-paste", 1, "clp"},

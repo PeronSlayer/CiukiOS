@@ -40,7 +40,9 @@ int desk_shell_program_icon(struct desktop *, int, const struct desk_packet *, c
 int desk_shell_program_balloon(struct desktop *, int, const struct desk_packet *);
 void desk_shell_program_remove(struct desktop *, uint32_t);
 /* Tray identifiers; geometry places Notifications next to the clock. */
-enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER, SH_TRAY_LANGUAGE };
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER, SH_TRAY_LANGUAGE, SH_TRAY_RESOURCES };
+/* G30 Resource Meter: shown while a resmeter client has a window; levels as apps/systools rm_state (0 ok, 1 low, 2 critical). */
+struct sh_resources { int visible; unsigned system, user, gdi, level; };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
 /* fx-21b: wording of the Windows notification (Microsoft KB 2654149, KB 314634). */
 #define DESK_USB_UNRECOGNIZED_TITLE "USB Device Not Recognized"
@@ -177,6 +179,7 @@ struct desk_shell {
     uint32_t remove_generation;
     uint64_t network_poll_ns;
     int start_hot;                  /* the pointer is over the Ciuki button */
+    struct sh_resources resources;
     int tooltip, hover_target; uint64_t hover_since; int32_t hover_x, hover_y;
     struct desk_box tooltip_last;
     uint32_t tooltip_hash;
@@ -258,6 +261,8 @@ void desk_shell_power_events(struct desktop *, const struct ciuki_power_events *
 /* G11: desktop.cfg was (re)loaded into sh.cfg: parse its power_* lines. */
 void desk_shell_power_config(struct desktop *);
 void desk_shell_power_scheme(struct desktop *, int scheme);   /* tray menu: make active and save */
+/* G30: the Resource Meter tray icon (hidden when !visible); damages only what changed. */
+void desk_shell_resources_update(struct desktop *, const struct sh_resources *);
 void desk_shell_volume_damage(struct desktop *);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);

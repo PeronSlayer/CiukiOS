@@ -4,6 +4,8 @@
 #undef IPPROTO_IP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP
+#undef IPPROTO_ICMP
+#undef SOCK_RAW
 #include <netinet/in.h>
 int cp_test_open(const char *,int,...);
 ssize_t cp_test_pread(int,void *,size_t,off_t);

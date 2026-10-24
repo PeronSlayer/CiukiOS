@@ -123,9 +123,9 @@ class AccessoriesTests(unittest.TestCase):
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
         # Catalogue order selects defaults: Viewer precedes its Paint alternative.
-        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "recorder", "regedit", "viewer", "wordpad"])
+        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "recorder", "regedit", "resmeter", "schedtask", "sysinfo", "sysmon", "viewer", "wordpad"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
-        self.assertEqual(set(build.ACCESSORIES) | {"regedit", "gfxdemo", "hwreport", "printers"}, set(names))
+        self.assertEqual(set(build.ACCESSORIES) | set(build.SYSTOOLS) | {"regedit", "gfxdemo", "hwreport", "printers"}, set(names))
         self.assertIn("regedit", build.PROGRAMS)
         image = (ROOT / "scripts/build_image.py").read_text()
         for name in names:

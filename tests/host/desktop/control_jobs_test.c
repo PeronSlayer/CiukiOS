@@ -6,11 +6,17 @@
 #undef IPPROTO_IP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP
+#undef IPPROTO_ICMP
+#undef SOCK_RAW
+#undef SOCK_STREAM
+#undef SOCK_NONBLOCK
 #include <netdb.h>
 #include <assert.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#undef SOCK_STREAM
+#undef SOCK_NONBLOCK
 #undef IPPROTO_IP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP

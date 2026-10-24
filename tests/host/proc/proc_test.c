@@ -749,7 +749,7 @@ static void test_enumeration(void)
     uint8_t fill[2 * PAGE_SIZE]; memset(fill, 0xcc, sizeof(fill)); CHECK(ua_write(p->memory, buffer, fill, sizeof(fill)) == 0);
     CHECK(list_records(p, buffer, CIUKI_PROC_LIST_MIN, &sys, rec) == 0);
     CHECK(sys.version == CIUKI_PROC_VERSION && sys.size == sizeof(sys) && sys.records == 0 && sys.processes == 9);
-    CHECK(sys.tick_hz == 1000 && sys.total_ticks == 9000 && sys.idle_ticks == 4000 && !sys.reserved[0] && !sys.reserved[1]);
+    CHECK(sys.tick_hz == 1000 && sys.total_ticks == 9000 && sys.idle_ticks == 4000 && !sys.disk_read_kib && !sys.disk_write_kib);
     CHECK(sys.usable_pages == HOST_PAGES - 1 && sys.free_pages == HOST_PAGES - 1 - pages_used);
     CHECK(sys.kheap_pages == 7 && sys.kheap_bytes == 1234 && sys.kheap_high_water == 5678);
     CHECK(get_word(p->memory, buffer + 64) == 0xccccccccu);           /* nothing beyond the system record */

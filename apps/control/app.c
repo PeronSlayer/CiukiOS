@@ -23,8 +23,8 @@ enum {
 };
 enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet", "addhw"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties", "Add New Hardware"};
 static void build(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
 static void refresh(struct cp_app *a);
@@ -54,6 +54,10 @@ static void text(struct cp_app *a, int id, const char *s)
 #include "game_properties.inc"
 #include "joystick.inc"
 #include "users.inc"
+static const char *class_icon(unsigned k);
+static const char *product(struct cp_app *a, const struct ciuki_device_record *d, char *resolved, size_t size);
+static void list_style(struct du_widget *w, const char *title);
+#include "hardware.inc"   /* G30: device actions, Add New Hardware, Performance, Hardware Profiles */
 
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
 static void load(struct cp_app *a, struct ciuki_settings *out)
@@ -531,6 +535,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     }
     if (dt_event(a, e)) return;
     if (pw_event(a, e)) return;
+    if (hw_event(a, e)) return;
     switch (e->id) {
     case 950:
         if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->autoplay_count) a->autoplay_selected=(unsigned)e->index;
@@ -660,7 +665,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_DETAILS: if (e->type == DU_EV_ACTIVATE) details(a); break;
     case C_SYSTEM_TABS:
-        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 5) {
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 6) {
             a->system_tab = e->index;
             cp_open(a,e->index==1 ? CP_DEVICES : e->index==3 ? CP_DRIVERS : CP_SYSTEM);
         }
@@ -694,6 +699,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             int index = a->tree_device[e->index];
             a->selected_device_id = index >= 0 ? a->devices.devices[index].id : 0;
             du_get(u, C_PROPERTIES)->disabled = !a->devices_ok || index < 0;
+            dm_buttons(a);
             cp_pack_buttons(a);
         }
         if (e->type == DU_EV_OPEN && e->index >= 0 && (unsigned)e->index < a->tree_count) {
@@ -984,8 +990,10 @@ void cp_tree_build(struct cp_app *a)
             if (!it->expanded) continue;
             unsigned n = a->tree_count++;
             char resolved[65];
-            snprintf(a->device_names[k], sizeof(a->device_names[k]), "%s%s", product(a, d, resolved, sizeof(resolved)),
-                     d->state == CIUKI_DEVICE_QUARANTINED ? " (quarantined)" : d->state == CIUKI_DEVICE_ABSENT ? " (absent)" : "");
+            enum dc_status ds = dc_status_of(hw_devices(a), d->id);
+            snprintf(a->device_names[k], sizeof(a->device_names[k]), "%s%s%s", product(a, d, resolved, sizeof(resolved)),
+                     d->state == CIUKI_DEVICE_QUARANTINED ? " (quarantined)" : d->state == CIUKI_DEVICE_ABSENT ? " (absent)" : "",
+                     ds == DC_DISABLED ? " (disabled)" : ds == DC_REMOVED ? " (removed)" : "");
             a->tree_items[n].text[0] = a->device_names[k]; a->tree_items[n].depth = 2;
             a->tree_items[n].icon16 = du_icon_argb(du_icon_name(class_icon(cls)), 16); a->tree_device[n] = (int)k;
         }
@@ -998,6 +1006,7 @@ void cp_tree_build(struct cp_app *a)
     struct du_widget *properties_button = du_get(a->ui, C_PROPERTIES);
     if (properties_button) properties_button->disabled = !a->devices_ok || !w || w->active >= a->tree_count || a->tree_device[w->active] < 0;
     cp_pack_buttons(a);
+    dm_buttons(a);
     a->ui->dirty = 1;
 }
 int cp_boot_serial(const char *src, size_t n, int serial, char *out, size_t cap)
@@ -1104,6 +1113,8 @@ static void properties(struct cp_app *a, int resources)
     const struct ciuki_device_record *d = &a->devices.devices[a->properties_device];
     char body[DU_DIALOG_TEXT], title[128]; size_t at = 0;
     char resolved_title[65];
+    hw_ready(a);
+    enum dc_status ds = dc_status_of(hw_devices(a), d->id);
     snprintf(title, sizeof(title), "%s Properties", product(a, d, resolved_title, sizeof(resolved_title)));
     if (!resources) {
         char resolved[65]; const char *name = product(a, d, resolved, sizeof(resolved));
@@ -1122,16 +1133,24 @@ static void properties(struct cp_app *a, int resources)
             d->bus, d->slot, d->function, d->vendor, d->device, d->sub_vendor, d->sub_device, d->revision, d->pci_class, d->subclass, d->prog_if);
         else at += (size_t)snprintf(body + at, sizeof(body) - at, "Bus: %s   Channel/unit: %u/%u\n",
             d->bus_type == CIUKI_BUS_LOADER ? "Loader" : d->bus_type == CIUKI_BUS_USB ? "USB" : "Legacy", d->slot, d->function);
-        snprintf(body + at, sizeof(body) - at, "Activation sequence: %u   Generation: %u", d->activation_seq, d->generation);
+        at += (size_t)snprintf(body + at, sizeof(body) - at, "Activation sequence: %u   Generation: %u\n", d->activation_seq, d->generation);
+        if (at >= sizeof(body)) at = sizeof(body) - 1;
+        if (ds == DC_DISABLED) at += (size_t)snprintf(body + at, sizeof(body) - at, "This device is disabled.\n");
+        else if (ds == DC_REMOVED) at += (size_t)snprintf(body + at, sizeof(body) - at, "(removed, detected again after a restart)\n");
+        if (at >= sizeof(body)) at = sizeof(body) - 1;
+        if (dc_driver_override(hw_devices(a), d->id)) at += (size_t)snprintf(body + at, sizeof(body) - at, "Driver update pending: %s (loaded after a restart)\n", dc_driver_override(hw_devices(a), d->id));
+        if (at >= sizeof(body)) at = sizeof(body) - 1;
+        snprintf(body + at, sizeof(body) - at, "Hardware profile: %s", a->hp.p[a->hp.active].name);
     } else {
         char resolved[65]; const char *name = product(a, d, resolved, sizeof(resolved));
         at = (size_t)snprintf(body, sizeof(body), "Resources\n\n%s\n", name);
-        for (unsigned k = 0; k < d->resource_count && at + 80 < sizeof(body); k++) {
+        for (unsigned k = 0; k < dc_resource_count(hw_devices(a), d) && at + 80 < sizeof(body); k++) {
             const struct ciuki_device_resource *r = &d->resources[k]; char value[64];
             range(value, sizeof(value), r->type, r->start, r->end, r->flags);
             at += (size_t)snprintf(body + at, sizeof(body) - at, "%s: %s\n", resource_name(r->type), value);
         }
-        snprintf(body + at, sizeof(body) - at, "%s", d->flags & CIUKI_DEVICES_TRUNCATED ? "More resources in the lease list." :
+        snprintf(body + at, sizeof(body) - at, "%s", ds != DC_ACTIVE ? "No resources are held while the device is disabled or removed." :
+                 d->flags & CIUKI_DEVICES_TRUNCATED ? "More resources in the lease list." :
                  d->resource_count ? "Assigned resources are read-only." : "No resource assignment recorded.");
     }
     if (!strcmp(d->driver,"gameport") || (d->bus_type==CIUKI_BUS_USB && !strcmp(d->name,"USB HID game controller"))) {
@@ -1165,21 +1184,28 @@ static void system_pages(struct cp_app *a)
 {
     struct du_widget *w; struct du_ui *u = a->ui; char line[512];
     if (a->page == CP_SYSTEM || a->page == CP_DEVICES || a->page == CP_DRIVERS) {
-        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers", "Startup"};
-        for (int k=0;k<5;k++) a->system_tabs[k].text[0]=tabs[k];
-        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=5;
+        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers", "Performance", "Hardware Profiles", "Startup"};
+        for (int k=0;k<7;k++) a->system_tabs[k].text[0]=tabs[k];
+        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=7;
         w->active=(unsigned)a->system_tab;
     }
-    if (a->page == CP_DEVICES) {
-        w = add(a, DU_TREE, C_TREE, 24, 40, 452, 240, ""); w->inactive_selection = 1;
+    if (a->page == CP_DEVICES && a->dm_updating) {
+        dm_update_build(a);
+    } else if (a->page == CP_DEVICES) {
+        w = add(a, DU_TREE, C_TREE, 24, 40, 452, 208, ""); w->inactive_selection = 1;
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
-        add(a, DU_BUTTON, C_PROPERTIES, 24, 288, 110, 24, "Properties...")->anchors = DU_ANCHOR_BOTTOM;
-        add(a, DU_BUTTON, C_FIRMWARE, 146, 288, 110, 24, "Firmware...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, C_PROPERTIES, 24, 256, 104, 24, "Properties...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, H_DM_DISABLE, 136, 256, 104, 24, "Disable")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, H_DM_ENABLE, 248, 256, 104, 24, "Enable")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, H_DM_REMOVE, 360, 256, 116, 24, "Remove")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, C_FIRMWARE, 24, 288, 104, 24, "Firmware...")->anchors = DU_ANCHOR_BOTTOM;
+        add(a, DU_BUTTON, H_DM_UPDATE, 136, 288, 140, 24, "Update Driver...")->anchors = DU_ANCHOR_BOTTOM;
         cp_tree_build(a);
         add(a, DU_BUTTON, C_REFRESH, 366, 288, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
         add(a, DU_BUTTON, CP_PACK_INSTALL, 24, 320, 250, 24, "Install driver from pack...")->anchors = DU_ANCHOR_BOTTOM;
         add(a, DU_BUTTON, CP_PACK_REMOVE, 282, 320, 194, 24, "Remove driver package...")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
         cp_pack_buttons(a);
+        dm_buttons(a);
     } else if (a->page == CP_DRIVERS) {
         unsigned n = a->devices_ok ? a->devices.driver_count : 0;
         for (unsigned k = 0; k < n; k++) {
@@ -1207,8 +1233,12 @@ static void system_pages(struct cp_app *a)
         w->columns[2] = (struct du_column){"Assignment", 182, 0}; w->columns[3] = (struct du_column){"State", 95, 0};
         add(a, DU_BUTTON, C_DETAILS, 24, 320, 110, 24, "Details...")->anchors = DU_ANCHOR_BOTTOM;
         add(a, DU_BUTTON, C_REFRESH, 366, 320, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+    } else if (a->page == CP_SYSTEM && a->system_tab == 4) {
+        perf_build(a);
+    } else if (a->page == CP_SYSTEM && a->system_tab == 5) {
+        hp_build(a);
     } else if (a->page == CP_SYSTEM) {
-        if (a->system_tab == 4) {
+        if (a->system_tab == 6) {
             text(a,C_STATUS,"");
             if (!a->startup) a->startup=calloc(DESK_STARTUP_MAX,sizeof(*a->startup));
             a->startup_count=a->startup && a->host.startup_list ? a->host.startup_list(a->host.ctx,a->startup,DESK_STARTUP_MAX) : -ENOSYS;
@@ -1582,10 +1612,12 @@ static void build(struct cp_app *a)
         add(a,DU_BUTTON,951,24,316,180,24,"Ask every time")->disabled=!a->autoplay_count;
         add(a,DU_BUTTON,952,216,316,96,24,"Refresh");
         add(a,DU_LABEL,953,24,350,508,16,"Select an action in AutoPlay to remember a new choice.");
+    } else if (a->page==CP_ADDHW) {
+        aw_build(a);
     } else {
         system_pages(a);
     }
-    if (a->page == CP_SYSTEM && a->system_tab!=4) cp_display_refresh(a);
+    if (a->page == CP_SYSTEM && a->system_tab!=6) cp_display_refresh(a);
     cp_tick(a); sync(a);
     /* Honor the current surface when returning from an applet after a resize. */
     int dx = u->canvas.width - CP_WIDTH, dy = u->canvas.height - CP_HEIGHT;
@@ -1597,7 +1629,7 @@ static void build(struct cp_app *a)
         if (v->anchors & DU_ANCHOR_GROW_Y) v->box.h += dy;
     }
     a->building=0;
-    du_focus(u, a->page == CP_HOME ? C_APPLETS : a->page == CP_DEVICES ? C_TREE : C_BACK);
+    du_focus(u, a->page == CP_HOME ? C_APPLETS : a->page == CP_DEVICES && !a->dm_updating ? C_TREE : a->page == CP_ADDHW ? H_AW_NEXT : C_BACK);
 }
 void cp_open(struct cp_app *a, int page)
 {
@@ -1619,7 +1651,8 @@ void cp_open(struct cp_app *a, int page)
     if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_preview_cancel(a);
     if (page==CP_DEVICES) a->system_tab=1;
     if (page==CP_DRIVERS) a->system_tab=3;
-    if (page==CP_SYSTEM && a->system_tab!=2 && a->system_tab!=4) a->system_tab=0;
+    if (page==CP_SYSTEM && a->system_tab!=2 && a->system_tab!=4 && a->system_tab!=5 && a->system_tab!=6) a->system_tab=0;
+    aw_stop(a);
     if (page==CP_DISPLAY && !a->display_session) {
         load(a,&a->cfg); a->display_original=a->cfg; a->display_session=1; a->display_original_mode=0;
         cp_display_refresh(a);
@@ -1627,9 +1660,12 @@ void cp_open(struct cp_app *a, int page)
     }
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;
+    a->dm_updating = 0;
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
     if (a->page == CP_POWER) pw_open(a);
+    if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY || a->page == CP_ADDHW) refresh(a);
+    if (a->page == CP_ADDHW) aw_start(a);
     build(a);
 }
 void cp_assets_ready(struct cp_app *a)
@@ -1644,6 +1680,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     a->ui = u;
     a->page=CP_HOME;
     load(a, &a->cfg); du_theme_use(u, a->cfg.theme);
+    hw_load_state(a);
     sound_defaults(&a->sounds);
     if (a->host.load_sounds) { size_t n = 0;
         if (!a->host.load_sounds(a->host.ctx, a->sound_text, sizeof(a->sound_text), &n))

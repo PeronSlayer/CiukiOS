@@ -2489,7 +2489,18 @@ struct ciuki_proc_system {
     uint32_t kheap_bytes;
     uint32_t kheap_high_water;
     uint32_t processes;
-    uint32_t reserved[2];
+    uint32_t disk_read_kib;
+```
+
+G30: device bytes read, KiB, wraps at 4 TiB; 0 when not counted
+
+```c
+uint32_t disk_write_kib;
+```
+
+G30: device bytes written, KiB
+
+```c
 };
 struct ciuki_proc_record {
     uint32_t version;

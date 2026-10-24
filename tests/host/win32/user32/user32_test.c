@@ -1804,6 +1804,31 @@ static void test_production_gdi(void) {
   CHECK(!w32_user_gl_damage(U32_PTR(first_dc)));
   CHECK(ReleaseDC(windows[0],first_dc));
   puts("TRACE window pixel format survives simultaneous and reacquired DCs");
+  /* G30: GetFreeSystemResources from the window table and the production gdi32 object table. */
+  {
+    UINT windows_used = 0;
+    for (UINT i = 0; i < U32_WINDOWS; i++)
+      if (u32_windows[i].handle)
+        windows_used++;
+    UINT user_free = (U32_WINDOWS - windows_used) * 100 / U32_WINDOWS;
+    CHECK(GetFreeSystemResources(2) == user_free && user_free < 100);
+    UINT gdi_before = GetFreeSystemResources(1);
+    DWORD many_dc[40], many_bitmap[40];
+    uint32_t *many_bits;
+    for (UINT i = 0; i < 40; i++) {
+      many_bitmap[i] = host_canvas(8, 8, 0, &many_dc[i], &many_bits);
+      CHECK(many_bitmap[i]);
+    }
+    CHECK(GetFreeSystemResources(1) < gdi_before && GetFreeSystemResources(1) >= 97);
+    for (UINT i = 0; i < 40; i++)
+      host_canvas_free(many_dc[i], many_bitmap[i]);
+    CHECK(GetFreeSystemResources(1) >= gdi_before - 1);
+    UINT system = GetFreeSystemResources(0);
+    CHECK(system == (GetFreeSystemResources(1) < GetFreeSystemResources(2) ? GetFreeSystemResources(1) : GetFreeSystemResources(2)));
+    SetLastError(0);
+    CHECK(GetFreeSystemResources(3) == 0 && GetLastError() == 87);
+    puts("TRACE GetFreeSystemResources: USER and GDI table shares, system is the lower, selector 3 fails");
+  }
   test_cf_bitmap();
   test_draw_icon();
   test_palette();

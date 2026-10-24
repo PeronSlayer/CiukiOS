@@ -5,6 +5,8 @@
 #undef IPPROTO_IP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP
+#undef IPPROTO_ICMP
+#undef SOCK_RAW
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>

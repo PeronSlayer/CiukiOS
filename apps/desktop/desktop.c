@@ -12,6 +12,8 @@
 #include "settings_io.h"
 #include "users_worker.h"
 #include "shortcut_io.h"
+#include "schedsvc.h"
+#include "resources.h"
 #include "wallpaper_io.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
@@ -542,6 +544,7 @@ static void launch_bind(struct desktop *d, int index, const struct desk_program 
     snprintf(c->application,sizeof(c->application),"%s",program->name);
     c->program=kind;
     c->taskman=!strcmp(program->name,"tasks");
+    c->sysapp=!strcmp(program->name,"sysinfo") || !strcmp(program->name,"sysmon") || !strcmp(program->name,"schedtask") || !strcmp(program->name,"resmeter");
     c->gfxdemo=!strcmp(program->name,"gfxdemo");
     c->dosbox=!strcmp(program->name,"dosbox");
     c->mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
@@ -1835,6 +1838,10 @@ static int launch_pending(struct desktop *d)
 }
 /* Strong native bindings are linked by build_desktop.py; host shell replays
  * keep their existing isolated platform. */
+/* G30: the scheduled-tasks service is linked by build_desktop.py (schedsvc.c); host replays run without it. */
+__attribute__((weak)) int desk_schedsvc_start(struct desktop *d) { (void)d; return 0; }
+__attribute__((weak)) void desk_schedsvc_tick(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_resources_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_v3_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_v3_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 __attribute__((weak)) void desk_v3_fixture_tick(struct desktop *d) { (void)d; }
@@ -2124,6 +2131,8 @@ static void shell_service(struct desktop *d)
     if (media_worker.rescan) media_read(d);
     media_poll(d);
     desktop_wait("autoplay-service"); desk_autoplay_service(d);
+    desk_schedsvc_tick(d);
+    desk_resources_poll(d);
     desktop_wait("autoplay-done");
     sh->want_reload=0;
     wallpaper_poll(d);
@@ -2654,6 +2663,8 @@ static void shell_setup(struct desktop *d, int gate)
         settings_writer_started=!cfg_writer_start(&settings_writer,d->sh.profile.settings,d->sh.profile.temporary);
         int autoplay_error=desk_autoplay_prepare(d);
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
+        int schedule_error=desk_schedsvc_start(d);
+        if (schedule_error) desk_shell_notify_error(d,"Task Scheduler unavailable",schedule_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }

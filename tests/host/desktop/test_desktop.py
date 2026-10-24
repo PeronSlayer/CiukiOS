@@ -400,7 +400,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-test"
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
+            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             ft = load("control_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
@@ -439,7 +439,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-modes-test"
             icons = load("control_modes_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
+            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             ft = load("control_modes_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
@@ -475,7 +475,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-async-test"
             icons = load("control_async_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/control_async_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
+            sources = ["tests/host/desktop/control_async_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             ft = load("control_async_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
@@ -681,9 +681,9 @@ class DesktopTests(unittest.TestCase):
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
-                                           "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
-                                           "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "calc", "charmap", "clipbrd", "clock", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "printspool", "recorder", "viewer", "wordpad"})  # legacy-recovery accessories and the f9-07 Hardware Report
+                                           "ciuki-portrait.xrgb", "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",
+                                           "calc", "charmap", "clipbrd", "clock", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "printspool", "recorder", "viewer", "wordpad",
+                                           "resmeter", "schedtask", "sysinfo", "sysmon"})
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -695,6 +695,7 @@ class DesktopTests(unittest.TestCase):
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clipbrd", "clock", "help", "mixer", "viewer")}
         expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/clipbrd", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/recorder", "/Programs/hwreport", "/Programs/logview", "/Programs/printers", "/Programs/wordpad", "/System/printspool",
+                                        "/Programs/resmeter", "/Programs/schedtask", "/Programs/sysinfo", "/Programs/sysmon",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],

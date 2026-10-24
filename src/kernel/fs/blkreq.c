@@ -269,11 +269,19 @@ static uintptr_t executor_id(void) {
     return (uintptr_t)g_current;
 #endif
 }
+/* G30: device byte totals for System Monitor (call 70, disk_read_kib and
+ * disk_write_kib). Diagnostic; kernel code is not preempted, and a torn
+ * update under FS_HOST threads only loses a sample. */
+uint64_t g_blk_read_bytes,g_blk_write_bytes;
 static int execute(struct blk_request *r,uint32_t bytes) {
     struct fs_request_scope scope; fs_request_enter(&scope,r->context);
     fs_lock_take(&pool_lock); r->executor=executor_id(); fs_lock_drop(&pool_lock);
     int result=fs_request_check();
     if (!result) result=execute_raw(r,bytes);
+    if (!result) {
+        if (r->operation==BLK_READ) g_blk_read_bytes+=bytes;
+        else if (r->operation==BLK_WRITE) g_blk_write_bytes+=bytes;
+    }
     if (!result && (r->device->media_generation!=r->generation || r->device->quarantined)) result=-FS_EIO;
     fs_lock_take(&pool_lock); r->executor=0; fs_lock_drop(&pool_lock);
     fs_request_leave(&scope);

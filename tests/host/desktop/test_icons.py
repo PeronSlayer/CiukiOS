@@ -205,8 +205,8 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 30)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf; G28 WordPad; integration adds G13/G31 system tools
-        self.assertEqual(len(accessories), 16)  # f2-52 Graphics Demo; G28 WordPad; integration accessories retained
+        self.assertEqual(len(set(programs)), 33)  # integration Programs plus four G30 System Tools; duplicate identities are rejected separately
+        self.assertEqual(len(accessories), 20)  # integration accessories plus the four G30 tools
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         # f6-19: native application records (name, label, Tango icon, description) agree
@@ -223,7 +223,7 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),16)  # integration applets retained alongside f5-09 and f1-113 additions
+        self.assertEqual(len(applets),17)  # integration applets plus G30 Add New Hardware
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",

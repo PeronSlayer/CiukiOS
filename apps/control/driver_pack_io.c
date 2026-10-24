@@ -247,6 +247,24 @@ static int device_package(const struct ndp_device *dev,const char *store,char ou
     if(!found) return -ENOENT;
     return load_manifest(out,m);
 }
+int dp_catalog(const char *store,struct dp_entry *out,unsigned capacity)
+{
+    if(root_ok(store)) return errno==ENOENT ? 0 : -errno;
+    DIR *dir=opendir(store); if(!dir) return errno==ENOENT ? 0 : -errno;
+    struct ndp_manifest *m=malloc(sizeof(*m)); if(!m) { closedir(dir); return -ENOMEM; }
+    struct dirent *de; unsigned n=0; char candidate[DP_PATH];
+    while(n<capacity && (de=readdir(dir))) {
+        size_t len=strlen(de->d_name);
+        if(!ndp_component(de->d_name) || strstr(de->d_name,".stage") || (len>7 && !strcmp(de->d_name+len-7,".remove"))) continue;
+        if(join(candidate,store,de->d_name) || load_manifest(candidate,m)) continue;
+        struct dp_entry e; snprintf(e.name,sizeof(e.name),"%s",m->name); snprintf(e.service,sizeof(e.service),"%s",m->service);
+        unsigned k=n++; while(k && strcmp(out[k-1].name,e.name)>0) { out[k]=out[k-1]; k--; }
+        out[k]=e;
+    }
+    free(m);
+    if(closedir(dir)) return -errno;
+    return (int)n;
+}
 int dp_installed(const struct ndp_device *dev,const char *store)
 {
     struct ndp_manifest *m=malloc(sizeof(*m)); if(!m) return -ENOMEM;

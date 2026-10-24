@@ -206,6 +206,57 @@ static int boot_save(void *ctx, const char *text, size_t length)
     if (close(fd)) r = -1;
     return r;
 }
+#define CP_HW_FILE CFG_DIR "/hwprofiles.cfg"
+static int hw_load(void *ctx, char *text, size_t size, size_t *length)
+{
+    (void)ctx;
+    int fd = open(CP_HW_FILE, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    size_t n = 0; int error = 0;
+    while (n < size) {
+        ssize_t got = read(fd, text + n, size - n);
+        if (got < 0) { error = errno; break; }
+        if (!got) break;
+        n += (size_t)got;
+    }
+    if (close(fd) && !error) error = errno;
+    if (!error && n >= size) error = EFBIG;
+    if (error) return -error;
+    text[n] = 0; *length = n;
+    return 0;
+}
+/* Atomic replace: temporary file, fsync, rename (cfg_write_at). */
+static int hw_save(void *ctx, const char *text, size_t length)
+{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, CFG_DIR "/hwprofiles.tmp", text, length); return e ? -e : 0; }
+static int memory_query(void *ctx, uint64_t *total_k, uint64_t *free_k)
+{
+    (void)ctx;
+    static uint8_t buffer[CIUKI_PROC_LIST_MIN + CIUKI_PROCESS_MAX * sizeof(struct ciuki_proc_record)];
+    if (ciuki_proc_list(buffer, sizeof(buffer)) <= 0) return -EIO;
+    struct ciuki_proc_system sys; memcpy(&sys, buffer, sizeof(sys));
+    if (sys.version != CIUKI_PROC_VERSION) return -EIO;
+    *total_k = (uint64_t)sys.usable_pages * 4u; *free_k = (uint64_t)sys.free_pages * 4u;
+    return 0;
+}
+static int driver_catalog(void *ctx, struct aw_model *out, unsigned capacity)
+{
+    (void)ctx;
+    struct dp_entry *e = calloc(AW_CATALOG_MAX, sizeof(*e));
+    if (!e) return -ENOMEM;
+    int n = dp_catalog(NDP_ROOT, e, AW_CATALOG_MAX), kept = 0;
+    for (int i = 0; i < n && (unsigned)kept < capacity; i++) {
+        size_t len = strlen(e[i].service); int ok = len > 0 && len < sizeof(out->driver);
+        for (size_t k = 0; ok && k < len; k++) if ((unsigned char)e[i].service[k] <= ' ' || e[i].service[k] == '=' || (unsigned char)e[i].service[k] > 126) ok = 0;
+        if (!ok) continue;
+        memset(&out[kept], 0, sizeof(out[kept]));
+        out[kept].class_id = CIUKI_DEVICE_NETWORK;
+        snprintf(out[kept].name, sizeof(out[kept].name), "%s", e[i].name);
+        snprintf(out[kept].driver, sizeof(out[kept].driver), "%s", e[i].service);
+        kept++;
+    }
+    free(e);
+    return n < 0 ? n : kept;
+}
 static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; return ciuki_devices(out); }
 static int firmware(void *ctx, struct ciuki_firmware_page *out) { (void)ctx; return ciuki_firmware_inventory(out); }
 static int pack_scan(void *ctx,const char *root,char names[][192],unsigned capacity)
@@ -823,6 +874,7 @@ int main(int argc, char **argv)
     h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->multimedia_open=multimedia_open;
     h->game_begin=game_begin;h->game_poll=game_poll_result;
     h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
+    h->hw_load = hw_load; h->hw_save = hw_save; h->memory = memory_query; h->driver_catalog = driver_catalog;
 
     const char *display = getenv("CIUKI_DISPLAY");
     h->screen_w = 1024; h->screen_h = 768;
