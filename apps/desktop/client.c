@@ -1753,6 +1753,11 @@ void desk_launch_completed(struct desktop *d, const struct desk_launch_request *
         return;
     }
     case DESK_LAUNCH_RUN:
+        if (r->run_command[0]) {
+            if (result>=0) desk_run_remember(d,r->run_command);
+            desk_run_result(d,r->run_command,result<0 ? result : 0);
+            return;
+        }
         if (result<0) {
             snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(-result),-result);
             desk_shell_message(d,"Run",text,1);

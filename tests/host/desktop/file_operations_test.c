@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT -- G8 against the real VFS jobs and HKCR server. */
 #include "fake_vfs.h"
 #include "../../../apps/files/operations.h"
+#include "../../../apps/desktop/run_model.h"
 #include "../../../apps/w32srv/registry.h"
 #include <assert.h>
 #include <errno.h>
@@ -28,7 +29,7 @@ static void finish(struct fm_job *j)
 }
 static void undo(struct fm_job *j)
 { fm_job_destroy(j); int e=fm_undo_start(j,&fake_vfs); if(e)fprintf(stderr,"undo start=%d\n",e); assert(!e); finish(j); fm_job_destroy(j); assert(fake_lookup(FM_UNDO_FILE)<0); }
-static void undo_tests(void)
+static __attribute__((noinline)) void undo_tests(void)
 {
     baseline(); struct fm_model *m=calloc(1,sizeof(*m)); struct fm_job *j=calloc(1,sizeof(*j)); assert(m && j);
     fm_init(m,&fake_vfs); assert(!fm_navigate(m,"/work")); assert(fm_select_name(m,"a.txt",0)>=0);
@@ -58,11 +59,11 @@ static void undo_tests(void)
     fm_destroy(m); free(m); free(j); fake_assert_clean();
     puts("PASS G8 Undo: rename/case, multi-copy/move/recycled delete, changed copies/descendants, replacement and permanent-delete safety");
 }
-static void link_tests(void)
+static __attribute__((noinline)) void link_tests(void)
 {
     baseline(); struct fm_model *m=calloc(1,sizeof(*m)); struct desk_launch_record *r=calloc(1,sizeof(*r)),*decoded=calloc(1,sizeof(*decoded)); assert(m && r && decoded);
     fm_init(m,&fake_vfs); assert(!fm_navigate(m,"/work"));
-    *r=(struct desk_launch_record){.label="Ciuki document",.target="/work/a.txt",.show=1};
+    strcpy(r->label,"Ciuki document"); strcpy(r->target,"/work/a.txt"); r->show=1;
     char path[FM_PATH]; assert(!fm_shortcut(m,r,path)); assert(!fm_link_read(&fake_vfs,path,decoded)); assert(!strcmp(decoded->target,r->target));
     assert(!fm_shortcut(m,r,path) && strstr(path,"(2).lnk"));
     strcpy(r->label,"Ciuki: a/b"); assert(!fm_shortcut(m,r,path)); assert(strstr(path,"Ciuki_ a_b.lnk"));
@@ -85,12 +86,79 @@ static void link_tests(void)
     assert(!fm_link_decode(bytes,88,"/work/win.lnk",decoded)); assert(!strcmp(decoded->target,"/work/a.txt"));
     bytes[78]=0; bytes[79]=0xd8; assert(fm_link_decode(bytes,88,"/work/win.lnk",decoded)<0);
     /* Cycle depth and unsupported shell namespace links are ordinary errors. */
-    strcpy(r->target,"/work/cycle.lnk"); uint8_t native[DESK_LINK_BYTES]; unsigned n=desk_link_encode(r,native,sizeof(native));
-    assert(!fm_write_new(&fake_vfs,r->target,native,n)); assert(fm_launch_resolve(&fake_vfs,r->target,NULL,decoded)==-EINVAL);
+    strcpy(r->target,"/work/cycle.lnk"); uint8_t *native=malloc(DESK_LINK_BYTES); assert(native); unsigned n=desk_link_encode(r,native,DESK_LINK_BYTES);
+    assert(!fm_write_new(&fake_vfs,r->target,native,n)); assert(fm_launch_resolve(&fake_vfs,r->target,NULL,decoded)==-EINVAL); free(native);
     fm_destroy(m); free(m); free(r); free(decoded); fake_assert_clean();
     puts("PASS G8 shortcuts: CIUKLNK3 round trips, unique names, selection, BMP, Windows LinkInfo/Unicode relative links, malformed data and cycles");
 }
-static void association_tests(const char *directory)
+static __attribute__((noinline)) void run_history_tests(void)
+{
+    struct desk_run_history *h=calloc(1,sizeof(*h)),*loaded=calloc(1,sizeof(*loaded)); assert(h && loaded);
+    assert(!desk_run_history_load(h) && !h->order[0]);
+    for (unsigned i=0;i<29;i++) { char command[32]; snprintf(command,sizeof(command),"command%u",i); assert(!desk_run_history_add(h,command)); }
+    assert(strlen(h->order)==26 && !strcmp(h->commands[(unsigned)(h->order[0]-'a')],"command28"));
+    assert(!strcmp(h->commands[(unsigned)(h->order[25]-'a')],"command3"));
+    assert(!desk_run_history_add(h,"COMMAND10") && strlen(h->order)==26);
+    assert(!strcmp(h->commands[(unsigned)(h->order[0]-'a')],"COMMAND10"));
+    assert(!desk_run_history_load(loaded) && !memcmp(h,loaded,sizeof(*h)));
+    char slot[2]={h->order[0],0},value[1100];
+    assert(!fm_registry_root_get(W32R_HKCU,DESK_RUN_KEY,slot,value,sizeof(value)) && !strcmp(value,"COMMAND10\\1"));
+    assert(fm_registry_get(DESK_RUN_KEY,"MRUList",value,sizeof(value))==-ENOENT); /* HKCU, never HKCR */
+    assert(!desk_run_history_add(h,"/work/ciuki-\xc3\xa8.txt"));
+    assert(!desk_run_history_load(loaded) && !memcmp(h,loaded,sizeof(*h)));
+    char large[DESK_RUN_MAX+1]; memset(large,'x',sizeof(large)-1); large[sizeof(large)-1]=0;
+    assert(desk_run_history_add(h,large)==-E2BIG);
+    uint32_t (*transport)(const void *,uint32_t,void *,uint32_t,uint32_t *)=fm_registry_exchange;
+    fm_registry_exchange=NULL; assert(desk_run_history_add(h,"failed-save")==-ENOSYS);
+    fm_registry_exchange=transport; assert(!desk_run_history_load(loaded) && !memcmp(h,loaded,sizeof(*h)));
+    /* Bad index bytes, duplicate indexes and malformed slot values are ignored. */
+    assert(!fm_registry_root_set(W32R_HKCU,DESK_RUN_KEY,"MRUList","aab!z"));
+    assert(!fm_registry_root_set(W32R_HKCU,DESK_RUN_KEY,"a","/work/bad"));
+    assert(!fm_registry_root_set(W32R_HKCU,DESK_RUN_KEY,"b","/work/ciuki\\1"));
+    assert(!fm_registry_root_set(W32R_HKCU,DESK_RUN_KEY,"z","\\1"));
+    assert(!desk_run_history_load(loaded) && !strcmp(loaded->order,"b"));
+    assert(!registry.handles); free(loaded); free(h);
+    puts("PASS G9 RunMRU: 26 entries, oldest eviction, case-insensitive promotion, HKCU UTF-16 persistence, malformed data and save failure");
+}
+static const char *run_env(void *ctx,const char *name)
+{
+    (void)ctx;
+    if (!strcasecmp(name,"PATH")) return "C:\\work;C:\\dest";
+    if (!strcasecmp(name,"windir")) return "C:\\work";
+    if (!strcasecmp(name,"CIUKI")) return "a b";
+    return NULL;
+}
+static __attribute__((noinline)) void run_resolver_tests(void)
+{
+    baseline(); struct desk_launch_record *r=calloc(1,sizeof(*r)); assert(r);
+    char out[DESK_RUN_MAX];
+    assert(!desk_run_expand("%wInDiR%/x %CIUKI% %missing% %",out,sizeof(out),run_env,NULL));
+    assert(!strcmp(out,"C:\\work/x a b %missing% %"));
+    assert(desk_run_expand("%CIUKI%",out,3,run_env,NULL)==-E2BIG);
+    fake_file("/work/game.exe",4,0); fake_file("/work/game.com",4,0); fake_file("/work/game.bat",4,0);
+    fake_file("/work/with space.com",4,0); fake_create("/work/folder",FM_DIR);
+    int node=fake_file("/work/native",4,0); memcpy(fake_nodes[node].data,"\177ELF",4);
+    const char *commands[]={"C:\\work\\game.exe /x \"a b\"", "C:\\work\\game.com", "C:\\work\\game.bat", "/work/native", "game /x", "\"%WiNdIr%/with space.com\" \"%CIUKI%\"", "/work/with space.com", "C:\\work\\folder", "https://example.com/ciuki?q=1%20woof", "C:\\work\\a.txt"};
+    const char *targets[]={"/work/game.exe","/work/game.com","/work/game.bat","/work/native","/work/game.exe","/work/with space.com","/work/with space.com","/Programs/files","/Programs/netsurf","/Programs/ciuknote"};
+    for (unsigned i=0;i<sizeof(commands)/sizeof(*commands);i++) {
+        int e=desk_run_resolve(&fake_vfs,commands[i],run_env,NULL,r);
+        if (e) fprintf(stderr,"Run resolve failed: %s: %d\n",commands[i],e);
+        assert(!e && !strcmp(r->target,targets[i]));
+        if (i==0) assert(!strcmp(r->arguments,"/x \"a b\""));
+        if (i==5) assert(!strcmp(r->arguments,"\"a b\""));
+    }
+    assert(!desk_run_resolve(&fake_vfs,"  C:\\work\\game  ",run_env,NULL,r) && !strcmp(r->target,"/work/game.exe"));
+    assert(!desk_run_resolve(&fake_vfs,"HTTPS://example.com/ciuki",run_env,NULL,r) && !strcmp(r->target,"/Programs/netsurf"));
+    assert(desk_run_resolve(&fake_vfs,"missing",run_env,NULL,r)==-ENOENT);
+    assert(desk_run_resolve(&fake_vfs,"%unknown%/missing",run_env,NULL,r)==-ENOENT);
+    assert(desk_run_resolve(&fake_vfs,"\"unfinished",run_env,NULL,r)==-EINVAL);
+    assert(desk_run_resolve(&fake_vfs,"game \"unfinished",run_env,NULL,r)==-EINVAL);
+    assert(desk_run_resolve(&fake_vfs,"\"\"",run_env,NULL,r)==-EINVAL);
+    char over[DESK_RUN_MAX+1]; memset(over,'x',sizeof(over)-1); over[sizeof(over)-1]=0;
+    assert(desk_run_resolve(&fake_vfs,over,run_env,NULL,r)==-E2BIG);
+    free(r); fake_assert_clean(); puts("PASS G9 Run resolution: paths/spaces/quotes, documents/folders/URLs, DOS/Win32/native, PATH/suffixes, environment and errors");
+}
+static __attribute__((noinline)) void association_tests(const char *directory)
 {
     struct wr_io io; wr_posix_io(&io,directory); assert(wr_init(&registry,&io,0)); fm_registry_exchange=exchange;
     baseline(); assert(!fm_associate("/work/a.txt","/Programs/ciuknote"));
@@ -127,11 +195,14 @@ static void association_tests(const char *directory)
     assert(!fm_registry_set(".abc\\ShellNew","FileName","C:\\work\\b.txt"));
     assert(!fm_shellnew(m,".abc",path)); assert(fake_nodes[fake_lookup(path)].meta.size==51);
     char name[300]; assert(!fm_registry_enum("",0,name,sizeof(name)) && name[0]);
+    run_history_tests();
     assert(!registry.handles); assert(calls>40);
+    assert(!wr_flush(&registry)); wr_destroy(&registry); assert(wr_init(&registry,&io,0));
+    char persisted[32]; assert(!fm_registry_root_get(W32R_HKCU,DESK_RUN_KEY,"MRUList",persisted,sizeof(persisted)) && !strcmp(persisted,"aab!z"));
     fm_destroy(m); free(m); free(t); free(r); wr_destroy(&registry); fm_registry_exchange=NULL; fake_assert_clean();
     puts("PASS G8 HKCR: production service, shared native/Win32 data, Always use, verbs/default/icon/description/EditFlags, ShellNew templates and NullFile");
 }
-static void launch_tests(void)
+static __attribute__((noinline)) void launch_tests(void)
 {
     baseline(); struct desk_launch_record *r=calloc(1,sizeof(*r)); assert(r);
     const char *names[]={"/work/prog.exe","/work/prog.com","/work/prog.bat","/work/native"};
@@ -158,4 +229,4 @@ static void launch_tests(void)
     free(r); fake_assert_clean(); puts("PASS G8 shared launcher: native ELF, EXE/COM/BAT/PIF, folder, URL, arguments and typed failures");
 }
 int main(int argc,char **argv)
-{ setvbuf(stdout,NULL,_IONBF,0); assert(argc==2); undo_tests(); link_tests(); association_tests(argv[1]); launch_tests(); fake_reset(); return 0; }
+{ setvbuf(stdout,NULL,_IONBF,0); assert(argc==2); undo_tests(); link_tests(); association_tests(argv[1]); launch_tests(); run_resolver_tests(); fake_reset(); return 0; }

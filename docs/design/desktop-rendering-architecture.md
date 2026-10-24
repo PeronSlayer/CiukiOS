@@ -447,6 +447,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 51 | G17 Properties opens, changes tab/value, Apply/OK/Cancel closes | property sheet and exposed viewport | `db_properties`, `db_page`, `db_input`, `db_apply` | none | DOS toolbar/properties/selection |
 | 52 | G17 Font size, Background label, clipboard/error notice and viewport scroll; incremental guest frame | toolbar/viewport for control changes; only scaled destination rows sampling changed VGA rows for video | `db_source_x/y`, `db_paint_rows`, `dosbox.c` damage mapping | hidden property-sheet backing is not uploaded over the sheet | DOS toolbar/properties/selection |
 | 53 | G17 font-size dropdown opens, changes highlighted choice, selects or cancels | list box and exposed guest rows | `db_input` font menu, `db_paint_rows` | guest updates do not overwrite the open list | DOS toolbar/properties/selection |
+| 54 | G9 Run: MRU arrival, dropdown open/scroll/select/cancel, selection replacement and keyboard button focus | Run content and old/new outer bounds on dropdown resize | `desk_run_history_ready`, `run_select`, `run_resize`, `internal_key`, `desk_internal_click` | none | `row_run` in `test_window_model`, all five presenters |
+| 55 | G9 Browse: opens, receives directory snapshot, navigates/selects or cancels; Run launch/error/accepted completion | old/new Run/Browse outer bounds, picker content, owned error message and exposed windows | `run_browse`, `desk_run_browse_ready`, `run_browser_input`, `desk_run_result` | worker results never paint directly | `row_run` in `test_window_model`, all five presenters |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

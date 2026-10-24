@@ -2843,7 +2843,12 @@ int desk_internal_open(struct desktop *d, int kind)
              kind==DESK_INTERNAL_END_TASK ? d->end_task.name : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
     if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.about_scroll = 0; d->sh.want_reload |= 2; }
-    if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
+    if (kind == DESK_INTERNAL_RUN) {
+        d->sh.run_length=0; d->sh.run_text[0]=0;
+        d->sh.run=calloc(1,sizeof(*d->sh.run));
+        if (!d->sh.run) { c->internal=0; c->window=0; return -1; }
+        d->sh.run->selected=-1; d->sh.run_history_request=1;
+    }
     if (kind == DESK_INTERNAL_SHUTDOWN) d->sh.shutdown_choice = 0;
     int32_t x = ((int32_t)d->width - c->frame.w) / 2, y = DESK_BAR + 20;
     if (kind == DESK_INTERNAL_RUN) { x = 8; y = DESK_BAR + 8; }   /* under the Ciuki button and its menu */
@@ -2862,6 +2867,12 @@ int desk_internal_open(struct desktop *d, int kind)
 void desk_internal_closed(struct desktop *d, int index)
 {
     if (d->about == index) d->about = -1;
+    if (d->clients[index].internal==DESK_INTERNAL_RUN && d->sh.run) {
+        struct desk_run_ui *r=d->sh.run;
+        if (r->browser) du_dialog_close(r->browser);
+        free(r->browser); free(r->pixels); free(r->entries); free(r); d->sh.run=NULL;
+        d->sh.run_history_request=0;
+    }
     if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->sh.confirm) { d->sh.confirm=0; desk_folder_cancelled(d); }   /* closing the question answers No */
     if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->v3_dialog_kind) {
         if(d->v3_dialog_kind==1)(void)desk_v3_dialog_accept(d);
@@ -2915,6 +2926,7 @@ static struct desk_box button_box(struct desk_box content, int index, int count)
     int32_t x = content.x + content.w - 10 - (count - index) * 81 + 6;
     return (struct desk_box){x, content.y + content.h - 33, 75, 23};
 }
+#include "run_ui.inc"
 static struct desk_box message_button_box(const struct desktop *d, struct desk_box content, int index)
 {
     int count=d->v3_dialog_kind==1||d->v3_dialog_kind==2 ? 2 : 1;
@@ -3225,22 +3237,41 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         push_button(&c, button_box(content, 0, 1), "OK", 1);
         break;
     case DESK_INTERNAL_RUN: {
+        struct desk_run_ui *r=d->sh.run;
+        if (r && r->browser) { run_browser_paint(d,content,clip); break; }
         du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("go-jump", 32), 32, DU_ICON_NORMAL);
-        multiline(&c, content.x + 56, content.y + 14, "Type the name of a program in /Programs, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
+        multiline(&c, content.x + 56, content.y + 14, "Type the name of a program, folder, document,\nor Internet address, and CiukiOS will open it.", SH_INK);
         du_label(&c, content.x + 12, content.y + 52 + (22 - DU_GLYPH_H) / 2, "&Open:", SH_INK, 1);
-        struct du_rect field = {content.x + 56, content.y + 52, content.w - 68, 22};
+        struct du_rect field = {content.x + 56, content.y + 52, content.w - 88, 22};
         du_well(&c, field, SH_WINDOW);
         if (d->focus == index && desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(&c, field);
         struct du_canvas fc = c; fc.clip = du_intersection(c.clip, (struct du_rect){field.x + 2, field.y + 2, field.w - 4, field.h - 4});
         /* Show the end of a long command line: drop leading characters until it fits. */
         int32_t room = field.w - 12;
         const char *shown = d->sh.run_text;
-        while (*shown && du_text_width(shown) > room) shown++;
+        unsigned cursor=r ? r->cursor : d->sh.run_length;
+        if (cursor>d->sh.run_length) cursor=d->sh.run_length;
+        while (*shown && shown<d->sh.run_text+cursor && du_text_width(shown)>room) shown+=du_utf8_next(shown,0);
+        char prefix[DESK_RUN_MAX]; unsigned prefix_bytes=cursor-(unsigned)(shown-d->sh.run_text);
+        memcpy(prefix,shown,prefix_bytes); prefix[prefix_bytes]=0;
         int32_t tx = field.x + 5, ty = field.y + (field.h - DU_GLYPH_H) / 2;
-        du_text(&fc, tx, ty, shown, SH_INK);
-        if (d->focus == index && !d->shell_caret_hidden) du_vline(&fc, tx + du_text_width(shown), ty - 2, DU_GLYPH_H + 5, SH_INK);
-        push_button(&c, button_box(content, 0, 2), "OK", 1);
-        push_button(&c, button_box(content, 1, 2), "Cancel", 0);
+        if (r && r->select_all && d->focus==index) du_fill(&fc,(struct du_rect){tx,ty-1,du_text_width(shown),DU_GLYPH_H+2},SH_HOT);
+        du_text(&fc, tx, ty, shown, r && r->select_all && d->focus==index ? SH_HOT_INK : SH_INK);
+        if (d->focus == index && (!r || (!r->focus && !r->select_all)) && !d->shell_caret_hidden) du_vline(&fc, tx + du_text_width(prefix), ty - 2, DU_GLYPH_H + 5, SH_INK);
+        push_button(&c,(struct desk_box){content.x+content.w-32,content.y+52,20,22},"v",0);
+        if (r && r->dropdown) {
+            struct du_rect list={content.x+56,content.y+76,content.w-68,run_rows(r)*18+4}; du_well(&c,list,SH_WINDOW);
+            for (int row=0;row<run_rows(r);row++) {
+                int k=r->top+row; int selected=k==r->selected;
+                if (selected) du_fill(&c,(struct du_rect){list.x+2,list.y+2+row*18,list.w-4,18},SH_HOT);
+                du_text_fit(&c,list.x+5,list.y+4+row*18,list.w-10,r->history.commands[(unsigned)(r->history.order[k]-'a')],selected?SH_HOT_INK:SH_INK);
+            }
+        }
+        static const char *const labels[]={"OK","Cancel","&Browse..."};
+        for (int k=0;k<3;k++) {
+            struct desk_box b=button_box(content,k,3); push_button(&c,b,labels[k],k==0);
+            if (r && r->focus==k+1) du_focus_ring(&c,(struct du_rect){b.x+4,b.y+4,b.w-8,b.h-8});
+        }
         break;
     }
     case DESK_INTERNAL_SHUTDOWN: {
@@ -3281,9 +3312,14 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
 }
 static void run_commit(struct desktop *d, int index)
 {
-    if (!d->sh.run_length) return;
+    (void)index;
+    struct desk_run_ui *r=d->sh.run;
+    if (!d->sh.run_length || !r || r->busy) return;
+    desk_run_trim(d->sh.run_text); d->sh.run_length=(unsigned)strlen(d->sh.run_text);
+    const char *p=d->sh.run_text; while (*p==' ' || *p=='\t') p++;
+    if (!*p) return;
     snprintf(d->sh.want_run, sizeof(d->sh.want_run), "%s", d->sh.run_text);
-    desk_request_close(d, index);
+    r->busy=1;
 }
 /* Modal shutdown input never reaches a client, the menu, or title dragging. */
 int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
@@ -3347,10 +3383,23 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         }
         if (desk_contains(button_box(content, 0, 1), x, y)) desk_request_close(d, index);
         return 1;
-    case DESK_INTERNAL_RUN:
-        if (desk_contains(button_box(content, 0, 2), x, y)) run_commit(d, index);
-        else if (desk_contains(button_box(content, 1, 2), x, y)) desk_request_close(d, index);
-        return 1;
+    case DESK_INTERNAL_RUN: {
+        struct desk_run_ui *r=d->sh.run; if (!r) return 1;
+        if (r->browser) {
+            struct du_ui *u=r->browser;
+            struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=x-content.x+u->dialog.box.x+DESK_BORDER,.value2=y-content.y+u->dialog.box.y+DESK_TITLE};
+            run_browser_input(d,&e);
+            e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1}; run_browser_input(d,&e);
+            if (r->browser) { e.value=0; run_browser_input(d,&e); }
+        } else if (desk_contains(button_box(content,0,3),x,y)) run_commit(d,index);
+        else if (desk_contains(button_box(content,1,3),x,y)) desk_request_close(d,index);
+        else if (desk_contains(button_box(content,2,3),x,y)) run_browse(d);
+        else if (y>=content.y+52 && y<content.y+74 && x>=content.x+content.w-32) { r->dropdown=!r->dropdown; run_resize(d); }
+        else if (r->dropdown && x>=content.x+56 && x<content.x+content.w-12 && y>=content.y+78 && y<content.y+78+run_rows(r)*18) {
+            run_select(d,r->top+(y-content.y-78)/18); r->dropdown=0; run_resize(d);
+        } else { r->focus=0; r->select_all=1; r->cursor=d->sh.run_length; }
+        damage(d,desk_outer(cl)); return 1;
+    }
     case DESK_INTERNAL_END_TASK:
         if (desk_contains(button_box(content,0,2),x,y)) desk_end_task_choice(d,1);
         else if (desk_contains(button_box(content,1,2),x,y)) desk_end_task_choice(d,0);
@@ -3850,6 +3899,11 @@ static int menu_letter(struct desktop *d, int level, unsigned ch)
 }
 int desk_shell_wheel(struct desktop *d, int detents)
 {
+    if (d->focus>=0 && d->clients[d->focus].internal==DESK_INTERNAL_RUN && d->sh.run) {
+        if (d->sh.run->browser) { struct ciuki_input_event e={.type=CIUKI_INPUT_WHEEL,.value=detents}; run_browser_input(d,&e); }
+        else { run_select(d,d->sh.run->selected-detents); damage(d,desk_outer(&d->clients[d->focus])); }
+        return 1;
+    }
     if (!d->shell || d->focus < 0 || d->clients[d->focus].internal != DESK_INTERNAL_ABOUT || d->sh.about_tab != 2) return 0;
     unsigned lines=(unsigned)d->sh.cfg.wheel_lines;
     if(lines==101) {
@@ -3876,6 +3930,9 @@ static int internal_key(struct desktop *d, int index, int code, int value)
 {
     struct desk_client *c = &d->clients[index];
     if (c->internal==DESK_INTERNAL_TRANSFER) { desk_folder_dialog_key(d,code,value); return 1; }
+    if (c->internal==DESK_INTERNAL_RUN && d->sh.run && d->sh.run->browser && value==0) {
+        struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=value}; run_browser_input(d,&e); return 1;
+    }
     if (value == 0) return 1;
     switch (c->internal) {
     case DESK_INTERNAL_GAME_DATA:
@@ -3908,19 +3965,53 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         }
         damage(d,desk_outer(c)); return 1;
     }
-    case DESK_INTERNAL_RUN:
-        d->shell_caret_hidden=0;d->shell_caret_next=0;
-        if (code == DU_KEY_ENTER) run_commit(d, index);
-        else if (code == DU_KEY_ESC) desk_request_close(d, index);
-        else if (code == DU_KEY_BACKSPACE) { if (d->sh.run_length) d->sh.run_length=(unsigned)du_utf8_prev(d->sh.run_text,d->sh.run_length); d->sh.run_text[d->sh.run_length]=0; }
-        else if (!(d->sh.modifiers & DU_CTRL)) {
-            char text[9];unsigned n=shell_text(d,(unsigned)code,text);
-            if(n && d->sh.run_length+n<sizeof(d->sh.run_text)) {
-                memcpy(d->sh.run_text+d->sh.run_length,text,n+1);d->sh.run_length+=n;
+    case DESK_INTERNAL_RUN: {
+        struct desk_run_ui *r=d->sh.run; if (!r) return 1;
+        if (r->browser) {
+            struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=value}; run_browser_input(d,&e); return 1;
+        }
+        d->shell_caret_hidden=0; d->shell_caret_next=0;
+        if (code==DU_KEY_ESC) { if (r->dropdown) { r->dropdown=0; run_resize(d); } else desk_request_close(d,index); }
+        else if (code==DU_KEY_TAB) r->focus=(r->focus+((d->sh.modifiers&DU_SHIFT)?3:1))%4;
+        else if ((d->sh.modifiers&DU_ALT) && code==0x30) run_browse(d); /* Alt+B */
+        else if (code==DU_KEY_F4) { r->dropdown=!r->dropdown; run_resize(d); }
+        else if (code==DU_KEY_ENTER || (code==DU_KEY_SPACE && r->focus)) {
+            if (r->dropdown) { r->dropdown=0; run_resize(d); }
+            else if (r->focus==2) desk_request_close(d,index);
+            else if (r->focus==3) run_browse(d);
+            else run_commit(d,index);
+        } else if (code==DU_KEY_UP || code==DU_KEY_DOWN) {
+            run_select(d,r->selected<0 ? 0 : r->selected+(code==DU_KEY_UP?-1:1));
+            if (d->sh.modifiers&DU_ALT) { r->dropdown=1; run_resize(d); }
+        } else if (!r->focus && !r->busy) {
+            if ((d->sh.modifiers&DU_CTRL) && code==0x1e) r->select_all=1;
+            else if (code==DU_KEY_HOME || code==DU_KEY_END || code==DU_KEY_LEFT || code==DU_KEY_RIGHT) {
+                if (code==DU_KEY_HOME || (r->select_all && code==DU_KEY_LEFT)) r->cursor=0;
+                else if (code==DU_KEY_END || r->select_all) r->cursor=d->sh.run_length;
+                else if (code==DU_KEY_LEFT && r->cursor) r->cursor=(unsigned)du_utf8_prev(d->sh.run_text,r->cursor);
+                else if (code==DU_KEY_RIGHT && r->cursor<d->sh.run_length) r->cursor=(unsigned)du_utf8_next(d->sh.run_text,r->cursor);
+                r->select_all=0;
+            } else if (code==DU_KEY_BACKSPACE || code==DU_KEY_DELETE) {
+                if (r->select_all) { d->sh.run_text[0]=0; r->cursor=0; }
+                else if (code==DU_KEY_BACKSPACE && r->cursor) {
+                    unsigned prev=(unsigned)du_utf8_prev(d->sh.run_text,r->cursor);
+                    memmove(d->sh.run_text+prev,d->sh.run_text+r->cursor,d->sh.run_length-r->cursor+1); r->cursor=prev;
+                } else if (code==DU_KEY_DELETE && r->cursor<d->sh.run_length) {
+                    size_t next=du_utf8_next(d->sh.run_text,r->cursor);
+                    memmove(d->sh.run_text+r->cursor,d->sh.run_text+next,d->sh.run_length-next+1);
+                }
+                d->sh.run_length=(unsigned)strlen(d->sh.run_text); r->select_all=0;
+            } else if (!(d->sh.modifiers&DU_CTRL)) {
+                char text[9]; unsigned n=shell_text(d,(unsigned)code,text);
+                if (n && (r->select_all ? 0 : d->sh.run_length)+n<sizeof(d->sh.run_text)) {
+                    if (r->select_all) { d->sh.run_length=0; r->cursor=0; d->sh.run_text[0]=0; }
+                    memmove(d->sh.run_text+r->cursor+n,d->sh.run_text+r->cursor,d->sh.run_length-r->cursor+1);
+                    memcpy(d->sh.run_text+r->cursor,text,n); d->sh.run_length+=n; r->cursor+=n; r->select_all=0;
+                }
             }
         }
-        damage(d, desk_outer(c));
-        return 1;
+        damage(d,desk_outer(c)); return 1;
+    }
     case DESK_INTERNAL_ABOUT:
         if (code == DU_KEY_ESC || code == DU_KEY_ENTER) desk_request_close(d, index);
         else if (d->sh.about_tab == 2 && (code == DU_KEY_UP || code == DU_KEY_DOWN || code == DU_KEY_PGUP || code == DU_KEY_PGDN ||
@@ -4229,6 +4320,10 @@ int desk_shell_key(struct desktop *d, int code, int value)
         d->sh.alt_used=1; return 1;
     }
     if (d->sh.modifiers & DU_ALT) {
+        if (d->focus>=0 && d->clients[d->focus].internal==DESK_INTERNAL_RUN && d->sh.run && !d->sh.run->browser &&
+            (code==0x30 || code==DU_KEY_UP || code==DU_KEY_DOWN)) {
+            d->sh.alt_used=1; return internal_key(d,d->focus,code,value);
+        }
         if (code==DU_KEY_ENTER && d->focus<0 && d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count) {
             if (value==1) act(d,&(struct sh_item){.action=SH_ACT_ICON_PROPERTIES,.arg=d->sh.icon_selected});
             d->sh.alt_used=1; return 1;
@@ -4386,7 +4481,8 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (d->focus >= 0 && d->clients[d->focus].internal) {
         /* AltGr characters reach the Run field; other Alt chords are ignored here. */
-        if ((d->sh.modifiers & DU_ALT) && d->sh.alt_code != 0x138) return 1;
+        if ((d->sh.modifiers & DU_ALT) && d->sh.alt_code != 0x138 &&
+            !(d->clients[d->focus].internal==DESK_INTERNAL_RUN && d->sh.run && d->sh.run->browser)) return 1;
         return internal_key(d, d->focus, code, value);
     }
     if (d->focus < 0 && d->sh.cfg.desktop_icons && d->sh.icon_count && !d->shell_test && !d->tasks_test && !d->app_test) {

@@ -26,6 +26,9 @@ int fm_link_selection(struct fm_model *, char *const *, unsigned);
 extern uint32_t (*fm_registry_exchange)(const void *, uint32_t, void *, uint32_t, uint32_t *);
 int fm_registry_get(const char *key, const char *name, char *out, unsigned cap);
 int fm_registry_set(const char *key, const char *name, const char *value);
+/* Internal native callers may use the existing HKCU/HKLM RPC roots too. */
+int fm_registry_root_get(uint32_t root, const char *key, const char *name, char *out, unsigned cap);
+int fm_registry_root_set(uint32_t root, const char *key, const char *name, const char *value);
 int fm_registry_enum(const char *key, unsigned index, char *out, unsigned cap);
 void fm_registered_types(struct fm_entry *, unsigned);
 struct fm_filetype {

@@ -384,9 +384,9 @@ static int op_reg(unsigned op,uint32_t key,const char *path,const char *name,uns
 { return op_reg_typed(1,op,key,path,name,index,data,bytes,out); }
 static void op_reg_close(uint32_t key)
 { struct w32r_reply *r=NULL; (void)op_reg(W32R_CLOSE,key,"","",0,NULL,0,&r); free(r); }
-int fm_registry_get(const char *key,const char *name,char *out,unsigned cap)
+int fm_registry_root_get(uint32_t root,const char *key,const char *name,char *out,unsigned cap)
 {
-    struct w32r_reply *r=NULL; int e=op_reg(W32R_OPEN,W32R_HKCR,key,"",0,NULL,0,&r); if (e) return e;
+    struct w32r_reply *r=NULL; int e=op_reg(W32R_OPEN,root,key,"",0,NULL,0,&r); if (e) return e;
     uint32_t handle=r->key; free(r); r=NULL;
     e=op_reg(W32R_QUERY,handle,"",name,0,NULL,0,&r);
     if (!e) {
@@ -396,7 +396,7 @@ int fm_registry_get(const char *key,const char *name,char *out,unsigned cap)
     }
     free(r); op_reg_close(handle); return e;
 }
-int fm_registry_set(const char *key,const char *name,const char *value)
+int fm_registry_root_set(uint32_t root,const char *key,const char *name,const char *value)
 {
     /* Native UI commands are UTF-8; encode into the same UTF-16LE REG_SZ
      * bytes used by RegSetValueExW. No private association store. */
@@ -416,10 +416,14 @@ int fm_registry_set(const char *key,const char *name,const char *value)
         if (c>=0x10000) { unsigned high=0xd800+((c-0x10000)>>10); data[at++]=(uint8_t)high; data[at++]=(uint8_t)(high>>8); c=0xdc00+((c-0x10000)&1023); }
         data[at++]=(uint8_t)c; data[at++]=(uint8_t)(c>>8);
     }
-    struct w32r_reply *r=NULL; int e=op_reg(W32R_CREATE,W32R_HKCR,key,"",0,NULL,0,&r);
+    struct w32r_reply *r=NULL; int e=op_reg(W32R_CREATE,root,key,"",0,NULL,0,&r);
     if (!e) { uint32_t handle=r->key; free(r); r=NULL; e=op_reg(W32R_SET,handle,"",name,0,data,at+2,&r); free(r); op_reg_close(handle); }
     free(data); return e;
 }
+int fm_registry_get(const char *key,const char *name,char *out,unsigned cap)
+{ return fm_registry_root_get(W32R_HKCR,key,name,out,cap); }
+int fm_registry_set(const char *key,const char *name,const char *value)
+{ return fm_registry_root_set(W32R_HKCR,key,name,value); }
 int fm_registry_enum(const char *key,unsigned index,char *out,unsigned cap)
 {
     struct w32r_reply *r=NULL; int e=op_reg(W32R_OPEN,W32R_HKCR,key,"",0,NULL,0,&r); if (e) return e;

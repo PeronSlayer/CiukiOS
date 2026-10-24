@@ -1518,12 +1518,55 @@ static void row_dos_controls(unsigned m)
     step("scaled incremental VGA damage");
     free(guest); wm_end();
 }
+static void row_run(unsigned m)
+{
+    row_name="G9 Run dialog"; wm_begin(m,1);
+    win_chord(0x13); int run=d.focus; assert(run>=0 && d.sh.run); step("Run via Win+R");
+    struct desk_run_history *h=calloc(1,sizeof(*h)); assert(h);
+    for (unsigned k=0;k<26;k++) { h->order[k]=(char)('a'+k); snprintf(h->commands[k],DESK_RUN_MAX,"command%u",k); }
+    desk_run_history_ready(&d,h); free(h); assert(!strcmp(d.sh.run_text,"command0")); step("MRU arrives; latest selected");
+    tap(DU_KEY_F4); assert(d.sh.run->dropdown); step("history dropdown opens");
+    for (unsigned k=0;k<10;k++) tap(DU_KEY_DOWN);
+    assert(!strcmp(d.sh.run_text,"command10") && d.sh.run->top>0); step("history scrolls beyond eight visible rows");
+    tap(DU_KEY_ESC); assert(!d.sh.run->dropdown); step("dropdown closes without closing Run");
+    tap(0x2d); assert(!strcmp(d.sh.run_text,"x")); step("typing replaces selected history");
+    tap(DU_KEY_HOME); tap(0x1e); assert(!strcmp(d.sh.run_text,"ax")); step("Run inserts at caret");
+    tap(DU_KEY_END); tap(DU_KEY_BACKSPACE); tap(DU_KEY_HOME); tap(DU_KEY_DELETE); assert(!d.sh.run_length); step("Run caret navigation and forward/backward delete");
+    key(0x1d,1); tap(0x1e); key(0x1d,0); tap(DU_KEY_BACKSPACE); assert(!d.sh.run_length); step("Ctrl+A and delete");
+    struct desk_box c=desk_content(&d.clients[run]);
+    click(c.x+c.w-22,c.y+62,CIUKI_BUTTON_LEFT); assert(d.sh.run->dropdown); step("mouse opens dropdown");
+    click(c.x+80,c.y+82,CIUKI_BUTTON_LEFT); assert(!d.sh.run->dropdown && d.sh.run_length); step("mouse selects history");
+    tap(DU_KEY_TAB); tap(DU_KEY_TAB); tap(DU_KEY_TAB); assert(d.sh.run->focus==3); step("Browse keyboard focus");
+    char previous[DESK_RUN_MAX]; strcpy(previous,d.sh.run_text);
+    tap(DU_KEY_ENTER); assert(d.sh.run->browser && d.sh.run->browse_pending); step("Browse opens without directory I/O");
+    struct du_file_entry entries[2]={{.name="folder",.directory=1},{.name="game.exe",.directory=0}};
+    d.sh.run->browse_pending=0;
+    desk_run_browse_ready(&d,"/Programs",entries,2,0); step("Browse directory snapshot arrives");
+    tap(DU_KEY_ESC); assert(!d.sh.run->browser && !strcmp(previous,d.sh.run_text)); step("Browse Cancel preserves command");
+    key(0x38,1); tap(0x30); key(0x38,0); assert(d.sh.run->browser); step("Alt+B reopens Browse");
+    d.sh.run->browse_pending=0; desk_run_browse_ready(&d,"/Programs",entries,2,0); step("Browse populated");
+    key(0x2a,1); tap(DU_KEY_TAB); key(0x2a,0); tap(DU_KEY_ENTER);
+    assert(d.sh.run->browse_pending && !strcmp(d.sh.run->browse_path,"/Programs/folder")); step("Browse navigates a directory");
+    d.sh.run->browse_pending=0; desk_run_browse_ready(&d,"/Programs/folder",entries+1,1,0); step("nested directory snapshot arrives");
+    /* A real filename is entered through the shared dialog's focused name edit. */
+    tap(0x22); tap(0x1e); tap(0x32); tap(0x12); tap(0x34); tap(0x12); tap(0x2d); tap(0x12);
+    tap(DU_KEY_ENTER); assert(!d.sh.run->browser && !strcmp(d.sh.run_text,"\"/Programs/folder/game.exe\"")); step("Browse inserts a quoted path");
+    key(0x38,1); tap(0x30); key(0x38,0); assert(d.sh.run->browser); step("Browse for a drive path");
+    struct du_ui *browser=d.sh.run->browser;
+    du_set_text(&browser->dialog.items[browser->dialog.focus],"D:\\Games\\game.exe");
+    tap(DU_KEY_ENTER); assert(!d.sh.run->browser && !strcmp(d.sh.run_text,"\"D:\\Games\\game.exe\"")); step("Browse preserves an absolute drive path");
+    tap(DU_KEY_ENTER); assert(d.sh.run->busy && !strcmp(d.sh.want_run,d.sh.run_text)); step("Run dispatches command");
+    desk_run_result(&d,d.sh.want_run,-ENOENT); assert(d.sh.run && !d.sh.run->busy); step("missing program error retains command");
+    desk_request_close(&d,d.focus); step("error dismissed");
+    desk_focus(&d,run); desk_run_result(&d,d.sh.run_text,0); assert(!d.sh.run); step("accepted command closes Run");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
-    row_input_text, row_dos_controls};
+    row_input_text, row_dos_controls, row_run};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

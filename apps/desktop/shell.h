@@ -13,6 +13,7 @@
 #include "folder.h"
 #include "autoplay.h"
 #include "wallpaper.h"
+#include "run_model.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <ciuki/abi.h>
@@ -34,6 +35,18 @@ struct sh_notification {
     char title[64], text[320];
     uint64_t started, expires;
     int active, icon, action, balloon, slide;
+};
+/* G9: lazily allocated while Run is open; only the input thread owns it. */
+struct desk_run_ui {
+    struct desk_run_history history;
+    int dropdown, selected, top, focus, select_all, busy;
+    unsigned cursor;
+    struct du_ui *browser;
+    uint32_t *pixels;
+    int browser_done, browser_accept, browse_pending, browse_ready, browse_error;
+    char browse_path[260], browse_cached[260], browse_result[260];
+    struct du_file_entry *entries;
+    unsigned entry_count;
 };
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22
@@ -134,7 +147,11 @@ struct desk_shell {
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, about_scroll, shutdown_choice, message_kind;
     int confirm;                    /* G2: SH_CONFIRM_*, the message window asks Yes or No */
-    char run_text[160]; unsigned run_length;
+    char run_text[DESK_RUN_MAX]; unsigned run_length;
+    struct desk_run_ui *run;
+    unsigned run_history_request;
+    char run_saves[DESK_RUN_MRU][DESK_RUN_MAX];
+    unsigned run_save_count;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
     int logo_down, alt_routed, alt_used, alt_code;
@@ -148,7 +165,7 @@ struct desk_shell {
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
     int want_save, want_wallpaper, want_mixer, want_power, want_reload, want_programs;
-    char want_run[192];
+    char want_run[DESK_RUN_MAX];
     /* Wallpaper cache: full screen, rebuilt when settings or size change. */
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
     uint32_t *background; int background_valid, background_selected, background_outline;
@@ -190,6 +207,10 @@ int desk_shell_power_update(struct desktop *, const struct ciuki_power_status *)
 void desk_shell_volume_damage(struct desktop *);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
+void desk_run_history_ready(struct desktop *, const struct desk_run_history *);
+void desk_run_browse_ready(struct desktop *, const char *, const struct du_file_entry *, unsigned, int);
+void desk_run_result(struct desktop *, const char *command, int error);
+void desk_run_remember(struct desktop *, const char *command);
 int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
 /* G2: a Yes/No question in the message window; Yes runs desk_folder_confirmed(action), No or closing it desk_folder_cancelled. */
