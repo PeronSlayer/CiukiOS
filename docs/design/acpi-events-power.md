@@ -562,3 +562,57 @@ touches I/O ports, so the port policy was never exercised.
 
   Lead confirmation 2026-10-23 (fx-18 merge): Battery Low flushes storage and
   notifies without suspending; only Critical Suspend keeps the f1-121 policy.
+
+## The APM BIOS returns with RETF 2 (fx-25, 2026-10-23)
+
+T23 trial of preview f441c5bd (private serial and `LOGS/BOOT.LOG`): the
+fx-18 window admitted the BIOS's PM1_CNT read (`[apm] io port=1004 width=1
+write=0 fn=5300 kind=pm1_cnt`), and the installation check **completed**:
+the registers saved after the call are `eax=00000102 ebx=0000504d
+ecx=00000003 flags=0202` (APM 1.2, "PM", 16- and 32-bit interfaces, CF
+clear). Yet the call ended with `error=-110 vector=13 cs=1000 ip=0001
+elapsed=87 deadline_ms=87` and `state=4`, which quarantined the whole BIOS VM
+again.
+
+Cause: the BIOS VM starts every call with CS:IP = 1000:0000 (the sentinel,
+a `HLT` byte at BIOSVM_SCRATCH) pushed as the return address, and it
+recognised the end of a call only when the monitor emulated an `IRET` that
+popped exactly that frame. An `IRET` traps in V86 mode at IOPL 0, but a far
+return does not: RETF is not IOPL-sensitive and runs natively (Intel SDM
+Vol. 3B, chapter 20, "Virtual-8086 Mode": only CLI, STI, PUSHF, POPF, INT n
+and IRET are IOPL-sensitive; HLT is privileged and raises #GP). BIOS
+interrupt handlers that must return a result in CF commonly end with
+`RETF 2`, which discards the caller's saved FLAGS and keeps the live ones.
+SeaBIOS (QEMU) returns with IRET, so every earlier test and QEMU run took
+the IRET path. On the T23 the handler's far return landed on 1000:0000, the
+CPU executed the sentinel `HLT`, the monitor treated it as a guest waiting
+for an interrupt (`V86_HALTED`, IP now 0001), and nothing woke it until the
+deadline. The reported vector 13 was the HLT's #GP, not a fault.
+
+Required behaviour:
+
+1. **Sentinel by any far return.** A `HLT` executed at the sentinel CS:IP
+   with SS = sentinel SS and SP = the sentinel SP (`RETF 2`, or `IRET`
+   emulated elsewhere) or the sentinel SP − 2 (`RETF` that left the saved
+   FLAGS on the stack) completes the call (`V86_DONE`). The result flags are
+   the live flags, which is what `RETF 2` returns. A `HLT` at the sentinel
+   with any other stack still halts; the failure record names it.
+2. **Exact failure records.** Every failed BIOS VM call logs one
+   `[biosvm] step=failure` record: `reason` (`port_denied`, `halted`,
+   `halted_at_sentinel`, `timeout`, `page_fault`, `emulation`, `cpu_fault`,
+   `error`), the
+   CS:IP and SS:SP at the end, the vector for a CPU fault, the denied port
+   with width and direction, `elapsed_ms`, the deadline actually used and
+   the caller's budget (`budget_ms`, the difference being queue time).
+   `biosvm_last_failure` returns the same facts, and the APM record names
+   the failing function with them (`[apm] call fn=… error=… reason=… cs:ip=…
+   port=… elapsed_ms=… budget_ms=…`).
+3. Firmware that never returns, halts outside the sentinel or touches a
+   denied port still aborts and quarantines the VM as before; only a
+   completed call is no longer mistaken for a hang.
+
+Host evidence: `tests/host/v86_test.c` `test_apm_t23_retf` (the T23 handler
+shape: PM1_CNT read, then `RETF 2` with the 5300h results: completes, flags
+from the handler, no quarantine; `RETF` without discarding also completes;
+a HLT elsewhere times out with `reason=halted` and the CS:IP) and
+`tests/host/apm_t23_test.c` (the failure detail in the APM record).

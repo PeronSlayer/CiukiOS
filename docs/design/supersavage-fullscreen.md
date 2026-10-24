@@ -3,6 +3,44 @@
 This implements the provider anticipated by f3-26. Qualification on the T23
 remains separate from the host register model.
 
+## fx-22 return transaction amendment (2026-10-23)
+
+Trial f441c5bd (Quake quit to the DOS prompt in native full screen, then
+Alt+Enter) ends at `vga-capture`; the desktop never came back. On e831e685 the
+same capture, 256 KiB through the uncached aperture, took 2230 ms against
+226 ms for the identical transfer at entry, while the display worker was
+absent from the CPU top list. Evidence, replays and measurements:
+[fx-22 validation](../validation/fx-22-fullscreen-return.md).
+
+Windows 9x reference: the VDD saves and restores a full-screen VM's video
+state when the display focus changes (RBIL INT 2Fh 4005h/4006h describe the
+save/restore callouts), the Windows 3.1 VGA VDD demand-pages video memory and
+"must track video memory usage", and a VM that can redraw itself is asked to
+repaint instead of having memory saved (OS/2 Museum, Windows 3.x VDDVGA).
+VxD services of a VM are not interrupted by the switch; the VM is suspended at
+a VMM boundary, and VPICD simulates no interrupt into a suspended VM. Time
+critical operations run with Time_Critical_Boost (Win95 DDK,
+Adjust_Exec_Priority), above every ordinary time slice.
+
+Expected behaviour, every step bounded, each with a fallback:
+
+| Step | Bound | Fallback |
+| --- | --- | --- |
+| Return transaction priority | the service task runs entry and return at `SCHED_BOOST_CAP` (15), above the desktop share and the focused-VM preference, below device service; restored afterwards | none needed |
+| `guest-revoke` / park | 250 ms; 750 ms while the VM's own synthetic VGA BIOS transfer is in flight, which completes before the guest loses the adapter | revoke, skip capture, VM suspended, `-ETIMEDOUT` (f1-80) |
+| Parked VM | blocks on its wake queue (unhold, stop and resume wake it, 20 ms re-check); a suspended VM is not runnable, urgent or the focus preference | — |
+| `vga-capture` | registers, then only the plane pages the guest wrote since the last full synchronisation (PTE dirty bits accumulated over the session, cleared after each full BIOS transfer; kernel aperture writes are recorded too), page by page within 750 ms | stop at a page boundary, keep the captured pages, VM suspended, `-ETIMEDOUT`, desktop restored |
+| `desktop-restore` | native register restore as before (40 ms retrace waits, 100 us delays) | VBE mode set through the BIOS VM (f3-36), then repaint |
+| Step records | each return step waits at most 50 ms (200 ms per return) for its BOOT.LOG commit, then stays queued, so the last durable record names the step that did not finish | queued (f1-80) |
+| Stall report | the device-level cpustat task records `fullscreen_stall step=… step_ms=…` once a return step lasts 1 s, every 5 s after | — |
+| VM teardown during a switch | `dosvm_destroy` waits up to 3 s for the bounded transaction before any side effect; never from the transaction's own task | `-EBUSY`, VM retained |
+
+Each step record carries `step_ms` (time since the previous step record); one
+`[dosvm] fullscreen_return` record per return gives park, capture (pages
+captured/wanted and outcome), restore and total milliseconds. A non-owner
+kernel copy into the aperture (dosvm_read/write from another task) uses the
+model while a VM owns the adapter; the owner's copies mark the pages dirty.
+
 ## f3-43 lease and desktop-present amendment (2026-10-18)
 
 The [accelerator ownership amendment](savage-2d.md#f3-43-failed-acceleration-relinquishes-scanout-access)

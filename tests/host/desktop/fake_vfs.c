@@ -36,7 +36,7 @@ int fake_create(const char *p, enum fm_type type)
         memset(&fake_nodes[i], 0, sizeof(fake_nodes[i]));
         fake_nodes[i].live = 1; snprintf(fake_nodes[i].path, FM_PATH, "%s", p);
         fake_nodes[i].meta = (struct fm_meta){type, 0, (uint64_t)i + 1, fake_volume(p),
-                                               type == FM_DIR ? 0040777u : 0100666u, 1791700000 + i * 60, 0};
+                                               type == FM_DIR ? 0040777u : 0100666u, 1791700000 + i * 60, 0, 0, 0, 0};
         return i;
     }
     return -ENOSPC;

@@ -20,6 +20,7 @@ static time_t host_now(void *p) { struct note_main *m = p; return m->app.test ? 
 static void host_recent(const char *path) { (void)du_recent_add(path); }
 static void host_quit(void *p) { du_window_close(&((struct note_main *)p)->window); }
 static int close_request(struct du_window *w, void *p) { (void)w; return cn_close_request(p); }
+static void host_declined(void *p) { du_window_close_reply(&((struct note_main *)p)->window, 0); }
 
 /* Test-only milestones, as Files: a PING whose serial names the completed stage is queued after
  * the turn that rendered it and queued its DAMAGE, so the desktop presents that frame before it
@@ -105,7 +106,7 @@ int main(int argc, char **argv)
     }
     struct cn_app *a = &m->app;
     m->window.close_request = close_request; m->window.user = a;
-    a->fs = cn_native_fs(); a->now = host_now; a->quit = host_quit; a->portrait = portrait;
+    a->fs = cn_native_fs(); a->now = host_now; a->quit = host_quit; a->declined = host_declined; a->portrait = portrait;
     if (!test) a->recent = host_recent;   /* scripted runs keep the disk unchanged */
     a->host = m; a->test = test;
     if (test) a->checkpoint = on_checkpoint;

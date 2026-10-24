@@ -459,6 +459,17 @@ LRESULT W32API DispatchMessageA(const MSG *m) {
   if (!m->hwnd || m->message == WM_QUIT)
     return 0;
   LRESULT r = u32_invoke(m->hwnd, m->message, m->wParam, m->lParam);
+  if (m->message == WM_CLOSE) {
+    /* G3: the desktop's close was handled and the window lives on (the
+     * program's "Save changes?" was cancelled): decline, so the desktop
+     * ends its "Closing..." state. A destroyed window sent CLOSE instead. */
+    struct u32_window *w = u32_window(m->hwnd);
+    if (w && w->desktop_close && !w->destroying) {
+      static const uint8_t declined[4];
+      w->desktop_close = 0;
+      u32_wire(w, DESK_CLOSE_ACK, declined, sizeof(declined), -1);
+    }
+  }
   u32_flush();
   return r;
 }

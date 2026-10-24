@@ -464,16 +464,19 @@ static void return_logging_tests(void)
         assert(display_fullscreen_checkpoint("guest-revoke",0)==(failure ? -EIO : 0));
         assert(!display_fullscreen_end() && fbdev_get()->present && !suspended);
         assert(!fullscreen_recovering && !fullscreen_display);
-        assert(log_syncs==syncs && blackbox_syncs==raws);
-        assert(log_requests==(failure==2 ? 0u : 4u));
+        /* fx-22: return steps wait (bounded) for the FAT watermark the
+         * storage worker commits; still no raw-trail sync on the caller. */
+        assert(blackbox_syncs==raws);
+        assert(log_syncs-syncs==(failure==2 ? 0u : 4u) && !log_requests);
         assert(log_errors==(failure ? 1u : 0u));
         assert(g_ticks-start<=50 && g_ticks-start<=NATIVE_RETURN_MS);
         printf("F1-80 display return log failure=%u watchdog-return->desktop-restored=%llums synchronous_io=0 errors=%u PASS\n",
                failure,(unsigned long long)(g_ticks-start),log_errors);
         /* The next entry must regain its synchronous durability gate. */
         log_sync_error=0;log_active=true;
+        unsigned returned=log_syncs;
         assert(!display_fullscreen_checkpoint("vm-park",0));
-        assert(log_syncs==syncs+1 && blackbox_syncs==raws+1);
+        assert(log_syncs==returned+1 && blackbox_syncs==raws+1);
     }
 }
 static int native_sync(void *p) { return *(bool *)p ? -EIO : 0; }

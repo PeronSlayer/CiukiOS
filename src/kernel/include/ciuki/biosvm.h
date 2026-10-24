@@ -45,6 +45,19 @@ struct apm_port_window;
 int biosvm_apm_set_window(const struct apm_port_window *w);
 struct biosvm_apm_io { uint64_t allowed, writes, absorbed, denied; };
 void biosvm_apm_io_snapshot(struct biosvm_apm_io *out);
+/* fx-25: why the last BIOS VM call failed (zeroed after a successful one).
+ * reason: port_denied, halted, halted_at_sentinel, timeout, page_fault,
+ * emulation (an instruction the monitor refused), cpu_fault or error; budget_ms is the caller's, deadline_ms what remained
+ * after queueing. Also logged as one `[biosvm] step=failure` record. */
+struct biosvm_failure {
+    int error;
+    uint16_t function, cs, ip, ss, sp, port;
+    uint8_t interrupt, vector, width;
+    bool write;
+    const char *reason;
+    uint32_t elapsed_ms, deadline_ms, budget_ms;
+};
+void biosvm_last_failure(struct biosvm_failure *out);
 /* Only fbdev's quiesced transaction calls this kernel-only entry. 4F02
  * (LFB), 4F01 into private scratch, 4F03 readback; serialized as one request.
  * No allowlist widening for biosvm_call or DOS guests. */

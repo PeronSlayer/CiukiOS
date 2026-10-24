@@ -4,6 +4,12 @@
 #include "../../../apps/libdeskui/v3.h"
 #include <w32/server.h>
 #include <w32/user_surface.h>
+BOOL u32_clip_call(UINT, HWND, UINT, DWORD, const void *, DWORD, struct w32r_reply *, void *, DWORD);
+void u32_clip_event(const struct desk_packet *);
+BOOL u32_clip_rendering(void);
+BOOL u32_clip_has_delayed(void);
+void u32_clip_abandon(DWORD);
+void u32_clip_render_all(HWND, BOOL);
 #define U32_WINDOWS 128
 #define U32_CLASSES 64
 #define U32_THREADS 64
@@ -43,6 +49,7 @@ struct u32_window {
   RECT rect;
   UINT z;
   uint32_t wire, generation, serial, ping;
+  uint32_t limits[4]; /* G4: WM_GETMINMAXINFO track sizes the desktop was told (client pixels) */
   struct u32_surface surface;
   struct u32_region update, damage;
   struct u32_prop *props;
@@ -53,6 +60,8 @@ struct u32_window {
   DWORD lease_w, lease_h, lease_bpp;
   BOOL lease_wanted;
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
+  BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_CLOSE; a window that survives its
+                         * dispatch (the user cancelled the program's prompt) declines with CLOSE_ACK 0 */
   /* f5-10C classic state: control/dialog records, menus, scroll bars. */
   void *control, *dialog;
   HANDLE menu, system_menu;

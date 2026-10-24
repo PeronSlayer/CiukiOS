@@ -27,6 +27,7 @@ struct cn_app {
     void (*checkpoint)(struct cn_app *, int stage); /* test mode only */
     int (*portrait)(uint32_t *pixels256);           /* the approved portrait (XRGB 256x256) */
     void (*recent)(const char *path);               /* recent documents list (libdeskui recent.h); NULL in tests */
+    void (*declined)(void *);                       /* G3: the user cancelled an exit (decline the close / veto the session) */
     void *host;
     int test, stage;
     /* document */

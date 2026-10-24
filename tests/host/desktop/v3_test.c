@@ -531,9 +531,15 @@ static void close_and_native_tasks(void)
     for (unsigned k=0;k<fake_sent;k++) if (fake_messages[k].data[1]==DESK_WINDOW_INFO) {
         struct desk_packet p; assert(desk_parse(&fake_messages[k],0,NULL,&p)); if (!strcmp(p.title,"A?")) found++;
     }
-    assert(found==1); d.terminate=end_process; assert(!desk_task_end(&d,d.clients[a].window_id,42) && ended==1);
+    /* G3 (Windows 98 Close Program): End Task first asks the window to close
+     * (WM_CLOSE); on a window already closing it offers "This program is not
+     * responding", whose End Task kills the authenticated host process. */
+    assert(found==1); d.terminate=end_process;
+    assert(!desk_task_end(&d,d.clients[a].window_id,42) && !ended && d.clients[a].closing && !d.end_task.kind);
+    assert(!desk_task_end(&d,d.clients[a].window_id,42) && !ended && d.end_task.kind==DESK_HANG_NOT_RESPONDING && d.end_task.pid==42);
+    desk_end_task_choice(&d,1); assert(ended==1 && !d.end_task.kind);
     msg(&m,DESK_V3_LEASE,16,1,1); assert(!desk_v3_receive(&d,root,&m)); flush(); cleanup();
-    puts("PASS window Close/decline without process timer, native ASCII task view, End Task independent of guest UI, idempotent lease release");
+    puts("PASS window Close/decline without process timer, native ASCII task view, End Task asks then offers Not Responding (kill independent of guest UI), idempotent lease release");
 }
 static void frame(const char *folder,const char *theme,const char *name)
 {

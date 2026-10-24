@@ -142,7 +142,8 @@ struct fat_transaction_guard {
 #define FAT_TRANSACTION_CLUSTERS 256u
 enum fat_transaction_op { FAT_TX_CREATE, FAT_TX_WRITE, FAT_TX_LOG_WRITE,
     FAT_TX_COMMIT, FAT_TX_REMOVE, FAT_TX_RENAME, FAT_TX_LOOKUP, FAT_TX_PUBLISH, FAT_TX_EXTEND,
-    FAT_TX_RENAME_REPLACE, FAT_TX_TRUNCATE, FAT_TX_RESERVE, FAT_TX_NEXT, FAT_TX_SET_METADATA };
+    FAT_TX_RENAME_REPLACE, FAT_TX_TRUNCATE, FAT_TX_RESERVE, FAT_TX_NEXT, FAT_TX_SET_METADATA,
+    FAT_TX_SET_LABEL /* G6: name = 11 padded label bytes */ };
 struct fat_transaction_args {
     enum fat_transaction_op op;
     struct fat_entry *entry;
@@ -278,6 +279,7 @@ int fat_remove(struct fat_volume *, struct fat_entry *, bool directory);
 int fat_rename(struct fat_volume *, struct fat_entry *, uint32_t new_parent, const char *new_name);
 int fat_rename_replace(struct fat_volume *,struct fat_entry *,struct fat_entry *,uint32_t,const char *,bool);
 int fat_set_metadata(struct fat_volume *, struct fat_entry *, uint8_t attr, const struct fat_times *);
+int fat_set_label(struct fat_volume *, const char label[11]);
 /* Useful to host/probe diagnostics; bounded, does not expose a private cache. */
 int fat_get_cluster(struct fat_volume *, uint32_t cluster, uint32_t *value);
 void fat_revoke_write(struct fat_volume *, const char *reason, uint32_t cluster);

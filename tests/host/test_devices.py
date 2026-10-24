@@ -89,6 +89,36 @@ class DeviceTests(unittest.TestCase):
                 image.write_png(target / (path.stem + '.png'), width, height, image.xrgb_to_rgb(path.read_bytes()))
             print(r.stdout.strip())
 
+    def test_datetime_properties(self):
+        """G1: Date/Time Properties (datetime_control_test.c) and its pinned renders."""
+        with self.scratch() as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS='detect_leaks=0')
+            binary = folder / 'datetime'
+            icons = load('datetime_icons', ROOT / 'tests/host/desktop/icon_assets.py')
+            sources = ['tests/host/desktop/datetime_control_test.c', 'src/kernel/lib/tzrule.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
+                       *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
+                       *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
+            ft = load('datetime_freetype', ROOT / 'sdk/freetype/build.py'); library = ft.host()
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
+                            *icons.defines(), '-I', str(ROOT / 'src/kernel/include'), '-I', str(ROOT / 'apps/control'),
+                            '-I', str(ROOT / 'tests/host/desktop'),
+                            '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include'), *ft.includes(), '-pthread', *(str(ROOT / s) for s in sources), str(library), '-lm', '-o', str(binary)], check=True, env=env)
+            frames = folder / 'frames'; frames.mkdir()
+            r = subprocess.run([binary, icons.portrait(), frames], env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('PASS date/time properties', r.stdout)
+            image = load('datetime_png', ROOT / 'tests/host/desktop/test_desktop.py')
+            target = ROOT / 'build/host/g1'; target.mkdir(parents=True, exist_ok=True)
+            captures = sorted(frames.glob('*.xrgb'))
+            self.assertEqual([p.stem for p in captures], ['control-datetime-date', 'control-datetime-edited', 'control-datetime-zone'])
+            for path in captures:
+                width, height = map(int, path.with_suffix('.size').read_text().split())
+                image.control_frame(self, path.stem, path.read_bytes(), width, height)
+                image.write_png(target / (path.stem + '.png'), width, height, image.xrgb_to_rgb(path.read_bytes()))
+            print(r.stdout.strip())
+
     def test_network_worker(self):
         with self.scratch() as temp:
             binary=Path(temp)/'network-worker'

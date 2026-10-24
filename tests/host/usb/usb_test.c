@@ -226,6 +226,7 @@ struct model {
     struct usb_host *sleep_host;
     unsigned frame_ms; /* Independent HC clock; zero keeps the 1 ms model. */
     uint64_t reset_at[2], recovery_at[2];
+    bool release_pending[2]; /* fx-21: reset released, PE not yet written */
     unsigned root_resets[2], root_enables[2], root_acks[2], hub_acks[USB_PORT_MAX];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool fatal_reassert, gate_stuck, source_stuck, run_stuck, halt_stuck, bme_stuck;
@@ -471,10 +472,16 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
             m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->reset_at[p]=m->now;m->root_resets[p]++;m->dev[p].reset_series++;
         }
         if(!(value&0x200) && (old&0x200)) {
-            assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;
+            assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;m->release_pending[p]=true;
         }
         if((value&4) && !(old&4) && (old&1)) {
-            assert(!(value&0x200) && m->now-m->recovery_at[p]>=1);m->root_enables[p]++;
+            /* fx-21: PE follows the reset release in the same IRQ-off section
+             * (Linux uhci_check_ports: 10 us), never after a task sleep: an
+             * idle port for more than 3 ms suspends the device in the Default
+             * state (USB 2.0 7.1.7.6). A later PE recovery is not a reset. */
+            assert(!(value&0x200));
+            if(m->release_pending[p]) assert(m->now==m->recovery_at[p]);
+            m->release_pending[p]=false;m->root_enables[p]++;
         }
         /* QEMU preserves RO bits, accepts PE only for CCS, and clears
          * CSC/PEC only on an explicit write of one (uhci_port_write). */
@@ -891,7 +898,11 @@ static void errors(bool ohci)
     setup(ohci,false);m.reset_stuck=true;uint64_t begin=m.now;assert(attach()<0 && m.host.quarantined && m.now-begin<=600);
     for(unsigned i=0;i<lease_count;i++)assert(leases[i].state==RS_QUARANTINED);
     setup(ohci,false);assert(!attach());m.silent=true;begin=m.now;
-    model_step();assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<7500);
+    /* fx-21b: two NAKing devices, each 2 series x 3 attempts of one 5 s
+     * enumeration message (+ two-frame retirement), 4 x 100 ms pauses, two
+     * 60 ms resets and the 100 ms debounce (was 7500 ms at 500 ms/stage). */
+    const uint64_t bound=2u*(6u*(USB_CTRL_TIMEOUT_MS+20u)+4u*100u+2u*60u+100u);
+    model_step();assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<bound);
     assert(descriptor_failures==12 && descriptor_results==descriptor_starts);
     setup(ohci,false);assert(!attach());m.malformed=true;model_step();assert(m.host.devices[0].quarantined);
     setup(ohci,false);assert(!attach());model_step();m.freeze=true;

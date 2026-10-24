@@ -5,6 +5,7 @@
  * comments (outside double quotes), case-insensitive section and key names
  * and yes/no values. Anything the schema does not define stops Setup with a
  * status id; nothing is guessed. */
+#include <ciuki/tzdata.h>
 #include "setup.h"
 #include <errno.h>
 #include <stdarg.h>
@@ -193,8 +194,20 @@ static int components(struct setup_answers *a, const char *v, size_t n, int *dep
     return 0;
 }
 
+/* G1: an IANA identifier of the bundled list (daylight-saving rule
+ * included, e.g. Europe/Rome), or a fixed "+hh:mm" offset as before. */
 static int time_zone(struct setup_answers *a, const char *v, size_t n)
 {
+    if (n && n < sizeof(a->tz_zone) && v[0] != '+' && v[0] != '-') {
+        char id[sizeof(a->tz_zone)];
+        memcpy(id, v, n); id[n] = 0;
+        int zone = ciuki_tz_find(id);
+        if (zone < 0) return -1;
+        memcpy(a->tz_zone, id, n + 1);
+        a->tz_minutes = ciuki_tz_zones[zone].minutes;
+        return 0;
+    }
+    a->tz_zone[0] = 0;
     if (n != 6 || (v[0] != '+' && v[0] != '-') || v[3] != ':') return -1;
     for (int i = 1; i < 6; i++) if (i != 3 && (v[i] < '0' || v[i] > '9')) return -1;
     int hours = (v[1] - '0') * 10 + (v[2] - '0'), minutes = (v[4] - '0') * 10 + (v[5] - '0');

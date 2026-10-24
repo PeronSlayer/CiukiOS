@@ -401,6 +401,7 @@ static int gate_folder_list(void *ctx,const char *path,unsigned flags,fm_emit em
     (void)ctx; struct fm_meta meta={.type=FM_DIR};
     if (!strcmp(path,"/")) return emit("Documents",&meta,arg);
     if (!strcmp(path,"/Documents")) return emit("Desktop",&meta,arg);
+    if (!strcmp(path,"/Documents/Trash") || !strcmp(path,"/RECYCLED")) return -ENOENT;   /* G2: the Recycle Bin icon's poll */
     assert(!strcmp(path,DESK_FOLDER));
     /* Initial/explicit browser reads are cheap too; stall only the poll. */
     if (flags==FM_LIST_NAMES_ONLY && !pthread_equal(pthread_self(),gate_main_thread)) {
@@ -411,7 +412,7 @@ static int gate_folder_list(void *ctx,const char *path,unsigned flags,fm_emit em
     return emit(atomic_load(&gate_folder_release) ? "External.txt" : "Original.txt",&meta,arg);
 }
 static int gate_folder_stat(void *ctx,const char *path,struct fm_meta *meta)
-{ (void)ctx; assert(!strcmp(path,DESK_FOLDER)); *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+{ (void)ctx; if (!strcmp(path,"/RECYCLED/INFO2")) return -ENOENT; assert(!strcmp(path,DESK_FOLDER)); *meta=(struct fm_meta){.type=FM_DIR}; return 0; }   /* G2: the Recycle Bin icon's poll */
 static void gate_folder_poll(void)
 {
     static struct desktop d; const struct desk_ops ops={0};
