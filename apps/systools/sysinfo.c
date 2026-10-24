@@ -52,7 +52,11 @@ void si_build(struct si_tree *t, const struct si_input *in)
     int conflicts = add(t, hw, SI_CATEGORY, "Conflicts/Sharing", NULL);
     unsigned n_conf = 0, n_share = 0;
     for (unsigned i = 0; i < count; i++)
-        for (unsigned j = i + 1; j < count; j++)
+        for (unsigned j = i + 1; j < count; j++) {
+            const struct ciuki_device_record *x = &d->devices[i], *y = &d->devices[j];
+            /* Two records of one PCI function (the bus entry and its driver's view) share its resources by design. */
+            if (x->vendor && x->vendor == y->vendor && x->device == y->device && x->bus == y->bus &&
+                x->slot == y->slot && x->function == y->function) continue;
             for (unsigned a = 0; a < d->devices[i].resource_count && a < CIUKI_DEVICE_RESOURCES; a++)
                 for (unsigned b = 0; b < d->devices[j].resource_count && b < CIUKI_DEVICE_RESOURCES; b++)
                     if (overlap(&d->devices[i].resources[a], &d->devices[j].resources[b])) {
@@ -67,6 +71,7 @@ void si_build(struct si_tree *t, const struct si_input *in)
                             add(t, conflicts, SI_ITEM, what, "Conflict: %s / %s", d->devices[i].name, d->devices[j].name);
                         }
                     }
+        }
     t->conflicts = n_conf;
     if (!n_conf && !n_share) snprintf(t->n[conflicts].value, SI_VALUE, "No conflicts");
     else snprintf(t->n[conflicts].value, SI_VALUE, "%u conflict(s), %u shared IRQ(s)", n_conf, n_share);

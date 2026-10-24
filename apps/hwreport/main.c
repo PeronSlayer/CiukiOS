@@ -215,7 +215,7 @@ int main(int argc,char **argv)
     a->window.user=a; a->window.message=message;
     a->ui.user=a; a->ui.event=event;
     labels(&a->ui,20,8,hr_summary);
-    labels(&a->ui,30,60,hr_privacy);
+    labels(&a->ui,30,76,hr_privacy);
     struct du_widget *preview=du_add(&a->ui,DU_TEXTAREA,PREVIEW,(struct du_rect){12,126,616,246},"");
     preview->data=&a->preview; a->preview.readonly=1;
     du_add(&a->ui,DU_BUTTON,LOGS,(struct du_rect){12,378,300,24},"Include optional full logs")->disabled=1;
