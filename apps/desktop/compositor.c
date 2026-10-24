@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Integer-only CPU compositor. All drawing is clipped before pixel access. */
 #include "desktop.h"
+#include "saver.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1000,13 +1001,8 @@ static void saver_scene(struct desktop *d, struct desk_box clip)
     fill(d,clip,clip,0);
     uint64_t frame=d->now_ns/50000000ull;
     if (d->saver_kind==1 && d->portrait) {
-        unsigned size=d->width<256 ? d->width : 256;
-        if (size>d->height) size=d->height;
-        unsigned wx=d->width-size, hy=d->height-size;
-        unsigned x=wx ? (unsigned)(frame%((uint64_t)wx*2)) : 0;
-        unsigned y=hy ? (unsigned)(frame%((uint64_t)hy*2)) : 0;
-        if (x>wx) x=wx*2-x;
-        if (y>hy) y=hy*2-y;
+        struct desk_saver_sprite logo=desk_saver_logo(d->width,d->height,frame);
+        unsigned size=logo.size,x=(unsigned)logo.x,y=(unsigned)logo.y;
         /* Nearest-neighbour size conversion of the pinned approved raster. */
         struct desk_box b;
         if (size && desk_intersect((struct desk_box){(int)x,(int)y,(int)size,(int)size},clip,&b))
@@ -1016,11 +1012,8 @@ static void saver_scene(struct desktop *d, struct desk_box clip)
     } else if (d->saver_kind==2 && d->width && d->height) {
         /* Fixed seeds, bounded integer projection; no allocations or FPU. */
         for (unsigned i=0;i<96;i++) {
-            unsigned z=1+(unsigned)((i*53u+255u-(unsigned)(frame%255))%255);
-            int x=(int)d->width/2+((int)(i*7919u%2049)-1024)*128/(int)z;
-            int y=(int)d->height/2+((int)(i*3571u%1537)-768)*128/(int)z;
-            unsigned c=255-z/2;
-            fill(d,clip,(struct desk_box){x,y,z<64 ? 2 : 1,z<64 ? 2 : 1},c*0x010101u);
+            struct desk_saver_sprite star=desk_saver_star(d->width,d->height,frame,i);
+            fill(d,clip,(struct desk_box){star.x,star.y,(int)star.size,(int)star.size},star.colour);
         }
     }
 }

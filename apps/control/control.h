@@ -38,7 +38,8 @@
 #define CP_WALLPAPERS 40
 enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_DISPLAY_TABS };
 enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
-enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS };
+enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS, CP_SAVER_PASSWORD, CP_SAVER_CHANGE, CP_SAVER_POWER,
+       CP_SAVER_NONE, CP_SAVER_BLANK, CP_SAVER_LOGO, CP_SAVER_STARS, CP_SAVER_UP, CP_SAVER_DOWN };
 #define CP_LOG_BYTES 8192u
 #define CP_LOG_FILE "/system/logs/BOOT.LOG"
 #define CP_FONTS_MAX 32
@@ -95,6 +96,7 @@ struct cp_host {
     void (*decode_cancel)(void *);
     void (*log)(void *, const char *line);                            /* serial record, optional */
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
+    int (*open_applet)(void *, int page); /* separate Display or Power Management window */
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
@@ -158,7 +160,7 @@ struct cp_app {
 
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
-    struct du_item saver_items[3];
+    struct du_menu_item saver_items[4];
     struct du_item network_items[2], network_tabs[3];
     char network_names[2][64], network_message[96], network_test_name[128];
     unsigned network_selected, network_tab;
@@ -289,6 +291,7 @@ int cp_display_leave(struct cp_app *);
 int cp_close(struct cp_app *);
 void cp_adapter_paint(struct cp_app *, struct du_canvas *);
 const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size);
+int cp_applet_message(struct ciuki_message *, uint32_t serial, int page);
 void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned request, int value, int flag);
 void cp_fonts_build(struct cp_app *);
 void cp_fonts_paint(struct cp_app *, struct du_canvas *);

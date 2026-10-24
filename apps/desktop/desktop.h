@@ -84,7 +84,7 @@ struct desk_gfx_stats {
     uint64_t convert_ns,copy_ns,slot_ns;
 };
 struct desk_client {
-    int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
+    int channel, surface, hello, window, unresponsive, ping_pending, ping_queued, resync_pending;
     int configure_pending, focus_pending, close_pending;
     int commit_pending, resizable, zoomed;
     unsigned cursor;

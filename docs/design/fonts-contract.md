@@ -433,3 +433,14 @@ passes the suite predicates through the runner's evidence parser. Host
 figures do not establish guest latency: a glyph miss costs one w32srv round
 trip of two or three fragments, and w32srv now yields instead of sleeping
 10 ms while a transaction is in flight (20 ms window).
+
+## fx-28 built-in atlas coverage
+
+`apps/desktop/font_codes.h` is the single atlas-index definition shared by the
+converter, compositor and toolkit (including the textarea). Existing indices
+remain unchanged. Additions cover hyphens, en/em dashes, curly quotes, chevron,
+euro, four arrows and minus; Latin-1 already covers degree, multiplication and
+copyright. The pinned font sources and licences are unchanged. The system-string
+audit parses all apps C string literals, including UTF-8 hex/octal escapes; control
+characters and byte-order signatures are not UI glyphs. Converter checks reject
+missing additional glyphs, with Inconsolata U+2011 using ordinary hyphen ink.

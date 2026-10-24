@@ -2,11 +2,13 @@
  * Control Panel pages (control.h). Settings I/O goes through cp_host; the
  * optional Fonts page reads its trusted store through libfont. */
 #include "control.h"
+#include "../desktop/saver.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
+#define CP_T_SAVER 701
 #define CP_T_PREVIEW 700   /* timer id of the deferred wallpaper preview (outside the widget ids) */
 enum {
     C_TABS = 1, C_CLOSE, C_STATUS,
@@ -234,11 +236,60 @@ static void preview_blit(struct du_canvas *c, int x, int y, const uint32_t *src)
         memcpy(c->pixels + (size_t)row * (size_t)c->width + (size_t)x0, src + (row - y) * 192 + (x0 - x), (size_t)(x1 - x0) * sizeof(uint32_t));
 }
 static void put(struct du_canvas *c, int x, int y, int w, int h, uint32_t colour) { du_fill(c, (struct du_rect){x, y, w, h}, colour); }
+/* A live miniature of the selected built-in saver, clipped to the CRT. */
+static void saver_monitor(struct cp_app *a, struct du_canvas *c)
+{
+    du_fill(c,(struct du_rect){198,44,164,126},DU_FACE);
+    du_edge(c,(struct du_rect){198,44,164,126},DU_RAISED);
+    du_edge(c,(struct du_rect){206,52,148,112},DU_SUNKEN);
+    struct du_rect screen={208,54,144,108}, clip=c->clip;
+    c->clip=du_intersection(clip,screen); du_fill(c,screen,0xff000000u);
+    uint64_t frame=a->ui->now/50000000ull;
+    unsigned sw=a->host.screen_w ? a->host.screen_w : 1024,sh=a->host.screen_h ? a->host.screen_h : 768;
+    if (!a->cfg.saver_enabled) {
+        du_fill(c,screen,desk_theme->desktop);
+        du_text_fit(c,224,104,112,"CiukiOS",DU_HILITE);
+    } else if (a->cfg.saver_kind==1 && a->host.portrait) {
+        struct desk_saver_sprite logo=desk_saver_logo(sw,sh,frame);
+        /* Render the same bouncing portrait in miniature, nearest neighbour. */
+        int x=screen.x+logo.x*screen.w/(int)sw,y=screen.y+logo.y*screen.h/(int)sh;
+        int w=(int)logo.size*screen.w/(int)sw,h=(int)logo.size*screen.h/(int)sh;
+        for (int j=0;j<h;j++) for (int i=0;i<w;i++)
+            du_fill(c,(struct du_rect){x+i,y+j,1,1},a->host.portrait[(j*256/h)*256+i*256/w]);
+    } else if (a->cfg.saver_kind==2) {
+        for (unsigned k=0;k<96;k++) {
+            struct desk_saver_sprite star=desk_saver_star(sw,sh,frame,k);
+            if (star.x<0 || star.y<0 || star.x>=(int)sw || star.y>=(int)sh) continue;
+            du_fill(c,(struct du_rect){screen.x+star.x*screen.w/(int)sw,screen.y+star.y*screen.h/(int)sh,1,1},star.colour);
+        }
+    }
+    c->clip=clip;
+    struct du_widget *combo=du_get(a->ui,CP_SAVER_KIND);
+    if (combo) {
+        struct du_rect b=combo->box;
+        du_well(c,b,DU_WINDOW);
+        du_text(c,b.x+5,b.y+8,combo->text,DU_INK);
+        du_raised(c,(struct du_rect){b.x+b.w-22,b.y+2,20,b.h-4},combo->pressed,combo->hot);
+        du_triangle(c,b.x+b.w-12,b.y+b.h/2,1,3,DU_INK);
+        if (a->ui->focus==(int)(combo-a->ui->widgets)) du_dotted(c,(struct du_rect){b.x+3,b.y+3,b.w-28,b.h-6});
+    }
+    for (int id=CP_SAVER_UP;id<=CP_SAVER_DOWN;id++) {
+        struct du_widget *arrow=du_get(a->ui,id);
+        if (arrow) {
+            du_raised(c,arrow->box,arrow->pressed,arrow->hot);
+            du_triangle(c,arrow->box.x+10,arrow->box.y+6,id==CP_SAVER_UP ? 0 : 1,3,arrow->disabled ? DU_GRAY : DU_INK);
+        }
+    }
+    du_fill(c,(struct du_rect){260,170,40,5},DU_SHADOW);
+    du_edge(c,(struct du_rect){244,175,72,5},DU_RAISED_THIN);
+}
+
 static void paint(struct du_ui *u, void *user)
 {
     struct cp_app *a = user;
     struct du_canvas *c = &u->canvas;
-    if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) {
+    if (a->page==CP_DISPLAY && a->display_tab==CP_SCREEN_SAVER) saver_monitor(a,c);
+    else if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) {
         if (!a->preview_valid) {
             /* An image wallpaper not decoded yet: paint the desktop colour now and
              * decode after this frame (timer), so the window never opens black
@@ -471,6 +522,11 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (cp_pack_event(a, e)) return;
     int save = 0;
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ESC) { cp_close(a); return; }
+    if (e->type==DU_EV_KEY && a->page==CP_DISPLAY && a->display_tab==CP_SCREEN_SAVER &&
+        du_focused(u)==CP_SAVER_WAIT && (e->key==DU_KEY_UP || e->key==DU_KEY_DOWN)) {
+        struct du_event arrow={.type=DU_EV_ACTIVATE,.id=e->key==DU_KEY_UP ? CP_SAVER_UP : CP_SAVER_DOWN};
+        event(u,&arrow,user); return;
+    }
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ENTER && a->page == CP_DISPLAY) {
         struct du_event ok = {.type=DU_EV_ACTIVATE,.id=CP_OK}; event(u,&ok,user); return;
     }
@@ -483,6 +539,11 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (cp_fonts_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
         a->preview_pending=2; a->preview_valid=0; du_invalidate(u,(struct du_rect){24,44,208,188});
+        return;
+    }
+    if (e->type==DU_EV_TICK && e->id==CP_T_SAVER) {
+        if (a->page==CP_DISPLAY && a->display_tab==CP_SCREEN_SAVER)
+            du_invalidate(u,(struct du_rect){208,54,144,108});
         return;
     }
     if (dt_event(a, e)) return;
@@ -549,8 +610,12 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case C_APPLETS:
-        if (e->type == DU_EV_OPEN && e->index >= 0 && (unsigned)e->index < du_get(u,C_APPLETS)->count)
-            cp_open(a, a->applet_pages[e->index]);
+        if (e->type == DU_EV_OPEN && e->index >= 0 && (unsigned)e->index < du_get(u,C_APPLETS)->count) {
+            int page=a->applet_pages[e->index];
+            if (page==CP_DISPLAY && a->host.open_applet) {
+                if (a->host.open_applet(a->host.ctx,page)) text(a,C_STATUS,"Display Properties could not be opened.");
+            } else cp_open(a,page);
+        }
         break;
     case 976:
         if(e->type==DU_EV_ACTIVATE && a->host.accel_retry){
@@ -581,18 +646,49 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case CP_SAVER_KIND:
-        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<3) { a->cfg.saver_kind=e->index; save=1; }
+        if (e->type==DU_EV_ACTIVATE) {
+            struct du_widget *w=du_get(u,CP_SAVER_KIND);
+            du_popup(u,a->saver_items,4,w->box.x,w->box.y+w->box.h,CP_SAVER_KIND);
+        }
         break;
-    case CP_SAVER_ENABLE:
-        if (e->type==DU_EV_ACTIVATE) { a->cfg.saver_enabled=!a->cfg.saver_enabled; save=1; build(a); }
-        break;
-    case CP_SAVER_WAIT:
-    case CP_MONITOR_WAIT:
-        if (e->type==DU_EV_CHANGE && e->index>=0 && e->index<=1440) {
-            if (e->id==CP_SAVER_WAIT) a->cfg.saver_seconds=e->index*60;
-            else a->cfg.monitor_seconds=e->index*60;
+    case CP_SAVER_NONE: case CP_SAVER_BLANK: case CP_SAVER_LOGO: case CP_SAVER_STARS:
+        if (e->type==DU_EV_ACTIVATE) {
+            int choice=e->id-CP_SAVER_NONE;
+            a->cfg.saver_enabled=choice!=0;
+            if (choice) {
+                a->cfg.saver_kind=choice-1;
+                if (a->cfg.saver_seconds<60) a->cfg.saver_seconds=60;
+                if (a->cfg.saver_seconds>86400) a->cfg.saver_seconds=86400;
+            }
             save=1; build(a);
         }
+        break;
+    case CP_SAVER_UP: case CP_SAVER_DOWN:
+        if (e->type==DU_EV_ACTIVATE) {
+            int value=a->cfg.saver_seconds/60+(e->id==CP_SAVER_UP ? 1 : -1);
+            if (value>=1 && value<=1440) { a->cfg.saver_seconds=value*60; save=1; build(a); du_focus(u,CP_SAVER_WAIT); }
+        }
+        break;
+    case CP_SAVER_WAIT:
+        if (e->type==DU_EV_COMMIT) {
+            char value[16]; snprintf(value,sizeof(value),"%d",a->cfg.saver_seconds/60);
+            du_set_text(du_get(u,CP_SAVER_WAIT),value); du_invalidate_widget(u,CP_SAVER_WAIT);
+        }
+        if (e->type==DU_EV_CHANGE) {
+            const char *s=du_get(u,CP_SAVER_WAIT)->text; char *end;
+            long value=strtol(s,&end,10);
+            if (*s && !*end && value>=1 && value<=1440) { a->cfg.saver_seconds=(int)value*60; save=1; }
+        }
+        break;
+    case CP_MONITOR_WAIT:
+        if (e->type==DU_EV_CHANGE && e->index>=0 && e->index<=1440) {
+            a->cfg.monitor_seconds=e->index*60; save=1; build(a);
+        }
+        break;
+    case CP_SAVER_POWER:
+        if (e->type==DU_EV_ACTIVATE && a->host.open_applet &&
+            a->host.open_applet(a->host.ctx,CP_POWER))
+            text(a,C_STATUS,"Power Management could not be opened.");
         break;
     case CP_SAVER_SETTINGS:
         if (e->type==DU_EV_ACTIVATE)
@@ -1240,6 +1336,7 @@ static unsigned power_read(struct cp_app *a)
 static void build(struct cp_app *a)
 {
     a->building=1;
+    du_timer_stop(a->ui,CP_T_SAVER);
     struct du_ui *u = a->ui;
     du_release(u); du_dialog_close(u);
     u->count = 0; u->focus = -1;
@@ -1305,21 +1402,26 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,971,240,88,292,16,"Installed fonts can be previewed below.");
             cp_fonts_build(a);
         } else if (a->display_tab==CP_SCREEN_SAVER) {
-            static const char *const names[]={"Blank","Ciuki logo","Starfield"};
-            add(a,DU_LABEL,1979,24,44,200,16,"Screen saver:");
-            for (int k=0;k<3;k++) a->saver_items[k]=(struct du_item){.text={names[k]},.selected=k==a->cfg.saver_kind};
-            w=add(a,DU_LISTVIEW,CP_SAVER_KIND,24,66,230,84,"");
-            w->items=a->saver_items; w->count=3; w->active=(unsigned)a->cfg.saver_kind; list_style(w,"Saver");
-            add(a,DU_BUTTON,CP_SAVER_ENABLE,24,166,230,24,a->cfg.saver_enabled ? "Enabled: Yes" : "Enabled: No");
-            char wait[80]; snprintf(wait,sizeof(wait),"Wait: %d minutes (0 = Never)",a->cfg.saver_seconds/60);
-            add(a,DU_LABEL,1978,24,208,350,16,wait);
-            w=add(a,DU_SCROLLBAR,CP_SAVER_WAIT,24,232,350,18,"");
-            w->vertical=0; w->total=1441; w->page=1; w->value=a->cfg.saver_seconds/60;
-            add(a,DU_BUTTON,CP_SAVER_PREVIEW,280,66,120,24,"Preview");
-            add(a,DU_BUTTON,CP_SAVER_SETTINGS,280,100,120,24,"Settings...");
-            add(a,DU_LABEL,1977,24,278,480,16,"Preview ends when you move the mouse or press a key.");
-            add(a,DU_LABEL,1976,24,302,480,16,"These savers have no additional settings.");
-            add(a,DU_LABEL,1975,24,326,480,16,"Monitor power: Power applet. Password protection: unavailable.");
+            static const char *const names[]={"(None)","Blank","Ciuki logo","Starfield"};
+            int choice=a->cfg.saver_enabled ? a->cfg.saver_kind+1 : 0;
+            add(a,DU_GROUP,1979,24,180,CP_WIDTH-48,126,"Screen saver");
+            for (int k=0;k<4;k++) a->saver_items[k]=(struct du_menu_item){names[k],CP_SAVER_NONE+k,0,0,k==choice ? DU_ITEM_CHECKED : 0};
+            w=add(a,DU_BUTTON,CP_SAVER_KIND,40,202,234,24,names[choice]);
+            add(a,DU_BUTTON,CP_SAVER_SETTINGS,286,202,104,24,"Settings...")->disabled=!choice;
+            add(a,DU_BUTTON,CP_SAVER_PREVIEW,400,202,104,24,"Preview")->disabled=!choice || !a->host.apply;
+            add(a,DU_CHECKBOX,CP_SAVER_PASSWORD,40,232,210,22,"Password protected")->disabled=1;
+            add(a,DU_BUTTON,CP_SAVER_CHANGE,400,232,104,22,"Change...")->disabled=1;
+            add(a,DU_LABEL,1977,40,266,42,18,"&Wait:");
+            char wait[16]; snprintf(wait,sizeof(wait),"%d",a->cfg.saver_seconds/60);
+            w=add(a,DU_EDIT,CP_SAVER_WAIT,94,262,50,24,wait); w->disabled=!choice; w->edit_up_down=1;
+            add(a,DU_BUTTON,CP_SAVER_UP,144,262,20,12,"+")->disabled=!choice;
+            add(a,DU_BUTTON,CP_SAVER_DOWN,144,274,20,12,"-")->disabled=!choice;
+            add(a,DU_LABEL,1978,174,266,90,16,"minutes");
+            add(a,DU_LABEL,1976,40,288,460,14,"Password protection unavailable: session lock is not installed.");
+            add(a,DU_GROUP,1975,24,316,CP_WIDTH-48,42,"Energy saving features of monitor");
+            add(a,DU_LABEL,1974,40,336,338,16,"Configure monitor power saving.");
+            add(a,DU_BUTTON,CP_SAVER_POWER,400,330,104,24,"Settings...")->disabled=!a->host.open_applet;
+            if (choice>1) du_timer_start(u,CP_T_SAVER,100000000ull,1);
         } else {
             add(a,DU_LABEL,CP_AREA_LABEL,24,44,232,16,"Resolution:");
             w=add(a,DU_LISTVIEW,CP_AREA,24,64,232,100,""); w->items=a->area_items; list_style(w,"Screen area");
@@ -1502,4 +1604,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { free(a->startup); a->startup=NULL; cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { du_timer_stop(a->ui,CP_T_SAVER); free(a->startup); a->startup=NULL; cp_preview_cancel(a); free(a->pack); a->pack=NULL; du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

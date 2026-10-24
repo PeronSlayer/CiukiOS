@@ -223,6 +223,7 @@ struct du_widget {
     size_t cursor, anchor, offset;          /* edit (bytes; offset in cells) */
     struct du_selection selection;
     const uint32_t *icon; int icon_size;    /* buttons, edit prefix icon */
+    int edit_up_down;                       /* DU_EDIT: forward Up/Down as DU_EV_KEY for a spinner buddy */
     int accepts_tab;                        /* DU_CANVAS: deliver Tab as DU_EV_KEY */
     int dropdown;                           /* toolbutton split arrow width */
     const struct du_item *items;            /* list/tree */

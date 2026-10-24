@@ -7,7 +7,7 @@ static void files_test_wait(struct files_app *a)
     for (unsigned i=0; a->reading && i<5000; i++) {
         struct du_event tick={.type=DU_EV_TICK,.id=3};
         files_event(a->ui,&tick,a);
-        if (a->reading) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        if (a->reading) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     }
     assert(!a->reading);
 }

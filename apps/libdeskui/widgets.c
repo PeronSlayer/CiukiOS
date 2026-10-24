@@ -419,6 +419,7 @@ void du_edit_press(struct du_widget *w, int x, int extend)
 int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
 {
     if (w->disabled) return 0;
+    if (w->edit_up_down && (code==DU_KEY_UP || code==DU_KEY_DOWN)) return 0;
     w->selection.ns = 0;
     size_t len = strlen(w->text);
     int shift = (u->modifiers & DU_SHIFT) != 0, ctrl = (u->modifiers & DU_CTRL) != 0;

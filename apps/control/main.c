@@ -55,6 +55,7 @@ struct cp_main { struct cp_network_worker network_worker; struct cp_app app; str
     struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
     pthread_mutex_t completion_lock;
     int completion[2];
+    uint32_t applet_serial;
     uint64_t tick_next;
 };
 
@@ -132,6 +133,7 @@ static void panel_size(int *width, int *height)
 }
 static void remember_size(struct cp_main *m)
 {
+    if (!m->window.resizable) return; /* property applets do not replace the browser geometry */
     int w=m->ui.canvas.width,h=m->ui.canvas.height;
     if (w==m->saved_w && h==m->saved_h) return;
     FILE *f=fopen(CFG_DIR "/control.tmp","w");
@@ -462,6 +464,16 @@ static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *leng
     }
     return close(fd) ? -errno : 0;
 }
+static int open_applet(void *ctx,int page)
+{
+    struct cp_main *m=ctx;struct ciuki_message request;
+    if (m->applet_serial) return -EBUSY;
+    if (!++m->serial) ++m->serial;
+    int r=cp_applet_message(&request,m->serial,page);
+    if (!r) r=du_window_queue(&m->window,&request);
+    if (!r) m->applet_serial=m->serial;
+    return r;
+}
 static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
 static int read_power_status(void *ctx, struct ciuki_power_status *out)
 { (void)ctx; return ciuki_power_status(out) ? -errno : 0; }
@@ -499,6 +511,13 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
     }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && m->display_serial && p->serial == m->display_serial) {
         m->display_serial = 0; cp_display_result(&m->app, p->result); return;
+    }
+    if (p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && m->applet_serial && p->serial==m->applet_serial) {
+        m->applet_serial=0;
+        if (p->result<0) { struct du_widget *s=du_get(&m->ui,3);
+            if (s) { du_set_text(s,"The applet could not be opened.");du_invalidate(&m->ui,s->box); }
+        }
+        return;
     }
     if(p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && p->serial==m->install_serial){
         m->install_serial=0;struct du_widget *s=du_get(&m->ui,3);
@@ -773,7 +792,7 @@ int main(int argc, char **argv)
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;
-    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
+    h->open_applet=open_applet; h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;
@@ -794,7 +813,8 @@ int main(int argc, char **argv)
     if (width>(int)h->screen_w-16) width=CP_WIDTH;
     if (height>(int)h->screen_h-100) height=CP_HEIGHT;
     m->saved_w=width; m->saved_h=height; m->title_page=-99;
-    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
+    if ((page!=CP_DISPLAY && page!=CP_ADAPTER && page!=CP_FONTS ? du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT) :
+         du_window_open(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel"))) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
         completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
