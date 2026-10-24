@@ -588,7 +588,7 @@ static struct caret *caret_for(DWORD tid, BOOL create) {
     return 0;
   for (UINT i = 0; i < 16; i++)
     if (!carets[i].tid) {
-      carets[i] = (struct caret){.tid = tid, .blink = 530};
+      carets[i] = (struct caret){.tid = tid, .blink = u32_input_value(DESK_INPUT_BLINK)};
       return &carets[i];
     }
   return 0;
@@ -687,11 +687,21 @@ BOOL W32API GetCaretPos(POINT *p) {
   *p = c->pos;
   return 1;
 }
+void u32_caret_preferences(void)
+{
+  UINT blink=u32_input_value(DESK_INPUT_BLINK);
+  for(UINT i=0;i<sizeof(carets)/sizeof(carets[0]);i++)if(carets[i].tid) {
+    struct caret *c=&carets[i];c->blink=blink;
+    if(!blink && c->hwnd && !c->hidden && !c->paint_hidden && !c->drawn)caret_xor(c);
+    if(c->hwnd) {KillTimer(c->hwnd,CARET_TIMER);if(blink)SetTimer(c->hwnd,CARET_TIMER,blink,caret_timer);}
+  }
+}
 BOOL W32API SetCaretBlinkTime(UINT n) {
   U32_GUARD;
   struct caret *c = caret_for(u32_tid(), 1);
   if (!c)
     return 0;
+  if(!u32_input_setting(DESK_INPUT_BLINK,n==0xffffffffu ? 0 : n,0))return 0;
   c->blink = n;
   if (c->hwnd) {
     KillTimer(c->hwnd, CARET_TIMER);
@@ -703,7 +713,7 @@ BOOL W32API SetCaretBlinkTime(UINT n) {
 UINT W32API GetCaretBlinkTime(void) {
   U32_GUARD;
   struct caret *c = caret_for(u32_tid(), 0);
-  return c ? c->blink : 530;
+  (void)c;u32_input_refresh();UINT n=u32_input_value(DESK_INPUT_BLINK);return n ? n : 0xffffffffu;
 }
 /* BeginPaint/EndPaint bracket: the caret never ends up inside painted pixels. */
 void u32_caret_paint(HWND h, HDC dc) {

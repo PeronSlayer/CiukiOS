@@ -342,66 +342,12 @@ int strcmp(const char *a, const char *b) {
 }
 #endif
 
-/* The desktop owns this existing plain configuration file. Only its keyboard
- * and double-click keys cross this boundary; the desktop theme never does. */
-static int compare_prefix(const char *a, const char *b, UINT n) {
-  for (UINT i = 0; i < n; i++)
-    if (a[i] != b[i])
-      return 1;
-  return 0;
-}
-void u32_settings(void) {
-  static BOOL read_once;
-  static DWORD last;
-  DWORD now = u32_ticks();
-  if (read_once && (DWORD)(now - last) < 1000)
-    return;
-  read_once = 1;
-  last = now;
-  DWORD saved_error = GetLastError();
-  char *data = u32_alloc(32769);
-  if (!data)
-    return;
-  UINT saved = u32_suspend();
-  HANDLE file = CreateFileA("C:\\system\\settings\\desktop.cfg", 0x80000000, 7,
-                            0, 3, 0, 0);
-  DWORD count = 0;
-  BOOL ok = file != K32_INVALID && ReadFile(file, data, 32768, &count, 0);
-  if (file != K32_INVALID)
-    CloseHandle(file);
-  u32_resume(saved);
-  if (ok && count <= 32768) {
-    data[count] = 0;
-    for (char *line = data; *line;) {
-      char *end = line;
-      while (*end && *end != '\n')
-        end++;
-      char finish = *end;
-      *end = 0;
-      if (w32_strlen(line) >= 11 && !compare_prefix(line, "keyboard=it", 11))
-        u32_layout = 1;
-      else if (w32_strlen(line) >= 11 &&
-               !compare_prefix(line, "keyboard=us", 11))
-        u32_layout = 0;
-      else if (w32_strlen(line) >= 16 &&
-               !compare_prefix(line, "double_click_ms=", 16)) {
-        UINT n = 0;
-        for (char *v = line + 16; *v >= '0' && *v <= '9' && n <= 5000; v++)
-          n = n * 10 + (*v - '0');
-        if (n >= 200 && n <= 900)
-          SetDoubleClickTime(n);
-      }
-      if (!finish)
-        break;
-      line = end + 1;
-    }
-  }
-  u32_free(data);
-  SetLastError(saved_error);
-}
+/* G12: the desktop owns session settings and requested durable writes. */
+void u32_settings(void) { u32_input_refresh(); }
 
 void u32_clear_thread_input(void) {
   for (UINT i=0;i<U32_THREADS;i++) if (threads[i].id) {
+    threads[i].dead_accent=0;
     w32_fill(threads[i].keys,0,256);threads[i].text_count=0;
     threads[i].key_window=threads[i].translate_window=0;threads[i].key_lparam=0;
   }

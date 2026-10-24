@@ -4,7 +4,18 @@
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
 #include <ciuki/mm.h>
+/* Weak defaults keep isolated USB controller fixtures independent of i8042. */
+extern unsigned input_repeat_delay(void) __attribute__((weak));
+extern unsigned input_repeat_interval(void) __attribute__((weak));
+extern unsigned input_lock_leds(void) __attribute__((weak));
 static uint8_t leds;
+static unsigned repeat_delay_ms(void) { return input_repeat_delay ? input_repeat_delay() : INPUT_REPEAT_DELAY_MS; }
+static unsigned repeat_interval_ms(void) { return input_repeat_interval ? input_repeat_interval() : INPUT_REPEAT_INTERVAL_MS; }
+static void refresh_leds(void)
+{
+    /* USB HID uses Num, Caps, Scroll; PS/2 uses Scroll, Num, Caps. */
+    if (input_lock_leds) { unsigned v = input_lock_leds(); leds = ((v >> 1) & 3) | ((v & 1) << 2); }
+}
 /* USB keyboard usages -> public set-1 positions, never ASCII. */
 static const uint16_t keycode[0x74] = {
     [4]=0x1e,[5]=0x30,[6]=0x2e,[7]=0x20,[8]=0x12,[9]=0x21,[10]=0x22,
@@ -292,7 +303,7 @@ static void report_keys(struct usb_device *d, struct usb_hid *h, const uint8_t *
         if (down) {
             if (c==0x3a) leds^=2; else if (c==0x45) leds^=1; else if (c==0x46) leds^=4;
             else if (u<0xe0 && c!=INPUT_KEY_PAUSE) {
-                h->repeat_key=c; h->repeat_at=d->host->io.now(d->host->io.cookie)+INPUT_REPEAT_DELAY_MS;
+                h->repeat_key=c; h->repeat_at=d->host->io.now(d->host->io.cookie)+repeat_delay_ms();
             }
         }
     }
@@ -337,7 +348,7 @@ int usb_hid_report(struct usb_device *d, struct usb_hid *h, const uint8_t *b, un
             if (c && first(b,i) && !has(h->previous,c)) {
                 key(d,h,b[i],c,1); translated++;
                 if (c==0x3a) leds^=2; else if (c==0x45) leds^=1; else if (c==0x46) leds^=4;
-                else if (c!=INPUT_KEY_PAUSE) { h->repeat_key=c; h->repeat_at=d->host->io.now(d->host->io.cookie)+INPUT_REPEAT_DELAY_MS; }
+                else if (c!=INPUT_KEY_PAUSE) { h->repeat_key=c; h->repeat_at=d->host->io.now(d->host->io.cookie)+repeat_delay_ms(); }
             }
         }
         if (!translated && !unsupported) drop_record(d,h,"unchanged",len,0);
@@ -388,6 +399,7 @@ void usb_hid_outputs(struct usb_device *d)
 {
     for (unsigned i=0;i<USB_HID_MAX;i++) {
         struct usb_hid *h=&d->hid[i];
+        refresh_leds();
         if (h->active && (h->protocol==1 || h->reports) && h->leds!=leds) {
             uint8_t value=leds;
             int err=h->reports ? report_leds(d,h,value) : usb_control(d,0x21,9,0x200,h->interface,&value,1);
@@ -495,6 +507,6 @@ void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
     if (h->repeat_key && usb_expired(host,h->repeat_at)) {
         unsigned usage=0;
         for (unsigned i=2;i<8;i++) if (!h->reports && code(h->previous[i])==h->repeat_key) { usage=h->previous[i]; break; }
-        key(d,h,usage,h->repeat_key,2); h->repeat_at=host->io.now(host->io.cookie)+INPUT_REPEAT_INTERVAL_MS;
+        key(d,h,usage,h->repeat_key,2); h->repeat_at=host->io.now(host->io.cookie)+repeat_interval_ms();
     }
 }

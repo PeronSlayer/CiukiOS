@@ -30,6 +30,7 @@ enum du_ta_motion { DU_TA_LEFT, DU_TA_RIGHT, DU_TA_UP, DU_TA_DOWN, DU_TA_HOME, D
 enum du_ta_drag { DU_TA_DRAG_NONE, DU_TA_DRAG_SELECT, DU_TA_DRAG_VTHUMB, DU_TA_DRAG_HTHUMB };
 
 struct du_textarea {
+    int caret_hidden;
     char *text;                 /* cap+1 bytes, always NUL terminated */
     size_t len, cap;
     uint64_t revision;

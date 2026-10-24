@@ -9,7 +9,7 @@
 #include "desktop.h"
 #include "../libdeskui/deskui.h"
 #include "shell_icons.h"
-#include "keymap.h"
+#include "input_text.h"
 #include "catalog.h"
 #include <errno.h>
 #include <stdio.h>
@@ -1219,6 +1219,10 @@ int desk_shell_power_update(struct desktop *d, const struct ciuki_power_status *
 static void draw_tray(struct desktop *d, struct du_canvas *canvas)
 {
     struct du_canvas c = *canvas;
+    if(d->sh.cfg.layout_switch) {
+        struct desk_box li=desk_shell_tray_icon_box(d,SH_TRAY_LANGUAGE);
+        du_text(&c,li.x,li.y+12,d->sh.cfg.keyboard==CFG_KEYS_IT ? "IT" : "EN",SH_INK);
+    }
     int net_disabled=d->sh.network.state==CIUKI_NET_STOPPED && !strncmp(d->sh.network.reason,"disabled",9);
     const char *net_icon = !d->sh.network.present ? "network-error" :
                           !net_disabled && d->sh.network.link == CIUKI_NET_LINK_UP ? "network-wired" : "network-offline";
@@ -1635,7 +1639,7 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
             const char *shown=f->edit;
             while (*shown && du_text_width(shown)>box.w-8) shown++;
             du_text(&c,box.x+4,box.y+5,shown,f->select_all ? DU_SELECT_INK : DU_INK);
-            if (!f->select_all) {
+            if (!f->select_all && !d->shell_caret_hidden) {
                 char prefix[FM_NAME]; unsigned start=(unsigned)(shown-f->edit), count=f->cursor>start ? f->cursor-start : 0;
                 memcpy(prefix,shown,count); prefix[count]=0;
                 du_vline(&c,box.x+4+du_text_width(prefix),box.y+4,16,DU_INK);
@@ -3023,7 +3027,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         while (*shown && du_text_width(shown) > room) shown++;
         int32_t tx = field.x + 5, ty = field.y + (field.h - DU_GLYPH_H) / 2;
         du_text(&fc, tx, ty, shown, SH_INK);
-        if (d->focus == index) du_vline(&fc, tx + du_text_width(shown), ty - 2, DU_GLYPH_H + 5, SH_INK);
+        if (d->focus == index && !d->shell_caret_hidden) du_vline(&fc, tx + du_text_width(shown), ty - 2, DU_GLYPH_H + 5, SH_INK);
         push_button(&c, button_box(content, 0, 2), "OK", 1);
         push_button(&c, button_box(content, 1, 2), "Cancel", 0);
         break;
@@ -3234,6 +3238,9 @@ int desk_shell_button(struct desktop *d, int button, int down)
             return 1;
         }
         desk_menu_close(d);
+    }
+    if(button==CIUKI_BUTTON_LEFT && d->sh.cfg.layout_switch && desk_contains(desk_shell_tray_icon_box(d,SH_TRAY_LANGUAGE),x,y)) {
+        d->sh.cfg.keyboard^=1;d->text_dead=0;desk_preferences_changed(d);return 1;
     }
     /* G1: double-clicking the tray clock opens Date/Time Properties. */
     if (button==CIUKI_BUTTON_LEFT && desk_contains(desk_shell_clock_box(d),x,y)) {
@@ -3450,6 +3457,25 @@ void desk_shell_motion(struct desktop *d)
 void desk_shell_tick(struct desktop *d)
 {
     if (!d->shell) return;
+    int run=-1,editing=d->sh.folder && d->sh.folder->editing>=0;
+    for(int i=0;i<DESK_CLIENTS;i++)if(d->clients[i].window && !d->clients[i].minimized &&
+        d->clients[i].internal==DESK_INTERNAL_RUN && d->focus==i)run=i;
+    unsigned old_caret=d->shell_caret_hidden;
+    uint64_t interval=(uint64_t)d->sh.cfg.cursor_blink_ms*1000000;
+    if(!editing && run<0) {d->shell_caret_hidden=0;d->shell_caret_next=0;}
+    else if(!interval) {d->shell_caret_hidden=0;d->shell_caret_next=UINT64_MAX;}
+    else if(!d->shell_caret_next || d->shell_caret_next==UINT64_MAX)d->shell_caret_next=d->now_ns+interval;
+    else if(d->now_ns>=d->shell_caret_next) {
+        d->shell_caret_hidden^=1;d->shell_caret_next=d->now_ns+interval;
+    }
+    if(old_caret!=d->shell_caret_hidden) {
+        if(run>=0)damage(d,desk_content(&d->clients[run]));
+        if(editing)icon_repaint(d,d->sh.folder->editing+3);
+    }
+    while(d->pointer_trail_count && d->pointer_trail[d->pointer_trail_count-1].until<=d->now_ns) {
+        unsigned k=--d->pointer_trail_count;
+        damage(d,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128});
+    }
     dnd_tick(d);
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
         d->now_ns - d->sh.network_poll_ns >= 2000000000ull)) {
@@ -3491,7 +3517,7 @@ void desk_shell_tick(struct desktop *d)
 }
 void desk_shell_scale_motion(struct desktop *d, int32_t *dx, int32_t *dy)
 {
-    int num = d->shell ? cfg_mouse_numerator(d->sh.cfg.mouse_speed) : 8;
+    int num = d->shell ? cfg_mouse_numerator((d->sh.cfg.mouse_spi_speed+1)/2) : 8;
     if (num == 8) return;
     int32_t ax = *dx * num + d->sh.motion_rx, ay = *dy * num + d->sh.motion_ry;
     *dx = ax / 8; *dy = ay / 8;
@@ -3563,12 +3589,26 @@ static int menu_key(struct desktop *d, int code)
 int desk_shell_wheel(struct desktop *d, int detents)
 {
     if (!d->shell || d->focus < 0 || d->clients[d->focus].internal != DESK_INTERNAL_ABOUT || d->sh.about_tab != 2) return 0;
-    about_scroll_to(d, d->focus, d->sh.about_scroll - detents * 3);
+    unsigned lines=(unsigned)d->sh.cfg.wheel_lines;
+    if(lines==101) {
+        struct desk_box view,licences;int rows;
+        credits_geometry(about_page_box(desk_content(&d->clients[d->focus])),&view,&licences,&rows);lines=(unsigned)rows;
+    }
+    int64_t next=(int64_t)d->sh.about_scroll-(int64_t)detents*lines;
+    about_scroll_to(d,d->focus,next<0 ? 0 : next>2147483647 ? 2147483647 : (int)next);
     return 1;
 }
 static unsigned keymap_mods(const struct desktop *d)
 {
     return (d->sh.modifiers & DU_SHIFT ? CIUKI_KEYMAP_SHIFT : 0) | (d->sh.alt_code == 0x138 ? CIUKI_KEYMAP_ALTGR : 0);
+}
+static unsigned shell_text(struct desktop *d, unsigned code, char text[9])
+{
+    unsigned mods=keymap_mods(d)|(d->text_caps ? CIUKI_KEYMAP_CAPS : 0), chars[2];
+    unsigned ch=ciuki_input_char(d->sh.cfg.keyboard,code,mods),n=0;
+    unsigned count=ciuki_input_compose(&d->text_dead,ch,d->sh.cfg.keyboard==CFG_KEYS_IT && code==0x0d && (mods&CIUKI_KEYMAP_SHIFT),chars);
+    for(unsigned k=0;k<count;k++)if(chars[k]>=32)n+=ciuki_input_utf8(chars[k],text+n);
+    text[n]=0;return n;
 }
 static int internal_key(struct desktop *d, int index, int code, int value)
 {
@@ -3607,13 +3647,14 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         damage(d,desk_outer(c)); return 1;
     }
     case DESK_INTERNAL_RUN:
+        d->shell_caret_hidden=0;d->shell_caret_next=0;
         if (code == DU_KEY_ENTER) run_commit(d, index);
         else if (code == DU_KEY_ESC) desk_request_close(d, index);
-        else if (code == DU_KEY_BACKSPACE) { if (d->sh.run_length) d->sh.run_text[--d->sh.run_length] = 0; }
+        else if (code == DU_KEY_BACKSPACE) { if (d->sh.run_length) d->sh.run_length=(unsigned)du_utf8_prev(d->sh.run_text,d->sh.run_length); d->sh.run_text[d->sh.run_length]=0; }
         else if (!(d->sh.modifiers & DU_CTRL)) {
-            unsigned ch = ciuki_keymap_char(d->sh.cfg.keyboard, (unsigned)code, keymap_mods(d));
-            if (ch >= 32 && ch < 127 && d->sh.run_length + 1 < sizeof(d->sh.run_text)) {
-                d->sh.run_text[d->sh.run_length++] = (char)ch; d->sh.run_text[d->sh.run_length] = 0;
+            char text[9];unsigned n=shell_text(d,(unsigned)code,text);
+            if(n && d->sh.run_length+n<sizeof(d->sh.run_text)) {
+                memcpy(d->sh.run_text+d->sh.run_length,text,n+1);d->sh.run_length+=n;
             }
         }
         damage(d, desk_outer(c));
@@ -3831,6 +3872,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
     if (d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
         if (!value) return 1;
+        d->shell_caret_hidden=0;d->shell_caret_next=0;
         size_t n=strlen(f->edit);
         if (code==DU_KEY_ESC) f->editing=-1;
         else if (code==DU_KEY_ENTER) { f->command=DF_RENAME; f->index=f->editing; }
@@ -3838,19 +3880,19 @@ int desk_shell_key(struct desktop *d, int code, int value)
         else if (code==DU_KEY_LEFT || code==DU_KEY_RIGHT || code==DU_KEY_HOME || code==DU_KEY_END) {
             if (code==DU_KEY_HOME) f->cursor=0;
             else if (code==DU_KEY_END) f->cursor=(unsigned)n;
-            else if (code==DU_KEY_LEFT && f->cursor) f->cursor--;
-            else if (code==DU_KEY_RIGHT && f->cursor<n) f->cursor++;
+            else if (code==DU_KEY_LEFT && f->cursor) f->cursor=(unsigned)du_utf8_prev(f->edit,f->cursor);
+            else if (code==DU_KEY_RIGHT && f->cursor<n) f->cursor=(unsigned)du_utf8_next(f->edit,f->cursor);
             f->select_all=0;
         } else if (code==DU_KEY_BACKSPACE || code==DU_KEY_DELETE) {
             if (f->select_all) { f->edit[0]=0; f->cursor=0; }
-            else if (code==DU_KEY_BACKSPACE && f->cursor) { memmove(f->edit+f->cursor-1,f->edit+f->cursor,n-f->cursor+1); f->cursor--; }
-            else if (code==DU_KEY_DELETE && f->cursor<n) memmove(f->edit+f->cursor,f->edit+f->cursor+1,n-f->cursor);
+            else if (code==DU_KEY_BACKSPACE && f->cursor) { unsigned prev=(unsigned)du_utf8_prev(f->edit,f->cursor);memmove(f->edit+prev,f->edit+f->cursor,n-f->cursor+1); f->cursor=prev; }
+            else if (code==DU_KEY_DELETE && f->cursor<n) {size_t next=du_utf8_next(f->edit,f->cursor);memmove(f->edit+f->cursor,f->edit+next,n-next+1);}
             f->select_all=0;
         } else if (!(d->sh.modifiers&DU_CTRL)) {
-            unsigned ch=ciuki_keymap_char(d->sh.cfg.keyboard,(unsigned)code,keymap_mods(d));
-            if (ch>=32 && ch<127) {
-                if (f->select_all) { f->edit[0]=0; f->cursor=0; n=0; }
-                if (n+1<sizeof(f->edit)) { memmove(f->edit+f->cursor+1,f->edit+f->cursor,n-f->cursor+1); f->edit[f->cursor++]=(char)ch; }
+            char text[9];unsigned bytes=shell_text(d,(unsigned)code,text);
+            if(bytes) {
+                if(f->select_all){f->edit[0]=0;f->cursor=0;n=0;}
+                if(n+bytes<sizeof(f->edit)) {memmove(f->edit+f->cursor+bytes,f->edit+f->cursor,n-f->cursor+1);memcpy(f->edit+f->cursor,text,bytes);f->cursor+=bytes;}
                 f->select_all=0;
             }
         }
@@ -3970,6 +4012,11 @@ void desk_shell_apply(struct desktop *d)
     /* The theme named by desktop.cfg (default Ciuki Blue), at once. */
     if (desk_theme_use(d->sh.cfg.theme)) desk_theme_use(DESK_THEME_DEFAULT);
     if (d->sh.levels) desk_menu_close(d);
+    d->shell_caret_next=0;d->shell_caret_hidden=0;
+    d->input_volatile_mask=0;
+    d->pointer_trail_count=0;
+    d->input_change_flags=2;d->input_change_key=0;
+    desk_preferences_changed(d);d->input_change_flags=0;
     damage_all(d);
 }
 

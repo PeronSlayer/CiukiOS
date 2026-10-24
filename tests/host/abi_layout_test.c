@@ -26,7 +26,8 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+/* G1 already added setup_answers.tz_zone[48]; keep its existing ABI oracle current. */
+_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -42,8 +43,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1024);
-SETUP_OFFSET(source_iso_sha,1089);
+SETUP_OFFSET(source_image_sha,1072);
+SETUP_OFFSET(source_iso_sha,1137);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -51,6 +52,12 @@ _Static_assert(__builtin_offsetof(struct setup_erased_partition,label)==20,"eras
 #undef SETUP_OFFSET
 #endif
 
+_Static_assert(DESK_INPUT_SETTINGS==80 && DESK_INPUT_STATE==81 && DESK_INPUT_VALUES==11,"G12 input protocol");
+_Static_assert(DESK_INPUT_LAYOUT==1 && DESK_INPUT_DELAY==2 && DESK_INPUT_SPEED==3 &&
+    DESK_INPUT_BLINK==4 && DESK_INPUT_SWAP==5 && DESK_INPUT_TRAILS==6 &&
+    DESK_INPUT_WHEEL==7 && DESK_INPUT_SCHEME==8 && DESK_INPUT_MOUSE_SPEED==9 &&
+    DESK_INPUT_DOUBLE_CLICK==10 && DESK_INPUT_TOGGLE==11,"G12 setting keys");
+_Static_assert(sizeof(((struct desk_packet *)0)->input_settings)==44,"G12 snapshot payload");
 struct expectation { const char *key; uint32_t native, expected; };
 _Static_assert(CIUKI_COM_UNKNOWN==0 && CIUKI_COM_8250==1 && CIUKI_COM_16450==2 &&
     CIUKI_COM_16550==3 && CIUKI_COM_16550A==4 && CIUKI_COM_16650==5 && CIUKI_COM_16750==6,"COM chip codes");
@@ -68,6 +75,14 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
 _Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
 static const struct expectation expectations[] = {
+    {"constant.INPUT_KEYBOARD_SET", INPUT_KEYBOARD_SET, 0x4905u},
+    {"sizeof.ciuki_keyboard_settings", sizeof(struct ciuki_keyboard_settings), 16u},
+    {"alignof.ciuki_keyboard_settings", _Alignof(struct ciuki_keyboard_settings), 4u},
+    {"offsetof.ciuki_keyboard_settings.version", __builtin_offsetof(struct ciuki_keyboard_settings, version), 0u},
+    {"offsetof.ciuki_keyboard_settings.size", __builtin_offsetof(struct ciuki_keyboard_settings, size), 4u},
+    {"offsetof.ciuki_keyboard_settings.delay", __builtin_offsetof(struct ciuki_keyboard_settings, delay), 8u},
+    {"offsetof.ciuki_keyboard_settings.speed", __builtin_offsetof(struct ciuki_keyboard_settings, speed), 12u},
+
     {"constant.CIUKI_HARDWARE_VERSION", CIUKI_HARDWARE_VERSION, 3u},
     {"sizeof.ciuki_hardware_info", sizeof(struct ciuki_hardware_info), 4500u},
     {"alignof.ciuki_hardware_info", _Alignof(struct ciuki_hardware_info), 4u},

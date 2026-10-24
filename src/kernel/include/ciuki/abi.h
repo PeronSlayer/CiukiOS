@@ -2237,6 +2237,17 @@ _Static_assert(sizeof(struct ciuki_display_engine_info) == 232, "display engine 
 _Static_assert(_Alignof(struct ciuki_display_engine_info) == 4, "display engine alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_display_engine_info, native) == 168, "display engine counters");
 
+/* G12: input-grant-only keyboard policy; no new syscall. */
+#define INPUT_KEYBOARD_SET 0x4905u
+#pragma pack(push, 4)
+struct ciuki_keyboard_settings {
+    uint32_t version;
+    uint32_t size;
+    uint32_t delay;
+    uint32_t speed;
+};
+#pragma pack(pop)
+_Static_assert(sizeof(struct ciuki_keyboard_settings)==16,"keyboard settings size");
 struct ciuki_input_event {
     uint32_t sequence; /* 0 */
     uint32_t source; /* 4 */

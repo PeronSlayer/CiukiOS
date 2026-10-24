@@ -63,6 +63,16 @@ enum desk_v3_opcode {
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
     DESK_V3_PRESENT /* 16-byte damage; RESULT after frame, immediate if covered/identical */
 };
+/* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
+ * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.
+ * Reply uses the request/window identity of the request; unsolicited snapshots
+ * use request 0. Appended after the highest existing opcode (79). */
+#define DESK_INPUT_SETTINGS 80u
+#define DESK_INPUT_STATE 81u
+#define DESK_INPUT_VALUES 11u
+enum desk_input_key { DESK_INPUT_LAYOUT=1, DESK_INPUT_DELAY, DESK_INPUT_SPEED,
+    DESK_INPUT_BLINK, DESK_INPUT_SWAP, DESK_INPUT_TRAILS, DESK_INPUT_WHEEL,
+    DESK_INPUT_SCHEME, DESK_INPUT_MOUSE_SPEED, DESK_INPUT_DOUBLE_CLICK, DESK_INPUT_TOGGLE };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -219,6 +229,7 @@ struct desk_packet {
     uint32_t resize_serial; /* optional GFX_FRAME replacement attachment */
     uint64_t completed_ns, next_frame_ns;
     uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
+    uint32_t input_settings[DESK_INPUT_VALUES];
     uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
 };
 int desk_utf8_valid(const uint8_t *, unsigned);

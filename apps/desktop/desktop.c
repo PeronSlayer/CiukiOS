@@ -170,7 +170,9 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
     reason=PAUSE_ANIMATION;
     if (d->animation.active)
         loop_deadline(now,d->animation.started+(d->animation.step+1)*25000000ull,&wait);
+    for(unsigned k=0;k<d->pointer_trail_count;k++)loop_deadline(now,d->pointer_trail[k].until,&wait);
     reason=PAUSE_TIMER;
+    if(d->shell && d->shell_caret_next)loop_deadline(now,d->shell_caret_next,&wait);
     loop_deadline(now,timer,&wait);
     reason=PAUSE_PING;
     for (int i=0;i<DESK_CLIENTS;i++) {
@@ -1006,7 +1008,9 @@ static int settings_save(struct desktop *d)
      * overwrite it with the pre-reload theme/wallpaper while its read waits. */
     if (settings_reload_pending || (d->sh.want_reload&1)) { d->sh.want_save=1; return 0; }
     static char text[CFG_TEXT_MAX];
-    size_t n=cfg_format(&d->sh.cfg,text,sizeof(text));
+    static struct ciuki_settings durable;
+    desk_preferences_persistent(d,&durable);
+    size_t n=cfg_format(&durable,text,sizeof(text));
     if (!n) { errno=ENOSPC; return -1; }
     if (!settings_writer_started) { errno=EIO; return -1; }
     int result=cfg_writer_try_submit(&settings_writer,text,n);
@@ -1813,6 +1817,16 @@ static void power_prepare(struct desktop *d)
     }
 }
 /* Serves the requests that shell.c raised while handling input. */
+static void input_settings_apply(struct desktop *d)
+{
+    static int delay=-1,speed=-1;
+    if(delay==d->sh.cfg.repeat_delay && speed==d->sh.cfg.repeat_speed)return;
+    struct ciuki_keyboard_settings s={1,sizeof(s),(unsigned)d->sh.cfg.repeat_delay,(unsigned)d->sh.cfg.repeat_speed};
+    if(ciuki_devctl(d->input,INPUT_KEYBOARD_SET,&s,sizeof(s))) {
+        snprintf(d->notice,sizeof(d->notice),"Keyboard settings: error %d",errno);
+    }
+    delay=d->sh.cfg.repeat_delay;speed=d->sh.cfg.repeat_speed;
+}
 static void shell_service(struct desktop *d)
 {
     struct desk_shell *sh=&d->sh;
@@ -2600,6 +2614,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_SHELL);
         if (d->sh.want_reload&1) desktop_input_pending();
         shell_service(d);
+        if(d->shell && !gate)input_settings_apply(d);
         if (d->tasks_test && d->tasks_stage==6 && d->tasks_checkpoint && tasks_verify(d)) {
             d->tasks_stage=DESK_TASKS_DONE; input_dirty=1;
         }

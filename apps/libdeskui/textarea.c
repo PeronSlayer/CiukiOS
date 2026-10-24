@@ -599,7 +599,7 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
         if (end < ta->len && ta->text[end] == '\n' && a <= end && b > end && col >= ta->left && col < ta->left + ta->cols)
             du_fill(c, (struct du_rect){ox + ((int)col - (int)ta->left) * DU_TA_CELL_W, y, DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
     }
-    if (focused && a == b) {
+    if (focused && !ta->caret_hidden && a == b) {
         unsigned vi, col; locate(ta, ta->cursor, ta->affinity, &vi, &col);
         if (vi >= ta->top && vi < ta->top + ta->rows && col >= ta->left && col <= ta->left + ta->cols)
             du_vline(c, ox + ((int)col - (int)ta->left) * DU_TA_CELL_W - 1, oy + (int)(vi - ta->top) * DU_TA_CELL_H + 1, DU_TA_CELL_H - 2, DU_INK);

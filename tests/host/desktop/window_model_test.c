@@ -1025,9 +1025,113 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void widget_damage(struct fake_app *a)
+{
+    struct ciuki_message m;shell_message(&m,DESK_DAMAGE,24);
+    desk_put32(m.data+12,240);desk_put32(m.data+16,180);wm_send(a,&m);
+}
+static unsigned widget_characters[2],widget_character_count;
+static void widget_character(struct du_ui *ui,const struct du_event *event,void *ctx)
+{
+    (void)ui;(void)ctx;
+    if(event->type==DU_EV_KEY && event->ch) {assert(widget_character_count<2);widget_characters[widget_character_count++]=event->ch;}
+}
+static void widget_key(struct du_ui *u,unsigned code,int value)
+{struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=(int)code,.value=value};du_input(u,&e);}
+static void widget_tap(struct du_ui *u,unsigned code)
+{widget_key(u,code,1);widget_key(u,code,0);}
+static void row_input_text(unsigned m)
+{
+    row_name="input text and blink";wm_begin(m,1);
+    struct fake_app *a=app_open("control",240,180,200,80);
+    static struct du_ui ui;static uint32_t pixels[240*180];
+    du_init(&ui,pixels,240,180);ui.input_layout=1;
+    struct du_widget *edit=du_add(&ui,DU_EDIT,1,(struct du_rect){10,10,210,24},"");assert(edit);du_focus(&ui,1);
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);assert(!edit->text[0]);
+    widget_tap(&ui,0x12);assert(!strcmp(edit->text,"\xc3\xaa"));
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);widget_tap(&ui,0x2d);
+    assert(!strcmp(edit->text,"\xc3\xaa^x"));
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);widget_tap(&ui,0x39);
+    assert(!strcmp(edit->text,"\xc3\xaa^x^"));
+    widget_key(&ui,0x138,1);widget_tap(&ui,0x12);widget_key(&ui,0x138,0);
+    assert(!strcmp(edit->text,"\xc3\xaa^x^\xe2\x82\xac"));
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);du_window_focus(&ui,0);du_window_focus(&ui,1);
+    assert(!ui.input_dead);widget_tap(&ui,0x1e);assert(strstr(edit->text,"a"));
+    du_render(&ui);
+    memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("native UTF-8 composed text");
+    ui.input_blink_ms=100;ui.input_caret_on=1;ui.input_caret_deadline=100000000;du_tick(&ui,100000000);assert(!ui.input_caret_on);
+    du_render(&ui);memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("caret blink off damage");
+    du_tick(&ui,200000000);assert(ui.input_caret_on);du_render(&ui);
+    memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("caret blink on damage");
+    ui.input_blink_ms=0;ui.input_caret_on=1;du_tick(&ui,900000000);assert(ui.input_caret_on);
+    struct du_widget *scroll=du_add(&ui,DU_SCROLLBAR,2,(struct du_rect){10,70,200,18},"");assert(scroll);scroll->total=100;scroll->page=10;scroll->vertical=0;
+    ui.mouse_x=20;ui.mouse_y=75;struct ciuki_input_event wheel={.type=CIUKI_INPUT_WHEEL,.value=-1};
+    ui.input_wheel_lines=7;du_input(&ui,&wheel);assert(scroll->value==7);
+    ui.input_wheel_lines=0;du_input(&ui,&wheel);assert(scroll->value==7);
+    ui.input_wheel_lines=101;du_input(&ui,&wheel);assert(scroll->value==17);
+    du_render(&ui);memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("wheel lines and page scroll");
+    static struct ciuki_settings cfg,parsed;static char text[CFG_TEXT_MAX];cfg_defaults(&cfg);
+    cfg.repeat_delay=3;cfg.repeat_speed=0;cfg.mouse_swap=1;cfg.mouse_trails=7;cfg.pointer_scheme=2;cfg.wheel_lines=101;cfg.cursor_blink_ms=0;
+    strcpy(cfg.extra,"foreign=value\n");size_t n=cfg_format(&cfg,text,sizeof(text));assert(n);cfg_defaults(&parsed);
+    assert(!cfg_parse(&parsed,text,n) && parsed.repeat_delay==3 && parsed.repeat_speed==0 && parsed.mouse_swap && parsed.mouse_trails==7 && parsed.pointer_scheme==2 && parsed.wheel_lines==101 && !parsed.cursor_blink_ms && strstr(parsed.extra,"foreign=value"));
+    assert(cfg_parse(&parsed,"repeat_speed=32\nrepeat_delay=4\nmouse_trails=8\n",strlen("repeat_speed=32\nrepeat_delay=4\nmouse_trails=8\n"))==3);
+    ui.focus=-1;ui.event=widget_character;widget_character_count=0;
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);widget_tap(&ui,0x2d);
+    assert(widget_character_count==2 && widget_characters[0]=='^' && widget_characters[1]=='x');ui.event=NULL;
+    int run=desk_internal_open(&d,DESK_INTERNAL_RUN);assert(run>=0);
+    d.sh.cfg.cursor_blink_ms=100;d.shell_caret_next=0;d.shell_caret_hidden=0;
+    desk_shell_tick(&d);step("shell Run caret starts visible");
+    turn(100000000);assert(d.shell_caret_hidden);step("shell Run caret blink off");
+    turn(100000000);assert(!d.shell_caret_hidden);step("shell Run caret blink on");
+    d.sh.cfg.cursor_blink_ms=0;turn(100000000);assert(!d.shell_caret_hidden);step("shell Run steady caret");
+    desk_focus(&d,a->slot);step("shell Run caret removed on focus loss");
+    desk_focus(&d,run);step("shell Run caret restored on activation");
+    wm_end();
+}
+/* G12: new screen-changing events are checked on every presenter. */
+static void row_input_preferences(unsigned m)
+{
+    row_name="input preferences";wm_begin(m,1);
+    struct fake_app *a=app_open("control",240,180,200,80);
+    struct ciuki_message setting;
+    shell_message(&setting,DESK_INPUT_SETTINGS,16);
+    desk_put32(setting.data+4,DESK_INPUT_SCHEME);desk_put32(setting.data+8,1);desk_put32(setting.data+12,1);
+    wm_send(a,&setting);assert(d.sh.cfg.pointer_scheme==1 && d.sh.want_save);step("large pointer applied");
+    pointer_to(0,0);step("large pointer clipped at top left");
+    pointer_to((int)d.width-1,(int)d.height-1);step("large pointer clipped at bottom right");
+    pointer_to(390,270);step("large pointer over a client");
+    d.sh.cfg.pointer_scheme=2;desk_preferences_changed(&d);step("inverted pointer applied");
+    pointer_to(415,260);step("inverted pointer follows the mouse");
+    d.sh.cfg.mouse_trails=7;desk_preferences_changed(&d);step("trails enabled");
+    for(int k=0;k<10;k++){pointer_to(280+k*9,200+k*3);step("trail footprints restored");}
+    turn(200000000);step("stationary trail expiry");assert(!d.pointer_trail_count);
+    d.sh.cfg.pointer_scheme=0;d.sh.cfg.mouse_trails=0;desk_preferences_changed(&d);step("hardware pointer restored");
+    unsigned layout=d.sh.cfg.keyboard;
+    key(0x38,1);key(0x2a,1);assert(d.sh.cfg.keyboard==(int)(layout^1));step("Left Alt+Shift changes indicator");
+    key(0x2a,2);assert(d.sh.cfg.keyboard==(int)(layout^1));key(0x2a,0);key(0x38,0);step("language chord released");
+    key(0x138,1);tap(0x2a);key(0x138,0);assert(d.sh.cfg.keyboard==(int)(layout^1));step("AltGr does not switch layout");
+    key(0x2a,1);key(0x38,1);assert(d.sh.cfg.keyboard==(int)layout);key(0x38,0);key(0x2a,0);
+    assert(!d.sh.levels);step("Shift then Left Alt switches without opening a menu");
+    d.sh.cfg.mouse_swap=1;desk_preferences_changed(&d);
+    pointer_to(300,360);press(CIUKI_BUTTON_RIGHT,1);assert(d.buttons&1);press(CIUKI_BUTTON_RIGHT,0);step("left handed button release");
+    desk_put32(setting.data+4,DESK_INPUT_DELAY);desk_put32(setting.data+8,3);desk_put32(setting.data+12,0);
+    wm_send(a,&setting);assert(d.sh.cfg.repeat_delay==3 && (d.input_volatile_mask&2));
+    static struct ciuki_settings durable;desk_preferences_persistent(&d,&durable);assert(durable.repeat_delay==1);
+    step("session SPI value");
+    desk_put32(setting.data+8,4);wm_send(a,&setting);assert(d.sh.cfg.repeat_delay==3);step("invalid value rejected");
+    desk_put32(setting.data+8,2);desk_put32(setting.data+12,1);wm_send(a,&setting);
+    assert(d.sh.cfg.repeat_delay==2 && !(d.input_volatile_mask&2));desk_preferences_persistent(&d,&durable);assert(durable.repeat_delay==2);step("durable SPI value");
+    int v=wm_v3_window(DESK_V3_OVERLAPPED,-1,450,100,160,100);assert(v>=0);
+    int peer=(int)d.clients[v].v3_peer-1;assert(peer>=0);
+    struct ciuki_message request;desk_v3_message(&request,DESK_INPUT_SETTINGS,12,1234,0,0);
+    request.sender_pid=d.clients[peer].pid;desk_put32(request.data+16,DESK_INPUT_WHEEL);desk_put32(request.data+20,7);desk_put32(request.data+24,3);
+    assert(!desk_v3_receive(&d,peer,&request) && d.sh.cfg.wheel_lines==7);step("Win32 global session setter");
+    desk_put32(request.data+20,102);assert(desk_v3_receive(&d,peer,&request)==-EINVAL && d.sh.cfg.wheel_lines==7);step("Win32 invalid value refused");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_input_preferences,row_input_text};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

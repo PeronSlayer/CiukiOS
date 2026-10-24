@@ -33,10 +33,17 @@ struct ciuki_settings {
     int wallpaper_mode;             /* CFG_WALL_* */
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */
     int clock_24h, clock_seconds, desktop_icons;
+    int mouse_spi_speed;            /* Win32 1..20, 10 = normal */
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
-    int double_click_ms;            /* 200..900 */
+    int double_click_ms;            /* 1..5000; Control Panel slider 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
     int keyboard;                   /* CFG_KEYS_* */
+    int repeat_delay, repeat_speed; /* Windows 0..3, 0..31 */
+    int cursor_blink_ms;            /* 0 = steady; otherwise 100..1200 */
+    int mouse_swap, mouse_trails;   /* boolean, 0/1 (off) or 2..7 */
+    int wheel_lines;                /* 0..100, 101 = one page */
+    int pointer_scheme;             /* 0 Ciuki, 1 large, 2 inverted */
+    int layout_switch;              /* Left Alt+Shift and tray indicator */
     char recent[CFG_RECENT_MAX][CFG_PATH_MAX];
     unsigned recent_count;          /* newest first */
     char extra[CFG_EXTRA_MAX];      /* unknown "key=value" lines, newline separated */
@@ -45,6 +52,8 @@ extern const char *const cfg_theme_names[CFG_THEMES];
 extern const char *const cfg_mode_names[CFG_WALL_MODES];
 extern const char *const cfg_keyboard_names[CFG_KEYS_COUNT];     /* "us", "it" */
 extern const char *const cfg_keyboard_labels[CFG_KEYS_COUNT];    /* "English (US)", "Italian" */
+int *cfg_input_field(struct ciuki_settings *, unsigned key);
+int cfg_input_set(struct ciuki_settings *, unsigned key, unsigned value);
 void cfg_defaults(struct ciuki_settings *);
 /* Parses text over the defaults already in *s; returns the number of lines
  * that were rejected (bad value or overlong); those keep their defaults. */

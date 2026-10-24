@@ -316,7 +316,14 @@ struct desktop {
     struct desk_box tip_shown; uint32_t tip_shown_hash;
     struct desk_box outline_shown; int outline_icon, about_windows;
     struct desk_box band_shown;  /* fx-15b: the rubber band as last composed (zero: none) */
-    uint32_t cursor_under[32*32]; struct desk_box cursor_box;
+    struct { int x, y; uint64_t until; } pointer_trail[7];
+    unsigned pointer_trail_count;
+    unsigned layout_alt, layout_shift, layout_chord, text_dead;
+    unsigned text_scan, text_caps, text_routed;
+    uint32_t input_saved[DESK_INPUT_VALUES], input_volatile_mask;
+    unsigned input_change_key,input_change_flags;
+    unsigned shell_caret_hidden;uint64_t shell_caret_next;
+    uint32_t cursor_under[64*64]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
     unsigned cursor_shape, cursor_loaded;
     unsigned lfb_bytes_per_pixel;
@@ -557,6 +564,8 @@ void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 int desk_modal_target(const struct desktop *, int index);
 int desk_next_window(const struct desktop *, int excluded, uint32_t pid, const char *application);
+void desk_preferences_changed(struct desktop *);
+void desk_preferences_persistent(const struct desktop *, struct ciuki_settings *);
 void desk_cursor_update(struct desktop *);
 void desk_geometry_begin(struct desktop *, int index, int size);
 void desk_geometry_end(struct desktop *, int cancel);

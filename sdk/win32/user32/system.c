@@ -142,7 +142,37 @@ static struct {
 } spi = {.mouse = {6, 10, 1}, .mouse_speed = 10, .icon_x = 75, .icon_y = 75,
          .title_wrap = 1, .click_w = 4, .click_h = 4, .beep = 1,
          .min_animate = 1};
+static UINT input_values[DESK_INPUT_VALUES]={0,1,31,530,0,0,3,0,10,500,1};
+void u32_input_snapshot(const uint32_t *values)
+{
+  BOOL layout_changed=u32_layout!=values[0];
+  if(layout_changed) {
+    struct u32_thread *t=u32_thread();if(t)t->dead_accent=0;
+  }
+  BOOL caret_changed=input_values[3]!=values[3];
+  for(UINT k=0;k<DESK_INPUT_VALUES;k++)input_values[k]=values[k];
+  if(caret_changed)u32_caret_preferences();
+  u32_layout=values[0];spi.swap=values[4];spi.mouse_speed=values[8];
+  if(layout_changed)for(UINT i=0;i<U32_WINDOWS;i++)if(u32_windows[i].handle && !u32_windows[i].parent)
+    SendNotifyMessageA(u32_windows[i].handle,0x51,0,u32_layout ? 0x04100410u : 0x04090409u);
+}
+UINT u32_input_value(UINT key) {return key && key<=DESK_INPUT_VALUES ? input_values[key-1] : 0;}
+BOOL u32_input_setting(UINT key, UINT value, UINT flags)
+{
+  uint8_t data[12];desk_put32(data,key);desk_put32(data+4,value);desk_put32(data+8,flags&3);
+  struct u32_window context={0};
+  return u32_wire(&context,DESK_INPUT_SETTINGS,data,sizeof(data),-1);
+}
+void u32_input_refresh(void)
+{
+  static BOOL busy,read;static DWORD last;
+  DWORD now=u32_ticks();
+  if(busy || (read && now-last<1000))return;
+  busy=1;read=1;last=now;
+  DWORD error=GetLastError();(void)u32_input_setting(0,0,0);SetLastError(error);busy=0;
+}
 int u32_spi_metric(int n, int fallback) {
+  u32_input_refresh();
   switch (n) {
   case 23: /* SM_SWAPBUTTON */
     return (int)spi.swap;
@@ -377,6 +407,28 @@ static BOOL spi_set(UINT action, UINT param, void *in) {
 BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
                                   UINT flags) {
   U32_GUARD;
+  u32_input_refresh();
+  UINT key=action==10 || action==11 ? DESK_INPUT_SPEED : action==22 || action==23 ? DESK_INPUT_DELAY :
+      action==94 || action==93 ? DESK_INPUT_TRAILS : action==104 || action==105 ? DESK_INPUT_WHEEL :
+      action==112 || action==113 ? DESK_INPUT_MOUSE_SPEED : action==33 ? DESK_INPUT_SWAP :
+      action==32 ? DESK_INPUT_DOUBLE_CLICK : 0;
+  if(key) {
+    BOOL get=action==10 || action==22 || action==94 || action==104 || action==112;
+    if(get) {
+      if(!out)return u32_fail(87);
+      UINT value=u32_input_value(key);
+      if(key==DESK_INPUT_WHEEL && value==101)value=0xffffffffu;
+      *(UINT *)out=value;return 1;
+    }
+    UINT value=action==113 ? (UINT)(uintptr_t)out : param;
+    if(key==DESK_INPUT_SPEED && value>31)value=31;
+    if(key==DESK_INPUT_WHEEL && value==0xffffffffu)value=101;
+    if(key==DESK_INPUT_MOUSE_SPEED) {if(value<1 || value>20)return u32_fail(87);}
+    if(key==DESK_INPUT_SWAP)value=!!value;
+    if(key==DESK_INPUT_DOUBLE_CLICK)value=value ? (value>5000 ? 5000 : value) : 500;
+    BOOL result=u32_input_setting(key,value,flags);
+    return result;
+  }
   static const struct {
     UINT get, set, value;
   } values[] = {{5, 6, 1},   {10, 11, 31},    {14, 15, 600}, {16, 17, 0},
