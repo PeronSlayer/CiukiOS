@@ -5,6 +5,8 @@ struct hlcache_handle;
 struct form_control;
 struct nsurl;
 struct ciuki_browser_surface;
+struct desk_packet;
+void ciuki_chrome_launch_result(const struct desk_packet *);
 void ciuki_chrome_status(const char *);
 void ciuki_chrome_url(struct nsurl *);
 void ciuki_chrome_loading(bool);

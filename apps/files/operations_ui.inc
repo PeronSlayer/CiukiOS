@@ -335,3 +335,8 @@ void files_shell_action(struct files_app *a,int action,const char *path)
     }
     if (a->loading) a->pending_command=action; else command(a,action);
 }
+void files_open_document(struct files_app *a,const char *path)
+{
+    int e=operation_open(a,path);
+    if(e<0)error_box(a,"Open","Cannot open the saved document:",e);
+}

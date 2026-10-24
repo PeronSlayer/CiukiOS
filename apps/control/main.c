@@ -7,6 +7,8 @@
 #include <poll.h>
 #include "control.h"
 #include "internet_storage.h"
+#include "../files/operations.h"
+#include "../desktop/win32_adapter.h"
 #include "programs.h"
 #include "decoder.h"
 #include "job.h"
@@ -877,6 +879,18 @@ static int internet_read(void *ctx,struct cp_internet_options *o)
 { (void)ctx;return internet_load(INTERNET_OPTIONS_PATH,o); }
 static int internet_write(void *ctx,const struct cp_internet_options *o)
 { (void)ctx;return internet_save(INTERNET_OPTIONS_PATH,o); }
+static int internet_default(void *ctx)
+{ (void)ctx;fm_registry_exchange=desk_w32_exchange;return fm_browser_default(); }
+static int internet_programs(void *ctx)
+{
+    struct cp_main *m=ctx;struct ciuki_message request;
+    const char *name="files";char arg[40];snprintf(arg,sizeof(arg),"--file-action=%d:",FILES_TYPES);
+    unsigned t=strlen(name),n=strlen(arg);
+    desk_message(&request,DESK_LAUNCH,16+t+n);desk_put32(request.data+4,++m->serial);
+    desk_put32(request.data+8,t);memcpy(request.data+12,name,t);
+    desk_put32(request.data+12+t,n);memcpy(request.data+16+t,arg,n);
+    return du_window_queue(&m->window,&request);
+}
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
@@ -913,6 +927,7 @@ int main(int argc, char **argv)
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;
     h->display = display_query;
     h->internet_clear_history=internet_clear;h->internet_load=internet_read;h->internet_save=internet_write;
+    h->internet_default=internet_default;h->internet_programs=internet_programs;
     h->display = display_query; h->monitor=monitor_query; h->refresh_rates=refresh_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;

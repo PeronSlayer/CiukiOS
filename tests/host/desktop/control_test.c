@@ -53,7 +53,10 @@ static int decode(void *c, const char *path, struct desk_image *out)
 
 static uint32_t portrait[256 * 256], pixels[CP_WIDTH * CP_HEIGHT];
 static struct cp_internet_options internet_saved;
-static unsigned internet_saves;
+static unsigned internet_saves,internet_defaulted,internet_programs_opened,internet_cleared;
+static int internet_default_program(void *ctx) { (void)ctx;internet_defaulted++;return 0; }
+static int internet_programs_open(void *ctx) { (void)ctx;internet_programs_opened++;return 0; }
+static int internet_clear(void *ctx) { (void)ctx;internet_cleared++;return 0; }
 static int internet_read(void *ctx,struct cp_internet_options *o)
 { (void)ctx;internet_defaults(o);return 0; }
 static int internet_write(void *ctx,const struct cp_internet_options *o)
@@ -397,8 +400,33 @@ static void users_controls(void)
 }
 
 #include "regional_control_test.h"
+static void internet_page(void)
+{
+    attach(CP_INTERNET);a.host.internet_load=internet_read;a.host.internet_save=internet_write;a.host.internet_default=internet_default_program;
+    a.host.internet_programs=internet_programs_open;a.host.internet_clear_history=internet_clear;cp_open(&a,CP_INTERNET);
+    assert(cp_page_index("internet")==CP_INTERNET && du_get(&u,1700) && du_get(&u,1704));
+    du_set_text(du_get(&u,1700),"https://example.test/home");du_set_text(du_get(&u,1701),"proxy.example.test");
+    du_set_text(du_get(&u,1702),"3128");du_set_text(du_get(&u,1703),"4");at_click_widget(&u,1704);
+    assert(internet_saves==1 && internet_saved.port==3128 && internet_saved.cache_mb==4 && !strcmp(internet_saved.home,"https://example.test/home"));
+    du_set_text(du_get(&u,1703),"17");at_click_widget(&u,1704);assert(internet_saves==1);
+    du_set_text(du_get(&u,1703),"2");du_set_text(du_get(&u,1700),"javascript:bad");at_click_widget(&u,1704);assert(internet_saves==1);
+    du_set_text(du_get(&u,1700),"https://example.test/home");
+    at_click_widget(&u,1721);assert(a.internet_tab==1 && du_get(&u,1705));
+    du_set_text(du_get(&u,1705),"30");at_click_widget(&u,1704);assert(internet_saves==2 && internet_saved.history_days==30);
+    at_click_widget(&u,1706);assert(internet_cleared==1);
+    at_click_widget(&u,1722);assert(a.internet_tab==2 && du_get(&u,1707));
+    du_set_text(du_get(&u,1707),"trusted.example");du_set_text(du_get(&u,1708),"blocked.example");
+    at_click_widget(&u,1704);assert(internet_saves==3 && !strcmp(internet_saved.restricted,"blocked.example"));
+    at_click_widget(&u,1723);assert(a.internet_tab==3 && du_get(&u,1713));
+    du_set_text(du_get(&u,1713),"user");du_set_text(du_get(&u,1714),"password");
+    at_click_widget(&u,1704);assert(internet_saves==4 && !strcmp(internet_saved.proxy_password,"password"));
+    at_click_widget(&u,1724);assert(a.internet_tab==4 && !du_get(&u,1716)->disabled && !du_get(&u,1717)->disabled);
+    at_click_widget(&u,1716);at_click_widget(&u,1717);assert(internet_defaulted==1 && internet_programs_opened==1);
+    cp_detach(&a);puts("PASS G26 Internet Properties: page/catalog, home/proxy/cache Apply, invalid values preserve saved settings");
+}
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--internet-only")) { setvbuf(stdout,NULL,_IONBF,0);internet_page();return 0; }
     users_controls();
     assert(argc == 3 || argc == 4);
     FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
@@ -565,24 +593,7 @@ int main(int argc, char **argv)
     cp_settings_saved(&a,EROFS); assert(!a.quit && !a.display_accept && a.display_dirty && a.display_session);
     du_dialog_close(&u); a.host.save_async=0; cp_close(&a); cp_detach(&a);
     regional_page();
-    attach(CP_INTERNET);a.host.internet_load=internet_read;a.host.internet_save=internet_write;cp_open(&a,CP_INTERNET);
-    assert(cp_page_index("internet")==CP_INTERNET && du_get(&u,1700) && du_get(&u,1704));
-    du_set_text(du_get(&u,1700),"https://example.test/home");du_set_text(du_get(&u,1701),"proxy.example.test");
-    du_set_text(du_get(&u,1702),"3128");du_set_text(du_get(&u,1703),"4");at_click_widget(&u,1704);
-    assert(internet_saves==1 && internet_saved.port==3128 && internet_saved.cache_mb==4 && !strcmp(internet_saved.home,"https://example.test/home"));
-    du_set_text(du_get(&u,1703),"17");at_click_widget(&u,1704);assert(internet_saves==1);
-    du_set_text(du_get(&u,1703),"2");du_set_text(du_get(&u,1700),"javascript:bad");at_click_widget(&u,1704);assert(internet_saves==1);
-    du_set_text(du_get(&u,1700),"https://example.test/home");
-    at_click_widget(&u,1721);assert(a.internet_tab==1 && du_get(&u,1705));
-    du_set_text(du_get(&u,1705),"30");at_click_widget(&u,1704);assert(internet_saves==2 && internet_saved.history_days==30);
-    at_click_widget(&u,1722);assert(a.internet_tab==2 && du_get(&u,1707));
-    du_set_text(du_get(&u,1707),"trusted.example");du_set_text(du_get(&u,1708),"blocked.example");
-    at_click_widget(&u,1704);assert(internet_saves==3 && !strcmp(internet_saved.restricted,"blocked.example"));
-    at_click_widget(&u,1723);assert(a.internet_tab==3 && du_get(&u,1713));
-    du_set_text(du_get(&u,1713),"user");du_set_text(du_get(&u,1714),"password");
-    at_click_widget(&u,1704);assert(internet_saves==4 && !strcmp(internet_saved.proxy_password,"password"));
-    at_click_widget(&u,1724);assert(a.internet_tab==4 && du_get(&u,1716)->disabled);
-    cp_detach(&a);puts("PASS G26 Internet Properties: page/catalog, home/proxy/cache Apply, invalid values preserve saved settings");
+    internet_page();
     attach(CP_DISPLAY);
     struct du_widget *browse=find(DU_BUTTON,"Browse..."); assert(browse);
     struct du_event choose={.type=DU_EV_ACTIVATE,.id=browse->id}; u.event(&u,&choose,u.user);

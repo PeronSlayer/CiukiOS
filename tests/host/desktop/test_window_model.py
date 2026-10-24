@@ -18,9 +18,9 @@ class WindowModelTests(unittest.TestCase):
         run_ui_replay(self)
 
     def test_every_row_equals_a_full_redraw(self):
-        sources = [*(ROOT / "apps/desktop" / n for n in ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "access.c", "access_desktop.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c"))]
+        sources = [*(ROOT / "apps/desktop" / n for n in ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "access.c", "access_desktop.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "recovery_view.c", "../files/app.c", "../files/model.c", "../files/transfer.c"))]
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c")),
-                    ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/fake_vfs.c",
+                    ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/disk_ui_vfs.c",
                     ROOT / "apps/accessories/mixer_view.c",
                     ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
                     ROOT / "tests/host/desktop/window_model_test.c"]
@@ -30,6 +30,7 @@ class WindowModelTests(unittest.TestCase):
             binary = Path(temp) / "window_model_test"
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                            "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections", "-pthread",
                             "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                             "-include", str(ROOT / "tests/host/desktop/paint_probe.h"),
                             "-I", str(ROOT / "src/kernel/include"), "-I", str(ROOT / "apps/desktop"),

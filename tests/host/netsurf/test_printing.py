@@ -9,6 +9,8 @@ ROOT=Path(__file__).resolve().parents[3]
 class BrowserPrinting(unittest.TestCase):
     def test_shortcuts_and_viewport(self):
         base=ROOT / "build/external/netsurf-host"
+        if not (base / "source/netsurf").is_dir():
+            base=Path("/home/peronslayer/Desktop/CiukiOS/build/external/netsurf-host")
         source=Path(os.environ.get("CIUKI_NETSURF_SOURCE",base / "source")) / "netsurf"
         prefix=Path(os.environ.get("CIUKI_NETSURF_PREFIX",base / "prefix"))
         if not (source / "include/netsurf/browser_window.h").is_file():
@@ -23,7 +25,7 @@ class BrowserPrinting(unittest.TestCase):
                         "-I"+str(source / "frontends/framebuffer/ciuki"),
                         "-include",str(ROOT / "tests/host/desktop/replay_base.h"),
                         str(ROOT / "tests/host/netsurf/printing_test.c"),
-                        str(ROOT / "sdk/netsurf/port/download_store.c"),
+                        str(ROOT / "sdk/netsurf/port/download_store.c"),str(ROOT / "apps/desktop/protocol.c"),
                         str(ROOT / "apps/libdeskui/widgets.c"),str(ROOT / "apps/libdeskui/draw.c"),"-o",str(binary)],check=True)
         subprocess.run([str(binary)],check=True)
 

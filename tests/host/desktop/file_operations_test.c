@@ -168,6 +168,15 @@ static __attribute__((noinline)) void association_tests(const char *directory)
     assert(!fm_registry_set(".only","","OnlyEdit"));
     assert(!fm_registry_set("OnlyEdit\\shell\\edit\\command","","\"/Programs/ciuknote\" \"%1\""));
     assert(!fm_association("/work/document.only",NULL,&builtin) && !strcmp(builtin.target,"/Programs/ciuknote"));
+    assert(!fm_browser_default());
+    assert(!fm_association("/work/page.htm",NULL,&builtin) && !strcmp(builtin.target,"/Programs/netsurf"));
+    assert(!fm_association("/work/page.html",NULL,&builtin) && !strcmp(builtin.target,"/Programs/netsurf"));
+    assert(!fm_launch_resolve(&fake_vfs,"https://ciuki.example/?a=1&b=2",NULL,&builtin) &&
+           !strcmp(builtin.target,"/Programs/netsurf") && !strcmp(builtin.arguments,"\"https://ciuki.example/?a=1&b=2\""));
+    assert(!fm_registry_set("http\\shell\\open\\command","","\"/Programs/other-browser\" \"%1\""));
+    assert(!fm_launch_resolve(&fake_vfs,"http://ciuki.example/",NULL,&builtin) && !strcmp(builtin.target,"/Programs/other-browser"));
+    assert(!fm_browser_default());
+    assert(!fm_launch_resolve(&fake_vfs,"HTTP://ciuki.example/",NULL,&builtin) && !strcmp(builtin.target,"/Programs/netsurf"));
     char value[300]; assert(!fm_registry_get(".txt","",value,sizeof(value)) && !strcmp(value,"CiukiOS.txt"));
     struct desk_launch_record *r=calloc(1,sizeof(*r)); assert(r);
     assert(!fm_launch_resolve(&fake_vfs,"/work/a.txt",NULL,r)); assert(!strcmp(r->target,"/Programs/ciuknote") && !strcmp(r->arguments,"\"/work/a.txt\""));

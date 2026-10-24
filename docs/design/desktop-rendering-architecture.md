@@ -476,6 +476,8 @@ after each of these transients (`equivalent()`).
 | 48 | fx-28 Display from Control Panel opens a fixed applet; monitor Settings opens Power Management | ordinary window create/focus (row 1); browser remains resizable | bounded Control Panel DESK_LAUNCH capability for display/power | OPEN_POWER is the shutdown confirmation, so it is not used | fixed-size arrange; real transport and `control_modes_test.c` |
 
 
+| 95 | G26C immediate or delayed new-window/file-handoff launch failure | browser status strip; opener content preserved | chrome `ciuki_chrome_launch_result` and existing surface result delivery | no fallback navigation | `row_g26c_launch_error` and production chrome launch fixture |
+
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 | 42 | Find entry points: Start > Find submenu, desktop F3, Win+F; Files criteria pages, validation, results publication, sorting, Stop and navigation | menu boxes, normal window/client damage; Files invalidates its changed client state | `desk_shell_find`, Files `find_dialog`, `scan_poll`, `files_update` | G7 adds no compositor special case | `row_find` in `test_window_model`; `files_search_test.c` compares every client transition with a full redraw |
@@ -546,6 +548,12 @@ caption animation of row 8 is the only window outline. Rows 25-30 came with
 | 46 | Desktop Theme package preview, Apply and rollback | complete desktop, icon and pointer state, menus and windows | `settings.c` package snapshots, Control Panel display transaction | G23: sound scheme accompanies the package and is restored on Cancel | desktop themes (`WM_ROW=37`) |
 | 47 | Background Browse result | wallpaper cache and complete desktop | existing background worker and display transaction | G23: Browse uses the same decode and repaint path as the picture list | background browse (`WM_ROW=38`) |
 | 48 | Settings > Advanced > General font-size sheet: small/large/custom, Apply and Cancel | client-owned modal contents; normal toolkit dialog and client damage | `control/app.c` Advanced property sheet; real controls in `control_modes_test.c` | G23: modal Cancel restores its entry snapshot, outer Display Cancel retains complete rollback | advanced font sheet (`WM_ROW=39`) |
+| 92 | G26C full-document Print, printer/range/copies/file edits, Cancel, Page Setup paper/margins/orientation and queue/error status | native modal bounds, changed controls and exposed browser client | `cp_ui_document`, G31 dialog/event/poll and normal browser client damage | browser layout remains unchanged | `row_g26c_print` plus production document/controller fixtures |
+| 93 | G26C saved download completion Open/Open With/Close, shared Files chooser and Always use | download modal, new Files frame/task button, chooser and exposed browser | chrome saved-download event, constrained existing v3 launch, G8 chooser | other callers and path traversal refused | `row_g26c_download` and production chrome/association fixtures |
+| 94 | G26C Internet Programs Make Default result and shared File Types window | changed Programs controls/status, Files window and property sheet | Internet controller, shared HKCR, existing v2 launch | no additional ABI numbers | `row_g26c_programs` and Control Panel fixture |
+
+| 95 | G26C immediate or delayed new-window/file-handoff launch failure | browser status strip; opener content preserved | chrome `ciuki_chrome_launch_result` and existing surface result delivery | no fallback navigation | `row_g26c_launch_error` and production chrome launch fixture |
+
 A window drag shows the window contents by default; the Effects preference selects a deferred outline drag; the
 caption animation of row 8 remains independent of that drag preference. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by

@@ -35,6 +35,8 @@
 #include "apps/libdeskui/internal.h"
 #include "apps/libdeskui/keymap.h"
 #include "apps/libprint/dialog.h"
+#include "printing.h"
+#include "apps/desktop/browser_launch.h"
 #include "surface.h"
 void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "profile.h"
@@ -43,7 +45,7 @@ void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "logline.h"
 #include "pointer.h"
 
-enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,WALLPAPER,NEW_WINDOW=10,OPEN=20,FILE_PICKER,NOTICE,SAVE_DOWNLOAD,DOWNLOAD_PROGRESS };
+enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,WALLPAPER,NEW_WINDOW=10,OPEN=20,FILE_PICKER,NOTICE,SAVE_DOWNLOAD,DOWNLOAD_PROGRESS,SAVED_DOWNLOAD };
 static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK,NEW_WINDOW,WALLPAPER};
 static struct du_ui ui;
 static struct cp_ui printing;
@@ -52,6 +54,8 @@ static bool active, loading, hotlist_ready, profile_ready, toolbar_keys;
 static bool status_dirty;
 static bool profile_requested;
 static struct cp_internet_options browser_internet;
+static char saved_download[128];
+static uint32_t launch_request;
 static unsigned input_records;
 static unsigned bookmarks;
 struct gui_download_window { struct download_context *context; struct ciuki_download_store store; bool failed;uint64_t total; };
@@ -106,10 +110,29 @@ bool ciuki_chrome_new_window(struct nsurl *url)
     const char *address=nsurl_access(url);size_t n=strlen(address);
     if(n>DESK_ARG_MAX) { ciuki_chrome_status("The address is too long for a new window.");return false; }
     uint8_t payload[4+DESK_ARG_MAX];desk_put32(payload,(uint32_t)n);memcpy(payload+4,address,n);
-    if(!du3_request(&surface->connection,DESK_LAUNCH,surface->window,surface->generation,payload,4+n,-1)) {
+    launch_request=du3_request(&surface->connection,DESK_LAUNCH,surface->window,surface->generation,payload,4+n,-1);
+    if(!launch_request) {
         ciuki_chrome_status("Unable to request a new browser window.");return false;
     }
     ciuki_chrome_status("Opening a new browser window...");return true;
+}
+void ciuki_chrome_launch_result(const struct desk_packet *p)
+{
+    if(p->request==launch_request && (p->index==DESK_LAUNCH || p->index==DESK_V3_LAUNCH)) {
+        launch_request=0;
+        if(p->result)ciuki_chrome_status("The desktop could not open the requested window.");
+    }
+}
+static bool open_download(int with)
+{
+    char argument[160];
+    if(with)snprintf(argument,sizeof(argument),"--file-action=%d:%s",FILES_OPEN_WITH,saved_download);
+    else snprintf(argument,sizeof(argument),"--open=%s",saved_download);
+    if(!desk_browser_file_argument(argument)) { ciuki_chrome_status("The saved file path cannot be opened.");return false; }
+    unsigned n=strlen(argument);uint8_t payload[240];
+    desk_put32(payload,5);memcpy(payload+4,"files",5);desk_put32(payload+9,n);memcpy(payload+13,argument,n);
+    launch_request=du3_request(&surface->connection,DESK_V3_LAUNCH,surface->window,surface->generation,payload,13+n,-1);
+    ciuki_chrome_status(launch_request?"Opening the saved file in Files...":"Unable to request Files.");return launch_request!=0;
 }
 static void action(int id)
 {
@@ -183,12 +206,26 @@ static void event(struct du_ui *u,const struct du_event *e,void *unused)
         ciuki_chrome_status("Download cancelled.");fbtk_request_redraw(fbtk);
     } else if(e->type==DU_EV_DIALOG && e->id==SAVE_DOWNLOAD) {
         struct gui_download_window *d=saving_download;saving_download=NULL;
+        bool saved=false;
         if(d && e->index==0 && u->dialog.text[0]) {
             if(ciuki_download_save(&d->store,u->dialog.text))
                 ciuki_chrome_status(errno==EEXIST ? "That file already exists. Choose another name." : "Unable to save the download. Choose another location.");
-            else { ciuki_chrome_status("Download saved.");download_release(d); }
+            else {
+                if(strlen(u->dialog.text)<sizeof(saved_download)) {
+                    strcpy(saved_download,u->dialog.text);saved=true;
+                }
+                ciuki_chrome_status("Download saved.");download_release(d);
+            }
         } else if(d) { ciuki_chrome_status("Download cancelled.");download_release(d); }
-        du_dialog_close(u);fbtk_request_redraw(fbtk);
+        du_dialog_close(u);
+        if(saved) {
+            static const char *const choices[]={"Open","Open With...","Close"};
+            du_message(u,SAVED_DOWNLOAD,"Download Complete",saved_download,DU_DLG_ICON_INFO,choices,3,2,2);
+        }
+        fbtk_request_redraw(fbtk);
+    } else if(e->type==DU_EV_DIALOG && e->id==SAVED_DOWNLOAD) {
+        if(e->index==0 || e->index==1)open_download(e->index==1);
+        du_dialog_close(u);saved_download[0]=0;fbtk_request_redraw(fbtk);
     } else if(e->type==DU_EV_DIALOG && (e->id==OPEN || e->id==FILE_PICKER)) {
         if(e->index==0 && u->dialog.text[0]) {
             if(e->id==FILE_PICKER && file_window && file_gadget)
@@ -343,12 +380,7 @@ static bool print_key(int code)
 {
     if(code!=0x19 || !(ui.modifiers&DU_CTRL))return false;
     if(ui.modifiers&DU_SHIFT)cp_ui_setup(&printing,&ui);
-    else if(surface && surface->ready) {
-        unsigned w=surface->current.info.width,h=surface->current.info.height;
-        if(h>CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)
-            cp_ui_image(&printing,&ui,"NetSurf - visible page",surface->current.back+(size_t)CIUKI_BROWSER_TOP*w,
-                        w,h-CIUKI_BROWSER_TOP-CIUKI_BROWSER_STATUS);
-    }
+    else if(surface && surface->ready)ciuki_print_document(&printing,&ui,browser());
     return true;
 }
 bool ciuki_chrome_input(const struct ciuki_input_event *input)

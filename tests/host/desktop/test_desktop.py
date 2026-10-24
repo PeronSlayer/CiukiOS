@@ -553,6 +553,7 @@ class DesktopTests(unittest.TestCase):
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
                             "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
                            check=True, env=env)
+            subprocess.run([str(binary), "--g26c-path"], check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
             # fx-8: a 3891 ms spawn (T23 423b803a NetSurf) runs on the launcher
