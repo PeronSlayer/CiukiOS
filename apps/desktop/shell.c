@@ -26,6 +26,7 @@
 #define SH_WINDOW    DU_WINDOW
 #define SH_TIP       0xffffe1u      /* tooltip paper */
 static void tooltip_hide(struct desktop *d);
+static void logon_paint(struct desktop *,struct desk_box);
 /* fx-19 selection and drag session (defined after the icon painter). */
 static int drop_lit(const struct desktop *d, int k);
 static void dnd_commit(struct desktop *d, unsigned effect);
@@ -327,7 +328,7 @@ static int icon_is_entry(const struct desktop *d, int index)
 }
 static const char *icon_position_name(const struct desktop *d, int index)
 {
-    if (index < 3) return index == 0 ? "/Computer" : index == 1 ? "/Documents" : "/Trash";
+    if (index < 3) return index == 0 ? "/Computer" : index == 1 ? (d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents") : "/Trash";
     return icon_is_entry(d, index) ? d->sh.icons[index].label : "/Pictures";
 }
 static void build(struct desktop *d, struct sh_menu *m, int kind)
@@ -344,6 +345,11 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
         separator(m);
+        char logoff_label[44];
+        snprintf(logoff_label,sizeof(logoff_label),"Log Off%s%.31s...",d->sh.profile.name[0] ? " " : "",d->sh.profile.name);
+        item(m,logoff_label,"system-log-out",SH_ACT_LOGOFF,0,0);
+        if (d->sh.profile.name[0] && (d->sh.users.flags&USERS_LOCK))
+            item(m, "Lock", "system-lock-screen", SH_ACT_LOCK, 0, 0);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
     case SH_MENU_PROGRAMS: {
@@ -703,6 +709,8 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_ABOUT: desk_about(d); break;
     case SH_ACT_EMPTY_RECYCLE: desk_folder_empty_request(d); break;
     case SH_ACT_RUN: desk_internal_open(d, DESK_INTERNAL_RUN); break;
+    case SH_ACT_LOGOFF: d->sh.want_power=3; break;
+    case SH_ACT_LOCK: desk_session_lock(d); break;
     case SH_ACT_SHUTDOWN: desk_internal_open(d, DESK_INTERNAL_SHUTDOWN); break;
     case SH_ACT_DOCUMENT:
         if (it->arg >= 0 && (unsigned)it->arg < d->sh.cfg.recent_count) {
@@ -1504,21 +1512,25 @@ static void icons_build(struct desktop *d)
     d->sh.icon_count = 0; d->sh.icon_selected=-1; d->sh.focus_unselected=0; d->sh.anchor=-1;
     icon_add(d, "Computer", "files", "Computer", "ciuki-computer", SH_ACT_LAUNCH, 1);
     if (d->sh.icon_count!=1) return;
-    icon_add(d, "Documents", "files", "/Documents", "user-home", SH_ACT_LAUNCH, 0);
+    icon_add(d, "Documents", "files", d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents", "user-home", SH_ACT_LAUNCH, 0);
     if (d->sh.icon_count!=2) return;
     icon_add(d, "Recycle Bin", "files", "Recycle Bin", "user-trash", SH_ACT_LAUNCH, 0);
     if (d->sh.icon_count!=3) return;
     if (d->sh.folder && d->sh.folder->bin_full) d->sh.icons[2].icon = "user-trash-full";   /* G2: the bin holds something */
     if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
         const struct fm_entry *e=&d->sh.folder->model.entries[i];
-        char path[FM_PATH]; if (fm_join(path,DESK_FOLDER,e->name)) return;
+        char path[FM_PATH]; if (fm_join(path,d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER,e->name)) return;
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
             e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic", SH_ACT_LAUNCH,0);
         if (d->sh.icon_count!=(int)i+4) return;
     }
     /* Keep folder entries at index 3 + model index; Pictures is a shortcut. */
-    if (d->pictures_exists) icon_add(d, "Pictures", "files", "/Documents/Pictures", "folder", SH_ACT_LAUNCH, 0);
+    if (d->pictures_exists) {
+        char path[FM_PATH];
+        if (!fm_join(path,d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents","Pictures"))
+            icon_add(d,"Pictures","files",path,"folder",SH_ACT_LAUNCH,0);
+    }
     d->sh.icon_selected = -1;
 }
 static void icon_open(struct desktop *d, int index)
@@ -1950,7 +1962,7 @@ static void dnd_evaluate(struct desktop *d)
             }
         } else {
             kind = SH_DROP_DESKTOP;
-            snprintf(destination, sizeof(destination), "%s", DESK_FOLDER);
+            snprintf(destination, sizeof(destination), "%s", d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER);
             if (g->source < 0) allowed = FM_EFFECT_MOVE | (g->count ? FM_EFFECT_COPY : 0);   /* reposition, or Ctrl: copy beside */
             else allowed = g->source_allowed;
         }
@@ -2474,12 +2486,14 @@ void desk_shell_overlay(struct desktop *d, struct desk_box clip)
     if (d->sh.tooltip && !d->sh.notification.active && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels) draw_tooltip(d, clip);
     if (d->sh.switcher) draw_switcher(d, clip);
     if (d->sh.dnd.active) draw_drag_image(d, clip);
+    if (d->sh.user_gate>0) logon_paint(d,clip);
 }
 /* Opaque overlay bodies, shared with foreign-surface clipping. Shadows and
  * the notification's tail remain dependent on the pixels underneath. */
 unsigned desk_shell_occluders(const struct desktop *d,struct desk_box *boxes)
 {
     unsigned n=0;if(!d->shell)return 0;
+    if (d->sh.user_gate>0) { boxes[0]=(struct desk_box){0,0,(int)d->width,(int)d->height}; return 1; }
     if(d->sh.notification.active)boxes[n++]=notification_box(d);
     for(int l=0;l<d->sh.levels;l++)boxes[n++]=d->sh.menus[l].box;
     if(d->sh.volume_open)boxes[n++]=volume_popup(d);
@@ -3963,7 +3977,7 @@ static void icons_prepare(void)
      * bounded shell/menu/window variants now, including the generic icon
      * used by crash victims whose title differs from the survivor's. */
     static const unsigned sizes[]={16,22,32,48};
-    static const char *const extra[]={"go-jump","drive-removable-media","media-optical","user-trash-full"};
+    static const char *const extra[]={"go-jump","drive-removable-media","media-optical","user-trash-full","system-log-out","system-lock-screen","system-users","dialog-password"};
     for (unsigned s=0;s<sizeof(sizes)/sizeof(*sizes);s++) {
         for (unsigned i=0;i<sizeof(icon_table)/sizeof(*icon_table);i++)
             (void)store_icon(icon_table[i].name,sizes[s]);
@@ -4058,3 +4072,5 @@ int desk_link_launch(struct desktop *d, unsigned index)
     if (!result) result=d->v3_launch(d,record);
     free(record); return result;
 }
+
+#include "logon.inc"

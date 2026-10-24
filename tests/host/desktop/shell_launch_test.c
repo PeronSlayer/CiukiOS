@@ -281,7 +281,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
     spawn_hold();
-    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !env[7]);
+    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !strcmp(env[7],"USER=") && !strcmp(env[8],"CIUKI_SETTINGS=/system/settings/desktop.cfg") && !strcmp(env[9],"CIUKI_PROFILE=") && !env[10]);
     assert(!strcmp(env[2],"HOME=/Documents") && !strcmp(env[3],"TMPDIR=/tmp") && !strcmp(env[4],"PATH=/Programs"));
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
     if (!strcmp(path,"/Programs/files")) {

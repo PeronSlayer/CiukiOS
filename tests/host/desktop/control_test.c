@@ -246,8 +246,53 @@ static void power_page(void)
     assert(!du_get(&u,1802)->text[0]); cp_detach(&a);
     puts("PASS power Control Panel: firmware ownership, AC/lid/battery unknowns, APM percent/life refresh, T23 empty bay, stale-value clearing");
 }
+/* G32: actual applet actions and secret-only controller fields. */
+static struct users_request user_pending;
+static struct users_view user_view;
+static int user_ready, user_error;
+static int user_begin(void *ctx,const struct users_request *q)
+{ (void)ctx; user_pending=*q; user_ready=1; return 0; }
+static int user_poll(void *ctx,struct users_view *v,int *error)
+{ (void)ctx; if (!user_ready) return 0; user_ready=0; *v=user_view; *error=user_error; return 1; }
+static void user_key(int id,unsigned ch)
+{ struct du_event e={.type=DU_EV_KEY,.id=id,.ch=ch}; u.event(&u,&e,u.user); }
+static void users_controls(void)
+{
+    attach(CP_HOME); a.host.user_begin=user_begin; a.host.user_poll=user_poll;
+    user_view.count=1; strcpy(user_view.names[0],"Alice"); user_view.ids[0]=1; user_view.flags=USERS_FLAGS;
+    cp_open(&a,CP_USERS); assert(user_pending.operation==USERS_READ && a.user_busy);
+    cp_tick(&a); assert(!a.user_busy && du_get(&u,1600)->count==1);
+    du_set_text(du_get(&u,1601),"Bob");
+    user_key(1603,'s'); user_key(1604,'s'); du_render(&u);
+    assert(!du_get(&u,1603)->text[0] && !du_get(&u,1604)->text[0]);
+    at_click_widget(&u,1605); assert(user_pending.operation==USERS_CREATE);
+    assert(!strcmp(user_pending.name,"Bob") && !strcmp(user_pending.password,"s") && !strcmp(user_pending.confirm,"s"));
+    assert(!a.user_request.password[0] && !a.user_request.confirm[0]);
+    user_view.count=2; strcpy(user_view.names[1],"Bob"); user_view.ids[1]=2;
+    cp_tick(&a); assert(du_get(&u,1600)->count==2);
+    du_get(&u,1608)->value=0; du_get(&u,1609)->value=1; du_get(&u,1610)->value=1;
+    at_click_widget(&u,1611); assert(user_pending.operation==USERS_POLICY && user_pending.flags==(USERS_PROFILES|USERS_LOCK)); cp_tick(&a);
+    du_set_text(du_get(&u,1601),"Bob"); at_click_widget(&u,1606); assert(u.dialog.kind!=DU_DLG_NONE);
+    struct du_event cancel={.type=DU_EV_DIALOG,.id=1613,.index=1}; u.event(&u,&cancel,u.user); du_dialog_close(&u);
+    assert(!a.user_busy); cp_detach(&a);
+    const char *old=getenv("USER"); char *previous=old ? strdup(old) : NULL;
+    assert(!setenv("USER","Alice",1));
+    attach(CP_HOME); a.host.user_begin=user_begin; a.host.user_poll=user_poll;
+    cp_open(&a,CP_PASSWORDS); cp_tick(&a);
+    user_key(1602,'o'); user_key(1603,'n'); user_key(1604,'n');
+    at_click_widget(&u,1607);
+    assert(user_pending.operation==USERS_CHANGE && !strcmp(user_pending.name,"Alice") && !strcmp(user_pending.current,"Alice"));
+    assert(!strcmp(user_pending.old_password,"o") && !strcmp(user_pending.password,"n"));
+    user_error=-EACCES; cp_tick(&a); assert(!a.user_busy && strstr(du_get(&u,1612)->text,"incorrect")); user_error=0;
+    at_click_widget(&u,1614); assert(user_pending.operation==USERS_READ); cp_tick(&a); assert(!a.user_busy);
+    cp_detach(&a);
+    if (previous) { assert(!setenv("USER",previous,1)); free(previous); } else unsetenv("USER");
+    puts("PASS G32 Users and Passwords: list, masked secret canvases, create, delete Cancel, options, old/new/confirm, asynchronous failure");
+}
+
 int main(int argc, char **argv)
 {
+    users_controls();
     assert(argc == 3 || argc == 4);
     FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     folder = argv[2];

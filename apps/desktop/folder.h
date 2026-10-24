@@ -35,6 +35,7 @@ struct desk_folder {
 struct desktop;
 struct desk_box;
 int desk_folder_init(struct desktop *, const struct fm_vfs *);
+int desk_folder_init_async(struct desktop *, const struct fm_vfs *);
 void desk_folder_destroy(struct desktop *);
 void desk_folder_service(struct desktop *);
 void desk_folder_rename(struct desktop *, int);

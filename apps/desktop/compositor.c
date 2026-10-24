@@ -267,6 +267,7 @@ int desk_start_contains(const struct desktop *d, int32_t x, int32_t y)
 }
 int desk_shell_chrome_intersects(const struct desktop *d, struct desk_box box)
 {
+    if (d->sh.user_gate) return 1;
     struct desk_box ignored;
     return desk_notification_intersects(d,box) ||
         (d->shell && desk_intersect(box,desk_start_bounds(d),&ignored)) ||

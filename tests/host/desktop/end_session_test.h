@@ -1,3 +1,5 @@
+static unsigned es_logoffs;
+static void es_logoff(struct desktop *desktop) { es_logoffs++; desk_logon_open(desktop,1); }
 /* G3 end of session and window close without data loss (Windows 9x
  * WM_QUERYENDSESSION / WM_ENDSESSION, "This program is not responding",
  * the MS-DOS "cannot shut down this program automatically" warning).
@@ -234,12 +236,14 @@ static void test_end_session(void)
      * (Restart the default). */
     es_setup();
     a=shutdown_client(361,"CiukNote",1,2); es_register(a,361);
+    d->logoff=es_logoff; es_logoffs=0;
     desk_session_begin(d,3);
     assert(es_last(a,DESK_QUERY_END_SESSION).flags==DESK_ENDSESSION_LOGOFF);
     es_answer(a,361,DESK_SESSION_AGREE);
     assert(d->power.state==DESK_POWER_CLOSING && es_last(a,DESK_END_SESSION).flags==DESK_ENDSESSION_LOGOFF);
     shutdown_reap(361,0); shutdown_at(2000000000ull);
     assert(!d->power.state && !shutdown_calls && !shutdown_prepares);
+    assert(es_logoffs==1 && d->sh.user_gate==1);
     shutdown_cleanup();
     es_setup();
     int tasks=shutdown_client(371,"Task Manager",1,2); d->clients[tasks].taskman=1;

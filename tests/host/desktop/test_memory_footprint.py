@@ -85,6 +85,7 @@ class MemoryFootprintTests(unittest.TestCase):
                       "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                       *icon_assets.defines()]
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")]
+            sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c", ROOT / "src/kernel/lib/sha256.c"]
             sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c")]
             sources += [ROOT / name for name in icon_assets.SOURCES]
             sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c")]

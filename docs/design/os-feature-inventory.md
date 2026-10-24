@@ -113,17 +113,17 @@ placement: a feature is done when the user can do the same thing.
 | SD-3 | Flush caches, then soft power-off (ACPI S5 / APM), or "It's now safe to turn off your computer" | RK-power | done | Kernel call 73 (`src/kernel/core/power.c:318-372`), ACPI S5 or APM 5307h, message at `client.c:1427-1431`; `tests/host/power_test.c`, `storage_power_test.c` |
 | SD-4 | Restart (warm reboot) | — | done | `src/kernel/core/reboot.c` (8042 pulse, then triple fault) |
 | SD-5 | Ctrl+Alt+Del: Close Program dialog (task list, End Task, Shut Down); pressed again, restarts | RK-keys, RK-tools | done | Ctrl+Alt+Del opens Task Manager, or brings it to the front; pressed again with Task Manager in front it opens Shut Down with Restart the default (G3: the orderly restart, so nothing unsaved is lost, unlike Windows 98's immediate restart); Task Manager File > Shut Down; End Task asks the program to close and offers "not responding" End Task (`client.c` `desk_task_end`); End Process warns about unsaved data (`apps/tasks/tasks.c`) |
-| SD-6 | Log Off *user* (Start menu), returning to the logon dialog | RK-users | absent | No users (see SS-1) |
+| SD-6 | Log Off *user* (Start menu), returning to the logon dialog | RK-users | done | G32: Start Log Off uses G3 query/veto/end and process close, then the desktop-owned logon gate; Cancel selects the default profile. `apps/desktop/client.c`, `desktop.c:user_logoff`, `logon.inc`; G3 callback regression in `end_session_test.h`, gate in `test_window_model` |
 | SD-7 | Power-button press runs the configured action (shut down, standby) | RK-power | partial | It always shuts down (`shell.c:1173-1175`); there is no choice |
 
 ## 3. Sessions, logon, users and security
 
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| SS-1 | Logon dialog (user name and password), Microsoft Family Logon, per-user profiles (Desktop, Start Menu, My Documents, Favorites, settings) | RK-users, RK-net (`wrkc18_2`) | absent | The desktop opens straight to the shell. Setup's "Your name" is stored in `System\Identity` (`apps/control/configuration.c:30`) and used nowhere; Win32 `GetUserName` returns "Ciuki" (`apps/w32srv/registry.c:396-398`) |
-| SS-2 | Passwords applet: change the Windows password, remote administration, enable user profiles | RK-cpl | absent | — |
-| SS-3 | Screen saver password and locking | RK-users, MS-ssave | absent | No screen saver (see DS-3) |
-| SS-4 | Users applet: create and manage users | RK-cpl | absent | — |
+| SS-1 | Logon dialog (user name and password), Microsoft Family Logon, per-user profiles (Desktop, Start Menu, My Documents, Favorites, settings) | RK-users, RK-net (`wrkc18_2`) | partial | G32: optional user/password gate with user-list selection and default-profile Cancel; stable per-user Desktop, Documents (including Music/Pictures), Favorites and Start Menu/Programs directories, copied desktop settings, worker activation, native child environment, Files/desktop and common-dialog places. `apps/desktop/users*`, `profile.h`, `logon.inc`; `test_users`, `control_test`, `test_window_model`. Remaining: G20 native Start Menu editing; Win32 HKCU, GetUserName and CSIDL rebinding; roaming/network logon and Favorites browser integration |
+| SS-2 | Passwords applet: change the Windows password, remote administration, enable user profiles | RK-cpl | partial | G32: reachable Passwords applet, old/new/confirmation with masked controller-owned fields, salted PBKDF2 verifier, profile/logon/lock options and worker-backed durable writes. `apps/control/users.inc`, `apps/desktop/users.c`, `users_io.c`; account and applet host tests. Remaining: remote-administration/network password providers (shown unavailable) |
+| SS-3 | Screen saver password and locking | RK-users, MS-ssave | partial | G32: named-user Lock action and opaque password gate, input isolation, failure/Cancel keeps the session locked, authenticated unlock, `desk_session_lock` entry point. `apps/desktop/logon.inc`, `input.c`, `compositor.c`; window-model row 30. Remaining: G10 saver/idle/dismissal integration (G10 is absent in this worktree) |
+| SS-4 | Users applet: create and manage users | RK-cpl | done | G32: reachable Users applet lists, creates and deletes local users, confirms deletion, refuses active-account deletion, preserves profile files and never reuses identifiers; optional logon and personalisation settings. `apps/control/users.inc`, `apps/desktop/users*`; `test_users`, Users/Passwords scenarios in `control_test.c` |
 | SS-5 | StartUp folder and the `Run`/`RunServices` registry keys start programs at logon; `RunOnce` once | RK-apps | partial | `RunOnce`/`RunServicesOnce` run only in a Win32 virtual restart (`apps/w32srv/restart.c:16-34,125,246`); `Run` and `RunServices` are deliberately never run (`restart.c:20`). Missing: a StartUp folder and the keys at every desktop start |
 | SS-6 | System policies (Policy Editor) | RK-comp, ch. 8 | absent (scope) | Enterprise feature; no counterpart planned |
 
@@ -507,14 +507,14 @@ row's detail is in the area section it points to.
 | CP-11 | Mouse (buttons, pointers, motion, general) | RK-cpl | partial | IN-6 |
 | CP-12 | Multimedia | RK-cpl | absent | MM-4 |
 | CP-13 | Network | RK-cpl | partial | NW-3 |
-| CP-14 | Passwords | RK-cpl | absent | SS-2 |
+| CP-14 | Passwords | RK-cpl | partial | G32 Passwords applet (SS-2): password and profile options; remote-administration provider remains absent |
 | CP-15 | Power Management | RK-cpl | partial | PW-3, PW-4 |
 | CP-16 | Printers | RK-cpl | absent | PR-1 |
 | CP-17 | Regional Settings | RK-cpl | absent | TM-4 |
 | CP-18 | Sounds | RK-cpl | partial | MM-1 |
 | CP-19 | System: General, Device Manager (properties, resources, driver, disable, remove, refresh, print), Hardware Profiles, Performance (file system, graphics, virtual memory) | RK-cpl, RK-dev | partial | General, Device Manager (read-only tree with properties, resources, drivers, leases), Hardware check, Logs, Drivers (`app.c:1062-1112`, `docs/design/device-manager.md`); `tests/host/desktop/device_manager_test.c`. Missing: disable, enable, remove and update a device; Hardware Profiles; the Performance tab |
 | CP-20 | Telephony | RK-cpl | absent (scope) | NW-11 |
-| CP-21 | Users | RK-cpl | absent | SS-4 |
+| CP-21 | Users | RK-cpl | done | G32 Users applet (SS-4), shared Control Panel/Start settings catalogue |
 | CP-22 | Scanners and Cameras, Infrared | RK-cpl | absent (scope) | No such device class in the hardware baseline (`docs/design/hardware-baseline.md`) |
 
 CiukiOS has applets that Windows 98 lacks: Storage and removable devices
@@ -718,7 +718,7 @@ below assume they land first.
 | G29 | Disk tools | FM-33, FM-34, ST-8, ST-10, ST-11, ST-12, ST-14, ER-6. A Format dialog (floppy, USB, FAT12/16/32, quick or full, label); Disk Cleanup and the low-disk warning; later a defragmenter, Drive Converter, a partition tool and Backup | fx-17 (removable rw), G6 | L | A new USB stick or floppy cannot be formatted |
 | G30 | System tools | SY-1, SY-2, SY-3, SY-7, CP-2, CP-19. A browsable System Information; selectable System Monitor counters; Resource Meter; Device Manager disable, enable, remove and update; an Add New Hardware wizard; Scheduled Tasks and a Maintenance wizard | G29 for maintenance tasks | L | For advanced users; lower first-hour impact |
 | G31 | Printing | PR-1 to PR-6, CD-3, AX-1/AX-3 print. Printers folder and Add Printer; a spooler with a queue window; native generic text, PostScript and PCL drivers over LPT and print-to-file; Print and Page Setup in CiukNote, Paint, Viewer and NetSurf; Win32 printer DCs and winspool; DOS LPT capture to the spooler | G16 | XL | Few period users print in the first hour, but every application expects it |
-| G32 | Users, logon and passwords | SS-1, SS-2, SS-3, SS-4, SD-6. An optional logon dialog, per-user profiles (Desktop, Start Menu, Documents, settings), Passwords and Users applets, Log Off, screen-saver password | G10, G20 | XL | Needed for shared machines; single-user use works without it |
+| G32 | Users, logon and passwords | SS-1, SS-2, SS-3, SS-4, SD-6. An optional logon dialog, per-user profiles (Desktop, Start Menu, Documents, settings), Passwords and Users applets, Log Off, screen-saver password **Local core implemented by G32** (`docs/design/users-and-logon.md`, `build/codex/g32-report.md`); remaining: G10 saver hook integration, G20 menu editing, Win32 user/HKCU/CSIDL rebinding, network/remote password providers | G10, G20 | XL | Needed for shared machines; single-user use works without it |
 
 Two areas are not new directives. They stay inside the existing programmes:
 

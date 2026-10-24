@@ -861,6 +861,15 @@ int desk_load_portrait(uint32_t *pixels)
 
 /* ---- the image's file system for Files and CiukNote (fake_vfs.c tree) -------- */
 const struct fm_vfs *fm_native_vfs(void) { return &fake_vfs; }
+/* G6 native metadata has no kernel in this replay; the virtual VFS keeps
+ * supplying ordinary size/time/stat metadata. No PE fixture is installed. */
+int fm_native_version(const char *path,char *out,size_t cap)
+{ (void)path; if (cap) out[0]=0; return -ENOENT; }
+int ciuki_file_info_get(const char *path,struct ciuki_file_info *out)
+{ (void)path; (void)out; errno=ENOSYS; return -1; }
+int ciuki_set_attributes(const char *path,uint32_t attributes)
+{ (void)path; (void)attributes; errno=ENOSYS; return -1; }
+
 static int cn_stat(void *ctx, const char *path, struct cn_stat *st)
 {
     struct fm_meta m; int r = fake_vfs.stat_path(ctx, path, &m);

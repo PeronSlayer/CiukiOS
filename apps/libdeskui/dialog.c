@@ -2,6 +2,7 @@
  * Modal dialogs drawn inside the client window: message box, input box,
  * file open/save and progress with Cancel. */
 #include "internal.h"
+#include "../desktop/profile.h"
 #include "../desktop/sounds.h"
 #include <dirent.h>
 #include <errno.h>
@@ -26,7 +27,7 @@ enum { F_ACCEPT, F_CANCEL, F_UP, F_FOLDER, F_LIST, F_NAME, F_LOOK, F_FILE, F_PLA
 #define PLACE_MAX 31
 struct du_dialog_places {
     struct du_item rows[PLACE_MAX];
-    struct { char path[32], label[64]; } entries[PLACE_MAX];
+    struct { char path[128], label[64]; } entries[PLACE_MAX];
     unsigned count;
     uint64_t next_poll;
     int fd;
@@ -79,10 +80,11 @@ void du_dialog_tick(struct du_ui *u)
      * Only the first list owns the observer and the polling deadline. */
     struct du_dialog_places *published=p;
     p=published+1; p->count=0;
-    place_add(p,"Desktop","/Documents/Desktop","place:desktop");
-    place_add(p,"Documents","/Documents","place:documents");
-    place_add(p,"Music","/Documents/Music","audio-x-generic");
-    place_add(p,"Pictures","/Documents/Pictures","image-x-generic");
+    char personal[128];
+    profile_child(personal,sizeof(personal),"Desktop"); place_add(p,"Desktop",personal,"place:desktop");
+    place_add(p,"Documents",profile_home(),"place:documents");
+    profile_child(personal,sizeof(personal),"Music"); place_add(p,"Music",personal,"audio-x-generic");
+    profile_child(personal,sizeof(personal),"Pictures"); place_add(p,"Pictures",personal,"image-x-generic");
     place_add(p,"CiukiOS (C:)","/","drive-harddisk");
 #if defined(__i386__) || defined(DU_NATIVE_MEDIA)
     if (published->fd<0) published->fd=open("/dev/media",O_RDONLY|O_CLOEXEC);

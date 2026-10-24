@@ -1025,9 +1025,43 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void row_logon(unsigned m)
+{
+    row_name="G32 logon and password lock"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,60,60); (void)a;
+    d.sh.users.count=2; strcpy(d.sh.users.names[0],"Alice"); strcpy(d.sh.users.names[1],"Bob");
+    d.sh.users.ids[0]=1; d.sh.users.ids[1]=2; d.sh.users.flags=USERS_FLAGS;
+    desk_logon_open(&d,1); step("optional logon conceals desktop and application");
+    tap(DU_KEY_DOWN); assert(!strcmp(d.sh.user_request.name,"Bob")); step("Family Logon user selection");
+    tap(DU_KEY_TAB); tap(0x1e); assert(!strcmp(d.sh.user_request.password,"a")); step("masked password and focus");
+    tap(DU_KEY_ENTER); assert(d.sh.user_want); step("password verification pending");
+    d.sh.user_want=0; d.sh.user_pending=1;
+    struct users_view v=d.sh.users;
+    desk_logon_result(&d,&v,-EACCES); assert(d.sh.user_gate==1 && !d.sh.user_request.password[0]); step("incorrect password remains at logon");
+    tap(DU_KEY_ESC); assert(d.sh.user_choose==2); step("Cancel chooses default profile");
+    desk_logon_done(&d); step("default desktop exposed with a full repaint");
+    strcpy(d.sh.profile.name,"Alice");
+    desk_session_lock(&d); assert(d.sh.user_gate==2); step("screen saver password hook / Lock");
+    int vi=wm_v3_window(DESK_V3_OVERLAPPED,-1,200,120,240,160); assert(vi>=0);
+    struct desk_client *vc=&d.clients[vi]; struct ciuki_message msg;
+    d.v3_lease=fake_lease; vc->v3_lease_wanted=1; vc->v3_visibility=-1;
+    desk_v3_reactivate(&d,vi); assert(!d.v3_lease_state);
+    v3msg(&msg,DESK_V3_LEASE,16,vc->v3_id,vc->v3_generation);
+    desk_put32(msg.data+16,1); desk_put32(msg.data+20,320); desk_put32(msg.data+24,200); desk_put32(msg.data+28,8);
+    assert(desk_v3_receive(&d,v3_root,&msg)==-EBUSY && !d.v3_lease_state);
+    desk_cursor_update(&d); assert(!d.v3_cursor_hidden);
+    step("a background Win32 window cannot lease the display or hide the lock pointer");
+    /* Lease reacquisition after unlock is the software-only row_lease case;
+     * engine fixtures pin their generation. This request was rejected. */
+    vc->v3_lease_wanted=0; d.v3_reactivate_pending=0;
+    tap(DU_KEY_ESC); assert(d.sh.user_gate==2 && !d.sh.user_choose); step("Escape cannot bypass lock");
+    tap(0x1e); step("lock password masked");
+    v.authenticated=1; desk_logon_result(&d,&v,0); assert(!d.sh.user_gate); step("authenticated unlock exposes desktop");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_logon};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

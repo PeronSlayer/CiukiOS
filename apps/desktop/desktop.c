@@ -8,6 +8,7 @@
 #include "sound_storage.h"
 #include "media_notice.h"
 #include "settings_io.h"
+#include "users_worker.h"
 #include "wallpaper_io.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
@@ -396,7 +397,7 @@ struct launch_job {
     int client, child, channel, child_fd;
     uint64_t click_ns, begin_ns, end_ns;
     struct desk_program program;
-    char *argv[LAUNCH_ARGV], *env[8];
+    char *argv[LAUNCH_ARGV], *env[12];
     char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX];
     struct ciuki_spawn_fd mapping[2];
     uint32_t mappings;
@@ -505,8 +506,13 @@ static int launch_prepare(struct desktop *d, const struct desk_program *program,
     /* The Control Panel's keyboard layout, for libdeskui programs. */
     snprintf(job->keymap,sizeof(job->keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
     snprintf(job->tz,sizeof(job->tz),"%s",d->tz_env[0] ? d->tz_env : "TZ=UTC0");
-    char *env[]={"LC_ALL=C",job->tz,"HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
-    memcpy(job->env,env,sizeof(env));
+    char home[160], user[64], settings[160], profile[160];
+    snprintf(home,sizeof(home),"HOME=%s",d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents");
+    snprintf(user,sizeof(user),"USER=%s",d->sh.profile.name);
+    snprintf(settings,sizeof(settings),"CIUKI_SETTINGS=%s",d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE);
+    snprintf(profile,sizeof(profile),"CIUKI_PROFILE=%s",d->sh.profile.root);
+    const char *env[]={"LC_ALL=C",job->tz,home,"TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,user,settings,profile,NULL};
+    for (unsigned k=0;env[k];k++) if (launch_strings(job,&used,env[k],&job->env[k])) return E2BIG;
     job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};
     job->request=d->launch_request;
@@ -737,6 +743,9 @@ static int tasks_verify(const struct desktop *d)
 /* Start menu and taskbar icons: the Tango store through icon_map.c. */
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
 static struct cfg_writer settings_writer;
+static struct users_worker user_worker;
+static int user_initial, user_switch_saving, user_default_loading, user_default_ready;
+static int links_profile_update(struct desktop *);
 static int settings_writer_started, verbose_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
 static int theme_read_pending;
@@ -977,7 +986,7 @@ static void settings_load(struct desktop *d)
 {
     cfg_defaults(&d->sh.cfg);
     uint8_t *text; size_t n;
-    if (read_file(CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
+    if (read_file(d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
     int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
     free(text);
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
@@ -1812,6 +1821,80 @@ static void power_prepare(struct desktop *d)
         if (!fstat(fd,&st) && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) close(fd);
     }
 }
+static void user_logoff(struct desktop *d)
+{
+    user_initial=0; user_switch_saving=user_default_loading=user_default_ready=0;
+    desk_logon_open(d,1);
+    d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
+    d->sh.want_run[0]=0;
+}
+static void user_service(struct desktop *d)
+{
+    struct desk_shell *s=&d->sh;
+    if (s->user_want && !user_worker.job.started) {
+        int e=users_begin(&user_worker,&s->user_request,d->wake,d->wake_ctx);
+        if (!e) { s->user_want=0; s->user_pending=1; users_erase(s->user_request.password,USERS_PASSWORD); }
+        else { s->user_want=0; desk_logon_result(d,&s->users,e); }
+    }
+    struct users_view v; int e;
+    if (users_poll(&user_worker,&v,&e)) {
+        if (user_default_loading) {
+            user_default_loading=0; user_initial=0; s->user_pending=0;
+            if (e) { s->user_choose=0; desk_logon_result(d,&s->users,e); }
+            else user_default_ready=1;
+        } else if (user_initial) {
+            user_initial=0; s->user_pending=0;
+            if (!e) s->users=v;
+            if (e || (v.flags&USERS_LOGON)) {
+                desk_logon_open(d,1);
+                if (e) desk_logon_result(d,&s->users,e);
+            } else desk_logon_done(d);
+        } else desk_logon_result(d,&v,e);
+    }
+    if (!s->user_choose) return;
+    if (s->user_choose==2 && !user_default_ready) {
+        if (!user_worker.job.started) {
+            struct users_request q={.operation=USERS_DEFAULT};
+            int e=users_begin(&user_worker,&q,d->wake,d->wake_ctx);
+            if (e) { s->user_choose=0; desk_logon_result(d,&s->users,e); }
+            else { user_default_loading=1; s->user_pending=1; }
+        }
+        return;
+    }
+    if (s->user_choose==1 && !s->users.authenticated) return;
+    if (!user_switch_saving) {
+        if (settings_save(d)) {
+            s->user_choose=0;
+            snprintf(s->user_status,sizeof(s->user_status),"Current settings could not be saved. Try again.");
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+            return;
+        }
+        user_switch_saving=1;
+    }
+    if (launcher_inflight() || (settings_writer_started && cfg_writer_busy(&settings_writer)) || desk_folder_busy(d)) return;
+    /* The shortcut worker retains a complete snapshot until its current scan
+     * is over; update its profile only at the next worker boundary. */
+    struct user_profile old=s->profile;
+    users_profile(&s->profile,s->user_choose==1 ? s->user_request.name : "",s->user_choose==1 ? s->users.authenticated : 0,s->users.flags);
+    if (!links_profile_update(d)) { s->profile=old; return; }
+    if (settings_writer_started) { cfg_writer_stop(&settings_writer); settings_writer_started=0; }
+    int (*run_job)(void *,size_t)=settings_writer.run_job;
+    memset(&settings_writer,0,sizeof(settings_writer));
+    settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx; settings_writer.run_job=run_job;
+    desk_folder_destroy(d);
+    settings_reload_pending=settings_reload_request=settings_reload_wallpaper=theme_read_pending=0;
+    s->cfg=user_worker.settings;
+    d->pictures_exists=!!s->profile.root[0] || d->pictures_exists;
+    s->icon_count=0; desk_shell_apply(d);
+    int error=d->autoplay_fs ? desk_folder_init_async(d,d->autoplay_fs) : -ENOSYS;
+    settings_writer_started=!cfg_writer_start(&settings_writer,s->profile.settings,s->profile.temporary);
+    wallpaper_load(d); wallpaper_update(d);
+    d->v3_links_force|=DESK_LINKS_SCAN;
+    desk_logon_done(d); user_switch_saving=user_default_ready=user_initial=0;
+    if (error) desk_shell_notify_error(d,"Desktop folder unavailable",error);
+    if (!settings_writer_started) desk_shell_notify_error(d,"Profile settings worker unavailable",EIO);
+    desk_sound(d,SOUND_LOGON);
+}
 /* Serves the requests that shell.c raised while handling input. */
 static void shell_service(struct desktop *d)
 {
@@ -1838,9 +1921,15 @@ static void shell_service(struct desktop *d)
     desktop_wait("settings-save-result");
     if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
         desk_shell_notify_error(d,"Settings not saved",save_error);
+        if (sh->user_gate && user_switch_saving) {
+            sh->user_choose=0; user_switch_saving=0;
+            snprintf(sh->user_status,sizeof(sh->user_status),"Current settings could not be saved. Try again.");
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        }
     }
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) { desk_power_tick(d); return; }
+    user_service(d);
     desktop_wait("folder-service"); desk_folder_service(d);
     if (sh->want_power) {
         int action=sh->want_power; sh->want_power=0;
@@ -2023,6 +2112,7 @@ struct links_scan {
     struct desk_link_entry *out; struct link_stamp *stamps; unsigned cap, count, budget;
     const struct desk_link_entry *previous; const struct link_stamp *previous_stamps; unsigned previous_count;
     unsigned stats, reads;
+    char programs[USERS_PATH];
 };
 /* 1 directory, 0 regular file, -1 anything else or gone. */
 static int link_entry_kind(const char *file, const struct dirent *entry, struct link_stamp *stamp, struct links_scan *s)
@@ -2074,6 +2164,9 @@ static void links_directory(struct links_scan *s, const char *path, unsigned des
 static int links_list(struct links_scan *s)
 {
     s->count=0;
+    if (s->programs[0] && strcmp(s->programs,links_roots[0])) {
+        s->budget=128; links_directory(s,s->programs,0,s->cap/2,3);
+    }
     for (unsigned r=0;r<sizeof(links_roots)/sizeof(*links_roots);r++) {
         s->budget=links_budget[r];
         links_directory(s,links_roots[r],links_on_desktop[r],r ? s->cap : s->cap/2,links_depth[r]);
@@ -2104,14 +2197,30 @@ struct links_worker {
     uint64_t scanned_ns;                       /* f2-95: last completed scan, 0 = none yet */
     unsigned scans, game_scans, stats, reads;  /* f2-95: totals for tests and diagnostics */
     char source[260];
+    char profile_programs[USERS_PATH];
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
 static struct links_worker *links_worker;
+static int links_profile_update(struct desktop *d)
+{
+    struct links_worker *w=links_worker;
+    if (!w) return 1;
+    pthread_mutex_lock(&w->mutex);
+    if (w->scanning || w->launch_busy || w->save_busy) { pthread_mutex_unlock(&w->mutex); return 0; }
+    snprintf(w->profile_programs,sizeof(w->profile_programs),"%s",d->sh.profile.programs);
+    w->count=0; w->scanned_ns=0; w->scan_requested=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex);
+    d->v3_link_count=0;
+    return 1;
+}
 static void links_scan_once(struct links_worker *w, int games)
 {
     struct links_scan s={.out=w->scratch,.stamps=w->scratch_stamps,.cap=DESK_LINKS,
         .previous=w->published,.previous_stamps=w->published_stamps,.previous_count=w->count};
+    pthread_mutex_lock(&w->mutex);
+    snprintf(s.programs,sizeof(s.programs),"%s",w->profile_programs);
+    pthread_mutex_unlock(&w->mutex);
     int count=links_list(&s);
     unsigned removed=w->games_removed;
     for(unsigned g=1;games && g<=CIUKI_DOSVM_GAME_COUNT;g++){
@@ -2297,6 +2406,8 @@ static void shell_setup(struct desktop *d, int gate)
     scan_programs(d);
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
+    users_profile(&d->sh.profile,"",0,0);
+    d->logoff=user_logoff;
     if (!gate) settings_load(d);
     if (!gate) startup_stage("settings_read");
     struct stat pictures;
@@ -2308,14 +2419,20 @@ static void shell_setup(struct desktop *d, int gate)
         if (result) desk_shell_notify_error(d,"Desktop folder unavailable",result);
         settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx;
         settings_writer.run_job=mixer_job_run;
-        settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
+        settings_writer_started=!cfg_writer_start(&settings_writer,d->sh.profile.settings,d->sh.profile.temporary);
         int autoplay_error=desk_autoplay_prepare(d);
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
-    if (!gate) desktop_watchdog_start(d);
+    if (!gate) {
+        /* Keep the ordinary first desktop frame when logon is disabled;
+         * hold input only until the worker has read the optional policy. */
+        user_initial=1; d->sh.user_gate=-1; d->sh.user_previous_focus=d->focus;
+        d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
+        desktop_watchdog_start(d);
+    }
     /* fx-8: ordinary desktops spawn on the launcher worker. */
     if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
