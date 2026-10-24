@@ -6,9 +6,10 @@
 /* G28b: builds the formatted document for the printer and page the user chose; runs on the UI thread when OK is pressed.
  * driver is the printer's cp_driver. 0 or -errno; the arrays are owned by the controller afterwards (cp_doc_free). */
 typedef int (*cp_prepare_fn)(void *ctx, const struct cp_page *page, unsigned driver, struct cp_doc *out);
+#include <stdio.h>
 /* One controller per client. The worker owns only the immutable snapshot. */
 struct cp_ui {
-    cp_prepare_fn prepare; void *prepare_ctx; struct cp_doc doc; int document, preset;
+    cp_prepare_fn prepare; void *prepare_ctx; struct cp_doc doc; int formatted, preset;
     struct cp_page page;
     struct cp_config *config;
     struct du_job job;
@@ -18,6 +19,10 @@ struct cp_ui {
     unsigned width, height, printer;
     int initialized, image, result, error, active;
     char title[CP_TITLE], target[CP_PATH];
+    char source[CP_PATH+96];
+    void *document;
+    int (*render)(void *, FILE *, unsigned, const struct cp_page *);
+    void (*release)(void *);
     struct du_item printer_rows[CP_PRINTERS];
     unsigned printer_ids[CP_PRINTERS];
 };
@@ -26,6 +31,11 @@ void cp_ui_text(struct cp_ui *, struct du_ui *, const char *, const char *, size
 void cp_ui_image(struct cp_ui *, struct du_ui *, const char *, const uint32_t *, unsigned, unsigned);
 /* Print dialog for a formatted document; `initial` (may be NULL) is the paper and margins the document was set up with. */
 void cp_ui_doc(struct cp_ui *, struct du_ui *, const char *title, const struct cp_page *initial, cp_prepare_fn, void *ctx);
+/* Takes ownership of document, including on refusal. Render runs on the UI
+ * owner after Print is accepted; the worker receives only the completed file.
+ * Callback returns 0 or -1/errno; no partial output is published. */
+void cp_ui_document(struct cp_ui *, struct du_ui *, const char *, void *,
+                    int (*)(void *, FILE *, unsigned, const struct cp_page *), void (*)(void *));
 /* Return nonzero when the controller consumed a dialog event. */
 int cp_ui_event(struct cp_ui *, struct du_ui *, const struct du_event *);
 void cp_ui_poll(struct cp_ui *, struct du_ui *);

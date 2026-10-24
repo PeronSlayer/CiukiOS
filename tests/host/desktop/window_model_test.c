@@ -2389,6 +2389,52 @@ static void row_g30b_network(unsigned m)
     app_paint(monitor,20,60,390,220,0x334455); step("adapter reset or unavailable source");
     app_close(cover); step("counter changes exposed"); wm_end();
 }
+static void row_g26c_print(unsigned m)
+{
+    row_name="G26C paginated Print and Page Setup";wm_begin(m,1);
+    struct fake_app *a=app_open("netsurf",360,280,90,60);
+    app_paint(a,20,40,310,205,0x723416);step("browser Print dialog opens over the full document");
+    app_paint(a,40,100,260,22,0x819273);step("printer copies range and print-to-file edited");
+    app_paint(a,0,0,360,280,0x357111);step("Cancel exposes the document");
+    app_paint(a,20,40,310,205,0x635812);step("Page Setup opens");
+    app_paint(a,30,80,280,90,0x871234);step("paper landscape and margins edited");
+    app_paint(a,0,0,360,280,0x357111);step("Page Setup accepted");
+    app_paint(a,40,90,260,80,0x123678);step("queued or failed print status");wm_end();
+}
+static void row_g26c_download(unsigned m)
+{
+    row_name="G26C download Open and Open With";wm_begin(m,1);
+    int browser=wm_v3_window(DESK_V3_OVERLAPPED,-1,40,60,320,220);assert(browser>=0);
+    struct desk_client *c=&d.clients[browser];struct ciuki_message request;
+    const char *arg="--file-action=348:/Documents/a file.txt";unsigned n=strlen(arg);
+    v3msg(&request,DESK_V3_LAUNCH,13+n,c->v3_id,c->v3_generation);
+    desk_put32(request.data+16,5);memcpy(request.data+20,"files",5);
+    desk_put32(request.data+25,n);memcpy(request.data+29,arg,n);
+    strcpy(d.clients[v3_root].application,"other");assert(desk_v3_receive(&d,v3_root,&request)==-EPERM);
+    step("nonbrowser file launch refused");
+    strcpy(d.clients[v3_root].application,"netsurf");assert(!desk_v3_receive(&d,v3_root,&request));
+    struct fake_app *files=last_app;assert(files);app_spawned(files);app_create_window(files);step("Files opens for saved download");
+    app_paint(files,0,0,files->w,files->h,0x572903);step("Open With program and Always use chooser");
+    app_close(files);step("Open With closes exposing browser");wm_end();
+}
+static void row_g26c_programs(unsigned m)
+{
+    row_name="G26C Internet Programs actions";wm_begin(m,1);
+    struct fake_app *a=app_open("control",360,280,110,50);
+    app_paint(a,10,30,340,220,0x485793);step("Programs default and File Types actions enabled");
+    app_paint(a,10,244,340,22,0x673211);step("default browser success or error status");
+    struct fake_app *files=app_open("files",360,280,190,110);step("shared File Types opens");
+    app_paint(files,20,40,300,200,0x196547);step("shared browser association edited");
+    app_close(files);step("File Types closes");wm_end();
+}
+static void row_g26c_launch_error(unsigned m)
+{
+    row_name="G26C asynchronous new-window error";wm_begin(m,1);
+    struct fake_app *a=app_open("netsurf",360,240,90,70);
+    app_paint(a,0,218,360,22,0x351278);step("new-window request queued status");
+    app_paint(a,0,218,360,22,0x832170);step("desktop late launch refusal status without opener navigation");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2407,7 +2453,8 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_icon_keyboard, row_system_icon_rename, row_wallpaper_change, row_shortcut_wizard, row_icon_metrics,
     row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout,
     row_icon_drop_targets, row_wallpaper_pattern, row_recovery, row_startup_disk_tools,
-    row_g30b_performance, row_g30b_schedule, row_g30b_network};
+    row_g30b_performance, row_g30b_schedule, row_g30b_network, row_g26c_print, row_g26c_download,
+    row_g26c_programs, row_g26c_launch_error};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

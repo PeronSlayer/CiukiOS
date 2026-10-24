@@ -481,7 +481,7 @@ int fm_associate(const char *path,const char *program)
 int fm_command_record(const char *command,const char *file,struct desk_launch_record *r)
 {
     memset(r,0,sizeof(*r)); r->show=1;
-    snprintf(r->label,sizeof(r->label),"%.63s",fm_basename(file));
+    snprintf(r->label,sizeof(r->label),"%.63s",!strncasecmp(file,"http://",7) || !strncasecmp(file,"https://",8)?"Web page":fm_basename(file));
     const char *p=command; while (*p==' ' || *p=='\t') p++;
     int quoted=*p=='"'; if (quoted) p++; unsigned at=0;
     while (*p && (quoted ? *p!='"' : *p!=' ' && *p!='\t')) {
@@ -504,6 +504,30 @@ int fm_command_record(const char *command,const char *file,struct desk_launch_re
         memcpy(r->arguments+at,s,n); at+=n; p++;
     }
     return desk_launch_valid(r) ? 0 : -EINVAL;
+}
+int fm_browser_default(void)
+{
+    /* The command is installed before the extension points to it. Every
+     * mutation goes through G8's shared HKCR service, including Win32 reads. */
+    int e=fm_associate("page.htm","/Programs/netsurf");
+    if(!e)e=fm_associate("page.html","/Programs/netsurf");
+    static const char *const protocols[]={"http","https"};
+    for(unsigned i=0;!e && i<2;i++) {
+        char key[80];snprintf(key,sizeof(key),"%s\\shell\\open\\command",protocols[i]);
+        e=fm_registry_set(key,"","\"/Programs/netsurf\" \"%1\"");
+        if(!e) { snprintf(key,sizeof(key),"%s\\shell",protocols[i]);e=fm_registry_set(key,"","open"); }
+        if(!e)e=fm_registry_set(protocols[i],"URL Protocol","");
+    }
+    return e;
+}
+static int op_url_association(const char *url,struct desk_launch_record *r)
+{
+    char command[1536];
+    const char *key=!strncasecmp(url,"https://",8)?"https\\shell\\open\\command":"http\\shell\\open\\command";
+    int e=fm_registry_get(key,"",command,sizeof(command));
+    if(e==-ENOENT || e==-ENOSYS || e==-EPIPE)strcpy(command,"\"/Programs/netsurf\" \"%1\"");
+    else if(e)return e;
+    return fm_command_record(command,url,r);
 }
 int fm_association(const char *path,const char *verb,struct desk_launch_record *r)
 {
@@ -576,10 +600,9 @@ int fm_launch_resolve(const struct fm_vfs *fs,const char *path,const char *verb,
     if (strlen(path)>=FM_PATH) e=-ENAMETOOLONG; else strcpy(current,path);
     for (unsigned depth=0;!e && depth<9;depth++) {
         memset(r,0,sizeof(*r)); r->show=show;
-        if (!strncmp(current,"http://",7) || !strncmp(current,"https://",8)) {
-            strcpy(r->label,"NetSurf"); strcpy(r->target,"/Programs/netsurf");
-            if (strchr(current,'"') || strlen(current)+3>sizeof(r->arguments)) { e=-E2BIG; break; }
-            snprintf(r->arguments,sizeof(r->arguments),"\"%s\"",current); break;
+        if (!strncasecmp(current,"http://",7) || !strncasecmp(current,"https://",8)) {
+            if(strchr(current,'"')) { e=-EINVAL;break; }
+            e=op_url_association(current,r);break;
         }
         e=fm_posix_path(current,current); if (e) break;
         struct fm_meta meta; e=fs->stat_path(fs->ctx,current,&meta); if (e) break;

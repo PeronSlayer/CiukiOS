@@ -537,7 +537,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "launch-test"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
-            sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c"]
+            sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c", ROOT / "apps/desktop/schedsvc.c"]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
             sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
             bridge = folder / "kernel-poll.o"
@@ -553,6 +553,7 @@ class DesktopTests(unittest.TestCase):
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
                             "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
                            check=True, env=env)
+            subprocess.run([str(binary), "--g26c-path"], check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
             # fx-8: a 3891 ms spawn (T23 423b803a NetSurf) runs on the launcher

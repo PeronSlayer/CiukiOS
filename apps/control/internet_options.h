@@ -32,7 +32,25 @@ static inline unsigned internet_zone(const struct cp_internet_options *o,const c
 {
     if(internet_site_match(o->restricted,host))return 3;
     if(internet_site_match(o->trusted,host))return 2;
-    if(!strchr(host,'.') || !strncmp(host,"127.",4) || !strncmp(host,"10.",3) || !strncmp(host,"192.168.",8))return 1;
+    if(!*host)return 0;
+    unsigned parts[4]={0},part=0,digits=0;int numeric=1;
+    for(const char *p=host;;p++) {
+        unsigned c=(unsigned char)*p;
+        if(c>='0' && c<='9') { if(++digits>3 || (parts[part]=parts[part]*10+c-'0')>255) { numeric=0;break; } }
+        else if(c=='.' && digits && part<3) { part++;digits=0; }
+        else { if(c || part!=3 || !digits)numeric=0;break; }
+    }
+    if(numeric)return parts[0]==127 || parts[0]==10 || (parts[0]==192 && parts[1]==168) ||
+                      (parts[0]==172 && parts[1]>=16 && parts[1]<=31)?1:0;
+    /* A dotless DNS name is intranet. Malformed addresses and IPv6 literals
+     * never inherit that rule; IPv6 transport is not implemented here. */
+    int hostname=0;
+    for(const char *p=host;*p;p++) {
+        unsigned c=(unsigned char)*p;
+        if((c>='a' && c<='z') || (c>='A' && c<='Z'))hostname=1;
+        else if(!((c>='0' && c<='9') || c=='-'))return 0;
+    }
+    if(hostname)return 1;
     return 0;
 }
 static inline void internet_defaults(struct cp_internet_options *o)

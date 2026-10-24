@@ -39,6 +39,7 @@ struct fm_filetype {
 int fm_filetype_get(struct fm_filetype *);
 int fm_filetype_set(const struct fm_filetype *);
 int fm_associate(const char *path, const char *program);
+int fm_browser_default(void);
 int fm_association(const char *path, const char *verb, struct desk_launch_record *);
 /* 0 program/document/URL, 1 folder, negative errno. Re-read links on use. */
 int fm_launch_resolve(const struct fm_vfs *, const char *path, const char *verb, struct desk_launch_record *);

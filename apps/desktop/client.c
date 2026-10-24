@@ -6,6 +6,7 @@
 #include "desktop.h"
 #include "gate.h"
 #include "help_request.h"
+#include "browser_launch.h"
 #include <errno.h>
 #include <string.h>
 #include <strings.h>
@@ -954,8 +955,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
                       !strcmp(p.title,"ciukide-run");
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                         !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
-        int panel_launch=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"control") &&
-                         (!strcmp(p.argument,"--panel=display") || !strcmp(p.argument,"--panel=power"));
+        char file_types[40];snprintf(file_types,sizeof(file_types),"--file-action=%d:",FILES_TYPES);
+        int panel_launch=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL &&
+                         ((!strcmp(p.title,"control") && (!strcmp(p.argument,"--panel=display") || !strcmp(p.argument,"--panel=power"))) ||
+                          (!strcmp(p.title,"files") && !strcmp(p.argument,file_types)));
         int install=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"install") && p.argument[0];
         /* G15: every program's F1 and Help menu opens CiukiOS Help (topic:<id> or no argument). */
         int help_open = p.opcode == DESK_LAUNCH && !c->taskman && !strcmp(p.title, "help") && desk_help_argument(p.argument);
@@ -2820,7 +2823,9 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         else desk_power_reply(d,i,p.serial,p.flags);
         break;
     case DESK_V3_LAUNCH:
-        error=!netsurf_wallpaper_request(c,&p) || !d->shell ? -EPERM : desk_task_launch(d,p.title,p.argument);
+        error=(!netsurf_wallpaper_request(c,&p) &&
+               !( !strcmp(anchor->application,"netsurf") && !strcmp(p.title,"files") && desk_browser_file_argument(p.argument))) || !d->shell
+              ? -EPERM : desk_task_launch(d,p.title,p.argument);
         if (error>0) error=0; /* A positive PID means the Control Panel was started. */
         d->launch_deferred=0; /* V3 replies report accepted queueing, not a later v2 TASK_RESULT. */
         break;

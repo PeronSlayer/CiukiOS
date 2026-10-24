@@ -266,7 +266,7 @@ int main(int argc, char **argv)
 {
     (void)setlocale(LC_ALL, ""); /* G24: opt into the user's regional formats. */
     int channel = 3, test = 0, bin_properties = 0, find = 0, shell_action=0, folder_options=0;
-    const char *shell_path=NULL; char shell_parent[FM_PATH];
+    const char *shell_path=NULL,*open_document=NULL; char shell_parent[FM_PATH];
     char **shell_paths=NULL; unsigned shell_count=0;
     const char *path = FM_COMPUTER, *property=NULL;
     char property_parent[FM_PATH];
@@ -277,6 +277,10 @@ int main(int argc, char **argv)
             channel = (int)n;
         } else if (!strcmp(argv[i], "--test=files")) test = 1;
         else if (!strcmp(argv[i],"--folder-options")) folder_options=1;
+        else if (!strncmp(argv[i],"--open=",7)) {
+            shell_path=argv[i]+7;if(shell_path[0]!='/' || fm_parent(shell_parent,shell_path))return 2;
+            open_document=shell_path;path=shell_parent;
+        }
         else if (!strncmp(argv[i],"--properties=",13)) { property=argv[i]+13; if (!property[0]) return 2; }
         /* G2: the desktop's Recycle Bin icon opens the bin, or its Properties. */
         else if (!strcmp(argv[i], "recycle:properties")) { path = "Recycle Bin"; bin_properties = 1; }
@@ -331,6 +335,7 @@ int main(int argc, char **argv)
     a->show_folder_options=folder_options;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }
     if (shell_action) files_shell_action(a,shell_action,shell_path);
+    if (open_document) files_open_document(a,open_document);
     /* Fixed placement keeps the scripted desktop case deterministic. */
     if (test) du_window_move(&m->window, 4, 36);
     int r = du_run(&m->window, idle, a);

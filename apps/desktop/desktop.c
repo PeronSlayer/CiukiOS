@@ -2553,7 +2553,7 @@ static void *links_thread(void *arg)
                 snprintf(r->directory,sizeof(r->directory),"%s",path);
                 char *slash=strrchr(r->directory,'/');if(slash)*slash=0;
                 result=0;
-            }else if(r && launch==3) {
+            }else if(r && launch==4) {
                 result=fm_launch_resolve(fm_native_vfs(),path,NULL,r);
                 if (result==1) result=0; /* folder is a Files launch record */
                 if (!strncmp(path,"/system/settings/open-",22)) (void)unlink(path);
@@ -2693,7 +2693,7 @@ static int shell_open_path(struct desktop *d,const char *path)
     if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
     int e=0;
     if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
-    else { strcpy(w->source,path); w->launch_requested=3; pthread_cond_signal(&w->changed); }
+    else { strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return e;
 }
 extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));

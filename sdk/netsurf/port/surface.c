@@ -5,6 +5,8 @@
 #include <string.h>
 #include <sys/mman.h>
 #include "surface.h"
+/* Standalone transport fixtures do not link the browser chrome. */
+extern void ciuki_chrome_launch_result(const struct desk_packet *) __attribute__((weak));
 #include "apps/libdeskui/keymap.h"
 #include "third_party/pixman/pixman-region32.c"
 
@@ -296,6 +298,7 @@ int ciuki_browser_packet(struct ciuki_browser_surface *s,const struct desk_packe
 {
     if(p->window_id!=s->window || p->generation!=s->generation)return 0;
     if(p->opcode==DESK_V3_RESULT) {
+        if(ciuki_chrome_launch_result)ciuki_chrome_launch_result(p);
         if(p->request==s->create_request && p->index==DESK_CREATE_WINDOW) {
             s->create_request=0; if(p->result) { ciuki_browser_mark_closed(s,"window-refused",p->result); return -1; }
             s->ready=true;

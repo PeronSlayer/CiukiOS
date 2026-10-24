@@ -556,10 +556,15 @@ static int paste_system(struct wp_app *a)
     }
     return 0;
 }
+static const char *clipboard_text(void)
+{
+    const char *text = du_system_clipboard_text_get();
+    return text ? text : du_clipboard_get();
+}
 static void paste(struct wp_app *a)
 {
     if (paste_system(a)) return;
-    const char *text = du_clipboard_get(); size_t n = strlen(text);
+    const char *text = clipboard_text(); size_t n = strlen(text);
     if (!n) return;
     if (a->clip_valid && a->clip_plain && !strcmp(text, a->clip_plain)) { paste_slice(a, &a->clip); return; }   /* our own copy: keep its formatting */
     char *clean; size_t len;
@@ -2296,7 +2301,7 @@ static void handle_pointer(struct wp_app *a, const struct du_event *e)
                                                                      {"&Font...", M_FONT}, {"&Bullet Style", M_BULLET}, {"&Paragraph...", M_PARAGRAPH}};
         int sel = has_selection(a);
         for (unsigned i = 0; i < 7; i++) {
-            unsigned disabled = (rows[i].id == M_CUT || rows[i].id == M_COPY) && !sel ? DU_ITEM_DISABLED : rows[i].id == M_PASTE && !du_clipboard_get()[0] ? DU_ITEM_DISABLED : 0;
+            unsigned disabled = (rows[i].id == M_CUT || rows[i].id == M_COPY) && !sel ? DU_ITEM_DISABLED : rows[i].id == M_PASTE && !clipboard_text()[0] ? DU_ITEM_DISABLED : 0;
             a->list_popup[i] = (struct du_menu_item){rows[i].label, rows[i].id, 0, 0, disabled | (rows[i].id == M_BULLET && a->pmix.bullet == 1 ? DU_ITEM_CHECKED : 0)};
         }
         du_popup(a->ui, a->list_popup, 7, e->x, e->y, W_DOC);
@@ -2427,7 +2432,7 @@ static void add_tool(struct wp_app *a, int id, const char *object, unsigned size
     struct du_widget *b = du_add(a->ui, DU_TOOLBUTTON, id, (struct du_rect){0}, "");
     if (!b) return;
     b->icon = icon(object, size); b->icon_size = (int)size; b->dropdown = dropdown;
-    b->tip = tip; b->help = help;   /* G15: the tooltip and the What's This? text */
+    du_set_tip(b, tip); b->help = help;   /* G15: the tooltip and the What's This? text */
     if (!b->icon) b->icon_size = 0;
 }
 int wp_attach(struct wp_app *a, struct du_ui *u)
@@ -2464,8 +2469,8 @@ int wp_attach(struct wp_app *a, struct du_ui *u)
         } else du_add(u, DU_SEPARATOR, toolbar_buttons[i].id, zero, "");
     }
     du_add(u, DU_TOOLBAR, W_FORMATBAR, zero, "");
-    struct du_widget *f = du_add(u, DU_BUTTON, W_FONTBTN, zero, ""); if (f) { f->dropdown = 0; f->tip = "Font"; f->help = "Changes the font of the selected text."; }
-    struct du_widget *sz = du_add(u, DU_BUTTON, W_SIZEBTN, zero, ""); if (sz) { sz->tip = "Font Size"; sz->help = "Changes the size of the selected text."; }
+    struct du_widget *f = du_add(u, DU_BUTTON, W_FONTBTN, zero, ""); if (f) { f->dropdown = 0; du_set_tip(f, "Font"); f->help = "Changes the font of the selected text."; }
+    struct du_widget *sz = du_add(u, DU_BUTTON, W_SIZEBTN, zero, ""); if (sz) { du_set_tip(sz, "Font Size"); sz->help = "Changes the size of the selected text."; }
     add_tool(a, W_COLORBTN, "preferences-desktop-theme", 22, 0, "Color", "Changes the color of the selected text.");
     du_add(u, DU_SEPARATOR, W_SEP1 + 10, zero, ""); du_add(u, DU_SEPARATOR, W_SEP1 + 11, zero, "");
     add_tool(a, M_BOLD, "action:bold", 22, 0, "Bold", "Makes the selected text bold, or turns bold off."); add_tool(a, M_ITALIC, "action:italic", 22, 0, "Italic", "Makes the selected text italic, or turns italic off.");
@@ -2479,9 +2484,9 @@ int wp_attach(struct wp_app *a, struct du_ui *u)
     struct du_widget *doc = du_add(u, DU_CANVAS, W_DOC, zero, "");
     if (!doc) return -ENOMEM;
     doc->accepts_tab = 1; doc->wheel_events = 1; doc->pointer_cursor = DESK_CURSOR_TEXT;
-    doc->tip = NULL; doc->help = "Type your document here. Use the Format menu or the format bar to change how it looks.";
+    du_set_tip(doc, NULL); doc->help = "Type your document here. Use the Format menu or the format bar to change how it looks.";
     struct du_widget *ruler = du_add(u, DU_CANVAS, W_RULER, zero, "");
-    if (ruler) { ruler->tip = NULL; ruler->help = "Drag the markers to change the indents of the paragraph; click to add a tab stop and drag it off the ruler to remove it."; }
+    if (ruler) { du_set_tip(ruler, NULL); ruler->help = "Drag the markers to change the indents of the paragraph; click to add a tab stop and drag it off the ruler to remove it."; }
     struct du_widget *sb = du_add(u, DU_SCROLLBAR, W_SCROLL, zero, ""); if (sb) sb->vertical = 1;
     struct du_widget *hb = du_add(u, DU_SCROLLBAR, W_HSCROLL, zero, ""); if (hb) { hb->vertical = 0; hb->hidden = 1; }
     du_add(u, DU_STATUS, W_STATUS, zero, "");

@@ -94,6 +94,7 @@ struct cp_host {
     int (*user_poll)(void *,struct users_view *,int *);
     int (*internet_clear_history)(void *);
     int (*internet_default)(void *);
+    int (*internet_programs)(void *);
     int (*internet_load)(void *,struct cp_internet_options *);
     int (*internet_save)(void *,const struct cp_internet_options *);
     int (*menu_begin)(void *,const struct sh_edit_request *,const char *arguments);

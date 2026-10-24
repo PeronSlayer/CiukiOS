@@ -88,7 +88,7 @@ static void test_end_session(void)
     assert(d->session.state && !d->power.state && !es_terms && !shutdown_calls && !d->end_task.kind && d->clients[a].window);
     es_answer(a,301,DESK_SESSION_AGREE);           /* the user saved */
     assert(!d->session.state && d->power.state==DESK_POWER_CLOSING);
-    struct desk_packet end=es_last(a,DESK_END_SESSION); assert(end.focused==1 && !end.flags);
+    static struct desk_packet end;end=es_last(a,DESK_END_SESSION); assert(end.focused==1 && !end.flags);
     assert(es_count(b,DESK_END_SESSION)==1 && es_last(b,DESK_END_SESSION).focused==1);
     assert(es_count(plain,DESK_CLOSE_REQUEST)==1 && !es_count(plain,DESK_END_SESSION));
     assert(es_count(legacy,DESK_CLOSED)==1 && !es_count(a,DESK_CLOSE_REQUEST));

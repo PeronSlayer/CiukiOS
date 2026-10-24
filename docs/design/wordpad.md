@@ -240,3 +240,15 @@ inserting; WMF/EMF/PICT drawing; picture sizing and cropping by dragging; right,
 importers keep left tabs only); registry persistence of options; the common Font dialog (G16); What's This? on dialog
 controls and troubleshooters (G15b); Win32 common-dialog guest qualification, hardware printing and guest evidence of every
 screen (all host tests use fixed-advance fonts and pinned frames reviewed as screenshots on 2026-10-24).
+
+### Integration: G15/G16 tooltip storage and G5 plain-text paste
+
+WordPad uses G16's `du_set_tip` for the owned tooltip array, retaining G15's
+help strings. The G5 clipboard fixture exposed that the plain-text paste path
+still read the legacy file clipboard after detecting system Unicode text.
+[Microsoft's standard clipboard formats](https://learn.microsoft.com/en-us/windows/win32/dataxchg/standard-clipboard-formats)
+defines CF_UNICODETEXT as NUL-terminated Unicode with CR/LF lines. Reuse the
+existing system text decoder for paste and its menu availability; fall back to
+the toolkit file clipboard only when no system transport is bound. RTF and DIB
+priority and newline sanitization retain their existing paths. The production
+WordPad host fixture covers formatted, picture and cross-client plain text.

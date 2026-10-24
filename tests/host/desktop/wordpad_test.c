@@ -918,7 +918,7 @@ static void test_print(void)
     assert(!wp_print_prepare(&app, &page, CP_POSTSCRIPT, &doc));
     int id = cp_submit_doc(root, CP_PRINTERS, "WordPad", &doc, &page, NULL); assert(id > 0); cp_doc_free(&doc);
     char path[700]; snprintf(path, sizeof(path), "%s/j%03d/data", root, id);
-    FILE *f = fopen(path, "rb"); assert(f); char buf[65536]; size_t got = fread(buf, 1, sizeof(buf) - 1, f); fclose(f); buf[got] = 0;
+    FILE *f = fopen(path, "rb"); assert(f); static char buf[65536]; size_t got = fread(buf, 1, sizeof(buf) - 1, f); fclose(f); buf[got] = 0;
     assert(!strncmp(buf, "%!PS-Adobe-3.0", 14) && strstr(buf, "(Heading) show") && strstr(buf, "colorimage") && strstr(buf, "/F1 findfont 10.0 scalefont setfont") && strstr(buf, "showpage"));
     /* the hook is optional: without it Print says so */
     reset(); app.print = NULL; cmd(M_PRINT); assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "not available")); ENTER;
@@ -990,8 +990,8 @@ static void test_locale_help_tips(void)
     ui.help_open = NULL; cmd(M_HELP); assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "Ctrl+J")); ENTER;
     /* every button of the toolbar and the format bar has a tooltip and a What's This? text */
     static const int tools[] = {M_NEW, M_OPEN, M_SAVE, M_PRINT, M_PREVIEW, M_FIND, M_CUT, M_COPY, M_PASTE, M_UNDO, M_DATETIME, M_BOLD, M_ITALIC, M_UNDERLINE, M_LEFT, M_CENTER, M_RIGHT, M_BULLET, W_COLORBTN};
-    for (unsigned i = 0; i < sizeof(tools) / sizeof(*tools); i++) assert(W(tools[i])->tip && W(tools[i])->tip[0] && W(tools[i])->help && strlen(W(tools[i])->help) > 10);
-    assert(W(W_FONTBTN)->tip && W(W_SIZEBTN)->tip && W(W_DOC)->help && W(W_RULER)->help);
+    for (unsigned i = 0; i < sizeof(tools) / sizeof(*tools); i++) assert(W(tools[i])->tip[0] && W(tools[i])->help && strlen(W(tools[i])->help) > 10);
+    assert(W(W_FONTBTN)->tip[0] && W(W_SIZEBTN)->tip[0] && W(W_DOC)->help && W(W_RULER)->help);
 }
 
 int main(int argc, char **argv)

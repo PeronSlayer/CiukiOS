@@ -37,7 +37,7 @@ static void settle(void)
     for (unsigned i=0;app.job_active || app.reading;i++) {
         assert(i<5000); ui.now+=10000000;
         du_tick(&ui,ui.now); files_test_wait(&app);
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     frame();
 }
@@ -80,7 +80,9 @@ int main(int argc,char **argv)
     memcpy(fake_nodes[note].data,"\177ELF",4); memcpy(fake_nodes[paint].data,"\177ELF",4);
     pixels=calloc(760*520+1,4); reference=calloc(760*520,4); assert(pixels && reference); pixels[760*520]=0x1234abcd;
     du_init(&ui,pixels,760,520); app.spawn=spawn_test; assert(!files_setup(&app,&ui,&fake_vfs,"/work")); frame();
-    char *selected_paths[]={"/work/a.txt","/work/b.txt"}; char manifest[FM_PATH];
+    files_open_document(&app,"/work/b.txt");assert(launches==1 && !strcmp(argument,"/work/b.txt"));
+    frame();
+    char *selected_paths[]={"/work/a.txt","/work/b.txt"}; static char manifest[FM_PATH];
     assert(!fm_shell_selection_write(&fake_vfs,selected_paths,2,manifest));
     assert(!fm_shell_selection_read(&fake_vfs,manifest,&app.shell_paths,&app.shell_count)); assert(!fake_vfs.unlink(NULL,manifest));
     assert(!raw_navigate(&app,"/work")); files_shell_action(&app,FILES_COPY_TO,NULL); files_test_wait(&app);
@@ -108,7 +110,7 @@ int main(int argc,char **argv)
     cancel(); action(FILES_OPEN_WITH);
     du_set_text(&ui.dialog.items[3],"/Programs/paint"); ui.dialog.items[4].value=0; ui.dialog.focus=0; accept();
     assert(!strcmp(launched,"/Programs/paint"));
-    struct desk_launch_record r; assert(!fm_association("/work/a.txt",NULL,&r) && !strcmp(r.target,"/Programs/ciuknote"));
+    static struct desk_launch_record r; assert(!fm_association("/work/a.txt",NULL,&r) && !strcmp(r.target,"/Programs/ciuknote"));
     action(FILES_OPEN_WITH); du_set_text(&ui.dialog.items[3],"/Programs/paint"); ui.dialog.items[4].value=1; ui.dialog.focus=0; accept();
     assert(!fm_association("/work/a.txt",NULL,&r) && !strcmp(r.target,"/Programs/paint"));
     action(FILES_TYPES); assert(du_dialog_id(&ui)==244);
@@ -126,7 +128,7 @@ int main(int argc,char **argv)
     assert(fake_lookup("/Documents/Desktop/Shortcut to a.txt.lnk")>=0);
     action(FILES_SEND_TO); action(401); settle(); assert(fake_lookup("/Documents/a.txt")>=0);
     struct fm_model *send=calloc(1,sizeof(*send)); assert(send); fm_init(send,&fake_vfs); strcpy(send->path,FM_SENDTO);
-    r=(struct desk_launch_record){.label="Destination",.target="/dest",.show=1}; char link[FM_PATH]; assert(!fm_shortcut(send,&r,link)); fm_destroy(send); free(send);
+    r=(struct desk_launch_record){.label="Destination",.target="/dest",.show=1}; static char link[FM_PATH]; assert(!fm_shortcut(send,&r,link)); fm_destroy(send); free(send);
     action(FILES_SEND_TO); assert(app.popup_count==6); action(405); settle(); assert(fake_lookup("/dest/a.txt")>=0);
     send=calloc(1,sizeof(*send)); assert(send); fm_init(send,&fake_vfs); strcpy(send->path,FM_SENDTO);
     r=(struct desk_launch_record){.label="Paint",.target="/Programs/paint",.show=1};
