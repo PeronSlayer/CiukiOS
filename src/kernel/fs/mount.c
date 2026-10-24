@@ -311,7 +311,10 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         v->io = (struct blkdev){ .read = volume_read, .write = volume_write,
             .capacity = part->count, .sector_size = 512, .ctx = v };
         refresh_volume(v);
-        e = fat_mount(&v->fat, &s->cache, &v->io, 0, part->count, false);
+        /* G29b: a committed conversion locator blocks ordinary FAT parsing.
+         * Replay is idempotent and must precede dirty-volume recovery. */
+        e = !superfloppy ? fat_convert_recover(dev,part->start,part->count) : 0;
+        if (!e) e = fat_mount(&v->fat, &s->cache, &v->io, 0, part->count, false);
         v->writes_before_gate = v->writes;
         if (!e) {
             v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));
@@ -1607,3 +1610,100 @@ void storage_setup_media(struct storage *s, struct ata_device *devices[STORAGE_D
 void storage_setup_records(struct ata_device *devices[STORAGE_DISKS]) { (void)devices; }
 int storage_writer_start(struct storage *s) { (void)s; return 0; }
 #endif
+
+/* G29b: per-file exclusive maintenance; requests never borrow userspace
+ * cluster addresses. The sequence joins successive reservations and detects
+ * intervening publishers. Reads and writes outside the reservation wait. */
+int storage_defrag(struct storage *s, struct ciuki_media_defrag *r, bool step)
+{
+    if (!r || r->version!=CIUKI_MEDIA_VERSION || r->size!=sizeof(*r) ||
+        r->drive>=26 || (r->flags&~CIUKI_DEFRAG_CHECK)) return -FS_EINVAL;
+    if (!s || !s->ready || s->stopped) return -FS_ENOENT;
+    if (s->setup_mode) return -FS_EBUSY;
+    unsigned d=r->drive;
+    vfs_lock(&s->vfs,0); vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
+    struct storage_volume *v=&s->volumes[d];
+    struct blkdev *dev=v->part.parent;
+    int e=!v->present || s->vfs.volumes[d]!=&v->fat || !v->fat.mounted ? -FS_ENOENT :
+        !dev || dev->quarantined || ((step || r->generation) && dev->media_generation!=r->generation) ? -FS_EIO : 0;
+    if (!e && step) {
+        if (pagefile_on(s,&v->fat) || vfs_identity_busy(&s->vfs,&v->fat)) e=-FS_EBUSY;
+        for (unsigned i=0;!e && i<VFS_NODES;i++)
+            if (s->vfs.nodes[i].refs && s->vfs.nodes[i].volume==&v->fat) e=-FS_EBUSY;
+        if (!e && px_volume_busy && px_volume_busy(&s->vfs,&v->fat)) e=-FS_EBUSY;
+        for (unsigned i=0;!e && i<VFS_TABLES;i++)
+            if (s->vfs.tables[i] && s->vfs.tables[i]->cwd_cluster[d]) e=-FS_EBUSY;
+        if (!e && v->fat.readonly) e=-FS_EROFS;
+        bool moved=false;
+        if (!e) {
+            e=VFS_IO(&s->vfs,fat_defrag_step(&v->fat,r->ordinal,r->sequence,&moved));
+            r->finished=e==1; if (e==1) e=0;
+            r->moved=moved;
+            if (!e && !r->finished) r->ordinal++;
+        }
+    } else if (!e) {
+        struct fat_defrag_info info;
+        if (r->flags&CIUKI_DEFRAG_CHECK) e=VFS_IO(&s->vfs,fat_scan(&v->fat));
+        if (!e && (v->fat.ro_reasons&(FAT_RO_CORRUPT|FAT_RO_COPIES|FAT_RO_LOST))) e=-FS_EIO;
+        if (!e) e=VFS_IO(&s->vfs,fat_defrag_analyze(&v->fat,&info));
+        if (!e) {
+            r->files=info.files; r->fragmented=info.fragmented;
+            r->clusters=info.clusters; r->free_clusters=info.free_clusters;
+            memcpy(r->map,info.map,sizeof(r->map)); r->ordinal=0; r->moved=0; r->finished=0;
+        }
+    }
+    if (!e) { r->sequence=v->fat.mutation_sequence; r->generation=dev->media_generation; }
+    vfs_unlock(&s->vfs);
+    return e;
+}
+
+int storage_convert(struct storage *s, struct ciuki_media_convert *r, bool execute)
+{
+    if (!r || r->version!=CIUKI_MEDIA_VERSION || r->size!=sizeof(*r) ||
+        r->drive>=26 || r->reserved) return -FS_EINVAL;
+    if (!s || !s->ready || s->stopped) return -FS_ENOENT;
+    unsigned d=r->drive;
+    /* The live system image's boot code is not replaced by a data-volume
+     * converter. Boot-time conversion needs the loader installation path. */
+    if (d==2 || s->setup_mode) return -FS_EROFS;
+    vfs_lock(&s->vfs,0); vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
+    struct storage_volume *v=&s->volumes[d]; struct blkdev *dev=v->part.parent;
+    int e=!v->present || !v->fat.mounted || s->vfs.volumes[d]!=&v->fat ? -FS_ENOENT :
+        v->removable || !v->partition ? -FS_EROFS :
+        !dev || dev->quarantined || ((execute || r->generation) && dev->media_generation!=r->generation) ? -FS_EIO : 0;
+    if (!e && (!dev->write || !blkdev_durable(dev))) e=-FS_EROFS;
+    if (!e && v->disk<STORAGE_DISKS && s->raw[v->disk].lease.holder) e=-FS_EBUSY;
+    uint32_t bytes=0;
+    if (!e) e=fat_convert_plan(&v->fat,&bytes);
+    if (!e && execute) {
+        for (unsigned i=0;!e && i<26;i++)
+            if (s->volumes[i].part.parent==dev && s->volumes[i].formatting) e=-FS_EBUSY;
+        if (pagefile_on(s,&v->fat) || vfs_identity_busy(&s->vfs,&v->fat)) e=-FS_EBUSY;
+        for (unsigned i=0;!e && i<VFS_TABLES;i++)
+            if (s->vfs.tables[i] && s->vfs.tables[i]->cwd_cluster[d]) e=-FS_EBUSY;
+        if (!e) { v->formatting=true; e=vfs_detach_locked(&s->vfs,d); } /* refuses open native/legacy files */
+        if (!e) {
+            bool was_writable=!v->fat.readonly;
+            cache_invalidate(&s->cache,&v->io,true); v->formatting=true;
+            e=VFS_IO(&s->vfs,fat_prepare(&v->fat,&s->cache,&v->io,0,v->io.capacity));
+            if (!e) {
+                v->fat.preparing=false; /* old read-only FAT may use the shared read cache */
+                e=VFS_IO(&s->vfs,fat_convert(&v->fat,dev,v->part.start));
+            }
+            cache_invalidate(&s->cache,&v->io,true);
+            if (!e) {
+                v->fat.mounted=false;
+                e=VFS_IO(&s->vfs,fat_prepare(&v->fat,&s->cache,&v->io,0,v->io.capacity));
+                if (!e && was_writable) e=VFS_IO(&s->vfs,fat_enable_write(&v->fat));
+                v->fat.preparing=false;
+                if (!e) e=vfs_attach_locked(&s->vfs,d,&v->fat);
+            }
+            /* Failure deliberately stays detached. A locator-bearing volume
+             * must be replayed on reboot before any filesystem access. */
+            if (e) { v->present=false; v->fat.mounted=false; v->read_gate=false; v->error=e; }
+        }
+        v->formatting=false;
+    }
+    if (!e) { r->generation=dev->media_generation; r->filesystem=execute ? 32 : 16; r->cluster_bytes=bytes; r->sectors=(uint32_t)v->part.block.capacity; }
+    vfs_unlock(&s->vfs); return e;
+}

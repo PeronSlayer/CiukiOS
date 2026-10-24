@@ -103,6 +103,22 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
     struct storage *s=storage_get();
     if (op>=MEDIA_CD_STATE && op<=MEDIA_CD_POSITION) return media_cd_devctl(p,s,op,address,bytes);
     if (op==MEDIA_GET_LABEL || op==MEDIA_SET_LABEL) return media_label(s,op,address,bytes);
+    if (op==MEDIA_GET_CONVERT || op==MEDIA_CONVERT) {
+        struct ciuki_media_convert r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        e=px_error(storage_convert(s,&r,op==MEDIA_CONVERT));
+        return e ? e : copy_to_user(address,&r,sizeof(r));
+    }
+    if (op==MEDIA_DEFRAG_ANALYZE || op==MEDIA_DEFRAG_STEP) {
+        struct ciuki_media_defrag r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        e=px_error(storage_defrag(s,&r,op==MEDIA_DEFRAG_STEP));
+        return e ? e : copy_to_user(address,&r,sizeof(r));
+    }
     if (op==MEDIA_GET_FORMAT || op==MEDIA_FORMAT) {
         struct ciuki_media_format r;
         if (bytes!=sizeof(r)) return -EINVAL;

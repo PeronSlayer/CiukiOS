@@ -91,6 +91,9 @@ struct files_app {
     int (*media_space)(unsigned drive, struct ciuki_media_space *);
     int (*media_format)(int write, struct ciuki_media_format *);
     struct files_disk *disk;
+    struct files_maintenance *maintenance;
+    int (*media_defrag)(int step, struct ciuki_media_defrag *);
+    int (*media_convert)(int execute, struct ciuki_media_convert *);
     const struct fm_vfs *cleanup_fs;
     int disk_pending, disk_drive;
     uint32_t disk_low_seen;
@@ -144,4 +147,5 @@ void files_layout(struct files_app *);
 void files_update(struct files_app *);
 int files_navigate(struct files_app *, const char *);
 void files_size_text(char *out, size_t n, uint64_t bytes);
+int files_maintenance_open(struct files_app *, unsigned drive, int convert);
 #endif

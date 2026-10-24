@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
+#include <ciuki/recovery.h>
 #include <ciuki/bootstat.h>
 #include "../../sdk/win32/include/w32/screen_saver.h"
 _Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
@@ -244,6 +245,47 @@ static const struct expectation expectations[] = {
     {"constant.MEDIA_SET_LABEL", MEDIA_SET_LABEL, 0x4d19u},
     {"constant.MEDIA_GET_FORMAT", MEDIA_GET_FORMAT, 0x4d1au},
     {"constant.MEDIA_FORMAT", MEDIA_FORMAT, 0x4d1bu},
+    {"constant.MEDIA_DEFRAG_ANALYZE", MEDIA_DEFRAG_ANALYZE, 0x4d1cu},
+    {"constant.MEDIA_DEFRAG_STEP", MEDIA_DEFRAG_STEP, 0x4d1du},
+    {"constant.CIUKI_DEFRAG_CHECK", CIUKI_DEFRAG_CHECK, 1u},
+    {"constant.CIUKI_DEFRAG_CELLS", CIUKI_DEFRAG_CELLS, 128u},
+    {"constant.CIUKI_DEFRAG_FREE", CIUKI_DEFRAG_FREE, 1u},
+    {"constant.CIUKI_DEFRAG_USED", CIUKI_DEFRAG_USED, 2u},
+    {"constant.CIUKI_DEFRAG_FRAGMENTED", CIUKI_DEFRAG_FRAGMENTED, 4u},
+    {"constant.CIUKI_DEFRAG_DIRECTORY", CIUKI_DEFRAG_DIRECTORY, 8u},
+    {"constant.CIUKI_DEFRAG_BAD", CIUKI_DEFRAG_BAD, 16u},
+    {"constant.MEDIA_GET_CONVERT", MEDIA_GET_CONVERT, 0x4d1eu},
+    {"constant.MEDIA_CONVERT", MEDIA_CONVERT, 0x4d1fu},
+    {"sizeof.ciuki_media_defrag", sizeof(struct ciuki_media_defrag), 184u},
+#if UINTPTR_MAX == UINT32_MAX
+    {"alignof.ciuki_media_defrag", _Alignof(struct ciuki_media_defrag), 4u},
+#else
+    {"alignof.ciuki_media_defrag", 4u, 4u}, /* native u64 alignment differs; target JSON remains checked */
+#endif
+    {"offsetof.ciuki_media_defrag.version", __builtin_offsetof(struct ciuki_media_defrag, version), 0u},
+    {"offsetof.ciuki_media_defrag.size", __builtin_offsetof(struct ciuki_media_defrag, size), 4u},
+    {"offsetof.ciuki_media_defrag.drive", __builtin_offsetof(struct ciuki_media_defrag, drive), 8u},
+    {"offsetof.ciuki_media_defrag.generation", __builtin_offsetof(struct ciuki_media_defrag, generation), 12u},
+    {"offsetof.ciuki_media_defrag.sequence", __builtin_offsetof(struct ciuki_media_defrag, sequence), 16u},
+    {"offsetof.ciuki_media_defrag.flags", __builtin_offsetof(struct ciuki_media_defrag, flags), 24u},
+    {"offsetof.ciuki_media_defrag.ordinal", __builtin_offsetof(struct ciuki_media_defrag, ordinal), 28u},
+    {"offsetof.ciuki_media_defrag.files", __builtin_offsetof(struct ciuki_media_defrag, files), 32u},
+    {"offsetof.ciuki_media_defrag.fragmented", __builtin_offsetof(struct ciuki_media_defrag, fragmented), 36u},
+    {"offsetof.ciuki_media_defrag.clusters", __builtin_offsetof(struct ciuki_media_defrag, clusters), 40u},
+    {"offsetof.ciuki_media_defrag.free_clusters", __builtin_offsetof(struct ciuki_media_defrag, free_clusters), 44u},
+    {"offsetof.ciuki_media_defrag.moved", __builtin_offsetof(struct ciuki_media_defrag, moved), 48u},
+    {"offsetof.ciuki_media_defrag.finished", __builtin_offsetof(struct ciuki_media_defrag, finished), 52u},
+    {"offsetof.ciuki_media_defrag.map", __builtin_offsetof(struct ciuki_media_defrag, map), 56u},
+    {"sizeof.ciuki_media_convert", sizeof(struct ciuki_media_convert), 32u},
+    {"alignof.ciuki_media_convert", _Alignof(struct ciuki_media_convert), 4u},
+    {"offsetof.ciuki_media_convert.version", __builtin_offsetof(struct ciuki_media_convert, version), 0u},
+    {"offsetof.ciuki_media_convert.size", __builtin_offsetof(struct ciuki_media_convert, size), 4u},
+    {"offsetof.ciuki_media_convert.drive", __builtin_offsetof(struct ciuki_media_convert, drive), 8u},
+    {"offsetof.ciuki_media_convert.generation", __builtin_offsetof(struct ciuki_media_convert, generation), 12u},
+    {"offsetof.ciuki_media_convert.cluster_bytes", __builtin_offsetof(struct ciuki_media_convert, cluster_bytes), 16u},
+    {"offsetof.ciuki_media_convert.filesystem", __builtin_offsetof(struct ciuki_media_convert, filesystem), 20u},
+    {"offsetof.ciuki_media_convert.sectors", __builtin_offsetof(struct ciuki_media_convert, sectors), 24u},
+    {"offsetof.ciuki_media_convert.reserved", __builtin_offsetof(struct ciuki_media_convert, reserved), 28u},
     {"constant.CIUKI_FORMAT_QUICK", CIUKI_FORMAT_QUICK, 1u},
     {"constant.CIUKI_FORMAT_FAT12", CIUKI_FORMAT_FAT12, 1u},
     {"constant.CIUKI_FORMAT_FAT16", CIUKI_FORMAT_FAT16, 2u},

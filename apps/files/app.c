@@ -26,7 +26,7 @@ enum {
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
-    C_CLEANUP = 312, C_FORMAT = 313,
+    C_CLEANUP = 312, C_FORMAT = 313, C_DEFRAG = 314, C_CONVERT = 315,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -1391,12 +1391,19 @@ static void property_page(struct files_app *a)
     int tools=a->property_drive>=0 && d->items[3].active==1;
     int version=a->property_drive<0 && d->items[3].active==1;
     for (unsigned i=4;i<d->count;i++) d->items[i].hidden=(uint8_t)(tools || version);
+    if (a->property_drive>=0) {
+        struct du_widget *button=du_property_control(a->ui,9,DU_BUTTON,C_DEFRAG,(struct du_rect){24,252,190,25},"&Defragment Now...");
+        button->hidden=!tools; button->disabled=!a->media_defrag;
+    }
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nDefragment Now: Disk Defragmenter is not installed." : version ? a->property_version : a->property_text);
+        "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below." : version ? a->property_version : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
     struct files_app *a=ctx;
+    if (e->type==DU_EV_ACTIVATE && e->id==C_DEFRAG && a->property_drive>=0) {
+        a->disk_drive=a->property_drive; a->disk_pending=4; du_dialog_close(u); return;
+    }
     if (e->type==DU_EV_ACTIVATE && e->id==C_CLEANUP && a->property_drive>=0) {
         a->disk_drive=a->property_drive; a->disk_pending=1; du_dialog_close(u); return;
     }
@@ -1934,6 +1941,9 @@ static void context(struct files_app *a, const struct du_event *e)
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
         int drive=!m->path[0] ? disk_target(a) : -1;
         if (drive>=0) {
+            popup_add(a,"Disk &Defragmenter...",C_DEFRAG,a->media_defrag && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
+            if (drive>=3 && a->media.type[drive]!=CIUKI_MEDIA_USB && a->media.type[drive]!=CIUKI_MEDIA_FLOPPY)
+                popup_add(a,"Drive &Converter (FAT32)...",C_CONVERT,a->media_convert && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
             if (drive>=2) popup_add(a,"Disk &Cleanup...",C_CLEANUP,a->media.type[drive]==CIUKI_MEDIA_OPTICAL ? DU_ITEM_DISABLED : 0);
             if (a->media.type[drive]==CIUKI_MEDIA_USB || a->media.type[drive]==CIUKI_MEDIA_FLOPPY)
                 popup_add(a,"&Format...",C_FORMAT,a->media_format ? 0 : DU_ITEM_DISABLED);
@@ -2050,6 +2060,11 @@ static void command(struct files_app *a, int id)
     case C_FIND: files_find(a); break;
     case C_FIND_STOP: if (a->find_running) files_find(a); break;
     case C_FIND_FOLDER: { char p[FM_PATH]; if (m->searching && m->active < m->count && !fm_entry_path(m, m->active, p) && !fm_parent(p, p)) files_navigate(a, p); break; }
+    case C_DEFRAG: case C_CONVERT: {
+        int drive=disk_target(a);
+        if (drive>=0) (void)files_maintenance_open(a,(unsigned)drive,id==C_CONVERT);
+        break;
+    }
     case C_CLEANUP: case C_FORMAT: {
         int drive=disk_target(a);
         if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);

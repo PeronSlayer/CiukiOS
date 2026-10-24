@@ -1246,6 +1246,49 @@ struct ciuki_media_format {
     uint32_t reserved;
 };
 _Static_assert(sizeof(struct ciuki_media_format) == 52, "media format ABI");
+/* G29b: bounded defragmentation, one whole-file publication per STEP.
+ * Sequence changes by another writer return EAGAIN; analyze and restart.
+ * Map cells aggregate bits over ceil(clusters/128) ranges, never exact
+ * per-cluster squares. Pause/Stop simply stop issuing STEP requests. */
+#define MEDIA_DEFRAG_ANALYZE 0x4d1cu
+#define MEDIA_DEFRAG_STEP 0x4d1du
+#define CIUKI_DEFRAG_CHECK 1u
+#define CIUKI_DEFRAG_CELLS 128u
+#define CIUKI_DEFRAG_FREE 1u
+#define CIUKI_DEFRAG_USED 2u
+#define CIUKI_DEFRAG_FRAGMENTED 4u
+#define CIUKI_DEFRAG_DIRECTORY 8u
+#define CIUKI_DEFRAG_BAD 16u
+struct ciuki_media_defrag {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint64_t sequence;
+    uint32_t flags;
+    uint32_t ordinal;
+    uint32_t files;
+    uint32_t fragmented;
+    uint32_t clusters;
+    uint32_t free_clusters;
+    uint32_t moved;
+    uint32_t finished;
+    uint8_t map[CIUKI_DEFRAG_CELLS];
+};
+_Static_assert(sizeof(struct ciuki_media_defrag) == 184, "media defrag ABI");
+#define MEDIA_GET_CONVERT 0x4d1eu
+#define MEDIA_CONVERT 0x4d1fu
+struct ciuki_media_convert {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t cluster_bytes;
+    uint32_t filesystem;
+    uint32_t sectors;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_media_convert) == 32, "media convert ABI");
 _Static_assert(sizeof(struct ciuki_media_space) == 32, "media space ABI");
 _Static_assert(sizeof(struct ciuki_media_state_v1) == 120, "media state v1 ABI");
 _Static_assert(sizeof(struct ciuki_media_state) == 224, "media state ABI");

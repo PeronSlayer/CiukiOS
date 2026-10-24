@@ -242,6 +242,33 @@ uint32_t fat_free_estimate(const struct fat_volume *v, bool *known);
 int fat_unmount(struct fat_volume *);
 int fat_commit(struct fat_volume *);
 int fat_scan(struct fat_volume *); /* bounded read-only ownership scan */
+/* G29b: caller holds exclusive volume reservation. No open-file identities,
+ * cwd or paging dependencies may exist during a move. Directories stay put.
+ * Every successful move preserves the directory slot and file bytes. */
+#define FAT_DEFRAG_CELLS 128u
+#define FAT_MAP_FREE 1u
+#define FAT_MAP_USED 2u
+#define FAT_MAP_FRAGMENTED 4u
+#define FAT_MAP_DIRECTORY 8u
+#define FAT_MAP_BAD 16u
+struct fat_defrag_info {
+    uint32_t files, fragmented, clusters, free_clusters;
+    uint8_t map[FAT_DEFRAG_CELLS];
+};
+int fat_defrag_analyze(struct fat_volume *, struct fat_defrag_info *);
+/* ordinal counts regular files, including empty files; returns 1 at end,
+ * 0 after a file (moved=false when contiguous or no free run is available).
+ * expected_sequence is checked before any writes. */
+int fat_defrag_step(struct fat_volume *, uint32_t ordinal, uint64_t expected_sequence, bool *moved);
+/* Converter runs on an exclusively detached, clean FAT16 volume. parent
+ * addresses the whole disk; start identifies its primary MBR partition.
+ * Recovery is mandatory before normal parsing of a locator-bearing volume.
+ * No locator: recovery returns 0 without writes. Conversion returns 0 only
+ * after durable FAT32 publication. All addresses are validated against the
+ * partition and parent device. */
+int fat_convert_plan(struct fat_volume *, uint32_t *cluster_bytes);
+int fat_convert(struct fat_volume *, struct blkdev *parent, uint64_t start);
+int fat_convert_recover(struct blkdev *parent, uint64_t start, uint64_t sectors);
 int fat_next(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
 int fat_next_dos(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
 int fat_lookup(struct fat_volume *, uint32_t directory, const char *, struct fat_entry *);

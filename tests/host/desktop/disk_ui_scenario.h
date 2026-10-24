@@ -122,3 +122,92 @@ static void disk_ui_scenario(void (*present)(struct du_ui *,const char *,void *)
     files_destroy(a); du_dialog_close(u); fake_assert_clean(); free(a); free(u); free(pixels);
     disk_test_app=NULL; disk_test_ui=NULL;
 }
+
+/* G29b controller, also presented by a new fx-15 row. */
+static unsigned maint_steps,maint_conversions;
+static int maint_entered,maint_release,maint_stale,maint_error,maint_restart_seen;
+static int maint_defrag(int step,struct ciuki_media_defrag *r)
+{
+    assert(!pthread_equal(pthread_self(),disk_test_main));
+    assert(r->drive==4 && r->generation==17);
+    if (maint_error) return maint_error;
+    if (!step) {
+        r->files=4; r->fragmented=maint_steps ? 0 : 2; r->clusters=1000; r->free_clusters=500;
+        r->sequence=21+maint_steps; r->ordinal=0; r->finished=0;
+        for (unsigned i=0;i<CIUKI_DEFRAG_CELLS;i++) r->map[i]=(uint8_t)(1u<<(i%5));
+    } else {
+        __atomic_store_n(&maint_entered,1,__ATOMIC_RELEASE);
+        while (!__atomic_load_n(&maint_release,__ATOMIC_ACQUIRE)) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
+        if (maint_stale) { maint_stale=0; __atomic_store_n(&maint_release,0,__ATOMIC_RELEASE); __atomic_store_n(&maint_restart_seen,1,__ATOMIC_RELEASE); return -EAGAIN; }
+        maint_steps++; r->ordinal++; r->sequence++; r->moved=1; r->finished=maint_steps>=2;
+    }
+    return 0;
+}
+static int maint_convert(int run,struct ciuki_media_convert *r)
+{
+    assert(!pthread_equal(pthread_self(),disk_test_main)); assert(r->drive==4 && r->generation==17);
+    if (maint_error) return maint_error;
+    if (run) maint_conversions++;
+    r->cluster_bytes=4096; r->filesystem=run ? 32 : 16; r->sectors=1048576;
+    return 0;
+}
+static void maint_wait_entered(void)
+{
+    for (unsigned k=0;k<10000 && !__atomic_load_n(&maint_entered,__ATOMIC_ACQUIRE);k++) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
+    assert(__atomic_load_n(&maint_entered,__ATOMIC_ACQUIRE));
+}
+static void maint_control(unsigned index,unsigned key)
+{ disk_test_ui->dialog.focus=(int)index; disk_test_press(key); }
+static void maintenance_ui_scenario(void (*present)(struct du_ui *,const char *,void *),void *ctx)
+{
+    disk_test_main=pthread_self(); maint_steps=maint_conversions=0; maint_stale=maint_error=0;
+    __atomic_store_n(&maint_release,0,__ATOMIC_RELEASE); __atomic_store_n(&maint_entered,0,__ATOMIC_RELEASE);
+    fake_image_tree();
+    disk_test_app=calloc(1,sizeof(*disk_test_app)); disk_test_ui=calloc(1,sizeof(*disk_test_ui));
+    uint32_t *pixels=calloc(560*400,4); assert(disk_test_app && disk_test_ui && pixels);
+    struct files_app *a=disk_test_app; struct du_ui *u=disk_test_ui;
+    du_init(u,pixels,560,400); a->media_defrag=maint_defrag; a->media_convert=maint_convert;
+    a->media.generation[4]=17;
+    assert(!files_setup(a,u,&fake_vfs,"/Documents")); disk_test_settle();
+    assert(!files_maintenance_open(a,4,0)); disk_test_settle(); assert(du_dialog_id(u)==220);
+    assert(strstr(u->dialog.text,"50%") && u->dialog.items[6].disabled);
+    disk_test_frame(present,"defrag analysis and Settings",ctx);
+    maint_control(4,DU_KEY_SPACE); assert(u->dialog.items[4].value);
+    disk_test_frame(present,"defrag Show Details and map legend",ctx);
+    disk_test_accept(0); maint_wait_entered();
+    disk_test_frame(present,"defrag running",ctx);
+    u->dialog.focus=8; u->service(u,a); assert(u->dialog.focus==8); /* async progress preserves keyboard focus */
+    maint_control(8,DU_KEY_ENTER);
+    assert(strstr(u->dialog.text,"Paused")); disk_test_frame(present,"defrag paused",ctx);
+    maint_control(8,DU_KEY_ENTER); assert(!strstr(u->dialog.text,"Paused"));
+    disk_test_frame(present,"defrag resumed",ctx); maint_control(8,DU_KEY_ENTER);
+    disk_test_accept(1); /* Stop wakes a paused worker at the safe file boundary. */
+    __atomic_store_n(&maint_release,1,__ATOMIC_RELEASE); disk_test_settle();
+    assert(du_dialog_id(u)==222 && strstr(u->dialog.text,"stopped")); disk_test_frame(present,"defrag stopped",ctx); disk_test_press(DU_KEY_ESC);
+    maint_steps=0; maint_stale=1; __atomic_store_n(&maint_restart_seen,0,__ATOMIC_RELEASE);
+    assert(!files_maintenance_open(a,4,0)); disk_test_settle();
+    disk_test_accept(0);
+    for (unsigned k=0;k<10000;k++) {
+        u->service(u,a);
+        if (__atomic_load_n(&maint_restart_seen,__ATOMIC_ACQUIRE) && strstr(u->dialog.text,"restarting")) break;
+        struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL);
+    }
+    assert(strstr(u->dialog.text,"Drive contents changed... restarting"));
+    disk_test_frame(present,"defrag drive contents changed restarting",ctx);
+    __atomic_store_n(&maint_release,1,__ATOMIC_RELEASE); disk_test_settle();
+    assert(du_dialog_id(u)==222 && strstr(u->dialog.text,"finished") && maint_steps==2);
+    disk_test_frame(present,"defrag complete after write restart",ctx); disk_test_press(DU_KEY_ESC);
+    maint_error=-EBUSY; assert(!files_maintenance_open(a,4,0)); disk_test_settle();
+    assert(du_dialog_id(u)==202); disk_test_frame(present,"defrag busy error",ctx); disk_test_press(DU_KEY_ESC); maint_error=0;
+    a->media.type[4]=CIUKI_MEDIA_USB; assert(files_maintenance_open(a,4,1)==-EROFS); a->media.type[4]=0;
+    assert(files_maintenance_open(a,2,1)==-EROFS);
+    assert(!files_maintenance_open(a,4,1)); disk_test_settle(); assert(du_dialog_id(u)==221);
+    assert(strstr(u->dialog.text,"cannot return to FAT16") && strstr(u->dialog.text,"dual-boot"));
+    disk_test_frame(present,"converter irreversible and compatibility warning",ctx);
+    disk_test_accept(1); assert(!maint_conversions);
+    assert(!files_maintenance_open(a,4,1)); disk_test_settle(); disk_test_accept(0); disk_test_settle();
+    assert(du_dialog_id(u)==222 && maint_conversions==1 && strstr(u->dialog.text,"successfully converted"));
+    disk_test_frame(present,"converter complete",ctx); disk_test_press(DU_KEY_ESC);
+    files_destroy(a); du_dialog_close(u); fake_assert_clean(); free(a); free(u); free(pixels);
+    disk_test_app=NULL; disk_test_ui=NULL;
+}

@@ -65,7 +65,7 @@ bootable rescue-media source and installation contract exist.
 ## Boundaries
 
 G29 does not change G14's ScanDisk/dirty-boot repair ownership. Copy Disk,
-application-start-optimised defragmentation, FAT16-to-FAT32 conversion,
+application-start-optimised placement, boot-volume FAT16-to-FAT32 conversion,
 interactive partition editing, Backup and System Recovery remain gaps until
 their engines, UI and failure tests exist. The inventory and implementation
 report must keep these rows open. The existing Setup whole-disk formatter
@@ -76,3 +76,7 @@ Every new disk-dialog state is a client invalidation. The fx-15 window model
 must exercise scan/selection, confirmation, progress, completion, errors and
 low-space warnings on all five presenters; the controller tests separately
 verify the operations behind those rendered states.
+
+G29b adds ordinary FAT file defragmentation and fixed data-partition conversion.
+See [Disk maintenance](disk-maintenance.md) for the transaction/recovery model,
+UI and remaining limits. Neither ST-10 nor ST-12 is claimed complete.

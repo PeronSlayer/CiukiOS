@@ -1394,6 +1394,52 @@ struct ciuki_media_format {
 };
 ```
 
+G29b: bounded defragmentation, one whole-file publication per STEP.
+Sequence changes by another writer return EAGAIN; analyze and restart.
+Map cells aggregate bits over ceil(clusters/128) ranges, never exact
+per-cluster squares. Pause/Stop simply stop issuing STEP requests.
+
+```c
+#define MEDIA_DEFRAG_ANALYZE 0x4d1cu
+#define MEDIA_DEFRAG_STEP 0x4d1du
+#define CIUKI_DEFRAG_CHECK 1u
+#define CIUKI_DEFRAG_CELLS 128u
+#define CIUKI_DEFRAG_FREE 1u
+#define CIUKI_DEFRAG_USED 2u
+#define CIUKI_DEFRAG_FRAGMENTED 4u
+#define CIUKI_DEFRAG_DIRECTORY 8u
+#define CIUKI_DEFRAG_BAD 16u
+struct ciuki_media_defrag {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint64_t sequence;
+    uint32_t flags;
+    uint32_t ordinal;
+    uint32_t files;
+    uint32_t fragmented;
+    uint32_t clusters;
+    uint32_t free_clusters;
+    uint32_t moved;
+    uint32_t finished;
+    uint8_t map[CIUKI_DEFRAG_CELLS];
+};
+
+#define MEDIA_GET_CONVERT 0x4d1eu
+#define MEDIA_CONVERT 0x4d1fu
+struct ciuki_media_convert {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t cluster_bytes;
+    uint32_t filesystem;
+    uint32_t sectors;
+    uint32_t reserved;
+};
+```
+
 f5-12B2: CD audio on /dev/media, addressed by optical slot (an audio-only
 disc has no drive letter). Every request carries version 1 and its own
 size; a request that names a generation is refused with EAGAIN when the

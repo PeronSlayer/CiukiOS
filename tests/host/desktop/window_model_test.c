@@ -1327,6 +1327,13 @@ static void row_network_tools(unsigned m)
     app_paint(panel,20,50,240,120,0xabcdef);step("Internet Properties apply status");
     wm_end();
 }
+static void row_disk_maintenance(unsigned m)
+{
+    row_name="disk maintenance"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    maintenance_ui_scenario(disk_ui_present,a);
+    app_close(a); step("disk maintenance close exposes desktop"); wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1768,7 +1775,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
     row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
     row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display,
-    row_power_resume};
+    row_power_resume, row_disk_maintenance};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
