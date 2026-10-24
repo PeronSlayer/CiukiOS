@@ -19,7 +19,7 @@ import sys
 ROOT=Path(__file__).resolve().parents[2]
 if __package__ in (None,''): sys.path.insert(0,str(ROOT))
 IDENT=re.compile(r'[A-Za-z_?$@][A-Za-z0-9_?$@]*\Z')
-DLL=re.compile(r'[A-Za-z0-9_-]+\.(?:dll|drv|acm)\Z',re.I)
+DLL=re.compile(r'[A-Za-z0-9_-]+\.(?:dll|drv|acm|ocx)\Z',re.I)
 # Explicit public assignments checked against upstream Wine specs on 2026-10-14.
 ORDINALS={
  'wsock32.dll':dict(zip(('accept','bind','closesocket','connect','getpeername','getsockname','getsockopt','htonl','htons','inet_addr','inet_ntoa','ioctlsocket','listen','ntohl','ntohs','recv','recvfrom','select','send','sendto','setsockopt','shutdown','socket'),range(1,24))) | {
@@ -34,7 +34,7 @@ def imports(text):
     result={}
     def add(dll,symbol):
         dll=dll.lower()
-        if not dll.endswith(('.dll','.drv')): dll+='.dll'
+        if not dll.endswith(('.dll','.drv','.ocx')): dll+='.dll'
         if not DLL.fullmatch(dll): raise ValueError('invalid DLL name: '+dll)
         if symbol.startswith('#'):
             if not symbol[1:].isdigit() or not 1<=int(symbol[1:])<=65535: raise ValueError('invalid ordinal: '+symbol)
@@ -46,7 +46,7 @@ def imports(text):
             for s in m[2].split(','):
                 s=s.strip()
                 if s and not s.startswith('<'): add(m[1],s)
-        m=re.match(r'- \*\*([\w.-]+\.(?:dll|drv))\*\* \(\d+\): (.*)',line)
+        m=re.match(r'- \*\*([\w.-]+\.(?:dll|drv|ocx))\*\* \(\d+\): (.*)',line)
         if m:
             for s in re.findall(r'`([^`]+)`',m[2]): add(m[1],s)
         # Plain metadata lists and the research's backtick-only common set;

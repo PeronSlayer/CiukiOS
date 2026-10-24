@@ -545,6 +545,36 @@ const struct help_topic help_topics[] = {
 "   is written to the disk first.\n"},
 
 /* ---- Reference ---- */
+{"startup-trouble", "Startup and shutdown problems", "Troubleshooting",
+ "startup;shutdown;boot;restart;recovery",
+"Startup and shutdown problems\n\n"
+"Select the troubleshooter below. It asks when the problem began and helps\n"
+"you compare a failed startup with a working configuration. Record the last\n"
+"boot message and save your work before restarting or changing a driver.\n"},
+{"memory-trouble", "Not enough memory", "Troubleshooting",
+ "memory;resources;allocation;programs",
+"Not enough memory\n\n"
+"Select the troubleshooter below. Check whether closing unused programs\n"
+"allows the operation to finish. Save work before closing a program. Compare\n"
+"the program's requirements with Hardware Report and record the exact error.\n"},
+{"print-trouble", "Printing problems", "Troubleshooting",
+ "printing;printer;paper;port;test page",
+"Printing problems\n\n"
+"Select the troubleshooter below. First distinguish a printer fault from\n"
+"a connection or program problem by printing the printer's own test page.\n"
+"Then check its port and try a short document in another program.\n"},
+{"hardware-trouble", "Hardware conflicts", "Troubleshooting",
+ "hardware;conflicts;resources;devices;driver",
+"Hardware conflicts\n\n"
+"Select the troubleshooter below. Compare Hardware Report with the device\n"
+"documentation and the last working configuration. Record device and driver\n"
+"changes. Turn the power off before moving internal hardware.\n"},
+{"graphics-trouble", "Windows game graphics problems", "Troubleshooting",
+ "graphics;Windows games;DirectX;OpenGL;display",
+"Windows game graphics problems\n\n"
+"Select the troubleshooter below. Determine whether the problem affects one\n"
+"game or several. Check the game's required graphics API and the supported\n"
+"adapter and display mode. Record the exact error before changing settings.\n"},
 {"about", "About CiukiOS", "Reference",
  "About;version;copyright;Ciuki;licence",
 "About CiukiOS\n"

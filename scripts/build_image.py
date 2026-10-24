@@ -274,6 +274,9 @@ def desktop_license_payloads():
     sources["/system/licenses/Yamaha-DS1-NOTICE.txt"] = ROOT / "third_party/yamaha/NOTICE.txt"
     sources["/system/licenses/Yamaha-DS1-UPSTREAM.json"] = ROOT / "third_party/yamaha/UPSTREAM.json"
     sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
+    sources["/system/licenses/HELP-LIBMSpack-LGPL.txt"] = ROOT / "sdk/win32/lz32/mspack/COPYING.LIB"
+    sources["/system/licenses/HELP-LIBMSpack-NOTICE.txt"] = ROOT / "sdk/win32/lz32/NOTICE.md"
+    sources["/system/licenses/HELP-LIBMSpack-UPSTREAM.json"] = ROOT / "sdk/win32/lz32/mspack/UPSTREAM.json"
     for name in ("hwids-NOTICES.txt", "hwids-GPL-2.0.txt",
                  "linux-cmipci-v6.12-NOTICES.txt", "linux-cmipci-v6.12-GPL-2.0.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name

@@ -424,12 +424,22 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+
+| 63 | Context-help caption button (G15; `WS_EX_CONTEXTHELP`, `DS_CONTEXTHELP`): the "?" takes the minimise slot, a window with it has no minimise or zoom, it is hot and pressed like every title button, and a press sends `WM_SYSCOMMAND` `SC_CONTEXTHELP` to the program (v3 `HELP`) | the caption when the style appears or goes away (the whole title bar: the buttons changed); the "?" box while hot or pressed | `compositor.c` `title_box`, `frame_style`, `desk_title_code`; `input.c` press; `client.c` `desk_context_help`; v3 `PLACE`/`CREATE` style bit `DESK_V3_CONTEXTHELP` | none | caption |
+
+| 64 | Help request reuses the existing window, including a minimised or shaded Help window | restored window, caption and activation/taskbar damage | `desk_task_launch`, existing minimise/shade/focus paths | G15B: requests no longer spawn another Help process | `row_help` |
+| 65 | Help topic cross-link, external HLP/CHM topic, Contents/Index/Search and Back | old and new topic, links, navigation and status controls | `help_document_show`, `help_show_topic`, `help_layout` | G15B: invalidate both old and new control rectangles on a layout change | `row_help`; `help_formats_test.c` pixel equivalence |
+| 66 | Troubleshooter question, answer, Back, Next, Finish and Cancel | topic body, choice and navigation controls, replaced links | `help_wizard_action`, `help_wizard_begin` | G15B: leaving the wizard must expose the new links pane and erase the old text border | `row_help`; all wizard branches in `help_formats_test.c` |
+| 67 | Default toolkit and modal-control tooltips/What's This? | popup's old and new rectangle | `du_control_help`, `tip_service`, `tip_track` | G15B: defaults also cover dynamically created dialog controls | `help_toolkit_test.c`; existing tooltip scenario |
+
+G15B reserves rows 63–67 after row 62 on `wt/integ`, the highest row on all
+visible branches. The original G15 caption row is renumbered to 63 to avoid
+G4's row 31.
 | 31 | Tooltip shown and hidden (`TTN_SHOW`/`TTN_POP`; G16): after the 500 ms initial delay, on autopop at 5 s, on leave, press, key and wheel | the tip's box only (old and new box when it moves to another tool) | libdeskui `controls.c` `du_tip_motion`/`du_tip_tick`/`draw_tip` (client surface, drawn after dialogs) | none | toolkit (`common_dialogs_test.c` `tooltips`) |
 | 32 | Combo box list opened, highlighted, scrolled and closed (`CB_SHOWDROPDOWN`; G16) | the list box (above or below the combo), the combo itself | `controls.c` `du_combo_drop`, `draw_combo_list` (overlay, drawn after dialogs) | none | toolkit (`combo_box`) |
 | 33 | Held up-down arrow and trackbar page repeat (`WM_TIMER` of the control; G16) | the control's box, and the buddy edit's box | `controls.c` `du_repeat_tick`, `updown_step`, `tb_set` | none | toolkit (`up_down`, `track_bar`) |
 | 34 | Confirmation, message and new-folder panel of the Open/Save As dialog (Windows shows a message box over the dialog; G16) | the dialog's box | `dialog.c` `sub_open`/`sub_close`/`file_draw` | none | toolkit (`file_dialog`) |
 | 35 | Color dialog widened by "Define Custom Colors >>" (the dialog grows and is re-centred; G16) | old and new dialog boxes with their shadow | `commdlg.c` `color_resize` (`du_dialog_place`) | none | toolkit (`color_dialog`) |
-
 Rows 31-35 (G16) happen inside one client's own surface, so `window_model_test.c`
 is not their harness: the toolkit harness (`common_dialogs_test.c`, run by
 `test_deskui.py`) compares the partially repainted surface with a full redraw

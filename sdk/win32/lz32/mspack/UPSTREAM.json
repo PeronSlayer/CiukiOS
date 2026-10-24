@@ -2,10 +2,14 @@
   "commit": "55d501976171397ccd5d5a7a1ca7da065b1d9a06",
   "files": {
     "COPYING.LIB": "a190dc9c8043755d90f8b0a75fa66b9e42d4af4c980bf5ddc633f0124db3cee7",
+    "chm.h": "834ca68536f0b8d7b76a947bb581084d12e95a982095a7affcdbed4f2c0a7cc8",
+    "chmd.c": "efc35c2f57ac7507b239d693ea98ddf718a0496c7aef06d100b93d678d435347",
     "kwaj.h": "6c27a983c242e2e229ff535b22a636c1ff076cae5d7ced9053cf7274028e125c",
     "kwajd.c": "f02647d4111e0e5648021b4b8c91b54895d64fccd85d6ee1e0736414fb9efe68",
     "lzss.h": "6eb7a906aecad72e4138a7ca8880ca3fbd6ae2af5e0a87f80e97bbe9322e8b13",
     "lzssd.c": "71e5f82490a03da517a469f1a044c243c6d685050a3b6c3412adf9991a25d76a",
+    "lzx.h": "22b1ffa9ddc15aa5fac95d4f4f0c60486f590e55636a17ab94f3ad1b770f907f",
+    "lzxd.c": "bc4a14a5938d99cb1e2521a0fcc16fa44e8ea262ab0bc072e3f9003e19c816da",
     "macros.h": "29a9628cd7a8881bd36defb811209c2a48852e0bf6899d579d6cb80d65337b0d",
     "mspack.h": "df9e9e2b18cc145e6cf652a43ffbc88bde21bfd6fd3024318fbc2140a4efd059",
     "mszip.h": "05e153c26abff41ccd5ebfee7587670a2adcb8707bc503de95025de987feaae4",
@@ -17,5 +21,11 @@
     "szddd.c": "6929b26d35e55ed387e86becad531badff4d90f77c7f2647476e468f69b69151"
   },
   "license": "LGPL-2.1-only",
-  "repository": "https://github.com/kyz/libmspack"
+  "patches": {
+    "chmd.c": "Mark sys/fh unused in read_off64 when SIZEOF_OFF_T >= 8; no decoder behaviour change."
+  },
+  "repository": "https://github.com/kyz/libmspack",
+  "upstream_files": {
+    "chmd.c": "58914e999015834e59ba20d3b7915e0793a5fefcd247dd7b3c9f6c936e74c693"
+  }
 }

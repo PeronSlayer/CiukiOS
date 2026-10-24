@@ -1904,6 +1904,63 @@ static void row_run(unsigned m)
     desk_focus(&d,run); desk_run_result(&d,d.sh.run_text,0); assert(!d.sh.run); step("accepted command closes Run");
     wm_end();
 }
+static int help_v3_request(int peer,int window,const char *argument)
+{
+    v3_root=peer; struct desk_client *c=&d.clients[window]; struct ciuki_message msg;
+    unsigned n=(unsigned)strlen(argument);
+    v3msg(&msg,DESK_LAUNCH,n+4,c->v3_id,c->v3_generation);
+    desk_put32(msg.data+16,n); memcpy(msg.data+20,argument,n);
+    return desk_v3_receive(&d,peer,&msg);
+}
+static unsigned help_messages(const struct desk_client *c)
+{
+    unsigned count=0;
+    for (unsigned i=0;i<c->tx_count;i++) {
+        struct desk_packet p; assert(desk_parse(&c->tx[(c->tx_head+i)%DESK_TX_MAX],0,NULL,&p));
+        count+=p.opcode==DESK_LAUNCH;
+    }
+    return count;
+}
+static void row_help(unsigned m)
+{
+    row_name="Help reuse, topic links and troubleshooter"; wm_begin(m,1);
+    snprintf(d.programs[d.program_count].name,sizeof(d.programs[0].name),"help");
+    snprintf(d.programs[d.program_count].path,sizeof(d.programs[0].path),"/Programs/help"); d.program_count++;
+    struct fake_app *help=app_open("help",400,280,80,90);
+    (void)app_open("files",240,150,380,230); step("Help partly covered");
+    struct desk_client *c=&d.clients[help->slot];
+    desk_minimize(&d,help->slot); for (unsigned k=0;k<8;k++) turn(25000000ull); step("Help minimised");
+    uint32_t id=c->window_id;
+    assert(desk_task_launch(&d,"help","topic:nosound")==(int)c->pid);
+    assert(!c->minimized && c->window_id==id && d.focus==help->slot);
+    unsigned forwarded=0;
+    for (unsigned i=0;i<c->tx_count;i++) {
+        struct desk_packet p; assert(desk_parse(&c->tx[(c->tx_head+i)%DESK_TX_MAX],0,NULL,&p));
+        if (p.opcode==DESK_LAUNCH) { assert(!strcmp(p.title,"help") && !strcmp(p.argument,"topic:nosound")); forwarded++; }
+    }
+    assert(forwarded==1); step("Help request restores and reuses its window");
+    app_paint(help,215,24,180,160,0xa151); step("related topic changes text and link pane");
+    app_paint(help,215,24,180,240,0xb261); step("troubleshooter question and choices");
+    app_paint(help,215,24,180,240,0xc371); step("Next changes the question");
+    app_paint(help,215,24,180,240,0xd481); step("Back restores a question");
+    app_paint(help,215,24,180,240,0xe591); step("Cancel restores topic and links");
+    int first=wm_v3_window(DESK_V3_OVERLAPPED,-1,350,60,180,100),first_peer=v3_root;
+    assert(first>=0);
+    v3_root=-1; v3_peer(take_fd()); d.clients[v3_root].pid=88;
+    int second=wm_v3_window(DESK_V3_OVERLAPPED,-1,370,220,180,100),second_peer=v3_root;
+    assert(second>=0 && first_peer!=second_peer);
+    unsigned messages=help_messages(c);
+    assert(!help_v3_request(first_peer,first,"hlp:1:42:8:/one.hlp"));
+    assert(!help_v3_request(second_peer,second,"chm:15:42:8:/two.chm"));
+    assert(help_messages(c)==messages+2);
+    assert(!help_v3_request(first_peer,first,"hlp:2:0:0:"));
+    assert(help_messages(c)==messages+2); /* another caller still uses Help */
+    assert(!help_v3_request(second_peer,second,"chm:18:0:0:"));
+    assert(help_messages(c)==messages+3);
+    assert(help_v3_request(second_peer,second,"--test=help")==-EPERM && help_messages(c)==messages+3);
+    step("v3 callers share Help, last quit closes, other launch arguments refused");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -1913,7 +1970,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
     row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display,
     row_power_resume, row_disk_maintenance, row_copy_disk, row_backup, row_blank_media,
-    row_disk_terminal, row_multimedia, row_run};
+    row_disk_terminal, row_multimedia, row_run, row_help};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

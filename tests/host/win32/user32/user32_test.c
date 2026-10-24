@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _GNU_SOURCE
 #include "../../../../sdk/win32/user32/internal.h"
-#include "../../../../apps/desktop/sounds.h"
+#include "../../../../apps/desktop/help_request.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -132,12 +132,29 @@ HANDLE W32API LoadLibraryA(const char *s) { return GetModuleHandleA(s); }
 /* Until the GDI phase USER runs on the fixture adapter (test_gdi below); then
  * gdi32.dll and user32.dll resolve to the production objects linked in. */
 static BOOL host_modules, real_gdi;
+#ifndef U32_TEST_EXTERNAL_MODULES
+static BOOL host_help;
+#endif
 #define HOST_GDI ((HANDLE)(uintptr_t)0x6d000000)
 #define HOST_USER ((HANDLE)(uintptr_t)0x6e000000)
+#define HOST_KERNEL ((HANDLE)(uintptr_t)0x6f000000)
+#ifndef U32_TEST_EXTERNAL_MODULES
+static DWORD W32API help_fullpath(const char *input,DWORD size,char *out,char **part)
+{
+    (void)part;
+    const char *prefix=input[1]==':' ? "" : "C:\\Help\\";
+    unsigned n=(unsigned)(strlen(prefix)+strlen(input));
+    if (size<=n) return n+1;
+    snprintf(out,size,"%s%s",prefix,input); return n;
+}
+static DWORD W32API help_attributes(const char *path)
+{ if (strstr(path,"missing")) { SetLastError(2); return UINT32_MAX; } return 0x20; }
+#endif
 /* Weak: tests/host/win32/input reuses this harness without gdi32/ddraw. */
 __attribute__((weak)) void *host_gdi_proc(const char *);
 #ifndef U32_TEST_EXTERNAL_MODULES
 HANDLE W32API GetModuleHandleA(const char *s) {
+  if (host_help && s && !strcmp(s,"kernel32.dll")) return HOST_KERNEL;
   if (!host_modules || !s)
     return 0;
   return !strcmp(s, "gdi32.dll") ? HOST_GDI
@@ -146,6 +163,7 @@ HANDLE W32API GetModuleHandleA(const char *s) {
 }
 #define USER_EXPORT(name) {#name, (void *)name}
 void *W32API GetProcAddress(HANDLE h, const char *s) {
+  if (h==HOST_KERNEL) return !strcmp(s,"GetFullPathNameA") ? (void *)help_fullpath : !strcmp(s,"GetFileAttributesA") ? (void *)help_attributes : 0;
   static const struct {
     const char *name;
     void *proc;
@@ -941,6 +959,46 @@ static BOOL W32API enumerate(HWND h, LPARAM unused) {
   enum_count++;
   return 1;
 }
+extern BOOL W32API WinHelpA(HWND,const char *,UINT,uintptr_t);
+extern int W32API GetDlgCtrlID(HWND);
+extern BOOL W32API WinHelpW(HWND,const WCHAR *,UINT,uintptr_t);
+extern HWND W32API CiukiHtmlHelpA(HWND,const char *,UINT,uintptr_t);
+extern HWND W32API CiukiHtmlHelpW(HWND,const WCHAR *,UINT,uintptr_t);
+#ifndef U32_TEST_EXTERNAL_MODULES
+static void test_help_requests(void)
+{
+    host_help=1;
+    CHECK(WinHelpA(windows[0],"guide.hlp",1,42));
+    struct desk_packet p; struct desk_help_request r;
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && p.opcode==DESK_LAUNCH && desk_help_decode(p.argument,&r));
+    CHECK(r.format==1 && r.command==1 && r.context==42 && !strcmp(r.path,"/Help/guide.hlp"));
+    DWORD controls[]={ (DWORD)GetDlgCtrlID(child),42,0,0 };
+    CHECK(WinHelpA(child,"guide.hlp",0xd,(uintptr_t)controls));
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && desk_help_decode(p.argument,&r) && r.command==8 && r.context==42);
+    controls[1]=UINT32_MAX;
+    CHECK(!WinHelpA(child,"guide.hlp",0xc,(uintptr_t)controls) && GetLastError()==2);
+    const WCHAR widefile[]={'D',':','\\','G','u','i','d','e','.','h','l','p',0};
+    const WCHAR widekey[]={'O','v','e','r','v','i','e','w',0};
+    CHECK(WinHelpW(windows[0],widefile,3,(uintptr_t)widekey));
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && desk_help_decode(p.argument,&r));
+    CHECK(!strcmp(r.path,"/mnt/D/Guide.hlp") && !strcmp(r.query,"Overview"));
+    CHECK(!WinHelpA(windows[0],"missing.hlp",1,42) && GetLastError()==2);
+    CHECK(!WinHelpA(windows[0],"guide.hlp",0xffff,0) && GetLastError()==120);
+    CHECK(!WinHelpA(windows[0],"guide.hlp",3,0) && GetLastError()==87);
+    CHECK(WinHelpA(windows[0],0,2,0));
+    HWND proxy=CiukiHtmlHelpA(windows[0],"guide.chm::/first.htm",0,0);
+    CHECK(proxy && IsWindow(proxy));
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && desk_help_decode(p.argument,&r));
+    CHECK(r.format==2 && !strcmp(r.query,"/first.htm"));
+    CHECK(CiukiHtmlHelpA(windows[0],"guide.chm",15,42)==proxy);
+    const WCHAR widechm[]={'g','u','i','d','e','.','c','h','m',0};
+    CHECK(CiukiHtmlHelpW(windows[0],widechm,2,(uintptr_t)widekey)==proxy);
+    CHECK(!CiukiHtmlHelpA(windows[0],0,18,0) && !IsWindow(proxy));
+    CHECK(UnregisterClassA("CiukiHtmlHelpProxy",0));
+    host_help=0;
+    puts("TRACE WinHelp A/W and HtmlHelp A/W native topic, context, keyword, missing file, reuse and close bridge");
+}
+#endif
 static void test_extras(void) {
   CHECK(!SetWindowPos(windows[0], 0, 0x7fffffff, 0, 0, 0,
                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) &&
@@ -1949,6 +2007,9 @@ static void run(void) {
   puts("STEP clipboard");
   test_clipboard();
   test_extras();
+  #ifndef U32_TEST_EXTERNAL_MODULES
+  test_help_requests();
+  #endif
   test_spi();
 #ifndef U32_TEST_EXTERNAL_MODULES
   test_g18_shell();

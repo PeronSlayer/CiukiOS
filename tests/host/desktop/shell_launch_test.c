@@ -920,13 +920,19 @@ __attribute__((noinline)) static void test_help_launch(void)
     window(&d,0,(uint32_t)hello,104,"Hello");
     unsigned before=help_spawns;
     expect_help_arg="topic:files"; assert(launch_request(&d,0,(uint32_t)hello,"help","topic:files")>0 && help_spawns==before+1);
-    expect_help_arg=NULL; assert(launch_request(&d,0,(uint32_t)hello,"help",NULL)>0 && help_spawns==before+2);
+    int help=-1;
+    for (unsigned i=0;i<DESK_CLIENTS;i++) if (d.clients[i].channel>=0 && !strcmp(d.clients[i].application,"help")) help=(int)i;
+    assert(help>=0); window(&d,help,d.clients[help].pid,105,"CiukiOS Help");
+    drain(&d,help);
+    expect_help_arg=NULL; assert(launch_request(&d,0,(uint32_t)hello,"help",NULL)>0 && help_spawns==before+1);
+    struct desk_packet forwarded[DESK_TX_MAX];
+    assert(queued(&d,help,DESK_LAUNCH,forwarded)==1 && !strcmp(forwarded[0].argument,"topic:welcome"));
     /* Nothing else is allowed from it: other arguments, other programs, other topic spellings. */
     assert(launch_request(&d,0,(uint32_t)hello,"help","/Documents/x.txt")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:")==-EPERM);
     assert(launch_request(&d,0,(uint32_t)hello,"help","topic:Files")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:../x")==-EPERM);
     assert(launch_request(&d,0,(uint32_t)hello,"help","--test=help")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:a b")==-EPERM);
     assert(launch_request(&d,0,(uint32_t)hello,"ciuknote","topic:files")==-EPERM && launch_request(&d,0,(uint32_t)hello,"hello",NULL)==-EPERM);
-    assert(launch_request(&d,0,(uint32_t)hello,"control","topic:files")==-EPERM && help_spawns==before+2);
+    assert(launch_request(&d,0,(uint32_t)hello,"control","topic:files")==-EPERM && help_spawns==before+1);
     /* Start > Help is one row that opens Help; the old submenu rows moved. */
     desk_menu_open(&d,SH_MENU_START,0,0);
     int row=item_at(&d.sh.menus[0],"Help"); assert(row>=0);
@@ -934,13 +940,16 @@ __attribute__((noinline)) static void test_help_launch(void)
     int about=item_at(&d.sh.menus[0],"About CiukiOS"); assert(about==item_at(&d.sh.menus[0],"Run...")+1 && d.sh.menus[0].items[about].action==SH_ACT_ABOUT);
     d.sh.menus[0].hot=row; key(&d,DU_KEY_RIGHT); assert(d.sh.levels==1);            /* no submenu to enter */
     expect_help_arg=NULL; before=help_spawns; key(&d,DU_KEY_ENTER);
-    assert(help_spawns==before+1 && !d.sh.levels);
+    assert(help_spawns==before && !d.sh.levels);
     /* F1: the empty desktop opens its topic; a focused window, Ctrl+F1 and an open menu get the key. */
     int saved=d.focus; d.focus=-1; expect_help_arg="topic:desktop"; before=help_spawns;
-    assert(desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before+1 && desk_shell_key(&d,DU_KEY_F1,0) && help_spawns==before+1);
-    d.focus=saved; assert(d.focus>=0 && !desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before+1);
-    d.focus=-1; desk_shell_key(&d,0x1d,1); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before+1); desk_shell_key(&d,0x1d,0);
-    desk_menu_open(&d,SH_MENU_START,0,0); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before+1); desk_menu_close(&d);
+    assert(desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before && d.focus==help);
+    /* Reusing Help activates it immediately; the release now belongs to the
+     * focused program instead of the empty desktop. */
+    (void)desk_shell_key(&d,DU_KEY_F1,0); assert(help_spawns==before);
+    d.focus=saved; assert(d.focus>=0 && !desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before);
+    d.focus=-1; desk_shell_key(&d,0x1d,1); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before); desk_shell_key(&d,0x1d,0);
+    desk_menu_open(&d,SH_MENU_START,0,0); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before); desk_menu_close(&d);
     /* Without /Programs/help the row stays (the layout and keyboard order never change) and starts nothing. */
     d.program_count=0; desk_program_add(&d,"hello",elf,sizeof(elf));
     desk_menu_open(&d,SH_MENU_START,0,0); row=item_at(&d.sh.menus[0],"Help");

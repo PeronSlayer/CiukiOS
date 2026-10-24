@@ -117,7 +117,9 @@ enum desk_cursor_shape {
     DESK_CURSOR_COUNT
 };
 #define DESK_TITLE_MAX 63u
-#define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message */
+#define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message.
+                           * G15B: server-to-Help LAUNCH reuses its window;
+                           * v3 client LAUNCH payload is u32 byte count + Help argument. */
 enum desk_opcode {
     /* DAMAGE remains a rectangle in every version. A legacy producer with
      * no finer damage sends its full backing bounds; no new negotiation is

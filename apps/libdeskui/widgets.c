@@ -204,6 +204,58 @@ void du_set_text(struct du_widget *w, const char *s)
     snprintf(w->text, sizeof(w->text), "%s", s ? s : "");
     w->cursor = w->anchor = strlen(w->text); w->offset = 0;
     memset(&w->selection, 0, sizeof(w->selection));
+    du_control_help(w);
+}
+
+/* Every toolkit control has a usable fallback, including controls created
+ * later by dialogs. Application strings still take precedence. Text entries
+ * never use the user's (possibly private) contents as their tooltip. */
+void du_control_help(struct du_widget *w)
+{
+    const char *tip="Information",*help="Shows information about this part of the program.";
+    switch (w->kind) {
+    case DU_BUTTON: case DU_TOOLBUTTON:
+        tip=w->text[0] ? w->text : "Action"; help="Carries out the action named on this button. A button ending in ... opens a dialog."; break;
+    case DU_EDIT: tip="Text entry"; help="Type a value here. Use Left and Right to move, Shift to select, and Ctrl+C or Ctrl+V to copy or paste."; break;
+    case DU_TEXTAREA: tip="Document text"; help="Read or select text here. Use the arrow keys or scroll bars to move through the document. Read-only documents cannot be edited."; break;
+    case DU_LISTVIEW: tip="Items"; help="Select an item with the arrow keys or a click. Press Enter or double-click to open it. Use Ctrl or Shift to select several items where supported."; break;
+    case DU_TREE: tip="Contents"; help="Select an item to view it. Use Right to expand a branch and Left to close it. Press Enter or double-click to open an item."; break;
+    case DU_CHECKBOX: tip=w->text[0] ? w->text : "Option"; help="Select or clear this option. Press Space to change the check mark."; break;
+    case DU_RADIO: tip=w->text[0] ? w->text : "Choice"; help="Select this choice. Only one choice in this group can be selected."; break;
+    case DU_TABS: tip="Pages"; help="Select a tab to show its page. Use Left and Right to move between tabs."; break;
+    case DU_SCROLLBAR: tip="Scroll"; help="Drag the thumb or click an arrow to move through the contents. Click beside the thumb to move a page."; break;
+    case DU_SPLITTER: tip="Resize panes"; help="Drag this divider to change the size of the neighbouring panes."; break;
+    case DU_PROGRESS: tip="Progress"; help="Shows how much of the current operation has finished."; break;
+    case DU_GRAPH: tip="History"; help="Shows how the measured value changes over time."; break;
+    case DU_CANVAS: tip="Work area"; help="This is the program's work area. Press F1 for the program's tools and keyboard commands."; break;
+    case DU_STATUS: tip="Status"; help="Shows the current selection, operation or program status."; break;
+    case DU_HEADER: tip=w->text[0] ? w->text : "Heading"; help="Names this column or group of controls."; break;
+    default: break;
+    }
+    if (!w->tip[0]) snprintf(w->tip, sizeof(w->tip), "%s", tip);
+    if (!w->help) {
+        char action[48]; unsigned at=0;
+        for (const char *p=w->text;*p && at+1<sizeof(action);p++) if (*p!='&' && *p!='.') {
+            unsigned c=(unsigned char)*p; action[at++]=(char)(c>='A' && c<='Z' ? c+32 : c);
+        }
+        action[at]=0;
+        static const struct { const char *name,*text; } actions[]={
+            {"open","Opens the selected file, folder or item. A dialog lets you choose a file when needed."},
+            {"save","Writes the current document to disk. Save As lets you choose another name or location."},
+            {"save as","Saves a copy of the current document with the name and location you choose."},
+            {"cancel","Closes this dialog or cancels this operation without accepting further changes."},
+            {"ok","Accepts the values in this dialog and closes it."},
+            {"apply","Applies the current settings while keeping this dialog open."},
+            {"delete","Removes the selected item. Check the selection before confirming a deletion."},
+            {"copy","Copies the selection to the clipboard so that it can be pasted elsewhere."},
+            {"paste","Inserts compatible data from the clipboard at the current selection."},
+            {"back","Returns to the previous page or location."},
+            {"help","Opens Help for this program or dialog."}
+        };
+        if (w->kind==DU_BUTTON || w->kind==DU_TOOLBUTTON)
+            for (unsigned i=0;i<sizeof(actions)/sizeof(*actions);i++) if (!strcmp(action,actions[i].name)) { help=actions[i].text; break; }
+        w->help=help;
+    }
 }
 
 int du_focusable(const struct du_widget *w)
@@ -1400,9 +1452,9 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
     if (e->type == CIUKI_INPUT_MOTION) {
         u->mouse_x = e->value; u->mouse_y = e->value2;
         if (u->combo_open) { du_combo_overlay_motion(u); return; }
+        if (u->menu >= 0 || u->popup) { du_menu_motion(u); return; }
+        if (u->capture >= 0 && (unsigned)u->capture < u->count) { du_widget_motion(u, &u->widgets[u->capture], u->mouse_x, u->mouse_y); return; }
         if (u->dialog.kind) { du_dialog_motion(u); return; }
-        if (u->menu >= 0 || u->popup) { du_tip_hide(u); du_menu_motion(u); return; }
-        if (u->capture >= 0 && (unsigned)u->capture < u->count) { du_tip_hide(u); du_widget_motion(u, &u->widgets[u->capture], u->mouse_x, u->mouse_y); return; }
         int hit = du_hit(u, u->mouse_x, u->mouse_y);
         du_tip_motion(u, hit >= 0 ? &u->widgets[hit] : NULL);
         if (hit != u->hover) {

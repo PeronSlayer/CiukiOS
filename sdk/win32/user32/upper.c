@@ -238,22 +238,6 @@ DWORD W32API WaitForInputIdle(HANDLE process, DWORD ms) {
   }
   return 0;
 }
-/* Limited: CiukiOS has no WinHelp viewer (WINHLP32.EXE). HELP_QUIT has
- * nothing to close and succeeds; other commands fail as when the viewer
- * cannot be started. */
-BOOL W32API WinHelpA(HWND h, const char *file, UINT command, uintptr_t data) {
-  (void)h, (void)file, (void)data;
-  if (command == 2)
-    return 1;
-  return u32_fail(2);
-}
-BOOL W32API WinHelpW(HWND h, const WCHAR *file, UINT command, uintptr_t data) {
-  (void)h, (void)file, (void)data;
-  if (command == 2)
-    return 1;
-  return u32_fail(2);
-}
-
 /* ---- monitors and DPI ---------------------------------------------------- */
 #define MONITOR ((HANDLE)(uintptr_t)0x00010001u)
 static RECT screen(void) {

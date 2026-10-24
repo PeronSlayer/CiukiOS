@@ -156,7 +156,6 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-/* G1 already added setup_answers.tz_zone[48]; keep its existing ABI oracle current. */
 _Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);

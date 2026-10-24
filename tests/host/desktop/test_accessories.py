@@ -29,8 +29,8 @@ TESTS = {
     "calc": [ACC + "calc_model.c", ACC + "calc_view.c"],
     "clock": [ACC + "clock_model.c", ACC + "clock_view.c"],
     "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c"],
-    "help": [ACC + "help_topics.c", ACC + "help_view.c"],
-    "logview": [ACC + "logview_model.c", ACC + "logview_view.c"],
+    "help": [ACC+n for n in ("help_topics.c","help_view.c","help_navigation.c","help_wizard.c","helpfile.c","help_hlp.c","help_chm.c","help_markup.c")]
+            + ["sdk/win32/lz32/mspack/chmd.c","sdk/win32/lz32/mspack/lzxd.c"],
     "mixer": [ACC + "mixer_view.c"],
     "mixer_queue": ["apps/desktop/settings_io.c"],
     "recorder": [ACC + "recorder.c"],
@@ -81,10 +81,11 @@ class AccessoriesTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0", HOME=str(scratch))
             binary = folder / name
             sources = [*TESTS[name], *TOOLKIT, f"tests/host/desktop/{name}_test.c"]
+            extra=["-I",str(ROOT/"sdk/win32/lz32/mspack"),"-DHAVE_INTTYPES_H=1","-DSIZEOF_OFF_T=8"] if name=="help" else []
             if name != "keymap":
                 sources.append(ACC + "acc.c")
             icons = load("acc_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            subprocess.run([*FLAGS, *(["-include", str(ROOT / "tests/host/desktop/replay_base.h")] if name == "recorder" else []), *icons.defines(), *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)],
+            subprocess.run([*FLAGS, *extra, *icons.defines(), *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)],
                            check=True, env=env)
             args = {"viewer": [str(scratch), str(ROOT / "misc/CiukiOS_SplashScreen.png"), str(renders)],
                     "help": [str(scratch), str(renders)], "logview": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])

@@ -254,6 +254,12 @@ static void event_wait_budget(const char *name)
 static void budgets(const char *name)
 {
     init(); uint64_t before=cpu_ns(); setup(); render();
+    /* G15B: every control of every toolkit program has both strings, not
+     * merely the Files/Help toolbar. Defaults preserve explicit app copy. */
+    for (unsigned i=0;i<ui.count;i++) {
+        const struct du_widget *w=&ui.widgets[i];
+        assert(w->tip && *w->tip && w->help && *w->help);
+    }
     double cold_host=(cpu_ns()-before)/1e6, cold_model=100.0+model_us()/1000.0;
     assert(cold_model<=500.0);
     /* Settle background publication before measuring the stable visible view. */

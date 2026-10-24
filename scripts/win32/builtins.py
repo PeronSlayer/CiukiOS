@@ -64,6 +64,9 @@ def build(out=None):
     user_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='user32.dll':store['dlls'][i]=user32.build(out,user_base,flags)
+    from scripts.win32 import help as htmlhelp
+    help_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls']=[d for d in store['dlls'] if d['name']!='hhctrl.ocx']+[htmlhelp.build(out,help_base)]
     ddraw_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='ddraw.dll':store['dlls'][i]=ddraw.build(out,ddraw_base)
