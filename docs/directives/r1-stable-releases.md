@@ -1,6 +1,6 @@
 # r1 — stable releases of approved images
 
-- **Written:** 2026-10-24 13:28 by the lead. Owner decision 2026-10-24: every image the owner approves as "stable" is published as a GitHub release with an emulator package (QEMU, VirtualBox, VMware), the installer and the raw disk image; documentation is updated with it. Implementer: Codex gpt-6.1-sol high, worktree from `main`. Rules of `g7-g12-os-gaps-batch-2.md` (header).
+- **Written:** 2026-10-24 13:24 by the lead. Owner decision 2026-10-24: every image the owner approves as "stable" is published as a GitHub release with an emulator package (QEMU, VirtualBox, VMware), the installer and the raw disk image; documentation is updated with it. Implementer: Codex gpt-6.1-sol high, worktree from `main`. Rules of `g7-g12-os-gaps-batch-2.md` (header).
 
 **Deliver `scripts/release_stable.py`** (host-testable, no network in tests), run by the lead only after the owner's approval of a named image SHA-256:
 1. **Inputs:** the canonical `build/f0/ciukios.img` and the Setup CD of the same source commit (`make build-full`, `make build-full-cd`), their manifests; refuse unless both manifests show the same commit, `source_dirty=0`, the image SHA-256 the owner approved, and the payload audits pass (no `legacy/local`, no commercial game payloads, nothing from `third_party/mswin98rskt` or the owner's driver pack).
