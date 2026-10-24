@@ -8,7 +8,7 @@ struct link;
 struct interface {const void *const *vt;struct link *owner;};
 struct link {
   struct interface a,w,p;
-  ULONG refs;BOOL dirty;DWORD show;LONG icon_index;
+  ULONG refs;BOOL dirty;DWORD show;LONG icon_index;uint16_t hotkey;
   char label[64],target[260],args[1024],cwd[260],icon[260],filename[260];
 };
 int shell_guid(const SHELL_GUID *g,DWORD a) {
@@ -29,12 +29,15 @@ static HRESULT W32API query(struct interface *i,const SHELL_GUID *id,void **out)
   addref(i);return 0;
 }
 static HRESULT set(char *out,DWORD cap,const void *s,int wide){
-  WCHAR w[1024];char u[3072];
   if(!s)return E_INVALID;
-  if(!wide){if(!MultiByteToWideChar(1252,0,s,-1,w,1024))return E_INVALID;s=w;}
-  if(!shell_utf8_encode(s,u,sizeof(u)))return E_INVALID;
-  DWORD n=w32_strlen(u)+1;if(n>cap)return E_INVALID;
-  w32_copy(out,u,n);return 0;
+  WCHAR *w=shell_alloc(1024*sizeof(*w)+3072);if(!w)return (HRESULT)0x8007000eu;
+  char *u=(char *)(w+1024);HRESULT result=E_INVALID;
+  if(!wide){if(!MultiByteToWideChar(1252,0,s,-1,w,1024))goto done;s=w;}
+  if(!shell_utf8_encode(s,u,3072))goto done;
+  DWORD n=w32_strlen(u)+1;if(n>cap)goto done;
+  w32_copy(out,u,n);result=0;
+done:
+  shell_free(w);return result;
 }
 static HRESULT get(const char *s,void *out,int cap,int wide){
   WCHAR w[1024];
@@ -59,8 +62,9 @@ FIELD(directory,cwd)
 FIELD(arguments,args)
 static HRESULT W32API path_set_a(struct interface *i,const char *s){return set_field(i,i->owner->target,sizeof(i->owner->target),s,0);}
 static HRESULT W32API path_set_w(struct interface *i,const WCHAR *s){return set_field(i,i->owner->target,sizeof(i->owner->target),s,1);}
-static HRESULT W32API hot_get(struct interface *i,uint16_t *out){(void)i;if(!out)return E_INVALID;*out=0;return 0;}
-static HRESULT W32API hot_set(struct interface *i,uint16_t value){(void)i;return value?E_NOTIMPL:0;}
+static int hot_valid(DWORD value){return !value || (!(value&0xfffff000u) && (value&255u));}
+static HRESULT W32API hot_get(struct interface *i,uint16_t *out){if(!out)return E_INVALID;*out=i->owner->hotkey;return 0;}
+static HRESULT W32API hot_set(struct interface *i,uint16_t value){if(!hot_valid(value))return E_INVALID;i->owner->hotkey=value;i->owner->dirty=1;return 0;}
 static HRESULT W32API show_get(struct interface *i,int *out){if(!out)return E_INVALID;*out=(int)i->owner->show;return 0;}
 static HRESULT W32API show_set(struct interface *i,int show){if(show!=1 && show!=3 && show!=7)return E_INVALID;i->owner->show=(DWORD)show;i->owner->dirty=1;return 0;}
 static HRESULT W32API icon_get_a(struct interface *i,char *s,int cap,int *index){if(!index)return E_INVALID;*index=i->owner->icon_index;return get(i->owner->icon,s,cap,0);}
@@ -74,7 +78,7 @@ static HRESULT W32API resolve(struct interface *i,HANDLE owner,DWORD flags){(voi
 static HRESULT W32API classid(struct interface *i,SHELL_GUID *out){(void)i;if(!out)return E_INVALID;*out=(SHELL_GUID){.a=0x21401,.d={0xc0,0,0,0,0,0,0,0x46}};return 0;}
 static HRESULT W32API dirty(struct interface *i){return i->owner->dirty?0:1;}
 static int valid(const struct link *l){
-  if(!l->target[0] || !l->label[0] || (l->show!=1 && l->show!=3 && l->show!=7))return 0;
+  if(!l->target[0] || !l->label[0] || !hot_valid(l->hotkey) || (l->show!=1 && l->show!=3 && l->show!=7))return 0;
   return l->target[0]=='/' || (((l->target[0]>='A' && l->target[0]<='Z') || (l->target[0]>='a' && l->target[0]<='z')) && l->target[1]==':' && (l->target[2]=='\\' || l->target[2]=='/'));
 }
 static HRESULT W32API save(struct interface *i,const WCHAR *name,BOOL remember){
@@ -87,23 +91,26 @@ static HRESULT W32API save(struct interface *i,const WCHAR *name,BOOL remember){
     if(!shell_copy(l->label,sizeof(l->label),base))return E_INVALID;
   }
   if(!valid(l))return E_INVALID;
-  uint8_t bytes[4096]={0};w32_copy(bytes,"CIUKLNK3",8);w32_put32(bytes+8,l->show);w32_put32(bytes+12,(DWORD)l->icon_index);
+  uint8_t *bytes=shell_alloc(4096);if(!bytes)return (HRESULT)0x8007000eu;
+  w32_copy(bytes,"CIUKLNK3",8);w32_put32(bytes+8,l->show);w32_put32(bytes+12,(DWORD)l->icon_index);w32_put32(bytes+36,l->hotkey);
   const char *fields[]={l->label,l->target,l->args,l->cwd,l->icon};DWORD at=40;
-  for(unsigned k=0;k<5;k++){DWORD n=w32_strlen(fields[k]);if(n>sizeof(bytes)-at)return E_INVALID;w32_put32(bytes+16+k*4,n);w32_copy(bytes+at,fields[k],n);at+=n;}
+  for(unsigned k=0;k<5;k++){DWORD n=w32_strlen(fields[k]);if(n>4096-at){shell_free(bytes);return E_INVALID;}w32_put32(bytes+16+k*4,n);w32_copy(bytes+at,fields[k],n);at+=n;}
   HANDLE h=CreateFileA(filename,0x40000000u,0,0,2,128,0);
-  if(h==K32_INVALID)return failure();
+  if(h==K32_INVALID){shell_free(bytes);return failure();}
   DWORD n=0;BOOL ok=WriteFile(h,bytes,at,&n,0) && n==at && FlushFileBuffers(h);DWORD e=GetLastError();CloseHandle(h);
+  shell_free(bytes);
   if(!ok){DeleteFileA(filename);SetLastError(e?e:112);return failure();}
   l->dirty=0;if(remember)shell_copy(l->filename,260,filename);return 0;
 }
 static HRESULT W32API load(struct interface *i,const WCHAR *name,DWORD mode){
   (void)mode;char filename[260];if(!shell_ansi(name,filename,260))return E_INVALID;
   HANDLE h=CreateFileA(filename,0x80000000u,1,0,3,0,0);if(h==K32_INVALID)return failure();
-  DWORD size=GetFileSize(h,0),got=0;uint8_t bytes[4096];
-  BOOL ok=size>=40 && size<=sizeof(bytes) && ReadFile(h,bytes,size,&got,0) && got==size;CloseHandle(h);
-  if(!ok || w32_u32(bytes)!=0x4b554943u || w32_u32(bytes+4)!=0x334b4e4cu || w32_u32(bytes+36))return E_INVALID;
-  struct link *tmp=shell_alloc(sizeof(*tmp));if(!tmp)return (HRESULT)0x8007000eu;
-  tmp->show=w32_u32(bytes+8);tmp->icon_index=(LONG)w32_u32(bytes+12);
+  DWORD size=GetFileSize(h,0),got=0;uint8_t *bytes=shell_alloc(4096);
+  if(!bytes){CloseHandle(h);return (HRESULT)0x8007000eu;}
+  BOOL ok=size>=40 && size<=4096 && ReadFile(h,bytes,size,&got,0) && got==size;CloseHandle(h);
+  if(!ok || w32_u32(bytes)!=0x4b554943u || w32_u32(bytes+4)!=0x334b4e4cu || !hot_valid(w32_u32(bytes+36))){shell_free(bytes);return E_INVALID;}
+  struct link *tmp=shell_alloc(sizeof(*tmp));if(!tmp){shell_free(bytes);return (HRESULT)0x8007000eu;}
+  tmp->show=w32_u32(bytes+8);tmp->icon_index=(LONG)w32_u32(bytes+12);tmp->hotkey=(uint16_t)w32_u32(bytes+36);
   char *fields[]={tmp->label,tmp->target,tmp->args,tmp->cwd,tmp->icon};
   const DWORD caps[]={64,260,1024,260,260};DWORD at=40;
   for(unsigned k=0;k<5;k++){
@@ -114,11 +121,12 @@ static HRESULT W32API load(struct interface *i,const WCHAR *name,DWORD mode){
     if(!shell_utf8_decode(fields[k],check,1024))ok=0;
     at+=n;
   }
+  shell_free(bytes);
   if(!ok || at!=size || !valid(tmp)){shell_free(tmp);return E_INVALID;}
   struct link *l=i->owner;
   w32_copy(l->label,tmp->label,sizeof(l->label));w32_copy(l->target,tmp->target,sizeof(l->target));
   w32_copy(l->args,tmp->args,sizeof(l->args));w32_copy(l->cwd,tmp->cwd,sizeof(l->cwd));w32_copy(l->icon,tmp->icon,sizeof(l->icon));
-  l->show=tmp->show;l->icon_index=tmp->icon_index;l->dirty=0;shell_copy(l->filename,260,filename);shell_free(tmp);return 0;
+  l->show=tmp->show;l->icon_index=tmp->icon_index;l->hotkey=tmp->hotkey;l->dirty=0;shell_copy(l->filename,260,filename);shell_free(tmp);return 0;
 }
 static HRESULT W32API completed(struct interface *i,const WCHAR *name){(void)i;(void)name;return 0;}
 static HRESULT W32API current(struct interface *i,WCHAR **out){

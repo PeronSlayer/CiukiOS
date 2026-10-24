@@ -56,6 +56,7 @@ class InstallerShellTests(unittest.TestCase):
             link = (root/'C/WINDOWS/Desktop/Fixture.lnk').read_bytes()
             self.assertEqual(link[:8],b'CIUKLNK3')
             self.assertEqual(struct.unpack_from('<Ii',link,8),(3,-3))
+            self.assertEqual(struct.unpack_from('<I',link,36),(0x0646,))
             lengths = struct.unpack_from('<5I',link,16)
             at,fields = 40,[]
             for n in lengths:

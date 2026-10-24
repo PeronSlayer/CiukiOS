@@ -16,12 +16,27 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <ciuki/abi.h>
-#define SH_LEVELS 3
-#define SH_ITEMS 20
+#define SH_LEVELS 10
+#define SH_ITEMS 80
+#define SH_PROGRAM_TRAY 8
+struct sh_program_tray {
+    uint32_t window, id, callback;
+    uint32_t pixels[256];
+    char tip[128];
+    uint64_t click_ns;
+};
+struct sh_program_balloon {
+    uint32_t window, id, timeout, icon;
+    char title[64], text[160];
+};
 #define SH_ICONS (FM_ENTRIES + 4 + (int)DESK_LINKS)
 #define SH_TRAY_ICON_SIZE 16
 #define SH_TRAY_GAP 4
 #define SH_TRAY_MARGIN 6
+struct desktop;
+int desk_shell_program_icon(struct desktop *, int, const struct desk_packet *, const struct ciuki_surface_info *, int);
+int desk_shell_program_balloon(struct desktop *, int, const struct desk_packet *);
+void desk_shell_program_remove(struct desktop *, uint32_t);
 /* Tray identifiers; geometry places Notifications next to the clock. */
 enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
@@ -43,7 +58,7 @@ struct sh_notification {
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA,
-       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_KINDS };
+       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_SHORTCUT, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
@@ -85,6 +100,14 @@ struct sh_dnd {
     struct desk_box image;            /* drag image bounds as last painted */
 };
 struct desk_shell {
+    struct sh_program_tray program_tray[SH_PROGRAM_TRAY];
+    struct sh_program_balloon program_balloons[SH_PROGRAM_TRAY];
+    unsigned program_balloon_count;
+    uint32_t balloon_window, balloon_id;
+    struct desk_launch_record shortcut_record;
+    char shortcut_source[260], shortcut_number[24], shortcut_status[160];
+    unsigned shortcut_field, shortcut_repair;
+    int shortcut_index;
     struct ciuki_settings cfg;
     int programs_selected, programs_scroll, programs_click;
     unsigned save_game, save_op, save_bytes, save_quota, save_confirm, save_focus, save_busy;
@@ -151,6 +174,7 @@ struct desk_shell {
 };
 struct desktop;
 struct desk_client;
+void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
 void desk_shell_reset(struct desktop *);
 void desk_shell_apply(struct desktop *);
 void desk_shell_background(struct desktop *, struct desk_box clip);

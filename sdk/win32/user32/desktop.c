@@ -10,6 +10,7 @@ struct request {
 };
 static struct request *requests;
 void u32_desktop_cleanup(DWORD tid) {
+  if (!tid) u32_startup_reset();
   struct request **at = &requests;
   while (*at) {
     if (!tid || (*at)->tid == tid) *at = (*at)->next;
@@ -139,6 +140,10 @@ BOOL u32_create_wire(struct u32_window *w) {
   }
   uint8_t identity[4];desk_put32(identity,U32_PTR(w->handle));
   if(!u32_wire(w,DESK_V3_WIN32_HWND,identity,4,-1))return 0;
+  if (w->exstyle&0x10u) {
+    desk_put32(identity,1);
+    if (!u32_wire(w,DESK_ACCEPT_FILES,identity,4,-1)) return 0;
+  }
   if (!(w->style & WS_VISIBLE) || IsIconic(w->handle))
     return u32_place(w);
   return 1;
@@ -223,17 +228,22 @@ void u32_event(const struct desk_packet *p) {
       w = &u32_windows[i];
       break;
     }
-  if (!w)
+  if (!w) {
+    u32_event_release(p);
     return;
+  }
   if (w->tid != u32_tid() || w->creating) {
     struct u32_thread *t = u32_thread_for(w->tid);
     if (!t || t->event_count >= 256) {
+      u32_event_release(p);
       u32_fail(1816);
       return;
     }
     struct u32_pending_event *e = u32_alloc(sizeof(*e));
-    if (!e)
+    if (!e) {
+      u32_event_release(p);
       return;
+    }
     e->packet = *p;
     if (t->events_tail)
       t->events_tail->next = e;
@@ -250,6 +260,13 @@ void u32_event(const struct desk_packet *p) {
   }
   HWND h = w->handle;
   switch (p->opcode) {
+  case DESK_V3_TRAY_EVENT:
+    u32_pointer=(POINT){p->x,p->y};
+    u32_queue(w->tid,h,p->serial,p->index,p->flags,QS_POSTMESSAGE,u32_ticks(),u32_pointer);
+    break;
+  case DESK_DROP_FILES:
+    u32_drop_files(w,p->x,p->y,p->attachment_fd);
+    break;
   case DESK_PING:
     w->ping = p->serial;
     break;
@@ -326,6 +343,11 @@ void u32_event(const struct desk_packet *p) {
   default:
     break;
   }
+}
+void u32_event_release(const struct desk_packet *p)
+{
+  if (p->opcode==DESK_DROP_FILES && p->attachment_fd>=0)
+    u32_backend.gate(CIUKI_SYS_CLOSE,(DWORD)p->attachment_fd,0,0);
 }
 void u32_pump(void) {
   u32_session_pump();

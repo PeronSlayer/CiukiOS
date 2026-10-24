@@ -55,6 +55,7 @@ struct u32_window {
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
   BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_CLOSE; a window that survives its
                          * dispatch (the user cancelled the program's prompt) declines with CLOSE_ACK 0 */
+  BOOL flash;
   /* f5-10C classic state: control/dialog records, menus, scroll bars. */
   void *control, *dialog;
   HANDLE menu, system_menu;
@@ -175,11 +176,16 @@ void u32_hooks_cleanup(DWORD);
 void u32_desktop_cleanup(DWORD);
 void u32_clipboard_cleanup(DWORD);
 void u32_icons_cleanup(void);
+BOOL u32_tray_pixels(HICON,struct u32_surface *);
+void u32_drop_files(struct u32_window *,int,int,int);
+int u32_startup_show(int);
+void u32_startup_reset(void);
 void u32_display_event(struct u32_window *, const struct desk_packet *);
 void u32_display_cache(void);
 BOOL u32_resize(struct u32_window *);
 void u32_clipboard_owned_clear(void);
 void u32_event(const struct desk_packet *);
+void u32_event_release(const struct desk_packet *);
 void u32_input(struct u32_window *, const struct ciuki_input_event *);
 void u32_clear_input(void);
 void u32_clear_thread_input(void);

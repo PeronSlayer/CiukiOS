@@ -39,6 +39,7 @@ int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
     static const char *const folders[][2]={{"Desktop","C:\\WINDOWS\\Desktop"},{"Programs","C:\\WINDOWS\\Start Menu\\Programs"},
         {"Start Menu","C:\\WINDOWS\\Start Menu"},{"Startup","C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},
         {"Personal","C:\\Documents"},{"Fonts","C:\\WINDOWS\\FONTS"},{"AppData","C:\\WINDOWS\\Application Data"},
+        {"Recent","C:\\WINDOWS\\Recent"},{"SendTo","C:\\WINDOWS\\SendTo"},
         {"Common Desktop","C:\\WINDOWS\\Desktop"},{"Common Programs","C:\\WINDOWS\\Start Menu\\Programs"}};
     for(unsigned root=0;root<2;root++)for(unsigned user=0;user<2;user++){
         char path[256];snprintf(path,sizeof(path),"%s%s\\Explorer\\%sShell Folders",root?".DEFAULT\\":"",cv,user?"User ":"");

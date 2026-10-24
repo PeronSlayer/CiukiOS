@@ -23,8 +23,9 @@ static unsigned starts,signals;
 static int authorized=1;
 static pthread_t desktop_thread;
 static unsigned native_launches,dos_launches;
+static int expected_show=1;
 int desk_task_launch(struct desktop *d,const char *name,const char *arg)
-{assert(pthread_equal(pthread_self(),desktop_thread));assert(d && !strcmp(name,"dosbox") && !strcmp(arg,"D:\\INSTALL.BAT"));dos_launches++;return 152;}
+{assert(pthread_equal(pthread_self(),desktop_thread));assert(d && d->launch_show==3 && !strcmp(name,"dosbox") && !strcmp(arg,"D:\\INSTALL.BAT"));dos_launches++;return 152;}
 static int readiness;
 static unsigned idle_enabled,idle_calls,idle_finished,idle_boot_checks;
 static uint64_t fixture_ms;
@@ -52,6 +53,7 @@ static int launch(struct desktop *d,const struct desk_program *p)
 {
     assert(!strcmp(p->name,"control") && !strcmp(p->path,"/Programs/control"));
     assert(!d->launch_arg && !strcmp(d->launch_argv[0],"--panel=display") && !d->launch_argv[1]);
+    assert(d->launch_show==expected_show);
     native_launches++;return 151;
 }
 void desk_shell_message(struct desktop *d,const char *title,const char *text,int error)
@@ -126,6 +128,7 @@ static void idle_traffic(struct desktop *d)
     d->clients[0].v3_win32_hwnd=0;
     advance(106000);
     struct desk_launch_record r={.label="Control",.target="C:\\Programs\\control",.arguments="--panel=display",.show=1};
+    expected_show=1;
     assert(!desk_w32_launch(DESK_W32_ELF,&r));desk_w32_poll(d);wait_for(&idle_finished,4);
     for(unsigned i=0;i<20;i++){desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);}
     advance(110999);desk_w32_poll(d);assert(idle_calls==4);
@@ -155,14 +158,15 @@ int main(void)
     /* The production registry ping precedes PE readiness; this fixture has
      * no service yet, so it must reject the launch at that first barrier. */
     readiness=-EACCES;assert(desk_w32_launch(DESK_W32_PE,&r)==-EAGAIN && starts==4);readiness=0;
+    r.show=7;expected_show=7;d.launch_show=1;
     assert(!desk_w32_launch(DESK_W32_ELF,&r));desk_w32_poll(&d);
-    assert(native_launches==1 && !strcmp(d.launch_arg,"retained") && !strcmp(d.launch_argv[0],"sentinel"));
+    assert(native_launches==1 && d.launch_show==1 && !strcmp(d.launch_arg,"retained") && !strcmp(d.launch_argv[0],"sentinel"));
     strcpy(r.directory,"C:\\unsupported-cwd");assert(desk_w32_native_shortcut(&d,&r)==-EOPNOTSUPP);
     r.directory[0]=0;strcpy(r.arguments,"1 2 3 4 5 6 7");assert(desk_w32_native_shortcut(&d,&r)==-E2BIG);
     assert(native_launches==1);
-    struct desk_launch_record dos={.label="Install",.target="/mnt/d/INSTALL.BAT",.show=1};
+    struct desk_launch_record dos={.label="Install",.target="/mnt/d/INSTALL.BAT",.show=3};
     assert(!desk_w32_launch(DESK_W32_DOS,&dos) && !dos_launches);
-    desk_w32_poll(&d);assert(dos_launches==1 && native_launches==1);
+    desk_w32_poll(&d);assert(dos_launches==1 && native_launches==1 && d.launch_show==1);
     strcpy(r.target,"C:\\Documents\\control");r.arguments[0]=0;
     assert(desk_w32_native_shortcut(&d,&r)==-EPERM && native_launches==1);
     puts("PASS reserved native identity cannot be forged by a similarly named user ELF");

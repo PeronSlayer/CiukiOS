@@ -208,6 +208,7 @@ int desk_shell_clock_width_at(const struct desktop *d, uint64_t second)
 static int tray_width_at(const struct desktop *d, uint64_t second)
 {
     unsigned icons = 3 + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION);
+    for (unsigned i=0;i<SH_PROGRAM_TRAY;i++) icons+=!!d->sh.program_tray[i].window;
     return 2 * SH_TRAY_MARGIN + desk_shell_clock_width_at(d, second) +
            (int)icons * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP);
 }
@@ -647,7 +648,7 @@ static struct desk_frame_style frame_style(struct desktop *d, int i)
     return (struct desk_frame_style){
         .title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title,
         .icon=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL,
-        .active=i==d->focus && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed, .maximized=c->zoomed,
+        .active=((i==d->focus) != !!c->flash) && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed, .maximized=c->zoomed,
         .buttons=d->shell && !c->owner_id && (c->v3_style&3)!=DESK_V3_TOOL ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
         .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
 }

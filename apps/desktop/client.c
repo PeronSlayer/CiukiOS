@@ -12,6 +12,11 @@ static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
 static void session_pong(struct desktop *, int, uint32_t);
 static void session_ping_sent(struct desktop *, int);
+static void queued_attachments_close(struct desktop *d,const struct ciuki_message *m)
+{
+    if (m->data[0]==DESK_V3_VERSION && m->data[1]==DESK_DROP_FILES)
+        for (unsigned k=0;k<m->fd_count && k<4;k++) if (m->fds[k]>=0) d->ops.close(m->fds[k]);
+}
 int desk_ignore_sigpipe(void)
 { return signal(SIGPIPE,SIG_IGN)==SIG_ERR ? -1 : 0; }
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
@@ -54,6 +59,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->v3_peer && c->window_id) for (int j=0;j<DESK_CLIENTS;j++)
         if (d->clients[j].v3_peer==c->v3_peer && d->clients[j].owner_id==c->window_id) desk_drop_client(d,j);
     uint32_t pid=c->pid, owner=c->owner_id, id=c->window_id;
+    if (id) desk_shell_program_remove(d,id);
     char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
     int was_focused=d->focus==i;
     if (d->focus == i) desk_focus(d, -1);
@@ -71,6 +77,8 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->window && !c->internal) d->v3_links_force|=DESK_LINKS_SCAN;
     if (c->pixels && !c->internal) d->ops.unmap((void *)c->pixels, c->info.allocation_bytes);
     if (c->surface >= 0) d->ops.close(c->surface);
+    for (unsigned k=0;k<c->tx_count;k++) queued_attachments_close(d,&c->tx[(c->tx_head+k)%DESK_TX_MAX]);
+    for (unsigned k=0;k<c->v3_over_count;k++) queued_attachments_close(d,&c->v3_over[(c->v3_over_head+k)%DESK_V3_OVER_MAX]);
     free(c->v3_over);
     if (c->channel >= 0 && !c->v3_peer) d->ops.close(c->channel);
     if (d->about == i) d->about = -1;
@@ -140,6 +148,7 @@ static void v3_hold(struct desktop *d, int pi, const struct ciuki_message *wire)
     }
     if (!p->v3_over) p->v3_over=malloc(sizeof(*p->v3_over)*DESK_V3_OVER_MAX);
     if (!p->v3_over || p->v3_over_count==DESK_V3_OVER_MAX) {
+        queued_attachments_close(d,wire);
         p->v3_over_lost++; /* bounded: only reachable inside the silence deadline, newest message discarded */
         v3_check_silent(d,pi); return;
     }
@@ -157,9 +166,9 @@ static void v3_refill(struct desktop *d, int pi)
 }
 void desk_queue(struct desktop *d, int i, const struct ciuki_message *m)
 {
-    if (i < 0 || i >= DESK_CLIENTS) return;
+    if (i < 0 || i >= DESK_CLIENTS) { queued_attachments_close(d,m); return; }
     struct desk_client *c = &d->clients[i];
-    if (c->channel < 0) return;
+    if (c->channel < 0) { queued_attachments_close(d,m); return; }
     if (c->version==DESK_V3_VERSION) {
         struct ciuki_message wire=*m;
         if (m->data[0]!=DESK_V3_VERSION) {
@@ -268,6 +277,7 @@ void desk_flush(struct desktop *d, int i)
             return;
         }
         d->replied++;
+        queued_attachments_close(d,message);
         c->tx_head = (c->tx_head + 1) % DESK_TX_MAX; c->tx_count--;
         c->v3_progress_ns = d->now_ns;
         if (c->version==DESK_V3_VERSION) v3_refill(d,i);
@@ -737,6 +747,9 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             c->order=++d->order; d->menu_focus=i;
             desk_message(&reply,DESK_FOCUS,8); desk_queue(d,i,&reply);
         } else desk_focus(d, i);
+        if (c->initial_show==3) desk_zoom(d,i);
+        else if (c->initial_show==7) desk_minimize(d,i);
+        c->initial_show=0;
         if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
         if (d->shell_test && c->pid == d->shell_pid && d->shell_stage == 2) d->shell_stage = 3;
         if (d->tasks_test && d->tasks_stage == 1 && c->pid == d->tasks_pid) d->tasks_stage = 2;
@@ -2137,6 +2150,18 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
+    case DESK_V3_TRAY_ICON:
+        error=desk_shell_program_icon(d,i,&p,&info,m->fd_count ? m->fds[0] : -1);
+        if (!error && m->fd_count) d->ops.close(m->fds[0]);
+        break;
+    case DESK_V3_TRAY_BALLOON:
+        error=desk_shell_program_balloon(d,i,&p); break;
+    case DESK_ACCEPT_FILES:
+        c->accept_files=(int)p.flags; break;
+    case DESK_V3_FLASH:
+        c->flash=p.flags ? !c->flash : 0;
+        desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+        desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height); break;
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

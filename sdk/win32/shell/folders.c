@@ -68,6 +68,7 @@ int shell_mkdirs(const char *path) {
 static const struct {unsigned id;const char *path;} folders[]={
  {0,"C:\\WINDOWS\\Desktop"},{2,"C:\\WINDOWS\\Start Menu\\Programs"},
  {5,"C:\\Documents"},{7,"C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},
+ {8,"C:\\WINDOWS\\Recent"},{9,"C:\\WINDOWS\\SendTo"},
  {11,"C:\\WINDOWS\\Start Menu"},{16,"C:\\WINDOWS\\Desktop"},
  {20,"C:\\WINDOWS\\FONTS"},{22,"C:\\WINDOWS\\Start Menu"},
  {23,"C:\\WINDOWS\\Start Menu\\Programs"},{24,"C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},

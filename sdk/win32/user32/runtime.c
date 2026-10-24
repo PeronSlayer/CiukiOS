@@ -429,7 +429,7 @@ static void cleanup_thread(DWORD tid, UINT mode) {
     if (t->id && (!tid || t->id == tid)) {
       identity = 1;
       while (t->events) {
-        struct u32_pending_event *e = t->events; t->events = e->next; u32_free(e);
+        struct u32_pending_event *e = t->events; t->events = e->next; u32_event_release(&e->packet); u32_free(e);
       }
       for (struct u32_send_frame *f = t->send; f; f = f->prev) {
         u32_free(f->data); f->data = 0;

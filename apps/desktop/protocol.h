@@ -61,7 +61,13 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    DESK_V3_PRESENT, /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    /* G18: TRAY_ICON: action,id,NIF flags,callback,tip-length,UTF-8 tip;
+     * optional 16x16 ARGB surface iff NIF_ICON. BALLOON: id,title-length,
+     * text-length,timeout-ms(low16)|NIIF-kind(high16),title,text.
+     * EVENT: id,callback,mouse-message,screen-x,screen-y.
+     * FLASH: invert (0/1). All use the authenticated window tuple. */
+    DESK_V3_TRAY_ICON, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
@@ -137,7 +143,11 @@ enum desk_opcode {
      * DRAG_END (desktop to the Files source): effect performed (0 none).
      * ACCEPT_FILES (any v2 client to desktop): 0/1, DragAcceptFiles.
      * DROP_FILES (desktop to an accepting client): serial, client x, y;
-     *   WM_DROPFILES, the client reads the data object (du_drop_file). */
+     *   WM_DROPFILES, the v2 client reads the data object (du_drop_file).
+     * G18 v3: ACCEPT_FILES has one 0/1 word; DROP_FILES has the three
+     * words above plus one read-only 1024-wide XRGB surface grant containing
+     * a u32 byte count and an independent X\n<type>/path\n snapshot. The
+     * receiver owns the transferred descriptor until it copies the data. */
     DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
     DESK_ACCEPT_FILES, DESK_DROP_FILES,
     /* G3 end of session (WM_QUERYENDSESSION / WM_ENDSESSION), version 2,
@@ -203,6 +213,7 @@ struct desk_packet {
     uint32_t width, height, serial, focused;
     char title[DESK_TITLE_MAX + 1];   /* also WINDOW_INFO title and LAUNCH name */
     char argument[DESK_ARG_MAX + 1];  /* LAUNCH: optional single program argument (empty when absent) */
+    char tooltip[128]; /* G18 tray tooltip (UTF-8 bytes) */
     struct ciuki_input_event event;
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
@@ -220,6 +231,7 @@ struct desk_packet {
     uint64_t completed_ns, next_frame_ns;
     uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
     uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
+    int attachment_fd; /* owned immutable DROP_FILES snapshot, -1 when absent */
 };
 int desk_utf8_valid(const uint8_t *, unsigned);
 void desk_v3_message(struct ciuki_message *, unsigned op, unsigned payload,

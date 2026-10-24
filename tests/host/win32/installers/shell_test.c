@@ -11,10 +11,35 @@ struct interface {const void *const *vt;struct link *owner;};
 struct factory {const void *const *vt;ULONG refs;};
 #define METHOD(i,n,type) ((type)(i)->vt[n])
 static SHELL_GUID guid(DWORD a){return (SHELL_GUID){.a=a,.d={0xc0,0,0,0,0,0,0,0x46}};}
+extern BOOL SHGetSpecialFolderPathW(HANDLE,WCHAR *,int,BOOL);
+extern HRESULT SHGetFolderPathW(HANDLE,int,HANDLE,DWORD,WCHAR *);
+extern LONG RegOpenKeyA(DWORD,const char *,DWORD *);
+extern LONG RegQueryValueExA(DWORD,const char *,DWORD *,DWORD *,void *,DWORD *);
+extern LONG RegCloseKey(DWORD);
+static void recent_sendto(void){
+  const char *names[]={"Recent","SendTo"};
+  const char *paths[]={"C:\\WINDOWS\\Recent","C:\\WINDOWS\\SendTo"};
+  for(unsigned i=0;i<2;i++){
+    char a[260];WCHAR w[260];
+    assert(SHGetSpecialFolderPathA(0,a,8+(int)i,0) && !strcmp(a,paths[i]));
+    assert(GetFileAttributesA(a)==~0u); /* Retrieval alone never creates. */
+    assert(!SHGetFolderPathW(0,0x8008+(int)i,0,0,w) && shell_ansi(w,a,260) && !strcmp(a,paths[i]));
+    assert(GetFileAttributesA(a)&16);
+    assert(SHGetSpecialFolderPathW(0,w,8+(int)i,1) && shell_ansi(w,a,260) && !strcmp(a,paths[i]));
+    for(unsigned root=0;root<2;root++)for(unsigned user=0;user<2;user++){
+      char key[160],value[260];DWORD h,type=0,n=sizeof(value);
+      snprintf(key,sizeof(key),"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\%sShell Folders",user?"User ":"");
+      assert(!RegOpenKeyA(0x80000002u-root,key,&h));
+      assert(!RegQueryValueExA(h,names[i],0,&type,value,&n) && type==1 && !strcmp(value,paths[i]));
+      assert(!RegCloseKey(h));
+    }
+  }
+  puts("PASS Recent/SendTo A/W paths, create flag and matching initial registry defaults");
+}
 static void folder_identifiers(void){
   /* The exact 9x NSIS route: current-user CSIDL, with/without CREATE,
    * PIDL -> ANSI path, and task-allocator ownership. */
-  const unsigned ids[]={0,2,16,23,25};
+  const unsigned ids[]={0,2,8,9,16,23,25};
   for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++){
     char expected[260],actual[260];WCHAR wide[260];void *pidl=0;
     assert(SHGetSpecialFolderPathA(0,expected,(int)ids[i],0));
@@ -48,15 +73,38 @@ static void links(void){
   assert(!METHOD(link,11,HRESULT(*)(struct interface *,const char *))(link,"--title \"two words\""));
   assert(!METHOD(link,17,HRESULT(*)(struct interface *,const char *,int))(link,"C:\\Program Files\\Ciuki Fixture\\fixture.exe",-3));
   assert(!METHOD(link,15,HRESULT(*)(struct interface *,int))(link,3));
+  uint16_t hotkey=0xffff;
+  assert(!METHOD(link,12,HRESULT(*)(struct interface *,uint16_t *))(link,&hotkey) && !hotkey);
+  assert(METHOD(link,12,HRESULT(*)(struct interface *,uint16_t *))(link,0)<0);
+  assert(!METHOD(link,13,HRESULT(*)(struct interface *,uint16_t))(link,0x0646)); /* Ctrl+Alt+F */
+  assert(METHOD(link,13,HRESULT(*)(struct interface *,uint16_t))(link,0x1046)<0);
+  assert(METHOD(link,13,HRESULT(*)(struct interface *,uint16_t))(link,0x0600)<0);
+  assert(!METHOD(link,12,HRESULT(*)(struct interface *,uint16_t *))(link,&hotkey) && hotkey==0x0646);
   assert(!METHOD(link,0,HRESULT(*)(struct interface *,const SHELL_GUID *,void **))(link,&persist_id,(void **)&persist));
   WCHAR filename[260];assert(shell_wide("C:\\WINDOWS\\Desktop\\Fixture.lnk",filename,260));
   assert(!METHOD(persist,6,HRESULT(*)(struct interface *,const WCHAR *,BOOL))(persist,filename,1));
   HANDLE h=CreateFileA("C:\\WINDOWS\\Desktop\\Fixture.lnk",0x80000000,1,0,3,0,0);assert(h!=K32_INVALID);
   uint8_t bytes[4096];DWORD got;assert(ReadFile(h,bytes,sizeof(bytes),&got,0));CloseHandle(h);
-  struct desk_launch_record expected={.label="Fixture \xe2\x82\xac",.target="C:\\Program Files\\Ciuki Fixture\\fixture.exe",.arguments="--title \"two words\"",.directory="C:\\Program Files\\Ciuki Fixture",.icon="C:\\Program Files\\Ciuki Fixture\\fixture.exe",.show=3,.icon_index=-3},decoded;
+  struct desk_launch_record expected={.label="Fixture \xe2\x82\xac",.target="C:\\Program Files\\Ciuki Fixture\\fixture.exe",.arguments="--title \"two words\"",.directory="C:\\Program Files\\Ciuki Fixture",.icon="C:\\Program Files\\Ciuki Fixture\\fixture.exe",.show=3,.icon_index=-3,.hotkey=0x0646},decoded;
   assert(desk_link_decode(bytes,got,&decoded));assert(!memcmp(&expected,&decoded,sizeof(expected)));
   for(DWORD n=0;n<got;n++)assert(!desk_link_decode(bytes,n,&decoded));
   assert(!METHOD(persist,5,HRESULT(*)(struct interface *,const WCHAR *,DWORD))(persist,filename,0));
+  assert(!METHOD(link,12,HRESULT(*)(struct interface *,uint16_t *))(link,&hotkey) && hotkey==0x0646);
+  uint8_t encoded[4096];assert(desk_link_encode(&expected,encoded,sizeof(encoded))==got && !memcmp(bytes,encoded,got));
+  const DWORD keys[]={0,0x0846,0x10046,0x1046,0x0600};
+  for(unsigned k=0;k<sizeof(keys)/sizeof(*keys);k++){
+    w32_put32(bytes+36,keys[k]);
+    int acceptable=k<2;assert(desk_link_decode(bytes,got,&decoded)==acceptable);
+    h=CreateFileA("C:\\WINDOWS\\Desktop\\Fixture.lnk",0x40000000u,0,0,2,128,0);assert(h!=K32_INVALID);
+    DWORD wrote;assert(WriteFile(h,bytes,got,&wrote,0) && wrote==got);assert(CloseHandle(h));
+    assert((METHOD(persist,5,HRESULT(*)(struct interface *,const WCHAR *,DWORD))(persist,filename,0)==0)==acceptable);
+    if(acceptable)hotkey=(uint16_t)keys[k];
+    uint16_t actual;assert(!METHOD(link,12,HRESULT(*)(struct interface *,uint16_t *))(link,&actual) && actual==hotkey);
+  }
+  assert(!METHOD(link,13,HRESULT(*)(struct interface *,uint16_t))(link,0));
+  assert(!METHOD(link,12,HRESULT(*)(struct interface *,uint16_t *))(link,&hotkey) && !hotkey);
+  assert(!METHOD(link,13,HRESULT(*)(struct interface *,uint16_t))(link,0x0646));
+  assert(!METHOD(persist,6,HRESULT(*)(struct interface *,const WCHAR *,BOOL))(persist,filename,1));
   char target[260];assert(!METHOD(link,3,HRESULT(*)(struct interface *,char *,int,void *,DWORD))(link,target,260,0,0));assert(!strcmp(target,expected.target));
   assert(METHOD(persist,2,ULONG(*)(struct interface *))(persist)==1);assert(METHOD(link,2,ULONG(*)(struct interface *))(link)==0);METHOD(factory,2,ULONG(*)(struct factory *))(factory);
   puts("PASS IShellLink / IPersistFile / desktop reader UTF-8 exact round-trip");
@@ -168,5 +216,5 @@ int main(int argc,char **argv){
   for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++)assert(SHGetSpecialFolderPathA(0,path,(int)ids[i],1));
   assert(!SHGetSpecialFolderPathA(0,path,3,0) && !path[0]);
   assert(!SHGetSpecialFolderPathA(0,path,31,0) && !path[0]);
-  folder_identifiers();links();operations();recycle();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
+  recent_sendto();folder_identifiers();links();operations();recycle();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
 }

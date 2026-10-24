@@ -424,6 +424,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | Shortcut Properties: focus, text, hotkey, initial show state, icon location, explicit target repair; installed Programs folder menus | the sheet content after every edit, old and new menu boxes, window exposure on close | `shell_g18.h`, `desk_internal_*`, `shortcut_programs_menu` | G18 adds repaint requests on all editing and submenu paths | G18 shortcut properties and installed menus |
+| 32 | Program tray add/modify/delete, tooltip, balloon queue/timeout/cancel, window cleanup; FlashWindow TRUE/FALSE; Win32 file drop | shifted tray/tooltip and old/new balloon bounds; caption and task button without activation; normal target activation for drops | `shell_tray.h`, v3 client, shell drag target | immutable surface snapshot prevents a later drag replacing queued data; explicit damage follows tray layout changes | G18 tray/flash row, five presenters |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

@@ -39,25 +39,29 @@ DWORD W32API GetCurrentProcessId(void) { return ui_kernel_pid(); }
 DWORD W32API GetTickCount(void) { return ui_kernel_ticks(); }
 #ifndef U32_TEST_EXTERNAL_MODULES
 /* tests/host/win32/dialogs supplies file, module and resource services. */
+static int g18_snapshot_fds[8];
+static unsigned g18_snapshot_closes,g18_snapshot_maps,g18_snapshot_unmaps;
+static int g18_snapshot(const char *);
 HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
                           SECURITY_ATTRIBUTES *security, DWORD creation,
                           DWORD flags, HANDLE template) {
-  (void)name;
   (void)access;
   (void)share;
   (void)security;
   (void)creation;
   (void)flags;
   (void)template;
+  (void)name;
   return K32_INVALID;
+}
+DWORD W32API GetFileSize(HANDLE h,DWORD *high) {
+  if(high)*high=0;
+  (void)h;return ~0u;
 }
 BOOL W32API ReadFile(HANDLE h, void *data, DWORD bytes, DWORD *count,
                      OVERLAPPED *o) {
-  (void)h;
-  (void)data;
-  (void)bytes;
-  (void)count;
   (void)o;
+  (void)h;(void)data;(void)bytes;(void)count;
   return 0;
 }
 BOOL W32API CloseHandle(HANDLE h) {
@@ -257,6 +261,24 @@ static void drop(struct u32_surface *s) {
   memset(s, 0, sizeof(*s));
   s->fd = -1;
 }
+#ifndef U32_TEST_EXTERNAL_MODULES
+static int g18_snapshot(const char *text) {
+  unsigned bytes=(unsigned)strlen(text);
+  for(unsigned k=0;k<8;k++)if(!g18_snapshot_fds[k]) {
+    struct u32_surface s;
+    CHECK(surface(1024,(bytes+4+4095)/4096,&s));
+    w32_put32(s.pixels,bytes);memcpy((uint8_t *)s.pixels+4,text,bytes);
+    g18_snapshot_fds[k]=s.fd;return s.fd;
+  }
+  CHECK(0);return -1;
+}
+static void g18_snapshot_length(int fd,DWORD length) {
+  for(unsigned k=0;k<64;k++)if(surfaces[k].fd==fd) {
+    w32_put32(surfaces[k].s.pixels,length);return;
+  }
+  CHECK(0);
+}
+#endif
 static struct ciuki_message outgoing[2048], incoming[256];
 static UINT outgoing_count, in_head, in_tail, reject_opcode;
 static DWORD lease_token = 0x40, lease_generation = 0x80, lease_serial;
@@ -283,6 +305,21 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
   (void)a;
   (void)c;
+#ifndef U32_TEST_EXTERNAL_MODULES
+  for(unsigned k=0;k<8;k++)if(g18_snapshot_fds[k])
+    for(unsigned j=0;j<64;j++)if(surfaces[j].fd==g18_snapshot_fds[k]) {
+      struct u32_surface *s=&surfaces[j].s;
+      if(a==(DWORD)s->fd && call==CIUKI_SYS_SURFACE_MAP) {
+        CHECK(b==1 && !c);g18_snapshot_maps++;return U32_PTR(s->pixels);
+      }
+      if(a==U32_PTR(s->pixels) && call==CIUKI_SYS_MUNMAP) {
+        CHECK(b==s->pitch*s->height && !c);g18_snapshot_unmaps++;return 0;
+      }
+      if(a==(DWORD)s->fd && call==CIUKI_SYS_CLOSE) {
+        drop(s);g18_snapshot_fds[k]=0;g18_snapshot_closes++;return 0;
+      }
+    }
+#endif
   if (call == CIUKI_SYS_CHANNEL_SEND) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
@@ -1506,6 +1543,7 @@ static void test_production_gdi(void) {
 }
 #ifndef U32_TEST_EXTERNAL_MODULES
 #include "../shell/clients.inc"
+#include "g18_test.inc"
 #endif
 static void run(void) {
   puts("STEP init");
@@ -1561,6 +1599,9 @@ static void run(void) {
   test_clipboard();
   test_extras();
   test_spi();
+#ifndef U32_TEST_EXTERNAL_MODULES
+  test_g18_shell();
+#endif
   test_order();
   test_display();
   test_production_gdi();

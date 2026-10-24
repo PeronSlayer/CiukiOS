@@ -1025,9 +1025,11 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+#include "g18_shortcut_test.h"
+#include "g18_tray_test.h"
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_g18_shortcuts,row_g18_tray};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */
@@ -1056,6 +1058,7 @@ static void wm_dump(void)
 }
 static void report(int sig)
 { (void)sig; fprintf(stderr,"aborted in mode %s at %s\n",wm_names[wm_mode],step_name); wm_dump(); signal(SIGABRT,SIG_DFL); }
+#ifndef WM_NO_MAIN
 int main(int argc, char **argv)
 {
     signal(SIGABRT,report);
@@ -1077,3 +1080,5 @@ int main(int argc, char **argv)
     printf("PASS fx-15 window model: %u frames identical to a full redraw\n",wm_frames);
     return 0;
 }
+
+#endif

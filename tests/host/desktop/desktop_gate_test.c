@@ -74,6 +74,9 @@ static struct gate_control page_storage, *control_page=&page_storage;
 #define page (*control_page)
 static uint32_t output_pixels[320*320];
 static uint32_t client_pixels[(240*160*4+4095)/4096*1024];
+static unsigned g18_surfaces;
+static uint8_t g18_pixels[2][4096];
+static unsigned g18_closed;
 static bool handshake;
 static const char *first_frame_portrait, *first_frame_output;
 static bool normal_first_frame;
@@ -256,8 +259,12 @@ int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 int ciuki_display_info(int fd,struct ciuki_framebuffer_info *s)
 { assert(fd==desktop_spawn_host_display_fd());s->width=s->height=320;return 0; }
 int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
-{assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return output_fd=desktop_spawn_host_output();}
+{
+    if(w==1024) { assert(h==1 && f==CIUKI_SURFACE_XRGB8888 && g18_surfaces<2); return 124+(int)g18_surfaces++; }
+    assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return output_fd=desktop_spawn_host_output();
+}
 void *ciuki_surface_map(int fd,int prot) {
+    if(fd>=124 && fd<=125 && g18_surfaces) { assert(prot==(PROT_READ|PROT_WRITE)); return g18_pixels[fd-124]; }
     if ((handshake && fd==7) || ((burst || flush_timeout) && fd==127)) { assert(prot==PROT_READ); return client_pixels; }
     assert(fd==output_fd && prot==(PROT_READ|PROT_WRITE));return output_pixels;
 }
@@ -341,6 +348,7 @@ int fcntl(int fd,int cmd,...) {
     return result;
 }
 int close(int fd) {
+    if(fd>=124 && fd<=125 && g18_surfaces) { g18_closed++; return 0; }
     if ((burst || flush_timeout) && fd==127) return 0;
     int result=desktop_spawn_host_close(fd);
     /* Cleanup must preserve the original setup error, even if close changes
@@ -572,6 +580,25 @@ static void link_write(const char *path,const char *label,const char *target,tim
     FILE *f=fopen(path,"wb"); assert(f && fwrite(bytes,1,n,f)==n && !fclose(f));
     struct timespec times[2]={{mtime,0},{mtime,0}}; assert(!utimensat(AT_FDCWD,path,times,0));
 }
+static void g18_snapshot_test(void)
+{
+    struct desktop *d=calloc(1,sizeof(*d)); assert(d);
+    char first[64]="/Documents/first.txt";
+    char *paths[]={first,"/mnt/d/music.mid"}; char types[]="FD";
+    d->sh.dnd.paths=paths;d->sh.dnd.types=types;d->sh.dnd.count=2;
+    int a=drop_snapshot(d); assert(a==124);
+    static const char expected[]="X\nF/Documents/first.txt\nD/mnt/d/music.mid\n";
+    assert(desk_get32(g18_pixels[0])==sizeof(expected)-1 && !memcmp(g18_pixels[0]+4,expected,sizeof(expected)-1));
+    strcpy(first,"/Documents/other.txt"); int b=drop_snapshot(d); assert(b==125);
+    assert(memcmp(g18_pixels[0],g18_pixels[1],sizeof(expected)+3));
+    assert(!memcmp(g18_pixels[0]+4,expected,sizeof(expected)-1));
+    assert(!close(a) && !close(b) && g18_closed==2);
+    d->sh.dnd.count=0; assert(drop_snapshot(d)<0);
+    d->sh.dnd.count=2;strcpy(first,"relative");assert(drop_snapshot(d)<0);
+    strcpy(first,"/Documents/invalid\nname");assert(drop_snapshot(d)<0);
+    assert(g18_surfaces==2);free(d);
+    puts("PASS G18 production drop snapshot: transferable surfaces, counted immutable bytes, distinct drops, invalid paths refused");
+}
 static void links_policy_test(void)
 {
     const char *tmp=getenv("TMPDIR"); char base[200];
@@ -634,6 +661,7 @@ int main(int argc,char **argv)
     gate_main_thread=pthread_self();
     idle_policy_test();
     idle_wake_test();
+    if (argc==2 && !strcmp(argv[1],"--g18-snapshot")) { g18_snapshot_test(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--links")) { links_policy_test(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--folder-poll")) { gate_folder_poll(); return 0; }
     if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
