@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 20">
+  <!-- fx-24 fixture, authored for the test: viewBox only (no width or
+       height attributes), as site logos are often written. -->
+  <rect x="0" y="0" width="80" height="20" fill="#8040c0"/>
+  <rect x="30" y="5" width="20" height="10" fill="#ffffff"/>
+</svg>

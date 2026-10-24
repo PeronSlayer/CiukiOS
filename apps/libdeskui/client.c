@@ -3,6 +3,7 @@
  * coalesced damage, close requests, focus releases and the event loop. */
 #include "internal.h"
 #include "completion.h"
+#include "clipboard.h"
 #include <poll.h>
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
@@ -14,6 +15,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __linux__
+#define DU_PROCESS_LOCAL _Thread_local /* host replay models processes with threads */
+#else
+#define DU_PROCESS_LOCAL
+#endif
+static DU_PROCESS_LOCAL struct du_window *clip_window;
+struct clip_saved { struct clip_saved *next; struct du_window *window; struct ciuki_message message; };
+static DU_PROCESS_LOCAL struct clip_saved *clip_saved_head,*clip_saved_tail;
+static DU_PROCESS_LOCAL unsigned clip_saved_count;
+static DU_PROCESS_LOCAL uint32_t clip_waiting;
+static int native_clip(void *ctx, struct desk_clip_wire *w, const void *data, struct desk_clip_wire *reply, void **out);
+static int next_message(struct du_window *w, struct ciuki_message *m)
+{
+    struct clip_saved **at=&clip_saved_head,*previous=NULL;
+    while (*at && (*at)->window!=w) { previous=*at; at=&(*at)->next; }
+    if (*at) {
+        struct clip_saved *p=*at; *m=p->message; *at=p->next;
+        if (clip_saved_tail==p) clip_saved_tail=previous;
+        free(p); clip_saved_count--; return 1;
+    }
+    return ciuki_channel_recv(w->channel,m,DONTWAIT);
+}
 static int queue(struct du_window *w, struct ciuki_message *m)
 {
     if (w->count == 16) { errno = EAGAIN; return -1; }
@@ -95,6 +118,7 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     /* G3: this window answers QUERY_END_SESSION (registration: serial 0, AGREE). */
     desk_message(&m, DESK_SESSION_ANSWER, 12); desk_put32(m.data + 8, DU_SESSION_AGREE); queue(w, &m);
     desk_message(&m,DESK_INPUT_SETTINGS,16);queue(w,&m);
+    clip_window=w; du_clip_bind(native_clip,w);
     return flush(w);
 fail: { int error = errno ? errno : EINVAL; du_window_destroy(w); errno = error; return -1; }
 }
@@ -260,18 +284,20 @@ int du_window_turn(struct du_window *w, uint64_t now)
     if (flush(w)) return -1;
     for (unsigned n = 0; n < 32 && w->count < 14; n++) {
         struct ciuki_message m;
-        int r = ciuki_channel_recv(w->channel, &m, DONTWAIT);
+        int r = next_message(w,&m);
         if (r < 0) { if (errno == EAGAIN || errno == EINTR) break; w->error = errno; w->closed = 1; return -1; }
         if (!r) { w->closed = 1; du_release(w->ui); return 0; }
-        for (unsigned i = 0; i < m.fd_count && i < 4; i++) close(m.fds[i]);
         struct desk_packet p;
         if (!m.sender_pid || (w->server_pid && m.sender_pid != w->server_pid) ||
             m.data[0] != DESK_SHELL_VERSION || m.data[2] != DESK_RESIZE_MINOR || !desk_parse(&m, 0, NULL, &p)) {
+            for (unsigned i=0;i<m.fd_count && i<4;i++) close(m.fds[i]);
             w->error = EIO; w->closed = 1; return -1;
         }
+        for (unsigned i=0;i<m.fd_count && i<4;i++) close(m.fds[i]);
         w->server_pid = m.sender_pid;
         if (now > w->ui->now) w->ui->now = now;
         switch (p.opcode) {
+        case DESK_CLIPBOARD_EVENT: du_clip_observe(p.clip.sequence); break;
         case DESK_CONFIGURE:
             if (p.flags & DESK_CONFIGURE_COMMITTED) {
                 if ((!w->configured ? p.serial != 0 : !w->swap_sent || p.serial != w->configure_serial) ||
@@ -384,6 +410,7 @@ protocol_error:
 
 int du_window_wait(struct du_window *w, uint64_t deadline)
 {
+    for (struct clip_saved *p=clip_saved_head;p;p=p->next) if (p->window==w) return 0;
     struct du_ui *u=w->ui;
     if (w->closed || (w->closing==1 && w->count<16) || (w->configured && u->dirty &&
         !w->swap_sent && !w->present_pending && w->count<16)) return 0;
@@ -415,6 +442,15 @@ int du_run(struct du_window *w, void (*idle)(void *), void *arg)
 
 void du_window_destroy(struct du_window *w)
 {
+    if (clip_window==w) { du_clip_bind(NULL,NULL); clip_window=NULL; }
+    struct clip_saved **at=&clip_saved_head,*previous=NULL;
+    while (*at) {
+        struct clip_saved *p=*at;
+        if (p->window!=w) { previous=p; at=&p->next; continue; }
+        for (unsigned i=0;i<p->message.fd_count;i++) close(p->message.fds[i]);
+        *at=p->next; if (clip_saved_tail==p) clip_saved_tail=previous;
+        free(p); clip_saved_count--;
+    }
     if (w->completion) {
         if (w->ui) { w->ui->wake=NULL; w->ui->wake_ctx=NULL; }
         du_completion_destroy(w->completion); free(w->completion); w->completion=NULL;
@@ -425,4 +461,76 @@ void du_window_destroy(struct du_window *w)
     free(w->back); w->back = NULL;
     if (w->surface >= 0) { close(w->surface); w->surface = -1; }
     if (w->channel >= 0) { close(w->channel); w->channel = -1; }
+}
+
+/* Synchronous clipboard RPC pumps transport/UI progress without running the
+ * application's event callback recursively. Calls originate on the UI thread. */
+static int native_clip(void *ctx, struct desk_clip_wire *w, const void *data, struct desk_clip_wire *reply, void **out)
+{
+    struct du_window *window=ctx;
+    if (clip_waiting) return -EBUSY;
+    int fd=-1;
+    if (w->bytes) {
+        uint32_t width,height; desk_clip_dims(w->bytes,&width,&height);
+        fd=ciuki_surface_create(width,height,CIUKI_SURFACE_XRGB8888); if (fd<0) return -errno;
+        struct ciuki_surface_info info;
+        if (ciuki_surface_info(fd,&info)) { int e=errno; close(fd); return -e; }
+        void *map=ciuki_surface_map(fd,PROT_READ|PROT_WRITE);
+        if (!map || map==MAP_FAILED) { close(fd); return -ENOMEM; }
+        memcpy(map,data,w->bytes); munmap(map,info.allocation_bytes);
+    }
+    struct ciuki_message m;
+    int error=desk_clip_message(&m,DESK_SHELL_VERSION,1,w,fd);
+    m.data[2]=DESK_RESIZE_MINOR;
+    if (error) { if (fd>=0) close(fd); return error; }
+    uint64_t deadline=du_now()+3000000000ull;
+    clip_waiting=w->serial;
+    while (window->count && du_now()<deadline && !window->closed) { flush(window); if (window->count) { struct pollfd p={window->channel,POLLOUT,0}; poll(&p,1,10); } }
+    if (window->count || window->closed) error=-EIO;
+    while (!error && ciuki_channel_send(window->channel,&m,DONTWAIT)) {
+        if (errno!=EAGAIN && errno!=EINTR) { error=-errno; break; }
+        if (du_now()>=deadline) { error=-ETIMEDOUT; break; }
+        struct pollfd p={window->channel,POLLOUT,0}; poll(&p,1,10);
+    }
+    if (fd>=0) close(fd);
+    int done=0;
+    while (!error && !done && !window->closed && du_now()<deadline) {
+        struct ciuki_message incoming;
+        int got=ciuki_channel_recv(window->channel,&incoming,DONTWAIT);
+        if (got<0 && (errno==EAGAIN || errno==EINTR)) { struct pollfd p={window->channel,POLLIN,0}; poll(&p,1,10); continue; }
+        if (got!=1) { error=-EIO; break; }
+        struct desk_packet packet;
+        if (!incoming.sender_pid || (window->server_pid && window->server_pid!=incoming.sender_pid) ||
+            !desk_parse(&incoming,0,NULL,&packet)) {
+            for (unsigned i=0;i<incoming.fd_count && i<4;i++) close(incoming.fds[i]); error=-EIO; break;
+        }
+        window->server_pid=incoming.sender_pid;
+        if (packet.opcode==DESK_CLIPBOARD_EVENT) {
+            du_clip_observe(packet.clip.sequence);
+            if (packet.clip.kind==DESK_CLIP_REPLY && packet.clip.serial==w->serial) {
+                *reply=packet.clip; *out=NULL; done=1; error=reply->result;
+                if (!error && incoming.fd_count) {
+                    struct ciuki_surface_info info;
+                    if (ciuki_surface_info(incoming.fds[0],&info) || !desk_surface_valid(&info) || reply->bytes>info.allocation_bytes) error=-EIO;
+                    else {
+                        void *map=ciuki_surface_map(incoming.fds[0],PROT_READ);
+                        if (!map || map==MAP_FAILED) error=-ENOMEM;
+                        else { *out=malloc(reply->bytes); if (!*out) error=-ENOMEM; else memcpy(*out,map,reply->bytes); munmap(map,info.allocation_bytes); }
+                    }
+                }
+            }
+            for (unsigned i=0;i<incoming.fd_count;i++) close(incoming.fds[i]);
+        } else if (packet.opcode==DESK_PING) {
+            struct ciuki_message pong; desk_message(&pong,DESK_PONG,8); pong.data[0]=2; pong.data[2]=1; desk_put32(pong.data+4,packet.serial);
+            if (ciuki_channel_send(window->channel,&pong,DONTWAIT) && errno!=EAGAIN && errno!=EINTR) error=-errno;
+        } else {
+            struct clip_saved *saved=clip_saved_count<1024 ? malloc(sizeof(*saved)) : NULL;
+            if (!saved) { for (unsigned i=0;i<incoming.fd_count;i++) close(incoming.fds[i]); error=-ENOMEM; break; }
+            *saved=(struct clip_saved){.window=window,.message=incoming};
+            if (clip_saved_tail) clip_saved_tail->next=saved; else clip_saved_head=saved;
+            clip_saved_tail=saved; clip_saved_count++;
+        }
+    }
+    if (!error && !done) error=-ETIMEDOUT;
+    clip_waiting=0; return error;
 }

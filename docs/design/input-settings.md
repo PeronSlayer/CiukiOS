@@ -49,7 +49,7 @@ language layouts are inventory gaps outside the enumerated G12 deliverables.
 
 ## Implementation and verification boundary
 
-Desktop protocol operations 80/81 carry a setting request and a bounded
+Desktop protocol operations 83/84 carry a setting request and a bounded
 snapshot for both native v2 and Win32 v3 clients. Only the input-grant owner
 programs hardware through devctl 0x4905. No syscall number is added. The
 desktop owns the current session values, while a separate saved-value mask

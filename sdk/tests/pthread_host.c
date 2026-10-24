@@ -74,6 +74,20 @@ int ciuki_pthread_host_tests(void) {
     CHECK(!pthread_mutex_init(&m,&ma));CHECK(!pthread_mutex_lock(&m));CHECK(!pthread_mutex_lock(&m));CHECK(m.words[1]==2);
     CHECK(!pthread_mutex_unlock(&m)&&m.words[0]==7);m.words[1]=UINT32_MAX;CHECK(pthread_mutex_lock(&m)==EAGAIN);
     m.words[1]=1;CHECK(!pthread_mutex_unlock(&m));CHECK(!pthread_mutex_destroy(&m));CHECK(pthread_mutex_lock(&m)==EINVAL);
+    /* fx-24: newlib's malloc/free/stdio locks are these mutexes; an
+     * uncontended unlock must not enter the kernel, a registered waiter
+     * (words[3]) is woken exactly as before. */
+    unsigned wakes=wake_calls;
+    CHECK(!pthread_mutex_init(&m,NULL));
+    for(unsigned j=0;j<1000;++j) { CHECK(!pthread_mutex_lock(&m));CHECK(!pthread_mutex_unlock(&m)); }
+    CHECK(wake_calls==wakes&&m.words[0]==0&&m.words[3]==0);
+    CHECK(!pthread_mutex_lock(&m));m.words[3]=1;CHECK(!pthread_mutex_unlock(&m));
+    CHECK(wake_calls==wakes+1&&last_word==&m.words[0]&&last_count==1&&m.words[0]==0);m.words[3]=0;
+    CHECK(!pthread_mutex_init(&m,&ma));CHECK(!pthread_mutex_lock(&m));CHECK(!pthread_mutex_lock(&m));m.words[3]=1;
+    CHECK(!pthread_mutex_unlock(&m)&&wake_calls==wakes+1&&m.words[0]==7);
+    CHECK(!pthread_mutex_unlock(&m)&&wake_calls==wakes+2&&m.words[0]==0);m.words[3]=0;
+    m.words[0]=8;m.words[1]=1;scenario=1;wait_calls=0;
+    CHECK(!pthread_mutex_lock(&m)&&wait_calls==2&&m.words[3]==0);CHECK(!pthread_mutex_unlock(&m)&&wake_calls==wakes+2);
     CHECK(!pthread_mutex_init(&m,NULL));CHECK(!pthread_mutex_lock(&m));
     pthread_cond_t cv=PTHREAD_COND_INITIALIZER;struct timespec deadline={1,0,0};scenario=2;wait_calls=0;
     CHECK(pthread_cond_timedwait(&cv,&m,&deadline)==ETIMEDOUT);CHECK(wait_calls==2&&m.words[0]==7&&cv.words[2]==0);

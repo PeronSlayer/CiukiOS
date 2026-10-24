@@ -8,6 +8,17 @@
 #include "logline.h"
 static uint64_t deadline;            /* 0: no timed layout is active */
 static uint64_t active_limit;        /* the limit of the active deadline */
+/* fx-24: clock_gettime is a system call on CiukiOS (proc/clock.c, 1 ms
+ * ticks) and layout code asks ciuki_layout_expired at every block, line,
+ * table and measured string: a remote layout pass of an encyclopedia main
+ * page made about 30,000 clock reads. The clock is read on the first check
+ * after every span boundary and then on every CIUKI_LAYOUT_CLOCK_STRIDE-th
+ * check; in between the last answer stands. With the 1 ms clock this delays
+ * a deadline by at most that many cheap checks; an expiry, once seen, holds
+ * to the span end. */
+static unsigned clock_checks;
+static bool expired_seen;
+static void clock_reset(void) { clock_checks=0;expired_seen=false; }
 bool ciuki_layout_top_level;
 static enum ciuki_layout_cause last_cause;
 static uint64_t last_ns;
@@ -46,20 +57,34 @@ struct ciuki_layout_span ciuki_layout_begin_limit(bool timed,uint64_t limit_ns)
         deadline=span.start>UINT64_MAX-limit?UINT64_MAX:span.start+limit;
         active_limit=limit_ns;
     }
+    clock_reset();
     return span;
 }
 struct ciuki_layout_span ciuki_layout_begin(bool timed) { return ciuki_layout_begin_limit(timed,CIUKI_LAYOUT_LIMIT_NS); }
 void (*ciuki_ui_pump)(void);
 static unsigned keepalive_calls;
 static uint64_t keepalive_last;
+static void keepalive_at(uint64_t t)
+{
+    if(!ciuki_ui_pump || (t!=UINT64_MAX && t-keepalive_last<20000000u))return;
+    keepalive_last=t;ciuki_ui_pump();
+}
 void ciuki_ui_keepalive(void)
 {
     if(!ciuki_ui_pump || (++keepalive_calls & 7))return;
-    uint64_t t=now();
-    if(t!=UINT64_MAX && t-keepalive_last<20000000u)return;
-    keepalive_last=t;ciuki_ui_pump();
+    keepalive_at(now());
 }
-bool ciuki_layout_expired(void) { ciuki_ui_keepalive();return deadline && now()>=deadline; }
+bool ciuki_layout_expired(void)
+{
+    if(expired_seen)return true;
+    /* Untimed (local) layout without a desktop channel: nothing to read for. */
+    if(!deadline && !ciuki_ui_pump)return false;
+    if(clock_checks++ % CIUKI_LAYOUT_CLOCK_STRIDE)return false;
+    uint64_t t=now();
+    keepalive_at(t);
+    expired_seen=deadline && t>=deadline;
+    return expired_seen;
+}
 bool ciuki_layout_end(struct ciuki_layout_span span,bool accepted)
 {
     uint64_t finish=now(),elapsed=charged(finish>=span.start?finish-span.start:UINT64_MAX);
@@ -68,6 +93,7 @@ bool ciuki_layout_end(struct ciuki_layout_span span,bool accepted)
     if(elapsed>*bucket)*bucket=elapsed;
     bool late=span.timed && (elapsed>span.limit || (deadline && finish>=deadline));
     deadline=span.outer_deadline;active_limit=span.outer_limit;
+    clock_reset();
     last_ns=elapsed;
     last_cause=accepted && !late?CIUKI_LAYOUT_ACCEPTED:late?CIUKI_LAYOUT_TIME:CIUKI_LAYOUT_ADMISSION;
     if(last_cause!=CIUKI_LAYOUT_ACCEPTED)ciuki_layout_rejections++;

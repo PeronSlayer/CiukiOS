@@ -681,6 +681,26 @@ static void test_client_boundary(void)
     CHECK(key_event(&w, 0x1E, 1) == -EACCES && !v->kbd.count && !take_key(v));
     c = command_for(w.id, w.generation); c.focused = 2; CHECK(dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) == -EINVAL);
     c = command_for(w.id, w.generation); c.focused = 1; CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));
+    /* G5: pause is owner/focus bound, text geometry and destinations are strict. */
+    c=command_for(w.id,w.generation); c.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_MARK,&c,sizeof(c)) && v->clipboard_mark);
+    c=command_for(w.id,w.generation); c.focused=2;
+    CHECK(dosvm_call(CIUKI_DOSVM_MARK,&c,sizeof(c))==-EINVAL && v->clipboard_mark);
+    c=command_for(w.id,w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_MARK,&c,sizeof(c)) && !v->clipboard_mark);
+    uint16_t text_columns=80,text_page=0,text_height=16; uint8_t text_rows=24,text_mode=3;
+    CHECK(!dosvm_write(v,0x449,&text_mode,1) && !dosvm_write(v,0x44a,&text_columns,2));
+    CHECK(!dosvm_write(v,0x44e,&text_page,2) && !dosvm_write(v,0x484,&text_rows,1) && !dosvm_write(v,0x485,&text_height,2));
+    uint8_t cell[2]={'C',7}; CHECK(!dosvm_write(v,0xb8000,cell,2));
+    c=command_for(w.id,w.generation); c.text.buffer=256; c.text.capacity=2000;
+    CHECK(!dosvm_call(CIUKI_DOSVM_TEXT,&c,sizeof(c)) && c.changed==2000 && c.text.columns==80 && c.text.rows==25 && user_mem[256]=='C');
+    c=command_for(w.id,w.generation); c.text.buffer=256; c.text.capacity=1999;
+    CHECK(dosvm_call(CIUKI_DOSVM_TEXT,&c,sizeof(c))==-ENOSPC);
+    c.text.capacity=2000; c.text.rows=25; CHECK(dosvm_call(CIUKI_DOSVM_TEXT,&c,sizeof(c))==-EINVAL);
+    c.text.rows=0; c.text.buffer=4000; CHECK(dosvm_call(CIUKI_DOSVM_TEXT,&c,sizeof(c))==-EFAULT);
+    text_mode=0x13; CHECK(!dosvm_write(v,0x449,&text_mode,1)); c.text.buffer=256;
+    CHECK(dosvm_call(CIUKI_DOSVM_TEXT,&c,sizeof(c))==-EOPNOTSUPP);
+    text_mode=3; CHECK(!dosvm_write(v,0x449,&text_mode,1));
     CHECK(v->window_input && !key_event(&w, 0x1E, 1) && v->kbd.count == 1 && v->kbd.bytes[v->kbd.head] == 0x1E &&
           (v->monitor.pic[0].irr & 2) && take_key(v) == 0x1E61 && !key_event(&w, 0x1E, 0) && !take_key(v));
     CHECK(press(v, &w, 0x1C) == 0x1C0D && press(v, &w, 0x2B) == 0x2B5C &&
@@ -699,6 +719,11 @@ static void test_client_boundary(void)
     CHECK(!key_event(&w, 0x1D, 0) && !key_event(&w, 0x38, 1));
     CHECK(press(v, &w, 0x1E) == 0x1E00 && press(v, &w, 0x02) == 0x7800 && press(v, &w, 0x58) == 0x8C00);
     CHECK(!key_event(&w, 0x38, 0) && !take_key(v));
+    CHECK(!key_event(&w,0x38,1));
+    CHECK(!press(v,&w,0x4f) && !press(v,&w,0x51) && !press(v,&w,0x52));
+    CHECK(!key_event(&w,0x38,0) && take_key(v)==0x0082 && !take_key(v));
+    uint8_t alt_work=1; CHECK(!dosvm_read(v,0x419,&alt_work,1) && !alt_work);
+
     CHECK(!key_event(&w, 0x1E, 1) && !key_event(&w, 0x1E, 2) && !key_event(&w, 0x1E, 0) &&
           take_key(v) == 0x1E61 && take_key(v) == 0x1E61 && !take_key(v));              /* typematic repeat */
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_TEXT; c.event.code = 'a';

@@ -87,6 +87,9 @@ mouse adaptation's exact upstream file and authors are in its notice above.
 | NetSurf and its libraries | 3.11 | GPL-2.0 with MIT libraries | `config/netsurf.json` | integrating |
 | zlib | 1.3.1 | zlib | `config/netsurf.json` | integrating |
 | libpng | 1.6.59 | PNG Reference Library v2 | `config/netsurf.json` | integrating |
+| libjpeg-turbo | 3.1.4.1 | IJG + BSD-3-Clause + zlib | `config/netsurf.json` | integrating |
+| Expat | 2.9.0 | MIT | `config/netsurf.json` | integrating |
+| libwebp (decoder) | 1.6.0 | BSD-3-Clause + patent grant | `config/netsurf.json` | integrating |
 | BearSSL | 0.6 | MIT | `third_party/bearssl/LICENSE.txt` | image |
 | Mozilla CA bundle (via curl) | 2026-09-25 | MPL-2.0 | `third_party/cacert/MPL-2.0.txt` | image |
 | MicroQuickJS | 2026-10-04 snapshot | MIT | `third_party/jsvendor/LICENSE` | image |

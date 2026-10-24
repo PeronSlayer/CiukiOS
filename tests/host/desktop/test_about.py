@@ -12,12 +12,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
-# F2-99 cursor; F1-109/F2-123, integ-video and integ-periph credits rows, re-recorded at the staging merge (lead); stage-fix6: seven ATA add-in rows.
+# F2-99 cursor; F1-109/F2-123, integ-video and integ-periph credits rows, re-recorded at the staging merge (lead); stage-fix6: seven ATA add-in rows; fx-24: libjpeg-turbo, Expat and libwebp rows (list length moves the scroll positions).
 GOLDENS = {
-    "about-credits": "02f5cc23098f2016d5beb10a071022822e724b1d8e6f79492af88fc2c723e3cb",
-    "about-credits-end": "b6ad380c9b961b634dd588abc3bab3261b6a08dd3c36e732ec642cc90d18c974",
-    "about-credits-pgdn": "6ad99729c9f33adb142521150d0599a102930aa4ad237d6dbc48f7909134db9c",
-    "about-credits-wheel": "6902956d8eb709783ee15e1dbc885f39c3b258923f91866d1d0f43f0c5158c6d",
+    "about-credits": "bb1e4b15f05b4ef4b6e2145f651453a1233685cdd0a5e25a3effa5876bc14468",
+    "about-credits-end": "11ffb76fae46ae3e4ec3f694b99f12235539e5459d1ca654d0a535cf9d77e9cf",
+    "about-credits-pgdn": "a15a3766bd149567b4e15fbdbd865a83a77adcb22f86d69f48dc6e8bd6892458",
+    "about-credits-wheel": "e85cff8bcd986e6ac558f6b5f6c62927173ec1ac432a70bc653530d092c92fc2",
 }
 
 

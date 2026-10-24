@@ -58,6 +58,34 @@ static void blocker_overflow(unsigned width,unsigned height)
         desk_shell_key(&d,DU_KEY_ESC,1);redraw();
     }
 }
+/* fx-21b: one "USB Device Not Recognized" balloon per device the kernel
+ * counts in /dev/media usb_unrecognized, including one that failed before
+ * the desktop started; the same count never raises it again. */
+static unsigned usb_balloons(void)
+{
+    return d.sh.notification.active && !strcmp(d.sh.notification.title,DESK_USB_UNRECOGNIZED_TITLE);
+}
+static void usb_unrecognized(struct ciuki_media_state *m,unsigned width,unsigned height)
+{
+    assert(desk_media_text_fits(DESK_USB_UNRECOGNIZED_TEXT,desk_media_notice_body((int)width,(int)height)));
+    if (d.sh.notification.active) {desk_shell_key(&d,DU_KEY_ESC,1);redraw();}
+    m->usb_unrecognized++;desk_shell_media_update(&d,m);
+    assert(usb_balloons() && d.sh.notification.balloon && d.sh.notification.icon==DU_DLG_ICON_WARNING);
+    assert(strstr(d.sh.notification.text,"has malfunctioned") && strstr(d.sh.notification.text,"plug it in again"));
+    settle();
+    assert(desk_shell_key(&d,DU_KEY_ESC,1) && !d.sh.notification.active);redraw();
+    desk_shell_media_update(&d,m);assert(!d.sh.notification.active); /* same count: no second balloon */
+    m->removable_mask=1u<<4;m->type[4]=CIUKI_MEDIA_USB;m->generation[4]++;desk_shell_media_update(&d,m);
+    assert(d.sh.notification.active && !usb_balloons()); /* the re-plugged stick: an ordinary media event */
+    settle();desk_shell_key(&d,DU_KEY_ESC,1);redraw();
+    m->usb_unrecognized++;desk_shell_media_update(&d,m);assert(usb_balloons());settle();
+    desk_shell_key(&d,DU_KEY_ESC,1);redraw();
+    /* A desktop started after the failure reports it once. */
+    struct ciuki_media_state fresh=*m;memset(&d.sh.media,0,sizeof(d.sh.media));
+    desk_shell_media_update(&d,&fresh);assert(usb_balloons());settle();
+    desk_shell_key(&d,DU_KEY_ESC,1);redraw();desk_shell_media_update(&d,&fresh);assert(!d.sh.notification.active);
+    m->removable_mask=0;m->type[4]=0;desk_shell_media_update(&d,m);settle();desk_shell_key(&d,DU_KEY_ESC,1);redraw();
+}
 static void replay(const char *dir,unsigned width,unsigned height,unsigned theme)
 {
     fake_reset(); desk_init(&d,&fake_ops,width,height);
@@ -101,6 +129,7 @@ static void replay(const char *dir,unsigned width,unsigned height,unsigned theme
     m.removable_mask=1u<<4;m.type[4]=CIUKI_MEDIA_USB;m.generation[4]++;desk_shell_media_update(&d,&m);
     m.removable_mask=0;m.type[4]=0;desk_shell_media_update(&d,&m);settle();capture(dir,name,"unsafe");assert(d.sh.notification.balloon);
     blocker_overflow(width,height);
+    usb_unrecognized(&m,width,height);
     free((void *)c->pixels);c->pixels=NULL;c->window=0;desk_render_release(&d);free(d.pixels);free(expected);assert(!fake_live());
 }
 int main(int argc,char **argv)
@@ -109,5 +138,6 @@ int main(int argc,char **argv)
     for (unsigned theme=0;theme<(unsigned)desk_theme_count();theme++) { replay(argv[1],640,480,theme);replay(argv[1],1024,768,theme); }
     puts("PASS blocker notification rows: 30 short/64 long wrapped names, visible exact remainder, both themes and two resolutions");
     puts("PASS removable notification replay: attach/write/busy/safe/detach/CD/unsafe, entry/expiry/Escape/outside click, opaque client damage, both themes and two resolutions");
+    puts("PASS fx-21b USB Device Not Recognized: one warning balloon per counted device (also before the desktop started), none for an unchanged count, ordinary media notice for the re-plugged stick");
     return 0;
 }

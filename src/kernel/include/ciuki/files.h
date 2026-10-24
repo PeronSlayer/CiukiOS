@@ -81,6 +81,12 @@ int px_resolve_locked(struct px_namespace *, struct px_node *cwd, const char *,
 int px_getcwd_locked(struct px_node *, char out[CIUKI_PATH_MAX]);
 int px_chdir(struct process *, const char *);
 int px_stat_locked(struct px_node *, struct ciuki_stat *);
+/* G6 file_info (call 98): check validates the copied record; get fills it
+ * for a resolved node; set takes the writer turn, resolves and publishes. */
+int px_file_info_check(const struct ciuki_file_info *);
+int px_file_info_get_locked(struct px_node *, struct ciuki_file_info *);
+int px_file_info_set_locked(struct px_namespace *, struct px_node *cwd, const char *,
+                            const struct ciuki_file_info *);
 int px_mkdir_locked(struct px_namespace *, struct px_node *, const char *, uint32_t);
 int px_remove_locked(struct px_namespace *, struct px_node *, const char *, bool directory);
 int px_rename_locked(struct px_namespace *, struct px_node *, const char *, const char *);

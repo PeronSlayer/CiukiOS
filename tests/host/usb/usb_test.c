@@ -906,7 +906,11 @@ static void errors(bool ohci)
     setup(ohci,false);m.reset_stuck=true;uint64_t begin=m.now;assert(attach()<0 && m.host.quarantined && m.now-begin<=600);
     for(unsigned i=0;i<lease_count;i++)assert(leases[i].state==RS_QUARANTINED);
     setup(ohci,false);assert(!attach());m.silent=true;begin=m.now;
-    model_step();assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<7500);
+    /* fx-21b: two NAKing devices, each 2 series x 3 attempts of one 5 s
+     * enumeration message (+ two-frame retirement), 4 x 100 ms pauses, two
+     * 60 ms resets and the 100 ms debounce (was 7500 ms at 500 ms/stage). */
+    const uint64_t bound=2u*(6u*(USB_CTRL_TIMEOUT_MS+20u)+4u*100u+2u*60u+100u);
+    model_step();assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<bound);
     assert(descriptor_failures==12 && descriptor_results==descriptor_starts);
     setup(ohci,false);assert(!attach());m.malformed=true;model_step();assert(m.host.devices[0].quarantined);
     setup(ohci,false);assert(!attach());model_step();m.freeze=true;

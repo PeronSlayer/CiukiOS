@@ -368,6 +368,12 @@ static void test_irq_restore(uint32_t f) {
             entropy = (ROOT / 'src/kernel/core/entropy.c').read_text()
             (temp / 'entropy_turns.inc').write_text(
                 entropy[entropy.index('/* f6-21 turns: begin'):entropy.index('static struct entropy_turns turns;')])
+            # fx-22: the switch policy (transaction boost, parked-VM wait),
+            # verbatim from dosvm_fullscreen.c, for the return replay.
+            fullscreen = (ROOT / 'src/kernel/vm/dosvm_fullscreen.c').read_text()
+            policy = fullscreen[fullscreen.index('/* fx-22 policy: begin'):fullscreen.index('/* fx-22 policy: end */')]
+            (temp / 'fullscreen_return_policy.inc').write_text(policy + functions(
+                'src/kernel/vm/dosvm_fullscreen.c', ('park_released', 'dosvm_fullscreen_checkpoint')))
             for unit, extra in (
                 ('kernel_latency_test.c', []),
                 ('jitter_collector_latency_test.c', []),
@@ -387,6 +393,9 @@ static void test_irq_restore(uint32_t f) {
                 # 423b803a replay (f0-46 transport as the negative control).
                 ('t23_vm_clock_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
+                # fx-22: the full-screen return beside the desktop on the T23
+                # e831e685 replay (pre-fx-22 policy as the negative control).
+                ('t23_fullscreen_return_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
                 binary = temp / Path(unit).stem
                 subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',

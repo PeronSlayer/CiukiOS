@@ -1542,6 +1542,53 @@ int fat_set_metadata(struct fat_volume *v, struct fat_entry *file, uint8_t attr,
     struct fat_entry changed=*file; changed.attr=attr; if (times) changed.times=*times;
     e=update(v,&changed); if (!e) *file=changed; return e;
 }
+/* G6: the volume label (Microsoft FAT 1.03: BS_VolLab at boot sector offset
+ * 43, or 71 on FAT32, and the root-directory entry with ATTR_VOLUME_ID, the
+ * one Windows reads). label is 11 bytes, space padded, already validated
+ * and upper case; all spaces removes the label. Both copies are written
+ * in one publication; the FAT32 backup boot sector follows the primary. */
+int fat_set_label(struct fat_volume *v, const char label[11]) {
+    int e=writable(v); if (e) return e;
+    bool empty=true; for (unsigned k=0;k<11;k++) if (label[k]!=' ') empty=false;
+    if ((e=publication_stage(v,FAT_P_DIRECTORY))) return e;
+    uint8_t b[32]; uint32_t found=UINT32_MAX;
+    uint64_t limit=v->type==32 ? (uint64_t)v->clusters*v->spc*16 : v->root_entries;
+    if (limit>UINT32_MAX) limit=UINT32_MAX;
+    struct dir_walk walk; walk_begin(&walk,v,0,0);
+    for (uint32_t i=0;i<(uint32_t)limit;i++) {
+        if (!(i&127u)) fs_service();
+        e=walk_read(v,&walk,0,i,b);
+        if (e==-FS_ENOENT || (!e && !b[0])) break;
+        if (e) return write_error(v,e);
+        if (b[0]!=0xe5 && b[11]!=15 && (b[11]&(FAT_ATTR_VOLUME|FAT_ATTR_DIR))==FAT_ATTR_VOLUME) { found=i; break; }
+    }
+    uint8_t tenths; uint16_t date,time; fs_timestamp(&date,&time,&tenths);
+    if (found!=UINT32_MAX) {
+        if ((e=dir_read(v,0,found,b))) return write_error(v,e);
+        if (empty) b[0]=0xe5; else memcpy(b,label,11);
+        fs_wr16(b+22,time); fs_wr16(b+24,date);
+        if ((e=dir_write(v,0,found,b))) return e;
+    } else if (!empty) {
+        uint32_t slot; if ((e=slots(v,0,1,&slot))) return e;
+        memset(b,0,sizeof(b)); memcpy(b,label,11); b[11]=FAT_ATTR_VOLUME;
+        fs_wr16(b+22,time); fs_wr16(b+24,date);
+        if ((e=dir_write(v,0,slot,b))) return e;
+    }
+    unsigned ext=v->type==32 ? 64 : 36;
+    uint8_t sector[512];
+    for (unsigned copy=0;copy<2;copy++) {
+        uint32_t at=copy ? (v->type==32 ? v->backup : 0) : 0;
+        if (copy && (!at || at>=v->reserved)) break;
+        if ((e=readsec(v,at,sector))) return write_error(v,e);
+        if (sector[ext+2]!=0x29) break; /* no extended BPB: no BS_VolLab */
+        memcpy(sector+ext+7,empty ? "NO NAME    " : label,11);
+        if ((e=writesec(v,at,sector))) return e;
+    }
+    for (unsigned k=0;k<11;k++) v->volume_label[k]=label[k];
+    v->volume_label[11]=0;
+    for (unsigned k=11;k && v->volume_label[k-1]==' ';k--) v->volume_label[k-1]=0;
+    return barrier(v);
+}
 /* One ownership bit per cluster, at most 1 MiB of ordinary PMM pages.
  * A failed allocation falls back to the existing reserved cache workspace;
  * every pass revisits all chains, so cross-links spanning passes remain
@@ -2589,6 +2636,7 @@ int fat_transaction_run(struct fat_volume *source, const struct fat_transaction_
     case FAT_TX_RENAME: e=fat_rename(v,&t->entry,a->directory,a->name); break;
     case FAT_TX_RENAME_REPLACE: e=fat_rename_replace(v,&t->entry,a->replacement ? &t->meta->replacement : 0,a->directory,a->name,a->flag); break;
     case FAT_TX_SET_METADATA: e=fat_set_metadata(v,&t->entry,a->attr,a->times); break;
+    case FAT_TX_SET_LABEL: e=fat_set_label(v,a->name); break;
     case FAT_TX_COMMIT:
         e=cache_error(v->cache,v->dev);
         if (!e) e=v->readonly ? (v->writable_session ? -FS_EROFS : 0) :
@@ -2614,6 +2662,7 @@ int fat_transaction_run(struct fat_volume *source, const struct fat_transaction_
             if (a->replacement && t->meta) *a->replacement=t->meta->replacement;
             if (a->cursor) *a->cursor=t->cursor;
             if (a->op!=FAT_TX_LOOKUP) source->completion=v->completion;
+            if (a->op==FAT_TX_SET_LABEL) memcpy(source->volume_label,v->volume_label,sizeof(source->volume_label));
         }
         if (v->readonly && !source->readonly && (current || (v->ro_reasons&FAT_RO_WRITE_ERROR)) && source->dev->media_generation==t->generation) {
             source->ro_reasons|=v->ro_reasons;

@@ -498,15 +498,23 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0) registry_quarantine(h->claims[i], h->claim_gen[i]);
     klog("[usb] quarantine controller=%s reason=%s irq_isolated=%u", h->owner, reason, isolated);
 }
+/* fx-21b: a refused quiesce leaves the running hosts able to enumerate. */
+static void quiesce_abandon(void)
+{
+    for (unsigned i = 0; i < host_count; i++) if (!hosts[i].quarantined) hosts[i].quiescing = false;
+}
 int usb_power_quiesce(void)
 {
     /* Retain arenas/claims even after a proved stop. Each general transfer
-     * reservation excludes BOT/control and HID while local sources stop. */
+     * reservation excludes BOT/control and HID while local sources stop.
+     * fx-21b: an enumeration message may wait 5 s; ask every such wait to
+     * end at once so the 2 s reservation bound below still holds. */
+    for (unsigned i = 0; i < host_count; i++) hosts[i].quiescing = true;
     for (unsigned i = 0; i < host_count; i++) {
         struct usb_host *h = &hosts[i];
         if (!h->owned) continue;
         if (h->quarantined && h->reason && !strncmp(h->reason,"shutdown_stopped",17)) continue;
-        if (!usb_host_take_until(h, h->io.now(h->io.cookie) + 2000)) return -16;
+        if (!usb_host_take_until(h, h->io.now(h->io.cookie) + 2000)) { quiesce_abandon(); return -16; }
         h->ready = false;
         bool stopped = false;
         if (!h->quarantined && h->pci.prog_if == 0) stopped = uhci_isolate(h);
@@ -526,7 +534,7 @@ int usb_power_quiesce(void)
         for (unsigned k = 0; k < 3; k++) if (h->claims[k] >= 0) registry_quarantine(h->claims[k], h->claim_gen[k]);
         h->quarantined = true; h->reason = stopped ? "shutdown_stopped" : "shutdown_uncertain";
         usb_host_drop(h);
-        if (!stopped) return -USB_EIO;
+        if (!stopped) { quiesce_abandon(); return -USB_EIO; }
     }
     return 0;
 }
@@ -801,9 +809,8 @@ static int packet(struct usb_device *d, unsigned pid, unsigned toggle, void *dat
     if (!d->host->ready || d->host->quarantined || d->quarantined) return -USB_EIO;
     return d->host->ops->packet(d, 0, pid, toggle, data, len, false);
 }
-int usb_control(struct usb_device *d, uint8_t type, uint8_t req, uint16_t value, uint16_t index, void *data, unsigned len)
+static int control_message(struct usb_device *d, uint8_t type, uint8_t req, uint16_t value, uint16_t index, void *data, unsigned len)
 {
-    if (!d || !d->host || len > USB_CONFIG_MAX || (len && !data) || !d->ep0 || d->ep0 > 64) return -EINVAL;
     uint8_t setup[8] = {type, req, value, value >> 8, index, index >> 8, len, len >> 8};
     int err = packet(d, USB_PID_SETUP, 0, setup, 8); if (err != 8) return err < 0 ? err : -USB_EPROTO;
     unsigned got = 0, toggle = 1;
@@ -818,7 +825,35 @@ int usb_control(struct usb_device *d, uint8_t type, uint8_t req, uint16_t value,
     err = packet(d, type & 0x80 ? USB_PID_OUT : USB_PID_IN, 1, 0, 0);
     return err ? err < 0 ? err : -USB_EPROTO : (int)got;
 }
+int usb_control(struct usb_device *d, uint8_t type, uint8_t req, uint16_t value, uint16_t index, void *data, unsigned len)
+{
+    if (!d || !d->host || len > USB_CONFIG_MAX || (len && !data) || !d->ep0 || d->ep0 > 64) return -EINVAL;
+    /* fx-21b: Linux usb_control_msg() bounds a whole message (SETUP, data,
+     * status) by USB_CTRL_GET/SET_TIMEOUT. An enumeration request (device
+     * not yet configured) gets that 5 s; a slow device that answers within
+     * it enumerates, as on Linux and Windows. Configured devices keep the
+     * 500 ms per stage (USB 2.0 section 9.2.6.4). */
+    bool bounded = !d->configured;
+    if (bounded) d->control_deadline = d->host->io.now(d->host->io.cookie) + USB_CTRL_TIMEOUT_MS;
+    int err = control_message(d, type, req, value, index, data, len);
+    if (bounded) d->control_deadline = 0;
+    return err;
+}
 static unsigned le16(const uint8_t *p) { return p[0] | (unsigned)p[1] << 8; }
+/* fx-21b: Windows reports a device that fails enumeration with the
+ * notification "USB Device Not Recognized" (Microsoft KB 2654149). Only a
+ * device still connected to a working, not quiescing controller counts: an
+ * unplug or a controller fault during enumeration is not a malfunction. */
+static uint32_t unrecognized_devices;
+uint32_t usb_unrecognized_devices(void) { return __atomic_load_n(&unrecognized_devices, __ATOMIC_RELAXED); }
+static void unrecognized(struct usb_host *h, unsigned root, unsigned parent, unsigned port, const char *reason)
+{
+    if (!h->ready || h->quarantined || h->quiescing ||
+        !(h->ops->port_status(h, root) & USB_PORT_CONNECTED)) return;
+    uint32_t count = __atomic_add_fetch(&unrecognized_devices, 1, __ATOMIC_RELAXED);
+    klog("[usb] unrecognized controller=%s port=%u parent=%u reason=%s count=%u notify=desktop tick=%llu",
+         h->owner, port + 1, parent, reason, count, (unsigned long long)h->io.now(h->io.cookie));
+}
 int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
 {
     if (len < 9 || len > USB_CONFIG_MAX || b[0] != 9 || b[1] != 2 || le16(b + 2) != len || !b[5]) return -USB_EPROTO;
@@ -913,7 +948,7 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
         }
         for (unsigned operation = 0; operation < 3; operation++) {
             if (operation) usb_sleep(h, 100);
-            if (!h->ready || h->quarantined ||
+            if (!h->ready || h->quarantined || h->quiescing ||
                 !(h->ops->port_status(h, root) & USB_PORT_CONNECTED)) { err = -USB_EIO; goto failed; }
             memset(b, 0, 8);
             uint64_t descriptor_tick = h->io.now(h->io.cookie);
@@ -977,6 +1012,7 @@ descriptor_ready:
     return (int)slot + 1;
 failed:
     usb_device_quarantine(d, err < 0 ? "enumeration_transfer" : "descriptor_or_topology");
+    unrecognized(h, root, parent, port, err < 0 ? "enumeration_transfer" : "descriptor_or_topology");
     return (int)slot + 1; /* retain after the bounded enumeration budget */
 }
 static bool root_debounce(struct usb_host *h, unsigned port)
@@ -1030,20 +1066,25 @@ void usb_step(struct usb_host *h)
             }
             if (h->root_blocked[p]) {
                 /* Do not interpret a quarantined device's sticky CSC as a
-                 * new connection. Acknowledge observed changes without reset. */
+                 * new connection. Acknowledge observed changes without reset.
+                 * fx-21b: once the quarantined connection was reported (its
+                 * changes acknowledged by an earlier scan), a new connect
+                 * change with CCS set is a re-plug faster than one scan. */
+                bool replugged = (s & USB_PORT_CONNECTED) && (s & USB_PORT_CHANGED) &&
+                                 log->quarantine_reported;
                 h->ops->port_ack_changes(h, p);
-                if (s & USB_PORT_CONNECTED) {
+                if ((s & USB_PORT_CONNECTED) && !replugged) {
                     if (!log->quarantine_reported) usb_port_record(h, p, "connect", 0);
                 } else {
-                    if (previous & USB_PORT_CONNECTED) usb_port_record(h, p, "disconnect", 0);
+                    if ((previous & USB_PORT_CONNECTED) && !replugged) usb_port_record(h, p, "disconnect", 0);
                     log->quarantine_reported = false;
                     if (child) { usb_detach(child, "disconnected"); h->root_child[p] = 0; }
                     /* f1-96b: the quarantined device is physically gone. A
                      * re-plug is debounced, reset and enumerated as a new
                      * device; a persisting overcurrent blocks it again. */
                     h->root_blocked[p] = false;
-                    klog("[usb] release port=%u controller=%s reason=disconnect tick=%llu",
-                         p + 1, h->owner, h->io.now(h->io.cookie));
+                    klog("[usb] release port=%u controller=%s reason=%s tick=%llu",
+                         p + 1, h->owner, replugged ? "reconnect" : "disconnect", h->io.now(h->io.cookie));
                 }
                 if (log->pending) usb_port_record(h, p, log->pending, log->result);
                 h->root_status[p] = s;
@@ -1085,6 +1126,7 @@ void usb_step(struct usb_host *h)
                     h->ops->port_disable(h, p);
                     klog("[usb] quarantine controller=%s port=%u stage=root_port_reset result=%d scope=port",
                          h->owner,p+1,err);
+                    unrecognized(h, p, 0, p, "root_port_reset");
                     continue;
                 }
                 s = h->ops->port_status(h, p);

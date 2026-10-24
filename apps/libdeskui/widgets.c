@@ -19,9 +19,13 @@
 #endif
 #include <unistd.h>
 
+extern int du_system_clipboard_text_set(const char *, size_t) __attribute__((weak));
+extern const char *du_system_clipboard_text_get(void) __attribute__((weak));
 static char *clipboard;
 static char clipboard_path[DU_TEXT_MAX] = "/system/settings/text.clip";
+#ifndef __i386__
 static unsigned clipboard_serial;
+#endif
 int du_clipboard_path(const char *path)
 {
     if (!path) path = "/system/settings/text.clip";
@@ -31,6 +35,17 @@ int du_clipboard_path(const char *path)
 }
 int du_clipboard_set_n(const char *s, size_t n)
 {
+    if (du_system_clipboard_text_set) {
+        int e=du_system_clipboard_text_set(s,n);
+#ifdef __i386__
+        return e;
+#else
+        if (e!=-ENOSYS) return e;
+#endif
+    }
+#ifdef __i386__
+    return -ENOSYS;
+#else
     if ((!s && n) || n > DU_CLIPBOARD_MAX || (n && memchr(s, 0, n))) return -1;
     char *next = malloc(n + 1);
     if (!next) return -1;
@@ -62,10 +77,15 @@ int du_clipboard_set_n(const char *s, size_t n)
     }
     free(clipboard); clipboard = next;
     return 0;
+#endif
 }
 void du_clipboard_set(const char *s) { (void)du_clipboard_set_n(s, s ? strlen(s) : 0); }
 const char *du_clipboard_get(void)
 {
+    if (du_system_clipboard_text_get) { const char *s=du_system_clipboard_text_get(); if (s) return s; }
+#ifdef __i386__
+    return "";
+#else
     FILE *f = fopen(clipboard_path, "rb");
     if (f) {
         char *next = NULL; long size = -1;
@@ -80,6 +100,7 @@ const char *du_clipboard_get(void)
         if (next) { next[size] = 0; free(clipboard); clipboard = next; }
     }
     return clipboard ? clipboard : "";
+#endif
 }
 
 /* The shell's drag data object (apps/files/transfer.c fm_drag_save): "X",
@@ -810,7 +831,9 @@ static void draw_check(struct du_canvas *c, struct du_widget *w, int focused)
             desk_paint_vgradient(&p, bx + 1, by + 1, size - 2, size - 2, down ? DU_SHADOW : DU_FACE, down ? DU_FACE : DU_HILITE);
             if (!down) { du_hline(c, bx + 1, by + 1, size - 2, desk_mix(DU_SHADOW, DU_FACE, 120)); du_vline(c, bx + 1, by + 1, size - 2, desk_mix(DU_SHADOW, DU_FACE, 120)); }
         } else { du_fill(c, box, down || w->disabled ? DU_FACE : DU_WINDOW); du_edge(c, box, DU_SUNKEN); }
-        if (w->value) {
+        if (w->value==2) {
+            du_fill(c,(struct du_rect){bx+3,by+5,size-6,3},ink);
+        } else if (w->value) {
             /* Tick: two strokes, two pixels thick. */
             static const int8_t tick[][2] = {{2,5},{3,6},{4,7},{5,6},{6,5},{7,4},{8,3},{9,2}};
             uint32_t mark = platinum && !w->disabled ? desk_theme->accent : ink;

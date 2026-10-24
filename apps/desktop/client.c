@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+extern void desk_clip_receive(struct desktop *, int, const struct ciuki_message *, const struct desk_packet *) __attribute__((weak));
+extern void desk_clip_drop(struct desktop *, int) __attribute__((weak));
 static void power_target(struct desktop *, uint32_t, const char *, int);
 static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
@@ -24,7 +26,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
     d->action = -1;
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;
-    d->title_click_window = -1;
+    d->title_click_window = d->icon_click_window = -1;
     d->cursor_loaded=DESK_CURSOR_COUNT;
     for (unsigned i = 0; i < DESK_CLIENTS; i++)
         d->clients[i].channel = d->clients[i].surface = -1;
@@ -53,6 +55,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (d->v3_pointer_window==i+1) desk_v3_pointer_release(d);
     if (c->v3_peer && c->window_id) for (int j=0;j<DESK_CLIENTS;j++)
         if (d->clients[j].v3_peer==c->v3_peer && d->clients[j].owner_id==c->window_id) desk_drop_client(d,j);
+    if (desk_clip_drop) desk_clip_drop(d,i);
     uint32_t pid=c->pid, owner=c->owner_id, id=c->window_id;
     char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
     int was_focused=d->focus==i;
@@ -609,6 +612,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     d->received++;
     struct ciuki_message reply;
     switch (p.opcode) {
+    case DESK_CLIPBOARD:
+        if (desk_clip_receive) desk_clip_receive(d,i,m,&p);
+        else close_attachments(d,m,-1);
+        break;
     case DESK_GFX_FRAME: {
         if (!c->gfxdemo || !c->window || c->closing || c->gfx_pending) {
             /* A rejected request never changes the persistent scene mapping. */
@@ -1096,6 +1103,256 @@ void desk_minimize(struct desktop *d, int i)
     desk_animate(d,from,c->minimized ? desk_task_button(d,i) : c->frame);
     desk_cursor_update(d);
 }
+/* ---- G4: taskbar window arrangement (Windows 98 CascadeWindows, TileWindows,
+ * Minimize All Windows, Show Desktop and their Undo) ---------------------- */
+static struct desk_box arrange_work(const struct desktop *d)
+{
+    /* The area between the top bar and the taskbar: windows never cover a bar. */
+    int32_t h=(int32_t)d->height-DESK_BAR-(d->shell ? DESK_BAR : 0);
+    return (struct desk_box){0,DESK_BAR,(int32_t)d->width,h>0 ? h : 0};
+}
+/* Which windows an arrangement moves. Cascade and tile leave alone what
+ * Windows leaves alone: minimised windows, owned windows (dialogs and
+ * Win32 popups stay with their owner), windows with an owned window open,
+ * built-in dialogs, Win32 popup and tool windows, topmost windows. */
+int desk_arrangeable(const struct desktop *d, int i)
+{
+    if (!d->shell || i<0 || i>=DESK_CLIENTS) return 0;
+    const struct desk_client *c=&d->clients[i];
+    if (!c->window || c->minimized || c->internal || c->owner_id || !desk_task_visible(c) || c->closing) return 0;
+    if (c->version==DESK_V3_VERSION && ((c->v3_style&3)!=DESK_V3_OVERLAPPED || (c->v3_style&DESK_V3_TOPMOST))) return 0;
+    for (int k=0;k<DESK_CLIENTS;k++)
+        if (k!=i && d->clients[k].window && d->clients[k].owner_id==c->window_id) return 0;
+    return 1;
+}
+static void arrange_forget(struct desktop *d) { memset(&d->arrange,0,sizeof(d->arrange)); }
+static void arrange_save(struct desktop *d, int kind)
+{
+    arrange_forget(d);
+    d->arrange.kind=kind;
+    if (d->focus>=0 && d->clients[d->focus].window) d->arrange.focus_id=d->clients[d->focus].window_id;
+}
+static void arrange_remember(struct desktop *d, int i)
+{
+    const struct desk_client *c=&d->clients[i];
+    struct desk_arrange_saved *s=&d->arrange.windows[d->arrange.count++];
+    s->window_id=c->window_id; s->frame=c->frame; s->restore=c->restore; s->shade_height=c->shade_height;
+    s->minimized=(uint8_t)c->minimized; s->zoomed=(uint8_t)c->zoomed; s->collapsed=(uint8_t)c->collapsed;
+}
+static int window_by_id(const struct desktop *d, uint32_t id)
+{
+    for (int i=0;id && i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].window_id==id) return i;
+    return -1;
+}
+/* Puts one window at `frame` inside the work area. A maximised or shaded
+ * window is first restored (Windows restores before it arranges); a window
+ * that cannot be resized keeps its size and takes the cell's corner. */
+static void arrange_place(struct desktop *d, int i, struct desk_box frame)
+{
+    struct desk_client *c=&d->clients[i];
+    if (c->collapsed) desk_collapse(d,i);
+    if (c->zoomed) {
+        c->zoomed=0;
+        desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+    }
+    if (c->resizable) desk_resize(d,i,frame);   /* limits, steps and the work area apply */
+    desk_move(d,i,frame.x,frame.y);                /* and keeps a window that cannot shrink inside it */
+}
+static void arrange_settle(struct desktop *d)
+{
+    /* The pending single-window copy of desk_move describes one move; an
+     * arrangement moves many windows, so every box is repainted. */
+    if (d->copy_pending) {
+        for (unsigned k=0;k<d->move_damage.count;k++)
+            desk_damage_add(&d->damage,d->move_damage.boxes[k],d->width,d->height);
+        d->move_damage.count=0; d->copy_pending=0;
+    }
+    desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+    desk_cursor_update(d);
+}
+static int arrange_prepare(struct desktop *d)
+{
+    if (!d->shell || d->power.state) return 0;
+    if (d->keyboard_geometry) desk_geometry_end(d,1);
+    d->drag=-1; d->resize_edges=0;
+    if (d->copy_pending) {
+        for (unsigned k=0;k<d->move_damage.count;k++)
+            desk_damage_add(&d->damage,d->move_damage.boxes[k],d->width,d->height);
+        d->move_damage.count=0; d->copy_pending=0;
+    }
+    return 1;
+}
+/* Windows are ordered by the stacking: bottom to top. */
+static int arrange_list(const struct desktop *d, int *list, int top_first)
+{
+    int n=0;
+    for (int i=0;i<DESK_CLIENTS;i++) if (desk_arrangeable(d,i)) list[n++]=i;
+    for (int a=1;a<n;a++) {
+        int key=list[a], b=a;
+        while (b && (top_first ? d->clients[list[b-1]].order<d->clients[key].order :
+                                 d->clients[list[b-1]].order>d->clients[key].order)) { list[b]=list[b-1]; b--; }
+        list[b]=key;
+    }
+    return n;
+}
+/* CascadeWindows: every window at three quarters of the work area (a window
+ * limited by its own minimum or maximum keeps that size), each offset by one
+ * caption height down and to the right of the one beneath it; the sequence
+ * starts over at the top left when the next offset would leave the work area.
+ * The stacking is not changed, so the window that was in front stays in
+ * front, at the end of the cascade. */
+static int arrange_cascade(struct desktop *d)
+{
+    int list[DESK_CLIENTS], n=arrange_list(d,list,0);
+    if (!n) return 0;
+    struct desk_box w=arrange_work(d);
+    int32_t step=DESK_TITLE, cw=w.w*3/4, ch=w.h*3/4;
+    arrange_save(d,DESK_ARRANGE_CASCADE);
+    for (int a=0;a<n;a++) arrange_remember(d,list[a]);
+    int32_t wrap=0;   /* positions that fit before the cascade starts over */
+    {
+        int32_t fx=(w.w-cw)/step+1, fy=(w.h-ch)/step+1;
+        wrap=fx<fy ? fx : fy;
+        if (wrap<1) wrap=1;
+    }
+    for (int a=0;a<n;a++) {
+        int32_t k=a%wrap;
+        arrange_place(d,list[a],(struct desk_box){w.x+k*step,w.y+k*step,cw,ch});
+    }
+    return n;
+}
+/* TileWindows: up to three windows share one strip (MDITILE_HORIZONTAL
+ * stacks them, MDITILE_VERTICAL puts them side by side); more windows fill a
+ * grid of about ceil(sqrt(n)) by ceil(n/ceil(sqrt(n))) cells, the shorter
+ * line on the side of the tiling direction, and the windows of a short last
+ * line share its width. The window in front takes the first cell. */
+static int arrange_tile(struct desktop *d, int vertical)
+{
+    int list[DESK_CLIENTS], n=arrange_list(d,list,1);
+    if (!n) return 0;
+    struct desk_box w=arrange_work(d);
+    int cols, rows;
+    if (n<=3) { cols=vertical ? n : 1; }
+    else {
+        int a=1; while (a*a<n) a++;
+        int b=(n+a-1)/a;
+        cols=vertical ? a : b;
+    }
+    rows=(n+cols-1)/cols;
+    arrange_save(d,vertical ? DESK_ARRANGE_TILE_V : DESK_ARRANGE_TILE_H);
+    for (int a=0;a<n;a++) arrange_remember(d,list[a]);
+    int index=0;
+    for (int r=0;r<rows;r++) {
+        int count=r<rows-1 ? cols : n-(rows-1)*cols;
+        int32_t y0=w.y+w.h*r/rows, y1=w.y+w.h*(r+1)/rows;
+        for (int cidx=0;cidx<count;cidx++,index++) {
+            int32_t x0=w.x+w.w*cidx/count, x1=w.x+w.w*(cidx+1)/count;
+            arrange_place(d,list[index],(struct desk_box){x0,y0,x1-x0,y1-y0});
+        }
+    }
+    return n;
+}
+int desk_arrange(struct desktop *d, int kind)
+{
+    if (!arrange_prepare(d)) return 0;
+    int n=0;
+    switch (kind) {
+    case DESK_ARRANGE_CASCADE: n=arrange_cascade(d); break;
+    case DESK_ARRANGE_TILE_H: n=arrange_tile(d,0); break;
+    case DESK_ARRANGE_TILE_V: n=arrange_tile(d,1); break;
+    default: return 0;
+    }
+    if (n) arrange_settle(d);
+    return n;
+}
+/* A window that Minimize All Windows takes to the taskbar. */
+int desk_minimizable(const struct desktop *d, int i)
+{
+    const struct desk_client *c=&d->clients[i];
+    if (!c->window || c->minimized || c->owner_id || !desk_task_visible(c)) return 0;
+    return c->version!=DESK_V3_VERSION || (c->v3_style&3)!=DESK_V3_POPUP;
+}
+int desk_minimize_all(struct desktop *d)
+{
+    if (!arrange_prepare(d)) return 0;
+    int mark[DESK_CLIENTS], n=0;
+    for (int i=0;i<DESK_CLIENTS;i++) { mark[i]=desk_minimizable(d,i); n+=mark[i]; }
+    if (!n) return 0;
+    /* Native dialogs owned by a window that goes to the taskbar follow it. */
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (c->window && !c->minimized && c->owner_id && c->internal && c->version!=DESK_V3_VERSION) {
+            int owner=window_by_id(d,c->owner_id);
+            if (owner>=0 && mark[owner]==1) mark[i]=2;
+        }
+    }
+    arrange_save(d,DESK_ARRANGE_MINIMIZE_ALL);
+    for (int i=0;i<DESK_CLIENTS;i++) if (mark[i]) arrange_remember(d,i);
+    for (int i=0;i<DESK_CLIENTS;i++) if (mark[i]) {
+        struct desk_client *c=&d->clients[i];
+        c->minimized=1;
+        desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+        if (c->version==DESK_V3_VERSION) v3_configure(d,i);
+    }
+    if (d->focus>=0 && d->clients[d->focus].minimized) desk_focus(d,-1);
+    desk_sound(d,SOUND_MINIMISE);
+    arrange_settle(d);
+    return n;
+}
+int desk_arrange_undo_kind(const struct desktop *d)
+{
+    if (!d->arrange.kind) return 0;
+    for (unsigned k=0;k<d->arrange.count;k++) if (window_by_id(d,d->arrange.windows[k].window_id)>=0) return d->arrange.kind;
+    return 0;
+}
+int desk_arrange_undo(struct desktop *d)
+{
+    if (!desk_arrange_undo_kind(d) || !arrange_prepare(d)) return 0;
+    struct desk_arrange_undo undo=d->arrange;
+    arrange_forget(d);
+    int n=0;
+    for (unsigned k=0;k<undo.count;k++) {
+        const struct desk_arrange_saved *s=&undo.windows[k];
+        int i=window_by_id(d,s->window_id);
+        if (i<0) continue;
+        struct desk_client *c=&d->clients[i];
+        n++;
+        if (undo.kind==DESK_ARRANGE_MINIMIZE_ALL) {
+            if (c->minimized && !s->minimized) {
+                c->minimized=0;
+                desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+                if (c->version==DESK_V3_VERSION) v3_configure(d,i);
+            }
+            continue;
+        }
+        /* Cascade and tile: the previous size, place and state. */
+        if (c->collapsed!=s->collapsed) desk_collapse(d,i);
+        c->zoomed=s->zoomed; c->restore=s->restore;
+        if (c->collapsed) c->shade_height=s->shade_height;
+        else if (c->resizable && !c->internal) desk_resize(d,i,s->frame);
+        desk_move(d,i,s->frame.x,s->frame.y);
+    }
+    if (undo.kind==DESK_ARRANGE_MINIMIZE_ALL) {
+        int f=window_by_id(d,undo.focus_id);
+        if (f>=0 && !d->clients[f].minimized) desk_focus(d,f);
+        desk_sound(d,SOUND_RESTORE);
+    }
+    arrange_settle(d);
+    return n;
+}
+/* Win+D and the Show Desktop button: minimise everything; when nothing is
+ * left to minimise and the last arrangement was Minimize All, bring the
+ * windows back. */
+int desk_show_desktop(struct desktop *d)
+{
+    if (!d->shell) return 0;
+    int n=0;
+    for (int i=0;i<DESK_CLIENTS;i++) n+=desk_minimizable(d,i);
+    if (n) return desk_minimize_all(d);
+    if (desk_arrange_undo_kind(d)==DESK_ARRANGE_MINIMIZE_ALL) return desk_arrange_undo(d);
+    return 0;
+}
+
 void desk_request_close(struct desktop *d, int i)
 {
     if (i<0 || i>=DESK_CLIENTS || !d->clients[i].window) return;
@@ -1967,8 +2224,16 @@ static void v3_configure(struct desktop *d, int i)
     desk_put32(m.data+16,(unsigned)b.w/c->v3_scale); desk_put32(m.data+20,(unsigned)b.h/c->v3_scale);
     desk_put32(m.data+24,c->v3_scale); desk_put32(m.data+28,c->resize_serial);
     desk_put32(m.data+32,(uint32_t)b.x); desk_put32(m.data+36,(uint32_t)b.y);
-    desk_put32(m.data+40,(uint32_t)c->minimized); desk_put32(m.data+44,c->v3_style);
+    desk_put32(m.data+40,c->minimized ? (uint32_t)c->minimized : c->zoomed ? 3u : 0u); desk_put32(m.data+44,c->v3_style);
     desk_queue(d,i,&m);
+}
+/* The track limits a window asked for (WM_GETMINMAXINFO) on top of the scale. */
+static void v3_apply_limits(struct desk_client *c)
+{
+    unsigned s=c->v3_scale ? c->v3_scale : 1;
+    c->min_width=(c->v3_limits[0] ? c->v3_limits[0] : 1)*s; c->min_height=(c->v3_limits[1] ? c->v3_limits[1] : 1)*s;
+    c->max_width=(c->v3_limits[2] ? c->v3_limits[2] : 2048)*s; c->max_height=(c->v3_limits[3] ? c->v3_limits[3] : 2048)*s;
+    c->step_width=c->step_height=s;
 }
 static void v3_place(struct desktop *d, int i, const struct desk_packet *p)
 {
@@ -1976,11 +2241,19 @@ static void v3_place(struct desktop *d, int i, const struct desk_packet *p)
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     c->v3_style=p->style; c->v3_scale=p->scale;
     c->resizable=(p->style&3)==DESK_V3_OVERLAPPED;
-    c->min_width=c->min_height=c->step_width=c->step_height=p->scale;
-    c->max_width=c->max_height=2048*p->scale;
+    v3_apply_limits(c);
     unsigned w=p->width*p->scale, h=p->height*p->scale;
-    c->frame=(p->style&3)==DESK_V3_POPUP ? (struct desk_box){p->x,p->y,(int)w,(int)h} : desk_frame(w,h,p->x,p->y);
-    c->minimized=(int)p->flags; c->resize_serial++; if (!c->resize_serial) c->resize_serial++;
+    struct desk_box frame=(p->style&3)==DESK_V3_POPUP ? (struct desk_box){p->x,p->y,(int)w,(int)h} : desk_frame(w,h,p->x,p->y);
+    /* Windows keeps the maximised state through minimising and hiding; only
+     * the normal state (0) restores the window to its previous place. */
+    if (c->zoomed && p->flags==0) { c->zoomed=0; frame=c->restore; }
+    else if (c->zoomed) frame=c->frame;
+    c->frame=frame;
+    c->minimized=p->flags==3 ? 0 : (int)p->flags; c->resize_serial++; if (!c->resize_serial) c->resize_serial++;
+    if (p->flags==3 && !c->zoomed && c->resizable && !c->collapsed && !c->internal && desk_modal_target(d,i)==i) {
+        c->restore=c->frame; c->zoomed=1;
+        desk_resize(d,i,(struct desk_box){0,DESK_BAR,(int32_t)d->width,(int32_t)d->height-DESK_BAR-(d->shell ? DESK_BAR : 0)});
+    }
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     v3_configure(d,i); desk_v3_restack(d);
 }
@@ -2154,6 +2427,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         if(p.request)v3_reply(d,peer,&p,error);
         return error;
     }
+    if (p.opcode==DESK_V3_CLIPBOARD && desk_clip_receive) { desk_clip_receive(d,peer,m,&p); return 0; }
     int error=0;
     if (!p.request && p.opcode!=DESK_PONG) error=-EINVAL;
     if (p.opcode==DESK_CREATE_WINDOW && !error) {
@@ -2217,6 +2491,12 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         break;
     case DESK_V3_WINDOW_ORDER:
         error=v3_order(d,peer,i,&p); break;
+    case DESK_V3_LIMITS:
+        /* WM_GETMINMAXINFO: remember the track sizes and hold the window to them. */
+        c->v3_limits[0]=p.min_width; c->v3_limits[1]=p.min_height; c->v3_limits[2]=p.max_width; c->v3_limits[3]=p.max_height;
+        v3_apply_limits(c);
+        if (c->resizable && !c->collapsed && !c->minimized) desk_resize(d,i,c->frame);
+        break;
     case DESK_V3_PLACE:
         if ((p.style&DESK_V3_MODAL) && !c->owner_id) { error=-EINVAL; break; }
         if (c->owner_id) for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window_id==c->owner_id &&
