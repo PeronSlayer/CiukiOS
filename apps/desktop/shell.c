@@ -2297,7 +2297,7 @@ static void draw_notification(struct desktop *d,struct desk_box clip)
 #define SH_DESKTOP_ICON 48
 #define LABEL_TOP 54                                   /* label block (halo included) in the cell */
 #define LABEL_H (ICON_CELL_H - LABEL_TOP)
-#define LABEL_ROOM (ICON_CELL_W - 12)                  /* widest line; the halo stays in the cell */
+#define LABEL_ROOM (ICON_CELL_W - 6)                   /* widest line; the halo stays in the cell */
 #define LABEL_BASE (desk_font(d->sh.cfg.icon_font)->ascent+1)                                  /* first baseline below LABEL_TOP */
 #define LABEL_PITCH (desk_font_line(d->sh.cfg.icon_font)-1)
 #define HALO_GAIN 48                                   /* sixteenths: 3x the blurred coverage */
@@ -2634,7 +2634,7 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         if (strcmp(ic->icon,"emblem-symbolic-link") && (ic->action==SH_ACT_WIN32_LINK || (extension && !strcasecmp(extension,".lnk"))))
             du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);   /* G19: the link arrow */
         char lines[2][32];
-        int count = label_lines(d,ic->label, lines,ic->box.w-desk_scale(12)), widest = 0;
+        int count = label_lines(d,ic->label, lines,ic->box.w-desk_scale(6)), widest = 0;
         for (int l = 0; l < count; l++) { int w = desk_text_measure(SH_LABEL_FONT, lines[l]); if (w > widest) widest = w; }
         int cell_width=ic->box.w;
         int pitch=desk_appearance_active ? desk_font_line(SH_LABEL_FONT)+desk_scale(2) : LABEL_PITCH;
@@ -3341,7 +3341,7 @@ static void draw_drag_image(struct desktop *d, struct desk_box clip)
             const struct sh_icon *ic = &d->sh.icons[g->icons[n]];
             int x = ic->box.x + dx, y = ic->box.y + dy;
             du_icon_blit(&c, x + (ICON_CELL_W - SH_DESKTOP_ICON) / 2, y + 4, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, DU_ICON_GHOST);
-            char lines[2][32]; int count = label_lines(d,ic->label, lines,ic->box.w-desk_scale(12)), widest = 0;
+            char lines[2][32]; int count = label_lines(d,ic->label, lines,ic->box.w-desk_scale(6)), widest = 0;
             for (int l = 0; l < count; l++) { int w = desk_text_measure(SH_LABEL_FONT, lines[l]); if (w > widest) widest = w; }
             desk_paint_round_blend(&p, x + (ICON_CELL_W - widest) / 2 - 5, y + LABEL_TOP + 1, widest + 10, count * LABEL_PITCH + 4, 4,
                                    SH_HOT, 110, SH_HOT, 140);
@@ -4235,8 +4235,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         struct desk_run_ui *r=d->sh.run;
         if (r && r->browser) { run_browser_paint(d,content,clip); break; }
         du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("go-jump", 32), 32, DU_ICON_NORMAL);
-        multiline(&c, content.x + 56, content.y + 14, "Type the name of a program, folder, document,\nor Internet address, and CiukiOS will open it.", SH_INK);
-        multiline(&c, content.x + 56, content.y + 14, d->sh.prompt_mode==1 ? "Type an address, folder or file to open." : d->sh.prompt_mode==2 ? "Type the existing folder to use as a new toolbar." : d->sh.prompt_mode==3 ? "Type a new name for this Start menu item." : "Type the name of a program in /Programs, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
+        multiline(&c, content.x + 56, content.y + 14, d->sh.prompt_mode==1 ? "Type an address, folder or file to open." : d->sh.prompt_mode==2 ? "Type the existing folder to use as a new toolbar." : d->sh.prompt_mode==3 ? "Type a new name for this Start menu item." : "Type the name of a program, folder, document,\nor Internet resource, and CiukiOS will open it for you.", SH_INK);
         du_label(&c, content.x + 12, content.y + 52 + (22 - DU_GLYPH_H) / 2, "&Open:", SH_INK, 1);
         struct du_rect field = {content.x + 56, content.y + 52, content.w - 88, 22};
         du_well(&c, field, SH_WINDOW);

@@ -42,7 +42,7 @@ static void init(void)
 {
     memset(back,0,sizeof(back)); memset(front,0,sizeof(front)); memset(&window,0,sizeof(window));
 #if defined(CASE_DEMO)
-    const unsigned width=240,height=160;
+    const unsigned width=360,height=240;
 #else
     const unsigned width=760,height=520;
 #endif

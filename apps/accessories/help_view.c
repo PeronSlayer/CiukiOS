@@ -156,7 +156,28 @@ static void topic_load(struct help_app *a, int topic)
     int book = help_topic_book((unsigned)topic);
     if (book >= 0) a->open_books[book] = 1;
     contents_rebuild(a);
-    help_load_text(a, help_topics[topic].text, strlen(help_topics[topic].text), help_topics[topic].title);
+    /* Topics are hard-wrapped near 68 columns in the source; the view is narrower, so a
+     * wrapped paragraph would break twice. Join the continuation lines of a paragraph
+     * (same length, '\n' -> ' ', so every offset is unchanged) and let the text area wrap. */
+    size_t tn = strlen(help_topics[topic].text);
+    char *flow = malloc(tn + 1);
+    if (flow) {
+        memcpy(flow, help_topics[topic].text, tn + 1);
+        for (size_t i = 0, start = 0; i < tn; i++) {
+            if (flow[i] != '\n') continue;
+            size_t len = i - start, next = i + 1;
+            int wrapped = len >= 50 && next < tn && flow[i - 1] != ':' && flow[next] != '\n' &&
+                          flow[next] != ' ' && flow[next] != '-' && flow[next] != '*' && flow[next] != '\t' && flow[next] != '|' &&
+                          !(flow[next] >= '0' && flow[next] <= '9') && flow[start] != ' ' && flow[start] != '\t';
+            for (size_t k = start; wrapped && k + 1 < i; k++) if (flow[k] == ' ' && flow[k + 1] == ' ') wrapped = 0;
+            if (wrapped) { size_t e = next; while (e < tn && flow[e] != '\n') e++;
+                for (size_t k = next; wrapped && k + 1 < e; k++) if (flow[k] == ' ' && flow[k + 1] == ' ') wrapped = 0; }
+            if (wrapped) flow[i] = ' ';
+            start = next;
+        }
+    }
+    help_load_text(a, flow ? flow : help_topics[topic].text, tn, help_topics[topic].title);
+    free(flow);
     help_links(a);
     index_fill(a);
 }

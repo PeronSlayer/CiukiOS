@@ -15,10 +15,10 @@ W, H = 800, 600
 # F2-99 cursor; F1-109/F2-123, integ-video and integ-periph credits rows, re-recorded at the staging merge (lead); stage-fix6: seven ATA add-in rows; fx-24: libjpeg-turbo, Expat and libwebp rows (list length moves the scroll positions).
 # fixd: visually reviewed combined G11/G19/G23/G30 integration frames (2026-10-24).
 GOLDENS = {
-    "about-credits": "8e82cde45366226cb571bac5b4704f9be23197a163af03d6bfec0949495bbe58",
-    "about-credits-end": "bfcea79ef7d9bfa34303b0f934ddfadee5f03d36e31d66ff42af1ee80fd7151a",
-    "about-credits-pgdn": "bff8fd8c5a2172cb44239fa135f1167ab926eec079f874f9acece7ffec673b14",
-    "about-credits-wheel": "bea9455377584ee19e8868b17fea3ec25da777866ba62265cf428754473e3a93"
+    "about-credits": "8a0b7b3791ba7e5926df7e47d10649469c3c81192ce6a6d73a488463833c31f8",
+    "about-credits-end": "2f81078bd0c0b57ffa3497c9c2d7a84fb136278cc9ce7225f30c54510b14769e",
+    "about-credits-pgdn": "36e516ccb1959b260d2bcea7db1be03b48d73a1264c2cf377459af3ba008c9c5",
+    "about-credits-wheel": "e77f570f96cd37ee3749e1a7fb0b3af01825275b290eaf4c719c3adf26c04111"
 }
 
 
