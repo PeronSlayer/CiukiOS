@@ -411,6 +411,7 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
   if (u32_foreground == h)
     u32_foreground = 0;
   u32_input_focus();
+  u32_clip_render_all(h,callbacks);
   if (callbacks) u32_invoke(h, WM_DESTROY, 0, 0);
   for (UINT i = 0; i < U32_TIMERS; i++)
     if (u32_timers[i].tid && u32_timers[i].hwnd == h)

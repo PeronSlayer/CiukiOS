@@ -238,7 +238,9 @@ struct desk_end_task {
     char name[DESK_TITLE_MAX + 1];
 };
 struct desk_render_cache;
+struct desk_clipboard;
 struct desktop {
+    struct desk_clipboard *clipboard;
     void (*wake)(void *);
     void *wake_ctx;
     uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
