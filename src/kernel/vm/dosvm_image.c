@@ -236,6 +236,25 @@ static bool begin(void)
     klog("[dosvm] image verify stage=start bytes=%u", iv.size);
     return true;
 }
+/* fx-23: the check's reads are background I/O (fs_port.h): queued behind
+ * every foreground request, no read-ahead on the storage writer, drop-behind
+ * in the cache. While a launch waits for the result the user is waiting, so
+ * its blocks are read as ordinary demand reads. */
+/* Request clocks are in microseconds (blk_request_remaining_ms). */
+static uint64_t iv_now(void *arg) { (void)arg; return (uint64_t)g_ticks * 1000u; }
+static void iv_pause(void *arg) { (void)arg; task_sleep_ms(1); }
+static struct vfs_request iv_request = {.deadline = UINT64_MAX / 2, .now = iv_now, .pause = iv_pause,
+                                       .operation = "verify", .site = "vfs", .background = true};
+static bool urgent(void);
+static int block_read(void *block, uint32_t amount, size_t *got)
+{
+    if (urgent()) return vfs_read(&iv.table, iv.fd, block, amount, got);
+    struct fs_request_scope scope;
+    fs_request_enter(&scope, &iv_request);
+    int e = vfs_read(&iv.table, iv.fd, block, amount, got);
+    fs_request_leave(&scope);
+    return e;
+}
 /* One 64 KiB block; false once finished. */
 static bool step_block(void)
 {
@@ -253,7 +272,7 @@ static bool step_block(void)
         uint8_t *block = P2V(iv.buffer);
         size_t got = 0;
         iv.block_started = g_ticks;
-        int e = vfs_read(&iv.table, iv.fd, block, amount, &got);
+        int e = block_read(block, amount, &got);
         if (!e && got != amount) e = -FS_EIO;
         if (e) {
             klog("[dosvm] image verify result=failed step=read at=%u error=%d", iv.at, e);
@@ -390,10 +409,38 @@ void dosvm_image_release(void)
  * caller hashes now, as before fx-4b. */
 static bool pending(void) { return (iv.armed && !iv.held) || iv.starting || iv.busy; }
 static bool settled_result(void *arg) { (void)arg; return !pending(); }
+/* fx-23: the result of a check that already finished in this session, for
+ * this exact version. The hash was made after this mount, so the stamp's
+ * "recovered at mount" lapse does not apply to it. */
+static bool finished_result(const struct vfs_file_version *version, char sha[65])
+{
+    uint32_t f = irq_save();
+    bool hit = !pending() && (iv.state == CIUKI_DOSVM_IMAGE_VERIFIED || iv.state == CIUKI_DOSVM_IMAGE_MISMATCH) &&
+               iv.sha[0] && vfs_file_version_equal(&iv.version, version);
+    if (hit) memcpy(sha, iv.sha, 65);
+    irq_restore(f);
+    return hit;
+}
+/* fx-23: no usable result: verify again on the background task (raised while
+ * this launch waits, progress in IMAGE_QUERY) instead of hashing 27.7 MB
+ * synchronously on the launching thread inside CREATE. False when there is
+ * no verifier (test-request and hardware-check boots keep the synchronous
+ * path) or a game removal holds the image. */
+static bool rearm(void)
+{
+    uint32_t f = irq_save();
+    bool ok = iv.desktop && (iv.task || iv.test) && !iv.held;
+    if (ok && !pending()) { iv.armed = true; iv.settled = true; }
+    irq_restore(f);
+    return ok;
+}
 int dosvm_image_lookup(struct vfs_table *t, const struct vfs_file_version *version, char sha[65],
                        const char **source, bool (*cancelled)(void *), void *arg)
 {
     char expected[65];
+    if (finished_result(version, sha)) { *source = "background"; return 0; }
+    bool rearmed = false;
+again:
     if (pending()) {
         uint32_t f = irq_save(); iv.waiters++; irq_restore(f);
         if (iv.task) kwait_wake_all(&iv.wake);
@@ -410,9 +457,14 @@ int dosvm_image_lookup(struct vfs_table *t, const struct vfs_file_version *versi
             memcpy(sha, iv.sha, 65); *source = "background"; return 0;
         }
     }
-    if (sidecar_read(t, expected) || !stamp_valid(t, version, expected)) return -ENOENT;
-    memcpy(sha, expected, 65); *source = "stamp";
-    return 0;
+    if (!sidecar_read(t, expected) && stamp_valid(t, version, expected)) {
+        memcpy(sha, expected, 65); *source = "stamp";
+        return 0;
+    }
+    /* One fresh check of the current version; a second miss (the file
+     * changed during it, or the check failed) falls back to the caller. */
+    if (!rearmed && rearm()) { rearmed = true; goto again; }
+    return -ENOENT;
 }
 /* Launch path after a synchronous hash matched the sidecar: stamp it so the
  * next boot does not hash, and report it verified. */

@@ -31,6 +31,9 @@
 #ifndef FS_HOST
 #include <ciuki/ata.h>
 #include <ciuki/sync.h>
+#include <ciuki/task.h>
+#else
+#include <time.h>
 #endif
 
 static struct storage system_storage;
@@ -653,6 +656,24 @@ int storage_activate_removable(struct storage *s, struct blkdev *dev)
     if (writable) fs_event_wake(&s->vfs.volume_changed);
     return writable;
 }
+/* fx-23: background free-count steps are maintenance I/O: their FAT reads
+ * queue behind foreground reads and stay at the cold end of the cache, and
+ * a step is not taken while a foreground caller waits for the drive (the
+ * next turn retries). Windows 98 runs such work "while the computer is
+ * idle" (Resource Kit ch. 10, Task Scheduler and Compression Agent). */
+static uint64_t census_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000u; } /* microseconds */
+static void census_pause(void *arg)
+{
+    (void)arg;
+#ifdef FS_HOST
+    struct timespec t={0,1000000}; nanosleep(&t,0);
+#else
+    task_sleep_ms(1);
+#endif
+}
+static const struct vfs_request census_request={.deadline=UINT64_MAX/2,.now=census_now,.pause=census_pause,
+    .operation="census",.site="mount",.background=true};
+#define CENSUS_YIELD_MS 20u
 unsigned storage_census_service(struct storage *s, uint32_t now)
 {
     if (!s || !s->ready || s->stopped) return 0;
@@ -663,13 +684,17 @@ unsigned storage_census_service(struct storage *s, uint32_t now)
         bool due=v->present && v->removable && v->fat.census && v->fat.mounted &&
             (!v->census_next_ms || (int32_t)(now-v->census_next_ms)>=0);
         bool counting=v->present && v->fat.census;
+        bool contended=due && s->vfs.diagnostic_waiters[d];
+        if (contended) { v->census_next_ms=now+CENSUS_YIELD_MS; v->census_yields++; }
         vfs_unlock(&s->vfs);
-        if (!due) { running+=counting; continue; }
+        if (!due || contended) { running+=counting; continue; }
         vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"census"); vfs_site_locked(&s->vfs,"mount");
         int e=1; uint32_t began=fs_now_ms();
         if (v->present && v->fat.census && v->fat.mounted) {
             refresh_volume(v);
+            struct fs_request_scope scope; fs_request_enter(&scope,&census_request);
             e=VFS_IO(&s->vfs,fat_census_step(&v->fat,128));
+            fs_request_leave(&scope);
             if (e<0) {
                 klog("[storage] free_count drive=%c result=%d state=abandoned",'A'+d,e);
                 fat_census_end(&v->fat);
@@ -684,6 +709,32 @@ unsigned storage_census_service(struct storage *s, uint32_t now)
         fs_service();
     }
     return running;
+}
+/* fx-23: a drive reservation still held after STORAGE_HOLD_REPORT_MS is
+ * named while it is held (the release-time vfs_hold record is budgeted and
+ * never appears for a hold that outlives the session), once per hold. */
+#define STORAGE_HOLD_REPORT_MS 2000u
+unsigned storage_hold_watch(struct storage *s, uint32_t now)
+{
+    if (!s || !s->ready) return 0;
+    struct hold_report { struct vfs_hold_info owner; uint32_t ms, waiters; char drive; } found[4];
+    unsigned n=0;
+    vfs_lock(&s->vfs,0);
+    for (unsigned d=0;d<26 && n<4;d++) {
+        if (!(s->vfs.reserved&(1u<<d))) { s->hold_reported[d]=0; continue; }
+        struct vfs_hold_info *h=&s->vfs.holds[d];
+        uint32_t ms=now-h->started;
+        if (ms<STORAGE_HOLD_REPORT_MS || s->hold_reported[d]==h->started+1u) continue;
+        s->hold_reported[d]=h->started+1u;
+        found[n++]=(struct hold_report){*h,ms,s->vfs.diagnostic_waiters[d],(char)('A'+d)};
+    }
+    vfs_unlock(&s->vfs);
+    for (unsigned i=0;i<n;i++)
+        klog("[storage] vfs_hold_long drive=%c ms=%u task=%s#%u op=%s site=%s waiters=%u",
+             found[i].drive,found[i].ms,found[i].owner.task.name[0] ? found[i].owner.task.name : "none",
+             found[i].owner.task.id,found[i].owner.op[0] ? found[i].owner.op : "metadata",
+             found[i].owner.site[0] ? found[i].owner.site : "vfs",found[i].waiters);
+    return n;
 }
 int storage_writeback(struct storage *s, uint32_t now)
 {
@@ -1042,10 +1093,21 @@ static bool initialized;
 static void storage_timer(void *arg)
 {
     struct storage *s = arg;
-    uint32_t last_raw=0;
+    uint32_t last_raw=0, window=(uint32_t)fs_now_ms(), passes=0;
+    uint32_t kicks=__atomic_load_n(&s->cache.writer_kicks,__ATOMIC_RELAXED);
     while (!s->stopped) {
         cache_writer_wait(&s->cache,10);
         uint64_t now=fs_now_ms();
+        /* fx-23: the writer polls every 10 ms (about 100 passes a second);
+         * a window far above that means something keeps kicking it. */
+        passes++;
+        if ((uint32_t)now-window>=2000) {
+            uint32_t k=__atomic_load_n(&s->cache.writer_kicks,__ATOMIC_RELAXED);
+            if (passes>600) klog("[storage] writer_busy passes=%u kicks=%u window_ms=%u",
+                                 passes,k-kicks,(uint32_t)now-window);
+            (void)storage_hold_watch(s,(uint32_t)now);
+            window=(uint32_t)now; passes=0; kicks=k;
+        }
         bool log_due=bootlog_due((uint32_t)now);
         bool due = cache_writeback_due(&s->cache, now) || log_due || (uint32_t)(now-last_raw)>=1000;
         if (due && !s->stopped) {

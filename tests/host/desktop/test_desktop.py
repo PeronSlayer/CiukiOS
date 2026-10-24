@@ -581,7 +581,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS dosbox autorun", result.stdout)
 
     def test_dosbox_loading(self):
-        self.dosbox_loading_replay(range(22), True)  # fx-4b: 20 verify wait, 21 mismatch
+        self.dosbox_loading_replay(range(24), True)  # fx-4b: 20 verify wait, 21 mismatch; fx-23: 22 slow CREATE, 23 close during it
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)
@@ -597,7 +597,7 @@ class DesktopTests(unittest.TestCase):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             shutil.copy2(ROOT / "apps/desktop/protocol.h", inc / "desktop.h")
             binary = folder / "loading-test"
-            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", "-pthread",
                             '-DDOSBOX_SETTINGS_DIR="'+str(folder/"prefs")+'"', "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
                             str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
                             "-o", str(binary)], check=True)

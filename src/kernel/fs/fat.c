@@ -1117,7 +1117,11 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
 int fat_read_stream(struct fat_volume *v, const struct fat_entry *file, uint64_t pos,
                     void *buf, size_t size, size_t *done, struct cache_stream *stream,
                     struct fat_cursor *cursor) {
-    if (!v->cache->adaptive || v->dev->logical) return fat_read_cursor(v,file,cursor,pos,buf,size,done);
+    /* fx-23: background (idle-class) readers never queue read-ahead; it
+     * would run on the P_DEVICE storage writer on their behalf. */
+    const struct vfs_request *request=fs_request_current();
+    if (!v->cache->adaptive || v->dev->logical || (request && request->background))
+        return fat_read_cursor(v,file,cursor,pos,buf,size,done);
     cache_stream_begin(v->cache,stream,v->dev,pos);
     int e=fat_read_cursor(v,file,cursor,pos,buf,size,done);
     uint32_t window=cache_stream_end(stream,pos,*done,!e);

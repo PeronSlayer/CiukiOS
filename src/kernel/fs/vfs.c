@@ -223,9 +223,23 @@ static void advance_cancelled(struct vfs *v) {
         if (next==v->next[d]) v->urgent_gate_valid[d]=false;
     }
 }
+/* fx-23: a refused publication step closes its drive to tickets issued
+ * after the refusal (T23 trial f441c5bd: the step needs an instant with no
+ * reservation and no queued ticket, and a stream of short desktop C:
+ * operations kept one from ever occurring for ~50 s). Tickets issued before
+ * it are served first; then the step runs (express reservation, below);
+ * then the gated tickets follow in their order. */
+static bool ticket_gated(const struct vfs *v,unsigned d,uint32_t ticket) {
+    /* The writer turn's owner is never gated: a suspended step resumes only
+     * through that turn (test_t23_holds: copy holds the turn, DOS waits). */
+    if (v->turn_depth[d] && v->turn_owner[d]==fs_task_token()) return false;
+    return v->publish_waiting[d] && (int32_t)(ticket-v->gate_ticket[d])>=0;
+}
 static int reserve_file_request(struct vfs *v,uint32_t mask,const struct vfs_request *request,
                                 struct vfs_file_identity *file) {
     if (!request) request=fs_request_current();
+    /* A caller already holding drives never waits behind a gate (fx-23). */
+    bool gate_exempt=v->active!=0;
     mask &= VFS_ALL_DRIVES; mask &= ~v->active;
     if (mask && request && request->wait && !request->wait->outcome) request->wait->drives=mask;
     if (!mask) return vfs_request_check(request);
@@ -265,7 +279,8 @@ static int reserve_file_request(struct vfs *v,uint32_t mask,const struct vfs_req
         error=vfs_request_check(request);
         bool ready=true;
         for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) &&
-            (waiter.ticket[d]!=v->serving[d] || (v->readers[d] && !compatible) || (v->mutating&(1u<<d)))) ready=false;
+            (waiter.ticket[d]!=v->serving[d] || (v->readers[d] && !compatible) || (v->mutating&(1u<<d)) ||
+             (v->reserved&(1u<<d)) || (!gate_exempt && ticket_gated(v,d,waiter.ticket[d])))) ready=false;
         if (error || ready) break;
         /* f1-98: lend this waiter's priority to the task it waits for on its
          * first unready drive while it sleeps. */
@@ -1149,12 +1164,17 @@ static bool guard_busy(struct transaction_guard *g) {
     struct vfs *v=g->v;
     bool busy=((v->reserved|v->mutating)&g->mask)!=0;
     if (g->read_only) return busy;
-    for (unsigned d=0;d<26;d++) if (g->mask&(1u<<d)) busy|=v->next[d]!=v->serving[d] || v->readers[d];
+    /* Tickets issued after a refused step (fx-23) wait for it, so only the
+     * ones issued before the gate keep the step out. */
+    for (unsigned d=0;d<26;d++) if (g->mask&(1u<<d))
+        busy|=(v->publish_waiting[d] ? (int32_t)(v->gate_ticket[d]-v->serving[d])>0 : v->next[d]!=v->serving[d]) || v->readers[d];
     return busy;
 }
 /* The guard's reservation, tagged before admission (see reserve_file_request). */
+static void guard_gate(struct transaction_guard *g,bool on);
 static void guard_lock(struct transaction_guard *g) {
     vfs_lock(g->v,0); vfs_tag_locked(g->v,g->op); vfs_site_locked(g->v,g->site);
+    guard_gate(g,false); /* fx-23: never queue behind our own gate */
     vfs_reserve_locked(g->v,g->mask);
 }
 /* Namespace held. While a step waits, new readers of its letters wait too
@@ -1164,9 +1184,26 @@ static void guard_gate(struct transaction_guard *g,bool on) {
     if (g->gate==on) return;
     g->gate=on;
     for (unsigned d=0;d<26;d++) if (g->mask&(1u<<d)) {
-        if (on) g->v->publish_waiting[d]++; else g->v->publish_waiting[d]--;
+        if (on && !g->v->publish_waiting[d]++) g->v->gate_ticket[d]=g->v->next[d];
+        if (!on) g->v->publish_waiting[d]--;
     }
     if (!on) fs_event_wake(&g->v->volume_changed);
+}
+/* Namespace held, the drives free (guard_busy false): a reservation that
+ * consumes no ticket, so releasing it advances no queue (fx-23). */
+static void express_reserve_locked(struct vfs *v,uint32_t mask) {
+    mask&=VFS_ALL_DRIVES; mask&=~v->active;
+    if (!mask) return;
+    if ((v->reserved|v->mutating)&mask) fs_panic("express reservation of a held drive");
+    struct vfs_hold_info owner=holder_snapshot(&v->namespace_owner);
+    v->reserved|=mask;
+    for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
+        v->hold_token[d]=fs_task_token();
+        v->holds[d]=owner; v->holds[d].started=fs_now_ms();
+    }
+    volume_mutexes(v,v->active,false); v->active|=mask;
+    volume_mutexes(v,v->active,true);
+    __atomic_store_n(&v->holder,first_drive(v->active),__ATOMIC_RELAXED);
 }
 static int transaction_guard_enter(void *arg) {
     struct transaction_guard *g=arg; struct vfs *v=g->v;
@@ -1174,9 +1211,14 @@ static int transaction_guard_enter(void *arg) {
     /* Never wait for a legacy writer while retaining cache reservations:
      * that writer may itself need one of our pinned sectors. */
     if (guard_busy(g)) { guard_gate(g,true); vfs_unlock(v); return -FS_EBUSY; }
-    guard_gate(g,false);
     vfs_tag_locked(v,g->op); vfs_site_locked(v,g->site);
-    vfs_reserve_locked(v,g->mask); v->default_drive=g->default_drive;
+    /* fx-23: tickets queued after the gate wait for this step: take the
+     * drive ahead of them (no ticket), else as before. */
+    bool behind=false;
+    for (unsigned d=0;d<26;d++) if ((g->mask&(1u<<d)) && v->next[d]!=v->serving[d]) behind=true;
+    if (behind) { express_reserve_locked(v,g->mask); guard_gate(g,false); }
+    else { guard_gate(g,false); vfs_reserve_locked(v,g->mask); } /* never queue behind our own gate */
+    v->default_drive=g->default_drive;
     return 0;
 }
 /* In-flight cluster set: namespace only, excluding a legacy VFS_IO mutator
@@ -1196,7 +1238,11 @@ static void transaction_guard_suspend(void *arg) {
 }
 static void transaction_guard_resume(void *arg) {
     struct transaction_guard *g=arg; struct vfs *v=g->v;
-    vfs_lock(v,0); vfs_turn_resume_locked(v,g->drive,g->turn_saved); g->turn_saved=0;
+    vfs_lock(v,0);
+    /* fx-23: a step that must wait for the writer turn opens its gate first:
+     * the turn's holder may be queued behind a gated ticket. */
+    if (g->turn_saved && !turn_available(v,1u<<g->drive,false)) guard_gate(g,false);
+    vfs_turn_resume_locked(v,g->drive,g->turn_saved); g->turn_saved=0;
 }
 static int transaction_guard_try_resume(void *arg) {
     struct transaction_guard *g=arg; struct vfs *v=g->v;

@@ -254,9 +254,39 @@ int main(int argc, char **argv)
     assert(dosvm_image_step()); run_to_end();
     dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED);
 
+    /* 7. fx-23 (T23 trial f441c5bd): a DOS launch right after the check
+     * must not hash 27.7 MB again on the launching thread inside CREATE.
+     * (a) The check finished on a volume recovered dirty at this mount: the
+     * stamp lapses, but this session's own result names the same version. */
+    reboot(); storage.volumes[2].fat.dirty_recovered = true;
+    dosvm_image_desktop_presented();
+    assert(dosvm_image_step()); run_to_end();
+    dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED);
+    char current_sha[65]; memcpy(current_sha, iv.sha, 65);  /* section 6 changed byte 4096 and the sidecar */
+    digest_sha[0] = 0;                                  /* the launch's session cache missed */
+    v = launch_version(&fd); reads = disk.reads; unsigned hashed = iv.blocks;
+    OK(dosvm_image_lookup(&table, &v, sha, &source, 0, 0));
+    assert(!strcmp(source, "background") && !strcmp(sha, current_sha) && iv.blocks == hashed);
+    assert(disk.reads - reads < 8);                      /* no second hash anywhere */
+    OK(vfs_close(&table, fd));
+    printf("fx-23 launch after the check on a recovered volume: source=%s, %u disk reads, no hash\n", source, disk.reads - reads);
+    /* (b) The image identity changed after the check (and the stamp no
+     * longer matches): the launch waits for one fresh check on the verifier
+     * (progress in IMAGE_QUERY) instead of hashing synchronously itself. */
+    set_mtime(0x5b5a, 0x6a20);
+    v = launch_version(&fd);
+    OK(dosvm_image_lookup(&table, &v, sha, &source, 0, 0));
+    assert(!strcmp(source, "background") && !strcmp(sha, current_sha) && iv.blocks == expected_blocks());
+    assert(vfs_file_version_equal(&iv.version, &v));
+    OK(vfs_close(&table, fd));
+    dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED);
+    printf("fx-23 launch after an identity change: re-armed background check, %u blocks on the verifier, source=%s\n",
+           iv.blocks, source);
+    storage.volumes[2].fat.dirty_recovered = false;
+
     assert(block_allocs == block_frees && !stamp_errors && records && digest_publishes);
     vfs_table_destroy(&table); OK(vfs_detach(&storage.vfs, 2)); vfs_destroy(&storage.vfs);
     cache_destroy(&storage.cache); fake_close(&disk); assert(!fs_host_contig_live);
-    puts("PASS fx-4b image verify: background hash with progress, stamp reuse, 4 identity changes re-hash, launch joins in-flight check (EINTR on owner exit), mismatch reported and never stamped, removal hold/release");
+    puts("PASS fx-4b image verify: background hash with progress, stamp reuse, 4 identity changes re-hash, launch joins in-flight check (EINTR on owner exit), mismatch reported and never stamped, removal hold/release; fx-23: finished result reused, re-armed check instead of a launch hash");
     return 0;
 }

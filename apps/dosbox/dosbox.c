@@ -24,6 +24,7 @@
 #include "loading.h"
 #include "settings.h"
 #include "network_settings.h"
+#include "../libdeskui/job.h"
 
 static void command(struct ciuki_dosvm_command *c, uint32_t id, uint32_t generation)
 {
@@ -115,6 +116,23 @@ static int pre_create_service(int channel, uint32_t *server, int *configured, in
     }
     return 0;
 }
+/* fx-23: CREATE runs on a worker thread. On the T23 (image f441c5bd) one
+ * CREATE stayed inside the kernel for about 53 s; the window thread was
+ * inside it, answered no PING and the desktop marked it "Not responding".
+ * The window thread now keeps serving the desktop (PING, close, focus),
+ * shows progress and sleeps in poll() between turns; it never spins. The
+ * worker only makes the system call (no window, surface or channel use). */
+struct dosbox_create { struct ciuki_dosvm_command command; int result, error; };
+static struct dosbox_create create_request;
+static struct du_job create_job;
+static void dosbox_create_work(void *arg)
+{
+    struct dosbox_create *r = arg;
+    r->result = ciuki_dosvm(CIUKI_DOSVM_CREATE, &r->command);
+    r->error = r->result ? errno : 0;
+}
+#define DOSBOX_CREATE_FIRST_MS 20
+#define DOSBOX_CREATE_POLL_MS 100
 static int name_valid(const char *name)
 {
     size_t n = strlen(name);
@@ -219,8 +237,54 @@ int main(int argc, char **argv)
     command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
     c.launch.kernel=kernel; c.launch.game=game; c.launch.memory=memory;
     dosvm_launch_network_set(&c,network);
-    if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
-        int error = errno;
+    create_request = (struct dosbox_create){.command = c};
+    if (du_job_start(&create_job, dosbox_create_work, &create_request)) {
+        dosbox_create_work(&create_request);                  /* no thread: as before fx-23 */
+    } else {
+        int panel_shown = 0, checked = -1, painted = 0;
+        uint64_t pulse_at = 0;
+        for (unsigned turn = 0;; turn++) {
+            struct pollfd wait = {channel, POLLIN, 0};
+            if (poll(&wait, 1, turn ? DOSBOX_CREATE_POLL_MS : DOSBOX_CREATE_FIRST_MS) < 0 && errno != EINTR) goto abandon;
+            if (du_job_ready(&create_job)) break;
+            int service = pre_create_service(channel, &server, &configured, &focused);
+            if (service) { result = service > 0 ? 0 : 1; goto abandon; }
+            if (!configured) continue;
+            /* CREATE may be waiting for a fresh check of the DOS system
+             * files (kernel fx-23): show its progress, else a pulse. */
+            struct ciuki_dosvm_command image;
+            command(&image, 0, 0);
+            int checking = !ciuki_dosvm(CIUKI_DOSVM_IMAGE_QUERY, &image) && image.state == CIUKI_DOSVM_IMAGE_VERIFYING;
+            uint64_t now = now_ms();
+            desk_message(&m, DESK_DAMAGE, 20);
+            if (checking) {
+                if ((int)image.changed == checked) continue;
+                checked = (int)image.changed;
+                snprintf(detail, sizeof(detail), "Checking the DOS system files: %u%%",
+                         (unsigned)(image.changed > 1000u ? 100u : image.changed / 10u));
+                dosbox_panel_progress(&canvas, name, icon, detail, image.changed);
+                desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, CIUKI_DOSVM_HEIGHT);
+                panel_shown = 0;
+            } else if (!panel_shown) {
+                snprintf(detail, sizeof(detail), "Starting the DOS session...");
+                dosbox_panel(&canvas, name, icon, NULL, detail, now - started);
+                desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, CIUKI_DOSVM_HEIGHT);
+                panel_shown = 1; checked = -1; pulse_at = now;
+            } else if (now - pulse_at >= DOSBOX_PULSE_MS) {
+                struct du_rect bar = dosbox_panel_pulse(&canvas, now - started);
+                desk_put32(m.data + 4, (uint32_t)bar.x); desk_put32(m.data + 8, (uint32_t)bar.y);
+                desk_put32(m.data + 12, (uint32_t)bar.w); desk_put32(m.data + 16, (uint32_t)bar.h);
+                pulse_at = now;
+            } else continue;
+            if (send_packet(channel, &m)) goto abandon;
+            painted = 1;
+        }
+        du_job_finish(&create_job);
+        if (painted) { redraw = 1; panel_redraw = 1; panel_sent = 0; snprintf(detail, sizeof(detail), "Preparing..."); }
+    }
+    c = create_request.command;
+    if (create_request.result) {
+        int error = create_request.error;
         struct ciuki_dosvm_command image;
         command(&image, 0, 0);
         failure = "Unable to start";
@@ -470,6 +534,13 @@ panel:
 done:
     command(&c, id, generation);
     if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
+    desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);
+    close(surface); close(channel);
+    return result;
+abandon:
+    /* Closed while CREATE runs: leave now. Process exit ends the worker's
+     * call; the kernel sees the owner stopping, cancels the creation (EINTR)
+     * and releases the VM it may have created (owner-gone). */
     desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);
     close(surface); close(channel);
     return result;

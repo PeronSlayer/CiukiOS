@@ -1159,3 +1159,42 @@ the in-flight check and EINTR on owner exit, mismatch never stamped, removal
 hold/release), `tests/host/dosvm_fx4_test.inc` (`test_fx4b_launch_paths`:
 CREATE with each result, record sources, mismatch refusal) and the DOS Box
 replay scenarios 20 and 21 (`tests/host/desktop/dosbox_loading_test.c`).
+
+### fx-23 amendment: no launch hashes, CREATE off the window thread (2026-10-23)
+
+T23 trial f441c5bd: right after the background check reported
+`result=verified`, DOOM's CREATE ran about 53 s inside the kernel (DOS Box at
+35–47 % CPU, all kernel time; its first 2 s of compute are consistent with a SHA-256 of the
+27.7 MB base on the T23), the window thread was inside that call, answered no
+desktop PING and was marked "Not responding"; closing it turned the finished
+CREATE into `[launch] … error=-4 stage=vm-create`.
+
+- **Finished results count.** `dosvm_image_lookup` uses a check that already
+  finished in this session for the same file version, before the stamp. The
+  stamp's "recovered dirty at this mount" lapse does not apply: that hash was
+  made after the mount.
+- **No synchronous launch hash while a verifier exists.** When neither the
+  session cache, the finished check nor the stamp matches, the lookup re-arms
+  one fresh background check of the current version and waits for it
+  (cancellable by the owner, progress in `CIUKI_DOSVM_IMAGE_QUERY`). Only boots
+  without a verifier (test-request, hardware check) or a held image still hash
+  in `base_identity`.
+- **CREATE on a worker thread.** DOS Box issues CREATE from a `du_job`
+  worker. The window thread keeps answering PING, CLOSE and FOCUS, shows the
+  check's percentage when CREATE waits for it and otherwise "Starting the DOS
+  session..." with the 250 ms pulse, and sleeps in `poll()` (20 ms, then
+  100 ms) between turns. A close during CREATE ends the process; the kernel
+  sees the owner stopping and cancels or releases the VM (`owner-gone`).
+- **Unresolved in the records.** The trial's records do not name the code
+  that kept CREATE in the kernel for the remaining ~50 s (it held the CPU in
+  short turns alternating with the storage writer, with no disk I/O, while
+  the boot log and Files waited). The writer decoupling and the
+  `vfs_hold_long`/`writer_busy` records of the storage amendment
+  (`vfs-storage-contract.md`, fx-23) remove the writer's per-event wakeups and
+  name any such hold in the next trial.
+
+Host evidence: `tests/host/dos/test_image_verify.py` section 7 (finished
+result reused on a recovered volume with no disk reads; an identity change
+after the check re-arms it, the hash runs on the verifier) and DOS Box replay
+scenarios 22 (a 6 s CREATE: PING answered, three check-progress paints,
+pulses, 61 polls of 100 ms) and 23 (close during CREATE).
