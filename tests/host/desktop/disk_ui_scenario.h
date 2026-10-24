@@ -41,7 +41,7 @@ static void disk_test_settle(void)
     for (unsigned k=0;k<10000;k++) {
         a->ui->service(a->ui,a);
         if (!a->reading && !a->loading && !a->job_active && !files_disk_busy(a) && !a->disk_pending) return;
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(!"G29 UI worker timeout");
 }
@@ -121,4 +121,113 @@ static void disk_ui_scenario(void (*present)(struct du_ui *,const char *,void *)
     assert(fake_lookup("/Documents/keep.txt")>=0 && fake_lookup("/keep.txt")>=0 && disk_test_queries>=3);
     files_destroy(a); du_dialog_close(u); fake_assert_clean(); free(a); free(u); free(pixels);
     disk_test_app=NULL; disk_test_ui=NULL;
+}
+/* G29c: the same production Copy Disk controller on one/two drives. */
+static unsigned copy_reads,copy_writes,copy_drive,copy_generation,copy_sectors;
+static int copy_error;
+static int copy_load(unsigned drive) { copy_drive=drive; return 0; }
+static int copy_state(struct ciuki_media_state *state)
+{
+    *state=(struct ciuki_media_state){.removable_mask=3};
+    state->type[0]=state->type[1]=CIUKI_MEDIA_FLOPPY;
+    state->generation[0]=state->generation[1]=copy_generation; return 0;
+}
+static int copy_query(int write,struct ciuki_media_format *r)
+{
+    assert(!write && r->drive==copy_drive && r->generation==copy_generation);
+    r->sectors=copy_sectors; r->filesystem=12; r->supported_filesystems=CIUKI_FORMAT_FAT12; return 0;
+}
+static int copy_image(int write,struct ciuki_floppy_image *r,void *buffer)
+{
+    assert(!pthread_equal(pthread_self(),disk_test_main));
+    assert(r->drive==copy_drive && r->generation==copy_generation && r->sectors==2880);
+    if(copy_error)return copy_error;
+    uint8_t *p=buffer;
+    if(write) { assert(p[0]==42 && p[2880*512-1]==99); copy_writes++; }
+    else { memset(p,0,2880*512); p[0]=42; p[2880*512-1]=99; copy_reads++; }
+    return 0;
+}
+static void copy_disk_scenario(void (*present)(struct du_ui *,const char *,void *),void *ctx)
+{
+    fake_image_tree(); disk_test_main=pthread_self(); copy_reads=copy_writes=copy_error=0; copy_generation=17; copy_sectors=2880;
+    struct files_app *a=calloc(1,sizeof(*a)); struct du_ui *u=calloc(1,sizeof(*u));
+    uint32_t *pixels=calloc(560*400,4); assert(a && u && pixels);
+    disk_test_app=a; disk_test_ui=u; du_init(u,pixels,560,400);
+    assert(!files_setup(a,u,&fake_vfs,"/Documents")); disk_test_settle();
+    a->media.type[0]=a->media.type[1]=CIUKI_MEDIA_FLOPPY;
+    a->media_image=copy_image; a->media_load=copy_load; a->media_format=copy_query; a->media_read=copy_state;
+    assert(!files_copy_disk_open(a,0)); disk_test_frame(present,"copy source prompt",ctx);
+    disk_test_press(DU_KEY_ESC); assert(!copy_reads);
+    assert(!files_copy_disk_open(a,0)); disk_test_accept(0); disk_test_frame(present,"copy read progress",ctx); disk_test_settle();
+    assert(copy_reads==1 && du_dialog_id(u)==221); disk_test_frame(present,"copy destination choice",ctx);
+    disk_test_accept(0); assert(du_dialog_id(u)==222 && strstr(u->dialog.text,"DESTINATION")); disk_test_frame(present,"copy swap confirmation",ctx);
+    disk_test_press(DU_KEY_ESC); assert(!copy_writes);
+    assert(!files_copy_disk_open(a,0)); disk_test_accept(0); disk_test_settle(); disk_test_accept(0); disk_test_accept(0); disk_test_settle();
+    assert(!copy_writes && du_dialog_id(u)==202); disk_test_frame(present,"copy source still inserted",ctx); disk_test_press(DU_KEY_ESC);
+    assert(!files_copy_disk_open(a,0)); disk_test_accept(0); disk_test_settle(); disk_test_accept(0);
+    copy_generation++; disk_test_accept(0); disk_test_frame(present,"copy write progress",ctx); disk_test_settle();
+    assert(copy_writes==1 && du_dialog_id(u)==219 && strstr(u->dialog.text,"verified")); disk_test_frame(present,"copy verified summary",ctx); disk_test_press(DU_KEY_ESC);
+    assert(!files_copy_disk_open(a,0)); disk_test_accept(0); disk_test_settle();
+    u->dialog.items[4].value=0; u->dialog.items[5].value=1; disk_test_accept(0); disk_test_accept(0); disk_test_settle();
+    assert(copy_writes==2 && copy_drive==1); disk_test_frame(present,"copy two drives",ctx); disk_test_press(DU_KEY_ESC);
+    copy_error=-EIO; assert(!files_copy_disk_open(a,0)); disk_test_accept(0); disk_test_settle();
+    assert(du_dialog_id(u)==202 && copy_writes==2); disk_test_frame(present,"copy source read error",ctx); disk_test_press(DU_KEY_ESC); copy_error=0;
+    files_destroy(a); du_dialog_close(u); fake_assert_clean(); free(a); free(u); free(pixels); disk_test_app=NULL; disk_test_ui=NULL;
+}
+static unsigned backup_ui_calls;
+static int backup_ui_mode,backup_ui_error;
+static int backup_ui_call(int mode,const char *archive,const char *source,const char *base,const char *root,
+                          enum bk_replace policy,const struct bk_callbacks *cb,struct bk_result *result)
+{
+    assert(!pthread_equal(pthread_self(),disk_test_main));
+    assert(!strcmp(archive,"/Documents/Backup.cbk") && !strcmp(source,"/Documents"));
+    assert(mode==backup_ui_mode && policy==BK_OLDER);
+    if(mode==1)assert(!strcmp(base,"/Documents/Full.cbk"));
+    if(mode==3)assert(!strcmp(root,"/Documents/Restored"));
+    backup_ui_calls++; *result=(struct bk_result){.files=3,.folders=1,.bytes=456};
+    cb->progress(cb->ctx,source,result); return backup_ui_error;
+}
+static void backup_ui_scenario(void (*present)(struct du_ui *,const char *,void *),void *ctx)
+{
+    fake_image_tree(); disk_test_main=pthread_self(); backup_ui_calls=backup_ui_error=0;
+    struct files_app *a=calloc(1,sizeof(*a)); struct du_ui *u=calloc(1,sizeof(*u)); uint32_t *pixels=calloc(560*400,4); assert(a && u && pixels);
+    disk_test_app=a; disk_test_ui=u; du_init(u,pixels,560,400);
+    assert(!files_setup(a,u,&fake_vfs,"/Documents")); disk_test_settle(); a->backup_call=backup_ui_call;
+    assert(!files_backup_open(a,"/Documents",NULL,0)); disk_test_frame(present,"backup job selection",ctx); disk_test_press(DU_KEY_ESC); assert(!backup_ui_calls);
+    for(int mode=0;mode<4;mode++) {
+        backup_ui_mode=mode;
+        assert(!files_backup_open(a,"/Documents",NULL,mode));
+        if(mode==1) { disk_test_accept(0); assert(du_dialog_id(u)==223 && backup_ui_calls==1); u->dialog.items[3].active=1; u->dialog.changed(u,&(struct du_event){.type=DU_EV_SELECT},a); du_set_text(&u->dialog.items[7],"/Documents/Full.cbk"); }
+        if(mode==3) { u->dialog.items[3].active=2; u->dialog.changed(u,&(struct du_event){.type=DU_EV_SELECT},a); du_set_text(&u->dialog.items[5],"/Documents/Restored"); }
+        disk_test_frame(present,mode==1 ? "backup differential options" : mode==3 ? "backup restore policies" : "backup full or verify options",ctx);
+        disk_test_accept(0); assert(du_dialog_id(u)==224 && u->dialog.focus==1); disk_test_frame(present,"backup confirmation",ctx);
+        disk_test_accept(0); disk_test_frame(present,"backup worker progress",ctx); disk_test_settle();
+        assert(backup_ui_calls==(unsigned)mode+1 && du_dialog_id(u)==219 && strstr(u->dialog.text,"completed")); disk_test_frame(present,"backup job summary",ctx); disk_test_press(DU_KEY_ESC);
+    }
+    files_properties_path(a,"/"); disk_test_settle();
+    u->dialog.items[3].active=1; u->dialog.changed(u,&(struct du_event){.type=DU_EV_SELECT},a);
+    assert(!u->dialog.items[6].hidden); disk_test_frame(present,"drive Backup Now",ctx);
+    u->dialog.changed(u,&(struct du_event){.type=DU_EV_ACTIVATE,.id=315},a);
+    assert(du_dialog_id(u)==223); disk_test_press(DU_KEY_ESC);
+    backup_ui_error=-EIO; backup_ui_mode=0;
+    assert(!files_backup_open(a,"/Documents",NULL,0)); disk_test_accept(0); disk_test_accept(0); disk_test_settle();
+    assert(du_dialog_id(u)==202); disk_test_frame(present,"backup checksum or IO error",ctx); disk_test_press(DU_KEY_ESC);
+    files_destroy(a); du_dialog_close(u); fake_assert_clean(); free(a); free(u); free(pixels); disk_test_app=NULL; disk_test_ui=NULL;
+}
+static int blank_query(int write,struct ciuki_media_format *r)
+{
+    assert(!write && r->drive==4); r->filesystem=16; r->sectors=65536;
+    r->supported_filesystems=CIUKI_FORMAT_FAT16; r->flags=CIUKI_FORMAT_UNFORMATTED; return 0;
+}
+static void blank_ui_scenario(void (*present)(struct du_ui *,const char *,void *),void *ctx)
+{
+    fake_image_tree(); disk_test_main=pthread_self();
+    struct files_app *a=calloc(1,sizeof(*a)); struct du_ui *u=calloc(1,sizeof(*u)); uint32_t *pixels=calloc(560*400,4); assert(a && u && pixels);
+    disk_test_app=a; disk_test_ui=u; du_init(u,pixels,560,400);
+    a->media.type[4]=CIUKI_MEDIA_USB; a->media.removable_mask=1u<<4; a->media.generation[4]=17; a->media_format=blank_query;
+    assert(!files_setup(a,u,&fake_vfs,FM_COMPUTER)); disk_test_settle();
+    assert(fm_select_name(&a->model,"E:",0)>=0); disk_test_frame(present,"unformatted drive listed",ctx);
+    assert(!files_navigate(a,"/mnt/e")); disk_test_settle();
+    assert(du_dialog_id(u)==216 && strstr(u->dialog.title,"Format")); disk_test_frame(present,"unformatted open offers format",ctx); disk_test_press(DU_KEY_ESC);
+    files_destroy(a); du_dialog_close(u); fake_assert_clean(); free(a); free(u); free(pixels); disk_test_app=NULL; disk_test_ui=NULL;
 }

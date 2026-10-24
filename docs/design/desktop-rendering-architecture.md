@@ -436,6 +436,10 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
+| 42 | G29c Copy Disk source prompt, read progress, destination choice and swap/destruction confirmation; write/read-back progress, completion, source-still-inserted and I/O errors | dialog boxes and client content only | Files `disk_ui.inc` worker publication and `du_invalidate` | none new | copy disk (`WM_ROW=34`) |
+| 43 | G29c Backup full/differential/verify/restore job options, overwrite choices, confirmation, progress, completion and checksum/I/O error | dialog boxes and client content | Files `disk_ui.inc`, worker progress and completion invalidation | none new | backup (`WM_ROW=35`) |
+| 44 | G29c unformatted removable media appear in Computer; opening offers Format | drive list, Format dialog and exposed client area | retained media slots, navigation failure and format query worker | none new | blank media (`WM_ROW=36`) |
+| 45 | G29c Terminal FDISK large-disk/destructive prompts, partition information/result/refusal; BACKUP/RESTORE command output | existing Terminal content invalidation and client DAMAGE | `term_execute` grid invalidation, desktop client damage; command semantics tested separately | no Terminal layout or protocol change | disk terminal (`WM_ROW=37`) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

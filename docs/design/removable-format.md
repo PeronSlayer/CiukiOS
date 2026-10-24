@@ -18,8 +18,8 @@ to 11 characters. The modern command's overwrite switches are not evidence
 for Windows 98 zeroing every data sector.
 
 Implement quick metadata recreation or full read verification followed by
-metadata recreation. Abort on an unreadable sector; bad-cluster salvage and
-low-level floppy track formatting remain gaps. FAT labels follow G6's ASCII
+metadata recreation. G29c adds low-level floppy track formatting and FAT12
+bad-data-cluster marking; unreadable metadata still aborts. FAT labels follow G6's ASCII
 validation and uppercasing. Formatting never copies system files or claims
 that a disk is bootable.
 
@@ -29,10 +29,10 @@ that a disk is bootable.
 there are no new syscalls. The fixed 52-byte `ciuki_media_format` uses media
 version 2 and the physical generation from `MEDIA_GET_STATE`. GET returns
 capacity, current FAT family, allocation size, label and supported family
-mask. FORMAT takes family 12/16/32, Quick flag (zero means Full), and label;
+mask. FORMAT takes family 12/16/32, Quick flag (zero means surface-only Full), optional floppy Low Level flag, and label;
 capacity/allocation/mask fields are outputs. Reserved must be zero.
 
-Only a mounted removable FAT volume is eligible. Fixed/system/optical
+G29c also accepts a retained unformatted removable identity without a FAT mount. Fixed/system/optical
 drives, Setup mode, uncertain durability, stale generations and devices with
 more than one mounted volume are refused. Partitioned USB media keep their
 existing FAT family to preserve the partition type; whole media may select
@@ -43,14 +43,22 @@ working directories in subfolders block formatting. Generation and
 quarantine are checked for every raw transfer. Failure after detachment
 leaves the volume unpublished; no uncertain filesystem is exposed.
 
-Full scanning happens before metadata replacement. The primary boot sector
+A surface-only Full scan precedes metadata replacement. Low-level floppy
+formatting is already destructive when FORMAT TRACK establishes sector IDs. The primary boot sector
 is invalidated and flushed before metadata writes, then published last
 after FATs/root/FSInfo/backup sectors have been flushed. No rollback can
 recover files after destructive metadata writes. The boot sector remains
 invalid after an interrupted operation until its final publication.
 
-Unformatted USB/floppy discovery has no assigned volume/letter in the
-current mount layer, so it cannot yet be selected. It remains a reported
-G29 gap, along with format progress/cancellation, low-level floppy format,
-system-file copying and partition-family changes. No image or hardware
-qualification is claimed by host tests.
+G29c publishes blank removable identities to media state without creating a
+FAT namespace. Files includes those letters and offers Format on root access.
+Full floppy formatting invokes the existing FDC FORMAT TRACK service, then
+checks individual sectors and marks unreadable FAT12 data clusters FF7h in
+both FATs. Metadata, generation, write-protect and quarantine errors refuse.
+Completely unformatted floppies use a read-only mechanical presence probe
+and nominal CMOS geometry before the user confirms low-level formatting.
+
+System-file copying still needs an approved unified native floppy boot path;
+no historical floppy loader is used. Progress/cancellation within a running
+format and partition-family changes remain gaps. Host tests do not claim
+image or hardware qualification. See `disk-tools-continuation.md`.

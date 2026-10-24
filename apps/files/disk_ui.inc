@@ -4,9 +4,9 @@
 
 enum {
     D_DISK_SCAN=212, D_CLEANUP, D_CLEAN_CONFIRM, D_DISK_PROGRESS,
-    D_FORMAT, D_FORMAT_CONFIRM, D_LOW_DISK, D_DISK_SUMMARY
+    D_FORMAT, D_FORMAT_CONFIRM, D_LOW_DISK, D_DISK_SUMMARY, D_COPY_SOURCE, D_COPY_DEST, D_COPY_CONFIRM, D_BACKUP, D_BACKUP_CONFIRM
 };
-enum { DISK_CLEAN_SCAN=1, DISK_FORMAT_QUERY, DISK_CLEAN_RUN, DISK_FORMAT_RUN, DISK_SPACE_QUERY };
+enum { DISK_CLEAN_SCAN=1, DISK_FORMAT_QUERY, DISK_CLEAN_RUN, DISK_FORMAT_RUN, DISK_SPACE_QUERY, DISK_COPY_READ, DISK_COPY_WRITE, DISK_BACKUP_RUN };
 struct files_disk {
     pthread_mutex_t lock;
     pthread_t thread;
@@ -16,8 +16,21 @@ struct files_disk {
     struct fm_cleanup_progress view;
     struct ciuki_media_format format;
     struct ciuki_media_space space;
+    struct ciuki_floppy_image image;
+    void *image_data;
+    unsigned source;
+    uint32_t source_generation;
+    int (*image_call)(int,struct ciuki_floppy_image *,void *);
+    int (*load_call)(unsigned);
+    int (*state_call)(struct ciuki_media_state *);
     int (*format_call)(int,struct ciuki_media_format *);
     int (*space_call)(unsigned,struct ciuki_media_space *);
+    int (*backup_call)(int,const char *,const char *,const char *,const char *,enum bk_replace,const struct bk_callbacks *,struct bk_result *);
+    char archive[FM_PATH], backup_source[FM_PATH], base[FM_PATH], restore_root[FM_PATH];
+    int backup_mode, backup_page;
+    unsigned backup_invalid;
+    enum bk_replace replace;
+    struct bk_result backup_result;
     unsigned drive, selected;
     int mode, started, done, error, cancel, warning;
 };
@@ -34,6 +47,12 @@ static void disk_publish(struct files_disk *w)
 {
     struct fm_cleanup_progress p; fm_cleanup_progress(w->cleanup,&p);
     pthread_mutex_lock(&w->lock); w->view=p; pthread_mutex_unlock(&w->lock);
+    du_wake(w->app->ui);
+}
+static void disk_backup_progress(void *ctx,const char *path,const struct bk_result *result)
+{
+    (void)path; struct files_disk *w=ctx;
+    pthread_mutex_lock(&w->lock); w->backup_result=*result; pthread_mutex_unlock(&w->lock);
     du_wake(w->app->ui);
 }
 static void *disk_run(void *ctx)
@@ -53,6 +72,31 @@ static void *disk_run(void *ctx)
         }
     } else if (w->mode==DISK_SPACE_QUERY)
         error=w->space_call ? w->space_call(w->drive,&w->space) : -ENOSYS;
+    else if (w->mode==DISK_BACKUP_RUN) {
+        const struct bk_callbacks cb={.ctx=w,.cancel=disk_cancelled,.progress=disk_backup_progress};
+        struct bk_result result={0};
+        error=w->backup_call ? w->backup_call(w->backup_mode,w->archive,w->backup_source,w->base,w->restore_root,w->replace,&cb,&result) : -ENOSYS;
+        pthread_mutex_lock(&w->lock); w->backup_result=result; pthread_mutex_unlock(&w->lock);
+    }
+    else if (w->mode==DISK_COPY_READ || w->mode==DISK_COPY_WRITE) {
+        if (!w->image_call || !w->load_call || !w->state_call || !w->format_call) error=-ENOSYS;
+        if (!error && disk_cancelled(w)) error=-ECANCELED;
+        if (!error) error=w->load_call(w->drive);
+        struct ciuki_media_state state={0};
+        if (!error) error=w->state_call(&state);
+        if (!error && (!(state.removable_mask&(1u<<w->drive)) || state.type[w->drive]!=CIUKI_MEDIA_FLOPPY)) error=-ENXIO;
+        struct ciuki_media_format format={.version=CIUKI_MEDIA_VERSION,.size=sizeof(format),.drive=w->drive};
+        if (!error) { format.generation=state.generation[w->drive]; error=w->format_call(0,&format); }
+        if (!error && w->mode==DISK_COPY_READ) {
+            if (!format.sectors || format.sectors>5760) error=-EINVAL;
+            else { free(w->image_data); w->image_data=malloc((size_t)format.sectors*512); if (!w->image_data) error=-ENOMEM; }
+            if (!error) { w->image=(struct ciuki_floppy_image){.version=CIUKI_MEDIA_VERSION,.size=sizeof(w->image),.sectors=format.sectors}; w->source_generation=format.generation; }
+        }
+        if (!error && (format.sectors!=w->image.sectors || (w->mode==DISK_COPY_WRITE && w->source==w->drive && format.generation==w->source_generation))) error=-EINVAL;
+        if (!error && disk_cancelled(w)) error=-ECANCELED;
+        if (!error) { w->image.drive=w->drive; w->image.generation=format.generation; error=w->image_call(w->mode==DISK_COPY_WRITE,&w->image,w->image_data); }
+        if (!error && w->mode==DISK_COPY_READ && disk_cancelled(w)) error=-ECANCELED;
+    }
     else error=w->format_call ? w->format_call(w->mode==DISK_FORMAT_RUN,&w->format) : -ENOSYS;
     pthread_mutex_lock(&w->lock); w->error=error; w->done=1; pthread_mutex_unlock(&w->lock);
     du_wake(w->app->ui);
@@ -61,12 +105,12 @@ static void *disk_run(void *ctx)
 static void disk_wait_dialog(struct files_app *a,int mode)
 {
     const char *title=mode==DISK_CLEAN_SCAN ? "Disk Cleanup" : mode==DISK_FORMAT_QUERY ? "Format" :
-                      mode==DISK_CLEAN_RUN ? "Disk Cleanup" : "Format";
+                      mode==DISK_CLEAN_RUN ? "Disk Cleanup" : mode==DISK_BACKUP_RUN ? "Backup" : (mode==DISK_COPY_READ || mode==DISK_COPY_WRITE) ? "Copy Disk" : "Format";
     const char *text=mode==DISK_CLEAN_SCAN ? "Calculating how much space can be freed..." :
                      mode==DISK_FORMAT_QUERY ? "Reading removable disk information..." :
-                     mode==DISK_CLEAN_RUN ? "Removing selected files..." : "Formatting disk. Please wait.";
+                     mode==DISK_CLEAN_RUN ? "Removing selected files..." : mode==DISK_BACKUP_RUN ? "Processing the backup job..." : mode==DISK_COPY_READ ? "Reading the source disk..." : mode==DISK_COPY_WRITE ? "Writing and verifying the destination disk..." : "Formatting disk. Please wait.";
     du_progress(a->ui,mode==DISK_CLEAN_SCAN || mode==DISK_FORMAT_QUERY ? D_DISK_SCAN : D_DISK_PROGRESS,title,text,0,0);
-    if (mode==DISK_FORMAT_RUN) a->ui->dialog.items[0].disabled=1;
+    if (mode==DISK_FORMAT_RUN || mode==DISK_COPY_WRITE) a->ui->dialog.items[0].disabled=1;
 }
 static int disk_launch(struct files_app *a,int mode)
 {
@@ -87,12 +131,12 @@ static void disk_stop(struct files_app *a)
     __atomic_store_n(&w->cancel,1,__ATOMIC_RELEASE);
     if (w->started) pthread_join(w->thread,NULL);
     fm_cleanup_destroy(w->cleanup);
-    pthread_mutex_destroy(&w->lock); free(w); a->disk=NULL;
+    pthread_mutex_destroy(&w->lock); free(w->image_data); free(w); a->disk=NULL;
 }
 static int disk_close_request(struct files_app *a)
 {
     struct files_disk *w=a->disk;
-    if (w->mode==DISK_FORMAT_RUN) {
+    if (w->mode==DISK_FORMAT_RUN || w->mode==DISK_COPY_WRITE) {
         if (a->close_declined) a->close_declined(a);
     } else {
         a->close_pending=1;
@@ -133,6 +177,122 @@ static void disk_sheet(struct files_app *a,int id,const char *title,const char *
     du_set_text(&a->ui->dialog.items[0],button);
     a->ui->dialog.items[2].hidden=1; a->ui->dialog.items[2].disabled=1;
 }
+static void disk_backup_capture(struct files_app *a)
+{
+    struct files_disk *w=a->disk; struct du_dialog *d=&a->ui->dialog;
+    w->backup_invalid&=~(1u<<w->backup_page);
+    const char *inputs[2]; char *outputs[2]; unsigned count=1;
+    if (!w->backup_page) {
+        for (unsigned i=0;i<4;i++) if (d->items[4+i].value) w->backup_mode=(int)i;
+        inputs[0]=d->items[9].text; outputs[0]=w->archive;
+    } else if (w->backup_page==1) {
+        inputs[0]=d->items[5].text; outputs[0]=w->backup_source;
+        inputs[1]=d->items[7].text; outputs[1]=w->base; count=2;
+    } else {
+        inputs[0]=d->items[5].text; outputs[0]=w->restore_root;
+        for (unsigned i=0;i<3;i++) if (d->items[6+i].value) w->replace=(enum bk_replace)i;
+    }
+    for (unsigned i=0;i<count;i++) {
+        size_t n=strlen(inputs[i]);
+        if (n>=FM_PATH) w->backup_invalid|=1u<<w->backup_page;
+        else memcpy(outputs[i],inputs[i],n+1);
+    }
+}
+static void disk_backup_page(struct files_app *a)
+{
+    struct files_disk *w=a->disk; struct du_dialog *d=&a->ui->dialog;
+    for (unsigned i=4;i<DU_DIALOG_ITEMS;i++) memset(&d->items[i],0,sizeof(d->items[i]));
+    d->count=4; w->backup_page=d->items[3].active;
+    if (!w->backup_page) {
+        static const char *const modes[]={"&Full","&Differential","&Verify","&Restore"};
+        for (unsigned i=0;i<4;i++) du_property_control(a->ui,4+i,DU_RADIO,650+(int)i,(struct du_rect){20+(int)i*120,92,116,24},modes[i])->value=(int)i==w->backup_mode;
+        du_property_control(a->ui,8,DU_LABEL,0,(struct du_rect){20,140,100,24},"Archive:");
+        du_property_control(a->ui,9,DU_EDIT,660,(struct du_rect){125,138,355,24},w->archive);
+        snprintf(d->text,sizeof(d->text),"Choose the job and archive. Select files and restore options on the other tabs.");
+    } else if (w->backup_page==1) {
+        du_property_control(a->ui,4,DU_LABEL,0,(struct du_rect){20,92,112,24},"Files / folder:");
+        du_property_control(a->ui,5,DU_EDIT,661,(struct du_rect){134,90,350,24},w->backup_source);
+        du_property_control(a->ui,6,DU_LABEL,0,(struct du_rect){20,140,112,24},"Full backup:");
+        du_property_control(a->ui,7,DU_EDIT,662,(struct du_rect){134,138,350,24},w->base);
+        snprintf(d->text,sizeof(d->text),"Full: copy the selected file or folder and its subfolders.\nDifferential: use the full backup's fixed file set.");
+    } else {
+        du_property_control(a->ui,4,DU_LABEL,0,(struct du_rect){20,92,112,24},"Restore folder:");
+        du_property_control(a->ui,5,DU_EDIT,663,(struct du_rect){134,90,350,24},w->restore_root);
+        static const char *const policies[]={"&Never replace files","Replace only &older files","Replace files &always"};
+        for (unsigned i=0;i<3;i++) du_property_control(a->ui,6+i,DU_RADIO,670+(int)i,(struct du_rect){24,142+(int)i*34,430,24},policies[i])->value=i==(unsigned)w->replace;
+        snprintf(d->text,sizeof(d->text),"Leave the restore folder blank for original locations.\nAn alternate folder preserves the complete original path.");
+    }
+    d->focus=0; du_invalidate(a->ui,d->box);
+}
+static void disk_backup_changed(struct du_ui *u,const struct du_event *e,void *ctx)
+{
+    struct files_app *a=ctx;
+    if (e->type==DU_EV_SELECT && u->dialog.items[3].active!=(unsigned)a->disk->backup_page) {
+        disk_backup_capture(a); disk_backup_page(a);
+    }
+}
+static int disk_backup_accept(struct du_ui *u,int button,void *ctx)
+{
+    if (button) return 0;
+    struct files_app *a=ctx; struct files_disk *w=a->disk; disk_backup_capture(a);
+    if (w->backup_invalid) { snprintf(u->dialog.text,sizeof(u->dialog.text),"A path is too long."); return 1; }
+    char *outputs[]={w->archive,w->backup_source,w->base,w->restore_root};
+    for (unsigned i=0;i<4;i++) {
+        if (!outputs[i][0] && i>1) continue;
+        char path[FM_PATH];
+        if (fm_posix_path(path,outputs[i]) || path[0]!='/') {
+            snprintf(u->dialog.text,sizeof(u->dialog.text),"Enter absolute file or folder paths."); return 1;
+        }
+        memcpy(outputs[i],path,strlen(path)+1);
+    }
+    if (w->backup_mode==1 && !w->base[0]) { snprintf(u->dialog.text,sizeof(u->dialog.text),"Differential needs the full backup's catalogue."); return 1; }
+    return 0;
+}
+int files_backup_open(struct files_app *a,const char *source,const char *archive,int mode)
+{
+    if (!a->backup_call) return -ENOSYS;
+    if (mode<0 || mode>3 || a->loading || a->reading || a->job_active || files_disk_busy(a) || du_dialog_id(a->ui)) return -EBUSY;
+    disk_stop(a); struct files_disk *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
+    int e=pthread_mutex_init(&w->lock,NULL); if (e) { free(w); return -e; }
+    a->disk=w; w->app=a; w->backup_call=a->backup_call; w->backup_mode=mode; w->replace=BK_OLDER;
+    snprintf(w->archive,sizeof(w->archive),"%s",archive ? archive : "/Documents/Backup.cbk");
+    snprintf(w->backup_source,sizeof(w->backup_source),"%s",source ? source : "/Documents");
+    static const struct du_item pages[]={{.text={"Job"}},{.text={"Files"}},{.text={"Restore"}}};
+    du_property_sheet(a->ui,D_BACKUP,"Backup",510,350,pages,3);
+    struct du_dialog *d=&a->ui->dialog; d->accept=disk_backup_accept; d->accept_ctx=a;
+    d->changed=disk_backup_changed; d->sheet_ctx=a; d->items[2].hidden=d->items[2].disabled=1;
+    du_set_text(&d->items[0],"&Start"); disk_backup_page(a);
+    return 0;
+}
+int files_copy_disk_open(struct files_app *a,unsigned drive)
+{
+    if (drive>=2 || a->loading || a->reading || a->job_active || files_disk_busy(a) || du_dialog_id(a->ui)) return -EBUSY;
+    if (!a->media_image || a->media.type[drive]!=CIUKI_MEDIA_FLOPPY) return -ENODEV;
+    disk_stop(a);
+    struct files_disk *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
+    int e=pthread_mutex_init(&w->lock,NULL); if (e) { free(w); return -e; }
+    a->disk=w; w->app=a; w->drive=drive; w->source=drive; w->image_call=a->media_image;
+    w->load_call=a->media_load; w->state_call=a->media_read; w->format_call=a->media_format;
+    char text[160]; snprintf(text,sizeof(text),"Insert the SOURCE disk into drive %c:.\nThe complete disk will be read before you insert the destination.",'A'+drive);
+    static const char *const buttons[]={"&Read source", "Cancel"};
+    du_message(a->ui,D_COPY_SOURCE,"Copy Disk",text,DU_DLG_ICON_INFO,buttons,2,0,1);
+    return 0;
+}
+static int disk_copy_accept(struct du_ui *u,int button,void *ctx)
+{
+    struct files_app *a=ctx; if (!button) a->disk->drive=u->dialog.items[5].value ? 1 : 0;
+    return 0;
+}
+static void disk_copy_destination(struct files_app *a)
+{
+    disk_sheet(a,D_COPY_DEST,"Copy Disk - Destination","&Next");
+    struct du_dialog *d=&a->ui->dialog; d->accept=disk_copy_accept; d->accept_ctx=a;
+    snprintf(d->text,sizeof(d->text),"Source read successfully. Choose the destination drive.\nFor a single drive, choose the source drive again.");
+    for (unsigned drive=0;drive<2;drive++) {
+        struct du_widget *b=du_property_control(a->ui,4+drive,DU_RADIO,640+(int)drive,(struct du_rect){24,90+(int)drive*32,250,24},drive ? "Drive &B:" : "Drive &A:");
+        b->value=drive==a->disk->source; b->disabled=a->media.type[drive]!=CIUKI_MEDIA_FLOPPY;
+    }
+}
 static int disk_options_accept(struct du_ui *u,int button,void *ctx)
 {
     struct files_app *a=ctx; struct files_disk *w=a->disk;
@@ -154,7 +314,7 @@ static int disk_options_accept(struct du_ui *u,int button,void *ctx)
             snprintf(u->dialog.text,sizeof(u->dialog.text),"The volume label contains an invalid character."); return 1;
         }
         w->format.filesystem=family;
-        w->format.flags=u->dialog.items[9].value ? CIUKI_FORMAT_QUICK : 0;
+        w->format.flags=u->dialog.items[9].value ? CIUKI_FORMAT_QUICK : w->drive<2 ? CIUKI_FORMAT_LOW_LEVEL : 0;
         memcpy(w->format.label,label,n+1);
     }
     return 0;
@@ -210,11 +370,32 @@ static void disk_format_options(struct files_app *a)
 static int disk_dialog_result(struct files_app *a,const struct du_event *e)
 {
     struct files_disk *w=a->disk;
-    if (!w || e->id<D_DISK_SCAN || e->id>D_DISK_SUMMARY) return 0;
+    if (!w || e->id<D_DISK_SCAN || e->id>D_BACKUP_CONFIRM) return 0;
     switch (e->id) {
     case D_DISK_SCAN: case D_DISK_PROGRESS:
-        if (w->mode!=DISK_FORMAT_RUN) __atomic_store_n(&w->cancel,1,__ATOMIC_RELEASE);
+        if (w->mode!=DISK_FORMAT_RUN && w->mode!=DISK_COPY_WRITE) __atomic_store_n(&w->cancel,1,__ATOMIC_RELEASE);
         if (w->started) disk_wait_dialog(a,w->mode);
+        break;
+    case D_BACKUP:
+        if (!e->index) {
+            const char *text=w->backup_mode==3 ? "Restore files using the selected overwrite policy?\nExisting files may be replaced. A blank restore folder means original locations." : w->backup_mode==2 ? "Verify the complete backup catalogue and every file checksum?" : "Create this backup job?\nIf the archive already exists, it will be replaced after the new archive is complete.";
+            du_message(a->ui,D_BACKUP_CONFIRM,"Confirm Backup",text,DU_DLG_ICON_WARNING,yes_no,2,1,1);
+        }
+        break;
+    case D_BACKUP_CONFIRM:
+        if (!e->index) (void)disk_launch(a,DISK_BACKUP_RUN);
+        break;
+    case D_COPY_SOURCE:
+        if (!e->index) (void)disk_launch(a,DISK_COPY_READ);
+        break;
+    case D_COPY_DEST:
+        if (!e->index) {
+            char text[240]; snprintf(text,sizeof(text),"Insert the DESTINATION disk into drive %c:.\nWARNING: All data on this disk will be erased.\n%sContinue?",'A'+w->drive,w->drive==w->source ? "Remove the source disk first.\n" : "");
+            du_message(a->ui,D_COPY_CONFIRM,"Confirm Copy Disk",text,DU_DLG_ICON_WARNING,yes_no,2,1,1);
+        }
+        break;
+    case D_COPY_CONFIRM:
+        if (!e->index) (void)disk_launch(a,DISK_COPY_WRITE);
         break;
     case D_CLEANUP: case D_FORMAT:
         if (e->index==0) {
@@ -232,6 +413,8 @@ static int disk_dialog_result(struct files_app *a,const struct du_event *e)
         break;
     default: break;
     }
+    if (!w->started && e->id!=D_COPY_SOURCE && e->id!=D_COPY_DEST) { free(w->image_data); w->image_data=NULL; }
+    if (!w->started && (e->id==D_COPY_SOURCE || e->id==D_COPY_DEST) && e->index!=0) { free(w->image_data); w->image_data=NULL; }
     return 1;
 }
 static void disk_allocation_completed(struct files_app *a)
@@ -243,8 +426,12 @@ static void disk_service(struct files_app *a)
 {
     struct files_disk *w=a->disk;
     if (w && w->started) {
-        pthread_mutex_lock(&w->lock); int done=w->done,error=w->error; struct fm_cleanup_progress view=w->view; pthread_mutex_unlock(&w->lock);
+        pthread_mutex_lock(&w->lock); int done=w->done,error=w->error; struct fm_cleanup_progress view=w->view; struct bk_result backup=w->backup_result; pthread_mutex_unlock(&w->lock);
         if (!done) {
+            if (w->mode==DISK_BACKUP_RUN && du_dialog_id(a->ui)==D_DISK_PROGRESS) {
+                char text[200]; snprintf(text,sizeof(text),"Files: %u    Folders: %u    Skipped: %u\nProcessed: %llu bytes",backup.files,backup.folders,backup.skipped,(unsigned long long)backup.bytes);
+                if (strcmp(a->ui->dialog.text,text)) { snprintf(a->ui->dialog.text,sizeof(a->ui->dialog.text),"%s",text); du_invalidate(a->ui,a->ui->dialog.box); }
+            }
             if (w->mode==DISK_CLEAN_RUN && du_dialog_id(a->ui)==D_DISK_PROGRESS) {
                 char text[200]; snprintf(text,sizeof(text),"Deleted %u file(s), %llu bytes.\nSkipped: %u    Errors: %u",view.items,(unsigned long long)view.bytes,view.skipped,view.errors);
                 if (strcmp(a->ui->dialog.text,text)) { snprintf(a->ui->dialog.text,sizeof(a->ui->dialog.text),"%s",text); du_invalidate(a->ui,a->ui->dialog.box); }
@@ -252,10 +439,17 @@ static void disk_service(struct files_app *a)
             return;
         }
         pthread_join(w->thread,NULL); w->started=0;
+        if (w->mode==DISK_COPY_WRITE || (w->mode==DISK_COPY_READ && error)) { free(w->image_data); w->image_data=NULL; }
         if (a->close_pending) { if (a->close) a->close(a); return; }
         if (w->mode!=DISK_SPACE_QUERY) du_dialog_close(a->ui);
         if (error && w->mode==DISK_SPACE_QUERY) { /* A background warning query is best effort. */ }
-        else if (error && error!=-ECANCELED) error_box(a,w->mode==DISK_CLEAN_SCAN || w->mode==DISK_CLEAN_RUN ? "Disk Cleanup" : "Format","The operation could not be completed:",error);
+        else if (error && error!=-ECANCELED) error_box(a,w->mode==DISK_BACKUP_RUN ? "Backup" : w->mode==DISK_COPY_READ || w->mode==DISK_COPY_WRITE ? "Copy Disk" : w->mode==DISK_CLEAN_SCAN || w->mode==DISK_CLEAN_RUN ? "Disk Cleanup" : "Format","The operation could not be completed:",error);
+        else if (w->mode==DISK_BACKUP_RUN) {
+            char text[256]; snprintf(text,sizeof(text),"%s\nFiles: %u    Folders: %u    Skipped: %u\nProcessed: %llu bytes",error==-ECANCELED ? "Backup job cancelled." : "Backup job completed.",backup.files,backup.folders,backup.skipped,(unsigned long long)backup.bytes);
+            du_message(a->ui,D_DISK_SUMMARY,"Backup",text,DU_DLG_ICON_INFO,NULL,0,0,0);
+        }
+        else if (!error && w->mode==DISK_COPY_READ) disk_copy_destination(a);
+        else if (!error && w->mode==DISK_COPY_WRITE) du_message(a->ui,D_DISK_SUMMARY,"Copy Disk","Disk copied and verified successfully.",DU_DLG_ICON_INFO,NULL,0,0,0);
         else if (!error && w->mode==DISK_CLEAN_SCAN) disk_cleanup_options(a);
         else if (!error && w->mode==DISK_FORMAT_QUERY) {
             if (!w->format.supported_filesystems) error_box(a,"Format","No FAT format fits this disk:",-EINVAL);

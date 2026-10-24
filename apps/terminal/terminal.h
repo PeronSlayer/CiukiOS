@@ -31,6 +31,7 @@ struct term_host {
     time_t (*now)(void *);
     void (*pump)(void *);
     void (*quit)(void *);
+    int (*disktool)(void *, int, char **);
 };
 struct terminal {
     struct term_host host;
@@ -52,6 +53,7 @@ struct terminal {
     unsigned pending_power;
     struct du_menu_item menu_items[3]; struct du_menu menu;
 };
+int term_disktool(struct terminal *, int, char **);
 int term_attach(struct terminal *, struct du_ui *, const struct term_host *);
 void term_detach(struct terminal *);
 void term_write(struct terminal *, const char *);

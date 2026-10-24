@@ -176,12 +176,12 @@ def build():
     archive = [sdk["tools"]["llvm-ar"]["path"], "rcsD", str(library), *(str(p) for p in objects)]
     subprocess.run(archive, check=True, env=env)
     commands["libdeskui"] = archive
-    sources["files"] = ["autoplay_content.c", "../files/files.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
+    sources["files"] = ["autoplay_content.c", "../files/files.c", "../files/backup.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/disktools.c", "../files/backup.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c"]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
     sources["control"] = ["startup.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
@@ -193,7 +193,7 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
+                          *(["-ldisk"] if name == "terminal" else []), *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Toolkit/compositor remain integer-only; TinyGL's scene uses the SDK x87 ABI.

@@ -142,8 +142,10 @@ int floppy_mount(unsigned drive)
      * mounted is a no-op; a DOS lease keeps the drive (EBUSY). */
     if (drive<2 && native_mounted[drive]) return 0;
     struct blkdev *b; int e=floppy_native_open(drive,&b);
+    bool blank=false;
+    if (e==-FS_EIO && !controller.quarantined) { e=fdc_native_blank(&controller,drive,&b); blank=!e; }
     if (e) return e;
-    e=storage_add_floppy(storage_get(),b,drive);
+    e=blank ? storage_add_blank_floppy(storage_get(),b,drive) : storage_add_floppy(storage_get(),b,drive);
     if (e) (void)floppy_native_close(drive);
     else { native_mounted[drive]=true; (void)storage_activate_removable(storage_get(),b); }
     return e;
@@ -155,4 +157,13 @@ int floppy_unmount(unsigned drive, bool surprise)
     if (!e) e=fdc_native_close(&controller,drive);
     if (!e) native_mounted[drive]=false;
     return e;
+}
+
+/* Called only by the namespace-reserved removable formatter. The existing
+ * FDC native lease remains held across FORMAT TRACK and the FAT write. */
+int floppy_format_track(struct blkdev *dev, unsigned cylinder, unsigned head)
+{
+    for (unsigned d=0;d<2;d++) if (dev==&controller.drive[d].block && native_mounted[d])
+        return fdc_format(&controller.drive[d].native,cylinder,head,0xf6);
+    return -FS_EBUSY;
 }

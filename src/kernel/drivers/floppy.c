@@ -467,6 +467,31 @@ int fdc_native_open(struct fdc *c, unsigned drive, struct blkdev **b)
     if (e) { (void)fdc_release(&d->native); return e; }
     *b=&d->block; return 0;
 }
+/* Read-only mechanical presence probe for a disk without sector IDs.
+ * Nominal CMOS geometry is a format choice, not a successfully read BPB. */
+int fdc_native_blank(struct fdc *c, unsigned drive, struct blkdev **out)
+{
+    if (!c || !out || drive>=FDC_DRIVES) return -FS_EINVAL;
+    struct fdc_drive *d=&c->drive[drive];
+    int e=fdc_acquire(c,drive,FDC_NATIVE,1,&d->native); if (e) return e;
+    e=gate(c);
+    if (!e) {
+        if (!fdc_geometry(d->type,&d->geometry)) e=-FS_EINVAL;
+        if (!e) e=start(&d->native);
+        if (!e && (rd(c,7)&0x80)) changed(d);
+        if (!e) e=seek(c,drive,0,true);
+        if (!e) e=seek(c,drive,1,false);
+        if (!e) e=seek(c,drive,0,false);
+        if (!e && (rd(c,7)&0x80)) e=-FS_EIO;
+        if (!e) {
+            d->block.capacity=(uint32_t)d->geometry.cylinders*d->geometry.heads*d->geometry.sectors;
+            d->changed=d->change_high=false; d->established=true;
+        }
+        e=finish(c,e);
+    }
+    if (e) { (void)fdc_release(&d->native); return e; }
+    *out=&d->block; return 0;
+}
 int fdc_native_close(struct fdc *c, unsigned drive)
 { return !c || drive>=FDC_DRIVES ? -FS_EINVAL : fdc_release(&c->drive[drive].native); }
 int fdc_attach(struct fdc *c, const struct fdc_io *io, const struct fdc_evidence *ev,

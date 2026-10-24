@@ -6,7 +6,7 @@ static int slow_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void
     (void)ctx;
     if (!strcmp(path,"/tmp")) {
         __atomic_store_n(&entered,1,__ATOMIC_RELEASE);
-        while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={0,1000000}; nanosleep(&t,NULL); }
+        while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
     }
     return fake_vfs.list(fake_vfs.ctx,path,flags,emit,arg);
 }
@@ -14,7 +14,7 @@ static int slow_format(int write,struct ciuki_media_format *r)
 {
     if (write) {
         __atomic_store_n(&entered,1,__ATOMIC_RELEASE);
-        while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={0,1000000}; nanosleep(&t,NULL); }
+        while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
     }
     return disk_test_format(write,r);
 }
@@ -24,13 +24,13 @@ static int delayed_media(struct ciuki_media_state *state)
 {
     (void)state;
     __atomic_store_n(&entered,1,__ATOMIC_RELEASE);
-    while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={0,1000000}; nanosleep(&t,NULL); }
+    while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
     return 0;
 }
 static void wait_entered(void)
 {
     for (unsigned k=0;k<10000 && !__atomic_load_n(&entered,__ATOMIC_ACQUIRE);k++) {
-        struct timespec t={0,1000000}; nanosleep(&t,NULL);
+        struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL);
     }
     assert(__atomic_load_n(&entered,__ATOMIC_ACQUIRE));
 }
@@ -92,6 +92,9 @@ int main(int argc,char **argv)
     assert(argc<=2);
     disk_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
     lifetimes();
+    copy_disk_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
+    backup_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
+    blank_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
     puts("PASS G29 disk dialogs: worker-only I/O, drive scope, preview, Cancel, confirmation, cleanup, format choices/label/full, busy refusal, allocation warnings and Cleanup action");
     return 0;
 }

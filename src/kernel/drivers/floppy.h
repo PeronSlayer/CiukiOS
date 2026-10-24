@@ -79,6 +79,7 @@ int fdc_transfer(struct fdc_lease *, uint64_t lba, unsigned count, void *, bool 
 int fdc_format(struct fdc_lease *, unsigned cylinder, unsigned head, uint8_t fill);
 /* Native FAT12 adapter: mount while held; unmount before close. */
 int fdc_native_open(struct fdc *, unsigned drive, struct blkdev **);
+int fdc_native_blank(struct fdc *, unsigned drive, struct blkdev **);
 int fdc_native_close(struct fdc *, unsigned drive);
 void floppy_init(void);
 struct fdc *floppy_controller(void);

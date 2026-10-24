@@ -22,6 +22,7 @@ struct storage_volume {
     unsigned disk, partition, drive;
     int error;
     bool present, read_gate, removable, safely_removed;
+    bool unformatted; /* retained raw media identity; no FAT namespace */
     bool formatting; /* namespace protected: retained raw-format owner, even while detached */
     bool optical; /* f9-01: Setup C: over the boot CD's image view; disk = ATA slot */
     uint32_t read_sequence, write_sequence;
@@ -49,6 +50,7 @@ struct storage_ntfs {
 #define STORAGE_LEASE_PHASE 32u
 #define STORAGE_LEASE_REASON 24u
 struct storage_lease {
+    bool partition_tool; /* exclusive nonboot editor, never Setup publish authority */
     uint32_t holder, state, generation; /* state: CIUKI_DISK_LEASE_* */
     uint32_t drive, reasons;            /* published letter index and its mount reasons */
     uint64_t reads, writes, flushes;    /* raw node sectors and flushes */
@@ -115,6 +117,7 @@ int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
  * never reused. Dirty removable media stay read-only; no recovery writes. */
 int storage_add_removable(struct storage *, struct blkdev *);
 /* Whole floppy media only, with a native drive lease held through detach. */
+int storage_add_blank_floppy(struct storage *, struct blkdev *, unsigned drive);
 int storage_add_floppy(struct storage *, struct blkdev *, unsigned drive);
 int storage_add_removable_bounded(struct storage *, struct blkdev *,
                                   bool (*cancel)(void *), void (*pause)(void *), void *);
@@ -123,6 +126,10 @@ int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surp
 /* G29: query or exclusively reformat one mounted removable FAT volume.
  * Record is already copied, returns FS errors; physical generation required. */
 struct ciuki_media_format;
+struct ciuki_floppy_image;
+typedef int (*storage_floppy_copy_fn)(void *, uint32_t offset, void *, uint32_t bytes, bool output);
+int storage_floppy_copy(struct storage *, struct ciuki_floppy_image *, storage_floppy_copy_fn, void *, bool write);
+int storage_floppy_image(struct storage *, struct ciuki_floppy_image *, void *, bool write);
 int storage_format_removable(struct storage *, struct ciuki_media_format *, bool execute);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 int storage_add_ro_locked(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
