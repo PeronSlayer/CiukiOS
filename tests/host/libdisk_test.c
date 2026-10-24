@@ -709,7 +709,8 @@ static void test_authority(void)
     CHECK(ctl(0, DISK_LEASE_RELEASE, &bad, sizeof(bad)) == -EOPNOTSUPP);
     bad.version = 1; bad.size = 8; CHECK(ctl(0, DISK_LEASE_RELEASE, &bad, sizeof(bad)) == -EINVAL);
     CHECK(ctl(0, DISK_LEASE_RELEASE, &q, 8) == -EINVAL);
-    CHECK(ctl(0, 0x4409, &q, sizeof(q)) == -ENOTTY && ctl(0, 0x4301, &q, sizeof(q)) == -ENOTTY);
+    /* 0x4409 is DISK_PARTITION_ACQUIRE (G29c); the first unused disk control is 0x440a. */
+    CHECK(ctl(0, 0x440a, &q, sizeof(q)) == -ENOTTY && ctl(0, 0x4301, &q, sizeof(q)) == -ENOTTY);
     /* Holder 42. */
     OK(acquire(0));
     CHECK(saw("[disk] lease disk=0 pid=42 state=held reason=acquire"));

@@ -149,8 +149,7 @@ def build(out, base, flags):
         'GetTickCount':0,'GetProcessHeap':0,'HeapAlloc':12,'HeapFree':12,
         'GlobalAlloc':8,'GlobalFree':4,'GlobalLock':4,'GlobalUnlock':4,'GlobalSize':4,
         'MultiByteToWideChar':24,'WideCharToMultiByte':32,
-        'CreateFileA':28,'ReadFile':20,'GetFileSize':8,'CloseHandle':4,'FindResourceA':12,'LoadResource':8,'SizeofResource':8,'GetProcAddress':8,'GetModuleHandleA':4,'LoadLibraryA':4}
-        'CreateFileA':28,'ReadFile':20,'WriteFile':20,'FlushFileBuffers':4,'DeleteFileA':4,'CloseHandle':4,'FindResourceA':12,'LoadResource':8,'SizeofResource':8,'GetProcAddress':8,'GetModuleHandleA':4,'LoadLibraryA':4}
+        'CreateFileA':28,'ReadFile':20,'GetFileSize':8,'WriteFile':20,'FlushFileBuffers':4,'DeleteFileA':4,'CloseHandle':4,'FindResourceA':12,'LoadResource':8,'SizeofResource':8,'GetProcAddress':8,'GetModuleHandleA':4,'LoadLibraryA':4}
     imp=objdir/'kernel32.def';imp.write_text('LIBRARY kernel32.dll\nEXPORTS\n'+''.join(f' {n}@{a}\n' for n,a in kernel_imports.items()))
     lib=objdir/'kernel32.lib';subprocess.run(['llvm-dlltool','-m','i386','-k','-d',str(imp),'-l',str(lib)],check=True)
     rc=objdir/'version.rc';rc.write_text((out/'generated/user32.rc').read_text().replace('CiukiOS placeholder user32.dll','CiukiOS USER core'))
