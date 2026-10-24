@@ -83,7 +83,9 @@ static void test_cost_breakdown(void)
             else if(stage==3) memset(out,0,sizeof(out));
             else if(stage==4) CHECK(!ac97_progress(&ac97));
             else if(stage==5) CHECK(!ac97_publish(&ac97,out));
-            else { audio_service(); CHECK(!audio.error && audio.running && ac97.published==AUDIO_LEAD); }
+            /* 2026-10-24 lead decision: the underrun grows the lead to the
+             * gap budget, so the resync primes 28 silent periods, not 8. */
+            else { audio_service(); CHECK(!audio.error && audio.running && ac97.published==audio_gap_lead(AUDIO_GAP_BUDGET_US,AUDIO_RATE)); }
             cost+=audio_cpu_ns()-begin;
         }
         printf("audio cost stage=%s mean_ns=%llu\n",names[stage],(unsigned long long)(cost/count));

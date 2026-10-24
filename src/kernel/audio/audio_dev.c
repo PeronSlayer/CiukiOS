@@ -233,6 +233,14 @@ int audio_settings_flush(void)
 void audio_master_refresh(void) { master_refresh(false); }
 void audio_master_refresh_requested(void) { master_refresh(true); }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
+/* The grown lead kept across an idle stop (audio_held_lead, audio.h). */
+static unsigned held_lead;
+static uint64_t held_since;
+static void lead_hold(void)
+{
+    if (audio.adaptive_lead) { held_lead = audio.adaptive_lead; held_since = g_ticks; }
+    audio.adaptive_lead = 0;
+}
 static bool first_playback;
 static bool playback_logged;
 static uint64_t playback_start, playback_next;
@@ -441,7 +449,7 @@ static void audio_service_locked(void)
         if (!err) {
             audio.running = false;
             audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
-            idle_since = 0; audio_backend_idle(false);
+            idle_since = 0; audio_backend_idle(false); lead_hold();
         }
         control = true;
     } else if (!err && !cursor_retry && tail && silent && b.published - b.retired <= 1) {
@@ -457,7 +465,7 @@ static void audio_service_locked(void)
         if (!err) {
             audio.running = false;
             audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
-            idle_since = 0; audio_backend_idle(false);
+            idle_since = 0; audio_backend_idle(false); lead_hold();
         }
         control = true;
     } else if (err && b.tail_drained) {
@@ -467,6 +475,13 @@ static void audio_service_locked(void)
          * an unpublished quantum if publication raced the final fetch. */
         audio.underruns++;
         transport_log("underrun", &b);
+        /* An exhausted transport proves the lead too short, whatever the
+         * last gap measured: grow it as a late service does, to cover at
+         * least the physical gap budget (an underrun raises the latency
+         * target in glitch-free audio servers too; see the contract). */
+        unsigned covered = service_gap > AUDIO_GAP_BUDGET_US ? service_gap : AUDIO_GAP_BUDGET_US;
+        unsigned grown = audio_gap_lead(covered, audio_output_rate());
+        if (grown > audio.adaptive_lead) audio.adaptive_lead = grown;
         transport_log("recover-stop", &b);
         error_op = "recover_stop";
         stop_snapshot = b;
@@ -516,6 +531,15 @@ static void audio_service_locked(void)
      * published=770 retired=769 → CELV/DCH halt). */
     /* Restore the lead in bounded turns. Deep idle silence is safe even
      * with a paused VM: arrival cuts it only after silence/stop proof. */
+    /* A new session after an idle stop starts with the held lead, decayed
+     * by the idle time: a sound shortly after another one does not begin
+     * with the nominal lead the previous session already outgrew. */
+    if (!audio.running && active && !recovering && held_lead) {
+        uint64_t idle = g_ticks - held_since;
+        unsigned kept = audio_held_lead(held_lead, nominal, idle > UINT32_MAX ? UINT32_MAX : (uint32_t)idle);
+        held_lead = 0;
+        if (kept > audio.adaptive_lead) { audio.adaptive_lead = kept; transport_log("lead-held", &b); }
+    }
     bool tail_start = !active && audio.running && !idle_since;
     if (tail_start) { idle_since = g_ticks; control = true; }
     unsigned limit, published_now = 0;
@@ -597,7 +621,7 @@ static void audio_service_locked(void)
             if (!err) {
                 audio.running = false;
                 audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false);
-                audio.adaptive_lead = 0;
+                lead_hold(); /* kept, then decayed: audio_held_lead */
             }
             control = true;
         }

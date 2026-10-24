@@ -178,6 +178,64 @@ latency budget. A slower negotiated backend needs a recorded period/lead
 decision and equivalent measurements before qualification; never change a
 guest's programmed rate to conceal lateness.
 
+**Lead decision, 2026-10-24: the grown lead survives the idle stop.**
+Evidence: QEMU KVM capture of image `9fe0a02e`
+(`docs/validation/doom-launch-audio-2026-10-24.md`). The idle stop reset the
+adaptive lead to zero and an underrun did not grow it, so every new sound
+began with eight periods (42.667 ms) although the measured service gap was
+134 ms: the startup sound lost 30 ms (WAV 0.31 s, serial L448), the window
+sound 30 s later underran (L1473), `window_close` lost 90 ms 8 s after a
+session that had grown to 28 periods (WAV 125.49 s, L7659), and DOOM
+underran once 10 s after the previous sound (L8716).
+
+Reference model: Windows 98 has no transport rule to copy. Its WDM path
+mixes every client in a cross-application kernel-mode mixer (Windows 98
+Resource Kit, chapter 30, `wrkc30_1.htm`; Microsoft,
+[Windows 98 Support for WDM Audio](https://learn.microsoft.com/en-us/previous-versions/ff539253(v=vs.85)):
+WaveCyclic port driver, no DirectSound hardware mixing), which neither grows
+nor holds an output lead; the latency margin belongs to the application's
+own `waveOut`/DirectSound buffers. CiukiOS's adaptive transport lead (f4-31)
+exists because its ring-0 stretches are not bounded. For
+how long a raised margin should be kept, the established practice of
+glitch-free audio servers is to raise it on an underrun and lower it only
+after a quiet verification period, in small steps (PulseAudio
+[`alsa-sink.c`](https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/blob/master/src/modules/alsa/alsa-sink.c):
+`TSCHED_WATERMARK_INC_STEP_USEC` on underrun,
+`TSCHED_WATERMARK_VERIFY_AFTER_USEC` 20 s, `TSCHED_WATERMARK_DEC_STEP_USEC`
+5 ms per step).
+
+Decision (`src/kernel/include/ciuki/audio.h` `audio_held_lead`,
+`src/kernel/audio/audio_dev.c`):
+
+- An underrun grows the session lead exactly as a late service does, to the
+  periods covering `max(measured gap, AUDIO_GAP_BUDGET_US)` (28 at 48 kHz);
+  the recovery primes that lead. An idle tail drained without client data
+  remains an idle halt, not an underrun.
+- Every transport stop in the idle tail (idle-stop, idle-halt) keeps the
+  grown lead. The next session starts with it for `AUDIO_LEAD_HOLD_MS`
+  (30 s) after the stop; after that it decays by 2 periods every 5 s
+  (`AUDIO_LEAD_DECAY_STEP`, `AUDIO_LEAD_DECAY_MS`) and returns to the nominal
+  eight periods 80 s after the stop (from 28). The record
+  `[audio] transport lead-held` names a session that started with a kept lead.
+- The first sound after a long idle, and the first sound after boot, keep
+  the nominal f4-31/F4-32 lead and latency bound (≤42.667 ms published lead,
+  ≤50 ms with a VM). A sound within the hold starts with up to 149.333 ms of
+  primed silence: its start is later, its playback is not interrupted.
+  `latency_frames` reports that lead.
+- While a session runs its grown lead is not decayed (unchanged f4-31
+  policy); the measured gap record `gap_us` stays the boot-lifetime maximum.
+
+Host evidence: `tests/host/audio/lead_hold_test.inc` replays the serial's
+session sequence through the production service and the ICH DMA fake
+(boot 41.8 ms gap; 28.6 s idle, 73 ms stretch; 8 s idle, 78 ms; 10 s idle,
+87 ms). Pre-decision `audio_dev.c`: each of the three later sessions starts
+with 8 periods and underruns once. After: they start with 28 periods and do
+not underrun; 39.3 s after a stop the start lead is 24; after 120 s it is 8.
+The first sound after boot still underruns once under a 42 ms gap, as the
+nominal bound allows. Two existing cases now expect the grown lead after
+an underrun (`late_refill_test.inc` publication retry, `deadline_test.inc`
+`exhausted_resync`, whose optimized cost is now a 28-period restart).
+
 ### Music decoded reservoir (F4-34, 2026-10-19)
 
 Research checked the pinned [minimp3 API and synchronization guidance](https://raw.githubusercontent.com/lieff/minimp3/ea99364f61c14656440e8d77e9c233ccf3124633/README.md),

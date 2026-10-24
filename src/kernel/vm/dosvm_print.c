@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
+#include <ciuki/process.h>
+#include <ciuki/signal.h>
 #include "dosvm_internal.h"
 /* Private on-disk protocol shared with the native spool producer. */
 #include "../../../apps/libprint/print.h"
@@ -98,6 +100,22 @@ static int print_publish(struct dosvm *v)
     p->slot=p->bytes=0; p->finish=p->failed=false;
     return 0;
 }
+/* The spool worker's doorbell (apps/libprint/print.h, cp_service_notify):
+ * Windows 98's print spooler VxD hands captured DOS output to the 32-bit
+ * spooler; here the published job rings the worker, which otherwise sleeps.
+ * SIGCHLD to the PID in worker.lock\owner; its default action is to
+ * ignore, so a record left by an earlier boot cannot harm another process. */
+static void print_ring(struct dosvm *v)
+{
+    uint32_t pid=0; size_t n=0;
+    int fd=vfs_open(&v->disk_table,"C:\\WINDOWS\\SPOOL\\worker.lock\\owner",VFS_READ,VFS_DENY_NONE,0);
+    if (fd<0) return;
+    int e=vfs_read(&v->disk_table,fd,&pid,sizeof(pid),&n);
+    (void)vfs_close(&v->disk_table,fd);
+    if (e || n!=sizeof(pid) || !pid) return;
+    struct process *p=proc_find(pid);
+    if (p && p->state==PROC_LIVE) proc_signal_post(p,0,SIGCHLD,0);
+}
 int dosvm_print_byte(struct dosvm *v,uint8_t byte)
 {
     struct dosvm_print_capture *p=&v->print_capture;
@@ -137,6 +155,7 @@ int dosvm_print_flush(struct dosvm *v,bool final)
             }
         }
         if (!e) e=print_publish(v);
+        if (!e) print_ring(v);
     }
     p->failed=e!=0;
     if (e) p->retry_tick=g_ticks;
