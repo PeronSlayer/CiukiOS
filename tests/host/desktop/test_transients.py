@@ -51,7 +51,7 @@ class TransientTests(unittest.TestCase):
                    ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay",
                     "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")]
         sources += [f"apps/libdeskui/{n}.c" for n in
-                    ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
+                    ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map")]
         sources += ["apps/files/model.c", "apps/files/transfer.c", "tests/host/desktop/fake.c",
                     "tests/host/desktop/transient_test.c"]
         with tempfile.TemporaryDirectory(dir=parent) as temp:

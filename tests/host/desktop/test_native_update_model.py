@@ -28,7 +28,7 @@ class NativeUpdateModelTests(unittest.TestCase):
                  "-Wno-macro-redefined", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                  "-ffunction-sections", "-fdata-sections", "-fno-builtin-memcmp", *icons.defines(),
                  "-I", str(ROOT / "src/kernel/include"), "-include", str(ROOT / "tests/host/desktop/replay_base.h")]
-        common = [*(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map", "recent", "client")),
+        common = [*(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "recent", "client")),
                   "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/accessories/acc.c"]
         cases = {
             "terminal": ["apps/terminal/app.c", "apps/terminal/commands.c", "apps/terminal/lua.c", "apps/tasks/model.c", "apps/files/model.c", "tests/host/desktop/fake_vfs.c"],

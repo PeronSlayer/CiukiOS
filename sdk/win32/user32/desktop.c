@@ -56,7 +56,7 @@ BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
       du3_request(&u32_desktop, op, w->wire, w->generation, data, n, fd);
   if (!token)
     return u32_fail(1062);
-  if (op == DESK_DAMAGE)
+  if (op == DESK_DAMAGE || op == DESK_V3_SOUND)
     return 1;
   struct request request = {requests, token, w->wire, w->generation, u32_tid(), 0, 0};
   requests = &request;

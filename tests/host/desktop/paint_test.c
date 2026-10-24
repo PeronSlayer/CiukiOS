@@ -408,7 +408,7 @@ static void files(const char *scratch)
     assert(!ui.dialog.kind && !strcmp(paint_path(),path));
     FILE *exported=fopen(path,"rb"); uint8_t header[54];assert(exported && fread(header,1,54,exported)==54 && header[28]==24);fclose(exported);
     paint_command(M_SAVEAS); dialog_button(0); du_set_text(&ui.dialog.items[5],path); dialog_button(0);
-    assert(ui.dialog.kind==DU_DLG_MESSAGE); dialog_button(0); assert(!ui.dialog.kind);
+    assert(ui.dialog.kind==DU_DLG_SAVE && ui.dialog.sub==1); dialog_button(15); assert(!ui.dialog.kind);   /* the dialog's own "already exists" prompt: Yes */
     /* Open and New from their menu accelerators. */
     at_chord(&ui,DU_KEY_LCTRL,0x18); assert(ui.dialog.kind==DU_DLG_OPEN);
     du_set_text(&ui.dialog.items[5],path); dialog_button(0); assert(!ui.dialog.kind && !state().dirty);

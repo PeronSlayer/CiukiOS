@@ -44,8 +44,6 @@ void cn_timestamp(char *out, size_t cap, const struct tm *tm)
 
 const char *cn_basename(const char *path)
 { const char *slash = strrchr(path, '/'); return slash ? slash + 1 : path; }
-int cn_has_extension(const char *name)
-{ const char *dot = strrchr(name, '.'); return dot && dot != name && dot[1]; }
 int cn_is_text_name(const char *name)
 {
     size_t n = strlen(name);
@@ -92,20 +90,4 @@ int cn_resolve(char *out, const char *dir, const char *input)
     if (!w) out[w++] = '/';
     out[w] = 0;
     return 0;
-}
-
-static unsigned char lower(unsigned char c) { return c >= 'A' && c <= 'Z' ? (unsigned char)(c + 32) : c; }
-int cn_has_wildcard(const char *name) { return strpbrk(name, "*?") != NULL; }
-int cn_match(const char *pattern, const char *name)
-{
-    /* Iterative glob with one backtrack point per `*`: linear space, bounded time. */
-    const char *star = NULL, *mark = NULL;
-    while (*name) {
-        if (*pattern == '*') { star = pattern++; mark = name; }
-        else if (*pattern == '?' || (*pattern && lower((unsigned char)*pattern) == lower((unsigned char)*name))) { pattern++; name++; }
-        else if (star) { pattern = star + 1; name = ++mark; }
-        else return 0;
-    }
-    while (*pattern == '*') pattern++;
-    return !*pattern;
 }

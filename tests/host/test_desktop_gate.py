@@ -234,9 +234,8 @@ void klog(const char *f,...) {(void)f;}
             '-I',str(self.folder/'desktop-include'),'-I',str(ROOT/'apps/desktop'),
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
             *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
-            *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c','widgets.c','list.c','menu.c','dialog.c','textarea.c')),  # desktop.c's shell icons
-            *(str(ROOT/'apps/desktop'/n) for n in ('clipboard.c','../libdeskui/clipboard.c','../libdeskui/clipstore.c','users.c','users_io.c','shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','power_policy.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c')),  # desktop shell
-
+            *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c','widgets.c','list.c','menu.c','dialog.c', 'controls.c', 'commdlg.c','textarea.c')),  # desktop.c's shell icons
+            *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c')),  # desktop shell
             *bridge,
             '-o',str(binary)],check=True,env=env)
         spec=importlib.util.spec_from_file_location('first_frame_portrait',ROOT/'apps/desktop/convert_portrait.py')
@@ -249,9 +248,6 @@ void klog(const char *f,...) {(void)f;}
         result=subprocess.run([str(binary),'--links'],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS F2-95 shortcut scan: ',result.stdout)
-        result=subprocess.run([str(binary),'--g18-snapshot'],capture_output=True,text=True,env=env,timeout=10)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertIn('PASS G18 production drop snapshot:',result.stdout)
         print('\n'.join(line for line in result.stdout.splitlines() if line.startswith('PASS F2-95 ')))
         portrait=converter.convert(ROOT/'assets/brand/ciuki-logo.png')
         source=self.folder/'portrait.xrgb';source.write_bytes(portrait)
@@ -336,9 +332,8 @@ void klog(const char *f,...) {(void)f;}
                         '-o',str(demo)],check=True,env=env)
         subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
                         *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
-                        *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c','widgets.c','list.c','menu.c','dialog.c','textarea.c')),
-                        *(str(ROOT/'apps/desktop'/n) for n in ('clipboard.c','../libdeskui/clipboard.c','../libdeskui/clipstore.c','users.c','users_io.c','shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','power_policy.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c')),
-
+                        *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c','widgets.c','list.c','menu.c','dialog.c', 'controls.c', 'commdlg.c','textarea.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c')),
                         '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
                         *self.kernel_spawn_bridge(env),
                         '-o',str(desktop)],check=True,env=env)

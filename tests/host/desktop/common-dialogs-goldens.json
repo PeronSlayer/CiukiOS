@@ -1,0 +1,22 @@
+{
+ "color-full.xrgb": "31a3b55f3cdf01af5432fc3a8766cd66360ac7b996a066c1484f0fa7e9ecd7f8",
+ "color.xrgb": "b78a36481e1509134d106cefb9cb0ba48abe07acff3206f0e1a7efcd6036a3ce",
+ "combo-closed.xrgb": "38a9962d837f5f65687fc0f3e8f15effc07ee6b42d813089c87c0ab2b0adc098",
+ "combo-open.xrgb": "ce6fe29d124b28ca87d22e735f6bc3db0c732682117724ade7b1705a2ace4a1f",
+ "file-details.xrgb": "360029c1ac95d41f4c4fc2463cabdd55b774c55bea6744ac60d4041e7ca542f0",
+ "file-invalid.xrgb": "12919227424d7764280a3fa1fec2be61e898c85d9cb86ca3f3e524440f5615ed",
+ "file-newfolder.xrgb": "390b5bf0e5960a1937fd7679b4297327779c1e894065d43c311b0b7f94906cc1",
+ "file-notfound.xrgb": "8cb145d74cbc82a036f5d3cab2d867f4eae21d28776d04827d8956b91467d3f8",
+ "file-overwrite.xrgb": "73a225ed850ebaa583015fe1682bb485b0af60a2f6070de117d5c4ecccf8b593",
+ "file-save.xrgb": "3b4c2b96d11efdcbf9056fb0a87b93854d532db705218318fdcc73b5a2be2a2d",
+ "file-type-list.xrgb": "aebaac42563be5a56e991568e252690884ba5eecf9f4ff253e5f256ce9d8c143",
+ "find-status.xrgb": "8ca2a9a6ac807ef91cc67fd62b80c1a0f32e6771e511f06ee5922259766a168a",
+ "find.xrgb": "8e535ae823278ee78dee1edf59e0fc30f0d4b77d1aa345e5fc8efe6d6401a552",
+ "folder.xrgb": "8ce4d2e5149601843264f4ef6d3745e4133b7e5efc31c2d7dd905dfecd8fc4b7",
+ "font-invalid.xrgb": "b566e2e957888cb1486a7c3b1f517d66ebefd5aa0e877f71d751c943cab9d028",
+ "font.xrgb": "87be4900abf38e97822b3bb9625c46a529320102b0ac9e2ef84434c7705ea89e",
+ "replace.xrgb": "fe20db6fd99c4f5b32c571656ded94c372ecd1c3084e80e1e5202cb893d1276b",
+ "tooltip.xrgb": "ab4f5dca3ceb184f182ba1b90f46ad134de6aacc414a44a5b030c358f590d5f9",
+ "trackbar.xrgb": "7898292e7ffc884db20ec37d173bdfc26cc836c7d99ffff2c95b54faa53f7149",
+ "updown.xrgb": "0b6ba8ded7fa1d133c55f466498e8d88d2250a94483bfb228655a69f62a7c5fc"
+}

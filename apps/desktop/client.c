@@ -2725,6 +2725,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         if(p.opcode==DESK_V3_PRESENT && visible){c->gl_present_request=p.request;return 0;}
         break;
     }
+    case DESK_V3_SOUND:
+        desk_sound(d,p.flags); return 0;      /* G16 MessageBeep: no reply (the event is checked by the sound runtime) */
     case DESK_V3_WIN32_HWND:
         if(c->v3_win32_hwnd && c->v3_win32_hwnd!=p.flags)error=-EINVAL;
         else c->v3_win32_hwnd=p.flags;

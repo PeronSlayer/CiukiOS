@@ -13,7 +13,7 @@ enum { M_NEW = 1, M_OPEN, M_SAVE, M_SAVEAS, M_EXIT, M_UNDO, M_CUT, M_COPY, M_PAS
        M_FINDNEXT, M_REPLACE, M_GOTO, M_SELALL, M_TIME, M_WRAP, M_FONT, M_STATUS, M_HELP, M_ABOUT, M_PAGESETUP, M_PRINT };
 enum { W_TEXT = 100, W_STATUS, W_FLABEL, W_FIND, W_FNEXT, W_FDIR, W_FCASE, W_FCLOSE,
        W_RLABEL, W_REPL, W_RONE, W_RALL };
-enum { D_CHANGES = 200, D_REPLACE, D_INFO, D_GOTO, D_FONT, D_CREATE, D_OPEN, D_SAVE, D_BIG };
+enum { D_CHANGES = 200, D_INFO, D_GOTO, D_FONT, D_CREATE, D_OPEN, D_SAVE, D_REPLACE = 207, D_BIG = 208 };
 
 enum cn_after { CN_AFTER_NONE, CN_AFTER_NEW, CN_AFTER_OPEN, CN_AFTER_EXIT, CN_AFTER_DROP };
 /* Test-mode checkpoints (the frame after the event is presented, then reported). */
@@ -38,10 +38,10 @@ struct cn_app {
     char path[CN_PATH]; int named, crlf;
     /* view and command state */
     int show_status, find_mode, match_case, find_up;
-    char note[96], filter[64];
+    char note[96];
     enum cn_after after;
     char dir[CN_PATH];         /* last folder of the file dialogs */
-    char pending[CN_PATH];     /* a Save As target waiting for the replace answer (or the large file offered to WordPad) */
+    char pending[CN_PATH];     /* Save As target, large file offer, or command-line create prompt */
     char dropped[CN_PATH];     /* fx-19: a file dropped on the window, opened after the save question */
     uint32_t ciuki32[1024]; int ciuki;
     /* menus */

@@ -25,7 +25,7 @@ class ControlJobsTests(unittest.TestCase):
         sources = ["tests/host/desktop/control_jobs_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                    *(f"apps/desktop/{n}.c" for n in ("settings", "settings_io", "sounds", "wallpaper", "image", "compositor", "theme")),
-                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
         with tempfile.TemporaryDirectory(prefix="control-jobs-", dir=parent) as tmp:
             work = Path(tmp)
             (work / "include").mkdir()

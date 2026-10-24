@@ -227,8 +227,11 @@ static void command(struct re_app *a, int id)
         } else if (!a->nodes[a->selected].depth) { error(a, "Cannot delete a root", EACCES); clear_pending(a); return; }
         confirm(a, a->deleting_value ? "Delete this value?" : "Delete this key and all its subkeys and values?");
     } else if (id == RE_IMPORT || id == RE_EXPORT) {
-        if (du_file_dialog(a->ui, RE_FILE, id == RE_EXPORT, id == RE_EXPORT ? "Export branch" : "Import registry file", "/Documents", "registry.reg", NULL, NULL))
-            error(a, "File dialog", errno);
+        static const struct du_file_filter types[] = {{"Registration Files (*.reg)", "*.reg"}, {"All Files (*.*)", "*.*"}};
+        struct du_file_options o = {.flags = id == RE_EXPORT ? DU_FILE_SAVE | DU_FILE_OVERWRITE_PROMPT : DU_FILE_FILE_MUST_EXIST,
+            .title = id == RE_EXPORT ? "Export branch" : "Import registry file", .folder = "/Documents", .name = "registry.reg",
+            .filters = types, .filter_count = 2, .default_ext = "reg"};
+        if (du_file_open(a->ui, RE_FILE, &o)) error(a, "File dialog", errno);
     }
 }
 static void apply(struct re_app *a)

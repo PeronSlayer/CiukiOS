@@ -81,7 +81,12 @@ enum desk_v3_opcode {
      * EVENT: id,callback,mouse-message,screen-x,screen-y.
      * FLASH: invert (0/1). All use the authenticated window tuple. */
     DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON = 86, DESK_V3_TRAY_EVENT = 90, DESK_V3_FLASH = 91,
-    DESK_V3_HELP = 89 /* G15: server to client, empty payload */
+    DESK_V3_HELP = 89, /* G15: server to client, empty payload */
+    /* G16 SOUND (MessageBeep): client to desktop, 4 bytes: the toolkit sound
+     * event (apps/desktop/sounds.h, below SOUND_EVENTS) the desktop plays through
+     * its system-sound scheme (mute, volume and DOS-window rules apply). There is
+     * no reply: like DAMAGE it only needs the window tuple of an open window. */
+    DESK_V3_SOUND = 92
 };
 /* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
  * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.

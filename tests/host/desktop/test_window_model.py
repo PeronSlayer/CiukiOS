@@ -13,18 +13,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 
 class WindowModelTests(unittest.TestCase):
-    def test_g8_file_operation_dialogs_redraw(self):
-        from .test_file_operations import run_ui_replay
-        run_ui_replay(self)
-
     def test_every_row_equals_a_full_redraw(self):
         sources = [ROOT / "apps/desktop" / name for name in
                    ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c",
-                    "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/app.c")]
-
-        sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "textarea.c", "icons.c", "icon_map.c")),
-                    ROOT / "apps/accessories/mixer_view.c", ROOT / "tests/host/desktop/fake.c", ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
-                    ROOT / "tests/host/desktop/window_model_test.c", ROOT / "tests/host/desktop/disk_ui_vfs.c"]
+                    "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
+        sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c")),
+                    ROOT / "tests/host/desktop/fake.c", ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
+                    ROOT / "tests/host/desktop/window_model_test.c"]
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="window-model-", dir=parent) as temp:

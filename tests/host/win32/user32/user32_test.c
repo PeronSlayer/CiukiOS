@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _GNU_SOURCE
 #include "../../../../sdk/win32/user32/internal.h"
+#include "../../../../apps/desktop/sounds.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1476,8 +1477,29 @@ static void test_spi(void) {
         SystemParametersInfoA(3, 0, mouse, 0) && mouse[1] == 12);
   BOOL beep = 0;
   CHECK(SystemParametersInfoA(1, 0, &beep, 0) && beep);
+  {
+    /* G16 MessageBeep: the icon picks the desktop's system sound, queued without a reply. */
+    static const struct { UINT type, event; } beeps[] = {
+        {0x10, SOUND_ERROR},       {0x30, SOUND_ERROR},         {0x20, SOUND_QUESTION},
+        {0x40, SOUND_INFORMATION}, {0, SOUND_INFORMATION},      {0xffffffffu, SOUND_INFORMATION}};
+    UINT from = outgoing_count, seen = 0;
+    for (UINT i = 0; i < sizeof(beeps) / sizeof(*beeps); i++)
+      CHECK(MessageBeep(beeps[i].type));
+    for (UINT i = from; i < outgoing_count; i++)
+      if (outgoing[i].data[1] == DESK_V3_SOUND) {
+        CHECK(desk_get32(outgoing[i].data + 16) == beeps[seen].event);
+        seen++;
+      }
+    CHECK(seen == sizeof(beeps) / sizeof(*beeps));
+  }
   CHECK(SystemParametersInfoA(2, 0, 0, 0) &&
         SystemParametersInfoA(1, 0, &beep, 0) && !beep);
+  {
+    UINT from = outgoing_count;
+    CHECK(MessageBeep(0x10));   /* SPI_SETBEEP off: nothing is played, the call still succeeds */
+    for (UINT i = from; i < outgoing_count; i++)
+      CHECK(outgoing[i].data[1] != DESK_V3_SOUND);
+  }
   CHECK(SystemParametersInfoA(13, 0, &value, 0) && value == 75);
   CHECK(SystemParametersInfoA(13, 90, 0, 0) &&
         SystemParametersInfoA(13, 0, &value, 0) && value == 90 &&
