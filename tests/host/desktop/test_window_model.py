@@ -35,6 +35,7 @@ class WindowModelTests(unittest.TestCase):
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                             "-include", str(ROOT / "tests/host/desktop/paint_probe.h"),
+                            "-include", str(ROOT / "sdk/sysroot-overlay/include/ciuki/devices.h"),
                             "-Wno-macro-redefined", "-I", str(Path(temp) / "include"), "-I", str(ROOT / "src/kernel/include"), "-I", str(ROOT / "apps/desktop"),
                             *map(str, sources), "-o", str(binary)], check=True)
             runs = os.environ.get("CIUKI_WINDOW_MODEL_RUNS", "6")

@@ -1987,7 +1987,7 @@ static void context(struct files_app *a, const struct du_event *e)
         int drive=!m->path[0] ? disk_target(a) : -1;
         if (drive>=0) {
             popup_add(a,"Disk &Defragmenter...",C_DEFRAG,a->media_defrag && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
-            if (drive>=3 && a->media.type[drive]!=CIUKI_MEDIA_USB && a->media.type[drive]!=CIUKI_MEDIA_FLOPPY)
+            if (drive>=2 && a->media.type[drive]!=CIUKI_MEDIA_USB && a->media.type[drive]!=CIUKI_MEDIA_FLOPPY)
                 popup_add(a,"Drive &Converter (FAT32)...",C_CONVERT,a->media_convert && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
             if (drive<2 && a->media.type[drive]==CIUKI_MEDIA_FLOPPY) popup_add(a,"&Copy Disk...",C_COPY_DISK,a->media_image ? 0 : DU_ITEM_DISABLED);
             if (a->backup_call) popup_add(a,"&Backup...",C_BACKUP,0);

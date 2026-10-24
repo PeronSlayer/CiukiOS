@@ -260,6 +260,8 @@ int fat_defrag_analyze(struct fat_volume *, struct fat_defrag_info *);
  * 0 after a file (moved=false when contiguous or no free run is available).
  * expected_sequence is checked before any writes. */
 int fat_defrag_step(struct fat_volume *, uint32_t ordinal, uint64_t expected_sequence, bool *moved);
+int fat_startup_record(struct fat_volume *, const struct fat_entry *, const uint32_t *, unsigned);
+int fat_defrag_startup_step(struct fat_volume *, uint32_t, uint64_t, uint32_t *, bool *);
 /* Converter runs on an exclusively detached, clean FAT16 volume. parent
  * addresses the whole disk; start identifies its primary MBR partition.
  * Recovery is mandatory before normal parsing of a locator-bearing volume.
@@ -269,6 +271,11 @@ int fat_defrag_step(struct fat_volume *, uint32_t ordinal, uint64_t expected_seq
 int fat_convert_plan(struct fat_volume *, uint32_t *cluster_bytes);
 int fat_convert(struct fat_volume *, struct blkdev *parent, uint64_t start);
 int fat_convert_recover(struct blkdev *parent, uint64_t start, uint64_t sectors);
+int fat_convert_boot(struct fat_volume *, struct blkdev *, uint64_t);
+int fat_convert_boot_loader(struct blkdev *, uint64_t, uint64_t);
+int fat_convert_boot_schedule(struct fat_volume *, struct blkdev *, uint64_t);
+int fat_convert_boot_pending(struct blkdev *, uint64_t, uint64_t, bool *);
+int fat_convert_boot_cancel(struct blkdev *, uint64_t);
 int fat_next(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
 int fat_next_dos(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
 int fat_lookup(struct fat_volume *, uint32_t directory, const char *, struct fat_entry *);

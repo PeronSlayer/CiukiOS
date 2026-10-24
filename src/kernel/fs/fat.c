@@ -2681,6 +2681,9 @@ int fat_transaction_run(struct fat_volume *source, const struct fat_transaction_
     return e;
 }
 
+
+#include "fat_startup.inc"
+
 /* G29b: whole-file COW relocation, under the caller's exclusive volume
  * reservation. The old chain remains owned until update() is durable. */
 static void defrag_mark(struct fat_volume *v, struct fat_defrag_info *info, uint32_t c, uint8_t bits)
@@ -2758,7 +2761,8 @@ int fat_defrag_analyze(struct fat_volume *v, struct fat_defrag_info *info)
     }
     return defrag_walk(v,info,0,0);
 }
-int fat_defrag_step(struct fat_volume *v, uint32_t ordinal, uint64_t expected, bool *moved)
+static int defrag_move(struct fat_volume *v, uint32_t ordinal, uint64_t expected, bool *moved,
+                       struct startup_record *profile, uint32_t *placement, struct fat_entry *selected)
 {
     if (!v || !moved || !v->mounted || v->transaction || v->transactions) return -FS_EINVAL;
     *moved=false;
@@ -2773,16 +2777,18 @@ int fat_defrag_step(struct fat_volume *v, uint32_t ordinal, uint64_t expected, b
         fat_census_end(v); v->free_unknown=false;
     }
     struct fat_entry file;
-    e=defrag_walk(v,0,ordinal,&file); if (e) return e;
+    if (selected) file=*selected;
+    else { e=defrag_walk(v,0,ordinal,&file); if (e) return e; }
     if (!file.size || !file.first) return 0;
     uint32_t count; bool fragmented;
     if ((e=defrag_chain(v,file.first,&count,&fragmented,0,0))) return e;
-    if (!fragmented) return 0;
+    if (!fragmented && !profile) return 0;
+    if (path_equal(file.alias,START_LOG)) return 0;
     uint32_t bytes=(uint32_t)v->spc*512;
     /* Preallocated/excess-tail files belong to the checker, not this tool. */
     if (count!=file.size/bytes+(file.size%bytes!=0)) return -FS_EIO;
     uint32_t run=0, first=0;
-    for (uint32_t c=2;c<v->clusters+2;c++) {
+    for (uint32_t c=placement ? *placement : 2;c<v->clusters+2;c++) {
         if (!(c&127)) fs_service();
         uint32_t n; if ((e=fat_get_cluster(v,c,&n))) return e;
         run=n ? 0 : run+1;
@@ -2794,21 +2800,65 @@ int fat_defrag_step(struct fat_volume *v, uint32_t ordinal, uint64_t expected, b
     for (uint32_t i=0,c=old;i<count;i++) {
         for (unsigned s=0;s<v->spc;s++) {
             if ((e=readsec(v,cluster_sector(v,c)+s,data)) ||
-                (e=writesec(v,cluster_sector(v,first+i)+s,data))) return e;
+                (e=writesec(v,cluster_sector(v,first+startup_offset(profile,i))+s,data))) return e;
         }
         uint32_t n; if ((e=fat_get_cluster(v,c,&n))) return e; c=n;
     }
     if ((e=barrier(v)) || (e=publication_stage(v,FAT_P_CHAIN))) return e;
     for (uint32_t i=0;i<count;i++)
-        if ((e=set_cluster(v,first+i,i+1==count ? mask(v) : first+i+1))) return e;
+        if ((e=set_cluster(v,first+startup_offset(profile,i),i+1==count ? mask(v) : first+startup_offset(profile,i+1)))) return e;
     if ((e=barrier(v))) return e;
     v->free_clusters-=count;
-    file.first=first;
+    file.first=first+startup_offset(profile,0);
     if ((e=update(v,&file))) return e;
     /* Directory publication has completed. Reclaim cannot damage its data. */
     if ((e=release_chain(v,old)) || (e=hints(v))) return e;
+    if (placement) *placement=first+count;
+    if (profile) profile->first=file.first;
     *moved=true;
     return 0;
+}
+int fat_defrag_step(struct fat_volume *v,uint32_t ordinal,uint64_t expected,bool *moved)
+{ return defrag_move(v,ordinal,expected,moved,0,0,0); }
+
+int fat_defrag_startup_step(struct fat_volume *v,uint32_t ordinal,uint64_t expected,uint32_t *placement,bool *moved)
+{
+    if (!v || !v->mounted || v->transaction || v->transactions || !placement ||
+        *placement<2 || *placement>v->clusters+2 || !moved) return -FS_EINVAL;
+    *moved=false;
+    if (expected!=v->mutation_sequence) return -FS_EAGAIN;
+    struct startup_log *log=fs_page_alloc(); if (!log) return -FS_ENOMEM;
+    struct fat_entry saved={0}, target; int e=startup_load(v,log,&saved);
+    unsigned valid=0; uint8_t sorted[START_FILES];
+    for (unsigned i=0;!e && i<START_FILES;i++) {
+        struct startup_record *r=&log->files[i];
+        if (!r->uses) continue;
+        uint32_t cursor=r->index;
+        int found=fat_next(v,r->parent,&cursor,&target);
+        if (found || !startup_match(v,r,&target) || (target.attr&FAT_ATTR_DIR)) { r->uses=0; continue; }
+        unsigned j=valid++;
+        while (j && (log->files[sorted[j-1]].uses<r->uses ||
+            (log->files[sorted[j-1]].uses==r->uses && log->files[sorted[j-1]].recent<r->recent))) {
+            sorted[j]=sorted[j-1]; j--;
+        }
+        sorted[j]=(uint8_t)i;
+    }
+    struct startup_record *profile=0;
+    if (!e && ordinal<valid) {
+        profile=&log->files[sorted[ordinal]]; uint32_t cursor=profile->index;
+        e=fat_next(v,profile->parent,&cursor,&target);
+    } else if (!e) {
+        uint32_t rest=ordinal-valid;
+        for (uint32_t i=0;;i++) {
+            e=defrag_walk(v,0,i,&target); if (e) break;
+            bool recorded=false;
+            for (unsigned j=0;j<valid;j++) if (startup_match(v,&log->files[sorted[j]],&target)) recorded=true;
+            if (!recorded && !rest--) break;
+        }
+    }
+    if (!e) e=defrag_move(v,0,expected,moved,profile,profile ? placement : 0,&target);
+    if (!e && *moved && profile) e=startup_save(v,log,&saved);
+    fs_page_free(log); return e;
 }
 
 #include "fat_convert.inc"
