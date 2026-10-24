@@ -271,8 +271,8 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
                   id, gen, n, s->frames, s->flips, s->harvests, s->pages, s->present_rate);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_present vm=%u gen=%u n=%u present_us=%llu harvest_us=%llu rows=%u",
                   id, gen, n, s->present_us, s->harvest_us, s->rows);
-    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_remap vm=%u gen=%u n=%u remaps=%u remap_us=%llu batched=%u",
-                  id, gen, n, s->port_remaps, s->remap_us, s->batched);
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_remap vm=%u gen=%u n=%u remaps=%u remap_us=%llu batched=%u lean=%u dac=%u linear=%u",
+                  id, gen, n, s->port_remaps, s->remap_us, s->batched, s->lean_exits, s->dac_batched, s->linear_direct);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_exits vm=%u gen=%u n=%u gp=%u pf=%u db=%u timer=%u other=%u pm=%u",
                   id, gen, n, s->exits[0], s->exits[1], s->exits[2], s->exits[3], s->exits[4], s->exits[5]);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_service vm=%u gen=%u n=%u ticks=%u timer_us=%llu audio_us=%llu port_overflow=%u",
@@ -349,6 +349,7 @@ static void perf_disk_report(struct dosvm *v)
     CAPTURE(harvests); CAPTURE(direct_pages); CAPTURE(trapped_bytes);
     CAPTURE(converted_bytes); CAPTURE(rows); CAPTURE(port_remaps);
     CAPTURE(burst_insn); CAPTURE(latch_read_windows); CAPTURE(batched);
+    CAPTURE(lean_exits); CAPTURE(dac_batched); CAPTURE(linear_direct);
     CAPTURE(port_overflow); CAPTURE(ticks);
     CAPTURE(return_hits); CAPTURE(return_segmented); CAPTURE(return_fallbacks);
     CAPTURE(return_armed); CAPTURE(return_expired); CAPTURE(return_reacquired);
@@ -418,6 +419,11 @@ static void perf_disk_report(struct dosvm *v)
     v->perf.last_port_remaps = r->port_remaps; v->perf.last_remap = r->remap_cycles;
     v->perf.last_burst_insn = r->burst_insn; v->perf.last_latch_read_windows = r->latch_read_windows;
     s->batched = DELTA(batched, last_batched);
+    s->lean_exits = DELTA(lean_exits, last_lean_exits);
+    s->dac_batched = DELTA(dac_batched, last_dac_batched);
+    s->linear_direct = DELTA(linear_direct, last_linear_direct);
+    v->perf.last_lean_exits = r->lean_exits; v->perf.last_dac_batched = r->dac_batched;
+    v->perf.last_linear_direct = r->linear_direct;
     s->idle_blocks = r->idle_blocks - v->perf.last_idle_blocks;
     v->perf.last_idle_blocks = r->idle_blocks;
     s->idle_reasons = 0;

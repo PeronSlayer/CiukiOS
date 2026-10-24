@@ -105,7 +105,7 @@ struct dosvm_perf_sample {
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows, present_rate;
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
-    uint32_t cost_count[DOSVM_COST_COUNT], batched;
+    uint32_t cost_count[DOSVM_COST_COUNT], batched, lean_exits, dac_batched, linear_direct;
     uint64_t cost_us[DOSVM_COST_COUNT];
     uint32_t idle_blocks, idle_reasons, idle_count[DOSVM_IDLE_REASONS], busy_permille;
     uint32_t port_remaps, burst_insn, latch_read_windows;
@@ -124,6 +124,7 @@ struct dosvm_perf_raw {
     uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
     uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
+    uint32_t lean_exits, dac_batched, linear_direct;
     uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
     uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
     uint32_t idle_blocks, idle_count[DOSVM_IDLE_REASONS];
@@ -302,6 +303,14 @@ struct dosvm {
     unsigned video_direct;
     bool video_read_window, video_writable;
     uint16_t video_pending[4]; /* dirty plane pages deferred by PTE swaps */
+    /* fx-27: linear (chain-4) pages whose stores are not yet deinterleaved
+     * into the planes, and the pages the presenter has not consumed yet. */
+    uint16_t video_linear_stale, video_linear_damage;
+    bool video_dac_burst;      /* a DAC data/index OUT retired in this exit */
+    bool video_index_linear;   /* video_indexes rows hold x-ordered linear bytes */
+    bool video_linear_rows;    /* every chain-4 row base is dword aligned */
+    bool video_row_proven;     /* the row being written differs from the last frame */
+    bool network_attached;     /* fx-27: IPX/NE2000 events are dispatched at exits */
     uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
     uint32_t video_linear_maps, video_linear_harvests;
     uint32_t video_seen_start, video_lut_display;
@@ -349,6 +358,10 @@ struct dosvm {
         uint32_t last_return_hits, last_return_segmented, last_return_fallbacks;
         uint32_t last_return_armed, last_return_expired, last_return_reacquired;
         uint32_t batched, last_batched;
+        /* fx-27: exits retired on the lean port path, OUTs batched by the DAC
+         * burst, chain-4 pages presented without a plane deinterleave. */
+        uint32_t lean_exits, last_lean_exits, dac_batched, last_dac_batched;
+        uint32_t linear_direct, last_linear_direct;
         uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
         uint32_t last_exits[6], last_irqs[16];
         uint64_t last_guest, last_monitor, last_present, last_harvest, last_log, last_edges;
@@ -483,6 +496,9 @@ uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
 const struct task *dosvm_task_focus(void);
 const struct task *dosvm_task_irq(void);
 int dosvm_io_burst(struct dosvm *, struct v86_frame *);
+/* fx-27: dosvm_io_burst, then the DAC palette burst after a DAC write. */
+int dosvm_port_bursts(struct dosvm *, struct v86_frame *);
+int dosvm_vga_dac_burst(struct dosvm *, struct v86_frame *);
 bool dosvm_io_fast(struct dosvm *, struct v86_frame *, const struct dpmi_seg *, int *);
 uint64_t dosvm_perf_clock(void);
 uint64_t dosvm_perf_task_clock(void);
@@ -588,6 +604,9 @@ static inline void dpmi_gprs(struct v86_frame *dst, const struct v86_frame *src)
 int dpmi_v86_int(struct dosvm *, struct v86_frame *, uint8_t vector);
 int dpmi_v86_stub(struct dosvm *, struct v86_frame *);
 int dpmi_pm_trap(struct dosvm *, struct v86_frame *, uint32_t cr2, uint32_t dr6);
+bool dpmi_lean_eligible(const struct dosvm *, const struct v86_frame *);
+bool dpmi_lean_quiet(const struct dosvm *, const struct v86_frame *);
+void dpmi_lean_retire(struct dosvm *, const struct v86_frame *);
 int dpmi_io_repeat(struct dosvm *, struct v86_frame *);
 int dpmi_deliver(struct dosvm *, struct v86_frame *);
 void dpmi_close(struct dosvm *);

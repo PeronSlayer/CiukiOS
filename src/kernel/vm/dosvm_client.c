@@ -148,15 +148,16 @@ struct dosvm *dosvm_client_first(uint32_t *owner)
     return 0;
 }
 
-struct row_target { struct surface *surface; bool force; };
+struct row_target { struct surface *surface; bool force; const struct dosvm *vm; };
 static int put_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 {
     struct row_target *target=arg;
     unsigned offset=y*CIUKI_DOSVM_WIDTH*4;
     /* Compare the existing shared surface, including text/VBE paths which
      * have page/band dirt rather than an exact indexed-plane row diff.
-     * A small stack chunk avoids another retained VM frame or large stack. */
-    if (!target->force) {
+     * A small stack chunk avoids another retained VM frame or large stack.
+     * fx-27: a row whose displayed indexes differ is written directly. */
+    if (!target->force && !(target->vm && target->vm->video_row_proven)) {
         uint8_t previous[256];unsigned at=0;
         for (;at<bytes;at+=sizeof(previous)) {
             unsigned n=bytes-at;if(n>sizeof(previous))n=sizeof(previous);
@@ -573,7 +574,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             bool scanlines=op==CIUKI_DOSVM_PRESENT_BANDS && c.presentation.flags==CIUKI_DOSVM_PRESENT_SCANLINES;
             uint32_t samples = v->present_samples;
             if (op == CIUKI_DOSVM_PRESENT_BANDS && c.presentation.redraw) v->video_presented = false;
-            struct row_target target={b->surface,!v->video_presented};
+            struct row_target target={b->surface,!v->video_presented,v};
             e = dosvm_vga_present(v, put_row, &target, g_ticks, &c.damage);
             if (e >= 0) {
                 /* A cadence-deferred call must not acknowledge the pending

@@ -195,6 +195,37 @@ int dosvm_vbe_flush(struct dosvm *v,bool force)
     }
     return dirty;
 }
+/* fx-27: collect and clear the D bits of the visible buffer pages (at most
+ * DOS_VBE_BYTES / 4 KiB = 256), as the VDD's Get_Mod/Clear_Mod report the
+ * video memory modified since the previous update (Windows 3.0 Virtual
+ * Device Adaptation Guide 18.4.1) and QEMU vga.c redraws only lines whose
+ * pages are dirty (memory_region_snapshot_get_dirty). */
+static bool vbe_collect(struct dosvm *v, unsigned bytes, uint32_t pages[DOS_VBE_BYTES / PAGE_SIZE / 32])
+{
+    /* Every buffer page's D bit is consumed, as dosvm_vbe_dirty(v, true)
+     * did, so off-screen stores do not keep the present sampler signalled;
+     * only visible pages mark rows. */
+    bool dirty = false;
+    unsigned visible = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (unsigned i = 0; i < v->vbe_buffer.pages && i < DOS_VBE_BYTES / PAGE_SIZE; i++) {
+        uint32_t *pte = vbe_pte(v, i);
+        if (!(*pte & 0x40)) continue;
+        if (i < visible) { pages[i / 32] |= 1u << (i % 32); dirty = true; }
+        *pte &= ~0x40u;
+        if (read_cr3() == v->as.pd_phys) invlpg(v->vbe_buffer.base + i * PAGE_SIZE);
+    }
+    return dirty;
+}
+static bool vbe_span_dirty(const uint32_t pages[], unsigned first, unsigned bytes)
+{
+    for (unsigned page = first / PAGE_SIZE; page <= (first + bytes - 1) / PAGE_SIZE; page++)
+        if (pages[page / 32] & (1u << (page % 32))) return true;
+    return false;
+}
+/* Only rows whose source lies in a dirty page are read and converted; a
+ * palette or mode change (display_changes) redraws every row. Columns step
+ * with an exact DDA (no division per pixel); 8-bit pixels use the 256-entry
+ * palette lookup shared with the VGA path. */
 int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,unsigned),
                       void *arg,uint64_t tick,struct ciuki_rect *damage)
 {
@@ -208,39 +239,57 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     if (v->video_presented && tick<v->video_due_us/1000u) return 0;
     v->present_samples++;
     v->video_due_us=dosvm_vga_next_due(v->video_due_us,period,tick);
-    bool dirty=dosvm_vbe_dirty(v,true);
-    if (v->video_presented && !dirty && v->video_display==v->vga.display_changes) return 0;
+    uint64_t begin=dosvm_perf_task_clock();
+    unsigned bpp=m->bpp/8u, row_bytes=m->width*bpp;
+    uint32_t pages[DOS_VBE_BYTES/PAGE_SIZE/32]={0};
+    bool dirty=vbe_collect(v,m->pitch*m->height,pages);
     uint32_t display=v->vga.display_changes;
+    bool full=!v->video_presented || v->video_display!=display;
+    if (!full && !dirty) { v->perf.present_cycles+=dosvm_perf_task_clock()-begin; return 0; }
     uint16_t mode=v->vbe_mode;
     uint32_t base=v->vbe_buffer.base;
     v->video_present_rate=(unsigned)((1000000u+dos_video_frame_us(m)/2)/dos_video_frame_us(m));
-    uint8_t pixels[1600];unsigned first=DOSVM_VIDEO_HEIGHT,last=0;
+    if (m->bpp==8 && (!v->video_lut_valid || v->video_lut_display!=display)) {
+        for (unsigned i=0;i<256;i++) {
+            const uint8_t *p=v->vga.dac[i];
+            v->video_lut[i]=(((p[0]<<2)|(p[0]>>4))<<16)|(((p[1]<<2)|(p[1]>>4))<<8)|(p[2]<<2)|(p[2]>>4);
+        }
+        v->video_lut_display=display; v->video_lut_valid=true;
+    }
+    uint8_t mask=v->vga.dac_mask;
+    uint8_t pixels[1600];unsigned first=DOSVM_VIDEO_HEIGHT,last=0,converted=UINT32_MAX;
     for (unsigned y=0;y<DOSVM_VIDEO_HEIGHT;y++) {
         if (!(y&3)) kpreempt_point();
         /* A mode change may release/reallocate the linear buffer. Never
          * dereference its old extent after a cooperative point. */
         if (v->vbe_mode!=mode || !v->vbe_buffer.used || v->vbe_buffer.base!=base ||
             v->fullscreen || v->fullscreen_hold || v->info.state>=DOSVM_STOPPING) {
-            v->video_presented=false;return 0;
+            v->video_presented=false;v->perf.present_cycles+=dosvm_perf_task_clock()-begin;return 0;
         }
         unsigned sy=y*m->height/DOSVM_VIDEO_HEIGHT;
-        if (dosvm_read(v,base+sy*m->pitch,pixels,m->pitch)) {
-            v->video_presented=false;return -EFAULT;
-        }
-        for (unsigned x=0;x<DOSVM_VIDEO_WIDTH;x++) {
-            unsigned sx=x*m->width/DOSVM_VIDEO_WIDTH; uint32_t color;
-            if (m->bpp==16) {
-                unsigned c=vm_u16(pixels+2*sx),r=c>>11,g=(c>>5)&63,b=c&31;
-                color=(((r<<3)|(r>>2))<<16)|(((g<<2)|(g>>4))<<8)|(b<<3)|(b>>2);
-            } else {
-                const uint8_t *p=v->vga.dac[pixels[sx]&v->vga.dac_mask];
-                color=(((p[0]<<2)|(p[0]>>4))<<16)|(((p[1]<<2)|(p[1]>>4))<<8)|(p[2]<<2)|(p[2]>>4);
+        if (!full && !vbe_span_dirty(pages,sy*m->pitch,row_bytes)) continue;
+        if (sy!=converted) {
+            if (dosvm_read(v,base+sy*m->pitch,pixels,row_bytes)) {
+                v->video_presented=false;v->perf.present_cycles+=dosvm_perf_task_clock()-begin;return -EFAULT;
             }
-            v->video_pixels[x]=color;
+            if (m->bpp==8 && m->width==DOSVM_VIDEO_WIDTH) {
+                for (unsigned x=0;x<DOSVM_VIDEO_WIDTH;x++) v->video_pixels[x]=v->video_lut[pixels[x]&mask];
+            } else for (unsigned x=0,sx=0,acc=0;x<DOSVM_VIDEO_WIDTH;x++) {
+                uint32_t color;
+                if (m->bpp==16) {
+                    unsigned c=vm_u16(pixels+2*sx),r=c>>11,g=(c>>5)&63,b=c&31;
+                    color=(((r<<3)|(r>>2))<<16)|(((g<<2)|(g>>4))<<8)|(b<<3)|(b>>2);
+                } else color=v->video_lut[pixels[sx]&mask];
+                v->video_pixels[x]=color;
+                for (acc+=m->width;acc>=DOSVM_VIDEO_WIDTH;acc-=DOSVM_VIDEO_WIDTH) sx++;
+            }
+            v->perf.converted_bytes+=row_bytes;
+            converted=sy;
         }
         int e=row(arg,y,v->video_pixels,sizeof(v->video_pixels));
-        if (e<0) { v->video_presented=false; return e; }
+        if (e<0) { v->video_presented=false; v->perf.present_cycles+=dosvm_perf_task_clock()-begin; return e; }
         if (e>0) continue;
+        v->perf.rows++;
         v->video_rows[y/32]|=1u<<(y%32);
         v->video_bands|=1ull<<(y/DOSVM_VIDEO_BAND);
         if(y<first)first=y;
@@ -251,6 +300,7 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     v->video_presented=v->vbe_mode==mode && v->vga.display_changes==display;
     v->video_tick=tick;v->video_display=display;
     v->video_geometry=(cvga_geometry){.width=m->width,.height=m->height};
+    v->perf.present_cycles+=dosvm_perf_task_clock()-begin;
     if(!last)return 0;
     v->video_frames++;
     *damage=(struct ciuki_rect){0,(int32_t)first,0,(int32_t)first,DOSVM_VIDEO_WIDTH,last-first};
