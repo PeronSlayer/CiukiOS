@@ -678,10 +678,10 @@ static int launch_exited(uint32_t pid)
 static unsigned launch_service(struct desktop *d)
 {
     if (!launcher.started) return 0;
-    /* One completed job at a time, oldest sequence first: a single copy on
-     * the stack (an array of DESK_CLIENTS jobs exceeded the 4 KiB frame
-     * limit of the i686 build). */
-    struct launch_job one, *job=&one;
+    /* One completed job at a time, oldest sequence first. The input thread
+     * owns this scratch copy; command text must not consume its 4 KiB stack. */
+    static struct launch_job one; /* input-thread scratch; includes the bounded Run command */
+    struct launch_job *job=&one;
     unsigned count=0;
     for (;;) {
         pthread_mutex_lock(&launcher.lock);
@@ -1803,36 +1803,44 @@ static void storage_poll(struct desktop *d, uint64_t now)
     (void)d; (void)now;
 #endif
 }
-static int run_command(struct desktop *d, char *line)
+static int run_submit(struct desktop *,const char *);
+static void links_service(struct desktop *);
+static int run_history_idle(void);
+static const char *run_environment(void *ctx,const char *name)
 {
-    /* "name arg..." or "/Programs/name arg...": spaces separate, double quotes group. */
-    char *words[8]; unsigned count=0;
-    for (char *p=line; *p && count<8;) {
-        while (*p==' ') p++;
-        if (!*p) break;
-        if (*p=='"') { words[count++]=++p; while (*p && *p!='"') p++; }
-        else { words[count++]=p; while (*p && *p!=' ') p++; }
-        if (*p) *p++=0;
-    }
-    if (!count) return 0;
-    const char *name=!strncmp(words[0],"/Programs/",sizeof("/Programs/")-1) ? words[0]+sizeof("/Programs/")-1 : words[0];
-    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
-        const char *args[6]; unsigned arguments=count-1<6 ? count-1 : 6;
-        for (unsigned a=0;a<arguments;a++) args[a]=words[a+1];
+    (void)ctx;
+    extern char **environ;
+    size_t n=strlen(name);
+    for (char **p=environ;p && *p;p++) if (!strncasecmp(*p,name,n) && (*p)[n]=='=') return *p+n+1;
+    if (!strcasecmp(name,"windir") || !strcasecmp(name,"SystemRoot")) return "C:\\WINDOWS";
+    if (!strcasecmp(name,"COMSPEC")) return "C:\\DOS\\COMMAND.COM";
+    return NULL;
+}
+static __attribute__((noinline)) int run_command(struct desktop *d,char *line)
+{
+    desk_run_trim(line);
+    char expanded[DESK_RUN_MAX],target[260],arguments[DESK_RUN_MAX];
+    int error=desk_run_expand(line,expanded,sizeof(expanded),run_environment,NULL);
+    if (!error) error=desk_run_split(expanded,target,arguments);
+    if (error) { desk_run_result(d,line,error); return error; }
+    char native[FM_PATH];
+    if (target[0] && target[1]==':' && !fm_posix_path(native,target) && strlen(native)<sizeof(target)) strcpy(target,native);
+    const char *name=!strncasecmp(target,"/Programs/",10) ? target+10 : target;
+    for (unsigned k=0;k<d->program_count;k++) if (!strcasecmp(d->programs[k].name,name)) {
+        name=d->programs[k].name;
+        char *args[6]; int count=fm_launch_arguments(arguments,args,6);
+        if (count<0) { desk_run_result(d,line,count); return count; }
         desk_launch_origin(d,DESK_LAUNCH_RUN,name);
-        int pid=arguments ? desk_task_launch_args(d,name,args,arguments) : desk_task_launch(d,name,NULL);
-        int error=pid<0 ? -pid : 0;
-        if (pid<0) {
-            char text[160]; snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(error),error);
-            desk_shell_message(d,"Run",text,1);
-        } else if (!pid) snprintf(d->notice,sizeof(d->notice),"Starting %.32s",name); /* fx-8: completes later */
-        else snprintf(d->notice,sizeof(d->notice),"Started %.32s (PID %d)",name,pid);
+        snprintf(d->launch_request.run_command,sizeof(d->launch_request.run_command),"%s",line);
+        int pid=count ? desk_task_launch_args(d,name,(const char *const *)args,(unsigned)count) : desk_task_launch(d,name,NULL);
+        if (pid>0) desk_run_remember(d,line);
+        if (pid) desk_run_result(d,line,pid<0 ? pid : 0);
+        if (!pid) snprintf(d->notice,sizeof(d->notice),"Starting %.32s",name);
         return pid;
     }
-    char text[200];
-    snprintf(text,sizeof(text),"CiukiOS cannot find '%.60s'.\nType the name of a program in /Programs.",words[0]);
-    desk_shell_message(d,"Run",text,1);
-    return -1;
+    int result=run_submit(d,line);
+    if (result<0) desk_run_result(d,line,result);
+    return result;
 }
 /* Shared by --launch and the Programs menu: a bare launch carries no payload. */
 static void startup_launch(struct desktop *d,const char *name)
@@ -1893,6 +1901,7 @@ __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,
 __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
 static int power_request(int action)
 {
+    if (!run_history_idle()) { errno=EBUSY; return -1; }
     int ready=desk_w32_shutdown();
     if(ready<=0){errno=ready<0 ? -ready : EBUSY;return -1;}
     return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
@@ -2067,7 +2076,11 @@ static void shell_service(struct desktop *d)
         }
     }
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=sh->want_power_force=sh->want_standby=0; sh->want_reload&=~1; sh->want_run[0]=0; }
-    if (d->power.state) { desk_power_tick(d); return; }
+    if (d->power.state) {
+        links_service(d);
+        if (run_history_idle()) desk_power_tick(d);
+        return;
+    }
     user_service(d);
     desktop_wait("folder-service"); desk_folder_service(d);
     if (sh->want_power) {
@@ -2181,6 +2194,7 @@ static void shell_service(struct desktop *d)
         memcpy(line,sh->want_run,sizeof(line)); sh->want_run[0]=0;
         desktop_wait("run-command"); run_command(d,line);
     }
+    if (!sh->gate) links_service(d); /* submit new Run/Browse work before sleeping */
     desktop_wait("shell-done");
 }
 __attribute__((weak)) int desk_startup_begin(int skip) { (void)skip; return -ENOSYS; }
@@ -2349,6 +2363,15 @@ struct links_worker {
     struct desk_launch_record edit_record;
     unsigned char icon_valid[DESK_LINKS], scratch_icon_valid[DESK_LINKS];
     uint32_t icons[DESK_LINKS][DESK_SHORTCUT_PIXELS], scratch_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+    int run_requested, run_busy, run_done, run_result;
+    char run_command[DESK_RUN_MAX];
+    int history_requested, history_busy, history_done, history_error;
+    char history_save[DESK_RUN_MAX];
+    struct desk_run_history history, history_work;
+    int browse_requested, browse_busy, browse_done, browse_error;
+    char browse_path[260];
+    struct du_file_entry browse_entries[DU_FILE_ENTRIES];
+    unsigned browse_count;
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
@@ -2368,6 +2391,14 @@ static int links_profile_update(struct desktop *d)
 /* Render-owned snapshot: worker writes never race a paint using these pixels. */
 static unsigned char links_icon_valid[DESK_LINKS];
 static uint32_t links_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+static int run_history_idle(void)
+{
+    struct links_worker *w=links_worker; if (!w) return 1;
+    pthread_mutex_lock(&w->mutex);
+    int idle=!w->run_requested && !w->run_busy && !w->run_done &&
+        !w->history_requested && !w->history_busy && !w->history_done && !w->desktop->sh.run_save_count;
+    pthread_mutex_unlock(&w->mutex); return idle;
+}
 static void links_scan_once(struct links_worker *w, int games)
 {
     struct links_scan s={.out=w->scratch,.stamps=w->scratch_stamps,.cap=DESK_LINKS,
@@ -2411,12 +2442,17 @@ static void *links_thread(void *arg)
     struct links_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->mutex);
-        while (!w->scan_requested && !w->launch_requested && !w->save_requested && !w->edit_requested) pthread_cond_wait(&w->changed,&w->mutex);
+        while (!w->scan_requested && !w->launch_requested && !w->save_requested && !w->edit_requested && !w->run_requested && !w->history_requested && !w->browse_requested) pthread_cond_wait(&w->changed,&w->mutex);
         int launch=w->launch_requested, games=0; char path[260];
+        int history=w->history_requested;
+        int run=!history && w->run_requested,browse=!history && !run && w->browse_requested;
         unsigned save=w->save_requested,game=w->save_game;
         int edit=w->edit_requested;
         if(edit){w->edit_requested=0;w->edit_busy=1;}
         else if (save) { w->save_requested=0; w->save_busy=1; }
+        else if (run) { w->run_requested=0; w->run_busy=1; }
+        else if (history) { w->history_requested=0; w->history_busy=1; }
+        else if (browse) { w->browse_requested=0; w->browse_busy=1; }
         else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
         else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
@@ -2437,6 +2473,26 @@ static void *links_thread(void *arg)
             pthread_mutex_lock(&w->mutex);
             w->save_result=result; w->save_command=command; w->save_operation=save;
             w->save_done=1; w->save_busy=0; pthread_mutex_unlock(&w->mutex);
+        } else if (run) {
+            struct desk_launch_record *r=malloc(sizeof(*r)); int result=-ENOMEM;
+            if (r) result=desk_run_resolve(fm_native_vfs(),w->run_command,run_environment,NULL,r);
+            if (!result) result=ciuki_win32_shell_launch(r);
+            free(r);
+            pthread_mutex_lock(&w->mutex);
+            w->run_result=result; w->run_busy=0; w->run_done=1;
+            desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
+        } else if (history) {
+            int error=desk_run_history_load(&w->history_work);
+            if (!error && w->history_save[0]) error=desk_run_history_add(&w->history_work,w->history_save);
+            pthread_mutex_lock(&w->mutex);
+            w->history=w->history_work; w->history_save[0]=0; w->history_busy=0; w->history_done=1; w->history_error=error;
+            desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
+        } else if (browse) {
+            unsigned count=0; int error=du_posix_lister(NULL,w->browse_path,w->browse_entries,DU_FILE_ENTRIES,&count);
+            if (error==-ENOTDIR) { struct stat st; if (!stat(w->browse_path,&st) && S_ISREG(st.st_mode)) error=1; }
+            pthread_mutex_lock(&w->mutex);
+            w->browse_count=count; w->browse_error=error; w->browse_busy=0; w->browse_done=1;
+            desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
         } else if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
             int result=-ENOMEM;
@@ -2566,6 +2622,16 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
+static int run_submit(struct desktop *d,const char *command)
+{
+    (void)d;
+    if (!command || strlen(command)>=DESK_RUN_MAX) return -E2BIG;
+    struct links_worker *w=links_worker; if (!w) return -ENOSYS;
+    pthread_mutex_lock(&w->mutex); int result=0;
+    if (w->run_requested || w->run_busy || w->run_done) result=-EBUSY;
+    else { strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
+    pthread_mutex_unlock(&w->mutex); return result;
+}
 static int shell_open_path(struct desktop *d,const char *path)
 {
     (void)d;
@@ -2605,6 +2671,7 @@ static void links_start(struct desktop *d)
     if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
     w->desktop=d;
     w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
+    fm_registry_exchange=desk_w32_exchange;
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
     links_worker=w;
     d->install_program=install_program; d->open_path=shell_open_path;
@@ -2635,13 +2702,41 @@ static void links_service(struct desktop *d)
         pthread_cond_signal(&w->changed);
     }
     int edit_done=w->edit_done,edit_result=w->edit_result;w->edit_done=0;
-    int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
+    int completed=w->completed, result=w->result; w->completed=0;
+
+    int run_done=w->run_done,run_result=w->run_result;
+    char command[DESK_RUN_MAX]; command[0]=0;
+    if (run_done) {
+        strcpy(command,w->run_command); w->run_done=0;
+        if (run_result>=0) desk_run_remember(d,command);
+    }
+    int history_error=0;
+    if (w->history_done) { desk_run_history_ready(d,&w->history); history_error=w->history_error; w->history_done=0; }
+    if (!w->run_requested && !w->run_busy && !w->history_requested && !w->history_busy &&
+        (d->sh.run_history_request || d->sh.run_save_count)) {
+        w->history_requested=1; d->sh.run_history_request=0;
+        w->history_save[0]=0;
+        if (d->sh.run_save_count) {
+            strcpy(w->history_save,d->sh.run_saves[0]); d->sh.run_save_count--;
+            memmove(d->sh.run_saves,d->sh.run_saves+1,d->sh.run_save_count*sizeof(d->sh.run_saves[0]));
+        }
+        pthread_cond_signal(&w->changed);
+    }
+    if (w->browse_done) {
+        desk_run_browse_ready(d,w->browse_path,w->browse_entries,w->browse_count,w->browse_error); w->browse_done=0;
+    }
+    if (d->sh.run && d->sh.run->browse_pending && !w->browse_requested && !w->browse_busy) {
+        strcpy(w->browse_path,d->sh.run->browse_path); w->browse_requested=1; d->sh.run->browse_pending=0; pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->mutex);
     if(edit_done){
         d->v3_links_force|=DESK_LINKS_SCAN;d->v3_links_next=0;
         if(edit_result<0)desk_shell_message(d,"Shortcut Properties","The shortcut could not be saved. Check that the file is still available and writable.",1);
     }
     if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+    if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
+    if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);
 }
 static void shell_setup(struct desktop *d, int gate)
 {

@@ -1383,6 +1383,41 @@ __attribute__((noinline)) static void test_network_service(void)
 #include "wallpaper_boot_test.h"
 #include "event_latency_test.h"
 #endif
+static void test_g9_run(void)
+{
+    struct desktop d; desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    d.programs[0]=(struct desk_program){"hello","/Programs/hello"}; d.program_count=1; d.launch=launch_program;
+    assert(!setenv("CIUKIRUN","C:\\PROGRAMS\\HELLO",1));
+    char env_command[]="%ciukirun%"; assert(run_command(&d,env_command)>0);
+    assert(d.sh.run_save_count==1 && !strcmp(d.sh.run_saves[0],env_command)); assert(!unsetenv("CIUKIRUN"));
+    drop_all(&d); fake_reset();
+    desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    struct links_worker *previous=links_worker,*w=calloc(1,sizeof(*w)); assert(w);
+    assert(!pthread_mutex_init(&w->mutex,NULL)); assert(!pthread_cond_init(&w->changed,NULL)); w->desktop=&d; links_worker=w;
+    int run=desk_internal_open(&d,DESK_INTERNAL_RUN); assert(run>=0);
+    char missing[]="C:\\missing\\game.exe"; strcpy(d.sh.run_text,missing); d.sh.run_length=(unsigned)strlen(missing);
+    assert(run_command(&d,missing)==0 && w->run_requested && !strcmp(w->run_command,missing));
+    assert(run_submit(&d,missing)==-EBUSY && !run_history_idle());
+    w->run_requested=0; w->run_done=1; w->run_result=-ENOENT;
+    links_service(&d); assert(d.sh.run && !d.sh.run->busy && !strcmp(d.sh.run_text,missing));
+    assert(strstr(d.sh.message_text,"could not be started") && !d.sh.run_save_count);
+    for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal==DESK_INTERNAL_MESSAGE) desk_drop_client(&d,i);
+    desk_focus(&d,run); w->history_requested=0; w->history_done=1;
+    strcpy(w->history.order,"a"); strcpy(w->history.commands[0],"hello");
+    links_service(&d); assert(!strcmp(d.sh.run->history.order,"a"));
+    struct desk_launch_request request={.origin=DESK_LAUNCH_RUN}; strcpy(request.run_command,missing);
+    desk_launch_completed(&d,&request,"game.exe",-ENOEXEC); assert(d.sh.run && !strcmp(d.sh.run_text,missing));
+    assert(!d.sh.run_save_count);
+    strcpy(request.run_command,"hello"); desk_launch_completed(&d,&request,"hello",200);
+    assert(d.sh.run_save_count==1 && !strcmp(d.sh.run_saves[0],"hello"));
+    for (unsigned i=0;i<30;i++) { char queued[32]; snprintf(queued,sizeof(queued),"queued%u",i); desk_run_remember(&d,queued); }
+    assert(d.sh.run_save_count==26 && !strcmp(d.sh.run_saves[0],"queued4") && !strcmp(d.sh.run_saves[25],"queued29"));
+    desk_run_remember(&d,"QUEUED10"); assert(d.sh.run_save_count==26 && !strcmp(d.sh.run_saves[25],"QUEUED10"));
+    assert(!run_history_idle()); d.sh.run_save_count=0; w->history_requested=w->history_done=0; assert(run_history_idle());
+    drop_all(&d); fake_reset(); links_worker=previous;
+    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w);
+    puts("PASS G9 production Run: case-insensitive environment, native launch/history, external worker queue/busy/completion, error correction, late native failure/success");
+}
 int main(int argc,char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
@@ -1526,7 +1561,7 @@ int main(int argc,char **argv)
     test_cd_player_menu();
     test_games_menu();
     test_help_launch();
-    test_menu_icons(); test_g8_open_with_record();
+    test_menu_icons(); test_g8_open_with_record(); test_g9_run();
     test_hwreport_menu();
     test_netsurf_record();
     test_launch_timing();

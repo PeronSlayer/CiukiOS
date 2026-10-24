@@ -176,6 +176,7 @@ struct desk_launch_request {
     int client, channel, recent;
     uint32_t pid, serial, opcode;
     char argument[DESK_ARG_MAX + 1];
+    char run_command[DESK_RUN_MAX]; /* internal async Run completion, never on the wire */
 };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent, close_deferred, pending; };
 #define DESK_POWER_CLOSE_NS 3000000000ull

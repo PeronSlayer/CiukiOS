@@ -478,6 +478,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 81 | G22B playback/recording view and recording source selection | swapped control captions, availability, sliders and Select states | `mixer_event`, `lines_show` | mode button sits below the menu; master disabled in Recording | multimedia controls |
 | 82 | G22B CD database load/save/refresh and track selection | CD client list, artist/title and track edit fields | `cdplayer.c` USER/GDI client damage | none new; CD model tests cover identity and persistence | multimedia controls |
 | 83 | G22B Multimedia CD-volume slider | changed native Control Panel client slider/status | `control/app.c`, toolkit damage | none new | multimedia controls |
+| 84 | G9 Run: MRU arrival, dropdown open/scroll/select/cancel, selection replacement and keyboard button focus | Run content and old/new outer bounds on dropdown resize | `desk_run_history_ready`, `run_select`, `run_resize`, `internal_key`, `desk_internal_click` | none | `row_run` in `test_window_model`, all five presenters |
+| 85 | G9 Browse: opens, receives directory snapshot, navigates/selects or cancels; Run launch/error/accepted completion | old/new Run/Browse outer bounds, picker content, owned error message and exposed windows | `run_browse`, `desk_run_browse_ready`, `run_browser_input`, `desk_run_result` | worker results never paint directly | `row_run` in `test_window_model`, all five presenters |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
