@@ -122,7 +122,7 @@ progress_name dw 0
 progress_limit dw 0
 progress_tick dd 0
 progress_polls dd 0
-progress_limits dw 1092, 364, 2184, 55 ; 60 s menu, 20 s video, 120 s ELF, 3 s handoff
+progress_limits dw 5461, 364, 2184, 55 ; 5 min menu (G14 Startup menu), 20 s video, 120 s ELF, 3 s handoff
 progress_names dw progress_menu, progress_video, progress_elf, progress_handoff
 progress_menu db 'menu',0
 progress_video db 'video',0

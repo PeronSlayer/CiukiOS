@@ -41,6 +41,11 @@ extern int power_platform_start(void) __attribute__((weak));
 extern void net_settings_load(struct vfs *);
 #pragma weak net_init
 #pragma weak fbdev_accel_schedule
+/* G14 (docs/design/startup-recovery.md 2.1-2.3): driver classes, the
+ * Automatic Skip Driver record and safe mode with disks. */
+#include <ciuki/bootstat.h>
+#pragma weak bootstat_begin
+#pragma weak bootstat_end
 
 static struct drivers_state state;
 static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
@@ -109,17 +114,36 @@ const struct activation_entry *drivers_mount_get(unsigned drive)
     return 0;
 }
 
+/* G14: this start skips the class (selective startup, Step-by-step, ASD). */
+static bool skipped(enum bootstat_class c)
+{
+    if (!((g_boot.flags >> CBI_F_SKIP_SHIFT) & (1u << c))) return false;
+    klog("[init] class=%s skipped reason=startup_choice", bootstat_class_name(c));
+    return true;
+}
+/* An activation the ASD agent can blame if the start dies inside it. */
+static void class_begin(enum bootstat_class c) { if (bootstat_begin) bootstat_begin(c); }
+static void class_end(enum bootstat_class c) { if (bootstat_end) bootstat_end(c); }
 /* After USB: joystick settings and game port (f1-113b), the firmware
  * inventory, then floppy (f1-115), the APM suspend-service owner and APM
- * (f1-121), in that order: the owner must exist before APM connects. */
+ * (f1-121), in that order: the owner must exist before APM connects. The
+ * game port and floppy are the ports class; the platform power driver and
+ * APM the power class (the ACPI thread records its own activation). */
 static void platform_devices_start(bool safe)
 {
-    if (joystick_storage_init && !safe) joystick_storage_init(&storage_get()->vfs);
-    if (gameport_init && !safe) gameport_init();
+    bool ports = !safe && !skipped(BOOTSTAT_PORTS), power = !safe && !skipped(BOOTSTAT_POWER);
+    if (ports) class_begin(BOOTSTAT_PORTS);
+    if (joystick_storage_init && ports) joystick_storage_init(&storage_get()->vfs);
+    if (gameport_init && ports) gameport_init();
+    if (ports) class_end(BOOTSTAT_PORTS);
     if (firmware_inventory_start) firmware_inventory_start();
-    if (floppy_init && !safe) floppy_init();
-    if (power_platform_start && !safe) (void)power_platform_start();
-    if (apm_start && !safe) apm_start();
+    if (ports) class_begin(BOOTSTAT_PORTS);
+    if (floppy_init && ports) floppy_init();
+    if (ports) class_end(BOOTSTAT_PORTS);
+    if (power) class_begin(BOOTSTAT_POWER);
+    if (power_platform_start && power) (void)power_platform_start();
+    if (apm_start && power) apm_start();
+    if (power) class_end(BOOTSTAT_POWER);
 }
 void drivers_init(void)
 {
@@ -177,7 +201,10 @@ void drivers_init(void)
     state.ata_sequence = 4;
     tick = g_ticks;
     safe_flag_before = !!(g_boot.flags & CBI_F_SAFE_MODE);
-    if (!state.safe) {
+    /* G14: Safe mode from the Startup menu keeps the disks (Windows 98
+     * Safe Mode repairs the configuration on them); safe=1 does not. */
+    bool safe_storage = state.safe && (g_boot.flags & CBI_F_SAFE_STORAGE);
+    if (!state.safe || safe_storage) {
         state.ata_called = true;
         state.optional_activations++;
         state.ata_error = ata_init();
@@ -196,24 +223,39 @@ void drivers_init(void)
     }
     activation_add((struct activation_entry){ .seq = state.ata_sequence, .device = "ata",
         .result = !state.ata_called ? "disabled" : (state.ata_error || quarantine) ? "failed" : storage ? "ready" : "absent",
-        .reason = state.safe ? "safe_mode" : "native_discovery", .error = state.ata_error,
+        .reason = safe_storage ? "safe_mode_storage" : state.safe ? "safe_mode" : "native_discovery", .error = state.ata_error,
         .tick = tick, .safe_flag_before = safe_flag_before, .present = storage, .quarantined = quarantine });
     splash_report(SPLASH_PHASE_ATA);
     storage_init();
     file_clock_start(CIUKI_BUILD_EPOCH, true);
     klog("[init] storage done; files bootstrap");
     splash_report(SPLASH_PHASE_STORAGE);
-    if (com_init && !state.safe) com_init();
-    if (lpt_init && !state.safe) lpt_init();
+    bool ports = !state.safe && !skipped(BOOTSTAT_PORTS);
+    if (ports) class_begin(BOOTSTAT_PORTS);
+    if (com_init && ports) com_init();
+    if (lpt_init && ports) lpt_init();
+    if (ports) class_end(BOOTSTAT_PORTS);
     int native_files = files_bootstrap(&storage_get()->vfs);
     klog("[init] files result=%d; audio init", native_files);
     splash_report(SPLASH_PHASE_FILES);
-    if (audio_init) audio_init(&storage_get()->vfs);
+    if (audio_init && !skipped(BOOTSTAT_SOUND)) {
+        class_begin(BOOTSTAT_SOUND);
+        audio_init(&storage_get()->vfs);
+        class_end(BOOTSTAT_SOUND);
+    }
     klog("[init] audio init done");
     splash_report(SPLASH_PHASE_AUDIO);
     if (net_settings_load) net_settings_load(&storage_get()->vfs);
-    if (net_init) net_init();
-    if (usb_init) usb_init();
+    if (net_init && !skipped(BOOTSTAT_NETWORK)) {
+        class_begin(BOOTSTAT_NETWORK);
+        net_init();
+        class_end(BOOTSTAT_NETWORK);
+    }
+    if (!skipped(BOOTSTAT_USB)) {
+        class_begin(BOOTSTAT_USB);
+        if (usb_init) usb_init();
+        class_end(BOOTSTAT_USB);
+    }
     platform_devices_start(state.safe);
     /* f1-94: after every UHCI handoff; SMI sampling and LEGACY_USB_EN. */
     if (smi_attribution_init) smi_attribution_init();

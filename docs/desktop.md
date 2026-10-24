@@ -1743,3 +1743,28 @@ contain its own hash). The Setup CD rescue page lists disks, views the hardware
 report (which quotes `BUILD.TXT`), and exports logs and the report to
 `\CIUKIOS-RESCUE-<date>\` on the first USB FAT volume; it never writes to an
 ATA disk.
+
+## System Tools: ScanDisk and System Configuration (G14, 2026-10-24)
+
+Programs ▸ Accessories ▸ System Tools has **ScanDisk** (`/Programs/scandisk`)
+and **System Configuration** (`/Programs/msconfig`); the design and the
+Windows 98 sources are in
+[startup-recovery](design/startup-recovery.md).
+
+- ScanDisk lists the drives, Standard or Thorough, "Automatically fix
+  errors", "Save lost fragments as files" and "Copy cross-linked files";
+  Start checks one drive at a time and shows ScanDisk Results (also in
+  `C:\SYSTEM\LOGS\SCANDISK.LOG`). A fix a drive in use needs is scheduled for
+  the next start. Files ▸ drive Properties ▸ Tools ▸ Check Now opens it for
+  that drive.
+- System Configuration: General (Normal, Diagnostic = the Startup menu once,
+  Selective = seven driver classes), Advanced (`BOOT.CFG`: Enable Startup
+  menu, Disable ScanDisk after bad shutdown, ScanDisk without asking, serial
+  log), Automatic Skip Driver (classes skipped after two failed starts, with
+  Enable) and Tools (Registry Checker backups and Back Up Now; System File
+  Checker scan, Update and Restore). General and Advanced take effect at the
+  next start.
+- At start the desktop shows what happened: Safe mode (corner labels and a
+  notice), a previous start that did not complete, driver classes the
+  Automatic Skip Driver agent skipped, ScanDisk results, and a registry root
+  Registry Checker restored; it makes the day's registry backup.

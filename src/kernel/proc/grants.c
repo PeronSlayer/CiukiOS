@@ -23,6 +23,7 @@ int grants_display_suspend(bool suspended)
 extern void display_frame_complete(uint32_t generation, bool full_frame) __attribute__((weak));
 extern void entropy_desktop_presented(void) __attribute__((weak));
 extern void dosvm_image_desktop_presented(void) __attribute__((weak)); /* fx-4b */
+extern void bootstat_presented(void) __attribute__((weak)); /* G14: the start is complete */
 bool grants_display_owner(const struct process *p)
 {
     if (!p || p->pid != grant_owner) return false;
@@ -306,6 +307,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         if (full_frame && pager_bootstrap_complete) pager_bootstrap_complete();
         if (full_frame && entropy_desktop_presented) entropy_desktop_presented(); /* f6-21 */
         if (full_frame && dosvm_image_desktop_presented) dosvm_image_desktop_presented(); /* fx-4b */
+        if (full_frame && bootstat_presented) bootstat_presented();
     }
     return err;
 }

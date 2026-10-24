@@ -1,6 +1,9 @@
 ; Canonical system FAT32 layout; checked against the image builder on host.
 %define CIUKI_FAT_RESERVED_SECTORS 160
-; Read-only BIOS sector access. EAX=LBA, ES:BX=512-byte destination.
+; BIOS sector access. EAX=LBA, ES:BX=512-byte buffer. Reads unless
+; disk_op is 1: G14's boot-status write (INT 13h AH=43h AL=0 with EDD, AH=03h
+; otherwise; IBM/Phoenix EDD 3.0 and the PC/AT BIOS). A failed write is not
+; fatal: the Setup CD's emulated disk is write-protected (SeaBIOS cdemu).
 disk_read:
     call progress_require
     pushad
@@ -14,7 +17,8 @@ disk_read:
     je .chs
     mov si, disk_dap
     mov word [disk_dap+2], 1
-    mov ah, 0x42
+    mov ax, 0x4200
+    add ah, [disk_op]
     stc
     int 0x13
     jmp .result
@@ -39,12 +43,13 @@ disk_read:
     mov dl, [B(boot_drive)]
     mov bx, [disk_dap+4]
     mov ax, 0x0201
+    add ah, [disk_op]
     stc
     int 0x13
 .result:
     jnc .ok
     dec bp
-    jz disk_error
+    jz .failed
     mov dl, [B(boot_drive)]
     xor ah, ah
     int 0x13
@@ -53,11 +58,15 @@ disk_read:
     popad
     call progress_require
     ret
+.failed:
+    cmp byte [disk_op], 0
+    jne .ok
 disk_error:
     mov si, disk_msg
     jmp fatal
 disk_msg db 'L:DISK',0
 disk_edd db 0
+disk_op db 0
 disk_spt dw 0
 disk_heads dw 0
 align 4, db 0

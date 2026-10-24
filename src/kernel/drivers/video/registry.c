@@ -66,6 +66,9 @@ static uint64_t command_native_count[14], command_software_count[14];
 bool display_accel_disabled(const char **reason)
 {
     if (g_boot.flags & CBI_F_SAFE_MODE) { if (reason) *reason = "safe_mode"; return true; }
+    /* G14: selective startup, Step-by-step or the ASD agent (bootstat.h
+     * class 0, boot flag bit 24). */
+    if (g_boot.flags & (1u << CBI_F_SKIP_SHIFT)) { if (reason) *reason = "startup_choice"; return true; }
     for (unsigned i = 0; i < sizeof(g_boot.options) && g_boot.options[i];) {
         unsigned first = i;
         while (i < sizeof(g_boot.options) && g_boot.options[i] &&

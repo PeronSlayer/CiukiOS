@@ -11,6 +11,8 @@ struct desk_catalog_entry { const char *name, *label, *tango; int takes_file; co
 static const struct desk_catalog_entry desk_catalog[] = {
     {"gfxdemo", "Graphics Demo", "applications-graphics", 0, ""},
     {"hwreport", "Hardware Report", "preferences-system", 0, ""},
+    {"scandisk", "ScanDisk", "drive-harddisk", 1, ""},
+    {"msconfig", "System Configuration", "preferences-system", 0, ""},
     {"printers", "Printers", "printer", 0, ""},
     /* G30 system tools (apps/systools). */
     {"resmeter", "Resource Meter", "applications-system", 0, ""},

@@ -27,6 +27,11 @@ extern void grants_display_yield(void) __attribute__((weak));
 
 #include <ciuki/mtrr.h>
 #include <ciuki/timing.h>
+/* G14: the accelerated display probe is the ASD agent's display class. */
+#include <ciuki/bootstat.h>
+#pragma weak bootstat_begin
+#pragma weak bootstat_end
+static void accel_class_end(void) { if (bootstat_end) bootstat_end(BOOTSTAT_DISPLAY); }
 
 static struct fb_device device;
 static struct kmutex presenter;
@@ -283,6 +288,7 @@ static void accel_marker_run(void)
         accel_blocked = true;
         display_driver_software("start_failed");
         accel_queued = false;
+        accel_class_end();
         return;
     }
     bool clear = accel_marker_request == ACCEL_MARKER_CLEAR;
@@ -295,6 +301,7 @@ static void accel_marker_run(void)
         int status = display_attempt_prepare(accel_vfs, adapter, display_driver_owner(), &retained);
         if (status || retained || !adapter->attempt_begin || adapter->attempt_begin(accel_vfs)) {
             accel_queued = false;
+            accel_class_end();
             accel_blocked = true;
             display_driver_software(!status && retained ? DISPLAY_ATTEMPT_RETAINED : "marker_unavailable");
             return;
@@ -320,6 +327,7 @@ static void accel_marker_run(void)
     accel_initializing = false;
     presenter_unlock();
     accel_queued = false;
+    accel_class_end();
 }
 
 static bool accel_marker_pending(void *arg)
@@ -355,6 +363,7 @@ void fbdev_accel_schedule(struct vfs *vfs)
         }
         task_start(accel_marker_task);
     }
+    if (bootstat_begin) bootstat_begin(BOOTSTAT_DISPLAY);
     accel_queued = true;
     accel_marker_request = ACCEL_MARKER_BEGIN;
     kwait_wake_all(&accel_marker_wait);

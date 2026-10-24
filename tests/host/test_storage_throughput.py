@@ -24,6 +24,8 @@ class StorageTaskTests(unittest.TestCase):
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
 #pragma weak blackbox_flush /* as in mount.c: absent on the host, so the timer skips it */
+#include <ciuki/bootstat.h>
+#pragma weak bootstat_service /* G14, as in mount.c: absent here */
 #include <assert.h>
 #include <setjmp.h>
 static struct storage s;
@@ -55,6 +57,7 @@ bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
     assert(c==&s.cache);
     return !written && now>=5000;
 }
+unsigned storage_census_service(struct storage *arg, uint32_t now) { (void)arg; (void)now; return 0; } /* fx-17b */
 int storage_writeback(struct storage *arg, uint32_t now) {
     assert(arg==&s && !s.stopped);
     assert(now==60 || now==100 || now==1060 || now==5050);

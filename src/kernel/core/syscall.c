@@ -109,6 +109,7 @@ static void sys_log(uint32_t nr, int32_t r, uint32_t side)
 int32_t net_socket_call(struct trap_frame *) __attribute__((weak));
 int32_t entropy_syscall(struct trap_frame *) __attribute__((weak));
 int32_t time_syscall(struct trap_frame *) __attribute__((weak)); /* G1 */
+int32_t recovery_syscall(struct trap_frame *) __attribute__((weak)); /* G14 */
 
 void syscall_dispatch(struct trap_frame *tf)
 {
@@ -159,6 +160,9 @@ void syscall_dispatch(struct trap_frame *tf)
         break;
     case CIUKI_SYS_TIME:
         r = time_syscall ? time_syscall(tf) : -ENOSYS;
+        break;
+    case CIUKI_SYS_RECOVERY:
+        r = recovery_syscall ? recovery_syscall(tf) : -ENOSYS;
         break;
     case CIUKI_SYS_W32:
         if (w32_syscall) { w32_syscall(tf); return; }

@@ -12,6 +12,9 @@
 #include <ciuki/thinkpad_ec.h>
 #include <ciuki/power_source.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/bootstat.h>
+#pragma weak bootstat_begin
+#pragma weak bootstat_end
 extern void audio_ec_attach(void);
 
 struct large { uint32_t pages, physical; uint64_t reserved; };
@@ -220,9 +223,16 @@ static void com_pnp_thread(void *unused)
 static void inventory_thread(void *unused)
 {
     (void)unused;
-    ACPI_STATUS s = (g_boot.flags & (CBI_F_SAFE_MODE | CBI_F_HW_CHECK)) ?
+    /* G14: a skipped power class (bootstat.h class 5, boot flag bit 29)
+     * keeps the read-only inventory of safe mode; the power run is an
+     * activation the ASD agent can blame. */
+    bool power = !(g_boot.flags & (CBI_F_SAFE_MODE | CBI_F_HW_CHECK)) &&
+        !(g_boot.flags & (1u << (CBI_F_SKIP_SHIFT + BOOTSTAT_POWER)));
+    if (power && bootstat_begin) bootstat_begin(BOOTSTAT_POWER);
+    ACPI_STATUS s = !power ?
         fw_inventory_run(&fw_kernel_ops, g_boot.acpi_rsdp_phys) :
         fw_inventory_power_run(&fw_kernel_ops, g_boot.acpi_rsdp_phys);
+    if (power && bootstat_end) bootstat_end(BOOTSTAT_POWER);
     struct ciuki_firmware_page p = {.version = CIUKI_FIRMWARE_VERSION, .size = sizeof(p)};
     (void)firmware_inventory_page(&p);
     klog("[acpi] inventory status=%u devices=%u tables=%u peak=%u flags=%u power_owner=%u", s, p.total, p.table_count, p.peak_bytes, p.flags, fw_power.ownership);

@@ -23,6 +23,14 @@ FAT_RESERVED = 160
 BLACKBOX_DESCRIPTOR = 8
 BLACKBOX_FIRST = 32
 BLACKBOX_SECTORS = 128
+# G14 boot-status sector CBS1 (src/kernel/include/ciuki/bootstat.h).
+BOOTSTAT_SECTOR = 9
+# G14 System File Checker baseline (docs/design/startup-recovery.md 2.6):
+# system payloads only; mutable, regenerated or very large data stays out.
+SFC_INCLUDE = ("/programs/", "/system/vmm.elf", "/system/fonts/", "/system/icons/", "/system/assets/",
+               "/system/hwids/", "/system/sounds/", "/system/win32/", "/system/netsurf/",
+               "/system/wallpapers/", "/windows/system/", "/windows/fonts/", "/windows/cdplayer.exe")
+SFC_EXCLUDE_SUFFIX = (".sf2",)
 IMAGE_BYTES = 512 * 1024 * 1024
 HEADER = struct.Struct("<4sHHIHH")
 DEFAULT_CONFIG = b"safe=0 serial=1\n"
@@ -333,6 +341,7 @@ def desktop_payloads():
                "/Programs/clipbrd": DESKTOP / "clipbrd", "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/wordpad": DESKTOP / "wordpad", "/Programs/help": DESKTOP / "help", "/Programs/logview": DESKTOP / "logview", "/Programs/mixer": DESKTOP / "mixer", "/Programs/recorder": DESKTOP / "recorder", "/Programs/viewer": DESKTOP / "viewer",
                "/Programs/terminal": DESKTOP / "terminal",
+               "/Programs/scandisk": DESKTOP / "scandisk", "/Programs/msconfig": DESKTOP / "msconfig",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
     sources.update(desktop_license_payloads())
@@ -656,6 +665,39 @@ def initialize_blackbox(volume):
         stream.write(bytes(BLACKBOX_SECTORS * SECTOR))
 
 
+def bootstat_record():
+    """A clean CBS1 record: CRC-32 over bytes 0-3 and 5-507 (byte 4 is the loader's)."""
+    record = bytearray(SECTOR)
+    record[:4] = b"CBS1"
+    record[5] = 1
+    struct.pack_into("<I", record, 508, zlib.crc32(bytes(record[5:508]), zlib.crc32(bytes(record[:4]))))
+    return bytes(record)
+
+
+def initialize_bootstat(volume):
+    """Sector 9 of the reserved area (Setup's formatter leaves it zero)."""
+    with volume.open("r+b") as stream:
+        stream.seek(BOOTSTAT_SECTOR * SECTOR)
+        require(stream.read(SECTOR) == bytes(SECTOR), "boot-status sector free")
+        stream.seek(BOOTSTAT_SECTOR * SECTOR)
+        stream.write(bootstat_record())
+
+
+def stage_sfc(directory, sources):
+    """/System/SFC.LST: 'sha256 size path' per system payload, the same
+    records as build-manifest.json. Before BUILD.TXT, never itself."""
+    lines = []
+    for name, source in sorted(sources.items(), key=lambda item: item[0].casefold()):
+        folded = name.casefold()
+        if folded.startswith(SFC_INCLUDE) and not folded.endswith(SFC_EXCLUDE_SUFFIX):
+            lines.append(f"{sha256(source)} {source.stat().st_size} {name}\n")
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / "SFC.LST"
+    target.write_text("; CiukiOS System File Checker baseline: sha256 size path\n" + "".join(lines), encoding="ascii")
+    sources["/System/SFC.LST"] = target
+    return len(lines)
+
+
 def check_image(image, volume):
     with image.open("rb") as stream:
         mbr = stream.read(SECTOR)
@@ -697,6 +739,8 @@ def check_image(image, volume):
         require(struct.unpack_from("<I", descriptor, 508)[0] == zlib.crc32(descriptor[:508]), "blackbox descriptor checksum")
         stream.seek(BLACKBOX_FIRST * SECTOR)
         require(stream.read(BLACKBOX_SECTORS * SECTOR) == bytes(BLACKBOX_SECTORS * SECTOR), "blackbox empty ring")
+        stream.seek(BOOTSTAT_SECTOR * SECTOR)
+        require(stream.read(SECTOR) == bootstat_record(), "boot-status sector")
         stream.seek(6 * SECTOR)
         require(stream.read(SECTOR) == bpb, "backup BPB")
         require(stream.read(SECTOR) == fsinfo, "backup FSInfo")
@@ -888,7 +932,9 @@ def build_with_stage(kernel, out, boot_cfg, stage):
             "-f", "2", "-R", str(FAT_RESERVED), "-b", "6", "-h", str(PART_LBA),
             "-n", "CIUKIOS", volume)
         initialize_blackbox(volume)
+        initialize_bootstat(volume)
         sources.update({"/system/VMM.ELF": installed_kernel, "/system/BOOT.CFG": cfg})
+        stage_sfc(scratch / "sfc", sources)
         # /System/BUILD.TXT: provenance quoted by the Hardware Report. It
         # carries no image hash (an image cannot contain its own SHA-256).
         revision, source_dirty = git_identity()

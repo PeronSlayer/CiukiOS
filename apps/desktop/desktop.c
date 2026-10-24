@@ -2679,8 +2679,11 @@ static void shell_setup(struct desktop *d, int gate)
     /* fx-8: ordinary desktops spawn on the launcher worker. */
     if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
+extern void desk_recovery_init(struct desktop *, int, int) __attribute__((weak));
+extern void desk_recovery_start(struct desktop *) __attribute__((weak));
 int main(int argc, char **argv)
 {
+    int safe_mode = 0, terminal_shell = 0;
     startup_begin=monotonic(); startup_stage("entry");
 #ifdef __i386__
     static struct ciuki_devices_info devices;
@@ -2709,6 +2712,8 @@ int main(int argc, char **argv)
             victim = argv[a]+9;
         else if (test && !strncmp(argv[a],"--cycles=",9)) cycles = number(argv[a]+9,100);
         else if (!strncmp(argv[a],"--launch=",9) && argv[a][9] && !launch) launch = argv[a]+9;
+        else if (!strcmp(argv[a],"--safe")) safe_mode=1;               /* G14: Safe mode */
+        else if (!strcmp(argv[a],"--shell=terminal")) terminal_shell=1; /* G14: Command prompt only */
         else if (fullscreen_test && !strncmp(argv[a],"--launch-game=",14) && startup_game_index<0) {
             for (unsigned g=0;g<DESK_GAME_COUNT;g++) if (!strcmp(argv[a]+14,desk_games[g].title)) startup_game_index=(int)g;
             if (startup_game_index<0) return 2;
@@ -2755,7 +2760,8 @@ int main(int argc, char **argv)
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (du_completion_init(&desktop_completion)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
-    int firstboot_pages=gate?0:desk_firstboot(d);
+    if (desk_recovery_init) desk_recovery_init(d,safe_mode,terminal_shell);
+    int firstboot_pages=gate || terminal_shell ? 0 : desk_firstboot(d);
     shell_setup(d,gate);
     if (!gate && !test) {
         char *spool_argv[] = {"/System/printspool",NULL};
@@ -2770,6 +2776,7 @@ int main(int argc, char **argv)
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) startup_launch(d,launch);
+    if (!gate && desk_recovery_start) desk_recovery_start(d);
     /* Channels and input now share a blocking native poll wait. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);
     for (int i=0; i<demo_count; i++) if (spawn_demo(d,demos[i],0) < 0) fprintf(stderr,"desktop: demo spawn failed\n");

@@ -21,6 +21,14 @@
 #pragma weak blackbox_reset
 #pragma weak blackbox_capture
 #pragma weak blackbox_serial_replay
+/* G14 boot status (core/bootstat.c): sector 9 of the same partition. */
+#include <ciuki/bootstat.h>
+#ifndef FS_HOST
+#include "scandisk.h"
+#endif
+#pragma weak bootstat_bind
+#pragma weak bootstat_service
+#pragma weak bootstat_reset
 #include <ciuki/init.h>
 #include <ciuki/vfs_hooks.h>
 #include <ciuki/reboot.h>
@@ -292,6 +300,8 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         /* Raw replay precedes FAT scanning and every writable activation. */
         if (boot && s==&system_storage && blackbox_bind)
             blackbox_bind(dev,part->start,part->count,blackbox_serial_replay);
+        if (boot && s==&system_storage && bootstat_bind)
+            (void)bootstat_bind(dev,part->start,part->count);
         unsigned d = boot ? 2 : s->next_drive++;
         if (d >= 26) return s->disk_errors[disk] = -FS_ENOSPC;
         struct storage_volume *v = &s->volumes[d];
@@ -840,6 +850,116 @@ static int log_directory(struct fat_volume *fat)
     if (!e && !(directory.attr & FAT_ATTR_DIR)) e = -FS_ENOTDIR;
     return e;
 }
+#ifndef FS_HOST
+/* G14 ScanDisk at start (docs/design/startup-recovery.md 2.4): the reports
+ * of this start, one per drive, for system call 99's REPORT. */
+static struct ciuki_scandisk scandisk_reports[26];
+static bool scandisk_ran[26], scandisk_busy;
+static bool boot_option(const char *token)
+{
+    size_t n = strlen(token);
+    for (unsigned i = 0; i < sizeof(g_boot.options) && g_boot.options[i];) {
+        unsigned first = i;
+        while (i < sizeof(g_boot.options) && g_boot.options[i] && g_boot.options[i] != ' ' &&
+               g_boot.options[i] != '\r' && g_boot.options[i] != '\n') i++;
+        if (i - first == n && !memcmp(g_boot.options + first, token, n)) return true;
+        if (i < sizeof(g_boot.options) && g_boot.options[i]) i++;
+    }
+    return false;
+}
+/* Reload a volume from disk after the engine wrote it (storage_boot_cfg's
+ * pattern): the VFS keeps its mount, identity and publication epochs. */
+static int remount_from_disk(struct storage *s, struct storage_volume *v)
+{
+    uint32_t identity_epoch=v->fat.identity_mount_generation, generation=v->io.media_generation;
+    uint64_t groups=v->fat.publication_count, frontier=v->fat.publication_frontier;
+    struct cache_completion completion=v->fat.completion;
+    void (*changed)(void *,struct fat_volume *,const struct fat_entry *,const struct fat_entry *,enum fat_identity_change)=v->fat.identity_changed;
+    void *identity_ctx=v->fat.identity_ctx;
+    void (*observer)(void *,uint64_t,enum fat_publication_stage,char,int)=v->fat.publication_observer;
+    void *observer_ctx=v->fat.publication_ctx;
+    cache_invalidate(&s->cache, &v->io, true);
+    int e=VFS_IO(&s->vfs,fat_mount(&v->fat,&s->cache,&v->io,0,v->io.capacity,false));
+    if (!e && generation!=v->io.media_generation) e=-FS_EIO;
+    if (e) { vfs_identity_expire(&s->vfs,&v->fat); return e; }
+    v->fat.identity_mount_generation=identity_epoch;
+    v->fat.identity_changed=changed; v->fat.identity_ctx=identity_ctx;
+    v->fat.publication_count=v->fat.publication_group=v->fat.publication_durable=groups;
+    v->fat.publication_frontier=frontier; v->fat.publication_generation=generation;
+    v->fat.completion=completion;
+    v->fat.publication_observer=observer; v->fat.publication_ctx=observer_ctx;
+    v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));
+    if (v->read_gate && !v->read_sequence) v->read_sequence = ++s->sequence;
+    return 0;
+}
+/* Namespace and volume lock held, before the FAT write session opens. A
+ * fixed volume marked unclean or with a hard error, or every fixed volume
+ * when the check was scheduled, unless Esc, autoscan=0, a test request. */
+static void boot_scandisk(struct storage *s, struct storage_volume *v, unsigned d)
+{
+    if (s != &system_storage || d >= 26 || scandisk_ran[d] || v->removable || v->optical || s->setup_mode) return;
+    uint32_t flags = g_boot.flags;
+    if ((flags & (CBI_F_TEST_REQUEST | CBI_F_SCANDISK_SKIP)) || boot_option("autoscan=0")) return;
+    bool unclean = (v->fat.ro_reasons & (FAT_RO_DIRTY | FAT_RO_IO_FLAG | FAT_RO_CORRUPT | FAT_RO_COPIES | FAT_RO_LOST)) != 0;
+    if (!unclean && !(flags & CBI_F_SCANDISK)) return;
+    if (!blkdev_durable(blkpart_device(&v->part))) return;
+    scandisk_ran[d] = true;
+    struct ciuki_scandisk *r = &scandisk_reports[d];
+    memset(r, 0, sizeof(*r));
+    r->drive = d;
+    r->flags = CIUKI_SCANDISK_FIX | CIUKI_SCANDISK_AT_START |
+        ((flags & CBI_F_SCANDISK_THOROUGH) || (v->fat.ro_reasons & FAT_RO_IO_FLAG) ? CIUKI_SCANDISK_THOROUGH : 0);
+    klog("[scandisk] start drive=%c reasons=0x%x scheduled=%u thorough=%u", 'A' + d, v->fat.ro_reasons,
+         !!(flags & CBI_F_SCANDISK), !!(r->flags & CIUKI_SCANDISK_THOROUGH));
+    refresh_volume(v);
+    cache_invalidate(&s->cache, &v->io, true);
+    (void)scandisk_run(&v->io, r);
+    int e = remount_from_disk(s, v);
+    if (e) { v->error = e; klog("[scandisk] remount drive=%c error=%d", 'A' + d, e); }
+}
+int storage_scandisk_report(unsigned d, struct ciuki_scandisk *out)
+{
+    if (d >= 26) return -FS_EINVAL;
+    vfs_lock(&system_storage.vfs,0);
+    if (scandisk_ran[d]) *out = scandisk_reports[d];
+    else { memset(out, 0, sizeof(*out)); out->version = CIUKI_SCANDISK_VERSION; out->size = sizeof(*out); out->drive = d; }
+    vfs_unlock(&system_storage.vfs);
+    return 0;
+}
+/* On demand (ScanDisk, Check Now): a read-only check of a mounted FAT drive
+ * after its writes are durable, the drive locked for the duration. A fix a
+ * fixed volume in use needs is scheduled for the next start. */
+int storage_scandisk(unsigned d, struct ciuki_scandisk *r, bool *schedule)
+{
+    struct storage *s = &system_storage;
+    *schedule = false;
+    if (d >= 26) return -FS_EINVAL;
+    vfs_lock(&s->vfs,0);
+    struct storage_volume *v = storage_volume(s, d);
+    bool ok = v && !v->error && v->fat.mounted && !v->optical && !s->stopped;
+    bool busy = scandisk_busy;
+    if (ok && !busy) scandisk_busy = true;
+    vfs_unlock(&s->vfs);
+    if (!ok) return -FS_ENOENT; /* not a mounted FAT drive */
+    if (busy) return -FS_EBUSY;
+    uint32_t wanted = r->flags;
+    vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"scandisk"); vfs_site_locked(&s->vfs,"mount");
+    int e = v->fat.readonly ? 0 : VFS_IO(&s->vfs,fat_commit(&v->fat));
+    if (!e) {
+        refresh_volume(v);
+        r->drive = d;
+        r->flags = wanted & ~(uint32_t)CIUKI_SCANDISK_FIX;
+        e = scandisk_run(&v->io, r);
+    }
+    vfs_unlock(&s->vfs);
+    vfs_lock(&s->vfs,0); scandisk_busy = false; vfs_unlock(&s->vfs);
+    fs_service();
+    if (!e && (wanted & CIUKI_SCANDISK_FIX) && (r->flags & CIUKI_SCANDISK_ERRORS) && !v->removable) *schedule = true;
+    r->flags |= wanted & CIUKI_SCANDISK_FIX;
+    return e;
+}
+#endif
+
 int storage_enable_write(struct storage *s, unsigned d)
 {
     struct storage_volume *v = storage_volume(s, d);
@@ -849,7 +969,16 @@ int storage_enable_write(struct storage *s, unsigned d)
     if (s->setup_mode && !v->removable) { v->refused++; return -FS_EROFS; }
     if (s->writer_error) return s->writer_error;
     if (v->error) return v->error;
-    if (!v->read_gate || v->writes_before_gate) { v->refused++; return -FS_EROFS; }
+    if (v->writes_before_gate) { v->refused++; return -FS_EROFS; }
+#ifndef FS_HOST
+    /* G14: ScanDisk repairs what the read gate would refuse (cross-links,
+     * FAT copies) and the dirty volume, before any write session. */
+    vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
+    boot_scandisk(s, v, d);
+    vfs_unlock(&s->vfs);
+    if (v->error) return v->error;
+#endif
+    if (!v->read_gate) { v->refused++; return -FS_EROFS; }
     vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
     refresh_volume(v);
     int e = VFS_IO(&s->vfs,fat_enable_write(&v->fat));
@@ -1094,6 +1223,7 @@ static int shutdown_volumes(struct storage *s)
 void storage_destroy(struct storage *s)
 {
     if (s==&system_storage && blackbox_reset) blackbox_reset();
+    if (s==&system_storage && bootstat_reset) bootstat_reset();
     if (!s || !s->ready) return;
     if (pagefile_on(s,0) && !pager_attach && pagefile_close) { pagefile_close(&system_pagefile); memset(&system_pagefile,0,sizeof(system_pagefile)); }
     for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
@@ -1353,6 +1483,7 @@ static void storage_timer(void *arg)
              * shared bounded work queue. fs_service/ATA yield within work. */
             if (blackbox_flush) blackbox_flush();
             last_raw=(uint32_t)now;
+            if (bootstat_service) (void)bootstat_service();
             if (log_due) bootlog_drain();
         }
         /* The writer_running reservation covers resize/prefetch too, so

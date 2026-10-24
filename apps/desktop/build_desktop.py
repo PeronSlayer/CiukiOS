@@ -31,6 +31,8 @@ ACCESSORIES = {
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
+    "scandisk": ["scandisk_main.c", "scandisk_view.c", "../sysrecovery/scanreport.c"],
+    "msconfig": ["msconfig_main.c", "msconfig_view.c", "msconfig_model.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/bootcfg.c", "../../src/kernel/lib/sha256.c"],
     # G28: WordPad (RTF editor); links libfont for the Liberation faces and shares CiukNote's file helpers.
     "wordpad": ["../wordpad/main.c", "../wordpad/app.c", "../wordpad/rich.c", "../wordpad/rtf.c", "../wordpad/layout.c",
                 "../wordpad/fonts.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"],
@@ -164,7 +166,7 @@ def build():
     start = time.monotonic()
     sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
                "desktop": ["clipboard.c", "v3_fixture.c", "w32_fixture_gate.c", "installer_fixture.c", "installer_registry.c", "installer_title.c", "win32_presenter.c", "win32_crash.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "desktop.c", "client.c", "gl_present.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
-                           "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
+                           "../libdeskui/icons.c", "../libdeskui/icon_map.c", "recovery.c", "recovery_view.c", "../sysrecovery/regcheck.c", "../sysrecovery/scanreport.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "../dosbox/clipboard.c", "protocol.c"]}
     evidence, commands = {}, {}
@@ -187,7 +189,7 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/network.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/network.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c", "../terminal/recovery.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
 
     systools = ["../systools/sysinfo.c", "../systools/resmeter.c", "../systools/monitor.c", "../systools/devctl.c", "../systools/sched.c", "../systools/profiles.c",

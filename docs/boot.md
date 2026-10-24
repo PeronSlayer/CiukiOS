@@ -13,7 +13,8 @@ pressed in the menu window.
 
 1. Firmware POST.
 2. The loader clears the text screen and shows one line at the bottom,
-   `S for safe mode, L for log, H for Hardware check`, for about 3 s.
+   `Ctrl or F8: Startup menu, S for safe mode, L for log, H for Hardware check`,
+   for about 3 s (G14, below).
 3. The loader sets the VBE mode (black screen) and loads `VMM.ELF`.
 4. The kernel draws the boot splash, the original Ciuki photograph
    (`misc/CiukiOS_SplashScreen.png`) with the tagline and a progress bar
@@ -128,6 +129,35 @@ desktop exited), or no desktop 120 s after the kernel started
 (`[console] no desktop 120 s after boot; boot log shown`). From then on it
 behaves as in a verbose boot.
 
+## Startup menu, Step-by-step and ScanDisk at start (G14)
+
+Design and Windows 98 sources: [startup-recovery](design/startup-recovery.md).
+
+- **Startup menu.** Hold Ctrl or press F8 during the 3-second window, or
+  put `menu=1` in `BOOT.CFG` (System Configuration ▸ Advanced ▸ Enable
+  Startup menu). It also appears without a key after a start that did not
+  complete, with Safe mode selected. Choices: 1 Normal, 2 Logged, 3 Safe
+  mode (with the disks), 4 Step-by-step confirmation, 5 Command prompt only,
+  6 Safe mode command prompt only, 7 Safe mode without disks (the earlier
+  `S`), 8 Hardware check. Digits and Up/Down select, Enter starts, the
+  30-second countdown restarts at every key; F5, Shift+F5 and Shift+F8 start
+  Safe mode, Safe mode command prompt only and Step-by-step at once (also
+  during the 3-second window). The serial log records `L:STARTUP=<n>`.
+- **Step-by-step.** Nine `[Enter=Y,Esc=N]` questions: the startup log on
+  screen, then each driver class (accelerated display, sound, network, USB,
+  ports, power management, startup programs) and the desktop.
+- **ScanDisk.** When the boot volume was not shut down properly (FAT[1]
+  clean bit clear) the loader shows `CiukiOS was not shut down properly.
+  ScanDisk will check your disks.` for 10 s; Esc skips it. `autoscan=0` in
+  `BOOT.CFG` disables the check, `autoscan=2` runs it without the message.
+  The kernel then checks and repairs every fixed FAT volume that needs it
+  before writes open (`[scandisk] ...` records), and the desktop shows the
+  results and appends them to `C:\SYSTEM\LOGS\SCANDISK.LOG`.
+- **Boot status.** Partition sector 9 (`CBS1`) records that a start is in
+  progress until the desktop's first frame, and which driver class was
+  activating; a class that stops the start twice is skipped
+  (`[asd] skip class=...`) until System Configuration enables it again.
+
 ## Verbose boots (unchanged console)
 
 The kernel console draws every log line on screen, as before, in these
@@ -135,7 +165,7 @@ boots:
 
 | Boot | How it is selected |
 | --- | --- |
-| Safe mode | `S` in the menu, or `safe=1` in `BOOT.CFG` |
+| Safe mode | `S` in the menu, Startup menu choices 3, 6 and 7, or `safe=1` in `BOOT.CFG` |
 | Serial log | `L` in the menu (sets boot flag bit 11; still toggles bit 1) |
 | Hardware check | `H` in the menu; bounded diagnostic page instead of the desktop ([contract](design/hardware-check.md)) |
 | Probe | `P` in the menu and a selector |
@@ -146,6 +176,10 @@ With a `BOOT.CFG` test request or safe flag the loader also prints its menu
 on screen as before. After `S`, `L` or `P` in a normal boot the loader prints
 its remaining lines on screen; the menu text itself stays serial-only there.
 A loader error is always printed on screen.
+
+The exact `BOOT.CFG` tokens `menu=1`, `autoscan=0` and `autoscan=2` are
+G14's (above); the loader acts on them and leaves them in the copied boot
+options.
 
 The exact `BOOT.CFG` token `usbscan=0` (f1-87 diagnostic) keeps the initial
 USB enumeration and stops the periodic USB rescans; the loader only accepts

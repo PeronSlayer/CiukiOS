@@ -101,7 +101,9 @@ int main(int argc,char **argv)
     du_set_text(&ui.dialog.items[4],"DATA"); apply(); assert(label_sets==1 && !strcmp(label,"DATA"));
     struct ciuki_input_event ctrl={.type=CIUKI_INPUT_KEY,.code=DU_KEY_LCTRL,.value=1};
     du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
-    assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"ScanDisk is not installed") && ui.dialog.items[4].hidden); dump(argv[1],"g6-tools"); cancel();
+    /* G14: Check Now (slot 5) is on the Tools page only. */
+    assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"Check Now checks this drive") && ui.dialog.items[4].hidden &&
+           !ui.dialog.items[5].hidden && !strcmp(ui.dialog.items[5].text,"Check &Now...")); dump(argv[1],"g6-tools"); cancel();
     counting=1; sheet("/"); assert(strstr(ui.dialog.text,"calculating...")); dump(argv[1],"g6-counting"); cancel();
     /* View options filter only browser listings; Properties includes hidden children. */
     assert(!files_navigate(&app,"/Documents/Sub") && app.model.count==0);

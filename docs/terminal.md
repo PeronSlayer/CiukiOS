@@ -32,6 +32,11 @@ Its working directory starts at `C:\Documents`. Commands are case insensitive.
 | `LUA` | Enter interactive Lua; `.exit` returns to the native prompt. |
 | `RUN program [args]` | Prints `not available in this release`: the native SDK has no pipes yet. |
 | `REG` | Reserved for the registry directive, f2-47. |
+| `SCANREG [/BACKUP] [/COMMENT=text] [/FIX]` | Registry Checker: check the registry roots, `/FIX` restores a damaged root from the newest good backup, `/BACKUP` writes `C:\SYSTEM\SYSBCKUP\RB00n.CRB` (five kept). |
+| `SCANREG /RESTORE [n]` | List the backups by date, or restore backup `n` (only after a Command prompt only start), then `REBOOT`. |
+| `SCANDISK [d:] [/A] [/THOROUGH] [/AUTOFIX]` | Check a drive (default: the current one) and print the ScanDisk report; `/AUTOFIX` schedules the repair for the next start. |
+| `SFC`, `SFC /UPDATE file`, `SFC /RESTORE file source` | System File Checker: list changed and deleted system files; keep a new version; restore the original from a source folder. |
+| `WIN` | After a Command prompt only start: start the normal desktop. |
 
 Paths may be relative, absolute POSIX paths, or drive paths such as
 `C:\Documents\notes.txt`. `C:` maps to `/`; `D:` through `Z:` map to `/mnt/d`

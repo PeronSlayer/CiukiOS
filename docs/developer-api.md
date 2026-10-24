@@ -829,7 +829,8 @@ G1 TIME=97 is preserved; G6 follows the highest allocated syscall.
 ```c
 CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
-    CIUKI_SYS_NET_INFO = 99,
+    CIUKI_SYS_RECOVERY = 99,
+    CIUKI_SYS_NET_INFO = 100,
 };
 ```
 
@@ -6608,6 +6609,56 @@ Returns 0 (or STATUS's result), or -1 with errno.
 
 ```c
 int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
+#endif
+```
+
+## `ciuki/recovery.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/recovery.h`.
+
+G14: startup recovery (call 99, CIUKI_SYS_RECOVERY; records and flags in
+ciuki/abi.h, docs/design/startup-recovery.md): the boot status, the
+Automatic Skip Driver list, selective startup and ScanDisk.
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_USER_RECOVERY_H
+#define CIUKI_USER_RECOVERY_H
+#include <ciuki/abi.h>
+```
+
+Each returns 0, or -1 with errno. Version and size are filled in.
+status: this start's boot flags and the boot-status record (flags lacks
+CIUKI_RECOVERY_VALID when the system volume has none).
+
+```c
+int ciuki_recovery_status(struct ciuki_recovery_status *status);
+```
+
+Selective startup classes and requests for the next start (EPERM
+without the recovery authority, ENODEV without a boot-status sector).
+
+```c
+int ciuki_recovery_configure(uint8_t disabled_classes, uint8_t requests);
+```
+
+The Automatic Skip Driver agent may load these classes again.
+
+```c
+int ciuki_recovery_enable(uint8_t classes);
+```
+
+An on-demand check of drive (0 = A:) with CIUKI_SCANDISK_* flags; the
+report is in *out (out->result is the check's own outcome).
+
+```c
+int ciuki_scandisk(unsigned drive, uint32_t flags, struct ciuki_scandisk *out);
+```
+
+The check that ran on drive at this start (RAN clear: none).
+
+```c
+int ciuki_scandisk_report(unsigned drive, struct ciuki_scandisk *out);
 #endif
 ```
 

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#pragma weak term_recovery /* recovery.c; host tests link the commands alone */
 static unsigned lower(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int equal(const char *a, const char *b) { return fm_same_path(a,b); }
 static int wildcard(const char *p, const char *s)
@@ -287,6 +288,8 @@ static const char help[]=
 "TASKS [KILL pid]       DISPLAY            MEM\n"
 "DATE  TIME            SHUTDOWN            REBOOT\n"
 "LUA [script.lua args]  script.lua [args]   RUN (unavailable)\n"
+"SCANREG [/BACKUP] [/COMMENT=text] [/RESTORE [n]] [/FIX]   SFC [/UPDATE f | /RESTORE f src]\n"
+"SCANDISK [d:] [/A] [/THOROUGH] [/AUTOFIX]   WIN (after Command prompt only)\n"
 "REG is reserved. Quote paths with spaces; * and ? match names.\n"
 "Tab: complete path; Up/Down: history; PgUp/PgDn: scroll.\n"
 "Ctrl+C: copy selection or interrupt; Ctrl+V: paste.\n"
@@ -304,6 +307,7 @@ int term_execute(struct terminal *t,const char *line)
     else if(equal(a[0],"CLS") || equal(a[0],"clear")) {
         if(n!=1)r=-EINVAL; else if(!t->capture) { for(unsigned i=0;i<t->count;i++)free(t->lines[(t->first+i)%TERM_SCROLLBACK]); t->first=t->count=t->used=t->top=0; t->pending[0]=0; t->selection_a=t->selection_b=0; }
     }
+    else if(term_recovery && term_recovery(t,n,a,&r)) { } /* G14: SCANREG, SCANDISK, SFC, WIN */
     else if(equal(a[0],"RUN"))term_write(t,"not available in this release\n");
     else if(equal(a[0],"REG"))term_write(t,"REG is reserved for a later release.\n");
     else if(equal(a[0],"DIR") || equal(a[0],"ls"))r=n>2 ? -EINVAL : directory(t,n==2 ? a[1] : t->cwd[0] ? t->cwd : "Computer");

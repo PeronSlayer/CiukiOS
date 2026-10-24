@@ -60,6 +60,8 @@ void term_detach(struct terminal *);
 void term_write(struct terminal *, const char *);
 void term_printf(struct terminal *, const char *, ...);
 int term_execute(struct terminal *, const char *);
+/* G14 (recovery.c): 1 when the command is SCANREG, SCANDISK, SFC or WIN. */
+int term_recovery(struct terminal *, int n, char **argv, int *result);
 char *term_capture(struct terminal *, const char *, int *);
 int term_path(struct terminal *, const char *, char *);
 unsigned term_visual_rows(const struct terminal *);

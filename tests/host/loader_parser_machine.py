@@ -45,6 +45,8 @@ class LoaderParserMachine(LoaderUARTMachine):
         self.regs.update(esp=0x7c00, ss=0, fs=0, ds=0x2000, es=0x2000)
         self.zero = self.carry = False
         self.hooks = {}
+        self.interrupts = {}  # vector -> callable; BIOS calls are host fixtures
+        self.budget = 100000
 
     @staticmethod
     def reg_info(name):
@@ -86,7 +88,7 @@ class LoaderParserMachine(LoaderUARTMachine):
     def run(self, name, stop=None):
         address = self.symbols[name]
         self.push(0xffff)
-        for _ in range(100000):
+        for _ in range(self.budget):
             if address == self.symbols['fatal']:
                 return False
             if address == stop:
@@ -94,6 +96,8 @@ class LoaderParserMachine(LoaderUARTMachine):
             if address in self.hooks:
                 self.hooks[address]()
                 address = self.pop()
+                if address == 0xffff:  # a hooked tail call (jmp print) returned
+                    return True
                 continue
             following, instruction = self.code[address]
             op, _, args = instruction.partition(' ')
@@ -162,6 +166,11 @@ class LoaderParserMachine(LoaderUARTMachine):
                     following = int(dest, 16)
             elif op in ('clc', 'stc'):
                 self.carry = op == 'stc'
+            elif op == 'int':
+                handler = self.interrupts.get(int(dest.split()[-1], 16))
+                if handler is None:
+                    raise AssertionError(f'unexpected BIOS call: {instruction}')
+                handler()
             elif op in ('jmp', 'jc', 'jnc', 'jb', 'jae', 'ja', 'jbe', 'jna', 'jz', 'jnz', 'je', 'jne'):
                 take = {'jmp': True, 'jc': self.carry, 'jb': self.carry,
                         'jnc': not self.carry, 'jae': not self.carry,

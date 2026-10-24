@@ -395,6 +395,8 @@ struct desktop {
     /* f2-31/f2-32 app scenarios (app_test is DESK_APP_FILES or DESK_APP_NOTE):
      * the program's checkpoints are PINGs with serial DESK_APP_CHECKPOINT+n. */
     int app_test, app_checkpoint, app_reported, app_done;
+    /* G14 (recovery.c): --safe and --shell=terminal from the supervisor. */
+    int safe_mode, terminal_shell;
     uint32_t app_pid;
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
@@ -611,6 +613,13 @@ int desk_help_argument(const char *argument);   /* G15: LAUNCH help from any cli
 /* Launch results: a PID, -errno, or 0 when d->launch_async queued the spawn
  * (fx-8); desk_launch_completed reports the late result to its origin. */
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
+/* G14 startup recovery (recovery.c; weak where host tests link without it). */
+void desk_recovery_init(struct desktop *, int safe, int terminal);
+void desk_recovery_start(struct desktop *);
+void desk_recovery_tick(struct desktop *);
+void desk_recovery_paint(struct desktop *, struct desk_box clip);
+int desk_recovery_win(struct desktop *);
+int desk_recovery_startup_allowed(const struct desktop *);
 void desk_launch_origin(struct desktop *, unsigned origin, const char *label);
 void desk_launch_completed(struct desktop *, const struct desk_launch_request *, const char *name, int result);
 /* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */

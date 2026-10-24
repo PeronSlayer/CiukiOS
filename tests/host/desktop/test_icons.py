@@ -205,8 +205,8 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(set(programs)), 33)  # integration Programs plus four G30 System Tools; duplicate identities are rejected separately
-        self.assertEqual(len(accessories), 20)  # integration accessories plus the four G30 tools
+        self.assertEqual(len(set(programs)), 35)  # integration Programs plus four G30 System Tools; duplicate identities are rejected separately
+        self.assertEqual(len(accessories), 22)  # integration accessories plus the four G30 tools
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         # f6-19: native application records (name, label, Tango icon, description) agree

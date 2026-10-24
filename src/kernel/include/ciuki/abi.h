@@ -761,7 +761,8 @@ enum ciuki_syscall {
     /* G1 TIME=97 is preserved; G6 follows the highest allocated syscall. */
     CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
-    CIUKI_SYS_NET_INFO = 99,
+    CIUKI_SYS_RECOVERY = 99,
+    CIUKI_SYS_NET_INFO = 100,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */

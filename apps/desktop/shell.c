@@ -275,6 +275,8 @@ static const struct program_info programs[] = {
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
     {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
+    {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},
+    {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
     {"logview", "Log Viewer", "text-x-generic", "system-tools", NULL},
     {"clipbrd", "Clipboard Viewer", "edit-paste", "system-tools", NULL},
     {"resmeter", "Resource Meter", "applications-system", "system-tools", NULL},
