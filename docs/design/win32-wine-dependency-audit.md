@@ -302,7 +302,7 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | cabinet.dll | 0 | 0 | 0 | 0 |
 | combase.dll | 0 | 0 | 0 | 5 |
 | comctl32.dll | 0 | 0 | 0 | 5 |
-| comdlg32.dll | 0 | 0 | 0 | 20 |
+| comdlg32.dll | 0 | 0 | 0 | 11 |
 | coml2.dll | 0 | 0 | 0 | 0 |
 | imm32.dll | 38 | 0 | 0 | 0 |
 | msvcrt.dll | 0 | 0 | 0 | 2 |
@@ -328,7 +328,7 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | f5-14b | `wine-retarget` | 197 |
 | f5-20b | `core-implement` | 218 |
 | f5-20c | `core-implement` | 7 |
-| f5-20c | `core-w21-stub` | 9 |
+| f5-20c | `core-w21-stub` | 7 |
 | f5-20c | `not-reused` | 38 |
 | f5-20c | `w21-unresolved-forwarder` | 3 |
 
@@ -419,7 +419,7 @@ Unique names per audit, rule and owning DLL:
 - f5-20c `core-api-f5-20c` → kernel32.dll (4): DebugBreak, IsBadCodePtr, IsBadReadPtr, IsBadWritePtr
 - f5-20c `core-census-w21` → imm32.dll (2): ImmGetContext, ImmReleaseContext
 - f5-20c `core-census-w21` → kernel32.dll (2): GetNumberOfConsoleInputEvents, ReadConsoleInputA
-- f5-20c `core-census-w21` → winspool.drv (3): ClosePrinter, DocumentPropertiesA, OpenPrinterA
+- f5-20c `core-census-w21` → winspool.drv (1): DocumentPropertiesA
 - f5-20c `not-reused` → imm32.dll (38): DelayLoadFailureHook, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
 
 ### Load and DllMain evidence (generated)
