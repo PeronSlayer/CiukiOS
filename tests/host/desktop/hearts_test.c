@@ -178,6 +178,12 @@ int main(int argc, char **argv)
       r = hearts_card_rect(&app, 0, 0); click(r.x + 3, r.y + 30); assert(app.marked[0] && !pass->disabled); }
     du_render(&ui);
     at_save(folder, "hearts-marked", &ui);
+    {   /* the Pass button is visible on the table (the table is painted after the widgets: it once hid the button) */
+        int differing = 0;
+        for (int y = pass->box.y + 2; y < pass->box.y + pass->box.h - 2; y++)
+            for (int x = pass->box.x + 2; x < pass->box.x + pass->box.w - 2; x++) differing += pixels[y * HE_W + x] != TABLE_GREEN;
+        assert(differing > pass->box.w * pass->box.h / 2);
+    }
     card_t chosen[3]; int k = 0; for (int i = 0; i < 13 && k < 3; i++) if (app.marked[i]) chosen[k++] = g->hand[0][i];
     assert(k == 3);
     hearts_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = HV_PASS}, &app);

@@ -11,7 +11,7 @@
 #define CIUKI_ACC_CHARMAP_H
 #include "acc.h"
 #include <ciuki/font.h>
-#define CHARMAP_W 560
+#define CHARMAP_W 606
 #define CHARMAP_H 316
 #define CHARMAP_COLS 18
 #define CHARMAP_ROWS 8

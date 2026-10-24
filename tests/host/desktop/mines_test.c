@@ -3,6 +3,8 @@
 #include "acc_test.h"
 static uint32_t pixels[MINES_W * MINES_H];
 static struct du_ui ui; static struct mines_app app;
+static int relayout_w, relayout_h, relayout_calls;
+static void relayout(void *host, int w, int h) { (void)host; relayout_w = w; relayout_h = h; relayout_calls++; }
 static void click_button(int x, int y, int button)
 {
     at_move(&ui, x, y);
@@ -167,6 +169,22 @@ int main(int argc, char **argv)
     assert(app.game.level == MINES_EXPERT && (app.game_items[4].flags & DU_ITEM_CHECKED) && !(app.game_items[2].flags & DU_ITEM_CHECKED));
     du_render(&ui);
     at_save(folder, "mines-expert", &ui);
+    /* The window wraps its board: a level that needs another size asks the host to reopen it (Windows resizes). */
+    {
+        int ww, wh; mines_window_size(&app.game, &ww, &wh);
+        assert(ww == 30 * MINES_CELL + 24 && wh == 72 + 16 * MINES_CELL + 12);
+        app.relayout = relayout;
+        ev.id = MN_EXPERT; mines_event(&ui, &ev, &app);   /* the harness canvas is 504 x 440: Expert wraps to 504 x 340 */
+        assert(relayout_calls == 1 && relayout_w == ww && relayout_h == wh);
+        ev.id = MN_BEGINNER; mines_event(&ui, &ev, &app);
+        assert(relayout_calls == 2 && relayout_w == 9 * MINES_CELL + 24 && relayout_h == 72 + 9 * MINES_CELL + 12 && app.game.level == MINES_BEGINNER);
+        app.relayout = NULL;
+        ev.id = MN_EXPERT; mines_event(&ui, &ev, &app);
+        app.game.view_w = 9 * MINES_CELL + 24;                                           /* a beginner-sized window centres the board */
+        mines_set_level(&app.game, MINES_BEGINNER, 0, 0, 0);
+        struct du_rect nb = mines_board_rect(&app.game); assert(nb.x == 12 && nb.x + nb.w + 12 == app.game.view_w);
+        app.game.view_w = MINES_W; ev.id = MN_EXPERT; mines_event(&ui, &ev, &app);
+    }
     ev.id = MN_MARKS; mines_event(&ui, &ev, &app); assert(app.game.marks_enabled && (app.game_items[7].flags & DU_ITEM_CHECKED));
     ev.id = MN_BEGINNER; mines_event(&ui, &ev, &app);
     ev.id = MN_CUSTOM; mines_event(&ui, &ev, &app); assert(ui.dialog.kind && !strcmp(ui.dialog.items[2].text, "16 16 40")); ui.dialog.kind = 0;   /* the Custom field box, with the usual numbers */

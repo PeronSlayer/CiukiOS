@@ -24,6 +24,7 @@ struct mines {
     int flags, opened, seconds;
     int marks_enabled;                    /* the Marks (?) menu option */
     int max_w, max_h;                     /* Custom limits: 30x24 or what the window shows */
+    int view_w;                           /* client width the board is centred in (0: MINES_W) */
     uint32_t seed;
     struct mines_best best;
 };
@@ -53,11 +54,15 @@ struct mines_app {
     const char *best_path;                /* where the best times persist, NULL: not saved */
     int pressed_face, hold_x, hold_y, holding;
     void (*quit)(void *host); void *host;   /* Game > Exit */
+    /* A level change needs another window size (the window wraps its board, like Windows):
+     * NULL keeps the window as it is. The host reopens the window at w x h and re-attaches. */
+    void (*relayout)(void *host, int w, int h);
 };
 enum { MN_CANVAS = 1, MN_NEW = 10, MN_BEGINNER, MN_INTERMEDIATE, MN_EXPERT, MN_CUSTOM, MN_MARKS, MN_BEST, MN_EXIT, MN_ABOUT, MN_HELP, MN_CUSTOM_BOX, MN_TIMER = 1 };
 void mines_attach(struct mines_app *, struct du_ui *);
 void mines_event(struct du_ui *, const struct du_event *, void *);
 void mines_paint(struct du_ui *, void *);
+void mines_window_size(const struct mines *, int *w, int *h);   /* client size that wraps the board */
 struct du_rect mines_board_rect(const struct mines *);
 struct du_rect mines_face_rect(const struct mines *);
 #endif
