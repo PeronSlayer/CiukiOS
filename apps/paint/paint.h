@@ -13,7 +13,7 @@ enum paint_command {
     M_NEW = 1, M_OPEN, M_SAVE, M_SAVEAS, M_EXIT, M_UNDO, M_REDO, M_CUT, M_COPY, M_PASTE,
     M_CLEARSEL, M_SELALL, M_TOOLBOX, M_COLORBOX, M_STATUS, M_ZOOMIN, M_ZOOMOUT, M_Z1, M_Z2,
     M_Z4, M_Z6, M_Z8, M_GRID, M_FONT, M_FLIP, M_INVERT, M_ATTR, M_CLEARIMG, M_OPAQUE,
-    M_HELP, M_ABOUT
+    M_HELP, M_ABOUT, M_PAGESETUP, M_PRINT
 };
 enum { P_CANVAS = 100, P_HSCROLL, P_VSCROLL, P_STATUS, P_TOOL = 200, P_SWATCH = 300, P_OPTIONS = 400 };
 struct paint_state {
@@ -34,6 +34,7 @@ int paint_open(const char *);
 int paint_save(const char *, enum paint_format);
 int paint_request_close(void); /* 1: unsaved prompt pending; 0: safe to close */
 void paint_decline_callback(void (*declined)(void *)); /* G3: an exit the user cancelled (host = paint_callbacks host) */
+void paint_print_callback(void (*printing)(void *, int setup));
 void paint_snapshot(struct paint_state *);
 uint8_t paint_pixel(int x, int y);
 uint32_t paint_rgb(uint8_t index);

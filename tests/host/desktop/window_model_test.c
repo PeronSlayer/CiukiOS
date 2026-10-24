@@ -412,7 +412,7 @@ static void wm_frame(const char *what)
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
 }
-static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo"};
+static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers"};
 static void wm_begin(unsigned m, int shell)
 {
     wm_mode=m; wm_shell=shell;
@@ -1025,9 +1025,31 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void row_printing(unsigned m)
+{
+    /* Print dialogs and queue rows live in a retained native client surface.
+     * Exercise their real DAMAGE/exposure path, including a covered client
+     * refreshing a queue while another window owns the focus. */
+    row_name="printing";wm_begin(m,1);
+    struct fake_app *queue=app_open("printers",300,240,180,100);step("Printers folder and queue created");
+    app_paint(queue,0,0,300,240,0x112233);step("Add Printer wizard opens");
+    app_paint(queue,20,70,250,90,0x442233);step("printer selection and default change");
+    app_paint(queue,0,0,300,240,0x552233);step("wizard closes and printers refresh");
+    struct fake_app *note=app_open("ciuknote",280,220,340,220);step("document covers part of queue");
+    app_paint(note,10,15,260,190,0x774433);step("Print dialog opens");
+    app_paint(note,10,15,260,190,0x884433);step("copies, range and print-to-file change");
+    app_paint(queue,0,80,300,100,0x998877);step("covered queue: job queued, paused, resumed");
+    app_paint(note,0,0,280,220,0xaa4433);step("Print cancelled exposes document");
+    app_paint(note,10,15,260,190,0xbb4433);step("Page Setup opens");
+    app_paint(note,10,15,260,190,0xcc4433);step("paper orientation and margins change");
+    app_paint(note,0,0,280,220,0xdd4433);step("Page Setup closes");
+    app_close(note);step("queue exposed after dialog client closes");
+    app_paint(queue,0,80,300,100,0xee8877);step("queue cancels or purges job and refreshes");
+    app_close(queue);step("queue closes");wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_printing};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

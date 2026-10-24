@@ -21,6 +21,8 @@ static size_t make_bmp(uint8_t *b)
     memcpy(p, top, 12);
     return 54 + 24;
 }
+static unsigned print_requests,setup_requests;
+static void host_print(void *arg,int setup) { (void)arg;if(setup)setup_requests++;else print_requests++; }
 static void write_file(const char *folder, const char *name, const void *data, size_t n)
 {
     char path[1024]; snprintf(path, sizeof(path), "%s/%s", folder, name);
@@ -69,11 +71,15 @@ int main(int argc, char **argv)
     static struct du_ui ui; static struct viewer_app app;
     du_init(&ui, pixels, VIEWER_W, VIEWER_H);
     viewer_attach(&app, &ui, viewer_native_fs());
+    app.printing=host_print;
+    struct du_event printing={.type=DU_EV_ACTIVATE,.id=V_M_PRINT};viewer_event(&ui,&printing,&app);assert(!print_requests);
+    printing.id=V_M_PAGESETUP;viewer_event(&ui,&printing,&app);assert(setup_requests==1);
     du_render(&ui);
     at_save(folder, "viewer-empty", &ui);
     char path[1024]; snprintf(path, sizeof(path), "%s/c-wallpaper.png", scratch);
     assert(!viewer_open(&app, path));
     assert(app.loaded && app.count == 4 && app.index == 2 && !strcmp(app.image.format, "PNG"));
+    at_chord(&ui,DU_KEY_LCTRL,0x19);assert(print_requests==1 && app.loaded);
     struct du_recent recent; assert(!du_recent_load(&recent) && recent.count == 1 && !strcmp(recent.paths[0], path));
     du_render(&ui);
     at_save(folder, "viewer-wallpaper-fit", &ui);

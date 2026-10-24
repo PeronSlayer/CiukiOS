@@ -4,6 +4,7 @@
 #include "app.h"
 #include "../libdeskui/job.h"
 #include "../libdeskui/recent.h"
+#include "../libprint/dialog.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,18 @@
 #define TEST_TIME 1791711660   /* 2026-10-11 09:41:00 UTC: the fixed clock of --test runs */
 #define CHECKPOINT_SERIAL 0xf2320000u
 
-struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; struct du_job opening; const char *path; char *raw; size_t length; int open_error; char resolved[CN_PATH]; uint64_t open_revision; };
+struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; struct cp_ui printing; int checkpoint, sent; struct du_job opening; const char *path; char *raw; size_t length; int open_error; char resolved[CN_PATH]; uint64_t open_revision; };
+static void print_request(void *arg,int setup)
+{
+    struct note_main *m=arg;
+    if (setup) cp_ui_setup(&m->printing,&m->ui);
+    else cp_ui_text(&m->printing,&m->ui,m->app.named?cn_basename(m->app.path):"Untitled - CiukNote",m->app.ta.text,m->app.ta.len);
+}
+static void print_event(struct du_ui *u,const struct du_event *e,void *arg)
+{
+    struct cn_app *a=arg;struct note_main *m=a->host;
+    if (!cp_ui_event(&m->printing,u,e)) cn_event(u,e,a);
+}
 
 static time_t host_now(void *p) { struct note_main *m = p; return m->app.test ? (time_t)TEST_TIME : time(NULL); }
 static void host_recent(const char *path) { (void)du_recent_add(path); }
@@ -37,6 +49,7 @@ static void load_argument(void *arg)
 static void idle(void *arg)
 {
     struct note_main *m = arg;
+    cp_ui_poll(&m->printing,&m->ui);
     if (du_job_ready(&m->opening)) {
         du_job_finish(&m->opening);
         int r=m->open_error;
@@ -111,11 +124,13 @@ int main(int argc, char **argv)
     a->host = m; a->test = test;
     if (test) a->checkpoint = on_checkpoint;
     if (cn_attach(a, &m->ui)) { fprintf(stderr, "CiukNote: out of memory\n"); du_window_destroy(&m->window); free(m); return 1; }
+    a->printing=print_request;m->ui.event=print_event;
     m->path=path;
     du_window_accept_files(&m->window, 1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window, 24, 48); /* fixed placement for the scripted QEMU case */
     int r = du_run(&m->window, idle, m);
     du_job_finish(&m->opening); free(m->raw);
+    cp_ui_destroy(&m->printing);
     cn_detach(a); du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

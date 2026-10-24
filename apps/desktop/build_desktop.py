@@ -29,7 +29,7 @@ ACCESSORIES = {
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
-PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", *ACCESSORIES)
+PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -50,7 +50,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
@@ -184,12 +184,16 @@ def build():
     sources["control"] = ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
     sources["gfxdemo"] = ["../gfxdemo/main.c", "../gfxdemo/app.c", "../gfxdemo/scene.c", "../accessories/acc.c"]
+    sources["printers"] = ["../printers/main.c", "../libprint/print.c", "../accessories/acc.c"]
+    sources["printspool"] = ["../printers/spool.c", "../libprint/print.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
+    for name in ("ciuknote", "paint", "viewer"):
+        sources[name] += ["../libprint/print.c", "../libprint/render.c", "../libprint/dialog.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, *(["-DDP_NATIVE_VFS"] if name == "control" else []), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "sdk/win32/include"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", *ACCESSORIES) else []),
+                          *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", "printers", "printspool", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
                           *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)

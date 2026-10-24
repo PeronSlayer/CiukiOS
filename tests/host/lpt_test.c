@@ -439,6 +439,8 @@ static void test_int17(void)
         uint16_t initial_equipment=0x823; /* four COM ports and one floppy */
         memcpy(guest_memory[i]+0x410,&initial_equipment,2);
         assert(!dosvm_lpt_init(&guests[i]));
+        /* This fixture exercises an explicit physical-device policy. */
+        guests[i].print_capture.enabled=false;
     }
     uint16_t base,equipment; memcpy(&base,guest_memory[0]+0x408,2); memcpy(&equipment,guest_memory[0]+0x410,2);
     assert(base==0x378 && equipment==0x4823 && !guest_memory[0][0x40e]);

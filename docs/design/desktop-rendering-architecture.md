@@ -424,6 +424,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | G31 Printers folder/Add Printer, default selection and queue refresh (queued, paused, resumed, cancelled or purged); Print and Page Setup opening, changing fields, cancelling or accepting | dialog/client damage; old dialog area exposed on close; covered queue damage retained until exposure | `apps/printers/main.c`, `apps/libprint/dialog.c`, libdeskui `du_invalidate`/`DAMAGE` | completion notices wait while another modal dialog (such as an unsaved-document prompt) is open | printing |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

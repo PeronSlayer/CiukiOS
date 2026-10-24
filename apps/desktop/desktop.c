@@ -2394,6 +2394,12 @@ int main(int argc, char **argv)
     d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
     int firstboot_pages=gate?0:desk_firstboot(d);
     shell_setup(d,gate);
+    if (!gate && !test) {
+        char *spool_argv[] = {"/System/printspool",NULL};
+        char *spool_env[] = {"PATH=/Programs",NULL};
+        if(ciuki_spawn(spool_argv[0],spool_argv,spool_env,NULL,0,0)<0)
+            fprintf(stderr,"desktop: background print service unavailable (errno=%d)\n",errno);
+    }
     if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
     if(firstboot_pages&(1u<<FB_DISPLAY))desk_task_launch_args(d,"control",(const char *const[]){"--panel=display"},1);

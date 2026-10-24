@@ -326,6 +326,7 @@ def desktop_payloads():
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
                "/Programs/regedit": DESKTOP / "regedit",
                "/Programs/hwreport": DESKTOP / "hwreport",
+               "/Programs/printers": DESKTOP / "printers", "/System/printspool": DESKTOP / "printspool",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
@@ -359,7 +360,7 @@ def desktop_payloads():
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/WINDOWS/SPOOL", "/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def font_payloads():

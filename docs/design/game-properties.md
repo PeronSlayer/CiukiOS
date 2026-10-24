@@ -49,20 +49,26 @@ explicitly edits the joystick choice. Existing SAVE_GAME and SAVE_STATUS
 perform identity storage and report durable completion.
 
 Each guest COM1–COM4 selects none, null or a retained physical I/O base.
-LPT1 selects none, INT17 printer device, raw physical lease or INT17 file.
-Physical selection is by native I/O base, resolved to the current driver index
+LPT1 selects none, the native print spooler, raw physical lease or INT17 file.
+G31 replaces the former INT17 physical-printer mode with capture into the
+native default printer's RAW queue; both INT17 and trapped SPP strobe output
+use it. Its physical-port selector is disabled: printer destinations are now
+chosen in Printers. See [DOS capture](printing-dos.md) for publication and
+retry behavior. The Raw choice retains the exclusive physical-device lease.
+Physical raw selection is by native I/O base, resolved to the current driver index
 at creation. Device refresh is a cached query and never acquires a lease.
 Current owners, unavailable states and duplicate COM selections are displayed.
 The launch acquisition is authoritative; concurrent native/VM leases refuse
 launch with EBUSY and unwind through normal VM cleanup. Missing physical COM
-falls back to null; missing physical LPT falls back to none. A missing or
+falls back to null; missing raw physical LPT falls back to none. A missing or
 unwritable output file disables LPT. CREATE.changed carries PORT_FALLBACK=2
 and PORT_SETTINGS_INVALID=4, composable with JOYSTICK_FALLBACK=1. The launcher
 shows the resulting note. No missing device is silently rebound to a different
 physical port. Live controller hotplug follows the f1-113b snapshot rules.
 
 Ports default to four null UARTs and no LPT for catalog games. Interactive DOS
-and existing trusted monitor probes retain their preexisting mapping.
+and existing trusted monitor probes now capture LPT1 into the native default
+printer queue unless an explicit game setting disables or overrides it.
 Private `/system/settings/dos-game-N-ports.S.ini` records use version 1,
 a sequence, explicitly little-endian fixed-width words, zero-padded path and
 an FNV-1a checksum over the complete INI body. Slot S equals sequence & 1.

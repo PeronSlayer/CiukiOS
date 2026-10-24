@@ -42,7 +42,8 @@ APP_SCREENS = {
     'cn-help.xrgb': 'e89781b5f31fd40b0c90dde5bca927fcb4b4874995b10194b5ce31d57a2b5630',
     'cn-limit.xrgb': '200981da8810de5f08368d9ec8990eb5c544fbb571cd4f8bbd0b001e70bff88d',
     'cn-menu-edit.xrgb': '1e116d6bf0b76ed52d7f28cfd1bfcb01bb61e6685605e46c80f7b1ece428f962',
-    'cn-menu-file.xrgb': '8373e57ec17b178ef87538570d77303d42a7265e4afb9aa994e3bd9c3ed58f13',
+    # G31 reviewed frame: Page Setup and Print added before Exit.
+    'cn-menu-file.xrgb': 'aa7f03af0d6eb8fcda0259fb26ad7964c968b1e5b340411c3ec033025bf25781',
     'cn-open-root.xrgb': '31c0813f08d9ded09f97c9a41a39a72a2331c5c008547a70da06e2ef5a8e36e1',
     'cn-open-tests.xrgb': 'ae632eeb42e0a5184db2ab11e11232564551b5bc43c3b0b987fa0a926d1e1af0',
     'cn-prompt-changes.xrgb': '1dac23bc0dcb2c31e1361d83e7b411362324f26dae3a7e4f076b07e4a65168a2',
@@ -206,7 +207,7 @@ class CiuknoteTests(unittest.TestCase):
         Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /Programs program can move a
         submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["calc", "charmap", "ciukide", "ciuknote", "clock", "control", "demo", "dosbox", "files", "gfxdemo", "hello", "help", "hwreport", "libc_smoke", "lua", "mixer", "music", "paint", "regedit", "tasks", "tcc", "terminal", "viewer"],
+        self.assertEqual(programs, ["calc", "charmap", "ciukide", "ciuknote", "clock", "control", "demo", "dosbox", "files", "gfxdemo", "hello", "help", "hwreport", "libc_smoke", "lua", "mixer", "music", "paint", "printers", "regedit", "tasks", "tcc", "terminal", "viewer"],
                          "the image's /Programs changed: check the Programs submenu rows of the desktop cases")
         menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()

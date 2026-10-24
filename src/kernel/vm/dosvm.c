@@ -13,6 +13,8 @@
 #pragma weak dosvm_game_ports_apply
 #pragma weak dosvm_game_ports_close
 #pragma weak dosvm_lpt_stop
+#pragma weak dosvm_print_service
+#pragma weak dosvm_print_flush
 /* fx-4 refusal record: zone figures and the inventory step. Weak only so the
  * guest-CPU harness, which links neither, keeps its fixture seams. */
 #pragma weak pmm_zone_free
@@ -722,6 +724,7 @@ static uint64_t idle_deadline(const struct dosvm *v)
 }
 static void idle_wait(struct dosvm *v, enum dosvm_idle_reason reason)
 {
+    if (dosvm_print_service && (read_eflags()&0x200)) dosvm_print_service(v);
     /* COMMAND now announces an empty prompt with INT 28h rather than a
      * BIOS read. Preserve the launch gate's detection of returning to input
      * without ever producing the requested program's first frame. */
@@ -863,6 +866,7 @@ static void stack_prefault(struct dosvm *v, const struct v86_frame *f)
 static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
 {
     dosvm_uart_service(v,g_ticks);
+    if (dosvm_print_service && (read_eflags()&0x200)) dosvm_print_service(v);
     if (read_eflags() & 0x200) dosvm_network_service(v, g_ticks);
     stack_prefault(v, f);
     uint64_t delivered = v->monitor.stats.reflected_irqs;
@@ -1351,6 +1355,13 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
     dosvm_uart_close(v);
+    /* Keep the host VFS table and buffered output for an explicit retry. */
+    int capture_error=dosvm_print_flush ? dosvm_print_flush(v,true) : 0;
+    if (capture_error) {
+        v->info.cleanup_error=capture_error;
+        destroying[slot]=false;
+        return capture_error;
+    }
     int printer_cleanup=dosvm_game_ports_close ? dosvm_game_ports_close(v) : 0;
     int network_error = dosvm_network_detach(v);
     if (network_error) { destroying[slot] = false; return network_error; }

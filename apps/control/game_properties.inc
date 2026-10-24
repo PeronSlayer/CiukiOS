@@ -196,11 +196,11 @@ static void game_build(struct cp_app *a)
         snprintf(label,sizeof(label),"COM%u: %s",i+1,target);
         add(a,DU_BUTTON,G_COM1+(int)i,24,134+(int)i*28,508,24,label);
     }
-    static const char *const modes[]={"None","INT 17h printer device","Raw physical lease","INT 17h output file"};
+    static const char *const modes[]={"None","Native print spooler","Raw physical lease","INT 17h output file"};
     snprintf(label,sizeof(label),"LPT1: %s",modes[a->game_ports.lpt_mode<=3 ? a->game_ports.lpt_mode : 0]);
     add(a,DU_BUTTON,G_LPT,24,250,260,24,label);
     game_port_label(a,label,sizeof(label),"lpt",a->game_ports.lpt_base);
-    add(a,DU_BUTTON,G_PORT,292,250,240,24,label)->disabled=a->game_ports.lpt_mode!=1 && a->game_ports.lpt_mode!=2;
+    add(a,DU_BUTTON,G_PORT,292,250,240,24,label)->disabled=a->game_ports.lpt_mode!=GAME_LPT_RAW;
     add(a,DU_EDIT,G_PATH,24,280,508,24,a->game_ports.path)->disabled=a->game_ports.lpt_mode!=GAME_LPT_FILE;
     add(a,DU_LABEL,G_NOTE,24,310,508,38,a->game_note);
     add(a,DU_BUTTON,G_APPLY,352,CP_HEIGHT-34,90,24,"Apply")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;

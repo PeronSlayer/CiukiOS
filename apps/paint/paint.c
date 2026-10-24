@@ -27,6 +27,7 @@ typedef u8 *fptr;
 static struct du_ui *ui;
 static void (*quit_cb)(void *);
 static void (*decline_cb)(void *);
+static void (*printing_cb)(void *,int);
 static void (*title_cb)(void *, const char *);
 static void *callback_host;
 static void fmt_u32(char *out, u32 n) { sprintf(out, "%u", (unsigned)n); }
@@ -1571,6 +1572,7 @@ static void tool_up(int x, int y)
 static struct du_menu_item file_items[] = {
     ITEM("&New", M_NEW, 0x31, DU_CTRL), ITEM("&Open...", M_OPEN, 0x18, DU_CTRL),
     ITEM("&Save", M_SAVE, 0x1f, DU_CTRL), ITEM("Save &As...", M_SAVEAS, 0, 0), SEP,
+    ITEM("Page Set&up...", M_PAGESETUP, 0, 0), ITEM("&Print...", M_PRINT, 0x19, DU_CTRL), SEP,
     ITEM("E&xit", M_EXIT, DU_KEY_F4, DU_ALT) };
 static struct du_menu_item edit_items[] = {
     ITEM("&Undo", M_UNDO, 0x2c, DU_CTRL), ITEM("&Repeat", M_REDO, 0x15, DU_CTRL), SEP,
@@ -2162,6 +2164,8 @@ void paint_command(int id)
     case M_OPEN: ask_then(A_OPEN); break;
     case M_SAVE: finish_pending(); drop_selection(); if (!path[0]) file_dialog(1); else do_save(path); break;
     case M_SAVEAS: finish_pending(); drop_selection(); format_dialog(); break;
+    case M_PAGESETUP: case M_PRINT:
+        finish_pending(); if (printing_cb) printing_cb(callback_host,id==M_PAGESETUP); break;
     case M_EXIT: ask_then(A_EXIT); break;
     case M_UNDO: undo(0); break; case M_REDO: undo(1); break;
     case M_CUT: if (sel_on && copy_selection()) clear_selection(); break;
@@ -2374,6 +2378,7 @@ full:
 }
 void paint_callbacks(void (*quit)(void *), void (*title)(void *, const char *), void *host)
 { quit_cb=quit; title_cb=title; callback_host=host; update_title(); }
+void paint_print_callback(void (*printing)(void *,int)) { printing_cb=printing; }
 void paint_detach(void)
 {
     if (!ui) return;
@@ -2381,7 +2386,7 @@ void paint_detach(void)
     cancel_pointer(); du_dialog_close(ui); du_menu_close(ui);
     img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); img_free(&selection_mask); du_ta_free(&text_edit);
     ui->event=NULL; ui->paint=NULL; ui->layout=NULL; ui->menus=NULL; ui->menu_count=ui->count=0;
-    ui=NULL; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
+    ui=NULL; quit_cb=NULL; decline_cb=NULL; printing_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
 }
 static int install_image(const char *p, struct paint_image next)
 {

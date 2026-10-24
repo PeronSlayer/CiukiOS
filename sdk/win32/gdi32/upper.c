@@ -8,7 +8,7 @@
  * (the GDI builtin is built without the FPU).
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
-#ifndef W32_HOST_MODEL
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
 __declspec(dllimport) void *W32API LoadLibraryA(const char *);
 __declspec(dllimport) void *W32API GetProcAddress(void *, const char *);
 #else
@@ -295,18 +295,6 @@ BOOL W32API DeleteColorSpace(void *h) {
 }
 
 /* ---- printing ----------------------------------------------------------- */
-/* No printer driver or printer DC exists on CiukiOS; StartDoc on any DC is
- * the non-printer case and fails with SP_ERROR (limited). */
-int W32API StartDocW(HDC h, const void *info) {
-  GDI_GUARD;
-  if (!gdi_dc(h) || !info) {
-    SetLastError(6);
-    return -1;
-  }
-  SetLastError(87);
-  return -1;
-}
-int W32API StartDocA(HDC h, const void *info) { return StartDocW(h, info); }
 /* Escapes: QUERYESCSUPPORT reports the supported ones; MFCOMMENT on a
  * metafile DC is recorded (metafile.c); every other escape is not
  * implemented by the display driver (0). */
