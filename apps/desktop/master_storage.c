@@ -101,3 +101,23 @@ int master_preference_save(const char *directory,unsigned left,unsigned right,un
     error=errno; reg_close_root(r);
     pthread_mutex_unlock(&workspace_lock); errno=error; return result;
 }
+
+/* Each source preference is one registry transaction, using the same bounded
+ * private libreg instance as the master. No partially updated stereo pair. */
+#include <ciuki/abi.h>
+int line_preference_save(const char *directory,const struct ciuki_mixer_line *line)
+{
+    if (!line || line->line<1 || line->line>5 || line->recording>1 || (line->recording && line->line==CIUKI_MIXER_MIDI) || line->left>100 || line->right>100 || line->mute>1 || line->selected>1) { errno=EINVAL; return -1; }
+    int error=pthread_mutex_lock(&workspace_lock);
+    if (error) { errno=error; return -1; }
+    union master_block *first=(void *)workspace.bytes;
+    first->h.bytes=sizeof(workspace.bytes)-sizeof(*first); first->h.available=1;
+    char key[16];
+    if (line->recording) snprintf(key,sizeof(key),"Recording");
+    else snprintf(key,sizeof(key),"Source%u",(unsigned)line->line);
+    int32_t value=ciuki_master_pack(line->left,line->right,line->mute) | (line->recording ? (int32_t)(line->line<<24) : 0);
+    struct reg_root *r=reg_open_root_at("System",directory);
+    int result=r ? reg_set_int32(r,CIUKI_MASTER_KEY,key,value) : -1;
+    error=errno; reg_close_root(r);
+    pthread_mutex_unlock(&workspace_lock); errno=error; return result;
+}

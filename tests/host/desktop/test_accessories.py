@@ -32,6 +32,7 @@ TESTS = {
     "help": [ACC + "help_topics.c", ACC + "help_view.c"],
     "logview": [ACC + "logview_model.c", ACC + "logview_view.c"],
     "mixer": [ACC + "mixer_view.c"],
+    "mixer_queue": ["apps/desktop/settings_io.c"],
     "recorder": [ACC + "recorder.c"],
     "cdplayer": [],
     "charmap": [ACC + "charmap_view.c"],
@@ -107,6 +108,7 @@ class AccessoriesTests(unittest.TestCase):
     def test_help(self): self.check_renders(self.run_native("help"))
     def test_logview(self): self.check_renders(self.run_native("logview"))
     def test_mixer(self): self.check_renders(self.run_native("mixer"))
+    def test_mixer_queue(self): self.run_native("mixer_queue")
     def test_recorder(self): self.run_native("recorder")
     def test_cdplayer(self): self.run_native("cdplayer")
     def test_charmap(self): self.check_renders(self.run_native("charmap"))

@@ -604,8 +604,8 @@ static bool mix_samples(struct vm_slot *s, const struct dosvm_audio_info *info, 
     unsigned master[2];
     for (unsigned c = 0; c < 2; c++) {
         unsigned source = s->muted ? 0 : s->gain[c];
-        gp[c] = combined_gain(info->master[c], info->voice[c], info->output_gain[c], source);
-        go[c] = combined_gain(info->master[c], info->fm[c], info->output_gain[c], source);
+        gp[c] = combined_gain(info->master[c], info->voice[c], info->output_gain[c], source) * audio_source_gain(CIUKI_MIXER_WAVE,c) / 100;
+        go[c] = combined_gain(info->master[c], info->fm[c], info->output_gain[c], source) * audio_source_gain(CIUKI_MIXER_MIDI,c) / 100;
         master[c] = c ? audio.master.right : audio.master.left;
         if ((audio.master_in_codec || audio.master_in_hardware) && master[c]) master[c] = 100;
         if (audio.master.mute) master[c] = 0;

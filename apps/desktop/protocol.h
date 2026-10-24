@@ -108,7 +108,10 @@ enum desk_opcode {
     DESK_SETTINGS,
     /* Legacy recovery (Volume Control), version 2, client to desktop: serial,
      * left, right (0..100), mute (0/1). The desktop applies it through its
-     * delegated /dev/mixer control handle (F4) and answers TASK_RESULT. */
+     * delegated /dev/mixer control handle (F4) and answers TASK_RESULT.
+     * G22B also accepts 28 bytes: append line (1..5) and recording (0/1).
+     * The flag word is mute for playback, Select for recording. A 20-byte
+     * request retains the original master semantics. */
     DESK_MIXER_SET,
     /* f2-36, version 2, client to desktop: uint32 length, then 1..63
      * printable ASCII bytes. Updates only the sending client's window. */

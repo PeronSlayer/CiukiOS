@@ -14,6 +14,7 @@
 #define DESKTOP_OCCLUSION_NO_MAIN
 #include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
+#include "../../../apps/accessories/mixer.h"
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
@@ -1328,11 +1329,63 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+/* G22B, appended after every existing scenario. Render the actual Volume
+ * Control client, send only its toolkit damage, then compare each presenter. */
+static struct ciuki_mixer_line wm_lines[2][6];
+static int wm_master_get(void *ctx,struct ciuki_mixer_master *out)
+{ (void)ctx; *out=(struct ciuki_mixer_master){.version=1,.size=32,.left=50,.right=50}; return 0; }
+static int wm_line_get(void *ctx,struct ciuki_mixer_line *out)
+{ (void)ctx; *out=wm_lines[out->recording][out->line]; return 0; }
+static int wm_line_set(void *ctx,const struct ciuki_mixer_line *in)
+{
+    (void)ctx; wm_lines[in->recording][in->line]=*in;
+    wm_lines[in->recording][in->line].available=1;
+    if (in->recording && in->selected) wm_lines[1][9-in->line].selected=0;
+    return 0;
+}
+static void wm_toolkit_damage(struct fake_app *a,struct du_ui *u)
+{
+    if (!u->dirty) return;
+    du_render(u);
+    for (unsigned i=0;i<u->frame_count;i++) {
+        struct du_rect r=u->frames[i]; struct ciuki_message message;
+        shell_message(&message,DESK_DAMAGE,24);
+        desk_put32(message.data+4,(unsigned)r.x); desk_put32(message.data+8,(unsigned)r.y);
+        desk_put32(message.data+12,(unsigned)r.w); desk_put32(message.data+16,(unsigned)r.h);
+        wm_send(a,&message);
+    }
+}
+static void row_multimedia(unsigned m)
+{
+    row_name="G22B multimedia controls"; wm_begin(m,1);
+    struct fake_app *a=app_open("mixer",MIXER_W,MIXER_H,20,50);
+    static struct du_ui ui; static struct mixer_app app;
+    memset(&app,0,sizeof(app));
+    for (unsigned rec=0;rec<2;rec++) for (unsigned i=1;i<=5;i++)
+        wm_lines[rec][i]=(struct ciuki_mixer_line){.version=1,.size=sizeof(struct ciuki_mixer_line),
+            .line=i,.recording=rec,.left=75,.right=75,.available=!rec || i>=4};
+    struct mixer_backend backend={.get=wm_master_get,.line_get=wm_line_get,.line_set=wm_line_set};
+    struct desk_client *client=&d.clients[a->slot];
+    du_init(&ui,(uint32_t *)client->pixels,(int)client->info.width,(int)client->info.height);
+    mixer_attach(&app,&ui,&backend); wm_toolkit_damage(a,&ui); step("playback columns");
+    struct fake_app *cover=app_open("ciuknote",240,140,200,140); step("columns partly covered");
+    struct du_event event={.type=DU_EV_ACTIVATE,.id=MX_LINE_BASE+12};
+    mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("Wave mute changes under another window");
+    event.id=MX_MODE; mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("recording view swaps controls");
+    event.id=MX_LINE_BASE+42; mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("Line input selected");
+    desk_move(&d,cover->slot,430,270); step("changed columns uncovered");
+    event.id=MX_MODE; mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("playback view restored");
+    struct fake_app *cd=app_open("ciuknote",400,280,180,80);
+    app_title(cd,"CD Player - saved disc names"); app_paint(cd,12,44,350,180,0xcd); step("disc names loaded or saved");
+    struct fake_app *control=app_open("control",400,280,60,120);
+    app_paint(control,150,240,200,18,0x4242); step("Multimedia CD volume changes");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_multimedia};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

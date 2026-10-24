@@ -826,6 +826,9 @@ static int terminal_kill(uint32_t pid, int sig)
 { assert(sig == SIGKILL); terminal_kill_pid = pid; return 0; }
 static int terminal_mixer(struct desktop *desktop, uint32_t l, uint32_t r, uint32_t mute)
 { (void)desktop; assert(l == 20 && r == 30 && mute == 1); terminal_mix_count++; return 0; }
+static unsigned terminal_line_count;
+static int terminal_line(struct desktop *desktop,const struct ciuki_mixer_line *line)
+{ (void)desktop; assert(line->line==CIUKI_MIXER_WAVE && line->left==20 && line->right==30 && line->mute==1); terminal_line_count++; return 0; }
 static int terminal_result(int client_index)
 {
     unsigned start = fake_sent; desk_flush(&d, client_index);
@@ -848,6 +851,13 @@ static void test_terminal(void)
     int found=0; for(int k=0;k<d.sh.menus[0].count;k++)if(!strcmp(d.sh.menus[0].items[k].label,"Terminal"))found++;
     assert(found==1); desk_menu_close(&d);
     struct ciuki_message m; struct desk_packet packet;
+    d.clients[i].mixer=1; d.mixer_line=terminal_line;
+    request(&m,DESK_MIXER_SET,28); m.data[0]=DESK_SHELL_VERSION;
+    desk_put32(m.data+8,20); desk_put32(m.data+12,30); desk_put32(m.data+16,1); desk_put32(m.data+20,CIUKI_MIXER_WAVE);
+    desk_receive(&d,i,&m); assert(!terminal_result(i) && terminal_line_count==1 && terminal_mix_count==0);
+    d.clients[i].mixer=0; desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && terminal_line_count==1);
+    struct desk_packet decoded; desk_put32(m.data+20,CIUKI_MIXER_MIDI); desk_put32(m.data+24,1); assert(!desk_parse(&m,1,NULL,&decoded));
+    desk_put32(m.data+24,0); desk_put32(m.data+20,6); assert(!desk_parse(&m,1,NULL,&decoded));
     request(&m,DESK_TERMINAL_POWER,12); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+4,9); desk_put32(m.data+8,CIUKI_POWER_OFF);
     assert(desk_parse(&m,1,NULL,&packet) && packet.flags==CIUKI_POWER_OFF);
     struct ciuki_message bad=m; desk_put32(bad.data+8,CIUKI_POWER_QUERY); assert(!desk_parse(&bad,1,NULL,&packet));

@@ -93,3 +93,122 @@ Disc title/track-name database and a native MIDI/AVI MCI bridge remain gaps.
 The latter must retain MCI's file-identity ownership, worker/thread rules,
 AVI rendering and audio transport; the current engine depends on Win32
 handles and USER/GDI and cannot simply be linked into a libdeskui client.
+
+## G22B continuation contract (2026-10-24)
+
+The second-parts directive retains the Windows 98 Resource Kit behaviour above.
+The local chapters `wrkc12_1.htm`, `wrkc12_2.htm`, `wrkc12_3.htm` and
+`wrkc23_2.htm` were checked again: playback/recording lines are separate;
+Multimedia chooses among installed devices, rather than inventing devices;
+MCI is the shared transport for waveform, sequencer, CD and video playback.
+
+Additional primary references checked before implementation:
+
+- [Microsoft: managing waveform recording](https://learn.microsoft.com/en-us/windows/win32/multimedia/managing-waveform-audio-recording):
+  prepared application buffers, queued input, completion callbacks, Stop and Reset.
+- [Microsoft: waveInOpen](https://learn.microsoft.com/en-us/previous-versions/dd743847(v=vs.85)):
+  format query does not open hardware; mapper, callback types and error results.
+- [Linux v6.12 intel8x0.c](https://github.com/torvalds/linux/blob/v6.12/sound/pci/intel8x0.c):
+  independent PCM-input register block at offset 00h, BDL/CIV/LVI/PICB,
+  channel RUN/reset and FIFO status; AC97 record selection remains in the codec.
+
+Repository comparison: ICH PCM-out uses a separate transport from the cyclic
+voice drivers. Its PCM-input adapter must use the existing exclusive copied
+capture lifetime, with its own descriptor page and pinned DMA pages. It must
+prove RUN clear, DCH and a stationary cursor before freeing pages. Unsupported
+controller layouts stay unavailable until their independent capture register
+model passes; no silent samples or speculative DMA programming. Capture errors
+return existing CiukiOS errors; no new panic paths.
+
+Mixer source controls must alter the actual signal route: software Wave/MIDI/CD
+attenuation belongs before the master sum, analog CD/Line/Mic controls belong to
+the codec, and Recording selects one input. The desktop remains the delegated
+mixer writer. Any capability not delivered is retained as an explicit inventory
+gap, with its technical reason and verification status in the G22B report.
+
+### Continuation implementation and limits
+
+G22B appends `AUDIO_SET_SOURCE=0x410d`, `AUDIO_CAPTURE_ACQUIRE=0x410e`,
+`AUDIO_CAPTURE_RELEASE=0x410f`, `MIXER_GET_LINE=0x4205` and
+`MIXER_SET_LINE=0x4206`. The previous highest operations in all 77 visible
+local/remote refs were 0x410c and 0x4204. No syscall or desktop opcode is added.
+`DESK_MIXER_SET` retains its original 20-byte master request and accepts a
+28-byte source request (append line and recording destination). Authorisation
+still comes from the desktop's delegated mixer client identity.
+The 16-byte audio-route and 40-byte mixer-line records have a reserved final
+word and an oracle entry for every field and constant.
+
+The native Volume Control now has Master, Wave, MIDI, CD Audio, Line In and
+Microphone playback columns. Recording shows Stereo Mix, CD, Line and Mic
+when supplied by the capture driver, with an exclusive Select control. The
+recording gain is copied-sample attenuation, not microphone boost; recording
+balance and mono microphone balance are disabled. The complete window fits a
+640-pixel display. Source preferences are atomic stereo/mute values in
+`System\Audio` (`Source1`…`Source5`); `Recording` stores the selected source
+and gain. They are restored at boot. Analog controls preserve unrelated bits
+(including microphone boost), save their original register values before the
+first write and restore them during safe backend shutdown. Wave, MIDI and CD
+attenuation happens before the master sum. Native streams can declare their
+source; WinMM marks its mixed stream and applies separate Wave/MIDI/CD gains,
+including MCI CD playback. DOS PCM/OPL respect Wave/MIDI respectively.
+
+The AC97 register identities and mux values were cross-checked against the
+[Linux AC97 register definitions](https://android.googlesource.com/kernel/common/+/ff729a0610eb/include/sound/ac97/regs.h)
+and the upstream [AC97 mixer implementation](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/69050f8d6d075dc01af7a5f2f550a8067510366f/sound/pci/ac97/ac97_codec.c).
+CD is mux 1, Line 4 and stereo Mix 5 in both channels; Mic remains 0.
+
+ICH capture owns eight PCM pages plus a descriptor page. Data and descriptor
+pins have separate FROM_DEVICE and TO_DEVICE directions. Input polling keeps
+its interrupts disabled, refreshes LVI behind CIV, checks FIFO/cursor/time
+bounds, and never resets the output channel. Input stop proves RUN clear,
+DCH and a stable cursor before unpin/free; failed proof quarantines all DMA
+ownership. The ADC rate and record mux/gain are restored. The standard ICH
+layout is exposed; SiS and ALi M5455 extensions remain unavailable. Trident
+DX/NX and ALi M5451 keep their existing copied capture path.
+
+Win32 waveIn now supports enumeration/caps, format query, exclusive open,
+prepared/queued buffers, mono/stereo 8/16-bit PCM at 4–48 kHz, Start/Stop/Reset,
+position and function/window/thread/event callbacks. It converts the copied
+48-kHz input with bounded decimation, discards input when no buffers are
+queued, returns partial buffers on Stop and all queued buffers on Reset,
+and rejects Close while buffers remain queued. Open reserves input without
+starting DMA; Stop retains that reservation; the last descriptor close
+releases it. The existing WinMM worker delivers callbacks outside its audio
+lock. Capture faults stop input rather than returning invented silence.
+[waveInStop](https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-waveinstop)
+and [waveInReset](https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-waveinreset)
+were checked for buffer-return and position semantics.
+
+The Multimedia page now also changes CD volume through the same delegated
+source request. It still describes the one selected system device; alternate
+playback/recording/MIDI device selection is not implemented.
+
+CD Player now edits artist, album title and track names. It identifies a disc
+from every track's position, length and audio/data type, clears names before
+refresh, and saves one complete INI section to `C:\System\cdplayer.ini` using
+[WritePrivateProfileSection](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-writeprivateprofilesectiona).
+The two TOC hashes are a local database key, not an assertion of Windows INI
+file compatibility. Failed saves retain the edits in the window. Names and
+section size are bounded and control characters are refused. MCI retains CD
+transport ownership; no disc metadata is inferred from raw audio.
+
+Remaining obligations: alternate device selection, analog recording boost,
+non-AC97 source controls, independent per-input recording gain, native MIDI
+and AVI Media Player over MCI, native MIDI port, DOS MPU-401 UART, and public
+capture adapters for the other families. The existing CMI and EMU private
+capture interfaces have different ownership/read/stop rules (EMU stop also
+stops playback); they have not been advertised through the voice interface.
+No unsupported family is counted as delivered. Hardware evidence and an
+unrestricted LeakSanitizer rerun remain the lead's integration work. Exact
+commands, results and the pre-existing compositor fuzz failure are recorded
+in `build/codex/g22b-report.md`.
+
+The desktop mixer keeps a complete pending snapshot in the existing 64-byte
+settings-worker job slot. Master and separate source changes survive queue
+coalescing; repeated changes replace only that control's value. Recording
+coalesces its last mux selection and newest shared gain in chronological order.
+A compile-time capacity assertion and `mixer_queue_test.c` exercise this boundary
+and rejected submissions. No worker buffer or stack limit was enlarged.
+ICH startup waits for DCH to clear before the first public READ; a stuck start
+has a bounded timeout and proved cleanup. Codec profiles with independent
+stereo mutes update both mute bits and restore the original source registers.

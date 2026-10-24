@@ -1963,6 +1963,8 @@ f1-101: the kernel's producer boost state of this stream
 #define AUDIO_CAPTURE_STOP 0x410cu
 #define CIUKI_CAPTURE_MIC 0u
 #define CIUKI_CAPTURE_LINE 1u
+#define CIUKI_CAPTURE_CD 2u
+#define CIUKI_CAPTURE_MIX 3u
 #define CIUKI_CAPTURE_FRAMES 128u
 ```
 
@@ -2006,7 +2008,56 @@ uint32_t reserved[2];
 
 f1-100: control handle; master record, one requested hardware read
 
+G22B: appended after the highest audio/mixer operations in visible refs.
+
 ```c
+#define AUDIO_SET_SOURCE 0x410du
+```
+
+Exclusive input reservation without starting DMA. A reserved description
+retains its ownership across START/STOP until RELEASE or last close.
+
+```c
+#define AUDIO_CAPTURE_ACQUIRE 0x410eu
+#define AUDIO_CAPTURE_RELEASE 0x410fu
+#define MIXER_GET_LINE 0x4205u
+#define MIXER_SET_LINE 0x4206u
+#define CIUKI_MIXER_WAVE 1u
+#define CIUKI_MIXER_MIDI 2u
+#define CIUKI_MIXER_CD 3u
+#define CIUKI_MIXER_LINE 4u
+#define CIUKI_MIXER_MIC 5u
+#define CIUKI_AUDIO_MIXED 6u
+```
+
+source is Wave/MIDI/CD or MIXED (the caller applies the line gains).
+
+```c
+struct ciuki_audio_route {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t reserved;
+};
+```
+
+recording=0 playback, 1 recording; selected is the recording input mux.
+Get reports unavailable lines, Set rejects them. Only the delegated mixer
+descriptor may Set. Analog controls preserve unrelated codec bits.
+
+```c
+struct ciuki_mixer_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t line;
+    uint32_t recording;
+    uint32_t left;
+    uint32_t right;
+    uint32_t mute;
+    uint32_t selected;
+    uint32_t available;
+    uint32_t reserved;
+};
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u
@@ -5311,6 +5362,9 @@ DESK_SETTINGS,
 Legacy recovery (Volume Control), version 2, client to desktop: serial,
 left, right (0..100), mute (0/1). The desktop applies it through its
 delegated /dev/mixer control handle (F4) and answers TASK_RESULT.
+G22B also accepts 28 bytes: append line (1..5) and recording (0/1).
+The flag word is mute for playback, Select for recording. A 20-byte
+request retains the original master semantics.
 
 ```c
 DESK_MIXER_SET,

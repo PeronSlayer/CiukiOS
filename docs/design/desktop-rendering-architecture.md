@@ -436,6 +436,11 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
+| 42 | G22B playback source volume, balance and mute | changed Volume Control client controls; occluded bits remain in the backing store | `mixer_view.c`, toolkit damage → `DESK_DAMAGE` | none new; source columns now report their changed controls | multimedia controls (`WM_ROW=33`) |
+| 43 | G22B playback/recording view and recording source selection | swapped control captions, availability, sliders and Select states | `mixer_event`, `lines_show` | mode button sits below the menu; master disabled in Recording | multimedia controls |
+| 44 | G22B CD database load/save/refresh and track selection | CD client list, artist/title and track edit fields | `cdplayer.c` USER/GDI client damage | none new; CD model tests cover identity and persistence | multimedia controls |
+| 45 | G22B Multimedia CD-volume slider | changed native Control Panel client slider/status | `control/app.c`, toolkit damage | none new | multimedia controls |
+
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

@@ -29,10 +29,10 @@ struct audio_capture_ops {
 };
 struct audio_capture {
     struct audio_frame *pcm;
-    struct mm_pin pin;
+    struct mm_pin pin, descriptor_pin;
     uint32_t phys, generation;
     uint64_t produced, consumed, observed, progressed;
-    unsigned last_frame;
+    unsigned last_frame, pages;
     uint16_t select, gain;
     bool running, failed, codec_changed;
 };
@@ -59,6 +59,8 @@ struct audio_dma_device {
     const char *name, *reason;
     enum audio_backend_kind kind;
     uint16_t base, bytes, command, codec_saved[8];
+    uint16_t mixer_line_saved[3];
+    unsigned mixer_line_mask;
     uint32_t phys, desc_phys, control, serial, saved_link, saved_legacy;
     uint32_t mmio_phys;
     volatile uint8_t *mmio;
@@ -143,6 +145,7 @@ int audio_capture_read(struct audio_dma_device *, uint32_t generation,
 int audio_capture_close(struct audio_dma_device *, uint32_t generation);
 int audio_capture_source(struct audio_dma_device *, uint32_t generation, unsigned source);
 int audio_capture_shutdown(struct audio_dma_device *);
+void ac97_capture_attach(void);
 uint32_t audio_voice_mask(const struct audio_dma_device *);
 int audio_voice_cursor(struct audio_dma_device *, unsigned voice, unsigned *frame);
 void audio_voice_program(struct audio_dma_device *, unsigned voice, uint32_t phys,

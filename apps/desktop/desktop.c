@@ -927,38 +927,67 @@ static int mixer_events=-1;
 static uint64_t ec_candidate_ns;
 static struct ciuki_mixer_master ec_candidate_master;
 static int master_candidate_save(int fd);
-struct mixer_job { uint32_t serial; int fd; struct ciuki_mixer_master master; int save_only; };
+#include "mixer_job.h"
+static int mixer_line_save(int fd,struct ciuki_mixer_line *line)
+{
+    int error=ciuki_devctl(fd,MIXER_SET_LINE,line,sizeof(*line)) ? errno : 0;
+    if (!error && line->recording && !line->selected) {
+        int found=0;
+        for (unsigned i=1;i<=CIUKI_MIXER_MIC;i++) {
+            if (i==CIUKI_MIXER_MIDI) continue;
+            struct ciuki_mixer_line selected={.version=1,.size=sizeof(selected),.recording=1,.line=i};
+            if (ciuki_devctl(fd,MIXER_GET_LINE,&selected,sizeof(selected))) { error=errno; break; }
+            if (selected.selected) { *line=selected; found=1; break; }
+        }
+        if (!error && !found) error=EIO;
+    }
+    if (!error && line_preference_save(REG_DIRECTORY,line)) error=errno;
+    return error;
+}
 static int mixer_job_run(void *record, size_t n)
 {
     if (n!=sizeof(struct mixer_job)) return EINVAL;
     struct mixer_job job; memcpy(&job,record,n);
+    if (job.mask & ~0x7ffu) return EINVAL;
     int error=0;
-    if (!job.save_only) error=ciuki_devctl(job.fd,MIXER_SET_MASTER,&job.master,sizeof(job.master)) ? errno : 0;
-    if (!error) {
-        int saved=master_preference_save(REG_DIRECTORY,job.master.left,job.master.right,job.master.mute);
-        job.master.save_state=saved ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
-        job.master.save_error=saved ? -errno : 0;
+    if (job.mask & 1) {
+        if (!job.save_only) error=ciuki_devctl(job.fd,MIXER_SET_MASTER,&job.master,sizeof(job.master)) ? errno : 0;
+        if (!error) {
+            int saved=master_preference_save(REG_DIRECTORY,job.master.left,job.master.right,job.master.mute);
+            job.master.save_state=saved ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
+            job.master.save_error=saved ? -errno : 0;
+        }
     }
+    for (unsigned i=1;i<=5;i++) if (job.mask & (1u<<i)) {
+        uint16_t v=job.values[i-1];
+        struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=i>5 ? i-5 : i,.recording=i>5,
+            .left=v&127,.right=(v>>7)&127,.mute=(v>>14)&1,.selected=v>>15};
+        int e=mixer_line_save(job.fd,&line); if (!error) error=e;
+    }
+    struct ciuki_mixer_line recording;
+    if (mixer_record_line(&job,&recording)) { int e=mixer_line_save(job.fd,&recording); if (!error) error=e; }
     memcpy(record,&job,n); return error;
 }
-/* Volume Control requests (DESK_MIXER_SET): the desktop holds the delegated
- * /dev/mixer control handle (F4 contract, Volume and persistence); the kernel
- * validates the record and saves C:\\SYSTEM\\AUDIO.CFG; this worker saves
- * the authoritative System\\Audio registry preference with libreg. */
-#ifdef __i386__   /* the SDK target; host replays (x86-64) have no mixer device */
+#ifdef __i386__
 #include <ciuki/audio.h>
 #endif
 static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_t mute)
 {
     if (d->power.state) return -EBUSY;
-    struct ciuki_mixer_master m;
     if (d->mixer_fd<0) return -ENODEV;
-    memset(&m,0,sizeof(m)); m.version=1; m.size=sizeof(m);
-    if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m))) return -errno;
-    m.left=left; m.right=right; m.mute=mute; m.save_state=0; m.save_error=0; m.reserved=0;
     if (!settings_writer_started) return -EIO;
-    struct mixer_job job={.serial=++mixer_serial,.fd=d->mixer_fd,.master=m};
-    return cfg_writer_job(&settings_writer,&job,sizeof(job)) ? -errno : 0;
+    struct mixer_job job=mixer_pending;
+    job.fd=d->mixer_fd; job.mask|=1; job.save_only=0;
+    job.master=(struct ciuki_mixer_master){.version=1,.size=sizeof(job.master),.left=left,.right=right,.mute=mute};
+    return mixer_submit(&job);
+}
+static int mixer_line_apply(struct desktop *d,const struct ciuki_mixer_line *line)
+{
+    if (d->power.state) return -EBUSY;
+    if (d->mixer_fd<0 || !settings_writer_started) return -ENODEV;
+    struct mixer_job job=mixer_pending; job.fd=d->mixer_fd;
+    int error=mixer_pack_line(&job,line); if (error) return error;
+    return mixer_submit(&job);
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
 static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
@@ -1539,8 +1568,8 @@ static int master_candidate_save(int fd)
     if (ec_candidate<0 || ec_candidate==last_ec_preference) return 0;
     if (!settings_writer_started) return 0;
     if (cfg_writer_busy(&settings_writer)) return 1;
-    struct mixer_job job={.serial=++mixer_serial,.fd=fd,.master=ec_candidate_master,.save_only=1};
-    if (!cfg_writer_job(&settings_writer,&job,sizeof(job))) last_ec_preference=ec_candidate;
+    struct mixer_job job=mixer_pending; job.fd=fd; job.master=ec_candidate_master; job.save_only=1; job.mask|=1;
+    if (!mixer_submit(&job)) last_ec_preference=ec_candidate;
     return 1;
 }
 /* fx-9b: the kernel's current key-applied master becomes the candidate at
@@ -1891,12 +1920,13 @@ static void shell_service(struct desktop *d)
     struct mixer_job job; size_t job_size; int job_error;
     if (settings_writer_started && cfg_writer_job_result(&settings_writer,&job,&job_size,&job_error)) {
         if (job_size!=sizeof(job)) job_error=EIO;
-        if (!job_error && job.master.save_state==CIUKI_MIXER_SAVED)
+        if ((job.mask & 1) && !job_error && job.master.save_state==CIUKI_MIXER_SAVED)
             last_ec_preference=ciuki_master_pack(job.master.left,job.master.right,job.master.mute);
         if (job_error) desk_shell_notify_error(d,"Volume change failed",job_error);
-        else if (job.master.save_state==CIUKI_MIXER_UNSAVED)
+        else if ((job.mask & 1) && job.master.save_state==CIUKI_MIXER_UNSAVED)
             desk_shell_notify_error(d,"Volume applied but not saved",(int)job.master.save_error);
-        if (!job_error && !job.save_only) desk_sound(d,SOUND_VOLUME);
+        if (!job_error && (!job.save_only || (job.mask & ~1u))) desk_sound(d,SOUND_VOLUME);
+        if (job.serial==mixer_serial) mixer_pending.mask=0;
         if (job.serial == mixer_serial && !sh->volume_drag && !sh->want_mixer) sh->want_reload|=4;
     }
     int save_error;
@@ -2336,7 +2366,7 @@ static void shell_setup(struct desktop *d, int gate)
         desk_w32_start(d); links_start(d); d->v3_lease=win32_lease; d->v3_lease_poll=desk_w32_presenter_poll;
         d->v3_restart=win32_restart;
     }
-    d->launch=launch_program; d->first_frame=first_frame_record; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
+    d->launch=launch_program; d->first_frame=first_frame_record; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply; d->mixer_line=mixer_line_apply;
     d->autoplay_fs=fm_native_vfs(); d->autoplay_preference=autoplay_preference; d->media_sound=media_sound;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
@@ -2348,7 +2378,7 @@ static void shell_setup(struct desktop *d, int gate)
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     observers_prepare(d);
-    d->mixer_set=mixer_apply;
+    d->mixer_set=mixer_apply; d->mixer_line=mixer_line_apply;
     d->joystick_control=desktop_joystick_control;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");

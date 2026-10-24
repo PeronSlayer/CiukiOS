@@ -257,7 +257,12 @@ static void test_voice_engines(void)
         voice_sleep(&vh,171); CHECK(ctl(other,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EIO);
         CHECK(!ctl(other,AUDIO_CAPTURE_STOP,&caps,sizeof(caps)) && !d->capture.generation);
         CHECK(!ctl(other,AUDIO_CAPTURE_STOP,&caps,sizeof(caps))); /* idempotent stop */
-        caps.source=2; CHECK(ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps))==-EINVAL);
+        for (unsigned source=CIUKI_CAPTURE_CD;source<=CIUKI_CAPTURE_MIX;source++) {
+            caps.source=source;
+            CHECK(!ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps)) && vh.codec[0x1a/2]==(source==CIUKI_CAPTURE_CD ? 0x0101 : 0x0505));
+            CHECK(!ctl(other,AUDIO_CAPTURE_STOP,&caps,sizeof(caps)));
+        }
+        caps.source=CIUKI_CAPTURE_MIX+1; CHECK(ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps))==-EINVAL);
         CHECK(!file_close(client,other));
         CHECK(!audio_capture_open(d,&token)); vh.no_progress=true;
         for(unsigned j=0;j<10;j++) { voice_sleep(&vh,10); CHECK(audio_capture_read(d,token,captured,1)==-EAGAIN); }

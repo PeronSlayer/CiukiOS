@@ -19,7 +19,7 @@ enum {
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
-    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V, C_SOUND_BROWSE, C_SOUND_NONE, C_SCHEME_SAVE, C_SCHEME_DELETE, D_SOUND_BROWSE, D_SCHEME_SAVE, C_MM_VOLUME, C_MM_RECORDER, C_MM_MUSIC
+    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V, C_SOUND_BROWSE, C_SOUND_NONE, C_SCHEME_SAVE, C_SCHEME_DELETE, D_SOUND_BROWSE, D_SCHEME_SAVE, C_MM_VOLUME, C_MM_RECORDER, C_MM_MUSIC, C_MM_CD
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia"};
@@ -748,6 +748,14 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             text(a,C_STATUS,r ? "Audio test could not start." : e->id == C_HARDWARE ? "Testing audio hardware..." : "Playing selected sound.");
         }
         break;
+    case C_MM_CD:
+        if (e->type==DU_EV_CHANGE && a->page==CP_MULTIMEDIA && a->host.audio_line) {
+            unsigned volume=(unsigned)du_get(u,C_MM_CD)->value;
+            struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=CIUKI_MIXER_CD,.left=volume,.right=volume};
+            int error=a->host.audio_line(a->host.ctx,&line,1);
+            text(a,C_STATUS,error ? "CD volume could not be changed." : "CD volume requested.");
+        }
+        break;
     case C_MM_VOLUME: case C_MM_RECORDER: case C_MM_MUSIC:
         if (e->type==DU_EV_ACTIVATE) {
             int error=a->host.multimedia_open ? a->host.multimedia_open(a->host.ctx,(unsigned)(e->id-C_MM_VOLUME)) : -ENOSYS;
@@ -1429,7 +1437,11 @@ static void build(struct cp_app *a)
         if (playback) snprintf(device,sizeof(device),"Controller %08x; codec %08x; playback %u Hz",diag.controller,diag.codec_id,diag.rate);
         else snprintf(device,sizeof(device),"Audio hardware unavailable or quarantined.");
         add(a,DU_LABEL,1808,28,248,494,20,device);
-        add(a,DU_LABEL,1809,28,268,494,20,"CD audio uses the selected optical drive through MCI.");
+        add(a,DU_LABEL,1809,28,268,110,20,"CD volume:");
+        struct ciuki_mixer_line cd={.version=1,.size=sizeof(cd),.line=CIUKI_MIXER_CD};
+        int cd_ok=a->host.audio_line && !a->host.audio_line(a->host.ctx,&cd,0) && cd.available;
+        struct du_widget *cd_slider=add(a,DU_SCROLLBAR,C_MM_CD,150,268,300,18,"");
+        cd_slider->total=110; cd_slider->page=10; cd_slider->value=(int)((cd.left+cd.right)/2); cd_slider->disabled=!cd_ok;
         add(a,DU_BUTTON,C_MM_VOLUME,24,306,152,26,"Volume Control");
         add(a,DU_BUTTON,C_MM_RECORDER,190,306,152,26,"Sound Recorder");
         add(a,DU_BUTTON,C_MM_MUSIC,356,306,152,26,"Music Player");

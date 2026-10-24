@@ -82,6 +82,11 @@ static int dev_open(void *o, uint32_t rate) {
     native(CIUKI_SYS_CLOSE, audio_fd, 0, 0, 0);
     audio_fd = -1;
   }
+  if (!r) {
+    struct ciuki_audio_route route={.version=1,.size=sizeof(route),.source=CIUKI_AUDIO_MIXED};
+    r=native(CIUKI_SYS_DEVCTL,audio_fd,AUDIO_SET_SOURCE,(uintptr_t)&route,sizeof(route));
+    if (r<0) { native(CIUKI_SYS_CLOSE,audio_fd,0,0,0); audio_fd=-1; }
+  }
   return r;
 }
 static int dev_status(void *o, uint64_t *n, uint32_t *g) {
@@ -159,10 +164,29 @@ void W32API CiukiAudioLock(void) {
   EnterCriticalSection(&guard);
 }
 void W32API CiukiAudioUnlock(void) { LeaveCriticalSection(&guard); }
+static void lines_poll(void) {
+  static uint32_t previous; static int have;
+  uint32_t now=GetTickCount();
+  if (have && now-previous<100) return;
+  previous=now; have=1;
+  int fd=native(CIUKI_SYS_OPEN,(uintptr_t)"/dev/mixer",O_RDONLY,0,0);
+  if (fd<0) return;
+  for (unsigned i=0;i<3;i++) {
+    struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=i+1};
+    if (!native(CIUKI_SYS_DEVCTL,fd,MIXER_GET_LINE,(uintptr_t)&line,sizeof(line)) &&
+        line.available && line.left<=100 && line.right<=100) {
+      engine.line_gain[i][0]=line.mute ? 0 : line.left;
+      engine.line_gain[i][1]=line.mute ? 0 : line.right;
+    }
+  }
+  native(CIUKI_SYS_CLOSE,fd,0,0,0);
+}
 static DWORD W32API mixer_thread(void *p) {
   (void)p;
   while (!quitting) {
     CiukiAudioLock();
+    lines_poll();
+    wa_input_tick();
     uint32_t r = wa_pump(&engine);
     wa_dispatch(&engine);
     CiukiAudioUnlock();
@@ -246,3 +270,6 @@ void wa_master(uint32_t out[2]) {
   out[0] = r < 0 ? 0 : m.left * 65535 / 100;
   out[1] = r < 0 ? 0 : m.right * 65535 / 100;
 }
+
+int wa_capture_native(uint32_t n, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d)
+{ return native(n,a,b,c,d); }

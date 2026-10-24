@@ -18,6 +18,7 @@ _Static_assert(SPI_SETSCREENSAVESECURE==0x77u,"G10 SPI_SETSCREENSAVESECURE");
 
 #include "../../apps/desktop/protocol.h"
 #include "../../apps/desktop/settings_catalog.h"
+_Static_assert(DESK_MIXER_SET==22u,"G22B preserves the mixer opcode");
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
@@ -1931,6 +1932,37 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_audio_diagnostics.reserved", __builtin_offsetof(struct ciuki_audio_diagnostics, reserved), 60u},
     {"constant.MIXER_GET_DIAGNOSTICS", MIXER_GET_DIAGNOSTICS, 0x4203u},
     {"constant.MIXER_REFRESH_MASTER", MIXER_REFRESH_MASTER, 0x4204u},
+    {"constant.AUDIO_SET_SOURCE", AUDIO_SET_SOURCE, 0x410du},
+    {"constant.AUDIO_CAPTURE_ACQUIRE", AUDIO_CAPTURE_ACQUIRE, 0x410eu},
+    {"constant.AUDIO_CAPTURE_RELEASE", AUDIO_CAPTURE_RELEASE, 0x410fu},
+    {"constant.MIXER_GET_LINE", MIXER_GET_LINE, 0x4205u},
+    {"constant.MIXER_SET_LINE", MIXER_SET_LINE, 0x4206u},
+    {"constant.CIUKI_MIXER_WAVE", CIUKI_MIXER_WAVE, 1u},
+    {"constant.CIUKI_MIXER_MIDI", CIUKI_MIXER_MIDI, 2u},
+    {"constant.CIUKI_MIXER_CD", CIUKI_MIXER_CD, 3u},
+    {"constant.CIUKI_MIXER_LINE", CIUKI_MIXER_LINE, 4u},
+    {"constant.CIUKI_MIXER_MIC", CIUKI_MIXER_MIC, 5u},
+    {"constant.CIUKI_AUDIO_MIXED", CIUKI_AUDIO_MIXED, 6u},
+    {"constant.CIUKI_CAPTURE_CD", CIUKI_CAPTURE_CD, 2u},
+    {"constant.CIUKI_CAPTURE_MIX", CIUKI_CAPTURE_MIX, 3u},
+    {"sizeof.ciuki_audio_route", sizeof(struct ciuki_audio_route), 16u},
+    {"alignof.ciuki_audio_route", _Alignof(struct ciuki_audio_route), 4u},
+    {"offsetof.ciuki_audio_route.version", __builtin_offsetof(struct ciuki_audio_route, version), 0u},
+    {"offsetof.ciuki_audio_route.size", __builtin_offsetof(struct ciuki_audio_route, size), 4u},
+    {"offsetof.ciuki_audio_route.source", __builtin_offsetof(struct ciuki_audio_route, source), 8u},
+    {"offsetof.ciuki_audio_route.reserved", __builtin_offsetof(struct ciuki_audio_route, reserved), 12u},
+    {"sizeof.ciuki_mixer_line", sizeof(struct ciuki_mixer_line), 40u},
+    {"alignof.ciuki_mixer_line", _Alignof(struct ciuki_mixer_line), 4u},
+    {"offsetof.ciuki_mixer_line.version", __builtin_offsetof(struct ciuki_mixer_line, version), 0u},
+    {"offsetof.ciuki_mixer_line.size", __builtin_offsetof(struct ciuki_mixer_line, size), 4u},
+    {"offsetof.ciuki_mixer_line.line", __builtin_offsetof(struct ciuki_mixer_line, line), 8u},
+    {"offsetof.ciuki_mixer_line.recording", __builtin_offsetof(struct ciuki_mixer_line, recording), 12u},
+    {"offsetof.ciuki_mixer_line.left", __builtin_offsetof(struct ciuki_mixer_line, left), 16u},
+    {"offsetof.ciuki_mixer_line.right", __builtin_offsetof(struct ciuki_mixer_line, right), 20u},
+    {"offsetof.ciuki_mixer_line.mute", __builtin_offsetof(struct ciuki_mixer_line, mute), 24u},
+    {"offsetof.ciuki_mixer_line.selected", __builtin_offsetof(struct ciuki_mixer_line, selected), 28u},
+    {"offsetof.ciuki_mixer_line.available", __builtin_offsetof(struct ciuki_mixer_line, available), 32u},
+    {"offsetof.ciuki_mixer_line.reserved", __builtin_offsetof(struct ciuki_mixer_line, reserved), 36u},
     {"constant.CIUKI_AUDIO_DIAG_READY", CIUKI_AUDIO_DIAG_READY, 1u},
     {"constant.CIUKI_AUDIO_DIAG_RUNNING", CIUKI_AUDIO_DIAG_RUNNING, 2u},
     {"constant.CIUKI_AUDIO_DIAG_QUARANTINE", CIUKI_AUDIO_DIAG_QUARANTINE, 4u},

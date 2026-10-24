@@ -479,6 +479,20 @@ static int capture_caps(void *ctx,struct ciuki_audio_capture *out)
     int error=ciuki_devctl(fd,AUDIO_CAPTURE_CAPS,out,sizeof(*out)) ? -errno : 0;
     close(fd); return error;
 }
+static int audio_line(void *ctx,struct ciuki_mixer_line *line,int set)
+{
+    struct cp_main *m=ctx;
+    if (!set) {
+        int fd=open("/dev/mixer",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+        int result=ciuki_devctl(fd,MIXER_GET_LINE,line,sizeof(*line)) ? -errno : 0;
+        close(fd); return result;
+    }
+    struct ciuki_message request; desk_message(&request,DESK_MIXER_SET,28);
+    desk_put32(request.data+4,++m->serial); desk_put32(request.data+8,line->left);
+    desk_put32(request.data+12,line->right); desk_put32(request.data+16,line->mute);
+    desk_put32(request.data+20,line->line); desk_put32(request.data+24,0);
+    return du_window_queue(&m->window,&request) ? -errno : 0;
+}
 static int multimedia_open(void *ctx,unsigned which)
 {
     struct cp_main *m=ctx;
@@ -802,7 +816,7 @@ int main(int argc, char **argv)
     h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
-    h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->multimedia_open=multimedia_open;
+    h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->audio_line=audio_line; h->multimedia_open=multimedia_open;
     h->game_begin=game_begin;h->game_poll=game_poll_result;
     h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
 

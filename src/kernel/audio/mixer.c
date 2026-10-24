@@ -87,8 +87,8 @@ void audio_mix(struct audio_frame *out, unsigned frames)
                     r = interpolate(a.right, b.right, s->phase, output_rate);
                 }
             }
-            sums[i][0] += l * (int32_t)s->gain[0] / 100;
-            sums[i][1] += r * (int32_t)s->gain[1] / 100;
+            sums[i][0] += (l * (int32_t)s->gain[0] / 100) * (int32_t)audio_source_gain(s->source, 0) / 100;
+            sums[i][1] += (r * (int32_t)s->gain[1] / 100) * (int32_t)audio_source_gain(s->source, 1) / 100;
             s->last_output = audio.output + i + 1;
             s->phase += s->rate;
             while (s->phase >= output_rate && s->queued) mixer_retire(s,output_rate);
