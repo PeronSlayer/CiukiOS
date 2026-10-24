@@ -4,6 +4,12 @@
 #include "../../../apps/libdeskui/v3.h"
 #include <w32/server.h>
 #include <w32/user_surface.h>
+BOOL u32_clip_call(UINT, HWND, UINT, DWORD, const void *, DWORD, struct w32r_reply *, void *, DWORD);
+void u32_clip_event(const struct desk_packet *);
+BOOL u32_clip_rendering(void);
+BOOL u32_clip_has_delayed(void);
+void u32_clip_abandon(DWORD);
+void u32_clip_render_all(HWND, BOOL);
 #define U32_WINDOWS 128
 #define U32_CLASSES 64
 #define U32_THREADS 64

@@ -280,6 +280,7 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
   for (UINT i = 0; i < 18; i++)
     desk_put32(b + i * 4, words[i]);
 }
+#include "g5_clipboard_fixture.h"
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
   (void)a;
   (void)c;
@@ -287,6 +288,7 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if (sent->data[1]==DESK_V3_CLIPBOARD) { fixture_clipboard(sent); return 0; }
     if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode) {
       DWORD flags = desk_get32(sent->data + 16);
       lease_event(desk_get32(sent->data + 8), desk_get32(sent->data + 12),
@@ -328,6 +330,11 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
       }
     return (DWORD)-9;
   }
+  if (call == CIUKI_SYS_SURFACE_MAP) {
+    for (UINT i=0;i<64;i++) if (surfaces[i].fd==(int)a) return U32_PTR(surfaces[i].s.pixels);
+    return (DWORD)-9;
+  }
+  if (call == CIUKI_SYS_MUNMAP) return 0;
   if (call == CIUKI_SYS_W32 && host_modules) {
     struct ciuki_w32_display_args *r = (void *)(uintptr_t)a;
     if (r->header.operation != W32_DISPLAY)
@@ -367,8 +374,10 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     info->modes[1] = (struct ciuki_display_mode){2, 800, 600, 32, 3200, 1, 1};
     return 0;
   }
-  if (call == CIUKI_SYS_CLOSE)
+  if (call == CIUKI_SYS_CLOSE) {
+    for (UINT i=0;i<64;i++) if (surfaces[i].fd==(int)a && clip_temp[i]) { clip_temp[i]=0; drop(&surfaces[i].s); }
     return 0;
+  }
   if (call == CIUKI_SYS_SLEEP_MS) {
     ui_kernel_pause(a);
     return 0;
@@ -439,7 +448,19 @@ static UINT traces;
 static int nesting;
 static int minmax_set;
 static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
+static unsigned g5_render_count,g5_all_count;
+static HWND g5_all_window;
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m==WM_RENDERALLFORMATS && h==g5_all_window) {
+    CHECK(OpenClipboard(h));
+    CHECK(GetClipboardOwner()==h);
+    HANDLE text=GlobalAlloc(2,5); CHECK(text); memcpy(GlobalLock(text),"all!",5);
+    CHECK(SetClipboardData(CF_TEXT,text)==text); CHECK(CloseClipboard()); g5_all_count++; return 0;
+  }
+  if (m==0x305) {
+    HANDLE text=GlobalAlloc(2,6); CHECK(text); memcpy(GlobalLock(text),"later",6);
+    CHECK(SetClipboardData((UINT)wp,text)==text); g5_render_count++; return 0;
+  }
   CHECK(traces < 2048);
   trace[traces].h = h;
   trace[traces].m = m;
@@ -756,6 +777,50 @@ static void test_clipboard(void) {
   CHECK(OpenClipboard(windows[0]));
   CHECK(EmptyClipboard());
   CHECK(CloseClipboard());
+  /* A native producer uses the very same store as USER. */
+  DWORD sequence=GetClipboardSequenceNumber();
+  struct desk_clip_wire request={.op=DESK_CLIP_OPEN},reply; void *data=NULL;
+  CHECK(!clip_request(&fixture_clip_store,999,&request,NULL,&reply,&data));
+  request.op=DESK_CLIP_EMPTY; CHECK(!clip_request(&fixture_clip_store,999,&request,NULL,&reply,&data));
+  static const uint8_t native_text[]={'n',0,'a',0,'t',0,'i',0,'v',0,'e',0,0xe8,0,0,0};
+  request=(struct desk_clip_wire){.op=DESK_CLIP_PUT,.format=13,.bytes=sizeof(native_text)};
+  CHECK(!clip_request(&fixture_clip_store,999,&request,native_text,&reply,&data));
+  request=(struct desk_clip_wire){.op=DESK_CLIP_CLOSE}; CHECK(!clip_request(&fixture_clip_store,999,&request,NULL,&reply,&data));
+  CHECK(GetClipboardSequenceNumber()>sequence && OpenClipboard(windows[0]));
+  HANDLE native=GetClipboardData(CF_TEXT); CHECK(native && !strcmp(GlobalLock(native),"native\xe8")); CHECK(CloseClipboard());
+  /* Registered formats are mapped by name across independent ID tables. */
+  UINT registered=RegisterClipboardFormatA("G5 format"); CHECK(registered>=0xc000);
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  HANDLE bytes=GlobalAlloc(2,4); memcpy(GlobalLock(bytes),"g5!",4);
+  CHECK(SetClipboardData(registered,bytes)==bytes && IsClipboardFormatAvailable(registered));
+  CHECK(CloseClipboard() && OpenClipboard(windows[0]));
+  HANDLE got=GetClipboardData(registered); CHECK(got && !strcmp(GlobalLock(got),"g5!"));
+  CHECK(CloseClipboard());
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  SetLastError(0); CHECK(!SetClipboardData(CF_TEXT,0) && !GetLastError()); CHECK(CloseClipboard());
+  peer=2; ui_kernel_schedule(schedule_peer);
+  ui_kernel_switch(2); CHECK(OpenClipboard(windows[2]));
+  HANDLE delayed=GetClipboardData(CF_TEXT); CHECK(delayed && !strcmp(GlobalLock(delayed),"later") && g5_render_count==1);
+  CHECK(CloseClipboard()); ui_kernel_switch(0); ui_kernel_schedule(0); peer=1;
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard() && CloseClipboard());
+  UINT promised=RegisterClipboardFormatA("G5 delayed"); CHECK(promised>=0xc000);
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  SetLastError(0); CHECK(!SetClipboardData(promised,0) && !GetLastError());
+  CHECK(!SetClipboardData(CF_TEXT,0) && !GetLastError()); CHECK(CloseClipboard());
+  CHECK(OpenClipboard(windows[0]));
+  CHECK(GetClipboardData(promised) && GetClipboardData(CF_TEXT) && !u32_clip_has_delayed());
+  CHECK(g5_render_count==3 && EmptyClipboard() && CloseClipboard());
+  g5_all_window=CreateWindowExA(0,"USER fixture","Clipboard owner",WS_VISIBLE,50,50,100,100,0,0,0,0);
+  CHECK(g5_all_window && OpenClipboard(g5_all_window) && EmptyClipboard());
+  SetLastError(0); CHECK(!SetClipboardData(CF_TEXT,0) && !GetLastError()); CHECK(CloseClipboard());
+  CHECK(DestroyWindow(g5_all_window) && g5_all_count==1 && !GetClipboardOwner());
+  g5_all_window=0;
+  CHECK(OpenClipboard(windows[0])); HANDLE all=GetClipboardData(CF_TEXT);
+  CHECK(all && !strcmp(GlobalLock(all),"all!")); CHECK(EmptyClipboard() && CloseClipboard());
+  printf("TRACE G5 WM_RENDERALLFORMATS owner destruction preserves rendered bytes and releases original blocks\n");
+  struct w32r_reply retired;
+  CHECK(!u32_directory(W32R_CLIP_GET,0,u32_tid(),CF_TEXT,0,"",0,0,&retired,0,0) && GetLastError()==120);
+  printf("TRACE G5 native to Win32 text, shared sequence, registered formats, cross-thread delayed WM_RENDERFORMAT, retired second store refused\n");
   printf("TRACE clipboard ownership copied UTF-16 and cross-process text\n");
 }
 static UINT hook_order[8], hook_calls, timer_calls, enum_count;
@@ -1735,6 +1800,7 @@ static void run(void) {
   #ifndef U32_TEST_EXTERNAL_MODULES
   shell_clients(dir);
   #endif
+  clip_destroy(&fixture_clip_store);
   wr_destroy(&server);
   for (unsigned i = 0; i < 2; i++) {
     char path[256];

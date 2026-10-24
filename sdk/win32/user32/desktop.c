@@ -250,6 +250,7 @@ BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
   return u32_wire(w, DESK_V3_WINDOW_ORDER, b, sizeof(b), -1);
 }
 void u32_event(const struct desk_packet *p) {
+  if (p->opcode==DESK_V3_CLIPBOARD_EVENT) { u32_clip_event(p); return; }
   if (p->opcode == DESK_V3_RESULT) {
     for (struct request *r = requests; r; r = r->next)
       if (r->token == p->request && r->window == p->window_id &&
