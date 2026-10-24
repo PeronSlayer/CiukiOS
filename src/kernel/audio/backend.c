@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Backend selection and cyclic DMA ownership.
  * References: docs/design/f4-audio-second-set.md. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -518,9 +519,11 @@ int audio_backend_init(void)
         else if (trident_match(p, &d->kind)) { d->ops = &trident_ops; d->name = "trident"; d->bytes = 256; }
         else if (ali5451_match(p, &d->kind)) { d->ops = &ali5451_ops; d->name = "ali5451"; d->bytes = 256; }
         else continue;
+        if (!system_admit(system_pci_id(p->bus, p->dev, p->fn), d->name)) { d->ops = 0; continue; }
         d->pci = *p; d->command = p->command; d->state.irq = p->irq_line;
         audio.backend_name=d->name; audio.backend_pci=d->pci; break;
     }
+    if (!d->ops && !system_admit(0x50001, "sb16")) return -ENODEV;
     if (!d->ops) { d->kind = AUDIO_SB16; d->ops = &sb16_ops; d->name = "sb16"; d->base = 0x220; d->bytes = 16; d->state.irq = 5; }
     else if (d->kind == AUDIO_YMFPCI) {
         audio.backend_name = d->name; audio.backend_pci = d->pci;

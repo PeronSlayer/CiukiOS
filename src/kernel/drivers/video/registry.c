@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Read-only PCI nomination, lifecycle metadata and policy.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -65,6 +66,8 @@ static uint64_t command_native_count[14], command_software_count[14];
 
 bool display_accel_disabled(const char **reason)
 {
+    if (system_performance && !system_performance()->graphics) { if (reason) *reason = "performance_setting"; return true; }
+    if (!system_admit(CIUKI_DEVICE_ACCELERATOR_ID, NULL)) { if (reason) *reason = "hardware_profile"; return true; }
     if (g_boot.flags & CBI_F_SAFE_MODE) { if (reason) *reason = "safe_mode"; return true; }
     /* G14: selective startup, Step-by-step or the ASD agent (bootstat.h
      * class 0, boot flag bit 24). */
@@ -131,7 +134,7 @@ const struct display_driver *display_driver_select(const struct fb_device *fb,
     if (displays != 1) return 0;
     for (unsigned i = 0; i < count; i++) {
         const struct display_driver *d = table[i];
-        if (d && match(d,p) && owns(d,p,fb) && (!d->probe || d->probe(p))) {
+        if (d && system_admit(CIUKI_DEVICE_ACCELERATOR_ID, d->id) && system_admit(system_pci_id(p->bus, p->dev, p->fn), d->id) && match(d,p) && owns(d,p,fb) && (!d->probe || d->probe(p))) {
             if (found) *found = p;
             return d;
         }

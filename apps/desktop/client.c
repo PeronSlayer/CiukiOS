@@ -1,3 +1,7 @@
+#include "schedsvc.h"
+#pragma weak desk_schedsvc_run
+#pragma weak desk_schedsvc_completed
+#pragma weak desk_schedsvc_exited
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "gate.h"
@@ -960,6 +964,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
         int terminal_end = terminal && p.opcode == DESK_END_TASK && !p.window_id && p.pid;
+        int scheduled_run = c->sysapp && !strcmp(c->application, "schedtask") && p.opcode == DESK_LAUNCH &&
+            !strcmp(p.title, "schedtask") && !strncmp(p.argument, "run:", 4) && p.argument[4];
         int sysapp_launch = c->sysapp && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) && !p.argument[0];
         /* G14: WIN at a Command prompt only start opens the normal desktop. */
         int terminal_win = terminal && p.opcode == DESK_LAUNCH && !strcmp(p.title, "win") && !p.argument[0];
@@ -973,11 +979,12 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
         int32_t result = terminal_win ? (desk_recovery_win ? desk_recovery_win(d) : -ENOSYS) :
-            !c->taskman && !files_open && !shell_open && !note_wordpad && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !panel_launch && !help_open && !sysapp_launch && !browser_wallpaper ? -EPERM :
+            !c->taskman && !files_open && !shell_open && !note_wordpad && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !panel_launch && !help_open && !sysapp_launch && !scheduled_run && !browser_wallpaper ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             shell_open ? (d->power.state ? -EBUSY : d->open_path ? d->open_path(d,p.argument) : -ENOSYS) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :
+            scheduled_run ? (desk_schedsvc_run ? desk_schedsvc_run(d, p.argument + 4) : -ENOSYS) :
             c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
         int deferred = p.opcode == DESK_LAUNCH && !result && d->launch_deferred;
         memset(&d->launch_request, 0, sizeof(d->launch_request)); d->launch_deferred = 0;
@@ -1628,6 +1635,7 @@ void desk_close_timeouts(struct desktop *d)
 }
 void desk_child_exited(struct desktop *d, uint32_t pid, int status)
 {
+    if (desk_schedsvc_exited) desk_schedsvc_exited(d, pid, status);
     if (pid && d->end_task.kind && d->end_task.pid==pid && !d->end_task.session) desk_end_task_choice(d,-1);
     for (unsigned i=0; i<d->power.count; i++)
         if (d->power.targets[i].pid==pid) d->power.targets[i].gone=1;
@@ -1898,6 +1906,10 @@ void desk_launch_completed(struct desktop *d, const struct desk_launch_request *
             snprintf(text,sizeof(text),"'%s' could not be started (error %d).",r->label[0] ? r->label : name,-result);
             desk_shell_message(d,"Games",text,1);
         }
+        return;
+    case DESK_LAUNCH_SCHEDULE:
+        if (desk_schedsvc_completed) desk_schedsvc_completed(d, r->serial, result);
+        if (result < 0) desk_shell_notify_error(d, "Scheduled task did not start", -result);
         return;
     case DESK_LAUNCH_AUTOPLAY:
         if (result<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);

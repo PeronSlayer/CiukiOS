@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Bounded NIC ownership, packet queues and thread service.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -104,7 +105,7 @@ static const struct netif_driver *const net_drivers[] = {
 static const struct netif_driver *find_driver(const struct pci_func *p)
 {
     for (unsigned i = 0; i < ARRAY_SIZE(net_drivers); i++)
-        if (net_drivers[i]->match(p)) return net_drivers[i];
+        if (net_drivers[i]->match(p) && system_admit(system_pci_id(p->bus, p->dev, p->fn), net_drivers[i]->name)) return net_drivers[i];
     return 0;
 }
 
@@ -859,6 +860,7 @@ struct netif *netif_publish_external(const struct pci_func *p,const struct netif
 {
     if(!initialized || shutting_down || net_sleeping || !p || !driver || !context || !fault || !generation ||
        !valid_mac(mac) || (g_boot.flags&CBI_F_SAFE_MODE)) return 0;
+    if (!system_admit(system_pci_id(p->bus,p->dev,p->fn), NULL)) return 0;
     kmutex_lock(&registration_mutex);
     if (shutting_down || net_sleeping) {kmutex_unlock(&registration_mutex);return 0;}
     unsigned slot=device_count;

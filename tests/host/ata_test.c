@@ -12,6 +12,9 @@
 #include <ciuki/work.h>
 #include <ciuki/storage.h>
 
+static bool g30_optical_enabled = true;
+bool system_device_allowed(uint32_t id, const char *driver)
+{ (void)driver; return id != 0x40100 || g30_optical_enabled; }
 static unsigned failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
@@ -1467,6 +1470,16 @@ static void test_emergency_recorder(void)
 }
 #include "ata_chipset_test.inc"
 #include "ata_addin_test.inc"
+static void test_profile_optical_binding(void)
+{
+    bool old_initialized=initialized, old_quiescing=channels[0].quiescing; initialized=true;
+    struct ata_device *d=&channels[0].devices[0], saved=*d; memset(d,0,sizeof(*d)); d->channel=&channels[0];
+    d->identified=true; d->atapi=true; channels[0].quiescing=false;
+    g30_optical_enabled=false; CHECK(!ata_device_get(0,0) && ata_inventory_get(0,0)==d);
+    d->atapi=false; CHECK(ata_device_get(0,0)==d); /* fixed boot disks remain protected */
+    d->atapi=true; g30_optical_enabled=true; CHECK(ata_device_get(0,0)==d); *d=saved; initialized=old_initialized; channels[0].quiescing=old_quiescing;
+    puts("PASS G30B optical binding: disabled ATAPI stays in inventory, is not mounted, fixed disk unaffected");
+}
 int main(int argc, char **argv)
 {
     if (argc == 2) {
@@ -1476,7 +1489,7 @@ int main(int argc, char **argv)
     }
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
-    test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder(); test_standby_timer();
+    test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder(); test_standby_timer(); test_profile_optical_binding();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

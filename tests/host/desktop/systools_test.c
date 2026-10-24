@@ -369,7 +369,7 @@ static void test_service(void)
     assert(st_add(&s, &daily) == 0 && st_add(&s, &boot) == 0 && st_add(&s, &bad) == 0);
     struct fake_host f; memset(&f, 0, sizeof(f)); f.now = base + 10;
     assert(st_save(&s, f.file, sizeof(f.file)) > 0); f.have_file = 1;
-    struct ss_host h = { &f, fh_now, fh_load, fh_save, fh_launch };
+    struct ss_host h = { &f, fh_now, fh_load, fh_save, fh_launch, NULL, NULL, NULL, NULL };
     assert(ss_poll(&service, &h) == 1 && f.launch_count == 1 && !strcmp(f.launched[0], "hwreport|") && f.saves == 1);   /* At Start only */
     assert(ss_poll(&service, &h) == 0 && f.saves == 1);                 /* unchanged file, nothing due */
     f.now = base + 40;                                                  /* 08:40: "missing" is due */
@@ -396,7 +396,7 @@ static void test_service(void)
     assert(ss_poll(&service, &h) == 1 && f.saves == saves + 1);
     /* no file at all: an empty schedule, no error */
     struct ss_service empty; memset(&empty, 0, sizeof(empty)); struct fake_host none; memset(&none, 0, sizeof(none)); none.now = base;
-    struct ss_host hn = { &none, fh_now, fh_load, fh_save, fh_launch };
+    struct ss_host hn = { &none, fh_now, fh_load, fh_save, fh_launch, NULL, NULL, NULL, NULL };
     assert(ss_poll(&empty, &hn) == 0 && empty.store.count == 0 && none.saves == 0);
     puts("PASS G30 scheduler service");
 }

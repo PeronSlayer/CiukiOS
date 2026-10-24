@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Intel ICH PCM-out. Sources/decisions: docs/design/f4-acceptance.md and
  * docs/validation/2026-10-14-f4-15-ac97-playback.md.
  * Chipset extensions adapt Linux v6.12 sound/pci/intel8x0.c,
@@ -914,7 +915,7 @@ int ac97_init(void)
     for (unsigned i = 0; i < 12; i++) d->claims[i] = -1;
     d->io = (struct ac97_io){ 0, read_io, write_io, now_io, sleep_io };
     const struct pci_func *p = 0;
-    for (unsigned i = 0; i < pci_count(); i++) if (supported(pci_get(i))) { p = pci_get(i); break; }
+    for (unsigned i = 0; i < pci_count(); i++) if (supported(pci_get(i)) && system_admit(system_pci_id(pci_get(i)->bus, pci_get(i)->dev, pci_get(i)->fn), "ac97")) { p = pci_get(i); break; }
     if (!p) { audio.reason = "device_absent"; return -ENODEV; }
     d->pci = *p; d->command = p->command;
     if (!controller_layout(d,g_boot.flags)) {

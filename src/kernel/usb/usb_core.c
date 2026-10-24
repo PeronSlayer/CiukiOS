@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* USB enumeration and serialized service. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
@@ -1049,6 +1050,11 @@ descriptor_ready:
     unsigned len = le16(b + 2); if (len < 9 || len > sizeof(b)) goto failed;
     err = usb_control(d, 0x80, 6, 0x200, 0, b, len); if (err != (int)len) goto failed;
     err = usb_parse_config(d, b, len); if (err) goto failed;
+    unsigned host_index = 0;
+    for (unsigned i = 0; i < host_count; i++) if (&hosts[i] == h) { host_index = i; break; }
+    if (!system_admit(0x60000u + host_index * USB_DEVICE_MAX + slot, d->storage.bound ? "usb-storage" : "usb-host")) {
+        d->reason = "disabled_by_hardware_profile"; return 0;
+    }
     err = usb_control(d, 0, 9, d->config, 0, 0, 0); if (err) goto failed;
     d->configured = true; d->reason = "unsupported_class";
     if (d->class_code == 9) {
@@ -1358,6 +1364,7 @@ void usb_init(void)
     /* First pass routes EHCI ports before companions enumerate. */
     for (unsigned pass = 0; pass < 2; pass++) for (unsigned i = 0; i < pci_count() && host_count < USB_HOST_MAX; i++) {
         const struct pci_func *p = pci_get(i);
+        if (!system_admit(system_pci_id(p->bus, p->dev, p->fn), "usb-host")) continue;
         if (p->class_code != 0x0c || p->subclass != 3 || (p->prog_if != 0 && p->prog_if != 0x10 && p->prog_if != 0x20) || (p->prog_if == 0x20) != (pass == 0)) continue;
         struct usb_host *h = &hosts[host_count++];
         struct usb_io io = {h, native_read, native_write, cfg_read, cfg_write, native_now, native_sleep};

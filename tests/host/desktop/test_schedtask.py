@@ -21,14 +21,25 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/libdeskui/keymap.c", "apps/desktop/compositor.c",
+           "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/textarea.c", "apps/libdeskui/keymap.c", "apps/desktop/compositor.c",
            "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 SOURCES = ["apps/systools/schedtask_ui.c", "apps/systools/sched.c", "apps/systools/service.c", "tests/host/desktop/schedtask_test.c"]
 PIN = "PIN-FROM-FIRST-RUN"
 RENDERS = {
-    "folder-empty": "22214bcc3b5e3a5a973139fba0bed5ac54753a494de69ed377bd8f3344665438", "folder-tasks": "53609bd9d7d5a3b4dc8c2f69879fe86afabda45b4658072f13a1031a26a51bc3", "wizard-welcome": "aba2b02842ae479e2d1d8f044395a7c69ef0a39cca6d0c1401324ddbf02ebc8e", "wizard-program": "c67f8edbed12aebdeb5c7dd44d158906dcf39e8aae0e9e511ba08b191196a8f2", "wizard-name": "d14c0861befe5793c5e4b62e301e5fb7b8ed52b0dee89630854189628756cb73",
-    "wizard-when-daily": "48f5783d8d30fbb763fc74a6e678fe8d0a06d37c8ebd8441b8b3734b22adc6d6", "wizard-when-weekly": "3347092bb35a91b185a9916b5497c48b21f60f5794b238fbd10dbe1e4b35583c", "wizard-finish": "373e0da66c10c02f24abd210062cc1376d50071adad9063ba5a759bf66c3622e", "props-task": "20b3a86de1d2166f56ef1e2fe794774b612ab8e0f762f8fbc5e85c74e597c879", "props-schedule": "820367e516d22ba65e07de14b92b4162d7dca2e10960015b7fa0f9a82b434771",
-    "props-settings": "82f78825a16a27ab9deac866e6b858fc6da0134efbc1bec131ec141a1acb98ae", "maint-welcome": "b297aa940dbddda220ee23e49866478c08946f6a741352af25742655233f59e9", "maint-slot": "763a3111e12b071a046057a868838e6adaac58f227ebaabbba76580eb7c47966", "maint-finish": "9f66c0d90b5735082b0cb946aa3b50c879450bd497e38dec1767290b2b4ab7bc",
+    "folder-empty": "22214bcc3b5e3a5a973139fba0bed5ac54753a494de69ed377bd8f3344665438",
+    "folder-tasks": "53609bd9d7d5a3b4dc8c2f69879fe86afabda45b4658072f13a1031a26a51bc3",
+    "maint-finish": "9f66c0d90b5735082b0cb946aa3b50c879450bd497e38dec1767290b2b4ab7bc",
+    "maint-slot": "763a3111e12b071a046057a868838e6adaac58f227ebaabbba76580eb7c47966",
+    "maint-welcome": "b297aa940dbddda220ee23e49866478c08946f6a741352af25742655233f59e9",
+    "props-schedule": "820367e516d22ba65e07de14b92b4162d7dca2e10960015b7fa0f9a82b434771",
+    "props-settings": "e7be053eca1ae67708908d955821857d71547182f927d655021f4420747f8c8e",
+    "props-task": "20b3a86de1d2166f56ef1e2fe794774b612ab8e0f762f8fbc5e85c74e597c879",
+    "wizard-finish": "373e0da66c10c02f24abd210062cc1376d50071adad9063ba5a759bf66c3622e",
+    "wizard-name": "d14c0861befe5793c5e4b62e301e5fb7b8ed52b0dee89630854189628756cb73",
+    "wizard-program": "c67f8edbed12aebdeb5c7dd44d158906dcf39e8aae0e9e511ba08b191196a8f2",
+    "wizard-welcome": "aba2b02842ae479e2d1d8f044395a7c69ef0a39cca6d0c1401324ddbf02ebc8e",
+    "wizard-when-daily": "48f5783d8d30fbb763fc74a6e678fe8d0a06d37c8ebd8441b8b3734b22adc6d6",
+    "wizard-when-weekly": "3347092bb35a91b185a9916b5497c48b21f60f5794b238fbd10dbe1e4b35583c"
 }
 
 
@@ -64,6 +75,12 @@ class SchedtaskTests(unittest.TestCase):
             fresh = {k: v for k, v in actual.items() if RENDERS[k] == PIN}
             if fresh:
                 print("RENDERS", PIN, json.dumps(fresh, indent=1, sort_keys=True))
+            if os.environ.get("CIUKI_UPDATE_SCHEDTASK_GOLDENS") == "1":
+                import re
+                source = Path(__file__)
+                updated = re.sub(r'RENDERS = \{.*?\n\}', "RENDERS = " + json.dumps(actual, indent=4, sort_keys=True), source.read_text(), count=1, flags=re.S)
+                source.write_text(updated)
+                RENDERS.update(actual)
             self.assertEqual({k: v for k, v in actual.items() if RENDERS[k] != PIN},
                              {k: v for k, v in RENDERS.items() if v != PIN})
             # Same input, same pixels.

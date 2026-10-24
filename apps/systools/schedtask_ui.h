@@ -21,7 +21,7 @@ struct stui_host {
     int (*programs)(void *, char names[][STUI_NAME], unsigned cap, unsigned *count);
     /* Asks the desktop to start the catalogue program `program`; returns a request number (> 0) whose result
      * arrives later through stui_launch_result, or -errno. */
-    int (*launch)(void *, const char *program);
+    int (*launch)(void *, const char *task, const char *program);
     void (*exit)(void *);                                          /* File > Exit */
 };
 

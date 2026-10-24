@@ -20,6 +20,8 @@
 #undef fake_reset
 #include "../../../apps/accessories/mixer.h"
 
+/* libreg's Hardware root is unavailable in this window-model fixture. */
+int ciuki_devices(struct ciuki_devices_info *out) { (void)out; errno=ENOSYS; return -1; }
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
 static unsigned wm_mode;
@@ -2338,6 +2340,46 @@ static void row_recovery(unsigned m)
     assert(!desk_recovery_win(&d) && !d.terminal_shell); step("WIN: the icons return");
     wm_end();
 }
+static void g30b_register(const char *name)
+{
+    snprintf(d.programs[d.program_count].name, sizeof(d.programs[0].name), "%s", name);
+    snprintf(d.programs[d.program_count].path, sizeof(d.programs[0].path), "/Programs/%s", name); d.program_count++;
+}
+static void row_g30b_performance(unsigned m)
+{
+    row_name="G30B Performance settings"; wm_begin(m,1);
+    struct fake_app *panel=app_open("control",440,330,40,60);
+    struct fake_app *cover=app_open("ciuknote",200,140,320,130); step("Performance partly covered");
+    app_paint(panel,20,45,390,250,0x113377); step("File System property sheet opens");
+    app_paint(panel,40,120,330,70,0x5577aa); step("role and read-ahead edited");
+    app_paint(panel,20,45,390,250,0x337755); step("Graphics Full/None and Virtual Memory settings");
+    app_paint(panel,30,245,350,40,0xaa3344); step("invalid sizes or failed save reported");
+    app_paint(panel,20,45,390,250,0x335588); step("Cancel or successful save closes sheet");
+    app_close(cover); step("property result exposed"); wm_end();
+}
+static void row_g30b_schedule(unsigned m)
+{
+    row_name="G30B Scheduler conditions and result"; wm_begin(m,1); g30b_register("schedtask");
+    struct fake_app *tasks=app_open("schedtask",440,330,80,60);
+    struct fake_app *cover=app_open("ciuknote",200,140,320,130); step("Scheduled Tasks partly covered");
+    app_paint(tasks,20,45,390,250,0x447799); step("Settings idle, deadline and power controls");
+    app_paint(tasks,30,130,350,100,0x889955); step("conditions edited and validated");
+    app_paint(tasks,20,45,390,250,0x335577); step("Apply or Cancel returns to task list");
+    app_paint(tasks,180,80,200,22,0x99aa22); step("running state from service");
+    app_paint(tasks,180,80,200,22,0x228855); step("completion exit code or start error");
+    app_close(cover); step("updated result exposed"); wm_end();
+}
+static void row_g30b_network(unsigned m)
+{
+    row_name="G30B System Monitor network"; wm_begin(m,1); g30b_register("sysmon");
+    struct fake_app *monitor=app_open("sysmon",440,330,80,60);
+    struct fake_app *cover=app_open("ciuknote",200,140,320,130); step("System Monitor partly covered");
+    app_paint(monitor,20,60,390,220,0x229955); step("Add adapter error counter");
+    app_paint(monitor,20,60,390,180,0x337766); step("receive/transmit/error sample and chart");
+    app_paint(monitor,20,245,390,35,0x779944); step("numeric and legend values");
+    app_paint(monitor,20,60,390,220,0x334455); step("adapter reset or unavailable source");
+    app_close(cover); step("counter changes exposed"); wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2354,7 +2396,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content,
     row_icon_sort, row_icon_auto_arrange,
     row_icon_keyboard, row_system_icon_rename, row_wallpaper_change, row_shortcut_wizard, row_icon_metrics,
-    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery};
+    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery, row_g30b_performance, row_g30b_schedule, row_g30b_network};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

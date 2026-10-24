@@ -2,6 +2,9 @@
  * physical media latency and use M1's NORMAL zone/hysteresis, not host RAM.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "vfs.h"
+#include <ciuki/system_settings.h>
+static struct system_perf g30_performance = {0,3,1,0,16,1024};
+const struct system_perf *system_performance(void) { return &g30_performance; }
 #include "fake.h"
 #include <ciuki/ledger.h>
 #include <ciuki/reclaim.h>
@@ -494,9 +497,34 @@ static void global_reclaim_hook(void) {
         reclaimed,blocked_dirty,blocked_pin,inflight,(unsigned long long)max_us);
     pinned=0; busy->busy=false; cache_stream_close(&stream); cache_destroy(&c); end_disk(&m);
 }
+static void performance_settings(void)
+{
+    for (unsigned role=0;role<3;role++) {
+        g30_performance.role=role;
+        struct block_cache c; struct disk m; init_disk(&m); CHECK(!cache_init(&c,2*MIB));
+        uint8_t data[512]={0}; CHECK(!cache_write(&c,&m.dev,4,data));
+        void *page=0; struct cache_block *b=block(&c,&m.dev,4,&page); CHECK(b && b->dirty);
+        unsigned age=role==1 ? 500 : role==2 ? 2000 : 1000;
+        CHECK(!cache_writeback_due(&c,b->since+age-1) && cache_writeback_due(&c,b->since+age));
+        cache_destroy(&c); end_disk(&m);
+    }
+    g30_performance.role=0;
+    for (unsigned ahead=0;ahead<4;ahead++) {
+        g30_performance.read_ahead=ahead;
+        struct block_cache c; struct disk m; struct cache_stream stream={0}; init_disk(&m);
+        CHECK(!cache_init(&c,2*MIB));
+        uint8_t data[512]; CHECK(!cache_read_ahead(&c,&m.dev,4000,128,data));
+        CHECK(m.last_count==(ahead ? (16u<<ahead) : 1));
+        stream_read(&c,&m,&stream,0,4096); stream_read(&c,&m,&stream,4096,4096);
+        CHECK(ahead ? stream.window_bytes && stream.window_bytes<=(8192u<<ahead) : !stream.window_bytes && !stream.pending);
+        cache_stream_close(&stream); cache_destroy(&c); end_disk(&m);
+    }
+    g30_performance=system_perf_default();
+    puts("PASS G30B file-system roles: dirty-age deadlines and None/16/32/64 KiB read-ahead on production cache");
+}
 int main(int argc,char **argv) {
     CHECK(argc==2); setvbuf(stdout,0,_IONBF,0);
-    global_reclaim_hook(); profiles(); dirty_prefetch_hit(); policy_edges(); speculative_cap(); sequential(4096); sequential(16384); fat_sequential(4096); fat_sequential(16384); same_stream_join(); cancellation(); random_reads(); vfs_eof(argv[1]); vfs_close_retirement(argv[1]);
+    performance_settings(); global_reclaim_hook(); profiles(); dirty_prefetch_hit(); policy_edges(); speculative_cap(); sequential(4096); sequential(16384); fat_sequential(4096); fat_sequential(16384); same_stream_join(); cancellation(); random_reads(); vfs_eof(argv[1]); vfs_close_retirement(argv[1]);
     puts("PASS C4 adaptive cache and stream read-ahead");
     return 0;
 }

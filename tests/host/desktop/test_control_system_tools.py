@@ -34,8 +34,8 @@ class ControlSystemToolsTests(unittest.TestCase):
         sources = ["tests/host/desktop/control_system_tools_test.c", "apps/control/app.c", "apps/systools/devctl.c", "apps/systools/profiles.c",
                    "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
-                   *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+                   *(f"apps/desktop/{n}.c" for n in ("settings", "power_policy", "sounds", "wallpaper", "image", "compositor", "theme")),
+                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "controls", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
         with tempfile.TemporaryDirectory(prefix="g30-control-", dir=parent) as tmp:
             work = Path(tmp)
             binary = work / "panel"

@@ -30,8 +30,8 @@ static int f_programs(void *c, char names[][STUI_NAME], unsigned cap, unsigned *
     for (unsigned i = 0; i < sizeof(installed) / sizeof(installed[0]) && i < cap; i++) snprintf(names[n++], STUI_NAME, "%s", installed[i]);
     *count = n; return 0;
 }
-static int f_launch(void *c, const char *program)
-{ (void)c; if (fail_launch) return -EAGAIN; snprintf(launched, sizeof(launched), "%s", program); launches++; return next_request++; }
+static int f_launch(void *c, const char *task_name, const char *program)
+{ (void)c; (void)task_name; if (fail_launch) return -EAGAIN; snprintf(launched, sizeof(launched), "%s", program); launches++; return next_request++; }
 static void f_exit(void *c) { (void)c; exits++; }
 static const struct stui_host host = { NULL, f_now, f_load, f_save, f_programs, f_launch, f_exit };
 
@@ -234,8 +234,12 @@ int main(int argc, char **argv)
     assert(t->kind == ST_WEEKLY && t->weekday_mask == ((1u << 2) | (1u << 6)) && t->minute_of_day == 360 && !t->enabled &&
            !strcmp(t->command, "/bin/scandisk /all") && t->start.day == 12);
     assert(strstr(text_of(150), "Next run: Never"));                          /* disabled */
-    at_chord(&ui, DU_KEY_LCTRL, DU_KEY_TAB); assert(s.props.tab == 2 && strstr(text_of(160), "Never") && strstr(text_of(163), "One time only"));
+    at_chord(&ui, DU_KEY_LCTRL, DU_KEY_TAB); assert(s.props.tab == 2 && strstr(text_of(160), "Never") && strstr(text_of(183), "One time only"));
+    click(164); put(165, "5"); click(166); click(167); click(168); put(169, "30");
     snap("props-settings");
+    click(103); st = read_file(); t = task(&st, "Startup tool");
+    assert(t->conditions == (ST_IDLE | ST_AC_ONLY | ST_STOP_IDLE | ST_STOP_BATTERY) && t->idle_minutes == 5 && t->idle_deadline == 30);
+
     at_chord(&ui, DU_KEY_LCTRL, DU_KEY_TAB);                                  /* wraps to Task */
     click(113); click(101);                                                   /* Enabled, OK */
     assert(s.mode == STUI_FOLDER);
@@ -251,8 +255,11 @@ int main(int argc, char **argv)
     assert(launches == 1 && !strcmp(launched, "calc") && s.launch_request == 6 && strstr(text_of(2), "Starting"));
     stui_launch_result(&s, 99, 5); assert(s.launch_request == 6);            /* another request: ignored */
     stui_launch_result(&s, 6, 1234);
-    st = read_file(); t = task(&st, "Calculator"); assert(t->last_run == clock_now && t->last_result == 0);
-    assert(!strcmp(cell(1, 3), "2026-10-11 09:41") && strstr(text_of(2), "Started \"Calculator\""));
+    st = read_file(); t = task(&st, "Calculator"); assert(t->last_run == -1);
+    assert(strstr(text_of(2), "Run requested"));
+    /* The service records an executable's actual completion; refresh reads it. */
+    st_mark_run(&st, (unsigned)(t - st.t), clock_now, 23); write_store(&st); at_tap(&ui, DU_KEY_F5);
+    assert(!strcmp(cell(1, 3), "2026-10-11 09:41") && strstr(cell(1, 4), "23"));
     menu_pick(FILE_MENU, 1); stui_launch_result(&s, 7, -ENOENT);
     expect_dialog("error 2"); dismiss(0);
     assert(!strcmp(cell(1, 4), "Last run failed (error 2)"));

@@ -215,3 +215,68 @@ Gaps: the start-up profile menu needs a loader/kernel hook that does not exist, 
 stored; `hp_store.active` is whatever the file says (first profile by default) and nothing changes it; the kernel does
 not read the stored disable/remove/driver state yet; the General tab of System Properties still reports memory read at
 start-up; the pager has no user-mode query.
+
+## G30B runtime settings (2026-10-24)
+
+Research before implementation: the owner's Windows 98 Resource Kit, `wrkc24_3.htm`
+(hardware profiles select devices/drivers), `wrkc23_4.htm` (Scheduled Tasks Settings),
+`wrkc26_3.htm` (dynamic swap file, manual minimum/maximum), `wrkc26_4.htm`
+(Desktop/Mobile/Server file-system roles and read-ahead), `wrkc26_5.htm`
+(graphics compatibility levels), and `wrkc26_9.htm` (network performance counters).
+Online primary references:
+[Task Scheduler 1.0 flags](https://learn.microsoft.com/en-us/windows/win32/api/mstask/nf-mstask-ischeduledworkitem-setflags),
+[idle wait](https://learn.microsoft.com/en-us/windows/win32/api/mstask/nf-mstask-ischeduledworkitem-setidlewait),
+[last exit code](https://learn.microsoft.com/en-us/windows/win32/api/mstask/nf-mstask-ischeduledworkitem-getexitcode),
+[Windows 98 device stop](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/stopping-a-device).
+These are Task Scheduler 1.0/Windows 9x rules, not Task Scheduler 2.0 or NT device-removal rules.
+
+Implementation decisions:
+
+- Boot profiles use an 8.3 canonical file `/system/HWPROF.CFG`, allowing the BIOS
+  loader and kernel to read the same atomic replacement. Control Panel imports the
+  old `/system/settings/hwprofiles.cfg` when the canonical file is absent. The
+  loader retains the complete configuration in its reserved extent, chooses the
+  default after the stored timeout (or waits indefinitely),
+  passes the choice in the private loader trailer (copied before reclamation), and the kernel parses that profile before
+  optional device activation. Remove is temporary: PnP redetects at restart;
+  disabled and driver choices persist. The existing recovery boot counter is
+  saved as `boot=`; Control Panel clears temporary Remove markers only when
+  that counter changes, preserving pending removals across Control Panel restarts. Core system/storage/input boot dependencies
+  remain protected. A driver override admits only the named matching driver (ASCII case-insensitive);
+  it cannot make incompatible hardware safe to program. Disabled ATAPI units
+  remain in discovery inventory but are excluded from mounted/device bindings;
+  Setup retains its optical boot dependency.
+- Scheduler settings are backwards-compatible extra records keyed by task name.
+  Idle means time since the desktop's last input; unknown power does not satisfy
+  an AC-only task. A blocked occurrence remains due; the idle wait deadline records
+  a timeout when it expires. Explicit Run requests go through the same service,
+  bypass start conditions, and retain actual completion results. Start errors and executable
+  exit codes are recorded separately from the pending/running state; queued work
+  is not reported as completed. Stop-on-idle-end and stop-on-battery act on the
+  tracked child only, through the existing termination hook.
+- Network counters use the existing read-only `CIUKI_NET_INFO_CONFIG` records
+  (packets received/transmitted and receive/transmit errors) for both admitted
+  adapters. The earlier G30 gap description overlooked these fields. Generation,
+  MAC and availability changes rebase each source; a reset never creates a large
+  rate. No new syscall or counter ABI is needed.
+- Performance edits persist in `/system/settings/performance.cfg`, with restart
+  notice and validation. Graphics exposes the implemented Full/None choices;
+  intermediate Windows driver compatibility levels are not emulated. Virtual
+  memory uses the existing system-volume backing file and 16 MiB extent granularity;
+  manual limits stay inside the existing 1 GiB metadata limit and keep the disk
+  free-space reserve. File-system read-ahead can be disabled; Mobile uses a shorter
+  dirty-age interval; Server a longer one (500/1000/2000 ms are CiukiOS
+  scheduling choices, not Windows registry constants). Name/path cache sizing
+  remains a gap: this filesystem has no corresponding VFAT name-cache model. No unmeasured physical-memory/cache ceiling is increased.
+
+G30B host evidence and limits: assembled loader replay covers default/timeout,
+manual choice and exact retained configuration; production runtime models cover
+settings/VFS cleanup, policy admission, scheduler completion and multi-adapter
+counter resets. The new fx-15 cases are appended at indices 93–95; the focused
+UBSan replay compares 115 frames across all five presenters. Runtime i686
+compilation passes with the 4 KiB frame limit. Full host qualification is still
+blocked by existing branch assertions/link fixtures and sandbox LeakSanitizer;
+see `build/codex/g30b-report.md` for exact commands and results. The loader reads
+only the canonical 8.3 file: an existing legacy profile file needs a Control Panel
+save before its profiles appear in the BIOS menu. Automatic docking/profile
+matching and new imported-driver boot activation services are not implemented.

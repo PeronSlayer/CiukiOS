@@ -31,9 +31,14 @@ static int sample(void *ctx, struct sm_raw *raw)
         memcpy(&r, a->list + sizeof(sys) + (size_t)i * sizeof(r), sizeof(r));
         threads += r.threads;
     }
-    struct ciuki_net_state net; memset(&net, 0, sizeof(net));
-    int have_net = ciuki_net_status(&net) == 0 && net.present;
-    sm_raw_from_proc(raw, &a->source, &sys, threads, have_net, net.rx_frames, net.tx_frames);
+    sm_raw_from_proc(raw, &a->source, &sys, threads, 0, 0, 0);
+    struct ciuki_net_control net[2] = {0}; unsigned count = 0;
+    for (unsigned i = 0; i < 2; i++) {
+        net[i].version = 1; net[i].size = sizeof(net[i]); net[i].index = i;
+        if (ciuki_net_info(CIUKI_NET_INFO_CONFIG, &net[i], sizeof(net[i]))) break;
+        count++;
+    }
+    sm_network_sample(raw, &a->source, net, count);
     return 0;
 }
 static int log_open(void *ctx, const char *path)

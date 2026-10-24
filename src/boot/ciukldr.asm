@@ -62,6 +62,7 @@ entry:
     mov al, 0
     call progress_begin
     call boot_menu
+    call hwprofiles_boot
     call autoscan_check
     call bootstat_write
     call progress_end
@@ -108,6 +109,7 @@ fatal:
 %include "src/boot/ciukldr/disk.inc"
 %include "src/boot/ciukldr/menu.inc"
 %include "src/boot/ciukldr/startup.inc"
+%include "src/boot/ciukldr/hwprofiles.inc"
 %include "src/boot/ciukldr/video.inc"
 %include "src/boot/ciukldr/elf.inc"
 
@@ -186,4 +188,9 @@ sector resb 512
 ; any of them (file_offset starts at 4096, file_loaded at 0), so it needs no
 ; initial zero fill; loader_end covers it.
 cluster resb 4096
+hw_line resb 160
+hw_names resb 256
+; G30B exact profile bytes survive until the early kernel copies their policy.
+resb 32768 - ($ - $$)
+hw_raw resb 24576
 loader_bss_end:

@@ -16,7 +16,7 @@ static const struct { const char *name, *category, *unit, *explain; uint64_t sca
     [SM_DISK_WRITE] = { "Bytes written/second", "File System", " B/s", "Rate of bytes written to disks by the file system.", 0 },
     [SM_NET_RX] = { "Packets received/second", "Network", " pkt/s", "Rate of packets received by the network adapter.", 0 },
     [SM_NET_TX] = { "Packets sent/second", "Network", " pkt/s", "Rate of packets sent by the network adapter.", 0 },
-    [SM_NET_ERRORS] = { "Network errors/second", "Network", " err/s", "Rate of receive and send errors of the network adapter.", 0 },
+    [SM_NET_ERRORS] = { "Network errors/second", "Network", " err/s", "Rate of receive and transmit errors reported by all available network adapters.", 0 },
 };
 const char *sm_name(int c) { return c >= 0 && c < SM_COUNTERS ? info[c].name : ""; }
 const char *sm_category(int c) { return c >= 0 && c < SM_COUNTERS ? info[c].category : ""; }
@@ -160,4 +160,24 @@ void sm_raw_from_proc(struct sm_raw *out, struct sm_source *src, const struct ci
         out->have |= (1u << SM_DISK_READ) | (1u << SM_DISK_WRITE);
     }
     if (have_net) { out->net_rx_packets = rx_frames; out->net_tx_packets = tx_frames; out->have |= (1u << SM_NET_RX) | (1u << SM_NET_TX); }
+}
+
+void sm_network_sample(struct sm_raw *out, struct sm_source *src, const struct ciuki_net_control *net, unsigned count)
+{
+    if (!src) return;
+    out->have &= ~((1u << SM_NET_RX) | (1u << SM_NET_TX) | (1u << SM_NET_ERRORS));
+    for (unsigned i = 0; i < 2; i++) {
+        const struct ciuki_net_control *n = net && i < count ? &net[i] : NULL;
+        if (!n || n->version != 1 || n->size != sizeof(*n)) { src->net[i].primed = 0; continue; }
+        uint64_t errors = n->rx_errors + n->tx_errors;
+        if (src->net[i].primed && src->net[i].generation == n->generation && !memcmp(src->net[i].mac, n->mac, 6)) {
+            src->rx_total += delta(n->rx_packets, src->net[i].rx);
+            src->tx_total += delta(n->tx_packets, src->net[i].tx);
+            src->error_total += delta(errors, src->net[i].errors);
+        }
+        src->net[i].rx = n->rx_packets; src->net[i].tx = n->tx_packets; src->net[i].errors = errors;
+        src->net[i].generation = n->generation; memcpy(src->net[i].mac, n->mac, 6); src->net[i].primed = 1;
+        out->have |= (1u << SM_NET_RX) | (1u << SM_NET_TX) | (1u << SM_NET_ERRORS);
+    }
+    out->net_rx_packets = src->rx_total; out->net_tx_packets = src->tx_total; out->net_errors = src->error_total;
 }

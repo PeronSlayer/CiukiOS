@@ -381,6 +381,8 @@ python3 -B "$root/tests/host/desktop/test_game_properties.py"
 
 # G30: system tools models (System Information, Monitor, Resource Meter, device actions, Add New Hardware, Scheduler).
 nice -n 19 python3 -B "$root/tests/host/desktop/test_systools.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_g30b_runtime.py"
+nice -n 19 python3 -B "$root/tests/host/test_hwprofiles_boot.py"
 nice -n 19 python3 -B "$root/tests/host/desktop/test_control_system_tools.py"
 nice -n 19 python3 -B "$root/tests/host/desktop/test_systools_ui.py"
 nice -n 19 python3 -B "$root/tests/host/desktop/test_schedtask.py"

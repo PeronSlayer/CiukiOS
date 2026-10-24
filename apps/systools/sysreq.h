@@ -17,6 +17,18 @@ static inline int sysreq_launch(struct du_window *w, uint32_t *serial, const cha
     desk_put32(m.data + 4, *serial); desk_put32(m.data + 8, n); memcpy(m.data + 12, program, n);
     return du_window_queue(w, &m) ? -EAGAIN : (int)*serial;
 }
+/* Existing v2 LAUNCH envelope, authenticated by the desktop as schedtask's
+ * explicit Run request. No message number or wire layout is added. */
+static inline int sysreq_task_message(struct ciuki_message *m, uint32_t serial, const char *task)
+{
+    size_t n = task ? strlen(task) : 0;
+    if (!m || !serial || !n || n >= 32) return -EINVAL;
+    for (size_t i = 0; i < n; i++) if ((unsigned char)task[i] < 32 || task[i] == 127) return -EINVAL;
+    desk_message(m, DESK_LAUNCH, 29 + (unsigned)n); m->data[0] = DESK_SHELL_VERSION;
+    desk_put32(m->data + 4, serial); desk_put32(m->data + 8, 9); memcpy(m->data + 12, "schedtask", 9);
+    desk_put32(m->data + 21, (uint32_t)(4 + n)); memcpy(m->data + 25, "run:", 4); memcpy(m->data + 29, task, n);
+    return 0;
+}
 /* DESK_WINDOWS_QUERY. Returns the serial (>0) or -errno. */
 static inline int sysreq_windows(struct du_window *w, uint32_t *serial)
 {

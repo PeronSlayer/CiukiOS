@@ -345,7 +345,7 @@ class LoaderParserTests(unittest.TestCase):
     def test_elf_fills_shared_scratch_before_first_header_validation(self):
         m = self.machine
         self.assertEqual(m.symbols['ph_table'], m.symbols['raw_map'])
-        self.assertEqual(m.symbols['loader_bss_end'], 0x7841)  # G14: + the 4 KiB cluster buffer
+        self.assertEqual(m.symbols['loader_bss_end'], 0xe000)  # G30B: reserved exact hardware-profile bytes
         for count in (1, 32):
             m.reset()
             header = bytearray(52)

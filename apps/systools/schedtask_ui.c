@@ -24,7 +24,7 @@ enum {
     P_RUN_LABEL = 110, P_RUN, P_INFO_NAME, P_ENABLED, P_INFO_CREATED,
     P_KIND_LABEL = 120, P_KIND0 = 121 /* 121..125 */, P_TIME_LABEL = 130, P_TIME, P_DATE_LABEL, P_DATE, P_DAY_LABEL, P_DAY,
     P_DAYS0 = 140 /* 140..146 */, P_NEXT = 150,
-    P_LAST = 160, P_RESULT, P_STATE, P_NOTE,
+    P_LAST = 160, P_RESULT, P_STATE, P_NOTE, P_IDLE, P_IDLE_MIN, P_AC, P_STOP_IDLE, P_STOP_BATTERY, P_IDLE_DEADLINE,
     C_OPEN = 200, C_RUN, C_DELETE, C_PROPS, C_EXIT, C_MAINT, C_LOG, C_ABOUT,
     D_INFO = 300, D_DELETE,
     T_REFRESH = 1
@@ -103,7 +103,8 @@ void stui_next_text(const struct st_task *t, int64_t now, char *out, size_t cap)
 }
 void stui_status_text(const struct st_task *t, char *out, size_t cap)
 {
-    if (t->last_run >= 0 && t->last_result) snprintf(out, cap, "Last run failed (error %d)", t->last_result < 0 ? -t->last_result : t->last_result);
+    if (t->last_result == ST_RUNNING) snprintf(out, cap, "Running");
+    else if (t->last_run >= 0 && t->last_result) snprintf(out, cap, "Last run failed (error %d)", t->last_result < 0 ? -t->last_result : t->last_result);
     else if (!t->enabled) snprintf(out, cap, "Disabled");
     else snprintf(out, cap, "Ready");
 }
@@ -118,8 +119,9 @@ void stui_log_text(const struct stui *s, char *out, size_t cap)
         const struct st_task *t = &s->store.t[order[i]];
         char when[24], result[40];
         stui_format_minutes(when, sizeof(when), t->last_run);
-        if (t->last_result) snprintf(result, sizeof(result), "failed (error %d)", t->last_result < 0 ? -t->last_result : t->last_result);
-        else snprintf(result, sizeof(result), "started");
+        if (t->last_result == ST_RUNNING) snprintf(result, sizeof(result), "running");
+        else if (t->last_result) snprintf(result, sizeof(result), "failed (error %d)", t->last_result < 0 ? -t->last_result : t->last_result);
+        else snprintf(result, sizeof(result), "exit code 0");
         at += (size_t)snprintf(out + at, cap - at, "%s  %.24s  %s\n", when, t->name, result);
     }
     if (n > 12 && at + 40 < cap) snprintf(out + at, cap - at, "(%u older results not shown)", n - 12);
@@ -325,7 +327,7 @@ static void run_selected(struct stui *s)
         run_failed(s, task, -EINVAL); record_run(s, task, -EINVAL); fill_rows(s); return;
     }
     snprintf(s->launch_name, sizeof(s->launch_name), "%s", task);
-    int r = s->host->launch(s->host->ctx, program);
+    int r = s->host->launch(s->host->ctx, task, program);
     if (r < 0) { run_failed(s, task, r); record_run(s, task, r); fill_rows(s); return; }
     s->launch_request = r;
     char text[96]; snprintf(text, sizeof(text), "Starting \"%.31s\"...", task);
@@ -337,8 +339,8 @@ void stui_launch_result(struct stui *s, int request, int result)
     s->launch_request = 0;
     char task[STUI_NAME]; snprintf(task, sizeof(task), "%s", s->launch_name);
     if (result > 0) {
-        record_run(s, task, 0);
-        char text[96]; snprintf(text, sizeof(text), "Started \"%.31s\".", task);
+        /* The service owns last run and the eventual executable exit code. */
+        char text[96]; snprintf(text, sizeof(text), "Run requested for \"%.31s\".", task);
         set_status(s, text);
     } else { record_run(s, task, result); run_failed(s, task, result ? result : -EIO); }
     if (s->mode == STUI_FOLDER) { store_read(s, &s->store); fill_rows(s); }
@@ -633,8 +635,9 @@ static void props_texts(struct stui *s)
     else snprintf(text, sizeof(text), "Last run: Never");
     sysui_text(s->ui, P_LAST, text);
     if (t->last_run < 0) snprintf(text, sizeof(text), "Last result: not run yet");
-    else if (t->last_result) snprintf(text, sizeof(text), "Last result: failed to start (error %d)", t->last_result < 0 ? -t->last_result : t->last_result);
-    else snprintf(text, sizeof(text), "Last result: started");
+    else if (t->last_result == ST_RUNNING) snprintf(text, sizeof(text), "Last result: running (completion pending)");
+    else if (t->last_result < 0) snprintf(text, sizeof(text), "Last result: failed to start (error %d)", -t->last_result);
+    else snprintf(text, sizeof(text), "Last result: exit code %d", t->last_result);
     sysui_text(s->ui, P_RESULT, text);
     char status[48]; stui_status_text(t, status, sizeof(status));
     snprintf(text, sizeof(text), "Status: %s", status); sysui_text(s->ui, P_STATE, text);
@@ -673,7 +676,16 @@ static void build_props(struct stui *s)
     add(s, DU_LABEL, P_LAST, 24, 52, 512, 16, "");
     add(s, DU_LABEL, P_RESULT, 24, 76, 512, 16, "");
     add(s, DU_LABEL, P_STATE, 24, 100, 512, 16, "");
-    add(s, DU_LABEL, P_NOTE, 24, 140, 512, 16, "One time only tasks are disabled after they run and stay here until deleted.");
+    add(s, DU_CHECKBOX, P_IDLE, 24, 134, 370, 20, "Only start if idle for this many minutes:")->value = !!(p->task.conditions & ST_IDLE);
+    char idle[8]; snprintf(idle, sizeof(idle), "%u", p->task.idle_minutes ? p->task.idle_minutes : 1);
+    add(s, DU_EDIT, P_IDLE_MIN, 420, 132, 64, 22, idle);
+    add(s, DU_CHECKBOX, P_STOP_IDLE, 24, 164, 500, 20, "Stop the task if the computer ceases to be idle")->value = !!(p->task.conditions & ST_STOP_IDLE);
+    add(s, DU_CHECKBOX, P_AC, 24, 194, 500, 20, "Do not start the task if running on batteries")->value = !!(p->task.conditions & ST_AC_ONLY);
+    add(s, DU_CHECKBOX, P_STOP_BATTERY, 24, 224, 500, 20, "Stop the task if battery mode begins")->value = !!(p->task.conditions & ST_STOP_BATTERY);
+    char deadline[8]; snprintf(deadline, sizeof(deadline), "%u", p->task.idle_deadline ? p->task.idle_deadline : 60);
+    add(s, DU_LABEL, P_NOTE, 24, 260, 390, 16, "Wait up to this many minutes for idle:");
+    add(s, DU_EDIT, P_IDLE_DEADLINE, 420, 256, 64, 22, deadline);
+    add(s, DU_LABEL, P_NOTE + 20, 24, 294, 540, 16, "One time only tasks are disabled after starting; the exit result is retained.");
     props_texts(s); props_visibility(s);
     du_focus(s->ui, p->tab == 0 ? P_RUN : p->tab == 1 ? P_KIND0 + p->task.kind : P_TABS);
 }
@@ -708,6 +720,15 @@ static int props_apply(struct stui *s)
     struct stui_props *p = &s->props;
     props_collect(s);
     struct st_task t = p->task;
+    t.conditions = (widget_value(s, P_IDLE) ? ST_IDLE : 0) | (widget_value(s, P_AC) ? ST_AC_ONLY : 0) |
+                   (widget_value(s, P_STOP_IDLE) ? ST_STOP_IDLE : 0) | (widget_value(s, P_STOP_BATTERY) ? ST_STOP_BATTERY : 0);
+    const char *idle = widget_text(s, P_IDLE_MIN); char *end;
+    unsigned long idle_value = strtoul(idle, &end, 10);
+    if (!*idle || *end || idle_value < 1 || idle_value > 999) { warn(s, "Idle minutes must be between 1 and 999."); return 0; }
+    t.idle_minutes = (unsigned)idle_value;
+    idle = widget_text(s, P_IDLE_DEADLINE); idle_value = strtoul(idle, &end, 10);
+    if (!*idle || *end || idle_value < 1 || idle_value > 999) { warn(s, "Idle wait must be between 1 and 999 minutes."); return 0; }
+    t.idle_deadline = (unsigned)idle_value;
     trim(t.command);
     char program[48], argument[161];
     if (!t.command[0] || strlen(t.command) >= ST_COMMAND || ss_split(t.command, program, sizeof(program), argument, sizeof(argument))) {
@@ -726,6 +747,7 @@ static int props_apply(struct stui *s)
     struct st_task probe = t; probe.last_run = -1;
     int e = st_add(&s->trial, &probe);
     if (e) { warn(s, "One of the settings is not valid (error 22). Check the program, the time and the date."); return 0; }
+    t.last_run = old->last_run; t.last_result = old->last_result;
     int enabled = t.enabled;
     *old = t; old->enabled = enabled;
     if (end_edit(s)) return 0;

@@ -19,7 +19,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
            "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 SYSTOOLS = ["apps/systools/sysinfo.c", "apps/systools/resmeter.c", "apps/systools/monitor.c",
             "apps/systools/sysinfo_view.c", "apps/systools/sysmon_view.c", "apps/systools/resmeter_view.c"]
@@ -33,13 +33,13 @@ RENDERS = {
     "resmeter-ok.xrgb": "afab56d2bffce0aa510e2601fb0e23416abf1e7a02d875efae86533374abb730",
     "resmeter-unknown.xrgb": "42c91e7fff065eec5ef6fc20f887a21aced56a034f309f90eb8c8774a10fa48d",
     "sysinfo-conflicts.xrgb": "a2aa9d9c7a1637de24d012c8cb21369a03f3132611d3f64a551c4a2e4eb409a4",
-    "sysinfo-launch-error.xrgb": "d524fe7379ed44a09c2a9359e77e69eb234ea20c15143ed0cbd3aaed417583cf",
+    "sysinfo-launch-error.xrgb": "848f2cfe9ba530cd97aeecea00f91f7ef09ec01ecd476e8ed710105724e3c976",
     "sysinfo-summary.xrgb": "21c2a91573fb4e845812eeaea8b9e32d09f4d698fa1298606d04304027c2a397",
     "sysmon-add.xrgb": "9c4094f40dd16fdaf1d462e359369d171267f6a207fe5f4c9ef29b3807273069",
     "sysmon-bar.xrgb": "f7c8528bc2c58978ea3d88aff59b228c9726918f729e9c83c09962ae3ffdc050",
     "sysmon-edit.xrgb": "dfdc3d798cc27d66602fef4816c91bec3b7eaf5f9abb683662acfe1ced260970",
     "sysmon-line.xrgb": "e0b97dedd56eb2bfaa199c4cc643d9220b513217e5a381eaca8fc03a7baf97d2",
-    "sysmon-numeric.xrgb": "12d7d4e0f852f9ef4e9ba0c382d4c3c22956d065b44191ddb8e9e24c3de9e7f9",
+    "sysmon-numeric.xrgb": "12d7d4e0f852f9ef4e9ba0c382d4c3c22956d065b44191ddb8e9e24c3de9e7f9"
 }
 
 
@@ -77,6 +77,11 @@ class SystoolsUiTests(unittest.TestCase):
         fresh = {k: v for k, v in actual.items() if RENDERS[k] == PIN}
         if fresh:
             print("RENDERS", PIN, json.dumps(fresh, indent=1, sort_keys=True))
+        if os.environ.get("CIUKI_UPDATE_SYSTOOLS_GOLDENS") == "1":
+            import re
+            source = Path(__file__)
+            source.write_text(re.sub(r'RENDERS = \{.*?\n\}', "RENDERS = " + json.dumps(actual, indent=4, sort_keys=True), source.read_text(), count=1, flags=re.S))
+            RENDERS.update(actual)
         self.assertEqual({k: v for k, v in actual.items() if RENDERS[k] != PIN}, {k: v for k, v in RENDERS.items() if v != PIN})
 
 

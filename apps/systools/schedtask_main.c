@@ -85,8 +85,13 @@ static int programs(void *ctx, char names[][STUI_NAME], unsigned cap, unsigned *
     closedir(d);
     *count = n; return 0;
 }
-static int launch(void *ctx, const char *program)
-{ struct app *a = ctx; return sysreq_launch(&a->window, &a->serial, program); }
+static int launch(void *ctx, const char *task, const char *program)
+{
+    (void)program; struct app *a = ctx; struct ciuki_message m;
+    a->serial = a->serial + 1 ? a->serial + 1 : 1;
+    int e = sysreq_task_message(&m, a->serial, task); if (e) return e;
+    return du_window_queue(&a->window, &m) ? -EAGAIN : (int)a->serial;
+}
 static void quit(void *ctx) { struct app *a = ctx; du_window_close(&a->window); }
 static void on_message(struct du_window *w, const struct desk_packet *p, void *ctx)
 {
