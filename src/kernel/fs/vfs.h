@@ -155,6 +155,7 @@ struct vfs {
      * while set, NEW open-file readers of that letter wait, so a reader
      * stream cannot starve a short publication step. */
     uint32_t publish_waiting[26];
+    uint32_t gate_ticket[26]; /* fx-23: first ticket issued after a publication step was refused */
     uint32_t lookup_restarts, lookup_guarded; /* diagnostics: reader restarts */
     /* f1-93 device windows (logical providers). io_owner/io_mode name the
      * task whose VFS_IO_MODE holds the drive's guard and how it may give

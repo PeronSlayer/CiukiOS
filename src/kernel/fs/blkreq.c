@@ -328,6 +328,10 @@ static unsigned rank(struct blk_queue *q,struct blk_request *r,uint32_t now) {
         }
     }
     if (r->operation==BLK_READ && r->priority==BLK_DEMAND && r->context && r->context->urgent_reader) return 1;
+    /* fx-23: idle-class maintenance reads wait behind every other request
+     * (ionice -c3, THREAD_MODE_BACKGROUND_BEGIN); the age promotion above
+     * still bounds their wait to BLKREQ_PROMOTE_MS. */
+    if (r->operation==BLK_READ && r->context && r->context->background) return BLK_PRIORITIES+2;
     return (unsigned)r->priority+2;
 }
 static bool better(struct blk_queue *q,struct blk_request *a,struct blk_request *b,uint32_t now) {

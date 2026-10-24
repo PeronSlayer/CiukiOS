@@ -68,6 +68,14 @@ static uint64_t last_bar_at;
  * files with progress; 21 is refused for a checksum mismatch. */
 static unsigned image_polls, image_paints, checking_seen, pongs, damaged_seen, pre_create_waits;
 static int last_permille = -1, vm_created;
+/* fx-23: scenario 22 is a CREATE that stays in the kernel for 6 s (the T23
+ * trial's was 53 s) while it waits for a fresh check of the DOS system
+ * files; 23 is closed by the user during that CREATE. */
+static volatile int create_entered, create_release;
+static unsigned create_polls, create_pongs, create_checking, create_pulses, create_queries;
+static uint64_t create_started_ms, create_released_ms;
+static void real_sleep(void) { struct timespec t = {0, 1000000}; nanosleep(&t, NULL); }
+static int creating(void) { return create_job.started && !__atomic_load_n(&create_job.done, __ATOMIC_ACQUIRE); }
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
 const struct desk_theme *desk_theme = &replay_theme;
@@ -78,6 +86,18 @@ static int replay_poll(struct pollfd *fds,nfds_t n,int timeout)
 {
     assert(n==1 && fds[0].fd==3 && fds[0].events==POLLIN);
     if (timeout==200) { assert(scenario==20 && !vm_created); pre_create_waits++; clock_ms+=200; fds[0].revents=0; return 0; }
+    if (timeout==DOSBOX_CREATE_FIRST_MS || timeout==DOSBOX_CREATE_POLL_MS) {
+        /* The window thread waits for the CREATE worker: never a spin. */
+        assert(create_job.started); create_polls++; fds[0].revents=0;
+        if (scenario==27 || scenario==28) {
+            clock_ms+=(uint64_t)timeout;
+            if (scenario==27 && clock_ms-create_started_ms>=6000 && create_pongs) { create_release=1; create_released_ms=clock_ms; }
+            if (!create_release) return 0;
+        }
+        for (unsigned i=0;i<5000 && !__atomic_load_n(&create_job.done,__ATOMIC_ACQUIRE);i++) real_sleep();
+        assert(__atomic_load_n(&create_job.done,__ATOMIC_ACQUIRE));
+        return 0;
+    }
     assert(timeout==-1);error_idle_waits++;clock_ms+=10000;fds[0].revents=POLLIN;return 1;
 }
 int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t f)
@@ -111,18 +131,28 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
             }
         } else { assert(screen[0] == replay_theme.face); full_damage++; }
     }
-    /* G3: a running program cannot be closed automatically: the desktop's warning. */
+    /* G3 lifecycle packets and fx-23 CREATE worker packets share this channel. */
     if (p.opcode==DESK_CLOSE_ACK) { assert(scenario==12 && p.flags==DESK_CLOSE_DOS_ACTIVE); close_declined++; }
     if (p.opcode==DESK_SESSION_ANSWER) {
         if (!p.serial) { assert(p.flags==DESK_SESSION_AGREE && !session_registered); session_registered++; }
         else { assert((scenario==22 || scenario==26) && p.serial==5 && p.flags==(scenario==26 ? DESK_SESSION_AGREE : DESK_SESSION_DOS_ACTIVE) && session_registered); session_answers++; }
     }
-    if (p.opcode==DESK_PONG) { assert(scenario==20 && !vm_created && desk_get32(m->data+4)==77); pongs++; }
+    if (p.opcode==DESK_PONG && (scenario==27 || scenario==28)) { assert(creating() && desk_get32(m->data+4)==78); create_pongs++; }
+    else if (p.opcode==DESK_PONG) { assert(scenario==20 && !vm_created && desk_get32(m->data+4)==77); pongs++; }
+    if (p.opcode==DESK_DAMAGE && creating() && desk_get32(m->data+12)==400 && desk_get32(m->data+16)==18) create_pulses++;
     return 0;
 }
 int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
 {
     assert(fd == 3 && flags == DONTWAIT);
+    if ((scenario==27 || scenario==28) && creating() && phase>=2 && !create_pongs && clock_ms-create_started_ms>=1000) {
+        desk_message(m, DESK_PING, 8); desk_put32(m->data + 4, 78);
+        m->data[0] = DESK_SHELL_VERSION; m->sender_pid = 999; return (int)m->length;
+    }
+    if (scenario==28 && creating() && create_pongs && clock_ms-create_started_ms>=2000) {
+        desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
+        m->data[0] = DESK_SHELL_VERSION; m->sender_pid = 999; return (int)m->length;
+    }
     if (scenario==20 && !vm_created && image_polls==3 && !pongs) {
         desk_message(m, DESK_PING, 8); desk_put32(m->data + 4, 77);
         m->data[0] = DESK_SHELL_VERSION; m->sender_pid = 999; return (int)m->length;
@@ -165,6 +195,13 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
             c->changed = image_polls < 6 ? image_polls * 180u : 1000u;
         }
         if (scenario==21) c->state = image_polls ? CIUKI_DOSVM_IMAGE_MISMATCH : CIUKI_DOSVM_IMAGE_UNCHECKED;
+        if ((scenario==27 || scenario==28) && creating()) {
+            /* CREATE joined a fresh check: 30/60/90 %, then verified. */
+            create_queries++;
+            if (create_queries<=3) { c->state=CIUKI_DOSVM_IMAGE_VERIFYING; c->changed=create_queries*300u; }
+            else c->state=CIUKI_DOSVM_IMAGE_VERIFIED;
+            return 0;
+        }
         image_polls++;
         return 0;
     }
@@ -175,6 +212,12 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         assert(c->launch.memory==CIUKI_DOSVM_MEMORY_PAGED);
         if (scenario==20) assert(image_polls==7 && image_paints==6 && phase>=2);
         if (scenario == 2 || scenario==9 || scenario==21) { errno = scenario==2 ? ENOMEM : EIO; return -1; }
+        if (scenario==27 || scenario==28) {
+            create_started_ms=clock_ms; create_entered=1;
+            for (unsigned i=0;i<20000 && !create_release;i++) real_sleep();
+            assert(create_release);
+            if (scenario==28) { errno=EINTR; return -1; }   /* the owner stopped */
+        }
         c->id = 1; c->generation = 9; vm_created = 1; return 0;
     }
     assert(c->id == 1 && c->generation == 9);
@@ -258,7 +301,7 @@ void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32
     if (!strcmp(s,"Back in the window")) back_seen++;   /* f3-61: the kernel ended full screen itself */
     if (!strcmp(s,"Game data is full")) save_full_notice++;
     if (!strncmp(s,"Loading ",8)) loading_seen++;
-    if (!strncmp(s,"Checking the DOS system files: ",31)) { assert(scenario==20); checking_seen++; }
+    if (!strncmp(s,"Checking the DOS system files: ",31)) { assert(scenario==20 || scenario==27 || scenario==28); checking_seen++; }
     if (!strcmp(s,"The DOS system files are damaged (checksum mismatch).")) damaged_seen++;
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
@@ -280,6 +323,10 @@ int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink
 void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,uint64_t phase)
 {
     (void)c; assert(b.x==120 && b.y==272 && b.w==400 && b.h==18);
+    if (total && creating()) {         /* fx-23: the check CREATE waits for */
+        assert((scenario==27 || scenario==28) && total==1000 && value>last_permille && !phase);
+        last_permille=value; create_checking++; return;
+    }
     if (total) {                       /* fx-4b determinate progress of the check */
         assert(scenario==20 && total==1000 && value>=0 && value<=1000 && value>last_permille && !phase);
         last_permille=value; image_paints++; return;
@@ -294,7 +341,7 @@ int main(int argc, char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=26);
+    assert(scenario>=0 && scenario<=28);
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -305,14 +352,14 @@ int main(int argc, char **argv)
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
     char *reference[]={"dosbox","--name=DOOM","--dos-kernel=unified","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
     struct dosbox_profile profile;
-    if (scenario>=24) {
+    if (scenario>=24 && scenario<=26) {
         dosbox_profile_default(&profile,"\\DOOM\\DOOM.EXE -config CIUKI.CFG");
         if (scenario==24) profile.close_on_exit=0; else profile.warn=0;
         assert(!dosbox_profile_save(&profile));
     }
     int selected=scenario==9 || scenario==10;
     int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
-    if (scenario>=24) {
+    if (scenario>=24 && scenario<=26) {
         char path[192]; assert(!dosbox_profile_path(profile.key,path,sizeof(path)) && !unlink(path));
         assert(!rmdir(DOSBOX_SETTINGS_DIR));
     }
@@ -325,6 +372,19 @@ int main(int argc, char **argv)
         printf("PASS G17 DOS program lifecycle: scenario=%d short-EXEC close/retain and per-program termination warning\n",scenario);
         return 0;
     }
+    if (scenario==28) {
+        assert(!result && creating() && create_pongs==1 && !closed && !presents);
+        create_release=1; du_job_finish(&create_job);
+        printf("PASS fx-23 close during CREATE: window closed after %llu ms of CREATE, PING answered, no VM left\n",
+               (unsigned long long)(clock_ms-create_started_ms));
+        puts("PASS dosbox loading replay scenario=28"); return 0;
+    }
+    if (scenario==27) {
+        assert(create_pongs==1 && create_checking==3 && last_permille==900 && create_pulses>=8);
+        assert(create_polls>=60 && create_polls<=62);
+        printf("PASS fx-23 slow CREATE: %llu ms in the kernel, PING answered, %u check paints to %d/1000, %u pulses, %u polls\n",
+               (unsigned long long)(create_released_ms-create_started_ms),create_checking,last_permille,create_pulses,create_polls);
+    } else assert(!create_pongs && !create_checking && create_polls<=1);
     if (scenario==11) assert(f12_forwarded==1 && !settings_damage);
     if (scenario==12) assert(close_declined==1);
     assert(session_registered==1);
@@ -336,7 +396,7 @@ int main(int argc, char **argv)
         assert(image_polls==7 && image_paints==6 && checking_seen>=6 && pongs==1 && pre_create_waits==6 && last_permille==900);
         printf("PASS fx-4b verify wait: %u progress paints to %d/1000, PING answered during the check, focus forwarded, %u ms\n",
                image_paints,last_permille,pre_create_waits*200u);
-    } else assert(!image_paints && !checking_seen && image_polls==(scenario==21 || scenario==9 ? 2u : 1u));
+    } else assert(!image_paints && (scenario==22 || scenario==27 || !checking_seen) && image_polls==(scenario==21 || scenario==9 ? 2u : 1u));
     if (scenario==21) { assert(damaged_seen==1); puts("PASS fx-4b mismatch: CREATE EIO named as damaged DOS system files"); }
     if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5 || scenario==9 || scenario==21)
         assert(result == 1 && error_seen && !presents && closed == (scenario != 2 && scenario!=9 && scenario!=21));
@@ -350,7 +410,7 @@ int main(int argc, char **argv)
     if (error_seen) { assert(error_seen==1 && error_idle_waits==1);
         puts("PASS DOS error window: one infinite wait for 10 s modeled idle, close in one turn"); }
     /* fullscreen's static page shares the title; fx-4b: six progress pages and the Preparing page */
-    if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : scenario==20 ? 8u : 1u));
+    if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : scenario==20 ? 8u : scenario==27 ? 6u : 1u));
     assert(damage_count);
     if (scenario==0 && !nonvideo) {
         assert(first_frame_ms<=3000);

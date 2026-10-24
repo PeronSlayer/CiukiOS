@@ -91,6 +91,30 @@ static void urgent_readers(void) {
     assert(m.order[0]==30 && m.order[1]==20 && !blk_queue_destroy(&m.queue));
     puts("PASS F1-87 audio demand read precedes older normal desktop read; age promotion preserved");
 }
+/* fx-23: a read of idle-class maintenance work (the DOS image check, a
+ * background free count) queued first is served after a later foreground
+ * read (Files listing during the check); age promotion still bounds it. */
+static void background_readers(void) {
+    struct disk m; init(&m); uint8_t b[3][512];
+    struct vfs_request idle={.background=true,.deadline=UINT64_MAX/2,.now=urgent_now,.pause=urgent_pause};
+    struct fs_request_scope scope;
+    fs_request_enter(&scope,&idle);
+    struct blk_request *check=prepare(&m,BLK_READ,40,512,b[0],BLK_DEMAND,0);
+    fs_request_leave(&scope);
+    struct blk_request *files=prepare(&m,BLK_READ,20,512,b[1],BLK_DEMAND,0);
+    struct blk_request *speculative=prepare(&m,BLK_READ,60,512,b[2],BLK_SPECULATIVE,0);
+    assert(!blk_request_submit(check) && !blk_request_submit(files) && !blk_request_submit(speculative));
+    drop(check,0); drop(files,0); drop(speculative,0);
+    assert(m.calls==3 && m.order[0]==20 && m.order[1]==60 && m.order[2]==40);
+    fs_request_enter(&scope,&idle);
+    check=prepare(&m,BLK_READ,40,512,b[0],BLK_DEMAND,0);
+    fs_request_leave(&scope);
+    files=prepare(&m,BLK_READ,20,512,b[1],BLK_DEMAND,0);
+    assert(!blk_request_submit(check) && !blk_request_submit(files)); check->enqueued-=BLKREQ_PROMOTE_MS+1;
+    drop(check,0); drop(files,0);
+    assert(m.order[3]==40 && m.order[4]==20 && !blk_queue_destroy(&m.queue));
+    puts("PASS fx-23 background check read waits behind a later foreground read; aged after 100 ms");
+}
 static void priorities(void) {
     struct disk m; init(&m); uint8_t b[4][512];
     struct blk_request *w=prepare(&m,BLK_WRITE,100,512,b[0],BLK_BACKGROUND,4);
@@ -302,4 +326,5 @@ static void idle_telemetry(void) {
     puts("PASS f1-86 idle queue telemetry: completed DMA burst published at next 5s boundary, no empty duplicates, later PIO completion retained");
 }
 int main(void) {
-    urgent_readers(); pool_bounds(); priorities(); merging(); faults(); pinned_limits(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }
+    urgent_readers();
+    background_readers(); pool_bounds(); priorities(); merging(); faults(); pinned_limits(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }

@@ -22,6 +22,14 @@ struct vfs_request {
     const char *operation; /* short diagnostic tag, copied on admission */
     const char *site; /* static family: native, dos, writer, mount, vfs */
     bool urgent_reader; /* deadline-sensitive audio; never inferred from a filename */
+    /* fx-23: idle-class maintenance I/O (the DOS image check, a background
+     * free count). Its reads queue behind every other demand read, never
+     * start read-ahead on the storage writer, and the blocks it fills or hits
+     * stay at the cold end of the cache LRU (drop-behind), so a scan larger
+     * than the cache cannot evict the foreground working set. Windows:
+     * THREAD_MODE_BACKGROUND_BEGIN lowers I/O and memory priority as well as
+     * CPU; Linux ionice -c3: disk time only when nobody else asked for it. */
+    bool background;
 };
 struct fs_request_scope { struct fs_request_scope *next; uintptr_t task; const struct vfs_request *request; };
 void fs_request_enter(struct fs_request_scope *,const struct vfs_request *);

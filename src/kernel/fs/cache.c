@@ -78,11 +78,22 @@ static int remember(struct block_cache *c, struct blkdev *d, int e) {
     if (s && e && !s->error) s->error=e;
     return e;
 }
-/* All schedule publishers hold cache; the writer's due check is lockless. */
+static void kick_writer(struct block_cache *c) {
+    __atomic_add_fetch(&c->writer_kicks,1,__ATOMIC_RELAXED); fs_event_wake(&c->writer_kick);
+}
+void cache_writer_kick(struct block_cache *c) { if (c) kick_writer(c); }
+/* fx-23: a background (idle-class) caller's blocks keep the cold end. */
+static bool background_io(void) {
+    const struct vfs_request *r=fs_request_current(); return r && r->background;
+}
+/* All schedule publishers hold cache; the writer's due check is lockless.
+ * Future deadlines are found by the writer's bounded poll; only a deadline
+ * that is already due kicks it (fx-23). */
 static void schedule_writeback(struct block_cache *c, uint32_t due) {
     if (!c->writeback_pending || (int32_t)(due-c->next_writeback)<0)
         __atomic_store_n(&c->next_writeback,due,__ATOMIC_RELEASE);
     __atomic_store_n(&c->writeback_pending,true,__ATOMIC_RELEASE);
+    if ((int32_t)(fs_now_ms()-due)>=0) kick_writer(c);
 }
 static void request_writeback(struct block_cache *c, struct cache_device *s) {
     s->requested=true; schedule_writeback(c,fs_now_ms()); fs_event_wake(&c->changed);
@@ -103,22 +114,23 @@ static void clean(struct block_cache *c, struct cache_block *b) {
 }
 /* Local timed event wait: preserve the port's event sequence handshake, but
  * do not turn a missing writer into an unbounded reader allocation wait. */
-static void wait_changed(struct block_cache *c, uint32_t ms) {
-    if (fs_request_current()) { (void)fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); return; }
+static void wait_event(struct block_cache *c, struct fs_event *ev, uint32_t ms) {
+    if (fs_request_current()) { (void)fs_event_wait_request(ev,&c->lock,VFS_WAIT_CACHE); return; }
 #ifdef FS_HOST
     struct timespec end; clock_gettime(CLOCK_REALTIME,&end);
     end.tv_sec+=ms/1000; end.tv_nsec+=(long)(ms%1000)*1000000;
     if (end.tv_nsec>=1000000000) { end.tv_sec++; end.tv_nsec-=1000000000; }
-    uint32_t seq=__atomic_load_n(&c->changed.sequence,__ATOMIC_ACQUIRE);
-    fs_lock_drop(&c->lock); pthread_mutex_lock(&c->changed.mutex);
-    while (seq==__atomic_load_n(&c->changed.sequence,__ATOMIC_ACQUIRE))
-        if (pthread_cond_timedwait(&c->changed.changed,&c->changed.mutex,&end)) break;
-    pthread_mutex_unlock(&c->changed.mutex); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
+    uint32_t seq=__atomic_load_n(&ev->sequence,__ATOMIC_ACQUIRE);
+    fs_lock_drop(&c->lock); pthread_mutex_lock(&ev->mutex);
+    while (seq==__atomic_load_n(&ev->sequence,__ATOMIC_ACQUIRE))
+        if (pthread_cond_timedwait(&ev->changed,&ev->mutex,&end)) break;
+    pthread_mutex_unlock(&ev->mutex); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
 #else
-    struct fs_event_ticket t={&c->changed,c->changed.sequence}; fs_lock_drop(&c->lock);
-    kwait_wait_until(&c->changed.wait,fs_event_changed,&t,deadline_after_ms(ms)); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
+    struct fs_event_ticket t={ev,ev->sequence}; fs_lock_drop(&c->lock);
+    kwait_wait_until(&ev->wait,fs_event_changed,&t,deadline_after_ms(ms)); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
 #endif
 }
+static void wait_changed(struct block_cache *c, uint32_t ms) { wait_event(c,&c->changed,ms); }
 static void scan_service(unsigned *work);
 static struct cache_fill *filling(struct block_cache *c, struct blkdev *d, uint64_t lba) {
     unsigned work=0;
@@ -277,6 +289,12 @@ static void touch(struct block_cache *c, struct cache_block *b) {
     if (c->lru[cls(b)].newest==b) return;
     lru_unlink(c,b); lru_newest(c,b);
 }
+/* fx-23 drop-behind: a background hit leaves the block where it is, a
+ * background fill goes to the cold end (the first victim). */
+static void touch_demand(struct block_cache *c, struct cache_block *b, bool background, bool fill) {
+    if (!background) { touch(c,b); return; }
+    if (fill) { lru_unlink(c,b); lru_oldest(c,b); c->background_fills++; }
+}
 static void half_activate(struct block_cache *c, struct cache_page *pg, unsigned h, unsigned layout, bool oldest_end) {
     unsigned count=layout ? 1 : SLOTS_512, size=layout ? HALF : 512;
     pg->layout[h]=(uint8_t)layout;
@@ -362,7 +380,7 @@ retry:
     if (b) {
         if (b->busy && !(read && readable_busy(b))) { if (issued && read) *issued=true; e=wait_block(c,b); if (e) return e; goto retry; }
         c->hits++; if (read) c->demand_hits++;
-        prefetch_finish(c,b,read); touch(c,b); *out=b; return 0;
+        prefetch_finish(c,b,read); touch_demand(c,b,read && background_io(),false); *out=b; return 0;
     }
     int blocked=-FS_ENOMEM; bool pending=false; struct cache_block *dirty=0;
     unsigned work=0;
@@ -395,7 +413,7 @@ retry:
     b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
     b->invalid=false; b->io_error=0;
     unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
-    touch(c,b);
+    touch_demand(c,b,read && background_io(),true);
     if (!read && issued) *issued=true; /* fresh slot, contents undefined (f1-89 fill) */
     if (read) {
         if (issued) *issued=true;
@@ -413,7 +431,7 @@ retry:
 }
 static unsigned meta_needed(unsigned data) { return data>1 ? (data-1+PAGES_PER_META-1)/PAGES_PER_META : 0; }
 int cache_init(struct block_cache *c, size_t bytes) {
-    memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock); fs_event_init(&c->changed); fs_lock_classify(&c->lock,3,0); fs_lock_classify(&c->workspace_lock,3,0);
+    memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock); fs_event_init(&c->changed); fs_event_init(&c->writer_kick); fs_lock_classify(&c->lock,3,0); fs_lock_classify(&c->workspace_lock,3,0);
     if (!bytes) bytes=CACHE_DEFAULT_BYTES;
     if (bytes<8192 || bytes>32u*1024u*1024u) { cache_destroy(c); return -FS_EINVAL; }
     size_t pages=bytes/4096;
@@ -753,7 +771,10 @@ void cache_stream_queue(struct cache_stream *s, uint64_t lba, uint32_t count) {
     if (!c->pressure && !s->pending && !s->outstanding && s->window_bytes &&
         s->media_generation==s->dev->media_generation && !blkdev_range(s->dev,lba,count)) {
         s->lba=lba; s->pending=count>s->window_bytes/512 ? s->window_bytes/512 : count;
-        fs_event_wake(&c->changed);
+        /* fx-23: skip the writer pass when the window is already resident
+         * (a cached sequential file); otherwise only the writer is woken. */
+        while (s->pending && find(c,s->dev,s->lba)) { s->lba++; s->pending--; }
+        if (s->pending) kick_writer(c);
     }
     fs_lock_drop(&c->lock);
 }
@@ -864,7 +885,7 @@ void cache_destroy(struct block_cache *c) {
         cache_unclaim(m,MM_CACHE_META); fs_page_free(m);
     }
     for (unsigned i=0;i<c->workspace_pages;i++) { fs_service(); cache_unclaim(c->workspace[i],MM_CACHE_WORK); fs_page_free(c->workspace[i]); }
-    fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock); fs_event_destroy(&c->changed);
+    fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock); fs_event_destroy(&c->changed); fs_event_destroy(&c->writer_kick);
     memset(c,0,sizeof(*c));
 }
 int cache_attach(struct block_cache *c, struct blkdev *d) {
@@ -945,6 +966,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
     struct cache_device *state=!e ? device(c,d) : 0;
     uint32_t epoch=state ? state->epoch : 0;
     uint32_t hits[BLKDEV_READ_SECTORS/32]={0}, generation=d->media_generation;
+    bool background=background_io();
     for (unsigned i=0; !e && i<count; i++) {
         if (!(i & 15u)) fs_service(); /* 16 short hash walks plus <=8 KiB copy */
         struct cache_block *b=find(c,d,lba+i);
@@ -952,7 +974,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         if (b) {
             prefetch_finish(c,b,true); c->demand_hits++;
             memcpy((uint8_t *)buf+i*512,b->data,512);
-            hits[i/32]|=1u<<(i%32); c->hits++; touch(c,b);
+            hits[i/32]|=1u<<(i%32); c->hits++; touch_demand(c,b,background,false);
         } else {
             struct cache_fill *fill=filling(c,d,lba+i);
             if (fill) {
@@ -991,7 +1013,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
             unhash(c,b); b->dev=d; b->lba=lba+j; b->generation=generation; b->sector_size=512;
             b->busy=true; b->invalid=false; b->io_error=0;
             unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b;
-            touch(c,b); reserved[j]=b; c->misses++;
+            touch_demand(c,b,background,true); reserved[j]=b; c->misses++;
         }
         c->demand_misses+=end-i;
         if (file_read_cancelled && file_read_cancelled()) e=-4;
@@ -1469,7 +1491,7 @@ bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
 }
 void cache_writer_wait(struct block_cache *c, uint32_t ms) {
     (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
-    if (!cache_writeback_due(c,fs_now_ms())) wait_changed(c,ms);
+    if (!cache_writeback_due(c,fs_now_ms())) wait_event(c,&c->writer_kick,ms);
     fs_lock_drop(&c->lock);
 }
 bool cache_writeback_report(struct block_cache *c, uint32_t now, struct cache_stats *out) {

@@ -26,6 +26,7 @@ struct storage_volume {
     bool optical; /* f9-01: Setup C: over the boot CD's image view; disk = ATA slot */
     uint32_t read_sequence, write_sequence;
     uint32_t census_next_ms; /* fx-17b: next background free-count step */
+    uint32_t census_yields;  /* fx-23: steps deferred for a waiting foreground caller */
     uint64_t reads, writes, flushes, refused, writes_before_gate;
     /* Selected crash probe only; notification after synchronous completion.
      * No callback in ordinary boot, no controller fault/recovery backdoor. */
@@ -74,6 +75,7 @@ struct storage {
     bool writer_running, writer_quiescing; /* protected by vfs namespace */
     unsigned next_drive;
     uint32_t sequence, writer_ticks;
+    uint32_t hold_reported[26]; /* fx-23: hold start (+1) already named by storage_hold_watch */
     int writer_error;
     /* f9-01 Setup mode (cd-setup-plan.md 3.2/3.3): every ATA volume stays
      * read-only; C: is the boot CD's image view, D: its ISO 9660 tree. */
@@ -146,6 +148,8 @@ int storage_activate_removable(struct storage *, struct blkdev *);
  * 128-sector step per volume per call, paced to a quarter of the device
  * time it used; returns the number of counts still running. */
 unsigned storage_census_service(struct storage *, uint32_t now_ms);
+/* fx-23: name drive reservations held for 2 s or more, once per hold. */
+unsigned storage_hold_watch(struct storage *, uint32_t now_ms);
 int storage_writeback(struct storage *, uint32_t now_ms);
 int storage_shutdown(struct storage *); /* no clean mark following any error */
 void storage_destroy(struct storage *); /* quiescent host tests / failed init only */

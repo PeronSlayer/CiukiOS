@@ -68,6 +68,14 @@ struct cache_fill {
 struct block_cache {
     fs_lock lock, workspace_lock;
     struct fs_event changed;
+    /* fx-23: the storage writer sleeps on its own event. It is kicked only
+     * when write-back is requested or due now, or a stream queues read-ahead;
+     * an ordinary fill, unpin, reservation release or completed write no
+     * longer wakes the P_DEVICE writer for a full pass (T23 trial f441c5bd:
+     * about 9,000 writer passes per second, 24-40 % CPU). Windows' lazy
+     * writer likewise runs on a timer (once a second), not per cache event. */
+    struct fs_event writer_kick;
+    uint32_t writer_kicks; uint64_t background_fills;
     struct cache_fill *fills;
     struct cache_page inline_page;  /* first page header: no descriptor page needed */
     struct cache_meta *meta;
@@ -201,6 +209,8 @@ bool cache_writeback_due(const struct block_cache *, uint32_t now_ms);
 /* Writer event sleep (bounded safety poll), never a volume reservation.
  * Set writer_online only with a live service; standalone caches need none. */
 void cache_writer_wait(struct block_cache *, uint32_t max_ms);
+/* fx-23: wake the writer for explicit work (shutdown, census, log). */
+void cache_writer_kick(struct block_cache *);
 bool cache_writeback_report(struct block_cache *, uint32_t now_ms, struct cache_stats *);
 int cache_error(struct block_cache *, struct blkdev *);
 /* f9-02 lease preflight: dirty bytes currently held for one device view. */
