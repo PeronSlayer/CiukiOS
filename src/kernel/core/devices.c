@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Read-only inventory. Sources and invariants: docs/design/device-manager.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -368,6 +369,12 @@ void devices_snapshot(struct ciuki_devices_info *out)
     if (inventory.truncated) out->flags |= CIUKI_DEVICES_TRUNCATED;
     out->boot_flags = g_boot.flags; out->input_policy = g_boot.input_policy;
     string(out->boot_options, sizeof(out->boot_options), g_boot.options);
+    if (system_profile_index) {
+        size_t n = strlen(out->boot_options);
+        /* Diagnostic copy only: never truncate the actual kernel options. */
+        if (n > sizeof(out->boot_options) - 14) n = sizeof(out->boot_options) - 14;
+        ksnprintf(out->boot_options + n, sizeof(out->boot_options) - n, " hwprofile=%u", system_profile_index());
+    }
     uint32_t f = irq_save(); out->uptime_ms = g_ticks; irq_restore(f);
     cpu_info(out);
     /* Preserve the fixed ABI: read-only volumes use ordinary inventory rows.
@@ -569,6 +576,15 @@ void devices_snapshot(struct ciuki_devices_info *out)
     if (!sound) append(out, 0x50000, CIUKI_DEVICE_SOUND, CIUKI_BUS_LEGACY, "Audio output", audio.backend_name ? audio.backend_name : "ac97",
                        CIUKI_DEVICE_ABSENT, audio.reason ? audio.reason : "No supported audio device.");
     usb_devices(out);
+    for (unsigned i = 0; i < out->count; i++) {
+        struct ciuki_device_record *entry = &out->devices[i];
+        if (entry->class_id != CIUKI_DEVICE_SYSTEM && entry->class_id != CIUKI_DEVICE_DISK &&
+            !(entry->id >= 0x30000 && entry->id <= 0x30003) &&
+            !system_admit(entry->id, entry->driver[0] ? entry->driver : NULL)) {
+            entry->state = CIUKI_DEVICE_ABSENT; entry->resource_count = 0;
+            string(entry->reason, sizeof(entry->reason), "Disabled or driver excluded by the hardware profile at boot.");
+        }
+    }
     drivers(out);
 }
 static void hardware_snapshot(struct ciuki_hardware_info *out)

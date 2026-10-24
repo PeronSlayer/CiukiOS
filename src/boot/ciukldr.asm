@@ -62,6 +62,7 @@ entry:
     mov al, 0
     call progress_begin
     call boot_menu
+    call hwprofiles_boot
     call autoscan_check
     call bootstat_write
     call progress_end
@@ -108,6 +109,7 @@ fatal:
 %include "src/boot/ciukldr/disk.inc"
 %include "src/boot/ciukldr/menu.inc"
 %include "src/boot/ciukldr/startup.inc"
+%include "src/boot/ciukldr/hwprofiles.inc"
 %include "src/boot/ciukldr/video.inc"
 %include "src/boot/ciukldr/elf.inc"
 
@@ -189,6 +191,8 @@ sector resb 512
 cluster resb 32768
 cv_header resb 512
 cv_data resb 512
+hw_line resb 160
+hw_names resb 256
 loader_segment_end:
 %if loader_segment_end-mode_scores > 40960
 %error Converter buffers must fit the loader segment
@@ -196,4 +200,6 @@ loader_segment_end:
 ; A separate 32 KiB GS segment holds the journal target index. The boot-info
 ; loader extent covers both segments until the protected-mode kernel reclaims it.
 cv_targets equ 0
-loader_bss_end equ 0x18000
+; Hardware-profile bytes occupy GS:8000..DFFF, after the converter index.
+hw_raw equ 0x8000
+loader_bss_end equ 0x1e000

@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Installed-package gate before image allocation and again before binding.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "package.h"
@@ -57,10 +58,10 @@ int ndis_package_admit(const char *path,const uint8_t hash[32],const struct pci_
        !m->enabled || strncmp(m->package,name,sizeof(m->package)) || strncmp(m->files[m->binary].name,slash+1,64) || memcmp(m->files[m->binary].hash,hash,32) ||
        (qualified_seal && memcmp(m->seal,qualified_seal,32))) goto close;
     uint8_t extra; if(read_package(r,"manifest.ndp",sizeof(*m),&extra,1,&got) || got) goto close;
-    int present=p ? match_device(&m->device,p) && ndis_qualified_package(hash,p,m->seal) : 0;
+    int present=p ? system_admit(system_pci_id(p->bus,p->dev,p->fn),m->service) && match_device(&m->device,p) && ndis_qualified_package(hash,p,m->seal) : 0;
     if(!p) for(unsigned i=0;i<pci_count();i++) {
         const struct pci_func *candidate=pci_get(i);
-        if(match_device(&m->device,candidate) && ndis_qualified_package(hash,candidate,m->seal)) { present=1; break; }
+        if(system_admit(system_pci_id(candidate->bus,candidate->dev,candidate->fn),m->service) && match_device(&m->device,candidate) && ndis_qualified_package(hash,candidate,m->seal)) { present=1; break; }
     }
     if(present && ndp_verify(m,&m->device,read_package,r)) ok=1;
  close: vfs_table_destroy(&r->table);

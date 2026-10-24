@@ -1,5 +1,17 @@
+#include <ciuki/system_settings.h>
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "cache.h"
+static unsigned cache_dirty_age(void)
+{
+    const struct system_perf *p = system_performance ? system_performance() : 0;
+    return p && p->role == 1 ? 500u : p && p->role == 2 ? 2000u : CACHE_DIRTY_AGE_MS;
+}
+static unsigned cache_read_limit(void)
+{
+    const struct system_perf *p = system_performance ? system_performance() : 0;
+    return !p ? CACHE_PREFETCH_MAX : !p->read_ahead ? 0 : 8192u << p->read_ahead;
+}
+
 #include <ciuki/reclaim.h>
 #ifndef FS_HOST
 #include <ciuki/ledger.h>
@@ -762,6 +774,8 @@ uint32_t cache_stream_end(struct cache_stream *s, uint64_t offset, size_t done, 
         }
         s->last_useful=s->useful;
     }
+    unsigned limit = cache_read_limit();
+    if (s->window_bytes > limit) s->window_bytes = limit;
     uint32_t window=!s->pending && !s->outstanding && s->resident<s->window_bytes/2 ? s->window_bytes : 0;
     fs_lock_drop(&c->lock); return window;
 }
@@ -1041,6 +1055,8 @@ int cache_read_ahead(struct block_cache *c, struct blkdev *d, uint64_t lba, uint
     bool hit=!e && find(c,d,lba);
     fs_lock_drop(&c->lock);
     if (e) return e;
+    unsigned limit = cache_read_limit() / 512;
+    if (!limit) count = 1; else if (count > limit) count = limit;
     if (hit || count==1) return cache_read(c,d,lba,sector);
     /* Bounded to the already qualified transport workspace size. Failure
      * preserves the demand-read path and never changes the write gate. */
@@ -1168,7 +1184,7 @@ int cache_publish(struct cache_reservation *r, const struct cache_image *images,
                 if (!s->dirty_bytes) s->oldest=b->since;
                 c->reserved_bytes-=b->sector_size; s->reserved_bytes-=b->sector_size;
                 c->dirty_bytes+=b->sector_size; s->dirty_bytes+=b->sector_size;
-                schedule_writeback(c,b->since+CACHE_DIRTY_AGE_MS);
+                schedule_writeback(c,b->since+cache_dirty_age());
             }
             b->dirty=true;
         }
@@ -1277,7 +1293,7 @@ retry_slot:
             b->since=fs_now_ms();
             if (!s->dirty_bytes) s->oldest=b->since;
             s->dirty_bytes+=d->sector_size; c->dirty_bytes+=d->sector_size;
-            schedule_writeback(c,b->since+CACHE_DIRTY_AGE_MS);
+            schedule_writeback(c,b->since+cache_dirty_age());
         }
         b->dirty=true;
         if (s->dirty_bytes>=c->dirty_budget) request_writeback(c,s);
@@ -1510,7 +1526,7 @@ int cache_writeback_tick(struct block_cache *c, uint32_t now) {
         struct blkdev *d=c->devices[i].dev; if (!d) continue;
         struct cache_device *s=&c->devices[i];
         if (s->error || !s->dirty_bytes) continue;
-        bool due=s->requested || s->dirty_bytes>=c->dirty_budget || (uint32_t)(now-s->oldest)>=CACHE_DIRTY_AGE_MS;
+        bool due=s->requested || s->dirty_bytes>=c->dirty_budget || (uint32_t)(now-s->oldest)>=cache_dirty_age();
         if (due) {
             s->requested=false;
             int e=write_batch(c,d,&c->tick_flushed);
@@ -1527,7 +1543,7 @@ int cache_writeback_tick(struct block_cache *c, uint32_t now) {
         struct cache_device *owner=b->dirty && !b->invalid ? device(c,b->dev) : 0;
         if (owner && !owner->error) {
             if ((int32_t)(b->since-owner->oldest)<0) owner->oldest=b->since;
-            schedule_writeback(c,owner->requested || owner->dirty_bytes>=c->dirty_budget ? fs_now_ms() : b->since+CACHE_DIRTY_AGE_MS);
+            schedule_writeback(c,owner->requested || owner->dirty_bytes>=c->dirty_budget ? fs_now_ms() : b->since+cache_dirty_age());
         }
     }
     uint32_t ms=fs_now_ms()-start; if (ms>c->max_flush_ms) c->max_flush_ms=ms;

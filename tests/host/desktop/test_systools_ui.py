@@ -39,7 +39,7 @@ RENDERS = {
     "sysmon-bar.xrgb": "f7c8528bc2c58978ea3d88aff59b228c9726918f729e9c83c09962ae3ffdc050",
     "sysmon-edit.xrgb": "dfdc3d798cc27d66602fef4816c91bec3b7eaf5f9abb683662acfe1ced260970",
     "sysmon-line.xrgb": "e0b97dedd56eb2bfaa199c4cc643d9220b513217e5a381eaca8fc03a7baf97d2",
-    "sysmon-numeric.xrgb": "12d7d4e0f852f9ef4e9ba0c382d4c3c22956d065b44191ddb8e9e24c3de9e7f9",
+    "sysmon-numeric.xrgb": "12d7d4e0f852f9ef4e9ba0c382d4c3c22956d065b44191ddb8e9e24c3de9e7f9"
 }
 
 
@@ -77,6 +77,11 @@ class SystoolsUiTests(unittest.TestCase):
         fresh = {k: v for k, v in actual.items() if RENDERS[k] == PIN}
         if fresh:
             print("RENDERS", PIN, json.dumps(fresh, indent=1, sort_keys=True))
+        if os.environ.get("CIUKI_UPDATE_SYSTOOLS_GOLDENS") == "1":
+            import re
+            source = Path(__file__)
+            source.write_text(re.sub(r'RENDERS = \{.*?\n\}', "RENDERS = " + json.dumps(actual, indent=4, sort_keys=True), source.read_text(), count=1, flags=re.S))
+            RENDERS.update(actual)
         self.assertEqual({k: v for k, v in actual.items() if RENDERS[k] != PIN}, {k: v for k, v in RENDERS.items() if v != PIN})
 
 

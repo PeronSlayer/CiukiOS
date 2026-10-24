@@ -452,7 +452,7 @@ static struct {
     void *wake_ctx;
     struct launch_job jobs[DESK_CLIENTS];
     /* Input-thread only: exits reaped while a spawn was still unbound. */
-    uint32_t exited[LAUNCH_EXITS];
+    uint32_t exited[LAUNCH_EXITS]; int exited_status[LAUNCH_EXITS];
     unsigned exited_next;
 } launcher={.lock=PTHREAD_MUTEX_INITIALIZER,.changed=PTHREAD_COND_INITIALIZER};
 static struct launch_job launch_sync_job;
@@ -680,15 +680,16 @@ static void first_frame_record(struct desktop *d, const struct desk_client *c, u
 #endif
 }
 /* Input thread: an exit reaped while a spawn may still be unbound. */
-static void launch_note_exit(struct desktop *d, uint32_t pid)
+static void launch_note_exit(struct desktop *d, uint32_t pid, int status)
 {
     for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid==pid || d->clients[i].pid==pid) return;
     if (!launcher.started || !launcher_inflight()) return;
-    launcher.exited[launcher.exited_next++%LAUNCH_EXITS]=pid;
+    unsigned slot = launcher.exited_next++ % LAUNCH_EXITS;
+    launcher.exited[slot]=pid; launcher.exited_status[slot]=status;
 }
-static int launch_exited(uint32_t pid)
+static int launch_exited(uint32_t pid, int *status)
 {
-    for (unsigned i=0;i<LAUNCH_EXITS;i++) if (launcher.exited[i]==pid) { launcher.exited[i]=0; return 1; }
+    for (unsigned i=0;i<LAUNCH_EXITS;i++) if (launcher.exited[i]==pid) { *status=launcher.exited_status[i]; launcher.exited[i]=0; return 1; }
     return 0;
 }
 /* Input thread, every turn: bind the PIDs of completed spawns or report
@@ -724,13 +725,14 @@ static unsigned launch_service(struct desktop *d)
             continue;
         }
         uint32_t pid=(uint32_t)job->pid;
-        int gone=launch_exited(pid);
+        int exit_status=0, gone=launch_exited(pid,&exit_status);
         if (live) {
             c->spawn_pending=0; c->pid=pid;
             c->launched_ns=monotonic(); /* AppStarting runs from the process's creation */
         }
         if (!gone) d->children[job->child].pid=pid;
         desk_launch_completed(d,&job->request,job->program.name,(int)pid);
+        if (gone) desk_schedsvc_exited(d,pid,exit_status);
         if (gone && live) desk_drop_client(d,job->client);
     }
     if (count) desk_cursor_update(d);
@@ -3279,7 +3281,7 @@ int main(int argc, char **argv)
             int status, pid;
             launch_service(d);
             while ((pid=waitpid(-1,&status,WNOHANG))>0) {
-                launch_note_exit(d,(uint32_t)pid);
+                launch_note_exit(d,(uint32_t)pid,status);
                 desk_w32_child_exited(d,(uint32_t)pid,status); desk_child_exited(d,(uint32_t)pid,status);
             }
         }

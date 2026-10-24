@@ -2205,6 +2205,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     a->ui = u;
     a->page=CP_HOME;
     load(a, &a->cfg); du_theme_use(u, a->cfg.theme);
+    refresh(a); /* Boot-selected profile is part of the inventory snapshot. */
     hw_load_state(a);
     sound_defaults(&a->sounds);
     if (a->host.load_sounds) { size_t n = 0;

@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Read first, then enable writing explicitly. FAT mount/ownership rules:
  * https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf
  * See tests/host/fs/STORAGE-VALIDATION.md for integration decisions.
@@ -1748,7 +1749,8 @@ void storage_init(void)
         e = bootlog_activate(&s->vfs, boot && !boot->error && !boot->fat.readonly, s->sequence);
         klog("[storage] disk_log=%s error=%d", e ? "unavailable" : "available", e);
     }
-    if (policy.pagefile) {
+    if (system_settings_load) system_settings_load(&s->vfs);
+    if (policy.pagefile && (!system_performance || system_performance()->vm != 2)) {
         /* M4: the pager manager opens and grows the file asynchronously;
          * without it commit stays RAM-only and the system remains usable. */
         e = storage_pagefile_bind(s, 2, "C:/SYSTEM/PAGEFILE.SWP");

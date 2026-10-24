@@ -11,6 +11,11 @@
 #include <ciuki/timing.h>
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr, "FAIL %s:%u: %s\n", __FILE__, __LINE__, #x); exit(1); } } while (0)
 static unsigned checks;
+static bool g30_enabled = true;
+static const char *g30_driver;
+bool system_device_allowed(uint32_t id, const char *driver)
+{ (void)id; return g30_enabled && (!g30_driver || !driver || !strcmp(g30_driver, driver)); }
+
 static uint32_t host_flags = 0x200;
 static unsigned sleeps, yields, page_count, releases, quarantines, config_writes, irq_adds, irq_removes;
 static int claim_fail, allocation_fail, irq_add_fail, release_fail;
@@ -963,10 +968,23 @@ static void test_power_sleep(void)
     }
     puts("PASS G11B network: retained claims/rings/IRQ, admission gate, two suspend/resume cycles for RTL8139/e100/NE2000");
 }
+static void test_profile_admission(void)
+{
+    struct model h; struct netif d;
+    model_setup(&h, &d, M_RTL); g30_enabled = false;
+    CHECK(model_attach(&h, &d) == -NET_ENODEV);
+    CHECK(!resource_count && !page_count && !config_writes && !irq_adds);
+    g30_enabled = true; g30_driver = "e100";
+    CHECK(model_attach(&h, &d) == -NET_ENODEV);
+    CHECK(!resource_count && !page_count && !config_writes && !irq_adds);
+    g30_driver = "rtl8139";
+    CHECK(!model_attach(&h, &d)); CHECK(!netif_stop(&d)); g30_driver = NULL;
+    puts("PASS G30B NIC disabled/wrong-driver admission: no resource, DMA, PCI writes or IRQ changes");
+}
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
-    test_power_sleep(); test_media_options();
+    test_profile_admission(); test_power_sleep(); test_media_options();
     test_external_publication();
     test_smi_budget();
     test_e100_irq();

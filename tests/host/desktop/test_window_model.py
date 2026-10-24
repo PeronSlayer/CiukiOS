@@ -22,7 +22,7 @@ class WindowModelTests(unittest.TestCase):
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c")),
                     ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/disk_ui_vfs.c",   # disk_ui_vfs.c renames the second fake_reset
                     *sorted((ROOT / "sdk/libreg").glob("*.c")),   # reg_* for autoplay_registry.c
-                    ROOT / "apps/accessories/mixer_view.c",
+                    ROOT / "apps/files/backup.c", ROOT / "apps/accessories/mixer_view.c",
                     ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
                     ROOT / "tests/host/desktop/window_model_test.c"]
         parent = ROOT / "build/host"
@@ -33,6 +33,8 @@ class WindowModelTests(unittest.TestCase):
             (Path(temp) / "include/ciuki").symlink_to(ROOT / "sdk/sysroot-overlay/include/ciuki", target_is_directory=True)
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                            "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections", "-pthread",
+                            "-I", str(Path(temp) / "include"), "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
                             "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                             "-include", str(ROOT / "tests/host/desktop/paint_probe.h"),
                             "-include", str(ROOT / "sdk/sysroot-overlay/include/ciuki/devices.h"),

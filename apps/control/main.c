@@ -1,3 +1,4 @@
+#include <ciuki/recovery.h>
 /* SPDX-License-Identifier: MIT
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter, access. */
@@ -212,11 +213,12 @@ static int boot_save(void *ctx, const char *text, size_t length)
     if (close(fd)) r = -1;
     return r;
 }
-#define CP_HW_FILE CFG_DIR "/hwprofiles.cfg"
+#define CP_HW_FILE SYSTEM_HW_PATH
 static int hw_load(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx;
     int fd = open(CP_HW_FILE, O_RDONLY | O_CLOEXEC);
+    if (fd < 0 && errno == ENOENT) fd = open(CFG_DIR "/hwprofiles.cfg", O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -errno;
     size_t n = 0; int error = 0;
     while (n < size) {
@@ -233,7 +235,33 @@ static int hw_load(void *ctx, char *text, size_t size, size_t *length)
 }
 /* Atomic replace: temporary file, fsync, rename (cfg_write_at). */
 static int hw_save(void *ctx, const char *text, size_t length)
-{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, CFG_DIR "/hwprofiles.tmp", text, length); return e ? -e : 0; }
+{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0; }
+static uint32_t boot_serial(void *ctx)
+{
+    (void)ctx; struct ciuki_recovery_status status;
+    return ciuki_recovery_status(&status) ? 0 : status.boots;
+}
+static int perf_load(void *ctx, struct system_perf *out)
+{
+    (void)ctx;
+    FILE *f = fopen(SYSTEM_PERF_PATH, "rb");
+    if (!f) return -errno;
+    char text[512]; size_t n = fread(text, 1, sizeof(text), f);
+    int e = ferror(f) || n == sizeof(text) ? -EIO : 0;
+    fclose(f);
+    if (!e && !system_perf_parse(out, text, n)) e = -EINVAL;
+    return e;
+}
+static int perf_save(void *ctx, const struct system_perf *p)
+{
+    (void)ctx;
+    if (!system_perf_valid(p)) return -EINVAL;
+    char text[256];
+    int n = snprintf(text, sizeof(text), "version=1\nrole=%u\nread_ahead=%u\ngraphics=%u\nvm=%u\nmin_mb=%u\nmax_mb=%u\n",
+        p->role, p->read_ahead, p->graphics, p->vm, p->min_mb, p->max_mb);
+    int e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
+    return e ? -e : 0;
+}
 static int memory_query(void *ctx, uint64_t *total_k, uint64_t *free_k)
 {
     (void)ctx;
@@ -923,7 +951,7 @@ int main(int argc, char **argv)
     h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->audio_line=audio_line; h->multimedia_open=multimedia_open;
     h->game_begin=game_begin;h->game_poll=game_poll_result;
     h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
-    h->hw_load = hw_load; h->hw_save = hw_save; h->memory = memory_query; h->driver_catalog = driver_catalog;
+    h->hw_load = hw_load; h->hw_save = hw_save; h->boot_serial = boot_serial; h->perf_load = perf_load; h->perf_save = perf_save; h->memory = memory_query; h->driver_catalog = driver_catalog;
 
     const char *display = getenv("CIUKI_DISPLAY");
     h->screen_w = 1024; h->screen_h = 768;

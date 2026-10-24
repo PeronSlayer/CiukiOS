@@ -346,7 +346,7 @@ class LoaderParserTests(unittest.TestCase):
     def test_elf_fills_shared_scratch_before_first_header_validation(self):
         m = self.machine
         self.assertEqual(m.symbols['ph_table'], m.symbols['raw_map'])
-        self.assertEqual(self.loader_extent, 0x18000)  # G29D: full 32-bit two-segment extent
+        self.assertEqual(self.loader_extent, 0x1e000)  # G29D converter index plus G30B retained profile bytes
         for count in (1, 32):
             m.reset()
             header = bytearray(52)
