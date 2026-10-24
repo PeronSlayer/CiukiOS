@@ -38,7 +38,8 @@ class NativeUpdateModelTests(unittest.TestCase):
             "calc": ["apps/accessories/calc_view.c", "apps/accessories/calc_model.c"],
             "clock": ["apps/accessories/clock_view.c", "apps/accessories/clock_model.c"],
             "charmap": ["apps/accessories/charmap_view.c"],
-            "help": ["apps/accessories/help_view.c", "apps/accessories/help_topics.c"],
+            "help": ["apps/accessories/"+n for n in ("help_view.c","help_topics.c","help_navigation.c","help_wizard.c","helpfile.c","help_hlp.c","help_chm.c","help_markup.c")]
+                    + ["sdk/win32/lz32/mspack/chmd.c","sdk/win32/lz32/mspack/lzxd.c"],
             "viewer": ["apps/accessories/viewer_view.c", "apps/accessories/viewer_model.c", "apps/accessories/viewer_stb.c"],
             "mixer": ["apps/accessories/mixer_view.c"],
             "music": ["apps/music/view.c"],
@@ -72,6 +73,7 @@ class NativeUpdateModelTests(unittest.TestCase):
                 objects.append(str(obj))
             for name, sources in cases.items():
                 extra = []
+                if name=="help": extra=["-I",str(ROOT/"sdk/win32/lz32/mspack"),"-DHAVE_INTTYPES_H=1","-DSIZEOF_OFF_T=8"]
                 if name == "demo":
                     extra = ["-I", str(work / "adapter")]
                 if name == "terminal":

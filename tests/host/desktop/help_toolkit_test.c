@@ -86,6 +86,26 @@ static void controls(void)
     du_focus(&u, E_NAME);
     du_render(&u);
 }
+static void test_defaults(void)
+{
+    fresh();
+    for (int kind=DU_LABEL;kind<=DU_CANVAS;kind++) {
+        struct du_widget *w=du_add(&u,(enum du_kind)kind,100+kind,(struct du_rect){0,0,1,1},kind==DU_EDIT ? "private entry" : "");
+        assert(w && w->tip && w->tip[0] && w->help && w->help[0]);
+        if (kind==DU_EDIT) assert(!strstr(w->tip,"private"));
+    }
+    struct du_widget *save=du_add(&u,DU_BUTTON,900,(struct du_rect){0,0,1,1},"&Save");
+    assert(strstr(save->help,"disk"));
+    du_tooltip(&u,900,"A program-specific tooltip"); du_set_text(save,"Save a copy");
+    assert(!strcmp(save->tip,"A program-specific tooltip"));
+    fresh();
+    du_message(&u,1,"Default dialog help","The controls have defaults.",DU_DLG_ICON_INFO,NULL,0,0,0);
+    for (unsigned i=0;i<u.dialog.count;i++) assert(u.dialog.items[i].tip && u.dialog.items[i].tip[0] && u.dialog.items[i].help && u.dialog.items[i].help[0]);
+    struct du_widget *button=&u.dialog.items[0];
+    move(button->box.x+5,button->box.y+5); at(u.tip.show_ns);
+    assert(u.tip.visible && !u.tip.context && u.tip.widget>=DU_WIDGETS);
+    du_tip_hide(&u); du_dialog_close(&u);
+}
 
 static void test_tooltips(void)
 {
@@ -151,9 +171,9 @@ static void test_f1(void)
     assert(count_of(DU_EV_HELP) == 1 && !count_of(DU_EV_KEY) && launches == 1 && !strcmp(launched, "paint"));
     const struct du_event *e = last_of(DU_EV_HELP);
     assert(e->id == E_NAME && e->index == DU_HELP_F1 && !strcmp(e->text, "Type your name here."));
-    /* The focused control without help text still reports its id; none focused reports 0. */
+    /* G15B: a control without app-specific text gets the toolkit fallback. */
     reset_events(); du_focus(&u, B_PLAIN); key(DU_KEY_F1);
-    assert(last_of(DU_EV_HELP)->id == B_PLAIN && !last_of(DU_EV_HELP)->text && launches == 2);
+    assert(last_of(DU_EV_HELP)->id == B_PLAIN && last_of(DU_EV_HELP)->text && launches == 2);
     /* The program handles it itself (WM_HELP handled): no launch. */
     reset_events(); consume_help = 1; key(DU_KEY_F1); assert(count_of(DU_EV_HELP) == 1 && launches == 2 && u.help_consumed);
     consume_help = 0; key(DU_KEY_F1); assert(launches == 3 && !u.help_consumed);
@@ -211,9 +231,9 @@ static void test_whats_this(void)
     assert(u.tip.visible == 0 && last_of(DU_EV_HELP)->id == 0 && !last_of(DU_EV_HELP)->text);   /* nothing under the pointer */
     reset_events(); chord(DU_KEY_LSHIFT, DU_KEY_F1); move(40, 50); key(DU_KEY_ESC); press(1); release(1);
     assert(count_of(DU_EV_HELP) == 0 && count_of(DU_EV_ACTIVATE) == 1);                  /* Esc cancelled: a normal click */
-    /* A control without help text: the event, no popup. */
+    /* The default What's This? text also produces a popup. */
     reset_events(); chord(DU_KEY_LSHIFT, DU_KEY_F1); move(130, 50); press(1); release(1);
-    assert(last_of(DU_EV_HELP)->id == B_PLAIN && !last_of(DU_EV_HELP)->text && !u.tip.visible && !u.whats_this);
+    assert(last_of(DU_EV_HELP)->id == B_PLAIN && last_of(DU_EV_HELP)->text && u.tip.visible && !u.whats_this);
     /* The program shows its own help for the control. */
     reset_events(); consume_help = 1; chord(DU_KEY_LSHIFT, DU_KEY_F1); move(40, 50); press(1); release(1);
     assert(count_of(DU_EV_HELP) == 1 && !u.tip.visible);
@@ -305,6 +325,7 @@ int main(int argc, char **argv)
     pixels = calloc(W * H + 1, 4); assert(pixels);
     pixels[W * H] = 0x5a5a5a5au;
     du_init(&u, pixels, W, H);
+    test_defaults();
     test_tooltips();
     test_f1();
     test_whats_this();

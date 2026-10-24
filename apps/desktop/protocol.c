@@ -112,6 +112,11 @@ static int v3_parse(const struct ciuki_message *m, int client,
     if (p->opcode==DESK_HELLO) return client && !n && !m->fd_count && !p->window_id && !p->generation && !p->request;
     if (!p->window_id || !p->generation) return 0;
     switch (p->opcode) {
+    case DESK_LAUNCH:
+        /* G15B: Win32's existing v3 transport requests the native Help
+         * viewer. Payload: byte count followed by the Help argument. */
+        if (!client || n<4 || n>4+DESK_ARG_MAX || desk_get32(b)!=n-4 || !desk_utf8_valid(b+4,n-4)) return 0;
+        memcpy(p->title,"help",5); memcpy(p->argument,b+4,n-4); expected=n; break;
     case DESK_CREATE_WINDOW:
         if (!client || n<36) return 0;
         p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);
@@ -583,7 +588,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         n = 12;
         break;
     case DESK_LAUNCH: {
-        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length < 13) return 0;
+        if (m->data[0] != DESK_SHELL_VERSION || m->length < 13) return 0;
         p->serial = desk_get32(m->data + 4);
         unsigned t = desk_get32(m->data + 8);
         if (!t || t > DESK_TITLE_MAX || m->length < 12 + t) return 0;
@@ -603,6 +608,7 @@ int desk_parse(const struct ciuki_message *m, int client,
             }
             n += 4 + a;
         }
+        if (!client && strcmp(p->title,"help")) return 0;
         break;
     }
     case DESK_TERMINAL_POWER:

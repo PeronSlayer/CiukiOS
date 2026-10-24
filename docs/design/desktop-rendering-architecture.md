@@ -425,7 +425,16 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
 
-| 31 | Context-help caption button (G15; `WS_EX_CONTEXTHELP`, `DS_CONTEXTHELP`): the "?" takes the minimise slot, a window with it has no minimise or zoom, it is hot and pressed like every title button, and a press sends `WM_SYSCOMMAND` `SC_CONTEXTHELP` to the program (v3 `HELP`) | the caption when the style appears or goes away (the whole title bar: the buttons changed); the "?" box while hot or pressed | `compositor.c` `title_box`, `frame_style`, `desk_title_code`; `input.c` press; `client.c` `desk_context_help`; v3 `PLACE`/`CREATE` style bit `DESK_V3_CONTEXTHELP` | none | caption |
+| 63 | Context-help caption button (G15; `WS_EX_CONTEXTHELP`, `DS_CONTEXTHELP`): the "?" takes the minimise slot, a window with it has no minimise or zoom, it is hot and pressed like every title button, and a press sends `WM_SYSCOMMAND` `SC_CONTEXTHELP` to the program (v3 `HELP`) | the caption when the style appears or goes away (the whole title bar: the buttons changed); the "?" box while hot or pressed | `compositor.c` `title_box`, `frame_style`, `desk_title_code`; `input.c` press; `client.c` `desk_context_help`; v3 `PLACE`/`CREATE` style bit `DESK_V3_CONTEXTHELP` | none | caption |
+
+| 64 | Help request reuses the existing window, including a minimised or shaded Help window | restored window, caption and activation/taskbar damage | `desk_task_launch`, existing minimise/shade/focus paths | G15B: requests no longer spawn another Help process | `row_help` |
+| 65 | Help topic cross-link, external HLP/CHM topic, Contents/Index/Search and Back | old and new topic, links, navigation and status controls | `help_document_show`, `help_show_topic`, `help_layout` | G15B: invalidate both old and new control rectangles on a layout change | `row_help`; `help_formats_test.c` pixel equivalence |
+| 66 | Troubleshooter question, answer, Back, Next, Finish and Cancel | topic body, choice and navigation controls, replaced links | `help_wizard_action`, `help_wizard_begin` | G15B: leaving the wizard must expose the new links pane and erase the old text border | `row_help`; all wizard branches in `help_formats_test.c` |
+| 67 | Default toolkit and modal-control tooltips/What's This? | popup's old and new rectangle | `du_control_help`, `tip_service`, `tip_track` | G15B: defaults also cover dynamically created dialog controls | `help_toolkit_test.c`; existing tooltip scenario |
+
+G15B reserves rows 63–67 after row 62 on `wt/integ`, the highest row on all
+visible branches. The original G15 caption row is renumbered to 63 to avoid
+G4's row 31.
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

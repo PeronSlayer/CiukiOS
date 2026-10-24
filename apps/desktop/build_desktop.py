@@ -23,7 +23,9 @@ ACCESSORIES = {
     "calc": ["calc_main.c", "calc_view.c", "calc_model.c"],
     "charmap": ["charmap_main.c", "charmap_view.c"],
     "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
-    "help": ["help_main.c", "help_view.c", "help_topics.c"],
+    "help": ["help_main.c", "help_view.c", "help_topics.c", "help_navigation.c", "help_wizard.c",
+             "helpfile.c", "help_hlp.c", "help_chm.c", "help_markup.c",
+             "../../sdk/win32/lz32/mspack/chmd.c", "../../sdk/win32/lz32/mspack/lzxd.c"],
     "mixer": ["mixer_main.c", "mixer_view.c"],
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
@@ -59,6 +61,7 @@ def inputs():
                  "src/kernel/lib/sha256.c", "src/kernel/include/ciuki/sha256.h"))
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "sdk/win32/include/w32/server.h")
+    files.extend(p for p in (ROOT / "sdk/win32/lz32/mspack").iterdir() if p.is_file())
     files.append(ROOT / "src/kernel/include/ciuki/game_ports_settings.h")
     files.append(ROOT / "src/probes/desktop_v3/controller.h")
     files.append(ROOT / "src/probes/win32_installers/controller.h")
@@ -188,6 +191,7 @@ def build():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, *(["-DDP_NATIVE_VFS"] if name == "control" else []), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "sdk/win32/include"),
+                          *(["-I",str(ROOT / "sdk/win32/lz32/mspack"),"-DHAVE_INTTYPES_H=1","-DSIZEOF_OFF_T=8"] if name=="help" else []),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),

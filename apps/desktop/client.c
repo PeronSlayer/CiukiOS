@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "gate.h"
+#include "help_request.h"
 #include <errno.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -45,6 +46,9 @@ void desk_drop_client(struct desktop *d, int i)
 {
     struct desk_client *c = &d->clients[i];
     if (c->channel < 0 && !c->internal) return;
+    if (!strcmp(c->application,"help")) { d->help_starting=0; d->help_pending[0]=0; memset(d->help_users,0,sizeof(d->help_users)); }
+    if (c->version==DESK_V3_VERSION && !c->v3_peer)
+        for (unsigned k=0;k<DESK_CLIENTS;k++) if (d->help_users[k]==c->pid) d->help_users[k]=0;
     if (c->version==DESK_V3_VERSION && !c->v3_peer) {
         for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].v3_peer==(unsigned)i+1) desk_drop_client(d,j);
     }
@@ -1250,6 +1254,8 @@ void desk_context_help(struct desktop *d, int index)
 int desk_help_argument(const char *argument)
 {
     if (!argument[0]) return 1;
+    struct desk_help_request request;
+    if (desk_help_decode(argument,&request)) return 1;
     if (strncmp(argument, "topic:", 6)) return 0;
     size_t n = strlen(argument + 6);
     if (!n || n > 40) return 0;
@@ -1321,8 +1327,26 @@ int desk_task_launch(struct desktop *d, const char *name, const char *argument)
     launch_clear(d);
     if (desk_session_busy(d)) return launch_done(d,-EBUSY);
     if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
+    if (!strcmp(name,"help")) {
+        const char *arg=argument && *argument ? argument : "topic:welcome";
+        size_t n=strlen(arg); if (n>DESK_ARG_MAX) return launch_done(d,-EINVAL);
+        for (unsigned k=0;k<DESK_CLIENTS;k++) {
+            struct desk_client *c=&d->clients[k];
+            if (c->channel<0 || c->closing || strcmp(c->application,"help")) continue;
+            struct ciuki_message msg; desk_message(&msg,DESK_LAUNCH,20+(unsigned)n);
+            desk_put32(msg.data+4,1); desk_put32(msg.data+8,4); memcpy(msg.data+12,"help",4);
+            desk_put32(msg.data+16,(uint32_t)n); memcpy(msg.data+20,arg,n); desk_queue(d,(int)k,&msg);
+            if (c->window) { if (c->collapsed) desk_collapse(d,(int)k); (void)desk_task_switch(d,c->window_id); }
+            d->help_starting=0; return launch_done(d,(int)c->pid);
+        }
+        if (d->help_starting) { snprintf(d->help_pending,sizeof(d->help_pending),"%s",arg); return launch_done(d,0); }
+    }
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name))
-        return launch_done(d,task_launch(d,&d->programs[k],argument,NULL,0));
+    {
+        int result=task_launch(d,&d->programs[k],argument,NULL,0);
+        if (!strcmp(name,"help") && !result && d->launch_deferred) d->help_starting=1;
+        return launch_done(d,result);
+    }
     return launch_done(d,-ENOENT);
 }
 
@@ -1356,6 +1380,13 @@ int desk_ide_launch(struct desktop *d,const char *path)
  * the Run and Games messages, AutoPlay's message, else a notification. */
 void desk_launch_completed(struct desktop *d, const struct desk_launch_request *r, const char *name, int result)
 {
+    if (!strcmp(name,"help")) {
+        d->help_starting=0;
+        if (result>0 && d->help_pending[0]) {
+            char arg[DESK_ARG_MAX+1]; memcpy(arg,d->help_pending,sizeof(arg)); d->help_pending[0]=0;
+            (void)desk_task_launch(d,"help",arg);
+        } else d->help_pending[0]=0;
+    }
     char text[200];
     switch (r->origin) {
     case DESK_LAUNCH_CLIENT: {
@@ -2163,6 +2194,29 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
+    case DESK_LAUNCH: {
+        if (!desk_help_argument(p.argument)) { error=-EPERM; break; }
+        struct desk_help_request request;
+        int encoded=desk_help_decode(p.argument,&request);
+        int quit=encoded && ((request.format==1 && request.command==2) || (request.format==2 && request.command==18));
+        if (quit) {
+            unsigned users=0;
+            for (unsigned k=0;k<DESK_CLIENTS;k++) { if (d->help_users[k]==c->pid) d->help_users[k]=0; users+=d->help_users[k]!=0; }
+            if (users) break;
+            int found=d->help_starting;
+            for (unsigned k=0;k<DESK_CLIENTS;k++) if (d->clients[k].channel>=0 && !strcmp(d->clients[k].application,"help")) found=1;
+            if (!found) break;
+        } else {
+            unsigned free_slot=DESK_CLIENTS;
+            for (unsigned k=0;k<DESK_CLIENTS;k++) {
+                if (d->help_users[k]==c->pid) { free_slot=DESK_CLIENTS; break; }
+                if (!d->help_users[k]) free_slot=k;
+            }
+            if (free_slot<DESK_CLIENTS) d->help_users[free_slot]=c->pid;
+        }
+        int result=desk_task_launch(d,"help",p.argument); if (result<0) error=result;
+        break;
+    }
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

@@ -26,7 +26,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -42,8 +42,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1024);
-SETUP_OFFSET(source_iso_sha,1089);
+SETUP_OFFSET(source_image_sha,1072);
+SETUP_OFFSET(source_iso_sha,1137);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");

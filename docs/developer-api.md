@@ -5016,7 +5016,9 @@ DESK_CURSOR_DRAG_MOVE, DESK_CURSOR_DRAG_COPY, DESK_CURSOR_DRAG_LINK,
 #define DESK_ARG_MAX 160u
 ```
 
-LAUNCH argument: 12 + name + 4 + argument always fits one message
+LAUNCH argument: 12 + name + 4 + argument always fits one message.
+G15B: server-to-Help LAUNCH reuses its window;
+v3 client LAUNCH payload is u32 byte count + Help argument.
 
 ```c
 enum desk_opcode {

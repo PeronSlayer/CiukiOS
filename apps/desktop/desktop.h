@@ -342,6 +342,9 @@ struct desktop {
      * scenarios); launch_request: the next launch's origin, reset after it;
      * launch_deferred: the last launch returned 0 and completes later. */
     int launch_async, launch_deferred;
+    int help_starting;
+    char help_pending[DESK_ARG_MAX+1];
+    uint32_t help_users[DESK_CLIENTS];
     struct desk_launch_request launch_request;
     int (*launch_mark)(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
     /* fx-15: a launched program's first frame reached the screen (quiet

@@ -3,6 +3,7 @@
 #ifndef CIUKI_DESKUI_INTERNAL_H
 #define CIUKI_DESKUI_INTERNAL_H
 #include "deskui.h"
+void du_control_help(struct du_widget *);
 
 #define DU_MENUBAR 20
 #define DU_DOUBLE_CLICK_NS 500000000ull
