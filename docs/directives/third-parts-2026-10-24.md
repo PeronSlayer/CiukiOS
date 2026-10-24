@@ -1,6 +1,6 @@
 # Third parts of the OS feature items (2026-10-24)
 
-- **Written:** 2026-10-24 10:38 by the lead. Owner 2026-10-24 ~09:50: use Codex to the end of its quota. Base: branch `wt/preverify` (main plus the integration repair snapshot). Rules: those of `g7-g12-os-gaps-batch-2.md` (header) and the second-parts directive; Codex gpt-6.1-sol high. These items enter today's T23 image only if they are verified before its chain starts; otherwise the next image.
+- **Written:** 2026-10-24 10:32 by the lead. Owner 2026-10-24 ~09:50: use Codex to the end of its quota. Base: branch `wt/preverify` (main plus the integration repair snapshot). Rules: those of `g7-g12-os-gaps-batch-2.md` (header) and the second-parts directive; Codex gpt-6.1-sol high. These items enter today's T23 image only if they are verified before its chain starts; otherwise the next image.
 
 | Item | Scope (remaining gaps recorded by the first and second parts) |
 | --- | --- |
