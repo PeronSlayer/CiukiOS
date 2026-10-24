@@ -244,6 +244,14 @@ static void wm_v3_place_at(int i, int x, int y, unsigned w, unsigned h, unsigned
     desk_put32(m.data+32,1); desk_put32(m.data+36,flags); desk_put32(m.data+40,c->v3_style&(DESK_V3_STYLES&~DESK_V3_MODAL));
     (void)desk_v3_receive(&d,v3_root,&m);
 }
+static void wm_v3_style(int i, unsigned style)
+{
+    struct desk_client *c=&d.clients[i]; struct ciuki_message m; v3msg(&m,DESK_V3_PLACE,28,c->v3_id,c->v3_generation);
+    desk_put32(m.data+16,(uint32_t)c->frame.x); desk_put32(m.data+20,(uint32_t)c->frame.y);
+    desk_put32(m.data+24,c->info.width); desk_put32(m.data+28,c->info.height); desk_put32(m.data+32,1);
+    desk_put32(m.data+36,0); desk_put32(m.data+40,style);
+    (void)desk_v3_receive(&d,v3_root,&m);
+}
 static void wm_v3_place(int i)
 {
     struct desk_client *c=&d.clients[i]; struct ciuki_message m; v3msg(&m,DESK_V3_PLACE,28,c->v3_id,c->v3_generation);
@@ -810,6 +818,17 @@ static void row_caption(unsigned m)
     a->hung=0; app_answer_pings(); step("responding again");
     struct desk_box x=desk_close_box(&d.clients[b->slot]); pointer_to(x.x+2,x.y+2); step("title button hot");
     press(CIUKI_BUTTON_LEFT,1); step("title button pressed"); pointer_to(300,300); press(CIUKI_BUTTON_LEFT,0); step("released elsewhere");
+    /* G15 WS_EX_CONTEXTHELP: the "?" takes the minimise slot (a style change repaints the caption),
+     * is hot and pressed like any title button, and HELP goes to the client. */
+    int h=wm_v3_window(DESK_V3_OVERLAPPED|DESK_V3_CONTEXTHELP,-1,120,110,240,150);
+    if (h>=0) {
+        step("window with the ? caption button");
+        struct desk_box hb=desk_help_box(&d.clients[h]); assert(hb.w>0 && !desk_min_box(&d.clients[h]).w);
+        pointer_to(hb.x+hb.w/2,hb.y+hb.h/2); step("? button hot");
+        press(CIUKI_BUTTON_LEFT,1); step("? button pressed (HELP sent)"); pointer_to(300,300); press(CIUKI_BUTTON_LEFT,0); step("released elsewhere");
+        wm_v3_style(h,DESK_V3_OVERLAPPED); assert(!desk_help_box(&d.clients[h]).w); step("style without ?: minimise and zoom again");
+        wm_v3_style(h,DESK_V3_OVERLAPPED|DESK_V3_CONTEXTHELP); step("style with ? again");
+    }
     wm_end();
 }
 static void row_menus(unsigned m)

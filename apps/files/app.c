@@ -1705,6 +1705,7 @@ static void context(struct files_app *a, const struct du_event *e)
 
 static void help(struct files_app *a)
 {
+    if (!du_help(a->ui, NULL)) return;   /* G15: the Files topic in CiukiOS Help; the box below when Help cannot start */
     du_message(a->ui, D_INFO, "Files Help",
                "Enter\tOpen the selection\nBackspace\tUp one level\nAlt+Left/Right\tBack and Forward\n"
                "Alt+D, F4\tAddress bar\nF2\tRename\nF5\tRefresh\nDel\tDelete permanently\nAlt+Enter\tProperties\n"
@@ -2252,6 +2253,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     for (unsigned i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); i++) {
         struct du_widget *b = du_add(u, DU_TOOLBUTTON, toolbar[i].id, zero, toolbar[i].label);
         b->icon = named(toolbar[i].icon, 22); b->icon_size = 22;
+        b->tip = toolbar[i].label;   /* G15: tooltip after the pointer rests on the button */
         if (toolbar[i].id == C_VIEWS) b->dropdown = 12;
     }
     du_add(u, DU_SEPARATOR, W_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP3, zero, "");

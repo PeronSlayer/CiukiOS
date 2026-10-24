@@ -146,6 +146,7 @@ typedef struct {
 #define WS_DLGFRAME 0x00400000u
 #define WS_THICKFRAME 0x00040000u
 #define WS_EX_TOPMOST 8u
+#define WS_EX_CONTEXTHELP 0x400u   /* G15: the "?" caption button (dialogs, no minimise/maximise) */
 #define WS_EX_TOOLWINDOW 128u
 #define WS_EX_CLIENTEDGE 512u
 #define WS_EX_STATICEDGE 0x20000u
@@ -208,6 +209,8 @@ BOOL W32API SetWindowPos(HWND, HWND, int, int, int, int, UINT);
 BOOL W32API MoveWindow(HWND, int, int, int, int, BOOL);
 LONG W32API GetWindowLongA(HWND, int);
 LONG W32API SetWindowLongA(HWND, int, LONG);
+BOOL W32API SetWindowContextHelpId(HWND, DWORD);   /* G15 */
+DWORD W32API GetWindowContextHelpId(HWND);
 uintptr_t W32API GetClassLongA(HWND, int);
 uintptr_t W32API SetClassLongA(HWND, int, intptr_t);
 uint16_t W32API GetWindowWord(HWND, int);

@@ -566,6 +566,8 @@ HWND u32_dialog_create_ex(HINSTANCE instance, const struct u32_template *t,
   DWORD style = t->style, ex = t->ex;
   if (style & DS_MODALFRAME)
     ex |= WS_EX_DLGMODALFRAME;
+  if (style & DS_CONTEXTHELP)
+    ex |= WS_EX_CONTEXTHELP; /* G15: the "?" caption button */
   if (style & DS_CONTROL) {
     style = (style & ~(WS_CAPTION | 0x80000u | WS_POPUP)) | WS_CHILD;
     ex |= WS_EX_CONTROLPARENT;

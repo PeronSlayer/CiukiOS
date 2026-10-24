@@ -209,6 +209,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->flags=desk_get32(b); if (p->flags>1) return 0;
         expected=4; break;
     case DESK_CLOSE: if (!client) return 0; break;
+    case DESK_V3_HELP: if (client) return 0; break;   /* G15: server to client, empty */
     case DESK_CLOSED: case DESK_CLOSE_REQUEST: if (client) return 0; break;
     case DESK_PING: case DESK_PONG:
         if (n!=4) return 0;

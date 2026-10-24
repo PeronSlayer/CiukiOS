@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 static int queue(struct du_window *w, struct ciuki_message *m)
@@ -27,6 +28,31 @@ static void dialog_sound(void *ctx, unsigned event)
 {
     struct du_window *w = ctx; struct ciuki_message m;
     desk_message(&m,DESK_SOUND,8); m.data[0] = DESK_SHELL_VERSION; desk_put32(m.data+4,event); (void)queue(w,&m);
+}
+
+/* G15: F1 and Help menus open CiukiOS Help at the program's topic. Only the
+ * desktop can start a window, so the request is a LAUNCH of "help" whose
+ * argument is "topic:<id>" (the desktop accepts it from every client and
+ * Help opens that topic); without a topic Help opens at its contents. */
+#define HELP_LAUNCH_SERIAL 0x48454c50u
+static int help_launch(struct du_ui *u, const char *topic, void *ctx)
+{
+    struct du_window *w = ctx; struct ciuki_message m;
+    const char name[] = "help"; size_t n = sizeof(name) - 1, a = 0;
+    char arg[DESK_ARG_MAX + 1];
+    (void)u;
+    if (!w) return -EINVAL;
+    if (topic && *topic) {
+        size_t t = strlen(topic);
+        if (t > 40) return -EINVAL;
+        for (size_t i = 0; i < t; i++)
+            if (!((topic[i] >= 'a' && topic[i] <= 'z') || (topic[i] >= '0' && topic[i] <= '9') || topic[i] == '-')) return -EINVAL;
+        a = (size_t)snprintf(arg, sizeof(arg), "topic:%s", topic);
+    }
+    desk_message(&m, DESK_LAUNCH, (unsigned)(12 + n + (a ? 4 + a : 0)));
+    desk_put32(m.data + 4, HELP_LAUNCH_SERIAL); desk_put32(m.data + 8, (uint32_t)n); memcpy(m.data + 12, name, n);
+    if (a) { desk_put32(m.data + 12 + n, (uint32_t)a); memcpy(m.data + 16 + n, arg, a); }
+    return queue(w, &m) ? -errno : 0;
 }
 
 static int flush(struct du_window *w)
@@ -73,6 +99,7 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     w->back = malloc((size_t)width * (size_t)height * 4);
     if (!w->back) { errno = ENOMEM; goto fail; }
     du_init(u, w->back, width, height);
+    u->help_open = help_launch; u->help_ctx = w;
     w->completion=malloc(sizeof(*w->completion));
     if (!w->completion) goto fail;
     if (du_completion_init(w->completion)) { free(w->completion); w->completion=NULL; goto fail; }

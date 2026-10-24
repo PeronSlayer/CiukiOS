@@ -171,7 +171,7 @@ application are in that application's section.
 | KB-8 | Shift+F10 and the Application key: context menu for the selection | RK-keys | partial | List and tree widgets only (`widgets.c:1230-1236`). Missing: text fields, desktop icons, taskbar, Win32 `VK_APPS` |
 | KB-9 | Alt+F6: next window of the same program; Ctrl+F4 / Ctrl+F6: MDI | RK-keys | absent | — |
 | KB-10 | Print Screen: screen to clipboard; Alt+Print Screen: active window to clipboard | RK-keys | absent | `CIUKI_KEY_PRINTSCREEN` exists (`src/kernel/include/ciuki/abi.h:622`) but nothing handles it |
-| KB-11 | F1: Help; Shift+F1: What's This? | RK-keys | partial | F1 in CiukNote, Files, Calculator and CiukIDE opens a static message box (`apps/files/app.c:1335`, `apps/accessories/calc_view.c:126`), not Help topics. No What's This? |
+| KB-11 | F1: Help; Shift+F1: What's This? | RK-keys | done | F1 opens the program's Help topic (`du_help_topic`, every toolkit program), `DU_EV_HELP`; Shift+F1 What's This? (`widgets.c`); Win32 `WM_HELP` (`classic.c`). `docs/design/help-everywhere.md` |
 | KB-12 | Win+E Explorer, Win+F Find, Win+Ctrl+F Find Computer, Win+R Run, Win+M Minimize All, Shift+Win+M Undo, Win+Tab cycle taskbar buttons, Win+F1 Help, Win+Break System Properties, Win+D desktop | RK-keys (`wrkappg_4`) | absent | `logo_down` is cleared by any other key (`shell.c:2974`); there is no chord handling |
 | KB-13 | Alt+M with focus on the taskbar or desktop: minimise all; Ctrl+Esc, Esc: focus the taskbar, then Tab through it | RK-keys (`wrkappg_2`) | absent | Taskbar keyboard focus is not implemented |
 | KB-14 | Ctrl+Alt+Del: reserved for the system (Close Program) | RK-keys | done | Task Manager (SD-5) |
@@ -205,7 +205,7 @@ application are in that application's section.
 | SM-4 | Documents: the 15 most recent documents, cleared from the properties | RK-tb | partial | `shell.c:397-405`, 8 items from `cfg.recent`. The apps' own `recent.lst` (`apps/libdeskui/recent.c`) is never read by the shell, although the header says it is |
 | SM-5 | Settings: Control Panel, Printers, Taskbar & Start Menu, Folder Options, Active Desktop | RK-cpl | partial | `shell.c:407-416`: Control Panel, its categories, Task Manager. Missing: Printers, Taskbar & Start Menu, Folder Options |
 | SM-6 | Find ▸ Files or Folders, Computer, On the Internet, People | RK-keys | absent | See FM-30 |
-| SM-7 | Help opens Windows Help | RK-keys | partial | The Help submenu has Keyboard Shortcuts and About (`shell.c:417-421`); the Help application is under Accessories |
+| SM-7 | Help opens Windows Help | RK-keys | done | Start > Help launches CiukiOS Help (`SH_ACT_HELP`); F1 on the empty desktop opens its topic; About CiukiOS moved to the Start root |
 | SM-8 | Run dialog: command line with history drop-down, Browse; accepts programs, documents, folders and URLs | RK-keys | partial | `shell.c:2297-2315`, `desktop.c:1632-1662`: only names in `/Programs` with up to six arguments. Missing: history, Browse, paths, documents, folders, URLs, Win32 and DOS programs |
 | SM-9 | Keyboard: arrows, Enter, Esc, and underlined letters in menus | RK-keys | partial | `shell.c:2777-2808`: arrows, Enter, Space, Esc. Missing: mnemonic letters, Home/End |
 
@@ -571,10 +571,10 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| HP-1 | Windows Help: Contents, Index, Search, with topics for every component and troubleshooters | RK-tools ("Troubleshooting Procedures") | partial | CiukiOS Help with 10 topics (`apps/accessories/help_topics.c`); `tests/host/desktop/help_test.c`. Missing: index, search, troubleshooters, topics for each program |
-| HP-2 | F1 in any program opens that program's help | RK-keys | partial | KB-11 |
-| HP-3 | What's This? (Shift+F1, the "?" caption button in dialogs) | RK-keys, MS-syscmd (SC_CONTEXTHELP) | absent | — |
-| HP-4 | Tooltips on toolbar buttons and controls | RK-vmm | partial | Taskbar and tray only (`shell.c:1017-1039`); none in `apps/libdeskui` |
+| HP-1 | Windows Help: Contents, Index, Search, with topics for every component and troubleshooters | RK-tools ("Troubleshooting Procedures") | partial | Contents tree, Index, Search, Back and 37 topics incl. every program and a Troubleshooting book (`apps/accessories/help*.c`, `help_test.c`). Missing: interactive troubleshooter wizards, cross-links |
+| HP-2 | F1 in any program opens that program's help | RK-keys | done | KB-11; `help topic:<id>` via `DESK_LAUNCH` |
+| HP-3 | What's This? (Shift+F1, the "?" caption button in dialogs) | RK-keys, MS-syscmd (SC_CONTEXTHELP) | done | Toolkit mode and dialog "?" button; v3 `DESK_V3_CONTEXTHELP` caption button; Win32 `SC_CONTEXTHELP`/`WM_HELP`. Controls carry `help` text only where programs set it |
+| HP-4 | Tooltips on toolbar buttons and controls | RK-vmm | partial | libdeskui `widget.tip` (500 ms, 5 s) set on the Files and Help toolbars; other programs' controls need tips added |
 | HP-5 | WinHelp/HTML Help for Windows programs (`WinHelp`, `.hlp`, `.chm`) | RK-apps | absent | No WinHelp engine |
 
 ## 29. Error reporting and logging

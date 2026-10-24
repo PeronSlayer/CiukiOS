@@ -341,8 +341,10 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Programs", "applications-other", SH_ACT_SUBMENU, SH_MENU_PROGRAMS, 0);
         item(m, "Documents", "document-open", SH_ACT_SUBMENU, SH_MENU_DOCUMENTS, 0);
         item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
-        item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
+        /* G15 (Windows 98): Start > Help opens Help itself; the old submenu moved (About to this menu, shortcuts to Help). */
+        item(m, "Help", "help-browser", SH_ACT_HELP, 0, 0);   /* a missing /Programs/help gets launch_named's message */
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
+        item(m, "About CiukiOS", "ciuki", SH_ACT_ABOUT, 0, 0);   /* G15: it left the Help submenu */
         separator(m);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
@@ -701,6 +703,7 @@ static void act(struct desktop *d, const struct sh_item *it)
     switch (it->action) {
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
+    case SH_ACT_HELP: launch_named(d, "help", NULL); break;
     case SH_ACT_EMPTY_RECYCLE: desk_folder_empty_request(d); break;
     case SH_ACT_RUN: desk_internal_open(d, DESK_INTERNAL_RUN); break;
     case SH_ACT_SHUTDOWN: desk_internal_open(d, DESK_INTERNAL_SHUTDOWN); break;
@@ -3828,6 +3831,11 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (!value && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC) && d->sh.alt_used) return 1;
     if ((d->sh.modifiers & DU_CTRL) && code == DU_KEY_ESC) { if (value == 1) toggle_start(d); return 1; }
+    /* G15: F1 with no window focused (the desktop) opens its Help topic; a focused program gets the key. */
+    if (code == DU_KEY_F1 && !(d->sh.modifiers & (DU_CTRL | DU_ALT | DU_SHIFT)) && d->focus < 0 && !d->sh.levels && !d->session.state) {
+        if (value == 1) launch_named(d, "help", "topic:desktop");
+        return 1;
+    }
     if (d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
         if (!value) return 1;

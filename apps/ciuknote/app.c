@@ -480,6 +480,7 @@ static void menu_command(struct cn_app *a, int id)
         break;
     case M_STATUS: a->show_status = !a->show_status; cn_layout(a); break;
     case M_HELP:
+        if (!du_help(a->ui, NULL)) break;   /* G15: the CiukNote topic in CiukiOS Help */
         box(a, D_INFO, "CiukNote Help", DU_DLG_ICON_INFO, NULL, 0, 0, 0,
             "File: Ctrl+N New, Ctrl+O Open, Ctrl+S Save\n"
             "Edit: Ctrl+Z Undo, Ctrl+X Cut, Ctrl+C Copy, Ctrl+V Paste\n"

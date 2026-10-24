@@ -16,6 +16,7 @@ int main(int argc, char **argv)
     if (du_window_open(&m->window, &m->ui, channel, CALC_W, CALC_H, "Calculator")) {
         fprintf(stderr, "calc: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "calc");   /* G15: F1 opens this program's Help topic */
     calc_attach(&m->app, &m->ui);
     if (test) du_window_move(&m->window, 24, 48);
     int r = du_run(&m->window, NULL, NULL);

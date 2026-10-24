@@ -15,12 +15,17 @@ typedef struct { UINT CtlType,CtlID,itemID,itemAction,itemState; HWND hwndItem; 
 typedef struct { UINT CtlType,CtlID,itemID,itemWidth,itemHeight; uintptr_t itemData; } MEASUREITEMSTRUCT;
 typedef struct { UINT cbSize,fMask,fType,fState,wID; HMENU hSubMenu; HANDLE hbmpChecked,hbmpUnchecked; uintptr_t dwItemData; char *dwTypeData; UINT cch; HANDLE hbmpItem; } MENUITEMINFOA;
 typedef struct { UINT cbSize; RECT rcExclude; } TPMPARAMS;
+#define HELPINFO_WINDOW 1
+#define HELPINFO_MENUITEM 2
+/* G15 WM_HELP: lParam points to this (PE32 layout, 28 bytes). */
+typedef struct { UINT cbSize; int iContextType, iCtrlId; HANDLE hItemHandle; uintptr_t dwContextId; POINT MousePos; } HELPINFO;
 #define WM_SETFONT 0x30u
 #define WM_GETFONT 0x31u
 #define WM_DRAWITEM 0x2bu
 #define WM_MEASUREITEM 0x2cu
 #define WM_DELETEITEM 0x2du
 #define WM_NOTIFY 0x4eu
+#define WM_HELP 0x53u              /* G15: F1, the Help button, What's This? (lParam: HELPINFO) */
 #define WM_CONTEXTMENU 0x7bu
 #define WM_GETDLGCODE 0x87u
 #define WM_INITDIALOG 0x110u
@@ -351,6 +356,7 @@ typedef struct { UINT cbSize; RECT rcExclude; } TPMPARAMS;
 #define SC_MOUSEMENU 0xf090u
 #define SC_KEYMENU 0xf100u
 #define SC_RESTORE 0xf120u
+#define SC_CONTEXTHELP 0xf180u    /* G15: What's This? */
 #define MSGF_DIALOGBOX 0
 #define MSGF_MENU 2
 #define VK_BACK 8
@@ -372,6 +378,7 @@ typedef struct { UINT cbSize; RECT rcExclude; } TPMPARAMS;
 #define VK_INSERT 45
 #define VK_DELETE 46
 #define VK_F4 0x73
+#define VK_F1 0x70
 #define VK_F10 0x79
 #define VK_APPS 0x5d
 #define COLOR_SCROLLBAR 0

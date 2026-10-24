@@ -793,6 +793,18 @@ static void box_script(HWND dlg, UINT why, UINT step) {
   } else if (box_kind == 3) {
     CHECK(step == 0);
     chr('r');
+  } else if (box_kind == 5) {
+    /* G15 MB_HELP: the Help button and F1 send WM_HELP to the owner. */
+    CHECK(step == 0);
+    HWND help = GetDlgItem(dlg, IDHELP);
+    CHECK(help && GetDlgItem(dlg, IDOK) && GetDlgItem(dlg, IDCANCEL));
+    owner_help_count = 0;
+    SendMessageA(dlg, WM_COMMAND, IDHELP | (BN_CLICKED << 16), (LPARAM)help);
+    CHECK(IsWindow(dlg) && owner_help_count == 1 && owner_help.iContextType == HELPINFO_WINDOW &&
+          owner_help.iCtrlId == IDHELP && owner_help.hItemHandle == help && owner_help.cbSize == sizeof(HELPINFO));
+    SendMessageA(GetFocus(), WM_KEYDOWN, VK_F1, 0);
+    CHECK(IsWindow(dlg) && owner_help_count == 2);
+    key(VK_ESCAPE);
   } else if (box_kind == 4) {
     CHECK(step == 0);
     HWND label = GetDlgItem(dlg, 0xffff);
@@ -844,6 +856,11 @@ static void test_msgbox(void) {
   CHECK(MessageBoxExA(box_owner, text, 0,
                       MB_OKCANCEL | MB_ICONEXCLAMATION | MB_SYSTEMMODAL,
                       0) == IDCANCEL);
+  /* G15: without MB_HELP, F1 in a box reaches nobody. */
+  box_kind = 5;
+  idle_count = 0;
+  CHECK(MessageBoxA(box_owner, "Help me.", "Setup", MB_OKCANCEL | MB_HELP) == IDCANCEL);
+  CHECK(owner_help_count == 2);
   /* Task-modal without an owner disables the thread's top-level windows. */
   HWND other = owner_window("Second", WS_CAPTION, 200, 100);
   box_owner = other;
@@ -1114,4 +1131,151 @@ static void test_frames(void) {
   frames_at(640, 480);
   frames_at(800, 600);
   CHECK(frame_count >= 20);
+}
+
+/* ---- G15: WM_HELP, F1 and What's This? ----
+ * Windows 98: F1 sends WM_HELP (HELPINFO_WINDOW, the control, its help id,
+ * the pointer) to the focused control and DefWindowProc passes it to the
+ * parent; Shift+F1 is SC_CONTEXTHELP: the help arrow until the next click,
+ * which sends WM_HELP for the window under the pointer and is not delivered;
+ * Esc ends the mode. */
+static void raw_input(HWND h, UINT type, UINT code, UINT value, UINT value2) {
+  struct u32_window *root = u32_root(u32_window(h));
+  UINT data[10] = {0, 0, 0, type, 0, 0, code, value, value2, 0};
+  event(root, type == CIUKI_INPUT_MOTION ? DESK_MOTION : type == CIUKI_INPUT_BUTTON ? DESK_BUTTON : DESK_KEY, data, 10);
+}
+static void pump_all(void) {
+  MSG m;
+  for (UINT i = 0; i < 400 && PeekMessageA(&m, 0, 0, 0, 1); i++) {
+    TranslateMessage(&m);
+    DispatchMessageA(&m);
+  }
+}
+static void raw_key(HWND h, UINT scan, UINT down) {
+  raw_input(h, CIUKI_INPUT_KEY, scan, down, 0);
+  pump_all();
+}
+static void raw_click(HWND owner, HWND target) {
+  RECT r;
+  GetWindowRect(target, &r);
+  POINT so = u32_surface_origin(u32_window(owner));
+  raw_input(owner, CIUKI_INPUT_MOTION, 0, (UINT)(r.left + 4 - so.x), (UINT)(r.top + 4 - so.y));
+  pump_all();
+  raw_input(owner, CIUKI_INPUT_BUTTON, 1, 1, 0);
+  pump_all();
+  raw_input(owner, CIUKI_INPUT_BUTTON, 1, 0, 0);
+  pump_all();
+}
+static void test_help(void) {
+  HWND owner = owner_window("Help owner", WS_CAPTION | 0x80000u, 300, 200);
+  UINT activate[2] = {1, 1};
+  event(u32_window(owner), DESK_V3_ACTIVATE, activate, 2);
+  pump_all();
+  HWND edit = CreateWindowExA(0, "EDIT", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 10, 10, 120, 22,
+                              owner, (HANDLE)(uintptr_t)41, FIXTURE, 0);
+  HWND button = CreateWindowExA(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE, 10, 50, 80, 24,
+                                owner, (HANDLE)(uintptr_t)42, FIXTURE, 0);
+  CHECK(edit && button);
+  pump_all();
+  /* Window help ids: SetWindowContextHelpId / GetWindowContextHelpId. */
+  CHECK(SetWindowContextHelpId(edit, 7001) && GetWindowContextHelpId(edit) == 7001 &&
+        GetWindowContextHelpId(button) == 0);
+  CHECK(!SetWindowContextHelpId(0, 1) && GetLastError() == 1400 && GetWindowContextHelpId(0) == 0);
+  CHECK(!u32_help_mode());
+  /* F1 with the edit focused: HELPINFO_WINDOW for the edit, delivered to its parent. */
+  SetFocus(edit);
+  owner_help_count = 0;
+  raw_key(owner, 0x3b, 1);
+  raw_key(owner, 0x3b, 0);
+  POINT cursor;
+  GetCursorPos(&cursor);
+  CHECK(owner_help_count == 1 && owner_help.cbSize == sizeof(HELPINFO) && owner_help.iContextType == HELPINFO_WINDOW &&
+        owner_help.iCtrlId == 41 && owner_help.hItemHandle == edit && owner_help.dwContextId == 7001 &&
+        owner_help.MousePos.x == cursor.x && owner_help.MousePos.y == cursor.y);
+  /* The button has no help id and reports its own id. */
+  SetFocus(button);
+  raw_key(owner, 0x3b, 1);
+  raw_key(owner, 0x3b, 0);
+  CHECK(owner_help_count == 2 && owner_help.iCtrlId == 42 && owner_help.hItemHandle == button && owner_help.dwContextId == 0);
+  /* F1 with Ctrl or Alt is not help. */
+  raw_key(owner, 0x1d, 1);
+  raw_key(owner, 0x3b, 1);
+  raw_key(owner, 0x3b, 0);
+  raw_key(owner, 0x1d, 0);
+  raw_key(owner, 0x38, 1);
+  raw_key(owner, 0x3b, 1);
+  raw_key(owner, 0x3b, 0);
+  raw_key(owner, 0x38, 0);
+  CHECK(owner_help_count == 2 && !u32_help_mode());
+  /* A window nobody answers ignores WM_HELP (there is no WinHelp engine); a child passes it up. */
+  WNDCLASSA plain = {.lpfnWndProc = DefWindowProcA, .lpszClassName = "Help plain"};
+  CHECK(RegisterClassA(&plain));
+  HWND top = CreateWindowExA(0, "Help plain", "p", 0, 0, 0, 10, 10, 0, 0, FIXTURE, 0);
+  HWND leaf = CreateWindowExA(0, "Help plain", "c", WS_CHILD, 0, 0, 5, 5, top, (HANDLE)(uintptr_t)3, FIXTURE, 0);
+  CHECK(top && leaf);
+  HELPINFO hi = {sizeof(hi), HELPINFO_WINDOW, 3, leaf, 0, {0, 0}};
+  CHECK(SendMessageA(leaf, WM_HELP, 0, (LPARAM)&hi) == 0 && SendMessageA(top, WM_HELP, 0, (LPARAM)&hi) == 0);
+  DestroyWindow(top);
+  /* Shift+F1: the help arrow until the click. */
+  HCURSOR before = GetCursor();
+  SetFocus(edit);
+  raw_key(owner, 0x2a, 1);
+  raw_key(owner, 0x3b, 1);
+  raw_key(owner, 0x3b, 0);
+  raw_key(owner, 0x2a, 0);
+  CHECK(u32_help_mode() && GetCursor() == (HCURSOR)(uintptr_t)32651u && owner_help_count == 2);
+  /* The click is the help request for the button under it, not a click. */
+  owner_last_command = 0;
+  HWND focus_before = GetFocus();
+  raw_click(owner, button);
+  CHECK(!u32_help_mode());
+  CHECK(GetCursor() == before);
+  CHECK(owner_help_count == 3);
+  CHECK(owner_help.hItemHandle == button && owner_help.iCtrlId == 42);
+  CHECK(owner_last_command == 0 && GetFocus() == focus_before);
+  /* Esc ends the mode without delivering the key. */
+  raw_key(owner, 0x2a, 1);
+  raw_key(owner, 0x3b, 1);
+  raw_key(owner, 0x3b, 0);
+  raw_key(owner, 0x2a, 0);
+  CHECK(u32_help_mode());
+  raw_key(owner, 0x01, 1);
+  MSG m;
+  CHECK(!u32_help_mode() && GetCursor() == before && !PeekMessageA(&m, edit, WM_KEYDOWN, WM_KEYDOWN, 0) &&
+        owner_help_count == 3);
+  raw_key(owner, 0x01, 0);
+  /* The mode ends after one click, a normal click works again, and the edit gets the id of its own help. */
+  SendMessageA(owner, WM_SYSCOMMAND, SC_CONTEXTHELP, 0);
+  CHECK(u32_help_mode());
+  raw_click(owner, edit);
+  CHECK(!u32_help_mode() && owner_help_count == 4 && owner_help.hItemHandle == edit && owner_help.dwContextId == 7001);
+  raw_click(owner, edit);
+  CHECK(owner_help_count == 4 && GetFocus() == edit);
+  /* WS_EX_CONTEXTHELP puts the "?" caption button on the window (v3 style bit), also for a
+   * template with DS_CONTEXTHELP; the desktop's HELP message starts What's This?. */
+  UINT before_create = outgoing_count;
+  HWND helper = CreateWindowExA(WS_EX_CONTEXTHELP, "Help plain", "dialog", WS_CAPTION | WS_VISIBLE, 0, 0, 200, 100, 0, 0, FIXTURE, 0);
+  CHECK(helper && (u32_window(helper)->exstyle & WS_EX_CONTEXTHELP));
+  UINT created_style = 0xffffffffu;
+  for (UINT i = before_create; i < outgoing_count; i++)
+    if (outgoing[i].data[1] == DESK_CREATE_WINDOW && desk_get32(outgoing[i].data + 8) == u32_window(helper)->wire)
+      created_style = desk_get32(outgoing[i].data + 16);
+  CHECK(created_style != 0xffffffffu && (created_style & DESK_V3_CONTEXTHELP));
+  CHECK(!(u32_style(u32_window(owner)) & DESK_V3_CONTEXTHELP) && (u32_style(u32_window(helper)) & DESK_V3_CONTEXTHELP));
+  CHECK(!u32_help_mode());
+  event(u32_window(helper), DESK_V3_HELP, 0, 0);
+  pump_all();
+  CHECK(u32_help_mode());
+  raw_key(helper, 0x01, 1);
+  raw_key(helper, 0x01, 0);
+  CHECK(!u32_help_mode());
+  DestroyWindow(helper);
+  #pragma pack(push, 2)
+  static const struct { DWORD style, ex; uint16_t cdit; int16_t x, y, cx, cy; uint16_t menu, cls, title; } tpl =
+      {WS_POPUP | WS_CAPTION | DS_CONTEXTHELP, 0, 0, 0, 0, 100, 50, 0, 0, 0};
+  #pragma pack(pop)
+  HWND dlg = CreateDialogIndirectParamA(FIXTURE, (const DLGTEMPLATE *)&tpl, 0, 0, 0);
+  CHECK(dlg && (GetWindowLongA(dlg, GWL_EXSTYLE) & WS_EX_CONTEXTHELP));
+  DestroyWindow(dlg);
+  DestroyWindow(owner);
 }

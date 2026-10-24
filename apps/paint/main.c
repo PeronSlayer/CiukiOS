@@ -33,6 +33,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window,&m->ui,channel,width,height,"Untitled - CiukPaint",360,384)) {
         fprintf(stderr,"paint: desktop connection failed: %s\n",strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "paint");   /* G15: F1 opens this program's Help topic */
     if (paint_attach(&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
     paint_callbacks(quit,title,m); paint_decline_callback(declined); m->window.close_request=closing;
     m->path=path;

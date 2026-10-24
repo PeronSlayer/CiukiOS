@@ -43,6 +43,8 @@ RENDERS = {
     "charmap.xrgb": "PIN-FROM-FIRST-RUN",
     "clock-initial.xrgb": "PIN-FROM-FIRST-RUN",
     "clock-noon.xrgb": "PIN-FROM-FIRST-RUN",
+    "help-index.xrgb": "PIN-FROM-FIRST-RUN",
+    "help-search.xrgb": "PIN-FROM-FIRST-RUN",
     "help-shortcuts.xrgb": "PIN-FROM-FIRST-RUN",
     "help-welcome.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-default.xrgb": "PIN-FROM-FIRST-RUN",

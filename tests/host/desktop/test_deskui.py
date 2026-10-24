@@ -46,6 +46,13 @@ TOOLKIT_FRAMES = {
     'deskui-view1.xrgb': '26cc77326b0cc117215cd2389e275852a86b5a4a34109881bb8bb99e5e05758b',
     'deskui-view2.xrgb': 'dc03906560ba1b1543e63a6d5959f7541d75651eecde32496f6c21eb0d2fc8d0',
 }
+# G15 (2026-10-23): the tooltip, the What's This? popup and the dialog "?" button, reviewed as PNG.
+HELP_TOOLKIT_FRAMES = {
+    'help-dialog-button.xrgb': 'a6cd36f668060afff27e9250c7a4e377218f18e36ecf56d63ce149afa6b18aab',
+    'help-dialog-whats-this.xrgb': '8dcf17399af218f5a5a0aca0d848b3326aff9fce0539db6eb8dea032523a56a2',
+    'help-tooltip.xrgb': 'a6f99be097cb9321c34b2849424e09fdfaea0d556e67522f72f0cd3485405003',
+    'help-whats-this.xrgb': 'aec0b87a3abead1bf4a49be6f8b4a5e08138d1386dfd1b151db65d96994c04ea',
+}
 FILES_FRAMES = {
     'files-drop-target.xrgb': 'fa3e0f26a2db9c30dd775cd57bdf5925669e1d72872289e5c9e0dff9a778a977',
     'files-band-details.xrgb': '4080b44e53eef99b7c25e4662588fe20350324862aa8a6900b9a72860ce94ece',
@@ -164,6 +171,14 @@ class DeskuiTests(unittest.TestCase):
             "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
+
+    def test_help_toolkit(self):
+        """G15: tooltips, F1 WM_HELP, What's This?, the dialog ? button and the LAUNCH of CiukiOS Help."""
+        stdout, digests = self.run_harness("help-toolkit", ["tests/host/desktop/help_toolkit_test.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"],
+            frames=True, cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-pthread"))
+        self.assertIn("PASS G15 libdeskui help", stdout)
+        self.check_frames(digests, HELP_TOOLKIT_FRAMES, "HELP_TOOLKIT")
 
     def test_dialog_places(self):
         sources = ['tests/host/desktop/dialog_places_test.c',

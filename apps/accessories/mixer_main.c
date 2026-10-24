@@ -45,6 +45,7 @@ int main(int argc, char **argv)
     if (du_window_open(&x->window, &x->ui, channel, MIXER_W, MIXER_H, "Volume Control")) {
         fprintf(stderr, "mixer: desktop connection failed: %s\n", strerror(errno)); free(x); return 1;
     }
+    du_help_topic(&x->ui, "mixer");   /* G15: F1 opens this program's Help topic */
     x->window.message = on_message; x->window.user = x;
     mixer_attach(&x->app, &x->ui, &backend);
     du_timer_start(&x->ui, MX_T_POLL, 1000000000ull, 1);   /* follow changes made elsewhere (tray, reboot) */

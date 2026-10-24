@@ -122,13 +122,14 @@ void calc_event(struct du_ui *u, const struct du_event *e, void *user)
         else if (e->id == CALC_M_GROUPING) {
             a->digit_grouping = !a->digit_grouping;
             a->view_items[1].flags = a->digit_grouping ? DU_ITEM_CHECKED : 0;
-        } else if (e->id == CALC_M_HELP)
-            du_message(u, 1, "Calculator Help",
+        } else if (e->id == CALC_M_HELP) {
+            /* G15: the Calculator topic in CiukiOS Help; the box when Help cannot start. */
+            if (du_help(u, NULL)) du_message(u, 1, "Calculator Help",
                        "Type numbers and operators on the keyboard or click the keys.\n"
                        "Enter or = : result     Esc : C     Del : CE     Backspace\n"
                        "@ : square root     r : 1/x     % : percent     F9 : +/-\n"
                        "Ctrl+L MC   Ctrl+R MR   Ctrl+M MS   Ctrl+P M+", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
-        else if (e->id == CALC_M_ABOUT)
+        } else if (e->id == CALC_M_ABOUT)
             du_message(u, 2, "About Calculator", "CiukiOS Calculator - Classic computing, one woof at a time.\nStandard mode, double precision.\nCode: MIT.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         break;

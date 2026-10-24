@@ -215,6 +215,7 @@ int main(int argc, char **argv)
         free(m);
         return 1;
     }
+    du_help_topic(&m->ui, "files");   /* G15: F1 opens this program's Help topic */
     struct files_app *a = &m->app;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;

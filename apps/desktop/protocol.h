@@ -19,7 +19,8 @@
 #define DESK_V3_TOOL 2u
 #define DESK_V3_TOPMOST 4u
 #define DESK_V3_MODAL 8u
-#define DESK_V3_STYLES 15u
+#define DESK_V3_CONTEXTHELP 16u   /* G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom) */
+#define DESK_V3_STYLES 31u
 #define DESK_V3_CAPTURE 1u
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
@@ -53,6 +54,9 @@
  * WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
  * owner id,owner-generation. Unselected fields are zero; no descriptors.
  * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+ * HELP (server, G15): empty. The user pressed the "?" caption button of a
+ * window created with DESK_V3_CONTEXTHELP; the client enters What's This?
+ * (WM_SYSCOMMAND SC_CONTEXTHELP) and answers the next click itself.
  * CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
  */
 enum desk_v3_opcode {
@@ -61,7 +65,8 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    DESK_V3_PRESENT, /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    DESK_V3_HELP /* G15, server to client: the "?" caption button was pressed (payload empty) */
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u

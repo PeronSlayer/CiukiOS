@@ -488,6 +488,10 @@ static unsigned glyph_alpha(int kind, int i, int j)
     case DESK_GLYPH_RESTORE:
         return ((i>=2 && (j==0 || j==1 || (j<=4 && i==6))) ||
             (j>=2 && i<=4 && (i==0 || i==4 || j==2 || j==3 || j==6))) ? 255 : 0;
+    case DESK_GLYPH_HELP: {   /* a 7x7 question mark */
+        static const uint8_t rows[7] = {0x1c, 0x22, 0x02, 0x04, 0x08, 0x00, 0x08};   /* bit 5 = column 0 */
+        return rows[j] & (0x20 >> i) ? 255 : 0;
+    }
     case DESK_GLYPH_COLLAPSE: return j >= 1 && j <= 4 && (i - 3 <= j - 1 && 3 - i <= j - 1) ? 255 : 0;   /* roll up */
     case DESK_GLYPH_EXPAND: return j >= 2 && j <= 5 && (i - 3 <= 5 - j && 3 - i <= 5 - j) ? 255 : 0;     /* roll down */
     default: return i == 0 || j == 0 || i == 6 || j == 6 || j == 1 ? 255 : 0;                               /* zoom */
@@ -646,8 +650,8 @@ void desk_title_button_box(int x, int y, int w, unsigned button, int box[4])
     int shade[4] = {0, 0, 0, 0};
     if (mw > 0 && min[0] - x - DESK_FRAME_BORDER - 40 >= DESK_FRAME_BUTTON)
         shade[0] = min[0] - DESK_FRAME_BUTTON - 2, shade[1] = min[1], shade[2] = DESK_FRAME_BUTTON, shade[3] = min[3];
-    const int *b = button == DESK_TB_CLOSE ? close : button == DESK_TB_MINIMIZE ? min : shade;
-    if (button != DESK_TB_CLOSE && button != DESK_TB_MINIMIZE && button != DESK_TB_COLLAPSE) b = (const int[4]){0, 0, 0, 0};
+    const int *b = button == DESK_TB_CLOSE ? close : button == DESK_TB_MINIMIZE || button == DESK_TB_HELP ? min : shade;
+    if (button != DESK_TB_CLOSE && button != DESK_TB_MINIMIZE && button != DESK_TB_COLLAPSE && button != DESK_TB_HELP) b = (const int[4]){0, 0, 0, 0};
     for (int k = 0; k < 4; k++) box[k] = b[k];
 }
 
@@ -658,9 +662,9 @@ static void paint_frame(struct desk_paint *p, int x, int y, int w, int h, const 
     struct frame f = {*p, x, y, w, h, t->radius};
     int platinum = t->title_style == DESK_TITLE_PINSTRIPE;
     int active = s->active, T = DESK_FRAME_TITLE;
-    static const unsigned order[3] = {DESK_TB_CLOSE, DESK_TB_MINIMIZE, DESK_TB_COLLAPSE};
-    int boxes[3][4], right = x + w - 4;   /* right: the title area ends 4 px before the first button */
-    for (int k = 0; k < 3; k++) {
+    static const unsigned order[4] = {DESK_TB_CLOSE, DESK_TB_MINIMIZE, DESK_TB_COLLAPSE, DESK_TB_HELP};
+    int boxes[4][4], right = x + w - 4;   /* right: the title area ends 4 px before the first button */
+    for (int k = 0; k < 4; k++) {
         desk_title_button_box(x, y, w, order[k], boxes[k]);
         if (!(s->buttons & order[k])) boxes[k][2] = 0;
         if (boxes[k][2] > 0 && boxes[k][0] - 3 < right) right = boxes[k][0] - 3;
@@ -712,10 +716,10 @@ static void paint_frame(struct desk_paint *p, int x, int y, int w, int h, const 
     if (!horizontal) desk_paint_text(&tp, font, tx, y + 17, title, emboss);
     desk_paint_text(&tp, font, tx, y + 16, title, ink);
 
-    for (int k = 0; k < 3; k++) {
+    for (int k = 0; k < 4; k++) {
         if (boxes[k][2] <= 0) continue;
         int kind = order[k] == DESK_TB_CLOSE ? DESK_GLYPH_CLOSE : order[k] == DESK_TB_MINIMIZE ? DESK_GLYPH_MINIMIZE :
-                   s->collapsed ? DESK_GLYPH_EXPAND : s->maximized ? DESK_GLYPH_RESTORE : DESK_GLYPH_ZOOM;
+                   order[k] == DESK_TB_HELP ? DESK_GLYPH_HELP : s->collapsed ? DESK_GLYPH_EXPAND : s->maximized ? DESK_GLYPH_RESTORE : DESK_GLYPH_ZOOM;
         desk_paint_title_button(&f.p, boxes[k][0], boxes[k][1], boxes[k][2], boxes[k][3], kind, active,
                                 s->hot == order[k], s->pressed == order[k]);
     }

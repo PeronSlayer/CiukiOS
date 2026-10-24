@@ -34,6 +34,7 @@ struct u32_prop {
 struct u32_window {
   HWND handle, parent, owner;
   DWORD tid, pid, style, exstyle, id;
+  DWORD help_id; /* G15: SetWindowContextHelpId, reported in HELPINFO.dwContextId */
   WNDPROC proc;
   HINSTANCE instance;
   intptr_t userdata;
@@ -211,6 +212,11 @@ void u32_controls_register(void);
 int u32_dialog_long(HWND, int, LONG *, BOOL);
 void u32_classic_destroy(HWND);
 LRESULT u32_classic_default(HWND, UINT, WPARAM, LPARAM, BOOL *);
+/* G15 help (classic.c): WM_HELP for F1, the Help button and What's This? */
+BOOL u32_help_mode(void);              /* SC_CONTEXTHELP mode is on */
+void u32_help_end(void);               /* Esc, or after a click */
+void u32_help_click(HWND, POINT);      /* a click in that mode: WM_HELP for the control */
+LRESULT u32_help_send(HWND target, HWND item, int control, POINT screen);
 void u32_nonclient(struct u32_window *, int *, int *, int *);
 POINT u32_surface_origin(struct u32_window *);
 void u32_surface_size(struct u32_window *, UINT *, UINT *);

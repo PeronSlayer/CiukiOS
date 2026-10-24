@@ -42,11 +42,11 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "b46e3cc28c49d9f171e433dc001d0af13c3392e6e76fa64411aecc264d89d5e5",
-    "ciuki-blue-dialogs.ppm": "33fb8b95d24597a632f58a4419617e05fb9bcd7ce8bd9bca6a3929ea296ea15b",
+    "ciuki-blue-dialogs.ppm": "d36df937eee5e1f62717e67ad556eda73550427639103408dbe128edf2524ccf",
     "ciuki-blue-tray-disabled.ppm": "e6448c5e6cff1af18be71510d8edc2898e309da6bf27daaf31e04f3de2551e3d",
     "ciuki-blue-tray-media.ppm": "7908574c1328c6dc007c6915f686e58e245b020552f299dc6cbb0480e9a5cf83",
     "platinum-desktop.ppm": "8748fdd63953ebd0ac92660d2d4770d26dd79ac7e2c5d05afc3d59d97564e8f6",
-    "platinum-dialogs.ppm": "e83f7300a43403fb837ccfb4d0bbf5deaa94fa06162760acec4bb1d27afb9476",
+    "platinum-dialogs.ppm": "57f5e05fb34ab31ba5484727208677cc23b63384f15ae2c2cd4a7d86c8002ddc",
     "platinum-tray-disabled.ppm": "5daa1a2a2ac41a643b565895372bdf6c541125397cec3cde3aecd0aa594a4fae",
     "platinum-tray-media.ppm": "0f68811b59e9f824f299017d3895141bb6a927f4efd456f59d7f3db04aa397df"
 }

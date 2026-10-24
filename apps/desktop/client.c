@@ -850,6 +850,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                         !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
         int install=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"install") && p.argument[0];
+        /* G15: every program's F1 and Help menu opens CiukiOS Help (topic:<id> or no argument). */
+        int help_open = p.opcode == DESK_LAUNCH && !c->taskman && !strcmp(p.title, "help") && desk_help_argument(p.argument);
         int terminal = c->program == DESK_APP_TERMINAL;
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
@@ -863,7 +865,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
-        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
+        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !help_open ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :
@@ -1232,6 +1234,30 @@ int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
         if (!d->terminate || (d->terminate(pid,SIGTERM) && errno!=ESRCH)) return -EPERM;
     }
     return 0;
+}
+/* G15: the argument of a client's request for CiukiOS Help: none, or
+ * "topic:" and a lower-case topic id (apps/accessories/help_topics.c). */
+/* G15: the "?" caption button of a DESK_V3_CONTEXTHELP window was pressed:
+ * the client starts What's This? (SC_CONTEXTHELP). Only v3 clients ask for the style. */
+void desk_context_help(struct desktop *d, int index)
+{
+    if (index<0 || index>=DESK_CLIENTS || !d->clients[index].window) return;
+    struct desk_client *c=&d->clients[index]; struct ciuki_message m;
+    if (c->version!=DESK_V3_VERSION || !(c->v3_style&DESK_V3_CONTEXTHELP)) return;
+    desk_v3_message(&m,DESK_V3_HELP,0,0,c->v3_id,c->v3_generation);
+    desk_queue(d,index,&m);
+}
+int desk_help_argument(const char *argument)
+{
+    if (!argument[0]) return 1;
+    if (strncmp(argument, "topic:", 6)) return 0;
+    size_t n = strlen(argument + 6);
+    if (!n || n > 40) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char ch = argument[6 + i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) return 0;
+    }
+    return 1;
 }
 int desk_task_switch(struct desktop *d, uint32_t window_id)
 {

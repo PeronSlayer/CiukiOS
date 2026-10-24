@@ -16,7 +16,7 @@ static const struct du_menu_item project_menu[]={
 static const struct du_menu_item edit_menu[]={
     {"&Undo",IDE_UNDO,0x2c,DU_CTRL,0}, {"Cu&t",IDE_CUT,0x2d,DU_CTRL,0},
     {"&Copy",IDE_COPY,0x2e,DU_CTRL,0}, {"&Paste",IDE_PASTE,0x2f,DU_CTRL,0}, {"Select &all",IDE_ALL,0x1e,DU_CTRL,0}};
-static const struct du_menu_item help_menu[]={{"Developer &guide",IDE_GUIDE,DU_KEY_F1,0,0}};
+static const struct du_menu_item help_menu[]={{"Developer &guide",IDE_GUIDE,0,0,0}};
 static void failure(struct ide_app *a,int r)
 {
     char text[256]; snprintf(text,sizeof(text),"%s (error %d)",strerror(r<0 ? -r : r),r<0 ? -r : r);
