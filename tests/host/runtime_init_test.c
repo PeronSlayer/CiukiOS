@@ -248,6 +248,7 @@ void storage_setup_media(struct storage *s, struct ata_device *d[STORAGE_DISKS])
 void storage_setup_records(struct ata_device *d[STORAGE_DISKS])
 { CHECK(setup_requested && d[0] && !d[0]->write_commands && system_storage.volumes[4].present); setup_record_calls++; }
 #include "../../src/kernel/core/init.c"
+#include <ciuki/system_settings.h>   /* G30b: the pagefile policy reads system_performance (weak) */
 #include "../../build/host/runtime_storage_init.inc"
 static struct storage host_storage;
 struct storage *storage_get(void) { return &host_storage; }

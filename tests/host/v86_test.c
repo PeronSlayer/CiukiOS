@@ -1690,7 +1690,11 @@ static void test_apm_probe(void)
         CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);
         r.ebx = 0x8000;
         CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);
-        const unsigned denied[] = {0x52ff,0x5310,0x537f,0x5381,0x15300};
+        /* G11b: 5310h (Get Capabilities) is allowed for the standby qualification. */
+        r = (struct biosvm_regs){.interrupt=0x15, .eax=0x5310};
+        CHECK(!biosvm_apm_call(&r, 25) && request_ms == 25);
+        before = enters;
+        const unsigned denied[] = {0x52ff,0x5311,0x537f,0x5381,0x15300};
         for (unsigned i=0; i<sizeof(denied)/sizeof(denied[0]); i++) {
             r = (struct biosvm_regs){.interrupt=0x15, .eax=denied[i]};
             CHECK(biosvm_apm_call(&r,100) == -V86_EPERM && enters == before);

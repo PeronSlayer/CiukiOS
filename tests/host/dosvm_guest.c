@@ -144,6 +144,11 @@ static unsigned debug_watch(uint32_t lin, unsigned n, bool write)
 }
 uint8_t arch_cpu_family(void) { return 6; }
 #include "../../src/kernel/vm/dosvm_internal.h"
+/* G5b: the DOS clipboard upcall resolves its client process and copies
+ * through user memory; the guest-execution harness never posts a request. */
+struct process *proc_find(uint32_t pid) { (void)pid; return NULL; }
+int copy_from_user(void *dst, uint32_t src, uint32_t bytes) { (void)dst; (void)src; (void)bytes; return -EFAULT; }
+int copy_to_user(uint32_t dst, const void *src, uint32_t bytes) { (void)dst; (void)src; (void)bytes; return -EFAULT; }
 #include "dosvm_fullscreen_stubs.inc"
 uint32_t pmm_alloc(void)
 {

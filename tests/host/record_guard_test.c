@@ -52,6 +52,8 @@ void bootlog_capture_ring(const char *s, size_t n) { CHECK(s && n); periodic_cap
 #include "../../src/kernel/lib/fmt.c"
 void bootlog_capture_verbose(const char *s, size_t n) { CHECK(s && n);verbose_captures++; }
 #include "../../src/kernel/core/output.c"
+/* G13: the double-fault path ends on the fatal screen (core/fatal.c, not linked here). */
+__attribute__((noreturn)) void fatal_screen(const struct fatal_report *r) { (void)r; abort(); }
 
 int main(void)
 {
