@@ -2,6 +2,7 @@
  * One settings hierarchy for the panel, Start and tray shortcuts. */
 #ifndef CIUKI_SETTINGS_CATALOG_H
 #define CIUKI_SETTINGS_CATALOG_H
+#define DESK_SETTINGS_SAVER_PREVIEW 10u /* kind 0..2, full-screen until input */
 #define DESK_SETTINGS_PROGRAMS 9u /* values zero; program and launcher inventory changed */
 #define DESK_SETTINGS_DISPLAY_PREVIEW 8u /* mode id; Control Panel owns persistence */
 #define DESK_SETTINGS_OPEN_POWER 7u /* values zero; open the shell confirmation */

@@ -5,6 +5,7 @@
 #include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
 #include "firstboot.h"
+#include "startup.h"
 #include "sound_storage.h"
 #include "media_notice.h"
 #include "settings_io.h"
@@ -48,6 +49,10 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+static int screen_control(struct ciuki_screen_control *q)
+{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SCREEN,CU_PTR(q),0,0,0,0); }
+static int monitor_power(int state)
+{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_DPMS,(uint32_t)state,0,0,0,0); }
 static uint64_t monotonic(void)
 {
     struct timespec t;
@@ -174,6 +179,10 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         loop_deadline(now,d->animation.started+(d->animation.step+1)*25000000ull,&wait);
     reason=PAUSE_TIMER;
     loop_deadline(now,timer,&wait);
+    if (d->shell && !d->sh.gate) {
+        loop_deadline(now,d->saver_poll ? d->saver_poll : now+1000000000ull,&wait);
+        if (d->saver_active && !d->monitor_off && d->saver_frame!=UINT64_MAX) loop_deadline(now,d->saver_frame,&wait);
+    }
     reason=PAUSE_PING;
     for (int i=0;i<DESK_CLIENTS;i++) {
         const struct desk_client *c=&d->clients[i];
@@ -915,6 +924,8 @@ static int32_t last_ec_preference=-1;
  * before a shutdown; one registry write per burst. */
 #define MASTER_QUIET_NS 3000000000ull
 static int32_t ec_candidate=-1;
+/* fx-26: mixer change readiness, see mixer_poll (-1 unknown, 1 on, 0 off). */
+static int mixer_events=-1;
 static uint64_t ec_candidate_ns;
 static struct ciuki_mixer_master ec_candidate_master;
 static int master_candidate_save(int fd);
@@ -1339,10 +1350,11 @@ static struct {
     unsigned requested, completed;
     int started, failed, pending, busy, ready, stopping, observed, ok;
     int blocking; /* completion wake installed: the UI takes the short mailbox lock, else trylock */
+    int fd;       /* fx-26: the worker's /dev/media description, polled by the service loop (-1 none) */
     unsigned commit;
     int confirm_pending, rescan, choice, always;
     struct ciuki_media_volume confirmation;
-} media_worker = {.lock=PTHREAD_MUTEX_INITIALIZER, .changed=PTHREAD_COND_INITIALIZER};
+} media_worker = {.lock=PTHREAD_MUTEX_INITIALIZER, .changed=PTHREAD_COND_INITIALIZER, .fd=-1};
 /* With a completion wake the mailbox lock is short (device queries run outside it) and a
  * failed trylock would strand a result nothing wakes the loop to collect; without one
  * (host harnesses) a contended mailbox is deferred, never waited on. */
@@ -1404,6 +1416,7 @@ static void *media_run(void *arg)
         struct ciuki_media_volume volumes[26]={0};
         struct ciuki_media_cd_state cd_states[4]={0};
         observer_open(&fd,"/dev/media");
+        __atomic_store_n(&media_worker.fd,fd,__ATOMIC_RELEASE);
         int observed=fd>=0 && !ciuki_devctl(fd,MEDIA_GET_STATE,&state,sizeof(state));
         int ok=observed;
         for (unsigned i=3;ok && i<26;i++) {
@@ -1414,7 +1427,7 @@ static void *media_run(void *arg)
             cd_states[i]=(struct ciuki_media_cd_state){.version=1,.size=sizeof(cd_states[i]),.slot=i};
             if (ciuki_devctl(fd,MEDIA_CD_STATE,&cd_states[i],sizeof(cd_states[i]))) ok=0;
         }
-        if (!ok) observer_close(&fd);
+        if (!ok) { __atomic_store_n(&media_worker.fd,-1,__ATOMIC_RELEASE); observer_close(&fd); }
         pthread_mutex_lock(&media_worker.lock);
         media_worker.state=state; memcpy(media_worker.volumes,volumes,sizeof(volumes));
         memcpy(media_worker.cd_states,cd_states,sizeof(cd_states));
@@ -1423,6 +1436,7 @@ static void *media_run(void *arg)
         desk_wake(d);
         pthread_mutex_unlock(&media_worker.lock);
     }
+    __atomic_store_n(&media_worker.fd,-1,__ATOMIC_RELEASE);
     observer_close(&fd);
     return NULL;
 }
@@ -1556,6 +1570,9 @@ static void mixer_read(struct desktop *d)
     if (fd<0 || (!refreshed && ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0)) {
         d->sh.mixer_state=-1;
         observer_close(&d->mixer_observer_fd);
+        /* fx-26: a description that cannot be read would stay readable:
+         * back to the 250 ms observation rather than a busy loop. */
+        if (fd>=0 && mixer_events>0) mixer_events=0;
     }
     else {
         d->sh.mixer_state=d->mixer_fd>=0 ? 2 : 1;
@@ -1586,11 +1603,57 @@ static void mixer_write(struct desktop *d)
         desk_shell_notify_error(d,"Volume change failed",e);
     }
 }
+/* fx-26: the kernel reports master changes through poll() on the mixer
+ * description (POLLIN until it is read again; Windows 98: the mixer driver's
+ * MM_MIXM_CONTROL_CHANGE to the tray's mixerOpen callback window), so a key,
+ * a refresh or another program's change is read on the loop turn it wakes
+ * and drawn on the next frame. -1 not yet known, 1 reported, 0 the kernel
+ * refuses (POLLNVAL): the 250 ms observation remains the fallback. With
+ * events the only deadline left is the quiet-period save of a key-applied
+ * master (MASTER_QUIET_NS after the last change, retried every 250 ms while
+ * the settings writer is busy). */
+static int mixer_watch_fd(const struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || d->power.state || !mixer_events) return -1;
+    return d->mixer_fd>=0 ? d->mixer_fd : d->mixer_observer_fd;
+}
 static void mixer_poll(struct desktop *d,uint64_t now,uint64_t *next)
 {
-    if (d->shell && !d->sh.gate && !d->power.state && now>=*next) {
+    if (!d->shell || d->sh.gate || d->power.state) return;
+    if (mixer_events>0) {
+        if (ec_candidate<0 || ec_candidate==last_ec_preference) { *next=UINT64_MAX; return; }
+        uint64_t due=ec_candidate_ns+MASTER_QUIET_NS;
+        if (*next==UINT64_MAX || *next<due) *next=due;
+        if (now>=*next) { *next=now+250000000ull; d->sh.want_reload|=4; }
+        return;
+    }
+    if (now>=*next) {
         *next=now+250000000ull;
         d->sh.want_reload|=4;
+    }
+}
+/* fx-26: the media worker's description is readable after a drive was
+ * published or withdrawn (WM_DEVICECHANGE); polled only while the worker is
+ * idle, so a pending query never spins the loop. */
+static int media_events=-1; /* as mixer_events: 0 after a POLLNVAL (no kernel readiness) */
+static int media_watch_fd(const struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || d->power.state || !media_worker.started || !media_events) return -1;
+    if (pthread_mutex_trylock(&media_worker.lock)) return -1;
+    int idle=!media_worker.pending && !media_worker.busy && !media_worker.ready;
+    pthread_mutex_unlock(&media_worker.lock);
+    return idle ? __atomic_load_n(&media_worker.fd,__ATOMIC_ACQUIRE) : -1;
+}
+/* After poll(): what the two watch entries reported. */
+static void watch_result(struct desktop *d,int mixer_revents,int media_revents)
+{
+    if (mixer_revents>=0) {
+        if (mixer_revents&POLLNVAL) mixer_events=0;
+        else { if (mixer_events<0) mixer_events=1; if (mixer_revents&POLLIN) d->sh.want_reload|=4; }
+    }
+    if (media_revents>=0) {
+        if (media_revents&POLLNVAL) media_events=0;
+        else if (media_revents&POLLIN) { media_events=1; media_worker.rescan=1; d->sh.want_reload|=32; }
     }
 }
 static void system_read(struct desktop *d)
@@ -1888,6 +1951,7 @@ static void shell_service(struct desktop *d)
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
             sh->cfg.display_mode = confirmed;
+            desk_saver_config(d);
             /* Explicit desktop Refresh also updates the launch inventory;
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
@@ -1953,6 +2017,7 @@ static void shell_service(struct desktop *d)
     }
     desktop_wait("shell-done");
 }
+__attribute__((weak)) int desk_startup_begin(int skip) { (void)skip; return -ENOSYS; }
 /* Optional f5-07A/f5-08 adapters. Until integrated, operations fail explicitly. */
 __attribute__((weak)) int ciuki_win32_shell_launch(const struct desk_launch_record *record)
 { (void)record; return -ENOSYS; }
@@ -2377,7 +2442,8 @@ int main(int argc, char **argv)
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); du_clip_bind(desk_clip_local,d); d->display=display; d->input=input;
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
-    d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
+    d->time_ns=monotonic;
+    d->screen_control=screen_control; d->monitor_power=monitor_power; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
     d->accel_info=ciuki_display_accel_info;
     d->engine_info=ciuki_display_engine_info;
@@ -2417,6 +2483,7 @@ int main(int argc, char **argv)
         if ((survivor_pid=spawn_demo(d,"none",1))<0) return gate_setup_error(gate,GATE_SETUP_SURVIVOR,errno);
         gate_report(d,CU_PTR(control),0,survivor_pid,0,0);
     }
+    desk_saver_config(d);
     int victim_pid = -1, completed = 0;
     uint64_t next_victim = 0;
     int input_reported = 0, display_reported = 0;
@@ -2425,6 +2492,10 @@ int main(int argc, char **argv)
     uint64_t report_deadline=0, next_input_report=0;
     unsigned reported_progress=0;
     int holding=0, shifted=0, startup_sound=0, accel_noticed=0;
+    d->startup.done=gate || test || fullscreen_test;
+#ifdef __i386__
+    if (devices.boot_flags & ((1u<<0)|(1u<<6))) d->startup.skip=1; /* safe/test boot */
+#endif
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
@@ -2599,6 +2670,10 @@ int main(int argc, char **argv)
         }
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
         desktop_stage(STALL_LAUNCH);
+        if (desk_startup_due(&d->startup,d->presents!=0,!fifo_count,now)) {
+            int error=desk_startup_begin(d->startup.skip);
+            if (error) desk_shell_notify_error(d,"Startup programs unavailable",-error);
+        }
         launch_pending(d);
         launch_service(d);   /* fx-8: bind or report spawns the launcher worker completed */
         desktop_stage(STALL_SHELL);
@@ -2755,21 +2830,30 @@ int main(int argc, char **argv)
          * work, never the normal desktop's idle policy. */
         if (gate && wait>10000000ull) wait=10000000ull;
         if (cache_more && wait>1000000ull) { wait=1000000ull; pause_reason=PAUSE_CACHE; }
+        if (!d->startup.done && d->startup.deadline && d->startup.deadline>sleep_now &&
+            d->startup.deadline-sleep_now<wait) wait=d->startup.deadline-sleep_now;
         loop_turn(wait);
         if (d->shell && !gate && !d->power.state) {
             /* Shell clock/directory snapshots have a genuine one-second deadline. */
             uint64_t second=1000000000ull-sleep_now%1000000000ull;
             if (second<wait) wait=second;
         }
-        struct pollfd fds[DESK_CLIENTS+2]; unsigned nfds=0;
+        struct pollfd fds[DESK_CLIENTS+4]; unsigned nfds=0;
         fds[nfds++]=(struct pollfd){d->input,POLLIN,0};
         fds[nfds++]=(struct pollfd){desktop_completion.fd[0],POLLIN,0};
         desk_clip_tick(d);
         for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0 && !d->clients[i].spawn_pending)
             fds[nfds++]=(struct pollfd){d->clients[i].channel,POLLIN | (d->clients[i].tx_count ? POLLOUT : 0),0};
+        /* fx-26: state-change watches (mixer master, drive namespace). */
+        unsigned watched=nfds; int mixer_at=-1, media_at=-1;
+        int watch=gate ? -1 : mixer_watch_fd(d);
+        if (watch>=0) { mixer_at=(int)nfds; fds[nfds++]=(struct pollfd){watch,POLLIN,0}; }
+        watch=gate ? -1 : media_watch_fd(d);
+        if (watch>=0) { media_at=(int)nfds; fds[nfds++]=(struct pollfd){watch,POLLIN,0}; }
         int ready=poll(fds,nfds,du_wait_ms(sleep_now,wait==UINT64_MAX ? UINT64_MAX : sleep_now+wait));
         if (ready<0 && errno!=EINTR) return 1;
-        for (unsigned i=0;i<nfds;i++) if (fds[i].revents&POLLNVAL) return 1;
+        if (ready>=0) watch_result(d,mixer_at>=0 ? fds[mixer_at].revents : -1,media_at>=0 ? fds[media_at].revents : -1);
+        for (unsigned i=0;i<watched;i++) if (fds[i].revents&POLLNVAL) return 1;
         if (fds[1].revents&(POLLERR|POLLHUP)) return 1;
         if ((fds[1].revents&POLLIN) && du_completion_take(&desktop_completion)) return 1;
     }

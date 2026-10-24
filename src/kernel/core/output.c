@@ -11,6 +11,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/blackbox.h>
 #include <ciuki/ledger.h>
+#include <ciuki/fatal.h>
 #pragma weak blackbox_capture
 #pragma weak blackbox_panic
 
@@ -242,6 +243,8 @@ void panic(const char *fmt, ...)
     va_start(ap, fmt);
     kvsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    char reason[sizeof(msg)];
+    memcpy(reason, msg, sizeof(msg));     /* the screen keeps the spaces */
     for (char *p = msg; *p; p++)
         if (*p == ' ')
             *p = '_';
@@ -251,7 +254,9 @@ void panic(const char *fmt, ...)
     console_set_color(0xFFFFFF, 0x800000);
     kputs_raw("Ciuki VMM panic: halting.\n");
     rec_emit_panicsafe("panic", "PANIC", extra);   /* last output */
-    halt_forever();
+    /* G13: after the records, the console shows the formatted screen. */
+    struct fatal_report report = { .frame = false, .task = g_current ? g_current->name : "boot", .reason = reason };
+    fatal_screen(&report);
 }
 
 void panic_frame(struct trap_frame *tf, const char *why)
@@ -275,7 +280,9 @@ void panic_frame(struct trap_frame *tf, const char *why)
     rec_emit_panicsafe("panic", "DATA", regs);
     kputs_raw("Ciuki VMM panic: halting.\n");
     rec_emit_panicsafe("panic", "PANIC", extra);   /* last output */
-    halt_forever();
+    struct fatal_report report = { .frame = true, .vector = tf->vector, .error = tf->err, .cs = tf->cs,
+                                   .eip = tf->eip, .cr2 = cr2, .task = g_current ? g_current->name : "boot" };
+    fatal_screen(&report);
 }
 
 /* Double fault: entered through the task gate on a private TSS. */
@@ -291,5 +298,7 @@ void df_handler(void)
     console_set_color(0xFFFFFF, 0x800000);
     kputs_raw("Ciuki VMM double fault: halting.\n");
     rec_emit_panicsafe("panic", "PANIC", extra);   /* last output */
-    halt_forever();
+    struct fatal_report report = { .frame = true, .vector = 8, .error = 0, .cs = g_tss.cs,
+                                   .eip = g_tss.eip, .cr2 = read_cr2(), .task = g_current ? g_current->name : "boot" };
+    fatal_screen(&report);
 }
