@@ -213,7 +213,9 @@ static void draw_combo_list(struct du_ui *u)
         int hot = i == u->combo_hot;
         if (hot) du_fill(c, row, DU_SELECT);
         struct du_rect old = c->clip; c->clip = du_intersection(old, row);
-        du_text(c, row.x + 3, row.y + (DU_ROW - DU_GLYPH_H) / 2, w->items[i].text[0] ? w->items[i].text[0] : "", hot ? DU_SELECT_INK : DU_INK);
+        int tx = row.x + 3;
+        if (w->items[i].icon16) { du_icon_blit(c, tx, row.y + (DU_ROW - 16) / 2, w->items[i].icon16, 16, DU_ICON_NORMAL); tx += 20; }   /* Look in lists drives and folders with their icons */
+        du_text(c, tx, row.y + (DU_ROW - DU_GLYPH_H) / 2, w->items[i].text[0] ? w->items[i].text[0] : "", hot ? DU_SELECT_INK : DU_INK);
         c->clip = old;
     }
     if (bar) { struct du_sb s = combo_sb(u, w); du_sb_draw(c, &s, u->combo_pressed == 3 ? 3 : 0); }

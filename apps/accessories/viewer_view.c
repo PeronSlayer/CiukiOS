@@ -11,7 +11,7 @@
 #include <strings.h>
 
 #define TOOLBAR_Y 22
-#define TOOLBAR_H 26
+#define TOOLBAR_H 30
 #define STATUS_H 20
 #define AREA_BG 0x3c4b52u
 
@@ -86,10 +86,15 @@ static void status(struct viewer_app *a)
 void viewer_layout(struct viewer_app *a)
 {
     struct du_canvas *c = &a->ui->canvas;
-    static const int ids[6] = { V_PREV, V_NEXT, V_OUT, V_IN, V_FIT, V_ACTUAL };
-    static const int widths[6] = { 70, 70, 70, 70, 60, 84 };
-    int x = 4;
-    for (int i = 0; i < 6; i++) { du_get(a->ui, ids[i])->box = (struct du_rect){x, TOOLBAR_Y + 2, widths[i], TOOLBAR_H - 4}; x += widths[i] + 4 + (i == 1 || i == 3) * 8; }
+    /* Icon tool bar (Win98 Image Preview style): Open | Previous Next | Zoom Out Zoom In | Best Fit Actual Size. */
+    static const int ids[7] = { V_OPEN, V_PREV, V_NEXT, V_OUT, V_IN, V_FIT, V_ACTUAL };
+    static const int seps[7] = { 1, 0, 1, 0, 1, 0, 0 };
+    du_get(a->ui, V_BAND)->box = (struct du_rect){0, TOOLBAR_Y, c->width, TOOLBAR_H};
+    int x = 4, sep_index = 0;
+    for (int i = 0; i < 7; i++) {
+        du_get(a->ui, ids[i])->box = (struct du_rect){x, TOOLBAR_Y + 2, 28, TOOLBAR_H - 4}; x += 28;
+        if (seps[i]) { du_get(a->ui, V_TSEP1 + sep_index)->box = (struct du_rect){x + 2, TOOLBAR_Y + 4, 2, TOOLBAR_H - 8}; x += 7; sep_index++; }
+    }
     du_get(a->ui, V_STATUS)->box = (struct du_rect){0, c->height - STATUS_H, c->width, STATUS_H};
 }
 
@@ -257,9 +262,17 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     a->menus[2] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 3;
     struct du_rect zero = {0, 0, 0, 0};
-    du_add(u, DU_BUTTON, V_PREV, zero, "< &Prev"); du_add(u, DU_BUTTON, V_NEXT, zero, "&Next >");
-    du_add(u, DU_BUTTON, V_OUT, zero, "Zoom -"); du_add(u, DU_BUTTON, V_IN, zero, "Zoom +");
-    du_add(u, DU_BUTTON, V_FIT, zero, "&Fit"); du_add(u, DU_BUTTON, V_ACTUAL, zero, "&Actual");
+    du_add(u, DU_TOOLBAR, V_BAND, zero, "");
+    static const struct { int id; const char *icon, *tip; } tools[7] = {
+        {V_OPEN, "document-open", "Open"}, {V_PREV, "go-previous", "Previous Image"}, {V_NEXT, "go-next", "Next Image"},
+        {V_OUT, "list-remove", "Zoom Out"}, {V_IN, "list-add", "Zoom In"},
+        {V_FIT, "view-fullscreen", "Best Fit"}, {V_ACTUAL, "image-x-generic", "Actual Size"} };
+    for (int i = 0; i < 7; i++) {
+        struct du_widget *b = du_add(u, DU_TOOLBUTTON, tools[i].id, zero, "");
+        b->icon = du_icon_argb(tools[i].icon, 22); b->icon_size = b->icon ? 22 : 0;
+        du_set_tip(b, tools[i].tip);
+    }
+    du_add(u, DU_SEPARATOR, V_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, V_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, V_TSEP3, zero, "");
     du_add(u, DU_STATUS, V_STATUS, zero, "");
     viewer_layout(a); status(a);
     u->focus = -1;
@@ -304,7 +317,7 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
                 du_file_open(u, V_D_SAVE, &o);
             }
             break;
-        case V_M_OPEN: du_file_dialog(u, V_D_OPEN, 0, "Open", a->folder[0] ? a->folder : "/", "", a->fs->list, a->fs->ctx); break;
+        case V_M_OPEN: case V_OPEN: du_file_dialog(u, V_D_OPEN, 0, "Open", a->folder[0] ? a->folder : "/", "", a->fs->list, a->fs->ctx); break;
         case V_M_PREV: case V_PREV: step(a, -1); break;
         case V_M_NEXT: case V_NEXT: step(a, 1); break;
         case V_M_IN: case V_IN: zoom(a, viewer_zoom_step(effective_zoom(a), 1)); break;

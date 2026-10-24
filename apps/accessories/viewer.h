@@ -52,7 +52,7 @@ struct viewer_app {
 };
 enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, V_M_FIT, V_M_ABOUT, V_M_PAGESETUP, V_M_PRINT, V_M_RIGHT, V_M_LEFT, V_M_TURN, V_M_WALL_CENTER, V_M_WALL_TILE, V_M_WALL_STRETCH,
        V_M_SAVE_AS = 30, V_D_SAVE,
-       V_STATUS = 100, V_PREV, V_NEXT, V_IN, V_OUT, V_FIT, V_ACTUAL, V_D_OPEN = 200, V_D_INFO };
+       V_STATUS = 100, V_PREV, V_NEXT, V_IN, V_OUT, V_FIT, V_ACTUAL, V_OPEN, V_BAND, V_TSEP1, V_TSEP2, V_TSEP3, V_D_OPEN = 200, V_D_INFO };
 int viewer_attach(struct viewer_app *, struct du_ui *, const struct viewer_fs *);
 void viewer_detach(struct viewer_app *);
 void viewer_poll(struct viewer_app *);

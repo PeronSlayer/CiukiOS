@@ -369,6 +369,17 @@ static void file_dialog(void)
     assert(!strcmp(du_combo_text(type), "Text Files (*.txt)") && type->count == 3);
     assert(dlg(ID_NEWDIR) && dlg(ID_NEWDIR)->tip[0] && !strcmp(dlg(ID_UP)->tip, "Up One Level"));
     frame("file-save");
+    /* Look in is an editable drop-down: the folder hierarchy (indented) then the other places; a pick navigates. */
+    struct du_widget *look = dlg(ID_FOLDER);
+    assert(look->kind == DU_COMBO && look->editable && look->count >= 3 && look->value == 1 && !strcmp(look->text, "/docs"));
+    assert(!strcmp(look->items[1].text[0], "  docs") && look->items[1].icon16 && look->items[0].icon16);
+    du_combo_drop(&u, look, 1); assert(u.combo_open == look); frame("file-lookin-open"); du_combo_drop(&u, look, 0);
+    u.dialog.focus = (int)(look - u.dialog.items); key(DU_KEY_UP);
+    assert(!strcmp(u.dialog.folder, "/") && !strcmp(look->text, "/") && look->value == 0);
+    du_set_text(look, "/docs"); key(DU_KEY_ENTER); assert(!strcmp(u.dialog.folder, "/docs") && look->value == 1);
+    u.dialog.focus = (int)(name - u.dialog.items);
+    /* The view and navigation buttons are icon tool buttons with tooltips. */
+    assert(dlg(ID_UP)->kind == DU_TOOLBUTTON && dlg(ID_UP)->icon && dlg(ID_VLIST)->kind == DU_TOOLBUTTON && dlg(ID_VICONS)->tip[0] && dlg(ID_VDETAILS)->tip[0]);
     /* Changing the type with the keyboard re-filters and reports the index with the result. */
     u.dialog.focus = (int)(type - u.dialog.items);
     key(DU_KEY_DOWN); assert(type->value == 1 && list->count == 2 && !strcmp(list->items[1].text[0], "b.log"));
