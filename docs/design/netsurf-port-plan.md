@@ -193,6 +193,10 @@ for the first milestone; there is no fabricated PNG/JPEG pin or source size.
 | JPEG | libjpeg C API; IJG notice/acknowledgment (or separately audited alternative) | absent; disabled M1/M2; [IJG source directory](https://ijg.org/files/) lists `jpegsrc.v10.tar.gz` at **1,074 KB (rounded)**; candidate only, exact bytes/hash and compatibility review remain before M3 adoption |
 | SVG/RISC OS sprite/WebP/JXL | extra parser/codec costs | off M1–M4 unless separately directed; supplied SVG/sprite code is audited, not automatically selected |
 
+**Superseded by fx-24 (2026-10-23):** PNG, JPEG, WebP and SVG are enabled
+as in upstream's framebuffer front end; see *Content handlers, rendering and
+cost (fx-24)* below for the pins, the handler table and the rendering fixes.
+
 Host tools are a separate dependency graph. The pinned framebuffer Makefile
 always generates embedded toolbar/pointer/throbber arrays via
 `tools/convert_image.c` using **host libpng**, independent of
@@ -630,6 +634,123 @@ drops only a client that read nothing for 5 s with a full queue); input past
 buttons are released afterwards like a focus loss. Held input is processed
 when the layout ends: the bound on input latency is the layout time, at most
 10 s for a top-level document and 75 ms for anything else.
+
+### Content handlers, rendering and cost (fx-24, 2026-10-23)
+
+Evidence: T23 trial of preview `f441c5bd` (private `legacy/local/physical/
+f441c5bd/`): `NETSURF.LOG` `fetches=92 fetch_ok=90`, `remote_max_us=3567000`;
+serial: the encyclopedia main page (268,370 bytes), its stylesheet
+(`load.php`, 200) and its thumbnails (200) were fetched; the slow layout was
+`pass=2 font_measures=1562 font_measure_us=632000 width_hits=1201
+measured_bytes=20938`, while `[cpu] top=netsurf#65:442k302s7` (NetSurf had
+44.2 % of the CPU, 30.2 points of it, i.e. 68 %, in the kernel). The host build lays out the same page with
+the same counters (1562/1201/20938), so the author CSS *was* applied on the
+T23; what was missing were the images, and the time went largely to the
+kernel.
+
+Upstream reference: `frontends/framebuffer/Makefile.defaults` of NetSurf 3.11
+(`NETSURF_USE_JPEG := YES`; `PNG`, `GIF`, `BMP`, `WEBP`, `NSSVG`,
+`ROSPRITE` `:= AUTO`, i.e. on when the library is present),
+`content/handlers/image/image.c` (`image_init` registers BMP, GIF, ICO, JPEG,
+JPEG XL, PNG, sprite, SVG, WebP when compiled), `frontends/framebuffer/
+framebuffer.c` (the plotter table; `framebuffer_plot_path` logs "path
+unimplemented"). Documentation: <https://www.netsurf-browser.org/documentation/>,
+<https://www.netsurf-browser.org/developers/>. SVG rules followed by the path
+plotter and the viewBox fix: SVG 1.1 painting (11.3 `fill-rule`,
+<https://www.w3.org/TR/SVG11/painting.html>), paths (8.3.3 closepath,
+<https://www.w3.org/TR/SVG11/paths.html>), coordinate systems (7.7 `viewBox`,
+<https://www.w3.org/TR/SVG11/coords.html>).
+
+| Content | Upstream framebuffer | Before fx-24 | fx-24 |
+| --- | --- | --- | --- |
+| `text/html` (libhubbub, libdom) | yes | yes | yes |
+| `text/css` (libcss): `<link rel=stylesheet>`, `@import`, `<style>`, `style=` | yes | yes | yes (host test) |
+| `text/plain` | yes | yes | yes |
+| `image/gif` (libnsgif) | yes | yes | yes |
+| `image/bmp`, `image/x-icon` (libnsbmp) | yes | yes | yes |
+| `image/png` (libpng 1.6.59) | yes | **no** (f6-14 deferred) | yes |
+| `image/jpeg` (libjpeg-turbo 3.1.4.1, C only) | yes | **no** | yes, DCT-scaled when larger than the bitmap admission |
+| `image/webp` (libwebp 1.6.0 decoder) | yes | **no** | yes |
+| `image/svg+xml` (libsvgtiny 0.1.8, Expat 2.9.0 XML binding) | yes, but paths not drawn | **no** | yes, paths drawn (non-zero fill, strokes, anti-aliased) |
+| `image/jxl` (libjxl, C++) | when present | no | no (gap: no C++ runtime in the SDK) |
+| RISC OS sprite | when present | no | no (not a web format) |
+
+Fetching and attachment follow upstream unchanged: stylesheets from
+`<link>` and `@import` are fetched by the HTML content and box conversion
+waits for them; `<img>` is fetched speculatively when the element enters the
+DOM and again by box construction (one shared low-level cache object);
+background images through the computed style. A fetch whose media type no
+handler accepts is aborted after its first slice, which is why the trial's
+thumbnails ended `stage=done code=200` at about 12 KB.
+
+Rendering defects fixed (patch 0009 and port files):
+
+1. **Paths** (`sdk/netsurf/port/path.c`): NetSurf path commands are mapped
+   through the SVG transform, Béziers flattened in device space, fills use
+   SVG's default non-zero rule (SVG 1.1, 11.3), strokes are the union of one
+   quadrilateral per segment plus round joins; each fill/stroke becomes an
+   8-bit coverage mask (exact horizontally, 4 rows per pixel), clipped and
+   blended with `nsfb_plot_glyph8`. `NS_TRANSPARENT` disables fill/stroke as
+   in the GTK front end (svg.c leaves the style types unset).
+2. **Clip outside the surface**: libnsfb refuses such a rectangle and
+   `framebuffer_plot_clip` returned `NSERROR_INVALID`; the knockout plotter
+   handed that error to the next flushing operation, so an unrelated SVG or
+   bitmap redraw "failed" and was drawn as the pink broken-object box. The
+   front end now treats it as an empty clip until the next clip, as cairo
+   and GDI do.
+3. **JPEG larger than the bitmap admission** (1024x1024 pixels, 4096 per
+   side, fx-14): decoded at 1/2, 1/4 or 1/8 in the DCT domain instead of
+   being refused (a broken-object box before).
+4. **SVG with only a viewBox** (typical logos): libsvgtiny took the missing
+   width/height from the viewport, which NetSurf gives as 0x0 before layout
+   and width x 1 for block-level objects; the drawing was 1 px high and then
+   stretched. The viewBox aspect ratio now fills in the missing size.
+5. Upstream bug: the broken-object glyph length used `sizeof` of a pointer.
+6. The decoded-bitmap cache is sized from the image ledger (3/4 of it)
+   instead of a quarter of the 2 MiB `memory_cache_size` (512 KiB), which
+   dropped every off-screen bitmap of an illustrated page.
+7. Local-history thumbnails are not made: the CiukiOS chrome has no
+   local-history view, and each history add/update cost a scaled redraw of
+   the page and 46 KB of the image ledger.
+
+Cost (the second half of the trial's complaint):
+
+1. **Allocator and stdio locks were system calls.** newlib's `malloc`,
+   `free` and stdio locks are SDK pthread mutexes, and
+   `pthread_mutex_unlock` always issued `WAKE_WORD`. One article load makes
+   about 2.7 million allocator calls; each became a kernel entry with an
+   address-space walk (`ww_bind`). The unlock now wakes only a registered
+   waiter, race-free under SMP by Dekker ordering (full-barrier release
+   before reading the waiter count; full-barrier registration before the
+   kernel compares the owner word). This applies to every native program.
+2. **Heap growth**: newlib extends the heap in 4 KiB steps (`DEFAULT_TOP_PAD`
+   0) and the kernel makes each `brk` extension a separate extent with its
+   own memory object, walked linearly by faults and mapping calls. NetSurf
+   now sets a 1 MiB top pad and a 4 MiB trim threshold (`mallopt`).
+3. **Clock reads**: the layout deadline read `clock_gettime` (a system call)
+   at every check (about 30,000 reads in one remote main-page layout pass,
+   several times more for a long article); it now reads it on a span's
+   first check and every 16th, never for an untimed layout without a
+   desktop channel; font measures are timed with the
+   time stamp counter.
+4. **Font measuring**: libfont rasterised a glyph to learn its advance and
+   scanned its 128-entry cache linearly. Measures now use a 512-entry
+   metrics cache per face (same hinted load, no rendering: identical
+   advances), Latin-1 code points skip the cmap search, bitmap lookups use
+   bucket chains, and faces without a kern table skip the kerning call.
+
+Measured on the host (snapshots of an encyclopedia main page and a long
+article, 800x600, medians of five runs): first layout pass 6.3 → 4.0 ms and
+38.6 → 22.9 ms, font measuring 3.9 → 1.9 ms and 17.7 → 8.5 ms; per load
+0.98 M and 2.66 M allocator lock releases no longer enter the kernel; a
+remote layout pass reads the clock ~1,400 instead of ~30,000 times. Style
+selection (libcss) is now the largest CPU share of a page (~25 %). T23
+estimate from the trial's own CPU accounting (user mode ≈ x87 the host):
+that main-page layout ≈ 0.3 s instead of 3.6 s, its whole first display
+≈ 4 s of CPU after the download. Details: `build/codex/fx-24-report.md`.
+Remaining kernel item: `brk` growth creates one extent per call and extent
+lists are walked linearly (`src/kernel/proc/uaddr.c`); NetSurf avoids it
+with its 1 MiB pad, other programs do not.
 
 ## Milestones and acceptance
 

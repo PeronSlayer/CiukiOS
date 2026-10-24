@@ -49,18 +49,22 @@ enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVEL
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG };
+                    SH_MENU_DRAG, SH_MENU_TASKBAR };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
-                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN,
+                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN, SH_ACT_DOS_MARK, SH_ACT_DOS_COPY, SH_ACT_DOS_PASTE, SH_ACT_DOS_QUICKEDIT,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
                  SH_ACT_LOGOFF, SH_ACT_LOCK,
-                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */ };
+                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
+                 /* G4 taskbar menu */
+                 SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
+                 SH_ACT_TASKBAR_PROPERTIES };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
-struct sh_item { char label[44]; const char *icon; uint8_t action, flags; int16_t arg; };
+/* mark: 1 + the byte of label that is the underlined access key (0 none). */
+struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
 struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
@@ -140,6 +144,13 @@ struct desk_shell {
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
     int logo_down, alt_routed, alt_used, alt_code;
+    /* G4 (KB-12, KB-13): Windows keys held (bit 0 left, bit 1 right) and the keys
+     * a Win chord consumed, whose releases are swallowed too; the keyboard
+     * focus of the taskbar (Win+Tab, Ctrl+Esc then Esc): task_pick is a client
+     * slot or DESK_CLIENTS for the Start button, task_return the window id that
+     * had the focus before; start_keyboard: the Start menu was opened by key. */
+    unsigned logo_keys; uint16_t chord[4];
+    int taskbar_key, task_pick, start_keyboard, start_focus_shown; uint32_t task_return;
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
     int want_save, want_wallpaper, want_mixer, want_power, want_reload, want_programs;
@@ -205,6 +216,9 @@ void desk_shell_notify_error(struct desktop *, const char *title, int error);
 void desk_shell_media_labels(struct desktop *, const struct ciuki_media_volume volumes[26]);
 void desk_menu_open(struct desktop *, int kind, int32_t x, int32_t y);
 void desk_menu_close(struct desktop *);
+void desk_shell_find(struct desktop *, int computer);   /* Win+F, Win+Ctrl+F, F3: Find (G7 replaces this body) */
+void desk_shell_taskbar_leave(struct desktop *);        /* the taskbar loses the keyboard focus (a window took it) */
+int desk_shell_caption_icon(struct desktop *, int client, uint64_t stamp, int menu_was_open);   /* click on the caption icon: window menu, second click closes */
 int desk_task_count(const struct desktop *);
 const char *desk_program_icon_name(const char *program);
 const char *desk_program_category(const char *program);

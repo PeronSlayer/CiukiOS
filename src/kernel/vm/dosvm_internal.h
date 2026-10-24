@@ -387,6 +387,7 @@ struct dosvm {
     unsigned console_length;
     cvga_geometry video_geometry;
     bool video_modex, video_chain4;
+    bool clipboard_mark;
     uint8_t video_dac_mask;
     uint16_t video_row_base[DOSVM_VIDEO_HEIGHT];
     uint8_t video_row_pan[DOSVM_VIDEO_HEIGHT];

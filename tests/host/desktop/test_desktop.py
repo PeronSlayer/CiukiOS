@@ -40,13 +40,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-82: intentional orb geometry, well and sphere changes in shell frames.
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
+# G4: the menus underline their access keys (the dialogs frames show menus).
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "b46e3cc28c49d9f171e433dc001d0af13c3392e6e76fa64411aecc264d89d5e5",
-    "ciuki-blue-dialogs.ppm": "33fb8b95d24597a632f58a4419617e05fb9bcd7ce8bd9bca6a3929ea296ea15b",
+    "ciuki-blue-dialogs.ppm": "52080fc9dfaf9169ea707ff625e3a9944ab3b6c690cc6456c20e24ffa251e9e2",
     "ciuki-blue-tray-disabled.ppm": "e6448c5e6cff1af18be71510d8edc2898e309da6bf27daaf31e04f3de2551e3d",
     "ciuki-blue-tray-media.ppm": "7908574c1328c6dc007c6915f686e58e245b020552f299dc6cbb0480e9a5cf83",
     "platinum-desktop.ppm": "8748fdd63953ebd0ac92660d2d4770d26dd79ac7e2c5d05afc3d59d97564e8f6",
-    "platinum-dialogs.ppm": "e83f7300a43403fb837ccfb4d0bbf5deaa94fa06162760acec4bb1d27afb9476",
+    "platinum-dialogs.ppm": "3301b55b981212981aa39174c449e35bfd8063ba5f790fcf7a4e93dac7d07570",
     "platinum-tray-disabled.ppm": "5daa1a2a2ac41a643b565895372bdf6c541125397cec3cde3aecd0aa594a4fae",
     "platinum-tray-media.ppm": "0f68811b59e9f824f299017d3895141bb6a927f4efd456f59d7f3db04aa397df"
 }
@@ -828,10 +829,12 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "autoplay", "autoplay_content", "sounds", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
+                                                                                  "clipboard", "shell", "autoplay", "autoplay_content", "sounds", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
+                 ("deskui_clipboard", posix, ROOT / "apps/libdeskui/clipboard.c"),
+                 ("deskui_clipstore", posix, ROOT / "apps/libdeskui/clipstore.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
