@@ -18,6 +18,8 @@ void cfg_defaults(struct ciuki_settings *s)
     s->wallpaper_mode = CFG_WALL_FILL;     /* the adaptive scenes are made for a centred, aspect-preserving fill */
     s->desktop_color = CFG_DESKTOP_COLOR;          /* DESK_BACKGROUND */
     s->clock_24h = 1;
+    s->taskbar_clock = 1;
+    s->quick_launch = 1;
     s->desktop_icons = 1;
     s->mouse_speed = CFG_MOUSE_NORMAL;
     s->double_click_ms = 500;
@@ -112,6 +114,8 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "clock_24h")) return flag(v, &s->clock_24h);
     if (!strcmp(key, "clock_seconds")) return flag(v, &s->clock_seconds);
     if (!strcmp(key, "desktop_icons")) return flag(v, &s->desktop_icons);
+    if (!strcmp(key, "taskbar_clock")) return flag(v, &s->taskbar_clock);
+    if (!strcmp(key, "quick_launch")) return flag(v, &s->quick_launch);
     if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
 
@@ -175,10 +179,13 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
     int n = snprintf(out, size,
         "# CiukiOS desktop settings (key=value). Written by the desktop and Control Panel.\n"
         "version=%d\ntheme=%s\nwallpaper=%s\nwallpaper_mode=%s\ndesktop_color=%06x\n"
-        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
+        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\n"
+        "taskbar_clock=%d\nquick_launch=%d\n"
+        "mouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
         CFG_VERSION, s->theme, s->wallpaper,
         cfg_mode_names[s->wallpaper_mode >= 0 && s->wallpaper_mode < CFG_WALL_MODES ? s->wallpaper_mode : 0],
         (unsigned)(s->desktop_color & 0xffffffu), !!s->clock_24h, !!s->clock_seconds, !!s->desktop_icons,
+        !!s->taskbar_clock, !!s->quick_launch,
         s->mouse_speed, s->double_click_ms,
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;

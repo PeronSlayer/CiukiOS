@@ -17,12 +17,13 @@ enum {
     C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_SOUND_LIST, C_SOUND_TEST, C_SOUND_ENABLED, C_HARDWARE, C_AUDIO,
     C_DATE, C_H24, C_SECONDS, C_TIME_NOTE1, C_TIME_NOTE2,
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
+    C_TASKBAR_CLOCK=1960, C_QUICK_LAUNCH,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "taskbar"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Taskbar & Start Menu"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
@@ -64,6 +65,10 @@ static void changed(struct cp_app *a)
     else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
+    else if (a->page==CP_TASKBAR) {
+        now.taskbar_clock=a->cfg.taskbar_clock;
+        now.quick_launch=a->cfg.quick_launch;
+    }
     static char out[CFG_TEXT_MAX];
     size_t n = cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The settings could not be saved."); return; }
@@ -347,6 +352,8 @@ static void sync(struct cp_app *a)
     if ((w = du_get(u,C_HARDWARE))) w->disabled = a->audio_testing;
     toggle_label(a, C_H24, "24-hour clock", a->cfg.clock_24h);
     toggle_label(a, C_SECONDS, "Show seconds", a->cfg.clock_seconds);
+    if ((w = du_get(u,C_TASKBAR_CLOCK))) w->value = a->cfg.taskbar_clock;
+    if ((w = du_get(u,C_QUICK_LAUNCH))) w->value = a->cfg.quick_launch;
     cp_display_sync(a);
     for (unsigned i=0;i<u->count;i++) {
         struct du_widget *v=&u->widgets[i];
@@ -755,6 +762,8 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_H24: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_24h = !a->cfg.clock_24h; save = 1; cp_tick(a); } break;
     case C_SECONDS: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_seconds = !a->cfg.clock_seconds; save = 1; cp_tick(a); } break;
+    case C_TASKBAR_CLOCK: if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) { a->cfg.taskbar_clock = !a->cfg.taskbar_clock; save = 1; } break;
+    case C_QUICK_LAUNCH: if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) { a->cfg.quick_launch = !a->cfg.quick_launch; save = 1; } break;
     default: break;
     }
     if (save && a->page == CP_DISPLAY) {
@@ -1356,6 +1365,10 @@ static void build(struct cp_app *a)
     w = add(a, DU_LISTVIEW, C_KEY, 24, 60, 220, 56, ""); w->items = a->key_items; w->count = CFG_KEYS_COUNT; list_style(w, "Layout");
     add(a, DU_LABEL, C_KEY_NOTE1, 24, 126, 452, 14, "The Run dialog uses the new layout at once; programs started");
     add(a, DU_LABEL, C_KEY_NOTE2, 24, 140, 452, 14, "afterwards receive it in CIUKI_KEYMAP.");
+    } else if (a->page == CP_TASKBAR) {
+    add(a,DU_CHECKBOX,C_TASKBAR_CLOCK,24,52,452,24,"Show the clock in the taskbar");
+    add(a,DU_CHECKBOX,C_QUICK_LAUNCH,24,84,452,24,"Show Quick Launch (Show Desktop)");
+    add(a,DU_LABEL,1970,24,126,452,42,"Start menu pins and Folder Options are managed from their shell and Files views.");
     } else if (a->page == CP_SOUNDS) {
     /* Sounds */
     add(a, DU_LABEL, C_VOL_L, 24, 44, 180, 14, "Master &volume:");

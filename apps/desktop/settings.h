@@ -14,8 +14,8 @@
 #define CFG_VERSION 1
 #define CFG_DESKTOP_COLOR 0x375564u
 #define CFG_TEXT_MAX 32768
-#define CFG_PATH_MAX 128
-#define CFG_RECENT_MAX 8
+#define CFG_PATH_MAX 256
+#define CFG_RECENT_MAX 15
 #define CFG_EXTRA_MAX 16384
 /* Wallpaper placement (wallpaper_mode). The values are the order of
  * cfg_mode_names; new modes are appended so existing files keep parsing.
@@ -33,6 +33,7 @@ struct ciuki_settings {
     int wallpaper_mode;             /* CFG_WALL_* */
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */
     int clock_24h, clock_seconds, desktop_icons;
+    int taskbar_clock, quick_launch;
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
     int double_click_ms;            /* 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */

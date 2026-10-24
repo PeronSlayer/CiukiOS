@@ -347,6 +347,7 @@ static const struct { int kind; const char *label; char key; } access_keys[] = {
     {SH_MENU_START,"Programs",'p'},{SH_MENU_START,"Documents",'d'},{SH_MENU_START,"Settings",'s'},
     {SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
     {SH_MENU_SETTINGS,"Control Panel",'c'},{SH_MENU_SETTINGS,"Task Manager",'t'},
+    {SH_MENU_SETTINGS,"Taskbar & Start Menu",'k'},
     {SH_MENU_HELP,"Keyboard Shortcuts",'k'},{SH_MENU_HELP,"About CiukiOS",'a'},
     {SH_MENU_DOCUMENTS,"My Documents",'m'},{SH_MENU_DOCUMENTS,"Clear Recent Documents",'c'},
     {SH_MENU_DESKTOP,"Arrange icons",'i'},{SH_MENU_DESKTOP,"Line up",'u'},{SH_MENU_DESKTOP,"Refresh",'f'},
@@ -465,6 +466,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (int k=0;k<CP_CATEGORIES;k++)
             item(m,cp_categories[k].label,cp_categories[k].icon,SH_ACT_SUBMENU,SH_MENU_SETTINGS_CATEGORY+k,off);
         separator(m);
+        item(m,"Taskbar & Start Menu","preferences-system-windows",SH_ACT_CONTROL,CP_TASKBAR+1,off);
         item(m, "Task Manager", "utilities-system-monitor", SH_ACT_TASKMAN, 0, program_index(d, "tasks") < 0 ? SH_ITEM_DISABLED : 0);
         break;
     }
@@ -838,9 +840,9 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_TILE_V: (void)desk_arrange(d, DESK_ARRANGE_TILE_V); break;
     case SH_ACT_MINIMIZE_ALL: (void)desk_minimize_all(d); break;
     case SH_ACT_ARRANGE_UNDO: (void)desk_arrange_undo(d); break;
-    /* Taskbar Properties (always on top, auto hide, clock) is G20's dialog;
-     * until then the entry opens the Control Panel, where it will live. */
-    case SH_ACT_TASKBAR_PROPERTIES: launch_named(d, "control", NULL); break;
+    /* G20 routes the taskbar context-menu Properties command to its dedicated
+     * Taskbar & Start Menu Control Panel page. */
+    case SH_ACT_TASKBAR_PROPERTIES: launch_named(d, "control", "--panel=taskbar"); break;
     case SH_ACT_ARRANGE: {
         if (!it->arg) cfg_icons_arrange(&d->sh.cfg);
         else {
@@ -1309,6 +1311,13 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     const struct desk_theme *t = desk_theme;
     struct desk_box bar = desk_taskbar(d), b;
     if (!desk_intersect(bar, clip, &b)) return;
+    struct desk_box quick=desk_quick_launch_button(d), part;
+    if (desk_intersect(quick,b,&part)) {
+        struct du_canvas qc=canvas(d,part); struct desk_paint qp=painter(&qc);
+        desk_paint_task(&qp,quick.x+1,quick.y,quick.w-2,quick.h,0,d->lfb_bytes_per_pixel==2);
+        const uint32_t *icon=desk_shell_icon("user-desktop",16);
+        if (icon) du_icon_blit(&qc,quick.x+(quick.w-16)/2,quick.y+(quick.h-16)/2,icon,16,DU_ICON_NORMAL);
+    }
     /* Both themes align tasks from the left; the whole bar belongs to windows. */
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_box button = desk_task_button(d, i), part;
@@ -1398,6 +1407,7 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
         du_text(&c,bi.x+9,bi.y+4,p->ac_online == 1 ? "+" : p->ac_online == 0 || p->ac_online == CIUKI_POWER_AC_BACKUP ? "-" : "?",
                 desk_theme->topbar_text);
     }
+    if (!d->sh.cfg.taskbar_clock) return;
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
@@ -3516,6 +3526,11 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     if (desk_contains(bar,x,y)) {
         int on_button = 0;
+        if (desk_contains(desk_quick_launch_button(d),x,y)) {
+            if (button==CIUKI_BUTTON_LEFT) (void)desk_show_desktop(d);
+            else if (button==CIUKI_BUTTON_RIGHT) { d->sh.menu_owner=-1; desk_menu_open(d,SH_MENU_TASKBAR,x,bar.y); }
+            return 1;
+        }
         for (int i = 0; i < DESK_CLIENTS; i++) if (desk_contains(desk_task_button(d, i), x, y)) {
             on_button = 1;
             if (button == CIUKI_BUTTON_RIGHT) {

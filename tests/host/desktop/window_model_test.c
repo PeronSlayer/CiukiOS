@@ -1322,11 +1322,31 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+static void row_taskbar_customization(unsigned m)
+{
+    row_name="G20 taskbar customization"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,60); (void)app_open("calc",220,150,260,140);
+    struct desk_box quick=desk_quick_launch_button(&d); assert(quick.w && quick.h);
+    click(quick.x+quick.w/2,quick.y+quick.h/2,CIUKI_BUTTON_LEFT);
+    assert(d.focus<0); step("Quick Launch Show Desktop");
+    assert(desk_show_desktop(&d)>0); step("Show Desktop undo restores the windows");
+    wm_end(); wm_begin(m,1);
+    d.sh.cfg.quick_launch=0; desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    assert(!desk_quick_launch_button(&d).w);
+    step("Quick Launch hidden and taskbar repainted");
+    d.sh.cfg.quick_launch=1; d.sh.cfg.taskbar_clock=0;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    assert(desk_quick_launch_button(&d).w && desk_shell_clock_box(&d).w==0);
+    step("Quick Launch restored and clock hidden");
+    d.sh.cfg.taskbar_clock=1; desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    step("clock restored");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_taskbar_customization};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

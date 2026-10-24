@@ -512,6 +512,7 @@ int desk_shell_chrome_intersects(const struct desktop *, struct desk_box);
 int desk_title_code(const struct desktop *, int32_t x, int32_t y);   /* title button under (x, y): index*4+k+1, or 0 */
 struct desk_box desk_title_code_box(const struct desktop *, int code);
 struct desk_box desk_task_button(const struct desktop *, int index);
+struct desk_box desk_quick_launch_button(const struct desktop *);
 struct desk_box desk_menu_box(const struct desktop *);
 int32_t desk_menu_row(const struct desktop *);
 int desk_contains(struct desk_box, int32_t, int32_t);

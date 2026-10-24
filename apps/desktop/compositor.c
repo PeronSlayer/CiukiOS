@@ -207,6 +207,7 @@ void desk_shell_clock_text_at(const struct desktop *d, uint64_t s, char *out, si
 }
 int desk_shell_clock_width_at(const struct desktop *d, uint64_t second)
 {
+    if (!d->sh.cfg.taskbar_clock) return 0;
     char text[24]; desk_shell_clock_text_at(d, second, text, sizeof(text));
     int w = desk_text_measure(desk_theme->font_ui, text);
     /* Reserve a stable second line for the ISO date, including rollover. */
@@ -216,7 +217,7 @@ int desk_shell_clock_width_at(const struct desktop *d, uint64_t second)
 static int tray_width_at(const struct desktop *d, uint64_t second)
 {
     unsigned icons = 3 + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION);
-    return 2 * SH_TRAY_MARGIN + desk_shell_clock_width_at(d, second) +
+    return 2 * SH_TRAY_MARGIN + (d->sh.cfg.taskbar_clock ? desk_shell_clock_width_at(d, second) : 0) +
            (int)icons * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP);
 }
 struct desk_box desk_shell_tray_box(const struct desktop *d)
@@ -248,13 +249,16 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
         if (i<index) position++;
         count++;
     }
-    int32_t available=(int32_t)d->width-2*DESK_TASK_X;
+    int32_t left=DESK_TASK_X+(d->sh.cfg.quick_launch ? 30 : 0);
+    int32_t available=(int32_t)d->width-left-DESK_TASK_X;
     if (available<=0 || !count) return (struct desk_box){0,0,0,0};
     int32_t w=available/(int32_t)count;
     if (w>160) w=160;
-    int32_t left=DESK_TASK_X+(int32_t)position*w;
-    return (struct desk_box){left,(int32_t)d->height-DESK_BAR+3,w,DESK_BAR-6};
+    int32_t x=left+(int32_t)position*w;
+    return (struct desk_box){x,(int32_t)d->height-DESK_BAR+3,w,DESK_BAR-6};
 }
+struct desk_box desk_quick_launch_button(const struct desktop *d)
+{ return d->sh.cfg.quick_launch ? (struct desk_box){4,(int32_t)d->height-DESK_BAR+3,26,DESK_BAR-6} : (struct desk_box){0,0,0,0}; }
 int32_t desk_menu_row(const struct desktop *d)
 { (void)d; return SH_START_ROW; }
 /* The Ciuki (Start) button at the left end of the top bar. */

@@ -69,6 +69,19 @@ static void init(void)
     strcpy(saved, "wallpaper=none\ndisplay_mode=280\nfuture_key=kept\nrecent=/Documents/note.txt\n"); saved_n = strlen(saved);
     attach(CP_ADAPTER);
 }
+static void taskbar_settings(void)
+{
+    enum { TASKBAR_CLOCK_WIDGET=1960, QUICK_LAUNCH_WIDGET=1961 };
+    init(); cp_open(&a,CP_TASKBAR);
+    assert(du_get(&u,TASKBAR_CLOCK_WIDGET) && du_get(&u,QUICK_LAUNCH_WIDGET));
+    assert(du_get(&u,TASKBAR_CLOCK_WIDGET)->value && du_get(&u,QUICK_LAUNCH_WIDGET)->value);
+    at_click_widget(&u,TASKBAR_CLOCK_WIDGET); at_click_widget(&u,QUICK_LAUNCH_WIDGET);
+    assert(strstr(saved,"taskbar_clock=0\n") && strstr(saved,"quick_launch=0\n"));
+    assert(strstr(saved,"future_key=kept\n") && strstr(saved,"recent=/Documents/note.txt\n"));
+    struct ciuki_settings roundtrip; cfg_defaults(&roundtrip); assert(!cfg_parse(&roundtrip,saved,saved_n));
+    assert(!roundtrip.taskbar_clock && !roundtrip.quick_launch);
+    cp_detach(&a);
+}
 static void start(void)
 {
     select(CP_AREA, 0); /* 640 x 480 only has 16-bit */
@@ -96,6 +109,7 @@ static void check_layout(void)
 }
 int main(int argc, char **argv)
 {
+    taskbar_settings();
     assert(argc == 3);
     FILE *f = fopen(argv[2], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     init(); cp_open(&a,CP_DISPLAY); select(CP_DISPLAY_TABS_ID,CP_SCREEN_SAVER);
