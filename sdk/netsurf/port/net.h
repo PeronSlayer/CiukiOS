@@ -10,7 +10,7 @@ enum ciuki_fetch_stage { CIUKI_FETCH_DNS,CIUKI_FETCH_CONNECT,CIUKI_FETCH_TLS,
     CIUKI_FETCH_REQUEST,CIUKI_FETCH_RESPONSE,CIUKI_FETCH_REDIRECT,
     CIUKI_FETCH_DONE,CIUKI_FETCH_ERROR };
 struct ciuki_request {
-    const char *host,*target,*post,*cookie,*proxy_host;
+    const char *host,*target,*post,*cookie,*proxy_host,*proxy_auth;
     unsigned proxy_port;
     const char **headers;
     unsigned port;
@@ -24,7 +24,7 @@ struct ciuki_job {
     ciuki_http_callback callback;void *context;
     struct ciuki_net *owner;
     struct ciuki_connection *connection;
-    char proxy_host[254];unsigned proxy_port;
+    char proxy_host[254],proxy_auth[264];unsigned proxy_port;
     char host[254];unsigned port;bool secure,post,started,finished,cancelled,retried,pooled;
     uint64_t dns_token,started_ms;
     char *request;size_t request_bytes,sent;

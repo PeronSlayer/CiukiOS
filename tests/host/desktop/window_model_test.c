@@ -1344,11 +1344,27 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+static void row_g26b_network_ui(unsigned mode)
+{
+    row_name="G26B browser and Internet transitions";wm_begin(mode,1);
+    struct fake_app *browser=app_open("netsurf",320,220,70,50);step("browser before blank target");
+    struct fake_app *blank=app_open("netsurf",300,200,190,120);step("blank target window");
+    app_paint(blank,0,0,300,200,0x745b22);step("blank target first content");
+    app_paint(browser,40,40,240,140,0x234678);step("download progress opens");
+    app_paint(browser,54,120,200,14,0x987612);step("download progress changes");
+    app_paint(browser,40,40,240,140,0x473892);step("download cancelled dialog closes");
+    struct fake_app *panel=app_open("control",320,220,260,30);step("Internet Properties General");
+    for(unsigned tab=1;tab<5;tab++) { app_paint(panel,12,30,290,160,0x456000+tab);step("Internet Properties page switch"); }
+    app_paint(panel,10,185,290,16,0x1243);step("history clear status");
+    app_paint(browser,0,32,320,160,0x2456);step("history or bookmarks refresh after another process");
+    app_paint(blank,20,40,160,32,0x5346);step("JavaScript document mutation paints");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver, row_network_tools};
+    row_move_damaged, row_fault, row_saver, row_network_tools, row_g26b_network_ui};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

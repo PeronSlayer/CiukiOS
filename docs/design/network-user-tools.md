@@ -106,3 +106,110 @@ startup and final cleanup; final cleanup reclaims all slots, but thread exit
 does not yet reclaim them during a long-lived startup session. Browser processes use unique profile staging files, but
 their in-memory history/bookmark models do not yet merge concurrent edits.
 These are compatibility gaps, not completed Windows 98 behaviour.
+
+## G26B continuation contract (2026-10-24)
+
+The continuation follows the Resource Kit chapter 15 TCP/IP Utilities and
+Appendix F `wrkappf_2.htm` (LMHOSTS), read in place. HOSTS and LMHOSTS remain
+separate namespaces; NetBIOS names have a 15-byte base plus a service suffix,
+case-insensitive, with quoted names and hexadecimal suffixes in LMHOSTS.
+[RFC 1002](https://www.rfc-editor.org/rfc/rfc1002.html) specifies NBNS name
+encoding and responses; [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035.html)
+specifies bounded compressed names and PTR responses. Untrusted responses
+must match transaction, question, type/class and source; loops and truncation
+are errors. Remote LMHOSTS includes require a file-sharing transport and are
+not silently treated as local paths.
+
+Terminal receives a separate DHCP-only capability at authorized spawn, never
+full static-configuration authority. NETCTL GET/SET still require the existing
+full capability; only RELEASE/RENEW accept the narrower capability. Invalid
+records are rejected before any side effect. DNS cancellation releases the
+caller's result ownership immediately; pending upstream callback storage stays
+reserved until completion, so late results cannot target a new request.
+
+Native receive version 1 stays byte-compatible. Version 2 uses reserved[0] as
+an output-flags pointer, with MSG_TRUNC when a datagram exceeded the supplied
+buffer (including a zero-byte buffer); excess data is discarded unless PEEK.
+Winsock maps truncation to WSAEMSGSIZE, preserving the received prefix. A
+read-only socket option returns available stream bytes or the next datagram's
+size for FIONREAD. Protocol statistics are copied on tcpip_thread, never read
+from foreign-thread PCBs. NET_INFO STATS=2 and SO_RX_BYTES=22 follow all
+visible branches' maxima (1 and 21); no new syscall is allocated.
+
+[WSAAsyncSelect](https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-wsaasyncselect)
+and [WSAEventSelect](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaeventselect)
+require nonblocking mode, one notification selection per socket, and
+reenabling READ/ACCEPT/WRITE after the corresponding operation, rather than a
+message flood. [WSAAsyncGetHostByName](https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-wsaasyncgethostbyname)
+returns a task handle and packs required-buffer-size/error in lParam; canceled
+work must not write the caller's buffer or post completion.
+[Overlapped I/O](https://learn.microsoft.com/en-us/windows/win32/winsock/overlapped-i-o-2)
+requires immediate completion or WSA_IO_PENDING and subsequent event/APC
+completion; an export that merely rejects overlapped requests does not close
+that obligation.
+
+Browser processes must merge durable profile changes under an exclusive
+interprocess transaction, reload before mutation, and preserve another
+window's updates. Link `_blank` is routed to the existing URL-only launcher.
+[RFC 9110 CONNECT](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6)
+requires an authority-form request, a successful tunnel before origin TLS,
+and proxy credentials only on the proxy request. TLS hostname verification
+continues to use the origin. Upstream NetSurf 3.11's
+[Duktape recipe](https://raw.githubusercontent.com/netsurf-browser/netsurf/release/3.11/content/handlers/javascript/duktape/Makefile)
+requires nsgenbind-generated DOM bindings as well as Duktape; enabling the
+option without the engine, bindings and memory admission does not deliver JS.
+
+### Delivered continuation and qualification limits
+
+The implementation also allocates NET_INFO ROUTES=3 after STATS=2. The
+statistics snapshot includes lwIP MIB-II TCP opens, failures, resets and
+retransmissions, current established connections and UDP no-port/errors;
+routes come from the actual up interfaces and selected default interface.
+The network pools are unchanged. The i686 network proof compiles 57 units
+and accounts for 3,301,376 bytes against its existing 4,194,304-byte ceiling.
+
+The Winsock bridge uses one bounded notification worker, eight asynchronous
+hostname requests and eight admitted overlapped operations. Native DNS
+continues to share four callback slots. Accepted sockets inherit notification
+selection; receive, accept and blocked-send retries rearm the appropriate
+events. Overlapped buffers are copied into admitted storage, receive results
+are scattered only at completion, and completion routines use the issuer's
+existing Win32 APC channel. Final cleanup serializes notification cancellation
+against application buffer writes. It still cannot cancel an older synchronous
+call that retained a duplicated fd, and resolver cache slots are reclaimed at
+final cleanup rather than individual thread exit. OOB and additional Winsock
+providers are not delivered. NetBIOS is LMHOSTS/B-node name lookup only: no
+WINS, remote LMHOSTS includes, preloaded cache, name registration or session
+transport. Async hostname lookup does not add a blocking NBNS fallback.
+
+The browser uses an exclusive profile transaction with a nonempty-directory
+lock and dead-owner recovery. History merges only local pending visits into
+the current durable file; a shared clear marker prevents stale windows from
+resurrecting cleared history. Bookmarks reload before mutation and atomic
+export. Duktape shares an admitted heap limited to one eighth of the free
+memory snapshot; retained script text stays charged to the DOM budget. The
+actual host browser executes an authored script that writes its document
+title and mutates a DOM node, and retains the authored PNG/JPEG render checks.
+The host symbol audit finds no duplicate strong symbols among linked browser
+archives or collisions between Duktape/adapter symbols and those archives.
+
+Internet Options implements history retention/clear, four active-script zones
+with exact trusted/restricted host lists, LAN proxy bypass and Basic proxy
+credentials. CONNECT gates origin TLS on a bounded successful proxy response;
+credentials are excluded from origin requests. It does not implement NTLM or
+Digest, the complete IE zone-action policy, dial-up connections, or a shared
+default-program association backend. Printing through G31 and default-program
+integration remain outstanding because their implementations are not in this
+worktree's base; no substitute print or association database is introduced.
+New-window POST transfer is also outstanding. New UI transitions have fx-15
+rows 42–46; native `_blank` and download-dialog integration still need lead
+validation.
+
+Host functional assertions reach their PASS markers, but sanitizer-enabled
+scripts exit nonzero when LeakSanitizer cannot inspect threads in the restricted
+sandbox. These are failed verification commands, not green sanitizer evidence.
+The ABI oracle reaches 2,577 checks, and the window model reaches 7,582 frames;
+both also encounter that shutdown failure. Strict i686 compilation passes for
+18 production C files, ten changed host-test C files and five patched upstream
+C files. Exact commands, exit statuses and remaining work are recorded in
+`build/codex/g26b-report.md`. No guest or image qualification was attempted.

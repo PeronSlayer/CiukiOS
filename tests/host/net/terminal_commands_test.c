@@ -46,23 +46,32 @@ static int fake_poll(struct pollfd *fds,nfds_t n,int timeout)
 static ssize_t fake_recvfrom(int fd,void *data,size_t bytes,int flags,struct sockaddr *address,socklen_t *length);
 static int fake_close(int fd) { assert(fd==21);closed++;return 0; }
 static int fake_getpid(void) { return 0x5326; }
-static int fake_getaddrinfo(const char *name,const char *service,const struct addrinfo *hints,struct addrinfo **out)
+int ciuki_hosts_reverse4(uint32_t ip,char *name,size_t cap) { (void)ip;(void)name;(void)cap;return -1; }
+static int dns_pending,dns_cancels;
+int ciuki_resolve4_begin(const char *name,struct ciuki_resolve_query *q)
 {
-    assert(!service && hints->ai_family==AF_INET);
-    if(!strcmp(name,"unknown"))return EAI_NONAME;
-    static struct sockaddr_in address;static struct addrinfo answer;
-    address=(struct sockaddr_in){.sin_family=AF_INET,.sin_addr={.s_addr=0x0100007f}};
-    answer=(struct addrinfo){.ai_addr=(void *)&address};*out=&answer;return 0;
+    *q=(struct ciuki_resolve_query){.size=sizeof(*q),.version=2,.address=0x0100007f,.status=!strcmp(name,"unknown")?1:dns_pending?4:0,.token=17};return 0;
 }
-static void fake_freeaddrinfo(struct addrinfo *answer) { assert(answer); }
+int ciuki_resolve4_query(struct ciuki_resolve_query *q)
+{ assert(q->token==17);if(q->action==CIUKI_RESOLVE_CANCEL)dns_cancels++;else q->status=4;return 0; }
+static int fake_nanosleep(const struct timespec *d,struct timespec *r)
+{ (void)r;clock_ms+=(uint64_t)d->tv_nsec/1000000;return 0; }
 static void pump(void *context) { struct terminal *t=context;pumps++;if(t->quit)t->interrupted=1; }
 int ciuki_net_info(unsigned operation,void *record,uint32_t bytes)
 {
     if(operation==CIUKI_NET_INFO_CONFIG) {
         assert(bytes==sizeof(struct ciuki_net_control));struct ciuki_net_control *r=record;unsigned index=r->index;
         *r=(struct ciuki_net_control){.size=sizeof(*r),.version=1,.count=1,.index=index,.link=CIUKI_NET_LINK_UP,
-            .address=0x640200c0,.mask=0x00ffffff,.gateway=0x010200c0,.dns={0x350200c0},.rx_packets=42,.tx_packets=17};
+            .address=0x640200c0,.mask=0x00ffffff,.gateway=0x010200c0,.dns={0x350200c0},.config={.dhcp=1},.rx_packets=42,.tx_packets=17};
         strcpy(r->name,"en0");strcpy(r->driver,"e100");strcpy(r->config.hostname,"CiukiOS");return 0;
+    }
+    if(operation==CIUKI_NET_INFO_ROUTES) {
+        assert(bytes==sizeof(struct ciuki_net_routes));struct ciuki_net_routes *r=record;
+        *r=(struct ciuki_net_routes){.size=sizeof(*r),.version=1,.count=1,.routes={{.gateway=0x010200c0,.interface_address=0x640200c0}}};return 0;
+    }
+    if(operation==CIUKI_NET_INFO_STATS) {
+        assert(bytes==sizeof(struct ciuki_net_statistics));struct ciuki_net_statistics *s=record;
+        *s=(struct ciuki_net_statistics){.size=sizeof(*s),.version=1,.tcp={.received=42,.sent=17},.udp={.received=9}};return 0;
     }
     assert(operation==CIUKI_NET_INFO_SOCKETS && bytes==sizeof(struct ciuki_net_socket_list));
     struct ciuki_net_socket_list *r=record;*r=(struct ciuki_net_socket_list){.size=sizeof(*r),.version=1,.count=1};
@@ -79,8 +88,7 @@ int ciuki_net_control(unsigned operation,struct ciuki_net_control *record)
 #define recvfrom fake_recvfrom
 #define close fake_close
 #define getpid fake_getpid
-#define getaddrinfo fake_getaddrinfo
-#define freeaddrinfo fake_freeaddrinfo
+#define nanosleep fake_nanosleep
 #include "../../../apps/terminal/network.c"
 static ssize_t fake_recvfrom(int fd,void *data,size_t bytes,int flags,struct sockaddr *address,socklen_t *length)
 {
@@ -106,7 +114,7 @@ int main(void)
     setvbuf(stdout,NULL,_IOLBF,0);struct terminal t={.host={.pump=pump}};t.host.ctx=&t;
     char *ipconfig[]={"ipconfig","/all"};assert(!command(&t,2,ipconfig));assert(strstr(output,"192.0.2.100") && strstr(output,"192.0.2.53"));
     char *netstat[]={"netstat"};assert(!command(&t,1,netstat) && strstr(output,"ESTABLISHED") && strstr(output,"127.0.0.2:443"));
-    char *stats[]={"netstat","-s"};assert(!command(&t,2,stats) && strstr(output,"RX 42"));
+    char *stats[]={"netstat","-s"};assert(!command(&t,2,stats) && strstr(output,"TCP Statistics") && strstr(output,"Received = 42"));
     char *renew[]={"ipconfig","/renew"};assert(command(&t,2,renew)==-EPERM);
     char *ping[]={"ping","-n","2","-w","50","localhost"};assert(!command(&t,6,ping) && strstr(output,"Received = 2") && closed==1 && pumps);
     dropped=1;assert(!command(&t,6,ping) && strstr(output,"Lost = 2") && closed==2);dropped=0;
@@ -114,6 +122,11 @@ int main(void)
     t.quit=1;assert(command(&t,6,ping)==-EINTR && closed==4);t.quit=t.interrupted=0;
     force_error=ENETDOWN;assert(command(&t,6,ping)==-ENETDOWN && closed==4);force_error=0;
     char *unknown[]={"ping","unknown"};assert(command(&t,2,unknown)==-EINVAL && strstr(output,"Cannot resolve"));
+    dns_pending=1;t.quit=1;assert(command(&t,6,ping)==-EINTR && dns_cancels==1 && closed==4);t.quit=t.interrupted=dns_pending=0;
+    char *filtered[]={"netstat","-sp","udp"};assert(!command(&t,3,filtered) && strstr(output,"UDP Statistics") && !strstr(output,"TCP Statistics"));
+    char *ether[]={"netstat","-e"};assert(!command(&t,2,ether) && strstr(output,"RX 42"));
+    char *routes[]={"netstat","-r"};assert(!command(&t,2,routes) && strstr(output,"192.0.2.1"));
+    char *invalid[]={"netstat","-p","other"};assert(command(&t,3,invalid)==-EINVAL);
     char *bad[]={"ping","-n","0","localhost"};assert(command(&t,4,bad)==-EINVAL);
     puts("PASS G26 Terminal commands: ipconfig/netstat, privilege, echo/TTL/timeout/cancel/DNS/link error and fd cleanup");return 0;
 }

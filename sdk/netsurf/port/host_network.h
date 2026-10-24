@@ -13,6 +13,7 @@
 #undef IPPROTO_ICMP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP
+#undef MSG_TRUNC
 #undef MSG_PEEK
 #undef MSG_DONTWAIT
 #undef MSG_NOSIGNAL

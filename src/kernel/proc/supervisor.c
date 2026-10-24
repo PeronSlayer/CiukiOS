@@ -191,6 +191,7 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
     bool authorized = parent == proc_supervisor() || (display && input);
     child->setup_capability = false; /* f9-01: never inherited or path-derived */
     child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
+    child->dhcp_capability = authorized && !strncmp(path,"/Programs/terminal",sizeof("/Programs/terminal"));
     child->network_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
     child->programs_capability = authorized &&

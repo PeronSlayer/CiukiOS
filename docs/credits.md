@@ -85,6 +85,8 @@ mouse adaptation's exact upstream file and authors are in its notice above.
 | --- | --- | --- | --- | --- |
 | lwIP | 2.2.1 | BSD-3-Clause | `docs/licenses/lwip-2.2.1-BSD-3-Clause.txt` | image |
 | NetSurf and its libraries | 3.11 | GPL-2.0 with MIT libraries | `config/netsurf.json` | integrating |
+| Duktape (NetSurf JavaScript) | 2.7.0, bundled in NetSurf 3.11 | MIT | NetSurf pinned archive; `system/licenses/Duktape.txt` includes upstream authors and license | G26B |
+| nsgenbind (build tool) | 0.9, bundled in NetSurf 3.11 | MIT | NetSurf pinned archive; `system/licenses/nsgenbind.txt` | G26B |
 | zlib | 1.3.1 | zlib | `config/netsurf.json` | integrating |
 | libpng | 1.6.59 | PNG Reference Library v2 | `config/netsurf.json` | integrating |
 | libjpeg-turbo | 3.1.4.1 | IJG + BSD-3-Clause + zlib | `config/netsurf.json` | integrating |

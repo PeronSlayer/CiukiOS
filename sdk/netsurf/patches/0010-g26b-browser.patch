@@ -1,0 +1,149 @@
+G26B: URL-only _blank routing and admitted upstream Duktape allocations.
+--- a/netsurf/desktop/browser_private.h
++++ b/netsurf/desktop/browser_private.h
+@@ -94,6 +94,9 @@
+  * Browser window data.
+  */
+ struct browser_window {
++#ifdef CIUKI_NETSURF
++	bool ciuki_external_target;
++#endif
+ 	/**
+ 	 * Content handle of page currently displayed which must have
+ 	 *  READY or DONE status or NULL for no content.
+--- a/netsurf/desktop/browser_window.c
++++ b/netsurf/desktop/browser_window.c
+@@ -3330,6 +3330,15 @@
+ 
+ 	assert(bw);
+ 	assert(url);
++#ifdef CIUKI_NETSURF
++	if (bw->ciuki_external_target) {
++		extern bool ciuki_chrome_new_window(struct nsurl *);
++		bw->ciuki_external_target = false;
++		if (fetch_is_post) return NSERROR_NOT_IMPLEMENTED;
++		return ciuki_chrome_new_window(url) ? NSERROR_OK : NSERROR_NOMEM;
++	}
++#endif
++
+ 
+ 	NSLOG(netsurf, INFO, "bw %p, url %s", bw, nsurl_access(url));
+ 
+@@ -4388,6 +4397,12 @@
+ 			return bw;
+ 	}
+ 
++#ifdef CIUKI_NETSURF
++	if (nsoption_bool(target_blank) && !strcasecmp(target, "_blank")) {
++		bw->ciuki_external_target = true;
++		return bw;
++	}
++#endif
+ 	/* handle reserved keywords */
+ 	if (((nsoption_bool(button_2_tab)) &&
+ 	     (mouse & BROWSER_MOUSE_CLICK_2))||
+--- a/netsurf/content/handlers/javascript/duktape/dukky.c
++++ b/netsurf/content/handlers/javascript/duktape/dukky.c
+@@ -545,12 +545,14 @@
+  * block, as do debugging tools such as Electric Fence by Bruce Perens.
+  */
+ 
++#include "frontends/framebuffer/ciuki/js_memory.h"
++
+ static void *dukky_alloc_function(void *udata, duk_size_t size)
+ {
+ 	if (size == 0)
+ 		return NULL;
+ 
+-	return malloc(size);
++	return ciuki_js_alloc(size);
+ }
+ 
+ static void *dukky_realloc_function(void *udata, void *ptr, duk_size_t size)
+@@ -559,18 +561,18 @@
+ 		return NULL;
+ 
+ 	if (size == 0) {
+-		free(ptr);
++		ciuki_js_free(ptr);
+ 		return NULL;
+ 	}
+ 
+-	return realloc(ptr, size);
++	return ciuki_js_realloc(ptr, size);
+ }
+ 
+ 
+ static void dukky_free_function(void *udata, void *ptr)
+ {
+ 	if (ptr != NULL)
+-		free(ptr);
++		ciuki_js_free(ptr);
+ }
+ 
+ /* exported interface documented in js.h */
+--- a/netsurf/content/handlers/html/html.c
++++ b/netsurf/content/handlers/html/html.c
+@@ -502,6 +502,14 @@
+ 	c->jsthread = NULL;
+ 
+ 	c->enable_scripting = nsoption_bool(enable_javascript);
++#ifdef CIUKI_NETSURF
++	{
++		extern bool ciuki_chrome_scripts(const char *);
++		lwc_string *host = nsurl_get_component(llcache_handle_get_url(c->base.llcache), NSURL_HOST);
++		c->enable_scripting = c->enable_scripting && ciuki_chrome_scripts(host ? lwc_string_data(host) : "");
++		if (host) lwc_string_unref(host);
++	}
++#endif
+ 	c->base.active = 1; /* The html content itself is active */
+ 
+ 	if (lwc_intern_string("*", SLEN("*"), &c->universal) != lwc_error_ok) {
+--- a/libdom/bindings/hubbub/parser.c
++++ b/libdom/bindings/hubbub/parser.c
+@@ -84,21 +84,6 @@
+         return ciuki_reject(p, CIUKI_DOC_MEMORY);
+     p->ciuki_charged += bytes + CIUKI_DOM_NODE_BYTES;
+     return true;
+-}
+-/* A discarded node returns its charge (its memory is released with it). */
+-static void ciuki_refund(dom_hubbub_parser *p, size_t bytes)
+-{
+-    size_t n = bytes > SIZE_MAX - CIUKI_DOM_NODE_BYTES ? SIZE_MAX : bytes + CIUKI_DOM_NODE_BYTES;
+-    p->ciuki_charged -= n < p->ciuki_charged ? n : p->ciuki_charged;
+-}
+-/* fx-14: NetSurf runs without JavaScript here, so the text of a script
+- * element is never used; the element stays in the DOM, empty. */
+-static bool ciuki_script_text(void *parent, void *child)
+-{
+-    dom_node_internal *p = parent, *c = child;
+-    return p && c && c->type == DOM_TEXT_NODE && p->type == DOM_ELEMENT_NODE &&
+-           p->name && dom_string_byte_length(p->name) == 6 &&
+-           strncasecmp(dom_string_data(p->name), "script", 6) == 0;
+ }
+ /* Depth before attach, including a reparented subtree's own depth. */
+ static bool ciuki_attach(void *parent, void *child)
+@@ -412,12 +397,6 @@
+ 	dom_exception err;
+ 
+ 	*result = NULL;
+-	if (ciuki_script_text(parent, child)) {
+-		dom_string *data = ((dom_node_internal *) child)->value;
+-		ciuki_refund(dom_parser, data ? dom_string_byte_length(data) : 0);
+-		*result = dom_node_ref((struct dom_node *) child);
+-		return HUBBUB_OK;
+-	}
+ 	if (!ciuki_attach(parent, child)) {
+ 		ciuki_reject(dom_parser, CIUKI_DOC_DEPTH);
+ 		return HUBBUB_NOMEM;
+--- a/netsurf/content/handlers/javascript/duktape/duktape.c
++++ b/netsurf/content/handlers/javascript/duktape/duktape.c
+@@ -74758,6 +74758,8 @@
+ 			num_stmts++;
+ 			duk__parse_stmt(comp_ctx, res, 0 /*allow_source_elem*/);
+ 		}
++
++		DUK_UNREF(num_stmts); /* count is diagnostic-only in this upstream compiler */
+ 
+ 		/* fall-through jump to next code of next case (backpatched) */
+ 		pc_prevstmt = duk__emit_jump_empty(comp_ctx);

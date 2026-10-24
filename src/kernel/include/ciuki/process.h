@@ -56,6 +56,7 @@ struct process {
     /* f2-100: supervisor/desktop-authorized desktop and Control Panel only;
      * network configuration authority is delegated explicitly at spawn. */
     bool network_capability;
+    bool dhcp_capability; /* G26B: authorized Terminal RELEASE/RENEW only. */
     /* G1: authority to set the clock and the system time zone (the
      * SE_SYSTEMTIME_NAME equivalent): desktop and Control Panel only,
      * delegated like network_capability, never inherited. */

@@ -80,5 +80,11 @@ static void netctl_tests(void)
     for(unsigned i=0;i<10;i++)net_stack_link(0,true);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);
     CHECK(dhcp_discover==discovers);CHECK(!ctl(2,&r));retry_acquisition();CHECK(!ctl(0,&r) && r.address);
     client.network_capability=false;CHECK(ctl(1,&r)==-EPERM);CHECK(!live_pins);
+    client.dhcp_capability=true;
+    CHECK(ctl(CIUKI_NETCTL_GET,&r)==-EPERM && ctl(CIUKI_NETCTL_SET,&r)==-EPERM);
+    CHECK(!ctl(CIUKI_NETCTL_RELEASE,&r) && !r.address);
+    CHECK(!ctl(CIUKI_NETCTL_RENEW,&r));retry_acquisition();
+    client.dhcp_capability=false;CHECK(ctl(CIUKI_NETCTL_RELEASE,&r)==-EPERM);
+    puts("PASS G26B DHCP-only capability: release/renew accepted, GET/SET and unprivileged mutations refused");
     puts("PASS f2-100 netctl: capability/copies, validation, static/DHCP, three DNS, search domain, save rollback, administrative down/up, release/renew, persisted boot before DHCP");
 }

@@ -437,6 +437,12 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
 
+| 42 | G26B link target `_blank` opens a separate browser process | new frame, client and task button | existing URL-only launcher and v3 create/present | no alternate drawing path | `row_g26b_network_ui`: blank target create/first content |
+| 43 | G26B download progress opens, advances, cancels or gives way to Save | dialog bounds and progress widget, exposed page on close | chrome `downloads_poll`/`event` and ordinary client damage | no alternate drawing path | `row_g26b_network_ui`: progress open/update/cancel |
+| 44 | G26B Internet General/History/Security/Connections/Programs page switch and history-clear/apply status | changed property-page client bounds and status | Control Panel `internet_event`/`internet_build` | no alternate drawing path | `row_g26b_network_ui`: each property page and clear status |
+| 45 | G26B history/bookmark page refresh after another browser process saves or clears | browser content viewport | normal document repaint after profile transaction | no alternate drawing path | `row_g26b_network_ui`: cross-process refresh |
+| 46 | G26B JavaScript changes document contents | changed content rectangles | upstream DOM/layout through framebuffer damage | no alternate drawing path | `row_g26b_network_ui`: script mutation present |
+
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by

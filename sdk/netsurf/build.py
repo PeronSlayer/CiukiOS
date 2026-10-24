@@ -26,9 +26,9 @@ LIBRARIES = ("libwapcaplet", "libparserutils", "libcss", "libhubbub", "libdom",
 # (frontends/framebuffer/Makefile.defaults: JPEG YES, PNG/GIF/BMP/WEBP/NSSVG
 # AUTO, i.e. enabled when the library is present). JPEG XL (libjxl, C++),
 # RISC OS sprites and video stay off; see docs/design/netsurf-port-plan.md.
-FEATURES = {key: "NO" for key in ("CURL", "OPENSSL", "DUKTAPE", "JPEGXL",
+FEATURES = {key: "NO" for key in ("CURL", "OPENSSL", "JPEGXL",
                                   "ROSPRITE", "HARU_PDF", "VIDEO", "FS_BACKING_STORE")}
-FEATURES.update({key: "YES" for key in ("GIF", "BMP", "PNG", "JPEG", "WEBP", "NSSVG",
+FEATURES.update({key: "YES" for key in ("DUKTAPE", "GIF", "BMP", "PNG", "JPEG", "WEBP", "NSSVG",
                                         "UTF8PROC", "NSLOG", "NSPSL", "LIBICONV_PLUG")})
 # Pinned archives (config/netsurf.json), verified on every run.
 PINNED = ("archive", "zlib", "libpng", "libjpeg", "expat", "libwebp")
@@ -97,10 +97,10 @@ def tool(name):
 
 def inputs(host=False):
     return {"pins": json.loads((ROOT / "config/netsurf.json").read_text()), "features": FEATURES, "ciuki_image_handlers": ["PNG", "JPEG"],
-            "internet_options": {name:digest(ROOT / "apps/control" / name) for name in ("internet_options.h","internet_storage.h")},
+            "internet_options": {name:digest(ROOT / "apps/control" / name) for name in ("internet_options.h","internet_storage.h","profile_lock.h")},
             "stb_image": digest(ROOT / "third_party/stb/stb_image.h"),
             "port": hashes(HERE), "sdk": digest(SDK / "manifest.json"), "epoch": EPOCH, "host": host,
-            "tools": {name: tool(name) for name in ("clang", "llvm-ar", "llvm-ranlib", "make", "perl", "pkg-config", "patch", "gawk")},
+            "tools": {name: tool(name) for name in ("clang", "llvm-ar", "llvm-ranlib", "make", "perl", "pkg-config", "patch", "gawk", "flex", "bison")},
             "desktop": {str(p.relative_to(ROOT)): digest(p) for folder in ("apps/libdeskui", "apps/desktop")
                         for p in sorted((ROOT / folder).glob("*.[ch]"))},
             "fonts": hashes(ROOT / "assets/fonts/liberation"),
@@ -471,7 +471,15 @@ def build(host=False, clean=False, directory=None):
         library_env=dict(env)
         if host and name=="libnsfb":library_env["CFLAGS"]+=" "+" ".join(host_header)
         run([*common, "install"], tree / name, library_env)
+    # nsgenbind 0.9 is included in the same pinned NetSurf release archive.
+    # It is a host build tool even for the i686 browser.
+    bind_env=dict(env);bind_env.pop("CFLAGS",None)
+    run(["make","-j1","install","VARIANT=release","CC=clang","BUILD_CC=clang",
+         "PREFIX="+str(hp),"NSSHARED="+str(tree / "buildsystem")],tree / "nsgenbind",bind_env)
+    env["PATH"]=str(hp / "bin")+os.pathsep+env.get("PATH",os.defpath)
     browser = tree / "netsurf"
+    with (browser / "frontends/framebuffer/Makefile").open("a") as stream:
+        stream.write("\nS_FRONTEND += ciuki/js_memory.c\n")
     # Build only the desktop toolkit, without its v1/v2 client transport.
     desk_objects=[]
     for source in [p for p in sorted((ROOT / "apps/libdeskui").glob("*.c")) if p.name!="client.c"] + [ROOT / "apps/desktop" / n for n in ("protocol.c", "compositor.c", "theme.c")]:
@@ -516,10 +524,16 @@ def build(host=False, clean=False, directory=None):
         if path.is_file():shutil.copy2(path,resource / "Resources" / path.name)
     notices = stage / "system/licenses"
     notices.mkdir(parents=True)
-    for name in ("netsurf", *LIBRARIES, "buildsystem"):
+    for name in ("netsurf", *LIBRARIES, "buildsystem", "nsgenbind"):
         notice = tree / name / ("LICENSE.md" if name == "libutf8proc" else "COPYING")
         shutil.copy2(notice, notices / (name + ".txt"))
     shutil.copy2(tree / "libnspsl/public_suffix_list.dat", notices / "public_suffix_list.dat")
+    # The pinned amalgamation embeds both upstream license and authors.
+    duktape=(browser / "content/handlers/javascript/duktape/duktape.c").read_text()
+    license_start=duktape.index("/* LICENSE.txt */")
+    authors=duktape.index("/* AUTHORS.rst */")
+    authors_end=duktape.index("*/",authors+len("/* AUTHORS.rst */"))+2
+    (notices / "Duktape.txt").write_text(duktape[license_start:authors_end]+"\n")
     shutil.copy2(src["zlib"] / "README", notices / "zlib.txt")
     shutil.copy2(ROOT / "third_party/pixman/COPYING",notices / "pixman.txt")
     shutil.copy2(ROOT / "third_party/bearssl/LICENSE.txt",notices / "BearSSL.txt")
@@ -544,7 +558,7 @@ def build(host=False, clean=False, directory=None):
     shutil.copy2(ROOT / "assets/icons/upstream/AUTHORS",notices / "Tango-AUTHORS.txt")
     shutil.copytree(HERE / "patches",notices / "netsurf-patches")
     (notices / "NetSurf-SOURCE.txt").write_text("NetSurf 3.11, GPL-2.0-only.\nSource: "+expected["pins"]["archive"]["url"]+"\nSHA-256: "+expected["pins"]["archive"]["sha256"]+"\nCiuki changes: sdk/netsurf; applied patches retained in netsurf-patches.\nCiuki portrait is a separate CiukiOS project asset; Tango is Public Domain.\n")
-    (resource / "Choices").write_text("enable_javascript:false\nmemory_cache_size:2097152\ndisc_cache_size:0\nmax_fetchers:8\n")
+    (resource / "Choices").write_text("enable_javascript:true\nmemory_cache_size:2097152\ndisc_cache_size:0\nmax_fetchers:8\n")
     # Chrome uses the system Tango store and approved portrait conversion.
     shutil.copy2(ROOT / "assets/brand/ciuki-logo.png",resource / "ciuki-logo.png")
     elf=None

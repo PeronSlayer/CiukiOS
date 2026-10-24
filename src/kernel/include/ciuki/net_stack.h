@@ -32,6 +32,10 @@ void net_fd_changed(struct process *, unsigned);
 void net_input_changed(void);
 uint32_t net_socket_count(void);
 void net_socket_snapshot(struct ciuki_net_socket_list *);
+int net_protocol_statistics(struct ciuki_net_statistics *);
+int net_route_snapshot(struct ciuki_net_routes *);
+int net_resolve_query(struct process *, struct ciuki_resolve_query *, const char *);
+void net_resolve_process_exit(struct process *);
 uint32_t *net_socket_flags(struct proc_object *);
 bool net_socket_object(struct proc_object *);
 int32_t net_socket_call(struct trap_frame *);
@@ -51,6 +55,8 @@ int net_socket_listen(struct process *, int, int, const struct net_socket_ref *)
 int net_socket_accept(struct process *, int, struct ciuki_sockaddr_in *, const struct net_socket_ref *);
 int net_socket_io(struct process *, int, void *, unsigned, unsigned,
                   struct ciuki_sockaddr_in *, bool, const struct net_socket_ref *);
+int net_socket_receive(struct process *, int, void *, unsigned, unsigned,
+                       struct ciuki_sockaddr_in *, const struct net_socket_ref *, unsigned *);
 int net_socket_shutdown(struct process *, int, unsigned, const struct net_socket_ref *);
 int net_socket_name(struct process *, int, unsigned, struct ciuki_sockaddr_in *, const struct net_socket_ref *);
 int net_socket_option(struct process *, int, unsigned, int, int, void *, unsigned *, const struct net_socket_ref *);

@@ -24,7 +24,7 @@ class WinsockBuild(unittest.TestCase):
         oldnames={name:e for e in old['exports'] for name in e['names']}
         newnames={name:e for e in new['exports'] for name in e['names']}
         for name in ('socket','bind','listen','accept','connect','send','recv','sendto','recvfrom','select',
-                     'WSAStartup','WSACleanup','gethostbyname','__WSAFDIsSet','WSASend','WSARecv','WSASocketA','getaddrinfo'):
+                     'WSAStartup','WSACleanup','WSAAsyncSelect','WSAAsyncGetHostByName','WSACancelAsyncRequest','WSAEventSelect','WSAEnumNetworkEvents','WSAGetOverlappedResult','gethostbyname','__WSAFDIsSet','WSASend','WSARecv','WSASocketA','getaddrinfo'):
             self.assertIn(name,oldnames);self.assertEqual(newnames[name]['forwarder'],'wsock32.'+name)
         self.assertEqual(oldnames['socket']['ordinal'],23)
         self.assertEqual(oldnames['__WSAFDIsSet']['ordinal'],151)
