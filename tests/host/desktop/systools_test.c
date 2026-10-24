@@ -54,6 +54,12 @@ static void test_sysinfo(void)
     struct ciuki_devices_info live = info;
     for (unsigned i = 0; i < live.count; i++) live.devices[i].resource_count = dc_resource_count(&store, &info.devices[i]);
     in.devices = &live; si_build(&tree, &in); assert(tree.conflicts == 0);
+    /* two records of the same PCI function share its resources without being a conflict */
+    struct ciuki_devices_info twin = info;
+    for (unsigned k = 0; k < 2; k++) { struct ciuki_device_record *t = &twin.devices[k];
+        t->vendor = 0x8086; t->device = 0x2415; t->bus = 0; t->slot = 4; t->function = 0; }
+    in.devices = &twin; si_build(&tree, &in); assert(tree.conflicts == 0);
+    twin.devices[1].function = 1; si_build(&tree, &in); assert(tree.conflicts == 1);
     puts("PASS G30 System Information");
 }
 static void test_meter(void)

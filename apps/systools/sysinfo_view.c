@@ -252,7 +252,7 @@ void siv_layout(struct du_ui *u, void *user)
     du_get(u, SIV_LIST)->box = (struct du_rect){left + 8, 24, w - left - 12, h - 24 - 24 - 4};
     du_get(u, SIV_STATUS)->box = (struct du_rect){0, h - 22, w, 22};
     struct du_widget *list = du_get(u, SIV_LIST);
-    list->columns[0].width = list->box.w * 2 / 5;
+    list->columns[0].width = list->box.w * 9 / 20;
     list->columns[1].width = list->box.w - list->columns[0].width;
 }
 
