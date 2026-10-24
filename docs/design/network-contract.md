@@ -184,7 +184,7 @@ which MUST be reviewed explicitly. Runtime test selection MUST NOT change them.
 | Group | Required configuration |
 | --- | --- |
 | Execution/API | `NO_SYS=0`, `SYS_LIGHTWEIGHT_PROT=1`, `LWIP_TCPIP_CORE_LOCKING=0`, `LWIP_TCPIP_CORE_LOCKING_INPUT=0`, `LWIP_TIMERS=1`, `LWIP_TIMERS_CUSTOM=0`, `LWIP_NETCONN=1`, `LWIP_SOCKET=0`, `LWIP_NETCONN_FULLDUPLEX=0`, `LWIP_NETCONN_SEM_PER_THREAD=0` |
-| Protocols | `LWIP_IPV4=1`, `LWIP_IPV6=0`, `LWIP_ETHERNET=1`, `LWIP_ARP=1`, `LWIP_ICMP=1`, `LWIP_TCP=1`, `LWIP_UDP=1`, `LWIP_DHCP=1`, `LWIP_DNS=1`, `LWIP_RAW=0`, `LWIP_IGMP=0`, `LWIP_AUTOIP=0`, `IP_FORWARD=0`, `IP_REASSEMBLY=0`, `IP_FRAG=0`, `ETHARP_SUPPORT_VLAN=0` |
+| Protocols | `LWIP_IPV4=1`, `LWIP_IPV6=0`, `LWIP_ETHERNET=1`, `LWIP_ARP=1`, `LWIP_ICMP=1`, `LWIP_TCP=1`, `LWIP_UDP=1`, `LWIP_DHCP=1`, `LWIP_DNS=1`, `LWIP_RAW=1` (G26: ICMP only, four raw PCBs within the existing datagram budget), `LWIP_IGMP=0`, `LWIP_AUTOIP=0`, `IP_FORWARD=0`, `IP_REASSEMBLY=0`, `IP_FRAG=0`, `ETHARP_SUPPORT_VLAN=0` |
 | Heap/pbuf | `MEM_ALIGNMENT=4`, `MEM_SIZE=1048576`, `MEM_LIBC_MALLOC=0`, `MEMP_MEM_MALLOC=0`, `PBUF_POOL_SIZE=128`, `PBUF_POOL_BUFSIZE=1536`, `MEMP_NUM_PBUF=128` |
 | Protocol pools | `MEMP_NUM_TCP_PCB=40`, `MEMP_NUM_TCP_PCB_LISTEN=8`, `MEMP_NUM_TCP_SEG=256`, `MEMP_NUM_UDP_PCB=20`, `MEMP_NUM_NETCONN=48`, `MEMP_NUM_NETBUF=64`, `MEMP_NUM_SYS_TIMEOUT=32` |
 | Core messages | `MEMP_NUM_TCPIP_MSG_API=64`, `MEMP_NUM_TCPIP_MSG_INPKT=64`, `TCPIP_MBOX_SIZE=64`, `DEFAULT_TCP_RECVMBOX_SIZE=8`, `DEFAULT_UDP_RECVMBOX_SIZE=8`, `DEFAULT_ACCEPTMBOX_SIZE=4` |
@@ -409,7 +409,7 @@ conformance. The new SDK MUST NOT undo F2's conformance-macro exclusions.
 
 | Interface | Required F6 behavior / lwIP mapping |
 | --- | --- |
-| `socket` | AF_INET SOCK_STREAM/TCP and SOCK_DGRAM/UDP only; protocol 0 selects the matching protocol. Type MAY include SOCK_NONBLOCK/SOCK_CLOEXEC, applied atomically to the new O_RDWR description/fd. Otherwise both flags are clear. Map to `netconn_new_with_callback`. Other family/type/protocol combinations fail distinctly. |
+| `socket` | AF_INET SOCK_STREAM/TCP and SOCK_DGRAM/UDP; protocol 0 selects the matching protocol. G26 adds SOCK_RAW with explicit IPPROTO_ICMP only (protocol 0 is rejected), through four bounded raw netconns sharing the existing datagram budget. Type MAY include SOCK_NONBLOCK/SOCK_CLOEXEC, applied atomically to the new O_RDWR description/fd. Otherwise both flags are clear. Map to `netconn_new_with_proto_and_callback`. Other family/type/protocol combinations fail distinctly. |
 | `bind`, `connect` | Translate copied IPv4 address; TCP and UDP connect, TCP nonblocking completion; bind only local/ANY address, enforce port conflict. Map to netconn bind/connect. UDP disconnect via AF_UNSPEC is supported. |
 | `listen`, `accept` | TCP only; backlog 1–4 (larger positive requests clamp to 4); accept returns a new fd and optional peer. New fd is blocking and CLOEXEC clear, regardless of listener NONBLOCK. No boot-started listener. |
 | `send/recv`, `sendto/recvfrom` | TCP partial bytes and UDP datagram semantics; copied kernel buffers; netconn write-partly, send/sendto, receive and retained TCP remainder. Receive MUST not acknowledge discarded TCP bytes as read. |
@@ -534,8 +534,9 @@ checked before arithmetic/allocation. Address-length pointers are u32.
 **[F6]** Public values MUST be:
 
 ```text
-AF_UNSPEC=0 AF_INET=2 SOCK_STREAM=1 SOCK_DGRAM=2
-SOCK_NONBLOCK=0x800 SOCK_CLOEXEC=0x80000 IPPROTO_IP=0 IPPROTO_TCP=6 IPPROTO_UDP=17
+AF_UNSPEC=0 AF_INET=2 SOCK_STREAM=1 SOCK_DGRAM=2 SOCK_RAW=3
+SOCK_NONBLOCK=0x800 SOCK_CLOEXEC=0x80000 IPPROTO_IP=0 IPPROTO_ICMP=1 IPPROTO_TCP=6 IPPROTO_UDP=17
+IP_TTL=2
 SHUT_RD=0 SHUT_WR=1 SHUT_RDWR=2 MSG_PEEK=2 MSG_DONTWAIT=0x40 MSG_NOSIGNAL=0x4000
 SOL_SOCKET=1 SO_REUSEADDR=2 SO_TYPE=3 SO_ERROR=4 SO_BROADCAST=6
 SO_RCVTIMEO=20 SO_SNDTIMEO=21 TCP_NODELAY=1
@@ -545,6 +546,8 @@ POLLIN=1 POLLOUT=4 POLLERR=8 POLLHUP=16 POLLNVAL=32 FD_SETSIZE=128
 SO_REUSEADDR/SO_BROADCAST/TCP_NODELAY MUST take a four-byte i32 0/1;
 SO_ERROR/SO_TYPE MUST return i32. REUSEADDR MUST NOT allow two live TCP
 listeners on the identical address/port or SO_REUSEPORT load distribution.
+G26 adds IPPROTO_IP/IP_TTL as a four-byte i32 in 1–255, read/written on the
+core thread. Raw receives include the IPv4 header; raw sends exclude it.
 Timeout options MUST use a 16-byte `timeval`: i64 seconds@0, i32 microseconds@8,
 zero@12; nonnegative, microseconds <1000000. Zero disables the timeout; other
 values MUST round up to milliseconds and reject overflow beyond INT32_MAX ms.
@@ -809,7 +812,9 @@ for explicitly launched LAN games and tests; process exit MUST close them.
 This resolves the LAN/server requirement without a boot-time daemon. UI MUST
 not imply a firewall or isolation boundary that is not implemented.
 
-**[F6]** No process or guest MAY obtain raw sockets, NIC register mappings,
+**[F6, amended by G26]** Native processes MAY obtain bounded ICMP raw sockets
+through the native API. Arbitrary raw protocols, IP_HDRINCL and direct guest raw
+socket access remain excluded. No process or guest MAY obtain NIC register mappings,
 physical descriptor pages, arbitrary Ethernet injection/capture or network
 configuration authority through ordinary sockets. Broadcast TX MUST require
 SO_BROADCAST. Parsers MUST enforce Ethernet/IP/UDP/TCP/DHCP/DNS length and

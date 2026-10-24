@@ -76,7 +76,8 @@ static int startup(void) {
     w32_ldr_init(&loader, &host.services, &host.peb);
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader, &host.peb, "/compiled-tls.exe", "\"two  spaces\" /x", "C:\\",
-                           "PATH=C:\\TOOLS\0TEMP=C:\\TEMP\0\0", &main));
+                           "PATH=C:\\TOOLS\0TEMP=C:\\TEMP\0CIUKI_SHELL_SHOW=7\0\0", &main));
+    CHECK((host.peb.ProcessParameters->WindowFlags&1) && host.peb.ProcessParameters->ShowWindowFlags==7);
     CHECK(main && loader.main == main && host.peb.ImageBaseAddress == main->pe.image);
     CHECK(host.teb.ThreadLocalStoragePointer && main->tls_index < 64);
     unsigned char *tls = host.teb.ThreadLocalStoragePointer[main->tls_index];

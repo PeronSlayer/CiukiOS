@@ -338,6 +338,8 @@ struct fake {
     bool late_edge_bm, stray_bm_irq;   /* the edge is the drive's INTRQ: BM Interrupt latched */
     uint8_t late_edge_status, live_status;
     unsigned busy_reads, dma_aborts;
+    /* G11 IDLE (E3h): the Count register of the last one, and an ABRT. */
+    bool idle_abort; uint8_t idle_count; unsigned idle_commands;
 };
 static struct fake *running;
 static void dma_bus_start(struct fake *f);
@@ -556,7 +558,11 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     f->phase_sectors=multiple ? f->multiple[f->selected] : 1;
     f->phase_left=f->blocks<f->phase_sectors ? f->blocks : f->phase_sectors;
     bool flush = value == 0xe7 || value == 0xea;
-    f->status = flush || value==0xc6 || value==0xef || f->dma_command ? 0x40 : 0x48;
+    f->status = flush || value==0xc6 || value==0xef || value==0xe3 || value==0xe0 || value==0xe1 || f->dma_command ? 0x40 : 0x48;
+    if (value == 0xe3) {
+        f->idle_count = f->registers[2][0]; f->idle_commands++;
+        if (f->idle_abort) f->status = 0x41;
+    }
     if (value == 0xef) {
         CHECK(f->registers[1][0] == 3 && f->registers[2][0] == (0x40 | f->channel.devices[f->selected].udma_mode));
         if (f->fault == DMA_MODE_ERROR) f->status = 0x41;
@@ -1001,6 +1007,48 @@ static void test_faults(void)
     printf("ata failures/deadlines/quarantine (ERR, DF, BSY/DRQ, IRQ, IDENTIFY, FLUSH): PASS\n");
 }
 
+/* G11 (docs/design/power-policy.md): IDLE E3h programs the standby timer
+ * only with IDENTIFY word 82 bit 3; an ABRT is that disk's refusal, any
+ * other error keeps the whole-channel quarantine. */
+static void test_standby_timer(void)
+{
+    struct fake f;
+    uint8_t buf[512];
+    fresh(&f, false); f.identify[0][82] |= 1u << 3;
+    CHECK(ata_channel_discover(&f.channel) == 1);
+    struct ata_device *d = &f.channel.devices[0];
+    CHECK(d->power_mgmt);
+    CHECK(!ata_power_command(d,0xe0) && f.command==0xe0);
+    CHECK(!ata_power_command(d,0xe1) && f.command==0xe1);
+    CHECK(!d->block.read(&d->block,0,1,buf));
+    unsigned commands = f.commands;
+    CHECK(ata_standby_timer(d, 241) == 0 && f.command == 0xe3 && f.idle_count == 241 && f.commands == commands + 1);
+    CHECK(d->standby_count == 241 && !d->standby_refused && !f.channel.stopped && (f.control & 2));
+    CHECK(!f.channel.active && !f.channel.mutex.owner);
+    CHECK(ata_standby_timer(d, 0) == 0 && f.idle_count == 0 && d->standby_count == 0);
+    CHECK(d->block.read(&d->block, 0, 1, buf) == 0);
+    /* The drive aborts the command: refused, the channel stays in service. */
+    f.idle_abort = true; commands = f.commands;
+    CHECK(ata_standby_timer(d, 12) == -FS_EOPNOTSUPP && f.commands == commands + 1);
+    CHECK(d->standby_refused && d->standby_count == 0 && !f.channel.stopped && !d->block.quarantined);
+    f.idle_abort = false;
+    CHECK(d->block.read(&d->block, 0, 1, buf) == 0 && ata_standby_timer(d, 12) == 0 && !d->standby_refused);
+    /* ERR with another Error bit (IDNF) is a real failure: quarantine. */
+    f.idle_abort = true; f.abort_error = 0x10;
+    CHECK(ata_standby_timer(d, 12) == -FS_EIO && f.channel.stopped && d->block.quarantined);
+    CHECK(ata_standby_timer(d, 12) == -FS_EQUARANTINED);
+    /* Without the feature set, and on a packet device: no command at all. */
+    fresh(&f, false); f.kind[1] = PACKET;
+    CHECK(ata_channel_discover(&f.channel) == 1 && !f.channel.devices[0].power_mgmt);
+    commands = f.commands;
+    CHECK(ata_standby_timer(&f.channel.devices[0], 12) == -FS_EOPNOTSUPP);
+    CHECK(ata_standby_timer(&f.channel.devices[1], 12) == -FS_EOPNOTSUPP && f.commands == commands && !f.idle_commands);
+    /* Word 83 not valid: words 82-84 carry no information. */
+    fresh(&f, false); f.identify[0][82] |= 1u << 3; f.identify[0][83] = 0;
+    CHECK(ata_channel_discover(&f.channel) == 1 && !f.channel.devices[0].power_mgmt);
+    printf("ata standby timer (IDLE E3h count, word 82 bit 3, ABRT refusal without quarantine, other errors quarantine, ATAPI skipped): PASS\n");
+}
+
 static void test_views(void)
 {
     struct fake f;
@@ -1428,7 +1476,7 @@ int main(int argc, char **argv)
     }
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
-    test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder();
+    test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder(); test_standby_timer();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

@@ -4,6 +4,7 @@
 #include "viewer.h"
 #include "../../../apps/libdeskui/recent.h"
 #include "acc_test.h"
+#include "wallpaper.h"
 #include <time.h>
 #include <errno.h>
 int setenv(const char *, const char *, int);
@@ -21,11 +22,15 @@ static size_t make_bmp(uint8_t *b)
     memcpy(p, top, 12);
     return 54 + 24;
 }
+static unsigned print_requests,setup_requests;
+static void host_print(void *arg,int setup) { (void)arg;if(setup)setup_requests++;else print_requests++; }
 static void write_file(const char *folder, const char *name, const void *data, size_t n)
 {
     char path[1024]; snprintf(path, sizeof(path), "%s/%s", folder, name);
     FILE *f = fopen(path, "wb"); assert(f && fwrite(data, 1, n, f) == n); fclose(f);
 }
+static int calls, last_mode; static char last_path[1100];
+static int record(void *host, const char *file, int mode) { (void)host; calls++; last_mode = mode; snprintf(last_path, sizeof(last_path), "%s", file); return 0; }
 int main(int argc, char **argv)
 {
     assert(argc >= 3);   /* argv[1]: scratch folder; argv[2]: a PNG wallpaper; argv[3]: optional render folder */
@@ -69,11 +74,15 @@ int main(int argc, char **argv)
     static struct du_ui ui; static struct viewer_app app;
     du_init(&ui, pixels, VIEWER_W, VIEWER_H);
     viewer_attach(&app, &ui, viewer_native_fs());
+    app.printing=host_print;
+    struct du_event printing={.type=DU_EV_ACTIVATE,.id=V_M_PRINT};viewer_event(&ui,&printing,&app);assert(!print_requests);
+    printing.id=V_M_PAGESETUP;viewer_event(&ui,&printing,&app);assert(setup_requests==1);
     du_render(&ui);
     at_save(folder, "viewer-empty", &ui);
     char path[1024]; snprintf(path, sizeof(path), "%s/c-wallpaper.png", scratch);
     assert(!viewer_open(&app, path));
     assert(app.loaded && app.count == 4 && app.index == 2 && !strcmp(app.image.format, "PNG"));
+    at_chord(&ui,DU_KEY_LCTRL,0x19);assert(print_requests==1 && app.loaded);
     struct du_recent recent; assert(!du_recent_load(&recent) && recent.count == 1 && !strcmp(recent.paths[0], path));
     du_render(&ui);
     at_save(folder, "viewer-wallpaper-fit", &ui);
@@ -121,6 +130,73 @@ int main(int argc, char **argv)
     du_render(&ui);
     assert(!viewer_open(&app,path)); /* close safely joins an outstanding decode */
     viewer_detach(&app);
+    /* G27: rotation of the picture (the view), keys, status, and the menu. */
+    {
+        snprintf(path, sizeof(path), "%s/a-tiny.bmp", scratch); app.asynchronous = 0;
+        assert(!viewer_open(&app, path) && app.loaded && app.rotation == 0 && app.image.width == 4 && app.image.height == 2);
+        uint32_t original[8]; memcpy(original, app.image.pixels, sizeof(original));
+        /* Clockwise: the top-left pixel goes to the top-right corner; 4 x 2 becomes 2 x 4. */
+        assert(!viewer_rotate(&app.image, 1) && app.image.width == 2 && app.image.height == 4);
+        assert(app.image.pixels[0 * 2 + 1] == original[0] && app.image.pixels[0 * 2 + 0] == original[4] && app.image.pixels[3 * 2 + 1] == original[3] && app.image.pixels[3 * 2 + 0] == original[7]);
+        assert(!viewer_rotate(&app.image, -1) && app.image.width == 4 && memcmp(app.image.pixels, original, sizeof(original)) == 0);
+        assert(!viewer_rotate(&app.image, 2) && app.image.pixels[0] == original[7] && app.image.pixels[7] == original[0]);
+        assert(!viewer_rotate(&app.image, 2) && !memcmp(app.image.pixels, original, sizeof(original)));
+        for (int i = 0; i < 4; i++) assert(!viewer_rotate(&app.image, 1));
+        assert(!memcmp(app.image.pixels, original, sizeof(original)) && !viewer_rotate(&app.image, 0) && !viewer_rotate(&app.image, 4) && !viewer_rotate(&app.image, 8));
+        assert(!memcmp(app.image.pixels, original, sizeof(original)) && app.image.width == 4);
+        struct viewer_image empty = {0}; assert(!viewer_rotate(&empty, 1));
+        viewer_open(&app, path);                                                   /* a fresh load of the file as stored */
+        at_tap(&ui, 0x13); assert(app.rotation == 1 && app.image.width == 2 && strstr(du_get(&ui, V_STATUS)->text, "rotated right"));
+        at_tap(&ui, 0x13); assert(app.rotation == 2 && app.image.width == 4 && strstr(du_get(&ui, V_STATUS)->text, "rotated 180"));
+        at_tap(&ui, 0x26); assert(app.rotation == 1);
+        at_tap(&ui, 0x26); assert(app.rotation == 0 && app.image.width == 4 && !strstr(du_get(&ui, V_STATUS)->text, "rotated"));
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_RIGHT}, &app); assert(app.rotation == 1);
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_TURN}, &app); assert(app.rotation == 3);
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_LEFT}, &app); assert(app.rotation == 2);
+        assert(!(app.view_items[6].flags & DU_ITEM_DISABLED));
+        du_render(&ui);
+        at_save(folder, "viewer-rotated", &ui);
+        snprintf(path, sizeof(path), "%s/b-photo.jpg", scratch); viewer_open(&app, path); assert(app.rotation == 0);   /* a new picture starts upright */
+    }
+    /* Set As Wallpaper: the file as stored, for the formats the desktop decodes. */
+    {
+        app.wallpaper = NULL; du_render(&ui); viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app); assert(!calls);   /* no hook: nothing happens */
+        app.wallpaper = record;
+        snprintf(path, sizeof(path), "%s/b-photo.jpg", scratch); viewer_open(&app, path);
+        du_render(&ui); assert(!(app.file_items[4].flags & DU_ITEM_DISABLED));
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app);
+        assert(calls == 1 && last_mode == 1 && !strcmp(last_path, path) && ui.dialog.kind && strstr(ui.dialog.text, "tiled")); ui.dialog.kind = 0;
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_STRETCH}, &app); assert(calls == 2 && last_mode == 2); ui.dialog.kind = 0;
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_CENTER}, &app); assert(calls == 3 && last_mode == 0); ui.dialog.kind = 0;
+        at_tap(&ui, 0x13);
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_CENTER}, &app);
+        assert(calls == 4 && strstr(ui.dialog.text, "rotation is not saved")); ui.dialog.kind = 0;   /* the view only: said so */
+        assert(!acc_wallpaper_supported("x.gif") && !acc_wallpaper_supported("x.xrgb") && acc_wallpaper_supported("x.JPG") && acc_wallpaper_supported("a.bmp") && acc_wallpaper_supported("a.png") && !acc_wallpaper_supported(NULL));
+        write_file(scratch, "g.gif", gif, sizeof(gif)); snprintf(path, sizeof(path), "%s/g.gif", scratch); viewer_open(&app, path);
+        viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app);
+        assert(calls == 4 && ui.dialog.kind && strstr(ui.dialog.text, "BMP, PNG and JPEG")); ui.dialog.kind = 0;   /* GIF is refused with the reason */
+        app.wallpaper = NULL;
+    }
+    /* The settings update keeps every other key, and refuses what the desktop cannot use. */
+    {
+        char cfg[1100]; snprintf(cfg, sizeof(cfg), "%s/desktop-test.cfg", scratch);
+        static const char original_cfg[] = "# kept\ntheme=Ciuki Blue\nwallpaper=none\nwallpaper_mode=center\nclock_24h=1\nfuture_key=stays\n";
+        write_file(scratch, "desktop-test.cfg", original_cfg, strlen(original_cfg));
+        assert(!acc_wallpaper_write(cfg, "/Documents/Pictures/dog.png", ACC_WALL_TILE));
+        FILE *f = fopen(cfg, "rb"); assert(f); char text[2048]; size_t n = fread(text, 1, sizeof(text) - 1, f); text[n] = 0; fclose(f);
+        assert(strstr(text, "wallpaper=/Documents/Pictures/dog.png") && strstr(text, "wallpaper_mode=tile") && strstr(text, "theme=Ciuki Blue") && strstr(text, "clock_24h=1") && strstr(text, "future_key=stays"));
+        assert(!acc_wallpaper_write(cfg, "/x/y.JPG", ACC_WALL_STRETCH));
+        f = fopen(cfg, "rb"); n = fread(text, 1, sizeof(text) - 1, f); text[n] = 0; fclose(f);
+        assert(strstr(text, "wallpaper_mode=stretch") && strstr(text, "wallpaper=/x/y.JPG") && !strstr(text, "dog.png"));
+        assert(acc_wallpaper_write(cfg, "relative.png", ACC_WALL_TILE) == -ENAMETOOLONG && acc_wallpaper_write(cfg, "/x/a.gif", ACC_WALL_TILE) == -EINVAL);
+        assert(acc_wallpaper_write(cfg, "/x/a.png", 99) == -EINVAL);
+        char longp[300]; memset(longp, 'a', sizeof(longp)); longp[0] = '/'; strcpy(longp + 250, ".png");
+        assert(acc_wallpaper_write(cfg, longp, ACC_WALL_TILE) == -ENAMETOOLONG);
+        char missing[1100]; snprintf(missing, sizeof(missing), "%s/new.cfg", scratch);
+        assert(!acc_wallpaper_write(missing, "/a/b.bmp", ACC_WALL_CENTER));        /* no settings file yet: defaults, then the wallpaper */
+        f = fopen(missing, "rb"); n = fread(text, 1, sizeof(text) - 1, f); text[n] = 0; fclose(f); assert(strstr(text, "wallpaper=/a/b.bmp"));
+        snprintf(missing, sizeof(missing), "%s/no-such-folder/x.cfg", scratch); assert(acc_wallpaper_write(missing, "/a/b.bmp", ACC_WALL_CENTER) < 0);
+    }
     puts("viewer: PASS");
     return 0;
 }

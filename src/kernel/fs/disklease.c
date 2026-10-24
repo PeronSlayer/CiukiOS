@@ -7,6 +7,8 @@
  * mutating request (write, flush, acquire, release, publish, phase, recheck)
  * needs the CALLER's Setup capability (EPERM) and, except the acquire, the
  * lease held by that caller (EACCES), checked on each call, never at open.
+ * G29c adds a separate nonboot editor acquisition for ordinary callers; it
+ * grants raw I/O/flush/release only, never Setup publish/phase/recheck.
  * State lives in struct storage under the VFS namespace lock; device I/O
  * runs without it. Errors are negative ABI errno values; no panic paths.
  *
@@ -73,8 +75,8 @@ static void record(unsigned disk, uint32_t pid, const char *state, const char *r
 }
 static int authorize(struct storage *s, unsigned disk, const struct storage_caller *c)
 {
-    if (!c || !c->setup_capability) return -EPERM;
     const struct storage_lease *l = &s->raw[disk].lease;
+    if (!c || (!c->setup_capability && !l->partition_tool)) return -EPERM;
     return leased(l) && l->holder == c->pid ? 0 : -EACCES;
 }
 static bool on_disk(const struct storage *s, unsigned disk, const struct storage_volume *v)
@@ -216,10 +218,13 @@ static int detach_locked(struct storage *s, unsigned disk)
     return 0;
 }
 
-static int acquire_locked(struct storage *s, unsigned disk, const struct storage_caller *c, struct ciuki_disk_info *out)
+static int acquire_locked(struct storage *s, unsigned disk, const struct storage_caller *c, struct ciuki_disk_info *out, bool editor)
 {
     struct storage_disk *r = &s->raw[disk];
-    if (!c || !c->setup_capability) return -EPERM;
+    if (!c || !c->pid || (!editor && !c->setup_capability)) return -EPERM;
+    /* The native editor never detaches the boot disk, even if temporarily
+     * read-only. Setup's original whole-disk install path is separate. */
+    if (editor && (!disk || on_disk(s,disk,&s->volumes[2]))) return -EBUSY;
     uint32_t mask = disk_drives(s, disk);
     if (mask) { vfs_reserve_locked(&s->vfs, mask); vfs_tag_locked(&s->vfs, "lease"); }
     const char *busy = busy_locked(s, disk);
@@ -234,6 +239,7 @@ static int acquire_locked(struct storage *s, unsigned disk, const struct storage
         record(disk, c->pid, "refused", "detach");
         return abi_error(e);
     }
+    r->lease.partition_tool=editor;
     r->lease.state = CIUKI_DISK_LEASE_HELD; r->lease.holder = c->pid; r->lease.generation++;
     r->lease.drive = 0; r->lease.reasons = 0;
     text(r->lease.phase, sizeof(r->lease.phase), "");
@@ -382,9 +388,9 @@ int storage_disk_control(struct storage *s, unsigned disk, const struct storage_
                          uint32_t op, void *record_in, uint32_t size)
 {
     if (!s || !s->ready || disk >= STORAGE_DISKS) return -ENXIO;
-    if (op < DISK_GET_INFO || op > DISK_RECHECK) return -ENOTTY;
+    if (op < DISK_GET_INFO || op > DISK_PARTITION_ACQUIRE) return -ENOTTY;
     if (!record_in) return -EINVAL;
-    uint32_t want = op == DISK_GET_INFO || op == DISK_LEASE_ACQUIRE ? sizeof(struct ciuki_disk_info) :
+    uint32_t want = op == DISK_GET_INFO || op == DISK_LEASE_ACQUIRE || op == DISK_PARTITION_ACQUIRE ? sizeof(struct ciuki_disk_info) :
         op == DISK_LEASE_RELEASE || op == DISK_FLUSH ? sizeof(struct ciuki_disk_request) :
         op == DISK_RECHECK ? sizeof(struct ciuki_disk_recheck) : sizeof(struct ciuki_disk_lease);
     const uint32_t *head = record_in;
@@ -395,6 +401,7 @@ int storage_disk_control(struct storage *s, unsigned disk, const struct storage_
         if (q->flags || q->reserved) return -EINVAL;
         return storage_disk_flush(s, disk, c);
     }
+    if ((op==DISK_PUBLISH || op==DISK_RECHECK || op==DISK_SET_PHASE) && (!c || !c->setup_capability)) return -EPERM;
     if (op == DISK_PUBLISH) return publish(s, disk, c, record_in);
     vfs_lock(&s->vfs, 0);
     struct storage_disk *r = &s->raw[disk];
@@ -402,7 +409,8 @@ int storage_disk_control(struct storage *s, unsigned disk, const struct storage_
     if (!e) switch (op) {
     case DISK_GET_INFO: info_locked(s, disk, record_in); break;
     case DISK_LEASE_STATE: lease_locked(s, disk, record_in); break;
-    case DISK_LEASE_ACQUIRE: e = acquire_locked(s, disk, c, record_in); break;
+    case DISK_LEASE_ACQUIRE: e = acquire_locked(s, disk, c, record_in, false); break;
+    case DISK_PARTITION_ACQUIRE: e = acquire_locked(s, disk, c, record_in, true); break;
     case DISK_LEASE_RELEASE: {
         const struct ciuki_disk_request *q = record_in;
         e = q->flags || q->reserved ? -EINVAL : release_locked(s, disk, c);

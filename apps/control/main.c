@@ -1,14 +1,17 @@
 /* SPDX-License-Identifier: MIT
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
- * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
+ * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter, access. */
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <poll.h>
 #include "control.h"
+#include "internet_storage.h"
 #include "programs.h"
 #include "decoder.h"
 #include "job.h"
+#include "../desktop/users_worker.h"
+#include "../desktop/profile.h"
 #include <ciuki/channel.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #ifdef __i386__
@@ -38,11 +41,15 @@
 #include "network_io.inc"
 #include "../dosbox/port_settings.h"
 
-struct cp_main { struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
+struct cp_main { struct users_worker users_worker; char settings_temp[160]; struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     uint32_t joystick_serial;
+    struct cp_job menu_job;
+    struct cp_menu_result menu_result;
+    struct sh_edit_request menu_edit;
+    char menu_args[1024];
     struct cp_job game_job;
     struct cp_game_result game_result;
     int saved_w, saved_h;
@@ -55,6 +62,7 @@ struct cp_main { struct cp_network_worker network_worker; struct cp_app app; str
     struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
     pthread_mutex_t completion_lock;
     int completion[2];
+    uint32_t applet_serial;
     uint64_t tick_next;
 };
 
@@ -68,6 +76,11 @@ static int startup_list(void *ctx,struct desk_startup_entry *out,unsigned cap)
 static int startup_enable(void *ctx,const struct desk_startup_entry *entry,int enabled)
 { (void)ctx; return desk_startup_enable_at("/System/Registry",entry,enabled); }
 static void programs_poll(struct cp_main *);
+static void notify_completion(void *);
+static int user_begin(void *ctx,const struct users_request *q)
+{ struct cp_main *m=ctx; return users_begin(&m->users_worker,q,notify_completion,m); }
+static int user_poll(void *ctx,struct users_view *v,int *e)
+{ struct cp_main *m=ctx; return users_poll(&m->users_worker,v,e); }
 /* All applet jobs share one bounded notification channel. Queue saturation
  * already means readable; other send failures close the peer and wake HUP.
  * Serialize send/close so concurrent producers cannot use a recycled fd. */
@@ -132,6 +145,7 @@ static void panel_size(int *width, int *height)
 }
 static void remember_size(struct cp_main *m)
 {
+    if (!m->window.resizable) return; /* property applets do not replace the browser geometry */
     int w=m->ui.canvas.width,h=m->ui.canvas.height;
     if (w==m->saved_w && h==m->saved_h) return;
     FILE *f=fopen(CFG_DIR "/control.tmp","w");
@@ -145,7 +159,7 @@ static void remember_size(struct cp_main *m)
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx;
-    FILE *f = fopen(CFG_FILE, "rb");
+    FILE *f = fopen(profile_settings(), "rb");
     if (!f) return -1;
     *length = fread(text, 1, size, f);
     int ok = !ferror(f) && *length < size;
@@ -197,6 +211,57 @@ static int boot_save(void *ctx, const char *text, size_t length)
     if (r) (void)boot_write(fd, previous, n); /* best effort after an I/O error */
     if (close(fd)) r = -1;
     return r;
+}
+#define CP_HW_FILE CFG_DIR "/hwprofiles.cfg"
+static int hw_load(void *ctx, char *text, size_t size, size_t *length)
+{
+    (void)ctx;
+    int fd = open(CP_HW_FILE, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    size_t n = 0; int error = 0;
+    while (n < size) {
+        ssize_t got = read(fd, text + n, size - n);
+        if (got < 0) { error = errno; break; }
+        if (!got) break;
+        n += (size_t)got;
+    }
+    if (close(fd) && !error) error = errno;
+    if (!error && n >= size) error = EFBIG;
+    if (error) return -error;
+    text[n] = 0; *length = n;
+    return 0;
+}
+/* Atomic replace: temporary file, fsync, rename (cfg_write_at). */
+static int hw_save(void *ctx, const char *text, size_t length)
+{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, CFG_DIR "/hwprofiles.tmp", text, length); return e ? -e : 0; }
+static int memory_query(void *ctx, uint64_t *total_k, uint64_t *free_k)
+{
+    (void)ctx;
+    static uint8_t buffer[CIUKI_PROC_LIST_MIN + CIUKI_PROCESS_MAX * sizeof(struct ciuki_proc_record)];
+    if (ciuki_proc_list(buffer, sizeof(buffer)) <= 0) return -EIO;
+    struct ciuki_proc_system sys; memcpy(&sys, buffer, sizeof(sys));
+    if (sys.version != CIUKI_PROC_VERSION) return -EIO;
+    *total_k = (uint64_t)sys.usable_pages * 4u; *free_k = (uint64_t)sys.free_pages * 4u;
+    return 0;
+}
+static int driver_catalog(void *ctx, struct aw_model *out, unsigned capacity)
+{
+    (void)ctx;
+    struct dp_entry *e = calloc(AW_CATALOG_MAX, sizeof(*e));
+    if (!e) return -ENOMEM;
+    int n = dp_catalog(NDP_ROOT, e, AW_CATALOG_MAX), kept = 0;
+    for (int i = 0; i < n && (unsigned)kept < capacity; i++) {
+        size_t len = strlen(e[i].service); int ok = len > 0 && len < sizeof(out->driver);
+        for (size_t k = 0; ok && k < len; k++) if ((unsigned char)e[i].service[k] <= ' ' || e[i].service[k] == '=' || (unsigned char)e[i].service[k] > 126) ok = 0;
+        if (!ok) continue;
+        memset(&out[kept], 0, sizeof(out[kept]));
+        out[kept].class_id = CIUKI_DEVICE_NETWORK;
+        snprintf(out[kept].name, sizeof(out[kept].name), "%s", e[i].name);
+        snprintf(out[kept].driver, sizeof(out[kept].driver), "%s", e[i].service);
+        kept++;
+    }
+    free(e);
+    return n < 0 ? n : kept;
 }
 static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; return ciuki_devices(out); }
 static int firmware(void *ctx, struct ciuki_firmware_page *out) { (void)ctx; return ciuki_firmware_inventory(out); }
@@ -272,6 +337,12 @@ static int usb_hwid_name(void *ctx, unsigned vendor, unsigned device, char *out,
     struct cp_main *m=ctx; m->assets_requested=1;
     return cp_hwid_lookup_json(m->hwid_usb,vendor,device,out,size);
 }
+static int sound_validate(void *ctx, const char *path)
+{ (void)ctx; return sound_validate_file(path); }
+static int sound_schemes(void *ctx, char names[][SOUND_SCHEME_NAME], unsigned cap)
+{ (void)ctx; return sound_scheme_list_at(SOUND_SCHEMES_DIR,names,cap); }
+static int sound_scheme(void *ctx, unsigned op, const char *name, struct sound_scheme *s)
+{ (void)ctx; return sound_scheme_at(SOUND_SCHEMES_DIR,op,name,s); }
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx; struct sound_scheme s;
@@ -387,6 +458,7 @@ static int game_begin(void *ctx,unsigned game,const struct game_ports_settings *
 static int game_poll_result(void *ctx,struct cp_game_result *r)
 {
     struct cp_main *m=ctx;if (!cp_job_ready(&m->game_job)) return 0;
+    cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);*r=m->game_result;return 1;
 }
 static int joystick_request(void *ctx, const struct ciuki_joystick_control *c)
@@ -410,6 +482,8 @@ static int autoplay_list(void *ctx,struct ap_preference *out,unsigned capacity)
 { (void)ctx; return ap_preference_list(NULL,out,capacity); }
 static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; return ap_preference_forget(NULL,id); }
+static int monitor_query(void *ctx,struct ciuki_monitor_info *q) { (void)ctx; return ciuki_display_monitor(q); }
+static int refresh_query(void *ctx,struct ciuki_display_refresh *q) { (void)ctx; return ciuki_display_refresh(q); }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
 static int generic_engine_query(void *ctx,struct ciuki_display_engine_info *info)
@@ -462,9 +536,55 @@ static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *leng
     }
     return close(fd) ? -errno : 0;
 }
+static int open_applet(void *ctx,int page)
+{
+    struct cp_main *m=ctx;struct ciuki_message request;
+    if (m->applet_serial) return -EBUSY;
+    if (!++m->serial) ++m->serial;
+    int r=cp_applet_message(&request,m->serial,page);
+    if (!r) r=du_window_queue(&m->window,&request);
+    if (!r) m->applet_serial=m->serial;
+    return r;
+}
 static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
 static int read_power_status(void *ctx, struct ciuki_power_status *out)
 { (void)ctx; return ciuki_power_status(out) ? -errno : 0; }
+static int capture_caps(void *ctx,struct ciuki_audio_capture *out)
+{
+    (void)ctx; int fd=open("/dev/audio",O_RDONLY|O_CLOEXEC);
+    if (fd<0) return -errno;
+    *out=(struct ciuki_audio_capture){.version=1,.size=sizeof(*out)};
+    int error=ciuki_devctl(fd,AUDIO_CAPTURE_CAPS,out,sizeof(*out)) ? -errno : 0;
+    close(fd); return error;
+}
+static int audio_line(void *ctx,struct ciuki_mixer_line *line,int set)
+{
+    struct cp_main *m=ctx;
+    if (!set) {
+        int fd=open("/dev/mixer",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+        int result=ciuki_devctl(fd,MIXER_GET_LINE,line,sizeof(*line)) ? -errno : 0;
+        close(fd); return result;
+    }
+    struct ciuki_message request; desk_message(&request,DESK_MIXER_SET,28);
+    desk_put32(request.data+4,++m->serial); desk_put32(request.data+8,line->left);
+    desk_put32(request.data+12,line->right); desk_put32(request.data+16,line->mute);
+    desk_put32(request.data+20,line->line); desk_put32(request.data+24,0);
+    return du_window_queue(&m->window,&request) ? -errno : 0;
+}
+static int multimedia_open(void *ctx,unsigned which)
+{
+    struct cp_main *m=ctx;
+    static const char *const names[]={"mixer","recorder","music"};
+    if (which>=3) return -EINVAL;
+    unsigned n=(unsigned)strlen(names[which]); struct ciuki_message request;
+    desk_message(&request,DESK_LAUNCH,16+n);
+    desk_put32(request.data+4,++m->serial); desk_put32(request.data+8,n);
+    memcpy(request.data+12,names[which],n); desk_put32(request.data+12+n,0);
+    return du_window_queue(&m->window,&request) ? -errno : 0;
+}
+static int read_power_events(void *ctx, struct ciuki_power_events *out)   /* G11 */
+{ (void)ctx; return ciuki_power_events(out) ? -errno : 0; }
+
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -499,6 +619,13 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
     }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && m->display_serial && p->serial == m->display_serial) {
         m->display_serial = 0; cp_display_result(&m->app, p->result); return;
+    }
+    if (p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && m->applet_serial && p->serial==m->applet_serial) {
+        m->applet_serial=0;
+        if (p->result<0) { struct du_widget *s=du_get(&m->ui,3);
+            if (s) { du_set_text(s,"The applet could not be opened.");du_invalidate(&m->ui,s->box); }
+        }
+        return;
     }
     if(p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && p->serial==m->install_serial){
         m->install_serial=0;struct du_widget *s=du_get(&m->ui,3);
@@ -563,7 +690,7 @@ static void idle(void *arg)
     } else if (m->assets_requested && !m->assets_ready && !m->assets.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         if (cp_job_start(&m->assets,read_assets,m,notify_completion,m)) m->assets_ready=1;
     }
-    if (m->window.configured && m->ui.frame_count) cp_fonts_poll(&m->app);
+    if (m->window.configured && m->ui.frame_count) { cp_fonts_poll(&m->app);cp_menu_poll(&m->app); }
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
@@ -590,7 +717,7 @@ static void idle(void *arg)
      * Other pages have no heartbeat. Navigation/close also runs on input and
      * completion, even when the wall clock has not changed. */
     int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS || m->app.page==CP_JOYSTICK ||
-        m->app.page==CP_POWER;
+        m->app.page==CP_POWER || m->app.page==CP_ACCESS;
     if (ticking && (!m->tick_next || mono>=m->tick_next)) {
         cp_tick(&m->app); m->tick_next=mono+1000000000ull;
     } else if (!ticking) m->tick_next=0;
@@ -699,6 +826,7 @@ static int program_install(void *ctx,const char *path)
     memcpy(request.data+16+t,path,n);
     int result=du_window_queue(&m->window,&request);if(!result)m->install_serial=m->serial;return result;
 }
+#include "start_menu_io.inc"
 static uint64_t control_deadline(struct cp_main *m)
 {
     uint64_t next=du_next_deadline(&m->ui);
@@ -742,9 +870,17 @@ static int control_run(struct cp_main *m)
     }
 }
 
+#include "internet_history.h"
+static int internet_clear(void *ctx)
+{ (void)ctx;return internet_history_clear("/Documents/NetSurf"); }
+static int internet_read(void *ctx,struct cp_internet_options *o)
+{ (void)ctx;return internet_load(INTERNET_OPTIONS_PATH,o); }
+static int internet_write(void *ctx,const struct cp_internet_options *o)
+{ (void)ctx;return internet_save(INTERNET_OPTIONS_PATH,o); }
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
+    const char *set_wallpaper=NULL;
     unsigned game=0;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
@@ -752,6 +888,7 @@ int main(int argc, char **argv)
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
+        else if (!strncmp(argv[i],"--set-wallpaper=",16)) { set_wallpaper=argv[i]+16; page=CP_DISPLAY; }
         else if (!strncmp(argv[i],"--game=",7)) {
             char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
             if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
@@ -761,24 +898,32 @@ int main(int argc, char **argv)
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
     if (completion_start(m)) { free(m); return 1; }
+    snprintf(m->settings_temp,sizeof(m->settings_temp),"%s.cpl",profile_settings());
     m->writer.notify=notify_completion; m->writer.notify_ctx=m;
-    m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
+    m->writer_started=!cfg_writer_start(&m->writer,profile_settings(),m->settings_temp);
     struct cp_host *h = &m->app.host;
+    h->user_begin=user_begin; h->user_poll=user_poll;
+    h->menu_begin=menu_begin_io;h->menu_poll=menu_poll_io;h->menu_explore=menu_explore;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
     h->startup_list=startup_list; h->startup_enable=startup_enable;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
+    h->sound_validate=sound_validate; h->sound_schemes=sound_schemes; h->sound_scheme=sound_scheme;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;
     h->display = display_query;
+    h->internet_clear_history=internet_clear;h->internet_load=internet_read;h->internet_save=internet_write;
+    h->display = display_query; h->monitor=monitor_query; h->refresh_rates=refresh_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;
-    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
+    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->power_events=read_power_events; h->log_read=log_read;
+    h->open_applet=open_applet; h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
-    h->audio_diagnostics = audio_query;
+    h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->audio_line=audio_line; h->multimedia_open=multimedia_open;
     h->game_begin=game_begin;h->game_poll=game_poll_result;
     h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
+    h->hw_load = hw_load; h->hw_save = hw_save; h->memory = memory_query; h->driver_catalog = driver_catalog;
 
     const char *display = getenv("CIUKI_DISPLAY");
     h->screen_w = 1024; h->screen_h = 768;
@@ -794,18 +939,23 @@ int main(int argc, char **argv)
     if (width>(int)h->screen_w-16) width=CP_WIDTH;
     if (height>(int)h->screen_h-100) height=CP_HEIGHT;
     m->saved_w=width; m->saved_h=height; m->title_page=-99;
-    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
+    if ((page!=CP_DISPLAY && page!=CP_ADAPTER && page!=CP_FONTS ? du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT) :
+         du_window_open(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel"))) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
         completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
+    du_help_topic(&m->ui, "control");   /* G15: F1 opens this program's Help topic */
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, game ? CP_HOME : page)) {
         du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
     if (game) cp_game_open(&m->app,game);
+    if (set_wallpaper && cp_wallpaper_set(&m->app,set_wallpaper)) fprintf(stderr,"control: wallpaper path is not a supported image\n");
     int r = control_run(m);
     cp_decoder_stop();
+    cp_job_finish(&m->users_worker.job);
+    cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);
     cp_job_finish(&m->assets);

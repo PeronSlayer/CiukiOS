@@ -123,6 +123,7 @@ int main(int argc,char **argv)
     int width=560,height=330; const char *display=getenv("CIUKI_DISPLAY");
     if (display && atoi(display)>=800) { width=760; height=500; }
     if (du_window_open_resizable(&m->window,&m->ui,channel,width,height,"CiukIDE",500,300)) { free(m); return 1; }
+    du_help_topic(&m->ui, "ciukide");   /* G15: F1 opens this program's Help topic */
     m->app.fs=cn_native_fs(); m->app.process=&child_ops; m->app.process_ctx=m; m->app.launch=launch; m->app.launch_ctx=m;
     m->window.user=m; m->window.message=message; m->window.close_request=close_request;
     if (ide_attach(&m->app,&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }

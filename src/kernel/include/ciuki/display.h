@@ -3,6 +3,8 @@
 #define CIUKI_KERNEL_DISPLAY_H
 #include <ciuki/desktop.h>
 int32_t display_syscall(struct trap_frame *);
+int display_monitor_query(struct ciuki_monitor_info *);
+int display_refresh_query(struct ciuki_display_refresh *);
 int display_query(struct ciuki_display_info *);
 int display_set(struct process *, uint16_t mode);
 /* Same desktop authority and rollback as call 74; a delegated mode does

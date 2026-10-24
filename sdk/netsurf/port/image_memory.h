@@ -4,6 +4,7 @@
 #ifndef CIUKI_NETSURF_IMAGE_MEMORY_H
 #define CIUKI_NETSURF_IMAGE_MEMORY_H
 #include <stddef.h>
+#include <stdint.h>
 /* fx-14: the decoded-image ledger is an eighth of the memory free when the
  * first image is charged (docmem_query.h), between the plan's 2 MiB decoded
  * image cache and 16 MiB; the 128 MiB baseline model gives 7 MiB. */
@@ -18,4 +19,6 @@ void *ciuki_image_malloc(size_t);
 void *ciuki_image_calloc(size_t,size_t);
 void *ciuki_image_realloc(void *,size_t);
 void ciuki_image_free(void *);
+/* Power-of-two sample lattice; zero means no safe output fits. */
+unsigned ciuki_image_scale(uint32_t,uint32_t,unsigned,uint32_t *,uint32_t *);
 #endif

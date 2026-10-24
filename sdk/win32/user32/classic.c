@@ -588,7 +588,7 @@ static struct caret *caret_for(DWORD tid, BOOL create) {
     return 0;
   for (UINT i = 0; i < 16; i++)
     if (!carets[i].tid) {
-      carets[i] = (struct caret){.tid = tid, .blink = 530};
+      carets[i] = (struct caret){.tid = tid, .blink = u32_input_value(DESK_INPUT_BLINK)};
       return &carets[i];
     }
   return 0;
@@ -687,11 +687,21 @@ BOOL W32API GetCaretPos(POINT *p) {
   *p = c->pos;
   return 1;
 }
+void u32_caret_preferences(void)
+{
+  UINT blink=u32_input_value(DESK_INPUT_BLINK);
+  for(UINT i=0;i<sizeof(carets)/sizeof(carets[0]);i++)if(carets[i].tid) {
+    struct caret *c=&carets[i];c->blink=blink;
+    if(!blink && c->hwnd && !c->hidden && !c->paint_hidden && !c->drawn)caret_xor(c);
+    if(c->hwnd) {KillTimer(c->hwnd,CARET_TIMER);if(blink)SetTimer(c->hwnd,CARET_TIMER,blink,caret_timer);}
+  }
+}
 BOOL W32API SetCaretBlinkTime(UINT n) {
   U32_GUARD;
   struct caret *c = caret_for(u32_tid(), 1);
   if (!c)
     return 0;
+  if(!u32_input_setting(DESK_INPUT_BLINK,n==0xffffffffu ? 0 : n,0))return 0;
   c->blink = n;
   if (c->hwnd) {
     KillTimer(c->hwnd, CARET_TIMER);
@@ -703,7 +713,7 @@ BOOL W32API SetCaretBlinkTime(UINT n) {
 UINT W32API GetCaretBlinkTime(void) {
   U32_GUARD;
   struct caret *c = caret_for(u32_tid(), 0);
-  return c ? c->blink : 530;
+  (void)c;u32_input_refresh();UINT n=u32_input_value(DESK_INPUT_BLINK);return n ? n : 0xffffffffu;
 }
 /* BeginPaint/EndPaint bracket: the caret never ends up inside painted pixels. */
 void u32_caret_paint(HWND h, HDC dc) {
@@ -929,10 +939,76 @@ LRESULT u32_nc_mouse(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     SendMessageA(h, WM_CONTEXTMENU, (WPARAM)h, lp);
   return 0;
 }
+/* ---- G15: WM_HELP and What's This? ----
+ * Windows 98 (RK-keys; the WM_HELP, WM_SYSCOMMAND/SC_CONTEXTHELP and
+ * DefWindowProc documentation): F1 sends WM_HELP with a HELPINFO
+ * (HELPINFO_WINDOW) to the window with the keyboard focus, and DefWindowProc
+ * passes it to the parent of a child window; Shift+F1 is SC_CONTEXTHELP, which
+ * turns the pointer into the help arrow (IDC_HELP) until the next click, and
+ * that click sends WM_HELP for the window under the pointer (no click reaches
+ * it). Esc ends the mode. There is no WinHelp engine: a WM_HELP nobody
+ * handles does nothing. */
+#if defined(__i386__)
+_Static_assert(sizeof(HELPINFO) == 28, "PE32 HELPINFO");
+#endif
+#define IDC_HELP_ID 32651u
+static HWND help_mode;
+static HCURSOR help_cursor_before;
+BOOL u32_help_mode(void) { return help_mode != 0; }
+LRESULT u32_help_send(HWND target, HWND item, int control, POINT screen) {
+  struct u32_window *w = u32_window(item);
+  HELPINFO hi;
+  hi.cbSize = sizeof(hi);
+  hi.iContextType = HELPINFO_WINDOW;
+  hi.iCtrlId = control;
+  hi.hItemHandle = item;
+  hi.dwContextId = w ? w->help_id : 0;
+  hi.MousePos = screen;
+  return SendMessageA(target, WM_HELP, 0, (LPARAM)&hi);
+}
+static void help_begin(HWND h) {
+  if (help_mode)
+    return;
+  help_mode = h;
+  help_cursor_before = SetCursor((HCURSOR)(uintptr_t)IDC_HELP_ID);
+}
+void u32_help_end(void) {
+  if (!help_mode)
+    return;
+  help_mode = 0;
+  SetCursor(help_cursor_before);
+  help_cursor_before = 0;
+}
+void u32_help_click(HWND h, POINT screen) {
+  struct u32_window *w = u32_window(h);
+  u32_help_end();
+  if (w)
+    u32_help_send(h, h, (int)w->id, screen);
+}
 LRESULT u32_classic_default(HWND h, UINT m, WPARAM wp, LPARAM lp,
                             BOOL *handled) {
   *handled = 1;
   switch (m) {
+  case WM_KEYDOWN:
+    if (wp == VK_F1 && GetKeyState(VK_CONTROL) >= 0 && GetKeyState(VK_MENU) >= 0) {
+      if (GetKeyState(VK_SHIFT) < 0)
+        SendMessageA(h, WM_SYSCOMMAND, SC_CONTEXTHELP, 0);
+      else {
+        struct u32_window *w = u32_window(h);
+        POINT p;
+        GetCursorPos(&p);
+        u32_help_send(h, h, w ? (int)w->id : 0, p);
+      }
+      return 0;
+    }
+    *handled = 0;
+    return 0;
+  case WM_HELP: {
+    struct u32_window *w = u32_window(h);
+    if (w && (w->style & WS_CHILD) && w->parent)
+      return SendMessageA(w->parent, m, wp, lp);
+    return 0;
+  }
   case WM_NCHITTEST:
     return u32_hit_test(h, point_of(lp));
   case WM_NCLBUTTONDOWN:
@@ -960,6 +1036,10 @@ LRESULT u32_classic_default(HWND h, UINT m, WPARAM wp, LPARAM lp,
     UINT command = (UINT)wp & 0xfff0u;
     if (command == SC_KEYMENU || command == SC_MOUSEMENU)
       return u32_menu_command(h, wp, lp);
+    if (command == SC_CONTEXTHELP) {
+      help_begin(h);
+      return 0;
+    }
     /* Interactive move/size belongs to the desktop; protocol v3 has no
      * request for it, so the command is accepted without effect. */
     if (command == SC_MOVE || command == SC_SIZE)

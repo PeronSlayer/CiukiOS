@@ -16,6 +16,14 @@ static inline const struct desk_cursor_raster *desk_generic_cursor(unsigned shap
         return &desk_extra_cursors[shape-DESK_CURSOR_OPEN_HAND];
     return NULL;
 }
+/* G25 Large pointer scheme: the same drawings at the pre-fx-13 scale (scripts/cursors/build_ciuki.py). */
+static inline const struct desk_cursor_raster *desk_generic_cursor_large(unsigned shape)
+{
+    if (shape<=DESK_CURSOR_PRECISION) return &desk_cursors_large[shape];
+    if (shape>=DESK_CURSOR_OPEN_HAND && shape<=DESK_CURSOR_HELP)
+        return &desk_extra_cursors_large[shape-DESK_CURSOR_OPEN_HAND];
+    return NULL;
+}
 static inline struct desk_tool_cursor desk_tool_cursor(unsigned shape)
 {
     static const char *const pencil[] = {
@@ -66,6 +74,20 @@ static inline struct desk_tool_cursor desk_tool_cursor(unsigned shape)
         if (rows[y][x]!='.') r.mask[y] |= 0x80000000u>>x;
         if (rows[y][x]=='o') r.image[y] |= 0x80000000u>>x;
     }
+    return r;
+}
+/* G25 pointer schemes (access.h ACC_POINTER_*): bit 0 Large, bit 1 Inverted. The compositor applies the same
+ * transformation to the 32x32 raster; host oracles use this to draw the hardware pointer's silhouette. */
+static inline struct desk_tool_cursor desk_tool_cursor_scheme(unsigned shape, unsigned scheme)
+{
+    struct desk_tool_cursor r=desk_tool_cursor(shape);
+    const struct desk_cursor_raster *generic=desk_generic_cursor(shape);
+    if ((scheme&1u) && generic) {
+        const struct desk_cursor_raster *large=desk_generic_cursor_large(shape);
+        memcpy(r.mask,large->mask,sizeof(r.mask)); memcpy(r.image,large->image,sizeof(r.image));
+        r.hot_x=(int)large->hot_x; r.hot_y=(int)large->hot_y;
+    }
+    if (scheme&2u) for (unsigned y=0;y<32;y++) r.image[y]=r.mask[y]&~r.image[y];
     return r;
 }
 #endif

@@ -186,11 +186,11 @@ static void unhold(struct dosvm *v)
 static bool park_released(void *arg)
 {
     const struct dosvm *v=arg;
-    return (!v->fullscreen_hold && !v->fullscreen_suspended && !v->clipboard_mark) || v->info.state>=DOSVM_STOPPING;
+    return (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) || v->info.state>=DOSVM_STOPPING;
 }
 void dosvm_fullscreen_checkpoint(struct dosvm *v)
 {
-    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->clipboard_mark) return;
+    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) return;
     v->fullscreen_parked=true;
     /* fx-22: a suspended VM is not scheduled (VMM Suspend_VM; VPICD
      * simulates no interrupt into it). The former 1 ms sleep loop kept the
@@ -493,7 +493,7 @@ void dosvm_fullscreen_poll(void)
             if (fullscreen_sample_frame) v->fullscreen_frame_seconds++;
             fullscreen_sample_frame=false;
         }
-        bool idle=v->fullscreen_suspended || v->idle.sleeping ||
+        bool idle=v->fullscreen_suspended || v->idle.sleeping || v->clipboard.pending ||
             (v->idle.seen && g_ticks-v->idle.last_tick<1000) ||
             (v->monitor.state==V86_HALTED && v->monitor.vif);
         bool frame_timeout=!fullscreen_frame_seen && deadline_passed(fullscreen_frame_deadline);
@@ -550,6 +550,10 @@ bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value)
         if (code==0x1D) left_ctrl=value!=0;
         if (code==0x11D) right_ctrl=value!=0;
         if (swallowed==code) { if (!value) swallowed=0; return true; }
+        if (fullscreen_owner && (code==0x137 || code==0x54)) {
+            if (value==1) { fullscreen_owner->clipboard_screen=true; dosvm_idle_wake(fullscreen_owner); }
+            return true;
+        }
         bool alt=left_alt||right_alt, ctrl=left_ctrl||right_ctrl;
         if (ctrl && alt && (code==0x153 || code==0x53)) return false; /* system path */
         if (value==1 && alt && !ctrl && (code==0x1C || code==0x11C || (code==0x0F && fullscreen_owner))) {
@@ -572,6 +576,8 @@ bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value)
     if (!v) return false;
     if (v->fullscreen_hold || fullscreen_return || !dosvm_valid(v->info.key)) return true;
     if (type==INPUT_KEY) dosvm_kbd_event(v,code,value);
+    else if (type==INPUT_REL && code==INPUT_WHEEL)
+        dosvm_mouse_wheel(v,value<-32767 ? 32767 : value>32767 ? -32767 : -value);
     else if (type==INPUT_REL && code!=INPUT_WHEEL)
         dosvm_mouse_event(v,code==INPUT_X ? value : 0,code==INPUT_Y ? value : 0,v->mouse.buttons);
     else if (type==INPUT_BTN && code<=INPUT_MIDDLE)

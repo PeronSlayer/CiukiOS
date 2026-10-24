@@ -10,11 +10,14 @@ int desk_w32_launcher_main(int,char **);
 static char path[260],words[34][1600],cwd[512];
 static unsigned maps,launched,sent,waits;
 static int wait_status,reply_result;
+static unsigned show;
 pid_t fixture_waitpid(pid_t pid,int *status,int options)
 {assert(pid==123 && !options);waits++;*status=wait_status;return pid;}
 ciuki_pid_t ciuki_spawn(const char *p,char *const argv[],char *const env[],const struct ciuki_spawn_fd *fds,uint32_t count,uint32_t flags)
 {
     assert(!flags && env && !strcmp(env[0],"LC_ALL=C"));
+    assert(env[3] && !strncmp(env[3],"CIUKI_SHELL_SHOW=",17) && !env[3][18]);
+    show=(unsigned)(env[3][17]-'0');
     launched++;snprintf(path,sizeof(path),"%s",p);assert(getcwd(cwd,sizeof(cwd)));
     maps=count;if(count)assert(count==1 && fds[0].source==3 && fds[0].target==3);
     memset(words,0,sizeof(words));
@@ -34,6 +37,7 @@ int main(int argc,char **argv)
     assert(!desk_w32_launcher_main(5,args));
     assert(!strcmp(path,"/Program Files/fixture.exe") && !maps && launched==1);
     assert(!strcmp(words[1],"\"C:\\Program Files\\fixture.exe\" /remove \"keep spaces\""));assert(!strcmp(cwd,argv[1]));
+    assert(show==1);
     char text[]="one \"two words\" empty\\\"quote \"\"";char *native[6]={0};
     assert(desk_w32_arguments(text,native,6)==4);
     assert(!strcmp(native[0],"one") && !strcmp(native[1],"two words") && !strcmp(native[2],"empty\"quote") && !native[3][0]);
@@ -48,5 +52,10 @@ int main(int argc,char **argv)
     char *wait_args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove",argv[1],"--wait",NULL};
     unsigned before=waits;assert(!desk_w32_launcher_main(6,wait_args) && reply_result==0 && waits==before+1);
     wait_status=3<<8;assert(desk_w32_launcher_main(6,wait_args)==1 && reply_result==-EIO && waits==before+2);
+    char *show_args[]={"shell-launch","0","C:\\fixture.exe","",argv[1],"7",NULL};
+    assert(!desk_w32_launcher_main(6,show_args) && show==7);
+    show_args[5]="3";assert(!desk_w32_launcher_main(6,show_args) && show==3);
+    unsigned saved=launched;show_args[5]="10";
+    assert(desk_w32_launcher_main(6,show_args)==1 && reply_result==-EINVAL && launched==saved);
     puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;
 }

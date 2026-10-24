@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include "sound_storage.h"
 #include <ciuki/devices.h>
+#include <ciuki/abi.h>
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -62,6 +63,52 @@ int main(int argc,char **argv)
     generation=reg_generation(r);assert(master_preference_save(argv[1],101,20,0)==-1&&errno==EINVAL&&reg_generation(r)==generation);
     assert(master_preference_save(argv[1],20,20,2)==-1&&errno==EINVAL);
     assert(!ciuki_master_unpack(-1,&left,&right,&mute)&&!ciuki_master_unpack(131072,&left,&right,&mute));
+    struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=CIUKI_MIXER_CD,.left=40,.right=65,.mute=1};
+    assert(!line_preference_save(argv[1],&line));
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,"Source3",&packed) && packed==ciuki_master_pack(40,65,1));
+    line.line=CIUKI_MIXER_LINE; line.recording=1; line.selected=1;
+    assert(!line_preference_save(argv[1],&line));
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,"Recording",&packed) && packed==(ciuki_master_pack(40,65,1)|(4<<24)));
+    line.left=101; generation=reg_generation(r); assert(line_preference_save(argv[1],&line)==-1 && errno==EINVAL && reg_generation(r)==generation);
     reg_close_root(r);
+    char schemes[256]; snprintf(schemes,sizeof(schemes),"%s/schemes",argv[1]);
+    char names[SOUND_SCHEMES_MAX][SOUND_SCHEME_NAME];
+    assert(sound_scheme_list_at(schemes,names,SOUND_SCHEMES_MAX)==0);
+    sound_defaults(&s); assert(!sound_assign(&s,SOUND_ERROR,"/Documents/My Sound.WAV"));
+    assert(!sound_path(&s,SOUND_ERROR,cfg,sizeof(cfg)) && !strcmp(cfg,"/Documents/My Sound.WAV"));
+    assert(!sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"Work",&s));
+    assert(!sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"Arcade",&s));
+    assert(sound_scheme_list_at(schemes,names,SOUND_SCHEMES_MAX)==2 && !strcmp(names[0],"Arcade") && !strcmp(names[1],"Work"));
+    assert(sound_scheme_list_at(schemes,names,1)==-ENOSPC);
+    sound_defaults(&loaded); assert(!sound_scheme_at(schemes,SOUND_SCHEME_LOAD,"Work",&loaded));
+    assert(!memcmp(&s,&loaded,sizeof(s)));
+    s.volume=42; assert(!sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"Work",&s));
+    assert(!sound_scheme_at(schemes,SOUND_SCHEME_LOAD,"Work",&loaded) && loaded.volume==42);
+    assert(sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"Default",&s)==-EINVAL);
+    assert(sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"default",&s)==-EINVAL);
+    assert(sound_scheme_at(schemes,SOUND_SCHEME_DELETE,"../escape",&s)==-EINVAL);
+    assert(!sound_scheme_at(schemes,SOUND_SCHEME_DELETE,"Work",&s));
+    assert(sound_scheme_at(schemes,SOUND_SCHEME_LOAD,"Work",&loaded)==-ENOENT);
+    assert(!sound_scheme_at(schemes,SOUND_SCHEME_DELETE,"Arcade",&s));
+    for (unsigned i=0;i<SOUND_SCHEMES_MAX;i++) {
+        char name[32]; snprintf(name,sizeof(name),"Scheme%02u",i);
+        assert(!sound_scheme_at(schemes,SOUND_SCHEME_SAVE,name,&s));
+    }
+    assert(sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"Overflow",&s)==-ENOSPC);
+    assert(!sound_scheme_at(schemes,SOUND_SCHEME_SAVE,"Scheme00",&s)); /* overwrite at capacity */
+    for (unsigned i=0;i<SOUND_SCHEMES_MAX;i++) {
+        char name[32]; snprintf(name,sizeof(name),"Scheme%02u",i);
+        assert(!sound_scheme_at(schemes,SOUND_SCHEME_DELETE,name,&s));
+    }
+    assert(!rmdir(schemes));
+    char cwd[1024]; assert(getcwd(cwd,sizeof(cwd))); assert(!chdir(argv[1]));
+    uint8_t wav[46]={0}; memcpy(wav,"RIFF",4); wav[4]=38; memcpy(wav+8,"WAVEfmt ",8);
+    wav[16]=16; wav[20]=1; wav[22]=1; wav[24]=0x22; wav[25]=0x56;
+    wav[28]=0x44; wav[29]=0xac; wav[32]=2; wav[34]=16; memcpy(wav+36,"data",4); wav[40]=2;
+    f=fopen("sample.wav","wb"); assert(f && fwrite(wav,1,sizeof(wav),f)==sizeof(wav)); fclose(f);
+    assert(!sound_validate_file("sample.wav"));
+    wav[20]=3; f=fopen("sample.wav","wb"); assert(f && fwrite(wav,1,sizeof(wav),f)==sizeof(wav)); fclose(f);
+    assert(sound_validate_file("sample.wav")==-EINVAL);
+    assert(!unlink("sample.wav")); assert(!chdir(cwd));
     puts("PASS sound storage: shipped/legacy/registry precedence, no writes on load, one durable merge, unrelated keys, invalid paths/volume");
 }

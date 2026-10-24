@@ -33,6 +33,7 @@ int main(int argc, char **argv)
     if (du_window_open(&m->window, &m->ui, channel, CLOCK_W, CLOCK_H, "Clock and Calendar")) {
         fprintf(stderr, "clock: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "clock");   /* G15: F1 opens this program's Help topic */
     clock_attach(&m->app, &m->ui, now_local, NULL);
     du_timer_start(&m->ui, 1, 250000000ull, 1);   /* four checks a second keep the seconds hand on time */
     if (test_mode) du_window_move(&m->window, 24, 48);

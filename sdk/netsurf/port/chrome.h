@@ -10,6 +10,7 @@ void ciuki_chrome_url(struct nsurl *);
 void ciuki_chrome_loading(bool);
 void ciuki_chrome_pointer(unsigned);
 void ciuki_chrome_reload(void);
+bool ciuki_chrome_new_window(struct nsurl *);
 bool ciuki_chrome_busy(void);
 void ciuki_chrome_complete(struct gui_window *);
 void ciuki_chrome_title(struct gui_window *,const char *);

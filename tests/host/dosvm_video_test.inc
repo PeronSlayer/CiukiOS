@@ -15,7 +15,7 @@ static struct surface fake_surface[3];
 static uint8_t user_mem[4096];
 static bool user_fault;
 static unsigned pins;
-static unsigned record_pin_walks, surface_rows;
+static unsigned record_pin_walks, surface_rows, surface_reads;
 static bool caught_signal;
 static struct proc_thread window_thread;
 int dosvm_model_user_read(const struct uaddr *, void *, uint32_t, uint32_t);
@@ -37,6 +37,7 @@ void surface_retain(struct surface *s) { s->references++; }
 void surface_release(struct surface *s) { CHECK(s->references > 1); s->references--; }
 int surface_read(struct surface *s, uint32_t offset, void *data, uint32_t bytes)
 {
+    surface_reads++;
     if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
     memcpy(data,s->pixels+offset,bytes);return 0;
 }

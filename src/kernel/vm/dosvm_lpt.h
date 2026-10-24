@@ -4,6 +4,18 @@
 struct dosvm;
 struct v86_frame;
 struct dosvm_lpt_state { uint32_t index, generation; bool raw, disabled; };
+/* Private capture state; no guest pointer or public ABI. */
+struct dosvm_print_capture {
+    uint64_t last_byte, retry_tick;
+    uint32_t bytes, slot;
+    int fd;
+    unsigned used;
+    bool enabled, opened, finish, busy, failed, ack;
+    uint8_t data, control, buffer[512];
+};
+int dosvm_print_byte(struct dosvm *, uint8_t);
+int dosvm_print_flush(struct dosvm *, bool final);
+void dosvm_print_service(struct dosvm *);
 int dosvm_lpt_bda(struct dosvm *);
 int dosvm_lpt_init(struct dosvm *);
 void dosvm_lpt_stop(struct dosvm *);

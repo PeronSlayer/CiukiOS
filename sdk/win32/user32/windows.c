@@ -632,6 +632,7 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   struct u32_window *w = u32_window(h);
   if (!w)
     return u32_fail(1400);
+  if (!w->parent) cmd=u32_startup_show(cmd);
   BOOL old = !!(w->style & WS_VISIBLE);
   DWORD prev = w->style;
   if (!cmd)
@@ -779,6 +780,10 @@ LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
       u32_place(w);
     break;
   case GWL_EXSTYLE:
+    if (!w->parent && ((w->exstyle^(DWORD)value)&0x10u)) {
+      uint8_t b[4]; desk_put32(b,!!((DWORD)value&0x10u));
+      if (!u32_wire(w,DESK_ACCEPT_FILES,b,4,-1)) return 0;
+    }
     w->exstyle = value;
     if (!w->parent)
       u32_place(w);
@@ -1241,7 +1246,8 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
   case WM_DESTROYCLIPBOARD:
     u32_clipboard_owned_clear();
     return 0;
-  case 0x11: /* WM_QUERYENDSESSION */
+  case 0x11:  /* WM_QUERYENDSESSION */
+  case 0x218: /* G11 WM_POWERBROADCAST: TRUE, a query is granted */
   case WM_NCCREATE:
     return 1;
   case WM_CLOSE:
@@ -1290,6 +1296,10 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return 1;
   }
   case WM_SETCURSOR:
+    if (u32_help_mode()) {
+      SetCursor((HCURSOR)(uintptr_t)32651u);   /* G15: What's This? keeps the help arrow over every window */
+      return 1;
+    }
     if (w && w->cls->c.hCursor)
       SetCursor(w->cls->c.hCursor);
     return 1;
@@ -1318,4 +1328,24 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
   default:
     return 0;
   }
+}
+
+/* G15: the help topic number a window reports in HELPINFO.dwContextId
+ * (SetWindowContextHelpId / GetWindowContextHelpId, user32 exports). */
+BOOL W32API SetWindowContextHelpId(HWND h, DWORD id) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  w->help_id = id;
+  return 1;
+}
+DWORD W32API GetWindowContextHelpId(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w) {
+    u32_fail(1400);
+    return 0;
+  }
+  return w->help_id;
 }

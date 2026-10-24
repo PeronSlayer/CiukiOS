@@ -466,18 +466,23 @@ int as_replace_pages(struct aspace *as, uint32_t va, const uint32_t *frames,
     for (unsigned i = 0; i < count; i++)
         if (!(pt[i] & PTE_P) || (!as->memory && (pt[i]&PTE_BORROWED)) ||
             (frames && (frames[i] & (PAGE_SIZE - 1)))) return -EFAULT;
-    uint32_t d = 0, a = 0;
-    bool changed = false;
+    uint32_t d = 0, a = 0, changed = 0;
     for (unsigned i = 0; i < count; i++) {
         uint32_t old = pt[i];
         if (old & 0x40u) d |= 1u << i;
         if (old & 0x20u) a |= 1u << i;
         uint32_t next = frames ? frames[i] | (flags & (PTE_U | PTE_W)) | PTE_P : old & ~0x40u;
-        if (old != next) { pt[i] = next; changed = true; }
+        if (old != next) { pt[i] = next; changed |= 1u << i; }
     }
-    /* No global user PTEs. CR3 reload also invalidates cleared D bits, so
-     * subsequent native stores are visible to the next collection. */
-    if (changed && read_cr3() == as->pd_phys) write_cr3(as->pd_phys);
+    /* fx-27: invalidate exactly the changed entries (at most 32, below
+     * Linux's 33-page tlb_single_page_flush_ceiling). The kernel's own
+     * mappings are not global (no CR4.PGE), so a CR3 reload would also
+     * discard every kernel and guest translation the rest of the exit and
+     * the guest's next instructions need (Intel SDM Vol. 3A 4.10.4.1).
+     * INVLPG of an entry whose D was cleared makes the CPU set D again on
+     * the next native store, so the next collection still sees it. */
+    if (changed && read_cr3() == as->pd_phys)
+        for (unsigned i = 0; i < count; i++) if (changed & (1u << i)) invlpg(va + i * PAGE_SIZE);
     if (dirty) *dirty = d;
     if (accessed) *accessed = a;
     return 0;

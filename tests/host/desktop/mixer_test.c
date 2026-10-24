@@ -7,6 +7,16 @@ static struct ciuki_mixer_master device = { .version = 1, .size = 32, .left = 50
 static unsigned sets; static uint32_t last_l, last_r, last_mute; static int fail_get;
 static int get(void *ctx, struct ciuki_mixer_master *m) { (void)ctx; if (fail_get) return -ENOENT; *m = device; return 0; }
 static int set(void *ctx, uint32_t l, uint32_t r, uint32_t mute) { (void)ctx; sets++; last_l = l; last_r = r; last_mute = mute; return 0; }
+static struct ciuki_mixer_line lines[2][6]; static unsigned line_sets;
+static int get_line(void *ctx,struct ciuki_mixer_line *l) {
+    (void)ctx; *l=lines[l->recording][l->line]; return 0;
+}
+static int set_line(void *ctx,const struct ciuki_mixer_line *l) {
+    (void)ctx; line_sets++; lines[l->recording][l->line]=*l;
+    lines[l->recording][l->line].available=1;
+    if (l->recording && l->selected) lines[1][9-l->line].selected=0;
+    return 0;
+}
 static void desktop_applies(struct mixer_app *a)
 {
     device.left = last_l; device.right = last_r; device.mute = last_mute; device.save_state = CIUKI_MIXER_SAVED;
@@ -27,10 +37,13 @@ int main(int argc, char **argv)
         mixer_split(vol, bal, &l, &r); mixer_join(l, r, &v, &b);
         assert(v == vol && (vol < 50 || abs(b - bal) <= 2));   /* integer channel levels: coarse balance at low volume */
     }
-    static const struct mixer_backend backend = { get, set, NULL };
+    static const struct mixer_backend backend = { get, set, NULL, get_line, set_line };
     static uint32_t pixels[MIXER_W * MIXER_H];
     static struct du_ui ui; static struct mixer_app app;
     du_init(&ui, pixels, MIXER_W, MIXER_H);
+    for (unsigned rec=0;rec<2;rec++) for (unsigned i=1;i<=5;i++)
+        lines[rec][i]=(struct ciuki_mixer_line){.version=1,.size=sizeof(struct ciuki_mixer_line),.line=i,.recording=rec,
+            .left=100,.right=100,.available=!rec || i>=4,.selected=rec && i==5};
     mixer_attach(&app, &ui, &backend);
     assert(app.available && app.volume == 50 && app.balance == 0 && strstr(app.status, "Default"));
     du_render(&ui);
@@ -47,6 +60,19 @@ int main(int argc, char **argv)
     assert(sets == 2 && last_mute == 1);
     desktop_applies(&app);
     assert(app.mute && !strcmp(du_get(&ui, MX_MUTE)->text, "[x] &Mute"));
+    /* Each real source has its own volume/balance/mute; recording uses an
+     * exclusive Select control, with absent destinations disabled. */
+    struct du_widget *wave=du_get(&ui,MX_LINE_BASE+10);
+    wave->value=65;
+    struct du_event change={.type=DU_EV_CHANGE,.id=wave->id}; mixer_event(&ui,&change,&app);
+    du_tick(&ui,ui.now+200000000ull);
+    assert(line_sets==1 && lines[0][1].left==35 && app.line_volume[1]==35);
+    at_click_widget(&ui,MX_LINE_BASE+12); assert(line_sets==2 && lines[0][1].mute);
+    at_click_widget(&ui,MX_MODE); assert(app.recording && du_get(&ui,MX_VOLUME)->disabled);
+    assert(du_get(&ui,MX_LINE_BASE+10)->disabled && !du_get(&ui,MX_LINE_BASE+40)->disabled);
+    at_click_widget(&ui,MX_LINE_BASE+42);
+    assert(lines[1][4].selected && !lines[1][5].selected && app.lines[4].selected);
+    at_click_widget(&ui,MX_MODE); assert(!app.recording && !du_get(&ui,MX_VOLUME)->disabled);
     /* Clicking the slider's track pages the volume down. */
     struct du_widget *s = du_get(&ui, MX_VOLUME);
     at_click(&ui, s->box.x + s->box.w / 2, s->box.y + s->box.h - 24);

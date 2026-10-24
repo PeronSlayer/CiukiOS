@@ -104,7 +104,7 @@ def generate(out):
                      'ec-events', 'ec-timeout', 'route', 'enable-timeout', 'rollback',
                      'init-failure', 'pts-failure', 'storm', 'thermal-change', 'global-lock',
                      'gpe-loop', 'shared-power', 'critical-battery', 'lid-open', 'battery-limit', 'eisa-button', 'cid-button', 'already-enabled',
-                     'provider-busy', 't23-legacy', 'tzp-poll', 'tzp-zero', 'tzp-ec')
+                     'provider-busy', 't23-legacy', 'tzp-poll', 'tzp-zero', 'tzp-ec', 'sleep-button')
     for case in runtime_cases:
         battery_info = [integer(2 if case == 'unit' else 0), integer(6000), integer(5000), integer(1), integer(11000),
                         integer(500), integer(100), integer(1), integer(1)] + [string('fixture')] * 4
@@ -114,7 +114,7 @@ def generate(out):
             bix = [integer(1)] + battery_info[:7] + [integer(50),integer(99000)] + [integer(1000)]*4 + battery_info[7:] + [integer(0)]
             battery_body += name('_BIX', package(bix))
         else: battery_body += name('_BIF', package(battery_info))
-        hid = integer(0x0c0cd041) if case == 'eisa-button' else string('CIUK0001' if case == 'cid-button' else 'PNP0C0C')
+        hid = integer(0x0c0cd041) if case == 'eisa-button' else string('CIUK0001' if case == 'cid-button' else 'PNP0C0E' if case == 'sleep-button' else 'PNP0C0C')
         sb = device('PWRB', name('_HID',hid) + (name('_CID',package([string('PNP0C0C')])) if case == 'cid-button' else b''))
         sb += device('LID0', name('_HID', string('PNP0C0D')) + name('_LID', integer(7 if case == 'lid-open' else 1)))
         sb += device('ACAD', name('_HID', string('ACPI0003')) + name('_PSR', integer(1)))
@@ -164,6 +164,7 @@ def generate(out):
         struct.pack_into('<I',fadt,48,0xb2); fadt[52]=0xf1; fadt[53]=0xf0
         struct.pack_into('<I',fadt,56,0x600); struct.pack_into('<I',fadt,64,0x604)
         struct.pack_into('<I',fadt,80,0x620); fadt[88]=4; fadt[89]=2; fadt[92]=4
+        if case == 'sleep-button': struct.pack_into('<I',fadt,112,1<<5)
         fadt[9]=0; fadt[9]=-sum(fadt)&255
         image[0x14000:0x14000+len(fadt)] = fadt
         root=sdt('XSDT',struct.pack('<Q',0x14000)); image[0x16000:0x16000+len(root)] = root

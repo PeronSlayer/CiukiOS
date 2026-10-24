@@ -17,6 +17,9 @@ BOOL u32_pointer_message(UINT m) {
   case WM_SETTEXT:
   case WM_GETTEXT:
   case WM_COPYDATA:
+  case WM_PAINTCLIPBOARD:
+  case WM_SIZECLIPBOARD:
+  case WM_ASKCBFORMATNAME:
   case 0x2b:
   case 0x2c:
   case 0x46:
@@ -167,6 +170,11 @@ BOOL W32API ReplyMessage(LRESULT result) {
 }
 static LRESULT send(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT flags,
                     UINT timeout, uintptr_t *output, BOOL notify) {
+  LRESULT display_result=0;
+  int display=notify ? 0 : u32_clip_display_send(h,m,wp,lp,&display_result);
+  if (display) {
+    if (output) *output=display_result; return display>0;
+  }
   DWORD pid = 0, tid = GetWindowThreadProcessId(h, &pid);
   if (!tid)
     return u32_fail(1400);

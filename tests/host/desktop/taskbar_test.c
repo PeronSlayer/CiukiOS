@@ -3,7 +3,9 @@
  * (docs/design/os-feature-inventory.md WM-11, WM-12, WM-13, KB-5, KB-8, KB-9,
  * KB-12, KB-13, SM-9). Every state is also compared with a full redraw.
  * SPDX-License-Identifier: MIT */
+#define _POSIX_C_SOURCE 200809L
 #include "fake.h"
+#include "replay_base.h"
 #include <deskui.h>
 #include <assert.h>
 #include <stdio.h>
@@ -278,7 +280,7 @@ static void taskbar_menu(void)
     setup();
     /* no windows: arrangements are disabled, Properties is enabled */
     right(empty_bar_x(),H-16);
-    assert(task_menu_visible() && d.sh.menus[0].count==6);
+    assert(task_menu_visible() && d.sh.menus[0].count==7);
     assert(d.sh.menus[0].items[0].flags&SH_ITEM_DISABLED && d.sh.menus[0].items[menu_item("Minimize All Windows")].flags&SH_ITEM_DISABLED);
     assert(!(d.sh.menus[0].items[menu_item("Properties")].flags&SH_ITEM_DISABLED));
     frame_matches("taskbar menu, no windows");
@@ -383,9 +385,10 @@ static void windows_keys(void)
     win(0x12); assert(!strcmp(launched,"files") && !strcmp(launched_arg,"Computer"));
     /* Win+R */
     win(0x13); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_RUN); desk_request_close(&d,d.focus);
-    /* Win+F and Win+Ctrl+F: Find is G7's; a message says so */
-    win(0x21); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE && strstr(d.clients[d.focus].title,"Find"));
-    assert(strstr(d.sh.message_title,"Files or Folders")); desk_request_close(&d,d.focus);
+    /* G4's chord reaches G7 Files Find; Find Computer stays separate. */
+    unsigned before=launch_count;
+    win(0x21); assert(launch_count==before+1 && !strcmp(launched,"files") && !strcmp(launched_arg,"find:"));
+    assert(!d.sh.levels && !d.sh.logo_keys);
     key(KEY_WIN,1); key(DU_KEY_LCTRL,1); tap(0x21); key(DU_KEY_LCTRL,0); key(KEY_WIN,0);
     assert(strstr(d.sh.message_title,"Computer") && d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE);
     desk_request_close(&d,d.focus);
@@ -496,8 +499,8 @@ static void context_keys(void)
     struct desk_box icon=d.sh.icons[0].box; left(icon.x+icon.w/2,icon.y+20); assert(d.sh.icon_selected==0);
     tap(KEY_MENU); assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_ICON && d.sh.menu_owner==0);
     frame_matches("icon menu by key"); tap(DU_KEY_ESC);
-    tap(KEY_F3); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE && strstr(d.sh.message_title,"Find"));
-    desk_request_close(&d,d.focus);
+    unsigned before=launch_count;
+    tap(KEY_F3); assert(launch_count==before+1 && !strcmp(launched,"files") && !strcmp(launched_arg,"find:"));
     clean();
 }
 
@@ -616,8 +619,11 @@ static void v3_zoom_limits(void)
     clean(); v3_root=-1;
 }
 
+
+#include "taskbar_custom_test.h"
 int main(void)
 {
+    g20_all();
     cascade(); tile(); exclusions(); minimize_all(); taskbar_menu(); mnemonics(); windows_keys(); taskbar_focus();
     alt_keys(); context_keys(); caption_icon(); v3_zoom_limits();
     printf("PASS G4 taskbar: cascade and tile geometry, exclusions, undo, minimize all and Show Desktop, taskbar menu, access keys, Windows-key shortcuts, taskbar keyboard focus, Alt shortcuts, context-menu keys, caption icon, Win32 maximised state and track limits; %u frames equal to a full redraw\n",checked);

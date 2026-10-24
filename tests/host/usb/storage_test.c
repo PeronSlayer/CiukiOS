@@ -786,6 +786,17 @@ static void fat32_budget(const char *path)
         unsigned steps=0;uint64_t census_begin=m.now;
         while(sv->fat.census) {
             sv->census_next_ms=0;(void)storage_census_service(storage_get(),fs_now_ms());
+            if(steps==2) {
+                /* fx-23: a foreground caller waits for E: (Files listing):
+                 * the background step yields this turn, takes no
+                 * reservation, and resumes once the drive is free. */
+                unsigned yields=sv->census_yields;
+                storage_get()->vfs.diagnostic_waiters[4]=1; sv->census_next_ms=0;
+                assert(storage_census_service(storage_get(),fs_now_ms())==1 && sv->fat.census);
+                assert(sv->census_yields==yields+1 && sv->census_next_ms!=0);
+                storage_get()->vfs.diagnostic_waiters[4]=0;
+                printf("fx-23 census step deferred for a waiting foreground caller (yields=%u)\n",sv->census_yields);
+            }
             if(steps==3) { /* a write between steps dirties counted sectors */
                 fd=vfs_open(&table,"E:/BETWEEN.BIN",VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_NONE,0);assert(fd>=0);
                 assert(!vfs_write(&table,fd,payload,65536,&done) && !vfs_commit(&table,fd) && !vfs_close(&table,fd));

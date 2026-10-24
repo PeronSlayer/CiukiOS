@@ -16,6 +16,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, w, h, "Registry Editor", 400, 240)) {
         fprintf(stderr, "regedit: %s\n", strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "regedit");   /* G15: F1 opens this program's Help topic */
     int result = re_attach_lazy(&m->app, &m->ui, REG_DIRECTORY);
     if (!result) { if (test) du_window_move(&m->window, 24, 48); result = du_run(&m->window,idle,&m->app); }
     re_destroy(&m->app); du_window_destroy(&m->window); free(m); return result < 0 ? 1 : 0;

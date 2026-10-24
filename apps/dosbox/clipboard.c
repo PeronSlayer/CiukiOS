@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT. Windows 9x DOS window Mark/Copy/Paste. */
 #include "clipboard.h"
 #include "autorun.h"
+#include "clipboard_settings.h"
 #include "../libdeskui/clipboard.h"
 #include "../libdeskui/clipstore.h"
 #include <ciuki/channel.h>
@@ -14,12 +15,13 @@
 #include <time.h>
 #include <unistd.h>
 static struct {
-    int channel,marking,dragging,text_mode,quick_edit,x0,y0,x1,y1,mouse_x,mouse_y,dirty;
+    int channel,marking,dragging,text_mode,quick_edit,exclusive,x0,y0,x1,y1,mouse_x,mouse_y,dirty;
     uint32_t id,generation,server,*pixels,*snapshot;
     unsigned columns,rows,cell_height;
     unsigned char *cells,*paste; unsigned paste_bytes,paste_at,key_at,key_count;
     struct dosbox_key keys[16];
-    uint64_t next_key;
+    uint64_t next_key, settings_key;
+    int settings_bound, guest_open;
     struct ciuki_message saved[1024]; unsigned head,count;
 } state;
 static uint64_t now(void)
@@ -85,6 +87,12 @@ static int rpc(void *ctx,struct desk_clip_wire *w,const void *data,struct desk_c
 }
 void dos_clip_init(int channel,uint32_t *pixels)
 { memset(&state,0,sizeof(state)); state.channel=channel; state.pixels=pixels; du_clip_bind(rpc,NULL); }
+void dos_clip_settings(const char *program)
+{
+    struct dosbox_clipboard_settings s;
+    state.settings_key=dosbox_clipboard_key(program); state.settings_bound=1;
+    dosbox_clipboard_load(state.settings_key,&s); state.quick_edit=s.quick_edit; state.exclusive=s.exclusive;
+}
 void dos_clip_vm(uint32_t id,uint32_t generation,uint32_t server)
 { state.id=id; state.generation=generation; state.server=server; }
 int dos_clip_recv(struct ciuki_message *m)
@@ -121,7 +129,13 @@ static int copy(void)
 }
 int dos_clip_action(unsigned action)
 {
-    if (action==4) { state.quick_edit=!state.quick_edit; return 0; }
+    if (action==4 || action==5) {
+        struct dosbox_clipboard_settings s={(unsigned)state.quick_edit,(unsigned)state.exclusive};
+        if (action==4) s.quick_edit=!s.quick_edit; else s.exclusive=!s.exclusive;
+        int e=state.settings_bound ? dosbox_clipboard_save(state.settings_key,&s) : 0;
+        if (!e) { state.quick_edit=s.quick_edit; state.exclusive=s.exclusive; }
+        return e;
+    }
     if (!state.id) return -ESRCH;
     if (!action) { if (state.marking) resume(); return 0; }
     if (action==2) return copy();
@@ -162,7 +176,7 @@ static void point(int x,int y,int *col,int *row)
 int dos_clip_input(const struct desk_packet *p)
 {
     if (p->opcode==DESK_MOTION && p->event.type==CIUKI_INPUT_MOTION) { state.mouse_x=p->event.value; state.mouse_y=p->event.value2; }
-    if (!state.marking && state.quick_edit && p->opcode==DESK_BUTTON && p->event.code==1 && p->event.value)
+    if (!state.marking && state.quick_edit && !state.exclusive && p->opcode==DESK_BUTTON && p->event.code==1 && p->event.value)
         (void)dos_clip_action(1);
     if (!state.marking) return 0;
     if (p->opcode==DESK_KEY) { if (p->event.value && p->event.code==CIUKI_KEY_ENTER) (void)copy(); else if (p->event.value && p->event.code==CIUKI_KEY_ESCAPE) resume(); return 1; }
@@ -175,6 +189,7 @@ int dos_clip_input(const struct desk_packet *p)
     return p->opcode==DESK_BUTTON;
 }
 int dos_clip_marking(void) { return state.marking; }
+int dos_clip_pasting(void) { return state.paste!=NULL; }
 int dos_clip_dirty(void)
 {
     if (!state.dirty) return 0;
@@ -221,7 +236,51 @@ void dos_clip_tick(int focused)
 }
 void dos_clip_destroy(void)
 {
+    if (state.guest_open) { (void)du_clip_close(); state.guest_open=0; }
     if (state.marking) resume(); free(state.paste); state.paste=NULL;
     while (state.count) { struct ciuki_message *m=&state.saved[state.head]; for (unsigned i=0;i<m->fd_count;i++) close(m->fds[i]); state.head=(state.head+1)%1024; state.count--; }
     du_clip_bind(NULL,NULL);
+}
+
+/* WAIT_PRESENT delivers an upcall only when the guest requests the clipboard.
+ * The buffer is transfer storage for this call, never a retained mirror. */
+static int dos_clip_execute(unsigned op,unsigned format,unsigned char *buffer,uint32_t *bytes)
+{
+    void *data=NULL; int e=0;
+    switch (op) {
+    case 1: e=du_clip_open(); if (!e) state.guest_open=1; break;
+    case 2: e=state.guest_open ? du_clip_empty() : -EPERM; break;
+    case 3: e=state.guest_open ? du_clip_put(format,buffer,*bytes) : -EPERM; break;
+    case 4: case 5:
+        e=state.guest_open ? du_clip_get(format,&data,bytes) : -EPERM;
+        if (!e && *bytes>CIUKI_DOSVM_CLIP_MAX) e=-ENOSPC;
+        if (!e && op==5 && *bytes) memcpy(buffer,data,*bytes);
+        free(data); break;
+    case 8: e=state.guest_open ? du_clip_close() : -EPERM; if (!e) state.guest_open=0; break;
+    case 9: *bytes=CIUKI_DOSVM_CLIP_MAX; break;
+    case CIUKI_DOSVM_CLIP_SCREEN:
+        e=du_clip_open();
+        if (!e) { e=du_clip_empty(); if (!e) e=du_clip_put(DESK_CF_OEMTEXT,buffer,*bytes);
+            if (!e) { unsigned char locale[4]={9,4,0,0}; e=du_clip_put(DESK_CF_LOCALE,locale,4); }
+            int closed=du_clip_close(); if (!e) e=closed; }
+        break;
+    default: e=-EINVAL; break;
+    }
+    return e;
+}
+int dos_clip_service(void)
+{
+    unsigned char *buffer=malloc(CIUKI_DOSVM_CLIP_MAX);
+    if (!buffer) return -ENOMEM;
+    struct ciuki_dosvm_command c; command(&c);
+    c.clip.buffer=(uint32_t)(uintptr_t)buffer; c.clip.capacity=CIUKI_DOSVM_CLIP_MAX;
+    if (ciuki_dosvm(CIUKI_DOSVM_CLIP_REQUEST,&c)) { int e=-errno; free(buffer); return e; }
+    unsigned op=c.clip.op,format=c.clip.format; uint32_t serial=c.clip.serial,bytes=c.clip.bytes;
+    int e=dos_clip_execute(op,format,buffer,&bytes);
+    command(&c); c.clip.serial=serial; c.clip.bytes=e ? 0 : bytes; c.clip.result=e;
+    if (op==5 && !e) { c.clip.buffer=(uint32_t)(uintptr_t)buffer; c.clip.capacity=bytes; }
+    int completed=ciuki_dosvm(CIUKI_DOSVM_CLIP_COMPLETE,&c);
+    int result=completed ? -errno : 0;
+    if (completed && op==1 && !e) { (void)du_clip_close(); state.guest_open=0; }
+    free(buffer); return result;
 }

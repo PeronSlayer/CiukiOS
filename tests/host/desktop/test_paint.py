@@ -15,7 +15,7 @@ _review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_
 capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
-TOOLKIT = ["draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"]
+TOOLKIT = ["draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"]
 # F2-99: nine generic-pointer goldens updated in integ-fix1; all other frames
 # and all pixels outside the pointer footprints retain their former pins.
 
@@ -28,7 +28,7 @@ class PaintTests(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("paint_icons", ROOT / "tests/host/desktop/icon_assets.py")
             icons = importlib.util.module_from_spec(spec); spec.loader.exec_module(icons)
             sources = [*(f"apps/libdeskui/{s}.c" for s in TOOLKIT), "apps/desktop/compositor.c", "apps/desktop/theme.c",
-                       "apps/paint/paint.c", "apps/paint/io.c", "apps/paint/stb.c", "tests/host/desktop/paint_test.c"]
+                       "apps/paint/paint.c", "apps/paint/io.c", "apps/paint/stb.c", "apps/paint/xform.c", "tests/host/desktop/paint_test.c"]
             binary = Path(temp) / "paint"
             flags = ["clang", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                      "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-ffunction-sections", "-fdata-sections",

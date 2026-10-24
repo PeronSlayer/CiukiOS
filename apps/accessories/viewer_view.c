@@ -3,6 +3,7 @@
 #include "viewer.h"
 #include "../libdeskui/job.h"
 #include "../libdeskui/recent.h"
+#include "wallpaper.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,8 +65,9 @@ static void status(struct viewer_app *a)
 {
     char text[256];
     if (a->loaded)
-        snprintf(text, sizeof(text), "%.80s   %d x %d %s   %d%%%s   %d of %u", acc_basename(a->path), a->image.width, a->image.height,
-                 a->image.format, effective_zoom(a), a->zoom ? "" : " (fit)", a->index + 1, a->count);
+        snprintf(text, sizeof(text), "%.80s   %d x %d %s   %d%%%s   %d of %u%s", acc_basename(a->path), a->image.width, a->image.height,
+                 a->image.format, effective_zoom(a), a->zoom ? "" : " (fit)", a->index + 1, a->count,
+                 a->rotation == 1 ? "   rotated right" : a->rotation == 2 ? "   rotated 180" : a->rotation == 3 ? "   rotated left" : "");
     else snprintf(text, sizeof(text), "%s", a->error[0] ? a->error : "Open an image with File > Open, or from Files.");
     struct du_widget *status_widget=du_get(a->ui,V_STATUS);
     if (strcmp(status_widget->text,text)) { du_set_text(status_widget,text); du_invalidate(a->ui,status_widget->box); }
@@ -76,6 +78,9 @@ static void status(struct viewer_app *a)
         if (w->disabled!=!many) { w->disabled=(uint8_t)!many;du_invalidate(a->ui,w->box); }
     }
     a->file_items[1].flags = a->file_items[2].flags = many ? 0 : DU_ITEM_DISABLED;
+    unsigned wall = a->wallpaper && a->loaded ? 0 : DU_ITEM_DISABLED;
+    a->file_items[4].flags = a->file_items[5].flags = a->file_items[6].flags = wall;
+    a->view_items[6].flags = a->view_items[7].flags = a->view_items[8].flags = a->loaded ? 0 : DU_ITEM_DISABLED;
 }
 void viewer_layout(struct viewer_app *a)
 {
@@ -122,7 +127,7 @@ void viewer_poll(struct viewer_app *a)
     if (!l || !du_job_ready(&l->job)) return;
     du_job_finish(&l->job);
     viewer_free(&a->image); a->image=l->result.image;
-    a->loaded=l->result.loaded; a->zoom=0; a->scroll_x=a->scroll_y=0;
+    a->loaded=l->result.loaded; a->zoom=0; a->scroll_x=a->scroll_y=0; a->rotation=0;
     strcpy(a->path,l->result.path); strcpy(a->folder,l->result.folder); strcpy(a->error,l->result.error);
     memcpy(a->names,l->result.names,sizeof(a->names)); a->count=l->result.count; a->index=l->result.index;
     free(l->result.entries); free(l); a->loading=NULL;
@@ -154,7 +159,7 @@ int viewer_open(struct viewer_app *a, const char *path)
     else strcpy(folder, ".");
     if (!same_folder || strcmp(folder, a->folder)) { snprintf(a->folder, sizeof(a->folder), "%s", folder); scan_folder(a); }
     else for (unsigned i = 0; i < a->count; i++) if (!strcmp(a->names[i], acc_basename(a->path))) a->index = (int)i;
-    viewer_free(&a->image); a->loaded = 0; a->zoom = 0; a->scroll_x = a->scroll_y = 0;
+    viewer_free(&a->image); a->loaded = 0; a->zoom = 0; a->scroll_x = a->scroll_y = 0; a->rotation = 0;
     if (err) {
         snprintf(a->error, sizeof(a->error), "%.80s: %s", acc_basename(path),
                  err == -EINVAL ? "not a supported image (PNG, JPEG, BMP, GIF)" : err == -EFBIG ? "the image is too large" :
@@ -164,6 +169,30 @@ int viewer_open(struct viewer_app *a, const char *path)
     return err;
 }
 
+static void rotate(struct viewer_app *a, int turns)
+{
+    if (!a->loaded) return;
+    int r = viewer_rotate(&a->image, turns);
+    if (r) { snprintf(a->error, sizeof(a->error), "Not enough memory to rotate the picture."); du_message(a->ui, V_D_INFO, "Image Viewer", a->error, DU_DLG_ICON_WARNING, NULL, 0, 0, 0); a->error[0] = 0; return; }
+    a->rotation = (a->rotation + turns) & 3;
+    a->scroll_x = a->scroll_y = 0;
+    du_invalidate(a->ui, viewer_area(a)); status(a);
+}
+/* Set As Wallpaper uses the file as stored: the desktop decodes BMP, PNG and JPEG, and a rotation is only a view. */
+static void set_wallpaper(struct viewer_app *a, int mode)
+{
+    if (!a->loaded || !a->wallpaper) return;
+    if (!acc_wallpaper_supported(a->path)) {
+        du_message(a->ui, V_D_INFO, "Image Viewer", "The desktop can use BMP, PNG and JPEG pictures as wallpaper.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+        return;
+    }
+    int r = a->wallpaper(a->host, a->path, mode);
+    char text[200];
+    if (r) snprintf(text, sizeof(text), "The wallpaper could not be set: %s.", r == -ENAMETOOLONG ? "the file name is too long" : "an error occurred");
+    else snprintf(text, sizeof(text), "The picture is now the wallpaper (%s)%s.", mode == 0 ? "centered" : mode == 1 ? "tiled" : "stretched",
+                  a->rotation ? "; the rotation is not saved in the file" : "");
+    du_message(a->ui, V_D_INFO, "Image Viewer", text, r ? DU_DLG_ICON_WARNING : DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+}
 static void step(struct viewer_app *a, int direction)
 {
     if (a->count < 2) return;
@@ -205,10 +234,15 @@ void viewer_paint(struct du_ui *u, void *user)
 
 static const struct du_menu_item file_template[] = {
     {"&Open...", V_M_OPEN, 0x18, DU_CTRL, 0}, {"&Previous Image", V_M_PREV, DU_KEY_PGUP, 0, DU_ITEM_DISABLED},
-    {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
+    {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
+    {"Page Set&up...", V_M_PAGESETUP, 0, 0, 0}, {"&Print...", V_M_PRINT, 0x19, DU_CTRL, 0},
+    {"Set As Wallpaper (&Centered)", V_M_WALL_CENTER, 0, 0, DU_ITEM_DISABLED}, {"Set As Wallpaper (&Tiled)", V_M_WALL_TILE, 0, 0, DU_ITEM_DISABLED},
+    {"Set As Wallpaper (&Stretched)", V_M_WALL_STRETCH, 0, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
 static const struct du_menu_item view_template[] = {
     {"Zoom &In", V_M_IN, 0, 0, 0}, {"Zoom &Out", V_M_OUT, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"&Best Fit", V_M_FIT, 0, 0, 0}, {"&Actual Size", V_M_ACTUAL, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR} };
+    {"&Best Fit", V_M_FIT, 0, 0, 0}, {"&Actual Size", V_M_ACTUAL, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
+    {"Rotate &Right", V_M_RIGHT, 0x13, DU_CTRL, DU_ITEM_DISABLED}, {"Rotate &Left", V_M_LEFT, 0x26, DU_CTRL, DU_ITEM_DISABLED},
+    {"Rotate &180 Degrees", V_M_TURN, 0, 0, DU_ITEM_DISABLED} };
 static const struct du_menu_item help_template[] = { {"&About Image Viewer", V_M_ABOUT, 0, 0, 0} };
 
 int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs *fs)
@@ -217,8 +251,8 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));
-    a->menus[0] = (struct du_menu){"&File", a->file_items, 5};
-    a->menus[1] = (struct du_menu){"&View", a->view_items, 5};
+    a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
+    a->menus[1] = (struct du_menu){"&View", a->view_items, 9};
     a->menus[2] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 3;
     struct du_rect zero = {0, 0, 0, 0};
@@ -262,7 +296,11 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
         case V_M_OUT: case V_OUT: zoom(a, viewer_zoom_step(effective_zoom(a), -1)); break;
         case V_M_FIT: case V_FIT: zoom(a, 0); break;
         case V_M_ACTUAL: case V_ACTUAL: zoom(a, 100); break;
+        case V_M_RIGHT: case V_M_LEFT: case V_M_TURN: rotate(a, id == V_M_RIGHT ? 1 : id == V_M_LEFT ? 3 : 2); break;
+        case V_M_WALL_CENTER: case V_M_WALL_TILE: case V_M_WALL_STRETCH:
+            set_wallpaper(a, id == V_M_WALL_CENTER ? 0 : id == V_M_WALL_TILE ? 1 : 2); break;
         case V_M_EXIT: if (a->quit) a->quit(a->host); break;
+        case V_M_PAGESETUP: case V_M_PRINT: if (a->printing && (id==V_M_PAGESETUP || a->loaded)) a->printing(a->host,id==V_M_PAGESETUP); break;
         case V_M_ABOUT:
             du_message(u, V_D_INFO, "About Image Viewer", "CiukiOS Image Viewer - Classic computing, one woof at a time.\n"
                        "PNG, JPEG, BMP and GIF by stb_image v2.30\n(MIT or Public Domain). Viewer code: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
@@ -278,6 +316,8 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
         if (e->ch == '+' || e->ch == '=' || e->key == 0x4e) zoom(a, viewer_zoom_step(z, 1));
         else if (e->ch == '-' || e->key == 0x4a) zoom(a, viewer_zoom_step(z, -1));
         else if (e->ch == 'f' || e->ch == 'F') zoom(a, 0);
+        else if (e->ch == 'r' || e->ch == 'R') rotate(a, 1);
+        else if (e->ch == 'l' || e->ch == 'L') rotate(a, 3);
         else if (e->ch == '1') zoom(a, 100);
         else if (e->key == DU_KEY_PGUP || (!big && e->key == DU_KEY_LEFT)) step(a, -1);
         else if (e->key == DU_KEY_PGDN || e->ch == ' ' || (!big && e->key == DU_KEY_RIGHT)) step(a, 1);

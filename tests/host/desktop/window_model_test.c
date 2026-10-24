@@ -14,6 +14,11 @@
 #define DESKTOP_OCCLUSION_NO_MAIN
 #include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
+#include "../../../apps/dosbox/window.h"
+#define fake_reset disk_ui_vfs_reset
+#include "disk_ui_scenario.h"
+#undef fake_reset
+#include "../../../apps/accessories/mixer.h"
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
@@ -115,10 +120,12 @@ static void app_answer_pings(void)
 }
 static struct fake_app *last_app;
 static int next_size_w, next_size_h;
+static unsigned find_launches;
 /* d->launch: the fx-8 asynchronous launcher (desktop.c launch_program):
  * the slot exists at once, AppStarting shows, the process comes later. */
 static int fake_launch(struct desktop *dd, const struct desk_program *program)
 {
+    if (!strcmp(program->name,"files") && dd->launch_arg && !strcmp(dd->launch_arg,"find:")) find_launches++;
     int k=0; while (k<DESK_CLIENTS && apps[k].stage!=APP_FREE) k++;
     if (k==DESK_CLIENTS || fds_left()<8) { errno=EAGAIN; return -1; }
     struct fake_app *a=&apps[k]; memset(a,0,sizeof(*a));
@@ -243,6 +250,14 @@ static void wm_v3_place_at(int i, int x, int y, unsigned w, unsigned h, unsigned
     struct desk_client *c=&d.clients[i]; struct ciuki_message m; v3msg(&m,DESK_V3_PLACE,28,c->v3_id,c->v3_generation);
     desk_put32(m.data+16,(uint32_t)x); desk_put32(m.data+20,(uint32_t)y); desk_put32(m.data+24,w); desk_put32(m.data+28,h);
     desk_put32(m.data+32,1); desk_put32(m.data+36,flags); desk_put32(m.data+40,c->v3_style&(DESK_V3_STYLES&~DESK_V3_MODAL));
+    (void)desk_v3_receive(&d,v3_root,&m);
+}
+static void wm_v3_style(int i, unsigned style)
+{
+    struct desk_client *c=&d.clients[i]; struct ciuki_message m; v3msg(&m,DESK_V3_PLACE,28,c->v3_id,c->v3_generation);
+    desk_put32(m.data+16,(uint32_t)c->frame.x); desk_put32(m.data+20,(uint32_t)c->frame.y);
+    desk_put32(m.data+24,c->info.width); desk_put32(m.data+28,c->info.height); desk_put32(m.data+32,1);
+    desk_put32(m.data+36,0); desk_put32(m.data+40,style);
     (void)desk_v3_receive(&d,v3_root,&m);
 }
 static void wm_v3_place(int i)
@@ -387,7 +402,7 @@ static void turn(uint64_t ns)
 {
     wm_clock+=ns; d.now_ns=wm_clock;
     desk_heartbeat(&d,d.now_ns);
-    if (d.shell) { desk_shell_tick(&d); desk_links_refresh(&d); }
+    if (d.shell) { desk_shell_tick(&d); desk_links_refresh(&d); desk_access_tick(&d); }
     serve_launches();
     for (int k=0;k<DESK_CLIENTS;k++) desk_flush(&d,k);
     apps_forget_dropped();
@@ -414,7 +429,7 @@ static void wm_frame(const char *what)
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
 }
-static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo"};
+static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer","resmeter"};
 static void wm_begin(unsigned m, int shell)
 {
     wm_mode=m; wm_shell=shell;
@@ -888,6 +903,17 @@ static void row_caption(unsigned m)
     a->hung=0; app_answer_pings(); step("responding again");
     struct desk_box x=desk_close_box(&d.clients[b->slot]); pointer_to(x.x+2,x.y+2); step("title button hot");
     press(CIUKI_BUTTON_LEFT,1); step("title button pressed"); pointer_to(300,300); press(CIUKI_BUTTON_LEFT,0); step("released elsewhere");
+    /* G15 WS_EX_CONTEXTHELP: the "?" takes the minimise slot (a style change repaints the caption),
+     * is hot and pressed like any title button, and HELP goes to the client. */
+    int h=wm_v3_window(DESK_V3_OVERLAPPED|DESK_V3_CONTEXTHELP,-1,120,110,240,150);
+    if (h>=0) {
+        step("window with the ? caption button");
+        struct desk_box hb=desk_help_box(&d.clients[h]); assert(hb.w>0 && !desk_min_box(&d.clients[h]).w);
+        pointer_to(hb.x+hb.w/2,hb.y+hb.h/2); step("? button hot");
+        press(CIUKI_BUTTON_LEFT,1); step("? button pressed (HELP sent)"); pointer_to(300,300); press(CIUKI_BUTTON_LEFT,0); step("released elsewhere");
+        wm_v3_style(h,DESK_V3_OVERLAPPED); assert(!desk_help_box(&d.clients[h]).w); step("style without ?: minimise and zoom again");
+        wm_v3_style(h,DESK_V3_OVERLAPPED|DESK_V3_CONTEXTHELP); step("style with ? again");
+    }
     wm_end();
 }
 static void row_menus(unsigned m)
@@ -923,10 +949,34 @@ static void row_popups(unsigned m)
     row_name="tray popups"; wm_begin(m,1);
     struct fake_app *a=app_open("files",400,260,200,40); (void)a;
     struct desk_box v=desk_shell_tray_icon_box(&d,SH_TRAY_VOLUME); click(v.x+4,v.y+4,CIUKI_BUTTON_LEFT); assert(d.sh.volume_open); step("volume popup");
-    tap(DU_KEY_UP); step("volume changed"); tap(DU_KEY_ESC); step("volume popup closed");
+    tap(DU_KEY_UP); step("volume changed");
+    turn(100000000ull); click(v.x+4,v.y+4,CIUKI_BUTTON_LEFT);
+    assert(!d.sh.volume_open && last_app && !strcmp(d.clients[last_app->slot].application,"mixer"));
+    step("G22 volume double-click closes popup and launches mixer");
+    turn(1000000000ull); click(v.x+4,v.y+4,CIUKI_BUTTON_LEFT);
+    assert(d.sh.volume_open); step("G22 isolated volume click keeps popup");
+    tap(DU_KEY_ESC); step("volume popup closed");
     desk_shell_notify(&d,"Network","Cable connected",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS); step("notification");
     for (unsigned k=0;k<12;k++) { turn(16666667ull); wm_frame("notification slides in"); }
     turn(8100000000ull); step("notification expired");
+    wm_end();
+}
+static void row_resources(unsigned m)
+{
+    /* G30: the Resource Meter tray icon: appears and disappears (the clock and every icon move), changes level, tooltip, click. */
+    row_name="resource meter tray icon"; wm_begin(m,1);
+    struct fake_app *meter=app_open("resmeter",300,160,200,100); (void)meter;
+    struct fake_app *other=app_open("files",320,200,60,150); (void)other;
+    struct sh_resources r={.visible=1,.system=80,.user=80,.gdi=95,.level=0};
+    desk_shell_resources_update(&d,&r); step("Resource Meter icon appears: the tray widens");
+    r.system=25; r.user=25; r.level=1; desk_shell_resources_update(&d,&r); step("level low: the bar changes");
+    struct desk_box i=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(i.w==SH_TRAY_ICON_SIZE);
+    pointer_to(i.x+4,i.y+4); step("hover the icon");
+    turn(700000000ull); assert(d.sh.tooltip==7); step("tooltip with the three values");
+    r.system=10; r.level=2; desk_shell_resources_update(&d,&r); step("critical while the tooltip shows");
+    click(i.x+4,i.y+4,CIUKI_BUTTON_LEFT); step("click raises the Resource Meter window");
+    r.visible=0; desk_shell_resources_update(&d,&r); assert(!d.sh.tooltip || d.sh.tooltip!=7); step("Resource Meter closed: the icon is removed");
+    struct desk_box gone=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(!gone.w);
     wm_end();
 }
 static void row_switcher(unsigned m)
@@ -1115,6 +1165,8 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+#include "g18_shortcut_test.h"
+#include "g18_tray_test.h"
 static void row_startup(unsigned m)
 {
     row_name="startup programs"; wm_begin(m,1);
@@ -1204,6 +1256,212 @@ static void row_saver(unsigned m)
     d.portrait=NULL; free(portrait);
     wm_end();
 }
+static void row_find(unsigned m)
+{
+    row_name="Find entry points"; wm_begin(m,1);
+    /* Start > Find menu damage, F3 on the desktop, Win+F without a stray
+     * Start toggle on release. Real Files controls/results are exercised
+     * against full client redraws in files_search_test.c. */
+    unsigned launched=find_launches;
+    tap(0x15b); step("Start menu opens with Find");
+    struct sh_menu *menu=&d.sh.menus[0]; int find=-1;
+    for (int i=0;i<menu->count;i++) if (menu->items[i].action==SH_ACT_SUBMENU && menu->items[i].arg==SH_MENU_FIND) find=i;
+    assert(find>=0 && menu->items[find].mark==1);
+    for (unsigned i=0; menu->hot!=find && i<SH_ITEMS; i++) tap(DU_KEY_DOWN);
+    assert(menu->hot==find);
+    tap(DU_KEY_RIGHT); step("Find submenu opens");
+    assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_FIND && d.sh.menus[1].items[0].mark==1);
+    tap(DU_KEY_ENTER); step("Find submenu launches Files"); assert(!d.sh.levels && find_launches==launched+1);
+    launched=find_launches;
+    d.focus=-1; tap(FM_FIND_KEY); step("F3 queues Files Find"); assert(find_launches==launched+1);
+    tap(0x15b); step("Start open before Win+F");
+    key(0x15b,1); tap(0x21); key(0x15b,0); step("Win+F launches and closes Start");
+    assert(!d.sh.levels && find_launches==launched+2);
+    key(0x15b,1); key(0x1d,1); tap(0x21); key(0x1d,0); key(0x15b,0);
+    assert(find_launches==launched+2); step("Win+Ctrl+F is separate from file search");
+    key(0x15b,1); tap(0x20); key(0x15b,0); tap(0x21);
+    assert(find_launches==launched+2); step("released Windows key does not latch Find");
+    key(0x15b,1); struct ciuki_input_event reset={.type=CIUKI_INPUT_RESYNC}; desk_input(&d,&reset); tap(0x21);
+    assert(find_launches==launched+2); step("input reset clears Windows-key state");
+    tap(0x15b); tap(0x21); step("Start Find by its access key");
+    assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_FIND);
+    tap(0x21); step("Files or Folders by its access key");
+    assert(!d.sh.levels && find_launches==launched+3);
+    wm_end();
+}
+static void disk_ui_present(struct du_ui *u,const char *label,void *ctx)
+{
+    struct fake_app *a=ctx; struct desk_client *c=&d.clients[a->slot];
+    assert(c->info.width==(unsigned)u->canvas.width && c->info.height==(unsigned)u->canvas.height);
+    memcpy((void *)c->pixels,u->canvas.pixels,(size_t)u->canvas.width*u->canvas.height*4);
+    struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+    desk_put32(message.data+4,0); desk_put32(message.data+8,0);
+    desk_put32(message.data+12,(unsigned)u->canvas.width); desk_put32(message.data+16,(unsigned)u->canvas.height);
+    wm_send(a,&message); step(label);
+}
+static void row_disk_tools(unsigned m)
+{
+    row_name="disk tools"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    disk_ui_scenario(disk_ui_present,a);
+    app_close(a); step("disk tools close exposes desktop"); wm_end();
+}
+static void row_network_tools(unsigned m)
+{
+    row_name="G26 browser windows and Internet dialogs";wm_begin(m,1);
+    int window=wm_v3_window(DESK_V3_OVERLAPPED,-1,160,72,260,180);assert(window>=0);
+    struct desk_client *c=&d.clients[window];
+    struct ciuki_message request;const char *url="http://example.test/download";unsigned n=(unsigned)strlen(url);
+    v3msg(&request,DESK_LAUNCH,4+n,c->v3_id,c->v3_generation);
+    desk_put32(request.data+16,n);memcpy(request.data+20,url,n);
+    snprintf(d.clients[v3_root].application,sizeof(d.clients[v3_root].application),"other");
+    assert(desk_v3_receive(&d,v3_root,&request)==-EPERM);step("untrusted launch refused");
+    snprintf(d.clients[v3_root].application,sizeof(d.clients[v3_root].application),"netsurf");
+    assert(!desk_v3_receive(&d,v3_root,&request));assert(last_app);step("new browser launch queued");
+    struct fake_app *child=last_app;app_spawned(child);app_create_window(child);step("new browser window visible");
+    app_paint(child,0,0,(unsigned)child->w,(unsigned)child->h,0x13579);step("new browser first frame");
+    /* Application widgets/dialogs publish damage through the common client
+     * path. Their state transitions are exercised by G26's app host tests. */
+    app_paint(child,12,24,120,64,0x24680);step("download Save dialog opens");
+    app_paint(child,12,24,120,64,0x13579);step("Save dialog closes");
+    struct fake_app *panel=app_open("control",320,220,220,100);step("Internet Properties opens");
+    app_paint(panel,20,50,240,120,0xabcdef);step("Internet Properties apply status");
+    wm_end();
+}
+static void row_disk_maintenance(unsigned m)
+{
+    row_name="disk maintenance"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    maintenance_ui_scenario(disk_ui_present,a);
+    app_close(a); step("disk maintenance close exposes desktop"); wm_end();
+}
+static void row_copy_disk(unsigned m)
+{
+    row_name="copy disk"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    copy_disk_scenario(disk_ui_present,a);
+    app_close(a); step("copy disk closes"); wm_end();
+}
+static void row_backup(unsigned m)
+{
+    row_name="backup"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    backup_ui_scenario(disk_ui_present,a);
+    app_close(a); step("backup closes"); wm_end();
+}
+static void row_blank_media(unsigned m)
+{
+    row_name="blank media"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    blank_ui_scenario(disk_ui_present,a);
+    app_close(a); step("blank media closes"); wm_end();
+}
+static void row_disk_terminal(unsigned m)
+{
+    row_name="disk terminal"; wm_begin(m,1);
+    struct fake_app *a=app_open("terminal",560,400,40,50);
+    uint32_t *pixels=calloc(560*400,4); struct du_ui *u=calloc(1,sizeof(*u)); assert(pixels && u);
+    du_init(u,pixels,560,400);
+    static const char *const states[]={"FDISK: Do you wish to enable large disk support (Y/N)?",
+        "FDISK: Number  Active  Type  Start LBA  Sectors", "FDISK: No changes written. Add YES to confirm.",
+        "FDISK: Partition table saved and verified. Restart before use.",
+        "BACKUP: Reading catalogue and file checksums...", "RESTORE: 3 files restored, 1 skipped.",
+        "FDISK: Boot disk is busy. No partition changes written."};
+    for (unsigned k=0;k<sizeof(states)/sizeof(*states);k++) {
+        du_fill(&u->canvas,(struct du_rect){0,0,560,400},DU_WINDOW);
+        du_text(&u->canvas,8,12,states[k],DU_INK);
+        /* Terminal's command completion invalidates its content rectangle;
+         * here the real desktop handles the same client DAMAGE publication. */
+        disk_ui_present(u,states[k],a);
+    }
+    free(u); free(pixels); app_close(a); step("disk terminal closes"); wm_end();
+static void row_appearance(unsigned m)
+{
+    row_name="display appearance"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,50);
+    desk_theme_changed(&d); step("custom desktop colour applied");
+    assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("appearance scheme applied");
+    wm_end();
+}
+/* G23 rows appended after the existing row 42; do not renumber old scenarios. */
+static void row_item_appearance(unsigned m)
+{
+    row_name="appearance items"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,50);
+    for(int scheme=0;scheme<AP_BUILTINS;scheme++) {
+        assert(!cfg_scheme_use(&d.sh.cfg,ap_builtin_name(scheme)));
+        desk_shell_apply(&d); step("named scheme palette and caption gradients");
+    }
+    d.sh.cfg.appearance.item[AP_ACTIVE_TITLE].points=18;
+    d.sh.cfg.appearance.item[AP_MENU].font=DESK_FONT_MONO;
+    desk_shell_apply(&d); step("per item fonts applied");
+    wm_end();
+}
+static void row_effects(unsigned m)
+{
+    row_name="display effects"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",260,180,40,50);
+    assert(!cfg_scheme_use(&d.sh.cfg,"Windows Standard"));
+    d.sh.cfg.document_icon=d.sh.cfg.recycle_icon=1;
+    d.sh.cfg.appearance.effects=AP_LARGE_ICONS|AP_MENU_ANIMATION;
+    desk_shell_apply(&d); step("large icons and binary fonts");
+    struct desk_box f=d.clients[a->slot].frame;
+    pointer_to(f.x+60,f.y+8); press(CIUKI_BUTTON_LEFT,1);
+    pointer_to(d.mouse_x+30,d.mouse_y+20); assert(d.geometry_outline); step("outline drag");
+    assert(d.clients[a->slot].frame.x==f.x);
+    press(CIUKI_BUTTON_LEFT,0); assert(!d.geometry_outline); step("outline drag committed");
+    desk_menu_open(&d,SH_MENU_START,0,0);
+    for(unsigned i=0;i<8;i++) step("animated menu reveal");
+    desk_menu_close(&d); step("animated menu dismissed");
+    wm_end();
+}
+static void row_dpi(unsigned m)
+{
+    row_name="display dpi"; wm_begin(m,1);
+    (void)app_open("files",260,180,40,50);
+    assert(!cfg_scheme_use(&d.sh.cfg,"Windows Standard"));
+    static const unsigned values[]={96,120,144,192,96};
+    for(unsigned i=0;i<sizeof(values)/sizeof(*values);i++) {
+        d.sh.cfg.appearance.dpi=(uint16_t)values[i]; desk_shell_apply(&d);
+        assert(desk_shell_icon("folder",desk_scale(48))); step("desktop DPI changed");
+    }
+    wm_end();
+}
+static void row_desktop_themes(unsigned m)
+{
+    row_name="desktop themes"; wm_begin(m,1);
+    (void)app_open("files",260,180,40,50);
+    struct sound_scheme sounds={0};
+    assert(!cfg_scheme_use(&d.sh.cfg,"Windows Standard"));
+    assert(!cfg_desktop_theme_save(&d.sh.cfg,"Captured theme",&sounds));
+    for(int pointer=0;pointer<3;pointer++) {
+        d.sh.cfg.pointer_scheme=pointer;
+        d.sh.cfg.appearance.effects^=AP_LARGE_ICONS;
+        desk_shell_apply(&d); step("package pointer and icon effects");
+    }
+    assert(!cfg_desktop_theme_use(&d.sh.cfg,"Captured theme",&sounds));
+    desk_shell_apply(&d); step("package restored");
+    assert(!cfg_desktop_theme_delete(&d.sh.cfg,"Captured theme"));
+    wm_end();
+}
+static void row_background_browse(unsigned m)
+{
+    row_name="background browse"; wm_begin(m,1);
+    (void)app_open("files",260,180,40,50);
+    strcpy(d.sh.cfg.wallpaper,"pattern:3"); desk_shell_apply(&d); step("browsed background committed");
+    wm_end();
+}
+static void row_advanced_fonts(unsigned m)
+{
+    row_name="advanced font sheet"; wm_begin(m,1);
+    struct fake_app *a=app_open("control",420,320,40,50);
+    /* The property sheet belongs to the client; real dialog controls are
+     * exercised by control_modes_test.c. The WM sees ordinary client damage. */
+    app_fill(a,0xc0c0c0); step("Advanced General sheet opened");
+    app_fill(a,0xc0c0c1); step("custom font sample changed");
+    app_fill(a,0xc0c0c0); step("Advanced Cancel restored");
+    wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1227,7 +1485,7 @@ static void row_taskbar_menu(unsigned m)
     bar_right_click(1); assert(d.sh.levels); step("menu on the top bar");
     click(500,300,CIUKI_BUTTON_LEFT); step("dismissed by a click");
     bar_right_click(0); menu_item_click(0); assert(!d.sh.levels); step("Cascade Windows");
-    bar_right_click(0); assert(d.sh.menus[0].count==7); step("menu with Undo Cascade");
+    bar_right_click(0); assert(d.sh.menus[0].count==8); step("menu with Undo Cascade");
     menu_item_click(1); step("Tile Windows Horizontally");
     bar_right_click(0); tap(0x2f); assert(!d.sh.levels); step("Tile Windows Vertically by its access key");
     bar_right_click(0); tap(0x32); step("Minimize All Windows by its access key");
@@ -1322,15 +1580,639 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+static void row_g8_menus(unsigned m)
+{
+    row_name="G8 file operations"; wm_begin(m,1);
+    desk_menu_open(&d,SH_MENU_DESKTOP,600,450); step("Undo and Paste Shortcut desktop menu");
+    desk_menu_close(&d); step("desktop menu dismissed");
+    desk_menu_open(&d,SH_MENU_NEW,580,430); step("New Bitmap, Shortcut and registered document menu");
+    desk_menu_close(&d); step("New menu dismissed");
+    d.sh.dnd.allowed=FM_EFFECTS; d.sh.dnd.effect=FM_EFFECT_LINK;
+    desk_menu_open(&d,SH_MENU_DRAG,600,430);
+    assert(d.sh.menus[0].items[2].arg==FM_EFFECT_LINK && !(d.sh.menus[0].items[2].flags&SH_ITEM_DISABLED));
+    step("Create Shortcut Here enabled and default"); desk_menu_close(&d); step("link menu dismissed");
+    wm_end();
+}
+static void widget_damage(struct fake_app *a)
+{
+    struct ciuki_message m;shell_message(&m,DESK_DAMAGE,24);
+    desk_put32(m.data+12,240);desk_put32(m.data+16,180);wm_send(a,&m);
+}
+static unsigned widget_characters[2],widget_character_count;
+static void widget_character(struct du_ui *ui,const struct du_event *event,void *ctx)
+{
+    (void)ui;(void)ctx;
+    if(event->type==DU_EV_KEY && event->ch) {assert(widget_character_count<2);widget_characters[widget_character_count++]=event->ch;}
+}
+static void widget_key(struct du_ui *u,unsigned code,int value)
+{struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=(int)code,.value=value};du_input(u,&e);}
+static void widget_tap(struct du_ui *u,unsigned code)
+{widget_key(u,code,1);widget_key(u,code,0);}
+static void row_input_text(unsigned m)
+{
+    row_name="input text and blink";wm_begin(m,1);
+    struct fake_app *a=app_open("control",240,180,200,80);
+    static struct du_ui ui;static uint32_t pixels[240*180];
+    du_init(&ui,pixels,240,180);ui.input_layout=1;
+    struct du_widget *edit=du_add(&ui,DU_EDIT,1,(struct du_rect){10,10,210,24},"");assert(edit);du_focus(&ui,1);
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);assert(!edit->text[0]);
+    widget_tap(&ui,0x12);assert(!strcmp(edit->text,"\xc3\xaa"));
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);widget_tap(&ui,0x2d);
+    assert(!strcmp(edit->text,"\xc3\xaa^x"));
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);widget_tap(&ui,0x39);
+    assert(!strcmp(edit->text,"\xc3\xaa^x^"));
+    widget_key(&ui,0x138,1);widget_tap(&ui,0x12);widget_key(&ui,0x138,0);
+    assert(!strcmp(edit->text,"\xc3\xaa^x^\xe2\x82\xac"));
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);du_window_focus(&ui,0);du_window_focus(&ui,1);
+    assert(!ui.input_dead);widget_tap(&ui,0x1e);assert(strstr(edit->text,"a"));
+    du_render(&ui);
+    memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("native UTF-8 composed text");
+    ui.input_blink_ms=100;ui.input_caret_on=1;ui.input_caret_deadline=100000000;du_tick(&ui,100000000);assert(!ui.input_caret_on);
+    du_render(&ui);memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("caret blink off damage");
+    du_tick(&ui,200000000);assert(ui.input_caret_on);du_render(&ui);
+    memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("caret blink on damage");
+    ui.input_blink_ms=0;ui.input_caret_on=1;du_tick(&ui,900000000);assert(ui.input_caret_on);
+    struct du_widget *scroll=du_add(&ui,DU_SCROLLBAR,2,(struct du_rect){10,70,200,18},"");assert(scroll);scroll->total=100;scroll->page=10;scroll->vertical=0;
+    ui.mouse_x=20;ui.mouse_y=75;struct ciuki_input_event wheel={.type=CIUKI_INPUT_WHEEL,.value=-1};
+    ui.input_wheel_lines=7;du_input(&ui,&wheel);assert(scroll->value==7);
+    ui.input_wheel_lines=0;du_input(&ui,&wheel);assert(scroll->value==7);
+    ui.input_wheel_lines=101;du_input(&ui,&wheel);assert(scroll->value==17);
+    du_render(&ui);memcpy((void *)d.clients[a->slot].pixels,pixels,sizeof(pixels));widget_damage(a);step("wheel lines and page scroll");
+    static struct ciuki_settings cfg,parsed;static char text[CFG_TEXT_MAX];cfg_defaults(&cfg);
+    cfg.repeat_delay=3;cfg.repeat_speed=0;cfg.mouse_swap=1;cfg.mouse_trails=7;cfg.pointer_scheme=2;cfg.wheel_lines=101;cfg.cursor_blink_ms=0;
+    strcpy(cfg.extra,"foreign=value\n");size_t n=cfg_format(&cfg,text,sizeof(text));assert(n);cfg_defaults(&parsed);
+    assert(!cfg_parse(&parsed,text,n) && parsed.repeat_delay==3 && parsed.repeat_speed==0 && parsed.mouse_swap && parsed.mouse_trails==7 && parsed.pointer_scheme==2 && parsed.wheel_lines==101 && !parsed.cursor_blink_ms && strstr(parsed.extra,"foreign=value"));
+    assert(cfg_parse(&parsed,"repeat_speed=32\nrepeat_delay=4\nmouse_trails=8\n",strlen("repeat_speed=32\nrepeat_delay=4\nmouse_trails=8\n"))==3);
+    ui.focus=-1;ui.event=widget_character;widget_character_count=0;
+    widget_key(&ui,0x2a,1);widget_tap(&ui,0x0d);widget_key(&ui,0x2a,0);widget_tap(&ui,0x2d);
+    assert(widget_character_count==2 && widget_characters[0]=='^' && widget_characters[1]=='x');ui.event=NULL;
+    int run=desk_internal_open(&d,DESK_INTERNAL_RUN);assert(run>=0);
+    d.sh.cfg.cursor_blink_ms=100;d.shell_caret_next=0;d.shell_caret_hidden=0;
+    desk_shell_tick(&d);step("shell Run caret starts visible");
+    turn(100000000);assert(d.shell_caret_hidden);step("shell Run caret blink off");
+    turn(100000000);assert(!d.shell_caret_hidden);step("shell Run caret blink on");
+    d.sh.cfg.cursor_blink_ms=0;turn(100000000);assert(!d.shell_caret_hidden);step("shell Run steady caret");
+    desk_focus(&d,a->slot);step("shell Run caret removed on focus loss");
+    desk_focus(&d,run);step("shell Run caret restored on activation");
+    wm_end();
+}
+/* G12: new screen-changing events are checked on every presenter. */
+static void row_input_preferences(unsigned m)
+{
+    row_name="input preferences";wm_begin(m,1);
+    struct fake_app *a=app_open("control",240,180,200,80);
+    struct ciuki_message setting;
+    shell_message(&setting,DESK_INPUT_SETTINGS,16);
+    desk_put32(setting.data+4,DESK_INPUT_SCHEME);desk_put32(setting.data+8,1);desk_put32(setting.data+12,1);
+    wm_send(a,&setting);assert(d.sh.cfg.pointer_scheme==1 && d.sh.want_save);step("large pointer applied");
+    pointer_to(0,0);step("large pointer clipped at top left");
+    pointer_to((int)d.width-1,(int)d.height-1);step("large pointer clipped at bottom right");
+    pointer_to(390,270);step("large pointer over a client");
+    d.sh.cfg.pointer_scheme=2;desk_preferences_changed(&d);step("inverted pointer applied");
+    pointer_to(415,260);step("inverted pointer follows the mouse");
+    d.sh.cfg.mouse_trails=7;desk_preferences_changed(&d);step("trails enabled");
+    for(int k=0;k<10;k++){pointer_to(280+k*9,200+k*3);step("trail footprints restored");}
+    turn(200000000);step("stationary trail expiry");assert(!d.pointer_trail_count);
+    d.sh.cfg.pointer_scheme=0;d.sh.cfg.mouse_trails=0;desk_preferences_changed(&d);step("hardware pointer restored");
+    unsigned layout=d.sh.cfg.keyboard;
+    key(0x38,1);key(0x2a,1);assert(d.sh.cfg.keyboard==(int)(layout^1));step("Left Alt+Shift changes indicator");
+    key(0x2a,2);assert(d.sh.cfg.keyboard==(int)(layout^1));key(0x2a,0);key(0x38,0);step("language chord released");
+    key(0x138,1);tap(0x2a);key(0x138,0);assert(d.sh.cfg.keyboard==(int)(layout^1));step("AltGr does not switch layout");
+    key(0x2a,1);key(0x38,1);assert(d.sh.cfg.keyboard==(int)layout);key(0x38,0);key(0x2a,0);
+    assert(!d.sh.levels);step("Shift then Left Alt switches without opening a menu");
+    d.sh.cfg.mouse_swap=1;desk_preferences_changed(&d);
+    pointer_to(300,360);press(CIUKI_BUTTON_RIGHT,1);assert(d.buttons&1);press(CIUKI_BUTTON_RIGHT,0);step("left handed button release");
+    desk_put32(setting.data+4,DESK_INPUT_DELAY);desk_put32(setting.data+8,3);desk_put32(setting.data+12,0);
+    wm_send(a,&setting);assert(d.sh.cfg.repeat_delay==3 && (d.input_volatile_mask&2));
+    static struct ciuki_settings durable;desk_preferences_persistent(&d,&durable);assert(durable.repeat_delay==1);
+    step("session SPI value");
+    desk_put32(setting.data+8,4);wm_send(a,&setting);assert(d.sh.cfg.repeat_delay==3);step("invalid value rejected");
+    desk_put32(setting.data+8,2);desk_put32(setting.data+12,1);wm_send(a,&setting);
+    assert(d.sh.cfg.repeat_delay==2 && !(d.input_volatile_mask&2));desk_preferences_persistent(&d,&durable);assert(durable.repeat_delay==2);step("durable SPI value");
+    int v=wm_v3_window(DESK_V3_OVERLAPPED,-1,450,100,160,100);assert(v>=0);
+    int peer=(int)d.clients[v].v3_peer-1;assert(peer>=0);
+    struct ciuki_message request;desk_v3_message(&request,DESK_INPUT_SETTINGS,12,1234,0,0);
+    request.sender_pid=d.clients[peer].pid;desk_put32(request.data+16,DESK_INPUT_WHEEL);desk_put32(request.data+20,7);desk_put32(request.data+24,3);
+    assert(!desk_v3_receive(&d,peer,&request) && d.sh.cfg.wheel_lines==7);step("Win32 global session setter");
+    desk_put32(request.data+20,102);assert(desk_v3_receive(&d,peer,&request)==-EINVAL && d.sh.cfg.wheel_lines==7);step("Win32 invalid value refused");
+    wm_end();
+}
+static void dos_controls_frame(struct fake_app *a,struct dosbox_window *w,const uint32_t *guest,const char *what)
+{
+    struct desk_client *c=&d.clients[a->slot]; assert(c->info.width==640 && c->info.height==480);
+    struct du_canvas canvas={(uint32_t *)c->pixels,640,480,{0,0,640,480}};
+    db_paint(w,&canvas,guest);
+    struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+    desk_put32(message.data+12,640); desk_put32(message.data+16,480); wm_send(a,&message);
+    step(what);
+}
+static void row_dos_controls(unsigned m)
+{
+    row_name="DOS toolbar/properties/selection"; wm_begin(m,1);
+    struct fake_app *a=app_open("dosbox",640,480,0,0);
+    uint32_t *guest=calloc(640u*480u,sizeof(*guest)); assert(guest);
+    for (unsigned i=0;i<640*480;i++) guest[i]=(i*173u)&0xffffff;
+    struct dosbox_window w={0}; dosbox_profile_default(&w.profile,"CUSTOM.EXE");
+    dos_controls_frame(a,&w,guest,"DOS toolbar and intact scaled guest");
+    w.pressed=1; dos_controls_frame(a,&w,guest,"toolbar button pressed");
+    w.pressed=0; w.marking=w.selected=1; w.columns=80; w.rows=25;
+    w.x0=2; w.y0=1; w.x1=16; w.y1=3; dos_controls_frame(a,&w,guest,"Mark selection");
+    w.x1=22; w.y1=5; dos_controls_frame(a,&w,guest,"selection grows");
+    w.marking=w.selected=0; db_notice(&w,"Text copied to the clipboard."); dos_controls_frame(a,&w,guest,"copy/cancel clears selection; notice");
+    db_properties(&w); dos_controls_frame(a,&w,guest,"DOS Properties opened");
+    for (int page=0;page<5;page++) { db_page(&w,page); dos_controls_frame(a,&w,guest,"property page selected"); }
+    w.draft.idle=100; dos_controls_frame(a,&w,guest,"property value edited");
+    w.properties=0; w.profile.zoom=2; w.profile.background=0; dos_controls_frame(a,&w,guest,"Apply/Cancel closes; font and background labels");
+    w.scroll_y=64; w.scroll_x=64; dos_controls_frame(a,&w,guest,"font viewport scroll");
+    w.profile.zoom=0; w.scroll_y=w.scroll_x=0; w.notice[0]=0; dos_controls_frame(a,&w,guest,"return to Fit");
+    w.font_menu=1; w.font_choice=2; dos_controls_frame(a,&w,guest,"font size list opens and highlights a choice");
+    w.font_menu=0; dos_controls_frame(a,&w,guest,"font size list closes");
+    /* Real incremental mapping: only destination rows sampling source 17. */
+    struct desk_client *c=&d.clients[a->slot];
+    struct du_canvas canvas={(uint32_t *)c->pixels,640,480,{0,0,640,480}};
+    uint32_t source[15]={0},damage[15]={0}; source[0]=1u<<17;
+    for (unsigned x=0;x<640;x++) guest[17*640+x]^=0xffffff;
+    db_paint_rows(&w,&canvas,guest,source,damage);
+    for (unsigned y=0;y<480;y++) if (damage[y/32]&(1u<<(y%32))) {
+        struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+        desk_put32(message.data+8,y); desk_put32(message.data+12,640); desk_put32(message.data+16,1); wm_send(a,&message);
+    }
+    step("scaled incremental VGA damage");
+    free(guest); wm_end();
+}
+static void row_printing(unsigned m)
+{
+    /* Print dialogs and queue rows live in a retained native client surface.
+     * Exercise their real DAMAGE/exposure path, including a covered client
+     * refreshing a queue while another window owns the focus. */
+    row_name="printing";wm_begin(m,1);
+    struct fake_app *queue=app_open("printers",300,240,180,100);step("Printers folder and queue created");
+    app_paint(queue,0,0,300,240,0x112233);step("Add Printer wizard opens");
+    app_paint(queue,20,70,250,90,0x442233);step("printer selection and default change");
+    app_paint(queue,0,0,300,240,0x552233);step("wizard closes and printers refresh");
+    struct fake_app *note=app_open("ciuknote",280,220,340,220);step("document covers part of queue");
+    app_paint(note,10,15,260,190,0x774433);step("Print dialog opens");
+    app_paint(note,10,15,260,190,0x884433);step("copies, range and print-to-file change");
+    app_paint(queue,0,80,300,100,0x998877);step("covered queue: job queued, paused, resumed");
+    app_paint(note,0,0,280,220,0xaa4433);step("Print cancelled exposes document");
+    app_paint(note,10,15,260,190,0xbb4433);step("Page Setup opens");
+    app_paint(note,10,15,260,190,0xcc4433);step("paper orientation and margins change");
+    app_paint(note,0,0,280,220,0xdd4433);step("Page Setup closes");
+    app_close(note);step("queue exposed after dialog client closes");
+    app_paint(queue,0,80,300,100,0xee8877);step("queue cancels or purges job and refreshes");
+    app_close(queue);step("queue closes");wm_end();
+}
+static void row_logon(unsigned m)
+{
+    row_name="G32 logon and password lock"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,60,60); (void)a;
+    d.sh.users.count=2; strcpy(d.sh.users.names[0],"Alice"); strcpy(d.sh.users.names[1],"Bob");
+    d.sh.users.ids[0]=1; d.sh.users.ids[1]=2; d.sh.users.flags=USERS_FLAGS;
+    desk_logon_open(&d,1); step("optional logon conceals desktop and application");
+    tap(DU_KEY_DOWN); assert(!strcmp(d.sh.user_request.name,"Bob")); step("Family Logon user selection");
+    tap(DU_KEY_TAB); tap(0x1e); assert(!strcmp(d.sh.user_request.password,"a")); step("masked password and focus");
+    tap(DU_KEY_ENTER); assert(d.sh.user_want); step("password verification pending");
+    d.sh.user_want=0; d.sh.user_pending=1;
+    struct users_view v=d.sh.users;
+    desk_logon_result(&d,&v,-EACCES); assert(d.sh.user_gate==1 && !d.sh.user_request.password[0]); step("incorrect password remains at logon");
+    tap(DU_KEY_ESC); assert(d.sh.user_choose==2); step("Cancel chooses default profile");
+    desk_logon_done(&d); step("default desktop exposed with a full repaint");
+    strcpy(d.sh.profile.name,"Alice");
+    desk_session_lock(&d); assert(d.sh.user_gate==2); step("screen saver password hook / Lock");
+    int vi=wm_v3_window(DESK_V3_OVERLAPPED,-1,200,120,240,160); assert(vi>=0);
+    struct desk_client *vc=&d.clients[vi]; struct ciuki_message msg;
+    d.v3_lease=fake_lease; vc->v3_lease_wanted=1; vc->v3_visibility=-1;
+    desk_v3_reactivate(&d,vi); assert(!d.v3_lease_state);
+    v3msg(&msg,DESK_V3_LEASE,16,vc->v3_id,vc->v3_generation);
+    desk_put32(msg.data+16,1); desk_put32(msg.data+20,320); desk_put32(msg.data+24,200); desk_put32(msg.data+28,8);
+    assert(desk_v3_receive(&d,v3_root,&msg)==-EBUSY && !d.v3_lease_state);
+    desk_cursor_update(&d); assert(!d.v3_cursor_hidden);
+    step("a background Win32 window cannot lease the display or hide the lock pointer");
+    /* Lease reacquisition after unlock is the software-only row_lease case;
+     * engine fixtures pin their generation. This request was rejected. */
+    vc->v3_lease_wanted=0; d.v3_reactivate_pending=0;
+    tap(DU_KEY_ESC); assert(d.sh.user_gate==2 && !d.sh.user_choose); step("Escape cannot bypass lock");
+    tap(0x1e); step("lock password masked");
+    v.authenticated=1; desk_logon_result(&d,&v,0); assert(!d.sh.user_gate); step("authenticated unlock exposes desktop");
+    wm_end();
+}
+static void row_regional(unsigned m)
+{
+    row_name="regional settings"; wm_begin(m,1);
+    struct fake_app *panel=app_open("control",420,300,40,60);
+    app_open("ciuknote",200,180,280,120); step("Regional Settings partially covered");
+    app_paint(panel,0,0,420,300,0x410u); step("Italian preset selected");
+    app_paint(panel,0,0,420,300,0x24u); step("regional tab change");
+    app_paint(panel,180,60,180,24,0x409u); step("format field edit");
+    app_paint(panel,12,250,390,20,0x25u); step("regional Apply/save status");
+    app_paint(panel,12,250,390,20,0x26u); step("regional save failure status");
+    wm_end();
+}
+/* G11 (docs/design/power-policy.md): the power meter appears, its tooltip
+ * follows the readings, "Show power meter on taskbar" re-lays out the tray,
+ * the scheme menu, and a battery alarm's message window. */
+static struct ciuki_power_status row_power_record(unsigned percent, uint32_t ac)
+{
+    struct ciuki_power_status p={.version=1,.size=sizeof(p),.provider=CIUKI_POWER_PROVIDER_APM,.ownership=CIUKI_POWER_OWNED,
+        .ac_online=ac,.lid_open=CIUKI_POWER_UNKNOWN,.battery_count=1};
+    p.batteries[0]=(struct ciuki_power_battery){.id=1,.present=1,.unit=CIUKI_POWER_UNIT_PERCENT,.state=ac==1 ? 2u : 1u,
+        .design=CIUKI_POWER_UNKNOWN,.full=100,.remaining=percent,.rate=CIUKI_POWER_UNKNOWN,.voltage=CIUKI_POWER_UNKNOWN,.seconds=percent*60u};
+    return p;
+}
+static void row_power(unsigned m)
+{
+    row_name="power"; wm_begin(m,1);
+    (void)app_open("files",320,220,40,50);
+    struct ciuki_power_events ev={.version=1,.size=sizeof(ev)};
+    struct ciuki_power_status p=row_power_record(80,1);
+    assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&ev,3); step("meter appears, tray re-laid out");
+    struct desk_box bi=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); assert(bi.w);
+    pointer_to(bi.x+4,bi.y+4); step("hover the meter");
+    turn(700000000ull); assert(d.sh.tooltip==6); step("meter tooltip");
+    p=row_power_record(42,0); assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&ev,3); step("tooltip text and icon follow the reading");
+    snprintf(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),"power_meter=0\n"); desk_shell_power_config(&d); step("meter hidden, tooltip gone");
+    d.sh.cfg.extra[0]=0; desk_shell_power_config(&d); step("meter shown again");
+    bi=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); click(bi.x+4,bi.y+4,CIUKI_BUTTON_LEFT);
+    assert(d.sh.levels==1 && d.sh.menus[0].kind==SH_MENU_POWER); step("scheme menu");
+    tap(DU_KEY_ESC); step("scheme menu closed");
+    pointer_to(300,300);
+    p=row_power_record(8,0); assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&ev,3);
+    assert(!strcmp(d.sh.message_title,"Low Battery Alarm")); step("low battery alarm message");
+    wm_end();
+}
+static void row_browser_clipboard_raster(unsigned m)
+{
+    row_name="browser clipboard and raster";wm_begin(m,1);
+    struct fake_app *browser=app_open("netsurf",400,300,60,70);
+    struct fake_app *other=app_open("ciuknote",220,160,300,130);
+    (void)other;step("browser partly covered");
+    app_paint(browser,8,8,350,24,0x123456);step("system clipboard paste into URL field");
+    app_paint(browser,10,60,380,230,0x00aacc);step("large raster decode completes under another window");
+    app_paint(browser,20,100,120,40,0x00ee44);step("paste into a page form");
+    wm_end();
+}
+/* G5b rows are appended after G10's saver rows; existing indexes stay stable. */
+static void row_dos_clipboard_settings(unsigned m)
+{
+    row_name="DOS clipboard settings"; wm_begin(m,1);
+    struct fake_app *a=app_open("dosbox",320,240,60,60);
+    key(0x38,1); tap(DU_KEY_SPACE); key(0x38,0); step("DOS window system menu");
+    assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_TASK);
+    struct sh_menu *menu=&d.sh.menus[0]; int quick=-1,exclusive=-1;
+    for (int i=0;i<menu->count;i++) {
+        if (menu->items[i].action==SH_ACT_DOS_QUICKEDIT) quick=i;
+        if (menu->items[i].action==SH_ACT_DOS_EXCLUSIVE) exclusive=i;
+    }
+    assert(quick>=0 && exclusive>quick); menu_item_click(exclusive); step("Exclusive mode command dismisses menu");
+    key(0x38,1); tap(DU_KEY_SPACE); key(0x38,0); step("reopen DOS menu");
+    menu_item_click(quick); step("QuickEdit command dismisses menu");
+    app_close(a); step("DOS settings window closed"); wm_end();
+}
+static void row_clipboard_owner_display(unsigned m)
+{
+    row_name="clipboard owner display"; wm_begin(m,1);
+    /* Register the accessory only in this row, preserving the existing fuzz
+     * catalogue and seeds. The application still uses the production launch. */
+    snprintf(d.programs[d.program_count].name,sizeof(d.programs[0].name),"clipbrd");
+    snprintf(d.programs[d.program_count].path,sizeof(d.programs[0].path),"/Programs/clipbrd"); d.program_count++;
+    struct fake_app *viewer=app_open("clipbrd",320,240,60,60);
+    (void)app_open("calc",160,120,240,180); step("viewer partially occluded");
+    for (unsigned k=0;k<4;k++) { app_paint(viewer,10,60,280,160,0x192837u+k*0x112233u); step("owner-display bitmap changes in viewer"); }
+    desk_focus(&d,viewer->slot); step("owner-display viewer activated");
+    desk_move(&d,viewer->slot,100,110); step("viewer moves after owner paint");
+    app_paint(viewer,10,60,280,160,0x8a4210); step("owner scroll repaints viewer");
+    app_close(viewer); step("owner-display viewer closed"); wm_end();
+}
+static int row_standby(void) { return 0; }
+static void row_power_resume(unsigned m)
+{
+    row_name="power suspend/resume"; wm_begin(m,1);
+    struct fake_app *app=app_open("files",320,220,40,50);
+    d.clients[app->slot].dosbox=1; d.sh.power_can_standby=1; d.power_standby=row_standby;
+    d.sh.want_standby=1; desk_power_policy_tick(&d);
+    assert(d.sh.notification.active); step("DOS suspend notice");
+    for (unsigned n=0;n<8 && !d.pbt.standbys;n++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==1); step("resume repaints the entire desktop");
+    wm_end();
+}
+/* G22B, appended after every existing scenario. Render the actual Volume
+ * Control client, send only its toolkit damage, then compare each presenter. */
+static struct ciuki_mixer_line wm_lines[2][6];
+static int wm_master_get(void *ctx,struct ciuki_mixer_master *out)
+{ (void)ctx; *out=(struct ciuki_mixer_master){.version=1,.size=32,.left=50,.right=50}; return 0; }
+static int wm_line_get(void *ctx,struct ciuki_mixer_line *out)
+{ (void)ctx; *out=wm_lines[out->recording][out->line]; return 0; }
+static int wm_line_set(void *ctx,const struct ciuki_mixer_line *in)
+{
+    (void)ctx; wm_lines[in->recording][in->line]=*in;
+    wm_lines[in->recording][in->line].available=1;
+    if (in->recording && in->selected) wm_lines[1][9-in->line].selected=0;
+    return 0;
+}
+static void wm_toolkit_damage(struct fake_app *a,struct du_ui *u)
+{
+    if (!u->dirty) return;
+    du_render(u);
+    for (unsigned i=0;i<u->frame_count;i++) {
+        struct du_rect r=u->frames[i]; struct ciuki_message message;
+        shell_message(&message,DESK_DAMAGE,24);
+        desk_put32(message.data+4,(unsigned)r.x); desk_put32(message.data+8,(unsigned)r.y);
+        desk_put32(message.data+12,(unsigned)r.w); desk_put32(message.data+16,(unsigned)r.h);
+        wm_send(a,&message);
+    }
+}
+static void row_multimedia(unsigned m)
+{
+    row_name="G22B multimedia controls"; wm_begin(m,1);
+    struct fake_app *a=app_open("mixer",MIXER_W,MIXER_H,20,50);
+    static struct du_ui ui; static struct mixer_app app;
+    memset(&app,0,sizeof(app));
+    for (unsigned rec=0;rec<2;rec++) for (unsigned i=1;i<=5;i++)
+        wm_lines[rec][i]=(struct ciuki_mixer_line){.version=1,.size=sizeof(struct ciuki_mixer_line),
+            .line=i,.recording=rec,.left=75,.right=75,.available=!rec || i>=4};
+    struct mixer_backend backend={.get=wm_master_get,.line_get=wm_line_get,.line_set=wm_line_set};
+    struct desk_client *client=&d.clients[a->slot];
+    du_init(&ui,(uint32_t *)client->pixels,(int)client->info.width,(int)client->info.height);
+    mixer_attach(&app,&ui,&backend); wm_toolkit_damage(a,&ui); step("playback columns");
+    struct fake_app *cover=app_open("ciuknote",240,140,200,140); step("columns partly covered");
+    struct du_event event={.type=DU_EV_ACTIVATE,.id=MX_LINE_BASE+12};
+    mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("Wave mute changes under another window");
+    event.id=MX_MODE; mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("recording view swaps controls");
+    event.id=MX_LINE_BASE+42; mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("Line input selected");
+    desk_move(&d,cover->slot,430,270); step("changed columns uncovered");
+    event.id=MX_MODE; mixer_event(&ui,&event,&app); wm_toolkit_damage(a,&ui); step("playback view restored");
+    struct fake_app *cd=app_open("ciuknote",400,280,180,80);
+    app_title(cd,"CD Player - saved disc names"); app_paint(cd,12,44,350,180,0xcd); step("disc names loaded or saved");
+    struct fake_app *control=app_open("control",400,280,60,120);
+    app_paint(control,150,240,200,18,0x4242); step("Multimedia CD volume changes");
+    wm_end();
+}
+static void row_run(unsigned m)
+{
+    row_name="G9 Run dialog"; wm_begin(m,1);
+    win_chord(0x13); int run=d.focus; assert(run>=0 && d.sh.run); step("Run via Win+R");
+    struct desk_run_history *h=calloc(1,sizeof(*h)); assert(h);
+    for (unsigned k=0;k<26;k++) { h->order[k]=(char)('a'+k); snprintf(h->commands[k],DESK_RUN_MAX,"command%u",k); }
+    desk_run_history_ready(&d,h); free(h); assert(!strcmp(d.sh.run_text,"command0")); step("MRU arrives; latest selected");
+    tap(DU_KEY_F4); assert(d.sh.run->dropdown); step("history dropdown opens");
+    for (unsigned k=0;k<10;k++) tap(DU_KEY_DOWN);
+    assert(!strcmp(d.sh.run_text,"command10") && d.sh.run->top>0); step("history scrolls beyond eight visible rows");
+    tap(DU_KEY_ESC); assert(!d.sh.run->dropdown); step("dropdown closes without closing Run");
+    tap(0x2d); assert(!strcmp(d.sh.run_text,"x")); step("typing replaces selected history");
+    tap(DU_KEY_HOME); tap(0x1e); assert(!strcmp(d.sh.run_text,"ax")); step("Run inserts at caret");
+    tap(DU_KEY_END); tap(DU_KEY_BACKSPACE); tap(DU_KEY_HOME); tap(DU_KEY_DELETE); assert(!d.sh.run_length); step("Run caret navigation and forward/backward delete");
+    key(0x1d,1); tap(0x1e); key(0x1d,0); tap(DU_KEY_BACKSPACE); assert(!d.sh.run_length); step("Ctrl+A and delete");
+    struct desk_box c=desk_content(&d.clients[run]);
+    click(c.x+c.w-22,c.y+62,CIUKI_BUTTON_LEFT); assert(d.sh.run->dropdown); step("mouse opens dropdown");
+    click(c.x+80,c.y+82,CIUKI_BUTTON_LEFT); assert(!d.sh.run->dropdown && d.sh.run_length); step("mouse selects history");
+    tap(DU_KEY_TAB); tap(DU_KEY_TAB); tap(DU_KEY_TAB); assert(d.sh.run->focus==3); step("Browse keyboard focus");
+    char previous[DESK_RUN_MAX]; strcpy(previous,d.sh.run_text);
+    tap(DU_KEY_ENTER); assert(d.sh.run->browser && d.sh.run->browse_pending); step("Browse opens without directory I/O");
+    struct du_file_entry entries[2]={{.name="folder",.directory=1},{.name="game.exe",.directory=0}};
+    d.sh.run->browse_pending=0;
+    desk_run_browse_ready(&d,"/Programs",entries,2,0); step("Browse directory snapshot arrives");
+    tap(DU_KEY_ESC); assert(!d.sh.run->browser && !strcmp(previous,d.sh.run_text)); step("Browse Cancel preserves command");
+    key(0x38,1); tap(0x30); key(0x38,0); assert(d.sh.run->browser); step("Alt+B reopens Browse");
+    d.sh.run->browse_pending=0; desk_run_browse_ready(&d,"/Programs",entries,2,0); step("Browse populated");
+    key(0x2a,1); tap(DU_KEY_TAB); key(0x2a,0); tap(DU_KEY_ENTER);
+    assert(d.sh.run->browse_pending && !strcmp(d.sh.run->browse_path,"/Programs/folder")); step("Browse navigates a directory");
+    d.sh.run->browse_pending=0; desk_run_browse_ready(&d,"/Programs/folder",entries+1,1,0); step("nested directory snapshot arrives");
+    /* A real filename is entered through the shared dialog's focused name edit. */
+    tap(0x22); tap(0x1e); tap(0x32); tap(0x12); tap(0x34); tap(0x12); tap(0x2d); tap(0x12);
+    tap(DU_KEY_ENTER); assert(!d.sh.run->browser && !strcmp(d.sh.run_text,"\"/Programs/folder/game.exe\"")); step("Browse inserts a quoted path");
+    key(0x38,1); tap(0x30); key(0x38,0); assert(d.sh.run->browser); step("Browse for a drive path");
+    struct du_ui *browser=d.sh.run->browser;
+    du_set_text(&browser->dialog.items[browser->dialog.focus],"D:\\Games\\game.exe");
+    tap(DU_KEY_ENTER); assert(!d.sh.run->browser && !strcmp(d.sh.run_text,"\"D:\\Games\\game.exe\"")); step("Browse preserves an absolute drive path");
+    tap(DU_KEY_ENTER); assert(d.sh.run->busy && !strcmp(d.sh.want_run,d.sh.run_text)); step("Run dispatches command");
+    desk_run_result(&d,d.sh.want_run,-ENOENT); assert(d.sh.run && !d.sh.run->busy); step("missing program error retains command");
+    desk_request_close(&d,d.focus); step("error dismissed");
+    desk_focus(&d,run); desk_run_result(&d,d.sh.run_text,0); assert(!d.sh.run); step("accepted command closes Run");
+    wm_end();
+}
+static int help_v3_request(int peer,int window,const char *argument)
+{
+    v3_root=peer; struct desk_client *c=&d.clients[window]; struct ciuki_message msg;
+    unsigned n=(unsigned)strlen(argument);
+    v3msg(&msg,DESK_LAUNCH,n+4,c->v3_id,c->v3_generation);
+    desk_put32(msg.data+16,n); memcpy(msg.data+20,argument,n);
+    return desk_v3_receive(&d,peer,&msg);
+}
+static unsigned help_messages(const struct desk_client *c)
+{
+    unsigned count=0;
+    for (unsigned i=0;i<c->tx_count;i++) {
+        struct desk_packet p; assert(desk_parse(&c->tx[(c->tx_head+i)%DESK_TX_MAX],0,NULL,&p));
+        count+=p.opcode==DESK_LAUNCH;
+    }
+    return count;
+}
+static void row_help(unsigned m)
+{
+    row_name="Help reuse, topic links and troubleshooter"; wm_begin(m,1);
+    snprintf(d.programs[d.program_count].name,sizeof(d.programs[0].name),"help");
+    snprintf(d.programs[d.program_count].path,sizeof(d.programs[0].path),"/Programs/help"); d.program_count++;
+    struct fake_app *help=app_open("help",400,280,80,90);
+    (void)app_open("files",240,150,380,230); step("Help partly covered");
+    struct desk_client *c=&d.clients[help->slot];
+    desk_minimize(&d,help->slot); for (unsigned k=0;k<8;k++) turn(25000000ull); step("Help minimised");
+    uint32_t id=c->window_id;
+    assert(desk_task_launch(&d,"help","topic:nosound")==(int)c->pid);
+    assert(!c->minimized && c->window_id==id && d.focus==help->slot);
+    unsigned forwarded=0;
+    for (unsigned i=0;i<c->tx_count;i++) {
+        struct desk_packet p; assert(desk_parse(&c->tx[(c->tx_head+i)%DESK_TX_MAX],0,NULL,&p));
+        if (p.opcode==DESK_LAUNCH) { assert(!strcmp(p.title,"help") && !strcmp(p.argument,"topic:nosound")); forwarded++; }
+    }
+    assert(forwarded==1); step("Help request restores and reuses its window");
+    app_paint(help,215,24,180,160,0xa151); step("related topic changes text and link pane");
+    app_paint(help,215,24,180,240,0xb261); step("troubleshooter question and choices");
+    app_paint(help,215,24,180,240,0xc371); step("Next changes the question");
+    app_paint(help,215,24,180,240,0xd481); step("Back restores a question");
+    app_paint(help,215,24,180,240,0xe591); step("Cancel restores topic and links");
+    int first=wm_v3_window(DESK_V3_OVERLAPPED,-1,350,60,180,100),first_peer=v3_root;
+    assert(first>=0);
+    v3_root=-1; v3_peer(take_fd()); d.clients[v3_root].pid=88;
+    int second=wm_v3_window(DESK_V3_OVERLAPPED,-1,370,220,180,100),second_peer=v3_root;
+    assert(second>=0 && first_peer!=second_peer);
+    unsigned messages=help_messages(c);
+    assert(!help_v3_request(first_peer,first,"hlp:1:42:8:/one.hlp"));
+    assert(!help_v3_request(second_peer,second,"chm:15:42:8:/two.chm"));
+    assert(help_messages(c)==messages+2);
+    assert(!help_v3_request(first_peer,first,"hlp:2:0:0:"));
+    assert(help_messages(c)==messages+2); /* another caller still uses Help */
+    assert(!help_v3_request(second_peer,second,"chm:18:0:0:"));
+    assert(help_messages(c)==messages+3);
+    assert(help_v3_request(second_peer,second,"--test=help")==-EPERM && help_messages(c)==messages+3);
+    step("v3 callers share Help, last quit closes, other launch arguments refused");
+    wm_end();
+}
+static void row_g26b_network_ui(unsigned mode)
+{
+    row_name="G26B browser and Internet transitions";wm_begin(mode,1);
+    struct fake_app *browser=app_open("netsurf",320,220,70,50);step("browser before blank target");
+    struct fake_app *blank=app_open("netsurf",300,200,190,120);step("blank target window");
+    app_paint(blank,0,0,300,200,0x745b22);step("blank target first content");
+    app_paint(browser,40,40,240,140,0x234678);step("download progress opens");
+    app_paint(browser,54,120,200,14,0x987612);step("download progress changes");
+    app_paint(browser,40,40,240,140,0x473892);step("download cancelled dialog closes");
+    struct fake_app *panel=app_open("control",320,220,260,30);step("Internet Properties General");
+    for(unsigned tab=1;tab<5;tab++) { app_paint(panel,12,30,290,160,0x456000+tab);step("Internet Properties page switch"); }
+    app_paint(panel,10,185,290,16,0x1243);step("history clear status");
+    app_paint(browser,0,32,320,160,0x2456);step("history or bookmarks refresh after another process");
+    app_paint(blank,20,40,160,32,0x5346);step("JavaScript document mutation paints");
+    wm_end();
+}
+static unsigned access_tones[ACC_TONES];
+static void access_tone_seen(struct desktop *dd, unsigned tone) { (void)dd; assert(tone<ACC_TONES); access_tones[tone]++; }
+static void access_settings(void) { desk_access_settings_changed(&d); }
+static void row_access(unsigned m)
+{
+    /* G25: the screen-changing events of the accessibility features: the tray status indicator (StickyKeys latch and
+     * lock, MouseKeys button, FilterKeys stopwatch), the hot-key confirmation window, the SoundSentry flash
+     * (title bar, window, desktop), high contrast (a theme change), the pointer schemes and the Magnifier panel
+     * (pointer motion, damage in and beside its source, a window dragged through it, panel flipping edges). */
+    row_name="accessibility"; wm_begin(m,1);
+    d.sound_tone=access_tone_seen; memset(access_tones,0,sizeof(access_tones));
+    struct fake_app *a=app_open("files",300,200,120,70); step("window");
+    /* Shift five times: StickyKeys on, indicator appears in the tray, a confirmation window opens. */
+    for (unsigned k=0;k<5;k++) { tap(0x2a); step("shift"); }
+    assert(access_feature_on(&d.acc.eng,ACC_F_STICKY) && d.acc.shown_visible && d.sh.confirm==SH_CONFIRM_ACCESS+ACC_F_STICKY);
+    assert(access_tones[ACC_TONE_SIREN_UP]==1);
+    step("StickyKeys confirmation");
+    tap(DU_KEY_ENTER); step("kept");
+    assert(access_feature_on(&d.acc.eng,ACC_F_STICKY) && !d.sh.confirm);
+    tap(0x1d); step("Ctrl latched"); tap(0x1d); step("Ctrl locked"); assert(d.acc.eng.locked);
+    tap(0x2a); step("Shift latched"); tap(0x1e); step("Shift released by a key");
+    tap(0x1d); step("Ctrl unlocked");
+    /* The dialog declined: the feature goes off again and the indicator leaves the tray. */
+    access_set_locks(&d.acc.eng,0,0,0);
+    for (unsigned k=0;k<5;k++) { tap(0x36); step("shift"); }
+    assert(!access_feature_on(&d.acc.eng,ACC_F_STICKY));
+    for (unsigned k=0;k<5;k++) { tap(0x36); step("shift"); }
+    assert(access_feature_on(&d.acc.eng,ACC_F_STICKY) && d.sh.confirm);
+    tap(DU_KEY_ESC); step("declined"); assert(!access_feature_on(&d.acc.eng,ACC_F_STICKY) && !d.acc.shown_visible);
+    /* MouseKeys: the hot key, the keypad moves the pointer, a drag holds the button (indicator state). */
+    key(0x38,1); key(0x2a,1); key(0x45,1); key(0x45,0); key(0x2a,0); key(0x38,0); step("MouseKeys hot key");
+    assert(access_feature_on(&d.acc.eng,ACC_F_MOUSE) && d.sh.confirm); tap(DU_KEY_ENTER); step("MouseKeys kept");
+    int px=d.mouse_x, py=d.mouse_y;
+    key(0x50,1); step("keypad down: one pixel"); for (unsigned k=0;k<40;k++) step("held"); key(0x50,0);
+    assert(d.mouse_y>py && d.mouse_x==px);
+    key(0x52,1); step("button held"); key(0x52,0); key(0x53,1); step("button released"); key(0x53,0);
+    key(0x4a,1); key(0x4a,0); step("right button selected");
+    d.sh.cfg.access.mouse&=~ACC_ON; access_settings(); step("MouseKeys off");
+    /* FilterKeys stopwatch in the tray. */
+    d.sh.cfg.access.filter|=ACC_ON; access_settings(); step("FilterKeys on");
+    d.sh.cfg.access.filter&=~ACC_ON; access_settings(); step("FilterKeys off");
+    /* SoundSentry: flash the title bar, the window, the desktop; the flash ends by itself. */
+    d.sh.cfg.access.sentry|=ACC_ON; d.sh.cfg.access.show_sounds=1;
+    for (unsigned effect=ACC_SS_TITLE;effect<=ACC_SS_DISPLAY;effect++) {
+        d.sh.cfg.access.sentry_effect=effect; access_settings();
+        desk_sound(&d,SOUND_ERROR); assert(d.acc.flash_active); step("flash");
+        turn(100000000ull); step("flash still on");
+        turn(200000000ull); desk_access_tick(&d); step("flash over"); assert(!d.acc.flash_active);
+    }
+    d.sh.cfg.access.sentry&=~ACC_ON; d.sh.cfg.access.show_sounds=0; access_settings();
+    /* High contrast by its hot key, and back. */
+    key(0x38,1); key(0x2a,1); key(0x137,1); key(0x137,0); key(0x2a,0); key(0x38,0); step("High Contrast hot key");
+    assert(access_feature_on(&d.acc.eng,ACC_F_CONTRAST) && desk_theme==desk_theme_named("High Contrast Black"));
+    tap(DU_KEY_ENTER); step("High Contrast kept");
+    d.sh.cfg.access.contrast|=ACC_ON; strcpy(d.sh.cfg.access.scheme,"High Contrast White"); access_settings(); step("another scheme");
+    key(0x38,1); key(0x2a,1); key(0x137,1); key(0x137,0); key(0x2a,0); key(0x38,0); step("High Contrast off");
+    assert(!access_feature_on(&d.acc.eng,ACC_F_CONTRAST) && desk_theme==desk_theme_named(d.sh.cfg.theme));
+    /* Pointer schemes. */
+    for (unsigned scheme=1;scheme<ACC_POINTERS;scheme++) { d.sh.cfg.access.pointer=scheme; access_settings(); pointer_to(300,200+(int)scheme*20); step("pointer scheme"); }
+    d.sh.cfg.access.pointer=0; access_settings(); step("standard pointer");
+    /* Magnifier. */
+    d.sh.cfg.access.mag_on=1; d.sh.cfg.access.mag_level=3; access_settings();
+    pointer_to(320,300); step("Magnifier on"); assert(d.acc.mag_shown);
+    pointer_to(330,310); step("pointer moves"); pointer_to(500,450); step("pointer moves more");
+    app_paint(a,10,10,120,60,a->salt+7); step("damage under the source");
+    app_paint(a,10,100,50,30,a->salt+9); step("damage beside the source");
+    desk_move(&d,a->slot,300,120); step("window moved through the source");
+    pointer_to(320,60); step("pointer near the panel: the panel flips edge"); pointer_to(320,440); step("and back");
+    d.sh.cfg.access.mag_level=9; access_settings(); step("level 9");
+    d.sh.cfg.access.mag_invert=1; access_settings(); step("inverted");
+    d.sh.cfg.access.mag_dock=ACC_DOCK_BOTTOM; d.sh.cfg.access.mag_percent=40; access_settings(); step("docked at the bottom, taller");
+    key(0x15b,1); key(0x148,1); key(0x148,0); key(0x15b,0); step("Win+Up"); (void)0;
+    d.sh.cfg.access.mag_follow=ACC_MAG_FOCUS; access_settings(); desk_focus(&d,a->slot); step("follows the focus");
+    (void)desk_internal_open(&d,DESK_INTERNAL_ABOUT); step("window above the source");
+    d.sh.cfg.access.mag_on=0; access_settings(); step("Magnifier off"); assert(!d.acc.mag_shown);
+    wm_end();
+}
+static void row_taskbar_customization(unsigned m)
+{
+    row_name="G20 taskbar customization"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,60); (void)app_open("calc",220,150,260,140);
+    struct desk_box quick=desk_quick_launch_button(&d); assert(quick.w && quick.h);
+    click(quick.x+quick.w/2,quick.y+quick.h/2,CIUKI_BUTTON_LEFT);
+    assert(d.focus<0); step("Quick Launch Show Desktop");
+    assert(desk_show_desktop(&d)>0); step("Show Desktop undo restores the windows");
+    wm_end(); wm_begin(m,1);
+    d.sh.cfg.quick_launch=0; desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    assert(!desk_quick_launch_button(&d).w);
+    step("Quick Launch hidden and taskbar repainted");
+    d.sh.cfg.quick_launch=1; d.sh.cfg.taskbar_clock=0;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    assert(desk_quick_launch_button(&d).w && desk_shell_clock_box(&d).w==0);
+    step("Quick Launch restored and clock hidden");
+    d.sh.cfg.taskbar_clock=1; desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    step("clock restored");
+    wm_end();
+}
+#include "window_custom_test.h"
+/* fx-28, appended after the existing model rows. */
+static void row_fixed_arrange(unsigned m)
+{
+    row_name="fixed-size arrange"; wm_begin(m,1);
+    struct fake_app *a=app_open("control",300,220,80,80);
+    struct fake_app *b=app_open("control",320,240,230,190); (void)b; /* resizable Control Panel browser */
+    struct desk_client *fixed=&d.clients[a->slot]; fixed->resizable=0;
+    struct desk_box original=fixed->frame; step("fixed Display Properties");
+    int kinds[]={DESK_ARRANGE_CASCADE,DESK_ARRANGE_TILE_H,DESK_ARRANGE_TILE_V};
+    for (unsigned k=0;k<3;k++) {
+        assert(desk_arrange(&d,kinds[k])==2);
+        assert(fixed->frame.w==original.w && fixed->frame.h==original.h); step("arranged with fixed dialog");
+        assert(desk_arrange_undo(&d)==2); assert(!memcmp(&fixed->frame,&original,sizeof(original))); step("Undo with fixed dialog");
+    }
+    wm_end();
+}
+static void row_review_content(unsigned m)
+{
+    row_name="screenshot review content"; wm_begin(m,1);
+    struct fake_app *a=app_open("control",400,280,100,80);
+    struct desk_client *c=&d.clients[a->slot];
+    uint32_t *pixels=(uint32_t *)c->pixels;
+    struct du_canvas canvas={.pixels=pixels,.width=400,.height=280,.clip={0,0,400,280}};
+    const char *states[]={"(None)","Blank","Ciuki logo","Starfield","Password protection unavailable", "313,524,224 bytes 299 MB", "DIB \xe2\x80\x94 2 formats", "\xe2\x86\x90 \xe2\x86\x92"};
+    for (unsigned k=0;k<sizeof(states)/sizeof(*states);k++) {
+        du_fill(&canvas,(struct du_rect){0,0,400,280},desk_theme->face);
+        du_text(&canvas,14,18,states[k],desk_theme->ink);
+        struct ciuki_message damage; shell_message(&damage,DESK_DAMAGE,24);
+        desk_put32(damage.data+12,400); desk_put32(damage.data+16,280); wm_send(a,&damage);
+        step("changed saver selection, preview, drive data or extended glyphs");
+        desk_menu_open(&d,SH_MENU_START,20,40); step("covered by shell menu"); desk_menu_close(&d); step("exposed changed control content");
+    }
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
+    row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
+    row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
+    row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
+    row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display,
+    row_power_resume, row_disk_maintenance, row_copy_disk, row_backup, row_blank_media,
+    row_disk_terminal, row_multimedia, row_run, row_help, row_g26b_network_ui, row_access,
+    row_taskbar_customization, row_taskbar_dock, row_taskbar_autohide, row_taskbar_toolbars,
+    row_start_custom, row_shell_custom_prompts, row_move_damaged, row_fault, row_saver,
+    row_appearance, row_item_appearance, row_effects, row_dpi, row_desktop_themes,
+    row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
-     * Main keeps indexes 0..28; fx-26 move-with-other-damage is index 29. */
+     * Integration keeps indexes 0..39; Regional Settings follows at 40. */
     const char *one=getenv("WM_ROW");
     for (unsigned k=0;k<sizeof(rows)/sizeof(*rows);k++) if (!one || (unsigned)atoi(one)==k) rows[k](m);
 }
@@ -1356,6 +2238,7 @@ static void wm_dump(void)
 }
 static void report(int sig)
 { (void)sig; fprintf(stderr,"aborted in mode %s at %s\n",wm_names[wm_mode],step_name); wm_dump(); signal(SIGABRT,SIG_DFL); }
+#ifndef WM_NO_MAIN
 int main(int argc, char **argv)
 {
     signal(SIGABRT,report);
@@ -1377,3 +2260,5 @@ int main(int argc, char **argv)
     printf("PASS fx-15 window model: %u frames identical to a full redraw\n",wm_frames);
     return 0;
 }
+
+#endif

@@ -8,22 +8,48 @@
 #ifndef CIUKI_DESKTOP_SHELL_H
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
+#include "users.h"
+#include "customize.h"
+#include "theme.h"
 #include "shell_link.h"
 #include "settings_catalog.h"
 #include "folder.h"
 #include "autoplay.h"
 #include "wallpaper.h"
+#include "power_policy.h"
+#include "run_model.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <ciuki/abi.h>
-#define SH_LEVELS 3
-#define SH_ITEMS 20
+#define SH_LEVELS 10
+#define SH_ITEMS 80
+#define SH_PROGRAM_TRAY 8
+struct sh_program_tray {
+    uint32_t window, id, callback;
+    uint32_t pixels[256];
+    char tip[128];
+    uint64_t click_ns;
+};
+struct sh_program_balloon {
+    uint32_t window, id, timeout, icon;
+    char title[64], text[160];
+};
 #define SH_ICONS (FM_ENTRIES + 4 + (int)DESK_LINKS)
 #define SH_TRAY_ICON_SIZE 16
 #define SH_TRAY_GAP 4
 #define SH_TRAY_MARGIN 6
+struct desktop;
+int desk_shell_program_icon(struct desktop *, int, const struct desk_packet *, const struct ciuki_surface_info *, int);
+int desk_shell_program_balloon(struct desktop *, int, const struct desk_packet *);
+void desk_shell_program_remove(struct desktop *, uint32_t);
+#define SH_TRAY_ICON_SIZE desk_scale(16)
+#define SH_TRAY_GAP desk_scale(4)
+#define SH_TRAY_MARGIN desk_scale(6)
 /* Tray identifiers; geometry places Notifications next to the clock. */
-enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
+
+/* G30 Resource Meter: shown while a resmeter client has a window; levels as apps/systools rm_state (0 ok, 1 low, 2 critical). */
+struct sh_resources { int visible; unsigned system, user, gdi, level; };
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER, SH_TRAY_LANGUAGE, SH_TRAY_RESOURCES, SH_TRAY_ACCESS /* G25 */ };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
 /* fx-21b: wording of the Windows notification (Microsoft KB 2654149, KB 314634). */
 #define DESK_USB_UNRECOGNIZED_TITLE "USB Device Not Recognized"
@@ -35,7 +61,19 @@ struct sh_notification {
     uint64_t started, expires;
     int active, icon, action, balloon, slide;
 };
-#define SH_START_ROW 30
+/* G9: lazily allocated while Run is open; only the input thread owns it. */
+struct desk_run_ui {
+    struct desk_run_history history;
+    int dropdown, selected, top, focus, select_all, busy;
+    unsigned cursor;
+    struct du_ui *browser;
+    uint32_t *pixels;
+    int browser_done, browser_accept, browse_pending, browse_ready, browse_error;
+    char browse_path[260], browse_cached[260], browse_result[260];
+    struct du_file_entry *entries;
+    unsigned entry_count;
+};
+#define SH_START_ROW 36
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
 #define SH_SEPARATOR 8
@@ -43,33 +81,43 @@ struct sh_notification {
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA,
-       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_KINDS };
+       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_SHORTCUT, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG, SH_MENU_TASKBAR };
+                    SH_MENU_DRAG, SH_MENU_TASKBAR, SH_MENU_FIND,
+                    SH_MENU_POWER /* G11: tray scheme choice */, SH_MENU_POWER_METER /* G11: tray right click */,
+                    SH_MENU_TOOLBARS, SH_MENU_START_ITEM, SH_MENU_TOOLBAR_CONTEXT, SH_MENU_TOOLBAR_ALL, SH_MENU_FOLDER_BASE=100 };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
-                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN, SH_ACT_DOS_MARK, SH_ACT_DOS_COPY, SH_ACT_DOS_PASTE, SH_ACT_DOS_QUICKEDIT,
+                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN, SH_ACT_DOS_MARK, SH_ACT_DOS_COPY, SH_ACT_DOS_PASTE, SH_ACT_DOS_QUICKEDIT, SH_ACT_DOS_EXCLUSIVE,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
+                 SH_ACT_LOGOFF, SH_ACT_LOCK,
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
-                 /* G4 taskbar menu */
+                 /* G4 taskbar menu: retain main's action values. */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
-                 SH_ACT_TASKBAR_PROPERTIES };
+                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_FIND,
+                 SH_ACT_FILES_ACTION, /* G8: appended after G7 Find. */
+                 SH_ACT_HELP /* G15: Start > Help */,
+                 SH_ACT_POWER_SCHEME /* G11: arg is the scheme */, SH_ACT_POWER_METER,
+                 SH_ACT_MAGNIFIER /* G25: Accessories > Magnifier: toggles the Magnifier */,
+                 SH_ACT_FOLDER_OPTIONS, SH_ACT_SHELL_ITEM, SH_ACT_TOOLBAR, SH_ACT_ADDRESS, SH_ACT_NEW_TOOLBAR,
+                 SH_ACT_START_OPEN, SH_ACT_START_DELETE, SH_ACT_START_RENAME, SH_ACT_START_EXPLORE, SH_ACT_TOOLBAR_EXPLORE, SH_ACT_FOLDER_EXPLORE, SH_ACT_START_PROPERTIES };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
 struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
-struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
+struct sh_menu { int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };
+struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
 struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };
 /* fx-19 shell drag session (DoDragDrop): the desktop owns the pointer from
  * the drag threshold until the drop, Esc or a right-drag menu choice. */
-enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK };
+enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK, SH_DROP_START, SH_DROP_QUICK, SH_DROP_TOOLBAR };
 #define SH_DRAG_IMAGE_ITEMS 8
 struct sh_dnd {
     int active, menu;                 /* menu: right-drag menu waits for a choice */
@@ -83,18 +131,33 @@ struct sh_dnd {
     int status_target; uint32_t status_serial; /* DRAG_STATUS of the current Files target */
     int32_t start_x, start_y, menu_x, menu_y;
     char destination[FM_PATH];
-    uint64_t hover_ns, repeat_ns;
+    uint64_t hover_ns, repeat_ns,start_hover_ns;
+    int opened_start;
     int hover_task, drop_index;
     int icons[SH_DRAG_IMAGE_ITEMS]; unsigned icon_count;   /* desktop source: dragged icons drawn */
     struct desk_box image;            /* drag image bounds as last painted */
 };
 struct desk_shell {
+    struct sh_program_tray program_tray[SH_PROGRAM_TRAY];
+    struct sh_program_balloon program_balloons[SH_PROGRAM_TRAY];
+    unsigned program_balloon_count;
+    uint32_t balloon_window, balloon_id;
+    struct desk_launch_record shortcut_record;
+    char shortcut_source[260], shortcut_number[24], shortcut_status[160];
+    unsigned shortcut_field, shortcut_repair;
+    int shortcut_index;
     struct ciuki_settings cfg;
+    struct user_profile profile;
+    struct users_view users;
+    struct users_request user_request;
+    int user_gate, user_focus, user_pending, user_want, user_choose, user_previous_focus;
+    char user_status[96];
     int programs_selected, programs_scroll, programs_click;
     unsigned save_game, save_op, save_bytes, save_quota, save_confirm, save_focus, save_busy;
     char save_status[160];
     uint64_t programs_click_ns;
     uint64_t clock_click_ns;        /* G1: first click of a tray-clock double-click */
+    uint64_t volume_click_ns;       /* G22: popup on click, Volume Control on double-click */
     int gate;                       /* runtime gate scenarios: defaults only, no settings I/O */
     struct sh_menu menus[SH_LEVELS];
     int levels, menu_owner;         /* menu_owner: client for SH_MENU_TASK, icon for SH_MENU_ICON */
@@ -116,6 +179,20 @@ struct desk_shell {
     struct ciuki_power_status power_status;
     uint64_t power_poll_ns;
     uint32_t power_seen;
+    /* G11 power policy (docs/design/power-policy.md): desktop.cfg's power_*
+     * lines, the meter summary, alarm and PBT_APMPOWERSTATUSCHANGE state,
+     * the call-73 EVENTS seen, QUERY's CAN_STANDBY, the monitor timeout
+     * of the current power source (consumed by G10's DPMS) and the drive
+     * timer last sent to the kernel. */
+    struct pp_config power_cfg;
+    struct pp_summary power_summary;
+    struct pp_alarm_state power_alarm;
+    struct pp_broadcast_state power_broadcast;
+    struct ciuki_power_events power_events;
+    int power_events_valid, power_can_standby;
+    int power_meter_hidden;   /* !show_meter; zero (shown) in a zeroed desktop */
+    uint32_t power_monitor_seconds, power_disk_sent;
+    uint64_t power_sleep_notice_ns;
     int network_open;
     struct ciuki_media_state media;
     char media_labels[26][33];
@@ -125,6 +202,7 @@ struct desk_shell {
     uint32_t remove_generation;
     uint64_t network_poll_ns;
     int start_hot;                  /* the pointer is over the Ciuki button */
+    struct sh_resources resources;
     int tooltip, hover_target; uint64_t hover_since; int32_t hover_x, hover_y;
     struct desk_box tooltip_last;
     uint32_t tooltip_hash;
@@ -133,7 +211,11 @@ struct desk_shell {
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, about_scroll, shutdown_choice, message_kind;
     int confirm;                    /* G2: SH_CONFIRM_*, the message window asks Yes or No */
-    char run_text[160]; unsigned run_length;
+    char run_text[DESK_RUN_MAX]; unsigned run_length;
+    struct desk_run_ui *run;
+    unsigned run_history_request;
+    char run_saves[DESK_RUN_MRU][DESK_RUN_MAX];
+    unsigned run_save_count;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
     int logo_down, alt_routed, alt_used, alt_code;
@@ -143,11 +225,23 @@ struct desk_shell {
      * slot or DESK_CLIENTS for the Start button, task_return the window id that
      * had the focus before; start_keyboard: the Start menu was opened by key. */
     unsigned logo_keys; uint16_t chord[4];
+    struct sh_folder_snapshot *custom;
+    struct sh_edit_request edit;
+    int custom_refresh, custom_item, custom_menu_root, custom_drag, custom_dragging;
+    int custom_press_x, custom_press_y, prompt_mode;
+    char custom_open[CFG_PATH_MAX],prompt_path[CFG_PATH_MAX];
+    unsigned recent_serial;
+    int address_focus;unsigned address_length;char address_text[CFG_PATH_MAX];
+    int bar_drag, bar_resize, bar_hidden, bar_raised;
+    int bar_origin_edge, bar_origin_size, bar_press_x, bar_press_y;
+    uint64_t bar_leave_ns;
     int taskbar_key, task_pick, start_keyboard, start_focus_shown; uint32_t task_return;
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
     int want_save, want_wallpaper, want_mixer, want_power, want_reload, want_programs;
-    char want_run[192];
+    /* G11: force ends programs that stop responding; standby: 1 user, 2 automatic. */
+    int want_power_force, want_standby;
+    char want_run[DESK_RUN_MAX];
     /* Wallpaper cache: full screen, rebuilt when settings or size change. */
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
     uint32_t *background; int background_valid, background_selected, background_outline;
@@ -162,10 +256,21 @@ struct desk_shell {
 };
 struct desktop;
 struct desk_client;
+/* mode 1: logon (Cancel selects default); mode 2: password lock. */
+void desk_logon_open(struct desktop *, int mode);
+void desk_logon_result(struct desktop *, const struct users_view *, int error);
+void desk_logon_done(struct desktop *);
+int desk_logon_input(struct desktop *, const struct ciuki_input_event *);
+void desk_session_lock(struct desktop *);
+void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
+const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);
 void desk_shell_apply(struct desktop *);
 void desk_shell_background(struct desktop *, struct desk_box clip);
 void desk_shell_topbar(struct desktop *, struct desk_box clip);
+void desk_shell_bar(struct desktop *, struct desk_box);
+void desk_shell_geometry(struct desktop *);
+void desk_shell_custom_updated(struct desktop *);
 void desk_shell_overlay(struct desktop *, struct desk_box clip);
 int desk_shell_button(struct desktop *, int button, int down);
 void desk_shell_motion(struct desktop *);
@@ -186,13 +291,30 @@ void desk_shell_clock_text_at(const struct desktop *, uint64_t, char *, size_t);
 int desk_shell_clock_width_at(const struct desktop *, uint64_t);
 void desk_shell_tray_damage(struct desktop *, int previous_width);
 int desk_shell_power_update(struct desktop *, const struct ciuki_power_status *);
+/* G11: the power meter icon is shown (a valid record and "Show power meter
+ * on taskbar"). */
+int desk_shell_power_shown(const struct desktop *);
+/* G11: after each status poll: EVENTS (NULL when unavailable) and QUERY's
+ * bits (negative when unavailable): alarms, BIOS sleep requests,
+ * PBT_APMPOWERSTATUSCHANGE, the monitor timeout. */
+void desk_shell_power_events(struct desktop *, const struct ciuki_power_events *, int query);
+/* G11: desktop.cfg was (re)loaded into sh.cfg: parse its power_* lines. */
+void desk_shell_power_config(struct desktop *);
+void desk_shell_power_scheme(struct desktop *, int scheme);   /* tray menu: make active and save */
+/* G30: the Resource Meter tray icon (hidden when !visible); damages only what changed. */
+void desk_shell_resources_update(struct desktop *, const struct sh_resources *);
 void desk_shell_volume_damage(struct desktop *);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
+void desk_run_history_ready(struct desktop *, const struct desk_run_history *);
+void desk_run_browse_ready(struct desktop *, const char *, const struct du_file_entry *, unsigned, int);
+void desk_run_result(struct desktop *, const char *command, int error);
+void desk_run_remember(struct desktop *, const char *command);
 int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
 /* G2: a Yes/No question in the message window; Yes runs desk_folder_confirmed(action), No or closing it desk_folder_cancelled. */
 enum { SH_CONFIRM_NONE, SH_CONFIRM_DELETE, SH_CONFIRM_EMPTY };
+#define SH_CONFIRM_ACCESS 100   /* G25: 100 + ACC_F_* feature: Yes keeps the feature the hot key switched on, No or closing it switches it off */
 void desk_shell_confirm(struct desktop *, const char *title, const char *text, int icon, int action);
 void desk_shell_bin_state(struct desktop *, int full);   /* the Recycle Bin icon's full or empty picture */
 void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);
@@ -203,7 +325,7 @@ void desk_shell_notify_error(struct desktop *, const char *title, int error);
 void desk_shell_media_labels(struct desktop *, const struct ciuki_media_volume volumes[26]);
 void desk_menu_open(struct desktop *, int kind, int32_t x, int32_t y);
 void desk_menu_close(struct desktop *);
-void desk_shell_find(struct desktop *, int computer);   /* Win+F, Win+Ctrl+F, F3: Find (G7 replaces this body) */
+void desk_shell_find(struct desktop *, int computer);   /* G7 Files Find; computer selects the separate network-search placeholder. */
 void desk_shell_taskbar_leave(struct desktop *);        /* the taskbar loses the keyboard focus (a window took it) */
 int desk_shell_caption_icon(struct desktop *, int client, uint64_t stamp, int menu_was_open);   /* click on the caption icon: window menu, second click closes */
 int desk_task_count(const struct desktop *);

@@ -26,6 +26,15 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_splash_progress.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
+# G14: Startup menu, Step-by-step, ScanDisk message and boot-status sector
+# (assembled loader), the kernel's boot-status/ASD module, and Registry
+# Checker, System File Checker and the ScanDisk report text.
+python3 -B -m unittest discover -s "$root/tests/host" -p test_startup_menu.py
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
+    "$root/tests/host/bootstat_test.c" "$root/src/kernel/core/bootstat.c" -o "$out/bootstat_test"
+"$out/bootstat_test"
+python3 -B -m unittest discover -s "$root/tests/host" -p test_sysrecovery.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
 python3 -B "$root/tests/host/test_display_driver_model.py"
 python3 -B "$root/tests/host/test_radeon2d.py"
@@ -291,6 +300,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/storage_power_test.c" -o "$out/storage_power_test"
 "$out/storage_power_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_sleep_test.c" -o "$out/power_sleep_test"
+"$out/power_sleep_test"
 
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
@@ -366,6 +378,14 @@ ASAN_OPTIONS=detect_leaks=0 "$out/savage2d_test"
 
 # f2-125: per-game controller/COM/LPT panel, persistence and launch services.
 python3 -B "$root/tests/host/desktop/test_game_properties.py"
+
+# G30: system tools models (System Information, Monitor, Resource Meter, device actions, Add New Hardware, Scheduler).
+nice -n 19 python3 -B "$root/tests/host/desktop/test_systools.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_control_system_tools.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_systools_ui.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_schedtask.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_schedsvc.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_resources.py"
 
 # f1-113: RC jitter/calibration, real HID state and V86 polling loop/BIOS.
 bash "$root/tests/host/joystick/run.sh"
@@ -667,6 +687,7 @@ python3 "$root/tests/host/lwip/fd_run.py" --frame
 python3 "$root/tests/host/lwip/run.py"
 python3 "$root/tests/host/lwip/fd_run.py"
 python3 "$root/tests/host/lwip/run.py" --kernel
+python3 "$root/tests/host/net/test_user_tools.py"
 
 
 # f4-05: the kernel's integer OPL3 port sample for sample against the pinned
@@ -703,6 +724,7 @@ python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loade
 
 # f5-06 kernel32 production VFS endpoints and direct-file INI parity.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel32.py
+python3 -B "$root/tests/host/win32/test_winsock.py"
 # f3-63: the classic-kernel H50 CPU boot is retired. Native DOS file API
 # tests above and unified H56/H57 below retain the supported coverage.
 

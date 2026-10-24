@@ -4,6 +4,8 @@
 #ifndef CIUKI_FILES_APP_H
 #define CIUKI_FILES_APP_H
 #include "model.h"
+#include "operations.h"
+#include "backup.h"
 #include <ciuki/abi.h>
 #include "../libdeskui/deskui.h"
 
@@ -11,7 +13,7 @@
 #define FILES_TREE 256
 #define FILES_CACHE 64
 
-struct files_row { char label[80], size[32], type[40], modified[24], attributes[8]; };
+struct files_row { char label[80], size[32], type[40], modified[24], attributes[8], location[FM_PATH]; };
 /* G2: the Recycle Bin view's extra columns. */
 struct files_bin_row { char name[FM_NAME], where[RB_PATH], deleted[24]; };
 struct files_place { char name[64], path[FM_PATH]; };
@@ -51,9 +53,18 @@ struct files_app {
     uint32_t ciuki16[256], ciuki32[1024]; int ciuki;
     int width, height, split, test, stage, rename_index, rename_new, job_active, close_pending, context_folder, tree_dirty;
     char note[160], rename_original[FM_NAME];
-    struct du_menu menus[5];
-    struct du_menu_item file_items[12], edit_items[6], view_items[12], go_items[14], help_items[3];
-    struct du_menu_item popup[18]; unsigned popup_count;
+    struct du_menu menus[6];
+    struct du_menu_item tools_items[2];
+    struct fm_search_query find_edit;
+    int find_page, find_initial, find_again, find_running;
+    char find_from[16], find_to[16], find_size[32];
+    struct du_menu_item file_items[20], edit_items[12], view_items[13], go_items[14], help_items[3];
+    struct du_menu_item popup[64]; unsigned popup_count;
+    struct files_operations *operations;
+    int shell_action; char shell_action_path[FM_PATH];
+    char **shell_paths; unsigned shell_count;
+    int (*shell_open)(struct files_app *, const char *);
+    int (*shell_record)(struct files_app *, const struct desk_launch_record *);
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
     void (*close)(struct files_app *);
     void (*close_declined)(struct files_app *);
@@ -79,6 +90,17 @@ struct files_app {
      * 0 mounted, -ENXIO no disk. space: volume capacity and free count. */
     int (*media_load)(unsigned drive);
     int (*media_space)(unsigned drive, struct ciuki_media_space *);
+    int (*media_format)(int write, struct ciuki_media_format *);
+    int (*media_image)(int write, struct ciuki_floppy_image *, void *);
+    int (*backup_call)(int, const char *, const char *, const char *, const char *,
+                       enum bk_replace, const struct bk_callbacks *, struct bk_result *);
+    struct files_disk *disk;
+    struct files_maintenance *maintenance;
+    int (*media_defrag)(int step, struct ciuki_media_defrag *);
+    int (*media_convert)(int execute, struct ciuki_media_convert *);
+    const struct fm_vfs *cleanup_fs;
+    int disk_pending, disk_drive;
+    uint32_t disk_low_seen;
     int (*file_info)(const char *, struct ciuki_file_info *);
     int (*set_attributes)(const char *, uint32_t);
     int (*set_label)(unsigned, const char *);
@@ -100,12 +122,20 @@ struct files_app {
     struct rb_policy policy, bin_edit;
     struct files_bin_row *bin_rows; unsigned bin_row_capacity;
     struct du_menu_item bin_items[8];
-    int bin_menu, bin_scope, delete_flags, show_bin_properties, bin_op;
+    int bin_menu, bin_scope, delete_flags, show_bin_properties, bin_op,show_folder_options;
     char **drop_paths; unsigned drop_count;   /* items dropped on the bin window, awaiting the confirmation */
     void *user;
 };
+/* G8 shell actions can be requested by desktop icons without duplicating UI. */
+
+void files_shell_action(struct files_app *, int action, const char *path);
 
 void files_properties_path(struct files_app *, const char *);
+/* G29: asynchronous disk dialogs; drive is zero-based (C: = 2). */
+int files_disk_open(struct files_app *, unsigned drive, int format);
+int files_backup_open(struct files_app *, const char *, const char *, int mode);
+int files_copy_disk_open(struct files_app *, unsigned drive);
+int files_disk_busy(const struct files_app *);
 void files_drop(struct files_app *, int x, int y, int copy);
 /* fx-19 drop target and source, driven by the desktop's drag session.
  * keys are FM_KEY_* bits; phase 0 enter/over/repeat, 1 leave. */
@@ -117,9 +147,11 @@ void files_destroy(struct files_app *);
 void files_event(struct du_ui *, const struct du_event *, void *);
 int files_close_request(struct files_app *);
 /* The desktop refused or failed to start the program requested through LAUNCH (error is positive). */
+void files_find(struct files_app *);
 void files_launch_failed(struct files_app *, int error);
 void files_layout(struct files_app *);
 void files_update(struct files_app *);
 int files_navigate(struct files_app *, const char *);
 void files_size_text(char *out, size_t n, uint64_t bytes);
+int files_maintenance_open(struct files_app *, unsigned drive, int convert);
 #endif

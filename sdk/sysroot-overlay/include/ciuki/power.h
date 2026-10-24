@@ -4,8 +4,9 @@
 #ifndef CIUKI_USER_POWER_H
 #define CIUKI_USER_POWER_H
 #include <ciuki/abi.h>
-#define __CIUKI_POWER_VERSION__ 1
-/* action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
+#define __CIUKI_POWER_VERSION__ 2
+/* action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF, CIUKI_POWER_QUERY,
+ * CIUKI_POWER_STANDBY or CIUKI_POWER_CANCEL_STANDBY.
  * QUERY returns CIUKI_POWER_CAN_* and CIUKI_POWER_STOPPED/UNCERTAIN bits.
  * Either progress bit means the session cannot resume. REBOOT does not return on
  * success. OFF flushes storage and powers off through the active provider
@@ -15,10 +16,23 @@
  * computer" only when QUERY also reports STOPPED. EBUSY with no progress
  * bit means open files prevented flushing; UNCERTAIN means a stop proof
  * failed after shutdown began: retain a terminal diagnostic and require reset. */
+/* G11B: CANCEL_STANDBY rejects a pending APM BIOS sleep request after an
+ * application veto. Desktop only, idempotent, EBUSY once sleep starts. */
 int ciuki_power(uint32_t action);
 /* Read-only cached firmware status of the one active power provider (ACPI,
  * or APM 1.2 when the OS does not own ACPI; see `provider`); initializes version/size
  * for the caller. Unknown values use CIUKI_POWER_UNKNOWN. No AML or BIOS
  * call runs during this query. */
 int ciuki_power_status(struct ciuki_power_status *status);
+/* G11 (version 2): cached boot-monotonic power events (APM standby/suspend
+ * requests, battery low, critical, resumes, status changes), the first unmet
+ * standby qualification and the programmed drive timer; initializes
+ * version/size. Any native client; no firmware call. */
+int ciuki_power_events(struct ciuki_power_events *events);
+/* Desktop only (EPERM otherwise): queues `disk_seconds` (0 = never, at most
+ * 5 h 30 min) as the standby timer of every ATA fixed disk and returns at
+ * once; the out fields report the last completed application. Stand by is
+ * ciuki_power(CIUKI_POWER_STANDBY), ENOTSUP while QUERY lacks
+ * CIUKI_POWER_CAN_STANDBY. */
+int ciuki_power_policy(struct ciuki_power_policy *policy);
 #endif

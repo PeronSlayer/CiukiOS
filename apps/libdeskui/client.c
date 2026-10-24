@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifdef __linux__
@@ -52,6 +53,31 @@ static void dialog_sound(void *ctx, unsigned event)
     desk_message(&m,DESK_SOUND,8); m.data[0] = DESK_SHELL_VERSION; desk_put32(m.data+4,event); (void)queue(w,&m);
 }
 
+/* G15: F1 and Help menus open CiukiOS Help at the program's topic. Only the
+ * desktop can start a window, so the request is a LAUNCH of "help" whose
+ * argument is "topic:<id>" (the desktop accepts it from every client and
+ * Help opens that topic); without a topic Help opens at its contents. */
+#define HELP_LAUNCH_SERIAL 0x48454c50u
+static int help_launch(struct du_ui *u, const char *topic, void *ctx)
+{
+    struct du_window *w = ctx; struct ciuki_message m;
+    const char name[] = "help"; size_t n = sizeof(name) - 1, a = 0;
+    char arg[DESK_ARG_MAX + 1];
+    (void)u;
+    if (!w) return -EINVAL;
+    if (topic && *topic) {
+        size_t t = strlen(topic);
+        if (t > 40) return -EINVAL;
+        for (size_t i = 0; i < t; i++)
+            if (!((topic[i] >= 'a' && topic[i] <= 'z') || (topic[i] >= '0' && topic[i] <= '9') || topic[i] == '-')) return -EINVAL;
+        a = (size_t)snprintf(arg, sizeof(arg), "topic:%s", topic);
+    }
+    desk_message(&m, DESK_LAUNCH, (unsigned)(12 + n + (a ? 4 + a : 0)));
+    desk_put32(m.data + 4, HELP_LAUNCH_SERIAL); desk_put32(m.data + 8, (uint32_t)n); memcpy(m.data + 12, name, n);
+    if (a) { desk_put32(m.data + 12 + n, (uint32_t)a); memcpy(m.data + 16 + n, arg, a); }
+    return queue(w, &m) ? -errno : 0;
+}
+
 static int flush(struct du_window *w)
 {
     while (w->count) {
@@ -80,8 +106,12 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     if (!len || len > DESK_TITLE_MAX || width <= 0 || height <= 0 ||
         min_width < 0 || min_height < 0 || (min_width == 0) != (min_height == 0) ||
         min_width > width || min_height > height) { errno = EINVAL; return -1; }
+    (void)desk_theme_poll(DESK_SETTINGS_PATH,du_now());
+    w->dpi=desk_appearance_active ? desk_appearance.dpi : 96;
+    desk_theme_logical(1);
+    int physical_w=(width*(int)w->dpi+48)/96, physical_h=(height*(int)w->dpi+48)/96;
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return -1;
-    w->surface = ciuki_surface_create((uint32_t)width, (uint32_t)height, CIUKI_SURFACE_XRGB8888);
+    w->surface = ciuki_surface_create((uint32_t)physical_w, (uint32_t)physical_h, CIUKI_SURFACE_XRGB8888);
     if (w->surface < 0) return -1;
     if (ciuki_surface_info(w->surface, &w->info) || !desk_surface_valid(&w->info)) goto fail;
     w->pixels = ciuki_surface_map(w->surface, PROT_READ | PROT_WRITE);
@@ -96,6 +126,7 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     w->back = malloc((size_t)width * (size_t)height * 4);
     if (!w->back) { errno = ENOMEM; goto fail; }
     du_init(u, w->back, width, height);
+    u->help_open = help_launch; u->help_ctx = w;
     w->completion=malloc(sizeof(*w->completion));
     if (!w->completion) goto fail;
     if (du_completion_init(w->completion)) { free(w->completion); w->completion=NULL; goto fail; }
@@ -105,20 +136,21 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4); queue(w, &m);
     desk_message(&m, DESK_CREATE_WINDOW, 44 + (unsigned)len);
-    desk_put32(m.data + 4, (uint32_t)width); desk_put32(m.data + 8, (uint32_t)height); desk_put32(m.data + 12, (uint32_t)len);
+    desk_put32(m.data + 4, (uint32_t)physical_w); desk_put32(m.data + 8, (uint32_t)physical_h); desk_put32(m.data + 12, (uint32_t)len);
     memcpy(m.data + 16, title, len); m.fd_count = 1; m.fds[0] = w->surface;
     if (w->resizable) {
         unsigned n = 16 + (unsigned)len;
         desk_put32(m.data + n, DESK_RESIZABLE);
-        desk_put32(m.data + n + 4, (uint32_t)min_width); desk_put32(m.data + n + 8, (uint32_t)min_height);
+        desk_put32(m.data + n + 4, (uint32_t)(min_width*(int)w->dpi+48)/96); desk_put32(m.data + n + 8, (uint32_t)(min_height*(int)w->dpi+48)/96);
         desk_put32(m.data + n + 12, CIUKI_SURFACE_DIMENSION_MAX); desk_put32(m.data + n + 16, CIUKI_SURFACE_DIMENSION_MAX);
         desk_put32(m.data + n + 20, 1); desk_put32(m.data + n + 24, 1);
     }
     queue(w, &m);
     /* G3: this window answers QUERY_END_SESSION (registration: serial 0, AGREE). */
     desk_message(&m, DESK_SESSION_ANSWER, 12); desk_put32(m.data + 8, DU_SESSION_AGREE); queue(w, &m);
+    desk_message(&m,DESK_INPUT_SETTINGS,16);queue(w,&m);
     clip_window=w; du_clip_bind(native_clip,w);
-    return flush(w);
+    desk_message(&m, DESK_POWER_REPLY, 12); desk_put32(m.data+8,1); queue(w,&m);    return flush(w);
 fail: { int error = errno ? errno : EINVAL; du_window_destroy(w); errno = error; return -1; }
 }
 int du_window_open(struct du_window *w, struct du_ui *u, int ch, int width, int height, const char *title)
@@ -140,7 +172,7 @@ static void discard_replacement(struct du_window *w)
     munmap(w->pixels,w->info.allocation_bytes); close(w->surface); free(w->back);
     w->surface = w->old_surface; w->info = w->old_info; w->pixels = w->old_pixels; w->back = w->old_back;
     w->old_surface = -1; w->old_pixels = w->old_back = NULL; w->replacement = w->swap_sent = 0;
-    du_resize(w->ui,w->back,(int)w->info.width,(int)w->info.height);
+    du_resize(w->ui,w->back,w->old_logical_width,w->old_logical_height);
 }
 static int replacement(struct du_window *w)
 {
@@ -153,13 +185,16 @@ static int replacement(struct du_window *w)
     if (ciuki_surface_info(fd,&info) || !desk_surface_valid(&info)) goto fail;
     pixels = ciuki_surface_map(fd,PROT_READ|PROT_WRITE);
     if (pixels == MAP_FAILED) { pixels = NULL; goto fail; }
-    back = malloc((size_t)info.width*info.height*4);
+    int logical_w=((int)info.width*96+(int)w->dpi/2)/(int)w->dpi;
+    int logical_h=((int)info.height*96+(int)w->dpi/2)/(int)w->dpi;
+    back = malloc((size_t)logical_w*logical_h*4);
     if (!back) { errno = ENOMEM; goto fail; }
+    w->old_logical_width=w->ui->canvas.width; w->old_logical_height=w->ui->canvas.height;
     w->old_surface = w->surface; w->old_info = w->info; w->old_pixels = w->pixels; w->old_back = w->back;
     w->surface = fd; w->info = info; w->pixels = pixels; w->back = back;
     w->damage_count=0;
     w->replacement = 1; w->configure_serial = w->request_serial; w->request_serial = 0; w->damaged = 0;
-    du_resize(w->ui,back,(int)info.width,(int)info.height);
+    du_resize(w->ui,back,logical_w,logical_h);
     return 0;
 fail: {
     int error = errno ? errno : EINVAL;
@@ -184,6 +219,22 @@ void du_window_present(struct du_window *w)
 {
     if (w->closed || w->swap_sent || w->present_pending) return;
     int width = (int)w->info.width, height = (int)w->info.height;
+    if(w->dpi && w->dpi!=96) {
+        int lw=w->ui->canvas.width, lh=w->ui->canvas.height;
+        int x0=width,y0=height,x1=-1,y1=-1;
+        for(int y=0;y<height;y++) for(int x=0;x<width;x++) {
+            uint32_t value=w->back[(size_t)(((2*y+1)*lh)/(2*height))*lw+((2*x+1)*lw)/(2*width)];
+            uint32_t *dst=w->pixels+(size_t)y*(w->info.stride/4)+x;
+            if(*dst==value && !w->replacement) continue;
+            *dst=value;
+            if(x<x0) x0=x;
+            if(y<y0) y0=y;
+            if(x>x1) x1=x;
+            if(y>y1) y1=y;
+        }
+        if(x1>=0) add_damage(w,(struct du_rect){x0,y0,x1-x0+1,y1-y0+1});
+        return;
+    }
     unsigned regions=w->present_rendered && !w->replacement ? w->ui->frame_count : 1;
     for (unsigned n=0;n<regions;n++) {
         struct du_rect r=w->present_rendered && !w->replacement ? w->ui->frames[n] : (struct du_rect){0,0,width,height};
@@ -225,6 +276,12 @@ int du_window_move(struct du_window *w, int x, int y)
     return queue(w, &m);
 }
 
+static void power_answer(struct du_window *w, int answer)
+{
+    struct ciuki_message m; desk_message(&m,DESK_POWER_REPLY,12);
+    desk_put32(m.data+4,w->power_serial); desk_put32(m.data+8,(uint32_t)answer);
+    w->power_reply_pending=queue(w,&m) ? answer+1 : 0;
+}
 /* G3 session states: 0 none, 1 inside the query callback, 2 the program
  * asks the user, 3 agreed (waiting for END_SESSION). */
 enum { SESSION_NONE, SESSION_QUERY, SESSION_ASKING, SESSION_AGREED };
@@ -296,7 +353,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
         w->server_pid = m.sender_pid;
         if (now > w->ui->now) w->ui->now = now;
         switch (p.opcode) {
-        case DESK_CLIPBOARD_EVENT: du_clip_observe(p.clip.sequence); break;
+        case DESK_CLIPBOARD_EVENT: du_clip_event(&p.clip); break;
         case DESK_CONFIGURE:
             if (p.flags & DESK_CONFIGURE_COMMITTED) {
                 if ((!w->configured ? p.serial != 0 : !w->swap_sent || p.serial != w->configure_serial) ||
@@ -309,7 +366,19 @@ int du_window_turn(struct du_window *w, uint64_t now)
                 w->request_width = p.width; w->request_height = p.height;
             }
             break;
-        case DESK_PING:
+        case DESK_INPUT_STATE:
+            if(w->ui->input_layout!=p.input_settings[0])w->ui->input_dead=0;
+            w->ui->input_layout=p.input_settings[0];w->ui->input_blink_ms=p.input_settings[3];
+            w->ui->input_wheel_lines=p.input_settings[6];w->ui->input_double_ms=p.input_settings[9];
+            w->ui->input_caret_on=1;w->ui->input_caret_deadline=0;w->ui->dirty=1;break;
+        case DESK_POWER_EVENT: {
+            w->power_serial=p.serial;
+            power_answer(w,2); (void)flush(w); /* handler owns the query from here */
+            int agree=w->power_event ? w->power_event(w,p.index,p.flags,w->user) : 1;
+            power_answer(w,p.index==0 && !agree ? 0 : 1);
+            break;
+        }        case DESK_PING:
+            if (w->power_reply_pending) power_answer(w,w->power_reply_pending-1);
             if (w->session_reply_pending) session_answer(w, w->session_reply_pending - 1);   /* answer before PONG */
             desk_message(&m, DESK_PONG, 8); desk_put32(m.data + 4, p.serial); queue(w, &m); break;
         case DESK_PONG: break;
@@ -337,15 +406,20 @@ int du_window_turn(struct du_window *w, uint64_t now)
             break;
         case DESK_FOCUS: du_window_focus(w->ui, p.focused != 0); break;
         case DESK_DROP_FILES:
-            if (w->accept_files) du_emit(w->ui, (struct du_event){.type = DU_EV_DROPFILES, .x = p.x, .y = p.y, .index = (int)p.serial});
+            if (w->accept_files) du_emit(w->ui, (struct du_event){.type = DU_EV_DROPFILES, .x = (int)(((int64_t)p.x*2+1)*w->ui->canvas.width/(2*w->info.width)), .y = (int)(((int64_t)p.y*2+1)*w->ui->canvas.height/(2*w->info.height)), .index = (int)p.serial});
             if (w->message) w->message(w, &p, w->user);
             break;
         case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
             /* Repair remembered input on the desktop's backlog RESYNC too. */
+            if(p.event.type==CIUKI_INPUT_MOTION && w->dpi && w->dpi!=96) {
+                p.event.value=(int)(((int64_t)p.event.value*2+1)*w->ui->canvas.width/(2*w->info.width));
+                p.event.value2=(int)(((int64_t)p.event.value2*2+1)*w->ui->canvas.height/(2*w->info.height));
+            }
             du_input(w->ui, &p.event); break;
         default: if (w->message) w->message(w, &p, w->user); break;
         }
     }
+    if (w->power_reply_pending && w->count<16) power_answer(w,w->power_reply_pending-1);
     if (w->session_reply_pending && w->count<16) session_answer(w, w->session_reply_pending - 1);
     if (w->close_reply_pending && w->count<16) {
         struct ciuki_message m; desk_message(&m,DESK_CLOSE_ACK,8);
@@ -355,6 +429,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
     if (!w->closing && !w->present_pending && replacement(w)) { w->error = errno; w->closed = 1; return -1; }
     if (w->closing) {
         if (w->closing == 1 && w->count < 16) {
+            if (clip_window==w) du_clip_release(); /* render while the channel is still live */
             struct ciuki_message m; desk_message(&m, DESK_CLOSE, 4);
             if (!queue(w, &m)) w->closing = 2;
         }
@@ -436,7 +511,7 @@ int du_run(struct du_window *w, void (*idle)(void *), void *arg)
 
 void du_window_destroy(struct du_window *w)
 {
-    if (clip_window==w) { du_clip_bind(NULL,NULL); clip_window=NULL; }
+    if (clip_window==w) { du_clip_release(); du_clip_bind(NULL,NULL); clip_window=NULL; }
     struct clip_saved **at=&clip_saved_head,*previous=NULL;
     while (*at) {
         struct clip_saved *p=*at;
@@ -511,6 +586,19 @@ static int native_clip(void *ctx, struct desk_clip_wire *w, const void *data, st
                         if (!map || map==MAP_FAILED) error=-ENOMEM;
                         else { *out=malloc(reply->bytes); if (!*out) error=-ENOMEM; else memcpy(*out,map,reply->bytes); munmap(map,info.allocation_bytes); }
                     }
+                }
+            }
+            /* EmptyClipboard destroys old producer resources before its
+             * caller can publish new promises. Ordinary UI events remain
+             * deferred; only this clipboard lifecycle callback is immediate. */
+            if (packet.clip.kind==DESK_CLIP_DESTROY) du_clip_event(&packet.clip);
+            if (packet.clip.kind==DESK_CLIP_RENDER) {
+                struct clip_saved *saved=clip_saved_count<1024 ? malloc(sizeof(*saved)) : NULL;
+                if (!saved) error=-ENOMEM;
+                else {
+                    *saved=(struct clip_saved){.window=window,.message=incoming}; saved->message.fd_count=0;
+                    if (clip_saved_tail) clip_saved_tail->next=saved; else clip_saved_head=saved;
+                    clip_saved_tail=saved; clip_saved_count++;
                 }
             }
             for (unsigned i=0;i<incoming.fd_count;i++) close(incoming.fds[i]);

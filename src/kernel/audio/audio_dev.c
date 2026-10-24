@@ -5,6 +5,7 @@
 #include <ciuki/audio.h>
 #include <ciuki/ac97.h>
 #include <ciuki/audio_backend.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
 #include <ciuki/timing.h>
@@ -14,6 +15,7 @@
 #include <ciuki/task.h>
 #pragma weak sched_audio_producer_stats /* f1-101: task.c, absent in audio-only hosts */
 static struct vfs *settings_vfs;
+static struct file_description *capture_reserved_owner;
 /* fx-26: poll readiness of /dev/mixer (Windows 98 mixer drivers notify a
  * mixerOpen(CALLBACK_WINDOW) client with MM_MIXM_CONTROL_CHANGE when a
  * control changes; here POLLIN tells the tray to read the master now). The
@@ -55,12 +57,12 @@ static void audio_locks_init(void)
     kmutex_init_level(&audio_lock.service, "audio.service", KMUTEX_LEVEL_OUTER);
     kmutex_init_level(&audio_lock.control, "audio.control", KMUTEX_LEVEL_OUTER);
 }
-static bool power_stopped;
+static bool power_stopped, power_suspended;
 void audio_ec_attach(void)
 {
     if (!__atomic_load_n(&audio.initialized, __ATOMIC_ACQUIRE) ||
         !kmutex_lock_until(&audio_lock.control,deadline_after_ms(2000))) return;
-    if (!power_stopped) { thinkpad_ec_init(); thinkpad_ec_start(); }
+    if (!power_stopped && !power_suspended) { thinkpad_ec_init(); thinkpad_ec_start(); }
     kmutex_unlock(&audio_lock.control);
 }
 static struct vfs_table settings_table; /* bounded, never on a kernel stack */
@@ -155,6 +157,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&audio_lock.control);
+    if (power_suspended) { kmutex_unlock(&audio_lock.control); return -EAGAIN; }
     /* The EC wrapper also clears delegation on failure. Offline changes
      * still apply and persist; the poller resynchronises from audio.master. */
     (void)thinkpad_ec_master_set(m);
@@ -173,6 +176,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
 static void master_refresh(bool requested)
 {
     kmutex_lock(&audio_lock.control);
+    if (power_suspended) { kmutex_unlock(&audio_lock.control); return; }
     struct ciuki_mixer_master m = audio.master, before = audio.master;
     bool hardware = audio.master_in_hardware;
     int changed = requested ? thinkpad_ec_master_refresh(&m) : thinkpad_ec_master_poll(&m);
@@ -336,6 +340,37 @@ int audio_power_quiesce(void)
     if (!e) power_stopped = true;
     kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service); return e;
 }
+bool audio_power_resume_ready(void)
+{ return !power_stopped && audio_backend_resume_ready(); }
+int audio_power_resume(void)
+{
+    if (!power_suspended) return 0;
+    kmutex_lock(&audio_lock.service); kmutex_lock(&audio_lock.control);
+    int e = audio_backend_resume();
+    if (!e) {
+        struct audio_transport b; audio_backend_snapshot(&b);
+        audio.running = b.running; audio.last_service_cycles = 0;
+        audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+        idle_since = 0; audio_backend_idle(false);
+        thinkpad_ec_start();
+    } else audio_fail(e);
+    power_suspended = false;
+    kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service);
+    audio_wake(); return e;
+}
+int audio_power_suspend(void)
+{
+    if (!audio.initialized || (!audio.ready && audio_backend_resume_ready())) return 0;
+    if (!audio_power_resume_ready()) return -ENOTSUP;
+    uint64_t end = deadline_after_ms(2000);
+    if (!kmutex_lock_until(&audio_lock.service, end)) return -EBUSY;
+    if (!kmutex_lock_until(&audio_lock.control, end)) { kmutex_unlock(&audio_lock.service); return -EBUSY; }
+    int e = thinkpad_ec_stop();
+    if (!e) { power_suspended = true; e = audio_backend_suspend(); }
+    kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service);
+    if (e && power_suspended) { int r = audio_power_resume(); if (r) return r; }
+    return e;
+}
 /* The service start moved later by the firmware time proven since `firmware`. */
 static uint64_t service_start(uint64_t start, uint64_t firmware)
 {
@@ -344,7 +379,7 @@ static uint64_t service_start(uint64_t start, uint64_t firmware)
 }
 static void audio_service_locked(void)
 {
-    if (!audio.ready) return;
+    if (!audio.ready || power_suspended) return;
     struct audio_transport b; audio_backend_snapshot(&b);
     uint64_t start = ktime_cycles();
     /* f2-96: SMM time inside the service (a T23 SMI lasts 2.1 ms, proven
@@ -358,7 +393,7 @@ static void audio_service_locked(void)
         if (gap > audio.max_service_gap_us) audio.max_service_gap_us = gap > UINT32_MAX ? UINT32_MAX : (uint32_t)gap;
     }
     audio.last_service_cycles = start;
-    bool active = native_source_count() != 0;
+    bool active = native_source_count() != 0 || audio_backend_capture_active();
     if (audio_vm_active && audio_vm_active()) active = true;
     bool attached = audio_vm_attached && audio_vm_attached();
     unsigned nominal = attached ? AUDIO_VM_LEAD : AUDIO_LEAD;
@@ -766,13 +801,13 @@ void audio_init(struct vfs *v)
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
-    kmutex_lock(&audio_lock.control); thinkpad_ec_start(); kmutex_unlock(&audio_lock.control);
+    kmutex_lock(&audio_lock.control); audio_lines_load(v); thinkpad_ec_start(); kmutex_unlock(&audio_lock.control);
     audio_boot_tone();
 }
 int audio_device_open(struct file_description *d, uint32_t flags)
 {
     if (d->node->kind == PX_AUDIO) {
-        if ((flags&O_ACCMODE)==O_RDONLY) return -EACCES;
+        if ((flags&O_ACCMODE)==O_RDONLY) return 0; /* explicit capture START, no DMA on open */
         return audio_stream_open(&d->audio);
     }
     (void)flags;
@@ -798,7 +833,19 @@ bool audio_refill_reader(struct process *p,uint32_t bytes)
     }
     return false;
 }
-void audio_device_close(struct file_description *d) { if (d->audio) { audio_stream_close(d->audio); d->audio = 0; } }
+void audio_device_close(struct file_description *d)
+{
+    if (d->capture_generation || capture_reserved_owner==d) {
+        kmutex_lock(&audio_lock.control);
+        if (d->capture_generation) {
+            (void)audio_capture_close(&audio_dma,d->capture_generation);
+            d->capture_generation=0; /* failed stop retains the driver's quarantine */
+        }
+        if (capture_reserved_owner==d) capture_reserved_owner=NULL;
+        kmutex_unlock(&audio_lock.control);
+    }
+    if (d->audio) { audio_stream_close(d->audio); d->audio = 0; }
+}
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted)
 {
     if (supervisor != proc_supervisor() || !trusted || !supervisor->cwd || !trusted->fds) return -EACCES;
@@ -857,6 +904,7 @@ static void operation_end(struct audio_operation *o)
 }
 int audio_write_user(struct file_description *d, uint32_t address, uint32_t bytes)
 {
+    if ((d->flags&O_ACCMODE)==O_RDONLY || !d->audio) return -EBADF;
     struct audio_stream *s = d->audio;
     unsigned frame = s->channels * (s->format == CIUKI_AUDIO_U8 ? 1 : 2);
     if (bytes > CIUKI_IO_MAX || bytes % frame) return -EINVAL;
@@ -908,6 +956,12 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_SET_GAIN: return sizeof(struct ciuki_audio_gain);
     case AUDIO_DRAIN: case AUDIO_RESET: case AUDIO_REFILL_READ: return sizeof(struct ciuki_audio_command);
     case AUDIO_GET_PRODUCER: return sizeof(struct ciuki_audio_producer);
+    case AUDIO_SET_SOURCE: return sizeof(struct ciuki_audio_route);
+    case MIXER_GET_LINE: case MIXER_SET_LINE: return sizeof(struct ciuki_mixer_line);
+    case AUDIO_CAPTURE_CAPS: case AUDIO_CAPTURE_START: case AUDIO_CAPTURE_STOP:
+    case AUDIO_CAPTURE_ACQUIRE: case AUDIO_CAPTURE_RELEASE:
+        return sizeof(struct ciuki_audio_capture);
+    case AUDIO_CAPTURE_READ: return sizeof(struct ciuki_audio_capture_data);
     case MIXER_GET_MASTER: case MIXER_SET_MASTER: case MIXER_REFRESH_MASTER: return sizeof(struct ciuki_mixer_master);
     case MIXER_GET_DIAGNOSTICS: return sizeof(struct ciuki_audio_diagnostics);
     default: return 0;
@@ -928,13 +982,69 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     if (!err && record[0] != 1) err = -EOPNOTSUPP;
     if (!err && record[1] != size) err = -EINVAL;
     bool observation = op == AUDIO_GET_STATUS || op == AUDIO_GET_PRODUCER; /* output-only records */
-    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER ? 1 : observation ? 0 : 2);
+    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER || op == AUDIO_SET_SOURCE ? 1 : observation ? 0 : 2);
     for (unsigned i = reserved; !err && i < size / 4; i++) if (record[i]) err = -EINVAL;
     if (!err) { err = ua_pin(p->memory, &o->pin, address, size, true); o->pinned = !err; }
     struct audio_stream *s = d->audio;
     if (!err && interrupted()) err = -EINTR;
+    bool capture_op=(op>=AUDIO_CAPTURE_CAPS && op<=AUDIO_CAPTURE_STOP) ||
+        op==AUDIO_CAPTURE_ACQUIRE || op==AUDIO_CAPTURE_RELEASE;
+    if (!err && d->node->kind==PX_AUDIO && !capture_op && !s && op!=AUDIO_GET_CAPS) err=-EACCES;
+    if (!err && capture_op && (d->flags&O_ACCMODE)!=O_RDONLY) err=-EACCES;
     if (!err && s && !observation && (audio.error || !audio.ready)) err = -EIO;
     if (!err) switch (op) {
+    case AUDIO_CAPTURE_CAPS: case AUDIO_CAPTURE_START: case AUDIO_CAPTURE_STOP:
+    case AUDIO_CAPTURE_ACQUIRE: case AUDIO_CAPTURE_RELEASE: {
+        struct ciuki_audio_capture *c=(void *)record;
+        kmutex_lock(&audio_lock.control);
+        if (op==AUDIO_CAPTURE_ACQUIRE) {
+            if (!audio_dma.capture_ops || !audio_dma.state.ready || audio_dma.state.quarantine) err=-EOPNOTSUPP;
+            else if ((capture_reserved_owner && capture_reserved_owner!=d) ||
+                     (audio_dma.capture.generation && audio_dma.capture.generation!=d->capture_generation)) err=-EBUSY;
+            else capture_reserved_owner=d;
+        } else if (op==AUDIO_CAPTURE_RELEASE) {
+            if (capture_reserved_owner && capture_reserved_owner!=d) err=-EACCES;
+            else if (d->capture_generation) err=-EBUSY;
+            else capture_reserved_owner=NULL;
+        } else if (op==AUDIO_CAPTURE_START) {
+            if (capture_reserved_owner && capture_reserved_owner!=d) err=-EBUSY;
+            else if (c->source>CIUKI_CAPTURE_MIX || c->gain>100 || c->rate!=AUDIO_RATE ||
+                c->channels!=2 || c->format!=CIUKI_AUDIO_S16LE) err=-EINVAL;
+            else if (d->capture_generation) err=-EBUSY;
+            else {
+                err=audio_capture_open(&audio_dma,&d->capture_generation);
+                if (!err) err=audio_capture_source(&audio_dma,d->capture_generation,c->source);
+                if (!err) audio.record_source=c->source;
+                if (err && d->capture_generation) {
+                    (void)audio_capture_close(&audio_dma,d->capture_generation); d->capture_generation=0;
+                }
+                if (!err) { d->capture_source=c->source; d->capture_gain=c->gain; }
+            }
+        } else if (op==AUDIO_CAPTURE_STOP && d->capture_generation) {
+            err=audio_capture_close(&audio_dma,d->capture_generation); d->capture_generation=0;
+        }
+        *c=(struct ciuki_audio_capture){.version=1,.size=sizeof(*c),
+            .source=audio.record_source,.gain=d->capture_gain,.rate=AUDIO_RATE,
+            .channels=2,.format=CIUKI_AUDIO_S16LE,
+            .available=audio_dma.capture_ops && audio_dma.state.ready && !audio_dma.state.quarantine};
+        kmutex_unlock(&audio_lock.control); break;
+    }
+    case AUDIO_CAPTURE_READ: {
+        struct ciuki_audio_capture_data *c=(void *)record;
+        if (!c->frames || c->frames>CIUKI_CAPTURE_FRAMES) { err=-EINVAL; break; }
+        kmutex_lock(&audio_lock.control);
+        int frames=d->capture_generation ? audio_capture_read(&audio_dma,d->capture_generation,
+            (struct audio_frame *)c->pcm,c->frames) : -EINVAL;
+        if (frames<0) err=frames;
+        else {
+            c->captured=(unsigned)frames;
+            for (unsigned i=0;i<(unsigned)frames*2;i++)
+                c->pcm[i]=(int16_t)((int32_t)c->pcm[i]*(int32_t)d->capture_gain/100 *
+                    (int32_t)(audio.lines_initialized ? audio.record_gain : 100)/100);
+            memset(c->pcm+frames*2,0,sizeof(c->pcm)-(unsigned)frames*4);
+        }
+        kmutex_unlock(&audio_lock.control); break;
+    }
     case AUDIO_GET_CAPS: memcpy(record, &audio.caps, size); break;
     case AUDIO_REFILL_READ:
         if ((d->flags&O_ACCMODE)==O_RDONLY) { err=-EACCES; break; }
@@ -949,6 +1059,15 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
             g_current->audio_refill_bytes=65536;
         }
         break;
+    case AUDIO_SET_SOURCE:
+        if (record[2]!=CIUKI_AUDIO_MIXED && (record[2]<CIUKI_MIXER_WAVE || record[2]>CIUKI_MIXER_CD)) err=-EINVAL;
+        else s->source=record[2];
+        break;
+    case MIXER_GET_LINE: case MIXER_SET_LINE:
+        if (op==MIXER_SET_LINE && !d->mixer_control) { err=-EACCES; break; }
+        kmutex_lock(&audio_lock.control);
+        err=audio_line_control((struct ciuki_mixer_line *)record,op==MIXER_SET_LINE);
+        kmutex_unlock(&audio_lock.control); break;
     case AUDIO_SET_FORMAT: err = audio_stream_format(s, (struct ciuki_audio_format *)record); break;
     case AUDIO_SET_GAIN:
         if (record[2] > 100 || record[3] > 100) err = -EINVAL;

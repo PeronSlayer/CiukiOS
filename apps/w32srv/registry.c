@@ -169,7 +169,7 @@ uint32_t wr_client_join(struct wr_server *s,uint32_t pid)
 }
 void wr_destroy(struct wr_server *s)
 {
-    free(s->ending);
+    free(s->ending); free(s->power); free(s->power_query);
     while (s->handles) { struct wr_handle *h = s->handles; s->handles = h->next; free(h); }
     while (s->keys) { struct wr_key *k = s->keys; s->keys = k->next; free_values(k->values); free(k->name); free(k); }
     wr_directory_free(s); memset(s, 0, sizeof(*s));

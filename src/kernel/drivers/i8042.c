@@ -131,6 +131,27 @@ struct poll_deadline { uint64_t end; unsigned polls; };
 static struct controller native;
 extern bool dosvm_fullscreen_input(uint16_t,uint16_t,int32_t) __attribute__((weak));
 static unsigned usb_devices;
+static unsigned repeat_delay = 1, repeat_speed = 31, lock_leds;
+static unsigned programmed_repeat = ~0u, programmed_leds = ~0u;
+static bool keyboard_policy_requested;
+unsigned input_repeat_delay(void) { return (repeat_delay + 1) * 250; }
+static unsigned typematic_interval(unsigned code)
+{ return ((8+(code&7))<<((code>>3)&3))*1000/240; }
+static unsigned typematic_rate(unsigned speed)
+{
+    /* SPI speed is linear in frequency (2.5..30 Hz); PS/2 F3 is not.
+     * Choose the nearest hardware period, and give USB that same period. */
+    unsigned wanted=12400/(31+11*speed),best=0,error=~0u;
+    for(unsigned code=0;code<32;code++) {
+        unsigned period=typematic_interval(code);
+        unsigned difference=period>wanted ? period-wanted : wanted-period;
+        if(difference<error){best=code;error=difference;}
+    }
+    return best;
+}
+unsigned input_repeat_interval(void) {return typematic_interval(typematic_rate(repeat_speed));}
+unsigned input_lock_leds(void) { return lock_leds; }
+static void keyboard_preferences_service(void);
 void input_devices_snapshot(struct input_devices *out)
 {
     uint32_t f = irq_save();
@@ -247,6 +268,11 @@ static void key_emit(struct controller *c, uint16_t code, bool down, uint64_t ti
         value = 2;
     } else {
         q->down[code] = down;
+        if (c == &native && down) {
+            if (code == 0x3a) lock_leds ^= 4;
+            else if (code == 0x45) lock_leds ^= 2;
+            else if (code == 0x46) lock_leds ^= 1;
+        }
         if (down) q->stats.keys_down++;
         else q->stats.keys_down--;
     }
@@ -440,6 +466,7 @@ static void input_retry(void);
 bool input_read(struct input_event *out)
 {
     input_retry();
+    keyboard_preferences_service();
     uint32_t f = irq_save();
     touchpad_flush(&native, g_ticks);
     irq_restore(f);
@@ -786,6 +813,54 @@ static int device_exchange(struct controller *c, bool aux, uint8_t b, uint64_t o
 static int device_command(struct controller *c, bool aux, uint8_t b, uint64_t outer)
 {
     return device_exchange(c, aux, b, outer, 0);
+}
+
+/* Thread consumer only. The command engine needs the input worker to drain
+ * IRQ replies, so never execute transactions from that same worker or IRQ. */
+static void quarantine(struct controller *, int);
+static int keyboard_program(unsigned repeat, unsigned leds)
+{
+    if (!native.stats.active || native.stats.firmware || native.stats.quarantined)
+        return 0; /* preference remains usable by USB and a later activation */
+    if (!(read_eflags() & 0x200) || !g_current) return -EINVAL;
+    kmutex_lock(&native.mutex);
+    int err = 0;
+    if (native.stats.active && !native.stats.quarantined) {
+        uint64_t end = native.io->now(native.io_arg) + I8042_REPLY_MS * 4;
+        if (repeat != programmed_repeat) {
+            err = device_command(&native, false, 0xf3, end);
+            if (!err) err = device_command(&native, false, (uint8_t)repeat, end);
+            if (!err) programmed_repeat = repeat;
+        }
+        if (!err && leds != programmed_leds) {
+            err = device_command(&native, false, 0xed, end);
+            if (!err) err = device_command(&native, false, (uint8_t)leds, end);
+            if (!err) programmed_leds = leds;
+        }
+    }
+    if(err)quarantine(&native,err);
+    kmutex_unlock(&native.mutex);
+    return err;
+}
+int input_keyboard_settings(const struct ciuki_keyboard_settings *s)
+{
+    if (!s || s->version != 1 || s->size != sizeof(*s) || s->delay > 3 || s->speed > 31)
+        return -EINVAL;
+    keyboard_policy_requested=true;repeat_delay=s->delay;repeat_speed=s->speed;
+    return keyboard_program((s->delay << 5) | typematic_rate(s->speed),lock_leds);
+}
+static void keyboard_preferences_service(void)
+{
+    /* One attempt per changed state; a missing keyboard must not stall every
+     * read. A subsequent preference change or activation permits another. */
+    static unsigned attempted_leds = ~0u;static gen_t attempted_generation;
+    /* Desktop's first explicit policy request initializes the default LEDs.
+     * An ordinary read with no lock change must not start a transaction. */
+    if ((!keyboard_policy_requested && !lock_leds && programmed_leds==~0u) ||
+        (attempted_leds==lock_leds && attempted_generation==native.stats.generation) ||
+        !native.stats.active || native.stats.firmware || native.stats.quarantined) return;
+    attempted_leds=lock_leds;attempted_generation=native.stats.generation;
+    (void)keyboard_program((repeat_delay << 5) | typematic_rate(repeat_speed), lock_leds);
 }
 
 /* Ports MUST be inhibited and drained before these untagged controller
@@ -1365,6 +1440,7 @@ int i8042_stop(gen_t generation)
         kmutex_unlock(&native.mutex);
         return -EINVAL;
     }
+    programmed_repeat = programmed_leds = ~0u;
     native.accepting = false;          /* reject submissions before stopping sources */
     /* Command-byte IRQ_BITS are cleared and verified below. A latched
      * edge cannot consume controller replies after accepting is clear. */

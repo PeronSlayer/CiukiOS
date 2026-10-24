@@ -23,6 +23,7 @@ int grants_display_suspend(bool suspended)
 extern void display_frame_complete(uint32_t generation, bool full_frame) __attribute__((weak));
 extern void entropy_desktop_presented(void) __attribute__((weak));
 extern void dosvm_image_desktop_presented(void) __attribute__((weak)); /* fx-4b */
+extern void bootstat_presented(void) __attribute__((weak)); /* G14: the start is complete */
 bool grants_display_owner(const struct process *p)
 {
     if (!p || p->pid != grant_owner) return false;
@@ -306,6 +307,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         if (full_frame && pager_bootstrap_complete) pager_bootstrap_complete();
         if (full_frame && entropy_desktop_presented) entropy_desktop_presented(); /* f6-21 */
         if (full_frame && dosvm_image_desktop_presented) dosvm_image_desktop_presented(); /* fx-4b */
+        if (full_frame && bootstat_presented) bootstat_presented();
     }
     return err;
 }
@@ -339,6 +341,7 @@ struct input_operation {
     struct desktop_description *grant;
     struct ua_pin *pin;
 };
+extern int input_keyboard_settings(const struct ciuki_keyboard_settings *) __attribute__((weak));
 extern int usb_hid_query(uint32_t, void *) __attribute__((weak));
 extern int joystick_hid_query(uint32_t, void *) __attribute__((weak));
 extern int joystick_control(struct ciuki_joystick_control *) __attribute__((weak));
@@ -347,6 +350,12 @@ int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t
 {
     int err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
     if (err) return err;
+    if (command == INPUT_KEYBOARD_SET) {
+        struct ciuki_keyboard_settings settings;
+        if (bytes != sizeof(settings)) return -EINVAL;
+        err = copy_from_user(&settings, address, bytes);
+        return err ? err : input_keyboard_settings ? input_keyboard_settings(&settings) : -ENODEV;
+    }
     unsigned expected=command==INPUT_HID_GET_CAPS ? sizeof(struct ciuki_hid_caps) :
         command==INPUT_HID_GET_STATE ? sizeof(struct ciuki_hid_state) :
         command==INPUT_HID_CALIBRATE ? sizeof(struct ciuki_hid_calibration) :

@@ -31,6 +31,11 @@ typedef struct {
   uint64_t total_phys, avail_phys, total_pagefile, avail_pagefile,
       total_virtual, avail_virtual, avail_extended_virtual;
 } MEMORYSTATUSEX;
+/* G11 GetSystemPowerStatus (winbase.h SYSTEM_POWER_STATUS, 12 bytes). */
+typedef struct {
+  uint8_t ac_line_status, battery_flag, battery_life_percent, reserved1;
+  DWORD battery_life_time, battery_full_life_time;
+} SYSTEM_POWER_STATUS;
 typedef struct {
   uint16_t architecture, reserved;
   DWORD page_size;
@@ -123,6 +128,7 @@ BOOL W32API UnlockFile(HANDLE, DWORD, DWORD, DWORD, DWORD);
 BOOL W32API LockFileEx(HANDLE, DWORD, DWORD, DWORD, DWORD, OVERLAPPED *);
 BOOL W32API UnlockFileEx(HANDLE, DWORD, DWORD, DWORD, OVERLAPPED *);
 BOOL W32API GlobalMemoryStatusEx(MEMORYSTATUSEX *);
+BOOL W32API GetSystemPowerStatus(SYSTEM_POWER_STATUS *);
 BOOL W32API ReadProcessMemory(HANDLE, const void *, void *, DWORD, DWORD *);
 BOOL W32API WriteProcessMemory(HANDLE, void *, const void *, DWORD, DWORD *);
 BOOL W32API DeleteFileA(const char *);

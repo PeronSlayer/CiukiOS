@@ -17,11 +17,35 @@ static int diagnostics(void *c,struct ciuki_audio_diagnostics *out)
 static void sound_event(void *ctx,unsigned e) { (void)ctx;sound_event_seen=e; }
 static struct du_widget *find(struct du_ui *u,const char *text)
 { for(unsigned i=0;i<u->count;i++) if(!strcmp(u->widgets[i].text,text))return &u->widgets[i];assert(0);return NULL; }
+static struct sound_scheme named;
+static int have_named, validate_error;
+static int validate(void *c,const char *path) { (void)c; assert(path[0]=='/'); return validate_error; }
+static int schemes(void *c,char names[][SOUND_SCHEME_NAME],unsigned count)
+{ (void)c; assert(count>0); if(have_named) strcpy(names[0],"Arcade"); return have_named; }
+static int scheme(void *c,unsigned op,const char *name,struct sound_scheme *s)
+{
+    (void)c; if(strcmp(name,"Arcade")) return -1;
+    if(op==SOUND_SCHEME_SAVE) { named=*s; have_named=1; }
+    else if(op==SOUND_SCHEME_LOAD) { if(!have_named)return -1; *s=named; }
+    else have_named=0;
+    return 0;
+}
+static unsigned mm_open;
+static unsigned cd_volume=75;
+static int cd_line(void *ctx,struct ciuki_mixer_line *line,int set) {
+    (void)ctx; assert(line->line==CIUKI_MIXER_CD);
+    if (set) cd_volume=line->left;
+    else { line->available=1; line->left=line->right=cd_volume; }
+    return 0;
+}
+static int multimedia(void *c,unsigned which) { (void)c; mm_open=which+1; return 0; }
+static int capture_caps(void *c,struct ciuki_audio_capture *out)
+{ (void)c; out->available=1; return 0; }
 int main(int argc,char **argv)
 {
     assert(argc==2); static struct cp_app a; static struct du_ui u; static uint32_t pixels[CP_WIDTH*CP_HEIGHT];
     strcpy(saved,"enabled=1\nerror=custom.wav\n");saved_n=strlen(saved);
-    a.host=(struct cp_host){.mixer=mixer,.apply=apply,.load_sounds=load,.save_sounds=save,.audio_diagnostics=diagnostics};
+    a.host=(struct cp_host){.mixer=mixer,.apply=apply,.load_sounds=load,.save_sounds=save,.audio_diagnostics=diagnostics,.sound_validate=validate,.sound_schemes=schemes,.sound_scheme=scheme,.multimedia_open=multimedia,.capture_caps=capture_caps,.audio_line=cd_line};
     diag=(struct ciuki_audio_diagnostics){.version=1,.size=64,.codec_id=0x43525931,.controller=0x80862485,
         .flags=CIUKI_AUDIO_DIAG_READY,.irq_line=11,.fetched_frames=10,.irqs=1,.power=15,.master=0x0404,.pcm=0x0808,.rate=48000};
     du_init(&u,pixels,CP_WIDTH,CP_HEIGHT);u.focused_window=1;assert(!cp_attach(&a,&u,CP_SOUNDS));
@@ -74,5 +98,30 @@ int main(int argc,char **argv)
     du_message(&u,102,"Question","Question",DU_DLG_ICON_QUESTION,NULL,0,0,0);assert(sound_event_seen==SOUND_QUESTION);du_dialog_close(&u);
     static const struct du_menu_item menu[]={{.label="Select",.id=500}};
     du_popup(&u,menu,1,20,20,1);assert(sound_event_seen==SOUND_MENU_OPEN);du_menu_close(&u);
+    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Browse...")->id}; u.event(&u,&ev,u.user);
+    assert(u.dialog.kind==DU_DLG_OPEN); int browse=u.dialog.id; du_dialog_close(&u);
+    ev=(struct du_event){.type=DU_EV_DIALOG,.id=browse,.index=0,.text="/Documents/My Sound.WAV"};
+    validate_error=-1; u.event(&u,&ev,u.user); assert(!strcmp(a.sounds.file[SOUND_ERROR],"error.wav"));
+    validate_error=0; u.event(&u,&ev,u.user); assert(!strcmp(a.sounds.file[SOUND_ERROR],ev.text));
+    failed_save=1; ev.text="/Documents/Other.wav"; u.event(&u,&ev,u.user);
+    assert(!strcmp(a.sounds.file[SOUND_ERROR],"/Documents/My Sound.WAV")); failed_save=0;
+    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Save As...")->id};u.event(&u,&ev,u.user);
+    assert(u.dialog.kind==DU_DLG_INPUT); int save_id=u.dialog.id;du_dialog_close(&u);
+    ev=(struct du_event){.type=DU_EV_DIALOG,.id=save_id,.index=0,.text="Arcade"};u.event(&u,&ev,u.user);
+    assert(have_named && a.sound_name_count==1 && !strcmp(a.sound_named,"Arcade"));
+    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"None")->id};u.event(&u,&ev,u.user);
+    assert(!a.sounds.file[SOUND_ERROR][0] && !a.sound_named[0]);
+    schemes=NULL;for(unsigned i=0;i<u.count;i++)if(u.widgets[i].items==a.scheme_items)schemes=&u.widgets[i];assert(schemes);
+    ev=(struct du_event){.type=DU_EV_SELECT,.id=schemes->id,.index=3};u.event(&u,&ev,u.user);
+    assert(!strcmp(a.sounds.file[SOUND_ERROR],"/Documents/My Sound.WAV"));
+    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Delete")->id};u.event(&u,&ev,u.user);
+    assert(!have_named && !a.sound_name_count && !strcmp(a.sounds.file[SOUND_ERROR],"/Documents/My Sound.WAV"));
+    cp_open(&a,CP_MULTIMEDIA); assert(cp_page_index("multimedia")==CP_MULTIMEDIA);
+    assert(find(&u,"Preferred recording: system capture device (microphone / line in)"));
+    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Sound Recorder")->id};u.event(&u,&ev,u.user);assert(mm_open==2);
+    struct du_widget *cd_slider=NULL;
+    for (unsigned i=0;i<u.count;i++) if (u.widgets[i].kind==DU_SCROLLBAR) cd_slider=&u.widgets[i];
+    assert(cd_slider && !cd_slider->disabled && cd_slider->value==75);
+    cd_slider->value=40; ev=(struct du_event){.type=DU_EV_CHANGE,.id=cd_slider->id};u.event(&u,&ev,u.user);assert(cd_volume==40);
     cp_detach(&a);puts("PASS Sounds page: events/assignments, preview, hardware request, enable persistence/failure, render");
 }

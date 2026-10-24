@@ -50,3 +50,13 @@ bounded cadence. Saver configuration has no additional per-saver options.
 
 Host evidence and limitations are recorded in build/codex/g10-report.md;
 firmware and physical panel behaviour require lead hardware qualification.
+
+## fx-28 Display Properties refinement
+
+The [screenshot-review contract](screenshot-review-fx-28.md) records the primary
+references. The tab now has a CRT miniature (100 ms updates only for animated
+choices, sharing the full-screen saver geometry), a drop-down beginning with (None), Settings, Preview, password controls
+and a bounded editable 1–1440 minute spinner. (None) disables activation without
+losing the saved saver kind. Password protected and Change are disabled with the
+reason that G32 session lock is not installed. Monitor Settings launches `control --panel=power` through the existing
+DESK_LAUNCH request; OPEN_POWER means Shut Down. Apply and Cancel retain their existing transaction.

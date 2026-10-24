@@ -95,14 +95,74 @@ static int media_label(struct storage *s,uint32_t op,uint32_t address,uint32_t b
     e=media_label_locked_apply(&s->vfs,&r,op==MEDIA_SET_LABEL ? padded : 0);
     return e ? e : op==MEDIA_SET_LABEL ? 0 : copy_to_user(address,&r,sizeof(r));
 }
+struct floppy_image_operation {
+    struct process *process;
+    struct ua_pin pin;
+    uint32_t address;
+    bool pinned;
+};
+static void floppy_image_free(void *arg)
+{
+    struct floppy_image_operation *o=arg;
+    if (o->pinned) ua_unpin(o->process->memory,&o->pin);
+    kfree(o);
+}
+static int floppy_user_copy(void *ctx,uint32_t offset,void *buffer,uint32_t bytes,bool output)
+{
+    struct floppy_image_operation *o=ctx;
+    return output ? copy_to_user(o->address+offset,buffer,bytes) : copy_from_user(buffer,o->address+offset,bytes);
+}
+static int floppy_image_call(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes)
+{
+    struct ciuki_floppy_image r;
+    if (bytes!=sizeof(r)) return -EINVAL;
+    int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+    if (r.version!=CIUKI_MEDIA_VERSION || r.size!=sizeof(r) || r.drive>=2 || !r.generation ||
+        !r.sectors || r.sectors>5760 || !r.buffer || r.flags || r.reserved) return -EINVAL;
+    uint32_t length=r.sectors*512;
+    struct floppy_image_operation *o=kzalloc(sizeof(*o)); if (!o) return -ENOMEM;
+    o->process=p; o->address=r.buffer;
+    struct proc_thread *thread=proc_thread_for(g_current);
+    if (thread) { thread->cleanup=floppy_image_free; thread->operation=o; }
+    if (!e) { e=ua_pin(p->memory,&o->pin,r.buffer,length,op==MEDIA_FLOPPY_READ); o->pinned=!e; }
+    if (!e) e=px_error(storage_floppy_copy(s,&r,floppy_user_copy,o,op==MEDIA_FLOPPY_WRITE));
+    if (thread) { thread->cleanup=0; thread->operation=0; }
+    floppy_image_free(o); return e;
+}
 int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
 {
     if (!file_fd_object(p,fd)) return -EBADF;
     struct file_description *f=file_fd(p,fd);
     if (!f || f->node->kind!=PX_MEDIA) return -ENOTTY;
     struct storage *s=storage_get();
+    if (op==MEDIA_FLOPPY_READ || op==MEDIA_FLOPPY_WRITE) return floppy_image_call(p,s,op,address,bytes);
     if (op>=MEDIA_CD_STATE && op<=MEDIA_CD_POSITION) return media_cd_devctl(p,s,op,address,bytes);
     if (op==MEDIA_GET_LABEL || op==MEDIA_SET_LABEL) return media_label(s,op,address,bytes);
+    if (op==MEDIA_GET_CONVERT || op==MEDIA_CONVERT) {
+        struct ciuki_media_convert r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        e=px_error(storage_convert(s,&r,op==MEDIA_CONVERT));
+        return e ? e : copy_to_user(address,&r,sizeof(r));
+    }
+    if (op==MEDIA_DEFRAG_ANALYZE || op==MEDIA_DEFRAG_STEP) {
+        struct ciuki_media_defrag r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        e=px_error(storage_defrag(s,&r,op==MEDIA_DEFRAG_STEP));
+        return e ? e : copy_to_user(address,&r,sizeof(r));
+    }
+    if (op==MEDIA_GET_FORMAT || op==MEDIA_FORMAT) {
+        struct ciuki_media_format r;
+        if (bytes!=sizeof(r)) return -EINVAL;
+        int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+        if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (r.size!=sizeof(r) || r.drive>=26 || !r.generation || r.reserved) return -EINVAL;
+        e=px_error(storage_format_removable(s,&r,op==MEDIA_FORMAT));
+        return e ? e : copy_to_user(address,&r,sizeof(r));
+    }
     /* Namespace publication selects immutable mount identity/label fields.
      * Queries never invoke filesystem/transport callbacks or reserve a drive. */
     if (op==MEDIA_GET_BLOCKERS) {
@@ -228,7 +288,7 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
             vfs_lock(&s->vfs,0);
             for (unsigned d=4;d<26;d++) {
                 struct storage_volume *v=&s->volumes[d];
-                if (v->present && v->removable && s->vfs.volumes[d] && !v->part.parent->quarantined) {
+                if (v->present && v->removable && (s->vfs.volumes[d] || v->unformatted) && !v->part.parent->quarantined) {
                     state.removable_mask|=1u<<d; state.generation[d]=v->part.parent->media_generation;
                     state.type[d]=CIUKI_MEDIA_USB;
                 } else if (v->safely_removed && v->part.parent) {
@@ -240,7 +300,7 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
                 /* fx-17b: A:/B: always listed; the bit only with a diskette. */
                 struct storage_volume *v=&s->volumes[d];
                 state.type[d]=CIUKI_MEDIA_FLOPPY;
-                if (v->present && s->vfs.volumes[d] && v->part.parent && !v->part.parent->quarantined) {
+                if (v->present && (s->vfs.volumes[d] || v->unformatted) && v->part.parent && !v->part.parent->quarantined) {
                     state.removable_mask|=1u<<d; state.generation[d]=v->part.parent->media_generation;
                 }
             }

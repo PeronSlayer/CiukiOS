@@ -13,7 +13,9 @@ enum paint_command {
     M_NEW = 1, M_OPEN, M_SAVE, M_SAVEAS, M_EXIT, M_UNDO, M_REDO, M_CUT, M_COPY, M_PASTE,
     M_CLEARSEL, M_SELALL, M_TOOLBOX, M_COLORBOX, M_STATUS, M_ZOOMIN, M_ZOOMOUT, M_Z1, M_Z2,
     M_Z4, M_Z6, M_Z8, M_GRID, M_FONT, M_FLIP, M_INVERT, M_ATTR, M_CLEARIMG, M_OPAQUE,
-    M_HELP, M_ABOUT
+    M_HELP, M_ABOUT, M_PAGESETUP, M_PRINT,
+    /* G27: Image > Stretch/Skew, Edit Colours, Set As Wallpaper. */
+    M_STRETCH, M_COLOURS, M_WALL_TILE, M_WALL_CENTER
 };
 enum { P_CANVAS = 100, P_HSCROLL, P_VSCROLL, P_STATUS, P_TOOL = 200, P_SWATCH = 300, P_OPTIONS = 400 };
 struct paint_state {
@@ -33,7 +35,13 @@ int paint_open_poll(void); /* 0 pending, 1 installed, negative error */
 int paint_open(const char *);
 int paint_save(const char *, enum paint_format);
 int paint_request_close(void); /* 1: unsaved prompt pending; 0: safe to close */
+/* G27 Set As Wallpaper: the picture is saved as a 24-bit bitmap named CiukPaint.bmp in `folder`, then
+ * set(host, path, mode) installs it (mode PAINT_WALL_TILE or PAINT_WALL_CENTER). 0 or -errno. */
+#define PAINT_WALL_TILE 1
+#define PAINT_WALL_CENTER 0
+void paint_wallpaper_callback(int (*set)(void *, const char *, int), void *host, const char *folder);
 void paint_decline_callback(void (*declined)(void *)); /* G3: an exit the user cancelled (host = paint_callbacks host) */
+void paint_print_callback(void (*printing)(void *, int setup));
 void paint_snapshot(struct paint_state *);
 uint8_t paint_pixel(int x, int y);
 uint32_t paint_rgb(uint8_t index);

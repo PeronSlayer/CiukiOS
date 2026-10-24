@@ -137,8 +137,10 @@ static int activate(void) { assert(reserves && !retires && fw_owned && !activati
 static void retire(bool uncertain) { assert(reserves); retires++; retired_uncertain=uncertain; }
 static void publish(const struct ciuki_power_status *p)
 { assert(p->version==CIUKI_POWER_VERSION && p->size==sizeof(*p) && p->battery_count<=CIUKI_POWER_BATTERIES); publishes++; }
+static unsigned sleep_requests;
+static void sleep_notice(void) { sleep_requests++; }
 static const struct fw_ops ops={allocate,release,charge,map,unmap,clock100ns,pause_ms,stall,thread,lock,unlock,access,
-    write_access,claim,sci,unsci,finish,reserve,activate,retire,publish,NULL};
+    write_access,claim,sci,unsci,finish,reserve,activate,retire,publish,NULL,sleep_notice};
 static void fire(void)
 { assert(irq_fn); fw_interrupt=true; (void)irq_fn(irq_context); fw_interrupt=false; }
 static void repeat(void *arg)
@@ -225,6 +227,15 @@ int main(int argc, char **argv)
         if (!strcmp(scenario,"t23-legacy") || !strcmp(scenario,"no-crt") || !strcmp(scenario,"rollback")) legacy_quirk();
     } else {
         assert(!s && fw_owned && irq_fn && acpi_power_can_off());
+        if (!strcmp(scenario,"events")) {
+            io[0x601]|=2; fire();
+            assert(sleep_requests==1 && !(io[0x601]&2) && !fw_power.shutdown_requests);
+            io[0x601]|=2; fire(); assert(sleep_requests==1); /* coalesced press */
+        }
+        if (!strcmp(scenario,"sleep-button")) {
+            io[0x620]|=1;fire();fw_power_poll();fw_power_poll();
+            assert(sleep_requests==1 && !fw_power.shutdown_requests);
+        }
         assert(p.ownership==CIUKI_POWER_OWNED && p.ac_online==1 && p.lid_open==1 && p.battery_count==1 && p.zone_count==1);
         if (!strcmp(scenario,"unit")) assert(p.batteries[0].unit==CIUKI_POWER_UNKNOWN && p.batteries[0].remaining==CIUKI_POWER_UNKNOWN);
         else assert(p.batteries[0].unit==0 && p.batteries[0].full==5000 && p.batteries[0].remaining==(!strcmp(scenario,"unknown") ? CIUKI_POWER_UNKNOWN : 2500));

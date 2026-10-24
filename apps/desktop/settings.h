@@ -8,15 +8,21 @@
 #define CIUKI_DESKTOP_SETTINGS_H
 #include <stddef.h>
 #include <stdint.h>
+#include "../../sdk/libciuki/regional_model.h"
+#include "access.h"
+#include "appearance.h"
+#include "sounds.h"
 #define CFG_DIR "/system/settings"
 #define CFG_FILE "/system/settings/desktop.cfg"
 #define CFG_WALLPAPER_DIR "/system/wallpapers"
 #define CFG_VERSION 1
 #define CFG_DESKTOP_COLOR 0x375564u
 #define CFG_TEXT_MAX 32768
-#define CFG_PATH_MAX 128
-#define CFG_RECENT_MAX 8
+#define CFG_PATH_MAX 256
+#define CFG_RECENT_MAX 15
 #define CFG_EXTRA_MAX 16384
+#define CFG_TOOLBARS 4
+enum { CFG_BAR_BOTTOM, CFG_BAR_TOP, CFG_BAR_LEFT, CFG_BAR_RIGHT };
 /* Wallpaper placement (wallpaper_mode). The values are the order of
  * cfg_mode_names; new modes are appended so existing files keep parsing.
  * Fill: uniform scale that covers the area, centred crop of the overflow. */
@@ -27,17 +33,45 @@ enum { CFG_KEYS_US, CFG_KEYS_IT, CFG_KEYS_COUNT };
 #define CFG_MOUSE_MIN 1
 #define CFG_MOUSE_MAX 10
 #define CFG_MOUSE_NORMAL 5
+#define CFG_DESKTOP_THEMES 4
+struct cfg_desktop_theme {
+    char name[32], wallpaper[CFG_PATH_MAX], skin[32];
+    int wallpaper_mode, saver_enabled, saver_seconds, saver_kind, pointer_scheme;
+    int document_icon, recycle_icon;
+    uint32_t desktop_color;
+    struct appearance appearance;
+    struct sound_scheme sounds;
+};
 struct ciuki_settings {
+    struct regional regional;
+    char desktop_theme_name[32];
+    int document_icon, recycle_icon;
+    struct cfg_desktop_theme desktop_themes[CFG_DESKTOP_THEMES];
+    struct appearance appearance;
+    int appearance_set;
+    char scheme[32];
+    struct ap_scheme schemes[AP_SCHEMES];
     char theme[32];                 /* "Platinum", "Ciuki Blue" */
     char wallpaper[CFG_PATH_MAX];   /* "ciuki", "none", "builtin:<name>" or an absolute file path */
     int wallpaper_mode;             /* CFG_WALL_* */
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */
     int clock_24h, clock_seconds, desktop_icons;
+    int mouse_spi_speed;            /* Win32 1..20, 10 = normal */
+    int taskbar_clock, quick_launch;
+    int taskbar_top, taskbar_autohide, start_small, taskbar_edge, taskbar_size;
+    int toolbar_address, toolbar_links, toolbar_desktop;
+    char toolbar_folder[CFG_TOOLBARS][CFG_PATH_MAX];
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
-    int double_click_ms;            /* 200..900 */
+    int double_click_ms;            /* 1..5000; Control Panel slider 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
     int saver_enabled, saver_seconds, saver_kind, monitor_seconds; /* G10: 0..INT32_MAX seconds; kinds 0..2 */
     int keyboard;                   /* CFG_KEYS_* */
+    int repeat_delay, repeat_speed; /* Windows 0..3, 0..31 */
+    int cursor_blink_ms;            /* 0 = steady; otherwise 100..1200 */
+    int mouse_swap, mouse_trails;   /* boolean, 0/1 (off) or 2..7 */
+    int wheel_lines;                /* 0..100, 101 = one page */
+    int layout_switch;              /* Left Alt+Shift and tray indicator */
+    struct access_settings access;  /* G25: access_* keys (access.h) */
     char recent[CFG_RECENT_MAX][CFG_PATH_MAX];
     unsigned recent_count;          /* newest first */
     char extra[CFG_EXTRA_MAX];      /* unknown "key=value" lines, newline separated */
@@ -46,6 +80,8 @@ extern const char *const cfg_theme_names[CFG_THEMES];
 extern const char *const cfg_mode_names[CFG_WALL_MODES];
 extern const char *const cfg_keyboard_names[CFG_KEYS_COUNT];     /* "us", "it" */
 extern const char *const cfg_keyboard_labels[CFG_KEYS_COUNT];    /* "English (US)", "Italian" */
+int *cfg_input_field(struct ciuki_settings *, unsigned key);
+int cfg_input_set(struct ciuki_settings *, unsigned key, unsigned value);
 void cfg_defaults(struct ciuki_settings *);
 /* Parses text over the defaults already in *s; returns the number of lines
  * that were rejected (bad value or overlong); those keep their defaults. */
@@ -57,7 +93,15 @@ int cfg_icon_position(const struct ciuki_settings *, const char *, int *, int *)
 int cfg_icon_move(struct ciuki_settings *, const char *, int, int);
 void cfg_icon_forget(struct ciuki_settings *, const char *);
 void cfg_icons_arrange(struct ciuki_settings *);
+int cfg_desktop_theme_save(struct ciuki_settings *,const char *,const struct sound_scheme *);
+int cfg_desktop_theme_use(struct ciuki_settings *,const char *,struct sound_scheme *);
+int cfg_desktop_theme_delete(struct ciuki_settings *,const char *);
+int cfg_scheme_save(struct ciuki_settings *, const char *);
+int cfg_scheme_delete(struct ciuki_settings *, const char *);
+int cfg_scheme_use(struct ciuki_settings *, const char *);
 int cfg_theme_index(const char *name);   /* -1 when unknown */
+/* G25: the theme in force: the high-contrast scheme while that mode is on, otherwise `theme`. */
+const char *cfg_effective_theme(const struct ciuki_settings *);
 /* Mouse speed as a rational multiplier num/8 applied to relative motion. */
 int cfg_mouse_numerator(int speed);
 #endif

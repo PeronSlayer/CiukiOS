@@ -247,6 +247,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&a->window, &a->ui, channel, TV_WIDTH, TV_HEIGHT, "Task Manager", TV_WIDTH, TV_HEIGHT)) {
         fprintf(stderr, "tasks: desktop connection failed: %s\n", strerror(errno)); free(a); return 1;
     }
+    du_help_topic(&a->ui, "tasks");   /* G15: F1 opens this program's Help topic */
     a->window.message = on_message; a->window.user = a;
     a->ui.event = event; a->ui.user = a;
     tv_init(&a->view, &a->ui, du_icon_argb(du_icon_name("program:*"), 16));

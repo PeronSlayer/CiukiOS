@@ -27,6 +27,19 @@ void cp_settings_message(struct ciuki_message *m, uint32_t serial, unsigned requ
         desk_put32(m->data + 12, (uint32_t)value);
 }
 
+/* Reuse the existing launch protocol; OPEN_POWER means Shut Down, not the
+ * Power Management applet. Only these two panel arguments are authorised. */
+int cp_applet_message(struct ciuki_message *m,uint32_t serial,int page)
+{
+    const char *arg=page==CP_DISPLAY ? "--panel=display" : page==CP_POWER ? "--panel=power" : NULL;
+    if (!arg) return -EINVAL;
+    unsigned t=7,n=(unsigned)strlen(arg);
+    desk_message(m,DESK_LAUNCH,16+t+n);m->data[0]=DESK_SHELL_VERSION;m->data[2]=DESK_RESIZE_MINOR;
+    desk_put32(m->data+4,serial);desk_put32(m->data+8,t);memcpy(m->data+12,"control",t);
+    desk_put32(m->data+12+t,n);memcpy(m->data+16+t,arg,n);
+    return 0;
+}
+
 static void label(struct cp_app *a, int id, const char *s)
 { struct du_widget *w=du_get(a->ui,id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 static int eligible(const struct ciuki_display_mode *m)
@@ -128,7 +141,7 @@ void cp_engine_refresh(struct cp_app *a)
         else snprintf(a->engine_line,sizeof(a->engine_line),"2D engine: %s; capabilities 0x%X",
             legacy.quarantined ? "quarantined" : legacy.capabilities ? "available" : "software rendering",legacy.capabilities);
     }
-    label(a,974,a->engine_line);
+    label(a,974,a->monitor_line);
 }
 int cp_display_refresh(struct cp_app *a)
 {
@@ -156,6 +169,18 @@ int cp_display_refresh(struct cp_app *a)
         }
         depths_build(a, d.bpp); a->preview_valid = 0;
     } else memset(&a->display, 0, sizeof(a->display));
+    a->host.monitor_info=(struct ciuki_monitor_info){.version=CIUKI_MONITOR_VERSION,.size=sizeof(a->host.monitor_info)};
+    if(a->host.monitor) (void)a->host.monitor(a->host.ctx,&a->host.monitor_info);
+    a->host.refresh_info=(struct ciuki_display_refresh){.version=CIUKI_MONITOR_VERSION,.size=sizeof(a->host.refresh_info)};
+    for(unsigned i=0;i<d.mode_count && i<32;i++) if(d.modes[i].current) a->host.refresh_info.mode_id=d.modes[i].id;
+    if(a->host.refresh_rates) (void)a->host.refresh_rates(a->host.ctx,&a->host.refresh_info);
+    const struct ciuki_monitor_info *m=&a->host.monitor_info;
+    if(m->flags&CIUKI_MONITOR_EDID_VALID) {
+        if(a->host.refresh_info.supported_count) {
+            uint32_t hz=a->host.refresh_info.rates_millihz[0];
+            snprintf(a->monitor_line,sizeof(a->monitor_line),"Monitor: %.24s; EDID %u.%03u Hz; refresh: default",m->name[0] ? m->name : m->manufacturer,hz/1000,hz%1000);
+        } else snprintf(a->monitor_line,sizeof(a->monitor_line),"Monitor: %.31s; refresh: firmware default",m->name[0] ? m->name : m->manufacturer);
+    } else snprintf(a->monitor_line,sizeof(a->monitor_line),"Monitor: not detected; refresh: firmware default");
     cp_engine_refresh(a);
     info_lines(a);
     label(a,972,a->adapter_lines[4]); label(a,973,a->adapter_lines[2]);
@@ -338,14 +363,14 @@ void cp_preview_request(struct cp_app *a, struct cp_preview_req *r, int have_ima
     const struct desk_theme *t = chosen(a);
     memset(r, 0, sizeof(*r));
     snprintf(r->path, sizeof(r->path), "%s", a->cfg.wallpaper);
-    r->mode = a->cfg.wallpaper_mode; r->colour = desktop_colour(a, t); r->bar = bar;
+    r->mode = a->cfg.wallpaper_mode; r->pattern=a->cfg.wallpaper_pattern; r->colour = desktop_colour(a, t); r->bar = bar;
     r->font = t->font_large; r->label = t->desktop_label; r->aa = t->text_aa; r->portrait = a->host.portrait;
     if (have_image) r->image = a->image;
 }
 static int preview_request_same(const struct cp_app *a, const struct cp_preview_req *r)
 {
     struct cp_preview_req now; cp_preview_request((struct cp_app *)a, &now, 0);
-    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.colour == r->colour &&
+    return !strncmp(now.path, r->path, sizeof(now.path)) && now.mode == r->mode && now.pattern==r->pattern && now.colour == r->colour &&
            now.bar == r->bar && now.font == r->font && now.label == r->label && now.aa == r->aa &&
            now.portrait == r->portrait;
 }

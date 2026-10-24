@@ -125,6 +125,10 @@ static int capture_close_locked(struct audio_dma_device *d)
         capture_quarantine(d, c->running ? "capture_stop_unproved" : "capture_codec_restore_failed");
         return -EIO;
     }
+    if (mm_unpin && c->descriptor_pin.ticket) {
+        e = mm_unpin(&c->descriptor_pin, c->descriptor_pin.generation);
+        if (e) { capture_quarantine(d, "capture_unpin_failed"); return -EIO; }
+    }
     if (mm_unpin && c->pin.ticket) {
         e = mm_unpin(&c->pin, c->pin.generation);
         if (e) { capture_quarantine(d, "capture_unpin_failed"); return -EIO; }
@@ -135,7 +139,7 @@ static int capture_close_locked(struct audio_dma_device *d)
         if (e) { capture_quarantine(d, "capture_release_failed"); return -EIO; }
         d->claims[6] = -1;
     }
-    for (unsigned i = 0; i < AUDIO_HW_BYTES / PAGE_SIZE; i++) {
+    for (unsigned i = 0; i < c->pages; i++) {
         mm_free(c->phys + i * PAGE_SIZE, MM_DMA); audio.commitment_pages--;
     }
     memset(c, 0, sizeof(*c));
@@ -169,16 +173,17 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
             c->generation ? -EBUSY : 0;
     if (e) { kmutex_unlock(&d->register_lock); return e; }
     if (!e && !c->phys) {
-        uint32_t phys = pmm_alloc_dma_run(AUDIO_HW_BYTES / PAGE_SIZE, 1);
+        unsigned pages = AUDIO_HW_BYTES / PAGE_SIZE + (d->kind == AUDIO_ICH ? 1u : 0u);
+        uint32_t phys = pmm_alloc_dma_run(pages, 1);
         if (!phys) e = -ENOMEM;
         else {
-            c->phys = phys; c->pcm = P2V(phys);
-            mm_claim(phys, AUDIO_HW_BYTES / PAGE_SIZE, MM_DMA);
-            audio.commitment_pages += AUDIO_HW_BYTES / PAGE_SIZE;
-            if (phys > audio_voice_mask(d) - (AUDIO_HW_BYTES - 1)) e = -EIO;
+            c->phys = phys; c->pcm = P2V(phys); c->pages = pages;
+            mm_claim(phys, pages, MM_DMA);
+            audio.commitment_pages += pages;
+            if (phys > audio_voice_mask(d) - (pages * PAGE_SIZE - 1)) e = -EIO;
         }
         if (!e) {
-            int h = registry_claim(RES_MMIO, phys, phys + AUDIO_HW_BYTES, d->name, false);
+            int h = registry_claim(RES_MMIO, phys, phys + pages * PAGE_SIZE, d->name, false);
             if (h < 0) e = h;
             else {
                 d->claims[6] = h; d->generations[6] = registry_get(h)->generation;
@@ -195,6 +200,12 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
             .pages=AUDIO_HW_BYTES/PAGE_SIZE,.address_mask=audio_voice_mask(d),
             .alignment=4,.direction=MM_PIN_FROM_DEVICE};
         e = mm_pin(&c->pin);
+        if (!e && d->kind == AUDIO_ICH) {
+            c->descriptor_pin=(struct mm_pin){.generation=c->generation,
+                .first_pfn=(c->phys+AUDIO_HW_BYTES)/PAGE_SIZE,.pages=1,
+                .address_mask=audio_voice_mask(d),.alignment=8,.direction=MM_PIN_TO_DEVICE};
+            e=mm_pin(&c->descriptor_pin);
+        }
     }
     if (!e) e = d->voice_codec_read(d, 0x1a, &c->select);
     if (!e) e = d->voice_codec_read(d, 0x1c, &c->gain);
@@ -216,6 +227,17 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
     return e;
 }
 
+int audio_capture_source(struct audio_dma_device *d, uint32_t generation, unsigned source)
+{
+    if (!generation || source>CIUKI_CAPTURE_MIX) return -EINVAL;
+    kmutex_lock(&d->register_lock);
+    int e=generation!=d->capture.generation || !d->capture.running ? -EINVAL :
+        d->state.quarantine ? -EIO :
+        d->voice_codec_write(d,0x1a,source==CIUKI_CAPTURE_MIC ? 0x0000 :
+            source==CIUKI_CAPTURE_LINE ? 0x0404 : source==CIUKI_CAPTURE_CD ? 0x0101 : 0x0505);
+    kmutex_unlock(&d->register_lock);
+    return e;
+}
 int audio_capture_read(struct audio_dma_device *d, uint32_t generation,
                        struct audio_frame *out, unsigned frames)
 {

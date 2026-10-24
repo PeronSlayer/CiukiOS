@@ -36,7 +36,7 @@ def build_footprint(folder, env):
     for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "devices.h"):
         shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
     for name in ("runtime.h", "raw.h"):
-        (inc / name).write_text("/* supplied by host harness */\n")
+        (inc / name).write_text("/* supplied by host harness */\n#define CU_CALL(n,b,c,d,s,i,p) ((void)(c), 0)\n")
     common = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
               "-D_POSIX_C_SOURCE=200809L", "-DDESK_FOOTPRINT_TEST", "-Wno-macro-redefined",
               "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
@@ -45,6 +45,7 @@ def build_footprint(folder, env):
               "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
               *icon_assets.defines()]
     sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")]
+    sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c", ROOT / "src/kernel/lib/sha256.c"]
     sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c")]
     sources += [ROOT / name for name in icon_assets.SOURCES]
     sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c")]

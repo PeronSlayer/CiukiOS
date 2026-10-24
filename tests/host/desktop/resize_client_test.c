@@ -3,10 +3,23 @@
 #include "resize_transport.h"
 #include "../../../apps/libdeskui/deskui.h"
 #include <ciuki/surface.h>
+#include "../../../apps/libdeskui/clipboard.h"
+#include "../../../apps/libdeskui/clipstore.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+static struct clip_store closing_clipboard;
+static unsigned closing_rendered;
+static int closing_transport(void *ctx,struct desk_clip_wire *w,const void *data,struct desk_clip_wire *r,void **out)
+{ return clip_request(ctx,55,w,data,r,out); }
+static void closing_producer(void *ctx,unsigned event,unsigned format)
+{
+    (void)format; struct du_window *w=ctx;
+    assert(event==DESK_CLIP_RELEASE && w->closing==1 && !w->closed);
+    static const unsigned char text[]={'o',0,'k',0,0,0};
+    assert(!du_clip_open() && !du_clip_put(13,text,sizeof(text)) && !du_clip_close()); closing_rendered++;
+}
 static void configured(unsigned w,unsigned h,unsigned serial,int committed)
 {
     struct ciuki_message m; desk_message(&m,DESK_CONFIGURE,20);
@@ -23,9 +36,62 @@ static void open_window(struct du_window *w,struct du_ui *u)
     configured(400,300,0,1); assert(du_window_turn(w,1)==1); drain();
     assert(rt_surfaces()==1 && rt_mappings()==1 && rt_handles()==1);
 }
+static unsigned power_seen;
+static int power_event(struct du_window *w,uint32_t event,uint32_t flags,void *ctx)
+{ (void)w;(void)ctx;assert(flags==1 || event!=0);power_seen++;return event!=0; }
+static void rt_power_tests(void)
+{
+    static struct du_window w;static struct du_ui u;open_window(&w,&u);w.power_event=power_event;
+    for(unsigned event=0;event<=18;event+=event==0?4:event==4?3:event==7?3:8) {
+        struct ciuki_message msg;desk_message(&msg,DESK_POWER_EVENT,16);msg.data[0]=DESK_SHELL_VERSION;msg.data[2]=DESK_RESIZE_MINOR;
+        desk_put32(msg.data+4,event+1);desk_put32(msg.data+8,event);desk_put32(msg.data+12,event==0);
+        rt_push(&msg);assert(du_window_turn(&w,event+10)==1);
+        unsigned replies=0;
+        while(rt_pop(&msg)) if(msg.data[1]==DESK_POWER_REPLY) {
+            assert(desk_get32(msg.data+4)==event+1);
+            assert(desk_get32(msg.data+8)==(replies?event!=0:2));replies++;
+        }
+        assert(replies==2);
+    }
+    assert(power_seen==5);du_window_destroy(&w);rt_reset();
+static unsigned dpi_activations;
+static void dpi_event(struct du_ui *ui,const struct du_event *event,void *arg)
+{ (void)ui;(void)arg; if(event->type==DU_EV_ACTIVATE && event->id==77) dpi_activations++; }
+static void dpi_windows(void)
+{
+    static const unsigned dpi_values[]={96,120,144,192,48};
+    for(unsigned n=0;n<sizeof(dpi_values)/sizeof(*dpi_values);n++) {
+        uint64_t now=du_now(); (void)desk_theme_poll(DESK_SETTINGS_PATH,now);
+        struct appearance a; ap_default(&a,0); a.dpi=(uint16_t)dpi_values[n]; desk_appearance_apply(&a);
+        struct du_window w; struct du_ui u; rt_reset();
+        assert(!du_window_open_resizable(&w,&u,3,401,301,"DPI",201,151)); drain();
+        assert(w.info.width==(401*dpi_values[n]+48)/96 && w.info.height==(301*dpi_values[n]+48)/96);
+        assert(u.canvas.width==401 && u.canvas.height==301);
+        du_add(&u,DU_BUTTON,77,(struct du_rect){50,60,80,24},"DPI hit target"); u.event=dpi_event;
+        configured(w.info.width,w.info.height,0,1); assert(du_window_turn(&w,now)==1); drain();
+        unsigned before=dpi_activations;
+        struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.monotonic_ns=now+1,
+            .value=(int)(60*w.info.width/401),.value2=(int)(70*w.info.height/301)};
+        struct ciuki_message message; desk_event_message(&message,DESK_MOTION,&e);
+        message.data[0]=DESK_SHELL_VERSION; message.data[2]=DESK_RESIZE_MINOR; rt_push(&message);
+        e.type=CIUKI_INPUT_BUTTON; e.code=CIUKI_BUTTON_LEFT; e.value=1; e.value2=0;
+        desk_event_message(&message,DESK_BUTTON,&e); message.data[0]=DESK_SHELL_VERSION; message.data[2]=DESK_RESIZE_MINOR; rt_push(&message);
+        e.value=0; desk_event_message(&message,DESK_BUTTON,&e); message.data[0]=DESK_SHELL_VERSION; message.data[2]=DESK_RESIZE_MINOR; rt_push(&message);
+        assert(du_window_turn(&w,now+2)==1); drain(); assert(dpi_activations==before+1);
+        w.present_pending=0; w.swap_sent=0; w.present_rendered=0;
+        u.canvas.pixels[0]=0x123456; u.canvas.pixels[401*301-1]=0xabcdef;
+        du_window_present(&w);
+        assert(w.pixels[0]==0x123456);
+        assert(w.pixels[(size_t)(w.info.height-1)*(w.info.stride/4)+w.info.width-1]==0xabcdef);
+        du_window_destroy(&w); assert(!rt_surfaces() && !rt_mappings() && !rt_handles());
+        desk_theme_use(DESK_THEME_DEFAULT);
+    }
+    puts("PASS G23 toolkit DPI: 48/96/120/144/192, logical layout, physical surfaces, pointer hit targets, scaled presentation and lifetime");
+}
 void rt_client_tests(void)
 {
-    struct du_window w; struct du_ui u;
+    static struct du_window w; static struct du_ui u;
+    rt_power_tests();
     open_window(&w,&u);
     u.mouse_x=15; u.mouse_y=40;
     assert(du_window_turn(&w,2)==1);
@@ -78,6 +144,16 @@ void rt_client_tests(void)
         assert(rt_surfaces()==1 && rt_handles()==1 && w.info.width==400);
         du_window_destroy(&w);assert(!rt_surfaces());
     }
+    /* A normal close must render promised data before CLOSE drops the
+     * transport; destructor-only rendering runs after w->closed is set. */
+    open_window(&w,&u); clip_init(&closing_clipboard);
+    du_clip_bind(closing_transport,&closing_clipboard); du_clip_producer_bind(closing_producer,&w);
+    assert(!du_clip_open() && !du_clip_empty() && !du_clip_delay(13) && !du_clip_close());
+    du_window_close(&w); assert(!du_window_turn(&w,100) && w.closed && closing_rendered==1);
+    assert(!closing_clipboard.owner && closing_clipboard.items[0].format==13 && closing_clipboard.items[0].bytes==6);
+    du_window_destroy(&w); assert(!rt_surfaces()); clip_destroy(&closing_clipboard);
+    puts("PASS G5b native window close renders delayed data before closing its channel");
     rt_reset();
     puts("PASS deskui resize transport: supersession, backpressure, in-flight serials, read-only transfers, EOF/failure cleanup, bounded surfaces, cursor FIFO and unchanged-shape suppression");
+    dpi_windows();
 }

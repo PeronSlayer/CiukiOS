@@ -127,13 +127,70 @@ void power_source_publish(enum power_source_kind kind, const struct power_source
     }
     irq_restore(f);
 }
+/* G11: boot-monotonic counters for call 73 EVENTS (never reset by a new
+ * reservation). APM 1.2 4.3: 0001h/0002h system and 0009h/000Ah user
+ * standby/suspend requests, 0005h battery low, 0008h critical suspend,
+ * 0003h/0004h/000Bh resume notifications, 0006h/000Ch status changes. */
+static struct power_source_counters counters;
+/* Weak: host harnesses link this arbiter without core/power_quiesce.c. */
+bool power_devices_resume_ready(void) __attribute__((weak));
+static void count(uint16_t event)
+{
+    switch (event) {
+    case 1: case 2: case 9: case 10: counters.sleep_requests++; break;
+    case 5: counters.battery_low++; break;
+    case 8: counters.critical++; break;
+    case 3: case 4: case 11: counters.resumes++; break;
+    case 6: case 12: counters.status_changes++; break;
+    default: break;
+    }
+}
 void power_source_event(enum power_source_kind kind, uint16_t event, uint16_t info)
 {
     uint32_t f = irq_save();
     if (source.active && source.provider == kind) {
         source.last_event = event; source.event_info = info; source.events++;
+        count(event);
     }
     irq_restore(f);
+}
+void power_source_counters(struct power_source_counters *out)
+{
+    if (!out) return;
+    uint32_t f = irq_save(); *out = counters; irq_restore(f);
+}
+uint32_t power_source_standby_reason(void)
+{
+    uint32_t f = irq_save();
+    struct power_source_ops ops = provider_ops;
+    bool active = source.active && !stopped && !off_running;
+    irq_restore(f);
+    if (!active) return CIUKI_POWER_STANDBY_NO_PROVIDER;
+    if (!ops.can_standby || !ops.standby || !ops.can_standby(ops.ctx)) return CIUKI_POWER_STANDBY_NO_FIRMWARE;
+    if (!power_devices_resume_ready || !power_devices_resume_ready()) return CIUKI_POWER_STANDBY_NO_RESUME;
+    return CIUKI_POWER_STANDBY_AVAILABLE;
+}
+int power_source_standby(void)
+{
+    if (power_source_standby_reason() != CIUKI_POWER_STANDBY_AVAILABLE) return -ENOTSUP;
+    uint32_t f = irq_save();
+    if (off_running || stopped || handoff_pending || !source.active) { irq_restore(f); return -EBUSY; }
+    struct power_source_ops ops = provider_ops; off_running = true; irq_restore(f);
+    int e = ops.standby ? ops.standby(ops.ctx) : -ENOTSUP;
+    f = irq_save(); off_running = false; irq_restore(f);
+    return e;
+}
+int power_source_cancel_standby(void)
+{
+    uint32_t f=irq_save();
+    if (off_running || stopped) { irq_restore(f); return -EBUSY; }
+    struct power_source_ops ops=provider_ops;
+    bool active=source.active && ops.cancel_standby;
+    if (active) off_running=true;
+    irq_restore(f);
+    int e=active ? ops.cancel_standby(ops.ctx) : 0;
+    f=irq_save();if (active) off_running=false;irq_restore(f);
+    return e;
 }
 /* Charge only when every present battery reports the same unit and known
  * values: capacities are never combined across different units. */
@@ -272,4 +329,32 @@ int power_source_soft_off(void)
     int e = ops.soft_off(ops.ctx);
     f = irq_save(); off_running = false; irq_restore(f);
     return e ? e : -EIO; /* returning cannot prove physical power removal */
+}
+/* G11: SYSTEM_POWER_STATUS (learn.microsoft.com, ns-winbase-system_power_status):
+ * BatteryFlag 1 high (>66 %), 2 low (<33 %), 4 critical (<5 %), 8 charging,
+ * 128 no system battery, 255 unknown; percent 255 and seconds -1 unknown;
+ * the remaining time is -1 on AC. Batteries combine as record_percent does. */
+void power_source_win32_status(struct power_source_win32 *out)
+{
+    struct ciuki_power_status p; power_source_status(&p);
+    *out = (struct power_source_win32){255, 255, 255, UINT32_MAX};
+    if (p.version != CIUKI_POWER_VERSION || p.battery_count > CIUKI_POWER_BATTERIES) return;
+    out->ac = p.ac_online == 1 ? 1u : p.ac_online == 0 || p.ac_online == CIUKI_POWER_AC_BACKUP ? 0u : 255u;
+    unsigned present = 0, charging = 0, critical = 0;
+    uint32_t seconds = UINT32_MAX;
+    for (unsigned i = 0; i < p.battery_count; i++) {
+        const struct ciuki_power_battery *b = &p.batteries[i];
+        if (b->present != 1) continue;
+        present++;
+        if (b->state == CIUKI_POWER_UNKNOWN) continue;
+        if (b->state & 2) charging = 1;
+        if (b->state & 4) critical = 1;
+        if ((b->state & 1) && b->seconds != CIUKI_POWER_UNKNOWN && (seconds == UINT32_MAX || b->seconds > seconds)) seconds = b->seconds;
+    }
+    uint32_t percent = record_percent(&p);
+    if (percent <= 100) out->percent = percent;
+    if (!present) out->battery_flag = p.battery_count || out->ac != 255 ? 128u : 255u;
+    else if (percent > 100) out->battery_flag = charging ? 8u : 255u;
+    else out->battery_flag = (percent > 66 ? 1u : percent < 33 ? 2u : 0u) | (percent < 5 || critical ? 4u : 0u) | (charging ? 8u : 0u);
+    if (out->ac != 1 && present) out->seconds = seconds;
 }

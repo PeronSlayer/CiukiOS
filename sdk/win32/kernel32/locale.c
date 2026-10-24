@@ -1,37 +1,38 @@
-/* National language support for the single locale CiukiOS ships: English
- * (United States), LCID 0x0409, ACP 1252, OEMCP 437, as Windows 98 US.
- * LCIDs, locale names, GetLocaleInfo, date/time/number/currency formatting
- * and character types, ANSI cores with Unicode entry points (f5-20A).
- * Field values follow the Windows 98 US English locale (short date M/d/yy).
+/* G24: US English / Italian regional formats over the shared user settings.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
 #define US 0x0409u
+#define IT 0x0410u
+#include "../../libciuki/regional_model.h"
+#include "regional_io.h"
 #define INVARIANT 0x007fu
 #define ERROR_INVALID_FLAGS 1004u
 extern void W32API GetLocalTime(SYSTEMTIME *);
-DWORD W32API GetUserDefaultLCID(void) { return US; }
-DWORD W32API GetSystemDefaultLCID(void) { return US; }
-uint16_t W32API GetUserDefaultLangID(void) { return US; }
-uint16_t W32API GetSystemDefaultLangID(void) { return US; }
+DWORD W32API GetUserDefaultLCID(void) {
+  struct regional r; k32_regional(&r); return r.italian ? IT : US;
+}
+DWORD W32API GetSystemDefaultLCID(void) { return GetUserDefaultLCID(); }
+uint16_t W32API GetUserDefaultLangID(void) { return (uint16_t)GetUserDefaultLCID(); }
+uint16_t W32API GetSystemDefaultLangID(void) { return GetUserDefaultLangID(); }
 uint16_t W32API GetUserDefaultUILanguage(void) { return US; }
 uint16_t W32API GetSystemDefaultUILanguage(void) { return US; }
-DWORD W32API GetThreadLocale(void) { return US; }
+DWORD W32API GetThreadLocale(void) { return GetUserDefaultLCID(); }
 /* LOCALE_SYSTEM_DEFAULT, LOCALE_USER_DEFAULT and LOCALE_NEUTRAL become the
  * defaults; a neutral sublanguage becomes SUBLANG_DEFAULT. */
 DWORD W32API ConvertDefaultLocale(DWORD lcid) {
   DWORD lang = lcid & 0xffff;
   if (lang == 0x800 || lang == 0x400 || !lang)
-    return US;
+    return GetUserDefaultLCID();
   if (!(lang & 0xfc00) && (lang & 0x3ff) && lang != INVARIANT)
     return (lcid & ~0xffffu) | 0x400u | (lang & 0x3ff);
   return lcid;
 }
 static DWORD resolve(DWORD lcid) {
   lcid = ConvertDefaultLocale(lcid);
-  return lcid == US || lcid == INVARIANT ? lcid : 0;
+  return lcid == US || lcid == IT || lcid == INVARIANT ? lcid : 0;
 }
 BOOL W32API IsValidLocale(DWORD lcid, DWORD flags) {
-  return (flags == 1 || flags == 2) && (lcid == US || lcid == INVARIANT);
+  return (flags == 1 || flags == 2) && (lcid == US || lcid == IT || lcid == INVARIANT);
 }
 struct field {
   uint16_t type;
@@ -82,6 +83,33 @@ static const struct field *field(DWORD lcid, DWORD type) {
       {0x1001, 0, "Invariant Language"}, {0x1002, 0, "Invariant Country"},
       {0x59, 0, "iv"}, {0x5a, 0, "IV"}, {0x5c, 0, ""}, {0x14, 0, "\xa4"},
       {0x15, 0, "XDR"}, {0x1f, 0, "MM/dd/yyyy"}, {0x6d, 0, ""}};
+  static const struct field italian[] = {
+      {0x01,2,"0410"},{0x02,0,"Italian (Italy)"},{0x03,0,"ITA"},{0x04,0,"italiano"},
+      {0x05,1,"39"},{0x06,0,"Italy"},{0x07,0,"ITA"},{0x08,0,"Italia"},{0x09,2,"0410"},
+      {0x0a,1,"39"},{0x0b,1,"850"},{0x0c,0,";"},{0x0d,1,"0"},
+      {0x0e,0,","},{0x0f,0,"."},{0x14,0,"EUR"},{0x15,0,"EUR"},{0x16,0,","},{0x17,0,"."},
+      {0x1b,1,"3"},{0x1c,1,"8"},{0x1f,0,"dd/MM/yyyy"},{0x20,0,"dddd d MMMM yyyy"},
+      {0x21,1,"1"},{0x22,1,"1"},{0x23,1,"1"},{0x24,1,"1"},{0x25,1,"1"},{0x26,1,"1"},{0x27,1,"1"},
+      {0x28,0,""},{0x29,0,""},
+      {0x2a,0,"luned\xec"},{0x2b,0,"marted\xec"},{0x2c,0,"mercoled\xec"},
+      {0x2d,0,"gioved\xec"},{0x2e,0,"venerd\xec"},{0x2f,0,"sabato"},{0x30,0,"domenica"},
+      {0x31,0,"lun"},{0x32,0,"mar"},{0x33,0,"mer"},{0x34,0,"gio"},{0x35,0,"ven"},{0x36,0,"sab"},{0x37,0,"dom"},
+      {0x38,0,"gennaio"},{0x39,0,"febbraio"},{0x3a,0,"marzo"},{0x3b,0,"aprile"},
+      {0x3c,0,"maggio"},{0x3d,0,"giugno"},{0x3e,0,"luglio"},{0x3f,0,"agosto"},
+      {0x40,0,"settembre"},{0x41,0,"ottobre"},{0x42,0,"novembre"},{0x43,0,"dicembre"},
+      {0x44,0,"gen"},{0x45,0,"feb"},{0x46,0,"mar"},{0x47,0,"apr"},{0x48,0,"mag"},{0x49,0,"giu"},
+      {0x4a,0,"lug"},{0x4b,0,"ago"},{0x4c,0,"set"},{0x4d,0,"ott"},{0x4e,0,"nov"},{0x4f,0,"dic"},
+      {0x54,1,"0"},{0x55,1,"1"},{0x59,0,"it"},{0x5a,0,"IT"},{0x5c,0,"it-IT"},
+      {0x5d,0,"HH:mm:ss"},{0x5e,0,"0410:00000410"},
+      {0x60,0,"lu"},{0x61,0,"ma"},{0x62,0,"me"},{0x63,0,"gi"},{0x64,0,"ve"},{0x65,0,"sa"},{0x66,0,"do"},
+      {0x67,0,"ita"},{0x68,0,"ITA"},{0x6d,0,"it"},{0x6e,0,"it-IT"},
+      {0x6f,0,"Italian (Italy)"},{0x72,0,"Italian (Italy)"},{0x73,0,"italiano (Italia)"},
+      {0x78,0,"d MMMM"},{0x79,0,"HH:mm"},{0x7b,0,"it-IT"},
+      {0x1001,0,"Italian"},{0x1002,0,"Italy"},{0x1003,0,"HH:mm:ss"},{0x1006,0,"MMMM yyyy"},
+      {0x1007,0,"Euro"},{0x1008,0,"euro"},{0x1012,1,"20280"}};
+  if (lcid == IT)
+    for (unsigned i=0;i<sizeof(italian)/sizeof(*italian);i++)
+      if (italian[i].type==type) return &italian[i];
   if (lcid == INVARIANT)
     for (unsigned i = 0; i < sizeof(invariant) / sizeof(*invariant); i++)
       if (invariant[i].type == type)
@@ -90,6 +118,50 @@ static const struct field *field(DWORD lcid, DWORD type) {
     if (fields[i].type == type)
       return &fields[i];
   return 0;
+}
+/* Per-call snapshot: pointers never escape the caller's regional record. */
+static const struct field *regional_field(const struct regional *r,DWORD lcid,DWORD type,
+                                          DWORD flags,struct field *scratch) {
+  const struct field *f=field(lcid,type);
+  if(!f || lcid!=(r->italian?IT:US) || (flags&0x80000000u)) return f;
+  static const char *const groups[]={"0","1;0","2;0","3;0","4;0","5;0","6;0","7;0","8;0","9;0"};
+  if(type==0x10 || type==0x18) {
+    *scratch=*f; scratch->value=groups[r->value[REG_GROUPING][0]-'0']; return scratch;
+  }
+  const char *derived=0;
+  switch(type) {
+  case 0x1d: derived=reg_separator(r->value[REG_DATE]); break;
+  case 0x1e: derived=reg_separator(r->value[REG_TIME]); break;
+  case 0x21: derived=reg_date_order(r->value[REG_DATE]); break;
+  case 0x22: derived=reg_date_order(r->value[REG_LONG_DATE]); break;
+  case 0x23: derived=reg_run(r->value[REG_TIME],'H')?"1":"0"; break;
+  case 0x24: derived=reg_run(r->value[REG_DATE],'y')>2?"1":"0"; break;
+  case 0x25: derived=(reg_run(r->value[REG_TIME],'H')>1 || reg_run(r->value[REG_TIME],'h')>1)?"1":"0"; break;
+  case 0x26: derived=reg_run(r->value[REG_DATE],'d')==2?"1":"0"; break;
+  case 0x27: derived=reg_run(r->value[REG_DATE],'M')==2?"1":"0"; break;
+  }
+  if(derived) { *scratch=*f; scratch->value=derived; return scratch; }
+  int index=-1;
+  switch(type) {
+  case 0x0d:index=REG_MEASURE;break;
+  case 0x0e:index=REG_DECIMAL;break; case 0x0f:index=REG_THOUSAND;break;
+  case 0x11:index=REG_DIGITS;break; case 0x1010:index=REG_NEGATIVE;break;
+  case 0x14:index=REG_SYMBOL;break; case 0x16:index=REG_MON_DECIMAL;break;
+  case 0x17:index=REG_MON_THOUSAND;break; case 0x19:index=REG_MON_DIGITS;break;
+  case 0x1b:index=REG_MON_POSITIVE;break; case 0x1c:index=REG_MON_NEGATIVE;break;
+  case 0x1f:index=REG_DATE;break; case 0x20:index=REG_LONG_DATE;break;
+  case 0x1003:index=REG_TIME;break; case 0x28:index=REG_AM;break; case 0x29:index=REG_PM;break;
+  }
+  if(index<0) return f;
+  *scratch=*f; scratch->value=r->value[index]; return scratch;
+}
+static const char *regional_name(const struct regional *r,DWORD lcid,DWORD type,DWORD flags) {
+  struct field scratch; return regional_field(r,lcid,type,flags,&scratch)->value;
+}
+static DWORD regional_resolve(DWORD lcid,const struct regional *r) {
+  if(lcid==0 || lcid==0x400 || lcid==0x800) return r->italian?IT:US;
+  lcid=ConvertDefaultLocale(lcid);
+  return lcid==US || lcid==IT || lcid==INVARIANT ? lcid : 0;
 }
 static DWORD number(const struct field *f) {
   DWORD n = 0;
@@ -103,7 +175,8 @@ static DWORD number(const struct field *f) {
 static int locale_info(DWORD lcid, DWORD type, void *out, int cap, int wide) {
   DWORD base = type & ~0xc0000000u, numeric = base & 0x20000000u;
   base &= ~0x20000000u;
-  const struct field *f = (lcid = resolve(lcid)) ? field(lcid, base) : 0;
+  struct regional r; k32_regional(&r); struct field scratch;
+  const struct field *f = (lcid = regional_resolve(lcid,&r)) ? regional_field(&r,lcid,base,type,&scratch) : 0;
   if (cap < 0 || (cap && !out)) {
     SetLastError(87);
     return 0;
@@ -161,8 +234,10 @@ static int name_equal(const WCHAR *a, const char *b) {
   return !*a;
 }
 DWORD W32API LocaleNameToLCID(const WCHAR *name, DWORD flags) {
-  if (!name || name_equal(name, "!x-sys-default-locale") || name_equal(name, "en-US"))
-    return US;
+  if (!name || name_equal(name, "!x-sys-default-locale")) return GetUserDefaultLCID();
+  if (name_equal(name,"en-US")) return US;
+  if (name_equal(name,"it-IT")) return IT;
+  if (name_equal(name,"it")) return flags & 0x08000000u ? 0x0010u : IT;
   if (!*name)
     return INVARIANT;
   if (name_equal(name, "en"))
@@ -171,7 +246,7 @@ DWORD W32API LocaleNameToLCID(const WCHAR *name, DWORD flags) {
   return 0;
 }
 BOOL W32API IsValidLocaleName(const WCHAR *name) {
-  return name && (!*name || name_equal(name, "en-US") || name_equal(name, "en"));
+  return name && (!*name || name_equal(name, "en-US") || name_equal(name, "en") || name_equal(name,"it-IT") || name_equal(name,"it"));
 }
 static int copy_name(const char *value, WCHAR *out, int cap) {
   int n = (int)w32_strlen(value) + 1;
@@ -191,19 +266,20 @@ int W32API LCIDToLocaleName(DWORD lcid, WCHAR *out, int cap, DWORD flags) {
   }
   if ((lcid & 0xffff) == 0x0009 && flags & 0x08000000u)
     return copy_name("en", out, cap);
+  if ((lcid & 0xffff)==0x0010 && (flags&0x08000000u)) return copy_name("it",out,cap);
   DWORD r = resolve(lcid);
   if (!r) {
     SetLastError(87);
     return 0;
   }
-  return copy_name(r == INVARIANT ? "" : "en-US", out, cap);
+  return copy_name(r == INVARIANT ? "" : r == IT ? "it-IT" : "en-US", out, cap);
 }
 int W32API GetUserDefaultLocaleName(WCHAR *out, int cap) {
   if (!out || cap <= 0) {
     SetLastError(87);
     return 0;
   }
-  return copy_name("en-US", out, cap);
+  return copy_name(GetUserDefaultLCID()==IT ? "it-IT" : "en-US", out, cap);
 }
 int W32API GetLocaleInfoEx(const WCHAR *name, DWORD type, WCHAR *out, int cap) {
   DWORD lcid = LocaleNameToLCID(name, 0);
@@ -211,6 +287,8 @@ int W32API GetLocaleInfoEx(const WCHAR *name, DWORD type, WCHAR *out, int cap) {
     return 0;
   if ((type & ~0xe0000000u) == 0x5c && lcid == US && name && name_equal(name, "en"))
     return copy_name("en", out, cap);
+  if ((type & ~0xe0000000u)==0x5c && lcid==IT && name && name_equal(name,"it"))
+    return copy_name("it",out,cap);
   return locale_info(lcid, type, out, cap, 1);
 }
 typedef BOOL(W32API *k32_locale_proc)(WCHAR *, DWORD, intptr_t);
@@ -227,8 +305,10 @@ BOOL W32API EnumSystemLocalesEx(k32_locale_proc proc, DWORD flags, intptr_t para
   int all = !(flags & 0x30);
   if ((all || flags & 0x20) && !proc(specific, 0x21, param))
     return 1;
-  if (all || flags & 0x10)
-    proc(neutral, 0x11, param);
+  if ((all || flags & 0x10) && !proc(neutral,0x11,param)) return 1;
+  k32_widen("it-IT",specific,6); k32_widen("it",neutral,3);
+  if ((all || flags & 0x20) && !proc(specific,0x21,param)) return 1;
+  if (all || flags & 0x10) proc(neutral,0x11,param);
   return 1;
 }
 /* CP_ACP 0, CP_OEMCP 1, CP_THREAD_ACP 3 and the three tables of the core. */
@@ -387,11 +467,13 @@ int W32API CompareStringOrdinal(const WCHAR *a, int n, const WCHAR *b, int m, BO
 struct text {
   char data[256];
   DWORD n;
+  int overflow;
 };
 static void put(struct text *t, const char *s) {
   for (; *s; s++)
     if (t->n < sizeof(t->data) - 1)
       t->data[t->n++] = *s;
+    else t->overflow=1;
 }
 static void put_number(struct text *t, DWORD v, unsigned width) {
   char digits[12];
@@ -409,6 +491,7 @@ static void put_number(struct text *t, DWORD v, unsigned width) {
   }
 }
 static int finish(const struct text *t, char *out, int cap) {
+  if(t->overflow) { SetLastError(122); return 0; }
   int n = (int)t->n + 1;
   if (cap < 0 || (cap && !out)) {
     SetLastError(87);
@@ -460,13 +543,13 @@ static unsigned weekday(const SYSTEMTIME *d) {
   unsigned y = d->year - (d->month < 3);
   return (y + y / 4 - y / 100 + y / 400 + offset[d->month - 1] + d->day) % 7;
 }
-static const char *name(DWORD type) { return field(US, type)->value; }
 /* DATE_SHORTDATE 1, DATE_LONGDATE 2, DATE_YEARMONTH 8; an explicit picture
  * excludes those flags (ERROR_INVALID_FLAGS). */
 int W32API GetDateFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *date, const char *picture,
                           char *out, int cap) {
   SYSTEMTIME d;
-  if (!resolve(lcid)) {
+  struct regional r; k32_regional(&r);
+  if (!(lcid=regional_resolve(lcid,&r))) {
     SetLastError(87);
     return 0;
   }
@@ -484,7 +567,7 @@ int W32API GetDateFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *date, const
     return 0;
   }
   if (!picture)
-    picture = name(flags & 2 ? 0x20 : flags & 8 ? 0x1006 : 0x1f);
+    picture = regional_name(&r,lcid,flags & 2 ? 0x20 : flags & 8 ? 0x1006 : 0x1f,flags);
   struct text t = {.n = 0};
   unsigned wd = weekday(&d);
   for (const char *p = picture; *p;) {
@@ -493,12 +576,12 @@ int W32API GetDateFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *date, const
       if (n <= 2)
         put_number(&t, d.day, n);
       else
-        put(&t, name((n == 3 ? 0x31 : 0x2a) + (wd + 6) % 7));
+        put(&t, regional_name(&r,lcid,(n == 3 ? 0x31 : 0x2a) + (wd + 6) % 7,flags));
     } else if (*p == 'M') {
       if (n <= 2)
         put_number(&t, d.month, n);
       else
-        put(&t, name((n == 3 ? 0x44 : 0x38) + d.month - 1));
+        put(&t, regional_name(&r,lcid,(n == 3 ? 0x44 : 0x38) + d.month - 1,flags));
     } else if (*p == 'y') {
       if (n <= 2)
         put_number(&t, d.year % 100, n);
@@ -524,7 +607,8 @@ int W32API GetDateFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *date, const
 int W32API GetTimeFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *time, const char *picture,
                           char *out, int cap) {
   SYSTEMTIME v;
-  if (!resolve(lcid)) {
+  struct regional r; k32_regional(&r);
+  if (!(lcid=regional_resolve(lcid,&r))) {
     SetLastError(87);
     return 0;
   }
@@ -541,7 +625,7 @@ int W32API GetTimeFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *time, const
     return 0;
   }
   if (!picture)
-    picture = name(0x1003);
+    picture = regional_name(&r,lcid,0x1003,flags);
   struct text t = {.n = 0};
   DWORD mark = 0;
   for (const char *p = picture; *p;) {
@@ -561,7 +645,7 @@ int W32API GetTimeFormatA(DWORD lcid, DWORD flags, const SYSTEMTIME *time, const
     else if (c == 's')
       put_number(&t, v.second, n > 1 ? 2 : 1);
     else if (c == 't') {
-      const char *m = name(v.hour < 12 ? 0x28 : 0x29);
+      const char *m = regional_name(&r,lcid,v.hour < 12 ? 0x28 : 0x29,flags);
       if (n == 1) {
         char one[2] = {m[0], 0};
         put(&t, one);
@@ -662,6 +746,7 @@ static int format_number(const char *value, DWORD digits, DWORD leading, DWORD g
       put(t, one);
     }
   }
+  if(t->overflow) { SetLastError(122); return 0; }
   return 1;
 }
 static int number_format(const char *value, const NUMBERFMTA *fmt, DWORD flags, char *out,
@@ -693,15 +778,25 @@ static int number_format(const char *value, const NUMBERFMTA *fmt, DWORD flags, 
 }
 int W32API GetNumberFormatA(DWORD lcid, DWORD flags, const char *value, const NUMBERFMTA *fmt,
                             char *out, int cap) {
-  if (!resolve(lcid)) {
+  struct regional r; k32_regional(&r);
+  if (!(lcid=regional_resolve(lcid,&r))) {
     SetLastError(87);
     return 0;
   }
-  return number_format(value, fmt, flags, out, cap);
+  NUMBERFMTA d = {
+      (DWORD)(regional_name(&r,lcid,0x11,flags)[0]-'0'),1,3,
+      regional_name(&r,lcid,0x0e,flags),regional_name(&r,lcid,0x0f,flags),
+      (DWORD)(regional_name(&r,lcid,0x1010,flags)[0]-'0')};
+  if(lcid==(r.italian?IT:US) && !(flags&0x80000000u)) d.grouping=(DWORD)(r.value[REG_GROUPING][0]-'0');
+  /* Preserve flag validation for caller-supplied formats. */
+  if(fmt) return number_format(value,fmt,flags,out,cap);
+  if(flags&~0xc0000000u) { SetLastError(ERROR_INVALID_FLAGS); return 0; }
+  return number_format(value,&d,flags&~0x80000000u,out,cap);
 }
 int W32API GetCurrencyFormatA(DWORD lcid, DWORD flags, const char *value,
                               const CURRENCYFMTA *fmt, char *out, int cap) {
-  if (!resolve(lcid)) {
+  struct regional r; k32_regional(&r);
+  if (!(lcid=regional_resolve(lcid,&r))) {
     SetLastError(87);
     return 0;
   }
@@ -709,7 +804,13 @@ int W32API GetCurrencyFormatA(DWORD lcid, DWORD flags, const char *value,
     SetLastError(!value ? 87 : ERROR_INVALID_FLAGS);
     return 0;
   }
-  CURRENCYFMTA d = {2, 1, 3, ".", ",", 0, 0, "$"};
+  struct field nf,pf;
+  CURRENCYFMTA d = {
+      (DWORD)(regional_name(&r,lcid,0x19,flags)[0]-'0'),1,3,
+      regional_name(&r,lcid,0x16,flags),regional_name(&r,lcid,0x17,flags),
+      number(regional_field(&r,lcid,0x1c,flags,&nf)),
+      number(regional_field(&r,lcid,0x1b,flags,&pf)),regional_name(&r,lcid,0x14,flags)};
+  if(lcid==(r.italian?IT:US) && !(flags&0x80000000u)) d.grouping=(DWORD)(r.value[REG_GROUPING][0]-'0');
   if (fmt)
     d = *fmt;
   if (!d.decimal || !d.thousand || !d.symbol || d.negative > 15 || d.positive > 3) {

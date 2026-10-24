@@ -94,6 +94,11 @@ struct netif {
      * network worker still owns copied queues and public state records. */
     void *driver_context;
     bool external_owner;
+    bool suspended, sleep_running;
+    uint16_t sleep_command;
+    bool (*power_ready)(struct netif *);
+    int (*power_suspend)(struct netif *);
+    int (*power_resume)(struct netif *);
     void (*external_fault)(struct netif *,const char *);
 };
 int net_e100_media(struct netif *, unsigned, unsigned);

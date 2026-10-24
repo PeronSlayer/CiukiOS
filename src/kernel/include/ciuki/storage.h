@@ -22,9 +22,12 @@ struct storage_volume {
     unsigned disk, partition, drive;
     int error;
     bool present, read_gate, removable, safely_removed;
+    bool unformatted; /* retained raw media identity; no FAT namespace */
+    bool formatting; /* namespace protected: retained raw-format owner, even while detached */
     bool optical; /* f9-01: Setup C: over the boot CD's image view; disk = ATA slot */
     uint32_t read_sequence, write_sequence;
     uint32_t census_next_ms; /* fx-17b: next background free-count step */
+    uint32_t census_yields;  /* fx-23: steps deferred for a waiting foreground caller */
     uint64_t reads, writes, flushes, refused, writes_before_gate;
     /* Selected crash probe only; notification after synchronous completion.
      * No callback in ordinary boot, no controller fault/recovery backdoor. */
@@ -48,6 +51,7 @@ struct storage_ntfs {
 #define STORAGE_LEASE_PHASE 32u
 #define STORAGE_LEASE_REASON 24u
 struct storage_lease {
+    bool partition_tool; /* exclusive nonboot editor, never Setup publish authority */
     uint32_t holder, state, generation; /* state: CIUKI_DISK_LEASE_* */
     uint32_t drive, reasons;            /* published letter index and its mount reasons */
     uint64_t reads, writes, flushes;    /* raw node sectors and flushes */
@@ -73,6 +77,7 @@ struct storage {
     bool writer_running, writer_quiescing; /* protected by vfs namespace */
     unsigned next_drive;
     uint32_t sequence, writer_ticks;
+    uint32_t hold_reported[26]; /* fx-23: hold start (+1) already named by storage_hold_watch */
     int writer_error;
     /* f9-01 Setup mode (cd-setup-plan.md 3.2/3.3): every ATA volume stays
      * read-only; C: is the boot CD's image view, D: its ISO 9660 tree. */
@@ -114,11 +119,24 @@ int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
  * never reused. Dirty removable media stay read-only; no recovery writes. */
 int storage_add_removable(struct storage *, struct blkdev *);
 /* Whole floppy media only, with a native drive lease held through detach. */
+int storage_add_blank_floppy(struct storage *, struct blkdev *, unsigned drive);
 int storage_add_floppy(struct storage *, struct blkdev *, unsigned drive);
 int storage_add_removable_bounded(struct storage *, struct blkdev *,
                                   bool (*cancel)(void *), void (*pause)(void *), void *);
 int storage_remove_removable(struct storage *, struct blkdev *, bool surprise);
 int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surprise);
+/* G29: query or exclusively reformat one mounted removable FAT volume.
+ * Record is already copied, returns FS errors; physical generation required. */
+struct ciuki_media_format;
+struct ciuki_floppy_image;
+typedef int (*storage_floppy_copy_fn)(void *, uint32_t offset, void *, uint32_t bytes, bool output);
+int storage_floppy_copy(struct storage *, struct ciuki_floppy_image *, storage_floppy_copy_fn, void *, bool write);
+int storage_floppy_image(struct storage *, struct ciuki_floppy_image *, void *, bool write);
+int storage_format_removable(struct storage *, struct ciuki_media_format *, bool execute);
+struct ciuki_media_defrag;
+int storage_defrag(struct storage *, struct ciuki_media_defrag *, bool step);
+struct ciuki_media_convert;
+int storage_convert(struct storage *, struct ciuki_media_convert *, bool execute);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 int storage_add_ro_locked(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);
@@ -133,6 +151,11 @@ int storage_ntfs_mount(struct storage *, unsigned slot);
 int storage_ntfs_unmount(struct storage *, unsigned slot);
 struct storage_volume *storage_volume(struct storage *, unsigned drive);
 int storage_enable_write(struct storage *, unsigned drive);
+/* G14 ScanDisk (fs/mount.c, kernel only): the check that ran at this start,
+ * and an on-demand read-only check (*schedule: the fix needs the next start). */
+struct ciuki_scandisk;
+int storage_scandisk_report(unsigned drive, struct ciuki_scandisk *);
+int storage_scandisk(unsigned drive, struct ciuki_scandisk *, bool *schedule);
 /* fx-17: after a removable device's volumes are published read-only, make
  * each writable one read-write (Windows 98 model, no ownership scan).
  * Returns the number of volumes made writable; records each outcome. */
@@ -141,6 +164,8 @@ int storage_activate_removable(struct storage *, struct blkdev *);
  * 128-sector step per volume per call, paced to a quarter of the device
  * time it used; returns the number of counts still running. */
 unsigned storage_census_service(struct storage *, uint32_t now_ms);
+/* fx-23: name drive reservations held for 2 s or more, once per hold. */
+unsigned storage_hold_watch(struct storage *, uint32_t now_ms);
 int storage_writeback(struct storage *, uint32_t now_ms);
 int storage_shutdown(struct storage *); /* no clean mark following any error */
 void storage_destroy(struct storage *); /* quiescent host tests / failed init only */

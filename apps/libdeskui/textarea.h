@@ -19,7 +19,7 @@
 #define DU_TA_TAB 8u
 #define DU_TA_CELL_W 6           /* monospace advance (Inconsolata 12, theme.h DESK_FONT_MONO) */
 #define DU_TA_CELL_H 13          /* line height */
-#define DU_TA_BAR 16             /* scrollbar thickness */
+#define DU_TA_BAR (desk_appearance_active ? desk_metric(AP_SCROLLBAR,16) : 16)             /* scrollbar thickness */
 #define DU_TA_PAD 2         /* text inset inside the sunken border */
 #define DU_TA_DOUBLE_NS 500000000ull
 
@@ -30,6 +30,7 @@ enum du_ta_motion { DU_TA_LEFT, DU_TA_RIGHT, DU_TA_UP, DU_TA_DOWN, DU_TA_HOME, D
 enum du_ta_drag { DU_TA_DRAG_NONE, DU_TA_DRAG_SELECT, DU_TA_DRAG_VTHUMB, DU_TA_DRAG_HTHUMB };
 
 struct du_textarea {
+    int caret_hidden;
     char *text;                 /* cap+1 bytes, always NUL terminated */
     size_t len, cap;
     uint64_t revision;

@@ -2,12 +2,14 @@
 /* SPDX-License-Identifier: MIT
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
+#include "../desktop/profile.h"
 #include "transfer.h"
 #include "transfer_ui.h"
 #include "../desktop/catalog.h"
 #include "../desktop/sounds.h"
 #include <errno.h>
 #include <stdio.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -18,18 +20,19 @@ enum {
     C_BACK = 1, C_FORWARD, C_UP, C_CUT, C_COPY, C_PASTE, C_DELETE, C_PROPERTIES, C_VIEWS,
     C_OPEN, C_OPEN_NOTE, C_NEW_FOLDER, C_NEW_TEXT, C_RENAME, C_CLOSE, C_SELECT_ALL, C_INVERT,
     C_ICONS, C_LIST, C_DETAILS, C_SORT_NAME, C_SORT_SIZE, C_SORT_TYPE, C_SORT_MODIFIED, C_REFRESH,
-    C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE,
+    C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE, C_FIND, C_FIND_STOP, C_FIND_FOLDER,
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
-    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT,
+    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND = 228,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
+    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
 #define STATUS_H 20
 
-enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN };
+enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN, SCAN_SEARCH };
 struct files_scan {
     struct files_app state; /* Owned data only; never a UI or live model. */
     struct fm_vfs source;
@@ -56,31 +59,49 @@ static int scan_submit(struct files_app *, enum scan_kind, const char *, int);
 static void scan_poll(struct files_app *);
 static void scan_stop(struct files_app *);
 static void open_item(struct files_app *, unsigned, int);
+static int operation_open(struct files_app *,const char *);
+static void open_with(struct files_app *,const char *);
+static int operations_command(struct files_app *,int);
+static int operations_result(struct files_app *,const struct du_event *);
+static int operations_undo_prepare(void *);
 static void bin_item_properties(struct files_app *, unsigned);
 static void drop_free(struct files_app *);
 static void bin_properties(struct files_app *);
 static void command(struct files_app *, int);
 static int scan_cancelled(const struct files_scan *);
+static void find_dialog(struct files_app *);
+static void disk_service(struct files_app *);
+static void disk_stop(struct files_app *);
+static int disk_dialog_result(struct files_app *, const struct du_event *);
+static void disk_allocation_completed(struct files_app *);
+static int disk_target(const struct files_app *);
+static int disk_close_request(struct files_app *);
 
 static const struct du_menu_item file_template[] = {
-    {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open with &CiukNote", C_OPEN_NOTE, 0, 0, 0},
+    {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open &With...", FILES_OPEN_WITH, 0, 0, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"New &Folder", C_NEW_FOLDER, 0, 0, 0}, {"New &Text Document", C_NEW_TEXT, 0, 0, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Delete", C_DELETE, DU_KEY_DELETE, 0, 0}, {"Rena&me", C_RENAME, DU_KEY_F2, 0, 0},
     {"P&roperties", C_PROPERTIES, DU_KEY_ENTER, DU_ALT, 0},
-    {"Safely &remove", C_SAFE_REMOVE, 0, 0, DU_ITEM_DISABLED}, {"&Close", C_CLOSE, DU_KEY_F4, DU_ALT, 0}};
+    {"Safely &remove", C_SAFE_REMOVE, 0, 0, DU_ITEM_DISABLED}, {"&Close", C_CLOSE, DU_KEY_F4, DU_ALT, 0},
+    {"Create &Shortcut",FILES_SHORTCUT,0,0,0},{"Send &To...",FILES_SEND_TO,0,0,0},
+    {"New &Shortcut...",FILES_NEW_SHORTCUT,0,0,0},{"New &Bitmap Image",FILES_NEW_BITMAP,0,0,0},
+    {"New &Document...",FILES_NEW_REGISTERED,0,0,0}};
 static const struct du_menu_item edit_template[] = {
     {"Cu&t", C_CUT, 0x2d, DU_CTRL, 0}, {"&Copy", C_COPY, 0x2e, DU_CTRL, 0}, {"&Paste", C_PASTE, 0x2f, DU_CTRL, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"Select &All", C_SELECT_ALL, 0x1e, DU_CTRL, 0}, {"&Invert Selection", C_INVERT, 0, 0, 0}};
+    {"Select &All", C_SELECT_ALL, 0x1e, DU_CTRL, 0}, {"&Invert Selection", C_INVERT, 0, 0, 0},
+    {"&Undo",FILES_UNDO,0x2c,DU_CTRL,0},{"Paste &Shortcut",FILES_PASTE_SHORTCUT,0,0,0},
+    {"Copy To &Folder...",FILES_COPY_TO,0,0,0},{"Move To F&older...",FILES_MOVE_TO,0,0,0}};
 static const struct du_menu_item view_template[] = {
     {"Lar&ge Icons", C_ICONS, 0, 0, DU_ITEM_RADIO}, {"&List", C_LIST, 0, 0, DU_ITEM_RADIO},
     {"&Details", C_DETAILS, 0, 0, DU_ITEM_RADIO}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"Sort by &Name", C_SORT_NAME, 0, 0, DU_ITEM_RADIO}, {"Sort by &Size", C_SORT_SIZE, 0, 0, DU_ITEM_RADIO},
     {"Sort by &Type", C_SORT_TYPE, 0, 0, DU_ITEM_RADIO}, {"Sort by &Modified", C_SORT_MODIFIED, 0, 0, DU_ITEM_RADIO},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&Refresh", C_REFRESH, DU_KEY_F5, 0, 0},
-    {"&Attributes column", C_ATTRIBUTES, 0, 0, 0}, {"Folder &Options...", C_OPTIONS, 0, 0, 0}};
+    {"&Attributes column", C_ATTRIBUTES, 0, 0, 0}, {"Folder &Options...", C_OPTIONS, 0, 0, 0},
+    {"&File Types...",FILES_TYPES,0,0,0}};
 static const struct du_menu_item go_template[] = {
     {"&Back", C_BACK, DU_KEY_LEFT, DU_ALT, 0}, {"&Forward", C_FORWARD, DU_KEY_RIGHT, DU_ALT, 0},
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
@@ -104,12 +125,17 @@ static const char *const yes_no[] = {"&Yes", "&No"};
 /* ---- formatting ---- */
 static void group(char *out, size_t n, uint64_t v)
 {
+    const struct lconv *locale=localeconv();
+    unsigned grouping=(unsigned char)locale->grouping[0];
+    const char *sep=locale->thousands_sep; size_t sep_n=strlen(sep);
     char digits[32]; int len = snprintf(digits, sizeof(digits), "%llu", (unsigned long long)v), k = 0;
     size_t at = 0;
     for (int i = 0; i < len && at + 2 < n; i++) {
         out[at++] = digits[i];
         k = len - i - 1;
-        if (k && k % 3 == 0) out[at++] = ',';
+        if (k && grouping && grouping<10 && k % (int)grouping == 0 && sep_n<n-at) {
+            memcpy(out+at,sep,sep_n); at+=sep_n;
+        }
     }
     out[at] = 0;
 }
@@ -121,8 +147,8 @@ void files_size_text(char *out, size_t n, uint64_t bytes)
     uint64_t scaled = bytes; unsigned u = 0;
     while (scaled >= 1024 * 1024 && u < 3) { scaled /= 1024; u++; }
     uint64_t hundredths = scaled * 100 / 1024;
-    if (hundredths < 1000) snprintf(out, n, "%llu.%02llu %s", (unsigned long long)(hundredths / 100), (unsigned long long)(hundredths % 100), units[u]);
-    else if (hundredths < 10000) snprintf(out, n, "%llu.%llu %s", (unsigned long long)(hundredths / 100), (unsigned long long)(hundredths % 100 / 10), units[u]);
+    if (hundredths < 1000) snprintf(out, n, "%llu%s%02llu %s", (unsigned long long)(hundredths / 100), localeconv()->decimal_point, (unsigned long long)(hundredths % 100), units[u]);
+    else if (hundredths < 10000) snprintf(out, n, "%llu%s%llu %s", (unsigned long long)(hundredths / 100), localeconv()->decimal_point, (unsigned long long)(hundredths % 100 / 10), units[u]);
     else snprintf(out, n, "%llu %s", (unsigned long long)(hundredths / 100), units[u]);
 }
 
@@ -136,7 +162,7 @@ static void time_text(char *out, size_t n, int64_t when)
 {
     time_t t = (time_t)when; struct tm tm;
     if (when <= 0 || !desk_localtime(&t, &tm)) { snprintf(out, n, "%s", ""); return; }   /* G1: local */
-    snprintf(out, n, "%04d-%02d-%02d %02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    if (!strftime(out, n, "%x %X", &tm) && n) out[0]=0;
 }
 
 static const char *reason(int error) { return fm_error_reason(error); }
@@ -162,7 +188,7 @@ static void insert_disk_prompt(struct files_app *a, int drive, const char *path)
 static int floppy_drive(const struct files_app *a, int d)
 { return d>=0 && d<2 && a->media.type[d]==CIUKI_MEDIA_FLOPPY; }
 static uint32_t floppy_slots(const struct files_app *a)
-{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u); }
+{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u) | a->media.removable_mask; }
 static void checkpoint(struct files_app *a, int stage)
 {
     if (!a->test || stage != a->stage + 1) return;
@@ -265,6 +291,9 @@ void files_layout(struct files_app *a)
             if (list->columns[0].width>=190) list->columns[0].width -= 70;
             list->columns[4] = (struct du_column){"Attributes", 70, 0}; list->column_count = 5;
         }
+        if (a->model.searching) {
+            list->columns[list->column_count++] = (struct du_column){"In Folder", 200, 0};
+        }
         if (!a->model.path[0]) {
             list->columns[1].title = "Capacity"; list->columns[3].title = "Free Space";
         }
@@ -323,13 +352,14 @@ static void places_build(struct files_app *a)
     for (unsigned i = 0; i < 7; i++) {
         if (i == 4 && !a->games_available) continue;
         struct files_place *p = &a->places[a->place_count++];
-        snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", paths[i]);
+        snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", i==2 ? profile_home() : paths[i]);
+        if (i==6) profile_child(p->path,sizeof(p->path),"Desktop");
     }
     for (unsigned i = 0; i < a->place_count; i++) {
         struct du_item *it = &a->place_items[i];
         memset(it, 0, sizeof(*it));
         it->text[0] = a->places[i].name;
-        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : !strcmp(a->places[i].path,"/Documents/Desktop") ? "place:desktop" : !strcmp(a->places[i].path,"/Games") ? "place:folder" : icons[i], 16);
+        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : !strcmp(a->places[i].name,"Desktop") ? "place:desktop" : !strcmp(a->places[i].path,"/Games") ? "place:folder" : icons[i], 16);
     }
     struct du_widget *w = W(a, W_PLACES);
     w->items = a->place_items; w->count = a->place_count;
@@ -431,11 +461,11 @@ static void tree_items(struct files_app *a)
 }
 
 /* ---- model to widgets ---- */
-static int in_clipboard(const struct files_app *a, const char *name)
+static int in_clipboard(const struct files_app *a, unsigned index)
 {
     if (!a->model.cut) return 0;
     char path[FM_PATH];
-    if (fm_join(path, a->model.path, name)) return 0;
+    if (fm_entry_path(&a->model, index, path)) return 0;
     for (unsigned i = 0; i < a->model.clipboard_count; i++) if (fm_same_path(a->model.clipboard[i], path)) return 1;
     return 0;
 }
@@ -509,6 +539,7 @@ static const unsigned bin_key_of_header[6] = {0, 4, 5, 2, 1, 3};
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
+    set_flag(a->tools_items, 2, C_FIND_STOP, DU_ITEM_DISABLED, !a->find_running);
     int computer = !(a->loading ? a->loading_path : m->path)[0];
     m->fixed = files_fixed(a);
     int bin = !a->loading && fm_is_recycle(m->path);
@@ -541,6 +572,8 @@ void files_update(struct files_app *a)
         const char *drive_icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
         char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (floppy ? "3.5-Inch Floppy Disk" : optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
+        t->location[0] = 0;
+        if (m->searching && e->result) { char parent[FM_PATH]; if (!fm_parent(parent, m->result_paths[e->result-1])) fm_display_path(t->location, parent); }
         const char *volume_label=drive_label(a,drive);
         if (computer && a->media_space) {
             int letter=e->name[0]>='A' && e->name[0]<='Z' ? e->name[0]-'A' : -1;
@@ -570,15 +603,19 @@ void files_update(struct files_app *a)
                                           icon16(e), icon32(e), (uint8_t)e->selected, 0, 0, 0, 0};
             continue;
         }
-        a->rows[i] = (struct du_item){{t->label[0] ? t->label : e->name, t->size, t->type, t->modified, t->attributes},
+        a->rows[i] = (struct du_item){{t->label[0] ? t->label : e->name, t->size, t->type, t->modified,
+                                      a->attribute_column ? t->attributes : m->searching ? t->location : t->attributes,
+                                      a->attribute_column && m->searching ? t->location : NULL},
                                       computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
-                                      (uint8_t)e->selected, (uint8_t)in_clipboard(a, e->name), 0, 0, 0};
+                                      (uint8_t)e->selected, (uint8_t)in_clipboard(a, i), 0, 0, 0};
     }
     struct du_widget *list = W(a, W_LIST);
     list->items = a->rows; list->count = count;
     list->active = m->active < count ? m->active : 0;
-    list->sort = bin ? bin_header_of_key[m->sort < 6 ? m->sort : 0] : (int)m->sort; list->descending = m->descending;
-    du_set_text(list, a->loading ? "Loading..." : bin ? "The Recycle Bin is empty." : "This folder is empty.");
+    list->sort = bin ? bin_header_of_key[m->sort < 6 ? m->sort : 0] :
+        m->sort == FM_SORT_LOCATION ? 4 + a->attribute_column :
+        m->searching && !a->attribute_column && m->sort == 4 ? -1 : (int)m->sort; list->descending = m->descending;
+    du_set_text(list, a->loading ? "Loading..." : bin ? "The Recycle Bin is empty." : m->searching ? "No files or folders were found." : "This folder is empty.");
     struct du_widget *address = W(a, W_ADDRESS);
     if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, display);
     address->icon = computer ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) : bin ? named(count ? "place:trash-full" : "place:trash", 16) : named("type:folder", 16);
@@ -590,7 +627,9 @@ void files_update(struct files_app *a)
     if (selected_files) files_size_text(size, sizeof(size), bytes);
     (void)folder_bytes;
     if (a->loading) snprintf(left, sizeof(left), "Loading...");
+    else if (m->searching && m->search_incomplete) snprintf(left, sizeof(left), "%u result(s); incomplete: %s", count, m->search_error == -E2BIG ? "Search limit reached; narrow the search." : reason(m->search_error));
     else if (a->note[0]) snprintf(left, sizeof(left), "%s", a->note);
+    else if (m->searching && !selected) snprintf(left, sizeof(left), "%u file(s) or folder(s) found", count);
     else if (selected == 1 && computer && m->active < count && m->entries[m->active].selected && a->media_space) {
         /* fx-17b: Windows 98 My Computer shows the selected drive's free
          * space and capacity; "calculating..." during a background count. */
@@ -623,12 +662,12 @@ void files_update(struct files_app *a)
     W(a, C_UP)->disabled = (uint8_t)root;
     W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = computer || bin || !selected;
     W(a, C_DELETE)->disabled = computer || !selected;
-    W(a, C_PASTE)->disabled = computer || bin || !m->clipboard_count;
-    W(a, C_PROPERTIES)->disabled = (uint8_t)(a->loading || (computer && !selected));
+    W(a, C_PASTE)->disabled = computer || bin || m->searching || !m->clipboard_count;
+    W(a, C_PROPERTIES)->disabled = (uint8_t)(a->loading || ((computer || m->searching) && !selected));
     /* G2: the File menu is the Recycle Bin's while it is shown. */
     if (bin != a->bin_menu) {
         a->bin_menu = bin;
-        a->menus[0].items = bin ? a->bin_items : a->file_items; a->menus[0].count = bin ? BIN_ITEMS : 11;
+        a->menus[0].items = bin ? a->bin_items : a->file_items; a->menus[0].count = bin ? BIN_ITEMS : sizeof(file_template)/sizeof(*file_template);
     }
     if (bin) {
         set_flag(a->bin_items, BIN_ITEMS, C_RESTORE, DU_ITEM_DISABLED, !selected);
@@ -640,15 +679,23 @@ void files_update(struct files_app *a)
     for (unsigned i=0;i<11;i++) if (a->file_items[i].id==C_SAFE_REMOVE)
         a->file_items[i].label=removal_label(a,target);
     set_flag(a->file_items, 11, C_OPEN, DU_ITEM_DISABLED, !selected);
-    set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
+    set_flag(a->file_items, sizeof(file_template)/sizeof(*file_template), FILES_OPEN_WITH, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_RENAME, DU_ITEM_DISABLED, computer || selected != 1);
-    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer);
-    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer);
-    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || (computer && !selected));
+    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer || m->searching);
+    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer || m->searching);
+    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || ((computer || m->searching) && !selected));
+    unsigned file_count=sizeof(file_template)/sizeof(*file_template), edit_count=sizeof(edit_template)/sizeof(*edit_template);
+    const int selection_actions[]={FILES_SHORTCUT,FILES_SEND_TO};
+    for (unsigned i=0;i<2;i++) set_flag(a->file_items,file_count,selection_actions[i],DU_ITEM_DISABLED,computer || bin || !selected);
+    const int new_actions[]={FILES_NEW_SHORTCUT,FILES_NEW_BITMAP,FILES_NEW_REGISTERED};
+    for (unsigned i=0;i<3;i++) set_flag(a->file_items,file_count,new_actions[i],DU_ITEM_DISABLED,a->loading || computer || bin || m->searching);
+    set_flag(a->edit_items,edit_count,FILES_COPY_TO,DU_ITEM_DISABLED,computer || bin || !selected);
+    set_flag(a->edit_items,edit_count,FILES_MOVE_TO,DU_ITEM_DISABLED,computer || bin || !selected);
+    set_flag(a->edit_items,edit_count,FILES_PASTE_SHORTCUT,DU_ITEM_DISABLED,a->loading || computer || bin || m->searching || !m->clipboard_count);
     set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || bin || !selected);
     set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || bin || !selected);
-    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || bin || !m->clipboard_count);
+    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || bin || m->searching || !m->clipboard_count);
     set_flag(a->go_items, 14, C_BACK, DU_ITEM_DISABLED, !m->history_at);
     set_flag(a->go_items, 14, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
     set_flag(a->go_items, 14, C_UP, DU_ITEM_DISABLED, root);
@@ -665,7 +712,7 @@ void files_update(struct files_app *a)
         if (a->place_items[i].selected) place = (int)i;
     }
     if (place >= 0) places->active = (unsigned)place;
-    if (a->tree_dirty && !a->loading && a->worker && !a->job_active)
+    if (a->tree_dirty && !a->loading && !m->searching && a->worker && !a->job_active)
         scan_submit(a, SCAN_TREE, NULL, 0);
     tree_items(a);
     a->ui->dirty = 1;
@@ -702,11 +749,11 @@ static void rename_commit(struct files_app *a)
     rename_hide(a);
     if (index >= a->model.count || strcmp(a->model.entries[index].name, original)) { files_update(a); return; }
     if (strcmp(name, original)) {
-        int r = fm_rename(&a->model, index, name);
+        int r = fm_rename_undo(&a->model, index, name);
         if (r) {
             char what[FM_NAME + 40]; snprintf(what, sizeof(what), "Cannot rename %s:", original);
             error_box(a, "Error Renaming File or Folder", what, r);
-        } else { a->tree_dirty = 1; checkpoint(a, 3); }
+        } else { a->tree_dirty = 1; if (a->model.searching) scan_submit(a, SCAN_REFRESH, NULL, 0); checkpoint(a, 3); }
     }
     files_update(a);
 }
@@ -744,7 +791,7 @@ static int scan_stat(void *ctx, const char *path, struct fm_meta *meta)
 static int scan_open(void *ctx, const char *path, int make)
 { struct files_scan *s = ctx; if (!make && scan_cancelled(s)) return -ECANCELED; return s->source.open(s->source.ctx, path, make); }
 static int scan_read(void *ctx, int fd, void *buffer, unsigned n)
-{ struct files_scan *s = ctx; return s->source.read(s->source.ctx, fd, buffer, n); }
+{ struct files_scan *s = ctx; return scan_cancelled(s) ? -ECANCELED : s->source.read(s->source.ctx, fd, buffer, n); }
 static int scan_write(void *ctx, int fd, const void *buffer, unsigned n)
 { struct files_scan *s = ctx; return s->source.write(s->source.ctx, fd, buffer, n); }
 static int scan_sync(void *ctx, int fd) { struct files_scan *s = ctx; return s->source.sync(s->source.ctx, fd); }
@@ -832,7 +879,8 @@ static int scan_listing(struct files_scan *s)
     unsigned count=0;
     for (unsigned i=0;i<m->count;i++) if (s->seen[i]) m->entries[count++]=m->entries[i];
     if (count!=m->count) { s->metadata_only=0; s->changed=1; m->count=count; }
-    if (!s->metadata_only) fm_sort(m,m->sort,m->descending);
+    if (s->kind!=SCAN_MEDIA || s->changed) fm_registered_types(m->entries,m->count);
+    if (!s->metadata_only || (s->kind==SCAN_REFRESH && m->sort==2)) fm_sort(m,m->sort,m->descending);
     return 0;
 }
 static int metadata_apply(struct files_app *a, struct files_scan *s)
@@ -904,7 +952,8 @@ static void *scan_run(void *arg)
             s->clipboard_valid=!fm_clipboard_load(&a->model); a->model.fs=adapter;
         }
 #endif
-        if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
+        if (s->kind == SCAN_SEARCH) s->error = fm_search(&a->model, &a->find_edit);
+        else if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
         else {
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
                 (s->kind == SCAN_NAVIGATE && !a->model.history_count)) {
@@ -986,7 +1035,10 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     fm_init(&b->model, &a->model.fs);
     memcpy(b->model.path, a->model.path, FM_PATH);
     memcpy(b->model.history, a->model.history, sizeof(b->model.history));
+    b->model.clipboard_sequence = a->model.clipboard_sequence;
     b->model.history_count = a->model.history_count; b->model.history_at = a->model.history_at;
+    b->find_edit = a->find_edit;
+    b->model.query = a->model.query; b->model.searching = a->model.searching;
     b->model.sort = a->model.sort; b->model.descending = a->model.descending;
     memcpy(b->expanded, a->expanded, sizeof(b->expanded)); b->expanded_count = a->expanded_count;
     memcpy(b->collapsed, a->collapsed, sizeof(b->collapsed)); b->collapsed_count = a->collapsed_count;
@@ -1019,9 +1071,10 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     scan_free(old); scan_free(result);
     a->tree_dirty = 0;
     a->reading = 1;
-    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH) {
+    a->find_running = kind == SCAN_SEARCH || (kind == SCAN_REFRESH && a->model.searching);
+    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH || kind == SCAN_SEARCH) {
         a->loading = 1;
-        snprintf(a->loading_path, sizeof(a->loading_path), "%s", kind == SCAN_REFRESH ? a->model.path : s->target);
+        snprintf(a->loading_path, sizeof(a->loading_path), "%s", (kind == SCAN_REFRESH || kind == SCAN_SEARCH) ? a->model.path : s->target);
         if (kind == SCAN_HISTORY) {
             int at = (int)a->model.history_at + delta;
             if (at >= 0 && (unsigned)at < a->model.history_count) strcpy(a->loading_path, a->model.history[at]);
@@ -1029,6 +1082,18 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
         files_update(a);
     }
     return 0;
+}
+/* A results view can contain another file with the created file's name. */
+__attribute__((noinline)) static void select_created_results(struct files_app *a)
+{
+    struct fm_model *m = &a->model; char target[FM_PATH];
+    for (unsigned i = 0; i < a->job.created_count; i++) {
+        if (fm_join(target, a->job.destination, a->job.created[i])) continue;
+        for (unsigned j = 0; j < m->count; j++) if (m->entries[j].result &&
+            fm_same_path(target, m->result_paths[m->entries[j].result-1])) {
+            m->entries[j].selected = 1; m->active = m->anchor = j;
+        }
+    }
 }
 static void scan_poll(struct files_app *a)
 {
@@ -1051,11 +1116,12 @@ static void scan_poll(struct files_app *a)
         a->model.show_hidden=b->model.show_hidden; a->model.hide_system=b->model.hide_system;
         a->model.hide_extensions=b->model.hide_extensions;
     }
-    a->reading = 0;
+    a->reading = a->find_running = 0;
     du_timer_stop(a->ui, T_BROWSER);
     if (s->clipboard_valid && s->clipboard_key==clipboard_key(&a->model) && clipboard_key(&a->model)!=clipboard_key(&b->model)) {
         fm_clipboard_clear(&a->model);
         a->model.clipboard=b->model.clipboard; a->model.clipboard_count=b->model.clipboard_count; a->model.cut=b->model.cut;
+        a->model.clipboard_sequence=b->model.clipboard_sequence;
         b->model.clipboard=NULL; b->model.clipboard_count=0;
         files_update(a);
     }
@@ -1082,29 +1148,41 @@ static void scan_poll(struct files_app *a)
     if (s->error) {
         int floppy = (s->kind == SCAN_NAVIGATE || s->kind == SCAN_HISTORY) ? media_drive(s->target) : -1;
         a->media = b->media; a->model.drive_slots = floppy_slots(a);
-        if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
-        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", "Cannot open the folder.", s->error);
+        if (floppy>=0 && (a->media.removable_mask&(1u<<floppy)) &&
+            (a->media.type[floppy]==CIUKI_MEDIA_FLOPPY || a->media.type[floppy]==CIUKI_MEDIA_USB) &&
+            fm_drive_root(s->target) && s->kind==SCAN_NAVIGATE) (void)files_disk_open(a,(unsigned)floppy,1);
+        else if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
+        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY)
+            error_box(a, "Files", s->kind == SCAN_SEARCH ? "Cannot search this location:" : "Cannot open the folder.", s->error);
     } else {
         if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || (s->changed && !s->metadata_only))) {
             struct fm_model *m = &a->model, *n = &b->model;
             int refresh = s->kind == SCAN_REFRESH || s->kind == SCAN_MEDIA;
-            char active[FM_NAME] = "";
-            if (refresh && m->active < m->count) strcpy(active, m->entries[m->active].name);
+            char active[FM_PATH] = "";
+            if (refresh && m->searching && m->active < m->count) fm_entry_path(m, m->active, active);
+            else if (refresh && m->active < m->count) strcpy(active, m->entries[m->active].name);
             if (refresh) for (unsigned i = 0; i < n->count; i++) for (unsigned j = 0; j < m->count; j++)
-                if (!strcmp(n->entries[i].name, m->entries[j].name)) n->entries[i].selected = m->entries[j].selected;
+                if (!strcmp(n->entries[i].name, m->entries[j].name) &&
+                    (!m->searching || (n->entries[i].result && m->entries[j].result &&
+                    !strcmp(n->result_paths[n->entries[i].result-1], m->result_paths[m->entries[j].result-1]))))
+                    n->entries[i].selected = m->entries[j].selected;
             free(m->entries); m->entries = n->entries; n->entries = NULL;
+            free(m->result_paths); m->result_paths = n->result_paths; n->result_paths = NULL;
+            m->result_count = n->result_count; m->searching = n->searching; m->query = n->query;
+            m->search_incomplete = n->search_incomplete; m->search_error = n->search_error;
             free(m->bin); m->bin = n->bin; n->bin = NULL; m->bin_count = n->bin_count; m->fixed = n->fixed;
             m->count = n->count; m->capacity = n->capacity; m->active = n->active; m->anchor = n->anchor;
             if (m->sort > 3 && fm_is_recycle(m->path) != fm_is_recycle(n->path)) m->sort = 0;
             memcpy(m->path, n->path, FM_PATH); memcpy(m->history, n->history, sizeof(m->history));
             m->history_count = n->history_count; m->history_at = n->history_at;
             m->find_length = 0; m->find[0] = 0;
-            if (refresh) for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->entries[i].name)) m->active = m->anchor = i;
+            if (refresh) for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->searching && m->entries[i].result ? m->result_paths[m->entries[i].result-1] : m->entries[i].name)) m->active = m->anchor = i;
             fm_sort(m, m->sort, m->descending);
             if (!refresh) W(a, W_LIST)->scroll = W(a, W_LIST)->hscroll = 0;
             if (a->select_created) {
                 fm_select_none(m);
-                for (unsigned i = 0; i < a->job.created_count; i++) fm_select_name(m, a->job.created[i], 1);
+                if (m->searching) select_created_results(a);
+                else for (unsigned i = 0; i < a->job.created_count; i++) fm_select_name(m, a->job.created[i], 1);
             }
         }
         a->media = b->media; memcpy(a->drive_labels, b->drive_labels, sizeof(a->drive_labels));
@@ -1124,7 +1202,19 @@ static void scan_poll(struct files_app *a)
     int pending = s->error ? 0 : a->pending_command;
     a->pending_command = 0;
     scan_free(s);
-    if (pending) command(a, pending);
+    if (a->shell_action) {
+        int action=a->shell_action; a->shell_action=0;
+        if (a->shell_paths) {
+            fm_select_none(&a->model);
+            for (unsigned i=0;i<a->shell_count;i++) {
+                char parent[FM_PATH];
+                if (!fm_parent(parent,a->shell_paths[i]) && fm_same_path(parent,a->model.path)) fm_select_name(&a->model,fm_basename(a->shell_paths[i]),1);
+            }
+            fm_drag_free(a->shell_paths,NULL,a->shell_count); a->shell_paths=NULL; a->shell_count=0;
+        } else fm_select_name(&a->model,fm_basename(a->shell_action_path),0);
+        command(a,action);
+    } else if (pending) command(a, pending);
+    if (a->find_initial) { a->find_initial = 0; files_find(a); }
 }
 static void scan_stop(struct files_app *a)
 {
@@ -1172,47 +1262,17 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
     if (e->bin) { bin_item_properties(a, index); return; }   /* G2: an item in the bin opens its properties */
     if (fm_entry_path(&a->model, index, path)) return;
     if (e->meta.type == FM_DIR && !with_note) { files_navigate(a, path); return; }
-    if (!with_note && !classified && e->meta.type == FM_FILE && !e->meta.exec && !strchr(e->name, '.')) {
-        int r = scan_submit(a, SCAN_OPEN, path, (int)index);
-        if (r) error_box(a, "Files", "Cannot open the file.", r);
+    if (!with_note && a->shell_open) { int r=a->shell_open(a,path); if (r<0) files_launch_failed(a,r); return; }
+    if (!with_note && !classified && e->meta.type==FM_FILE && !e->meta.exec && !strchr(e->name,'.')) {
+        int r=scan_submit(a,SCAN_OPEN,path,(int)index);
+        if (r) error_box(a,"Files","Cannot open the file.",r);
         return;
     }
-    enum fm_kind kind = fm_kind(e);
-    if (e->meta.exec && !with_note) {
-        char *argv[] = {(char *)e->name, NULL};
-        int r = spawn(a, path, argv);
-        if (r < 0) { char what[FM_NAME + 40]; snprintf(what, sizeof(what), "Cannot run %s:", e->name); error_box(a, "Files", what, r); }
-        else { snprintf(a->note, sizeof(a->note), "Started %.120s", e->name); files_update(a); }
-        return;
-    }
-    if (with_note || kind == FM_KIND_TEXT || kind == FM_KIND_SCRIPT) {
-        struct fm_meta meta;
-        if (a->model.fs.stat_path(a->model.fs.ctx, "/Programs/ciuknote", &meta) || meta.type != FM_FILE) {
-            du_message(a->ui, D_INFO, "Files", "CiukNote is not installed.\nText files open in /Programs/ciuknote once it is available.",
-                       DU_DLG_ICON_INFO, NULL, 0, 0, 0);
-            return;
-        }
-        char *argv[] = {"ciuknote", path, NULL};
-        int r = spawn(a, "/Programs/ciuknote", argv);
-        if (r < 0) error_box(a, "Files", "Cannot start CiukNote:", r);
-        return;
-    }
-    const struct desk_catalog_entry *program = desk_catalog_file(path);
-    if (kind == FM_KIND_IMAGE || program) {
-        struct fm_meta meta;
-        char executable[80];
-        if (program) snprintf(executable, sizeof(executable), "/Programs/%s", program->name);
-        if (program && !a->model.fs.stat_path(a->model.fs.ctx, executable, &meta) && meta.type == FM_FILE) {
-            char *argv[] = {(char *)program->name, path, NULL};
-            int r = spawn(a, executable, argv);
-            if (r < 0) error_box(a, "Files", "Cannot start the application:", r);
-            return;
-        }
-    }
-    char text[FM_NAME + 160], type[40];
-    snprintf(text, sizeof(text), "Files cannot open '%s'.\nNo program is registered for files of type\n'%s'.",
-             e->name, fm_type_name(e, type, sizeof(type)));
-    du_message(a->ui, D_INFO, "Open With", text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+    if (!with_note && e->meta.exec) { char *argv[]={e->name,NULL}; int r=spawn(a,path,argv); if (r<0) files_launch_failed(a,r); return; }
+    if (with_note) { char *argv[]={"ciuknote",path,NULL}; int r=spawn(a,"/Programs/ciuknote",argv); if (r<0) files_launch_failed(a,r); return; }
+    int r=operation_open(a,path);
+    if (r==-ENOEXEC) open_with(a,path);
+    else if (r<0) files_launch_failed(a,r);
 }
 
 /* ---- jobs ---- */
@@ -1246,14 +1306,16 @@ static int job_begin(struct files_app *a)
     if (a->job_active || a->loading) return -EBUSY;
     int r=transfer_start(a);
     if (r) { error_box(a,"Files","Cannot start the file worker:",r); return r; }
+    a->transfer->prepare=NULL; a->transfer->ctx=NULL;
     fm_job_destroy(&a->job);
     return 0;
 }
 static void job_launch(struct files_app *a)
 {
+    a->job.record_undo=!a->job.undoing && a->job.kind!=FM_PROPERTIES && fm_undo_supported(&a->job.fs);
     a->job.chunk=FM_CHUNK;
     a->job_active=1;
-    a->transfer->prepare=a->job.kind==FM_PROPERTIES ? property_prepare : NULL; a->transfer->ctx=a;
+    if (a->job.kind==FM_PROPERTIES) { a->transfer->prepare=property_prepare; a->transfer->ctx=a; }
     fm_transfer_reset(a->transfer);
     a->job_ui_ns=job_now();
     du_timer_start(a->ui,T_JOB,1000000000ull,0); /* visible elapsed time, not result polling */
@@ -1333,17 +1395,46 @@ static void property_page(struct files_app *a)
     int tools=a->property_drive>=0 && d->items[3].active==1;
     int version=a->property_drive<0 && d->items[3].active==1;
     for (unsigned i=4;i<d->count;i++) d->items[i].hidden=(uint8_t)(tools || version);
+    if (a->property_drive>=0) {
+        struct du_widget *button=du_property_control(a->ui,9,DU_BUTTON,C_DEFRAG,(struct du_rect){24,252,190,25},"&Defragment Now...");
+        button->hidden=!tools; button->disabled=!a->media_defrag;
+    }
+    if (a->property_drive>=0 && a->backup_call && d->count>6) d->items[6].hidden=(uint8_t)!tools;
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nDefragment Now: Disk Defragmenter is not installed." : version ? a->property_version : a->property_text);
+        (a->backup_call ? "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
     struct files_app *a=ctx;
+    if (e->type==DU_EV_ACTIVATE && e->id==C_DEFRAG && a->property_drive>=0) {
+        a->disk_drive=a->property_drive; a->disk_pending=4; du_dialog_close(u); return;
+    }
+    if (e->type==DU_EV_ACTIVATE && e->id==C_CLEANUP && a->property_drive>=0) {
+        a->disk_drive=a->property_drive; a->disk_pending=1; du_dialog_close(u); return;
+    }
+    if (e->type==DU_EV_ACTIVATE && e->id==C_BACKUP && a->property_drive>=0) {
+        char source[16]; snprintf(source,sizeof(source),a->property_drive==2 ? "/" : "/mnt/%c",'a'+a->property_drive);
+        du_dialog_close(u); (void)files_backup_open(a,source,NULL,0); return;
+    }
     if (e->type==DU_EV_SELECT && !a->property_options) property_page(a);
     if (e->type==DU_EV_CHANGE) { u->dialog.items[2].disabled=0; du_invalidate(u,u->dialog.box); }
 }
-/* Integer polar sectors. Start the blue used-space sector at noon;
- * the table bounds each 1/64 turn without floating point or libm. */
+/* Group bytes without locale state; Windows 98 drive properties show
+ * exact bytes alongside binary megabytes, even on small volumes. */
+static void drive_space_text(char out[64], uint64_t bytes)
+{
+    char digits[24], grouped[32];
+    snprintf(digits,sizeof(digits),"%llu",(unsigned long long)bytes);
+    size_t len=strlen(digits), n=0;
+    for (size_t i=0;i<len;i++) {
+        if (i && (len-i)%3==0) grouped[n++]=',';
+        grouped[n++]=digits[i];
+    }
+    grouped[n]=0;
+    snprintf(out,64,"%s bytes %llu MB",grouped,(unsigned long long)(bytes/1048576));
+}
+/* Elliptical top and shaded front thickness, integer-only. A unit ray is
+ * chosen in the untilted disc so the used/free ratio survives projection. */
 static void property_paint(struct du_ui *u,void *ctx)
 {
     struct files_app *a=ctx;
@@ -1353,19 +1444,27 @@ static void property_paint(struct du_ui *u,void *ctx)
     const struct ciuki_media_space *sp=&a->property_space;
     uint32_t total=sp->total_clusters, free=sp->free_clusters>total ? total : sp->free_clusters;
     unsigned used=total ? (unsigned)((uint64_t)(total-free)*64/total) : 0;
-    int cx=u->dialog.box.x+u->dialog.box.w-72,cy=u->dialog.box.y+214;
-    for (int y=-34;y<=34;y++) for (int x=-34;x<=34;x++) if (x*x+y*y<=34*34) {
-        unsigned angle=0; int best=-100000;
-        /* Choose the nearest clockwise unit ray, without atan2/libm. */
-        for (unsigned k=0;k<64;k++) {
-            unsigned q=k/16,t=k%16; int sn=sine[t],cs=sine[16-t];
-            int vx=q==0 ? sn : q==1 ? cs : q==2 ? -sn : -cs;
-            int vy=q==0 ? -cs : q==1 ? sn : q==2 ? cs : -sn;
-            int dot=vx*x+vy*y;
-            if (dot>best) { best=dot; angle=k; }
+    const uint32_t blue=0xff2059c5u,purple=0xffc52dafu;
+    int pitch=desk_font_line(desk_theme->font_ui)+1;
+    int legend_y=u->dialog.box.y+DESK_TITLE+42+3*pitch;
+    du_fill(&u->canvas,(struct du_rect){u->dialog.box.x+24,legend_y,10,10},blue);
+    du_fill(&u->canvas,(struct du_rect){u->dialog.box.x+24,legend_y+pitch,10,10},purple);
+    int cx=u->dialog.box.x+366,cy=u->dialog.box.y+250;
+    /* Back-to-front layers leave a ten-pixel front wall below the top. */
+    for (int layer=1;layer>=0;layer--) for (int y=-32;y<=32;y++) for (int x=-96;x<=96;x++)
+        if (x*x+9*y*y<=96*96) {
+            unsigned angle=0; int best=-100000;
+            for (unsigned k=0;k<64;k++) {
+                unsigned q=k/16,t=k%16; int sn=sine[t],cs=sine[16-t];
+                int vx=q==0 ? sn : q==1 ? cs : q==2 ? -sn : -cs;
+                int vy=q==0 ? -cs : q==1 ? sn : q==2 ? cs : -sn;
+                int dot=vx*x+vy*y*3;
+                if (dot>best) { best=dot; angle=k; }
+            }
+            uint32_t colour=angle<used ? blue : purple;
+            if (layer) colour=(colour&0xff000000u)|((colour&0xfefefeu)>>1);
+            du_fill(&u->canvas,(struct du_rect){cx+x,cy+y,1,layer ? 11 : 1},colour);
         }
-        du_fill(&u->canvas,(struct du_rect){cx+x,cy+y,1,1},angle<used ? 0xff2059c5u : 0xffc52dafU);
-    }
 }
 static int property_accept(struct du_ui *u,int button,void *ctx)
 {
@@ -1444,18 +1543,21 @@ static void properties_dialog(struct files_app *a)
     d->accept=property_accept; d->accept_ctx=a; d->changed=property_changed; d->paint=property_paint; d->sheet_ctx=a;
     d->items[2].disabled=1;
     if (a->property_drive>=0) {
-        char used[48]="Unavailable",free_text[48]="Unavailable",capacity[48]="Unavailable";
+        char used[64]="Unavailable",free_text[64]="Unavailable",capacity[64]="Unavailable";
         struct ciuki_media_space *sp=&a->property_space;
         if (a->property_have_space) {
             uint64_t total=(uint64_t)sp->total_clusters*sp->cluster_bytes;
-            uint64_t free=(uint64_t)sp->free_clusters*sp->cluster_bytes;
-            files_size_text(capacity,sizeof(capacity),total);
+            uint64_t free=(uint64_t)(sp->free_clusters>sp->total_clusters ? sp->total_clusters : sp->free_clusters)*sp->cluster_bytes;
+            drive_space_text(capacity,total);
             if (sp->flags & CIUKI_MEDIA_SPACE_COUNTING) { strcpy(used,"calculating..."); strcpy(free_text,"calculating..."); }
-            else { files_size_text(used,sizeof(used),total>free ? total-free : 0); files_size_text(free_text,sizeof(free_text),free); }
+            else { drive_space_text(used,total-free); drive_space_text(free_text,free); }
         }
-        snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\nUsed space:\t%s (blue)\nFree space:\t%s (purple)\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
+        snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\n    Used space:\t%s\n    Free space:\t%s\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
         struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){24,178,220,23},a->property_label);
         w->disabled=!a->set_label || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
+        if (a->backup_call) du_property_control(a->ui,6,DU_BUTTON,C_BACKUP,(struct du_rect){24,157,150,25},"&Backup Now...");
+        w=du_property_control(a->ui,5,DU_BUTTON,C_CLEANUP,(struct du_rect){24,220,150,25},"Disk &Cleanup...");
+        w->disabled=a->property_drive<2 || !a->property_have_space || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
     } else {
         static const char *const names[]={"&Read-only","&Hidden","&Archive","&System"};
         for (unsigned i=0;i<4;i++) {
@@ -1502,10 +1604,12 @@ __attribute__((noinline)) static void job_finished(struct files_app *a)
      * copies the text; on the stack it pushed job_tick over the 4 KiB frame limit. */
     static char report[DU_DIALOG_TEXT];
     char report_title[64]; int report_icon = 0;
-    if (kind != FM_PROPERTIES && fm_job_report(j, report_title, sizeof(report_title), report, sizeof(report), &report_icon))
+    if (a->transfer->prepare==operations_undo_prepare && j->state==FM_FAILED)
+        error_box(a,"Undo","Cannot undo the last file operation:",-j->error);
+    else if (kind != FM_PROPERTIES && fm_job_report(j, report_title, sizeof(report_title), report, sizeof(report), &report_icon))
         du_message(a->ui, D_ERROR, report_title, report, report_icon, NULL, 0, 0, 0);
     else if (j->state == FM_FAILED) {
-        const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->sources[0];
+        const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->count ? j->sources[0] : "";
         char what[FM_NAME + 40];
         snprintf(what, sizeof(what), "Cannot %s %.200s:", verb(kind), fm_basename(source));
         error_box(a, "Error Reading File or Folder", what, -j->error);
@@ -1515,6 +1619,7 @@ __attribute__((noinline)) static void job_finished(struct files_app *a)
         files_update(a);
         return;
     }
+    if (kind==FM_COPY || kind==FM_MOVE) disk_allocation_completed(a);
     a->select_created = (kind == FM_COPY || kind == FM_MOVE) && j->created_count && fm_same_path(j->destination, a->model.path);
     scan_submit(a, SCAN_REFRESH, NULL, 0);
     if (kind == FM_MOVE && !j->bin && j->state == FM_DONE && !j->skipped && !j->kept && !j->kept_folders && a->model.cut) fm_clipboard_consume(&a->model);
@@ -1570,6 +1675,8 @@ static void files_service(struct du_ui *u,void *ctx)
 {
     (void)u; struct files_app *a=ctx;
     scan_poll(a); job_tick(a);
+    disk_service(a);
+    if (a->show_folder_options && !a->loading && !a->job_active && !du_dialog_id(a->ui)) { a->show_folder_options=0;folder_options(a); }
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
         files_properties_path(a,a->property_request); a->property_request[0]=0;
     }
@@ -1796,6 +1903,8 @@ static void bin_properties(struct files_app *a)
     bin_scope_show(a);
 }
 
+#include "search_ui.inc"
+
 static void properties(struct files_app *a)
 {
     if (fm_is_recycle(a->model.path)) {
@@ -1838,6 +1947,8 @@ static void popup_add(struct files_app *a, const char *label, int id, unsigned f
         a->popup[a->popup_count++] = (struct du_menu_item){label, id, 0, 0, flags};
 }
 
+#include "operations_ui.inc"
+
 static void context(struct files_app *a, const struct du_event *e)
 {
     a->popup_count = 0;
@@ -1858,13 +1969,28 @@ static void context(struct files_app *a, const struct du_event *e)
             return;
         }
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
+        if (m->searching) popup_add(a, "Open Containing &Folder", C_FIND_FOLDER, 0);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
-        if (kind != FM_KIND_FOLDER) popup_add(a, "Open with &CiukNote", C_OPEN_NOTE, 0);
+        int drive=!m->path[0] ? disk_target(a) : -1;
+        if (drive>=0) {
+            popup_add(a,"Disk &Defragmenter...",C_DEFRAG,a->media_defrag && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
+            if (drive>=3 && a->media.type[drive]!=CIUKI_MEDIA_USB && a->media.type[drive]!=CIUKI_MEDIA_FLOPPY)
+                popup_add(a,"Drive &Converter (FAT32)...",C_CONVERT,a->media_convert && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
+            if (drive<2 && a->media.type[drive]==CIUKI_MEDIA_FLOPPY) popup_add(a,"&Copy Disk...",C_COPY_DISK,a->media_image ? 0 : DU_ITEM_DISABLED);
+            if (a->backup_call) popup_add(a,"&Backup...",C_BACKUP,0);
+            if (drive>=2) popup_add(a,"Disk &Cleanup...",C_CLEANUP,a->media.type[drive]==CIUKI_MEDIA_OPTICAL ? DU_ITEM_DISABLED : 0);
+            if (a->media.type[drive]==CIUKI_MEDIA_USB || a->media.type[drive]==CIUKI_MEDIA_FLOPPY)
+                popup_add(a,"&Format...",C_FORMAT,a->media_format ? 0 : DU_ITEM_DISABLED);
+        }
+        if (kind != FM_KIND_FOLDER) popup_add(a, "Open &With...", FILES_OPEN_WITH, 0);
         if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
             popup_add(a, "Play in &Music Player", C_MUSIC, 0);
+        if (a->backup_call && n==1) popup_add(a,"&Backup / Restore...",C_BACKUP,0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Cu&t", C_CUT, 0); popup_add(a, "&Copy", C_COPY, 0);
+        popup_add(a,"Create &Shortcut",FILES_SHORTCUT,0); popup_add(a,"Send &To...",FILES_SEND_TO,0);
+        popup_add(a,"Copy To Folder...",FILES_COPY_TO,0); popup_add(a,"Move To Folder...",FILES_MOVE_TO,0);
         if (kind == FM_KIND_FOLDER && n == 1) popup_add(a, "&Paste", C_PASTE_INTO, m->clipboard_count ? 0 : DU_ITEM_DISABLED);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "&Delete", C_DELETE, 0); popup_add(a, "Rena&me", C_RENAME, n == 1 ? 0 : DU_ITEM_DISABLED);
@@ -1898,15 +2024,17 @@ static void context(struct files_app *a, const struct du_event *e)
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Refres&h", C_REFRESH, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "&Paste", C_PASTE, m->clipboard_count ? 0 : DU_ITEM_DISABLED);
+        popup_add(a, "&Paste", C_PASTE, !m->searching && m->clipboard_count ? 0 : DU_ITEM_DISABLED);
+        popup_add(a,"Paste &Shortcut",FILES_PASTE_SHORTCUT,!m->searching && m->clipboard_count?0:DU_ITEM_DISABLED); popup_add(a,"&Undo",FILES_UNDO,0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "New &Folder", C_NEW_FOLDER, 0); popup_add(a, "New &Text Document", C_NEW_TEXT, 0);
+        popup_add(a, "New &Folder", C_NEW_FOLDER, m->searching ? DU_ITEM_DISABLED : 0); popup_add(a, "New &Text Document", C_NEW_TEXT, m->searching ? DU_ITEM_DISABLED : 0);
+        popup_add(a,"New &Shortcut...",FILES_NEW_SHORTCUT,m->searching ? DU_ITEM_DISABLED : 0); popup_add(a,"New &Bitmap Image",FILES_NEW_BITMAP,m->searching ? DU_ITEM_DISABLED : 0); popup_add(a,"New &Document...",FILES_NEW_REGISTERED,m->searching ? DU_ITEM_DISABLED : 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "P&roperties", C_PROPERTIES, 0);
+        popup_add(a, "P&roperties", C_PROPERTIES, m->searching ? DU_ITEM_DISABLED : 0);
         files_update(a);
     } else if ((e->id == W_TREE || e->id == W_PLACES) && e->index >= 0) {
         const char *path = e->id == W_TREE ? a->tree[e->index].path : a->places[e->index].path;
-        if (!fm_same_path(path, a->model.path)) files_navigate(a, path);
+        if (m->searching || !fm_same_path(path, a->model.path)) files_navigate(a, path);
         popup_add(a, "&Open", C_TREE_OPEN, DU_ITEM_DEFAULT);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
@@ -1919,10 +2047,11 @@ static void context(struct files_app *a, const struct du_event *e)
 
 static void help(struct files_app *a)
 {
+    if (!du_help(a->ui, NULL)) return;   /* G15: the Files topic in CiukiOS Help; the box below when Help cannot start */
     du_message(a->ui, D_INFO, "Files Help",
                "Enter\tOpen the selection\nBackspace\tUp one level\nAlt+Left/Right\tBack and Forward\n"
-               "Alt+D, F4\tAddress bar\nF2\tRename\nF5\tRefresh\nDel\tDelete permanently\nAlt+Enter\tProperties\n"
-               "Ctrl+C/X/V\tCopy, Cut, Paste\nCtrl+A\tSelect all\n---\nType the first letters of a name to select it.\n"
+               "Alt+D, F4\tAddress bar\nF2\tRename\nF5\tRefresh\nDel\tMove to the Recycle Bin\nShift+Del\tDelete permanently\nAlt+Enter\tProperties\n"
+               "Ctrl+C/X/V\tCopy, Cut, Paste\nCtrl+Z\tUndo the last file operation\nCtrl+A\tSelect all\n---\nType the first letters of a name to select it.\n"
                "Copies cannot keep dates and attributes in this release.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
 }
 
@@ -1956,12 +2085,36 @@ static void command(struct files_app *a, int id)
     if (!m->path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
         id == C_PASTE_INTO || id == C_DELETE || id == C_DELETE_NOW || id == C_RENAME || id == C_NEW_FOLDER || id == C_NEW_TEXT ||
         id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
+    if (m->searching && (id == C_PASTE || id == C_NEW_FOLDER || id == C_NEW_TEXT || (id == C_PROPERTIES && !fm_selected(m, NULL)))) return;
+    if (operations_command(a,id)) return;
     int in_bin = fm_is_recycle(m->path);
     /* G2: the bin keeps its items as stored; nothing is created, renamed, cut or pasted there. */
     if (in_bin && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE || id == C_PASTE_INTO || id == C_RENAME ||
                    id == C_NEW_FOLDER || id == C_NEW_TEXT || id == C_MUSIC || id == C_SAFE_REMOVE)) return;
     if (!in_bin && (id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
     switch (id) {
+    case C_FIND: files_find(a); break;
+    case C_FIND_STOP: if (a->find_running) files_find(a); break;
+    case C_FIND_FOLDER: { char p[FM_PATH]; if (m->searching && m->active < m->count && !fm_entry_path(m, m->active, p) && !fm_parent(p, p)) files_navigate(a, p); break; }
+    case C_DEFRAG: case C_CONVERT: {
+        int drive=disk_target(a);
+        if (drive>=0) (void)files_maintenance_open(a,(unsigned)drive,id==C_CONVERT);
+        break;
+    }
+    case C_BACKUP: {
+        char source[FM_PATH];
+        if (a->model.active<a->model.count && !fm_entry_path(&a->model,a->model.active,source)) {
+            size_t n=strlen(source); int archive=n>4 && fm_same_path(source+n-4,".cbk");
+            (void)files_backup_open(a,archive ? NULL : source,archive ? source : NULL,archive ? 3 : 0);
+        }
+        break;
+    }
+    case C_COPY_DISK: { int drive=disk_target(a); if (drive>=0) (void)files_copy_disk_open(a,(unsigned)drive); break; }
+    case C_CLEANUP: case C_FORMAT: {
+        int drive=disk_target(a);
+        if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);
+        break;
+    }
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
         if (d<3) break;
@@ -1974,7 +2127,13 @@ static void command(struct files_app *a, int id)
             static const char *const buttons[]={"&OK"};
             du_message(a->ui,D_INFO,"Drive is in use",text,DU_DLG_ICON_WARNING,buttons,1,0,0);
         } else if (r) error_box(a,"Safely remove","The drive could not be safely removed:",r);
-        else { files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
+        else {
+            /* Raw/blank-media slots outlive a missing /mnt directory. The
+             * acknowledged removal must expire this cached slot immediately. */
+            a->media.removable_mask&=~(1u<<(unsigned)d);
+            a->media.type[d]=optical ? CIUKI_MEDIA_NONE : CIUKI_MEDIA_SAFE_REMOVED;
+            a->model.drive_slots=floppy_slots(a);
+            files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;
     }
     case C_BACK: case C_FORWARD:
@@ -1994,8 +2153,8 @@ static void command(struct files_app *a, int id)
     case C_EMPTY_BIN: confirm_empty(a); break;
     case C_BIN_PROPS: bin_properties(a); break;
     case C_GO_BIN: files_navigate(a, "/Programs"); break;
-    case C_GO_DESKTOP: files_navigate(a,"/Documents/Desktop"); break;
-    case C_GO_DOCUMENTS: files_navigate(a, "/Documents"); break;
+    case C_GO_DESKTOP: { char path[FM_PATH]; profile_child(path,sizeof(path),"Desktop"); files_navigate(a,path); break; }
+    case C_GO_DOCUMENTS: files_navigate(a, profile_home()); break;
     case C_GO_GAMES: files_navigate(a, "/Games"); break;
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;
@@ -2009,7 +2168,7 @@ static void command(struct files_app *a, int id)
     case C_PASTE: paste(a, m->path); break;
     case C_PASTE_INTO: {
         char p[FM_PATH];
-        if (m->active < m->count && m->entries[m->active].meta.type == FM_DIR && !fm_join(p, m->path, m->entries[m->active].name)) paste(a, p);
+        if (m->active < m->count && m->entries[m->active].meta.type == FM_DIR && !fm_entry_path(m, m->active, p)) paste(a, p);
         break;
     }
     case C_DELETE: if (in_bin) confirm_purge(a); else confirm_delete(a, 0); break;
@@ -2061,7 +2220,13 @@ static void command(struct files_app *a, int id)
 
 static void dialog_result(struct files_app *a, const struct du_event *e)
 {
+    if (operations_result(a,e)) return;
+    if (disk_dialog_result(a,e)) return;
     switch (e->id) {
+    case D_FIND:
+        if (e->index == 2) { a->find_page = (a->find_page + 1) % 3; find_dialog(a); }
+        else if (e->index == 0) { a->note[0] = 0; int r = scan_submit(a, SCAN_SEARCH, NULL, 0); if (r) error_box(a, "Find", "Cannot start the search:", r); }
+        break;
     case D_DELETE:
         if (a->drop_count) { if (e->index == 0) start_bin_job(a, BIN_DELETE, a->drop_paths, a->drop_count, 0); drop_free(a); }
         else if (e->index == 0) run_delete(a);
@@ -2093,6 +2258,7 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
 /* The toolkit acknowledges the shell request while confirmation/cleanup waits. */
 int files_close_request(struct files_app *a)
 {
+    if (files_disk_busy(a)) return disk_close_request(a);
     if (!a->job_active) return 1;
     if (du_dialog_id(a->ui)!=D_CANCEL_JOB && !a->close_pending)
         du_message(a->ui,D_CANCEL_JOB,"Cancel Operation?","Cancel the current operation and close Files?",DU_DLG_ICON_QUESTION,yes_no,2,1,1);
@@ -2124,6 +2290,7 @@ static void list_select(struct files_app *a, const struct du_event *e)
 
 static void key(struct files_app *a, const struct du_event *e)
 {
+    if (e->key == FM_FIND_KEY && !e->modifiers) { files_find(a); return; }
     int focus = du_focused(a->ui);
     if (e->key == DU_KEY_F4 && !(e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT))) { command(a, C_ADDRESS); return; }
     /* G2: Shift+Delete bypasses the Recycle Bin (the plain Delete is a menu accelerator). */
@@ -2251,7 +2418,7 @@ static int drag_destination(struct files_app *a, int x, int y, char destination[
             *widget = W_LIST; *index = i;
             return fm_entry_path(&a->model, (unsigned)i, destination);
         }
-        if (!a->model.path[0]) return -EPERM;
+        if (!a->model.path[0] || a->model.searching) return -EPERM;
         *widget = W_LIST;
         snprintf(destination, FM_PATH, "%s", a->model.path); return 0;
     }
@@ -2287,7 +2454,7 @@ static unsigned drag_evaluate(struct files_app *a, int x, int y, unsigned keys, 
     }
     /* Copy and move only: CiukiOS has no native file shortcuts (link). A CD
      * source cannot be moved; a CD target accepts nothing. */
-    *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY : FM_EFFECT_COPY | FM_EFFECT_MOVE;
+    *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY | FM_EFFECT_LINK : FM_EFFECTS;
     for (unsigned i = 0; i < a->drag_count && *allowed; i++) if (a->drag_types[i] == 'D' && fm_beneath(destination, a->drag_paths[i])) *allowed = 0;
     unsigned effect = fm_drop_effect(source, target, keys, *allowed);
     if (effect && fm_drop_check(a->drag_paths, a->drag_count, destination, effect)) effect = FM_EFFECT_NONE;
@@ -2355,7 +2522,12 @@ void files_drag_drop(struct files_app *a, uint32_t serial, int x, int y, unsigne
     unsigned chosen = r ? FM_EFFECT_NONE : drag_evaluate(a, x, y, keys, destination, &allowed);
     drag_highlight(a, 0, -1);
     if (r) { error_box(a, "Files", "Cannot read the dragged items:", r); return; }
-    if (chosen != effect || (effect != FM_EFFECT_COPY && effect != FM_EFFECT_MOVE)) return;
+    if (chosen != effect || !(effect & FM_EFFECTS)) return;
+    if (effect==FM_EFFECT_LINK) {
+        struct fm_model *target=calloc(1,sizeof(*target)); int r=-ENOMEM;
+        if (target) { fm_init(target,&a->model.fs); strcpy(target->path,destination); r=fm_link_selection(target,a->drag_paths,a->drag_count); fm_destroy(target); free(target); }
+        operations_refreshed(a,r); return;
+    }
     if (fm_is_recycle(destination)) { drop_delete(a); return; }
     job_record("[files] drop effect=%s items=%u", effect == FM_EFFECT_MOVE ? "move" : "copy", a->drag_count);
     start_job(a, effect == FM_EFFECT_MOVE ? FM_MOVE : FM_COPY, a->drag_paths, a->drag_count, destination);
@@ -2396,7 +2568,7 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         if (e->id == T_JOB) job_tick(a);
         else if (e->id == T_DRAG_REFRESH) drag_refresh(a);
         else if (e->id == T_BROWSER) scan_poll(a);
-        else if (e->id == T_MEDIA && a->media_read && !a->loading && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
+        else if (e->id == T_MEDIA && a->media_read && !a->loading && !a->job_active && !a->model.searching && a->rename_index<0 && !du_dialog_id(a->ui)) {
             struct files_worker *w = a->worker;
             if (w && !pthread_mutex_trylock(&w->lock)) {
                 int idle = !w->busy && !w->pending && !w->result;
@@ -2429,11 +2601,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
     case DU_EV_SELECT:
         if (e->id == W_LIST) list_select(a, e);
         else if (e->id == W_TREE && e->index >= 0 && (unsigned)e->index < a->tree_count) {
-            if (!fm_same_path(a->tree[e->index].path, a->model.path)) { char p[FM_PATH]; strcpy(p, a->tree[e->index].path); files_navigate(a, p); }
+            if (a->model.searching || !fm_same_path(a->tree[e->index].path, a->model.path)) { char p[FM_PATH]; strcpy(p, a->tree[e->index].path); files_navigate(a, p); }
             du_focus(a->ui, W_TREE);
         } else if (e->id == W_PLACES && e->index >= 0 && (unsigned)e->index < a->place_count) {
             if (!strcmp(a->places[e->index].path, "control:")) open_control(a);
-            else if (!fm_same_path(a->places[e->index].path, a->model.path)) files_navigate(a, a->places[e->index].path);
+            else if (a->model.searching || !fm_same_path(a->places[e->index].path, a->model.path)) files_navigate(a, a->places[e->index].path);
         }
         break;
     case DU_EV_OPEN:
@@ -2442,7 +2614,8 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         break;
     case DU_EV_SORT: {
         unsigned column = (unsigned)e->index;
-        if (fm_is_recycle(a->model.path)) column = column < 6 ? bin_key_of_header[column] : 0;   /* G2: the bin's Details order differs */
+        if (a->model.searching && column == 4u + (unsigned)a->attribute_column) column = FM_SORT_LOCATION;
+        else if (fm_is_recycle(a->model.path)) column = column < 6 ? bin_key_of_header[column] : 0;   /* G2: the bin's Details order differs */
         fm_sort(&a->model, column, a->model.sort == column ? !a->model.descending : 0);
         files_update(a);
         break;
@@ -2466,19 +2639,23 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->tree = calloc(FILES_TREE, sizeof(*a->tree));
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
-    copy_menu(a->file_items, file_template, 11); copy_menu(a->bin_items, bin_template, BIN_ITEMS); copy_menu(a->edit_items, edit_template, 6);
-    copy_menu(a->view_items, view_template, 12); copy_menu(a->go_items, go_template, 14); copy_menu(a->help_items, help_template, 3);
-    a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
-    a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 6};
-    a->menus[2] = (struct du_menu){"&View", a->view_items, 12};
+    copy_menu(a->file_items, file_template, sizeof(file_template)/sizeof(*file_template)); copy_menu(a->bin_items, bin_template, BIN_ITEMS); copy_menu(a->edit_items, edit_template, sizeof(edit_template)/sizeof(*edit_template));
+    copy_menu(a->view_items, view_template, sizeof(view_template)/sizeof(*view_template)); copy_menu(a->go_items, go_template, 14); copy_menu(a->help_items, help_template, 3);
+    a->menus[0] = (struct du_menu){"&File", a->file_items, sizeof(file_template)/sizeof(*file_template)};
+    a->menus[1] = (struct du_menu){"&Edit", a->edit_items, sizeof(edit_template)/sizeof(*edit_template)};
+    a->menus[2] = (struct du_menu){"&View", a->view_items, sizeof(view_template)/sizeof(*view_template)};
     a->menus[3] = (struct du_menu){"&Go", a->go_items, 14};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
-    u->menus = a->menus; u->menu_count = 5;
+    a->tools_items[0] = (struct du_menu_item){"&Find Files or Folders...", C_FIND, FM_FIND_KEY, 0, 0};
+    a->tools_items[1] = (struct du_menu_item){"&Stop Search", C_FIND_STOP, 0, 0, 0};
+    a->menus[5] = a->menus[4]; a->menus[4] = (struct du_menu){"&Tools", a->tools_items, 2};
+    u->menus = a->menus; u->menu_count = 6;
     struct du_rect zero = {0, 0, 0, 0};
     du_add(u, DU_SEPARATOR, W_BAND1, zero, "");
     for (unsigned i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); i++) {
         struct du_widget *b = du_add(u, DU_TOOLBUTTON, toolbar[i].id, zero, toolbar[i].label);
         b->icon = named(toolbar[i].icon, 22); b->icon_size = 22;
+        snprintf(b->tip, sizeof(b->tip), "%s", toolbar[i].label);   /* G15: tooltip after the pointer rests on the button */
         if (toolbar[i].id == C_VIEWS) b->dropdown = 12;
     }
     du_add(u, DU_SEPARATOR, W_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP3, zero, "");
@@ -2520,6 +2697,9 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
 
 void files_destroy(struct files_app *a)
 {
+    operations_destroy(a);
+    fm_drag_free(a->shell_paths,NULL,a->shell_count); a->shell_paths=NULL; a->shell_count=0;
+    disk_stop(a);
     a->ui->service=NULL;
     du_timer_stop(a->ui,T_DRAG_REFRESH);
     fm_drag_free(a->drag_paths,a->drag_types,a->drag_count); a->drag_paths=NULL; a->drag_types=NULL; a->drag_count=0;
@@ -2537,6 +2717,8 @@ void files_destroy(struct files_app *a)
     a->rows = NULL; a->texts = NULL; a->tree = NULL; a->tree_items = NULL;
 }
 
+#include "disk_ui.inc"
+
 void files_drop(struct files_app *a, int x, int y, int copy)
 {
     if (a->loading || a->job_active || du_dialog_id(a->ui) || a->rename_index>=0) return;
@@ -2547,7 +2729,7 @@ void files_drop(struct files_app *a, int x, int y, int copy)
     else {
         index=du_list_hit(W(a,W_TREE),x,y);
         if (index>=0 && (unsigned)index<a->tree_count) snprintf(destination,sizeof(destination),"%s",a->tree[index].path);
-        else if (!du_contains(du_list_body(W(a,W_LIST)),x,y)) return;
+        else if (a->model.searching || !du_contains(du_list_body(W(a,W_LIST)),x,y)) return;
     }
     int r=fm_clipboard_load(&a->model);
     if (r) { error_box(a,"Paste","Cannot read the file clipboard:",r); return; }

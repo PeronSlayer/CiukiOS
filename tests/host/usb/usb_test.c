@@ -33,6 +33,9 @@ bool drivers_input_firmware(void)
 static struct resource leases[64];
 static unsigned lease_count, generation;
 static unsigned claims, writes, events, key_downs, key_ups, repeats, wheel_events;
+static unsigned keyboard_delay=500,keyboard_interval=33;
+unsigned input_repeat_delay(void){return keyboard_delay;}
+unsigned input_repeat_interval(void){return keyboard_interval;}
 static unsigned held[513], buttons[3];
 static int last_x,last_y,last_wheel;
 static unsigned connect_records,disconnect_records,reset_records,enable_records;
@@ -803,12 +806,17 @@ static void basic(bool ohci,bool hub)
         hub_connects==2 && hub_disconnects==6 && m.hub_reset_requests==2 && !hub_failures);
     assert(kbd->address!=mouse->address && kbd->vendor==0x1234 && mouse->low_speed==!hub);
     unsigned kp=hub?2:0,mp=hub?3:1;
+    keyboard_delay=1000;keyboard_interval=200;
     m.dev[kp].report[0]=2;m.dev[kp].report[2]=4;m.dev[kp].report_len=8;
     m.dev[mp].report[0]=1;m.dev[mp].report[1]=0xfd;m.dev[mp].report[2]=7;m.dev[mp].report[3]=0xff;m.dev[mp].report_len=4;
     m.now+=20;model_step();
     assert(held[INPUT_KEY_A]==1 && held[0x2a]==1 && buttons[0]==1);
     assert(last_x==-3 && last_y==7 && last_wheel==-1 && wheel_events);
-    unsigned old=repeats;m.now+=INPUT_REPEAT_DELAY_MS;model_step();assert(repeats>old);
+    unsigned old=repeats;uint64_t first_repeat=kbd->hid[0].repeat_at;
+    m.now=first_repeat-100;model_step();assert(repeats==old);
+    m.now=first_repeat;model_step();assert(repeats>old);
+    assert(kbd->hid[0].repeat_at>m.now && kbd->hid[0].repeat_at-m.now<=keyboard_interval);
+    keyboard_delay=500;keyboard_interval=33;
     memset(m.dev[kp].report,0,8);m.dev[kp].report[2]=1;m.dev[kp].report_len=8;
     m.now+=20;model_step();assert(held[INPUT_KEY_A]==1); /* rollover holds */
     memset(m.dev[kp].report,0,8);m.dev[kp].report[2]=0x39;m.dev[kp].report_len=8;
@@ -1832,8 +1840,22 @@ static void hid_packet_capacity(bool ohci)
     printf("PASS F1-104b %s interrupt: 32/64 bytes in all 64 slots, retirement, previous/next/bulk guards, oversize/MPS refusal; arena=%u slot=%u bulk_td=%u bulk_buffer=%u\n",
            ohci ? "OHCI" : "UHCI",USB_DMA_BYTES,USB_HID_STRIDE,USB_BULK_TD,USB_BULK_BUFFER);
 }
+static void power_sleep(bool ohci)
+{
+    setup(ohci,false); assert(!attach());
+    unsigned leases=lease_count; gen_t generation=m.host.generation;
+    static uint8_t schedule[USB_DMA_BYTES]; memcpy(schedule,m.dma,sizeof(schedule));
+    for (unsigned cycle=0;cycle<2;cycle++) {
+        assert(!usb_host_suspend(&m.host) && m.host.suspended && !m.host.ready);
+        assert(!usb_host_irq(&m.host));
+        assert(!usb_host_resume(&m.host) && !m.host.suspended && m.host.ready);
+        assert(lease_count==leases && generation==m.host.generation && !memcmp(schedule,m.dma,sizeof(schedule)));
+    }
+    printf("PASS G11B %s: two suspend/resume cycles, retained schedules/claims, no reset\n",ohci?"OHCI":"UHCI");
+}
 int main(void)
 {
+    power_sleep(false); power_sleep(true);
     scan_option(); unsupported_hid_peer(false); unsupported_hid_peer(true); hid_packet_capacity(false); hid_packet_capacity(true);
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
     receiver_wheel();chained_bulk();binding_eighth_packet();

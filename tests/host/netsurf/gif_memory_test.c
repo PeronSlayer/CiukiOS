@@ -47,7 +47,7 @@ static unsigned decode(const uint8_t *data,size_t length)
 }
 int main(int argc,char **argv)
 {
-    assert(argc==2);uint8_t data[4096];
+    assert(argc==2);static uint8_t data[4096];
     FILE *file=fopen(argv[1],"rb");assert(file);
     size_t length=fread(data,1,sizeof(data),file);assert(feof(file) && length);fclose(file);
     allocation_count=0;unsigned decoded_allocs=decode(data,length);assert(decoded_allocs>=4);
@@ -69,9 +69,14 @@ int main(int argc,char **argv)
     assert(CIUKI_IMAGE_BYTES>=CIUKI_IMAGE_MIN_BYTES && CIUKI_IMAGE_BYTES<=CIUKI_IMAGE_MAX_BYTES);
     if(!getenv("CIUKI_NETSURF_FREE_BYTES"))assert(CIUKI_IMAGE_BYTES==7u*1024u*1024u);
     gif->info.width=1024;gif->info.height=(uint32_t)(CIUKI_IMAGE_BYTES*3/5/(4*1024));gif->decoded_frame=1;
-    /* Bitmap + restore would exceed the same ledger. */
+    /* Large GIFs use a sampled canvas, including their restore buffer. */
+    assert(nsgif__record_frame(gif,NULL)==NSGIF_OK);
+    assert(gif->sample>1 && gif->prev_frame && gif->output_height<gif->info.height);
+    ciuki_image_free(gif->prev_frame);gif->prev_frame=NULL;gif->prev_index=NSGIF_FRAME_INVALID;
+    size_t reserved=CIUKI_IMAGE_BYTES-ciuki_image_used();assert(!ciuki_image_reserve(reserved));
     assert(nsgif__record_frame(gif,NULL)==NSGIF_ERR_OOM);
     assert(gif->frame_image && !gif->prev_frame && ciuki_image_used()<=CIUKI_IMAGE_BYTES);
+    ciuki_image_release(reserved);
     nsgif_destroy(gif);assert(!ciuki_image_used());
     void *p=ciuki_image_malloc(100);assert(p);memset(p,0x7a,100);
     size_t used=ciuki_image_used();
@@ -79,4 +84,5 @@ int main(int argc,char **argv)
     assert(!ciuki_image_calloc(SIZE_MAX,2));ciuki_image_free(p);assert(!ciuki_image_used());
     puts("NetSurf GIF: shared memory-derived ledger, restore rejection/OOM, 1024-frame cap, overflow and allocation sweep passed");
     fflush(stdout);
+    return 0;
 }

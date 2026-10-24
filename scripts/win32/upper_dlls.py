@@ -71,10 +71,10 @@ def memory_model(pe):
 
 
 def read_images(folder):
-    """Only DLL/DRV/ACM providers from this explicit directory, no host Wine."""
+    """Only DLL/DRV/ACM/OCX providers from this explicit directory, no host Wine."""
     result = {}
     for path in sorted(Path(folder).iterdir()):
-        if path.suffix.lower() not in ('.dll', '.drv', '.acm') or not path.is_file():
+        if path.suffix.lower() not in ('.dll', '.drv', '.acm', '.ocx') or not path.is_file():
             continue
         name = path.name.lower()
         if name in result:
@@ -539,7 +539,7 @@ def reject_unqualified_wine(folder, store):
     """
     expected = {d['name'].lower() for d in store['dlls']}
     for path in Path(folder).iterdir():
-        if path.is_file() and path.suffix.lower() in ('.dll', '.drv', '.acm'):
+        if path.is_file() and path.suffix.lower() in ('.dll', '.drv', '.acm', '.ocx'):
             if path.name.lower() not in expected:
                 raise ValueError('unlisted builtin PE: ' + path.name)
     reused = [record for record in store['dlls'] if record.get('wine_reused') is True]

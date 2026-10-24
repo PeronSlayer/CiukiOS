@@ -510,10 +510,23 @@ static void long_interrupt_reports(void)
     usb_host_quarantine(hc(),"long_reports_end");
     puts("PASS F1-104b EHCI: 32/64-byte reports in all 64 slots, previous/next guards, retirement, oversize/MPS refusal");
 }
+static void sleep_resume(void)
+{
+    prepare_model(false);start_ehci(false);
+    static uint8_t schedule[USB_DMA_BYTES];memcpy(schedule,m.dma,sizeof(schedule));
+    gen_t generation=hc()->generation;unsigned leases=lease_count;
+    for(unsigned cycle=0;cycle<2;cycle++) {
+        assert(!usb_host_suspend(hc()) && hc()->suspended && !hc()->ready);
+        assert(!usb_host_resume(hc()) && hc()->ready && !hc()->suspended);
+        assert(generation==hc()->generation && leases==lease_count && !memcmp(schedule,m.dma,sizeof(schedule)));
+    }
+    usb_host_quarantine(hc(),"sleep_test_end");
+    puts("PASS G11B EHCI: retained periodic/async schedules and claims, two suspend/resume cycles");
+}
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    ownership_and_admission(); enumeration_hid(); bulk_and_unlink(); periodic_and_faults(); hub_tt();
+    sleep_resume(); ownership_and_admission(); enumeration_hid(); bulk_and_unlink(); periodic_and_faults(); hub_tt();
     split_budgets_recovery(); admission_and_failed_tt(); mixed_tree(); idle_interrupts(); irq_grace();
     stop_and_faults(); irq_lease_loss(); concurrent_hid_bulk();
     long_interrupt_reports();

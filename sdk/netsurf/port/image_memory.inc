@@ -23,6 +23,23 @@ int ciuki_image_reserve(size_t n)
 }
 void ciuki_image_release(size_t n) { image_bytes-=n; }
 size_t ciuki_image_used(void) { return image_bytes; }
+unsigned ciuki_image_scale(uint32_t w,uint32_t h,unsigned copies,uint32_t *ow,uint32_t *oh)
+{
+    if(!w || !h || w>65535 || h>65535 || !copies)return 0;
+    size_t available=CIUKI_IMAGE_BYTES-image_bytes;
+    /* Retain headroom for decoder rows, LZW and allocation headers. The
+     * ledger still rejects any scratch request that exceeds its remainder. */
+    if(available<=131072)return 0;
+    size_t pixels=(available-131072)/4/copies;
+    if(pixels>1024u*1024u)pixels=1024u*1024u;
+    unsigned scale=1;
+    for(;;) {
+        *ow=(w-1)/scale+1;*oh=(h-1)/scale+1;
+        if(*ow<=4096 && *oh<=4096 && (size_t)(*ow)*(*oh)<=pixels)return scale;
+        if(scale>=65536)return 0;
+        scale*=2;
+    }
+}
 void *ciuki_image_malloc(size_t n)
 {
     if(n>SIZE_MAX-sizeof(union image_header))return NULL;

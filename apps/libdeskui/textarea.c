@@ -540,7 +540,7 @@ int du_ta_text(struct du_textarea *ta, unsigned ch)
  * else (control characters, other scripts) is a hollow placeholder box. */
 static void draw_char(struct du_canvas *c, int x, int y, unsigned ch, uint32_t ink, int bold)
 {
-    if ((ch >= 0x20 && ch < 0x7f) || (ch >= 0xa0 && ch <= 0xff) || ch == 0x2022 || ch == 0x2026) {
+    if (desk_font_code_index(ch)>=0) {
         char s[4]; size_t n;
         if (ch < 0x80) { s[0] = (char)ch; n = 1; }
         else if (ch < 0x800) { s[0] = (char)(0xc0 | (ch >> 6)); s[1] = (char)(0x80 | (ch & 63)); n = 2; }
@@ -599,7 +599,7 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
         if (end < ta->len && ta->text[end] == '\n' && a <= end && b > end && col >= ta->left && col < ta->left + ta->cols)
             du_fill(c, (struct du_rect){ox + ((int)col - (int)ta->left) * DU_TA_CELL_W, y, DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
     }
-    if (focused && a == b) {
+    if (focused && !ta->caret_hidden && a == b) {
         unsigned vi, col; locate(ta, ta->cursor, ta->affinity, &vi, &col);
         if (vi >= ta->top && vi < ta->top + ta->rows && col >= ta->left && col <= ta->left + ta->cols)
             du_vline(c, ox + ((int)col - (int)ta->left) * DU_TA_CELL_W - 1, oy + (int)(vi - ta->top) * DU_TA_CELL_H + 1, DU_TA_CELL_H - 2, DU_INK);

@@ -730,6 +730,8 @@ static UINT idle_count, idle_calls;
 static UINT owner_messages[2048], owner_message_count;
 static WPARAM owner_last_command;
 static UINT owner_fontchange, owner_contextmenu;
+static UINT owner_help_count; /* G15: WM_HELP seen by the owner and its HELPINFO */
+static HELPINFO owner_help;
 static LRESULT W32API owner_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   if (owner_message_count < 2048)
     owner_messages[owner_message_count++] = m;
@@ -750,6 +752,11 @@ static LRESULT W32API owner_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     owner_fontchange++;
   if (m == WM_CONTEXTMENU)
     owner_contextmenu++;
+  if (m == WM_HELP) {
+    owner_help_count++;
+    owner_help = *(const HELPINFO *)lp;
+    return 1;
+  }
   return DefWindowProcA(h, m, wp, lp);
 }
 static BOOL seen(UINT m) {
@@ -821,6 +828,8 @@ static void harness_run(void) {
     test_menus();
   else if (!strcmp(mode, "msgbox"))
     test_msgbox();
+  else if (!strcmp(mode, "help"))
+    test_help();
   else if (!strcmp(mode, "installer"))
     test_installer();
   else if (!strcmp(mode, "frames"))

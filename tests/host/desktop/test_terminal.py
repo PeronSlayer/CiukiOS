@@ -26,9 +26,9 @@ class TerminalTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(archive.read_bytes()).hexdigest(), pin)
             source = lua.extract(archive, temp, 'lua-5.4.8') / 'src'
             upstream = sorted(p for p in source.glob('*.c') if p.name not in ('lua.c', 'luac.c'))
-            toolkit = ['draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map']
+            toolkit = ['draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea', 'icons', 'icon_map']
             sources = [*(ROOT / f'apps/libdeskui/{s}.c' for s in toolkit),
-                       *(ROOT / f'apps/terminal/{s}.c' for s in ('app', 'commands', 'lua')),
+                       *(ROOT / f'apps/terminal/{s}.c' for s in ('app', 'commands', 'script', 'lua')),
                        ROOT / 'apps/tasks/model.c', ROOT / 'apps/files/model.c',
                        ROOT / 'apps/desktop/compositor.c', ROOT / 'apps/desktop/theme.c',
                        ROOT / 'tests/host/desktop/fake_vfs.c', ROOT / 'tests/host/desktop/terminal_test.c', *upstream]

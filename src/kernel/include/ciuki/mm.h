@@ -121,7 +121,8 @@ int as_revoke_borrowed(struct aspace *, uint32_t va, uint32_t phys);
 int as_seal_borrowed(struct aspace *, uint32_t va, uint32_t phys);
 /* Replace 1..32 already-present pages within one table; no allocation or
  * ownership change. Caller excludes guest execution/interrupts. Return old
- * D/A bits as page masks, clear D, and flush the active AS once if changed.
+ * D/A bits as page masks, clear D, and INVLPG each changed entry of the
+ * active AS (fx-27: never a whole-TLB CR3 reload).
  * frames == NULL keeps frames/permissions (dirty collection only). */
 int as_replace_pages(struct aspace *, uint32_t va, const uint32_t *frames,
                      unsigned count, uint32_t flags, uint32_t *dirty, uint32_t *accessed);

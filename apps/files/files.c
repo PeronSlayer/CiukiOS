@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Files entry point: desktop channel, native VFS, program launching. */
 #include "app.h"
+#include "cleanup.h"
 #include "../desktop/autoplay.h"
 #include <ciuki/media.h>
 #include <ciuki/fileinfo.h>
@@ -11,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../desktop/tz_env.h"
@@ -35,6 +37,21 @@ static int launch_window(struct files_main *m, const char *name, const char *pat
     memcpy(msg.data + 12, name, length);
     desk_put32(msg.data + 12 + length, (uint32_t)n); memcpy(msg.data + 16 + length, path, n);
     return du_window_queue(&m->window, &msg) ? -errno : 0;
+}
+
+uint32_t files_registry_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *);
+static int shell_open(struct files_app *a,const char *path)
+{ return launch_window(a->user,"shell-open",path); }
+static int shell_record(struct files_app *a,const struct desk_launch_record *record)
+{
+    struct files_main *m=a->user;
+    uint8_t *bytes=malloc(DESK_LINK_BYTES); if (!bytes) return -ENOMEM;
+    unsigned n=desk_link_encode(record,bytes,DESK_LINK_BYTES);
+    if (!n) { free(bytes); return -EINVAL; }
+    char path[128]; snprintf(path,sizeof(path),"/system/settings/open-%u-%u.lnk",(unsigned)getpid(),m->launch_serial+1);
+    int e=fm_write_new(&a->model.fs,path,bytes,n); free(bytes);
+    if (!e) { e=shell_open(a,path); if (e) a->model.fs.unlink(a->model.fs.ctx,path); }
+    return e;
 }
 static void on_message(struct du_window *w, const struct desk_packet *p, void *user)
 {
@@ -75,7 +92,7 @@ static int launch(struct files_app *a, const char *program, char *const argv[])
     if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/control") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
     char tz[DESK_TZ_ENV_BYTES];
-    char *env[] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
+    char *env[] = {desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }
@@ -107,7 +124,7 @@ static void idle(void *arg)
     while (waitpid(-1, &status, WNOHANG) > 0) { }
     char display[FM_PATH], title[DESK_TITLE_MAX + 1];
     if (!fm_display_path(display, m->app.model.path)) {
-        snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
+        snprintf(title, sizeof(title), "%s - %.*s", m->app.model.searching ? "Find" : "Files", (int)sizeof(title) - 9, display);
         for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
         if (strcmp(title, m->title) && !du_window_set_title(&m->window, title)) strcpy(m->title, title);
     }
@@ -187,6 +204,38 @@ static int media_space(unsigned d,struct ciuki_media_space *sp)
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_SPACE,sp,sizeof(*sp)) ? -errno : 0; close(fd); return e;
 }
+static int media_defrag(int step,struct ciuki_media_defrag *r)
+{
+    int fd=open("/dev/media",O_RDONLY); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,step ? MEDIA_DEFRAG_STEP : MEDIA_DEFRAG_ANALYZE,r,sizeof(*r)) ? -errno : 0;
+    close(fd); return e;
+}
+static int media_convert(int execute,struct ciuki_media_convert *r)
+{
+    int fd=open("/dev/media",O_RDONLY); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,execute ? MEDIA_CONVERT : MEDIA_GET_CONVERT,r,sizeof(*r)) ? -errno : 0;
+    close(fd); return e;
+}
+static int media_format(int write,struct ciuki_media_format *request)
+{
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,write ? MEDIA_FORMAT : MEDIA_GET_FORMAT,request,sizeof(*request)) ? -errno : 0;
+    close(fd); return e;
+}
+static int native_backup(int mode,const char *archive,const char *source,const char *base,
+                          const char *root,enum bk_replace policy,const struct bk_callbacks *cb,struct bk_result *result)
+{
+    const struct fm_vfs *fs=fm_native_backup_vfs();
+    if (mode<2) { const char *sources[]={source}; return bk_create(fs,archive,sources,1,mode ? base : NULL,cb,result); }
+    return mode==2 ? bk_verify(fs,archive,cb,result) : bk_restore(fs,archive,*root ? root : NULL,policy,cb,result);
+}
+static int media_image(int write,struct ciuki_floppy_image *r,void *buffer)
+{
+    r->buffer=(uint32_t)(uintptr_t)buffer;
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,write ? MEDIA_FLOPPY_WRITE : MEDIA_FLOPPY_READ,r,sizeof(*r)) ? -errno : 0;
+    close(fd); return e;
+}
 static int native_info(const char *path,struct ciuki_file_info *info)
 { return ciuki_file_info_get(path,info) ? -errno : 0; }
 static int native_attributes(const char *path,uint32_t attributes)
@@ -215,7 +264,10 @@ static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_
 }
 int main(int argc, char **argv)
 {
-    int channel = 3, test = 0, bin_properties = 0;
+    (void)setlocale(LC_ALL, ""); /* G24: opt into the user's regional formats. */
+    int channel = 3, test = 0, bin_properties = 0, find = 0, shell_action=0, folder_options=0;
+    const char *shell_path=NULL; char shell_parent[FM_PATH];
+    char **shell_paths=NULL; unsigned shell_count=0;
     const char *path = FM_COMPUTER, *property=NULL;
     char property_parent[FM_PATH];
     for (int i = 1; i < argc; i++) {
@@ -224,9 +276,24 @@ int main(int argc, char **argv)
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strcmp(argv[i], "--test=files")) test = 1;
+        else if (!strcmp(argv[i],"--folder-options")) folder_options=1;
         else if (!strncmp(argv[i],"--properties=",13)) { property=argv[i]+13; if (!property[0]) return 2; }
         /* G2: the desktop's Recycle Bin icon opens the bin, or its Properties. */
         else if (!strcmp(argv[i], "recycle:properties")) { path = "Recycle Bin"; bin_properties = 1; }
+        else if (!strcmp(argv[i], "find:")) { find = 1; path = FM_COMPUTER; }
+        else if (!strncmp(argv[i],"--file-action=",14)) {
+            char *end; long action=strtol(argv[i]+14,&end,10);
+            if (*end!=':' || action<FILES_UNDO || action>FILES_NEW_REGISTERED) return 2;
+            shell_action=(int)action; shell_path=end+1;
+            if (shell_path[0]=='@') {
+                const char *manifest=shell_path+1;
+                if (strncmp(manifest,"/system/settings/selection-",27) || fm_shell_selection_read(fm_native_vfs(),manifest,&shell_paths,&shell_count)) return 2;
+                (void)unlink(manifest);
+                if (fm_parent(shell_parent,shell_paths[0])) { fm_drag_free(shell_paths,NULL,shell_count); return 2; }
+                path=shell_parent;
+            } else if (shell_path[0]) { if (fm_parent(shell_parent,shell_path)) return 2; path=shell_parent; }
+            else path="/Documents/Desktop";
+        }
         else if (argv[i][0] != '-') path = argv[i];
         else return 2;
     }
@@ -246,16 +313,24 @@ int main(int argc, char **argv)
         free(m);
         return 1;
     }
+    du_help_topic(&m->ui, "files");   /* G15: F1 opens this program's Help topic */
     struct files_app *a = &m->app;
+    fm_registry_exchange=files_registry_exchange;
+    a->shell_open=shell_open; a->shell_record=shell_record;
+    a->shell_paths=shell_paths; a->shell_count=shell_count;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     a->media_load=media_load; a->media_space=media_space;
+    a->media_defrag=media_defrag; a->media_convert=media_convert; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
+    a->backup_call=native_backup; a->media_image=media_image; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->file_info=native_info; a->set_attributes=native_attributes; a->set_label=native_label; a->volume_label=native_volume_label; a->version_info=fm_native_version;
     if (property) snprintf(a->property_request,sizeof(a->property_request),"%s",property);
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
-    a->show_bin_properties = bin_properties;
+    a->show_bin_properties = bin_properties; a->find_initial = find;
+    a->show_folder_options=folder_options;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }
+    if (shell_action) files_shell_action(a,shell_action,shell_path);
     /* Fixed placement keeps the scripted desktop case deterministic. */
     if (test) du_window_move(&m->window, 4, 36);
     int r = du_run(&m->window, idle, a);

@@ -41,6 +41,7 @@ struct fw_ops {
     /* fx-3: the calling task's own execution time (100 ns, monotonic, does
      * not advance while the task waits to run). NULL: wall clock. */
     uint64_t (*run_clock)(void);
+    void (*sleep_request)(void);
 };
 extern const struct fw_ops fw_kernel_ops;
 extern const struct fw_ops *fw_os;

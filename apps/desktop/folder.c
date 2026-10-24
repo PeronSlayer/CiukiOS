@@ -19,6 +19,8 @@ struct folder_worker {
     int bin_full, migrated; uint32_t fixed;   /* G2: the Recycle Bin icon's state, read beside the folder */
     const char *activity;
 };
+static const char *folder_path(const struct desktop *d)
+{ return d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER; }
 static int poll_start(struct desk_folder *,struct desktop *);
 static void poll_stop(struct desk_folder *);
 static void poll_service(struct desktop *);
@@ -37,15 +39,19 @@ void desk_folder_changed(struct desktop *d)
     d->sh.icon_count = 0; d->sh.icon_drag=d->sh.click_icon=-1;
     desk_shell_apply(d);
 }
-int desk_folder_init(struct desktop *d, const struct fm_vfs *fs)
+static int folder_init(struct desktop *d, const struct fm_vfs *fs,int deferred)
 {
     struct desk_folder *f = calloc(1, sizeof(*f)); if (!f) return -ENOMEM;
     fm_init(&f->model, fs); fm_init(&f->result,fs); f->dialog_window=-1; f->editing = -1; f->index = -1;
-    int r = fm_navigate(&f->model, DESK_FOLDER);
+    int r=0;
+    if (deferred) snprintf(f->model.path,sizeof(f->model.path),"%s",folder_path(d));
+    else r=fm_navigate(&f->model,folder_path(d));
     if (!r) r=poll_start(f,d);
     if (r) { fm_destroy(&f->model); free(f); return r; }
     f->ready = 1; d->sh.folder = f; desk_folder_changed(d); return 0;
 }
+int desk_folder_init(struct desktop *d,const struct fm_vfs *fs) { return folder_init(d,fs,0); }
+int desk_folder_init_async(struct desktop *d,const struct fm_vfs *fs) { return folder_init(d,fs,1); }
 void desk_folder_destroy(struct desktop *d)
 {
     if (!d->sh.folder) return;
@@ -66,32 +72,20 @@ void desk_folder_rename(struct desktop *d, int index)
     f->cursor = (unsigned)strlen(f->edit);
     desk_focus(d,-1); desk_damage_add(&d->damage,d->sh.icons[index].box,d->width,d->height);
 }
-static int bitmap(struct fm_model *m, const char *name)
-{
-    /* One white pixel, 24-bit uncompressed BMP, padded scanline. */
-    static const unsigned char bmp[58] = {
-        'B','M',58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,
-        1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,255,255,255,0 };
-    char path[FM_PATH]; int r = fm_join(path,m->path,name); if (r) return r;
-    int fd = m->fs.open(m->fs.ctx,path,1); if (fd < 0) return fd;
-    unsigned at=0;
-    while (at < sizeof(bmp)) { int n=m->fs.write(m->fs.ctx,fd,bmp+at,sizeof(bmp)-at); if (n<=0) { r=n<0?n:-EIO; break; } at+=(unsigned)n; }
-    if (!r) r=m->fs.sync(m->fs.ctx,fd);
-    int closed=m->fs.close(m->fs.ctx,fd); if (!r) r=closed;
-    if (r) m->fs.unlink(m->fs.ctx,path); else { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
-    return r;
-}
 enum { F_PROGRESS=850, F_REPLACE };
 static int transfer_prepare(void *arg)
 {
     struct desk_folder *f=arg;
+    if (f->undo_job) { fm_job_destroy(&f->job); return fm_undo_start(&f->job,&f->model.fs); }
     if (f->clipboard_job) {
         int r=fm_clipboard_load(&f->model); if (r) return r;
         enum fm_job_kind kind=f->clipboard_job==2 ? (f->model.cut ? FM_MOVE : FM_COPY) : f->job.kind;
         char destination[FM_PATH]; snprintf(destination,sizeof(destination),"%s",f->job.destination);
         fm_job_destroy(&f->job);
         if (!f->model.clipboard_count) { f->job.state=FM_DONE; return 0; }
-        return fm_job_start(&f->job,&f->model.fs,kind,f->model.clipboard,f->model.clipboard_count,destination);
+        int e=fm_job_start(&f->job,&f->model.fs,kind,f->model.clipboard,f->model.clipboard_count,destination);
+        if (!e) f->job.record_undo=fm_undo_supported(&f->job.fs);
+        return e;
     }
     return 0;
 }
@@ -100,7 +94,7 @@ static void transfer_complete(void *arg)
     struct desk_folder *f=arg;
     if (f->job.state==FM_DONE && f->job.kind==FM_MOVE && !f->job.skipped && !f->job.kept && !f->job.kept_folders && f->clipboard_job && f->model.cut)
         fm_clipboard_consume(&f->model);
-    snprintf(f->result.path,sizeof(f->result.path),"%s",DESK_FOLDER);
+    snprintf(f->result.path,sizeof(f->result.path),"%s",f->model.path);
     f->result.sort=f->model.sort; f->result.descending=f->model.descending;
     f->result_error=fm_refresh(&f->result);
     f->bin_full_job=rb_full(&f->result.fs,f->model.fixed);   /* G2: the bin may have changed with this job */
@@ -188,10 +182,11 @@ static int job(struct desktop *d, enum fm_job_kind kind, char **paths, unsigned 
 {
     struct desk_folder *f=d->sh.folder;
     int r=job_begin(d); if (r) return r;
-    f->clipboard_job=clipboard; f->display_kind=kind; f->bin_op=0;
+    f->undo_job=0; f->clipboard_job=clipboard; f->display_kind=kind; f->bin_op=0;
     char *placeholder[]={"/system/settings/files.clip"};
     r=fm_job_start(&f->job,&f->model.fs,kind,clipboard ? placeholder : paths,clipboard ? 1 : n,to);
     if (r) return r;
+    f->job.record_undo=fm_undo_supported(&f->job.fs);
     return job_launch(d,to);
 }
 /* G2 Recycle Bin jobs: Delete (RB_RECYCLE) and Empty (RB_PURGE) run on the same worker and dialog. */
@@ -202,10 +197,10 @@ static int bin_job(struct desktop *d, int op, char *const *paths, unsigned n, un
 {
     struct desk_folder *f=d->sh.folder;
     int r=job_begin(d); if (r) return r;
-    f->clipboard_job=0; f->display_kind=FM_DELETE; f->model.fixed=folder_fixed(d);
+    f->undo_job=0; f->clipboard_job=0; f->display_kind=FM_DELETE; f->model.fixed=folder_fixed(d);
     r=op==BIN_DELETE ? rb_delete_job(&f->job,&f->model.fs,paths,n,&f->policy,f->model.fixed,flags) : rb_empty_job(&f->job,&f->model.fs,f->model.fixed);
     if (r) return r;
-    f->bin_op=op;
+    f->bin_op=op; f->job.record_undo=fm_undo_supported(&f->job.fs);
     return job_launch(d,"");
 }
 static void pending_free(struct desk_folder *f)
@@ -272,7 +267,7 @@ void desk_folder_drop(struct desktop *d, int source, int copy)
         fm_select(&f->model,(unsigned)index,0);
         r=fm_clipboard(&f->model,!copy); if (!r) r=fm_clipboard_save(&f->model);
     }
-    char destination[FM_PATH]; snprintf(destination,sizeof(destination),"%s",DESK_FOLDER);
+    char destination[FM_PATH]; snprintf(destination,sizeof(destination),"%s",folder_path(d));
     int folder_target=0;
     for (int i=3;i<d->sh.icon_count;i++) if ((unsigned)(i-3)<f->model.count &&
         f->model.entries[i-3].meta.type==FM_DIR && desk_contains(d->sh.icons[i].box,d->mouse_x,d->mouse_y) &&
@@ -304,6 +299,13 @@ int desk_folder_transfer(struct desktop *d, char *const *paths, unsigned count, 
     if (f->busy) return -EBUSY;
     if (!count) return -ENOENT;
     if (trash) return desk_folder_delete_request(d,paths,count,0);   /* the old Trash drop is a Delete (G2) */
+    if (effect==FM_EFFECT_LINK) {
+        struct fm_model *target=calloc(1,sizeof(*target)); if (!target) return -ENOMEM;
+        fm_init(target,&f->model.fs); snprintf(target->path,sizeof(target->path),"%s",destination);
+        int e=fm_link_selection(target,paths,count); fm_destroy(target); free(target);
+        if (!e) { e=fm_refresh(&f->model); if (!e) desk_folder_changed(d); }
+        return e;
+    }
     if (effect!=FM_EFFECT_COPY && effect!=FM_EFFECT_MOVE) return -EINVAL;
     f->revision++;
     int r=job(d,effect==FM_EFFECT_MOVE ? FM_MOVE : FM_COPY,(char **)paths,count,destination,0);
@@ -318,15 +320,15 @@ static void positions_after(struct desktop *d, struct fm_job *j)
     /* G2: an item deleted or sent to the bin leaves its Desktop position behind. */
     if (j->kind==FM_DELETE) for (unsigned i=0;i<j->count;i++) {
         char parent[FM_PATH];
-        if ((!j->bin || (j->bin->done && j->bin->done[i])) && !fm_parent(parent,j->sources[i]) && fm_same_path(parent,DESK_FOLDER))
+        if ((!j->bin || (j->bin->done && j->bin->done[i])) && !fm_parent(parent,j->sources[i]) && fm_same_path(parent,folder_path(d)))
             { cfg_icon_forget(&d->sh.cfg,fm_basename(j->sources[i])); changed=1; }
     }
     if (j->kind==FM_MOVE) for (unsigned i=0;i<j->completed && i<j->count;i++) {
         char parent[FM_PATH];
-        if (!fm_parent(parent,j->sources[i]) && fm_same_path(parent,DESK_FOLDER) && !fm_same_path(j->destination,DESK_FOLDER))
+        if (!fm_parent(parent,j->sources[i]) && fm_same_path(parent,folder_path(d)) && !fm_same_path(j->destination,folder_path(d)))
             { cfg_icon_forget(&d->sh.cfg,fm_basename(j->sources[i])); changed=1; }
     }
-    if (f->place && fm_same_path(j->destination,DESK_FOLDER)) {
+    if (f->place && fm_same_path(j->destination,folder_path(d))) {
         int top=DESK_BAR+10, cell_h=94, rows=((int)d->height-DESK_BAR-4-top)/cell_h;
         if (rows<1) rows=1;
         for (unsigned k=0;k<j->created_count;k++) {
@@ -350,7 +352,7 @@ struct folder_check { const struct fm_model *model; const uint16_t *index; unsig
 static int check_entry(const char *name, const struct fm_meta *meta, void *arg)
 {
     struct folder_check *check=arg;
-    if (!strcmp(name,".") || !strcmp(name,"..") || fm_hidden(DESK_FOLDER,name)) return 0;
+    if (!strcmp(name,".") || !strcmp(name,"..") || fm_hidden(check->model->path,name)) return 0;
     if (!*name || strlen(name)>=FM_NAME || strchr(name,'/')) return -EIO;
     if (++check->count>FM_ENTRIES) return -E2BIG;
     unsigned slot=entry_bucket(name);
@@ -386,7 +388,7 @@ static void *folder_poll_worker(void *arg)
         }
         struct folder_check check={.model=&w->snapshot,.index=w->index};
         struct fm_vfs *fs=&w->snapshot.fs;
-        w->error=fs->list(fs->ctx,DESK_FOLDER,FM_LIST_NAMES_ONLY,check_entry,&check);
+        w->error=fs->list(fs->ctx,w->snapshot.path,FM_LIST_NAMES_ONLY,check_entry,&check);
         w->different=!w->error && (check.changed || check.count!=w->snapshot.count);
         if (!w->migrated) { (void)rb_migrate(fs); w->migrated=1; }
         w->bin_full=rb_full(fs,w->fixed);
@@ -406,7 +408,8 @@ static int poll_start(struct desk_folder *f,struct desktop *d)
     struct folder_worker *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
     w->desktop=d;
     fm_init(&w->snapshot,&f->model.fs); fm_init(&w->result,&f->model.fs);
-    snprintf(w->result.path,sizeof(w->result.path),"%s",DESK_FOLDER);
+    snprintf(w->result.path,sizeof(w->result.path),"%s",f->model.path);
+    snprintf(w->snapshot.path,sizeof(w->snapshot.path),"%s",f->model.path);
     w->snapshot.capacity=f->model.capacity;
     if (w->snapshot.capacity) w->snapshot.entries=malloc(w->snapshot.capacity*sizeof(*w->snapshot.entries));
     if (w->snapshot.capacity && !w->snapshot.entries) { free(w); return -ENOMEM; }
@@ -516,15 +519,40 @@ void desk_folder_service(struct desktop *d)
     int r=0; char name[FM_NAME], path[FM_PATH];
     if (command==DF_FOLDER || command==DF_TEXT || command==DF_BITMAP) {
         r=fm_unique(m,command==DF_FOLDER ? "New Folder" : command==DF_TEXT ? "New Text Document" : "New Bitmap Image",command==DF_FOLDER ? "" : command==DF_TEXT ? ".txt" : ".bmp",name);
-        if (!r) r=command==DF_BITMAP ? bitmap(m,name) : fm_create(m,name,command==DF_FOLDER);
+        if (!r) r=command==DF_BITMAP ? fm_bitmap(m,name) : fm_create(m,name,command==DF_FOLDER);
+        if (!r && command==DF_BITMAP) { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
         if (!r) { desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; desk_folder_rename(d,d->sh.icon_selected); }
     } else if (command==DF_REFRESH) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
+    else if (command==DF_UNDO) {
+        r=job_begin(d);
+        char *paths[]={FM_UNDO_FILE};
+        if (!r) r=fm_job_start(&f->job,&m->fs,FM_MOVE,paths,1,m->path);
+        if (!r) { f->undo_job=1; f->clipboard_job=0; f->bin_op=0; f->display_kind=FM_MOVE; r=job_launch(d,m->path); }
+    }
+    else if (command==DF_PASTE_SHORTCUT) {
+        r=fm_clipboard_load(m); if (!r) r=fm_link_selection(m,m->clipboard,m->clipboard_count);
+        if (!r) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
+    }
     else if (command==DF_PASTE) r=job(d,FM_COPY,NULL,0,m->path,2);
     else if (index>=0 && (unsigned)index<m->count) {
-        if (command==DF_RENAME) {
+        if (command==DF_SHORTCUT) {
+            unsigned n=0; char **paths=NULL;
+            if (!multi || !fm_selected(m,NULL)) fm_select(m,(unsigned)index,0);
+            n=fm_selected(m,NULL); paths=calloc(n,sizeof(*paths)); if (!paths) r=-ENOMEM;
+            unsigned k=0;
+            for (unsigned i=0;!r && i<m->count;i++) if (m->entries[i].selected) {
+                paths[k]=malloc(FM_PATH); if (!paths[k]) r=-ENOMEM; else r=fm_entry_path(m,i,paths[k]); k++;
+            }
+            if (!r) r=fm_link_selection(m,paths,n);
+            for (unsigned i=0;i<k;i++) free(paths[i]);
+            free(paths);
+            if (!r) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
+        } else if (command==DF_PASTE_INTO && m->entries[index].meta.type==FM_DIR) {
+            r=fm_entry_path(m,(unsigned)index,path); if (!r) r=job(d,FM_COPY,NULL,0,path,2);
+        } else if (command==DF_RENAME) {
             int x,y,placed=cfg_icon_position(&d->sh.cfg,m->entries[index].name,&x,&y);
             snprintf(name,sizeof(name),"%s",m->entries[index].name);
-            r=fm_rename(m,(unsigned)index,f->edit);
+            r=fm_rename_undo(m,(unsigned)index,f->edit);
             if (!r) { cfg_icon_forget(&d->sh.cfg,name); d->sh.want_save=1; if (placed) { cfg_icon_move(&d->sh.cfg,f->edit,x,y); d->sh.want_save=1; } f->editing=-1; desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; }
         } else if (command==DF_DELETE && multi && fm_selected(m,NULL)>1) {
             unsigned n=fm_selected(m,NULL),k=0; char **paths=calloc(n,sizeof(*paths));

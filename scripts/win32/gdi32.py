@@ -13,7 +13,7 @@ from scripts.win32 import stubs
 from scripts import build_kernel
 
 SOURCES = ('dib.c', 'region.c', 'objects.c', 'clip.c', 'bitmap.c', 'palette.c',
-           'draw.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
+           'draw.c', 'printing.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
            'uniscribe.c', 'bridge.c', 'pixelformat.c', 'compiler.c', 'compiler.S')
 C_EXPORTS = ('w32_dib_validate','w32_dib_raw','w32_dib_rgb','w32_dib_encode',
              'w32_dib_put','w32_gdi_rop3','w32_dib_blt')
@@ -58,7 +58,9 @@ def build(out, base=0x72000000, flags=None):
     for dll, declarations in [('ntdll', ' w32_stub_hit\n w32_get_services\n w32_stricmp\n memcpy\n memset\n'
                                         ' w32_shim_stub\n w32_shim_w_stub\n w32_server_exchange\n'),
                               ('kernel32', ' MapViewOfFile@20\n UnmapViewOfFile@4\n CreateFileA@28\n ReadFile@20\n GetFileSize@8\n'
-                                           ' SetFilePointer@16\n CloseHandle@4\n CopyFileA@12\n DeleteFileA@4\n'
+                                           ' SetFilePointer@16\n CloseHandle@4\n FlushFileBuffers@4\n CopyFileA@12\n DeleteFileA@4\n'
+                                           ' CreateDirectoryA@8\n RemoveDirectoryA@4\n MoveFileA@8\n GetLastError@0\n GetCurrentProcessId@0\n GetFullPathNameA@16\n GetModuleHandleA@4\n LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n')]:
+                                           ' GetTickCount@0\n SetFilePointer@16\n CloseHandle@4\n CopyFileA@12\n DeleteFileA@4\n'
                                            ' GetModuleHandleA@4\n LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n')]:
         definition = out/f'gdi32-{dll}.def'
         definition.write_text(f'LIBRARY {dll}.dll\nEXPORTS\n'+declarations)

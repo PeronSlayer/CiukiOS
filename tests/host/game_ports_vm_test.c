@@ -87,7 +87,11 @@ int main(void)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     reset();assert(word(0x410)==0x4822);assert(!dosvm_game_ports_apply(&vm));assert(word(0x410)==0x822);close_vm();
-    struct game_ports_settings p;game_ports_defaults(&p);p.com[0]=0;p.com[1]=0x3f8;p.lpt_mode=GAME_LPT_RAW;save(&p,1);
+    struct game_ports_settings p;game_ports_defaults(&p);p.lpt_mode=GAME_LPT_PRINTER;save(&p,1);
+    reset();lpt_owned=true;assert(!dosvm_game_ports_apply(&vm));
+    assert(vm.print_capture.enabled && !vm.lpt[0].generation && word(0x408)==0x378);
+    close_vm();assert(lpt_owned);lpt_owned=false;
+    p.com[0]=0;p.com[1]=0x3f8;p.lpt_mode=GAME_LPT_RAW;save(&p,1);
     reset();assert(!dosvm_game_ports_apply(&vm));assert(!vm.uart[0].bound && vm.uart[1].native==0 && vm.lpt[0].raw);
     assert(word(0x400)==0 && word(0x402)==0x2f8 && word(0x410)==0x4622);
     uint32_t value=0;assert(!dosvm_uart_port(&vm,0x3f8,2,false,&value,NULL) && value==0xffff);

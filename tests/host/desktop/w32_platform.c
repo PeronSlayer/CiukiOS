@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* The host socket header declares its own SOCK_RAW enum member. */
+#undef SOCK_RAW
 #include <sys/socket.h>
 #include <sys/prctl.h>
 #include <signal.h>

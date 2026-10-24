@@ -4,6 +4,8 @@
 #include <ciuki/w32_objects.h>
 #include <ciuki/systime.h>
 #pragma weak timezone_call
+#include <ciuki/power_source.h>
+#pragma weak power_source_win32_status
 static void priority_apply(struct proc_thread *t) {
   if (!t->w32 || !t->task)
     return;
@@ -58,6 +60,11 @@ uint32_t w32_system_call(struct proc_thread *t,
       else if (e) a->error = 31;             /* ERROR_GEN_FAILURE */
       else if (copy_to_user(a->low, &z, sizeof(z))) a->error = 998;
     }
+  } else if (a->action == W32_S_POWER) {
+    struct power_source_win32 p = {255, 255, 255, UINT32_MAX};
+    if (power_source_win32_status) power_source_win32_status(&p);
+    a->low = p.ac; a->high = p.battery_flag; a->value = p.percent;
+    a->extra = p.seconds; a->result = UINT32_MAX;
   } else if (a->action == W32_S_MEMORY) {
     a->low = pmm_total_usable();
     a->high = pmm_free_count();

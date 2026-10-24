@@ -155,6 +155,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window,&m->ui,channel,w,h,"Music Player",420,300)) {
         fprintf(stderr,"music: desktop connection failed: %s\n",strerror(errno)); music_runtime_destroy(m->runtime); free(m); return 1;
     }
+    du_help_topic(&m->ui, "music");   /* G15: F1 opens this program's Help topic */
     music_runtime_notify(m->runtime,m->ui.wake,m->ui.wake_ctx);
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
     m->window.query_end_session=query_end_session;

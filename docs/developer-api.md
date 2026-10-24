@@ -829,6 +829,8 @@ G1 TIME=97 is preserved; G6 follows the highest allocated syscall.
 ```c
 CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
+    CIUKI_SYS_RECOVERY = 99,
+    CIUKI_SYS_NET_INFO = 100,
 };
 ```
 
@@ -1362,6 +1364,114 @@ struct ciuki_media_label {
 };
 ```
 
+G29/G29c: mounted FAT or retained unformatted removable media; generation is the physical medium's
+MEDIA_GET_STATE generation. GET fills filesystem (12/16/32), sectors,
+cluster_bytes, supported_filesystems and label. FORMAT accepts family,
+flags and label; the other output fields are ignored and recomputed.
+Full (flags=0) scans sectors, Quick recreates metadata without a scan.
+Both destroy files. reserved must be zero; fixed/busy/stale media refuse.
+Partitioned volumes retain their FAT family; no system files are copied.
+
+```c
+#define MEDIA_GET_FORMAT 0x4d1au
+#define MEDIA_FORMAT 0x4d1bu
+#define CIUKI_FORMAT_QUICK 1u
+#define CIUKI_FORMAT_FAT12 1u
+#define CIUKI_FORMAT_FAT16 2u
+#define CIUKI_FORMAT_FAT32 4u
+```
+
+G29c: query-only flag for a retained medium without a mounted FAT.
+
+```c
+#define CIUKI_FORMAT_UNFORMATTED 2u
+#define CIUKI_FORMAT_LOW_LEVEL 4u
+```
+
+floppy only; FORMAT TRACK, then FAT surface check
+
+```c
+#define MEDIA_FLOPPY_READ 0x4d1cu
+#define MEDIA_FLOPPY_WRITE 0x4d1du
+```
+
+Entire diskette snapshot; bytes=sectors*512, <=2880 KiB. Kernel takes
+exclusive ownership for each call. WRITE requires an exact capacity match,
+and flushes and reads back every sector. buffer is a copied user address.
+
+```c
+struct ciuki_floppy_image {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t sectors;
+    uint32_t buffer;
+    uint32_t flags;
+    uint32_t reserved;
+};
+
+struct ciuki_media_format {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t filesystem;
+    uint32_t flags;
+    uint32_t sectors;
+    uint32_t cluster_bytes;
+    uint32_t supported_filesystems;
+    char label[12];
+    uint32_t reserved;
+};
+```
+
+G29b: bounded defragmentation, one whole-file publication per STEP.
+Sequence changes by another writer return EAGAIN; analyze and restart.
+Map cells aggregate bits over ceil(clusters/128) ranges, never exact
+per-cluster squares. Pause/Stop simply stop issuing STEP requests.
+
+```c
+#define MEDIA_DEFRAG_ANALYZE 0x4d1cu
+#define MEDIA_DEFRAG_STEP 0x4d1du
+#define CIUKI_DEFRAG_CHECK 1u
+#define CIUKI_DEFRAG_CELLS 128u
+#define CIUKI_DEFRAG_FREE 1u
+#define CIUKI_DEFRAG_USED 2u
+#define CIUKI_DEFRAG_FRAGMENTED 4u
+#define CIUKI_DEFRAG_DIRECTORY 8u
+#define CIUKI_DEFRAG_BAD 16u
+struct ciuki_media_defrag {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint64_t sequence;
+    uint32_t flags;
+    uint32_t ordinal;
+    uint32_t files;
+    uint32_t fragmented;
+    uint32_t clusters;
+    uint32_t free_clusters;
+    uint32_t moved;
+    uint32_t finished;
+    uint8_t map[CIUKI_DEFRAG_CELLS];
+};
+
+#define MEDIA_GET_CONVERT 0x4d1eu
+#define MEDIA_CONVERT 0x4d1fu
+struct ciuki_media_convert {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t cluster_bytes;
+    uint32_t filesystem;
+    uint32_t sectors;
+    uint32_t reserved;
+};
+```
+
 f5-12B2: CD audio on /dev/media, addressed by optical slot (an audio-only
 disc has no drive letter). Every request carries version 1 and its own
 size; a request that names a generation is refused with EAGAIN when the
@@ -1705,6 +1815,12 @@ struct ciuki_disk_lease (out)
 struct ciuki_disk_lease (phase in)
 
 ```c
+#define DISK_PARTITION_ACQUIRE 0x4409u
+```
+
+ciuki_disk_info; exclusive nonboot disk editor
+
+```c
 #define DISK_RECHECK 0x4408u
 ```
 
@@ -1957,6 +2073,49 @@ command: this thread's next bounded source reads
 f1-101: the kernel's producer boost state of this stream
 
 ```c
+#define AUDIO_CAPTURE_CAPS 0x4109u
+#define AUDIO_CAPTURE_START 0x410au
+#define AUDIO_CAPTURE_READ 0x410bu
+#define AUDIO_CAPTURE_STOP 0x410cu
+#define CIUKI_CAPTURE_MIC 0u
+#define CIUKI_CAPTURE_LINE 1u
+#define CIUKI_CAPTURE_CD 2u
+#define CIUKI_CAPTURE_MIX 3u
+#define CIUKI_CAPTURE_FRAMES 128u
+```
+
+Open /dev/audio O_RDONLY. START is explicit and exclusive; close stops it.
+Fixed S16LE stereo 48000 Hz, copied buffers only. Unsupported hardware
+reports available=0, START returns EOPNOTSUPP. READ returns EAGAIN while
+waiting for data, EIO on an overrun. Gain is software attenuation 0..100.
+
+```c
+struct ciuki_audio_capture {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t gain;
+    uint32_t rate;
+    uint32_t channels;
+    uint32_t format;
+    uint32_t available;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_capture_data {
+    uint32_t version;
+    uint32_t size;
+    uint32_t frames;
+    uint32_t captured;
+    int16_t pcm[256];
+```
+
+CIUKI_CAPTURE_FRAMES stereo frames
+
+```c
+uint32_t reserved[2];
+};
+
+
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
@@ -1965,7 +2124,56 @@ f1-101: the kernel's producer boost state of this stream
 
 f1-100: control handle; master record, one requested hardware read
 
+G22B: appended after the highest audio/mixer operations in visible refs.
+
 ```c
+#define AUDIO_SET_SOURCE 0x410du
+```
+
+Exclusive input reservation without starting DMA. A reserved description
+retains its ownership across START/STOP until RELEASE or last close.
+
+```c
+#define AUDIO_CAPTURE_ACQUIRE 0x410eu
+#define AUDIO_CAPTURE_RELEASE 0x410fu
+#define MIXER_GET_LINE 0x4205u
+#define MIXER_SET_LINE 0x4206u
+#define CIUKI_MIXER_WAVE 1u
+#define CIUKI_MIXER_MIDI 2u
+#define CIUKI_MIXER_CD 3u
+#define CIUKI_MIXER_LINE 4u
+#define CIUKI_MIXER_MIC 5u
+#define CIUKI_AUDIO_MIXED 6u
+```
+
+source is Wave/MIDI/CD or MIXED (the caller applies the line gains).
+
+```c
+struct ciuki_audio_route {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t reserved;
+};
+```
+
+recording=0 playback, 1 recording; selected is the recording input mux.
+Get reports unavailable lines, Set rejects them. Only the delegated mixer
+descriptor may Set. Analog controls preserve unrelated codec bits.
+
+```c
+struct ciuki_mixer_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t line;
+    uint32_t recording;
+    uint32_t left;
+    uint32_t right;
+    uint32_t mute;
+    uint32_t selected;
+    uint32_t available;
+    uint32_t reserved;
+};
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u
@@ -2284,6 +2492,115 @@ uint32_t reserved;
 };
 ```
 
+G11 power policy (call 73, docs/design/power-policy.md). STANDBY (desktop
+only) enters a qualified sleep state; ENOTSUP while QUERY lacks
+CAN_STANDBY. POLICY (desktop only): C=record, D=sizeof; queues the ATA
+standby timer of every fixed disk for a kernel task and returns at once;
+the out fields report the last completed application. EVENTS (any native
+client): C=record, D=sizeof; cached boot-monotonic counters, no firmware
+call.
+
+```c
+#define CIUKI_POWER_STANDBY 5u
+#define CIUKI_POWER_POLICY 6u
+#define CIUKI_POWER_EVENTS 7u
+#define CIUKI_POWER_CANCEL_STANDBY 8u
+#define CIUKI_POWER_CAN_STANDBY 16u
+#define CIUKI_POWER_POLICY_VERSION 1u
+#define CIUKI_POWER_EVENTS_VERSION 1u
+```
+
+standby_reason: the first unmet standby qualification.
+
+```c
+#define CIUKI_POWER_STANDBY_AVAILABLE 0u
+#define CIUKI_POWER_STANDBY_NO_PROVIDER 1u
+#define CIUKI_POWER_STANDBY_NO_FIRMWARE 2u
+#define CIUKI_POWER_STANDBY_NO_RESUME 3u
+struct ciuki_power_policy {
+    uint32_t version;
+    uint32_t size;
+    uint32_t disk_seconds;
+```
+
+in: idle time before the drives spin down; 0 never
+
+```c
+uint32_t disks;
+```
+
+out: fixed disks that accepted the timer
+
+```c
+uint32_t refused;
+```
+
+out: disks without the feature or that aborted
+
+```c
+uint32_t applied_seconds;
+```
+
+out: programmed time (rounded up)
+
+```c
+int32_t error;
+```
+
+out: negative errno of the first failure
+
+```c
+uint32_t reserved;
+};
+struct ciuki_power_events {
+    uint32_t version;
+    uint32_t size;
+    uint32_t sleep_requests;
+```
+
+APM 0001h, 0002h, 0009h, 000Ah
+
+```c
+uint32_t battery_low;
+```
+
+APM 0005h
+
+```c
+uint32_t critical;
+```
+
+APM 0008h
+
+```c
+uint32_t resumes;
+```
+
+APM 0003h, 0004h, 000Bh
+
+```c
+uint32_t status_changes;
+```
+
+APM 0006h, 000Ch
+
+```c
+uint32_t standby_reason;
+```
+
+CIUKI_POWER_STANDBY_*
+
+```c
+uint32_t disk_seconds;
+```
+
+last programmed drive timer, UNKNOWN before
+
+```c
+uint32_t reserved;
+};
+```
+
 f2-33: process enumeration (call 70) and termination request (call 71).
 One system record, then process records in ascending PID order.
 
@@ -2309,7 +2626,18 @@ struct ciuki_proc_system {
     uint32_t kheap_bytes;
     uint32_t kheap_high_water;
     uint32_t processes;
-    uint32_t reserved[2];
+    uint32_t disk_read_kib;
+```
+
+G30: device bytes read, KiB, wraps at 4 TiB; 0 when not counted
+
+```c
+uint32_t disk_write_kib;
+```
+
+G30: device bytes written, KiB
+
+```c
 };
 struct ciuki_proc_record {
     uint32_t version;
@@ -3174,6 +3502,67 @@ G10: shared screen policy and serialized monitor power, syscall 74.
 ```c
 #define CIUKI_DISPLAY_SCREEN 2u
 #define CIUKI_DISPLAY_DPMS 3u
+```
+
+G23: additive queries. Existing display records remain unchanged.
+DEVCTL numbers follow main's highest allocated request, 0x53540004.
+Display authority may query via syscall 74 operations 4/5 as well.
+
+```c
+#define CIUKI_DISPLAY_MONITOR 4u
+#define CIUKI_DISPLAY_REFRESH 5u
+#define DISPLAY_GET_MONITOR 0x53540005u
+#define DISPLAY_GET_REFRESH 0x53540006u
+#define CIUKI_MONITOR_VERSION 1u
+#define CIUKI_MONITOR_EDID_VALID 1u
+#define CIUKI_MONITOR_DDC 2u
+#define CIUKI_TIMING_PREFERRED 1u
+#define CIUKI_TIMING_INTERLACED 2u
+struct ciuki_monitor_timing {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixel_clock_khz;
+    uint32_t horizontal_total;
+    uint32_t vertical_total;
+    uint32_t refresh_millihz;
+    uint32_t flags;
+};
+struct ciuki_monitor_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    char manufacturer[4];
+    uint32_t product;
+    uint32_t serial;
+    char name[32];
+    uint32_t manufacture_week;
+    uint32_t manufacture_year;
+    uint32_t minimum_hz;
+    uint32_t maximum_hz;
+    uint32_t timing_count;
+    struct ciuki_monitor_timing timings[4];
+    uint8_t edid[128];
+};
+struct ciuki_display_refresh {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mode_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t current_millihz;
+```
+
+0: firmware default, actual rate unknown
+
+```c
+uint32_t supported_count;
+    uint32_t rates_millihz[16];
+```
+
+monitor timings, not a mode-setting promise
+
+```c
+};
 #define CIUKI_SCREEN_VERSION 1u
 #define CIUKI_SCREEN_CONFIG 1u
 #define CIUKI_SCREEN_STATUS 2u
@@ -4131,9 +4520,20 @@ struct ciuki_display_engine_info {
     uint64_t native[CIUKI_ENGINE_OPERATIONS];
     uint64_t software[CIUKI_ENGINE_OPERATIONS];
 };
+```
 
+G12: input-grant-only keyboard policy; no new syscall.
 
-
+```c
+#define INPUT_KEYBOARD_SET 0x4905u
+#pragma pack(push, 4)
+struct ciuki_keyboard_settings {
+    uint32_t version;
+    uint32_t size;
+    uint32_t delay;
+    uint32_t speed;
+};
+#pragma pack(pop)
 
 struct ciuki_input_event {
     uint32_t sequence;
@@ -4391,7 +4791,56 @@ owner-only snapshot of visible BIOS text cells
 focused=1 pause for Mark, 0 resume
 
 ```c
+#define CIUKI_DOSVM_CLIP_REQUEST 20u
+```
+
+owner fetches transient WINOLDAP request
+
+```c
+#define CIUKI_DOSVM_CLIP_COMPLETE 21u
+```
+
+matching serial completes it
+
+```c
+#define CIUKI_DOSVM_CLIP_MAX 65536u
+#define CIUKI_DOSVM_CLIP_SCREEN 256u
+```
+
+text-only full-screen Print Screen
+
+```c
 #define CIUKI_DOSVM_TEXT_MAX 16000u
+```
+
+G17 owner-bound visible OEM text and window execution policy. No pointers.
+
+```c
+#define CIUKI_DOSVM_TEXT_CHUNK 22u
+#define CIUKI_DOSVM_POLICY 23u
+#define CIUKI_DOSVM_TEXT_BYTES 48u
+struct ciuki_dosvm_text_chunk {
+    uint32_t row;
+    uint32_t column;
+    uint32_t columns;
+    uint32_t rows;
+    uint8_t characters[CIUKI_DOSVM_TEXT_BYTES];
+};
+struct ciuki_dosvm_policy {
+    uint32_t marking;
+```
+
+0/1: pause at the existing guest checkpoint
+
+```c
+uint32_t idle_sensitivity;
+```
+
+0..100: empty BIOS keyboard poll detection
+
+```c
+uint32_t reserved[8];
+};
 #define CIUKI_DOSVM_IMAGE_UNCHECKED 0u
 ```
 
@@ -4412,6 +4861,7 @@ UNIFIED.IMG differs from UNIFIED.SHA
 #define CIUKI_DOSVM_EVENT_STATE 2u
 #define CIUKI_DOSVM_EVENT_CONSOLE 4u
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
+#define CIUKI_DOSVM_EVENT_CLIPBOARD 16u
 ```
 
 CREATE launch.kernel: all three historical values map to unified (2).
@@ -4469,9 +4919,35 @@ STATUS.reason is positive errno
 STATUS.changed: game data quota/disk space exhausted
 
 ```c
+#define CIUKI_DOSVM_PROGRAM_RETURNED 128u
+```
+
+armed EXEC returned to its shell
+
+```c
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_clip {
+    uint32_t serial;
+    uint32_t op;
+```
+
+WINOLDAP AX low byte, or CLIP_SCREEN
+
+```c
+uint32_t format;
+    uint32_t bytes;
+    uint32_t buffer;
+    uint32_t capacity;
+    int32_t result;
+```
+
+0 success, negative errno failure
+
+```c
+uint32_t reserved[3];
+};
 struct ciuki_dosvm_text {
     uint32_t buffer;
     uint32_t capacity;
@@ -4562,7 +5038,14 @@ struct ciuki_dosvm_text text;
 TEXT input buffer/capacity; output OEM cells
 
 ```c
-struct { uint32_t kernel, game, memory, reserved[7]; } launch;
+struct ciuki_dosvm_clip clip;
+```
+
+CLIP_REQUEST/CLIP_COMPLETE
+
+```c
+struct ciuki_dosvm_policy policy;
+        struct { uint32_t kernel, game, memory, reserved[7]; } launch;
 ```
 
 CREATE input
@@ -4597,6 +5080,7 @@ An older kernel rejects flags with EINVAL; retry with flags=0.
 
 ```c
 struct { uint32_t bits[15], reserved; } scanlines;
+      struct ciuki_dosvm_text_chunk text_chunk;
     };
 };
 
@@ -4938,14 +5422,19 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define AF_INET 2
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
+#define SOCK_RAW 3
 #define SOCK_NONBLOCK 2048
 #define SOCK_CLOEXEC 524288
 #define IPPROTO_IP 0
+#define IPPROTO_ICMP 1
+#define IP_TTL 2
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #define SHUT_RD 0
 #define SHUT_WR 1
 #define SHUT_RDWR 2
+#define MSG_TRUNC 32
+#define CIUKI_SOCKET_IO_V2 2u
 #define MSG_PEEK 2
 #define MSG_DONTWAIT 64
 #define MSG_NOSIGNAL 16384
@@ -4956,6 +5445,7 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define SO_BROADCAST 6
 #define SO_RCVTIMEO 20
 #define SO_SNDTIMEO 21
+#define SO_RX_BYTES 22
 #define TCP_NODELAY 1
 #define POLLIN 1
 #define POLLOUT 4
@@ -4968,7 +5458,90 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define CIUKI_SOCKET_IO_MAX 32768
 #define CIUKI_UDP_MAX 1472
 #define CIUKI_DNS_MAX 4
+#define CIUKI_NET_INFO_CONFIG 0u
+#define CIUKI_NET_INFO_SOCKETS 1u
+#define CIUKI_NET_INFO_STATS 2u
+#define CIUKI_NET_INFO_ROUTES 3u
+#define CIUKI_NET_ROUTES_MAX 4u
+#define CIUKI_RESOLVE_START 1u
+#define CIUKI_RESOLVE_POLL 2u
+#define CIUKI_RESOLVE_CANCEL 3u
+#define CIUKI_RESOLVE_PENDING 4u
+#define CIUKI_NET_SOCKET_CLOSED 0u
+#define CIUKI_NET_SOCKET_LISTEN 1u
+#define CIUKI_NET_SOCKET_CONNECTING 2u
+#define CIUKI_NET_SOCKET_CONNECTED 3u
+#define CIUKI_NET_SOCKET_CLOSE_WAIT 4u
 #pragma pack(push, 4)
+struct ciuki_net_protocol_stats {
+    uint32_t received;
+    uint32_t sent;
+    uint32_t dropped;
+    uint32_t errors;
+    uint32_t checksum_errors;
+    uint32_t length_errors;
+    uint32_t memory_errors;
+    uint32_t protocol_errors;
+};
+struct ciuki_net_statistics {
+    uint32_t size;
+    uint32_t version;
+    struct ciuki_net_protocol_stats ip;
+    struct ciuki_net_protocol_stats icmp;
+    struct ciuki_net_protocol_stats tcp;
+    struct ciuki_net_protocol_stats udp;
+    uint32_t tcp_active_opens;
+    uint32_t tcp_passive_opens;
+    uint32_t tcp_failed_connects;
+    uint32_t tcp_resets;
+    uint32_t tcp_retransmitted;
+    uint32_t tcp_received;
+    uint32_t tcp_sent;
+    uint32_t tcp_receive_errors;
+    uint32_t tcp_reset_segments;
+    uint32_t udp_no_ports;
+    uint32_t udp_receive_errors;
+    uint32_t tcp_connections;
+};
+struct ciuki_net_route {
+    uint32_t destination;
+    uint32_t mask;
+    uint32_t gateway;
+    uint32_t interface_address;
+};
+struct ciuki_net_routes {
+    uint32_t size;
+    uint32_t version;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_net_route routes[CIUKI_NET_ROUTES_MAX];
+};
+struct ciuki_resolve_query {
+    uint32_t size;
+    uint32_t version;
+    uint32_t action;
+    uint32_t token;
+    uint32_t name;
+    uint32_t name_bytes;
+    uint32_t address;
+    int32_t status;
+};
+struct ciuki_net_socket_info {
+    uint32_t pid;
+    uint32_t type;
+    uint32_t state;
+    uint32_t local_address;
+    uint16_t local_port;
+    uint16_t peer_port;
+    uint32_t peer_address;
+};
+struct ciuki_net_socket_list {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_net_socket_info sockets[CIUKI_SOCKET_MAX];
+};
 struct ciuki_sockaddr_in {
     uint16_t family;
     uint16_t port;
@@ -4984,7 +5557,13 @@ struct ciuki_socket_io {
     uint32_t flags;
     uint32_t address;
     uint32_t address_length;
-    uint32_t reserved[2];
+```
+
+v1: both zero. v2 receive: [0] optional output u32 flags pointer
+(MSG_TRUNC for a discarded datagram tail), [1] zero. v2 send: zero.
+
+```c
+uint32_t reserved[2];
 };
 struct ciuki_socket_option {
     uint32_t size;
@@ -5136,7 +5715,13 @@ v2.1: header byte 2; v1/v2.0 remain unchanged
 #define DESK_V3_TOOL 2u
 #define DESK_V3_TOPMOST 4u
 #define DESK_V3_MODAL 8u
-#define DESK_V3_STYLES 15u
+#define DESK_V3_CONTEXTHELP 16u
+```
+
+G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom)
+
+```c
+#define DESK_V3_STYLES 31u
 #define DESK_V3_CAPTURE 1u
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
@@ -5176,6 +5761,9 @@ gets the desktop's "This program is not responding" dialog (G3).
 WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
 owner id,owner-generation. Unselected fields are zero; no descriptors.
 CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+HELP (server, G15): empty. The user pressed the "?" caption button of a
+window created with DESK_V3_CONTEXTHELP; the client enters What's This?
+(WM_SYSCOMMAND SC_CONTEXTHELP) and answers the next click itself.
 CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
 
 ```c
@@ -5204,8 +5792,50 @@ PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
 3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED).
 
 ```c
-DESK_V3_LIMITS
+DESK_V3_LIMITS,
+```
+
+G18: TRAY_ICON: action,id,NIF flags,callback,tip-length,UTF-8 tip;
+optional 16x16 ARGB surface iff NIF_ICON. BALLOON: id,title-length,
+text-length,timeout-ms(low16)|NIIF-kind(high16),title,text.
+EVENT: id,callback,mouse-message,screen-x,screen-y.
+FLASH: invert (0/1). All use the authenticated window tuple.
+
+```c
+DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON = 86, DESK_V3_TRAY_EVENT = 90, DESK_V3_FLASH = 91,
+    DESK_V3_HELP = 89,
+```
+
+G15: server to client, empty payload
+
+G16 SOUND (MessageBeep): client to desktop, 4 bytes: the toolkit sound
+event (apps/desktop/sounds.h, below SOUND_EVENTS) the desktop plays through
+its system-sound scheme (mute, volume and DOS-window rules apply). There is
+no reply: like DAMAGE it only needs the window tuple of an open window.
+
+```c
+DESK_V3_SOUND = 92,
+```
+
+G19: desktop-owned Control Panel action request from a v3 client.
+
+```c
+DESK_V3_LAUNCH = 93
 };
+```
+
+G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
+flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.
+Reply uses the request/window identity of the request; unsolicited snapshots
+use request 0. Appended after main's existing clipboard and limits opcodes (80–82).
+
+```c
+#define DESK_INPUT_SETTINGS 83u
+#define DESK_INPUT_STATE 84u
+#define DESK_INPUT_VALUES 11u
+enum desk_input_key { DESK_INPUT_LAYOUT=1, DESK_INPUT_DELAY, DESK_INPUT_SPEED,
+    DESK_INPUT_BLINK, DESK_INPUT_SWAP, DESK_INPUT_TRAILS, DESK_INPUT_WHEEL,
+    DESK_INPUT_SCHEME, DESK_INPUT_MOUSE_SPEED, DESK_INPUT_DOUBLE_CLICK, DESK_INPUT_TOGGLE };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -5236,7 +5866,9 @@ DESK_CURSOR_DRAG_MOVE, DESK_CURSOR_DRAG_COPY, DESK_CURSOR_DRAG_LINK,
 #define DESK_ARG_MAX 160u
 ```
 
-LAUNCH argument: 12 + name + 4 + argument always fits one message
+LAUNCH argument: 12 + name + 4 + argument always fits one message.
+G15B: server-to-Help LAUNCH reuses its window;
+v3 client LAUNCH payload is u32 byte count + Help argument.
 
 ```c
 enum desk_opcode {
@@ -5270,6 +5902,9 @@ DESK_SETTINGS,
 Legacy recovery (Volume Control), version 2, client to desktop: serial,
 left, right (0..100), mute (0/1). The desktop applies it through its
 delegated /dev/mixer control handle (F4) and answers TASK_RESULT.
+G22B also accepts 28 bytes: append line (1..5) and recording (0/1).
+The flag word is mute for playback, Select for recording. A 20-byte
+request retains the original master semantics.
 
 ```c
 DESK_MIXER_SET,
@@ -5368,7 +6003,11 @@ DRAG_DROP (desktop to the Files target): serial, client x, y, effect.
 DRAG_END (desktop to the Files source): effect performed (0 none).
 ACCEPT_FILES (any v2 client to desktop): 0/1, DragAcceptFiles.
 DROP_FILES (desktop to an accepting client): serial, client x, y;
-  WM_DROPFILES, the client reads the data object (du_drop_file).
+  WM_DROPFILES, the v2 client reads the data object (du_drop_file).
+G18 v3: ACCEPT_FILES has one 0/1 word; DROP_FILES has the three
+words above plus one read-only 1024-wide XRGB surface grant containing
+a u32 byte count and an independent X\n<type>/path\n snapshot. The
+receiver owns the transferred descriptor until it copies the data.
 
 ```c
 DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
@@ -5396,6 +6035,13 @@ SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
 DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
 ```
 
+G11B keeps main's allocated wire numbers; integration opcodes follow.
+
+```c
+DESK_POWER_EVENT = 87,
+    DESK_POWER_REPLY = 88,
+```
+
 G5 one system clipboard owned by the desktop (Windows 98 clipboard
 model; docs/design/system-clipboard.md), version 2, any client.
 CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
@@ -5410,17 +6056,17 @@ CLIPBOARD_EVENT (desktop to client): serial (0 unsolicited), kind
   A successful GET reply with bytes carries one read-only surface.
 
 ```c
-DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
-    DESK_DOS_CLIPBOARD
+DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
+    DESK_DOS_CLIPBOARD = 94
 ```
 
-v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit
+v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode
 
 ```c
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
-                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
-enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY, DESK_CLIP_DISPLAY_EVENT };
 #define DESK_CLIP_DELAYED 1u
 ```
 
@@ -5632,6 +6278,12 @@ char argument[DESK_ARG_MAX + 1];
 LAUNCH: optional single program argument (empty when absent)
 
 ```c
+char tooltip[128];
+```
+
+G18 tray tooltip (UTF-8 bytes)
+
+```c
 struct ciuki_input_event event;
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
@@ -5673,10 +6325,17 @@ uint64_t completed_ns, next_frame_ns;
 optional 84-byte FRAME
 
 ```c
-uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
+uint32_t input_settings[DESK_INPUT_VALUES];
+    uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
 ```
 
 optional 64-byte PRESENTED
+
+```c
+int attachment_fd;
+```
+
+owned immutable DROP_FILES snapshot, -1 when absent
 
 ```c
 struct desk_clip_wire clip;
@@ -5782,6 +6441,8 @@ Query requires version=CIUKI_DISPLAY_VERSION and size=sizeof(*info).
 ```c
 int ciuki_display_query(struct ciuki_display_info *);
 int ciuki_display_set(uint16_t mode_id);
+int ciuki_display_monitor(struct ciuki_monitor_info *);
+int ciuki_display_refresh(struct ciuki_display_refresh *);
 #endif
 ```
 
@@ -6015,6 +6676,7 @@ SPDX-License-Identifier: MIT
 #ifndef CIUKI_SDK_NET_H
 #define CIUKI_SDK_NET_H
 #include <ciuki/abi.h>
+#include <stddef.h>
 ```
 
 Public read-only /dev/net: open(O_RDONLY), NET_GET_STATE, close.
@@ -6032,10 +6694,40 @@ describe local availability.
 int ciuki_net_status(struct ciuki_net_state *);
 ```
 
+DNS v2: start fills a process-owned token; poll returns status 4 while pending.
+Cancel invalidates that token immediately; late upstream results are discarded.
+
+LMHOSTS then local-subnet NBNS; suffix is the NetBIOS service byte.
+
+```c
+int ciuki_netbios_resolve(const char *, unsigned, uint32_t *);
+```
+
+HOSTS then PTR DNS, no numeric fallback.
+
+```c
+int ciuki_hosts_reverse4(uint32_t, char *, size_t);
+int ciuki_reverse4(uint32_t, char *, size_t);
+int ciuki_resolve4_query(struct ciuki_resolve_query *);
+```
+
+Numeric/HOSTS/localhost first; otherwise starts a cancellable DNS query.
+
+```c
+int ciuki_resolve4_begin(const char *, struct ciuki_resolve_query *);
+```
+
 Privileged configuration; returns 0 or -1 with errno.
 
 ```c
 int ciuki_net_control(unsigned operation, struct ciuki_net_control *);
+```
+
+Read-only CONFIG, SOCKETS, STATS or ROUTES snapshot; no capability.
+operation is CIUKI_NET_INFO_*; bytes must match the corresponding record.
+
+```c
+int ciuki_net_info(unsigned operation, void *record, uint32_t bytes);
 #endif
 ```
 
@@ -6051,10 +6743,11 @@ SPDX-License-Identifier: MIT
 #ifndef CIUKI_USER_POWER_H
 #define CIUKI_USER_POWER_H
 #include <ciuki/abi.h>
-#define __CIUKI_POWER_VERSION__ 1
+#define __CIUKI_POWER_VERSION__ 2
 ```
 
-action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
+action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF, CIUKI_POWER_QUERY,
+CIUKI_POWER_STANDBY or CIUKI_POWER_CANCEL_STANDBY.
 QUERY returns CIUKI_POWER_CAN_* and CIUKI_POWER_STOPPED/UNCERTAIN bits.
 Either progress bit means the session cannot resume. REBOOT does not return on
 success. OFF flushes storage and powers off through the active provider
@@ -6064,6 +6757,9 @@ after storage has stopped: show "It is now safe to turn off your
 computer" only when QUERY also reports STOPPED. EBUSY with no progress
 bit means open files prevented flushing; UNCERTAIN means a stop proof
 failed after shutdown began: retain a terminal diagnostic and require reset.
+
+G11B: CANCEL_STANDBY rejects a pending APM BIOS sleep request after an
+application veto. Desktop only, idempotent, EBUSY once sleep starts.
 
 ```c
 int ciuki_power(uint32_t action);
@@ -6076,6 +6772,25 @@ call runs during this query.
 
 ```c
 int ciuki_power_status(struct ciuki_power_status *status);
+```
+
+G11 (version 2): cached boot-monotonic power events (APM standby/suspend
+requests, battery low, critical, resumes, status changes), the first unmet
+standby qualification and the programmed drive timer; initializes
+version/size. Any native client; no firmware call.
+
+```c
+int ciuki_power_events(struct ciuki_power_events *events);
+```
+
+Desktop only (EPERM otherwise): queues `disk_seconds` (0 = never, at most
+5 h 30 min) as the standby timer of every ATA fixed disk and returns at
+once; the out fields report the last completed application. Stand by is
+ciuki_power(CIUKI_POWER_STANDBY), ENOTSUP while QUERY lacks
+CIUKI_POWER_CAN_STANDBY.
+
+```c
+int ciuki_power_policy(struct ciuki_power_policy *policy);
 #endif
 ```
 
@@ -6214,6 +6929,56 @@ Returns 0 (or STATUS's result), or -1 with errno.
 
 ```c
 int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
+#endif
+```
+
+## `ciuki/recovery.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/recovery.h`.
+
+G14: startup recovery (call 99, CIUKI_SYS_RECOVERY; records and flags in
+ciuki/abi.h, docs/design/startup-recovery.md): the boot status, the
+Automatic Skip Driver list, selective startup and ScanDisk.
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_USER_RECOVERY_H
+#define CIUKI_USER_RECOVERY_H
+#include <ciuki/abi.h>
+```
+
+Each returns 0, or -1 with errno. Version and size are filled in.
+status: this start's boot flags and the boot-status record (flags lacks
+CIUKI_RECOVERY_VALID when the system volume has none).
+
+```c
+int ciuki_recovery_status(struct ciuki_recovery_status *status);
+```
+
+Selective startup classes and requests for the next start (EPERM
+without the recovery authority, ENODEV without a boot-status sector).
+
+```c
+int ciuki_recovery_configure(uint8_t disabled_classes, uint8_t requests);
+```
+
+The Automatic Skip Driver agent may load these classes again.
+
+```c
+int ciuki_recovery_enable(uint8_t classes);
+```
+
+An on-demand check of drive (0 = A:) with CIUKI_SCANDISK_* flags; the
+report is in *out (out->result is the check's own outcome).
+
+```c
+int ciuki_scandisk(unsigned drive, uint32_t flags, struct ciuki_scandisk *out);
+```
+
+The check that ran on drive at this start (RAN clear: none).
+
+```c
+int ciuki_scandisk_report(unsigned drive, struct ciuki_scandisk *out);
 #endif
 ```
 
@@ -6839,14 +7604,14 @@ DU_CHAR_W is only an average advance for rough sizing.
 
 ```c
 #define DU_CHAR_W  7
-#define DU_GLYPH_H 9
-#define DU_ROW     17
+#define DU_GLYPH_H (desk_appearance_active ? desk_font_cap(desk_theme->font_ui) : 9)
+#define DU_ROW     (desk_appearance_active ? desk_font_line(desk_theme->font_ui)+4 : 17)
 ```
 
 list, tree and menu-bar rows
 
 ```c
-#define DU_MENU_ITEM_H 19
+#define DU_MENU_ITEM_H (desk_appearance_active ? desk_metric(AP_MENU,19) : 19)
 #define DU_MENU_SEP_H  9
 ```
 
@@ -6858,7 +7623,12 @@ Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs).
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
 #define DU_WIDGETS       64
-#define DU_DIALOG_ITEMS  10
+#define DU_DIALOG_ITEMS  36
+```
+
+G16: file dialog 18, Font 19, Color 30
+
+```c
 #define DU_TIMERS        8
 #define DU_REGIONS       32
 #define DU_TEXT_MAX      1040
@@ -7140,7 +7910,17 @@ Application-drawn canvas; pointer events retain capture for
 either drawing button, including motion outside its box.
 
 ```c
-DU_CANVAS };
+DU_CANVAS,
+```
+
+G16: drop-down list or editable combination box (items/count,
+value = selected index or -1; `editable` keeps w->text as the
+edit field), horizontal or vertical slider (lo..hi, value,
+line, big, tick; vertical when the box is taller than wide),
+and the up-down arrow pair (lo..hi, value, wrap, buddy).
+
+```c
+DU_COMBO, DU_TRACKBAR, DU_UPDOWN };
 #define DU_TAB_H 20
 
 struct du_widget {
@@ -7258,7 +8038,18 @@ struct du_rect cursor_box;
 
 optional client-coordinate subregion
 
+G16 (common controls, see docs/design/common-dialogs.md). lo..hi is the
+range of a trackbar or up-down (hi < lo is allowed: "up" then moves
+toward hi); line and big are the arrow-key and page steps; tick is the
+tick-mark interval (0: none); buddy is the id of the edit an up-down
+drives; wrap makes an up-down wrap at the ends; editable turns a combo
+box into an edit field with a list. tip is the tooltip text.
+
 ```c
+int lo, hi, line, big, tick, buddy;
+    uint8_t wrap, editable;
+    char tip[96];
+    const char *help;
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -7286,7 +8077,7 @@ fx-19: rubber-band selection phases, and files dropped on the window
 (x/y client position; du_drop_file reads the paths).
 
 ```c
-DU_EV_MARQUEE, DU_EV_DROPFILES
+DU_EV_MARQUEE, DU_EV_DROPFILES, DU_EV_HELP = 20
 };
 ```
 
@@ -7305,6 +8096,7 @@ input resynchronization or resize. The application paints DU_CANVAS.
 
 ```c
 enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+enum { DU_HELP_F1 = 1, DU_HELP_CONTEXT = 2 };
 struct du_event {
     enum du_event_type type;
     int id, index, x, y;
@@ -7312,7 +8104,13 @@ struct du_event {
     const char *text;
 };
 
-enum du_dialog_kind { DU_DLG_NONE, DU_DLG_MESSAGE, DU_DLG_INPUT, DU_DLG_OPEN, DU_DLG_SAVE, DU_DLG_PROGRESS };
+enum du_dialog_kind { DU_DLG_NONE, DU_DLG_MESSAGE, DU_DLG_INPUT, DU_DLG_OPEN, DU_DLG_SAVE, DU_DLG_PROGRESS,
+```
+
+G16
+
+```c
+DU_DLG_FONT, DU_DLG_COLOR, DU_DLG_FOLDER, DU_DLG_FIND };
 enum du_dialog_icon { DU_DLG_ICON_NONE, DU_DLG_ICON_INFO, DU_DLG_ICON_WARNING, DU_DLG_ICON_ERROR, DU_DLG_ICON_QUESTION };
 ```
 
@@ -7372,9 +8170,39 @@ int sheet;
     void (*changed)(struct du_ui *, const struct du_event *, void *);
     void (*paint)(struct du_ui *, void *);
     void *sheet_ctx;
+```
+
+G16: private state and hooks of the common dialogs (file, font, color,
+folder, find). state is heap memory owned by the dialog and released by
+free_state when the dialog closes or is replaced. The hooks run before
+the generic route: a nonzero result means the event was consumed.
+
+```c
+void *state;
+    void (*free_state)(void *);
+    int (*on_event)(struct du_ui *, const struct du_event *);
+    int (*on_key)(struct du_ui *, unsigned code);
+    int (*on_press)(struct du_ui *, int button, int x, int y);
+    void (*on_draw)(struct du_ui *);
+    int sub;
+```
+
+file dialog: confirmation or name prompt over the dialog
+
+```c
+unsigned overlay;
+```
+
+items from this index on are drawn by on_draw (0: none)
+
+```c
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
+
+#define DU_TIP_DELAY_NS 500000000ull
+#define DU_TIP_SHOW_NS 5000000000ull
+struct du_tip { int widget, visible, context; uint64_t show_ns, hide_ns; struct du_rect box; const char *text; };
 
 struct du_ui {
     void (*sound)(void *, unsigned);
@@ -7383,12 +8211,16 @@ struct du_ui {
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;
     int focus, capture, hover;
+    uint64_t menu_opened; unsigned menu_animation_step;
     struct du_menu *menus; unsigned menu_count;
     int menu, menu_item, menu_keyboard, menu_armed, menu_track;
     const struct du_menu_item *popup; unsigned popup_count; int popup_x, popup_y, popup_owner;
     struct du_dialog dialog;
     struct du_timer timers[DU_TIMERS];
     int mouse_x, mouse_y, focused_window;
+    unsigned input_layout, input_dead, input_blink_ms, input_wheel_lines, input_double_ms;
+    unsigned input_text[2], input_text_count, input_text_ready;
+    int input_caret_on; uint64_t input_caret_deadline;
     unsigned modifiers, buttons, caps;
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
@@ -7439,6 +8271,25 @@ void (*wake)(void *);
     void (*service)(struct du_ui *, void *);
     int wait_fds[4];
     unsigned wait_count;
+    const char *help_topic;
+    int (*help_open)(struct du_ui *, const char *topic, void *);
+    void *help_ctx;
+    int help_consumed, whats_this;
+    struct du_tip help_tip;
+```
+
+G16 transient overlays (drawn last, see controls.c): the open combo box
+list, the tooltip, the held spin or page repeat, and the single-level
+undo of the single-line edit. All pointers address widgets of this ui
+(widgets[] or dialog.items[]) and are cleared when they go away.
+
+```c
+struct du_widget *combo_open;
+    int combo_hot, combo_pressed;
+    struct { struct du_widget *w; uint64_t since, due; int visible, shown_x, shown_y;
+             struct du_rect box; char text[96]; } tip;
+    struct { struct du_widget *w; uint64_t start; int dir, step; } repeat;
+    struct { const struct du_widget *w; int kind; size_t cursor, anchor; char text[DU_TEXT_MAX]; } undo;
 };
 static inline void du_wake(struct du_ui *u)
 { if (u && u->wake) u->wake(u->wake_ctx); }
@@ -7458,6 +8309,54 @@ void du_focus(struct du_ui *, int id);
 int du_focused(const struct du_ui *);
 void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
+```
+
+G16 controls (controls.c). Tooltip text of any widget: shown below the
+pointer after it rests on the widget for 500 ms, hidden after 5 s, on
+movement away, press, key or wheel (the Windows initial and autopop delays).
+
+```c
+void du_set_tip(struct du_widget *, const char *);
+void du_help_topic(struct du_ui *, const char *);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+```
+
+Combo box: items must outlive the widget; selected -1 is no selection.
+Events: DU_EV_SELECT (index) when the user picks an entry, DU_EV_CHANGE when
+the text of an editable box changes, DU_EV_COMMIT on Enter in an editable box.
+
+```c
+void du_combo_set(struct du_widget *, const struct du_item *items, unsigned count, int selected);
+void du_combo_drop(struct du_ui *, struct du_widget *, int open);
+const char *du_combo_text(const struct du_widget *);
+```
+
+Trackbar: DU_EV_CHANGE (index = value) on every move, DU_EV_COMMIT when the
+user lets go of the slider or a page click ends.
+
+```c
+void du_trackbar_set(struct du_widget *, int lo, int hi, int value, int line, int big, int tick);
+```
+
+Up-down: DU_EV_CHANGE (index = value). du_updown_attach makes the edit
+buddy_id its buddy (UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS): the
+arrows sit on the right edge of the edit, the edit shows the value, and Up and
+Down in the edit step it. du_updown_value reads the buddy's text first.
+
+```c
+void du_updown_set(struct du_widget *, int lo, int hi, int value, int wrap);
+int du_updown_attach(struct du_ui *, int updown_id, int buddy_id);
+int du_updown_value(struct du_ui *, struct du_widget *);
+```
+
+Single-level undo of the single-line edit (EM_UNDO): the last edit, typing
+counted as one, is undone; undoing again redoes it. Ctrl+Z and Alt+Backspace.
+
+```c
+int du_edit_undo(struct du_ui *, struct du_widget *);
 ```
 
 Union clipped repaint regions; a full dirty=1 invalidation takes precedence.
@@ -7539,6 +8438,151 @@ void du_message(struct du_ui *, int id, const char *title, const char *text, int
 void du_input_box(struct du_ui *, int id, const char *title, const char *prompt, const char *initial);
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
+```
+
+G16 Open / Save As (GetOpenFileName, GetSaveFileName). One filter is
+{label "Text Files (*.txt)", pattern "*.txt;*.log"}; filters appear in the
+"Files of type" box in the order given and filter_index (0-based) is the
+initial one. A name typed with * or ? sets a temporary pattern instead of
+closing. On OK the dialog ends with DU_EV_DIALOG: index 0, text the full
+path (default_ext, three characters at most as in OPENFILENAME, appended
+when the name has no extension), key the selected filter index. Cancel is
+index 1. DU_FILE_OVERWRITE_PROMPT asks "... already exists. Do you want
+to replace it?" before accepting an existing Save As name;
+DU_FILE_FILE_MUST_EXIST and DU_FILE_PATH_MUST_EXIST refuse names that do
+not exist with the Windows wording. The New Folder button calls make_dir
+(NULL: mkdir(2) with mode 0777); with DU_FILE_NO_NEW_FOLDER it is hidden.
+Returns 0 or -errno (the folder could not be listed).
+
+```c
+struct du_file_filter { const char *label, *pattern; };
+enum { DU_FILE_SAVE = 1, DU_FILE_OVERWRITE_PROMPT = 2, DU_FILE_FILE_MUST_EXIST = 4,
+       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16 };
+typedef int (*du_mkdir_fn)(void *ctx, const char *path);
+struct du_file_options {
+    unsigned flags;
+    const char *title, *folder, *name;
+    const struct du_file_filter *filters; unsigned filter_count, filter_index;
+    const char *default_ext;
+    du_lister lister; void *lister_ctx;
+    du_mkdir_fn make_dir; void *make_dir_ctx;
+};
+int du_file_open(struct du_ui *, int id, const struct du_file_options *);
+```
+
+Case-insensitive wildcard match of one name against ';'-separated patterns
+("*.txt;*.log", "*.*" matches every name; * and ? only).
+
+```c
+int du_pattern_match(const char *patterns, const char *name);
+```
+
+G16 Font dialog (ChooseFont). initial may be NULL. families lists the face
+names offered (NULL, 0: a built-in list of the UI faces). The result text of
+DU_EV_DIALOG index 0 is du_font_format()'s form; du_font_parse reads it. The
+sample line uses the UI face, bold for DU_FONT_BOLD, unless the application
+draws it: sample, when set, paints the preview in the given rectangle.
+
+```c
+#define DU_FONT_BOLD   1u
+#define DU_FONT_ITALIC 2u
+struct du_font_choice { char family[64]; unsigned style, points, underline, strikeout; uint32_t color; };
+#define DU_FONT_NO_EFFECTS 1u
+typedef void (*du_sample_fn)(struct du_canvas *, struct du_rect, const struct du_font_choice *, void *ctx);
+int du_font_dialog(struct du_ui *, int id, const struct du_font_choice *initial,
+                   const char *const *families, unsigned family_count, unsigned flags,
+                   du_sample_fn sample, void *sample_ctx);
+void du_font_format(char *out, size_t size, const struct du_font_choice *);
+int du_font_parse(const char *text, struct du_font_choice *out);
+```
+
+0, or -EINVAL
+
+G16 Color dialog (ChooseColor): 48 basic colours, 16 custom colours, hue /
+saturation / luminance spectrum with red, green, blue entry. custom points at
+16 0x00RRGGBB values the dialog updates in place (it must stay valid while
+the dialog is open; NULL keeps them private). The result text of DU_EV_DIALOG
+index 0 is "#RRGGBB"; du_color_parse reads it.
+
+```c
+#define DU_COLOR_FULL_OPEN    1u
+```
+
+CC_FULLOPEN: custom-colour controls shown at once
+
+```c
+#define DU_COLOR_PREVENT_FULL 2u
+```
+
+CC_PREVENTFULLOPEN
+
+```c
+int du_color_dialog(struct du_ui *, int id, uint32_t initial, uint32_t *custom, unsigned flags);
+int du_color_parse(const char *text, uint32_t *rgb);
+void du_rgb_to_hsl(uint32_t rgb, unsigned *h, unsigned *s, unsigned *l);
+```
+
+0..239 as in the Windows dialog
+
+```c
+uint32_t du_hsl_to_rgb(unsigned h, unsigned s, unsigned l);
+```
+
+G16 Browse for Folder (SHBrowseForFolder with BIF_RETURNONLYFSDIRS). The
+tree starts at root ("/" when NULL) and opens initial. prompt is shown above
+the tree. Result: DU_EV_DIALOG index 0, text the folder path.
+
+```c
+struct du_folder_options {
+    const char *title, *prompt, *root, *initial;
+    unsigned flags;
+```
+
+DU_FILE_NO_NEW_FOLDER
+
+```c
+du_lister lister; void *lister_ctx;
+    du_mkdir_fn make_dir; void *make_dir_ctx;
+};
+int du_folder_dialog(struct du_ui *, int id, const struct du_folder_options *);
+```
+
+G16 Find and Replace (FindText, ReplaceText). The dialog stays open while
+the callback handles Find Next, Replace and Replace All; Cancel/Close and Esc
+end it with DU_EV_DIALOG (index 1). DU_FIND_DOWN, _WHOLE and _CASE are
+FR_DOWN, FR_WHOLEWORD and FR_MATCHCASE; the _HIDE_ and _NO_ flags are
+FR_HIDEUPDOWN, FR_HIDEWHOLEWORD, FR_HIDEMATCHCASE (hide) and FR_NOUPDOWN etc. (disable).
+
+```c
+#define DU_FIND_DOWN 1u
+#define DU_FIND_WHOLE 2u
+#define DU_FIND_CASE 4u
+#define DU_FIND_HIDE_UPDOWN 0x10u
+#define DU_FIND_HIDE_WHOLE 0x20u
+#define DU_FIND_HIDE_CASE 0x40u
+#define DU_FIND_NO_UPDOWN 0x100u
+#define DU_FIND_NO_WHOLE 0x200u
+#define DU_FIND_NO_CASE 0x400u
+enum du_find_action { DU_FIND_NEXT = 1, DU_FIND_REPLACE, DU_FIND_REPLACE_ALL };
+struct du_find { char what[128], with[128]; unsigned flags; };
+typedef void (*du_find_fn)(struct du_ui *, int action, const struct du_find *, void *ctx);
+int du_find_dialog(struct du_ui *, int id, int replace, const struct du_find *initial, du_find_fn, void *ctx);
+```
+
+Text shown at the bottom of the open Find or Replace dialog (for example
+"Cannot find \"x\"."), set by the callback because a second dialog cannot be
+stacked; cleared when the search text changes.
+
+```c
+void du_find_status(struct du_ui *, const char *text);
+```
+
+Search helper for the callback: the first match of f->what in text[0..length)
+at or after from (DU_FIND_DOWN) or ending at or before from (up), honouring
+DU_FIND_WHOLE and DU_FIND_CASE; returns 1 and the match bounds, or 0.
+
+```c
+int du_find_text(const char *text, size_t length, size_t from, const struct du_find *, size_t *lo, size_t *hi);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
 ```
 
@@ -7608,7 +8652,14 @@ du_window_turn path always presents those regions.
 
 ```c
 int present_rendered;
-    uint32_t server_pid, ping_serial;
+    int old_logical_width, old_logical_height;
+    unsigned dpi;
+```
+
+G23: physical surface pixels per 96 logical units; fixed until reopen.
+
+```c
+uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
 ```
@@ -7666,6 +8717,9 @@ uint32_t session_serial, session_flags;
 answer+1, retried if the queue is full
 
 ```c
+int (*power_event)(struct du_window *, uint32_t event, uint32_t flags, void *);
+    uint32_t power_serial;
+    int power_reply_pending;
 };
 enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
@@ -7774,7 +8828,7 @@ monospace advance (Inconsolata 12, theme.h DESK_FONT_MONO)
 line height
 
 ```c
-#define DU_TA_BAR 16
+#define DU_TA_BAR (desk_appearance_active ? desk_metric(AP_SCROLLBAR,16) : 16)
 ```
 
 scrollbar thickness
@@ -7795,6 +8849,7 @@ enum du_ta_motion { DU_TA_LEFT, DU_TA_RIGHT, DU_TA_UP, DU_TA_DOWN, DU_TA_HOME, D
 enum du_ta_drag { DU_TA_DRAG_NONE, DU_TA_DRAG_SELECT, DU_TA_DRAG_VTHUMB, DU_TA_DRAG_HTHUMB };
 
 struct du_textarea {
+    int caret_hidden;
     char *text;
 ```
 
@@ -7992,6 +9047,15 @@ int du3_ui_progress(struct du3_connection *, uint32_t window, uint32_t generatio
 uint32_t du3_window_order(struct du3_connection *, uint32_t window,
     uint32_t generation, uint32_t flags, uint32_t after, uint32_t after_generation,
     uint32_t owner, uint32_t owner_generation);
+```
+
+G11B: serial 0 / answer 1 registers this native window; for a power
+EVENT, answer 2 marks dequeue, 0 vetoes a query, 1 agrees/completes.
+Explicit UI-thread replies; no acknowledgement is hidden in du3_next.
+
+```c
+uint32_t du3_power_reply(struct du3_connection *, uint32_t window,
+    uint32_t generation, uint32_t serial, uint32_t answer);
 #endif
 ```
 

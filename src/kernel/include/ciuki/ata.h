@@ -54,6 +54,11 @@ struct ata_device {
     struct ata_channel *channel;
     unsigned unit;
     bool present, atapi, identified, lba48, flush_ext;
+    /* G11: IDENTIFY word 82 bit 3 (Power Management feature set: IDLE E3h
+     * with a standby timer); standby_count is the last accepted count. */
+    bool power_mgmt, standby_refused;
+    bool power_sleep_refused;
+    uint8_t standby_count;
     char model[41];                 /* printable, whitespace replaced by '_' */
     char serial[21], firmware[9];   /* f9-02: IDENTIFY words 10-19 and 23-26, trimmed */
     gen_t generation;              /* last issued command, retained for evidence */
@@ -130,6 +135,8 @@ struct ata_channel {
     uint8_t expiry;                 /* f1-92: why the last expired()/wait ended */
     const char *fault_cause;        /* f1-92: cause carried from DMA to channel fault */
     bool native, stopped, discovered, quiescing;
+    bool sleeping;
+    struct task *sleep_owner;
 };
 
 const char *ata_channel_owner(unsigned);

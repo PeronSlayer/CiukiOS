@@ -262,6 +262,9 @@ static void test_emu10k1(void)
         emodel_capture_advance(2048); emodel.tick+=43;
         CHECK(emu10k1_capture_read(d,captured,1024)==-EIO && d->emu.capture_failed);
         CHECK(!emu10k1_capture_stop(d));
+        unsigned sleep_pages=pages_used; uint32_t sleep_phys=d->phys;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(d->state.ready && d->phys==sleep_phys && pages_used==sleep_pages);
         audio_backend_shutdown(); CHECK(!audio.quarantined && pages_used==baseline && !audio.commitment_pages);
         CHECK(emodel.unpins==2);
         CHECK(emodel.codec[0x1a/2]==0x0101 && emodel.codec[0x1c/2]==0x8000);

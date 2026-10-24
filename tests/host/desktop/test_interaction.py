@@ -31,9 +31,9 @@ def replay(reference=False):
                 tar.extractall(source, filter="data")
         sources = [source / f"apps/desktop/{n}.c" for n in
                    ("client", "input", "protocol", "compositor", "theme", "shell", "autoplay", "autoplay_content",
-                    "settings", "wallpaper", "keymap", "folder")]
+                    "settings", "power_policy", "wallpaper", "keymap", "folder")]
         sources += [source / f"apps/libdeskui/{n}.c" for n in
-                    ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
+                    ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map")]
         sources += [source / "apps/files/model.c", source / "apps/files/transfer.c", source / "tests/host/desktop/fake.c",
                     ROOT / "tests/host/desktop/interaction_test.c"]
         binary = folder / "interaction"

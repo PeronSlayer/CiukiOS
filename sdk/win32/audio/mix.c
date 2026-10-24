@@ -9,6 +9,7 @@ void wa_init(struct wa_engine *e, const struct wa_transport *t) {
   e->rate = 44100;
   e->focused = 1;
   e->volume[0] = e->volume[1] = 65535;
+  for (unsigned i=0;i<3;i++) e->line_gain[i][0]=e->line_gain[i][1]=100;
 }
 int wa_valid_format(const struct wa_format *f) {
   return f && f->tag == 1 && (f->channels == 1 || f->channels == 2) &&
@@ -345,14 +346,17 @@ uint32_t wa_render(struct wa_engine *e, int16_t *out, uint32_t n) {
       if (s->playing && !s->paused) {
         int32_t v[2] = {0, 0};
         frame(e, s, v, due);
-        sum[0] += v[0];
-        sum[1] += v[1];
+        unsigned route=s->route<3 ? s->route : 0;
+        sum[0] += v[0]*(int32_t)e->line_gain[route][0]/100;
+        sum[1] += v[1]*(int32_t)e->line_gain[route][1]/100;
       }
       e->ledger[(uint32_t)(due - 1) % WA_LEAD][k] = (struct wa_stamp){
           s->frame, s->fraction, s->epoch, s->rendered_samples};
     }
-    if (e->synth)
-      e->synth(e->synth_context, sum, 1, e->rate);
+    if (e->synth) {
+      int32_t midi[2]={0,0}; e->synth(e->synth_context, midi, 1, e->rate);
+      for (unsigned c=0;c<2;c++) sum[c]+=midi[c]*(int32_t)e->line_gain[1][c]/100;
+    }
     e->rendered++;
     for (unsigned c = 0; c < 2; c++) {
       int32_t v = sum[c];

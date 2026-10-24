@@ -182,6 +182,10 @@ static char name_text[256];
 static const char *status_name(void) { snprintf(name_text, sizeof(name_text), "%s", W(W_STATUS)->text); *strchr(name_text, '\t') = 0; return name_text; }
 static const char *status_pos(void) { return strchr(W(W_STATUS)->text, '\t') + 1; }
 static int dialog_is(int id) { return ui.dialog.kind && ui.dialog.id == id; }
+/* G16: the toolkit dialog lists every entry and shows those of the chosen file type: rows are item 4. */
+static unsigned rows(void) { return ui.dialog.items[4].count; }
+static int row_is(int index, const char *name) { return (unsigned)index < rows() && !strcmp(ui.dialog.items[4].items[index].text[0], name); }
+enum { SUB_NONE, SUB_CONFIRM, SUB_MESSAGE, SUB_NEWDIR };   /* ui.dialog.sub of the file dialog's confirmation panel */
 static int widget_visible(int id) { return !W(id)->hidden; }
 static int focus_is(int id) { return du_focused(&ui) == id; }
 static void select_range(size_t a, size_t b) { du_ta_select(&app.ta, a, b); cn_refresh(&app); settle(); }
@@ -195,6 +199,16 @@ static int cell_y(int line) { return W(W_TEXT)->box.y + 4 + line * DU_TA_CELL_H 
 
 /* ---- scenarios ----------------------------------------------------------- */
 
+static unsigned print_requests,setup_requests;
+static void host_print(void *arg,int setup) { (void)arg;if(setup)setup_requests++;else print_requests++; }
+static void test_print_commands(void)
+{
+    reset(0);app.printing=host_print;
+    assert(!du_ta_insert(&app.ta,"unsaved",7,DU_TA_EDIT_TYPE));
+    chord(DU_KEY_LCTRL,0x19);assert(print_requests==1 && app.ta.len==7 && !memcmp(app.ta.text,"unsaved",7));
+    struct du_event e={.type=DU_EV_ACTIVATE,.id=M_PAGESETUP};cn_event(&ui,&e,&app);assert(setup_requests==1);
+    assert(!saves);puts("PASS G31 CiukNote: Ctrl+P and Page Setup callbacks preserve unsaved document");
+}
 static void test_startup(void)
 {
     reset(1);
@@ -283,7 +297,7 @@ static void test_save_and_open(void)
     CTRL(0x31); assert(has_text("") && !app.named);
     CTRL(0x18); assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests") && !strcmp(ui.dialog.title, "Open"));
     /* The list shows folders and text files only: sub, Alpha.TXT, beta.txt, note.txt (data.bin is filtered out). */
-    assert(ui.dialog.entry_count == 4 && ui.dialog.entries[0].directory && !strcmp(ui.dialog.entries[0].name, "sub"));
+    assert(rows() == 4 && row_is(0, "sub"));
     type("/system/tests/note.txt"); ENTER;
     assert(!ui.dialog.kind && has_text("Hello\nWorld!") && app.named && !app.ta.modified && app.crlf && app.stage == CN_CP_OPENED);
     /* File > Exit through F10, Up (wraps to the last item), Enter. */
@@ -323,17 +337,18 @@ static void test_save_errors_and_replace(void)
 {
     reset(0);
     type("data"); CTRL(0x1f); type("/system/hello"); ENTER;                    /* default extension -> hello.txt exists */
-    assert(dialog_is(D_REPLACE) && strstr(ui.dialog.text, "hello.txt already exists.") && ui.dialog.focus == 1);
+    assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_CONFIRM && ui.dialog.focus == 16);   /* the toolkit asks: default button No */
     ENTER;                                                                      /* the default is No: back to the dialog */
-    assert(dialog_is(D_SAVE) && !strcmp(ui.dialog.items[5].text, "hello.txt") && expect_file("/system/hello.txt", "hello"));
-    ENTER; assert(dialog_is(D_REPLACE)); press(0x15); assert(!ui.dialog.kind);  /* "&Yes" replaces */
+    assert(dialog_is(D_SAVE) && !ui.dialog.sub && !strcmp(ui.dialog.items[5].text, "/system/hello") && expect_file("/system/hello.txt", "hello"));
+    ENTER; assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_CONFIRM); press(0x15); assert(!ui.dialog.kind);  /* "&Yes" replaces */
     assert(expect_file("/system/hello.txt", "data") && !strcmp(app.path, "/system/hello.txt") && !app.ta.modified);
     /* Failures leave the document modified and report the error; the dialog comes back with the name. */
     reset(0); type("x"); CTRL(0x1f); type("/lost.txt"); fail_save = -ENOSPC; ENTER;
     assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "could not be saved") && strstr(ui.dialog.text, "error 28") && app.ta.modified && !app.named);
     ENTER; fail_save = 0; assert(!ui.dialog.kind); CTRL(0x1f); type("/lost.txt"); ENTER; assert(!ui.dialog.kind && expect_file("/lost.txt", "x"));
     /* A missing folder fails and keeps the document modified. */
-    reset(0); type("x"); CTRL(0x1f); type("/nowhere/file.txt"); ENTER; assert(dialog_is(D_INFO) && app.ta.modified); ENTER;
+    reset(0); type("x"); CTRL(0x1f); type("/nowhere/file.txt"); ENTER;                 /* the dialog reports it and stays */
+    assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_MESSAGE && app.ta.modified); ENTER; ESC; assert(!ui.dialog.kind && app.ta.modified);
     /* A folder name navigates instead of saving. */
     reset(0); type("x"); CTRL(0x1f); type("system"); ENTER; assert(dialog_is(D_SAVE) && !strcmp(ui.dialog.folder, "/system") && !ui.dialog.items[5].text[0]);
     type("n.txt"); ENTER; assert(expect_file("/system/n.txt", "x"));
@@ -533,46 +548,46 @@ static void test_open_argument(void)
 enum { F_OK, F_CANCEL, F_UP, F_FOLDER, F_LIST, F_NAME };   /* indices of the toolkit's file dialog items */
 static int entry_x(int index) { struct du_rect r = du_list_label(&ui.dialog.items[F_LIST], (unsigned)index); return r.x + r.w / 2; }
 static int entry_y(int index) { struct du_rect r = du_list_label(&ui.dialog.items[F_LIST], (unsigned)index); return r.y + r.h / 2; }
-static int entry_is(int index, const char *name) { return (unsigned)index < ui.dialog.entry_count && !strcmp(ui.dialog.entries[index].name, name); }
+static int entry_is(int index, const char *name) { return row_is(index, name); }
 static const char *name_box(void) { return ui.dialog.items[F_NAME].text; }
 
 static void test_file_dialogs(void)
 {
     reset(0);
     CTRL(0x18);
-    assert(dialog_is(D_OPEN) && ui.dialog.entry_count == 3 && entry_is(0, "Documents") && entry_is(1, "Programs") && entry_is(2, "system"));
+    assert(dialog_is(D_OPEN) && rows() == 3 && entry_is(0, "Documents") && entry_is(1, "Programs") && entry_is(2, "system"));
     screen("open-root");
     type("/system/tests"); ENTER;                      /* an absolute folder in the name box navigates */
     assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests") && !name_box()[0]);
     /* Folders first, then the text files (case-insensitive *.txt); data.bin is hidden. */
-    assert(ui.dialog.entry_count == 3 && ui.dialog.entries[0].directory && entry_is(0, "sub") && entry_is(1, "Alpha.TXT") && entry_is(2, "beta.txt"));
+    assert(rows() == 3 && entry_is(0, "sub") && entry_is(1, "Alpha.TXT") && entry_is(2, "beta.txt"));
     screen("open-tests");
     click(entry_x(1), entry_y(1)); assert(!strcmp(name_box(), "Alpha.TXT"));
     click(entry_x(2), entry_y(2)); assert(!strcmp(name_box(), "beta.txt"));
     /* Double-click on a folder enters it; Up leaves it. */
     click(entry_x(0), entry_y(0)); mono_ns += 100000000ull; click(entry_x(0), entry_y(0));
-    assert(!strcmp(ui.dialog.folder, "/system/tests/sub") && ui.dialog.entry_count == 0);
+    assert(!strcmp(ui.dialog.folder, "/system/tests/sub") && rows() == 0);
     { struct du_rect up = ui.dialog.items[F_UP].box; click(up.x + up.w / 2, up.y + up.h / 2); }
     assert(!strcmp(ui.dialog.folder, "/system/tests"));
     { struct du_rect nb = ui.dialog.items[F_NAME].box; click(nb.x + nb.w / 2, nb.y + nb.h / 2); }
     CTRL(0x1e);   /* Ctrl+A in the box, then the typed pattern replaces the clicked name */
     /* A pattern in the name box is a filter for the next listing. */
-    type("*.*"); ENTER; assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests") && ui.dialog.entry_count == 4 && entry_is(3, "data.bin"));
-    type("*.bin"); ENTER; assert(dialog_is(D_OPEN) && ui.dialog.entry_count == 2 && entry_is(0, "sub") && entry_is(1, "data.bin"));
+    type("*.*"); ENTER; assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests") && rows() == 4 && entry_is(3, "data.bin"));
+    type("*.bin"); ENTER; assert(dialog_is(D_OPEN) && rows() == 2 && entry_is(0, "sub") && entry_is(1, "data.bin"));
     click(entry_x(1), entry_y(1)); assert(!strcmp(name_box(), "data.bin")); ENTER;
     assert(!ui.dialog.kind && app.ta.len == 3 && !strcmp(app.path, "/system/tests/data.bin"));
-    CTRL(0x18); assert(ui.dialog.entry_count == 3 && !strcmp(ui.dialog.folder, "/system/tests"));   /* the filter lasted one dialog */
-    type("*.bin"); ENTER; ESC; CTRL(0x18); assert(ui.dialog.entry_count == 3); ESC;                  /* Cancel drops it too */
+    CTRL(0x18); assert(rows() == 3 && !strcmp(ui.dialog.folder, "/system/tests"));   /* the filter lasted one dialog */
+    type("*.bin"); ENTER; ESC; CTRL(0x18); assert(rows() == 3); ESC;                  /* Cancel drops it too */
     /* Double-click on a file opens it. */
     CTRL(0x18); click(entry_x(2), entry_y(2)); mono_ns += 100000000ull; click(entry_x(2), entry_y(2));
     assert(!ui.dialog.kind && has_text("lf only\nsecond\n") && !strcmp(app.path, "/system/tests/beta.txt") && !app.crlf);
     /* Names without an extension get .txt; the report names the file that was tried. */
     CTRL(0x18); type("Alpha.TXT"); ENTER; assert(!ui.dialog.kind && has_text("Alpha\nline two\n") && app.crlf);
     CTRL(0x18); type("beta"); ENTER; assert(!ui.dialog.kind && has_text("lf only\nsecond\n") && !app.crlf);
-    CTRL(0x18); type("nothing"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "The file was not found:") && strstr(ui.dialog.text, "nothing.txt")); ENTER;
-    assert(has_text("lf only\nsecond\n"));
+    CTRL(0x18); type("nothing"); ENTER;                                       /* "File not found" in the dialog, which stays open */
+    assert(dialog_is(D_OPEN) && ui.dialog.sub == SUB_MESSAGE); ENTER; ESC; assert(!ui.dialog.kind && has_text("lf only\nsecond\n"));
     CTRL(0x18); type("../hello"); ENTER; assert(!ui.dialog.kind && has_text("hello"));
-    CTRL(0x18); type("a:b"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "That file name is not valid:")); ENTER;
+    CTRL(0x18); type("a:b"); ENTER; assert(dialog_is(D_OPEN) && ui.dialog.sub == SUB_MESSAGE); ENTER; ESC;
     CTRL(0x18); assert(!strcmp(ui.dialog.folder, "/system")); type("tests"); ENTER; assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests")); ESC;
     /* Folder errors are reported. */
     fail_list = -EACCES; CTRL(0x18); assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "The folder could not be opened:")); ENTER; fail_list = 0;
@@ -589,7 +604,7 @@ static void test_file_dialogs(void)
     /* Saving over a folder name is refused. */
     reset(0); type("x"); CTRL(0x1f); type("/system/tests"); ENTER; assert(dialog_is(D_SAVE)); type("sub"); ENTER; assert(dialog_is(D_SAVE)); ESC;
     reset(0); type("x"); CTRL(0x1f); type("/Documents/sub.txt"); fail_save = -EIO; ENTER; assert(dialog_is(D_INFO)); fail_save = 0; ENTER;
-    add_dir("/Documents/dir.txt"); CTRL(0x1f); type("/Documents/dir"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "That name is a folder:")); ENTER;
+    add_dir("/Documents/dir.txt"); CTRL(0x1f); type("/Documents/dir"); ENTER; assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_MESSAGE); ENTER; ESC;
     /* The Save As dialog's own cancel button keeps the document and the prompt chain stops. */
     reset(0); type("x"); CTRL(0x31); ENTER; assert(dialog_is(D_SAVE) && app.after == CN_AFTER_NEW); ESC; assert(!ui.dialog.kind && app.after == CN_AFTER_NONE && has_text("x"));
 }
@@ -769,6 +784,30 @@ static int replay(const char *script, const char *result_path)
     return 0;
 }
 
+/* G28: a file above the 60 KiB limit is offered to WordPad when the host can start it. */
+static int wordpad_calls, wordpad_result; static char wordpad_path[CN_PATH];
+static int host_wordpad(void *p, const char *path) { (void)p; wordpad_calls++; snprintf(wordpad_path, sizeof(wordpad_path), "%s", path); return wordpad_result; }
+static void test_wordpad_handoff(void)
+{
+    static char big[CN_LIMIT + 100]; memset(big, 'a', sizeof(big));
+    reset(0); app.wordpad = host_wordpad; wordpad_calls = 0; wordpad_result = 0;
+    add_file("/system/tests/big.txt", big, sizeof(big), 1);
+    assert(cn_open_argument(&app, "/system/tests/big.txt") == -EFBIG && dialog_is(D_BIG) && ui.dialog.buttons == 2);
+    assert(strstr(ui.dialog.text, "too large for CiukNote") && strstr(ui.dialog.text, "61,440") && strstr(ui.dialog.text, "WordPad") && !wordpad_calls);
+    screen("wordpad-offer");
+    press(0x31); assert(!ui.dialog.kind && !wordpad_calls && !app.named && app.ta.len == 0);     /* "&No" is key N */
+    cn_open_argument(&app, "/system/tests/big.txt"); ENTER;                                      /* Yes is the default */
+    assert(!ui.dialog.kind && wordpad_calls == 1 && !strcmp(wordpad_path, "/system/tests/big.txt") && !app.named);
+    /* through the Open dialog: the answer to the unsaved-changes question does not matter, the document stays */
+    CTRL(0x18); type("/system/tests/big.txt"); ENTER; assert(dialog_is(D_BIG)); ENTER; assert(wordpad_calls == 2);
+    /* a launch that fails is reported */
+    wordpad_result = -EPERM; cn_open_argument(&app, "/system/tests/big.txt"); ENTER;
+    assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "WordPad could not be started") && wordpad_calls == 3); ENTER;
+    /* without a launcher (scripted runs) the old message stays */
+    app.wordpad = NULL; cn_open_argument(&app, "/system/tests/big.txt");
+    assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "could not be opened") && strstr(ui.dialog.text, "File too large") && wordpad_calls == 3); ENTER;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 4 && !strcmp(argv[1], "replay")) return replay(argv[2], argv[3]);
@@ -776,7 +815,7 @@ int main(int argc, char **argv)
     test_startup(); test_typing(); test_clipboard_and_undo(); test_save_and_open(); test_unsaved_prompt();
     test_save_errors_and_replace(); test_find_replace(); test_goto_wrap_status(); test_time_log_encoding();
     test_limits(); test_open_argument(); test_file_dialogs(); test_menus_and_context(); test_mouse_text();
-    test_wrap_navigation(); test_screens(); test_resize(); test_random_input();
+    test_wrap_navigation(); test_screens(); test_resize(); test_random_input(); test_print_commands(); test_wordpad_handoff();
     puts("PASS ciuknote: typing, shift/caps, clipboard, undo, prompts, save/open, replace prompt, find/replace, go to, wrap, status bar, "
          "time/date, .LOG, line endings, limits, argument, file dialogs, menus, context menu, mouse, scroll bars, screens");
     return 0;

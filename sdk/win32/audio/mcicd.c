@@ -392,6 +392,7 @@ static uint32_t start(struct cd *c, uint32_t from, uint32_t to) {
     if (waveOutOpen(&c->output, 0, &pcm, 0, 0, 0)) {
       (void)release_output(c); return MCIERR_WAVE_OUTPUTSUNSUITABLE;
     }
+    wa_wave_route(c->output,2);
     log_path(c, c->forced == 1 ? "forced" : "primary");
   }
   c->mode = MCI_MODE_PLAY; c->host->begin(c->device); return MCI_ASYNC;

@@ -325,7 +325,7 @@ static void tcp_tests(void)
 static void refusal_tests(void)
 {
     CHECK(net_socket_create(&client,10,SOCK_STREAM,0)==-EAFNOSUPPORT);
-    CHECK(net_socket_create(&client,AF_INET,3,0)==-ESOCKTNOSUPPORT);
+    CHECK(net_socket_create(&client,AF_INET,4,0)==-ESOCKTNOSUPPORT);
     CHECK(net_socket_create(&client,AF_INET,SOCK_STREAM,17)==-EPROTONOSUPPORT);
     CHECK(call(CIUKI_SYS_NETCTL,0,0,0,0)==-EPERM);
     struct ciuki_pollfd entries[3]={{-1,POLLIN,7},{127,POLLIN,7},{127,POLLOUT,7}};
@@ -614,6 +614,7 @@ static void cycles(void)
         lwip_stats.memp[MEMP_UDP_PCB]->used==udp_before);
     puts("PASS 10000 create/close cycles; heap/netconn/UDP PCB baseline stable; no public objects retained");
 }
+#include "raw.inc"
 #include "amendment.inc"
 #include "dos_bridge.inc"
 #include "netctl.inc"
@@ -631,7 +632,7 @@ int main(int argc,char **argv)
     if(argc>1) {
         CHECK(!net_stack_attach(0,client_mac,true));retry_acquisition();netctl_tests();cu_host_shutdown();return 0;
     }
-    refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
+    raw_tests();refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
     preparation_races();queue_races();connect_error_race();shutdown_close_tests();
     cycles();dns_dhcp_tests();f624_tcp_tests();dos_bridge_pool_test();CHECK(!live_pins);
     extern unsigned cu_arch_bytes(void),cu_socket_bytes(void),cu_socket_object_bytes(void),cu_request_bytes(void);

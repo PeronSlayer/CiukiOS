@@ -306,6 +306,10 @@ static int backend_codec_restore(struct audio_dma_device *d)
 void audio_backend_shutdown(void)
 {
     if (!dma_selected) {
+        if (audio_dma.kind == AUDIO_ICH) audio_dma.state.ready=false;
+        if (audio_dma.kind == AUDIO_ICH && audio_dma.capture.phys && audio_capture_shutdown(&audio_dma))
+            ac97.quarantine = true;
+        if (audio_dma.kind == AUDIO_ICH && !ac97.quarantine && audio_lines_restore()) ac97.quarantine=true;
         ac97_shutdown();
         if (audio.quarantined)
             klog("[audio] failure stage=shutdown backend=ac97 reason=stop_unproved fallback=quarantine");
@@ -329,6 +333,7 @@ void audio_backend_shutdown(void)
         else if (irq_chain_remove(d->state.irq, backend_irq, d->name)) unsafe = true;
         else d->irq_attached = false;
     }
+    if (!unsafe && audio_lines_restore()) unsafe = true;
     if (!unsafe && backend_codec_restore(d)) unsafe = true;
     if (!unsafe && d->kind == AUDIO_YMFPCI && ymfpci_release(d)) unsafe = true;
     if (!unsafe && d->touched && d->voice_restore && d->voice_restore(d)) unsafe = true;
@@ -494,6 +499,7 @@ int audio_backend_init(void)
     dma_selected = false;
     int e = ac97_init();
     if (e != -ENODEV || ac97.pci.vendor) {
+        if (!e) ac97_capture_attach();
         audio.backend_name = "ac97"; audio.backend_pci = ac97.pci; audio.backend_touched = ac97.touched;
         audio.master_in_codec = !ac97.software_master;
         return e;
@@ -563,3 +569,113 @@ int audio_backend_master(const struct ciuki_mixer_master *m)
     kmutex_unlock(&audio_dma.register_lock); return e;
 }
 void audio_backend_deadline(void) { if (dma_selected) audio_dma.state.deadline_misses++; else ac97.deadline_misses++; }
+
+/* All cyclic families use their own halt/prepare/start implementations. Pins,
+ * mappings and IRQ memberships survive; proving a fresh silent transport
+ * prevents an old hardware cursor from retiring new application data. */
+static struct audio_dma_device sleep_dma;
+static bool backend_asleep;
+bool audio_backend_resume_ready(void)
+{
+    if (!audio.initialized) return true;
+    bool present=dma_selected ? audio_dma.kind!=AUDIO_SB16 || audio_dma.dsp_major : ac97.pci.vendor!=0;
+    if (!present) {
+        for (unsigned i=0;i<pci_count();i++) {
+            const struct pci_func *p=pci_get(i);
+            if (p->class_code==4 && p->subclass==1) return false; /* inventoried but unqualified */
+        }
+        return !audio.quarantined;
+    }
+    if (!audio.ready || audio.quarantined) return false;
+    return dma_selected ? audio_dma.state.ready && !audio_dma.state.quarantine &&
+        audio_dma.ops && audio_dma.ops->prepare && audio_dma.ops->halt : ac97.ready && !ac97.quarantine;
+}
+int audio_backend_suspend(void)
+{
+    if (backend_asleep) return 0;
+    if (!audio_backend_resume_ready()) return -ENOTSUP;
+    int e = 0;
+    if (dma_selected) {
+        struct audio_dma_device *d = &audio_dma;
+        sleep_dma = *d;
+        if (maestro_kind(d->kind)) { e=maestro_power_save(d); if (e) return e; }
+        if (!e && d->capture.running && d->capture_ops) {
+            kmutex_lock(&d->register_lock);
+            e = d->capture_ops->halt(d);
+            if (!e) d->capture.running = false;
+            kmutex_unlock(&d->register_lock);
+        }
+        if (!e && d->emu.capture_running) e = emu10k1_capture_stop(d);
+        if (!e && d->cmi.running) e = cmipci_capture_stop(d);
+        if (!e) e = audio_dma_stop(d);
+        if (e) { d->state.quarantine=true; d->ops->inhibit(d); }
+        else e = d->ops->mute(d, true);
+        d->state.ready=false;
+    } else {
+        e = ac97_stop(&ac97);
+        if (!e) e = ac97_set_mute(&ac97, true);
+        ac97.ready=false;
+    }
+    /* Even a failed mute requires restoration; no release of DMA storage. */
+    backend_asleep = true;
+    return e;
+}
+int audio_backend_resume(void)
+{
+    if (!backend_asleep) return 0;
+    int e;
+    if (!dma_selected) e = ac97_power_resume(&ac97);
+    else {
+        struct audio_dma_device *d = &audio_dma;
+        d->state.ready = false;
+        d->activation_deadline = audio_hw_deadline(d, 7000);
+        d->codec_saved_count = 0;
+        e = d->state.quarantine ? -EIO : d->ops->prepare(d);
+        if (!e) e = audio_dma_prove(d);
+        /* Firmware defaults are not the boot owner's original context. */
+        memcpy(d->codec_saved, sleep_dma.codec_saved, sizeof(d->codec_saved));
+        d->codec_saved_count = sleep_dma.codec_saved_count;
+        d->codec = sleep_dma.codec;
+        d->saved_link = sleep_dma.saved_link; d->saved_legacy = sleep_dma.saved_legacy;
+        d->link_changed = sleep_dma.link_changed; d->legacy_changed = sleep_dma.legacy_changed;
+        memcpy(d->saved_mixer, sleep_dma.saved_mixer, sizeof(d->saved_mixer));
+        memcpy(d->ak, sleep_dma.ak, sizeof(d->ak));
+        memcpy(d->voice_saved, sleep_dma.voice_saved, sizeof(d->voice_saved));
+        d->voice_saved_count = sleep_dma.voice_saved_count;
+        d->ymf_config48 = sleep_dma.ymf_config48; d->ymf_config4c = sleep_dma.ymf_config4c;
+        d->ymf_link_changed = sleep_dma.ymf_link_changed;
+        d->emu.hcfg = sleep_dma.emu.hcfg; d->emu.iocfg = sleep_dma.emu.iocfg;
+        d->emu.config_saved = sleep_dma.emu.config_saved;
+        d->cmi.misc=sleep_dma.cmi.misc; d->cmi.ext=sleep_dma.cmi.ext;
+        memcpy(d->cmi.mixer,sleep_dma.cmi.mixer,sizeof(d->cmi.mixer));
+        memcpy(d->cmi.native,sleep_dma.cmi.native,sizeof(d->cmi.native));
+        d->cmi.saved=sleep_dma.cmi.saved;
+        d->activation_deadline = 0;
+        if (!e) { d->state.ready = true; e = audio_backend_master(&audio.master); }
+        if (!e && maestro_kind(d->kind)) e=maestro_power_resume(d);
+        if (!e && sleep_dma.capture.running && d->capture_ops) {
+            kmutex_lock(&d->register_lock);
+            e = d->capture_ops->start(d);
+            if (!e) {
+                d->capture.running = true; d->capture.last_frame = 0;
+                d->capture.produced = d->capture.consumed = 0;
+                d->capture.observed = d->capture.progressed = d->io.now(d->io.cookie);
+            }
+            kmutex_unlock(&d->register_lock);
+        }
+        if (!e && sleep_dma.emu.capture_running) e = emu10k1_capture_start(d, sleep_dma.emu.capture_rate);
+        if (!e && sleep_dma.cmi.running) e = cmipci_capture_start(d, sleep_dma.cmi.rate);
+        if (e) {
+            d->state.ready = false; d->state.quarantine = true; d->ops->inhibit(d);
+            for (unsigned i=0;i<8;i++) if (d->claims[i]>=0) registry_quarantine(d->claims[i],d->generations[i]);
+        }
+    }
+    backend_asleep = false;
+    return e;
+}
+
+bool audio_backend_capture_active(void)
+{
+    return dma_selected && (audio_dma.capture.running || audio_dma.emu.capture_running ||
+        audio_dma.cmi.running || (maestro_kind(audio_dma.kind) && maestro_capture_active(&audio_dma)));
+}

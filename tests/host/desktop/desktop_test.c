@@ -492,6 +492,7 @@ static void test_lifecycle(void)
     /* f2-88: one rule for every application. A first frame (or any reply) 2 s late is not "not responding". */
     d.clients[survivor].ping_pending=0; d.clients[survivor].next_ping_ns=0;
     desk_heartbeat(&d,10000000000ull); assert(d.clients[survivor].ping_pending);
+    desk_flush(&d,survivor); /* fx-28: the timeout begins when this PING is delivered. */
     desk_heartbeat(&d,12100000000ull); assert(!d.clients[survivor].unresponsive);
     /* A desktop-owned wait (launch VFS lookup, present) past the 5 s deadline: the loop has not drained the
      * channels since, so the unread PONG is not charged to the application... */
@@ -826,12 +827,39 @@ static int terminal_kill(uint32_t pid, int sig)
 { assert(sig == SIGKILL); terminal_kill_pid = pid; return 0; }
 static int terminal_mixer(struct desktop *desktop, uint32_t l, uint32_t r, uint32_t mute)
 { (void)desktop; assert(l == 20 && r == 30 && mute == 1); terminal_mix_count++; return 0; }
+static unsigned terminal_line_count;
+static int terminal_line(struct desktop *desktop,const struct ciuki_mixer_line *line)
+{ (void)desktop; assert(line->line==CIUKI_MIXER_WAVE && line->left==20 && line->right==30 && line->mute==1); terminal_line_count++; return 0; }
 static int terminal_result(int client_index)
 {
     unsigned start = fake_sent; desk_flush(&d, client_index);
     for (unsigned k = start; k < fake_sent; k++) if (fake_messages[k].data[1] == DESK_TASK_RESULT)
         return (int32_t)desk_get32(fake_messages[k].data + 12);
     assert(0); return -999;
+}
+static int wordpad_launches;
+static int wordpad_launch_test(struct desktop *desktop, const struct desk_program *p)
+{ (void)desktop; assert(!strcmp(p->name,"wordpad") || !strcmp(p->name,"paint")); if (!strcmp(p->name,"wordpad")) wordpad_launches++; return 321; }
+/* G28: CiukNote may hand a document above its limit to WordPad, and only that. */
+static void test_note_wordpad(void)
+{
+    setup(640,480); int i=client(5,12,64,48,0x123456);
+    d.clients[i].version=DESK_SHELL_VERSION; desk_flush(&d,i);
+    assert(desk_program_graphical("wordpad") && desk_catalog_takes_file("wordpad") && !strcmp(desk_program_label("wordpad"),"WordPad"));
+    strcpy(d.programs[0].name,"wordpad"); strcpy(d.programs[0].path,"/Programs/wordpad");
+    strcpy(d.programs[1].name,"paint"); strcpy(d.programs[1].path,"/Programs/paint"); d.program_count=2;
+    d.launch=wordpad_launch_test; wordpad_launches=0;
+    struct ciuki_message m; const char *path="/Documents/big.txt";
+    #define WP_LAUNCH(NAME,ARG) do { unsigned n_=(unsigned)strlen(NAME),p_=(unsigned)strlen(ARG); request(&m,DESK_LAUNCH,16+n_+p_); m.data[0]=DESK_SHELL_VERSION; \
+        desk_put32(m.data+4,60); desk_put32(m.data+8,n_); memcpy(m.data+12,NAME,n_); desk_put32(m.data+12+n_,p_); memcpy(m.data+16+n_,ARG,p_); } while (0)
+    WP_LAUNCH("wordpad",path);
+    d.clients[i].program=0; desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && !wordpad_launches);
+    d.clients[i].program=DESK_APP_NOTE; desk_receive(&d,i,&m); assert(terminal_result(i)==321 && wordpad_launches==1);
+    WP_LAUNCH("wordpad","big.txt"); desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && wordpad_launches==1);   /* absolute paths only */
+    WP_LAUNCH("paint",path); desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && wordpad_launches==1);          /* nothing else */
+    d.clients[i].program=DESK_APP_FILES; WP_LAUNCH("wordpad",path); desk_receive(&d,i,&m); assert(terminal_result(i)==321 && wordpad_launches==2);
+    #undef WP_LAUNCH
+    cleanup(); puts("PASS WordPad launch: CiukNote and Files hand over a document, nothing else");
 }
 static void test_terminal(void)
 {
@@ -848,6 +876,13 @@ static void test_terminal(void)
     int found=0; for(int k=0;k<d.sh.menus[0].count;k++)if(!strcmp(d.sh.menus[0].items[k].label,"Terminal"))found++;
     assert(found==1); desk_menu_close(&d);
     struct ciuki_message m; struct desk_packet packet;
+    d.clients[i].mixer=1; d.mixer_line=terminal_line;
+    request(&m,DESK_MIXER_SET,28); m.data[0]=DESK_SHELL_VERSION;
+    desk_put32(m.data+8,20); desk_put32(m.data+12,30); desk_put32(m.data+16,1); desk_put32(m.data+20,CIUKI_MIXER_WAVE);
+    desk_receive(&d,i,&m); assert(!terminal_result(i) && terminal_line_count==1 && terminal_mix_count==0);
+    d.clients[i].mixer=0; desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && terminal_line_count==1);
+    struct desk_packet decoded; desk_put32(m.data+20,CIUKI_MIXER_MIDI); desk_put32(m.data+24,1); assert(!desk_parse(&m,1,NULL,&decoded));
+    desk_put32(m.data+24,0); desk_put32(m.data+20,6); assert(!desk_parse(&m,1,NULL,&decoded));
     request(&m,DESK_TERMINAL_POWER,12); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+4,9); desk_put32(m.data+8,CIUKI_POWER_OFF);
     assert(desk_parse(&m,1,NULL,&packet) && packet.flags==CIUKI_POWER_OFF);
     struct ciuki_message bad=m; desk_put32(bad.data+8,CIUKI_POWER_QUERY); assert(!desk_parse(&bad,1,NULL,&packet));
@@ -1076,15 +1111,186 @@ static void test_power_status(void)
     p.battery_count=5; assert(desk_shell_power_update(&d,&p)==-1);
     puts("PASS power desktop: tray geometry, unknown values, coalesced orderly request, gate and shutdown guards, APM percent record, T23 empty bay");
 }
+/* G11 power policy on the production shell (docs/design/power-policy.md):
+ * tooltip, meter option, scheme menu, alarms, button, lid, BIOS sleep
+ * requests, WM_POWERBROADCAST queue, the Stand by sequence and idle timer. */
+static unsigned power_sounds[SOUND_EVENTS];
+static void power_sound(struct desktop *desktop, unsigned e) { (void)desktop; if (e<SOUND_EVENTS) power_sounds[e]++; }
+struct power_call { unsigned action; uint32_t event, lparam; };
+static struct power_call power_calls[64]; static unsigned power_call_count;
+static uint32_t power_w32_state; static int power_standby_result, power_standbys;
+static int power_w32(struct desktop *desktop, unsigned action, uint32_t event, uint32_t lparam, struct desk_w32_status *st)
+{
+    (void)desktop; assert(power_call_count<64);
+    power_calls[power_call_count++]=(struct power_call){action,event,lparam};
+    st->state=action==DESK_W32_POWER_STATUS ? power_w32_state : 0; st->pid=st->hwnd=st->delivered=0;
+    return 0;
+}
+static unsigned power_cancels;
+static int power_cancel_seam(void) { power_cancels++;return 0; }
+static int power_standby_seam(void) { power_standbys++; if (power_standby_result) { errno=-power_standby_result; return -1; } return 0; }
+static unsigned begins(uint32_t event)
+{ unsigned n=0; for (unsigned i=0;i<power_call_count;i++) n+=power_calls[i].action==DESK_W32_POWER_BEGIN && power_calls[i].event==event; return n; }
+static const struct power_call *last_begin(void)
+{ for (unsigned i=power_call_count;i--;) if (power_calls[i].action==DESK_W32_POWER_BEGIN) return &power_calls[i]; return NULL; }
+static void power_drain(void)   /* broker: every broadcast delivered */
+{ power_w32_state=DESK_W32_ENDED; for (unsigned i=0;i<12;i++) { d.now_ns+=1000000ull; desk_power_policy_tick(&d); } }
+static struct ciuki_power_status t23(unsigned percent, uint32_t ac)
+{
+    struct ciuki_power_status p={.version=1,.size=sizeof(p),.provider=CIUKI_POWER_PROVIDER_APM,.ownership=CIUKI_POWER_OWNED,
+        .ac_online=ac,.lid_open=CIUKI_POWER_UNKNOWN,.battery_count=2};
+    p.batteries[0]=(struct ciuki_power_battery){.id=1,.present=1,.unit=CIUKI_POWER_UNIT_PERCENT,.state=ac==1 ? 2u : 1u,
+        .design=CIUKI_POWER_UNKNOWN,.full=100,.remaining=percent,.rate=CIUKI_POWER_UNKNOWN,.voltage=CIUKI_POWER_UNKNOWN,.seconds=percent*60u};
+    memset(&p.batteries[1],0xff,sizeof(p.batteries[1])); p.batteries[1].id=2; p.batteries[1].present=0;
+    return p;
+}
+static struct ciuki_power_events power_ev={.version=1,.size=sizeof(struct ciuki_power_events)};
+static void power_poll(struct ciuki_power_status p, int query)
+{ assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&power_ev,query); }
+static void test_power_policy(void)
+{
+    setup(800,600); desk_shell_enable(&d);
+    d.sound_event=power_sound; d.w32_power=power_w32; d.power_standby=power_standby_seam;d.power_cancel_standby=power_cancel_seam;power_cancels=0;
+    memset(power_sounds,0,sizeof(power_sounds)); power_call_count=0;
+    assert(d.sh.power_cfg.count==PP_BUILTIN && d.sh.power_cfg.show_meter);
+    power_poll(t23(80,1),3);
+    assert(pp_active(&d.sh.power_cfg,&d.sh.power_summary)==PP_PORTABLE && d.sh.power_monitor_seconds==15*60);
+    /* Tooltip: hover the meter. */
+    struct desk_box bi=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); assert(bi.w==16);
+    d.mouse_x=bi.x+4; d.mouse_y=bi.y+4; d.now_ns=1000000000ull; desk_shell_motion(&d);
+    d.now_ns+=700000000ull; desk_shell_tick(&d); assert(d.sh.tooltip==6);
+    power_poll(t23(80,0),3);   /* on battery: the meter's numbers change under the tooltip */
+    assert(d.sh.tooltip==6 && d.sh.power_monitor_seconds==120 && begins(PP_PBT_POWERSTATUSCHANGE)==0);
+    desk_power_policy_tick(&d); assert(begins(PP_PBT_POWERSTATUSCHANGE)==1);   /* AC change */
+    power_drain();
+    /* Show power meter on taskbar off: the icon and its width go. */
+    int width=desk_shell_tray_box(&d).w;
+    snprintf(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),"power_meter=0\n"); desk_shell_power_config(&d);
+    assert(!desk_shell_tray_icon_box(&d,SH_TRAY_POWER).w && desk_shell_tray_box(&d).w==width-SH_TRAY_ICON_SIZE-SH_TRAY_GAP && !d.sh.tooltip);
+    d.sh.cfg.extra[0]=0; desk_shell_power_config(&d); assert(desk_shell_tray_icon_box(&d,SH_TRAY_POWER).w==16);
+    /* Left click: the scheme menu; right click: the meter menu. */
+    bi=desk_shell_tray_icon_box(&d,SH_TRAY_POWER);
+    d.mouse_x=bi.x+4; d.mouse_y=bi.y+4; desk_shell_button(&d,CIUKI_BUTTON_LEFT,1);
+    assert(d.sh.levels==1 && d.sh.menus[0].kind==SH_MENU_POWER && d.sh.menus[0].count==3);
+    assert(d.sh.menus[0].items[PP_PORTABLE].flags&SH_ITEM_DEFAULT && d.sh.menus[0].items[PP_PORTABLE].action==SH_ACT_POWER_SCHEME);
+    desk_menu_close(&d);
+    desk_shell_power_scheme(&d,PP_ALWAYS_ON);
+    assert(d.sh.want_save && d.sh.power_cfg.active==PP_ALWAYS_ON && strstr(d.sh.cfg.extra,"power_scheme=2\n") && d.sh.power_monitor_seconds==900);
+    d.mouse_x=bi.x+4; d.mouse_y=bi.y+4; desk_shell_button(&d,CIUKI_BUTTON_RIGHT,1);
+    assert(d.sh.levels==1 && d.sh.menus[0].kind==SH_MENU_POWER_METER && d.sh.menus[0].count==2 &&
+           d.sh.menus[0].items[0].action==SH_ACT_POWER_METER);
+    desk_menu_close(&d);
+    /* Alarms: low at 10 %, PBT_APMBATTERYLOW; critical at 3 % shuts down (no standby). */
+    power_poll(t23(11,0),3); assert(!d.sh.want_power);
+    power_poll(t23(9,0),3);
+    assert(!strcmp(d.sh.message_title,"Low Battery Alarm") && strstr(d.sh.message_text,"at 9% (0 hr 09 min)") &&
+           !power_sounds[SOUND_INFORMATION] && power_sounds[SOUND_ERROR]==1);   /* the message window's warning */
+    assert(!d.sh.want_power); power_drain(); assert(begins(PP_PBT_BATTERYLOW)==1);
+    power_poll(t23(3,0),3);
+    assert(!strcmp(d.sh.message_title,"Critical Battery Alarm") && strstr(d.sh.message_text,"will now shut down") && power_sounds[SOUND_ERROR]==2);
+    assert(d.sh.want_power==2 && !d.sh.want_power_force && !d.sh.want_standby);
+    d.sh.want_power=0; power_poll(t23(2,0),3); assert(!d.sh.want_power);   /* once per discharge */
+    /* Stand by qualified: the critical action stands by, with Force. */
+    d.sh.power_cfg.critical.force=1; d.sh.power_alarm=(struct pp_alarm_state){0};
+    power_poll(t23(2,0),3|CIUKI_POWER_CAN_STANDBY); assert(d.sh.want_standby==2 && !d.sh.want_power);
+    d.sh.want_standby=0; d.sh.power_cfg.critical.action=PP_ACTION_SHUTDOWN; d.sh.power_alarm=(struct pp_alarm_state){0};
+    power_poll(t23(2,0),3); assert(d.sh.want_power==2 && d.sh.want_power_force==1);
+    d.sh.want_power=d.sh.want_power_force=0;
+    /* Power button and lid. */
+    struct ciuki_power_status p=t23(50,1); p.shutdown_requests=d.sh.power_seen+1; p.lid_open=1;
+    d.sh.power_cfg.power_button=PP_BUTTON_STANDBY; power_poll(p,3); assert(d.sh.want_power==2 && !d.sh.want_standby);
+    d.sh.want_power=0; power_poll(p,3|CIUKI_POWER_CAN_STANDBY);   /* QUERY follows the record: availability first */
+    p.shutdown_requests++; power_poll(p,3|CIUKI_POWER_CAN_STANDBY); assert(d.sh.want_standby==2 && !d.sh.want_power);
+    d.sh.want_standby=0; power_poll(p,3); d.sh.power_cfg.lid=PP_LID_SHUTDOWN; p.lid_open=0; power_poll(p,3); assert(d.sh.want_power==2);
+    d.sh.want_power=0; power_poll(p,3); assert(!d.sh.want_power);   /* still closed: one action */
+    d.sh.power_cfg.lid=PP_LID_NONE; p.lid_open=1; power_poll(p,3); p.lid_open=0; power_poll(p,3); assert(!d.sh.want_power);
+    /* APM standby/suspend requests while unqualified: one notice per burst. */
+    d.sh.notification.active=0; power_ev.sleep_requests++; power_poll(p,3);
+    assert(d.sh.notification.active && strstr(d.sh.notification.text,"Stand by is not available"));
+    d.sh.notification.active=0; d.now_ns+=1000000000ull; power_ev.sleep_requests++; power_poll(p,3); assert(!d.sh.notification.active);
+    d.now_ns+=11000000000ull; power_ev.sleep_requests++; power_poll(p,3); assert(d.sh.notification.active);
+    /* The Shut Down dialog offers Stand by only where qualified. */
+    int index=desk_internal_open(&d,DESK_INTERNAL_SHUTDOWN); assert(index>=0);
+    struct desk_box c=desk_content(&d.clients[index]);
+    desk_internal_click(&d,index,c.x+c.w-10-4*81+6+10,c.y+c.h-33+10); assert(!d.sh.want_standby && !d.sh.want_power);
+    power_poll(p,3|CIUKI_POWER_CAN_STANDBY); power_drain();
+    index=desk_internal_open(&d,DESK_INTERNAL_SHUTDOWN); assert(index>=0); c=desk_content(&d.clients[index]);
+    desk_internal_click(&d,index,c.x+c.w-10-4*81+6+10,c.y+c.h-33+10); assert(d.sh.want_standby==1);
+    /* The Stand by sequence: query (denied), then query, suspend, STANDBY, resume. */
+    power_call_count=0; power_w32_state=DESK_W32_PENDING;
+    desk_power_policy_tick(&d);
+    assert(!d.sh.want_standby && d.pbt.standby==DESK_STANDBY_QUERY && last_begin()->event==PP_PBT_QUERYSUSPEND && last_begin()->lparam==1);
+    power_w32_state=DESK_W32_VETOED; desk_power_policy_tick(&d);
+    assert(d.pbt.standby==DESK_STANDBY_IDLE && !power_standbys && power_cancels==1); power_drain();
+    assert(begins(PP_PBT_QUERYSUSPENDFAILED)==1);
+    power_call_count=0; d.sh.want_standby=2; power_w32_state=DESK_W32_PENDING; desk_power_policy_tick(&d);
+    assert(last_begin()->event==PP_PBT_QUERYSUSPEND && !last_begin()->lparam);
+    desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0); /* must not overwrite query completion */
+    d.now_ns+=DESK_POWER_QUERY_NS; desk_power_policy_tick(&d);
+    assert(d.pbt.standby==DESK_STANDBY_QUERY); /* broker still processing a delivered query */
+    power_w32_state=DESK_W32_ENDED; desk_power_policy_tick(&d); desk_power_policy_tick(&d);
+    assert(d.pbt.standby==DESK_STANDBY_SUSPEND && last_begin()->event==PP_PBT_SUSPEND);
+    power_drain();
+    assert(power_standbys==1 && d.pbt.standby==DESK_STANDBY_IDLE && begins(PP_PBT_RESUMEAUTOMATIC)==1 && !begins(PP_PBT_RESUMESUSPEND));
+    assert(!last_begin()->lparam && d.last_input_ns==d.now_ns-11000000ull);
+    d.last_input_ns=d.now_ns+1;power_drain();assert(begins(PP_PBT_RESUMESUSPEND)==1);
+    power_call_count=0; power_standby_result=-ENOTSUP; d.sh.want_standby=1; power_drain();
+    assert(power_standbys==2 && begins(PP_PBT_RESUMESUSPEND)==1 && last_begin()->lparam==PP_PBTF_RESUMEFROMFAILURE);
+    assert(d.pbt.standby_error==ENOTSUP && strstr(d.sh.notification.title,"Stand by failed"));
+    power_standby_result=0;
+    /* Without the qualification nothing stands by. */
+    power_poll(p,3); d.sh.want_standby=1; power_call_count=0; power_drain(); assert(!power_call_count && !d.sh.want_standby);
+    /* System standby after: Portable/Laptop on battery, 5 min without input. */
+    d.sh.power_cfg.active=PP_PORTABLE; power_poll(t23(60,0),3|CIUKI_POWER_CAN_STANDBY); power_drain();
+    d.last_input_ns=d.now_ns; d.now_ns+=299000000000ull; desk_power_policy_tick(&d); assert(d.pbt.standby==DESK_STANDBY_IDLE && !d.sh.want_standby);
+    d.now_ns+=2000000000ull; d.v3_lease_state=1; desk_power_policy_tick(&d); assert(d.pbt.standby==DESK_STANDBY_IDLE);
+    d.v3_lease_state=0; power_call_count=0; desk_power_policy_tick(&d); assert(d.pbt.standby==DESK_STANDBY_QUERY && begins(PP_PBT_QUERYSUSPEND)==1);
+    power_drain();
+    /* Status changes coalesce while a broadcast runs. */
+    power_call_count=0; power_w32_state=DESK_W32_PENDING;
+    desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0); desk_power_policy_tick(&d);
+    desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0); desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0);
+    assert(d.pbt.count==1); power_drain(); assert(begins(PP_PBT_POWERSTATUSCHANGE)==2);
+    cleanup();
+    puts("PASS power policy desktop: meter tooltip and option, scheme and meter menus, alarms once per discharge with sound/message/action/Force, button and lid, APM sleep-request notice, Stand by button and sequence (query, deny, 20 s, suspend, resume, failure), idle standby, broadcast coalescing");
+}
+static void test_native_power(void)
+{
+    setup(640,480); desk_shell_enable(&d); d.now_ns=1000000000ull;
+    int a=client(70,71,100,100,0), b=client(72,73,100,100,0);
+    d.clients[a].version=d.clients[b].version=2;
+    struct ciuki_message msg; struct desk_packet packet;
+    request(&msg,DESK_POWER_REPLY,12); msg.data[0]=2; desk_put32(msg.data+8,1);
+    assert(desk_parse(&msg,1,NULL,&packet) && !desk_parse(&msg,0,NULL,&packet));
+    desk_receive(&d,a,&msg); desk_receive(&d,b,&msg);
+    assert(d.clients[a].power_aware && d.clients[b].power_aware);
+    desk_power_broadcast(&d,PP_PBT_QUERYSUSPEND,1); desk_power_policy_tick(&d);
+    uint32_t serial=d.pbt.serial; assert(d.clients[a].power_pending==1 && d.clients[b].power_pending==1);
+    desk_power_reply(&d,a,serial,2); d.now_ns+=DESK_POWER_QUERY_NS;
+    desk_power_policy_tick(&d); assert(d.pbt.running && d.clients[a].power_pending==2 && !d.clients[b].power_pending);
+    desk_power_reply(&d,a,serial-1,0); assert(!d.pbt.denied);
+    desk_power_reply(&d,a,serial,0); desk_power_policy_tick(&d); assert(d.pbt.denied && !d.pbt.running);
+    desk_power_broadcast(&d,PP_PBT_QUERYSUSPENDFAILED,0); desk_power_policy_tick(&d);
+    assert(!d.clients[a].power_pending && d.clients[b].power_pending); /* only the program that agreed */
+    desk_power_reply(&d,b,d.pbt.serial,1); desk_power_policy_tick(&d);
+    desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0); desk_power_policy_tick(&d);
+    assert(d.clients[a].power_pending && d.clients[b].power_pending);
+    desk_power_reply(&d,a,d.pbt.serial,1); desk_power_reply(&d,b,d.pbt.serial,1); desk_power_policy_tick(&d);
+    request(&msg,DESK_POWER_EVENT,16); msg.data[0]=2;desk_put32(msg.data+4,1);
+    assert(desk_parse(&msg,0,NULL,&packet) && !desk_parse(&msg,1,NULL,&packet));
+    msg.fd_count=1;msg.fds[0]=1;assert(!desk_parse(&msg,0,NULL,&packet));
+    cleanup(); puts("PASS G11B native power: opt-in, query/veto, handler delivery, late reply isolation, agreement-only failure, status notices, strict wire validation");
+}
 int main(void)
 {
     test_joystick_broker();
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
-    test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
+    test_graphics_service(); test_menu(); test_ide_launch(); test_note_wordpad(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     test_game_data_properties();
     test_power_status();
+    test_power_policy(); test_native_power();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

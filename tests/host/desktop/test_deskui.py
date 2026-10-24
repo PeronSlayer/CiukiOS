@@ -24,7 +24,7 @@ capture = _review.capture
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
            "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 
 # Reviewed frames (2026-10-11): an unpinned run prints the new digests. Convert
@@ -33,19 +33,28 @@ TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
 # F2-64 recorded affected transient frames; remaining frames await lead review.
 # 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
+# G16 (2026-10-24): deskui-open and the four Places frames re-pinned for the toolkit Open/Save As (New Folder, List/Details, Files of type).
 # F4-30 (2026-10-18): only deskui-open changes for the shared Places pane;
 # the four dialog-places-goldens.json frames cover mounted media and Save.
 TOOLKIT_FRAMES = {
     'deskui-input.xrgb': '72e8a91f02bdb8b2b5ef0bafe23a9dc1332152aef2280790299cfb5951c16da6',
     'deskui-menu.xrgb': 'a9ffa04ca2ea5565a6a7ca8a99b32dc3c3b3d7e0edba6646be7d7ee31946cea9',
     'deskui-message.xrgb': '23bca4045904f0bdc3311b8578b025328a1baa30b2b202b2f872ec8242f36f41',
-    'deskui-open.xrgb': 'fc912b457c774d912452593b94c8dbea73c0f0222c7fb4de97f441a86f06552e',
+    'deskui-open.xrgb': 'dfc6242164e8cc9c9dc4405d3b5f71bf8ffbf83d919eda20f20bd7315889ce15',
     'deskui-popup.xrgb': '0d67abb32369b6a755ed7f5247dea1389049a56297cef185087485cd8ec8035c',
     'deskui-progress.xrgb': 'af6ac5d3e8525d71376d9d0768b53a9d45c4b0403e0289a1d2aab3837e7c9b76',
     'deskui-view0.xrgb': '9269da40f4bd59ba2b6331b8382dcd432b1dd1089456a608fbeef7986f823c05',
     'deskui-view1.xrgb': '26cc77326b0cc117215cd2389e275852a86b5a4a34109881bb8bb99e5e05758b',
     'deskui-view2.xrgb': 'dc03906560ba1b1543e63a6d5959f7541d75651eecde32496f6c21eb0d2fc8d0',
 }
+# G15 help widget frames.
+HELP_TOOLKIT_FRAMES = {
+    'help-dialog-button.xrgb': 'a6cd36f668060afff27e9250c7a4e377218f18e36ecf56d63ce149afa6b18aab',
+    'help-dialog-whats-this.xrgb': '8dcf17399af218f5a5a0aca0d848b3326aff9fce0539db6eb8dea032523a56a2',
+    'help-tooltip.xrgb': 'a6f99be097cb9321c34b2849424e09fdfaea0d556e67522f72f0cd3485405003',
+    'help-whats-this.xrgb': 'aec0b87a3abead1bf4a49be6f8b4a5e08138d1386dfd1b151db65d96994c04ea',
+}
+# Merge G7: retain main's reviewed frame hashes; the lead re-pins combined UI changes.
 FILES_FRAMES = {
     'files-drop-target.xrgb': 'fa3e0f26a2db9c30dd775cd57bdf5925669e1d72872289e5c9e0dff9a778a977',
     'files-band-details.xrgb': '4080b44e53eef99b7c25e4662588fe20350324862aa8a6900b9a72860ce94ece',
@@ -83,14 +92,15 @@ FILES_FRAMES = {
 # are re-pinned by the lead after a visual review; pinned entries still compare.
 PIN = "PIN-FROM-FIRST-RUN"
 
+# G24 merge: retain integration frame hashes; lead reviews and re-pins regional text.
 # G6: reviewed property sheets, drive pie/counting, Version and Attributes.
 G6_FRAMES = {
     "g6-attributes.xrgb": "4ec32dfe992e81b6410a27d69633378555a5ba2ace43694a2f3b01d43df7c3a5",
-    "g6-counting.xrgb": "42b3305b9c527cd7f17357243d80e9a0b41881ddcf48236cdd018197e02054e4",
-    "g6-drive.xrgb": "498d8688f28d739299d4b71bc2567cc7ff1e98784a8172e9c07e3cd5417e2648",
+    "g6-counting.xrgb": "645bf87f431823b02050418cbbb3c60ac64207833db3e5a32f530ba33ac519f9",
+    "g6-drive.xrgb": "f0b68a2ce8bb6e4f3f9e18c962898c6c234c612ef9de85bb1334f5e77155e638",
     "g6-file.xrgb": "5bfaba21d7f7629d31aa78b3edfbc71d472e207f632032aca0596d060cd2c165",
     "g6-folder.xrgb": "c7cde320492cac790ffb8e74c6ece5f449c6e88659de20cf4e58f3173d3e58d1",
-    "g6-tools.xrgb": "eee7fead585b45aa113857a8f7f27184b2e9b50a1759813e99be6fa420159b2f",
+    "g6-tools.xrgb": "56bd974b5241215bb30f2e3e523f5229f43cf3fa9414a34f88d488ba456a3424",
     "g6-version.xrgb": "96976f0bb3f2a2100d69c50ed0f6819ce2a3cc7043ac7d28d58327e1751c6526"
 }
 
@@ -176,12 +186,28 @@ class DeskuiTests(unittest.TestCase):
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
 
+    def test_help_toolkit(self):
+        """G15: tooltips, F1 WM_HELP, What's This?, the dialog ? button and the LAUNCH of CiukiOS Help."""
+        stdout, digests = self.run_harness("help-toolkit", ["tests/host/desktop/help_toolkit_test.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c",
+            "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"],
+            frames=True, cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-pthread"))
+        self.assertIn("PASS G15 libdeskui help", stdout)
+        self.check_frames(digests, HELP_TOOLKIT_FRAMES, "HELP_TOOLKIT")
+
     def test_dialog_places(self):
         sources = ['tests/host/desktop/dialog_places_test.c',
                    *(s for s in TOOLKIT if s != 'apps/libdeskui/dialog.c')]
         _, digests = self.run_harness('places', sources, frames=True)
         expected = json.loads((ROOT/'tests/host/desktop/dialog-places-goldens.json').read_text())
         self.check_frames(digests, expected, 'PLACES')
+
+    def test_common_controls_and_dialogs(self):
+        """G16: combo box, trackbar, up-down, tooltips, edit undo, Open/Save As, Font, Color, Browse for Folder, Find and Replace."""
+        stdout, digests = self.run_harness("common-dialogs", ["tests/host/desktop/common_dialogs_test.c", *TOOLKIT], frames=True)
+        self.assertIn("PASS G16 common controls and dialogs", stdout)
+        expected = json.loads((ROOT / "tests/host/desktop/common-dialogs-goldens.json").read_text())
+        self.check_frames(digests, expected, "G16")
 
     def test_files_slow_listing_responsive(self):
         stdout, _ = self.run_harness("files-async", ["tests/host/desktop/files_async_test.c",
@@ -194,7 +220,7 @@ class DeskuiTests(unittest.TestCase):
             "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c",
             *(f"apps/desktop/{n}.c" for n in ("client", "input", "shell", "autoplay", "autoplay_content",
-                "settings", "settings_io", "wallpaper", "keymap", "folder"))], frames=True,
+                "settings", "power_policy", "settings_io", "wallpaper", "keymap", "folder"))], frames=True,
             cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h")))
         self.assertIn("PASS Files transfer worker", stdout)
         self.assertIn("[files] job=copy progress items=0 bytes=0", stdout)
@@ -211,6 +237,13 @@ class DeskuiTests(unittest.TestCase):
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"], directory)
         self.assertIn("PASS Files idle", stdout)
 
+    def test_find_files(self):
+        stdout, _ = self.run_harness("files-search", ["tests/host/desktop/files_search_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"])
+        self.assertIn("PASS G7 model", stdout)
+        self.assertIn("PASS G7 UI", stdout)
+
     def test_files_version(self):
         stdout, _ = self.run_harness("files-version", ["tests/host/desktop/files_version_test.c", "apps/files/vfs.c", "apps/files/model.c"])
         self.assertIn("PASS G6 PE Version", stdout)
@@ -222,10 +255,33 @@ class DeskuiTests(unittest.TestCase):
         self.assertIn("PASS G6 Properties", stdout)
         self.check_frames(digests, G6_FRAMES, "G6")
 
+    def test_files_cleanup(self):
+        stdout, _ = self.run_harness("files-cleanup", ["tests/host/desktop/files_cleanup_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/model.c", "apps/files/vfs.c"])
+        self.assertIn("PASS G29 Disk Cleanup model", stdout)
+
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",
                                                      "apps/files/model.c"])
         self.assertIn("PASS Files model", stdout)
+
+    def test_partition_tool(self):
+        stdout, _ = self.run_harness("partition-tool", ["tests/host/partition_tool_test.c",
+            "sdk/libdisk/disk.c", "sdk/libdisk/format.c", "sdk/libdisk/sha256.c"],
+            lambda folder: folder / "disk.img", cflags=("-I", str(ROOT / "sdk/libdisk/include")))
+        self.assertIn("PASS FDISK", stdout)
+
+    def test_backup(self):
+        stdout, _ = self.run_harness("backup", ["tests/host/desktop/backup_test.c",
+            "apps/files/backup.c", "apps/files/vfs.c", "apps/files/model.c"],
+            lambda folder: folder, cflags=("-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"))
+        self.assertIn("PASS Backup", stdout)
+
+    def test_files_disk_ui(self):
+        stdout, _ = self.run_harness("files-disk-ui", ["tests/host/desktop/files_disk_ui_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/app.c", "apps/files/model.c",
+            "apps/files/transfer.c", *TOOLKIT], frames=True)
+        self.assertIn("PASS G29 disk dialogs", stdout)
 
     def files_ui(self):
         if DeskuiTests.portrait is None:

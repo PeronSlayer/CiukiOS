@@ -6,6 +6,12 @@
 #include <w32/gdi32.h>
 #include <w32/pixelformat.h>
 #include <w32/services.h>
+extern unsigned W32API GetMetaFileBitsEx(DWORD,unsigned,void *);
+extern DWORD W32API SetMetaFileBitsEx(unsigned,const void *);
+extern unsigned W32API GetEnhMetaFileBits(DWORD,unsigned,void *);
+extern DWORD W32API SetEnhMetaFileBits(unsigned,const void *);
+extern BOOL W32API DeleteMetaFile(DWORD);
+extern BOOL W32API DeleteEnhMetaFile(DWORD);
 #include <linux/futex.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -67,6 +73,8 @@ int w32_stricmp(const char *a, const char *b) {
   }
   return (unsigned char)*a - (unsigned char)*b;
 }
+extern BOOL host_appearance_write(void *,const void *,DWORD,DWORD *);
+extern BOOL host_appearance_flush(void *);
 /* f5-10C font-store imports. user32_test.c supplies CreateFileA (always
  * INVALID_HANDLE_VALUE) and ReadFile/CloseHandle, so the font files are never
  * opened here; the remaining file imports of gdi32/font.c refuse. The font
@@ -85,6 +93,7 @@ DWORD W32API SetFilePointer(void *h, LONG at, LONG *high, DWORD how) {
 }
 BOOL W32API WriteFile(void *h, const void *data, DWORD bytes, DWORD *put,
                       void *o) {
+  if(host_appearance_write(h,data,bytes,put)) return 1;
   (void)h;
   (void)data;
   (void)bytes;
@@ -98,7 +107,13 @@ BOOL W32API CopyFileA(const char *from, const char *to, BOOL fail_exists) {
   (void)fail_exists;
   return 0;
 }
+BOOL W32API FlushFileBuffers(void *h) { return host_appearance_flush(h); }
 BOOL W32API DeleteFileA(const char *name) {
+  (void)name;
+  return 0;
+}
+/* Printing cleanup uses the same refused host file service as DeleteFileA. */
+BOOL W32API RemoveDirectoryA(const char *name) {
   (void)name;
   return 0;
 }
@@ -115,7 +130,10 @@ static const struct {
                EXPORT(GetObjectA),         EXPORT(GetDIBits),
                EXPORT(w32_gdi_draw_icon),  EXPORT(SetDIBits),
                EXPORT(CreateCompatibleDC), EXPORT(StretchBlt),
-               EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format)};
+               EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format),
+               EXPORT(w32_gdi_live_objects), EXPORT(GetPaletteEntries), EXPORT(CreatePalette),
+               EXPORT(GetMetaFileBitsEx), EXPORT(SetMetaFileBitsEx), EXPORT(GetEnhMetaFileBits),
+               EXPORT(SetEnhMetaFileBits), EXPORT(DeleteMetaFile), EXPORT(DeleteEnhMetaFile)};
 void *host_gdi_proc(const char *name) {
   for (unsigned i = 0; i < sizeof(exports) / sizeof(*exports); i++)
     if (!strcmp(exports[i].name, name))

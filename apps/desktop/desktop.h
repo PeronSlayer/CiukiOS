@@ -4,8 +4,12 @@
 #include "protocol.h"
 #include "theme.h"
 #include "start-orb.h"
+/* Generated geometry remains the 96 dpi source of truth. */
+#undef DESK_BAR
+#define DESK_BAR desk_scale(32)
 #include "shell_link.h"
 #include "startup.h"
+#include "access.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
@@ -84,7 +88,7 @@ struct desk_gfx_stats {
     uint64_t convert_ns,copy_ns,slot_ns;
 };
 struct desk_client {
-    int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
+    int channel, surface, hello, window, unresponsive, ping_pending, ping_queued, resync_pending;
     int configure_pending, focus_pending, close_pending;
     int commit_pending, resizable, zoomed;
     unsigned cursor;
@@ -109,6 +113,7 @@ struct desk_client {
     int collapsed;                /* retained shade state, independent of maximize */
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
+    int sysapp;                   /* G30: launched sysinfo/sysmon/schedtask/resmeter; window list and argument-free catalogue launches */
     int gfxdemo;                  /* launch-bound graphics diagnostics authority */
     int dosbox;                   /* launch-bound DOS full-screen menu */
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
@@ -119,11 +124,15 @@ struct desk_client {
     uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
     int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
     int accept_files;             /* fx-19: DragAcceptFiles (DESK_ACCEPT_FILES) */
+    int flash;                    /* G18: visual inversion, never activation */
+    int initial_show;             /* shortcut Run state, consumed on CREATE */
     /* G3: session_aware: the window registered for QUERY_END_SESSION;
      * session_end: 1 send END_SESSION(1) at the end of the session, 2 the
      * Win32 broker delivered WM_ENDSESSION (no close message); close_sent_ns:
      * when the pending close request was sent (hung-program detection). */
     int session_aware, session_end;
+    int power_aware, power_pending, power_granted;
+    uint32_t power_serial;
     uint64_t close_sent_ns;
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
@@ -171,6 +180,7 @@ struct desk_launch_request {
     int client, channel, recent;
     uint32_t pid, serial, opcode;
     char argument[DESK_ARG_MAX + 1];
+    char run_command[DESK_RUN_MAX]; /* internal async Run completion, never on the wire */
 };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent, close_deferred, pending; };
 #define DESK_POWER_CLOSE_NS 3000000000ull
@@ -241,6 +251,32 @@ struct desk_session_part {
 #define DESK_EWX_POWEROFF 8u
 enum { DESK_W32_PENDING, DESK_W32_ENDED, DESK_W32_VETOED, DESK_W32_HELD };
 struct desk_w32_status { uint32_t state, pid, hwnd, delivered; };
+/* G11 (docs/design/power-policy.md): WM_POWERBROADCAST through the same
+ * broker (W32R_ENDSESSION indices W32R_POWER_*). STATUS state: 0 running,
+ * 1 delivered, 2 denied (BROADCAST_QUERY_DENY); pid = windows that granted. */
+#define DESK_W32_POWER_BEGIN 8u
+#define DESK_W32_POWER_STATUS 9u
+#define DESK_W32_POWER_RESET 10u
+#define DESK_POWER_QUERY_NS 20000000000ull   /* PBT_APMQUERYSUSPEND: ~20 s, then agreement */
+#define DESK_PBT_QUEUE 4
+enum { DESK_STANDBY_IDLE, DESK_STANDBY_QUERY, DESK_STANDBY_SUSPEND };
+struct desk_pbt { uint32_t event, lparam; };
+struct desk_power_broadcast {
+    struct desk_pbt queue[DESK_PBT_QUEUE];
+    unsigned count;
+    uint32_t serial;
+    int w32_running;
+    uint32_t sequence_done;
+    int sequence_denied;
+    int running, denied;            /* denied: the last finished query */
+    struct desk_pbt current, done;  /* done: the last finished broadcast (event + 1, 0 none) */
+    uint64_t started_ns;
+    int standby, standby_lparam;    /* DESK_STANDBY_* */
+    unsigned broadcasts, standbys;
+    int standby_error;
+    int resume_pending;
+    uint64_t resume_input_ns;
+};
 struct desk_session {
     int state, action;
     unsigned count, at;
@@ -248,6 +284,7 @@ struct desk_session {
     struct desk_session_part parts[DESK_CLIENTS + 1];
     uint32_t w32_pid, w32_hwnd, w32_delivered;
     uint64_t w32_since, w32_next;
+    int force;   /* G11 alarm "Force": a program that stops responding is ended */
 };
 /* The "This program is not responding" (End Task, Cancel) and DOS warning
  * (Yes, No) dialogs: one at a time, for a window close, End Task or the session. */
@@ -256,6 +293,21 @@ struct desk_end_task {
     int kind, window, session;
     uint32_t pid, target;          /* target: the program's window id, 0 for a Win32 broker target */
     char name[DESK_TITLE_MAX + 1];
+};
+/* G25 accessibility glue state (access_desktop.c); the engine is struct access (access.h). */
+#define DESK_ACCESS_SOURCE 0xACC0u  /* input event source of MouseKeys pointer events: not scaled by the mouse speed */
+struct desk_access {
+    struct access eng;
+    int started;
+    unsigned shown_bits;            /* tray indicator state last painted */
+    int shown_visible;
+    int flash_active; struct desk_box flash; uint64_t flash_until;
+    /* Magnifier (docs/design/accessibility.md): the panel and what it shows */
+    int mag_shown, mag_pending;
+    struct access_mag_box mag_panel, mag_source;
+    int mag_mx, mag_my, mag_hw; unsigned mag_shape, mag_level, mag_invert;
+    uint64_t mouse_stamp, focus_stamp; int focus_cx, focus_cy;
+    int mag_side;
 };
 struct desk_render_cache;
 struct desk_clipboard;
@@ -267,6 +319,7 @@ struct desktop {
     uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
     unsigned games_removed;
     int (*install_program)(struct desktop *,const char *);
+    int (*open_path)(struct desktop *,const char *); /* G8, shared with Files and G9 */
     struct desk_ops ops;
     int display, input, output, focus, drag;
     int v3_pointer_window; /* slot + 1, zero means no capture/clip */
@@ -304,6 +357,8 @@ struct desktop {
     int32_t mouse_x, mouse_y, drag_x, drag_y;
     unsigned resize_edges;
     struct desk_box resize_start;
+    struct desk_box geometry_preview;
+    int geometry_outline;
     int keyboard_geometry;       /* 1 move, 2 size; drag identifies the window */
     int geometry_zoomed;
     struct desk_box geometry_restore;
@@ -345,7 +400,14 @@ struct desktop {
     struct desk_box tip_shown; uint32_t tip_shown_hash;
     struct desk_box outline_shown; int outline_icon, about_windows;
     struct desk_box band_shown;  /* fx-15b: the rubber band as last composed (zero: none) */
-    uint32_t cursor_under[32*32]; struct desk_box cursor_box;
+    struct { int x, y; uint64_t until; } pointer_trail[7];
+    unsigned pointer_trail_count;
+    unsigned layout_alt, layout_shift, layout_chord, text_dead;
+    unsigned text_scan, text_caps, text_routed;
+    uint32_t input_saved[DESK_INPUT_VALUES], input_volatile_mask;
+    unsigned input_change_key,input_change_flags;
+    unsigned shell_caret_hidden;uint64_t shell_caret_next;
+    uint32_t cursor_under[64*64]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
     unsigned cursor_shape, cursor_loaded;
     unsigned lfb_bytes_per_pixel;
@@ -363,6 +425,8 @@ struct desktop {
     /* f2-31/f2-32 app scenarios (app_test is DESK_APP_FILES or DESK_APP_NOTE):
      * the program's checkpoints are PINGs with serial DESK_APP_CHECKPOINT+n. */
     int app_test, app_checkpoint, app_reported, app_done;
+    /* G14 (recovery.c): --safe and --shell=terminal from the supervisor. */
+    int safe_mode, terminal_shell;
     uint32_t app_pid;
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
@@ -371,6 +435,9 @@ struct desktop {
      * scenarios); launch_request: the next launch's origin, reset after it;
      * launch_deferred: the last launch returned 0 and completes later. */
     int launch_async, launch_deferred;
+    int help_starting;
+    char help_pending[DESK_ARG_MAX+1];
+    uint32_t help_users[DESK_CLIENTS];
     struct desk_launch_request launch_request;
     int (*launch_mark)(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
     /* fx-15: a launched program's first frame reached the screen (quiet
@@ -387,6 +454,8 @@ struct desktop {
     char build_identity[65], version[65], notice[64];
     struct desk_link_entry *v3_links;
     unsigned v3_link_count;
+    int launch_show;              /* scoped by the shortcut launcher */
+    int (*drop_snapshot)(struct desktop *); /* private read-only drag surface */
     uint64_t v3_links_next;
     /* f2-95: DESK_LINKS_SCAN asks the shortcut worker for a scan at the next
      * snapshot, DESK_LINKS_GAMES also for the bundled-games query. Without a
@@ -395,6 +464,8 @@ struct desktop {
     /* Enumerate a fresh bounded snapshot; read source again before launch. */
     int (*v3_links_list)(struct desktop *, struct desk_link_entry *, unsigned);
     int (*v3_link_read)(struct desktop *, const char *, struct desk_launch_record *);
+    int (*v3_link_save)(struct desktop *, const char *, const struct desk_launch_record *);
+    const uint32_t *(*v3_link_icon)(struct desktop *, const char *, unsigned);
     int (*v3_launch)(struct desktop *, const struct desk_launch_record *);
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;
@@ -412,11 +483,20 @@ struct desktop {
     int (*autoplay_preference)(struct desktop *, const char *id, const char *label, int action);
     void (*media_sound)(struct desktop *, int connected);
     struct desk_shell sh;
+    uint64_t resources_next_ns;     /* G30: next Resource Meter sample (resources.c) */
+    struct desk_schedsvc *schedsvc; /* G30: scheduled tasks service (schedsvc.c), or NULL */
+    struct desk_access acc;
     struct desk_power_sequence power;
     struct desk_session session;   /* G3: the end-of-session queries before power */
     struct desk_end_task end_task;
     /* G3: the Win32 end-session broker; NULL or an error: no Win32 programs to ask. */
     int (*w32_session)(struct desktop *, unsigned action, uint32_t flags, struct desk_w32_status *);
+    /* G11: WM_POWERBROADCAST (action DESK_W32_POWER_*, event = PBT_*), and
+     * call 73 STANDBY (0 or -1 with errno). NULL: none. */
+    int (*w32_power)(struct desktop *, unsigned action, uint32_t event, uint32_t lparam, struct desk_w32_status *);
+    int (*power_standby)(void);
+    int (*power_cancel_standby)(void);
+    struct desk_power_broadcast pbt;
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
     void (*sound_event)(struct desktop *, unsigned event);
@@ -424,14 +504,17 @@ struct desktop {
     int (*sound_request)(struct desktop *, int client, unsigned request, unsigned event, uint32_t serial);
     int (*sound_shutdown)(struct desktop *); /* 1 complete, 0 still within the 2 s allowance */
     void (*sound_cancel)(struct desktop *);
+    void (*sound_tone)(struct desktop *, unsigned tone);   /* G25: a synthesised accessibility tone (access.h ACC_TONE_*) */
     int (*power_request)(int action);
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
+    void (*logoff)(struct desktop *); /* G32: called after G3 has closed the session */
     int (*power_alive)(struct desktop *, uint32_t pid);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*joystick_control)(struct desktop *, struct ciuki_joystick_control *);
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
+    int (*mixer_line)(struct desktop *, const struct ciuki_mixer_line *);
     /* Title-bar double-click (maximize and restore). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* G4: the caption icon's double click closes (WM-11); the taskbar's Undo record. */
@@ -499,12 +582,21 @@ struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
 struct desk_box desk_close_box(const struct desk_client *c);
 struct desk_box desk_caption_icon_box(const struct desktop *, const struct desk_client *c);   /* zero when the theme draws none */
+struct desk_box desk_help_box(const struct desk_client *c);   /* G15: empty without DESK_V3_CONTEXTHELP */
+void desk_context_help(struct desktop *, int index);          /* G15: HELP to a v3 client */
 struct desk_box desk_min_box(const struct desk_client *c);
 struct desk_box desk_shade_box(const struct desk_client *c);   /* zoom; zero box when too narrow */
 struct desk_box desk_outer(const struct desk_client *c);       /* frame plus drop shadow */
 void desk_collapse(struct desktop *, int index);                /* toggle windowshade */
 void desk_theme_changed(struct desktop *);                       /* repaint after desk_theme_use */
 struct desk_box desk_taskbar(const struct desktop *);
+struct desk_box desk_work_area(const struct desktop *);
+int desk_taskbar_front(const struct desktop *);
+#define DESK_TOOLBAR_SLOTS 32
+enum { DESK_TOOLBAR_ITEM, DESK_TOOLBAR_FOLDER, DESK_TOOLBAR_ADDRESS, DESK_TOOLBAR_OVERFLOW };
+struct desk_toolbar_slot { struct desk_box box; int kind,arg; };
+int desk_toolbar_slots(const struct desktop *,struct desk_toolbar_slot *);
+int desk_toolbar_extent(const struct desktop *);
 struct desk_box desk_start_button(const struct desktop *);       /* top bar, left end */
 struct desk_box desk_start_bounds(const struct desktop *);       /* includes soft shadow */
 int desk_start_contains(const struct desktop *, int32_t, int32_t);
@@ -512,6 +604,7 @@ int desk_shell_chrome_intersects(const struct desktop *, struct desk_box);
 int desk_title_code(const struct desktop *, int32_t x, int32_t y);   /* title button under (x, y): index*4+k+1, or 0 */
 struct desk_box desk_title_code_box(const struct desktop *, int code);
 struct desk_box desk_task_button(const struct desktop *, int index);
+struct desk_box desk_quick_launch_button(const struct desktop *);
 struct desk_box desk_menu_box(const struct desktop *);
 int32_t desk_menu_row(const struct desktop *);
 int desk_contains(struct desk_box, int32_t, int32_t);
@@ -541,6 +634,12 @@ void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */
+/* G11: queue a WM_POWERBROADCAST to every Win32 window (coalesces status
+ * changes); desk_power_policy_tick drives the queue, the Stand by sequence
+ * and the idle standby timer (shell.c, from desk_shell_tick). */
+void desk_power_reply(struct desktop *, int client, uint32_t serial, uint32_t answer);
+void desk_power_broadcast(struct desktop *, uint32_t event, uint32_t lparam);
+void desk_power_policy_tick(struct desktop *);
 void desk_session_tick(struct desktop *);
 void desk_session_cancel(struct desktop *);
 uint64_t desk_session_deadline(const struct desktop *);  /* next session/hung-close turn, 0 none */
@@ -556,9 +655,17 @@ void desk_about(struct desktop *);
 void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
+int desk_help_argument(const char *argument);   /* G15: LAUNCH help from any client */
 /* Launch results: a PID, -errno, or 0 when d->launch_async queued the spawn
  * (fx-8); desk_launch_completed reports the late result to its origin. */
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
+/* G14 startup recovery (recovery.c; weak where host tests link without it). */
+void desk_recovery_init(struct desktop *, int safe, int terminal);
+void desk_recovery_start(struct desktop *);
+void desk_recovery_tick(struct desktop *);
+void desk_recovery_paint(struct desktop *, struct desk_box clip);
+int desk_recovery_win(struct desktop *);
+int desk_recovery_startup_allowed(const struct desktop *);
 void desk_launch_origin(struct desktop *, unsigned origin, const char *label);
 void desk_launch_completed(struct desktop *, const struct desk_launch_request *, const char *name, int result);
 /* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */
@@ -576,7 +683,14 @@ void desk_stack_damage(struct desktop *);
 void desk_scene_reconcile(struct desktop *); /* fx-15: before every frame decision and in desk_redraw */
 void desk_caption_damage(struct desktop *, int);
 unsigned desk_shell_occluders(const struct desktop *, struct desk_box *); /* SH_LEVELS+6 slots */
-static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }
+/* G25: SoundSentry and ShowSounds follow every desktop sound (access_desktop.c; weak: tests may omit it). */
+/* G25 accessibility glue (access_desktop.c). Hosts that omit it get NULL from the weak references. */
+void desk_access_tick(struct desktop *);                   /* every service turn: SlowKeys, hot-key holds, MouseKeys, time-out, flash */
+uint64_t desk_access_wake(const struct desktop *, uint64_t now_ns);   /* next deadline, 0 none */
+void desk_access_settings_changed(struct desktop *);       /* desktop.cfg was reloaded or edited */
+void desk_access_sound_cue(struct desktop *, unsigned event) __attribute__((weak));
+static inline void desk_sound(struct desktop *d, unsigned e)
+{ if (d->sound_event) d->sound_event(d,e); if (desk_access_sound_cue) desk_access_sound_cue(d,e); }
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
 int desk_v3_receive(struct desktop *, int, const struct ciuki_message *);
 void desk_v3_revoke(struct desktop *);
@@ -601,6 +715,8 @@ void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 int desk_modal_target(const struct desktop *, int index);
 int desk_next_window(const struct desktop *, int excluded, uint32_t pid, const char *application);
+void desk_preferences_changed(struct desktop *);
+void desk_preferences_persistent(const struct desktop *, struct ciuki_settings *);
 void desk_cursor_update(struct desktop *);
 void desk_geometry_begin(struct desktop *, int index, int size);
 void desk_geometry_end(struct desktop *, int cancel);
@@ -618,6 +734,7 @@ void desk_saver_tick(struct desktop *);
 int desk_saver_start(struct desktop *, unsigned kind);
 int desk_saver_input(struct desktop *, const struct ciuki_input_event *);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
+void desk_input_unfiltered(struct desktop *, const struct ciuki_input_event *);   /* G25: after the accessibility filters */
 int desk_drain_input(struct desktop *, int (*read_events)(int, struct ciuki_input_event *, uint32_t));
 void desk_composite(struct desktop *, struct desk_box);
 void desk_accel_reset(struct desktop *, uint32_t generation);

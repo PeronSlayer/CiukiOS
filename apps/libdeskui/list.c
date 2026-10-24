@@ -7,7 +7,7 @@
 #define HEADER_H 18
 #define CELL_W 76
 #define CELL_H 68
-#define SB 16
+#define SB (desk_appearance_active ? desk_metric(AP_SCROLLBAR,16) : 16)
 
 struct layout {
     struct du_rect body, area, header;
@@ -571,7 +571,7 @@ int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y
         return 1;
     }
     int dbl = index >= 0 && u->last_click_widget == w->id && u->last_click_index == index &&
-              u->now - u->last_click_ns < DU_DOUBLE_CLICK_NS &&
+              u->now - u->last_click_ns < ((uint64_t)u->input_double_ms*1000000ull) &&
               x - u->last_click_x <= 4 && u->last_click_x - x <= 4 && y - u->last_click_y <= 4 && u->last_click_y - y <= 4;
     if (index >= 0) w->active = (unsigned)index;
     /* fx-19: a press on a selected item (without Shift) keeps the selection

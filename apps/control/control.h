@@ -8,12 +8,14 @@
 #include "../libdeskui/deskui.h"
 #include "../libdeskui/textarea.h"
 #include "../desktop/settings.h"
+#include "../desktop/customize.h"
 #include "../desktop/shell_link.h"
 #include "../desktop/startup.h"
 #include "../desktop/sounds.h"
 #include "../desktop/autoplay.h"
 #include "../desktop/wallpaper.h"
 #include "../desktop/settings_catalog.h"
+#include "../desktop/power_policy.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
 #include "../../src/kernel/include/ciuki/game_ports_settings.h"
@@ -22,6 +24,9 @@
 #include <ciuki/font.h>
 #include <stdint.h>
 #include "driver_pack.h"
+#include "../desktop/users.h"
+#include "internet_options.h"
+#include "../systools/systools.h"
 #define CP_PACK_INSTALL 1450
 #define CP_PACK_REMOVE 1451
 #define CP_PACK_LOCATION 1452
@@ -36,9 +41,12 @@
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_DISPLAY_TABS };
+enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_EFFECTS, CP_THEMES, CP_DISPLAY_TABS };
 enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
-enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS };
+enum { CP_WALL_PATTERN=2001 };
+enum { CP_ICON_APPEARANCE=1990, CP_ICON_APPEARANCE_BACK, CP_ICON_SPACE_X, CP_ICON_SPACE_Y, CP_ICON_FONT, CP_ICON_SPACE_X_VALUE, CP_ICON_SPACE_Y_VALUE };
+enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS, CP_SAVER_PASSWORD, CP_SAVER_CHANGE, CP_SAVER_POWER,
+       CP_SAVER_NONE, CP_SAVER_BLANK, CP_SAVER_LOGO, CP_SAVER_STARS, CP_SAVER_UP, CP_SAVER_DOWN };
 #define CP_LOG_BYTES 8192u
 #define CP_LOG_FILE "/system/logs/BOOT.LOG"
 #define CP_FONTS_MAX 32
@@ -53,7 +61,7 @@ enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE
 enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT, CP_MODE_SAVE };
 /* f2-88b: one preview job. image is moved to the worker (NULL: decode path first). */
 struct cp_preview_req {
-    char path[128]; int mode; uint32_t colour, bar; int font; uint32_t label; int aa;
+    char path[128]; int mode, pattern; uint32_t colour, bar; int font; uint32_t label; int aa;
     const uint32_t *portrait; struct desk_image image;
 };
 struct cp_preview_done {
@@ -76,7 +84,21 @@ struct cp_game_result {
     unsigned game;
     int saved, error, rejected;
 };
+#define CP_MENU_MAX 96
+enum { CP_TASKBAR_TABS=1970, CP_START_ADD, CP_START_REMOVE, CP_START_ADVANCED, CP_START_CLEAR, CP_START_LIST,
+       CP_ADD_TARGET=2000, CP_ADD_ARGS, CP_ADD_FOLDER, CP_ADD_NAME, CP_REMOVE_CONFIRM };
+struct cp_menu_result { struct sh_folder_item entries[CP_MENU_MAX]; unsigned count; int error,operation; };
 struct cp_host {
+    int (*user_begin)(void *,const struct users_request *);
+    int (*user_poll)(void *,struct users_view *,int *);
+    int (*internet_clear_history)(void *);
+    int (*internet_default)(void *);
+    int (*internet_load)(void *,struct cp_internet_options *);
+    int (*internet_save)(void *,const struct cp_internet_options *);
+    int (*menu_begin)(void *,const struct sh_edit_request *,const char *arguments);
+    int (*menu_poll)(void *,struct cp_menu_result *);
+    int (*menu_explore)(void *,const char *);
+
     int (*pack_scan)(void *, const char *, char names[][192], unsigned);
     int (*pack_preview)(void *, struct dp_plan *, const char *, const char *, const struct ndp_device *, char reason[160]);
     int (*pack_install)(void *, const struct dp_plan *, const char *, char reason[160]);
@@ -95,6 +117,7 @@ struct cp_host {
     void (*decode_cancel)(void *);
     void (*log)(void *, const char *line);                            /* serial record, optional */
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
+    int (*open_applet)(void *, int page); /* separate Display or Power Management window */
     int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
@@ -110,6 +133,13 @@ struct cp_host {
     int (*boot_save)(void *, const char *, size_t);
     int (*load_sounds)(void *, char *, size_t, size_t *);
     int (*save_sounds)(void *, const char *, size_t);
+    int (*sound_validate)(void *, const char *);
+    int (*sound_schemes)(void *, char names[][SOUND_SCHEME_NAME], unsigned);
+    int (*sound_scheme)(void *, unsigned, const char *, struct sound_scheme *);
+    int (*monitor)(void *,struct ciuki_monitor_info *);
+    int (*refresh_rates)(void *,struct ciuki_display_refresh *);
+    struct ciuki_monitor_info monitor_info;
+    struct ciuki_display_refresh refresh_info;
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*engine)(void *, struct ciuki_accel_info *);
     int (*engine_info)(void *, struct ciuki_display_engine_info *);
@@ -120,7 +150,11 @@ struct cp_host {
     int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
     int (*power)(void *); /* opens the shell's safe shutdown dialog */
     int (*power_status)(void *, struct ciuki_power_status *);
+    int (*power_events)(void *, struct ciuki_power_events *);   /* G11: call-73 EVENTS; NULL: unavailable */
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
+    int (*capture_caps)(void *, struct ciuki_audio_capture *);
+    int (*audio_line)(void *,struct ciuki_mixer_line *,int set);
+    int (*multimedia_open)(void *, unsigned); /* 0 Volume Control, 1 Recorder, 2 Music */
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
     /* f5-07A RPC adapter; enumerate HKLM and HKCU Uninstall, never open hives.
@@ -135,6 +169,15 @@ struct cp_host {
     /* G1: the system time-zone record (syscall 97): GET, SET_LOCAL,
      * SET_ZONE; 0 or -errno. NULL: Date/Time shows the host clock read-only. */
     int (*time_zone)(void *, struct ciuki_time_zone *, uint32_t operation);
+    /* G30 (docs/design/system-tools.md): hardware profile settings,
+     * /system/settings/hwprofiles.cfg. load returns 0 or -errno (absent -ENOENT) with a terminated text;
+     * save replaces the file atomically (temp file, fsync, rename). NULL: profiles live in memory only. */
+    int (*hw_load)(void *, char *text, size_t size, size_t *length);
+    int (*hw_save)(void *, const char *text, size_t length);
+    /* Installed driver-pack entries as Add New Hardware models (class NETWORK); count or -errno. NULL: none. */
+    /* Current memory totals (call 70), KiB; NULL: the startup values mem_total_k and mem_free_k. */
+    int (*memory)(void *, uint64_t *total_k, uint64_t *free_k);
+    int (*driver_catalog)(void *, struct aw_model *out, unsigned capacity);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -145,6 +188,24 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct users_view users;
+    struct users_request user_request;
+    struct du_item user_items[USERS_MAX];
+    int user_busy, user_loaded, user_operation;
+    char user_note[160];
+    struct regional regional_edit;
+    struct du_item regional_tabs[5], regional_presets[2];
+    unsigned regional_tab;
+    int regional_saving, regional_accept;
+    struct cp_internet_options internet;
+    int internet_loaded,internet_tab;
+    struct cp_menu_result menu;
+    struct du_item taskbar_tabs[2],menu_items[CP_MENU_MAX];
+    struct sh_edit_request menu_edit;
+    char menu_target[CFG_PATH_MAX],menu_args[1024],menu_folder[CFG_PATH_MAX];
+    int taskbar_tab,menu_busy,menu_cleared;
+    unsigned menu_selected;
+
     struct game_ports_settings game_ports;
     struct ciuki_joystick_control game_joystick;
     int game_open, game_busy, game_loaded, game_joy_ready, game_joy_dirty, game_save;
@@ -158,7 +219,7 @@ struct cp_app {
 
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
-    struct du_item saver_items[3];
+    struct du_menu_item saver_items[4];
     struct du_item network_items[2], network_tabs[3];
     char network_names[2][64], network_message[96], network_test_name[128];
     unsigned network_selected, network_tab;
@@ -176,8 +237,22 @@ struct cp_app {
     struct du_ui *ui;
     struct cp_host host;
     char power_lines[20][128];
+    /* G11 Power Management (power.inc): the desktop.cfg power_* lines, the
+     * meter summary, EVENTS (standby availability), the tab and dropdowns. */
+    struct pp_config pw_cfg;
+    struct pp_summary pw_summary;
+    struct ciuki_power_events pw_events;
+    int pw_events_ok, pw_lid_known, pw_tab, pw_details, pw_popup_owner, pw_tab_count, pw_tabs_map[4];
+    struct du_item pw_tabs[4];
+    struct du_menu_item pw_menu[16];
+    char pw_menu_labels[16][PP_NAME_MAX];
+    int pw_menu_value[16];
+    char pw_cells[PP_SOURCES][PP_TIMERS][24], pw_text[3][128];
     struct ciuki_settings cfg;
     struct ciuki_settings display_original;
+    int icon_appearance;
+    struct du_item icon_font_items[DESK_FONTS];
+    char icon_font_labels[DESK_FONTS][64];
     int display_tab, display_session, display_dirty, display_preview, display_write;
     int display_accept, display_leaving, close_pending;
     int navigation_pending, next_page;
@@ -194,11 +269,24 @@ struct cp_app {
     int audio_before_ok;
     char sound_text[SOUND_TEXT_MAX+1];
     struct sound_scheme sounds; unsigned sound_selected;
-    struct du_item sound_items[SOUND_EVENTS], scheme_items[3];
+    struct du_item sound_items[SOUND_EVENTS], scheme_items[3+SOUND_SCHEMES_MAX];
+    char sound_names[SOUND_SCHEMES_MAX][SOUND_SCHEME_NAME], sound_named[SOUND_SCHEME_NAME];
+    unsigned sound_name_count;
     char sound_volume_label[24];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
-    struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
-    char wall_labels[CP_WALLPAPERS + 8][48];
+    struct du_item pattern_items[DESK_WALL_PATTERNS];
+    struct appearance advanced_original;
+    int advanced_original_set, advanced_dirty;
+    uint32_t advanced_colour;
+    struct sound_scheme display_original_sounds;
+    int display_sounds_dirty;
+    char monitor_line[160];
+    int appearance_item, appearance_scheme;
+    struct du_item appearance_items[AP_ITEMS], appearance_schemes[AP_BUILTINS+AP_SCHEMES];
+    char appearance_names[AP_BUILTINS+AP_SCHEMES][32];
+    unsigned appearance_count;
+    struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 16], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
+    char wall_labels[CP_WALLPAPERS + 16][48];
     uint32_t preview[192 * 144];
     int preview_valid;
     struct desk_image image;
@@ -218,7 +306,7 @@ struct cp_app {
     uint64_t snapshot_time;
     unsigned collapsed;
     uint32_t selected_device_id;
-    struct du_item applet_items[CP_PAGES], system_tabs[5];
+    struct du_item applet_items[CP_PAGES], system_tabs[7];
     struct du_item tree_items[CP_TREE_MAX], driver_items[CIUKI_DRIVERS_MAX], lease_items[CIUKI_LEASES_MAX];
     int tree_device[CP_TREE_MAX]; unsigned tree_count;
     char device_names[CIUKI_DEVICES_MAX][96];
@@ -253,11 +341,33 @@ struct cp_app {
     int dt_year, dt_month, dt_day;
     struct du_item dt_tabs[2], dt_zone_items[CP_TZ_MAX];
     char dt_time_text[16], dt_zone_line[160], dt_dst_line[192];
+    /* G30 device actions, Add New Hardware, Performance and Hardware Profiles (hardware.inc). */
+    struct hp_store hp; int hp_ready;
+    unsigned hp_selected;
+    int hp_wait_mode;                    /* start-up radio: 0 wait for me, 1 default after N seconds */
+    char hp_wait_text[8], hp_status[96];
+    char hp_loaded_note[96];
+    uint32_t dm_pending_id; int dm_pending_action; int dm_updating;
+    unsigned dm_candidates[AW_CATALOG_MAX], dm_candidate_count, dm_candidate;
+    struct du_item dm_items[AW_CATALOG_MAX];
+    struct aw_model aw_catalog[AW_CATALOG_MAX]; uint8_t aw_from_pack[AW_CATALOG_MAX]; unsigned aw_catalog_count;
+    struct aw_wizard aw; int aw_active, aw_searching; unsigned aw_progress;
+    unsigned aw_list[AW_CATALOG_MAX], aw_list_count;
+    struct du_item aw_items[CIUKI_DEVICE_CLASSES > AW_CATALOG_MAX ? CIUKI_DEVICE_CLASSES : AW_CATALOG_MAX];
+    char aw_names[AW_FOUND_MAX][96];
+    struct du_item profile_items[HP_MAX]; char profile_notes[HP_MAX][48];
+    struct pf_status perf;
+    /* G25 Accessibility Options (access.inc): settings as last read, the sub-view's entry state, tab and view. */
+    struct access_settings access_loaded, ac_backup;
+    int ac_tab, ac_view;
+    struct du_item ac_tabs[5], ac_items[8];
 };
 void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);
+void cp_menu_poll(struct cp_app *);
 void cp_assets_ready(struct cp_app *);
 int cp_attach(struct cp_app *, struct du_ui *, int page);
+int cp_wallpaper_set(struct cp_app *, const char *path);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
@@ -289,6 +399,7 @@ int cp_display_leave(struct cp_app *);
 int cp_close(struct cp_app *);
 void cp_adapter_paint(struct cp_app *, struct du_canvas *);
 const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size);
+int cp_applet_message(struct ciuki_message *, uint32_t serial, int page);
 void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned request, int value, int flag);
 void cp_fonts_build(struct cp_app *);
 void cp_fonts_paint(struct cp_app *, struct du_canvas *);

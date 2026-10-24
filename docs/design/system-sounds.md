@@ -24,7 +24,9 @@ handles scheme reloads and writes short quanta. Event dispatch only queues a
 command; it performs no disk reads or blocking audio writes in the compositor.
 The player preserves staged samples across partial writes/EAGAIN.
 The compiled default event order and filenames match build_sounds.py; custom
-assignments accept only WAV basenames inside /system/sounds (no traversal). Idle and
+assignments accept WAV basenames inside /system/sounds and, since G22, validated
+absolute PCM WAV paths selected with Browse (no traversal, quotes or control
+characters). See [G22 multimedia](g22-multimedia.md) for named schemes and bounds. Idle and
 shutdown completion use consumed source frames plus the advertised transport
 and drain allowance, without calling the blocking AUDIO_DRAIN in the UI.
 Shutdown gives sound completion at most two seconds before the power request.

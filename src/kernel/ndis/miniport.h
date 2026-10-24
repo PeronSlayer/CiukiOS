@@ -100,6 +100,8 @@ struct ndis_miniport {
     uint8_t counter_width[5];
     unsigned counter_next;
     bool counter_request;
+    unsigned power_phase; /* 0 running, 1 drain, 2 query, 3 D3, 4 asleep, 5 D0 */
+    int power_error;
     struct { struct trap_frame frame;uint32_t token;uint8_t irql;bool active,parked,sync; } call[NDIS_HOST_DEPTH];
     struct { uint32_t packet,buffer,mdl,callback,context,bytes;uint8_t header[14];bool live,pending,completed;uint32_t status,transferred; } transfer;
 };
@@ -109,6 +111,8 @@ uint32_t ndis_mp_register(struct ndis_miniport *,uint32_t address,uint32_t bytes
 int ndis_mp_attributes(struct ndis_miniport *,uint32_t context,uint32_t hang,uint32_t flags,uint32_t bus);
 int ndis_mp_irq(struct ndis_miniport *,uint32_t object,uint32_t vector,uint32_t level,bool isr,bool shared,uint32_t mode);
 void ndis_mp_poll(struct ndis_miniport *);
+bool ndis_mp_power_ready(struct ndis_miniport *);
+int ndis_mp_power(struct ndis_miniport *, bool suspend);
 int ndis_mp_oid(struct ndis_miniport *,bool set,uint32_t oid,const void *,uint32_t bytes);
 int ndis_mp_oid_complete(struct ndis_miniport *,bool set,uint32_t status);
 int ndis_mp_send_complete(struct ndis_miniport *,uint32_t packet,uint32_t status);

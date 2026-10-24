@@ -761,6 +761,8 @@ enum ciuki_syscall {
     /* G1 TIME=97 is preserved; G6 follows the highest allocated syscall. */
     CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
+    CIUKI_SYS_RECOVERY = 99,
+    CIUKI_SYS_NET_INFO = 100,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
@@ -1217,6 +1219,95 @@ struct ciuki_media_label {
     uint32_t reserved;
 };
 _Static_assert(sizeof(struct ciuki_media_label) == 32, "media label ABI");
+/* G29/G29c: mounted FAT or retained unformatted removable media; generation is the physical medium's
+ * MEDIA_GET_STATE generation. GET fills filesystem (12/16/32), sectors,
+ * cluster_bytes, supported_filesystems and label. FORMAT accepts family,
+ * flags and label; the other output fields are ignored and recomputed.
+ * Full (flags=0) scans sectors, Quick recreates metadata without a scan.
+ * Both destroy files. reserved must be zero; fixed/busy/stale media refuse.
+ * Partitioned volumes retain their FAT family; no system files are copied. */
+#define MEDIA_GET_FORMAT 0x4d1au
+#define MEDIA_FORMAT 0x4d1bu
+#define CIUKI_FORMAT_QUICK 1u
+#define CIUKI_FORMAT_FAT12 1u
+#define CIUKI_FORMAT_FAT16 2u
+#define CIUKI_FORMAT_FAT32 4u
+/* G29c: query-only flag for a retained medium without a mounted FAT. */
+#define CIUKI_FORMAT_UNFORMATTED 2u
+#define CIUKI_FORMAT_LOW_LEVEL 4u /* floppy only; FORMAT TRACK, then FAT surface check */
+#define MEDIA_FLOPPY_READ 0x4d1cu
+#define MEDIA_FLOPPY_WRITE 0x4d1du
+/* Entire diskette snapshot; bytes=sectors*512, <=2880 KiB. Kernel takes
+ * exclusive ownership for each call. WRITE requires an exact capacity match,
+ * and flushes and reads back every sector. buffer is a copied user address. */
+struct ciuki_floppy_image {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t sectors;
+    uint32_t buffer;
+    uint32_t flags;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_floppy_image) == 32, "floppy image ABI");
+struct ciuki_media_format {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t filesystem;
+    uint32_t flags;
+    uint32_t sectors;
+    uint32_t cluster_bytes;
+    uint32_t supported_filesystems;
+    char label[12];
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_media_format) == 52, "media format ABI");
+/* G29b: bounded defragmentation, one whole-file publication per STEP.
+ * Sequence changes by another writer return EAGAIN; analyze and restart.
+ * Map cells aggregate bits over ceil(clusters/128) ranges, never exact
+ * per-cluster squares. Pause/Stop simply stop issuing STEP requests. */
+#define MEDIA_DEFRAG_ANALYZE 0x4d1cu
+#define MEDIA_DEFRAG_STEP 0x4d1du
+#define CIUKI_DEFRAG_CHECK 1u
+#define CIUKI_DEFRAG_CELLS 128u
+#define CIUKI_DEFRAG_FREE 1u
+#define CIUKI_DEFRAG_USED 2u
+#define CIUKI_DEFRAG_FRAGMENTED 4u
+#define CIUKI_DEFRAG_DIRECTORY 8u
+#define CIUKI_DEFRAG_BAD 16u
+struct ciuki_media_defrag {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint64_t sequence;
+    uint32_t flags;
+    uint32_t ordinal;
+    uint32_t files;
+    uint32_t fragmented;
+    uint32_t clusters;
+    uint32_t free_clusters;
+    uint32_t moved;
+    uint32_t finished;
+    uint8_t map[CIUKI_DEFRAG_CELLS];
+};
+_Static_assert(sizeof(struct ciuki_media_defrag) == 184, "media defrag ABI");
+#define MEDIA_GET_CONVERT 0x4d1eu
+#define MEDIA_CONVERT 0x4d1fu
+struct ciuki_media_convert {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t cluster_bytes;
+    uint32_t filesystem;
+    uint32_t sectors;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_media_convert) == 32, "media convert ABI");
 _Static_assert(sizeof(struct ciuki_media_space) == 32, "media space ABI");
 _Static_assert(sizeof(struct ciuki_media_state_v1) == 120, "media state v1 ABI");
 _Static_assert(sizeof(struct ciuki_media_state) == 224, "media state ABI");
@@ -1386,6 +1477,7 @@ _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position 
 #define DISK_PUBLISH 0x4405u        /* struct ciuki_disk_lease (drive, reasons out) */
 #define DISK_LEASE_STATE 0x4406u    /* struct ciuki_disk_lease (out) */
 #define DISK_SET_PHASE 0x4407u      /* struct ciuki_disk_lease (phase in) */
+#define DISK_PARTITION_ACQUIRE 0x4409u /* ciuki_disk_info; exclusive nonboot disk editor */
 #define DISK_RECHECK 0x4408u        /* struct ciuki_disk_recheck */
 #define CIUKI_DISK_SLOTS 4u
 #define CIUKI_DISK_SECTOR 512u
@@ -1505,10 +1597,80 @@ _Static_assert(sizeof(struct ciuki_disk_recheck) == 64, "disk recheck ABI");
 #define AUDIO_RESET 0x4106u
 #define AUDIO_REFILL_READ 0x4107u /* command: this thread's next bounded source reads */
 #define AUDIO_GET_PRODUCER 0x4108u /* f1-101: the kernel's producer boost state of this stream */
+#define AUDIO_CAPTURE_CAPS 0x4109u
+#define AUDIO_CAPTURE_START 0x410au
+#define AUDIO_CAPTURE_READ 0x410bu
+#define AUDIO_CAPTURE_STOP 0x410cu
+#define CIUKI_CAPTURE_MIC 0u
+#define CIUKI_CAPTURE_LINE 1u
+#define CIUKI_CAPTURE_CD 2u
+#define CIUKI_CAPTURE_MIX 3u
+#define CIUKI_CAPTURE_FRAMES 128u
+/* Open /dev/audio O_RDONLY. START is explicit and exclusive; close stops it.
+ * Fixed S16LE stereo 48000 Hz, copied buffers only. Unsupported hardware
+ * reports available=0, START returns EOPNOTSUPP. READ returns EAGAIN while
+ * waiting for data, EIO on an overrun. Gain is software attenuation 0..100. */
+struct ciuki_audio_capture {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t gain;
+    uint32_t rate;
+    uint32_t channels;
+    uint32_t format;
+    uint32_t available;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_capture_data {
+    uint32_t version;
+    uint32_t size;
+    uint32_t frames;
+    uint32_t captured;
+    int16_t pcm[256]; /* CIUKI_CAPTURE_FRAMES stereo frames */
+    uint32_t reserved[2];
+};
+_Static_assert(sizeof(struct ciuki_audio_capture)==40,"audio capture control");
+_Static_assert(sizeof(struct ciuki_audio_capture_data)==536,"audio capture data");
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
 #define MIXER_REFRESH_MASTER 0x4204u /* f1-100: control handle; master record, one requested hardware read */
+/* G22B: appended after the highest audio/mixer operations in visible refs. */
+#define AUDIO_SET_SOURCE 0x410du
+/* Exclusive input reservation without starting DMA. A reserved description
+ * retains its ownership across START/STOP until RELEASE or last close. */
+#define AUDIO_CAPTURE_ACQUIRE 0x410eu
+#define AUDIO_CAPTURE_RELEASE 0x410fu
+#define MIXER_GET_LINE 0x4205u
+#define MIXER_SET_LINE 0x4206u
+#define CIUKI_MIXER_WAVE 1u
+#define CIUKI_MIXER_MIDI 2u
+#define CIUKI_MIXER_CD 3u
+#define CIUKI_MIXER_LINE 4u
+#define CIUKI_MIXER_MIC 5u
+#define CIUKI_AUDIO_MIXED 6u
+/* source is Wave/MIDI/CD or MIXED (the caller applies the line gains). */
+struct ciuki_audio_route {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t reserved;
+};
+/* recording=0 playback, 1 recording; selected is the recording input mux.
+ * Get reports unavailable lines, Set rejects them. Only the delegated mixer
+ * descriptor may Set. Analog controls preserve unrelated codec bits. */
+struct ciuki_mixer_line {
+    uint32_t version;
+    uint32_t size;
+    uint32_t line;
+    uint32_t recording;
+    uint32_t left;
+    uint32_t right;
+    uint32_t mute;
+    uint32_t selected;
+    uint32_t available;
+    uint32_t reserved;
+};
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u
@@ -1710,6 +1872,47 @@ struct ciuki_power_status {
     struct ciuki_power_battery batteries[CIUKI_POWER_BATTERIES];
     struct ciuki_power_zone zones[CIUKI_POWER_ZONES];
 };
+/* G11 power policy (call 73, docs/design/power-policy.md). STANDBY (desktop
+ * only) enters a qualified sleep state; ENOTSUP while QUERY lacks
+ * CAN_STANDBY. POLICY (desktop only): C=record, D=sizeof; queues the ATA
+ * standby timer of every fixed disk for a kernel task and returns at once;
+ * the out fields report the last completed application. EVENTS (any native
+ * client): C=record, D=sizeof; cached boot-monotonic counters, no firmware
+ * call. */
+#define CIUKI_POWER_STANDBY 5u
+#define CIUKI_POWER_POLICY 6u
+#define CIUKI_POWER_EVENTS 7u
+#define CIUKI_POWER_CANCEL_STANDBY 8u
+#define CIUKI_POWER_CAN_STANDBY 16u
+#define CIUKI_POWER_POLICY_VERSION 1u
+#define CIUKI_POWER_EVENTS_VERSION 1u
+/* standby_reason: the first unmet standby qualification. */
+#define CIUKI_POWER_STANDBY_AVAILABLE 0u
+#define CIUKI_POWER_STANDBY_NO_PROVIDER 1u
+#define CIUKI_POWER_STANDBY_NO_FIRMWARE 2u
+#define CIUKI_POWER_STANDBY_NO_RESUME 3u
+struct ciuki_power_policy {
+    uint32_t version;
+    uint32_t size;
+    uint32_t disk_seconds; /* in: idle time before the drives spin down; 0 never */
+    uint32_t disks; /* out: fixed disks that accepted the timer */
+    uint32_t refused; /* out: disks without the feature or that aborted */
+    uint32_t applied_seconds; /* out: programmed time (rounded up) */
+    int32_t error; /* out: negative errno of the first failure */
+    uint32_t reserved;
+};
+struct ciuki_power_events {
+    uint32_t version;
+    uint32_t size;
+    uint32_t sleep_requests; /* APM 0001h, 0002h, 0009h, 000Ah */
+    uint32_t battery_low; /* APM 0005h */
+    uint32_t critical; /* APM 0008h */
+    uint32_t resumes; /* APM 0003h, 0004h, 000Bh */
+    uint32_t status_changes; /* APM 0006h, 000Ch */
+    uint32_t standby_reason; /* CIUKI_POWER_STANDBY_* */
+    uint32_t disk_seconds; /* last programmed drive timer, UNKNOWN before */
+    uint32_t reserved;
+};
 
 /* f2-33: process enumeration (call 70) and termination request (call 71).
  * One system record, then process records in ascending PID order. */
@@ -1734,7 +1937,8 @@ struct ciuki_proc_system {
     uint32_t kheap_bytes;
     uint32_t kheap_high_water;
     uint32_t processes;
-    uint32_t reserved[2];
+    uint32_t disk_read_kib;   /* G30: device bytes read, KiB, wraps at 4 TiB; 0 when not counted */
+    uint32_t disk_write_kib;  /* G30: device bytes written, KiB */
 };
 struct ciuki_proc_record {
     uint32_t version;
@@ -1969,6 +2173,53 @@ struct ciuki_surface_info {
 /* G10: shared screen policy and serialized monitor power, syscall 74. */
 #define CIUKI_DISPLAY_SCREEN 2u
 #define CIUKI_DISPLAY_DPMS 3u
+/* G23: additive queries. Existing display records remain unchanged.
+ * DEVCTL numbers follow main's highest allocated request, 0x53540004.
+ * Display authority may query via syscall 74 operations 4/5 as well. */
+#define CIUKI_DISPLAY_MONITOR 4u
+#define CIUKI_DISPLAY_REFRESH 5u
+#define DISPLAY_GET_MONITOR 0x53540005u
+#define DISPLAY_GET_REFRESH 0x53540006u
+#define CIUKI_MONITOR_VERSION 1u
+#define CIUKI_MONITOR_EDID_VALID 1u
+#define CIUKI_MONITOR_DDC 2u
+#define CIUKI_TIMING_PREFERRED 1u
+#define CIUKI_TIMING_INTERLACED 2u
+struct ciuki_monitor_timing {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixel_clock_khz;
+    uint32_t horizontal_total;
+    uint32_t vertical_total;
+    uint32_t refresh_millihz;
+    uint32_t flags;
+};
+struct ciuki_monitor_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    char manufacturer[4];
+    uint32_t product;
+    uint32_t serial;
+    char name[32];
+    uint32_t manufacture_week;
+    uint32_t manufacture_year;
+    uint32_t minimum_hz;
+    uint32_t maximum_hz;
+    uint32_t timing_count;
+    struct ciuki_monitor_timing timings[4];
+    uint8_t edid[128];
+};
+struct ciuki_display_refresh {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mode_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t current_millihz; /* 0: firmware default, actual rate unknown */
+    uint32_t supported_count;
+    uint32_t rates_millihz[16]; /* monitor timings, not a mode-setting promise */
+};
 #define CIUKI_SCREEN_VERSION 1u
 #define CIUKI_SCREEN_CONFIG 1u
 #define CIUKI_SCREEN_STATUS 2u
@@ -2337,6 +2588,17 @@ _Static_assert(sizeof(struct ciuki_display_engine_info) == 232, "display engine 
 _Static_assert(_Alignof(struct ciuki_display_engine_info) == 4, "display engine alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_display_engine_info, native) == 168, "display engine counters");
 
+/* G12: input-grant-only keyboard policy; no new syscall. */
+#define INPUT_KEYBOARD_SET 0x4905u
+#pragma pack(push, 4)
+struct ciuki_keyboard_settings {
+    uint32_t version;
+    uint32_t size;
+    uint32_t delay;
+    uint32_t speed;
+};
+#pragma pack(pop)
+_Static_assert(sizeof(struct ciuki_keyboard_settings)==16,"keyboard settings size");
 struct ciuki_input_event {
     uint32_t sequence; /* 0 */
     uint32_t source; /* 4 */
@@ -2415,7 +2677,27 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_IMAGE_QUERY 17u
 #define CIUKI_DOSVM_TEXT 18u /* owner-only snapshot of visible BIOS text cells */
 #define CIUKI_DOSVM_MARK 19u /* focused=1 pause for Mark, 0 resume */
+#define CIUKI_DOSVM_CLIP_REQUEST 20u /* owner fetches transient WINOLDAP request */
+#define CIUKI_DOSVM_CLIP_COMPLETE 21u /* matching serial completes it */
+#define CIUKI_DOSVM_CLIP_MAX 65536u
+#define CIUKI_DOSVM_CLIP_SCREEN 256u /* text-only full-screen Print Screen */
 #define CIUKI_DOSVM_TEXT_MAX 16000u
+/* G17 owner-bound visible OEM text and window execution policy. No pointers. */
+#define CIUKI_DOSVM_TEXT_CHUNK 22u
+#define CIUKI_DOSVM_POLICY 23u
+#define CIUKI_DOSVM_TEXT_BYTES 48u
+struct ciuki_dosvm_text_chunk {
+    uint32_t row;
+    uint32_t column;
+    uint32_t columns;
+    uint32_t rows;
+    uint8_t characters[CIUKI_DOSVM_TEXT_BYTES];
+};
+struct ciuki_dosvm_policy {
+    uint32_t marking; /* 0/1: pause at the existing guest checkpoint */
+    uint32_t idle_sensitivity; /* 0..100: empty BIOS keyboard poll detection */
+    uint32_t reserved[8];
+};
 #define CIUKI_DOSVM_IMAGE_UNCHECKED 0u /* not verified yet: CREATE verifies */
 #define CIUKI_DOSVM_IMAGE_VERIFYING 1u
 #define CIUKI_DOSVM_IMAGE_VERIFIED 2u
@@ -2426,6 +2708,7 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_EVENT_STATE 2u
 #define CIUKI_DOSVM_EVENT_CONSOLE 4u
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
+#define CIUKI_DOSVM_EVENT_CLIPBOARD 16u
 /* CREATE launch.kernel: all three historical values map to unified (2).
  * Values 0/1 are retired compatibility inputs, never another kernel.
  * game is the catalog index+1, or zero for the interactive shell. */
@@ -2445,9 +2728,20 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_SHELL_READY 32u /* STATUS: shell blocked for input, guest key queues empty */
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
 #define CIUKI_DOSVM_SAVE_FULL 64u /* STATUS.changed: game data quota/disk space exhausted */
+#define CIUKI_DOSVM_PROGRAM_RETURNED 128u /* armed EXEC returned to its shell */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_clip {
+    uint32_t serial;
+    uint32_t op; /* WINOLDAP AX low byte, or CLIP_SCREEN */
+    uint32_t format;
+    uint32_t bytes;
+    uint32_t buffer;
+    uint32_t capacity;
+    int32_t result; /* 0 success, negative errno failure */
+    uint32_t reserved[3];
+};
 struct ciuki_dosvm_text {
     uint32_t buffer;
     uint32_t capacity;
@@ -2473,6 +2767,8 @@ struct ciuki_dosvm_command {
        union {
         struct ciuki_input_event event; /* 72: INPUT */
         struct ciuki_dosvm_text text; /* TEXT input buffer/capacity; output OEM cells */
+        struct ciuki_dosvm_clip clip; /* CLIP_REQUEST/CLIP_COMPLETE */
+        struct ciuki_dosvm_policy policy;
         struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
         struct { uint32_t bands[2], redraw, flags, reserved[6]; } presentation; /* bands output; redraw input 0/1 */
         struct { uint32_t timeout_ms, frame_ms, events, reserved[7]; } wait; /* WAIT_PRESENT */
@@ -2484,6 +2780,7 @@ struct ciuki_dosvm_command {
        * Legacy callers (flags=0) retain the original damage rectangle.
        * An older kernel rejects flags with EINVAL; retry with flags=0. */
       struct { uint32_t bits[15], reserved; } scanlines;
+      struct ciuki_dosvm_text_chunk text_chunk;
     };
 };
 
@@ -3148,14 +3445,19 @@ _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen s
 #define AF_INET 2
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
+#define SOCK_RAW 3
 #define SOCK_NONBLOCK 2048
 #define SOCK_CLOEXEC 524288
 #define IPPROTO_IP 0
+#define IPPROTO_ICMP 1
+#define IP_TTL 2
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #define SHUT_RD 0
 #define SHUT_WR 1
 #define SHUT_RDWR 2
+#define MSG_TRUNC 32
+#define CIUKI_SOCKET_IO_V2 2u
 #define MSG_PEEK 2
 #define MSG_DONTWAIT 64
 #define MSG_NOSIGNAL 16384
@@ -3166,6 +3468,7 @@ _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen s
 #define SO_BROADCAST 6
 #define SO_RCVTIMEO 20
 #define SO_SNDTIMEO 21
+#define SO_RX_BYTES 22
 #define TCP_NODELAY 1
 #define POLLIN 1
 #define POLLOUT 4
@@ -3178,7 +3481,90 @@ _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen s
 #define CIUKI_SOCKET_IO_MAX 32768
 #define CIUKI_UDP_MAX 1472
 #define CIUKI_DNS_MAX 4
+#define CIUKI_NET_INFO_CONFIG 0u
+#define CIUKI_NET_INFO_SOCKETS 1u
+#define CIUKI_NET_INFO_STATS 2u
+#define CIUKI_NET_INFO_ROUTES 3u
+#define CIUKI_NET_ROUTES_MAX 4u
+#define CIUKI_RESOLVE_START 1u
+#define CIUKI_RESOLVE_POLL 2u
+#define CIUKI_RESOLVE_CANCEL 3u
+#define CIUKI_RESOLVE_PENDING 4u
+#define CIUKI_NET_SOCKET_CLOSED 0u
+#define CIUKI_NET_SOCKET_LISTEN 1u
+#define CIUKI_NET_SOCKET_CONNECTING 2u
+#define CIUKI_NET_SOCKET_CONNECTED 3u
+#define CIUKI_NET_SOCKET_CLOSE_WAIT 4u
 #pragma pack(push, 4)
+struct ciuki_net_protocol_stats {
+    uint32_t received;
+    uint32_t sent;
+    uint32_t dropped;
+    uint32_t errors;
+    uint32_t checksum_errors;
+    uint32_t length_errors;
+    uint32_t memory_errors;
+    uint32_t protocol_errors;
+};
+struct ciuki_net_statistics {
+    uint32_t size;
+    uint32_t version;
+    struct ciuki_net_protocol_stats ip;
+    struct ciuki_net_protocol_stats icmp;
+    struct ciuki_net_protocol_stats tcp;
+    struct ciuki_net_protocol_stats udp;
+    uint32_t tcp_active_opens;
+    uint32_t tcp_passive_opens;
+    uint32_t tcp_failed_connects;
+    uint32_t tcp_resets;
+    uint32_t tcp_retransmitted;
+    uint32_t tcp_received;
+    uint32_t tcp_sent;
+    uint32_t tcp_receive_errors;
+    uint32_t tcp_reset_segments;
+    uint32_t udp_no_ports;
+    uint32_t udp_receive_errors;
+    uint32_t tcp_connections;
+};
+struct ciuki_net_route {
+    uint32_t destination;
+    uint32_t mask;
+    uint32_t gateway;
+    uint32_t interface_address;
+};
+struct ciuki_net_routes {
+    uint32_t size;
+    uint32_t version;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_net_route routes[CIUKI_NET_ROUTES_MAX];
+};
+struct ciuki_resolve_query {
+    uint32_t size;
+    uint32_t version;
+    uint32_t action;
+    uint32_t token;
+    uint32_t name;
+    uint32_t name_bytes;
+    uint32_t address;
+    int32_t status;
+};
+struct ciuki_net_socket_info {
+    uint32_t pid;
+    uint32_t type;
+    uint32_t state;
+    uint32_t local_address;
+    uint16_t local_port;
+    uint16_t peer_port;
+    uint32_t peer_address;
+};
+struct ciuki_net_socket_list {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_net_socket_info sockets[CIUKI_SOCKET_MAX];
+};
 struct ciuki_sockaddr_in {
     uint16_t family;
     uint16_t port;
@@ -3194,6 +3580,8 @@ struct ciuki_socket_io {
     uint32_t flags;
     uint32_t address;
     uint32_t address_length;
+    /* v1: both zero. v2 receive: [0] optional output u32 flags pointer
+     * (MSG_TRUNC for a discarded datagram tail), [1] zero. v2 send: zero. */
     uint32_t reserved[2];
 };
 struct ciuki_socket_option {

@@ -1,3 +1,5 @@
+static unsigned es_logoffs;
+static void es_logoff(struct desktop *desktop) { es_logoffs++; desk_logon_open(desktop,1); }
 /* G3 end of session and window close without data loss (Windows 9x
  * WM_QUERYENDSESSION / WM_ENDSESSION, "This program is not responding",
  * the MS-DOS "cannot shut down this program automatically" warning).
@@ -32,7 +34,7 @@ static void es_register(int i, uint32_t pid)
 static unsigned es_count(int i, unsigned op) { return queued(&shutdown_desktop,i,op,NULL); }
 static struct desk_packet es_last(int i, unsigned op)
 {
-    struct desk_packet p[DESK_TX_MAX]; unsigned n=queued(&shutdown_desktop,i,op,p);
+    static struct desk_packet p[DESK_TX_MAX]; unsigned n=queued(&shutdown_desktop,i,op,p);
     assert(n); return p[n-1];
 }
 /* The answer to the query in turn (its serial survives drained rings). */
@@ -145,6 +147,18 @@ static void test_end_session(void)
     assert(es_count(a,DESK_END_SESSION)==1);
     shutdown_cleanup();
     puts("PASS G3 hung: Not Responding after 5 s, Cancel keeps all, End Task SIGKILL then power, recovery dismisses");
+    /* G11 battery alarm with "Force standby or shutdown even if a program
+     * stops responding": the hung program is ended as End Task would. */
+    es_setup();
+    a=shutdown_client(323,"Hung",1,2); es_register(a,323);
+    desk_session_begin(d,2); d->session.force=1;
+    shutdown_at(5900000000ull); assert(!d->end_task.kind && !es_terms);
+    shutdown_at(6000000000ull);
+    assert(es_terms==1 && es_term_pid==323 && es_term_sig==SIGKILL && !d->end_task.kind);
+    assert(!d->session.state && d->power.state==DESK_POWER_CLOSING);
+    shutdown_reap(323,0); shutdown_at(6500000000ull); assert(shutdown_calls==1);
+    shutdown_cleanup();
+    puts("PASS G11 alarm Force: a program that stops responding during the alarm's shutdown is ended, power follows");
 
     /* 4. A DOS window whose program runs: the Windows 98 warning. No cancels
      * the shutdown; Yes agrees and the window gets END_SESSION(1). */
@@ -234,12 +248,14 @@ static void test_end_session(void)
      * (Restart the default). */
     es_setup();
     a=shutdown_client(361,"CiukNote",1,2); es_register(a,361);
+    d->logoff=es_logoff; es_logoffs=0;
     desk_session_begin(d,3);
     assert(es_last(a,DESK_QUERY_END_SESSION).flags==DESK_ENDSESSION_LOGOFF);
     es_answer(a,361,DESK_SESSION_AGREE);
     assert(d->power.state==DESK_POWER_CLOSING && es_last(a,DESK_END_SESSION).flags==DESK_ENDSESSION_LOGOFF);
     shutdown_reap(361,0); shutdown_at(2000000000ull);
     assert(!d->power.state && !shutdown_calls && !shutdown_prepares);
+    assert(es_logoffs==1 && d->sh.user_gate==1);
     shutdown_cleanup();
     es_setup();
     int tasks=shutdown_client(371,"Task Manager",1,2); d->clients[tasks].taskman=1;

@@ -1,6 +1,16 @@
 /* Generational process-local objects, recursive serialization and DC state.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
+#include "../../../apps/desktop/appearance.h"
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
+#define G23_IMPORT __declspec(dllimport)
+#else
+#define G23_IMPORT extern
+#endif
+G23_IMPORT void *W32API CreateFileA(const char *,DWORD,DWORD,void *,DWORD,DWORD,void *);
+G23_IMPORT BOOL W32API ReadFile(void *,void *,DWORD,DWORD *,void *);
+G23_IMPORT BOOL W32API CloseHandle(void *);
+G23_IMPORT DWORD W32API GetTickCount(void);
 #define SLOTS 4095u
 static struct {
   struct object *object;
@@ -152,7 +162,7 @@ DWORD gdi_color(COLORREF c) {
   return ((c & 255) << 16) | (c & 0xff00) | ((c >> 16) & 255);
 }
 DWORD gdi_device_bpp(struct dc *d) {
-  return desktop.bpp ? desktop.bpp : gdi_target(d)->bpp;
+  return d->printer ? gdi_target(d)->bpp : desktop.bpp ? desktop.bpp : gdi_target(d)->bpp;
 }
 COLORREF gdi_colorref(DWORD c) { return gdi_color(c); }
 HGDIOBJ W32API GetStockObject(int n) {
@@ -256,35 +266,44 @@ BOOL W32API w32_gdi_set_desktop(const struct w32_dib *s) {
 HDC W32API CreateDCA(const char *driver, const char *device, const char *output,
                      const void *mode) {
   GDI_GUARD;
-  (void)device;
-  (void)mode;
-  if (!driver || w32_stricmp(driver, "DISPLAY") || output ||
-      !w32_dib_validate(&desktop))
+  if (!driver || w32_stricmp(driver, "DISPLAY"))
+    return gdi_printer_create(driver, device, output, mode, 0);
+  if (output || !w32_dib_validate(&desktop))
     return 0;
   return new_dc(0, &desktop);
 }
 HDC W32API CreateDCW(const WCHAR *driver, const WCHAR *device,
                      const WCHAR *output, const void *mode) {
-  (void)device;
-  char name[8];
-  unsigned i = 0;
-  if (!driver)
-    return 0;
-  for (; i < 7 && driver[i]; i++) {
-    if (driver[i] > 127)
-      return 0;
-    name[i] = (char)driver[i];
+  char names[3][260];
+  const WCHAR *input[3] = {driver, device, output};
+  for (unsigned n = 0; n < 3; n++) {
+    unsigned i = 0;
+    if (input[n]) {
+      for (; i < 259 && input[n][i]; i++) {
+        int c = gdi_cp1252_ansi(input[n][i]);
+        if (c < 0)
+          return 0;
+        names[n][i] = (char)c;
+      }
+      if (input[n][i])
+        return 0;
+    }
+    names[n][i] = 0;
   }
-  if (driver[i])
-    return 0;
-  name[i] = 0;
-  return CreateDCA(name, 0, output ? "" : 0, mode);
+  if (!driver || w32_stricmp(names[0], "DISPLAY")) {
+    GDI_GUARD;
+    return gdi_printer_create(driver ? names[0] : 0, device ? names[1] : 0,
+                              output ? names[2] : 0, mode, 1);
+  }
+  return CreateDCA(names[0], device ? names[1] : 0, output ? names[2] : 0, mode);
 }
+
 BOOL W32API DeleteDC(HDC h) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  gdi_printer_free(d);
   gdi_record_free(d);
   state_refs(&d->s, -1);
   gdi_region_free(&d->s.clip);
@@ -396,7 +415,7 @@ DWORD W32API GetObjectType(HGDIOBJ h) {
   /* f5-20B: a metafile DC reports OBJ_METADC. */
   return o ? (o->type == GDI_MEMDC && o->u.dc.record ? 4u : o->type) : 0;
 }
-#ifndef W32_HOST_MODEL
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
 __declspec(dllimport) BOOL W32API UnmapViewOfFile(const void *);
 #else
 extern BOOL W32API UnmapViewOfFile(const void *);
@@ -481,6 +500,7 @@ void W32API w32_gdi_process_exit(void) {
   gdi_font_exit();
   for (unsigned i = 0; i < sizeof(fonts) / sizeof(*fonts); i++)
     gdi_font_stock(fonts[i], &stocks[fonts[i]].u.font);
+  gdi_printer_exit();
   desktop = (struct w32_dib){0};
   gdi_palette_reset();
 }
@@ -563,12 +583,36 @@ int W32API GetObjectW(HGDIOBJ h, int bytes, void *out) {
                : 0;
   return GetObjectA(h, bytes, out);
 }
+/* Windows 98 font DPI is established when a GUI process starts. */
+static unsigned display_effects=AP_SMOOTH;
+static unsigned display_dpi(void) {
+  static unsigned dpi; static DWORD last;
+  DWORD now=GetTickCount();
+  if(dpi && (DWORD)(now-last)<1000) return dpi;
+  if(!dpi) dpi=96;
+  last=now;
+  char *text=gdi_alloc(32769); if(!text) return dpi;
+  void *file=CreateFileA("C:\\system\\settings\\desktop.cfg",0x80000000u,7,0,3,0,0);
+  DWORD n=0;
+  if(file!=(void *)(intptr_t)-1) {
+    if(ReadFile(file,text,32768,&n,0) && n<=32768) {
+      text[n]=0;
+      struct appearance a;
+      if(ap_settings_decode(&a,text,n)) { dpi=a.dpi; display_effects=a.effects; }
+    }
+    CloseHandle(file);
+  }
+  gdi_free(text,32769); return dpi;
+}
+int gdi_smoothing(void) { (void)display_dpi(); return !!(display_effects&AP_SMOOTH); }
 int W32API GetDeviceCaps(HDC h, int cap) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
   struct w32_dib *s = gdi_target(d);
   if (!s)
     return 0;
+  if (d->printer)
+    return gdi_printer_caps(d, cap);
   DWORD width = desktop.width ? desktop.width : s->width,
         height = desktop.height ? desktop.height : s->height,
         bpp = desktop.bpp ? desktop.bpp : s->bpp;
@@ -578,9 +622,9 @@ int W32API GetDeviceCaps(HDC h, int cap) {
   case 2:
     return 1;
   case 4:
-    return (int)(width * 254 / 960);
+    return (int)(width * 254 / (display_dpi()*10));
   case 6:
-    return (int)(height * 254 / 960);
+    return (int)(height * 254 / (display_dpi()*10));
   case 8:
     return (int)width;
   case 10:
@@ -610,7 +654,7 @@ int W32API GetDeviceCaps(HDC h, int cap) {
     return bpp <= 8 ? 0xbf99 : 0xbe99;
   case 88:
   case 90:
-    return 96;
+    return (int)display_dpi();
   case 104:
     return bpp <= 8 ? 256 : 0;
   case 106:
@@ -618,7 +662,7 @@ int W32API GetDeviceCaps(HDC h, int cap) {
   case 108:
     return (int)bpp;
   case 116:
-    return 60;
+    return 0; /* VBE firmware default; an EDID timing is not scanout state. */
   case 117:
     return (int)height;
   case 118:

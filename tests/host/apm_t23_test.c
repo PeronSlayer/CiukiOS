@@ -93,6 +93,7 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
     case 0x5300: r->eax = 0x0102; r->ebx = 0x504d; r->ecx = 0x0003; break;
     case 0x5301: connects++; break;
     case 0x5304: disconnects++; break;
+    case 0x5310: CHECK(!r->ebx); r->ecx=0; break;
     case 0x530e: r->eax = 0x0102; break;
     case 0x5308: case 0x530f: break;
     case 0x530a:
@@ -154,6 +155,8 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
 }
 void task_start(struct task *t) { CHECK(t != NULL); }
 static unsigned flushes, stops;
+int power_devices_suspend(void) { return -ENOTSUP; }
+int power_devices_resume(void) { return 0; }
 int storage_power_init(void) { return 0; }
 int storage_sync_bounded(uint64_t end) { (void)end; flushes++; return 0; }
 uint64_t deadline_after_ms(uint32_t ms) { return ticks + ms; }
@@ -169,6 +172,7 @@ void klog(const char *fmt, ...)
 #define APM_PLATFORM_HOST_CLOCK
 static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000 + calls * 3; } /* modelled 3 us per BIOS call */
 #include "../../src/kernel/core/power_source.c"
+bool power_devices_resume_ready(void) { return false; }
 #include "../../src/kernel/core/apm_platform.c"
 void task_sleep_ms(uint32_t ms) { ticks += ms; service_once(); }
 static void post(uint16_t e) { events[event_tail++ % 16] = e; }

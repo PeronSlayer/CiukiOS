@@ -92,9 +92,9 @@ yet); it will call `desk_show_desktop`.
   (`--panel=system`), `F1` Help (the Help program, else the shortcut list). The
   keys of a chord are not delivered to the program, repeats and releases
   included. Other Win+key combinations still reach the program.
-* **Find is G7's:** G7 (Find Files or Folders) is not in this build. Win+F,
-  Win+Ctrl+F and F3 on the desktop therefore open a message window that says
-  so; they all call `desk_shell_find`, the one function G7 replaces.
+* **Find (G7 integration):** Win+F and F3 on the desktop call the shared
+  `desk_shell_find` entry point to launch G7's Files criteria with `find:`.
+  Win+Ctrl+F keeps the separate Find Computer placeholder.
 * **Taskbar keyboard focus (KB-13):** Win+Tab starts at the button after the
   active window; Ctrl+Esc opens Start and Esc closes it leaving the focus on
   the Start button. Tab and Shift+Tab walk Start and the task buttons and leave
@@ -176,3 +176,15 @@ assert the codes.
 ## Not delivered (gaps)
 
 See `build/codex/g4-report.md`.
+
+### fx-28 fixed-size windows
+
+Direct Display Properties launches now register a fixed-size native window.
+Native arrangements already move such windows without resizing. Win32
+`CascadeWindows` and `TileWindows` now add SWP_NOSIZE without WS_THICKFRAME;
+sizeable test fixtures explicitly request a sizing frame. Added mixed fixed and
+sizeable regression coverage and an appended fx-15 rendering row. The Control
+Panel browser opens Display in a separate fixed-size applet through DESK_LAUNCH,
+retaining its own sizing style. Monitor Settings launches Power Management by the
+same path. The shell authorises only authenticated Control Panel clients and the
+exact display/power arguments; other programs and panel arguments are refused.

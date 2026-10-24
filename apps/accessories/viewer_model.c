@@ -61,6 +61,26 @@ int viewer_decode(const uint8_t *data, size_t size, const char *name, struct vie
     return 0;
 }
 
+int viewer_rotate(struct viewer_image *im, int quarter_turns)
+{
+    int turns = ((quarter_turns % 4) + 4) % 4;
+    if (!turns || !im->pixels) return 0;
+    int w = im->width, h = im->height;
+    if (turns == 2) {                         /* reverse the pixel order */
+        for (size_t i = 0, j = (size_t)w * (size_t)h - 1; i < j; i++, j--) { uint32_t t = im->pixels[i]; im->pixels[i] = im->pixels[j]; im->pixels[j] = t; }
+        return 0;
+    }
+    uint32_t *out = malloc((size_t)w * (size_t)h * 4);
+    if (!out) return -ENOMEM;
+    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+        /* Clockwise: old (x, y) goes to (h - 1 - y, x); counter-clockwise: to (y, w - 1 - x). */
+        int nx = turns == 1 ? h - 1 - y : y, ny = turns == 1 ? x : w - 1 - x;
+        out[(size_t)ny * (size_t)h + (size_t)nx] = im->pixels[(size_t)y * (size_t)w + (size_t)x];
+    }
+    free(im->pixels); im->pixels = out; im->width = h; im->height = w;
+    return 0;
+}
+
 static const int steps[] = { 10, 25, 33, 50, 67, 100, 150, 200, 300, 400, 800 };
 #define STEPS (int)(sizeof(steps) / sizeof(*steps))
 int viewer_zoom_step(int zoom, int direction)

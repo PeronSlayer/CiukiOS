@@ -35,7 +35,9 @@ static void protocol(void)
     const unsigned ops[]={DESK_CREATE_WINDOW,DESK_DAMAGE,DESK_V3_RESIZE,DESK_V3_PLACE,DESK_SET_TITLE,
         DESK_SET_CURSOR,DESK_V3_CURSOR_BITMAP,DESK_V3_POINTER,DESK_V3_WARP,DESK_V3_LEASE,
         DESK_V3_CRASH,DESK_V3_RESTART,DESK_CLOSE,DESK_CLOSED,DESK_CLOSE_REQUEST,DESK_PING,DESK_PONG,
-        DESK_CONFIGURE,DESK_V3_RESULT,DESK_V3_ACTIVATE,DESK_V3_LEASE_EVENT,DESK_KEY,DESK_MOTION,DESK_BUTTON,DESK_V3_RELATIVE_EVENT,DESK_V3_POINTER_STATE,DESK_CLOSE_ACK,DESK_V3_WINDOW_ORDER,DESK_V3_WIN32_HWND};
+        DESK_CONFIGURE,DESK_V3_RESULT,DESK_V3_ACTIVATE,DESK_V3_LEASE_EVENT,DESK_KEY,DESK_MOTION,DESK_BUTTON,
+        DESK_V3_RELATIVE_EVENT,DESK_V3_POINTER_STATE,DESK_CLOSE_ACK,DESK_V3_WINDOW_ORDER,DESK_V3_WIN32_HWND,
+        DESK_V3_HELP,DESK_V3_SOUND};
     for (unsigned k=0;k<sizeof(ops)/sizeof(*ops);k++) {
         unsigned op=ops[k], n=0; int direction=1;
         msg(&m,op,0,1,1); uint8_t *b=m.data+16;
@@ -53,6 +55,7 @@ static void protocol(void)
         case DESK_V3_CRASH: n=13; desk_put32(b,0xc0000005); desk_put32(b+8,1); b[12]='M'; break;
         case DESK_V3_RESTART: case DESK_CLOSE_ACK: n=4; break;
         case DESK_V3_WIN32_HWND: n=4;desk_put32(b,100);break;
+        case DESK_V3_SOUND: n=4;desk_put32(b,9);break;
         case DESK_V3_WINDOW_ORDER: n=20; desk_put32(b,DESK_V3_ORDER_Z|DESK_V3_ORDER_OWNER); desk_put32(b+4,2); desk_put32(b+8,1); desk_put32(b+12,3); desk_put32(b+16,1); break;
         case DESK_V3_POINTER_STATE: n=4; direction=0; break;
         case DESK_CONFIGURE: n=32; direction=0; desk_put32(b,32); desk_put32(b+4,32); desk_put32(b+8,1); desk_put32(b+12,1); break;
@@ -60,7 +63,7 @@ static void protocol(void)
         case DESK_V3_ACTIVATE: n=8; direction=0; break;
         case DESK_V3_LEASE_EVENT: n=20; direction=0; desk_put32(b+4,1); desk_put32(b+8,320); desk_put32(b+12,200); desk_put32(b+16,8); break;
         case DESK_PING: case DESK_PONG: n=4; break;
-        case DESK_CLOSED: case DESK_CLOSE_REQUEST: direction=0; break;
+        case DESK_CLOSED: case DESK_CLOSE_REQUEST: case DESK_V3_HELP: direction=0; break;   /* G15: HELP is server to client, empty */
         case DESK_KEY: case DESK_MOTION: case DESK_BUTTON: case DESK_V3_RELATIVE_EVENT:
             n=40; direction=0;
             desk_put32(b+12,op==DESK_KEY ? CIUKI_INPUT_KEY : op==DESK_BUTTON ? CIUKI_INPUT_BUTTON : CIUKI_INPUT_MOTION);
@@ -78,6 +81,15 @@ static void protocol(void)
     msg(&m,DESK_CREATE_WINDOW,36,1,1); m.fd_count=1; m.fds[0]=9;
     desk_put32(m.data+36,32); desk_put32(m.data+40,32); desk_put32(m.data+44,1);
     assert(desk_parse(&m,1,&s,&p) && !p.title[0]);
+    /* G15: the context-help style bit is accepted, unknown style bits are not; HELP has no payload. */
+    msg(&m,DESK_CREATE_WINDOW,36,1,1); m.fd_count=1; m.fds[0]=9;
+    desk_put32(m.data+16,DESK_V3_CONTEXTHELP); desk_put32(m.data+36,32); desk_put32(m.data+40,32); desk_put32(m.data+44,1); desk_put32(m.data+48,0);
+    assert(desk_parse(&m,1,&s,&p) && p.style==DESK_V3_CONTEXTHELP);
+    desk_put32(m.data+16,DESK_V3_CONTEXTHELP*2); assert(!desk_parse(&m,1,&s,&p));
+    msg(&m,DESK_V3_PLACE,28,1,1); desk_put32(m.data+24,32); desk_put32(m.data+28,32); desk_put32(m.data+32,1); desk_put32(m.data+40,DESK_V3_CONTEXTHELP|DESK_V3_TOPMOST);
+    assert(desk_parse(&m,1,&s,&p) && p.style==(DESK_V3_CONTEXTHELP|DESK_V3_TOPMOST));
+    desk_v3_message(&m,DESK_V3_HELP,0,0,1,1); assert(desk_parse(&m,0,&s,&p) && p.opcode==DESK_V3_HELP && !desk_parse(&m,1,&s,&p));
+    desk_v3_message(&m,DESK_V3_HELP,4,0,1,1); assert(!desk_parse(&m,0,&s,&p));
     puts("PASS every v3 message: direction, length, reserved bytes, descriptors, UTF-8");
 }
 static int peer(int fd, unsigned pid)
@@ -349,6 +361,50 @@ static void window_order(void)
     flush(); cleanup();
     puts("PASS v3 WINDOW_ORDER: insert-after, bottom, topmost bands, owner change, cycles, malformed payloads, authority");
 }
+/* G15 WS_EX_CONTEXTHELP: a "?" caption button in the minimise slot, no minimise or zoom,
+ * hover/press code, and a click sends HELP to the client (and only to it). */
+static void context_help(void)
+{
+    setup(); int root=peer(10,42), plain=create(root,20,1,1,0,0), helper=create(root,21,2,1,DESK_V3_CONTEXTHELP,0);
+    int owned=create(root,22,3,1,DESK_V3_CONTEXTHELP,1);
+    flush();
+    struct desk_box hb=desk_help_box(&d.clients[helper]), min=desk_min_box(&d.clients[plain]), close=desk_close_box(&d.clients[helper]);
+    assert(hb.w>0 && hb.h>0 && !desk_help_box(&d.clients[plain]).w && hb.x+hb.w<=close.x);
+    assert(hb.x==min.x-(d.clients[plain].frame.x-d.clients[helper].frame.x) && hb.y==min.y-(d.clients[plain].frame.y-d.clients[helper].frame.y));   /* the minimise slot */
+    assert(!desk_min_box(&d.clients[helper]).w && !desk_shade_box(&d.clients[helper]).w && close.w>0 && min.w>0);
+    assert(desk_help_box(&d.clients[owned]).w>0);                                        /* dialogs are owned windows */
+    d.mouse_x=hb.x+hb.w/2; d.mouse_y=hb.y+hb.h/2;
+    assert(desk_title_code(&d,d.mouse_x,d.mouse_y)==helper*4+4);
+    assert(desk_title_code(&d,min.x+2,min.y+2)==plain*4+2 || desk_title_code(&d,min.x+2,min.y+2)==0);
+    unsigned before=fake_sent;
+    struct ciuki_input_event down={.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1}, up=down; up.value=0;
+    desk_input(&d,&down); desk_input(&d,&up); flush();
+    unsigned helps=0;
+    for (unsigned k=before;k<fake_sent;k++) if (fake_messages[k].data[1]==DESK_V3_HELP) {
+        struct desk_packet p; assert(desk_parse(&fake_messages[k],0,NULL,&p) && p.window_id==d.clients[helper].v3_id &&
+            p.generation==d.clients[helper].v3_generation && fake_messages[k].length==16);
+        helps++;
+    }
+    assert(helps==1 && !d.clients[helper].minimized && d.clients[helper].window);        /* it neither minimised nor closed */
+    /* The same spot of an ordinary window is its minimise button: no HELP. */
+    d.mouse_x=min.x+min.w/2; d.mouse_y=min.y+min.h/2; before=fake_sent;
+    desk_input(&d,&down); desk_input(&d,&up); flush();
+    for (unsigned k=before;k<fake_sent;k++) assert(fake_messages[k].data[1]!=DESK_V3_HELP);
+    assert(d.clients[plain].minimized);
+    /* A client that did not ask for the style never gets HELP, even asked directly. */
+    before=fake_sent; desk_context_help(&d,plain); desk_context_help(&d,-1); desk_context_help(&d,DESK_CLIENTS); flush();
+    for (unsigned k=before;k<fake_sent;k++) assert(fake_messages[k].data[1]!=DESK_V3_HELP);
+    /* PLACE changes the style: the button appears and disappears with it. */
+    struct ciuki_message m; msg(&m,DESK_V3_PLACE,28,1,1);
+    desk_put32(m.data+16,d.clients[plain].frame.x); desk_put32(m.data+20,d.clients[plain].frame.y);
+    desk_put32(m.data+24,200); desk_put32(m.data+28,100); desk_put32(m.data+32,1); desk_put32(m.data+36,0); desk_put32(m.data+40,DESK_V3_CONTEXTHELP);
+    m.sender_pid=42; assert(!desk_v3_receive(&d,root,&m));
+    assert(d.clients[plain].v3_style&DESK_V3_CONTEXTHELP && desk_help_box(&d.clients[plain]).w>0 && !desk_min_box(&d.clients[plain]).w);
+    desk_put32(m.data+40,0); assert(!desk_v3_receive(&d,root,&m));
+    assert(!desk_help_box(&d.clients[plain]).w && desk_min_box(&d.clients[plain]).w>0);
+    flush(); cleanup();
+    puts("PASS v3 context help: ? button in the minimise slot of DESK_V3_CONTEXTHELP windows (owned dialogs too), title code, HELP to the client on a click only, style changes by PLACE");
+}
 static void input_and_lease(void)
 {
     setup(); int root=peer(10,42), a=create(root,20,1,1,0,0), b=create(root,21,2,1,0,0); desk_focus(&d,a); flush();
@@ -390,9 +446,13 @@ static void input_and_lease(void)
 }
 static void links(void)
 {
-    struct desk_launch_record r={.label="Game",.target="C:\\Games\\A game.exe",.arguments="-data \"A B\"",.directory="C:\\Games",.icon="C:\\Games\\icon.ico",.show=3,.icon_index=-2}, out;
-    uint8_t bytes[DESK_LINK_BYTES]; unsigned n=desk_link_encode(&r,bytes,sizeof(bytes)); assert(n && desk_link_decode(bytes,n,&out)); assert(!memcmp(&r,&out,sizeof(r)));
-    assert(!desk_link_decode(bytes,n-1,&out)); bytes[36]=1; assert(!desk_link_decode(bytes,n,&out)); bytes[36]=0; desk_put32(bytes+16,0xffffffff); assert(!desk_link_decode(bytes,n,&out));
+    static struct desk_launch_record r={.label="Game",.target="C:\\Games\\A game.exe",.arguments="-data \"A B\"",.directory="C:\\Games",.icon="C:\\Games\\icon.ico",.show=3,.icon_index=-2}, out;
+    static uint8_t bytes[DESK_LINK_BYTES]; unsigned n=desk_link_encode(&r,bytes,sizeof(bytes)); assert(n && desk_link_decode(bytes,n,&out)); assert(!memcmp(&r,&out,sizeof(r)));
+    assert(!desk_link_decode(bytes,n-1,&out));
+    desk_put32(bytes+36,0x0641); assert(desk_link_decode(bytes,n,&out) && out.hotkey==0x0641);
+    desk_put32(bytes+36,0x0600); assert(!desk_link_decode(bytes,n,&out)); /* modifier without key */
+    desk_put32(bytes+36,0x10041); assert(!desk_link_decode(bytes,n,&out)); /* reserved upper word */
+    desk_put32(bytes+36,0); desk_put32(bytes+16,0xffffffff); assert(!desk_link_decode(bytes,n,&out));
     assert(desk_uninstall_command("\"C:\\Program Files\\Game\\uninstall.exe\" /remove \"A B\"",&out));
     assert(!strcmp(out.target,"C:\\Program Files\\Game\\uninstall.exe") && !strcmp(out.arguments,"/remove \"A B\""));
     assert(!desk_uninstall_command("\"C:\\bad.exe /remove",&out)); assert(!desk_uninstall_command("uninstall.exe",&out)); assert(!desk_uninstall_command("C:\\Program Files\\uninstall.exe",&out));
@@ -468,6 +528,25 @@ static void bridge(void)
     assert(!du3_ui_progress(&c,1,1,99)); assert(bridge_wire.data[1]==DESK_PONG);
     bridge_wire.data[255]=1; assert(du3_next(&c,&p)<0 && c.disconnected);
     puts("PASS user-mode bridge tokens, backpressure, malformed server, explicit guest UI PONG");
+}
+static void native_power(void)
+{
+    setup();int root=peer(10,42),a=create(root,20,1,1,0,0);flush();
+    struct du3_connection c;struct du3_transport ops={bridge_send,bridge_recv,fake_ops.info,fake_ops.close};
+    assert(!du3_connect(&c,10,&ops));
+    assert(du3_power_reply(&c,1,1,0,1));bridge_wire.sender_pid=42;
+    check_packet(&bridge_wire,1,NULL);assert(!desk_v3_receive(&d,root,&bridge_wire) && d.clients[a].power_aware);
+    desk_power_broadcast(&d,PP_PBT_QUERYSUSPEND,1);desk_power_policy_tick(&d);flush();
+    struct ciuki_message event={0};
+    for(unsigned i=0;i<fake_sent;i++) if(fake_messages[i].data[1]==DESK_POWER_EVENT) event=fake_messages[i];
+    check_packet(&event,0,NULL);bridge_wire=event;struct desk_packet p;
+    unsigned sent=bridge_sends;assert(du3_next(&c,&p)==1 && p.index==0 && p.flags==1 && p.window_id==1 && p.generation==1 && bridge_sends==sent);
+    uint32_t serial=p.serial;
+    assert(du3_power_reply(&c,1,1,serial,2));bridge_wire.sender_pid=42;assert(!desk_v3_receive(&d,root,&bridge_wire));
+    d.now_ns+=DESK_POWER_QUERY_NS;desk_power_policy_tick(&d);assert(d.pbt.running && d.clients[a].power_pending==2);
+    assert(du3_power_reply(&c,1,1,serial,0));bridge_wire.sender_pid=42;assert(!desk_v3_receive(&d,root,&bridge_wire));
+    desk_power_policy_tick(&d);assert(d.pbt.denied && !d.pbt.running);
+    cleanup();puts("PASS G11B native v3 power: opt-in, window/generation binding, explicit UI dequeue and veto, no implicit I/O-thread acknowledgement");
 }
 /* Focused GL completion replay: production request, receive, redraw and drop.
  * No captures or guest evidence. */
@@ -615,6 +694,5 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); window_order(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
-    puts("PASS desktop v3 integration (host only)"); return 0;
+    protocol(); ownership(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);    protocol(); ownership(); window_order(); input_and_lease(); resize_and_cursor(); bridge();native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);    puts("PASS desktop v3 integration (host only)"); return 0;
 }

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <pthread.h>
 
 static void raw_files_event(struct du_ui *u,const struct du_event *e,void *arg)
 { files_event(u,e,arg); }
@@ -52,9 +53,21 @@ static void click(int x, int y) { motion(x, y); press(1); release(1); clock_ns +
 static void rclick(int x, int y) { motion(x, y); press(2); release(2); clock_ns += 600000000ull; }
 static void key(int code) { event(CIUKI_INPUT_KEY, code, 1, 0); event(CIUKI_INPUT_KEY, code, 0, 0); }
 static void chord(int mod, int code) { event(CIUKI_INPUT_KEY, mod, 1, 0); key(code); event(CIUKI_INPUT_KEY, mod, 0, 0); }
-static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 100000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); struct timespec pause={0,1000000}; nanosleep(&pause,NULL); } }
+static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 100000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); } }
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
+/* Keep the worker's copy pending until the UI has requested cancellation.
+ * The UI's clipboard reads continue, so timing cannot turn this into a completed copy. */
+static int hold_cancel_read;
+static pthread_t cancel_ui_thread;
+static int cancel_read(void *ctx, int fd, void *buffer, unsigned count)
+{
+    if (!pthread_equal(pthread_self(),cancel_ui_thread))
+        while (__atomic_load_n(&hold_cancel_read,__ATOMIC_ACQUIRE)) {
+            struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
+        }
+    return fake_vfs.read(ctx,fd,buffer,count);
+}
 static int control_spawned;
 static int control_spawn(struct files_app *a, const char *program, char *const argv[])
 {
@@ -387,7 +400,7 @@ static void script_coordinates(void)
 {
     struct du_rect view = du_menu_title(&ui, 2), file = du_menu_title(&ui, 0);
     struct du_rect vbox = du_menu_box(&ui, app.view_items, 10, view.x, view.y + view.h);
-    struct du_rect fbox = du_menu_box(&ui, app.file_items, 11, file.x, file.y + file.h);
+    struct du_rect fbox = du_menu_box(&ui, app.file_items, app.menus[0].count, file.x, file.y + file.h);
     struct du_widget *places = du_get(&ui, 103);
     struct du_rect system = du_list_label(places, 3);
     printf("SCRIPT view_title=%d,%d list_item=%d,%d places_system=%d,%d file_title=%d,%d new_folder=%d,%d\n",
@@ -468,15 +481,15 @@ static void file_drag_tests(void)
     clock_ns+=600000000ull; motion(x2,y2); press(2); assert(!ui.popup); release(2); assert(ui.popup); key(DU_KEY_ESC);
     puts("PASS fx-19 Files drag source: SM_CXDRAG threshold, multi-selection kept on press, deferred click/Ctrl toggle, right-drag and release-time context menu, data object separate from the clipboard");
 
-    /* Drop target: same drive moves, Ctrl copies, Shift moves, Ctrl+Shift/Alt link is refused (no shortcuts). */
+    /* Drop target: same drive moves, Ctrl copies, Shift moves, Ctrl+Shift/Alt creates shortcuts. */
     assert(!files_navigate(&app,"/Documents"));
     save_drag("/Documents/Desktop/Source.txt",'F');
     int tx,ty; label_point("Target",&tx,&ty);
-    assert(over(7,tx,ty,0)==FM_EFFECT_MOVE && status_allowed==(FM_EFFECT_COPY|FM_EFFECT_MOVE));
+    assert(over(7,tx,ty,0)==FM_EFFECT_MOVE && status_allowed==FM_EFFECTS);
     assert(LIST()->drop_hot==list_find("Target")+1);
     dump("drop-target");
     assert(over(7,tx,ty,FM_KEY_CTRL)==FM_EFFECT_COPY && over(7,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_MOVE);
-    assert(over(7,tx,ty,FM_KEY_CTRL|FM_KEY_SHIFT)==FM_EFFECT_NONE && over(7,tx,ty,FM_KEY_ALT)==FM_EFFECT_NONE && !LIST()->drop_hot);
+    assert(over(7,tx,ty,FM_KEY_CTRL|FM_KEY_SHIFT)==FM_EFFECT_LINK && over(7,tx,ty,FM_KEY_ALT)==FM_EFFECT_LINK && LIST()->drop_hot);
     struct du_rect body=du_list_body(LIST());
     assert(over(7,body.x+body.w-30,body.y+body.h-30,0)==FM_EFFECT_MOVE && !LIST()->drop_hot);   /* background: this folder */
     files_drag_over(&app,7,1,0,0,0); assert(status_effect==FM_EFFECT_NONE && !LIST()->drop_hot);
@@ -487,10 +500,10 @@ static void file_drag_tests(void)
     assert(over(8,tx,ty,0)==FM_EFFECT_COPY && over(8,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_MOVE);
     files_drag_drop(&app,8,tx,ty,FM_EFFECT_MOVE); tick();
     assert(fake_lookup("/Documents/Target/Stick.txt")>=0 && fake_lookup("/mnt/e/Stick.txt")<0);
-    /* A CD source is copy-only; a folder never enters itself; its own folder is a no-op move. */
+    /* A CD source permits copy and link; a folder never enters itself; its own folder is a no-op move. */
     app.media.removable_mask=1u<<4; app.media.type[4]=CIUKI_MEDIA_OPTICAL;
     save_drag("/mnt/e/Other.txt",'F');
-    assert(over(9,tx,ty,0)==FM_EFFECT_COPY && status_allowed==FM_EFFECT_COPY && over(9,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_NONE);
+    assert(over(9,tx,ty,0)==FM_EFFECT_COPY && status_allowed==(FM_EFFECT_COPY|FM_EFFECT_LINK) && over(9,tx,ty,FM_KEY_SHIFT)==FM_EFFECT_NONE);
     app.media.removable_mask=0; app.media.type[4]=0;
     save_drag("/Documents/Target",'D');
     assert(over(10,tx,ty,0)==FM_EFFECT_NONE && status_allowed==0);
@@ -504,9 +517,10 @@ static void file_drag_tests(void)
     assert(over(11,nl.x+4,nl.y+nl.h/2,0)==FM_EFFECT_MOVE && TREE()->drop_hot==node+1);
     files_drag_drop(&app,11,nl.x+4,nl.y+nl.h/2,FM_EFFECT_MOVE); tick();
     assert(fake_lookup("/Documents/Target/Move.txt")>=0 && fake_lookup("/Documents/Desktop/Move.txt")<0 && !TREE()->drop_hot);
-    /* A stale or mismatched effect does nothing. */
+    /* G8: a link drop publishes a shortcut, keeps the source, and refreshes. */
     save_drag("/Documents/Desktop/Third.txt",'F');
-    files_drag_drop(&app,12,tx,ty,FM_EFFECT_LINK); tick(); assert(fake_lookup("/Documents/Target/Third.txt")<0);
+    files_drag_drop(&app,12,tx,ty,FM_EFFECT_LINK); files_test_wait(&app);
+    assert(fake_lookup("/Documents/Target/Third.txt")<0 && fake_lookup("/Documents/Target/Shortcut to Third.txt.lnk")>=0 && fake_lookup("/Documents/Desktop/Third.txt")>=0);
     /* Hovering a collapsed tree folder expands it after one second (Explorer). */
     node=-1; for (unsigned i=0;i<app.tree_count;i++) if (!strcmp(app.tree[i].path,"/Documents/Target")) node=(int)i;
     assert(node>=0 && app.tree[node].children && !app.tree[node].expanded);
@@ -605,7 +619,7 @@ int main(int argc, char **argv)
     /* File > New Folder: checkpoint 2, inline rename open. */
     struct du_rect file = du_menu_title(&ui, 0);
     click(file.x + file.w / 2, file.y + file.h / 2);
-    struct du_rect fbox = du_menu_box(&ui, app.file_items, 11, file.x, file.y + file.h);
+    struct du_rect fbox = du_menu_box(&ui, app.file_items, app.menus[0].count, file.x, file.y + file.h);
     dump("menu-file");
     click(fbox.x + 40, fbox.y + 3 + 17 + 17 + 9 + 8);
     assert(checkpoint_count == 2 && app.rename_index >= 0 && fake_lookup("/system/New Folder") >= 0);
@@ -693,7 +707,7 @@ int main(int argc, char **argv)
     /* "Paste" in the folder's context menu pastes into it. */
     unsigned paste = 0; for (unsigned i = 0; i < ui.popup_count; i++) if (ui.popup[i].label && !strcmp(ui.popup[i].label, "&Paste")) paste = i;
     struct du_rect pbox = du_menu_box(&ui, ui.popup, ui.popup_count, ui.popup_x, ui.popup_y);
-    int y = pbox.y + 3; for (unsigned i = 0; i < paste; i++) y += ui.popup[i].flags & DU_ITEM_SEPARATOR ? 9 : 17;
+    int y = pbox.y + 3; for (unsigned i = 0; i < paste; i++) y += ui.popup[i].flags & DU_ITEM_SEPARATOR ? DU_MENU_SEP_H : DU_MENU_ITEM_H;
     click(pbox.x + 30, y + 8);
     tick();
     assert(du_dialog_id(&ui) && app.job.state == FM_REPLACE);
@@ -733,18 +747,23 @@ int main(int argc, char **argv)
     key(DU_KEY_ENTER); assert(!ui.dialog.kind);
     /* Help and About dialogs. */
     key(DU_KEY_F1); dump("help"); key(DU_KEY_ESC);
-    struct du_rect help = du_menu_title(&ui, 4); click(help.x + 5, help.y + 5);
+    struct du_rect help = du_menu_title(&ui, ui.menu_count - 1); click(help.x + 5, help.y + 5);
     struct du_rect hbox = du_menu_box(&ui, app.help_items, 3, help.x, help.y + help.h);
     click(hbox.x + 20, hbox.y + 3 + 17 + 9 + 8);
     dump("about"); key(DU_KEY_ENTER);
     /* A close request during a job cancels it, cleans up, then closes. */
     chord(DU_KEY_LCTRL, 0x1e); chord(DU_KEY_LCTRL, 0x2e);
-    assert(!files_navigate(&app, "/system/Ciuki")); chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
+    assert(!files_navigate(&app, "/system/Ciuki")); files_test_wait(&app);
+    cancel_ui_thread=pthread_self(); app.model.fs.read=cancel_read;
+    __atomic_store_n(&hold_cancel_read,1,__ATOMIC_RELEASE);
+    chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
     assert(!files_close_request(&app) && !closed);
     assert(strstr(ui.dialog.title,"Cancel Operation"));
     struct du_event confirm={.type=DU_EV_DIALOG,.id=ui.dialog.id,.index=0};
     du_dialog_close(&ui); files_event(&ui,&confirm,&app);
+    __atomic_store_n(&hold_cancel_read,0,__ATOMIC_RELEASE);
     tick(); assert(closed && !app.job_active && app.job.state == FM_CANCELLED);
+    app.model.fs.read=fake_vfs.read;
     closed = 0;
     /* Alt+F4 closes. */
     chord(DU_KEY_LALT, DU_KEY_F4); assert(closed);

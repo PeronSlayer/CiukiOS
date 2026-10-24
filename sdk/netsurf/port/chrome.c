@@ -18,6 +18,10 @@
 #include "utils/file.h"
 #include "netsurf/browser_window.h"
 #include "netsurf/download.h"
+#include "desktop/download.h"
+#include "download_store.h"
+#include "apps/control/internet_storage.h"
+#include "apps/control/profile_lock.h"
 #include "netsurf/content.h"
 #include "content/hlcache.h"
 #include "content/content.h"
@@ -29,6 +33,7 @@
 #include "apps/libdeskui/deskui.h"
 #include "apps/libdeskui/internal.h"
 #include "apps/libdeskui/keymap.h"
+#include "apps/libprint/dialog.h"
 #include "surface.h"
 void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "profile.h"
@@ -37,15 +42,22 @@ void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "logline.h"
 #include "pointer.h"
 
-enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,OPEN=20,FILE_PICKER,NOTICE };
-static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK};
+enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,NEW_WINDOW=10,OPEN=20,FILE_PICKER,NOTICE,SAVE_DOWNLOAD,DOWNLOAD_PROGRESS };
+static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK,NEW_WINDOW};
 static struct du_ui ui;
+static struct cp_ui printing;
 static struct ciuki_browser_surface *surface;
 static bool active, loading, hotlist_ready, profile_ready, toolbar_keys;
 static bool status_dirty;
 static bool profile_requested;
+static struct cp_internet_options browser_internet;
 static unsigned input_records;
 static unsigned bookmarks;
+struct gui_download_window { struct download_context *context; struct ciuki_download_store store; bool failed;uint64_t total; };
+static struct gui_download_window *downloads[4], *saving_download,*progress_download;
+static void downloads_poll(void);
+static void downloads_finish(void);
+static void download_release(struct gui_download_window *);
 static unsigned content_cursor=DESK_CURSOR_ARROW;
 static struct form_control *file_gadget;
 static struct gui_window *file_window;
@@ -87,6 +99,17 @@ static int save_hotlist(const char *path,void *unused)
 { (void)unused;return hotlist_export(path,"NetSurf Bookmarks")==NSERROR_OK?0:-1; }
 static int save_choices(const char *path,void *unused)
 { (void)unused;return nsoption_write(path,nsoptions,nsoptions_default)==NSERROR_OK?0:-1; }
+bool ciuki_chrome_new_window(struct nsurl *url)
+{
+    if(!active || !url)return false;
+    const char *address=nsurl_access(url);size_t n=strlen(address);
+    if(n>DESK_ARG_MAX) { ciuki_chrome_status("The address is too long for a new window.");return false; }
+    uint8_t payload[4+DESK_ARG_MAX];desk_put32(payload,(uint32_t)n);memcpy(payload+4,address,n);
+    if(!du3_request(&surface->connection,DESK_LAUNCH,surface->window,surface->generation,payload,4+n,-1)) {
+        ciuki_chrome_status("Unable to request a new browser window.");return false;
+    }
+    ciuki_chrome_status("Opening a new browser window...");return true;
+}
 static void action(int id)
 {
     struct browser_window *bw=browser();if(!bw)return;
@@ -96,23 +119,46 @@ static void action(int id)
     case RELOAD:ciuki_chrome_reload();break;
     case STOP:browser_window_stop(bw);ciuki_chrome_loading(false);break;
     case HOME:navigate(nsoption_charp(homepage_url)?nsoption_charp(homepage_url):"about:welcome");break;
-    case BOOKMARK:
-        if(!hotlist_ready || bookmarks>=500) { ciuki_chrome_status("Bookmark limit reached or profile unavailable.");break; }
-        if(!hotlist_has_url(browser_window_access_url(bw))) {
-            if(hotlist_add_url(browser_window_access_url(bw))) { ciuki_chrome_status("Unable to add bookmark.");break; }
-            bookmarks++;
+    case NEW_WINDOW:ciuki_chrome_new_window(browser_window_access_url(bw));break;
+    case BOOKMARK: {
+        if(!profile_ready) { ciuki_chrome_status("Profile unavailable.");break; }
+        struct internet_profile_lock lock;
+        if(ciuki_profile_transaction_begin(&lock)) { ciuki_chrome_status("Bookmarks are busy. Try again.");break; }
+        if(hotlist_ready)hotlist_fini();
+        hotlist_ready=hotlist_init(ciuki_profile_path("Bookmarks.html"),NULL)==NSERROR_OK;
+        bookmarks=0;
+        int error=!hotlist_ready || hotlist_iterate(NULL,NULL,count_bookmark,NULL)!=NSERROR_OK;
+        if(!error && !hotlist_has_url(browser_window_access_url(bw))) {
+            error=bookmarks>=500 || hotlist_add_url(browser_window_access_url(bw))!=NSERROR_OK;
+            if(!error)bookmarks++;
         }
-        if(ciuki_profile_replace("Bookmarks.html",save_hotlist,NULL))ciuki_chrome_status("Unable to save bookmarks; the previous file was kept.");
-        else ciuki_chrome_status("Bookmark saved. Ctrl+B opens Bookmarks; Ctrl+H opens History.");
+        if(!error)error=ciuki_profile_replace("Bookmarks.html",save_hotlist,NULL);
+        internet_profile_unlock(&lock);
+        ciuki_chrome_status(error?"Unable to save bookmarks; the previous file was kept.":"Bookmark saved. Ctrl+B opens Bookmarks; Ctrl+H opens History.");
         break;
+    }
     }
 }
 static void event(struct du_ui *u,const struct du_event *e,void *unused)
 {
     (void)unused;
+    if(cp_ui_event(&printing,u,e)) { fbtk_request_redraw(fbtk);return; }
     if(e->type==DU_EV_ACTIVATE || e->type==DU_EV_COMMIT) {
         if(e->id==URL) { u->focus=-1;toolbar_keys=false;navigate(du_get(u,URL)->text); }
         else action(e->id);
+    } else if(e->type==DU_EV_DIALOG && e->id==DOWNLOAD_PROGRESS) {
+        struct gui_download_window *d=progress_download;progress_download=NULL;
+        du_dialog_close(u);
+        if(d) { if(d->context)download_context_abort(d->context);download_release(d); }
+        ciuki_chrome_status("Download cancelled.");fbtk_request_redraw(fbtk);
+    } else if(e->type==DU_EV_DIALOG && e->id==SAVE_DOWNLOAD) {
+        struct gui_download_window *d=saving_download;saving_download=NULL;
+        if(d && e->index==0 && u->dialog.text[0]) {
+            if(ciuki_download_save(&d->store,u->dialog.text))
+                ciuki_chrome_status(errno==EEXIST ? "That file already exists. Choose another name." : "Unable to save the download. Choose another location.");
+            else { ciuki_chrome_status("Download saved.");download_release(d); }
+        } else if(d) { ciuki_chrome_status("Download cancelled.");download_release(d); }
+        du_dialog_close(u);fbtk_request_redraw(fbtk);
     } else if(e->type==DU_EV_DIALOG && (e->id==OPEN || e->id==FILE_PICKER)) {
         if(e->index==0 && u->dialog.text[0]) {
             if(e->id==FILE_PICKER && file_window && file_gadget)
@@ -129,7 +175,7 @@ static void layout(void)
 {
     int w=surface->current.info.width,h=surface->current.info.height;
     for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++)du_get(&ui,buttons[i])->box=(struct du_rect){4+(int)i*30,4,28,28};
-    du_get(&ui,URL)->box=(struct du_rect){188,6,w-194,24};
+    du_get(&ui,URL)->box=(struct du_rect){218,6,w-224,24};
     du_get(&ui,STATUS)->box=(struct du_rect){0,h-CIUKI_BROWSER_STATUS,w,CIUKI_BROWSER_STATUS};
 }
 void ciuki_chrome_init(struct ciuki_browser_surface *s)
@@ -138,8 +184,8 @@ void ciuki_chrome_init(struct ciuki_browser_surface *s)
     surface=s;active=status_dirty=true;toolbar_keys=false;input_records=0;
     du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
     ui.event=event;
-    const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark"};
-    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new"};
+    const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark","New window"};
+    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new","actions/document-new"};
     for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++) {
         struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,buttons[i],(struct du_rect){0},labels[i]);
         widget->icon=du_icon_argb(icons[i],22);widget->icon_size=22;
@@ -167,6 +213,8 @@ void ciuki_chrome_pointer(unsigned shape)
 { content_cursor=ciuki_pointer_shape(shape);chrome_cursor(); }
 void ciuki_chrome_render(void)
 {
+    if(active)cp_ui_poll(&printing,&ui);
+    downloads_poll();
     chrome_cursor(); /* also retry a refused cursor send on an otherwise idle UI turn */
     if(!active || (!ui.dirty && !status_dirty))return;
     struct browser_window *bw=browser();
@@ -222,7 +270,7 @@ void ciuki_chrome_complete(struct gui_window *window)
     /* READY may have scheduled a layout error that has not broadcast yet. */
     if(!content || content_is_layout_rejected(content))return;
     nsurl *url=browser_window_access_url(window->bw);
-    if(url && ciuki_profile_visit(nsurl_access(url)))
+    if(url && (ciuki_profile_visit(nsurl_access(url)) || ciuki_profile_history_save()))
         ciuki_chrome_status("Unable to record this page in history.");
 }
 /* f6-18 test profile: gate, fixture anchors and the one-shot page report. */
@@ -260,6 +308,18 @@ static void focus_address(void)
     struct du_widget *edit=du_get(&ui,URL);
     edit->anchor=0;edit->cursor=strlen(edit->text);edit->selection.ns=0;ui.dirty=1;
 }
+static bool print_key(int code)
+{
+    if(code!=0x19 || !(ui.modifiers&DU_CTRL))return false;
+    if(ui.modifiers&DU_SHIFT)cp_ui_setup(&printing,&ui);
+    else if(surface && surface->ready) {
+        unsigned w=surface->current.info.width,h=surface->current.info.height;
+        if(h>CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)
+            cp_ui_image(&printing,&ui,"NetSurf - visible page",surface->current.back+(size_t)CIUKI_BROWSER_TOP*w,
+                        w,h-CIUKI_BROWSER_TOP-CIUKI_BROWSER_STATUS);
+    }
+    return true;
+}
 bool ciuki_chrome_input(const struct ciuki_input_event *input)
 {
     if(!active)return false;
@@ -272,7 +332,9 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         }
         bool ctrl=ui.modifiers&DU_CTRL,alt=ui.modifiers&DU_ALT;
         if(e.value && !ui.dialog.kind) {
+            if(print_key(e.code))return true;
             if(ctrl && e.code==0x26) { focus_address();return true; }
+            if(ctrl && e.code==0x31) { action(NEW_WINDOW);return true; }
             if(ctrl && e.code==0x13) { action(RELOAD);return true; }
             if(e.code==DU_KEY_ESC) { action(STOP);return true; }
             if(alt && e.code==DU_KEY_LEFT) { action(BACK);return true; }
@@ -370,22 +432,89 @@ void ciuki_chrome_file(struct gui_window *window,struct hlcache_handle *content,
     file_window=window;file_gadget=gadget;
     if(du_file_dialog(&ui,FILE_PICKER,0,"Choose a file","/Documents","",NULL,NULL))ciuki_chrome_status("File picker unavailable.");
 }
-static struct gui_download_window *refuse_download(struct download_context *context,struct gui_window *window)
+static void download_release(struct gui_download_window *d)
 {
-    (void)context;(void)window;
-    ciuki_chrome_status("Downloads are unavailable in this local browsing milestone.");return NULL;
+    for(unsigned i=0;i<4;i++)if(downloads[i]==d)downloads[i]=NULL;
+    if(saving_download==d)saving_download=NULL;
+    if(progress_download==d) { progress_download=NULL;if(ui.dialog.id==DOWNLOAD_PROGRESS)du_dialog_close(&ui);fbtk_request_redraw(fbtk); }
+    ciuki_download_discard(&d->store);
+    if(d->context)download_context_destroy(d->context);
+    free(d);
 }
-static nserror refuse_data(struct gui_download_window *window,const char *data,unsigned int size)
-{ (void)window;(void)data;(void)size;return NSERROR_NOT_IMPLEMENTED; }
-static void download_error(struct gui_download_window *window,const char *message)
-{ (void)window;ciuki_chrome_status(message); }
-static void download_done(struct gui_download_window *window)
-{ (void)window;ciuki_chrome_status("Downloads are unavailable in this local browsing milestone."); }
-struct gui_download_table ciuki_download_table={.create=refuse_download,.data=refuse_data,.error=download_error,.done=download_done};
+static struct gui_download_window *download_create(struct download_context *context,struct gui_window *window)
+{
+    (void)window;
+    unsigned slot=0;while(slot<4 && downloads[slot])slot++;
+    if(slot==4 || !active) { ciuki_chrome_status("Finish a download before starting another.");return NULL; }
+    struct gui_download_window *d=calloc(1,sizeof(*d));if(!d)return NULL;
+    if(ciuki_download_begin(&d->store,"/Documents",download_context_get_filename(context))) {
+        free(d);ciuki_chrome_status("Unable to create the download file.");return NULL;
+    }
+    d->context=context;d->total=download_context_get_total_length(context);downloads[slot]=d;ciuki_chrome_status("Downloading... A Save dialog will open when the file is ready.");return d;
+}
+static nserror download_data(struct gui_download_window *d,const char *data,unsigned int size)
+{
+    if(d->failed || ciuki_download_write(&d->store,data,size)) {
+        d->failed=true;ciuki_chrome_status("Download failed: storage full or file too large.");return NSERROR_SAVE_FAILED;
+    }
+    return NSERROR_OK;
+}
+static void download_error(struct gui_download_window *d,const char *message)
+{ ciuki_chrome_status(message);download_release(d); }
+static void download_done(struct gui_download_window *d)
+{
+    if(d->failed || ciuki_download_complete(&d->store)) {
+        ciuki_chrome_status("The download could not be completed.");download_release(d);return;
+    }
+    download_context_destroy(d->context);d->context=NULL;
+    if(progress_download==d) { progress_download=NULL;if(ui.dialog.id==DOWNLOAD_PROGRESS)du_dialog_close(&ui);fbtk_request_redraw(fbtk); }
+    ciuki_chrome_status("Download complete. Choose where to save it.");
+}
+static void downloads_poll(void)
+{
+    for(unsigned i=0;i<4;i++)if(downloads[i] && downloads[i]->failed) {
+        download_context_abort(downloads[i]->context);download_release(downloads[i]);
+    }
+    if(!active)return;
+    if(progress_download && ui.dialog.id==DOWNLOAD_PROGRESS) {
+        struct gui_download_window *d=progress_download;char message[256];
+        snprintf(message,sizeof(message),"%s\n%llu of %llu bytes received",d->store.name,(unsigned long long)d->store.bytes,(unsigned long long)d->total);
+        unsigned value=d->total?(unsigned)((uint64_t)d->store.bytes*1000/d->total):0;if(value>1000)value=1000;
+        du_progress(&ui,DOWNLOAD_PROGRESS,"File Download",message,value,d->total?1000:0);return;
+    }
+    if(ui.dialog.kind || saving_download)return;
+    for(unsigned i=0;i<4;i++)if(downloads[i] && downloads[i]->store.complete) {
+        struct gui_download_window *d=downloads[i];
+        if(!du_file_dialog(&ui,SAVE_DOWNLOAD,1,"Save download","/Documents",d->store.name,NULL,NULL))saving_download=d;
+        return;
+    }
+    for(unsigned i=0;i<4;i++)if(downloads[i] && downloads[i]->context) {
+        progress_download=downloads[i];du_progress(&ui,DOWNLOAD_PROGRESS,"File Download",progress_download->store.name,0,0);return;
+    }
+}
+static void downloads_finish(void)
+{
+    for(unsigned i=0;i<4;i++)if(downloads[i]) {
+        if(downloads[i]->context)download_context_abort(downloads[i]->context);
+        download_release(downloads[i]);
+    }
+}
+struct gui_download_table ciuki_download_table={.create=download_create,.data=download_data,.error=download_error,.done=download_done};
 void ciuki_chrome_defaults(void)
 {
-    nsoption_set_bool(enable_javascript,false);
-    nsoption_set_int(memory_cache_size,2*1024*1024);nsoption_set_uint(disc_cache_size,0);
+    struct cp_internet_options internet;
+    internet_defaults(&browser_internet);
+    if(!internet_load(INTERNET_OPTIONS_PATH,&internet)) {
+        browser_internet=internet;
+        ciuki_profile_history_days(internet.history_days);
+        nsoption_set_charp(homepage_url,strdup(internet.home));
+        nsoption_set_int(memory_cache_size,internet.cache_mb*1024*1024);
+        nsoption_set_bool(http_proxy,internet.proxy[0]!=0);
+        nsoption_set_charp(http_proxy_host,internet.proxy[0]?strdup(internet.proxy):NULL);
+        nsoption_set_int(http_proxy_port,internet.port);
+    } else nsoption_set_int(memory_cache_size,2*1024*1024);
+    nsoption_set_bool(enable_javascript,true);
+    nsoption_set_uint(disc_cache_size,0);
     nsoption_set_charp(disc_cache_path,NULL);nsoption_set_charp(cookie_file,NULL);nsoption_set_charp(cookie_jar,NULL);
     nsoption_set_int(max_fetchers,8);nsoption_set_int(max_fetchers_per_host,2);
     nsoption_set_charp(fb_toolbar_layout,strdup("q"));
@@ -443,6 +572,8 @@ int ciuki_chrome_start(void)
 }
 void ciuki_chrome_finish(void)
 {
+    cp_ui_destroy(&printing);
+    downloads_finish();
     if(profile_ready) {
         if(ciuki_profile_history_save() || ciuki_profile_replace("Choices",save_choices,NULL))
             fprintf(stderr,"NetSurf: unable to save profile; previous files retained.\n");
@@ -533,3 +664,9 @@ void ciuki_chrome_capture(void *context)
     (void)context;
 #endif
 }
+
+/* Called before a document enables its script engine, including frames. */
+bool ciuki_chrome_scripts(const char *host)
+{ return browser_internet.scripts[internet_zone(&browser_internet,host?host:"")]!=0; }
+
+const struct cp_internet_options *ciuki_chrome_internet(void) { return &browser_internet; }

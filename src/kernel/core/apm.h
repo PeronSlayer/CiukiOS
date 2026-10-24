@@ -69,6 +69,7 @@ struct apm_ops {
     uint64_t (*now_us)(void *);
     void (*low_battery)(void *, int error);
     bool (*handoff)(void *);
+    bool (*sleep_ready)(void *);
 };
 struct apm_backend {
     struct apm_ops ops;
@@ -77,6 +78,9 @@ struct apm_backend {
     struct apm_status status;
     uint16_t version;
     uint16_t flags;
+    uint16_t capabilities, sleep_request;
+    bool capabilities_valid, capabilities_due;
+    uint64_t sleep_processing_at;
     uint16_t last_event;
     uint8_t bios_error;
     uint16_t last_function; /* fx-25: function of the last firmware call */
@@ -103,6 +107,9 @@ void apm_backend_init(struct apm_backend *, const struct apm_ops *);
 int apm_backend_probe(struct apm_backend *);
 int apm_backend_connect(struct apm_backend *);
 int apm_backend_service(struct apm_backend *);
+bool apm_backend_can_standby(const struct apm_backend *);
+int apm_backend_standby(struct apm_backend *);
+int apm_backend_cancel_standby(struct apm_backend *);
 int apm_backend_off(struct apm_backend *); /* requires global orderly-shutdown proof before Off */
 void apm_status_decode(const struct biosvm_regs *, struct apm_status *);
 /* fx-18: one battery unit (BX=80nnh); CH bit 4 = selected unit absent. */

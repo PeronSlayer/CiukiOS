@@ -37,7 +37,7 @@ static void autoplay_test_wait(unsigned *counter,unsigned value)
     for (unsigned i=0;i<3000;i++) {
         pthread_mutex_lock(&autoplay_test_lock); int ready=*counter>=value; pthread_mutex_unlock(&autoplay_test_lock);
         if (ready) return;
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(!"AutoPlay operation did not start");
 }
@@ -55,7 +55,7 @@ static void autoplay_test_service(struct desktop *d)
     /* Confirmation now waits for a fresh asynchronous media observation.
      * Keep measuring each individual production frame turn. */
     for (unsigned i=0;media_worker.confirm_pending && i<3000;i++) {
-        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000};nanosleep(&pause,NULL);
         begin=monotonic();shell_service(d);elapsed=monotonic()-begin;
         assert(elapsed<50000000ull);
         if (elapsed>autoplay_test_service_max) autoplay_test_service_max=elapsed;
@@ -106,7 +106,7 @@ static void test_autoplay_startup(void)
     for (unsigned i=0;;i++) {
         pthread_mutex_lock(&settings_writer.lock); int reading=settings_writer.activity==2; pthread_mutex_unlock(&settings_writer.lock);
         if (reading) break;
-        assert(i<3000); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        assert(i<3000); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     autoplay_test_service(&d); autoplay_test_wait(&autoplay_test_scans,1);
     assert(!strcmp(desk_autoplay_activity(&d),"media-scan:root") && desk_autoplay_busy(&d));
@@ -167,7 +167,7 @@ static void test_autoplay_startup(void)
     pthread_cond_signal(&wallpaper_test_changed); pthread_mutex_unlock(&wallpaper_test_lock);
     for (unsigned i=0;d.sh.wallpaper_pending || settings_reload_pending;i++) {
         assert(i<3000); autoplay_test_service(&d);
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(!d.sh.image_failed && d.menu_open);
     cfg_writer_stop(&settings_writer); settings_writer_started=0; assert(!close(settings_pipe[0]));
@@ -184,7 +184,7 @@ static pthread_t slow_folder_frame;
 static unsigned slow_folder_lists, slow_folder_revision;
 static int slow_folder_polling;
 static void slow_folder_pause(void)
-{ struct timespec pause={0,25000000}; nanosleep(&pause,NULL); }
+{ struct timespec pause={.tv_sec=0,.tv_nsec=25000000}; nanosleep(&pause,NULL); }
 static int slow_folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
 {
     (void)ctx; slow_folder_pause(); struct fm_meta meta={.type=FM_DIR};
@@ -242,7 +242,7 @@ static void test_slow_stick_folder(void)
         fake_presents=0;
         assert(!desk_redraw(&d)); frames++;
         __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
-        struct timespec pause={0,16000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=16000000}; nanosleep(&pause,NULL);
     }
     assert(frames>100 && mounted && __atomic_load_n(&slow_folder_lists,__ATOMIC_RELAXED)>=5);
     assert(d.sh.autoplay.open && !strcmp(d.sh.autoplay.content.budget,"time"));

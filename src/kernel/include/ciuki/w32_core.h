@@ -65,7 +65,11 @@ enum w32_system_action {
   /* G1: low = struct ciuki_time_zone *, extra = its size; the record is
    * the syscall-97 record (abi.h). error: 1314 without the time
    * authority, 87 for a malformed record. */
-  W32_S_TIME_ZONE
+  W32_S_TIME_ZONE,
+  /* G11: GetSystemPowerStatus (docs/design/power-policy.md 24): low = AC
+   * (0/1/255), high = battery flag, value = percent (255 unknown), extra =
+   * remaining seconds, result = full-life seconds (0xffffffff unknown). */
+  W32_S_POWER
 };
 struct ciuki_w32_system_args {
   struct ciuki_w32_header header;

@@ -4,10 +4,21 @@
 #include "../../../apps/libdeskui/v3.h"
 #include <w32/server.h>
 #include <w32/user_surface.h>
+#include "../../../apps/desktop/appearance.h"
+void u32_appearance_load(const char *);
+BOOL u32_appearance_commit(const struct appearance *);
 BOOL u32_clip_call(UINT, HWND, UINT, DWORD, const void *, DWORD, struct w32r_reply *, void *, DWORD);
 void u32_clip_event(const struct desk_packet *);
+BOOL u32_clip_rpc(struct desk_clip_wire *,const void *,struct desk_clip_wire *,void **);
+void u32_clip_display_event(const struct desk_packet *);
+int u32_clip_display_send(HWND,UINT,WPARAM,LPARAM,LRESULT *);
+BOOL u32_clip_display_blit(HDC,const void *,DWORD,const RECT *);
 BOOL u32_clip_rendering(void);
 BOOL u32_clip_has_delayed(void);
+BOOL u32_clip_handle_format(UINT);
+void u32_clip_handle_free(UINT,HANDLE);
+void *u32_clip_handle_pack(UINT,HANDLE,DWORD *);
+HANDLE u32_clip_handle_unpack(UINT,const uint8_t *,DWORD);
 void u32_clip_abandon(DWORD);
 void u32_clip_render_all(HWND, BOOL);
 #define U32_WINDOWS 128
@@ -40,6 +51,7 @@ struct u32_prop {
 struct u32_window {
   HWND handle, parent, owner;
   DWORD tid, pid, style, exstyle, id;
+  DWORD help_id; /* G15: SetWindowContextHelpId, reported in HELPINFO.dwContextId */
   WNDPROC proc;
   HINSTANCE instance;
   intptr_t userdata;
@@ -62,6 +74,7 @@ struct u32_window {
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
   BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_CLOSE; a window that survives its
                          * dispatch (the user cancelled the program's prompt) declines with CLOSE_ACK 0 */
+  BOOL flash;
   /* f5-10C classic state: control/dialog records, menus, scroll bars. */
   void *control, *dialog;
   HANDLE menu, system_menu;
@@ -99,7 +112,7 @@ struct u32_thread {
   void *hook_frame;
   UINT event_count;
   MSG text[64];
-  UINT text_count;
+  UINT text_count, dead_accent, key_scan;
   HWND key_window, translate_window;
   DWORD key_time, translate_time, key_lparam;
 };
@@ -156,6 +169,8 @@ struct u32_window *u32_root(struct u32_window *);
 struct u32_class *u32_class(const char *, HINSTANCE);
 BOOL u32_directory(UINT, HWND, DWORD, DWORD, DWORD, const char *, const void *,
                    DWORD, struct w32r_reply *, void *, DWORD);
+BOOL u32_directory_utf8(UINT, HWND, DWORD, DWORD, DWORD, const char *, const void *,
+                   DWORD, struct w32r_reply *, void *, DWORD);
 BOOL u32_directory_window(HWND, struct w32r_window *, char *);
 BOOL u32_sync_window(struct u32_window *);
 LRESULT u32_invoke(HWND, UINT, WPARAM, LPARAM);
@@ -165,6 +180,11 @@ BOOL u32_message(struct ciuki_w32_message_args *);
 void u32_pump(void);
 void u32_flush(void);
 BOOL u32_connect(void);
+void u32_input_snapshot(const uint32_t *);
+UINT u32_input_value(UINT);
+BOOL u32_input_setting(UINT, UINT, UINT);
+void u32_input_refresh(void);
+void u32_caret_preferences(void);
 BOOL u32_wire(struct u32_window *, UINT, const void *, UINT, int);
 BOOL u32_create_wire(struct u32_window *);
 BOOL u32_place(struct u32_window *);
@@ -182,11 +202,17 @@ void u32_hooks_cleanup(DWORD);
 void u32_desktop_cleanup(DWORD);
 void u32_clipboard_cleanup(DWORD);
 void u32_icons_cleanup(void);
+BOOL u32_tray_pixels(HICON,struct u32_surface *);
+void u32_drop_files(struct u32_window *,int,int,int);
+int u32_startup_show(int);
+void u32_startup_reset(void);
 void u32_display_event(struct u32_window *, const struct desk_packet *);
 void u32_display_cache(void);
 BOOL u32_resize(struct u32_window *);
 void u32_clipboard_owned_clear(void);
+void u32_clipboard_changed(DWORD);
 void u32_event(const struct desk_packet *);
+void u32_event_release(const struct desk_packet *);
 void u32_input(struct u32_window *, const struct ciuki_input_event *);
 void u32_clear_input(void);
 void u32_clear_thread_input(void);
@@ -219,6 +245,11 @@ void u32_controls_register(void);
 int u32_dialog_long(HWND, int, LONG *, BOOL);
 void u32_classic_destroy(HWND);
 LRESULT u32_classic_default(HWND, UINT, WPARAM, LPARAM, BOOL *);
+/* G15 help (classic.c): WM_HELP for F1, the Help button and What's This? */
+BOOL u32_help_mode(void);              /* SC_CONTEXTHELP mode is on */
+void u32_help_end(void);               /* Esc, or after a click */
+void u32_help_click(HWND, POINT);      /* a click in that mode: WM_HELP for the control */
+LRESULT u32_help_send(HWND target, HWND item, int control, POINT screen);
 void u32_nonclient(struct u32_window *, int *, int *, int *);
 POINT u32_surface_origin(struct u32_window *);
 void u32_surface_size(struct u32_window *, UINT *, UINT *);

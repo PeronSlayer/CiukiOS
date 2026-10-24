@@ -47,7 +47,11 @@ static int send(int fd, const struct ciuki_message *m, uint32_t flags)
     if (fd==fake_closed_peer) { raise(SIGPIPE); errno=EPIPE; return -1; }
     if (!fds[fd].live) { errno=EPIPE; return -1; }
     if (fake_block) { errno=EAGAIN; return -1; }
-    assert(fake_sent<2048 && !m->sender_pid && !m->fd_count);
+    assert(fake_sent<2048 && !m->sender_pid);
+    /* G18: the sole server attachment is a transferred immutable drop
+     * snapshot. Delivery is recorded; the fake receiver does not read it. */
+    assert(!m->fd_count || (m->fd_count==1 && m->data[0]==DESK_V3_VERSION && m->data[1]==DESK_DROP_FILES));
+    if (m->fd_count) assert(m->fds[0]>=0 && m->fds[0]<128 && fds[m->fds[0]].live && fds[m->fds[0]].pixels);
     struct desk_packet p; assert(desk_parse(m,0,NULL,&p));
     fake_destinations[fake_sent]=fd; fake_messages[fake_sent++]=*m; return 0;
 }

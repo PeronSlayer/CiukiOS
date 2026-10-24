@@ -43,6 +43,7 @@ struct fake_bus {
     bool ignore_enable_commands, drop_irq_config, unstable_config, missing_aux;
     bool final_obf, obf_after_ack, bad_selftest_status;
     bool silent_kbd_test, silent_aux_test, config_ack, t23;
+    uint8_t keyboard_trace[256];unsigned keyboard_sends;
     uint8_t missing_command;
     uint8_t controller_ack_command, status_base;
     uint32_t controller_ack_delay, iface_delay;
@@ -196,6 +197,7 @@ static void fake_write(void *arg, uint16_t port, uint8_t data)
         return;
     }
     b->sends++;
+    if(!b->aux && b->keyboard_sends<sizeof(b->keyboard_trace))b->keyboard_trace[b->keyboard_sends++]=data;
     if (b->aux) {
         CHECK(b->aux_sends < ARRAY_SIZE(b->aux_trace));
         if (b->aux_sends < ARRAY_SIZE(b->aux_trace)) b->aux_trace[b->aux_sends] = data;
@@ -592,6 +594,7 @@ int biosvm_selftest(struct biosvm_selftest_report *out)
 
 static void reset_native(void)
 {
+    repeat_delay=1;repeat_speed=31;lock_leds=0;programmed_repeat=programmed_leds=~0u;keyboard_policy_requested=false;
     native_policy_override = false;
     i8042_fault_end();
     memset(&native, 0, sizeof(native));
@@ -2002,8 +2005,60 @@ static void test_usb_shared_queue(void)
 
 #include "../../tests/host/i8042_touchpad_test.inc"
 
+static void test_g12_preferences(void)
+{
+    setvbuf(stdout,NULL,_IONBF,0);
+    reset_native();native_policy_override=true;
+    int init_error=i8042_init();CHECK(!init_error);
+    if(init_error){printf("G12 init error %d: %s\n",init_error,last_log);return;}
+    hw.irq_reply=true;
+    struct ciuki_keyboard_settings settings={1,sizeof(settings),3,0};
+    hw.keyboard_sends=0;
+    CHECK(!input_keyboard_settings(&settings));
+    CHECK(hw.keyboard_sends==4 && hw.keyboard_trace[0]==0xf3 && hw.keyboard_trace[1]==0x7c &&
+        hw.keyboard_trace[2]==0xed && hw.keyboard_trace[3]==0);
+    CHECK(input_repeat_delay()==1000 && input_repeat_interval()==400);
+    settings.delay=0;settings.speed=31;hw.keyboard_sends=0;
+    CHECK(!input_keyboard_settings(&settings));
+    CHECK(hw.keyboard_sends==2 && hw.keyboard_trace[1]==0);
+    CHECK(input_repeat_delay()==250 && input_repeat_interval()==33);
+    for(unsigned speed=0;speed<32;speed++) {
+        settings.speed=speed;CHECK(!input_keyboard_settings(&settings));
+        unsigned period=input_repeat_interval(),wanted=12400/(31+11*speed);
+        unsigned difference=period>wanted ? period-wanted : wanted-period;
+        CHECK(difference*100<=wanted*20);
+    }
+    unsigned before=hw.writes;settings.delay=4;
+    CHECK(input_keyboard_settings(&settings)==-EINVAL && hw.writes==before);
+    settings.delay=0;settings.speed=32;CHECK(input_keyboard_settings(&settings)==-EINVAL);
+    hw.keyboard_sends=0;
+    key_emit(&native,0x3a,true,1);key_emit(&native,0x3a,true,2);key_emit(&native,0x3a,false,3);
+    CHECK(input_lock_leds()==4);
+    struct input_event event;while(input_read(&event)){}
+    CHECK(hw.keyboard_sends==2 && hw.keyboard_trace[0]==0xed && hw.keyboard_trace[1]==4);
+    input_usb_event(INPUT_KEY,0x45,1,123,4);input_usb_event(INPUT_KEY,0x45,0,123,5);
+    CHECK(input_lock_leds()==6);while(input_read(&event)){}
+    CHECK(hw.keyboard_sends && hw.keyboard_trace[hw.keyboard_sends-1]==6);
+    key_emit(&native,0x46,true,6);key_emit(&native,0x46,false,7);while(input_read(&event)){}
+    CHECK(input_lock_leds()==7 && hw.keyboard_sends && hw.keyboard_trace[hw.keyboard_sends-1]==7);
+    CHECK(!i8042_stop(native.stats.generation));CHECK(!i8042_init());
+    hw.keyboard_sends=0;while(input_read(&event)){}
+    CHECK(hw.keyboard_sends==4 && hw.keyboard_trace[0]==0xf3 && hw.keyboard_trace[1]==0 &&
+        hw.keyboard_trace[2]==0xed && hw.keyboard_trace[3]==7);
+    settings=(struct ciuki_keyboard_settings){0,sizeof(settings),0,31};
+    CHECK(input_keyboard_settings(&settings)==-EINVAL);
+    settings.version=1;settings.size--;CHECK(input_keyboard_settings(&settings)==-EINVAL);
+    settings.size=sizeof(settings);settings.speed=0;hw.missing_command=0xf3;
+    uint64_t start=hw.now;
+    CHECK(input_keyboard_settings(&settings)==-I8042_ETIMEDOUT && native.stats.quarantined);
+    CHECK(hw.now-start<=I8042_REPLY_MS*4 && input_repeat_interval()==400);
+    printf("PASS G12 PS/2 typematic, USB timing policy, shared lock LEDs, invalid bounds\n");
+}
+
 int main(int argc, char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
+    if(argc==2 && !strcmp(argv[1],"g12-settings")){test_g12_preferences();return failures ? 1 : 0;}
     if (argc == 2) {
         if (!strncmp(argv[1], "input-", 6)) {
             print_records = true;

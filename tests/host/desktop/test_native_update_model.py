@@ -28,27 +28,31 @@ class NativeUpdateModelTests(unittest.TestCase):
                  "-Wno-macro-redefined", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                  "-ffunction-sections", "-fdata-sections", "-fno-builtin-memcmp", *icons.defines(),
                  "-I", str(ROOT / "src/kernel/include"), "-include", str(ROOT / "tests/host/desktop/replay_base.h")]
-        common = [*(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map", "recent", "client")),
+        common = [*(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "recent", "client")),
                   "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/accessories/acc.c"]
         cases = {
-            "terminal": ["apps/terminal/app.c", "apps/terminal/commands.c", "apps/terminal/lua.c", "apps/tasks/model.c", "apps/files/model.c", "tests/host/desktop/fake_vfs.c"],
+            "terminal": ["apps/terminal/app.c", "apps/terminal/commands.c", "apps/terminal/script.c", "apps/terminal/lua.c", "apps/tasks/model.c", "apps/files/model.c", "tests/host/desktop/fake_vfs.c"],
             "gfx": ["apps/gfxdemo/app.c", "apps/gfxdemo/scene.c"],
             "dosbox": [],
             "demo": [],
             "calc": ["apps/accessories/calc_view.c", "apps/accessories/calc_model.c"],
             "clock": ["apps/accessories/clock_view.c", "apps/accessories/clock_model.c"],
             "charmap": ["apps/accessories/charmap_view.c"],
-            "help": ["apps/accessories/help_view.c", "apps/accessories/help_topics.c"],
+            "help": ["apps/accessories/"+n for n in ("help_view.c","help_topics.c","help_navigation.c","help_wizard.c","helpfile.c","help_hlp.c","help_chm.c","help_markup.c")]
+                    + ["sdk/win32/lz32/mspack/chmd.c","sdk/win32/lz32/mspack/lzxd.c"],
             "viewer": ["apps/accessories/viewer_view.c", "apps/accessories/viewer_model.c", "apps/accessories/viewer_stb.c"],
+            "charmap": ["apps/accessories/charmap_view.c", "apps/accessories/charmap_model.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c"],
+            "help": ["apps/accessories/help_view.c", "apps/accessories/help_topics.c"],
+            "viewer": ["apps/accessories/viewer_view.c", "apps/accessories/viewer_model.c", "apps/accessories/viewer_stb.c", "apps/accessories/wallpaper.c", "apps/desktop/settings.c", "apps/desktop/protocol.c"],
             "mixer": ["apps/accessories/mixer_view.c"],
             "music": ["apps/music/view.c"],
-            "paint": ["apps/paint/paint.c", "apps/paint/io.c", "apps/paint/stb.c"],
+            "paint": ["apps/paint/paint.c", "apps/paint/io.c", "apps/paint/stb.c", "apps/paint/xform.c"],
             "note": ["apps/ciuknote/app.c", "apps/ciuknote/doc.c"],
             "tasks": ["apps/tasks/view.c", "apps/tasks/model.c"],
             "ide": ["apps/ciukide/app.c", "apps/ciukide/model.c", "apps/ciukide/job.c", "apps/ciuknote/doc.c"],
             "regedit": ["apps/regedit/app.c", *(str(p.relative_to(ROOT)) for p in sorted((ROOT / "sdk/libreg").glob("*.c")))],
             "files": ["apps/files/app.c", "apps/files/model.c", "apps/files/transfer.c", "tests/host/desktop/fake_vfs.c", "apps/desktop/autoplay_content.c"],
-            "control": ["apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "apps/desktop/settings.c", "apps/desktop/sounds.c",
+            "control": ["apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "apps/desktop/settings.c", "apps/desktop/sounds.c",
                         "apps/desktop/wallpaper.c", "apps/desktop/image.c", "apps/desktop/protocol.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c"],
         }
         with tempfile.TemporaryDirectory(prefix="native-update-", dir=parent) as tmp:
@@ -72,6 +76,7 @@ class NativeUpdateModelTests(unittest.TestCase):
                 objects.append(str(obj))
             for name, sources in cases.items():
                 extra = []
+                if name=="help": extra=["-I",str(ROOT/"sdk/win32/lz32/mspack"),"-DHAVE_INTTYPES_H=1","-DSIZEOF_OFF_T=8"]
                 if name == "demo":
                     extra = ["-I", str(work / "adapter")]
                 if name == "terminal":
@@ -82,7 +87,7 @@ class NativeUpdateModelTests(unittest.TestCase):
                 if name == "gfx":
                     gl = module("native_model_gl", ROOT / "sdk/libgl/build.py")
                     extra = [*gl.includes(), str(gl.host(sanitize=True)), "-Wl,--wrap=gfx_cube", "-Wl,--wrap=gfx_sprites"]
-                if name == "control":
+                if name in ("control", "charmap"):
                     ft = module("native_model_ft", ROOT / "sdk/freetype/build.py")
                     extra = [*ft.includes(), str(ft.host())]
                 binary = work / name

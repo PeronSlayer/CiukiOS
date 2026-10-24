@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _GNU_SOURCE
 #include "../../../../sdk/win32/user32/internal.h"
+#include "../../../../apps/desktop/help_request.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,11 +38,28 @@ void W32API SetLastError(DWORD n) { errors[ui_kernel_current()] = n; }
 DWORD W32API GetCurrentThreadId(void) { return ui_kernel_tid(); }
 DWORD W32API GetCurrentProcessId(void) { return ui_kernel_pid(); }
 DWORD W32API GetTickCount(void) { return ui_kernel_ticks(); }
+static int g23_files_enabled,g23_temporary,g23_flush_failure,g23_rename_failure;
+static char g23_config[34000],g23_pending[34000];
+BOOL host_appearance_write(void *h,const void *data,DWORD bytes,DWORD *written) {
+  if(!g23_files_enabled || (uintptr_t)h!=0x732 || bytes>=sizeof(g23_pending)) return 0;
+  w32_copy(g23_pending,data,bytes);g23_pending[bytes]=0;if(written)*written=bytes;return 1;
+}
+BOOL host_appearance_flush(void *h) {
+  return g23_files_enabled && (uintptr_t)h==0x732 && !g23_flush_failure;
+}
 #ifndef U32_TEST_EXTERNAL_MODULES
 /* tests/host/win32/dialogs supplies file, module and resource services. */
+static int g18_snapshot_fds[8];
+static unsigned g18_snapshot_closes,g18_snapshot_maps,g18_snapshot_unmaps;
+static int g18_snapshot(const char *);
 HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
                           SECURITY_ATTRIBUTES *security, DWORD creation,
                           DWORD flags, HANDLE template) {
+  if(g23_files_enabled && !strcmp(name,"C:\\system\\settings\\desktop.cfg")) return (HANDLE)0x731;
+  if(g23_files_enabled && !strcmp(name,"C:\\system\\settings\\desktop.cfg.appearance.tmp")) {
+    if(creation!=1 || g23_temporary) {SetLastError(183);return K32_INVALID;}
+    g23_temporary=1;g23_pending[0]=0;return (HANDLE)0x732;
+  }
   (void)name;
   (void)access;
   (void)share;
@@ -49,15 +67,24 @@ HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
   (void)creation;
   (void)flags;
   (void)template;
+  (void)name;
   return K32_INVALID;
+}
+DWORD W32API GetFileSize(HANDLE h,DWORD *high) {
+  if(high)*high=0;
+  (void)h;return ~0u;
 }
 BOOL W32API ReadFile(HANDLE h, void *data, DWORD bytes, DWORD *count,
                      OVERLAPPED *o) {
+  if(g23_files_enabled && (uintptr_t)h==0x731) {
+    DWORD n=(DWORD)strlen(g23_config); if(n>bytes)n=bytes;w32_copy(data,g23_config,n);*count=n;return 1;
+  }
   (void)h;
   (void)data;
   (void)bytes;
   (void)count;
   (void)o;
+  (void)h;(void)data;(void)bytes;(void)count;
   return 0;
 }
 BOOL W32API CloseHandle(HANDLE h) {
@@ -127,12 +154,29 @@ HANDLE W32API LoadLibraryA(const char *s) { return GetModuleHandleA(s); }
 /* Until the GDI phase USER runs on the fixture adapter (test_gdi below); then
  * gdi32.dll and user32.dll resolve to the production objects linked in. */
 static BOOL host_modules, real_gdi;
+#ifndef U32_TEST_EXTERNAL_MODULES
+static BOOL host_help;
+#endif
 #define HOST_GDI ((HANDLE)(uintptr_t)0x6d000000)
 #define HOST_USER ((HANDLE)(uintptr_t)0x6e000000)
+#define HOST_KERNEL ((HANDLE)(uintptr_t)0x6f000000)
+#ifndef U32_TEST_EXTERNAL_MODULES
+static DWORD W32API help_fullpath(const char *input,DWORD size,char *out,char **part)
+{
+    (void)part;
+    const char *prefix=input[1]==':' ? "" : "C:\\Help\\";
+    unsigned n=(unsigned)(strlen(prefix)+strlen(input));
+    if (size<=n) return n+1;
+    snprintf(out,size,"%s%s",prefix,input); return n;
+}
+static DWORD W32API help_attributes(const char *path)
+{ if (strstr(path,"missing")) { SetLastError(2); return UINT32_MAX; } return 0x20; }
+#endif
 /* Weak: tests/host/win32/input reuses this harness without gdi32/ddraw. */
 __attribute__((weak)) void *host_gdi_proc(const char *);
 #ifndef U32_TEST_EXTERNAL_MODULES
 HANDLE W32API GetModuleHandleA(const char *s) {
+  if (host_help && s && !strcmp(s,"kernel32.dll")) return HOST_KERNEL;
   if (!host_modules || !s)
     return 0;
   return !strcmp(s, "gdi32.dll") ? HOST_GDI
@@ -141,6 +185,7 @@ HANDLE W32API GetModuleHandleA(const char *s) {
 }
 #define USER_EXPORT(name) {#name, (void *)name}
 void *W32API GetProcAddress(HANDLE h, const char *s) {
+  if (h==HOST_KERNEL) return !strcmp(s,"GetFullPathNameA") ? (void *)help_fullpath : !strcmp(s,"GetFileAttributesA") ? (void *)help_attributes : 0;
   static const struct {
     const char *name;
     void *proc;
@@ -257,6 +302,24 @@ static void drop(struct u32_surface *s) {
   memset(s, 0, sizeof(*s));
   s->fd = -1;
 }
+#ifndef U32_TEST_EXTERNAL_MODULES
+static int g18_snapshot(const char *text) {
+  unsigned bytes=(unsigned)strlen(text);
+  for(unsigned k=0;k<8;k++)if(!g18_snapshot_fds[k]) {
+    struct u32_surface s;
+    CHECK(surface(1024,(bytes+4+4095)/4096,&s));
+    w32_put32(s.pixels,bytes);memcpy((uint8_t *)s.pixels+4,text,bytes);
+    g18_snapshot_fds[k]=s.fd;return s.fd;
+  }
+  CHECK(0);return -1;
+}
+static void g18_snapshot_length(int fd,DWORD length) {
+  for(unsigned k=0;k<64;k++)if(surfaces[k].fd==fd) {
+    w32_put32(surfaces[k].s.pixels,length);return;
+  }
+  CHECK(0);
+}
+#endif
 static struct ciuki_message outgoing[2048], incoming[256];
 static UINT outgoing_count, in_head, in_tail, reject_opcode;
 static DWORD lease_token = 0x40, lease_generation = 0x80, lease_serial;
@@ -280,11 +343,34 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
   for (UINT i = 0; i < 18; i++)
     desk_put32(b + i * 4, words[i]);
 }
+static UINT shared_input[DESK_INPUT_VALUES]={0,1,31,530,0,0,3,0,10,500,1};
+static UINT saved_input[DESK_INPUT_VALUES]={0,1,31,530,0,0,3,0,10,500,1};
 static struct ciuki_screen_control saver_policy={.version=1,.size=sizeof(saver_policy),.timeout=600,.saver=1};
 #include "g5_clipboard_fixture.h"
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
+  if(call==CIUKI_SYS_RENAME && g23_files_enabled) {
+    CHECK(!strcmp((const char *)(uintptr_t)a,"/system/settings/desktop.cfg.appearance.tmp"));
+    CHECK(!strcmp((const char *)(uintptr_t)b,"/system/settings/desktop.cfg"));
+    if(g23_rename_failure) return (DWORD)-5;
+    strcpy(g23_config,g23_pending);g23_temporary=0;return 0;
+  }
   (void)a;
   (void)c;
+#ifndef U32_TEST_EXTERNAL_MODULES
+  for(unsigned k=0;k<8;k++)if(g18_snapshot_fds[k])
+    for(unsigned j=0;j<64;j++)if(surfaces[j].fd==g18_snapshot_fds[k]) {
+      struct u32_surface *s=&surfaces[j].s;
+      if(a==(DWORD)s->fd && call==CIUKI_SYS_SURFACE_MAP) {
+        CHECK(b==1 && !c);g18_snapshot_maps++;return U32_PTR(s->pixels);
+      }
+      if(a==U32_PTR(s->pixels) && call==CIUKI_SYS_MUNMAP) {
+        CHECK(b==s->pitch*s->height && !c);g18_snapshot_unmaps++;return 0;
+      }
+      if(a==(DWORD)s->fd && call==CIUKI_SYS_CLOSE) {
+        drop(s);g18_snapshot_fds[k]=0;g18_snapshot_closes++;return 0;
+      }
+    }
+#endif
   if (call==CIUKI_SYS_DISPLAY && a==CIUKI_DISPLAY_SCREEN) {
     struct ciuki_screen_control *q=(void *)(uintptr_t)b;
     int old=(int)saver_policy.running;
@@ -298,6 +384,15 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if(sent->data[1]==DESK_INPUT_SETTINGS) {
+      UINT key=desk_get32(sent->data+16),value=desk_get32(sent->data+20),flags=desk_get32(sent->data+24);
+      if(key && key<=DESK_INPUT_VALUES){shared_input[key-1]=value;if(flags&1)saved_input[key-1]=value;}
+      CHECK(in_tail-in_head<256);
+      struct ciuki_message *state=&incoming[in_tail++%256];
+      desk_v3_message(state,DESK_INPUT_STATE,DESK_INPUT_VALUES*4+8,desk_get32(sent->data+4),desk_get32(sent->data+8),desk_get32(sent->data+12));
+      for(UINT k=0;k<DESK_INPUT_VALUES;k++)desk_put32(state->data+16+k*4,shared_input[k]);
+      desk_put32(state->data+16+DESK_INPUT_VALUES*4,key);desk_put32(state->data+20+DESK_INPUT_VALUES*4,flags);
+    }
     if (sent->data[1]==DESK_V3_CLIPBOARD) { fixture_clipboard(sent); return 0; }
     if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode) {
       DWORD flags = desk_get32(sent->data + 16);
@@ -460,7 +555,27 @@ static int minmax_set;
 static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
 static unsigned g5_render_count,g5_all_count;
 static HWND g5_all_window;
+static HANDLE g5b_bitmap;
+static unsigned g5b_bitmap_renders,g5b_display_paints,g5b_display_sizes,g5b_display_scrolls,g5b_locale_renders;
+static BOOL g5b_display;
+
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m==WM_RENDERFORMAT && wp==CF_LOCALE) {
+    HANDLE locale=GlobalAlloc(2,4); CHECK(locale); w32_put32(GlobalLock(locale),0x409);
+    CHECK(SetClipboardData(CF_LOCALE,locale)==locale); g5b_locale_renders++; return 0;
+  }
+  if (m==WM_RENDERFORMAT && wp==CF_BITMAP && g5b_bitmap) {
+    CHECK(SetClipboardData(CF_BITMAP,g5b_bitmap)==g5b_bitmap); g5b_bitmap_renders++; return 0;
+  }
+  if (g5b_display) {
+    if (m==WM_ASKCBFORMATNAME) { CHECK(wp>=10); memcpy((void *)lp,"G5b owner",10); return 0; }
+    if (m==WM_SIZECLIPBOARD) { CHECK(GlobalSize((HANDLE)lp)==sizeof(RECT)); g5b_display_sizes++; return 0; }
+    if (m==WM_VSCROLLCLIPBOARD || m==WM_HSCROLLCLIPBOARD) { g5b_display_scrolls++; return 0; }
+    if (m==WM_PAINTCLIPBOARD) {
+      PAINTSTRUCT *p=GlobalLock((HANDLE)lp); CHECK(p && p->hdc);
+      CHECK(FillRect(p->hdc,&p->rcPaint,(HBRUSH)6)); GlobalUnlock((HANDLE)lp); g5b_display_paints++; return 0;
+    }
+  }
   if (m==WM_RENDERALLFORMATS && h==g5_all_window) {
     CHECK(OpenClipboard(h));
     CHECK(GetClipboardOwner()==h);
@@ -542,6 +657,10 @@ static void input_event(struct u32_window *w, UINT type, UINT code,
                         UINT value) {
   UINT data[10] = {0, 0, 0, type, 0, 0, code, value, 0, 0};
   event(w, DESK_KEY, data, 10);
+}
+static void g12_input_event(struct u32_window *w,UINT type,UINT code,UINT value)
+{
+  UINT data[10]={0,0,0,type,1000000000,0,code,value,0,0};event(w,DESK_KEY,data,10);
 }
 static void discard(void) {
   MSG msg;
@@ -670,7 +789,7 @@ static void test_input(void) {
   MSG msg;
   struct u32_window *w = u32_window(windows[0]);
   for (UINT layout = 0; layout < 2; layout++) {
-    u32_layout = layout;
+    shared_input[0]=layout;u32_layout = layout;
     u32_clear_input();
     for (UINT k = 0; k < sizeof(vk_scans) / sizeof(*vk_scans); k++) {
       UINT expected = layout ? vk_it[k] : vk_us[k];
@@ -694,6 +813,19 @@ static void test_input(void) {
     printf("TRACE protocol-v3 layout=%s %u pinned KEY/TEXT messages\n",
            layout ? "it" : "us", count);
   }
+  discard();u32_clear_input();SetFocus(w->handle);
+  g12_input_event(w,CIUKI_INPUT_KEY,0x2a,1);discard();
+  g12_input_event(w,CIUKI_INPUT_KEY,0x0d,1);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==WM_KEYDOWN);CHECK(TranslateMessage(&msg));
+  g12_input_event(w,CIUKI_INPUT_TEXT,'^',0);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==0x103 && msg.wParam=='^');
+  g12_input_event(w,CIUKI_INPUT_KEY,0x0d,0);g12_input_event(w,CIUKI_INPUT_KEY,0x2a,0);discard();
+  g12_input_event(w,CIUKI_INPUT_KEY,0x12,1);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==WM_KEYDOWN);CHECK(TranslateMessage(&msg));
+  g12_input_event(w,CIUKI_INPUT_TEXT,'e',0);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==WM_CHAR && msg.wParam==0xea);
+  g12_input_event(w,CIUKI_INPUT_KEY,0x12,0);discard();u32_clear_input();
+  puts("PASS G12 WM_DEADCHAR then composed WM_CHAR through TranslateMessage");
   CHECK(SetCapture(child) == 0 && GetCapture() == child);
   CHECK(ReleaseCapture() && GetCapture() == 0);
   SetFocus(child);
@@ -855,6 +987,46 @@ static BOOL W32API enumerate(HWND h, LPARAM unused) {
   enum_count++;
   return 1;
 }
+extern BOOL W32API WinHelpA(HWND,const char *,UINT,uintptr_t);
+extern int W32API GetDlgCtrlID(HWND);
+extern BOOL W32API WinHelpW(HWND,const WCHAR *,UINT,uintptr_t);
+extern HWND W32API CiukiHtmlHelpA(HWND,const char *,UINT,uintptr_t);
+extern HWND W32API CiukiHtmlHelpW(HWND,const WCHAR *,UINT,uintptr_t);
+#ifndef U32_TEST_EXTERNAL_MODULES
+static void test_help_requests(void)
+{
+    host_help=1;
+    CHECK(WinHelpA(windows[0],"guide.hlp",1,42));
+    struct desk_packet p; struct desk_help_request r;
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && p.opcode==DESK_LAUNCH && desk_help_decode(p.argument,&r));
+    CHECK(r.format==1 && r.command==1 && r.context==42 && !strcmp(r.path,"/Help/guide.hlp"));
+    DWORD controls[]={ (DWORD)GetDlgCtrlID(child),42,0,0 };
+    CHECK(WinHelpA(child,"guide.hlp",0xd,(uintptr_t)controls));
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && desk_help_decode(p.argument,&r) && r.command==8 && r.context==42);
+    controls[1]=UINT32_MAX;
+    CHECK(!WinHelpA(child,"guide.hlp",0xc,(uintptr_t)controls) && GetLastError()==2);
+    const WCHAR widefile[]={'D',':','\\','G','u','i','d','e','.','h','l','p',0};
+    const WCHAR widekey[]={'O','v','e','r','v','i','e','w',0};
+    CHECK(WinHelpW(windows[0],widefile,3,(uintptr_t)widekey));
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && desk_help_decode(p.argument,&r));
+    CHECK(!strcmp(r.path,"/mnt/D/Guide.hlp") && !strcmp(r.query,"Overview"));
+    CHECK(!WinHelpA(windows[0],"missing.hlp",1,42) && GetLastError()==2);
+    CHECK(!WinHelpA(windows[0],"guide.hlp",0xffff,0) && GetLastError()==120);
+    CHECK(!WinHelpA(windows[0],"guide.hlp",3,0) && GetLastError()==87);
+    CHECK(WinHelpA(windows[0],0,2,0));
+    HWND proxy=CiukiHtmlHelpA(windows[0],"guide.chm::/first.htm",0,0);
+    CHECK(proxy && IsWindow(proxy));
+    CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && desk_help_decode(p.argument,&r));
+    CHECK(r.format==2 && !strcmp(r.query,"/first.htm"));
+    CHECK(CiukiHtmlHelpA(windows[0],"guide.chm",15,42)==proxy);
+    const WCHAR widechm[]={'g','u','i','d','e','.','c','h','m',0};
+    CHECK(CiukiHtmlHelpW(windows[0],widechm,2,(uintptr_t)widekey)==proxy);
+    CHECK(!CiukiHtmlHelpA(windows[0],0,18,0) && !IsWindow(proxy));
+    CHECK(UnregisterClassA("CiukiHtmlHelpProxy",0));
+    host_help=0;
+    puts("TRACE WinHelp A/W and HtmlHelp A/W native topic, context, keyword, missing file, reuse and close bridge");
+}
+#endif
 static void test_extras(void) {
   CHECK(!SetWindowPos(windows[0], 0, 0x7fffffff, 0, 0, 0,
                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) &&
@@ -1025,7 +1197,7 @@ static void test_arrange(void) {
   CHECK(p);
   HWND k[3];
   for (UINT i = 0; i < 3; i++) {
-    k[i] = CreateWindowExA(0, "USER fixture", "kid", WS_CHILD | WS_VISIBLE, 0,
+    k[i] = CreateWindowExA(0, "USER fixture", "kid", WS_CHILD | WS_VISIBLE | WS_THICKFRAME, 0,
                            0, 50, 50, p, (HANDLE)(uintptr_t)(20 + i), 0, 0);
     CHECK(k[i]);
   }
@@ -1051,7 +1223,7 @@ static void test_arrange(void) {
   /* four and five windows fill a grid; the short last line shares its width */
   HWND more[2];
   for (UINT i = 0; i < 2; i++)
-    more[i] = CreateWindowExA(0, "USER fixture", "more", WS_CHILD | WS_VISIBLE,
+    more[i] = CreateWindowExA(0, "USER fixture", "more", WS_CHILD | WS_VISIBLE | WS_THICKFRAME,
                               0, 0, 50, 50, p, (HANDLE)(uintptr_t)(30 + i), 0, 0);
   HWND five[5] = {k[0], k[1], k[2], more[0], more[1]};
   CHECK(TileWindows(p, MDITILE_VERTICAL, &area, 5, five) == 5);
@@ -1083,13 +1255,27 @@ static void test_arrange(void) {
   HWND top[3];
   for (UINT i = 0; i < 3; i++)
     top[i] = CreateWindowExA(i == 1 ? WS_EX_TOOLWINDOW : 0, "USER fixture", "top",
-                             WS_VISIBLE | WS_CAPTION, 5, 40, 60, 60, 0, 0, 0, 0);
+                             WS_VISIBLE | WS_CAPTION | WS_THICKFRAME, 5, 40, 60, 60, 0, 0, 0, 0);
   CHECK(SetWindowPos(top[2], HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
   RECT work = {0, 32, 800, 600};
   CHECK(TileWindows(0, 0, &work, 3, top) == 1);
   CHECK(local_rect(top[0]).left == 0 && local_rect(top[0]).top == 32 &&
         local_rect(top[0]).right == 800 && local_rect(top[1]).left == 5);
+  /* A fixed-size property dialog moves but never takes the cell's size. */
+  HWND fixed=CreateWindowExA(0,"USER fixture","Display Properties",WS_VISIBLE | WS_CAPTION,
+                              27,61,260,180,0,0,0,0);
+  RECT fixed_before=local_rect(fixed); HWND mixed[2]={top[0],fixed};
+  CHECK(CascadeWindows(0,0,&work,2,mixed)==2);
+  RECT fr=local_rect(fixed);
+  CHECK(fr.right-fr.left==fixed_before.right-fixed_before.left && fr.bottom-fr.top==fixed_before.bottom-fixed_before.top);
+  CHECK(TileWindows(0,MDITILE_HORIZONTAL,&work,2,mixed)==2);
+  fr=local_rect(fixed);
+  CHECK(fr.right-fr.left==fixed_before.right-fixed_before.left && fr.bottom-fr.top==fixed_before.bottom-fixed_before.top);
+  CHECK(TileWindows(0,MDITILE_VERTICAL,&work,2,mixed)==2);
+  fr=local_rect(fixed);
+  CHECK(fr.right-fr.left==fixed_before.right-fixed_before.left && fr.bottom-fr.top==fixed_before.bottom-fixed_before.top);
+  CHECK(DestroyWindow(fixed));
   for (UINT i = 0; i < 3; i++) CHECK(DestroyWindow(top[i]));
   CHECK(DestroyWindow(p));
   printf("TRACE arrange: cascade tile zorder grid skip restore iconic "
@@ -1367,6 +1553,57 @@ static void test_lifecycle(void) {
          "dependent WM_DESTROY, timers hooks clipboard released, thread detach "
          "destruction, service identity teardown\n");
 }
+static void test_g23_appearance(void) {
+  struct appearance value; ap_default(&value,0); value.dpi=144;
+  value.item[AP_SELECTED].colour=0x112233;
+  char encoded[AP_HEX_BYTES+1]; ap_encode(&value,encoded); u32_appearance_load(encoded);
+  BOOL colour_notice=0,metric_notice=0; MSG notice;
+  for(unsigned i=0;i<64 && PeekMessageA(&notice,0,0,0,1);i++) {
+    colour_notice|=notice.message==21; metric_notice|=notice.message==0x1a;
+    DispatchMessageA(&notice);
+  }
+  CHECK(colour_notice && metric_notice);
+  CHECK(GetSysColor(13)==0x332211);
+  CHECK(GetSystemMetrics(2)==24 && GetSystemMetrics(4)==36 && GetSystemMetrics(38)==144);
+  uint8_t ncm[340]={0}; w32_put32(ncm,340);
+  CHECK(SystemParametersInfoA(41,340,ncm,0));
+  CHECK(w32_u32(ncm+8)==24 && w32_u32(ncm+20)==36 && !strcmp((char *)ncm+52,"Inter"));
+  CHECK((int32_t)w32_u32(ncm+280)==-18);
+  BOOL enabled=0;
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && enabled);
+  CHECK(SystemParametersInfoA(74,0,&enabled,0) && enabled);
+  CHECK(SystemParametersInfoA(0x1002,0,&enabled,0) && enabled);
+  /* The fixture refuses disk writes: failed shared setters retain the value. */
+  CHECK(!SystemParametersInfoA(37,0,0,1));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && enabled);
+  w32_put32(ncm,339); CHECK(!SystemParametersInfoA(42,339,ncm,0) && GetLastError()==87);
+#ifndef U32_TEST_EXTERNAL_MODULES
+  g23_files_enabled=1; strcpy(g23_config,"keyboard=it\nfuture_key=kept\n");
+  CHECK(SystemParametersInfoA(37,0,0,1));
+  CHECK(strstr(g23_config,"future_key=kept\n") && strstr(g23_config,"appearance="));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && !enabled);
+  w32_put32(ncm,340); CHECK(SystemParametersInfoA(41,340,ncm,0));
+  CHECK(SystemParametersInfoA(42,340,ncm,1));
+  CHECK(GetSystemMetrics(2)==24 && GetSystemMetrics(4)==36);
+  g23_flush_failure=1;
+  CHECK(!SystemParametersInfoA(37,1,0,1));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && !enabled);
+  g23_flush_failure=0; g23_temporary=0;g23_rename_failure=1;
+  CHECK(!SystemParametersInfoA(37,1,0,1));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && !enabled);
+  g23_rename_failure=0;g23_temporary=0;g23_files_enabled=0;
+#endif
+  u32_appearance_load("");
+  colour_notice=metric_notice=0;
+  for(unsigned i=0;i<64 && PeekMessageA(&notice,0,0,0,1);i++) {
+    colour_notice|=notice.message==21; metric_notice|=notice.message==0x1a;
+    DispatchMessageA(&notice);
+  }
+  CHECK(colour_notice && metric_notice);
+  w32_put32(ncm,340); CHECK(SystemParametersInfoA(41,340,ncm,0));
+  CHECK(w32_u32(ncm+8)!=24); /* Rollback also drops cached scaled metrics. */
+  puts("TRACE G23 shared palette, DPI metrics, NONCLIENTMETRICS fonts, Effects and failed-write rollback");
+}
 static void test_spi(void) {
   UINT timeout=0; BOOL active=1;
   CHECK(SystemParametersInfoA(14,0,&timeout,0) && timeout==600);
@@ -1391,8 +1628,29 @@ static void test_spi(void) {
         SystemParametersInfoA(3, 0, mouse, 0) && mouse[1] == 12);
   BOOL beep = 0;
   CHECK(SystemParametersInfoA(1, 0, &beep, 0) && beep);
+  {
+    /* G16 MessageBeep: the icon picks the desktop's system sound, queued without a reply. */
+    static const struct { UINT type, event; } beeps[] = {
+        {0x10, SOUND_ERROR},       {0x30, SOUND_ERROR},         {0x20, SOUND_QUESTION},
+        {0x40, SOUND_INFORMATION}, {0, SOUND_INFORMATION},      {0xffffffffu, SOUND_INFORMATION}};
+    UINT from = outgoing_count, seen = 0;
+    for (UINT i = 0; i < sizeof(beeps) / sizeof(*beeps); i++)
+      CHECK(MessageBeep(beeps[i].type));
+    for (UINT i = from; i < outgoing_count; i++)
+      if (outgoing[i].data[1] == DESK_V3_SOUND) {
+        CHECK(desk_get32(outgoing[i].data + 16) == beeps[seen].event);
+        seen++;
+      }
+    CHECK(seen == sizeof(beeps) / sizeof(*beeps));
+  }
   CHECK(SystemParametersInfoA(2, 0, 0, 0) &&
         SystemParametersInfoA(1, 0, &beep, 0) && !beep);
+  {
+    UINT from = outgoing_count;
+    CHECK(MessageBeep(0x10));   /* SPI_SETBEEP off: nothing is played, the call still succeeds */
+    for (UINT i = from; i < outgoing_count; i++)
+      CHECK(outgoing[i].data[1] != DESK_V3_SOUND);
+  }
   CHECK(SystemParametersInfoA(13, 0, &value, 0) && value == 75);
   CHECK(SystemParametersInfoA(13, 90, 0, 0) &&
         SystemParametersInfoA(13, 0, &value, 0) && value == 90 &&
@@ -1400,6 +1658,25 @@ static void test_spi(void) {
   CHECK(SystemParametersInfoA(29, 8, 0, 0) && GetSystemMetrics(36) == 8);
   CHECK(SystemParametersInfoA(33, 1, 0, 0) && GetSystemMetrics(23) == 1);
   CHECK(SystemParametersInfoA(33, 0, 0, 0) && !GetSystemMetrics(23));
+  CHECK(SystemParametersInfoA(23,3,0,1));
+  CHECK(SystemParametersInfoA(22,0,&value,0) && value==3 && saved_input[1]==3);
+  CHECK(SystemParametersInfoA(11,0,0,0));
+  CHECK(SystemParametersInfoA(10,0,&value,0) && value==0 && saved_input[2]==31);
+  CHECK(SystemParametersInfoA(93,7,0,1));
+  CHECK(SystemParametersInfoA(94,0,&value,0) && value==7 && saved_input[5]==7);
+  CHECK(SystemParametersInfoA(105,0xffffffffu,0,1));
+  CHECK(SystemParametersInfoA(104,0,&value,0) && (UINT)value==0xffffffffu && saved_input[6]==101);
+  CHECK(SystemParametersInfoA(23,1,0,0));
+  CHECK(SystemParametersInfoA(11,31,0,0));
+  CHECK(SystemParametersInfoA(105,3,0,0));
+  CHECK(SystemParametersInfoA(93,0,0,0));
+  uint8_t dead_keys[256]={0};uint16_t composed;
+  dead_keys[16]=128;
+  CHECK(ToAsciiEx(0xdd,0x0d,dead_keys,&composed,0,0x04100410u)==-1 && composed=='^');
+  dead_keys[16]=0;
+  CHECK(ToAsciiEx('A',0x1e,dead_keys,&composed,0,0x04100410u)==1 && composed==0xe2);
+  dead_keys[16]=128;CHECK(ToAsciiEx(0xdd,0x0d,dead_keys,&composed,0,0x04100410u)==-1);
+  dead_keys[16]=0;CHECK(ToAsciiEx('X',0x2d,dead_keys,&composed,0,0x04100410u)==2 && composed==('^'|('x'<<8)));
   RECT work = {0, 0, 0, 0}, set = {0, 0, 640, 400};
   CHECK(SystemParametersInfoA(48, 0, &work, 0) && work.top == 32);
   CHECK(SystemParametersInfoA(47, 0, &set, 0) &&
@@ -1430,6 +1707,73 @@ static void test_spi(void) {
     notified |= trace[i].h == windows[0] && trace[i].m == 0x1a &&
                 trace[i].wp == 105;
   CHECK(notified);
+  /* G25: the accessibility records and SM_SHOWSOUNDS. */
+  uint8_t rec[48];
+  w32_fill(rec, 0, sizeof(rec));
+  w32_put32(rec, 8);
+  CHECK(SystemParametersInfoA(58, 8, rec, 0) && w32_u32(rec + 4) == 0x1fe);   /* StickyKeys defaults: Flags 510 */
+  w32_put32(rec + 4, 0x1ff | 0x01000000u);                                   /* the latched bit is state: ignored */
+  CHECK(SystemParametersInfoA(59, 8, rec, 0));
+  w32_put32(rec + 4, 0);
+  CHECK(SystemParametersInfoA(58, 8, rec, 0) && w32_u32(rec + 4) == 0x1ff);
+  CHECK(!SystemParametersInfoA(58, 12, rec, 0) && GetLastError() == 87);    /* uiParam must be the size */
+  w32_put32(rec, 4);
+  CHECK(!SystemParametersInfoA(58, 8, rec, 0) && GetLastError() == 87);     /* and so must cbSize */
+  w32_put32(rec, 24);
+  CHECK(SystemParametersInfoA(50, 24, rec, 0) && w32_u32(rec + 4) == 0x7e &&
+        w32_u32(rec + 8) == 1000 && w32_u32(rec + 12) == 1000 &&
+        w32_u32(rec + 16) == 500 && w32_u32(rec + 20) == 0);
+  w32_put32(rec + 20, 700);                                                  /* BounceKeys needs the others zero */
+  CHECK(!SystemParametersInfoA(51, 24, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 8, 0); w32_put32(rec + 12, 0); w32_put32(rec + 16, 0);
+  CHECK(SystemParametersInfoA(51, 24, rec, 0) && SystemParametersInfoA(50, 24, rec, 0) && w32_u32(rec + 20) == 700);
+  w32_put32(rec + 20, 0);                                                    /* and zero bounce needs them all */
+  CHECK(!SystemParametersInfoA(51, 24, rec, 0));
+  w32_put32(rec + 8, 20001); w32_put32(rec + 12, 1); w32_put32(rec + 16, 1);
+  CHECK(!SystemParametersInfoA(51, 24, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 8, 2000); w32_put32(rec + 12, 300); w32_put32(rec + 16, 1400);
+  CHECK(SystemParametersInfoA(51, 24, rec, 0));
+  w32_put32(rec, 8);
+  CHECK(SystemParametersInfoA(52, 8, rec, 0) && w32_u32(rec + 4) == 0x3e);
+  w32_put32(rec + 4, 0x3f);
+  CHECK(SystemParametersInfoA(53, 8, rec, 0) && SystemParametersInfoA(52, 8, rec, 0) && w32_u32(rec + 4) == 0x3f);
+  w32_fill(rec, 0, sizeof(rec)); w32_put32(rec, 28);
+  CHECK(SystemParametersInfoA(54, 28, rec, 0) && w32_u32(rec + 4) == 0x7e && w32_u32(rec + 8) == 80 &&
+        w32_u32(rec + 12) == 3000 && w32_u32(rec + 16) == 8);
+  w32_put32(rec + 8, 9);                                                     /* iMaxSpeed 10..360 */
+  CHECK(!SystemParametersInfoA(55, 28, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 8, 360); w32_put32(rec + 12, 999);
+  CHECK(!SystemParametersInfoA(55, 28, rec, 0));                              /* iTimeToMaxSpeed 1000..5000 */
+  w32_put32(rec + 12, 5000); w32_put32(rec + 4, 0xff | 0x80000000u);          /* MKF_MOUSEMODE is state */
+  CHECK(SystemParametersInfoA(55, 28, rec, 0) && SystemParametersInfoA(54, 28, rec, 0) &&
+        w32_u32(rec + 4) == 0xff && w32_u32(rec + 8) == 360 && w32_u32(rec + 12) == 5000);
+  w32_put32(rec + 24, 1);                                                    /* reserved */
+  CHECK(!SystemParametersInfoA(55, 28, rec, 0));
+  w32_fill(rec, 0, sizeof(rec)); w32_put32(rec, 48);
+  CHECK(SystemParametersInfoA(64, 48, rec, 0) && w32_u32(rec + 4) == 2 && w32_u32(rec + 32) == 0);
+  w32_put32(rec + 4, 1); w32_put32(rec + 32, 4);                              /* a custom effect is not available */
+  CHECK(!SystemParametersInfoA(65, 48, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 32, 3);
+  CHECK(SystemParametersInfoA(65, 48, rec, 0) && SystemParametersInfoA(64, 48, rec, 0) &&
+        w32_u32(rec + 4) == 3 && w32_u32(rec + 32) == 3);
+  char scheme[64] = "";
+  struct { UINT cb; DWORD flags; char *scheme; } hc = {sizeof(hc), 0, scheme};   /* HIGHCONTRASTA */
+  CHECK(SystemParametersInfoA(66, sizeof(hc), &hc, 0) && hc.flags == 0x7e &&
+        !strcmp(scheme, "High Contrast Black"));
+  strcpy(scheme, "High Contrast White"); hc.flags = 0x7f;
+  CHECK(SystemParametersInfoA(67, sizeof(hc), &hc, 0));
+  scheme[0] = 0; hc.flags = 0;
+  CHECK(SystemParametersInfoA(66, sizeof(hc), &hc, 0) && hc.flags == 0x7f && !strcmp(scheme, "High Contrast White"));
+  w32_fill(rec, 0, sizeof(rec)); w32_put32(rec, 12);
+  CHECK(SystemParametersInfoA(60, 12, rec, 0) && w32_u32(rec + 4) == 0 && w32_u32(rec + 8) == 300000);
+  w32_put32(rec + 4, 3); w32_put32(rec + 8, 600000);
+  CHECK(SystemParametersInfoA(61, 12, rec, 0) && SystemParametersInfoA(60, 12, rec, 0) &&
+        w32_u32(rec + 4) == 3 && w32_u32(rec + 8) == 600000);
+  CHECK(!SystemParametersInfoA(62, 16, rec, 0) && GetLastError() == 120);    /* SerialKeys is not provided */
+  CHECK(!GetSystemMetrics(70));
+  CHECK(SystemParametersInfoA(57, 1, 0, 0) && GetSystemMetrics(70) == 1 &&
+        SystemParametersInfoA(56, 0, &old, 0) && old);
+  CHECK(SystemParametersInfoA(57, 0, 0, 0) && !GetSystemMetrics(70));
   CHECK(!SystemParametersInfoA(9999, 0, 0, 0) && GetLastError() == 120);
   printf("TRACE SystemParametersInfo setters: uiParam pvParam-value and "
          "structure conventions, metrics, SPIF_SENDCHANGE\n");
@@ -1680,6 +2024,7 @@ static void test_palette(void) {
 extern int host_pixel_format(DWORD,int);
 extern BOOL W32API w32_user_gl_target(DWORD,DWORD *);
 extern BOOL W32API w32_user_gl_damage(DWORD);
+#include "g5b_clipboard_test.h"
 static void test_production_gdi(void) {
   CHECK(host_gdi_proc && host_ddraw_seam);
   /* An old v1 table ends before the v2 tail. ASan guards its exact size. */
@@ -1720,7 +2065,33 @@ static void test_production_gdi(void) {
   CHECK(!w32_user_gl_damage(U32_PTR(first_dc)));
   CHECK(ReleaseDC(windows[0],first_dc));
   puts("TRACE window pixel format survives simultaneous and reacquired DCs");
+  /* G30: GetFreeSystemResources from the window table and the production gdi32 object table. */
+  {
+    UINT windows_used = 0;
+    for (UINT i = 0; i < U32_WINDOWS; i++)
+      if (u32_windows[i].handle)
+        windows_used++;
+    UINT user_free = (U32_WINDOWS - windows_used) * 100 / U32_WINDOWS;
+    CHECK(GetFreeSystemResources(2) == user_free && user_free < 100);
+    UINT gdi_before = GetFreeSystemResources(1);
+    DWORD many_dc[40], many_bitmap[40];
+    uint32_t *many_bits;
+    for (UINT i = 0; i < 40; i++) {
+      many_bitmap[i] = host_canvas(8, 8, 0, &many_dc[i], &many_bits);
+      CHECK(many_bitmap[i]);
+    }
+    CHECK(GetFreeSystemResources(1) < gdi_before && GetFreeSystemResources(1) >= 97);
+    for (UINT i = 0; i < 40; i++)
+      host_canvas_free(many_dc[i], many_bitmap[i]);
+    CHECK(GetFreeSystemResources(1) >= gdi_before - 1);
+    UINT system = GetFreeSystemResources(0);
+    CHECK(system == (GetFreeSystemResources(1) < GetFreeSystemResources(2) ? GetFreeSystemResources(1) : GetFreeSystemResources(2)));
+    SetLastError(0);
+    CHECK(GetFreeSystemResources(3) == 0 && GetLastError() == 87);
+    puts("TRACE GetFreeSystemResources: USER and GDI table shares, system is the lower, selector 3 fails");
+  }
   test_cf_bitmap();
+  test_g5b_handles();
   test_draw_icon();
   test_palette();
   dd_window = CreateWindowExA(0, "USER fixture", "dd", WS_VISIBLE | WS_POPUP,
@@ -1741,6 +2112,7 @@ static void test_production_gdi(void) {
 }
 #ifndef U32_TEST_EXTERNAL_MODULES
 #include "../shell/clients.inc"
+#include "g18_test.inc"
 #endif
 static void run(void) {
   puts("STEP init");
@@ -1795,12 +2167,19 @@ static void run(void) {
   puts("STEP clipboard");
   test_clipboard();
   test_extras();
+  #ifndef U32_TEST_EXTERNAL_MODULES
+  test_help_requests();
+  #endif
   test_spi();
+#ifndef U32_TEST_EXTERNAL_MODULES
+  test_g18_shell();
+#endif
   test_order();
   test_arrange();
   test_zoom_limits();
   test_display();
   test_production_gdi();
+  test_g23_appearance();
   traces = 0;
   CHECK(DestroyWindow(windows[0]));
   UINT child_destroy = 999, parent_destroy = 999;

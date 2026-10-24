@@ -14,6 +14,7 @@ static struct du_ui ui;
 static uint32_t pixels[760*520];
 static unsigned sets, label_sets;
 static int refuse, counting, expect_worker;
+static uint32_t volume_total=100,volume_free=75,volume_cluster=4096;
 static pthread_t main_thread;
 static char label[12]="CIUKIOS";
 static int info(const char *path,struct ciuki_file_info *out)
@@ -34,7 +35,7 @@ static int attributes(const char *path,uint32_t bits)
     int i=fake_lookup(path); assert(i>=0); fake_nodes[i].meta.attributes=bits; return 0;
 }
 static int space(unsigned drive,struct ciuki_media_space *s)
-{ assert(drive==2); *s=(struct ciuki_media_space){.cluster_bytes=4096,.total_clusters=100,.free_clusters=75,.flags=counting ? 1 : 0}; return 0; }
+{ assert(drive==2); *s=(struct ciuki_media_space){.cluster_bytes=volume_cluster,.total_clusters=volume_total,.free_clusters=volume_free,.flags=counting ? 1 : 0}; return 0; }
 static int get_label(unsigned drive,char out[33]) { assert(drive==2); strcpy(out,label); return 0; }
 static int set_label(unsigned drive,const char *text)
 { assert(drive==2); label_sets++; if (strlen(text)>11) return -EINVAL; strcpy(label,text); return 0; }
@@ -42,7 +43,7 @@ static void finish_job(void)
 {
     for (unsigned i=0;i<5000 && app.job_active;i++) {
         struct du_event tick={.type=DU_EV_TICK,.id=1}; files_event(&ui,&tick,&app);
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(!app.job_active && ui.dialog.sheet);
 }
@@ -73,6 +74,8 @@ int main(int argc,char **argv)
     fake_nodes[hidden].meta.allocated=4096; fake_nodes[hidden].meta.allocated_known=1;
     du_init(&ui,pixels,760,520); assert(!files_setup(&app,&ui,&fake_vfs,"/Documents"));
     app.file_info=info; app.set_attributes=attributes; app.media_space=space; app.media_label=get_label; app.set_label=set_label; app.version_info=version_info;
+    files_test_wait(&app);app.show_folder_options=1;assert(ui.service);ui.service(&ui,ui.user);
+    assert(!app.show_folder_options && ui.dialog.sheet && app.property_options);cancel();
     sheet("/Documents/Long name.txt");
     assert(strstr(ui.dialog.text,"LONGNA~1.TXT") && strstr(ui.dialog.text,"4.00 KB") && strstr(ui.dialog.text,"Created:"));
     assert(ui.dialog.items[6].value==1 && !ui.dialog.items[4].disabled);
@@ -97,12 +100,26 @@ int main(int argc,char **argv)
     assert(strstr(ui.dialog.text,"1.2.3.4") && ui.dialog.items[4].hidden); dump(argv[1],"g6-version"); cancel();
     sheet("/Documents/Sub"); assert(app.job.files==1 && app.job.bytes==11 && app.job.allocated==4096); dump(argv[1],"g6-folder"); cancel();
     sheet("/"); assert(app.property_drive==2 && app.property_have_space && ui.dialog.items[3].count==2);
-    assert(strstr(ui.dialog.text,"100 KB") && strstr(ui.dialog.text,"300 KB")); dump(argv[1],"g6-drive");
+    assert(strstr(ui.dialog.text,"102,400 bytes 0 MB") && strstr(ui.dialog.text,"307,200 bytes 0 MB") && strstr(ui.dialog.text,"409,600 bytes 0 MB")); dump(argv[1],"g6-drive");
     du_set_text(&ui.dialog.items[4],"DATA"); apply(); assert(label_sets==1 && !strcmp(label,"DATA"));
     struct ciuki_input_event ctrl={.type=CIUKI_INPUT_KEY,.code=DU_KEY_LCTRL,.value=1};
     du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
-    assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"ScanDisk is not installed") && ui.dialog.items[4].hidden); dump(argv[1],"g6-tools"); cancel();
+    /* G14: Check Now (slot 5) is on the Tools page only. */
+    assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"Check Now checks this drive") && ui.dialog.items[4].hidden &&
+           !ui.dialog.items[5].hidden && !strcmp(ui.dialog.items[5].text,"Check &Now...")); dump(argv[1],"g6-tools"); cancel();
     counting=1; sheet("/"); assert(strstr(ui.dialog.text,"calculating...")); dump(argv[1],"g6-counting"); cancel();
+    counting=0;volume_total=76544;volume_free=0;sheet("/");
+    assert(strstr(ui.dialog.text,"313,524,224 bytes 299 MB") && strstr(ui.dialog.text,"0 bytes 0 MB"));
+    du_render(&ui);
+    unsigned top_blue=0,top_purple=0,front=0;
+    for (unsigned i=0;i<760*520;i++) {
+        uint32_t c=pixels[i]&0xffffffu;
+        top_blue+=c==0x2059c5;top_purple+=c==0xc52daf;front+=c==0x102c62;
+    }
+    assert(top_blue>5000 && top_purple<=100 && front>1000);cancel();
+    volume_free=volume_total;sheet("/");du_render(&ui);cancel();
+    volume_total=0;volume_free=0;sheet("/");assert(strstr(ui.dialog.text,"0 bytes 0 MB"));du_render(&ui);cancel();
+    volume_total=100;volume_free=75;
     /* View options filter only browser listings; Properties includes hidden children. */
     assert(!files_navigate(&app,"/Documents/Sub") && app.model.count==0);
     app.model.show_hidden=1; assert(!files_navigate(&app,"/Documents/Sub") && app.model.count==1);

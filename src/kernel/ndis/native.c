@@ -109,6 +109,7 @@ static bool interrupt(unsigned irq,const char *owner)
     for(unsigned i=0;i<NDIS_HOST_MAX;i++) {
         struct ndis_native *n=adapters[i];
         if(!n || n->owner!=owner || n->pci.irq_line!=irq || !ndis_host_live(&n->host)) continue;
+        if(n->miniport.power_phase==4) return false;
         if(!ndis_host_interrupt(&n->host,ndis_execution_now())) return false;
         if(n->irq_delivery!=n->host.irq_token) n->dpc_phase=false;
         n->irq_accounted=false;
@@ -204,6 +205,7 @@ int ndis_native_irq_bind(struct ndis_native *n,uint32_t isr,uint32_t dpc)
     int pending=n->qualification->cause(n);
     if(pending<0) { ndis_host_stop(&n->host,"irq-initial-cause-failed",0,0,ndis_execution_now());return 0; }
     if(pending) {
+        if(n->miniport.power_phase==4) return false;
         if(!ndis_host_interrupt(&n->host,ndis_execution_now())) return 0;
         n->irq_delivery=n->host.irq_token;n->irq_accounted=true;wake_worker(n);
     }
@@ -242,8 +244,9 @@ int ndis_native_enqueue(struct ndis_native *n,enum ndis_host_kind kind,uint32_t 
 void ndis_native_poll(struct ndis_native *n)
 {
     if(!n) return;
-    if(n->host.nt) ndis_nt_poll(n->host.nt);
+    if(n->host.nt && n->miniport.power_phase != 4) ndis_nt_poll(n->host.nt);
     if(n->ndis.miniport) ndis_mp_poll(&n->miniport);
+    if(n->miniport.power_phase==4) return;
     if(n->detach_pending) {
         int rc=irq_chain_remove(n->pci.irq_line,interrupt,n->owner);
         if(!rc) n->detach_pending=n->irq_attached=false;
@@ -494,7 +497,7 @@ static int nt_start(struct ndis_native *n)
 void ndis_native_tick(struct ndis_native *n)
 {
     if(!n || !n->runtime_physical || !ndis_host_live(&n->host)) return;
-    if(n->host.nt) ndis_nt_poll(n->host.nt);
+    if(n->host.nt && n->miniport.power_phase != 4) ndis_nt_poll(n->host.nt);
     uint32_t *tick=(uint32_t *)((uint8_t *)P2V(n->runtime_physical)+8192);
     uint64_t value=g_ticks;
     __atomic_store_n(tick+2,(uint32_t)(value>>32),__ATOMIC_RELEASE);

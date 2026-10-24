@@ -12,6 +12,7 @@
 
 #define VIDEO_LINEAR 5u
 static void video_direct(struct dosvm *, bool port_timed);
+static void video_collect(struct dosvm *, bool planes);
 extern const uint8_t font_cfn_regular[]; /* 95 widths, then 95 x 16 u16 rows */
 
 static bool vram(uint32_t address) { return address >= 0xA0000 && address < 0xC0000; }
@@ -116,6 +117,7 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
         if (p <= 0x3DF) {
             if (write) {
                 unsigned reg = video_register(&v->vga, p);
+                if (p == 0x3C8 || p == 0x3C9) v->video_dac_burst = true; /* fx-27 */
                 uint64_t begin = dosvm_perf_task_clock();
                 v->perf.vga_reg = reg; v->perf.port_count[reg]++;
                 /* f3-19: the common data-port path. A single-plane change
@@ -161,7 +163,7 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                 /* Completion must publish the last plane's D pages even
                  * before the native presenter next polls. Keep the window
                  * writable, including a redundant start-address write. */
-                if (flip && v->video_direct == VIDEO_LINEAR) dosvm_vga_sync(v, false);
+                if (flip && v->video_direct == VIDEO_LINEAR && v->as.pd_phys) video_collect(v, false);
                 /* Mode X/Y flips select the source without collecting D. */
                 /* f3-06: a CRTC start-address-high store is a page flip
                  * (DOOM's I_FinishUpdate, Wolf3D's VW_UpdateScreen). */
@@ -269,7 +271,24 @@ static uint32_t video_exchange(struct dosvm *v, unsigned want)
     v->video_direct = want;
     return dirty;
 }
-static void video_harvest(struct dosvm *v)
+/* fx-27: chain-4 stores stay in the linear backing until a model consumer
+ * needs the planes. A collection only records the D pages: as "stale" (the
+ * planes lack them) and as presenter damage. The presenter converts chained
+ * rows straight from the linear backing, as DOSBox renders mode 13h from its
+ * linear fastmem copy (vga_memory.cpp VGA_ChainedVGA_Handler writeCache).
+ * Every consumer of the planes (dosvm_vga_model/sync, a window switch, the
+ * presenter's planar path, snapshots) deinterleaves the stale pages first. */
+static void video_linear_flush(struct dosvm *v)
+{
+    uint16_t stale = v->video_linear_stale;
+    v->video_linear_stale = 0;
+    for (unsigned i = 0; i < VIDEO_WINDOW_PAGES; i++) if (stale & (1u << i)) {
+        cvga_store_chain4_span(&v->vga, i * PAGE_SIZE,
+                               P2V(v->frames[VIDEO_WINDOW_PAGE + i]), PAGE_SIZE);
+        v->perf.direct_pages++; v->video_linear_harvests++;
+    }
+}
+static void video_collect(struct dosvm *v, bool planes)
 {
     uint64_t begin = dosvm_perf_task_clock();
     uint32_t dirty = 0;
@@ -278,12 +297,13 @@ static void video_harvest(struct dosvm *v)
                              VIDEO_WINDOW_PAGES, 0, &dirty, 0)) panic("dosvm: missing video window table");
         if (v->video_direct < VIDEO_LINEAR)
             v->video_pending[v->video_direct - 1] |= (uint16_t)dirty;
-        else for (unsigned i = 0; i < VIDEO_WINDOW_PAGES; i++) if (dirty & (1u << i)) {
-            cvga_store_chain4_span(&v->vga, i * PAGE_SIZE,
-                                   P2V(v->frames[VIDEO_WINDOW_PAGE + i]), PAGE_SIZE);
-            v->perf.direct_pages++; v->video_linear_harvests++;
+        else if (dirty) {
+            v->video_linear_stale |= (uint16_t)dirty;
+            v->video_linear_damage |= (uint16_t)dirty;
+            v->vga.changes++;
         }
     }
+    if (planes) video_linear_flush(v);
     bool harvested = dirty != 0;
     for (unsigned plane = 0; plane < 4; plane++) {
         uint32_t pending = v->video_pending[plane];
@@ -299,6 +319,8 @@ static void video_harvest(struct dosvm *v)
     dosvm_present_notify(v);
     v->perf.harvest_cycles += dosvm_perf_task_clock() - begin;
 }
+/* Every page is published to the planes (the pre-fx-27 harvest). */
+static void video_harvest(struct dosvm *v) { video_collect(v, true); }
 void dosvm_vga_sync(struct dosvm *v, bool unmap)
 {
     if (v->fullscreen) return;
@@ -754,6 +776,145 @@ void dosvm_vga_burst(struct dosvm *v, struct v86_frame *f)
     }
     video_burst(v, f, &c);
 }
+/* ---- fx-27 DAC palette burst ----
+ * A DAC load is 768 OUTs to 3C9h (DOOM I_SetPalette, Quake VGA_SetPalette:
+ * movzx/sar/mov edx,3C9h/out/inc/cmp/jng per byte), each a monitor exit:
+ * 17 ms per palette change on the T23 (trial f441c5bd vga_io 21.8 us per
+ * 3C9h exit). After a trapped DAC write the monitor decodes ahead, on a
+ * copy, at most DAC_LOOKAHEAD instructions for the next VGA DAC or status
+ * port access. Only instructions with no memory store and no VGA memory
+ * read (latch loads) qualify: register setup/ALU, shifts, short branches
+ * and loads from resident RAM. If such an access is found, the copy's state
+ * is exactly what the CPU would have produced for those instructions, so it
+ * is committed and the port instruction is executed through the VGA port
+ * callback; otherwise nothing is committed and the CPU continues natively.
+ * The burst stops on TF, watchpoints, IF-image/return tracking, STI/MOV SS
+ * shadows, a deliverable IRQ, a reschedule, a host tick, any instruction
+ * the decoder does not support and after DAC_BURST_INSN instructions, so
+ * the guest observes the sequential result, sooner. One exit per palette
+ * load; DOSBox (render.cpp RENDER_SetPal/Check_Palette) and QEMU (vga.c
+ * update_palette256) likewise apply a whole palette change at the next
+ * frame rather than per entry. */
+#define DAC_LOOKAHEAD 8u
+#define DAC_BURST_INSN 8192u
+struct dac_bus {
+    struct dosvm *v;
+    bool detect, found;
+    uint32_t page[2];               /* cached resident linear pages (code, data) */
+    const uint8_t *host[2];
+    /* Descriptors decoded once per burst: the decoder loads no selector. */
+    struct { uint16_t sel; bool valid; struct dpmi_seg seg; } seg[3];
+    unsigned next_seg;
+};
+static bool dac_port_ok(uint16_t port, unsigned size, int write)
+{
+    if (size > 2) return false;
+    if (port >= 0x3C6 && port <= 0x3C9) return true;   /* DAC mask, indexes, data */
+    return !write && size == 1 && (port == 0x3DA || port == 0x3BA);
+}
+static int dac_byte(struct dac_bus *b, unsigned slot, uint32_t address, uint8_t *value)
+{
+    if (vram(address)) return -EFAULT;  /* a VGA memory read loads the latches */
+    uint32_t page = address & ~0xFFFu;
+    if (!b->host[slot] || b->page[slot] != page) {
+        uint32_t pte = 0, phys = as_lookup(&b->v->as, address, &pte);
+        if (!phys || !(pte & PTE_U)) return -EFAULT;     /* never pages in */
+        b->page[slot] = page; b->host[slot] = P2V(phys & ~0xFFFu);
+    }
+    *value = b->host[slot][address & 0xFFFu];
+    return 0;
+}
+static int dac_read(void *arg, uint32_t address, uint8_t *value) { return dac_byte(arg, 1, address, value); }
+static int dac_fetch(void *arg, uint32_t address, uint8_t *value) { return dac_byte(arg, 0, address, value); }
+static int dac_write(void *arg, uint32_t address, uint8_t value)
+{ (void)arg; (void)address; (void)value; return -EFAULT; }
+static uint32_t dac_base(void *arg, uint16_t sel) { return pm_segment_base(((struct dac_bus *)arg)->v, sel); }
+/* dpmi_ptr's segment checks on a per-burst descriptor cache; the page
+ * check is dac_byte's (resident user pages only, stricter than
+ * dosvm_range), so no per-byte page-table walk. */
+static int dac_validate(void *arg, uint16_t sel, uint32_t off, unsigned size, int write)
+{
+    struct dac_bus *b = arg;
+    const struct dpmi_seg *s = 0;
+    for (unsigned i = 0; i < 3 && !s; i++) if (b->seg[i].valid && b->seg[i].sel == sel) s = &b->seg[i].seg;
+    if (!s) {
+        unsigned i = b->next_seg++ % 3;
+        b->seg[i].valid = dpmi_seg(b->v, sel, &b->seg[i].seg);
+        if (!b->seg[i].valid) return -EFAULT;
+        b->seg[i].sel = sel; s = &b->seg[i].seg;
+    }
+    if (!size || !s->present || (write ? !s->writable : !s->readable)) return -EFAULT;
+    uint32_t last = off + size - 1;
+    if (last < off) return -EFAULT;
+    if (s->down) {
+        if (off <= s->limit || last > (s->big ? 0xFFFFFFFFu : 0xFFFFu)) return -EFAULT;
+    } else if (last > s->limit) return -EFAULT;
+    return s->base + off + size - 1 < s->base + off ? -EFAULT : 0;
+}
+static int dac_port(void *arg, uint16_t port, unsigned size, int write, uint32_t *value)
+{
+    struct dac_bus *b = arg;
+    if (!dac_port_ok(port, size, write)) return -EFAULT;
+    if (b->detect) { b->found = true; return -EAGAIN; }  /* unsupported: no effect */
+    return dosvm_vga_port(b->v, port, size, write != 0, value, 0);
+}
+int dosvm_vga_dac_burst(struct dosvm *v, struct v86_frame *f)
+{
+    if (v->fullscreen || video_run_blocked(v, f)) return 0;
+    cvx_cpu c = {0};
+    struct dac_bus ctx = {.v = v};
+    cvx_bus bus = {.read = dac_read, .write = dac_write, .fetch = dac_fetch, .context = &ctx, .port = dac_port};
+    if (v->frame_pm) {
+        struct dpmi_seg cs;
+        if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || !cs.code || !cs.present) return 0;
+        uint32_t selectors[] = {f->tf.es, f->tf.cs, f->tf.user_ss, f->tf.ds, f->tf.fs, f->tf.gs};
+        for (unsigned i = 0; i < 6; i++) c.sreg[i] = (uint16_t)selectors[i];
+        c.code32 = cs.big; c.seg_base[CVX_CS] = cs.base; c.base_valid = 1u << CVX_CS;
+        bus.segment_base = dac_base; bus.validate = dac_validate;
+    } else {
+        uint32_t segments[] = {f->es, f->tf.cs, f->tf.user_ss, f->ds, f->fs, f->gs};
+        for (unsigned i = 0; i < 6; i++) {
+            if (segments[i] > 65535) return 0;
+            c.sreg[i] = (uint16_t)segments[i]; c.seg_base[i] = segments[i] << 4;
+        }
+    }
+    c.gpr[0] = f->tf.eax; c.gpr[1] = f->tf.ecx; c.gpr[2] = f->tf.edx; c.gpr[3] = f->tf.ebx;
+    c.gpr[4] = f->tf.user_esp; c.gpr[5] = f->tf.ebp; c.gpr[6] = f->tf.esi; c.gpr[7] = f->tf.edi;
+    c.eip = f->tf.eip; c.eflags = f->tf.eflags;
+    uint64_t tick = g_ticks;
+    unsigned executed = 0, ports = 0;
+    while (executed < DAC_BURST_INSN && g_ticks == tick && !video_run_blocked(v, f)) {
+        cvx_cpu ahead = c;
+        unsigned pure = 0;
+        ctx.detect = true; ctx.found = false; v->video_bus_fault = false;
+        while (pure < DAC_LOOKAHEAD) {
+            cvx_cpu next = ahead;
+            cvx_result result;
+            if (cvx_execute(&next, &bus, 1, &result) != CVX_DONE || v->video_bus_fault) break;
+            ahead = next; pure++;
+        }
+        if (!ctx.found || v->video_bus_fault) break;
+        cvx_cpu next = ahead;
+        cvx_result result;
+        ctx.detect = false;
+        if (cvx_execute(&next, &bus, 1, &result) != CVX_DONE || v->video_bus_fault) {
+            v->video_bus_fault = false;
+            c = ahead;                  /* the CPU executes the port instruction itself */
+            executed += pure;
+            break;
+        }
+        c = next; executed += pure + 1; ports++;
+        f->tf.eax = c.gpr[0]; f->tf.ecx = c.gpr[1]; f->tf.edx = c.gpr[2]; f->tf.ebx = c.gpr[3];
+        f->tf.user_esp = c.gpr[4]; f->tf.ebp = c.gpr[5]; f->tf.esi = c.gpr[6]; f->tf.edi = c.gpr[7];
+        f->tf.eip = c.eip; f->tf.eflags = c.eflags;
+    }
+    f->tf.eax = c.gpr[0]; f->tf.ecx = c.gpr[1]; f->tf.edx = c.gpr[2]; f->tf.ebx = c.gpr[3];
+    f->tf.user_esp = c.gpr[4]; f->tf.ebp = c.gpr[5]; f->tf.esi = c.gpr[6]; f->tf.edi = c.gpr[7];
+    f->tf.eip = c.eip; f->tf.eflags = c.eflags;
+    v->video_bus_fault = false;
+    v->perf.dac_batched += ports; v->perf.burst_insn += executed; v->video_burst += executed;
+    return 0;
+}
 /* Selector base for the decoder. A selector the client could not have
  * loaded (null, absent) makes the access a bus fault: the VM stops with
  * the diagnostic instead of the emulator using base 0. */
@@ -821,12 +982,13 @@ static uint32_t rgb(const cvga_state *g, uint8_t index)
  * spans are contiguous; chain-4 uses every fourth byte in each plane.
  * The total of the four spans is exactly width, including partial dots
  * from pan. Do not confuse a dirty PTE with changed pixels, or a CRTC flip
- * with changed palette/geometry. */
-static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsigned y, unsigned width, bool force)
+ * with changed palette/geometry. fx-27: 0 unchanged, 1 redrawn because
+ * forced (palette, geometry, pan, layout), 2 displayed bytes differ. */
+static unsigned video_planar_changed(struct dosvm *v, const cvga_state *scan, unsigned y, unsigned width, bool force)
 {
     unsigned base = v->video_row_base[y], pan = v->video_row_pan[y];
     uint8_t *previous = v->video_indexes[y];
-    bool changed = force || v->video_index_pan[y] != (pan & 3);
+    bool forced = force || v->video_index_pan[y] != (pan & 3), differs = false;
     v->video_index_pan[y] = (uint8_t)(pan & 3);
     for (unsigned p = 0; p < 4; p++) {
         unsigned first = (p + 4 - (pan & 3)) & 3;
@@ -836,7 +998,7 @@ static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsign
             unsigned at = (base + ((pan + first) / 4) * 4) & 0xffffu;
             for (unsigned x = 0; x < count; x++, at = (at + 4) & 0xffffu) {
                 uint8_t index = scan->plane[p][at];
-                changed |= previous[x] != index;
+                differs |= previous[x] != index;
                 previous[x] = index;
             }
             previous += count;
@@ -845,13 +1007,68 @@ static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsign
         unsigned at = (base + (pan + first) / 4) & 0xffffu;
         unsigned n = CVGA_PLANE_SIZE - at;
         if (n > count) n = count;
-        if (!changed && (memcmp(previous, &scan->plane[p][at], n) ||
-            (n < count && memcmp(previous + n, scan->plane[p], count - n)))) changed = true;
+        if (!forced && !differs && (memcmp(previous, &scan->plane[p][at], n) ||
+            (n < count && memcmp(previous + n, scan->plane[p], count - n)))) differs = true;
         memcpy(previous, &scan->plane[p][at], n);
         if (n < count) memcpy(previous + n, scan->plane[p], count - n);
         previous += count;
     }
-    return changed;
+    return differs ? 2 : forced ? 1 : 0;
+}
+/* fx-27: chain-4 scanout read from the linear backing while the linear
+ * window is open. With a dword-aligned row base (video_linear_rows) dot x
+ * of row y is linear byte (base + pan + x) & FFFFh: plane (dot & 3) at
+ * plane offset base + (dot / 4) * 4, which is where the window stores CPU
+ * byte o (plane o & 3, offset o & FFFCh). The 16 backing pages are not
+ * contiguous; rows are taken page by page. video_indexes keeps x order. */
+static const uint8_t *video_linear_span(const struct dosvm *v, unsigned at, unsigned *n)
+{
+    unsigned off = at & (PAGE_SIZE - 1);
+    if (*n > PAGE_SIZE - off) *n = PAGE_SIZE - off;
+    return (const uint8_t *)P2V(v->frames[VIDEO_WINDOW_PAGE + (at >> 12)]) + off;
+}
+static unsigned video_linear_changed(struct dosvm *v, unsigned y, unsigned width, bool force)
+{
+    unsigned pan = v->video_row_pan[y], start = (v->video_row_base[y] + pan) & 0xffffu;
+    uint8_t *previous = v->video_indexes[y];
+    bool forced = force || v->video_index_pan[y] != (pan & 3), differs = false;
+    v->video_index_pan[y] = (uint8_t)(pan & 3);
+    for (unsigned x = 0; x < width;) {
+        unsigned n = width - x;
+        const uint8_t *src = video_linear_span(v, (start + x) & 0xffffu, &n);
+        if (!differs && memcmp(previous + x, src, n)) differs = true;
+        memcpy(previous + x, src, n);
+        x += n;
+    }
+    return differs ? 2 : forced ? 1 : 0;
+}
+static void video_linear_row32(const struct dosvm *v, unsigned y, unsigned width, unsigned scale,
+                               const uint32_t lut[256], uint32_t *dest)
+{
+    unsigned start = (v->video_row_base[y] + v->video_row_pan[y]) & 0xffffu;
+    uint8_t mask = v->vga.dac_mask;
+    for (unsigned x = 0; x < width;) {
+        unsigned n = width - x;
+        const uint8_t *src = video_linear_span(v, (start + x) & 0xffffu, &n);
+        if (scale == 2) for (unsigned i = 0; i < n; i++) {
+            uint32_t c = lut[src[i] & mask];
+            dest[0] = c; dest[1] = c; dest += 2;
+        } else for (unsigned i = 0; i < n; i++) {
+            uint32_t c = lut[src[i] & mask];
+            for (unsigned k = 0; k < scale; k++) *dest++ = c;
+        }
+        x += n;
+    }
+}
+/* Rows of [start, start + width) that lie in a damaged backing page. */
+static bool video_linear_damaged(unsigned start, unsigned width, uint16_t damage)
+{
+    if (!damage || !width) return false;
+    unsigned first = start >> 12, last = ((start + width - 1) & 0xffffu) >> 12;
+    for (unsigned page = first;; page = (page + 1) & 15) {
+        if (damage & (1u << page)) return true;
+        if (page == last) return false;
+    }
 }
 /* One cadence policy for the wait, dirty sampler and presenter. Keep the
  * microsecond phase internally; only the public timeout is rounded up. */
@@ -891,7 +1108,9 @@ void dosvm_present_checkpoint(struct dosvm *v)
     if (deadline_passed(v->present_sample_due_us / 1000u) && v->info.state < DOSVM_STOPPING &&
         !v->fullscreen && !v->fullscreen_hold) {
         v->present_sample_due_us = dosvm_vga_next_due(v->present_sample_due_us, dosvm_vga_period_us(v, g_ticks), g_ticks);
-        dosvm_vga_sync(v, false);
+        /* fx-27: observe D pages only; the presenter reads chained pages
+         * from the linear backing, so no deinterleave per sample. */
+        if (!v->fullscreen && v->as.pd_phys) video_collect(v, false);
         if (v->vbe_mode && dosvm_vbe_dirty(v, false)) v->present_vbe_changes++;
     }
     dosvm_present_notify(v);
@@ -923,11 +1142,10 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
      * Drop missed deadlines instead of accumulating a catch-up burst. */
     v->video_due_us = dosvm_vga_next_due(v->video_due_us, period, tick);
     uint64_t begin = dosvm_perf_task_clock();
-    /* Take and clear the dirty granules atomically with respect to the VM
-     * worker: a store after this point stays marked for the next frame. */
-    video_harvest(v); /* Includes dirt carried by earlier plane switches. */
-    memcpy(v->video_taken, v->vga.dirty, sizeof(v->video_taken));
-    memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
+    /* fx-27: collect D pages (including dirt carried by earlier plane
+     * switches) without deinterleaving the chain-4 backing; the granules
+     * are taken below, once the chained source is known. */
+    video_collect(v, false);
     uint32_t display = v->vga.display_changes, changes = v->vga.changes;
     uint8_t dac_mask = v->vga.dac_mask;
     uint32_t starts = v->video_starts;
@@ -969,7 +1187,25 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             v->video_row_base[y] = base; v->video_row_pan[y] = (uint8_t)pan;
             if (!(y & 3)) kpreempt_point();
         }
+        v->video_linear_rows = v->video_chain4;
+        for (unsigned y = 0; y < g.height && v->video_linear_rows; y++)
+            v->video_linear_rows = !(v->video_row_base[y] & 3u);
     }
+    /* fx-27: while the chain-4 window is open, its linear backing is the
+     * complete chained image; any other scanout reads planes made current
+     * first. Take and clear the dirty granules atomically with respect to
+     * the VM worker: a store after this point stays marked for the next
+     * frame (granules, or a D page for the next collection). */
+    bool linear = supported && v->video_chain4 && v->video_linear_rows && v->video_direct == VIDEO_LINEAR;
+    if (!linear) video_linear_flush(v);
+    memcpy(v->video_taken, v->vga.dirty, sizeof(v->video_taken));
+    memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
+    uint16_t linear_damage = v->video_linear_damage;
+    v->video_linear_damage = 0;
+    /* video_indexes keeps the layout of the source that filled it; a
+     * change of source compares every row again (recorded below, once rows
+     * are actually compared). */
+    bool layout = v->video_index_linear != linear;
     bool indexed = v->video_modex || v->video_chain4;
     if (g.text) for (unsigned i = 0; i < CVGA_DIRTY_BYTES && !full; i++) full = v->video_taken[2][i] != 0;
     if (!full && changes == v->video_changes && (!g.text || phase == v->video_phase)) {
@@ -978,6 +1214,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
         v->perf.present_cycles += dosvm_perf_task_clock() - begin;
         return 0; /* an idle prompt/game never scans every row at the poll rate */
     }
+    v->video_index_linear = linear;
     bool palette_changed = !v->video_lut_valid;
     if (!v->video_lut_valid || v->video_lut_display != display) {
         for (unsigned i = 0; i < 256; i++) {
@@ -992,15 +1229,19 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     if (supported) for (unsigned y = 0; y < g.height; y++) {
         if (!(y & 3)) kpreempt_point();
         unsigned band = y / DOSVM_VIDEO_BAND;
-        if ((indexed || !bands[band]) && (full || (v->video_chain4 ?
-            cvga_chain4_dirty(v->video_row_base[y], v->video_row_pan[y], g.width, v->video_taken) : v->video_modex ?
+        if ((indexed || !bands[band]) && (full || layout || (v->video_chain4 ?
+            cvga_chain4_dirty(v->video_row_base[y], v->video_row_pan[y], g.width, v->video_taken) ||
+            (linear && video_linear_damaged((v->video_row_base[y] + v->video_row_pan[y]) & 0xffffu,
+                                            g.width, linear_damage)) : v->video_modex ?
             cvga_modex_dirty(v->video_row_base[y], v->video_row_pan[y], g.width, v->video_taken) :
             cvga_row_reads_dirty(scan, y, v->video_taken)) ||
             (g.text && (phase ^ v->video_phase) && cvga_row_phase_sensitive(scan, y)))) {
-            bool force = !planar_cached || borders || palette_changed || g.blank ||
+            bool force = !planar_cached || borders || palette_changed || g.blank || layout ||
                 v->video_geometry.blank != g.blank || v->video_dac_mask != scan->dac_mask;
-            if (!indexed || video_planar_changed(v, scan, y, g.width, force)) {
-                bands[band] = 1; dirty_rows[y] = 1;
+            unsigned changed = !indexed ? 1 : linear ? video_linear_changed(v, y, g.width, force) :
+                video_planar_changed(v, scan, y, g.width, force);
+            if (changed) {
+                bands[band] = 1; dirty_rows[y] = (uint8_t)changed;
             }
         }
     }
@@ -1023,7 +1264,10 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             if (left + width < DOSVM_VIDEO_WIDTH)
                 memset(v->video_pixels + left + width, 0,
                        (DOSVM_VIDEO_WIDTH - left - width) * sizeof(uint32_t));
-            if (v->video_chain4 && !g.blank) {
+            if (linear && !g.blank) {
+                video_linear_row32(v, source, g.width, scale, v->video_lut, v->video_pixels + left);
+                v->perf.linear_direct++;
+            } else if (v->video_chain4 && !g.blank) {
                 cvp_chain4_row32(scan, v->video_row_base[source], v->video_row_pan[source],
                                  g.width, scale, v->video_lut, v->video_pixels + left);
             } else if (v->video_modex && !g.blank) {
@@ -1041,7 +1285,11 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             v->perf.converted_bytes += g.width;
             rendered = source;
         }
+        /* fx-27: an exact index difference proves the row changed; the
+         * surface writer then needs no comparison with its old contents. */
+        v->video_row_proven = inside && indexed && !g.blank && dirty_rows[source] == 2;
         int e = row(arg, y, v->video_pixels, sizeof(v->video_pixels));
+        v->video_row_proven = false;
         if (e<0) {
             v->perf.present_cycles += dosvm_perf_task_clock() - begin;
             v->video_presented = false; return e;

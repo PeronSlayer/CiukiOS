@@ -47,6 +47,30 @@ static inline uint16_t dosbox_key_for(char c, int *shift)
     case '/': return CIUKI_KEY_SLASH;
     case '=': return CIUKI_KEY_EQUAL;
     case ',': return CIUKI_KEY_COMMA;
+    case ';': return CIUKI_KEY_SEMICOLON;
+    case '\'': return CIUKI_KEY_APOSTROPHE;
+    case '`': return CIUKI_KEY_GRAVE;
+    case '[': return CIUKI_KEY_LEFTBRACKET;
+    case ']': return CIUKI_KEY_RIGHTBRACKET;
+    case '!': *shift=1; return CIUKI_KEY_1;
+    case '@': *shift=1; return CIUKI_KEY_2;
+    case '#': *shift=1; return CIUKI_KEY_3;
+    case '$': *shift=1; return CIUKI_KEY_4;
+    case '%': *shift=1; return CIUKI_KEY_5;
+    case '^': *shift=1; return CIUKI_KEY_6;
+    case '&': *shift=1; return CIUKI_KEY_7;
+    case '*': *shift=1; return CIUKI_KEY_8;
+    case '(': *shift=1; return CIUKI_KEY_9;
+    case ')': *shift=1; return CIUKI_KEY_0;
+    case '+': *shift=1; return CIUKI_KEY_EQUAL;
+    case '{': *shift=1; return CIUKI_KEY_LEFTBRACKET;
+    case '}': *shift=1; return CIUKI_KEY_RIGHTBRACKET;
+    case '|': *shift=1; return CIUKI_KEY_BACKSLASH;
+    case '"': *shift=1; return CIUKI_KEY_APOSTROPHE;
+    case '<': *shift=1; return CIUKI_KEY_COMMA;
+    case '>': *shift=1; return CIUKI_KEY_PERIOD;
+    case '?': *shift=1; return CIUKI_KEY_SLASH;
+    case '~': *shift=1; return CIUKI_KEY_GRAVE;
     default: return 0;
     }
 }
@@ -57,6 +81,9 @@ static inline int dosbox_command_lines(const char *command, char lines[DOSBOX_LI
 {
     size_t n = strlen(command);
     if (!n || n > DOSBOX_COMMAND_MAX || command[0] == ' ' || command[n - 1] == ' ') return -1;
+    /* Preserve command-launch refusals; the clipboard typist separately
+     * accepts printable ASCII, including punctuation and shell operators. */
+    if (strpbrk(command,";|><&")) return -1;
     for (size_t i = 0; i < n; i++) { int shift; if (!dosbox_key_for(command[i], &shift)) return -1; }
     /* A host media launch explicitly switches drive before changing directory. */
     if (n>3 && command[1]==':' && command[2]=='\\' &&

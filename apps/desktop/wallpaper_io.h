@@ -9,7 +9,7 @@
 struct desk_wall_request {
     char path[CFG_PATH_MAX];
     uint32_t width, height, top, bottom, colour;
-    int mode;
+    int mode, pattern;
     const uint32_t *portrait; /* immutable approved asset, valid until worker_stop */
     int caption_font;
     uint32_t caption_colour;

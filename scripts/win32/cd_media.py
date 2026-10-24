@@ -21,7 +21,7 @@ def build_one(out, source, name):
     subprocess.run(['clang', *gdi32.FLAGS, '-c', str(helper), '-o', str(helper_obj)], check=True)
     symbols = subprocess.check_output(['llvm-nm', '-u', str(obj)], text=True)
     groups = {}
-    kernel = {'GetModuleHandleA', 'ExitProcess', 'GetCommandLineA', 'Sleep', 'VirtualAlloc'}
+    kernel = {'GetModuleHandleA', 'ExitProcess', 'GetCommandLineA', 'Sleep', 'VirtualAlloc', 'GetPrivateProfileStringA', 'WritePrivateProfileSectionA'}
     for symbol, arity in re.findall(r'\bU _([A-Za-z][A-Za-z0-9_]*)@(\d+)\s*$', symbols, re.M):
         dll = 'kernel32' if symbol in kernel else 'winmm' if symbol.startswith('mci') else 'user32'
         groups.setdefault(dll, []).append(f'{symbol}@{arity}')

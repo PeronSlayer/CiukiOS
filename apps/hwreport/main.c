@@ -211,6 +211,7 @@ int main(int argc,char **argv)
     if (du_window_open(&a->window,&a->ui,channel,640,480,"Hardware Report")) {
         du_ta_free(&a->preview); free(a->text); free(a); return 1;
     }
+    du_help_topic(&a->ui, "hwreport");   /* G15: F1 opens this program's Help topic */
     a->window.user=a; a->window.message=message;
     a->ui.user=a; a->ui.event=event;
     labels(&a->ui,20,8,hr_summary);

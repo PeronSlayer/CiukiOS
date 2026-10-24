@@ -28,7 +28,9 @@ int main(int argc, char **argv)
     assert(sound_path(&s,SOUND_QUESTION,path,sizeof(path)) == -ENOENT);
     assert(sound_path(&s,SOUND_EVENTS,path,sizeof(path)) == -EINVAL);
     assert(sound_path(&s,SOUND_ERROR,path,3) == -ENAMETOOLONG);
-    static const char *bad[] = {"ui_volume=101", "ui_volume=-1", "ui_volume=", "ui_volume=abc", "enabled=2", "enabled=", "error=../bad.wav", "error=/bad.wav", "error=a.ogg", "error=a..wav", "badline"};
+    assert(!sound_assign(&s,SOUND_ERROR,"/Documents/My Sound (1).wAv"));
+    assert(!sound_path(&s,SOUND_ERROR,path,sizeof(path)) && !strcmp(path,"/Documents/My Sound (1).wAv"));
+    static const char *bad[] = {"ui_volume=101", "ui_volume=-1", "ui_volume=", "ui_volume=abc", "enabled=2", "enabled=", "error=../bad.wav", "error=relative/bad.wav", "error=/bad\".wav", "error=a.ogg", "error=a..wav", "badline"};
     for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) { saved=s; assert(sound_parse(&s,bad[i],strlen(bad[i])) == -EINVAL); assert(!memcmp(&s,&saved,sizeof(s))); }
     assert(sound_parse(&s,"enabled=1\0error=a.wav",21) == -EINVAL);
     assert(sound_parse(&s,"",SOUND_TEXT_MAX+1) == -EINVAL);

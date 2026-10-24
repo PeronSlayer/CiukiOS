@@ -58,9 +58,12 @@ entry:
     call a20_enable
     call fat_mount
     call config_read
+    call bootstat_read
     mov al, 0
     call progress_begin
     call boot_menu
+    call autoscan_check
+    call bootstat_write
     call progress_end
     mov al, 1
     call progress_begin
@@ -104,6 +107,7 @@ fatal:
 %include "src/boot/ciukldr/memory.inc"
 %include "src/boot/ciukldr/disk.inc"
 %include "src/boot/ciukldr/menu.inc"
+%include "src/boot/ciukldr/startup.inc"
 %include "src/boot/ciukldr/video.inc"
 %include "src/boot/ciukldr/elf.inc"
 
@@ -120,7 +124,6 @@ ph_table equ raw_map
 %if MAX_PH*32 > CIUKI_E820_MAX*24
 %error ELF program headers must fit the raw E820 scratch
 %endif
-cluster times 4096 db 0
 elf_header times 52 db 0
 fw_file times 64 db 0
 mode_buffer times 256 db 0
@@ -178,4 +181,9 @@ cfg_buffer resb 512
 ; Every successful disk_read fills all 512 bytes before a consumer runs.
 ; Keep scratch out of the fixed file, leaving room for progress diagnostics.
 sector resb 512
+; G14: the 4 KiB cluster buffer leaves the fixed file for the Startup menu.
+; cluster_read fills all 4096 bytes before directory_find or file_getc read
+; any of them (file_offset starts at 4096, file_loaded at 0), so it needs no
+; initial zero fill; loader_end covers it.
+cluster resb 4096
 loader_bss_end:

@@ -3,10 +3,12 @@
 #define _DEFAULT_SOURCE 1
 #define _POSIX_C_SOURCE 200809L
 #include "fake.h"
+#ifndef __i386__
 #undef DT_UNKNOWN
 #undef DT_CHR
 #undef DT_DIR
 #undef DT_REG
+#endif
 #include <dirent.h>
 #undef ILL_ILLOPC
 #undef FPE_INTDIV
@@ -28,12 +30,21 @@
 #include <string.h>
 #include <time.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 /* Keep the cfg_writer.write member out of the write() syscall macro below. */
 #include "../../../apps/desktop/settings_io.h"
 #define CIUKI_RUNTIME_H
 #define CIUKI_RAW_H
 #define CU_PTR(p) ((uintptr_t)(p))
+/* The footprint fixture supplies CU_CALL in its generated raw.h. */
+#ifndef DESK_FOOTPRINT_TEST
+/* G10's raw DISPLAY controls share this fixture's absent display device. */
+static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uint32_t c,uint32_t d,uint32_t e)
+{ (void)op; (void)argument; (void)b; (void)c; (void)d; (void)e; return (uint32_t)-ENOSYS; }
+#define CU_CALL(name,...) shell_display_call(__VA_ARGS__)
+#endif
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
+uint32_t ciuki_raw_debug_write(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 int shell_close(int);
 int shell_open(const char *, int, ...);
@@ -104,8 +115,14 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 }
 #define fopen sequence_fopen
 #endif
-#include "replay_display.h"
+/* The model has no BIOS display service, including in i686 compile checks. */
+#ifdef __i386__
+static inline uint32_t shell_screen_unavailable(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f)
+{ (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return (uint32_t)-ENOSYS; }
+#define CU_CALL(n,a,b,c,d,e,f) shell_screen_unavailable(a,b,c,d,e,f)
+#endif
 #include "../../../apps/desktop/desktop.c"
+#undef CU_CALL
 #undef write
 #undef opendir
 #ifdef DESK_FOOTPRINT_TEST
@@ -259,6 +276,7 @@ int shell_fstat(int fd, struct stat *st)
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
 static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg, *expect_netsurf[2];
 static unsigned dosbox_spawns, netsurf_spawns;
+static const char *expect_help_arg; static unsigned help_spawns;
 static unsigned control_spawns;
 /* fx-8: a slow spawn. With spawn_hold_ms set the call blocks until the test
  * releases it or the hold expires (the T23 trial's NetSurf: 3891 ms). */
@@ -284,7 +302,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
     spawn_hold();
-    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !env[7]);
+    assert(!strcmp(env[0],"LANG=en_US") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !strcmp(env[7],"USER=") && !strcmp(env[8],"CIUKI_SETTINGS=/system/settings/desktop.cfg") && !strcmp(env[9],"CIUKI_PROFILE=") && !env[10]);
     assert(!strcmp(env[2],"HOME=/Documents") && !strcmp(env[3],"TMPDIR=/tmp") && !strcmp(env[4],"PATH=/Programs"));
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
     if (!strcmp(path,"/Programs/files")) {
@@ -312,6 +330,13 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         for (unsigned i=0;i<2 && expect_netsurf[i];i++) assert(argv[at] && !strcmp(argv[at++],expect_netsurf[i]));
         assert(!argv[at]);
         netsurf_spawns++;
+    } else if (!strcmp(path,"/Programs/help")) {
+        /* G15: CiukiOS Help takes a text file or topic:<id> as its only argument. */
+        assert(!strcmp(argv[0],"help") && !strcmp(argv[1],"--channel-fd=3") && count==1);
+        unsigned at=2;
+        if (expect_help_arg) assert(argv[at] && !strcmp(argv[at++],expect_help_arg));
+        assert(!argv[at]);
+        help_spawns++;
     } else if (!strcmp(path,"/Programs/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
     else if (!strcmp(path,"/Programs/music")) assert(!strcmp(argv[0],"music") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     else if (!strcmp(path,"/Programs/tasks")) {
@@ -356,7 +381,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
         if (media_slow) {
             assert(!pthread_equal(pthread_self(),media_frame_thread));
             __atomic_add_fetch(&media_slow_queries,1,__ATOMIC_RELAXED);
-            struct timespec pause={0,25000000};nanosleep(&pause,NULL);
+            struct timespec pause={.tv_sec=0,.tv_nsec=25000000};nanosleep(&pause,NULL);
         }
         if (op==MEDIA_GET_STATE) {
             assert(size==sizeof(media_fixture));
@@ -423,7 +448,7 @@ static int media_wait_read(struct desktop *d)
         int ok=media_worker.ok;
         pthread_mutex_unlock(&media_worker.lock);
         if (ready) { media_poll(d); return ok; }
-        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000};nanosleep(&pause,NULL);
     }
     assert(!"media worker timeout");return 0;
 }
@@ -431,6 +456,9 @@ static int media_wait_read(struct desktop *d)
 static uint32_t last_power_action;
 int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
 int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
+/* G11: the EVENTS and POLICY records (no kernel in these scenarios). */
+int ciuki_power_events(struct ciuki_power_events *out) { (void)out; errno=ENOSYS; return -1; }
+int ciuki_power_policy(struct ciuki_power_policy *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
 {
     assert(bytes>=CIUKI_PROC_LIST_MIN+8*sizeof(struct ciuki_proc_record));
@@ -468,7 +496,7 @@ static int32_t request(struct desktop *d,int index,uint32_t pid,unsigned opcode,
     if (opcode==DESK_SWITCH_TO) desk_put32(m.data+12,0);
     if (opcode==DESK_WINDOWS_QUERY) desk_put32(m.data+8,0);
     drain(d,index); v2(d,index,pid,&m);
-    struct desk_packet r[DESK_TX_MAX];
+    static struct desk_packet r[DESK_TX_MAX];
     if (opcode==DESK_WINDOWS_QUERY && !queued(d,index,DESK_TASK_RESULT,r)) return 0;
     assert(queued(d,index,DESK_TASK_RESULT,r)==1 && r[0].serial==0x1234 && r[0].request==opcode);
     return r[0].result;
@@ -500,12 +528,22 @@ static int sound_settings(struct desktop *d, int client, unsigned request, unsig
     sound_calls++; sound_request = request; sound_event = event; return 0;
 }
 static unsigned install_requests;
+static void test_g8_open_with_record(void)
+{
+    struct desk_launch_record r;
+    assert(!open_with_record("/Documents/unknown item.zzz",&r) && desk_launch_valid(&r));
+    assert(!strcmp(r.target,"/Programs/files") && !strcmp(r.arguments,"\"--file-action=348:/Documents/unknown item.zzz\""));
+    assert(open_with_record("relative.zzz",&r)==-EINVAL);
+}
+static unsigned shell_open_requests;
+static int shell_open_fixture(struct desktop *d,const char *path)
+{ (void)d; assert(!strcmp(path,"/Documents/a.exe")); shell_open_requests++; return 0; }
 static int install_fixture(struct desktop *d,const char *path)
 {(void)d;assert(!strcmp(path,"/mnt/d/SETUP.EXE"));install_requests++;return 0;}
 /* Each scenario owns a struct desktop (~600 KiB): keep frames out of main. */
 __attribute__((noinline)) static void test_display_settings(void)
 {
-    struct desktop d; struct ciuki_message m; struct desk_packet reply[DESK_TX_MAX];
+    static struct desktop d; struct ciuki_message m; static struct desk_packet reply[DESK_TX_MAX];
     fake_reset(); desk_init(&d, &fake_ops, 1024, 768); desk_shell_enable(&d);
     fake_channel(60); assert(desk_add_client(&d, 60) == 0); window(&d, 0, 500, 70, "Control Panel");
     d.display_set = display_set; display_calls = 0; display_result = 0;
@@ -555,6 +593,18 @@ __attribute__((noinline)) static void test_display_settings(void)
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && install_requests==1);
     d.power.state=DESK_POWER_CLOSING;drain(&d,0);v2(&d,0,500,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && install_requests==1);
+    d.power.state=0; d.open_path=shell_open_fixture; shell_open_requests=0;
+    const char *opened="/Documents/a.exe"; unsigned opened_len=(unsigned)strlen(opened);
+    desk_message(&m,DESK_LAUNCH,26+opened_len); desk_put32(m.data+4,44); desk_put32(m.data+8,10);
+    memcpy(m.data+12,"shell-open",10); desk_put32(m.data+22,opened_len); memcpy(m.data+26,opened,opened_len);
+    d.clients[0].program=0; drain(&d,0); v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && !shell_open_requests);
+    d.clients[0].program=DESK_APP_FILES; drain(&d,0); v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && shell_open_requests==1);
+    d.power.state=DESK_POWER_CLOSING; drain(&d,0); v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && shell_open_requests==1);
+    d.open_path=NULL;
+    puts("PASS G8 shared launch request: Files identity, normal result, unrelated-client refusal and shutdown refusal");
     assert(install_program(&d,"/Programs/SETUP.EXE")==-EINVAL);
     assert(install_program(&d,"/mnt/d/GAME.EXE")==-EINVAL);
     assert(install_program(&d,"/mnt/d/../SETUP.EXE")==-EINVAL);
@@ -598,7 +648,7 @@ static void test_task_protocol(void)
 /* f2-33: the Task Manager scenario through the production desktop paths. */
 __attribute__((noinline)) static void test_tasks_scenario(void)
 {
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); next_pair=40; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.self_pid=50; d.authority_fd=6; d.tasks_test=1;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
@@ -609,7 +659,7 @@ __attribute__((noinline)) static void test_tasks_scenario(void)
     assert(tasks==300 && d.clients[0].taskman && d.children[0].pid==300);
     d.tasks_pid=300; d.tasks_stage=1;                 /* main loop: menu action on "tasks" */
     window(&d,0,300,60,"Task Manager"); assert(d.tasks_stage==2 && d.clients[0].window_id==1);
-    struct desk_packet r[DESK_TX_MAX];
+    static struct desk_packet r[DESK_TX_MAX];
     assert(!request(&d,0,300,DESK_WINDOWS_QUERY,0,0,0) && queued(&d,0,DESK_WINDOW_INFO,r)==1);
     assert(r[0].count==1 && r[0].window_id==1 && r[0].pid==300 && r[0].flags==DESK_WINDOW_FOCUSED && !strcmp(r[0].title,"Task Manager"));
     assert(request(&d,0,300,DESK_LAUNCH,0,0,"nothing")==-ENOENT && d.tasks_stage==2);
@@ -700,13 +750,13 @@ static int32_t launch_request(struct desktop *d,int index,uint32_t pid,const cha
     desk_put32(m.data+4,0x4321); desk_put32(m.data+8,n); memcpy(m.data+12,name,n);
     if (a) { desk_put32(m.data+12+n,a); memcpy(m.data+16+n,arg,a); }
     drain(d,index); v2(d,index,pid,&m);
-    struct desk_packet r[DESK_TX_MAX];
+    static struct desk_packet r[DESK_TX_MAX];
     assert(queued(d,index,DESK_TASK_RESULT,r)==1 && r[0].serial==0x4321 && r[0].request==DESK_LAUNCH);
     return r[0].result;
 }
 __attribute__((noinline)) static void test_note_scenario(void)
 {
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); next_pair=60; pid_source=400; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.self_pid=50; d.authority_fd=-1;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
@@ -812,7 +862,7 @@ static int launch_cd_player(struct desktop *d,const struct desk_launch_record *r
 }
 __attribute__((noinline)) static void test_cd_player_menu(void)
 {
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.v3_launch=launch_cd_player;
     desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
@@ -836,7 +886,7 @@ __attribute__((noinline)) static void test_cd_player_menu(void)
  * click or two clicks too far apart do not. */
 __attribute__((noinline)) static void test_clock_double_click(void)
 {
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
@@ -856,9 +906,74 @@ __attribute__((noinline)) static void test_clock_double_click(void)
     expect_control_arg=NULL; drop_all(&d); desk_render_release(&d); fake_reset();
     puts("PASS G1 tray clock: double-click opens Date/Time Properties (--panel=datetime), single and slow clicks do not");
 }
+/* G15: Help everywhere on the desktop side. Any program may ask for CiukiOS
+ * Help (LAUNCH help with no argument or topic:<id>) and nothing else; Start >
+ * Help opens it; F1 on the empty desktop opens its topic; About CiukiOS moved
+ * to Settings. */
+__attribute__((noinline)) static void test_help_launch(void)
+{
+    static struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); next_pair=20; pid_source=700; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.launch=launch_program; d.terminate=fake_terminate; d.self_pid=50; d.authority_fd=-1;
+    desk_program_add(&d,"hello",elf,sizeof(elf)); desk_program_add(&d,"help",elf,sizeof(elf));
+    desk_program_add(&d,"ciuknote",elf,sizeof(elf)); desk_program_add(&d,"control",elf,sizeof(elf));
+    assert(desk_help_argument("") && desk_help_argument("topic:files") && desk_help_argument("topic:a-b9") && !desk_help_argument("topic:") &&
+           !desk_help_argument("topic:Files") && !desk_help_argument("topic:a/b") && !desk_help_argument("topic:a b") && !desk_help_argument("/Documents/x.txt") &&
+           !desk_help_argument("files") && !desk_help_argument("topic:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));   /* 41 characters */
+    assert(desk_help_argument("topic:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));                                        /* 40 */
+    /* An ordinary program (no rights of its own) opens Help at its topic. */
+    const struct desk_program *hello_program=NULL;
+    for (unsigned k=0;k<d.program_count;k++) if (!strcmp(d.programs[k].name,"hello")) hello_program=&d.programs[k];
+    assert(hello_program);
+    int hello=launch_program(&d,hello_program); assert(hello>0 && d.clients[0].program==0);
+    window(&d,0,(uint32_t)hello,104,"Hello");
+    unsigned before=help_spawns;
+    expect_help_arg="topic:files"; assert(launch_request(&d,0,(uint32_t)hello,"help","topic:files")>0 && help_spawns==before+1);
+    int help=-1;
+    for (unsigned i=0;i<DESK_CLIENTS;i++) if (d.clients[i].channel>=0 && !strcmp(d.clients[i].application,"help")) help=(int)i;
+    assert(help>=0); window(&d,help,d.clients[help].pid,105,"CiukiOS Help");
+    drain(&d,help);
+    expect_help_arg=NULL; assert(launch_request(&d,0,(uint32_t)hello,"help",NULL)>0 && help_spawns==before+1);
+    struct desk_packet forwarded[DESK_TX_MAX];
+    assert(queued(&d,help,DESK_LAUNCH,forwarded)==1 && !strcmp(forwarded[0].argument,"topic:welcome"));
+    /* Nothing else is allowed from it: other arguments, other programs, other topic spellings. */
+    assert(launch_request(&d,0,(uint32_t)hello,"help","/Documents/x.txt")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:")==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"help","topic:Files")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:../x")==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"help","--test=help")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:a b")==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"ciuknote","topic:files")==-EPERM && launch_request(&d,0,(uint32_t)hello,"hello",NULL)==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"control","topic:files")==-EPERM && help_spawns==before+1);
+    /* Start > Help is one row that opens Help; the old submenu rows moved. */
+    desk_menu_open(&d,SH_MENU_START,0,0);
+    int row=item_at(&d.sh.menus[0],"Help"); assert(row>=0);
+    assert(d.sh.menus[0].items[row].action==SH_ACT_HELP && !(d.sh.menus[0].items[row].flags&SH_ITEM_DISABLED) && !strcmp(d.sh.menus[0].items[row].icon,"help-browser"));
+    int about=item_at(&d.sh.menus[0],"About CiukiOS"); assert(about==item_at(&d.sh.menus[0],"Run...")+1 && d.sh.menus[0].items[about].action==SH_ACT_ABOUT);
+    d.sh.menus[0].hot=row; key(&d,DU_KEY_RIGHT); assert(d.sh.levels==1);            /* no submenu to enter */
+    expect_help_arg=NULL; before=help_spawns; key(&d,DU_KEY_ENTER);
+    assert(help_spawns==before && !d.sh.levels);
+    /* F1: the empty desktop opens its topic; a focused window, Ctrl+F1 and an open menu get the key. */
+    int saved=d.focus; d.focus=-1; expect_help_arg="topic:desktop"; before=help_spawns;
+    assert(desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before && d.focus==help);
+    /* Reusing Help activates it immediately; the release now belongs to the
+     * focused program instead of the empty desktop. */
+    (void)desk_shell_key(&d,DU_KEY_F1,0); assert(help_spawns==before);
+    d.focus=saved; assert(d.focus>=0 && !desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before);
+    d.focus=-1; desk_shell_key(&d,0x1d,1); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before); desk_shell_key(&d,0x1d,0);
+    desk_menu_open(&d,SH_MENU_START,0,0); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before); desk_menu_close(&d);
+    /* Without /Programs/help the row stays (the layout and keyboard order never change) and starts nothing. */
+    d.program_count=0; desk_program_add(&d,"hello",elf,sizeof(elf));
+    desk_menu_open(&d,SH_MENU_START,0,0); row=item_at(&d.sh.menus[0],"Help");
+    assert(row>=0 && !(d.sh.menus[0].items[row].flags&SH_ITEM_DISABLED)); before=help_spawns;
+    d.sh.menus[0].hot=row; key(&d,DU_KEY_ENTER); assert(help_spawns==before);
+    for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal==DESK_INTERNAL_MESSAGE) desk_drop_client(&d,i);
+    desk_menu_close(&d);
+    expect_help_arg=NULL; drop_all(&d); fake_reset();
+    puts("PASS G15 desktop: LAUNCH help (none or topic:<id>) from any program and nothing wider, Start > Help direct, kept without /Programs/help, F1 on the empty desktop, About CiukiOS on the Start menu");
+}
+
 __attribute__((noinline)) static void test_games_menu(void)
 {
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
@@ -930,7 +1045,7 @@ __attribute__((noinline)) static void test_games_menu(void)
  * Ciuki Demo no longer borrow the icons of programs and games. */
 __attribute__((noinline)) static void test_menu_icons(void)
 {
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     static const char *const bin[]={"calc","charmap","ciukide","ciuknote","clock","control","demo","dosbox","files","hello","help",
                                     "libc_smoke","lua","mixer","netsurf","tasks","tcc","viewer","newtool"};
@@ -942,7 +1057,7 @@ __attribute__((noinline)) static void test_menu_icons(void)
     for (unsigned k=0;k<sizeof(kinds)/sizeof(kinds[0]);k++) {
         d.sh.menu_owner=0; desk_menu_open(&d,kinds[k],0,0);
         const struct sh_menu *m=&d.sh.menus[0];
-        assert(m->icon==16);
+        assert(m->icon==(kinds[k]==SH_MENU_START && !d.sh.cfg.start_small ? 32 : 16));
         for (int a=0;a<m->count;a++) for (int b=a+1;b<m->count;b++) {
             const struct sh_item *x=&m->items[a], *y=&m->items[b];
             if (x->icon && y->icon && !(x->action==SH_ACT_GAME && y->action==SH_ACT_GAME)) assert(strcmp(x->icon,y->icon));
@@ -976,11 +1091,11 @@ __attribute__((noinline)) static void test_menu_icons(void)
             !strcmp(d.sh.menus[0].items[2].label,cp_applets[a].label));
     }
     desk_menu_open(&d,SH_MENU_DESKTOP,0,0);
-    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","","Properties"};
-    assert(d.sh.menus[0].count==7);
-    for (unsigned k=0;k<7;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
-    assert(d.sh.menus[0].items[6].action==SH_ACT_CONTROL && d.sh.menus[0].items[6].arg==CP_DISPLAY+1);
-    desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==2);
+    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","Paste Shortcut","Undo    Ctrl+Z","","Properties"};
+    assert(d.sh.menus[0].count==9);
+    for (unsigned k=0;k<9;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
+    assert(d.sh.menus[0].items[8].action==SH_ACT_CONTROL && d.sh.menus[0].items[8].arg==CP_DISPLAY+1);
+    desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==5);
     /* Start > Settings > Input > Keyboard keeps keyboard submenu traversal. */
     desk_menu_open(&d,SH_MENU_START,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"Settings");key(&d,DU_KEY_RIGHT);
     assert(d.sh.levels==2);d.sh.menus[1].hot=item_at(&d.sh.menus[1],"Input");key(&d,DU_KEY_RIGHT);
@@ -993,7 +1108,7 @@ __attribute__((noinline)) static void test_menu_icons(void)
     for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) assert(strcmp(run,desk_program_icon_name(bin[i])));
     assert(strcmp(desk_program_icon_name("demo"),"applications-games") && strcmp(desk_program_icon_name("demo"),desk_games[0].tango));
     drop_all(&d); fake_reset();
-    puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
+    puts("PASS menu icons: Start 32/16 px, submenus 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
 }
 /* f6-19 (T23 1.0.0 alpha: "[console] Unable to initialise framebuffer" after
  * a Programs-menu launch): NetSurf is the browser application. Its catalog.h
@@ -1035,7 +1150,7 @@ __attribute__((noinline)) static void test_netsurf_record(void)
     assert(!strcmp(desk_program_label("netsurf"),"NetSurf") && !strcmp(desk_program_description("netsurf"),"Web browser"));
     assert(!desk_program_description("files") && !desk_program_description("hello"));
     assert(!strcmp(desk_program_icon_name("netsurf"),app->tango) && !strcmp(desk_program_category("netsurf"),"programs"));
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
@@ -1085,14 +1200,14 @@ static int music_mixer_set(struct desktop *d,uint32_t l,uint32_t r,uint32_t mute
 { (void)d; assert(l==30 && r==60 && !mute); music_mixer_calls++; return 0; }
 __attribute__((noinline)) static void test_music_mixer(void)
 {
-    struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
+    static struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
     d.mixer_set=music_mixer_set; music_mixer_calls=0;
     struct desk_program program={"music","/Programs/music"};
     int pid=launch_program(&d,&program); assert(pid>0 && d.clients[0].mixer);
     window(&d,0,(uint32_t)pid,60,"Music Player");
     struct ciuki_message m; desk_message(&m,DESK_MIXER_SET,20);
     desk_put32(m.data+4,42); desk_put32(m.data+8,30); desk_put32(m.data+12,60); desk_put32(m.data+16,0);
-    struct desk_packet reply[DESK_TX_MAX]; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
+    static struct desk_packet reply[DESK_TX_MAX]; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && music_mixer_calls==1);
     d.power.state=DESK_POWER_CLOSING; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && music_mixer_calls==1);
@@ -1110,7 +1225,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     uint64_t totals[2][3];
     trace_verbose=timing_model=1;
     for(unsigned mode=0;mode<2;mode++) for(unsigned program=0;program<3;program++) {
-        struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
+        static struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
         d.pixels=calloc(640*480,4); assert(d.pixels);
         model_us=1000000; d.launch_click_ns=model_us*1000;
         memset(&launch_timing,0,sizeof(launch_timing)); model_elf_bytes=bytes[program];
@@ -1146,7 +1261,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     for(unsigned i=0;i<3;i++) assert(totals[1][i]<totals[0][i]);
     trace_verbose=timing_model=0;
     fake_reset(); next_pair=20;
-    struct desktop d; desk_init(&d,&fake_ops,640,480);
+    static struct desktop d; desk_init(&d,&fake_ops,640,480);
     struct desk_program p={"files","/Programs/files"};
     assert(launch_program(&d,&p)>0 && !d.launch_mark); drop_all(&d); fake_reset(); next_pair=20;
     timing_model=trace_verbose=1; model_us=1000000;
@@ -1188,7 +1303,7 @@ __attribute__((noinline)) static void test_wallpaper_startup(void)
     for (unsigned i=54;i<70;i++) bmp[i]=(unsigned char)(i*3);
     char path[]="/tmp/f2-44-XXXXXX"; int fd=mkstemp(path); assert(fd>=0);
     assert(write(fd,bmp,sizeof(bmp))==sizeof(bmp)); assert(!close(fd));
-    struct desktop d; fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    static struct desktop d; fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     d.pixels=calloc(640*480,4); assert(d.pixels);
     snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"%s",path);
     memset(startup_us,0,sizeof(startup_us)); startup_cached=startup_sent=0;
@@ -1213,7 +1328,7 @@ __attribute__((noinline)) static void test_wallpaper_startup(void)
     pthread_cond_signal(&wallpaper_test_changed); pthread_mutex_unlock(&wallpaper_test_lock);
     for (unsigned i=0;i<10000 && d.sh.wallpaper_pending;i++) {
         wallpaper_poll(&d);
-        if (d.sh.wallpaper_pending) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        if (d.sh.wallpaper_pending) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     }
     assert(!d.sh.wallpaper_pending && !d.sh.image_failed && startup_us[7]);
     assert(!d.sh.image.pixels && d.sh.wall_valid && d.menu_open);
@@ -1249,7 +1364,7 @@ static void test_media_removal_service(void)
 }
 __attribute__((noinline)) static void test_network_service(void)
 {
-    struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
+    static struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
     network_fixture = (struct ciuki_net_state){ .version = 1, .size = sizeof(network_fixture),
         .present = 1, .link = CIUKI_NET_LINK_UP, .state = CIUKI_NET_RUNNING, .driver = "e100" };
     network_available = 1; network_error = 0; network_opens = network_closes = network_queries = 0;
@@ -1287,6 +1402,41 @@ __attribute__((noinline)) static void test_network_service(void)
 #include "wallpaper_boot_test.h"
 #include "event_latency_test.h"
 #endif
+static void test_g9_run(void)
+{
+    struct desktop d; desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    d.programs[0]=(struct desk_program){"hello","/Programs/hello"}; d.program_count=1; d.launch=launch_program;
+    assert(!setenv("CIUKIRUN","C:\\PROGRAMS\\HELLO",1));
+    char env_command[]="%ciukirun%"; assert(run_command(&d,env_command)>0);
+    assert(d.sh.run_save_count==1 && !strcmp(d.sh.run_saves[0],env_command)); assert(!unsetenv("CIUKIRUN"));
+    drop_all(&d); fake_reset();
+    desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    struct links_worker *previous=links_worker,*w=calloc(1,sizeof(*w)); assert(w);
+    assert(!pthread_mutex_init(&w->mutex,NULL)); assert(!pthread_cond_init(&w->changed,NULL)); w->desktop=&d; links_worker=w;
+    int run=desk_internal_open(&d,DESK_INTERNAL_RUN); assert(run>=0);
+    char missing[]="C:\\missing\\game.exe"; strcpy(d.sh.run_text,missing); d.sh.run_length=(unsigned)strlen(missing);
+    assert(run_command(&d,missing)==0 && w->run_requested && !strcmp(w->run_command,missing));
+    assert(run_submit(&d,missing)==-EBUSY && !run_history_idle());
+    w->run_requested=0; w->run_done=1; w->run_result=-ENOENT;
+    links_service(&d); assert(d.sh.run && !d.sh.run->busy && !strcmp(d.sh.run_text,missing));
+    assert(strstr(d.sh.message_text,"could not be started") && !d.sh.run_save_count);
+    for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal==DESK_INTERNAL_MESSAGE) desk_drop_client(&d,i);
+    desk_focus(&d,run); w->history_requested=0; w->history_done=1;
+    strcpy(w->history.order,"a"); strcpy(w->history.commands[0],"hello");
+    links_service(&d); assert(!strcmp(d.sh.run->history.order,"a"));
+    struct desk_launch_request request={.origin=DESK_LAUNCH_RUN}; strcpy(request.run_command,missing);
+    desk_launch_completed(&d,&request,"game.exe",-ENOEXEC); assert(d.sh.run && !strcmp(d.sh.run_text,missing));
+    assert(!d.sh.run_save_count);
+    strcpy(request.run_command,"hello"); desk_launch_completed(&d,&request,"hello",200);
+    assert(d.sh.run_save_count==1 && !strcmp(d.sh.run_saves[0],"hello"));
+    for (unsigned i=0;i<30;i++) { char queued[32]; snprintf(queued,sizeof(queued),"queued%u",i); desk_run_remember(&d,queued); }
+    assert(d.sh.run_save_count==26 && !strcmp(d.sh.run_saves[0],"queued4") && !strcmp(d.sh.run_saves[25],"queued29"));
+    desk_run_remember(&d,"QUEUED10"); assert(d.sh.run_save_count==26 && !strcmp(d.sh.run_saves[25],"QUEUED10"));
+    assert(!run_history_idle()); d.sh.run_save_count=0; w->history_requested=w->history_done=0; assert(run_history_idle());
+    drop_all(&d); fake_reset(); links_worker=previous;
+    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w);
+    puts("PASS G9 production Run: case-insensitive environment, native launch/history, external worker queue/busy/completion, error correction, late native failure/success");
+}
 int main(int argc,char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
@@ -1309,9 +1459,14 @@ int main(int argc,char **argv)
     test_clock_double_click();
     test_media_removal_service();
     test_music_mixer();
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};
+    struct launch_job regional_job;
+    reg_defaults(&d.sh.cfg.regional,1);
+    assert(!launch_prepare(&d,&program,&regional_job) && !strcmp(regional_job.env[0],"LANG=it_IT"));
+    reg_defaults(&d.sh.cfg.regional,0);
+    assert(!strcmp(regional_job.env[0],"LANG=it_IT")); /* queued spawn owns its environment snapshot */
     struct desk_program long_program;
     memset(&long_program,'a',sizeof(long_program));
     long_program.name[sizeof(long_program.name)-1]=0;long_program.path[sizeof(long_program.path)-1]=0;
@@ -1424,7 +1579,8 @@ int main(int argc,char **argv)
     test_note_scenario();
     test_cd_player_menu();
     test_games_menu();
-    test_menu_icons();
+    test_help_launch();
+    test_menu_icons(); test_g8_open_with_record(); test_g9_run();
     test_hwreport_menu();
     test_netsurf_record();
     test_launch_timing();

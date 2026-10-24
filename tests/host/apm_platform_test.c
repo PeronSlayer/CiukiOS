@@ -17,7 +17,9 @@ static void irq_restore(uint32_t f) { (void)f; }
 static unsigned failures, checks, probes, connects, disconnects, tasks, polls, acks, offs, stops;
 static int flush_error, stop_error, firmware_error, storage_init_error;
 static bool fail_task, broker_dead;
-static uint16_t next_event;
+static uint16_t next_event, firmware_caps;
+static unsigned device_sleeps, device_resumes, standby_calls, cancel_calls;
+static int device_sleep_error;
 static uint64_t ticks;
 static char log_line[256];
 static struct task fake_tasks[8];
@@ -36,6 +38,7 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
     case 0x5300: probes++; r->eax = 0x0102; r->ebx = 0x504d; r->ecx = 0; break;
     case 0x5301: connects++; break;
     case 0x5304: break;
+    case 0x5310: CHECK(!r->ebx); r->ecx=firmware_caps; break;
     case 0x530e: r->eax = 0x0102; break;
     case 0x530a:
         if (r->ebx & 0x8000) { r->flags = 1; r->eax = 0x0900; break; } /* no battery sockets */
@@ -47,9 +50,10 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
         break;
     case 0x5307:
         CHECK(r->ebx == 1);
-        if (r->ecx == 2) { acks++; CHECK(stops); }
+        if (r->ecx == 1) standby_calls++;
+        else if (r->ecx == 2) { acks++; CHECK(stops); }
         else if (r->ecx == 3) offs++;
-        else CHECK(r->ecx == 5);
+        else if (r->ecx==5) cancel_calls++; else CHECK(r->ecx==4);
         break;
     default: CHECK(false);
     }
@@ -62,6 +66,8 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
     return fail_task ? NULL : &fake_tasks[tasks % 8];
 }
 void task_start(struct task *t) { CHECK(t != NULL); }
+int power_devices_suspend(void) { device_sleeps++; return device_sleep_error; }
+int power_devices_resume(void) { device_resumes++; return 0; }
 int storage_power_init(void) { return storage_init_error; }
 int storage_sync_bounded(uint64_t end) { CHECK(end >= ticks || flush_error); return flush_error; }
 uint64_t deadline_after_ms(uint32_t ms) { return ticks + ms; }
@@ -81,6 +87,7 @@ void biosvm_last_failure(struct biosvm_failure *out) { *out = (struct biosvm_fai
 #define APM_PLATFORM_HOST_CLOCK
 static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000; }
 #include "../../src/kernel/core/power_source.c"
+bool power_devices_resume_ready(void) { return true; }
 #include "../../src/kernel/core/apm_platform.c"
 void task_sleep_ms(uint32_t ms) { ticks += ms; service_once(); }
 int main(void)
@@ -137,6 +144,16 @@ int main(void)
     power_source_snapshot(&snap); CHECK(snap.events == 1 && snap.last_event == 6);
     /* Without the call-73 stopped latch neither the arbiter nor the APM
      * backend reaches firmware Off. */
+    firmware_caps=3; backend.capabilities_due=true; service_once();
+    CHECK(power_source_standby_reason()==CIUKI_POWER_STANDBY_AVAILABLE);
+    CHECK(!power_source_standby() && standby_calls==1 && device_sleeps==1 && device_resumes==1);
+    CHECK(!sleep_pending && !off_running && !stopped);
+    backend.sleep_request=1;CHECK(!power_source_cancel_standby() && !backend.sleep_request && cancel_calls==1);
+    flush_error=-VFS_ETIMEOUT;
+    CHECK(power_source_standby()==-ETIMEDOUT && device_sleeps==1 && standby_calls==1);
+    flush_error=0;device_sleep_error=-EBUSY;
+    CHECK(power_source_standby()==-EBUSY && device_sleeps==2 && standby_calls==1);
+    device_sleep_error=0;firmware_caps=0;backend.capabilities_due=true;service_once();
     CHECK(power_source_can_off());
     CHECK(power_source_soft_off() == -EBUSY && !offs);
     CHECK(apm_backend_off(&backend) == -EBUSY && !offs && backend.state == APM_CONNECTED);

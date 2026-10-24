@@ -27,6 +27,11 @@ void input_devices_changed(enum input_source source, bool attached);
  * This encoding is independent of the character layout. */
 #define INPUT_REPEAT_DELAY_MS 500u
 #define INPUT_REPEAT_INTERVAL_MS 33u
+unsigned input_repeat_delay(void);
+unsigned input_repeat_interval(void);
+unsigned input_lock_leds(void);
+struct ciuki_keyboard_settings;
+int input_keyboard_settings(const struct ciuki_keyboard_settings *);
 /* USB producer: balanced transitions per HID interface, thread context.
  * Merges with native PS/2 held state, even when i8042 activation failed. */
 void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick);

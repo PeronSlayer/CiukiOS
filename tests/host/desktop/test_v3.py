@@ -142,10 +142,10 @@ class DesktopV3Tests(unittest.TestCase):
         icons = load('v3_control_icons', ROOT / 'tests/host/desktop/icon_assets.py')
         ft = load('v3_control_ft', ROOT / 'sdk/freetype/build.py')
         library = ft.host()
-        sources = ['tests/host/desktop/v3_control_test.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c',
+        sources = ['tests/host/desktop/v3_control_test.c', 'apps/control/app.c', 'apps/desktop/power_policy.c', 'apps/systools/devctl.c', 'apps/systools/profiles.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c',
                    'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                    *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
-                   *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
+                   *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea', 'icons', 'icon_map'))]
         binary = work / 'v3-control-test'
         subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-D_POSIX_C_SOURCE=200809L',
                         '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined', *icons.defines(),

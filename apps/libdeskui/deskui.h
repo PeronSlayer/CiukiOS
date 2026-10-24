@@ -32,9 +32,9 @@
  * height of the UI face, so (h - DU_GLYPH_H) / 2 centres a line in h rows.
  * DU_CHAR_W is only an average advance for rough sizing. */
 #define DU_CHAR_W  7
-#define DU_GLYPH_H 9
-#define DU_ROW     17   /* list, tree and menu-bar rows */
-#define DU_MENU_ITEM_H 19
+#define DU_GLYPH_H (desk_appearance_active ? desk_font_cap(desk_theme->font_ui) : 9)
+#define DU_ROW     (desk_appearance_active ? desk_font_line(desk_theme->font_ui)+4 : 17)   /* list, tree and menu-bar rows */
+#define DU_MENU_ITEM_H (desk_appearance_active ? desk_metric(AP_MENU,19) : 19)
 #define DU_MENU_SEP_H  9
 /* Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs). */
 #define DU_ICON_SMALL   (desk_theme->icon_small)
@@ -42,7 +42,7 @@
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
 #define DU_WIDGETS       64
-#define DU_DIALOG_ITEMS  10
+#define DU_DIALOG_ITEMS  36   /* G16: file dialog 18, Font 19, Color 30 */
 #define DU_TIMERS        8
 #define DU_REGIONS       32
 #define DU_TEXT_MAX      1040
@@ -201,7 +201,13 @@ enum du_kind { DU_LABEL, DU_BUTTON, DU_TOOLBUTTON, DU_EDIT, DU_LISTVIEW, DU_TREE
                DU_CHECKBOX, DU_RADIO, DU_TOOLBAR,
                /* Application-drawn canvas; pointer events retain capture for
                 * either drawing button, including motion outside its box. */
-               DU_CANVAS };
+               DU_CANVAS,
+               /* G16: drop-down list or editable combination box (items/count,
+                * value = selected index or -1; `editable` keeps w->text as the
+                * edit field), horizontal or vertical slider (lo..hi, value,
+                * line, big, tick; vertical when the box is taller than wide),
+                * and the up-down arrow pair (lo..hi, value, wrap, buddy). */
+               DU_COMBO, DU_TRACKBAR, DU_UPDOWN };
 #define DU_TAB_H 20
 
 struct du_widget {
@@ -223,6 +229,7 @@ struct du_widget {
     size_t cursor, anchor, offset;          /* edit (bytes; offset in cells) */
     struct du_selection selection;
     const uint32_t *icon; int icon_size;    /* buttons, edit prefix icon */
+    int edit_up_down;                       /* DU_EDIT: forward Up/Down as DU_EV_KEY for a spinner buddy */
     int accepts_tab;                        /* DU_CANVAS: deliver Tab as DU_EV_KEY */
     int dropdown;                           /* toolbutton split arrow width */
     const struct du_item *items;            /* list/tree */
@@ -241,6 +248,16 @@ struct du_widget {
     void *data;                             /* f2-32: DU_TEXTAREA state */
     unsigned pointer_cursor;               /* application cursor for this widget; arrow is automatic */
     struct du_rect cursor_box;              /* optional client-coordinate subregion */
+    /* G16 (common controls, see docs/design/common-dialogs.md). lo..hi is the
+     * range of a trackbar or up-down (hi < lo is allowed: "up" then moves
+     * toward hi); line and big are the arrow-key and page steps; tick is the
+     * tick-mark interval (0: none); buddy is the id of the edit an up-down
+     * drives; wrap makes an up-down wrap at the ends; editable turns a combo
+     * box into an edit field with a list. tip is the tooltip text. */
+    int lo, hi, line, big, tick, buddy;
+    uint8_t wrap, editable;
+    char tip[96];
+    const char *help;
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -264,7 +281,7 @@ enum du_event_type {
     DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER,
     /* fx-19: rubber-band selection phases, and files dropped on the window
      * (x/y client position; du_drop_file reads the paths). */
-    DU_EV_MARQUEE, DU_EV_DROPFILES
+    DU_EV_MARQUEE, DU_EV_DROPFILES, DU_EV_HELP = 20
 };
 /* fx-19 DU_EV_SELECT .key from a file_drag list press: PENDING on an
  * already selected item without Shift (keep the selection so it can be
@@ -275,6 +292,7 @@ enum du_event_type {
  * zero on hover), x/y are client coordinates. CANCEL follows focus loss,
  * input resynchronization or resize. The application paints DU_CANVAS. */
 enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+enum { DU_HELP_F1 = 1, DU_HELP_CONTEXT = 2 };
 struct du_event {
     enum du_event_type type;
     int id, index, x, y;
@@ -282,7 +300,8 @@ struct du_event {
     const char *text;
 };
 
-enum du_dialog_kind { DU_DLG_NONE, DU_DLG_MESSAGE, DU_DLG_INPUT, DU_DLG_OPEN, DU_DLG_SAVE, DU_DLG_PROGRESS };
+enum du_dialog_kind { DU_DLG_NONE, DU_DLG_MESSAGE, DU_DLG_INPUT, DU_DLG_OPEN, DU_DLG_SAVE, DU_DLG_PROGRESS,
+                      /* G16 */ DU_DLG_FONT, DU_DLG_COLOR, DU_DLG_FOLDER, DU_DLG_FIND };
 enum du_dialog_icon { DU_DLG_ICON_NONE, DU_DLG_ICON_INFO, DU_DLG_ICON_WARNING, DU_DLG_ICON_ERROR, DU_DLG_ICON_QUESTION };
 
 /* Directory entries for the open/save dialog, from a replaceable lister. */
@@ -316,9 +335,25 @@ struct du_dialog {
     void (*changed)(struct du_ui *, const struct du_event *, void *);
     void (*paint)(struct du_ui *, void *);
     void *sheet_ctx;
+    /* G16: private state and hooks of the common dialogs (file, font, color,
+     * folder, find). state is heap memory owned by the dialog and released by
+     * free_state when the dialog closes or is replaced. The hooks run before
+     * the generic route: a nonzero result means the event was consumed. */
+    void *state;
+    void (*free_state)(void *);
+    int (*on_event)(struct du_ui *, const struct du_event *);
+    int (*on_key)(struct du_ui *, unsigned code);
+    int (*on_press)(struct du_ui *, int button, int x, int y);
+    void (*on_draw)(struct du_ui *);
+    int sub;                                /* file dialog: confirmation or name prompt over the dialog */
+    unsigned overlay;                       /* items from this index on are drawn by on_draw (0: none) */
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
+
+#define DU_TIP_DELAY_NS 500000000ull
+#define DU_TIP_SHOW_NS 5000000000ull
+struct du_tip { int widget, visible, context; uint64_t show_ns, hide_ns; struct du_rect box; const char *text; };
 
 struct du_ui {
     void (*sound)(void *, unsigned);
@@ -327,12 +362,16 @@ struct du_ui {
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;
     int focus, capture, hover;
+    uint64_t menu_opened; unsigned menu_animation_step;
     struct du_menu *menus; unsigned menu_count;
     int menu, menu_item, menu_keyboard, menu_armed, menu_track;
     const struct du_menu_item *popup; unsigned popup_count; int popup_x, popup_y, popup_owner;
     struct du_dialog dialog;
     struct du_timer timers[DU_TIMERS];
     int mouse_x, mouse_y, focused_window;
+    unsigned input_layout, input_dead, input_blink_ms, input_wheel_lines, input_double_ms;
+    unsigned input_text[2], input_text_count, input_text_ready;
+    int input_caret_on; uint64_t input_caret_deadline;
     unsigned modifiers, buttons, caps;
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
@@ -356,6 +395,21 @@ struct du_ui {
     void (*service)(struct du_ui *, void *);
     int wait_fds[4];
     unsigned wait_count;
+    const char *help_topic;
+    int (*help_open)(struct du_ui *, const char *topic, void *);
+    void *help_ctx;
+    int help_consumed, whats_this;
+    struct du_tip help_tip;
+    /* G16 transient overlays (drawn last, see controls.c): the open combo box
+     * list, the tooltip, the held spin or page repeat, and the single-level
+     * undo of the single-line edit. All pointers address widgets of this ui
+     * (widgets[] or dialog.items[]) and are cleared when they go away. */
+    struct du_widget *combo_open;
+    int combo_hot, combo_pressed;
+    struct { struct du_widget *w; uint64_t since, due; int visible, shown_x, shown_y;
+             struct du_rect box; char text[96]; } tip;
+    struct { struct du_widget *w; uint64_t start; int dir, step; } repeat;
+    struct { const struct du_widget *w; int kind; size_t cursor, anchor; char text[DU_TEXT_MAX]; } undo;
 };
 static inline void du_wake(struct du_ui *u)
 { if (u && u->wake) u->wake(u->wake_ctx); }
@@ -372,6 +426,34 @@ void du_focus(struct du_ui *, int id);
 int du_focused(const struct du_ui *);
 void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
+/* G16 controls (controls.c). Tooltip text of any widget: shown below the
+ * pointer after it rests on the widget for 500 ms, hidden after 5 s, on
+ * movement away, press, key or wheel (the Windows initial and autopop delays). */
+void du_set_tip(struct du_widget *, const char *);
+void du_help_topic(struct du_ui *, const char *);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+/* Combo box: items must outlive the widget; selected -1 is no selection.
+ * Events: DU_EV_SELECT (index) when the user picks an entry, DU_EV_CHANGE when
+ * the text of an editable box changes, DU_EV_COMMIT on Enter in an editable box. */
+void du_combo_set(struct du_widget *, const struct du_item *items, unsigned count, int selected);
+void du_combo_drop(struct du_ui *, struct du_widget *, int open);
+const char *du_combo_text(const struct du_widget *);
+/* Trackbar: DU_EV_CHANGE (index = value) on every move, DU_EV_COMMIT when the
+ * user lets go of the slider or a page click ends. */
+void du_trackbar_set(struct du_widget *, int lo, int hi, int value, int line, int big, int tick);
+/* Up-down: DU_EV_CHANGE (index = value). du_updown_attach makes the edit
+ * buddy_id its buddy (UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS): the
+ * arrows sit on the right edge of the edit, the edit shows the value, and Up and
+ * Down in the edit step it. du_updown_value reads the buddy's text first. */
+void du_updown_set(struct du_widget *, int lo, int hi, int value, int wrap);
+int du_updown_attach(struct du_ui *, int updown_id, int buddy_id);
+int du_updown_value(struct du_ui *, struct du_widget *);
+/* Single-level undo of the single-line edit (EM_UNDO): the last edit, typing
+ * counted as one, is undone; undoing again redoes it. Ctrl+Z and Alt+Backspace. */
+int du_edit_undo(struct du_ui *, struct du_widget *);
 /* Union clipped repaint regions; a full dirty=1 invalidation takes precedence. */
 void du_invalidate(struct du_ui *, struct du_rect);
 void du_invalidate_widget(struct du_ui *, int id);
@@ -420,6 +502,101 @@ void du_message(struct du_ui *, int id, const char *title, const char *text, int
 void du_input_box(struct du_ui *, int id, const char *title, const char *prompt, const char *initial);
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
+/* G16 Open / Save As (GetOpenFileName, GetSaveFileName). One filter is
+ * {label "Text Files (*.txt)", pattern "*.txt;*.log"}; filters appear in the
+ * "Files of type" box in the order given and filter_index (0-based) is the
+ * initial one. A name typed with * or ? sets a temporary pattern instead of
+ * closing. On OK the dialog ends with DU_EV_DIALOG: index 0, text the full
+ * path (default_ext, three characters at most as in OPENFILENAME, appended
+ * when the name has no extension), key the selected filter index. Cancel is
+ * index 1. DU_FILE_OVERWRITE_PROMPT asks "... already exists. Do you want
+ * to replace it?" before accepting an existing Save As name;
+ * DU_FILE_FILE_MUST_EXIST and DU_FILE_PATH_MUST_EXIST refuse names that do
+ * not exist with the Windows wording. The New Folder button calls make_dir
+ * (NULL: mkdir(2) with mode 0777); with DU_FILE_NO_NEW_FOLDER it is hidden.
+ * Returns 0 or -errno (the folder could not be listed). */
+struct du_file_filter { const char *label, *pattern; };
+enum { DU_FILE_SAVE = 1, DU_FILE_OVERWRITE_PROMPT = 2, DU_FILE_FILE_MUST_EXIST = 4,
+       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16 };
+typedef int (*du_mkdir_fn)(void *ctx, const char *path);
+struct du_file_options {
+    unsigned flags;
+    const char *title, *folder, *name;
+    const struct du_file_filter *filters; unsigned filter_count, filter_index;
+    const char *default_ext;
+    du_lister lister; void *lister_ctx;
+    du_mkdir_fn make_dir; void *make_dir_ctx;
+};
+int du_file_open(struct du_ui *, int id, const struct du_file_options *);
+/* Case-insensitive wildcard match of one name against ';'-separated patterns
+ * ("*.txt;*.log", "*.*" matches every name; * and ? only). */
+int du_pattern_match(const char *patterns, const char *name);
+
+/* G16 Font dialog (ChooseFont). initial may be NULL. families lists the face
+ * names offered (NULL, 0: a built-in list of the UI faces). The result text of
+ * DU_EV_DIALOG index 0 is du_font_format()'s form; du_font_parse reads it. The
+ * sample line uses the UI face, bold for DU_FONT_BOLD, unless the application
+ * draws it: sample, when set, paints the preview in the given rectangle. */
+#define DU_FONT_BOLD   1u
+#define DU_FONT_ITALIC 2u
+struct du_font_choice { char family[64]; unsigned style, points, underline, strikeout; uint32_t color; };
+#define DU_FONT_NO_EFFECTS 1u
+typedef void (*du_sample_fn)(struct du_canvas *, struct du_rect, const struct du_font_choice *, void *ctx);
+int du_font_dialog(struct du_ui *, int id, const struct du_font_choice *initial,
+                   const char *const *families, unsigned family_count, unsigned flags,
+                   du_sample_fn sample, void *sample_ctx);
+void du_font_format(char *out, size_t size, const struct du_font_choice *);
+int du_font_parse(const char *text, struct du_font_choice *out);   /* 0, or -EINVAL */
+
+/* G16 Color dialog (ChooseColor): 48 basic colours, 16 custom colours, hue /
+ * saturation / luminance spectrum with red, green, blue entry. custom points at
+ * 16 0x00RRGGBB values the dialog updates in place (it must stay valid while
+ * the dialog is open; NULL keeps them private). The result text of DU_EV_DIALOG
+ * index 0 is "#RRGGBB"; du_color_parse reads it. */
+#define DU_COLOR_FULL_OPEN    1u   /* CC_FULLOPEN: custom-colour controls shown at once */
+#define DU_COLOR_PREVENT_FULL 2u   /* CC_PREVENTFULLOPEN */
+int du_color_dialog(struct du_ui *, int id, uint32_t initial, uint32_t *custom, unsigned flags);
+int du_color_parse(const char *text, uint32_t *rgb);
+void du_rgb_to_hsl(uint32_t rgb, unsigned *h, unsigned *s, unsigned *l);   /* 0..239 as in the Windows dialog */
+uint32_t du_hsl_to_rgb(unsigned h, unsigned s, unsigned l);
+
+/* G16 Browse for Folder (SHBrowseForFolder with BIF_RETURNONLYFSDIRS). The
+ * tree starts at root ("/" when NULL) and opens initial. prompt is shown above
+ * the tree. Result: DU_EV_DIALOG index 0, text the folder path. */
+struct du_folder_options {
+    const char *title, *prompt, *root, *initial;
+    unsigned flags;                         /* DU_FILE_NO_NEW_FOLDER */
+    du_lister lister; void *lister_ctx;
+    du_mkdir_fn make_dir; void *make_dir_ctx;
+};
+int du_folder_dialog(struct du_ui *, int id, const struct du_folder_options *);
+
+/* G16 Find and Replace (FindText, ReplaceText). The dialog stays open while
+ * the callback handles Find Next, Replace and Replace All; Cancel/Close and Esc
+ * end it with DU_EV_DIALOG (index 1). DU_FIND_DOWN, _WHOLE and _CASE are
+ * FR_DOWN, FR_WHOLEWORD and FR_MATCHCASE; the _HIDE_ and _NO_ flags are
+ * FR_HIDEUPDOWN, FR_HIDEWHOLEWORD, FR_HIDEMATCHCASE (hide) and FR_NOUPDOWN etc. (disable). */
+#define DU_FIND_DOWN 1u
+#define DU_FIND_WHOLE 2u
+#define DU_FIND_CASE 4u
+#define DU_FIND_HIDE_UPDOWN 0x10u
+#define DU_FIND_HIDE_WHOLE 0x20u
+#define DU_FIND_HIDE_CASE 0x40u
+#define DU_FIND_NO_UPDOWN 0x100u
+#define DU_FIND_NO_WHOLE 0x200u
+#define DU_FIND_NO_CASE 0x400u
+enum du_find_action { DU_FIND_NEXT = 1, DU_FIND_REPLACE, DU_FIND_REPLACE_ALL };
+struct du_find { char what[128], with[128]; unsigned flags; };
+typedef void (*du_find_fn)(struct du_ui *, int action, const struct du_find *, void *ctx);
+int du_find_dialog(struct du_ui *, int id, int replace, const struct du_find *initial, du_find_fn, void *ctx);
+/* Text shown at the bottom of the open Find or Replace dialog (for example
+ * "Cannot find \"x\"."), set by the callback because a second dialog cannot be
+ * stacked; cleared when the search text changes. */
+void du_find_status(struct du_ui *, const char *text);
+/* Search helper for the callback: the first match of f->what in text[0..length)
+ * at or after from (DU_FIND_DOWN) or ending at or before from (up), honouring
+ * DU_FIND_WHOLE and DU_FIND_CASE; returns 1 and the match bounds, or 0. */
+int du_find_text(const char *text, size_t length, size_t from, const struct du_find *, size_t *lo, size_t *hi);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
 /* OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
  * Control slots 4..9 are caller-owned, boxes relative to the sheet body.
@@ -455,6 +632,8 @@ struct du_window {
     /* Explicit presenters opt in to the last render regions. The normal
      * du_window_turn path always presents those regions. */
     int present_rendered;
+    int old_logical_width, old_logical_height;
+    unsigned dpi; /* G23: physical surface pixels per 96 logical units; fixed until reopen. */
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
@@ -486,6 +665,9 @@ struct du_window {
     int session;                 /* DU_SESSION_* state, internal */
     uint32_t session_serial, session_flags;
     int session_reply_pending;   /* answer+1, retried if the queue is full */
+    int (*power_event)(struct du_window *, uint32_t event, uint32_t flags, void *);
+    uint32_t power_serial;
+    int power_reply_pending;
 };
 enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);

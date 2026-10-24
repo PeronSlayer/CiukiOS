@@ -13,9 +13,9 @@ class TaskbarTests(unittest.TestCase):
     def test_taskbar_arrangement_and_windows_keys(self):
         sources = [ROOT / f"apps/desktop/{n}.c" for n in
                    ("client", "input", "protocol", "compositor", "theme", "shell", "autoplay", "autoplay_content",
-                    "settings", "wallpaper", "keymap", "folder")]
+                    "settings", "wallpaper", "keymap", "folder", "power_policy")]
         sources += [ROOT / f"apps/libdeskui/{n}.c" for n in
-                    ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
+                    ("draw", "widgets", "controls", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
         sources += [ROOT / "apps/files/model.c", ROOT / "apps/files/transfer.c", ROOT / "tests/host/desktop/fake.c",
                     ROOT / "tests/host/desktop/taskbar_test.c"]
         parent = ROOT / "build/host"

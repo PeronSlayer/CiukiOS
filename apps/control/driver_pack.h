@@ -20,6 +20,10 @@ int dp_uninstall(const struct ndp_device *,const char *store,char reason[160]);
 typedef int (*dp_busy_check)(void *,const struct ndp_device *);
 int dp_uninstall_checked(const struct ndp_device *,const char *store,dp_busy_check,void *,char reason[160]);
 int dp_installed(const struct ndp_device *,const char *store);
+/* Installed packages (G30 Add New Hardware catalogue): display name and service of each valid manifest in the
+ * store, sorted by name. Returns the count, 0 for a missing store, or -errno. */
+struct dp_entry { char name[128], service[64]; };
+int dp_catalog(const char *store,struct dp_entry *out,unsigned capacity);
 /* Test-only failure injection is supplied through this callback, NULL in production. */
 typedef int (*dp_fault)(const char *operation,void *);
 void dp_test_fault(dp_fault,void *);

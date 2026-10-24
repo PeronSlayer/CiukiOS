@@ -4,6 +4,8 @@
 /* SPDX-License-Identifier: MIT
  * Files model. Paths are absolute POSIX paths; FAT names compare without case. */
 #include "model.h"
+#include "operations.h"
+#include "../desktop/catalog.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +16,8 @@ static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int rb_job_begin(struct fm_job *);
 static void rb_job_finish(struct fm_job *);
 static void rb_job_free(struct fm_job *);
+static void undo_root(struct fm_job *, const struct fm_frame *);
+static void undo_finish(struct fm_job *);
 static int compare(const char *a, const char *b)
 {
     while (*a && fold((unsigned char)*a) == fold((unsigned char)*b)) { a++; b++; }
@@ -174,6 +178,11 @@ int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx) { return fm_vol
 int fm_entry_path(const struct fm_model *m, unsigned index, char *out)
 {
     if (index >= m->count) return -ENOENT;
+    if (m->entries[index].result) {
+        unsigned n = m->entries[index].result - 1;
+        if (n >= m->result_count || !m->result_paths) return -ENOENT;
+        strcpy(out, m->result_paths[n]); return 0;
+    }
     if (m->entries[index].bin) {   /* G2: a Recycle Bin item is addressed by its stored path */
         const struct rb_item *item = rb_entry_item(m, &m->entries[index]);
         char dir[FM_PATH];
@@ -245,6 +254,7 @@ static const struct { const char *ext, *type; enum fm_kind kind; } types[] = {
     {"wav", "Wave Sound", FM_KIND_AUDIO}, {"mid", "MIDI Sequence", FM_KIND_AUDIO},
     {"com", "MS-DOS Application", FM_KIND_APP}, {"exe", "Application", FM_KIND_APP},
     {"elf", "ELF Program", FM_KIND_FILE}, {"img", "Disk Image", FM_KIND_FILE},
+    {"lnk", "Shortcut", FM_KIND_FILE}, {"pif", "MS-DOS Shortcut", FM_KIND_APP},
     {"iso", "CD-ROM Image", FM_KIND_FILE}, {"zip", "ZIP Archive", FM_KIND_FILE},
 };
 
@@ -261,6 +271,7 @@ const char *fm_type_name(const struct fm_entry *e, char *buffer, size_t size)
 {
     if (e->meta.type == FM_DIR) return "File Folder";
     if (e->meta.type != FM_FILE) return "Device";
+    if (e->registered_type[0]) return e->registered_type;
     if (e->meta.exec) return "Application";
     const char *ext = suffix(e->name);
     if (!ext) return "File";
@@ -322,6 +333,7 @@ static int browser_listing(struct fm_vfs *fs, const char *path, uint32_t fixed, 
                 (show_hidden || !(l->entries[i].meta.attributes & 2u)) &&
                 (!hide_system || !(l->entries[i].meta.attributes & 4u))) l->entries[count++] = l->entries[i];
         l->count = count;
+        fm_registered_types(l->entries,l->count);
     }
     return r;
 }
@@ -372,7 +384,18 @@ void fm_clipboard_clear(struct fm_model *m)
     for (unsigned i = 0; i < m->clipboard_count; i++) free(m->clipboard[i]);
     free(m->clipboard); m->clipboard = NULL; m->clipboard_count = 0; m->cut = 0;
 }
-void fm_destroy(struct fm_model *m) { free(m->entries); free(m->bin); fm_clipboard_clear(m); memset(m, 0, sizeof(*m)); }
+void fm_destroy(struct fm_model *m) { free(m->entries); free(m->bin); free(m->result_paths); fm_clipboard_clear(m); memset(m, 0, sizeof(*m)); }
+
+static int result_location_order(const char *a, const char *b)
+{
+    size_t na = (size_t)(strrchr(a, '/') - a), nb = (size_t)(strrchr(b, '/') - b), i = 0;
+    while (i < na && i < nb) {
+        int difference = (int)fold((unsigned char)a[i]) - (int)fold((unsigned char)b[i]);
+        if (difference) return difference;
+        i++;
+    }
+    return na < nb ? -1 : na > nb;
+}
 
 /* G2: in the Recycle Bin the name is the original one and two more keys exist:
  * 4 the original location, 5 the deletion time. */
@@ -393,7 +416,8 @@ static int order(const struct fm_model *m, const struct fm_entry *a, const struc
         if (!result) result = (int)a->bin - (int)b->bin;
         return descending ? -result : result;
     }
-    if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
+    if (column == FM_SORT_LOCATION && a->result && b->result) result = result_location_order(m->result_paths[a->result-1], m->result_paths[b->result-1]);
+    else if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
     else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
     else if (column == 4) result = a->meta.attributes < b->meta.attributes ? -1 : a->meta.attributes > b->meta.attributes;
     else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
@@ -404,13 +428,15 @@ static int order(const struct fm_model *m, const struct fm_entry *a, const struc
 
 void fm_sort(struct fm_model *m, unsigned column, int descending)
 {
-    if (column > 5) return;
-    if (column == 5 && !fm_is_recycle(m->path)) column = 0;
+    if (column > FM_SORT_LOCATION) return;
+    if ((column == 5 && !fm_is_recycle(m->path)) || (column == FM_SORT_LOCATION && !m->searching)) column = 0;
     m->sort = column; m->descending = descending;
     if (m->count < 2) return;
     /* Stable bottom-up merge sort; focus/anchor follow entries, not indices. */
     struct fm_entry *tmp = malloc(m->count * sizeof(*tmp));
     if (!tmp) return;
+    unsigned active_result = m->active < m->count ? m->entries[m->active].result : 0;
+    unsigned anchor_result = m->anchor < m->count ? m->entries[m->anchor].result : 0;
     char active[FM_NAME] = "", anchor[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);
     if (m->anchor < m->count) strcpy(anchor, m->entries[m->anchor].name);
@@ -425,11 +451,13 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
         memcpy(m->entries + start, tmp + start, (end - start) * sizeof(*tmp));
     }
     for (unsigned i = 0; i < m->count; i++) {
-        if (!strcmp(active, m->entries[i].name)) m->active = i;
-        if (!strcmp(anchor, m->entries[i].name)) m->anchor = i;
+        if (active_result ? m->entries[i].result == active_result : !strcmp(active, m->entries[i].name)) m->active = i;
+        if (anchor_result ? m->entries[i].result == anchor_result : !strcmp(anchor, m->entries[i].name)) m->anchor = i;
     }
     free(tmp);
 }
+
+#include "search.inc"
 
 static int load(struct fm_model *m, const char *path)
 {
@@ -437,6 +465,7 @@ static int load(struct fm_model *m, const char *path)
     int r = browser_listing(&m->fs, path, m->fixed, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
     free(m->entries); free(m->bin);
+    free(m->result_paths); m->result_paths = NULL; m->result_count = 0; m->searching = 0;
     m->entries = l.entries; m->count = l.count; m->capacity = l.capacity; m->bin = l.bin; m->bin_count = l.bin_count;
     m->active = m->anchor = 0; m->find_length = 0; m->find[0] = 0;
     /* Key 4 changes meaning across the bin boundary; do not carry it over. */
@@ -477,6 +506,7 @@ int fm_navigate(struct fm_model *m, const char *path)
 
 int fm_refresh(struct fm_model *m)
 {
+    if (m->searching) return fm_search(m, &m->query);
     struct listing l;
     int r = browser_listing(&m->fs, m->path, m->fixed, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
@@ -588,7 +618,7 @@ int fm_clipboard(struct fm_model *m, int cut)
     for (unsigned i = 0; i < m->count && !r; i++) if (m->entries[i].selected) {
         paths[next] = malloc(FM_PATH);
         if (!paths[next]) { r = -ENOMEM; break; }
-        r = fm_join(paths[next++], m->path, m->entries[i].name);
+        r = fm_entry_path(m, i, paths[next++]);
     }
     if (r) { for (unsigned i = 0; i < count; i++) free(paths[i]); free(paths); return r; }
     fm_clipboard_clear(m);
@@ -638,8 +668,9 @@ int fm_rename(struct fm_model *m, unsigned index, const char *name)
     if (index >= m->count) return -ENOENT;
     char source[FM_PATH], target[FM_PATH];
     int r = fm_valid_name(name);
-    if (!r) r = fm_join(source, m->path, m->entries[index].name);
-    if (!r) r = fm_join(target, m->path, name);
+    if (!r) r = fm_entry_path(m, index, source);
+    if (!r) r = fm_parent(target, source);
+    if (!r) r = fm_join(target, target, name);
     if (r) return r;
     if (!strcmp(m->entries[index].name, name)) return 0;
     struct fm_meta meta;
@@ -647,7 +678,7 @@ int fm_rename(struct fm_model *m, unsigned index, const char *name)
     if (!r && compare(m->entries[index].name, name)) return -EEXIST;
     if (r && r != -ENOENT) return r;
     r = m->fs.rename(m->fs.ctx, source, target);
-    if (!r) { r = fm_refresh(m); if (!r) fm_select_name(m, name, 0); }
+    if (!r && !m->searching) { r = fm_refresh(m); if (!r) fm_select_name(m, name, 0); }
     return r;
 }
 
@@ -716,6 +747,7 @@ static void keep_source(struct fm_job *j, const char *source, int r, int folder)
 static void pop(struct fm_job *j)
 {
     struct fm_frame *f = &j->frames[j->depth - 1];
+    if (j->depth == 1 && j->record_undo) undo_root(j, f);
     if (j->depth == 1 && (j->kind == FM_COPY || j->kind == FM_MOVE) && j->created_count < FM_CREATED && f->target[0])
         snprintf(j->created[j->created_count++], FM_NAME, "%s", fm_basename(f->target));
     free_frame(&j->frames[--j->depth]);
@@ -881,6 +913,7 @@ int fm_job_step(struct fm_job *j)
     int r = job_step(j);
     /* G2: the Recycle Bin's records follow the items that really moved. */
     if (j->bin && j->state != FM_RUNNING && j->state != FM_REPLACE && j->state != FM_IDLE) rb_job_finish(j);
+    if (j->state == FM_DONE || j->state == FM_CANCELLED || j->state == FM_FAILED) undo_finish(j);
     return r;
 }
 static int job_step(struct fm_job *j)
@@ -910,9 +943,10 @@ static int job_step(struct fm_job *j)
             if (j->destination_known > 0) j->destination_dev = where.dev;
         }
         if (j->kind == FM_COPY || j->kind == FM_MOVE) {
-            if (j->bin && j->bin->target && j->bin->target[j->next - 1]) { snprintf(target, sizeof(target), "%s", j->bin->target[j->next - 1]); r = 0; }
+            if (j->targets) { snprintf(target, sizeof(target), "%s", j->targets[j->next - 1]); r = 0; }
+            else if (j->bin && j->bin->target && j->bin->target[j->next - 1]) { snprintf(target, sizeof(target), "%s", j->bin->target[j->next - 1]); r = 0; }
             else r = j->trash == 2 ? trash_target(j, source, target) : fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
-            if (!r && fm_same_path(target, source)) {
+            if (!r && !j->targets && fm_same_path(target, source)) {
                 if (j->kind == FM_MOVE) { j->completed++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items; return 1; }
                 r = copy_name(j, source, target);
             }
@@ -925,6 +959,9 @@ static int job_step(struct fm_job *j)
     if (!f->phase) {
         r = j->fs.stat_path(j->fs.ctx, f->source, &f->meta);
         if (r) return fail(j, r);
+        if (j->undoing && j->kind==FM_MOVE && fm_same_path(f->source,f->target)) {
+            r=j->fs.rename(j->fs.ctx,f->source,f->target); if (r) return fail(j,r); pop(j); return 1;
+        }
         if (f->meta.type == FM_OTHER) return fail(j, -ENOTSUP);
         if (j->kind == FM_DELETE && j->bin && j->depth == 1 && j->bin->target && j->bin->target[j->next - 1]) {
             /* G2: into the Recycle Bin: a rename inside the volume, never a copy. */
@@ -950,6 +987,8 @@ static int job_step(struct fm_job *j)
         } else if (j->kind == FM_COPY || j->kind == FM_MOVE) {
             r = j->fs.stat_path(j->fs.ctx, f->target, &f->existing);
             f->exists = !r;
+            if (f->exists) j->undo_unsafe = 1;
+            if (j->undoing && f->exists) return fail(j, -EEXIST);
             if (r && r != -ENOENT) return fail(j, r);
             if (f->exists && f->existing.dev == f->meta.dev && f->existing.ino == f->meta.ino) return fail(j, -EINVAL);
             if (f->exists && f->existing.type != f->meta.type) return fail(j, f->meta.type == FM_DIR ? -ENOTDIR : -EISDIR);
@@ -1006,7 +1045,7 @@ static int job_step(struct fm_job *j)
         if (r) return fail(j, r);
         struct fm_meta current;
         r = j->fs.stat_path(j->fs.ctx, f->target, &current);
-        if (!f->exists && !r) { f->exists = 1; f->existing = current; j->prompt_dir = 0; j->state = FM_REPLACE; f->phase = 3; return 0; }
+        if (!f->exists && !r) { j->undo_unsafe=1; if (j->undoing) return fail(j,-EEXIST); f->exists = 1; f->existing = current; j->prompt_dir = 0; j->state = FM_REPLACE; f->phase = 3; return 0; }
         if (r && r != -ENOENT) return fail(j, r);
         f->phase = 3;
     }
@@ -1070,8 +1109,12 @@ void fm_job_destroy(struct fm_job *j)
     free(j->sources);
     free(j->totals);
     free(j->buffer);
+    if (j->targets) { for (unsigned i=0;i<j->count;i++) free(j->targets[i]); free(j->targets); }
+    if (j->undo) { fm_undo_free(j->undo); free(j->undo); }
     rb_job_free(j);
     memset(j, 0, sizeof(*j)); j->input = j->output = -1;
 }
 
 #include "recycle.inc"
+#include "operations.inc"
+#include "cleanup.inc"

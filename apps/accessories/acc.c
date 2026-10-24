@@ -1,9 +1,24 @@
 /* SPDX-License-Identifier: MIT
  * Shared helpers of the CiukiOS accessories; see acc.h. */
 #include "acc.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+int acc_set_wallpaper(struct du_window *window, const char *path)
+{
+    if (!window || !path || path[0]!='/' || !*path) return -EINVAL;
+    char argument[161]; int n=snprintf(argument,sizeof(argument),"--set-wallpaper=%s",path);
+    if (n<=0 || (size_t)n>=sizeof(argument)) return -ENAMETOOLONG;
+    struct ciuki_message m; unsigned name_n=7, arg_n=(unsigned)n;
+    desk_message(&m,DESK_LAUNCH,16+name_n+arg_n);
+    desk_put32(m.data+4,++window->request_serial);
+    if (!window->request_serial) desk_put32(m.data+4,++window->request_serial);
+    desk_put32(m.data+8,name_n); memcpy(m.data+12,"control",name_n);
+    desk_put32(m.data+12+name_n,arg_n); memcpy(m.data+16+name_n,argument,arg_n);
+    return du_window_queue(window,&m);
+}
 
 int acc_args(int argc, char **argv, const char *test_name, int *channel, int *test, const char **path)
 {

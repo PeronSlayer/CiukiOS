@@ -179,6 +179,14 @@ BOOL u32_directory(UINT op, HWND h, DWORD index, DWORD type, DWORD flags,
                    struct w32r_reply *reply, void *result, DWORD cap) {
   char utf8[1021];
   u32_utf8(utf8, sizeof(utf8), name ? name : "");
+  return u32_directory_utf8(op,h,index,type,flags,utf8,data,n,reply,result,cap);
+}
+BOOL u32_directory_utf8(UINT op, HWND h, DWORD index, DWORD type, DWORD flags,
+                   const char *name, const void *data, DWORD n,
+                   struct w32r_reply *reply, void *result, DWORD cap) {
+  const char *utf8=name ? name : "";
+  unsigned length=w32_strlen(utf8);
+  if (length>1020) return u32_fail(87);
   DWORD len = w32_strlen(utf8) + 1,
         total = sizeof(struct w32r_request) + 1 + len + n;
   uint8_t *in = u32_alloc(total), *out = u32_alloc(W32R_MAX);
@@ -340,8 +348,15 @@ int strcmp(const char *a, const char *b) {
     a++, b++;
   return (uint8_t)*a - (uint8_t)*b;
 }
+int strncmp(const char *a, const char *b, size_t n) {
+  while (n && *a && *a == *b)
+    a++, b++, n--;
+  return n ? (uint8_t)*a - (uint8_t)*b : 0;
+}
 #endif
 
+/* G12: the desktop owns session settings and requested durable writes. */
+void u32_settings(void) { u32_input_refresh(); }
 /* The desktop owns this existing plain configuration file. Only its keyboard
  * and double-click keys cross this boundary; the desktop theme never does. */
 static int compare_prefix(const char *a, const char *b, UINT n) {
@@ -349,6 +364,54 @@ static int compare_prefix(const char *a, const char *b, UINT n) {
     if (a[i] != b[i])
       return 1;
   return 0;
+}
+/* Merge only the shared appearance keys. CREATE_NEW serializes writers;
+ * flush and replace publish a complete file, preserving unrelated settings. */
+BOOL u32_appearance_commit(const struct appearance *a) {
+  if(!ap_valid(a)) return u32_fail(87);
+  char *data=u32_alloc(32769), *output=u32_alloc(32769+AP_HEX_BYTES+64);
+  if(!data || !output) { u32_free(data); u32_free(output); return u32_fail(8); }
+  char hex[AP_HEX_BYTES+1]; ap_encode(a,hex);
+  UINT saved=u32_suspend(); DWORD count=0, used=0, error=0;
+  const char *path="C:\\system\\settings\\desktop.cfg";
+  const char *temporary="C:\\system\\settings\\desktop.cfg.appearance.tmp";
+  HANDLE in=CreateFileA(path,0x80000000u,7,0,3,0,0);
+  if(in!=K32_INVALID) {
+    if(!ReadFile(in,data,32768,&count,0) || count==32768) error=13;
+    CloseHandle(in);
+  } else if(GetLastError()!=2 && GetLastError()!=3) error=GetLastError();
+  data[count]=0;
+  for(DWORD at=0; !error && at<count;) {
+    DWORD start=at; while(at<count && data[at]!='\n') at++;
+    if(at<count) at++;
+    DWORD n=at-start;
+    if((n>=11 && !compare_prefix(data+start,"appearance=",11)) ||
+       (n>=14 && !compare_prefix(data+start,"desktop_color=",14))) continue;
+    w32_copy(output+used,data+start,n); used+=n;
+  }
+  if(used && output[used-1]!='\n') output[used++]='\n';
+  w32_copy(output+used,"appearance=",11); used+=11;
+  w32_copy(output+used,hex,AP_HEX_BYTES); used+=AP_HEX_BYTES; output[used++]='\n';
+  w32_copy(output+used,"desktop_color=",14); used+=14;
+  ap_hexword(output+used,a->item[AP_DESKTOP].colour,6); used+=6; output[used++]='\n';
+  HANDLE out=K32_INVALID;
+  if(!error) {
+    out=CreateFileA(temporary,0x40000000u,0,0,1,0,0);
+    if(out==K32_INVALID) error=GetLastError();
+  }
+  if(out!=K32_INVALID) {
+    DWORD written=0;
+    if(!WriteFile(out,output,used,&written,0) || written!=used || !FlushFileBuffers(out)) error=GetLastError() ? GetLastError() : 29;
+    CloseHandle(out);
+    if(!error) {
+      int32_t status=(int32_t)u32_backend.gate(CIUKI_SYS_RENAME,
+        U32_PTR("/system/settings/desktop.cfg.appearance.tmp"),U32_PTR("/system/settings/desktop.cfg"),0);
+      if(status<0) error=status==-13 ? 5 : 29;
+    }
+    if(error) DeleteFileA(temporary);
+  }
+  u32_resume(saved); u32_free(data); u32_free(output);
+  return error ? u32_fail(error) : 1;
 }
 void u32_settings(void) {
   static BOOL read_once;
@@ -372,6 +435,10 @@ void u32_settings(void) {
   u32_resume(saved);
   if (ok && count <= 32768) {
     data[count] = 0;
+    struct appearance appearance;
+    if(ap_settings_decode(&appearance,data,count)) {
+      char encoded[AP_HEX_BYTES+1]; ap_encode(&appearance,encoded); u32_appearance_load(encoded);
+    } else u32_appearance_load("");
     for (char *line = data; *line;) {
       char *end = line;
       while (*end && *end != '\n')
@@ -402,6 +469,7 @@ void u32_settings(void) {
 
 void u32_clear_thread_input(void) {
   for (UINT i=0;i<U32_THREADS;i++) if (threads[i].id) {
+    threads[i].dead_accent=0;
     w32_fill(threads[i].keys,0,256);threads[i].text_count=0;
     threads[i].key_window=threads[i].translate_window=0;threads[i].key_lparam=0;
   }
@@ -429,7 +497,7 @@ static void cleanup_thread(DWORD tid, UINT mode) {
     if (t->id && (!tid || t->id == tid)) {
       identity = 1;
       while (t->events) {
-        struct u32_pending_event *e = t->events; t->events = e->next; u32_free(e);
+        struct u32_pending_event *e = t->events; t->events = e->next; u32_event_release(&e->packet); u32_free(e);
       }
       for (struct u32_send_frame *f = t->send; f; f = f->prev) {
         u32_free(f->data); f->data = 0;

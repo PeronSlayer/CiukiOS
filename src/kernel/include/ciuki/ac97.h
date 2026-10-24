@@ -67,6 +67,7 @@ int ac97_codec_read(struct ac97_device *, uint16_t reg, uint16_t *value, uint64_
 int ac97_codec_write(struct ac97_device *, uint16_t reg, uint16_t value, uint64_t deadline);
 int ac97_codec_prepare(struct ac97_device *);
 int ac97_codec_restore(struct ac97_device *);
+int ac97_power_resume(struct ac97_device *);
 int ac97_controller_reset(struct ac97_device *);
 int ac97_set_master(struct ac97_device *, const struct ciuki_mixer_master *);
 int ac97_set_mute(struct ac97_device *, bool mute);

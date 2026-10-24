@@ -23,5 +23,16 @@ int main(void)
     result=(uint32_t)-EFAULT; assert(ciuki_power_status(&p)==-1 && errors._errno==EFAULT);
     assert(ciuki_power_status(NULL)==-1 && errors._errno==EINVAL);
     result=3; assert(ciuki_power(CIUKI_POWER_QUERY)==3 && action==3 && !address && !bytes);
-    puts("PASS power SDK: exact call/extent/header, errno and capability query"); return 0;
+    /* G11: EVENTS and POLICY records. */
+    struct ciuki_power_events e={.reserved=9}; result=0;
+    assert(!ciuki_power_events(&e) && called==73 && action==7 && bytes==40 && address==CU_PTR(&e));
+    assert(e.version==1 && e.size==40 && !e.reserved);
+    result=(uint32_t)-EINVAL; assert(ciuki_power_events(&e)==-1 && errors._errno==EINVAL);
+    errors._errno=0; assert(ciuki_power_events(NULL)==-1 && errors._errno==EINVAL);
+    struct ciuki_power_policy q={.disk_seconds=600,.reserved=3}; result=0;
+    assert(!ciuki_power_policy(&q) && action==6 && bytes==32 && address==CU_PTR(&q) && q.version==1 && q.size==32 && !q.reserved && q.disk_seconds==600);
+    result=(uint32_t)-EPERM; assert(ciuki_power_policy(&q)==-1 && errors._errno==EPERM);
+    result=(uint32_t)-ENOTSUP; assert(ciuki_power(CIUKI_POWER_STANDBY)==-1 && action==5 && errors._errno==ENOTSUP);
+    result=0; assert(!ciuki_power(CIUKI_POWER_CANCEL_STANDBY) && action==8 && !address && !bytes);
+    puts("PASS power SDK: exact call/extent/header, errno and capability query; G11 EVENTS, POLICY, STANDBY"); return 0;
 }

@@ -14,6 +14,8 @@
 #include <ciuki/registry.h>
 #include <ciuki/work.h>
 #include <ciuki/ata.h>
+#include <ciuki/ata_power.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/timing.h>
 #include <ciuki/mm.h>
 
@@ -35,7 +37,13 @@ static struct kmutex addin_mutex;
 static bool addin_mutex_ready;
 static void ata_lock(struct ata_channel *c)
 {
-    if(!ata_addin_match(c->pci)) {kmutex_lock(&c->mutex);return;}
+retry:
+    while (c->sleeping && !c->stopped && c->sleep_owner != g_current) task_sleep_ms(1);
+    if(!ata_addin_match(c->pci)) {
+        kmutex_lock(&c->mutex);
+        if (c->sleeping && !c->stopped && c->sleep_owner != g_current) { kmutex_unlock(&c->mutex); goto retry; }
+        return;
+    }
     if((uintptr_t)&addin_mutex<(uintptr_t)&c->mutex) {
         kmutex_lock(&addin_mutex);kmutex_lock(&c->mutex);
     } else {kmutex_lock(&c->mutex);kmutex_lock(&addin_mutex);}
@@ -353,12 +361,21 @@ static bool packet_identify_abort(struct ata_device *d, uint8_t s)
     log_signature(d, s, value);
     return packet_signature(value);
 }
+/* G11: a non-data command the device rejects (ATA-6 6.2: ERR with only ABRT
+ * in the Error register, not BSY/DRQ/DF) is a refusal of that command, never
+ * a channel fault. Only for optional power-management commands. */
+#define ATA_CLASSIFY_PACKET 1
+#define ATA_CLASSIFY_ABORT 2
+static bool command_abort(struct ata_device *d, uint8_t s)
+{
+    return (s & ATA_ERR) && !(s & (ATA_BSY | ATA_DRQ | ATA_DF)) && reg_read(d->channel, 1) == 0x04;
+}
 
 /* Poll only bounded status transitions at reset/selection or within a
  * data phase. BSY makes every other status bit invalid (7.15). Sleep after
  * short sampling so a stuck device cannot monopolize this UP kernel. */
 static int poll_status_result(struct ata_device *d, uint64_t start, uint64_t deadline,
-                              uint8_t required, uint8_t forbidden, bool classify)
+                              uint8_t required, uint8_t forbidden, int classify)
 {
     struct ata_channel *c = d->channel;
     for (unsigned samples = 0;; samples++) {
@@ -367,7 +384,8 @@ static int poll_status_result(struct ata_device *d, uint64_t start, uint64_t dea
         if (c->stopped || c->quiescing || expired(c, deadline))
             return failure(d, start, s);
         if (!(s & ATA_BSY)) {
-            if (classify && packet_identify_abort(d, s)) return 1;
+            if (classify == ATA_CLASSIFY_PACKET && packet_identify_abort(d, s)) return 1;
+            if (classify == ATA_CLASSIFY_ABORT && command_abort(d, s)) return 1;
             if (!s || s == 0xff || (s & (ATA_ERR | ATA_DF)))
                 return failure(d, start, s);
             if ((s & required) == required && !(s & forbidden))
@@ -396,7 +414,7 @@ static bool irq_ready(void *arg)
 }
 
 static int wait_irq_until(struct ata_device *d, uint32_t *sequence, uint64_t start,
-                          uint64_t deadline, bool classify, uint8_t timeout_cause)
+                          uint64_t deadline, int classify, uint8_t timeout_cause)
 {
     uint64_t check = hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
     if (check && check < deadline) deadline = check;
@@ -416,13 +434,14 @@ static int wait_irq_until(struct ata_device *d, uint32_t *sequence, uint64_t sta
         if (c->expiry == ATA_EXPIRY_DEADLINE) c->expiry = timeout_cause;
         return failure(d, start, s);
     }
-    if (classify && packet_identify_abort(d, s)) return 1;
+    if (classify == ATA_CLASSIFY_PACKET && packet_identify_abort(d, s)) return 1;
+    if (classify == ATA_CLASSIFY_ABORT && !(s & ATA_BSY) && command_abort(d, s)) return 1;
     if (!(s & ATA_BSY) && (s & (ATA_ERR | ATA_DF)))
         return failure(d, start, s);
     return 0;
 }
 static int wait_irq_result(struct ata_device *d, uint32_t *sequence, uint64_t start,
-                           uint64_t deadline, bool classify)
+                           uint64_t deadline, int classify)
 {
     return wait_irq_until(d, sequence, start, deadline, classify, ATA_EXPIRY_DEADLINE);
 }
@@ -909,9 +928,9 @@ static int identify(struct ata_device *d)
     if (!e)
         e = issue(d, ATA_IDENTIFY, start, &sequence);
     if (!e)
-        e = wait_irq_result(d, &sequence, start, deadline, true);
+        e = wait_irq_result(d, &sequence, start, deadline, ATA_CLASSIFY_PACKET);
     if (!e)
-        e = poll_status_result(d, start, deadline, ATA_DRQ, 0, true);
+        e = poll_status_result(d, start, deadline, ATA_DRQ, 0, ATA_CLASSIFY_PACKET);
     if (e == 1) {
         /* Retire EC's IRQ/generation and restore nIEN before issuing A1.
          * All reset signatures have already been captured by pass 1. */
@@ -968,6 +987,8 @@ static int identify(struct ata_device *d)
     else if (supported_valid && enabled_valid)
         cache = w85 & (1u << 5) ? BLKDEV_CACHE_ENABLED : BLKDEV_CACHE_DISABLED;
     d->flush_ext = d->lba48 && (w83 & (1u << 13));
+    /* G11: 8.15.38 word 82 bit 3, Power Management feature set (IDLE E3h). */
+    d->power_mgmt = supported_valid && (w82 & (1u << 3));
     d->block.capacity = cap;
     d->block.write_cache_state = cache;
     d->block.request_read = ata_read; d->block.read = blkdev_read;
@@ -1091,7 +1112,7 @@ static int firmware_mode(struct ata_device *d)
         if (packet_identify_abort(d, status)) break;
         /* The abort may arrive between the status sample above and the
          * DRQ poll. Classify it there too, before generic containment. */
-        e = poll_status_result(d, start, deadline, ATA_DRQ, 0, true);
+        e = poll_status_result(d, start, deadline, ATA_DRQ, 0, ATA_CLASSIFY_PACKET);
         if (e == 1) { e = 0; break; }
         if (!e) e = data_block(d, data, false, start, deadline);
         if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
@@ -1572,6 +1593,139 @@ static int ata_flush(struct blkdev *b)
     }
     ata_unlock(c);
     return e;
+}
+
+/* G11 (docs/design/power-policy.md): ATA/ATAPI-6 8.14 IDLE (E3h) with the
+ * standby timer in the Count register, a non-data command. Only on a fixed
+ * disk whose IDENTIFY word 82 bit 3 advertises the Power Management feature
+ * set. An ABRT is that disk's refusal (recorded, the channel stays in
+ * service); any other failure keeps the whole-channel quarantine rule. The
+ * drive returns to Active by itself at the next media access. */
+int ata_standby_timer(struct ata_device *d, uint8_t count)
+{
+    struct ata_channel *c = d->channel;
+    if (!d->identified || d->atapi || !d->power_mgmt) return -FS_EOPNOTSUPP;
+    if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
+    ata_lock(c);
+    bool addin = ata_addin_match(c->pci);
+    int e = d->block.quarantined || c->stopped || c->quiescing ? -FS_EQUARANTINED : 0;
+    if (!e && addin && (!d->raid_checked || d->raid_member)) e = -FS_EQUARANTINED;
+    if (!e) {
+        uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
+        uint32_t sequence;
+        d->issued = false;
+        e = select_device(d, start, deadline, 0);
+        if (!e) {
+            device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+            reg_write(c, 2, count);
+            e = issue(d, 0xe3, start, &sequence);
+        }
+        if (!e) e = wait_irq_result(d, &sequence, start, deadline, ATA_CLASSIFY_ABORT);
+        if (!e) e = poll_status_result(d, start, deadline, 0, ATA_DRQ, ATA_CLASSIFY_ABORT);
+        disarm(c);
+        d->elapsed_ms = now(c) - start;
+        if (e == 1) { d->error = 0x04; e = -FS_EOPNOTSUPP; }
+    }
+    d->standby_refused = e == -FS_EOPNOTSUPP;
+    if (!e) d->standby_count = count;
+    ata_unlock(c);
+    return e;
+}
+int ata_standby_timer_all(uint32_t seconds, struct ata_standby_result *out)
+{
+    uint32_t applied;
+    uint8_t count = ata_standby_count(seconds, &applied);
+    *out = (struct ata_standby_result){0, 0, applied, 0};
+    unsigned fixed = 0;
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) for (unsigned u = 0; u < ATA_DEVICES; u++) {
+        struct ata_channel *c = &channels[i];
+        struct ata_device *d = &c->devices[u];
+        if (!c->ops || !d->identified || d->atapi) continue;
+        fixed++;
+        int e = ata_standby_timer(d, count);
+        if (!e) out->disks++;
+        else { out->refused++; if (!out->error) out->error = e; }
+        klog("[ata%u] standby_timer unit=%u count=%u seconds=%u result=%d", c->index, u, count, applied, e);
+    }
+    return (int)fixed;
+}
+
+/* ATA-6 STANDBY IMMEDIATE E0h / IDLE IMMEDIATE E1h. No SRST and no
+ * allocation/claim retirement; ordinary I/O waits at channel admission. */
+static bool power_asleep[ATA_CHANNELS][ATA_DEVICES];
+bool ata_power_resume_ready(void)
+{
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->discovered) continue;
+        if (c->stopped || c->quiescing || ata_addin_match(c->pci)) return false;
+        for (unsigned u = 0; u < ATA_DEVICES; u++) {
+            struct ata_device *d = &c->devices[u];
+            if (d->present && (!d->identified || d->block.quarantined || d->power_sleep_refused ||
+                (!d->atapi && !d->power_mgmt))) return false;
+        }
+    }
+    return true;
+}
+static int ata_power_command(struct ata_device *d, uint8_t command)
+{
+    struct ata_channel *c = d->channel;
+    uint64_t start = now(c), end = start + ATA_COMMAND_MS;
+    uint32_t sequence;
+    d->issued = false;
+    int e = select_device(d, start, end, 0);
+    if (!e) {
+        device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+        e = issue(d, command, start, &sequence);
+    }
+    if (!e) e = wait_irq_result(d, &sequence, start, end, ATA_CLASSIFY_ABORT);
+    if (!e) e = poll_status_result(d, start, end, 0, ATA_DRQ, ATA_CLASSIFY_ABORT);
+    disarm(c);
+    if (e==1) {d->power_sleep_refused=true;e=-FS_EOPNOTSUPP;}
+    return e;
+}
+int ata_power_resume(void)
+{
+    int first = 0;
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->sleeping) continue;
+        ata_lock(c);
+        for (unsigned u = 0; u < ATA_DEVICES; u++) if (power_asleep[i][u]) {
+            int e = ata_power_command(&c->devices[u], 0xe1);
+            if (e && !first) first = e;
+            power_asleep[i][u] = false;
+        }
+        c->sleeping = false; c->sleep_owner = NULL;
+        ata_unlock(c);
+    }
+    return first;
+}
+int ata_power_suspend(void)
+{
+    if (!ata_power_resume_ready()) return -FS_EOPNOTSUPP;
+    int e = 0;
+    for (unsigned i = 0; !e && i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->discovered) continue;
+        for (unsigned u = 0; !e && u < ATA_DEVICES; u++) {
+            struct ata_device *d = &c->devices[u];
+            if (d->identified && !d->atapi) e = ata_flush(&d->block);
+        }
+        if (e) break;
+        ata_lock(c);
+        c->sleep_owner = g_current; c->sleeping = true;
+        for (unsigned u = 0; !e && u < ATA_DEVICES; u++) {
+            struct ata_device *d = &c->devices[u];
+            if (!d->identified || d->atapi) continue;
+            /* Also wake a disk whose standby command returned uncertain. */
+            power_asleep[i][u] = true;
+            e = ata_power_command(d, 0xe0);
+        }
+        ata_unlock(c);
+    }
+    if (e) { int r = ata_power_resume(); return r ? r : e; }
+    return 0;
 }
 
 /* Emergency recorder: no mutex, scheduler, DMA, logging or command replay.

@@ -41,7 +41,10 @@ def build(out=None):
     # of the census DLLs only (never a title-private DLL).
     for dll,names in stubs.acceptance_extra(stubs.imports(research.read_text())).items():
         extra.setdefault(dll,set()).update(names)
-    stubs.generate([research],generated,extra={dll:sorted(names) for dll,names in extra.items()})
+    # G31: the original printer facade shares GDI's native spool producer.
+    from scripts.win32.printing import FORWARDERS
+    extra.setdefault('winspool.drv',set()).update(FORWARDERS)
+    stubs.generate([research],generated,implemented={'winspool.drv': FORWARDERS},extra={dll:sorted(names) for dll,names in extra.items()})
     store=stubs.build(generated,out/'ntdll.lib')
     import shutil
     for dll in store['dlls']:shutil.copyfile(generated/dll['path'],out/dll['path'])
@@ -49,6 +52,8 @@ def build(out=None):
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='kernel32.dll':store['dlls'][i]=kernel32.build(out,kernel_base,flags)
         if dll['name']=='wsock32.dll':store['dlls'][i]=kernel32.build_offline(out,dll['base'],flags)
+    winsock_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls']=[d for d in store['dlls'] if d['name']!='ws2_32.dll']+[kernel32.build_winsock2(out,winsock_base,flags)]
     from scripts.win32 import audio
     audio_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     audio_dlls=audio.build(out,audio_base,flags)
@@ -59,6 +64,9 @@ def build(out=None):
     user_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='user32.dll':store['dlls'][i]=user32.build(out,user_base,flags)
+    from scripts.win32 import help as htmlhelp
+    help_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls']=[d for d in store['dlls'] if d['name']!='hhctrl.ocx']+[htmlhelp.build(out,help_base)]
     ddraw_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='ddraw.dll':store['dlls'][i]=ddraw.build(out,ddraw_base)

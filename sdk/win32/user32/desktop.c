@@ -10,6 +10,7 @@ struct request {
 };
 static struct request *requests;
 void u32_desktop_cleanup(DWORD tid) {
+  if (!tid) u32_startup_reset();
   struct request **at = &requests;
   while (*at) {
     if (!tid || (*at)->tid == tid) *at = (*at)->next;
@@ -49,13 +50,13 @@ BOOL u32_connect(void) {
   return 1;
 }
 BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
-  if (!w || !w->wire || !u32_connect())
+  if (!w || (!w->wire && op!=DESK_INPUT_SETTINGS) || !u32_connect())
     return 0;
   DWORD token =
       du3_request(&u32_desktop, op, w->wire, w->generation, data, n, fd);
   if (!token)
     return u32_fail(1062);
-  if (op == DESK_DAMAGE)
+  if (op == DESK_DAMAGE || op == DESK_V3_SOUND)
     return 1;
   struct request request = {requests, token, w->wire, w->generation, u32_tid(), 0, 0};
   requests = &request;
@@ -89,7 +90,8 @@ UINT u32_style(struct u32_window *w) {
           : (w->style & WS_POPUP) && !(w->style & WS_CAPTION)
               ? DESK_V3_POPUP
               : DESK_V3_OVERLAPPED) |
-         (w->exstyle & WS_EX_TOPMOST ? DESK_V3_TOPMOST : 0);
+         (w->exstyle & WS_EX_TOPMOST ? DESK_V3_TOPMOST : 0) |
+         (w->exstyle & WS_EX_CONTEXTHELP ? DESK_V3_CONTEXTHELP : 0);
 }
 BOOL u32_create_wire(struct u32_window *w) {
   if (!u32_connect())
@@ -139,6 +141,10 @@ BOOL u32_create_wire(struct u32_window *w) {
   }
   uint8_t identity[4];desk_put32(identity,U32_PTR(w->handle));
   if(!u32_wire(w,DESK_V3_WIN32_HWND,identity,4,-1))return 0;
+  if (w->exstyle&0x10u) {
+    desk_put32(identity,1);
+    if (!u32_wire(w,DESK_ACCEPT_FILES,identity,4,-1)) return 0;
+  }
   if (!(w->style & WS_VISIBLE) || IsIconic(w->handle))
     return u32_place(w);
   return 1;
@@ -250,6 +256,18 @@ BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
   return u32_wire(w, DESK_V3_WINDOW_ORDER, b, sizeof(b), -1);
 }
 void u32_event(const struct desk_packet *p) {
+  if(p->opcode==DESK_INPUT_STATE) {
+    BOOL changed=0;
+    if(p->index<=DESK_INPUT_VALUES)for(UINT k=1;k<=DESK_INPUT_VALUES;k++)
+      if((!p->index || k==p->index) && u32_input_value(k)!=p->input_settings[k-1])changed=1;
+    u32_input_snapshot(p->input_settings);
+    if(changed && (p->flags&2)) {
+      static const UINT actions[]={0,0,23,11,0,33,93,105,87,113,32,91};
+      for(UINT i=0;i<U32_WINDOWS;i++)if(u32_windows[i].handle && !u32_windows[i].parent)
+        SendNotifyMessageA(u32_windows[i].handle,0x1a,actions[p->index],0);
+    }
+    return;
+  }
   if (p->opcode==DESK_V3_CLIPBOARD_EVENT) { u32_clip_event(p); return; }
   if (p->opcode == DESK_V3_RESULT) {
     for (struct request *r = requests; r; r = r->next)
@@ -268,17 +286,22 @@ void u32_event(const struct desk_packet *p) {
       w = &u32_windows[i];
       break;
     }
-  if (!w)
+  if (!w) {
+    u32_event_release(p);
     return;
+  }
   if (w->tid != u32_tid() || w->creating) {
     struct u32_thread *t = u32_thread_for(w->tid);
     if (!t || t->event_count >= 256) {
+      u32_event_release(p);
       u32_fail(1816);
       return;
     }
     struct u32_pending_event *e = u32_alloc(sizeof(*e));
-    if (!e)
+    if (!e) {
+      u32_event_release(p);
       return;
+    }
     e->packet = *p;
     if (t->events_tail)
       t->events_tail->next = e;
@@ -295,12 +318,24 @@ void u32_event(const struct desk_packet *p) {
   }
   HWND h = w->handle;
   switch (p->opcode) {
+  case DESK_V3_TRAY_EVENT:
+    u32_pointer=(POINT){p->x,p->y};
+    u32_queue(w->tid,h,p->serial,p->index,p->flags,QS_POSTMESSAGE,u32_ticks(),u32_pointer);
+    break;
+  case DESK_DROP_FILES:
+    u32_drop_files(w,p->x,p->y,p->attachment_fd);
+    break;
   case DESK_PING:
     w->ping = p->serial;
     break;
   case DESK_CLOSE_REQUEST:
     w->desktop_close = 1;
     u32_queue(w->tid, h, WM_CLOSE, 0, 0, QS_POSTMESSAGE, u32_ticks(),
+              u32_pointer);
+    break;
+  case DESK_V3_HELP:
+    /* G15: the "?" caption button: DefWindowProc turns SC_CONTEXTHELP into What's This? */
+    u32_queue(w->tid, h, WM_SYSCOMMAND, 0xf180u /* SC_CONTEXTHELP */, 0, QS_POSTMESSAGE, u32_ticks(),
               u32_pointer);
     break;
   case DESK_V3_ACTIVATE:
@@ -378,6 +413,11 @@ void u32_event(const struct desk_packet *p) {
   default:
     break;
   }
+}
+void u32_event_release(const struct desk_packet *p)
+{
+  if (p->opcode==DESK_DROP_FILES && p->attachment_fd>=0)
+    u32_backend.gate(CIUKI_SYS_CLOSE,(DWORD)p->attachment_fd,0,0);
 }
 void u32_pump(void) {
   u32_session_pump();

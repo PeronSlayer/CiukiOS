@@ -12,6 +12,9 @@
 #include <ciuki/thinkpad_ec.h>
 #include <ciuki/power_source.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/bootstat.h>
+#pragma weak bootstat_begin
+#pragma weak bootstat_end
 extern void audio_ec_attach(void);
 
 struct large { uint32_t pages, physical; uint64_t reserved; };
@@ -209,9 +212,10 @@ static int provider_reserve(void)
 static int provider_activate(void) { return power_source_activate(POWER_SOURCE_ACPI); }
 static void provider_retire(bool uncertain) { power_source_release(POWER_SOURCE_ACPI, uncertain, uncertain ? -EIO : 0); }
 static void provider_publish(const struct ciuki_power_status *p) { power_source_publish_record(POWER_SOURCE_ACPI, p); }
+static void provider_sleep_request(void) { power_source_event(POWER_SOURCE_ACPI, 1, 0); }
 const struct fw_ops fw_kernel_ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, udelay, thread, lock, unlock, access,
     write_access, claim_port, sci, unsci, finish, provider_reserve, provider_activate, provider_retire, provider_publish,
-    run_clock100ns};
+    run_clock100ns, provider_sleep_request};
 static void com_pnp_thread(void *unused)
 {
     (void)unused;
@@ -220,9 +224,16 @@ static void com_pnp_thread(void *unused)
 static void inventory_thread(void *unused)
 {
     (void)unused;
-    ACPI_STATUS s = (g_boot.flags & (CBI_F_SAFE_MODE | CBI_F_HW_CHECK)) ?
+    /* G14: a skipped power class (bootstat.h class 5, boot flag bit 29)
+     * keeps the read-only inventory of safe mode; the power run is an
+     * activation the ASD agent can blame. */
+    bool power = !(g_boot.flags & (CBI_F_SAFE_MODE | CBI_F_HW_CHECK)) &&
+        !(g_boot.flags & (1u << (CBI_F_SKIP_SHIFT + BOOTSTAT_POWER)));
+    if (power && bootstat_begin) bootstat_begin(BOOTSTAT_POWER);
+    ACPI_STATUS s = !power ?
         fw_inventory_run(&fw_kernel_ops, g_boot.acpi_rsdp_phys) :
         fw_inventory_power_run(&fw_kernel_ops, g_boot.acpi_rsdp_phys);
+    if (power && bootstat_end) bootstat_end(BOOTSTAT_POWER);
     struct ciuki_firmware_page p = {.version = CIUKI_FIRMWARE_VERSION, .size = sizeof(p)};
     (void)firmware_inventory_page(&p);
     klog("[acpi] inventory status=%u devices=%u tables=%u peak=%u flags=%u power_owner=%u", s, p.total, p.table_count, p.peak_bytes, p.flags, fw_power.ownership);

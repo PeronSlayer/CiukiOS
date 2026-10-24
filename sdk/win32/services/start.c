@@ -77,6 +77,18 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
         if(v->flags&0x100){p->StandardInput=(void *)(uintptr_t)v->input;p->StandardOutput=(void *)(uintptr_t)v->output;p->StandardError=(void *)(uintptr_t)v->error;}
         if(v->title&&!unicode(l->services,(const char *)(uintptr_t)v->title,&p->WindowTitle,0))return STATUS_NO_MEMORY;
     }
+    /* Initial native-to-PE shell launch has no Win32 STARTUPINFO record.
+     * Never inherit this private fallback over an explicit CreateProcess
+     * startup (including an explicit startup without USESHOWWINDOW). */
+    if(!boot || boot->version!=3){
+        for(const char *q=environment;*q;q+=w32_strlen(q)+1){
+            static const char key[]="CIUKI_SHELL_SHOW=";
+            unsigned i=0;while(i<sizeof(key)-1 && q[i] && q[i]==key[i])i++;
+            if(i==sizeof(key)-1 && (q[i]=='1' || q[i]=='3' || q[i]=='7') && !q[i+1]){
+                p->WindowFlags|=1;p->ShowWindowFlags=(unsigned)(q[i]-'0');break;
+            }
+        }
+    }
 
     if (!unicode(l->services, exe, &p->ImagePathName,1) ||
         !unicode(l->services, command, &p->CommandLine,0) ||

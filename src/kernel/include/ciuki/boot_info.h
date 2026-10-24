@@ -36,7 +36,21 @@
 #define CBI_F_HW_CHECK         (1u << 13)
 /* Input policy selected by the loader's exact Armada E500 platform match. */
 #define CBI_F_INPUT_DETECTED   (1u << 14)
-#define CBI_F_DEFINED_MASK     0x00007FFFu
+/* G14 startup menu and recovery (docs/design/startup-recovery.md). The
+ * loader found the boot-status sector still "in progress": the previous
+ * start did not complete. */
+#define CBI_F_BOOT_FAILED      (1u << 15)
+#define CBI_F_STEP             (1u << 16) /* step-by-step confirmation used */
+#define CBI_F_CMD_ONLY         (1u << 17) /* command prompt only: Terminal, no shell */
+#define CBI_F_SAFE_STORAGE     (1u << 18) /* with SAFE_MODE: ATA and the disks stay on */
+#define CBI_F_SCANDISK         (1u << 19) /* ScanDisk scheduled for this start */
+#define CBI_F_SCANDISK_SKIP    (1u << 20) /* Esc at the loader's ScanDisk message */
+#define CBI_F_SCANDISK_THOROUGH (1u << 21)
+#define CBI_F_MENU_SHOWN       (1u << 22) /* the Startup menu was on screen */
+/* Bits 24-31: driver classes skipped this start (bootstat.h class bits). */
+#define CBI_F_SKIP_SHIFT       24u
+#define CBI_F_SKIP_MASK        (0xFFu << CBI_F_SKIP_SHIFT)
+#define CBI_F_DEFINED_MASK     0xFF7FFFFFu
 
 /* A normal boot keeps the screen quiet until the desktop takes it: no test
  * request, no safe mode, no L choice and a linear framebuffer. Every other

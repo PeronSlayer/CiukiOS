@@ -26,4 +26,9 @@ int du3_ui_progress(struct du3_connection *, uint32_t window, uint32_t generatio
 uint32_t du3_window_order(struct du3_connection *, uint32_t window,
     uint32_t generation, uint32_t flags, uint32_t after, uint32_t after_generation,
     uint32_t owner, uint32_t owner_generation);
+/* G11B: serial 0 / answer 1 registers this native window; for a power
+ * EVENT, answer 2 marks dequeue, 0 vetoes a query, 1 agrees/completes.
+ * Explicit UI-thread replies; no acknowledgement is hidden in du3_next. */
+uint32_t du3_power_reply(struct du3_connection *, uint32_t window,
+    uint32_t generation, uint32_t serial, uint32_t answer);
 #endif

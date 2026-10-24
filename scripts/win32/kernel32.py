@@ -111,16 +111,45 @@ def build_offline(out,base,flags):
     out=Path(out);obj=out/'offline-wsock.obj'
     subprocess.run(['clang',*flags,'-c',str(ROOT/'sdk/win32/offline/wsock.c'),'-o',str(obj)],check=True)
     nm=subprocess.run(['llvm-nm','--defined-only',str(obj)],capture_output=True,text=True,check=True).stdout
-    exports=dict(re.findall(r'\bT _([A-Za-z][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M))
+    exports=dict(re.findall(r'\bT _([A-Za-z_][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M))
     lines=['LIBRARY wsock32.dll','EXPORTS']
     for name,bytes_ in sorted(exports.items()):
         ordinal=stubs.ORDINALS['wsock32.dll'].get(name)
         lines.append(f'    {name}=_{name}@{bytes_}'+(f' @{ordinal}' if ordinal else ''))
     definition=out/'offline-wsock.def';definition.write_text('\n'.join(lines)+'\n')
+    resource=out/'winsock.rc'
+    resource.write_text((out/'generated/wsock32.rc').read_text().replace('CiukiOS placeholder wsock32.dll','CiukiOS native Winsock'))
+    subprocess.run(['llvm-rc','/fo',str(out/'winsock.res'),str(resource)],check=True)
+    imports=out/'winsock-ntdll.def'
+    imports.write_text('LIBRARY ntdll.dll\nEXPORTS\n LdrGetDllHandle@16\n LdrGetProcedureAddress@16\n')
+    subprocess.run(['llvm-dlltool','-m','i386','-k','-d',str(imports),'-l',str(out/'winsock-ntdll.lib')],check=True)
     image=out/'wsock32.dll'
     subprocess.run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/safeseh:no','/timestamp:0',
         '/incremental:no','/fixed','/base:'+hex(base),'/def:'+str(definition),'/out:'+str(image),
-        str(obj),str(out/'generated/wsock32.res'),str(out/'ntdll.lib')],check=True)
+        str(obj),str(out/'winsock.res'),str(out/'ntdll.lib'),str(out/'winsock-ntdll.lib')],check=True)
     raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0]
     return {'name':'wsock32.dll','path':'wsock32.dll','base':base,'size':struct.unpack_from('<I',raw,pe+80)[0],
+        'sha256':hashlib.sha256(raw).hexdigest(),'version':stubs.image_version(raw)}
+
+
+def build_winsock2(out,base,flags):
+    """Winsock 2 names share the wsock32 implementation and its process state."""
+    out=Path(out)
+    nm=subprocess.check_output(['llvm-nm','--defined-only',str(out/'offline-wsock.obj')],text=True)
+    names=sorted(dict(re.findall(r'\bT _([A-Za-z_][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M)))
+    # Wine's pinned ws2_32.spec: ordinals 10-12 differ from wsock32.
+    ordinals=dict(stubs.ORDINALS['wsock32.dll'])
+    ordinals.update(ioctlsocket=10,inet_addr=11,inet_ntoa=12)
+    lines=['LIBRARY ws2_32.dll','EXPORTS']
+    lines += [f'    {n}=wsock32.{n}'+(f' @{ordinals[n]}' if n in ordinals else '') for n in names]
+    definition=out/'winsock2.def';definition.write_text('\n'.join(lines)+'\n')
+    resource=out/'winsock2.rc'
+    resource.write_text((out/'generated/wsock32.rc').read_text().replace('CiukiOS placeholder wsock32.dll','CiukiOS Winsock 2 forwarders').replace('wsock32','ws2_32'))
+    subprocess.run(['llvm-rc','/fo',str(out/'winsock2.res'),str(resource)],check=True)
+    image=out/'ws2_32.dll'
+    subprocess.run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/safeseh:no',
+        '/timestamp:0','/incremental:no','/fixed','/base:'+hex(base),'/def:'+str(definition),
+        '/out:'+str(image),str(out/'winsock2.res')],check=True)
+    raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0]
+    return {'name':'ws2_32.dll','path':'ws2_32.dll','base':base,'size':struct.unpack_from('<I',raw,pe+80)[0],
         'sha256':hashlib.sha256(raw).hexdigest(),'version':stubs.image_version(raw)}

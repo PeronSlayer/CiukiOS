@@ -6,6 +6,17 @@ import subprocess
 import unittest
 ROOT=Path(__file__).resolve().parents[3]
 class Kernel32Files(unittest.TestCase):
+    def test_regional_settings_reader(self):
+        out=ROOT/'build/host/win32/regional';out.mkdir(parents=True,exist_ok=True)
+        program=out/'reader'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            str(ROOT/'tests/host/win32/regional_io_test.c'),'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        print(result.stdout,end='')
+
     def test_i386_fiber_and_apc_runtime(self):
         from tests.host.win32.adapter import build
         program=build.build_kernel32_runtime(ROOT/'build/host/win32/kernel32-i386')
@@ -27,6 +38,20 @@ class Kernel32Files(unittest.TestCase):
         result=subprocess.run([program],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS memory status edge matrix',result.stdout)
+
+    def test_system_power_status(self):
+        """G11: GetSystemPowerStatus over the Win32 system action (power_status_test.c)."""
+        out=ROOT/'build/host/win32/power-status';out.mkdir(parents=True,exist_ok=True)
+        program=out/'status'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL',
+            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            str(ROOT/'tests/host/win32/power_status_test.c'),
+            *[str(ROOT/'sdk/win32/kernel32'/n) for n in ('time.c','text.c')],'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS GetSystemPowerStatus',result.stdout)
 
     def test_local_time_views(self):
         """G1: Win32 and DOS views of the system zone agree (localtime_views_test.c)."""
@@ -58,14 +83,17 @@ class Kernel32Files(unittest.TestCase):
         self.assertIn('PASS file wrappers',result.stdout)
 
     def test_offline_facade(self):
-        out=ROOT/'build/host/win32/offline';out.mkdir(parents=True,exist_ok=True)
-        program=out/'offline'
+        # G26 replaces the former offline facade with a native socket bridge.
+        out=ROOT/'build/host/win32/winsock';out.mkdir(parents=True,exist_ok=True)
+        program=out/'winsock'
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL',
-            '-fsanitize=address,undefined','-fno-sanitize-recover=all','-I'+str(ROOT/'sdk/win32/include'),
-            str(ROOT/'tests/host/win32/offline_test.c'),str(ROOT/'sdk/win32/offline/wsock.c'),'-o',str(program)],check=True)
-        result=subprocess.run([program],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
+            '-fno-pie','-no-pie','-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            str(ROOT/'tests/host/win32/offline_test.c'),'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,
+            env=dict(os.environ,ASAN_OPTIONS='detect_stack_use_after_return=0'))
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertIn('PASS offline Winsock',result.stdout)
+        self.assertIn('PASS G26 Winsock',result.stdout)
 
     def test_profile_two_process_serialization(self):
         out=ROOT/'build/host/win32/profile-processes';out.mkdir(parents=True,exist_ok=True)

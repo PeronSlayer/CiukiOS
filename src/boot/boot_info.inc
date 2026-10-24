@@ -24,6 +24,16 @@
 %define CBI_F_DIAG_VERBOSE    (1 << 12) ; high-volume diagnostics, fw_cfg probes
 %define CBI_F_HW_CHECK        (1 << 13) ; H: bounded hardware check page
 %define CBI_F_INPUT_DETECTED  (1 << 14) ; exact E500 platform match
+; G14 startup menu and recovery (docs/design/startup-recovery.md).
+%define CBI_F_BOOT_FAILED     (1 << 15) ; boot-status sector still in progress
+%define CBI_F_STEP            (1 << 16) ; step-by-step confirmation
+%define CBI_F_CMD_ONLY        (1 << 17) ; command prompt only
+%define CBI_F_SAFE_STORAGE    (1 << 18) ; safe mode keeps the disks
+%define CBI_F_SCANDISK        (1 << 19) ; ScanDisk scheduled
+%define CBI_F_SCANDISK_SKIP   (1 << 20) ; Esc at the ScanDisk message
+%define CBI_F_SCANDISK_THOROUGH (1 << 21)
+%define CBI_F_MENU_SHOWN      (1 << 22)
+%define CBI_F_SKIP_SHIFT      24        ; bits 24-31: skipped driver classes
 %define CBI_A20_ALREADY_ON    1
 %define CBI_A20_INT15         2
 %define CBI_A20_KBC           3

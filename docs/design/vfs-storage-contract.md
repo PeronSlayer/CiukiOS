@@ -1247,3 +1247,90 @@ pending deletion retains the live file/identity for existing opens, rejects new
 opens and removes the name/chain on final close. A native rename changes the
 ancestry used by subsequent Win32 handle writes, truncate, section writeback
 and delete-on-close; System protection cannot be bypassed by retaining a handle.
+
+### fx-23 amendment: background I/O and the storage writer (2026-10-23)
+
+Trial evidence (T23, image f441c5bd, private records): during the fx-4b
+check of `UNIFIED.IMG` (27.7 MB, 26 s) the storage writer (P_DEVICE) used
+10–23 % of the CPU while the idle-class verifier itself barely registered;
+after the DOS launch the writer used 24–40 % with 1,200–1,500 device-budget
+overruns per 2 s and about 18,000 context switches per second, the ATA queue
+was empty, the boot log made no progress for 55 s, and Files waited 19.4 s
+for its window.
+
+Reference behaviour:
+
+- Windows 98 runs disk maintenance (ScanDisk, Disk Defragmenter,
+  Compression Agent) through Task Scheduler "while the computer is idle" and
+  can stop it when the computer is in use (Resource Kit ch. 10, "Using Task
+  Scheduler"; ch. 26, task configuration "how to run the program if the
+  computer is idle, is in use").
+- Windows NT-class systems lower I/O and memory priority, not only CPU,
+  for background work: "it is not sufficient to adjust the CPU scheduling
+  priority; even an idle CPU priority thread can easily interfere with system
+  responsiveness when it uses the disk and memory"
+  ([SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadpriority)).
+- Linux's idle I/O class "will only get disk time when no other program has
+  asked for disk I/O" ([ionice(1)](https://man7.org/linux/man-pages/man1/ionice.1.html)).
+- The Windows lazy writer runs on a timer ("spawns a process every second
+  called a lazy writer", [File Caching](https://learn.microsoft.com/en-us/windows/win32/fileio/file-caching)),
+  not on every cache event.
+
+CiukiOS rules from this amendment:
+
+1. **Background requests.** `struct vfs_request.background` marks idle-class
+   maintenance I/O (the DOS image check, the fx-17b free count). Its reads
+   rank after every other queued request (`blkreq.c rank`, the 100 ms age
+   promotion still bounds the wait), `fat_read_stream` queues no read-ahead
+   for it (the storage writer never reads at device priority on its
+   behalf), and the blocks it fills stay at the cold end of the LRU while its
+   hits are not promoted (drop-behind): a scan larger than the cache reuses
+   its own slots and leaves the foreground working set resident.
+2. **Writer wake.** The storage writer sleeps on `cache.writer_kick`, not on
+   the shared `cache.changed` event. It is kicked when write-back is requested
+   or becomes due now, and when a stream queues read-ahead whose window is not
+   already resident. Fills, unpins, reservation releases and completed writes
+   no longer wake it; future deadlines, the boot log and the census are found
+   by its 10 ms poll.
+3. **Free count yields.** A background free-count step runs under a
+   background request and is deferred by 20 ms while any foreground caller is
+   queued for that drive (`census_yields`).
+4. **Diagnostics.** The writer reports `[storage] writer_busy passes=…
+   kicks=… window_ms=…` when it ran more than 600 passes in a 2 s window
+   (the poll alone is about 200), and `[storage] vfs_hold_long drive=… ms=…
+   task=… op=… site=… waiters=…` once for each drive reservation still held
+   after 2 s (the release-time `vfs_hold` record is budgeted and never appears
+   for a hold that outlives the observation).
+
+Host evidence: `tests/host/dos/test_fx23_contention.py` (production
+cache/FAT/VFS: a Files listing every 2.5 MiB of a 6 MiB check through a
+2 MiB cache reads 0 sectors, 2,668 before; 0 writer read-ahead commands for
+the check, 178 before; 5,000 foreground fills wake a sleeping writer once,
+2,901 times before), `tests/host/fs/test_blkreq.c` (`background_readers`) and
+`tests/host/usb/storage_test.c` (the census step yields to a waiting caller).
+
+#### fx-23 follow-up: a refused publication step is not starved (2026-10-24)
+
+The ~50 s CREATE of the f441c5bd trial was a FAT transaction step
+(`transaction_guard_wait`) waiting for C: to have no reservation, no queued
+ticket and no in-flight reader at one instant (`guard_busy`), while ordinary
+ticketed C: operations kept overlapping. Its gate meanwhile refused every
+open-file read on C:. Rule from this follow-up:
+
+- When a step is refused, the drive's `gate_ticket` records the next ticket.
+  Tickets issued from then on are not admitted until the step has run. A
+  caller already holding drives and the owner of the drive's writer turn are
+  exempt, because the step may need that turn back.
+- `guard_busy` counts only the tickets issued before the gate. The step takes
+  the drive with an express reservation (no ticket, so its release advances no
+  queue) and then opens the gate. Ticket admission also requires the drive not
+  to be reserved.
+- A step never queues behind its own gate: it opens the gate before taking
+  a ticket (`guard_lock`, non-express entry) and before waiting for the
+  writer turn (`transaction_guard_resume`). The turn's holder may be queued
+  behind a gated ticket.
+
+Host evidence: `tests/host/dos/contention_test.c` section 4. With three
+back-to-back C: operation streams the stamp write waited the whole 4 s run
+before, and 523 ms after. `tests/host/fs/test_t23_holds.c` covers the
+turn-holder exemption.

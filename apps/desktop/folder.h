@@ -1,19 +1,19 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef CIUKI_DESKTOP_FOLDER_H
 #define CIUKI_DESKTOP_FOLDER_H
-#include "../files/model.h"
+#include "../files/operations.h"
 #include "../files/transfer.h"
 #include "../libdeskui/deskui.h"
 #define DESK_FOLDER "/Documents/Desktop"
 #define DESK_TRASH "/Documents/Trash"   /* the pre-G2 Trash folder: its items are migrated into C:\RECYCLED (RB_LEGACY_TRASH) */
 #define DESK_FOLDER_POLL_SLOTS (2u * FM_ENTRIES)
-enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY };
+enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY, DF_UNDO, DF_SHORTCUT, DF_PASTE_SHORTCUT, DF_PASTE_INTO };
 struct desk_folder {
     struct fm_model model;
     struct fm_job job;
     struct files_transfer *transfer;
     struct fm_model result;
-    int result_error, clipboard_job, dialog_window;
+    int result_error, clipboard_job, dialog_window, undo_job;
     /* G2 Recycle Bin: the delete awaiting its confirmation, the policy read for it,
      * the running bin job (RB op) and the full/empty state of the icon. */
     struct rb_policy policy; char **pending; unsigned pending_count, delete_flags;
@@ -35,6 +35,7 @@ struct desk_folder {
 struct desktop;
 struct desk_box;
 int desk_folder_init(struct desktop *, const struct fm_vfs *);
+int desk_folder_init_async(struct desktop *, const struct fm_vfs *);
 void desk_folder_destroy(struct desktop *);
 void desk_folder_service(struct desktop *);
 void desk_folder_rename(struct desktop *, int);

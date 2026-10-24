@@ -906,6 +906,10 @@ static void test_external_publication(void)
     driver.transmit=external_tx;driver.stop=external_stop;driver.link_state=external_link;driver.irq_enable=external_irq;
     struct pci_func pci={.bus=1,.dev=2,.fn=0,.vendor=0x8086,.device=0x100e};
     uint8_t address[6]={2,0,0,0,0,7};unsigned context=1;
+    kmutex_init(&registration_mutex);
+    CHECK(!net_power_suspend() && net_init()==-NET_EBUSY);
+    CHECK(!netif_publish_external(&pci,&driver,&context,address,7,true,external_fault) && !device_count);
+    CHECK(!net_power_resume());
     struct netif *d=netif_publish_external(&pci,&driver,&context,address,7,true,external_fault);
     CHECK(d && d==net_get(0) && net_count()==1 && d->external_owner && d->running);
     CHECK(!netif_publish_external(&pci,&driver,&context,address,8,true,external_fault));
@@ -943,10 +947,26 @@ static void test_external_power_barrier(void)
     memset(devices,0,sizeof(devices));device_count=0;worker=0;initialized=false;shutting_down=false;
     puts("PASS external netif under the power barrier: owner stop refusal, stop proof, idempotent retry, no publication after shutdown");
 }
+static void test_power_sleep(void)
+{
+    for (enum model_kind kind=M_RTL;kind<=M_NE;kind++) {
+        struct model h; struct netif *d=&devices[0]; model_setup(&h,d,kind);
+        shutting_down=false; CHECK(!model_attach(&h,d)); device_count=1;
+        unsigned pages=page_count, released=releases, irqs=irq_adds;
+        gen_t generation=d->generation; uint8_t *dma=d->dma;
+        CHECK(net_power_resume_ready() && !net_power_suspend());
+        CHECK(d->suspended && !d->running && d->dma==dma && page_count==pages && releases==released);
+        CHECK(!netif_poll(d) && !net_power_resume() && d->running && d->ready);
+        CHECK(d->generation==generation && d->dma==dma && page_count==pages && irq_adds==irqs);
+        CHECK(!net_power_suspend() && !net_power_resume());
+        CHECK(!netif_stop(d)); device_count=0;
+    }
+    puts("PASS G11B network: retained claims/rings/IRQ, admission gate, two suspend/resume cycles for RTL8139/e100/NE2000");
+}
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
-    test_media_options();
+    test_power_sleep(); test_media_options();
     test_external_publication();
     test_smi_budget();
     test_e100_irq();

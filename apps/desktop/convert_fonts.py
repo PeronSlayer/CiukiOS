@@ -10,7 +10,7 @@ compositor and libdeskui (apps/desktop/theme.c draws them).
   convert_fonts.py --prepare   rasterize (pinned SDK FreeType) and pin
   convert_fonts.py --check     verify sources and header (standard library)
 
-Character set: U+0020-U+007E, U+00A0-U+00FF, U+2022 and U+2026. Advances
+Character set: U+0020-U+007E, U+00A0-U+00FF and font_codes.h punctuation/arrows. Advances
 are FreeType's hinted advances rounded to whole pixels; no kerning. The
 conversions are Modified Versions under each font's licence (SIL OFL 1.1,
 no Reserved Font Name): assets/fonts/LICENSES.TXT and the OFL.txt files.
@@ -18,6 +18,7 @@ no Reserved Font Name): assets/fonts/LICENSES.TXT and the OFL.txt files.
 # SPDX-License-Identifier: MIT
 import hashlib
 import json
+import re
 import importlib.util
 from pathlib import Path
 import struct
@@ -27,7 +28,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 UP = ROOT / "assets/fonts/upstream"
-CODES = [*range(0x20, 0x7f), *range(0xa0, 0x100), 0x2022, 0x2026]
+EXTRA_CODES = [int(c, 16) for c in re.findall(r"0x[0-9a-f]+", (HERE / "font_codes.h").read_text().split("desk_font_extra_codes[] = {", 1)[1].split("};", 1)[0])]
+CODES = [*range(0x20, 0x7f), *range(0xa0, 0x100), *EXTRA_CODES]
 # (id, C name, source, licence file, pixel size, weight)
 FACES = [
     ("DESK_FONT_UI", "Inter 12", "inter/Inter[opsz,wght].ttf", "inter/OFL.txt", 12, 400),
@@ -78,7 +80,7 @@ def prepare():
     record = {"conversion": "Pinned SDK FreeType, normal grey hinting v35, ink-box crop, rounded advances",
               "freetype": ft.pin()["version"], "backend": ft.recipe(),
               "converter_sha256": sha((ROOT / "sdk/freetype/ui_raster.c").read_bytes()),
-              "codes": "U+0020-007E, U+00A0-00FF, U+2022, U+2026", "faces": {}}
+              "codes": CODES, "faces": {}}
     for ident, name, source, licence, size, weight in FACES:
         path = UP / source
         ascent, descent, glyphs, alpha = rasterize(binary, path, size, weight)
@@ -118,6 +120,7 @@ def check():
         raise ValueError("stale UI FreeType recipe; run convert_fonts.py --prepare")
     if sha((HERE / "ui_fonts.h").read_bytes()) != record["header_sha256"]:
         raise ValueError("stale UI fonts header; run convert_fonts.py --prepare")
+    if record.get("codes") != CODES: raise ValueError("stale UI font coverage")
     names = [f[0] for f in FACES]
     if sorted(record["faces"]) != sorted(names):
         raise ValueError("UI font face list changed")

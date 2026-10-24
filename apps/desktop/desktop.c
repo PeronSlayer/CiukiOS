@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "../files/operations.h"
 #include "desktop.h"
 #include <ciuki/present_abi.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
@@ -9,6 +10,10 @@
 #include "sound_storage.h"
 #include "media_notice.h"
 #include "settings_io.h"
+#include "users_worker.h"
+#include "shortcut_io.h"
+#include "schedsvc.h"
+#include "resources.h"
 #include "wallpaper_io.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
@@ -50,9 +55,21 @@
 #include <time.h>
 #include <unistd.h>
 static int screen_control(struct ciuki_screen_control *q)
-{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SCREEN,CU_PTR(q),0,0,0,0); }
+{
+#ifdef __i386__
+    return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SCREEN,CU_PTR(q),0,0,0,0);
+#else
+    (void)q;return -ENOSYS;
+#endif
+}
 static int monitor_power(int state)
-{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_DPMS,(uint32_t)state,0,0,0,0); }
+{
+#ifdef __i386__
+    return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_DPMS,(uint32_t)state,0,0,0,0);
+#else
+    (void)state;return -ENOSYS;
+#endif
+}
 static uint64_t monotonic(void)
 {
     struct timespec t;
@@ -156,9 +173,13 @@ static unsigned fifo_head, fifo_count;
 /* Input and completion descriptors use the f2-88c native wait. */
 /* f2-95: which deadline shortened the wait (the [desktop] loop record). */
 enum { PAUSE_IDLE, PAUSE_INPUT, PAUSE_FRAME, PAUSE_ANIMATION, PAUSE_TIMER, PAUSE_PING, PAUSE_CLOSE,
-       PAUSE_NOTIFY, PAUSE_HOVER, PAUSE_POWER, PAUSE_CACHE, PAUSE_REASONS };
+       PAUSE_NOTIFY, PAUSE_HOVER, PAUSE_POWER, PAUSE_CACHE, PAUSE_ACCESS, PAUSE_REASONS };
 static const char *const pause_names[PAUSE_REASONS]={"idle","input","frame","animation","timer","ping",
-    "close","notify","hover","power","cache"};
+    "close","notify","hover","power","cache","access"};
+/* G25 accessibility glue (access_desktop.c): the filters' timers (SlowKeys, hot-key holds, MouseKeys, time-out). */
+extern void desk_access_tick(struct desktop *) __attribute__((weak));
+extern uint64_t desk_access_wake(const struct desktop *, uint64_t) __attribute__((weak));
+extern void desk_access_settings_changed(struct desktop *) __attribute__((weak));
 static unsigned pause_reason;
 static void loop_deadline_for(uint64_t now,uint64_t deadline,uint64_t *wait,unsigned reason)
 {
@@ -177,9 +198,11 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
     reason=PAUSE_ANIMATION;
     if (d->animation.active)
         loop_deadline(now,d->animation.started+(d->animation.step+1)*25000000ull,&wait);
+    for(unsigned k=0;k<d->pointer_trail_count;k++)loop_deadline(now,d->pointer_trail[k].until,&wait);
     reason=PAUSE_TIMER;
+    if(d->shell && d->shell_caret_next)loop_deadline(now,d->shell_caret_next,&wait);
     loop_deadline(now,timer,&wait);
-    if (d->shell && !d->sh.gate) {
+    if (d->shell && !d->sh.gate && !d->power.state) {
         loop_deadline(now,d->saver_poll ? d->saver_poll : now+1000000000ull,&wait);
         if (d->saver_active && !d->monitor_off && d->saver_frame!=UINT64_MAX) loop_deadline(now,d->saver_frame,&wait);
     }
@@ -188,7 +211,7 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         const struct desk_client *c=&d->clients[i];
         if (c->channel<0 || !c->hello || (c->version==DESK_V3_VERSION && !c->window)) continue;
         if (!c->ping_pending && c->tx_count<DESK_TX_MAX) loop_deadline(now,c->next_ping_ns,&wait);
-        else if (c->ping_pending && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
+        else if (c->ping_pending && !c->ping_queued && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
     }
     if (d->shell && !d->power.state) {
         reason=PAUSE_CLOSE;
@@ -203,6 +226,8 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
             if (now>=n->started && now-n->started<160000000ull)
                 loop_deadline(now,n->started+((now-n->started)/8000000ull+1)*8000000ull,&wait);
         }
+        reason=PAUSE_ACCESS;
+        if (desk_access_wake) { uint64_t access=desk_access_wake(d,now); if (access) loop_deadline(now,access,&wait); }
         reason=PAUSE_HOVER;
         if (!d->sh.tooltip && d->sh.hover_since && d->sh.hover_target && !n->active &&
             !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open)
@@ -321,7 +346,8 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
     char fault[48];
     snprintf(fault,sizeof(fault),"--fault=%s",kind);
     char *argv[] = {"demo","--channel-fd=3",fault,gate ? "--test=crash-isolation" : NULL,NULL};
-    char *env[] = {"LC_ALL=C",d->tz_env[0] ? d->tz_env : "TZ=UTC0",NULL};
+    char language[20]; snprintf(language,sizeof(language),"LANG=%s",reg_locale(&d->sh.cfg.regional));
+    char *env[] = {language,d->tz_env[0] ? d->tz_env : "TZ=UTC0",NULL};
     struct ciuki_spawn_fd mapping = {pair[1],3};
     int i = -1;
     ciuki_pid_t pid = -1;
@@ -407,8 +433,8 @@ struct launch_job {
     int client, child, channel, child_fd;
     uint64_t click_ns, begin_ns, end_ns;
     struct desk_program program;
-    char *argv[LAUNCH_ARGV], *env[8];
-    char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX];
+    char *argv[LAUNCH_ARGV], *env[12];
+    char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX], language[20];
     struct ciuki_spawn_fd mapping[2];
     uint32_t mappings;
     int (*mark)(uint32_t, ciuki_pid_t, uint64_t);
@@ -516,8 +542,14 @@ static int launch_prepare(struct desktop *d, const struct desk_program *program,
     /* The Control Panel's keyboard layout, for libdeskui programs. */
     snprintf(job->keymap,sizeof(job->keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
     snprintf(job->tz,sizeof(job->tz),"%s",d->tz_env[0] ? d->tz_env : "TZ=UTC0");
-    char *env[]={"LC_ALL=C",job->tz,"HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
-    memcpy(job->env,env,sizeof(env));
+    snprintf(job->language,sizeof(job->language),"LANG=%s",reg_locale(&d->sh.cfg.regional));
+    char home[160], user[64], settings[160], profile[160];
+    snprintf(home,sizeof(home),"HOME=%s",d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents");
+    snprintf(user,sizeof(user),"USER=%s",d->sh.profile.name);
+    snprintf(settings,sizeof(settings),"CIUKI_SETTINGS=%s",d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE);
+    snprintf(profile,sizeof(profile),"CIUKI_PROFILE=%s",d->sh.profile.root);
+    const char *env[]={job->language,job->tz,home,"TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,user,settings,profile,NULL};
+    for (unsigned k=0;env[k];k++) if (launch_strings(job,&used,env[k],&job->env[k])) return E2BIG;
     job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};
     job->request=d->launch_request;
@@ -530,10 +562,12 @@ static void launch_bind(struct desktop *d, int index, const struct desk_program 
     snprintf(c->application,sizeof(c->application),"%s",program->name);
     c->program=kind;
     c->taskman=!strcmp(program->name,"tasks");
+    c->sysapp=!strcmp(program->name,"sysinfo") || !strcmp(program->name,"sysmon") || !strcmp(program->name,"schedtask") || !strcmp(program->name,"resmeter");
     c->gfxdemo=!strcmp(program->name,"gfxdemo");
     c->dosbox=!strcmp(program->name,"dosbox");
     c->mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
     c->awaiting_frame=desk_program_graphical(program->name);
+    c->initial_show=d->launch_show;
     c->launched_ns=monotonic();
     c->launch_input_ns=click_ns;
 }
@@ -662,10 +696,10 @@ static int launch_exited(uint32_t pid)
 static unsigned launch_service(struct desktop *d)
 {
     if (!launcher.started) return 0;
-    /* One completed job at a time, oldest sequence first: a single copy on
-     * the stack (an array of DESK_CLIENTS jobs exceeded the 4 KiB frame
-     * limit of the i686 build). */
-    struct launch_job one, *job=&one;
+    /* One completed job at a time, oldest sequence first. The input thread
+     * owns this scratch copy; command text must not consume its 4 KiB stack. */
+    static struct launch_job one; /* input-thread scratch; includes the bounded Run command */
+    struct launch_job *job=&one;
     unsigned count=0;
     for (;;) {
         pthread_mutex_lock(&launcher.lock);
@@ -748,6 +782,9 @@ static int tasks_verify(const struct desktop *d)
 /* Start menu and taskbar icons: the Tango store through icon_map.c. */
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
 static struct cfg_writer settings_writer;
+static struct users_worker user_worker;
+static int user_initial, user_switch_saving, user_default_loading, user_default_ready;
+static int links_profile_update(struct desktop *);
 static int settings_writer_started, verbose_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
 static int theme_read_pending;
@@ -927,38 +964,67 @@ static int mixer_events=-1;
 static uint64_t ec_candidate_ns;
 static struct ciuki_mixer_master ec_candidate_master;
 static int master_candidate_save(int fd);
-struct mixer_job { uint32_t serial; int fd; struct ciuki_mixer_master master; int save_only; };
+#include "mixer_job.h"
+static int mixer_line_save(int fd,struct ciuki_mixer_line *line)
+{
+    int error=ciuki_devctl(fd,MIXER_SET_LINE,line,sizeof(*line)) ? errno : 0;
+    if (!error && line->recording && !line->selected) {
+        int found=0;
+        for (unsigned i=1;i<=CIUKI_MIXER_MIC;i++) {
+            if (i==CIUKI_MIXER_MIDI) continue;
+            struct ciuki_mixer_line selected={.version=1,.size=sizeof(selected),.recording=1,.line=i};
+            if (ciuki_devctl(fd,MIXER_GET_LINE,&selected,sizeof(selected))) { error=errno; break; }
+            if (selected.selected) { *line=selected; found=1; break; }
+        }
+        if (!error && !found) error=EIO;
+    }
+    if (!error && line_preference_save(REG_DIRECTORY,line)) error=errno;
+    return error;
+}
 static int mixer_job_run(void *record, size_t n)
 {
     if (n!=sizeof(struct mixer_job)) return EINVAL;
     struct mixer_job job; memcpy(&job,record,n);
+    if (job.mask & ~0x7ffu) return EINVAL;
     int error=0;
-    if (!job.save_only) error=ciuki_devctl(job.fd,MIXER_SET_MASTER,&job.master,sizeof(job.master)) ? errno : 0;
-    if (!error) {
-        int saved=master_preference_save(REG_DIRECTORY,job.master.left,job.master.right,job.master.mute);
-        job.master.save_state=saved ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
-        job.master.save_error=saved ? -errno : 0;
+    if (job.mask & 1) {
+        if (!job.save_only) error=ciuki_devctl(job.fd,MIXER_SET_MASTER,&job.master,sizeof(job.master)) ? errno : 0;
+        if (!error) {
+            int saved=master_preference_save(REG_DIRECTORY,job.master.left,job.master.right,job.master.mute);
+            job.master.save_state=saved ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
+            job.master.save_error=saved ? -errno : 0;
+        }
     }
+    for (unsigned i=1;i<=5;i++) if (job.mask & (1u<<i)) {
+        uint16_t v=job.values[i-1];
+        struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=i>5 ? i-5 : i,.recording=i>5,
+            .left=v&127,.right=(v>>7)&127,.mute=(v>>14)&1,.selected=v>>15};
+        int e=mixer_line_save(job.fd,&line); if (!error) error=e;
+    }
+    struct ciuki_mixer_line recording;
+    if (mixer_record_line(&job,&recording)) { int e=mixer_line_save(job.fd,&recording); if (!error) error=e; }
     memcpy(record,&job,n); return error;
 }
-/* Volume Control requests (DESK_MIXER_SET): the desktop holds the delegated
- * /dev/mixer control handle (F4 contract, Volume and persistence); the kernel
- * validates the record and saves C:\\SYSTEM\\AUDIO.CFG; this worker saves
- * the authoritative System\\Audio registry preference with libreg. */
-#ifdef __i386__   /* the SDK target; host replays (x86-64) have no mixer device */
+#ifdef __i386__
 #include <ciuki/audio.h>
 #endif
 static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_t mute)
 {
     if (d->power.state) return -EBUSY;
-    struct ciuki_mixer_master m;
     if (d->mixer_fd<0) return -ENODEV;
-    memset(&m,0,sizeof(m)); m.version=1; m.size=sizeof(m);
-    if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m))) return -errno;
-    m.left=left; m.right=right; m.mute=mute; m.save_state=0; m.save_error=0; m.reserved=0;
     if (!settings_writer_started) return -EIO;
-    struct mixer_job job={.serial=++mixer_serial,.fd=d->mixer_fd,.master=m};
-    return cfg_writer_job(&settings_writer,&job,sizeof(job)) ? -errno : 0;
+    struct mixer_job job=mixer_pending;
+    job.fd=d->mixer_fd; job.mask|=1; job.save_only=0;
+    job.master=(struct ciuki_mixer_master){.version=1,.size=sizeof(job.master),.left=left,.right=right,.mute=mute};
+    return mixer_submit(&job);
+}
+static int mixer_line_apply(struct desktop *d,const struct ciuki_mixer_line *line)
+{
+    if (d->power.state) return -EBUSY;
+    if (d->mixer_fd<0 || !settings_writer_started) return -ENODEV;
+    struct mixer_job job=mixer_pending; job.fd=d->mixer_fd;
+    int error=mixer_pack_line(&job,line); if (error) return error;
+    return mixer_submit(&job);
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
 static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
@@ -990,13 +1056,17 @@ static void settings_load(struct desktop *d)
 {
     cfg_defaults(&d->sh.cfg);
     uint8_t *text; size_t n;
-    if (read_file(CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
+    if (read_file(d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
     int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
     free(text);
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
+    (void)pp_load(&d->sh.power_cfg,d->sh.cfg.extra);   /* G11: the power_* lines */
+    d->sh.power_meter_hidden=!d->sh.power_cfg.show_meter;
+    d->sh.power_disk_sent=CIUKI_POWER_UNKNOWN;   /* the first poll programs the drive timer, Never included */
+
 }
 static int (*audio_shutdown_wait)(struct desktop *);
-static int theme_poll_async(uint64_t now)
+static int theme_poll_async(struct desktop *d,uint64_t now)
 {
     static uint64_t next;
     static char text[CFG_TEXT_MAX]; size_t n; int error;
@@ -1007,11 +1077,17 @@ static int theme_poll_async(uint64_t now)
     if (!cfg_writer_read_result(&settings_writer,text,&n,&error)) return 0;
     theme_read_pending=0;
     if (error && error!=ENOENT) return 0;
-    char name[32]="";
-    if (!error && desk_settings_theme(text,n,name,sizeof(name))) name[0]=0;
-    const struct desk_theme *before=desk_theme;
-    if (!name[0] || desk_theme_use(name)) desk_theme_use(DESK_THEME_DEFAULT);
-    return desk_theme!=before;
+    static struct ciuki_settings incoming;
+    cfg_defaults(&incoming);
+    if(!error) (void)cfg_parse(&incoming,text,n);
+    int changed=strcmp(d->sh.cfg.theme,incoming.theme) || d->sh.cfg.document_icon!=incoming.document_icon || d->sh.cfg.recycle_icon!=incoming.recycle_icon || d->sh.cfg.pointer_scheme!=incoming.pointer_scheme || d->sh.cfg.desktop_color!=incoming.desktop_color || d->sh.cfg.appearance_set!=incoming.appearance_set ||
+        memcmp(&d->sh.cfg.appearance,&incoming.appearance,sizeof(incoming.appearance));
+    if(!changed) return 0;
+    strcpy(d->sh.cfg.theme,incoming.theme); d->sh.cfg.appearance=incoming.appearance;
+    d->sh.cfg.appearance_set=incoming.appearance_set; d->sh.cfg.desktop_color=incoming.desktop_color;
+    d->sh.cfg.pointer_scheme=incoming.pointer_scheme; d->sh.cfg.document_icon=incoming.document_icon; d->sh.cfg.recycle_icon=incoming.recycle_icon;
+    desk_shell_apply(d);
+    return 1;
 }
 static int settings_save(struct desktop *d)
 {
@@ -1019,7 +1095,9 @@ static int settings_save(struct desktop *d)
      * overwrite it with the pre-reload theme/wallpaper while its read waits. */
     if (settings_reload_pending || (d->sh.want_reload&1)) { d->sh.want_save=1; return 0; }
     static char text[CFG_TEXT_MAX];
-    size_t n=cfg_format(&d->sh.cfg,text,sizeof(text));
+    static struct ciuki_settings durable;
+    desk_preferences_persistent(d,&durable);
+    size_t n=cfg_format(&durable,text,sizeof(text));
     if (!n) { errno=ENOSPC; return -1; }
     if (!settings_writer_started) { errno=EIO; return -1; }
     int result=cfg_writer_try_submit(&settings_writer,text,n);
@@ -1029,11 +1107,13 @@ static int settings_save(struct desktop *d)
 static int media_busy(void);
 static void media_stop(void);
 static void master_candidate_latest(struct desktop *d);
+static int custom_busy(void);
+static void custom_stop(void);
 static int shutdown_wait(struct desktop *d)
 {
     master_candidate_latest(d); /* fx-9b: a press after the last mixer poll too */
     if (master_candidate_save(d->mixer_fd)) return 0; /* fx-9b: the last key change first */
-    if (media_busy()) return 0;
+    if (custom_busy() || media_busy()) return 0;
     if (desk_autoplay_busy(d)) return 0;
     if (desk_folder_busy(d)) return 0;
     if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
@@ -1316,7 +1396,7 @@ static void wallpaper_poll(struct desktop *d)
          * do not upload that same photograph a second time. */
         desktop_wait("wallpaper-compare");
         if (d->scanout_valid && d->sh.wall_valid && d->sh.background_valid && d->sh.wall &&
-            d->sh.wall_w==d->width && d->sh.wall_h==d->height && d->height>2*DESK_BAR)
+            d->sh.wall_w==d->width && d->sh.wall_h==d->height && d->height>(uint32_t)(2*DESK_BAR))
             changed=memcmp(d->sh.wall+(size_t)DESK_BAR*d->width,pixels+(size_t)DESK_BAR*d->width,
                            (size_t)d->width*(d->height-2*DESK_BAR)*4)!=0;
         desktop_wait("wallpaper-publish");
@@ -1369,6 +1449,7 @@ static void observers_prepare(struct desktop *d)
 }
 static void observers_close(struct desktop *d)
 {
+    custom_stop();
     media_stop();
     observer_close(&d->media_fd);
     observer_close(&d->network_fd);
@@ -1539,8 +1620,8 @@ static int master_candidate_save(int fd)
     if (ec_candidate<0 || ec_candidate==last_ec_preference) return 0;
     if (!settings_writer_started) return 0;
     if (cfg_writer_busy(&settings_writer)) return 1;
-    struct mixer_job job={.serial=++mixer_serial,.fd=fd,.master=ec_candidate_master,.save_only=1};
-    if (!cfg_writer_job(&settings_writer,&job,sizeof(job))) last_ec_preference=ec_candidate;
+    struct mixer_job job=mixer_pending; job.fd=fd; job.master=ec_candidate_master; job.save_only=1; job.mask|=1;
+    if (!mixer_submit(&job)) last_ec_preference=ec_candidate;
     return 1;
 }
 /* fx-9b: the kernel's current key-applied master becomes the candidate at
@@ -1749,36 +1830,44 @@ static void storage_poll(struct desktop *d, uint64_t now)
     (void)d; (void)now;
 #endif
 }
-static int run_command(struct desktop *d, char *line)
+static int run_submit(struct desktop *,const char *);
+static void links_service(struct desktop *);
+static int run_history_idle(void);
+static const char *run_environment(void *ctx,const char *name)
 {
-    /* "name arg..." or "/Programs/name arg...": spaces separate, double quotes group. */
-    char *words[8]; unsigned count=0;
-    for (char *p=line; *p && count<8;) {
-        while (*p==' ') p++;
-        if (!*p) break;
-        if (*p=='"') { words[count++]=++p; while (*p && *p!='"') p++; }
-        else { words[count++]=p; while (*p && *p!=' ') p++; }
-        if (*p) *p++=0;
-    }
-    if (!count) return 0;
-    const char *name=!strncmp(words[0],"/Programs/",sizeof("/Programs/")-1) ? words[0]+sizeof("/Programs/")-1 : words[0];
-    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
-        const char *args[6]; unsigned arguments=count-1<6 ? count-1 : 6;
-        for (unsigned a=0;a<arguments;a++) args[a]=words[a+1];
+    (void)ctx;
+    extern char **environ;
+    size_t n=strlen(name);
+    for (char **p=environ;p && *p;p++) if (!strncasecmp(*p,name,n) && (*p)[n]=='=') return *p+n+1;
+    if (!strcasecmp(name,"windir") || !strcasecmp(name,"SystemRoot")) return "C:\\WINDOWS";
+    if (!strcasecmp(name,"COMSPEC")) return "C:\\DOS\\COMMAND.COM";
+    return NULL;
+}
+static __attribute__((noinline)) int run_command(struct desktop *d,char *line)
+{
+    desk_run_trim(line);
+    char expanded[DESK_RUN_MAX],target[260],arguments[DESK_RUN_MAX];
+    int error=desk_run_expand(line,expanded,sizeof(expanded),run_environment,NULL);
+    if (!error) error=desk_run_split(expanded,target,arguments);
+    if (error) { desk_run_result(d,line,error); return error; }
+    char native[FM_PATH];
+    if (target[0] && target[1]==':' && !fm_posix_path(native,target) && strlen(native)<sizeof(target)) strcpy(target,native);
+    const char *name=!strncasecmp(target,"/Programs/",10) ? target+10 : target;
+    for (unsigned k=0;k<d->program_count;k++) if (!strcasecmp(d->programs[k].name,name)) {
+        name=d->programs[k].name;
+        char *args[6]; int count=fm_launch_arguments(arguments,args,6);
+        if (count<0) { desk_run_result(d,line,count); return count; }
         desk_launch_origin(d,DESK_LAUNCH_RUN,name);
-        int pid=arguments ? desk_task_launch_args(d,name,args,arguments) : desk_task_launch(d,name,NULL);
-        int error=pid<0 ? -pid : 0;
-        if (pid<0) {
-            char text[160]; snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(error),error);
-            desk_shell_message(d,"Run",text,1);
-        } else if (!pid) snprintf(d->notice,sizeof(d->notice),"Starting %.32s",name); /* fx-8: completes later */
-        else snprintf(d->notice,sizeof(d->notice),"Started %.32s (PID %d)",name,pid);
+        snprintf(d->launch_request.run_command,sizeof(d->launch_request.run_command),"%s",line);
+        int pid=count ? desk_task_launch_args(d,name,(const char *const *)args,(unsigned)count) : desk_task_launch(d,name,NULL);
+        if (pid>0) desk_run_remember(d,line);
+        if (pid) desk_run_result(d,line,pid<0 ? pid : 0);
+        if (!pid) snprintf(d->notice,sizeof(d->notice),"Starting %.32s",name);
         return pid;
     }
-    char text[200];
-    snprintf(text,sizeof(text),"CiukiOS cannot find '%.60s'.\nType the name of a program in /Programs.",words[0]);
-    desk_shell_message(d,"Run",text,1);
-    return -1;
+    int result=run_submit(d,line);
+    if (result<0) desk_run_result(d,line,result);
+    return result;
 }
 /* Shared by --launch and the Programs menu: a bare launch carries no payload. */
 static void startup_launch(struct desktop *d,const char *name)
@@ -1813,6 +1902,10 @@ static int launch_pending(struct desktop *d)
 }
 /* Strong native bindings are linked by build_desktop.py; host shell replays
  * keep their existing isolated platform. */
+/* G30: the scheduled-tasks service is linked by build_desktop.py (schedsvc.c); host replays run without it. */
+__attribute__((weak)) int desk_schedsvc_start(struct desktop *d) { (void)d; return 0; }
+__attribute__((weak)) void desk_schedsvc_tick(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_resources_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_v3_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_v3_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 __attribute__((weak)) void desk_v3_fixture_tick(struct desktop *d) { (void)d; }
@@ -1835,11 +1928,14 @@ __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,
 __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
 static int power_request(int action)
 {
+    if (!run_history_idle()) { errno=EBUSY; return -1; }
     int ready=desk_w32_shutdown();
     if(ready<=0){errno=ready<0 ? -ready : EBUSY;return -1;}
     return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
 }
 static int power_state(void) { return ciuki_power(CIUKI_POWER_QUERY); }
+static int power_cancel_standby(void) { return ciuki_power(CIUKI_POWER_CANCEL_STANDBY); }
+static int power_standby(void) { return ciuki_power(CIUKI_POWER_STANDBY); }   /* G11 */
 static int power_alive(struct desktop *d, uint32_t pid)
 {
     /* One syscall snapshot per loop, shared by all targets. Disconnecting
@@ -1877,7 +1973,93 @@ static void power_prepare(struct desktop *d)
         if (!fstat(fd,&st) && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) close(fd);
     }
 }
+static void user_logoff(struct desktop *d)
+{
+    user_initial=0; user_switch_saving=user_default_loading=user_default_ready=0;
+    desk_logon_open(d,1);
+    d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
+    d->sh.want_run[0]=0;
+}
+static void user_service(struct desktop *d)
+{
+    struct desk_shell *s=&d->sh;
+    if (s->user_want && !user_worker.job.started) {
+        int e=users_begin(&user_worker,&s->user_request,d->wake,d->wake_ctx);
+        if (!e) { s->user_want=0; s->user_pending=1; users_erase(s->user_request.password,USERS_PASSWORD); }
+        else { s->user_want=0; desk_logon_result(d,&s->users,e); }
+    }
+    struct users_view v; int e;
+    if (users_poll(&user_worker,&v,&e)) {
+        if (user_default_loading) {
+            user_default_loading=0; user_initial=0; s->user_pending=0;
+            if (e) { s->user_choose=0; desk_logon_result(d,&s->users,e); }
+            else user_default_ready=1;
+        } else if (user_initial) {
+            user_initial=0; s->user_pending=0;
+            if (!e) s->users=v;
+            if (e || (v.flags&USERS_LOGON)) {
+                desk_logon_open(d,1);
+                if (e) desk_logon_result(d,&s->users,e);
+            } else desk_logon_done(d);
+        } else desk_logon_result(d,&v,e);
+    }
+    if (!s->user_choose) return;
+    if (s->user_choose==2 && !user_default_ready) {
+        if (!user_worker.job.started) {
+            struct users_request q={.operation=USERS_DEFAULT};
+            int e=users_begin(&user_worker,&q,d->wake,d->wake_ctx);
+            if (e) { s->user_choose=0; desk_logon_result(d,&s->users,e); }
+            else { user_default_loading=1; s->user_pending=1; }
+        }
+        return;
+    }
+    if (s->user_choose==1 && !s->users.authenticated) return;
+    if (!user_switch_saving) {
+        if (settings_save(d)) {
+            s->user_choose=0;
+            snprintf(s->user_status,sizeof(s->user_status),"Current settings could not be saved. Try again.");
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+            return;
+        }
+        user_switch_saving=1;
+    }
+    if (launcher_inflight() || (settings_writer_started && cfg_writer_busy(&settings_writer)) || desk_folder_busy(d)) return;
+    /* The shortcut worker retains a complete snapshot until its current scan
+     * is over; update its profile only at the next worker boundary. */
+    struct user_profile old=s->profile;
+    users_profile(&s->profile,s->user_choose==1 ? s->user_request.name : "",s->user_choose==1 ? s->users.authenticated : 0,s->users.flags);
+    if (!links_profile_update(d)) { s->profile=old; return; }
+    if (settings_writer_started) { cfg_writer_stop(&settings_writer); settings_writer_started=0; }
+    int (*run_job)(void *,size_t)=settings_writer.run_job;
+    memset(&settings_writer,0,sizeof(settings_writer));
+    settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx; settings_writer.run_job=run_job;
+    desk_folder_destroy(d);
+    settings_reload_pending=settings_reload_request=settings_reload_wallpaper=theme_read_pending=0;
+    s->cfg=user_worker.settings;
+    d->pictures_exists=!!s->profile.root[0] || d->pictures_exists;
+    s->icon_count=0; desk_shell_apply(d);
+    int error=d->autoplay_fs ? desk_folder_init_async(d,d->autoplay_fs) : -ENOSYS;
+    settings_writer_started=!cfg_writer_start(&settings_writer,s->profile.settings,s->profile.temporary);
+    wallpaper_load(d); wallpaper_update(d);
+    d->v3_links_force|=DESK_LINKS_SCAN;
+    desk_logon_done(d); user_switch_saving=user_default_ready=user_initial=0;
+    if (error) desk_shell_notify_error(d,"Desktop folder unavailable",error);
+    if (!settings_writer_started) desk_shell_notify_error(d,"Profile settings worker unavailable",EIO);
+    desk_sound(d,SOUND_LOGON);
+}
 /* Serves the requests that shell.c raised while handling input. */
+static void input_settings_apply(struct desktop *d)
+{
+    static int delay=-1,speed=-1;
+    if(delay==d->sh.cfg.repeat_delay && speed==d->sh.cfg.repeat_speed)return;
+    struct ciuki_keyboard_settings s={1,sizeof(s),(unsigned)d->sh.cfg.repeat_delay,(unsigned)d->sh.cfg.repeat_speed};
+    if(ciuki_devctl(d->input,INPUT_KEYBOARD_SET,&s,sizeof(s))) {
+        snprintf(d->notice,sizeof(d->notice),"Keyboard settings: error %d",errno);
+    }
+    delay=d->sh.cfg.repeat_delay;speed=d->sh.cfg.repeat_speed;
+}
+int ciuki_win32_shell_launch(const struct desk_launch_record *);
+#include "customize_runtime.inc"
 static void shell_service(struct desktop *d)
 {
     struct desk_shell *sh=&d->sh;
@@ -1886,32 +2068,61 @@ static void shell_service(struct desktop *d)
         sh->power_poll_ns = d->now_ns + 1000000000ull;
         struct ciuki_power_status status;
         if (!ciuki_power_status(&status)) (void)desk_shell_power_update(d,&status);
+        /* G11: cached EVENTS and QUERY (no firmware call), then the drive
+         * timer of the current power source when it changed. */
+        struct ciuki_power_events events;
+        int events_ok=!ciuki_power_events(&events), query=ciuki_power(CIUKI_POWER_QUERY);
+        desk_shell_power_events(d,events_ok ? &events : NULL,query);
+        uint32_t disks=pp_timer(&sh->power_cfg,&sh->power_summary,PP_DISKS);
+        if (disks!=sh->power_disk_sent && !sh->gate) {
+            struct ciuki_power_policy policy={.disk_seconds=disks};
+            int r=ciuki_power_policy(&policy);
+            sh->power_disk_sent=disks;   /* sent once per value; refusals are kernel records */
+            fprintf(stderr,"[desktop] power policy disk_seconds=%u result=%d\n",disks,r ? -errno : 0);
+        }
     }
     desktop_wait("mixer-result");
     struct mixer_job job; size_t job_size; int job_error;
     if (settings_writer_started && cfg_writer_job_result(&settings_writer,&job,&job_size,&job_error)) {
         if (job_size!=sizeof(job)) job_error=EIO;
-        if (!job_error && job.master.save_state==CIUKI_MIXER_SAVED)
+        if ((job.mask & 1) && !job_error && job.master.save_state==CIUKI_MIXER_SAVED)
             last_ec_preference=ciuki_master_pack(job.master.left,job.master.right,job.master.mute);
         if (job_error) desk_shell_notify_error(d,"Volume change failed",job_error);
-        else if (job.master.save_state==CIUKI_MIXER_UNSAVED)
+        else if ((job.mask & 1) && job.master.save_state==CIUKI_MIXER_UNSAVED)
             desk_shell_notify_error(d,"Volume applied but not saved",(int)job.master.save_error);
-        if (!job_error && !job.save_only) desk_sound(d,SOUND_VOLUME);
+        if (!job_error && (!job.save_only || (job.mask & ~1u))) desk_sound(d,SOUND_VOLUME);
+        if (job.serial==mixer_serial) mixer_pending.mask=0;
         if (job.serial == mixer_serial && !sh->volume_drag && !sh->want_mixer) sh->want_reload|=4;
     }
     int save_error;
     desktop_wait("settings-save-result");
     if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
         desk_shell_notify_error(d,"Settings not saved",save_error);
+        if (sh->user_gate && user_switch_saving) {
+            sh->user_choose=0; user_switch_saving=0;
+            snprintf(sh->user_status,sizeof(sh->user_status),"Current settings could not be saved. Try again.");
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        }
     }
+    if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=sh->want_power_force=sh->want_standby=0; sh->want_reload&=~1; sh->want_run[0]=0; }
+    if (d->power.state) {
+        links_service(d);
+        if (run_history_idle()) desk_power_tick(d);
+        return;
+    }
+    user_service(d);
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
-    if (d->power.state) { desk_power_tick(d); return; }
+        custom_service(d);
+        if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
+        desk_power_tick(d);return;
     desktop_wait("folder-service"); desk_folder_service(d);
+    custom_service(d);
     if (sh->want_power) {
-        int action=sh->want_power; sh->want_power=0;
+        int action=sh->want_power, force=sh->want_power_force; sh->want_power=sh->want_power_force=0;
         if (d->session.state) return;   /* G3: the programs are being asked already */
         if (settings_save(d)) { /* still try: settings are a convenience */ }
         desk_session_begin(d,action);   /* G3: ask every program; power only when all agreed */
+        if (force && d->session.state) d->session.force=1;   /* G11 alarm "Force" */
         return;
     }
     if (sh->want_programs) {
@@ -1940,31 +2151,45 @@ static void shell_service(struct desktop *d)
             settings_reload_wallpaper=0;
         } else {
             int old_tray_width = desk_shell_tray_box(d).w;
+            int old_bar_edge=sh->cfg.taskbar_edge,old_bar_size=sh->cfg.taskbar_size;
+            int old_bar_top=sh->cfg.taskbar_top,old_bar_hide=sh->cfg.taskbar_autohide,old_start_small=sh->cfg.start_small;
             char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
-            memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
+            memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); snprintf(old_theme,sizeof(old_theme),"%s",cfg_effective_theme(&sh->cfg));   /* G25: high contrast changes the theme in force */
             int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
             uint32_t old_colour=sh->cfg.desktop_color;
+            struct appearance old_appearance=sh->cfg.appearance; int old_appearance_set=sh->cfg.appearance_set, old_pointer=sh->cfg.pointer_scheme, old_document=sh->cfg.document_icon, old_recycle=sh->cfg.recycle_icon;
             uint16_t confirmed = sh->cfg.display_mode;
+            sh->recent_serial++;
             cfg_defaults(&sh->cfg);
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
             sh->cfg.display_mode = confirmed;
             desk_saver_config(d);
+            desk_shell_power_config(d);   /* G11: Control Panel's power_* lines */
+
             /* Explicit desktop Refresh also updates the launch inventory;
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
             int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || settings_reload_wallpaper;
-            int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
+            int visual=image_changed || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_mode!=sh->cfg.wallpaper_mode ||
+            int appearance_changed=old_document!=sh->cfg.document_icon || old_recycle!=sh->cfg.recycle_icon || old_pointer!=sh->cfg.pointer_scheme || old_appearance_set!=sh->cfg.appearance_set || memcmp(&old_appearance,&sh->cfg.appearance,sizeof(old_appearance));
+            int visual=appearance_changed || image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
                        old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
             if (visual) {
                 /* A wallpaper-only request leaves the retained desktop
                  * untouched until its complete replacement is ready. */
-                if (strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                if (strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                if (appearance_changed || strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
                     desktop_wait("theme-apply"); sh->icon_count=0; desk_shell_apply(d);
                 }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
             }
+            if (old_bar_edge!=sh->cfg.taskbar_edge || old_bar_size!=sh->cfg.taskbar_size ||
+                old_bar_top!=sh->cfg.taskbar_top || old_bar_hide!=sh->cfg.taskbar_autohide) desk_shell_geometry(d);
+            else if (old_start_small!=sh->cfg.start_small) desk_shell_custom_updated(d);
+            sh->custom_refresh=1;
             desk_shell_tray_damage(d,old_tray_width);
+            if (desk_access_settings_changed) desk_access_settings_changed(d);   /* G25: the filters and the pointer scheme follow the file */
             settings_reload_wallpaper=0;
         }
     }
@@ -1996,6 +2221,8 @@ static void shell_service(struct desktop *d)
     if (media_worker.rescan) media_read(d);
     media_poll(d);
     desktop_wait("autoplay-service"); desk_autoplay_service(d);
+    desk_schedsvc_tick(d);
+    desk_resources_poll(d);
     desktop_wait("autoplay-done");
     sh->want_reload=0;
     wallpaper_poll(d);
@@ -2013,6 +2240,7 @@ static void shell_service(struct desktop *d)
         memcpy(line,sh->want_run,sizeof(line)); sh->want_run[0]=0;
         desktop_wait("run-command"); run_command(d,line);
     }
+    if (!sh->gate) links_service(d); /* submit new Run/Browse work before sleeping */
     desktop_wait("shell-done");
 }
 __attribute__((weak)) int desk_startup_begin(int skip) { (void)skip; return -ENOSYS; }
@@ -2066,7 +2294,7 @@ static int link_read(struct desktop *d, const char *path, struct desk_launch_rec
     uint8_t *bytes=malloc(DESK_LINK_BYTES+1); if (!bytes) { fclose(f); return -ENOMEM; }
     size_t n=fread(bytes,1,DESK_LINK_BYTES+1,f); int bad=ferror(f);
     if (fclose(f)) bad=1;
-    int result=bad || n>DESK_LINK_BYTES || !desk_link_decode(bytes,(unsigned)n,record) ? -EINVAL : 0;
+    int result=bad || n>DESK_LINK_BYTES || fm_link_decode(bytes,(unsigned)n,path,record) ? -EINVAL : 0;
     free(bytes); return result;
 }
 /* f2-95: the shortcut scan walks the Start Menu, the Windows desktop, /Games
@@ -2090,6 +2318,7 @@ struct links_scan {
     struct desk_link_entry *out; struct link_stamp *stamps; unsigned cap, count, budget;
     const struct desk_link_entry *previous; const struct link_stamp *previous_stamps; unsigned previous_count;
     unsigned stats, reads;
+    char programs[USERS_PATH];
 };
 /* 1 directory, 0 regular file, -1 anything else or gone. */
 static int link_entry_kind(const char *file, const struct dirent *entry, struct link_stamp *stamp, struct links_scan *s)
@@ -2141,6 +2370,9 @@ static void links_directory(struct links_scan *s, const char *path, unsigned des
 static int links_list(struct links_scan *s)
 {
     s->count=0;
+    if (s->programs[0] && strcmp(s->programs,links_roots[0])) {
+        s->budget=128; links_directory(s,s->programs,0,s->cap/2,3);
+    }
     for (unsigned r=0;r<sizeof(links_roots)/sizeof(*links_roots);r++) {
         s->budget=links_budget[r];
         links_directory(s,links_roots[r],links_on_desktop[r],r ? s->cap : s->cap/2,links_depth[r]);
@@ -2171,15 +2403,59 @@ struct links_worker {
     uint64_t scanned_ns;                       /* f2-95: last completed scan, 0 = none yet */
     unsigned scans, game_scans, stats, reads;  /* f2-95: totals for tests and diagnostics */
     char source[260];
+    char profile_programs[USERS_PATH];
+    int edit_requested, edit_busy, edit_done, edit_result;
+    char edit_source[260];
+    struct desk_launch_record edit_record;
+    unsigned char icon_valid[DESK_LINKS], scratch_icon_valid[DESK_LINKS];
+    uint32_t icons[DESK_LINKS][DESK_SHORTCUT_PIXELS], scratch_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+    int run_requested, run_busy, run_done, run_result;
+    char run_command[DESK_RUN_MAX];
+    int history_requested, history_busy, history_done, history_error;
+    char history_save[DESK_RUN_MAX];
+    struct desk_run_history history, history_work;
+    int browse_requested, browse_busy, browse_done, browse_error;
+    char browse_path[260];
+    struct du_file_entry browse_entries[DU_FILE_ENTRIES];
+    unsigned browse_count;
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
 static struct links_worker *links_worker;
+static int links_profile_update(struct desktop *d)
+{
+    struct links_worker *w=links_worker;
+    if (!w) return 1;
+    pthread_mutex_lock(&w->mutex);
+    if (w->scanning || w->launch_requested || w->launch_busy || w->save_requested || w->save_busy || w->edit_requested || w->edit_busy || w->edit_done) { pthread_mutex_unlock(&w->mutex); return 0; }
+    snprintf(w->profile_programs,sizeof(w->profile_programs),"%s",d->sh.profile.programs);
+    w->count=0; w->scanned_ns=0; w->scan_requested=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex);
+    d->v3_link_count=0;
+    return 1;
+}
+/* Render-owned snapshot: worker writes never race a paint using these pixels. */
+static unsigned char links_icon_valid[DESK_LINKS];
+static uint32_t links_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+static int run_history_idle(void)
+{
+    struct links_worker *w=links_worker; if (!w) return 1;
+    pthread_mutex_lock(&w->mutex);
+    int idle=!w->run_requested && !w->run_busy && !w->run_done &&
+        !w->history_requested && !w->history_busy && !w->history_done && !w->desktop->sh.run_save_count;
+    pthread_mutex_unlock(&w->mutex); return idle;
+}
 static void links_scan_once(struct links_worker *w, int games)
 {
     struct links_scan s={.out=w->scratch,.stamps=w->scratch_stamps,.cap=DESK_LINKS,
         .previous=w->published,.previous_stamps=w->published_stamps,.previous_count=w->count};
+    pthread_mutex_lock(&w->mutex);
+    snprintf(s.programs,sizeof(s.programs),"%s",w->profile_programs);
+    pthread_mutex_unlock(&w->mutex);
     int count=links_list(&s);
+    memset(w->scratch_icon_valid,0,sizeof(w->scratch_icon_valid));
+    for(unsigned k=0;k<s.count;k++)
+        w->scratch_icon_valid[k]=(unsigned char)desk_shortcut_icon_load(&w->scratch[k].launch,w->scratch_icons[k]);
     unsigned removed=w->games_removed;
     for(unsigned g=1;games && g<=CIUKI_DOSVM_GAME_COUNT;g++){
         struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
@@ -2192,30 +2468,77 @@ static void links_scan_once(struct links_worker *w, int games)
     w->count=count>0 && count<=(int)DESK_LINKS ? (unsigned)count : 0;
     memcpy(w->published,w->scratch,w->count*sizeof(*w->published));
     memcpy(w->published_stamps,w->scratch_stamps,w->count*sizeof(*w->published_stamps));
+    memcpy(w->icon_valid,w->scratch_icon_valid,sizeof(w->icon_valid));
+    memcpy(w->icons,w->scratch_icons,w->count*sizeof(*w->icons));
     w->scanned_ns=monotonic(); w->scanning=0;
     w->scans++; w->game_scans+=!!games; w->stats+=s.stats; w->reads+=s.reads;
     desk_wake(w->desktop);
     pthread_mutex_unlock(&w->mutex);
+}
+static int open_with_record(const char *path,struct desk_launch_record *record)
+{
+    if (!path || path[0]!='/' || strchr(path,'"')) return -EINVAL;
+    memset(record,0,sizeof(*record)); strcpy(record->label,"Open With");
+    strcpy(record->target,"/Programs/files"); record->show=1;
+    int n=snprintf(record->arguments,sizeof(record->arguments),"\"--file-action=%u:%s\"",FILES_OPEN_WITH,path);
+    return n<0 || (unsigned)n>=sizeof(record->arguments) ? -E2BIG : 0;
 }
 static void *links_thread(void *arg)
 {
     struct links_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->mutex);
-        while (!w->scan_requested && !w->launch_requested && !w->save_requested) pthread_cond_wait(&w->changed,&w->mutex);
+        while (!w->scan_requested && !w->launch_requested && !w->save_requested && !w->edit_requested && !w->run_requested && !w->history_requested && !w->browse_requested) pthread_cond_wait(&w->changed,&w->mutex);
         int launch=w->launch_requested, games=0; char path[260];
+        int history=w->history_requested;
+        int run=!history && w->run_requested,browse=!history && !run && w->browse_requested;
         unsigned save=w->save_requested,game=w->save_game;
-        if (save) { w->save_requested=0; w->save_busy=1; }
+        int edit=w->edit_requested;
+        if(edit){w->edit_requested=0;w->edit_busy=1;}
+        else if (save) { w->save_requested=0; w->save_busy=1; }
+        else if (run) { w->run_requested=0; w->run_busy=1; }
+        else if (history) { w->history_requested=0; w->history_busy=1; }
+        else if (browse) { w->browse_requested=0; w->browse_busy=1; }
         else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
         else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
-        if (save) {
+        if(edit){
+            /* Re-read the source before replacement: stale or deleted links
+             * fail explicitly and are never silently recreated. */
+            struct desk_launch_record *old=malloc(sizeof(*old));
+            int result=old ? link_read(NULL,w->edit_source,old) : -ENOMEM;
+            free(old);
+            if(!result)result=desk_shortcut_write(w->edit_source,&w->edit_record);
+            pthread_mutex_lock(&w->mutex);
+            w->edit_result=result;w->edit_done=1;w->edit_busy=0;w->scan_requested=1;
+            desk_wake(w->desktop);pthread_mutex_unlock(&w->mutex);
+        }else if (save) {
             struct ciuki_dosvm_command command={.version=CIUKI_DOSVM_VERSION,.size=sizeof(command)};
             command.launch.game=game;
             int result=ciuki_dosvm(save,&command) ? -errno : 0;
             pthread_mutex_lock(&w->mutex);
             w->save_result=result; w->save_command=command; w->save_operation=save;
             w->save_done=1; w->save_busy=0; pthread_mutex_unlock(&w->mutex);
+        } else if (run) {
+            struct desk_launch_record *r=malloc(sizeof(*r)); int result=-ENOMEM;
+            if (r) result=desk_run_resolve(fm_native_vfs(),w->run_command,run_environment,NULL,r);
+            if (!result) result=ciuki_win32_shell_launch(r);
+            free(r);
+            pthread_mutex_lock(&w->mutex);
+            w->run_result=result; w->run_busy=0; w->run_done=1;
+            desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
+        } else if (history) {
+            int error=desk_run_history_load(&w->history_work);
+            if (!error && w->history_save[0]) error=desk_run_history_add(&w->history_work,w->history_save);
+            pthread_mutex_lock(&w->mutex);
+            w->history=w->history_work; w->history_save[0]=0; w->history_busy=0; w->history_done=1; w->history_error=error;
+            desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
+        } else if (browse) {
+            unsigned count=0; int error=du_posix_lister(NULL,w->browse_path,w->browse_entries,DU_FILE_ENTRIES,&count);
+            if (error==-ENOTDIR) { struct stat st; if (!stat(w->browse_path,&st) && S_ISREG(st.st_mode)) error=1; }
+            pthread_mutex_lock(&w->mutex);
+            w->browse_count=count; w->browse_error=error; w->browse_busy=0; w->browse_done=1;
+            desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
         } else if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
             int result=-ENOMEM;
@@ -2225,7 +2548,18 @@ static void *links_thread(void *arg)
                 snprintf(r->directory,sizeof(r->directory),"%s",path);
                 char *slash=strrchr(r->directory,'/');if(slash)*slash=0;
                 result=0;
-            }else if(r)result=link_read(NULL,path,r);
+            }else if(r && launch==3) {
+                result=fm_launch_resolve(fm_native_vfs(),path,NULL,r);
+                if (result==1) result=0; /* folder is a Files launch record */
+                if (!strncmp(path,"/system/settings/open-",22)) (void)unlink(path);
+            }else if(r) {
+                result=fm_launch_resolve(fm_native_vfs(),path,NULL,r);
+                if (result==1) result=0;
+            }
+            if (r && result==-ENOEXEC && launch!=2) {
+                char unresolved[260]; snprintf(unresolved,sizeof(unresolved),"%s",r->target[0]?r->target:path);
+                result=open_with_record(unresolved,r);
+            }
             if (!result) result=ciuki_win32_shell_launch(r);
             free(r);
             pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; desk_wake(w->desktop); pthread_mutex_unlock(&w->mutex);
@@ -2253,7 +2587,11 @@ static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsign
     pthread_mutex_lock(&w->mutex);
     unsigned n=w->count<cap ? w->count : cap;
     int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
+    same=same && !memcmp(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid)) &&
+        !memcmp(links_icons,w->icons,n*sizeof(*links_icons));
     if (!same) memcpy(out,w->published,n*sizeof(*out));
+    memcpy(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid));
+    memcpy(links_icons,w->icons,n*sizeof(*links_icons));
     links_request(w,d,monotonic());
     pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
 }
@@ -2261,6 +2599,63 @@ static int link_cached(struct desktop *d,const char *source,struct desk_launch_r
 {
     for (unsigned k=0;k<d->v3_link_count;k++) if (!strcmp(source,d->v3_links[k].source)) { *out=d->v3_links[k].launch; return 0; }
     return -ENOENT;
+}
+static int drop_snapshot(struct desktop *d)
+{
+    /* Channel attachments are read-only surface grants, never file fds.
+     * Serialize the shell-owned list and release the writable mapping
+     * before publication so a queued drop has independent immutable bytes. */
+    const struct sh_dnd *g=&d->sh.dnd;
+    if (!g->count || g->count>DESK_DRAG_ITEMS) return -1;
+    unsigned bytes=2;
+    for (unsigned k=0;k<g->count;k++) {
+        size_t n=strlen(g->paths[k]);
+        if (!n || n>=FM_PATH || g->paths[k][0]!='/' || !desk_utf8_valid((const uint8_t *)g->paths[k],(unsigned)n)) return -1;
+        if (strchr(g->paths[k],'\\') || strchr(g->paths[k],':')) return -1;
+        const char *part=g->paths[k]+1;
+        while (*part) {
+            const char *end=strchr(part,'/'); size_t len=end ? (size_t)(end-part) : strlen(part);
+            if (!len || (len==1 && part[0]=='.') || (len==2 && part[0]=='.' && part[1]=='.')) return -1;
+            if (!end) break;
+            part=end+1;
+        }
+        bytes+=(unsigned)n+2;
+    }
+    unsigned rows=(bytes+4+4095)/4096;
+    int fd=ciuki_surface_create(1024,rows,CIUKI_SURFACE_XRGB8888);
+    if (fd<0) return -1;
+    uint8_t *out=ciuki_surface_map(fd,PROT_READ|PROT_WRITE);
+    if (!out || out==MAP_FAILED) { close(fd); return -1; }
+    desk_put32(out,bytes); memcpy(out+4,"X\n",2); unsigned at=6;
+    for (unsigned k=0;k<g->count;k++) {
+        size_t n=strlen(g->paths[k]);
+        out[at++]=g->types && g->types[k]=='D' ? 'D' : 'F';
+        memcpy(out+at,g->paths[k],n); at+=(unsigned)n; out[at++]='\n';
+    }
+    if (munmap(out,rows*4096)) { close(fd); return -1; }
+    return fd;
+}
+static const uint32_t *link_icon_cached(struct desktop *d,const char *source,unsigned size)
+{
+    if(size!=16 && size!=32)return NULL;
+    for(unsigned k=0;k<d->v3_link_count;k++)if(!strcmp(source,d->v3_links[k].source))
+        return links_icon_valid[k] ? links_icons[k]+(size==32 ? 16*16 : 0) : NULL;
+    return NULL;
+}
+static int link_save_async(struct desktop *d,const char *source,const struct desk_launch_record *record)
+{
+    if(!source || !record || !desk_launch_valid(record))return -EINVAL;
+    unsigned k=0;for(;k<d->v3_link_count;k++)if(!strcmp(source,d->v3_links[k].source))break;
+    if(k==d->v3_link_count)return -ENOENT;
+    struct links_worker *w=links_worker;
+    if(!w || pthread_mutex_trylock(&w->mutex))return -EBUSY;
+    int result=0;
+    if(w->edit_requested || w->edit_busy || w->edit_done)result=-EBUSY;
+    else {
+        snprintf(w->edit_source,sizeof(w->edit_source),"%s",source);w->edit_record=*record;w->edit_requested=1;
+        pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->mutex);return result;
 }
 static int link_launch_async(struct desktop *d,const struct desk_launch_record *record)
 {
@@ -2273,6 +2668,29 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
+static int run_submit(struct desktop *d,const char *command)
+{
+    (void)d;
+    if (!command || strlen(command)>=DESK_RUN_MAX) return -E2BIG;
+    struct links_worker *w=links_worker; if (!w) return -ENOSYS;
+    pthread_mutex_lock(&w->mutex); int result=0;
+    if (w->run_requested || w->run_busy || w->run_done) result=-EBUSY;
+    else { strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
+    pthread_mutex_unlock(&w->mutex); return result;
+}
+static int shell_open_path(struct desktop *d,const char *path)
+{
+    (void)d;
+    if (!path || strlen(path)>=260 || (path[0]!='/' && !(path[0] && path[1]==':') &&
+        strncmp(path,"http://",7) && strncmp(path,"https://",8))) return -EINVAL;
+    struct links_worker *w=links_worker;
+    if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
+    int e=0;
+    if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
+    else { strcpy(w->source,path); w->launch_requested=3; pthread_cond_signal(&w->changed); }
+    pthread_mutex_unlock(&w->mutex); return e;
+}
+extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
 static int install_program(struct desktop *d,const char *path)
 {
     (void)d;
@@ -2299,10 +2717,13 @@ static void links_start(struct desktop *d)
     if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
     w->desktop=d;
     w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
+    fm_registry_exchange=desk_w32_exchange;
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
     links_worker=w;
-    d->install_program=install_program;
+    d->install_program=install_program; d->open_path=shell_open_path;
+    fm_registry_exchange=desk_w32_exchange;
     d->v3_links_list=links_snapshot; d->v3_link_read=link_cached; d->v3_launch=link_launch_async;
+    d->v3_link_save=link_save_async;d->v3_link_icon=link_icon_cached;
 }
 static void links_service(struct desktop *d)
 {
@@ -2326,9 +2747,42 @@ static void links_service(struct desktop *d)
         w->save_game=d->sh.save_game; w->save_requested=d->sh.save_op; d->sh.save_op=0;
         pthread_cond_signal(&w->changed);
     }
-    int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
+    int edit_done=w->edit_done,edit_result=w->edit_result;w->edit_done=0;
+    int completed=w->completed, result=w->result; w->completed=0;
+
+    int run_done=w->run_done,run_result=w->run_result;
+    char command[DESK_RUN_MAX]; command[0]=0;
+    if (run_done) {
+        strcpy(command,w->run_command); w->run_done=0;
+        if (run_result>=0) desk_run_remember(d,command);
+    }
+    int history_error=0;
+    if (w->history_done) { desk_run_history_ready(d,&w->history); history_error=w->history_error; w->history_done=0; }
+    if (!w->run_requested && !w->run_busy && !w->history_requested && !w->history_busy &&
+        (d->sh.run_history_request || d->sh.run_save_count)) {
+        w->history_requested=1; d->sh.run_history_request=0;
+        w->history_save[0]=0;
+        if (d->sh.run_save_count) {
+            strcpy(w->history_save,d->sh.run_saves[0]); d->sh.run_save_count--;
+            memmove(d->sh.run_saves,d->sh.run_saves+1,d->sh.run_save_count*sizeof(d->sh.run_saves[0]));
+        }
+        pthread_cond_signal(&w->changed);
+    }
+    if (w->browse_done) {
+        desk_run_browse_ready(d,w->browse_path,w->browse_entries,w->browse_count,w->browse_error); w->browse_done=0;
+    }
+    if (d->sh.run && d->sh.run->browse_pending && !w->browse_requested && !w->browse_busy) {
+        strcpy(w->browse_path,d->sh.run->browse_path); w->browse_requested=1; d->sh.run->browse_pending=0; pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->mutex);
+    if(edit_done){
+        d->v3_links_force|=DESK_LINKS_SCAN;d->v3_links_next=0;
+        if(edit_result<0)desk_shell_message(d,"Shortcut Properties","The shortcut could not be saved. Check that the file is still available and writable.",1);
+    }
     if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+    if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
+    if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);
 }
 static void shell_setup(struct desktop *d, int gate)
 {
@@ -2336,7 +2790,7 @@ static void shell_setup(struct desktop *d, int gate)
         desk_w32_start(d); links_start(d); d->v3_lease=win32_lease; d->v3_lease_poll=desk_w32_presenter_poll;
         d->v3_restart=win32_restart;
     }
-    d->launch=launch_program; d->first_frame=first_frame_record; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
+    d->launch=launch_program; d->first_frame=first_frame_record; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply; d->mixer_line=mixer_line_apply;
     d->autoplay_fs=fm_native_vfs(); d->autoplay_preference=autoplay_preference; d->media_sound=media_sound;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
@@ -2344,11 +2798,13 @@ static void shell_setup(struct desktop *d, int gate)
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     terminate_authority=d->authority_fd;
     d->power_request=power_request; d->power_state=power_state; d->power_prepare=power_prepare; d->power_alive=power_alive;
+    d->power_standby=power_standby;
+    d->power_cancel_standby=power_cancel_standby;
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     observers_prepare(d);
-    d->mixer_set=mixer_apply;
+    d->mixer_set=mixer_apply; d->mixer_line=mixer_line_apply;
     d->joystick_control=desktop_joystick_control;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
@@ -2364,6 +2820,8 @@ static void shell_setup(struct desktop *d, int gate)
     scan_programs(d);
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
+    users_profile(&d->sh.profile,"",0,0);
+    d->logoff=user_logoff;
     if (!gate) settings_load(d);
     if (!gate) startup_stage("settings_read");
     struct stat pictures;
@@ -2375,19 +2833,37 @@ static void shell_setup(struct desktop *d, int gate)
         if (result) desk_shell_notify_error(d,"Desktop folder unavailable",result);
         settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx;
         settings_writer.run_job=mixer_job_run;
+        settings_writer_started=!cfg_writer_start(&settings_writer,d->sh.profile.settings,d->sh.profile.temporary);
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
+#ifdef __i386__
+        /* The native bootstrap owns file-worker lifetime. Host models attach
+         * storage adapters separately and never write the guest's root paths. */
+        int custom_error=custom_prepare(d);
+        if (custom_error) desk_shell_notify_error(d,"Shell worker unavailable",custom_error);
+#endif
         int autoplay_error=desk_autoplay_prepare(d);
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
+        int schedule_error=desk_schedsvc_start(d);
+        if (schedule_error) desk_shell_notify_error(d,"Task Scheduler unavailable",schedule_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
-    if (!gate) desktop_watchdog_start(d);
+    if (!gate) {
+        /* Keep the ordinary first desktop frame when logon is disabled;
+         * hold input only until the worker has read the optional policy. */
+        user_initial=1; d->sh.user_gate=-1; d->sh.user_previous_focus=d->focus;
+        d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
+        desktop_watchdog_start(d);
+    }
     /* fx-8: ordinary desktops spawn on the launcher worker. */
     if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
+extern void desk_recovery_init(struct desktop *, int, int) __attribute__((weak));
+extern void desk_recovery_start(struct desktop *) __attribute__((weak));
 int main(int argc, char **argv)
 {
+    int safe_mode = 0, terminal_shell = 0;
     startup_begin=monotonic(); startup_stage("entry");
 #ifdef __i386__
     static struct ciuki_devices_info devices;
@@ -2416,6 +2892,8 @@ int main(int argc, char **argv)
             victim = argv[a]+9;
         else if (test && !strncmp(argv[a],"--cycles=",9)) cycles = number(argv[a]+9,100);
         else if (!strncmp(argv[a],"--launch=",9) && argv[a][9] && !launch) launch = argv[a]+9;
+        else if (!strcmp(argv[a],"--safe")) safe_mode=1;               /* G14: Safe mode */
+        else if (!strcmp(argv[a],"--shell=terminal")) terminal_shell=1; /* G14: Command prompt only */
         else if (fullscreen_test && !strncmp(argv[a],"--launch-game=",14) && startup_game_index<0) {
             for (unsigned g=0;g<DESK_GAME_COUNT;g++) if (!strcmp(argv[a]+14,desk_games[g].title)) startup_game_index=(int)g;
             if (startup_game_index<0) return 2;
@@ -2438,7 +2916,9 @@ int main(int argc, char **argv)
     uint32_t *portrait = malloc(DESK_PORTRAIT_SIZE*DESK_PORTRAIT_SIZE*4);
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
-    desk_init(d,&ops,info.width,info.height); du_clip_bind(desk_clip_local,d); d->display=display; d->input=input;
+    desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->drop_snapshot=drop_snapshot;
+    du_clip_bind(desk_clip_local,d);
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
     d->time_ns=monotonic;
     d->screen_control=screen_control; d->monitor_power=monitor_power; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
@@ -2460,8 +2940,15 @@ int main(int argc, char **argv)
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (du_completion_init(&desktop_completion)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
-    int firstboot_pages=gate?0:desk_firstboot(d);
+    if (desk_recovery_init) desk_recovery_init(d,safe_mode,terminal_shell);
+    int firstboot_pages=gate || terminal_shell ? 0 : desk_firstboot(d);
     shell_setup(d,gate);
+    if (!gate && !test) {
+        char *spool_argv[] = {"/System/printspool",NULL};
+        char *spool_env[] = {"PATH=/Programs",NULL};
+        if(ciuki_spawn(spool_argv[0],spool_argv,spool_env,NULL,0,0)<0)
+            fprintf(stderr,"desktop: background print service unavailable (errno=%d)\n",errno);
+    }
     if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
     if(firstboot_pages&(1u<<FB_DISPLAY))desk_task_launch_args(d,"control",(const char *const[]){"--panel=display"},1);
@@ -2469,6 +2956,7 @@ int main(int argc, char **argv)
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) startup_launch(d,launch);
+    if (!gate && desk_recovery_start) desk_recovery_start(d);
     /* Channels and input now share a blocking native poll wait. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);
     for (int i=0; i<demo_count; i++) if (spawn_demo(d,demos[i],0) < 0) fprintf(stderr,"desktop: demo spawn failed\n");
@@ -2513,7 +3001,10 @@ int main(int argc, char **argv)
                 desktop_time_refresh(d);
                 desk_shell_clock_damage(d,previous);
             }
-            if (!d->power.state) { desktop_wait("shell-tick"); desk_shell_tick(d); desk_links_refresh(d); links_service(d); }
+            if (!d->power.state) {
+                desktop_wait("shell-tick"); desk_shell_tick(d); desk_links_refresh(d); links_service(d);
+                if (desk_access_tick) desk_access_tick(d);
+            }
         }
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;
@@ -2662,7 +3153,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_DISPLAY); display_poll(d);
         if (!gate && d->inputs) startup_stage("first_input_handled");
         desktop_stage(STALL_THEME);
-        if (d->shell && !gate && !d->power.state && !(d->sh.want_reload&1) && theme_poll_async(now)) {
+        if (d->shell && !gate && !d->power.state && !(d->sh.want_reload&1) && theme_poll_async(d,now)) {
             snprintf(d->sh.cfg.theme,sizeof(d->sh.cfg.theme),"%s",desk_theme->name);
             desk_theme_changed(d); d->sh.wall_valid=0; wallpaper_update(d);
         }
@@ -2677,6 +3168,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_SHELL);
         if (d->sh.want_reload&1) desktop_input_pending();
         shell_service(d);
+        if(d->shell && !gate)input_settings_apply(d);
         if (d->tasks_test && d->tasks_stage==6 && d->tasks_checkpoint && tasks_verify(d)) {
             d->tasks_stage=DESK_TASKS_DONE; input_dirty=1;
         }

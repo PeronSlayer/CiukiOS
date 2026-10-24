@@ -148,6 +148,126 @@ static void test_audio_settings_flush(void)
     quiesce_error=0; assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"ASNQNQP")); /* durable: not again */
     puts("PASS power runtime fx-9b: audio settings flush before the storage flush, failure tolerated, repeated only while storage is not durable");
 }
+/* G11 (docs/design/power-policy.md): the drive timer through a scripted
+ * ATA backend, the standby qualification, the EVENTS counters. */
+static unsigned g11_fixed, g11_refuse, g11_calls;
+static uint32_t g11_seconds;
+int ata_standby_timer_all(uint32_t seconds, struct ata_standby_result *out)
+{
+    uint32_t applied; (void)ata_standby_count(seconds, &applied);
+    g11_calls++; g11_seconds = seconds;
+    *out = (struct ata_standby_result){0, 0, applied, 0};
+    for (unsigned i = 0; i < g11_fixed; i++) {
+        if (i < g11_refuse) { out->refused++; if (!out->error) out->error = -95; }
+        else out->disks++;
+    }
+    return (int)g11_fixed;
+}
+static bool g11_resume, g11_capable;
+static int g11_standby_result, g11_standbys;
+static bool g11_nested;
+bool power_devices_resume_ready(void) { return g11_resume; }
+static bool g11_can_standby(void *ctx) { (void)ctx; return g11_capable; }
+static int g11_standby(void *ctx) { (void)ctx; g11_standbys++;
+    if (g11_nested) {
+        assert(power_syscall(CIUKI_POWER_STANDBY)==-EBUSY);
+        assert(power_syscall(CIUKI_POWER_CANCEL_STANDBY)==-EBUSY);
+        assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY);
+        assert(power_syscall(CIUKI_POWER_REBOOT)==-EBUSY);
+    }
+    return g11_standby_result; }
+static unsigned g11_cancels;
+static int g11_cancel(void *ctx) { (void)ctx;g11_cancels++;return 0; }
+static void g11_provide(enum power_source_kind kind, bool sleep)
+{
+    power_source_release(source.provider, false, 0);
+    const struct power_source_ops ops = {.soft_off=provider_off, .can_standby=sleep ? g11_can_standby : NULL,
+                                         .standby=sleep ? g11_standby : NULL, .cancel_standby=g11_cancel};
+    assert(!power_source_reserve(kind, &ops) && !power_source_activate(kind));
+}
+static void test_g11(void)
+{
+    /* ATA/ATAPI-6 8.14 IDLE Count: 5 s units to 240, then 30 min units to
+     * 251 (5 h 30 min), always rounded up and clamped. */
+    static const uint32_t in[] = {0, 1, 5, 6, 60, 1200, 1201, 1800, 1801, 3600, 18000, 19800, 99999};
+    static const uint8_t count[] = {0, 1, 1, 2, 12, 240, 241, 241, 242, 242, 250, 251, 251};
+    static const uint32_t applied[] = {0, 5, 5, 10, 60, 1200, 1800, 1800, 3600, 3600, 18000, 19800, 19800};
+    for (unsigned i = 0; i < sizeof(in)/sizeof(*in); i++) {
+        uint32_t a = 1; assert(ata_standby_count(in[i], &a) == count[i] && a == applied[i]);
+    }
+    /* Standby qualification: provider, firmware capability, device resume. */
+    reset(); g11_resume = g11_capable = false; g11_standbys = 0;
+    assert(power_source_standby_reason() == CIUKI_POWER_STANDBY_NO_FIRMWARE);
+    assert(!(power_syscall(CIUKI_POWER_QUERY) & CIUKI_POWER_CAN_STANDBY));
+    assert(power_syscall(CIUKI_POWER_STANDBY) == -ENOTSUP && strstr(last, "standby refused reason=2") && !stages);
+    g11_provide(POWER_SOURCE_APM, true);
+    assert(power_source_standby_reason() == CIUKI_POWER_STANDBY_NO_FIRMWARE); /* no 5310h capability */
+    g11_capable = true;
+    assert(power_source_standby_reason() == CIUKI_POWER_STANDBY_NO_RESUME);
+    assert(power_syscall(CIUKI_POWER_STANDBY) == -ENOTSUP && !g11_standbys);
+    g11_resume = true;
+    assert(power_source_standby_reason() == CIUKI_POWER_STANDBY_AVAILABLE);
+    assert(power_syscall(CIUKI_POWER_QUERY) == (3 | CIUKI_POWER_CAN_STANDBY));
+    g11_nested=true; g11_standby_result = 0; assert(power_syscall(CIUKI_POWER_STANDBY) == 0 && g11_standbys == 1 && !stages);
+    assert(!power_syscall(CIUKI_POWER_CANCEL_STANDBY) && g11_cancels==1);
+    g11_nested=false; g11_standby_result = -EIO; assert(power_syscall(CIUKI_POWER_STANDBY) == -EIO && g11_standbys == 2);
+    desktop.pid = 7; assert(power_syscall(CIUKI_POWER_STANDBY) == -EPERM && g11_standbys == 2); desktop.pid = 42;
+    /* After the orderly stop nothing can stand by. */
+    assert(power_syscall(CIUKI_POWER_OFF) == -EIO && !strcmp(order, "SNQP"));
+    assert(!(power_syscall(CIUKI_POWER_QUERY) & CIUKI_POWER_CAN_STANDBY));
+    assert(power_syscall(CIUKI_POWER_STANDBY) == -EBUSY && g11_standbys == 2);
+    reset(); power_source_release(POWER_SOURCE_ACPI, false, 0);
+    assert(power_source_standby_reason() == CIUKI_POWER_STANDBY_NO_PROVIDER);
+    /* APM event counters: boot-monotonic, APM only, active provider only. */
+    reset(); g11_provide(POWER_SOURCE_APM, false);
+    struct power_source_counters before, after; power_source_counters(&before);
+    static const uint16_t events[] = {1, 2, 9, 10, 5, 8, 3, 4, 11, 6, 12, 7, 0x0200};
+    for (unsigned i = 0; i < sizeof(events)/sizeof(*events); i++) power_source_event(POWER_SOURCE_APM, events[i], 0);
+    power_source_event(POWER_SOURCE_ACPI, 5, 0);
+    power_source_counters(&after);
+    assert(after.sleep_requests - before.sleep_requests == 4 && after.battery_low - before.battery_low == 1 &&
+           after.critical - before.critical == 1 && after.resumes - before.resumes == 3 &&
+           after.status_changes - before.status_changes == 2);
+    g11_provide(POWER_SOURCE_APM, false); /* a new reservation keeps the counts */
+    power_source_counters(&before); assert(!memcmp(&before, &after, sizeof(before)));
+    struct ciuki_power_events ev; memset(&ev, 0xa5, sizeof(ev));
+    disk_seconds = CIUKI_POWER_UNKNOWN; power_events_fill(&ev);
+    assert(ev.sleep_requests == after.sleep_requests && ev.battery_low == after.battery_low && ev.critical == after.critical &&
+           ev.resumes == after.resumes && ev.status_changes == after.status_changes &&
+           ev.standby_reason == CIUKI_POWER_STANDBY_NO_FIRMWARE && ev.disk_seconds == CIUKI_POWER_UNKNOWN && !ev.reserved);
+    /* POLICY: validated record, every fixed disk, refusals counted. */
+    struct ciuki_power_policy pol = {.version = CIUKI_POWER_POLICY_VERSION, .size = sizeof(pol), .disk_seconds = 1500};
+    struct ciuki_power_policy bad = pol; bad.version = 2; assert(power_policy_apply(&bad) == -EINVAL);
+    bad = pol; bad.size = 28; assert(power_policy_apply(&bad) == -EINVAL);
+    bad = pol; bad.reserved = 1; assert(power_policy_apply(&bad) == -EINVAL);
+    bad = pol; bad.disk_seconds = 19801; assert(power_policy_apply(&bad) == -EINVAL);
+    assert(!g11_calls);
+    g11_fixed = 0; assert(power_policy_apply(&pol) == -ENODEV && disk_seconds == CIUKI_POWER_UNKNOWN);
+    g11_fixed = 2; g11_refuse = 1;
+    assert(power_policy_apply(&pol) == 0 && pol.disks == 1 && pol.refused == 1 && pol.applied_seconds == 1800 &&
+           pol.error == -95 && g11_seconds == 1500 && disk_seconds == 1800 && strstr(last, "policy disk_seconds=1500 applied=1800"));
+    g11_refuse = 2; pol.disk_seconds = 0;
+    assert(power_policy_apply(&pol) == -95 && !pol.disks && pol.refused == 2 && disk_seconds == 1800);
+    g11_refuse = 0; assert(power_policy_apply(&pol) == 0 && pol.disks == 2 && disk_seconds == 0);
+    power_events_fill(&ev); assert(ev.disk_seconds == 0);
+    /* GetSystemPowerStatus values of the record (SYSTEM_POWER_STATUS). */
+    struct power_source_win32 w;
+    reset(); power_source_release(POWER_SOURCE_ACPI, false, 0); acpi_record_valid = false;
+    power_source_win32_status(&w); assert(w.ac == 255 && w.battery_flag == 255 && w.percent == 255 && w.seconds == UINT32_MAX);
+    g11_provide(POWER_SOURCE_APM, false);
+    struct power_source_status apm = {.ac = 0, .percent = 78, .seconds = 5100, .battery_flags = 1, .units = 2,
+        .battery = {{1, 78, 5100, 1}, {0, POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN, 0x10}}};
+    power_source_publish(POWER_SOURCE_APM, &apm);
+    power_source_win32_status(&w); assert(w.ac == 0 && w.battery_flag == 1 && w.percent == 78 && w.seconds == 5100);
+    apm.ac = 2; apm.battery[0] = (struct power_source_battery){1, 4, 300, 4}; power_source_publish(POWER_SOURCE_APM, &apm);
+    power_source_win32_status(&w); assert(w.ac == 0 && w.battery_flag == 6 && w.percent == 4 && w.seconds == 300);
+    apm.ac = 1; apm.battery[0] = (struct power_source_battery){1, 40, 9000, 8}; power_source_publish(POWER_SOURCE_APM, &apm);
+    power_source_win32_status(&w); assert(w.ac == 1 && w.battery_flag == 8 && w.percent == 40 && w.seconds == UINT32_MAX);
+    apm.units = 1; apm.battery[0] = (struct power_source_battery){0, POWER_SOURCE_UNKNOWN, POWER_SOURCE_UNKNOWN, 0x10};
+    power_source_publish(POWER_SOURCE_APM, &apm);
+    power_source_win32_status(&w); assert(w.ac == 1 && w.battery_flag == 128 && w.percent == 255);
+    puts("PASS power runtime G11: ATA standby count encoding, standby reasons (provider, firmware, device resume), CAN_STANDBY, STANDBY authority and stop latch, APM event counters, EVENTS record, POLICY validation and refusals, SYSTEM_POWER_STATUS");
+}
 int main(void)
 {
     test_audio_settings_flush();
@@ -182,5 +302,6 @@ int main(void)
     puts("PASS power runtime: authority, query, flush refusal, quiesce refusal, one ACPI/APM soft-off path after the stopped latch, retained diagnostics, reboot");
     test_setup_authority();
     test_repeated_requests();
+    test_g11();
     return 0;
 }

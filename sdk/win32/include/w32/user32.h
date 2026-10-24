@@ -147,6 +147,7 @@ typedef struct {
 #define WS_DLGFRAME 0x00400000u
 #define WS_THICKFRAME 0x00040000u
 #define WS_EX_TOPMOST 8u
+#define WS_EX_CONTEXTHELP 0x400u   /* G15: the "?" caption button (dialogs, no minimise/maximise) */
 #define WS_EX_TOOLWINDOW 128u
 #define WS_EX_CLIENTEDGE 512u
 #define WS_EX_STATICEDGE 0x20000u
@@ -218,6 +219,8 @@ uint16_t W32API TileWindows(HWND, UINT, const RECT *, UINT, const HWND *);
 UINT W32API ArrangeIconicWindows(HWND);
 LONG W32API GetWindowLongA(HWND, int);
 LONG W32API SetWindowLongA(HWND, int, LONG);
+BOOL W32API SetWindowContextHelpId(HWND, DWORD);   /* G15 */
+DWORD W32API GetWindowContextHelpId(HWND);
 uintptr_t W32API GetClassLongA(HWND, int);
 uintptr_t W32API SetClassLongA(HWND, int, intptr_t);
 uint16_t W32API GetWindowWord(HWND, int);
@@ -366,6 +369,8 @@ BOOL W32API ChangeClipboardChain(HWND, HWND);
 int W32API GetSystemMetrics(int);
 BOOL W32API SystemParametersInfoA(UINT, UINT, void *, UINT);
 DWORD W32API GetSysColor(int);
+/* G30: GFSR_SYSTEMRESOURCES 0, GFSR_GDIRESOURCES 1, GFSR_USERRESOURCES 2; percent free. */
+UINT W32API GetFreeSystemResources(UINT);
 BOOL W32API SetSysColors(int, const int *, const DWORD *);
 BOOL W32API MessageBeep(UINT);
 BOOL W32API ExitWindowsEx(UINT, DWORD);

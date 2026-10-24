@@ -111,3 +111,12 @@ Microsoft's [WM_COMMAND reference](https://learn.microsoft.com/en-us/windows/win
 identifies menu commands by their command identifier; the Files controller
 likewise dispatches activation events by ID. Distinct IDs therefore preserve
 both command routes. Bin dialogs remain 207–210; Insert Disk is 211.
+
+## fx-28 drive presentation
+
+Drive General now shows grouped exact bytes and binary MB together. A blue/purple
+elliptical disc with a darker front wall replaces the flat circle; legend squares
+use exactly the same two top colours. Counting omits the disc and swatches, keeps
+capacity visible and reports calculating for used/free; unknown space remains
+unavailable. Free clusters are clamped to total for both numbers and the disc.
+See [fx-28's researched contract](screenshot-review-fx-28.md).

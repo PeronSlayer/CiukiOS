@@ -111,18 +111,20 @@ static void test_menu_vga_dirty_repeat(void)
     for (unsigned active = 0; active < 2; active++) {
         write_cr3(active ? v->as.pd_phys : kpd_phys);
         for (unsigned frame = 0; frame < 3; frame++) {
-            unsigned before = cr3_reloads, harvests = v->video_linear_harvests;
+            unsigned before = cr3_reloads, single = invalidations, harvests = v->video_linear_harvests;
             uint8_t value = (uint8_t)(active * 3 + frame + 1);
             linear_store(v, 0x1011, value);
             dosvm_vga_sync(v, false);
             CHECK(v->vga.plane[1][0x1010] == value && v->video_linear_harvests == harvests + 1);
             CHECK(!(*window_pte(v, 0xA1000) & DOSVM_PTE_DIRTY));
-            CHECK(cr3_reloads == before + active);
+            /* fx-27: the cleared D bit is invalidated by one INVLPG of that
+             * entry when the VM's space is active, never a CR3 reload. */
+            CHECK(cr3_reloads == before && invalidations == single + active);
             dosvm_vga_sync(v, false); CHECK(v->video_linear_harvests == harvests + 1);
         }
     }
     write_cr3(kpd_phys); destroy(v, true); empty();
-    puts("f3-10 VGA: repeated stores harvested, one active CR3 reload on each dirty collection, inactive mapping ready for CR3 reload PASS");
+    puts("f3-10 VGA: repeated stores harvested, one active INVLPG per collected page (fx-27), inactive mapping ready for CR3 reload PASS");
 }
 static void test_menu_pm_devices(void)
 {

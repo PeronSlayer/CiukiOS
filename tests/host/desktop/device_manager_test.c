@@ -129,7 +129,7 @@ int main(int argc, char **argv)
     assert(app.page==CP_HOME && kind(DU_TREE)->count==CP_CATEGORIES);
     render(renders,"control-folder");
     unsigned seen[CP_PAGES]={0}, count=0;
-    static const char *const page_files[]={"display","mouse","keyboard","sounds","datetime","system","devices","drivers","network","power","adapter","fonts","autoplay","programs","joystick"};
+    static const char *const page_files[]={"display","mouse","keyboard","sounds","datetime","system","devices","drivers","network","power","adapter","fonts","autoplay","programs","joystick","multimedia","users","passwords","regional","internet","addhw","access"};
     _Static_assert(sizeof(page_files)/sizeof(*page_files)==CP_PAGES,"every applet has a render filename");
     for (int cat=0;cat<CP_CATEGORIES;cat++) {
         du_focus(&ui,CP_CATEGORY); at_tap(&ui,DU_KEY_HOME);
@@ -139,6 +139,7 @@ int main(int argc, char **argv)
         unsigned n=kind(DU_LISTVIEW)->count;
         for (unsigned row=0;row<n;row++) {
             int page=app.applet_pages[row]; assert(!seen[page]++); count++;
+            if (!app.applet_items[row].icon16) fprintf(stderr,"missing applet icon: page=%d label=%s\n",page,app.applet_items[row].text[0]);
             assert(app.applet_items[row].icon16);
             du_focus(&ui,kind(DU_LISTVIEW)->id); at_tap(&ui,DU_KEY_HOME);
             for (unsigned k=0;k<row;k++) at_tap(&ui,DU_KEY_DOWN);

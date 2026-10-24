@@ -572,11 +572,11 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size)
 { (void)fd; (void)op; (void)record; (void)size; errno = ENODEV; return -1; }
 int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
 /* G6 file information (call 98): not modelled; Files' Properties falls back. */
-int ciuki_file_info_get(const char *path, struct ciuki_file_info *out) { (void)path; (void)out; errno = ENOSYS; return -1; }
 int ciuki_file_info_set(const char *path, uint32_t mask, const struct ciuki_file_info *in) { (void)path; (void)mask; (void)in; errno = ENOSYS; return -1; }
-int ciuki_set_attributes(const char *path, uint32_t attributes) { (void)path; (void)attributes; errno = ENOSYS; return -1; }
-int fm_native_version(const char *path, char *out, size_t cap) { (void)path; (void)out; (void)cap; return -ENOSYS; }
 int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
+/* G11: the EVENTS and POLICY records (no kernel in these scenarios). */
+int ciuki_power_events(struct ciuki_power_events *out) { (void)out; errno=ENOSYS; return -1; }
+int ciuki_power_policy(struct ciuki_power_policy *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
 { (void)event; (void)pid; (void)click_us; return 0; } /* quiet replay */
 int ciuki_proc_list(void *buffer, uint32_t bytes)
@@ -866,6 +866,15 @@ int desk_load_portrait(uint32_t *pixels)
 
 /* ---- the image's file system for Files and CiukNote (fake_vfs.c tree) -------- */
 const struct fm_vfs *fm_native_vfs(void) { return &fake_vfs; }
+/* G6 native metadata has no kernel in this replay; the virtual VFS keeps
+ * supplying ordinary size/time/stat metadata. No PE fixture is installed. */
+int fm_native_version(const char *path,char *out,size_t cap)
+{ (void)path; if (cap) out[0]=0; return -ENOENT; }
+int ciuki_file_info_get(const char *path,struct ciuki_file_info *out)
+{ (void)path; (void)out; errno=ENOSYS; return -1; }
+int ciuki_set_attributes(const char *path,uint32_t attributes)
+{ (void)path; (void)attributes; errno=ENOSYS; return -1; }
+
 static int cn_stat(void *ctx, const char *path, struct cn_stat *st)
 {
     struct fm_meta m; int r = fake_vfs.stat_path(ctx, path, &m);

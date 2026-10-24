@@ -321,7 +321,10 @@ static void test_workload_linear_replay(bool pm, bool window)
     unsigned maps = v->video_linear_maps;
     unsigned harvests = v->video_linear_harvests;
     port_out(v, 0x3D4, 2, 0x000C); port_out(v, 0x3D4, 2, 0x000D);
-    if (window) CHECK(v->video_linear_harvests > harvests);
+    /* fx-27: a flip collects the D pages for the presenter (which reads the
+     * linear backing); the planes follow only when a model consumer needs
+     * them (here the digest's dosvm_vga_sync). */
+    if (window) CHECK(v->video_linear_harvests == harvests && v->video_linear_stale && v->video_linear_damage);
     port_out(v, 0x3C8, 1, 0x40); port_out(v, 0x3C9, 1, 1); port_out(v, 0x3C9, 1, 2); port_out(v, 0x3C9, 1, 3);
     CHECK(v->video_starts == 1 && v->vga.dac[0x40][2] == 3 && v->video_linear_maps == maps);
     struct dosvm_frame frame;
@@ -329,7 +332,8 @@ static void test_workload_linear_replay(bool pm, bool window)
     harvests = v->video_linear_harvests;
     CHECK(!dosvm_frame_digest(v, 0, &frame) && frame.width == 320 && frame.height == 200 && v->video_direct == VIDEO_LINEAR);
     CHECK(!memcmp(v->vga.plane, reference.plane, sizeof(reference.plane)));
-    CHECK(v->video_linear_harvests == harvests); /* flip already published D pages */
+    CHECK(window ? v->video_linear_harvests > harvests && !v->video_linear_stale :
+                   v->video_linear_harvests == harvests);
     dosvm_vga_direct(v);
     uint8_t old_latches[4]; memcpy(old_latches, v->vga.latch, sizeof(old_latches));
     /* Read map select is ignored by chain-4; direct values match every

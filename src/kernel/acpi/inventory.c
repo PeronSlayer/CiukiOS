@@ -253,7 +253,7 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
                 for (unsigned i = 0; i < count && !status; i++) {
                     uint32_t caps = records[i].capabilities;
                     if (!handles[i] || handles[i] == AcpiGbl_RootNode || !!(caps & CIUKI_FW_CAP_EC) != !pass) continue;
-                    status = fw_power_collect(handles[i], caps, records[i].id,matches(&records[i],"PNP0C0C"));
+                    status = fw_power_collect(handles[i], caps, records[i].id,matches(&records[i],"PNP0C0C"),matches(&records[i],"PNP0C0E"));
                 }
             if (!status) { fw_budget_stage("takeover", NULL); status = fw_power_takeover(); }
             if (status) { fw_power.error = status; fw_power_stop(); }

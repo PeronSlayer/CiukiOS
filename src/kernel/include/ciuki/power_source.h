@@ -44,6 +44,11 @@ struct power_source_ops {
     /* Optional and cache-only: false while firmware Off is unqualified
      * (ACPI without an evaluated \_S5). NULL: an active provider may try. */
     bool (*can_off)(void *);
+    /* G11, optional: the provider reports and can enter a sleep state (APM
+     * 1.2 Get Capabilities, ACPI \_S1/\_S3 with a wake path). NULL: no. */
+    bool (*can_standby)(void *);
+    int (*standby)(void *);
+    int (*cancel_standby)(void *);
 };
 /* Installed once by the global device/time owner before APM connects.
  * quiesce_dma is a nonblocking step with an absolute PIT-millisecond
@@ -95,4 +100,27 @@ void power_source_snapshot(struct power_source_snapshot *); /* cache only */
 void power_source_status(struct ciuki_power_status *);
 bool power_source_can_off(void);
 int power_source_soft_off(void); /* EBUSY before power_source_mark_stopped */
+/* G11 (docs/design/power-policy.md): event counters of the active provider
+ * for call 73 EVENTS (sleep requests, battery low, critical, resumes, status
+ * changes), monotonic for the boot; cache only. */
+struct power_source_counters {
+    uint32_t sleep_requests, battery_low, critical, resumes, status_changes;
+};
+void power_source_counters(struct power_source_counters *);
+/* The first unmet standby qualification (CIUKI_POWER_STANDBY_*): an active
+ * provider, its sleep capability, then a resume path for every native DMA
+ * device (power_devices_resume_ready). Cache only. */
+uint32_t power_source_standby_reason(void);
+/* ENOTSUP unless the reason is AVAILABLE; then the provider's standby. */
+int power_source_standby(void);
+int power_source_cancel_standby(void);
+/* G11: Win32 SYSTEM_POWER_STATUS of the call-73 record (GetSystemPowerStatus,
+ * docs/design/power-policy.md 24): ac 0/1/255 (APM backup power is 0),
+ * battery_flag 1/2/4/8/128/255, percent 0..100 or 255, seconds of life on
+ * battery or UINT32_MAX (full life is always unknown). Cache only. */
+struct power_source_win32 { uint32_t ac, battery_flag, percent, seconds; };
+void power_source_win32_status(struct power_source_win32 *);
+/* core/power_quiesce.c: true only when every native driver holding DMA or
+ * interrupt state can suspend and restore it. */
+bool power_devices_resume_ready(void);
 #endif

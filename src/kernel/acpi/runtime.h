@@ -50,5 +50,5 @@ void fw_power_publish(void);
 void fw_queue_drain(unsigned);
 ACPI_STATUS fw_inventory_power_run(const struct fw_ops *, uint32_t);
 /* Called by inventory while its handles are still live. */
-ACPI_STATUS fw_power_collect(ACPI_HANDLE, uint32_t, uint32_t, bool);
+ACPI_STATUS fw_power_collect(ACPI_HANDLE, uint32_t, uint32_t, bool, bool);
 #endif

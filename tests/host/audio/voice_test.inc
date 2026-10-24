@@ -228,6 +228,42 @@ static void test_voice_engines(void)
         second_claim_failure=second_claim_next;
         CHECK(audio_capture_open(d,&token)==-EBUSY && pages_used==baseline+8 && !d->capture.generation);
         second_claim_failure=-1;
+        /* G22: real fd/devctl boundary over each voice-family capture engine. */
+        int fd=file_open(client,"/dev/audio",O_RDONLY,0); CHECK(fd>=0);
+        struct ciuki_audio_capture caps={.version=1,.size=sizeof(caps)};
+        CHECK(!ctl(fd,AUDIO_CAPTURE_CAPS,&caps,sizeof(caps)) && caps.available && caps.rate==48000);
+        CHECK(!d->capture.generation); /* querying never starts recording */
+        CHECK(call(CIUKI_SYS_WRITE,fd,0,4,0,0)==-EBADF); /* no playback stream on a capture fd */
+        CHECK(ctl(fd,AUDIO_SET_GAIN,&(struct ciuki_audio_gain){.version=1,.size=24},24)==-EACCES);
+        vh.capture_frame=0; /* fake ADC write cursor resets with its newly programmed ring */
+        caps.source=CIUKI_CAPTURE_MIC; caps.gain=50;
+        CHECK(!ctl(fd,AUDIO_CAPTURE_START,&caps,sizeof(caps)) && vh.codec[0x1a/2]==0);
+        CHECK(ctl(fd,AUDIO_CAPTURE_START,&caps,sizeof(caps))==-EBUSY);
+        int other=file_open(client,"/dev/audio",O_RDONLY,0); CHECK(other>=0);
+        CHECK(ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps))==-EBUSY);
+        struct ciuki_audio_capture_data data={.version=1,.size=sizeof(data),.frames=128};
+        CHECK(ctl(other,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EINVAL);
+        CHECK(ctl(fd,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EAGAIN);
+        voice_sleep(&vh,10);
+        CHECK(!ctl(fd,AUDIO_CAPTURE_READ,&data,sizeof(data)) && data.captured==128);
+        for (unsigned i=0;i<data.captured;i++) CHECK(data.pcm[i*2]==(int)i/2 && data.pcm[i*2+1]==-(int)i/2);
+        data.frames=129; CHECK(ctl(fd,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EINVAL);
+        data.frames=128; data.reserved[0]=1; CHECK(ctl(fd,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EINVAL);
+        data.reserved[0]=0; data.version=2; CHECK(ctl(fd,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EOPNOTSUPP);
+        data.version=1;
+        CHECK(!file_close(client,fd) && !d->capture.generation && pages_used==baseline+8);
+        caps.source=CIUKI_CAPTURE_LINE; caps.gain=100;
+        CHECK(!ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps)) && vh.codec[0x1a/2]==0x0404);
+        voice_sleep(&vh,171); CHECK(ctl(other,AUDIO_CAPTURE_READ,&data,sizeof(data))==-EIO);
+        CHECK(!ctl(other,AUDIO_CAPTURE_STOP,&caps,sizeof(caps)) && !d->capture.generation);
+        CHECK(!ctl(other,AUDIO_CAPTURE_STOP,&caps,sizeof(caps))); /* idempotent stop */
+        for (unsigned source=CIUKI_CAPTURE_CD;source<=CIUKI_CAPTURE_MIX;source++) {
+            caps.source=source;
+            CHECK(!ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps)) && vh.codec[0x1a/2]==(source==CIUKI_CAPTURE_CD ? 0x0101 : 0x0505));
+            CHECK(!ctl(other,AUDIO_CAPTURE_STOP,&caps,sizeof(caps)));
+        }
+        caps.source=CIUKI_CAPTURE_MIX+1; CHECK(ctl(other,AUDIO_CAPTURE_START,&caps,sizeof(caps))==-EINVAL);
+        CHECK(!file_close(client,other));
         CHECK(!audio_capture_open(d,&token)); vh.no_progress=true;
         for(unsigned j=0;j<10;j++) { voice_sleep(&vh,10); CHECK(audio_capture_read(d,token,captured,1)==-EAGAIN); }
         voice_sleep(&vh,1); CHECK(audio_capture_read(d,token,captured,1)==-EIO);
@@ -238,6 +274,9 @@ static void test_voice_engines(void)
         vh.pending[bank] = 0x82;
         CHECK(backend_irq(11, d->name) && vh.pending[bank] == 0x80);
         CHECK(!backend_irq(11, d->name) && vh.pending[bank] == 0x80);
+        unsigned sleep_pages=pages_used; uint32_t sleep_phys=d->phys;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(d->state.ready && d->phys==sleep_phys && pages_used==sleep_pages);
         audio_backend_shutdown(); CHECK(!audio.quarantined && pages_used == baseline && !audio.commitment_pages);
         CHECK(!voice_pins);
         CHECK(vh.codec[1] == 0x8000 && vh.codec[0x18 / 2] == 0x8808 && !(vh.cfg[1] & 4));

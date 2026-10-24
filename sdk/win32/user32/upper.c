@@ -238,22 +238,6 @@ DWORD W32API WaitForInputIdle(HANDLE process, DWORD ms) {
   }
   return 0;
 }
-/* Limited: CiukiOS has no WinHelp viewer (WINHLP32.EXE). HELP_QUIT has
- * nothing to close and succeeds; other commands fail as when the viewer
- * cannot be started. */
-BOOL W32API WinHelpA(HWND h, const char *file, UINT command, uintptr_t data) {
-  (void)h, (void)file, (void)data;
-  if (command == 2)
-    return 1;
-  return u32_fail(2);
-}
-BOOL W32API WinHelpW(HWND h, const WCHAR *file, UINT command, uintptr_t data) {
-  (void)h, (void)file, (void)data;
-  if (command == 2)
-    return 1;
-  return u32_fail(2);
-}
-
 /* ---- monitors and DPI ---------------------------------------------------- */
 #define MONITOR ((HANDLE)(uintptr_t)0x00010001u)
 static RECT screen(void) {
@@ -563,17 +547,34 @@ BOOL W32API KillSystemTimer(HWND h, uintptr_t id) {
  * window messages (0xC000-0xFFFF), as on Windows. */
 UINT W32API RegisterClipboardFormatA(const char *name) {
   U32_GUARD;
-  if (!name || !*name)
-    return u32_fail(87);
-  return RegisterWindowMessageA(name);
+  if (!name || !*name) return u32_fail(87);
+  WCHAR wide[DESK_CLIP_NAME_MAX+1];
+  if (!MultiByteToWideChar(1252,0,name,-1,wide,DESK_CLIP_NAME_MAX+1)) return u32_fail(87);
+  return RegisterClipboardFormatW(wide);
 }
 UINT W32API RegisterClipboardFormatW(const WCHAR *name) {
   U32_GUARD;
-  if (!name || !*name || u32_wlen(name) > 255)
-    return u32_fail(87);
-  char n[256];
-  u32_to_ansi(n, sizeof(n), name, -1);
-  return RegisterWindowMessageA(n);
+  if (!name || !*name) return u32_fail(87);
+  char text[DESK_CLIP_NAME_MAX+1];
+  unsigned n=0;
+  for (unsigned i=0;name[i];i++) {
+    unsigned c=name[i];
+    if (c>=0xd800 && c<=0xdbff) {
+      unsigned low=name[++i]; if (low<0xdc00 || low>0xdfff) return u32_fail(87);
+      c=0x10000+((c-0xd800)<<10)+(low-0xdc00);
+    } else if (c>=0xdc00 && c<=0xdfff) return u32_fail(87);
+    unsigned count=c<128 ? 1 : c<2048 ? 2 : c<65536 ? 3 : 4;
+    if (n+count>DESK_CLIP_NAME_MAX) return u32_fail(87);
+    if (count==1) text[n++]=c;
+    else {
+      text[n++]=(count==2 ? 0xc0 : count==3 ? 0xe0 : 0xf0)|(c>>(6*(count-1)));
+      for (unsigned k=count-1;k;k--) text[n++]=0x80|((c>>(6*(k-1)))&63);
+    }
+  }
+  text[n]=0;
+  if (!desk_utf8_valid((const uint8_t *)text,n)) return u32_fail(87);
+  struct w32r_reply r;
+  return u32_directory_utf8(W32R_ATOM_ADD,0,0,0,0,text,0,0,&r,0,0) ? r.key : 0;
 }
 static int format_name(UINT format, char *out, int n) {
   if (!out || n <= 0)
@@ -590,7 +591,9 @@ static int format_name(UINT format, char *out, int n) {
   int at = 0;
   for (const uint8_t *p = (const uint8_t *)name; *p && at + 1 < n;) {
     unsigned c = *p++;
-    if (c >= 0xe0 && p[0] && p[1]) {
+    if (c>=0xf0 && p[0] && p[1] && p[2]) {
+      c=((c&7)<<18)|((unsigned)(p[0]&63)<<12)|((unsigned)(p[1]&63)<<6)|(p[2]&63); p+=3;
+    } else if (c >= 0xe0 && p[0] && p[1]) {
       c = ((c & 15) << 12) | ((unsigned)(p[0] & 63) << 6) | (p[1] & 63);
       p += 2;
     } else if (c >= 0xc0 && p[0]) {
@@ -608,11 +611,22 @@ int W32API GetClipboardFormatNameA(UINT format, char *out, int n) {
 }
 int W32API GetClipboardFormatNameW(UINT format, WCHAR *out, int n) {
   U32_GUARD;
-  if (!out || n <= 0)
-    return u32_fail(87);
-  char a[256];
-  int k = format_name(format, a, sizeof(a));
-  if (!k)
-    return 0;
-  return (int)u32_to_wide(out, (UINT)n, a, k);
+  if (!out || n<=0 || format<0xc000 || format>0xffff) return u32_fail(87);
+  char text[W32R_NAME+1]; struct w32r_reply r;
+  if (!u32_directory(W32R_ATOM_NAME,(HWND)(uintptr_t)format,0,0,0,"",0,0,&r,text,W32R_NAME)) return 0;
+  unsigned bytes=r.data_bytes<W32R_NAME ? r.data_bytes : W32R_NAME;
+  text[bytes]=0;
+  if (!desk_utf8_valid((const uint8_t *)text,w32_strlen(text))) return u32_fail(87);
+  unsigned used=0;
+  for (const uint8_t *p=(const uint8_t *)text;*p;) {
+    unsigned c=*p++;
+    if (c>=128) {
+      unsigned left=c<0xe0 ? 1 : c<0xf0 ? 2 : 3; c&=(1u<<(6-left))-1;
+      while (left--) c=(c<<6)|(*p++&63);
+    }
+    if (used+(c>=65536 ? 2u : 1u)>=(unsigned)n) break;
+    if (c>=65536) { out[used++]=0xd800+((c-65536)>>10); c=0xdc00+((c-65536)&1023); }
+    out[used++]=c;
+  }
+  out[used]=0; return used;
 }

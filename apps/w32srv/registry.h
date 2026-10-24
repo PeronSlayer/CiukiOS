@@ -65,6 +65,8 @@ struct wr_server {
     uint32_t live[WR_LIVE];
     unsigned live_count;
     struct wr_end *ending;
+    struct wr_power *power_query;
+    struct wr_power *power;   /* G11: the WM_POWERBROADCAST in progress */
 };
 int wr_init(struct wr_server *, const struct wr_io *, uint64_t now);
 #define WR_CLIENT_MARKER "CiukiOS Win32 Client (f5-07B)"

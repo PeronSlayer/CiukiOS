@@ -39,6 +39,7 @@ int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
     static const char *const folders[][2]={{"Desktop","C:\\WINDOWS\\Desktop"},{"Programs","C:\\WINDOWS\\Start Menu\\Programs"},
         {"Start Menu","C:\\WINDOWS\\Start Menu"},{"Startup","C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},
         {"Personal","C:\\Documents"},{"Fonts","C:\\WINDOWS\\FONTS"},{"AppData","C:\\WINDOWS\\Application Data"},
+        {"Recent","C:\\WINDOWS\\Recent"},{"SendTo","C:\\WINDOWS\\SendTo"},
         {"Common Desktop","C:\\WINDOWS\\Desktop"},{"Common Programs","C:\\WINDOWS\\Start Menu\\Programs"}};
     for(unsigned root=0;root<2;root++)for(unsigned user=0;user<2;user++){
         char path[256];snprintf(path,sizeof(path),"%s%s\\Explorer\\%sShell Folders",root?".DEFAULT\\":"",cv,user?"User ":"");
@@ -51,7 +52,16 @@ int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
     if(!s->hive[0].sequence&&!exists&&wr_put(s,dx,"InstalledVersion",3,installed,sizeof(installed)))return 0;
     static const char *const classes[][2]={
         {".lnk","lnkfile"},{".exe","exefile"},{".txt","txtfile"},
-        {"exefile\\shell\\open\\command","\"%1\" %*"},{"txtfile\\shell\\open\\command","ciuknote.exe \"%1\""},
+        {"txtfile","Text Document"},
+        {".md","txtfile"},{".log","txtfile"},{".cfg","txtfile"},{".ini","txtfile"},{".conf","txtfile"},
+        {".csv","txtfile"},{".json","txtfile"},{".c","txtfile"},{".h","txtfile"},{".asm","txtfile"},
+        {".bmp","CiukiOS.Image"},{".png","CiukiOS.Image"},{".jpg","CiukiOS.Image"},{".jpeg","CiukiOS.Image"},
+        {".jpe","CiukiOS.Image"},{".gif","CiukiOS.Image"},{".xrgb","CiukiOS.Image"},
+        {"CiukiOS.Image","Image"},{"CiukiOS.Image\\shell\\open\\command","\"/Programs/viewer\" \"%1\""},
+        {"CiukiOS.Image\\shell\\edit\\command","\"/Programs/paint\" \"%1\""},
+        {".wav","CiukiOS.Audio"},{".mp3","CiukiOS.Audio"},{".ogg","CiukiOS.Audio"},{".m3u","CiukiOS.Audio"},
+        {"CiukiOS.Audio","Audio"},{"CiukiOS.Audio\\shell\\open\\command","\"/Programs/music\" \"%1\""},
+        {"exefile\\shell\\open\\command","\"%1\" %*"},{"txtfile\\shell\\open\\command","\"/Programs/ciuknote\" \"%1\""},
         {"CLSID\\{D7B70EE0-4340-11CF-B063-0020AFC2CD35}\\InprocServer32","ddraw.dll"},
         {"CLSID\\{47D4D946-62E8-11CF-93BC-444553540000}\\InprocServer32","dsound.dll"},
         {"CLSID\\{25E609E0-B259-11CF-BFC7-444553540000}\\InprocServer32","dinput.dll"},

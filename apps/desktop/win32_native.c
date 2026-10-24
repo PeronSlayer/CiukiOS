@@ -173,8 +173,8 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     if(pair[1]>=0){if(fcntl(pair[1],F_SETFD,0)<0){result=-errno;goto done;}maps[count++]=(struct ciuki_spawn_fd){pair[1],3};}
     if(fcntl(report[1],F_SETFD,0)<0){result=-errno;goto done;}
     maps[count++]=(struct ciuki_spawn_fd){report[1],4};
-    char type[8];snprintf(type,sizeof(type),"%u",(unsigned)kind);
-    char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,wait ? "--wait" : NULL,NULL};
+    char type[8],show[2]={(char)('0'+r->show),0};snprintf(type,sizeof(type),"%u",(unsigned)kind);
+    char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,show,wait ? "--wait" : NULL,NULL};
     char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
     helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
     if(helper<0){result=-errno;goto done;}
@@ -251,7 +251,9 @@ int desk_w32_native_shortcut(struct desktop *d,const struct desk_launch_record *
     memcpy(saved,d->launch_argv,sizeof(saved));
     d->launch_arg=NULL;
     for(unsigned k=0;k<6;k++)d->launch_argv[k]=k<(unsigned)n ? words[k] : NULL;
+    int saved_show=d->launch_show;d->launch_show=(int)r->show;
     int pid=d->launch(d,&program),error=errno;
+    d->launch_show=saved_show;
     d->launch_arg=arg;memcpy(d->launch_argv,saved,sizeof(saved));
     if(pid>=0)return pid;
     return pid==-1 ? -(error ? error : EIO) : pid;
@@ -473,6 +475,25 @@ static int w32_session(struct desktop *d,unsigned action,uint32_t flags,struct d
     st->state=r.key;st->pid=r.count;st->hwnd=r.type;st->delivered=r.disposition;
     return 0;
 }
+/* G11 (docs/design/power-policy.md): WM_POWERBROADCAST through the same
+ * broker; the values of the desktop's seam are the W32R ones. */
+_Static_assert(DESK_W32_POWER_BEGIN==W32R_POWER_BEGIN && DESK_W32_POWER_STATUS==W32R_POWER_STATUS &&
+               DESK_W32_POWER_RESET==W32R_POWER_RESET,"G11 seam values");
+static int w32_power(struct desktop *d,unsigned action,uint32_t event,uint32_t lparam,struct desk_w32_status *st)
+{
+    (void)d;
+    if(!authorized)return -ENODEV;
+    if(restart.stage)return -EBUSY;   /* an ExitWindowsEx restart owns the broker */
+    struct {struct w32r_request r;char empty[2];} a={.r={.version=1,.op=W32R_ENDSESSION,.index=action,
+        .type=event,.flags=lparam,.path_bytes=1,.name_bytes=1}};
+    struct w32r_reply r;uint32_t used=0;
+    uint32_t e=desk_w32_exchange(&a,(uint32_t)sizeof(a.r)+2,&r,(uint32_t)sizeof(r),&used);
+    if(!e && (used!=sizeof(r) || r.version!=1 || r.name_bytes || r.data_bytes))e=13;
+    if(!e)e=r.error;
+    if(e)return e==1115?-EBUSY:-EIO;
+    st->state=r.key;st->pid=r.count;st->hwnd=0;st->delivered=0;
+    return 0;
+}
 /* After the desktop's session ended (cancelled, or a log off), free the
  * broker once its WM_ENDSESSION deliveries are done. */
 static void w32_session_reap(struct desktop *d,uint64_t ms)
@@ -491,7 +512,7 @@ void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->w32_session=w32_session;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {
@@ -524,7 +545,9 @@ void desk_w32_poll(struct desktop *d)
             int result;
             if(pending.kind==DESK_W32_DOS){
                 char command[260];result=desk_w32_dos_command(&pending.record,command,sizeof(command));
+                int saved_show=d->launch_show;d->launch_show=(int)pending.record.show;
                 if(!result)result=desk_task_launch(d,"dosbox",command);
+                d->launch_show=saved_show;
             }else result=desk_w32_native_shortcut(d,&pending.record);
             if(result<0)desk_shell_message(d,"Programs","The program could not be started with its requested arguments or working directory.",1);
             pending.ready=0;
@@ -536,6 +559,7 @@ void desk_w32_poll(struct desktop *d)
                 d->clients[i].pid=(uint32_t)pending.pid;d->clients[i].awaiting_frame=1;
                 snprintf(d->clients[i].application,sizeof(d->clients[i].application),"%s",pending.title);
                 d->clients[i].dosbox=pending.kind==DESK_W32_DOS;
+                d->clients[i].initial_show=(int)pending.show;
             }
             pending.ready=0;
         }

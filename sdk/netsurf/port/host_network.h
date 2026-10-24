@@ -6,11 +6,14 @@
 #include "tests/host/desktop/replay_base.h"
 #undef SOCK_STREAM
 #undef SOCK_DGRAM
+#undef SOCK_RAW
 #undef SOCK_NONBLOCK
 #undef SOCK_CLOEXEC
 #undef IPPROTO_IP
+#undef IPPROTO_ICMP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP
+#undef MSG_TRUNC
 #undef MSG_PEEK
 #undef MSG_DONTWAIT
 #undef MSG_NOSIGNAL

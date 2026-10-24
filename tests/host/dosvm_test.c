@@ -997,6 +997,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_exit_test.inc"
 #include "dosvm_idle_test.inc"
 #include "dosvm_fullscreen_test.inc"
+#include "dosvm_clipboard_test.inc"
 #include "dosvm_quake_start_test.inc"
 #include "dosvm_startup_test.inc"
 #include "dosvm_creation_test.inc"
@@ -1013,9 +1014,13 @@ static void test_memory_services(bool locked)
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
+#include "dosvm_properties_test.inc"
+#include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_CLIPBOARD")) { test_programmatic_clipboard(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_SAVE_TEST")) {
         test_persistent_provider(); test_client_boundary();
         free(ram); fflush(stdout); return 0;
@@ -1029,6 +1034,7 @@ int main(void)
     }
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX22")) { test_fx22(); printf("fx-22 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1055,6 +1061,7 @@ int main(void)
     test_vga_transaction_bound();
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
     test_video();
+    test_programmatic_clipboard();
     test_wait_present();
     test_vm_audio();
     test_game_audio();
@@ -1073,6 +1080,7 @@ int main(void)
     test_isr_return_evidence(); test_isr_expiry(); test_if_cli_epoch(); test_if_handler_scope();
     test_speed();
     test_cost_bursts();
+    test_fx27();
     test_exit_cost();
     test_idle();
     test_fullscreen_transport();
@@ -1084,6 +1092,7 @@ int main(void)
     test_quake_start();
     CHECK(guest_enters==4 && deletes>1); /* includes f3-40 worker IRQ reentry */
     test_startup_boot();
+    test_dos_properties();
     test_pool_paging(); /* f3-46: last, it attaches the production pager */
     free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record);

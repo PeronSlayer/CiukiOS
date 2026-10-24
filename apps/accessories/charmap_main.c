@@ -15,9 +15,11 @@ int main(int argc, char **argv)
     if (du_window_open(&m->window, &m->ui, channel, CHARMAP_W, CHARMAP_H, "Character Map")) {
         fprintf(stderr, "charmap: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "charmap");   /* G15: F1 opens this program's Help topic */
     charmap_attach(&m->app, &m->ui);
     if (test) du_window_move(&m->window, 24, 48);
     int r = du_run(&m->window, NULL, NULL);
+    charmap_detach(&m->app);
     du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

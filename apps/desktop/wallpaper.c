@@ -217,6 +217,27 @@ static void caption(uint32_t *out, uint32_t width, uint32_t height, int32_t y0, 
     desk_paint_text_n_aa(&p, font, ((int32_t)width - w) / 2, y0 + 256 + 28, "CiukiOS", (size_t)-1, colour, aa);
 }
 
+/* Original geometric 8x8 masks, authored for CiukiOS; no vendor artwork. */
+static const uint8_t pattern_rows[DESK_WALL_PATTERNS][8]={
+    {0,0,0,0,0,0,0,0},
+    {255,8,8,8,255,128,128,128},
+    {0,60,66,90,90,66,60,0},
+    {240,240,240,240,15,15,15,15},
+    {60,66,129,129,129,129,66,60},
+    {255,129,129,129,129,129,129,255}
+};
+uint32_t desk_wallpaper_pattern_pixel(int pattern, uint32_t x, uint32_t y, uint32_t colour)
+{
+    if (pattern<=0 || pattern>=DESK_WALL_PATTERNS) return colour&0xffffffu;
+    return pattern_rows[pattern][y&7u]&(128u>>(x&7u)) ? 0u : colour&0xffffffu;
+}
+int desk_wallpaper_render_pattern(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
+                          const char *spec, int mode, uint32_t colour,
+                          const struct desk_image *image, const uint32_t *portrait, int pattern)
+{
+    return desk_wallpaper_render_pattern_styled(out,width,height,top,bottom,spec,mode,colour,image,portrait,
+                                       desk_theme->font_large,desk_theme->desktop_label,desk_theme->text_aa,pattern);
+}
 int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
                           const char *spec, int mode, uint32_t colour,
                           const struct desk_image *image, const uint32_t *portrait)
@@ -228,8 +249,34 @@ int desk_wallpaper_render_styled(uint32_t *out, uint32_t width, uint32_t height,
                           const char *spec, int mode, uint32_t colour,
                           const struct desk_image *image, const uint32_t *portrait, int font, uint32_t label, int aa)
 {
+    return desk_wallpaper_render_pattern_styled(out,width,height,top,bottom,spec,mode,colour,image,portrait,font,label,aa,0);
+}
+int desk_wallpaper_render_pattern_styled(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
+                          const char *spec, int mode, uint32_t colour,
+                          const struct desk_image *image, const uint32_t *portrait, int font, uint32_t label, int aa, int pattern)
+{
     colour &= 0xffffffu;
+    for (uint32_t y=0;y<height;y++) for (uint32_t x=0;x<width;x++)
+        out[(size_t)y*width+x]=desk_wallpaper_pattern_pixel(pattern,x,y,colour);
     for (size_t i = 0; i < (size_t)width * height; i++) out[i] = colour;
+    if (spec && !strncmp(spec, "pattern:", 8) && spec[8] >= '0' && spec[8] <= '7' && !spec[9]) {
+        static const uint8_t patterns[8][8] = {
+            {0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+            {0x11,0x00,0x44,0x00,0x11,0x00,0x44,0x00},
+            {0x55,0xaa,0x55,0xaa,0x55,0xaa,0x55,0xaa},
+            {0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01},
+            {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80},
+            {0xff,0x00,0xff,0x00,0xff,0x00,0xff,0x00},
+            {0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11},
+            {0x81,0x42,0x24,0x18,0x18,0x24,0x42,0x81},
+        };
+        uint32_t alternate = shade(colour, (colour & 0xffffffu) < 0x808080u ? 24 : -24);
+        unsigned pattern = (unsigned)(spec[8] - '0');
+        for (uint32_t y = top; y < height - (bottom < height ? bottom : 0); y++)
+            for (uint32_t x = 0; x < width; x++)
+                if (patterns[pattern][y & 7] & (0x80u >> (x & 7))) out[(size_t)y * width + x] = alternate;
+        return 0;
+    }
     if (!spec || !strcmp(spec, "none")) return 0;
     if (!strcmp(spec, "ciuki")) {
         /* Exactly where the plain compositor puts the approved portrait. */
@@ -243,7 +290,7 @@ int desk_wallpaper_render_styled(uint32_t *out, uint32_t width, uint32_t height,
                 uint32_t p = portrait[y * 256 + x] & 0xffffffu;
                 /* The converted array is composited over #375564; its fully
                  * transparent surround takes the chosen desktop colour. */
-                out[(size_t)(y0 + y) * width + (uint32_t)(x0 + x)] = p == 0x375564u ? colour : p;
+                out[(size_t)(y0 + y) * width + (uint32_t)(x0 + x)] = p == 0x375564u ? out[(size_t)(y0+y)*width+(uint32_t)(x0+x)] : p;
             }
         }
         caption(out, width, height, y0, font, label, aa);
@@ -256,6 +303,13 @@ int desk_wallpaper_render_styled(uint32_t *out, uint32_t width, uint32_t height,
         return 0;
     }
     if (!image || !image->pixels) return -1;
+    if (pattern>0 && pattern<DESK_WALL_PATTERNS) {
+        uint32_t image_h=mode==CFG_WALL_TILE ? height : area_h, image_y=mode==CFG_WALL_TILE ? 0 : oy;
+        uint32_t *layer=malloc((size_t)width*image_h*4u); if (!layer) return -1;
+        desk_image_scale_layer(image,layer,width,image_h,mode);
+        for (size_t i=0;i<(size_t)width*image_h;i++) out[(size_t)image_y*width+i]=desk_wallpaper_over(layer[i],out[(size_t)image_y*width+i]);
+        free(layer); return 0;
+    }
     if (mode == CFG_WALL_TILE) {
         desk_image_scale(image, out, width, height, mode, colour);
         return 0;

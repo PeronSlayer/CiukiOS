@@ -27,7 +27,7 @@ def build(out, base, flags):
     objdir = out/'shell-objects'
     objdir.mkdir(parents=True, exist_ok=True)
     libraries = [codecs.import_library(objdir, 'kernel32', KERNEL),
-        codecs.import_library(objdir, 'user32', {'MessageBoxA': 16,
+        codecs.import_library(objdir, 'user32', {'MessageBoxA': 16, 'CiukiShellNotify': 12,
             'PrivateExtractIconExA': 20, 'PrivateExtractIconsA': 32,
             'DestroyIcon': 4, 'GetWindowLongA': 8, 'SetWindowLongA': 12,
             'GetPropA':8,'SetPropA':12,'RemovePropA':8,'DefWindowProcA':16,

@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../../apps/desktop/font_codes.h"
 
 static void word(int32_t v)
 {
@@ -15,7 +16,7 @@ static void word(int32_t v)
     for (unsigned i = 0; i < 4; i++) if (putchar((int)(n >> (i * 8) & 255)) == EOF) exit(1);
 }
 static int code(unsigned i)
-{ return i < 95 ? (int)i + 32 : i < 191 ? (int)i + 160 - 95 : i == 191 ? 0x2022 : 0x2026; }
+{ return i < 95 ? (int)i + 32 : i < 191 ? (int)i + 160 - 95 : (int)desk_font_extra_codes[i-191]; }
 int main(int argc, char **argv)
 {
     if (argc != 4) return 1;
@@ -40,8 +41,15 @@ int main(int argc, char **argv)
     free(coords); FT_Done_MM_Var(library, axes);
     word((int32_t)(face->size->metrics.ascender / 64));
     word((int32_t)(-face->size->metrics.descender / 64));
-    for (unsigned i = 0; i < 193; i++) {
-        if (FT_Load_Char(face, (FT_ULong)code(i), FT_LOAD_NO_BITMAP | FT_LOAD_TARGET_NORMAL) ||
+    for (unsigned i = 0; i < DESK_FONT_CODE_COUNT; i++) {
+        unsigned cp=(unsigned)code(i);
+        /* Non-breaking hyphen has the same ink as hyphen; line breaking is
+         * outside this raster atlas. Inconsolata omits that cmap entry. */
+        if (cp==0x2011 && !FT_Get_Char_Index(face,cp)) cp='-';
+        if (i>=191 && !FT_Get_Char_Index(face, cp)) {
+            fprintf(stderr,"Missing U+%04X in %s\n",code(i),argv[1]); return 1;
+        }
+        if (FT_Load_Char(face, cp, FT_LOAD_NO_BITMAP | FT_LOAD_TARGET_NORMAL) ||
             FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) return 1;
         FT_GlyphSlot slot = face->glyph; FT_Bitmap *b = &slot->bitmap;
         if (b->pitch < 0 || b->width > 512 || b->rows > 512) return 1;

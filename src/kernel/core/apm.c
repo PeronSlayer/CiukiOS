@@ -93,6 +93,53 @@ int apm_backend_probe(struct apm_backend *b)
     return 0;
 }
 
+/* APM 1.2 4.6.17: BX=0 (BIOS), not BX=1 (all devices).
+ * A BIOS-level refusal removes sleep support, not status/soft-off. */
+static int capabilities(struct apm_backend *b)
+{
+    struct biosvm_regs r;
+    b->capabilities_valid = false;
+    int e = call(b, 0x5310, 0, 0, APM_STATUS_MS, &r);
+    if (e == -EAGAIN) return e;
+    b->capabilities_due = false;
+    if (!e) { b->capabilities = (uint16_t)r.ecx; b->capabilities_valid = true; }
+    return b->transport_error ? e : 0;
+}
+bool apm_backend_can_standby(const struct apm_backend *b)
+{
+    return b && b->state == APM_CONNECTED && !b->emergency &&
+        b->capabilities_valid && (b->capabilities & 3);
+}
+int apm_backend_cancel_standby(struct apm_backend *b)
+{
+    if (!b || b->state!=APM_CONNECTED) return -ENODEV;
+    if (!b->sleep_request) return 0;
+    if (b->emergency || b->ops.acpi_present(b->ops.ctx)) return -EBUSY;
+    struct biosvm_regs r;
+    int e=call(b,0x5307,1,5,APM_STATUS_MS,&r);
+    if (e==-EAGAIN) return e;
+    b->sleep_request=0;
+    if (e) b->capabilities_valid=false;
+    return b->transport_error ? failed(b,e) : e;
+}
+int apm_backend_standby(struct apm_backend *b)
+{
+    if (!apm_backend_can_standby(b)) return -ENOTSUP;
+    if (b->ops.acpi_present(b->ops.ctx)) return -EBUSY;
+    /* Prefer global standby. A pending BIOS request must use its state. */
+    uint16_t state = b->sleep_request ? b->sleep_request : (b->capabilities & 1 ? 1 : 2);
+    if (!(b->capabilities & (1u << (state - 1)))) return -ENOTSUP;
+    struct biosvm_regs r;
+    int e = call(b, 0x5307, 1, state, APM_POWER_MS, &r);
+    if (e == -EAGAIN) return e;
+    b->sleep_request = 0;
+    /* Restore PIC/PIT and wall time even if firmware refused the request. */
+    int resumed = b->ops.resume(b->ops.ctx, state == 1 ? 11 : 3, 0);
+    b->status_due = true; b->next_poll = b->ops.now_ms(b->ops.ctx);
+    if (b->transport_error) return failed(b, e);
+    return resumed ? resumed : e;
+}
+
 /* APM 1.2 4.6.11: BH AC line, BL battery status, CH battery flag, CL
  * percentage, DX remaining life (bit 15 minutes). fx-18: when CH is
  * unknown (FFh, as APM 1.0 BIOSes report it) the battery status BL
@@ -166,6 +213,9 @@ int apm_backend_connect(struct apm_backend *b)
         e = call(b, 0x530f, 1, 1, APM_STATUS_MS, &r);
     if (e) return failed(b, e);
     b->state = APM_CONNECTED;
+    b->capabilities_due = true;
+    e = capabilities(b);
+    if (e && e != -EAGAIN) return failed(b, e);
     b->next_poll = b->ops.now_ms(b->ops.ctx);
     b->next_status = b->next_poll;
     b->status_due = b->probe_units = true;
@@ -268,7 +318,7 @@ static int emergency_step(struct apm_backend *b)
     if (b->ops.emergency_record) b->ops.emergency_record(b->ops.ctx, b->emergency_error);
     int e = call(b, 0x5307, 1, 2, APM_POWER_MS, &r);
     if (e == -EAGAIN) return 0; /* EC hold busy: acknowledge next turn */
-    b->emergency = false;
+    b->emergency = false; b->sleep_request=0;
     if (e) return failed(b, e);
     e = b->ops.resume(b->ops.ctx, 4, 0);
     if (e) return failed(b, e);
@@ -301,6 +351,10 @@ int apm_backend_service(struct apm_backend *b)
     if (!b->emergency && b->ops.handoff && b->ops.handoff(b->ops.ctx)) return apm_backend_yield(b);
     if (b->ops.acpi_present(b->ops.ctx)) return failed(b, -EBUSY);
     uint64_t now = b->ops.now_ms(b->ops.ctx);
+    if (b->capabilities_due) {
+        int e = capabilities(b);
+        if (e && e != -EAGAIN) return failed(b, e);
+    }
     if (now >= b->next_poll) {
         b->next_poll = now + APM_POLL_MS;
         unsigned i;
@@ -317,7 +371,13 @@ int apm_backend_service(struct apm_backend *b)
             if (b->ops.event) b->ops.event(b->ops.ctx, event, info);
             switch (event) {
             case 1: case 2: case 9: case 10:
-                if (b->rejects_pending < 8) b->rejects_pending++;
+                if (apm_backend_can_standby(b) && (!b->ops.sleep_ready || b->ops.sleep_ready(b->ops.ctx)) &&
+                    (b->capabilities & ((event == 1 || event == 9) ? 1u : 2u))) {
+                    if (!b->sleep_request) {
+                        b->sleep_request = event == 1 || event == 9 ? 1 : 2;
+                        b->sleep_processing_at = 0;
+                    }
+                } else if (b->rejects_pending < 8) b->rejects_pending++;
                 break;
             case 5:
                 b->status_due = true;
@@ -332,7 +392,7 @@ int apm_backend_service(struct apm_backend *b)
                 if (e) return failed(b, e);
                 break;
             case 6: b->status_due = true; break;              /* 4.3.7 */
-            case 12: b->status_due = b->probe_units = true; break; /* 4.3.13 */
+            case 12: b->capabilities_due = b->status_due = b->probe_units = true; break; /* 4.3.13 */
             default: break; /* unknown events grant no power operation */
             }
             /* Avoid unbounded firmware work on a malicious event stream;
@@ -342,6 +402,14 @@ int apm_backend_service(struct apm_backend *b)
         if (i == 8 || b->ops.now_ms(b->ops.ctx) - now >= APM_STATUS_MS) {
             b->poll_overflows++;
             b->next_poll = b->ops.now_ms(b->ops.ctx);
+        }
+    }
+    if (b->sleep_request && b->ops.now_ms(b->ops.ctx) >= b->sleep_processing_at) {
+        struct biosvm_regs r;
+        int e = call(b, 0x5307, 1, 4, APM_STATUS_MS, &r);
+        if (e && e != -EAGAIN) return failed(b, e);
+        if (!e) {
+            b->sleep_processing_at = b->ops.now_ms(b->ops.ctx) + 1000;
         }
     }
     /* Standby/suspend requests are rejected (APM 1.2 4.3.2/4.3.3: Set Power

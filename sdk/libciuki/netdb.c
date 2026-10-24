@@ -1,11 +1,22 @@
 /* Bounded A lookup, with all linked records owned by this SDK.
  * SPDX-License-Identifier: MIT */
 #include <ciuki/runtime.h>
+#include <ciuki/net.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
+#include "hosts.h"
+static int hosts_next(void *stream) { return fgetc(stream); }
+static int hosts_address(const char *name,uint32_t *address)
+{
+    FILE *stream=fopen("/system/settings/HOSTS","r");
+    if(!stream)return 0;
+    int found=cu_hosts_lookup(hosts_next,stream,name,address);
+    fclose(stream);return found;
+}
 struct answer { struct addrinfo info; struct sockaddr_in address; };
 void freeaddrinfo(struct addrinfo *info)
 {
@@ -31,14 +42,16 @@ int getaddrinfo(const char *node,const char *service,const struct addrinfo *hint
     if (!node) address.s_addr=htonl(h.ai_flags&AI_PASSIVE ? INADDR_ANY : INADDR_LOOPBACK);
     else if (inet_pton(AF_INET,node,&address)!=1) {
         if (h.ai_flags&AI_NUMERICHOST) return EAI_NONAME;
-        if (!strcmp(node,"localhost")) address.s_addr=htonl(INADDR_LOOPBACK);
+        if (hosts_address(node,&address.s_addr)) { /* Local mappings precede DNS. */ }
+        else if (!strcmp(node,"localhost")) address.s_addr=htonl(INADDR_LOOPBACK);
         else {
             size_t bytes=strlen(node)+1; if (bytes<2 || bytes>254) return EAI_NONAME;
             struct ciuki_resolve4 r={.size=sizeof(r),.version=1,.name=CU_PTR(node),.name_bytes=(uint32_t)bytes};
             int e=ciuki_error(CU_CALL(RESOLVE4,CU_PTR(&r),0,0,0,0,0));
             if (e) { if (e==ENOMEM) return EAI_MEMORY; errno=e; return EAI_SYSTEM; }
-            if (r.status) return r.status==1 ? EAI_NONAME : r.status==2 ? EAI_AGAIN : EAI_FAIL;
-            address.s_addr=r.address;
+            if (r.status) {
+                if(strchr(node,'.') || ciuki_netbios_resolve(node,0x20,&address.s_addr))return r.status==1?EAI_NONAME:r.status==2?EAI_AGAIN:EAI_FAIL;
+            } else address.s_addr=r.address;
         }
     }
     struct addrinfo **tail=out;
@@ -69,4 +82,17 @@ const char *gai_strerror(int code)
     case EAI_SYSTEM:return "System error";
     default:return "Unknown resolver error";
     }
+}
+
+int ciuki_resolve4_begin(const char *name,struct ciuki_resolve_query *q)
+{
+    if(!name || !q) { errno=EFAULT;return -1; }
+    size_t bytes=strlen(name)+1;
+    if(bytes<2 || bytes>254) { errno=EINVAL;return -1; }
+    *q=(struct ciuki_resolve_query){.size=sizeof(*q),.version=2,.action=CIUKI_RESOLVE_START};
+    struct in_addr a;
+    if(inet_pton(AF_INET,name,&a)==1 || hosts_address(name,&a.s_addr)) { q->address=a.s_addr;return 0; }
+    if(!strcmp(name,"localhost")) { q->address=htonl(INADDR_LOOPBACK);return 0; }
+    q->name=CU_PTR(name);q->name_bytes=(uint32_t)bytes;
+    int r=ciuki_resolve4_query(q);q->name=q->name_bytes=0;return r;
 }

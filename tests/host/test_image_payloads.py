@@ -79,6 +79,37 @@ class ImagePayloadTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "blackbox reserved geometry"):
             image.initialize_blackbox(volume)
 
+    def test_bootstat_sector_and_sfc_baseline(self):
+        """G14: a clean CBS1 record in sector 9 and the SFC.LST baseline."""
+        import struct, zlib
+        record = image.bootstat_record()
+        self.assertEqual((record[:4], record[4], record[5]), (b"CBS1", 0, 1))
+        self.assertEqual(struct.unpack_from("<I", record, 508)[0], zlib.crc32(record[5:508], zlib.crc32(record[:4])))
+        self.assertEqual(record[6:508], bytes(502))
+        volume = self.work / "bootstat.fat"
+        volume.write_bytes(bytes(160 * 512))
+        image.initialize_bootstat(volume)
+        data = volume.read_bytes()
+        self.assertEqual(data[9 * 512:10 * 512], record)
+        self.assertEqual(data[:9 * 512] + data[10 * 512:], bytes(159 * 512))
+        with self.assertRaisesRegex(ValueError, "boot-status sector free"):
+            image.initialize_bootstat(volume)
+        files = {}
+        for name, body in (("/Programs/desktop", b"desktop"), ("/system/VMM.ELF", b"kernel"),
+                           ("/System/Registry/System.reg", b"reg"), ("/system/BOOT.CFG", b"cfg"),
+                           ("/WINDOWS/SYSTEM/FluidR3_GM.sf2", b"bank"), ("/System/Win32/kernel32.dll", b"dll"),
+                           ("/system/cache/x", b"cache"), ("/Documents/a.txt", b"doc")):
+            path = self.work / ("src" + str(len(files)))
+            path.write_bytes(body)
+            files[name] = path
+        count = image.stage_sfc(self.work / "sfc", files)
+        self.assertEqual(count, 3)
+        lines = files["/System/SFC.LST"].read_text().splitlines()
+        self.assertTrue(lines[0].startswith("; CiukiOS System File Checker"))
+        self.assertEqual(lines[1:], [f"{hashlib.sha256(b).hexdigest()} {len(b)} {n}" for n, b in
+                                     (("/Programs/desktop", b"desktop"), ("/system/VMM.ELF", b"kernel"),
+                                      ("/System/Win32/kernel32.dll", b"dll"))])
+
     def test_registry_seed_and_payload_readback(self):
         with patch.object(image, "git_identity", return_value=("abc123", "clean")):
             sources, directories = image.registry_payloads(self.work / "registry")

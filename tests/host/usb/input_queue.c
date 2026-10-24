@@ -14,3 +14,9 @@ uint64_t ktime_cycles(void) { assert(!"unexpected physical i8042 clock access");
 #include "../../../src/kernel/drivers/i8042.c"
 bool kwork_queue(kwork_fn fn, void *arg)
 { (void)fn; (void)arg; assert(!"unexpected native IRQ work in merged-queue fixture"); return false; }
+/* G12 makes the bounded command path reachable from input_read. This fixture
+ * has no native device: keep those hardware/scheduler boundaries explicit. */
+void pic_mask(unsigned irq) { (void)irq; assert(!"unexpected native PIC access"); }
+void irq_set_handler(unsigned irq, irq_handler_t handler)
+{ (void)irq; (void)handler; assert(!"unexpected native IRQ registration"); }
+void task_yield(void) { assert(!"unexpected native command wait"); }

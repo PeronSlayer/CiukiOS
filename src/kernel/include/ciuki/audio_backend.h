@@ -29,10 +29,10 @@ struct audio_capture_ops {
 };
 struct audio_capture {
     struct audio_frame *pcm;
-    struct mm_pin pin;
+    struct mm_pin pin, descriptor_pin;
     uint32_t phys, generation;
     uint64_t produced, consumed, observed, progressed;
-    unsigned last_frame;
+    unsigned last_frame, pages;
     uint16_t select, gain;
     bool running, failed, codec_changed;
 };
@@ -59,6 +59,8 @@ struct audio_dma_device {
     const char *name, *reason;
     enum audio_backend_kind kind;
     uint16_t base, bytes, command, codec_saved[8];
+    uint16_t mixer_line_saved[3];
+    unsigned mixer_line_mask;
     uint32_t phys, desc_phys, control, serial, saved_link, saved_legacy;
     uint32_t mmio_phys;
     volatile uint8_t *mmio;
@@ -83,7 +85,7 @@ struct audio_dma_device {
     bool link_changed, legacy_changed;
     uint8_t ak[26], dsp_major, dsp_minor, saved_mixer[6];
     struct cmipci_state cmi;
-    /* Optional voice engines: no public capture ABI or foreign framework. */
+    /* Optional voice engines; audio_dev.c exposes copies, never DMA mappings. */
     const struct audio_capture_ops *capture_ops;
     int (*voice_codec_read)(struct audio_dma_device *, uint16_t, uint16_t *);
     int (*voice_codec_write)(struct audio_dma_device *, uint16_t, uint16_t);
@@ -93,6 +95,10 @@ struct audio_dma_device {
     unsigned voice_saved_count;
 };
 extern struct audio_dma_device audio_dma;
+int audio_backend_suspend(void);
+int audio_backend_resume(void);
+bool audio_backend_resume_ready(void);
+bool audio_backend_capture_active(void);
 int sb16_restore(struct audio_dma_device *);
 extern const struct audio_dma_ops es137x_ops, sb16_ops, via82xx_ops, cmipci_ops;
 bool cmipci_match(const struct pci_func *, enum audio_backend_kind *);
@@ -141,7 +147,9 @@ int audio_capture_open(struct audio_dma_device *, uint32_t *generation);
 int audio_capture_read(struct audio_dma_device *, uint32_t generation,
                        struct audio_frame *, unsigned frames);
 int audio_capture_close(struct audio_dma_device *, uint32_t generation);
+int audio_capture_source(struct audio_dma_device *, uint32_t generation, unsigned source);
 int audio_capture_shutdown(struct audio_dma_device *);
+void ac97_capture_attach(void);
 uint32_t audio_voice_mask(const struct audio_dma_device *);
 int audio_voice_cursor(struct audio_dma_device *, unsigned voice, unsigned *frame);
 void audio_voice_program(struct audio_dma_device *, unsigned voice, uint32_t phys,

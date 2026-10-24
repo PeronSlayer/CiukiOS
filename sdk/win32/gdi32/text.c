@@ -154,6 +154,7 @@ static void compose(struct dc *d, const struct w32_gdi_glyph *g, int x,
   if (bounds.bottom > (LONG)s->height)
     bounds.bottom = (LONG)s->height;
   DWORD text = gdi_resolve_color(d, d->s.text);
+  int smoothing=gdi_smoothing();
   for (int yy = bounds.top; yy < bounds.bottom; yy++)
     for (int xx = bounds.left; xx < bounds.right; xx++) {
       if (!in_rect(clip, xx, yy) || !gdi_visible(d, xx, yy))
@@ -165,6 +166,7 @@ static void compose(struct dc *d, const struct w32_gdi_glyph *g, int x,
       if (d->s.viewport_ext.cy * d->s.window_ext.cy < 0)
         gy = g->height - 1 - gy;
       unsigned a = g->coverage[gy * g->pitch + gx];
+      if(!smoothing) a=a>=104 ? 255 : 0;
       if (!a)
         continue;
       if (a == 255) {
@@ -192,6 +194,10 @@ int gdi_text(HDC h, int x, int y, unsigned flags, const RECT *rect,
       ((flags & (ETO_CLIPPED | ETO_OPAQUE)) && !rect) ||
       (flags & ~(ETO_CLIPPED | ETO_OPAQUE | ETO_GLYPH_INDEX)))
     return 0;
+  if (d->printer) {
+    int printed=gdi_printer_text(d,x,y,flags,rect,text,count,dx,wide);
+    if(printed>=0)return printed;
+  }
   if ((flags & ETO_GLYPH_INDEX) && !wide)
     return 1;
   RECT area = {0}, *clip = 0;

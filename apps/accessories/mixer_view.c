@@ -23,6 +23,57 @@ void mixer_join(uint32_t left, uint32_t right, int *volume, int *balance)
     else *balance = -(100 - (int)(right * 100 / v));
 }
 
+static const char *const line_names[]={"Master","Wave","MIDI","CD Audio","Line In","Microphone"};
+static int line_id(unsigned line,unsigned kind) { return MX_LINE_BASE+(int)line*10+(int)kind; }
+static void lines_show(struct mixer_app *a)
+{
+    for (unsigned i=1;i<=5;i++) {
+        struct ciuki_mixer_line *l=&a->lines[i];
+        struct du_widget *v=du_get(a->ui,line_id(i,0)), *b=du_get(a->ui,line_id(i,1));
+        struct du_widget *m=du_get(a->ui,line_id(i,2)), *label=du_get(a->ui,line_id(i,3));
+        if (!v || !b || !m || !label) continue;
+        int changed=v->value!=100-a->line_volume[i] || b->value!=a->line_balance[i]+100 ||
+            v->disabled!=!l->available;
+        v->value=100-a->line_volume[i]; b->value=a->line_balance[i]+100;
+        v->disabled=m->disabled=!l->available;
+        b->disabled=!l->available || a->recording || i==CIUKI_MIXER_MIC;
+        char text[64];
+        snprintf(text,sizeof(text),a->recording ? (l->selected ? "[x] Select" : "[ ] Select") :
+                 (l->mute ? "[x] Mute" : "[ ] Mute"));
+        changed|=strcmp(m->text,text)!=0; du_set_text(m,text);
+        snprintf(text,sizeof(text),l->available ? "%d%%" : "Unavailable",a->line_volume[i]);
+        changed|=strcmp(label->text,text)!=0; du_set_text(label,text);
+        struct du_widget *group=du_get(a->ui,line_id(i,4));
+        const char *name=a->recording && i==CIUKI_MIXER_WAVE ? "Stereo Mix" : line_names[i];
+        if (group && strcmp(group->text,name)) { changed=1; du_set_text(group,name); }
+        if (changed) du_invalidate(a->ui,(struct du_rect){108+(int)(i-1)*102,58,102,230});
+    }
+    struct du_widget *mode=du_get(a->ui,MX_MODE);
+    const char *caption=a->recording ? "&Playback controls" : "&Recording controls";
+    if (mode && strcmp(mode->text,caption)) { du_set_text(mode,caption); du_invalidate(a->ui,mode->box); }
+}
+static void lines_refresh(struct mixer_app *a)
+{
+    for (unsigned i=1;i<=5;i++) {
+        if (a->line_pending & (1u<<i)) continue;
+        struct ciuki_mixer_line l={.version=1,.size=sizeof(l),.line=i,.recording=(unsigned)a->recording};
+        int e=a->backend && a->backend->line_get ? a->backend->line_get(a->backend->ctx,&l) : -ENODEV;
+        if (e) l.available=0;
+        a->lines[i]=l; mixer_join(l.left,l.right,&a->line_volume[i],&a->line_balance[i]);
+    }
+    lines_show(a);
+}
+static void lines_apply(struct mixer_app *a)
+{
+    for (unsigned i=1;i<=5;i++) if (a->line_pending & (1u<<i)) {
+        struct ciuki_mixer_line l=a->lines[i];
+        mixer_split(a->line_volume[i],a->line_balance[i],&l.left,&l.right);
+        l.available=l.reserved=0;
+        int e=a->backend && a->backend->line_set ? a->backend->line_set(a->backend->ctx,&l) : -ENODEV;
+        if (e) snprintf(a->status,sizeof(a->status),"The %s control could not be changed (error %d)",line_names[i],e);
+    }
+    a->line_pending=0;
+}
 static void show(struct mixer_app *a)
 {
     struct du_ui *u=a->ui;
@@ -37,7 +88,7 @@ static void show(struct mixer_app *a)
             uint32_t l,r; mixer_split(a->volume,a->balance,&l,&r);
             snprintf(text,sizeof(text),"%d%%  (L %u, R %u)",a->volume,(unsigned)l,(unsigned)r);
         }
-        if (w->id>=MX_VOLUME && w->id<=MX_MUTE) disabled=!a->available;
+        if (w->id>=MX_VOLUME && w->id<=MX_MUTE) disabled=!a->available || a->recording;
         if (w->id==MX_STATUS) snprintf(text,sizeof(text),"%s",a->status);
         if (value!=w->value || disabled!=w->disabled || strcmp(text,w->text)) {
             w->value=value; w->disabled=(uint8_t)disabled; du_set_text(w,text); du_invalidate(u,w->box);
@@ -65,7 +116,7 @@ void mixer_refresh(struct mixer_app *a)
         a->master = m;
         if (!a->pending && !a->waiting) { mixer_join(m.left, m.right, &a->volume, &a->balance); a->mute = m.mute != 0; }
     }
-    describe(a); show(a);
+    describe(a); show(a); lines_refresh(a);
 }
 static void apply(struct mixer_app *a)
 {
@@ -99,17 +150,28 @@ void mixer_attach(struct mixer_app *a, struct du_ui *u, const struct mixer_backe
     a->menus[0] = (struct du_menu){"&Options", a->options_items, 1};
     a->menus[1] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 2;
-    du_add(u, DU_GROUP, MX_GROUP, (struct du_rect){8, 26, 120, 180}, "Volume");
-    struct du_widget *v = du_add(u, DU_SCROLLBAR, MX_VOLUME, (struct du_rect){58, 46, 18, 110}, "");
+    du_add(u, DU_GROUP, MX_GROUP, (struct du_rect){8, 28, 96, 230}, "Master");
+    struct du_widget *v = du_add(u, DU_SCROLLBAR, MX_VOLUME, (struct du_rect){48, 86, 18, 110}, "");
     v->vertical = 1; v->total = 110; v->page = 10;
-    du_add(u, DU_LABEL, MX_LEVEL, (struct du_rect){16, 162, 108, 16}, "");
-    du_add(u, DU_BUTTON, MX_MUTE, (struct du_rect){26, 180, 84, 22}, "[ ] &Mute");
-    du_add(u, DU_GROUP, MX_BGROUP, (struct du_rect){136, 26, 156, 80}, "Balance");
-    struct du_widget *b = du_add(u, DU_SCROLLBAR, MX_BALANCE, (struct du_rect){160, 56, 108, 18}, "");
+    du_add(u, DU_LABEL, MX_LEVEL, (struct du_rect){14, 200, 86, 16}, "");
+    du_add(u, DU_BUTTON, MX_MUTE, (struct du_rect){18, 224, 76, 22}, "[ ] &Mute");
+    du_add(u,DU_BUTTON,MX_MODE,(struct du_rect){8,2,220,24},"&Recording controls");
+    struct du_widget *b = du_add(u, DU_SCROLLBAR, MX_BALANCE, (struct du_rect){24, 58, 64, 18}, "");
     b->total = 210; b->page = 10;
-    du_add(u, DU_LABEL, MX_LEFT, (struct du_rect){146, 56, 10, 18}, "L");
-    du_add(u, DU_LABEL, MX_RIGHT, (struct du_rect){274, 56, 10, 18}, "R");
+    du_add(u, DU_LABEL, MX_LEFT, (struct du_rect){16, 58, 10, 18}, "L");
+    du_add(u, DU_LABEL, MX_RIGHT, (struct du_rect){90, 58, 10, 18}, "R");
     du_add(u, DU_STATUS, MX_STATUS, (struct du_rect){0, MIXER_H - 20, MIXER_W, 20}, "");
+    for (unsigned i=1;i<=5;i++) {
+        int x=108+(int)(i-1)*102;
+        du_add(u,DU_GROUP,line_id(i,4),(struct du_rect){x,28,100,230},line_names[i]);
+        struct du_widget *vol=du_add(u,DU_SCROLLBAR,line_id(i,0),(struct du_rect){x+42,86,18,110},"");
+        vol->vertical=1; vol->total=110; vol->page=10;
+        struct du_widget *bal=du_add(u,DU_SCROLLBAR,line_id(i,1),(struct du_rect){x+8,58,84,18},"");
+        bal->total=210; bal->page=10;
+        du_add(u,DU_LABEL,line_id(i,3),(struct du_rect){x+6,200,88,18},"");
+        du_add(u,DU_BUTTON,line_id(i,2),(struct du_rect){x+6,224,88,22},"[ ] Mute");
+    }
+    for (unsigned i=0;i<u->count;i++) if (u->widgets[i].id!=MX_STATUS) u->widgets[i].box.y+=30;
     mixer_refresh(a);
     u->focus = -1;
 }
@@ -117,6 +179,22 @@ void mixer_attach(struct mixer_app *a, struct du_ui *u, const struct mixer_backe
 void mixer_event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct mixer_app *a = user;
+    if ((e->type==DU_EV_CHANGE || e->type==DU_EV_ACTIVATE) && e->id>=MX_LINE_BASE+10 && e->id<MX_LINE_BASE+60) {
+        unsigned i=(unsigned)(e->id-MX_LINE_BASE)/10,kind=(unsigned)(e->id-MX_LINE_BASE)%10;
+        if (!a->lines[i].available) return;
+        if (kind==0) a->line_volume[i]=100-du_get(u,e->id)->value;
+        else if (kind==1) a->line_balance[i]=du_get(u,e->id)->value-100;
+        else if (kind==2) {
+            if (a->recording) {
+                for (unsigned j=1;j<=5;j++) a->lines[j].selected=j==i;
+            }
+            else a->lines[i].mute^=1;
+        } else return;
+        a->line_pending|=1u<<i;
+        if (kind==2) { lines_apply(a); lines_show(a); show(a); }
+        else { du_timer_start(u,MX_T_APPLY,120000000ull,0); lines_show(a); }
+        return;
+    }
     switch (e->type) {
     case DU_EV_CHANGE:
         if (e->id == MX_VOLUME) a->volume = 100 - du_get(u, MX_VOLUME)->value;
@@ -127,22 +205,26 @@ void mixer_event(struct du_ui *u, const struct du_event *e, void *user)
         describe(a); show(a);
         return;
     case DU_EV_TICK:
-        if (e->id == MX_T_APPLY && a->pending) apply(a);
+        if (e->id == MX_T_APPLY) { if (a->pending) apply(a); if (a->line_pending) { lines_apply(a); lines_show(a); show(a); } }
         else if (e->id == MX_T_POLL && !a->pending && !a->waiting && u->capture < 0) mixer_refresh(a);
         return;
     case DU_EV_ACTIVATE:
-        if (e->id == MX_MUTE) { a->mute = !a->mute; apply(a); }
+        if (e->id==MX_MODE) {
+            if (a->line_pending) lines_apply(a);
+            a->recording^=1; lines_refresh(a);
+        }
+        else if (e->id == MX_MUTE) { a->mute = !a->mute; apply(a); }
         else if (e->id == MX_M_REFRESH) mixer_refresh(a);
         else if (e->id == MX_M_ABOUT)
             du_message(u, 1, "About Volume Control", "CiukiOS Volume Control - Classic computing, one woof at a time.\n"
-                       "Master volume of the F4 mixer (0-100, balance, mute).\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+                       "Playback and recording lines supplied by the audio device.\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         u->focus = -1;
         break;
     case DU_EV_KEY: {
         /* Up/Down or PgUp/PgDn: volume; Left/Right: balance; M: mute. */
         int dv = e->key == DU_KEY_UP ? 2 : e->key == DU_KEY_DOWN ? -2 : e->key == DU_KEY_PGUP ? 10 : e->key == DU_KEY_PGDN ? -10 : 0;
         int db = e->key == DU_KEY_LEFT ? -5 : e->key == DU_KEY_RIGHT ? 5 : 0;
-        if (!a->available) return;
+        if (!a->available || a->recording) return;
         if (dv || db) {
             a->volume += dv; a->balance += db;
             if (a->volume < 0) a->volume = 0;

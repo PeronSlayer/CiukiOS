@@ -19,7 +19,8 @@
 #define DESK_V3_TOOL 2u
 #define DESK_V3_TOPMOST 4u
 #define DESK_V3_MODAL 8u
-#define DESK_V3_STYLES 15u
+#define DESK_V3_CONTEXTHELP 16u   /* G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom) */
+#define DESK_V3_STYLES 31u
 #define DESK_V3_CAPTURE 1u
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
@@ -53,6 +54,9 @@
  * WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
  * owner id,owner-generation. Unselected fields are zero; no descriptors.
  * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+ * HELP (server, G15): empty. The user pressed the "?" caption button of a
+ * window created with DESK_V3_CONTEXTHELP; the client enters What's This?
+ * (WM_SYSCOMMAND SC_CONTEXTHELP) and answers the next click itself.
  * CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
  */
 enum desk_v3_opcode {
@@ -70,8 +74,32 @@ enum desk_v3_opcode {
      * pixels, each 0 (default) or 1..2048, max >= min when both are given.
      * PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
      * 3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED). */
-    DESK_V3_LIMITS
+    DESK_V3_LIMITS,
+    /* G18: TRAY_ICON: action,id,NIF flags,callback,tip-length,UTF-8 tip;
+     * optional 16x16 ARGB surface iff NIF_ICON. BALLOON: id,title-length,
+     * text-length,timeout-ms(low16)|NIIF-kind(high16),title,text.
+     * EVENT: id,callback,mouse-message,screen-x,screen-y.
+     * FLASH: invert (0/1). All use the authenticated window tuple. */
+    DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON = 86, DESK_V3_TRAY_EVENT = 90, DESK_V3_FLASH = 91,
+    DESK_V3_HELP = 89, /* G15: server to client, empty payload */
+    /* G16 SOUND (MessageBeep): client to desktop, 4 bytes: the toolkit sound
+     * event (apps/desktop/sounds.h, below SOUND_EVENTS) the desktop plays through
+     * its system-sound scheme (mute, volume and DOS-window rules apply). There is
+     * no reply: like DAMAGE it only needs the window tuple of an open window. */
+    DESK_V3_SOUND = 92,
+    /* G19: desktop-owned Control Panel action request from a v3 client. */
+    DESK_V3_LAUNCH = 93
 };
+/* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
+ * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.
+ * Reply uses the request/window identity of the request; unsolicited snapshots
+ * use request 0. Appended after main's existing clipboard and limits opcodes (80–82). */
+#define DESK_INPUT_SETTINGS 83u
+#define DESK_INPUT_STATE 84u
+#define DESK_INPUT_VALUES 11u
+enum desk_input_key { DESK_INPUT_LAYOUT=1, DESK_INPUT_DELAY, DESK_INPUT_SPEED,
+    DESK_INPUT_BLINK, DESK_INPUT_SWAP, DESK_INPUT_TRAILS, DESK_INPUT_WHEEL,
+    DESK_INPUT_SCHEME, DESK_INPUT_MOUSE_SPEED, DESK_INPUT_DOUBLE_CLICK, DESK_INPUT_TOGGLE };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -91,7 +119,9 @@ enum desk_cursor_shape {
     DESK_CURSOR_COUNT
 };
 #define DESK_TITLE_MAX 63u
-#define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message */
+#define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message.
+                           * G15B: server-to-Help LAUNCH reuses its window;
+                           * v3 client LAUNCH payload is u32 byte count + Help argument. */
 enum desk_opcode {
     /* DAMAGE remains a rectangle in every version. A legacy producer with
      * no finer damage sends its full backing bounds; no new negotiation is
@@ -108,7 +138,10 @@ enum desk_opcode {
     DESK_SETTINGS,
     /* Legacy recovery (Volume Control), version 2, client to desktop: serial,
      * left, right (0..100), mute (0/1). The desktop applies it through its
-     * delegated /dev/mixer control handle (F4) and answers TASK_RESULT. */
+     * delegated /dev/mixer control handle (F4) and answers TASK_RESULT.
+     * G22B also accepts 28 bytes: append line (1..5) and recording (0/1).
+     * The flag word is mute for playback, Select for recording. A 20-byte
+     * request retains the original master semantics. */
     DESK_MIXER_SET,
     /* f2-36, version 2, client to desktop: uint32 length, then 1..63
      * printable ASCII bytes. Updates only the sending client's window. */
@@ -146,7 +179,11 @@ enum desk_opcode {
      * DRAG_END (desktop to the Files source): effect performed (0 none).
      * ACCEPT_FILES (any v2 client to desktop): 0/1, DragAcceptFiles.
      * DROP_FILES (desktop to an accepting client): serial, client x, y;
-     *   WM_DROPFILES, the client reads the data object (du_drop_file). */
+     *   WM_DROPFILES, the v2 client reads the data object (du_drop_file).
+     * G18 v3: ACCEPT_FILES has one 0/1 word; DROP_FILES has the three
+     * words above plus one read-only 1024-wide XRGB surface grant containing
+     * a u32 byte count and an independent X\n<type>/path\n snapshot. The
+     * receiver owns the transferred descriptor until it copies the data. */
     DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
     DESK_ACCEPT_FILES, DESK_DROP_FILES,
     /* G3 end of session (WM_QUERYENDSESSION / WM_ENDSESSION), version 2,
@@ -166,6 +203,9 @@ enum desk_opcode {
      *   sends QUERY_END_SESSION or END_SESSION to an unregistered client
      *   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end). */
     DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+    /* G11B keeps main's allocated wire numbers; integration opcodes follow. */
+    DESK_POWER_EVENT = 87,
+    DESK_POWER_REPLY = 88,
     /* G5 one system clipboard owned by the desktop (Windows 98 clipboard
      * model; docs/design/system-clipboard.md), version 2, any client.
      * CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
@@ -178,12 +218,12 @@ enum desk_opcode {
      *   result, format, byte count, sequence, owner token, item count,
      *   items: count u32 formats, or count name bytes for a NAME reply.
      *   A successful GET reply with bytes carries one read-only surface. */
-    DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
-    DESK_DOS_CLIPBOARD /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit */
+    DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
+    DESK_DOS_CLIPBOARD = 94 /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
-                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
-enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY, DESK_CLIP_DISPLAY_EVENT };
 #define DESK_CLIP_DELAYED 1u   /* PUT: SetClipboardData(format, NULL); owner only, no bytes */
 #define DESK_CLIP_RENDERED 2u  /* PUT: the owner's answer to RENDER; zero bytes declines */
 #define DESK_CLIP_OWNER 1u     /* QUERY reply flags in byte count: the clipboard has an owner */
@@ -280,6 +320,7 @@ struct desk_packet {
     uint32_t width, height, serial, focused;
     char title[DESK_TITLE_MAX + 1];   /* also WINDOW_INFO title and LAUNCH name */
     char argument[DESK_ARG_MAX + 1];  /* LAUNCH: optional single program argument (empty when absent) */
+    char tooltip[128]; /* G18 tray tooltip (UTF-8 bytes) */
     struct ciuki_input_event event;
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
@@ -296,7 +337,9 @@ struct desk_packet {
     uint32_t resize_serial; /* optional GFX_FRAME replacement attachment */
     uint64_t completed_ns, next_frame_ns;
     uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
+    uint32_t input_settings[DESK_INPUT_VALUES];
     uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
+    int attachment_fd; /* owned immutable DROP_FILES snapshot, -1 when absent */
     struct desk_clip_wire clip; /* G5 CLIPBOARD / CLIPBOARD_EVENT */
     int clipboard_fd; /* v3 GET reply only; receiver closes it */
 };

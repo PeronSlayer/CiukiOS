@@ -75,7 +75,7 @@ struct request {
     struct process *reserved_process;
     int reserved_fd;
     struct ciuki_sockaddr_in address;
-    unsigned bytes, flags, option, level, length, which;
+    unsigned bytes, flags, output_flags, option, level, length, which;
     int result;
     bool used, submitted, done, abandoned, has_address;
     void (*outer_cleanup)(void *);
@@ -102,6 +102,21 @@ uint32_t net_socket_count(void)
     sys_prot_t f = sys_arch_protect(); unsigned n = 0;
     for (unsigned i = 0; i < CIUKI_SOCKET_MAX; i++) n += sockets[i].used;
     sys_arch_unprotect(f); return n;
+}
+void net_socket_snapshot(struct ciuki_net_socket_list *list)
+{
+    memset(list,0,sizeof(*list));list->size=sizeof(*list);list->version=1;
+    sys_prot_t f=sys_arch_protect();
+    for(unsigned i=0;i<CIUKI_SOCKET_MAX;i++) {
+        struct socket_object *s=&sockets[i];if(!s->used || s->pending || s->closing)continue;
+        struct ciuki_net_socket_info *out=&list->sockets[list->count++];
+        out->pid=s->origin_pid;out->type=s->type;
+        out->state=s->listening?CIUKI_NET_SOCKET_LISTEN:s->connecting?CIUKI_NET_SOCKET_CONNECTING:
+            s->connected?(s->eof?CIUKI_NET_SOCKET_CLOSE_WAIT:CIUKI_NET_SOCKET_CONNECTED):CIUKI_NET_SOCKET_CLOSED;
+        out->local_address=s->local.address;out->local_port=s->local.port;
+        out->peer_address=s->peer.address;out->peer_port=s->peer.port;
+    }
+    sys_arch_unprotect(f);
 }
 static void retain(struct proc_object *o)
 {
@@ -313,6 +328,9 @@ static void option_core(void *arg)
         if (s->listening) { r->result = -ENOPROTOOPT; return; }
         if (r->which) { if (value) tcp_nagle_disable(s->conn->pcb.tcp); else tcp_nagle_enable(s->conn->pcb.tcp); }
         value = tcp_nagle_disabled(s->conn->pcb.tcp) ? 1 : 0;
+    } else if (r->level == IPPROTO_IP) {
+        if (r->which) pcb->ttl = (u8_t)value;
+        value = pcb->ttl;
     } else {
         unsigned bit = r->option == SO_REUSEADDR ? SOF_REUSEADDR : SOF_BROADCAST;
         if (r->which) { if (value) ip_set_option(pcb, bit); else ip_reset_option(pcb, bit); }
@@ -323,6 +341,23 @@ static void option_core(void *arg)
 static int option(struct request *r)
 {
     struct socket_object *s = r->socket; int32_t value = 0;
+    if (r->level == SOL_SOCKET && r->option == SO_RX_BYTES) {
+        if(r->which)return -ENOPROTOOPT;
+        unsigned available=0;
+        if(s->type==SOCK_STREAM) {
+            sys_prot_t f=sys_arch_protect();
+            available=s->conn->recv_avail>0?(unsigned)s->conn->recv_avail:0;
+            sys_arch_unprotect(f);
+            if(s->tcp_rx)available+=s->tcp_rx->tot_len-s->rx_offset;
+        } else {
+            if(!s->udp_rx) {
+                err_t e=netconn_recv_udp_raw_netbuf_flags(s->conn,&s->udp_rx,NETCONN_DONTBLOCK);
+                if(e && e!=ERR_WOULDBLOCK)return error_number(e);
+            }
+            if(s->udp_rx)available=s->udp_rx->p->tot_len;
+        }
+        memcpy(r->buffer,&available,4);r->length=4;return 0;
+    }
     if (r->level == SOL_SOCKET && (r->option == SO_TYPE || r->option == SO_ERROR)) {
         if (r->which) return -ENOPROTOOPT;
         sys_prot_t f = sys_arch_protect();
@@ -345,10 +380,11 @@ static int option(struct request *r)
         r->length = sizeof(t); return 0;
     }
     if (!((r->level == SOL_SOCKET && (r->option == SO_REUSEADDR || r->option == SO_BROADCAST)) ||
-          (r->level == IPPROTO_TCP && r->option == TCP_NODELAY && s->type == SOCK_STREAM))) return -ENOPROTOOPT;
+          (r->level == IPPROTO_TCP && r->option == TCP_NODELAY && s->type == SOCK_STREAM) ||
+          (r->level == IPPROTO_IP && r->option == IP_TTL))) return -ENOPROTOOPT;
     if (r->which) {
         if (r->length != 4) return -EINVAL;
-        memcpy(&value, r->buffer, 4); if (value != 0 && value != 1) return -EINVAL;
+        memcpy(&value, r->buffer, 4); if (r->level == IPPROTO_IP ? value < 1 || value > 255 : value != 0 && value != 1) return -EINVAL;
     }
     r->result = 0;
     err_t e = tcpip_callback_wait(option_core, r);
@@ -384,9 +420,10 @@ static int attempt(struct request *r)
     switch (r->operation) {
     case OP_NEW:
         if ((cancelled = commit(r))) return cancelled;
-        s->conn = netconn_new_with_callback(s->type == SOCK_STREAM ? NETCONN_TCP : NETCONN_UDP, notify);
+        s->conn = netconn_new_with_proto_and_callback(s->type == SOCK_STREAM ? NETCONN_TCP :
+            s->type == SOCK_RAW ? NETCONN_RAW : NETCONN_UDP, s->type == SOCK_RAW ? IPPROTO_ICMP : 0, notify);
         if (!s->conn) return -ENOBUFS;
-        netconn_set_nonblocking(s->conn, 1); s->send_events = s->type == SOCK_DGRAM;
+        netconn_set_nonblocking(s->conn, 1); s->send_events = s->type != SOCK_STREAM;
         return 0;
     case OP_BIND:
         r->result = 0;
@@ -515,6 +552,7 @@ static int attempt(struct request *r)
                 e = netconn_recv_udp_raw_netbuf_flags(c, &s->udp_rx, NETCONN_DONTBLOCK);
                 if (e) return error_number(e);
             }
+            r->output_flags=s->udp_rx->p->tot_len>r->bytes?MSG_TRUNC:0;
             unsigned n = s->udp_rx->p->tot_len < r->bytes ? s->udp_rx->p->tot_len : r->bytes;
             pbuf_copy_partial(s->udp_rx->p, r->buffer, (u16_t)n, 0);
             address_out(&r->address, netbuf_fromaddr(s->udp_rx), netbuf_fromport(s->udp_rx));
@@ -663,8 +701,9 @@ int net_socket_create(struct process *p, int family, int type, int protocol)
     if (family != AF_INET) return -EAFNOSUPPORT;
     if (type & ~(SOCK_NONBLOCK | SOCK_CLOEXEC | 0xf)) return -EINVAL;
     unsigned base = type & 0xf;
-    if (base != SOCK_STREAM && base != SOCK_DGRAM) return -ESOCKTNOSUPPORT;
-    if (protocol && protocol != (base == SOCK_STREAM ? IPPROTO_TCP : IPPROTO_UDP)) return -EPROTONOSUPPORT;
+    if (base != SOCK_STREAM && base != SOCK_DGRAM && base != SOCK_RAW) return -ESOCKTNOSUPPORT;
+    if (protocol && protocol != (base == SOCK_STREAM ? IPPROTO_TCP : base == SOCK_RAW ? IPPROTO_ICMP : IPPROTO_UDP)) return -EPROTONOSUPPORT;
+    if (base == SOCK_RAW && protocol != IPPROTO_ICMP) return -EPROTONOSUPPORT;
     if (!workers_ready) return -ENOBUFS;
     int fd = file_fd_reserve(p); if (fd < 0) return fd;
     int e; struct socket_object *s = reserve_socket(p, base, &e); if (!s) { file_fd_cancel(p, fd); return e; }
@@ -762,13 +801,14 @@ int net_socket_accept(struct process *p, int fd, struct ciuki_sockaddr_in *a, co
     if (e) return e;
     return slot;
 }
-int net_socket_io(struct process *p, int fd, void *buffer, unsigned bytes, unsigned flags,
-                  struct ciuki_sockaddr_in *a, bool send, const struct net_socket_ref *ref)
+static int socket_io(struct process *p, int fd, void *buffer, unsigned bytes, unsigned flags,
+                  struct ciuki_sockaddr_in *a, bool send, const struct net_socket_ref *ref, unsigned *output_flags)
 {
     if (bytes > CIUKI_SOCKET_IO_MAX || flags & ~(MSG_DONTWAIT | (send ? MSG_NOSIGNAL : MSG_PEEK))) return -EINVAL;
     int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     struct socket_object *s = r->socket;
-    if (send && s->type == SOCK_DGRAM && bytes > CIUKI_UDP_MAX) { request_free(r); return -EMSGSIZE; }
+    if (send && s->type != SOCK_STREAM && bytes > CIUKI_UDP_MAX) { request_free(r); return -EMSGSIZE; }
+    if (send && s->type == SOCK_RAW && a && a->port) { request_free(r); return -EINVAL; }
     r->operation = send ? OP_SEND : OP_RECV; r->bytes = bytes; r->flags = flags;
     r->has_address = send && a;
     if (send && a) { e = address_check(a, false); if (e) { request_free(r); return e; } r->address = *a; }
@@ -777,12 +817,19 @@ int net_socket_io(struct process *p, int fd, void *buffer, unsigned bytes, unsig
     if (!send && e >= 0) {
         if (e) memcpy(buffer, r->buffer, (unsigned)e);
         if (a) *a = r->address;
+        if (output_flags) *output_flags=r->output_flags;
     }
     if (e == -EPIPE && send && !(flags & MSG_NOSIGNAL)) {
         struct proc_thread *t = proc_thread_for(g_current); if (t) proc_signal_pipe(t);
     }
     request_free(r); return e;
 }
+int net_socket_io(struct process *p,int fd,void *buffer,unsigned bytes,unsigned flags,
+                  struct ciuki_sockaddr_in *a,bool send,const struct net_socket_ref *ref)
+{ return socket_io(p,fd,buffer,bytes,flags,a,send,ref,NULL); }
+int net_socket_receive(struct process *p,int fd,void *buffer,unsigned bytes,unsigned flags,
+                       struct ciuki_sockaddr_in *a,const struct net_socket_ref *ref,unsigned *out)
+{ *out=0;return socket_io(p,fd,buffer,bytes,flags,a,false,ref,out); }
 int net_socket_shutdown(struct process *p, int fd, unsigned how, const struct net_socket_ref *ref)
 {
     if (how > SHUT_RDWR) return -EINVAL;
@@ -942,6 +989,7 @@ struct dns_request {
     uint32_t address;
     int status;
     unsigned generation;
+    uint32_t owner, token;
     bool used, done, abandoned;
     uint64_t started;
 };
@@ -1112,6 +1160,59 @@ int net_resolve(struct process *p, const char *name, uint32_t *address, int *sta
     }
     if (t) { t->cleanup = w.outer; t->operation = w.value; }
     return result;
+}
+/* Async v2 shares the four DNS callback slots with synchronous v1. A token
+ * never aliases a late callback: abandoned storage stays live until dns_done. */
+static uint32_t dns_token;
+void net_resolve_process_exit(struct process *p)
+{
+    sys_prot_t f=sys_arch_protect();
+    for(unsigned i=0;i<CIUKI_DNS_MAX;i++)if(lookups[i].used && lookups[i].owner==p->pid) {
+        lookups[i].abandoned=true;lookups[i].token=0;
+        if(lookups[i].done)lookups[i].used=false;
+    }
+    sys_arch_unprotect(f);
+}
+int net_resolve_query(struct process *p,struct ciuki_resolve_query *q,const char *name)
+{
+    if(q->action<CIUKI_RESOLVE_START || q->action>CIUKI_RESOLVE_CANCEL)return -EINVAL;
+    if(q->action==CIUKI_RESOLVE_START) {
+        if(!workers_ready)return -ENETDOWN;
+        if(!name || !dns_name(name))return -EINVAL;
+        char qualified[254],domain[128];bool dot=false;
+        for(const char *s=name;*s;s++)if(*s=='.')dot=true;
+        if(!dot) {
+            net_stack_search_domain(domain);
+            if(domain[0]) {
+                size_t n=strlen(name),d=strlen(domain);
+                if(n+1+d>=sizeof(qualified))return -EINVAL;
+                memcpy(qualified,name,n);qualified[n++]='.';memcpy(qualified+n,domain,d+1);name=qualified;
+            }
+        }
+        struct dns_request *r=NULL;sys_prot_t f=sys_arch_protect();
+        if(dns_token!=UINT32_MAX)for(unsigned i=0;i<CIUKI_DNS_MAX;i++)if(!lookups[i].used) {
+            r=&lookups[i];memset(r,0,sizeof(*r));r->used=true;
+            r->owner=p->pid;r->token=++dns_token;r->generation=resolver_generation;r->started=cu_now();
+            memcpy(r->name,name,strlen(name)+1);break;
+        }
+        sys_arch_unprotect(f);if(!r)return -EAGAIN;
+        q->token=r->token;q->address=0;q->status=4;
+        if(resolve_overridden(name,&r->address)) { r->status=0;r->done=true; }
+        else if(tcpip_try_callback(dns_start,r)!=ERR_OK) { r->used=false;return -ENOMEM; }
+        return 0;
+    }
+    sys_prot_t f=sys_arch_protect();struct dns_request *r=NULL;
+    for(unsigned i=0;i<CIUKI_DNS_MAX;i++)if(lookups[i].used && q->token &&
+        lookups[i].token==q->token && lookups[i].owner==p->pid) { r=&lookups[i];break; }
+    if(!r) { sys_arch_unprotect(f);return -EINVAL; }
+    q->address=0;q->status=4;
+    if(q->action==CIUKI_RESOLVE_CANCEL || (!r->done && cu_now()-r->started>=10000)) {
+        q->status=2;r->token=0;r->abandoned=true;if(r->done)r->used=false;
+    } else if(r->done) {
+        q->status=r->generation==resolver_generation?r->status:3;
+        q->address=q->status?0:r->address;r->used=false;
+    }
+    sys_arch_unprotect(f);return 0;
 }
 unsigned cu_socket_bytes(void) { return sizeof(sockets) + sizeof(polls) + sizeof(lookups); }
 unsigned cu_socket_object_bytes(void) { return sizeof(struct socket_object); }

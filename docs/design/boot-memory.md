@@ -924,3 +924,18 @@ page-rounded reservation are unchanged. `scripts/loader_budget.py` reports
 the bytes per section and the free tail, and the size test requires at
 least 512 free bytes. See the
 [f0-54 record](../validation/f0-54-loader-budget.md).
+
+## G14 amendment: Startup menu, boot status and loader scratch (2026-10-24)
+
+Boot flag bits 15–22 and 24–31 are defined (`CBI_F_BOOT_FAILED`,
+`CBI_F_STEP`, `CBI_F_CMD_ONLY`, `CBI_F_SAFE_STORAGE`, `CBI_F_SCANDISK`,
+`CBI_F_SCANDISK_SKIP`, `CBI_F_SCANDISK_THOROUGH`, `CBI_F_MENU_SHOWN`, and
+the skipped driver classes); the defined mask becomes `0xFF7FFFFF`.
+Structure version, size and offsets are unchanged. The loader reads and
+writes partition sector 9 (the `CBS1` boot-status record, byte 4 only)
+through INT 13h; a failed write is ignored. The 4 KiB `cluster` buffer
+moves to loader BSS after `sector`, so `loader_end` is `0x27841` (was
+`0x26841`); the fixed file stays 48 sectors with 2,967 free bytes. The
+menu stage's progress deadline is 5 minutes. Details:
+[startup-recovery](startup-recovery.md).
+

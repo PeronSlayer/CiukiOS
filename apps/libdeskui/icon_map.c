@@ -17,6 +17,13 @@
 const struct du_icon_map du_icon_map[] = {
     /* /Programs programs (the desktop menu lists /Programs) */
     {"program:hwreport", "preferences-system"},
+    {"program:scandisk", "drive-harddisk"},
+    {"program:msconfig", "preferences-system"},
+    {"program:printers", "printer"},
+    {"program:resmeter", "applications-system"},
+    {"program:schedtask", "x-office-calendar"},
+    {"program:sysinfo", "document-properties"},
+    {"program:sysmon", "utilities-system-monitor"},
     {"program:regedit", "preferences-system"},
     {"program:*", "application-x-executable"},
     {"program:files", "system-file-manager"},
@@ -37,15 +44,24 @@ const struct du_icon_map du_icon_map[] = {
     {"program:netsurf", "internet-web-browser"},       /* NetSurf, the browser application (apps/desktop/catalog.h) */
     /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
     {"program:cdplayer", "media-optical"},
+    {"program:clipbrd", "edit-paste"},
+    {"program:recorder", "audio-input-microphone"},
     {"program:calc", "accessories-calculator"},
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
     {"program:help", "help-browser"},
+    {"program:clipbrd", "edit-paste"},                  /* same catalogue icon in Files and the desktop */
     {"program:logview", "text-x-generic"},             /* Log Viewer (G13) */
     {"program:music", "audio-x-generic"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
     {"program:paint", "applications-graphics"},
+    {"program:wordpad", "x-office-document"},                  /* G28 */
+    {"program:mines", "face-smile"},                   /* G27 Minesweeper */
+    {"program:solitaire", "applications-games"},       /* G27 Solitaire */
+    {"program:freecell", "applications-games"},        /* G27 FreeCell */
+    {"program:hearts", "emblem-favorite"},             /* G27 Hearts */
+    {"program:serial", "network-wired"},               /* G27 Serial Terminal */
 
     /* Start menu */
     {"menu:*", "application-x-executable"},
@@ -177,6 +193,7 @@ const struct du_icon_map du_icon_map[] = {
     {"type:.inf", "emblem-system"}, {"type:.json", "emblem-system"}, {"type:.xml", "emblem-system"},
     {"type:.yaml", "emblem-system"}, {"type:.yml", "emblem-system"}, {"type:.toml", "emblem-system"},
     {"type:.reg", "emblem-system"}, {"type:.pif", "emblem-system"},
+    {"type:.lnk", "emblem-symbolic-link"},
     {"type:.htm", "text-html"}, {"type:.html", "text-html"},
     {"type:.lua", "text-x-script"}, {"type:.bat", "text-x-script"}, {"type:.cmd", "text-x-script"},
     {"type:.sh", "text-x-script"}, {"type:.py", "text-x-script"}, {"type:.pl", "text-x-script"},
