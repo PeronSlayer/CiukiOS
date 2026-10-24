@@ -1300,6 +1300,12 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return 1;
   case WM_SYSCOMMAND:
     switch (wp & 0xfff0) {
+    case SC_SCREENSAVE:
+      u32_saver_command(SC_SCREENSAVE,-1);
+      break;
+    case SC_MONITORPOWER:
+      u32_saver_command(SC_MONITORPOWER,(int)lp);
+      break;
     case 0xf060:
       SendMessageA(h, WM_CLOSE, 0, 0);
       break;

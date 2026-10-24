@@ -103,6 +103,9 @@ static void mode_info(uint16_t id, uint8_t m[256])
     if (m[25] == 32) { m[54] = m[56] = m[58] = m[60] = 8; m[55] = 16; m[57] = 8; m[61] = 24; }
     else { m[54] = 5; m[55] = 11; m[56] = 6; m[57] = 5; m[58] = 5; }
 }
+static int dpms_error;
+static unsigned dpms_state, dpms_calls;
+int biosvm_video_dpms(unsigned state) { assert(suspended); dpms_calls++; dpms_state=state; return dpms_error; }
 int biosvm_video_prepare(void) { return prepare_failure ? -EPERM : 0; }
 int biosvm_video_switch(uint16_t id, uint8_t m[256])
 {
@@ -255,7 +258,7 @@ static void query_tests(void)
     current = &other; assert(!display_syscall(&t)); memcpy(&q, user + 16, sizeof(q)); assert(q.mode_count == 2);
     t.ecx = sizeof(user) - 4; assert(display_syscall(&t) == -EFAULT);
     t.ecx = sizeof(user) - 8; memcpy(user + t.ecx, &q, 8); assert(display_syscall(&t) == -EFAULT);
-    t.ebx = 2; assert(display_syscall(&t) == -EINVAL);
+    t.ebx = 99; assert(display_syscall(&t) == -EINVAL);
     t.ebx = CIUKI_DISPLAY_SET; t.ecx = 0x10000; assert(display_syscall(&t) == -EINVAL);
     t.ecx = 0x111; assert(display_syscall(&t) == -EPERM);
     current = &desktop; t.edx = 1; assert(display_syscall(&t) == -EINVAL);
@@ -516,8 +519,66 @@ static void native_upload_tests(void)
     assert(fbdev_present_native(device.generation,0,0,pixels,2)==-EIO);
     puts("PASS bounded native upload: generation/registry/extent validation, acceleration sync and write drain");
 }
+static void screen_policy_test(void)
+{
+    struct ciuki_screen_control q={.version=1,.size=sizeof(q)};
+    fixture(); current=&other;
+    assert(!screen_control(current,&q) && q.timeout==600 && !q.enabled);
+    q.action=CIUKI_SCREEN_CONFIG;
+    assert(screen_control(current,&q)==-EPERM);
+    q.action=15; q.value=30; q.flags=CIUKI_SCREEN_PERSIST;
+    assert(!screen_control(current,&q) && q.timeout==30 && q.flags==1);
+    q.action=17; q.value=1; assert(!screen_control(current,&q) && q.enabled);
+    q.action=97; q.value=1; assert(!screen_control(current,&q) && !q.value && q.running);
+    q.action=97; q.value=0; assert(!screen_control(current,&q) && q.value && !q.running);
+    q.action=15; q.value=-1; assert(screen_control(current,&q)==-EINVAL);
+    q.action=CIUKI_SCREEN_CONFIG; q.timeout=0x80000000u;
+    current=&desktop; assert(screen_control(current,&q)==-EINVAL); current=&other;
+    q.action=0xf170; q.value=0; assert(screen_control(current,&q)==-EINVAL);
+    q.value=2; assert(!screen_control(current,&q) && q.command==0xf170 && q.argument==2);
+    q.action=CIUKI_SCREEN_STATUS; q.value=0;
+    assert(screen_control(current,&q)==-EPERM);
+    current=&desktop;
+    assert(!screen_control(current,&q) && !q.command && !q.flags);
+    struct trap_frame t={.ebx=CIUKI_DISPLAY_SCREEN,.ecx=16};
+    q.action=0; memcpy(user+16,&q,sizeof(q)); assert(!display_syscall(&t));
+    t.ecx=sizeof(user)-4; assert(display_syscall(&t)==-EFAULT);
+    q.version=2; assert(screen_control(current,&q)==-EINVAL);
+    puts("PASS G10 shared policy: cross-process SPI state, validation, authority, persistence acknowledgement, syscall copy bounds");
+}
+static void monitor_test(void)
+{
+    fixture(); current=&desktop; dpms_calls=0; dpms_error=0;
+    assert(monitor_power(&other,2)==-EPERM);
+    assert(monitor_power(&desktop,0)==-EINVAL);
+    assert(!monitor_power(&desktop,-1) && !dpms_calls);
+    assert(!monitor_power(&desktop,2) && dpms_state==4 && monitor_asleep && switching && suspended);
+    assert(display_set(&desktop,0x111)==-EBUSY);
+    dpms_error=-EIO; assert(monitor_power(&desktop,-1)==-EIO && monitor_asleep && switching);
+    dpms_error=0; assert(!monitor_power(&desktop,-1) && !monitor_asleep && !switching && !suspended);
+    fixture(); dpms_error=-EOPNOTSUPP;
+    assert(monitor_power(&desktop,2)==-EOPNOTSUPP && !monitor_asleep && !switching && !suspended);
+    dpms_error=0;
+    assert(!monitor_power(&desktop,1) && dpms_state==1);
+    assert(!monitor_power(&desktop,-1) && dpms_state==0);
+    fixture();
+    delegated_test=true;
+    struct ciuki_screen_control delegated={.version=1,.size=sizeof(delegated)};
+    assert(!screen_control(&desktop,&delegated) && delegated.inhibited);
+    assert(monitor_power(&desktop,2)==-EBUSY);
+    delegated_test=false;
+    assert(!display_fullscreen_begin(0x13));
+    assert(monitor_power(&desktop,2)==-EBUSY);
+    struct ciuki_screen_control q={.version=1,.size=sizeof(q)};
+    assert(!screen_control(&desktop,&q) && q.inhibited);
+    q.action=0xf140; q.value=-1; assert(screen_control(&desktop,&q)==-EBUSY);
+    assert(!display_fullscreen_end());
+    q.action=0; assert(!screen_control(&desktop,&q) && !q.inhibited);
+    puts("PASS G10 monitor: DPMS off/on/low-power, serialized ownership, failed-wake retry, unsupported entry rollback, fullscreen exclusion");
+}
 int main(void)
 {
+    screen_policy_test(); monitor_test();
     delegated_takeover_tests();
     native_upload_tests();
     refused_retry_tests();

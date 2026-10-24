@@ -61,12 +61,24 @@
 
 static struct desktop d;
 static uint64_t vnow;
-static uint64_t vclock(void) { return vnow; }
+/* fx-26: inside a timed frame the clock includes the frame's modeled cost
+ * so far (the compositor reads it at frame start and end). */
+static int timed_frame;
+static uint64_t t_entries, t_engine, t_write, t_cmp;
+static double frame_cost_ns(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t vclock(void);
 static uint32_t vram_first=768, vram_end=2048;
 static struct { uint64_t entries, present_px, write_px, engine_ops, compared; } k;
 static uint64_t __real_memcmp_bytes;
 int __real_memcmp(const void *, const void *, size_t);
 int __wrap_memcmp(const void *a, const void *b, size_t n) { __real_memcmp_bytes+=n; return __real_memcmp(a,b,n); }
+static uint64_t vclock(void)
+{
+    if (!timed_frame) return vnow;
+    const struct desk_frame_stats *f=&d.frame_stats;
+    return vnow+(uint64_t)frame_cost_ns(f->scene_px,f->lfb_bytes,k.entries-t_entries,k.engine_ops-t_engine,
+                                        k.write_px-t_write,__real_memcmp_bytes-t_cmp,f->compare_px,f->copy_bytes);
+}
 static int upload(int display,int surface,const struct ciuki_rect *r)
 { (void)display; (void)surface; k.entries++; k.present_px+=(uint64_t)r->width*r->height; return 0; }
 static int display_info(int display,struct ciuki_framebuffer_info *out)
@@ -277,6 +289,189 @@ static void foreign_load(unsigned kind,struct tally *t)
     if(kind==3)assert(t->scene_px<=t->frames*2u*8u*16u);
     scene_free();
 }
+/* fx-26 (T23 f441c5bd: window management slow while something else
+ * draws): a large window (NetSurf-sized, 800x560) dragged at 60 frames a
+ * second while a DOS window (640x480) changes 32 scanlines at 70.09 Hz and
+ * the dragged program itself repaints a 200x16 status line at 5 Hz. The
+ * modeled cost of every frame (composition, LFB bytes, RAM copy, engine
+ * requests, kernel entries) must fit the 16.7 ms slot, so the drag keeps the
+ * frame rate. Before fx-26 any pending damage disabled the move copy and
+ * every frame recomposed and uploaded both outer boxes in software. */
+static double frame_ms(const struct tally *t)
+{
+    double us=(double)t->entries*ENTRY_US+(double)t->scene_px*COMPOSE_NS/1000.0
+        +(double)t->lfb_bytes*LFB_NS_B/1000.0+(double)t->write_px*4.0*WRITE_NS_B/1000.0
+        +(double)t->ram_bytes*RAM_NS_B/1000.0+(double)t->compared*CMP_NS_B/1000.0
+        +(double)t->engine_ops*ENGINE_US+(double)t->proof_px*8.0*CMP_NS_B/1000.0;
+    return t->frames ? us/1000.0/(double)t->frames : 0.0;
+}
+static void drag_with_dos(struct tally *t, uint64_t *worst_input_ns)
+{
+    scene_setup(); vnow=1000000000ull;
+    int dos=window_new(11,21,640,480,340,250); d.clients[dos].dosbox=1;
+    int web=window_new(10,20,800,560,40,60);
+    warm(); tally_begin();
+    uint64_t begin=vnow, end=begin+3000000000ull, next_dos=begin, next_status=begin, next_input=begin, turns=0, events=0, ram=0;
+    uint64_t pending_input=0; *worst_input_ns=0;
+    int dx=8, dy=6; unsigned tick=0;
+    while (vnow<end) {
+        d.now_ns=vnow; turns++;
+        if (vnow>=next_dos) {
+            struct desk_client *c=&d.clients[dos]; uint32_t *p=(uint32_t *)c->pixels;
+            for (unsigned row=20;row<52;row++) for (unsigned col=0;col<640;col++) p[row*640+col]=(row*92761u+col*817u+tick*7631u)&0xffffff;
+            struct ciuki_message m; desk_message(&m,DESK_DAMAGE,20); m.sender_pid=c->pid;
+            desk_put32(m.data+4,0); desk_put32(m.data+8,20); desk_put32(m.data+12,640); desk_put32(m.data+16,32);
+            desk_receive(&d,dos,&m); events++; next_dos+=14268000ull; tick++;
+        }
+        if (vnow>=next_status) {
+            struct desk_client *c=&d.clients[web]; uint32_t *p=(uint32_t *)c->pixels;
+            for (unsigned row=530;row<546;row++) for (unsigned col=10;col<210;col++) p[row*800+col]^=0x00101010;
+            struct ciuki_message m; desk_message(&m,DESK_DAMAGE,20); m.sender_pid=c->pid;
+            desk_put32(m.data+4,10); desk_put32(m.data+8,530); desk_put32(m.data+12,200); desk_put32(m.data+16,16);
+            desk_receive(&d,web,&m); events++; next_status+=200000000ull;
+        }
+        if (vnow>=next_input) {
+            /* PS/2 pointer at 100 Hz: the drag moves the window. */
+            struct desk_box f=d.clients[web].frame;
+            if (f.x+dx<0 || f.x+f.w+dx>(int)d.width) dx=-dx;
+            if (f.y+dy<DESK_BAR || f.y+f.h+dy>(int)d.height-DESK_BAR) dy=-dy;
+            desk_move(&d,web,f.x+dx,f.y+dy); events++;
+            if (!pending_input) pending_input=vnow;
+            next_input+=10000000ull;
+        }
+        if (desk_frame_due(&d,vnow)) {
+            if (d.copy_pending && d.frame_valid) ram+=(uint64_t)d.copy_rect.width*d.copy_rect.height*4;
+            assert(!desk_redraw(&d));
+            if (pending_input) { uint64_t lag=vnow-pending_input; if (lag>*worst_input_ns) *worst_input_ns=lag; pending_input=0; }
+        }
+        uint64_t next=next_input<next_dos ? next_input : next_dos;
+        if (next_status<next) next=next_status;
+        vnow+=wait_ns(next);
+    }
+    tally_end(t,(double)(vnow-begin)/1e9,turns,ram,events);
+    scene_free();
+}
+/* fx-26: the same drags with the frame taking its modeled T23 time (the
+ * virtual clock advances by each frame's composition, LFB, RAM-copy, engine
+ * and kernel-entry cost) and the desktop's wake-ups late by a deterministic
+ * 0-4 ms (T23 f441c5bd: resched_lat_max_ms 3-9 for the desktop). Measured:
+ * frames per second and the pointer-motion -> frame latency. */
+struct timed { double fps, frame_ms, input_max_ms, input_mean_ms; uint64_t frames; };
+static double frame_cost_ns(uint64_t scene, uint64_t lfb, uint64_t entries, uint64_t engine, uint64_t write, uint64_t cmp, uint64_t proof, uint64_t ram)
+{
+    return (double)entries*ENTRY_US*1000.0+(double)scene*COMPOSE_NS+(double)lfb*LFB_NS_B+(double)write*4.0*WRITE_NS_B+
+        (double)ram*RAM_NS_B+(double)cmp*CMP_NS_B+(double)engine*ENGINE_US*1000.0+(double)proof*8.0*CMP_NS_B;
+}
+static struct timed timed_drag(int w, int h, int dos_window, unsigned lateness_ms, int engine)
+{
+    scene_setup(); vnow=1000000000ull;
+    if (!engine) { d.accel=NULL; d.accel_caps=0; d.hw_cursor=d.hw_cursor_shown=0; d.cursor_dirty=1; }
+    int dos=dos_window ? window_new(11,21,640,480,340,250) : -1;
+    if (dos>=0) d.clients[dos].dosbox=1;
+    int win=window_new(10,20,(unsigned)w,(unsigned)h,40,60);
+    warm(); tally_begin();
+    uint64_t begin=vnow, end=begin+4000000000ull, next_dos=begin, next_input=begin, pending=0, lag_sum=0, lag_max=0, lags=0;
+    double busy_ns=0; int dx=8, dy=6; unsigned tick=0, rnd=12345;
+    while (vnow<end) {
+        d.now_ns=vnow;
+        if (dos>=0 && vnow>=next_dos) {
+            struct desk_client *c=&d.clients[dos]; uint32_t *p=(uint32_t *)c->pixels;
+            for (unsigned row=20;row<52;row++) for (unsigned col=0;col<640;col++) p[row*640+col]=(row*92761u+col*817u+tick*7631u)&0xffffff;
+            struct ciuki_message m; desk_message(&m,DESK_DAMAGE,20); m.sender_pid=c->pid;
+            desk_put32(m.data+4,0); desk_put32(m.data+8,20); desk_put32(m.data+12,640); desk_put32(m.data+16,32);
+            desk_receive(&d,dos,&m); next_dos+=14268000ull; tick++;
+        }
+        while (vnow>=next_input) {
+            struct desk_box f=d.clients[win].frame;
+            if (f.x+dx<0 || f.x+f.w+dx>(int)d.width) dx=-dx;
+            if (f.y+dy<DESK_BAR || f.y+f.h+dy>(int)d.height-DESK_BAR) dy=-dy;
+            desk_move(&d,win,f.x+dx,f.y+dy);
+            if (!pending) pending=next_input;
+            next_input+=10000000ull;
+        }
+        if (desk_frame_due(&d,vnow)) {
+            uint64_t scene=d.stats.scene_px, lfb=d.stats.lfb_bytes, entries=k.entries, engine=k.engine_ops, write=k.write_px,
+                cmp=__real_memcmp_bytes, proof=d.stats.compare_px;
+            uint64_t ram=d.copy_pending && d.frame_valid ? (uint64_t)d.copy_rect.width*d.copy_rect.height*4 : 0;
+            uint64_t moved=pending;
+            memset(&d.frame_stats,0,sizeof(d.frame_stats));
+            t_entries=k.entries; t_engine=k.engine_ops; t_write=k.write_px; t_cmp=__real_memcmp_bytes; timed_frame=1;
+            assert(!desk_redraw(&d));
+            timed_frame=0;
+            double cost=frame_cost_ns(d.stats.scene_px-scene,d.stats.lfb_bytes-lfb,k.entries-entries,k.engine_ops-engine,
+                                      k.write_px-write,__real_memcmp_bytes-cmp,d.stats.compare_px-proof,ram);
+            (void)ram;
+            busy_ns+=cost; vnow+=(uint64_t)cost;
+            if (moved) { uint64_t lag=vnow-moved; lag_sum+=lag; lags++; if (lag>lag_max) lag_max=lag; pending=0; }
+            continue;
+        }
+        uint64_t next=next_input<next_dos ? next_input : next_dos;
+        uint64_t wait=wait_ns(next);
+        rnd=rnd*1103515245u+12345u;
+        vnow+=wait+(lateness_ms ? (uint64_t)((rnd>>16)%(lateness_ms*1000u))*1000ull : 0); /* late wake-up */
+    }
+    struct timed r={.frames=d.stats.frames};
+    double seconds=(double)(vnow-begin)/1e9;
+    r.fps=d.stats.frames/seconds; r.frame_ms=d.stats.frames ? busy_ns/1e6/d.stats.frames : 0;
+    r.input_max_ms=lag_max/1e6; r.input_mean_ms=lags ? (double)lag_sum/lags/1e6 : 0;
+    scene_free();
+    return r;
+}
+/* fx-26: minimise, restore, maximise and restore of an 800x560 window
+ * while a DOS window plays, each operation at a random slot phase with the
+ * clock advancing by the frame cost: operation -> first frame showing it,
+ * the cost of that frame and the frames of the 150 ms caption animation. */
+struct op_result { double first_ms, first_cost_ms, max_first_ms; unsigned animation_frames; };
+static struct op_result timed_ops(unsigned lateness_ms)
+{
+    scene_setup(); vnow=1000000000ull;
+    int dos=window_new(11,21,640,480,340,250); d.clients[dos].dosbox=1;
+    int win=window_new(10,20,800,560,40,60);
+    warm();
+    struct op_result r={0,0,0,0}; unsigned ops=0, rnd=777; double sum=0, cost_sum=0;
+    uint64_t next_dos=vnow;
+    for (unsigned op=0;op<16;op++) {
+        uint64_t at=vnow+50000000ull+(uint64_t)((op*7919u)%17u)*1000000ull, shown=0; double first_cost=0;
+        unsigned frames_before=(unsigned)d.stats.frames; int done=0, anim_seen=0;
+        uint64_t until=at+400000000ull;
+        while (vnow<until) {
+            d.now_ns=vnow;
+            if (vnow>=next_dos) {
+                struct desk_client *c=&d.clients[dos]; uint32_t *p=(uint32_t *)c->pixels;
+                for (unsigned row=20;row<52;row++) for (unsigned col=0;col<640;col++) p[row*640+col]^=0x00010101;
+                struct ciuki_message m; desk_message(&m,DESK_DAMAGE,20); m.sender_pid=c->pid;
+                desk_put32(m.data+4,0); desk_put32(m.data+8,20); desk_put32(m.data+12,640); desk_put32(m.data+16,32);
+                desk_receive(&d,dos,&m); next_dos+=14268000ull;
+            }
+            if (!done && vnow>=at) {
+                if (op%4==2) desk_zoom(&d,win); else if (op%4==3) desk_zoom(&d,win); else desk_minimize(&d,win);
+                done=1; at=vnow;
+            }
+            desk_animation_tick(&d);
+            if (desk_frame_due(&d,vnow)) {
+                memset(&d.frame_stats,0,sizeof(d.frame_stats));
+                t_entries=k.entries; t_engine=k.engine_ops; t_write=k.write_px; t_cmp=__real_memcmp_bytes; timed_frame=1;
+                uint64_t start=vnow; assert(!desk_redraw(&d)); uint64_t end=vclock(); timed_frame=0;
+                vnow=end;
+                if (done && !shown) { shown=vnow; first_cost=(double)(end-start)/1e6; }
+                if (done && d.animation.active) anim_seen++;
+                continue;
+            }
+            uint64_t wait=wait_ns(next_dos<at && !done ? next_dos : (done ? next_dos : at));
+            uint64_t anim=d.animation.active ? d.animation.started+(d.animation.step+1)*25000000ull : UINT64_MAX;
+            if (anim>vnow && anim-vnow<wait) wait=anim-vnow;
+            rnd=rnd*1103515245u+12345u;
+            vnow+=wait+(lateness_ms ? (uint64_t)((rnd>>16)%(lateness_ms*1000u))*1000ull : 0);
+        }
+        assert(shown);
+        double ms=(double)(shown-at)/1e6; sum+=ms; cost_sum+=first_cost; if (ms>r.max_first_ms) r.max_first_ms=ms;
+        r.animation_frames+=(unsigned)anim_seen; ops++;
+        (void)frames_before;
+    }
+    r.first_ms=sum/ops; r.first_cost_ms=cost_sum/ops; r.animation_frames/=ops;
+    scene_free();
+    return r;
+}
 int main(void)
 {
     struct tally idle, drag;
@@ -310,5 +505,43 @@ int main(void)
         assert(cpu<=budgets[kind]);
     }
     puts("PASS F2-98b T23 budgets: idle, native-rate DOS scanlines, Win32 area, NetSurf separated labels");
+    {
+        struct tally t; uint64_t input_ns;
+        drag_with_dos(&t,&input_ns); report("fx26-drag-800x560-with-dos",&t);
+        double ms=frame_ms(&t), fps=t.frames/t.seconds;
+        printf("CPU fx-26 drag 800x560 with a DOS window at 70 Hz: frames_per_s=%.1f modeled_frame_ms=%.2f slot_ms=16.67 "
+               "scene_px_per_frame=%.0f lfb_bytes_per_frame=%.0f engine_copies_per_frame=%.1f input_to_frame_max_ms=%.1f\n",
+               fps,ms,t.frames ? (double)t.scene_px/t.frames : 0.0,t.frames ? (double)t.lfb_bytes/t.frames : 0.0,
+               t.frames ? (double)t.copies/t.frames : 0.0,(double)input_ns/1e6);
+        assert(fps>=59.0 && t.copies>=t.frames/2);
+        assert(ms<=16.67);
+        assert(input_ns<=17000000ull);
+        puts("PASS fx-26 T23 window drag keeps the frame rate while other windows draw");
+        static const struct { int w, h, dos, engine; const char *name; } drags[]={
+            {560,420,0,1,"560x420"},{800,560,0,1,"800x560"},{800,560,1,1,"800x560+dos"},{1000,680,0,1,"1000x680"},
+            {560,420,0,0,"560x420-software"}};
+        static const unsigned lates[]={0,4,9}; /* f441c5bd: desktop resched_lat_max_ms 3, 9 with a DOS VM */
+        /* FX26_NO_ASSERT=1 prints the table without asserting (negative-control
+         * runs against older apps/desktop sources). */
+        for (unsigned i=0;i<sizeof(drags)/sizeof(*drags);i++) for (unsigned li=0;li<3;li++) {
+            unsigned late=lates[li];
+            struct timed r=timed_drag(drags[i].w,drags[i].h,drags[i].dos,late,drags[i].engine);
+            fflush(stdout); printf("TIMED fx-26 drag %s wake_late_max_ms=%u frames_per_s=%.1f modeled_frame_ms=%.2f input_to_frame_mean_ms=%.1f max_ms=%.1f\n",
+                   drags[i].name,late,r.fps,r.frame_ms,r.input_mean_ms,r.input_max_ms); fflush(stdout);
+            /* The frame rate holds while the frame fits its slot; input is
+             * on screen within one frame period plus the frame itself. */
+            if (r.frame_ms+late<16.0 && !getenv("FX26_NO_ASSERT")) assert(r.fps>=55.0);
+            if (!getenv("FX26_NO_ASSERT")) assert(r.input_max_ms<=16.67+r.frame_ms*2+late+1.0);
+        }
+        puts("PASS fx-26 T23 timed drags: no lost slots from late frame starts");
+        for (unsigned li=0;li<3;li++) {
+            struct op_result o=timed_ops(lates[li]);
+            fflush(stdout);
+            printf("TIMED fx-26 minimise/restore/maximise 800x560+dos wake_late_max_ms=%u op_to_frame_mean_ms=%.1f max_ms=%.1f first_frame_cost_ms=%.1f animation_frames=%u\n",
+                   lates[li],o.first_ms,o.max_first_ms,o.first_cost_ms,o.animation_frames); fflush(stdout);
+            if (!getenv("FX26_NO_ASSERT")) assert(o.max_first_ms<=16.67+o.first_cost_ms*2+lates[li]+1.0 && o.animation_frames>=5);
+        }
+        puts("PASS fx-26 T23 window operations: first frame within one slot plus its own cost");
+    }
     return 0;
 }
