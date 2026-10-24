@@ -304,3 +304,25 @@ contract rechecked in
 Existing window-model scenario indexes are preserved; the three G16B
 scenarios follow them at indexes 101–103. Integration frame hashes are
 retained for overlapping names; the lead must review and re-pin changed frames.
+
+## Visual audit A (2026-10-24): Open/Save As toolbar and Image Viewer tool bar
+
+Reference: the Windows 98 Open/Save As dialog (OPENFILENAME, Microsoft Platform
+SDK "Common Dialog Box Library") has a "Look in:"/"Save in:" drop-down listing the
+hierarchy of the current folder and the drives, followed by small icon buttons
+(Up One Level, New Folder, List, Details) with tooltips; the Places bar spans the
+list height; the file list ends just above the name rows. Decisions:
+
+- "Look in" is an editable DU_COMBO: indented folder hierarchy from the root, then
+  the other Places (desktop, documents, mounted drives) with their icons; a pick
+  navigates, typing a path and Enter still works. The combo drop-down list now
+  draws `icon16` of its items when present.
+- Up, New Folder, List, Details and Icons are 24x22 DU_TOOLBUTTONs (Tango go-up,
+  folder-new, format-justify-left/fill, applications-other, 16 px) with tooltips,
+  grouped by a gap; the floating "Icons" text button is gone. The Places header
+  is dropped and the bar spans the list height.
+- Image Viewer: DU_TOOLBAR band with 22 px Tango tool buttons and separators,
+  Open | Previous Next | Zoom Out Zoom In | Best Fit Actual Size, with tooltips.
+  Tango 0.8.90 has no zoom or rotate glyphs, so zoom uses list-remove / list-add,
+  Best Fit view-fullscreen and Actual Size image-x-generic; rotate stays in the
+  View menu (no icon in the store; no new artwork added).

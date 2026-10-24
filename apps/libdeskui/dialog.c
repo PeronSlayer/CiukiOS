@@ -53,6 +53,7 @@ static void places_close(struct du_dialog *d)
 #endif
     free(d->places); d->places=NULL;
 }
+static void look_build(struct du_dialog *d);
 static void places_select(struct du_dialog *d)
 {
     if (!d->places) return;
@@ -141,6 +142,7 @@ void du_dialog_tick(struct du_ui *u)
     int max=(int)p->count-du_list_page(w); if (max<0) max=0;
     if (w->scroll>max) w->scroll=max;
     places_select(d); du_invalidate(u,w->box);
+    if (d->state && (d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE)) { look_build(d); }
 }
 uint64_t du_dialog_deadline(const struct du_ui *u)
 { return u->dialog.places ? u->dialog.places->next_poll : UINT64_MAX; }
@@ -413,6 +415,7 @@ static const char *base_name(const char *path)
 static int has_extension(const char *name) { return strrchr(base_name(name), '.') != NULL; }
 
 #define FILTER_MAX 12
+#define LOOK_MAX 48
 struct file_state {
     unsigned flags;
     struct du_file_result *result;
@@ -428,6 +431,9 @@ struct file_state {
     du_mkdir_fn make_dir; void *make_dir_ctx;
     char pending[DU_TEXT_MAX];             /* the path accepted (or being confirmed) */
     char sub_text[320]; int sub_icon;
+    struct du_item look_rows[LOOK_MAX];    /* Look in drop-down: the folder hierarchy, then the other places */
+    char look_label[LOOK_MAX][96], look_path[LOOK_MAX][256];
+    unsigned look_count;
     int panel_dx, panel_dy, panel_w, panel_h;
     char title[96];
 };
@@ -503,10 +509,58 @@ static int navigate(struct du_ui *u, const char *path)
     if (strcmp(d->folder, path)) f->typed[0] = 0;
     snprintf(d->folder, sizeof(d->folder), "%s", path);
     refilter(u);
+    look_build(d);
     du_set_text(&d->items[F_FOLDER], d->folder);
     places_select(d);
     dialog_damage(u);
     return 0;
+}
+
+/* Look in: Win98 lists the hierarchy of the current folder (indented), then the other
+ * places (desktop, documents, drives). Selecting a row navigates there. */
+static void look_add(struct file_state *f, const char *label, const char *path, const char *icon, unsigned depth)
+{
+    if (f->look_count >= LOOK_MAX || strlen(path) >= sizeof(f->look_path[0])) return;
+    unsigned i = f->look_count++;
+    snprintf(f->look_path[i], sizeof(f->look_path[i]), "%s", path);
+    snprintf(f->look_label[i], sizeof(f->look_label[i]), "%*s%s", (int)(depth * 2), "", label);
+    f->look_rows[i] = (struct du_item){0};
+    f->look_rows[i].text[0] = f->look_label[i];
+    f->look_rows[i].icon16 = du_icon_argb(du_icon_name(icon), 16);
+}
+static void look_build(struct du_dialog *d)
+{
+    struct file_state *f = FILE_STATE(d);
+    struct du_widget *w = &d->items[F_FOLDER];
+    f->look_count = 0;
+    const char *root_label = "CiukiOS (C:)";
+    if (d->places) for (unsigned i = 0; i < d->places->count; i++)
+        if (!strcmp(d->places->entries[i].path, "/")) root_label = d->places->entries[i].label;
+    look_add(f, root_label, "/", "drive-harddisk", 0);
+    int current = 0;
+    char path[256]; size_t n = 0; unsigned depth = 1;
+    for (const char *p = d->folder; *p && f->look_count < LOOK_MAX / 2;) {
+        while (*p == '/') p++;
+        const char *end = p; while (*end && *end != '/') end++;
+        if (end == p) break;
+        size_t len = (size_t)(end - p);
+        if (n + 1 + len >= sizeof(path)) break;
+        path[n++] = '/'; memcpy(path + n, p, len); n += len; path[n] = 0;
+        char name[96]; snprintf(name, sizeof(name), "%.*s", (int)len, p);
+        look_add(f, name, path, "folder-open", depth++);
+        current = (int)f->look_count - 1;
+        p = end;
+    }
+    if (d->places) for (unsigned i = 0; i < d->places->count; i++) {
+        const char *pp = d->places->entries[i].path;
+        if (!strcmp(pp, "/")) continue;
+        unsigned k = 0; for (; k < f->look_count; k++) if (!strcmp(f->look_path[k], pp)) break;
+        if (k < f->look_count) continue;
+        look_add(f, d->places->entries[i].label, pp, "folder", 0);
+        f->look_rows[f->look_count - 1].icon16 = d->places->rows[i].icon16;
+    }
+    du_combo_set(w, f->look_rows, f->look_count, -1);
+    w->value = current;
 }
 
 static void join(char *out, const char *folder, const char *name)
@@ -555,33 +609,40 @@ int du_file_open(struct du_ui *u, int id, const struct du_file_options *o)
     int row2 = b.y + b.h - 3 - 10 - BTN_H - ((o->flags & DU_FILE_READONLY_BOX) ? 26 : 0), row1 = row2 - BTN_H - 6;
     item(d, F_ACCEPT, DU_BUTTON, ID_BUTTON, save ? "&Save" : "&Open")->box = (struct du_rect){right - BTN_W, row1, BTN_W, BTN_H};
     item(d, F_CANCEL, DU_BUTTON, ID_BUTTON - 1, "Cancel")->box = (struct du_rect){right - BTN_W, row2, BTN_W, BTN_H};
-    /* Toolbar row: Look in, folder, Up, New Folder, List, Details. */
-    int x = right;
-    x -= 56; item(d, F_VDETAILS, DU_BUTTON, ID_VDETAILS, "D&etails")->box = (struct du_rect){x, y, 56, 22}; x -= 4;
-    x -= 40; item(d, F_VLIST, DU_BUTTON, ID_VLIST, "&List")->box = (struct du_rect){x, y, 40, 22}; x -= 4;
+    /* Toolbar row (Win98): "Look in" drop-down, then icon buttons Up, New Folder | List, Details, Icons. */
+    int x = right, tb_w = 24;
     int hide_new = (o->flags & DU_FILE_NO_NEW_FOLDER) != 0;
-    x -= 80; item(d, F_NEWDIR, DU_BUTTON, ID_NEWDIR, "&New Folder")->box = (struct du_rect){x, y, 80, 22}; x -= 4;
+    static const struct { int slot, id; const char *icon, *tip; } tools[5] = {
+        {F_VICONS, ID_VICONS, "applications-other", "Large Icons"}, {F_VDETAILS, ID_VDETAILS, "format-justify-fill", "Details"},
+        {F_VLIST, ID_VLIST, "format-justify-left", "List"}, {F_NEWDIR, ID_NEWDIR, "folder-new", "Create New Folder"},
+        {F_UP, ID_UP, "go-up", "Up One Level"} };
+    for (int i = 0; i < 5; i++) {
+        x -= tb_w;
+        struct du_widget *t = item(d, tools[i].slot, DU_TOOLBUTTON, tools[i].id, "");
+        t->box = (struct du_rect){x, y, tb_w, 22};
+        t->icon = du_icon_argb(du_icon_name(tools[i].icon), 16); t->icon_size = t->icon ? 16 : 0;
+        du_set_tip(t, tools[i].tip);
+        x -= 1;
+        if (i == 2) x -= 5;   /* group separator between the view buttons and Up / New Folder */
+    }
     d->items[F_NEWDIR].hidden = (uint8_t)hide_new;
-    x -= 40; item(d, F_UP, DU_BUTTON, ID_UP, "Up")->box = (struct du_rect){x, y, 40, 22}; x -= 4;
-    /* Icons live beside the bottom controls to preserve the Look in edit. */
-    item(d, F_VICONS, DU_BUTTON, ID_VICONS, "&Icons")->box = (struct du_rect){right - BTN_W, row1 - 29, BTN_W, 22};
+    x -= 3;
     struct du_widget *ro = item(d, F_READONLY, DU_CHECKBOX, ID_READONLY, "Open as &read-only");
     ro->box = (struct du_rect){b.x + 94, row2 + 26, 200, 22};
     ro->hidden = !(o->flags & DU_FILE_READONLY_BOX); ro->value = !!(o->flags & DU_FILE_READONLY);
     int folder_w = x - (b.x + 80); if (folder_w < 40) folder_w = 40;
-    item(d, F_FOLDER, DU_EDIT, ID_FOLDER, o->folder)->box = (struct du_rect){b.x + 80, y, folder_w, 22};
+    item(d, F_FOLDER, DU_COMBO, ID_FOLDER, o->folder)->box = (struct du_rect){b.x + 80, y, folder_w, 22};
+    d->items[F_FOLDER].editable = 1;
     d->items[F_FOLDER].icon = du_icon_argb(du_icon_name("type:folder"), 16);
-    du_set_tip(&d->items[F_UP], "Up One Level"); du_set_tip(&d->items[F_NEWDIR], "Create New Folder");
-    du_set_tip(&d->items[F_VLIST], "List"); du_set_tip(&d->items[F_VDETAILS], "Details");
     struct du_widget *list = item(d, F_LIST, DU_LISTVIEW, ID_LIST, "");
     list->view = DU_LIST; list->inactive_selection = 1; list->selection_external = 1;
     int pane = b.w >= 460 ? 150 : 120;
-    list->box = (struct du_rect){b.x + 14 + pane + 8, y + 30, b.w - 36 - pane, row1 - 36 - (y + 30)};
+    list->box = (struct du_rect){b.x + 14 + pane + 8, y + 30, b.w - 36 - pane, row1 - 8 - (y + 30)};
     file_columns(list, 0); list->view = DU_LIST;
     struct du_widget *places = item(d, F_PLACES, DU_TREE, ID_PLACES, "");
     places->inactive_selection = 1;
-    places->box = (struct du_rect){b.x + 14, y + 48, pane, list->box.h - 18};
-    item(d, F_PLACES_TITLE, DU_HEADER, 0, "Places")->box = (struct du_rect){b.x + 14, y + 30, pane, 18};
+    places->box = (struct du_rect){b.x + 14, y + 30, pane, list->box.h};   /* the Places bar spans the list height, as Win98 */
+    item(d, F_PLACES_TITLE, DU_HEADER, 0, "Places")->hidden = 1;
     item(d, F_NAME, DU_EDIT, ID_NAME, o->name)->box = (struct du_rect){b.x + 94, row1, right - BTN_W - 10 - (b.x + 94), 22};
     d->items[F_NAME].anchor = 0;
     item(d, F_LOOK, DU_LABEL, 0, "Look &in:")->box = (struct du_rect){b.x + 14, y, 64, 22};
@@ -1030,6 +1091,10 @@ static int file_event(struct du_ui *u, const struct du_event *e)
     if (e->type == DU_EV_COMMIT && e->id == ID_SUB_EDIT) { sub_yes(u); return 1; }
     if (e->type == DU_EV_CANCEL && e->id == ID_SUB_EDIT) { sub_no(u); return 1; }
     if (e->type == DU_EV_CHANGE && e->id == ID_NAME) { f->selection_input = 0; return 0; }
+    if (e->type == DU_EV_SELECT && e->id == ID_FOLDER) {
+        if ((unsigned)e->index < f->look_count && navigate(u, f->look_path[e->index])) du_set_text(&d->items[F_FOLDER], d->folder);
+        return 1;
+    }
     if (e->type == DU_EV_SELECT && e->id == ID_TYPE) {
         f->filter = e->index; d->result = e->index; f->typed[0] = 0; refilter(u); return 1;
     }

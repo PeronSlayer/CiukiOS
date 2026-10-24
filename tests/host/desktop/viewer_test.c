@@ -77,6 +77,15 @@ int main(int argc, char **argv)
     app.printing=host_print;
     struct du_event printing={.type=DU_EV_ACTIVATE,.id=V_M_PRINT};viewer_event(&ui,&printing,&app);assert(!print_requests);
     printing.id=V_M_PAGESETUP;viewer_event(&ui,&printing,&app);assert(setup_requests==1);
+    {   /* The tool bar is icon buttons with tooltips, grouped by separators: Open | Prev Next | Out In | Fit Actual. */
+        static const int tools[] = { V_OPEN, V_PREV, V_NEXT, V_OUT, V_IN, V_FIT, V_ACTUAL };
+        for (unsigned i = 0; i < sizeof(tools) / sizeof(*tools); i++) {
+            struct du_widget *w = du_get(&ui, tools[i]);
+            assert(w->kind == DU_TOOLBUTTON && w->icon && w->icon_size == 22 && !w->text[0] && w->tip[0]);
+            if (i) assert(w->box.x > du_get(&ui, tools[i - 1])->box.x + 27);
+        }
+        assert(du_get(&ui, V_TSEP1)->box.x < du_get(&ui, V_PREV)->box.x && du_get(&ui, V_TSEP3)->box.x > du_get(&ui, V_OUT)->box.x && du_get(&ui, V_BAND)->kind == DU_TOOLBAR);
+    }
     du_render(&ui);
     at_save(folder, "viewer-empty", &ui);
     char path[1024]; snprintf(path, sizeof(path), "%s/c-wallpaper.png", scratch);
