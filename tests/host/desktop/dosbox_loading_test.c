@@ -54,7 +54,7 @@ int dos_clip_service(void) { return 0; }
 
 static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
-static unsigned title_set, finished_panel;
+static unsigned title_set, finished_panel, close_requests;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
 static unsigned error_idle_waits;
 static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
@@ -145,7 +145,12 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
         if (!p.serial) { assert(p.flags==DESK_SESSION_AGREE && !session_registered); session_registered++; }
         else { assert((scenario==22 || scenario==26) && p.serial==5 && p.flags==(scenario==26 ? DESK_SESSION_AGREE : DESK_SESSION_DOS_ACTIVE) && session_registered); session_answers++; }
     }
-    if (p.opcode==DESK_SET_TITLE) { assert(scenario==30 && !strcmp(p.title,"Finished - DOOM")); title_set++; }
+    /* dosbox: EXIT with "Close on exit" off (30); a program that ended before
+     * it was shown or in its first seconds (23, 24, 32). */
+    if (p.opcode==DESK_SET_TITLE) {
+        assert((scenario==23 || scenario==24 || scenario==30 || scenario==32) && !strcmp(p.title,"Finished - DOOM"));
+        title_set++;
+    }
     if (p.opcode==DESK_PONG && (scenario==27 || scenario==28)) { assert(creating() && desk_get32(m->data+4)==78); create_pongs++; }
     else if (p.opcode==DESK_PONG) { assert(scenario==20 && !vm_created && desk_get32(m->data+4)==77); pongs++; }
     if (p.opcode==DESK_DAMAGE && creating() && desk_get32(m->data+12)==400 && desk_get32(m->data+16)==18) create_pulses++;
@@ -186,8 +191,10 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
     } else if ((scenario==22 || scenario==26) && session_answers==1 && !session_ends) {
         desk_message(m,DESK_END_SESSION,16); desk_put32(m->data+4,5); desk_put32(m->data+8,1); session_ends++;
     } else if (scenario==22 || scenario==26) { errno = EAGAIN; return -1; }
-    else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : enter_ms+650)) || (error_seen && clock_ms > 5000)) {
-        desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
+    else if (scenario==31 && clock_ms < enter_ms+20000) { errno = EAGAIN; return -1; } /* the program's return closes it */
+    else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : scenario==32 ? enter_ms+2650 : enter_ms+650)) ||
+             (error_seen && clock_ms > 5000)) {
+        desk_message(m, DESK_CLOSE_REQUEST, 4); phase++; close_requests++;
     } else { errno = EAGAIN; return -1; }
     m->data[0] = DESK_SHELL_VERSION; m->sender_pid = 999;
     return (int)m->length;
@@ -265,6 +272,11 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if ((scenario==18 || scenario==19) && presents) c->changed|=CIUKI_DOSVM_SAVE_FULL;
         if ((scenario==23 || scenario==24) && entered && clock_ms>enter_ms+20)
             c->changed=CIUKI_DOSVM_PROGRAM_RETURNED|CIUKI_DOSVM_SHELL_READY;
+        /* 31: a game shown for 12 s returns (Close on exit closes the window);
+         * 32: a game shown at 0.5 s returns at 2 s (Wolfenstein 3-D's memory
+         * error after its signon screen): the window stays, "Finished - DOOM". */
+        if ((scenario==31 && entered && clock_ms>enter_ms+12000) || (scenario==32 && entered && clock_ms>enter_ms+2000))
+            c->changed|=CIUKI_DOSVM_PROGRAM_RETURNED|CIUKI_DOSVM_SHELL_READY;
         if (scenario==19 && presents && !fs_command) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
         /* Decision 2026-10-24: EXIT at the prompt ends COMMAND, the wrapper writes
          * the control port and the VM stops with reason EXIT (0). */
@@ -284,7 +296,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     case CIUKI_DOSVM_PRESENT_BANDS:
         if (scenario==0 && c->presentation.flags) { errno=EINVAL;return -1; } /* legacy kernel */
         if (!(last_events&CIUKI_DOSVM_EVENT_VIDEO)) { assert(c->presentation.redraw); nonvideo_presents++; }
-        if (scenario != 6) assert(entered && clock_ms > enter_ms + (scenario==24 ? 20u : 500u) && !error_seen);
+        if (scenario != 6) assert(entered && clock_ms > enter_ms + (scenario==23 || scenario==24 ? 20u : 500u) && !error_seen);
         if (!presents) first_frame_ms=clock_ms;
         presents++;
         c->changed = 1;
@@ -353,7 +365,7 @@ int main(int argc, char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=30);
+    assert(scenario>=0 && scenario<=32);
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -377,12 +389,23 @@ int main(int argc, char **argv)
     }
     if (scenario==23 || scenario==24 || scenario==25 || scenario==26) {
         assert(!result && session_registered==1 && !error_seen && !close_declined);
-        if (scenario==23) assert(!presents && closed==1);
-        if (scenario==24) assert(presents && closed==1);
+        /* A program that returned 20 ms after its command, before any frame:
+         * its text screen is shown in a "Finished - DOOM" window, whether or
+         * not "Close on exit" is on (Windows 98 shows the program's output). */
+        if (scenario==23 || scenario==24) assert(presents && closed==1 && title_set==1 && close_requests==1);
         if (scenario==25) assert(presents && !closed);
         if (scenario==26) assert(session_queries==1 && session_answers==1 && session_ends==1 && closed==1);
-        printf("PASS G17 DOS program lifecycle: scenario=%d short-EXEC close/retain and per-program termination warning\n",scenario);
+        printf("PASS G17 DOS program lifecycle: scenario=%d short EXEC keeps a Finished window, retain and per-program termination warning\n",scenario);
         return 0;
+    }
+    if (scenario==31 || scenario==32) {
+        assert(!result && session_registered==1 && !error_seen && !close_declined && presents && closed==1);
+        if (scenario==31) assert(!title_set && !close_requests && clock_ms>enter_ms+12000);
+        else assert(title_set==1 && close_requests==1);
+        printf("PASS G17 DOS program lifecycle: scenario=%d %s\n",scenario,scenario==31 ?
+               "a program shown for 12 s closes its window on return (Close on exit)" :
+               "a program that returned in its first seconds keeps the Finished - DOOM window");
+        puts("PASS dosbox loading replay scenario"); return 0;
     }
     if (scenario==29 || scenario==30) {
         assert(!result && session_registered==1 && !error_seen && !close_declined && presents && closed==1);

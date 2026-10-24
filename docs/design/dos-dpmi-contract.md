@@ -1218,3 +1218,110 @@ result reused on a recovered volume with no disk reads; an identity change
 after the check re-arms it, the hash runs on the verifier) and DOS Box replay
 scenarios 22 (a 6 s CREATE: PING answered, three check-progress paints,
 pulses, 61 polls of 100 ms) and 23 (close during CREATE).
+
+### DOS Box memory: XMS in front of the guest INT 2Fh chain (2026-10-24)
+
+**Defect.** On the image of `9fe0a02e` Wolfenstein 3-D 1.4 shareware
+(`C:\WOLF3D\WOLF3D.EXE`) quit at once with "You do not have enough memory to
+run Wolfenstein 3-D". DOOM (DOS/4GW) and Quake (DPMI) were unaffected.
+
+**Research.**
+- XMS 3.0 ([text](https://www.phatcode.net/res/219/files/xms30.txt)):
+  "The recommended way of determining if an XMS driver is installed is to set
+  AH=43h and AL=00h and then execute INT 2Fh. If an XMS driver is available,
+  80h will be returned in AL"; AX=4310h returns the control function in ES:BX;
+  "the base XMS driver continues to be the only one installed on INT 2Fh
+  AH=43h" ([RBIL 2F/4300h](https://mirror.cs.msu.ru/oldlinux.org/Linux.old/docs/interrupts/int-html/rb-4765.htm)).
+  HIMEM.SYS is a CONFIG.SYS driver, so its INT 2Fh hook sits in front of the
+  DOS kernel's handler.
+- Windows 95/98 MS-DOS sessions are V86 VMs of the VMM (not NT's NTVDM):
+  the Windows XMS driver serves every VM with "its own set of handles" and
+  passes unknown handles to the real-mode HIMEM
+  ([The Old New Thing, 2016-05-03](https://devblogs.microsoft.com/oldnewthing/20160503-00/?p=93397));
+  EMS, XMS and DPMI are per-program PIF memory settings, "Auto" by default
+  ([Windows 95 Resource Kit, MS-DOS-based applications](https://techshelps.github.io/MSDN/DNWIN95/HTML/S65BF.HTM)).
+- The FreeDOS 2043 kernel's INT 2Fh (`kernel/int2f.asm`, unified sources
+  `third_party/freedos/unified/kernel-2043-sources.zip`) answers 11h, 12h,
+  16h, 4A01h/4A02h, 10h, 08h and 14h and returns every other function with
+  IRET (`Int2f?iret`): it does not chain AH=43h. The VMM answered 4300h/4310h
+  only in its ROM default handler (F000:02F0), behind DOS, so after the
+  kernel installed INT 2Fh no program saw XMS. The retired CiukiDOS kernel
+  chained to the ROM, which is why Wolf3D ran on 2026-10-12 (f3-06).
+- FreeDOS 1.3 `COMMAND.COM` is FreeCOM 0.85a XMS_Swap (`BIN/COMMAND.COM` is
+  byte-identical to `BIN/FREECOM/XSWAP/CMD-EN.COM`; `shell/init.c`
+  `FEATURE_XMS_SWAP`): with XMS it swaps its transient part out while a
+  program runs; without XMS it stays resident.
+- Wolfenstein 3-D source ([id Software release](https://github.com/id-Software/wolf3d)):
+  [`WL_MAIN.C`](https://github.com/id-Software/wolf3d/blob/master/WOLFSRC/WL_MAIN.C)
+  `InitGame` shows `ERRORSCREEN` and exits when `mminfo.mainmem < 235000`;
+  [`ID_MM.C`](https://github.com/id-Software/wolf3d/blob/master/WOLFSRC/ID_MM.C)
+  `MM_Startup` sets `mainmem = nearheap + farheap` from `coreleft()` less
+  `SAVENEARHEAP` (400h) and `farcoreleft()` less `SAVEFARHEAP` (0)
+  ([`ID_MM.H`](https://github.com/id-Software/wolf3d/blob/master/WOLFSRC/ID_MM.H)).
+  `MML_SetupXMS` (UMBs) exists but `MM_Startup` never calls it: only
+  conventional memory counts. The earlier statement in this contract that its
+  memory manager uses XMS/UMBs is corrected here: UMBs are unused, and
+  [`ID_PM.C`](https://github.com/id-Software/wolf3d/blob/master/WOLFSRC/ID_PM.C)
+  pages graphics/sound into EMS (found only through the LIM "open handle"
+  test, opening the `EMMXXXX0` device) or XMS when present, else main memory.
+  The shipped `WOLF3D.EXE` is LZEXE 0.91 over a Borland C++ medium-model
+  program: load image 287040 bytes, DGROUP at 3783h, `_stklen` 1000h,
+  `_heaplen` 0, so c0 keeps a 64 KiB DGROUP and the far heap is the rest of
+  the program's DOS block. The check passes when that block is at least
+  **80BDh paragraphs (527312 bytes, 515 KiB)**.
+- LIM EMS 4.0 Appendix B ([text](https://www.phatcode.net/res/218/files/limems40.txt))
+  gives two detection methods, the "open handle" technique (DOS 3Dh on
+  `EMMXXXX0`, IOCTL 4400h bit 7, 4407h) and the "get interrupt vector"
+  technique (name at offset 0Ah of the INT 67h handler segment).
+
+**Measurement** (host replay of the canonical `kernel=unified` guest on the
+production VM code, `tests/host/dos/run_dos_memory.sh`; paragraphs in hex,
+program `DOSMEM.COM` running from the prompt):
+
+| | before | after |
+| --- | --- | --- |
+| INT 12h / DOS | 640 KiB / 7.10, DOS=LOW, no UMB link | same |
+| Kernel low (`SC` text, `SD` data/BUFFERS=10/FILES=40/CDS/CIUKIDF.SYS) | 0A55h (42320 B) + 0357h (13680 B) | same |
+| CIUKISH.COM + environment | 0028h + 0006h | same |
+| FreeCOM resident while a program runs | **110Ch (69824 B)** | **0091h (2320 B)** (swapped to XMS) |
+| SHARE | 0235h (9040 B) | same |
+| COMMAND environment (top of memory) | 0040h | same |
+| DOSREADY largest block at boot | 7BA2h (495 KiB; QEMU 7BD2h) | 8C1Dh (561 KiB) |
+| Block a program gets at the prompt | ~7BDFh (507376 B): Wolf3D short by 19936 B | ~8C5Ah (574880 B): Wolf3D margin 47568 B |
+| XMS (2Fh/4300h) | **absent** (AL=00h) | 3.00, HMA free (DOS=LOW), 24480 KiB free |
+| UMB (XMS 10h query) | unreachable | largest 1700h paragraphs (92 KiB, C900h–DFFFh); DOS does not link them (DOS=LOW, no DOS=UMB) |
+| EMS (INT 67h) | LIM 4.0, frame E000h, 512 pages | same; "open handle" detection fails (no `EMMXXXX0` DOS device) |
+
+**Decision.** The VMM answers INT 2Fh AX=4300h (AL=80h) and AX=4310h
+(ES:BX = C800:0000, the patchable XMS entry) at the V86 interrupt trap,
+before the guest's INT 2Fh chain, as HIMEM.SYS does in front of DOS and as
+the VMM already answers DPMI 1687h and MSCDEX 15xxh
+(`src/kernel/vm/dosvm.c` `interrupt_dispatch`, `dosvm_xms.c`
+`dosvm_xms_multiplex`; the ROM default handler keeps the same answer for
+reflected calls). Other multiplex functions are untouched and reflect as
+before. This is the smallest change: no CONFIG.SYS, FILES/BUFFERS, DOS=LOW
+(f3-56 Amendment 1) or memory cap changes, no guest XMS/EMS driver, no new
+reservation. The f3-48 conformance profile is unchanged; its `multiplex`
+case already expects AL=80h from 2Fh/4300h, which both the pristine FreeDOS
+1.3 reference and the unified guest now return.
+
+**Not done (measured headroom, later decisions).** DOS=UMB with LOADHIGH
+SHARE would move about 9 KiB into the 92 KiB UMB arena; DOS=HIGH would free
+the 42 KiB `SC` block but needs the DFV2 final bind to accept kernel text in
+the HMA (f3-56 Amendment 1). EMS visibility to "open handle" programs needs
+an `EMMXXXX0` character device in the DOS device chain (IOCTL 4400h bit 7,
+4407h ready); Wolf3D does not need it (it pages into XMS). Windows 98 sessions
+typically show about 600 KiB free with DOS=HIGH,UMB; this profile gives
+561 KiB.
+
+**Risks.** DOS/4GW and Quake select the DPMI host through 2Fh/1687h before
+XMS, so their path is unchanged; FreeCOM's swap now takes about 96 KiB of
+the shared 24 MiB XMS/EMS/DPMI pool while a program runs.
+
+Host evidence: `tests/host/dos/run_dos_memory.sh` (fails on the old VMM:
+XMS absent, FreeCOM 110Ch resident, largest 7B74h, Wolf3D back at the prompt
+after 1 s in text mode; passes after: XMS visible, FreeCOM 0091h, largest
+8BEFh, Wolf3D still in mode 13h unchained after 8 s, pristine FreeDOS 1.3
+sees XMS) and `tests/host/dosvm_test.c` (trap answer with a non-chaining
+INT 2Fh vector). The Wolf3D replay sets `GUEST_NO_X87` so Borland's startup
+uses its INT 34h–3Dh emulator, because the libx86emu runner has no x87.

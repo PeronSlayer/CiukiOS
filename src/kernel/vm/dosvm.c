@@ -1336,6 +1336,16 @@ static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
         } else v->exec_overflow = true;
         v->launch_returned = false;
     }
+    /* XMS 3.0 installation check and control-function address (2Fh/4300h,
+     * 4310h) in front of the guest's INT 2Fh chain, as HIMEM.SYS hooks INT 2Fh
+     * after the DOS kernel and Windows 98's V86MMGR serves XMS in every VM.
+     * The FreeDOS kernel's handler returns AH=43h unchained (int2f.asm
+     * Int2f?iret), so the ROM default answer was unreachable: no program saw
+     * XMS and the XMS-swap FreeCOM stayed resident (tests/host/dos/dos_memory.py). */
+    if (vector == 0x2F) {
+        int xms = dosvm_xms_multiplex(v, f);
+        if (xms != -ENOSYS) return xms;
+    }
     if (vector == 0xFD) return dosvm_mouse_return(v, f);
     if (vector != 0xFE) return dpmi_v86_int(v, f, vector);
     int stub = dpmi_v86_stub(v, f);

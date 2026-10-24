@@ -20,6 +20,19 @@ It is also run by `scripts/test/host_kernel_tests.sh`. The printed H49 labels
 describe the cases actually exercised; the f3-49 report distinguishes these
 from the full acceptance matrix and personality/controller integration.
 
+DOS Box memory (what a real-mode program started at the DOS Box prompt sees:
+XMS through INT 2Fh, the MCB chain, FreeCOM's XMS swap, HMA/UMB/EMS, then
+Wolfenstein 3-D 1.4's own memory check and the game itself) runs the
+canonical `kernel=unified` guest on the production VM code:
+
+```sh
+nice -n 19 bash tests/host/dos/run_dos_memory.sh
+```
+
+It uses the H57 qualification when present, else builds the fork once under
+`build/host/dos/dosmem/`. Figures and sources are in
+[dos-dpmi-contract.md](../../../docs/design/dos-dpmi-contract.md#dos-box-memory-xms-in-front-of-the-guest-int-2fh-chain-2026-10-24).
+
 Run one command at a time:
 
 ```sh

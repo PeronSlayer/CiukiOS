@@ -872,6 +872,17 @@ static void test_memory_services(bool locked)
     CHECK(as_lookup(&v->as,0xC8000,0)==v->frames[0xC8] && v->memory.frame_segment==0xE000 && v->memory.umb_enabled);
     struct v86_frame f;
     f=xf(0,0); CHECK(XMS(v,f) && AX(f)==0x300 && BX(f)==0x100 && DX(f)==1);
+    /* XMS installation check at the V86 INT 2Fh trap, in front of the guest's
+     * chain: a DOS handler that returns AH=43h unchained (FreeDOS int2f.asm)
+     * must not hide XMS (DOSMEM, Wolfenstein 3-D). Other functions reflect. */
+    uint32_t vector2f; CHECK(!dosvm_read(v,0x2F*4,&vector2f,4));
+    CHECK(!dosvm_write(v,0x2F*4,&(uint32_t){0x12340000u},4));
+    f=ef(0x4300,0,0); CHECK(!interrupt_dispatch(v,&f,0x2F) && (f.tf.eax&0xFFFFu)==0x4380);
+    f=ef(0x4310,0,0x5555); f.es=0x1111; CHECK(!interrupt_dispatch(v,&f,0x2F) && f.es==VM_XMS_SEG && BX(f)==0);
+    f=ef(0x4300,0,0); CHECK(!dosvm_xms_multiplex(v,&f) && (f.tf.eax&255)==0x80);
+    f=ef(0x4301,0,0); CHECK(dosvm_xms_multiplex(v,&f)==-ENOSYS && AX(f)==0x4301);
+    f=ef(0x1600,0,0); CHECK(dosvm_xms_multiplex(v,&f)==-ENOSYS);
+    CHECK(!dosvm_write(v,0x2F*4,&vector2f,4));
     f=xf(1,0xFFFF); CHECK(XMS(v,f) && AX(f)==1 && v->memory.hma);
     f=xf(1,0xFFFF); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0x91);
     f=xf(2,0); CHECK(XMS(v,f) && AX(f)==1 && !v->memory.hma);

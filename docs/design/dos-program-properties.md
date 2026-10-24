@@ -53,6 +53,23 @@ clears the signed counter in BH, 0005h/0006h accept BX=FFFFh, and callback
 mask bit 7 delivers a separate counter in BH. Positive guest counts mean
 downward movement; the desktop input convention is converted at the boundary.
 
+## A program that ends in its first seconds (2026-10-24)
+
+Windows 98 keeps a DOS window titled "Finished - <name>" with the program's
+last screen when the program ends and "Close on exit" is off; a program
+started from the Games menu that fails at once ("not enough memory", a
+missing file) otherwise vanished before its window ever showed it, so the
+user saw nothing. Decision: when a launched program returns to the prompt
+before the window showed its first frame, or within its first 10 s
+(`DOSBOX_EARLY_EXIT_MS`, `apps/dosbox/loading.h`), the DOS Box shows the
+VM's text screen, titles the window "Finished - <name>" and keeps it open even
+with "Close on exit" on, with the notice "The program has ended. Read its
+messages, then close this window." A program that ran longer still closes
+its window on return with "Close on exit". Host replay: DOS Box scenarios 23
+and 24 (return 20 ms after the command, no frame), 31 (shown for 12 s, closes)
+and 32 (shown at 0.5 s, returns at 2 s, keeps the window); the end-to-end
+game launch "exit" mode quits after 11 s.
+
 ## Remaining PIF compatibility
 
 Native private profiles are not binary Windows PIF import/export. Shortcut
