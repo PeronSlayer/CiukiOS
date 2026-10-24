@@ -51,6 +51,46 @@ struct peer {
     unsigned char *io;
 };
 static struct peer peers[16];
+/* fx-24: the styled-page fixture (fixtures/fx24, CIUKI_FIXTURE_SITE) as a
+ * web server sends it: HTML, CSS and SVG gzip-encoded with a length,
+ * images chunked, each with its media type; anything else is a 404. */
+static void site_response(struct peer *p,const char *name)
+{
+    static const char *const types[][2]={{".html","text/html; charset=utf-8"},{".css","text/css"},{".svg","image/svg+xml"},
+        {".png","image/png"},{".jpg","image/jpeg"},{".gif","image/gif"},{".webp","image/webp"}};
+    const char *site=getenv("CIUKI_FIXTURE_SITE"),*type=NULL;
+    for(unsigned i=0;i<sizeof(types)/sizeof(*types);i++){
+        size_t n=strlen(name),m=strlen(types[i][0]);
+        if(n>m && !strcmp(name+n-m,types[i][0]))type=types[i][1];
+    }
+    unsigned char body[16384];size_t bytes=0;FILE *file=NULL;
+    if(site && type && !strchr(name,'/') && name[0]!='.'){
+        char path[1024];snprintf(path,sizeof(path),"%s/%s",site,name);file=fopen(path,"rb");
+    }
+    if(!file){
+        const char *missing="HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+        p->response_bytes=strlen(missing);memcpy(p->response,missing,p->response_bytes);return;
+    }
+    bytes=fread(body,1,sizeof(body),file);CHECK(feof(file));fclose(file);
+    size_t used;
+    if(!strncmp(type,"image/",6) && strcmp(type,"image/svg+xml")){
+        used=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nTransfer-Encoding: chunked\r\n\r\n",type);
+        for(size_t at=0;at<bytes;at+=1000){
+            size_t n=bytes-at<1000?bytes-at:1000;
+            used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"%zx\r\n",n);
+            CHECK(used+n+2<sizeof(p->response));memcpy(p->response+used,body+at,n);used+=n;memcpy(p->response+used,"\r\n",2);used+=2;
+        }
+        used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"0\r\n\r\n");
+    } else {
+        unsigned char encoded[16384];z_stream z={0};
+        CHECK(deflateInit2(&z,9,Z_DEFLATED,31,8,Z_DEFAULT_STRATEGY)==Z_OK);
+        z.next_in=body;z.avail_in=(uInt)bytes;z.next_out=encoded;z.avail_out=sizeof(encoded);
+        CHECK(deflate(&z,Z_FINISH)==Z_STREAM_END);size_t n=z.total_out;deflateEnd(&z);
+        used=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Encoding: gzip\r\nContent-Length: %zu\r\n\r\n",type,n);
+        CHECK(used+n<=sizeof(p->response));memcpy(p->response+used,encoded,n);used+=n;
+    }
+    p->response_bytes=used;
+}
 static void response(struct peer *p)
 {
     char method[16],path[4097];CHECK(sscanf(p->request,"%15s %4096s",method,path)==2);
@@ -113,11 +153,23 @@ static void response(struct peer *p)
             CHECK(count==200);printf("fixture_cookie_retention=%u\n",count);
         }
         p->response_bytes=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s",strlen(page),page);
+    } else if(!strncmp(path,"/fx24/",6)){
+        site_response(p,path+6);
     } else if(!strcmp(path,"/framed")){
         /* fx-11: a top-level document (10 s layout limit) whose iframe is a
          * sub-resource window that keeps the 75 ms limit. */
-        const char *page="<!doctype html><title>Framed</title><h1>Ciuki</h1><iframe src=\"/page\" width=\"200\" height=\"100\"></iframe>";
+        const char *page="<!doctype html><title>Framed</title><h1>Ciuki</h1><iframe src=\"/frame-content\" width=\"200\" height=\"100\"></iframe>";
         p->response_bytes=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s",strlen(page),page);
+    } else if(!strcmp(path,"/frame-content")){
+        /* fx-24: the iframe's document has enough text (200 short lines) that
+         * its layout stays far above 75 ms of the x20000 budget clock: the
+         * one-heading /page laid out in 3.6 us of host time once clock reads
+         * and font measures got cheaper, i.e. 72 ms charged, under the limit. */
+        size_t used=0;char body[8192];
+        used+=(size_t)snprintf(body+used,sizeof(body)-used,"<!doctype html><title>Frame</title>");
+        for(unsigned i=0;i<200;i++)used+=(size_t)snprintf(body+used,sizeof(body)-used,"<p>Ciuki %u</p>",i);
+        CHECK(used<sizeof(body)-1);
+        p->response_bytes=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s",used,body);
     } else if(!strcmp(path,"/large-header")){
         strcpy((char *)p->response,"HTTP/1.1 200 OK\r\nX: ");size_t n=strlen((char *)p->response);
         memset(p->response+n,'x',8193);memcpy(p->response+n+8193,"\r\n\r\n",4);p->response_bytes=n+8197;

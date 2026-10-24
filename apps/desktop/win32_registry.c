@@ -1,15 +1,17 @@
 /* Native shell client of the f5-07A copied registry RPC. SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
+#include "startup.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 static pthread_mutex_t registry_lock=PTHREAD_MUTEX_INITIALIZER;
 static const char uninstall[]="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 struct response { struct w32r_reply header; uint8_t bytes[W32R_MAX-sizeof(struct w32r_reply)]; };
-static uint32_t call(struct response *r, unsigned op, uint32_t key, const char *path, const char *name, unsigned index)
+static uint32_t call_access(struct response *r, unsigned op, uint32_t key, const char *path, const char *name, unsigned index, uint32_t access)
 {
     if (!path) path="";
     if (!name) name="";
@@ -18,18 +20,20 @@ static uint32_t call(struct response *r, unsigned op, uint32_t key, const char *
     size_t size=sizeof(struct w32r_request)+p+n;
     uint8_t *wire=malloc(size); if (!wire) return 8;
     struct w32r_request a={.version=W32R_VERSION,.op=op,.key=key,.index=index,
-        .access=0x20019,.path_bytes=(uint32_t)p,.name_bytes=(uint32_t)n};
+        .access=access,.path_bytes=(uint32_t)p,.name_bytes=(uint32_t)n};
     memcpy(wire,&a,sizeof(a)); memcpy(wire+sizeof(a),path,p); memcpy(wire+sizeof(a)+p,name,n);
     uint32_t used=0, error=desk_w32_exchange(wire,(uint32_t)size,r,sizeof(*r),&used);
     free(wire);
     if (error) return error;
     if (used<sizeof(r->header) || r->header.version!=W32R_VERSION || r->header.name_bytes>=W32R_NAME ||
         r->header.data_bytes>W32R_DATA) return 13;
-    size_t names=r->header.name_bytes ? r->header.name_bytes+1 : 0;
+    size_t names=r->header.name_bytes || (op==W32R_ENUM_VALUE && !r->header.error) ? r->header.name_bytes+1 : 0;
     if (used!=sizeof(r->header)+names+r->header.data_bytes ||
         (names && (r->bytes[names-1] || memchr(r->bytes,0,names-1)))) return 13;
     return r->header.error;
 }
+static uint32_t call(struct response *r, unsigned op, uint32_t key, const char *path, const char *name, unsigned index)
+{ return call_access(r,op,key,path,name,index,0x20019); }
 static int native_error(uint32_t e)
 {
     switch (e) { case 0:return 0; case 2:case 3:return -ENOENT; case 5:return -EACCES;
@@ -67,13 +71,13 @@ static uint32_t expand(const char *in,char *out,unsigned cap)
     }
     out[at]=0;return 0;
 }
-static uint32_t string(struct response *r, uint32_t key, const char *name, char *out, unsigned cap)
+static uint32_t string_value(struct response *r, uint32_t key, const char *name, char *out, unsigned cap, int expand_value)
 {
     out[0]=0;
     uint32_t e=call(r,W32R_QUERY,key,NULL,name,0);
     if (e) return e;
     unsigned count=r->header.data_bytes;
-    unsigned expanded=r->header.type==2 && !strcmp(name,"UninstallString");
+    unsigned expanded=r->header.type==2 && expand_value;
     if ((r->header.type!=1 && !expanded) || r->header.name_bytes || count<2 || count%2 ||
         r->bytes[count-1] || r->bytes[count-2]) return 13;
     unsigned at=0;
@@ -101,6 +105,8 @@ static uint32_t string(struct response *r, uint32_t key, const char *name, char 
     }
     return 0;
 }
+static uint32_t string(struct response *r,uint32_t key,const char *name,char *out,unsigned cap)
+{ return string_value(r,key,name,out,cap,!strcmp(name,"UninstallString")); }
 static uint32_t number(struct response *r,uint32_t key,const char *name,uint32_t *out)
 {
     *out=0; uint32_t e=call(r,W32R_QUERY,key,NULL,name,0);
@@ -228,4 +234,90 @@ int desk_w32_ready(void)
     pthread_mutex_lock(&registry_lock);
     uint32_t e=call(r,W32R_INFO,W32R_HKLM,NULL,NULL,0);
     pthread_mutex_unlock(&registry_lock);free(r);return native_error(e);
+}
+
+int desk_startup_command(const char *command, struct desk_launch_record *r)
+{
+    if (!command || !r) return -EINVAL;
+    memset(r,0,sizeof(*r)); strcpy(r->label,"Startup"); r->show=1;
+    const char *p=command; while (*p==' ' || *p=='\t') p++;
+    int quoted=*p=='"'; if (quoted) p++;
+    unsigned n=0;
+    while (*p && (quoted ? *p!='"' : *p!=' ' && *p!='\t')) {
+        if (n+1>=sizeof(r->target)) return -E2BIG;
+        r->target[n++]=*p++;
+    }
+    if (!n || (quoted && *p!='"')) return -EINVAL;
+    if (quoted) { p++; if (*p && *p!=' ' && *p!='\t') return -EINVAL; }
+    while (*p==' ' || *p=='\t') p++;
+    if (strlen(p)>=sizeof(r->arguments)) return -E2BIG;
+    strcpy(r->arguments,p);
+    if (r->target[0]!='/' && !(n>2 && r->target[1]==':')) {
+        if (strpbrk(r->target,"/\\")) return -EINVAL;
+        char name[260]; strcpy(name,r->target);
+        static const char *const dirs[]={"/WINDOWS", "/WINDOWS/SYSTEM", "/Programs"};
+        int found=0;
+        for (unsigned i=0;i<3;i++) {
+            int count=snprintf(r->target,sizeof(r->target),"%s/%s",dirs[i],name);
+            struct stat st;
+            if (count>0 && (unsigned)count<sizeof(r->target) && !stat(r->target,&st) && S_ISREG(st.st_mode)) { found=1; break; }
+        }
+        if (!found) return -ENOENT;
+    }
+    return desk_launch_valid(r) ? 0 : -EINVAL;
+}
+/* G21: copied snapshots, no handles retained across UI/worker turns. */
+static const char *const startup_keys[]={"RunServicesOnce","RunServices","RunOnce","RunOnce","Run","Run"};
+static uint32_t startup_hive(unsigned source)
+{ return source==3 || source==5 ? W32R_HKCU : W32R_HKLM; }
+static void startup_path(unsigned source,char path[128])
+{ snprintf(path,128,"Software\\Microsoft\\Windows\\CurrentVersion\\%s",startup_keys[source]); }
+int ciuki_win32_startup_list(struct desk_startup_entry *out,unsigned cap)
+{
+    if (!out || !cap) return -EINVAL;
+    struct response *r=malloc(sizeof(*r)); if (!r) return -ENOMEM;
+    pthread_mutex_lock(&registry_lock);
+    unsigned count=0; uint32_t error=0;
+    for (unsigned source=0;source<6 && !error;source++) {
+        char path[128]; startup_path(source,path); uint32_t key=0;
+        error=call(r,W32R_OPEN,startup_hive(source),path,NULL,0);
+        if (error==2) { error=0; continue; }
+        if (error) break;
+        key=r->header.key;
+        for (unsigned index=0;!error;index++) {
+            error=call(r,W32R_ENUM_VALUE,key,NULL,NULL,index);
+            if (error==259) { error=0; break; }
+            if (error) break;
+            if (count==cap) { error=234; break; }
+            struct desk_startup_entry *e=&out[count]; memset(e,0,sizeof(*e)); e->source=source; e->enabled=1;
+            if (r->header.name_bytes>=sizeof(e->name)) { error=234; break; }
+            memcpy(e->name,r->bytes,r->header.name_bytes+1);
+            error=string_value(r,key,e->name,e->command,sizeof(e->command),1);
+            if (error==13 || error==234) { e->error=native_error(error); error=0; }
+            if (!error) {
+                if (!e->error) e->error=desk_startup_command(e->command,&e->launch);
+                count++;
+            }
+        }
+        uint32_t closed=call(r,W32R_CLOSE,key,NULL,NULL,0); if (!error) error=closed;
+    }
+    pthread_mutex_unlock(&registry_lock); free(r);
+    return error ? native_error(error) : (int)count;
+}
+int ciuki_win32_startup_consume(const struct desk_startup_entry *e)
+{
+    if (!e || !(e->source==0 || e->source==2 || e->source==3)) return -EINVAL;
+    struct response *r=malloc(sizeof(*r)); char *current=malloc(sizeof(e->command));
+    if (!r || !current) { free(r); free(current); return -ENOMEM; }
+    pthread_mutex_lock(&registry_lock);
+    char path[128]; startup_path(e->source,path); uint32_t key=0;
+    uint32_t error=call_access(r,W32R_OPEN,startup_hive(e->source),path,NULL,0,0x2001b);
+    if (!error) {
+        key=r->header.key; error=string_value(r,key,e->name,current,sizeof(e->command),1);
+        if (!error && strcmp(current,e->command)) error=13;
+        if (!error) error=call(r,W32R_DELETE_VALUE,key,NULL,e->name,0);
+        if (!error) error=call(r,W32R_FLUSH,key,NULL,NULL,0);
+        uint32_t closed=call(r,W32R_CLOSE,key,NULL,NULL,0); if (!error) error=closed;
+    }
+    pthread_mutex_unlock(&registry_lock); free(r); free(current); return native_error(error);
 }
