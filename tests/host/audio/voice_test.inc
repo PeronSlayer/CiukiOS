@@ -269,6 +269,9 @@ static void test_voice_engines(void)
         vh.pending[bank] = 0x82;
         CHECK(backend_irq(11, d->name) && vh.pending[bank] == 0x80);
         CHECK(!backend_irq(11, d->name) && vh.pending[bank] == 0x80);
+        unsigned sleep_pages=pages_used; uint32_t sleep_phys=d->phys;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(d->state.ready && d->phys==sleep_phys && pages_used==sleep_pages);
         audio_backend_shutdown(); CHECK(!audio.quarantined && pages_used == baseline && !audio.commitment_pages);
         CHECK(!voice_pins);
         CHECK(vh.codec[1] == 0x8000 && vh.codec[0x18 / 2] == 0x8808 && !(vh.cfg[1] & 4));

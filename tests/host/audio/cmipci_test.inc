@@ -202,6 +202,9 @@ static void test_cmipci(void)
         CHECK(!backend_irq(11,"cmipci"));
         memset(captured,0x5a,sizeof(captured)); cmi_model_sleep(&cmi_hw,171);
         CHECK(cmipci_capture_read(d,captured)==-EIO && d->cmi.failed && captured[0].left==0x5a5a);
+        unsigned sleep_pages=pages_used; uint32_t sleep_phys=d->phys;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(d->state.ready && d->phys==sleep_phys && pages_used==sleep_pages);
         audio_backend_shutdown();
         CHECK(!audio.quarantined && pages_used==baseline && !audio.commitment_pages && cmi_unpins==2 && !(cmi_hw.cfg[1]&4));
         CHECK(!memcmp(saved,cmi_hw.mixer,256) && cmi_hw.regs[0x24]==0xc0 && cmi_hw.regs[0x25]==0xf0);

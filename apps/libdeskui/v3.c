@@ -60,3 +60,10 @@ uint32_t du3_window_order(struct du3_connection *c, uint32_t id, uint32_t genera
     desk_put32(b+12,owner); desk_put32(b+16,owner_generation);
     return du3_request(c,DESK_V3_WINDOW_ORDER,id,generation,b,sizeof(b),-1);
 }
+
+uint32_t du3_power_reply(struct du3_connection *c, uint32_t id,
+    uint32_t generation, uint32_t serial, uint32_t answer)
+{
+    uint8_t b[8];desk_put32(b,serial);desk_put32(b+4,answer);
+    return du3_request(c,DESK_POWER_REPLY,id,generation,b,sizeof(b),-1);
+}

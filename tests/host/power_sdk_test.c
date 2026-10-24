@@ -33,5 +33,6 @@ int main(void)
     assert(!ciuki_power_policy(&q) && action==6 && bytes==32 && address==CU_PTR(&q) && q.version==1 && q.size==32 && !q.reserved && q.disk_seconds==600);
     result=(uint32_t)-EPERM; assert(ciuki_power_policy(&q)==-1 && errors._errno==EPERM);
     result=(uint32_t)-ENOTSUP; assert(ciuki_power(CIUKI_POWER_STANDBY)==-1 && action==5 && errors._errno==ENOTSUP);
+    result=0; assert(!ciuki_power(CIUKI_POWER_CANCEL_STANDBY) && action==8 && !address && !bytes);
     puts("PASS power SDK: exact call/extent/header, errno and capability query; G11 EVENTS, POLICY, STANDBY"); return 0;
 }

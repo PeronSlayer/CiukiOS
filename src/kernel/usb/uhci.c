@@ -605,3 +605,30 @@ const struct usb_hc_ops usb_uhci_ops = {
     .interrupt = usb_interrupt, .interrupt_stop = usb_interrupt_stop,
     .bulk = bulk,
 };
+
+/* UHCI 1.1: global suspend retains FLBASEADD, FRNUM and endpoint state.
+ * Resume signalling lasts at least 20 ms before RUN is restored. */
+int usb_uhci_suspend(struct usb_host *h)
+{
+    h->sleep_regs[0] = usb_read(h, 0, 2);
+    h->sleep_regs[1] = usb_read(h, 4, 2);
+    h->sleep_regs[2] = usb_read(h, 6, 2);
+    h->sleep_regs[3] = usb_read(h, 8, 4);
+    h->sleep_regs[4] = usb_read(h, 0x0c, 1);
+    usb_write(h, 4, 0, 2); usb_write(h, 0, h->sleep_regs[0] & ~1u, 2);
+    int e = usb_wait_register(h, 2, 2, 0x20, 0x20, 100);
+    if (!e) usb_write(h, 0, (h->sleep_regs[0] & ~1u) | 8u, 2);
+    return e;
+}
+int usb_uhci_resume(struct usb_host *h)
+{
+    usb_write(h, 4, 0, 2);
+    usb_write(h, 8, h->sleep_regs[3], 4); usb_write(h, 6, h->sleep_regs[2], 2);
+    usb_write(h, 0x0c, h->sleep_regs[4], 1);
+    usb_write(h, 0, (h->sleep_regs[0] & ~9u) | 0x10u, 2);
+    usb_sleep(h, 20); usb_write(h, 0, h->sleep_regs[0] & ~0x19u, 2);
+    usb_sleep(h, 10); usb_write(h, 0, h->sleep_regs[0], 2);
+    int e = usb_wait_register(h, 2, 2, 0x20, 0, 100);
+    if (!e) usb_write(h, 4, h->sleep_regs[1], 2);
+    return e;
+}

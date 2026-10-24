@@ -25,7 +25,7 @@ static int raw(unsigned who,unsigned op,unsigned f,unsigned flags,const void *da
 static void test_protocol(void)
 {
     assert(DESK_QUERY_END_SESSION==49 && DESK_END_SESSION==50 && DESK_SESSION_ANSWER==51);
-    assert(DESK_CLIPBOARD==52 && DESK_CLIPBOARD_EVENT==53 && DESK_V3_CLIPBOARD==80 && DESK_V3_CLIPBOARD_EVENT==81);
+    assert(DESK_CLIPBOARD==92 && DESK_CLIPBOARD_EVENT==93 && DESK_V3_CLIPBOARD==80 && DESK_V3_CLIPBOARD_EVENT==81);
     for (unsigned v=2;v<=3;v++) {
         struct desk_clip_wire w={.serial=123,.op=DESK_CLIP_OPEN,.token=0x3456}; struct ciuki_message m; struct desk_packet p;
         assert(!desk_clip_message(&m,v,1,&w,-1) && desk_parse(&m,1,NULL,&p)); assert(p.clip.token==0x3456);

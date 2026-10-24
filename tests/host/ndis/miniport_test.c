@@ -189,9 +189,27 @@ static void refusal_paths(void)
     handle[0]=mp.adapter;assert(svc(NDIS_OP_NdisMPromoteMiniport,handle,1)==NDIS_NOT_SUPPORTED);
     assert(mp.state==NDIS_MP_RUNNING && device_refusals==1); /* refusals never fault or succeed */
 }
+static void power_sleep_test(void)
+{
+    mp_setup(false);
+    assert(!ndis_mp_power_ready(&mp));
+    mp.supported[mp.supported_count++]=0xfd010102u;
+    mp.supported[mp.supported_count++]=0xfd010103u;
+    assert(ndis_mp_power_ready(&mp));
+    for (unsigned cycle=0;cycle<2;cycle++) {
+        assert(ndis_mp_power(&mp,true)==-11);
+        for (unsigned n=0;n<20 && mp.power_phase!=4;n++) tick();
+        assert(mp.power_phase==4 && mp.tx_blocked && !ndis_mp_power(&mp,true));
+        tick(); assert(mp.power_phase==4);
+        assert(ndis_mp_power(&mp,false)==-11);
+        for (unsigned n=0;n<20 && mp.power_phase;n++) tick();
+        assert(!mp.power_phase && !mp.tx_blocked && !ndis_mp_power(&mp,false));
+    }
+    puts("PASS synthetic NDIS G11B: advertised power OIDs required, QUERY D3 then SET D3, asleep callback gate, D0 restart without Halt");
+}
 int main(void)
 {
-    census_resolution();refusal_paths();
+    power_sleep_test(); census_resolution();refusal_paths();
     mp_setup(false);uint8_t frame[60]={0};frame[12]=8;uint32_t token;
     assert(ndis_channel_send(&channel,frame,14,&token)==1);send_status=NDIS_RESOURCES;tick();assert(mp.tx_blocked && completed==0);
     uint32_t token2;assert(ndis_channel_send(&channel,frame,60,&token2)==1);tick();assert(mp.tx_consumed==1);

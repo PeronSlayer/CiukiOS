@@ -478,7 +478,15 @@ int32_t power_syscall(uint32_t action)
         return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0) |
                (!(power_progress & (CIUKI_POWER_STOPPED | CIUKI_POWER_UNCERTAIN)) &&
                 power_source_standby_reason() == CIUKI_POWER_STANDBY_AVAILABLE ? CIUKI_POWER_CAN_STANDBY : 0);
-    if (action == CIUKI_POWER_STANDBY) return power_progress ? -EBUSY : power_standby();
+    if (action == CIUKI_POWER_STANDBY || action == CIUKI_POWER_CANCEL_STANDBY) {
+        uint32_t f=irq_save(); bool busy=power_running || power_progress;
+        if (!busy) power_running=true;
+        irq_restore(f);
+        if (busy) return -EBUSY;
+        int e=action==CIUKI_POWER_CANCEL_STANDBY ? power_source_cancel_standby() : power_standby();
+        f=irq_save(); power_running=false; irq_restore(f);
+        return e;
+    }
     if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;
     bool off = action == CIUKI_POWER_OFF;
     uint32_t f = irq_save();

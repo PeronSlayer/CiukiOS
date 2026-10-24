@@ -3,6 +3,7 @@
 #include "netif.h"
 #include "execution.h"
 #include <ciuki/kernel.h>
+#include <ciuki/task.h>
 static struct ndis_native *native(struct netif *d) { return d->driver_context; }
 static bool match(const struct pci_func *p) { (void)p;return false; /* explicit installation only */ }
 static bool idle(struct netif *d) { return native(d)->host.idle_proved; }
@@ -56,10 +57,31 @@ static void irq_enable(struct netif *d,bool enabled) { (void)d;(void)enabled; /*
 static int promiscuous(struct netif *d,bool enabled) { (void)d;(void)enabled;return -ENOSYS; }
 const struct netif_driver net_ndis={"ndis",match,0,0,0,idle,init,init,stop,transmit,receive,link_state,mac,interrupt,irq_enable,promiscuous};
 static void fault(struct netif *d,const char *why) { ndis_mp_fault(&native(d)->miniport,why); }
+static bool power_ready(struct netif *d) { return ndis_mp_power_ready(&native(d)->miniport); }
+static int power_change(struct netif *d, bool suspend)
+{
+    struct ndis_native *n = native(d);
+    uint64_t end = deadline_after_ms(2000);
+    int e;
+    do {
+        ndis_native_poll(n);
+        e = ndis_mp_power(&n->miniport, suspend);
+        if (e != -EAGAIN) return e;
+        task_sleep_ms(1);
+    } while (!deadline_passed(end));
+    return -ETIMEDOUT;
+}
+static int power_suspend(struct netif *d) { return power_change(d, true); }
+static int power_resume(struct netif *d) { return power_change(d, false); }
 int ndis_netif_publish(struct ndis_native *n)
 {
     if(!n || !ndis_host_live(&n->host) || n->netif || n->miniport.state!=NDIS_MP_RUNNING ||
        !n->qualification || n->qualification!=ndis_qualified_profile(n->host.image,&n->pci)) return 0;
     n->netif=netif_publish_external(&n->pci,&net_ndis,n,n->miniport.address,n->host.generation,n->miniport.carrier,fault);
+    if (n->netif) {
+        n->netif->power_ready = power_ready;
+        n->netif->power_suspend = power_suspend;
+        n->netif->power_resume = power_resume;
+    }
     return n->netif!=0;
 }

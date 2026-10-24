@@ -150,7 +150,7 @@ void power_source_event(enum power_source_kind kind, uint16_t event, uint16_t in
     uint32_t f = irq_save();
     if (source.active && source.provider == kind) {
         source.last_event = event; source.event_info = info; source.events++;
-        if (kind == POWER_SOURCE_APM) count(event);
+        count(event);
     }
     irq_restore(f);
 }
@@ -173,8 +173,24 @@ uint32_t power_source_standby_reason(void)
 int power_source_standby(void)
 {
     if (power_source_standby_reason() != CIUKI_POWER_STANDBY_AVAILABLE) return -ENOTSUP;
-    uint32_t f = irq_save(); struct power_source_ops ops = provider_ops; irq_restore(f);
-    return ops.standby ? ops.standby(ops.ctx) : -ENOTSUP;
+    uint32_t f = irq_save();
+    if (off_running || stopped || handoff_pending || !source.active) { irq_restore(f); return -EBUSY; }
+    struct power_source_ops ops = provider_ops; off_running = true; irq_restore(f);
+    int e = ops.standby ? ops.standby(ops.ctx) : -ENOTSUP;
+    f = irq_save(); off_running = false; irq_restore(f);
+    return e;
+}
+int power_source_cancel_standby(void)
+{
+    uint32_t f=irq_save();
+    if (off_running || stopped) { irq_restore(f); return -EBUSY; }
+    struct power_source_ops ops=provider_ops;
+    bool active=source.active && ops.cancel_standby;
+    if (active) off_running=true;
+    irq_restore(f);
+    int e=active ? ops.cancel_standby(ops.ctx) : 0;
+    f=irq_save();if (active) off_running=false;irq_restore(f);
+    return e;
 }
 /* Charge only when every present battery reports the same unit and known
  * values: capacities are never combined across different units. */

@@ -185,6 +185,9 @@ static void test_maestro(void)
         unsigned writes=maestro_hw.writes;
         CHECK(maestro_capture_start(d,48000,4,&token)==-EINVAL && maestro_hw.writes==writes);
         CHECK(!maestro_capture_start(d,22050,4,&token) && token);
+        uint32_t sleep_token=token;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(maestro.capture_running && maestro.capture_generation==sleep_token);
         CHECK(maestro_hw.apu[2][11]==4 && maestro_hw.apu[3][11]==5 && maestro_hw.apu[4][11]==0x14 && maestro_hw.apu[5][11]==0x15);
         CHECK(maestro_hw.apu[2][0]==0x40bf && maestro_hw.apu[4][0]==0x409f);
         struct audio_frame captured[AUDIO_QUANTUM];
@@ -202,6 +205,9 @@ static void test_maestro(void)
         CHECK(!audio_backend_stop());
         for (unsigned voice=0;voice<6;voice++) CHECK(!(maestro_hw.apu[voice][0]&MAESTRO_MODE));
         CHECK(!(maestro_hw.cfg[1]&4) && !maestro_hw.ports[0x14/2]);
+        unsigned sleep_pages=pages_used; uint32_t sleep_phys=d->phys;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(d->state.ready && d->phys==sleep_phys && pages_used==sleep_pages);
         audio_backend_shutdown(); CHECK(pages_used==baseline && !audio.commitment_pages && !audio.quarantined);
         CHECK(maestro_hw.codec[1]==0x8202 && maestro_hw.codec[0x26/2]==0x800f);
         CHECK(maestro_hw.codec[0x1a/2]==0x0101 && maestro_hw.codec[0x1c/2]==0x8505);

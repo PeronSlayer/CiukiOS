@@ -165,14 +165,24 @@ int ata_standby_timer_all(uint32_t seconds, struct ata_standby_result *out)
 }
 static bool g11_resume, g11_capable;
 static int g11_standby_result, g11_standbys;
+static bool g11_nested;
 bool power_devices_resume_ready(void) { return g11_resume; }
 static bool g11_can_standby(void *ctx) { (void)ctx; return g11_capable; }
-static int g11_standby(void *ctx) { (void)ctx; g11_standbys++; return g11_standby_result; }
+static int g11_standby(void *ctx) { (void)ctx; g11_standbys++;
+    if (g11_nested) {
+        assert(power_syscall(CIUKI_POWER_STANDBY)==-EBUSY);
+        assert(power_syscall(CIUKI_POWER_CANCEL_STANDBY)==-EBUSY);
+        assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY);
+        assert(power_syscall(CIUKI_POWER_REBOOT)==-EBUSY);
+    }
+    return g11_standby_result; }
+static unsigned g11_cancels;
+static int g11_cancel(void *ctx) { (void)ctx;g11_cancels++;return 0; }
 static void g11_provide(enum power_source_kind kind, bool sleep)
 {
     power_source_release(source.provider, false, 0);
     const struct power_source_ops ops = {.soft_off=provider_off, .can_standby=sleep ? g11_can_standby : NULL,
-                                         .standby=sleep ? g11_standby : NULL};
+                                         .standby=sleep ? g11_standby : NULL, .cancel_standby=g11_cancel};
     assert(!power_source_reserve(kind, &ops) && !power_source_activate(kind));
 }
 static void test_g11(void)
@@ -198,8 +208,9 @@ static void test_g11(void)
     g11_resume = true;
     assert(power_source_standby_reason() == CIUKI_POWER_STANDBY_AVAILABLE);
     assert(power_syscall(CIUKI_POWER_QUERY) == (3 | CIUKI_POWER_CAN_STANDBY));
-    g11_standby_result = 0; assert(power_syscall(CIUKI_POWER_STANDBY) == 0 && g11_standbys == 1 && !stages);
-    g11_standby_result = -EIO; assert(power_syscall(CIUKI_POWER_STANDBY) == -EIO && g11_standbys == 2);
+    g11_nested=true; g11_standby_result = 0; assert(power_syscall(CIUKI_POWER_STANDBY) == 0 && g11_standbys == 1 && !stages);
+    assert(!power_syscall(CIUKI_POWER_CANCEL_STANDBY) && g11_cancels==1);
+    g11_nested=false; g11_standby_result = -EIO; assert(power_syscall(CIUKI_POWER_STANDBY) == -EIO && g11_standbys == 2);
     desktop.pid = 7; assert(power_syscall(CIUKI_POWER_STANDBY) == -EPERM && g11_standbys == 2); desktop.pid = 42;
     /* After the orderly stop nothing can stand by. */
     assert(power_syscall(CIUKI_POWER_OFF) == -EIO && !strcmp(order, "SNQP"));

@@ -677,6 +677,28 @@ static int controller_activate(struct ac97_device *d)
     else stage_log(d, d->activation_stage, "ok");
     return err;
 }
+/* Rebuild the original pinned transport after firmware may have lost the
+ * register context. Preserve the boot rollback values across codec prepare. */
+int ac97_power_resume(struct ac97_device *d)
+{
+    static struct ac97_device saved;
+    saved = *d; d->ready=false;
+    int e = controller_activate(d);
+    d->saved_master = saved.saved_master; d->saved_pcm = saved.saved_pcm;
+    d->saved_headphone = saved.saved_headphone; d->saved_ext = saved.saved_ext;
+    d->saved_rate = saved.saved_rate; d->saved_power = saved.saved_power;
+    d->saved_beep = saved.saved_beep; d->saved_spdif = saved.saved_spdif;
+    d->saved_sis_gate = saved.saved_sis_gate;
+    d->codec = saved.codec;
+    d->activation_deadline = 0;
+    if (e) {
+        d->ready = false; d->quarantine = true;
+        for (unsigned i=0;i<12;i++) if (d->claims[i]>=0) registry_quarantine(d->claims[i],d->claim_generation[i]);
+        return e;
+    }
+    d->ready = true;
+    return ac97_set_master(d, &audio.master);
+}
 static bool supported(const struct pci_func *p)
 {
     return p->class_code == 4 && p->subclass == 1 &&

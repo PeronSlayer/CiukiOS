@@ -443,8 +443,8 @@ static void input_and_lease(void)
 }
 static void links(void)
 {
-    struct desk_launch_record r={.label="Game",.target="C:\\Games\\A game.exe",.arguments="-data \"A B\"",.directory="C:\\Games",.icon="C:\\Games\\icon.ico",.show=3,.icon_index=-2}, out;
-    uint8_t bytes[DESK_LINK_BYTES]; unsigned n=desk_link_encode(&r,bytes,sizeof(bytes)); assert(n && desk_link_decode(bytes,n,&out)); assert(!memcmp(&r,&out,sizeof(r)));
+    static struct desk_launch_record r={.label="Game",.target="C:\\Games\\A game.exe",.arguments="-data \"A B\"",.directory="C:\\Games",.icon="C:\\Games\\icon.ico",.show=3,.icon_index=-2}, out;
+    static uint8_t bytes[DESK_LINK_BYTES]; unsigned n=desk_link_encode(&r,bytes,sizeof(bytes)); assert(n && desk_link_decode(bytes,n,&out)); assert(!memcmp(&r,&out,sizeof(r)));
     assert(!desk_link_decode(bytes,n-1,&out));
     desk_put32(bytes+36,0x0641); assert(desk_link_decode(bytes,n,&out) && out.hotkey==0x0641);
     desk_put32(bytes+36,0x0600); assert(!desk_link_decode(bytes,n,&out)); /* modifier without key */
@@ -525,6 +525,25 @@ static void bridge(void)
     assert(!du3_ui_progress(&c,1,1,99)); assert(bridge_wire.data[1]==DESK_PONG);
     bridge_wire.data[255]=1; assert(du3_next(&c,&p)<0 && c.disconnected);
     puts("PASS user-mode bridge tokens, backpressure, malformed server, explicit guest UI PONG");
+}
+static void native_power(void)
+{
+    setup();int root=peer(10,42),a=create(root,20,1,1,0,0);flush();
+    struct du3_connection c;struct du3_transport ops={bridge_send,bridge_recv,fake_ops.info,fake_ops.close};
+    assert(!du3_connect(&c,10,&ops));
+    assert(du3_power_reply(&c,1,1,0,1));bridge_wire.sender_pid=42;
+    check_packet(&bridge_wire,1,NULL);assert(!desk_v3_receive(&d,root,&bridge_wire) && d.clients[a].power_aware);
+    desk_power_broadcast(&d,PP_PBT_QUERYSUSPEND,1);desk_power_policy_tick(&d);flush();
+    struct ciuki_message event={0};
+    for(unsigned i=0;i<fake_sent;i++) if(fake_messages[i].data[1]==DESK_POWER_EVENT) event=fake_messages[i];
+    check_packet(&event,0,NULL);bridge_wire=event;struct desk_packet p;
+    unsigned sent=bridge_sends;assert(du3_next(&c,&p)==1 && p.index==0 && p.flags==1 && p.window_id==1 && p.generation==1 && bridge_sends==sent);
+    uint32_t serial=p.serial;
+    assert(du3_power_reply(&c,1,1,serial,2));bridge_wire.sender_pid=42;assert(!desk_v3_receive(&d,root,&bridge_wire));
+    d.now_ns+=DESK_POWER_QUERY_NS;desk_power_policy_tick(&d);assert(d.pbt.running && d.clients[a].power_pending==2);
+    assert(du3_power_reply(&c,1,1,serial,0));bridge_wire.sender_pid=42;assert(!desk_v3_receive(&d,root,&bridge_wire));
+    desk_power_policy_tick(&d);assert(d.pbt.denied && !d.pbt.running);
+    cleanup();puts("PASS G11B native v3 power: opt-in, window/generation binding, explicit UI dequeue and veto, no implicit I/O-thread acknowledgement");
 }
 /* Focused GL completion replay: production request, receive, redraw and drop.
  * No captures or guest evidence. */
@@ -672,6 +691,5 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
-    puts("PASS desktop v3 integration (host only)"); return 0;
+    protocol(); ownership(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);    protocol(); ownership(); window_order(); input_and_lease(); resize_and_cursor(); bridge();native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);    puts("PASS desktop v3 integration (host only)"); return 0;
 }

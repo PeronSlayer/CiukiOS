@@ -9,6 +9,9 @@
 extern const struct audio_dma_ops maestro_ops;
 bool maestro_match(const struct pci_func *, enum audio_backend_kind *);
 bool maestro_kind(enum audio_backend_kind);
+int maestro_power_save(struct audio_dma_device *);
+int maestro_power_resume(struct audio_dma_device *);
+bool maestro_capture_active(const struct audio_dma_device *);
 int maestro_restore(struct audio_dma_device *);
 /* Kernel-owned copied S16LE stereo diagnostic capture; no public/guest ABI.
  * source is AC'97 MIC=0 or LINE=4; token is invalidated by every full stop.

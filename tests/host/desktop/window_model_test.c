@@ -1748,6 +1748,18 @@ static void row_clipboard_owner_display(unsigned m)
     app_paint(viewer,10,60,280,160,0x8a4210); step("owner scroll repaints viewer");
     app_close(viewer); step("owner-display viewer closed"); wm_end();
 }
+static int row_standby(void) { return 0; }
+static void row_power_resume(unsigned m)
+{
+    row_name="power suspend/resume"; wm_begin(m,1);
+    struct fake_app *app=app_open("files",320,220,40,50);
+    d.clients[app->slot].dosbox=1; d.sh.power_can_standby=1; d.power_standby=row_standby;
+    d.sh.want_standby=1; desk_power_policy_tick(&d);
+    assert(d.sh.notification.active); step("DOS suspend notice");
+    for (unsigned n=0;n<8 && !d.pbt.standbys;n++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==1); step("resume repaints the entire desktop");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -1755,7 +1767,8 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
     row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
     row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
-    row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display};
+    row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display,
+    row_power_resume};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

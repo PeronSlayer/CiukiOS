@@ -127,6 +127,8 @@ struct desk_client {
      * Win32 broker delivered WM_ENDSESSION (no close message); close_sent_ns:
      * when the pending close request was sent (hung-program detection). */
     int session_aware, session_end;
+    int power_aware, power_pending, power_granted;
+    uint32_t power_serial;
     uint64_t close_sent_ns;
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
@@ -257,12 +259,18 @@ struct desk_pbt { uint32_t event, lparam; };
 struct desk_power_broadcast {
     struct desk_pbt queue[DESK_PBT_QUEUE];
     unsigned count;
+    uint32_t serial;
+    int w32_running;
+    uint32_t sequence_done;
+    int sequence_denied;
     int running, denied;            /* denied: the last finished query */
     struct desk_pbt current, done;  /* done: the last finished broadcast (event + 1, 0 none) */
     uint64_t started_ns;
     int standby, standby_lparam;    /* DESK_STANDBY_* */
     unsigned broadcasts, standbys;
     int standby_error;
+    int resume_pending;
+    uint64_t resume_input_ns;
 };
 struct desk_session {
     int state, action;
@@ -461,6 +469,7 @@ struct desktop {
      * call 73 STANDBY (0 or -1 with errno). NULL: none. */
     int (*w32_power)(struct desktop *, unsigned action, uint32_t event, uint32_t lparam, struct desk_w32_status *);
     int (*power_standby)(void);
+    int (*power_cancel_standby)(void);
     struct desk_power_broadcast pbt;
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
@@ -592,6 +601,7 @@ void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut do
 /* G11: queue a WM_POWERBROADCAST to every Win32 window (coalesces status
  * changes); desk_power_policy_tick drives the queue, the Stand by sequence
  * and the idle standby timer (shell.c, from desk_shell_tick). */
+void desk_power_reply(struct desktop *, int client, uint32_t serial, uint32_t answer);
 void desk_power_broadcast(struct desktop *, uint32_t event, uint32_t lparam);
 void desk_power_policy_tick(struct desktop *);
 void desk_session_tick(struct desktop *);

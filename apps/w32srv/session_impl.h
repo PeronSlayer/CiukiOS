@@ -28,26 +28,47 @@ static void wr_end_advance(struct wr_server *s)
 }
 /* G11: one WM_POWERBROADCAST, every top-level window of a live client in
  * turn; a query (PBT 0/1) stops at the first BROADCAST_QUERY_DENY. */
-struct wr_power {uint32_t event,lparam,count,at,granted,denied;struct wr_end_window windows[4096];};
+struct wr_power {uint32_t event,lparam,count,at,granted,denied;uint64_t deadline;struct wr_end_window windows[4096];};
+static void wr_power_retire(struct wr_server *s)
+{
+    if(s->power && s->power->event<=1) {free(s->power_query);s->power_query=s->power;}
+    else free(s->power);
+    s->power=NULL;
+}
 static void wr_power_advance(struct wr_server *s)
 {
     struct wr_power *p=s->power;if(!p)return;
-    while(p->at<p->count && !wr_end_live(s,p->windows[p->at].w.pid))p->at++;
+    while(p->at<p->count) {
+        struct wr_end_window *w=&p->windows[p->at];
+        if(!wr_end_live(s,w->w.pid)) {p->at++;p->deadline=0;continue;}
+        if(!p->deadline) p->deadline=s->now+(p->event<=1?20000:2000);
+        if(s->now>=p->deadline && (!w->delivered || p->event>1)) {
+            w->queried=1;p->granted++;p->at++;p->deadline=0;continue;
+        }
+        break;
+    }
 }
 static uint32_t wr_power_call(struct wr_server *s,uint32_t pid,const struct w32r_request *a,struct w32r_reply *r)
 {
     if(pid!=s->compat_writer_pid || !pid)return 5;
     if(a->key || a->data_bytes)return 87;
-    if(a->index==W32R_POWER_RESET){if(a->type||a->flags)return 87;free(s->power);s->power=NULL;return 0;}
+    if(a->index==W32R_POWER_RESET){if(a->type||a->flags)return 87;
+        wr_power_retire(s);return 0;}
     if(a->index==W32R_POWER_STATUS){
         if(a->type||a->flags)return 87;
         struct wr_power *p=s->power;wr_power_advance(s);
         r->key=!p||p->at>=p->count?(p&&p->denied?2:1):0;r->count=p?p->granted:0;return 0;
     }
     if(a->type>0x12)return 87;   /* the PBT_* range of Windows 98 */
-    if(s->power){wr_power_advance(s);if(s->power->at<s->power->count)return 1115;free(s->power);s->power=NULL;}
+    if(s->power){wr_power_advance(s);if(s->power->at<s->power->count)return 1115;wr_power_retire(s);}
     struct wr_power *p=calloc(1,sizeof(*p));if(!p)return 8;
     p->event=a->type;p->lparam=a->flags;
+    if(a->type==2 && s->power_query) {
+        for(unsigned i=0;i<s->power_query->count;i++)
+            if(s->power_query->windows[i].queried && wr_end_live(s,s->power_query->windows[i].w.pid))
+                p->windows[p->count++].w=s->power_query->windows[i].w;
+        s->power=p;wr_power_advance(s);return 0;
+    }
     uint8_t bytes[24+W32R_NAME];
     for(unsigned i=0;i<4096;i++){
         struct w32r_request q={.op=W32R_WINDOW_ENUM,.index=i};struct w32r_reply v={0};
@@ -74,7 +95,8 @@ static uint32_t wr_power_turn(struct wr_server *s,uint32_t pid,const struct w32r
     if(!w->delivered || a->key!=w->w.hwnd || a->flags>1)return 87;
     w->delivered=0;
     if(!a->flags && p->event<=1){p->denied=1;p->at=p->count;return 0;}
-    if(a->flags)p->granted++;
+    if(a->flags){p->granted++;w->queried=1;}
+    p->deadline=0;
     p->at++;wr_power_advance(s);return 0;
 }
 static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_request *a,

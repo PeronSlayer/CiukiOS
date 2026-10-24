@@ -80,7 +80,7 @@ enum desk_v3_opcode {
      * text-length,timeout-ms(low16)|NIIF-kind(high16),title,text.
      * EVENT: id,callback,mouse-message,screen-x,screen-y.
      * FLASH: invert (0/1). All use the authenticated window tuple. */
-    DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH,
+    DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON = 86, DESK_V3_TRAY_EVENT = 90, DESK_V3_FLASH = 91,
     DESK_V3_HELP = 89 /* G15: server to client, empty payload */
 };
 /* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
@@ -191,6 +191,9 @@ enum desk_opcode {
      *   sends QUERY_END_SESSION or END_SESSION to an unregistered client
      *   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end). */
     DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+    /* G11B keeps main's allocated wire numbers; integration opcodes follow. */
+    DESK_POWER_EVENT = 87,
+    DESK_POWER_REPLY = 88,
     /* G5 one system clipboard owned by the desktop (Windows 98 clipboard
      * model; docs/design/system-clipboard.md), version 2, any client.
      * CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
@@ -203,8 +206,8 @@ enum desk_opcode {
      *   result, format, byte count, sequence, owner token, item count,
      *   items: count u32 formats, or count name bytes for a NAME reply.
      *   A successful GET reply with bytes carries one read-only surface. */
-    DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
-    DESK_DOS_CLIPBOARD /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */
+    DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
+    DESK_DOS_CLIPBOARD = 94 /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
                     DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };

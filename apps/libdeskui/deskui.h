@@ -547,6 +547,11 @@ struct du_window {
     int session;                 /* DU_SESSION_* state, internal */
     uint32_t session_serial, session_flags;
     int session_reply_pending;   /* answer+1, retried if the queue is full */
+    /* G11B: PBT event and lParam; query (event 0) returns 0 to veto,
+     * nonzero to agree. Other events ignore the return. NULL agrees. */
+    int (*power_event)(struct du_window *, uint32_t event, uint32_t flags, void *);
+    uint32_t power_serial;
+    int power_reply_pending;
 };
 enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);

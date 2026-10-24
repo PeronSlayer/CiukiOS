@@ -93,6 +93,10 @@ struct audio_dma_device {
     unsigned voice_saved_count;
 };
 extern struct audio_dma_device audio_dma;
+int audio_backend_suspend(void);
+int audio_backend_resume(void);
+bool audio_backend_resume_ready(void);
+bool audio_backend_capture_active(void);
 int sb16_restore(struct audio_dma_device *);
 extern const struct audio_dma_ops es137x_ops, sb16_ops, via82xx_ops, cmipci_ops;
 bool cmipci_match(const struct pci_func *, enum audio_backend_kind *);

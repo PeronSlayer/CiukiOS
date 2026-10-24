@@ -48,6 +48,7 @@ struct power_source_ops {
      * 1.2 Get Capabilities, ACPI \_S1/\_S3 with a wake path). NULL: no. */
     bool (*can_standby)(void *);
     int (*standby)(void *);
+    int (*cancel_standby)(void *);
 };
 /* Installed once by the global device/time owner before APM connects.
  * quiesce_dma is a nonblocking step with an absolute PIT-millisecond
@@ -112,6 +113,7 @@ void power_source_counters(struct power_source_counters *);
 uint32_t power_source_standby_reason(void);
 /* ENOTSUP unless the reason is AVAILABLE; then the provider's standby. */
 int power_source_standby(void);
+int power_source_cancel_standby(void);
 /* G11: Win32 SYSTEM_POWER_STATUS of the call-73 record (GetSystemPowerStatus,
  * docs/design/power-policy.md 24): ac 0/1/255 (APM backup power is 0),
  * battery_flag 1/2/4/8/128/255, percent 0..100 or 255, seconds of life on
@@ -119,6 +121,6 @@ int power_source_standby(void);
 struct power_source_win32 { uint32_t ac, battery_flag, percent, seconds; };
 void power_source_win32_status(struct power_source_win32 *);
 /* core/power_quiesce.c: true only when every native driver holding DMA or
- * interrupt state can suspend and restore it (none can yet). */
+ * interrupt state can suspend and restore it. */
 bool power_devices_resume_ready(void);
 #endif

@@ -2369,6 +2369,7 @@ call.
 #define CIUKI_POWER_STANDBY 5u
 #define CIUKI_POWER_POLICY 6u
 #define CIUKI_POWER_EVENTS 7u
+#define CIUKI_POWER_CANCEL_STANDBY 8u
 #define CIUKI_POWER_CAN_STANDBY 16u
 #define CIUKI_POWER_POLICY_VERSION 1u
 #define CIUKI_POWER_EVENTS_VERSION 1u
@@ -5536,7 +5537,7 @@ EVENT: id,callback,mouse-message,screen-x,screen-y.
 FLASH: invert (0/1). All use the authenticated window tuple.
 
 ```c
-DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH,
+DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON = 86, DESK_V3_TRAY_EVENT = 90, DESK_V3_FLASH = 91,
     DESK_V3_HELP = 89
 ```
 
@@ -5752,6 +5753,13 @@ SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
 DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
 ```
 
+G11B keeps main's allocated wire numbers; integration opcodes follow.
+
+```c
+DESK_POWER_EVENT = 87,
+    DESK_POWER_REPLY = 88,
+```
+
 G5 one system clipboard owned by the desktop (Windows 98 clipboard
 model; docs/design/system-clipboard.md), version 2, any client.
 CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
@@ -5766,8 +5774,8 @@ CLIPBOARD_EVENT (desktop to client): serial (0 unsolicited), kind
   A successful GET reply with bytes carries one read-only surface.
 
 ```c
-DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
-    DESK_DOS_CLIPBOARD
+DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
+    DESK_DOS_CLIPBOARD = 94
 ```
 
 v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode
@@ -6430,7 +6438,8 @@ SPDX-License-Identifier: MIT
 #define __CIUKI_POWER_VERSION__ 2
 ```
 
-action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
+action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF, CIUKI_POWER_QUERY,
+CIUKI_POWER_STANDBY or CIUKI_POWER_CANCEL_STANDBY.
 QUERY returns CIUKI_POWER_CAN_* and CIUKI_POWER_STOPPED/UNCERTAIN bits.
 Either progress bit means the session cannot resume. REBOOT does not return on
 success. OFF flushes storage and powers off through the active provider
@@ -6440,6 +6449,9 @@ after storage has stopped: show "It is now safe to turn off your
 computer" only when QUERY also reports STOPPED. EBUSY with no progress
 bit means open files prevented flushing; UNCERTAIN means a stop proof
 failed after shutdown began: retain a terminal diagnostic and require reset.
+
+G11B: CANCEL_STANDBY rejects a pending APM BIOS sleep request after an
+application veto. Desktop only, idempotent, EBUSY once sleep starts.
 
 ```c
 int ciuki_power(uint32_t action);
@@ -8222,7 +8234,13 @@ uint32_t session_serial, session_flags;
 
 answer+1, retried if the queue is full
 
+G11B: PBT event and lParam; query (event 0) returns 0 to veto,
+nonzero to agree. Other events ignore the return. NULL agrees.
+
 ```c
+int (*power_event)(struct du_window *, uint32_t event, uint32_t flags, void *);
+    uint32_t power_serial;
+    int power_reply_pending;
 };
 enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
@@ -8550,6 +8568,15 @@ int du3_ui_progress(struct du3_connection *, uint32_t window, uint32_t generatio
 uint32_t du3_window_order(struct du3_connection *, uint32_t window,
     uint32_t generation, uint32_t flags, uint32_t after, uint32_t after_generation,
     uint32_t owner, uint32_t owner_generation);
+```
+
+G11B: serial 0 / answer 1 registers this native window; for a power
+EVENT, answer 2 marks dequeue, 0 vetoes a query, 1 agrees/completes.
+Explicit UI-thread replies; no acknowledgement is hidden in du3_next.
+
+```c
+uint32_t du3_power_reply(struct du3_connection *, uint32_t window,
+    uint32_t generation, uint32_t serial, uint32_t answer);
 #endif
 ```
 

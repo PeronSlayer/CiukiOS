@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
+#include <ciuki/bootstat.h>
 #include "../../sdk/win32/include/w32/screen_saver.h"
 _Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
 _Static_assert(SC_MONITORPOWER==0xf170u,"G10 SC_MONITORPOWER");
@@ -30,6 +31,15 @@ _Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 #include "../../apps/desktop/protocol.h"
 #include "../../apps/desktop/settings_catalog.h"
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
+#include "../../apps/libdeskui/deskui.h"
+#if defined(__i386__)
+_Static_assert(sizeof(struct du_window)==5360,"G11B toolkit window extent");
+_Static_assert(__builtin_offsetof(struct du_window,power_event)==5348,"G11B toolkit power callback");
+_Static_assert(__builtin_offsetof(struct du_window,power_serial)==5352,"G11B toolkit power serial");
+_Static_assert(__builtin_offsetof(struct du_window,power_reply_pending)==5356,"G11B toolkit power reply");
+#endif
+_Static_assert(DESK_POWER_EVENT == 87, "G11B desktop power event");
+_Static_assert(DESK_POWER_REPLY == 88, "G11B desktop power reply");
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
@@ -39,7 +49,7 @@ _Static_assert(DESK_DRAG_BEGIN==42 && DESK_DRAG_OVER==43 && DESK_DRAG_STATUS==44
 _Static_assert(DESK_CURSOR_HELP==21 && DESK_CURSOR_DRAG_MOVE==22 && DESK_CURSOR_DRAG_COPY==23 && DESK_CURSOR_DRAG_LINK==24 &&
                DESK_CURSOR_COUNT==25,"drag-and-drop cursor IDs");
 _Static_assert(DESK_DRAG_ITEMS==4096u,"drag data object item bound");
-_Static_assert(DESK_V3_TRAY_ICON==85 && DESK_V3_TRAY_BALLOON==86 && DESK_V3_TRAY_EVENT==87 && DESK_V3_FLASH==88,"G18 desktop opcodes");
+_Static_assert(DESK_V3_TRAY_ICON==85 && DESK_V3_TRAY_BALLOON==86 && DESK_V3_TRAY_EVENT==90 && DESK_V3_FLASH==91,"G18 desktop opcodes");
 _Static_assert(sizeof(((struct desk_packet *)0)->tooltip)==128,"G18 UTF-8 tray tooltip bound");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[1])==88,"launch joystick device");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[2])==92,"launch joystick generation");
@@ -71,9 +81,9 @@ _Static_assert(CF_DIBV5==17u,"G5 Win32 CF_DIBV5");
 _Static_assert(WM_RENDERFORMAT==773u,"G5 Win32 WM_RENDERFORMAT");
 _Static_assert(WM_RENDERALLFORMATS==774u,"G5 Win32 WM_RENDERALLFORMATS");
 /* G5: append after G3; the byte protocol is independent of pointer width. */
-_Static_assert(DESK_CLIPBOARD==52u,"G5 DESK_CLIPBOARD");
-_Static_assert(DESK_CLIPBOARD_EVENT==53u,"G5 DESK_CLIPBOARD_EVENT");
-_Static_assert(DESK_DOS_CLIPBOARD==54u,"G5 DESK_DOS_CLIPBOARD");
+_Static_assert(DESK_CLIPBOARD==92u,"G5 DESK_CLIPBOARD");
+_Static_assert(DESK_CLIPBOARD_EVENT==93u,"G5 DESK_CLIPBOARD_EVENT");
+_Static_assert(DESK_DOS_CLIPBOARD==94u,"G5 DESK_DOS_CLIPBOARD");
 _Static_assert(DESK_V3_CLIPBOARD==80u,"G5 DESK_V3_CLIPBOARD");
 _Static_assert(DESK_V3_CLIPBOARD_EVENT==81u,"G5 DESK_V3_CLIPBOARD_EVENT");
 _Static_assert(DESK_CLIP_QUERY==1u,"G5 DESK_CLIP_QUERY");
@@ -601,6 +611,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_POWER_STANDBY", CIUKI_POWER_STANDBY, 5u},
     {"constant.CIUKI_POWER_POLICY", CIUKI_POWER_POLICY, 6u},
     {"constant.CIUKI_POWER_EVENTS", CIUKI_POWER_EVENTS, 7u},
+    {"constant.CIUKI_POWER_CANCEL_STANDBY", CIUKI_POWER_CANCEL_STANDBY, 8u},
     {"constant.CIUKI_POWER_CAN_STANDBY", CIUKI_POWER_CAN_STANDBY, 16u},
     {"constant.CIUKI_POWER_POLICY_VERSION", CIUKI_POWER_POLICY_VERSION, 1u},
     {"constant.CIUKI_POWER_EVENTS_VERSION", CIUKI_POWER_EVENTS_VERSION, 1u},

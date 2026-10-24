@@ -279,6 +279,16 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if (client || n!=12 || !(p->serial=desk_get32(b))) return 0;
         p->x=(int32_t)desk_get32(b+4); p->y=(int32_t)desk_get32(b+8);
         expected=12; fd=1; break;
+    case DESK_POWER_EVENT:
+        if (client || n!=12) return 0;
+        p->serial=desk_get32(b);p->index=desk_get32(b+4);p->flags=desk_get32(b+8);
+        if (!p->serial || p->index>18 || p->flags>1) return 0;
+        expected=12;break;
+    case DESK_POWER_REPLY:
+        if (!client || n!=8) return 0;
+        p->serial=desk_get32(b);p->flags=desk_get32(b+4);
+        if (p->flags>2 || (!p->serial && p->flags!=1)) return 0;
+        expected=8;break;
     case DESK_CREATE_WINDOW:
         if (!client || n<36) return 0;
         p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);
@@ -485,6 +495,16 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->index=desk_get32(m->data+4+DESK_INPUT_VALUES*4);p->flags=desk_get32(m->data+8+DESK_INPUT_VALUES*4);
         n=12+DESK_INPUT_VALUES*4;break;
 
+    case DESK_POWER_EVENT:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=16) return 0;
+        p->serial=desk_get32(m->data+4); p->index=desk_get32(m->data+8); p->flags=desk_get32(m->data+12);
+        if (!p->serial || p->index>18 || p->flags>1) return 0;
+        n=16; break;
+    case DESK_POWER_REPLY:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=12) return 0;
+        p->serial=desk_get32(m->data+4); p->flags=desk_get32(m->data+8);
+        if (p->flags>2 || (!p->serial && p->flags!=1)) return 0;
+        n=12; break;
     case DESK_CLOSE_ACK:
         if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
         p->flags=desk_get32(m->data+4); if (p->flags>DESK_CLOSE_DOS_ACTIVE) return 0;

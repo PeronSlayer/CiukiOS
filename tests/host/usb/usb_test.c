@@ -1840,8 +1840,22 @@ static void hid_packet_capacity(bool ohci)
     printf("PASS F1-104b %s interrupt: 32/64 bytes in all 64 slots, retirement, previous/next/bulk guards, oversize/MPS refusal; arena=%u slot=%u bulk_td=%u bulk_buffer=%u\n",
            ohci ? "OHCI" : "UHCI",USB_DMA_BYTES,USB_HID_STRIDE,USB_BULK_TD,USB_BULK_BUFFER);
 }
+static void power_sleep(bool ohci)
+{
+    setup(ohci,false); assert(!attach());
+    unsigned leases=lease_count; gen_t generation=m.host.generation;
+    static uint8_t schedule[USB_DMA_BYTES]; memcpy(schedule,m.dma,sizeof(schedule));
+    for (unsigned cycle=0;cycle<2;cycle++) {
+        assert(!usb_host_suspend(&m.host) && m.host.suspended && !m.host.ready);
+        assert(!usb_host_irq(&m.host));
+        assert(!usb_host_resume(&m.host) && !m.host.suspended && m.host.ready);
+        assert(lease_count==leases && generation==m.host.generation && !memcmp(schedule,m.dma,sizeof(schedule)));
+    }
+    printf("PASS G11B %s: two suspend/resume cycles, retained schedules/claims, no reset\n",ohci?"OHCI":"UHCI");
+}
 int main(void)
 {
+    power_sleep(false); power_sleep(true);
     scan_option(); unsupported_hid_peer(false); unsupported_hid_peer(true); hid_packet_capacity(false); hid_packet_capacity(true);
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
     receiver_wheel();chained_bulk();binding_eighth_packet();

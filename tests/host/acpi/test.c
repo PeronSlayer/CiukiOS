@@ -51,9 +51,9 @@ static ACPI_STATUS access(unsigned space, uint64_t a, unsigned width, UINT64 *v,
 }
 /* Read-only inventory: no writes, routes or ACPI/APM power provider seam. */
 static const struct fw_ops ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, stall_us, thread, lock, unlock, access,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 static const struct fw_ops run_ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, stall_us, thread, lock, unlock, access,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, run_clock};
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, run_clock, NULL};
 static void callback(void *p) { (*(int *)p)++; }
 static void osl(void)
 {

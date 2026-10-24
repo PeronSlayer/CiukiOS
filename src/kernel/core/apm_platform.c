@@ -6,6 +6,7 @@
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/power_source.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/apm_ports.h>
 #include <ciuki/registry.h>
 #include "apm.h"
@@ -21,6 +22,12 @@ static struct apm_backend backend;
 static bool attempted;
 static struct task *apm_worker;
 static bool off_pending, off_done;
+static bool sleep_pending, sleep_done;
+static int sleep_result;
+static bool cancel_pending, cancel_done;
+static int cancel_result;
+static uint64_t cancel_deadline;
+static uint64_t sleep_deadline;
 static int off_result;
 static uint64_t off_deadline;
 
@@ -78,7 +85,7 @@ static int request_off(void *ctx)
     (void)ctx;
     if (g_current == apm_worker) return -EBUSY;
     uint32_t f = irq_save();
-    if (off_pending || backend.state != APM_CONNECTED) { irq_restore(f); return -EBUSY; }
+    if (off_pending || sleep_pending || backend.state != APM_CONNECTED) { irq_restore(f); return -EBUSY; }
     off_done = false; off_pending = true;
     off_deadline = deadline_after_ms(APM_QUIESCE_MS + APM_POWER_MS + 500);
     irq_restore(f);
@@ -88,13 +95,60 @@ static int request_off(void *ctx)
     }
     return off_result;
 }
+static int sleep_error(int e)
+{
+    if (e==-VFS_ETIMEOUT) return -ETIMEDOUT;
+    if (e==-VFS_ECANCELLED) return -EINTR;
+    if (e==-FS_EQUARANTINED || e==-FS_EUCLEAN || e==-FS_ELOOP) return -EIO;
+    return e;
+}
+static bool can_standby(void *ctx)
+{ (void)ctx; return !off_pending && apm_backend_can_standby(&backend); }
+static int request_standby(void *ctx)
+{
+    (void)ctx;
+    if (g_current == apm_worker || off_pending || sleep_pending || cancel_pending) return -EBUSY;
+    /* Flush on the requesting task while APM continues polling. The flush
+     * mailbox owns its request after a timeout; never abandon live DMA. */
+    uint64_t end = deadline_after_ms(60000);
+    int e;
+    while ((e = storage_sync_bounded(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(1);
+    if (e) return sleep_error(e==-EAGAIN && deadline_passed(end) ? -VFS_ETIMEOUT : e);
+    e = power_devices_suspend();
+    if (e) return sleep_error(e);
+    uint32_t f = irq_save();
+    if (!can_standby(NULL)) {
+        irq_restore(f); (void)power_devices_resume(); return -ENOTSUP;
+    }
+    sleep_done = false; sleep_pending = true; sleep_deadline = deadline_after_ms(APM_POWER_MS);
+    irq_restore(f);
+    /* Once firmware owns the request a wall-clock timeout cannot cancel it:
+     * sleep can last arbitrarily long. The contained BIOS call is bounded
+     * while executing; only its worker publishes completion. */
+    while (!sleep_done) task_sleep_ms(1);
+    e = power_devices_resume();
+    return sleep_error(e ? e : sleep_result);
+}
+static bool sleep_ready(void *ctx) { (void)ctx; return power_devices_resume_ready(); }
+static int request_cancel_standby(void *ctx)
+{
+    (void)ctx;
+    uint32_t f=irq_save();
+    if (g_current==apm_worker || sleep_pending || off_pending || cancel_pending) {irq_restore(f);return -EBUSY;}
+    if (backend.state!=APM_CONNECTED) {irq_restore(f);return 0;}
+    cancel_deadline=deadline_after_ms(APM_POWER_MS);cancel_done=false;cancel_pending=true;
+    irq_restore(f);
+    while (!cancel_done) task_sleep_ms(1);
+    return cancel_result;
+}
 static int reserve(void *ctx)
 {
     (void)ctx;
     /* V86 containment exists. The remaining admission is the global
      * storage/DMA/time owner, not an invented ring-0 firmware broker. */
     if (!power_source_platform_ready()) return -ENOTSUP;
-    const struct power_source_ops ops = {.soft_off = request_off};
+    const struct power_source_ops ops = {.soft_off = request_off,
+        .can_standby = can_standby, .standby = request_standby, .cancel_standby = request_cancel_standby};
     int e = power_source_reserve(POWER_SOURCE_APM, &ops);
     if (e) return e;
     /* Reserve before allocating/starting shared workers: ACPI cannot race
@@ -207,7 +261,7 @@ static int discover(void)
         .reserve = reserve, .release = release, .now_ms = now, .step = step,
         .resume = resume, .publish = publish, .event = event,
         .orderly_shutdown = orderly, .emergency_record = emergency_record,
-        .now_us = now_us, .low_battery = low_battery, .handoff = handoff};
+        .now_us = now_us, .low_battery = low_battery, .handoff = handoff, .sleep_ready = sleep_ready};
     apm_backend_init(&backend, &ops);
     int e;
     if (!wait_acpi()) {
@@ -272,6 +326,16 @@ static void service_once(void)
         klog("[apm] service error=%d emergency_error=%d state=%u", e, backend.emergency_error, backend.state);
     }
     if (backend.state == APM_CONNECTED) cost_record();
+    if (cancel_pending) {
+        int r=deadline_passed(cancel_deadline) ? -ETIMEDOUT : apm_backend_cancel_standby(&backend);
+        if (r!=-EAGAIN) {uint32_t f=irq_save();cancel_result=r;cancel_pending=false;cancel_done=true;irq_restore(f);}
+    }
+    if (sleep_pending) {
+        int r = deadline_passed(sleep_deadline) ? -ETIMEDOUT : apm_backend_standby(&backend);
+        if (r != -EAGAIN) {
+            uint32_t f = irq_save(); sleep_result = r; sleep_pending = false; sleep_done = true; irq_restore(f);
+        }
+    }
     if (off_pending) {
         int r = deadline_passed(off_deadline) ? -V86_ETIMEDOUT :
                 backend.emergency ? -EBUSY : apm_backend_off(&backend);
@@ -289,6 +353,8 @@ static void worker(void *unused)
         task_sleep_ms(10);
     }
     /* Complete a queued caller even if firmware failed before servicing it. */
+    if (cancel_pending) {cancel_result=-ENODEV;cancel_pending=false;cancel_done=true;}
+    if (sleep_pending) { sleep_result = -ENODEV; sleep_pending = false; sleep_done = true; }
     if (off_pending) { off_result = -ENODEV; off_pending = false; off_done = true; }
 }
 void apm_start(void)

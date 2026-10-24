@@ -1115,6 +1115,8 @@ static int power_w32(struct desktop *desktop, unsigned action, uint32_t event, u
     st->state=action==DESK_W32_POWER_STATUS ? power_w32_state : 0; st->pid=st->hwnd=st->delivered=0;
     return 0;
 }
+static unsigned power_cancels;
+static int power_cancel_seam(void) { power_cancels++;return 0; }
 static int power_standby_seam(void) { power_standbys++; if (power_standby_result) { errno=-power_standby_result; return -1; } return 0; }
 static unsigned begins(uint32_t event)
 { unsigned n=0; for (unsigned i=0;i<power_call_count;i++) n+=power_calls[i].action==DESK_W32_POWER_BEGIN && power_calls[i].event==event; return n; }
@@ -1137,7 +1139,7 @@ static void power_poll(struct ciuki_power_status p, int query)
 static void test_power_policy(void)
 {
     setup(800,600); desk_shell_enable(&d);
-    d.sound_event=power_sound; d.w32_power=power_w32; d.power_standby=power_standby_seam;
+    d.sound_event=power_sound; d.w32_power=power_w32; d.power_standby=power_standby_seam;d.power_cancel_standby=power_cancel_seam;power_cancels=0;
     memset(power_sounds,0,sizeof(power_sounds)); power_call_count=0;
     assert(d.sh.power_cfg.count==PP_BUILTIN && d.sh.power_cfg.show_meter);
     power_poll(t23(80,1),3);
@@ -1208,15 +1210,19 @@ static void test_power_policy(void)
     desk_power_policy_tick(&d);
     assert(!d.sh.want_standby && d.pbt.standby==DESK_STANDBY_QUERY && last_begin()->event==PP_PBT_QUERYSUSPEND && last_begin()->lparam==1);
     power_w32_state=DESK_W32_VETOED; desk_power_policy_tick(&d);
-    assert(d.pbt.standby==DESK_STANDBY_IDLE && !power_standbys); power_drain();
+    assert(d.pbt.standby==DESK_STANDBY_IDLE && !power_standbys && power_cancels==1); power_drain();
     assert(begins(PP_PBT_QUERYSUSPENDFAILED)==1);
     power_call_count=0; d.sh.want_standby=2; power_w32_state=DESK_W32_PENDING; desk_power_policy_tick(&d);
     assert(last_begin()->event==PP_PBT_QUERYSUSPEND && !last_begin()->lparam);
-    d.now_ns+=DESK_POWER_QUERY_NS; desk_power_policy_tick(&d);   /* unanswered for 20 s: agreement */
+    desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0); /* must not overwrite query completion */
+    d.now_ns+=DESK_POWER_QUERY_NS; desk_power_policy_tick(&d);
+    assert(d.pbt.standby==DESK_STANDBY_QUERY); /* broker still processing a delivered query */
+    power_w32_state=DESK_W32_ENDED; desk_power_policy_tick(&d); desk_power_policy_tick(&d);
     assert(d.pbt.standby==DESK_STANDBY_SUSPEND && last_begin()->event==PP_PBT_SUSPEND);
     power_drain();
-    assert(power_standbys==1 && d.pbt.standby==DESK_STANDBY_IDLE && begins(PP_PBT_RESUMEAUTOMATIC)==1 && begins(PP_PBT_RESUMESUSPEND)==1);
+    assert(power_standbys==1 && d.pbt.standby==DESK_STANDBY_IDLE && begins(PP_PBT_RESUMEAUTOMATIC)==1 && !begins(PP_PBT_RESUMESUSPEND));
     assert(!last_begin()->lparam && d.last_input_ns==d.now_ns-11000000ull);
+    d.last_input_ns=d.now_ns+1;power_drain();assert(begins(PP_PBT_RESUMESUSPEND)==1);
     power_call_count=0; power_standby_result=-ENOTSUP; d.sh.want_standby=1; power_drain();
     assert(power_standbys==2 && begins(PP_PBT_RESUMESUSPEND)==1 && last_begin()->lparam==PP_PBTF_RESUMEFROMFAILURE);
     assert(d.pbt.standby_error==ENOTSUP && strstr(d.sh.notification.title,"Stand by failed"));
@@ -1237,6 +1243,33 @@ static void test_power_policy(void)
     cleanup();
     puts("PASS power policy desktop: meter tooltip and option, scheme and meter menus, alarms once per discharge with sound/message/action/Force, button and lid, APM sleep-request notice, Stand by button and sequence (query, deny, 20 s, suspend, resume, failure), idle standby, broadcast coalescing");
 }
+static void test_native_power(void)
+{
+    setup(640,480); desk_shell_enable(&d); d.now_ns=1000000000ull;
+    int a=client(70,71,100,100,0), b=client(72,73,100,100,0);
+    d.clients[a].version=d.clients[b].version=2;
+    struct ciuki_message msg; struct desk_packet packet;
+    request(&msg,DESK_POWER_REPLY,12); msg.data[0]=2; desk_put32(msg.data+8,1);
+    assert(desk_parse(&msg,1,NULL,&packet) && !desk_parse(&msg,0,NULL,&packet));
+    desk_receive(&d,a,&msg); desk_receive(&d,b,&msg);
+    assert(d.clients[a].power_aware && d.clients[b].power_aware);
+    desk_power_broadcast(&d,PP_PBT_QUERYSUSPEND,1); desk_power_policy_tick(&d);
+    uint32_t serial=d.pbt.serial; assert(d.clients[a].power_pending==1 && d.clients[b].power_pending==1);
+    desk_power_reply(&d,a,serial,2); d.now_ns+=DESK_POWER_QUERY_NS;
+    desk_power_policy_tick(&d); assert(d.pbt.running && d.clients[a].power_pending==2 && !d.clients[b].power_pending);
+    desk_power_reply(&d,a,serial-1,0); assert(!d.pbt.denied);
+    desk_power_reply(&d,a,serial,0); desk_power_policy_tick(&d); assert(d.pbt.denied && !d.pbt.running);
+    desk_power_broadcast(&d,PP_PBT_QUERYSUSPENDFAILED,0); desk_power_policy_tick(&d);
+    assert(!d.clients[a].power_pending && d.clients[b].power_pending); /* only the program that agreed */
+    desk_power_reply(&d,b,d.pbt.serial,1); desk_power_policy_tick(&d);
+    desk_power_broadcast(&d,PP_PBT_POWERSTATUSCHANGE,0); desk_power_policy_tick(&d);
+    assert(d.clients[a].power_pending && d.clients[b].power_pending);
+    desk_power_reply(&d,a,d.pbt.serial,1); desk_power_reply(&d,b,d.pbt.serial,1); desk_power_policy_tick(&d);
+    request(&msg,DESK_POWER_EVENT,16); msg.data[0]=2;desk_put32(msg.data+4,1);
+    assert(desk_parse(&msg,0,NULL,&packet) && !desk_parse(&msg,1,NULL,&packet));
+    msg.fd_count=1;msg.fds[0]=1;assert(!desk_parse(&msg,0,NULL,&packet));
+    cleanup(); puts("PASS G11B native power: opt-in, query/veto, handler delivery, late reply isolation, agreement-only failure, status notices, strict wire validation");
+}
 int main(void)
 {
     test_joystick_broker();
@@ -1247,6 +1280,6 @@ int main(void)
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     test_game_data_properties();
     test_power_status();
-    test_power_policy();
+    test_power_policy(); test_native_power();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }
